@@ -114,6 +114,10 @@ procinit(void)
 	    PR_WAITOK, "pgrppl", NULL);
 	pool_init(&session_pool, sizeof(struct session), 0, IPL_NONE,
 	    PR_WAITOK, "sessionpl", NULL);
+
+#ifdef WITH_TURNSTILES
+	turnstile_init();
+#endif
 }
 
 /*

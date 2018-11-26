@@ -680,6 +680,7 @@ file kern/kern_kthread.c
 file kern/kern_ktrace.c			ktrace
 file kern/kern_lock.c
 file kern/kern_malloc.c
+file kern/kern_mcslock.c
 file kern/kern_rwlock.c
 file kern/kern_physio.c
 file kern/kern_proc.c
@@ -696,6 +697,7 @@ file kern/kern_synch.c
 file kern/kern_tc.c
 file kern/kern_time.c
 file kern/kern_timeout.c
+file kern/kern_turnstile.c
 file kern/kern_uuid.c
 file kern/kern_watchdog.c		!small_kernel
 file kern/kern_task.c

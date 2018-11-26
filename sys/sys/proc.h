@@ -52,6 +52,9 @@
 #include <sys/tree.h>
 
 #ifdef _KERNEL
+#ifdef WITH_TURNSTILES
+#include <sys/turnstile.h>
+#endif
 #include <sys/atomic.h>
 #define __need_process
 #endif
@@ -380,6 +383,10 @@ struct proc {
 	struct	lock_list_entry *p_sleeplocks;
 
 	struct	kcov_dev *p_kd;
+
+#ifdef WITH_TURNSTILES
+	struct turnstile *p_ts;
+#endif
 };
 
 /* Status values. */

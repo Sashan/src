@@ -180,6 +180,11 @@ thread_new(struct proc *parent, vaddr_t uaddr)
 	p->p_sleeplocks = NULL;
 #endif
 
+#ifdef WITH_TURNSTILES
+	p->p_ts = turnstile_alloc();
+	KASSERT(p->p_ts != NULL);
+#endif
+
 #if NKCOV > 0
 	p->p_kd = NULL;
 #endif

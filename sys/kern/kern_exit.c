@@ -75,6 +75,10 @@
 #include <sys/kcov.h>
 #endif
 
+#ifdef WITH_TURNSTILES
+#include <sys/turnstile.h>
+#endif
+
 void	proc_finish_wait(struct proc *, struct proc *);
 void	process_zap(struct process *);
 void	proc_free(struct proc *);
@@ -377,6 +381,9 @@ void
 proc_free(struct proc *p)
 {
 	crfree(p->p_ucred);
+#ifdef WITH_TURNSTILES
+	turnstile_free(p->p_ts);
+#endif
 	pool_put(&proc_pool, p);
 	nthreads--;
 }
