@@ -38,7 +38,7 @@ mcs_lock_enter(struct mcs_lock *mcs)
 
 	mcs->mcs_wait = curproc;
 	mcs->mcs_next = NULL;
-	old_mcs = atomic_swap_ptr(&mcs->mcs_global->mcs_next, &mcs);
+	old_mcs = atomic_swap_ptr(&mcs->mcs_global->mcs_next, mcs);
 	
 	if (old_mcs->mcs_next != NULL) {
 		old_mcs->mcs_next = mcs;
