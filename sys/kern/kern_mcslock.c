@@ -40,7 +40,7 @@ mcs_lock_enter(struct mcs_lock *mcs)
 	mcs->mcs_next = NULL;
 	old_mcs = atomic_swap_ptr(&mcs->mcs_global->mcs_next, mcs);
 	
-	if (old_mcs->mcs_next != NULL) {
+	if (old_mcs != NULL) {
 		old_mcs->mcs_next = mcs;
 
 		/* spin, waiting for other thread to finish */
