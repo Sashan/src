@@ -244,7 +244,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 	} else {
 		rwl_incr = RW_PROC(curproc) | RWLOCK_WRLOCK;
 		rwl_setwait = RWLOCK_WAIT | RWLOCK_WRWANT;
-		rwl_needwait = RWLOCK_WRLOCK | (-1 & ~0x7);
+		rwl_needwait = RWLOCK_WRLOCK;
 		queue = TS_WRITER_Q;
 	}
 
@@ -324,16 +324,20 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 	int rcnt, wcnt;
 
 	o = rwl->rwl_owner;
-	if ((o & RWLOCK_WRLOCK) != 0)
+	if ((o & RWLOCK_WRLOCK) != 0) {
 		decr = RW_PROC(o);
-	else
+		KASSERT(decr == (unsigned int)curproc);
+	} else {
 		decr = RWLOCK_READ_INCR;
+		KASSERT((o >> RWLOCK_READER_SHIFT) != 0);
+	}
 
 	/*
 	 * If there are no waiters on the lock, then we may get away with
 	 * rw_cas(), because we are the only thread, which currently owns the
 	 * lock.
 	 */
+#if 0
 	while ((newo = (o - decr) & RWLOCK_WAIT) == 0) {
 		/*
 		 * we are done with lock if we manage to update the owner.
@@ -347,6 +351,18 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 			return;
 		o = newo;
 	}
+#else
+	membar_exit();
+	for (;;) {
+		newo = (o - decr);
+		if ((newo & (-RWLOCK_MASK | RWLOCK_WAIT)) == RWLOCK_WAIT)
+			break;
+		newo = rw_cas(&rwl->rwl_owner, o, newo);
+		if (newo == o)
+			return;
+		o = newo;
+	}
+#endif
 
 	ts = turnstile_lookup(rwl, &mcs);
 	rcnt = turnstile_readers(ts);
