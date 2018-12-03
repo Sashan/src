@@ -351,7 +351,7 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 
 	o = rwl->rwl_owner;
 	if ((o & RWLOCK_WRLOCK) != 0) {
-		decr = RW_PROC(o);
+		decr = RW_PROC(o) | RWLOCK_WRLOCK;
 		KASSERT(decr == (unsigned int)curproc);
 	} else {
 		decr = RWLOCK_READ_INCR;
