@@ -253,7 +253,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 
 		o = rwl->rwl_owner;
 		if (((o & rwl_needwait) == 0) &&
-		    (rw_cas(&rwl->rwl_owner, o,
+		    (atomic_cas_ulong(&rwl->rwl_owner, o,
 		    o + (rwl_incr & ~RWLOCK_WRWANT)) == o)) {
 			/*
 			 * We could acquire a lock almost for free for
@@ -283,7 +283,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 		o = rwl->rwl_owner;
 
 		if (((o & rwl_needwait) == 0) &&
-		    (rw_cas(&rwl->rwl_owner, o, o | rwl_setwait) != o)) {
+		    (atomic_cas_ulong(&rwl->rwl_owner, o, o | rwl_setwait) != o)) {
 			/*
 			 * We've lost the race with other thread competing for
 			 * the same lock. We must restart lock acquisition
