@@ -244,8 +244,8 @@ _rw_init_flags(struct rwlock *rwl, const char *name, int flags,
 int
 _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 {
-	int	rwl_incr, rwl_setwait, rwl_needwait, queue;
-	unsigned int o;
+	unsigned long o;
+	int queue, rwl_incr, rwl_setwait, rwl_needwait;
 	struct turnstile *ts;
 	struct mcs_lock	mcs;
 #ifdef WITNESS
@@ -345,14 +345,14 @@ void
 _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 {
 	struct mcs_lock	mcs;
-	unsigned int o, decr, newo;
+	unsigned long o, decr, newo;
 	struct turnstile *ts;
 	int rcnt, wcnt;
 
 	o = rwl->rwl_owner;
 	if ((o & RWLOCK_WRLOCK) != 0) {
 		decr = RW_PROC(o) | RWLOCK_WRLOCK;
-		KASSERT(decr == ((unsigned int)curproc | RWLOCK_WRLOCK));
+		KASSERT(decr == ((unsigned long)curproc | RWLOCK_WRLOCK));
 	} else {
 		decr = RWLOCK_READ_INCR;
 		KASSERT((o >> RWLOCK_READER_SHIFT) != 0);
