@@ -215,6 +215,31 @@ _rw_init_flags(struct rwlock *rwl, const char *name, int flags,
 	_rw_init_flags_witness(rwl, name, RWLOCK_LO_FLAGS(flags), type);
 }
 
+#define	PRINT_FLAGS(_f_)	\
+	((_f_) & RW_DOWNGRADE) ? "DOWN" : ".",	\
+	((_f_) & RW_READ) ? "READ" : ".",	\
+	((_f_) & RW_WRITE) ? "WRITE" : "."
+
+#define	PRINT_LOCK(_rwl_, _f_)		do {		\
+		if ((_rwl_)->rwl_owner & RWLOCK_WRLOCK) {	\
+			printf("[%s] Owner: 0x%lX, %s %s %s, asking: %s %s %s\n",\
+			    __func__,						\
+			    RW_PROC((_rwl_)->rwl_owner),			\
+			    ((_rwl_)->rwl_owner & RWLOCK_WRWANT) ? "WRWANT" : ".",	\
+			    ((_rwl_)->rwl_owner & RWLOCK_WRLOCK) ? "WRITER" : ".",	\
+			    ((_rwl_)->rwl_owner & RWLOCK_WAIT) ? "WAITERS" : ".",	\
+			    PRINT_FLAGS(_f_));	\
+		} else {				\
+			printf("[%s] Readers: 0x%lX, %s %s %s, asking: %s %s %s\n",	\
+			    __func__,							\
+			    RW_PROC((_rwl_)->rwl_owner),				\
+			    ((_rwl_)->rwl_owner & RWLOCK_WRWANT) ? "WRWANT" : ".",	\
+			    ((_rwl_)->rwl_owner & RWLOCK_WRLOCK) ? "!!WRITER!!" : ".",	\
+			    ((_rwl_)->rwl_owner & RWLOCK_WAIT) ? "WAITERS" : ".",	\
+			    PRINT_FLAGS(_f_));	\
+		}	\
+	} while (0)
+
 #ifdef WITH_TURNSTILES
 int
 _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
@@ -236,6 +261,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 		    NULL);
 #endif
 
+	PRINT_LOCK(rwl, flags);
 	if (flags == RW_READ) {
 		rwl_incr = RWLOCK_READ_INCR;
 		rwl_setwait = RWLOCK_WAIT;
@@ -253,8 +279,8 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 
 		o = rwl->rwl_owner;
 		if (((o & rwl_needwait) == 0) &&
-		    (atomic_cas_ulong(&rwl->rwl_owner, o,
-		    o + (rwl_incr & ~RWLOCK_WRWANT)) == o)) {
+		    (!rw_cas(&rwl->rwl_owner, o,
+			o + (rwl_incr & ~RWLOCK_WRWANT)))) {
 			/*
 			 * We could acquire a lock almost for free for
 			 * one of the reasons below:
@@ -283,7 +309,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 		o = rwl->rwl_owner;
 
 		if (((o & rwl_needwait) == 0) &&
-		    (atomic_cas_ulong(&rwl->rwl_owner, o, o | rwl_setwait) != o)) {
+		    (rw_cas(&rwl->rwl_owner, o, o | rwl_setwait))) {
 			/*
 			 * We've lost the race with other thread competing for
 			 * the same lock. We must restart lock acquisition
@@ -331,6 +357,8 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 		decr = RWLOCK_READ_INCR;
 		KASSERT((o >> RWLOCK_READER_SHIFT) != 0);
 	}
+
+	PRINT_LOCK(rwl, 0);
 
 	/*
 	 * If there are no waiters on the lock, then we may get away with
