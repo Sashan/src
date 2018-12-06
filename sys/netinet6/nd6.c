@@ -484,6 +484,7 @@ void
 nd6_expire(void *unused)
 {
 	struct ifnet *ifp;
+	int	do_update = 0;
 
 	KERNEL_LOCK();
 	NET_LOCK();
@@ -500,12 +501,17 @@ nd6_expire(void *unused)
 			if (IFA6_IS_INVALID(ia6)) {
 				in6_purgeaddr(&ia6->ia_ifa);
 			} else {
-				if (IFA6_IS_DEPRECATED(ia6))
+				if (IFA6_IS_DEPRECATED(ia6)) {
 					ia6->ia6_flags |= IN6_IFF_DEPRECATED;
+					do_update = 1;
+				}
 				nd6_expire_timer_update(ia6);
 			}
 		}
 	}
+
+	if (do_update == 1)
+		dohooks(ifp->if_addrhooks, 0);
 
 	NET_UNLOCK();
 	KERNEL_UNLOCK();
