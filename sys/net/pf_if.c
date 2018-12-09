@@ -50,6 +50,7 @@
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
+#include <netinet6/in6_var.h>
 
 #include <net/pfvar.h>
 
@@ -523,8 +524,18 @@ pfi_instance_add(struct ifnet *ifp, u_int8_t net, int flags)
 			pfi_address_add(ifa->ifa_broadaddr, af, net2);
 		else if (flags & PFI_AFLAG_PEER)
 			pfi_address_add(ifa->ifa_dstaddr, af, net2);
-		else
+		else {
+			/*
+			 * Do not insert deprecated IPv6 addresses
+			 */
+			if (af == AF_INET6) {
+				struct in6_ifaddr	*ia6 = ifatoia6(ifa);
+
+				if (ia6->ia6_flags & IN6_IFF_DEPRECATED)
+					continue;
+			}
 			pfi_address_add(ifa->ifa_addr, af, net2);
+		}
 	}
 }
 
