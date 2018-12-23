@@ -1,4 +1,4 @@
-/* $OpenBSD: window.c,v 1.213 2018/10/18 08:38:01 nicm Exp $ */
+/* $OpenBSD: window.c,v 1.216 2018/12/18 13:20:44 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -921,6 +921,7 @@ window_pane_spawn(struct window_pane *wp, int argc, char **argv,
 	sigprocmask(SIG_BLOCK, &set, &oldset);
 	switch (wp->pid = fdforkpty(ptm_fd, &wp->fd, wp->tty, NULL, &ws)) {
 	case -1:
+		wp->event = NULL;
 		wp->fd = -1;
 
 		xasprintf(cause, "%s: %s", cmd, strerror(errno));
@@ -997,6 +998,11 @@ window_pane_spawn(struct window_pane *wp, int argc, char **argv,
 
 	wp->event = bufferevent_new(wp->fd, window_pane_read_callback, NULL,
 	    window_pane_error_callback, wp);
+	if (wp->event == NULL)
+		fatalx("out of memory");
+
+	wp->pipe_off = 0;
+	wp->flags &= ~PANE_EXITED;
 
 	bufferevent_setwatermark(wp->event, EV_READ, 0, READ_SIZE);
 	bufferevent_enable(wp->event, EV_READ|EV_WRITE);
@@ -1252,7 +1258,7 @@ window_pane_reset_mode(struct window_pane *wp)
 
 void
 window_pane_key(struct window_pane *wp, struct client *c, struct session *s,
-    key_code key, struct mouse_event *m)
+    struct winlink *wl, key_code key, struct mouse_event *m)
 {
 	struct window_pane	*wp2;
 
@@ -1262,7 +1268,7 @@ window_pane_key(struct window_pane *wp, struct client *c, struct session *s,
 	if (wp->mode != NULL) {
 		wp->modelast = time(NULL);
 		if (wp->mode->key != NULL)
-			wp->mode->key(wp, c, s, (key & ~KEYC_XTERM), m);
+			wp->mode->key(wp, c, s, wl, (key & ~KEYC_XTERM), m);
 		return;
 	}
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: wsmux.c,v 1.32 2017/06/12 13:45:39 deraadt Exp $	*/
+/*	$OpenBSD: wsmux.c,v 1.36 2018/12/17 19:14:59 anton Exp $	*/
 /*      $NetBSD: wsmux.c,v 1.37 2005/04/30 03:47:12 augustss Exp $      */
 
 /*
@@ -192,7 +192,6 @@ wsmuxopen(dev_t dev, int flags, int mode, struct proc *p)
 
 	evar = &sc->sc_base.me_evar;
 	wsevent_init(evar);
-	evar->io = p->p_p;
 #ifdef WSDISPLAY_COMPAT_RAWKBD
 	sc->sc_rawkbd = 0;
 #endif
@@ -471,23 +470,21 @@ wsmux_do_ioctl(struct device *dv, u_long cmd, caddr_t data, int flag,
 			return (EINVAL);
 		evar->async = *(int *)data != 0;
 		return (0);
-	case FIOSETOWN:
-		DPRINTF(("%s: FIOSETOWN\n", sc->sc_base.me_dv.dv_xname));
+	case TIOCGPGRP:
+		DPRINTF(("%s: TIOCGPGRP\n", sc->sc_base.me_dv.dv_xname));
 		evar = sc->sc_base.me_evp;
 		if (evar == NULL)
 			return (EINVAL);
-		if (-*(int *)data != evar->io->ps_pgid
-		    && *(int *)data != evar->io->ps_pid)
-			return (EPERM);
+		*(int *)data = -sigio_getown(&evar->sigio);
 		return (0);
 	case TIOCSPGRP:
 		DPRINTF(("%s: TIOCSPGRP\n", sc->sc_base.me_dv.dv_xname));
+		if (*(int *)data < 0)
+			return (EINVAL);
 		evar = sc->sc_base.me_evp;
 		if (evar == NULL)
 			return (EINVAL);
-		if (*(int *)data != evar->io->ps_pgid)
-			return (EPERM);
-		return (0);
+		return (sigio_setown(&evar->sigio, -*(int *)data));
 	default:
 		DPRINTF(("%s: unknown\n", sc->sc_base.me_dv.dv_xname));
 		break;
@@ -500,8 +497,11 @@ wsmux_do_ioctl(struct device *dv, u_long cmd, caddr_t data, int flag,
 	    )
 		return (EACCES);
 
-	/* Return 0 if any of the ioctl() succeeds, otherwise the last error */
-	error = 0;
+	/*
+	 * If children are attached: return 0 if any of the ioctl() succeeds,
+	 * otherwise the last error.
+	 */
+	error = ENOTTY;
 	ok = 0;
 	TAILQ_FOREACH(me, &sc->sc_cld, me_next) {
 #ifdef DIAGNOSTIC

@@ -1,4 +1,4 @@
-/*	$OpenBSD: exec_i386.c,v 1.23 2018/04/23 23:14:10 yasuoka Exp $	*/
+/*	$OpenBSD: exec_i386.c,v 1.26 2018/12/10 16:52:02 jsing Exp $	*/
 
 /*
  * Copyright (c) 1997-1998 Michael Shalayeff
@@ -141,7 +141,7 @@ run_loadfile(u_long *marks, int howto)
 
 	/*
 	 * This code may be used both for 64bit and 32bit.  Make sure the
-	 * bootarg is 32bit always on even on amd64.
+	 * bootarg is always 32bit, even on amd64.
 	 */
 #ifdef __amd64__
 	makebootargs32(av, &ac);
@@ -217,11 +217,13 @@ ucode_load(void)
 	buf = (char *)(1*1024*1024);
 
 	if (read(fd, buf, buflen) != buflen) {
-		free(buf, buflen);
+		close(fd);
 		return;
 	}
 
 	uc.uc_addr = (uint64_t)buf;
 	uc.uc_size = (uint64_t)buflen;
 	addbootarg(BOOTARG_UCODE, sizeof(uc), &uc);
+
+	close(fd);
 }

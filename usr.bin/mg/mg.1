@@ -1,7 +1,7 @@
-.\"	$OpenBSD: mg.1,v 1.107 2018/08/29 07:50:16 reyk Exp $
+.\"	$OpenBSD: mg.1,v 1.111 2018/12/18 23:05:03 jmc Exp $
 .\" This file is in the public domain.
 .\"
-.Dd $Mdocdate: August 29 2018 $
+.Dd $Mdocdate: December 18 2018 $
 .Dt MG 1
 .Os
 .Sh NAME
@@ -475,6 +475,8 @@ Delete backwards
 characters.
 Like delete-char, this actually does a kill if presented
 with an argument.
+If the cursor is in a region, the region is removed and placed
+in to the kill buffer.
 .It delete-blank-lines
 Delete blank lines around dot.
 If dot is sitting on a blank line, this command
@@ -486,6 +488,8 @@ Delete
 characters forward.
 If any argument is present, it kills rather than deletes,
 saving the result in the kill buffer.
+If the cursor is in a region, the region is removed and placed
+in to the kill buffer.
 .It delete-horizontal-space
 Delete any whitespace around the dot.
 .It delete-leading-space
@@ -884,6 +888,10 @@ Prompt and switch to a new buffer in the current window.
 Switch to buffer in another window.
 .It toggle-read-only
 Toggle the read-only flag on the current buffer.
+.It toggle-read-only-all
+Toggle the read-only flag on all non-ephemeral buffers.
+A simple toggle that switches a global read-only flag either on
+or off.
 .It transpose-chars
 Transpose the two characters in front of and under dot,
 then move forward one character.
@@ -957,7 +965,7 @@ Specific key bindings are available in dired mode.
 dired-unmark-backward
 .It RET, e, f and C-m
 dired-find-file
-.It SPC
+.It SPC, n
 dired-next-line
 .It !
 dired-shell-command
@@ -971,8 +979,6 @@ dired-do-copy
 dired-flag-file-deletion
 .It g
 dired-revert
-.It n
-dired-next-line
 .It o
 dired-find-file-other-window
 .It p
@@ -1023,7 +1029,7 @@ dired buffer in another window.
 .It dired-previous-line
 Move the cursor to the previous line.
 .It dired-revert
-Refresh the dired buffer.
+Refresh the dired buffer while retaining any flags.
 .It dired-scroll-down
 Scroll down the dired buffer.
 .It dired-scroll-up
@@ -1066,9 +1072,9 @@ auto-execute *.c c-mode
 .Ed
 .Pp
 Comments can be added to the startup files by placing
-.Dq \;
+.Sq ;\&
 or
-.Dq #
+.Sq #
 as the first character of a line.
 .Sh FILES
 .Bl -tag -width /usr/share/doc/mg/tutorial -compact

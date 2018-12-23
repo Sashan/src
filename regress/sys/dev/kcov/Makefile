@@ -1,13 +1,27 @@
-#	$OpenBSD: Makefile,v 1.1 2018/08/26 08:12:09 anton Exp $
+#	$OpenBSD: Makefile,v 1.3 2018/12/17 22:11:37 anton Exp $
 
 PROG=		kcov
 WARNINGS=	yes
 
-run-regress-${PROG}: ${PROG}
+TESTS+=	coverage
+TESTS+=	fork
+TESTS+=	exec
+TESTS+=	mode
+TESTS+=	open
+TESTS+=	close
+
+REGRESS_SETUP_ONCE=	setup
+setup: ${PROG}
+
+.for t in ${TESTS}
+$t:
+	@echo "\n======== ${@} ========"
 	if ${SUDO} ./${PROG} -p; then \
-		${SUDO} ./${PROG} ${KCOVFLAGS}; \
+		${SUDO} ./${PROG} ${KCOVFLAGS} $t; \
 	else \
 		echo "SKIPPED"; \
 	fi
+REGRESS_TARGETS+=	$t
+.endfor
 
 .include <bsd.regress.mk>

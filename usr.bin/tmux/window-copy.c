@@ -1,4 +1,4 @@
-/* $OpenBSD: window-copy.c,v 1.203 2018/11/08 18:49:19 nicm Exp $ */
+/* $OpenBSD: window-copy.c,v 1.205 2018/12/18 13:20:44 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -26,7 +26,8 @@
 
 static const char *window_copy_key_table(struct window_pane *);
 static void	window_copy_command(struct window_pane *, struct client *,
-		    struct session *, struct args *, struct mouse_event *);
+		    struct session *, struct winlink *, struct args *,
+		    struct mouse_event *);
 static struct screen *window_copy_init(struct window_pane *,
 		    struct cmd_find_state *, struct args *);
 static void	window_copy_free(struct window_pane *);
@@ -514,7 +515,7 @@ window_copy_key_table(struct window_pane *wp)
 
 static void
 window_copy_command(struct window_pane *wp, struct client *c, struct session *s,
-    struct args *args, struct mouse_event *m)
+    __unused struct winlink *wl, struct args *args, struct mouse_event *m)
 {
 	struct window_copy_mode_data	*data = wp->modedata;
 	struct screen			*sn = &data->screen;
@@ -1817,15 +1818,27 @@ window_copy_in_set(struct window_pane *wp, u_int px, u_int py, const char *set)
 	struct window_copy_mode_data	*data = wp->modedata;
 	struct grid_cell		 gc;
 	const struct utf8_data		*ud;
+	struct utf8_data		*copy;
+	struct utf8_data		*loop;
+	int				 found = 0;
 
 	grid_get_cell(data->backing->grid, px, py, &gc);
-
+	if (gc.flags & GRID_FLAG_PADDING)
+		return (0);
 	ud = &gc.data;
-	if (ud->size != 1 || (gc.flags & GRID_FLAG_PADDING))
-		return (0);
-	if (*ud->data == 0x00 || *ud->data == 0x7f)
-		return (0);
-	return (strchr(set, *ud->data) != NULL);
+
+	copy = utf8_fromcstr(set);
+	for (loop = copy; loop->size != 0; loop++) {
+		if (loop->size != ud->size)
+			continue;
+		if (memcmp(loop->data, ud->data, loop->size) == 0) {
+			found = 1;
+			break;
+		}
+	}
+	free(copy);
+
+	return (found);
 }
 
 static u_int

@@ -211,10 +211,6 @@
 ./etc/rpc
 ./etc/services
 ./etc/signify
-./etc/signify/openbsd-62-base.pub
-./etc/signify/openbsd-62-fw.pub
-./etc/signify/openbsd-62-pkg.pub
-./etc/signify/openbsd-62-syspatch.pub
 ./etc/signify/openbsd-63-base.pub
 ./etc/signify/openbsd-63-fw.pub
 ./etc/signify/openbsd-63-pkg.pub
@@ -457,7 +453,7 @@
 ./usr/bin/merge
 ./usr/bin/mesg
 ./usr/bin/mg
-./usr/bin/midiplay
+./usr/bin/midicat
 ./usr/bin/mixerctl
 ./usr/bin/mkdep
 ./usr/bin/mklocale
@@ -624,8 +620,8 @@
 ./usr/games
 ./usr/include
 ./usr/lib
-./usr/lib/libc.so.92.7
-./usr/lib/libcrypto.so.45.0
+./usr/lib/libc.so.93.0
+./usr/lib/libcrypto.so.45.1
 ./usr/lib/libcurses.so.14.0
 ./usr/lib/libedit.so.5.2
 ./usr/lib/libevent.so.4.1
@@ -651,10 +647,10 @@
 ./usr/lib/librpcsvc.so.2.0
 ./usr/lib/libskey.so.6.0
 ./usr/lib/libsndio.so.7.0
-./usr/lib/libssl.so.47.0
+./usr/lib/libssl.so.47.1
 ./usr/lib/libtermcap.so.14.0
 ./usr/lib/libtermlib.so.14.0
-./usr/lib/libtls.so.19.0
+./usr/lib/libtls.so.19.2
 ./usr/lib/libusbhid.so.7.0
 ./usr/lib/libutil.so.13.0
 ./usr/lib/libz.so.5.0
@@ -2712,8 +2708,8 @@
 ./usr/share/relink/kernel.tgz
 ./usr/share/relink/usr
 ./usr/share/relink/usr/lib
-./usr/share/relink/usr/lib/libc.so.92.7.a
-./usr/share/relink/usr/lib/libcrypto.so.45.0.a
+./usr/share/relink/usr/lib/libc.so.93.0.a
+./usr/share/relink/usr/lib/libcrypto.so.45.1.a
 ./usr/share/relink/usr/libexec
 ./usr/share/relink/usr/libexec/ld.so.a
 ./usr/share/snmp

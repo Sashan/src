@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.c,v 1.566 2018/10/01 12:38:32 mpi Exp $	*/
+/*	$OpenBSD: if.c,v 1.570 2018/12/20 10:26:36 claudio Exp $	*/
 /*	$NetBSD: if.c,v 1.35 1996/05/07 05:26:04 thorpej Exp $	*/
 
 /*
@@ -84,6 +84,7 @@
 #include <sys/domain.h>
 #include <sys/task.h>
 #include <sys/atomic.h>
+#include <sys/percpu.h>
 #include <sys/proc.h>
 
 #include <dev/rndvar.h>
@@ -1103,6 +1104,9 @@ if_detach(struct ifnet *ifp)
 	splx(s);
 	NET_UNLOCK();
 
+	if (ifp->if_counters != NULL)
+		if_counters_free(ifp);
+
 	for (i = 0; i < ifp->if_nifqs; i++)
 		ifq_destroy(ifp->if_ifqs[i]);
 	if (ifp->if_ifqs != ifp->if_snd.ifq_ifqs) {
@@ -1622,7 +1626,7 @@ if_slowtimo(void *arg)
 	if (ifp->if_watchdog) {
 		if (ifp->if_timer > 0 && --ifp->if_timer == 0)
 			task_add(net_tq(ifp->if_index), &ifp->if_watchdogtask);
-		timeout_add(&ifp->if_slowtimo, hz / IFNET_SLOWHZ);
+		timeout_add_sec(&ifp->if_slowtimo, IFNET_SLOWTIMO);
 	}
 	splx(s);
 }
@@ -2131,11 +2135,13 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCSLIFPHYRTABLE:
 	case SIOCSLIFPHYTTL:
 	case SIOCSLIFPHYDF:
+	case SIOCSLIFPHYECN:
 	case SIOCADDMULTI:
 	case SIOCDELMULTI:
 	case SIOCSIFMEDIA:
 	case SIOCSVNETID:
 	case SIOCSVNETFLOWID:
+	case SIOCSTXHPRIO:
 	case SIOCSIFPAIR:
 	case SIOCSIFPARENT:
 	case SIOCDIFPARENT:
@@ -2360,11 +2366,47 @@ ifconf(caddr_t data)
 }
 
 void
+if_counters_alloc(struct ifnet *ifp)
+{
+	KASSERT(ifp->if_counters == NULL);
+
+	ifp->if_counters = counters_alloc(ifc_ncounters);
+}
+
+void
+if_counters_free(struct ifnet *ifp)
+{
+	KASSERT(ifp->if_counters != NULL);
+
+	counters_free(ifp->if_counters, ifc_ncounters);
+	ifp->if_counters = NULL;
+}
+
+void
 if_getdata(struct ifnet *ifp, struct if_data *data)
 {
 	unsigned int i;
 
 	*data = ifp->if_data;
+
+	if (ifp->if_counters != NULL) {
+		uint64_t counters[ifc_ncounters];
+
+		counters_read(ifp->if_counters, counters, nitems(counters));
+
+		data->ifi_ipackets += counters[ifc_ipackets];
+		data->ifi_ierrors += counters[ifc_ierrors];
+		data->ifi_opackets += counters[ifc_opackets];
+		data->ifi_oerrors += counters[ifc_oerrors];
+		data->ifi_collisions += counters[ifc_collisions];
+		data->ifi_ibytes += counters[ifc_ibytes];
+		data->ifi_obytes += counters[ifc_obytes];
+		data->ifi_imcasts += counters[ifc_imcasts];
+		data->ifi_omcasts += counters[ifc_omcasts];
+		data->ifi_iqdrops += counters[ifc_iqdrops];
+		data->ifi_oqdrops += counters[ifc_oqdrops];
+		data->ifi_noproto += counters[ifc_noproto];
+	}
 
 	for (i = 0; i < ifp->if_nifqs; i++) {
 		struct ifqueue *ifq = ifp->if_ifqs[i];

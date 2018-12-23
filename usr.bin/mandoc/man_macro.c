@@ -1,4 +1,4 @@
-/*	$OpenBSD: man_macro.c,v 1.95 2018/08/26 16:18:38 schwarze Exp $ */
+/*	$OpenBSD: man_macro.c,v 1.99 2018/12/21 16:58:49 schwarze Exp $ */
 /*
  * Copyright (c) 2008, 2009, 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
  * Copyright (c) 2012-2015, 2017, 2018 Ingo Schwarze <schwarze@openbsd.org>
@@ -20,6 +20,7 @@
 
 #include <assert.h>
 #include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -103,8 +104,8 @@ man_unscope(struct roff_man *man, const struct roff_node *to)
 			if (man->flags & (MAN_BLINE | MAN_ELINE) &&
 			    man_macro(n->tok)->flags &
 			     (MAN_BSCOPED | MAN_NSCOPED)) {
-				mandoc_vmsg(MANDOCERR_BLK_LINE,
-				    man->parse, n->line, n->pos,
+				mandoc_msg(MANDOCERR_BLK_LINE,
+				    n->line, n->pos,
 				    "EOF breaks %s", roff_name[n->tok]);
 				if (man->flags & MAN_ELINE)
 					man->flags &= ~MAN_ELINE;
@@ -121,7 +122,7 @@ man_unscope(struct roff_man *man, const struct roff_node *to)
 			if (n->type == ROFFT_BLOCK &&
 			    man_macro(n->tok)->fp == blk_exp)
 				mandoc_msg(MANDOCERR_BLK_NOEND,
-				    man->parse, n->line, n->pos,
+				    n->line, n->pos, "%s",
 				    roff_name[n->tok]);
 		}
 
@@ -199,27 +200,30 @@ blk_close(MACRO_PROT_ARGS)
 {
 	enum roff_tok		 ctok, ntok;
 	const struct roff_node	*nn;
-	char			*p;
-	int			 cline, cpos, nrew, target;
+	char			*p, *ep;
+	int			 cline, cpos, la, nrew, target;
 
 	nrew = 1;
 	switch (tok) {
 	case MAN_RE:
 		ntok = MAN_RS;
+		la = *pos;
 		if ( ! man_args(man, line, pos, buf, &p))
 			break;
 		for (nn = man->last->parent; nn; nn = nn->parent)
 			if (nn->tok == ntok && nn->type == ROFFT_BLOCK)
 				nrew++;
-		target = strtol(p, &p, 10);
-		if (*p != '\0')
-			mandoc_vmsg(MANDOCERR_ARG_EXCESS, man->parse,
-			    line, p - buf, "RE ... %s", p);
+		target = strtol(p, &ep, 10);
+		if (*ep != '\0')
+			mandoc_msg(MANDOCERR_ARG_EXCESS, line,
+			    la + (buf[la] == '"') + (int)(ep - p),
+			    "RE ... %s", ep);
+		free(p);
 		if (target == 0)
 			target = 1;
 		nrew -= target;
 		if (nrew < 1) {
-			mandoc_vmsg(MANDOCERR_RE_NOTOPEN, man->parse,
+			mandoc_msg(MANDOCERR_RE_NOTOPEN,
 			    line, ppos, "RE %d", target);
 			return;
 		}
@@ -242,8 +246,8 @@ blk_close(MACRO_PROT_ARGS)
 			break;
 
 	if (nn == NULL) {
-		mandoc_msg(MANDOCERR_BLK_NOTOPEN, man->parse,
-		    line, ppos, roff_name[tok]);
+		mandoc_msg(MANDOCERR_BLK_NOTOPEN,
+		    line, ppos, "%s", roff_name[tok]);
 		rew_scope(man, MAN_PP);
 		if (tok == MAN_RE) {
 			roff_elem_alloc(man, line, ppos, ROFF_br);
@@ -309,11 +313,12 @@ blk_exp(MACRO_PROT_ARGS)
 				roff_setreg(man->roff, "an-margin",
 				    head->aux, '+');
 		}
+		free(p);
 	}
 
 	if (buf[*pos] != '\0')
-		mandoc_vmsg(MANDOCERR_ARG_EXCESS, man->parse, line,
-		    *pos, "%s ... %s", roff_name[tok], buf + *pos);
+		mandoc_msg(MANDOCERR_ARG_EXCESS, line, *pos,
+		    "%s ... %s", roff_name[tok], buf + *pos);
 
 	man_unscope(man, head);
 	roff_body_alloc(man, line, ppos, tok);
@@ -345,6 +350,7 @@ blk_imp(MACRO_PROT_ARGS)
 		if ( ! man_args(man, line, pos, buf, &p))
 			break;
 		roff_word_alloc(man, line, la, p);
+		free(p);
 	}
 
 	/*
@@ -377,15 +383,13 @@ in_line_eoln(MACRO_PROT_ARGS)
 
 	for (;;) {
 		if (buf[*pos] != '\0' && (tok == MAN_fi || tok == MAN_nf)) {
-			mandoc_vmsg(MANDOCERR_ARG_SKIP,
-			    man->parse, line, *pos, "%s %s",
-			    roff_name[tok], buf + *pos);
+			mandoc_msg(MANDOCERR_ARG_SKIP, line, *pos,
+			    "%s %s", roff_name[tok], buf + *pos);
 			break;
 		}
 		if (buf[*pos] != '\0' && man->last != n && tok == MAN_PD) {
-			mandoc_vmsg(MANDOCERR_ARG_EXCESS,
-			    man->parse, line, *pos, "%s ... %s",
-			    roff_name[tok], buf + *pos);
+			mandoc_msg(MANDOCERR_ARG_EXCESS, line, *pos,
+			    "%s ... %s", roff_name[tok], buf + *pos);
 			break;
 		}
 		la = *pos;
@@ -396,6 +400,7 @@ in_line_eoln(MACRO_PROT_ARGS)
 			roff_word_append(man, p);
 		else
 			roff_word_alloc(man, line, la, p);
+		free(p);
 	}
 
 	/*
@@ -455,6 +460,6 @@ man_args(struct roff_man *man, int line, int *pos, char *buf, char **v)
 	if ('\0' == *start)
 		return 0;
 
-	*v = mandoc_getarg(man->parse, v, line, pos);
+	*v = roff_getarg(man->roff, v, line, pos);
 	return 1;
 }

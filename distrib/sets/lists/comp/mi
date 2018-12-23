@@ -841,7 +841,11 @@
 ./usr/include/dev/wsfont/bold8x16-iso1.h
 ./usr/include/dev/wsfont/bold8x16.h
 ./usr/include/dev/wsfont/gallant12x22.h
+./usr/include/dev/wsfont/spleen12x24.h
+./usr/include/dev/wsfont/spleen16x32.h
+./usr/include/dev/wsfont/spleen32x64.h
 ./usr/include/dev/wsfont/spleen5x8.h
+./usr/include/dev/wsfont/spleen8x16.h
 ./usr/include/dev/wsfont/wsfont.h
 ./usr/include/dev/x86emu
 ./usr/include/dev/x86emu/x86emu.h
@@ -929,6 +933,7 @@
 ./usr/include/net/hfsc.h
 ./usr/include/net/if.h
 ./usr/include/net/if_arp.h
+./usr/include/net/if_bpe.h
 ./usr/include/net/if_bridge.h
 ./usr/include/net/if_dl.h
 ./usr/include/net/if_enc.h
@@ -1107,6 +1112,7 @@
 ./usr/include/openssl/rsa.h
 ./usr/include/openssl/safestack.h
 ./usr/include/openssl/sha.h
+./usr/include/openssl/sm3.h
 ./usr/include/openssl/srtp.h
 ./usr/include/openssl/ssl.h
 ./usr/include/openssl/ssl2.h
@@ -1323,6 +1329,7 @@
 ./usr/include/sys/sensors.h
 ./usr/include/sys/shm.h
 ./usr/include/sys/siginfo.h
+./usr/include/sys/sigio.h
 ./usr/include/sys/signal.h
 ./usr/include/sys/signalvar.h
 ./usr/include/sys/socket.h
@@ -2319,7 +2326,7 @@
 ./usr/share/man/man3/fuse_mount.3
 ./usr/share/man/man3/fuse_new.3
 ./usr/share/man/man3/fuse_opt.3
-./usr/share/man/man3/fuse_parse_cmd_line.3
+./usr/share/man/man3/fuse_parse_cmdline.3
 ./usr/share/man/man3/fuse_set_signal_handlers.3
 ./usr/share/man/man3/fuse_setup.3
 ./usr/share/man/man3/fuse_teardown.3
@@ -2888,6 +2895,7 @@
 ./usr/share/man/man9/rtrequest.9
 ./usr/share/man/man9/rwlock.9
 ./usr/share/man/man9/sensor_attach.9
+./usr/share/man/man9/sigio_init.9
 ./usr/share/man/man9/socreate.9
 ./usr/share/man/man9/sosplice.9
 ./usr/share/man/man9/spl.9

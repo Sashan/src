@@ -1,4 +1,4 @@
-/*	$OpenBSD: libmdoc.h,v 1.84 2018/08/17 20:31:52 schwarze Exp $ */
+/*	$OpenBSD: libmdoc.h,v 1.86 2018/12/21 16:58:49 schwarze Exp $ */
 /*
  * Copyright (c) 2008, 2009, 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
  * Copyright (c) 2013,2014,2015,2017,2018 Ingo Schwarze <schwarze@openbsd.org>
@@ -38,6 +38,7 @@ enum	margserr {
 	ARGS_ERROR,
 	ARGS_EOLN, /* end-of-line */
 	ARGS_WORD, /* normal word */
+	ARGS_ALLOC, /* normal word from roff_getarg() */
 	ARGS_PUNCT, /* series of punctuation */
 	ARGS_PHRASE /* Bl -column phrase */
 };
@@ -69,7 +70,6 @@ void		  mdoc_tail_alloc(struct roff_man *, int, int,
 			enum roff_tok);
 struct roff_node *mdoc_endbody_alloc(struct roff_man *, int, int,
 			enum roff_tok, struct roff_node *);
-void		  mdoc_node_relink(struct roff_man *, struct roff_node *);
 void		  mdoc_node_validate(struct roff_man *);
 void		  mdoc_state(struct roff_man *, struct roff_node *);
 void		  mdoc_state_reset(struct roff_man *);

@@ -1,4 +1,4 @@
-/* $OpenBSD: input.c,v 1.138 2018/10/18 08:04:14 nicm Exp $ */
+/* $OpenBSD: input.c,v 1.140 2018/12/17 21:52:59 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -767,6 +767,8 @@ input_init(struct window_pane *wp)
 	ictx->input_buf = xmalloc(INPUT_BUF_START);
 
 	ictx->since_ground = evbuffer_new();
+	if (ictx->since_ground == NULL)
+		fatalx("out of memory");
 
 	evtimer_set(&ictx->timer, input_timer_callback, ictx);
 
@@ -1860,7 +1862,8 @@ input_csi_dispatch_sgr_colon(struct input_ctx *ictx, u_int i)
 				free(copy);
 				return;
 			}
-		}
+		} else
+			n++;
 		log_debug("%s: %u = %d", __func__, n - 1, p[n - 1]);
 	}
 	free(copy);

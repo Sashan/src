@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_sigalgs.h,v 1.4 2018/11/09 05:43:39 beck Exp $ */
+/* $OpenBSD: ssl_sigalgs.h,v 1.8 2018/11/16 02:41:16 beck Exp $ */
 /*
  * Copyright (c) 2018, Bob Beck <beck@openbsd.org>
  *
@@ -55,6 +55,9 @@ __BEGIN_HIDDEN_DECLS
 #define SIGALG_GOSTR12_256_STREEBOG_256	0xEEEE
 #define SIGALG_GOSTR01_GOST94		0xEDED
 
+/* Legacy sigalg for < 1.2 same value as boring uses*/
+#define SIGALG_RSA_PKCS1_MD5_SHA1	0xFF01
+
 #define SIGALG_FLAG_RSA_PSS	0x00000001
 
 struct ssl_sigalg{
@@ -70,10 +73,10 @@ extern uint16_t tls12_sigalgs[];
 extern size_t tls12_sigalgs_len;
 
 const struct ssl_sigalg *ssl_sigalg_lookup(uint16_t sigalg);
-const EVP_MD * ssl_sigalg_md(uint16_t sigalg, uint16_t *values, size_t len);
-uint16_t ssl_sigalg_value(const EVP_PKEY *pk, const EVP_MD *md);
+const struct ssl_sigalg *ssl_sigalg(uint16_t sigalg, uint16_t *values, size_t len);
 int ssl_sigalgs_build(CBB *cbb, uint16_t *values, size_t len);
 int ssl_sigalg_pkey_check(uint16_t sigalg, EVP_PKEY *pk);
+int ssl_sigalg_pkey_ok(const struct ssl_sigalg *sigalg, EVP_PKEY *pkey);
 
 __END_HIDDEN_DECLS
 

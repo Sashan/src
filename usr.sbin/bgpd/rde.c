@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.c,v 1.448 2018/11/08 09:59:45 claudio Exp $ */
+/*	$OpenBSD: rde.c,v 1.454 2018/12/22 16:12:40 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -71,7 +71,8 @@ void		 rde_reflector(struct rde_peer *, struct rde_aspath *);
 
 void		 rde_dump_ctx_new(struct ctl_show_rib_request *, pid_t,
 		     enum imsg_type);
-void		 rde_dump_ctx_throttle(pid_t pid, int throttle);
+void		 rde_dump_ctx_throttle(pid_t, int);
+void		 rde_dump_ctx_terminate(pid_t);
 void		 rde_dump_mrt_new(struct mrt *, pid_t, int);
 
 int		 rde_rdomain_import(struct rde_aspath *, struct rdomain *);
@@ -133,7 +134,7 @@ int			 softreconfig;
 struct rde_dump_ctx {
 	LIST_ENTRY(rde_dump_ctx)	entry;
 	struct ctl_show_rib_request	req;
-	sa_family_t			af;
+	u_int16_t			rid;
 	u_int8_t			throttled;
 };
 
@@ -482,7 +483,6 @@ rde_dispatch_imsg_session(struct imsgbuf *ibuf)
 			asp->origin = csr.origin;
 			asp->flags |= F_PREFIX_ANNOUNCED | F_ANN_DYNAMIC;
 			asp->aspath = aspath_get(asdata, csr.aspath_len);
-			asp->source_as = aspath_origin(asp->aspath);
 			netconf_s.asp = asp;
 			break;
 		case IMSG_NETWORK_ATTR:
@@ -583,10 +583,6 @@ badnetdel:
 			break;
 		case IMSG_CTL_SHOW_NETWORK:
 		case IMSG_CTL_SHOW_RIB:
-		case IMSG_CTL_SHOW_RIB_AS:
-		case IMSG_CTL_SHOW_RIB_COMMUNITY:
-		case IMSG_CTL_SHOW_RIB_EXTCOMMUNITY:
-		case IMSG_CTL_SHOW_RIB_LARGECOMMUNITY:
 		case IMSG_CTL_SHOW_RIB_PREFIX:
 			if (imsg.hdr.len != IMSG_HEADER_SIZE + sizeof(req)) {
 				log_warnx("rde_dispatch: wrong imsg len");
@@ -662,6 +658,9 @@ badnetdel:
 			} else {
 				rde_dump_ctx_throttle(imsg.hdr.pid, 1);
 			}
+			break;
+		case IMSG_CTL_TERMINATE:
+			rde_dump_ctx_terminate(imsg.hdr.pid);
 			break;
 		default:
 			break;
@@ -1125,10 +1124,6 @@ rde_update_dispatch(struct imsg *imsg)
 			}
 		}
 
-		if (state.aspath.flags & F_ATTR_ASPATH)
-			state.aspath.source_as =
-			    aspath_origin(state.aspath.aspath);
-
 		rde_reflector(peer, &state.aspath);
 	}
 
@@ -1393,7 +1388,7 @@ rde_update_update(struct rde_peer *peer, struct filterstate *in,
 
 	peer->prefix_rcvd_update++;
 	vstate = rde_roa_validity(&conf->rde_roa, prefix, prefixlen,
-	    in->aspath.source_as);
+	    aspath_origin(in->aspath.aspath));
 
 	/* add original path to the Adj-RIB-In */
 	if (path_update(&ribs[RIB_ADJ_IN].rib, peer, in, prefix, prefixlen,
@@ -2224,21 +2219,25 @@ rde_dump_filter(struct prefix *p, struct ctl_show_rib_request *req)
 	if ((req->flags & F_CTL_INVALID) &&
 	    (asp->flags & F_ATTR_PARSE_ERR) == 0)
 		return;
-	if (req->type == IMSG_CTL_SHOW_RIB_AS &&
-	    !aspath_match(asp->aspath->data, asp->aspath->len,
-	    &req->as, 0))
+	if (req->as.type != AS_UNDEF &&
+	    !aspath_match(asp->aspath, &req->as, 0))
 		return;
-	if (req->type == IMSG_CTL_SHOW_RIB_COMMUNITY &&
-	    !community_match(asp, req->community.as,
-	    req->community.type))
-		return;
-	if (req->type == IMSG_CTL_SHOW_RIB_EXTCOMMUNITY &&
-	    !community_ext_match(asp, &req->extcommunity, 0))
-		return;
-	if (req->type == IMSG_CTL_SHOW_RIB_LARGECOMMUNITY &&
-	    !community_large_match(asp, req->large_community.as,
-	    req->large_community.ld1, req->large_community.ld2))
-		return;
+	switch (req->community.type) {
+	case COMMUNITY_TYPE_NONE:
+		break;
+	case COMMUNITY_TYPE_BASIC:
+		if (!community_match(asp, &req->community, NULL))
+			return;
+		break;
+	case COMMUNITY_TYPE_LARGE:
+		if (!community_large_match(asp, &req->community, NULL))
+			return;
+		break;
+	case COMMUNITY_TYPE_EXT:
+		if (!community_ext_match(asp, &req->community, 0))
+			return;
+		break;
+	}
 	if (!ovs_match(p, req->flags))
 		return;
 	rde_dump_rib_as(p, asp, req->pid, req->flags);
@@ -2316,7 +2315,7 @@ rde_dump_ctx_new(struct ctl_show_rib_request *req, pid_t pid,
 		rid = RIB_ADJ_OUT;
 	} else if ((rid = rib_find(req->rib)) == RIB_NOTFOUND) {
 		log_warnx("rde_dump_ctx_new: no such rib %s", req->rib);
-		error = CTL_RES_NOSUCHPEER;
+		error = CTL_RES_NOSUCHRIB;
 		imsg_compose(ibuf_se_ctl, IMSG_CTL_RESULT, 0, pid, -1, &error,
 		    sizeof(error));
 		free(ctx);
@@ -2326,6 +2325,7 @@ rde_dump_ctx_new(struct ctl_show_rib_request *req, pid_t pid,
 	memcpy(&ctx->req, req, sizeof(struct ctl_show_rib_request));
 	ctx->req.pid = pid;
 	ctx->req.type = type;
+	ctx->rid = rid;
 	switch (ctx->req.type) {
 	case IMSG_CTL_SHOW_NETWORK:
 		if (rib_dump_new(rid, ctx->req.aid, CTL_MSG_HIGH_MARK, ctx,
@@ -2334,10 +2334,6 @@ rde_dump_ctx_new(struct ctl_show_rib_request *req, pid_t pid,
 			goto nomem;
 		break;
 	case IMSG_CTL_SHOW_RIB:
-	case IMSG_CTL_SHOW_RIB_AS:
-	case IMSG_CTL_SHOW_RIB_COMMUNITY:
-	case IMSG_CTL_SHOW_RIB_EXTCOMMUNITY:
-	case IMSG_CTL_SHOW_RIB_LARGECOMMUNITY:
 		if (rib_dump_new(rid, ctx->req.aid, CTL_MSG_HIGH_MARK, ctx,
 		    rde_dump_upcall, rde_dump_done, rde_dump_throttled) == -1)
 			goto nomem;
@@ -2373,7 +2369,7 @@ rde_dump_ctx_new(struct ctl_show_rib_request *req, pid_t pid,
 		free(ctx);
 		return;
 	default:
-		fatalx("rde_dump_ctx_new: unsupported imsg type");
+		fatalx("%s: unsupported imsg type", __func__);
 	}
 	LIST_INSERT_HEAD(&rde_dump_h, ctx, entry);
 }
@@ -2386,6 +2382,33 @@ rde_dump_ctx_throttle(pid_t pid, int throttle)
 	LIST_FOREACH(ctx, &rde_dump_h, entry) {
 		if (ctx->req.pid == pid) {
 			ctx->throttled = throttle;
+			return;
+		}
+	}
+}
+
+void
+rde_dump_ctx_terminate(pid_t pid)
+{
+	struct rde_dump_ctx	*ctx;
+
+	LIST_FOREACH(ctx, &rde_dump_h, entry) {
+		if (ctx->req.pid == pid) {
+			void (*upcall)(struct rib_entry *, void *);
+			switch (ctx->req.type) {
+			case IMSG_CTL_SHOW_NETWORK:
+				upcall = network_dump_upcall;
+				break;
+			case IMSG_CTL_SHOW_RIB:
+				upcall = rde_dump_upcall;
+				break;
+			case IMSG_CTL_SHOW_RIB_PREFIX:
+				upcall = rde_dump_prefix_upcall;
+				break;
+			default:
+				fatalx("%s: unsupported imsg type", __func__);
+			}
+			rib_dump_terminate(ctx->rid, ctx, upcall);
 			return;
 		}
 	}
@@ -2446,7 +2469,7 @@ rde_rdomain_import(struct rde_aspath *asp, struct rdomain *rd)
 	struct filter_set	*s;
 
 	TAILQ_FOREACH(s, &rd->import, entry) {
-		if (community_ext_match(asp, &s->action.ext_community, 0))
+		if (community_match(asp, &s->action.community, 0))
 			return (1);
 	}
 	return (0);
@@ -3090,7 +3113,7 @@ rde_softreconfig_in(struct rib_entry *re, void *bula)
 		if (conf->rde_roa.dirty) {
 			/* ROA validation state update */
 			vstate = rde_roa_validity(&conf->rde_roa,
-			    &prefix, pt->prefixlen, asp->source_as);
+			    &prefix, pt->prefixlen, aspath_origin(asp->aspath));
 			if (vstate != p->validation_state) {
 				force_eval = 1;
 				p->validation_state = vstate;
@@ -3376,6 +3399,20 @@ peer_up(u_int32_t id, struct session_up *sup)
 	}
 }
 
+static void
+peer_adjout_flush_upcall(struct rib_entry *re, void *arg)
+{
+	struct rde_peer *peer = arg;
+	struct prefix *p, *np;
+
+	LIST_FOREACH_SAFE(p, &re->prefix_h, rib_l, np) {
+		if (peer != prefix_peer(p))
+			continue;
+		prefix_destroy(p);
+		break;	/* optimization, only one match per peer possible */
+	}
+}
+
 void
 peer_down(u_int32_t id)
 {
@@ -3388,9 +3425,15 @@ peer_down(u_int32_t id)
 	}
 	peer->remote_bgpid = 0;
 	peer->state = PEER_DOWN;
-	up_down(peer);
 	/* stop all pending dumps which may depend on this peer */
 	rib_dump_terminate(peer->loc_rib_id, peer, rde_up_dump_upcall);
+
+	/* flush Adj-RIB-Out for this peer */
+	if (rib_dump_new(RIB_ADJ_OUT, AID_UNSPEC, 0, peer,
+	    peer_adjout_flush_upcall, NULL, NULL) == -1)
+		fatal("%s: rib_dump_new", __func__);
+
+	up_down(peer);
 
 	peer_flush(peer, AID_UNSPEC, 0);
 
@@ -3443,6 +3486,7 @@ peer_flush_upcall(struct rib_entry *re, void *arg)
 
 		prefix_destroy(p);
 		peer->prefix_cnt--;
+		break;	/* optimization, only one match per peer possible */
 	}
 }
 
@@ -3644,7 +3688,6 @@ network_add(struct network_config *nc, int flagstatic)
 		asp = path_get();
 		asp->aspath = aspath_get(NULL, 0);
 		asp->origin = ORIGIN_IGP;
-		asp->source_as = aspath_origin(asp->aspath);
 		asp->flags = F_ATTR_ORIGIN | F_ATTR_ASPATH |
 		    F_ATTR_LOCALPREF | F_PREFIX_ANNOUNCED;
 		/* the nexthop is unset unless a default set overrides it */
@@ -3658,7 +3701,7 @@ network_add(struct network_config *nc, int flagstatic)
 		    peerself);
 
 	vstate = rde_roa_validity(&conf->rde_roa, &nc->prefix,
-	    nc->prefixlen, asp->source_as);
+	    nc->prefixlen, aspath_origin(asp->aspath));
 	if (path_update(&ribs[RIB_ADJ_IN].rib, peerself, &state, &nc->prefix,
 	    nc->prefixlen, vstate) == 1)
 		peerself->prefix_cnt++;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_subr.c,v 1.282 2018/09/29 04:29:48 visa Exp $	*/
+/*	$OpenBSD: vfs_subr.c,v 1.284 2018/12/23 10:46:51 natano Exp $	*/
 /*	$NetBSD: vfs_subr.c,v 1.53 1996/04/22 01:39:13 christos Exp $	*/
 
 /*
@@ -1424,6 +1424,7 @@ vfs_hang_addrlist(struct mount *mp, struct netexport *nep,
 		return (EINVAL);
 	nplen = sizeof(struct netcred) + argp->ex_addrlen + argp->ex_masklen;
 	np = (struct netcred *)malloc(nplen, M_NETADDR, M_WAITOK|M_ZERO);
+	np->netc_len = nplen;
 	saddr = (struct sockaddr *)(np + 1);
 	error = copyin(argp->ex_addr, saddr, argp->ex_addrlen);
 	if (error)
@@ -1466,7 +1467,7 @@ finish:
 	np->netc_exflags = argp->ex_flags;
 	return (0);
 out:
-	free(np, M_NETADDR, nplen);
+	free(np, M_NETADDR, np->netc_len);
 	return (error);
 }
 
@@ -1474,9 +1475,10 @@ int
 vfs_free_netcred(struct radix_node *rn, void *w, u_int id)
 {
 	struct radix_node_head *rnh = (struct radix_node_head *)w;
+	struct netcred * np = (struct netcred *)rn;
 
 	rn_delete(rn->rn_key, rn->rn_mask, rnh, NULL);
-	free(rn, M_NETADDR, 0);
+	free(np, M_NETADDR, np->netc_len);
 	return (0);
 }
 
@@ -1490,7 +1492,7 @@ vfs_free_addrlist(struct netexport *nep)
 
 	if ((rnh = nep->ne_rtable_inet) != NULL) {
 		rn_walktree(rnh, vfs_free_netcred, rnh);
-		free(rnh, M_RTABLE, 0);
+		free(rnh, M_RTABLE, sizeof(*rnh));
 		nep->ne_rtable_inet = NULL;
 	}
 }
@@ -1607,6 +1609,15 @@ vaccess(enum vtype type, mode_t file_mode, uid_t uid, gid_t gid,
 	if (acc_mode & VWRITE)
 		mask |= S_IWOTH;
 	return (file_mode & mask) == mask ? 0 : EACCES;
+}
+
+int
+vnoperm(struct vnode *vp)
+{
+	if (vp->v_flag & VROOT || vp->v_mount == NULL)
+		return 0;
+
+	return (vp->v_mount->mnt_flag & MNT_NOPERM);
 }
 
 struct rwlock vfs_stall_lock = RWLOCK_INITIALIZER("vfs_stall");

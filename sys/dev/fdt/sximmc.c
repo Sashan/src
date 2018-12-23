@@ -1,4 +1,4 @@
-/* $OpenBSD: sximmc.c,v 1.5 2018/08/06 10:52:30 patrick Exp $ */
+/* $OpenBSD: sximmc.c,v 1.7 2018/12/04 11:25:48 kettenis Exp $ */
 /* $NetBSD: awin_mmc.c,v 1.23 2015/11/14 10:32:40 bouyer Exp $ */
 
 /*-
@@ -298,7 +298,8 @@ sximmc_match(struct device *parent, void *match, void *aux)
 	    OF_is_compatible(faa->fa_node, "allwinner,sun5i-a13-mmc") ||
 	    OF_is_compatible(faa->fa_node, "allwinner,sun7i-a20-mmc") ||
 	    OF_is_compatible(faa->fa_node, "allwinner,sun9i-a80-mmc") ||
-	    OF_is_compatible(faa->fa_node, "allwinner,sun50i-a64-mmc"));
+	    OF_is_compatible(faa->fa_node, "allwinner,sun50i-a64-mmc") ||
+	    OF_is_compatible(faa->fa_node, "allwinner,sun50i-a64-emmc"));
 }
 
 int
@@ -306,7 +307,8 @@ sximmc_idma_setup(struct sximmc_softc *sc)
 {
 	int error;
 
-	if (OF_is_compatible(sc->sc_node, "allwinner,sun4i-a10-mmc")) {
+	if (OF_is_compatible(sc->sc_node, "allwinner,sun4i-a10-mmc") ||
+	    OF_is_compatible(sc->sc_node, "allwinner,sun50i-a64-emmc")) {
 		sc->sc_idma_xferlen = 0x2000;
 	} else {
 		sc->sc_idma_xferlen = 0x10000;
@@ -418,7 +420,7 @@ sximmc_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_ih = fdt_intr_establish(faa->fa_node, IPL_BIO,
 	    sximmc_intr, sc, sc->sc_dev.dv_xname);
 	if (sc->sc_ih == NULL) {
-		printf(": can't to establish interrupt\n");
+		printf(": can't establish interrupt\n");
 		return;
 	}
 

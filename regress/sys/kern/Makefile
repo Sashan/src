@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.77 2018/09/30 08:26:40 vgross Exp $
+#	$OpenBSD: Makefile,v 1.79 2018/12/19 21:21:59 bluhm Exp $
 
 SUBDIR+= __syscall access accept cmsgsize
 SUBDIR+= dup2 dup2_accept dup2_self descrip
@@ -9,7 +9,7 @@ SUBDIR+= fcntl_dup
 SUBDIR+= flock
 SUBDIR+= ftruncate
 SUBDIR+= futex
-SUBDIR+= getpeereid getrusage gettimeofday itimer 
+SUBDIR+= getpeereid getrusage gettimeofday itimer
 SUBDIR+= kqueue mbuf minherit
 SUBDIR+= main-thread-exited
 SUBDIR+= mmap mmap2 mmap3 mmap-fail
@@ -18,7 +18,9 @@ SUBDIR+= nanosleep noexec
 SUBDIR+= open
 SUBDIR+= pledge
 SUBDIR+= pread preadv ptmget pty pwrite pwritev rcvtimeo
-SUBDIR+= rlimit-file signal signal-stress sigprof sigsuspend
+SUBDIR+= recvwait
+SUBDIR+= rlimit-file
+SUBDIR+= sigio signal signal-stress sigprof sigsuspend
 SUBDIR+= sosplice
 SUBDIR+= syscall sysvmsg sysvsem
 SUBDIR+= sysvshm unalign unfdpass wait

@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_sigalgs.c,v 1.3 2018/11/09 05:43:39 beck Exp $ */
+/* $OpenBSD: ssl_sigalgs.c,v 1.11 2018/11/16 02:41:16 beck Exp $ */
 /*
  * Copyright (c) 2018, Bob Beck <beck@openbsd.org>
  *
@@ -36,6 +36,7 @@ const struct ssl_sigalg sigalgs[] = {
 		.md = EVP_sha512,
 		.key_type = EVP_PKEY_EC,
 		.pkey_idx = SSL_PKEY_ECC,
+		.curve_nid = NID_secp521r1,
 	},
 #ifndef OPENSSL_NO_GOST
 	{
@@ -56,6 +57,7 @@ const struct ssl_sigalg sigalgs[] = {
 		.md = EVP_sha384,
 		.key_type = EVP_PKEY_EC,
 		.pkey_idx = SSL_PKEY_ECC,
+		.curve_nid = NID_secp384r1,
 	},
 	{
 		.value = SIGALG_RSA_PKCS1_SHA256,
@@ -68,6 +70,7 @@ const struct ssl_sigalg sigalgs[] = {
 		.md = EVP_sha256,
 		.key_type = EVP_PKEY_EC,
 		.pkey_idx = SSL_PKEY_ECC,
+		.curve_nid = NID_X9_62_prime256v1,
 	},
 #ifndef OPENSSL_NO_GOST
 	{
@@ -83,7 +86,6 @@ const struct ssl_sigalg sigalgs[] = {
 		.pkey_idx = SSL_PKEY_GOST01,
 	},
 #endif
-#ifdef LIBRESSL_HAS_TLS1_3
 	{
 		.value = SIGALG_RSA_PSS_RSAE_SHA256,
 		.md = EVP_sha256,
@@ -126,7 +128,6 @@ const struct ssl_sigalg sigalgs[] = {
 		.pkey_idx = SSL_PKEY_RSA_SIGN,
 		.flags = SIGALG_FLAG_RSA_PSS,
 	},
-#endif
 	{
 		.value = SIGALG_RSA_PKCS1_SHA224,
 		.md = EVP_sha224,
@@ -150,6 +151,12 @@ const struct ssl_sigalg sigalgs[] = {
 		.key_type = EVP_PKEY_EC,
 		.md = EVP_sha1,
 		.pkey_idx = SSL_PKEY_ECC,
+	},
+	{
+		.value = SIGALG_RSA_PKCS1_MD5_SHA1,
+		.key_type = EVP_PKEY_RSA,
+		.pkey_idx = SSL_PKEY_RSA_SIGN,
+		.md = EVP_md5_sha1,
 	},
 	{
 		.value = SIGALG_NONE,
@@ -187,8 +194,8 @@ ssl_sigalg_lookup(uint16_t sigalg)
 	return NULL;
 }
 
-const EVP_MD *
-ssl_sigalg_md(uint16_t sigalg, uint16_t *values, size_t len)
+const struct ssl_sigalg *
+ssl_sigalg(uint16_t sigalg, uint16_t *values, size_t len)
 {
 	const struct ssl_sigalg *sap;
 	int i;
@@ -199,40 +206,15 @@ ssl_sigalg_md(uint16_t sigalg, uint16_t *values, size_t len)
 	}
 	if (values[i] == sigalg) {
 		if ((sap = ssl_sigalg_lookup(sigalg)) != NULL)
-			return sap->md();
+			return sap;
 	}
 
 	return NULL;
 }
 
 int
-ssl_sigalg_pkey_check(uint16_t sigalg, EVP_PKEY *pk)
-{
-	const struct ssl_sigalg *sap;
-
-	if ((sap = ssl_sigalg_lookup(sigalg)) != NULL)
-		return sap->key_type == pk->type;
-
-	return 0;
-}
-
-uint16_t
-ssl_sigalg_value(const EVP_PKEY *pk, const EVP_MD *md)
-{
-	int i;
-
-	for (i = 0; sigalgs[i].value != SIGALG_NONE; i++) {
-		if ((sigalgs[i].key_type == pk->type) &&
-		    ((sigalgs[i].md() == md)))
-			return sigalgs[i].value;
-	}
-	return SIGALG_NONE;
-}
-
-int
 ssl_sigalgs_build(CBB *cbb, uint16_t *values, size_t len)
 {
-	const struct ssl_sigalg *sap;
 	size_t i;
 
 	for (i = 0; sigalgs[i].value != SIGALG_NONE; i++);
@@ -243,11 +225,46 @@ ssl_sigalgs_build(CBB *cbb, uint16_t *values, size_t len)
 
 	/* Add values in order as long as they are supported. */
 	for (i = 0; i < len; i++) {
-		if ((sap = ssl_sigalg_lookup(values[i])) != NULL) {
+		/* Do not allow the legacy value for < 1.2 to be used */
+		if (values[i] == SIGALG_RSA_PKCS1_MD5_SHA1)
+			return 0;
+
+		if (ssl_sigalg_lookup(values[i]) != NULL) {
 			if (!CBB_add_u16(cbb, values[i]))
 				return 0;
 		} else
 			return 0;
 	}
+	return 1;
+}
+
+int
+ssl_sigalg_pkey_ok(const struct ssl_sigalg *sigalg, EVP_PKEY *pkey)
+{
+	if (sigalg == NULL || pkey == NULL)
+		return 0;
+	if (sigalg->key_type != pkey->type)
+		return 0;
+
+	if ((sigalg->flags & SIGALG_FLAG_RSA_PSS)) {
+		/*
+		 * RSA PSS Must have an RSA key that needs to be at
+		 * least as big as twice the size of the hash + 2
+		 */
+		if (pkey->type != EVP_PKEY_RSA ||
+		    EVP_PKEY_size(pkey) < (2 * EVP_MD_size(sigalg->md()) + 2))
+			return 0;
+	}
+
+	if (pkey->type == EVP_PKEY_EC) {
+		if (sigalg->curve_nid == 0)
+			return 0;
+		/* Curve must match for EC keys */
+		if (EC_GROUP_get_curve_name(EC_KEY_get0_group
+		    (EVP_PKEY_get0_EC_KEY(pkey))) != sigalg->curve_nid) {
+			return 1; /* XXX www.videolan.org curve mismatch */
+		}
+	}
+
 	return 1;
 }

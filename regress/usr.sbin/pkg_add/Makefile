@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.57 2018/06/27 15:06:07 espie Exp $
+# $OpenBSD: Makefile,v 1.61 2018/12/21 14:04:53 espie Exp $
 
 REGRESS_TARGETS=pkgnames pkgpaths signatures depends-check longnames pkgcfl \
 	collision-check1-disabled collision-check2-disabled collision-check3 \
@@ -9,7 +9,7 @@ REGRESS_TARGETS=pkgnames pkgpaths signatures depends-check longnames pkgcfl \
 	lib-report1 lib-report2 lib-report3 loop1 \
 	lib-report4 lib-report5 lib-report6 lib-report7 \
 	qttest gstest exotest-disabled inter1 manual1 oldlib1 \
-	usertest-1 usertest-2 usertest-3 cups-bug
+	usertest-1 usertest-2 usertest-3 cups-bug nettle-bug
 
 collision-check{1,2}-disabled:
 	@! ${MAKE} -C ${.CURDIR} ${@:S/-disabled$//}
@@ -51,14 +51,14 @@ LONG3=iamanotherreallylonglinkthatcantberepresentedcorrectlyinatararchivebutwewa
 LONG4=iamanotherreallylonghardlinkthatcantberepresentedcorrectlyinatararchivebutwewantittohappenanywaysohmygodaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa42
 
 .for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 \
-    26 27 28 29 30 31 32 33 34 35 36
+    26 27 28 29 30 31 32 33 34 35 36 37
 S$i ?= ${.OBJDIR}/src$i
 SRC$i ?= ${S$i}/usr/local
 D$i ?= ${.OBJDIR}/dest$i
 DEST$i ?= ${D$i}/usr/local
 .endfor
 
-# current maxes (used): D33, SRC23, plist21
+# current maxes (used): D37, SRC24, plist22
 pkgnames:
 	perl ${.CURDIR}/check-name
 
@@ -233,7 +233,7 @@ qttest: rep0/qt-0.tgz rep1/qt-1.tgz
 gstest: rep0/gs-0.tgz rep0/gs-0-no_x11.tgz rep0/purple-0.tgz
 	@-rm -rf ${D27}
 	-@ROOT=${D27} PKG_PATH=${.OBJDIR}/rep0 ${ADD_PKG} purple-0
-	@if ROOT=${D27} PKG_PATH=${.OBJDIR}/rep0 ${ADD_PKG} -r gs-0-no_x11; then exit 1; fi
+	@if ROOT=${D27} PKG_PATH=${.OBJDIR}/rep0 ${ADD_PKG} -rI gs-0-no_x11; then exit 1; fi
 
 exotest: rep0/exo-0.tgz rep1/exo-1.tgz
 	@-rm -rf ${D28}
@@ -251,7 +251,7 @@ manual1: rep0/ma-0.tgz rep0/mb-0.tgz rep0/mc-0.tgz rep0/md-0.tgz \
 	@-rm -rf ${D30}
 	@ROOT=${D30} PKG_PATH=${.OBJDIR}/rep0 ${ADD_PKG} md mb
 	@ROOT=${D30} ${INFO_PKG} -mq|diff -u - ${.CURDIR}/list9.out
-	@ROOT=${D30} PKG_PATH=${.OBJDIR}/rep1 ${ADD_PKG} -u
+	@-ROOT=${D30} PKG_PATH=${.OBJDIR}/rep1 ${ADD_PKG} -u
 	@ROOT=${D30} ${INFO_PKG} -mq|diff -u - ${.CURDIR}/list10.out
 	@ROOT=${D30} ${DELETE_PKG} -a
 	@ROOT=${D30} ${INFO_PKG} -q|diff -u - ${.CURDIR}/list11.out
@@ -690,6 +690,46 @@ usertest-3:
 keys:
 	mkdir signify
 	signify -G -n -s signify/test-pkg.sec -p signify/test-pkg.pub
+
+plist22:
+	@echo "@owner "`id -un` >>$@
+	@echo "@group "`id -gn` >>$@
+	@echo '@lib lib/libnettle.so.$${LIBnettle_VERSION}' >>$@
+
+rep4/libnettle-0.tgz: plist22
+	@mkdir -p ${SRC24}/lib
+	@touch ${SRC24}/lib/libnettle.so.0.0
+	@${CREATE_PKG} -B src24 -DLIBnettle_VERSION=0.0 -f plist22 $@
+
+rep4/cups-libs-0.tgz:
+	@${CREATE_PKG} -P't/gnutls:gnutls-*:gnutls-0' -f ${.CURDIR}/empty $@
+
+rep5/cups-libs-0.tgz:
+	@${CREATE_PKG} -P't/gnutls:gnutls-*:gnutls-0' -f ${.CURDIR}/empty $@
+
+rep4/gnutls-0.tgz:
+	@${CREATE_PKG} -P't/libnettle:libnettle-*:libnettle-0' -f ${.CURDIR}/empty $@
+
+rep5/gnutls-0.tgz:
+	@${CREATE_PKG} -P't/libnettle:libnettle-*:libnettle-1' -f ${.CURDIR}/empty $@
+
+rep4/gtk+3-cups-0.tgz:
+	@${CREATE_PKG} -DREGRESSION_TESTING -W nettle.0.0 -P't/cups-libs:cups-libs-*:cups-libs-0' -f ${.CURDIR}/empty $@
+
+rep5/gtk+3-cups-0.tgz:
+	@${CREATE_PKG} -DREGRESSION_TESTING -W nettle.1.0 -P't/cups-libs:cups-libs-*:cups-libs-0' -f ${.CURDIR}/empty $@
+
+rep5/libnettle-1.tgz: plist22
+	@mkdir -p ${SRC24}/lib
+	@touch ${SRC24}/lib/libnettle.so.1.0
+	@${CREATE_PKG} -B src24 -DLIBnettle_VERSION=1.0 -f plist22 $@
+
+nettle-bug: rep4/cups-libs-0.tgz rep4/gtk+3-cups-0.tgz rep4/gnutls-0.tgz \
+	rep4/libnettle-0.tgz rep5/cups-libs-0.tgz rep5/gtk+3-cups-0.tgz \
+	rep5/gnutls-0.tgz rep5/libnettle-1.tgz
+	@-rm -rf ${D37}
+	@ROOT=${D37} ${ADD_PKG} rep4/gtk+3-cups
+	@ROOT=${D37} PKG_PATH=${.OBJDIR}/rep5 ${ADD_PKG} -u gtk+3-cups
 
 .PHONY: ${REGRESS_TARGETS}
 

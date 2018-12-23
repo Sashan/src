@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.686 2018/11/07 08:10:45 miko Exp $	*/
+/*	$OpenBSD: parse.y,v 1.688 2018/11/15 03:22:01 dlg Exp $	*/
 
 /*
  * Copyright (c) 2001 Markus Friedl.  All rights reserved.
@@ -307,7 +307,6 @@ struct scrub_opts {
 	int			nodf;
 	int			minttl;
 	int			maxmss;
-	int			settos;
 	int			randomid;
 	int			reassemble_tcp;
 } scrub_opts;
@@ -5564,8 +5563,8 @@ pfctl_cmdline_symset(char *s)
 	if ((val = strrchr(s, '=')) == NULL)
 		return (-1);
 
-	sym = strndup(s, val - s);	
-	if (sym == NULL);
+	sym = strndup(s, val - s);
+	if (sym == NULL)
 		err(1, "%s", __func__);
 	ret = symset(sym, val + 1, 1);
 	free(sym);

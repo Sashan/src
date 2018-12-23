@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.352 2018/11/04 14:34:00 claudio Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.359 2018/12/22 16:12:40 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -50,6 +50,7 @@
 #define	READ_BUF_SIZE			65535
 #define	RT_BUF_SIZE			16384
 #define	MAX_RTSOCK_BUF			(2 * 1024 * 1024)
+#define	MAX_COMM_MATCH			3
 
 #define	BGPD_OPT_VERBOSE		0x0001
 #define	BGPD_OPT_VERBOSE2		0x0002
@@ -427,12 +428,8 @@ enum imsg_type {
 	IMSG_CTL_SHOW_NEXTHOP,
 	IMSG_CTL_SHOW_INTERFACE,
 	IMSG_CTL_SHOW_RIB,
-	IMSG_CTL_SHOW_RIB_AS,
 	IMSG_CTL_SHOW_RIB_PREFIX,
 	IMSG_CTL_SHOW_RIB_ATTR,
-	IMSG_CTL_SHOW_RIB_COMMUNITY,
-	IMSG_CTL_SHOW_RIB_EXTCOMMUNITY,
-	IMSG_CTL_SHOW_RIB_LARGECOMMUNITY,
 	IMSG_CTL_SHOW_NETWORK,
 	IMSG_CTL_SHOW_RIB_MEM,
 	IMSG_CTL_SHOW_RIB_HASH,
@@ -440,6 +437,7 @@ enum imsg_type {
 	IMSG_CTL_SHOW_TIMER,
 	IMSG_CTL_LOG_VERBOSE,
 	IMSG_CTL_SHOW_FIB_TABLES,
+	IMSG_CTL_TERMINATE,
 	IMSG_NETWORK_ADD,
 	IMSG_NETWORK_ASPATH,
 	IMSG_NETWORK_ATTR,
@@ -509,7 +507,8 @@ enum ctl_results {
 	CTL_RES_PENDING,
 	CTL_RES_NOMEM,
 	CTL_RES_BADPEER,
-	CTL_RES_BADSTATE
+	CTL_RES_BADSTATE,
+	CTL_RES_NOSUCHRIB
 };
 
 /* needed for session.h parse prototype */
@@ -740,35 +739,27 @@ struct filter_ovs {
 };
 
 struct filter_community {
-	int		as;
-	int		type;
-};
-
-struct filter_largecommunity {
-	int64_t		as;
-	int64_t		ld1;
-	int64_t		ld2;
-};
-
-struct filter_extcommunity {
-	u_int16_t	flags;
 	u_int8_t	type;
-	u_int8_t	subtype;	/* if extended type */
+	u_int8_t	dflag1;	/* one of set, any, local-as, neighbor-as */
+	u_int8_t	dflag2;
+	u_int8_t	dflag3;
 	union {
-		struct ext_as {
-			u_int16_t	as;
-			u_int32_t	val;
-		}		ext_as;
-		struct ext_as4 {
-			u_int32_t	as4;
-			u_int16_t	val;
-		}		ext_as4;
-		struct ext_ip {
-			struct in_addr	addr;
-			u_int16_t	val;
-		}		ext_ip;
-		u_int64_t	ext_opaq;	/* only 48 bits */
-	}		data;
+		struct basic {
+			u_int32_t	data1;
+			u_int32_t	data2;
+		} b;
+		struct large {
+			u_int32_t	data1;
+			u_int32_t	data2;
+			u_int32_t	data3;
+		} l;
+		struct ext {
+			u_int32_t	data1;
+			u_int64_t	data2;
+			u_int8_t	type;
+			u_int8_t	subtype;	/* if extended type */
+		} e;
+	}		c;
 };
 
 struct ctl_show_rib_request {
@@ -777,8 +768,6 @@ struct ctl_show_rib_request {
 	struct bgpd_addr	prefix;
 	struct filter_as	as;
 	struct filter_community community;
-	struct filter_extcommunity extcommunity;
-	struct filter_largecommunity large_community;
 	u_int32_t		peerid;
 	u_int32_t		flags;
 	u_int8_t		validation_state;
@@ -828,11 +817,16 @@ struct filter_peers {
 };
 
 /* special community type */
-#define	COMMUNITY_ERROR			-1
-#define	COMMUNITY_ANY			-2
-#define	COMMUNITY_NEIGHBOR_AS		-3
-#define	COMMUNITY_LOCAL_AS		-4
-#define	COMMUNITY_UNSET			-5
+#define	COMMUNITY_TYPE_NONE		0
+#define	COMMUNITY_TYPE_BASIC		1
+#define	COMMUNITY_TYPE_EXT		2
+#define	COMMUNITY_TYPE_LARGE		3
+
+#define	COMMUNITY_ANY			1
+#define	COMMUNITY_NEIGHBOR_AS		2
+#define	COMMUNITY_LOCAL_AS		3
+
+/* wellknown community definitions */
 #define	COMMUNITY_WELLKNOWN		0xffff
 #define	COMMUNITY_GRACEFUL_SHUTDOWN	0x0000  /* RFC 8326 */
 #define	COMMUNITY_BLACKHOLE		0x029A	/* RFC 7999 */
@@ -927,17 +921,10 @@ struct filter_match {
 	struct filter_nexthop		nexthop;
 	struct filter_as		as;
 	struct filter_aslen		aslen;
-	struct filter_community		community;
-	struct filter_largecommunity	large_community;
-	struct filter_extcommunity	ext_community;
+	struct filter_community		community[MAX_COMM_MATCH];
 	struct filter_prefixset		prefixset;
 	struct filter_originset		originset;
 	struct filter_ovs		ovs;
-};
-
-union filter_rule_ptr {
-	struct filter_rule		*ptr;
-	u_int32_t			 nr;
 };
 
 struct filter_rule {
@@ -951,7 +938,7 @@ struct filter_rule {
 #define RDE_FILTER_SKIP_REMOTE_AS	2
 #define RDE_FILTER_SKIP_PEERID		3
 #define RDE_FILTER_SKIP_COUNT		4
-	union filter_rule_ptr		skip[RDE_FILTER_SKIP_COUNT];
+	struct filter_rule		*skip[RDE_FILTER_SKIP_COUNT];
 	enum filter_actions		action;
 	enum directions			dir;
 	u_int8_t			quick;
@@ -971,12 +958,8 @@ enum action_types {
 	ACTION_SET_NEXTHOP_BLACKHOLE,
 	ACTION_SET_NEXTHOP_NOMODIFY,
 	ACTION_SET_NEXTHOP_SELF,
-	ACTION_SET_COMMUNITY,
 	ACTION_DEL_COMMUNITY,
-	ACTION_DEL_LARGE_COMMUNITY,
-	ACTION_SET_LARGE_COMMUNITY,
-	ACTION_SET_EXT_COMMUNITY,
-	ACTION_DEL_EXT_COMMUNITY,
+	ACTION_SET_COMMUNITY,
 	ACTION_PFTABLE,
 	ACTION_PFTABLE_ID,
 	ACTION_RTLABEL,
@@ -995,8 +978,6 @@ struct filter_set {
 		struct bgpd_addr		 nexthop;
 		struct nexthop			*nh;
 		struct filter_community		 community;
-		struct filter_largecommunity	 large_community;
-		struct filter_extcommunity	 ext_community;
 		char				 pftable[PFTABLE_LEN];
 		char				 rtlabel[RTLABEL_LEN];
 		u_int8_t			 origin;
@@ -1266,7 +1247,6 @@ const char	*log_shutcomm(const char *);
 int		 aspath_snprint(char *, size_t, void *, u_int16_t);
 int		 aspath_asprint(char **, void *, u_int16_t);
 size_t		 aspath_strlen(void *, u_int16_t);
-int		 aspath_match(void *, u_int16_t, struct filter_as *, u_int32_t);
 u_int32_t	 aspath_extract(const void *, int);
 int		 aspath_verify(void *, u_int16_t, int);
 #define		 AS_ERR_LEN	-1
@@ -1414,7 +1394,8 @@ static const char * const ctl_res_strerror[] = {
 	"previous reload still running",
 	"out of memory",
 	"not a cloned peer",
-	"peer still active, down peer first"
+	"peer still active, down peer first",
+	"no such RIB"
 };
 
 static const char * const timernames[] = {

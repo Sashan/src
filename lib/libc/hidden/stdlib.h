@@ -1,4 +1,4 @@
-/*	$OpenBSD: stdlib.h,v 1.13 2018/11/05 08:23:40 otto Exp $	*/
+/*	$OpenBSD: stdlib.h,v 1.15 2018/11/21 06:57:04 otto Exp $	*/
 /*	$NetBSD: stdlib.h,v 1.25 1995/12/27 21:19:08 jtc Exp $	*/
 
 /*-

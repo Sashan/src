@@ -114,6 +114,7 @@ maildir_engine(const char *dirname, int junk)
 	char	extpath[PATH_MAX];
 	char	subdir[PATH_MAX];
 	char	filename[PATH_MAX];
+	char	hostname[HOST_NAME_MAX+1];
 
 	char	tmp[PATH_MAX];
 	char	new[PATH_MAX];
@@ -165,10 +166,13 @@ maildir_engine(const char *dirname, int junk)
 		}
 	}
 
+	if (gethostname(hostname, sizeof hostname) != 0)
+		(void)strlcpy(hostname, "localhost", sizeof hostname);
+
 	(void)snprintf(filename, sizeof filename, "%lld.%08x.%s",
 	    (long long int) time(NULL),
 	    arc4random(),
-	    "localhost");
+	    hostname);
 
 	(void)snprintf(tmp, sizeof tmp, "%s/tmp/%s", dirname, filename);
 
@@ -182,7 +186,9 @@ maildir_engine(const char *dirname, int junk)
 		line[strcspn(line, "\n")] = '\0';
 		if (line[0] == '\0')
 			in_hdr = 0;
-		if (junk && in_hdr && strcmp(line, "X-Spam: yes") == 0)
+		if (junk && in_hdr &&
+		    (strcasecmp(line, "x-spam: yes") == 0 ||
+			strcasecmp(line, "x-spam-flag: yes") == 0))
 			is_junk = 1;
 		fprintf(fp, "%s\n", line);
 	}

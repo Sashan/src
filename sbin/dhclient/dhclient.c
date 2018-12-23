@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhclient.c,v 1.582 2018/11/09 16:52:41 krw Exp $	*/
+/*	$OpenBSD: dhclient.c,v 1.590 2018/11/12 16:46:02 krw Exp $	*/
 
 /*
  * Copyright 2004 Henning Brauer <henning@openbsd.org>
@@ -137,7 +137,7 @@ struct ifaddrs	*get_link_ifa(const char *, struct ifaddrs *);
 void		 interface_link_forceup(char *, int);
 void		 interface_state(struct interface_info *);
 void		 get_hw_address(struct interface_info *);
-void		 tick_msg(const char *, int, time_t, time_t);
+void		 tick_msg(const char *, int, time_t);
 
 struct client_lease *apply_defaults(struct client_lease *);
 struct client_lease *clone_lease(struct client_lease *);
@@ -185,7 +185,7 @@ void	set_default_client_identifier(struct interface_info *);
 void	set_default_hostname(void);
 struct client_lease *get_recorded_lease(struct interface_info *);
 
-#define ROUNDUP(a) \
+#define ROUNDUP(a)	\
 	((a) > 0 ? (1 + (((a) - 1) | (sizeof(long) - 1))) : sizeof(long))
 #define	ADVANCE(x, n) (x += ROUNDUP((n)->sa_len))
 
@@ -302,7 +302,6 @@ get_hw_address(struct interface_info *ifi)
 	sdl = (struct sockaddr_dl *)ifa->ifa_addr;
 	memcpy(ifi->hw_address.ether_addr_octet, LLADDR(sdl),
 	    ETHER_ADDR_LEN);
-	ifi->flags |= IFI_VALID_LLADDR;
 
 	freeifaddrs(ifap);
 }
@@ -315,9 +314,10 @@ routehandler(struct interface_info *ifi, int routefd)
 	struct if_msghdr		*ifm;
 	struct if_announcemsghdr	*ifan;
 	struct ifa_msghdr		*ifam;
+	struct if_ieee80211_data	*ifie;
 	char				*rtmmsg;
 	ssize_t				 n;
-	int				 newlinkstatus, oldlinkstatus;
+	int				 newlinkup, oldlinkup;
 
 	rtmmsg = calloc(1, 2048);
 	if (rtmmsg == NULL)
@@ -364,25 +364,40 @@ routehandler(struct interface_info *ifi, int routefd)
 		if ((rtm->rtm_flags & RTF_UP) == 0)
 			fatalx("down");
 
-		if ((ifi->flags & IFI_VALID_LLADDR) != 0) {
+		oldlinkup = LINK_STATE_IS_UP(ifi->link_state);
+		interface_state(ifi);
+		newlinkup = LINK_STATE_IS_UP(ifi->link_state);
+
+		if (newlinkup != 0) {
 			memcpy(&hw, &ifi->hw_address, sizeof(hw));
 			get_hw_address(ifi);
 			if (memcmp(&hw, &ifi->hw_address, sizeof(hw))) {
+				tick_msg("", 0, INT64_MAX);
 				log_warnx("%s: LLADDR changed", log_procname);
 				quit = SIGHUP;
 				goto done;
 			}
 		}
 
-		oldlinkstatus = LINK_STATE_IS_UP(ifi->link_state);
-		interface_state(ifi);
-		newlinkstatus = LINK_STATE_IS_UP(ifi->link_state);
-		if (newlinkstatus != oldlinkstatus) {
+		if (newlinkup != oldlinkup) {
 			log_debug("%s: link %s -> %s", log_procname,
-			    (oldlinkstatus != 0) ? "up" : "down",
-			    (newlinkstatus != 0) ? "up" : "down");
+			    (oldlinkup != 0) ? "up" : "down",
+			    (newlinkup != 0) ? "up" : "down");
 			ifi->state = S_PREBOOT;
 			state_preboot(ifi);
+		}
+		break;
+	case RTM_80211INFO:
+		if (rtm->rtm_index != ifi->index)
+			break;
+		ifie = &((struct if_ieee80211_msghdr *)rtm)->ifim_ifie;
+		if (ifi->ssid_len != ifie->ifie_nwid_len ||
+		    memcmp(ifi->ssid, ifie->ifie_nwid, ifie->ifie_nwid_len)
+		    != 0) {
+			tick_msg("", 0, INT64_MAX);
+			log_warnx("%s: SSID changed", log_procname);
+			quit = SIGHUP;
+			goto done;
 		}
 		break;
 	case RTM_IFANNOUNCE:
@@ -607,7 +622,7 @@ main(int argc, char *argv[])
 
 	rtfilter = ROUTE_FILTER(RTM_PROPOSAL) | ROUTE_FILTER(RTM_IFINFO) |
 	    ROUTE_FILTER(RTM_NEWADDR) | ROUTE_FILTER(RTM_DELADDR) |
-	    ROUTE_FILTER(RTM_IFANNOUNCE);
+	    ROUTE_FILTER(RTM_IFANNOUNCE) | ROUTE_FILTER(RTM_80211INFO);
 
 	if (setsockopt(routefd, PF_ROUTE, ROUTE_MSGFILTER,
 	    &rtfilter, sizeof(rtfilter)) == -1)
@@ -671,6 +686,7 @@ main(int argc, char *argv[])
 	}
 
 	time(&ifi->startup_time);
+	tick_msg(NULL, 0, ifi->startup_time);	/* Set time to stop ticking. */
 
 	ifi->state = S_PREBOOT;
 	state_preboot(ifi);
@@ -695,28 +711,23 @@ usage(void)
 void
 state_preboot(struct interface_info *ifi)
 {
-	time_t		 cur_time, tickstart, tickstop;
+	time_t		 cur_time;
 
 	time(&cur_time);
 
-	tickstart = ifi->startup_time + 3;
-	tickstop = ifi->startup_time + config->link_timeout;
-
 	interface_state(ifi);
+	tick_msg("link", LINK_STATE_IS_UP(ifi->link_state), ifi->startup_time);
 
 	if (LINK_STATE_IS_UP(ifi->link_state)) {
-		tick_msg("link", 1, tickstart, tickstop);
-		if ((ifi->flags & IFI_VALID_LLADDR) == 0)
-			get_hw_address(ifi);
 		ifi->state = S_REBOOTING;
 		state_reboot(ifi);
 	} else {
-		tick_msg("link", 0, tickstart, tickstop);
-		if (cur_time > tickstop) {
+		if (cur_time < ifi->startup_time + config->link_timeout) {
+			set_timeout(ifi, 1, state_preboot);
+		} else {
 			go_daemon();
 			cancel_timeout(ifi); /* Wait for RTM_IFINFO. */
-		} else
-			set_timeout(ifi, 1, state_preboot);
+		}
 	}
 }
 
@@ -954,14 +965,12 @@ bind_lease(struct interface_info *ifi)
 	struct proposal		*offered_proposal = NULL;
 	struct proposal		*effective_proposal = NULL;
 	char			*msg = NULL;
-	time_t			 cur_time, renewal, tickstart, tickstop;
+	time_t			 cur_time, renewal;
 	int			 rslt, seen;
 
 	time(&cur_time);
-	tickstart = ifi->first_sending + 3;
-	tickstop = ifi->startup_time + config->link_timeout;
 	if ((cmd_opts & OPT_VERBOSE) == 0)
-		tick_msg("lease", 1, tickstart, tickstop);
+		tick_msg("lease", 1, ifi->first_sending);
 
 	lease = apply_defaults(ifi->offer);
 
@@ -1310,17 +1319,13 @@ void
 send_discover(struct interface_info *ifi)
 {
 	struct dhcp_packet	*packet = &ifi->sent_packet;
-	time_t			 cur_time, interval, tickstart, tickstop;
+	time_t			 cur_time, interval;
 	ssize_t			 rslt;
 
 	time(&cur_time);
 
 	/* Figure out how long it's been since we started transmitting. */
 	interval = cur_time - ifi->first_sending;
-
-	tickstart = ifi->first_sending + 3;
-	tickstop = ifi->startup_time + config->link_timeout;
-
 	if (interval > config->timeout) {
 		state_panic(ifi);
 		return;
@@ -1356,12 +1361,12 @@ send_discover(struct interface_info *ifi)
 	 * link_timeout we just go daemon and finish things up in the
 	 * background.
 	 */
-	if (cur_time < tickstop) {
+	if (cur_time < ifi->startup_time + config->link_timeout) {
 		if ((cmd_opts & OPT_VERBOSE) == 0)
-			tick_msg("lease", 0, tickstart, tickstop);
+			tick_msg("lease", 0, ifi->first_sending);
 		ifi->interval = 1;
 	} else {
-		tick_msg("lease", 0, tickstart, tickstop);
+		tick_msg("lease", 0, ifi->first_sending);
 	}
 
 	/* Record the number of seconds since we started sending. */
@@ -1417,15 +1422,12 @@ send_request(struct interface_info *ifi)
 	struct in_addr		 from;
 	struct dhcp_packet	*packet = &ifi->sent_packet;
 	ssize_t			 rslt;
-	time_t			 cur_time, interval, tickstart, tickstop;
+	time_t			 cur_time, interval;
 
 	time(&cur_time);
 
 	/* Figure out how long it's been since we started transmitting. */
 	interval = cur_time - ifi->first_sending;
-
-	tickstart = ifi->first_sending + 3;
-	tickstop = ifi->startup_time + config->link_timeout;
 
 	/*
 	 * If we're in the INIT-REBOOT state and we've been trying longer
@@ -1483,12 +1485,12 @@ send_request(struct interface_info *ifi)
 	 * link_timeout we just go daemon and finish things up in the
 	 * background.
 	 */
-	if (cur_time < tickstop) {
+	if (cur_time < ifi->startup_time + config->link_timeout) {
 		if ((cmd_opts & OPT_VERBOSE) == 0)
-			tick_msg("lease", 0, tickstart, tickstop);
+			tick_msg("lease", 0, ifi->first_sending);
 		ifi->interval = 1;
 	} else {
-		tick_msg("lease", 0, tickstart, tickstop);
+		tick_msg("lease", 0, ifi->first_sending);
 	}
 
 	/*
@@ -2751,14 +2753,31 @@ lease_rebind(struct client_lease *lease)
 }
 
 void
-tick_msg(const char *preamble, int success, time_t start, time_t stop)
+tick_msg(const char *preamble, int success, time_t start)
 {
 	static int	preamble_sent;
+	static time_t	stop;
 	time_t		cur_time;
+
+#define	GRACE_SECONDS	3
 
 	time(&cur_time);
 
-	if (isatty(STDERR_FILENO) == 0 || cur_time < start)
+	if (start == INT64_MAX) {
+		if (preamble_sent == 1) {
+			fprintf(stderr, "\n");
+			fflush(stderr);
+			preamble_sent = 0;
+		}
+		return;
+	}
+
+	if (preamble == NULL) {
+		stop = start + config->link_timeout;
+		return;
+	}
+
+	if (isatty(STDERR_FILENO) == 0 || cur_time < start + GRACE_SECONDS)
 		return;
 
 	if (preamble_sent == 0) {
@@ -2767,7 +2786,7 @@ tick_msg(const char *preamble, int success, time_t start, time_t stop)
 		preamble_sent = 1;
 	}
 
-	if (success == 1) {
+	if (success != 0) {
 		fprintf(stderr, " got %s\n", preamble);
 		fflush(stderr);
 		preamble_sent = 0;

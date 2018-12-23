@@ -1,4 +1,4 @@
-/*	$OpenBSD: mproc.c,v 1.29 2017/03/17 20:57:57 eric Exp $	*/
+/*	$OpenBSD: mproc.c,v 1.32 2018/12/17 08:56:31 eric Exp $	*/
 
 /*
  * Copyright (c) 2012 Eric Faurot <eric@faurot.net>
@@ -439,9 +439,21 @@ m_add_time(struct mproc *m, time_t v)
 };
 
 void
+m_add_timeval(struct mproc *m, struct timeval *tv)
+{
+	m_add(m, tv, sizeof(*tv));
+}
+
+
+void
 m_add_string(struct mproc *m, const char *v)
 {
-	m_add(m, v, strlen(v) + 1);
+	if (v) {
+		m_add(m, "s", 1);
+		m_add(m, v, strlen(v) + 1);
+	}
+	else
+		m_add(m, "\0", 1);
 };
 
 void
@@ -536,13 +548,28 @@ m_get_time(struct msg *m, time_t *t)
 }
 
 void
+m_get_timeval(struct msg *m, struct timeval *tv)
+{
+	m_get(m, tv, sizeof(*tv));
+}
+
+void
 m_get_string(struct msg *m, const char **s)
 {
 	uint8_t	*end;
+	char c;
 
 	if (m->pos >= m->end)
 		m_error("msg too short");
 
+	c = *m->pos++;
+	if (c == '\0') {
+		*s = NULL;
+		return;
+	}
+
+	if (m->pos >= m->end)
+		m_error("msg too short");
 	end = memchr(m->pos, 0, m->end - m->pos);
 	if (end == NULL)
 		m_error("unterminated string");
@@ -555,6 +582,11 @@ void
 m_get_data(struct msg *m, const void **data, size_t *sz)
 {
 	m_get_size(m, sz);
+
+	if (*sz == 0) {
+		*data = NULL;
+		return;
+	}
 
 	if (m->pos + *sz > m->end)
 		m_error("msg too short");
