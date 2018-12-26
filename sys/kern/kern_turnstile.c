@@ -26,12 +26,9 @@
 #include <sys/time.h>
 #include <sys/timeout.h>
 #include <sys/pool.h>
+#include <sys/signalvar.h>
 #include <sys/turnstile.h>
 #include <sys/mcs_lock.h>
-
-#define	TS_READER_Q	0
-#define	TS_WRITER_Q	1
-#define	TS_COUNT	2
 
 struct turnstile {
 	LIST_ENTRY(turnstile)	 ts_chain_link;
@@ -43,10 +40,11 @@ struct turnstile {
 	unsigned int		 ts_wcount[TS_COUNT];
 };
 
-#define	TS_READERS(ts)	((ts)->ts_wcount[TS_READER_Q])
-#define	TS_WRITERS(ts)	((ts)->ts_wcount[TS_WRITER_Q])
-#define	TS_ALL(ts)	\
-	((ts)->ts_wcount[TS_READER_Q] + (ts)->ts_wcount[TS_WRITER_Q])
+#define	TS_READERS(ts)	((ts)->ts_wcount[TS_READER_Q] +	\
+	(ts)->ts_wcount[TS_IREADER_Q])
+#define	TS_WRITERS(ts)	((ts)->ts_wcount[TS_WRITER_Q] +	\
+	(ts)->ts_wcount[TS_IWRITER_Q])
+#define	TS_ALL(ts)	TS_READERS((ts)) + TS_WRITERS((ts))
 
 #define	TS_HASH_SIZE	32	/* must be power of 2 */
 /*
@@ -104,22 +102,24 @@ turnstile_lookup(void *lock_addr, struct mcs_lock *mcs)
 	return (ts);
 }
 
-void
-turnstile_block(struct turnstile *ts, int q, void *lock_addr,
+int
+turnstile_block(struct turnstile *ts, unsigned int q, void *lock_addr,
     struct mcs_lock *mcs)
 {
 	struct ts_chain *tc = TS_CHAIN_FIND(lock_addr);
-	int			s;
-
+	int		 s, sig, sigintr;
+	struct proc	*p = curproc;
+	int		 rv;
 
 	KASSERT(mcs_owner(mcs));
+	KASSERT(q < TS_COUNT);
 
 	if (ts == NULL) {
 		/*
 		 * We must donate our own turnstile, because we are the first
 		 * thread, which is going to wait for particular lock.
 		 */
-		ts = curproc->p_ts;
+		ts = p->p_ts;
 		ts->ts_lock_addr = lock_addr;
 		LIST_INSERT_HEAD(&tc->tc_head, ts, ts_chain_link);
 	} else {
@@ -127,49 +127,96 @@ turnstile_block(struct turnstile *ts, int q, void *lock_addr,
 		 * Someone else has donated the turnstile, we put our turnstile
 		 * to the free list.
 		 */
-		LIST_INSERT_HEAD(&ts->ts_free_list, curproc->p_ts,
+		LIST_INSERT_HEAD(&ts->ts_free_list, p->p_ts,
 		    ts_free_link);
 		/*
 		 * associate curproc with turnstile linked to lock. This way we can
 		 * quickly track, which lock a thread is wiating for.
 		 */
-		curproc->p_ts = ts;
+		p->p_ts = ts;
 	}
 
-	/*
-	 * Code below implements special case of sleep_setup() for turnstile.
-	 */
 #ifdef DIAGNOSTIC
-	if (curproc->p_flag & P_CANTSLEEP)
-		panic("sleep: %s failed insomnia", curproc->p_p->ps_comm);
+	if (p->p_flag & P_CANTSLEEP)
+		panic("sleep: %s failed insomnia", p->p_p->ps_comm);
 
-	if (curproc->p_stat != SONPROC)
+	if (p->p_stat != SONPROC)
 		panic("tsleep: not SONPROC");
 #endif
-	curproc->p_wchan = lock_addr;
-	curproc->p_wmesg = "TODO: get rwlock name";
-	curproc->p_slptime = 0;
-	curproc->p_priority = 0;	/* priority will come later */
-	TAILQ_INSERT_HEAD(&ts->ts_sleepq[q], curproc, p_runq);
+	p->p_wchan = lock_addr;
+	p->p_wmesg = "TODO: get rwlock name";
+	p->p_slptime = 0;
+	p->p_priority = 0;	/* priority will come later */
+	p->p_ts_q = q;
+	TAILQ_INSERT_HEAD(&ts->ts_sleepq[q], p, p_runq);
 	ts->ts_wcount[q]++;
-	/*
-	 * sleep_setup() is done. Now we should do turnstile specific sleep
-	 * finish.
-	 */
-
-	curproc->p_stat = SSLEEP;
-	curproc->p_ru.ru_nvcsw++;
 
 	mcs_lock_leave(mcs);
 
 	/*
-	 * We'd like current process to give up CPU here. It will be woken
-	 * up by lock exit() call, not by scheduler (unless there will be
-	 * signal sent to process). mi_switch() expects we acquire scheduler
-	 * lock. 
+	 * mi_switch() expects we acquire scheduler lock. 
 	 */
 	SCHED_LOCK(s);
+
+	/*
+	 * It's right time to handle signal. If caller has set RW_INTR bit,
+	 * then we must let curproc continue to run on CPU. The
+	 * turnstile_block() bails out with error in this case.
+	 */
+	if (q > TS_WRITER_Q) {
+		/*
+		 * Code below implements sleep_setup_signal() for turnstiles.
+		 */
+		atomic_setbits_int(&p->p_flag, P_SINTR);
+		if (p->p_p->ps_single != NULL || (sig = CURSIG(p)) != 0) {
+			/*
+			 * There is a signal pending and caller wants to be
+			 * interrupted by signal. In this case we must let
+			 * caller to run on CPU. The function must bail out
+			 * with  proper error code.
+			 */
+			p->p_stat = SONPROC;
+			p->p_wchan = NULL;
+			p->p_cpu->ci_schedstate.spc_curpriority = p->p_usrpri;
+
+			/*
+			 * We must unlock scheduler and run relevant part of
+			 * sleep_finish() and sleep_finish_signal().
+			 */
+			SCHED_UNLOCK(s);
+			/*
+			 * Even though this belongs to the signal handling part
+			 * of sleep, we need to clear it before the ktrace.
+			 */
+			atomic_clearbits_int(&p->p_flag, P_SINTR);
+
+			/*
+			 * Do turnstile specific unsleep().
+			 */
+			mcs_lock_enter(mcs);
+			turnstile_interrupt(ts, p, mcs);
+			mcs_lock_leave(mcs);
+
+			/*
+			 * Do sleep_finish_signal() for turnstile.
+			 */
+			rv = single_thread_check(p, 1);
+			if (rv == 0) {
+				sigintr = p->p_p->ps_sigacts->ps_sigintr;
+				if (sigintr  & sigmask(sig))
+					rv = EINTR;
+				else
+					rv = ERESTART;
+			}
+			return (rv);
+		}
+	}
+
+	p->p_stat = SSLEEP;
+	p->p_ru.ru_nvcsw++;
 	mi_switch();
+
+	return (0);
 }
 
 void
@@ -187,6 +234,7 @@ turnstile_remove(struct turnstile *ts, struct proc *p, int q)
 
 	ts->ts_wcount[q]--;
 	TAILQ_REMOVE(&ts->ts_sleepq[q], p, p_runq);
+	p->p_ts_q = TS_COUNT;
 	/*
 	 * TODO:
 	 *	inspect the code for correct lock order of SCHED_LOCK() and
@@ -200,12 +248,13 @@ turnstile_remove(struct turnstile *ts, struct proc *p, int q)
 }
 
 void
-turnstile_wakeup(struct turnstile *ts, int q, int count, struct mcs_lock *mcs)
+turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_lock *mcs)
 {
 	struct ts_chain *tc = TS_CHAIN_FIND(ts->ts_lock_addr);
 	struct proc *p;
 
 	KASSERT(mcs_owner(&tc->tc_lock));
+	KASSERT(q < TS_COUNT);
 	while (count > 0) {
 		p = TAILQ_FIRST(&ts->ts_sleepq[q]);
 		turnstile_remove(ts, p, q);
@@ -230,5 +279,26 @@ struct proc *
 turnstile_first(struct turnstile *ts, int q)
 {
 	return (TAILQ_FIRST(&ts->ts_sleepq[q]));
+}
+
+void
+turnstile_interrupt(struct turnstile *ts, struct proc *p, struct mcs_lock *mcs)
+{
+	KASSERT(ts != NULL);
+	KASSERT(p->p_ts == ts);
+	KASSERT(ts->ts_lock_addr == p->p_wchan);
+	KASSERT(mcs_owner(mcs));
+
+	if ((p->p_ts = LIST_FIRST(&ts->ts_free_list)) != NULL) {
+		KASSERT(TS_ALL(ts) > 1);
+		LIST_REMOVE(p->p_ts, ts_free_link);
+	} else {
+		KASSERT(TS_ALL(ts) == 1);
+		LIST_REMOVE(ts, ts_chain_link);
+	}
+
+	TAILQ_REMOVE(&ts->ts_sleepq[p->p_ts_q], p, p_runq);
+	ts->ts_wcount[p->p_ts_q]--;
+	p->p_ts_q = TS_COUNT;
 }
 #endif	/* WITH_TURNSTILES */

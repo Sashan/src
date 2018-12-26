@@ -182,6 +182,7 @@ thread_new(struct proc *parent, vaddr_t uaddr)
 
 #ifdef WITH_TURNSTILES
 	p->p_ts = turnstile_alloc();
+	p->p_ts_q = TS_COUNT;
 	KASSERT(p->p_ts != NULL);
 #endif
 

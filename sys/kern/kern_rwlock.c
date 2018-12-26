@@ -248,6 +248,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 	int queue, rwl_incr, rwl_setwait, rwl_needwait;
 	struct turnstile *ts;
 	struct mcs_lock	mcs;
+	int e;
 #ifdef WITNESS
 	int lop_flags;
 
@@ -262,17 +263,20 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 #endif
 
 	PRINT_LOCK(rwl, flags);
-	if (flags == RW_READ) {
+	if (flags & RW_READ) {
 		rwl_incr = RWLOCK_READ_INCR;
 		rwl_setwait = RWLOCK_WAIT;
 		rwl_needwait = RWLOCK_WRLOCK|RWLOCK_WRWANT;
-		queue = TS_READER_Q;
-	} else {
+		queue = (flags & RW_INTR) ? TS_IREADER_Q : TS_READER_Q;
+	} else if (flags & RW_WRITE) {
 		rwl_incr = RW_PROC(curproc) | RWLOCK_WRLOCK;
 		rwl_setwait = RWLOCK_WAIT | RWLOCK_WRWANT;
 		rwl_needwait = RWLOCK_WRLOCK;
-		queue = TS_WRITER_Q;
-	}
+		queue = (flags & RW_INTR) ? TS_IWRITER_Q : TS_WRITER_Q; 
+	} else
+		panic("%s: invalid rw-flags: 0x%x", __func__, flags);
+
+	flags &= ~RW_INTR;
 
 	do {
 		rw_enter_diag(rwl, flags);
@@ -319,7 +323,10 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 			continue;
 		}
 
-		turnstile_block(ts, queue, rwl, &mcs);
+		e = turnstile_block(ts, queue, rwl, &mcs);
+
+		if (e != 0)
+			return (e);
 
 		/*
 		 * We came back after sleeping on turnstile. Let's see
@@ -329,12 +336,6 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 		if ((flags == RW_READ) || ((rwl->rwl_owner & ~0x7)
 		    == RW_PROC(curproc)))
 			break;
-
-		/*
-		 * TODO: we should handle and propagate a signal, in case the
-		 * block oepration on lock is supposed to be interrupted by
-		 * signal.
-		 */
 	} while (1);
 
 	return (0);

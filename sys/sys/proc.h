@@ -389,6 +389,7 @@ struct proc {
 
 #ifdef WITH_TURNSTILES
 	struct turnstile *p_ts;
+	unsigned int	p_ts_q;
 #endif
 };
 

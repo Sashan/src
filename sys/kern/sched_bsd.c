@@ -47,6 +47,9 @@
 #include <uvm/uvm_extern.h>
 #include <sys/sched.h>
 #include <sys/timeout.h>
+#ifdef WITH_TURNSTILES
+#include <sys/turnstile.h>
+#endif
 
 #ifdef KTRACE
 #include <sys/ktrace.h>
@@ -481,6 +484,8 @@ void
 setrunnable(struct proc *p)
 {
 	SCHED_ASSERT_LOCKED();
+	struct turnstile *ts;
+	struct mcs_lock mcs;
 
 	switch (p->p_stat) {
 	case 0:
@@ -498,7 +503,16 @@ setrunnable(struct proc *p)
 		if ((p->p_p->ps_flags & PS_TRACED) != 0 && p->p_xstat != 0)
 			atomic_setbits_int(&p->p_siglist, sigmask(p->p_xstat));
 	case SSLEEP:
+#ifdef	WITH_TURNSTILES
+		if (p->p_wchan != NULL) {
+			ts = turnstile_lookup((void *)p->p_wchan, &mcs);
+			KASSERT(ts != NULL);
+			turnstile_interrupt(ts, p, &mcs);
+			mcs_lock_leave(&mcs);
+		}
+#else
 		unsleep(p);		/* e.g. when sending signals */
+#endif	/* WITH_TURNSTILES */
 		break;
 	}
 	p->p_stat = SRUN;
