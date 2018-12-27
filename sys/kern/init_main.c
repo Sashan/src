@@ -95,6 +95,10 @@
 #include <crypto/cryptosoft.h>
 #endif
 
+#ifdef WITH_TURNSTILES
+#include <sys/turnstile.h>
+#endif
+
 #if defined(NFSSERVER) || defined(NFSCLIENT)
 extern void nfs_init(void);
 #endif
@@ -272,6 +276,11 @@ main(void *framep)
 	/* Create credentials. */
 	p->p_ucred = crget();
 	p->p_ucred->cr_ngroups = 1;	/* group 0 */
+
+#ifdef WITH_TURNSTILES
+	p->p_ts = turnstile_alloc();
+	p->p_ts_q = TS_COUNT;
+#endif
 
 	/*
 	 * Create process 0 (the swapper).
