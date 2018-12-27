@@ -504,12 +504,14 @@ setrunnable(struct proc *p)
 			atomic_setbits_int(&p->p_siglist, sigmask(p->p_xstat));
 	case SSLEEP:
 #ifdef	WITH_TURNSTILES
-		if (p->p_wchan != NULL) {
+		if (p->p_ts_q < TS_COUNT) {
+			KASSERT(p->p_wchan != NULL);
 			ts = turnstile_lookup((void *)p->p_wchan, &mcs);
 			KASSERT(ts != NULL);
 			turnstile_interrupt(ts, p, &mcs);
 			mcs_lock_leave(&mcs);
-		}
+		} else
+			unsleep(p);
 #else
 		unsleep(p);		/* e.g. when sending signals */
 #endif	/* WITH_TURNSTILES */
