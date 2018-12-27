@@ -344,7 +344,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 		 * race with another writer.
 		 */
 		if ((flags == RW_READ) ||
-		    ((RWLOCK_OWNER(rwl) == (struct proc *)RW_PROC(curproc)))
+		    (RWLOCK_OWNER(rwl) == (struct proc *)RW_PROC(curproc)))
 			break;
 	} while (1);
 
