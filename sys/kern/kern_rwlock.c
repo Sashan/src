@@ -215,23 +215,26 @@ _rw_init_flags(struct rwlock *rwl, const char *name, int flags,
 	_rw_init_flags_witness(rwl, name, RWLOCK_LO_FLAGS(flags), type);
 }
 
-#define	PRINT_FLAGS(_f_)	\
+#ifdef DEBUG_LOCK
+#define	DPRINT_FLAGS(_f_)	\
 	((_f_) & RW_DOWNGRADE) ? "DOWN" : ".",	\
 	((_f_) & RW_READ) ? "READ" : ".",	\
 	((_f_) & RW_WRITE) ? "WRITE" : "."
 
-#define	PRINT_LOCK(_rwl_, _f_)		do {		\
+#define	DPRINT_LOCK(_rwl_, _f_)		do {		\
 		if ((_rwl_)->rwl_owner & RWLOCK_WRLOCK) {	\
-			printf("[%s] Owner: 0x%lX, %s %s %s, asking: %s %s %s\n",\
+			printf("[%s:%s] Owner: 0x%lX, %s %s %s, asking: %s %s %s\n",\
 			    __func__,						\
+			    (_rwl_)->rwl_name,						\
 			    RW_PROC((_rwl_)->rwl_owner),			\
 			    ((_rwl_)->rwl_owner & RWLOCK_WRWANT) ? "WRWANT" : ".",	\
 			    ((_rwl_)->rwl_owner & RWLOCK_WRLOCK) ? "WRITER" : ".",	\
 			    ((_rwl_)->rwl_owner & RWLOCK_WAIT) ? "WAITERS" : ".",	\
 			    PRINT_FLAGS(_f_));	\
 		} else {				\
-			printf("[%s] Readers: 0x%lX, %s %s %s, asking: %s %s %s\n",	\
+			printf("[%s:%s] Readers: 0x%lX, %s %s %s, asking: %s %s %s\n",	\
 			    __func__,							\
+			    (_rwl_)->rwl_name,						\
 			    RW_PROC((_rwl_)->rwl_owner),				\
 			    ((_rwl_)->rwl_owner & RWLOCK_WRWANT) ? "WRWANT" : ".",	\
 			    ((_rwl_)->rwl_owner & RWLOCK_WRLOCK) ? "!!WRITER!!" : ".",	\
@@ -239,6 +242,13 @@ _rw_init_flags(struct rwlock *rwl, const char *name, int flags,
 			    PRINT_FLAGS(_f_));	\
 		}	\
 	} while (0)
+#define DPRINTF(x...)	do { printf(x); } while (0)
+#else
+#define DPRINT_FLAGS(_f_)	(void)(0)
+#define	DPRINT_LOCK(_rwl_, _f_)	(void)(0)
+#define	DPRINTF(x...)		(void)(0)
+#endif
+
 
 #ifdef WITH_TURNSTILES
 int
@@ -262,7 +272,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 		    NULL);
 #endif
 
-	PRINT_LOCK(rwl, flags);
+	DPRINT_LOCK(rwl, flags);
 	if (flags & RW_READ) {
 		rwl_incr = RWLOCK_READ_INCR;
 		rwl_setwait = RWLOCK_WAIT;
@@ -359,7 +369,7 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 		KASSERT((o >> RWLOCK_READER_SHIFT) != 0);
 	}
 
-	PRINT_LOCK(rwl, 0);
+	DPRINT_LOCK(rwl, 0);
 
 	/*
 	 * If there are no waiters on the lock, then we may get away with
@@ -387,8 +397,12 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 		if ((newo & (-RWLOCK_MASK | RWLOCK_WAIT)) == RWLOCK_WAIT)
 			break;
 		newo = atomic_cas_ulong(&rwl->rwl_owner, o, newo);
-		if (newo == o)
+		if (newo == o) {
+			membar_sync();
+			DPRINTF("[%s] taking exit ", __func__);
+			DPRINT_LOCK(rwl, 0);
 			return;
+		}
 		o = newo;
 	}
 #endif
@@ -569,7 +583,9 @@ rw_assert_wrlock(struct rwlock *rwl)
 		panic("%s: lock not held", rwl->rwl_name);
 
 	if (RWLOCK_OWNER(rwl) != (struct proc *)RW_PROC(curproc))
-		panic("%s: lock not held by this process", rwl->rwl_name);
+		panic("%s: lock not held by this process (%lX vs. %p)",
+		    rwl->rwl_name,
+		    RW_PROC(rwl->rwl_owner), curproc);
 }
 
 void
