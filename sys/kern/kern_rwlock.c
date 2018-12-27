@@ -254,8 +254,8 @@ _rw_init_flags(struct rwlock *rwl, const char *name, int flags,
 int
 _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 {
-	unsigned long o;
-	int queue, rwl_incr, rwl_setwait, rwl_needwait;
+	unsigned long o, rwl_incr;
+	unsigned int queue, rwl_setwait, rwl_needwait;
 	struct turnstile *ts;
 	struct mcs_lock	mcs;
 	int e;
@@ -343,8 +343,8 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 		 * if we could acquire a lock. Remember we could loose
 		 * race with another writer.
 		 */
-		if ((flags == RW_READ) || ((rwl->rwl_owner & ~0x7)
-		    == RW_PROC(curproc)))
+		if ((flags == RW_READ) ||
+		    ((RWLOCK_OWNER(rwl) == (struct proc *)RW_PROC(curproc)))
 			break;
 	} while (1);
 
