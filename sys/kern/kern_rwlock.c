@@ -394,7 +394,7 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 	membar_exit();
 	for (;;) {
 		newo = (o - decr);
-		if ((newo & (-RWLOCK_MASK | RWLOCK_WAIT)) == RWLOCK_WAIT)
+		if ((newo & (~RWLOCK_MASK | RWLOCK_WAIT)) == RWLOCK_WAIT)
 			break;
 		newo = atomic_cas_ulong(&rwl->rwl_owner, o, newo);
 		if (newo == o) {
