@@ -235,32 +235,33 @@ turnstile_remove(struct turnstile *ts, struct proc *p, int q)
 	ts->ts_wcount[q]--;
 	TAILQ_REMOVE(&ts->ts_sleepq[q], p, p_runq);
 	p->p_ts_q = TS_COUNT;
-	/*
-	 * TODO:
-	 *	inspect the code for correct lock order of SCHED_LOCK() and
-	 *	turnstile chain lock. We are still holding a chain lock here.
-	 */
-	SCHED_LOCK(s);
-	p->p_wchan = 0;
-	KASSERT(p->p_stat == SSLEEP);
-	setrunnable(p);
-	SCHED_UNLOCK(s);
 }
 
 void
 turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_lock *mcs)
 {
 	struct ts_chain *tc = TS_CHAIN_FIND(ts->ts_lock_addr);
+	TAILQ_HEAD(, proc)	wake_q;
 	struct proc *p;
 
 	KASSERT(mcs_owner(&tc->tc_lock));
 	KASSERT(q < TS_COUNT);
+	TAILQ_INIT(&wake_p);
 	while (count > 0) {
 		p = TAILQ_FIRST(&ts->ts_sleepq[q]);
 		turnstile_remove(ts, p, q);
+		TAILQ_INSERT_TAIL(&wake_q, p, p_runq);
 	}
-
 	mcs_lock_leave(mcs);
+
+	SCHED_LOCK(s);
+	while (p = TAILQ_FIRST(&wake_q)) {
+		TAILQ_REMOVE(&wake_q, p, p_runq);
+		p->p_wchan = 0;
+		KASSERT(p->p_stat == SSLEEP);
+		setrunnable(p);
+	}
+	SCHED_UNLOCK(s);
 }
 
 unsigned int
