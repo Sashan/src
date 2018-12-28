@@ -222,8 +222,6 @@ turnstile_block(struct turnstile *ts, unsigned int q, void *lock_addr,
 void
 turnstile_remove(struct turnstile *ts, struct proc *p, int q)
 {
-	int	s;
-
 	if ((p->p_ts = LIST_FIRST(&ts->ts_free_list)) != NULL) {
 		KASSERT(TS_ALL(ts) > 1);
 		LIST_REMOVE(p->p_ts, ts_free_link);
@@ -243,10 +241,11 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 	struct ts_chain *tc = TS_CHAIN_FIND(ts->ts_lock_addr);
 	TAILQ_HEAD(, proc)	wake_q;
 	struct proc *p;
+	int	s;
 
 	KASSERT(mcs_owner(&tc->tc_lock));
 	KASSERT(q < TS_COUNT);
-	TAILQ_INIT(&wake_p);
+	TAILQ_INIT(&wake_q);
 	while (count > 0) {
 		p = TAILQ_FIRST(&ts->ts_sleepq[q]);
 		turnstile_remove(ts, p, q);
@@ -255,7 +254,7 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 	mcs_lock_leave(mcs);
 
 	SCHED_LOCK(s);
-	while (p = TAILQ_FIRST(&wake_q)) {
+	while ((p = TAILQ_FIRST(&wake_q)) != NULL) {
 		TAILQ_REMOVE(&wake_q, p, p_runq);
 		p->p_wchan = 0;
 		KASSERT(p->p_stat == SSLEEP);
