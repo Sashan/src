@@ -580,11 +580,13 @@ rw_assert_wrlock(struct rwlock *rwl)
 		return;
 
 	if (!(rwl->rwl_owner & RWLOCK_WRLOCK))
-		panic("%s: lock not held", rwl->rwl_name);
+		panic("%s@%p: lock not held (%lX)", rwl->rwl_name, rwl,
+		    rwl->rwl_owner);
 
 	if (RWLOCK_OWNER(rwl) != (struct proc *)RW_PROC(curproc))
-		panic("%s: lock not held by this process (%lX vs. %p)",
+		panic("%s@%p: lock not held by this process (%lX vs. %p)",
 		    rwl->rwl_name,
+		    rwl,
 		    RW_PROC(rwl->rwl_owner), curproc);
 }
 
@@ -595,7 +597,8 @@ rw_assert_rdlock(struct rwlock *rwl)
 		return;
 
 	if (!RWLOCK_OWNER(rwl) || (rwl->rwl_owner & RWLOCK_WRLOCK))
-		panic("%s: lock not shared", rwl->rwl_name);
+		panic("%s@%p: lock not shared (%lX)", rwl->rwl_name, rwl,
+		    rwl->rwl_owner);
 }
 
 void
@@ -606,9 +609,10 @@ rw_assert_anylock(struct rwlock *rwl)
 
 	switch (rw_status(rwl)) {
 	case RW_WRITE_OTHER:
-		panic("%s: lock held by different process", rwl->rwl_name);
+		panic("%s@%p: lock held by different process (%lX vs. %p)",
+		    rwl->rwl_name, rwl, rwl->rwl_owner, curproc);
 	case 0:
-		panic("%s: lock not held", rwl->rwl_name);
+		panic("%s@%p: lock not held", rwl->rwl_name, rwl);
 	}
 }
 
@@ -619,7 +623,8 @@ rw_assert_unlocked(struct rwlock *rwl)
 		return;
 
 	if (rwl->rwl_owner != 0L)
-		panic("%s: lock held", rwl->rwl_name);
+		panic("%s@%p: lock held (%lX)", rwl->rwl_name, rwl,
+		    rwl->rwl_owner);
 }
 #endif
 
