@@ -348,6 +348,11 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 			break;
 	} while (1);
 
+	if (flags & RW_DOWNGRADE)
+		WITNESS_DOWNGRADE(&rwl->rwl_lock_obj, lop_flags, file, line);
+	else
+		WITNESS_LOCK(&rwl->rwl_lock_obj, lop_flags, file, line);
+
 	return (0);
 
 }
