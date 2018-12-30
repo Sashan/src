@@ -242,12 +242,38 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 	TAILQ_HEAD(, proc)	wake_q;
 	struct proc *p;
 	int	s;
+	unsigned int	select_q[2];
+	unsigned int	i = 0;
 
 	KASSERT(mcs_owner(&tc->tc_lock));
-	KASSERT(q < TS_COUNT);
+	KASSERT((q == TS_READER_Q) || (q == TS_WRITER_Q));
 	TAILQ_INIT(&wake_q);
+
+	/*
+	 * Unlike other OSes OpenBSD comes with pair of queues:
+	 *	regular and interruptible.
+	 * The wake up function must be picking from both queues.
+	 */
+	switch (q) {
+	case TS_READER_Q:
+		KASSERT(count < TS_READERS(ts));
+		select_q[0] = TS_READER_Q;
+		select_q[1] = TS_IREADER_Q;
+		break;
+	case TS_WRITER_Q:
+		KASSERT(count < TS_WRITERS(ts));
+		select_q[0] = TS_WRITER_Q;
+		select_q[1] = TS_IWRITER_Q;
+		break;
+	default:
+		return;
+	}
 	while (count > 0) {
+		q = select_q[i & 1];
+		i++;
 		p = TAILQ_FIRST(&ts->ts_sleepq[q]);
+		if (p == NULL)
+			continue;
 		turnstile_remove(ts, p, q);
 		TAILQ_INSERT_TAIL(&wake_q, p, p_runq);
 		count--;
