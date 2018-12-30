@@ -376,22 +376,10 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 	 * rw_cas(), because we are the only thread, which currently owns the
 	 * lock.
 	 */
-#if 0
-	while ((newo = (o - decr) & RWLOCK_WAIT) == 0) {
-		/*
-		 * we are done with lock if we manage to update the owner.
-		 * Remember rw_cas() returns the ->rwl_owner before the `cas`
-		 * operation gets executed.
-		 *
-		 * If we fail to update, then we must retry.
-		 */
-		newo = rw_cas(&rwl->rwl_owner, o, newo);
-		if (newo == o)
-			return;
-		o = newo;
-	}
-#else
-	membar_exit();
+	WITNESS_UNLOCK(&rwl->rwl_lock_obj, wrlock ? LOP_EXCLUSIVE : 0,
+	    file, line);
+
+	membar_exit_before_atomic();
 	for (;;) {
 		newo = (o - decr);
 		if ((newo & (~RWLOCK_MASK | RWLOCK_WAIT)) == RWLOCK_WAIT)
@@ -405,7 +393,6 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 		}
 		o = newo;
 	}
-#endif
 
 	ts = turnstile_lookup(rwl, &mcs);
 	rcnt = turnstile_readers(ts);

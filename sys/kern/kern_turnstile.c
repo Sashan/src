@@ -228,6 +228,7 @@ turnstile_remove(struct turnstile *ts, struct proc *p, int q)
 	} else {
 		KASSERT(TS_ALL(ts) == 1);
 		LIST_REMOVE(ts, ts_chain_link);
+		ts->ts_lock_addr = 0;
 	}
 
 	ts->ts_wcount[q]--;
