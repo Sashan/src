@@ -376,8 +376,8 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 	 * rw_cas(), because we are the only thread, which currently owns the
 	 * lock.
 	 */
-	WITNESS_UNLOCK(&rwl->rwl_lock_obj, wrlock ? LOP_EXCLUSIVE : 0,
-	    file, line);
+	WITNESS_UNLOCK(&rwl->rwl_lock_obj,
+	    (o & RWLOCK_WRLOCK) ? LOP_EXCLUSIVE : 0, file, line);
 
 	membar_exit_before_atomic();
 	for (;;) {
