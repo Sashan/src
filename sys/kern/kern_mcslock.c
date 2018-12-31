@@ -57,7 +57,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 {
 	struct mcs_lock *old_mcs;
 
-	old_mcs = atomic_swap_ptr(&mcs->mcs_global->mcs_next, mcs);
+	old_mcs = atomic_swap_ptr(&mcs->mcs_global->mcs_next, mcs->mcs_next);
 	KASSERT(old_mcs != NULL);
 	if (old_mcs != mcs) {
 		/*
