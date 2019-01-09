@@ -313,14 +313,14 @@ turnstile_first(struct turnstile *ts, int q)
 	struct proc *p;
 	switch (q) {
 	case TS_READER_Q:
-		p = TAILQ_FIRST(&ts->sleepq[q]);
+		p = TAILQ_FIRST(&ts->ts_sleepq[q]);
 		if (p == NULL)
-			p = TAILQ_FIRST(&ts->sleepq[TS_IREADER_Q]);
+			p = TAILQ_FIRST(&ts->ts_sleepq[TS_IREADER_Q]);
 		break;
 	case TS_WRITER_Q:
-		p = TAILQ_FIRST(&ts->sleepq[q]);
+		p = TAILQ_FIRST(&ts->ts_sleepq[q]);
 		if (p == NULL)
-			p = TAILQ_FIRST(&ts->sleepq[TS_IWRITER_Q]);
+			p = TAILQ_FIRST(&ts->ts_sleepq[TS_IWRITER_Q]);
 		break;
 	default:
 		p = NULL;
