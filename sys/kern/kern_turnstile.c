@@ -248,6 +248,8 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 
 	KASSERT(mcs_owner(&tc->tc_lock));
 	KASSERT((q == TS_READER_Q) || (q == TS_WRITER_Q));
+	KASSERT((q == TS_READER_Q) && (count < TS_READERS(ts)));
+	KASSERT((q == TS_WRITER_Q) && (count < TS_WRITERS(ts)));
 	TAILQ_INIT(&wake_q);
 
 	/*
@@ -306,7 +308,22 @@ turnstile_writers(struct turnstile *ts)
 struct proc *
 turnstile_first(struct turnstile *ts, int q)
 {
-	return (TAILQ_FIRST(&ts->ts_sleepq[q]));
+	struct proc *p;
+	switch (q) {
+	case TS_READER_Q:
+		p = TAILQ_FIRST(&ts->sleepq[q]);
+		if (p == NULL)
+			p = TAILQ_FIRST(&ts->sleepq[TS_IREADER_Q]);
+		break;
+	case TS_WRITER_Q:
+		p = TAILQ_FIRST(&ts->sleepq[q]);
+		if (p == NULL)
+			p = TAILQ_FIRST(&ts->sleepq[TS_IWRITER_Q]);
+		break;
+	default:
+		p = NULL;
+	}
+	return (p);
 }
 
 void

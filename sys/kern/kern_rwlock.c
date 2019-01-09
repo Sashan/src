@@ -299,7 +299,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 			 * We could acquire a lock almost for free for
 			 * one of the reasons below:
 			 *	- lock was empty
-			 *	- we were yet another reader to grab the
+			 *	- we were yet another reader to grab
 			 *	  the lock with no writers waiting.
 			 */
 			membar_enter();
