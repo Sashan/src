@@ -1,4 +1,4 @@
-/*	$OpenBSD: man_macro.c,v 1.99 2018/12/21 16:58:49 schwarze Exp $ */
+/*	$OpenBSD: man_macro.c,v 1.104 2018/12/31 10:03:38 schwarze Exp $ */
 /*
  * Copyright (c) 2008, 2009, 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
  * Copyright (c) 2012-2015, 2017, 2018 Ingo Schwarze <schwarze@openbsd.org>
@@ -61,8 +61,6 @@ static const struct man_macro man_macros[MAN_MAX - MAN_TH] = {
 	{ in_line_eoln, MAN_NSCOPED | MAN_ESCOPED | MAN_JOIN }, /* I */
 	{ in_line_eoln, 0 }, /* IR */
 	{ in_line_eoln, 0 }, /* RI */
-	{ in_line_eoln, MAN_NSCOPED }, /* nf */
-	{ in_line_eoln, MAN_NSCOPED }, /* fi */
 	{ blk_close, MAN_XSCOPE }, /* RE */
 	{ blk_exp, MAN_XSCOPE }, /* RS */
 	{ in_line_eoln, 0 }, /* DT */
@@ -338,9 +336,9 @@ blk_imp(MACRO_PROT_ARGS)
 	struct roff_node *n;
 
 	rew_scope(man, tok);
-	n = roff_block_alloc(man, line, ppos, tok);
-	if (n->tok == MAN_SH || n->tok == MAN_SS)
-		man->flags &= ~MAN_LITERAL;
+	if (tok == MAN_SH || tok == MAN_SS)
+		man->flags &= ~ROFF_NOFILL;
+	roff_block_alloc(man, line, ppos, tok);
 	n = roff_head_alloc(man, line, ppos, tok);
 
 	/* Add line arguments. */
@@ -381,12 +379,12 @@ in_line_eoln(MACRO_PROT_ARGS)
 	roff_elem_alloc(man, line, ppos, tok);
 	n = man->last;
 
+	if (tok == MAN_EX)
+		man->flags |= ROFF_NOFILL;
+	else if (tok == MAN_EE)
+		man->flags &= ~ROFF_NOFILL;
+
 	for (;;) {
-		if (buf[*pos] != '\0' && (tok == MAN_fi || tok == MAN_nf)) {
-			mandoc_msg(MANDOCERR_ARG_SKIP, line, *pos,
-			    "%s %s", roff_name[tok], buf + *pos);
-			break;
-		}
 		if (buf[*pos] != '\0' && man->last != n && tok == MAN_PD) {
 			mandoc_msg(MANDOCERR_ARG_EXCESS, line, *pos,
 			    "%s ... %s", roff_name[tok], buf + *pos);
@@ -429,7 +427,7 @@ in_line_eoln(MACRO_PROT_ARGS)
 	/* Rewind our element scope. */
 
 	for ( ; man->last; man->last = man->last->parent) {
-		man_state(man, man->last);
+		man->last->flags |= NODE_VALID;
 		if (man->last == n)
 			break;
 	}
@@ -443,9 +441,7 @@ in_line_eoln(MACRO_PROT_ARGS)
 void
 man_endparse(struct roff_man *man)
 {
-
-	man_unscope(man, man->first);
-	man->flags &= ~MAN_LITERAL;
+	man_unscope(man, man->meta.first);
 }
 
 static int

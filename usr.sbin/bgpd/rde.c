@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.c,v 1.454 2018/12/22 16:12:40 claudio Exp $ */
+/*	$OpenBSD: rde.c,v 1.458 2018/12/31 08:53:09 florian Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -106,7 +106,7 @@ static void	 peer_recv_eor(struct rde_peer *, u_int8_t);
 static void	 peer_send_eor(struct rde_peer *, u_int8_t);
 
 void		 network_add(struct network_config *, int);
-void		 network_delete(struct network_config *, int);
+void		 network_delete(struct network_config *);
 static void	 network_dump_upcall(struct rib_entry *, void *);
 static void	 network_flush_upcall(struct rib_entry *, void *);
 
@@ -540,12 +540,12 @@ badnet:
 			case AID_INET:
 				if (netconf_s.prefixlen > 32)
 					goto badnetdel;
-				network_delete(&netconf_s, 0);
+				network_delete(&netconf_s);
 				break;
 			case AID_INET6:
 				if (netconf_s.prefixlen > 128)
 					goto badnetdel;
-				network_delete(&netconf_s, 0);
+				network_delete(&netconf_s);
 				break;
 			default:
 badnetdel:
@@ -748,7 +748,7 @@ rde_dispatch_imsg_parent(struct imsgbuf *ibuf)
 			}
 			memcpy(&netconf_p, imsg.data, sizeof(netconf_p));
 			TAILQ_INIT(&netconf_p.attrset);
-			network_delete(&netconf_p, 1);
+			network_delete(&netconf_p);
 			break;
 		case IMSG_RECONF_CONF:
 			if (imsg.hdr.len - IMSG_HEADER_SIZE !=
@@ -1240,6 +1240,23 @@ rde_update_dispatch(struct imsg *imsg)
 				rde_update_withdraw(peer, &prefix, prefixlen);
 			}
 			break;
+		case AID_VPN_IPv6:
+			while (mplen > 0) {
+				if ((pos = nlri_get_vpn6(mpp, mplen,
+				    &prefix, &prefixlen, 1)) == -1) {
+					log_peer_warnx(&peer->conf,
+					    "bad VPNv6 withdraw prefix");
+					rde_update_err(peer, ERR_UPDATE,
+					    ERR_UPD_OPTATTR, mpa.unreach,
+					    mpa.unreach_len);
+					goto done;
+				}
+				mpp += pos;
+				mplen -= pos;
+
+				rde_update_withdraw(peer, &prefix, prefixlen);
+			}
+			break;
 		default:
 			/* silently ignore unsupported multiprotocol AF */
 			break;
@@ -1350,6 +1367,25 @@ rde_update_dispatch(struct imsg *imsg)
 				    &prefix, &prefixlen, 0)) == -1) {
 					log_peer_warnx(&peer->conf,
 					    "bad VPNv4 nlri prefix");
+					rde_update_err(peer, ERR_UPDATE,
+					    ERR_UPD_OPTATTR,
+					    mpa.reach, mpa.reach_len);
+					goto done;
+				}
+				mpp += pos;
+				mplen -= pos;
+
+				if (rde_update_update(peer, &state, &prefix,
+				    prefixlen) == -1)
+					goto done;
+			}
+			break;
+		case AID_VPN_IPv6:
+			while (mplen > 0) {
+				if ((pos = nlri_get_vpn6(mpp, mplen,
+				    &prefix, &prefixlen, 0)) == -1) {
+					log_peer_warnx(&peer->conf,
+					    "bad VPNv6 nlri prefix");
 					rde_update_err(peer, ERR_UPDATE,
 					    ERR_UPD_OPTATTR,
 					    mpa.reach, mpa.reach_len);
@@ -1904,6 +1940,16 @@ rde_get_mp_nexthop(u_char *data, u_int16_t len, u_int8_t aid,
 		}
 		memcpy(&nexthop.v6.s6_addr, data, 16);
 		break;
+	case AID_VPN_IPv6:
+		if (nhlen != 24) {
+			log_warnx("bad multiprotocol nexthop, bad size %d",
+			    nhlen);
+			return (-1);
+		}
+		memcpy(&nexthop.v6, data + sizeof(u_int64_t),
+		    sizeof(nexthop.v6));
+		nexthop.aid = AID_INET6;
+		break;
 	case AID_VPN_IPv4:
 		/*
 		 * Neither RFC4364 nor RFC3107 specify the format of the
@@ -2352,6 +2398,7 @@ rde_dump_ctx_new(struct ctl_show_rib_request *req, pid_t pid,
 			hostplen = 32;
 			break;
 		case AID_INET6:
+		case AID_VPN_IPv6:
 			hostplen = 128;
 			break;
 		default:
@@ -2469,7 +2516,7 @@ rde_rdomain_import(struct rde_aspath *asp, struct rdomain *rd)
 	struct filter_set	*s;
 
 	TAILQ_FOREACH(s, &rd->import, entry) {
-		if (community_match(asp, &s->action.community, 0))
+		if (community_ext_match(asp, &s->action.community, 0))
 			return (1);
 	}
 	return (0);
@@ -2517,6 +2564,7 @@ rde_send_kroute(struct rib *rib, struct prefix *new, struct prefix *old)
 
 	switch (addr.aid) {
 	case AID_VPN_IPv4:
+	case AID_VPN_IPv6:
 		if (!(rib->flags & F_RIB_LOCAL))
 			/* not Loc-RIB, no update for VPNs */
 			break;
@@ -3643,6 +3691,7 @@ network_add(struct network_config *nc, int flagstatic)
 	struct rde_aspath	*asp;
 	struct filter_set_head	*vpnset = NULL;
 	in_addr_t		 prefix4;
+	struct in6_addr		 prefix6;
 	u_int8_t		 vstate;
 	u_int16_t		 i;
 
@@ -3665,6 +3714,24 @@ network_add(struct network_config *nc, int flagstatic)
 				nc->prefix.vpn4.labelstack[2] =
 				    (rd->label << 4) & 0xf0;
 				nc->prefix.vpn4.labelstack[2] |= BGP_MPLS_BOS;
+				vpnset = &rd->export;
+				break;
+			case AID_INET6:
+				memcpy(&prefix6, &nc->prefix.v6.s6_addr,
+				    sizeof(struct in6_addr));
+				memset(&nc->prefix, 0, sizeof(nc->prefix));
+				nc->prefix.aid = AID_VPN_IPv6;
+				nc->prefix.vpn6.rd = rd->rd;
+				memcpy(&nc->prefix.vpn6.addr.s6_addr, &prefix6,
+				    sizeof(struct in6_addr));
+				nc->prefix.vpn6.labellen = 3;
+				nc->prefix.vpn6.labelstack[0] =
+				    (rd->label >> 12) & 0xff;
+				nc->prefix.vpn6.labelstack[1] =
+				    (rd->label >> 4) & 0xff;
+				nc->prefix.vpn6.labelstack[2] =
+				    (rd->label << 4) & 0xf0;
+				nc->prefix.vpn6.labelstack[2] |= BGP_MPLS_BOS;
 				vpnset = &rd->export;
 				break;
 			default:
@@ -3720,15 +3787,12 @@ network_add(struct network_config *nc, int flagstatic)
 }
 
 void
-network_delete(struct network_config *nc, int flagstatic)
+network_delete(struct network_config *nc)
 {
 	struct rdomain	*rd;
 	in_addr_t	 prefix4;
-	u_int32_t	 flags = F_PREFIX_ANNOUNCED;
+	struct in6_addr	 prefix6;
 	u_int32_t	 i;
-
-	if (!flagstatic)
-		flags |= F_ANN_DYNAMIC;
 
 	if (nc->rtableid) {
 		SIMPLEQ_FOREACH(rd, rdomains_l, entry) {
@@ -3749,6 +3813,23 @@ network_delete(struct network_config *nc, int flagstatic)
 				nc->prefix.vpn4.labelstack[2] =
 				    (rd->label << 4) & 0xf0;
 				nc->prefix.vpn4.labelstack[2] |= BGP_MPLS_BOS;
+				break;
+			case AID_INET6:
+				memcpy(&prefix6, &nc->prefix.v6.s6_addr,
+				    sizeof(struct in6_addr));
+				memset(&nc->prefix, 0, sizeof(nc->prefix));
+				nc->prefix.aid = AID_VPN_IPv6;
+				nc->prefix.vpn6.rd = rd->rd;
+				memcpy(&nc->prefix.vpn6.addr.s6_addr, &prefix6,
+				    sizeof(struct in6_addr));
+				nc->prefix.vpn6.labellen = 3;
+				nc->prefix.vpn6.labelstack[0] =
+				    (rd->label >> 12) & 0xff;
+				nc->prefix.vpn6.labelstack[1] =
+				    (rd->label >> 4) & 0xff;
+				nc->prefix.vpn6.labelstack[2] =
+				    (rd->label << 4) & 0xf0;
+				nc->prefix.vpn6.labelstack[2] |= BGP_MPLS_BOS;
 				break;
 			default:
 				log_warnx("unable to VPNize prefix");

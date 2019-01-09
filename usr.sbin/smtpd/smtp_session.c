@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtp_session.c,v 1.380 2018/12/23 16:37:53 eric Exp $	*/
+/*	$OpenBSD: smtp_session.c,v 1.383 2018/12/28 11:35:25 gilles Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -134,7 +134,7 @@ struct smtp_session {
 	struct listener		*listener;
 	void			*ssl_ctx;
 	struct sockaddr_storage	 ss;
-	char			 hostname[HOST_NAME_MAX+1];
+	char			 rdns[HOST_NAME_MAX+1];
 	char			 smtpname[HOST_NAME_MAX+1];
 	int			 fcrdns;
 
@@ -607,7 +607,7 @@ smtp_session(struct listener *listener, int sock,
 		/* A bit of a hack */
 		if (!strcmp(hostname, "localhost"))
 			s->flags |= SF_BOUNCE;
-		(void)strlcpy(s->hostname, hostname, sizeof(s->hostname));
+		(void)strlcpy(s->rdns, hostname, sizeof(s->rdns));
 		s->fcrdns = 1;
 		smtp_lookup_servername(s);
 	} else {
@@ -629,7 +629,7 @@ smtp_getnameinfo_cb(void *arg, int gaierrno, const char *host, const char *serv)
 	if (gaierrno) {
 		log_warnx("getnameinfo: %s: %s", ss_to_text(&s->ss),
 		    gai_strerror(gaierrno));
-		(void)strlcpy(s->hostname, "<unknown>", sizeof(s->hostname));
+		(void)strlcpy(s->rdns, "<unknown>", sizeof(s->rdns));
 
 		if (gaierrno == EAI_NODATA || gaierrno == EAI_NONAME)
 			s->fcrdns = 0;
@@ -640,12 +640,12 @@ smtp_getnameinfo_cb(void *arg, int gaierrno, const char *host, const char *serv)
 		return;
 	}
 
-	(void)strlcpy(s->hostname, host, sizeof(s->hostname));
+	(void)strlcpy(s->rdns, host, sizeof(s->rdns));
 
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = s->ss.ss_family;
 	hints.ai_socktype = SOCK_STREAM;
-	resolver_getaddrinfo(s->hostname, NULL, &hints, smtp_getaddrinfo_cb, s);
+	resolver_getaddrinfo(s->rdns, NULL, &hints, smtp_getaddrinfo_cb, s);
 }
 
 static void
@@ -656,7 +656,7 @@ smtp_getaddrinfo_cb(void *arg, int gaierrno, struct addrinfo *ai0)
 	char fwd[64], rev[64];
 
 	if (gaierrno) {
-		log_warnx("getaddrinfo: %s: %s", s->hostname,
+		log_warnx("getaddrinfo: %s: %s", s->rdns,
 		    gai_strerror(gaierrno));
 
 		if (gaierrno == EAI_NODATA || gaierrno == EAI_NONAME)
@@ -1457,6 +1457,12 @@ smtp_check_starttls(struct smtp_session *s, const char *args)
 static int
 smtp_check_mail_from(struct smtp_session *s, const char *args)
 {
+	char *copy;
+	char tmp[SMTP_LINE_MAX];
+
+	(void)strlcpy(tmp, args, sizeof tmp);
+	copy = tmp;  
+
 	if (s->helo[0] == '\0' || s->tx) {
 		smtp_reply(s, "503 %s %s: Command not allowed at this point.",
 		    esc_code(ESC_STATUS_PERMFAIL, ESC_INVALID_COMMAND),
@@ -1497,16 +1503,46 @@ smtp_check_mail_from(struct smtp_session *s, const char *args)
 		return 0;
 	}
 
+	if (smtp_mailaddr(&s->tx->evp.sender, copy, 1, &copy,
+		s->tx->session->smtpname) == 0) {
+		smtp_reply(s, "553 %s: Sender address syntax error",
+		    esc_code(ESC_STATUS_PERMFAIL, ESC_OTHER_ADDRESS_STATUS));
+		smtp_tx_free(s->tx);
+		return 0;
+	}
+
 	return 1;
 }
 
 static int
 smtp_check_rcpt_to(struct smtp_session *s, const char *args)
 {
+	char *copy;
+	char tmp[SMTP_LINE_MAX];
+
+	(void)strlcpy(tmp, args, sizeof tmp);
+	copy = tmp; 
+
 	if (s->tx == NULL) {
 		smtp_reply(s, "503 %s %s: Command not allowed at this point.",
 		    esc_code(ESC_STATUS_PERMFAIL, ESC_INVALID_COMMAND),
 		    esc_description(ESC_INVALID_COMMAND));
+		return 0;
+	}
+
+	if (s->tx->rcptcount >= env->sc_session_max_rcpt) {
+		smtp_reply(s->tx->session, "451 %s %s: Too many recipients",
+		    esc_code(ESC_STATUS_TEMPFAIL, ESC_TOO_MANY_RECIPIENTS),
+		    esc_description(ESC_TOO_MANY_RECIPIENTS));
+		return 0;
+	}
+
+	if (smtp_mailaddr(&s->tx->evp.rcpt, copy, 0, &copy,
+		s->tx->session->smtpname) == 0) {
+		smtp_reply(s->tx->session,
+		    "501 %s: Recipient address syntax error",
+		    esc_code(ESC_STATUS_PERMFAIL,
+		        ESC_BAD_DESTINATION_MAILBOX_ADDRESS_SYNTAX));
 		return 0;
 	}
 
@@ -1570,7 +1606,7 @@ smtp_filter_begin(struct smtp_session *s)
 	m_add_string(p_lka, s->listener->filter_name);
 	m_add_sockaddr(p_lka, (struct sockaddr *)&s->ss);
 	m_add_sockaddr(p_lka, (struct sockaddr *)&s->listener->ss);
-	m_add_string(p_lka, s->hostname);
+	m_add_string(p_lka, s->rdns);
 	m_add_int(p_lka, s->fcrdns);
 	m_close(p_lka);
 }
@@ -1935,11 +1971,11 @@ smtp_connected(struct smtp_session *s)
 	smtp_enter_state(s, STATE_CONNECTED);
 
 	log_info("%016"PRIx64" smtp connected address=%s host=%s",
-	    s->id, ss_to_text(&s->ss), s->hostname);
+	    s->id, ss_to_text(&s->ss), s->rdns);
 
 	smtp_filter_begin(s);
 
-	report_smtp_link_connect("smtp-in", s->id, s->hostname, s->fcrdns, &s->ss,
+	report_smtp_link_connect("smtp-in", s->id, s->rdns, s->fcrdns, &s->ss,
 	    &s->listener->ss);
 
 	smtp_filter_phase(FILTER_CONNECT, s, ss_to_text(&s->ss));
@@ -2273,7 +2309,7 @@ smtp_tx(struct smtp_session *s)
 	tx->evp.ss = s->ss;
 	(void)strlcpy(tx->evp.tag, s->listener->tag, sizeof(tx->evp.tag));
 	(void)strlcpy(tx->evp.smtpname, s->smtpname, sizeof(tx->evp.smtpname));
-	(void)strlcpy(tx->evp.hostname, s->hostname, sizeof tx->evp.hostname);
+	(void)strlcpy(tx->evp.hostname, s->rdns, sizeof tx->evp.hostname);
 	(void)strlcpy(tx->evp.helo, s->helo, sizeof(tx->evp.helo));
 
 	if (s->flags & SF_BOUNCE)
@@ -2630,8 +2666,11 @@ static int
 smtp_tx_filtered_dataline(struct smtp_tx *tx, const char *line)
 {
 	if (!strcmp(line, ".")) {
-		if (tx->error)
-			return 1;
+		/* XXX - this needs to be handled properly */
+		/*
+		 * if (tx->error)
+		 *	return 1;
+		 */
 		line = NULL;
 	}
 	else {
@@ -2742,7 +2781,7 @@ smtp_message_begin(struct smtp_tx *tx)
 	if (!(s->listener->flags & F_MASK_SOURCE)) {
 		m_printf(tx, "from %s (%s [%s])",
 		    s->helo,
-		    s->hostname,
+		    s->rdns,
 		    ss_to_text(&s->ss));
 	}
 	m_printf(tx, "\n\tby %s (%s) with %sSMTP%s%s id %08x",

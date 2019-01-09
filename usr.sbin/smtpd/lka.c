@@ -1,4 +1,4 @@
-/*	$OpenBSD: lka.c,v 1.229 2018/12/23 16:37:53 eric Exp $	*/
+/*	$OpenBSD: lka.c,v 1.232 2018/12/28 11:40:29 eric Exp $	*/
 
 /*
  * Copyright (c) 2008 Pierre-Yves Ritschard <pyr@openbsd.org>
@@ -223,7 +223,7 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 		m_get_string(&m, &tablename);
 		m_end(&m);
 
-		table = table_find(env, tablename, NULL);
+		table = table_find(env, tablename);
 
 		m_create(p, IMSG_MTA_LOOKUP_SOURCE, 0, 0, -1);
 		m_add_id(p, reqid);
@@ -234,7 +234,7 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 			m_add_int(p, LKA_TEMPFAIL);
 		}
 		else {
-			ret = table_fetch(table, NULL, K_SOURCE, &lk);
+			ret = table_fetch(table, K_SOURCE, &lk);
 			if (ret == -1)
 				m_add_int(p, LKA_TEMPFAIL);
 			else if (ret == 0)
@@ -272,7 +272,7 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 		m_get_string(&m, &tablename);
 		m_end(&m);
 
-		table = table_find(env, tablename, NULL);
+		table = table_find(env, tablename);
 
 		m_create(p, IMSG_MTA_LOOKUP_SMARTHOST, 0, 0, -1);
 		m_add_id(p, reqid);
@@ -282,7 +282,7 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 			m_add_int(p, LKA_TEMPFAIL);
 		}
 		else {
-			ret = table_fetch(table, NULL, K_RELAYHOST, &lk);
+			ret = table_fetch(table, K_RELAYHOST, &lk);
 			if (ret == -1)
 				m_add_int(p, LKA_TEMPFAIL);
 			else if (ret == 0)
@@ -342,7 +342,7 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 
 	case IMSG_CTL_UPDATE_TABLE:
 		ret = 0;
-		table = table_find(env, imsg->data, NULL);
+		table = table_find(env, imsg->data);
 		if (table == NULL) {
 			log_warnx("warn: Lookup table not found: "
 			    "\"%s\"", (char *)imsg->data);
@@ -682,14 +682,14 @@ lka_authenticate(const char *tablename, const char *user, const char *password)
 	union lookup		 lk;
 
 	log_debug("debug: lka: authenticating for %s:%s", tablename, user);
-	table = table_find(env, tablename, NULL);
+	table = table_find(env, tablename);
 	if (table == NULL) {
 		log_warnx("warn: could not find table %s needed for authentication",
 		    tablename);
 		return (LKA_TEMPFAIL);
 	}
 
-	switch (table_lookup(table, NULL, user, K_CREDENTIALS, &lk)) {
+	switch (table_lookup(table, K_CREDENTIALS, user, &lk)) {
 	case -1:
 		log_warnx("warn: user credentials lookup fail for %s:%s",
 		    tablename, user);
@@ -711,7 +711,7 @@ lka_credentials(const char *tablename, const char *label, char *dst, size_t sz)
 	char			*buf;
 	int			 buflen, r;
 
-	table = table_find(env, tablename, NULL);
+	table = table_find(env, tablename);
 	if (table == NULL) {
 		log_warnx("warn: credentials table %s missing", tablename);
 		return (LKA_TEMPFAIL);
@@ -719,7 +719,7 @@ lka_credentials(const char *tablename, const char *label, char *dst, size_t sz)
 
 	dst[0] = '\0';
 
-	switch (table_lookup(table, NULL, label, K_CREDENTIALS, &lk)) {
+	switch (table_lookup(table, K_CREDENTIALS, label, &lk)) {
 	case -1:
 		log_warnx("warn: credentials lookup fail for %s:%s",
 		    tablename, label);
@@ -754,13 +754,13 @@ lka_userinfo(const char *tablename, const char *username, struct userinfo *res)
 	union lookup	 lk;
 
 	log_debug("debug: lka: userinfo %s:%s", tablename, username);
-	table = table_find(env, tablename, NULL);
+	table = table_find(env, tablename);
 	if (table == NULL) {
 		log_warnx("warn: cannot find user table %s", tablename);
 		return (LKA_TEMPFAIL);
 	}
 
-	switch (table_lookup(table, NULL, username, K_USERINFO, &lk)) {
+	switch (table_lookup(table, K_USERINFO, username, &lk)) {
 	case -1:
 		log_warnx("warn: failure during userinfo lookup %s:%s",
 		    tablename, username);
@@ -784,13 +784,13 @@ lka_addrname(const char *tablename, const struct sockaddr *sa,
 	source = sa_to_text(sa);
 
 	log_debug("debug: lka: helo %s:%s", tablename, source);
-	table = table_find(env, tablename, NULL);
+	table = table_find(env, tablename);
 	if (table == NULL) {
 		log_warnx("warn: cannot find helo table %s", tablename);
 		return (LKA_TEMPFAIL);
 	}
 
-	switch (table_lookup(table, NULL, source, K_ADDRNAME, &lk)) {
+	switch (table_lookup(table, K_ADDRNAME, source, &lk)) {
 	case -1:
 		log_warnx("warn: failure during helo lookup %s:%s",
 		    tablename, source);
@@ -812,13 +812,13 @@ lka_mailaddrmap(const char *tablename, const char *username, const struct mailad
 	int			found;
 
 	log_debug("debug: lka: mailaddrmap %s:%s", tablename, username);
-	table = table_find(env, tablename, NULL);
+	table = table_find(env, tablename);
 	if (table == NULL) {
 		log_warnx("warn: cannot find mailaddrmap table %s", tablename);
 		return (LKA_TEMPFAIL);
 	}
 
-	switch (table_lookup(table, NULL, username, K_MAILADDRMAP, &lk)) {
+	switch (table_lookup(table, K_MAILADDRMAP, username, &lk)) {
 	case -1:
 		log_warnx("warn: failure during mailaddrmap lookup %s:%s",
 		    tablename, username);

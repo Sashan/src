@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.366 2018/12/19 15:26:42 claudio Exp $ */
+/*	$OpenBSD: parse.y,v 1.368 2018/12/30 13:53:07 denis Exp $ */
 
 /*
  * Copyright (c) 2002, 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -1192,10 +1192,8 @@ neighbor	: {	curpeer = new_peer(); }
 			if (($3.prefix.aid == AID_INET && $3.len != 32) ||
 			    ($3.prefix.aid == AID_INET6 && $3.len != 128))
 				curpeer->conf.template = 1;
-			if (curpeer->conf.capabilities.mp[
-			    curpeer->conf.remote_addr.aid] == -1)
-				curpeer->conf.capabilities.mp[
-				    curpeer->conf.remote_addr.aid] = 1;
+			curpeer->conf.capabilities.mp[
+			    curpeer->conf.remote_addr.aid] = 1;
 			if (get_id(curpeer)) {
 				yyerror("get_id failed");
 				YYERROR;
@@ -3761,7 +3759,7 @@ alloc_peer(void)
 	p->conf.export_type = EXPORT_UNSET;
 	p->conf.announce_capa = 1;
 	for (i = 0; i < AID_MAX; i++)
-		p->conf.capabilities.mp[i] = -1;
+		p->conf.capabilities.mp[i] = 0;
 	p->conf.capabilities.refresh = 1;
 	p->conf.capabilities.grestart.restart = 1;
 	p->conf.capabilities.as4byte = 1;
@@ -3976,6 +3974,7 @@ merge_prefixspec(struct filter_prefix *p, struct filter_prefixlen *pl)
 		max_len = 32;
 		break;
 	case AID_INET6:
+	case AID_VPN_IPv6:
 		max_len = 128;
 		break;
 	}
@@ -4143,8 +4142,6 @@ str2key(char *s, char *dest, size_t max_len)
 int
 neighbor_consistent(struct peer *p)
 {
-	u_int8_t	i;
-
 	/* local-address and peer's address: same address family */
 	if (p->conf.local_addr.aid &&
 	    p->conf.local_addr.aid != p->conf.remote_addr.aid) {
@@ -4197,11 +4194,6 @@ neighbor_consistent(struct peer *p)
 		    "reflector clusters");
 		return (-1);
 	}
-
-	/* the default MP capability is NONE */
-	for (i = 0; i < AID_MAX; i++)
-		if (p->conf.capabilities.mp[i] == -1)
-			p->conf.capabilities.mp[i] = 0;
 
 	return (0);
 }
