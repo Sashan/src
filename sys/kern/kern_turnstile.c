@@ -176,7 +176,8 @@ turnstile_block(struct turnstile *ts, unsigned int q, void *lock_addr,
 			 * with  proper error code.
 			 */
 			p->p_stat = SONPROC;
-			p->p_wchan = NULL;
+			p->p_wchan = 0;
+			p->p_wmesg = NULL;
 			p->p_cpu->ci_schedstate.spc_curpriority = p->p_usrpri;
 
 			/*
@@ -287,6 +288,7 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 	while ((p = TAILQ_FIRST(&wake_q)) != NULL) {
 		TAILQ_REMOVE(&wake_q, p, p_runq);
 		p->p_wchan = 0;
+		p->p_wmesg = NULL;
 		KASSERT(p->p_stat == SSLEEP);
 		setrunnable(p);
 	}
