@@ -403,6 +403,24 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 	wcnt = turnstile_writers(ts);
 	o = rwl->rwl_owner;
 
+	if ((rcnt == 0) || (decr == RWLOCK_READ_INCR)) {
+		if (rcnt != 0) {
+			newo = RW_PROC(turnstile_first(ts, TS_WRITER_Q));
+			newo |= RWLOCK_WRLOCK | RWLOCK_WAIT;
+			newo |= (wcnt > 1) ? RWLOCK_WRWANT : 0;
+			atomic_swap_ulong(&rwl->rwl_owner, newo);
+			turnstile_wakeup(ts, TS_WRITER_Q, 1, &mcs);
+		} else {
+			atomic_swap_ulong(&rwl->rwl_owner, RWLOCK_WRWANT);
+			turnstile_wakeup(ts, TS_WRITER_Q, wcnt, &mcs);
+		}
+	} else {
+		newo = rcnt << RWLOCK_READER_SHIFT;
+		newo |= (wcnt != 0) ? RWLOCK_WAIT | RWLOCK_WRWANT : 0;
+		atomic_swap_ulong(&rwl->rwl_owner, newo);
+		turnstile_wakeup(ts, TS_READER_Q, rcnt, &mcs);
+	}
+#if 0
 	if (decr == RWLOCK_READ_INCR) {
 		/*
 		 * Remember the turnstile got removed from ts chain, by
@@ -438,6 +456,7 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 		atomic_swap_ulong(&rwl->rwl_owner, newo);
 		turnstile_wakeup(ts, TS_READER_Q, rcnt, &mcs);
 	}
+#endif
 }
 
 #else	/* !WITH_TURNSTILE */
