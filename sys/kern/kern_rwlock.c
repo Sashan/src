@@ -281,7 +281,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 	} else if (flags & RW_WRITE) {
 		rwl_incr = RW_PROC(curproc) | RWLOCK_WRLOCK;
 		rwl_setwait = RWLOCK_WAIT | RWLOCK_WRWANT;
-		rwl_needwait = RWLOCK_WRLOCK;
+		rwl_needwait = RWLOCK_WRLOCK | ~RWLOCK_MASK;
 		queue = (flags & RW_INTR) ? TS_IWRITER_Q : TS_WRITER_Q; 
 	} else
 		panic("%s: invalid rw-flags: 0x%x", __func__, flags);
@@ -293,8 +293,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 
 		o = rwl->rwl_owner;
 		if (((o & rwl_needwait) == 0) &&
-		    (!rw_cas(&rwl->rwl_owner, o,
-			o + (rwl_incr & ~RWLOCK_WRWANT)))) {
+		    (!rw_cas(&rwl->rwl_owner, o, o + rwl_incr))) {
 			/*
 			 * We could acquire a lock almost for free for
 			 * one of the reasons below:
