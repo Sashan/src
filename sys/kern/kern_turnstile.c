@@ -309,7 +309,6 @@ turnstile_first(struct turnstile *ts, int q)
 void
 turnstile_interrupt(struct turnstile *ts, struct proc *p, struct mcs_lock *mcs)
 {
-	int	s;
 #ifdef DEBUG
 	struct proc *p_dbg;
 #endif	/* DEBUG */
