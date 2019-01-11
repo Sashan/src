@@ -40,10 +40,8 @@ struct turnstile {
 	unsigned int		 ts_wcount[TS_COUNT];
 };
 
-#define	TS_READERS(ts)	((ts)->ts_wcount[TS_READER_Q] +	\
-	(ts)->ts_wcount[TS_IREADER_Q])
-#define	TS_WRITERS(ts)	((ts)->ts_wcount[TS_WRITER_Q] +	\
-	(ts)->ts_wcount[TS_IWRITER_Q])
+#define	TS_READERS(ts)	((ts)->ts_wcount[TS_READER_Q])
+#define	TS_WRITERS(ts)	((ts)->ts_wcount[TS_WRITER_Q])
 #define	TS_ALL(ts)	TS_READERS((ts)) + TS_WRITERS((ts))
 
 #define	TS_HASH_SIZE	32	/* must be power of 2 */
@@ -79,7 +77,7 @@ struct turnstile *
 turnstile_alloc(void)
 {
 	struct turnstile *ts;
-	int i
+	int i;
 
 	ts = pool_get(&ts_pool, PR_WAITOK|PR_ZERO);
 
@@ -117,8 +115,8 @@ turnstile_lookup(void *lock_addr, struct mcs_lock *mcs)
 }
 
 int
-turnstile_block(struct turnstile *ts, unsigned int q, void *lock_addr,
-    struct mcs_lock *mcs)
+turnstile_block(struct turnstile *ts, unsigned int q, int interruptible,
+    void *lock_addr, struct mcs_lock *mcs)
 {
 	struct ts_chain *tc = TS_CHAIN_FIND(lock_addr);
 	int		 s, sig, sigintr;
@@ -177,7 +175,7 @@ turnstile_block(struct turnstile *ts, unsigned int q, void *lock_addr,
 	 * then we must let curproc continue to run on CPU. The
 	 * turnstile_block() bails out with error in this case.
 	 */
-	if (q > TS_WRITER_Q) {
+	if (interruptible != 0) {
 		/*
 		 * Code below implements sleep_setup_signal() for turnstiles.
 		 */
@@ -258,40 +256,15 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 	TAILQ_HEAD(, proc)	wake_q;
 	struct proc *p;
 	int	s;
-	unsigned int	select_q[2];
-	unsigned int	i = 0;
 
 	KASSERT(mcs_owner(&tc->tc_lock));
 	KASSERT((q == TS_READER_Q) || (q == TS_WRITER_Q));
 	KASSERT((q == TS_READER_Q) && (count < TS_READERS(ts)));
 	KASSERT((q == TS_WRITER_Q) && (count < TS_WRITERS(ts)));
-	TAILQ_INIT(&wake_q);
 
-	/*
-	 * Unlike other OSes OpenBSD comes with pair of queues:
-	 *	regular and interruptible.
-	 * The wake up function must be picking from both queues.
-	 */
-	switch (q) {
-	case TS_READER_Q:
-		KASSERT(count < TS_READERS(ts));
-		select_q[0] = TS_READER_Q;
-		select_q[1] = TS_IREADER_Q;
-		break;
-	case TS_WRITER_Q:
-		KASSERT(count < TS_WRITERS(ts));
-		select_q[0] = TS_WRITER_Q;
-		select_q[1] = TS_IWRITER_Q;
-		break;
-	default:
-		return;
-	}
+	TAILQ_INIT(&wake_q);
 	while (count > 0) {
-		q = select_q[i & 1];
-		i++;
 		p = TAILQ_FIRST(&ts->ts_sleepq[q]);
-		if (p == NULL)
-			continue;
 		turnstile_remove(ts, p, q);
 		TAILQ_INSERT_TAIL(&wake_q, p, p_runq);
 		count--;
@@ -324,22 +297,8 @@ turnstile_writers(struct turnstile *ts)
 struct proc *
 turnstile_first(struct turnstile *ts, int q)
 {
-	struct proc *p;
-	switch (q) {
-	case TS_READER_Q:
-		p = TAILQ_FIRST(&ts->ts_sleepq[q]);
-		if (p == NULL)
-			p = TAILQ_FIRST(&ts->ts_sleepq[TS_IREADER_Q]);
-		break;
-	case TS_WRITER_Q:
-		p = TAILQ_FIRST(&ts->ts_sleepq[q]);
-		if (p == NULL)
-			p = TAILQ_FIRST(&ts->ts_sleepq[TS_IWRITER_Q]);
-		break;
-	default:
-		p = NULL;
-	}
-	return (p);
+	KASSERT(q < TS_COUNT);
+	return (TAILQ_FIRST(&ts->ts_sleepq[q]));
 }
 
 void

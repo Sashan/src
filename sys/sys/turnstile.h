@@ -27,9 +27,7 @@
 
 #define	TS_READER_Q	0
 #define	TS_WRITER_Q	1
-#define	TS_IREADER_Q	2	/* interruptible readers */
-#define	TS_IWRITER_Q	3	/* interruptible writers */
-#define	TS_COUNT	4
+#define	TS_COUNT	2
 
 struct proc;
 struct turnstile;
@@ -38,13 +36,16 @@ extern void turnstile_init(void);
 extern struct turnstile *turnstile_alloc(void);
 extern void turnstile_free(struct turnstile *);
 extern struct turnstile *turnstile_lookup(void *, struct mcs_lock *);
-extern int turnstile_block(struct turnstile *, unsigned int, void *, struct mcs_lock *);
+extern int turnstile_block(struct turnstile *, unsigned int, int, void *,
+    struct mcs_lock *);
 extern void turnstile_remove(struct turnstile *, struct proc *, int);
-extern void turnstile_wakeup(struct turnstile *, unsigned int, int, struct mcs_lock *);
+extern void turnstile_wakeup(struct turnstile *, unsigned int, int,
+    struct mcs_lock *);
 extern unsigned int turnstile_readers(struct turnstile *);
 extern unsigned int turnstile_writers(struct turnstile *);
 extern struct proc* turnstile_first(struct turnstile *, int);
-extern void turnstile_interrupt(struct turnstile *, struct proc *, struct mcs_lock *);
+extern void turnstile_interrupt(struct turnstile *, struct proc *,
+    struct mcs_lock *);
 
 #endif	/* _KERNEL */
 #endif	/* WITH_TURNSTILES */

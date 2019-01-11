@@ -277,12 +277,10 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 		rwl_incr = RWLOCK_READ_INCR;
 		rwl_setwait = RWLOCK_WAIT;
 		rwl_needwait = RWLOCK_WRLOCK|RWLOCK_WRWANT;
-		queue = (flags & RW_INTR) ? TS_IREADER_Q : TS_READER_Q;
 	} else if (flags & RW_WRITE) {
 		rwl_incr = RW_PROC(curproc) | RWLOCK_WRLOCK;
 		rwl_setwait = RWLOCK_WAIT | RWLOCK_WRWANT;
 		rwl_needwait = RWLOCK_WRLOCK | ~RWLOCK_MASK;
-		queue = (flags & RW_INTR) ? TS_IWRITER_Q : TS_WRITER_Q; 
 	} else
 		panic("%s: invalid rw-flags: 0x%x", __func__, flags);
 
@@ -332,7 +330,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 			continue;
 		}
 
-		e = turnstile_block(ts, queue, rwl, &mcs);
+		e = turnstile_block(ts, queue, (flags & RW_INTR), rwl, &mcs);
 
 		if (e != 0)
 			return (e);
