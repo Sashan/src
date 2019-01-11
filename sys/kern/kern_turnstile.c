@@ -301,6 +301,11 @@ turnstile_first(struct turnstile *ts, int q)
 	return (TAILQ_FIRST(&ts->ts_sleepq[q]));
 }
 
+/*
+ * Unlike turnstile_wakeup(), turnstile_interrupt() runs on behalf of
+ * setrunnable(), therefore we must not call it to avoid recursion.
+ * turnstile_interrupt() just emulates unsleep().
+ */
 void
 turnstile_interrupt(struct turnstile *ts, struct proc *p, struct mcs_lock *mcs)
 {
@@ -332,12 +337,5 @@ turnstile_interrupt(struct turnstile *ts, struct proc *p, struct mcs_lock *mcs)
 	TAILQ_REMOVE(&ts->ts_sleepq[p->p_ts_q], p, p_runq);
 	ts->ts_wcount[p->p_ts_q]--;
 	p->p_ts_q = TS_COUNT;
-	mcs_lock_leave(mcs);
-	SCHED_LOCK(s);
-	p->p_wchan = 0;
-	p->p_wmesg = NULL;
-	KASSERT(p->p_stat == SSLEEP);
-	setrunnable(p);
-	SCHED_UNLOCK(s);
 }
 #endif	/* WITH_TURNSTILES */

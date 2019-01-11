@@ -509,6 +509,7 @@ setrunnable(struct proc *p)
 			ts = turnstile_lookup((void *)p->p_wchan, &mcs);
 			KASSERT(ts != NULL);
 			turnstile_interrupt(ts, p, &mcs);
+			mcs_lock_leave(&mcs);
 		} else
 			unsleep(p);
 #else
