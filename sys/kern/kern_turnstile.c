@@ -78,12 +78,26 @@ turnstile_init(void)
 struct turnstile *
 turnstile_alloc(void)
 {
-	return (pool_get(&ts_pool, PR_WAITOK|PR_ZERO));
+	struct turnstile *ts;
+	int i
+
+	ts = pool_get(&ts_pool, PR_WAITOK|PR_ZERO);
+
+	for (i = 0; i < TS_COUNT; i++)
+		TAILQ_INIT(&ts->ts_sleepq[i]);
+
+	return (ts);
 }
 
 void
 turnstile_free(struct turnstile *ts)
 {
+#ifdef	DEBUG
+	int	i;
+
+	for (i = 0; i < TS_COUNT; i++)
+		KASSERT(TAILQ_EMPTY(ts->ts_sleepq[i]));
+#endif
 	pool_put(&ts_pool, ts);
 }
 
