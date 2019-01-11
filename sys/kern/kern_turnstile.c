@@ -304,6 +304,10 @@ turnstile_first(struct turnstile *ts, int q)
 void
 turnstile_interrupt(struct turnstile *ts, struct proc *p, struct mcs_lock *mcs)
 {
+#ifdef DEBUG
+	struct proc *p_dbg;
+#endif	/* DEBUG */
+
 	KASSERT(ts != NULL);
 	KASSERT(p->p_ts == ts);
 	KASSERT(ts->ts_lock_addr == p->p_wchan);
@@ -317,6 +321,13 @@ turnstile_interrupt(struct turnstile *ts, struct proc *p, struct mcs_lock *mcs)
 		LIST_REMOVE(ts, ts_chain_link);
 	}
 
+#ifdef DEBUG
+	TAILQ_FOREACH(p_dbg, &ts->ts_sleepq[p->p_ts_q], p_runq) {
+		if (p_dbg == p)
+			break;
+	}
+	KASSERT(ts_dbg == ts);
+#endif	/* DEBUG */
 	TAILQ_REMOVE(&ts->ts_sleepq[p->p_ts_q], p, p_runq);
 	ts->ts_wcount[p->p_ts_q]--;
 	p->p_ts_q = TS_COUNT;
