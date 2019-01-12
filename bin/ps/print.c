@@ -238,6 +238,9 @@ printstate(const struct kinfo_proc *kp, VARENT *ve)
 		break;
 
 	case SSLEEP:
+#ifdef WITH_TURNSTILES
+	case STSLEEP:
+#endif
 		if (flag & P_SINTR)	/* interruptible (long) */
 			*cp = kp->p_slptime >= maxslp ? 'I' : 'S';
 		else

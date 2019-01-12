@@ -464,9 +464,16 @@ void
 proc_printit(struct proc *p, const char *modif,
     int (*pr)(const char *, ...) __attribute__((__format__(__kprintf__,1,2))))
 {
+#ifdef WITH_TURNSTILES
+	static const char *const pstat[] = {
+		"idle", "run", "sleep", "stop", "zombie", "dead", "onproc",
+		"tsleep"
+	};
+#else
 	static const char *const pstat[] = {
 		"idle", "run", "sleep", "stop", "zombie", "dead", "onproc"
 	};
+#endif
 	char pstbuf[5];
 	const char *pst = pstbuf;
 

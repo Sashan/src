@@ -401,6 +401,7 @@ struct proc {
 #define	SZOMB	5		/* unused */
 #define	SDEAD	6		/* Thread is almost gone */
 #define	SONPROC	7		/* Thread is currently on a CPU. */
+#define STSLEEP 8		/* Thread is sleeping on turnstile */
 
 #define	P_ZOMBIE(p)	((p)->p_stat == SDEAD)
 #define	P_HASSIBLING(p)	(TAILQ_FIRST(&(p)->p_p->ps_threads) != (p) || \

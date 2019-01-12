@@ -267,6 +267,7 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 		p = TAILQ_FIRST(&ts->ts_sleepq[q]);
 		turnstile_remove(ts, p, q);
 		TAILQ_INSERT_TAIL(&wake_q, p, p_runq);
+		p->p_ts_q = TS_COUNT;
 		count--;
 	}
 	mcs_lock_leave(mcs);

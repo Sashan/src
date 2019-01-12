@@ -483,9 +483,9 @@ resched_proc(struct proc *p, u_char pri)
 void
 setrunnable(struct proc *p)
 {
-	SCHED_ASSERT_LOCKED();
 	struct turnstile *ts;
 	struct mcs_lock mcs;
+	SCHED_ASSERT_LOCKED();
 
 	switch (p->p_stat) {
 	case 0:
@@ -503,19 +503,19 @@ setrunnable(struct proc *p)
 		if ((p->p_p->ps_flags & PS_TRACED) != 0 && p->p_xstat != 0)
 			atomic_setbits_int(&p->p_siglist, sigmask(p->p_xstat));
 	case SSLEEP:
+		unsleep(p);		/* e.g. when sending signals */
+		break;
 #ifdef	WITH_TURNSTILES
+	case STSLEEP:
 		if (p->p_ts_q < TS_COUNT) {
 			KASSERT(p->p_wchan != NULL);
 			ts = turnstile_lookup((void *)p->p_wchan, &mcs);
 			KASSERT(ts != NULL);
 			turnstile_interrupt(ts, p, &mcs);
 			mcs_lock_leave(&mcs);
-		} else
-			unsleep(p);
-#else
-		unsleep(p);		/* e.g. when sending signals */
-#endif	/* WITH_TURNSTILES */
+		}
 		break;
+#endif	/* WITH_TURNSTILES */
 	}
 	p->p_stat = SRUN;
 	p->p_cpu = sched_choosecpu(p);
