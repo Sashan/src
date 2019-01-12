@@ -225,7 +225,7 @@ turnstile_block(struct turnstile *ts, unsigned int q, int interruptible,
 		}
 	}
 
-	p->p_stat = SSLEEP;
+	p->p_stat = STSLEEP;
 	p->p_ru.ru_nvcsw++;
 	mi_switch();
 
@@ -277,7 +277,7 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 		TAILQ_REMOVE(&wake_q, p, p_runq);
 		p->p_wchan = 0;
 		p->p_wmesg = NULL;
-		KASSERT(p->p_stat == SSLEEP);
+		KASSERT(p->p_stat == STSLEEP);
 		setrunnable(p);
 	}
 	SCHED_UNLOCK(s);
