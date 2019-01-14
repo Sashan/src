@@ -293,7 +293,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 
 		o = rwl->rwl_owner;
 		if (((o & rwl_needwait) == 0) &&
-		    (!rw_cas(&rwl->rwl_owner, o, o + rwl_incr))) {
+		    (!rw_cas(&rwl->rwl_owner, o, (o + rwl_incr) & ~RWLOCK_WRWANT))) {
 			/*
 			 * We could acquire a lock almost for free for
 			 * one of the reasons below:
