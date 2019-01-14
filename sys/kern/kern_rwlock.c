@@ -393,6 +393,9 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 			membar_sync();
 			DPRINTF("[%s] taking exit ", __func__);
 			DPRINT_LOCK(rwl, 0);
+			ts = turnstile_lookup(rwl, &mcs);
+			KASSERT(ts == NULL);
+			mcs_lock_leave(&mcs);
 			return;
 		}
 		o = newo;
