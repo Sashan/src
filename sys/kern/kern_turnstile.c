@@ -257,7 +257,7 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 	struct proc *p;
 	int	s;
 
-	KASSERT(mcs_owner(&tc->tc_lock));
+	KASSERT(mcs_owner(mcs));
 	KASSERT((q == TS_READER_Q) || (q == TS_WRITER_Q));
 	KASSERT((q == TS_READER_Q) && (count < TS_READERS(ts)));
 	KASSERT((q == TS_WRITER_Q) && (count < TS_WRITERS(ts)));
