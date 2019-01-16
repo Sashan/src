@@ -254,7 +254,7 @@ _rw_init_flags(struct rwlock *rwl, const char *name, int flags,
 int
 _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 {
-	unsigned long o, rwl_incr;
+	unsigned long o, new_o, rwl_incr;
 	unsigned int queue, rwl_setwait, rwl_needwait;
 	struct turnstile *ts;
 	struct mcs_lock	mcs;
@@ -276,7 +276,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 	if (flags & RW_READ) {
 		rwl_incr = RWLOCK_READ_INCR;
 		rwl_setwait = RWLOCK_WAIT;
-		rwl_needwait = RWLOCK_WRLOCK|RWLOCK_WRWANT;
+		rwl_needwait = RWLOCK_WRLOCK | RWLOCK_WRWANT;
 		queue = TS_READER_Q;
 	} else if (flags & RW_WRITE) {
 		rwl_incr = RW_PROC(curproc) | RWLOCK_WRLOCK;
@@ -286,14 +286,17 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 	} else
 		panic("%s: invalid rw-flags: 0x%x", __func__, flags);
 
-	flags &= ~RW_INTR;
-
 	do {
 		rw_enter_diag(rwl, flags);
 
 		o = rwl->rwl_owner;
+		/*
+		 * writer must drop WRWANT flag here, just in case it will get
+		 * lucky to acquire lock without waiting.
+		 */
+		new_o = (o + rwl_incr) & ~RWLOCK_WRWANT;
 		if (((o & rwl_needwait) == 0) &&
-		    (!rw_cas(&rwl->rwl_owner, o, (o + rwl_incr) & ~RWLOCK_WRWANT))) {
+		    (!rw_cas(&rwl->rwl_owner, o, new_o))) {
 			/*
 			 * We could acquire a lock almost for free for
 			 * one of the reasons below:
@@ -321,8 +324,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 		ts = turnstile_lookup(rwl, &mcs);
 		o = rwl->rwl_owner;
 
-		if (((o & rwl_needwait) == 0) &&
-		    (rw_cas(&rwl->rwl_owner, o, o | rwl_setwait))) {
+		if (rw_cas(&rwl->rwl_owner, o, o | rwl_setwait)) {
 			/*
 			 * We've lost the race with other thread competing for
 			 * the same lock. We must restart lock acquisition
@@ -342,7 +344,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 		 * if we could acquire a lock. Remember we could loose
 		 * race with another writer.
 		 */
-		if ((flags == RW_READ) ||
+		if ((flags & RW_READ) ||
 		    (RWLOCK_OWNER(rwl) == (struct proc *)RW_PROC(curproc)))
 			break;
 	} while (1);
