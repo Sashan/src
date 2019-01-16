@@ -71,6 +71,6 @@ mcs_lock_leave(struct mcs_lock *mcs)
 int
 mcs_owner(struct mcs_lock *mcs)
 {
-	return (curproc == mcs_global->mcs_wait);
+	return (curproc == mcs->mcs_wait);
 }
 #endif
