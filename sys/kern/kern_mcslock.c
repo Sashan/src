@@ -67,7 +67,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	}
 }
 
-#ifdef DEBUG
+#ifdef DIAGNOSTIC
 int
 mcs_owner(struct mcs_lock *mcs)
 {
