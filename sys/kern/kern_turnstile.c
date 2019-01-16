@@ -252,7 +252,6 @@ turnstile_remove(struct turnstile *ts, struct proc *p, int q)
 void
 turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_lock *mcs)
 {
-	struct ts_chain *tc = TS_CHAIN_FIND(ts->ts_lock_addr);
 	TAILQ_HEAD(, proc)	wake_q;
 	struct proc *p;
 	int	s;

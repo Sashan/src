@@ -28,5 +28,7 @@ struct mcs_lock {
 extern void mcs_lock_init(struct mcs_lock *, struct mcs_lock *);
 extern void mcs_lock_enter(struct mcs_lock *);
 extern void mcs_lock_leave(struct mcs_lock *);
+#ifdef DEBUG
 extern int mcs_owner(struct mcs_lock *);
+#endif
 #endif	/* _SYS_MCS_LOCK_H_ */

@@ -67,8 +67,10 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	}
 }
 
+#ifdef DEBUG
 int
-mcs_owner(struct mcs_lock *mcs_global)
+mcs_owner(struct mcs_lock *mcs)
 {
 	return (curproc == mcs_global->mcs_wait);
 }
+#endif
