@@ -234,14 +234,18 @@ turnstile_block(struct turnstile *ts, unsigned int q, int interruptible,
 void
 turnstile_remove(struct turnstile *ts, struct proc *p, int q)
 {
+	/*
+	 * Last turnstile must be attached to process p.
+	 */
+	KASSERT((p->p_ts == ts) || (TS_ALL(ts) > 1));
 	if ((p->p_ts = LIST_FIRST(&ts->ts_free_list)) != NULL) {
 		KASSERT(TS_ALL(ts) > 1);
 		LIST_REMOVE(p->p_ts, ts_free_link);
 	} else {
 		KASSERT(TS_ALL(ts) == 1);
-		KASSERT(p->p_ts == ts);
 		LIST_REMOVE(ts, ts_chain_link);
 		ts->ts_lock_addr = 0;
+		p->p_ts = ts;
 	}
 
 	ts->ts_wcount[q]--;
