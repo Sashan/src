@@ -148,6 +148,8 @@ turnstile_block(struct turnstile *ts, unsigned int q, int interruptible,
 		p->p_ts = ts;
 	}
 
+	printf("%s @ %p (%p)\n", __func__, ts->ts_lock_addr, p);
+
 #ifdef DIAGNOSTIC
 	if (p->p_flag & P_CANTSLEEP)
 		panic("sleep: %s failed insomnia", p->p_p->ps_comm);
@@ -268,11 +270,11 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 	TAILQ_INIT(&wake_q);
 	while (count > 0) {
 		p = TAILQ_FIRST(&ts->ts_sleepq[q]);
+		printf("%s @ %p (%p)\n", __func__, ts->ts_lock_addr, p);
 		turnstile_remove(ts, p, q);
 		TAILQ_INSERT_TAIL(&wake_q, p, p_runq);
 		p->p_ts_q = TS_COUNT;
 		count--;
-		printf("%s @ %p (%p)\n", __func__, ts->ts_lock_addr, p);
 	}
 	mcs_lock_leave(mcs);
 
