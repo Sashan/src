@@ -232,7 +232,7 @@ turnstile_block(struct turnstile *ts, unsigned int q, int interruptible,
 
 	SCHED_ASSERT_LOCKED();
 	p->p_cpu->ci_schedstate.spc_curpriority = p->p_usrpri;
-	SCHED_UNLOCK(sls->sls_s);
+	SCHED_UNLOCK(s);
 
 	/*
 	 * Even though this belongs to the signal handling part of sleep,
