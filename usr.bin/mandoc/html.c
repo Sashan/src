@@ -1,7 +1,7 @@
-/*	$OpenBSD: html.c,v 1.117 2018/12/15 23:33:20 schwarze Exp $ */
+/*	$OpenBSD: html.c,v 1.121 2019/01/11 12:44:10 schwarze Exp $ */
 /*
  * Copyright (c) 2008-2011, 2014 Kristaps Dzonsons <kristaps@bsd.lv>
- * Copyright (c) 2011-2015, 2017, 2018 Ingo Schwarze <schwarze@openbsd.org>
+ * Copyright (c) 2011-2015, 2017-2019 Ingo Schwarze <schwarze@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -76,6 +76,7 @@ static	const struct htmldata htmltags[TAG_MAX] = {
 	{"dl",		HTML_NLALL | HTML_INDENT},
 	{"dt",		HTML_NLAROUND},
 	{"dd",		HTML_NLAROUND | HTML_INDENT},
+	{"p",		HTML_NLAROUND | HTML_INDENT},
 	{"pre",		HTML_NLALL | HTML_NOINDENT},
 	{"var",		0},
 	{"cite",	0},
@@ -261,6 +262,53 @@ print_metaf(struct html *h, enum mandoc_esc deco)
 	default:
 		break;
 	}
+}
+
+void
+html_close_paragraph(struct html *h)
+{
+	struct tag	*t;
+
+	for (t = h->tag; t != NULL; t = t->next) {
+		if (t->tag == TAG_P || t->tag == TAG_PRE) {
+			print_tagq(h, t);
+			break;
+		}
+	}
+}
+
+/*
+ * ROFF_nf switches to no-fill mode, ROFF_fi to fill mode.
+ * TOKEN_NONE does not switch.  The old mode is returned.
+ */
+enum roff_tok
+html_fillmode(struct html *h, enum roff_tok want)
+{
+	struct tag	*t;
+	enum roff_tok	 had;
+
+	for (t = h->tag; t != NULL; t = t->next)
+		if (t->tag == TAG_PRE)
+			break;
+
+	had = t == NULL ? ROFF_fi : ROFF_nf;
+
+	if (want != had) {
+		switch (want) {
+		case ROFF_fi:
+			print_tagq(h, t);
+			break;
+		case ROFF_nf:
+			html_close_paragraph(h);
+			print_otag(h, TAG_PRE, "");
+			break;
+		case TOKEN_NONE:
+			break;
+		default:
+			abort();
+		}
+	}
+	return had;
 }
 
 char *
@@ -607,12 +655,6 @@ print_otag(struct html *h, enum htmltag tag, const char *fmt, ...)
 			print_encode(h, arg1, NULL, 1);
 			fmt++;
 			break;
-		case 'T':
-			print_encode(h, arg1, NULL, 1);
-			print_word(h, "\" title=\"");
-			print_encode(h, arg1, NULL, 1);
-			fmt++;
-			break;
 		default:
 			print_encode(h, arg1, NULL, 1);
 			break;
@@ -784,30 +826,28 @@ print_tagq(struct html *h, const struct tag *until)
 
 	while ((tag = h->tag) != NULL) {
 		print_ctag(h, tag);
-		if (until && tag == until)
+		if (tag == until)
 			return;
 	}
 }
 
+/*
+ * Close out all open elements up to but excluding suntil.
+ * Note that a paragraph just inside stays open together with it
+ * because paragraphs include subsequent phrasing content.
+ */
 void
 print_stagq(struct html *h, const struct tag *suntil)
 {
 	struct tag	*tag;
 
 	while ((tag = h->tag) != NULL) {
-		if (suntil && tag == suntil)
+		if (tag == suntil ||
+		    (tag->next == suntil &&
+		     (tag->tag == TAG_P || tag->tag == TAG_PRE)))
 			return;
 		print_ctag(h, tag);
 	}
-}
-
-void
-print_paragraph(struct html *h)
-{
-	struct tag	*t;
-
-	t = print_otag(h, TAG_DIV, "c", "Pp");
-	print_tagq(h, t);
 }
 
 

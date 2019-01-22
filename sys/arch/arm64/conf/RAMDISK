@@ -1,4 +1,4 @@
-# $OpenBSD: RAMDISK,v 1.75 2018/09/28 13:39:57 ccardenas Exp $
+# $OpenBSD: RAMDISK,v 1.78 2019/01/11 08:02:19 patrick Exp $
 #
 # GENERIC machine description file
 #
@@ -76,6 +76,7 @@ ahci*		at fdt?
 dwge*		at fdt?
 dwpcie*		at fdt?
 pci*		at dwpcie?
+ohci*		at fdt?
 ehci*		at fdt?
 pciecam*	at fdt?
 pci*		at pciecam?
@@ -117,6 +118,7 @@ imxiic*		at fdt?
 iic*		at imxiic?
 imxesdhc*	at fdt?
 sdmmc*		at imxesdhc?
+imxsrc*		at fdt?
 imxpd*		at fdt?
 imxdwusb*	at fdt?
 
@@ -247,6 +249,7 @@ ch*		at scsibus?
 uk*		at scsibus?
 
 # I2C devices
+abcrtc*		at iic?			# Abracon x80x RTC
 islrtc*		at iic?			# ISL1208 RTC
 rkpmic*		at iic?			# RK808 PMIC
 

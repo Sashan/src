@@ -1,4 +1,4 @@
-/*	$OpenBSD: kcov.c,v 1.5 2018/12/27 19:38:01 anton Exp $	*/
+/*	$OpenBSD: kcov.c,v 1.7 2019/01/16 19:28:37 anton Exp $	*/
 
 /*
  * Copyright (c) 2018 Anton Lindqvist <anton@openbsd.org>
@@ -35,11 +35,13 @@ static int test_coverage(int, int);
 static int test_dying(int, int);
 static int test_exec(int, int);
 static int test_fork(int, int);
+static int test_mmap(int, int);
 static int test_open(int, int);
 static int test_state(int, int);
 
+static int check_coverage(const unsigned long *, int, unsigned long, int);
 static void do_syscall(void);
-static void dump(const unsigned long *);
+static void dump(const unsigned long *, int mode);
 static void kcov_disable(int);
 static void kcov_enable(int, int);
 static int kcov_open(void);
@@ -61,6 +63,7 @@ main(int argc, char *argv[])
 		{ "dying",	test_dying,	1 },
 		{ "exec",	test_exec,	1 },
 		{ "fork",	test_fork,	1 },
+		{ "mmap",	test_mmap,	1 },
 		{ "open",	test_open,	0 },
 		{ "state",	test_state,	1 },
 		{ NULL,		NULL,		0 },
@@ -128,14 +131,9 @@ main(int argc, char *argv[])
 	*cover = 0;
 	error = tests[i].fn(fd, mode);
 	if (verbose)
-		dump(cover);
-	if (tests[i].coverage && *cover == 0) {
-                warnx("coverage empty (count=%lu, fd=%d)\n", *cover, fd);
+		dump(cover, mode);
+	if (check_coverage(cover, mode, bufsize, tests[i].coverage))
 		error = 1;
-	} else if (!tests[i].coverage && *cover != 0) {
-                warnx("coverage is not empty (count=%lu, fd=%d)\n", *cover, fd);
-		error = 1;
-	}
 
 	if (munmap(cover, bufsize * sizeof(unsigned long)) == -1)
 		err(1, "munmap");
@@ -157,13 +155,34 @@ do_syscall(void)
 	getpid();
 }
 
+static int
+check_coverage(const unsigned long *cover, int mode, unsigned long maxsize,
+    int nonzero)
+{
+	int error = 0;
+
+	if (nonzero && cover[0] == 0) {
+		warnx("coverage empty (count=0)\n");
+		return 1;
+	} else if (!nonzero && cover[0] != 0) {
+		warnx("coverage not empty (count=%lu)\n", *cover);
+		return 1;
+	} else if (cover[0] >= maxsize) {
+		warnx("coverage overflow (count=%lu, max=%lu)\n", *cover, maxsize);
+		return 1;
+	}
+
+	return error;
+}
+
 static void
-dump(const unsigned long *cover)
+dump(const unsigned long *cover, int mode)
 {
 	unsigned long i;
+	int stride = 1;
 
 	for (i = 0; i < cover[0]; i++)
-		printf("%lu/%lu: %p\n", i + 1, cover[0], (void *)cover[i + 1]);
+		printf("%p\n", (void *)cover[i * stride + 1]);
 }
 
 static int
@@ -323,6 +342,25 @@ test_fork(int fd, int mode)
 }
 
 /*
+ * Calling mmap() after enable is not allowed.
+ */
+static int
+test_mmap(int fd, int mode)
+{
+	void *cover;
+
+	kcov_enable(fd, mode);
+	cover = mmap(NULL, bufsize * sizeof(unsigned long),
+	    PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (cover != MAP_FAILED) {
+		warnx("expected mmap to fail");
+		return 1;
+	}
+
+	return 0;
+}
+
+/*
  * Open /dev/kcov more than once.
  */
 static int
@@ -330,7 +368,7 @@ test_open(int oldfd, int mode)
 {
 	unsigned long *cover;
 	int fd;
-	int ret = 0;
+	int error = 0;
 
 	fd = kcov_open();
 	if (ioctl(fd, KIOSETBUFSIZE, &bufsize) == -1)
@@ -344,14 +382,13 @@ test_open(int oldfd, int mode)
 	do_syscall();
 	kcov_disable(fd);
 
-	if (*cover == 0) {
-		warnx("coverage empty (count=0, fd=%d)\n", fd);
-		ret = 1;
-	}
+	error = check_coverage(cover, mode, bufsize, 1);
+
 	if (munmap(cover, bufsize * sizeof(unsigned long)))
 		err(1, "munmap");
 	close(fd);
-	return ret;
+
+	return error;
 }
 
 /*

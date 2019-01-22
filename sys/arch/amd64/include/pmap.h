@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.h,v 1.69 2018/10/04 05:00:40 guenther Exp $	*/
+/*	$OpenBSD: pmap.h,v 1.71 2019/01/11 06:25:06 mlarkin Exp $	*/
 /*	$NetBSD: pmap.h,v 1.1 2003/04/26 18:39:46 fvdl Exp $	*/
 
 /*
@@ -176,7 +176,7 @@
 
 #define NKL4_KIMG_ENTRIES	1
 #define NKL3_KIMG_ENTRIES	1
-#define NKL2_KIMG_ENTRIES	16
+#define NKL2_KIMG_ENTRIES	64
 
 #define NDML4_ENTRIES		1
 #define NDML3_ENTRIES		1
@@ -378,7 +378,9 @@ extern const long nbpd[], nkptpmax[];
  * prototypes
  */
 
+void		map_tramps(void);	/* machdep.c */
 paddr_t		pmap_bootstrap(paddr_t, paddr_t);
+void		pmap_randomize(void);
 boolean_t	pmap_clear_attrs(struct vm_page *, unsigned long);
 static void	pmap_page_protect(struct vm_page *, vm_prot_t);
 void		pmap_page_remove (struct vm_page *);

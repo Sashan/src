@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.91 2018/09/11 13:54:28 ccardenas Exp $
+# $OpenBSD: GENERIC,v 1.94 2019/01/11 08:02:19 patrick Exp $
 #
 # GENERIC machine description file
 #
@@ -65,6 +65,7 @@ ahci*		at fdt?
 dwge*		at fdt?
 dwpcie*		at fdt?
 pci*		at dwpcie?
+ohci*		at fdt?
 ehci*		at fdt?
 pciecam*	at fdt?
 pci*		at pciecam?
@@ -116,6 +117,7 @@ imxiic*		at fdt?
 iic*		at imxiic?
 imxesdhc*	at fdt?
 sdmmc*		at imxesdhc?
+imxsrc*		at fdt?
 imxpd*		at fdt?
 imxdwusb*	at fdt?
 imxspi*		at fdt?
@@ -329,6 +331,7 @@ ch*		at scsibus?
 uk*		at scsibus?
 
 # I2C devices
+abcrtc*		at iic?			# Abracon x80x RTC
 fanpwr*		at iic?			# FAN53555 regulator
 islrtc*		at iic?			# ISL1208 RTC
 rkpmic*		at iic?			# RK808 PMIC

@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.121 2018/10/04 05:00:40 guenther Exp $	*/
+/*	$OpenBSD: pmap.c,v 1.124 2019/01/17 01:52:27 mlarkin Exp $	*/
 /*	$NetBSD: pmap.c,v 1.3 2003/05/08 18:13:13 thorpej Exp $	*/
 
 /*
@@ -553,10 +553,6 @@ pmap_kremove(vaddr_t sva, vsize_t len)
  * pmap_bootstrap: get the system in a state where it can run with VM
  *	properly enabled (called before main()).   the VM system is
  *      fully init'd later...
- *
- * => on i386, locore.s has already enabled the MMU by allocating
- *	a PDP for the kernel, and nkpde PTP's for the kernel.
- * => kva_start is the first free virtual address in kernel space
  */
 
 paddr_t
@@ -753,6 +749,43 @@ pmap_bootstrap(paddr_t first_avail, paddr_t max_pa)
 }
 
 /*
+ * pmap_randomize
+ *
+ * Randomizes the location of the kernel pmap
+ */
+void
+pmap_randomize(void)
+{
+	pd_entry_t *pml4va, *oldpml4va;
+	paddr_t pml4pa;
+
+	pml4va = km_alloc(PAGE_SIZE, &kv_page, &kp_zero, &kd_nowait);
+	if (pml4va == NULL)
+		panic("%s: km_alloc failed", __func__);
+
+	/* Copy old PML4 page to new one */
+	oldpml4va = pmap_kernel()->pm_pdir;
+	memcpy(pml4va, oldpml4va, PAGE_SIZE);
+
+	/* Switch to new PML4 */
+	pmap_extract(pmap_kernel(), (vaddr_t)pml4va, &pml4pa);
+	lcr3(pml4pa);
+
+	/* Fixup pmap_kernel and proc0's %cr3 */
+	pmap_kernel()->pm_pdirpa = pml4pa;
+	pmap_kernel()->pm_pdir = pml4va;
+	proc0.p_addr->u_pcb.pcb_cr3 = pml4pa;
+
+	/* Fixup recursive PTE PML4E slot. We are only changing the PA */	
+	pml4va[PDIR_SLOT_PTE] = pml4pa | (pml4va[PDIR_SLOT_PTE] & ~PG_FRAME);
+
+	/* Wipe out bootstrap PML4 */
+	memset(oldpml4va, 0, PAGE_SIZE);
+
+	tlbflush();
+}
+
+/*
  * Pre-allocate PTPs for low memory, so that 1:1 mappings for various
  * trampoline code can be entered.
  */
@@ -779,18 +812,11 @@ pmap_prealloc_lowmem_ptps(paddr_t first_avail)
 }
 
 /*
- * pmap_init: called from uvm_init, our job is to get the pmap
- * system ready to manage mappings... this mainly means initing
- * the pv_entry stuff.
+ * pmap_init: no further initialization required on this platform
  */
-
 void
 pmap_init(void)
 {
-	/*
-	 * done: pmap module is up (and ready for business)
-	 */
-
 	pmap_initialized = TRUE;
 }
 
@@ -928,7 +954,6 @@ pmap_free_ptp(struct pmap *pmap, struct vm_page *ptp, vaddr_t va,
  *
  * => pmap should NOT be pmap_kernel()
  */
-
 
 struct vm_page *
 pmap_get_ptp(struct pmap *pmap, vaddr_t va)
@@ -1443,7 +1468,6 @@ pmap_remove_ptes(struct pmap *pmap, struct vm_page *ptp, vaddr_t ptpva,
 		/* end of "for" loop: time for next pte */
 	}
 }
-
 
 /*
  * pmap_remove_pte: remove a single PTE from a PTP

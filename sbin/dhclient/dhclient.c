@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhclient.c,v 1.598 2018/12/28 16:01:39 krw Exp $	*/
+/*	$OpenBSD: dhclient.c,v 1.609 2019/01/17 05:17:08 krw Exp $	*/
 
 /*
  * Copyright 2004 Henning Brauer <henning@openbsd.org>
@@ -142,7 +142,6 @@ void		 rtm_dispatch(struct interface_info *, struct rt_msghdr *);
 
 struct client_lease *apply_defaults(struct client_lease *);
 struct client_lease *clone_lease(struct client_lease *);
-void		 apply_ignore_list(char *);
 
 void state_preboot(struct interface_info *);
 void state_reboot(struct interface_info *);
@@ -182,8 +181,6 @@ struct client_lease *packet_to_lease(struct interface_info *,
 void go_daemon(void);
 int rdaemon(int);
 void	take_charge(struct interface_info *, int);
-void	set_default_client_identifier(struct interface_info *);
-void	set_default_hostname(void);
 struct client_lease *get_recorded_lease(struct interface_info *);
 
 #define ROUNDUP(a)	\
@@ -269,6 +266,9 @@ void
 interface_state(struct interface_info *ifi)
 {
 	struct ifaddrs	*ifap, *ifa;
+	int		 newlinkup, oldlinkup;
+
+	oldlinkup = LINK_STATE_IS_UP(ifi->link_state);
 
 	if (getifaddrs(&ifap) != 0)
 		fatal("getifaddrs");
@@ -279,10 +279,17 @@ interface_state(struct interface_info *ifi)
 	    (ifa->ifa_flags & IFF_RUNNING) == 0) {
 		ifi->link_state = LINK_STATE_DOWN;
 	} else {
-		ifi->link_state = ((struct if_data *)ifa->ifa_data)->ifi_link_state;
+		ifi->link_state =
+		    ((struct if_data *)ifa->ifa_data)->ifi_link_state;
 	}
-
 	freeifaddrs(ifap);
+
+	newlinkup = LINK_STATE_IS_UP(ifi->link_state);
+	if (newlinkup != oldlinkup) {
+		log_debug("%s: link %s -> %s", log_procname,
+		    (oldlinkup != 0) ? "up" : "down",
+		    (newlinkup != 0) ? "up" : "down");
+	}
 }
 
 void
@@ -311,19 +318,16 @@ void
 routefd_handler(struct interface_info *ifi, int routefd)
 {
 	struct rt_msghdr		*rtm;
-	char				*buf, *lim, *next;
+	unsigned char			*buf = ifi->rbuf;
+	unsigned char			*lim, *next;
 	ssize_t				 n;
 
-	buf = calloc(1, 2048);
-	if (buf == NULL)
-		fatal("rtm buf");
-
 	do {
-		n = read(routefd, buf, 2048);
+		n = read(routefd, buf, RT_BUF_SIZE);
 	} while (n == -1 && errno == EINTR);
 	if (n == -1) {
 		log_warn("%s: routing socket", log_procname);
-		goto done;
+		return;
 	}
 	if (n == 0)
 		fatalx("%s: routing socket closed", log_procname);
@@ -340,10 +344,6 @@ routefd_handler(struct interface_info *ifi, int routefd)
 
 		rtm_dispatch(ifi, rtm);
 	}
-
-done:
-	free(buf);
-	return;
 }
 
 void
@@ -404,9 +404,6 @@ rtm_dispatch(struct interface_info *ifi, struct rt_msghdr *rtm)
 		}
 
 		if (newlinkup != oldlinkup) {
-			log_debug("%s: link %s -> %s", log_procname,
-			    (oldlinkup != 0) ? "up" : "down",
-			    (newlinkup != 0) ? "up" : "down");
 			ifi->state = S_PREBOOT;
 			state_preboot(ifi);
 		}
@@ -461,13 +458,13 @@ main(int argc, char *argv[])
 	struct ieee80211_nwid	 nwid;
 	struct ifreq		 ifr;
 	struct stat		 sb;
-	const char		*tail_path = "/etc/resolv.conf.tail";
 	struct interface_info	*ifi;
 	struct passwd		*pw;
 	char			*ignore_list = NULL;
-	ssize_t			 tailn;
+	unsigned char		*newp;
+	size_t			 newsize;
 	int			 fd, socket_fd[2];
-	int			 rtfilter, ioctlfd, routefd, tailfd;
+	int			 rtfilter, ioctlfd, routefd;
 	int			 ch;
 
 	saved_argv = argv;
@@ -570,8 +567,8 @@ main(int argc, char *argv[])
 		exit(0);
 	}
 
-	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
-	    PF_UNSPEC, socket_fd) == -1)
+	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0,
+	    socket_fd) == -1)
 		fatal("socketpair");
 
 	if ((nullfd = open(_PATH_DEVNULL, O_RDWR, 0)) == -1)
@@ -584,24 +581,9 @@ main(int argc, char *argv[])
 		fatal("unpriv_ibuf");
 	imsg_init(unpriv_ibuf, socket_fd[1]);
 
-	config = calloc(1, sizeof(*config));
-	if (config == NULL)
-		fatal("config");
-	read_conf(ifi->name);
-
+	read_conf(ifi->name, ignore_list, &ifi->hw_address);
 	if ((cmd_opts & OPT_NOACTION) != 0)
 		return 0;
-
-	/*
-	 * Set default client identifier, if needed, *before* reading
-	 * the leases file! Changes to the lladdr will trigger a restart
-	 * and go through here again.
-	 */
-	set_default_client_identifier(ifi);
-
-	/*
-	 * Set default hostname, if needed. */
-	set_default_hostname();
 
 	if ((pw = getpwnam("_dhcp")) == NULL)
 		fatalx("no such user: _dhcp");
@@ -610,52 +592,31 @@ main(int argc, char *argv[])
 	    _PATH_LEASE_DB, ifi->name) == -1)
 		fatal("path_lease_db");
 
-	/* 2nd stage (post fork) config setup. */
-	if (ignore_list != NULL)
-		apply_ignore_list(ignore_list);
-
-	tailfd = open(tail_path, O_RDONLY);
-	if (tailfd == -1) {
-		if (errno != ENOENT)
-			fatal("open(%s)", tail_path);
-	} else if (fstat(tailfd, &sb) == -1) {
-		fatal("fstat(%s)", tail_path);
-	} else {
-		if (sb.st_size > 0 && sb.st_size < LLONG_MAX) {
-			config->resolv_tail = calloc(1, sb.st_size + 1);
-			if (config->resolv_tail == NULL) {
-				fatal("%s contents", tail_path);
-			}
-			tailn = read(tailfd, config->resolv_tail, sb.st_size);
-			if (tailn == -1)
-				fatal("read(%s)", tail_path);
-			else if (tailn == 0)
-				fatalx("got no data from %s", tail_path);
-			else if (tailn != sb.st_size)
-				fatalx("short read of %s", tail_path);
-		}
-		close(tailfd);
-	}
-
 	interface_state(ifi);
 	if (!LINK_STATE_IS_UP(ifi->link_state))
 		interface_link_forceup(ifi->name, ioctlfd);
 	close(ioctlfd);
 	ioctlfd = -1;
 
-	if ((routefd = socket(PF_ROUTE, SOCK_RAW, AF_INET)) == -1)
-		fatal("socket(PF_ROUTE, SOCK_RAW)");
+	if ((routefd = socket(AF_ROUTE, SOCK_RAW, AF_INET)) == -1)
+		fatal("socket(AF_ROUTE, SOCK_RAW)");
 
 	rtfilter = ROUTE_FILTER(RTM_PROPOSAL) | ROUTE_FILTER(RTM_IFINFO) |
 	    ROUTE_FILTER(RTM_NEWADDR) | ROUTE_FILTER(RTM_DELADDR) |
 	    ROUTE_FILTER(RTM_IFANNOUNCE) | ROUTE_FILTER(RTM_80211INFO);
 
-	if (setsockopt(routefd, PF_ROUTE, ROUTE_MSGFILTER,
+	if (setsockopt(routefd, AF_ROUTE, ROUTE_MSGFILTER,
 	    &rtfilter, sizeof(rtfilter)) == -1)
 		fatal("setsockopt(ROUTE_MSGFILTER)");
 	if (setsockopt(routefd, AF_ROUTE, ROUTE_TABLEFILTER, &ifi->rdomain,
 	    sizeof(ifi->rdomain)) == -1)
 		fatal("setsockopt(ROUTE_TABLEFILTER)");
+
+	/* Allocate a rbuf large enough to handle routing socket messages. */
+	ifi->rbuf_max = RT_BUF_SIZE;
+	ifi->rbuf = malloc(ifi->rbuf_max);
+	if (ifi->rbuf == NULL)
+		fatal("rbuf");
 
 	take_charge(ifi, routefd);
 
@@ -679,15 +640,16 @@ main(int argc, char *argv[])
 			fatal("fopen(%s)", path_option_db);
 	}
 
-	/* Register the interface. */
+	/* Create the udp and bpf sockets, growing rbuf if needed. */
 	ifi->udpfd = get_udp_sock(ifi->rdomain);
 	ifi->bpffd = get_bpf_sock(ifi->name);
-	ifi->rbuf_max = configure_bpf_sock(ifi->bpffd);
-	ifi->rbuf = malloc(ifi->rbuf_max);
-	if (ifi->rbuf == NULL)
-		fatal("bpf input buffer");
-	ifi->rbuf_offset = 0;
-	ifi->rbuf_len = 0;
+	newsize = configure_bpf_sock(ifi->bpffd);
+	if (newsize > ifi->rbuf_max) {
+		if ((newp = realloc(ifi->rbuf, newsize)) == NULL)
+			fatal("rbuf");
+		ifi->rbuf = newp;
+		ifi->rbuf_max = newsize;
+	}
 
 	if (chroot(_PATH_VAREMPTY) == -1)
 		fatal("chroot(%s)", _PATH_VAREMPTY);
@@ -2515,49 +2477,6 @@ cleanup:
 	return NULL;
 }
 
-/*
- * Apply the list of options to be ignored that was provided on the
- * command line. This will override any ignore list obtained from
- * dhclient.conf.
- */
-void
-apply_ignore_list(char *ignore_list)
-{
-	uint8_t		 list[DHO_COUNT];
-	char		*p;
-	int		 ix, i, j;
-
-	memset(list, 0, sizeof(list));
-	ix = 0;
-
-	for (p = strsep(&ignore_list, ", "); p != NULL;
-	    p = strsep(&ignore_list, ", ")) {
-		if (*p == '\0')
-			continue;
-
-		i = name_to_code(p);
-		if (i == DHO_END) {
-			log_debug("%s: invalid option name: '%s'", log_procname,
-			    p);
-			return;
-		}
-
-		/* Avoid storing duplicate options in the list. */
-		for (j = 0; j < ix && list[j] != i; j++)
-			;
-		if (j == ix)
-			list[ix++] = i;
-	}
-
-	for (i = 0; i < ix; i++) {
-		j = list[i];
-		config->default_actions[j] = ACTION_IGNORE;
-		free(config->defaults[j].data);
-		config->defaults[j].data = NULL;
-		config->defaults[j].len = 0;
-	}
-}
-
 void
 take_charge(struct interface_info *ifi, int routefd)
 {
@@ -2655,63 +2574,6 @@ get_recorded_lease(struct interface_info *ifi)
 		time(&lp->epoch);
 
 	return lp;
-}
-
-void
-set_default_client_identifier(struct interface_info *ifi)
-{
-	struct option_data	*opt;
-
-	/*
-	 * Check both len && data so
-	 *
-	 *     send dhcp-client-identifier "";
-	 *
-	 * can be used to suppress sending the default client
-	 * identifier.
-	 */
-	opt = &config->send_options[DHO_DHCP_CLIENT_IDENTIFIER];
-	if (opt->len == 0 && opt->data == NULL) {
-		opt->data = calloc(1, ETHER_ADDR_LEN + 1);
-		if (opt->data == NULL)
-			fatal("default client identifier");
-		opt->data[0] = HTYPE_ETHER;
-		memcpy(&opt->data[1], ifi->hw_address.ether_addr_octet,
-		    ETHER_ADDR_LEN);
-		opt->len = ETHER_ADDR_LEN + 1;
-	}
-}
-
-void
-set_default_hostname(void)
-{
-	char			 hn[HOST_NAME_MAX + 1], *p;
-	struct option_data	*opt;
-	int			 rslt;
-
-	/*
-	 * Check both len && data so
-	 *
-	 *     send host-name "";
-	 *
-	 * can be used to suppress sending the default host
-	 * name.
-	 */
-	opt = &config->send_options[DHO_HOST_NAME];
-	if (opt->len == 0 && opt->data == NULL) {
-		rslt = gethostname(hn, sizeof(hn));
-		if (rslt == -1) {
-			log_warn("host-name");
-			return;
-		}
-		p = strchr(hn, '.');
-		if (p != NULL)
-			*p = '\0';
-		opt->data = strdup(hn);
-		if (opt->data == NULL)
-			fatal("default host-name");
-		opt->len = strlen(opt->data);
-	}
 }
 
 time_t
@@ -2885,12 +2747,12 @@ propose_release(struct interface_info *ifi)
 	if (time(&start_time) == -1)
 		fatal("time");
 
-	if ((routefd = socket(PF_ROUTE, SOCK_RAW, AF_INET)) == -1)
-		fatal("socket(PF_ROUTE, SOCK_RAW)");
+	if ((routefd = socket(AF_ROUTE, SOCK_RAW, AF_INET)) == -1)
+		fatal("socket(AF_ROUTE, SOCK_RAW)");
 
 	rtfilter = ROUTE_FILTER(RTM_PROPOSAL);
 
-	if (setsockopt(routefd, PF_ROUTE, ROUTE_MSGFILTER,
+	if (setsockopt(routefd, AF_ROUTE, ROUTE_MSGFILTER,
 	    &rtfilter, sizeof(rtfilter)) == -1)
 		fatal("setsockopt(ROUTE_MSGFILTER)");
 	if (setsockopt(routefd, AF_ROUTE, ROUTE_TABLEFILTER, &ifi->rdomain,

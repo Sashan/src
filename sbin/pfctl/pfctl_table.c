@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfctl_table.c,v 1.78 2018/10/15 21:15:35 kn Exp $ */
+/*	$OpenBSD: pfctl_table.c,v 1.80 2019/01/11 01:56:54 kn Exp $ */
 
 /*
  * Copyright (c) 2002 Cedric Berger
@@ -54,8 +54,6 @@
 #include "pfctl.h"
 
 extern void	usage(void);
-static int	pfctl_table(int, char *[], char *, const char *, char *,
-		    const char *, int);
 static void	print_table(struct pfr_table *, int, int);
 static void	print_tstats(struct pfr_tstats *, int);
 static int	load_addr(struct pfr_buffer *, int, char *[], char *, int, int);
@@ -94,7 +92,8 @@ static const char	*istats_text[2][2][2] = {
 			goto _error;					\
 		}							\
 		if (nadd) {						\
-			warn_namespace_collision(table.pfrt_name);	\
+			warn_duplicate_tables(table.pfrt_name,		\
+			    table.pfrt_anchor);				\
 			xprintf(opts, "%d table created", nadd);	\
 			if (opts & PF_OPT_NOACTION)			\
 				return (0);				\
@@ -114,15 +113,6 @@ pfctl_show_tables(const char *anchor, int opts)
 {
 	if (pfctl_table(0, NULL, NULL, "-s", NULL, anchor, opts) == -1)
 		exit(1);
-}
-
-int
-pfctl_command_tables(int argc, char *argv[], char *tname,
-    const char *command, char *file, const char *anchor, int opts)
-{
-	if (tname == NULL || command == NULL)
-		usage();
-	return pfctl_table(argc, argv, tname, command, file, anchor, opts);
 }
 
 int
@@ -537,12 +527,10 @@ pfctl_define_table(char *name, int flags, int addrs, const char *anchor,
 }
 
 void
-warn_namespace_collision(const char *filter)
+warn_duplicate_tables(const char *tablename, const char *anchorname)
 {
 	struct pfr_buffer b;
 	struct pfr_table *t;
-	const char *name = NULL, *lastcoll;
-	int coll = 0;
 
 	bzero(&b, sizeof(b));
 	b.pfrb_type = PFRB_TABLES;
@@ -558,22 +546,13 @@ warn_namespace_collision(const char *filter)
 	PFRB_FOREACH(t, &b) {
 		if (!(t->pfrt_flags & PFR_TFLAG_ACTIVE))
 			continue;
-		if (filter != NULL && strcmp(filter, t->pfrt_name))
+		if (!strcmp(anchorname, t->pfrt_anchor))
 			continue;
-		if (!t->pfrt_anchor[0])
-			name = t->pfrt_name;
-		else if (name != NULL && !strcmp(name, t->pfrt_name)) {
-			coll++;
-			lastcoll = name;
-			name = NULL;
-		}
+		if (!strcmp(tablename, t->pfrt_name))
+			warnx("warning: table <%s> already defined"
+			    " in anchor \"%s\"", tablename,
+			    t->pfrt_anchor[0] ? t->pfrt_anchor : "/");
 	}
-	if (coll == 1)
-		warnx("warning: namespace collision with <%s> global table.",
-		    lastcoll);
-	else if (coll > 1)
-		warnx("warning: namespace collisions with %d global tables.",
-		    coll);
 	pfr_buf_clear(&b);
 }
 
