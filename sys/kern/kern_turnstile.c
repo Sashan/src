@@ -148,7 +148,8 @@ turnstile_block(struct turnstile *ts, unsigned int q, int interruptible,
 		p->p_ts = ts;
 	}
 
-	printf("%s @ %p (%p)\n", __func__, ts->ts_lock_addr, p);
+	printf("%s @ %p (%p) %s\n", __func__, ts->ts_lock_addr, p,
+	    (q == TS_READER_Q) ? "reader" : "writer");
 
 #ifdef DIAGNOSTIC
 	if (p->p_flag & P_CANTSLEEP)
@@ -280,7 +281,8 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 	TAILQ_INIT(&wake_q);
 	while (count > 0) {
 		p = TAILQ_FIRST(&ts->ts_sleepq[q]);
-		printf("%s @ %p (%p)\n", __func__, ts->ts_lock_addr, p);
+		printf("%s @ %p (%p) %s\n", __func__, ts->ts_lock_addr, p,
+		    (q == TS_READER_Q) ? "reader" : "writer");
 		turnstile_remove(ts, p, q);
 		TAILQ_INSERT_TAIL(&wake_q, p, p_runq);
 		p->p_ts_q = TS_COUNT;
@@ -350,7 +352,8 @@ turnstile_interrupt(struct turnstile *ts, struct proc *p, struct mcs_lock *mcs)
 	}
 	KASSERT(ts_dbg == ts);
 #endif	/* DEBUG */
-	printf("%s @ %p (%p)\n", __func__, ts->ts_lock_addr, p);
+	printf("%s @ %p (%p) %s\n", __func__, ts->ts_lock_addr, p,
+	    (p->p_ts_q == TS_READER_Q) ? "reader" : "writer");
 	TAILQ_REMOVE(&ts->ts_sleepq[p->p_ts_q], p, p_runq);
 	ts->ts_wcount[p->p_ts_q]--;
 	mcs_lock_leave(mcs);
