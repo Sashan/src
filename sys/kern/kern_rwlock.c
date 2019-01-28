@@ -415,14 +415,14 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 			newo |= (wcnt > 1) ? RWLOCK_WRWANT : 0;
 			atomic_swap_ulong(&rwl->rwl_owner, newo);
 			membar_sync();
-			printf("%s unblocking 1 writer, %p %lX\n",
-			    __func__, rwl, rwl->rwl_owner);
+			printf("%s unblocking (1) writer, %p 0x%lX\n (was: 0x%lX)\n",
+			    __func__, rwl, rwl->rwl_owner, o);
 			turnstile_wakeup(ts, TS_WRITER_Q, 1, &mcs);
 		} else {
 			atomic_swap_ulong(&rwl->rwl_owner, RWLOCK_WRWANT);
 			membar_sync();
-			printf("%s unblocking writers (%d), %p %lX\n",
-			    __func__, wcnt, rwl, rwl->rwl_owner);
+			printf("%s unblocking writers (%d), %p 0x%lX (was: 0x%lX)\n",
+			    __func__, wcnt, rwl, rwl->rwl_owner, o);
 			turnstile_wakeup(ts, TS_WRITER_Q, wcnt, &mcs);
 		}
 	} else {
@@ -430,7 +430,7 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 		newo |= (wcnt != 0) ? RWLOCK_WAIT | RWLOCK_WRWANT : 0;
 		atomic_swap_ulong(&rwl->rwl_owner, newo);
 		membar_sync();
-		printf("%s unblocking readers (%d), %p %lX\n",
+		printf("%s unblocking readers (%d), %p 0x%lX\n",
 		    __func__, rcnt, rwl, rwl->rwl_owner);
 		turnstile_wakeup(ts, TS_READER_Q, rcnt, &mcs);
 	}
