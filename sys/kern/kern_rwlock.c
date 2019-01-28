@@ -414,15 +414,18 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 			newo |= RWLOCK_WRLOCK | RWLOCK_WAIT;
 			newo |= (wcnt > 1) ? RWLOCK_WRWANT : 0;
 			atomic_swap_ulong(&rwl->rwl_owner, newo);
+			membar_sync();
 			turnstile_wakeup(ts, TS_WRITER_Q, 1, &mcs);
 		} else {
 			atomic_swap_ulong(&rwl->rwl_owner, RWLOCK_WRWANT);
+			membar_sync();
 			turnstile_wakeup(ts, TS_WRITER_Q, wcnt, &mcs);
 		}
 	} else {
 		newo = rcnt << RWLOCK_READER_SHIFT;
 		newo |= (wcnt != 0) ? RWLOCK_WAIT | RWLOCK_WRWANT : 0;
 		atomic_swap_ulong(&rwl->rwl_owner, newo);
+		membar_sync();
 		turnstile_wakeup(ts, TS_READER_Q, rcnt, &mcs);
 	}
 #if 0
