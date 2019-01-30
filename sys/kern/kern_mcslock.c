@@ -28,7 +28,7 @@
 /*
  * should be ~2 secs on Hrvoje's boxes
  */
-#define MCS_DELAY	100000000
+#define MCS_DELAY	1000000000
 #endif
 
 void
@@ -54,7 +54,7 @@ mcs_lock_enter(struct mcs_lock *mcs)
 		old_mcs->mcs_next = mcs;
 
 		/* spin, waiting for other thread to finish */
-		while (mcs->mcs_wait != NULL) {
+		while ((mcs->mcs_wait != NULL) && (panicstr == NULL) ) {
 #ifdef DIAGNOSTIC
 			i--;
 			if (i == 0)
