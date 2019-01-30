@@ -24,6 +24,13 @@
 #include <sys/mcs_lock.h>
 #include <sys/atomic.h>
 
+#ifdef DIAGNOSTIC
+/*
+ * should be ~2 secs on Hrvoje's boxes
+ */
+#define MCS_DELAY	100000000
+#endif
+
 void
 mcs_lock_init(struct mcs_lock *mcs_local, struct mcs_lock *mcs_global)
 {
@@ -35,6 +42,9 @@ void
 mcs_lock_enter(struct mcs_lock *mcs)
 {
 	struct mcs_lock *old_mcs;
+#ifdef DIAGNOSTIC
+	unsigned long long i = MCS_DELAY;
+#endif
 
 	mcs->mcs_wait = curproc;
 	mcs->mcs_next = NULL;
@@ -44,7 +54,15 @@ mcs_lock_enter(struct mcs_lock *mcs)
 		old_mcs->mcs_next = mcs;
 
 		/* spin, waiting for other thread to finish */
-		while (mcs->mcs_wait != NULL) ;
+		while (mcs->mcs_wait != NULL) {
+#ifdef DIAGNOSTIC
+			i--;
+			if (i == 0)
+				panic("%s @ %p infinite spinlock "
+				    "%p/old_mcs %p/mcs\n",
+				    __func__, curproc, old_mcs, mcs);
+#endif
+		}
 
 		mcs->mcs_wait = curproc;
 	}
