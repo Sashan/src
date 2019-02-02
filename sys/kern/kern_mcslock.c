@@ -49,7 +49,7 @@ mcs_lock_enter(struct mcs_lock *mcs)
 	/*
 	 * the last bit indicates a process waiting for spinlock.
 	 */
-	mcs->mcs_wait = curproc | 1;
+	mcs->mcs_wait = (struct proc *)((unsigned long long)curproc | 1);
 	mcs->mcs_next = NULL;
 	old_mcs = atomic_swap_ptr(&mcs->mcs_global->mcs_next, mcs);
 	
