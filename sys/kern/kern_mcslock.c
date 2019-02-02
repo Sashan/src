@@ -42,6 +42,7 @@ void
 mcs_lock_enter(struct mcs_lock *mcs)
 {
 	struct mcs_lock *old_mcs;
+	struct mcs_lock *wait_mcs;
 #ifdef DIAGNOSTIC
 	unsigned long long i = MCS_DELAY;
 #endif
@@ -55,11 +56,16 @@ mcs_lock_enter(struct mcs_lock *mcs)
 	
 	if (old_mcs != NULL) {
 		old_mcs->mcs_next = mcs;
+		membar_exit();
 
 		/*
 		 * spin, waiting for other thread to finish
 		 */
-		while ((mcs->mcs_wait != NULL) && (panicstr == NULL) ) {
+		membar_enter();
+		wait_mcs = mcs->mcs_wait;
+		while ((wait_mcs != NULL) && (panicstr == NULL) ) {
+			membar_enter();
+			wait_mcs = mcs->mcs_wait;
 #ifdef DIAGNOSTIC
 			i--;
 			if (i == 0)
@@ -79,11 +85,14 @@ void
 mcs_lock_leave(struct mcs_lock *mcs)
 {
 	struct mcs_lock *old_mcs;
+	struct mcs_lock *next_mcs;
 #ifdef DIAGNOSTIC
 	unsigned long long i = MCS_DELAY;
 #endif
 
-	if (mcs->mcs_next == NULL) {
+	membar_enter();
+	next_mcs = mcs->mcs_next;
+	if (next_mcs == NULL) {
 		old_mcs = atomic_cas_ptr(&mcs->mcs_global->mcs_next, mcs, NULL);
 		/*
 		 * If there is no waiter, then we can just return.
@@ -96,7 +105,9 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	 * There is at least one waiter. We have to spin wait for our waiter to
 	 * become ready.
 	 */
-	while (mcs->mcs_next == NULL) {
+	while (next_mcs == NULL) {
+		membar_enter();
+		next_mcs = mcs->mcs_next;
 #ifdef DIAGNOSTIC
 		i--;
 		if (i == 0)
@@ -109,7 +120,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	 * let our waiter run.
 	 */
 	mcs->mcs_next->mcs_wait = NULL;
-
+	membar_exit();
 }
 
 #ifdef DIAGNOSTIC
