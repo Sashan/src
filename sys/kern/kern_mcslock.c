@@ -46,7 +46,10 @@ mcs_lock_enter(struct mcs_lock *mcs)
 	unsigned long long i = MCS_DELAY;
 #endif
 
-	mcs->mcs_wait = curproc;
+	/*
+	 * the last bit indicates a process waiting for spinlock.
+	 */
+	mcs->mcs_wait = curproc | 1;
 	mcs->mcs_next = NULL;
 	old_mcs = atomic_swap_ptr(&mcs->mcs_global->mcs_next, mcs);
 	
@@ -65,9 +68,9 @@ mcs_lock_enter(struct mcs_lock *mcs)
 				    __func__, curproc, old_mcs, mcs);
 #endif
 		}
-
-		mcs->mcs_wait = curproc;
 	}
+
+	mcs->mcs_wait = curproc;
 
 	return;
 }
@@ -82,12 +85,16 @@ mcs_lock_leave(struct mcs_lock *mcs)
 
 	if (mcs->mcs_next == NULL) {
 		old_mcs = atomic_cas_ptr(&mcs->mcs_global->mcs_next, mcs, NULL);
+		/*
+		 * If there is no waiter, then we can just return.
+		 */
 		if (old_mcs == mcs) 
 			return;
 	}
 
 	/*
-	 * spin wait for other thread to get ready.
+	 * There is at least one waiter. We have to spin wait for our waiter to
+	 * become ready.
 	 */
 	while (mcs->mcs_next == NULL) {
 #ifdef DIAGNOSTIC
@@ -99,7 +106,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	}
 
 	/*
-	 * let other thread run.
+	 * let our waiter run.
 	 */
 	mcs->mcs_next->mcs_wait = NULL;
 
