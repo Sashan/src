@@ -28,7 +28,7 @@
 /*
  * should be ~2 secs on Hrvoje's boxes
  */
-#define MCS_DELAY	1000000000
+#define MCS_DELAY	1000000000UL
 #endif
 
 void
@@ -53,7 +53,9 @@ mcs_lock_enter(struct mcs_lock *mcs)
 	if (old_mcs != NULL) {
 		old_mcs->mcs_next = mcs;
 
-		/* spin, waiting for other thread to finish */
+		/*
+		 * spin, waiting for other thread to finish
+		 */
 		while ((mcs->mcs_wait != NULL) && (panicstr == NULL) ) {
 #ifdef DIAGNOSTIC
 			i--;
@@ -74,15 +76,33 @@ void
 mcs_lock_leave(struct mcs_lock *mcs)
 {
 	struct mcs_lock *old_mcs;
+#ifdef DIAGNOSTIC
+	unsigned long long i = MCS_DELAY;
+#endif
 
-	old_mcs = atomic_swap_ptr(&mcs->mcs_global->mcs_next, mcs->mcs_next);
-	KASSERT(old_mcs != NULL);
-	if (old_mcs != mcs) {
-		/*
-		 * Let the waiter run then.
-		 */
-		old_mcs->mcs_wait = NULL;
+	if (mcs->mcs_next == NULL) {
+		old_mcs = atomic_cas_ptr(&mcs->mcs_global->mcs_next, mcs, NULL);
+		if (old_mcs == mcs) 
+			return;
 	}
+
+	/*
+	 * spin wait for other thread to get ready.
+	 */
+	while (mcs->mcs_next == NULL) {
+#ifdef DIAGNOSTIC
+		i--;
+		if (i == 0)
+			panic("%s @ %p infinite spinlock %p/mcs\n",
+			    __func__, curproc, mcs);
+#endif
+	}
+
+	/*
+	 * let other thread run.
+	 */
+	mcs->mcs_next->mcs_wait = NULL;
+
 }
 
 #ifdef DIAGNOSTIC
