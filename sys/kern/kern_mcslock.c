@@ -42,7 +42,7 @@ void
 mcs_lock_enter(struct mcs_lock *mcs)
 {
 	struct mcs_lock *old_mcs;
-	struct mcs_lock *wait_mcs;
+	struct proc *wait_mcs;
 #ifdef DIAGNOSTIC
 	unsigned long long i = MCS_DELAY;
 #endif
