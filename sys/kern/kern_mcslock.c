@@ -121,7 +121,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	/*
 	 * let our waiter run.
 	 */
-	KASSERT(mcs->mcs_global == mcs_next->mcs_global);
+	KASSERT(mcs->mcs_global == next_mcs->mcs_global);
 	mcs->mcs_next->mcs_wait = NULL;
 	membar_exit();
 }
