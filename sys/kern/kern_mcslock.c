@@ -55,7 +55,7 @@ mcs_lock_enter(struct mcs_lock *mcs)
 	old_mcs = atomic_swap_ptr(&mcs->mcs_global->mcs_next, mcs);
 	
 	if (old_mcs != NULL) {
-		KASSERT(old_mcs->mcs_owner == mcs->mcs_owner);
+		KASSERT(old_mcs->mcs_global == mcs->mcs_global);
 		old_mcs->mcs_next = mcs;
 		membar_exit();
 
@@ -72,7 +72,7 @@ mcs_lock_enter(struct mcs_lock *mcs)
 			if (i == 0)
 				panic("%s @ %p (%p) infinite spinlock "
 				    "%p/old_mcs %p/mcs\n",
-				    __func__, curproc, old_mcs->mcs_owner,
+				    __func__, curproc, old_mcs->mcs_global,
 				    old_mcs, mcs);
 #endif
 		}
@@ -114,14 +114,14 @@ mcs_lock_leave(struct mcs_lock *mcs)
 		i--;
 		if (i == 0)
 			panic("%s @ %p (%p) infinite spinlock %p/mcs\n",
-			    __func__, curproc, mcs->mcs_owner, mcs);
+			    __func__, curproc, mcs->mcs_global, mcs);
 #endif
 	}
 
 	/*
 	 * let our waiter run.
 	 */
-	KASSERT(mcs->mcs_owner == mcs_next->mcs_owner);
+	KASSERT(mcs->mcs_global == mcs_next->mcs_global);
 	mcs->mcs_next->mcs_wait = NULL;
 	membar_exit();
 }
