@@ -42,7 +42,7 @@ void
 mcs_lock_enter(struct mcs_lock *mcs)
 {
 	struct mcs_lock *old_mcs;
-	struct proc *wait_mcs;
+	volatile struct proc *wait_mcs;
 #ifdef DIAGNOSTIC
 	unsigned long long i = MCS_DELAY;
 #endif
@@ -57,15 +57,12 @@ mcs_lock_enter(struct mcs_lock *mcs)
 	if (old_mcs != NULL) {
 		KASSERT(old_mcs->mcs_global == mcs->mcs_global);
 		old_mcs->mcs_next = mcs;
-		membar_exit();
 
 		/*
 		 * spin, waiting for other thread to finish
 		 */
-		membar_enter();
 		wait_mcs = mcs->mcs_wait;
 		while ((wait_mcs != NULL) && (panicstr == NULL) ) {
-			membar_enter();
 			wait_mcs = mcs->mcs_wait;
 #ifdef DIAGNOSTIC
 			i--;
@@ -87,12 +84,11 @@ void
 mcs_lock_leave(struct mcs_lock *mcs)
 {
 	struct mcs_lock *old_mcs;
-	struct mcs_lock *next_mcs;
+	volatile struct mcs_lock *next_mcs;
 #ifdef DIAGNOSTIC
 	unsigned long long i = MCS_DELAY;
 #endif
 
-	membar_enter();
 	next_mcs = mcs->mcs_next;
 	if (next_mcs == NULL) {
 		old_mcs = atomic_cas_ptr(&mcs->mcs_global->mcs_next, mcs, NULL);
@@ -108,7 +104,6 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	 * become ready.
 	 */
 	while (next_mcs == NULL) {
-		membar_enter();
 		next_mcs = mcs->mcs_next;
 #ifdef DIAGNOSTIC
 		i--;
@@ -123,7 +118,6 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	 */
 	KASSERT(mcs->mcs_global == next_mcs->mcs_global);
 	mcs->mcs_next->mcs_wait = NULL;
-	membar_exit();
 }
 
 #ifdef DIAGNOSTIC
