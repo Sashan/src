@@ -57,6 +57,7 @@ mcs_lock_enter(struct mcs_lock *mcs)
 	if (old_mcs != NULL) {
 		KASSERT(old_mcs->mcs_global == mcs->mcs_global);
 		old_mcs->mcs_next = mcs;
+		membar_sync();
 
 		/*
 		 * spin, waiting for other thread to finish
@@ -93,6 +94,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 #endif
 
 	mcs_next = mcs->mcs_next;
+	membar_exit();
 	if (mcs_next == NULL) {
 		old_mcs = atomic_cas_ptr(&mcs->mcs_global->mcs_next, mcs, NULL);
 		/*
@@ -121,6 +123,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	 */
 	KASSERT(mcs->mcs_global == mcs_next->mcs_global);
 	mcs->mcs_next->mcs_wait = NULL;
+	membar_sync();
 }
 
 #ifdef DIAGNOSTIC
