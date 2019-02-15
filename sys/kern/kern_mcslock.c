@@ -67,6 +67,7 @@ mcs_lock_enter(struct mcs_lock *mcs)
 			if (panicstr != NULL)
 				break;
 			mcs_wait = mcs->mcs_wait;
+			membar_sync();
 #ifdef DIAGNOSTIC
 			i--;
 			if (i == 0)
