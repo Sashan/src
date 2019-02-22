@@ -419,7 +419,7 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 			    __func__, rwl, rwl->rwl_owner, o);
 			turnstile_wakeup(ts, TS_WRITER_Q, 1, &mcs);
 		} else {
-			atomic_swap_ulong(&rwl->rwl_owner, RWLOCK_WRWANT);
+			atomic_swap_ulong(&rwl->rwl_owner, RWLOCK_WRWANT|RWLOCK_WAIT);
 			membar_sync();
 			printf("%s unblocking writers (%d), %p 0x%lX (was: 0x%lX)\n",
 			    __func__, wcnt, rwl, rwl->rwl_owner, o);
