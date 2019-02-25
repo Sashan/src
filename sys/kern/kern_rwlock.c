@@ -410,8 +410,16 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 
 	if ((rcnt == 0) || (decr == RWLOCK_READ_INCR)) {
 		if (rcnt != 0) {
+			/*
+			 * Let one writer run, before passing lock to readers
+			 * again.
+			 */
 			newo = RW_PROC(turnstile_first(ts, TS_WRITER_Q));
 			newo |= RWLOCK_WRLOCK | RWLOCK_WAIT;
+			/*
+			 * Set WRWANT flag iff thre is more than one writer
+			 * waiting.
+			 */
 			newo |= (wcnt > 1) ? RWLOCK_WRWANT : 0;
 			atomic_swap_ulong(&rwl->rwl_owner, newo);
 			membar_sync();
@@ -419,7 +427,14 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 			    __func__, rwl, rwl->rwl_owner, o);
 			turnstile_wakeup(ts, TS_WRITER_Q, 1, &mcs);
 		} else {
-			atomic_swap_ulong(&rwl->rwl_owner, RWLOCK_WRWANT|RWLOCK_WAIT);
+			/*
+			 * There are no readers. Open the lock and let writers
+			 * fight. There is a slight chance of agile reader will
+			 * get in. If it will be problem we can give up lock
+			 * ownership after we call turnstile_wakeup(), but we
+			 * must be careful not to ovewrite wait bits then.
+			 */
+			atomic_swap_ulong(&rwl->rwl_owner, 0);
 			membar_sync();
 			printf("%s unblocking writers (%d), %p 0x%lX (was: 0x%lX)\n",
 			    __func__, wcnt, rwl, rwl->rwl_owner, o);
