@@ -23,6 +23,7 @@ struct mcs_lock {
 	struct proc	*mcs_wait;
 	struct mcs_lock	*mcs_next;
 	struct mcs_lock *mcs_global;
+	struct proc	*mcs_me;
 };
 
 extern void mcs_lock_init(struct mcs_lock *, struct mcs_lock *);

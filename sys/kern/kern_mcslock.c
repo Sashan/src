@@ -36,6 +36,7 @@ mcs_lock_init(struct mcs_lock *mcs_local, struct mcs_lock *mcs_global)
 {
 	memset(mcs_local, 0, sizeof (struct mcs_lock));
 	mcs_local->mcs_global = mcs_global;
+	mcs_local->mcs_me = curproc;
 }
 
 void
