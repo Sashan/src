@@ -55,6 +55,11 @@ mcs_lock_enter(struct mcs_lock *mcs)
 	 */
 	mcs->mcs_wait = (struct proc *)((unsigned long long)curproc | 1);
 	mcs->mcs_next = NULL;
+	/*
+	 * no interrupts, while dealing with turnstiles. We want to keep all
+	 * processes in mcs lock chain on processor, while doing busy-wait.
+	 */
+	s = splhigh();
 	old_mcs = atomic_swap_ptr(&mcs->mcs_global->mcs_next, mcs);
 	
 	if (old_mcs != NULL) {
@@ -64,9 +69,9 @@ mcs_lock_enter(struct mcs_lock *mcs)
 
 		/*
 		 * spin, waiting for other thread to finish
+		 * disable interrupts while spinning.
 		 */
 		mcs_wait = mcs->mcs_wait;
-		s = splhigh();
 		while (mcs_wait != NULL) {
 			if (panicstr != NULL)
 				break;
@@ -74,20 +79,19 @@ mcs_lock_enter(struct mcs_lock *mcs)
 			membar_sync();
 #ifdef DIAGNOSTIC
 			i--;
-			if (i == 0) {
-				splx(s);
+			if (i == 0)
 				panic("%s @ %p (%p) infinite spinlock "
 				    "%p/old_mcs %p/mcs\n",
 				    __func__, curproc, old_mcs->mcs_global,
 				    old_mcs, mcs);
-			}
 #endif
 		}
-		splx(s);
 	}
 
 	if (panicstr == NULL)
 		mcs->mcs_wait = curproc;
+
+	splx(s);
 
 	return;
 }
@@ -102,6 +106,11 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	unsigned long long i = MCS_DELAY;
 #endif
 
+	/*
+	 * no interrupts, while dealing with turnstiles. We want to keep all
+	 * processes in mcs lock chain on processor, while doing busy-wait.
+	 */
+	s = splhigh();
 	mcs_next = mcs->mcs_next;
 	membar_exit();
 	if (mcs_next == NULL) {
@@ -109,27 +118,25 @@ mcs_lock_leave(struct mcs_lock *mcs)
 		/*
 		 * If there is no waiter, then we can just return.
 		 */
-		if (old_mcs == mcs) 
+		if (old_mcs == mcs) {
+			splx(s);
 			return;
+		}
 	}
 
 	/*
 	 * There is at least one waiter. We have to spin wait for our waiter to
 	 * become ready.
 	 */
-	s = splhigh();
 	while (mcs_next == NULL) {
 		mcs_next = mcs->mcs_next;
 #ifdef DIAGNOSTIC
 		i--;
-		if (i == 0) {
-			splx(s);
+		if (i == 0)
 			panic("%s @ %p (%p) infinite spinlock %p/mcs\n",
 			    __func__, curproc, mcs->mcs_global, mcs);
-		}
 #endif
 	}
-	splx(s);
 
 	/*
 	 * let our waiter run.
@@ -137,6 +144,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	KASSERT(mcs->mcs_global == mcs_next->mcs_global);
 	mcs->mcs_next->mcs_wait = NULL;
 	membar_sync();
+	splx(s);
 }
 
 #ifdef DIAGNOSTIC
