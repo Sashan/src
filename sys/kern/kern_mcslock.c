@@ -23,6 +23,7 @@
 #include <sys/proc.h>
 #include <sys/mcs_lock.h>
 #include <sys/atomic.h>
+#include <machine/intr.h>
 
 #ifdef DIAGNOSTIC
 /*
@@ -44,6 +45,7 @@ mcs_lock_enter(struct mcs_lock *mcs)
 {
 	struct mcs_lock *old_mcs;
 	volatile struct proc *mcs_wait;
+	int	s;
 #ifdef DIAGNOSTIC
 	unsigned long long i = MCS_DELAY;
 #endif
@@ -64,6 +66,7 @@ mcs_lock_enter(struct mcs_lock *mcs)
 		 * spin, waiting for other thread to finish
 		 */
 		mcs_wait = mcs->mcs_wait;
+		s = splhigh();
 		while (mcs_wait != NULL) {
 			if (panicstr != NULL)
 				break;
@@ -71,13 +74,16 @@ mcs_lock_enter(struct mcs_lock *mcs)
 			membar_sync();
 #ifdef DIAGNOSTIC
 			i--;
-			if (i == 0)
+			if (i == 0) {
+				splx(s);
 				panic("%s @ %p (%p) infinite spinlock "
 				    "%p/old_mcs %p/mcs\n",
 				    __func__, curproc, old_mcs->mcs_global,
 				    old_mcs, mcs);
+			}
 #endif
 		}
+		splx(s);
 	}
 
 	if (panicstr == NULL)
@@ -91,6 +97,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 {
 	struct mcs_lock *old_mcs;
 	volatile struct mcs_lock *mcs_next;
+	int	s;
 #ifdef DIAGNOSTIC
 	unsigned long long i = MCS_DELAY;
 #endif
@@ -110,15 +117,19 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	 * There is at least one waiter. We have to spin wait for our waiter to
 	 * become ready.
 	 */
+	s = splhigh();
 	while (mcs_next == NULL) {
 		mcs_next = mcs->mcs_next;
 #ifdef DIAGNOSTIC
 		i--;
-		if (i == 0)
+		if (i == 0) {
+			splx(s);
 			panic("%s @ %p (%p) infinite spinlock %p/mcs\n",
 			    __func__, curproc, mcs->mcs_global, mcs);
+		}
 #endif
 	}
+	splx(s);
 
 	/*
 	 * let our waiter run.
