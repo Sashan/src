@@ -281,8 +281,8 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 	TAILQ_INIT(&wake_q);
 	while (count > 0) {
 		p = TAILQ_FIRST(&ts->ts_sleepq[q]);
-		printf("%s/%p @ %p (%p) %s\n", __func__, curproc,
-		    ts->ts_lock_addr, p,
+		printf("%s/%p @ %p (%p [%d]) %s\n", __func__, curproc,
+		    ts->ts_lock_addr, p, p->p_stat,
 		    (q == TS_READER_Q) ? "reader" : "writer");
 		turnstile_remove(ts, p, q);
 		TAILQ_INSERT_TAIL(&wake_q, p, p_runq);
