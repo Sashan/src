@@ -23,7 +23,7 @@
 #include <sys/proc.h>
 #include <sys/mcs_lock.h>
 #include <sys/atomic.h>
-#include <machine/intr.h>
+#include <machine/cpu.h>
 
 #ifdef DIAGNOSTIC
 /*
@@ -45,7 +45,6 @@ mcs_lock_enter(struct mcs_lock *mcs)
 {
 	struct mcs_lock *old_mcs;
 	volatile struct proc *mcs_wait;
-	int	s;
 #ifdef DIAGNOSTIC
 	unsigned long long i = MCS_DELAY;
 #endif
@@ -59,7 +58,7 @@ mcs_lock_enter(struct mcs_lock *mcs)
 	 * no interrupts, while dealing with turnstiles. We want to keep all
 	 * processes in mcs lock chain on processor, while doing busy-wait.
 	 */
-	s = splhigh();
+	intr_disable();
 	old_mcs = atomic_swap_ptr(&mcs->mcs_global->mcs_next, mcs);
 	
 	if (old_mcs != NULL) {
@@ -91,7 +90,7 @@ mcs_lock_enter(struct mcs_lock *mcs)
 	if (panicstr == NULL)
 		mcs->mcs_wait = curproc;
 
-	splx(s);
+	intr_enable();
 
 	return;
 }
@@ -101,7 +100,6 @@ mcs_lock_leave(struct mcs_lock *mcs)
 {
 	struct mcs_lock *old_mcs;
 	volatile struct mcs_lock *mcs_next;
-	int	s;
 #ifdef DIAGNOSTIC
 	unsigned long long i = MCS_DELAY;
 #endif
@@ -110,7 +108,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	 * no interrupts, while dealing with turnstiles. We want to keep all
 	 * processes in mcs lock chain on processor, while doing busy-wait.
 	 */
-	s = splhigh();
+	intr_disable();
 	mcs_next = mcs->mcs_next;
 	membar_exit();
 	if (mcs_next == NULL) {
@@ -119,7 +117,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 		 * If there is no waiter, then we can just return.
 		 */
 		if (old_mcs == mcs) {
-			splx(s);
+			intr_enable();
 			return;
 		}
 	}
@@ -144,7 +142,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	KASSERT(mcs->mcs_global == mcs_next->mcs_global);
 	mcs->mcs_next->mcs_wait = NULL;
 	membar_sync();
-	splx(s);
+	intr_enable();
 }
 
 #ifdef DIAGNOSTIC
