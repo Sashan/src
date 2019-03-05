@@ -1,4 +1,4 @@
-/*	$OpenBSD: kcov.c,v 1.7 2019/01/16 19:28:37 anton Exp $	*/
+/*	$OpenBSD: kcov.c,v 1.10 2019/01/23 19:40:20 anton Exp $	*/
 
 /*
  * Copyright (c) 2018 Anton Lindqvist <anton@openbsd.org>
@@ -35,7 +35,6 @@ static int test_coverage(int, int);
 static int test_dying(int, int);
 static int test_exec(int, int);
 static int test_fork(int, int);
-static int test_mmap(int, int);
 static int test_open(int, int);
 static int test_state(int, int);
 
@@ -63,7 +62,6 @@ main(int argc, char *argv[])
 		{ "dying",	test_dying,	1 },
 		{ "exec",	test_exec,	1 },
 		{ "fork",	test_fork,	1 },
-		{ "mmap",	test_mmap,	1 },
 		{ "open",	test_open,	0 },
 		{ "state",	test_state,	1 },
 		{ NULL,		NULL,		0 },
@@ -86,6 +84,8 @@ main(int argc, char *argv[])
 		case 'm':
 			if (strcmp(optarg, "pc") == 0)
 				mode = KCOV_MODE_TRACE_PC;
+			else if (strcmp(optarg, "cmp") == 0)
+				mode = KCOV_MODE_TRACE_CMP;
 			else
 				errx(1, "unknown mode %s", optarg);
 			break;
@@ -159,6 +159,7 @@ static int
 check_coverage(const unsigned long *cover, int mode, unsigned long maxsize,
     int nonzero)
 {
+	unsigned long arg1, arg2, exp, i, pc, type;
 	int error = 0;
 
 	if (nonzero && cover[0] == 0) {
@@ -172,6 +173,30 @@ check_coverage(const unsigned long *cover, int mode, unsigned long maxsize,
 		return 1;
 	}
 
+	if (mode == KCOV_MODE_TRACE_CMP) {
+		if (*cover * 4 >= maxsize) {
+			warnx("coverage cmp overflow (count=%lu, max=%lu)\n",
+			    *cover * 4, maxsize);
+			return 1;
+		}
+
+		for (i = 0; i < cover[0]; i++) {
+			type = cover[i * 4 + 1];
+			arg1 = cover[i * 4 + 2];
+			arg2 = cover[i * 4 + 3];
+			pc = cover[i * 4 + 4];
+
+			exp = type >> 1;
+			if (exp <= 3)
+				continue;
+
+			warnx("coverage cmp invalid size (i=%lu, exp=%lx, "
+			    "const=%ld, arg1=%lu, arg2=%lu, pc=%p)\n",
+			    i, exp, type & 0x1, arg1, arg2, (void *)pc);
+			error = 1;
+		}
+	}
+
 	return error;
 }
 
@@ -181,8 +206,11 @@ dump(const unsigned long *cover, int mode)
 	unsigned long i;
 	int stride = 1;
 
+	if (mode == KCOV_MODE_TRACE_CMP)
+		stride = 4;
+
 	for (i = 0; i < cover[0]; i++)
-		printf("%p\n", (void *)cover[i * stride + 1]);
+		printf("%p\n", (void *)cover[i * stride + stride]);
 }
 
 static int
@@ -337,25 +365,6 @@ test_fork(int fd, int mode)
 	/* Upon exit, the kcov descriptor must be reusable again. */
 	kcov_enable(fd, mode);
 	kcov_disable(fd);
-
-	return 0;
-}
-
-/*
- * Calling mmap() after enable is not allowed.
- */
-static int
-test_mmap(int fd, int mode)
-{
-	void *cover;
-
-	kcov_enable(fd, mode);
-	cover = mmap(NULL, bufsize * sizeof(unsigned long),
-	    PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-	if (cover != MAP_FAILED) {
-		warnx("expected mmap to fail");
-		return 1;
-	}
 
 	return 0;
 }

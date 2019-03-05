@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_clnt.c,v 1.51 2018/11/29 06:21:09 tb Exp $ */
+/* $OpenBSD: ssl_clnt.c,v 1.56 2019/02/09 15:26:15 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -775,7 +775,7 @@ ssl3_send_client_hello(SSL *s)
 			goto err;
 
 		/* TLS extensions */
-		if (!tlsext_clienthello_build(s, &client_hello)) {
+		if (!tlsext_client_build(s, &client_hello, SSL_TLSEXT_MSG_CH)) {
 			SSLerror(s, ERR_R_INTERNAL_ERROR);
 			goto err;
 		}
@@ -979,7 +979,7 @@ ssl3_get_server_hello(SSL *s)
 	}
 	S3I(s)->hs.new_cipher = cipher;
 
-	if (!tls1_handshake_hash_init(s))
+	if (!tls1_transcript_hash_init(s))
 		goto err;
 
 	/*
@@ -999,7 +999,7 @@ ssl3_get_server_hello(SSL *s)
 		goto f_err;
 	}
 
-	if (!tlsext_serverhello_parse(s, &cbs, &al)) {
+	if (!tlsext_client_parse(s, &cbs, &al, SSL_TLSEXT_MSG_SH)) {
 		SSLerror(s, SSL_R_PARSE_TLSEXT);
 		goto f_err;
 	}
@@ -1680,7 +1680,8 @@ ssl3_get_certificate_request(SSL *s)
 			SSLerror(s, SSL_R_DATA_LENGTH_TOO_LONG);
 			goto err;
 		}
-		if (!tls1_process_sigalgs(s, &sigalgs)) {
+		if (!tls1_process_sigalgs(s, &sigalgs, tls12_sigalgs,
+		    tls12_sigalgs_len)) {
 			ssl3_send_alert(s, SSL3_AL_FATAL, SSL_AD_DECODE_ERROR);
 			SSLerror(s, SSL_R_SIGNATURE_ALGORITHMS_ERROR);
 			goto err;
@@ -2445,7 +2446,7 @@ ssl3_send_client_verify_rsa(SSL *s, CBB *cert_verify)
 	unsigned int signature_len = 0;
 	int ret = 0;
 
-	if (!tls1_handshake_hash_value(s, data, sizeof(data), NULL))
+	if (!tls1_transcript_hash_value(s, data, sizeof(data), NULL))
 		goto err;
 
 	pkey = s->cert->key->privatekey;
@@ -2480,7 +2481,7 @@ ssl3_send_client_verify_ec(SSL *s, CBB *cert_verify)
 	unsigned int signature_len = 0;
 	int ret = 0;
 
-	if (!tls1_handshake_hash_value(s, data, sizeof(data), NULL))
+	if (!tls1_transcript_hash_value(s, data, sizeof(data), NULL))
 		goto err;
 
 	pkey = s->cert->key->privatekey;

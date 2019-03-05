@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhcpd.h,v 1.268 2019/01/14 04:54:46 krw Exp $	*/
+/*	$OpenBSD: dhcpd.h,v 1.273 2019/02/12 16:50:44 krw Exp $	*/
 
 /*
  * Copyright (c) 2004 Henning Brauer <henning@openbsd.org>
@@ -41,7 +41,8 @@
 
 #define	LOCAL_PORT	68
 #define	REMOTE_PORT	67
-#define	INTERNALSIG	SIG_ATOMIC_MAX
+#define	TERMINATE	1
+#define	RESTART		2
 #define DB_TIMEFMT	"%w %Y/%m/%d %T UTC"
 #define	RT_BUF_SIZE	2048
 
@@ -80,7 +81,7 @@ enum dhcp_state {
 };
 
 enum actions {
-	ACTION_NONE,
+	ACTION_USELEASE,
 	ACTION_DEFAULT,
 	ACTION_SUPERSEDE,
 	ACTION_PREPEND,
@@ -108,7 +109,6 @@ struct client_config {
 	time_t			 reboot_timeout;
 	time_t			 backoff_cutoff;
 	TAILQ_HEAD(, reject_elem) reject_list;
-	char			*resolv_tail;
 	char			*filename;
 	char			*server_name;
 };
@@ -206,7 +206,7 @@ extern char			*path_lease_db;
 extern char			*log_procname;
 extern struct client_config	*config;
 extern struct imsgbuf		*unpriv_ibuf;
-extern volatile sig_atomic_t	 quit;
+extern int			 quit;
 extern int			 cmd_opts;
 #define		OPT_NOACTION	1
 #define		OPT_VERBOSE	2
@@ -222,6 +222,7 @@ void		 bootreply(struct interface_info *, struct option_data *,
     const char *);
 void		 free_client_lease(struct client_lease *);
 void		 routefd_handler(struct interface_info *, int);
+void		 state_preboot(struct interface_info *);
 
 /* packet.c */
 void		 assemble_eh_header(struct ether_addr, struct ether_header *);
@@ -240,11 +241,7 @@ void		 read_lease_db(char *, struct client_lease_tq *);
 /* kroute.c */
 unsigned int	 extract_classless_route(uint8_t *, unsigned int,
     in_addr_t *, in_addr_t *, in_addr_t *);
-void		 delete_address(struct in_addr);
-void		 set_resolv_conf(char *, uint8_t *, unsigned int,
-    uint8_t *, unsigned int);
 void		 write_resolv_conf(void);
-void		 set_mtu(int, uint16_t);
-void		 set_address(char *, struct in_addr, struct in_addr);
-void		 set_routes(struct in_addr, struct in_addr, uint8_t *,
-    unsigned int);
+
+void		 propose(struct proposal *);
+void		 revoke_proposal(struct proposal *);

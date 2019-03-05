@@ -1,4 +1,4 @@
-/*	$OpenBSD: locore.S,v 1.111 2018/10/07 22:43:06 guenther Exp $	*/
+/*	$OpenBSD: locore.S,v 1.114 2019/02/18 08:26:19 yasuoka Exp $	*/
 /*	$NetBSD: locore.S,v 1.13 2004/03/25 18:33:17 drochner Exp $	*/
 
 /*
@@ -172,7 +172,7 @@ _C_LABEL(lapic_isr):
 	.globl	_C_LABEL(ssym),_C_LABEL(esym),_C_LABEL(boothowto)
 	.globl	_C_LABEL(bootdev)
 	.globl	_C_LABEL(bootinfo), _C_LABEL(bootinfo_size), _C_LABEL(atdevbase)
-	.globl	_C_LABEL(proc0paddr),_C_LABEL(PTDpaddr)
+	.globl	_C_LABEL(proc0paddr)
 	.globl	_C_LABEL(biosbasemem)
 	.globl	_C_LABEL(bootapiver)
 	.globl	_C_LABEL(pg_nx)
@@ -198,7 +198,6 @@ _C_LABEL(atdevbase):	.quad	0	# location of start of iomem in virtual
 _C_LABEL(bootapiver):	.long	0	# /boot API version
 _C_LABEL(bootdev):	.long	0	# device we booted from
 _C_LABEL(proc0paddr):	.quad	0
-_C_LABEL(PTDpaddr):	.quad	0	# paddr of PTD, for libkvm
 #ifndef REALBASEMEM
 _C_LABEL(biosbasemem):	.long	0	# base memory reported by BIOS
 #else
@@ -214,27 +213,6 @@ _C_LABEL(pg_g_kern):	.quad	0	# 0x100 if global pages should be used
 					# in kernel mappings, 0 otherwise (for
 					# insecure CPUs)
 _C_LABEL(cpu_meltdown):	.long	0	# 1 if this CPU has Meltdown
-
-#define	_RELOC(x)	((x) - KERNBASE)
-#define	RELOC(x)	_RELOC(_C_LABEL(x))
-
-	.globl	gdt64
-
-gdt64:
-	.word	gdt64_end-gdt64_start-1
-	.quad	_RELOC(gdt64_start)
-.align 64, 0xcc
-
-gdt64_start:
-	.quad 0x0000000000000000	/* always empty */
-	.quad 0x00af9a000000ffff	/* kernel CS */
-	.quad 0x00cf92000000ffff	/* kernel DS */
-gdt64_end:
-
-/*
- * Some hackage to deal with 64bit symbols in 32 bit mode.
- * This may not be needed if things are cleaned up a little.
- */
 
 /*****************************************************************************/
 
@@ -1141,6 +1119,28 @@ ENTRY(pagezero)
 	jne     1b
 	sfence
 	RETGUARD_CHECK(pagezero, r11)
+	ret
+
+/* int rdmsr_safe(u_int msr, uint64_t *data) */
+ENTRY(rdmsr_safe)
+	RETGUARD_SETUP(rdmsr_safe_return, r10)
+
+	movl	%edi,	%ecx	/* u_int msr */
+	.globl	rdmsr_safe_fault
+rdmsr_safe_fault:
+	rdmsr
+	salq	$32, %rdx
+	movl	%eax, %eax
+	orq	%rdx, %rax
+	movq	%rax, (%rsi)	/* *data */
+	xorq	%rax, %rax
+
+	RETGUARD_CHECK(rdmsr_safe_return, r10)
+	ret
+
+NENTRY(rdmsr_resume)
+	movl	$0x1, %eax
+	RETGUARD_CHECK(rdmsr_safe_return, r10)
 	ret
 
 #if NXEN > 0

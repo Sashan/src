@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.361 2018/12/30 13:53:07 denis Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.376 2019/02/27 04:31:56 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -81,7 +81,6 @@
 #define	F_BLACKHOLE		0x0100
 #define	F_LONGER		0x0200
 #define	F_MPLS			0x0400
-#define	F_REDISTRIBUTED		0x0800
 #define	F_CTL_DETAIL		0x1000	/* only used by bgpctl */
 #define	F_CTL_ADJ_IN		0x2000
 #define	F_CTL_ADJ_OUT		0x4000
@@ -221,18 +220,19 @@ struct bgpd_addr {
 #define	LISTENER_LISTENING	0x02
 
 struct listen_addr {
-	TAILQ_ENTRY(listen_addr)	 entry;
-	struct sockaddr_storage		 sa;
-	int				 fd;
-	enum reconf_action		 reconf;
-	u_int8_t			 flags;
+	TAILQ_ENTRY(listen_addr)	entry;
+	struct sockaddr_storage		sa;
+	int				fd;
+	enum reconf_action		reconf;
+	socklen_t			sa_len;
+	u_int8_t			flags;
 };
 
 TAILQ_HEAD(listen_addrs, listen_addr);
 TAILQ_HEAD(filter_set_head, filter_set);
 
-struct rdomain;
-SIMPLEQ_HEAD(rdomain_head, rdomain);
+struct l3vpn;
+SIMPLEQ_HEAD(l3vpn_head, l3vpn);
 
 struct network;
 TAILQ_HEAD(network_head, network);
@@ -267,7 +267,7 @@ struct filter_rule;
 TAILQ_HEAD(filter_head, filter_rule);
 
 struct bgpd_config {
-	struct rdomain_head			 rdomains;
+	struct l3vpn_head			 l3vpns;
 	struct network_head			 networks;
 	struct filter_head			*filters;
 	struct listen_addrs			*listen_addrs;
@@ -411,7 +411,7 @@ struct network_config {
 	struct filter_set_head	 attrset;
 	struct rde_aspath	*asp;
 	char			 psname[SET_NAME_LEN];
-	u_int			 rtableid;
+	u_int64_t		 rd;
 	u_int16_t		 rtlabel;
 	enum network_type	 type;
 	u_int8_t		 prefixlen;
@@ -467,10 +467,10 @@ enum imsg_type {
 	IMSG_RECONF_FILTER,
 	IMSG_RECONF_LISTENER,
 	IMSG_RECONF_CTRL,
-	IMSG_RECONF_RDOMAIN,
-	IMSG_RECONF_RDOMAIN_EXPORT,
-	IMSG_RECONF_RDOMAIN_IMPORT,
-	IMSG_RECONF_RDOMAIN_DONE,
+	IMSG_RECONF_VPN,
+	IMSG_RECONF_VPN_EXPORT,
+	IMSG_RECONF_VPN_IMPORT,
+	IMSG_RECONF_VPN_DONE,
 	IMSG_RECONF_PREFIX_SET,
 	IMSG_RECONF_PREFIX_SET_ITEM,
 	IMSG_RECONF_AS_SET,
@@ -567,20 +567,21 @@ enum suberr_cease {
 struct kroute_node;
 struct kroute6_node;
 struct knexthop_node;
+struct kredist_node;
 RB_HEAD(kroute_tree, kroute_node);
 RB_HEAD(kroute6_tree, kroute6_node);
 RB_HEAD(knexthop_tree, knexthop_node);
+RB_HEAD(kredist_tree, kredist_node);
 
 struct ktable {
 	char			 descr[PEER_DESCR_LEN];
-	char			 ifmpe[IFNAMSIZ];
 	struct kroute_tree	 krt;
 	struct kroute6_tree	 krt6;
 	struct knexthop_tree	 knt;
+	struct kredist_tree	 kredist;
 	struct network_head	 krn;
 	u_int			 rtableid;
 	u_int			 nhtableid; /* rdomain id for nexthop lookup */
-	u_int			 ifindex;   /* ifindex of ifmpe */
 	int			 nhrefcnt;  /* refcnt for nexthop table */
 	enum reconf_action	 state;
 	u_int8_t		 fib_conf;  /* configured FIB sync flag */
@@ -638,6 +639,7 @@ struct kif {
 	u_int8_t		 if_type;
 	u_int8_t		 link_state;
 	u_int8_t		 nh_reachable;	/* for nexthop verification */
+	u_int8_t		 depend_state;	/* for session depend on */
 };
 
 struct session_up {
@@ -654,15 +656,25 @@ struct pftable_msg {
 	u_int8_t		len;
 };
 
+struct ctl_show_interface {
+	char			 ifname[IFNAMSIZ];
+	char			 linkstate[32];
+	char			 media[32];
+	u_int64_t		 baudrate;
+	u_int			 rdomain;
+	u_int8_t		 nh_reachable;
+	u_int8_t		 is_up;
+};
+
 struct ctl_show_nexthop {
-	struct bgpd_addr	addr;
-	struct kif		kif;
+	struct bgpd_addr		addr;
+	struct ctl_show_interface	iface;
 	union {
 		struct kroute		kr4;
 		struct kroute6		kr6;
 	} kr;
-	u_int8_t		valid;
-	u_int8_t		krvalid;
+	u_int8_t			valid;
+	u_int8_t			krvalid;
 };
 
 struct ctl_neighbor {
@@ -670,6 +682,7 @@ struct ctl_neighbor {
 	char			descr[PEER_DESCR_LEN];
 	char			shutcomm[SHUT_COMM_LEN];
 	int			show_timers;
+	int			is_group;
 };
 
 #define	F_PREF_ELIGIBLE	0x01
@@ -771,7 +784,7 @@ struct filter_community {
 		struct ext {
 			u_int32_t	data1;
 			u_int64_t	data2;
-			u_int8_t	type;
+			short		type;
 			u_int8_t	subtype;	/* if extended type */
 		} e;
 	}		c;
@@ -783,7 +796,6 @@ struct ctl_show_rib_request {
 	struct bgpd_addr	prefix;
 	struct filter_as	as;
 	struct filter_community community;
-	u_int32_t		peerid;
 	u_int32_t		flags;
 	u_int8_t		validation_state;
 	pid_t			pid;
@@ -865,8 +877,10 @@ struct filter_peers {
 #define EXT_COMMUNITY_NON_TRANS_IPV4	0x41	/* IPv4 specific */
 #define EXT_COMMUNITY_NON_TRANS_FOUR_AS	0x42	/* 4 octet AS specific */
 #define EXT_COMMUNITY_NON_TRANS_OPAQUE	0x43	/* opaque ext community */
+#define EXT_COMMUNITY_UNKNOWN		-1
 
 /* BGP Origin Validation State Extended Community RFC8097 */
+#define EXT_COMMUNITY_SUBTYPE_OVS	0
 #define EXT_COMMUNITY_OVS_VALID		0
 #define EXT_COMMUNITY_OVS_NOTFOUND	1
 #define EXT_COMMUNITY_OVS_INVALID	2
@@ -876,7 +890,7 @@ struct filter_peers {
 #define EXT_COMMUNITY_FLAG_VALID	0x01
 
 struct ext_comm_pairs {
-	u_int8_t	type;
+	short		type;
 	u_int8_t	subtype;
 	const char	*subname;
 };
@@ -905,7 +919,7 @@ struct ext_comm_pairs {
 	{ EXT_COMMUNITY_TRANS_OPAQUE, 0x06, "ort" },		\
 	{ EXT_COMMUNITY_TRANS_OPAQUE, 0x0d, "defgw" },		\
 								\
-	{ EXT_COMMUNITY_NON_TRANS_OPAQUE, 0x00, "ovs" },	\
+	{ EXT_COMMUNITY_NON_TRANS_OPAQUE, EXT_COMMUNITY_SUBTYPE_OVS, "ovs" }, \
 								\
 	{ EXT_COMMUNITY_TRANS_EVPN, 0x00, "mac-mob" },		\
 	{ EXT_COMMUNITY_TRANS_EVPN, 0x01, "esi-lab" },		\
@@ -968,6 +982,7 @@ enum action_types {
 	ACTION_SET_RELATIVE_WEIGHT,
 	ACTION_SET_PREPEND_SELF,
 	ACTION_SET_PREPEND_PEER,
+	ACTION_SET_AS_OVERRIDE,
 	ACTION_SET_NEXTHOP,
 	ACTION_SET_NEXTHOP_REJECT,
 	ACTION_SET_NEXTHOP_BLACKHOLE,
@@ -1025,8 +1040,8 @@ struct as_set {
 	int				 dirty;
 };
 
-struct rdomain {
-	SIMPLEQ_ENTRY(rdomain)		entry;
+struct l3vpn {
+	SIMPLEQ_ENTRY(l3vpn)		entry;
 	char				descr[PEER_DESCR_LEN];
 	char				ifmpe[IFNAMSIZ];
 	struct filter_set_head		import;
@@ -1061,38 +1076,37 @@ extern struct rib_names ribnames;
 #define AS_NONE		0
 
 struct rde_memstats {
-	int64_t		path_cnt;
-	int64_t		path_refs;
-	int64_t		prefix_cnt;
-	int64_t		rib_cnt;
-	int64_t		pt_cnt[AID_MAX];
-	int64_t		nexthop_cnt;
-	int64_t		aspath_cnt;
-	int64_t		aspath_size;
-	int64_t		aspath_refs;
-	int64_t		attr_cnt;
-	int64_t		attr_refs;
-	int64_t		attr_data;
-	int64_t		attr_dcnt;
-	int64_t		aset_cnt;
-	int64_t		aset_size;
-	int64_t		aset_nmemb;
-	int64_t		pset_cnt;
-	int64_t		pset_size;
+	long long	path_cnt;
+	long long	path_refs;
+	long long	prefix_cnt;
+	long long	rib_cnt;
+	long long	pt_cnt[AID_MAX];
+	long long	nexthop_cnt;
+	long long	aspath_cnt;
+	long long	aspath_size;
+	long long	aspath_refs;
+	long long	attr_cnt;
+	long long	attr_refs;
+	long long	attr_data;
+	long long	attr_dcnt;
+	long long	aset_cnt;
+	long long	aset_size;
+	long long	aset_nmemb;
+	long long	pset_cnt;
+	long long	pset_size;
 };
 
 struct rde_hashstats {
 	char		name[16];
-	int64_t		num;
-	int64_t		min;
-	int64_t		max;
-	int64_t		sum;
-	int64_t		sumq;
+	long long	num;
+	long long	min;
+	long long	max;
+	long long	sum;
+	long long	sumq;
 };
 
 #define	MRT_FILE_LEN	512
 #define	MRT2MC(x)	((struct mrt_config *)(x))
-#define	MRT_MAX_TIMEOUT	7200
 
 enum mrt_type {
 	MRT_NONE,
@@ -1158,7 +1172,7 @@ RB_PROTOTYPE(prefixset_tree, prefixset_item, entry, prefixset_cmp);
 
 /* kroute.c */
 int		 kr_init(void);
-int		 ktable_update(u_int, char *, char *, int, u_int8_t);
+int		 ktable_update(u_int, char *, int, u_int8_t);
 void		 ktable_preload(void);
 void		 ktable_postload(u_int8_t);
 int		 ktable_exists(u_int, u_int *);
@@ -1177,9 +1191,10 @@ void		 kr_nexthop_delete(u_int32_t, struct bgpd_addr *,
 		    struct bgpd_config *);
 void		 kr_show_route(struct imsg *);
 void		 kr_ifinfo(char *);
-int		 kr_net_reload(u_int, struct network_head *);
+void		 kr_net_reload(u_int, u_int64_t, struct network_head *);
 int		 kr_reload(void);
 struct in6_addr	*prefixlen2mask6(u_int8_t prefixlen);
+int		 get_mpe_config(const char *, u_int *, u_int *);
 
 /* log.c */
 void		 log_peer_info(const struct peer_config *, const char *, ...)
@@ -1194,7 +1209,7 @@ void		 mrt_clear_seq(void);
 void		 mrt_write(struct mrt *);
 void		 mrt_clean(struct mrt *);
 void		 mrt_init(struct imsgbuf *, struct imsgbuf *);
-int		 mrt_timeout(struct mrt_head *);
+time_t		 mrt_timeout(struct mrt_head *);
 void		 mrt_reconfigure(struct mrt_head *);
 void		 mrt_handler(struct mrt_head *);
 struct mrt	*mrt_get(struct mrt_head *, struct mrt *);
@@ -1253,10 +1268,10 @@ int			 set_equal(const struct set_table *,
 /* util.c */
 const char	*log_addr(const struct bgpd_addr *);
 const char	*log_in6addr(const struct in6_addr *);
-const char	*log_sockaddr(struct sockaddr *);
+const char	*log_sockaddr(struct sockaddr *, socklen_t);
 const char	*log_as(u_int32_t);
 const char	*log_rd(u_int64_t);
-const char	*log_ext_subtype(u_int8_t, u_int8_t);
+const char	*log_ext_subtype(short, u_int8_t);
 const char	*log_shutcomm(const char *);
 int		 aspath_snprint(char *, size_t, void *, u_int16_t);
 int		 aspath_asprint(char **, void *, u_int16_t);
@@ -1287,12 +1302,9 @@ int		 aid2afi(u_int8_t, u_int16_t *, u_int8_t *);
 int		 afi2aid(u_int16_t, u_int8_t, u_int8_t *);
 sa_family_t	 aid2af(u_int8_t);
 int		 af2aid(sa_family_t, u_int8_t, u_int8_t *);
-struct sockaddr	*addr2sa(struct bgpd_addr *, u_int16_t);
-void		 sa2addr(struct sockaddr *, struct bgpd_addr *);
-uint64_t	 ift2ifm(uint8_t);
-const char *	 get_media_descr(uint64_t);
-const char *	 get_linkstate(uint8_t, int);
-const char *	 get_baudrate(u_int64_t, char *);
+struct sockaddr	*addr2sa(struct bgpd_addr *, u_int16_t, socklen_t *);
+void		 sa2addr(struct sockaddr *, struct bgpd_addr *, u_int16_t *);
+const char *	 get_baudrate(unsigned long long, char *);
 
 static const char * const log_procnames[] = {
 	"parent",

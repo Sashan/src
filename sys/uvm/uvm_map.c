@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_map.c,v 1.239 2018/10/31 08:50:25 kettenis Exp $	*/
+/*	$OpenBSD: uvm_map.c,v 1.242 2019/03/01 01:46:18 cheloha Exp $	*/
 /*	$NetBSD: uvm_map.c,v 1.86 2000/11/27 08:40:03 chs Exp $	*/
 
 /*
@@ -1081,6 +1081,8 @@ uvm_mapanon(struct vm_map *map, vaddr_t *addr, vsize_t sz,
 		if ((flags & UVM_FLAG_OVERLAY) == 0)
 			entry->etype |= UVM_ET_NEEDSCOPY;
 	}
+	if (flags & UVM_FLAG_CONCEAL)
+		entry->etype |= UVM_ET_CONCEAL;
 	if (flags & UVM_FLAG_OVERLAY) {
 		KERNEL_LOCK();
 		entry->aref.ar_pageoff = 0;
@@ -1350,6 +1352,8 @@ uvm_map(struct vm_map *map, vaddr_t *addr, vsize_t sz,
 		if ((flags & UVM_FLAG_OVERLAY) == 0)
 			entry->etype |= UVM_ET_NEEDSCOPY;
 	}
+	if (flags & UVM_FLAG_CONCEAL)
+		entry->etype |= UVM_ET_CONCEAL;
 	if (flags & UVM_FLAG_OVERLAY) {
 		entry->aref.ar_pageoff = 0;
 		entry->aref.ar_amap = amap_alloc(sz, M_WAITOK, 0);
@@ -1491,7 +1495,7 @@ uvm_mapent_merge(struct vm_map *map, struct vm_map_entry *e1,
  * Attempt forward and backward joining of entry.
  *
  * Returns entry after joins.
- * We are guaranteed that the amap of entry is either non-existant or
+ * We are guaranteed that the amap of entry is either non-existent or
  * has never been used.
  */
 struct vm_map_entry*
@@ -1768,7 +1772,7 @@ uvm_map_lookup_entry(struct vm_map *map, vaddr_t address,
  * Inside a vm_map find the sp address and verify MAP_STACK, and also
  * remember low and high regions of that of region  which is marked
  * with MAP_STACK.  Return TRUE.
- * If sp isn't in a MAP_STACK region return FALSE.
+ * If sp isn't in a non-guard MAP_STACK region return FALSE.
  */
 boolean_t
 uvm_map_check_stack_range(struct proc *p, vaddr_t sp)
@@ -1789,7 +1793,11 @@ uvm_map_check_stack_range(struct proc *p, vaddr_t sp)
 	}
 
 	if ((entry->etype & UVM_ET_STACK) == 0) {
+		int protection = entry->protection;
+
 		vm_map_unlock_read(map);
+		if (protection == PROT_NONE)
+			return (TRUE);	/* don't update range */
 		return (FALSE);
 	}
 	p->p_spstart = entry->start;

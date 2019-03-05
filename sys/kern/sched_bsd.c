@@ -1,4 +1,4 @@
-/*	$OpenBSD: sched_bsd.c,v 1.48 2019/01/06 12:59:45 visa Exp $	*/
+/*	$OpenBSD: sched_bsd.c,v 1.50 2019/02/26 14:24:21 visa Exp $	*/
 /*	$NetBSD: kern_synch.c,v 1.37 1996/04/22 01:38:37 christos Exp $	*/
 
 /*-
@@ -47,6 +47,7 @@
 #include <uvm/uvm_extern.h>
 #include <sys/sched.h>
 #include <sys/timeout.h>
+#include <sys/smr.h>
 #ifdef WITH_TURNSTILES
 #include <sys/turnstile.h>
 #endif
@@ -220,6 +221,13 @@ schedcpu(void *arg)
 	KASSERT(phz);
 
 	LIST_FOREACH(p, &allproc, p_list) {
+		/*
+		 * Idle threads are never placed on the runqueue,
+		 * therefore computing their priority is pointless.
+		 */
+		if (p->p_cpu != NULL &&
+		    p->p_cpu->ci_schedstate.spc_idleproc == p)
+			continue;
 		/*
 		 * Increment sleep time (if sleeping). We ignore overflow.
 		 */
@@ -413,6 +421,8 @@ mi_switch(void)
 
 	SCHED_ASSERT_UNLOCKED();
 
+	smr_idle();
+
 	/*
 	 * We're running again; record our new start time.  We might
 	 * be running on a new CPU now, so don't use the cache'd
@@ -543,7 +553,12 @@ resetpriority(struct proc *p)
 void
 schedclock(struct proc *p)
 {
+	struct cpu_info *ci = curcpu();
+	struct schedstate_percpu *spc = &ci->ci_schedstate;
 	int s;
+
+	if (p == spc->spc_idleproc)
+		return;
 
 	SCHED_LOCK(s);
 	p->p_estcpu = ESTCPULIM(p->p_estcpu + 1);

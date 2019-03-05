@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.6 2018/04/06 14:44:04 patrick Exp $
+# $OpenBSD: Makefile,v 1.8 2019/02/26 23:39:51 jsg Exp $
 
 LIB=	LLVMAnalysis
 NOPIC=
@@ -11,7 +11,7 @@ SRCS=	AliasAnalysis.cpp \
 	AliasAnalysisEvaluator.cpp \
 	AliasAnalysisSummary.cpp \
 	AliasSetTracker.cpp \
-	Analysis.cpp \
+	AnalysisAnalysis.cpp \
 	AssumptionCache.cpp \
 	BasicAliasAnalysis.cpp \
 	BlockFrequencyInfo.cpp \
@@ -66,12 +66,14 @@ SRCS=	AliasAnalysis.cpp \
 	MemorySSAUpdater.cpp \
 	ModuleDebugInfoPrinter.cpp \
 	ModuleSummaryAnalysis.cpp \
+	MustExecute.cpp \
 	ObjCARCAliasAnalysis.cpp \
 	ObjCARCAnalysisUtils.cpp \
 	ObjCARCInstKind.cpp \
 	OptimizationRemarkEmitter.cpp \
 	OrderedBasicBlock.cpp \
 	PHITransAddr.cpp \
+	PhiValues.cpp \
 	PostDominators.cpp \
 	ProfileSummaryInfo.cpp \
 	PtrUseVisitor.cpp \
@@ -82,6 +84,7 @@ SRCS=	AliasAnalysis.cpp \
 	ScalarEvolutionAliasAnalysis.cpp \
 	ScalarEvolutionExpander.cpp \
 	ScalarEvolutionNormalization.cpp \
+	SyntheticCountsUtils.cpp \
 	TargetLibraryInfo.cpp \
 	TargetTransformInfo.cpp \
 	Trace.cpp \
@@ -93,9 +96,14 @@ SRCS=	AliasAnalysis.cpp \
 	ValueTracking.cpp \
 	VectorUtils.cpp
 
+AnalysisAnalysis.cpp:
+	ln -s ${LLVM_SRCS}/lib/Analysis/Analysis.cpp $@
+
 .PATH:	${.CURDIR}/../../../llvm/lib/Analysis
 
 install:
 	@# Nothing here so far ...
+
+CLEANFILES+= AnalysisAnalysis.cpp
 
 .include <bsd.lib.mk>

@@ -54,8 +54,6 @@ read_cb(void *buf, size_t buflen, void *cb_arg)
 struct extend_test {
 	size_t extend_len;
 	size_t read_len;
-	uint8_t want_buf[128];
-	size_t want_len;
 	ssize_t want_ret;
 };
 
@@ -111,6 +109,7 @@ main(int argc, char **argv)
 	CBS cbs;
 
 	rs.buf = testdata;
+	rs.offset = 0;
 
 	if ((buf = tls13_buffer_new(0)) == NULL)
 		errx(1, "tls13_buffer_new");

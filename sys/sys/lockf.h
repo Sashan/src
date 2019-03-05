@@ -1,4 +1,4 @@
-/*	$OpenBSD: lockf.h,v 1.12 2018/11/02 07:15:03 anton Exp $	*/
+/*	$OpenBSD: lockf.h,v 1.14 2019/01/30 17:04:04 anton Exp $	*/
 /*	$NetBSD: lockf.h,v 1.5 1994/06/29 06:44:33 cgd Exp $	*/
 
 /*
@@ -49,13 +49,20 @@ struct lockf {
 	off_t	lf_start;	 /* The byte # of the start of the lock */
 	off_t	lf_end;		 /* The byte # of the end of the lock (-1=EOF)*/
 	caddr_t	lf_id;		 /* The id of the resource holding the lock */
-	struct	lockf **lf_head; /* Back pointer to the head of lockf list */
-	struct	lockf *lf_prev;	 /* A pointer to the previous lock on this inode */
-	struct	lockf *lf_next;	 /* A pointer to the next lock on this inode */
+	struct	lockf_state *lf_state;	/* State associated with the lock */
+	TAILQ_ENTRY(lockf) lf_entry;
+	struct	lockf *lf_blk;	 /* The lock that blocks us */
 	struct	locklist lf_blkhd;	/* The list of blocked locks */
 	TAILQ_ENTRY(lockf) lf_block; /* A request waiting for a lock */
 	uid_t	lf_uid;		/* User ID responsible */
 	pid_t	lf_pid;		/* POSIX - owner pid */
+};
+
+struct lockf_state {
+	TAILQ_HEAD(, lockf)	  ls_locks;	/* list of locks */
+	struct lockf_state	**ls_owner;	/* owner */
+	int		 	  ls_refs;	/* reference counter */
+	int			  ls_pending;	/* pending lock operations */
 };
 
 /* Maximum length of sleep chains to traverse to try and detect deadlock. */
@@ -64,27 +71,26 @@ struct lockf {
 #ifdef _KERNEL
 __BEGIN_DECLS
 void	 lf_init(void);
-int	 lf_advlock(struct lockf **,
+int	 lf_advlock(struct lockf_state **,
 	    off_t, caddr_t, int, struct flock *, int);
 int	 lf_clearlock(struct lockf *);
 int	 lf_findoverlap(struct lockf *,
-	    struct lockf *, int, struct lockf **, struct lockf **);
+	    struct lockf *, int, struct lockf **);
 struct lockf *
 	 lf_getblock(struct lockf *);
 int	 lf_getlock(struct lockf *, struct flock *);
 int	 lf_setlock(struct lockf *);
+void	 lf_purgelocks(struct lockf_state *);
 void	 lf_split(struct lockf *, struct lockf *);
-void	 lf_wakelock(struct lockf *);
-void	 lf_link(struct lockf *, struct lockf *);
-void	 lf_unlink(struct lockf *);
+void	 lf_wakelock(struct lockf *, int);
 __END_DECLS
 
 #ifdef LOCKF_DEBUG
 extern int lockf_debug;
 
 __BEGIN_DECLS
-void	lf_print(char *, struct lockf *);
-void	lf_printlist(char *, struct lockf *);
+void	lf_print(const char *, struct lockf *);
+void	lf_printlist(const char *, struct lockf *);
 __END_DECLS
 #endif /* LOCKF_DEBUG */
 

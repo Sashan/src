@@ -1,4 +1,4 @@
-/*	$OpenBSD: printconf.c,v 1.126 2018/12/30 13:53:07 denis Exp $	*/
+/*	$OpenBSD: printconf.c,v 1.132 2019/02/26 10:49:15 claudio Exp $	*/
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -35,8 +35,8 @@ void		 print_community(struct filter_community *c);
 void		 print_origin(u_int8_t);
 void		 print_set(struct filter_set_head *);
 void		 print_mainconf(struct bgpd_config *);
-void		 print_rdomain_targets(struct filter_set_head *, const char *);
-void		 print_rdomain(struct rdomain *);
+void		 print_l3vpn_targets(struct filter_set_head *, const char *);
+void		 print_l3vpn(struct l3vpn *);
 const char	*print_af(u_int8_t);
 void		 print_network(struct network_config *, const char *);
 void		 print_as_sets(struct as_set_head *);
@@ -200,37 +200,69 @@ print_community(struct filter_community *c)
 		}
 		break;
 	case COMMUNITY_TYPE_EXT:
+		if (c->dflag3 == COMMUNITY_ANY) {
+			printf("* * ");
+			break;
+		}
 		printf("%s ", log_ext_subtype(c->c.e.type, c->c.e.subtype));
+		if (c->dflag1 == COMMUNITY_ANY) {
+			printf("* ");
+			break;
+		}
+
 		switch (c->c.e.type) {
 		case EXT_COMMUNITY_TRANS_TWO_AS:
 		case EXT_COMMUNITY_TRANS_FOUR_AS:
-			printf("%s:%llu ", log_as(c->c.e.data1),
-			    c->c.e.data2);
+			if (c->dflag1 == COMMUNITY_NEIGHBOR_AS)
+				printf("neighbor-as:");
+			else if (c->dflag1 == COMMUNITY_LOCAL_AS)
+				printf("local-as:");
+			else
+				printf("%s:", log_as(c->c.e.data1));
 			break;
 		case EXT_COMMUNITY_TRANS_IPV4:
 			addr.s_addr = htonl(c->c.e.data1);
-			printf("%s:%llu ", inet_ntoa(addr),
-			    c->c.e.data2);
+			printf("%s:", inet_ntoa(addr));
+			break;
+		}
+
+		switch (c->c.e.type) {
+		case EXT_COMMUNITY_TRANS_TWO_AS:
+		case EXT_COMMUNITY_TRANS_FOUR_AS:
+		case EXT_COMMUNITY_TRANS_IPV4:
+			if (c->dflag2 == COMMUNITY_ANY)
+				printf("* ");
+			else if (c->dflag2 == COMMUNITY_NEIGHBOR_AS)
+				printf("neighbor-as ");
+			else if (c->dflag2 == COMMUNITY_LOCAL_AS)
+				printf("local-as ");
+			else
+				printf("%llu ",
+				    (unsigned long long)c->c.e.data2);
 			break;
 		case EXT_COMMUNITY_TRANS_OPAQUE:
 		case EXT_COMMUNITY_TRANS_EVPN:
-			printf("0x%llx ", c->c.e.data2);
+			printf("0x%llx ", (unsigned long long)c->c.e.data2);
 			break;
 		case EXT_COMMUNITY_NON_TRANS_OPAQUE:
-			switch (c->c.e.data2) {
-			case EXT_COMMUNITY_OVS_VALID:
-				printf("valid ");
-				break;
-			case EXT_COMMUNITY_OVS_NOTFOUND:
-				printf("not-found ");
-				break;
-			case EXT_COMMUNITY_OVS_INVALID:
-				printf("invalid ");
+			if (c->c.e.subtype == EXT_COMMUNITY_SUBTYPE_OVS) {
+				switch (c->c.e.data2) {
+				case EXT_COMMUNITY_OVS_VALID:
+					printf("valid ");
+					break;
+				case EXT_COMMUNITY_OVS_NOTFOUND:
+					printf("not-found ");
+					break;
+				case EXT_COMMUNITY_OVS_INVALID:
+					printf("invalid ");
+					break;
+				}
 				break;
 			}
+			printf("0x%llx ", (unsigned long long)c->c.e.data2);
 			break;
 		default:
-			printf("0x%llx ", c->c.e.data2);
+			printf("0x%llx ", (unsigned long long)c->c.e.data2);
 			break;
 		}
 	}
@@ -299,6 +331,9 @@ print_set(struct filter_set_head *set)
 		case ACTION_SET_PREPEND_PEER:
 			printf("prepend-neighbor %u ", s->action.prepend);
 			break;
+		case ACTION_SET_AS_OVERRIDE:
+			printf("as-override ");
+			break;
 		case ACTION_DEL_COMMUNITY:
 			printf("%s delete ",
 			    community_type(&s->action.community));
@@ -364,7 +399,7 @@ print_mainconf(struct bgpd_config *conf)
 
 	TAILQ_FOREACH(la, conf->listen_addrs, entry)
 		printf("listen on %s\n",
-		    log_sockaddr((struct sockaddr *)&la->sa));
+		    log_sockaddr((struct sockaddr *)&la->sa, la->sa_len));
 
 	if (conf->flags & BGPD_FLAG_NEXTHOP_BGP)
 		printf("nexthop qualify via bgp\n");
@@ -375,7 +410,7 @@ print_mainconf(struct bgpd_config *conf)
 }
 
 void
-print_rdomain_targets(struct filter_set_head *set, const char *tgt)
+print_l3vpn_targets(struct filter_set_head *set, const char *tgt)
 {
 	struct filter_set	*s;
 	TAILQ_FOREACH(s, set, entry) {
@@ -386,26 +421,23 @@ print_rdomain_targets(struct filter_set_head *set, const char *tgt)
 }
 
 void
-print_rdomain(struct rdomain *r)
+print_l3vpn(struct l3vpn *vpn)
 {
 	struct network *n;
 
-	printf("rdomain %u {\n", r->rtableid);
-	if (*r->descr)
-		printf("\tdescr \"%s\"\n", r->descr);
-	if (r->flags & F_RIB_NOFIBSYNC)
+	printf("vpn \"%s\" on %s {\n", vpn->descr, vpn->ifmpe);
+	printf("\t%s\n", log_rd(vpn->rd));
+
+	print_l3vpn_targets(&vpn->export, "export-target");
+	print_l3vpn_targets(&vpn->import, "import-target");
+
+	if (vpn->flags & F_RIB_NOFIBSYNC)
 		printf("\tfib-update no\n");
 	else
 		printf("\tfib-update yes\n");
-	printf("\tdepend on %s\n", r->ifmpe);
 
-	TAILQ_FOREACH(n, &r->net_l, entry)
+	TAILQ_FOREACH(n, &vpn->net_l, entry)
 		print_network(&n->net, "\t");
-
-	printf("\n\t%s\n", log_rd(r->rd));
-
-	print_rdomain_targets(&r->export, "export-target");
-	print_rdomain_targets(&r->import, "import-target");
 
 	printf("}\n");
 }
@@ -955,12 +987,12 @@ void
 print_config(struct bgpd_config *conf, struct rib_names *rib_l,
     struct network_head *net_l, struct peer *peer_l,
     struct filter_head *rules_l, struct mrt_head *mrt_l,
-    struct rdomain_head *rdom_l)
+    struct l3vpn_head *vpns_l)
 {
 	struct filter_rule	*r;
 	struct network		*n;
 	struct rde_rib		*rr;
-	struct rdomain		*rd;
+	struct l3vpn		*vpn;
 
 	print_mainconf(conf);
 	print_roa(&conf->roa);
@@ -969,10 +1001,10 @@ print_config(struct bgpd_config *conf, struct rib_names *rib_l,
 	print_originsets(&conf->originsets);
 	TAILQ_FOREACH(n, net_l, entry)
 		print_network(&n->net, "");
-	if (!SIMPLEQ_EMPTY(rdom_l))
+	if (!SIMPLEQ_EMPTY(vpns_l))
 		printf("\n");
-	SIMPLEQ_FOREACH(rd, rdom_l, entry)
-		print_rdomain(rd);
+	SIMPLEQ_FOREACH(vpn, vpns_l, entry)
+		print_l3vpn(vpn);
 	printf("\n");
 	SIMPLEQ_FOREACH(rr, rib_l, entry) {
 		if (rr->flags & F_RIB_NOEVALUATE)

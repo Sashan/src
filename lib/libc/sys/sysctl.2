@@ -1,4 +1,4 @@
-.\"	$OpenBSD: sysctl.2,v 1.19 2019/01/06 20:09:38 schwarze Exp $
+.\"	$OpenBSD: sysctl.2,v 1.22 2019/02/07 15:11:38 visa Exp $
 .\"
 .\" Copyright (c) 1993
 .\"	The Regents of the University of California.  All rights reserved.
@@ -27,7 +27,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd $Mdocdate: January 6 2019 $
+.Dd $Mdocdate: February 7 2019 $
 .Dt SYSCTL 2
 .Os
 .Sh NAME
@@ -489,7 +489,7 @@ information.
 .It Dv KERN_TTYCOUNT Ta "integer" Ta "no"
 .It Dv KERN_VERSION Ta "string" Ta "no"
 .It Dv KERN_WATCHDOG Ta "node" Ta "not applicable"
-.It Dv KERN_WITNESSWATCH Ta "integer" Ta "yes"
+.It Dv KERN_WITNESS Ta "node" Ta "not applicable"
 .It Dv KERN_WXABORT Ta "integer" Ta "yes"
 .El
 .Bl -tag -width "123456"
@@ -1102,7 +1102,24 @@ variable.
 The period of the watchdog timer in seconds.
 Set to 0 to disable the watchdog timer.
 .El
-.It Dv KERN_WITNESSWATCH Pq Va kern.witnesswatch
+.It Dv KERN_WITNESS Pq Va kern.witness
+Control settings of
+.Xr witness 4 .
+.Bl -column "KERN_WITNESS_LOCKTRACE" "integer" "Changeable" -offset indent
+.It Sy "Third level name" Ta Sy "Type" Ta Sy "Changeable"
+.It Dv KERN_WITNESS_LOCKTRACE Ta "integer" Ta "yes"
+.It Dv KERN_WITNESS_WATCH Ta "integer" Ta "yes"
+.El
+.Pp
+The variables are as follows:
+.Bl -tag -width "123456"
+.It Dv KERN_WITNESS_LOCKTRACE Pq Va kern.witness.locktrace
+When set,
+.Xr witness 4
+saves a stack trace on each lock acquisition.
+The stack traces of acquired locks can be viewed using
+.Xr ddb 4 .
+.It Dv KERN_WITNESS_WATCH Pq Va kern.witness.watch
 Control how
 .Xr witness 4
 behaves on error.
@@ -1123,6 +1140,7 @@ Print a message if an error is detected,
 and a stack trace if possible.
 .It 3
 The same as 2, but also drop into the kernel debugger.
+.El
 .El
 .It Dv KERN_WXABORT Pq Va kern.wxabort
 Generate an abort,
@@ -1592,7 +1610,7 @@ This value applies to normal transport protocols, not to ICMP.
 .It Li ipcomp.enable Pq Va net.inet.ipcomp.enable
 Enable the IPComp protocol.
 See
-.Xr ipsecctl 8
+.Xr ipcomp 4
 for more information.
 .It Li ipip.allow Pq Va net.inet.ipip.allow
 If set to 0, incoming IP-in-IP packets will not be processed.

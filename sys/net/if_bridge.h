@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_bridge.h,v 1.58 2018/12/07 16:19:40 mpi Exp $	*/
+/*	$OpenBSD: if_bridge.h,v 1.62 2019/02/20 17:11:51 mpi Exp $	*/
 
 /*
  * Copyright (c) 1999, 2000 Jason L. Wright (jason@thought.net)
@@ -242,6 +242,9 @@ struct ifbrlconf {
 };
 
 #ifdef _KERNEL
+
+#include <sys/mutex.h>
+
 /* STP port flags */
 #define	BSTP_PORT_CANMIGRATE	0x0001
 #define	BSTP_PORT_NEWINFO	0x0002
@@ -409,7 +412,7 @@ struct bstp_state {
  * Bridge interface list
  */
 struct bridge_iflist {
-	TAILQ_ENTRY(bridge_iflist)	next;		/* next in list */
+	SLIST_ENTRY(bridge_iflist)	bif_next;	/* next in list */
 	struct bridge_softc		*bridge_sc;
 	struct bstp_port		*bif_stp;	/* STP port state */
 	struct brl_head			bif_brlin;	/* input rules */
@@ -456,6 +459,7 @@ struct bridge_rtnode {
 	struct ether_addr		brt_addr;	/* dst addr */
 	struct bridge_tunneltag		brt_tunnel;	/* tunnel endpoint */
 };
+#define brt_family brt_tunnel.brtag_peer.sa.sa_family
 
 #ifndef BRIDGE_RTABLE_SIZE
 #define BRIDGE_RTABLE_SIZE	1024
@@ -463,19 +467,25 @@ struct bridge_rtnode {
 #define BRIDGE_RTABLE_MASK	(BRIDGE_RTABLE_SIZE - 1)
 
 /*
+ *  Locks used to protect struct members in this file:
+ *	I	immutable after creation
+ *	m	per-softc mutex
+ */
+/*
  * Software state for each bridge
  */
 struct bridge_softc {
 	struct ifnet			sc_if;	/* the interface */
-	u_int32_t			sc_brtmax;	/* max # addresses */
-	u_int32_t			sc_brtcnt;	/* current # addrs */
+	uint32_t			sc_brtmax;	/* [m] max # addresses */
+	uint32_t			sc_brtcnt;	/* [m] current # addrs */
 	int				sc_brttimeout;	/* timeout ticks */
-	u_int64_t			sc_hashkey[2];	/* siphash key */
+	uint64_t			sc_hashkey[2];	/* [I] siphash key */
 	struct timeout			sc_brtimeout;	/* timeout state */
 	struct bstp_state		*sc_stp;	/* stp state */
-	TAILQ_HEAD(, bridge_iflist)	sc_iflist;	/* interface list */
-	TAILQ_HEAD(, bridge_iflist)	sc_spanlist;	/* span ports */
-	LIST_HEAD(, bridge_rtnode)	sc_rts[BRIDGE_RTABLE_SIZE];	/* hash table */
+	SLIST_HEAD(, bridge_iflist)	sc_iflist;	/* interface list */
+	SLIST_HEAD(, bridge_iflist)	sc_spanlist;	/* span ports */
+	struct mutex			sc_mtx;		/* mutex */
+	LIST_HEAD(, bridge_rtnode)	sc_rts[BRIDGE_RTABLE_SIZE];	/* [m] hash table */
 };
 
 extern const u_int8_t bstp_etheraddr[];
@@ -506,7 +516,7 @@ u_int8_t bstp_getstate(struct bstp_state *, struct bstp_port *);
 void	bstp_ifsflags(struct bstp_port *, u_int);
 
 int	bridgectl_ioctl(struct ifnet *, u_long, caddr_t);
-struct ifnet *bridge_rtupdate(struct bridge_softc *,
+int	bridge_rtupdate(struct bridge_softc *,
     struct ether_addr *, struct ifnet *ifp, int, u_int8_t, struct mbuf *);
 struct bridge_rtnode *bridge_rtlookup(struct bridge_softc *,
     struct ether_addr *);

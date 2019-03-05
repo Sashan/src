@@ -1,4 +1,4 @@
-/* $OpenBSD: sshconnect.c,v 1.309 2018/12/27 03:25:25 djm Exp $ */
+/* $OpenBSD: sshconnect.c,v 1.314 2019/02/27 19:37:01 markus Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -433,7 +433,7 @@ ssh_connect_direct(struct ssh *ssh, const char *host, struct addrinfo *aitop,
     struct sockaddr_storage *hostaddr, u_short port, int family,
     int connection_attempts, int *timeout_ms, int want_keepalive)
 {
-	int on = 1;
+	int on = 1, saved_timeout_ms = *timeout_ms;
 	int oerrno, sock = -1, attempt;
 	char ntop[NI_MAXHOST], strport[NI_MAXSERV];
 	struct addrinfo *ai;
@@ -477,6 +477,7 @@ ssh_connect_direct(struct ssh *ssh, const char *host, struct addrinfo *aitop,
 				continue;
 			}
 
+			*timeout_ms = saved_timeout_ms;
 			if (timeout_connect(sock, ai->ai_addr, ai->ai_addrlen,
 			    timeout_ms) >= 0) {
 				/* Successful connection. */
@@ -522,12 +523,20 @@ ssh_connect(struct ssh *ssh, const char *host, struct addrinfo *addrs,
     struct sockaddr_storage *hostaddr, u_short port, int family,
     int connection_attempts, int *timeout_ms, int want_keepalive)
 {
+	int in, out;
+
 	if (options.proxy_command == NULL) {
 		return ssh_connect_direct(ssh, host, addrs, hostaddr, port,
 		    family, connection_attempts, timeout_ms, want_keepalive);
 	} else if (strcmp(options.proxy_command, "-") == 0) {
-		if ((ssh_packet_set_connection(ssh,
-		    STDIN_FILENO, STDOUT_FILENO)) == NULL)
+		if ((in = dup(STDIN_FILENO)) < 0 ||
+		    (out = dup(STDOUT_FILENO)) < 0) {
+			if (in >= 0)
+				close(in);
+			error("%s: dup() in/out failed", __func__);
+			return -1; /* ssh_packet_set_connection logs error */
+		}
+		if ((ssh_packet_set_connection(ssh, in, out)) == NULL)
 			return -1; /* ssh_packet_set_connection logs error */
 		return 0;
 	} else if (options.proxy_use_fdpass) {
@@ -539,22 +548,24 @@ ssh_connect(struct ssh *ssh, const char *host, struct addrinfo *addrs,
 
 /* defaults to 'no' */
 static int
-confirm(const char *prompt)
+confirm(const char *prompt, const char *fingerprint)
 {
 	const char *msg, *again = "Please type 'yes' or 'no': ";
+	const char *again_fp = "Please type 'yes', 'no' or the fingerprint: ";
 	char *p;
 	int ret = -1;
 
 	if (options.batch_mode)
 		return 0;
-	for (msg = prompt;;msg = again) {
+	for (msg = prompt;;msg = fingerprint ? again_fp : again) {
 		p = read_passphrase(msg, RP_ECHO);
 		if (p == NULL)
 			return 0;
 		p[strcspn(p, "\n")] = '\0';
 		if (p[0] == '\0' || strcasecmp(p, "no") == 0)
 			ret = 0;
-		else if (strcasecmp(p, "yes") == 0)
+		else if (strcasecmp(p, "yes") == 0 || (fingerprint != NULL &&
+		    strcasecmp(p, fingerprint) == 0))
 			ret = 1;
 		free(p);
 		if (ret != -1)
@@ -666,7 +677,7 @@ check_host_key(char *hostname, struct sockaddr *hostaddr, u_short port,
 	char msg[1024];
 	const char *type;
 	const struct hostkey_entry *host_found, *ip_found;
-	int len, cancelled_forwarding = 0;
+	int len, cancelled_forwarding = 0, confirmed;
 	int local = sockaddr_is_local(hostaddr);
 	int r, want_cert = sshkey_is_cert(host_key), host_ip_differ = 0;
 	int hostkey_trusted = 0; /* Known or explicitly accepted by user */
@@ -841,14 +852,15 @@ check_host_key(char *hostname, struct sockaddr *hostaddr, u_short port,
 			    "established%s\n"
 			    "%s key fingerprint is %s.%s%s\n%s"
 			    "Are you sure you want to continue connecting "
-			    "(yes/no)? ",
+			    "(yes/no/[fingerprint])? ",
 			    host, ip, msg1, type, fp,
 			    options.visual_host_key ? "\n" : "",
 			    options.visual_host_key ? ra : "",
 			    msg2);
 			free(ra);
+			confirmed = confirm(msg, fp);
 			free(fp);
-			if (!confirm(msg))
+			if (!confirmed)
 				goto fail;
 			hostkey_trusted = 1; /* user explicitly confirmed */
 		}
@@ -1042,7 +1054,7 @@ check_host_key(char *hostname, struct sockaddr *hostaddr, u_short port,
 		    SSH_STRICT_HOSTKEY_ASK) {
 			strlcat(msg, "\nAre you sure you want "
 			    "to continue connecting (yes/no)? ", sizeof(msg));
-			if (!confirm(msg))
+			if (!confirm(msg, NULL))
 				goto fail;
 		} else if (options.strict_host_key_checking !=
 		    SSH_STRICT_HOSTKEY_OFF) {
@@ -1240,24 +1252,6 @@ ssh_login(struct ssh *ssh, Sensitive *sensitive, const char *orighost,
 	ssh_kex2(ssh, host, hostaddr, port);
 	ssh_userauth2(ssh, local_user, server_user, host, sensitive);
 	free(local_user);
-}
-
-void
-ssh_put_password(char *password)
-{
-	int size;
-	char *padded;
-
-	if (datafellows & SSH_BUG_PASSWORDPAD) {
-		packet_put_cstring(password);
-		return;
-	}
-	size = ROUNDUP(strlen(password) + 1, 32);
-	padded = xcalloc(1, size);
-	strlcpy(padded, password, size);
-	packet_put_string(padded, size);
-	explicit_bzero(padded, size);
-	free(padded);
 }
 
 /* print all known host keys for a given host, but skip keys of given type */

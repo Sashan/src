@@ -1,4 +1,4 @@
-/*	$OpenBSD: ieee80211_proto.c,v 1.91 2018/11/12 16:36:54 krw Exp $	*/
+/*	$OpenBSD: ieee80211_proto.c,v 1.93 2019/02/27 06:00:29 stsp Exp $	*/
 /*	$NetBSD: ieee80211_proto.c,v 1.8 2004/04/30 23:58:20 dyoung Exp $	*/
 
 /*-
@@ -90,7 +90,7 @@ ieee80211_proto_attach(struct ifnet *ifp)
 
 	ifp->if_hdrlen = sizeof(struct ieee80211_frame);
 
-	ic->ic_rtsthreshold = IEEE80211_RTS_DEFAULT;
+	ic->ic_rtsthreshold = IEEE80211_RTS_MAX;
 	ic->ic_fragthreshold = 2346;		/* XXX not used yet */
 	ic->ic_fixed_rate = -1;			/* no fixed rate */
 	ic->ic_fixed_mcs = -1;			/* no fixed mcs */
@@ -543,7 +543,8 @@ ieee80211_ht_negotiate(struct ieee80211com *ic, struct ieee80211_node *ni)
 {
 	int i;
 
-	ni->ni_flags &= ~IEEE80211_NODE_HT;
+	ni->ni_flags &= ~(IEEE80211_NODE_HT | IEEE80211_NODE_HT_SGI20 |
+	    IEEE80211_NODE_HT_SGI40);
 
 	/* Check if we support HT. */
 	if ((ic->ic_modecaps & (1 << IEEE80211_MODE_11N)) == 0)
@@ -590,6 +591,8 @@ ieee80211_ht_negotiate(struct ieee80211com *ic, struct ieee80211_node *ni)
 	}
 
 	ni->ni_flags |= IEEE80211_NODE_HT;
+
+	/* Flags IEEE8021_NODE_HT_SGI20/40 are set by drivers if supported. */
 }
 
 void

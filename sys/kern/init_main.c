@@ -1,4 +1,4 @@
-/*	$OpenBSD: init_main.c,v 1.282 2019/01/01 07:06:44 jsg Exp $	*/
+/*	$OpenBSD: init_main.c,v 1.284 2019/02/26 14:24:21 visa Exp $	*/
 /*	$NetBSD: init_main.c,v 1.84.4.1 1996/06/02 09:08:06 mrg Exp $	*/
 
 /*
@@ -76,6 +76,7 @@
 #include <sys/pipe.h>
 #include <sys/task.h>
 #include <sys/witness.h>
+#include <sys/smr.h>
 
 #include <sys/syscall.h>
 #include <sys/syscallargs.h>
@@ -127,7 +128,6 @@ extern	struct user *proc0paddr;
 
 struct	vnode *rootvp, *swapdev_vp;
 int	boothowto;
-struct	timespec boottime;
 int	db_active = 0;
 int	ncpus =  1;
 int	ncpusfound = 1;			/* number of cpus we find */
@@ -244,6 +244,9 @@ main(void *framep)
 
 	/* Initialize SRP subsystem. */
 	srp_startup();
+
+	/* Initialize SMR subsystem. */
+	smr_startup();
 
 	/*
 	 * Initialize process and pgrp structures.
@@ -520,9 +523,8 @@ main(void *framep)
 	 * from the file system.  Reset p->p_rtime as it may have been
 	 * munched in mi_switch() after the time got set.
 	 */
-	nanotime(&boottime);
 	LIST_FOREACH(pr, &allprocess, ps_list) {
-		pr->ps_start = boottime;
+		getnanotime(&pr->ps_start);
 		TAILQ_FOREACH(p, &pr->ps_threads, p_thr_link) {
 			nanouptime(&p->p_cpu->ci_schedstate.spc_runtime);
 			timespecclear(&p->p_rtime);

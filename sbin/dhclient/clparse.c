@@ -1,4 +1,4 @@
-/*	$OpenBSD: clparse.c,v 1.176 2019/01/14 04:54:46 krw Exp $	*/
+/*	$OpenBSD: clparse.c,v 1.183 2019/02/12 16:50:44 krw Exp $	*/
 
 /* Parser for dhclient config and lease files. */
 
@@ -79,7 +79,6 @@ int	parse_reject_statement(FILE *);
 void	apply_ignore_list(char *);
 void	set_default_client_identifier(struct ether_addr *);
 void	set_default_hostname(void);
-void	read_resolv_conf_tail(void);
 
 void
 init_config(void)
@@ -174,7 +173,6 @@ read_conf(char *name, char *ignore_list, struct ether_addr *hwaddr)
 	set_default_client_identifier(hwaddr);
 	set_default_hostname();
 	apply_ignore_list(ignore_list);
-	read_resolv_conf_tail();
 }
 
 /*
@@ -188,6 +186,7 @@ read_lease_db(char *name, struct client_lease_tq *tq)
 {
 	struct client_lease	*lease, *lp, *nlp;
 	FILE			*cfile;
+	int			 i;
 
 	TAILQ_INIT(tq);
 
@@ -196,36 +195,34 @@ read_lease_db(char *name, struct client_lease_tq *tq)
 
 	new_parse(path_lease_db);
 
-	for (;;) {
-		if (parse_lease(cfile, name, &lease) == 1) {
-			/*
-			 * The new lease will supersede a lease with the same ssid
-			 * AND the same Client Identifier AND the same
-			 * IP address.
-			 */
-			TAILQ_FOREACH_SAFE(lp, tq, next, nlp) {
-				if (lp->ssid_len != lease->ssid_len)
-					continue;
-				if (memcmp(lp->ssid, lease->ssid, lp->ssid_len) != 0)
-					continue;
-				if ((lease->options[DHO_DHCP_CLIENT_IDENTIFIER].len != 0) &&
-				    ((lp->options[DHO_DHCP_CLIENT_IDENTIFIER].len !=
-				    lease->options[DHO_DHCP_CLIENT_IDENTIFIER].len) ||
-				    memcmp(lp->options[DHO_DHCP_CLIENT_IDENTIFIER].data,
-				    lease->options[DHO_DHCP_CLIENT_IDENTIFIER].data,
-				    lp->options[DHO_DHCP_CLIENT_IDENTIFIER].len)))
-					continue;
-				if (lp->address.s_addr != lease->address.s_addr)
-					continue;
+	i = DHO_DHCP_CLIENT_IDENTIFIER;
+	while (feof(cfile) == 0) {
+		if (parse_lease(cfile, name, &lease) == 0)
+			continue;
 
-				TAILQ_REMOVE(tq, lp, next);
-				free_client_lease(lp);
-			}
+		/*
+		 * The new lease will supersede a lease with the same
+		 * ssid AND the same Client Identifier AND the same
+		 * IP address.
+		 */
+		TAILQ_FOREACH_SAFE(lp, tq, next, nlp) {
+			if (lp->ssid_len != lease->ssid_len)
+				continue;
+			if (memcmp(lp->ssid, lease->ssid, lp->ssid_len) != 0)
+				continue;
+			if ((lease->options[i].len != 0) &&
+			    ((lp->options[i].len != lease->options[i].len) ||
+			    memcmp(lp->options[i].data, lease->options[i].data,
+			    lp->options[i].len) != 0))
+				continue;
+			if (lp->address.s_addr != lease->address.s_addr)
+				continue;
 
-			TAILQ_INSERT_TAIL(tq, lease, next);
+			TAILQ_REMOVE(tq, lp, next);
+			free_client_lease(lp);
 		}
-		if (feof(cfile) != 0)
-			break;
+
+		TAILQ_INSERT_TAIL(tq, lease, next);
 	}
 
 	fclose(cfile);
@@ -303,7 +300,7 @@ parse_conf_decl(FILE *cfile, char *name)
 			if (count == 0) {
 				for (i = 0; i < DHO_COUNT; i++)
 					if (p[i] == ACTION_IGNORE)
-						p[i] = ACTION_NONE;
+						p[i] = ACTION_USELEASE;
 			} else {
 				for (i = 0; i < count; i++)
 					p[list[i]] = ACTION_IGNORE;
@@ -333,6 +330,29 @@ parse_conf_decl(FILE *cfile, char *name)
 	case TOK_NEXT_SERVER:
 		if (parse_ip_addr(cfile, &config->next_server) == 1)
 			parse_semi(cfile);
+		break;
+	case TOK_USELEASE:
+		memset(list, 0, sizeof(list));
+		count = 0;
+		if (parse_option_list(cfile, &count, list) == 1) {
+			enum actions *p = config->default_actions;
+			if (count == 0) {
+				for (i = 0; i < DHO_COUNT; i++) {
+					free(config->defaults[i].data);
+					config->defaults[i].data = NULL;
+					config->defaults[i].len = 0;
+					p[i] = ACTION_USELEASE;
+				}
+			} else {
+				for (i = 0; i < count; i++) {
+					free(config->defaults[list[i]].data);
+					config->defaults[list[i]].data = NULL;
+					config->defaults[list[i]].len = 0;
+					p[list[i]] = ACTION_USELEASE;
+				}
+			}
+			parse_semi(cfile);
+		}
 		break;
 	case TOK_PREPEND:
 		if (parse_option(cfile, &i, config->defaults) == 1) {
@@ -959,42 +979,5 @@ set_default_hostname(void)
 		if (opt->data == NULL)
 			fatal("default host-name");
 		opt->len = strlen(opt->data);
-	}
-}
-
-void
-read_resolv_conf_tail(void)
-{
-	struct stat		 sb;
-	const char		*tail_path = "/etc/resolv.conf.tail";
-	ssize_t			 tailn;
-	int			 tailfd;
-
-	if (config->resolv_tail != NULL) {
-		free(config->resolv_tail);
-		config->resolv_tail = NULL;
-	}
-
-	tailfd = open(tail_path, O_RDONLY);
-	if (tailfd == -1) {
-		if (errno != ENOENT)
-			fatal("open(%s)", tail_path);
-	} else if (fstat(tailfd, &sb) == -1) {
-		fatal("fstat(%s)", tail_path);
-	} else {
-		if (sb.st_size > 0 && sb.st_size < LLONG_MAX) {
-			config->resolv_tail = calloc(1, sb.st_size + 1);
-			if (config->resolv_tail == NULL) {
-				fatal("%s contents", tail_path);
-			}
-			tailn = read(tailfd, config->resolv_tail, sb.st_size);
-			if (tailn == -1)
-				fatal("read(%s)", tail_path);
-			else if (tailn == 0)
-				fatalx("got no data from %s", tail_path);
-			else if (tailn != sb.st_size)
-				fatalx("short read of %s", tail_path);
-		}
-		close(tailfd);
 	}
 }

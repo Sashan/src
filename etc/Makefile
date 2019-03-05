@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.466 2019/01/08 07:14:10 florian Exp $
+#	$OpenBSD: Makefile,v 1.468 2019/02/05 16:23:58 florian Exp $
 
 .include <bsd.own.mk>
 
@@ -48,7 +48,7 @@ MUTABLE=changelist daily etc.${MACHINE}/disktab \
 EXAMPLES=acme-client.conf chio.conf dhclient.conf dhcpd.conf exports \
 	httpd.conf ifstated.conf inetd.conf man.conf mixerctl.conf \
 	mrouted.conf ntpd.conf printcap rad.conf rbootd.conf \
-	remote sensorsd.conf wsconsctl.conf
+	remote unwind.conf sensorsd.conf wsconsctl.conf
 
 # -rw-------
 EXAMPLES_600=bgpd.conf doas.conf dvmrpd.conf eigrpd.conf hostapd.conf \
@@ -64,7 +64,7 @@ RCDAEMONS=amd apmd bgpd bootparamd cron dhcpd dhcrelay dhcrelay6 dvmrpd \
 	pflogd portmap rad radiusd rarpd rbootd rebound relayd ripd route6d \
 	sasyncd sensorsd slowcgi slaacd smtpd sndiod snmpd spamd \
 	spamlogd sshd statd switchd syslogd tftpd tftpproxy unbound \
-	vmd watchdogd wsmoused xenodm ypbind ypldap ypserv
+	unwind vmd watchdogd wsmoused xenodm ypbind ypldap ypserv
 
 MISETS=	base${OSrev}.tgz comp${OSrev}.tgz man${OSrev}.tgz game${OSrev}.tgz
 

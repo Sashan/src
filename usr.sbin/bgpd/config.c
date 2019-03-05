@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.79 2018/12/27 20:23:24 remi Exp $ */
+/*	$OpenBSD: config.c,v 1.84 2019/02/27 04:31:56 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004, 2005 Henning Brauer <henning@openbsd.org>
@@ -18,11 +18,6 @@
 
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/mman.h>
-#include <sys/ioctl.h>
-
-#include <netmpls/mpls.h>
 
 #include <errno.h>
 #include <ifaddrs.h>
@@ -39,7 +34,7 @@
 u_int32_t	get_bgpid(void);
 int		host_ip(const char *, struct bgpd_addr *, u_int8_t *);
 void		free_networks(struct network_head *);
-void		free_rdomains(struct rdomain_head *);
+void		free_l3vpns(struct l3vpn_head *);
 
 struct bgpd_config *
 new_config(void)
@@ -75,7 +70,7 @@ new_config(void)
 
 	/* init the various list for later */
 	TAILQ_INIT(&conf->networks);
-	SIMPLEQ_INIT(&conf->rdomains);
+	SIMPLEQ_INIT(&conf->l3vpns);
 	SIMPLEQ_INIT(&conf->prefixsets);
 	SIMPLEQ_INIT(&conf->originsets);
 	RB_INIT(&conf->roa);
@@ -101,16 +96,16 @@ free_networks(struct network_head *networks)
 }
 
 void
-free_rdomains(struct rdomain_head *rdomains)
+free_l3vpns(struct l3vpn_head *l3vpns)
 {
-	struct rdomain		*rd;
+	struct l3vpn		*vpn;
 
-	while ((rd = SIMPLEQ_FIRST(rdomains)) != NULL) {
-		SIMPLEQ_REMOVE_HEAD(rdomains, entry);
-		filterset_free(&rd->export);
-		filterset_free(&rd->import);
-		free_networks(&rd->net_l);
-		free(rd);
+	while ((vpn = SIMPLEQ_FIRST(l3vpns)) != NULL) {
+		SIMPLEQ_REMOVE_HEAD(l3vpns, entry);
+		filterset_free(&vpn->export);
+		filterset_free(&vpn->import);
+		free_networks(&vpn->net_l);
+		free(vpn);
 	}
 }
 
@@ -145,7 +140,7 @@ free_config(struct bgpd_config *conf)
 	struct listen_addr	*la;
 	struct mrt		*m;
 
-	free_rdomains(&conf->rdomains);
+	free_l3vpns(&conf->l3vpns);
 	free_networks(&conf->networks);
 	filterlist_free(conf->filters);
 	free_prefixsets(&conf->prefixsets);
@@ -250,9 +245,9 @@ merge_config(struct bgpd_config *xconf, struct bgpd_config *conf,
 		TAILQ_INSERT_TAIL(&xconf->networks, n, entry);
 	}
 
-	/* switch the rdomain configs, first remove the old ones */
-	free_rdomains(&xconf->rdomains);
-	SIMPLEQ_CONCAT(&xconf->rdomains, &conf->rdomains);
+	/* switch the l3vpn configs, first remove the old ones */
+	free_l3vpns(&xconf->l3vpns);
+	SIMPLEQ_CONCAT(&xconf->l3vpns, &conf->l3vpns);
 
 	/*
 	 * merge new listeners:
@@ -372,7 +367,7 @@ host_ip(const char *s, struct bgpd_addr *h, u_int8_t *len)
 	hints.ai_flags = AI_NUMERICHOST;
 	if (getaddrinfo(s, NULL, &hints, &res) == 0) {
 		*len = res->ai_family == AF_INET6 ? 128 : 32;
-		sa2addr(res->ai_addr, h);
+		sa2addr(res->ai_addr, h, NULL);
 		freeaddrinfo(res);
 	} else {	/* ie. for 10/8 parsing */
 		if ((bits = inet_net_pton(AF_INET, s, &h->v4, sizeof(h->v4))) == -1)
@@ -397,7 +392,7 @@ prepare_listeners(struct bgpd_config *conf)
 		la->fd = -1;
 		la->flags = DEFAULT_LISTENER;
 		la->reconf = RECONF_REINIT;
-		la->sa.ss_len = sizeof(struct sockaddr_in);
+		la->sa_len = sizeof(struct sockaddr_in);
 		((struct sockaddr_in *)&la->sa)->sin_family = AF_INET;
 		((struct sockaddr_in *)&la->sa)->sin_addr.s_addr =
 		    htonl(INADDR_ANY);
@@ -409,7 +404,7 @@ prepare_listeners(struct bgpd_config *conf)
 		la->fd = -1;
 		la->flags = DEFAULT_LISTENER;
 		la->reconf = RECONF_REINIT;
-		la->sa.ss_len = sizeof(struct sockaddr_in6);
+		la->sa_len = sizeof(struct sockaddr_in6);
 		((struct sockaddr_in6 *)&la->sa)->sin6_family = AF_INET6;
 		((struct sockaddr_in6 *)&la->sa)->sin6_port = htons(BGP_PORT);
 		TAILQ_INSERT_TAIL(conf->listen_addrs, la, entry);
@@ -437,24 +432,25 @@ prepare_listeners(struct bgpd_config *conf)
 		    &opt, sizeof(opt)) == -1)
 			fatal("setsockopt SO_REUSEADDR");
 
-		if (bind(la->fd, (struct sockaddr *)&la->sa, la->sa.ss_len) ==
+		if (bind(la->fd, (struct sockaddr *)&la->sa, la->sa_len) ==
 		    -1) {
 			switch (la->sa.ss_family) {
 			case AF_INET:
 				log_warn("cannot bind to %s:%u",
-				    log_sockaddr((struct sockaddr *)&la->sa),
-				    ntohs(((struct sockaddr_in *)
+				    log_sockaddr((struct sockaddr *)&la->sa,
+				    la->sa_len), ntohs(((struct sockaddr_in *)
 				    &la->sa)->sin_port));
 				break;
 			case AF_INET6:
 				log_warn("cannot bind to [%s]:%u",
-				    log_sockaddr((struct sockaddr *)&la->sa),
-				    ntohs(((struct sockaddr_in6 *)
+				    log_sockaddr((struct sockaddr *)&la->sa,
+				    la->sa_len), ntohs(((struct sockaddr_in6 *)
 				    &la->sa)->sin6_port));
 				break;
 			default:
 				log_warn("cannot bind to %s",
-				    log_sockaddr((struct sockaddr *)&la->sa));
+				    log_sockaddr((struct sockaddr *)&la->sa,
+				    la->sa_len));
 				break;
 			}
 			close(la->fd);
@@ -466,31 +462,6 @@ prepare_listeners(struct bgpd_config *conf)
 	}
 
 	return (r);
-}
-
-int
-get_mpe_label(struct rdomain *r)
-{
-	struct  ifreq	ifr;
-	struct shim_hdr	shim;
-	int		s;
-
-	s = socket(AF_INET, SOCK_DGRAM, 0);
-	if (s == -1)
-		return (-1);
-
-	bzero(&shim, sizeof(shim));
-	bzero(&ifr, sizeof(ifr));
-	strlcpy(ifr.ifr_name, r->ifmpe, sizeof(ifr.ifr_name));
-	ifr.ifr_data = (caddr_t)&shim;
-
-	if (ioctl(s, SIOCGETLABEL, (caddr_t)&ifr) == -1) {
-		close(s);
-		return (-1);
-	}
-	close(s);
-	r->label = shim.shim_label;
-	return (0);
 }
 
 void
