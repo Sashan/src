@@ -272,6 +272,7 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 	TAILQ_HEAD(, proc)	wake_q;
 	struct proc *p;
 	int	s;
+	char	p_stat;
 
 	KASSERT(mcs_owner(mcs));
 	KASSERT((q == TS_READER_Q) || (q == TS_WRITER_Q));
@@ -290,6 +291,18 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 		count--;
 	}
 	mcs_lock_leave(mcs);
+
+	/*
+	 * If I understand SCHED_LOCK() right, it locks CPU, not the whole
+	 * kernel. If process, we are going to wake up, still runs on other
+	 * CPU (getting ready to take a nap), our SCHED_LOCK() here does not
+	 * count. The process `p` is operating its own SCHED_LOCK().
+	 */
+	TAILQ_FOREACH(p, &wake_q, p_runq) {
+		p_stat = *(volatile char *)&p->p_stat;
+		while (p_stat != STSLEEP)
+			p_stat = *((volatile char *)&p->p_stat);
+	}
 
 	SCHED_LOCK(s);
 	while ((p = TAILQ_FIRST(&wake_q)) != NULL) {
