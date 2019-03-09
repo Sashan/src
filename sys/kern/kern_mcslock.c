@@ -70,11 +70,11 @@ mcs_lock_enter(struct mcs_lock *mcs)
 		 * spin, waiting for other thread to finish
 		 * disable interrupts while spinning.
 		 */
-		mcs_wait = mcs->mcs_wait;
+		mcs_wait = *((volatile struct proc **)&mcs->mcs_wait);
 		while (mcs_wait != NULL) {
 			if (panicstr != NULL)
 				break;
-			mcs_wait = mcs->mcs_wait;
+			mcs_wait = *((volatile struct proc **)&mcs->mcs_wait);
 			membar_sync();
 #ifdef DIAGNOSTIC
 			i--;
@@ -109,7 +109,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	 * processes in mcs lock chain on processor, while doing busy-wait.
 	 */
 	intr_disable();
-	mcs_next = mcs->mcs_next;
+	mcs_next = *((volatile struct mcs_lock **)&mcs->mcs_next);
 	membar_exit();
 	if (mcs_next == NULL) {
 		old_mcs = atomic_cas_ptr(&mcs->mcs_global->mcs_next, mcs, NULL);
@@ -127,7 +127,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	 * become ready.
 	 */
 	while (mcs_next == NULL) {
-		mcs_next = mcs->mcs_next;
+		mcs_next = *((volatile struct mcs_lock **)&mcs->mcs_next);
 #ifdef DIAGNOSTIC
 		i--;
 		if (i == 0)
