@@ -23,6 +23,7 @@ struct mcs_lock {
 	struct proc	*mcs_wait;
 	struct mcs_lock	*mcs_next;
 	struct mcs_lock *mcs_global;
+	unsigned long	 mcs_s;
 	struct proc	*mcs_me;
 };
 
