@@ -165,7 +165,6 @@ turnstile_block(struct turnstile *ts, unsigned int q, int interruptible,
 	p->p_ts_q = q;
 	TAILQ_INSERT_HEAD(&ts->ts_sleepq[q], p, p_runq);
 	ts->ts_wcount[q]++;
-	p->p_stat = STSLEEP;
 
 	mcs_lock_leave(mcs);
 
@@ -229,6 +228,7 @@ turnstile_block(struct turnstile *ts, unsigned int q, int interruptible,
 	}
 
 	p->p_ru.ru_nvcsw++;
+	p->p_stat = STSLEEP;
 	mi_switch();
 
 	SCHED_ASSERT_LOCKED();
