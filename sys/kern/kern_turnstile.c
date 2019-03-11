@@ -300,8 +300,10 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 	 */
 	TAILQ_FOREACH(p, &wake_q, p_runq) {
 		p_stat = *(volatile char *)&p->p_stat;
-		while (p_stat != STSLEEP)
+		while (p_stat != STSLEEP) {
+			sched_pause(preempt);
 			p_stat = *((volatile char *)&p->p_stat);
+		}
 	}
 
 	SCHED_LOCK(s);
