@@ -63,19 +63,17 @@ mcs_lock_enter(struct mcs_lock *mcs)
 	
 	if (old_mcs != NULL) {
 		KASSERT(old_mcs->mcs_global == mcs->mcs_global);
-		old_mcs->mcs_next = mcs;
-		membar_sync();
+		WRITE_ONCE(old_mcs->mcs_next, mcs);
 
 		/*
 		 * spin, waiting for other thread to finish
 		 * disable interrupts while spinning.
 		 */
-		mcs_wait = *((volatile struct proc **)&mcs->mcs_wait);
+		mcs_wait = READ_ONCE(mcs->mcs_wait);
 		while (mcs_wait != NULL) {
 			if (panicstr != NULL)
 				break;
-			mcs_wait = *((volatile struct proc **)&mcs->mcs_wait);
-			membar_sync();
+			mcs_wait = READ_ONCE(mcs->mcs_wait);
 #ifdef DIAGNOSTIC
 			i--;
 			if (i == 0)
@@ -106,8 +104,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	 * no interrupts, while dealing with turnstiles. We want to keep all
 	 * processes in mcs lock chain on processor, while doing busy-wait.
 	 */
-	mcs_next = *((volatile struct mcs_lock **)&mcs->mcs_next);
-	membar_exit();
+	mcs_next = READ_ONCE(mcs->mcs_next);
 	if (mcs_next == NULL) {
 		old_mcs = atomic_cas_ptr(&mcs->mcs_global->mcs_next, mcs, NULL);
 		/*
@@ -124,7 +121,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	 * become ready.
 	 */
 	while (mcs_next == NULL) {
-		mcs_next = *((volatile struct mcs_lock **)&mcs->mcs_next);
+		mcs_next = READ_ONCE(mcs->mcs_next);
 #ifdef DIAGNOSTIC
 		i--;
 		if (i == 0)
@@ -137,8 +134,7 @@ mcs_lock_leave(struct mcs_lock *mcs)
 	 * let our waiter run.
 	 */
 	KASSERT(mcs->mcs_global == mcs_next->mcs_global);
-	mcs->mcs_next->mcs_wait = NULL;
-	membar_sync();
+	WRITE_ONCE(mcs_next->mcs_wait, NULL);
 	intr_restore(mcs->mcs_s);
 }
 
