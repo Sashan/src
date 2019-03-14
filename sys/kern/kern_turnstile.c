@@ -158,11 +158,6 @@ turnstile_block(struct turnstile *ts, unsigned int q, int interruptible,
 	if (p->p_stat != SONPROC)
 		panic("tsleep: not SONPROC");
 #endif
-	p->p_wchan = lock_addr;
-	p->p_wmesg = "TODO: get rwlock name";
-	p->p_slptime = 0;
-	p->p_priority = 0;	/* priority will come later */
-	p->p_ts_q = q;
 	TAILQ_INSERT_HEAD(&ts->ts_sleepq[q], p, p_runq);
 	ts->ts_wcount[q]++;
 
@@ -172,6 +167,12 @@ turnstile_block(struct turnstile *ts, unsigned int q, int interruptible,
 	 * mi_switch() expects we acquire scheduler lock. 
 	 */
 	SCHED_LOCK(s);
+
+	p->p_wchan = lock_addr;
+	p->p_wmesg = "TODO: get rwlock name";
+	p->p_slptime = 0;
+	p->p_priority = 0;	/* priority will come later */
+	p->p_ts_q = q;
 
 	/*
 	 * It's right time to handle signal. If caller has set RW_INTR bit,
