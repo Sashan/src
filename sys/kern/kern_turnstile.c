@@ -228,7 +228,7 @@ turnstile_block(struct turnstile *ts, unsigned int q, int interruptible,
 	}
 
 	p->p_ru.ru_nvcsw++;
-	p->p_stat = STSLEEP;
+	WRITE_ONCE(p->p_stat, STSLEEP);
 	mi_switch();
 
 	SCHED_ASSERT_LOCKED();
@@ -299,10 +299,10 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 	 * count. The process `p` is operating its own SCHED_LOCK().
 	 */
 	TAILQ_FOREACH(p, &wake_q, p_runq) {
-		p_stat = *(volatile char *)&p->p_stat;
+		p_stat = READ_ONCE(p->p_stat);
 		while (p_stat != STSLEEP) {
 			sched_pause(preempt);
-			p_stat = *((volatile char *)&p->p_stat);
+			p_stat = READ_ONCE(p->p_stat);
 		}
 	}
 
