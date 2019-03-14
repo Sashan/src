@@ -1,4 +1,4 @@
-/*	$OpenBSD: frontend.c,v 1.20 2019/01/29 15:43:33 florian Exp $	*/
+/*	$OpenBSD: frontend.c,v 1.24 2019/03/12 18:47:57 pamela Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -341,17 +341,13 @@ frontend_dispatch_main(int fd, short event, void *bula)
 			 * Setup pipe and event handler to the engine
 			 * process.
 			 */
-			if (iev_engine) {
-				log_warnx("%s: received unexpected imsg fd "
-				    "to frontend", __func__);
-				break;
-			}
-			if ((fd = imsg.fd) == -1) {
-				log_warnx("%s: expected to receive imsg fd to "
+			if (iev_engine)
+				fatalx("%s: received unexpected imsg fd to "
+				    "frontend", __func__);
+			if ((fd = imsg.fd) == -1)
+				fatalx("%s: expected to receive imsg fd to "
 				   "frontend but didn't receive any",
 				   __func__);
-				break;
-			}
 
 			iev_engine = malloc(sizeof(struct imsgev));
 			if (iev_engine == NULL)
@@ -366,6 +362,9 @@ frontend_dispatch_main(int fd, short event, void *bula)
 			event_add(&iev_engine->ev, NULL);
 			break;
 		case IMSG_RECONF_CONF:
+			if (IMSG_DATA_SIZE(imsg) != sizeof(struct rad_conf))
+				fatalx("%s: IMSG_RECONF_CONF wrong length: %lu",
+				    __func__, IMSG_DATA_SIZE(imsg));
 			if ((nconf = malloc(sizeof(struct rad_conf))) ==
 			    NULL)
 				fatal(NULL);
@@ -376,6 +375,10 @@ frontend_dispatch_main(int fd, short event, void *bula)
 			ra_options = &nconf->ra_options;
 			break;
 		case IMSG_RECONF_RA_IFACE:
+			if (IMSG_DATA_SIZE(imsg) != sizeof(struct
+			    ra_iface_conf))
+				fatalx("%s: IMSG_RECONF_RA_IFACE wrong length: "
+				    "%lu", __func__, IMSG_DATA_SIZE(imsg));
 			if ((ra_iface_conf = malloc(sizeof(struct
 			    ra_iface_conf))) == NULL)
 				fatal(NULL);
@@ -390,6 +393,11 @@ frontend_dispatch_main(int fd, short event, void *bula)
 			ra_options = &ra_iface_conf->ra_options;
 			break;
 		case IMSG_RECONF_RA_AUTOPREFIX:
+			if (IMSG_DATA_SIZE(imsg) != sizeof(struct
+			    ra_prefix_conf))
+				fatalx("%s: IMSG_RECONF_RA_AUTOPREFIX wrong "
+				    "length: %lu", __func__,
+				    IMSG_DATA_SIZE(imsg));
 			if ((ra_iface_conf->autoprefix = malloc(sizeof(struct
 			    ra_prefix_conf))) == NULL)
 				fatal(NULL);
@@ -397,6 +405,11 @@ frontend_dispatch_main(int fd, short event, void *bula)
 			    sizeof(struct ra_prefix_conf));
 			break;
 		case IMSG_RECONF_RA_PREFIX:
+			if (IMSG_DATA_SIZE(imsg) != sizeof(struct
+			    ra_prefix_conf))
+				fatalx("%s: IMSG_RECONF_RA_PREFIX wrong "
+				    "length: %lu", __func__,
+				    IMSG_DATA_SIZE(imsg));	
 			if ((ra_prefix_conf = malloc(sizeof(struct
 			    ra_prefix_conf))) == NULL)
 				fatal(NULL);
@@ -406,6 +419,10 @@ frontend_dispatch_main(int fd, short event, void *bula)
 			    ra_prefix_conf, entry);
 			break;
 		case IMSG_RECONF_RA_RDNSS:
+			if (IMSG_DATA_SIZE(imsg) != sizeof(struct
+			    ra_rdnss_conf))
+				fatalx("%s: IMSG_RECONF_RA_RDNSS wrong length: "
+				    "%lu", __func__, IMSG_DATA_SIZE(imsg));
 			if ((ra_rdnss_conf = malloc(sizeof(struct
 			    ra_rdnss_conf))) == NULL)
 				fatal(NULL);
@@ -415,6 +432,10 @@ frontend_dispatch_main(int fd, short event, void *bula)
 			    ra_rdnss_conf, entry);
 			break;
 		case IMSG_RECONF_RA_DNSSL:
+			if (IMSG_DATA_SIZE(imsg) != sizeof(struct
+			    ra_dnssl_conf))
+				fatalx("%s: IMSG_RECONF_RA_DNSSL wrong length: "
+				    "%lu", __func__, IMSG_DATA_SIZE(imsg));
 			if ((ra_dnssl_conf = malloc(sizeof(struct
 			    ra_dnssl_conf))) == NULL)
 				fatal(NULL);
@@ -506,18 +527,18 @@ frontend_dispatch_engine(int fd, short event, void *bula)
 
 		switch (imsg.hdr.type) {
 		case IMSG_SEND_RA:
-			if (imsg.hdr.len != IMSG_HEADER_SIZE + sizeof(send_ra))
-				fatal("%s: IMSG_SEND_RA wrong length: %d",
-				    __func__, imsg.hdr.len);
+			if (IMSG_DATA_SIZE(imsg) != sizeof(send_ra))
+				fatalx("%s: IMSG_SEND_RA wrong length: %lu",
+				    __func__, IMSG_DATA_SIZE(imsg));
 			memcpy(&send_ra, imsg.data, sizeof(send_ra));
 			ra_iface = find_ra_iface_by_id(send_ra.if_index);
 			if (ra_iface)
 				ra_output(ra_iface, &send_ra.to);
 			break;
 		case IMSG_REMOVE_IF:
-			if (imsg.hdr.len != IMSG_HEADER_SIZE + sizeof(if_index))
-				fatal("%s: IMSG_REMOVE_IF wrong length: %d",
-				    __func__, imsg.hdr.len);
+			if (IMSG_DATA_SIZE(imsg) != sizeof(if_index))
+				fatalx("%s: IMSG_REMOVE_IF wrong length: %lu",
+				    __func__, IMSG_DATA_SIZE(imsg));
 			memcpy(&if_index, imsg.data, sizeof(if_index));
 			ra_iface = find_ra_iface_by_id(if_index);
 			if (ra_iface) {
@@ -871,7 +892,7 @@ get_interface_prefixes(struct ra_iface *ra_iface, struct ra_prefix_conf
 		(void) strlcpy(ifr6.ifr_name, ra_iface->name,
 		    sizeof(ifr6.ifr_name));
 		memcpy(&ifr6.ifr_addr, sin6, sizeof(ifr6.ifr_addr));
-		
+
 		if (ioctl(ioctlsock, SIOCGIFNETMASK_IN6, (caddr_t)&ifr6) < 0)
 			continue; /* addr got deleted while we were looking */
 
@@ -966,7 +987,7 @@ build_packet(struct ra_iface *ra_iface)
 		    ((ra_iface_conf->ra_options.dnssl_len + 7) & ~7);
 
 	if (len > sizeof(ra_iface->data))
-		fatal("%s: packet too big", __func__); /* XXX send multiple */
+		fatalx("%s: packet too big", __func__); /* XXX send multiple */
 
 	p = buf;
 

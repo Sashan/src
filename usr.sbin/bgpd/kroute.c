@@ -1,4 +1,4 @@
-/*	$OpenBSD: kroute.c,v 1.233 2019/02/21 11:17:22 claudio Exp $ */
+/*	$OpenBSD: kroute.c,v 1.235 2019/03/07 07:42:36 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -112,6 +112,7 @@ int	krVPN6_delete(struct ktable *, struct kroute_full *, u_int8_t);
 void	kr_net_delete(struct network *);
 int	kr_net_match(struct ktable *, struct network_config *, u_int16_t);
 struct network *kr_net_find(struct ktable *, struct network *);
+void	kr_net_clear(struct ktable *);
 void	kr_redistribute(int, struct ktable *, struct kroute *);
 void	kr_redistribute6(int, struct ktable *, struct kroute6 *);
 struct kroute_full *kr_tofull(struct kroute *);
@@ -353,6 +354,7 @@ ktable_destroy(struct ktable *kt, u_int8_t fib_prio)
 	knexthop_clear(kt);
 	kroute_clear(kt);
 	kroute6_clear(kt);
+	kr_net_clear(kt);
 
 	krt[kt->rtableid] = NULL;
 	free(kt);
@@ -855,6 +857,7 @@ kr_shutdown(u_int8_t fib_prio, u_int rdomain)
 	for (i = krt_size; i > 0; i--)
 		ktable_free(i - 1, fib_prio);
 	kif_clear(rdomain);
+	free(krt);
 }
 
 void
@@ -1226,16 +1229,21 @@ kr_net_redist_add(struct ktable *kt, struct network_config *net,
 	r->dynamic = dynamic;
 
 	xr = RB_INSERT(kredist_tree, &kt->kredist, r);
-	if (xr != NULL && dynamic != xr->dynamic) {
-		if (dynamic) {
+	if (xr != NULL) {
+		if (dynamic == xr->dynamic || dynamic) {
 			/*
-			 * ignore update, a non-dynamic announcement
-			 * is already present.
+			 * ignore update, equal announcement already present,
+			 * or a non-dynamic announcement is already present
+			 * which has preference.
 			 */
 			free(r);
 			return 0;
 		}
-		/* non-dynamic announcments are preferred */
+		/*
+		 * only the case where xr->dynamic == 1 and dynamic == 0
+		 * ends up here and in this case non-dynamic announcments
+		 * are preferred. Override dynamic flag.
+		 */
 		xr->dynamic = dynamic;
 	}
 
@@ -1266,7 +1274,7 @@ kr_net_redist_del(struct ktable *kt, struct network_config *net, int dynamic)
 	free(r);
 
 	if (send_network(IMSG_NETWORK_REMOVE, net, NULL) == -1)
-		log_warnx("%s: faild to send network update", __func__);
+		log_warnx("%s: faild to send network removal", __func__);
 }
 
 int
@@ -1340,8 +1348,6 @@ kr_net_reload(u_int rtableid, u_int64_t rd, struct network_head *nh)
 		fatalx("%s: non-existent rtableid %d", __func__, rtableid);
 
 	while ((n = TAILQ_FIRST(nh)) != NULL) {
-		log_debug("%s: processing %s/%u", __func__,
-		    log_addr(&n->net.prefix), n->net.prefixlen);
 		TAILQ_REMOVE(nh, n, entry);
 		n->net.old = 0;
 		n->net.rd = rd;
@@ -1353,6 +1359,19 @@ kr_net_reload(u_int rtableid, u_int64_t rd, struct network_head *nh)
 			kr_net_delete(n);
 		} else
 			TAILQ_INSERT_TAIL(&kt->krn, n, entry);
+	}
+}
+
+void
+kr_net_clear(struct ktable *kt)
+{
+	struct network *n, *xn;
+
+	TAILQ_FOREACH_SAFE(n, &kt->krn, entry, xn) {
+		TAILQ_REMOVE(&kt->krn, n, entry);
+		if (n->net.type == NETWORK_DEFAULT)
+			kr_net_redist_del(kt, &n->net, 0);
+		kr_net_delete(n);
 	}
 }
 

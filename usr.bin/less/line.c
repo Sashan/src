@@ -16,6 +16,7 @@
  */
 
 #include <wchar.h>
+#include <wctype.h>
 
 #include "charset.h"
 #include "less.h"
@@ -112,7 +113,7 @@ expand_linebuf(void)
 /*
  * Is a character ASCII?
  */
-int
+static int
 is_ascii_char(LWCHAR ch)
 {
 	return (ch <= 0x7F);
@@ -437,43 +438,50 @@ pwidth(wchar_t ch, int a, wchar_t prev_ch)
 static int
 backc(void)
 {
-	LWCHAR prev_ch;
-	char *p = linebuf + curr;
-	LWCHAR ch = step_char(&p, -1, linebuf + lmargin);
-	int width;
+	wchar_t	 ch, prev_ch;
+	int	 i, len, width;
+
+	i = curr - 1;
+	if (utf_mode) {
+		while (i >= lmargin && IS_UTF8_TRAIL(linebuf[i]))
+			i--;
+	}
+	if (i < lmargin)
+		return (0);
+	if (utf_mode) {
+		len = mbtowc(&ch, linebuf + i, curr - i);
+		if (len == -1 || i + len < curr) {
+			(void)mbtowc(NULL, NULL, MB_CUR_MAX);
+			return (0);
+		}
+	} else
+		ch = linebuf[i];
 
 	/* This assumes that there is no '\b' in linebuf.  */
 	while (curr > lmargin && column > lmargin &&
 	    (!(attr[curr - 1] & (AT_ANSI|AT_BINARY)))) {
-		curr = p - linebuf;
-		prev_ch = step_char(&p, -1, linebuf + lmargin);
+		curr = i--;
+		if (utf_mode) {
+			while (i >= lmargin && IS_UTF8_TRAIL(linebuf[i]))
+				i--;
+		}
+		if (i < lmargin)
+			prev_ch = L'\0';
+		else if (utf_mode) {
+			len = mbtowc(&prev_ch, linebuf + i, curr - i);
+			if (len == -1 || i + len < curr) {
+				(void)mbtowc(NULL, NULL, MB_CUR_MAX);
+				prev_ch = L'\0';
+			}
+		} else
+			prev_ch = linebuf[i];
 		width = pwidth(ch, attr[curr], prev_ch);
 		column -= width;
 		if (width > 0)
 			return (1);
-		ch = prev_ch;
-	}
-
-	return (0);
-}
-
-/*
- * Are we currently within a recognized ANSI escape sequence?
- */
-static int
-in_ansi_esc_seq(void)
-{
-	int i;
-
-	/*
-	 * Search backwards for either an ESC (which means we ARE in a seq);
-	 * or an end char (which means we're NOT in a seq).
-	 */
-	for (i = curr - 1; i >= 0; i--) {
-		if (linebuf[i] == ESC)
-			return (1);
-		if (!is_ansi_middle(linebuf[i]))
+		if (prev_ch == L'\0')
 			return (0);
+		ch = prev_ch;
 	}
 	return (0);
 }
@@ -481,7 +489,7 @@ in_ansi_esc_seq(void)
 /*
  * Is a character the end of an ANSI escape sequence?
  */
-int
+static int
 is_ansi_end(LWCHAR ch)
 {
 	if (!is_ascii_char(ch))
@@ -505,13 +513,10 @@ is_ansi_middle(LWCHAR ch)
 /*
  * Append a character and attribute to the line buffer.
  */
-#define	STORE_CHAR(ch, a, rep, pos)				\
-		if (store_char((ch), (a), (rep), (pos)))	\
-			return (1)
-
 static int
 store_char(LWCHAR ch, char a, char *rep, off_t pos)
 {
+	int i;
 	int w;
 	int replen;
 	char cs;
@@ -529,22 +534,45 @@ store_char(LWCHAR ch, char a, char *rep, off_t pos)
 		}
 	}
 
-	if (ctldisp == OPT_ONPLUS && in_ansi_esc_seq()) {
-		if (!is_ansi_end(ch) && !is_ansi_middle(ch)) {
+	w = -1;
+	if (ctldisp == OPT_ONPLUS) {
+		/*
+		 * Set i to the beginning of an ANSI escape sequence
+		 * that was begun and not yet ended, or to -1 otherwise.
+		 */
+		for (i = curr - 1; i >= 0; i--) {
+			if (linebuf[i] == ESC)
+				break;
+			if (!is_ansi_middle(linebuf[i]))
+				i = 0;
+		}
+		if (i >= 0 && !is_ansi_end(ch) && !is_ansi_middle(ch)) {
 			/* Remove whole unrecognized sequence.  */
-			do {
-				curr--;
-			} while (curr > 0 && linebuf[curr] != ESC);
+			curr = i;
 			return (0);
 		}
-		a = AT_ANSI;	/* Will force re-AT_'ing around it.  */
-		w = 0;
-	} else if (ctldisp == OPT_ONPLUS && ch == ESC) {
-		a = AT_ANSI;	/* Will force re-AT_'ing around it.  */
-		w = 0;
-	} else {
-		char *p = &linebuf[curr];
-		LWCHAR prev_ch = step_char(&p, -1, linebuf);
+		if (i >= 0 || ch == ESC) {
+			a = AT_ANSI;  /* Will force re-AT_'ing around it. */
+			w = 0;
+		}
+	}
+	if (w == -1) {
+		wchar_t prev_ch;
+
+		if (utf_mode) {
+			for (i = curr - 1; i >= 0; i--)
+				if (!IS_UTF8_TRAIL(linebuf[i]))
+					break;
+			if (i >= 0) {
+				w = mbtowc(&prev_ch, linebuf + i, curr - i);
+				if (w == -1 || i + w < curr) {
+					(void)mbtowc(NULL, NULL, MB_CUR_MAX);
+					prev_ch = L' ';
+				}
+			} else
+				prev_ch = L' ';
+		} else
+			prev_ch = curr > 0 ? linebuf[curr - 1] : L' ';
 		w = pwidth(ch, a, prev_ch);
 	}
 
@@ -583,10 +611,6 @@ store_char(LWCHAR ch, char a, char *rep, off_t pos)
  * Append a tab to the line buffer.
  * Store spaces to represent the tab.
  */
-#define	STORE_TAB(a, pos)		\
-	if (store_tab((a), (pos)))	\
-		return (1)
-
 static int
 store_tab(int attr, off_t pos)
 {
@@ -608,14 +632,11 @@ store_tab(int attr, off_t pos)
 		return (1);
 
 	do {
-		STORE_CHAR(' ', attr, " ", pos);
+		if (store_char(' ', attr, " ", pos))
+			return (1);
 	} while (--to_tab > 0);
 	return (0);
 }
-
-#define	STORE_PRCHAR(c, pos)		\
-	if (store_prchar((c), (pos)))	\
-		return (1)
 
 static int
 store_prchar(char c, off_t pos)
@@ -636,7 +657,8 @@ store_prchar(char c, off_t pos)
 		return (1);
 
 	for (; *s != 0; s++) {
-		STORE_CHAR(*s, AT_BINARY, NULL, pos);
+		if (store_char(*s, AT_BINARY, NULL, pos))
+			return (1);
 	}
 	return (0);
 }
@@ -646,10 +668,10 @@ flush_mbc_buf(off_t pos)
 {
 	int i;
 
-	for (i = 0; i < mbc_buf_index; i++)
+	for (i = 0; i < mbc_buf_index; i++) {
 		if (store_prchar(mbc_buf[i], pos))
 			return (mbc_buf_index - i);
-
+	}
 	return (0);
 }
 
@@ -753,8 +775,8 @@ retry:
 static int
 do_append(LWCHAR ch, char *rep, off_t pos)
 {
+	wchar_t prev_ch;
 	int a;
-	LWCHAR prev_ch;
 
 	a = AT_NORMAL;
 
@@ -770,9 +792,11 @@ do_append(LWCHAR ch, char *rep, off_t pos)
 		if (curr <= lmargin ||
 		    column <= lmargin ||
 		    (attr[curr - 1] & (AT_ANSI|AT_BINARY))) {
-			STORE_PRCHAR('\b', pos);
+			if (store_prchar('\b', pos))
+				return (1);
 		} else if (bs_mode == BS_NORMAL) {
-			STORE_CHAR(ch, AT_NORMAL, NULL, pos);
+			if (store_char(ch, AT_NORMAL, NULL, pos))
+				return (1);
 		} else if (bs_mode == BS_SPECIAL) {
 			overstrike = backc();
 		}
@@ -790,7 +814,10 @@ do_append(LWCHAR ch, char *rep, off_t pos)
 		 */
 		overstrike = utf_mode ? -1 : 0;
 		/* To be correct, this must be a base character.  */
-		prev_ch = get_wchar(linebuf + curr);
+		if (mbtowc(&prev_ch, linebuf + curr, MB_CUR_MAX) == -1) {
+			(void)mbtowc(NULL, NULL, MB_CUR_MAX);
+			prev_ch = L'\0';
+		}
 		a = attr[curr];
 		if (ch == prev_ch) {
 			/*
@@ -812,7 +839,7 @@ do_append(LWCHAR ch, char *rep, off_t pos)
 			} else {
 				a |= AT_BOLD;
 			}
-		} else if (ch == '_') {
+		} else if (ch == '_' && prev_ch != L'\0') {
 			a |= AT_UNDERLINE;
 			ch = prev_ch;
 			rep = linebuf + curr;
@@ -821,8 +848,7 @@ do_append(LWCHAR ch, char *rep, off_t pos)
 		}
 		/* Else we replace prev_ch, but we keep its attributes.  */
 	} else if (overstrike < 0) {
-		if (is_composing_char(ch) ||
-		    is_combining_char(get_wchar(linebuf + curr), ch)) {
+		if (wcwidth(ch) == 0) {
 			/* Continuation of the same overstrike.  */
 			if (curr > 0)
 				a = attr[curr - 1] & (AT_UNDERLINE | AT_BOLD);
@@ -841,21 +867,25 @@ do_append(LWCHAR ch, char *rep, off_t pos)
 			goto do_control_char;
 		case BS_NORMAL:
 		case BS_SPECIAL:
-			STORE_TAB(a, pos);
+			if (store_tab(a, pos))
+				return (1);
 			break;
 		}
-	} else if ((!utf_mode || is_ascii_char(ch)) && control_char((char)ch)) {
+	} else if ((!utf_mode || is_ascii_char(ch)) &&
+	    !isprint((unsigned char)ch)) {
 do_control_char:
 		if (ctldisp == OPT_ON ||
 		    (ctldisp == OPT_ONPLUS && ch == ESC)) {
 			/*
 			 * Output as a normal character.
 			 */
-			STORE_CHAR(ch, AT_NORMAL, rep, pos);
+			if (store_char(ch, AT_NORMAL, rep, pos))
+				return (1);
 		} else {
-			STORE_PRCHAR((char)ch, pos);
+			if (store_prchar(ch, pos))
+				return (1);
 		}
-	} else if (utf_mode && ctldisp != OPT_ON && is_ubin_char(ch)) {
+	} else if (utf_mode && ctldisp != OPT_ON && !iswprint(ch)) {
 		char *s;
 
 		s = prutfchar(ch);
@@ -864,10 +894,13 @@ do_control_char:
 		    pwidth(' ', binattr, 0) + attr_ewidth(binattr) > sc_width)
 			return (1);
 
-		for (; *s != 0; s++)
-			STORE_CHAR(*s, AT_BINARY, NULL, pos);
+		for (; *s != 0; s++) {
+			if (store_char(*s, AT_BINARY, NULL, pos))
+				return (1);
+		}
 	} else {
-		STORE_CHAR(ch, a, rep, pos);
+		if (store_char(ch, a, rep, pos))
+			return (1);
 	}
 	return (0);
 }
