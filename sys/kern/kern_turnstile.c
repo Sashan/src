@@ -173,6 +173,7 @@ turnstile_block(struct turnstile *ts, unsigned int q, int interruptible,
 	p->p_slptime = 0;
 	p->p_priority = 0;	/* priority will come later */
 	p->p_ts_q = q;
+	WRITE_ONCE(p->p_stat, STSLEEP);
 
 	/*
 	 * It's right time to handle signal. If caller has set RW_INTR bit,
@@ -229,7 +230,6 @@ turnstile_block(struct turnstile *ts, unsigned int q, int interruptible,
 	}
 
 	p->p_ru.ru_nvcsw++;
-	WRITE_ONCE(p->p_stat, STSLEEP);
 	mi_switch();
 
 	SCHED_ASSERT_LOCKED();
@@ -293,12 +293,6 @@ turnstile_wakeup(struct turnstile *ts, unsigned int q, int count, struct mcs_loc
 	}
 	mcs_lock_leave(mcs);
 
-	/*
-	 * If I understand SCHED_LOCK() right, it locks CPU, not the whole
-	 * kernel. If process, we are going to wake up, still runs on other
-	 * CPU (getting ready to take a nap), our SCHED_LOCK() here does not
-	 * count. The process `p` is operating its own SCHED_LOCK().
-	 */
 	TAILQ_FOREACH(p, &wake_q, p_runq) {
 		p_stat = READ_ONCE(p->p_stat);
 		while (p_stat != STSLEEP) {
