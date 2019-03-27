@@ -1,4 +1,4 @@
-/* $OpenBSD: window.c,v 1.221 2019/03/14 09:53:52 nicm Exp $ */
+/* $OpenBSD: window.c,v 1.225 2019/03/18 21:55:04 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -61,6 +61,17 @@ struct window_pane_tree all_window_panes;
 static u_int	next_window_pane_id;
 static u_int	next_window_id;
 static u_int	next_active_point;
+
+/* List of window modes. */
+const struct window_mode *all_window_modes[] = {
+	&window_buffer_mode,
+	&window_client_mode,
+	&window_clock_mode,
+	&window_copy_mode,
+	&window_tree_mode,
+	&window_view_mode,
+	NULL
+};
 
 static void	window_destroy(struct window *);
 
@@ -206,7 +217,6 @@ winlink_remove(struct winlinks *wwl, struct winlink *wl)
 	}
 
 	RB_REMOVE(winlinks, wwl, wl);
-	free(wl->status_text);
 	free(wl);
 }
 
@@ -854,6 +864,8 @@ window_pane_destroy(struct window_pane *wp)
 
 	input_free(wp);
 
+	screen_free(&wp->status_screen);
+
 	screen_free(&wp->base);
 	if (wp->saved_grid != NULL)
 		grid_destroy(wp->saved_grid);
@@ -1236,16 +1248,17 @@ window_pane_set_mode(struct window_pane *wp, const struct window_mode *mode,
 		if (wme->mode == mode)
 			break;
 	}
-	if (wme != NULL)
+	if (wme != NULL) {
 		TAILQ_REMOVE(&wp->modes, wme, entry);
-	else {
+		TAILQ_INSERT_HEAD(&wp->modes, wme, entry);
+	} else {
 		wme = xcalloc(1, sizeof *wme);
 		wme->wp = wp;
 		wme->mode = mode;
 		wme->prefix = 1;
+		TAILQ_INSERT_HEAD(&wp->modes, wme, entry);
 		wme->screen = wme->mode->init(wme, fs, args);
 	}
-	TAILQ_INSERT_HEAD(&wp->modes, wme, entry);
 
 	wp->screen = wme->screen;
 	wp->flags |= (PANE_REDRAW|PANE_CHANGED);

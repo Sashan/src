@@ -1,4 +1,4 @@
-/* $OpenBSD: server-client.c,v 1.267 2019/03/12 11:16:50 nicm Exp $ */
+/* $OpenBSD: server-client.c,v 1.272 2019/03/18 20:53:33 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -204,7 +204,7 @@ server_client_create(int fd)
 	c->tty.sx = 80;
 	c->tty.sy = 24;
 
-	screen_init(&c->status.status, c->tty.sx, 1, 0);
+	status_init(c);
 
 	c->message_string = NULL;
 	TAILQ_INIT(&c->message_log);
@@ -281,13 +281,7 @@ server_client_lost(struct client *c)
 	if (c->stderr_data != c->stdout_data)
 		evbuffer_free(c->stderr_data);
 
-	if (event_initialized(&c->status.timer))
-		evtimer_del(&c->status.timer);
-	screen_free(&c->status.status);
-	if (c->status.old_status != NULL) {
-		screen_free(c->status.old_status);
-		free(c->status.old_status);
-	}
+	status_free(c);
 
 	free(c->title);
 	free((void *)c->cwd);
@@ -417,12 +411,13 @@ server_client_check_mouse(struct client *c)
 {
 	struct session		*s = c->session;
 	struct mouse_event	*m = &c->tty.mouse;
-	struct window		*w;
+	struct winlink		*wl;
 	struct window_pane	*wp;
 	u_int			 x, y, b, sx, sy, px, py;
 	int			 flag;
 	key_code		 key;
 	struct timeval		 tv;
+	struct style_range	*sr;
 	enum { NOTYPE, MOVE, DOWN, UP, DRAG, WHEEL, DOUBLE, TRIPLE } type;
 	enum { NOWHERE, PANE, STATUS, STATUS_LEFT, STATUS_RIGHT, BORDER } where;
 
@@ -509,17 +504,29 @@ have_event:
 
 	/* Is this on the status line? */
 	m->statusat = status_at_line(c);
-	if (m->statusat != -1 && y == (u_int)m->statusat) {
-		if (x < c->status.left_size)
+	if (m->statusat != -1 &&
+	    y >= (u_int)m->statusat &&
+	    y < m->statusat + status_line_size(c))
+		sr = status_get_range(c, x, y - m->statusat);
+	else
+		sr = NULL;
+	if (sr != NULL) {
+		switch (sr->type) {
+		case STYLE_RANGE_NONE:
+			break;
+		case STYLE_RANGE_LEFT:
 			where = STATUS_LEFT;
-		else if (x > c->tty.sx - c->status.right_size)
+			break;
+		case STYLE_RANGE_RIGHT:
 			where = STATUS_RIGHT;
-		else {
-			w = status_get_window_at(c, x);
-			if (w == NULL)
-				return (KEYC_UNKNOWN);
-			m->w = w->id;
-			where = STATUS;
+			break;
+		case STYLE_RANGE_WINDOW:
+			wl = winlink_find_by_index(&s->windows, sr->argument);
+			if (wl != NULL) {
+				m->w = wl->window->id;
+				where = STATUS;
+			}
+			break;
 		}
 	}
 
@@ -1537,7 +1544,7 @@ server_client_set_title(struct client *c)
 	ft = format_create(c, NULL, FORMAT_NONE, 0);
 	format_defaults(ft, c, NULL, NULL, NULL);
 
-	title = format_expand_time(ft, template, time(NULL));
+	title = format_expand_time(ft, template);
 	if (c->title == NULL || strcmp(title, c->title) != 0) {
 		free(c->title);
 		c->title = xstrdup(title);
