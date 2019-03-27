@@ -171,7 +171,7 @@ turnstile_block(struct turnstile *ts, unsigned int q, int interruptible,
 	p->p_wchan = lock_addr;
 	p->p_wmesg = "TODO: get rwlock name";
 	p->p_slptime = 0;
-	p->p_priority = 0;	/* priority will come later */
+	p->p_priority = (q == TS_READER_Q) ? PLOCK : PWAIT;
 	p->p_ts_q = q;
 	WRITE_ONCE(p->p_stat, STSLEEP);
 
@@ -184,6 +184,7 @@ turnstile_block(struct turnstile *ts, unsigned int q, int interruptible,
 		/*
 		 * Code below implements sleep_setup_signal() for turnstiles.
 		 */
+		p->p_priority |= PCATCH;
 		atomic_setbits_int(&p->p_flag, P_SINTR);
 		if (p->p_p->ps_single != NULL || (sig = CURSIG(p)) != 0) {
 			/*
