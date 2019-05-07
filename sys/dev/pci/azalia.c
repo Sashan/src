@@ -1,4 +1,4 @@
-/*	$OpenBSD: azalia.c,v 1.244 2018/04/22 10:02:13 ratchov Exp $	*/
+/*	$OpenBSD: azalia.c,v 1.248 2019/05/05 09:09:59 kettenis Exp $	*/
 /*	$NetBSD: azalia.c,v 1.20 2006/05/07 08:31:44 kent Exp $	*/
 
 /*-
@@ -515,6 +515,15 @@ azalia_pci_attach(struct device *parent, struct device *self, void *aux)
 		reg = azalia_pci_read(sc->pc, sc->tag, ICH_PCI_MMC);
 		reg &= ~(ICH_PCI_MMC_ME);
 		azalia_pci_write(sc->pc, sc->tag, ICH_PCI_MMC, reg);
+	}
+
+	/* disable MSI for AMD Summit Ridge/Raven Ridge HD Audio */
+	if (PCI_VENDOR(sc->pciid) == PCI_VENDOR_AMD) {
+		switch (PCI_PRODUCT(sc->pciid)) {
+		case PCI_PRODUCT_AMD_AMD64_17_HDA:
+		case PCI_PRODUCT_AMD_AMD64_17_1X_HDA:
+			pa->pa_flags &= ~PCI_FLAGS_MSI_ENABLED;
+		}
 	}
 
 	/* interrupt */
@@ -1398,6 +1407,9 @@ azalia_resume_codec(codec_t *this)
 	}
 	DELAY(100);
 
+	if (this->qrks & AZ_QRK_WID_DOLBY_ATMOS)
+		azalia_codec_init_dolby_atmos(this);
+
 	FOR_EACH_WIDGET(this, i) {
 		w = &this->w[i];
 		if (w->widgetcap & COP_AWCAP_POWER) {
@@ -1538,6 +1550,9 @@ azalia_codec_init(codec_t *this)
 		printf("%s: out of memory\n", XNAME(this->az));
 		return ENOMEM;
 	}
+
+	if (this->qrks & AZ_QRK_WID_DOLBY_ATMOS)
+		azalia_codec_init_dolby_atmos(this);
 
 	/* query the base parameters */
 	azalia_comresp(this, this->audiofunc, CORB_GET_PARAMETER,

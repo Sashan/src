@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.27 2019/02/23 03:37:50 jsg Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.29 2019/04/22 18:52:56 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2016 Dale Rahn <drahn@dalerahn.com>
@@ -49,7 +49,6 @@
 #define CPU_PART_CORTEX_A53	0xd03
 #define CPU_PART_CORTEX_A35	0xd04
 #define CPU_PART_CORTEX_A55	0xd05
-#define CPU_PART_NEOVERSE_E1	0xd06
 #define CPU_PART_CORTEX_A57	0xd07
 #define CPU_PART_CORTEX_A72	0xd08
 #define CPU_PART_CORTEX_A73	0xd09
@@ -58,6 +57,7 @@
 #define CPU_PART_NEOVERSE_N1	0xd0c
 #define CPU_PART_CORTEX_DEIMOS	0xd0d
 #define CPU_PART_CORTEX_A76AE	0xd0e
+#define CPU_PART_NEOVERSE_E1	0xd4a
 
 #define CPU_PART_THUNDERX_T88	0x0a1
 #define CPU_PART_THUNDERX_T81	0x0a2
@@ -710,8 +710,8 @@ cpu_opp_mountroot(struct device *self)
 		}
 
 		/* Disable if regulator isn't implemented. */
-		error = ENODEV;
-		if (curr_microvolt != 0)
+		error = ci->ci_cpu_supply ? ENODEV : 0;
+		if (ci->ci_cpu_supply && curr_microvolt != 0)
 			error = regulator_set_voltage(ci->ci_cpu_supply,
 			    curr_microvolt);
 		if (error) {
@@ -776,8 +776,8 @@ cpu_opp_dotask(void *arg)
 
 		if (error == 0 && opp_hz < curr_hz)
 			error = clock_set_frequency(ci->ci_node, NULL, opp_hz);
-		if (error == 0 && opp_microvolt != 0 &&
-		    opp_microvolt != curr_microvolt) {
+		if (error == 0 && ci->ci_cpu_supply &&
+		    opp_microvolt != 0 && opp_microvolt != curr_microvolt) {
 			error = regulator_set_voltage(ci->ci_cpu_supply,
 			    opp_microvolt);
 		}

@@ -1,4 +1,4 @@
-/* $OpenBSD: bwfm.c,v 1.58 2019/02/19 08:12:30 stsp Exp $ */
+/* $OpenBSD: bwfm.c,v 1.60 2019/04/25 01:52:13 kevlo Exp $ */
 /*
  * Copyright (c) 2010-2016 Broadcom Corporation
  * Copyright (c) 2016,2017 Patrick Wildt <patrick@blueri.se>
@@ -757,7 +757,7 @@ bwfm_media_change(struct ifnet *ifp)
 		bwfm_stop(ifp);
 		bwfm_init(ifp);
 	}
-	return 0;
+	return error;
 }
 
 /* Chip initialization (SDIO, PCIe) */
@@ -2411,7 +2411,7 @@ bwfm_scan_node(struct bwfm_softc *sc, struct bwfm_bss_info *bss, size_t len)
 	ni->ni_chan = &ic->ic_channels[chanidx];
 	/* Supply RSSI */
 	rxi.rxi_flags = 0;
-	rxi.rxi_rssi = letoh32(bss->rssi);
+	rxi.rxi_rssi = (int16_t)letoh16(bss->rssi);
 	rxi.rxi_tstamp = 0;
 	ieee80211_input(ifp, m, ni, &rxi);
 	/* Restore channel */

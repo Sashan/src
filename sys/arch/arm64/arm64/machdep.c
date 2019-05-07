@@ -1,4 +1,4 @@
-/* $OpenBSD: machdep.c,v 1.37 2019/01/31 14:35:06 patrick Exp $ */
+/* $OpenBSD: machdep.c,v 1.39 2019/04/30 20:04:31 patrick Exp $ */
 /*
  * Copyright (c) 2014 Patrick Wildt <patrick@blueri.se>
  *
@@ -231,6 +231,7 @@ fdt_find_cons(const char *name)
 
 extern void	com_fdt_init_cons(void);
 extern void	imxuart_init_cons(void);
+extern void	mvuart_init_cons(void);
 extern void	pluart_init_cons(void);
 extern void	simplefb_init_cons(bus_space_tag_t);
 
@@ -246,6 +247,7 @@ consinit(void)
 
 	com_fdt_init_cons();
 	imxuart_init_cons();
+	mvuart_init_cons();
 	pluart_init_cons();
 	simplefb_init_cons(&arm64_bs_tag);
 }
@@ -369,6 +371,9 @@ int	waittime = -1;
 __dead void
 boot(int howto)
 {
+	if ((howto & RB_RESET) != 0)
+		goto doreset;
+
 	if (cold) {
 		if ((howto & RB_USERREQ) == 0)
 			howto |= RB_HALT;
@@ -412,6 +417,7 @@ haltsys:
 		cngetc();
 	}
 
+doreset:
 	printf("rebooting...\n");
 	delay(500000);
 	if (cpuresetfn)

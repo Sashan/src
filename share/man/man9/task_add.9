@@ -1,4 +1,4 @@
-.\"	$OpenBSD: task_add.9,v 1.18 2018/12/16 03:40:12 dlg Exp $
+.\"	$OpenBSD: task_add.9,v 1.21 2019/04/28 04:20:40 dlg Exp $
 .\"
 .\" Copyright (c) 2013 David Gwynne <dlg@openbsd.org>
 .\"
@@ -14,13 +14,14 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: December 16 2018 $
+.Dd $Mdocdate: April 28 2019 $
 .Dt TASK_ADD 9
 .Os
 .Sh NAME
 .Nm taskq_create ,
 .Nm taskq_destroy ,
 .Nm taskq_barrier ,
+.Nm taskq_del_barrier ,
 .Nm task_set ,
 .Nm task_add ,
 .Nm task_del ,
@@ -40,6 +41,8 @@
 .Fn taskq_destroy "struct taskq *tq"
 .Ft void
 .Fn taskq_barrier "struct taskq *tq"
+.Ft void
+.Fn taskq_del_barrier "struct taskq *tq" "struct task *t"
 .Ft void
 .Fn task_set "struct task *t" "void (*fn)(void *)" "void *arg"
 .Ft int
@@ -81,8 +84,6 @@ argument:
 .Bl -tag -width xxx -offset indent
 .It Dv TASKQ_MPSAFE
 The threads servicing the taskq will be run without the kernel big lock.
-.It Dv TASKQ_CANTSLEEP
-The tasks run via the taskq cannot sleep.
 .El
 .Pp
 .Fn taskq_destroy
@@ -102,6 +103,13 @@ returns.
 .Fn taskq_barrier
 is only supported on taskqs serviced by 1 thread,
 and may not be called by a task running in the specified taskq.
+.Pp
+.Fn taskq_del_barrier
+either removes
+.Fa t
+from the list of pending tasks on the
+.Fa tq
+taskq, or waits until any running task has completed.
 .Pp
 It is the responsibility of the caller to provide the
 .Fn task_set ,
@@ -183,6 +191,8 @@ and
 .Fn taskq_destroy
 can be called during autoconf, or from process context.
 .Fn taskq_barrier
+and
+.Fn taskq_del_barrier
 can be called from process context.
 .Fn task_set ,
 .Fn task_add ,

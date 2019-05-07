@@ -1,4 +1,4 @@
-/* $OpenBSD: server-client.c,v 1.272 2019/03/18 20:53:33 nicm Exp $ */
+/* $OpenBSD: server-client.c,v 1.280 2019/05/07 11:24:03 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -35,7 +35,7 @@
 static void	server_client_free(int, short, void *);
 static void	server_client_check_focus(struct window_pane *);
 static void	server_client_check_resize(struct window_pane *);
-static key_code	server_client_check_mouse(struct client *);
+static key_code	server_client_check_mouse(struct client *, struct key_event *);
 static void	server_client_repeat_timer(int, short, void *);
 static void	server_client_click_timer(int, short, void *);
 static void	server_client_check_exit(struct client *);
@@ -407,10 +407,10 @@ server_client_exec(struct client *c, const char *cmd)
 
 /* Check for mouse keys. */
 static key_code
-server_client_check_mouse(struct client *c)
+server_client_check_mouse(struct client *c, struct key_event *event)
 {
+	struct mouse_event	*m = &event->m;
 	struct session		*s = c->session;
-	struct mouse_event	*m = &c->tty.mouse;
 	struct winlink		*wl;
 	struct window_pane	*wp;
 	u_int			 x, y, b, sx, sy, px, py;
@@ -419,7 +419,13 @@ server_client_check_mouse(struct client *c)
 	struct timeval		 tv;
 	struct style_range	*sr;
 	enum { NOTYPE, MOVE, DOWN, UP, DRAG, WHEEL, DOUBLE, TRIPLE } type;
-	enum { NOWHERE, PANE, STATUS, STATUS_LEFT, STATUS_RIGHT, BORDER } where;
+	enum { NOWHERE,
+	       PANE,
+	       STATUS,
+	       STATUS_LEFT,
+	       STATUS_RIGHT,
+	       STATUS_DEFAULT,
+	       BORDER } where;
 
 	type = NOTYPE;
 	where = NOWHERE;
@@ -442,9 +448,11 @@ server_client_check_mouse(struct client *c)
 		type = DRAG;
 		if (c->tty.mouse_drag_flag) {
 			x = m->x, y = m->y, b = m->b;
+			if (x == m->lx && y == m->ly)
+				return (KEYC_UNKNOWN);
 			log_debug("drag update at %u,%u", x, y);
 		} else {
-			x = m->lx - m->ox, y = m->ly - m->oy, b = m->lb;
+			x = m->lx, y = m->ly, b = m->lb;
 			log_debug("drag start at %u,%u", x, y);
 		}
 	} else if (MOUSE_WHEEL(m->b)) {
@@ -506,27 +514,29 @@ have_event:
 	m->statusat = status_at_line(c);
 	if (m->statusat != -1 &&
 	    y >= (u_int)m->statusat &&
-	    y < m->statusat + status_line_size(c))
+	    y < m->statusat + status_line_size(c)) {
 		sr = status_get_range(c, x, y - m->statusat);
-	else
-		sr = NULL;
-	if (sr != NULL) {
-		switch (sr->type) {
-		case STYLE_RANGE_NONE:
-			break;
-		case STYLE_RANGE_LEFT:
-			where = STATUS_LEFT;
-			break;
-		case STYLE_RANGE_RIGHT:
-			where = STATUS_RIGHT;
-			break;
-		case STYLE_RANGE_WINDOW:
-			wl = winlink_find_by_index(&s->windows, sr->argument);
-			if (wl != NULL) {
+		if (sr == NULL) {
+			where = STATUS_DEFAULT;
+		} else {
+			switch (sr->type) {
+			case STYLE_RANGE_NONE:
+				return (KEYC_UNKNOWN);
+			case STYLE_RANGE_LEFT:
+				where = STATUS_LEFT;
+				break;
+			case STYLE_RANGE_RIGHT:
+				where = STATUS_RIGHT;
+				break;
+			case STYLE_RANGE_WINDOW:
+				wl = winlink_find_by_index(&s->windows, sr->argument);
+				if (wl == NULL)
+					return (KEYC_UNKNOWN);
 				m->w = wl->window->id;
+
 				where = STATUS;
+				break;
 			}
-			break;
 		}
 	}
 
@@ -547,8 +557,6 @@ have_event:
 			return (KEYC_UNKNOWN);
 		px = px + m->ox;
 		py = py + m->oy;
-		m->x = x + m->ox;
-		m->y = y + m->oy;
 
 		/* Try the pane borders if not zoomed. */
 		if (~s->curw->window->flags & WINDOW_ZOOMED) {
@@ -605,6 +613,8 @@ have_event:
 				key = KEYC_MOUSEDRAGEND1_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_MOUSEDRAGEND1_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_MOUSEDRAGEND1_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_MOUSEDRAGEND1_BORDER;
 			break;
@@ -617,6 +627,8 @@ have_event:
 				key = KEYC_MOUSEDRAGEND2_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_MOUSEDRAGEND2_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_MOUSEDRAGEND2_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_MOUSEDRAGEND2_BORDER;
 			break;
@@ -629,6 +641,8 @@ have_event:
 				key = KEYC_MOUSEDRAGEND3_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_MOUSEDRAGEND3_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_MOUSEDRAGEND3_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_MOUSEDRAGEND3_BORDER;
 			break;
@@ -651,6 +665,12 @@ have_event:
 			key = KEYC_MOUSEMOVE_PANE;
 		if (where == STATUS)
 			key = KEYC_MOUSEMOVE_STATUS;
+		if (where == STATUS_LEFT)
+			key = KEYC_MOUSEMOVE_STATUS_LEFT;
+		if (where == STATUS_RIGHT)
+			key = KEYC_MOUSEMOVE_STATUS_RIGHT;
+		if (where == STATUS_DEFAULT)
+			key = KEYC_MOUSEMOVE_STATUS_DEFAULT;
 		if (where == BORDER)
 			key = KEYC_MOUSEMOVE_BORDER;
 		break;
@@ -668,6 +688,8 @@ have_event:
 					key = KEYC_MOUSEDRAG1_STATUS_LEFT;
 				if (where == STATUS_RIGHT)
 					key = KEYC_MOUSEDRAG1_STATUS_RIGHT;
+				if (where == STATUS_DEFAULT)
+					key = KEYC_MOUSEDRAG1_STATUS_DEFAULT;
 				if (where == BORDER)
 					key = KEYC_MOUSEDRAG1_BORDER;
 				break;
@@ -680,6 +702,8 @@ have_event:
 					key = KEYC_MOUSEDRAG2_STATUS_LEFT;
 				if (where == STATUS_RIGHT)
 					key = KEYC_MOUSEDRAG2_STATUS_RIGHT;
+				if (where == STATUS_DEFAULT)
+					key = KEYC_MOUSEDRAG2_STATUS_DEFAULT;
 				if (where == BORDER)
 					key = KEYC_MOUSEDRAG2_BORDER;
 				break;
@@ -692,6 +716,8 @@ have_event:
 					key = KEYC_MOUSEDRAG3_STATUS_LEFT;
 				if (where == STATUS_RIGHT)
 					key = KEYC_MOUSEDRAG3_STATUS_RIGHT;
+				if (where == STATUS_DEFAULT)
+					key = KEYC_MOUSEDRAG3_STATUS_DEFAULT;
 				if (where == BORDER)
 					key = KEYC_MOUSEDRAG3_BORDER;
 				break;
@@ -714,6 +740,8 @@ have_event:
 				key = KEYC_WHEELUP_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_WHEELUP_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_WHEELUP_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_WHEELUP_BORDER;
 		} else {
@@ -721,6 +749,12 @@ have_event:
 				key = KEYC_WHEELDOWN_PANE;
 			if (where == STATUS)
 				key = KEYC_WHEELDOWN_STATUS;
+			if (where == STATUS_LEFT)
+				key = KEYC_WHEELDOWN_STATUS_LEFT;
+			if (where == STATUS_RIGHT)
+				key = KEYC_WHEELDOWN_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_WHEELDOWN_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_WHEELDOWN_BORDER;
 		}
@@ -736,6 +770,8 @@ have_event:
 				key = KEYC_MOUSEUP1_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_MOUSEUP1_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_MOUSEUP1_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_MOUSEUP1_BORDER;
 			break;
@@ -748,6 +784,8 @@ have_event:
 				key = KEYC_MOUSEUP2_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_MOUSEUP2_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_MOUSEUP2_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_MOUSEUP2_BORDER;
 			break;
@@ -760,6 +798,8 @@ have_event:
 				key = KEYC_MOUSEUP3_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_MOUSEUP3_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_MOUSEUP3_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_MOUSEUP3_BORDER;
 			break;
@@ -776,6 +816,8 @@ have_event:
 				key = KEYC_MOUSEDOWN1_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_MOUSEDOWN1_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_MOUSEDOWN1_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_MOUSEDOWN1_BORDER;
 			break;
@@ -788,6 +830,8 @@ have_event:
 				key = KEYC_MOUSEDOWN2_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_MOUSEDOWN2_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_MOUSEDOWN2_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_MOUSEDOWN2_BORDER;
 			break;
@@ -800,6 +844,8 @@ have_event:
 				key = KEYC_MOUSEDOWN3_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_MOUSEDOWN3_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_MOUSEDOWN3_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_MOUSEDOWN3_BORDER;
 			break;
@@ -816,6 +862,8 @@ have_event:
 				key = KEYC_DOUBLECLICK1_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_DOUBLECLICK1_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_DOUBLECLICK1_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_DOUBLECLICK1_BORDER;
 			break;
@@ -828,6 +876,8 @@ have_event:
 				key = KEYC_DOUBLECLICK2_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_DOUBLECLICK2_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_DOUBLECLICK2_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_DOUBLECLICK2_BORDER;
 			break;
@@ -840,6 +890,8 @@ have_event:
 				key = KEYC_DOUBLECLICK3_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_DOUBLECLICK3_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_DOUBLECLICK3_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_DOUBLECLICK3_BORDER;
 			break;
@@ -856,6 +908,8 @@ have_event:
 				key = KEYC_TRIPLECLICK1_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_TRIPLECLICK1_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_TRIPLECLICK1_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_TRIPLECLICK1_BORDER;
 			break;
@@ -868,6 +922,8 @@ have_event:
 				key = KEYC_TRIPLECLICK2_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_TRIPLECLICK2_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_TRIPLECLICK2_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_TRIPLECLICK2_BORDER;
 			break;
@@ -880,6 +936,8 @@ have_event:
 				key = KEYC_TRIPLECLICK3_STATUS_LEFT;
 			if (where == STATUS_RIGHT)
 				key = KEYC_TRIPLECLICK3_STATUS_RIGHT;
+			if (where == STATUS_DEFAULT)
+				key = KEYC_TRIPLECLICK3_STATUS_DEFAULT;
 			if (where == BORDER)
 				key = KEYC_TRIPLECLICK3_BORDER;
 			break;
@@ -924,11 +982,17 @@ server_client_assume_paste(struct session *s)
 	return (0);
 }
 
-/* Handle data key input from client. */
-void
-server_client_handle_key(struct client *c, key_code key)
+/*
+ * Handle data key input from client. This owns and can modify the key event it
+ * is given and is responsible for freeing it.
+ */
+static enum cmd_retval
+server_client_key_callback(struct cmdq_item *item, void *data)
 {
-	struct mouse_event		*m = &c->tty.mouse;
+	struct client			*c = item->client;
+	struct key_event		*event = data;
+	key_code			 key = event->key;
+	struct mouse_event		*m = &event->m;
 	struct session			*s = c->session;
 	struct winlink			*wl;
 	struct window			*w;
@@ -943,7 +1007,7 @@ server_client_handle_key(struct client *c, key_code key)
 
 	/* Check the client is good to accept input. */
 	if (s == NULL || (c->flags & (CLIENT_DEAD|CLIENT_SUSPENDED)) != 0)
-		return;
+		goto out;
 	wl = s->curw;
 	w = wl->window;
 
@@ -955,11 +1019,11 @@ server_client_handle_key(struct client *c, key_code key)
 	/* Number keys jump to pane in identify mode. */
 	if (c->flags & CLIENT_IDENTIFY && key >= '0' && key <= '9') {
 		if (c->flags & CLIENT_READONLY)
-			return;
+			goto out;
 		window_unzoom(w);
 		wp = window_pane_at_index(w, key - '0');
 		server_client_clear_identify(c, wp);
-		return;
+		goto out;
 	}
 
 	/* Handle status line. */
@@ -969,19 +1033,19 @@ server_client_handle_key(struct client *c, key_code key)
 	}
 	if (c->prompt_string != NULL) {
 		if (c->flags & CLIENT_READONLY)
-			return;
+			goto out;
 		if (status_prompt_key(c, key) == 0)
-			return;
+			goto out;
 	}
 
 	/* Check for mouse keys. */
 	m->valid = 0;
 	if (key == KEYC_MOUSE) {
 		if (c->flags & CLIENT_READONLY)
-			return;
-		key = server_client_check_mouse(c);
+			goto out;
+		key = server_client_check_mouse(c, event);
 		if (key == KEYC_UNKNOWN)
-			return;
+			goto out;
 
 		m->valid = 1;
 		m->key = key;
@@ -992,10 +1056,9 @@ server_client_handle_key(struct client *c, key_code key)
 		 */
 		if (key == KEYC_DRAGGING) {
 			c->tty.mouse_drag_update(c, m);
-			return;
+			goto out;
 		}
-	} else
-		m->valid = 0;
+	}
 
 	/* Find affected pane. */
 	if (!KEYC_IS_MOUSE(key) || cmd_find_from_mouse(&fs, m, 0) != 0)
@@ -1034,7 +1097,7 @@ table_changed:
 	    strcmp(table->name, "prefix") != 0) {
 		server_client_set_key_table(c, "prefix");
 		server_status_client(c);
-		return;
+		goto out;
 	}
 	flags = c->flags;
 
@@ -1092,9 +1155,9 @@ try_again:
 		server_status_client(c);
 
 		/* Execute the key binding. */
-		key_bindings_dispatch(bd, NULL, c, m, &fs);
+		key_bindings_dispatch(bd, item, c, m, &fs);
 		key_bindings_unref_table(table);
-		return;
+		goto out;
 	}
 
 	/*
@@ -1129,14 +1192,56 @@ try_again:
 	if (first != table && (~flags & CLIENT_REPEAT)) {
 		server_client_set_key_table(c, NULL);
 		server_status_client(c);
-		return;
+		goto out;
 	}
 
 forward_key:
 	if (c->flags & CLIENT_READONLY)
-		return;
+		goto out;
 	if (wp != NULL)
 		window_pane_key(wp, c, s, wl, key, m);
+
+out:
+	free(event);
+	return (CMD_RETURN_NORMAL);
+}
+
+/* Handle a key event. */
+int
+server_client_handle_key(struct client *c, struct key_event *event)
+{
+	struct session		*s = c->session;
+	struct window		*w;
+	struct window_pane	*wp = NULL;
+	struct cmdq_item	*item;
+
+	/* Check the client is good to accept input. */
+	if (s == NULL || (c->flags & (CLIENT_DEAD|CLIENT_SUSPENDED)) != 0)
+		return (0);
+	w = s->curw->window;
+
+	/*
+	 * Key presses in identify mode are a special case. The queue might be
+	 * blocked so they need to be processed immediately rather than queued.
+	 */
+	if (c->flags & CLIENT_IDENTIFY) {
+		if (c->flags & CLIENT_READONLY)
+			return (0);
+		if (event->key >= '0' && event->key <= '9') {
+			window_unzoom(w);
+			wp = window_pane_at_index(w, event->key - '0');
+		}
+		server_client_clear_identify(c, wp);
+		return (0);
+	}
+
+	/*
+	 * Add the key to the queue so it happens after any commands queued by
+	 * previous keys.
+	 */
+	item = cmdq_get_callback(server_client_key_callback, event);
+	cmdq_append(c, item);
+	return (1);
 }
 
 /* Client functions that need to happen every loop. */
@@ -1317,6 +1422,7 @@ focused:
 		if (wp->base.mode & MODE_FOCUSON)
 			bufferevent_write(wp->event, "\033[I", 3);
 		notify_pane("pane-focus-in", wp);
+		session_update_activity(c->session, NULL);
 	}
 	wp->flags |= PANE_FOCUSED;
 }
@@ -1603,8 +1709,7 @@ server_client_dispatch(struct imsg *imsg, void *arg)
 			evbuffer_add(c->stdin_data, stdindata.data,
 			    stdindata.size);
 		}
-		c->stdin_callback(c, c->stdin_closed,
-		    c->stdin_callback_data);
+		c->stdin_callback(c, c->stdin_closed, c->stdin_callback_data);
 		break;
 	case MSG_RESIZE:
 		if (datalen != 0)

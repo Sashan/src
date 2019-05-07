@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.377 2019/03/07 07:42:36 claudio Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.381 2019/05/03 15:25:47 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -38,12 +38,12 @@
 #define	CONFFILE			"/etc/bgpd.conf"
 #define	BGPD_USER			"_bgpd"
 #define	PEER_DESCR_LEN			32
-#define	SHUT_COMM_LEN			129
+#define	SHUT_COMM_LEN			256	/* includes NUL terminator */
 #define	PFTABLE_LEN			32
 #define	TCP_MD5_KEY_LEN			80
 #define	IPSEC_ENC_KEY_LEN		32
 #define	IPSEC_AUTH_KEY_LEN		20
-#define	SET_NAME_LEN			64
+#define	SET_NAME_LEN			128
 
 #define	MAX_PKTSIZE			4096
 #define	MIN_HOLDTIME			3
@@ -81,13 +81,13 @@
 #define	F_BLACKHOLE		0x0100
 #define	F_LONGER		0x0200
 #define	F_MPLS			0x0400
-#define	F_CTL_DETAIL		0x1000	/* only used by bgpctl */
-#define	F_CTL_ADJ_IN		0x2000
-#define	F_CTL_ADJ_OUT		0x4000
+#define	F_CTL_DETAIL		0x1000	/* only set on requests */
+#define	F_CTL_ADJ_IN		0x2000	/* only set on requests */
+#define	F_CTL_ADJ_OUT		0x4000	/* only set on requests */
 #define	F_CTL_ACTIVE		0x8000
 #define	F_RTLABEL		0x10000
 #define	F_CTL_SSV		0x20000	/* only used by bgpctl */
-#define	F_CTL_INVALID		0x40000 /* only used by bgpctl */
+#define	F_CTL_INVALID		0x40000 /* only set on requests */
 #define	F_CTL_OVS_VALID		0x80000
 #define	F_CTL_OVS_INVALID	0x100000
 #define	F_CTL_OVS_NOTFOUND	0x200000
@@ -231,6 +231,9 @@ struct listen_addr {
 TAILQ_HEAD(listen_addrs, listen_addr);
 TAILQ_HEAD(filter_set_head, filter_set);
 
+struct peer;
+TAILQ_HEAD(peer_head, peer);
+
 struct l3vpn;
 SIMPLEQ_HEAD(l3vpn_head, l3vpn);
 
@@ -267,6 +270,7 @@ struct filter_rule;
 TAILQ_HEAD(filter_head, filter_rule);
 
 struct bgpd_config {
+	struct peer_head			 peers;
 	struct l3vpn_head			 l3vpns;
 	struct network_head			 networks;
 	struct filter_head			*filters;
@@ -376,7 +380,6 @@ struct peer_config {
 	enum export_type	 export_type;
 	enum enforce_as		 enforce_as;
 	enum enforce_as		 enforce_local_as;
-	enum reconf_action	 reconf_action;
 	u_int16_t		 max_prefix_restart;
 	u_int16_t		 holdtime;
 	u_int16_t		 min_holdtime;

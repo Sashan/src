@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.96 2019/02/03 14:03:36 patrick Exp $
+# $OpenBSD: GENERIC,v 1.101 2019/04/30 20:22:54 patrick Exp $
 #
 # GENERIC machine description file
 #
@@ -45,6 +45,7 @@ acpimcfg*	at acpi?
 acpipci*	at acpi?
 pci*		at acpipci?
 ahci*		at acpi?
+ccp*		at acpi?		# AMD Cryptographic Co-processor
 com*		at acpi?
 pluart*		at acpi?
 xhci*		at acpi?
@@ -119,8 +120,6 @@ iic*		at imxiic?
 imxesdhc*	at fdt?
 sdmmc*		at imxesdhc?
 imxsrc*		at fdt?
-imxpd*		at fdt?
-imxdwusb*	at fdt?
 imxspi*		at fdt?
 ssdfb*		at iic?
 ssdfb*		at spi?
@@ -147,9 +146,12 @@ mvgicp*		at fdt? early 1
 mvicu*		at fdt? early 1
 mvpinctrl*	at fdt? early 1
 mvgpio*		at fdt?
+mvmdio*		at fdt?
+mvneta*		at fdt?
 mvrng*		at fdt?
 mvrtc*		at fdt?
 mvtemp*		at fdt?
+mvuart*		at fdt?
 
 # Rockchip SoCs
 rkclock*	at fdt? early 1
@@ -245,6 +247,8 @@ uchcom*		at uhub?		# WinChipHead CH341/340 serial
 ucom*		at uchcom?
 uticom*		at uhub?		# TI serial
 ucom*		at uticom?
+uxrcom*		at uhub?		# Exar XR21V1410 serial
+ucom*		at uxrcom?
 uaudio*		at uhub?		# USB Audio
 audio*		at uaudio?
 umidi*		at uhub?		# USB MIDI

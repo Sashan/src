@@ -1,4 +1,4 @@
-/* $OpenBSD: cfg.c,v 1.66 2019/03/12 11:16:49 nicm Exp $ */
+/* $OpenBSD: cfg.c,v 1.69 2019/05/03 21:21:00 nicm Exp $ */
 
 /*
  * Copyright (c) 2008 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -102,7 +102,8 @@ start_cfg(void)
 		cmdq_append(c, cfg_item);
 	}
 
-	load_cfg(TMUX_CONF, NULL, NULL, 1);
+	if (cfg_file == NULL)
+		load_cfg(TMUX_CONF, NULL, NULL, 1);
 
 	if (cfg_file == NULL && (home = find_home()) != NULL) {
 		xasprintf(&cfg_file, "%s/.tmux.conf", home);
@@ -115,7 +116,8 @@ start_cfg(void)
 }
 
 static int
-cfg_check_condition(const char *path, size_t line, const char *p, int *skip)
+cfg_check_cond(const char *path, size_t line, const char *p, int *skip,
+    struct client *c, struct cmd_find_state *fs)
 {
 	struct format_tree	*ft;
 	char			*s;
@@ -130,6 +132,10 @@ cfg_check_condition(const char *path, size_t line, const char *p, int *skip)
 	}
 
 	ft = format_create(NULL, NULL, FORMAT_NONE, FORMAT_NOJOBS);
+	if (fs != NULL)
+		format_defaults(ft, c, fs->s, fs->wl, fs->wp);
+	else
+		format_defaults(ft, c, NULL, NULL, NULL);
 	s = format_expand(ft, p);
 	result = format_true(s);
 	free(s);
@@ -141,7 +147,7 @@ cfg_check_condition(const char *path, size_t line, const char *p, int *skip)
 
 static void
 cfg_handle_if(const char *path, size_t line, struct cfg_conds *conds,
-    const char *p)
+    const char *p, struct client *c, struct cmd_find_state *fs)
 {
 	struct cfg_cond	*cond;
 	struct cfg_cond	*parent = TAILQ_FIRST(conds);
@@ -153,7 +159,7 @@ cfg_handle_if(const char *path, size_t line, struct cfg_conds *conds,
 	cond = xcalloc(1, sizeof *cond);
 	cond->line = line;
 	if (parent == NULL || parent->met)
-		cond->met = cfg_check_condition(path, line, p, &cond->skip);
+		cond->met = cfg_check_cond(path, line, p, &cond->skip, c, fs);
 	else
 		cond->skip = 1;
 	cond->saw_else = 0;
@@ -162,7 +168,7 @@ cfg_handle_if(const char *path, size_t line, struct cfg_conds *conds,
 
 static void
 cfg_handle_elif(const char *path, size_t line, struct cfg_conds *conds,
-    const char *p)
+    const char *p, struct client *c, struct cmd_find_state *fs)
 {
 	struct cfg_cond	*cond = TAILQ_FIRST(conds);
 
@@ -173,7 +179,7 @@ cfg_handle_elif(const char *path, size_t line, struct cfg_conds *conds,
 	if (cond == NULL || cond->saw_else)
 		cfg_add_cause("%s:%zu: unexpected %%elif", path, line);
 	else if (!cond->skip)
-		cond->met = cfg_check_condition(path, line, p, &cond->skip);
+		cond->met = cfg_check_cond(path, line, p, &cond->skip, c, fs);
 	else
 		cond->met = 0;
 }
@@ -214,16 +220,16 @@ cfg_handle_endif(const char *path, size_t line, struct cfg_conds *conds)
 
 static void
 cfg_handle_directive(const char *p, const char *path, size_t line,
-    struct cfg_conds *conds)
+    struct cfg_conds *conds, struct client *c, struct cmd_find_state *fs)
 {
 	int	n = 0;
 
 	while (p[n] != '\0' && !isspace((u_char)p[n]))
 		n++;
 	if (strncmp(p, "%if", n) == 0)
-		cfg_handle_if(path, line, conds, p + n);
+		cfg_handle_if(path, line, conds, p + n, c, fs);
 	else if (strncmp(p, "%elif", n) == 0)
-		cfg_handle_elif(path, line, conds, p + n);
+		cfg_handle_elif(path, line, conds, p + n, c, fs);
 	else if (strcmp(p, "%else") == 0)
 		cfg_handle_else(path, line, conds);
 	else if (strcmp(p, "%endif") == 0)
@@ -244,6 +250,13 @@ load_cfg(const char *path, struct client *c, struct cmdq_item *item, int quiet)
 	struct cmdq_item	*new_item;
 	struct cfg_cond		*cond, *cond1;
 	struct cfg_conds	 conds;
+	struct cmd_find_state	*fs = NULL;
+	struct client		*fc = NULL;
+
+	if (item != NULL) {
+		fs = &item->target;
+		fc = cmd_find_client(item, NULL, 1);
+	}
 
 	TAILQ_INIT(&conds);
 
@@ -270,7 +283,7 @@ load_cfg(const char *path, struct client *c, struct cmdq_item *item, int quiet)
 			*q-- = '\0';
 
 		if (*p == '%') {
-			cfg_handle_directive(p, path, line, &conds);
+			cfg_handle_directive(p, path, line, &conds, fc, fs);
 			continue;
 		}
 		cond = TAILQ_FIRST(&conds);
@@ -289,9 +302,10 @@ load_cfg(const char *path, struct client *c, struct cmdq_item *item, int quiet)
 		free(buf);
 
 		new_item = cmdq_get_command(cmdlist, NULL, NULL, 0);
-		if (item != NULL)
+		if (item != NULL) {
 			cmdq_insert_after(item, new_item);
-		else
+			item = new_item;
+		} else
 			cmdq_append(c, new_item);
 		cmd_list_free(cmdlist);
 

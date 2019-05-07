@@ -1,4 +1,4 @@
-#	$OpenBSD: GENERIC,v 1.839 2019/01/18 01:34:50 pd Exp $
+#	$OpenBSD: GENERIC,v 1.841 2019/05/04 11:34:47 kettenis Exp $
 #
 # For further information on compiling OpenBSD kernels, see the config(8)
 # man page.
@@ -318,7 +318,7 @@ urtw*	at uhub?		# Realtek 8187
 rsu*	at uhub?		# Realtek RTL8188SU/RTL8191SU/RTL8192SU
 urtwn*	at uhub?		# Realtek RTL8188CU/RTL8192CU
 udcf*	at uhub?		# Gude Expert mouseCLOCK
-umbg*	at uhub?		# Meinberg Funkuhren USB5131
+umbg*	at uhub?		# Meinberg Funkuhren USB5131/DCF600USB
 umb*	at uhub?		# Mobile Broadband Interface Model
 uthum*	at uhidev?		# TEMPerHUM sensor
 ugold*	at uhidev?		# gold TEMPer sensor
@@ -384,14 +384,14 @@ agp*		at viaagp?	# AGP bridges
 inteldrm*	at pci?		# Intel i915, i945 DRM driver
 intagp*		at inteldrm?
 agp*		at intagp?
-drm0		at inteldrm? console 1
+drm0		at inteldrm? primary 1
 drm*		at inteldrm?
-wsdisplay0	at inteldrm? console 1
+wsdisplay0	at inteldrm? primary 1
 wsdisplay*	at inteldrm? mux -1
 radeondrm*	at pci? 	# ATI Radeon DRM driver
-drm0		at radeondrm? console 1
+drm0		at radeondrm? primary 1
 drm*		at radeondrm?
-wsdisplay0	at radeondrm? console 1
+wsdisplay0	at radeondrm? primary 1
 wsdisplay*	at radeondrm? mux -1
 
 pcppi0		at isa?

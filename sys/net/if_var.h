@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_var.h,v 1.94 2019/01/09 01:14:21 dlg Exp $	*/
+/*	$OpenBSD: if_var.h,v 1.99 2019/04/28 22:15:57 mpi Exp $	*/
 /*	$NetBSD: if.h,v 1.23 1996/05/07 02:40:27 thorpej Exp $	*/
 
 /*
@@ -106,6 +106,9 @@ struct if_clone {
  *	c	only used in ioctl or routing socket contexts (kernel lock)
  *	k	kernel lock
  *	N	net lock
+ *
+ *  For SRP related structures that allow lock-free reads, the write lock
+ *  is indicated below.
  */
 /*
  * Structure defining a queue for a network interface.
@@ -115,7 +118,7 @@ struct if_clone {
 TAILQ_HEAD(ifnet_head, ifnet);		/* the actual queue head */
 
 struct ifnet {				/* and the entries */
-	void	*if_softc;		/* lower-level data for this if */
+	void	*if_softc;		/* [I] lower-level data for this if */
 	struct	refcnt if_refcnt;
 	TAILQ_ENTRY(ifnet) if_list;	/* [k] all struct ifnets are chained */
 	TAILQ_HEAD(, ifaddr) if_addrlist; /* [N] list of addresses per if */
@@ -128,8 +131,8 @@ struct ifnet {				/* and the entries */
 	void	(*if_rtrequest)(struct ifnet *, int, struct rtentry *);
 	char	if_xname[IFNAMSIZ];	/* [I] external name (name + unit) */
 	int	if_pcount;		/* [k] # of promiscuous listeners */
+	unsigned int if_bridgeidx;	/* [k] used by bridge ports */
 	caddr_t	if_bpf;			/* packet filter structure */
-	caddr_t if_bridgeport;		/* used by bridge ports */
 	caddr_t if_switchport;		/* used by switch ports */
 	caddr_t if_mcast;		/* used by multicast code */
 	caddr_t if_mcast6;		/* used by IPv6 multicast code */
@@ -156,7 +159,7 @@ struct ifnet {				/* and the entries */
 	struct	task if_linkstatetask;	/* [I] task to do route updates */
 
 	/* procedure handles */
-	SRPL_HEAD(, ifih) if_inputs;	/* input routines (dequeue) */
+	SRPL_HEAD(, ifih) if_inputs;	/* [k] input routines (dequeue) */
 	int	(*if_output)(struct ifnet *, struct mbuf *, struct sockaddr *,
 		     struct rtentry *);	/* output routine (enqueue) */
 					/* link level output function */
@@ -173,6 +176,7 @@ struct ifnet {				/* and the entries */
 	struct	ifqueue **if_ifqs;	/* [I] pointer to an array of sndqs */
 	void	(*if_qstart)(struct ifqueue *);
 	unsigned int if_nifqs;		/* [I] number of output queues */
+	unsigned int if_txmit;		/* [c] txmitigation amount */
 
 	struct	ifiqueue if_rcv;	/* rx/input queue */
 	struct	ifiqueue **if_iqs;	/* [I] pointer to the array of iqs */
@@ -300,6 +304,9 @@ do {									\
 #define	IFQ_IS_EMPTY(ifq)		ifq_empty(ifq)
 #define	IFQ_SET_MAXLEN(ifq, len)	ifq_set_maxlen(ifq, len)
 
+#define IF_TXMIT_MIN			1
+#define IF_TXMIT_DEFAULT		16
+
 /* default interface priorities */
 #define IF_WIRED_DEFAULT_PRIORITY	0
 #define IF_WIRELESS_DEFAULT_PRIORITY	4
@@ -334,6 +341,7 @@ void	if_start(struct ifnet *);
 int	if_enqueue(struct ifnet *, struct mbuf *);
 int	if_enqueue_ifq(struct ifnet *, struct mbuf *);
 void	if_input(struct ifnet *, struct mbuf_list *);
+void	if_vinput(struct ifnet *, struct mbuf *);
 void	if_input_process(struct ifnet *, struct mbuf_list *);
 int	if_input_local(struct ifnet *, struct mbuf *, sa_family_t);
 int	if_output_local(struct ifnet *, struct mbuf *, sa_family_t);
@@ -379,6 +387,11 @@ int	if_rxr_ioctl(struct if_rxrinfo *, const char *, u_int,
 
 void	if_counters_alloc(struct ifnet *);
 void	if_counters_free(struct ifnet *);
+
+int	if_txhprio_l2_check(int);
+int	if_txhprio_l3_check(int);
+int	if_rxhprio_l2_check(int);
+int	if_rxhprio_l3_check(int);
 
 #endif /* _KERNEL */
 

@@ -1156,6 +1156,7 @@
 ./usr/share/man/man4/acpihve.4
 ./usr/share/man/man4/acpimadt.4
 ./usr/share/man/man4/acpimcfg.4
+./usr/share/man/man4/acpipci.4
 ./usr/share/man/man4/acpiprt.4
 ./usr/share/man/man4/acpipwrres.4
 ./usr/share/man/man4/acpisbs.4
@@ -1238,7 +1239,6 @@
 ./usr/share/man/man4/arc.4
 ./usr/share/man/man4/arcofi.4
 ./usr/share/man/man4/arm64
-./usr/share/man/man4/arm64/acpipci.4
 ./usr/share/man/man4/arm64/agtimer.4
 ./usr/share/man/man4/arm64/ampintc.4
 ./usr/share/man/man4/arm64/apm.4
@@ -1471,7 +1471,6 @@
 ./usr/share/man/man4/i386/skgpio.4
 ./usr/share/man/man4/i386/tcpcib.4
 ./usr/share/man/man4/i386/uha.4
-./usr/share/man/man4/i386/vmm.4
 ./usr/share/man/man4/i386/wds.4
 ./usr/share/man/man4/i386/wdt.4
 ./usr/share/man/man4/iatp.4
@@ -1599,7 +1598,6 @@
 ./usr/share/man/man4/macppc/mpcpcibr.4
 ./usr/share/man/man4/macppc/onyx.4
 ./usr/share/man/man4/macppc/openpic.4
-./usr/share/man/man4/macppc/openprom.4
 ./usr/share/man/man4/macppc/pgs.4
 ./usr/share/man/man4/macppc/piic.4
 ./usr/share/man/man4/macppc/smu.4
@@ -1615,6 +1613,7 @@
 ./usr/share/man/man4/maxrtc.4
 ./usr/share/man/man4/maxtmp.4
 ./usr/share/man/man4/mbg.4
+./usr/share/man/man4/mcx.4
 ./usr/share/man/man4/mfi.4
 ./usr/share/man/man4/mfii.4
 ./usr/share/man/man4/midi.4
@@ -1638,6 +1637,7 @@
 ./usr/share/man/man4/mue.4
 ./usr/share/man/man4/multicast.4
 ./usr/share/man/man4/mvclock.4
+./usr/share/man/man4/mvgicp.4
 ./usr/share/man/man4/mvgpio.4
 ./usr/share/man/man4/mvicu.4
 ./usr/share/man/man4/mvneta.4
@@ -1664,11 +1664,13 @@
 ./usr/share/man/man4/oce.4
 ./usr/share/man/man4/octeon/amdcf.4
 ./usr/share/man/man4/octeon/cnmac.4
+./usr/share/man/man4/octeon/octcf.4
 ./usr/share/man/man4/octeon/octcib.4
 ./usr/share/man/man4/octeon/octcit.4
 ./usr/share/man/man4/octeon/octciu.4
 ./usr/share/man/man4/octeon/octcrypto.4
 ./usr/share/man/man4/octeon/octgpio.4
+./usr/share/man/man4/octeon/octiic.4
 ./usr/share/man/man4/octeon/octmmc.4
 ./usr/share/man/man4/octeon/octrng.4
 ./usr/share/man/man4/octeon/octrtc.4
@@ -1678,6 +1680,7 @@
 ./usr/share/man/man4/ohci.4
 ./usr/share/man/man4/onewire.4
 ./usr/share/man/man4/oosiop.4
+./usr/share/man/man4/openprom.4
 ./usr/share/man/man4/options.4
 ./usr/share/man/man4/osiop.4
 ./usr/share/man/man4/otus.4
@@ -1857,7 +1860,6 @@
 ./usr/share/man/man4/sparc64/magma.4
 ./usr/share/man/man4/sparc64/mem.4
 ./usr/share/man/man4/sparc64/mgx.4
-./usr/share/man/man4/sparc64/openprom.4
 ./usr/share/man/man4/sparc64/pcons.4
 ./usr/share/man/man4/sparc64/pmc.4
 ./usr/share/man/man4/sparc64/power.4
@@ -2008,6 +2010,7 @@
 ./usr/share/man/man4/uvisor.4
 ./usr/share/man/man4/uvscom.4
 ./usr/share/man/man4/uwacom.4
+./usr/share/man/man4/uxrcom.4
 ./usr/share/man/man4/vether.4
 ./usr/share/man/man4/vga.4
 ./usr/share/man/man4/vgafb.4
@@ -2147,6 +2150,7 @@
 ./usr/share/man/man5/rad.conf.5
 ./usr/share/man/man5/radiusd.conf.5
 ./usr/share/man/man5/ranlib.5
+./usr/share/man/man5/rcsfile.5
 ./usr/share/man/man5/relayd.conf.5
 ./usr/share/man/man5/remote.5
 ./usr/share/man/man5/resolv.conf.5
@@ -2453,6 +2457,7 @@
 ./usr/share/man/man8/rc.subr.8
 ./usr/share/man/man8/rcctl.8
 ./usr/share/man/man8/rdate.8
+./usr/share/man/man8/rdsetroot.8
 ./usr/share/man/man8/reboot.8
 ./usr/share/man/man8/rebound.8
 ./usr/share/man/man8/relayctl.8
@@ -2527,6 +2532,7 @@
 ./usr/share/man/man8/syslogd.8
 ./usr/share/man/man8/sysmerge.8
 ./usr/share/man/man8/syspatch.8
+./usr/share/man/man8/sysupgrade.8
 ./usr/share/man/man8/talkd.8
 ./usr/share/man/man8/tcpdrop.8
 ./usr/share/man/man8/tcpdump.8
@@ -2550,6 +2556,7 @@
 ./usr/share/man/man8/vmctl.8
 ./usr/share/man/man8/vmd.8
 ./usr/share/man/man8/vmstat.8
+./usr/share/man/man8/vnconfig.8
 ./usr/share/man/man8/watchdogd.8
 ./usr/share/man/man8/wsconscfg.8
 ./usr/share/man/man8/wsconsctl.8

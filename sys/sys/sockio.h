@@ -1,4 +1,4 @@
-/*	$OpenBSD: sockio.h,v 1.80 2019/02/26 03:19:11 dlg Exp $	*/
+/*	$OpenBSD: sockio.h,v 1.82 2019/04/19 04:21:33 dlg Exp $	*/
 /*	$NetBSD: sockio.h,v 1.5 1995/08/23 00:40:47 thorpej Exp $	*/
 
 /*-
@@ -68,6 +68,7 @@
 /* 53 and 54 used to be SIOC[SG]IFMEDIA with a 32 bit media word */
 #define	SIOCSIFMEDIA	_IOWR('i', 55, struct ifreq)	/* set net media */
 #define	SIOCGIFMEDIA	_IOWR('i', 56, struct ifmediareq) /* get net media */
+#define	SIOCGIFSFFPAGE	_IOWR('i', 57, struct if_sffpage) /* get SFF page */
 
 #define	SIOCDIFPHYADDR	 _IOW('i', 73, struct ifreq)	/* delete gif addrs */
 #define	SIOCSLIFPHYADDR	 _IOW('i', 74, struct if_laddrreq) /* set gif addrs */
@@ -205,6 +206,9 @@
 
 #define	SIOCSLIFPHYECN	_IOW('i', 199, struct ifreq)	/* set ecn copying */
 #define	SIOCGLIFPHYECN	_IOWR('i', 200, struct ifreq)	/* get ecn copying */
+
+#define	SIOCSRXHPRIO	_IOW('i', 219, struct ifreq)	/* set rx hdr prio */
+#define	SIOCGRXHPRIO	_IOWR('i', 219, struct ifreq)	/* get rx hdr prio */
 
 #define SIOCSPWE3CTRLWORD	_IOW('i', 220, struct ifreq)
 #define SIOCGPWE3CTRLWORD	_IOWR('i',  220, struct ifreq)

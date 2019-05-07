@@ -1,4 +1,4 @@
-/*	$OpenBSD: ifq.h,v 1.23 2019/03/01 04:47:33 dlg Exp $ */
+/*	$OpenBSD: ifq.h,v 1.26 2019/04/16 04:04:19 dlg Exp $ */
 
 /*
  * Copyright (c) 2015 David Gwynne <dlg@openbsd.org>
@@ -25,6 +25,7 @@ struct ifq_ops;
 
 struct ifqueue {
 	struct ifnet		*ifq_if;
+	struct taskq		*ifq_softnet;
 	union {
 		void			*_ifq_softc;
 		/*
@@ -57,6 +58,7 @@ struct ifqueue {
 	struct mutex		 ifq_task_mtx;
 	struct task_list	 ifq_task_list;
 	void			*ifq_serializer;
+	struct task		 ifq_bundle;
 
 	/* work to be serialised */
 	struct task		 ifq_start;
@@ -212,8 +214,7 @@ struct ifiqueue {
  * == Network Driver API
  *
  * The API used by network drivers is mostly documented in the
- * ifq_dequeue(9) manpage except for ifq_serialize(),
- * ifq_is_serialized(), and IFQ_ASSERT_SERIALIZED().
+ * ifq_dequeue(9) manpage except for ifq_serialize().
  *
  * === ifq_serialize()
  *
@@ -227,16 +228,6 @@ struct ifiqueue {
  * Because the work may be run on another CPU, the lifetime of the
  * task and the work it represents can extend beyond the end of the
  * call to ifq_serialize() that dispatched it.
- *
- * === ifq_is_serialized()
- *
- * This function returns whether the caller is currently within the
- * ifqueue serializer context.
- *
- * === IFQ_ASSERT_SERIALIZED()
- *
- * This macro will assert that the caller is currently within the
- * specified ifqueue serialiser context.
  *
  *
  * = ifqueue work serialisation
@@ -408,6 +399,7 @@ void		 ifq_attach(struct ifqueue *, const struct ifq_ops *, void *);
 void		 ifq_destroy(struct ifqueue *);
 void		 ifq_add_data(struct ifqueue *, struct if_data *);
 int		 ifq_enqueue(struct ifqueue *, struct mbuf *);
+void		 ifq_start(struct ifqueue *);
 struct mbuf	*ifq_deq_begin(struct ifqueue *);
 void		 ifq_deq_commit(struct ifqueue *, struct mbuf *);
 void		 ifq_deq_rollback(struct ifqueue *, struct mbuf *);
@@ -419,7 +411,6 @@ unsigned int	 ifq_purge(struct ifqueue *);
 void		*ifq_q_enter(struct ifqueue *, const struct ifq_ops *);
 void		 ifq_q_leave(struct ifqueue *, void *);
 void		 ifq_serialize(struct ifqueue *, struct task *);
-int		 ifq_is_serialized(struct ifqueue *);
 void		 ifq_barrier(struct ifqueue *);
 
 #define	ifq_len(_ifq)			((_ifq)->ifq_len)
@@ -451,12 +442,6 @@ ifq_is_oactive(struct ifqueue *ifq)
 }
 
 static inline void
-ifq_start(struct ifqueue *ifq)
-{
-	ifq_serialize(ifq, &ifq->ifq_start);
-}
-
-static inline void
 ifq_restart(struct ifqueue *ifq)
 {
 	ifq_serialize(ifq, &ifq->ifq_restart);
@@ -468,8 +453,6 @@ ifq_idx(struct ifqueue *ifq, unsigned int nifqs, const struct mbuf *m)
 	return ((*ifq->ifq_ops->ifqop_idx)(nifqs, m));
 }
 
-#define IFQ_ASSERT_SERIALIZED(_ifq)	KASSERT(ifq_is_serialized(_ifq))
-
 /* ifiq */
 
 void		 ifiq_init(struct ifiqueue *, struct ifnet *, unsigned int);
@@ -477,7 +460,6 @@ void		 ifiq_destroy(struct ifiqueue *);
 int		 ifiq_input(struct ifiqueue *, struct mbuf_list *);
 int		 ifiq_enqueue(struct ifiqueue *, struct mbuf *);
 void		 ifiq_add_data(struct ifiqueue *, struct if_data *);
-void		 ifiq_barrier(struct ifiqueue *);
 
 #define	ifiq_len(_ifiq)			ml_len(&(_ifiq)->ifiq_ml)
 #define	ifiq_empty(_ifiq)		ml_empty(&(_ifiq)->ifiq_ml)

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.c,v 1.573 2019/03/01 04:47:32 dlg Exp $	*/
+/*	$OpenBSD: if.c,v 1.581 2019/04/28 22:15:57 mpi Exp $	*/
 /*	$NetBSD: if.c,v 1.35 1996/05/07 05:26:04 thorpej Exp $	*/
 
 /*
@@ -144,6 +144,8 @@ int	if_detached_ioctl(struct ifnet *, u_long, caddr_t);
 
 int	ifioctl_get(u_long, caddr_t);
 int	ifconf(caddr_t);
+static int
+	if_sffpage_check(const caddr_t);
 
 int	if_getgroup(caddr_t, struct ifnet *);
 int	if_getgroupmembers(caddr_t);
@@ -613,6 +615,8 @@ if_attach_common(struct ifnet *ifp)
 	ifp->if_snd.ifq_ifqs[0] = &ifp->if_snd;
 	ifp->if_ifqs = ifp->if_snd.ifq_ifqs;
 	ifp->if_nifqs = 1;
+	if (ifp->if_txmit == 0)
+		ifp->if_txmit = IF_TXMIT_DEFAULT;
 
 	ifiq_init(&ifp->if_rcv, ifp, 0);
 
@@ -691,12 +695,10 @@ if_enqueue(struct ifnet *ifp, struct mbuf *m)
 #endif
 
 #if NBRIDGE > 0
-	if (ifp->if_bridgeport && (m->m_flags & M_PROTO1) == 0) {
+	if (ifp->if_bridgeidx && (m->m_flags & M_PROTO1) == 0) {
 		int error;
 
-		KERNEL_LOCK();
-		error = bridge_output(ifp, m, NULL, NULL);
-		KERNEL_UNLOCK();
+		error = bridge_enqueue(ifp, m);
 		return (error);
 	}
 #endif
@@ -894,13 +896,30 @@ if_ih_remove(struct ifnet *ifp, int (*input)(struct ifnet *, struct mbuf *,
 	}
 }
 
+static void
+if_ih_input(struct ifnet *ifp, struct mbuf *m)
+{
+	struct ifih *ifih;
+	struct srp_ref sr;
+
+	/*
+	 * Pass this mbuf to all input handlers of its
+	 * interface until it is consumed.
+	 */
+	SRPL_FOREACH(ifih, &sr, &ifp->if_inputs, ifih_next) {
+		if ((*ifih->ifih_input)(ifp, m, ifih->ifih_cookie))
+			break;
+	}
+	SRPL_LEAVE(&sr);
+
+	if (ifih == NULL)
+		m_freem(m);
+}
+
 void
 if_input_process(struct ifnet *ifp, struct mbuf_list *ml)
 {
 	struct mbuf *m;
-	struct ifih *ifih;
-	struct srp_ref sr;
-	int s;
 
 	if (ml_empty(ml))
 		return;
@@ -921,23 +940,35 @@ if_input_process(struct ifnet *ifp, struct mbuf_list *ml)
 	 * lists.
 	 */
 	NET_RLOCK();
-	s = splnet();
-	while ((m = ml_dequeue(ml)) != NULL) {
-		/*
-		 * Pass this mbuf to all input handlers of its
-		 * interface until it is consumed.
-		 */
-		SRPL_FOREACH(ifih, &sr, &ifp->if_inputs, ifih_next) {
-			if ((*ifih->ifih_input)(ifp, m, ifih->ifih_cookie))
-				break;
-		}
-		SRPL_LEAVE(&sr);
-
-		if (ifih == NULL)
-			m_freem(m);
-	}
-	splx(s);
+	while ((m = ml_dequeue(ml)) != NULL)
+		if_ih_input(ifp, m);
 	NET_RUNLOCK();
+}
+
+void
+if_vinput(struct ifnet *ifp, struct mbuf *m)
+{
+#if NBPFILTER > 0
+	caddr_t if_bpf;
+#endif
+
+	m->m_pkthdr.ph_ifidx = ifp->if_index;
+	m->m_pkthdr.ph_rtableid = ifp->if_rdomain;
+
+	counters_pkt(ifp->if_counters,
+	    ifc_ipackets, ifc_ibytes, m->m_pkthdr.len);
+
+#if NBPFILTER > 0
+	if_bpf = ifp->if_bpf;
+	if (if_bpf) {
+		if (bpf_mtap_ether(if_bpf, m, BPF_DIRECTION_OUT)) {
+			m_freem(m);
+			return;
+		}
+	}
+#endif
+
+	if_ih_input(ifp, m);
 }
 
 void
@@ -1161,7 +1192,7 @@ if_isconnected(const struct ifnet *ifp0, unsigned int ifidx)
 		connected = 1;
 
 #if NBRIDGE > 0
-	if (SAME_BRIDGE(ifp0->if_bridgeport, ifp->if_bridgeport))
+	if (ifp0->if_bridgeidx == ifp->if_bridgeidx)
 		connected = 1;
 #endif
 #if NCARP > 0
@@ -2143,6 +2174,19 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		NET_UNLOCK();
 		break;
 
+	case SIOCGIFSFFPAGE:
+		error = suser(p);
+		if (error != 0)
+			break;
+
+		error = if_sffpage_check(data);
+		if (error != 0)
+			break;
+
+		/* don't take NET_LOCK because i2c reads take a long time */
+		error = ((*ifp->if_ioctl)(ifp, cmd, data));
+		break;
+
 	case SIOCSETKALIVE:
 	case SIOCDIFPHYADDR:
 	case SIOCSLIFPHYADDR:
@@ -2156,6 +2200,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCSVNETID:
 	case SIOCSVNETFLOWID:
 	case SIOCSTXHPRIO:
+	case SIOCSRXHPRIO:
 	case SIOCSIFPAIR:
 	case SIOCSIFPARENT:
 	case SIOCDIFPARENT:
@@ -2302,6 +2347,86 @@ ifioctl_get(u_long cmd, caddr_t data)
 	NET_RUNLOCK();
 
 	return (error);
+}
+
+static int
+if_sffpage_check(const caddr_t data)
+{
+	const struct if_sffpage *sff = (const struct if_sffpage *)data;
+
+	switch (sff->sff_addr) {
+	case IFSFF_ADDR_EEPROM:
+	case IFSFF_ADDR_DDM:
+		break;
+	default:
+		return (EINVAL);
+	}
+
+	return (0);
+}
+
+int
+if_txhprio_l2_check(int hdrprio)
+{
+	switch (hdrprio) {
+	case IF_HDRPRIO_PACKET:
+		return (0);
+	default:
+		if (hdrprio >= IF_HDRPRIO_MIN && hdrprio <= IF_HDRPRIO_MAX)
+			return (0);
+		break;
+	}
+
+	return (EINVAL);
+}
+
+int
+if_txhprio_l3_check(int hdrprio)
+{
+	switch (hdrprio) {
+	case IF_HDRPRIO_PACKET:
+	case IF_HDRPRIO_PAYLOAD:
+		return (0);
+	default:
+		if (hdrprio >= IF_HDRPRIO_MIN && hdrprio <= IF_HDRPRIO_MAX)
+			return (0);
+		break;
+	}
+
+	return (EINVAL);
+}
+
+int
+if_rxhprio_l2_check(int hdrprio)
+{
+	switch (hdrprio) {
+	case IF_HDRPRIO_PACKET:
+	case IF_HDRPRIO_OUTER:
+		return (0);
+	default:
+		if (hdrprio >= IF_HDRPRIO_MIN && hdrprio <= IF_HDRPRIO_MAX)
+			return (0);
+		break;
+	}
+
+	return (EINVAL);
+}
+
+int
+if_rxhprio_l3_check(int hdrprio)
+{
+	switch (hdrprio) {
+	case IF_HDRPRIO_PACKET:
+	case IF_HDRPRIO_PAYLOAD:
+	case IF_HDRPRIO_OUTER:
+		return (0);
+	default:
+		if (hdrprio >= IF_HDRPRIO_MIN && hdrprio <= IF_HDRPRIO_MAX)
+			return (0);
+		break;
+	}
+
+	return (EINVAL);
 }
 
 /*

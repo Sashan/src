@@ -1,4 +1,4 @@
-/* $OpenBSD: server-fn.c,v 1.119 2019/03/12 20:02:47 nicm Exp $ */
+/* $OpenBSD: server-fn.c,v 1.121 2019/05/03 20:44:24 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -368,7 +368,7 @@ server_destroy_session_group(struct session *s)
 	else {
 		TAILQ_FOREACH_SAFE(s, &sg->sessions, gentry, s1) {
 			server_destroy_session(s);
-			session_destroy(s, __func__);
+			session_destroy(s, 1, __func__);
 		}
 	}
 }
@@ -435,11 +435,10 @@ server_check_unattached(void)
 		if (s->attached != 0)
 			continue;
 		if (options_get_number (s->options, "destroy-unattached"))
-			session_destroy(s, __func__);
+			session_destroy(s, 1, __func__);
 	}
 }
 
-/* Set stdin callback. */
 int
 server_set_stdin_callback(struct client *c, void (*cb)(struct client *, int,
     void *), void *cb_data, char **cause)
@@ -453,7 +452,7 @@ server_set_stdin_callback(struct client *c, void (*cb)(struct client *, int,
 		return (-1);
 	}
 	if (c->stdin_callback != NULL) {
-		*cause = xstrdup("stdin in use");
+		*cause = xstrdup("stdin is in use");
 		return (-1);
 	}
 

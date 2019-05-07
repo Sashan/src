@@ -1,4 +1,4 @@
-/*	$OpenBSD: task.h,v 1.13 2018/12/16 03:36:02 dlg Exp $ */
+/*	$OpenBSD: task.h,v 1.15 2019/04/28 04:20:40 dlg Exp $ */
 
 /*
  * Copyright (c) 2013 David Gwynne <dlg@openbsd.org>
@@ -35,7 +35,6 @@ struct task {
 TAILQ_HEAD(task_list, task);
 
 #define TASKQ_MPSAFE		(1 << 0)
-#define TASKQ_CANTSLEEP		(1 << 1)
 
 #define TASK_INITIALIZER(_f, _a)  {{ NULL, NULL }, (_f), (_a), 0 }
 
@@ -46,6 +45,8 @@ extern struct taskq *const systqmp;
 struct taskq	*taskq_create(const char *, unsigned int, int, unsigned int);
 void		 taskq_destroy(struct taskq *);
 void		 taskq_barrier(struct taskq *);
+
+void		 taskq_del_barrier(struct taskq *, struct task *);
 
 void		 task_set(struct task *, void (*)(void *), void *);
 int		 task_add(struct taskq *, struct task *);

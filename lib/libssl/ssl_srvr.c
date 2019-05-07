@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_srvr.c,v 1.64 2019/02/09 15:26:15 jsing Exp $ */
+/* $OpenBSD: ssl_srvr.c,v 1.68 2019/04/22 15:12:20 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -913,8 +913,7 @@ ssl3_get_client_hello(SSL *s)
 
 		CBS_dup(&cbs, &ext_block);
 
-		i = ssl_get_prev_session(s, CBS_data(&session_id),
-		    CBS_len(&session_id), &ext_block);
+		i = ssl_get_prev_session(s, &session_id, &ext_block);
 		if (i == 1) { /* previous session */
 			s->internal->hit = 1;
 		} else if (i == -1)
@@ -2177,7 +2176,7 @@ ssl3_get_cert_verify(SSL *s)
 			al = SSL_AD_DECODE_ERROR;
 			goto f_err;
 		}
-		if (!ssl_sigalg_pkey_ok(sigalg, pkey)) {
+		if (!ssl_sigalg_pkey_ok(sigalg, pkey, 0)) {
 			SSLerror(s, SSL_R_WRONG_SIGNATURE_TYPE);
 			al = SSL_AD_DECODE_ERROR;
 			goto f_err;
@@ -2467,7 +2466,7 @@ int
 ssl3_send_server_certificate(SSL *s)
 {
 	CBB cbb, server_cert;
-	X509 *x;
+	CERT_PKEY *cpk;
 
 	/*
 	 * Server Certificate - RFC 5246, section 7.4.2.
@@ -2476,7 +2475,7 @@ ssl3_send_server_certificate(SSL *s)
 	memset(&cbb, 0, sizeof(cbb));
 
 	if (S3I(s)->hs.state == SSL3_ST_SW_CERT_A) {
-		if ((x = ssl_get_server_send_cert(s)) == NULL) {
+		if ((cpk = ssl_get_server_send_pkey(s)) == NULL) {
 			SSLerror(s, ERR_R_INTERNAL_ERROR);
 			return (0);
 		}
@@ -2484,7 +2483,7 @@ ssl3_send_server_certificate(SSL *s)
 		if (!ssl3_handshake_msg_start(s, &cbb, &server_cert,
 		    SSL3_MT_CERTIFICATE))
 			goto err;
-		if (!ssl3_output_cert_chain(s, &server_cert, x))
+		if (!ssl3_output_cert_chain(s, &server_cert, cpk))
 			goto err;
 		if (!ssl3_handshake_msg_finish(s, &cbb))
 			goto err;
@@ -2553,7 +2552,7 @@ ssl3_send_newsession_ticket(SSL *s)
 			EVP_EncryptInit_ex(&ctx, EVP_aes_128_cbc(), NULL,
 			    tctx->internal->tlsext_tick_aes_key, iv);
 			HMAC_Init_ex(&hctx, tctx->internal->tlsext_tick_hmac_key,
-			    16, tlsext_tick_md(), NULL);
+			    16, EVP_sha256(), NULL);
 			memcpy(key_name, tctx->internal->tlsext_tick_key_name, 16);
 		}
 

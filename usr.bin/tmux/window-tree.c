@@ -1,4 +1,4 @@
-/* $OpenBSD: window-tree.c,v 1.35 2019/03/18 14:10:25 nicm Exp $ */
+/* $OpenBSD: window-tree.c,v 1.37 2019/04/30 06:19:51 nicm Exp $ */
 
 /*
  * Copyright (c) 2017 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -785,7 +785,8 @@ window_tree_search(__unused void *modedata, void *itemdata, const char *ss)
 	struct session			*s;
 	struct winlink			*wl;
 	struct window_pane		*wp;
-	const char			*cmd;
+	char				*cmd;
+	int				 retval;
 
 	window_tree_pull_item(item, &s, &wl, &wp);
 
@@ -806,7 +807,9 @@ window_tree_search(__unused void *modedata, void *itemdata, const char *ss)
 		cmd = get_proc_name(wp->fd, wp->tty);
 		if (cmd == NULL || *cmd == '\0')
 			return (0);
-		return (strstr(cmd, ss) != NULL);
+		retval = (strstr(cmd, ss) != NULL);
+		free(cmd);
+		return retval;
 	}
 	return (0);
 }
@@ -1006,7 +1009,7 @@ window_tree_kill_each(__unused void* modedata, void* itemdata,
 	case WINDOW_TREE_SESSION:
 		if (s != NULL) {
 			server_destroy_session(s);
-			session_destroy(s, __func__);
+			session_destroy(s, 1, __func__);
 		}
 		break;
 	case WINDOW_TREE_WINDOW:
