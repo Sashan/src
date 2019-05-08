@@ -1,7 +1,7 @@
-/*	$OpenBSD: roff_html.c,v 1.13 2018/12/03 16:17:58 schwarze Exp $ */
+/*	$OpenBSD: roff_html.c,v 1.20 2019/04/30 15:52:42 schwarze Exp $ */
 /*
  * Copyright (c) 2010 Kristaps Dzonsons <kristaps@bsd.lv>
- * Copyright (c) 2014, 2017, 2018 Ingo Schwarze <schwarze@openbsd.org>
+ * Copyright (c) 2014, 2017, 2018, 2019 Ingo Schwarze <schwarze@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -18,7 +18,8 @@
 #include <sys/types.h>
 
 #include <assert.h>
-#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "mandoc.h"
 #include "roff.h"
@@ -31,14 +32,19 @@ typedef	void	(*roff_html_pre_fp)(ROFF_HTML_ARGS);
 
 static	void	  roff_html_pre_br(ROFF_HTML_ARGS);
 static	void	  roff_html_pre_ce(ROFF_HTML_ARGS);
+static	void	  roff_html_pre_fi(ROFF_HTML_ARGS);
+static	void	  roff_html_pre_ft(ROFF_HTML_ARGS);
+static	void	  roff_html_pre_nf(ROFF_HTML_ARGS);
 static	void	  roff_html_pre_sp(ROFF_HTML_ARGS);
 
 static	const roff_html_pre_fp roff_html_pre_acts[ROFF_MAX] = {
 	roff_html_pre_br,  /* br */
 	roff_html_pre_ce,  /* ce */
-	NULL,  /* ft */
+	roff_html_pre_fi,  /* fi */
+	roff_html_pre_ft,  /* ft */
 	NULL,  /* ll */
 	NULL,  /* mc */
+	roff_html_pre_nf,  /* nf */
 	NULL,  /* po */
 	roff_html_pre_ce,  /* rj */
 	roff_html_pre_sp,  /* sp */
@@ -76,7 +82,36 @@ roff_html_pre_ce(ROFF_HTML_ARGS)
 }
 
 static void
+roff_html_pre_fi(ROFF_HTML_ARGS)
+{
+	if (html_fillmode(h, TOKEN_NONE) == ROFF_fi)
+		print_otag(h, TAG_BR, "");
+}
+
+static void
+roff_html_pre_ft(ROFF_HTML_ARGS)
+{
+	const char	*cp;
+
+	cp = n->child->string;
+	html_setfont(h, mandoc_font(cp, (int)strlen(cp)));
+}
+
+static void
+roff_html_pre_nf(ROFF_HTML_ARGS)
+{
+	if (html_fillmode(h, TOKEN_NONE) == ROFF_nf)
+		print_otag(h, TAG_BR, "");
+}
+
+static void
 roff_html_pre_sp(ROFF_HTML_ARGS)
 {
-	print_paragraph(h);
+	if (html_fillmode(h, TOKEN_NONE) == ROFF_nf) {
+		h->col++;
+		print_endline(h);
+	} else {
+		html_close_paragraph(h);
+		print_otag(h, TAG_P, "c", "Pp");
+	}
 }

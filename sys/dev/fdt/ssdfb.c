@@ -1,4 +1,4 @@
-/* $OpenBSD: ssdfb.c,v 1.7 2018/08/17 21:00:17 patrick Exp $ */
+/* $OpenBSD: ssdfb.c,v 1.10 2019/02/22 09:39:33 patrick Exp $ */
 /*
  * Copyright (c) 2018 Patrick Wildt <patrick@blueri.se>
  *
@@ -22,8 +22,11 @@
 #include <sys/malloc.h>
 #include <sys/stdint.h>
 
+#include <uvm/uvm_extern.h>
+
 #include <dev/i2c/i2cvar.h>
 #include <dev/spi/spivar.h>
+#include <dev/usb/udlio.h>
 
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_gpio.h>
@@ -40,6 +43,7 @@
 #define SSDFB_SET_PAGE_RANGE			0x22
 #define SSDFB_SET_START_LINE			0x40
 #define SSDFB_SET_CONTRAST_CONTROL		0x81
+#define SSDFB_CHARGE_PUMP			0x8d
 #define SSDFB_SET_COLUMN_DIRECTION_NORMAL	0xa0
 #define SSDFB_SET_COLUMN_DIRECTION_REVERSE	0xa1
 #define SSDFB_SET_MULTIPLEX_RATIO		0xa8
@@ -72,6 +76,9 @@ struct ssdfb_softc {
 	struct rasops_info	 sc_rinfo;
 	struct wsdisplay_emulops sc_riops;
 	int			 (*sc_ri_do_cursor)(struct rasops_info *);
+
+	uint8_t			 sc_brightness;
+	int			 sc_mode;
 
 	uint8_t			 sc_column_range[2];
 	uint8_t			 sc_page_range[2];
@@ -179,7 +186,8 @@ ssdfb_i2c_match(struct device *parent, void *match, void *aux)
 {
 	struct i2c_attach_args *ia = aux;
 
-	if (strcmp(ia->ia_name, "solomon,ssd1309fb-i2c") == 0)
+	if (strcmp(ia->ia_name, "solomon,ssd1306fb-i2c") == 0 ||
+	    strcmp(ia->ia_name, "solomon,ssd1309fb-i2c") == 0)
 		return 1;
 
 	return 0;
@@ -206,7 +214,6 @@ ssdfb_i2c_detach(struct device *self, int flags)
 {
 	struct ssdfb_softc *sc = (struct ssdfb_softc *)self;
 	ssdfb_detach(sc, flags);
-	free(sc->sc_gpio, M_DEVBUF, sc->sc_gpiolen);
 	return 0;
 }
 
@@ -293,8 +300,10 @@ ssdfb_attach(struct ssdfb_softc *sc)
 	sc->sc_height = OF_getpropint(sc->sc_node, "solomon,height", 16);
 	sc->sc_pgoff = OF_getpropint(sc->sc_node, "solomon,page-offset", 1);
 
-	sc->sc_fbsize = (sc->sc_width * sc->sc_height) / 8;
+	sc->sc_fbsize = round_page((sc->sc_width * sc->sc_height) / 8);
 	sc->sc_fb = malloc(sc->sc_fbsize, M_DEVBUF, M_WAITOK | M_ZERO);
+
+	sc->sc_brightness = 223;
 
 	ri = &sc->sc_rinfo;
 	ri->ri_bits = malloc(sc->sc_fbsize, M_DEVBUF, M_WAITOK | M_ZERO);
@@ -375,6 +384,11 @@ ssdfb_init(struct ssdfb_softc *sc)
 		reg[1] = 0xa0;
 		ssdfb_write_command(sc, reg, 2);
 	}
+	if (OF_is_compatible(sc->sc_node, "solomon,ssd1306fb-i2c")) {
+		reg[0] = SSDFB_SET_DISPLAY_CLOCK_DIVIDE_RATIO;
+		reg[1] = 0x80;
+		ssdfb_write_command(sc, reg, 2);
+	}
 	reg[0] = SSDFB_SET_MULTIPLEX_RATIO;
 	reg[1] = 0x3f;
 	ssdfb_write_command(sc, reg, 2);
@@ -399,7 +413,7 @@ ssdfb_init(struct ssdfb_softc *sc)
 		reg[1] |= 1 << 5;
 	ssdfb_write_command(sc, reg, 2);
 	reg[0] = SSDFB_SET_CONTRAST_CONTROL;
-	reg[1] = 223;
+	reg[1] = sc->sc_brightness;
 	ssdfb_write_command(sc, reg, 2);
 	reg[0] = SSDFB_SET_PRE_CHARGE_PERIOD;
 	reg[1] = (OF_getpropint(sc->sc_node, "solomon,prechargep1", 2) & 0xf) << 0;
@@ -411,6 +425,16 @@ ssdfb_init(struct ssdfb_softc *sc)
 		reg[1] = 0x34;
 		ssdfb_write_command(sc, reg, 2);
 	}
+	if (OF_is_compatible(sc->sc_node, "solomon,ssd1306fb-i2c")) {
+		reg[0] = SSDFB_SET_VCOM_DESELECT_LEVEL;
+		reg[1] = 0x20;
+		ssdfb_write_command(sc, reg, 2);
+	}
+	reg[0] = SSDFB_CHARGE_PUMP;
+	reg[1] = 0x10;
+	if (OF_is_compatible(sc->sc_node, "solomon,ssd1306fb-i2c"))
+		reg[1] |= 1 << 2;
+	ssdfb_write_command(sc, reg, 2);
 	reg[0] = SSDFB_ENTIRE_DISPLAY_ON;
 	ssdfb_write_command(sc, reg, 1);
 	reg[0] = SSDFB_SET_DISPLAY_MODE_NORMAL;
@@ -566,14 +590,44 @@ ssdfb_ioctl(void *v, u_long cmd, caddr_t data, int flag, struct proc *p)
 {
 	struct ssdfb_softc	*sc = v;
 	struct rasops_info 	*ri = &sc->sc_rinfo;
+	struct wsdisplay_param	*dp = (struct wsdisplay_param *)data;
 	struct wsdisplay_fbinfo	*wdf;
+	struct udl_ioctl_damage *d;
+	int			 mode;
+	uint8_t			 reg[2];
 
 	switch (cmd) {
 	case WSDISPLAYIO_GETPARAM:
+		switch (dp->param) {
+		case WSDISPLAYIO_PARAM_BRIGHTNESS:
+			dp->min = 0;
+			dp->max = 255;
+			dp->curval = sc->sc_brightness;
+			break;
+		default:
+			return (-1);
+		}
+		break;
 	case WSDISPLAYIO_SETPARAM:
-		return (-1);
+		switch (dp->param) {
+		case WSDISPLAYIO_PARAM_BRIGHTNESS:
+			if (dp->curval == 0) {
+				reg[0] = SSDFB_SET_DISPLAY_OFF;
+				ssdfb_write_command(sc, reg, 1);
+			} else if (sc->sc_brightness == 0) {
+				reg[0] = SSDFB_SET_DISPLAY_ON;
+				ssdfb_write_command(sc, reg, 1);
+			}
+			reg[0] = SSDFB_SET_CONTRAST_CONTROL;
+			reg[1] = sc->sc_brightness = dp->curval;
+			ssdfb_write_command(sc, reg, 2);
+			break;
+		default:
+			return (-1);
+		}
+		break;
 	case WSDISPLAYIO_GTYPE:
-		*(u_int *)data = WSDISPLAY_TYPE_UNKNOWN;
+		*(u_int *)data = WSDISPLAY_TYPE_DL;
 		break;
 	case WSDISPLAYIO_GINFO:
 		wdf = (struct wsdisplay_fbinfo *)data;
@@ -586,9 +640,36 @@ ssdfb_ioctl(void *v, u_long cmd, caddr_t data, int flag, struct proc *p)
 		*(u_int *)data = ri->ri_stride;
 		break;
 	case WSDISPLAYIO_SMODE:
+		mode = *(u_int *)data;
+		switch (mode) {
+		case WSDISPLAYIO_MODE_EMUL:
+			if (sc->sc_mode != WSDISPLAYIO_MODE_EMUL) {
+				memset(ri->ri_bits, 0, sc->sc_fbsize);
+				ssdfb_partial(sc, 0, sc->sc_width,
+				    0, sc->sc_height);
+				sc->sc_mode = mode;
+			}
+			break;
+		case WSDISPLAYIO_MODE_DUMBFB:
+			if (sc->sc_mode != WSDISPLAYIO_MODE_DUMBFB) {
+				memset(ri->ri_bits, 0, sc->sc_fbsize);
+				ssdfb_partial(sc, 0, sc->sc_width,
+				    0, sc->sc_height);
+				sc->sc_mode = mode;
+			}
+			break;
+		case WSDISPLAYIO_MODE_MAPPED:
+		default:
+			return (-1);
+		}
 		break;
 	case WSDISPLAYIO_GETSUPPORTEDDEPTH:
 		*(u_int *)data = WSDISPLAYIO_DEPTH_1;
+		break;
+	case UDLIO_DAMAGE:
+		d = (struct udl_ioctl_damage *)data;
+		d->status = UDLIO_STATUS_OK;
+		ssdfb_partial(sc, d->x1, d->x2, d->y1, d->y2);
 		break;
 	default:
 		return (-1);
@@ -600,7 +681,17 @@ ssdfb_ioctl(void *v, u_long cmd, caddr_t data, int flag, struct proc *p)
 paddr_t
 ssdfb_mmap(void *v, off_t off, int prot)
 {
-	return -1;
+	struct ssdfb_softc	*sc = v;
+	struct rasops_info	*ri = &sc->sc_rinfo;
+	paddr_t			 pa;
+
+	if (off >= sc->sc_fbsize || off < 0)
+		return (-1);
+
+	if (!pmap_extract(pmap_kernel(), (vaddr_t)ri->ri_bits, &pa))
+		return (-1);
+
+	return (pa + off);
 }
 
 int

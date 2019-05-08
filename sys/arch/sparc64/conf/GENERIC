@@ -1,4 +1,4 @@
-#	$OpenBSD: GENERIC,v 1.308 2018/08/22 15:38:46 mpi Exp $
+#	$OpenBSD: GENERIC,v 1.310 2019/03/22 12:07:00 sthen Exp $
 #
 # For further information on compiling OpenBSD kernels, see the config(8)
 # man page.
@@ -84,6 +84,7 @@ epic*	at pci?			# SMC EPIC/100 ethernet
 em*	at pci?			# Intel Pro/1000 ethernet
 #ixgb*	at pci?			# Intel Pro/10Gb ethernet
 ix*	at pci?			# Intel 82598EB 10Gb ethernet
+ixl*	at pci?			# Intel 700 Series Ethernet
 myx*	at pci?			# Myricom Myri-10G 10Gb ethernet
 oce*	at pci?			# Emulex OneConnect 10Gb ethernet
 bge*	at pci?			# Broadcom BCM570x (aka Tigon3)
@@ -246,7 +247,7 @@ udsbr*	at uhub?		# D-Link DSB-R100 radio
 radio*	at udsbr?		# USB radio
 ugen*	at uhub?		# USB Generic driver
 udcf*	at uhub?		# Gude Expert mouseCLOCK
-umbg*	at uhub?		# Meinberg Funkuhren USB5131
+umbg*	at uhub?		# Meinberg Funkuhren USB5131/DCF600USB
 uthum*	at uhidev?		# TEMPerHUM sensor
 ugold*	at uhidev?		# gold TEMPer sensor
 utwitch* at uhidev?		# UYUREX BBU sensor

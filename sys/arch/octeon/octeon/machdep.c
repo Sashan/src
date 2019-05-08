@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.107 2018/12/04 16:24:13 visa Exp $ */
+/*	$OpenBSD: machdep.c,v 1.110 2019/05/05 15:43:24 visa Exp $ */
 
 /*
  * Copyright (c) 2009, 2010 Miodrag Vallat.
@@ -230,7 +230,7 @@ mips_init(register_t a0, register_t a1, register_t a2, register_t a3)
 	struct boot_info *boot_info;
 	uint32_t config4;
 
-	extern char start[], edata[], end[];
+	extern char start[], end[];
 	extern char exception[], e_exception[];
 	extern void xtlb_miss;
 
@@ -244,11 +244,6 @@ mips_init(register_t a0, register_t a1, register_t a2, register_t a3)
 	 */
 	setcurcpu(&cpu_info_primary);
 #endif
-	/*
-	 * Clear the compiled BSS segment in OpenBSD code.
-	 */
-
-	bzero(edata, end - edata);
 
 	/*
 	 * Set up early console output.
@@ -685,9 +680,20 @@ octeon_tlb_init(void)
 static u_int64_t
 get_ncpusfound(void)
 {
-	extern struct boot_desc *octeon_boot_desc;
-	uint64_t core_mask = octeon_boot_desc->core_mask;
+	uint64_t core_mask;
 	uint64_t i, ncpus = 0;
+	int chipid;
+
+	chipid = octeon_get_chipid();
+	switch (octeon_model_family(chipid)) {
+	case OCTEON_MODEL_FAMILY_CN73XX:
+	case OCTEON_MODEL_FAMILY_CN78XX:
+		core_mask = octeon_xkphys_read_8(OCTEON_CIU3_BASE + CIU3_FUSE);
+		break;
+	default:
+		core_mask = octeon_xkphys_read_8(OCTEON_CIU_BASE + CIU_FUSE);
+		break;
+	}
 
 	/* There has to be 1-to-1 mapping between cpuids and coreids. */
 	for (i = 0; i < OCTEON_MAXCPUS && (core_mask & (1ul << i)) != 0; i++)
@@ -753,6 +759,9 @@ int	waittime = -1;
 __dead void
 boot(int howto)
 {
+	if ((howto & RB_RESET) != 0)
+		goto doreset;
+
 	if (curproc)
 		savectx(curproc->p_addr, 0);
 
@@ -792,6 +801,7 @@ haltsys:
 		else
 			printf("System Halt.\n");
 	} else {
+doreset:
 		printf("System restart.\n");
 		(void)disableintr();
 		tlb_set_wired(0);

@@ -65,6 +65,9 @@
 #include "remote.h"
 #include "lookup3.h"
 #include "rrl.h"
+#ifdef USE_DNSTAP
+#include "dnstap/dnstap_collector.h"
+#endif
 
 #define RELOAD_SYNC_TIMEOUT 25 /* seconds */
 
@@ -599,6 +602,26 @@ server_init_ifs(struct nsd *nsd, size_t from, size_t to, int* reuseport_works)
 		}
 
 #ifdef SO_REUSEPORT
+#  ifdef SO_REUSEPORT_LB
+		/* on FreeBSD 12 we have SO_REUSEPORT_LB that does loadbalance
+		 * like SO_REUSEPORT on Linux.  This is what the users want
+		 * with the config option in nsd.conf; if we actually
+		 * need local address and port reuse they'll also need to
+		 * have SO_REUSEPORT set for them, assume it was _LB they want.
+		 */
+		if(nsd->reuseport && *reuseport_works &&
+			setsockopt(nsd->udp[i].s, SOL_SOCKET, SO_REUSEPORT_LB,
+			(void*)&on, (socklen_t)sizeof(on)) < 0) {
+			if(verbosity >= 3
+#ifdef ENOPROTOOPT
+				|| errno != ENOPROTOOPT
+#endif
+				)
+			    log_msg(LOG_ERR, "setsockopt(..., SO_REUSEPORT_LB, "
+				"...) failed: %s", strerror(errno));
+			*reuseport_works = 0;
+		}
+#  else /* SO_REUSEPORT_LB */
 		if(nsd->reuseport && *reuseport_works &&
 			setsockopt(nsd->udp[i].s, SOL_SOCKET, SO_REUSEPORT,
 			(void*)&on, (socklen_t)sizeof(on)) < 0) {
@@ -611,6 +634,7 @@ server_init_ifs(struct nsd *nsd, size_t from, size_t to, int* reuseport_works)
 				"...) failed: %s", strerror(errno));
 			*reuseport_works = 0;
 		}
+#  endif /* SO_REUSEPORT_LB */
 #else
 		(void)reuseport_works;
 #endif /* SO_REUSEPORT */
@@ -716,13 +740,55 @@ server_init_ifs(struct nsd *nsd, size_t from, size_t to, int* reuseport_works)
 #endif
 #if defined(AF_INET)
 		if (addr->ai_family == AF_INET) {
-#  if defined(IP_MTU_DISCOVER) && defined(IP_PMTUDISC_DONT)
-			int action = IP_PMTUDISC_DONT;
-			if (setsockopt(nsd->udp[i].s, IPPROTO_IP, 
-				IP_MTU_DISCOVER, &action, sizeof(action)) < 0)
-			{
-				log_msg(LOG_ERR, "setsockopt(..., IP_MTU_DISCOVER, IP_PMTUDISC_DONT...) failed: %s",
-					strerror(errno));
+#  if defined(IP_MTU_DISCOVER)
+			int mtudisc_disabled = 0;
+#   if defined(IP_PMTUDISC_OMIT)
+		/* Try IP_PMTUDISC_OMIT first */
+
+		/*
+		 * Linux 3.15 has IP_PMTUDISC_OMIT which makes sockets
+		 * ignore PMTU information and send packets with DF=0.
+		 * Fragmentation is allowed if and only if the packet
+		 * size exceeds the outgoing interface MTU or the packet
+		 * encounters smaller MTU link in network.
+		 * This mitigates DNS fragmentation attacks by preventing
+		 * forged PMTU information.
+		 * FreeBSD already has same semantics without setting
+		 * the option.
+		 */
+			int action_omit = IP_PMTUDISC_OMIT;
+			if (!mtudisc_disabled) {
+				if(setsockopt(nsd->udp[i].s, IPPROTO_IP,
+					IP_MTU_DISCOVER, &action_omit,
+					sizeof(action_omit)) < 0)
+				{
+					log_msg(LOG_ERR, "setsockopt(..., IP_MTU_DISCOVER, IP_PMTUDISC_OMIT...) failed: %s",
+						strerror(errno));
+				} else {
+					mtudisc_disabled = 1;
+				}
+			}	
+#   endif /* IP_PMTUDISC_OMIT */
+#   if defined(IP_PMTUDISC_DONT)
+			/* 
+			 * Use IP_PMTUDISC_DONT
+			 * if IP_PMTUDISC_OMIT failed / undefined
+			 */
+			if (!mtudisc_disabled) {
+				int action_dont = IP_PMTUDISC_DONT;
+				if (setsockopt(nsd->udp[i].s, IPPROTO_IP, 
+					IP_MTU_DISCOVER, &action_dont,
+					sizeof(action_dont)) < 0)
+				{
+					log_msg(LOG_ERR, "setsockopt(..., IP_MTU_DISCOVER, IP_PMTUDISC_DONT...) failed: %s",
+						strerror(errno));
+				} else {
+					mtudisc_disabled = 1;
+				}
+			}
+#   endif /* IP_PMTUDISC_DONT */
+			/* exit if all methods to disable PMTUD failed */
+			if(!mtudisc_disabled) {
 				return -1;
 			}
 #  elif defined(IP_DONTFRAG)
@@ -1088,6 +1154,9 @@ server_shutdown(struct nsd *nsd)
 #ifdef MEMCLEAN /* OS collects memory pages */
 #ifdef RATELIMIT
 	rrl_mmap_deinit_keep_mmap();
+#endif
+#ifdef USE_DNSTAP
+	dt_collector_destroy(nsd->dt_collector, nsd);
 #endif
 	udb_base_free_keep_mmap(nsd->task[0]);
 	udb_base_free_keep_mmap(nsd->task[1]);
@@ -1903,6 +1972,9 @@ server_main(struct nsd *nsd)
 	unlink(nsd->zonestatfname[0]);
 	unlink(nsd->zonestatfname[1]);
 #endif
+#ifdef USE_DNSTAP
+	dt_collector_close(nsd->dt_collector, nsd);
+#endif
 
 	if(reload_listener.fd != -1) {
 		sig_atomic_t cmd = NSD_QUIT;
@@ -2215,6 +2287,7 @@ handle_udp(int fd, short event, void* arg)
 	for (i = 0; i < recvcount; i++) {
 	loopstart:
 		received = msgs[i].msg_len;
+		queries[i]->addrlen = msgs[i].msg_hdr.msg_namelen;
 		q = queries[i];
 		if (received == -1) {
 			log_msg(LOG_ERR, "recvmmsg %d failed %s", i, strerror(
@@ -2223,6 +2296,7 @@ handle_udp(int fd, short event, void* arg)
 			/* No zone statup */
 			query_reset(queries[i], UDP_MAX_MESSAGE_LEN, 0);
 			iovecs[i].iov_len = buffer_remaining(q->packet);
+			msgs[i].msg_hdr.msg_namelen = queries[i]->addrlen;
 			goto swap_drop;
 		}
 
@@ -2237,6 +2311,10 @@ handle_udp(int fd, short event, void* arg)
 
 		buffer_skip(q->packet, received);
 		buffer_flip(q->packet);
+#ifdef USE_DNSTAP
+		dt_collector_submit_auth_query(data->nsd, &q->addr, q->addrlen,
+			q->tcp, q->packet);
+#endif /* USE_DNSTAP */
 
 		/* Process and answer the query... */
 		if (server_process_query_udp(data->nsd, q) != QUERY_DISCARDED) {
@@ -2267,9 +2345,15 @@ handle_udp(int fd, short event, void* arg)
 				ZTATUP(data->nsd, q->zone, truncated);
 			}
 #endif /* BIND8_STATS */
+#ifdef USE_DNSTAP
+			dt_collector_submit_auth_response(data->nsd,
+				&q->addr, q->addrlen, q->tcp, q->packet,
+				q->zone);
+#endif /* USE_DNSTAP */
 		} else {
 			query_reset(queries[i], UDP_MAX_MESSAGE_LEN, 0);
 			iovecs[i].iov_len = buffer_remaining(q->packet);
+			msgs[i].msg_hdr.msg_namelen = queries[i]->addrlen;
 		swap_drop:
 			STATUP(data->nsd, dropped);
 			ZTATUP(data->nsd, q->zone, dropped);
@@ -2310,6 +2394,7 @@ handle_udp(int fd, short event, void* arg)
 	for(i=0; i<recvcount; i++) {
 		query_reset(queries[i], UDP_MAX_MESSAGE_LEN, 0);
 		iovecs[i].iov_len = buffer_remaining(queries[i]->packet);
+		msgs[i].msg_hdr.msg_namelen = queries[i]->addrlen;
 	}
 }
 
@@ -2350,13 +2435,15 @@ handle_udp(int fd, short event, void* arg)
 	}
 	for (i = 0; i < recvcount; i++) {
 		received = msgs[i].msg_len;
-		msgs[i].msg_hdr.msg_namelen = queries[i]->addrlen;
+		queries[i]->addrlen = msgs[i].msg_hdr.msg_namelen;
 		if (received == -1) {
 			log_msg(LOG_ERR, "recvmmsg failed");
 			STATUP(data->nsd, rxerr);
 			/* No zone statup */
 			/* the error can be found in msgs[i].msg_hdr.msg_flags */
 			query_reset(queries[i], UDP_MAX_MESSAGE_LEN, 0);
+			iovecs[i].iov_len = buffer_remaining(queries[i]->packet);
+			msgs[i].msg_hdr.msg_namelen = queries[i]->addrlen;
 			continue;
 		}
 		q = queries[i];
@@ -2394,6 +2481,10 @@ handle_udp(int fd, short event, void* arg)
 
 		buffer_skip(q->packet, received);
 		buffer_flip(q->packet);
+#ifdef USE_DNSTAP
+		dt_collector_submit_auth_query(data->nsd, &q->addr, q->addrlen,
+			q->tcp, q->packet);
+#endif /* USE_DNSTAP */
 
 		/* Process and answer the query... */
 		if (server_process_query_udp(data->nsd, q) != QUERY_DISCARDED) {
@@ -2440,6 +2531,11 @@ handle_udp(int fd, short event, void* arg)
 					ZTATUP(data->nsd, q->zone, truncated);
 				}
 #endif /* BIND8_STATS */
+#ifdef USE_DNSTAP
+				dt_collector_submit_auth_response(data->nsd,
+					&q->addr, q->addrlen, q->tcp,
+					q->packet, q->zone);
+#endif /* USE_DNSTAP */
 			}
 		} else {
 			STATUP(data->nsd, dropped);
@@ -2448,6 +2544,8 @@ handle_udp(int fd, short event, void* arg)
 #ifndef NONBLOCKING_IS_BROKEN
 #ifdef HAVE_RECVMMSG
 		query_reset(queries[i], UDP_MAX_MESSAGE_LEN, 0);
+		iovecs[i].iov_len = buffer_remaining(queries[i]->packet);
+		msgs[i].msg_hdr.msg_namelen = queries[i]->addrlen;
 #endif
 	}
 #endif
@@ -2633,6 +2731,10 @@ handle_tcp_reading(int fd, short event, void* arg)
 	data->query_count++;
 
 	buffer_flip(data->query->packet);
+#ifdef USE_DNSTAP
+	dt_collector_submit_auth_query(data->nsd, &data->query->addr,
+		data->query->addrlen, data->query->tcp, data->query->packet);
+#endif /* USE_DNSTAP */
 	data->query_state = server_process_query(data->nsd, data->query);
 	if (data->query_state == QUERY_DISCARDED) {
 		/* Drop the packet and the entire connection... */
@@ -2668,6 +2770,11 @@ handle_tcp_reading(int fd, short event, void* arg)
 	/* Switch to the tcp write handler.  */
 	buffer_flip(data->query->packet);
 	data->query->tcplen = buffer_remaining(data->query->packet);
+#ifdef USE_DNSTAP
+	dt_collector_submit_auth_response(data->nsd, &data->query->addr,
+		data->query->addrlen, data->query->tcp, data->query->packet,
+		data->query->zone);
+#endif /* USE_DNSTAP */
 	data->bytes_transmitted = 0;
 
 	timeout.tv_sec = data->tcp_timeout / 1000;

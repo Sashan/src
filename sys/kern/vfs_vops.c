@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_vops.c,v 1.19 2018/06/21 14:17:23 visa Exp $	*/
+/*	$OpenBSD: vfs_vops.c,v 1.21 2019/05/03 14:24:13 visa Exp $	*/
 /*
  * Copyright (c) 2010 Thordur I. Bjornsson <thib@openbsd.org> 
  *
@@ -336,7 +336,7 @@ int
 VOP_FSYNC(struct vnode *vp, struct ucred *cred, int waitfor, 
     struct proc *p)
 {
-	int r;
+	int r, s;
 	struct vop_fsync_args a;
 	a.a_vp = vp;
 	a.a_cred = cred;
@@ -351,6 +351,10 @@ VOP_FSYNC(struct vnode *vp, struct ucred *cred, int waitfor,
 	vp->v_inflight++;
 	r = (vp->v_op->vop_fsync)(&a);
 	vp->v_inflight--;
+	s = splbio();
+	if (r == 0 && vp->v_bioflag & VBIOERROR)
+		r = EIO;
+	splx(s);
 	return r;
 }
 
@@ -683,7 +687,6 @@ VOP_PATHCONF(struct vnode *vp, int name, register_t *retval)
 int
 VOP_ADVLOCK(struct vnode *vp, void *id, int op, struct flock *fl, int flags)
 {
-	int r;
 	struct vop_advlock_args a;
 	a.a_vp = vp;
 	a.a_id = id;
@@ -694,10 +697,7 @@ VOP_ADVLOCK(struct vnode *vp, void *id, int op, struct flock *fl, int flags)
 	if (vp->v_op->vop_advlock == NULL)
 		return (EOPNOTSUPP);
 
-	vp->v_inflight++;
-	r = (vp->v_op->vop_advlock)(&a);
-	vp->v_inflight--;
-	return r;
+	return (vp->v_op->vop_advlock)(&a);
 }
 
 int

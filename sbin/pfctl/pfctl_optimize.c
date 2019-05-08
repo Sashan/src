@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfctl_optimize.c,v 1.39 2018/09/06 15:07:33 kn Exp $ */
+/*	$OpenBSD: pfctl_optimize.c,v 1.41 2019/03/07 08:01:52 kn Exp $ */
 
 /*
  * Copyright (c) 2004 Mike Frantzen <frantzen@openbsd.org>
@@ -892,11 +892,6 @@ load_feedback_profile(struct pfctl *pf, struct superblocks *superblocks)
 		rs = pf_find_or_create_ruleset(pr.anchor_call);
 		por->por_rule.anchor = rs->anchor;
 		TAILQ_INSERT_TAIL(&queue, por, por_entry);
-
-		/* XXX pfctl_get_pool(pf->dev, &pr.rule.rpool, nr, pr.ticket,
-		 *         PF_PASS, pf->anchor) ???
-		 * ... pfctl_clear_pool(&pr.rule.rpool)
-		 */
 	}
 
 	if (construct_superblocks(pf, &queue, &prof_superblocks))
@@ -1232,11 +1227,9 @@ add_opt_table(struct pfctl *pf, struct pf_opt_tbl **tbl, sa_family_t af,
 	node_host.ifname = ifname;
 	node_host.weight = addr->weight;
 
-#ifdef OPT_DEBUG
 	DEBUG("<%s> adding %s/%d", (*tbl)->pt_name, inet_ntop(af,
 	    &node_host.addr.v.a.addr, buf, sizeof(buf)),
-	    unmask(&node_host.addr.v.a.mask);
-#endif /* OPT_DEBUG */
+	    unmask(&node_host.addr.v.a.mask));
 
 	if (append_addr_host((*tbl)->pt_buf, &node_host, 0, 0)) {
 		warn("failed to add host");

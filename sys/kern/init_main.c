@@ -1,4 +1,4 @@
-/*	$OpenBSD: init_main.c,v 1.281 2018/09/10 16:18:34 sashan Exp $	*/
+/*	$OpenBSD: init_main.c,v 1.284 2019/02/26 14:24:21 visa Exp $	*/
 /*	$NetBSD: init_main.c,v 1.84.4.1 1996/06/02 09:08:06 mrg Exp $	*/
 
 /*
@@ -76,6 +76,7 @@
 #include <sys/pipe.h>
 #include <sys/task.h>
 #include <sys/witness.h>
+#include <sys/smr.h>
 
 #include <sys/syscall.h>
 #include <sys/syscallargs.h>
@@ -106,7 +107,7 @@ extern void nfs_init(void);
 const char	copyright[] =
 "Copyright (c) 1982, 1986, 1989, 1991, 1993\n"
 "\tThe Regents of the University of California.  All rights reserved.\n"
-"Copyright (c) 1995-2018 OpenBSD. All rights reserved.  https://www.OpenBSD.org\n";
+"Copyright (c) 1995-2019 OpenBSD. All rights reserved.  https://www.OpenBSD.org\n";
 
 /* Components of the first process -- never freed. */
 struct	session session0;
@@ -123,7 +124,6 @@ extern	struct user *proc0paddr;
 
 struct	vnode *rootvp, *swapdev_vp;
 int	boothowto;
-struct	timespec boottime;
 int	db_active = 0;
 int	ncpus =  1;
 int	ncpusfound = 1;			/* number of cpus we find */
@@ -240,6 +240,9 @@ main(void *framep)
 
 	/* Initialize SRP subsystem. */
 	srp_startup();
+
+	/* Initialize SMR subsystem. */
+	smr_startup();
 
 	/*
 	 * Initialize process and pgrp structures.
@@ -511,9 +514,8 @@ main(void *framep)
 	 * from the file system.  Reset p->p_rtime as it may have been
 	 * munched in mi_switch() after the time got set.
 	 */
-	nanotime(&boottime);
 	LIST_FOREACH(pr, &allprocess, ps_list) {
-		pr->ps_start = boottime;
+		getnanotime(&pr->ps_start);
 		TAILQ_FOREACH(p, &pr->ps_threads, p_thr_link) {
 			nanouptime(&p->p_cpu->ci_schedstate.spc_runtime);
 			timespecclear(&p->p_rtime);

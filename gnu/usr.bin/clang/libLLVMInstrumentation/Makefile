@@ -1,14 +1,13 @@
-# $OpenBSD: Makefile,v 1.5 2018/04/06 14:44:04 patrick Exp $
+# $OpenBSD: Makefile,v 1.7 2019/03/05 09:44:40 jsg Exp $
 
 LIB=	LLVMInstrumentation
-NOPIC=
 NOPROFILE=
 
 CPPFLAGS+=	-I${LLVM_SRCS}/include/llvm/Transforms
 
-.include <bsd.own.mk>
-SRCS=	AddressSanitizer.cpp \
+SRCS+=	AddressSanitizer.cpp \
 	BoundsChecking.cpp \
+	CGProfile.cpp \
 	DataFlowSanitizer.cpp \
 	EfficiencySanitizer.cpp \
 	GCOVProfiling.cpp \
@@ -23,8 +22,3 @@ SRCS=	AddressSanitizer.cpp \
 	ThreadSanitizer.cpp
 
 .PATH:	${.CURDIR}/../../../llvm/lib/Transforms/Instrumentation
-
-install:
-	@# Nothing here so far ...
-
-.include <bsd.lib.mk>

@@ -1,4 +1,4 @@
-/*	$OpenBSD: rad.h,v 1.15 2018/08/03 13:14:46 florian Exp $	*/
+/*	$OpenBSD: rad.h,v 1.17 2019/03/02 03:40:45 pamela Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -31,6 +31,8 @@
 #define	MIN_RTR_ADV_INTERVAL		200
 #define	MAX_SEARCH 1025 /* same as MAXDNAME in arpa/nameser.h */
 #define	DEFAULT_RDNS_LIFETIME		600 * 1.5
+
+#define IMSG_DATA_SIZE(imsg)	((imsg).hdr.len - IMSG_HEADER_SIZE)
 
 enum {
 	PROC_MAIN,
@@ -71,7 +73,6 @@ enum imsg_type {
 	IMSG_SEND_RA,
 	IMSG_UPDATE_IF,
 	IMSG_REMOVE_IF,
-	IMSG_SHUTDOWN,
 	IMSG_SOCKET_IPC
 };
 

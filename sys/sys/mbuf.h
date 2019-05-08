@@ -1,4 +1,4 @@
-/*	$OpenBSD: mbuf.h,v 1.240 2018/11/12 07:45:52 claudio Exp $	*/
+/*	$OpenBSD: mbuf.h,v 1.242 2019/02/11 00:25:33 bluhm Exp $	*/
 /*	$NetBSD: mbuf.h,v 1.19 1996/02/09 18:25:14 christos Exp $	*/
 
 /*
@@ -119,8 +119,8 @@ struct pkthdr_pf {
 
 #ifdef _KERNEL
 #define MPF_BITS \
-    ("\20\1GENERATED\3TRANSLATE_LOCALHOST\4DIVERTED\5DIVERTED_PACKET" \
-    "\6REROUTE\7REFRAGMENTED\10PROCESSED")
+    ("\20\1GENERATED\2SYNCOOKIE_RECREATED\3TRANSLATE_LOCALHOST\4DIVERTED" \
+    "\5DIVERTED_PACKET\6REROUTE\7REFRAGMENTED\10PROCESSED")
 #endif
 
 /* record/packet header in first mbuf of chain; valid if M_PKTHDR set */
@@ -343,17 +343,6 @@ u_int mextfree_register(void (*)(caddr_t, u_int, void *));
 	if (((to)->m_flags & M_EXT) == 0)				\
 		(to)->m_data = (to)->m_pktdat;				\
 } while (/* CONSTCOND */ 0)
-
-/*
- * Set the m_data pointer of a newly-allocated mbuf (m_get/MGET) to place
- * an object of the specified size at the end of the mbuf, longword aligned.
- */
-#define	M_ALIGN(m, len) 	m_align((m), (len))
-/*
- * As above, for mbufs allocated with m_gethdr/MGETHDR
- * or initialized by M_MOVE_PKTHDR.
- */
-#define	MH_ALIGN(m, len)	m_align((m), (len))
 
 /*
  * Determine if an mbuf's data area is read-only. This is true for

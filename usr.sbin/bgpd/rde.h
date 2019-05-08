@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.h,v 1.203 2018/11/28 08:32:27 claudio Exp $ */
+/*	$OpenBSD: rde.h,v 1.211 2019/03/07 07:42:36 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Claudio Jeker <claudio@openbsd.org> and
@@ -77,11 +77,7 @@ LIST_HEAD(rde_peer_head, rde_peer);
 LIST_HEAD(aspath_list, aspath);
 LIST_HEAD(attr_list, attr);
 LIST_HEAD(aspath_head, rde_aspath);
-RB_HEAD(uptree_prefix, update_prefix);
-RB_HEAD(uptree_attr, update_attr);
-
-TAILQ_HEAD(uplist_prefix, update_prefix);
-TAILQ_HEAD(uplist_attr, update_attr);
+RB_HEAD(prefix_tree, prefix);
 
 struct rde_peer {
 	LIST_ENTRY(rde_peer)		 hash_l; /* hash list over all peers */
@@ -90,12 +86,10 @@ struct rde_peer {
 	struct bgpd_addr		 remote_addr;
 	struct bgpd_addr		 local_v4_addr;
 	struct bgpd_addr		 local_v6_addr;
-	struct uptree_prefix		 up_prefix;
-	struct uptree_attr		 up_attrs;
-	struct uplist_attr		 updates[AID_MAX];
-	struct uplist_prefix		 withdraws[AID_MAX];
-	time_t				 staletime[AID_MAX];
 	struct capabilities		 capa;
+	struct prefix_tree		 updates[AID_MAX];
+	struct prefix_tree		 withdraws[AID_MAX];
+	time_t				 staletime[AID_MAX];
 	u_int64_t			 prefix_rcvd_update;
 	u_int64_t			 prefix_rcvd_withdraw;
 	u_int64_t			 prefix_rcvd_eor;
@@ -104,8 +98,6 @@ struct rde_peer {
 	u_int64_t			 prefix_sent_eor;
 	u_int32_t			 prefix_cnt; /* # of prefixes */
 	u_int32_t			 remote_bgpid; /* host byte order! */
-	u_int32_t			 up_pcnt;
-	u_int32_t			 up_acnt;
 	u_int32_t			 up_nlricnt;
 	u_int32_t			 up_wcnt;
 	enum peer_state			 state;
@@ -125,6 +117,7 @@ struct rde_peer {
 
 struct aspath {
 	LIST_ENTRY(aspath)	entry;
+	u_int32_t		source_as;	/* cached source_as */
 	int			refcnt;	/* reference count */
 	u_int16_t		len;	/* total length of aspath in octets */
 	u_int16_t		ascnt;	/* number of AS hops in data */
@@ -208,7 +201,6 @@ struct rde_aspath {
 	struct aspath			*aspath;
 	u_int64_t			 hash;
 	u_int32_t			 flags;		/* internally used */
-	u_int32_t			 source_as;	/* cached source_as */
 	u_int32_t			 med;		/* multi exit disc */
 	u_int32_t			 lpref;		/* local pref */
 	u_int32_t			 weight;	/* low prio lpref */
@@ -282,8 +274,22 @@ struct pt_entry_vpn4 {
 	u_int8_t			 pad2;
 };
 
+struct pt_entry_vpn6 {
+	RB_ENTRY(pt_entry)		 pt_e;
+	u_int8_t			 aid;
+	u_int8_t			 prefixlen;
+	u_int16_t			 refcnt;
+	struct in6_addr			 prefix6;
+	u_int64_t			 rd;
+	u_int8_t			 labelstack[21];
+	u_int8_t			 labellen;
+	u_int8_t			 pad1;
+	u_int8_t			 pad2;
+};
+
 struct prefix {
 	LIST_ENTRY(prefix)		 rib_l, nexthop_l;
+	RB_ENTRY(prefix)		 entry;
 	struct rib_entry		*re;
 	struct rde_aspath		*aspath;
 	struct rde_peer			*peer;
@@ -291,6 +297,10 @@ struct prefix {
 	time_t				 lastchange;
 	u_int8_t			 validation_state;
 	u_int8_t			 nhflags;
+	u_int8_t			 flags;
+	u_int8_t			 eor;
+#define	PREFIX_FLAG_WITHDRAW	0x01
+#define	PREFIX_FLAG_UPDATE	0x02
 };
 
 #define	NEXTHOP_SELF		0x01
@@ -354,12 +364,14 @@ u_char		*aspath_deflate(u_char *, u_int16_t *, int *);
 void		 aspath_merge(struct rde_aspath *, struct attr *);
 u_char		*aspath_dump(struct aspath *);
 u_int16_t	 aspath_length(struct aspath *);
-u_int16_t	 aspath_count(const void *, u_int16_t);
 u_int32_t	 aspath_neighbor(struct aspath *);
 u_int32_t	 aspath_origin(struct aspath *);
 int		 aspath_loopfree(struct aspath *, u_int32_t);
 int		 aspath_compare(struct aspath *, struct aspath *);
+int		 aspath_match(struct aspath *, struct filter_as *, u_int32_t);
 u_char		*aspath_prepend(struct aspath *, u_int32_t, int, u_int16_t *);
+u_char		*aspath_override(struct aspath *, u_int32_t, u_int32_t,
+		    u_int16_t *);
 int		 aspath_lenmatch(struct aspath *, enum aslen_spec, u_int);
 
 int	 community_match(struct rde_aspath *, struct filter_community *,
@@ -375,13 +387,13 @@ int	 community_large_set(struct rde_aspath *, struct filter_community *,
 void	 community_large_delete(struct rde_aspath *, struct filter_community *,
 	    struct rde_peer *);
 int	 community_ext_match(struct rde_aspath *,
-	    struct filter_extcommunity *, u_int16_t);
+	    struct filter_community *, struct rde_peer *);
 int	 community_ext_set(struct rde_aspath *,
-	    struct filter_extcommunity *, u_int16_t);
+	    struct filter_community *, struct rde_peer *);
 void	 community_ext_delete(struct rde_aspath *,
-	    struct filter_extcommunity *, u_int16_t);
-int	 community_ext_conv(struct filter_extcommunity *, u_int16_t,
-	    u_int64_t *);
+	    struct filter_community *, struct rde_peer *);
+int	 community_ext_conv(struct filter_community *, struct rde_peer *,
+	    u_int64_t *, u_int64_t *);
 u_char	*community_ext_delete_non_trans(u_char *, u_int16_t, u_int16_t *);
 
 /* rde_decide.c */
@@ -475,7 +487,6 @@ int		 path_update(struct rib *, struct rde_peer *,
 		     struct filterstate *, struct bgpd_addr *, int, u_int8_t);
 int		 path_compare(struct rde_aspath *, struct rde_aspath *);
 u_int32_t	 path_remove_stale(struct rde_aspath *, u_int8_t, time_t);
-int		 path_empty(struct rde_aspath *);
 struct rde_aspath *path_copy(struct rde_aspath *, const struct rde_aspath *);
 struct rde_aspath *path_prep(struct rde_aspath *);
 struct rde_aspath *path_get(void);
@@ -487,6 +498,11 @@ struct prefix	*prefix_get(struct rib *, struct rde_peer *,
 		    struct bgpd_addr *, int);
 int		 prefix_remove(struct rib *, struct rde_peer *,
 		    struct bgpd_addr *, int);
+void		 prefix_add_eor(struct rde_peer *, u_int8_t);
+void		 prefix_update(struct rib *, struct rde_peer *,
+		    struct bgpd_addr *, int);
+int		 prefix_withdraw(struct rib *, struct rde_peer *,
+		    struct bgpd_addr *, int);
 int		 prefix_write(u_char *, int, struct bgpd_addr *, u_int8_t, int);
 int		 prefix_writebuf(struct ibuf *, struct bgpd_addr *, u_int8_t);
 struct prefix	*prefix_bypeer(struct rib_entry *, struct rde_peer *);
@@ -494,6 +510,8 @@ void		 prefix_updateall(struct prefix *, enum nexthop_state,
 		     enum nexthop_state);
 void		 prefix_destroy(struct prefix *);
 void		 prefix_relink(struct prefix *, struct rde_aspath *, int);
+
+RB_PROTOTYPE(prefix_tree, prefix, entry, prefix_cmp)
 
 static inline struct rde_peer *
 prefix_peer(struct prefix *p)
@@ -539,36 +557,17 @@ int		 nexthop_compare(struct nexthop *, struct nexthop *);
 
 /* rde_update.c */
 void		 up_init(struct rde_peer *);
-void		 up_down(struct rde_peer *);
 int		 up_rib_remove(struct rde_peer *, struct rib_entry *);
 void		 up_rib_add(struct rde_peer *, struct rib_entry *);
 void		 up_withdraw_all(struct rde_peer *);
-int		 up_test_update(struct rde_peer *, struct prefix *);
-int		 up_generate(struct rde_peer *, struct filterstate *,
-		     struct bgpd_addr *, u_int8_t);
 void		 up_generate_updates(struct filter_head *, struct rde_peer *,
 		     struct prefix *, struct prefix *);
 void		 up_generate_default(struct filter_head *, struct rde_peer *,
 		     u_int8_t);
-int		 up_generate_marker(struct rde_peer *, u_int8_t);
-int		 up_dump_prefix(u_char *, int, struct uplist_prefix *,
-		     struct rde_peer *, int);
+int		 up_is_eor(struct rde_peer *, u_int8_t);
+int		 up_dump_withdraws(u_char *, int, struct rde_peer *, u_int8_t);
+int		 up_dump_mp_unreach(u_char *, int, struct rde_peer *, u_int8_t);
 int		 up_dump_attrnlri(u_char *, int, struct rde_peer *);
-u_char		*up_dump_mp_unreach(u_char *, u_int16_t *, struct rde_peer *,
-		     u_int8_t);
-int		 up_dump_mp_reach(u_char *, u_int16_t *, struct rde_peer *,
-		     u_int8_t);
-
-/* rde_trie.c */
-int	trie_add(struct trie_head *, struct bgpd_addr *, u_int8_t, u_int8_t,
-	    u_int8_t);
-int	trie_roa_add(struct trie_head *, struct bgpd_addr *, u_int8_t,
-	    struct set_table *);
-void	trie_free(struct trie_head *);
-int	trie_match(struct trie_head *, struct bgpd_addr *, u_int8_t, int);
-int	trie_roa_check(struct trie_head *, struct bgpd_addr *, u_int8_t,
-	    u_int32_t);
-void	trie_dump(struct trie_head *);
-int	trie_equal(struct trie_head *, struct trie_head *);
+int		 up_dump_mp_reach(u_char *, int, struct rde_peer *, u_int8_t);
 
 #endif /* __RDE_H__ */

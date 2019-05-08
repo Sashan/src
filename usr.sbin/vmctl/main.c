@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.50 2018/12/06 09:23:15 claudio Exp $	*/
+/*	$OpenBSD: main.c,v 1.55 2019/03/18 20:27:12 kn Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -72,22 +72,22 @@ int		 ctl_receive(struct parse_result *, int, char *[]);
 struct ctl_command ctl_commands[] = {
 	{ "console",	CMD_CONSOLE,	ctl_console,	"id" },
 	{ "create",	CMD_CREATE,	ctl_create,
-		"\"path\" [-b base] [-i disk] [-s size]", 1 },
-	{ "load",	CMD_LOAD,	ctl_load,	"\"path\"" },
-	{ "log",	CMD_LOG,	ctl_log,	"[verbose|brief]" },
-	{ "reload",	CMD_RELOAD,	ctl_reload,	"" },
-	{ "reset",	CMD_RESET,	ctl_reset,	"[all|vms|switches]" },
-	{ "show",	CMD_STATUS,	ctl_status,	"[id]" },
-	{ "start",	CMD_START,	ctl_start,	"\"name\""
-	    " [-Lc] [-b image] [-B device] [-r image] [-m size]\n"
-	    "\t\t[-n switch] [-i count] [-d disk]* [-t name]" },
-	{ "status",	CMD_STATUS,	ctl_status,	"[id]" },
-	{ "stop",	CMD_STOP,	ctl_stop,	"[id|-a] [-fw]" },
-	{ "wait",	CMD_WAITFOR,	ctl_waitfor,	"id" },
+		"disk [-b base | -i disk] [-s size]", 1 },
+	{ "load",	CMD_LOAD,	ctl_load,	"filename" },
+	{ "log",	CMD_LOG,	ctl_log,	"[brief | verbose]" },
 	{ "pause",	CMD_PAUSE,	ctl_pause,	"id" },
-	{ "unpause",	CMD_UNPAUSE,	ctl_unpause,	"id" },
+	{ "receive",	CMD_RECEIVE,	ctl_receive,	"name" ,	1},
+	{ "reload",	CMD_RELOAD,	ctl_reload,	"" },
+	{ "reset",	CMD_RESET,	ctl_reset,	"[all | switches | vms]" },
 	{ "send",	CMD_SEND,	ctl_send,	"id",	1},
-	{ "receive",	CMD_RECEIVE,	ctl_receive,	"id" ,	1},
+	{ "show",	CMD_STATUS,	ctl_status,	"[id]" },
+	{ "start",	CMD_START,	ctl_start,	"id | name"
+	    " [-cL] [-B device] [-b path] [-d disk] [-i count]\n"
+	    "\t\t[-m size] [-n switch] [-r path] [-t name]" },
+	{ "status",	CMD_STATUS,	ctl_status,	"[id]" },
+	{ "stop",	CMD_STOP,	ctl_stop,	"[id | -a] [-fw]" },
+	{ "unpause",	CMD_UNPAUSE,	ctl_unpause,	"id" },
+	{ "wait",	CMD_WAITFOR,	ctl_waitfor,	"id" },
 	{ NULL }
 };
 
@@ -598,6 +598,11 @@ ctl_create(struct parse_result *res, int argc, char *argv[])
 			/* NOTREACHED */
 		}
 	}
+	argc -= optind;
+	argv += optind;
+
+	if (argc > 0)
+		ctl_usage(res->ctl);
 
 	if (input) {
 		if (base && input)
@@ -856,8 +861,14 @@ ctl_start(struct parse_result *res, int argc, char *argv[])
 		case 'B':
 			if (res->bootdevice)
 				errx(1, "boot device specified multiple times");
-			if (strcmp("net", optarg) == 0)
+			if (strcmp("disk", optarg) == 0)
+				res->bootdevice = VMBOOTDEV_DISK;
+			else if (strcmp("cdrom", optarg) == 0)
+				res->bootdevice = VMBOOTDEV_CDROM;
+			else if (strcmp("net", optarg) == 0)
 				res->bootdevice = VMBOOTDEV_NET;
+			else
+				errx(1, "unknown boot device %s", optarg);
 			break;
 		case 'r':
 			if (res->isopath)
@@ -906,6 +917,11 @@ ctl_start(struct parse_result *res, int argc, char *argv[])
 			/* NOTREACHED */
 		}
 	}
+	argc -= optind;
+	argv += optind;
+
+	if (argc > 0)
+		ctl_usage(res->ctl);
 
 	for (i = res->nnets; i < res->nifs; i++) {
 		/* Add interface that is not attached to a switch */
@@ -947,6 +963,11 @@ ctl_stop(struct parse_result *res, int argc, char *argv[])
 			/* NOTREACHED */
 		}
 	}
+	argc -= optind;
+	argv += optind;
+
+	if (argc > 0)
+		ctl_usage(res->ctl);
 
 	/* VM id is only expected without the -a flag */
 	if ((res->action != CMD_STOPALL && ret == -1) ||

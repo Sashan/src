@@ -1088,7 +1088,7 @@ worker_handle_request(struct comm_point* c, void* arg, int error,
 	struct ub_packed_rrset_key* alias_rrset = NULL;
 	struct reply_info* partial_rep = NULL;
 	struct query_info* lookup_qinfo = &qinfo;
-	struct query_info qinfo_tmp; /* placeholdoer for lookup_qinfo */
+	struct query_info qinfo_tmp; /* placeholder for lookup_qinfo */
 	struct respip_client_info* cinfo = NULL, cinfo_tmp;
 	memset(&qinfo, 0, sizeof(qinfo));
 
@@ -1171,11 +1171,11 @@ worker_handle_request(struct comm_point* c, void* arg, int error,
 
 	/* check if this query should be dropped based on source ip rate limiting */
 	if(!infra_ip_ratelimit_inc(worker->env.infra_cache, repinfo,
-			*worker->env.now)) {
+			*worker->env.now, c->buffer)) {
 		/* See if we are passed through with slip factor */
 		if(worker->env.cfg->ip_ratelimit_factor != 0 &&
 			ub_random_max(worker->env.rnd,
-						  worker->env.cfg->ip_ratelimit_factor) == 1) {
+						  worker->env.cfg->ip_ratelimit_factor) == 0) {
 
 			char addrbuf[128];
 			addr_to_str(&repinfo->addr, repinfo->addrlen,
@@ -1208,7 +1208,7 @@ worker_handle_request(struct comm_point* c, void* arg, int error,
 	if(worker->env.cfg->log_queries) {
 		char ip[128];
 		addr_to_str(&repinfo->addr, repinfo->addrlen, ip, sizeof(ip));
-		log_nametypeclass(0, ip, qinfo.qname, qinfo.qtype, qinfo.qclass);
+		log_query_in(ip, qinfo.qname, qinfo.qtype, qinfo.qclass);
 	}
 	if(qinfo.qtype == LDNS_RR_TYPE_AXFR || 
 		qinfo.qtype == LDNS_RR_TYPE_IXFR) {
@@ -1559,8 +1559,17 @@ send_reply_rc:
 	if(worker->env.cfg->log_replies)
 	{
 		struct timeval tv = {0, 0};
-		log_reply_info(0, &qinfo, &repinfo->addr, repinfo->addrlen,
-			tv, 1, c->buffer);
+		if(qinfo.local_alias && qinfo.local_alias->rrset &&
+			qinfo.local_alias->rrset->rk.dname) {
+			/* log original qname, before the local alias was
+			 * used to resolve that CNAME to something else */
+			qinfo.qname = qinfo.local_alias->rrset->rk.dname;
+			log_reply_info(0, &qinfo, &repinfo->addr, repinfo->addrlen,
+				tv, 1, c->buffer);
+		} else {
+			log_reply_info(0, &qinfo, &repinfo->addr, repinfo->addrlen,
+				tv, 1, c->buffer);
+		}
 	}
 #ifdef USE_DNSCRYPT
 	if(!dnsc_handle_uncurved_request(repinfo)) {

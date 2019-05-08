@@ -1,4 +1,4 @@
-/*	$OpenBSD: sdmmcvar.h,v 1.30 2018/08/09 13:52:36 patrick Exp $	*/
+/*	$OpenBSD: sdmmcvar.h,v 1.32 2019/04/02 07:08:40 stsp Exp $	*/
 
 /*
  * Copyright (c) 2006 Uwe Stuehler <uwe@openbsd.org>
@@ -200,6 +200,7 @@ struct sdmmc_softc {
 #define SMC_CAPS_MMC_DDR52	0x2000  /* eMMC DDR52 timing */
 #define SMC_CAPS_MMC_HS200	0x4000	/* eMMC HS200 timing */
 #define SMC_CAPS_MMC_HS400	0x8000	/* eMMC HS400 timing */
+#define SMC_CAPS_NONREMOVABLE	0x10000	/* non-removable devices */
 
 	int sc_function_count;		/* number of I/O functions (SDIO) */
 	struct sdmmc_function *sc_card;	/* selected card */
@@ -213,6 +214,7 @@ struct sdmmc_softc {
 	struct rwlock sc_lock;		/* lock around host controller */
 	void *sc_scsibus;		/* SCSI bus emulation softc */
 	TAILQ_HEAD(, sdmmc_intr_handler) sc_intrq; /* interrupt handlers */
+	long sc_max_seg;		/* maximum segment size */
 	long sc_max_xfer;		/* maximum transfer size */
 	void *sc_cookies[SDMMC_MAX_FUNCTIONS]; /* pass extra info from bus to dev */
 };

@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sig.c,v 1.225 2018/11/12 15:09:17 visa Exp $	*/
+/*	$OpenBSD: kern_sig.c,v 1.229 2019/05/01 06:26:42 dlg Exp $	*/
 /*	$NetBSD: kern_sig.c,v 1.54 1996/04/22 01:38:32 christos Exp $	*/
 
 /*
@@ -733,18 +733,6 @@ csignal(pid_t pgid, int signum, uid_t uid, uid_t euid)
 }
 
 /*
- * Send a signal to a process group.
- */
-void
-gsignal(int pgid, int signum)
-{
-	struct pgrp *pgrp;
-
-	if (pgid && (pgrp = pgfind(pgid)))
-		pgsignal(pgrp, signum, 0);
-}
-
-/*
  * Send a signal to a process group.  If checktty is 1,
  * limit to members which have a controlling terminal.
  */
@@ -900,6 +888,8 @@ ptsignal(struct proc *p, int signum, enum signal_type type)
 	struct process *pr = p->p_p;
 	struct proc *q;
 	int wakeparent = 0;
+
+	KERNEL_ASSERT_LOCKED();
 
 #ifdef DIAGNOSTIC
 	if ((u_int)signum >= NSIG || signum == 0)
@@ -1592,7 +1582,8 @@ coredump(struct proc *p)
 
 	NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_SYSSPACE, name, p);
 
-	error = vn_open(&nd, O_CREAT | FWRITE | O_NOFOLLOW, S_IRUSR | S_IWUSR);
+	error = vn_open(&nd, O_CREAT | FWRITE | O_NOFOLLOW | O_NONBLOCK,
+	    S_IRUSR | S_IWUSR);
 
 	if (error)
 		goto out;
@@ -1729,7 +1720,7 @@ sys___thrsigdivert(struct proc *p, void *v, register_t *retval)
 		if (KTRPOINT(p, KTR_STRUCT))
 			ktrreltimespec(p, &ts);
 #endif
-		if (ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000)
+		if (!timespecisvalid(&ts))
 			timeinvalid = 1;
 		else {
 			to_ticks = (uint64_t)hz * ts.tv_sec +

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ieee80211_var.h,v 1.92 2018/10/27 10:02:47 phessler Exp $	*/
+/*	$OpenBSD: ieee80211_var.h,v 1.95 2019/03/01 08:13:11 stsp Exp $	*/
 /*	$NetBSD: ieee80211_var.h,v 1.7 2004/05/06 03:07:10 dyoung Exp $	*/
 
 /*-
@@ -77,9 +77,10 @@ enum ieee80211_phymode {
 	IEEE80211_MODE_11A	= 1,	/* 5GHz, OFDM */
 	IEEE80211_MODE_11B	= 2,	/* 2GHz, CCK */
 	IEEE80211_MODE_11G	= 3,	/* 2GHz, OFDM */
-	IEEE80211_MODE_11N	= 4,	/* 11n, 2GHz/5GHz */
+	IEEE80211_MODE_11N	= 4,	/* 2GHz/5GHz, OFDM/HT */
+	IEEE80211_MODE_11AC	= 5,	/* 5GHz, OFDM/VHT */
 };
-#define	IEEE80211_MODE_MAX	(IEEE80211_MODE_11N+1)
+#define	IEEE80211_MODE_MAX	(IEEE80211_MODE_11AC+1)
 
 enum ieee80211_opmode {
 	IEEE80211_M_STA		= 1,	/* infrastructure station */
@@ -119,6 +120,7 @@ struct ieee80211_channel {
 #define IEEE80211_CHAN_DYN	0x0400	/* Dynamic CCK-OFDM channel */
 #define IEEE80211_CHAN_XR	0x1000	/* Extended range OFDM channel */
 #define IEEE80211_CHAN_HT	0x2000	/* 11n/HT channel */
+#define IEEE80211_CHAN_VHT	0x4000	/* 11ac/VHT channel */
 
 /*
  * Useful combinations of channel characteristics.
@@ -142,6 +144,8 @@ struct ieee80211_channel {
 	(((_c)->ic_flags & IEEE80211_CHAN_G) == IEEE80211_CHAN_G)
 #define	IEEE80211_IS_CHAN_N(_c) \
 	(((_c)->ic_flags & IEEE80211_CHAN_HT) == IEEE80211_CHAN_HT)
+#define	IEEE80211_IS_CHAN_AC(_c) \
+	(((_c)->ic_flags & IEEE80211_CHAN_VHT) == IEEE80211_CHAN_VHT)
 
 #define	IEEE80211_IS_CHAN_2GHZ(_c) \
 	(((_c)->ic_flags & IEEE80211_CHAN_2GHZ) != 0)
@@ -251,7 +255,7 @@ struct ieee80211com {
 	enum ieee80211_state	ic_state;	/* 802.11 state */
 	u_int32_t		*ic_aid_bitmap;
 	u_int16_t		ic_max_aid;
-	enum ieee80211_protmode	ic_protmode;	/* 802.11g protection mode */
+	enum ieee80211_protmode	ic_protmode;	/* 802.11g/n protection mode */
 	struct ifmedia		ic_media;	/* interface media config */
 	caddr_t			ic_rawbpf;	/* packet filter structure */
 	struct ieee80211_node	*ic_bss;	/* information for this node */
@@ -390,7 +394,8 @@ struct ieee80211_ess {
 #define	IEEE80211_F_PBAR	0x04000000	/* CONF: PBAC required */
 #define	IEEE80211_F_BGSCAN	0x08000000	/* STATUS: background scan */
 #define IEEE80211_F_AUTO_JOIN	0x10000000	/* CONF: auto-join active */
-#define IEEE80211_F_USERMASK	0xe0000000	/* CONF: ioctl flag mask */
+#define	IEEE80211_F_VHTON	0x20000000	/* CONF: VHT enabled */
+#define IEEE80211_F_USERMASK	0xc0000000	/* CONF: ioctl flag mask */
 
 /* ic_xflags */
 #define	IEEE80211_F_TX_MGMT_ONLY 0x00000001	/* leave data frames on ifq */
@@ -450,7 +455,7 @@ enum ieee80211_phymode ieee80211_chan2mode(struct ieee80211com *,
 void	ieee80211_disable_wep(struct ieee80211com *); 
 void	ieee80211_disable_rsn(struct ieee80211com *); 
 int	ieee80211_add_ess(struct ieee80211com *, struct ieee80211_join *);
-void	ieee80211_del_ess(struct ieee80211com *, char *, int);
+void	ieee80211_del_ess(struct ieee80211com *, char *, int, int);
 void	ieee80211_set_ess(struct ieee80211com *, struct ieee80211_ess *,
 	    struct ieee80211_node *);
 struct ieee80211_ess *ieee80211_get_ess(struct ieee80211com *, const char *, int);

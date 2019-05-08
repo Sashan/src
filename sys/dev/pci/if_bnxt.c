@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_bnxt.c,v 1.17 2018/09/19 10:26:17 jmatthew Exp $	*/
+/*	$OpenBSD: if_bnxt.c,v 1.20 2019/04/24 10:09:49 jmatthew Exp $	*/
 /*-
  * Broadcom NetXtreme-C/E network driver.
  *
@@ -62,7 +62,6 @@
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcidevs.h>
 
-#define __FBSDID(x)
 #include <dev/pci/if_bnxtreg.h>
 
 #include <net/if.h>
@@ -83,7 +82,7 @@
 #define BNXT_TX_RING_ID		3
 
 #define BNXT_MAX_QUEUE		8
-#define BNXT_MAX_MTU		9000
+#define BNXT_MAX_MTU		9500
 #define BNXT_AG_BUFFER_SIZE	8192
 
 #define BNXT_CP_PAGES		4
@@ -348,6 +347,7 @@ int		bnxt_hwrm_nvm_get_dev_info(struct bnxt_softc *, uint16_t *,
 int		bnxt_hwrm_port_phy_qcfg(struct bnxt_softc *,
 		    struct ifmediareq *);
 int		bnxt_hwrm_func_rgtr_async_events(struct bnxt_softc *);
+int		bnxt_get_sffpage(struct bnxt_softc *, struct if_sffpage *);
 
 /* not used yet: */
 #if 0
@@ -1026,6 +1026,10 @@ bnxt_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 
 	case SIOCGIFRXR:
 		error = bnxt_rxrinfo(sc, (struct if_rxrinfo *)ifr->ifr_data);
+		break;
+
+	case SIOCGIFSFFPAGE:
+		error = bnxt_get_sffpage(sc, (struct if_sffpage *)data);
 		break;
 
 	default:
@@ -3141,4 +3145,33 @@ int bnxt_hwrm_func_rgtr_async_events(struct bnxt_softc *softc)
 		_bnxt_hwrm_set_async_event_bit(&req, events[i]);
 
 	return hwrm_send_message(softc, &req, sizeof(req));
+}
+
+int
+bnxt_get_sffpage(struct bnxt_softc *softc, struct if_sffpage *sff)
+{
+	struct hwrm_port_phy_i2c_read_input req;
+	struct hwrm_port_phy_i2c_read_output *out;
+	int offset;
+
+	bnxt_hwrm_cmd_hdr_init(softc, &req, HWRM_PORT_PHY_I2C_READ);
+	req.i2c_slave_addr = sff->sff_addr;
+	req.page_number = htole16(sff->sff_page);
+
+	for (offset = 0; offset < 256; offset += sizeof(out->data)) {
+		req.page_offset = htole16(offset);
+		req.data_length = sizeof(out->data);
+		req.enables = htole32(HWRM_PORT_PHY_I2C_READ_REQ_ENABLES_PAGE_OFFSET);
+		
+		if (hwrm_send_message(softc, &req, sizeof(req))) {
+			printf("%s: failed to read i2c data\n", DEVNAME(softc));
+			return 1;
+		}
+
+		out = (struct hwrm_port_phy_i2c_read_output *)
+		    BNXT_DMA_KVA(softc->sc_cmd_resp);
+		memcpy(sff->sff_data + offset, out->data, sizeof(out->data));
+	}
+
+	return 0;
 }

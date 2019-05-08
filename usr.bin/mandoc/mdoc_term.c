@@ -1,7 +1,7 @@
-/*	$OpenBSD: mdoc_term.c,v 1.268 2018/12/03 21:00:06 schwarze Exp $ */
+/*	$OpenBSD: mdoc_term.c,v 1.271 2019/01/04 03:37:42 schwarze Exp $ */
 /*
  * Copyright (c) 2008, 2009, 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
- * Copyright (c) 2010, 2012-2018 Ingo Schwarze <schwarze@openbsd.org>
+ * Copyright (c) 2010, 2012-2019 Ingo Schwarze <schwarze@openbsd.org>
  * Copyright (c) 2013 Franco Fichtner <franco@lastsummer.de>
  *
  * Permission to use, copy, modify, and distribute this software for any
@@ -27,7 +27,6 @@
 #include <string.h>
 
 #include "mandoc_aux.h"
-#include "mandoc.h"
 #include "roff.h"
 #include "mdoc.h"
 #include "out.h"
@@ -250,7 +249,7 @@ static	int	 fn_prio;
 
 
 void
-terminal_mdoc(void *arg, const struct roff_man *mdoc)
+terminal_mdoc(void *arg, const struct roff_meta *mdoc)
 {
 	struct roff_node	*n;
 	struct termp		*p;
@@ -268,8 +267,7 @@ terminal_mdoc(void *arg, const struct roff_man *mdoc)
 			if (n->tok == MDOC_Sh && n->sec == SEC_SYNOPSIS) {
 				if (n->child->next->child != NULL)
 					print_mdoc_nodelist(p, NULL,
-					    &mdoc->meta,
-					    n->child->next->child);
+					    mdoc, n->child->next->child);
 				term_newln(p);
 				break;
 			}
@@ -279,8 +277,7 @@ terminal_mdoc(void *arg, const struct roff_man *mdoc)
 		save_defindent = p->defindent;
 		if (p->defindent == 0)
 			p->defindent = 5;
-		term_begin(p, print_mdoc_head, print_mdoc_foot,
-		    &mdoc->meta);
+		term_begin(p, print_mdoc_head, print_mdoc_foot, mdoc);
 		while (n != NULL &&
 		    (n->type == ROFFT_COMMENT ||
 		     n->flags & NODE_NOPRT))
@@ -288,7 +285,7 @@ terminal_mdoc(void *arg, const struct roff_man *mdoc)
 		if (n != NULL) {
 			if (n->tok != MDOC_Sh)
 				term_vspace(p);
-			print_mdoc_nodelist(p, NULL, &mdoc->meta, n);
+			print_mdoc_nodelist(p, NULL, mdoc, n);
 		}
 		term_end(p);
 		p->defindent = save_defindent;
@@ -312,6 +309,19 @@ print_mdoc_node(DECL_ARGS)
 	struct termpair	 npair;
 	size_t		 offset, rmargin;
 	int		 chld;
+
+	/*
+	 * In no-fill mode, break the output line at the beginning
+	 * of new input lines except after \c, and nowhere else.
+	 */
+
+	if (n->flags & NODE_NOFILL) {
+		if (n->flags & NODE_LINE &&
+		    (p->flags & TERMP_NONEWLINE) == 0)
+			term_newln(p);
+		p->flags |= TERMP_BRNEVER;
+	} else
+		p->flags &= ~TERMP_BRNEVER;
 
 	if (n->type == ROFFT_COMMENT || n->flags & NODE_NOPRT)
 		return;
@@ -342,9 +352,22 @@ print_mdoc_node(DECL_ARGS)
 
 	switch (n->type) {
 	case ROFFT_TEXT:
-		if (*n->string == ' ' && n->flags & NODE_LINE &&
-		    (p->flags & TERMP_NONEWLINE) == 0)
-			term_newln(p);
+		if (n->flags & NODE_LINE) {
+			switch (*n->string) {
+			case '\0':
+				if (p->flags & TERMP_NONEWLINE)
+					term_newln(p);
+				else
+					term_vspace(p);
+				return;
+			case ' ':
+				if ((p->flags & TERMP_NONEWLINE) == 0)
+					term_newln(p);
+				break;
+			default:
+				break;
+			}
+		}
 		if (NODE_DELIMC & n->flags)
 			p->flags |= TERMP_NOSPACE;
 		term_word(p, n->string);
@@ -1419,8 +1442,6 @@ termp_fa_pre(DECL_ARGS)
 static int
 termp_bd_pre(DECL_ARGS)
 {
-	size_t			 lm, len;
-	struct roff_node	*nn;
 	int			 offset;
 
 	if (n->type == ROFFT_BLOCK) {
@@ -1446,65 +1467,19 @@ termp_bd_pre(DECL_ARGS)
 			p->tcol->offset += offset;
 	}
 
-	/*
-	 * If -ragged or -filled are specified, the block does nothing
-	 * but change the indentation.  If -unfilled or -literal are
-	 * specified, text is printed exactly as entered in the display:
-	 * for macro lines, a newline is appended to the line.  Blank
-	 * lines are allowed.
-	 */
-
-	if (n->norm->Bd.type != DISP_literal &&
-	    n->norm->Bd.type != DISP_unfilled &&
-	    n->norm->Bd.type != DISP_centered)
-		return 1;
-
-	if (n->norm->Bd.type == DISP_literal) {
+	switch (n->norm->Bd.type) {
+	case DISP_literal:
 		term_tab_set(p, NULL);
 		term_tab_set(p, "T");
 		term_tab_set(p, "8n");
+		break;
+	case DISP_centered:
+		p->flags |= TERMP_CENTER;
+		break;
+	default:
+		break;
 	}
-
-	lm = p->tcol->offset;
-	p->flags |= TERMP_BRNEVER;
-	for (nn = n->child; nn != NULL; nn = nn->next) {
-		if (n->norm->Bd.type == DISP_centered) {
-			if (nn->type == ROFFT_TEXT) {
-				len = term_strlen(p, nn->string);
-				p->tcol->offset = len >= p->tcol->rmargin ?
-				    0 : lm + len >= p->tcol->rmargin ?
-				    p->tcol->rmargin - len :
-				    (lm + p->tcol->rmargin - len) / 2;
-			} else
-				p->tcol->offset = lm;
-		}
-		print_mdoc_node(p, pair, meta, nn);
-		/*
-		 * If the printed node flushes its own line, then we
-		 * needn't do it here as well.  This is hacky, but the
-		 * notion of selective eoln whitespace is pretty dumb
-		 * anyway, so don't sweat it.
-		 */
-		if (nn->tok < ROFF_MAX)
-			continue;
-		switch (nn->tok) {
-		case MDOC_Sm:
-		case MDOC_Bl:
-		case MDOC_D1:
-		case MDOC_Dl:
-		case MDOC_Pp:
-			continue;
-		default:
-			break;
-		}
-		if (p->flags & TERMP_NONEWLINE ||
-		    (nn->next && ! (nn->next->flags & NODE_LINE)))
-			continue;
-		term_flushln(p);
-		p->flags |= TERMP_NOSPACE;
-	}
-	p->flags &= ~TERMP_BRNEVER;
-	return 0;
+	return 1;
 }
 
 static void
@@ -1512,12 +1487,14 @@ termp_bd_post(DECL_ARGS)
 {
 	if (n->type != ROFFT_BODY)
 		return;
-	if (DISP_literal == n->norm->Bd.type ||
-	    DISP_unfilled == n->norm->Bd.type)
+	if (n->norm->Bd.type == DISP_unfilled ||
+	    n->norm->Bd.type == DISP_literal)
 		p->flags |= TERMP_BRNEVER;
 	p->flags |= TERMP_NOSPACE;
 	term_newln(p);
 	p->flags &= ~TERMP_BRNEVER;
+	if (n->norm->Bd.type == DISP_centered)
+		p->flags &= ~TERMP_CENTER;
 }
 
 static int

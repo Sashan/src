@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.c,v 1.568 2018/11/29 00:11:49 dlg Exp $	*/
+/*	$OpenBSD: if.c,v 1.581 2019/04/28 22:15:57 mpi Exp $	*/
 /*	$NetBSD: if.c,v 1.35 1996/05/07 05:26:04 thorpej Exp $	*/
 
 /*
@@ -84,6 +84,7 @@
 #include <sys/domain.h>
 #include <sys/task.h>
 #include <sys/atomic.h>
+#include <sys/percpu.h>
 #include <sys/proc.h>
 
 #include <dev/rndvar.h>
@@ -143,6 +144,8 @@ int	if_detached_ioctl(struct ifnet *, u_long, caddr_t);
 
 int	ifioctl_get(u_long, caddr_t);
 int	ifconf(caddr_t);
+static int
+	if_sffpage_check(const caddr_t);
 
 int	if_getgroup(caddr_t, struct ifnet *);
 int	if_getgroupmembers(caddr_t);
@@ -612,6 +615,8 @@ if_attach_common(struct ifnet *ifp)
 	ifp->if_snd.ifq_ifqs[0] = &ifp->if_snd;
 	ifp->if_ifqs = ifp->if_snd.ifq_ifqs;
 	ifp->if_nifqs = 1;
+	if (ifp->if_txmit == 0)
+		ifp->if_txmit = IF_TXMIT_DEFAULT;
 
 	ifiq_init(&ifp->if_rcv, ifp, 0);
 
@@ -631,6 +636,8 @@ if_attach_common(struct ifnet *ifp)
 
 	if (ifp->if_rtrequest == NULL)
 		ifp->if_rtrequest = if_rtrequest_dummy;
+	if (ifp->if_enqueue == NULL)
+		ifp->if_enqueue = if_enqueue_ifq;
 	ifp->if_llprio = IFQ_DEFPRIO;
 
 	SRPL_INIT(&ifp->if_inputs);
@@ -682,20 +689,16 @@ if_qstart_compat(struct ifqueue *ifq)
 int
 if_enqueue(struct ifnet *ifp, struct mbuf *m)
 {
-	unsigned int idx;
-	struct ifqueue *ifq;
-	int error;
-
 #if NPF > 0
 	if (m->m_pkthdr.pf.delay > 0)
 		return (pf_delay_pkt(m, ifp->if_index));
 #endif
 
 #if NBRIDGE > 0
-	if (ifp->if_bridgeport && (m->m_flags & M_PROTO1) == 0) {
-		KERNEL_LOCK();
-		error = bridge_output(ifp, m, NULL, NULL);
-		KERNEL_UNLOCK();
+	if (ifp->if_bridgeidx && (m->m_flags & M_PROTO1) == 0) {
+		int error;
+
+		error = bridge_enqueue(ifp, m);
 		return (error);
 	}
 #endif
@@ -704,12 +707,26 @@ if_enqueue(struct ifnet *ifp, struct mbuf *m)
 	pf_pkt_addr_changed(m);
 #endif	/* NPF > 0 */
 
-	/*
-	 * use the operations on the first ifq to pick which of the array
-	 * gets this mbuf.
-	 */
-	idx = ifq_idx(&ifp->if_snd, ifp->if_nifqs, m);
-	ifq = ifp->if_ifqs[idx];
+	return ((*ifp->if_enqueue)(ifp, m));
+}
+
+int
+if_enqueue_ifq(struct ifnet *ifp, struct mbuf *m)
+{
+	struct ifqueue *ifq = &ifp->if_snd;
+	int error;
+
+	if (ifp->if_nifqs > 1) {
+		unsigned int idx;
+
+		/*
+		 * use the operations on the first ifq to pick which of
+		 * the array gets this mbuf.
+		 */
+
+		idx = ifq_idx(&ifp->if_snd, ifp->if_nifqs, m);
+		ifq = ifp->if_ifqs[idx];
+	}
 
 	error = ifq_enqueue(ifq, m);
 	if (error)
@@ -723,7 +740,7 @@ if_enqueue(struct ifnet *ifp, struct mbuf *m)
 void
 if_input(struct ifnet *ifp, struct mbuf_list *ml)
 {
-	ifiq_input(&ifp->if_rcv, ml, 2048);
+	ifiq_input(&ifp->if_rcv, ml);
 }
 
 int
@@ -879,13 +896,30 @@ if_ih_remove(struct ifnet *ifp, int (*input)(struct ifnet *, struct mbuf *,
 	}
 }
 
+static void
+if_ih_input(struct ifnet *ifp, struct mbuf *m)
+{
+	struct ifih *ifih;
+	struct srp_ref sr;
+
+	/*
+	 * Pass this mbuf to all input handlers of its
+	 * interface until it is consumed.
+	 */
+	SRPL_FOREACH(ifih, &sr, &ifp->if_inputs, ifih_next) {
+		if ((*ifih->ifih_input)(ifp, m, ifih->ifih_cookie))
+			break;
+	}
+	SRPL_LEAVE(&sr);
+
+	if (ifih == NULL)
+		m_freem(m);
+}
+
 void
 if_input_process(struct ifnet *ifp, struct mbuf_list *ml)
 {
 	struct mbuf *m;
-	struct ifih *ifih;
-	struct srp_ref sr;
-	int s;
 
 	if (ml_empty(ml))
 		return;
@@ -906,23 +940,35 @@ if_input_process(struct ifnet *ifp, struct mbuf_list *ml)
 	 * lists.
 	 */
 	NET_RLOCK();
-	s = splnet();
-	while ((m = ml_dequeue(ml)) != NULL) {
-		/*
-		 * Pass this mbuf to all input handlers of its
-		 * interface until it is consumed.
-		 */
-		SRPL_FOREACH(ifih, &sr, &ifp->if_inputs, ifih_next) {
-			if ((*ifih->ifih_input)(ifp, m, ifih->ifih_cookie))
-				break;
-		}
-		SRPL_LEAVE(&sr);
-
-		if (ifih == NULL)
-			m_freem(m);
-	}
-	splx(s);
+	while ((m = ml_dequeue(ml)) != NULL)
+		if_ih_input(ifp, m);
 	NET_RUNLOCK();
+}
+
+void
+if_vinput(struct ifnet *ifp, struct mbuf *m)
+{
+#if NBPFILTER > 0
+	caddr_t if_bpf;
+#endif
+
+	m->m_pkthdr.ph_ifidx = ifp->if_index;
+	m->m_pkthdr.ph_rtableid = ifp->if_rdomain;
+
+	counters_pkt(ifp->if_counters,
+	    ifc_ipackets, ifc_ibytes, m->m_pkthdr.len);
+
+#if NBPFILTER > 0
+	if_bpf = ifp->if_bpf;
+	if (if_bpf) {
+		if (bpf_mtap_ether(if_bpf, m, BPF_DIRECTION_OUT)) {
+			m_freem(m);
+			return;
+		}
+	}
+#endif
+
+	if_ih_input(ifp, m);
 }
 
 void
@@ -1103,6 +1149,9 @@ if_detach(struct ifnet *ifp)
 	splx(s);
 	NET_UNLOCK();
 
+	if (ifp->if_counters != NULL)
+		if_counters_free(ifp);
+
 	for (i = 0; i < ifp->if_nifqs; i++)
 		ifq_destroy(ifp->if_ifqs[i]);
 	if (ifp->if_ifqs != ifp->if_snd.ifq_ifqs) {
@@ -1143,7 +1192,7 @@ if_isconnected(const struct ifnet *ifp0, unsigned int ifidx)
 		connected = 1;
 
 #if NBRIDGE > 0
-	if (SAME_BRIDGE(ifp0->if_bridgeport, ifp->if_bridgeport))
+	if (ifp0->if_bridgeidx == ifp->if_bridgeidx)
 		connected = 1;
 #endif
 #if NCARP > 0
@@ -1622,7 +1671,7 @@ if_slowtimo(void *arg)
 	if (ifp->if_watchdog) {
 		if (ifp->if_timer > 0 && --ifp->if_timer == 0)
 			task_add(net_tq(ifp->if_index), &ifp->if_watchdogtask);
-		timeout_add(&ifp->if_slowtimo, hz / IFNET_SLOWHZ);
+		timeout_add_sec(&ifp->if_slowtimo, IFNET_SLOWTIMO);
 	}
 	splx(s);
 }
@@ -2125,6 +2174,19 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		NET_UNLOCK();
 		break;
 
+	case SIOCGIFSFFPAGE:
+		error = suser(p);
+		if (error != 0)
+			break;
+
+		error = if_sffpage_check(data);
+		if (error != 0)
+			break;
+
+		/* don't take NET_LOCK because i2c reads take a long time */
+		error = ((*ifp->if_ioctl)(ifp, cmd, data));
+		break;
+
 	case SIOCSETKALIVE:
 	case SIOCDIFPHYADDR:
 	case SIOCSLIFPHYADDR:
@@ -2138,9 +2200,17 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCSVNETID:
 	case SIOCSVNETFLOWID:
 	case SIOCSTXHPRIO:
+	case SIOCSRXHPRIO:
 	case SIOCSIFPAIR:
 	case SIOCSIFPARENT:
 	case SIOCDIFPARENT:
+	case SIOCSETMPWCFG:
+	case SIOCSETLABEL:
+	case SIOCDELLABEL:
+	case SIOCSPWE3CTRLWORD:
+	case SIOCSPWE3FAT:
+	case SIOCSPWE3NEIGHBOR:
+	case SIOCDPWE3NEIGHBOR:
 		if ((error = suser(p)) != 0)
 			break;
 		/* FALLTHROUGH */
@@ -2279,6 +2349,86 @@ ifioctl_get(u_long cmd, caddr_t data)
 	return (error);
 }
 
+static int
+if_sffpage_check(const caddr_t data)
+{
+	const struct if_sffpage *sff = (const struct if_sffpage *)data;
+
+	switch (sff->sff_addr) {
+	case IFSFF_ADDR_EEPROM:
+	case IFSFF_ADDR_DDM:
+		break;
+	default:
+		return (EINVAL);
+	}
+
+	return (0);
+}
+
+int
+if_txhprio_l2_check(int hdrprio)
+{
+	switch (hdrprio) {
+	case IF_HDRPRIO_PACKET:
+		return (0);
+	default:
+		if (hdrprio >= IF_HDRPRIO_MIN && hdrprio <= IF_HDRPRIO_MAX)
+			return (0);
+		break;
+	}
+
+	return (EINVAL);
+}
+
+int
+if_txhprio_l3_check(int hdrprio)
+{
+	switch (hdrprio) {
+	case IF_HDRPRIO_PACKET:
+	case IF_HDRPRIO_PAYLOAD:
+		return (0);
+	default:
+		if (hdrprio >= IF_HDRPRIO_MIN && hdrprio <= IF_HDRPRIO_MAX)
+			return (0);
+		break;
+	}
+
+	return (EINVAL);
+}
+
+int
+if_rxhprio_l2_check(int hdrprio)
+{
+	switch (hdrprio) {
+	case IF_HDRPRIO_PACKET:
+	case IF_HDRPRIO_OUTER:
+		return (0);
+	default:
+		if (hdrprio >= IF_HDRPRIO_MIN && hdrprio <= IF_HDRPRIO_MAX)
+			return (0);
+		break;
+	}
+
+	return (EINVAL);
+}
+
+int
+if_rxhprio_l3_check(int hdrprio)
+{
+	switch (hdrprio) {
+	case IF_HDRPRIO_PACKET:
+	case IF_HDRPRIO_PAYLOAD:
+	case IF_HDRPRIO_OUTER:
+		return (0);
+	default:
+		if (hdrprio >= IF_HDRPRIO_MIN && hdrprio <= IF_HDRPRIO_MAX)
+			return (0);
+		break;
+	}
+
+	return (EINVAL);
+}
+
 /*
  * Return interface configuration
  * of system.  List may be used
@@ -2362,11 +2512,47 @@ ifconf(caddr_t data)
 }
 
 void
+if_counters_alloc(struct ifnet *ifp)
+{
+	KASSERT(ifp->if_counters == NULL);
+
+	ifp->if_counters = counters_alloc(ifc_ncounters);
+}
+
+void
+if_counters_free(struct ifnet *ifp)
+{
+	KASSERT(ifp->if_counters != NULL);
+
+	counters_free(ifp->if_counters, ifc_ncounters);
+	ifp->if_counters = NULL;
+}
+
+void
 if_getdata(struct ifnet *ifp, struct if_data *data)
 {
 	unsigned int i;
 
 	*data = ifp->if_data;
+
+	if (ifp->if_counters != NULL) {
+		uint64_t counters[ifc_ncounters];
+
+		counters_read(ifp->if_counters, counters, nitems(counters));
+
+		data->ifi_ipackets += counters[ifc_ipackets];
+		data->ifi_ierrors += counters[ifc_ierrors];
+		data->ifi_opackets += counters[ifc_opackets];
+		data->ifi_oerrors += counters[ifc_oerrors];
+		data->ifi_collisions += counters[ifc_collisions];
+		data->ifi_ibytes += counters[ifc_ibytes];
+		data->ifi_obytes += counters[ifc_obytes];
+		data->ifi_imcasts += counters[ifc_imcasts];
+		data->ifi_omcasts += counters[ifc_omcasts];
+		data->ifi_iqdrops += counters[ifc_iqdrops];
+		data->ifi_oqdrops += counters[ifc_oqdrops];
+		data->ifi_noproto += counters[ifc_noproto];
+	}
 
 	for (i = 0; i < ifp->if_nifqs; i++) {
 		struct ifqueue *ifq = ifp->if_ifqs[i];

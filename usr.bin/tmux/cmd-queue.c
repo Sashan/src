@@ -1,4 +1,4 @@
-/* $OpenBSD: cmd-queue.c,v 1.58 2017/08/30 10:33:57 nicm Exp $ */
+/* $OpenBSD: cmd-queue.c,v 1.65 2019/05/03 18:59:58 nicm Exp $ */
 
 /*
  * Copyright (c) 2013 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -66,6 +66,7 @@ cmdq_append(struct client *c, struct cmdq_item *item)
 
 		item->queue = queue;
 		TAILQ_INSERT_TAIL(queue, item, entry);
+		log_debug("%s %s: %s", __func__, cmdq_name(c), item->name);
 
 		item = next;
 	} while (item != NULL);
@@ -81,21 +82,75 @@ cmdq_insert_after(struct cmdq_item *after, struct cmdq_item *item)
 
 	do {
 		next = item->next;
-		item->next = NULL;
+		item->next = after->next;
+		after->next = item;
 
 		if (c != NULL)
 			c->references++;
 		item->client = c;
 
 		item->queue = queue;
-		if (after->next != NULL)
-			TAILQ_INSERT_AFTER(queue, after->next, item, entry);
-		else
-			TAILQ_INSERT_AFTER(queue, after, item, entry);
-		after->next = item;
+		TAILQ_INSERT_AFTER(queue, after, item, entry);
+		log_debug("%s %s: %s after %s", __func__, cmdq_name(c),
+		    item->name, after->name);
 
+		after = item;
 		item = next;
 	} while (item != NULL);
+}
+
+
+/* Insert a hook. */
+void
+cmdq_insert_hook(struct session *s, struct cmdq_item *item,
+    struct cmd_find_state *fs, const char *fmt, ...)
+{
+	struct options			*oo;
+	va_list				 ap;
+	char				*name;
+	struct cmdq_item		*new_item;
+	struct options_entry		*o;
+	struct options_array_item	*a;
+	struct cmd_list			*cmdlist;
+
+	if (item->flags & CMDQ_NOHOOKS)
+		return;
+	if (s == NULL)
+		oo = global_s_options;
+	else
+		oo = s->options;
+
+	va_start(ap, fmt);
+	xvasprintf(&name, fmt, ap);
+	va_end(ap);
+
+	o = options_get(oo, name);
+	if (o == NULL) {
+		free(name);
+		return;
+	}
+	log_debug("running hook %s (parent %p)", name, item);
+
+	a = options_array_first(o);
+	while (a != NULL) {
+		cmdlist = options_array_item_value(a)->cmdlist;
+		if (cmdlist == NULL) {
+			a = options_array_next(a);
+			continue;
+		}
+
+		new_item = cmdq_get_command(cmdlist, fs, NULL, CMDQ_NOHOOKS);
+		cmdq_format(new_item, "hook", "%s", name);
+		if (item != NULL) {
+			cmdq_insert_after(item, new_item);
+			item = new_item;
+		} else
+			cmdq_append(NULL, new_item);
+
+		a = options_array_next(a);
+	}
+
+	free(name);
 }
 
 /* Remove an item. */
@@ -111,12 +166,12 @@ cmdq_remove(struct cmdq_item *item)
 	if (item->client != NULL)
 		server_client_unref(item->client);
 
-	if (item->type == CMDQ_COMMAND)
+	if (item->cmdlist != NULL)
 		cmd_list_free(item->cmdlist);
 
 	TAILQ_REMOVE(item->queue, item, entry);
 
-	free((void *)item->name);
+	free(item->name);
 	free(item);
 }
 
@@ -152,7 +207,6 @@ cmdq_get_command(struct cmd_list *cmdlist, struct cmd_find_state *current,
 	struct cmdq_item	*item, *first = NULL, *last = NULL;
 	struct cmd		*cmd;
 	u_int			 group = cmdq_next_group();
-	char			*tmp;
 	struct cmdq_shared	*shared;
 
 	shared = xcalloc(1, sizeof *shared);
@@ -164,10 +218,8 @@ cmdq_get_command(struct cmd_list *cmdlist, struct cmd_find_state *current,
 		memcpy(&shared->mouse, m, sizeof shared->mouse);
 
 	TAILQ_FOREACH(cmd, &cmdlist->list, qentry) {
-		xasprintf(&tmp, "command[%s]", cmd->entry->name);
-
 		item = xcalloc(1, sizeof *item);
-		item->name = tmp;
+		xasprintf(&item->name, "[%s/%p]", cmd->entry->name, item);
 		item->type = CMDQ_COMMAND;
 
 		item->group = group;
@@ -245,7 +297,7 @@ cmdq_fire_command(struct cmdq_item *item)
 			fsp = &fs;
 		else
 			goto out;
-		hooks_insert(fsp->s->hooks, item, fsp, "after-%s", entry->name);
+		cmdq_insert_hook(fsp->s, item, fsp, "after-%s", entry->name);
 	}
 
 out:
@@ -262,12 +314,9 @@ struct cmdq_item *
 cmdq_get_callback1(const char *name, cmdq_cb cb, void *data)
 {
 	struct cmdq_item	*item;
-	char			*tmp;
-
-	xasprintf(&tmp, "callback[%s]", name);
 
 	item = xcalloc(1, sizeof *item);
-	item->name = tmp;
+	xasprintf(&item->name, "[%s/%p]", name, item);
 	item->type = CMDQ_CALLBACK;
 
 	item->group = 0;
@@ -404,10 +453,11 @@ cmdq_guard(struct cmdq_item *item, const char *guard, int flags)
 void
 cmdq_print(struct cmdq_item *item, const char *fmt, ...)
 {
-	struct client	*c = item->client;
-	struct window	*w;
-	va_list		 ap;
-	char		*tmp, *msg;
+	struct client			*c = item->client;
+	struct window_pane		*wp;
+	struct window_mode_entry	*wme;
+	va_list				 ap;
+	char				*tmp, *msg;
 
 	va_start(ap, fmt);
 
@@ -425,14 +475,11 @@ cmdq_print(struct cmdq_item *item, const char *fmt, ...)
 		evbuffer_add(c->stdout_data, "\n", 1);
 		server_client_push_stdout(c);
 	} else {
-		w = c->session->curw->window;
-		if (w->active->mode != &window_copy_mode) {
-			window_pane_reset_mode(w->active);
-			window_pane_set_mode(w->active, &window_copy_mode, NULL,
-			    NULL);
-			window_copy_init_for_output(w->active);
-		}
-		window_copy_vadd(w->active, fmt, ap);
+		wp = c->session->curw->window->active;
+		wme = TAILQ_FIRST(&wp->modes);
+		if (wme == NULL || wme->mode != &window_view_mode)
+			window_pane_set_mode(wp, &window_view_mode, NULL, NULL);
+		window_copy_vadd(wp, fmt, ap);
 	}
 
 	va_end(ap);

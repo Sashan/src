@@ -1,4 +1,4 @@
-/*	$OpenBSD: vnode.h,v 1.148 2018/08/13 15:26:17 visa Exp $	*/
+/*	$OpenBSD: vnode.h,v 1.150 2019/02/17 22:17:28 tedu Exp $	*/
 /*	$NetBSD: vnode.h,v 1.38 1996/02/29 20:59:05 cgd Exp $	*/
 
 /*
@@ -149,6 +149,7 @@ struct vnode {
 #define	VBIOWAIT	0x0001	/* waiting for output to complete */
 #define VBIOONSYNCLIST	0x0002	/* Vnode is on syncer worklist */
 #define VBIOONFREELIST  0x0004  /* Vnode is on a free list */
+#define VBIOERROR	0x0008  /* A write failed */
 
 /*
  * Vnode attributes.  A field value of VNOVAL represents a field whose value
@@ -586,6 +587,7 @@ struct vnode *checkalias(struct vnode *, dev_t, struct mount *);
 int	getnewvnode(enum vtagtype, struct mount *, struct vops *,
 	    struct vnode **);
 int	vaccess(enum vtype, mode_t, uid_t, gid_t, mode_t, struct ucred *);
+int	vnoperm(struct vnode *);
 void	vattr_null(struct vattr *);
 void	vdevgone(int, int, int, enum vtype);
 int	vcount(struct vnode *);

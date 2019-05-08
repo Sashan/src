@@ -1,4 +1,4 @@
-/*	$OpenBSD: frontend.c,v 1.22 2018/07/23 17:25:52 florian Exp $	*/
+/*	$OpenBSD: frontend.c,v 1.26 2019/03/15 16:45:33 florian Exp $	*/
 
 /*
  * Copyright (c) 2017 Florian Obser <florian@openbsd.org>
@@ -352,6 +352,9 @@ frontend_dispatch_main(int fd, short event, void *bula)
 			break;
 #ifndef	SMALL
 		case IMSG_CONTROLFD:
+			if (control_state.fd != -1)
+				fatalx("%s: received unexpected controlsock",
+				    __func__);
 			if ((fd = imsg.fd) == -1)
 				fatalx("%s: expected to receive imsg "
 				    "control fd but didn't receive any",
@@ -426,10 +429,18 @@ frontend_dispatch_engine(int fd, short event, void *bula)
 			break;
 #endif	/* SMALL */
 		case IMSG_CTL_SEND_SOLICITATION:
+			if (IMSG_DATA_SIZE(imsg) != sizeof(if_index))
+				fatalx("%s: IMSG_CTL_SEND_SOLICITATION wrong "
+				    "length: %lu", __func__,
+				    IMSG_DATA_SIZE(imsg));		
 			if_index = *((uint32_t *)imsg.data);
 			send_solicitation(if_index);
 			break;
 		case IMSG_FAKE_ACK:
+			if (IMSG_DATA_SIZE(imsg) != sizeof(struct 
+			    imsg_proposal_ack))
+				fatalx("%s: IMSG_FAKE_ACK wrong length: %lu",
+				    __func__, IMSG_DATA_SIZE(imsg));
 			frontend_imsg_compose_engine(IMSG_PROPOSAL_ACK,
 			   0, 0, imsg.data, sizeof(struct imsg_proposal_ack));
 			break;
@@ -564,7 +575,7 @@ update_autoconf_addresses(uint32_t if_index, char* if_name)
 		memset(&ifr6, 0, sizeof(ifr6));
 		(void) strlcpy(ifr6.ifr_name, if_name, sizeof(ifr6.ifr_name));
 		memcpy(&ifr6.ifr_addr, sin6, sizeof(ifr6.ifr_addr));
-		
+
 		if (ioctl(ioctlsock, SIOCGIFNETMASK_IN6, (caddr_t)&ifr6) < 0) {
 			log_warn("SIOCGIFNETMASK_IN6");
 			continue;
@@ -605,7 +616,7 @@ update_autoconf_addresses(uint32_t if_index, char* if_name)
 	log_debug("%s: %s link state down? %s", __func__, if_name,
 	    imsg_link_state.link_state == LINK_STATE_DOWN ? "yes" : "no");
 
-	frontend_imsg_compose_main(IMSG_UPDATE_LINK_STATE, 0, 
+	frontend_imsg_compose_main(IMSG_UPDATE_LINK_STATE, 0,
 	    &imsg_link_state, sizeof(imsg_link_state));
 }
 
@@ -872,13 +883,13 @@ handle_route_message(struct rt_msghdr *rtm, struct sockaddr **rti_info)
 			    argv[3] == NULL) {
 				id = strtonum(argv[1], 0, INT64_MAX, &errstr);
 				if (errstr != NULL) {
-					log_warn("%s: proposal seq is %s: %s",
+					log_warnx("%s: proposal seq is %s: %s",
 					    __func__, errstr, argv[1]);
 					break;
 				}
 				pid = strtonum(argv[2], 0, INT32_MAX, &errstr);
 				if (errstr != NULL) {
-					log_warn("%s: pid is %s: %s",
+					log_warnx("%s: pid is %s: %s",
 					    __func__, errstr, argv[2]);
 					break;
 				}

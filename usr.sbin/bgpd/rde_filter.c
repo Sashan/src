@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde_filter.c,v 1.114 2018/11/28 08:32:27 claudio Exp $ */
+/*	$OpenBSD: rde_filter.c,v 1.117 2019/02/04 18:53:10 claudio Exp $ */
 
 /*
  * Copyright (c) 2004 Claudio Jeker <claudio@openbsd.org>
@@ -131,6 +131,15 @@ rde_apply_set(struct filter_set_head *sh, struct filterstate *state,
 			state->aspath.aspath = aspath_get(np, nl);
 			free(np);
 			break;
+		case ACTION_SET_AS_OVERRIDE:
+			if (from == NULL)
+				break;
+			 np = aspath_override(state->aspath.aspath,
+			     from->conf.remote_as, from->conf.local_as, &nl);
+			aspath_put(state->aspath.aspath);
+			state->aspath.aspath = aspath_get(np, nl);
+			free(np);
+			break;
 		case ACTION_SET_NEXTHOP:
 		case ACTION_SET_NEXTHOP_REJECT:
 		case ACTION_SET_NEXTHOP_BLACKHOLE:
@@ -149,6 +158,10 @@ rde_apply_set(struct filter_set_head *sh, struct filterstate *state,
 				community_large_set(&state->aspath,
 				    &set->action.community, peer);
 				break;
+			case COMMUNITY_TYPE_EXT:
+				community_ext_set(&state->aspath,
+				    &set->action.community, peer);
+				break;
 			}
 			break;
 		case ACTION_DEL_COMMUNITY:
@@ -161,6 +174,9 @@ rde_apply_set(struct filter_set_head *sh, struct filterstate *state,
 				community_large_delete(&state->aspath,
 				    &set->action.community, peer);
 				break;
+			case COMMUNITY_TYPE_EXT:
+				community_ext_delete(&state->aspath,
+				    &set->action.community, peer);
 			}
 			break;
 		case ACTION_PFTABLE:
@@ -183,16 +199,6 @@ rde_apply_set(struct filter_set_head *sh, struct filterstate *state,
 			break;
 		case ACTION_SET_ORIGIN:
 			state->aspath.origin = set->action.origin;
-			break;
-		case ACTION_SET_EXT_COMMUNITY:
-			community_ext_set(&state->aspath,
-			    &set->action.ext_community,
-			    peer->conf.remote_as);
-			break;
-		case ACTION_DEL_EXT_COMMUNITY:
-			community_ext_delete(&state->aspath,
-			    &set->action.ext_community,
-			    peer->conf.remote_as);
 			break;
 		}
 	}
@@ -219,8 +225,8 @@ rde_filter_match(struct filter_rule *f, struct rde_peer *peer,
 	}
 
 	if (asp != NULL && f->match.as.type != AS_UNDEF) {
-		if (aspath_match(asp->aspath->data, asp->aspath->len,
-		    &f->match.as, peer->conf.remote_as) == 0)
+		if (aspath_match(asp->aspath, &f->match.as,
+		    peer->conf.remote_as) == 0)
 			return (0);
 	}
 
@@ -244,13 +250,12 @@ rde_filter_match(struct filter_rule *f, struct rde_peer *peer,
 			    peer) == 0)
 				return (0);
 			break;
+		case COMMUNITY_TYPE_EXT:
+			if (community_ext_match(asp, &f->match.community[i],
+			    peer) == 0)
+				return (0);
 		}
 	}
-	if (asp != NULL &&
-	    (f->match.ext_community.flags & EXT_COMMUNITY_FLAG_VALID))
-		if (community_ext_match(asp, &f->match.ext_community,
-		    peer->conf.remote_as) == 0)
-			return (0);
 
 	if (state != NULL && f->match.nexthop.flags != 0) {
 		struct bgpd_addr *nexthop, *cmpaddr;
@@ -289,7 +294,7 @@ rde_filter_match(struct filter_rule *f, struct rde_peer *peer,
 		pt_getaddr(p->re->prefix, prefix);
 		plen = p->re->prefix->prefixlen;
 		if (trie_roa_check(&f->match.originset.ps->th, prefix, plen,
-		    asp->source_as) != ROA_VALID)
+		    aspath_origin(asp->aspath)) != ROA_VALID)
 			return (0);
 	}
 
@@ -540,12 +545,6 @@ filterset_cmp(struct filter_set *a, struct filter_set *b)
 		    sizeof(a->action.community)));
 	}
 
-	if (a->type == ACTION_SET_EXT_COMMUNITY ||
-	    a->type == ACTION_DEL_EXT_COMMUNITY) {	/* a->type == b->type */
-		return (memcmp(&a->action.ext_community,
-		    &b->action.ext_community, sizeof(a->action.ext_community)));
-	}
-
 	if (a->type == ACTION_SET_NEXTHOP && b->type == ACTION_SET_NEXTHOP) {
 		/*
 		 * This is the only interesting case, all others are considered
@@ -583,6 +582,10 @@ filterset_equal(struct filter_set_head *ah, struct filter_set_head *bh)
 		case ACTION_SET_PREPEND_PEER:
 			if (a->type == b->type &&
 			    a->action.prepend == b->action.prepend)
+				continue;
+			break;
+		case ACTION_SET_AS_OVERRIDE:
+			if (a->type == b->type)
 				continue;
 			break;
 		case ACTION_SET_LOCALPREF:
@@ -658,14 +661,6 @@ filterset_equal(struct filter_set_head *ah, struct filter_set_head *bh)
 			    a->action.origin == b->action.origin)
 				continue;
 			break;
-		case ACTION_SET_EXT_COMMUNITY:
-		case ACTION_DEL_EXT_COMMUNITY:
-			if (a->type == b->type && memcmp(
-			    &a->action.ext_community,
-			    &b->action.ext_community,
-			    sizeof(a->action.ext_community)) == 0)
-				continue;
-			break;
 		}
 		/* compare failed */
 		return (0);
@@ -692,6 +687,8 @@ filterset_name(enum action_types type)
 		return ("prepend-self");
 	case ACTION_SET_PREPEND_PEER:
 		return ("prepend-peer");
+	case ACTION_SET_AS_OVERRIDE:
+		return ("as-override");
 	case ACTION_SET_NEXTHOP:
 	case ACTION_SET_NEXTHOP_REJECT:
 	case ACTION_SET_NEXTHOP_BLACKHOLE:
@@ -710,10 +707,6 @@ filterset_name(enum action_types type)
 		return ("rtlabel");
 	case ACTION_SET_ORIGIN:
 		return ("origin");
-	case ACTION_SET_EXT_COMMUNITY:
-		return ("ext-community");
-	case ACTION_DEL_EXT_COMMUNITY:
-		return ("ext-community delete");
 	}
 
 	fatalx("filterset_name: got lost");

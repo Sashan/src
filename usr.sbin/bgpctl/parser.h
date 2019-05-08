@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.h,v 1.32 2018/11/28 08:33:59 claudio Exp $ */
+/*	$OpenBSD: parser.h,v 1.35 2019/02/11 15:47:55 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -63,12 +63,14 @@ struct parse_result {
 	struct filter_as	 as;
 	struct filter_set_head	 set;
 	struct filter_community  community;
-	struct filter_extcommunity extcommunity;
 	char			 peerdesc[PEER_DESCR_LEN];
 	char			 rib[PEER_DESCR_LEN];
 	char			 shutcomm[SHUT_COMM_LEN];
 	char			*irr_outdir;
+	const char		*ext_comm_subtype;
+	u_int64_t		 rd;
 	int			 flags;
+	int			 is_group;
 	u_int8_t		 validation_state;
 	u_int			 rtableid;
 	enum actions		 action;

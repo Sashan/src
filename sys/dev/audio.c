@@ -1,4 +1,4 @@
-/*	$OpenBSD: audio.c,v 1.173 2018/10/31 02:25:26 miko Exp $	*/
+/*	$OpenBSD: audio.c,v 1.178 2019/04/05 06:14:13 ratchov Exp $	*/
 /*
  * Copyright (c) 2015 Alexandre Ratchov <alex@caoua.org>
  *
@@ -125,7 +125,6 @@ struct audio_softc {
 #if NWSKBD > 0
 	struct wskbd_vol spkr, mic;
 	struct task wskbd_task;
-	int wskbd_taskset;
 #endif
 	int record_enable;		/* mixer record.enable value */
 };
@@ -138,6 +137,7 @@ void audio_pintr(void *);
 void audio_rintr(void *);
 #if NWSKBD > 0
 void wskbd_mixer_init(struct audio_softc *);
+void wskbd_mixer_cb(void *);
 #endif
 
 const struct cfattach audio_ca = {
@@ -387,7 +387,7 @@ audio_pintr(void *addr)
 	 * check if record pointer wrapped, see explanation
 	 * in audio_rintr()
 	 */
-	if (sc->mode & AUMODE_RECORD) {
+	if ((sc->mode & AUMODE_RECORD) && sc->ops->underrun == NULL) {
 		sc->offs--;
 		nblk = sc->rec.len / sc->rec.blksz;
 		todo = -sc->offs;
@@ -401,12 +401,17 @@ audio_pintr(void *addr)
 	}
 
 	sc->play.pos += sc->play.blksz;
-	audio_fill_sil(sc, sc->play.data + sc->play.start, sc->play.blksz);
+	if (!sc->ops->underrun) {
+		audio_fill_sil(sc, sc->play.data + sc->play.start,
+		    sc->play.blksz);
+	}
 	audio_buf_rdiscard(&sc->play, sc->play.blksz);
 	if (sc->play.used < sc->play.blksz) {
 		DPRINTFN(1, "%s: play underrun\n", DEVNAME(sc));
 		sc->play.xrun += sc->play.blksz;
 		audio_buf_wcommit(&sc->play, sc->play.blksz);
+		if (sc->ops->underrun)
+			sc->ops->underrun(sc->arg);
 	}
 
 	DPRINTFN(1, "%s: play intr, used -> %zu, start -> %zu\n",
@@ -465,7 +470,7 @@ audio_rintr(void *addr)
 	 * We fix this by advancing play position by an integer count of
 	 * full buffers, so it reaches the record position.
 	 */
-	if (sc->mode & AUMODE_PLAY) {
+	if ((sc->mode & AUMODE_PLAY) && sc->ops->underrun == NULL) {
 		sc->offs++;
 		nblk = sc->play.len / sc->play.blksz;
 		todo = sc->offs;
@@ -1469,7 +1474,6 @@ audio_read(struct audio_softc *sc, struct uio *uio, int ioflag)
 		ptr = audio_buf_rgetblk(&sc->rec, &count);
 		if (count > uio->uio_resid)
 			count = uio->uio_resid;
-		audio_buf_rdiscard(&sc->rec, count);
 		mtx_leave(&audio_lock);
 		DPRINTFN(1, "%s: read: start = %zu, count = %zu\n",
 		    DEVNAME(sc), ptr - sc->rec.data, count);
@@ -1479,6 +1483,7 @@ audio_read(struct audio_softc *sc, struct uio *uio, int ioflag)
 		if (error)
 			return error;
 		mtx_enter(&audio_lock);
+		audio_buf_rdiscard(&sc->rec, count);
 	}
 	mtx_leave(&audio_lock);
 	return 0;
@@ -1538,7 +1543,6 @@ audio_write(struct audio_softc *sc, struct uio *uio, int ioflag)
 		}
 		if (count > uio->uio_resid)
 			count = uio->uio_resid;
-		audio_buf_wcommit(&sc->play, count);
 		mtx_leave(&audio_lock);
 		error = uiomove(ptr, count, uio);
 		if (error)
@@ -1548,14 +1552,20 @@ audio_write(struct audio_softc *sc, struct uio *uio, int ioflag)
 			DPRINTFN(1, "audio_write: converted count = %zu\n",
 			    count);
 		}
+		if (sc->ops->copy_output)
+			sc->ops->copy_output(sc->arg, count);
+
+		mtx_enter(&audio_lock);
+		audio_buf_wcommit(&sc->play, count);
 
 		/* start automatically if audio_ioc_start() was never called */
 		if (audio_canstart(sc)) {
+			mtx_leave(&audio_lock);
 			error = audio_start(sc);
 			if (error)
 				return error;
+			mtx_enter(&audio_lock);
 		}
-		mtx_enter(&audio_lock);
 	}
 	mtx_leave(&audio_lock);
 	return 0;
@@ -2000,6 +2010,7 @@ wskbd_mixer_init(struct audio_softc *sc)
 			mic_names[i].cn, mic_names[i].dn))
 			break;
 	}
+	task_set(&sc->wskbd_task, wskbd_mixer_cb, sc);
 }
 
 void
@@ -2072,16 +2083,12 @@ wskbd_mixer_update(struct audio_softc *sc, struct wskbd_vol *vol)
 }
 
 void
-wskbd_mixer_cb(void *addr)
+wskbd_mixer_cb(void *arg)
 {
-	struct audio_softc *sc = addr;
-	int s;
+	struct audio_softc *sc = arg;
 
 	wskbd_mixer_update(sc, &sc->spkr);
 	wskbd_mixer_update(sc, &sc->mic);
-	s = spltty();
-	sc->wskbd_taskset = 0;
-	splx(s);
 	device_unref(&sc->dev);
 }
 
@@ -2096,11 +2103,8 @@ wskbd_set_mixermute(long mute, long out)
 		return ENODEV;
 	vol = out ? &sc->spkr : &sc->mic;
 	vol->mute_pending = mute ? WSKBD_MUTE_ENABLE : WSKBD_MUTE_DISABLE;
-	if (!sc->wskbd_taskset) {
-		task_set(&sc->wskbd_task, wskbd_mixer_cb, sc);
-		task_add(systq, &sc->wskbd_task);
-		sc->wskbd_taskset = 1;
-	}
+	if (!task_add(systq, &sc->wskbd_task))
+		device_unref(&sc->dev);
 	return 0;
 }
 
@@ -2118,11 +2122,8 @@ wskbd_set_mixervolume(long dir, long out)
 		vol->mute_pending ^= WSKBD_MUTE_TOGGLE;
 	else
 		vol->val_pending += dir;
-	if (!sc->wskbd_taskset) {
-		task_set(&sc->wskbd_task, wskbd_mixer_cb, sc);
-		task_add(systq, &sc->wskbd_task);
-		sc->wskbd_taskset = 1;
-	}
+	if (!task_add(systq, &sc->wskbd_task))
+		device_unref(&sc->dev);
 	return 0;
 }
 #endif /* NWSKBD > 0 */

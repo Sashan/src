@@ -1,4 +1,4 @@
-/*	$OpenBSD: ieee80211_ioctl.c,v 1.69 2018/11/25 12:14:01 phessler Exp $	*/
+/*	$OpenBSD: ieee80211_ioctl.c,v 1.73 2019/02/19 08:12:30 stsp Exp $	*/
 /*	$NetBSD: ieee80211_ioctl.c,v 1.15 2004/05/06 02:58:16 dyoung Exp $	*/
 
 /*-
@@ -137,9 +137,16 @@ ieee80211_node2req(struct ieee80211com *ic, const struct ieee80211_node *ni,
 	memcpy(nr->nr_rxmcs, ni->ni_rxmcs, sizeof(nr->nr_rxmcs));
 	nr->nr_max_rxrate = ni->ni_max_rxrate;
 	nr->nr_tx_mcs_set = ni->ni_tx_mcs_set;
-	nr->nr_txmcs = ni->ni_txmcs;
 	if (ni->ni_flags & IEEE80211_NODE_HT)
 		nr->nr_flags |= IEEE80211_NODEREQ_HT;
+
+	/* HT / VHT */
+	nr->nr_txmcs = ni->ni_txmcs;
+
+	/* VHT */
+	nr->nr_vht_ss = ni->ni_vht_ss;
+	if (ni->ni_flags & IEEE80211_NODE_VHT)
+		nr->nr_flags |= IEEE80211_NODEREQ_VHT;
 }
 
 void
@@ -509,11 +516,29 @@ ieee80211_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			error = EINVAL;
 			break;
 		}
-		if (join.i_flags & IEEE80211_JOIN_DEL)
-			ieee80211_del_ess(ic, join.i_nwid, join.i_len ? 0 : 1);
-
-		/* save nwid for auto-join */
-		if (!(join.i_flags & IEEE80211_JOIN_DEL)) {
+		if (join.i_flags & IEEE80211_JOIN_DEL) {
+			int update_ic = 0;
+			if (ic->ic_des_esslen == join.i_len &&
+			    memcmp(join.i_nwid, ic->ic_des_essid,
+			    join.i_len) == 0)
+				update_ic = 1;
+			if (join.i_flags & IEEE80211_JOIN_DEL_ALL && 
+			    ieee80211_get_ess(ic, ic->ic_des_essid,
+			    ic->ic_des_esslen) != NULL)
+				update_ic = 1;
+			ieee80211_del_ess(ic, join.i_nwid, join.i_len,
+			    join.i_flags & IEEE80211_JOIN_DEL_ALL ? 1 : 0);
+			if (update_ic == 1) {
+				/* Unconfigure this essid */
+				memset(ic->ic_des_essid, 0, IEEE80211_NWID_LEN);
+				ic->ic_des_esslen = 0;
+				/* disable WPA/WEP */
+				ieee80211_disable_rsn(ic);
+				ieee80211_disable_wep(ic);
+				error = ENETRESET;
+			}
+		} else {
+			/* save nwid for auto-join */
 			if (ieee80211_add_ess(ic, &join) == 0)
 				ic->ic_flags |= IEEE80211_F_AUTO_JOIN;
 		}
@@ -556,6 +581,8 @@ ieee80211_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 				join.i_flags |= IEEE80211_JOIN_8021X;
 			if (ess->flags & IEEE80211_F_WEPON)
 				join.i_flags |= IEEE80211_JOIN_NWKEY;
+			if (ess->flags & IEEE80211_JOIN_ANY)
+				join.i_flags |= IEEE80211_JOIN_ANY;
 			ieee80211_ess_getwpaparms(ess, &join.i_wpaparams);
 			error = copyout(&join, &ja->ja_node[ja->ja_nodes],
 			    sizeof(ja->ja_node[0]));

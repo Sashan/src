@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: UpdateSet.pm,v 1.81 2018/07/18 13:06:23 espie Exp $
+# $OpenBSD: UpdateSet.pm,v 1.83 2019/04/07 10:44:25 espie Exp $
 #
 # Copyright (c) 2007-2010 Marc Espie <espie@openbsd.org>
 #
@@ -184,6 +184,11 @@ sub merge
 	return $self;
 }
 
+sub match_locations
+{
+	return [];
+}
+
 OpenBSD::Auto::cache(solver,
     sub {
     	require OpenBSD::Dependencies;
@@ -280,6 +285,10 @@ sub move_kept
 		delete $self->{older}{$h->pkgname};
 		delete $self->{newer}{$h->pkgname};
 		$self->{kept}{$h->pkgname} = $h;
+		if (!defined $h->{location}) {
+			$h->{location} = 
+			    $self->{repo}->installed->find($h->pkgname);
+		}
 		$h->complete_dependency_info;
 		$h->{update_found} = $h;
 	}

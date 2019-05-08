@@ -1,4 +1,4 @@
-/*	$OpenBSD: vm.c,v 1.42 2018/12/06 09:20:06 claudio Exp $	*/
+/*	$OpenBSD: vm.c,v 1.45 2019/03/01 07:32:29 mlarkin Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -61,6 +61,7 @@
 #include "i8259.h"
 #include "ns8250.h"
 #include "mc146818.h"
+#include "fw_cfg.h"
 #include "atomicio.h"
 
 io_fn_t ioports_map[MAX_PORTS];
@@ -126,15 +127,9 @@ uint8_t vcpu_done[VMM_MAX_VCPUS_PER_VM];
  *        features of the CPU in use.
  */
 static const struct vcpu_reg_state vcpu_init_flat64 = {
-#ifdef __i386__
-	.vrs_gprs[VCPU_REGS_EFLAGS] = 0x2,
-	.vrs_gprs[VCPU_REGS_EIP] = 0x0,
-	.vrs_gprs[VCPU_REGS_ESP] = 0x0,
-#else
 	.vrs_gprs[VCPU_REGS_RFLAGS] = 0x2,
 	.vrs_gprs[VCPU_REGS_RIP] = 0x0,
 	.vrs_gprs[VCPU_REGS_RSP] = 0x0,
-#endif
 	.vrs_crs[VCPU_REGS_CR0] = CR0_CD | CR0_NW | CR0_ET | CR0_PE | CR0_PG,
 	.vrs_crs[VCPU_REGS_CR3] = PML4_PAGE,
 	.vrs_crs[VCPU_REGS_CR4] = CR4_PAE | CR4_PSE,
@@ -153,7 +148,12 @@ static const struct vcpu_reg_state vcpu_init_flat64 = {
 	.vrs_sregs[VCPU_REGS_LDTR] = { 0x0, 0xFFFF, 0x0082, 0x0},
 	.vrs_sregs[VCPU_REGS_TR] = { 0x0, 0xFFFF, 0x008B, 0x0},
 	.vrs_msrs[VCPU_REGS_EFER] = EFER_LME | EFER_LMA,
-#ifndef __i386__
+	.vrs_drs[VCPU_REGS_DR0] = 0x0,
+	.vrs_drs[VCPU_REGS_DR1] = 0x0,
+	.vrs_drs[VCPU_REGS_DR2] = 0x0,
+	.vrs_drs[VCPU_REGS_DR3] = 0x0,
+	.vrs_drs[VCPU_REGS_DR6] = 0xFFFF0FF0,
+	.vrs_drs[VCPU_REGS_DR7] = 0x400,
 	.vrs_msrs[VCPU_REGS_STAR] = 0ULL,
 	.vrs_msrs[VCPU_REGS_LSTAR] = 0ULL,
 	.vrs_msrs[VCPU_REGS_CSTAR] = 0ULL,
@@ -161,7 +161,6 @@ static const struct vcpu_reg_state vcpu_init_flat64 = {
 	.vrs_msrs[VCPU_REGS_KGSBASE] = 0ULL,
 	.vrs_msrs[VCPU_REGS_MISC_ENABLE] = 0ULL,
 	.vrs_crs[VCPU_REGS_XCR0] = XCR0_X87
-#endif
 };
 
 /*
@@ -169,15 +168,9 @@ static const struct vcpu_reg_state vcpu_init_flat64 = {
  * as a flat 16 bit address space.
  */
 static const struct vcpu_reg_state vcpu_init_flat16 = {
-#ifdef __i386__
-	.vrs_gprs[VCPU_REGS_EFLAGS] = 0x2,
-	.vrs_gprs[VCPU_REGS_EIP] = 0xFFF0,
-	.vrs_gprs[VCPU_REGS_ESP] = 0x0,
-#else
 	.vrs_gprs[VCPU_REGS_RFLAGS] = 0x2,
 	.vrs_gprs[VCPU_REGS_RIP] = 0xFFF0,
 	.vrs_gprs[VCPU_REGS_RSP] = 0x0,
-#endif
 	.vrs_crs[VCPU_REGS_CR0] = 0x60000010,
 	.vrs_crs[VCPU_REGS_CR3] = 0,
 	.vrs_sregs[VCPU_REGS_CS] = { 0xF000, 0xFFFF, 0x809F, 0xF0000},
@@ -191,14 +184,18 @@ static const struct vcpu_reg_state vcpu_init_flat16 = {
 	.vrs_sregs[VCPU_REGS_LDTR] = { 0x0, 0xFFFF, 0x0082, 0x0},
 	.vrs_sregs[VCPU_REGS_TR] = { 0x0, 0xFFFF, 0x008B, 0x0},
 	.vrs_msrs[VCPU_REGS_EFER] = 0ULL,
-#ifndef __i386__
+	.vrs_drs[VCPU_REGS_DR0] = 0x0,
+	.vrs_drs[VCPU_REGS_DR1] = 0x0,
+	.vrs_drs[VCPU_REGS_DR2] = 0x0,
+	.vrs_drs[VCPU_REGS_DR3] = 0x0,
+	.vrs_drs[VCPU_REGS_DR6] = 0xFFFF0FF0,
+	.vrs_drs[VCPU_REGS_DR7] = 0x400,
 	.vrs_msrs[VCPU_REGS_STAR] = 0ULL,
 	.vrs_msrs[VCPU_REGS_LSTAR] = 0ULL,
 	.vrs_msrs[VCPU_REGS_CSTAR] = 0ULL,
 	.vrs_msrs[VCPU_REGS_SFMASK] = 0ULL,
 	.vrs_msrs[VCPU_REGS_KGSBASE] = 0ULL,
 	.vrs_crs[VCPU_REGS_XCR0] = XCR0_X87
-#endif
 };
 
 /*
@@ -561,6 +558,8 @@ send_vm(int fd, struct vm_create_params *vcp)
 	if ((ret = ns8250_dump(fd)))
 		goto err;
 	if ((ret = mc146818_dump(fd)))
+		goto err;
+	if ((ret = fw_cfg_dump(fd)))
 		goto err;
 	if ((ret = pci_dump(fd)))
 		goto err;
@@ -950,6 +949,13 @@ init_emulated_hw(struct vmop_create_params *vmc, int child_cdrom,
 	for (i = COM1_DATA; i <= COM1_SCR; i++)
 		ioports_map[i] = vcpu_exit_com;
 
+	/* Init QEMU fw_cfg interface */
+	fw_cfg_init(vmc);
+	ioports_map[FW_CFG_IO_SELECT] = vcpu_exit_fw_cfg;
+	ioports_map[FW_CFG_IO_DATA] = vcpu_exit_fw_cfg;
+	ioports_map[FW_CFG_IO_DMA_ADDR_HIGH] = vcpu_exit_fw_cfg_dma;
+	ioports_map[FW_CFG_IO_DMA_ADDR_LOW] = vcpu_exit_fw_cfg_dma;
+
 	/* Initialize PCI */
 	for (i = VMM_PCI_IO_BAR_BASE; i <= VMM_PCI_IO_BAR_END; i++)
 		ioports_map[i] = vcpu_exit_pci;
@@ -1000,6 +1006,13 @@ restore_emulated_hw(struct vm_create_params *vcp, int fd,
 	mc146818_restore(fd, vcp->vcp_id);
 	ioports_map[IO_RTC] = vcpu_exit_mc146818;
 	ioports_map[IO_RTC + 1] = vcpu_exit_mc146818;
+
+	/* Init QEMU fw_cfg interface */
+	fw_cfg_restore(fd);
+	ioports_map[FW_CFG_IO_SELECT] = vcpu_exit_fw_cfg;
+	ioports_map[FW_CFG_IO_DATA] = vcpu_exit_fw_cfg;
+	ioports_map[FW_CFG_IO_DMA_ADDR_HIGH] = vcpu_exit_fw_cfg_dma;
+	ioports_map[FW_CFG_IO_DMA_ADDR_LOW] = vcpu_exit_fw_cfg_dma;
 
 	/* Initialize PCI */
 	for (i = VMM_PCI_IO_BAR_BASE; i <= VMM_PCI_IO_BAR_END; i++)
@@ -1622,7 +1635,7 @@ vaddr_mem(paddr_t gpa, size_t len)
  *
  * Parameters:
  *  dst: the destination paddr_t in the guest VM
- *  buf: data to copy
+ *  buf: data to copy (or NULL to zero the data)
  *  len: number of bytes to copy
  *
  * Return values:
@@ -1653,9 +1666,12 @@ write_mem(paddr_t dst, const void *buf, size_t len)
 			n = len;
 
 		to = (char *)vmr->vmr_va + off;
-		memcpy(to, from, n);
-
-		from += n;
+		if (buf == NULL)
+			memset(to, 0, n);
+		else {
+			memcpy(to, from, n);
+			from += n;
+		}
 		len -= n;
 		off = 0;
 		vmr++;

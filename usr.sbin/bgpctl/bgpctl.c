@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpctl.c,v 1.225 2018/12/05 06:53:52 denis Exp $ */
+/*	$OpenBSD: bgpctl.c,v 1.236 2019/05/03 01:48:42 jsg Exp $ */
 
 /*
  * Copyright (c) 2003 Henning Brauer <henning@openbsd.org>
@@ -23,11 +23,11 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 
+#include <endian.h>
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
-#include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -84,7 +84,6 @@ void		 show_attr(void *, u_int16_t, int);
 void		 show_community(u_char *, u_int16_t);
 void		 show_large_community(u_char *, u_int16_t);
 void		 show_ext_community(u_char *, u_int16_t);
-char		*fmt_mem(int64_t);
 int		 show_rib_memory_msg(struct imsg *);
 void		 send_filterset(struct imsgbuf *, struct filter_set_head *);
 const char	*get_errstr(u_int8_t, u_int8_t);
@@ -93,10 +92,10 @@ void		 show_mrt_dump(struct mrt_rib *, struct mrt_peer *, void *);
 void		 network_mrt_dump(struct mrt_rib *, struct mrt_peer *, void *);
 void		 show_mrt_state(struct mrt_bgp_state *, void *);
 void		 show_mrt_msg(struct mrt_bgp_msg *, void *);
-void		 mrt_to_bgpd_addr(union mrt_addr *, struct bgpd_addr *);
 const char	*msg_type(u_int8_t);
 void		 network_bulk(struct parse_result *);
 const char	*print_auth_method(enum auth_method);
+int		 match_aspath(void *, u_int16_t, struct filter_as *);
 
 struct imsgbuf	*ibuf;
 struct mrt_parser show_mrt = { show_mrt_dump, show_mrt_state, show_mrt_msg };
@@ -155,6 +154,7 @@ main(int argc, char *argv[])
 
 	memcpy(&neighbor.addr, &res->peeraddr, sizeof(neighbor.addr));
 	strlcpy(neighbor.descr, res->peerdesc, sizeof(neighbor.descr));
+	neighbor.is_group = res->is_group;
 	strlcpy(neighbor.shutcomm, res->shutcomm, sizeof(neighbor.shutcomm));
 
 	switch (res->action) {
@@ -280,8 +280,6 @@ main(int argc, char *argv[])
 			ribreq.as = res->as;
 		if (res->community.type != COMMUNITY_TYPE_NONE)
 			ribreq.community = res->community;
-		if (res->extcommunity.flags == EXT_COMMUNITY_FLAG_VALID)
-			ribreq.extcommunity = res->extcommunity;
 		ribreq.neighbor = neighbor;
 		strlcpy(ribreq.rib, res->rib, sizeof(ribreq.rib));
 		ribreq.aid = res->aid;
@@ -346,7 +344,7 @@ main(int argc, char *argv[])
 		bzero(&net, sizeof(net));
 		net.prefix = res->addr;
 		net.prefixlen = res->prefixlen;
-		net.rtableid = tableid;
+		net.rd = res->rd;
 		/* attribute sets are not supported */
 		if (res->action == NETWORK_ADD) {
 			imsg_compose(ibuf, IMSG_NETWORK_ADD, 0, 0, -1,
@@ -658,7 +656,7 @@ show_neighbor_msg(struct imsg *imsg, enum neighbor_views nv)
 	struct peer		*p;
 	struct ctl_timer	*t;
 	struct in_addr		 ina;
-	char			 buf[NI_MAXHOST], pbuf[NI_MAXSERV], *s;
+	char			*s;
 	int			 hascapamp = 0;
 	u_int8_t		 i;
 
@@ -760,25 +758,11 @@ show_neighbor_msg(struct imsg *imsg, enum neighbor_views nv)
 			if (errstr)
 				printf("  Last error: %s\n\n", errstr);
 		} else {
-			if (getnameinfo((struct sockaddr *)&p->sa_local,
-			    (socklen_t)p->sa_local.ss_len,
-			    buf, sizeof(buf), pbuf, sizeof(pbuf),
-			    NI_NUMERICHOST | NI_NUMERICSERV)) {
-				strlcpy(buf, "(unknown)", sizeof(buf));
-				strlcpy(pbuf, "", sizeof(pbuf));
-			}
-			printf("  Local host:  %20s, Local port:  %5s\n", buf,
-			    pbuf);
+			printf("  Local host:  %20s, Local port:  %5u\n",
+			    log_addr(&p->local), p->local_port);
 
-			if (getnameinfo((struct sockaddr *)&p->sa_remote,
-			    (socklen_t)p->sa_remote.ss_len,
-			    buf, sizeof(buf), pbuf, sizeof(pbuf),
-			    NI_NUMERICHOST | NI_NUMERICSERV)) {
-				strlcpy(buf, "(unknown)", sizeof(buf));
-				strlcpy(pbuf, "", sizeof(pbuf));
-			}
-			printf("  Remote host: %20s, Remote port: %5s\n", buf,
-			    pbuf);
+			printf("  Remote host: %20s, Remote port: %5u\n",
+			    log_addr(&p->remote), p->remote_port);
 			printf("\n");
 		}
 		break;
@@ -927,7 +911,7 @@ show_fib_head(void)
 	printf("flags: "
 	    "* = valid, B = BGP, C = Connected, S = Static, D = Dynamic\n");
 	printf("       "
-	    "N = BGP Nexthop reachable via this route R = redistributed\n");
+	    "N = BGP Nexthop reachable via this route\n");
 	printf("       r = reject route, b = blackhole route\n\n");
 	printf("flags prio destination          gateway\n");
 }
@@ -966,11 +950,6 @@ show_fib_flags(u_int16_t flags)
 
 	if (flags & F_NEXTHOP)
 		printf("N");
-	else
-		printf(" ");
-
-	if (flags & F_REDISTRIBUTED)
-		printf("R");
 	else
 		printf(" ");
 
@@ -1085,22 +1064,12 @@ show_nexthop_msg(struct imsg *imsg)
 			printf("unknown address family\n");
 			return (0);
 		}
-		if (p->kif.ifname[0]) {
-			char *s1;
-			if (p->kif.baudrate) {
-				if (asprintf(&s1, ", %s",
-				    get_baudrate(p->kif.baudrate,
-				    "bps")) == -1)
-					err(1, NULL);
-			} else if (asprintf(&s1, ", %s", get_linkstate(
-			    p->kif.if_type, p->kif.link_state)) == -1)
-					err(1, NULL);
-			if (asprintf(&s, "%s (%s%s)", p->kif.ifname,
-			    p->kif.flags & IFF_UP ? "UP" : "DOWN", s1) == -1)
-				err(1, NULL);
-			printf("%-15s", s);
-			free(s1);
-			free(s);
+		if (p->iface.ifname[0]) {
+			printf("%s (%s, %s)", p->iface.ifname,
+			    p->iface.is_up ? "UP" : "DOWN",
+			    p->iface.baudrate ?
+			    get_baudrate(p->iface.baudrate, "bps") :
+			    p->iface.linkstate);
 		}
 		printf("\n");
 		break;
@@ -1125,24 +1094,22 @@ show_interface_head(void)
 int
 show_interface_msg(struct imsg *imsg)
 {
-	struct kif	*k;
-	uint64_t	 ifms_type;
+	struct ctl_show_interface	*iface;
 
 	switch (imsg->hdr.type) {
 	case IMSG_CTL_SHOW_INTERFACE:
-		k = imsg->data;
-		printf("%-15s", k->ifname);
-		printf("%-9u", k->rdomain);
-		printf("%-9s", k->nh_reachable ? "ok" : "invalid");
-		printf("%-7s", k->flags & IFF_UP ? "UP" : "");
+		iface = imsg->data;
+		printf("%-15s", iface->ifname);
+		printf("%-9u", iface->rdomain);
+		printf("%-9s", iface->nh_reachable ? "ok" : "invalid");
+		printf("%-7s", iface->is_up ? "UP" : "");
 
-		if ((ifms_type = ift2ifm(k->if_type)) != 0)
-			printf("%s, ", get_media_descr(ifms_type));
+		if (iface->media[0])
+			printf("%s, ", iface->media);
+		printf("%s", iface->linkstate);
 
-		printf("%s", get_linkstate(k->if_type, k->link_state));
-
-		if (k->link_state != LINK_STATE_DOWN && k->baudrate > 0)
-			printf(", %s", get_baudrate(k->baudrate, "Bit/s"));
+		if (iface->baudrate > 0)
+			printf(", %s", get_baudrate(iface->baudrate, "Bit/s"));
 		printf("\n");
 		break;
 	case IMSG_CTL_END:
@@ -1606,6 +1573,7 @@ show_attr(void *b, u_int16_t len, int flag0)
 				nexthop.aid = AID_INET;
 				memcpy(&nexthop.v4, data + sizeof(u_int64_t),
 				    sizeof(nexthop.v4));
+				break;
 			default:
 				printf("unhandled AID #%u", aid);
 				goto done;
@@ -1766,12 +1734,12 @@ show_ext_community(u_char *data, u_int16_t len)
 		case EXT_COMMUNITY_TRANS_OPAQUE:
 		case EXT_COMMUNITY_TRANS_EVPN:
 			memcpy(&ext, data + i, sizeof(ext));
-			ext = betoh64(ext) & 0xffffffffffffLL;
-			printf("0x%llx", ext);
+			ext = be64toh(ext) & 0xffffffffffffLL;
+			printf("0x%llx", (unsigned long long)ext);
 			break;
 		case EXT_COMMUNITY_NON_TRANS_OPAQUE:
 			memcpy(&ext, data + i, sizeof(ext));
-			ext = betoh64(ext) & 0xffffffffffffLL;
+			ext = be64toh(ext) & 0xffffffffffffLL;
 			switch (ext) {
 			case EXT_COMMUNITY_OVS_VALID:
 				printf("valid ");
@@ -1783,26 +1751,26 @@ show_ext_community(u_char *data, u_int16_t len)
 				printf("invalid ");
 				break;
 			default:
-				printf("0x%llx ", ext);
+				printf("0x%llx ", (unsigned long long)ext);
 				break;
 			}
 			break;
 		default:
 			memcpy(&ext, data + i, sizeof(ext));
-			printf("0x%llx", betoh64(ext));
+			printf("0x%llx", (unsigned long long)be64toh(ext));
 		}
 		if (i + 8 < len)
 			printf(", ");
 	}
 }
 
-char *
-fmt_mem(int64_t num)
+static char *
+fmt_mem(long long num)
 {
 	static char	buf[16];
 
 	if (fmt_scaled(num, buf) == -1)
-		snprintf(buf, sizeof(buf), "%lldB", (long long)num);
+		snprintf(buf, sizeof(buf), "%lldB", num);
 
 	return (buf);
 }
@@ -1827,31 +1795,31 @@ show_rib_memory_msg(struct imsg *imsg)
 				continue;
 			pts += stats.pt_cnt[i] * pt_sizes[i];
 			printf("%10lld %s network entries using %s of memory\n",
-			    (long long)stats.pt_cnt[i], aid_vals[i].name,
+			    stats.pt_cnt[i], aid_vals[i].name,
 			    fmt_mem(stats.pt_cnt[i] * pt_sizes[i]));
 		}
 		printf("%10lld rib entries using %s of memory\n",
-		    (long long)stats.rib_cnt, fmt_mem(stats.rib_cnt *
+		    stats.rib_cnt, fmt_mem(stats.rib_cnt *
 		    sizeof(struct rib_entry)));
 		printf("%10lld prefix entries using %s of memory\n",
-		    (long long)stats.prefix_cnt, fmt_mem(stats.prefix_cnt *
+		    stats.prefix_cnt, fmt_mem(stats.prefix_cnt *
 		    sizeof(struct prefix)));
 		printf("%10lld BGP path attribute entries using %s of memory\n",
-		    (long long)stats.path_cnt, fmt_mem(stats.path_cnt *
+		    stats.path_cnt, fmt_mem(stats.path_cnt *
 		    sizeof(struct rde_aspath)));
 		printf("\t   and holding %lld references\n",
-		    (long long)stats.path_refs);
+		    stats.path_refs);
 		printf("%10lld BGP AS-PATH attribute entries using "
 		    "%s of memory\n\t   and holding %lld references\n",
-		    (long long)stats.aspath_cnt, fmt_mem(stats.aspath_size),
-		    (long long)stats.aspath_refs);
+		    stats.aspath_cnt, fmt_mem(stats.aspath_size),
+		    stats.aspath_refs);
 		printf("%10lld BGP attributes entries using %s of memory\n",
-		    (long long)stats.attr_cnt, fmt_mem(stats.attr_cnt *
+		    stats.attr_cnt, fmt_mem(stats.attr_cnt *
 		    sizeof(struct attr)));
 		printf("\t   and holding %lld references\n",
-		    (long long)stats.attr_refs);
+		    stats.attr_refs);
 		printf("%10lld BGP attributes using %s of memory\n",
-		    (long long)stats.attr_dcnt, fmt_mem(stats.attr_data));
+		    stats.attr_dcnt, fmt_mem(stats.attr_data));
 		printf("%10lld as-set elements in %lld tables using "
 		    "%s of memory\n", stats.aset_nmemb, stats.aset_cnt,
 		    fmt_mem(stats.aset_size));
@@ -1983,7 +1951,7 @@ network_bulk(struct parse_result *res)
 				errx(1, "bad prefix: %s", b);
 			net.prefix = h;
 			net.prefixlen = len;
-			net.rtableid = tableid;
+			net.rd = res->rd;
 
 			if (res->action == NETWORK_BULK_ADD) {
 				imsg_compose(ibuf, IMSG_NETWORK_ADD,
@@ -2017,11 +1985,11 @@ show_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 	for (i = 0; i < mr->nentries; i++) {
 		mre = &mr->entries[i];
 		bzero(&ctl, sizeof(ctl));
-		mrt_to_bgpd_addr(&mr->prefix, &ctl.prefix);
+		ctl.prefix = mr->prefix;
 		ctl.prefixlen = mr->prefixlen;
 		ctl.lastchange = mre->originated;
-		mrt_to_bgpd_addr(&mre->nexthop, &ctl.true_nexthop);
-		mrt_to_bgpd_addr(&mre->nexthop, &ctl.exit_nexthop);
+		ctl.true_nexthop = mre->nexthop;
+		ctl.exit_nexthop = mre->nexthop;
 		ctl.origin = mre->origin;
 		ctl.local_pref = mre->local_pref;
 		ctl.med = mre->med;
@@ -2029,8 +1997,7 @@ show_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 		ctl.aspath_len = mre->aspath_len;
 
 		if (mre->peer_idx < mp->npeers) {
-			mrt_to_bgpd_addr(&mp->peers[mre->peer_idx].addr,
-			    &ctl.remote_addr);
+			ctl.remote_addr = mp->peers[mre->peer_idx].addr;
 			ctl.remote_id = mp->peers[mre->peer_idx].bgp_id;
 		}
 
@@ -2056,8 +2023,7 @@ show_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 		}
 		/* filter by AS */
 		if (req->as.type != AS_UNDEF &&
-		   !aspath_match(mre->aspath, mre->aspath_len,
-		   &req->as, 0))
+		   !match_aspath(mre->aspath, mre->aspath_len, &req->as))
 			continue;
 
 		if (req->flags & F_CTL_DETAIL) {
@@ -2084,19 +2050,18 @@ network_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 	for (i = 0; i < mr->nentries; i++) {
 		mre = &mr->entries[i];
 		bzero(&ctl, sizeof(ctl));
-		mrt_to_bgpd_addr(&mr->prefix, &ctl.prefix);
+		ctl.prefix = mr->prefix;
 		ctl.prefixlen = mr->prefixlen;
 		ctl.lastchange = mre->originated;
-		mrt_to_bgpd_addr(&mre->nexthop, &ctl.true_nexthop);
-		mrt_to_bgpd_addr(&mre->nexthop, &ctl.exit_nexthop);
+		ctl.true_nexthop = mre->nexthop;
+		ctl.exit_nexthop = mre->nexthop;
 		ctl.origin = mre->origin;
 		ctl.local_pref = mre->local_pref;
 		ctl.med = mre->med;
 		ctl.aspath_len = mre->aspath_len;
 
 		if (mre->peer_idx < mp->npeers) {
-			mrt_to_bgpd_addr(&mp->peers[mre->peer_idx].addr,
-			    &ctl.remote_addr);
+			ctl.remote_addr = mp->peers[mre->peer_idx].addr;
 			ctl.remote_id = mp->peers[mre->peer_idx].bgp_id;
 		}
 
@@ -2122,15 +2087,14 @@ network_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 		}
 		/* filter by AS */
 		if (req->as.type != AS_UNDEF &&
-		   !aspath_match(mre->aspath, mre->aspath_len,
-		   &req->as, 0))
+		   !match_aspath(mre->aspath, mre->aspath_len, &req->as))
 			continue;
 
 		bzero(&net, sizeof(net));
 		net.prefix = ctl.prefix;
 		net.prefixlen = ctl.prefixlen;
 		net.type = NETWORK_MRTCLONE;
-		/* XXX rtableid */
+		/* XXX rd can't be set and will be 0 */
 
 		imsg_compose(ibuf, IMSG_NETWORK_ADD, 0, 0, -1,
 		    &net, sizeof(net));
@@ -2170,13 +2134,9 @@ print_time(struct timespec *t)
 void
 show_mrt_state(struct mrt_bgp_state *ms, void *arg)
 {
-	struct bgpd_addr src, dst;
-
-	mrt_to_bgpd_addr(&ms->src, &src);
-	mrt_to_bgpd_addr(&ms->dst, &dst);
 	printf("%s %s[%u] -> ", print_time(&ms->time),
-	    log_addr(&src), ms->src_as);
-	printf("%s[%u]: %s -> %s\n", log_addr(&dst), ms->dst_as,
+	    log_addr(&ms->src), ms->src_as);
+	printf("%s[%u]: %s -> %s\n", log_addr(&ms->dst), ms->dst_as,
 	    statenames[ms->old_state], statenames[ms->new_state]);
 }
 
@@ -2394,7 +2354,8 @@ static void
 show_mrt_notification(u_char *p, u_int16_t len)
 {
 	u_int16_t i;
-	u_int8_t errcode, subcode, shutcomm_len;
+	u_int8_t errcode, subcode;
+	size_t shutcomm_len;
 	char shutcomm[SHUT_COMM_LEN];
 
 	memcpy(&errcode, p, sizeof(errcode));
@@ -2410,15 +2371,14 @@ show_mrt_notification(u_char *p, u_int16_t len)
 
 	if (errcode == ERR_CEASE && (subcode == ERR_CEASE_ADMIN_DOWN ||
 	    subcode == ERR_CEASE_ADMIN_RESET)) {
-		if (len >= sizeof(shutcomm_len)) {
-			memcpy(&shutcomm_len, p, sizeof(shutcomm_len));
-			p += sizeof(shutcomm_len);
-			len -= sizeof(shutcomm_len);
+		if (len > 1) {
+			shutcomm_len = *p++;
+			len--;
 			if(len < shutcomm_len) {
 				printf("truncated shutdown reason");
 				return;
 			}
-			if (shutcomm_len > (SHUT_COMM_LEN-1)) {
+			if (shutcomm_len > SHUT_COMM_LEN - 1) {
 				printf("overly long shutdown reason");
 				return;
 			}
@@ -2504,11 +2464,11 @@ show_mrt_update(u_char *p, u_int16_t len)
 	printf("\n");
 	/* alen attributes here */
 	while (alen > 3) {
-		u_int8_t flags, type;
+		u_int8_t flags;
 		u_int16_t attrlen;
 
 		flags = p[0];
-		type = p[1];
+		/* type = p[1]; */
 
 		/* get the attribute length */
 		if (flags & ATTR_EXTLEN) {
@@ -2549,16 +2509,13 @@ show_mrt_msg(struct mrt_bgp_msg *mm, void *arg)
 	static const u_int8_t marker[MSGSIZE_HEADER_MARKER] = {
 	    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 	    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
-	struct bgpd_addr src, dst;
 	u_char *p;
 	u_int16_t len;
 	u_int8_t type;
 
-	mrt_to_bgpd_addr(&mm->src, &src);
-	mrt_to_bgpd_addr(&mm->dst, &dst);
 	printf("%s %s[%u] -> ", print_time(&mm->time),
-	    log_addr(&src), mm->src_as);
-	printf("%s[%u]: size %u ", log_addr(&dst), mm->dst_as, mm->msg_len);
+	    log_addr(&mm->src), mm->src_as);
+	printf("%s[%u]: size %u ", log_addr(&mm->dst), mm->dst_as, mm->msg_len);
 	p = mm->msg;
 	len = mm->msg_len;
 
@@ -2633,25 +2590,6 @@ show_mrt_msg(struct mrt_bgp_msg *mm, void *arg)
 	printf("\n");
 }
 
-void
-mrt_to_bgpd_addr(union mrt_addr *ma, struct bgpd_addr *ba)
-{
-	switch (ma->sa.sa_family) {
-	case AF_INET:
-	case AF_INET6:
-		sa2addr(&ma->sa, ba);
-		break;
-	case AF_VPNv4:
-		bzero(ba, sizeof(*ba));
-		ba->aid = AID_VPN_IPv4;
-		ba->vpn4.rd = ma->svpn4.sv_rd;
-		ba->vpn4.addr.s_addr = ma->svpn4.sv_addr.s_addr;
-		memcpy(ba->vpn4.labelstack, ma->svpn4.sv_label,
-		    sizeof(ba->vpn4.labelstack));
-		break;
-	}
-}
-
 const char *
 msg_type(u_int8_t type)
 {
@@ -2661,7 +2599,67 @@ msg_type(u_int8_t type)
 }
 
 int
-as_set_match(const struct as_set *a, u_int32_t asnum)
+match_aspath(void *data, u_int16_t len, struct filter_as *f)
 {
+	u_int8_t	*seg;
+	int		 final;
+	u_int16_t	 seg_size;
+	u_int8_t	 i, seg_len;
+	u_int32_t	 as = 0;
+
+	if (f->type == AS_EMPTY) {
+		if (len == 0)
+			return (1);
+		else
+			return (0);
+	}
+
+	seg = data;
+
+	/* just check the leftmost AS */
+	if (f->type == AS_PEER && len >= 6) {
+		as = aspath_extract(seg, 0);
+		if (f->as_min == as)
+			return (1);
+		else
+			return (0);
+	}
+
+	for (; len >= 6; len -= seg_size, seg += seg_size) {
+		seg_len = seg[1];
+		seg_size = 2 + sizeof(u_int32_t) * seg_len;
+
+		final = (len == seg_size);
+
+		if (f->type == AS_SOURCE) {
+			/*
+			 * Just extract the rightmost AS
+			 * but if that segment is an AS_SET then the rightmost
+			 * AS of a previous AS_SEQUENCE segment should be used.
+			 * Because of that just look at AS_SEQUENCE segments.
+			 */
+			if (seg[0] == AS_SEQUENCE)
+				as = aspath_extract(seg, seg_len - 1);
+			/* not yet in the final segment */
+			if (!final)
+				continue;
+			if (f->as_min == as)
+				return (1);
+			else
+				return (0);
+		}
+		/* AS_TRANSIT or AS_ALL */
+		for (i = 0; i < seg_len; i++) {
+			/*
+			 * the source (rightmost) AS is excluded from
+			 * AS_TRANSIT matches.
+			 */
+			if (final && i == seg_len - 1 && f->type == AS_TRANSIT)
+				return (0);
+			as = aspath_extract(seg, i);
+			if (f->as_min == as)
+				return (1);
+		}
+	}
 	return (0);
 }

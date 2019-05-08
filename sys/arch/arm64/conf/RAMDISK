@@ -1,4 +1,4 @@
-# $OpenBSD: RAMDISK,v 1.75 2018/09/28 13:39:57 ccardenas Exp $
+# $OpenBSD: RAMDISK,v 1.86 2019/04/30 20:22:54 patrick Exp $
 #
 # GENERIC machine description file
 #
@@ -38,6 +38,7 @@ option		MSDOSFS
 option		INET6
 option		EXT2FS
 option		NFSCLIENT
+option		CRYPTO
 
 makeoptions	KERNEL_BASE_PHYS="0x00200000"
 makeoptions	KERNEL_BASE_VIRT="0xffffff8000200000"
@@ -55,6 +56,7 @@ acpimcfg*	at acpi?
 acpipci*	at acpi?
 pci*		at acpipci?
 ahci*		at acpi?
+ccp*		at acpi?		# AMD Cryptographic Co-processor
 com*		at acpi?
 pluart*		at acpi?
 xhci*		at acpi?
@@ -76,12 +78,15 @@ ahci*		at fdt?
 dwge*		at fdt?
 dwpcie*		at fdt?
 pci*		at dwpcie?
+ohci*		at fdt?
 ehci*		at fdt?
 pciecam*	at fdt?
 pci*		at pciecam?
 sdhc*		at fdt?
 sdmmc*		at sdhc?
+bwfm*		at sdmmc?	# Broadcom FullMAC
 xhci*		at fdt?
+ccp*		at fdt?		# AMD Cryptographic Co-processor
 
 # NS16550 compatible serial ports
 com*		at fdt?
@@ -117,8 +122,7 @@ imxiic*		at fdt?
 iic*		at imxiic?
 imxesdhc*	at fdt?
 sdmmc*		at imxesdhc?
-imxpd*		at fdt?
-imxdwusb*	at fdt?
+imxsrc*		at fdt?
 
 # Raspberry Pi 3
 bcmaux*		at fdt?
@@ -135,11 +139,15 @@ hireset*	at fdt? early 1
 
 # Marvell SoCs
 mvclock*	at fdt? early 1
+mvgicp*		at fdt? early 1
 mvicu*		at fdt? early 1
 mvpinctrl*	at fdt? early 1
 mvgpio*		at fdt?
+mvmdio*		at fdt?
+mvneta*		at fdt?
 mvrng*		at fdt?
 mvrtc*		at fdt?
+mvuart*		at fdt?
 
 # Rockchip SoCs
 rkclock*	at fdt? early 1
@@ -247,6 +255,7 @@ ch*		at scsibus?
 uk*		at scsibus?
 
 # I2C devices
+abcrtc*		at iic?			# Abracon x80x RTC
 islrtc*		at iic?			# ISL1208 RTC
 rkpmic*		at iic?			# RK808 PMIC
 

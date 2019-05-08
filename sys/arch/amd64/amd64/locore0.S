@@ -1,4 +1,4 @@
-/*	$OpenBSD: locore0.S,v 1.9 2018/07/10 16:01:26 deraadt Exp $	*/
+/*	$OpenBSD: locore0.S,v 1.17 2019/02/18 08:26:20 yasuoka Exp $	*/
 /*	$NetBSD: locore.S,v 1.13 2004/03/25 18:33:17 drochner Exp $	*/
 
 /*
@@ -156,10 +156,10 @@ start:	movw	$0x1234,0x472			# warm boot
 	movl	16(%esp), %eax
 	testl	%eax,%eax
 	jz	1f
-	addl	$KERNBASE_LO,%eax
+	addl	$(KERNBASE & 0xffffffff),%eax
 	movl	$RELOC(esym),%ebp
 	movl	%eax,(%ebp)
-	movl	$KERNBASE_HI,4(%ebp)
+	movl	$(KERNBASE >> 32),4(%ebp)
 1:
 	movl	24(%esp), %eax
 	movl	%eax, RELOC(biosbasemem)
@@ -223,12 +223,11 @@ bi_size_ok:
 	 * Intel CPU, now check if IA32_ARCH_CAPABILITIES is supported and
 	 * if it says this CPU is safe.
 	 */
-	movl	$0x0,	%eax
-	cpuid
 	cmpl	$0x7,	%eax
 	jl	.Lcpu_check_finished
 
 	movl	$0x7,	%eax
+	xorl	%ecx,%ecx
 	cpuid
 	testl	$SEFF0EDX_ARCH_CAP, %edx
 	jz	.Lcpu_check_finished
@@ -253,9 +252,9 @@ bi_size_ok:
 
 	movl	$0x0a,%eax
 	cpuid
-	movl	%eax,RELOC(_C_LABEL(cpu_perf_eax))
-	movl	%ebx,RELOC(_C_LABEL(cpu_perf_ebx))
-	movl	%edx,RELOC(_C_LABEL(cpu_perf_edx))
+	movl	%eax,RELOC(cpu_perf_eax)
+	movl	%ebx,RELOC(cpu_perf_ebx)
+	movl	%edx,RELOC(cpu_perf_edx)
 
 	movl	$0x80000001, %eax
 	cpuid
@@ -277,7 +276,7 @@ cont:
 
 	movl	$0x80000007,%eax
 	cpuid
-	movl	%edx,RELOC(_C_LABEL(cpu_apmi_edx))
+	movl	%edx,RELOC(cpu_apmi_edx)
 
 	/*
 	 * Finished with old stack; load new %esp now instead of later so we
@@ -349,7 +348,7 @@ cont:
 	movl	RELOC(esym),%eax
 	testl	%eax,%eax
 	jz	1f
-	subl	$KERNBASE_LO,%eax	/* XXX */
+	subl	$(KERNBASE & 0xffffffff),%eax	/* XXX */
 	/* Page tables must be after symbols and after kernel image. */
 	cmpl	%eax,%edi
 	jg	1f
@@ -381,9 +380,9 @@ cont:
 	andl	$~PGOFSET,%edx
 
 	/*
-	 * Skip the first MB.
+	 * Skip the first 16 MB.
 	 */
-	movl	$(KERNTEXTOFF_LO - KERNBASE_LO),%eax
+	movl	$(KERNTEXTOFF - KERNBASE),%eax
 	movl	%eax,%ecx
 	shrl	$(PGSHIFT-3),%ecx	/* ((n >> PGSHIFT) << 3) for # pdes */
 	addl	%ecx,%ebx
@@ -549,11 +548,6 @@ store_pte:
 	movl	%ebp, 4(%ebx)
 	popl	%ebp
 
-	/* Save phys. addr of PTD, for libkvm. */
-	movl	$RELOC(PTDpaddr),%ebp
-	movl	%esi,(%ebp)
-	movl	$0,4(%ebp)
-
 	/*
 	 * Startup checklist:
 	 * 1. Enable PAE (and SSE while here).
@@ -662,7 +656,13 @@ longmode_hi:
 	addq	%r8,%rax
 	movq	%rax,_C_LABEL(proc0paddr)(%rip)
 	leaq	(USPACE-FRAMESIZE)(%rax),%rsp
+
+	/*
+	 * Set proc0's %cr3 to bootstrap page tables. Will be overwritten when
+	 * pmap_randomize is called later.
+	 */
 	movq	%rsi,PCB_CR3(%rax)	# pcb->pcb_cr3
+
 	xorq	%rbp,%rbp		# mark end of frames
 
 	xorw	%ax,%ax
@@ -687,6 +687,17 @@ _C_LABEL(codepatch_end):
 	.previous
 
 	.data
+	.globl	gdt64
+gdt64:
+	.word	gdt64_end-gdt64_start-1
+	.quad	_RELOC(gdt64_start)
+	.align 64, 0xcc
+
+gdt64_start:
+	.quad 0x0000000000000000	/* always empty */
+	.quad 0x00af9a000000ffff	/* kernel CS */
+	.quad 0x00cf92000000ffff	/* kernel DS */
+gdt64_end:
 
 farjmp64:
 	.long	longmode-KERNBASE

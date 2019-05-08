@@ -1,4 +1,4 @@
-/*	$OpenBSD: mib.c,v 1.91 2018/08/31 05:20:36 jsg Exp $	*/
+/*	$OpenBSD: mib.c,v 1.93 2019/05/02 14:04:10 gerhard Exp $	*/
 
 /*
  * Copyright (c) 2012 Joel Knight <joel@openbsd.org>
@@ -614,6 +614,8 @@ mib_hrstorage(struct oid *oid, struct ber_oid *o, struct ber_element **elm)
 
 	sop = &so[0];
 	switch (idx) {
+	case 0:
+		return (-1);
 	case 1:
 		descr = "Physical memory";
 		units = uvm.pagesize;
@@ -2658,7 +2660,7 @@ static const char * const sensor_drive_s[SENSOR_DRIVE_STATES] = {
 static const char * const sensor_unit_s[SENSOR_MAX_TYPES + 1] = {
 	"degC",	"RPM", "V DC", "V AC", "Ohm", "W", "A", "Wh", "Ah",
 	"", "", "%", "lx", "", "sec", "%RH", "Hz", "degree", 
-	"mm", "Pa", "m/s^2", ""
+	"m", "Pa", "m/s^2", "m/s", ""
 };
 
 const char *
@@ -2690,6 +2692,8 @@ mib_sensorvalue(struct sensor *s)
 	case SENSOR_LUX:
 	case SENSOR_FREQ:
 	case SENSOR_ACCEL:
+	case SENSOR_VELOCITY:
+	case SENSOR_DISTANCE:
 		ret = asprintf(&v, "%.2f", s->value / 1000000.0);
 		break;
 	case SENSOR_INDICATOR:
@@ -2699,7 +2703,6 @@ mib_sensorvalue(struct sensor *s)
 	case SENSOR_HUMIDITY:
 		ret = asprintf(&v, "%.2f", s->value / 1000.0);
 		break;
-	case SENSOR_DISTANCE:
 	case SENSOR_PRESSURE:
 		ret = asprintf(&v, "%.2f", s->value / 1000.0);
 		break;

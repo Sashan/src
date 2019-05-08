@@ -1,7 +1,7 @@
 #! /usr/bin/perl
 
 # ex:ts=8 sw=4:
-# $OpenBSD: PkgAdd.pm,v 1.105 2018/10/22 10:29:06 espie Exp $
+# $OpenBSD: PkgAdd.pm,v 1.110 2019/04/17 07:32:02 stsp Exp $
 #
 # Copyright (c) 2003-2014 Marc Espie <espie@openbsd.org>
 #
@@ -101,7 +101,7 @@ sub tie_files
 		}
 		$self->{tieto} = $tied;
 		$tied->{tied} = 1;
-		$state->say("Tieing #1 to #2", $self->stringize,
+		$state->say("Tying #1 to #2", $self->stringize,
 		    $tied->stringize) if $state->verbose >= 3;
 	}
 }
@@ -136,6 +136,9 @@ sub handle_options
 	$state->{pkglist} = $state->opt('l');
 	$state->{update} = $state->opt('u');
 	$state->{fuzzy} = $state->opt('z');
+	if ($state->defines('snapshot')) {
+		$state->{subst}->add('snap', 1);
+	}
 
 	if (@ARGV == 0 && !$state->{update} && !$state->{pkglist}) {
 		$state->usage("Missing pkgname");
@@ -201,6 +204,31 @@ OpenBSD::Auto::cache(tracker,
 	return OpenBSD::Tracker->new;
     });
 
+sub tweak_header
+{
+	my ($state, $info) = @_;
+	my $header = $state->{setheader};
+
+	if (defined $info) {
+		$header.=" ($info)";
+	}
+
+	if (!$state->progress->set_header($header)) {
+		return unless $state->verbose;
+		if (!defined $info) {
+			$header = "Adding $header";
+		}
+		if (defined $state->{lastheader} &&
+		    $header eq $state->{lastheader}) {
+			return;
+		}
+		$state->{lastheader} = $header;
+		$state->print("#1", $header);
+		$state->print("(pretending) ") if $state->{not};
+		$state->print("\n");
+	}
+}
+
 package OpenBSD::ConflictCache;
 our @ISA = (qw(OpenBSD::Cloner));
 sub new
@@ -246,24 +274,10 @@ sub setup_header
 	} else {
 		$header .= $set->print;
 	}
-	if (defined $info) {
-		$header.=" ($info)";
-	}
 
-	if (!$state->progress->set_header($header)) {
-		return unless $state->verbose;
-		if (!defined $info) {
-			$header = "Adding $header";
-		}
-		if (defined $state->{lastheader} &&
-		    $header eq $state->{lastheader}) {
-			return;
-		}
-		$state->{lastheader} = $header;
-		$state->print("#1", $header);
-		$state->print("(pretending) ") if $state->{not};
-		$state->print("\n");
-	}
+	$state->{setheader} = $header;
+
+	$state->tweak_header($info);
 }
 
 my $checked = {};
@@ -542,6 +556,10 @@ sub check_forward_dependencies
 		if (!$state->defines('dontmerge')) {
 			my $okay = 1;
 			for my $m (keys %$bad) {
+				if ($set->{kept}{$m}) {
+					$okay = 0;
+					next;
+				}
 				if ($set->try_merging($m, $state)) {
 					$no_merge = 0;
 				} else {
@@ -768,8 +786,7 @@ sub really_add
 		$set->setup_header($state, $handle, "extracting");
 
 		try {
-			OpenBSD::Add::perform_extraction($handle,
-			    $state);
+			OpenBSD::Add::perform_extraction($handle, $state);
 		} catchall {
 			unless ($state->{interrupted}) {
 				$state->errsay($_);
@@ -921,10 +938,6 @@ sub process_set
 	if (newer_has_errors($set, $state)) {
 		return ();
 	}
-	if ($set->newer == 0 && $set->older_to_do == 0) {
-		$state->tracker->uptodate($set);
-		return ();
-	}
 
 	my @deps = $set->solver->solve_depends($state);
 	if ($state->verbose >= 2) {
@@ -934,6 +947,11 @@ sub process_set
 		$state->build_deptree($set, @deps);
 		$set->solver->check_for_loops($state);
 		return (@deps, $set);
+	}
+
+	if ($set->newer == 0 && $set->older_to_do == 0) {
+		$state->tracker->uptodate($set);
+		return ();
 	}
 
 	if (!$set->complete($state)) {

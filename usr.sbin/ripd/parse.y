@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.44 2018/11/11 13:55:07 remi Exp $ */
+/*	$OpenBSD: parse.y,v 1.46 2019/02/13 22:57:08 deraadt Exp $ */
 
 /*
  * Copyright (c) 2006 Michele Marchetto <mydecay@openbeer.it>
@@ -26,6 +26,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <net/route.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -104,7 +105,8 @@ typedef struct {
 
 %}
 
-%token	SPLIT_HORIZON TRIGGERED_UPDATES FIBUPDATE REDISTRIBUTE RDOMAIN
+%token	SPLIT_HORIZON TRIGGERED_UPDATES FIBPRIORITY FIBUPDATE
+%token	REDISTRIBUTE RDOMAIN
 %token	AUTHKEY AUTHTYPE AUTHMD AUTHMDKEYID
 %token	INTERFACE RTLABEL
 %token	COST PASSIVE
@@ -195,6 +197,13 @@ conf_main	: SPLIT_HORIZON STRING {
 				YYERROR;
 			}
 			conf->rdomain = $2;
+		}
+		| FIBPRIORITY NUMBER {
+			if ($2 <= RTP_NONE || $2 > RTP_MAX) {
+				yyerror("invalid fib-priority");
+				YYERROR;
+			}
+			conf->fib_priority = $2;
 		}
 		| FIBUPDATE yesno {
 			if ($2 == 0)
@@ -423,6 +432,7 @@ lookup(char *s)
 	    {"auth-type",		AUTHTYPE},
 	    {"cost",			COST},
 	    {"demote",			DEMOTE},
+	    {"fib-priority",		FIBPRIORITY},
 	    {"fib-update",		FIBUPDATE},
 	    {"interface",		INTERFACE},
 	    {"no",			NO},
@@ -629,7 +639,7 @@ top:
 	if (c == '-' || isdigit(c)) {
 		do {
 			*p++ = c;
-			if ((unsigned)(p-buf) >= sizeof(buf)) {
+			if ((size_t)(p-buf) >= sizeof(buf)) {
 				yyerror("string too long");
 				return (findeol());
 			}
@@ -668,7 +678,7 @@ nodigits:
 	if (isalnum(c) || c == ':' || c == '_') {
 		do {
 			*p++ = c;
-			if ((unsigned)(p-buf) >= sizeof(buf)) {
+			if ((size_t)(p-buf) >= sizeof(buf)) {
 				yyerror("string too long");
 				return (findeol());
 			}
@@ -771,6 +781,7 @@ parse_config(char *filename, int opts)
 	defs->auth_type = AUTH_NONE;
 	conf->opts = opts;
 	conf->options = OPT_SPLIT_POISONED;
+	conf->fib_priority = RTP_RIP;
 	SIMPLEQ_INIT(&conf->redist_list);
 
 	if ((file = pushfile(filename, !(conf->opts & RIPD_OPT_NOACTION))) == NULL) {

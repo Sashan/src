@@ -1,14 +1,12 @@
-# $OpenBSD: Makefile,v 1.6 2018/04/06 14:44:04 patrick Exp $
+# $OpenBSD: Makefile,v 1.10 2019/03/05 09:44:41 jsg Exp $
 
 LIB=	LLVMScalarOpts
-NOPIC=
 NOPROFILE=
 
 CPPFLAGS+=	-I${LLVM_SRCS}/include/llvm/Transforms
 CPPFLAGS+=	-I${LLVM_SRCS}/include/llvm/Transforms/Scalar
 
-.include <bsd.own.mk>
-SRCS=	ADCE.cpp \
+SRCS+=	ADCE.cpp \
 	AlignmentFromAssumptions.cpp \
 	BDCE.cpp \
 	CallSiteSplitting.cpp \
@@ -28,6 +26,8 @@ SRCS=	ADCE.cpp \
 	IVUsersPrinter.cpp \
 	InductiveRangeCheckElimination.cpp \
 	IndVarSimplify.cpp \
+	InferAddressSpaces.cpp \
+	InstSimplifyPass.cpp \
 	JumpThreading.cpp \
 	LICM.cpp \
 	LoopAccessAnalysisPrinter.cpp \
@@ -45,6 +45,7 @@ SRCS=	ADCE.cpp \
 	LoopSimplifyCFG.cpp \
 	LoopSink.cpp \
 	LoopStrengthReduce.cpp \
+	LoopUnrollAndJamPass.cpp \
 	LoopUnrollPass.cpp \
 	LoopUnswitch.cpp \
 	LoopVersioningLICM.cpp \
@@ -61,7 +62,7 @@ SRCS=	ADCE.cpp \
 	Reassociate.cpp \
 	Reg2Mem.cpp \
 	RewriteStatepointsForGC.cpp \
-	SCCP.cpp \
+	ScalarSCCP.cpp \
 	SROA.cpp \
 	Scalar.cpp \
 	Scalarizer.cpp \
@@ -75,9 +76,9 @@ SRCS=	ADCE.cpp \
 	StructurizeCFG.cpp \
 	TailRecursionElimination.cpp
 
+ScalarSCCP.cpp:
+	ln -s ${LLVM_SRCS}/lib/Transforms/Scalar/SCCP.cpp $@
+
 .PATH:	${.CURDIR}/../../../llvm/lib/Transforms/Scalar
 
-install:
-	@# Nothing here so far ...
-
-.include <bsd.lib.mk>
+CLEANFILES+= ScalarSCCP.cpp

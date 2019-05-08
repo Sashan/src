@@ -1,14 +1,13 @@
-# $OpenBSD: Makefile,v 1.1 2018/10/04 11:43:29 patrick Exp $
+# $OpenBSD: Makefile,v 1.4 2019/03/05 09:44:40 jsg Exp $
 
 LIB=	LLVMExecutionEngine
-NOPIC=
 NOPROFILE=
 
 CPPFLAGS+=	-I${LLVM_SRCS}/include/llvm/ExecutionEngine
 
-.include <bsd.own.mk>
-SRCS=	Execution.cpp \
+SRCS+=	Execution.cpp \
 	ExecutionEngine.cpp \
+	ExecutionEngineCore.cpp \
 	ExecutionEngineBindings.cpp \
 	ExecutionUtils.cpp \
 	ExternalFunctions.cpp \
@@ -16,6 +15,7 @@ SRCS=	Execution.cpp \
 	IndirectionUtils.cpp \
 	Interpreter.cpp \
 	JITSymbol.cpp \
+	Legacy.cpp \
 	MCJIT.cpp \
 	NullResolver.cpp \
 	OrcABISupport.cpp \
@@ -31,7 +31,10 @@ SRCS=	Execution.cpp \
 	RuntimeDyldELFMips.cpp \
 	RuntimeDyldMachO.cpp \
 	SectionMemoryManager.cpp \
-	TargetSelect.cpp \
+	TargetSelect.cpp
+
+ExecutionEngineCore.cpp:
+	ln -s ${LLVM_SRCS}/lib/ExecutionEngine/Orc/Core.cpp $@
 
 .PATH:	${.CURDIR}/../../../llvm/lib/ExecutionEngine
 .PATH:	${.CURDIR}/../../../llvm/lib/ExecutionEngine/Interpreter
@@ -40,8 +43,4 @@ SRCS=	Execution.cpp \
 .PATH:	${.CURDIR}/../../../llvm/lib/ExecutionEngine/RuntimeDyld
 .PATH:	${.CURDIR}/../../../llvm/lib/ExecutionEngine/RuntimeDyld/Targets
 
-
-install:
-	@# Nothing here so far ...
-
-.include <bsd.lib.mk>
+CLEANFILES+= ExecutionEngineCore.cpp

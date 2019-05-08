@@ -1,4 +1,4 @@
-/*	$OpenBSD: route.c,v 1.227 2018/11/12 16:39:12 krw Exp $	*/
+/*	$OpenBSD: route.c,v 1.230 2019/03/31 11:30:35 kn Exp $	*/
 /*	$NetBSD: route.c,v 1.16 1996/04/15 18:27:05 cgd Exp $	*/
 
 /*
@@ -222,7 +222,10 @@ main(int argc, char **argv)
 		}
 	}
 
-	s = socket(PF_ROUTE, SOCK_RAW, af);
+	if (tflag)
+		s = open(_PATH_DEVNULL, O_WRONLY);
+	else
+		s = socket(AF_ROUTE, SOCK_RAW, af);
 	if (s == -1)
 		err(1, "socket");
 
@@ -232,15 +235,17 @@ main(int argc, char **argv)
 			err(1, "setsockopt(ROUTE_MSGFILTER)");
 	}
 
-	/* force socket onto table user requested */
-	if (Tflag == 1 && Terr == 0) {
-		if (setsockopt(s, AF_ROUTE, ROUTE_TABLEFILTER,
-		    &tableid, sizeof(tableid)) == -1)
-			err(1, "setsockopt(ROUTE_TABLEFILTER)");
-	} else {
-		if (setsockopt(s, AF_ROUTE, ROUTE_TABLEFILTER,
-		    &rtable_any, sizeof(tableid)) == -1)
-			err(1, "setsockopt(ROUTE_TABLEFILTER)");
+	if (!tflag) {
+		/* force socket onto table user requested */
+		if (Tflag == 1 && Terr == 0) {
+			if (setsockopt(s, AF_ROUTE, ROUTE_TABLEFILTER,
+			    &tableid, sizeof(tableid)) == -1)
+				err(1, "setsockopt(ROUTE_TABLEFILTER)");
+		} else {
+			if (setsockopt(s, AF_ROUTE, ROUTE_TABLEFILTER,
+			    &rtable_any, sizeof(tableid)) == -1)
+				err(1, "setsockopt(ROUTE_TABLEFILTER)");
+		}
 	}
 
 	if (pledge("stdio dns route", NULL) == -1)
@@ -1170,7 +1175,8 @@ char routeflags[] =
 "\030CONNECTED\031BFD";
 char ifnetflags[] =
 "\1UP\2BROADCAST\3DEBUG\4LOOPBACK\5PTP\6STATICARP\7RUNNING\010NOARP\011PPROMISC"
-"\012ALLMULTI\013OACTIVE\014SIMPLEX\015LINK0\016LINK1\017LINK2\020MULTICAST";
+"\012ALLMULTI\013OACTIVE\014SIMPLEX\015LINK0\016LINK1\017LINK2\020MULTICAST"
+"\23INET6_NOPRIVACY\24MPLS\25WOL\26AUTOCONF6\27INET6_NOSOII";
 char addrnames[] =
 "\1DST\2GATEWAY\3NETMASK\4GENMASK\5IFP\6IFA\7AUTHOR\010BRD\011SRC\012SRCMASK\013LABEL\014BFD\015DNS\016STATIC\017SEARCH";
 
@@ -1224,7 +1230,8 @@ print_rtmsg(struct rt_msghdr *rtm, int msglen)
 		    get_linkstate(ifm->ifm_data.ifi_type,
 		        ifm->ifm_data.ifi_link_state),
 		    ifm->ifm_data.ifi_mtu);
-		bprintf(stdout, ifm->ifm_flags, ifnetflags);
+		bprintf(stdout, ifm->ifm_flags | (ifm->ifm_xflags << 16),
+		    ifnetflags);
 		pmsg_addrs((char *)ifm + ifm->ifm_hdrlen, ifm->ifm_addrs);
 		break;
 	case RTM_80211INFO:

@@ -91,6 +91,7 @@ usage()
 	printf("  stats_noreset			peek at statistics\n");
 	printf("  addzone <name> <pattern>	add a new zone\n");
 	printf("  delzone <name>		remove a zone\n");
+	printf("  changezone <name> <pattern>	change zone to use pattern\n");
 	printf("  addzones			add zone list on stdin {name space pattern newline}\n");
 	printf("  delzones			remove zone list on stdin {name newline}\n");
 	printf("  write [<zone>]		write changed zonefiles to disk\n");
@@ -100,6 +101,11 @@ usage()
 	printf("  zonestatus [<zone>]		print state, serial, activity\n");
 	printf("  serverpid			get pid of server process\n");
 	printf("  verbosity <number>		change logging detail\n");
+	printf("  print_tsig [<key_name>]	print tsig with <name> the secret and algo\n");
+	printf("  update_tsig <name> <secret>	change existing tsig with <name> to a new <secret>\n");
+	printf("  add_tsig <name> <secret> [algo] add new key with the given parameters\n");
+	printf("  assoc_tsig <zone> <key_name>	associate <zone> with given tsig <key_name> name\n");
+	printf("  del_tsig <key_name>		delete tsig <key_name> from configuration\n");
 	exit(1);
 }
 

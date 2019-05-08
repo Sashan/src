@@ -1,6 +1,6 @@
-/*	$OpenBSD: mdoc_man.c,v 1.127 2018/12/03 21:00:06 schwarze Exp $ */
+/*	$OpenBSD: mdoc_man.c,v 1.130 2019/01/04 03:17:38 schwarze Exp $ */
 /*
- * Copyright (c) 2011-2018 Ingo Schwarze <schwarze@openbsd.org>
+ * Copyright (c) 2011-2019 Ingo Schwarze <schwarze@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -102,6 +102,7 @@ static	int	  pre_lk(DECL_ARGS);
 static	int	  pre_li(DECL_ARGS);
 static	int	  pre_nm(DECL_ARGS);
 static	int	  pre_no(DECL_ARGS);
+static	void	  pre_noarg(DECL_ARGS);
 static	int	  pre_ns(DECL_ARGS);
 static	void	  pre_onearg(DECL_ARGS);
 static	int	  pre_pp(DECL_ARGS);
@@ -126,9 +127,11 @@ static	void	  print_node(DECL_ARGS);
 static const void_fp roff_man_acts[ROFF_MAX] = {
 	pre_br,		/* br */
 	pre_onearg,	/* ce */
+	pre_noarg,	/* fi */
 	pre_ft,		/* ft */
 	pre_onearg,	/* ll */
 	pre_onearg,	/* mc */
+	pre_noarg,	/* nf */
 	pre_onearg,	/* po */
 	pre_onearg,	/* rj */
 	pre_sp,		/* sp */
@@ -323,6 +326,7 @@ man_strlen(const char *cp)
 		case ESCAPE_UNICODE:
 		case ESCAPE_NUMBERED:
 		case ESCAPE_SPECIAL:
+		case ESCAPE_UNDEF:
 		case ESCAPE_OVERSTRIKE:
 			if (skip)
 				skip = 0;
@@ -599,7 +603,7 @@ print_count(int *count)
 }
 
 void
-man_mdoc(void *arg, const struct roff_man *mdoc)
+man_mdoc(void *arg, const struct roff_meta *mdoc)
 {
 	struct roff_node *n;
 
@@ -612,9 +616,8 @@ man_mdoc(void *arg, const struct roff_man *mdoc)
 	}
 
 	printf(".TH \"%s\" \"%s\" \"%s\" \"%s\" \"%s\"\n",
-	    mdoc->meta.title,
-	    (mdoc->meta.msec == NULL ? "" : mdoc->meta.msec),
-	    mdoc->meta.date, mdoc->meta.os, mdoc->meta.vol);
+	    mdoc->title, (mdoc->msec == NULL ? "" : mdoc->msec),
+	    mdoc->date, mdoc->os, mdoc->vol);
 
 	/* Disable hyphenation and if nroff, disable justification. */
 	printf(".nh\n.if n .ad l");
@@ -626,7 +629,7 @@ man_mdoc(void *arg, const struct roff_man *mdoc)
 		*fontqueue.tail = 'R';
 	}
 	for (; n != NULL; n = n->next)
-		print_node(&mdoc->meta, n);
+		print_node(mdoc, n);
 	putchar('\n');
 }
 
@@ -934,7 +937,6 @@ post_aq(DECL_ARGS)
 static int
 pre_bd(DECL_ARGS)
 {
-
 	outflags &= ~(MMAN_PP | MMAN_sp | MMAN_br);
 
 	if (DISP_unfilled == n->norm->Bd.type ||
@@ -949,12 +951,27 @@ pre_bd(DECL_ARGS)
 static void
 post_bd(DECL_ARGS)
 {
+	enum roff_tok	 bef, now;
 
 	/* Close out this display. */
 	print_line(".RE", MMAN_nl);
-	if (DISP_unfilled == n->norm->Bd.type ||
-	    DISP_literal  == n->norm->Bd.type)
-		print_line(".fi", MMAN_nl);
+	bef = n->flags & NODE_NOFILL ? ROFF_nf : ROFF_fi;
+	if (n->last == NULL)
+		now = n->norm->Bd.type == DISP_unfilled ||
+		    n->norm->Bd.type == DISP_literal ? ROFF_nf : ROFF_fi;
+	else if (n->last->tok == ROFF_nf)
+		now = ROFF_nf;
+	else if (n->last->tok == ROFF_fi)
+		now = ROFF_fi;
+	else
+		now = n->last->flags & NODE_NOFILL ? ROFF_nf : ROFF_fi;
+	if (bef != now) {
+		outflags |= MMAN_nl;
+		print_word(".");
+		outflags &= ~MMAN_spc;
+		print_word(roff_name[bef]);
+		outflags |= MMAN_nl;
+	}
 
 	/* Maybe we are inside an enclosing list? */
 	if (NULL != n->parent->next)
@@ -1605,7 +1622,6 @@ pre_onearg(DECL_ARGS)
 static int
 pre_li(DECL_ARGS)
 {
-
 	font_push('R');
 	return 1;
 }
@@ -1638,7 +1654,6 @@ pre_nm(DECL_ARGS)
 static void
 post_nm(DECL_ARGS)
 {
-
 	switch (n->type) {
 	case ROFFT_BLOCK:
 		outflags &= ~MMAN_Bk;
@@ -1656,15 +1671,23 @@ post_nm(DECL_ARGS)
 static int
 pre_no(DECL_ARGS)
 {
-
 	outflags |= MMAN_spc_force;
 	return 1;
+}
+
+static void
+pre_noarg(DECL_ARGS)
+{
+	outflags |= MMAN_nl;
+	print_word(".");
+	outflags &= ~MMAN_spc;
+	print_word(roff_name[n->tok]);
+	outflags |= MMAN_nl;
 }
 
 static int
 pre_ns(DECL_ARGS)
 {
-
 	outflags &= ~MMAN_spc;
 	return 0;
 }

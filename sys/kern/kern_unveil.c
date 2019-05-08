@@ -1,7 +1,7 @@
-/*	$OpenBSD: kern_unveil.c,v 1.17 2018/10/29 00:11:37 deraadt Exp $	*/
+/*	$OpenBSD: kern_unveil.c,v 1.25 2019/03/26 13:41:40 beck Exp $	*/
 
 /*
- * Copyright (c) 2017-2018 Bob Beck <beck@openbsd.org>
+ * Copyright (c) 2017-2019 Bob Beck <beck@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -19,6 +19,7 @@
 #include <sys/param.h>
 
 #include <sys/mount.h>
+#include <sys/filedesc.h>
 #include <sys/proc.h>
 #include <sys/namei.h>
 #include <sys/pool.h>
@@ -197,6 +198,7 @@ unveil_destroy(struct process *ps)
 	    sizeof(struct unveil));
 	ps->ps_uvvcount = 0;
 	ps->ps_uvpaths = NULL;
+	ps->ps_uvpcwd = NULL;
 }
 
 void
@@ -238,22 +240,23 @@ unveil_copy(struct process *parent, struct process *child)
 	if (parent->ps_uvpcwd)
 		child->ps_uvpcwd = child->ps_uvpaths +
 		    (parent->ps_uvpcwd - parent->ps_uvpaths);
-	child->ps_uvpcwdgone = parent->ps_uvpcwdgone;
 	child->ps_uvdone = parent->ps_uvdone;
 	child->ps_uvshrink = parent->ps_uvshrink;
 }
 
 /*
  * Walk up from vnode dp, until we find a matching unveil, or the root vnode
- * returns NULL if no unveil to be found above dp.
+ * returns -1 if no unveil to be found above dp.
  */
 ssize_t
-unveil_find_cover(struct vnode *dp, struct proc *p, struct vnode *rootvnode)
+unveil_find_cover(struct vnode *dp, struct proc *p)
 {
-	struct vnode *vp = NULL, *parent = NULL;
+	struct vnode *vp = NULL, *parent = NULL, *root;
 	ssize_t ret = -1;
 	int error;
 
+	/* use the correct root to stop at, chrooted or not.. */
+	root = p->p_fd->fd_rdir ? p->p_fd->fd_rdir : rootvnode;
 	vp = dp;
 
 	do {
@@ -267,9 +270,22 @@ unveil_find_cover(struct vnode *dp, struct proc *p, struct vnode *rootvnode)
 			.cn_namelen = 2,
 			.cn_consume = 0
 		};
+
+		/*
+		 * If we are at the root of a filesystem, and we are
+		 * still mounted somewhere, take the .. in the above
+		 * filesystem.
+		 */
+		if (vp != root && (vp->v_flag & VROOT)) {
+			if (vp->v_mount == NULL)
+				return -1;
+			vp = vp->v_mount->mnt_vnodecovered ?
+			    vp->v_mount->mnt_vnodecovered : vp;
+		}
+
 		if (vget(vp, LK_EXCLUSIVE|LK_RETRY) != 0)
 			return -1;
-		/* Get parent vnode of dvp using lookup of '..' */
+		/* Get parent vnode of vp using lookup of '..' */
 		/* This returns with vp unlocked but ref'ed*/
 		error = VOP_LOOKUP(vp, &parent, &cn);
 		if (error) {
@@ -291,13 +307,16 @@ unveil_find_cover(struct vnode *dp, struct proc *p, struct vnode *rootvnode)
 		(void) unveil_lookup(parent, p, &ret);
 		vput(parent);
 
+		if (ret >= 0)
+			break;
+
 		if (vp == parent) {
 			ret = -1;
 			break;
 		}
 		vp = parent;
 		parent = NULL;
-	} while (vp != rootvnode);
+	} while (vp != root);
 	return ret;
 }
 
@@ -449,7 +468,7 @@ unveil_add_vnode(struct process *pr, struct vnode *vp, struct vnode *rootvnode)
 	pr->ps_uvvcount++;
 
 	/* find out what we are covered by */
-	uv->uv_cover = unveil_find_cover(vp, pr->ps_mainproc, rootvnode);
+	uv->uv_cover = unveil_find_cover(vp, pr->ps_mainproc);
 
 	/*
 	 * Find anyone covered by what we are covered by
@@ -460,7 +479,7 @@ unveil_add_vnode(struct process *pr, struct vnode *vp, struct vnode *rootvnode)
 		if (pr->ps_uvpaths[i].uv_cover == uv->uv_cover)
 			pr->ps_uvpaths[j].uv_cover =
 			    unveil_find_cover(pr->ps_uvpaths[j].uv_vp,
-			    pr->ps_mainproc, rootvnode);
+			    pr->ps_mainproc);
 	}
 
 	return (uv);
@@ -611,8 +630,6 @@ unveil_add(struct proc *p, struct nameidata *ndp, const char *permissions)
  done:
 	if (ret == 0)
 		unveil_add_traversed_vnodes(p, ndp);
-	unveil_free_traversed_vnodes(ndp);
-	pool_put(&namei_pool, ndp->ni_cnd.cn_pnbuf);
 	return ret;
 }
 
@@ -634,6 +651,8 @@ unveil_flagmatch(struct nameidata *ni, u_char flags)
 #ifdef DEBUG_UNVEIL
 			printf("unveil lacks UNVEIL_READ\n");
 #endif
+			if (flags != UNVEIL_INSPECT)
+				ni->ni_unveil_eacces = 1;
 			return 0;
 		}
 	}
@@ -642,6 +661,8 @@ unveil_flagmatch(struct nameidata *ni, u_char flags)
 #ifdef DEBUG_UNVEIL
 			printf("unveil lacks UNVEIL_WRITE\n");
 #endif
+			if (flags != UNVEIL_INSPECT)
+				ni->ni_unveil_eacces = 1;
 			return 0;
 		}
 	}
@@ -650,6 +671,8 @@ unveil_flagmatch(struct nameidata *ni, u_char flags)
 #ifdef DEBUG_UNVEIL
 			printf("unveil lacks UNVEIL_EXEC\n");
 #endif
+			if (flags != UNVEIL_INSPECT)
+				ni->ni_unveil_eacces = 1;
 			return 0;
 		}
 	}
@@ -658,6 +681,8 @@ unveil_flagmatch(struct nameidata *ni, u_char flags)
 #ifdef DEBUG_UNVEIL
 			printf("unveil lacks UNVEIL_CREATE\n");
 #endif
+			if (flags != UNVEIL_INSPECT)
+				ni->ni_unveil_eacces = 1;
 			return 0;
 		}
 	}
@@ -702,8 +727,8 @@ unveil_start_relative(struct proc *p, struct nameidata *ni)
 	 */
 	if (uv && (unveil_flagmatch(ni, uv->uv_flags))) {
 #ifdef DEBUG_UNVEIL
-		printf("unveil: %s(%d): cwd unveil matches",
-		    p->p_p->ps_comm, p->p_p->ps_pid);
+		printf("unveil: %s(%d): cwd unveil at %p matches",
+		    p->p_p->ps_comm, p->p_p->ps_pid, uv);
 #endif
 		ni->ni_unveil_match = uv;
 	}
@@ -724,8 +749,14 @@ unveil_check_component(struct proc *p, struct nameidata *ni, struct vnode *dp)
 				/*
 				 * adjust unveil match as necessary
 				 */
-				ni->ni_unveil_match = unveil_covered(
-				    ni->ni_unveil_match, dp, p->p_p);
+				uv = unveil_covered(ni->ni_unveil_match, dp,
+				    p->p_p);
+				/* clear the match when we DOTDOT above it */
+				if (ni->ni_unveil_match &&
+				    ni->ni_unveil_match->uv_vp == dp) {
+					ni->ni_unveil_match = NULL;
+					ni->ni_unveil_eacces = 0;
+				}
 			}
 			else
 				uv = unveil_lookup(dp, p, NULL);
@@ -787,7 +818,11 @@ unveil_check_final(struct proc *p, struct nameidata *ni)
 			    " vnode %p\n",
 			    p->p_p->ps_comm, p->p_p->ps_pid, ni->ni_vp);
 #endif
-			return EACCES;
+			if (uv->uv_flags & UNVEIL_USERSET)
+				return EACCES;
+			else
+				return ENOENT;
+
 		}
 		/* directry and flags match, update match */
 		ni->ni_unveil_match = uv;
@@ -821,13 +856,14 @@ unveil_check_final(struct proc *p, struct nameidata *ni)
 			    ni->ni_cnd.cn_nameptr, ni->ni_dvp);
 #endif
 			/*
-			 * If dir has perms, EACCESS, otherwise
-			 * ENOENT
+			 * If dir has user set restrictions fail with
+			 * EACCESS. Otherwise, use any covering match
+			 * that we found above this dir.
 			 */
 			if (uv->uv_flags & UNVEIL_USERSET)
 				return EACCES;
 			else
-				return ENOENT;
+				goto done;
 		}
 		/* directory flags match, update match */
 		if (uv->uv_flags & UNVEIL_USERSET)
@@ -854,6 +890,15 @@ done:
 		    ni->ni_unveil_match->uv_vp);
 #endif
 		return (0);
+	}
+	if (ni->ni_unveil_eacces) {
+#ifdef DEBUG_UNVEIL
+		printf("unveil: %s(%d): \"%s\" flag mismatch above/at "
+		    "vnode %p\n",
+		    p->p_p->ps_comm, p->p_p->ps_pid, ni->ni_cnd.cn_nameptr,
+		    ni->ni_unveil_match->uv_vp);
+#endif
+		return EACCES;
 	}
 	return ENOENT;
 }

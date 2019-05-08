@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf_ioctl.c,v 1.338 2018/10/01 19:47:30 kn Exp $ */
+/*	$OpenBSD: pf_ioctl.c,v 1.343 2019/02/18 13:11:44 bluhm Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -316,7 +316,7 @@ pf_rm_rule(struct pf_rulequeue *rulequeue, struct pf_rule *rule)
 	pfi_kif_unref(rule->rdr.kif, PFI_KIF_REF_RULE);
 	pfi_kif_unref(rule->nat.kif, PFI_KIF_REF_RULE);
 	pfi_kif_unref(rule->route.kif, PFI_KIF_REF_RULE);
-	pf_anchor_remove(rule);
+	pf_remove_anchor(rule);
 	pool_put(&pf_rule_pl, rule);
 }
 
@@ -1037,7 +1037,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				pf_status.stateid = time_second;
 				pf_status.stateid = pf_status.stateid << 32;
 			}
-			timeout_add(&pf_purge_to, 1 * hz);
+			timeout_add_sec(&pf_purge_to, 1);
 			pf_create_queues();
 			DPFPRINTF(LOG_NOTICE, "pf: started");
 		}
@@ -1582,9 +1582,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 					sidx = 1;
 					didx = 0;
 				}
-				PF_ACPY(&key.addr[sidx],
+				pf_addrcpy(&key.addr[sidx],
 				    &psk->psk_src.addr.v.a.addr, key.af);
-				PF_ACPY(&key.addr[didx],
+				pf_addrcpy(&key.addr[didx],
 				    &psk->psk_dst.addr.v.a.addr, key.af);
 				key.port[sidx] = psk->psk_src.port[0];
 				key.port[didx] = psk->psk_dst.port[0];
@@ -1641,11 +1641,11 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			if ((!psk->psk_af || sk->af == psk->psk_af)
 			    && (!psk->psk_proto || psk->psk_proto ==
 			    sk->proto) && psk->psk_rdomain == sk->rdomain &&
-			    PF_MATCHA(psk->psk_src.neg,
+			    pf_match_addr(psk->psk_src.neg,
 			    &psk->psk_src.addr.v.a.addr,
 			    &psk->psk_src.addr.v.a.mask,
 			    srcaddr, sk->af) &&
-			    PF_MATCHA(psk->psk_dst.neg,
+			    pf_match_addr(psk->psk_dst.neg,
 			    &psk->psk_dst.addr.v.a.addr,
 			    &psk->psk_dst.addr.v.a.mask,
 			    dstaddr, sk->af) &&
@@ -1732,7 +1732,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		state = TAILQ_FIRST(&state_list);
 		while (state) {
 			if (state->timeout != PFTM_UNLINKED) {
-				if ((nr+1) * sizeof(*p) > (unsigned)ps->ps_len)
+				if ((nr+1) * sizeof(*p) > ps->ps_len)
 					break;
 				pf_state_export(pstore, state);
 				error = copyout(pstore, p, sizeof(*p));
@@ -1822,9 +1822,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			key.af = pnl->af;
 			key.proto = pnl->proto;
 			key.rdomain = pnl->rdomain;
-			PF_ACPY(&key.addr[sidx], &pnl->saddr, pnl->af);
+			pf_addrcpy(&key.addr[sidx], &pnl->saddr, pnl->af);
 			key.port[sidx] = pnl->sport;
-			PF_ACPY(&key.addr[didx], &pnl->daddr, pnl->af);
+			pf_addrcpy(&key.addr[didx], &pnl->daddr, pnl->af);
 			key.port[didx] = pnl->dport;
 
 			PF_STATE_ENTER_READ();
@@ -1836,9 +1836,11 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				error = E2BIG;	/* more than one state */
 			else if (state != NULL) {
 				sk = state->key[sidx];
-				PF_ACPY(&pnl->rsaddr, &sk->addr[sidx], sk->af);
+				pf_addrcpy(&pnl->rsaddr, &sk->addr[sidx],
+				    sk->af);
 				pnl->rsport = sk->port[sidx];
-				PF_ACPY(&pnl->rdaddr, &sk->addr[didx], sk->af);
+				pf_addrcpy(&pnl->rdaddr, &sk->addr[didx],
+				    sk->af);
 				pnl->rdport = sk->port[didx];
 				pnl->rrdomain = sk->rdomain;
 			} else
@@ -1943,7 +1945,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			break;
 		}
 		pr->nr = 0;
-		if (ruleset->anchor == NULL) {
+		if (ruleset == &pf_main_ruleset) {
 			/* XXX kludge for pf_main_ruleset */
 			RB_FOREACH(anchor, pf_anchor_global, &pf_anchors)
 				if (anchor->parent == NULL)
@@ -1971,7 +1973,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			break;
 		}
 		pr->name[0] = 0;
-		if (ruleset->anchor == NULL) {
+		if (ruleset == &pf_main_ruleset) {
 			/* XXX kludge for pf_main_ruleset */
 			RB_FOREACH(anchor, pf_anchor_global, &pf_anchors)
 				if (anchor->parent == NULL && nr++ == pr->nr) {
@@ -2543,7 +2545,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pfioc_src_nodes	*psn = (struct pfioc_src_nodes *)addr;
 		struct pf_src_node	*n, *p, *pstore;
 		u_int32_t		 nr = 0;
-		int			 space = psn->psn_len;
+		size_t			 space = psn->psn_len;
 
 		PF_LOCK();
 		if (space == 0) {
@@ -2560,7 +2562,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		RB_FOREACH(n, pf_src_tree, &tree_src_tracking) {
 			int	secs = time_uptime, diff;
 
-			if ((nr + 1) * sizeof(*p) > (unsigned)psn->psn_len)
+			if ((nr + 1) * sizeof(*p) > psn->psn_len)
 				break;
 
 			memcpy(pstore, n, sizeof(*pstore));
@@ -2624,11 +2626,11 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		PF_LOCK();
 		RB_FOREACH(sn, pf_src_tree, &tree_src_tracking) {
-			if (PF_MATCHA(psnk->psnk_src.neg,
+			if (pf_match_addr(psnk->psnk_src.neg,
 				&psnk->psnk_src.addr.v.a.addr,
 				&psnk->psnk_src.addr.v.a.mask,
 				&sn->addr, sn->af) &&
-			    PF_MATCHA(psnk->psnk_dst.neg,
+			    pf_match_addr(psnk->psnk_dst.neg,
 				&psnk->psnk_dst.addr.v.a.addr,
 				&psnk->psnk_dst.addr.v.a.mask,
 				&sn->raddr, sn->af)) {

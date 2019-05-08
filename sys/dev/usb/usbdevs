@@ -1,4 +1,4 @@
-$OpenBSD: usbdevs,v 1.693 2018/11/19 07:31:35 kevlo Exp $
+$OpenBSD: usbdevs,v 1.698 2019/04/24 20:28:31 remi Exp $
 /* $NetBSD: usbdevs,v 1.322 2003/05/10 17:47:14 hamajima Exp $ */
 
 /*
@@ -143,6 +143,7 @@ vendor HOLTEK		0x04d9	Holtek
 vendor PANASONIC	0x04da	Panasonic (Matsushita)
 vendor SHARP		0x04dd	Sharp
 vendor IIYAMA		0x04e1	Iiyama
+vendor EXAR		0x04e2	Exar
 vendor SHUTTLE		0x04e6	Shuttle Technology
 vendor SAMSUNG2		0x04e8	Samsung Electronics
 vendor ANNABOOKS	0x04ed	Annabooks
@@ -1640,6 +1641,7 @@ product DVICO RT3070		0xb307	RT3070
 product DYNASTREAM ANTDEVBOARD	0x1003	ANT dev board
 product DYNASTREAM ANT2USB	0x1004	ANT2USB
 product DYNASTREAM ANTDEVBOARD2	0x1006	ANT dev board
+product DYNASTREAM ANTUSB2	0x1008	ANTUSB-2 Stick
 product DYNASTREAM ANTUSBM	0x1009	ANTUSB-m Stick
 
 /* EasyDisk products */
@@ -1758,6 +1760,9 @@ product EVOLUTION RCM4_2	0x0303	RCM4 interface
 
 /* Extended Systems products */
 product EXTENDED XTNDACCESS	0x0100	XTNDAccess IrDA
+
+/* Exar products */
+product EXAR XR21V1410		0x1410	XR21V1410
 
 /* Falcom Wireless Communications GmbH products */
 product FALCOM TWIST		0x0001	Twist
@@ -2923,6 +2928,7 @@ product MEI S2000		0x1101	Series 2000
 
 /* Meinberg Funkuhren products */
 product MEINBERG USB5131	0x0301	USB 5131 DCF77 - Radio Clock
+product MEINBERG DCF600USB	0x0302	DCF600USB - Radio Clock
 
 /* Melco, Inc products */
 product MELCO LUATX1		0x0001	LUA-TX Ethernet
@@ -3937,6 +3943,7 @@ product SILABS DEKTEK_DTAPLUS	0x83d8	DekTec DTA Plus VHF/UHF Booster
 product SILABS KYOCERA_GPS	0x8411	Kyocera GPS
 product SILABS IRZ_SG10		0x8418	IRZ SG-10 GSM/GPRS Modem
 product SILABS BEI_VCP		0x846e	BEI USB Sensor (VCP)
+product SILABS JUNIPER_BX_CONS	0x8470	Juniper BX Console
 product SILABS BALLUFF_RFID	0x8477	Balluff RFID reader
 product SILABS AC_SERV_IBUS	0x85ea	AC-Services IBUS
 product SILABS AC_SERV_CIS	0x85eb	AC-Services CIS-IBUS
@@ -4273,6 +4280,7 @@ product TOSHIBA HSDPA		0x1302	HSDPA
 /* TP-Link products */
 product TPLINK RTL8192CU	0x0100	RTL8192CU
 product TPLINK RTL8812AU	0x0101	RTL8812AU
+product TPLINK RTL8192EU	0x0107	RTL8192EU
 product TPLINK RTL8188EUS	0x010C	RTL8188EUS
 
 /* Trek Technology products */

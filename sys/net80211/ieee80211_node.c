@@ -1,4 +1,4 @@
-/*	$OpenBSD: ieee80211_node.c,v 1.158 2018/11/25 12:14:01 phessler Exp $	*/
+/*	$OpenBSD: ieee80211_node.c,v 1.164 2019/04/28 22:15:58 mpi Exp $	*/
 /*	$NetBSD: ieee80211_node.c,v 1.14 2004/05/09 09:18:47 dyoung Exp $	*/
 
 /*-
@@ -191,13 +191,13 @@ ieee80211_get_ess(struct ieee80211com *ic, const char *nwid, int len)
 }
 
 void
-ieee80211_del_ess(struct ieee80211com *ic, char *nwid, int all)
+ieee80211_del_ess(struct ieee80211com *ic, char *nwid, int len, int all)
 {
 	struct ieee80211_ess *ess, *next;
 
 	TAILQ_FOREACH_SAFE(ess, &ic->ic_ess, ess_next, next) {
-		if (all == 1 || (memcmp(ess->essid, nwid,
-		    IEEE80211_NWID_LEN) == 0)) {
+		if (all == 1 || (ess->esslen == len &&
+		    memcmp(ess->essid, nwid, len) == 0)) {
 			TAILQ_REMOVE(&ic->ic_ess, ess, ess_next);
 			explicit_bzero(ess, sizeof(*ess));
 			free(ess, M_DEVBUF, sizeof(*ess));
@@ -215,7 +215,7 @@ ieee80211_ess_setnwkeys(struct ieee80211_ess *ess,
     const struct ieee80211_nwkey *nwkey)
 {
 	struct ieee80211_key *k;
-	int i;
+	int error, i;
 
 	if (nwkey->i_wepon == IEEE80211_NWKEY_OPEN) {
 		if (!(ess->flags & IEEE80211_F_WEPON))
@@ -242,6 +242,9 @@ ieee80211_ess_setnwkeys(struct ieee80211_ess *ess,
 			k->k_cipher = IEEE80211_CIPHER_WEP104;
 		k->k_len = ieee80211_cipher_keylen(k->k_cipher);
 		k->k_flags = IEEE80211_KEY_GROUP | IEEE80211_KEY_TX;
+		error = copyin(nwkey->i_key[i].i_keydat, k->k_key, k->k_len);
+		if (error != 0)
+			return error;
 	}
 	ess->def_txkey = nwkey->i_defkid - 1;
 	ess->flags |= IEEE80211_F_WEPON;
@@ -356,10 +359,6 @@ ieee80211_add_ess(struct ieee80211com *ic, struct ieee80211_join *join)
 	if (ic->ic_opmode != IEEE80211_M_STA)
 		return (0);
 
-	/* Don't save an empty nwid */
-	if (join->i_len == 0)
-		return (0);
-
 	TAILQ_FOREACH(ess, &ic->ic_ess, ess_next) {
 		if (ess->esslen == join->i_len &&
 		    memcmp(ess->essid, join->i_nwid, ess->esslen) == 0)
@@ -455,6 +454,10 @@ ieee80211_ess_calculate_score(struct ieee80211com *ic,
 	else
 		min_5ghz_rssi = (uint8_t)IEEE80211_RSSI_THRES_5GHZ;
 
+	/* not using join any */
+	if (ieee80211_get_ess(ic, ni->ni_essid, ni->ni_esslen))
+		score += 32;
+
 	/* Calculate the crypto score */
 	if (ni->ni_rsnprotos & IEEE80211_PROTO_RSN)
 		score += 16;
@@ -513,9 +516,9 @@ ieee80211_ess_is_better(struct ieee80211com *ic,
 int
 ieee80211_match_ess(struct ieee80211_ess *ess, struct ieee80211_node *ni)
 {
-	if (ess->esslen != ni->ni_esslen)
-		return 0;
-	if (memcmp(ess->essid, ni->ni_essid, ess->esslen) != 0)
+	if (ess->esslen != 0 &&
+	    (ess->esslen != ni->ni_esslen ||
+	    memcmp(ess->essid, ni->ni_essid, ess->esslen) != 0))
 		return 0;
 
 	if (ess->flags & (IEEE80211_F_PSK | IEEE80211_F_RSNON)) {
@@ -533,6 +536,10 @@ ieee80211_match_ess(struct ieee80211_ess *ess, struct ieee80211_node *ni)
 		if ((ni->ni_capinfo & IEEE80211_CAPINFO_PRIVACY) != 0)
 			return 0;
 	}
+
+	if (ess->esslen == 0 &&
+	    (ni->ni_capinfo & IEEE80211_CAPINFO_PRIVACY) != 0)
+		return 0;
 
 	return 1;
 }
@@ -599,6 +606,8 @@ ieee80211_switch_ess(struct ieee80211com *ic)
 			printf("%s: switching to network ", ifp->if_xname);
 			ieee80211_print_essid(selni->ni_essid,
 			    selni->ni_esslen);
+			if (seless->esslen == 0)
+				printf(" via join any");
 			printf("\n");
 
 		}
@@ -732,7 +741,7 @@ ieee80211_node_detach(struct ifnet *ifp)
 		(*ic->ic_node_free)(ic, ic->ic_bss);
 		ic->ic_bss = NULL;
 	}
-	ieee80211_del_ess(ic, NULL, 1);
+	ieee80211_del_ess(ic, NULL, 0, 1);
 	ieee80211_free_allnodes(ic, 1);
 #ifndef IEEE80211_STA_ONLY
 	free(ic->ic_aid_bitmap, M_DEVBUF,
@@ -888,11 +897,15 @@ ieee80211_create_ibss(struct ieee80211com* ic, struct ieee80211_channel *chan)
 		int aci;
 
 		/* 
-		 * Default to non-member HT protection. This will be updated
-		 * later based on the number of non-HT nodes in the node cache.
+		 * Configure HT protection. This will be updated later
+		 * based on the number of non-HT nodes in the node cache.
 		 */
-		ni->ni_htop1 = IEEE80211_HTPROT_NONMEMBER;
-		ic->ic_protmode = IEEE80211_PROT_RTSCTS;
+		ic->ic_protmode = IEEE80211_PROT_NONE;
+		ni->ni_htop1 = IEEE80211_HTPROT_NONE;
+		/* Disallow Greenfield mode. None of our drivers support it. */
+		ni->ni_htop1 |= IEEE80211_HTOP1_NONGF_STA;
+		if (ic->ic_update_htprot)
+			ic->ic_update_htprot(ic, ni);
 
 		/* Configure QoS EDCA parameters. */
 		for (aci = 0; aci < EDCA_NUM_AC; aci++) {
@@ -997,6 +1010,9 @@ ieee80211_match_bss(struct ieee80211com *ic, struct ieee80211_node *ni)
 	rate = ieee80211_fix_rate(ic, ni, IEEE80211_F_DONEGO);
 	if (rate & IEEE80211_RATE_BASIC)
 		fail |= 0x08;
+	if (ISSET(ic->ic_flags, IEEE80211_F_AUTO_JOIN) &&
+	    ic->ic_des_esslen == 0)
+		fail |= 0x10;
 	if (ic->ic_des_esslen != 0 &&
 	    (ni->ni_esslen != ic->ic_des_esslen ||
 	     memcmp(ni->ni_essid, ic->ic_des_essid, ic->ic_des_esslen) != 0))
@@ -1976,7 +1992,14 @@ ieee80211_clean_nodes(struct ieee80211com *ic, int cache_timeout)
 #ifndef IEEE80211_STA_ONLY
 		nnodes++;
 		if ((ic->ic_flags & IEEE80211_F_HTON) && cache_timeout) {
-			if (!ieee80211_node_supports_ht(ni)) {
+			/*
+			 * Check if node supports 802.11n.
+			 * Only require HT capabilities IE for this check.
+			 * Nodes might never reveal their supported MCS to us
+			 * unless they go through a full association sequence.
+			 * ieee80211_node_supports_ht() could misclassify them.
+			 */
+			if ((ni->ni_flags & IEEE80211_NODE_HTCAP) == 0) {
 				nonht++;
 				if (ni->ni_state == IEEE80211_STA_ASSOC)
 					nonhtassoc++;
@@ -2022,7 +2045,7 @@ ieee80211_clean_nodes(struct ieee80211com *ic, int cache_timeout)
 #ifndef IEEE80211_STA_ONLY
 		nnodes--;
 		if ((ic->ic_flags & IEEE80211_F_HTON) && cache_timeout) {
-			if (!ieee80211_node_supports_ht(ni)) {
+			if ((ni->ni_flags & IEEE80211_NODE_HTCAP) == 0) {
 				nonht--;
 				if (ni->ni_state == IEEE80211_STA_ASSOC)
 					nonhtassoc--;
@@ -2043,16 +2066,20 @@ ieee80211_clean_nodes(struct ieee80211com *ic, int cache_timeout)
 
 #ifndef IEEE80211_STA_ONLY
 	if ((ic->ic_flags & IEEE80211_F_HTON) && cache_timeout) {
+		uint16_t htop1 = ic->ic_bss->ni_htop1;
+
 		/* Update HT protection settings. */
 		if (nonht) {
-			protmode = IEEE80211_PROT_RTSCTS;
+			protmode = IEEE80211_PROT_CTSONLY;
 			if (nonhtassoc)
 				htprot = IEEE80211_HTPROT_NONHT_MIXED;
 			else
 				htprot = IEEE80211_HTPROT_NONMEMBER;
 		}
-		if (ic->ic_bss->ni_htop1 != htprot) {
-			ic->ic_bss->ni_htop1 = htprot;
+		if ((htop1 & IEEE80211_HTOP1_PROT_MASK) != htprot) {
+			htop1 &= ~IEEE80211_HTOP1_PROT_MASK;
+			htop1 |= htprot;
+			ic->ic_bss->ni_htop1 |= htop1;
 			ic->ic_protmode = protmode;
 			if (ic->ic_update_htprot)
 				ic->ic_update_htprot(ic, ic->ic_bss);
@@ -2119,6 +2146,8 @@ ieee80211_setup_htcaps(struct ieee80211_node *ni, const uint8_t *data,
 	ni->ni_txbfcaps = (data[21] | (data[22] << 8) | (data[23] << 16) |
 		(data[24] << 24));
 	ni->ni_aselcaps = data[25];
+
+	ni->ni_flags |= IEEE80211_NODE_HTCAP;
 }
 
 #ifndef IEEE80211_STA_ONLY
@@ -2137,7 +2166,8 @@ ieee80211_clear_htcaps(struct ieee80211_node *ni)
 	ni->ni_txbfcaps = 0;
 	ni->ni_aselcaps = 0;
 
-	ni->ni_flags &= ~IEEE80211_NODE_HT;
+	ni->ni_flags &= ~(IEEE80211_NODE_HT | IEEE80211_NODE_HT_SGI20 |
+	    IEEE80211_NODE_HT_SGI40 | IEEE80211_NODE_HTCAP);
 
 }
 #endif
@@ -2252,7 +2282,10 @@ ieee80211_node_join_ht(struct ieee80211com *ic, struct ieee80211_node *ni)
 
 	/* Update HT protection setting. */
 	if ((ni->ni_flags & IEEE80211_NODE_HT) == 0) {
-		ic->ic_bss->ni_htop1 = IEEE80211_HTPROT_NONHT_MIXED;
+		uint16_t htop1 = ic->ic_bss->ni_htop1;
+		htop1 &= ~IEEE80211_HTOP1_PROT_MASK;
+		htop1 |= IEEE80211_HTPROT_NONHT_MIXED;
+		ic->ic_bss->ni_htop1 = htop1;
 		if (ic->ic_update_htprot)
 			ic->ic_update_htprot(ic, ic->ic_bss);
 	}
@@ -2445,10 +2478,10 @@ ieee80211_node_join(struct ieee80211com *ic, struct ieee80211_node *ni,
 
 #if NBRIDGE > 0
 	/*
-	 * If the parent interface is a bridgeport, learn
+	 * If the parent interface is a bridge port, learn
 	 * the node's address dynamically on this interface.
 	 */
-	if (ic->ic_if.if_bridgeport != NULL)
+	if (ic->ic_if.if_bridgeidx != 0)
 		bridge_update(&ic->ic_if,
 		    (struct ether_addr *)ni->ni_macaddr, 0);
 #endif
@@ -2602,10 +2635,10 @@ ieee80211_node_leave(struct ieee80211com *ic, struct ieee80211_node *ni)
 
 #if NBRIDGE > 0
 	/*
-	 * If the parent interface is a bridgeport, delete
+	 * If the parent interface is a bridge port, delete
 	 * any dynamically learned address for this node.
 	 */
-	if (ic->ic_if.if_bridgeport != NULL)
+	if (ic->ic_if.if_bridgeidx != 0)
 		bridge_update(&ic->ic_if,
 		    (struct ether_addr *)ni->ni_macaddr, 1);
 #endif

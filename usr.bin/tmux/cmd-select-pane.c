@@ -1,4 +1,4 @@
-/* $OpenBSD: cmd-select-pane.c,v 1.45 2018/10/18 08:38:01 nicm Exp $ */
+/* $OpenBSD: cmd-select-pane.c,v 1.50 2019/04/30 06:21:30 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -19,6 +19,7 @@
 #include <sys/types.h>
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "tmux.h"
 
@@ -65,7 +66,7 @@ cmd_select_pane_redraw(struct window *w)
 	 */
 
 	TAILQ_FOREACH(c, &clients, entry) {
-		if (c->session == NULL)
+		if (c->session == NULL || (c->flags & CLIENT_CONTROL))
 			continue;
 		if (c->session->curw->window == w && tty_window_bigger(&c->tty))
 			server_redraw_client(c);
@@ -89,6 +90,7 @@ cmd_select_pane_exec(struct cmd *self, struct cmdq_item *item)
 	struct window		*w = wl->window;
 	struct session		*s = item->target.s;
 	struct window_pane	*wp = item->target.wp, *lastwp, *markedwp;
+	struct style		*sy = &wp->style;
 	char			*pane_title;
 	const char		*style;
 
@@ -110,7 +112,7 @@ cmd_select_pane_exec(struct cmd *self, struct cmdq_item *item)
 		else {
 			server_unzoom_window(w);
 			window_redraw_active_switch(w, lastwp);
-			if (window_set_active_pane(w, lastwp)) {
+			if (window_set_active_pane(w, lastwp, 1)) {
 				cmd_find_from_winlink(current, wl, 0);
 				cmd_select_pane_redraw(w);
 			}
@@ -141,17 +143,16 @@ cmd_select_pane_exec(struct cmd *self, struct cmdq_item *item)
 	}
 
 	if (args_has(self->args, 'P') || args_has(self->args, 'g')) {
-		if (args_has(args, 'P')) {
-			style = args_get(args, 'P');
-			if (style_parse(&grid_default_cell, &wp->colgc,
-			    style) == -1) {
+		if ((style = args_get(args, 'P')) != NULL) {
+			style_set(sy, &grid_default_cell);
+			if (style_parse(sy, &grid_default_cell, style) == -1) {
 				cmdq_error(item, "bad style: %s", style);
 				return (CMD_RETURN_ERROR);
 			}
 			wp->flags |= PANE_REDRAW;
 		}
 		if (args_has(self->args, 'g'))
-			cmdq_print(item, "%s", style_tostring(&wp->colgc));
+			cmdq_print(item, "%s", style_tostring(sy));
 		return (CMD_RETURN_NORMAL);
 	}
 
@@ -193,9 +194,9 @@ cmd_select_pane_exec(struct cmd *self, struct cmdq_item *item)
 		return (CMD_RETURN_NORMAL);
 	server_unzoom_window(wp->window);
 	window_redraw_active_switch(w, wp);
-	if (window_set_active_pane(w, wp)) {
+	if (window_set_active_pane(w, wp, 1)) {
 		cmd_find_from_winlink_pane(current, wl, wp, 0);
-		hooks_insert(s->hooks, item, current, "after-select-pane");
+		cmdq_insert_hook(s, item, current, "after-select-pane");
 		cmd_select_pane_redraw(w);
 	}
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: engine.c,v 1.9 2018/08/03 13:14:46 florian Exp $	*/
+/*	$OpenBSD: engine.c,v 1.15 2019/03/15 16:47:19 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -211,33 +211,32 @@ engine_dispatch_frontend(int fd, short event, void *bula)
 
 		switch (imsg.hdr.type) {
 		case IMSG_RA_RS:
-			if (imsg.hdr.len != IMSG_HEADER_SIZE + sizeof(ra_rs))
-				fatal("%s: IMSG_RA_RS wrong length: %d",
-				    __func__, imsg.hdr.len);
+			if (IMSG_DATA_SIZE(imsg) != sizeof(ra_rs))
+				fatalx("%s: IMSG_RA_RS wrong length: %lu",
+				    __func__, IMSG_DATA_SIZE(imsg));
 			memcpy(&ra_rs, imsg.data, sizeof(ra_rs));
 			parse_ra_rs(&ra_rs);
 			break;
 		case IMSG_UPDATE_IF:
-			if (imsg.hdr.len != IMSG_HEADER_SIZE + sizeof(if_index))
-				fatal("%s: IMSG_UPDATE_IF wrong length: %d",
-				    __func__, imsg.hdr.len);
+			if (IMSG_DATA_SIZE(imsg) != sizeof(if_index))
+				fatalx("%s: IMSG_UPDATE_IF wrong length: %lu",
+				    __func__, IMSG_DATA_SIZE(imsg));
 			memcpy(&if_index, imsg.data, sizeof(if_index));
 			update_iface(if_index);
 			break;
 		case IMSG_REMOVE_IF:
-			if (imsg.hdr.len != IMSG_HEADER_SIZE + sizeof(if_index))
-				fatal("%s: IMSG_REMOVE_IF wrong length: %d",
-				    __func__, imsg.hdr.len);
+			if (IMSG_DATA_SIZE(imsg) != sizeof(if_index))
+				fatalx("%s: IMSG_REMOVE_IF wrong length: %lu",
+				    __func__, IMSG_DATA_SIZE(imsg));
 			memcpy(&if_index, imsg.data, sizeof(if_index));
 			remove_iface(if_index);
 			break;
 		case IMSG_CTL_LOG_VERBOSE:
-			/* Already checked by frontend. */
+			if (IMSG_DATA_SIZE(imsg) != sizeof(verbose))
+				fatalx("%s: IMSG_CTL_LOG_VERBOSE wrong length: "
+				    "%lu", __func__, IMSG_DATA_SIZE(imsg));
 			memcpy(&verbose, imsg.data, sizeof(verbose));
 			log_setverbose(verbose);
-			break;
-		case IMSG_SHUTDOWN:
-			engine_imsg_compose_frontend(IMSG_SHUTDOWN, 0, NULL, 0);
 			break;
 		default:
 			log_debug("%s: unexpected imsg %d", __func__,
@@ -297,16 +296,13 @@ engine_dispatch_main(int fd, short event, void *bula)
 			 * Setup pipe and event handler to the frontend
 			 * process.
 			 */
-			if (iev_frontend) {
-				log_warnx("%s: received unexpected imsg fd "
+			if (iev_frontend)
+				fatalx("%s: received unexpected imsg fd "
 				    "to engine", __func__);
-				break;
-			}
-			if ((fd = imsg.fd) == -1) {
-				log_warnx("%s: expected to receive imsg fd to "
+
+			if ((fd = imsg.fd) == -1)
+				fatalx("%s: expected to receive imsg fd to "
 				   "engine but didn't receive any", __func__);
-				break;
-			}
 
 			iev_frontend = malloc(sizeof(struct imsgev));
 			if (iev_frontend == NULL)
@@ -322,6 +318,12 @@ engine_dispatch_main(int fd, short event, void *bula)
 			event_add(&iev_frontend->ev, NULL);
 			break;
 		case IMSG_RECONF_CONF:
+			if (nconf != NULL)
+				fatalx("%s: IMSG_RECONF_CONF already in "
+				    "progress", __func__);
+			if (IMSG_DATA_SIZE(imsg) != sizeof(struct rad_conf))
+				fatalx("%s: IMSG_RECONF_CONF wrong length: %lu",
+				    __func__, IMSG_DATA_SIZE(imsg));
 			if ((nconf = malloc(sizeof(struct rad_conf))) == NULL)
 				fatal(NULL);
 			memcpy(nconf, imsg.data, sizeof(struct rad_conf));
@@ -331,6 +333,10 @@ engine_dispatch_main(int fd, short event, void *bula)
 			ra_options = &nconf->ra_options;
 			break;
 		case IMSG_RECONF_RA_IFACE:
+			if (IMSG_DATA_SIZE(imsg) != sizeof(struct
+			    ra_iface_conf))
+				fatalx("%s: IMSG_RECONF_RA_IFACE wrong length: "
+				    "%lu", __func__, IMSG_DATA_SIZE(imsg));
 			if ((ra_iface_conf = malloc(sizeof(struct
 			    ra_iface_conf))) == NULL)
 				fatal(NULL);
@@ -345,6 +351,11 @@ engine_dispatch_main(int fd, short event, void *bula)
 			ra_options = &ra_iface_conf->ra_options;
 			break;
 		case IMSG_RECONF_RA_AUTOPREFIX:
+			if (IMSG_DATA_SIZE(imsg) != sizeof(struct
+			    ra_prefix_conf))
+				fatalx("%s: IMSG_RECONF_RA_AUTOPREFIX wrong "
+				    "length: %lu", __func__,
+				    IMSG_DATA_SIZE(imsg));
 			if ((ra_iface_conf->autoprefix = malloc(sizeof(struct
 			    ra_prefix_conf))) == NULL)
 				fatal(NULL);
@@ -352,6 +363,11 @@ engine_dispatch_main(int fd, short event, void *bula)
 			    sizeof(struct ra_prefix_conf));
 			break;
 		case IMSG_RECONF_RA_PREFIX:
+			if (IMSG_DATA_SIZE(imsg) != sizeof(struct
+			    ra_prefix_conf))
+				fatalx("%s: IMSG_RECONF_RA_PREFIX wrong "
+				    "length: %lu", __func__,
+				    IMSG_DATA_SIZE(imsg));
 			if ((ra_prefix_conf = malloc(sizeof(struct
 			    ra_prefix_conf))) == NULL)
 				fatal(NULL);
@@ -361,6 +377,10 @@ engine_dispatch_main(int fd, short event, void *bula)
 			    ra_prefix_conf, entry);
 			break;
 		case IMSG_RECONF_RA_RDNSS:
+			if(IMSG_DATA_SIZE(imsg) != sizeof(struct
+			    ra_rdnss_conf))
+				fatalx("%s: IMSG_RECONF_RA_RDNSS wrong length: "
+				    "%lu", __func__, IMSG_DATA_SIZE(imsg));
 			if ((ra_rdnss_conf = malloc(sizeof(struct
 			    ra_rdnss_conf))) == NULL)
 				fatal(NULL);
@@ -370,6 +390,10 @@ engine_dispatch_main(int fd, short event, void *bula)
 			    ra_rdnss_conf, entry);
 			break;
 		case IMSG_RECONF_RA_DNSSL:
+			if(IMSG_DATA_SIZE(imsg) != sizeof(struct
+			    ra_dnssl_conf))
+				fatalx("%s: IMSG_RECONF_RA_DNSSL wrong length: "
+				    "%lu", __func__, IMSG_DATA_SIZE(imsg));
 			if ((ra_dnssl_conf = malloc(sizeof(struct
 			    ra_dnssl_conf))) == NULL)
 				fatal(NULL);
@@ -379,6 +403,9 @@ engine_dispatch_main(int fd, short event, void *bula)
 			    ra_dnssl_conf, entry);
 			break;
 		case IMSG_RECONF_END:
+			if (nconf == NULL)
+				fatalx("%s: IMSG_RECONF_END without "
+				    "IMSG_RECONF_CONF", __func__);
 			merge_config(engine_conf, nconf);
 			nconf = NULL;
 			break;

@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile.i386,v 1.130 2018/10/30 11:08:30 kettenis Exp $
+#	$OpenBSD: Makefile.i386,v 1.134 2019/04/14 14:07:06 deraadt Exp $
 
 # For instructions on building kernels consult the config(8) and options(4)
 # manual pages.
@@ -21,7 +21,9 @@ S!=	cd ../../../..; pwd
 _machdir?=	$S/arch/${_mach}
 _archdir?=	$S/arch/${_arch}
 
-INCLUDES=	-nostdinc -I$S -I${.OBJDIR} -I$S/arch
+INCLUDES=	-nostdinc -I$S -I${.OBJDIR} -I$S/arch \
+		-I$S/dev/pci/drm/include \
+		-I$S/dev/pci/drm/include/uapi
 CPPFLAGS=	${INCLUDES} ${IDENT} ${PARAM} -D_KERNEL -MD -MP
 CWARNFLAGS=	-Werror -Wall -Wimplicit-function-declaration \
 		-Wno-uninitialized -Wno-pointer-sign \
@@ -35,6 +37,7 @@ CMACHFLAGS+=	-fno-stack-protector
 .endif
 .if ${IDENT:M-DSMALL_KERNEL}
 SORTR=		cat
+COPTS?=		-Oz -mtune=i486 -mno-retpoline
 .elif ${COMPILER_VERSION:Mclang}
 CMACHFLAGS+=	-mretpoline
 .endif
@@ -97,7 +100,7 @@ LINKFLAGS+=	-S
 .endif
 
 .if ${SYSTEM_OBJ:Mkcov.o} && ${COMPILER_VERSION:Mclang}
-PROF=		-fsanitize-coverage=trace-pc
+PROF=		-fsanitize-coverage=trace-pc,trace-cmp
 .endif
 
 %LOAD
@@ -148,7 +151,7 @@ vers.o: ${SYSTEM_DEP:Ngap.o}
 
 .if ${SYSTEM_OBJ:Mkcov.o} && ${COMPILER_VERSION:Mclang}
 kcov.o: $S/dev/kcov.c
-	${NORMAL_C} -fno-sanitize-coverage=trace-pc
+	${NORMAL_C} -fno-sanitize-coverage=trace-pc,trace-cmp
 .endif
 
 clean:
@@ -162,7 +165,7 @@ depend obj:
 
 locore0.o: ${_machdir}/${_mach}/locore0.S assym.h
 locore.o mutex.o in_cksum.o mptramp.o: assym.h
-kvm86call.o acpi_wakecode.o vmm_support.o: assym.h
+kvm86call.o acpi_wakecode.o: assym.h
 
 hardlink-obsd:
 	[[ ! -f /bsd ]] || cmp -s bsd /bsd || ln -f /bsd /obsd

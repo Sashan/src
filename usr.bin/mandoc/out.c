@@ -1,4 +1,4 @@
-/*	$OpenBSD: out.c,v 1.47 2018/11/29 01:54:58 schwarze Exp $ */
+/*	$OpenBSD: out.c,v 1.50 2019/03/29 21:25:43 schwarze Exp $ */
 /*
  * Copyright (c) 2009, 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
  * Copyright (c) 2011,2014,2015,2017,2018 Ingo Schwarze <schwarze@openbsd.org>
@@ -25,7 +25,7 @@
 #include <time.h>
 
 #include "mandoc_aux.h"
-#include "mandoc.h"
+#include "tbl.h"
 #include "out.h"
 
 struct	tbl_colgroup {
@@ -147,7 +147,7 @@ tblcalc(struct rofftbl *tbl, const struct tbl_span *sp_first,
 		gp = &first_group;
 		for (dp = sp->first; dp != NULL; dp = dp->next) {
 			icol = dp->layout->col;
-			while (icol > maxcol)
+			while (maxcol < icol + dp->hspans)
 				tbl->cols[++maxcol].spacing = SIZE_MAX;
 			col = tbl->cols + icol;
 			col->flags |= dp->layout->flags;

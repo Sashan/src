@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfctl_parser.h,v 1.112 2018/09/06 15:07:34 kn Exp $ */
+/*	$OpenBSD: pfctl_parser.h,v 1.115 2019/03/07 08:01:52 kn Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -210,16 +210,15 @@ struct pfctl_watermarks {
 	u_int32_t	lo;
 };
 
+void		 copy_satopfaddr(struct pf_addr *, struct sockaddr *);
+
 int	pfctl_rules(int, char *, int, int, char *, struct pfr_buffer *);
 int	pfctl_optimize_ruleset(struct pfctl *, struct pf_ruleset *);
 int     pf_opt_create_table(struct pfctl *, struct pf_opt_tbl *);
 int     add_opt_table(struct pfctl *, struct pf_opt_tbl **, sa_family_t,
             struct pf_rule_addr *, char *);
 
-int	pfctl_add_rule(struct pfctl *, struct pf_rule *, const char *);
-int	pfctl_add_pool(struct pfctl *, struct pf_pool *, sa_family_t, int);
-void	pfctl_move_pool(struct pf_pool *, struct pf_pool *);
-void	pfctl_clear_pool(struct pf_pool *);
+void	pfctl_add_rule(struct pfctl *, struct pf_rule *);
 
 int	pfctl_set_timeout(struct pfctl *, const char *, int, int);
 int	pfctl_set_reassembly(struct pfctl *, int, int);

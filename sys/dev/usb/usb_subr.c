@@ -1,4 +1,4 @@
-/*	$OpenBSD: usb_subr.c,v 1.146 2018/11/27 14:56:09 mpi Exp $ */
+/*	$OpenBSD: usb_subr.c,v 1.148 2019/02/17 15:02:22 mpi Exp $ */
 /*	$NetBSD: usb_subr.c,v 1.103 2003/01/10 11:19:13 augustss Exp $	*/
 /*	$FreeBSD: src/sys/dev/usb/usb_subr.c,v 1.18 1999/11/17 22:33:47 n_hibma Exp $	*/
 
@@ -862,7 +862,7 @@ usbd_probe_and_attach(struct device *parent, struct usbd_device *dev, int port,
 {
 	struct usb_attach_arg uaa;
 	usb_device_descriptor_t *dd = &dev->ddesc;
-	int i, confi, nifaces, len;
+	int i, confi, nifaces;
 	usbd_status err;
 	struct device *dv;
 	struct usbd_interface **ifaces;
@@ -940,7 +940,6 @@ usbd_probe_and_attach(struct device *parent, struct usbd_device *dev, int port,
 			goto fail;
 		}
 		dev->nsubdev = nifaces + 2;
-		len = (nifaces + 2) * sizeof(dv);
 
 		for (i = 0; i < nifaces; i++) {
 			if (usbd_iface_claimed(dev, i))
@@ -1209,7 +1208,6 @@ usbd_new_device(struct device *parent, struct usbd_bus *bus, int depth,
 	 * address does not correspond to the hardware one.
 	 */
 	dev->address = addr;
-	bus->devices[addr] = dev;
 
 	err = usbd_reload_device_desc(dev);
 	if (err) {
@@ -1245,6 +1243,8 @@ usbd_new_device(struct device *parent, struct usbd_bus *bus, int depth,
 		up->device = NULL;
 		return (err);
   	}
+
+	bus->devices[addr] = dev;
 
 	err = usbd_probe_and_attach(parent, dev, port, addr);
 	if (err) {

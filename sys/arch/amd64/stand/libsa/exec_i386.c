@@ -1,4 +1,4 @@
-/*	$OpenBSD: exec_i386.c,v 1.24 2018/11/12 05:06:50 guenther Exp $	*/
+/*	$OpenBSD: exec_i386.c,v 1.28 2019/04/20 23:00:07 deraadt Exp $	*/
 
 /*
  * Copyright (c) 1997-1998 Michael Shalayeff
@@ -59,7 +59,7 @@ extern struct cmd_state cmd;
 char *bootmac = NULL;
 
 void
-run_loadfile(u_long *marks, int howto)
+run_loadfile(uint64_t *marks, int howto)
 {
 	u_long entry;
 #ifdef EXEC_DEBUG
@@ -154,7 +154,7 @@ run_loadfile(u_long *marks, int howto)
 	 * Move the loaded kernel image to the usual place after calling
 	 * ExitBootServices().
 	 */
-	memcpy((void *)marks[MARK_START] + delta, (void *)marks[MARK_START],
+	memmove((void *)marks[MARK_START] + delta, (void *)marks[MARK_START],
 	    marks[MARK_END] - marks[MARK_START]);
 	for (i = 0; i < MARK_MAX; i++)
 		marks[i] += delta;
@@ -217,11 +217,13 @@ ucode_load(void)
 	buf = (char *)(1*1024*1024);
 
 	if (read(fd, buf, buflen) != buflen) {
-		free(buf, buflen);
+		close(fd);
 		return;
 	}
 
 	uc.uc_addr = (uint64_t)buf;
 	uc.uc_size = (uint64_t)buflen;
 	addbootarg(BOOTARG_UCODE, sizeof(uc), &uc);
+
+	close(fd);
 }

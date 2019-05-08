@@ -1,4 +1,4 @@
-/*	$OpenBSD: cgi.c,v 1.99 2018/10/19 21:10:00 schwarze Exp $ */
+/*	$OpenBSD: cgi.c,v 1.104 2019/03/06 12:32:10 schwarze Exp $ */
 /*
  * Copyright (c) 2011, 2012 Kristaps Dzonsons <kristaps@bsd.lv>
  * Copyright (c) 2014, 2015, 2016, 2017, 2018 Ingo Schwarze <schwarze@usta.de>
@@ -34,6 +34,7 @@
 #include "roff.h"
 #include "mdoc.h"
 #include "man.h"
+#include "mandoc_parse.h"
 #include "main.h"
 #include "manconf.h"
 #include "mansearch.h"
@@ -319,7 +320,7 @@ http_encode(const char *p)
 	for (; *p != '\0'; p++) {
 		if (isalnum((unsigned char)*p) == 0 &&
 		    strchr("-._~", *p) == NULL)
-			printf("%%%02.2X", (unsigned char)*p);
+			printf("%%%2.2X", (unsigned char)*p);
 		else
 			putchar(*p);
 	}
@@ -844,7 +845,7 @@ resp_format(const struct req *req, const char *file)
 {
 	struct manoutput conf;
 	struct mparse	*mp;
-	struct roff_man	*man;
+	struct roff_meta *meta;
 	void		*vp;
 	int		 fd;
 	int		 usepath;
@@ -855,10 +856,11 @@ resp_format(const struct req *req, const char *file)
 	}
 
 	mchars_alloc();
-	mp = mparse_alloc(MPARSE_SO | MPARSE_UTF8 | MPARSE_LATIN1,
-	    MANDOCERR_MAX, NULL, MANDOC_OS_OTHER, req->q.manpath);
+	mp = mparse_alloc(MPARSE_SO | MPARSE_UTF8 | MPARSE_LATIN1 |
+	    MPARSE_VALIDATE, MANDOC_OS_OTHER, req->q.manpath);
 	mparse_readfd(mp, fd, file);
 	close(fd);
+	meta = mparse_result(mp);
 
 	memset(&conf, 0, sizeof(conf));
 	conf.fragment = 1;
@@ -869,24 +871,11 @@ resp_format(const struct req *req, const char *file)
 	    scriptname, *scriptname == '\0' ? "" : "/",
 	    usepath ? req->q.manpath : "", usepath ? "/" : "");
 
-	mparse_result(mp, &man, NULL);
-	if (man == NULL) {
-		warnx("fatal mandoc error: %s/%s", req->q.manpath, file);
-		pg_error_internal();
-		mparse_free(mp);
-		mchars_free();
-		return;
-	}
-
 	vp = html_alloc(&conf);
-
-	if (man->macroset == MACROSET_MDOC) {
-		mdoc_validate(man);
-		html_mdoc(vp, man);
-	} else {
-		man_validate(man);
-		html_man(vp, man);
-	}
+	if (meta->macroset == MACROSET_MDOC)
+		html_mdoc(vp, meta);
+	else
+		html_man(vp, meta);
 
 	html_free(vp);
 	mparse_free(mp);
@@ -1183,7 +1172,7 @@ parse_path_info(struct req *req, const char *path)
 	}
 
 	/* Optional section. */
-	if (strncmp(path, "man", 3) == 0) {
+	if (strncmp(path, "man", 3) == 0 || strncmp(path, "cat", 3) == 0) {
 		path += 3;
 		end = strchr(path, '/');
 		free(req->q.sec);

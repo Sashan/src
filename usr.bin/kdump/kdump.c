@@ -1,4 +1,4 @@
-/*	$OpenBSD: kdump.c,v 1.135 2018/10/21 19:56:26 guenther Exp $	*/
+/*	$OpenBSD: kdump.c,v 1.137 2019/01/11 18:46:30 deraadt Exp $	*/
 
 /*-
  * Copyright (c) 1988, 1993
@@ -208,16 +208,18 @@ main(int argc, char *argv[])
 	if (argc > optind)
 		usage();
 
-	if (unveil(tracefile, "r") == -1)
-		err(1, "unveil");
+	if (strcmp(tracefile, "-") != 0)
+		if (unveil(tracefile, "r") == -1)
+			err(1, "unveil");
 	if (pledge("stdio rpath getpw", NULL) == -1)
 		err(1, "pledge");
 
 	m = malloc(size = 1025);
 	if (m == NULL)
 		err(1, NULL);
-	if (!freopen(tracefile, "r", stdin))
-		err(1, "%s", tracefile);
+	if (strcmp(tracefile, "-") != 0)
+		if (!freopen(tracefile, "r", stdin))
+			err(1, "%s", tracefile);
 
 	if (fread_tail(&ktr_header, sizeof(struct ktr_header), 1) == 0 ||
 	    ktr_header.ktr_type != htobe32(KTR_START))
@@ -730,7 +732,6 @@ static const formatter scargs[][8] = {
     [SYS_utimes]	= { Ppath, Pptr },
     [SYS_futimes]	= { Pfd, Pptr },
     [SYS_kbind]		= { Pptr, Psize, Phexlonglong },
-    [SYS_mincore]	= { Pptr, Pbigsize, Pptr },
     [SYS_getgroups]	= { Pcount, Pptr },
     [SYS_setgroups]	= { Pcount, Pptr },
     [SYS_setpgid]	= { Ppid_t, Ppid_t },

@@ -1,4 +1,4 @@
-/*	$OpenBSD: rasops.c,v 1.57 2018/09/22 17:40:57 kettenis Exp $	*/
+/*	$OpenBSD: rasops.c,v 1.59 2019/03/18 16:10:39 fcambus Exp $	*/
 /*	$NetBSD: rasops.c,v 1.35 2001/02/02 06:01:01 marcus Exp $	*/
 
 /*-
@@ -211,15 +211,24 @@ rasops_init(struct rasops_info *ri, int wantrows, int wantcols)
 #ifdef _KERNEL
 	/* Select a font if the caller doesn't care */
 	if (ri->ri_font == NULL) {
-		int cookie;
+		int cookie = -1;
 
 		wsfont_init();
 
-		if (ri->ri_width > 80*12)
-			/* High res screen, choose a big font */
+		if (ri->ri_width >= 120 * 32)
+			/* Screen width larger than 3840px, 32px wide font */
+			cookie = wsfont_find(NULL, 32, 0, 0);
+
+		if (cookie <= 0 && ri->ri_width >= 120 * 16)
+			/* Screen width larger than 1920px, 16px wide font */
+			cookie = wsfont_find(NULL, 16, 0, 0);
+
+		if (cookie <= 0 && ri->ri_width > 80 * 12)
+			/* Screen width larger than 960px, 12px wide font */
 			cookie = wsfont_find(NULL, 12, 0, 0);
-		else
-			/*  lower res, choose a 8 pixel wide font */
+
+		if (cookie <= 0)
+			/* Lower resolution, choose a 8px wide font */
 			cookie = wsfont_find(NULL, 8, 0, 0);
 
 		if (cookie <= 0)
@@ -1889,10 +1898,6 @@ int
 rasops_list_font_cb(void *cbarg, struct wsdisplay_font *font)
 {
 	struct rasops_list_font_ctx *ctx = cbarg;
-
-	if (font->fontheight != ctx->ri->ri_font->fontheight ||
-	    font->fontwidth != ctx->ri->ri_font->fontwidth)
-		return 0;
 
 	if (ctx->cnt-- == 0) {
 		ctx->font = font;

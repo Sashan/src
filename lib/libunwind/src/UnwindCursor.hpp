@@ -36,6 +36,8 @@
 
 namespace libunwind {
 
+static UnwindInfoSectionsCache uwis_cache;
+
 #if defined(_LIBUNWIND_SUPPORT_DWARF_UNWIND)
 /// Cache of recently found FDEs.
 template <typename A>
@@ -521,8 +523,8 @@ private:
   }
 #endif
 
-#if defined(_LIBUNWIND_TARGET_MIPS_N64)
-  int stepWithCompactEncoding(Registers_mips_n64 &) {
+#if defined(_LIBUNWIND_TARGET_MIPS_NEWABI)
+  int stepWithCompactEncoding(Registers_mips_newabi &) {
     return UNW_EINVAL;
   }
 #endif
@@ -583,8 +585,8 @@ private:
   }
 #endif
 
-#if defined(_LIBUNWIND_TARGET_MIPS_N64)
-  bool compactSaysUseDwarf(Registers_mips_n64 &, uint32_t *) const {
+#if defined(_LIBUNWIND_TARGET_MIPS_NEWABI)
+  bool compactSaysUseDwarf(Registers_mips_newabi &, uint32_t *) const {
     return true;
   }
 #endif
@@ -644,8 +646,8 @@ private:
   }
 #endif
 
-#if defined (_LIBUNWIND_TARGET_MIPS_N64)
-  compact_unwind_encoding_t dwarfEncoding(Registers_mips_n64 &) const {
+#if defined (_LIBUNWIND_TARGET_MIPS_NEWABI)
+  compact_unwind_encoding_t dwarfEncoding(Registers_mips_newabi &) const {
     return 0;
   }
 #endif
@@ -1286,7 +1288,14 @@ void UnwindCursor<A, R>::setInfoBasedOnIPRegister(bool isReturnAddress) {
 
   // Ask address space object to find unwind sections for this pc.
   UnwindInfoSections sects;
-  if (_addressSpace.findUnwindSections(pc, sects)) {
+  bool have_sects = false;
+  if (uwis_cache.getUnwindInfoSectionsForPC(pc, sects))
+    have_sects = true;
+  else if (_addressSpace.findUnwindSections(pc, sects)) {
+    uwis_cache.setUnwindInfoSectionsForPC(pc, sects);
+    have_sects = true;
+  }
+  if (have_sects) {
 #if defined(_LIBUNWIND_SUPPORT_COMPACT_UNWIND)
     // If there is a compact unwind encoding table, look there first.
     if (sects.compact_unwind_section != 0) {
@@ -1417,8 +1426,6 @@ int UnwindCursor<A, R>::step() {
     this->setInfoBasedOnIPRegister(true);
     if (_unwindInfoMissing)
       return UNW_STEP_END;
-    if (_info.gp)
-      setReg(UNW_REG_SP, getReg(UNW_REG_SP) + _info.gp);
   }
 
   return result;

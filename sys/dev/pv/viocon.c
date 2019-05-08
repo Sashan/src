@@ -1,4 +1,4 @@
-/*	$OpenBSD: viocon.c,v 1.3 2018/02/19 08:59:52 mpi Exp $	*/
+/*	$OpenBSD: viocon.c,v 1.6 2019/03/24 18:21:12 sf Exp $	*/
 
 /*
  * Copyright (c) 2013-2015 Stefan Fritsch <sf@sfritsch.de>
@@ -30,9 +30,9 @@
 
 
 /* features */
-#define	VIRTIO_CONSOLE_F_SIZE		(1<<0)
-#define	VIRTIO_CONSOLE_F_MULTIPORT	(1<<1)
-#define	VIRTIO_CONSOLE_F_EMERG_WRITE 	(1<<2)
+#define	VIRTIO_CONSOLE_F_SIZE		(1ULL<<0)
+#define	VIRTIO_CONSOLE_F_MULTIPORT	(1ULL<<1)
+#define	VIRTIO_CONSOLE_F_EMERG_WRITE 	(1ULL<<2)
 
 /* config space */
 #define VIRTIO_CONSOLE_COLS		0	/* 16 bits */
@@ -49,9 +49,11 @@
 #endif
 
 struct virtio_feature_name viocon_feature_names[] = {
+#if VIRTIO_DEBUG
 	{ VIRTIO_CONSOLE_F_SIZE,	"Size" },
 	{ VIRTIO_CONSOLE_F_MULTIPORT,	"MultiPort" },
 	{ VIRTIO_CONSOLE_F_EMERG_WRITE,	"EmergWrite" },
+#endif
 	{ 0, 				NULL },
 };
 
@@ -178,7 +180,6 @@ viocon_attach(struct device *parent, struct device *self, void *aux)
 		panic("already attached to something else");
 	vsc->sc_child = self;
 	vsc->sc_ipl = IPL_TTY;
-	vsc->sc_intrhand = virtio_vq_intr;
 	vsc->sc_config_change = 0;
 	sc->sc_virtio = vsc;
 	sc->sc_max_ports = maxports;

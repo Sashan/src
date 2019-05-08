@@ -1,4 +1,4 @@
-/*	$OpenBSD: uhci.c,v 1.144 2018/11/16 11:57:29 mpi Exp $	*/
+/*	$OpenBSD: uhci.c,v 1.147 2019/03/12 08:13:50 ratchov Exp $	*/
 /*	$NetBSD: uhci.c,v 1.172 2003/02/23 04:19:26 simonb Exp $	*/
 /*	$FreeBSD: src/sys/dev/usb/uhci.c,v 1.33 1999/11/17 22:33:41 n_hibma Exp $	*/
 
@@ -190,7 +190,7 @@ usbd_status	uhci_device_setintr(struct uhci_softc *sc,
 
 void		uhci_device_clear_toggle(struct usbd_pipe *pipe);
 
-__inline__ struct uhci_soft_qh *uhci_find_prev_qh(struct uhci_soft_qh *,
+static inline struct uhci_soft_qh *uhci_find_prev_qh(struct uhci_soft_qh *,
 		    struct uhci_soft_qh *);
 
 #ifdef UHCI_DEBUG
@@ -314,7 +314,7 @@ struct usbd_pipe_methods uhci_device_isoc_methods = {
 	} while (0)
 #define uhci_active_intr_list(ex) ((ex)->inext.le_prev != NULL)
 
-__inline__ struct uhci_soft_qh *
+static inline struct uhci_soft_qh *
 uhci_find_prev_qh(struct uhci_soft_qh *pqh, struct uhci_soft_qh *sqh)
 {
 	DPRINTFN(15,("uhci_find_prev_qh: pqh=%p sqh=%p\n", pqh, sqh));
@@ -2188,7 +2188,7 @@ uhci_device_isoc_start(struct usbd_xfer *xfer)
 #endif
 
 	/* Find the last TD */
-	i = ux->curframe + xfer->nframes;
+	i = ux->curframe + (xfer->nframes - 1);
 	if (i >= UHCI_VFRAMELIST_COUNT)
 		i -= UHCI_VFRAMELIST_COUNT;
 	end = upipe->u.iso.stds[i];
@@ -2708,7 +2708,7 @@ usb_config_descriptor_t uhci_confd = {
 	1,
 	1,
 	0,
-	UC_SELF_POWERED,
+	UC_BUS_POWERED | UC_SELF_POWERED,
 	0			/* max power */
 };
 

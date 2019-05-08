@@ -1,4 +1,4 @@
-/*	$OpenBSD: ieee80211_input.c,v 1.202 2018/08/07 18:13:14 stsp Exp $	*/
+/*	$OpenBSD: ieee80211_input.c,v 1.205 2019/03/29 11:05:46 stsp Exp $	*/
 
 /*-
  * Copyright (c) 2001 Atsushi Onoe
@@ -210,11 +210,29 @@ ieee80211_input(struct ifnet *ifp, struct mbuf *m, struct ieee80211_node *ni,
 		tid = 0;
 	}
 
-	if (type == IEEE80211_FC0_TYPE_DATA && hasqos &&
+	if (ic->ic_state == IEEE80211_S_RUN &&
+	    type == IEEE80211_FC0_TYPE_DATA && hasqos &&
 	    (subtype & IEEE80211_FC0_SUBTYPE_NODATA) == 0 &&
-	    !(rxi->rxi_flags & IEEE80211_RXI_AMPDU_DONE)) {
+	    !(rxi->rxi_flags & IEEE80211_RXI_AMPDU_DONE)
+#ifndef IEEE80211_STA_ONLY
+	    && (ic->ic_opmode == IEEE80211_M_STA || ni != ic->ic_bss)
+#endif
+	    ) {
 		int ba_state = ni->ni_rx_ba[tid].ba_state;
 
+#ifndef IEEE80211_STA_ONLY
+		if (ic->ic_opmode == IEEE80211_M_HOSTAP) {
+			if (!IEEE80211_ADDR_EQ(wh->i_addr1,
+			    ic->ic_bss->ni_bssid)) {
+				ic->ic_stats.is_rx_wrongbss++;
+				goto err;
+			}
+			if (ni->ni_state != IEEE80211_S_ASSOC) {
+				ic->ic_stats.is_rx_notassoc++;
+				goto err;
+			}
+		}
+#endif
 		/* 
 		 * If Block Ack was explicitly requested, check
 		 * if we have a BA agreement for this RA/TID.
@@ -402,6 +420,13 @@ ieee80211_input(struct ifnet *ifp, struct mbuf *m, struct ieee80211_node *ni,
 #endif	/* IEEE80211_STA_ONLY */
 		default:
 			/* can't get there */
+			goto out;
+		}
+
+		/* Do not process "no data" frames any further. */
+		if (subtype & IEEE80211_FC0_SUBTYPE_NODATA) {
+			if (ic->ic_rawbpf)
+				bpf_mtap(ic->ic_rawbpf, m, BPF_DIRECTION_IN);
 			goto out;
 		}
 
@@ -1558,7 +1583,9 @@ ieee80211_recv_probe_resp(struct ieee80211com *ic, struct mbuf *m,
 			DPRINTF(("[%s] erp change: was 0x%x, now 0x%x\n",
 			    ether_sprintf((u_int8_t *)wh->i_addr2),
 			    ni->ni_erp, erp));
-			if (ic->ic_curmode == IEEE80211_MODE_11G &&
+			if ((ic->ic_curmode == IEEE80211_MODE_11G ||
+			    (ic->ic_curmode == IEEE80211_MODE_11N &&
+			    IEEE80211_IS_CHAN_2GHZ(ni->ni_chan))) &&
 			    (erp & IEEE80211_ERP_USE_PROTECTION))
 				ic->ic_flags |= IEEE80211_F_USEPROT;
 			else

@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.230 2018/11/01 00:18:44 sashan Exp $	*/
+/*	$OpenBSD: parse.y,v 1.233 2019/03/13 23:29:32 benno Exp $	*/
 
 /*
  * Copyright (c) 2007 - 2014 Reyk Floeter <reyk@openbsd.org>
@@ -173,9 +173,10 @@ typedef struct {
 %token	PREFORK PRIORITY PROTO QUERYSTR REAL REDIRECT RELAY REMOVE REQUEST
 %token	RESPONSE RETRY QUICK RETURN ROUNDROBIN ROUTE SACK SCRIPT SEND SESSION
 %token	SNMP SOCKET SPLICE SSL STICKYADDR STYLE TABLE TAG TAGGED TCP TIMEOUT TLS
-%token	TO ROUTER RTLABEL TRANSPARENT TRAP UPDATES URL VIRTUAL WITH TTL RTABLE
+%token	TO ROUTER RTLABEL TRANSPARENT TRAP UPDATES URL WITH TTL RTABLE
 %token	MATCH PARAMS RANDOM LEASTSTATES SRCHASH KEY CERTIFICATE PASSWORD ECDHE
 %token	EDH TICKETS CONNECTION CONNECTIONS ERRORS STATE CHANGES CHECKS
+%token	WEBSOCKETS
 %token	<v.string>	STRING
 %token  <v.number>	NUMBER
 %type	<v.string>	hostname interface table value optstring
@@ -1064,8 +1065,20 @@ protoptsl	: ssltls tlsflags
 		| ssltls '{' tlsflags_l '}'
 		| TCP tcpflags
 		| TCP '{' tcpflags_l '}'
-		| HTTP httpflags
-		| HTTP '{' httpflags_l '}'
+		| HTTP {
+			if (proto->type != RELAY_PROTO_HTTP) {
+				yyerror("can set http options only for "
+				    "http protocol");
+				YYERROR;
+			}
+		} httpflags
+		| HTTP  {
+			if (proto->type != RELAY_PROTO_HTTP) {
+				yyerror("can set http options only for "
+				    "http protocol");
+				YYERROR;
+			}
+		} '{' httpflags_l '}'
 		| RETURN ERROR opteflags	{ proto->flags |= F_RETURN; }
 		| RETURN ERROR '{' eflags_l '}'	{ proto->flags |= F_RETURN; }
 		| filterrule
@@ -1078,17 +1091,14 @@ httpflags_l	: httpflags comma httpflags_l
 		;
 
 httpflags	: HEADERLEN NUMBER	{
-			if (proto->type != RELAY_PROTO_HTTP) {
-				yyerror("can set http options only for "
-				    "http protocol");
-				YYERROR;
-			}
 			if ($2 < 0 || $2 > RELAY_MAXHEADERLENGTH) {
 				yyerror("invalid headerlen: %d", $2);
 				YYERROR;
 			}
 			proto->httpheaderlen = $2;
 		}
+		| WEBSOCKETS	{ proto->httpflags |= HTTPFLAG_WEBSOCKETS; }
+		| NO WEBSOCKETS	{ proto->httpflags &= ~HTTPFLAG_WEBSOCKETS; }
 		;
 
 tcpflags_l	: tcpflags comma tcpflags_l
@@ -2337,7 +2347,7 @@ lookup(char *s)
 		{ "updates",		UPDATES },
 		{ "url",		URL },
 		{ "value",		VALUE },
-		{ "virtual",		VIRTUAL },
+		{ "websockets",		WEBSOCKETS },
 		{ "with",		WITH }
 	};
 	const struct keywords	*p;
@@ -2551,7 +2561,7 @@ top:
 	if (c == '-' || isdigit(c)) {
 		do {
 			*p++ = c;
-			if ((unsigned)(p-buf) >= sizeof(buf)) {
+			if ((size_t)(p-buf) >= sizeof(buf)) {
 				yyerror("string too long");
 				return (findeol());
 			}
@@ -2590,7 +2600,7 @@ nodigits:
 	if (isalnum(c) || c == ':' || c == '_') {
 		do {
 			*p++ = c;
-			if ((unsigned)(p-buf) >= sizeof(buf)) {
+			if ((size_t)(p-buf) >= sizeof(buf)) {
 				yyerror("string too long");
 				return (findeol());
 			}

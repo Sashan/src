@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_tun.c,v 1.182 2018/11/12 06:35:37 dlg Exp $	*/
+/*	$OpenBSD: if_tun.c,v 1.185 2019/05/01 06:11:46 dlg Exp $	*/
 /*	$NetBSD: if_tun.c,v 1.24 1996/05/07 02:40:48 thorpej Exp $	*/
 
 /*
@@ -73,6 +73,10 @@
 #if NBPFILTER > 0
 #include <net/bpf.h>
 #endif
+
+#ifdef MPLS
+#include <netmpls/mpls.h>
+#endif /* MPLS */
 
 #include <net/if_tun.h>
 
@@ -579,6 +583,7 @@ tun_output(struct ifnet *ifp, struct mbuf *m0, struct sockaddr *dst,
 void
 tun_wakeup(struct tun_softc *tp)
 {
+	KERNEL_LOCK();
 	if (tp->tun_flags & TUN_RWAIT) {
 		tp->tun_flags &= ~TUN_RWAIT;
 		wakeup((caddr_t)tp);
@@ -587,6 +592,7 @@ tun_wakeup(struct tun_softc *tp)
 		csignal(tp->tun_pgid, SIGIO,
 		    tp->tun_siguid, tp->tun_sigeuid);
 	selwakeup(&tp->tun_rsel);
+	KERNEL_UNLOCK();
 }
 
 /*
@@ -670,8 +676,7 @@ tun_dev_ioctl(struct tun_softc *tp, u_long cmd, caddr_t data, int flag,
 			tp->tun_flags &= ~TUN_ASYNC;
 		break;
 	case FIONREAD:
-		*(int *)data = ifq_empty(&tp->tun_if.if_snd) ?
-		    0 : tp->tun_if.if_mtu;
+		*(int *)data = ifq_hdatalen(&tp->tun_if.if_snd);
 		break;
 	case TIOCSPGRP:
 		tp->tun_pgid = *(int *)data;
@@ -934,6 +939,11 @@ tun_dev_write(struct tun_softc *tp, struct uio *uio, int ioflag)
 #ifdef INET6
 	case AF_INET6:
 		ipv6_input(ifp, top);
+		break;
+#endif
+#ifdef MPLS
+	case AF_MPLS:
+		mpls_input(ifp, top);
 		break;
 #endif
 	default:

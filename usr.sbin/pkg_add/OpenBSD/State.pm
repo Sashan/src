@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: State.pm,v 1.54 2018/08/03 06:37:08 espie Exp $
+# $OpenBSD: State.pm,v 1.56 2019/04/06 10:48:51 espie Exp $
 #
 # Copyright (c) 2007-2014 Marc Espie <espie@openbsd.org>
 #
@@ -471,9 +471,10 @@ sub _system
 	if (!defined $r) {
 		return 1;
 	} elsif ($r == 0) {
+		$DB::inhibit_exit = 0;
 		&$todo;
-		exec {$_[0]} @_;
-		exit 1;
+		exec {$_[0]} @_ or
+		    exit 1;
 	} else {
 		&$todo2;
 		waitpid($r, 0);

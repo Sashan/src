@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmmvar.h,v 1.59 2018/09/20 14:32:59 brynet Exp $	*/
+/*	$OpenBSD: vmmvar.h,v 1.63 2019/04/01 12:02:43 mlarkin Exp $	*/
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -27,7 +27,7 @@
 #define VMM_MAX_DISKS_PER_VM	4
 #define VMM_MAX_PATH_DISK	128
 #define VMM_MAX_PATH_CDROM	128
-#define VMM_MAX_NAME_LEN	32
+#define VMM_MAX_NAME_LEN	64
 #define VMM_MAX_KERNEL_PATH	128
 #define VMM_MAX_VCPUS_PER_VM	64
 #define VMM_MAX_VM_MEM_SIZE	32768
@@ -415,10 +415,19 @@ struct vcpu_segment_info {
 #define VCPU_REGS_MISC_ENABLE	6
 #define VCPU_REGS_NMSRS	(VCPU_REGS_MISC_ENABLE + 1)
 
+#define VCPU_REGS_DR0		0
+#define VCPU_REGS_DR1		1
+#define VCPU_REGS_DR2		2
+#define VCPU_REGS_DR3		3
+#define VCPU_REGS_DR6		4
+#define VCPU_REGS_DR7		5
+#define VCPU_REGS_NDRS	(VCPU_REGS_DR7 + 1)
+
 struct vcpu_reg_state {
 	uint64_t			vrs_gprs[VCPU_REGS_NGPRS];
 	uint64_t			vrs_crs[VCPU_REGS_NCRS];
 	uint64_t			vrs_msrs[VCPU_REGS_NMSRS];
+	uint64_t			vrs_drs[VCPU_REGS_NDRS];
 	struct vcpu_segment_info	vrs_sregs[VCPU_REGS_NSREGS];
 	struct vcpu_segment_info	vrs_gdtr;
 	struct vcpu_segment_info	vrs_idtr;
@@ -519,8 +528,9 @@ struct vm_intr_params {
 #define VM_RWREGS_SREGS	0x2	/* read/write segment registers */
 #define VM_RWREGS_CRS	0x4	/* read/write CRs */
 #define VM_RWREGS_MSRS	0x8	/* read/write MSRs */
+#define VM_RWREGS_DRS	0x10	/* read/write DRs */
 #define VM_RWREGS_ALL	(VM_RWREGS_GPRS | VM_RWREGS_SREGS | VM_RWREGS_CRS | \
-    VM_RWREGS_MSRS)
+    VM_RWREGS_MSRS | VM_RWREGS_DRS)
 
 struct vm_rwregs_params {
 	/*
@@ -554,6 +564,7 @@ struct vm_rwregs_params {
  *  speedstep (CPUIDECX_EST)
  *  thermal (CPUIDECX_TM2, CPUID_ACPI, CPUID_TM)
  *  context id (CPUIDECX_CNXTID)
+ *  machine check (CPUID_MCE, CPUID_MCA)
  *  silicon debug (CPUIDECX_SDBG)
  *  xTPR (CPUIDECX_XTPR)
  *  perf/debug (CPUIDECX_PDCM)
@@ -567,6 +578,7 @@ struct vm_rwregs_params {
  *  hyperthreading (CPUID_HTT)
  *  pending break enabled (CPUID_PBE)
  *  MTRR (CPUID_MTRR)
+ *  Speculative execution control features (AMD)
  */
 #define VMM_CPUIDECX_MASK ~(CPUIDECX_EST | CPUIDECX_TM2 | CPUIDECX_MWAIT | \
     CPUIDECX_PDCM | CPUIDECX_VMX | CPUIDECX_DTES64 | \
@@ -577,7 +589,11 @@ struct vm_rwregs_params {
 #define VMM_CPUIDEDX_MASK ~(CPUID_ACPI | CPUID_TM | \
     CPUID_HTT | CPUID_DS | CPUID_APIC | \
     CPUID_PSN | CPUID_SS | CPUID_PBE | \
-    CPUID_MTRR)
+    CPUID_MTRR | CPUID_MCE | CPUID_MCA)
+#define VMM_AMDSPEC_EBX_MASK ~(CPUIDEBX_IBPB | CPUIDEBX_IBRS | \
+    CPUIDEBX_STIBP | CPUIDEBX_IBRS_ALWAYSON | CPUIDEBX_STIBP_ALWAYSON | \
+    CPUIDEBX_IBRS_PREF | CPUIDEBX_SSBD | CPUIDEBX_VIRT_SSBD | \
+    CPUIDEBX_SSBD_NOTREQ)
 
 /*
  * SEFF flags - copy from host minus:
@@ -812,6 +828,16 @@ struct vcpu_gueststate
 	uint32_t	vg_exit_reason;		/* 0x88 */
 	uint64_t	vg_rflags;		/* 0x90 */
 	uint64_t	vg_xcr0;		/* 0x98 */
+	/*
+	 * Debug registers
+	 * - %dr4/%dr5 are aliased to %dr6/%dr7 (or cause #DE)
+	 * - %dr7 is saved automatically in the VMCS
+	 */
+	uint64_t	vg_dr0;			/* 0xa0 */
+	uint64_t	vg_dr1;			/* 0xa8 */
+	uint64_t	vg_dr2;			/* 0xb0 */
+	uint64_t	vg_dr3;			/* 0xb8 */
+	uint64_t	vg_dr6;			/* 0xc0 */
 };
 
 /*

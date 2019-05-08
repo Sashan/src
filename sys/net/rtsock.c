@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtsock.c,v 1.280 2018/11/12 16:36:54 krw Exp $	*/
+/*	$OpenBSD: rtsock.c,v 1.285 2019/04/05 12:58:34 bluhm Exp $	*/
 /*	$NetBSD: rtsock.c,v 1.18 1996/03/29 00:32:10 cgd Exp $	*/
 
 /*
@@ -126,7 +126,7 @@ struct rt_msghdr *rtm_report(struct rtentry *, u_char, int, int);
 struct mbuf	*rtm_msg1(int, struct rt_addrinfo *);
 int		 rtm_msg2(int, int, struct rt_addrinfo *, caddr_t,
 		     struct walkarg *);
-void		 rtm_xaddrs(caddr_t, caddr_t, struct rt_addrinfo *);
+int		 rtm_xaddrs(caddr_t, caddr_t, struct rt_addrinfo *);
 int		 rtm_validate_proposal(struct rt_addrinfo *);
 void		 rtm_setmetrics(u_long, const struct rt_metrics *,
 		     struct rt_kmetrics *);
@@ -169,7 +169,7 @@ struct rtptable rtptable;
 #define ROUTECB_FLAG_FLUSH	0x2	/* Wait until socket is empty before
 					   queueing more packets */
 
-#define ROUTE_DESYNC_RESEND_TIMEOUT	(hz / 5)	/* In hz */
+#define ROUTE_DESYNC_RESEND_TIMEOUT	200	/* In ms */
 
 void
 route_prinit(void)
@@ -237,7 +237,7 @@ route_usrreq(struct socket *so, int req, struct mbuf *m, struct mbuf *nam,
 		break;
 	case PRU_SENSE:
 		/* stat: don't bother with a blocksize. */
-		return (0);
+		break;
 
 	/* minimal support, just implement a fake peer address */
 	case PRU_SOCKADDR:
@@ -248,8 +248,6 @@ route_usrreq(struct socket *so, int req, struct mbuf *m, struct mbuf *nam,
 		nam->m_len = route_src.sa_len;
 		break;
 
-	case PRU_RCVOOB:
-		return (EOPNOTSUPP);
 	case PRU_RCVD:
 		/*
 		 * If we are in a FLUSH state, check if the buffer is
@@ -259,8 +257,9 @@ route_usrreq(struct socket *so, int req, struct mbuf *m, struct mbuf *nam,
 		    ((sbspace(rop->rop_socket, &rop->rop_socket->so_rcv) ==
 		    rop->rop_socket->so_rcv.sb_hiwat)))
 			rop->rop_flags &= ~ROUTECB_FLAG_FLUSH;
-		return (0);
+		break;
 
+	case PRU_RCVOOB:
 	case PRU_SENDOOB:
 		error = EOPNOTSUPP;
 		break;
@@ -277,8 +276,10 @@ route_usrreq(struct socket *so, int req, struct mbuf *m, struct mbuf *nam,
 	}
 
  release:
-	m_freem(control);
-	m_freem(m);
+	if (req != PRU_RCVD && req != PRU_RCVOOB && req != PRU_SENSE) {
+		m_freem(control);
+		m_freem(m);
+	}
 	return (error);
 }
 
@@ -461,7 +462,7 @@ rtm_senddesync(struct socket *so)
 		m_freem(desync_mbuf);
 	}
 	/* Re-add timeout to try sending msg again */
-	timeout_add(&rop->rop_timeout, ROUTE_DESYNC_RESEND_TIMEOUT);
+	timeout_add_msec(&rop->rop_timeout, ROUTE_DESYNC_RESEND_TIMEOUT);
 }
 
 void
@@ -681,7 +682,7 @@ route_output(struct mbuf *m, struct socket *so, struct sockaddr *dstaddr,
 	if ((m->m_flags & M_PKTHDR) == 0)
 		panic("route_output");
 	len = m->m_pkthdr.len;
-	if (len < offsetof(struct rt_msghdr, rtm_type) + 1 ||
+	if (len < offsetof(struct rt_msghdr, rtm_hdrlen) + 1 ||
 	    len != mtod(m, struct rt_msghdr *)->rtm_msglen) {
 		error = EINVAL;
 		goto fail;
@@ -704,13 +705,6 @@ route_output(struct mbuf *m, struct socket *so, struct sockaddr *dstaddr,
 		error = EPROTONOSUPPORT;
 		goto fail;
 	}
-	rtm->rtm_pid = curproc->p_p->ps_pid;
-	if (rtm->rtm_hdrlen == 0)	/* old client */
-		rtm->rtm_hdrlen = sizeof(struct rt_msghdr);
-	if (len < rtm->rtm_hdrlen) {
-		error = EINVAL;
-		goto fail;
-	}
 
 	/* Verify that the caller is sending an appropriate message early */
 	switch (rtm->rtm_type) {
@@ -724,6 +718,19 @@ route_output(struct mbuf *m, struct socket *so, struct sockaddr *dstaddr,
 		error = EOPNOTSUPP;
 		goto fail;
 	}
+	/*
+	 * Verify that the header length is valid.
+	 * All messages from userland start with a struct rt_msghdr.
+	 */
+	if (rtm->rtm_hdrlen == 0)	/* old client */
+		rtm->rtm_hdrlen = sizeof(struct rt_msghdr);
+	if (rtm->rtm_hdrlen < sizeof(struct rt_msghdr) ||
+	    len < rtm->rtm_hdrlen) {
+		error = EINVAL;
+		goto fail;
+	}
+
+	rtm->rtm_pid = curproc->p_p->ps_pid;
 
 	/*
 	 * Verify that the caller has the appropriate privilege; RTM_GET
@@ -772,7 +779,9 @@ route_output(struct mbuf *m, struct socket *so, struct sockaddr *dstaddr,
 
 	bzero(&info, sizeof(info));
 	info.rti_addrs = rtm->rtm_addrs;
-	rtm_xaddrs(rtm->rtm_hdrlen + (caddr_t)rtm, len + (caddr_t)rtm, &info);
+	if ((error = rtm_xaddrs(rtm->rtm_hdrlen + (caddr_t)rtm,
+	    len + (caddr_t)rtm, &info)) != 0)
+		goto fail;
 	info.rti_flags = rtm->rtm_flags;
 	if (rtm->rtm_type != RTM_PROPOSAL &&
 	   (info.rti_info[RTAX_DST] == NULL ||
@@ -1339,19 +1348,32 @@ rtm_getmetrics(const struct rt_kmetrics *in, struct rt_metrics *out)
 	((a) > 0 ? (1 + (((a) - 1) | (sizeof(long) - 1))) : sizeof(long))
 #define ADVANCE(x, n) (x += ROUNDUP((n)->sa_len))
 
-void
+int
 rtm_xaddrs(caddr_t cp, caddr_t cplim, struct rt_addrinfo *rtinfo)
 {
 	struct sockaddr	*sa;
 	int		 i;
 
 	bzero(rtinfo->rti_info, sizeof(rtinfo->rti_info));
-	for (i = 0; (i < RTAX_MAX) && (cp < cplim); i++) {
+	for (i = 0; i < sizeof(rtinfo->rti_addrs) * 8; i++) {
 		if ((rtinfo->rti_addrs & (1 << i)) == 0)
 			continue;
-		rtinfo->rti_info[i] = sa = (struct sockaddr *)cp;
+		if (i >= RTAX_MAX || cp + sizeof(socklen_t) > cplim) {
+			/*
+			 * Clear invalid bits, userland code may set them.
+			 * After OpenBSD 6.5 release, fix OpenVPN, remove
+			 * this workaround, and return EINVAL.  XXX
+			 */
+			rtinfo->rti_addrs &= (1 << i) - 1;
+			break;
+		}
+		sa = (struct sockaddr *)cp;
+		if (cp + sa->sa_len > cplim)
+			return (EINVAL);
+		rtinfo->rti_info[i] = sa;
 		ADVANCE(cp, sa);
 	}
+	return (0);
 }
 
 struct mbuf *
@@ -1465,7 +1487,8 @@ again:
 		if (w->w_needed <= 0 && w->w_where) {
 			if (w->w_tmemsize < len) {
 				free(w->w_tmem, M_RTABLE, w->w_tmemsize);
-				w->w_tmem = malloc(len, M_RTABLE, M_NOWAIT);
+				w->w_tmem = malloc(len, M_RTABLE,
+				    M_NOWAIT | M_ZERO);
 				if (w->w_tmem)
 					w->w_tmemsize = len;
 			}

@@ -1,4 +1,4 @@
-.\" $OpenBSD: bsd.port.mk.5,v 1.503 2018/11/16 10:06:11 espie Exp $
+.\" $OpenBSD: bsd.port.mk.5,v 1.508 2019/04/04 02:28:23 naddy Exp $
 .\"
 .\" Copyright (c) 2000-2008 Marc Espie
 .\"
@@ -24,7 +24,7 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.Dd $Mdocdate: November 16 2018 $
+.Dd $Mdocdate: April 4 2019 $
 .Dt BSD.PORT.MK 5
 .Os
 .Sh NAME
@@ -721,6 +721,15 @@ Used by some options of
 .Xr dpb 1 ,
 suitable for
 .Ev BULK_TARGETS .
+.It Cm show-indexed
+Similar to
+.Cm show .
+Invoked as make show-indexed=name, show the contents of ${name${SUBPACKAGE}},
+or ${name} if the variable
+.Ev name
+is not
+.Ev SUBPACKAGE
+dependent.
 .It Cm show-prepare-results
 Print the list of actual installed packages found out by
 .Cm prepare .
@@ -942,15 +951,6 @@ Several versions of automake may coexist peacefully.
 .Ev AUTOMAKE_VERSION
 must be set before trying to run automake.
 Defaults to 1.4.
-Note that even if
-.Ev CONFIGURE_STYLE
-includes automake,
-automake should still be run manually during the right
-.Cm configure
-stage.
-.It Ev AUTOUPDATE
-Location of the autoupdate binary.
-Defaults to autoupdate.
 .It Ev BASE_PKGPATH
 Full
 .Xr pkgpath 7
@@ -1444,18 +1444,6 @@ if autoconf needs to be rerun first,
 but set
 .Sq no-autoheader
 to prevent autoheader from running.
-Add
-.Sq automake
-if automake may need to be rerun.
-Otherwise, automake will be explicitly disabled.
-Note that automake is never run automatically.
-In order to use it,
-.Ev CONFIGURE_STYLE
-should include
-.Sq automake
-and there should be a
-.Cm {pre,do}-configure
-target running automake.
 .Pp
 If
 .Sq imake ,
@@ -2310,7 +2298,7 @@ Full list of options used while applying distribution patches.
 .It Ev PATCH_DIST_STRIP
 Patch option used to strip directory levels while applying distribution
 patches.
-Defaults to -p0 .
+Defaults to -p0.
 .It Ev PATCH_LIST
 Wildcard pattern of patches to select under ${PATCHDIR}.
 Defaults to patch-*.
@@ -2324,7 +2312,7 @@ PATCH_LIST=${PORTSDIR}/x11/kde/libs2/patches/p-* patch-*
 .Ed
 .It Ev PATCH_STRIP
 Patch option used to strip directory levels while applying port's patches.
-Defaults to -p0 .
+Defaults to -p0.
 .It Ev PERMIT_DISTFILES_FTP , PERMIT_PACKAGE_CDROM , PERMIT_PACKAGE_FTP
 Set to
 .Sq Yes
@@ -3169,7 +3157,7 @@ for more details.
 As a special extension,
 .Ev WANTLIB
 may include absolute paths, e.g.,
-.Pa ${LOCALBASE}/lib/expat.=4
+.Pa ${LOCALBASE}/lib/expat=4
 to distinguish between base libraries and port libraries.
 Use with caution, this is very seldom needed.
 .It Ev wantlib_args
@@ -4194,7 +4182,7 @@ if platform did not support shared libraries.
 All ports should have a working directory, as this is necessary to store
 cookies and keep state.
 .It Ev NO_WRKSUBDIR
-The same functionality is obtained by setting WRKDIST=${WRKDIR} .
+The same functionality is obtained by setting WRKDIST=${WRKDIR}.
 .It Ev NOCLEANDEPENDS
 Use CLEANDEPENDS instead.
 .It Ev NOMANCOMPRESS
@@ -4285,7 +4273,7 @@ Used to refer to the full package name, has been superseded by
 .Ev FULLPKGNAME-foo ,
 for
 .Ev SUBPACKAGE
--foo .
+-foo.
 .Ev PKGNAME
 now holds the package name, not taking multi-packages or flavors
 into account.

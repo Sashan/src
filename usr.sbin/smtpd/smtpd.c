@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtpd.c,v 1.308 2018/12/06 12:09:50 gilles Exp $	*/
+/*	$OpenBSD: smtpd.c,v 1.318 2019/03/31 03:36:18 yasuoka Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -530,9 +530,7 @@ main(int argc, char *argv[])
 				tracing |= TRACE_IO;
 			else if (!strcmp(optarg, "smtp"))
 				tracing |= TRACE_SMTP;
-			else if (!strcmp(optarg, "mfa") ||
-			    !strcmp(optarg, "filter") ||
-			    !strcmp(optarg, "filters"))
+			else if (!strcmp(optarg, "filters"))
 				tracing |= TRACE_FILTERS;
 			else if (!strcmp(optarg, "mta") ||
 			    !strcmp(optarg, "transfer"))
@@ -829,8 +827,11 @@ start_child(int save_argc, char **save_argv, char *rexec)
 		return p;
 	}
 
-	if (dup2(sp[0], 3) == -1)
-		fatal("%s: dup2", rexec);
+	if (sp[0] != 3) {
+		if (dup2(sp[0], 3) == -1)
+			fatal("%s: dup2", rexec);
+	} else if (fcntl(sp[0], F_SETFD, 0) == -1)
+		fatal("%s: fcntl", rexec);
 
 	if (closefrom(4) == -1)
 		fatal("%s: closefrom", rexec);
@@ -1318,8 +1319,10 @@ fork_processor(const char *name, const char *command, const char *user, const ch
 	    signal(SIGHUP, SIG_DFL) == SIG_ERR)
 		err(1, "signal");
 
-	execle(command, name, (char *)NULL, NULL);
-	perror("execle");
+	if (system(command) == -1)
+		err(1, NULL);
+
+	/* there's no successful exit from a processor */
 	_exit(1);
 }
 
@@ -1903,6 +1906,10 @@ imsg_to_str(int type)
 	CASE(IMSG_GETADDRINFO_END);
 	CASE(IMSG_GETNAMEINFO);
 
+	CASE(IMSG_CERT_INIT);
+	CASE(IMSG_CERT_CERTIFICATE);
+	CASE(IMSG_CERT_VERIFY);
+
 	CASE(IMSG_SETUP_KEY);
 	CASE(IMSG_SETUP_PEER);
 	CASE(IMSG_SETUP_DONE);
@@ -1950,8 +1957,6 @@ imsg_to_str(int type)
 	CASE(IMSG_MDA_KILL);
 	CASE(IMSG_MDA_OPEN_MESSAGE);
 
-	CASE(IMSG_MFA_SMTP_RESPONSE);
-
 	CASE(IMSG_MTA_DELIVERY_OK);
 	CASE(IMSG_MTA_DELIVERY_TEMPFAIL);
 	CASE(IMSG_MTA_DELIVERY_PERMFAIL);
@@ -1968,10 +1973,6 @@ imsg_to_str(int type)
 	CASE(IMSG_MTA_LOOKUP_SMARTHOST);
 	CASE(IMSG_MTA_OPEN_MESSAGE);
 	CASE(IMSG_MTA_SCHEDULE);
-	CASE(IMSG_MTA_TLS_INIT);
-	CASE(IMSG_MTA_TLS_VERIFY_CERT);
-	CASE(IMSG_MTA_TLS_VERIFY_CHAIN);
-	CASE(IMSG_MTA_TLS_VERIFY);
 
 	CASE(IMSG_SCHED_ENVELOPE_BOUNCE);
 	CASE(IMSG_SCHED_ENVELOPE_DELIVER);
@@ -1988,10 +1989,6 @@ imsg_to_str(int type)
 	CASE(IMSG_SMTP_CHECK_SENDER);
 	CASE(IMSG_SMTP_EXPAND_RCPT);
 	CASE(IMSG_SMTP_LOOKUP_HELO);
-	CASE(IMSG_SMTP_TLS_INIT);
-	CASE(IMSG_SMTP_TLS_VERIFY_CERT);
-	CASE(IMSG_SMTP_TLS_VERIFY_CHAIN);
-	CASE(IMSG_SMTP_TLS_VERIFY);
 
 	CASE(IMSG_SMTP_REQ_CONNECT);
 	CASE(IMSG_SMTP_REQ_HELO);
@@ -2006,23 +2003,23 @@ imsg_to_str(int type)
 
 	CASE(IMSG_LKA_PROCESSOR_FORK);
 
-	CASE(IMSG_SMTP_REPORT_LINK_CONNECT);
-	CASE(IMSG_SMTP_REPORT_LINK_DISCONNECT);
-	CASE(IMSG_SMTP_REPORT_LINK_TLS);
+	CASE(IMSG_REPORT_SMTP_LINK_CONNECT);
+	CASE(IMSG_REPORT_SMTP_LINK_DISCONNECT);
+	CASE(IMSG_REPORT_SMTP_LINK_TLS);
 
-	CASE(IMSG_SMTP_REPORT_TX_BEGIN);
-	CASE(IMSG_SMTP_REPORT_TX_ENVELOPE);
-	CASE(IMSG_SMTP_REPORT_TX_COMMIT);
-	CASE(IMSG_SMTP_REPORT_TX_ROLLBACK);
+	CASE(IMSG_REPORT_SMTP_TX_BEGIN);
+	CASE(IMSG_REPORT_SMTP_TX_ENVELOPE);
+	CASE(IMSG_REPORT_SMTP_TX_COMMIT);
+	CASE(IMSG_REPORT_SMTP_TX_ROLLBACK);
 
-	CASE(IMSG_SMTP_REPORT_PROTOCOL_CLIENT);
-	CASE(IMSG_SMTP_REPORT_PROTOCOL_SERVER);
+	CASE(IMSG_REPORT_SMTP_PROTOCOL_CLIENT);
+	CASE(IMSG_REPORT_SMTP_PROTOCOL_SERVER);
 
-	CASE(IMSG_SMTP_FILTER_BEGIN);
-	CASE(IMSG_SMTP_FILTER_END);
-	CASE(IMSG_SMTP_FILTER_PROTOCOL);
-	CASE(IMSG_SMTP_FILTER_DATA_BEGIN);
-	CASE(IMSG_SMTP_FILTER_DATA_END);
+	CASE(IMSG_FILTER_SMTP_BEGIN);
+	CASE(IMSG_FILTER_SMTP_END);
+	CASE(IMSG_FILTER_SMTP_PROTOCOL);
+	CASE(IMSG_FILTER_SMTP_DATA_BEGIN);
+	CASE(IMSG_FILTER_SMTP_DATA_END);
 
 	CASE(IMSG_CA_PRIVENC);
 	CASE(IMSG_CA_PRIVDEC);

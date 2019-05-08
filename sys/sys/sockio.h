@@ -1,4 +1,4 @@
-/*	$OpenBSD: sockio.h,v 1.78 2018/11/29 00:11:23 dlg Exp $	*/
+/*	$OpenBSD: sockio.h,v 1.82 2019/04/19 04:21:33 dlg Exp $	*/
 /*	$NetBSD: sockio.h,v 1.5 1995/08/23 00:40:47 thorpej Exp $	*/
 
 /*-
@@ -68,6 +68,7 @@
 /* 53 and 54 used to be SIOC[SG]IFMEDIA with a 32 bit media word */
 #define	SIOCSIFMEDIA	_IOWR('i', 55, struct ifreq)	/* set net media */
 #define	SIOCGIFMEDIA	_IOWR('i', 56, struct ifmediareq) /* get net media */
+#define	SIOCGIFSFFPAGE	_IOWR('i', 57, struct if_sffpage) /* get SFF page */
 
 #define	SIOCDIFPHYADDR	 _IOW('i', 73, struct ifreq)	/* delete gif addrs */
 #define	SIOCSLIFPHYADDR	 _IOW('i', 74, struct if_laddrreq) /* set gif addrs */
@@ -143,6 +144,8 @@
 #define	SIOCSSPPPPARAMS	 _IOW('i', 147, struct ifreq)	/* set pppoe params */
 #define	SIOCGSPPPPARAMS	_IOWR('i', 148, struct ifreq)	/* get pppoe params */
 
+#define SIOCDELLABEL	 _IOW('i', 151, struct ifreq)	/* del MPLS label */
+#define SIOCGPWE3	 _IOWR('i', 152, struct ifreq)	/* get MPLS PWE3 cap */
 #define SIOCSETLABEL	 _IOW('i', 153, struct ifreq)	/* set MPLS label */
 #define SIOCGETLABEL	 _IOW('i', 154, struct ifreq)	/* get MPLS label */
 
@@ -203,6 +206,17 @@
 
 #define	SIOCSLIFPHYECN	_IOW('i', 199, struct ifreq)	/* set ecn copying */
 #define	SIOCGLIFPHYECN	_IOWR('i', 200, struct ifreq)	/* get ecn copying */
+
+#define	SIOCSRXHPRIO	_IOW('i', 219, struct ifreq)	/* set rx hdr prio */
+#define	SIOCGRXHPRIO	_IOWR('i', 219, struct ifreq)	/* get rx hdr prio */
+
+#define SIOCSPWE3CTRLWORD	_IOW('i', 220, struct ifreq)
+#define SIOCGPWE3CTRLWORD	_IOWR('i',  220, struct ifreq)
+#define SIOCSPWE3FAT		_IOW('i', 221, struct ifreq)
+#define SIOCGPWE3FAT		_IOWR('i', 221, struct ifreq)
+#define SIOCSPWE3NEIGHBOR	_IOW('i', 222, struct if_laddrreq)
+#define SIOCGPWE3NEIGHBOR	_IOWR('i', 222, struct if_laddrreq)
+#define SIOCDPWE3NEIGHBOR	_IOW('i', 222, struct ifreq)
 
 #define	SIOCSVH		_IOWR('i', 245, struct ifreq)	/* set carp param */
 #define	SIOCGVH		_IOWR('i', 246, struct ifreq)	/* get carp param */

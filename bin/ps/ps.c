@@ -1,4 +1,4 @@
-/*	$OpenBSD: ps.c,v 1.73 2018/09/16 02:44:06 millert Exp $	*/
+/*	$OpenBSD: ps.c,v 1.75 2019/03/24 05:30:35 deraadt Exp $	*/
 /*	$NetBSD: ps.c,v 1.15 1995/05/18 20:33:25 mycroft Exp $	*/
 
 /*-
@@ -203,10 +203,13 @@ main(int argc, char *argv[])
 
 			if (strcmp(optarg, "co") == 0)
 				ttypath = _PATH_CONSOLE;
-			else if (*optarg != '/')
-				(void)snprintf(ttypath = pathbuf,
-				    sizeof(pathbuf), "%s%s", _PATH_TTY, optarg);
-			else
+			else if (*optarg != '/') {
+				int r = snprintf(pathbuf, sizeof(pathbuf), "%s%s",
+				    _PATH_TTY, optarg);
+				if (r < 0 || r > sizeof(pathbuf))
+					errx(1, "%s: too long\n", optarg);
+				ttypath = pathbuf;
+			} else
 				ttypath = optarg;
 			if (stat(ttypath, &sb) == -1)
 				err(1, "%s", ttypath);
@@ -272,9 +275,9 @@ main(int argc, char *argv[])
 	if (kd == NULL)
 		errx(1, "%s", errbuf);
 
-	if (unveil(_PATH_DEVDB, "r") == -1)
+	if (unveil(_PATH_DEVDB, "r") == -1 && errno != ENOENT)
 		err(1, "unveil");
-	if (unveil(_PATH_DEV, "r") == -1)
+	if (unveil(_PATH_DEV, "r") == -1 && errno != ENOENT)
 		err(1, "unveil");
 	if (swapf)
 		if (unveil(swapf, "r") == -1)

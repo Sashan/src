@@ -1,4 +1,4 @@
-/*	$OpenBSD: intr.h,v 1.18 2018/08/20 15:02:07 visa Exp $ */
+/*	$OpenBSD: intr.h,v 1.20 2019/03/21 16:51:21 visa Exp $ */
 
 /*
  * Copyright (c) 2001-2004 Opsycon AB  (www.opsycon.se / www.opsycon.com)
@@ -138,26 +138,6 @@ int	splraise(int);
 void	splx(int);
 int	spllower(int);
 
-/*
- * Interrupt control struct used by interrupt dispatchers
- * to hold interrupt handler info.
- */
-
-#include <sys/evcount.h>
-
-struct intrhand {
-	struct	intrhand	*ih_next;
-	int			(*ih_fun)(void *);
-	void			*ih_arg;
-	int			 ih_level;
-	int			 ih_irq;
-	struct evcount		 ih_count;
-	int			 ih_flags;
-#define	IH_ALLOCATED		0x01
-#define	IH_MPSAFE		0x02
-	cpuid_t			 ih_cpuid;
-};
-
 void	intr_barrier(void *);
 
 /*
@@ -187,6 +167,7 @@ struct intr_controller {
 	void	*(*ic_establish_fdt_idx)(void *, int, int, int,
 		    int (*)(void *), void *, const char *);
 	void	 (*ic_disestablish)(void *);
+	void	 (*ic_intr_barrier)(void *);
 
 #ifdef MULTIPROCESSOR
 	int	 (*ic_ipi_establish)(int (*)(void *), cpuid_t);

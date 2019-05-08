@@ -1,4 +1,4 @@
-/*	$OpenBSD: vioblk.c,v 1.9 2017/08/10 18:06:58 reyk Exp $	*/
+/*	$OpenBSD: vioblk.c,v 1.12 2019/03/24 18:22:36 sf Exp $	*/
 
 /*
  * Copyright (c) 2012 Stefan Fritsch.
@@ -72,6 +72,7 @@
 #define ALLOC_SEGS	(SEG_MAX + 2)
 
 struct virtio_feature_name vioblk_feature_names[] = {
+#if VIRTIO_DEBUG
 	{ VIRTIO_BLK_F_BARRIER,		"Barrier" },
 	{ VIRTIO_BLK_F_SIZE_MAX,	"SizeMax" },
 	{ VIRTIO_BLK_F_SEG_MAX,		"SegMax" },
@@ -81,6 +82,10 @@ struct virtio_feature_name vioblk_feature_names[] = {
 	{ VIRTIO_BLK_F_SCSI,		"SCSI" },
 	{ VIRTIO_BLK_F_FLUSH,		"Flush" },
 	{ VIRTIO_BLK_F_TOPOLOGY,	"Topology" },
+	{ VIRTIO_BLK_F_CONFIG_WCE,	"ConfigWCE" },
+	{ VIRTIO_BLK_F_DISCARD,		"Discard" },
+	{ VIRTIO_BLK_F_WRITE_ZEROES,	"Write0s" },
+#endif
 	{ 0,				NULL }
 };
 
@@ -166,7 +171,7 @@ vioblk_attach(struct device *parent, struct device *self, void *aux)
 	struct vioblk_softc *sc = (struct vioblk_softc *)self;
 	struct virtio_softc *vsc = (struct virtio_softc *)parent;
 	struct scsibus_attach_args saa;
-	uint32_t features;
+	uint64_t features;
 	int qsize;
 
 	vsc->sc_vqs = &sc->sc_vq[0];

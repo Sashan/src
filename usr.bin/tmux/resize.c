@@ -1,4 +1,4 @@
-/* $OpenBSD: resize.c,v 1.27 2018/10/18 08:38:01 nicm Exp $ */
+/* $OpenBSD: resize.c,v 1.31 2019/04/17 14:43:49 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -51,6 +51,8 @@ resize_window(struct window *w, u_int sx, u_int sy)
 	if (sy < w->layout_root->sy)
 		sy = w->layout_root->sy;
 	window_resize(w, sx, sy);
+	log_debug("%s: @%u resized to %u,%u; layout %u,%u", __func__, w->id,
+	    sx, sy, w->layout_root->sx, w->layout_root->sy);
 
 	/* Restore the window zoom state. */
 	if (zoomed)
@@ -59,6 +61,18 @@ resize_window(struct window *w, u_int sx, u_int sy)
 	tty_update_window_offset(w);
 	server_redraw_window(w);
 	notify_window("window-layout-changed", w);
+}
+
+static int
+ignore_client_size(struct client *c)
+{
+	if (c->session == NULL)
+		return (1);
+	if (c->flags & CLIENT_NOSIZEFLAGS)
+		return (1);
+	if ((c->flags & CLIENT_CONTROL) && (~c->flags & CLIENT_SIZECHANGED))
+		return (1);
+	return (0);
 }
 
 void
@@ -77,9 +91,7 @@ default_window_size(struct session *s, struct window *w, u_int *sx, u_int *sy,
 	if (type == WINDOW_SIZE_LARGEST) {
 		*sx = *sy = 0;
 		TAILQ_FOREACH(c, &clients, entry) {
-			if (c->session == NULL)
-				continue;
-			if (c->flags & CLIENT_NOSIZEFLAGS)
+			if (ignore_client_size(c))
 				continue;
 			if (w != NULL && !session_has(c->session, w))
 				continue;
@@ -99,9 +111,7 @@ default_window_size(struct session *s, struct window *w, u_int *sx, u_int *sy,
 	} else {
 		*sx = *sy = UINT_MAX;
 		TAILQ_FOREACH(c, &clients, entry) {
-			if (c->session == NULL)
-				continue;
-			if (c->flags & CLIENT_NOSIZEFLAGS)
+			if (ignore_client_size(c))
 				continue;
 			if (w != NULL && !session_has(c->session, w))
 				continue;
@@ -146,7 +156,7 @@ recalculate_sizes(void)
 	struct client	*c;
 	struct window	*w;
 	u_int		 sx, sy, cx, cy;
-	int		 flags, type, current, has, changed;
+	int		 type, current, has, changed;
 
 	/*
 	 * Clear attached count and update saved status line information for
@@ -154,7 +164,7 @@ recalculate_sizes(void)
 	 */
 	RB_FOREACH(s, sessions, &sessions) {
 		s->attached = 0;
-		status_update_saved(s);
+		status_update_cache(s);
 	}
 
 	/*
@@ -162,21 +172,13 @@ recalculate_sizes(void)
 	 * client.
 	 */
 	TAILQ_FOREACH(c, &clients, entry) {
-		if ((s = c->session) == NULL)
+		if (ignore_client_size(c))
 			continue;
-
-		flags = c->flags;
-		if (flags & CLIENT_SUSPENDED)
-			continue;
-		if ((flags & CLIENT_CONTROL) && (~flags & CLIENT_SIZECHANGED))
-			continue;
-
 		if (c->tty.sy <= status_line_size(c))
 			c->flags |= CLIENT_STATUSOFF;
 		else
 			c->flags &= ~CLIENT_STATUSOFF;
-
-		s->attached++;
+		c->session->attached++;
 	}
 
 	/* Walk each window and adjust the size. */
@@ -188,14 +190,16 @@ recalculate_sizes(void)
 		type = options_get_number(w->options, "window-size");
 		if (type == WINDOW_SIZE_MANUAL)
 			continue;
-		current = !options_get_number(w->options, "aggressive-resize");
+		current = options_get_number(w->options, "aggressive-resize");
 
 		changed = 1;
 		if (type == WINDOW_SIZE_LARGEST) {
 			sx = sy = 0;
 			TAILQ_FOREACH(c, &clients, entry) {
-				if ((s = c->session) == NULL)
+				if (ignore_client_size(c))
 					continue;
+				s = c->session;
+
 				if (current)
 					has = (s->curw->window == w);
 				else
@@ -216,8 +220,10 @@ recalculate_sizes(void)
 		} else {
 			sx = sy = UINT_MAX;
 			TAILQ_FOREACH(c, &clients, entry) {
-				if ((s = c->session) == NULL)
+				if (ignore_client_size(c))
 					continue;
+				s = c->session;
+
 				if (current)
 					has = (s->curw->window == w);
 				else

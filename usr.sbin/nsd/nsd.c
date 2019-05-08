@@ -21,7 +21,9 @@
 #include <grp.h>
 #endif /* HAVE_GRP_H */
 #ifdef HAVE_SETUSERCONTEXT
+#ifdef HAVE_LOGIN_CAP_H
 #include <login_cap.h>
+#endif /* HAVE_LOGIN_CAP_H */
 #endif /* HAVE_SETUSERCONTEXT */
 
 #include <assert.h>
@@ -45,6 +47,9 @@
 #include "tsig.h"
 #include "remote.h"
 #include "xfrd-disk.h"
+#ifdef USE_DNSTAP
+#include "dnstap/dnstap_collector.h"
+#endif
 
 /* The server handler... */
 struct nsd nsd;
@@ -949,7 +954,7 @@ main(int argc, char *argv[])
 		int fd;
 
 		/* Take off... */
-		switch ((nsd.pid = fork())) {
+		switch (fork()) {
 		case 0:
 			/* Child */
 			break;
@@ -1102,6 +1107,12 @@ main(int argc, char *argv[])
 	options_zonestatnames_create(nsd.options);
 	server_zonestat_alloc(&nsd);
 #endif /* USE_ZONE_STATS */
+#ifdef USE_DNSTAP
+	if(nsd.options->dnstap_enable) {
+		nsd.dt_collector = dt_collector_create(&nsd);
+		dt_collector_start(nsd.dt_collector, &nsd);
+	}
+#endif /* USE_DNSTAP */
 
 	if(nsd.server_kind == NSD_SERVER_MAIN) {
 		server_prepare_xfrd(&nsd);

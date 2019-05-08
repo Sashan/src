@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_socket2.c,v 1.99 2018/11/19 13:15:37 visa Exp $	*/
+/*	$OpenBSD: uipc_socket2.c,v 1.101 2019/04/16 13:15:32 yasuoka Exp $	*/
 /*	$NetBSD: uipc_socket2.c,v 1.11 1996/02/04 02:17:55 christos Exp $	*/
 
 /*
@@ -886,7 +886,8 @@ sbcompress(struct sockbuf *sb, struct mbuf *m, struct mbuf *n)
 		}
 		if (n && (n->m_flags & M_EOR) == 0 &&
 		    /* m_trailingspace() checks buffer writeability */
-		    m->m_len <= MCLBYTES / 4 && /* XXX Don't copy too much */
+		    m->m_len <= ((n->m_flags & M_EXT)? n->m_ext.ext_size :
+		       MCLBYTES) / 4 && /* XXX Don't copy too much */
 		    m->m_len <= m_trailingspace(n) &&
 		    n->m_type == m->m_type) {
 			memcpy(mtod(n, caddr_t) + n->m_len, mtod(m, caddr_t),
@@ -1020,14 +1021,14 @@ sbdroprecord(struct sockbuf *sb)
  * with the specified type for presentation on a socket buffer.
  */
 struct mbuf *
-sbcreatecontrol(caddr_t p, int size, int type, int level)
+sbcreatecontrol(const void *p, size_t size, int type, int level)
 {
 	struct cmsghdr *cp;
 	struct mbuf *m;
 
 	if (CMSG_SPACE(size) > MCLBYTES) {
-		printf("sbcreatecontrol: message too large %d\n", size);
-		return NULL;
+		printf("sbcreatecontrol: message too large %zu\n", size);
+		return (NULL);
 	}
 
 	if ((m = m_get(M_DONTWAIT, MT_CONTROL)) == NULL)

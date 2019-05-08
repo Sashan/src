@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.40 2018/11/01 00:18:44 sashan Exp $ */
+/*	$OpenBSD: parse.y,v 1.43 2019/04/29 05:14:38 remi Exp $ */
 
 /*
  * Copyright (c) 2004, 2005 Esben Norby <norby@openbsd.org>
@@ -25,6 +25,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <net/route.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -122,8 +123,8 @@ typedef struct {
 
 %}
 
-%token	AREA INTERFACE ROUTERID FIBUPDATE REDISTRIBUTE RTLABEL RDOMAIN
-%token	STUB ROUTER SPFDELAY SPFHOLDTIME EXTTAG
+%token	AREA INTERFACE ROUTERID FIBPRIORITY FIBUPDATE REDISTRIBUTE RTLABEL
+%token	RDOMAIN STUB ROUTER SPFDELAY SPFHOLDTIME EXTTAG
 %token	METRIC PASSIVE
 %token	HELLOINTERVAL TRANSMITDELAY
 %token	RETRANSMITINTERVAL ROUTERDEADTIME ROUTERPRIORITY
@@ -213,6 +214,13 @@ conf_main	: ROUTERID STRING {
 				YYERROR;
 			}
 			free($2);
+		}
+		| FIBPRIORITY NUMBER {
+			if ($2 <= RTP_NONE || $2 > RTP_MAX) {
+				yyerror("invalid fib-priority");
+				YYERROR;
+			}
+			conf->fib_priority = $2;
 		}
 		| FIBUPDATE yesno {
 			if ($2 == 0)
@@ -613,6 +621,7 @@ lookup(char *s)
 		{"demote",		DEMOTE},
 		{"depend",		DEPEND},
 		{"external-tag",	EXTTAG},
+		{"fib-priority",	FIBPRIORITY},
 		{"fib-update",		FIBUPDATE},
 		{"hello-interval",	HELLOINTERVAL},
 		{"include",		INCLUDE},
@@ -848,7 +857,7 @@ top:
 	if (c == '-' || isdigit(c)) {
 		do {
 			*p++ = c;
-			if ((unsigned)(p-buf) >= sizeof(buf)) {
+			if ((size_t)(p-buf) >= sizeof(buf)) {
 				yyerror("string too long");
 				return (findeol());
 			}
@@ -887,7 +896,7 @@ nodigits:
 	if (isalnum(c) || c == ':' || c == '_') {
 		do {
 			*p++ = c;
-			if ((unsigned)(p-buf) >= sizeof(buf)) {
+			if ((size_t)(p-buf) >= sizeof(buf)) {
 				yyerror("string too long");
 				return (findeol());
 			}
@@ -1008,6 +1017,7 @@ parse_config(char *filename, int opts)
 	conf->spf_delay = DEFAULT_SPF_DELAY;
 	conf->spf_hold_time = DEFAULT_SPF_HOLDTIME;
 	conf->spf_state = SPF_IDLE;
+	conf->fib_priority = RTP_OSPF;
 
 	if ((file = pushfile(filename,
 	    !(conf->opts & OSPFD_OPT_NOACTION))) == NULL) {
@@ -1141,18 +1151,41 @@ conf_get_area(struct in_addr id)
 int
 conf_check_rdomain(u_int rdomain)
 {
-	struct area	*a;
-	struct iface	*i;
-	int		 errs = 0;
+	struct area		*a;
+	struct iface		*i, *idep;
+	struct redistribute	*r;
+	int			 errs = 0;
+
+	SIMPLEQ_FOREACH(r, &conf->redist_list, entry)
+		if (r->dependon[0] != '\0') {
+			idep = if_findname(r->dependon);
+			if (idep->rdomain != rdomain) {
+				logit(LOG_CRIT,
+				    "depend on %s: interface not in rdomain %u",
+				    idep->name, rdomain);
+				errs++;
+			}
+		}
 
 	LIST_FOREACH(a, &conf->area_list, entry)
-		LIST_FOREACH(i, &a->iface_list, entry)
+		LIST_FOREACH(i, &a->iface_list, entry) {
 			if (i->rdomain != rdomain) {
 				logit(LOG_CRIT,
 				    "interface %s not in rdomain %u",
 				    i->name, rdomain);
 				errs++;
 			}
+			if (i->dependon[0] != '\0') {
+				idep = if_findname(i->dependon);
+				if (idep->rdomain != rdomain) {
+					logit(LOG_CRIT,
+					    "depend on %s: interface not in "
+					    "rdomain %u",
+					    idep->name, rdomain);
+					errs++;
+				}
+			}
+		}
 
 	return (errs);
 }

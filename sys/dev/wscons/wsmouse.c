@@ -1,4 +1,4 @@
-/* $OpenBSD: wsmouse.c,v 1.50 2018/11/20 19:33:44 anton Exp $ */
+/* $OpenBSD: wsmouse.c,v 1.52 2019/03/24 18:04:02 bru Exp $ */
 /* $NetBSD: wsmouse.c,v 1.35 2005/02/27 00:27:52 perry Exp $ */
 
 /*
@@ -168,8 +168,12 @@ struct cfattach wsmouse_ca = {
 
 #if NWSMUX > 0
 struct wssrcops wsmouse_srcops = {
-	WSMUX_MOUSE,
-	wsmouse_mux_open, wsmouse_mux_close, wsmousedoioctl, NULL, NULL
+	.type		= WSMUX_MOUSE,
+	.dopen		= wsmouse_mux_open,
+	.dclose		= wsmouse_mux_close,
+	.dioctl		= wsmousedoioctl,
+	.ddispioctl	= NULL,
+	.dsetdisplay	= NULL,
 };
 #endif
 
@@ -1030,10 +1034,18 @@ wsmouse_motion_sync(struct wsmouseinput *input, struct evq_access *evq)
 			wsmouse_evq_put(evq, DELTA_X_EV(input), dx);
 		if (dy)
 			wsmouse_evq_put(evq, DELTA_Y_EV(input), dy);
-		if (motion->dz)
-			wsmouse_evq_put(evq, DELTA_Z_EV, motion->dz);
-		if (motion->dw)
-			wsmouse_evq_put(evq, DELTA_W_EV, motion->dw);
+		if (motion->dz) {
+			if (IS_TOUCHPAD(input))
+				wsmouse_evq_put(evq, VSCROLL_EV, motion->dz);
+			else
+				wsmouse_evq_put(evq, DELTA_Z_EV, motion->dz);
+		}
+		if (motion->dw) {
+			if (IS_TOUCHPAD(input))
+				wsmouse_evq_put(evq, HSCROLL_EV, motion->dw);
+			else
+				wsmouse_evq_put(evq, DELTA_W_EV, motion->dw);
+		}
 	}
 	if (motion->sync & SYNC_POSITION) {
 		if (motion->sync & SYNC_X) {

@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sched.c,v 1.54 2018/11/17 23:10:08 cheloha Exp $	*/
+/*	$OpenBSD: kern_sched.c,v 1.56 2019/03/26 04:24:22 visa Exp $	*/
 /*
  * Copyright (c) 2007, 2008 Artur Grabowski <art@openbsd.org>
  *
@@ -25,6 +25,7 @@
 #include <sys/signalvar.h>
 #include <sys/mutex.h>
 #include <sys/task.h>
+#include <sys/smr.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -93,6 +94,7 @@ sched_init_cpu(struct cpu_info *ci)
 	kthread_create_deferred(sched_kthreads_create, ci);
 
 	LIST_INIT(&spc->spc_deadproc);
+	SIMPLEQ_INIT(&spc->spc_deferred);
 
 	/*
 	 * Slight hack here until the cpuset code handles cpu_info
@@ -171,6 +173,8 @@ sched_idle(void *v)
 		}
 
 		splassert(IPL_NONE);
+
+		smr_idle();
 
 		cpuset_add(&sched_idle_cpus, ci);
 		cpu_idle_enter();

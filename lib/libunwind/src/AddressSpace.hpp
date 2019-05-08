@@ -17,8 +17,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/tree.h>
 
-#if !defined(_LIBUNWIND_IS_BAREMETAL) && !defined(_WIN32)
+#ifndef _LIBUNWIND_USE_DLADDR
+  #if !defined(_LIBUNWIND_IS_BAREMETAL) && !defined(_WIN32)
+    #define _LIBUNWIND_USE_DLADDR 1
+  #else
+    #define _LIBUNWIND_USE_DLADDR 0
+  #endif
+#endif
+
+#if _LIBUNWIND_USE_DLADDR
 #include <dlfcn.h>
 #endif
 
@@ -168,6 +177,62 @@ struct UnwindInfoSections {
 #endif
 };
 
+class UnwindInfoSectionsCache {
+public:
+
+  struct CacheItem {
+    CacheItem(UnwindInfoSections &uis, uintptr_t pc)
+      : m_uis(uis), m_pc(pc) {
+    }
+    CacheItem(uintptr_t pc)
+      : m_pc(pc) {
+    }
+
+    UnwindInfoSections m_uis;
+    uintptr_t m_pc;
+
+    RB_ENTRY(CacheItem) entry;
+  };
+
+  typedef uintptr_t CacheItemKey;
+
+  int CacheCmp(struct CacheItem *c1, struct CacheItem *c2) {
+    return (c1->m_pc < c2->m_pc ? -1 : c1->m_pc > c2->m_pc);
+  }
+
+  UnwindInfoSectionsCache() {
+    m_head = RB_INITIALIZER(&head);
+  }
+
+  bool getUnwindInfoSectionsForPC(CacheItemKey key, UnwindInfoSections &uis) {
+    UnwindInfoSections *result = nullptr;
+    if (m_prev_req_item && m_prev_req_item->m_pc == key)
+      result = &m_prev_req_item->m_uis;
+    else {
+      struct CacheItem find(key), *res;
+      res = RB_FIND(CacheTree, &m_head, &find);
+      if (res) {
+        m_prev_req_item = res;
+        result = &res->m_uis;
+      }
+    }
+    if (result) {
+      uis = *result;
+      return true;
+    }
+    return false;
+  }
+
+  void setUnwindInfoSectionsForPC(CacheItemKey key, UnwindInfoSections &uis) {
+    CacheItem *p_item(new CacheItem(uis, key));
+    RB_INSERT(CacheTree, &m_head, p_item);
+  }
+
+private:
+  CacheItem *m_prev_req_item = nullptr;
+  RB_HEAD(CacheTree, CacheItem) m_head;
+  RB_GENERATE(CacheTree, CacheItem, entry, CacheCmp);
+};
 
 /// LocalAddressSpace is used as a template parameter to UnwindCursor when
 /// unwinding a thread in the same process.  The wrappers compile away,
@@ -207,6 +272,7 @@ public:
     return val;
   }
   uintptr_t       getP(pint_t addr);
+  uint64_t        getRegister(pint_t addr);
   static uint64_t getULEB128(pint_t &addr, pint_t end);
   static int64_t  getSLEB128(pint_t &addr, pint_t end);
 
@@ -222,6 +288,14 @@ public:
 
 inline uintptr_t LocalAddressSpace::getP(pint_t addr) {
 #if __SIZEOF_POINTER__ == 8
+  return get64(addr);
+#else
+  return get32(addr);
+#endif
+}
+
+inline uint64_t LocalAddressSpace::getRegister(pint_t addr) {
+#if __SIZEOF_POINTER__ == 8 || defined(__mips64)
   return get64(addr);
 #else
   return get32(addr);
@@ -571,7 +645,7 @@ inline bool LocalAddressSpace::findOtherFDE(pint_t targetAddr, pint_t &fde) {
 inline bool LocalAddressSpace::findFunctionName(pint_t addr, char *buf,
                                                 size_t bufLen,
                                                 unw_word_t *offset) {
-#if !defined(_LIBUNWIND_IS_BAREMETAL) && !defined(_WIN32)
+#if _LIBUNWIND_USE_DLADDR
   Dl_info dyldInfo;
   if (dladdr((void *)addr, &dyldInfo)) {
     if (dyldInfo.dli_sname != NULL) {
@@ -604,6 +678,7 @@ public:
   uint32_t  get32(pint_t addr);
   uint64_t  get64(pint_t addr);
   pint_t    getP(pint_t addr);
+  uint64_t  getRegister(pint_t addr);
   uint64_t  getULEB128(pint_t &addr, pint_t end);
   int64_t   getSLEB128(pint_t &addr, pint_t end);
   pint_t    getEncodedP(pint_t &addr, pint_t end, uint8_t encoding,
@@ -640,7 +715,12 @@ typename P::uint_t RemoteAddressSpace<P>::getP(pint_t addr) {
 }
 
 template <typename P>
-uint64_t RemoteAddressSpace<P>::getULEB128(pint_t &addr, pint_t end) {
+typename P::uint_t OtherAddressSpace<P>::getRegister(pint_t addr) {
+  return P::getRegister(*(uint64_t *)localCopy(addr));
+}
+
+template <typename P>
+uint64_t OtherAddressSpace<P>::getULEB128(pint_t &addr, pint_t end) {
   uintptr_t size = (end - addr);
   LocalAddressSpace::pint_t laddr = (LocalAddressSpace::pint_t) localCopy(addr);
   LocalAddressSpace::pint_t sladdr = laddr;

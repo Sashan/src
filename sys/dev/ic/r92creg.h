@@ -1,4 +1,4 @@
-/*	$OpenBSD: r92creg.h,v 1.22 2018/12/04 10:47:32 jmatthew Exp $	*/
+/*	$OpenBSD: r92creg.h,v 1.24 2019/03/11 06:19:33 kevlo Exp $	*/
 
 /*-
  * Copyright (c) 2010 Damien Bergamini <damien.bergamini@free.fr>
@@ -326,15 +326,16 @@
 #define R92C_SYS_CLKR_RING_EN		0x00002000
 
 /* Bits for R92C_RSV_CTRL. */
-#define R92C_RSV_CTRL_WLOCK_ALL		0x01
-#define R92C_RSV_CTRL_WLOCK_00		0x02
-#define R92C_RSV_CTRL_WLOCK_04		0x04
-#define R92C_RSV_CTRL_WLOCK_08		0x08
-#define R92C_RSV_CTRL_WLOCK_40		0x10
-#define R92C_RSV_CTRL_R_DIS_PRST_0	0x20
-#define R92C_RSV_CTRL_R_DIS_PRST_1	0x40
-#define R92C_RSV_CTRL_LOCK_ALL_EN	0x80
+#define R92C_RSV_CTRL_WLOCK_ALL		0x0001
+#define R92C_RSV_CTRL_WLOCK_00		0x0002
+#define R92C_RSV_CTRL_WLOCK_04		0x0004
+#define R92C_RSV_CTRL_WLOCK_08		0x0008
+#define R92C_RSV_CTRL_WLOCK_40		0x0010
+#define R92C_RSV_CTRL_R_DIS_PRST_0	0x0020
+#define R92C_RSV_CTRL_R_DIS_PRST_1	0x0040
+#define R92C_RSV_CTRL_LOCK_ALL_EN	0x0080
 #define R88E_RSV_CTRL_MIO_EN		0x0100
+#define R88E_RSV_CTRL_MCU_RST		0x0800
 
 /* Bits for R92C_RF_CTRL. */
 #define R92C_RF_CTRL_EN		0x01
@@ -543,6 +544,9 @@
 /* Bits for R92C_TDECTRL. */
 #define R92C_TDECTRL_BLK_DESC_NUM_M	0x000000f0
 #define R92C_TDECTRL_BLK_DESC_NUM_S	4
+
+/* Bits for R92C_TXDMA_OFFSET_CHK. */
+#define R92C_TXDMA_OFFSET_CHK_DROP_DATA_EN	0x00000200
 
 /* Bits for R92E_AUTO_LLT. */
 #define R92E_AUTO_LLT_EN		0x00010000
@@ -1235,7 +1239,17 @@ struct r92e_tx_pwr {
 #define R92E_ROM_TXPWR_HT20_DIFF_S	4
 #define R92E_ROM_TXPWR_OFDM_DIFF_M	0x0f
 #define R92E_ROM_TXPWR_OFDM_DIFF_S	0
-	uint16_t	pwr_diff[3];
+
+	struct {
+		uint8_t ht40_ht20_tx_pwr_diff;
+#define R92E_ROM_TXPWR_HT40_DIFF_M	0xf0
+#define R92E_ROM_TXPWR_HT40_DIFF_S	4
+#define R92E_ROM_TXPWR_HT20_2S_DIFF_M	0x0f
+#define R92E_ROM_TXPWR_HT20_2S_DIFF_S	0
+
+		uint8_t ofdm_cck_tx_pwr_diff;
+	} __packed pwr_diff[3];
+
 	uint8_t		reserved[24];
 } __packed;
 

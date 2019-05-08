@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpufunc.h,v 1.31 2018/10/04 05:00:40 guenther Exp $	*/
+/*	$OpenBSD: cpufunc.h,v 1.33 2019/03/26 19:32:46 mlarkin Exp $	*/
 /*	$NetBSD: cpufunc.h,v 1.3 2003/05/08 10:27:43 fvdl Exp $	*/
 
 /*-
@@ -52,9 +52,33 @@ invlpg(u_int64_t addr)
 }  
 
 static __inline void
+sidt(void *p)
+{
+	__asm volatile("sidt (%0)" : : "r" (p) : "memory");
+}
+
+static __inline void
 lidt(void *p)
 {
 	__asm volatile("lidt (%0)" : : "r" (p) : "memory");
+}
+
+static __inline void
+sgdt(void *p)
+{
+	__asm volatile("sgdt (%0)" : : "r" (p) : "memory");
+}
+
+static __inline void
+bare_lgdt(struct region_descriptor *p)
+{
+	__asm volatile("lgdt (%0)" : : "r" (p) : "memory");
+}
+
+static __inline void
+sldt(u_short *sel)
+{
+	__asm volatile("sldt (%0)" : : "r" (sel) : "memory");
 }
 
 static __inline void
@@ -352,6 +376,8 @@ void cpu_ucode_apply(struct cpu_info *);
 
 struct cpu_info_full;
 void cpu_enter_pages(struct cpu_info_full *);
+
+int rdmsr_safe(u_int msr, uint64_t *);
 
 #endif /* _KERNEL */
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: virtiovar.h,v 1.7 2017/09/08 05:36:52 deraadt Exp $	*/
+/*	$OpenBSD: virtiovar.h,v 1.12 2019/03/24 18:21:12 sf Exp $	*/
 /*	$NetBSD: virtiovar.h,v 1.1 2011/10/30 12:12:21 hannken Exp $	*/
 
 /*
@@ -64,8 +64,8 @@
  */
 
 
-#ifndef _DEV_PCI_VIRTIOVAR_H_
-#define	_DEV_PCI_VIRTIOVAR_H_
+#ifndef _DEV_PV_VIRTIOVAR_H_
+#define	_DEV_PV_VIRTIOVAR_H_
 
 #include <sys/param.h>
 #include <sys/queue.h>
@@ -78,6 +78,10 @@
 #ifndef VIRTIO_DEBUG
 #define VIRTIO_DEBUG		0
 #endif
+
+/* flags for config(8) */
+#define VIRTIO_CF_NO_INDIRECT		1
+#define VIRTIO_CF_NO_EVENT_IDX		2
 
 struct vq_entry {
 	SLIST_ENTRY(vq_entry)	 qe_list;	/* free list */
@@ -145,9 +149,9 @@ struct virtio_ops {
 	void		(*write_dev_cfg_4)(struct virtio_softc *, int, uint32_t);
 	void		(*write_dev_cfg_8)(struct virtio_softc *, int, uint64_t);
 	uint16_t	(*read_queue_size)(struct virtio_softc *, uint16_t);
-	void		(*setup_queue)(struct virtio_softc *, uint16_t, uint32_t);
+	void		(*setup_queue)(struct virtio_softc *, struct virtqueue *, uint64_t);
 	void		(*set_status)(struct virtio_softc *, int);
-	uint32_t	(*neg_features)(struct virtio_softc *, uint32_t, const struct virtio_feature_name *);
+	uint64_t	(*neg_features)(struct virtio_softc *, uint64_t, const struct virtio_feature_name *);
 	int		(*poll_intr)(void *);
 };
 
@@ -160,7 +164,7 @@ struct virtio_softc {
 
 	int			 sc_ipl;		/* set by child */
 
-	uint32_t		 sc_features;
+	uint64_t		 sc_features;
 	int			 sc_indirect;
 
 	int			 sc_nvqs;	/* set by child */
@@ -187,6 +191,10 @@ struct virtio_softc {
 #define	virtio_setup_queue(sc, i, v)		(sc)->sc_ops->setup_queue(sc, i, v)
 #define	virtio_negotiate_features(sc, f, n)	(sc)->sc_ops->neg_features(sc, f, n)
 #define	virtio_poll_intr(sc)			(sc)->sc_ops->poll_intr(sc)
+
+/* only for transport drivers */
+#define	virtio_set_status(sc, i)		(sc)->sc_ops->set_status(sc, i)
+#define	virtio_device_reset(sc)			virtio_set_status((sc), 0)
 
 int virtio_alloc_vq(struct virtio_softc*, struct virtqueue*, int, int, int,
 		    const char*);
@@ -215,9 +223,8 @@ void virtio_stop_vq_intr(struct virtio_softc *, struct virtqueue *);
 int virtio_start_vq_intr(struct virtio_softc *, struct virtqueue *);
 
 const char *virtio_device_string(int);
-void virtio_log_features(uint32_t, uint32_t, const struct virtio_feature_name *);
-
 #if VIRTIO_DEBUG
+void virtio_log_features(uint64_t, uint64_t, const struct virtio_feature_name *);
 void virtio_vq_dump(struct virtqueue *vq);
 #endif
 int virtio_nused(struct virtqueue *vq);
@@ -225,4 +232,4 @@ int virtio_postpone_intr(struct virtqueue *vq, uint16_t nslots);
 int virtio_postpone_intr_smart(struct virtqueue *vq);
 int virtio_postpone_intr_far(struct virtqueue *vq);
 
-#endif /* _DEV_PCI_VIRTIOVAR_H_ */
+#endif /* _DEV_PV_VIRTIOVAR_H_ */

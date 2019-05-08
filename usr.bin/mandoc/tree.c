@@ -1,7 +1,7 @@
-/*	$OpenBSD: tree.c,v 1.47 2018/11/25 19:23:59 schwarze Exp $ */
+/*	$OpenBSD: tree.c,v 1.51 2019/01/01 05:56:26 schwarze Exp $ */
 /*
  * Copyright (c) 2008, 2009, 2011, 2014 Kristaps Dzonsons <kristaps@bsd.lv>
- * Copyright (c) 2013,2014,2015,2017,2018 Ingo Schwarze <schwarze@openbsd.org>
+ * Copyright (c) 2013-2015, 2017-2019 Ingo Schwarze <schwarze@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -27,6 +27,8 @@
 #include "roff.h"
 #include "mdoc.h"
 #include "man.h"
+#include "tbl.h"
+#include "eqn.h"
 #include "main.h"
 
 static	void	print_box(const struct eqn_box *, int);
@@ -37,18 +39,18 @@ static	void	print_span(const struct tbl_span *, int);
 
 
 void
-tree_mdoc(void *arg, const struct roff_man *mdoc)
+tree_mdoc(void *arg, const struct roff_meta *mdoc)
 {
-	print_meta(&mdoc->meta);
+	print_meta(mdoc);
 	putchar('\n');
 	print_mdoc(mdoc->first->child, 0);
 }
 
 void
-tree_man(void *arg, const struct roff_man *man)
+tree_man(void *arg, const struct roff_meta *man)
 {
-	print_meta(&man->meta);
-	if (man->meta.hasbody == 0)
+	print_meta(man);
+	if (man->hasbody == 0)
 		puts("body  = empty");
 	putchar('\n');
 	print_man(man->first->child, 0);
@@ -185,20 +187,22 @@ print_mdoc(const struct roff_node *n, int indent)
 		}
 
 		putchar(' ');
-		if (NODE_DELIMO & n->flags)
+		if (n->flags & NODE_DELIMO)
 			putchar('(');
-		if (NODE_LINE & n->flags)
+		if (n->flags & NODE_LINE)
 			putchar('*');
 		printf("%d:%d", n->line, n->pos + 1);
-		if (NODE_DELIMC & n->flags)
+		if (n->flags & NODE_DELIMC)
 			putchar(')');
-		if (NODE_EOS & n->flags)
+		if (n->flags & NODE_EOS)
 			putchar('.');
-		if (NODE_BROKEN & n->flags)
+		if (n->flags & NODE_BROKEN)
 			printf(" BROKEN");
-		if (NODE_NOSRC & n->flags)
+		if (n->flags & NODE_NOFILL)
+			printf(" NOFILL");
+		if (n->flags & NODE_NOSRC)
 			printf(" NOSRC");
-		if (NODE_NOPRT & n->flags)
+		if (n->flags & NODE_NOPRT)
 			printf(" NOPRT");
 		putchar('\n');
 	}
@@ -284,13 +288,15 @@ print_man(const struct roff_node *n, int indent)
 		for (i = 0; i < indent; i++)
 			putchar(' ');
 		printf("%s (%s) ", p, t);
-		if (NODE_LINE & n->flags)
+		if (n->flags & NODE_LINE)
 			putchar('*');
 		printf("%d:%d", n->line, n->pos + 1);
-		if (NODE_DELIMC & n->flags)
+		if (n->flags & NODE_DELIMC)
 			putchar(')');
-		if (NODE_EOS & n->flags)
+		if (n->flags & NODE_EOS)
 			putchar('.');
+		if (n->flags & NODE_NOFILL)
+			printf(" NOFILL");
 		putchar('\n');
 	}
 

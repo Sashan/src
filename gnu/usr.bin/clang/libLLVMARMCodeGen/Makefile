@@ -1,17 +1,16 @@
-# $OpenBSD: Makefile,v 1.5 2018/04/06 14:44:04 patrick Exp $
+# $OpenBSD: Makefile,v 1.7 2019/03/05 09:44:39 jsg Exp $
 
 LIB=	LLVMARMCodeGen
-NOPIC=
 NOPROFILE=
 
 CPPFLAGS+=	-I${.OBJDIR}/../include/llvm/ARM -I${LLVM_SRCS}/lib/Target/ARM
 
-.include <bsd.own.mk>
-SRCS=	A15SDOptimizer.cpp \
+SRCS+=	A15SDOptimizer.cpp \
 	ARMAsmPrinter.cpp \
 	ARMBaseInstrInfo.cpp \
 	ARMBaseRegisterInfo.cpp \
 	ARMCallLowering.cpp \
+	ARMCodeGenPrepare.cpp \
 	ARMComputeBlockSize.cpp \
 	ARMConstantIslandPass.cpp \
 	ARMConstantPoolValue.cpp \
@@ -28,6 +27,7 @@ SRCS=	A15SDOptimizer.cpp \
 	ARMMCInstLower.cpp \
 	ARMMachineFunctionInfo.cpp \
 	ARMMacroFusion.cpp \
+	ARMParallelDSP.cpp \
 	ARMRegisterBankInfo.cpp \
 	ARMRegisterInfo.cpp \
 	ARMOptimizeBarriersPass.cpp \
@@ -45,8 +45,3 @@ SRCS=	A15SDOptimizer.cpp \
 	Thumb2SizeReduction.cpp
 
 .PATH:	${.CURDIR}/../../../llvm/lib/Target/ARM
-
-install:
-	@# Nothing here so far ...
-
-.include <bsd.lib.mk>

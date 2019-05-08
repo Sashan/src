@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.77 2018/11/07 08:10:45 miko Exp $	*/
+/*	$OpenBSD: parse.y,v 1.79 2019/04/02 09:42:55 sthen Exp $	*/
 
 /*
  * Copyright (c) 2010-2013 Reyk Floeter <reyk@openbsd.org>
@@ -253,7 +253,7 @@ const struct ipsec_xf groupxfs[] = {
 	{ "grp29",		IKEV2_XFORMDH_BRAINPOOL_P384R1 },
 	{ "brainpool512",	IKEV2_XFORMDH_BRAINPOOL_P512R1 },
 	{ "grp30",		IKEV2_XFORMDH_BRAINPOOL_P512R1 },
-	{ "curve25519",		IKEV2_XFORMDH_X_CURVE25519 },
+	{ "curve25519",		IKEV2_XFORMDH_CURVE25519 },
 	{ NULL }
 };
 
@@ -1418,7 +1418,7 @@ top:
 	if (c == '-' || isdigit(c)) {
 		do {
 			*p++ = c;
-			if ((unsigned)(p-buf) >= sizeof(buf)) {
+			if ((size_t)(p-buf) >= sizeof(buf)) {
 				yyerror("string too long");
 				return (findeol());
 			}
@@ -1457,7 +1457,7 @@ nodigits:
 	if (isalnum(c) || c == ':' || c == '_' || c == '*') {
 		do {
 			*p++ = c;
-			if ((unsigned)(p-buf) >= sizeof(buf)) {
+			if ((size_t)(p-buf) >= sizeof(buf)) {
 				yyerror("string too long");
 				return (findeol());
 			}

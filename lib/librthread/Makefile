@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.53 2018/10/21 17:07:24 visa Exp $
+#	$OpenBSD: Makefile,v 1.55 2019/02/13 13:22:14 mpi Exp $
 
 LIB=pthread
 LIBCSRCDIR=	${.CURDIR}/../libc
@@ -27,10 +27,8 @@ SRCS=	rthread.c \
 	rthread_mutex_prio.c \
 	rthread_mutexattr.c \
 	rthread_np.c \
-	rthread_rwlock.c \
 	rthread_rwlockattr.c \
 	rthread_sched.c \
-	rthread_sig.c \
 	rthread_stack.c \
 	rthread_spin_lock.c \
 	sched_prio.c
@@ -41,9 +39,12 @@ SRCS=	rthread.c \
     ${MACHINE_ARCH} == "i386" || ${MACHINE_ARCH} == "mips64" || \
     ${MACHINE_ARCH} == "mips64el" || ${MACHINE_ARCH} == "powerpc" || \
     ${MACHINE_ARCH} == "sparc64"
-SRCS+=	rthread_sem.c
+CFLAGS+= -DFUTEX
+SRCS+=	rthread_sem.c \
+	rthread_rwlock.c
 .else
-SRCS+=	rthread_sem_compat.c
+SRCS+=	rthread_sem_compat.c \
+	rthread_rwlock_compat.c
 .endif
 
 SRCDIR= ${.CURDIR}/../libpthread

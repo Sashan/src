@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.h,v 1.125 2018/10/24 08:26:37 claudio Exp $ */
+/*	$OpenBSD: session.h,v 1.136 2019/04/07 10:52:30 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -143,27 +143,28 @@ struct ctl_conn {
 	struct imsgbuf		ibuf;
 	int			restricted;
 	int			throttled;
+	int			terminate;
 };
 
 TAILQ_HEAD(ctl_conns, ctl_conn)	ctl_conns;
 
 struct peer_stats {
-	u_int64_t		 msg_rcvd_open;
-	u_int64_t		 msg_rcvd_update;
-	u_int64_t		 msg_rcvd_notification;
-	u_int64_t		 msg_rcvd_keepalive;
-	u_int64_t		 msg_rcvd_rrefresh;
-	u_int64_t		 msg_sent_open;
-	u_int64_t		 msg_sent_update;
-	u_int64_t		 msg_sent_notification;
-	u_int64_t		 msg_sent_keepalive;
-	u_int64_t		 msg_sent_rrefresh;
-	u_int64_t		 prefix_rcvd_update;
-	u_int64_t		 prefix_rcvd_withdraw;
-	u_int64_t		 prefix_rcvd_eor;
-	u_int64_t		 prefix_sent_update;
-	u_int64_t		 prefix_sent_withdraw;
-	u_int64_t		 prefix_sent_eor;
+	unsigned long long	 msg_rcvd_open;
+	unsigned long long	 msg_rcvd_update;
+	unsigned long long	 msg_rcvd_notification;
+	unsigned long long	 msg_rcvd_keepalive;
+	unsigned long long	 msg_rcvd_rrefresh;
+	unsigned long long	 msg_sent_open;
+	unsigned long long	 msg_sent_update;
+	unsigned long long	 msg_sent_notification;
+	unsigned long long	 msg_sent_keepalive;
+	unsigned long long	 msg_sent_rrefresh;
+	unsigned long long	 prefix_rcvd_update;
+	unsigned long long	 prefix_rcvd_withdraw;
+	unsigned long long	 prefix_rcvd_eor;
+	unsigned long long	 prefix_sent_update;
+	unsigned long long	 prefix_sent_withdraw;
+	unsigned long long	 prefix_sent_eor;
 	time_t			 last_updown;
 	time_t			 last_read;
 	u_int32_t		 prefix_cnt;
@@ -195,6 +196,7 @@ TAILQ_HEAD(peer_timer_head, peer_timer);
 struct peer {
 	struct peer_config	 conf;
 	struct peer_stats	 stats;
+	TAILQ_ENTRY(peer)	 entry;
 	struct {
 		struct capabilities	ann;
 		struct capabilities	peer;
@@ -206,13 +208,12 @@ struct peer {
 		u_int32_t		spi_out;
 		enum auth_method	method;
 		u_int8_t		established;
-	} auth;
-	struct sockaddr_storage	 sa_local;
-	struct sockaddr_storage	 sa_remote;
+	}			 auth;
+	struct bgpd_addr	 local;
+	struct bgpd_addr	 remote;
 	struct peer_timer_head	 timers;
 	struct msgbuf		 wbuf;
 	struct ibuf_read	*rbuf;
-	struct peer		*next;
 	struct peer		*template;
 	int			 fd;
 	int			 lasterr;
@@ -221,15 +222,18 @@ struct peer {
 	u_int32_t		 remote_bgpid;
 	enum session_state	 state;
 	enum session_state	 prev_state;
+	enum reconf_action	 reconf_action;
 	u_int16_t		 short_as;
 	u_int16_t		 holdtime;
+	u_int16_t		 local_port;
+	u_int16_t		 remote_port;
 	u_int8_t		 depend_ok;
 	u_int8_t		 demoted;
 	u_int8_t		 passive;
 	u_int8_t		 throttled;
+	u_int8_t		 rpending;
 };
 
-extern struct peer	*peers;
 extern time_t		 pauseaccept;
 
 struct ctl_timer {
@@ -244,16 +248,15 @@ int	 carp_demote_get(char *);
 int	 carp_demote_set(char *, int);
 
 /* config.c */
-int	 merge_config(struct bgpd_config *, struct bgpd_config *,
-	    struct peer *);
-void	 prepare_listeners(struct bgpd_config *);
-int	 get_mpe_label(struct rdomain *);
+void	 merge_config(struct bgpd_config *, struct bgpd_config *);
+int	 prepare_listeners(struct bgpd_config *);
 
 /* control.c */
+int	control_check(char *);
 int	control_init(int, char *);
 int	control_listen(int);
 void	control_shutdown(int);
-int	control_dispatch_msg(struct pollfd *, u_int *);
+int	control_dispatch_msg(struct pollfd *, u_int *, struct peer_head *);
 unsigned int	control_accept(int, int);
 
 /* log.c */
@@ -262,7 +265,8 @@ void		 log_statechange(struct peer *, enum session_state,
 		    enum session_events);
 void		 log_notification(const struct peer *, u_int8_t, u_int8_t,
 		    u_char *, u_int16_t, const char *);
-void		 log_conn_attempt(const struct peer *, struct sockaddr *);
+void		 log_conn_attempt(const struct peer *, struct sockaddr *,
+		    socklen_t);
 
 /* mrt.c */
 void		 mrt_dump_bgp_msg(struct mrt *, void *, u_int16_t,
@@ -272,7 +276,7 @@ void		 mrt_dump_state(struct mrt *, u_int16_t, u_int16_t,
 void		 mrt_done(struct mrt *);
 
 /* parse.y */
-int	 parse_config(char *, struct bgpd_config *, struct peer **);
+struct bgpd_config *parse_config(char *, struct peer_head *);
 
 /* pfkey.c */
 int	pfkey_read(int, struct sadb_msg *);
@@ -281,9 +285,7 @@ int	pfkey_remove(struct peer *);
 int	pfkey_init(struct bgpd_sysdep *);
 
 /* printconf.c */
-void	print_config(struct bgpd_config *, struct rib_names *,
-	    struct network_head *, struct peer *, struct filter_head *,
-	    struct mrt_head *, struct rdomain_head *);
+void	print_config(struct bgpd_config *, struct rib_names *);
 
 /* rde.c */
 void	 rde_main(int, int);
@@ -292,8 +294,10 @@ void	 rde_main(int, int);
 void		 session_main(int, int);
 void		 bgp_fsm(struct peer *, enum session_events);
 int		 session_neighbor_rrefresh(struct peer *p);
-struct peer	*getpeerbyaddr(struct bgpd_addr *);
-struct peer	*getpeerbydesc(const char *);
+struct peer	*getpeerbydesc(struct bgpd_config *, const char *);
+struct peer	*getpeerbyip(struct bgpd_config *, struct sockaddr *);
+struct peer	*getpeerbyid(struct bgpd_config *, u_int32_t);
+int		 peer_matched(struct peer *, struct ctl_neighbor *);
 int		 imsg_ctl_parent(int, u_int32_t, pid_t, void *, u_int16_t);
 int		 imsg_ctl_rde(int, pid_t, void *, u_int16_t);
 void		 session_stop(struct peer *, u_int8_t);

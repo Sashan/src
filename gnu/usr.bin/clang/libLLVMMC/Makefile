@@ -1,19 +1,18 @@
-# $OpenBSD: Makefile,v 1.5 2018/04/06 14:44:04 patrick Exp $
+# $OpenBSD: Makefile,v 1.7 2019/03/05 09:44:40 jsg Exp $
 
 LIB=	LLVMMC
-NOPIC=
 NOPROFILE=
 
 CPPFLAGS+=	-I${LLVM_SRCS}/include/llvm/MC
 
-.include <bsd.own.mk>
-SRCS=	ConstantPools.cpp \
+SRCS+=	ConstantPools.cpp \
 	ELFObjectWriter.cpp \
 	MCAsmBackend.cpp \
 	MCAsmInfo.cpp \
 	MCAsmInfoCOFF.cpp \
 	MCAsmInfoDarwin.cpp \
 	MCAsmInfoELF.cpp \
+	MCAsmMacro.cpp \
 	MCAsmStreamer.cpp \
 	MCAssembler.cpp \
 	MCCodeEmitter.cpp \
@@ -57,11 +56,7 @@ SRCS=	ConstantPools.cpp \
 	MachObjectWriter.cpp \
 	StringTableBuilder.cpp \
 	SubtargetFeature.cpp \
+	WasmObjectWriter.cpp \
 	WinCOFFObjectWriter.cpp
 
 .PATH:	${.CURDIR}/../../../llvm/lib/MC
-
-install:
-	@# Nothing here so far ...
-
-.include <bsd.lib.mk>

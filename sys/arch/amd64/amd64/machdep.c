@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.251 2018/11/05 15:13:56 kn Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.256 2019/04/01 07:00:51 tedu Exp $	*/
 /*	$NetBSD: machdep.c,v 1.3 2003/05/07 22:58:18 fvdl Exp $	*/
 
 /*-
@@ -192,6 +192,7 @@ paddr_t tramp_pdirpa;
 
 int kbd_reset;
 int lid_action = 1;
+int pwr_action = 1;
 int forceukbd;
 
 /*
@@ -536,6 +537,16 @@ cpu_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 				lid_action = val;
 		}
 		return (error);
+	case CPU_PWRACTION:
+		val = pwr_action;
+		error = sysctl_int(oldp, oldlenp, newp, newlen, &val);
+		if (!error) {
+			if (val < 0 || val > 2)
+				error = EINVAL;
+			else
+				pwr_action = val;
+		}
+		return (error);
 #if NPCKBC > 0 && NUKBD > 0
 	case CPU_FORCEUKBD:
 		if (forceukbd)
@@ -816,6 +827,9 @@ boot(int howto)
 	if ((howto & RB_POWERDOWN) != 0)
 		lid_action = 0;
 
+	if ((howto & RB_RESET) != 0)
+		goto doreset;
+
 	if (cold) {
 		if ((howto & RB_USERREQ) == 0)
 			howto |= RB_HALT;
@@ -867,6 +881,7 @@ haltsys:
 		cnpollc(0);
 	}
 
+doreset:
 	printf("rebooting...\n");
 	if (cpureset_delay > 0)
 		delay(cpureset_delay * 1000);
@@ -914,7 +929,7 @@ cpu_dump(void)
 	/*
 	 * Add the machine-dependent header info.
 	 */
-	cpuhdrp->ptdpaddr = PTDpaddr;
+	cpuhdrp->ptdpaddr = proc0.p_addr->u_pcb.pcb_cr3;
 	cpuhdrp->nmemsegs = mem_cluster_cnt;
 
 	/*
@@ -1284,11 +1299,11 @@ cpu_init_extents(void)
 	already_done = 1;
 }
 
-#if defined(MULTIPROCESSOR) || \
-    (NACPI > 0 && !defined(SMALL_KERNEL))
 void
 map_tramps(void)
 {
+#if defined(MULTIPROCESSOR) || \
+    (NACPI > 0 && !defined(SMALL_KERNEL))
 	struct pmap *kmp = pmap_kernel();
 	extern paddr_t tramp_pdirpa;
 #ifdef MULTIPROCESSOR
@@ -1299,20 +1314,19 @@ map_tramps(void)
 	extern u_int32_t mp_pdirpa;
 #endif
 
-	pmap_kenter_pa(lo32_vaddr, lo32_paddr, PROT_READ | PROT_WRITE);
-
 	/*
 	 * The initial PML4 pointer must be below 4G, so if the
 	 * current one isn't, use a "bounce buffer" and save it
 	 * for tramps to use.
 	 */
 	if (kmp->pm_pdirpa > 0xffffffff) {
+		pmap_kenter_pa(lo32_vaddr, lo32_paddr, PROT_READ | PROT_WRITE);
 		memcpy((void *)lo32_vaddr, kmp->pm_pdir, PAGE_SIZE);
 		tramp_pdirpa = lo32_paddr;
+		pmap_kremove(lo32_vaddr, PAGE_SIZE);
 	} else
 		tramp_pdirpa = kmp->pm_pdirpa;
 
-	pmap_kremove(lo32_vaddr, PAGE_SIZE);
 
 #ifdef MULTIPROCESSOR
 	/* Map MP tramp code and data pages RW for copy */
@@ -1343,8 +1357,8 @@ map_tramps(void)
 	pmap_kremove(MP_TRAMPOLINE, PAGE_SIZE);
 	pmap_kremove(MP_TRAMP_DATA, PAGE_SIZE);
 #endif /* MULTIPROCESSOR */
-}
 #endif
+}
 
 #define	IDTVEC(name)	__CONCAT(X, name)
 typedef void (vector)(void);
@@ -1356,6 +1370,7 @@ init_x86_64(paddr_t first_avail)
 	struct region_descriptor region;
 	bios_memmap_t *bmp;
 	int x, ist;
+	uint64_t max_dm_size = ((uint64_t)512 * NUM_L4_SLOT_DIRECT) << 30;
 
 	cpu_init_msrs(&cpu_info_primary);
 
@@ -1486,11 +1501,11 @@ init_x86_64(paddr_t first_avail)
 		}
 
 		/*
-		 * The direct map is limited to 512GB of memory, so
-		 * discard anything above that.
+		 * The direct map is limited to 512GB * NUM_L4_SLOT_DIRECT of
+		 * memory, so discard anything above that.
 		 */
-		if (e1 >= (uint64_t)512*1024*1024*1024) {
-			e1 = (uint64_t)512*1024*1024*1024;
+		if (e1 >= max_dm_size) {
+			e1 = max_dm_size;
 			if (s1 > e1)
 				continue;
 		}
@@ -1665,11 +1680,6 @@ init_x86_64(paddr_t first_avail)
 	pmap_growkernel(VM_MIN_KERNEL_ADDRESS + 32 * 1024 * 1024);
 
 	pmap_kenter_pa(idt_vaddr, idt_paddr, PROT_READ | PROT_WRITE);
-
-#if defined(MULTIPROCESSOR) || \
-    (NACPI > 0 && !defined(SMALL_KERNEL))
-	map_tramps();
-#endif
 
 	idt = (struct gate_descriptor *)idt_vaddr;
 	cpu_info_primary.ci_tss = &cpu_info_full_primary.cif_tss;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: kcov.c,v 1.1 2018/08/26 08:12:09 anton Exp $	*/
+/*	$OpenBSD: kcov.c,v 1.10 2019/01/23 19:40:20 anton Exp $	*/
 
 /*
  * Copyright (c) 2018 Anton Lindqvist <anton@openbsd.org>
@@ -24,21 +24,25 @@
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
-static int test_close(int);
-static int test_coverage(int);
-static int test_exec(int);
-static int test_fork(int);
-static int test_mode(int);
-static int test_open(int);
+static int test_close(int, int);
+static int test_coverage(int, int);
+static int test_dying(int, int);
+static int test_exec(int, int);
+static int test_fork(int, int);
+static int test_open(int, int);
+static int test_state(int, int);
 
+static int check_coverage(const unsigned long *, int, unsigned long, int);
 static void do_syscall(void);
-static void dump(const unsigned long *);
+static void dump(const unsigned long *, int mode);
 static void kcov_disable(int);
-static void kcov_enable(int);
+static void kcov_enable(int, int);
 static int kcov_open(void);
 static __dead void usage(void);
 
@@ -50,30 +54,40 @@ main(int argc, char *argv[])
 {
 	struct {
 		const char *name;
-		int (*fn)(int);
+		int (*fn)(int, int);
 		int coverage;		/* test must produce coverage */
 	} tests[] = {
-		{ "coverage",	test_coverage,	1 },
-		{ "fork",	test_fork,	1 },
-		{ "exec",	test_exec,	1 },
-		{ "mode",	test_mode,	1 },
-		{ "open",	test_open,	0 },
 		{ "close",	test_close,	0 },
+		{ "coverage",	test_coverage,	1 },
+		{ "dying",	test_dying,	1 },
+		{ "exec",	test_exec,	1 },
+		{ "fork",	test_fork,	1 },
+		{ "open",	test_open,	0 },
+		{ "state",	test_state,	1 },
 		{ NULL,		NULL,		0 },
 	};
 	unsigned long *cover;
 	int c, fd, i;
-	int nfail = 0;
+	int error = 0;
+	int mode = 0;
 	int prereq = 0;
 	int reexec = 0;
 	int verbose = 0;
 
 	self = argv[0];
 
-	while ((c = getopt(argc, argv, "Epv")) != -1)
+	while ((c = getopt(argc, argv, "Em:pv")) != -1)
 		switch (c) {
 		case 'E':
 			reexec = 1;
+			break;
+		case 'm':
+			if (strcmp(optarg, "pc") == 0)
+				mode = KCOV_MODE_TRACE_PC;
+			else if (strcmp(optarg, "cmp") == 0)
+				mode = KCOV_MODE_TRACE_CMP;
+			else
+				errx(1, "unknown mode %s", optarg);
 			break;
 		case 'p':
 			prereq = 1;
@@ -86,8 +100,6 @@ main(int argc, char *argv[])
 		}
 	argc -= optind;
 	argv += optind;
-	if (argc > 0)
-		usage();
 
 	if (prereq) {
 		fd = kcov_open();
@@ -100,6 +112,14 @@ main(int argc, char *argv[])
 		return 0;
 	}
 
+	if (mode == 0 || argc != 1)
+		usage();
+	for (i = 0; tests[i].name != NULL; i++)
+		if (strcmp(argv[0], tests[i].name) == 0)
+			break;
+	if (tests[i].name == NULL)
+		errx(1, "%s: no such test", argv[0]);
+
 	fd = kcov_open();
 	if (ioctl(fd, KIOSETBUFSIZE, &bufsize) == -1)
 		err(1, "ioctl: KIOSETBUFSIZE");
@@ -108,36 +128,24 @@ main(int argc, char *argv[])
 	if (cover == MAP_FAILED)
 		err(1, "mmap");
 
-	for (i = 0; tests[i].name != NULL; i++) {
-		printf("===> %s\n", tests[i].name);
-		*cover = 0;
-		nfail += tests[i].fn(fd);
-		if (verbose)
-			dump(cover);
-		if (tests[i].coverage && *cover == 0) {
-			warnx("coverage empty (count=%lu, fd=%d)\n",
-			    *cover, fd);
-			nfail++;
-		} else if (!tests[i].coverage && *cover != 0) {
-			warnx("coverage is not empty (count=%lu, fd=%d)\n",
-			    *cover, fd);
-			nfail++;
-		}
-	}
+	*cover = 0;
+	error = tests[i].fn(fd, mode);
+	if (verbose)
+		dump(cover, mode);
+	if (check_coverage(cover, mode, bufsize, tests[i].coverage))
+		error = 1;
 
 	if (munmap(cover, bufsize * sizeof(unsigned long)) == -1)
 		err(1, "munmap");
 	close(fd);
 
-	if (nfail > 0)
-		return 1;
-	return 0;
+	return error;
 }
 
 static __dead void
 usage(void)
 {
-	fprintf(stderr, "usage: kcov [-Epv]\n");
+	fprintf(stderr, "usage: kcov [-Epv] -t mode test\n");
 	exit(1);
 }
 
@@ -147,13 +155,62 @@ do_syscall(void)
 	getpid();
 }
 
+static int
+check_coverage(const unsigned long *cover, int mode, unsigned long maxsize,
+    int nonzero)
+{
+	unsigned long arg1, arg2, exp, i, pc, type;
+	int error = 0;
+
+	if (nonzero && cover[0] == 0) {
+		warnx("coverage empty (count=0)\n");
+		return 1;
+	} else if (!nonzero && cover[0] != 0) {
+		warnx("coverage not empty (count=%lu)\n", *cover);
+		return 1;
+	} else if (cover[0] >= maxsize) {
+		warnx("coverage overflow (count=%lu, max=%lu)\n", *cover, maxsize);
+		return 1;
+	}
+
+	if (mode == KCOV_MODE_TRACE_CMP) {
+		if (*cover * 4 >= maxsize) {
+			warnx("coverage cmp overflow (count=%lu, max=%lu)\n",
+			    *cover * 4, maxsize);
+			return 1;
+		}
+
+		for (i = 0; i < cover[0]; i++) {
+			type = cover[i * 4 + 1];
+			arg1 = cover[i * 4 + 2];
+			arg2 = cover[i * 4 + 3];
+			pc = cover[i * 4 + 4];
+
+			exp = type >> 1;
+			if (exp <= 3)
+				continue;
+
+			warnx("coverage cmp invalid size (i=%lu, exp=%lx, "
+			    "const=%ld, arg1=%lu, arg2=%lu, pc=%p)\n",
+			    i, exp, type & 0x1, arg1, arg2, (void *)pc);
+			error = 1;
+		}
+	}
+
+	return error;
+}
+
 static void
-dump(const unsigned long *cover)
+dump(const unsigned long *cover, int mode)
 {
 	unsigned long i;
+	int stride = 1;
+
+	if (mode == KCOV_MODE_TRACE_CMP)
+		stride = 4;
 
 	for (i = 0; i < cover[0]; i++)
-		printf("%lu/%lu: %p\n", i + 1, cover[0], (void *)cover[i + 1]);
+		printf("%p\n", (void *)cover[i * stride + stride]);
 }
 
 static int
@@ -168,9 +225,9 @@ kcov_open(void)
 }
 
 static void
-kcov_enable(int fd)
+kcov_enable(int fd, int mode)
 {
-	if (ioctl(fd, KIOENABLE) == -1)
+	if (ioctl(fd, KIOENABLE, &mode) == -1)
 		err(1, "ioctl: KIOENABLE");
 }
 
@@ -185,7 +242,7 @@ kcov_disable(int fd)
  * Close before mmap.
  */
 static int
-test_close(int oldfd)
+test_close(int oldfd, int mode)
 {
 	int fd;
 
@@ -198,11 +255,47 @@ test_close(int oldfd)
  * Coverage of current thread.
  */
 static int
-test_coverage(int fd)
+test_coverage(int fd, int mode)
 {
-	kcov_enable(fd);
+	kcov_enable(fd, mode);
 	do_syscall();
 	kcov_disable(fd);
+	return 0;
+}
+
+static void *
+closer(void *arg)
+{
+	int fd = *((int *)arg);
+
+	close(fd);
+	return NULL;
+}
+
+/*
+ * Close kcov descriptor in another thread during tracing.
+ */
+static int
+test_dying(int fd, int mode)
+{
+	pthread_t th;
+	int error;
+
+	kcov_enable(fd, mode);
+
+	if ((error = pthread_create(&th, NULL, closer, &fd)))
+		errc(1, error, "pthread_create");
+	if ((error = pthread_join(th, NULL)))
+		errc(1, error, "pthread_join");
+
+	if (close(fd) == -1) {
+		if (errno != EBADF)
+			err(1, "close");
+	} else {
+		warnx("expected kcov descriptor to be closed");
+		return 1;
+	}
+
 	return 0;
 }
 
@@ -210,7 +303,7 @@ test_coverage(int fd)
  * Coverage of thread after exec.
  */
 static int
-test_exec(int fd)
+test_exec(int fd, int mode)
 {
 	pid_t pid;
 	int status;
@@ -219,7 +312,7 @@ test_exec(int fd)
 	if (pid == -1)
 		err(1, "fork");
 	if (pid == 0) {
-		kcov_enable(fd);
+		kcov_enable(fd, mode);
 		execlp(self, self, "-E", NULL);
 		_exit(1);
 	}
@@ -235,7 +328,7 @@ test_exec(int fd)
 	}
 
 	/* Upon exit, the kcov descriptor must be reusable again. */
-	kcov_enable(fd);
+	kcov_enable(fd, mode);
 	kcov_disable(fd);
 
 	return 0;
@@ -245,7 +338,7 @@ test_exec(int fd)
  * Coverage of thread after fork.
  */
 static int
-test_fork(int fd)
+test_fork(int fd, int mode)
 {
 	pid_t pid;
 	int status;
@@ -254,7 +347,7 @@ test_fork(int fd)
 	if (pid == -1)
 		err(1, "fork");
 	if (pid == 0) {
-		kcov_enable(fd);
+		kcov_enable(fd, mode);
 		do_syscall();
 		_exit(0);
 	}
@@ -270,24 +363,55 @@ test_fork(int fd)
 	}
 
 	/* Upon exit, the kcov descriptor must be reusable again. */
-	kcov_enable(fd);
+	kcov_enable(fd, mode);
 	kcov_disable(fd);
 
 	return 0;
 }
 
 /*
- * Mode transitions.
+ * Open /dev/kcov more than once.
  */
 static int
-test_mode(int fd)
+test_open(int oldfd, int mode)
 {
-	if (ioctl(fd, KIOENABLE) == -1) {
-		warnx("KIOSETBUFSIZE -> KIOENABLE");
+	unsigned long *cover;
+	int fd;
+	int error = 0;
+
+	fd = kcov_open();
+	if (ioctl(fd, KIOSETBUFSIZE, &bufsize) == -1)
+		err(1, "ioctl: KIOSETBUFSIZE");
+	cover = mmap(NULL, bufsize * sizeof(unsigned long),
+	    PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (cover == MAP_FAILED)
+		err(1, "mmap");
+
+	kcov_enable(fd, mode);
+	do_syscall();
+	kcov_disable(fd);
+
+	error = check_coverage(cover, mode, bufsize, 1);
+
+	if (munmap(cover, bufsize * sizeof(unsigned long)))
+		err(1, "munmap");
+	close(fd);
+
+	return error;
+}
+
+/*
+ * State transitions.
+ */
+static int
+test_state(int fd, int mode)
+{
+	if (ioctl(fd, KIOENABLE, &mode) == -1) {
+		warn("KIOSETBUFSIZE -> KIOENABLE");
 		return 1;
 	}
 	if (ioctl(fd, KIODISABLE) == -1) {
-		warnx("KIOENABLE -> KIODISABLE");
+		warn("KIOENABLE -> KIODISABLE");
 		return 1;
 	}
 	if (ioctl(fd, KIOSETBUFSIZE, 0) != -1) {
@@ -299,8 +423,8 @@ test_mode(int fd)
 		return 1;
 	}
 
-	kcov_enable(fd);
-	if (ioctl(fd, KIOENABLE) != -1) {
+	kcov_enable(fd, mode);
+	if (ioctl(fd, KIOENABLE, &mode) != -1) {
 		warnx("KIOENABLE -> KIOENABLE");
 		return 1;
 	}
@@ -311,36 +435,4 @@ test_mode(int fd)
 	kcov_disable(fd);
 
 	return 0;
-}
-
-/*
- * Open /dev/kcov more than once.
- */
-static int
-test_open(int oldfd)
-{
-	unsigned long *cover;
-	int fd;
-	int ret = 0;
-
-	fd = kcov_open();
-	if (ioctl(fd, KIOSETBUFSIZE, &bufsize) == -1)
-		err(1, "ioctl: KIOSETBUFSIZE");
-	cover = mmap(NULL, bufsize * sizeof(unsigned long),
-	    PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-	if (cover == MAP_FAILED)
-		err(1, "mmap");
-
-	kcov_enable(fd);
-	do_syscall();
-	kcov_disable(fd);
-
-	if (*cover == 0) {
-		warnx("coverage empty (count=0, fd=%d)\n", fd);
-		ret = 1;
-	}
-	if (munmap(cover, bufsize * sizeof(unsigned long)))
-		err(1, "munmap");
-	close(fd);
-	return ret;
 }

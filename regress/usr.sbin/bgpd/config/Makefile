@@ -1,6 +1,6 @@
-# $OpenBSD: Makefile,v 1.8 2018/12/04 22:28:23 bluhm Exp $
+# $OpenBSD: Makefile,v 1.10 2019/02/27 04:11:40 claudio Exp $
 
-BGPDTESTS=1 2 3 4 5 6 7 8 9 10
+BGPDTESTS=1 2 3 4 5 6 7 8 9 10 11 12
 
 .for n in ${BGPDTESTS}
 BGPD_TARGETS+=bgpd${n}

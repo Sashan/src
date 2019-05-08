@@ -1,4 +1,4 @@
-/* $OpenBSD: acpi.c,v 1.360 2018/10/26 20:26:19 kettenis Exp $ */
+/* $OpenBSD: acpi.c,v 1.363 2019/04/04 07:10:05 kettenis Exp $ */
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  * Copyright (c) 2005 Jordan Hargrave <jordan@openbsd.org>
@@ -892,8 +892,8 @@ acpi_gpio_parse_events(int crsidx, union acpi_resource *crs, void *arg)
 		node = aml_searchname(devnode,
 		    (char *)&crs->pad[crs->lr_gpio.res_off]);
 		pin = *(uint16_t *)&crs->pad[crs->lr_gpio.pin_off];
-		if (crs->lr_gpio.type == LR_GPIO_INT &&
-		    node && node->gpio && pin < 256) {
+		if (crs->lr_gpio.type == LR_GPIO_INT && pin < 256 &&
+		    node && node->gpio && node->gpio->intr_establish) {
 			struct acpi_gpio *gpio = node->gpio;
 			struct acpi_gpio_event *ev;
 
@@ -1954,6 +1954,7 @@ void
 acpi_pbtn_task(void *arg0, int dummy)
 {
 	struct acpi_softc *sc = arg0;
+	extern int pwr_action;
 	uint16_t en;
 	int s;
 
@@ -1966,7 +1967,18 @@ acpi_pbtn_task(void *arg0, int dummy)
 	    en | ACPI_PM1_PWRBTN_EN);
 	splx(s);
 
-	acpi_addtask(sc, acpi_powerdown_task, sc, 0);
+	switch (pwr_action) {
+	case 0:
+		break;
+	case 1:
+		acpi_addtask(sc, acpi_powerdown_task, sc, 0);
+		break;
+#ifndef SMALL_KERNEL
+	case 2:
+		acpi_addtask(sc, acpi_sleep_task, sc, ACPI_SLEEP_SUSPEND);
+		break;
+#endif
+	}
 }
 
 void

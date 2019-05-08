@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.c,v 1.370 2018/10/22 07:46:55 claudio Exp $ */
+/*	$OpenBSD: session.c,v 1.379 2019/04/25 12:12:16 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004, 2005 Henning Brauer <henning@openbsd.org>
@@ -24,7 +24,6 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/un.h>
-#include <net/if_types.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
@@ -58,7 +57,6 @@
 
 void	session_sighdlr(int);
 int	setup_listeners(u_int *);
-void	init_conf(struct bgpd_config *);
 void	init_peer(struct peer *);
 void	start_timer_holdtime(struct peer *);
 void	start_timer_keepalive(struct peer *);
@@ -83,7 +81,7 @@ void	session_rrefresh(struct peer *, u_int8_t);
 int	session_graceful_restart(struct peer *);
 int	session_graceful_stop(struct peer *);
 int	session_dispatch_msg(struct pollfd *, struct peer *);
-int	session_process_msg(struct peer *);
+void	session_process_msg(struct peer *);
 int	parse_header(struct peer *, u_char *, u_int16_t *, u_int8_t *);
 int	parse_open(struct peer *);
 int	parse_update(struct peer *);
@@ -96,18 +94,15 @@ void	session_up(struct peer *);
 void	session_down(struct peer *);
 int	imsg_rde(int, u_int32_t, void *, u_int16_t);
 void	session_demote(struct peer *, int);
-int	session_link_state_is_up(int, int, int);
+void	merge_peers(struct bgpd_config *, struct bgpd_config *);
 
 int		 la_cmp(struct listen_addr *, struct listen_addr *);
-struct peer	*getpeerbyip(struct sockaddr *);
 void		 session_template_clone(struct peer *, struct sockaddr *,
 		    u_int32_t, u_int32_t);
 int		 session_match_mask(struct peer *, struct bgpd_addr *);
-struct peer	*getpeerbyid(u_int32_t);
 
 struct bgpd_config	*conf, *nconf;
 struct bgpd_sysdep	 sysdep;
-struct peer		*peers, *npeers;
 volatile sig_atomic_t	 session_quit;
 int			 pending_reconf;
 int			 csock = -1, rcsock = -1;
@@ -147,7 +142,8 @@ setup_listeners(u_int *la_cnt)
 
 		if (la->fd == -1) {
 			log_warn("cannot establish listener on %s: invalid fd",
-			    log_sockaddr((struct sockaddr *)&la->sa));
+			    log_sockaddr((struct sockaddr *)&la->sa,
+			    la->sa_len));
 			continue;
 		}
 
@@ -181,7 +177,7 @@ setup_listeners(u_int *la_cnt)
 		la->flags |= LISTENER_LISTENING;
 
 		log_info("listening on %s",
-		    log_sockaddr((struct sockaddr *)&la->sa));
+		    log_sockaddr((struct sockaddr *)&la->sa, la->sa_len));
 	}
 
 	*la_cnt = cnt;
@@ -198,7 +194,7 @@ session_main(int debug, int verbose)
 	u_int			 listener_cnt, ctl_cnt, mrt_cnt;
 	u_int			 new_cnt;
 	struct passwd		*pw;
-	struct peer		*p, **peer_l = NULL, *last, *next;
+	struct peer		*p, **peer_l = NULL, *next;
 	struct mrt		*m, *xm, **mrt_l = NULL;
 	struct pollfd		*pfd = NULL;
 	struct ctl_conn		*ctl_conn;
@@ -248,57 +244,48 @@ session_main(int debug, int verbose)
 	peer_cnt = 0;
 	ctl_cnt = 0;
 
-	if ((conf = calloc(1, sizeof(struct bgpd_config))) == NULL)
-		fatal(NULL);
-	if ((conf->listen_addrs = calloc(1, sizeof(struct listen_addrs))) ==
-	    NULL)
-		fatal(NULL);
-	TAILQ_INIT(conf->listen_addrs);
-
+	conf = new_config();
 	log_info("session engine ready");
 
 	while (session_quit == 0) {
 		/* check for peers to be initialized or deleted */
-		last = NULL;
 		if (!pending_reconf) {
-			for (p = peers; p != NULL; p = next) {
-				next = p->next;
+			for (p = TAILQ_FIRST(&conf->peers); p != NULL;
+			   p = next) {
+				next = TAILQ_NEXT(p, entry);
 				/* cloned peer that idled out? */
 				if (p->template && (p->state == STATE_IDLE ||
 				    p->state == STATE_ACTIVE) &&
 				    time(NULL) - p->stats.last_updown >=
 				    INTERVAL_HOLD_CLONED)
-					p->conf.reconf_action = RECONF_DELETE;
+					p->reconf_action = RECONF_DELETE;
 
 				/* new peer that needs init? */
 				if (p->state == STATE_NONE)
 					init_peer(p);
 
 				/* reinit due? */
-				if (p->conf.reconf_action == RECONF_REINIT) {
+				if (p->reconf_action == RECONF_REINIT) {
 					session_stop(p, ERR_CEASE_ADMIN_RESET);
 					if (!p->conf.down)
 						timer_set(p, Timer_IdleHold, 0);
 				}
 
 				/* deletion due? */
-				if (p->conf.reconf_action == RECONF_DELETE) {
+				if (p->reconf_action == RECONF_DELETE) {
 					if (p->demoted)
 						session_demote(p, -1);
 					p->conf.demote_group[0] = 0;
 					session_stop(p, ERR_CEASE_PEER_UNCONF);
 					log_peer_warnx(&p->conf, "removed");
-					if (last != NULL)
-						last->next = next;
-					else
-						peers = next;
+					TAILQ_REMOVE(&conf->peers, p, entry);
 					timer_remove_all(p);
+					pfkey_remove(p);
 					free(p);
 					peer_cnt--;
 					continue;
 				}
-				p->conf.reconf_action = RECONF_NONE;
-				last = p;
+				p->reconf_action = RECONF_NONE;
 			}
 		}
 
@@ -383,7 +370,7 @@ session_main(int debug, int verbose)
 		idx_listeners = i;
 		timeout = 240;	/* loop every 240s at least */
 
-		for (p = peers; p != NULL; p = p->next) {
+		TAILQ_FOREACH(p, &conf->peers, entry) {
 			time_t	nextaction;
 			struct peer_timer *pt;
 
@@ -439,7 +426,7 @@ session_main(int debug, int verbose)
 			if (p->wbuf.queued > 0 || p->state == STATE_CONNECT)
 				events |= POLLOUT;
 			/* is there still work to do? */
-			if (p->rbuf && p->rbuf->wpos)
+			if (p->rpending)
 				timeout = 0;
 
 			/* poll events */
@@ -534,7 +521,7 @@ session_main(int debug, int verbose)
 			session_dispatch_msg(&pfd[j],
 			    peer_l[j - idx_listeners]);
 
-		for (p = peers; p != NULL; p = p->next)
+		TAILQ_FOREACH(p, &conf->peers, entry)
 			if (p->rbuf && p->rbuf->wpos)
 				session_process_msg(p);
 
@@ -543,15 +530,16 @@ session_main(int debug, int verbose)
 				mrt_write(mrt_l[j - idx_peers]);
 
 		for (; j < i; j++)
-			control_dispatch_msg(&pfd[j], &ctl_cnt);
+			control_dispatch_msg(&pfd[j], &ctl_cnt, &conf->peers);
 	}
 
-	while ((p = peers) != NULL) {
-		peers = p->next;
+	while ((p = TAILQ_FIRST(&conf->peers)) != NULL) {
+		TAILQ_REMOVE(&conf->peers, p, entry);
 		strlcpy(p->conf.shutcomm,
 		    "bgpd shutting down",
 		    sizeof(p->conf.shutcomm));
 		session_stop(p, ERR_CEASE_ADMIN_DOWN);
+		timer_remove_all(p);
 		pfkey_remove(p);
 		free(p);
 	}
@@ -562,11 +550,7 @@ session_main(int debug, int verbose)
 		free(m);
 	}
 
-	while ((la = TAILQ_FIRST(conf->listen_addrs)) != NULL) {
-		TAILQ_REMOVE(conf->listen_addrs, la, entry);
-		free(la);
-	}
-	free(conf->listen_addrs);
+	free_config(conf);
 	free(peer_l);
 	free(mrt_l);
 	free(pfd);
@@ -595,15 +579,6 @@ session_main(int debug, int verbose)
 }
 
 void
-init_conf(struct bgpd_config *c)
-{
-	if (!c->holdtime)
-		c->holdtime = INTERVAL_HOLD;
-	if (!c->connectretry)
-		c->connectretry = INTERVAL_CONNECTRETRY;
-}
-
-void
 init_peer(struct peer *p)
 {
 	TAILQ_INIT(&p->timers);
@@ -628,7 +603,7 @@ init_peer(struct peer *p)
 	 * do not handle new peers. they must reach ESTABLISHED beforehands.
 	 * peers added at runtime have reconf_action set to RECONF_REINIT.
 	 */
-	if (p->conf.reconf_action != RECONF_REINIT && p->conf.demote_group[0])
+	if (p->reconf_action != RECONF_REINIT && p->conf.demote_group[0])
 		session_demote(p, +1);
 }
 
@@ -1028,7 +1003,7 @@ session_accept(int listenfd)
 		return;
 	}
 
-	p = getpeerbyip((struct sockaddr *)&cliaddr);
+	p = getpeerbyip(conf, (struct sockaddr *)&cliaddr);
 
 	if (p != NULL && p->state == STATE_IDLE && p->errcnt < 2) {
 		if (timer_running(p, Timer_IdleHold, NULL)) {
@@ -1089,7 +1064,7 @@ open:
 		/* then do part of the open dance */
 		goto open;
 	} else {
-		log_conn_attempt(p, (struct sockaddr *)&cliaddr);
+		log_conn_attempt(p, (struct sockaddr *)&cliaddr, len);
 		close(connfd);
 	}
 }
@@ -1099,6 +1074,7 @@ session_connect(struct peer *peer)
 {
 	int			 opt = 1;
 	struct sockaddr		*sa;
+	socklen_t		 sa_len;
 
 	/*
 	 * we do not need the overcomplicated collision detection RFC 1771
@@ -1139,8 +1115,8 @@ session_connect(struct peer *peer)
 	peer->wbuf.fd = peer->fd;
 
 	/* if update source is set we need to bind() */
-	if ((sa = addr2sa(&peer->conf.local_addr, 0)) != NULL) {
-		if (bind(peer->fd, sa, sa->sa_len) == -1) {
+	if ((sa = addr2sa(&peer->conf.local_addr, 0, &sa_len)) != NULL) {
+		if (bind(peer->fd, sa, sa_len) == -1) {
 			log_peer_warn(&peer->conf, "session_connect bind");
 			bgp_fsm(peer, EVNT_CON_OPENFAIL);
 			return (-1);
@@ -1152,8 +1128,8 @@ session_connect(struct peer *peer)
 		return (-1);
 	}
 
-	sa = addr2sa(&peer->conf.remote_addr, BGP_PORT);
-	if (connect(peer->fd, sa, sa->sa_len) == -1) {
+	sa = addr2sa(&peer->conf.remote_addr, BGP_PORT, &sa_len);
+	if (connect(peer->fd, sa, sa_len) == -1) {
 		if (errno != EINPROGRESS) {
 			if (errno != peer->lasterr)
 				log_peer_warn(&peer->conf, "connect");
@@ -1263,16 +1239,17 @@ session_setup_socket(struct peer *p)
 void
 session_tcp_established(struct peer *peer)
 {
-	socklen_t	len;
+	struct sockaddr_storage	ss;
+	socklen_t		len;
 
-	len = sizeof(peer->sa_local);
-	if (getsockname(peer->fd, (struct sockaddr *)&peer->sa_local,
-	    &len) == -1)
+	len = sizeof(ss);
+	if (getsockname(peer->fd, (struct sockaddr *)&ss, &len) == -1)
 		log_warn("getsockname");
-	len = sizeof(peer->sa_remote);
-	if (getpeername(peer->fd, (struct sockaddr *)&peer->sa_remote,
-	    &len) == -1)
+	sa2addr((struct sockaddr *)&ss, &peer->local, &peer->local_port);
+	len = sizeof(ss);
+	if (getpeername(peer->fd, (struct sockaddr *)&ss, &len) == -1)
 		log_warn("getpeername");
+	sa2addr((struct sockaddr *)&ss, &peer->remote, &peer->remote_port);
 }
 
 void
@@ -1541,7 +1518,7 @@ session_update(u_int32_t peerid, void *data, size_t datalen)
 	struct peer		*p;
 	struct bgp_msg		*buf;
 
-	if ((p = getpeerbyid(peerid)) == NULL) {
+	if ((p = getpeerbyid(conf, peerid)) == NULL) {
 		log_warnx("no such peer: id=%u", peerid);
 		return;
 	}
@@ -1802,7 +1779,7 @@ session_dispatch_msg(struct pollfd *pfd, struct peer *p)
 	return (0);
 }
 
-int
+void
 session_process_msg(struct peer *p)
 {
 	struct mrt	*mrt;
@@ -1813,19 +1790,20 @@ session_process_msg(struct peer *p)
 
 	rpos = 0;
 	av = p->rbuf->wpos;
+	p->rpending = 0;
 
 	/*
 	 * session might drop to IDLE -> buffers deallocated
 	 * we MUST check rbuf != NULL before use
 	 */
 	for (;;) {
-		if (rpos + MSGSIZE_HEADER > av)
-			break;
 		if (p->rbuf == NULL)
+			return;
+		if (rpos + MSGSIZE_HEADER > av)
 			break;
 		if (parse_header(p, p->rbuf->buf + rpos, &msglen,
 		    &msgtype) == -1)
-			return (0);
+			return;
 		if (rpos + msglen > av)
 			break;
 		p->rbuf->rptr = p->rbuf->buf + rpos;
@@ -1870,11 +1848,11 @@ session_process_msg(struct peer *p)
 			bgp_fsm(p, EVNT_CON_FATAL);
 		}
 		rpos += msglen;
-		if (++processed > MSG_PROCESS_LIMIT)
+		if (++processed > MSG_PROCESS_LIMIT) {
+			p->rpending = 1;
 			break;
+		}
 	}
-	if (p->rbuf == NULL)
-		return (1);
 
 	if (rpos < av) {
 		left = av - rpos;
@@ -1882,8 +1860,6 @@ session_process_msg(struct peer *p)
 		p->rbuf->wpos = left;
 	} else
 		p->rbuf->wpos = 0;
-
-	return (1);
 }
 
 int
@@ -2236,7 +2212,7 @@ parse_notification(struct peer *peer)
 	u_int8_t	 subcode;
 	u_int8_t	 capa_code;
 	u_int8_t	 capa_len;
-	u_int8_t	 shutcomm_len;
+	size_t		 shutcomm_len;
 	u_int8_t	 i;
 
 	/* just log */
@@ -2334,16 +2310,15 @@ parse_notification(struct peer *peer)
 	if (errcode == ERR_CEASE &&
 	    (subcode == ERR_CEASE_ADMIN_DOWN ||
 	     subcode == ERR_CEASE_ADMIN_RESET)) {
-		if (datalen >= sizeof(shutcomm_len)) {
-			memcpy(&shutcomm_len, p, sizeof(shutcomm_len));
-			p += sizeof(shutcomm_len);
-			datalen -= sizeof(shutcomm_len);
+		if (datalen > 1) {
+			shutcomm_len = *p++;
+			datalen--;
 			if(datalen < shutcomm_len) {
 			    log_peer_warnx(&peer->conf,
 				"received truncated shutdown reason");
 			    return (0);
 			}
-			if (shutcomm_len > (SHUT_COMM_LEN-1)) {
+			if (shutcomm_len > SHUT_COMM_LEN - 1) {
 			    log_peer_warnx(&peer->conf,
 				"received overly long shutdown reason");
 			    return (0);
@@ -2573,12 +2548,10 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 	struct mrt		 xmrt;
 	struct mrt		*mrt;
 	struct imsgbuf		*i;
-	struct peer_config	*pconf;
-	struct peer		*p, *next;
+	struct peer		*p;
 	struct listen_addr	*la, *nla;
 	struct kif		*kif;
 	u_char			*data;
-	enum reconf_action	 reconf;
 	int			 n, fd, depend_ok, restricted;
 	u_int8_t		 aid, errcode, subcode;
 
@@ -2623,60 +2596,20 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 		case IMSG_RECONF_CONF:
 			if (idx != PFD_PIPE_MAIN)
 				fatalx("reconf request not from parent");
-			if ((nconf = malloc(sizeof(struct bgpd_config))) ==
-			    NULL)
-				fatal(NULL);
-			memcpy(nconf, imsg.data, sizeof(struct bgpd_config));
-			if ((nconf->listen_addrs = calloc(1,
-			    sizeof(struct listen_addrs))) == NULL)
-				fatal(NULL);
-			TAILQ_INIT(nconf->listen_addrs);
-			npeers = NULL;
-			init_conf(nconf);
+			nconf = new_config();
+
+			copy_config(nconf, imsg.data); 
 			pending_reconf = 1;
 			break;
 		case IMSG_RECONF_PEER:
 			if (idx != PFD_PIPE_MAIN)
 				fatalx("reconf request not from parent");
-			pconf = imsg.data;
-			p = getpeerbyaddr(&pconf->remote_addr);
-			if (p == NULL) {
-				if ((p = calloc(1, sizeof(struct peer))) ==
-				    NULL)
-					fatal("new_peer");
-				p->state = p->prev_state = STATE_NONE;
-				p->next = npeers;
-				npeers = p;
-				reconf = RECONF_REINIT;
-			} else
-				reconf = RECONF_KEEP;
-
-			memcpy(&p->conf, pconf, sizeof(struct peer_config));
-			p->conf.reconf_action = reconf;
-
-			/* sync the RDE in case we keep the peer */
-			if (reconf == RECONF_KEEP) {
-				if (imsg_rde(IMSG_SESSION_ADD, p->conf.id,
-				    &p->conf, sizeof(struct peer_config)) == -1)
-					fatalx("imsg_compose error");
-				if (p->conf.template) {
-					/* apply the conf to all clones */
-					struct peer *np;
-					for (np = peers; np; np = np->next) {
-						if (np->template != p)
-							continue;
-						session_template_clone(np,
-						    NULL, np->conf.id,
-						    np->conf.remote_as);
-						if (imsg_rde(IMSG_SESSION_ADD,
-						    np->conf.id, &np->conf,
-						    sizeof(struct peer_config))
-						    == -1)
-							fatalx("imsg_compose"
-							    " error");
-					}
-				}
-			}
+			if ((p = calloc(1, sizeof(struct peer))) == NULL)
+				fatal("new_peer");
+			memcpy(&p->conf, imsg.data, sizeof(struct peer_config));
+			p->state = p->prev_state = STATE_NONE;
+			p->reconf_action = RECONF_REINIT;
+			TAILQ_INSERT_TAIL(&nconf->peers, p, entry);
 			break;
 		case IMSG_RECONF_LISTENER:
 			if (idx != PFD_PIPE_MAIN)
@@ -2697,7 +2630,7 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 					log_warnx("expected to receive fd for "
 					    "%s but didn't receive any",
 					    log_sockaddr((struct sockaddr *)
-					    &nla->sa));
+					    &nla->sa, nla->sa_len));
 
 				la = calloc(1, sizeof(struct listen_addr));
 				if (la == NULL)
@@ -2746,32 +2679,8 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 				fatalx("reconf request not from parent");
 			if (nconf == NULL)
 				fatalx("got IMSG_RECONF_DONE but no config");
-			conf->flags = nconf->flags;
-			conf->log = nconf->log;
-			conf->bgpid = nconf->bgpid;
-			conf->clusterid = nconf->clusterid;
-			conf->as = nconf->as;
-			conf->short_as = nconf->short_as;
-			conf->holdtime = nconf->holdtime;
-			conf->min_holdtime = nconf->min_holdtime;
-			conf->connectretry = nconf->connectretry;
-
-			/* add new peers */
-			for (p = npeers; p != NULL; p = next) {
-				next = p->next;
-				p->next = peers;
-				peers = p;
-			}
-			/* find ones that need attention */
-			for (p = peers; p != NULL; p = p->next) {
-				/* needs to be deleted? */
-				if (p->conf.reconf_action == RECONF_NONE &&
-				    !p->template)
-					p->conf.reconf_action = RECONF_DELETE;
-				/* had demotion, is demoted, demote removed? */
-				if (p->demoted && !p->conf.demote_group[0])
-						session_demote(p, -1);
-			}
+			copy_config(conf, nconf);
+			merge_peers(conf, nconf);
 
 			/* delete old listeners */
 			for (la = TAILQ_FIRST(conf->listen_addrs); la != NULL;
@@ -2779,8 +2688,8 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 				nla = TAILQ_NEXT(la, entry);
 				if (la->reconf == RECONF_NONE) {
 					log_info("not listening on %s any more",
-					    log_sockaddr(
-					    (struct sockaddr *)&la->sa));
+					    log_sockaddr((struct sockaddr *)
+					    &la->sa, la->sa_len));
 					TAILQ_REMOVE(conf->listen_addrs, la,
 					    entry);
 					close(la->fd);
@@ -2797,8 +2706,7 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 			}
 
 			setup_listeners(listener_cnt);
-			free(nconf->listen_addrs);
-			free(nconf);
+			free_config(nconf);
 			nconf = NULL;
 			pending_reconf = 0;
 			log_info("SE reconfigured");
@@ -2812,10 +2720,9 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 			    sizeof(struct kif))
 				fatalx("IFINFO imsg with wrong len");
 			kif = imsg.data;
-			depend_ok = session_link_state_is_up(kif->flags,
-			    kif->if_type, kif->link_state);
+			depend_ok = kif->depend_state;
 
-			for (p = peers; p != NULL; p = p->next)
+			TAILQ_FOREACH(p, &conf->peers, entry)
 				if (!strcmp(p->conf.if_depend, kif->ifname)) {
 					if (depend_ok && !p->depend_ok) {
 						p->depend_ok = depend_ok;
@@ -2910,7 +2817,7 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 				log_warnx("RDE sent invalid notification");
 				break;
 			}
-			if ((p = getpeerbyid(imsg.hdr.peerid)) == NULL) {
+			if ((p = getpeerbyid(conf, imsg.hdr.peerid)) == NULL) {
 				log_warnx("no such peer: id=%u",
 				    imsg.hdr.peerid);
 				break;
@@ -2950,7 +2857,7 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 				log_warnx("RDE sent invalid restart msg");
 				break;
 			}
-			if ((p = getpeerbyid(imsg.hdr.peerid)) == NULL) {
+			if ((p = getpeerbyid(conf, imsg.hdr.peerid)) == NULL) {
 				log_warnx("no such peer: id=%u",
 				    imsg.hdr.peerid);
 				break;
@@ -2977,7 +2884,7 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 		case IMSG_SESSION_DOWN:
 			if (idx != PFD_PIPE_ROUTE)
 				fatalx("update request not from RDE");
-			if ((p = getpeerbyid(imsg.hdr.peerid)) == NULL) {
+			if ((p = getpeerbyid(conf, imsg.hdr.peerid)) == NULL) {
 				log_warnx("no such peer: id=%u",
 				    imsg.hdr.peerid);
 				break;
@@ -3027,26 +2934,12 @@ la_cmp(struct listen_addr *a, struct listen_addr *b)
 }
 
 struct peer *
-getpeerbyaddr(struct bgpd_addr *addr)
-{
-	struct peer *p;
-
-	/* we might want a more effective way to find peers by IP */
-	for (p = peers; p != NULL &&
-	    memcmp(&p->conf.remote_addr, addr, sizeof(p->conf.remote_addr));
-	    p = p->next)
-		;	/* nothing */
-
-	return (p);
-}
-
-struct peer *
-getpeerbydesc(const char *descr)
+getpeerbydesc(struct bgpd_config *c, const char *descr)
 {
 	struct peer	*p, *res = NULL;
 	int		 match = 0;
 
-	for (p = peers; p != NULL; p = p->next)
+	TAILQ_FOREACH(p, &c->peers, entry)
 		if (!strcmp(p->conf.descr, descr)) {
 			res = p;
 			match++;
@@ -3063,22 +2956,22 @@ getpeerbydesc(const char *descr)
 }
 
 struct peer *
-getpeerbyip(struct sockaddr *ip)
+getpeerbyip(struct bgpd_config *c, struct sockaddr *ip)
 {
 	struct bgpd_addr addr;
 	struct peer	*p, *newpeer, *loose = NULL;
 	u_int32_t	 id;
 
-	sa2addr(ip, &addr);
+	sa2addr(ip, &addr, NULL);
 
 	/* we might want a more effective way to find peers by IP */
-	for (p = peers; p != NULL; p = p->next)
+	TAILQ_FOREACH(p, &c->peers, entry)
 		if (!p->conf.template &&
 		    !memcmp(&addr, &p->conf.remote_addr, sizeof(addr)))
 			return (p);
 
 	/* try template matching */
-	for (p = peers; p != NULL; p = p->next)
+	TAILQ_FOREACH(p, &c->peers, entry)
 		if (p->conf.template &&
 		    p->conf.remote_addr.aid == addr.aid &&
 		    session_match_mask(p, &addr))
@@ -3092,26 +2985,53 @@ getpeerbyip(struct sockaddr *ip)
 			fatal(NULL);
 		memcpy(newpeer, loose, sizeof(struct peer));
 		for (id = UINT_MAX; id > UINT_MAX / 2; id--) {
-			for (p = peers; p != NULL && p->conf.id != id;
-			    p = p->next)
-				;	/* nothing */
-			if (p == NULL) {	/* we found a free id */
+			TAILQ_FOREACH(p, &c->peers, entry)
+				if (p->conf.id == id)
+					break;
+			if (p == NULL)		/* we found a free id */
 				break;
-			}
 		}
 		newpeer->template = loose;
 		session_template_clone(newpeer, ip, id, 0);
 		newpeer->state = newpeer->prev_state = STATE_NONE;
-		newpeer->conf.reconf_action = RECONF_KEEP;
+		newpeer->reconf_action = RECONF_KEEP;
 		newpeer->rbuf = NULL;
 		init_peer(newpeer);
 		bgp_fsm(newpeer, EVNT_START);
-		newpeer->next = peers;
-		peers = newpeer;
+		TAILQ_INSERT_TAIL(&c->peers, newpeer, entry);
 		return (newpeer);
 	}
 
 	return (NULL);
+}
+
+struct peer *
+getpeerbyid(struct bgpd_config *c, u_int32_t peerid)
+{
+	struct peer *p;
+
+	/* we might want a more effective way to find peers by id */
+	TAILQ_FOREACH(p, &c->peers, entry)
+		if (p->conf.id == peerid)
+			return (p);
+	return (NULL);
+}
+
+int
+peer_matched(struct peer *p, struct ctl_neighbor *n)
+{
+	char *s;
+
+	if (n && n->addr.aid) {
+		if (memcmp(&p->conf.remote_addr, &n->addr,
+		    sizeof(p->conf.remote_addr)))
+			return 0;
+	} else if (n && n->descr[0]) {
+		s = n->is_group ? p->conf.group : p->conf.descr;
+		if (strcmp(s, n->descr))
+			return 0;
+	}
+	return 1;
 }
 
 void
@@ -3121,7 +3041,7 @@ session_template_clone(struct peer *p, struct sockaddr *ip, u_int32_t id,
 	struct bgpd_addr	remote_addr;
 
 	if (ip)
-		sa2addr(ip, &remote_addr);
+		sa2addr(ip, &remote_addr, NULL);
 	else
 		memcpy(&remote_addr, &p->conf.remote_addr, sizeof(remote_addr));
 
@@ -3172,19 +3092,6 @@ session_match_mask(struct peer *p, struct bgpd_addr *a)
 	return (0);
 }
 
-struct peer *
-getpeerbyid(u_int32_t peerid)
-{
-	struct peer *p;
-
-	/* we might want a more effective way to find peers by IP */
-	for (p = peers; p != NULL &&
-	    p->conf.id != peerid; p = p->next)
-		;	/* nothing */
-
-	return (p);
-}
-
 void
 session_down(struct peer *peer)
 {
@@ -3210,8 +3117,8 @@ session_up(struct peer *p)
 	    &p->conf, sizeof(p->conf)) == -1)
 		fatalx("imsg_compose error");
 
-	sa2addr((struct sockaddr *)&p->sa_local, &sup.local_addr);
-	sa2addr((struct sockaddr *)&p->sa_remote, &sup.remote_addr);
+	sup.local_addr = p->local;
+	sup.remote_addr = p->remote;
 
 	sup.remote_bgpid = p->remote_bgpid;
 	sup.short_as = p->short_as;
@@ -3273,19 +3180,21 @@ void
 session_stop(struct peer *peer, u_int8_t subcode)
 {
 	char data[SHUT_COMM_LEN];
-	uint8_t datalen;
-	uint8_t shutcomm_len;
+	size_t datalen;
+	size_t shutcomm_len;
 	char *communication;
 
 	datalen = 0;
-
 	communication = peer->conf.shutcomm;
 
 	if ((subcode == ERR_CEASE_ADMIN_DOWN ||
 	    subcode == ERR_CEASE_ADMIN_RESET)
 	    && communication && *communication) {
 		shutcomm_len = strlen(communication);
-		if(shutcomm_len < SHUT_COMM_LEN) {
+		if (shutcomm_len > SHUT_COMM_LEN - 1) {
+		    log_peer_warnx(&peer->conf,
+			"trying to send overly long shutdown reason");
+		} else {
 			data[0] = shutcomm_len;
 			datalen = shutcomm_len + sizeof(data[0]);
 			memcpy(data + 1, communication, shutcomm_len);
@@ -3304,21 +3213,50 @@ session_stop(struct peer *peer, u_int8_t subcode)
 	bgp_fsm(peer, EVNT_STOP);
 }
 
-/*
- * return 1 when the interface is up
- * and the link state is up or unknwown
- * except when this is a carp interface, then
- * return 1 only when link state is up
- */
-int
-session_link_state_is_up(int flags, int type, int link_state)
+void
+merge_peers(struct bgpd_config *c, struct bgpd_config *nc)
 {
-	if (!(flags & IFF_UP))
-		return (0);
+	struct peer *p, *np;
 
-	if (type == IFT_CARP &&
-	    link_state == LINK_STATE_UNKNOWN)
-		return (0);
+	TAILQ_FOREACH(p, &c->peers, entry) {
+		/* templates are handled specially */
+		if (p->template != NULL)
+			continue;
+		np = getpeerbyid(nc, p->conf.id);
+		if (np == NULL) {
+			p->reconf_action = RECONF_DELETE;
+			continue;
+		}
 
-	return LINK_STATE_IS_UP(link_state);
+		memcpy(&p->conf, &np->conf, sizeof(p->conf));
+		TAILQ_REMOVE(&nc->peers, np, entry);
+		free(np);
+
+		p->reconf_action = RECONF_KEEP;
+
+		/* had demotion, is demoted, demote removed? */
+		if (p->demoted && !p->conf.demote_group[0])
+			session_demote(p, -1);
+
+		/* sync the RDE in case we keep the peer */
+		if (imsg_rde(IMSG_SESSION_ADD, p->conf.id,
+		    &p->conf, sizeof(struct peer_config)) == -1)
+			fatalx("imsg_compose error");
+
+		/* apply the config to all clones of a template */
+		if (p->conf.template) {
+			struct peer *xp;
+			TAILQ_FOREACH(xp, &conf->peers, entry) {
+				if (xp->template != p)
+					continue;
+				session_template_clone(xp, NULL, xp->conf.id,
+				    xp->conf.remote_as);
+				if (imsg_rde(IMSG_SESSION_ADD, xp->conf.id,
+				    &xp->conf, sizeof(xp->conf)) == -1)
+					fatalx("imsg_compose error");
+			}
+		}
+	}
+
+	TAILQ_CONCAT(&c->peers, &nc->peers, entry);
 }

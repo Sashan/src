@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.78 2018/11/14 17:24:01 mestre Exp $ */
+/*	$OpenBSD: config.c,v 1.87 2019/03/31 16:57:38 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004, 2005 Henning Brauer <henning@openbsd.org>
@@ -18,11 +18,6 @@
 
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/mman.h>
-#include <sys/ioctl.h>
-
-#include <netmpls/mpls.h>
 
 #include <errno.h>
 #include <ifaddrs.h>
@@ -36,31 +31,16 @@
 #include "session.h"
 #include "log.h"
 
-u_int32_t	get_bgpid(void);
 int		host_ip(const char *, struct bgpd_addr *, u_int8_t *);
 void		free_networks(struct network_head *);
-void		free_rdomains(struct rdomain_head *);
+void		free_l3vpns(struct l3vpn_head *);
 
 struct bgpd_config *
 new_config(void)
 {
 	struct bgpd_config	*conf;
-	u_int			 rdomid;
 
 	if ((conf = calloc(1, sizeof(struct bgpd_config))) == NULL)
-		fatal(NULL);
-
-	conf->min_holdtime = MIN_HOLDTIME;
-	conf->bgpid = get_bgpid();
-	conf->fib_priority = RTP_BGP;
-	conf->default_tableid = getrtable();
-	ktable_exists(conf->default_tableid, &rdomid);
-	if (rdomid != conf->default_tableid)
-		fatalx("current routing table %u is not a routing domain",
-		    conf->default_tableid);
-
-	if (asprintf(&conf->csock, "%s.%d", SOCKET_NAME,
-	    conf->default_tableid) == -1)
 		fatal(NULL);
 
 	if ((conf->as_sets = calloc(1, sizeof(struct as_set_head))) == NULL)
@@ -74,10 +54,13 @@ new_config(void)
 		fatal(NULL);
 
 	/* init the various list for later */
+	TAILQ_INIT(&conf->peers);
 	TAILQ_INIT(&conf->networks);
-	SIMPLEQ_INIT(&conf->rdomains);
+	SIMPLEQ_INIT(&conf->l3vpns);
 	SIMPLEQ_INIT(&conf->prefixsets);
 	SIMPLEQ_INIT(&conf->originsets);
+	SIMPLEQ_INIT(&conf->rde_prefixsets);
+	SIMPLEQ_INIT(&conf->rde_originsets);
 	RB_INIT(&conf->roa);
 	SIMPLEQ_INIT(conf->as_sets);
 
@@ -86,6 +69,22 @@ new_config(void)
 	LIST_INIT(conf->mrt);
 
 	return (conf);
+}
+
+void
+copy_config(struct bgpd_config *to, struct bgpd_config *from)
+{
+	to->flags = from->flags;
+	to->log = from->log;
+	to->default_tableid = from->default_tableid;
+	to->bgpid = from->bgpid;
+	to->clusterid = from->clusterid;
+	to->as = from->as;
+	to->short_as = from->short_as;
+	to->holdtime = from->holdtime;
+	to->min_holdtime = from->min_holdtime;
+	to->connectretry = from->connectretry;
+	to->fib_priority = from->fib_priority;
 }
 
 void
@@ -101,16 +100,16 @@ free_networks(struct network_head *networks)
 }
 
 void
-free_rdomains(struct rdomain_head *rdomains)
+free_l3vpns(struct l3vpn_head *l3vpns)
 {
-	struct rdomain		*rd;
+	struct l3vpn		*vpn;
 
-	while ((rd = SIMPLEQ_FIRST(rdomains)) != NULL) {
-		SIMPLEQ_REMOVE_HEAD(rdomains, entry);
-		filterset_free(&rd->export);
-		filterset_free(&rd->import);
-		free_networks(&rd->net_l);
-		free(rd);
+	while ((vpn = SIMPLEQ_FIRST(l3vpns)) != NULL) {
+		SIMPLEQ_REMOVE_HEAD(l3vpns, entry);
+		filterset_free(&vpn->export);
+		filterset_free(&vpn->import);
+		free_networks(&vpn->net_l);
+		free(vpn);
 	}
 }
 
@@ -122,6 +121,22 @@ free_prefixsets(struct prefixset_head *psh)
 	while (!SIMPLEQ_EMPTY(psh)) {
 		ps = SIMPLEQ_FIRST(psh);
 		free_prefixtree(&ps->psitems);
+		SIMPLEQ_REMOVE_HEAD(psh, entry);
+		free(ps);
+	}
+}
+
+void
+free_rde_prefixsets(struct rde_prefixset_head *psh)
+{
+	struct rde_prefixset	*ps;
+
+	if (psh == NULL)
+		return;
+
+	while (!SIMPLEQ_EMPTY(psh)) {
+		ps = SIMPLEQ_FIRST(psh);
+		trie_free(&ps->th);
 		SIMPLEQ_REMOVE_HEAD(psh, entry);
 		free(ps);
 	}
@@ -142,14 +157,17 @@ free_prefixtree(struct prefixset_tree *p)
 void
 free_config(struct bgpd_config *conf)
 {
+	struct peer		*p;
 	struct listen_addr	*la;
 	struct mrt		*m;
 
-	free_rdomains(&conf->rdomains);
+	free_l3vpns(&conf->l3vpns);
 	free_networks(&conf->networks);
 	filterlist_free(conf->filters);
 	free_prefixsets(&conf->prefixsets);
 	free_prefixsets(&conf->originsets);
+	free_rde_prefixsets(&conf->rde_prefixsets);
+	free_rde_prefixsets(&conf->rde_originsets);
 	free_prefixtree(&conf->roa);
 	as_sets_free(conf->as_sets);
 
@@ -165,30 +183,29 @@ free_config(struct bgpd_config *conf)
 	}
 	free(conf->mrt);
 
+	while ((p = TAILQ_FIRST(&conf->peers)) != NULL) {
+		TAILQ_REMOVE(&conf->peers, p, entry);
+		free(p);
+	}
+
 	free(conf->csock);
 	free(conf->rcsock);
 
 	free(conf);
 }
 
-int
-merge_config(struct bgpd_config *xconf, struct bgpd_config *conf,
-    struct peer *peer_l)
+void
+merge_config(struct bgpd_config *xconf, struct bgpd_config *conf)
 {
 	struct listen_addr	*nla, *ola, *next;
 	struct network		*n;
+	struct peer		*p, *np;
 
 	/*
 	 * merge the freshly parsed conf into the running xconf
 	 */
-	if (!conf->as) {
-		log_warnx("configuration error: AS not given");
-		return (1);
-	}
-
 	if ((conf->flags & BGPD_FLAG_REFLECTOR) && conf->clusterid == 0)
 		conf->clusterid = conf->bgpid;
-
 
 	/* adjust FIB priority if changed */
 	/* if xconf is uninitialized we get RTP_NONE */
@@ -199,16 +216,7 @@ merge_config(struct bgpd_config *xconf, struct bgpd_config *conf,
 	}
 
 	/* take over the easy config changes */
-	xconf->flags = conf->flags;
-	xconf->log = conf->log;
-	xconf->bgpid = conf->bgpid;
-	xconf->clusterid = conf->clusterid;
-	xconf->as = conf->as;
-	xconf->short_as = conf->short_as;
-	xconf->holdtime = conf->holdtime;
-	xconf->min_holdtime = conf->min_holdtime;
-	xconf->connectretry = conf->connectretry;
-	xconf->fib_priority = conf->fib_priority;
+	copy_config(xconf, conf);
 
 	/* clear old control sockets and use new */
 	free(xconf->csock);
@@ -223,6 +231,9 @@ merge_config(struct bgpd_config *xconf, struct bgpd_config *conf,
 	filterlist_free(xconf->filters);
 	xconf->filters = conf->filters;
 	conf->filters = NULL;
+
+	/* merge mrt config */
+	mrt_mergeconfig(xconf->mrt, conf->mrt);
 
 	/* switch the roa, first remove the old one */
 	free_prefixtree(&xconf->roa);
@@ -250,9 +261,9 @@ merge_config(struct bgpd_config *xconf, struct bgpd_config *conf,
 		TAILQ_INSERT_TAIL(&xconf->networks, n, entry);
 	}
 
-	/* switch the rdomain configs, first remove the old ones */
-	free_rdomains(&xconf->rdomains);
-	SIMPLEQ_CONCAT(&xconf->rdomains, &conf->rdomains);
+	/* switch the l3vpn configs, first remove the old ones */
+	free_l3vpns(&xconf->l3vpns);
+	SIMPLEQ_CONCAT(&xconf->l3vpns, &conf->l3vpns);
 
 	/*
 	 * merge new listeners:
@@ -295,10 +306,28 @@ merge_config(struct bgpd_config *xconf, struct bgpd_config *conf,
 		}
 	}
 
+	/*
+	 * merge peers:
+	 * - need to know which peers are new, replaced and removed
+	 * - first mark all new peers as RECONF_REINIT
+	 * - walk over old peers and check if there is a corresponding new
+	 *   peer if so mark it RECONF_KEEP. Remove all old peers.
+	 * - swap lists (old peer list is actually empty).
+	 */
+	TAILQ_FOREACH(p, &conf->peers, entry)
+		p->reconf_action = RECONF_REINIT;
+	while ((p = TAILQ_FIRST(&xconf->peers)) != NULL) {
+		np = getpeerbyid(conf, p->conf.id);
+		if (np != NULL)
+			np->reconf_action = RECONF_KEEP;
+
+		TAILQ_REMOVE(&xconf->peers, p, entry);
+		free(p);
+	}
+	TAILQ_CONCAT(&xconf->peers, &conf->peers, entry);
+
 	/* conf is merged so free it */
 	free_config(conf);
-
-	return (0);
 }
 
 u_int32_t
@@ -372,7 +401,7 @@ host_ip(const char *s, struct bgpd_addr *h, u_int8_t *len)
 	hints.ai_flags = AI_NUMERICHOST;
 	if (getaddrinfo(s, NULL, &hints, &res) == 0) {
 		*len = res->ai_family == AF_INET6 ? 128 : 32;
-		sa2addr(res->ai_addr, h);
+		sa2addr(res->ai_addr, h, NULL);
 		freeaddrinfo(res);
 	} else {	/* ie. for 10/8 parsing */
 		if ((bits = inet_net_pton(AF_INET, s, &h->v4, sizeof(h->v4))) == -1)
@@ -384,11 +413,12 @@ host_ip(const char *s, struct bgpd_addr *h, u_int8_t *len)
 	return (1);
 }
 
-void
+int
 prepare_listeners(struct bgpd_config *conf)
 {
 	struct listen_addr	*la, *next;
 	int			 opt = 1;
+	int			 r = 0;
 
 	if (TAILQ_EMPTY(conf->listen_addrs)) {
 		if ((la = calloc(1, sizeof(struct listen_addr))) == NULL)
@@ -396,7 +426,7 @@ prepare_listeners(struct bgpd_config *conf)
 		la->fd = -1;
 		la->flags = DEFAULT_LISTENER;
 		la->reconf = RECONF_REINIT;
-		la->sa.ss_len = sizeof(struct sockaddr_in);
+		la->sa_len = sizeof(struct sockaddr_in);
 		((struct sockaddr_in *)&la->sa)->sin_family = AF_INET;
 		((struct sockaddr_in *)&la->sa)->sin_addr.s_addr =
 		    htonl(INADDR_ANY);
@@ -408,7 +438,7 @@ prepare_listeners(struct bgpd_config *conf)
 		la->fd = -1;
 		la->flags = DEFAULT_LISTENER;
 		la->reconf = RECONF_REINIT;
-		la->sa.ss_len = sizeof(struct sockaddr_in6);
+		la->sa_len = sizeof(struct sockaddr_in6);
 		((struct sockaddr_in6 *)&la->sa)->sin6_family = AF_INET6;
 		((struct sockaddr_in6 *)&la->sa)->sin6_port = htons(BGP_PORT);
 		TAILQ_INSERT_TAIL(conf->listen_addrs, la, entry);
@@ -436,57 +466,36 @@ prepare_listeners(struct bgpd_config *conf)
 		    &opt, sizeof(opt)) == -1)
 			fatal("setsockopt SO_REUSEADDR");
 
-		if (bind(la->fd, (struct sockaddr *)&la->sa, la->sa.ss_len) ==
+		if (bind(la->fd, (struct sockaddr *)&la->sa, la->sa_len) ==
 		    -1) {
 			switch (la->sa.ss_family) {
 			case AF_INET:
 				log_warn("cannot bind to %s:%u",
-				    log_sockaddr((struct sockaddr *)&la->sa),
-				    ntohs(((struct sockaddr_in *)
+				    log_sockaddr((struct sockaddr *)&la->sa,
+				    la->sa_len), ntohs(((struct sockaddr_in *)
 				    &la->sa)->sin_port));
 				break;
 			case AF_INET6:
 				log_warn("cannot bind to [%s]:%u",
-				    log_sockaddr((struct sockaddr *)&la->sa),
-				    ntohs(((struct sockaddr_in6 *)
+				    log_sockaddr((struct sockaddr *)&la->sa,
+				    la->sa_len), ntohs(((struct sockaddr_in6 *)
 				    &la->sa)->sin6_port));
 				break;
 			default:
 				log_warn("cannot bind to %s",
-				    log_sockaddr((struct sockaddr *)&la->sa));
+				    log_sockaddr((struct sockaddr *)&la->sa,
+				    la->sa_len));
 				break;
 			}
 			close(la->fd);
 			TAILQ_REMOVE(conf->listen_addrs, la, entry);
 			free(la);
+			r = -1;
 			continue;
 		}
 	}
-}
 
-int
-get_mpe_label(struct rdomain *r)
-{
-	struct  ifreq	ifr;
-	struct shim_hdr	shim;
-	int		s;
-
-	s = socket(AF_INET, SOCK_DGRAM, 0);
-	if (s == -1)
-		return (-1);
-
-	bzero(&shim, sizeof(shim));
-	bzero(&ifr, sizeof(ifr));
-	strlcpy(ifr.ifr_name, r->ifmpe, sizeof(ifr.ifr_name));
-	ifr.ifr_data = (caddr_t)&shim;
-
-	if (ioctl(s, SIOCGETLABEL, (caddr_t)&ifr) == -1) {
-		close(s);
-		return (-1);
-	}
-	close(s);
-	r->label = shim.shim_label;
-	return (0);
+	return (r);
 }
 
 void

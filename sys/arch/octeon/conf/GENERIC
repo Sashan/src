@@ -1,4 +1,4 @@
-#	$OpenBSD: GENERIC,v 1.44 2018/08/22 15:38:46 mpi Exp $
+#	$OpenBSD: GENERIC,v 1.46 2019/03/22 12:07:00 sthen Exp $
 #
 # For further information on compiling OpenBSD kernels, see the config(8)
 # man page.
@@ -53,6 +53,7 @@ com*		at fdt_octeon?
 octcib*		at fdt?		# Interrupt controller
 octcit*		at fdt?		# Interrupt controller v3
 octciu*		at fdt?		# Interrupt controller v1
+octgpio*	at fdt?		# GPIO controller
 octmmc*		at fdt?		# MMC host controller
 sdmmc*		at octmmc?	# SD/MMC bus
 
@@ -174,7 +175,7 @@ urtw*		at uhub?	# Realtek 8187
 rsu*		at uhub?	# Realtek RTL8188SU/RTL8191SU/RTL8192SU
 urtwn*		at uhub?	# Realtek RTL8188CU/RTL8192CU
 udcf*		at uhub?	# Gude Expert mouseCLOCK
-umbg*		at uhub?	# Meinberg Funkuhren USB5131
+umbg*		at uhub?	# Meinberg Funkuhren USB5131/DCF600USB
 uthum*		at uhidev?	# TEMPerHUM sensor
 ugold*		at uhidev?	# gold TEMPer sensor
 utrh*		at uhidev?	# USBRH sensor

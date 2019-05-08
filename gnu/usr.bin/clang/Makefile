@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.8 2018/10/04 11:43:29 patrick Exp $
+# $OpenBSD: Makefile,v 1.11 2019/03/05 09:44:38 jsg Exp $
 
 .include <bsd.own.mk>
 
@@ -10,56 +10,16 @@ SUBDIR+=libLLVMSupport
 SUBDIR+=libLLVMTableGen
 SUBDIR+=llvm-tblgen
 SUBDIR+=include/llvm/IR
-
-# these need Intrinsics.gen
-SUBDIR+=libLLVMCore
-SUBDIR+=libLLVMIRReader
-SUBDIR+=libLLVMCodeGen
-SUBDIR+=libLLVMSelectionDAG
-SUBDIR+=libLLVMAsmPrinter
-# only required by llc
-#SUBDIR+=libLLVMMIRParser
-SUBDIR+=libLLVMBinaryFormat
-SUBDIR+=libLLVMBitReader
-SUBDIR+=libLLVMBitWriter
-SUBDIR+=libLLVMTransformUtils
-SUBDIR+=libLLVMInstrumentation
-SUBDIR+=libLLVMInstCombine
-SUBDIR+=libLLVMScalarOpts
-SUBDIR+=libLLVMipo
-SUBDIR+=libLLVMVectorize
-SUBDIR+=libLLVMObjCARCOpts
-SUBDIR+=libLLVMLinker
-SUBDIR+=libLLVMAnalysis
-SUBDIR+=libLLVMMC
-SUBDIR+=libLLVMMCParser
-SUBDIR+=libLLVMMCDisassembler
-SUBDIR+=libLLVMObject
-SUBDIR+=libLLVMOption
-SUBDIR+=libLLVMTarget
-SUBDIR+=libLLVMAsmParser
-SUBDIR+=libLLVMProfileData
-SUBDIR+=libLLVMCoverage
-SUBDIR+=libLLVMDebugInfoCodeView
-SUBDIR+=libLLVMDebugInfoDWARF
-SUBDIR+=libLLVMDebugInfoMSF
-SUBDIR+=libLLVMDebugInfoPDB
-SUBDIR+=libLLVMExecutionEngine
-SUBDIR+=libLLVMGlobalISel
-SUBDIR+=libLLVMLTO
-SUBDIR+=libLLVMPasses
-SUBDIR+=libLLVMCoroutines
-SUBDIR+=libLLVMDemangle
+SUBDIR+=include/llvm/Transforms/InstCombine
 
 .for arch in ${LLVM_ARCHS}
-.if "${arch}" == ${LLVM_ARCH} || make(obj)
+.if "${arch}" == ${LLVM_ARCH} || "${arch}" == "AMDGPU" || make(obj)
 SUBDIR+=include/llvm/${arch}
 .endif
 .endfor
 
-.for _l in ${BACKEND_LIBS}
-SUBDIR+=lib${_l}
-.endfor
+SUBDIR+=libLLVM
+SUBDIR+=llvm-config
 
 SUBDIR+=clang-tblgen
 SUBDIR+=include/clang
@@ -75,6 +35,7 @@ SUBDIR+=libclangAnalysis
 SUBDIR+=libclangEdit
 SUBDIR+=libclangRewrite
 SUBDIR+=libclangDriver
+SUBDIR+=libclangDriverArch
 SUBDIR+=libclangSerialization
 SUBDIR+=libclangFrontend
 SUBDIR+=libclangRewriteFrontend
