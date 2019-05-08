@@ -251,7 +251,7 @@ _rw_init_flags(struct rwlock *rwl, const char *name, int flags,
 
 #ifdef WITH_TURNSTILES
 int
-_rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
+rw_enter(struct rwlock *rwl, int flags)
 {
 	unsigned long o, new_o, rwl_incr;
 	unsigned int queue, rwl_setwait, rwl_needwait;
@@ -267,8 +267,7 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 	if (flags & RW_DUPOK)
 		lop_flags |= LOP_DUPOK;
 	if ((flags & RW_NOSLEEP) == 0 && (flags & RW_DOWNGRADE) == 0)
-		WITNESS_CHECKORDER(&rwl->rwl_lock_obj, lop_flags, file, line,
-		    NULL);
+		WITNESS_CHECKORDER(&rwl->rwl_lock_obj, lop_flags, NULL);
 #endif
 
 	DPRINT_LOCK(rwl, flags);
@@ -349,16 +348,16 @@ _rw_enter(struct rwlock *rwl, int flags LOCK_FL_VARS)
 	} while (1);
 
 	if (flags & RW_DOWNGRADE)
-		WITNESS_DOWNGRADE(&rwl->rwl_lock_obj, lop_flags, file, line);
+		WITNESS_DOWNGRADE(&rwl->rwl_lock_obj, lop_flags);
 	else
-		WITNESS_LOCK(&rwl->rwl_lock_obj, lop_flags, file, line);
+		WITNESS_LOCK(&rwl->rwl_lock_obj, lop_flags);
 
 	return (0);
 
 }
 
 void
-_rw_exit(struct rwlock *rwl LOCK_FL_VARS)
+rw_exit(struct rwlock *rwl)
 {
 	struct mcs_lock	mcs;
 	unsigned long o, decr, newo;
@@ -382,7 +381,7 @@ _rw_exit(struct rwlock *rwl LOCK_FL_VARS)
 	 * lock.
 	 */
 	WITNESS_UNLOCK(&rwl->rwl_lock_obj,
-	    (o & RWLOCK_WRLOCK) ? LOP_EXCLUSIVE : 0, file, line);
+	    (o & RWLOCK_WRLOCK) ? LOP_EXCLUSIVE : 0);
 
 	membar_exit_before_atomic();
 	for (;;) {
