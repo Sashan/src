@@ -28,6 +28,7 @@
 #ifdef DIAGNOSTIC
 /*
  * should be ~2 secs on Hrvoje's boxes
+ * XXX: I should get the we use in MP_LOCKDEBUG.
  */
 #define MCS_DELAY	1000000000UL
 #endif
