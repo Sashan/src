@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.889 2019/05/07 11:24:03 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.894 2019/05/10 14:12:47 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -727,11 +727,41 @@ struct screen_write_ctx {
 	u_int			 skipped;
 };
 
+/* Screen redraw context. */
+struct screen_redraw_ctx {
+	struct client	*c;
+
+	u_int		 statuslines;
+	int		 statustop;
+
+	int		 pane_status;
+
+	u_int		 sx;
+	u_int		 sy;
+	u_int		 ox;
+	u_int		 oy;
+};
+
 /* Screen size. */
 #define screen_size_x(s) ((s)->grid->sx)
 #define screen_size_y(s) ((s)->grid->sy)
 #define screen_hsize(s) ((s)->grid->hsize)
 #define screen_hlimit(s) ((s)->grid->hlimit)
+
+/* Menu item. */
+struct menu_item {
+	char			*name;
+	char			*command;
+	key_code		 key;
+};
+
+/* Menu. */
+struct menu {
+	char			*title;
+	struct menu_item	*items;
+	u_int			 count;
+	u_int			 width;
+};
 
 /*
  * Window mode. Windows can be in several modes and this is used to call the
@@ -1153,6 +1183,7 @@ struct tty {
 
 	u_int		 mouse_last_x;
 	u_int		 mouse_last_y;
+	u_int		 mouse_last_b;
 	int		 mouse_drag_flag;
 	void		(*mouse_drag_update)(struct client *,
 			    struct mouse_event *);
@@ -1374,6 +1405,9 @@ struct status_line {
 /* Client connection. */
 typedef int (*prompt_input_cb)(struct client *, void *, const char *, int);
 typedef void (*prompt_free_cb)(void *);
+typedef void (*overlay_draw_cb)(struct client *, struct screen_redraw_ctx *);
+typedef int (*overlay_key_cb)(struct client *, struct key_event *);
+typedef void (*overlay_free_cb)(struct client *);
 struct client {
 	const char	*name;
 	struct tmuxpeer	*peer;
@@ -1423,7 +1457,7 @@ struct client {
 #define CLIENT_REPEAT 0x20
 #define CLIENT_SUSPENDED 0x40
 #define CLIENT_ATTACHED 0x80
-#define CLIENT_IDENTIFY 0x100
+/* 0x100 unused */
 #define CLIENT_DEAD 0x200
 #define CLIENT_REDRAWBORDERS 0x400
 #define CLIENT_READONLY 0x800
@@ -1440,23 +1474,19 @@ struct client {
 #define CLIENT_SIZECHANGED 0x400000
 #define CLIENT_STATUSOFF 0x800000
 #define CLIENT_REDRAWSTATUSALWAYS 0x1000000
+#define CLIENT_REDRAWOVERLAY 0x2000000
 #define CLIENT_ALLREDRAWFLAGS		\
 	(CLIENT_REDRAWWINDOW|		\
 	 CLIENT_REDRAWSTATUS|		\
 	 CLIENT_REDRAWSTATUSALWAYS|	\
-	 CLIENT_REDRAWBORDERS)
+	 CLIENT_REDRAWBORDERS|		\
+	 CLIENT_REDRAWOVERLAY)
 #define CLIENT_NOSIZEFLAGS	\
 	(CLIENT_DEAD|		\
 	 CLIENT_SUSPENDED|	\
 	 CLIENT_DETACHING)
 	int		 flags;
 	struct key_table *keytable;
-
-	struct event	 identify_timer;
-	void		(*identify_callback)(struct client *,
-			     struct window_pane *);
-	void		*identify_callback_data;
-	struct cmdq_item *identify_callback_item;
 
 	char		*message_string;
 	struct event	 message_timer;
@@ -1487,6 +1517,12 @@ struct client {
 	void		*pan_window;
 	u_int		 pan_ox;
 	u_int		 pan_oy;
+
+	overlay_draw_cb	 overlay_draw;
+	overlay_key_cb	 overlay_key;
+	overlay_free_cb	 overlay_free;
+	void		*overlay_data;
+	struct event	 overlay_timer;
 
 	TAILQ_ENTRY(client) entry;
 };
@@ -1666,7 +1702,7 @@ char		*paste_make_sample(struct paste_buffer *);
 #define FORMAT_PANE 0x80000000U
 #define FORMAT_WINDOW 0x40000000U
 struct format_tree;
-const char	*format_skip(const char *s, const char *end);
+const char	*format_skip(const char *, const char *);
 int		 format_true(const char *);
 struct format_tree *format_create(struct client *, struct cmdq_item *, int,
 		     int);
@@ -1980,8 +2016,9 @@ void	 key_bindings_add(const char *, key_code, int, struct cmd_list *);
 void	 key_bindings_remove(const char *, key_code);
 void	 key_bindings_remove_table(const char *);
 void	 key_bindings_init(void);
-void	 key_bindings_dispatch(struct key_binding *, struct cmdq_item *,
-	     struct client *, struct mouse_event *, struct cmd_find_state *);
+struct cmdq_item *key_bindings_dispatch(struct key_binding *,
+	     struct cmdq_item *, struct client *, struct mouse_event *,
+	     struct cmd_find_state *);
 
 /* key-string.c */
 key_code	 key_string_lookup_string(const char *);
@@ -2008,7 +2045,8 @@ void	 server_add_accept(int);
 
 /* server-client.c */
 u_int	 server_client_how_many(void);
-void	 server_client_set_identify(struct client *, u_int);
+void	 server_client_set_overlay(struct client *, u_int, overlay_draw_cb,
+    overlay_key_cb, overlay_free_cb, void *);
 void	 server_client_set_key_table(struct client *, const char *);
 const char *server_client_get_key_table(struct client *);
 int	 server_client_check_nested(struct client *);
@@ -2177,6 +2215,7 @@ void	 screen_write_fast_copy(struct screen_write_ctx *, struct screen *,
 	     u_int, u_int, u_int, u_int);
 void	 screen_write_hline(struct screen_write_ctx *, u_int, int, int);
 void	 screen_write_vline(struct screen_write_ctx *, u_int, int, int);
+void	 screen_write_menu(struct screen_write_ctx *, struct menu *, int);
 void	 screen_write_box(struct screen_write_ctx *, u_int, u_int);
 void	 screen_write_preview(struct screen_write_ctx *, struct screen *, u_int,
 	     u_int);
