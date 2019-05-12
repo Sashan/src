@@ -23,13 +23,182 @@
 #include <sys/systm.h>
 #include <sys/param.h>
 #include <sys/proc.h>
+#include <sys/malloc.h>
+#include <machine/cpu.h>
+#include <sys/time.h>
 
-struct proc *lockstat_p = NULL;
+#if LONG_BIT == 64
+#define	LOCKSTAT_HASH_SHIFT	3
+#elif LONG_BIT == 32
+#define	LOCKSTAT_HASH_SHIFT	2
+#endif
+
+#define	LOCKSTAT_MINBUFS	1000
+#define	LOCKSTAT_DEFBUFS	10000
+#define	LOCKSTAT_MAXBUFS	1000000
+
+#define	LOCKSTAT_HASH_SIZE	128
+#define	LOCKSTAT_HASH_MASK	(LOCKSTAT_HASH_SIZE - 1)
+#define	LOCKSTAT_HASH(key)	\
+	((key >> LOCKSTAT_HASH_SHIFT) & LOCKSTAT_HASH_MASK)
+
+#define LOCKSTAT_ENABLED_UPDATE() do { \
+	lockstat_enabled = lockstat_dev_enabled; \
+	membar_producer(); \
+    } while (0)
+
+struct proc *lockstat_p;
+int lockstat_dev_enabled;
+int lockstat_enabled;
+
+struct lscpu {
+	SLIST_HEAD(, lsbuf)	lc_free;
+	u_int			lc_overflow;
+	LIST_HEAD(, lsbuf) lc_hash[LOCKSTAT_HASH_SIZE];
+};
+
+struct lsbuf	*lockstat_baseb;
+size_t		lockstat_sizeb;
+uintptr_t	lockstat_csstart;
+uintptr_t	lockstat_csend;
+uintptr_t	lockstat_csmask;
+uintptr_t	lockstat_lamask;
+uintptr_t	lockstat_lockstart;
+uintptr_t	lockstat_lockend;
+
+struct timespec	lockstat_stime;
+
+int lockstat_alloc(struct lsenable *le);
+void lockstat_free(void);
+
+/*
+ * Allocate buffers for lockstat_start().
+ */
+int
+lockstat_alloc(struct lsenable *le)
+{
+	struct lsbuf *lb;
+	size_t sz;
+
+	KASSERT(!lockstat_dev_enabled);
+	lockstat_free();
+
+	sz = sizeof(*lb) * le->le_nbufs;
+
+	lb = malloc(sz, M_TEMP, M_WAITOK);
+
+	/* coverity[assert_side_effect] */
+	KASSERT(!lockstat_dev_enabled);
+	KASSERT(lockstat_baseb == NULL);
+	lockstat_sizeb = sz;
+	lockstat_baseb = lb;
+		
+	return (0);
+}
+
+/*
+ * Free allocated buffers after tracing has stopped.
+ */
+void
+lockstat_free(void)
+{
+
+	KASSERT(!lockstat_dev_enabled);
+
+	if (lockstat_baseb != NULL) {
+		free(lockstat_baseb, M_TEMP, lockstat_sizeb);
+		lockstat_baseb = NULL;
+	}
+}
+
+/*
+ * Prepare the per-CPU tables for use, or clear down tables when tracing is
+ * stopped.
+ */
+void
+lockstat_init_tables(struct lsenable *le)
+{
+	int i, per, slop, cpuno;
+	CPU_INFO_ITERATOR cii;
+	struct cpu_info *ci;
+	struct lscpu *lc;
+	struct lsbuf *lb;
+
+	/* coverity[assert_side_effect] */
+	KASSERT(!lockstat_dev_enabled);
+
+	CPU_INFO_FOREACH(cii, ci) {
+		if (ci->ci_lockstat != NULL) {
+			free(ci->ci_lockstat, M_TEMP, sizeof(struct lscpu));
+			ci->ci_lockstat = NULL;
+		}
+	}
+
+	if (le == NULL)
+		return;
+
+	lb = lockstat_baseb;
+	per = le->le_nbufs / ncpus;
+	slop = le->le_nbufs - (per * ncpus);
+	cpuno = 0;
+	CPU_INFO_FOREACH(cii, ci) {
+		lc = malloc(sizeof(*lc), M_TEMP, M_WAITOK);
+		lc->lc_overflow = 0;
+		ci->ci_lockstat = lc;
+
+		SLIST_INIT(&lc->lc_free);
+		for (i = 0; i < LOCKSTAT_HASH_SIZE; i++)
+			LIST_INIT(&lc->lc_hash[i]);
+
+		for (i = per; i != 0; i--, lb++) {
+			lb->lb_cpu = (uint16_t)cpuno;
+			SLIST_INSERT_HEAD(&lc->lc_free, lb, lb_chain.slist);
+		}
+		if (--slop > 0) {
+			lb->lb_cpu = (uint16_t)cpuno;
+			SLIST_INSERT_HEAD(&lc->lc_free, lb, lb_chain.slist);
+			lb++;
+		}
+		cpuno++;
+	}
+}
+
+/*
+ * Start collecting lock statistics.
+ */
+void
+lockstat_start(struct lsenable *le)
+{
+
+	/* coverity[assert_side_effect] */
+	KASSERT(!lockstat_dev_enabled);
+
+	lockstat_init_tables(le);
+
+	if ((le->le_flags & LE_CALLSITE) != 0)
+		lockstat_csmask = (uintptr_t)-1LL;
+	else
+		lockstat_csmask = 0;
+
+	if ((le->le_flags & LE_LOCK) != 0)
+		lockstat_lamask = (uintptr_t)-1LL;
+	else
+		lockstat_lamask = 0;
+
+	lockstat_csstart = le->le_csstart;
+	lockstat_csend = le->le_csend;
+	lockstat_lockstart = le->le_lockstart;
+	lockstat_lockstart = le->le_lockstart;
+	lockstat_lockend = le->le_lockend;
+	membar_sync();
+	getnanotime(&lockstat_stime);
+	lockstat_dev_enabled = le->le_mask;
+	LOCKSTAT_ENABLED_UPDATE();
+}
 
 void
 lockstatattach(int num)
 {
-	log(LOG_ERR, "%s: Hello\n", __func__);
 }
 
 int
@@ -64,11 +233,87 @@ lockstatclose(dev_t dev, int flags, int fmt, struct proc *p)
 	return (0);
 }
 
+/*
+ * Stop collecting lock statistics.
+ */
+int
+lockstat_stop(struct lsdisable *ld)
+{
+	CPU_INFO_ITERATOR cii;
+	struct cpu_info *ci;
+	u_int cpuno, overflow;
+	struct timespec ts;
+	int error;
+
+	/* coverity[assert_side_effect] */
+	KASSERT(lockstat_dev_enabled);
+
+	/*
+	 * Set enabled false, force a write barrier, and wait for other CPUs
+	 * to exit lockstat_event().
+	 */
+	lockstat_dev_enabled = 0;
+	LOCKSTAT_ENABLED_UPDATE();
+	getnanotime(&ts);
+	tsleep(&lockstat_stop, PPAUSE, "lockstat", 10);
+
+	/*
+	 * Did we run out of buffers while tracing?
+	 */
+	overflow = 0;
+	CPU_INFO_FOREACH(cii, ci)
+		overflow += ((struct lscpu *)ci->ci_lockstat)->lc_overflow;
+
+	if (overflow != 0) {
+		error = EOVERFLOW;
+		log(LOG_NOTICE, "lockstat: %d buffer allocations failed\n",
+		    overflow);
+	} else
+		error = 0;
+
+	lockstat_init_tables(NULL);
+
+	/* Run through all LWPs and clear the slate for the next run. */
+	KERNEL_ASSERT_LOCKED();
+#if 0
+	/*
+	 * clean per-process counters here.
+	 */
+	LIST_FOREACH(p, &alllwp, l_list) {
+		p->p_pfailaddr = 0;
+		p->p_pfailtime = 0;
+		p->p_pfaillock = 0;
+	}
+#endif
+
+	/*
+	 * Fill out the disable struct for the caller.
+	 */
+	timespecsub(&ts, &lockstat_stime, &ld->ld_time);
+	ld->ld_size = lockstat_sizeb;
+
+	cpuno = 0;
+	CPU_INFO_FOREACH(cii, ci) {
+		if (cpuno >= sizeof(ld->ld_freq) / sizeof(ld->ld_freq[0])) {
+			log(LOG_WARNING, "lockstat: too many CPUs\n");
+			break;
+		}
+		ld->ld_freq[cpuno++] = 1000;
+#if 0
+		ld->ld_freq[cpuno++] = cpu_frequency(ci);
+#endif
+	}
+
+	return (error);
+}
+
 int
 lockstatioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 {
-#ifndef	NETBSD
 	int	error;
+	struct lsenable le_buf;
+	struct lsenable *le = &le_buf;
+	struct lsdisable ld_buf;
 
 	KERNEL_ASSERT_LOCKED();
 
@@ -80,31 +325,15 @@ lockstatioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		*(int *)addr = LS_VERSION;
 		error = 0;
 		break;
-	default:
-		error = ENOTSUP;
-	}
-
-	return (error);
-#else
-	lsenable_t *le;
-	int error;
-
-	if (lockstat_lwp != curlwp)
-		return EBUSY;
-
-	switch (cmd) {
-	case IOC_LOCKSTAT_GVERSION:
-		*(int *)data = LS_VERSION;
-		error = 0;
-		break;
 
 	case IOC_LOCKSTAT_ENABLE:
-		le = (lsenable_t *)data;
+		le = (struct lsenable *)addr;
 
-		if (!cpu_hascounter()) {
-			error = ENODEV;
+		if (copyin(addr, &le, sizeof (struct lsenable))) {
+			error = EBUSY;
 			break;
 		}
+
 		if (lockstat_dev_enabled) {
 			error = EBUSY;
 			break;
@@ -129,9 +358,9 @@ lockstatioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			le->le_lockend = le->le_lockstart - 1;
 		}
 		if ((le->le_mask & LB_EVENT_MASK) == 0)
-			return EINVAL;
+			return (EINVAL);
 		if ((le->le_mask & LB_LOCK_MASK) == 0)
-			return EINVAL;
+			return (EINVAL);
 
 		/*
 		 * Start tracing.
@@ -143,19 +372,36 @@ lockstatioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case IOC_LOCKSTAT_DISABLE:
 		if (!lockstat_dev_enabled)
 			error = EINVAL;
-		else
-			error = lockstat_stop((lsdisable_t *)data);
+		else {
+			memset(&ld_buf, 0, sizeof(struct lsdisable));
+			error = lockstat_stop(&ld_buf);
+			if (error)
+				break;
+
+			error = copyout(&ld_buf, addr, sizeof(struct lsdisable));
+		}
 		break;
+
 
 	default:
-		error = ENOTTY;
-		break;
+		error = ENOTSUP;
 	}
 
-	return error;
-#endif
+	return (error);
 }
 
+int
+lockstatread(dev_t dev, struct uio *uio, int flag)
+{
+
+	if (curproc != lockstat_p || lockstat_dev_enabled)
+		return (EBUSY);
+	return (uiomove(lockstat_baseb, lockstat_sizeb, uio));
+}
+
+/*
+ * OpenBSD specific part.
+ */
 void
 lockstat_reset_swatch(struct lockstat_swatch *sw)
 {

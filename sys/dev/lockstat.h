@@ -58,7 +58,7 @@ struct lsenable {
 	uintptr_t	le_nbufs;	/* buffers to allocate, 0 = default */
 	u_int		le_flags;	/* request flags */
 	u_int		le_mask;	/* event mask (LB_*) */
-} ;
+};
 
 /*
  * Disable request.
@@ -66,11 +66,11 @@ struct lsenable {
 
 #define	IOC_LOCKSTAT_DISABLE	_IOR('L', 2, struct lsdisable)
 
-typedef struct lsdisable {
+struct lsdisable {
 	size_t		ld_size;	/* buffer space allocated */
 	struct timespec	ld_time;	/* time spent enabled */
 	uint64_t	ld_freq[64];	/* counter HZ by CPU number */
-} lsdisable_t;
+};
 
 /*
  * Event buffers returned from reading from the devices.
@@ -103,7 +103,7 @@ typedef struct lsdisable {
 
 #define	LB_DTRACE		0x00010000
 
-typedef struct lsbuf {
+struct lsbuf {
 	union {
 		LIST_ENTRY(lsbuf) list;
 		SLIST_ENTRY(lsbuf) slist;
@@ -115,8 +115,9 @@ typedef struct lsbuf {
 	uint32_t	lb_counts[LB_NEVENT];	/* count of events */
 	uint16_t	lb_flags;		/* lock type */
 	uint16_t	lb_cpu;			/* CPU number */
-} lsbuf_t;
+};
 
+#ifdef _KERNEL
 /*
  * stuff below is OpenBSD specific.
  */
@@ -146,5 +147,6 @@ void lockstat_start_swatch(struct lockstat_swatch *);
 void lockstat_stop_swatch(struct lockstat_swatch *);
 void lockstat_stopstart_swatch(struct lockstat_swatch *);
 void lockstat_event(uintptr_t, uintptr_t, int, struct lockstat_swatch *);
+#endif
 
 #endif

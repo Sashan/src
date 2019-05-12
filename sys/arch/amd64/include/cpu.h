@@ -202,6 +202,7 @@ struct cpu_info {
 	union		vmm_cpu_cap ci_vmm_cap;
 	paddr_t		ci_vmxon_region_pa;
 	struct vmxon_region *ci_vmxon_region;
+	struct lscpu	*ci_lockstat;
 };
 
 #define CPUF_BSP	0x0001		/* CPU is the original BSP */
