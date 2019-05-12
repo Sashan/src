@@ -16,8 +16,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#ifdef WITH_LOCKSTAT
-
 #include <dev/lockstat.h>
 #include <sys/syslog.h>
 #include <sys/errno.h>
@@ -118,5 +116,3 @@ lockstat_event(uintptr_t rwl, uintptr_t caller, int lf,
 	if (sw->sw_lockstat_runs == 0)
 		return;
 }
-
-#endif

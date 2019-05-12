@@ -110,7 +110,7 @@ rw_enter_read(struct rwlock *rwl)
 	    rw_cas(&rwl->rwl_owner, owner, owner + RWLOCK_READ_INCR)))
 		rw_enter(rwl, RW_READ);
 	else {
-#if NLCOKSTAT > 0
+#if NLOCKSTAT > 0
 	    	struct lockstat_swatch sw;
 #endif
 		membar_enter_after_atomic();
