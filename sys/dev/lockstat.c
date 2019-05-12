@@ -20,6 +20,11 @@
 #include <sys/syslog.h>
 #include <sys/errno.h>
 #include <sys/types.h>
+#include <sys/systm.h>
+#include <sys/param.h>
+#include <sys/proc.h>
+
+struct proc *lockstat_p = NULL;
 
 void
 lockstatattach(int num)
@@ -33,6 +38,13 @@ lockstatopen(dev_t dev, int flags, int fmt, struct proc *p)
 	if (minor(dev) >= 1)
 		return (ENXIO);
 
+	KERNEL_ASSERT_LOCKED();
+
+	if (lockstat_p != NULL)
+		return (EBUSY);
+
+	lockstat_p = p;
+
 	return (0);
 }
 
@@ -42,13 +54,106 @@ lockstatclose(dev_t dev, int flags, int fmt, struct proc *p)
 	if (minor(dev) >= 1)
 		return (ENXIO);
 
+	KERNEL_ASSERT_LOCKED();
+
+	if (lockstat_p != p)
+		return (ENXIO);
+
+	lockstat_p = NULL;
+
 	return (0);
 }
 
 int
 lockstatioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 {
-	return (ENODEV);
+#ifndef	NETBSD
+	int	error;
+
+	KERNEL_ASSERT_LOCKED();
+
+	if (lockstat_p != p)
+		return (EBUSY);
+
+	switch (cmd) {
+	case IOC_LOCKSTAT_GVERSION:
+		*(int *)addr = LS_VERSION;
+		error = 0;
+		break;
+	default:
+		error = ENOTSUP;
+	}
+
+	return (error);
+#else
+	lsenable_t *le;
+	int error;
+
+	if (lockstat_lwp != curlwp)
+		return EBUSY;
+
+	switch (cmd) {
+	case IOC_LOCKSTAT_GVERSION:
+		*(int *)data = LS_VERSION;
+		error = 0;
+		break;
+
+	case IOC_LOCKSTAT_ENABLE:
+		le = (lsenable_t *)data;
+
+		if (!cpu_hascounter()) {
+			error = ENODEV;
+			break;
+		}
+		if (lockstat_dev_enabled) {
+			error = EBUSY;
+			break;
+		}
+
+		/*
+		 * Sanitize the arguments passed in and set up filtering.
+		 */
+		if (le->le_nbufs == 0)
+			le->le_nbufs = LOCKSTAT_DEFBUFS;
+		else if (le->le_nbufs > LOCKSTAT_MAXBUFS ||
+		    le->le_nbufs < LOCKSTAT_MINBUFS) {
+			error = EINVAL;
+			break;
+		}
+		if ((le->le_flags & LE_ONE_CALLSITE) == 0) {
+			le->le_csstart = 0;
+			le->le_csend = le->le_csstart - 1;
+		}
+		if ((le->le_flags & LE_ONE_LOCK) == 0) {
+			le->le_lockstart = 0;
+			le->le_lockend = le->le_lockstart - 1;
+		}
+		if ((le->le_mask & LB_EVENT_MASK) == 0)
+			return EINVAL;
+		if ((le->le_mask & LB_LOCK_MASK) == 0)
+			return EINVAL;
+
+		/*
+		 * Start tracing.
+		 */
+		if ((error = lockstat_alloc(le)) == 0)
+			lockstat_start(le);
+		break;
+
+	case IOC_LOCKSTAT_DISABLE:
+		if (!lockstat_dev_enabled)
+			error = EINVAL;
+		else
+			error = lockstat_stop((lsdisable_t *)data);
+		break;
+
+	default:
+		error = ENOTTY;
+		break;
+	}
+
+	return error;
+#endif
 }
 
 void
