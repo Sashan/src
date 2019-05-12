@@ -20,6 +20,7 @@ define	i2cbus {}
 define	gpiobus {}
 define	onewirebus {}
 define	video {}
+define	ddb
 
 # filesystem firmware loading attribute
 define firmload
