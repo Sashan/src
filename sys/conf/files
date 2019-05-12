@@ -615,6 +615,9 @@ file 	net/if_pppoe.c			pppoe	needs-flag
 pseudo-device kcov
 file	dev/kcov.c			kcov	needs-flag
 
+pseudo-device lockstat
+file	dev/lockstat.c			lockstat needs-flag
+
 # XXX machine-independent SCSI files should live somewhere here, maybe
 
 # kernel sources

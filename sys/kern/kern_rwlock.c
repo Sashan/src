@@ -17,6 +17,8 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include "lockstat.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
@@ -24,6 +26,10 @@
 #include <sys/limits.h>
 #include <sys/atomic.h>
 #include <sys/witness.h>
+
+#if NLOCKSTAT > 0
+#include <dev/lockstat.h>
+#endif
 
 /* XXX - temporary measure until proc0 is properly aligned */
 #define RW_PROC(p) (((long)p) & ~RWLOCK_MASK)
@@ -104,9 +110,21 @@ rw_enter_read(struct rwlock *rwl)
 	    rw_cas(&rwl->rwl_owner, owner, owner + RWLOCK_READ_INCR)))
 		rw_enter(rwl, RW_READ);
 	else {
+#if NLCOKSTAT > 0
+	    	struct lockstat_swatch sw;
+#endif
 		membar_enter_after_atomic();
 		WITNESS_CHECKORDER(&rwl->rwl_lock_obj, LOP_NEWORDER, NULL);
 		WITNESS_LOCK(&rwl->rwl_lock_obj, 0);
+#if NLOCKSTAT > 0
+		lockstat_reset_swatch(&sw);
+		lockstat_event((uintptr_t)rwl,
+		    (uintptr_t)__builtin_return_address(0),
+		    LOCKSTAT_RW | LOCKSTAT_RW_READ, &sw);
+		lockstat_event((uintptr_t)rwl,
+		    (uintptr_t)__builtin_return_address(0),
+		    LOCKSTAT_RW | LOCKSTAT_SPIN, &sw);
+#endif
 	}
 }
 
@@ -119,10 +137,22 @@ rw_enter_write(struct rwlock *rwl)
 	    RW_PROC(p) | RWLOCK_WRLOCK)))
 		rw_enter(rwl, RW_WRITE);
 	else {
+#if NLOCKSTAT > 0
+		struct lockstat_swatch sw;
+#endif
 		membar_enter_after_atomic();
 		WITNESS_CHECKORDER(&rwl->rwl_lock_obj,
 		    LOP_EXCLUSIVE | LOP_NEWORDER, NULL);
 		WITNESS_LOCK(&rwl->rwl_lock_obj, LOP_EXCLUSIVE);
+#if NLOCKSTAT > 0
+		lockstat_reset_swatch(&sw);
+		lockstat_event((uintptr_t)rwl,
+		    (uintptr_t)__builtin_return_address(0),
+		    LOCKSTAT_RW | LOCKSTAT_RW_WRITE, &sw);
+		lockstat_event((uintptr_t)rwl,
+		    (uintptr_t)__builtin_return_address(0),
+		    LOCKSTAT_RW | LOCKSTAT_SPIN, &sw);
+#endif
 	}
 }
 
@@ -223,6 +253,8 @@ rw_enter(struct rwlock *rwl, int flags)
 	const struct rwlock_op *op;
 	struct sleep_state sls;
 	unsigned long inc, o;
+	int error;
+	int do_sleep = 0;
 #ifdef MULTIPROCESSOR
 	/*
 	 * If process holds the kernel lock, then we want to give up on CPU
@@ -230,8 +262,14 @@ rw_enter(struct rwlock *rwl, int flags)
 	 * can progress. Hence no spinning if we hold the kernel lock.
 	 */
 	unsigned int spin = (_kernel_lock_held()) ? 0 : RW_SPINS;
-#endif
-	int error;
+#endif	/* MULTIPROCESSOR */
+#if NLOCKSTAT > 0
+	struct lockstat_swatch spin_sw;
+	struct lockstat_swatch sleep_sw;
+#ifdef MULTIPROCESSOR
+	int	spin_done;
+#endif	/* MULTIPROCESSOR && NLOCKSTAT */
+#endif	/* NLOCKSTAT */
 #ifdef WITNESS
 	int lop_flags;
 
@@ -247,10 +285,17 @@ rw_enter(struct rwlock *rwl, int flags)
 	op = &rw_ops[(flags & RW_OPMASK) - 1];
 
 	inc = op->inc + RW_PROC(curproc) * op->proc_mult;
+#if NLOCKSTAT > 0
+	lockstat_reset_swatch(&sleep_sw);
+	lockstat_reset_swatch(&spin_sw);
+	spin_done = 0;
+#ifdef MULTIPROCESSOR
+	lockstat_start_swatch(&spin_sw);
+#endif
+#endif
 retry:
 	while (__predict_false(((o = rwl->rwl_owner) & op->check) != 0)) {
 		unsigned long set = o | op->wait_set;
-		int do_sleep;
 
 		/* Avoid deadlocks after panic or in DDB */
 		if (panicstr || db_active)
@@ -268,6 +313,34 @@ retry:
 		}
 #endif
 
+#if NLOCKSTAT > 0
+#ifdef MULTIPROCESSOR
+	/*
+	 * If we took a sleep when arriving here (do_sleep == 1), then we stop
+	 * start our sleep time stop watch to add a new time sample to whole
+	 * stats. On the other hand if we were lucky to skip the sleep, we just
+	 * start our stop watch, without collecting a sample.
+	 */
+		if (spin_done == 0) {
+			spin_done = 1;
+			lockstat_stop_swatch(&spin_sw);
+			/*
+			 * set sleep swatch to stop time for spin lock,
+			 * this saves us one microuptime() call, which
+			 * is expensive. 
+			 */
+			lockstat_set_swatch(&sleep_sw, &spin_sw.sw_stop_tv);
+		} else if (do_sleep)
+			lockstat_stopstart_swatch(&sleep_sw);
+		else
+			lockstat_start_swatch(&sleep_sw);
+#else
+		if (do_sleep)
+			lockstat_stopstart_swatch(&sleep_sw);
+		else
+			lockstat_start_swatch(&sleep_sw);
+#endif
+#endif /* NLOCKSTAT */
 		rw_enter_diag(rwl, flags);
 
 		if (flags & RW_NOSLEEP)
@@ -290,6 +363,15 @@ retry:
 	if (__predict_false(rw_cas(&rwl->rwl_owner, o, o + inc)))
 		goto retry;
 	membar_enter_after_atomic();
+
+#if NLOCKSTAT > 0
+	lockstat_stop_swatch(&sleep_sw);
+	lockstat_event((uintptr_t)rwl, (uintptr_t)__builtin_return_address(0),
+	    LOCKSTAT_RW | (flags & RW_WRITE) ?
+		LOCKSTAT_RW_WRITE : LOCKSTAT_RW_READ, &sleep_sw);
+	lockstat_event((uintptr_t)rwl, (uintptr_t)__builtin_return_address(0),
+	    LOCKSTAT_RW | LOCKSTAT_SPIN, &spin_sw);
+#endif
 
 	/*
 	 * If old lock had RWLOCK_WAIT and RWLOCK_WRLOCK set, it means we
