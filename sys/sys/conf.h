@@ -482,8 +482,6 @@ extern struct cdevsw cdevsw[];
 	(dev_type_stop((*))) enodev, 0, selfalse, \
 	(dev_init(c,n,mmap)), 0, D_CLONE }
 
-#endif
-
 /* open, close, ioctl */
 #define cdev_lockstat_init(c,n) { \
 	dev_init(c,n,open), dev_init(c,n,close), (dev_type_read((*))) enodev, \
@@ -491,6 +489,7 @@ extern struct cdevsw cdevsw[];
 	(dev_type_stop((*))) enodev, 0, selfalse, \
 	(dev_type_mmap((*))) enodev }
 
+#endif
 /*
  * Line discipline switch table
  */
