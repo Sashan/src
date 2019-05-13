@@ -480,7 +480,7 @@ lockstat_event(uintptr_t rwl, uintptr_t caller, int lf,
 	int s, flags;
 
 	flags = sw->sw_lockstat_flags;
-	if (((flags & lockstat_dev_enabled) != flags) || (sw->sw_count == 0))
+	if ((sw->sw_lockstat_flags == 0) || (sw->sw_count == 0))
 		return;
 
 	if ((rwl < lockstat_lockstart) || (rwl > lockstat_lockend))
@@ -497,6 +497,11 @@ lockstat_event(uintptr_t rwl, uintptr_t caller, int lf,
 	 * buffer with the same key.
 	 */
 	smr_read_enter();
+	if (lockstat_dev_enabled == 0) {
+		smr_read_leave();
+		return;
+	}
+
 	s = splhigh();
 	lc = curcpu()->ci_lockstat;
 	KASSERT(lc != NULL);
