@@ -200,7 +200,7 @@ lockstat_start(struct lsenable *le)
 	lockstat_lockend = le->le_lockend;
 
 	log(LOG_NOTICE,
-	    "%s: caller range [%lx:%lx], lock range [%lx:%lx] (%lx)\n",
+	    "%s: caller range [%lx:%lx], lock range [%lx:%lx] (%p)\n",
 	    __func__,
 	    le->le_csstart, le->le_csend,
 	    le->le_lockstart, le->le_lockend,

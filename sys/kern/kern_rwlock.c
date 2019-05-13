@@ -118,12 +118,13 @@ rw_enter_read(struct rwlock *rwl)
 		WITNESS_LOCK(&rwl->rwl_lock_obj, 0);
 #if NLOCKSTAT > 0
 		lockstat_reset_swatch(&sw);
+		sw.sw_count = 1;
 		lockstat_event((uintptr_t)rwl,
 		    (uintptr_t)__builtin_return_address(0),
-		    LOCKSTAT_RW | LOCKSTAT_RW_READ, &sw);
+		    LB_RWLOCK | LB_SLEEP1, &sw);
 		lockstat_event((uintptr_t)rwl,
 		    (uintptr_t)__builtin_return_address(0),
-		    LOCKSTAT_RW | LOCKSTAT_SPIN, &sw);
+		    LB_RWLOCK | LB_SPIN, &sw);
 #endif
 	}
 }
@@ -146,12 +147,13 @@ rw_enter_write(struct rwlock *rwl)
 		WITNESS_LOCK(&rwl->rwl_lock_obj, LOP_EXCLUSIVE);
 #if NLOCKSTAT > 0
 		lockstat_reset_swatch(&sw);
+		sw.sw_count = 1;
 		lockstat_event((uintptr_t)rwl,
 		    (uintptr_t)__builtin_return_address(0),
-		    LOCKSTAT_RW | LOCKSTAT_RW_WRITE, &sw);
+		    LB_RWLOCK | LB_SLEEP2, &sw);
 		lockstat_event((uintptr_t)rwl,
 		    (uintptr_t)__builtin_return_address(0),
-		    LOCKSTAT_RW | LOCKSTAT_SPIN, &sw);
+		    LB_RWLOCK | LB_SPIN, &sw);
 #endif
 	}
 }
@@ -367,10 +369,10 @@ retry:
 #if NLOCKSTAT > 0
 	lockstat_stop_swatch(&sleep_sw);
 	lockstat_event((uintptr_t)rwl, (uintptr_t)__builtin_return_address(0),
-	    LOCKSTAT_RW | (flags & RW_WRITE) ?
-		LOCKSTAT_RW_WRITE : LOCKSTAT_RW_READ, &sleep_sw);
+	    LB_RWLOCK | (flags & RW_WRITE) ?
+		LB_SLEEP2 : LB_SLEEP1, &sleep_sw);
 	lockstat_event((uintptr_t)rwl, (uintptr_t)__builtin_return_address(0),
-	    LOCKSTAT_RW | LOCKSTAT_SPIN, &spin_sw);
+	    LB_RWLOCK | LB_SPIN, &spin_sw);
 #endif
 
 	/*
