@@ -48,22 +48,16 @@
     } while (0)
 
 struct proc *lockstat_p;
-int lockstat_dev_enabled;
-int lockstat_enabled;
+volatile int lockstat_dev_enabled;
+volatile int lockstat_enabled;
 
 SLIST_HEAD(slsbuf, lsbuf);
 LIST_HEAD(llsbuf, lsbuf);
 
 struct lscpu {
 	struct slsbuf		lc_free;
-/*
-	SLIST_HEAD(, lsbuf)	lc_free;
-*/
 	u_int			lc_overflow;
 	struct llsbuf		lc_hash[LOCKSTAT_HASH_SIZE];
-/*
-	LIST_HEAD(, lsbuf) lc_hash[LOCKSTAT_HASH_SIZE];
-*/
 };
 
 struct lsbuf	*lockstat_baseb;
@@ -419,7 +413,7 @@ lockstatread(dev_t dev, struct uio *uio, int flag)
 void
 lockstat_reset_swatch(struct lockstat_swatch *sw)
 {
-	sw->sw_lockstat_flags = lockstat_dev_enabled;
+	sw->sw_lockstat_flags = lockstat_enabled;
 	sw->sw_count = 0;
 	sw->sw_start_tv.tv_sec = 0;
 	sw->sw_start_tv.tv_usec = 0;
@@ -500,6 +494,7 @@ lockstat_event(uintptr_t rwl, uintptr_t caller, int lf,
 	 */
 	s = splhigh();
 	lc = curcpu()->ci_lockstat;
+	KASSERT(lc != NULL);
 	ll = &lc->lc_hash[LOCKSTAT_HASH(rwl ^ caller)];
 	event = (lf & LB_EVENT_MASK) - 1;
 
