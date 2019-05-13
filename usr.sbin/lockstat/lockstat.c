@@ -165,7 +165,14 @@ static void	makelists(int, int);
 static void	nullsig(int);
 __dead static void	usage(void);
 static lock_t	*morelocks(void);
+
+/*
+ * Unlike NetBSD OpenBSD gets time in uSecs already.
+ * The only thing we need to is to convert timeval to double.
+ */
 static int timeval_cmp(struct timeval *, struct timeval *);
+double timeval2double(struct timeval *);
+#define T2D(tv) timeval2double((tv))
 
 int
 main(int argc, char **argv)
@@ -281,6 +288,9 @@ main(int argc, char **argv)
 			    nlistf);
 	}
 
+	/*
+	 * Unlike NetBSD, we do just 64-bit initially.
+	 */
 	if (loadsym_elf(nlfd) != 0)
 		errx(EXIT_FAILURE, "unable to load symbol table");
 	close(nlfd);
@@ -349,12 +359,6 @@ disable:
 	if (close(lsfd))
 		err(EXIT_FAILURE, "close(" _PATH_DEV_LOCKSTAT ")");
 
-	/*
-	 * Figure out how to scale the results.  For internal use we convert
-	 * all times from CPU frequency based to picoseconds, and values are
-	 * eventually displayed in ms.
-	 */
-	/* XXX fix me */
 	nbufs = (int)(ld.ld_size / sizeof(struct lsbuf));
 
 	TAILQ_INIT(&locklist);
@@ -497,6 +501,9 @@ findsym(findsym_t find, char *name, uintptr_t *start, uintptr_t *end, bool chg)
 		}
 	}
 
+	/*
+	 * Again, unlike NetBSD, we do just 64bit initially.
+	 */
 	rv = findsym_elf(find, name, start, end);
 
 	if (find == FUNC_BYNAME || find == LOCK_BYNAME) {
@@ -710,8 +717,7 @@ display(int mask, const char *name)
 {
 	lock_t *l;
 	struct lsbuf *lb;
-	struct timeval metric_tv;
-	unsigned int count;
+	double pcscale, metric;
 	char fname[NAME_SIZE];
 	int event;
 
@@ -726,38 +732,52 @@ display(int mask, const char *name)
 	/*
 	 * Sum up all events for this type of lock + event.
 	 */
-	if (cflag) {
-		TAILQ_FOREACH(l, &locklist, chain) {
-			count += l->count;
-			displayed++;
-		}
+	pcscale = 0;
+	TAILQ_FOREACH(l, &locklist, chain) {
+		if (cflag)
+			pcscale += l->count;
+		else
+			pcscale += timeval2double(&l->time);
+		displayed++;
 	}
+
+	if (pcscale == 0)
+		pcscale = 100;
+	else
+		pcscale = (100.0 / pcscale);
 
 	/*
 	 * For each lock, print a summary total, followed by a breakdown by
 	 * caller.
 	 */
-	metric_tv.tv_sec = 0;
-	metric_tv.tv_usec = 0;
 	TAILQ_FOREACH(l, &locklist, chain) {
+		if (cflag)
+			metric = l->count;
+		else
+			metric = timeval2double(&l->time);
+		metric *= pcscale;
+
 		if (l->name[0] == '\0')
 			findsym(LOCK_BYADDR, l->name, &l->lock, NULL, false);
 
 		if (lflag || l->nbufs > 1)
-			fprintf(outfp, "%llu.%lu %u %llu.%lu %-22s <all>\n",
-			    metric_tv.tv_sec, metric_tv.tv_usec,
-			    l->count,
+			fprintf(outfp, "%6.2f %u %llu.%lu %-22s <all>\n",
+			    metric, l->count,
 			    l->time.tv_sec, l->time.tv_usec, l->name);
 
 		if (lflag)
 			continue;
 
 		TAILQ_FOREACH(lb, &l->bufs, lb_chain.tailq) {
+			if (cflag)
+				metric = lb->lb_counts[event];
+			else
+				metric = timeval2double(&lb->lb_times[event]);
+			metric *= pcscale;
 			findsym(FUNC_BYADDR, fname, &lb->lb_callsite, NULL,
 			    false);
-			fprintf(outfp, "%llu.%lu %u %llu.%lu %-22s %s\n",
-			    metric_tv.tv_sec, metric_tv.tv_usec,
-			    lb->lb_counts[event],
+			fprintf(outfp, "%6.2f %u %llu.%lu %-22s %s\n",
+			    metric, lb->lb_counts[event],
 			    lb->lb_times[event].tv_sec, lb->lb_times[event].tv_usec,
 			    l->name, fname);
 		}
@@ -771,4 +791,16 @@ timeval_cmp(struct timeval *a_tv, struct timeval *b_tv)
 		return (a_tv->tv_usec - b_tv->tv_usec);
 	else
 		return (a_tv->tv_usec - a_tv->tv_usec);
+}
+
+double
+timeval2double(struct timeval *tv)
+{
+	double rv;
+	/*
+	 * convert to uSecs
+	 */
+	rv = tv->tv_sec * 1000000.0;
+	rv += tv->tv_usec;
+	return (rv);
 }
