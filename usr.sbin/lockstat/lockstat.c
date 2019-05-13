@@ -695,6 +695,13 @@ makelists(int mask, int event)
 	}
 }
 
+#define LOCKSTAT_HEADER_FORMATS	\
+    "\n-- %s\n\n"		\
+    "Total%%  Count   Time/ms          Lock                       Caller\n" \
+    "------ ------- --------- ---------------------- " \
+    "------------------------------\n"
+#define LOCKSTAT_LINE_FORMATS	\
+    "%llu.%lu %u %llu.%lu %-22s <all>\n"
 /*
  * Display a summary table for one lock type / event type pair.
  */
@@ -714,10 +721,7 @@ display(int mask, const char *name)
 	if (TAILQ_EMPTY(&locklist))
 		return;
 
-	fprintf(outfp, "\n-- %s\n\n"
-	    "Total%%  Count   Time/ms          Lock                       Caller\n"
-	    "------ ------- --------- ---------------------- ------------------------------\n",
-	    name);
+	fprintf(outfp, LOCKSTAT_HEADER_FORMATS, name);
 
 	/*
 	 * Sum up all events for this type of lock + event.
