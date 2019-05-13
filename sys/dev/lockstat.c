@@ -197,8 +197,14 @@ lockstat_start(struct lsenable *le)
 	lockstat_csstart = le->le_csstart;
 	lockstat_csend = le->le_csend;
 	lockstat_lockstart = le->le_lockstart;
-	lockstat_lockstart = le->le_lockstart;
 	lockstat_lockend = le->le_lockend;
+
+	log(LOG_NOTICE,
+	    "%s: caller range [%lx:%lx], lock range [%lx:%lx] (%lx)\n",
+	    __func__,
+	    le->le_csstart, le->le_csend,
+	    le->le_lockstart, le->le_lockend,
+	    &netlock);
 	membar_sync();
 	getnanotime(&lockstat_stime);
 	lockstat_dev_enabled = le->le_mask;
