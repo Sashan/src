@@ -94,7 +94,7 @@ lockstat_alloc(struct lsenable *le)
 
 	sz = sizeof(*lb) * le->le_nbufs;
 
-	lb = malloc(sz, M_TEMP, M_WAITOK);
+	lb = malloc(sz, M_TEMP, M_WAITOK | M_ZERO);
 
 	/* coverity[assert_side_effect] */
 	KASSERT(!lockstat_dev_enabled);
@@ -151,7 +151,7 @@ lockstat_init_tables(struct lsenable *le)
 	slop = le->le_nbufs - (per * ncpus);
 	cpuno = 0;
 	CPU_INFO_FOREACH(cii, ci) {
-		lc = malloc(sizeof(*lc), M_TEMP, M_WAITOK);
+		lc = malloc(sizeof(*lc), M_TEMP, M_WAITOK | M_ZERO);
 		lc->lc_overflow = 0;
 		ci->ci_lockstat = lc;
 
