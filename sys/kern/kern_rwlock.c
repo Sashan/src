@@ -121,7 +121,7 @@ rw_enter_read(struct rwlock *rwl)
 		sw.sw_count = 1;
 		lockstat_event((uintptr_t)rwl,
 		    (uintptr_t)__builtin_return_address(0),
-		    LB_RWLOCK | LB_SLEEP1, &sw);
+		    LB_RWLOCK | LB_SLEEP2, &sw);
 		lockstat_event((uintptr_t)rwl,
 		    (uintptr_t)__builtin_return_address(0),
 		    LB_RWLOCK | LB_SPIN, &sw);
@@ -150,7 +150,7 @@ rw_enter_write(struct rwlock *rwl)
 		sw.sw_count = 1;
 		lockstat_event((uintptr_t)rwl,
 		    (uintptr_t)__builtin_return_address(0),
-		    LB_RWLOCK | LB_SLEEP2, &sw);
+		    LB_RWLOCK | LB_SLEEP1, &sw);
 		lockstat_event((uintptr_t)rwl,
 		    (uintptr_t)__builtin_return_address(0),
 		    LB_RWLOCK | LB_SPIN, &sw);
@@ -371,7 +371,7 @@ retry:
 	lockstat_stop_swatch(&sleep_sw);
 	lockstat_event((uintptr_t)rwl, (uintptr_t)__builtin_return_address(0),
 	    LB_RWLOCK | (flags & RW_WRITE) ?
-		LB_SLEEP2 : LB_SLEEP1, &sleep_sw);
+		LB_SLEEP1 : LB_SLEEP2, &sleep_sw);
 	lockstat_event((uintptr_t)rwl, (uintptr_t)__builtin_return_address(0),
 	    LB_RWLOCK | LB_SPIN, &spin_sw);
 #endif
