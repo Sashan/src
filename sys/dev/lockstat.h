@@ -111,7 +111,7 @@ struct lsbuf {
 	} lb_chain;
 	uintptr_t	lb_lock;		/* lock address */
 	uintptr_t	lb_callsite;		/* call site */
-	uint64_t	lb_times[LB_NEVENT];	/* cumulative times */
+	struct timeval	lb_times[LB_NEVENT];	/* cumulative times */
 	uint32_t	lb_counts[LB_NEVENT];	/* count of events */
 	uint16_t	lb_flags;		/* lock type */
 	uint16_t	lb_cpu;			/* CPU number */
@@ -126,7 +126,7 @@ struct lsbuf {
  * Stopwatch structure to collect lockstat statics.
  */
 struct lockstat_swatch {
-	int		sw_lockstat_runs;
+	int		sw_lockstat_flags;
 	struct timeval	sw_start_tv;
 	struct timeval	sw_stop_tv;
 	struct timeval	sw_acc_tv;

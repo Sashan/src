@@ -51,10 +51,19 @@ struct proc *lockstat_p;
 int lockstat_dev_enabled;
 int lockstat_enabled;
 
+SLIST_HEAD(slsbuf, lsbuf);
+LIST_HEAD(llsbuf, lsbuf);
+
 struct lscpu {
+	struct slsbuf		lc_free;
+/*
 	SLIST_HEAD(, lsbuf)	lc_free;
+*/
 	u_int			lc_overflow;
+	struct llsbuf		lc_hash[LOCKSTAT_HASH_SIZE];
+/*
 	LIST_HEAD(, lsbuf) lc_hash[LOCKSTAT_HASH_SIZE];
+*/
 };
 
 struct lsbuf	*lockstat_baseb;
@@ -408,7 +417,7 @@ lockstat_reset_swatch(struct lockstat_swatch *sw)
 	/*
 	 * XXX enable data collection with running lockstat consumer
 	 */
-	sw->sw_lockstat_runs = 0;
+	sw->sw_lockstat_flags = 0;
 	sw->sw_count = 0;
 	sw->sw_start_tv.tv_sec = 0;
 	sw->sw_start_tv.tv_usec = 0;
@@ -419,7 +428,7 @@ lockstat_reset_swatch(struct lockstat_swatch *sw)
 void
 lockstat_set_swatch(struct lockstat_swatch *sw, struct timeval *start_tv)
 {
-	if (sw->sw_lockstat_runs == 0)
+	if (sw->sw_lockstat_flags == 0)
 		return;
 
 	sw->sw_start_tv.tv_sec = start_tv->tv_sec;
@@ -429,7 +438,7 @@ lockstat_set_swatch(struct lockstat_swatch *sw, struct timeval *start_tv)
 void
 lockstat_start_swatch(struct lockstat_swatch *sw)
 {
-	if (sw->sw_lockstat_runs == 0)
+	if (sw->sw_lockstat_flags == 0)
 		return;
 
 	microuptime(&sw->sw_start_tv);
@@ -438,7 +447,7 @@ lockstat_start_swatch(struct lockstat_swatch *sw)
 void
 lockstat_stop_swatch(struct lockstat_swatch *sw)
 {
-	if (sw->sw_lockstat_runs == 0)
+	if (sw->sw_lockstat_flags == 0)
 		return;
 
 	microuptime(&sw->sw_stop_tv);
@@ -450,7 +459,7 @@ lockstat_stop_swatch(struct lockstat_swatch *sw)
 void
 lockstat_stopstart_swatch(struct lockstat_swatch *sw)
 {
-	if (sw->sw_lockstat_runs == 0)
+	if (sw->sw_lockstat_flags == 0)
 		return;
 
 	microuptime(&sw->sw_stop_tv);
@@ -464,6 +473,70 @@ void
 lockstat_event(uintptr_t rwl, uintptr_t caller, int lf,
     struct lockstat_swatch *sw)
 {
-	if (sw->sw_lockstat_runs == 0)
+	struct llsbuf *ll;
+	struct lscpu *lc;
+	struct lsbuf *lb;
+	u_int event;
+	int s, flags;
+
+	flags = sw->sw_lockstat_flags;
+	if (((flags & lockstat_dev_enabled) != flags) || (sw->sw_count == 0))
 		return;
+
+	if ((rwl < lockstat_lockstart) || (rwl > lockstat_lockend))
+		return;
+
+	if ((caller < lockstat_csstart) || (caller > lockstat_lockend))
+		return;
+	
+	caller &= lockstat_csmask;
+	rwl &= lockstat_lamask;
+
+	/*
+	 * Find the table for this lock+caller pair, and try to locate a
+	 * buffer with the same key.
+	 */
+	s = splhigh();
+	lc = curcpu()->ci_lockstat;
+	ll = &lc->lc_hash[LOCKSTAT_HASH(rwl ^ caller)];
+	event = (lf & LB_EVENT_MASK) - 1;
+
+	LIST_FOREACH(lb, ll, lb_chain.list) {
+		if (lb->lb_lock == rwl && lb->lb_callsite == caller)
+			break;
+	}
+
+	if (lb != NULL) {
+		/*
+		 * We found a record.  Move it to the front of the list, as
+		 * we're likely to hit it again soon.
+		 */
+		if (lb != LIST_FIRST(ll)) {
+			LIST_REMOVE(lb, lb_chain.list);
+			LIST_INSERT_HEAD(ll, lb, lb_chain.list);
+		}
+		lb->lb_counts[event] += sw->sw_count;
+		timeradd(&lb->lb_times[event], &sw->sw_acc_tv,
+		    &lb->lb_times[event]);
+	} else if ((lb = SLIST_FIRST(&lc->lc_free)) != NULL) {
+		/*
+		 * Pinch a new buffer and fill it out.
+		 */
+		SLIST_REMOVE_HEAD(&lc->lc_free, lb_chain.slist);
+		LIST_INSERT_HEAD(ll, lb, lb_chain.list);
+		lb->lb_flags = (uint16_t)flags;
+		lb->lb_lock = rwl;
+		lb->lb_callsite = caller;
+		lb->lb_counts[event] = sw->sw_count;
+		lb->lb_times[event] = sw->sw_acc_tv;
+	} else {
+		/*
+		 * We didn't find a buffer and there were none free.
+		 * lockstat_stop() will notice later on and report the
+		 * error.
+		 */
+		 lc->lc_overflow++;
+	}
+
+	splx(s);
 }
