@@ -17,6 +17,7 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
+#include "lockstat.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -35,6 +36,10 @@
 /* CPU-dependent timing, this needs to be settable from ddb. */
 int __mp_lock_spinout = 200000000;
 #endif /* MP_LOCKDEBUG */
+
+#if NLOCKSTAT > 0
+#include <dev/lockstat.h>
+#endif
 
 #ifdef MULTIPROCESSOR
 
@@ -258,11 +263,19 @@ mtx_enter(struct mutex *mtx)
 #ifdef MP_LOCKDEBUG
 	int nticks = __mp_lock_spinout;
 #endif
+#if NLOCKSTAT > 0
+	struct lockstat_swatch	sw;
+#endif
 
 	WITNESS_CHECKORDER(MUTEX_LOCK_OBJECT(mtx),
 	    LOP_EXCLUSIVE | LOP_NEWORDER, NULL);
 
 	spc->spc_spinning++;
+
+#if NLOCKSTAT > 0
+	lockstat_reset_swatch(&sw);
+	lockstat_start_swatch(&sw);
+#endif
 	while (mtx_enter_try(mtx) == 0) {
 		CPU_BUSY_CYCLE();
 
@@ -275,6 +288,11 @@ mtx_enter(struct mutex *mtx)
 #endif
 	}
 	spc->spc_spinning--;
+#if NLOCKSTAT > 0
+	lockstat_stop_swatch(&sw);
+	lockstat_event((uintptr_t)mtx, (uintptr_t)__builtin_return_address(0),
+	    LB_SPIN_MUTEX | LB_SPIN, &sw);
+#endif
 }
 
 int
