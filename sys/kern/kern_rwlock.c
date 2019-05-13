@@ -312,7 +312,8 @@ retry:
 			spin--;
 			CPU_BUSY_CYCLE();
 			continue;
-		}
+		} else
+			spin_done = 1;
 #endif
 
 #if NLOCKSTAT > 0
