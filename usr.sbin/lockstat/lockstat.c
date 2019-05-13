@@ -702,7 +702,6 @@ display(int mask, const char *name)
 {
 	lock_t *l;
 	struct lsbuf *lb;
-	struct timeval pcscale;
 	struct timeval metric_tv;
 	unsigned int count;
 	char fname[NAME_SIZE];
@@ -722,20 +721,19 @@ display(int mask, const char *name)
 	/*
 	 * Sum up all events for this type of lock + event.
 	 */
-	pcscale.tv_sec = 0;
-	pcscale.tv_usec = 0;
-	TAILQ_FOREACH(l, &locklist, chain) {
-		if (cflag)
+	if (cflag) {
+		TAILQ_FOREACH(l, &locklist, chain) {
 			count += l->count;
-		else
-			timeradd(&pcscale, &l->time, &pcscale);
-		displayed++;
+			displayed++;
+		}
 	}
 
 	/*
 	 * For each lock, print a summary total, followed by a breakdown by
 	 * caller.
 	 */
+	metric_tv.tv_sec = 0;
+	metric_tv.tv_usec = 0;
 	TAILQ_FOREACH(l, &locklist, chain) {
 		if (l->name[0] == '\0')
 			findsym(LOCK_BYADDR, l->name, &l->lock, NULL, false);
