@@ -43,13 +43,7 @@
 #define	LOCKSTAT_HASH(key)	\
 	((key >> LOCKSTAT_HASH_SHIFT) & LOCKSTAT_HASH_MASK)
 
-#define LOCKSTAT_ENABLED_UPDATE() do { \
-	lockstat_enabled = lockstat_dev_enabled; \
-	membar_producer(); \
-    } while (0)
-
 struct proc *lockstat_p;
-volatile int lockstat_dev_enabled;
 volatile int lockstat_enabled;
 
 SLIST_HEAD(slsbuf, lsbuf);
@@ -84,7 +78,7 @@ lockstat_alloc(struct lsenable *le)
 	struct lsbuf *lb;
 	size_t sz;
 
-	KASSERT(!lockstat_dev_enabled);
+	KASSERT(!lockstat_enabled);
 	lockstat_free();
 
 	sz = sizeof(*lb) * le->le_nbufs;
@@ -92,7 +86,7 @@ lockstat_alloc(struct lsenable *le)
 	lb = malloc(sz, M_TEMP, M_WAITOK | M_ZERO);
 
 	/* coverity[assert_side_effect] */
-	KASSERT(!lockstat_dev_enabled);
+	KASSERT(!lockstat_enabled);
 	KASSERT(lockstat_baseb == NULL);
 	lockstat_sizeb = sz;
 	lockstat_baseb = lb;
@@ -107,7 +101,7 @@ void
 lockstat_free(void)
 {
 
-	KASSERT(!lockstat_dev_enabled);
+	KASSERT(!lockstat_enabled);
 
 	if (lockstat_baseb != NULL) {
 		free(lockstat_baseb, M_TEMP, lockstat_sizeb);
@@ -129,7 +123,7 @@ lockstat_init_tables(struct lsenable *le)
 	struct lsbuf *lb;
 
 	/* coverity[assert_side_effect] */
-	KASSERT(!lockstat_dev_enabled);
+	KASSERT(!lockstat_enabled);
 
 	CPU_INFO_FOREACH(cii, ci) {
 		if (ci->ci_lockstat != NULL) {
@@ -175,7 +169,7 @@ lockstat_start(struct lsenable *le)
 {
 
 	/* coverity[assert_side_effect] */
-	KASSERT(!lockstat_dev_enabled);
+	KASSERT(!lockstat_enabled);
 
 	lockstat_init_tables(le);
 
@@ -202,8 +196,8 @@ lockstat_start(struct lsenable *le)
 	    &netlock);
 	membar_sync();
 	getnanotime(&lockstat_stime);
-	lockstat_dev_enabled = le->le_mask;
-	LOCKSTAT_ENABLED_UPDATE();
+	lockstat_enabled = le->le_mask;
+	membar_producer();
 }
 
 void
@@ -256,14 +250,14 @@ lockstat_stop(struct lsdisable *ld)
 	int error;
 
 	/* coverity[assert_side_effect] */
-	KASSERT(lockstat_dev_enabled);
+	KASSERT(lockstat_enabled);
 
 	/*
 	 * Set enabled false, force a write barrier, and wait for other CPUs
 	 * to exit lockstat_event().
 	 */
-	lockstat_dev_enabled = 0;
-	LOCKSTAT_ENABLED_UPDATE();
+	lockstat_enabled = 0;
+	membar_producer();
 	getnanotime(&ts);
 	/*
 	 * wait for all producers.
@@ -342,7 +336,7 @@ lockstatioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case IOC_LOCKSTAT_ENABLE:
 		memmove(le, addr, sizeof(struct lsenable));
 
-		if (lockstat_dev_enabled) {
+		if (lockstat_enabled) {
 			error = EBUSY;
 			break;
 		}
@@ -382,7 +376,7 @@ lockstatioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		break;
 
 	case IOC_LOCKSTAT_DISABLE:
-		if (!lockstat_dev_enabled)
+		if (!lockstat_enabled)
 			error = EINVAL;
 		else {
 			memset(&ld_buf, 0, sizeof(struct lsdisable));
@@ -406,7 +400,7 @@ int
 lockstatread(dev_t dev, struct uio *uio, int flag)
 {
 
-	if (curproc != lockstat_p || lockstat_dev_enabled)
+	if (curproc != lockstat_p || lockstat_enabled)
 		return (EBUSY);
 	return (uiomove(lockstat_baseb, lockstat_sizeb, uio));
 }
@@ -470,17 +464,19 @@ lockstat_stopstart_swatch(struct lockstat_swatch *sw)
 }
 
 void
-lockstat_event(uintptr_t rwl, uintptr_t caller, int lf,
+lockstat_event(uintptr_t rwl, uintptr_t caller, int flags,
     struct lockstat_swatch *sw)
 {
 	struct llsbuf *ll;
 	struct lscpu *lc;
 	struct lsbuf *lb;
 	u_int event;
-	int s, flags;
+	int s;
 
-	flags = sw->sw_lockstat_flags;
-	if ((sw->sw_lockstat_flags == 0) || (sw->sw_count == 0))
+	if (sw->sw_lockstat_flags == 0)
+		return;
+
+	if (sw->sw_count == 0)
 		return;
 
 	if ((rwl < lockstat_lockstart) || (rwl > lockstat_lockend))
@@ -497,7 +493,7 @@ lockstat_event(uintptr_t rwl, uintptr_t caller, int lf,
 	 * buffer with the same key.
 	 */
 	smr_read_enter();
-	if (lockstat_dev_enabled == 0) {
+	if (lockstat_enabled == 0) {
 		smr_read_leave();
 		return;
 	}
@@ -506,7 +502,7 @@ lockstat_event(uintptr_t rwl, uintptr_t caller, int lf,
 	lc = curcpu()->ci_lockstat;
 	KASSERT(lc != NULL);
 	ll = &lc->lc_hash[LOCKSTAT_HASH(rwl ^ caller)];
-	event = (lf & LB_EVENT_MASK) - 1;
+	event = (flags & LB_EVENT_MASK) - 1;
 
 	LIST_FOREACH(lb, ll, lb_chain.list) {
 		if (lb->lb_lock == rwl && lb->lb_callsite == caller)
