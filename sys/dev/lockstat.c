@@ -276,7 +276,7 @@ lockstat_stop(struct lsdisable *ld)
 {
 	CPU_INFO_ITERATOR cii;
 	struct cpu_info *ci;
-	u_int cpuno, overflow;
+	u_int overflow;
 	struct timespec ts;
 	int error;
 
