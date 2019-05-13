@@ -100,7 +100,6 @@ struct lsenable {
 struct lsdisable {
 	size_t		ld_size;	/* buffer space allocated */
 	struct timespec	ld_time;	/* time spent enabled */
-	uint64_t	ld_freq[64];	/* counter HZ by CPU number */
 };
 
 /*

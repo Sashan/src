@@ -121,7 +121,7 @@ lockstat_alloc(struct lsenable *le)
 	KASSERT(lockstat_baseb == NULL);
 	lockstat_sizeb = sz;
 	lockstat_baseb = lb;
-		
+
 	return (0);
 }
 
@@ -313,34 +313,12 @@ lockstat_stop(struct lsdisable *ld)
 
 	/* Run through all LWPs and clear the slate for the next run. */
 	KERNEL_ASSERT_LOCKED();
-#if 0
-	/*
-	 * clean per-process counters here.
-	 */
-	LIST_FOREACH(p, &alllwp, l_list) {
-		p->p_pfailaddr = 0;
-		p->p_pfailtime = 0;
-		p->p_pfaillock = 0;
-	}
-#endif
 
 	/*
 	 * Fill out the disable struct for the caller.
 	 */
 	timespecsub(&ts, &lockstat_stime, &ld->ld_time);
 	ld->ld_size = lockstat_sizeb;
-
-	cpuno = 0;
-	CPU_INFO_FOREACH(cii, ci) {
-		if (cpuno >= sizeof(ld->ld_freq) / sizeof(ld->ld_freq[0])) {
-			log(LOG_WARNING, "lockstat: too many CPUs\n");
-			break;
-		}
-		ld->ld_freq[cpuno++] = 1000;
-#if 0
-		ld->ld_freq[cpuno++] = cpu_frequency(ci);
-#endif
-	}
 
 	return (error);
 }
