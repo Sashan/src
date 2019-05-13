@@ -182,7 +182,6 @@ main(int argc, char **argv)
 	char *lockname, *funcname;
 	const name_t *name;
 	struct lsenable le;
-	double ms;
 	char *p;
 
 	nlistf = NULL;
@@ -369,7 +368,8 @@ disable:
 	/*
 	 * Display the results.
 	 */
-	fprintf(outfp, "Elapsed time: %.2f seconds.", ms / MILLI);
+	fprintf(outfp, "Elapsed time: %.2f seconds.",
+	    timespec2msec(&ld.ld_time)/1000.0);
 	if (sflag || pflag) {
 		fprintf(outfp, " Displaying ");
 		if (pflag)
