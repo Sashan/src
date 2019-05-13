@@ -149,6 +149,7 @@ __mp_lock(struct __mp_lock *mpl)
 
 #if NLOCKSTAT > 0
 	lockstat_reset_swatch(&sw);
+	lockstat_start_swatch(&sw);
 #endif
 	s = intr_disable();
 	if (cpu->mplc_depth++ == 0)
