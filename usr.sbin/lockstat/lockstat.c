@@ -89,7 +89,7 @@ typedef struct lockstruct {
 	buflist_t		bufs;
 	buflist_t		tosort;
 	uintptr_t		lock;
- 	double			time;
+ 	struct timeval		time;
 	uint32_t		count;
 	u_int			flags;
 	u_int			nbufs;
@@ -153,9 +153,6 @@ static bool		xflag;
 static int		lsfd;
 static int		displayed;
 static int		bin64;
-static double		tscale;
-static double		cscale;
-static double		cpuscale[sizeof(ld.ld_freq) / sizeof(ld.ld_freq[0])];
 static FILE		*outfp;
 
 static void	findsym(findsym_t, char *, uintptr_t *, uintptr_t *, bool);
@@ -167,14 +164,13 @@ static int	matchname(const name_t *, char *);
 static void	makelists(int, int);
 static void	nullsig(int);
 __dead static void	usage(void);
-static int	ncpu(void);
 static lock_t	*morelocks(void);
+static int timeval_cmp(struct timeval *, struct timeval *);
 
 int
 main(int argc, char **argv)
 {
 	int eventtype, locktype, ch, nlfd, fd;
-	size_t i;
 	bool sflag, pflag, mflag, Mflag;
 	const char *nlistf, *outf;
 	char *lockname, *funcname;
@@ -365,16 +361,7 @@ disable:
 	 * all times from CPU frequency based to picoseconds, and values are
 	 * eventually displayed in ms.
 	 */
-	for (i = 0; i < sizeof(ld.ld_freq) / sizeof(ld.ld_freq[0]); i++)
-		if (ld.ld_freq[i] != 0)
-			cpuscale[i] = PICO / ld.ld_freq[i];
-	ms = ld.ld_time.tv_sec * MILLI + ld.ld_time.tv_nsec / MICRO;
-	if (pflag)
-		cscale = 1.0 / ncpu();
-	else
-		cscale = 1.0;
-	cscale *= (sflag ? MILLI / ms : 1.0);
-	tscale = cscale / NANO;
+	/* XXX fix me */
 	nbufs = (int)(ld.ld_size / sizeof(struct lsbuf));
 
 	TAILQ_INIT(&locklist);
@@ -488,24 +475,6 @@ matchname(const name_t *name, char *string)
 		usage();
 
 	return mask;
-}
-
-/*
- * Return the number of CPUs in the running system.
- */
-static int
-ncpu(void)
-{
-	int rv, mib[2];
-	size_t varlen;
-
-	mib[0] = CTL_HW;
-	mib[1] = HW_NCPU;
-	varlen = sizeof(rv);
-	if (sysctl(mib, 2, &rv, &varlen, NULL, (size_t)0) < 0)
-		rv = 1;
-
-	return (rv);
 }
 
 /*
@@ -658,19 +627,15 @@ makelists(int mask, int event)
 			l->nbufs = 0;
 			l->name[0] = '\0';
 			l->count = 0;
-			l->time = 0;
+			l->time.tv_sec = 0;
+			l->time.tv_usec = 0;
 			TAILQ_INIT(&l->tosort);
 			TAILQ_INIT(&l->bufs);
 			TAILQ_INSERT_TAIL(&sortlist, l, chain);
 		}
 
-		/*
-		 * Scale the time values per buffer and summarise
-		 * times+counts per lock.
-		 */
-		lb->lb_times[event] *= cpuscale[lb->lb_cpu];
 		l->count += lb->lb_counts[event];
-		l->time += lb->lb_times[event];
+		timeradd(&l->time, &lb->lb_times[event], &l->time);
 
 		/*
 		 * Merge same lock+callsite pairs from multiple CPUs
@@ -682,7 +647,8 @@ makelists(int mask, int event)
 		}
 		if (lb2 != NULL) {
 			lb2->lb_counts[event] += lb->lb_counts[event];
-			lb2->lb_times[event] += lb->lb_times[event];
+			timeradd(&lb2->lb_times[event], &lb->lb_times[event],
+			    &lb2->lb_times[event]);
 		} else {
 			TAILQ_INSERT_HEAD(&l->tosort, lb, lb_chain.tailq);
 			l->nbufs++;
@@ -707,8 +673,8 @@ makelists(int mask, int event)
 					if (lb->lb_counts[event] >
 					    lb2->lb_counts[event])
 						break;
-				} else if (lb->lb_times[event] >
-				    lb2->lb_times[event])
+				} else if (timeval_cmp(&lb->lb_times[event],
+				    &lb2->lb_times[event]) > 0)
 					break;
 				lb2 = TAILQ_NEXT(lb2, lb_chain.tailq);
 			}
@@ -728,7 +694,7 @@ makelists(int mask, int event)
 			if (cflag) {
 				if (l->count > l2->count)
 					break;
-			} else if (l->time > l2->time)
+			} else if (timeval_cmp(&l->time, &l2->time) > 0)
 				break;
 			l2 = TAILQ_NEXT(l2, chain);
 		}
@@ -747,7 +713,9 @@ display(int mask, const char *name)
 {
 	lock_t *l;
 	struct lsbuf *lb;
-	double pcscale, metric;
+	struct timeval pcscale;
+	struct timeval metric_tv;
+	unsigned int count;
 	char fname[NAME_SIZE];
 	int event;
 
@@ -765,53 +733,41 @@ display(int mask, const char *name)
 	/*
 	 * Sum up all events for this type of lock + event.
 	 */
-	pcscale = 0;
+	pcscale.tv_sec = 0;
+	pcscale.tv_usec = 0;
 	TAILQ_FOREACH(l, &locklist, chain) {
 		if (cflag)
-			pcscale += l->count;
+			count += l->count;
 		else
-			pcscale += l->time;
+			timeradd(&pcscale, &l->time, &pcscale);
 		displayed++;
 	}
-	if (pcscale == 0)
-		pcscale = 100;
-	else
-		pcscale = (100.0 / pcscale);
 
 	/*
 	 * For each lock, print a summary total, followed by a breakdown by
 	 * caller.
 	 */
 	TAILQ_FOREACH(l, &locklist, chain) {
-		if (cflag)
-			metric = l->count;
-		else
-			metric = l->time;
-		metric *= pcscale;
-
 		if (l->name[0] == '\0')
 			findsym(LOCK_BYADDR, l->name, &l->lock, NULL, false);
 
 		if (lflag || l->nbufs > 1)
-			fprintf(outfp, "%6.2f %7d %9.2f %-22s <all>\n",
-			    metric, (int)(l->count * cscale),
-			    l->time * tscale, l->name);
+			fprintf(outfp, "%llu.%lu %u %llu.%lu %-22s <all>\n",
+			    metric_tv.tv_sec, metric_tv.tv_usec,
+			    l->count,
+			    l->time.tv_sec, l->time.tv_usec, l->name);
 
 		if (lflag)
 			continue;
 
 		TAILQ_FOREACH(lb, &l->bufs, lb_chain.tailq) {
-			if (cflag)
-				metric = lb->lb_counts[event];
-			else
-				metric = lb->lb_times[event];
-			metric *= pcscale;
-
 			findsym(FUNC_BYADDR, fname, &lb->lb_callsite, NULL,
 			    false);
-			fprintf(outfp, "%6.2f %7d %9.2f %-22s %s\n",
-			    metric, (int)(lb->lb_counts[event] * cscale),
-			    lb->lb_times[event] * tscale, l->name, fname);
+			fprintf(outfp, "%llu.%lu %u %llu.%lu %-22s %s\n",
+			    metric_tv.tv_sec, metric_tv.tv_usec,
+			    lb->lb_counts[event],
+			    lb->lb_times[event].tv_sec, lb->lb_times[event].tv_usec,
+			    l->name, fname);
 		}
 	}
 }
@@ -830,40 +786,11 @@ findsym32(findsym_t sym, char *name, uintptr_t *start, uintptr_t *end)
 	return (0);
 }
 
-#if 0
-#include <errno.h>
-#include <err.h>
-#include <fcntl.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <stdio.h>
-#include <sys/ioctl.h>
-
-#define LOCKSTAT_DEV	"/dev/lockstat"
-
-void usage(void);
-
-void
-usage(void)
-{
-	fprintf(stderr, "usage: \n");
-	exit(1);
-}
-
 int
-main(int argc, char *argv[])
+timeval_cmp(struct timeval *a_tv, struct timeval *b_tv)
 {
-	int	fd;
-
-	fd = open(LOCKSTAT_DEV, O_RDWR);
-	if (fd == -1)
-		err(1, "open:");
-
-	if (ioctl(fd, 1, "") == -1)
-		err(1, "ioctl:");
-
-	close(fd);
-
-	return (0);
+	if (a_tv->tv_sec == b_tv->tv_sec)
+		return (a_tv->tv_usec - b_tv->tv_usec);
+	else
+		return (a_tv->tv_usec - a_tv->tv_usec);
 }
-#endif
