@@ -90,7 +90,7 @@ typedef struct lockstruct {
 	buflist_t		bufs;
 	buflist_t		tosort;
 	uintptr_t		lock;
- 	struct timeval		time;
+ 	struct timespec		time;
 	uint32_t		count;
 	u_int			flags;
 	u_int			nbufs;
@@ -168,11 +168,10 @@ static lock_t	*morelocks(void);
 
 /*
  * Unlike NetBSD OpenBSD gets time in uSecs already.
- * The only thing we need to is to convert timeval to double.
+ * The only thing we need to is to convert timespec to double.
  */
-static int timeval_cmp(struct timeval *, struct timeval *);
-double timeval2usec(struct timeval *);
-double timeval2msec(struct timeval *);
+double timespec2usec(struct timespec *);
+double timespec2msec(struct timespec *);
 
 int
 main(int argc, char **argv)
@@ -624,14 +623,14 @@ makelists(int mask, int event)
 			l->name[0] = '\0';
 			l->count = 0;
 			l->time.tv_sec = 0;
-			l->time.tv_usec = 0;
+			l->time.tv_nsec = 0;
 			TAILQ_INIT(&l->tosort);
 			TAILQ_INIT(&l->bufs);
 			TAILQ_INSERT_TAIL(&sortlist, l, chain);
 		}
 
 		l->count += lb->lb_counts[event];
-		timeradd(&l->time, &lb->lb_times[event], &l->time);
+		timespecadd(&l->time, &lb->lb_times[event], &l->time);
 
 		/*
 		 * Merge same lock+callsite pairs from multiple CPUs
@@ -643,7 +642,7 @@ makelists(int mask, int event)
 		}
 		if (lb2 != NULL) {
 			lb2->lb_counts[event] += lb->lb_counts[event];
-			timeradd(&lb2->lb_times[event], &lb->lb_times[event],
+			timespecadd(&lb2->lb_times[event], &lb->lb_times[event],
 			    &lb2->lb_times[event]);
 		} else {
 			TAILQ_INSERT_HEAD(&l->tosort, lb, lb_chain.tailq);
@@ -669,8 +668,8 @@ makelists(int mask, int event)
 					if (lb->lb_counts[event] >
 					    lb2->lb_counts[event])
 						break;
-				} else if (timeval_cmp(&lb->lb_times[event],
-				    &lb2->lb_times[event]) > 0)
+				} else if (timespeccmp(&lb->lb_times[event],
+				    &lb2->lb_times[event], >))
 					break;
 				lb2 = TAILQ_NEXT(lb2, lb_chain.tailq);
 			}
@@ -690,7 +689,7 @@ makelists(int mask, int event)
 			if (cflag) {
 				if (l->count > l2->count)
 					break;
-			} else if (timeval_cmp(&l->time, &l2->time) > 0)
+			} else if (timespeccmp(&l->time, &l2->time, >))
 				break;
 			l2 = TAILQ_NEXT(l2, chain);
 		}
@@ -734,7 +733,7 @@ display(int mask, const char *name)
 		if (cflag)
 			pcscale += l->count;
 		else
-			pcscale += timeval2usec(&l->time);
+			pcscale += timespec2usec(&l->time);
 		displayed++;
 	}
 
@@ -751,7 +750,7 @@ display(int mask, const char *name)
 		if (cflag)
 			metric = l->count;
 		else
-			metric = timeval2usec(&l->time);
+			metric = timespec2usec(&l->time);
 		metric *= pcscale;
 
 		if (l->name[0] == '\0')
@@ -759,7 +758,7 @@ display(int mask, const char *name)
 
 		if (lflag || l->nbufs > 1)
 			fprintf(outfp, "%6.2f %7u %9.2f %-22s <all>\n",
-			    metric, l->count, timeval2msec(&l->time), l->name);
+			    metric, l->count, timespec2msec(&l->time), l->name);
 
 		if (lflag)
 			continue;
@@ -768,45 +767,36 @@ display(int mask, const char *name)
 			if (cflag)
 				metric = lb->lb_counts[event];
 			else
-				metric = timeval2usec(&lb->lb_times[event]);
+				metric = timespec2usec(&lb->lb_times[event]);
 			metric *= pcscale;
 			findsym(FUNC_BYADDR, fname, &lb->lb_callsite, NULL,
 			    false);
 			fprintf(outfp, "%6.2f %7u %9.2f %-22s %s\n",
 			    metric, lb->lb_counts[event],
-			    timeval2msec(&lb->lb_times[event]), l->name, fname);
+			    timespec2msec(&lb->lb_times[event]), l->name, fname);
 		}
 	}
 }
 
-int
-timeval_cmp(struct timeval *a_tv, struct timeval *b_tv)
-{
-	if (a_tv->tv_sec == b_tv->tv_sec)
-		return (a_tv->tv_usec - b_tv->tv_usec);
-	else
-		return (a_tv->tv_usec - a_tv->tv_usec);
-}
-
 double
-timeval2usec(struct timeval *tv)
+timespec2usec(struct timespec *tv)
 {
 	double rv;
 	/*
 	 * convert to uSecs
 	 */
-	rv = tv->tv_sec * 1000000.0;
-	rv += tv->tv_usec;
+	rv = tv->tv_sec * 1000000000.0;
+	rv += tv->tv_nsec;
 	return (rv);
 }
 
 double
-timeval2msec(struct timeval *tv)
+timespec2msec(struct timespec *tv)
 {
 	double rv;
 
-	rv = tv->tv_sec * 1000.0;
-	rv += tv->tv_usec/1000.0;
+	rv = tv->tv_sec * 1000000.0;
+	rv += tv->tv_nsec/1000000.0;
 
 	return (rv);
 }

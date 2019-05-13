@@ -414,21 +414,21 @@ lockstat_reset_swatch(struct lockstat_swatch *sw)
 	sw->sw_lockstat_flags = lockstat_enabled;
 	sw->sw_count = 0;
 	sw->sw_start_tv.tv_sec = 0;
-	sw->sw_start_tv.tv_usec = 0;
+	sw->sw_start_tv.tv_nsec = 0;
 	sw->sw_stop_tv.tv_sec = 0;
-	sw->sw_stop_tv.tv_usec = 0;
+	sw->sw_stop_tv.tv_nsec = 0;
 	sw->sw_acc_tv.tv_sec = 0;
-	sw->sw_acc_tv.tv_usec = 0;
+	sw->sw_acc_tv.tv_nsec = 0;
 }
 
 void
-lockstat_set_swatch(struct lockstat_swatch *sw, struct timeval *start_tv)
+lockstat_set_swatch(struct lockstat_swatch *sw, struct timespec *start_tv)
 {
 	if (sw->sw_lockstat_flags == 0)
 		return;
 
 	sw->sw_start_tv.tv_sec = start_tv->tv_sec;
-	sw->sw_start_tv.tv_usec = start_tv->tv_usec;
+	sw->sw_start_tv.tv_nsec = start_tv->tv_nsec;
 }
 
 void
@@ -437,7 +437,7 @@ lockstat_start_swatch(struct lockstat_swatch *sw)
 	if (sw->sw_lockstat_flags == 0)
 		return;
 
-	microuptime(&sw->sw_start_tv);
+	nanouptime(&sw->sw_start_tv);
 }
 
 void
@@ -446,9 +446,9 @@ lockstat_stop_swatch(struct lockstat_swatch *sw)
 	if (sw->sw_lockstat_flags == 0)
 		return;
 
-	microuptime(&sw->sw_stop_tv);
-	timersub(&sw->sw_stop_tv, &sw->sw_start_tv, &sw->sw_start_tv);
-	timeradd(&sw->sw_acc_tv, &sw->sw_start_tv, &sw->sw_acc_tv);
+	nanouptime(&sw->sw_stop_tv);
+	timespecsub(&sw->sw_stop_tv, &sw->sw_start_tv, &sw->sw_start_tv);
+	timespecadd(&sw->sw_acc_tv, &sw->sw_start_tv, &sw->sw_acc_tv);
 	sw->sw_count++;
 }
 
@@ -458,9 +458,9 @@ lockstat_stopstart_swatch(struct lockstat_swatch *sw)
 	if (sw->sw_lockstat_flags == 0)
 		return;
 
-	microuptime(&sw->sw_stop_tv);
-	timersub(&sw->sw_stop_tv, &sw->sw_start_tv, &sw->sw_start_tv);
-	timeradd(&sw->sw_acc_tv, &sw->sw_start_tv, &sw->sw_acc_tv);
+	nanouptime(&sw->sw_stop_tv);
+	timespecsub(&sw->sw_stop_tv, &sw->sw_start_tv, &sw->sw_start_tv);
+	timespecadd(&sw->sw_acc_tv, &sw->sw_start_tv, &sw->sw_acc_tv);
 	sw->sw_start_tv = sw->sw_stop_tv;
 	sw->sw_count++;
 }
@@ -521,7 +521,7 @@ lockstat_event(uintptr_t rwl, uintptr_t caller, int flags,
 			LIST_INSERT_HEAD(ll, lb, lb_chain.list);
 		}
 		lb->lb_counts[event] += sw->sw_count;
-		timeradd(&lb->lb_times[event], &sw->sw_acc_tv,
+		timespecadd(&lb->lb_times[event], &sw->sw_acc_tv,
 		    &lb->lb_times[event]);
 	} else if ((lb = SLIST_FIRST(&lc->lc_free)) != NULL) {
 		/*

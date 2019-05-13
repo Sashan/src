@@ -111,7 +111,7 @@ struct lsbuf {
 	} lb_chain;
 	uintptr_t	lb_lock;		/* lock address */
 	uintptr_t	lb_callsite;		/* call site */
-	struct timeval	lb_times[LB_NEVENT];	/* cumulative times */
+	struct timespec	lb_times[LB_NEVENT];	/* cumulative times */
 	uint32_t	lb_counts[LB_NEVENT];	/* count of events */
 	uint16_t	lb_flags;		/* lock type */
 	uint16_t	lb_cpu;			/* CPU number */
@@ -127,9 +127,9 @@ struct lsbuf {
  */
 struct lockstat_swatch {
 	int		sw_lockstat_flags;
-	struct timeval	sw_start_tv;
-	struct timeval	sw_stop_tv;
-	struct timeval	sw_acc_tv;
+	struct timespec	sw_start_tv;
+	struct timespec	sw_stop_tv;
+	struct timespec	sw_acc_tv;
 	unsigned int	sw_count;
 };
 
@@ -142,7 +142,7 @@ enum {
 };
 
 void lockstat_reset_swatch(struct lockstat_swatch *);
-void lockstat_set_swatch(struct lockstat_swatch *, struct timeval *);
+void lockstat_set_swatch(struct lockstat_swatch *, struct timespec *);
 void lockstat_start_swatch(struct lockstat_swatch *);
 void lockstat_stop_swatch(struct lockstat_swatch *);
 void lockstat_stopstart_swatch(struct lockstat_swatch *);
