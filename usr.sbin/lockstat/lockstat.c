@@ -733,7 +733,7 @@ display(int mask, const char *name)
 		if (cflag)
 			pcscale += l->count;
 		else
-			pcscale += timespec2usec(&l->time);
+			pcscale += timespec2msec(&l->time);
 		displayed++;
 	}
 
@@ -750,7 +750,7 @@ display(int mask, const char *name)
 		if (cflag)
 			metric = l->count;
 		else
-			metric = timespec2usec(&l->time);
+			metric = timespec2msec(&l->time);
 		metric *= pcscale;
 
 		if (l->name[0] == '\0')
@@ -767,7 +767,7 @@ display(int mask, const char *name)
 			if (cflag)
 				metric = lb->lb_counts[event];
 			else
-				metric = timespec2usec(&lb->lb_times[event]);
+				metric = timespec2msec(&lb->lb_times[event]);
 			metric *= pcscale;
 			findsym(FUNC_BYADDR, fname, &lb->lb_callsite, NULL,
 			    false);
