@@ -413,10 +413,7 @@ lockstatread(dev_t dev, struct uio *uio, int flag)
 void
 lockstat_reset_swatch(struct lockstat_swatch *sw)
 {
-	/*
-	 * XXX enable data collection with running lockstat consumer
-	 */
-	sw->sw_lockstat_flags = 0;
+	sw->sw_lockstat_flags = lockstat_dev_enabled;
 	sw->sw_count = 0;
 	sw->sw_start_tv.tv_sec = 0;
 	sw->sw_start_tv.tv_usec = 0;
