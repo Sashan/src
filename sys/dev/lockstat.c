@@ -26,6 +26,7 @@
 #include <sys/malloc.h>
 #include <machine/cpu.h>
 #include <sys/time.h>
+#include <sys/smr.h>
 
 #if LONG_BIT == 64
 #define	LOCKSTAT_HASH_SHIFT	3
@@ -265,11 +266,9 @@ lockstat_stop(struct lsdisable *ld)
 	LOCKSTAT_ENABLED_UPDATE();
 	getnanotime(&ts);
 	/*
-	 * XXX: this is race. I need to figure out how to use barrier here.  I
-	 * basically must wait for all producers to make sure all updates to
-	 * lockstat buffers are done.
+	 * wait for all producers.
 	 */
-	tsleep(&lockstat_stop, PPAUSE, "lockstat", 100000000);
+	smr_barrier();
 
 	/*
 	 * Did we run out of buffers while tracing?
@@ -497,6 +496,7 @@ lockstat_event(uintptr_t rwl, uintptr_t caller, int lf,
 	 * Find the table for this lock+caller pair, and try to locate a
 	 * buffer with the same key.
 	 */
+	smr_read_enter();
 	s = splhigh();
 	lc = curcpu()->ci_lockstat;
 	KASSERT(lc != NULL);
@@ -541,4 +541,5 @@ lockstat_event(uintptr_t rwl, uintptr_t caller, int lf,
 	}
 
 	splx(s);
+	smr_read_leave();
 }
