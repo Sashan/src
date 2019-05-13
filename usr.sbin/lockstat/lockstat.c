@@ -171,8 +171,7 @@ static lock_t	*morelocks(void);
  * The only thing we need to is to convert timeval to double.
  */
 static int timeval_cmp(struct timeval *, struct timeval *);
-double timeval2double(struct timeval *);
-#define T2D(tv) timeval2double((tv))
+double timeval2usec(struct timeval *);
 
 int
 main(int argc, char **argv)
@@ -734,7 +733,7 @@ display(int mask, const char *name)
 		if (cflag)
 			pcscale += l->count;
 		else
-			pcscale += timeval2double(&l->time);
+			pcscale += timeval2usec(&l->time);
 		displayed++;
 	}
 
@@ -751,16 +750,15 @@ display(int mask, const char *name)
 		if (cflag)
 			metric = l->count;
 		else
-			metric = timeval2double(&l->time);
+			metric = timeval2usec(&l->time);
 		metric *= pcscale;
 
 		if (l->name[0] == '\0')
 			findsym(LOCK_BYADDR, l->name, &l->lock, NULL, false);
 
 		if (lflag || l->nbufs > 1)
-			fprintf(outfp, "%6.2f %u %llu.%lu %-22s <all>\n",
-			    metric, l->count,
-			    l->time.tv_sec, l->time.tv_usec, l->name);
+			fprintf(outfp, "%6.2f %7u %9.2f %-22s <all>\n",
+			    metric, l->count, timeval2msec(&l->time), l->name);
 
 		if (lflag)
 			continue;
@@ -769,14 +767,13 @@ display(int mask, const char *name)
 			if (cflag)
 				metric = lb->lb_counts[event];
 			else
-				metric = timeval2double(&lb->lb_times[event]);
+				metric = timeval2usec(&lb->lb_times[event]);
 			metric *= pcscale;
 			findsym(FUNC_BYADDR, fname, &lb->lb_callsite, NULL,
 			    false);
-			fprintf(outfp, "%6.2f %u %llu.%lu %-22s %s\n",
+			fprintf(outfp, "%6.2f %7u %9.2u %-22s %s\n",
 			    metric, lb->lb_counts[event],
-			    lb->lb_times[event].tv_sec, lb->lb_times[event].tv_usec,
-			    l->name, fname);
+			    timeval2msec(&lb->lb_times[event]), l->name, fname);
 		}
 	}
 }
@@ -791,7 +788,7 @@ timeval_cmp(struct timeval *a_tv, struct timeval *b_tv)
 }
 
 double
-timeval2double(struct timeval *tv)
+timeval2usec(struct timeval *tv)
 {
 	double rv;
 	/*
@@ -799,5 +796,16 @@ timeval2double(struct timeval *tv)
 	 */
 	rv = tv->tv_sec * 1000000.0;
 	rv += tv->tv_usec;
+	return (rv);
+}
+
+double
+timeval2msec(struct timeval *tv)
+{
+	double rv;
+
+	rv = tv->tv_sec * 1000.0;
+	rv += tv->tv_usec/1000.0
+
 	return (rv);
 }
