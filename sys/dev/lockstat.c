@@ -264,7 +264,12 @@ lockstat_stop(struct lsdisable *ld)
 	lockstat_dev_enabled = 0;
 	LOCKSTAT_ENABLED_UPDATE();
 	getnanotime(&ts);
-	tsleep(&lockstat_stop, PPAUSE, "lockstat", 10);
+	/*
+	 * XXX: this is race. I need to figure out how to use barrier here.  I
+	 * basically must wait for all producers to make sure all updates to
+	 * lockstat buffers are done.
+	 */
+	tsleep(&lockstat_stop, PPAUSE, "lockstat", 100000000);
 
 	/*
 	 * Did we run out of buffers while tracing?
