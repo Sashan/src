@@ -361,10 +361,14 @@ lockstatioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			le->le_lockstart = 0;
 			le->le_lockend = le->le_lockstart - 1;
 		}
-		if ((le->le_mask & LB_EVENT_MASK) == 0)
-			return (EINVAL);
-		if ((le->le_mask & LB_LOCK_MASK) == 0)
-			return (EINVAL);
+		if ((le->le_mask & LB_EVENT_MASK) == 0) {
+			error = EINVAL;
+			break;
+		}
+		if ((le->le_mask & LB_LOCK_MASK) == 0) {
+			error = EINVAL;
+			break;
+		}
 
 		/*
 		 * Start tracing.
