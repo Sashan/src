@@ -172,6 +172,7 @@ static lock_t	*morelocks(void);
  */
 static int timeval_cmp(struct timeval *, struct timeval *);
 double timeval2usec(struct timeval *);
+double timeval2msec(struct timeval *);
 
 int
 main(int argc, char **argv)
@@ -771,7 +772,7 @@ display(int mask, const char *name)
 			metric *= pcscale;
 			findsym(FUNC_BYADDR, fname, &lb->lb_callsite, NULL,
 			    false);
-			fprintf(outfp, "%6.2f %7u %9.2u %-22s %s\n",
+			fprintf(outfp, "%6.2f %7u %9.2f %-22s %s\n",
 			    metric, lb->lb_counts[event],
 			    timeval2msec(&lb->lb_times[event]), l->name, fname);
 		}
@@ -805,7 +806,7 @@ timeval2msec(struct timeval *tv)
 	double rv;
 
 	rv = tv->tv_sec * 1000.0;
-	rv += tv->tv_usec/1000.0
+	rv += tv->tv_usec/1000.0;
 
 	return (rv);
 }
