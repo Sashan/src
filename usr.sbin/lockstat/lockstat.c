@@ -65,6 +65,7 @@
 #include <string.h>
 #include <limits.h>
 #include <unistd.h>
+#include <elf.h>
 #include <err.h>
 #include <paths.h>
 #include <util.h>
@@ -152,7 +153,6 @@ static bool		dflag;
 static bool		xflag;
 static int		lsfd;
 static int		displayed;
-static int		bin64;
 static FILE		*outfp;
 
 static void	findsym(findsym_t, char *, uintptr_t *, uintptr_t *, bool);
@@ -272,11 +272,7 @@ main(int argc, char **argv)
 	 */
 	if (nlistf == NULL) {
 		nlfd = open(_PATH_KSYMS, O_RDONLY);
-#if 0
-		nlistf = getbootfile();
-#else
-		nlistf = NULL;
-#endif
+		nlistf = _PATH_KSYMS;
 	} else
 		nlfd = -1;
 	if (nlfd == -1) {
@@ -284,13 +280,9 @@ main(int argc, char **argv)
 			err(EXIT_FAILURE, "cannot open " _PATH_KSYMS " or %s",
 			    nlistf);
 	}
-#if 0
-	if (loadsym32(nlfd) != 0) {
-		if (loadsym64(nlfd) != 0)
-			errx(EXIT_FAILURE, "unable to load symbol table");
-		bin64 = 1;
-	}
-#endif
+
+	if (loadsym_elf(nlfd) != 0)
+		errx(EXIT_FAILURE, "unable to load symbol table");
 	close(nlfd);
 
 	memset(&le, 0, sizeof(le));
@@ -504,10 +496,7 @@ findsym(findsym_t find, char *name, uintptr_t *start, uintptr_t *end, bool chg)
 		}
 	}
 
-	if (bin64)
-		rv = findsym64(find, name, start, end);
-	else
-		rv = findsym32(find, name, start, end);
+	rv = findsym_elf(find, name, start, end);
 
 	if (find == FUNC_BYNAME || find == LOCK_BYNAME) {
 		if (rv == -1)
@@ -770,20 +759,6 @@ display(int mask, const char *name)
 			    l->name, fname);
 		}
 	}
-}
-
-int
-findsym64(findsym_t sym, char *name, uintptr_t *start, uintptr_t *end)
-{
-	strlcpy(name, "FooBar", sizeof ("FooBar") -1);
-	return (0);
-}
-
-int
-findsym32(findsym_t sym, char *name, uintptr_t *start, uintptr_t *end)
-{
-	strlcpy(name, "FooBar", sizeof ("FooBar") -1);
-	return (0);
 }
 
 int

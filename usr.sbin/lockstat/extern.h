@@ -31,11 +31,10 @@
 
 #define	NAME_SIZE	32
 
+#include <sys/stdint.h>
 /*
  * elf32.c, elf64.c
  */
-
-#include <sys/stdint.h>
 
 typedef enum findsym_enum {
 	LOCK_BYNAME,
@@ -45,7 +44,5 @@ typedef enum findsym_enum {
 	FIND_MAX
 } findsym_t;
 
-int	loadsym32(int);
-int	loadsym64(int);
-int	findsym32(findsym_t, char *, uintptr_t *, uintptr_t *);
-int	findsym64(findsym_t, char *, uintptr_t *, uintptr_t *);
+int	loadsym_elf(int);
+int	findsym_elf(findsym_t, char *, uintptr_t *, uintptr_t *);
