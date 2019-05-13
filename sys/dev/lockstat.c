@@ -417,6 +417,8 @@ lockstat_reset_swatch(struct lockstat_swatch *sw)
 	sw->sw_start_tv.tv_usec = 0;
 	sw->sw_stop_tv.tv_sec = 0;
 	sw->sw_stop_tv.tv_usec = 0;
+	sw->sw_acc_tv.tv_sec = 0;
+	sw->sw_acc_tv.tv_usec = 0;
 }
 
 void
