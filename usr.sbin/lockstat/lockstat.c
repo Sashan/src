@@ -305,7 +305,6 @@ main(int argc, char **argv)
 		findsym(LOCK_BYNAME, lockname, &le.le_lockstart,
 		    &le.le_lockend, true);
 		le.le_flags |= LE_ONE_LOCK;
-		printf("%lx : %lx\n", le.le_lockstart, le.le_lockend);
 	}
 	if (!lflag)
 		le.le_flags |= LE_CALLSITE;
@@ -707,8 +706,6 @@ makelists(int mask, int event)
     "Total%%  Count   Time/ms          Lock                       Caller\n" \
     "------ ------- --------- ---------------------- " \
     "------------------------------\n"
-#define LOCKSTAT_LINE_FORMATS	\
-    "%llu.%lu %u %llu.%lu %-22s <all>\n"
 /*
  * Display a summary table for one lock type / event type pair.
  */
