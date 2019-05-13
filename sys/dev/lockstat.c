@@ -226,7 +226,7 @@ lockstat_start(struct lsenable *le)
 	    le->le_lockstart, le->le_lockend,
 	    &netlock);
 	membar_sync();
-	getnanotime(&lockstat_stime);
+	nanotime(&lockstat_stime);
 	lockstat_enabled = le->le_mask;
 	membar_producer();
 }
@@ -289,9 +289,10 @@ lockstat_stop(struct lsdisable *ld)
 	 */
 	lockstat_enabled = 0;
 	membar_producer();
-	getnanotime(&ts);
+	nanotime(&ts);
 	/*
-	 * wait for all producers.
+	 * wait for all producers. NetBSD uses tsleep() here. We can
+	 * got for smr_barrier().
 	 */
 	smr_barrier();
 
