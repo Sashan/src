@@ -137,6 +137,9 @@ __mp_lock(struct __mp_lock *mpl)
 {
 	struct __mp_lock_cpu *cpu = &mpl->mpl_cpus[cpu_number()];
 	unsigned long s;
+#if NLOCKSTAT > 0
+	struct lockstat_swatch sw;
+#endif
 
 #ifdef WITNESS
 	if (!__mp_lock_held(mpl, curcpu()))
@@ -144,6 +147,9 @@ __mp_lock(struct __mp_lock *mpl)
 		    LOP_EXCLUSIVE | LOP_NEWORDER, NULL);
 #endif
 
+#if NLOCKSTAT > 0
+	lockstat_reset_swatch(&sw);
+#endif
 	s = intr_disable();
 	if (cpu->mplc_depth++ == 0)
 		cpu->mplc_ticket = atomic_inc_int_nv(&mpl->mpl_users);
@@ -151,6 +157,11 @@ __mp_lock(struct __mp_lock *mpl)
 
 	__mp_lock_spin(mpl, cpu->mplc_ticket);
 	membar_enter_after_atomic();
+#if NLOCKSTAT > 0
+	lockstat_stop_swatch(&sw);
+	lockstat_event((uintptr_t)mpl, (uintptr_t)__builtin_return_address(0),
+	    LB_SPIN_MUTEX | LB_SPIN, &sw);
+#endif
 
 	WITNESS_LOCK(&mpl->mpl_lock_obj, LOP_EXCLUSIVE);
 }
