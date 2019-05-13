@@ -295,6 +295,7 @@ main(int argc, char **argv)
 		findsym(LOCK_BYNAME, lockname, &le.le_lockstart,
 		    &le.le_lockend, true);
 		le.le_flags |= LE_ONE_LOCK;
+		printf("%lx : %lx\n", le.le_lockstart, le.le_lockend);
 	}
 	if (!lflag)
 		le.le_flags |= LE_CALLSITE;
