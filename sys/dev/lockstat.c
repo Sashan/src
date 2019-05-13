@@ -336,9 +336,7 @@ lockstatioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		break;
 
 	case IOC_LOCKSTAT_ENABLE:
-		le = (struct lsenable *)addr;
-
-		if (copyin(addr, &le, sizeof (struct lsenable))) {
+		if (copyin(addr, le, sizeof (struct lsenable))) {
 			error = EBUSY;
 			break;
 		}
