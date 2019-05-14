@@ -98,7 +98,6 @@ struct bpf_d {
 	LIST_ENTRY(bpf_d) bd_list;	/* descriptor list */
 
 	struct task	bd_wake_task;	/* delay csignal() and selwakeup() */
-	int		bd_removed;
 
 	struct smr_entry
 			bd_smr;

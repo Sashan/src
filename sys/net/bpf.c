@@ -392,13 +392,14 @@ bpfclose(dev_t dev, int flag, int mode, struct proc *p)
 	bpf_detachd(d);
 	bpf_wakeup(d);
 	LIST_REMOVE(d, bd_list);
-	d->bd_removed = 1;
 	mtx_leave(&d->bd_mtx);
 
 	/*
-	 * There is a wake up task scheduled, because we did call bpf_wakeup().
-	 * The wake up task will garbage collect a `d` for us.
+	 * Wait for the task to finish here, before proceeding to garbage
+	 * collection.
 	 */
+	taskq_barrier(systq);
+	smr_call(&d->bd_smr, bpf_d_smr, d);
 
 	return (0);
 }
@@ -562,7 +563,6 @@ void
 bpf_wakeup_cb(void *xd)
 {
 	struct bpf_d *d = xd;
-	int removed;
 
 	KERNEL_ASSERT_LOCKED();
 
@@ -571,13 +571,6 @@ bpf_wakeup_cb(void *xd)
 		csignal(d->bd_pgid, d->bd_sig, d->bd_siguid, d->bd_sigeuid);
 
 	selwakeup(&d->bd_sel);
-
-	mtx_enter(&d->bd_mtx);
-	removed = d->bd_removed;
-	mtx_leave(&d->bd_mtx);
-
-	if (removed)
-		smr_call(&d->bd_smr, bpf_d_smr, d);
 }
 
 int
