@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.96 2019/05/10 18:04:06 nicm Exp $
+# $OpenBSD: Makefile,v 1.99 2019/05/25 07:29:04 nicm Exp $
 
 PROG=	tmux
 SRCS=	alerts.c \
@@ -32,12 +32,12 @@ SRCS=	alerts.c \
 	cmd-list-panes.c \
 	cmd-list-sessions.c \
 	cmd-list-windows.c \
-	cmd-list.c \
 	cmd-load-buffer.c \
 	cmd-lock-server.c \
 	cmd-move-window.c \
 	cmd-new-session.c \
 	cmd-new-window.c \
+	cmd-parse.y \
 	cmd-paste-buffer.c \
 	cmd-pipe-pane.c \
 	cmd-queue.c \
@@ -63,7 +63,6 @@ SRCS=	alerts.c \
 	cmd-show-options.c \
 	cmd-source-file.c \
 	cmd-split-window.c \
-	cmd-string.c \
 	cmd-swap-pane.c \
 	cmd-swap-window.c \
 	cmd-switch-client.c \
@@ -126,6 +125,8 @@ CDIAGFLAGS+= -Wno-long-long -Wall -W -Wnested-externs -Wformat=2
 CDIAGFLAGS+= -Wmissing-prototypes -Wstrict-prototypes -Wmissing-declarations
 CDIAGFLAGS+= -Wwrite-strings -Wshadow -Wpointer-arith -Wsign-compare
 CDIAGFLAGS+= -Wundef -Wbad-function-cast -Winline -Wcast-align
+
+CFLAGS += -I${.CURDIR}
 
 LDADD=  -lutil -lcurses -levent
 DPADD=  ${LIBUTIL} ${LIBCURSES} ${LIBEVENT}

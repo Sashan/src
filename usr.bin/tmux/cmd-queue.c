@@ -1,4 +1,4 @@
-/* $OpenBSD: cmd-queue.c,v 1.65 2019/05/03 18:59:58 nicm Exp $ */
+/* $OpenBSD: cmd-queue.c,v 1.71 2019/05/25 10:46:55 nicm Exp $ */
 
 /*
  * Copyright (c) 2013 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -32,11 +32,14 @@ static struct cmdq_list global_queue = TAILQ_HEAD_INITIALIZER(global_queue);
 static const char *
 cmdq_name(struct client *c)
 {
-	static char	s[32];
+	static char	s[256];
 
 	if (c == NULL)
 		return ("<global>");
-	xsnprintf(s, sizeof s, "<%p>", c);
+	if (c->name != NULL)
+		xsnprintf(s, sizeof s, "<%s>", c->name);
+	else
+		xsnprintf(s, sizeof s, "<%p>", c);
 	return (s);
 }
 
@@ -175,21 +178,14 @@ cmdq_remove(struct cmdq_item *item)
 	free(item);
 }
 
-/* Set command group. */
-static u_int
-cmdq_next_group(void)
-{
-	static u_int	group;
-
-	return (++group);
-}
-
 /* Remove all subsequent items that match this item's group. */
 static void
 cmdq_remove_group(struct cmdq_item *item)
 {
 	struct cmdq_item	*this, *next;
 
+	if (item->group == 0)
+		return;
 	this = TAILQ_NEXT(item, entry);
 	while (this != NULL) {
 		next = TAILQ_NEXT(this, entry);
@@ -206,7 +202,6 @@ cmdq_get_command(struct cmd_list *cmdlist, struct cmd_find_state *current,
 {
 	struct cmdq_item	*item, *first = NULL, *last = NULL;
 	struct cmd		*cmd;
-	u_int			 group = cmdq_next_group();
 	struct cmdq_shared	*shared;
 
 	shared = xcalloc(1, sizeof *shared);
@@ -222,12 +217,14 @@ cmdq_get_command(struct cmd_list *cmdlist, struct cmd_find_state *current,
 		xasprintf(&item->name, "[%s/%p]", cmd->entry->name, item);
 		item->type = CMDQ_COMMAND;
 
-		item->group = group;
+		item->group = cmd->group;
 		item->flags = flags;
 
 		item->shared = shared;
 		item->cmdlist = cmdlist;
 		item->cmd = cmd;
+
+		log_debug("%s: %s group %u", __func__, item->name, item->group);
 
 		shared->references++;
 		cmdlist->references++;
@@ -266,13 +263,14 @@ static enum cmd_retval
 cmdq_fire_command(struct cmdq_item *item)
 {
 	struct client		*c = item->client;
+	struct cmdq_shared	*shared = item->shared;
 	struct cmd		*cmd = item->cmd;
 	const struct cmd_entry	*entry = cmd->entry;
 	enum cmd_retval		 retval;
 	struct cmd_find_state	*fsp, fs;
 	int			 flags;
 
-	flags = !!(cmd->flags & CMD_CONTROL);
+	flags = !!(shared->flags & CMDQ_SHARED_CONTROL);
 	cmdq_guard(item, "begin", flags);
 
 	if (item->client == NULL)
@@ -326,6 +324,25 @@ cmdq_get_callback1(const char *name, cmdq_cb cb, void *data)
 	item->data = data;
 
 	return (item);
+}
+
+/* Generic error callback. */
+static enum cmd_retval
+cmdq_error_callback(struct cmdq_item *item, void *data)
+{
+	char	*error = data;
+
+	cmdq_error(item, "%s", error);
+	free(error);
+
+	return (CMD_RETURN_NORMAL);
+}
+
+/* Get an error callback for the command queue. */
+struct cmdq_item *
+cmdq_get_error(const char *error)
+{
+	return (cmdq_get_callback(cmdq_error_callback, xstrdup(error)));
 }
 
 /* Fire callback on callback queue. */
