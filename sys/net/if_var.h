@@ -185,6 +185,8 @@ struct ifnet {				/* and the entries */
 	struct sockaddr_dl *if_sadl;	/* [N] pointer to our sockaddr_dl */
 
 	void	*if_afdata[AF_MAX];
+
+	unsigned int if_rcv_idx;
 };
 #define	if_mtu		if_data.ifi_mtu
 #define	if_type		if_data.ifi_type
