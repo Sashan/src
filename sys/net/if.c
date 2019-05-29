@@ -740,7 +740,7 @@ if_enqueue_ifq(struct ifnet *ifp, struct mbuf *m)
 void
 if_input(struct ifnet *ifp, struct mbuf_list *ml)
 {
-	ifiq_input(ifp->if_rcv[ifp->if_rcv_idx % NET_TASKQ], ml);
+	ifiq_input(ifp->if_iqs[ifp->if_rcv_idx % NET_TASKQ], ml);
 	ifp->if_rcv_idx++;
 }
 
