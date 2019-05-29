@@ -235,7 +235,7 @@ int	ifq_congestion;
 
 int		 netisr;
 
-#define	NET_TASKQ	1
+#define	NET_TASKQ	8
 struct taskq	*nettqmp[NET_TASKQ];
 
 struct task if_input_task_locked = TASK_INITIALIZER(if_netisr, NULL);
@@ -618,11 +618,13 @@ if_attach_common(struct ifnet *ifp)
 	if (ifp->if_txmit == 0)
 		ifp->if_txmit = IF_TXMIT_DEFAULT;
 
-	if_attach_iqueues(ifp, NET_TASKQ);
+	ifiq_init(&ifp->if_rcv, ifp, 0);
 
 	ifp->if_rcv.ifiq_ifiqs[0] = &ifp->if_rcv;
 	ifp->if_iqs = ifp->if_rcv.ifiq_ifiqs;
 	ifp->if_niqs = 1;
+
+	if_attach_iqueues(ifp, NET_TASKQ);
 
 	ifp->if_addrhooks = malloc(sizeof(*ifp->if_addrhooks),
 	    M_TEMP, M_WAITOK);
@@ -740,7 +742,7 @@ if_enqueue_ifq(struct ifnet *ifp, struct mbuf *m)
 void
 if_input(struct ifnet *ifp, struct mbuf_list *ml)
 {
-	ifiq_input(ifp->if_iqs[ifp->if_rcv_idx % NET_TASKQ], ml);
+	ifiq_input(ifp->if_iqs[ifp->if_rcv_idx % ifp->if_niqs], ml);
 	ifp->if_rcv_idx++;
 }
 
@@ -977,14 +979,14 @@ if_netisr(void *unused)
 {
 	int n, t = 0;
 
-	NET_LOCK();
+	NET_RLOCK();
 
 	while ((n = netisr) != 0) {
 		/* Like sched_pause() but with a rwlock dance. */
 		if (curcpu()->ci_schedstate.spc_schedflags & SPCF_SHOULDYIELD) {
-			NET_UNLOCK();
+			NET_RUNLOCK();
 			yield();
-			NET_LOCK();
+			NET_RLOCK();
 		}
 
 		atomic_clearbits_int(&netisr, n);
@@ -1045,7 +1047,7 @@ if_netisr(void *unused)
 	}
 #endif
 
-	NET_UNLOCK();
+	NET_RUNLOCK();
 }
 
 void
