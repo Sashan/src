@@ -618,7 +618,7 @@ if_attach_common(struct ifnet *ifp)
 	if (ifp->if_txmit == 0)
 		ifp->if_txmit = IF_TXMIT_DEFAULT;
 
-	ifiq_init(&ifp->if_rcv, ifp, 0);
+	if_attach_iqueues(ifp, NET_TASKQ);
 
 	ifp->if_rcv.ifiq_ifiqs[0] = &ifp->if_rcv;
 	ifp->if_iqs = ifp->if_rcv.ifiq_ifiqs;
@@ -740,7 +740,8 @@ if_enqueue_ifq(struct ifnet *ifp, struct mbuf *m)
 void
 if_input(struct ifnet *ifp, struct mbuf_list *ml)
 {
-	ifiq_input(&ifp->if_rcv, ml);
+	ifiq_input(ifp->if_rcv[ifp->if_rcv_idx % NET_TASKQ], ml);
+	ifp->if_rcv_idx++;
 }
 
 int
