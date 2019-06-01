@@ -940,23 +940,30 @@ int
 pf_state_insert(struct pfi_kif *kif, struct pf_state_key **skw,
     struct pf_state_key **sks, struct pf_state *s)
 {
+	int	rv = 0;
+
 	PF_ASSERT_LOCKED();
 
 	s->kif = kif;
+	PF_STATE_ENTER_WRITE();
 	if (*skw == *sks) {
-		if (pf_state_key_attach(*skw, s, PF_SK_WIRE))
-			return (-1);
+		if (pf_state_key_attach(*skw, s, PF_SK_WIRE)) {
+			rv = -1;
+			goto done;
+		}
 		*skw = *sks = s->key[PF_SK_WIRE];
 		s->key[PF_SK_STACK] = s->key[PF_SK_WIRE];
 	} else {
 		if (pf_state_key_attach(*skw, s, PF_SK_WIRE)) {
 			pool_put(&pf_state_key_pl, *sks);
-			return (-1);
+			rv = -1;
+			goto done;
 		}
 		*skw = s->key[PF_SK_WIRE];
 		if (pf_state_key_attach(*sks, s, PF_SK_STACK)) {
 			pf_state_key_detach(s, PF_SK_WIRE);
-			return (-1);
+			rv = -1;
+			goto done;
 		}
 		*sks = s->key[PF_SK_STACK];
 	}
@@ -973,16 +980,19 @@ pf_state_insert(struct pfi_kif *kif, struct pf_state_key **skw,
 			addlog("\n");
 		}
 		pf_detach_state(s);
-		return (-1);
+		rv = -1;
+		goto done;
 	}
 	TAILQ_INSERT_TAIL(&state_list, s, entry_list);
 	pf_status.fcounters[FCNT_STATE_INSERT]++;
 	pf_status.states++;
 	pfi_kif_ref(kif, PFI_KIF_REF_STATE);
+done:
+	PF_STATE_EXIT_WRITE();
 #if NPFSYNC > 0
 	pfsync_insert_state(s);
 #endif	/* NPFSYNC > 0 */
-	return (0);
+	return (rv);
 }
 
 struct pf_state *
