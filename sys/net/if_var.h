@@ -181,12 +181,10 @@ struct ifnet {				/* and the entries */
 	struct	ifiqueue if_rcv;	/* rx/input queue */
 	struct	ifiqueue **if_iqs;	/* [I] pointer to the array of iqs */
 	unsigned int if_niqs;		/* [I] number of input queues */
-	unsigned int if_rcv_idx;	/* round robin for softnet tasks */
 
 	struct sockaddr_dl *if_sadl;	/* [N] pointer to our sockaddr_dl */
 
 	void	*if_afdata[AF_MAX];
-
 };
 #define	if_mtu		if_data.ifi_mtu
 #define	if_type		if_data.ifi_type
