@@ -1,4 +1,4 @@
-/* $OpenBSD: cmd-new-session.c,v 1.118 2019/05/17 05:47:31 nicm Exp $ */
+/* $OpenBSD: cmd-new-session.c,v 1.120 2019/06/03 18:28:37 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -39,8 +39,8 @@ const struct cmd_entry cmd_new_session_entry = {
 	.name = "new-session",
 	.alias = "new",
 
-	.args = { "Ac:dDEF:n:Ps:t:x:y:", 0, -1 },
-	.usage = "[-AdDEP] [-c start-directory] [-F format] [-n window-name] "
+	.args = { "Ac:dDEF:n:Ps:t:x:Xy:", 0, -1 },
+	.usage = "[-AdDEPX] [-c start-directory] [-F format] [-n window-name] "
 		 "[-s session-name] " CMD_TARGET_SESSION_USAGE " [-x width] "
 		 "[-y height] [command]",
 
@@ -105,7 +105,8 @@ cmd_new_session_exec(struct cmd *self, struct cmdq_item *item)
 			if (args_has(args, 'A')) {
 				retval = cmd_attach_session(item,
 				    newname, args_has(args, 'D'),
-				    0, NULL, args_has(args, 'E'));
+				    args_has(args, 'X'), 0, NULL,
+				    args_has(args, 'E'));
 				free(newname);
 				return (retval);
 			}
@@ -242,8 +243,13 @@ cmd_new_session_exec(struct cmd *self, struct cmdq_item *item)
 
 	/* Create the new session. */
 	oo = options_create(global_s_options);
-	if (args_has(args, 'x') || args_has(args, 'y'))
+	if (args_has(args, 'x') || args_has(args, 'y')) {
+		if (!args_has(args, 'x'))
+			dsx = sx;
+		if (!args_has(args, 'y'))
+			dsy = sy;
 		options_set_string(oo, "default-size", 0, "%ux%u", dsx, dsy);
+	}
 	env = environ_create();
 	if (c != NULL && !args_has(args, 'E'))
 		environ_update(global_s_options, c->environ, env);

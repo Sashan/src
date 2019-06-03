@@ -1,4 +1,4 @@
-/*	$OpenBSD: realpath.c,v 1.23 2019/05/28 13:08:56 beck Exp $ */
+/*	$OpenBSD: realpath.c,v 1.25 2019/05/30 13:22:48 deraadt Exp $ */
 /*
  * Copyright (c) 2003 Constantin S. Svintsoff <kostik@iclub.nsu.ru>
  *
