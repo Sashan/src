@@ -1,4 +1,4 @@
-/*	$OpenBSD: ntp.c,v 1.150 2019/05/28 06:49:46 otto Exp $ */
+/*	$OpenBSD: ntp.c,v 1.152 2019/05/30 13:42:19 otto Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -316,6 +316,11 @@ ntp_main(struct ntpd_conf *nconf, struct passwd *pw, int argc, char **argv)
 		    (peer_cnt == 0 && sensors_cnt == 0)))
 			priv_settime(0);	/* no good peers, don't wait */
 
+		TAILQ_FOREACH(cstr, &conf->constraints, entry) {
+			if (constraint_query(cstr) == -1)
+				continue;
+		}
+
 		if (ibuf_main->w.queued > 0)
 			pfd[PFD_PIPE_MAIN].events |= POLLOUT;
 		if (ibuf_dns->w.queued > 0)
@@ -330,15 +335,7 @@ ntp_main(struct ntpd_conf *nconf, struct passwd *pw, int argc, char **argv)
 		}
 		ctls = i;
 
-		TAILQ_FOREACH(cstr, &conf->constraints, entry) {
-			if (constraint_query(cstr) == -1)
-				continue;
-		}
-
 		now = getmonotime();
-		if (constraint_cnt)
-			nextaction = now + 1;
-
 		timeout = nextaction - now;
 		if (timeout < 0)
 			timeout = 0;
@@ -474,7 +471,7 @@ int
 ntp_dispatch_imsg_dns(void)
 {
 	struct imsg		 imsg;
-	struct ntp_peer		*peer, *npeer;
+	struct ntp_peer		*peer, *npeer, *tmp;
 	u_int16_t		 dlen;
 	u_char			*p;
 	struct ntp_addr		*h;
@@ -502,6 +499,21 @@ ntp_dispatch_imsg_dns(void)
 			if (peer->addr != NULL) {
 				log_warnx("IMSG_HOST_DNS but addr != NULL!");
 				break;
+			}
+
+			/*
+			 * For the redo dns case we want to have only one clone
+			 * of the pool peer, since it wil be cloned again
+			 */
+			if (peer->addr_head.pool) {
+				TAILQ_FOREACH_SAFE(npeer, &conf->ntp_peers,
+				    entry, tmp) {
+					if (npeer->id == peer->id)
+						continue;
+					if (strcmp(npeer->addr_head.name,
+					    peer->addr_head.name) == 0)
+						peer_remove(npeer);
+				}
 			}
 
 			dlen = imsg.hdr.len - IMSG_HEADER_SIZE;
@@ -576,6 +588,19 @@ peer_remove(struct ntp_peer *p)
 	TAILQ_REMOVE(&conf->ntp_peers, p, entry);
 	free(p);
 	peer_cnt--;
+}
+
+void
+peer_addr_head_clear(struct ntp_peer *p)
+{
+	struct ntp_addr *a = p->addr_head.a;
+	while (a) {
+		struct ntp_addr *next = a->next;
+		free(a);
+		a = next;
+	}
+	p->addr_head.a = NULL;
+	p->addr = NULL;
 }
 
 static void
