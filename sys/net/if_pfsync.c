@@ -1302,7 +1302,9 @@ pfsyncioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 
 			/* drop everything */
 			timeout_del(&sc->sc_tmo);
+			PF_LOCK();
 			pfsync_drop(sc);
+			PF_UNLOCK();
 
 			pfsync_cancel_full_update(sc);
 		}
@@ -1312,8 +1314,11 @@ pfsyncioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		    ifr->ifr_mtu <= PFSYNC_MINPKT ||
 		    ifr->ifr_mtu > sc->sc_sync_if->if_mtu)
 			return (EINVAL);
-		if (ifr->ifr_mtu < ifp->if_mtu)
+		if (ifr->ifr_mtu < ifp->if_mtu) {
+			PF_LOCK();
 			pfsync_sendout();
+			PF_UNLOCK();
+		}
 		ifp->if_mtu = ifr->ifr_mtu;
 		break;
 	case SIOCGETPFSYNC:
@@ -1369,8 +1374,11 @@ pfsyncioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		if (sifp->if_mtu < sc->sc_if.if_mtu ||
 		    (sc->sc_sync_if != NULL &&
 		    sifp->if_mtu < sc->sc_sync_if->if_mtu) ||
-		    sifp->if_mtu < MCLBYTES - sizeof(struct ip))
+		    sifp->if_mtu < MCLBYTES - sizeof(struct ip)) {
+			PF_LOCK();
 			pfsync_sendout();
+			PF_UNLOCK();
+		}
 
 		if (sc->sc_sync_if) {
 			hook_disestablish(
@@ -1427,7 +1435,9 @@ pfsyncioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		sc->sc_dhcookie = hook_establish(sc->sc_sync_if->if_detachhooks,
 		    0, pfsync_ifdetach, sc);
 
+		PF_LOCK();
 		pfsync_request_full_update(sc);
+		PF_UNLOCK();
 
 		break;
 
