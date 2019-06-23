@@ -39,6 +39,7 @@
 #include <sys/msgbuf.h>
 #include <sys/malloc.h>
 #include <sys/mount.h>
+#include <sys/srp.h>
 
 #include <uvm/uvm_extern.h>
 #include <machine/db_machdep.h>		/* type definitions */
@@ -117,6 +118,7 @@ void	db_write_cmd(db_expr_t, boolean_t, db_expr_t, char *);
 void	db_witness_display(db_expr_t, int, db_expr_t, char *);
 void	db_witness_list(db_expr_t, int, db_expr_t, char *);
 void	db_witness_list_all(db_expr_t, int, db_expr_t, char *);
+void	db_show_srp_cmd(db_expr_t, int, db_expr_t, char *);
 
 
 /*
@@ -541,6 +543,13 @@ db_bcstats_print_cmd(db_expr_t addr, int have_addr, db_expr_t count, char *modif
 	bcstats_print(db_printf);
 }
 
+/*ARGSUSED*/
+void
+db_show_srp_cmd(db_expr_t addr, int have_addr, db_expr_t count, char *modif)
+{
+	srp_print(NULL, db_printf);
+}
+
 /*
  * 'show' commands
  */
@@ -586,6 +595,9 @@ struct db_command db_show_cmds[] = {
 	{ "proc",	db_proc_print_cmd,	0,	NULL },
 	{ "registers",	db_show_regs,		0,	NULL },
 	{ "socket",	db_socket_print_cmd,	0,	NULL },
+#ifdef SRP_DEBUG
+	{ "srp",	db_show_srp_cmd,	0,	NULL },
+#endif
 	{ "struct",	db_ctf_show_struct,	CS_OWN,	NULL },
 	{ "uvmexp",	db_uvmexp_print_cmd,	0,	NULL },
 	{ "vnode",	db_vnode_print_cmd,	0,	NULL },

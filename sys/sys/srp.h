@@ -21,6 +21,11 @@
 
 #include <sys/refcnt.h>
 
+#ifdef	SRP_DEBUG
+#include <sys/types.h>
+#include <sys/stdint.h>
+#endif
+
 #ifndef __upunused
 #ifdef MULTIPROCESSOR
 #define __upunused
@@ -35,9 +40,17 @@ struct srp {
 
 #define SRP_INITIALIZER() { NULL }
 
+#ifndef	SRP_STACKTRACE
+#define	SRP_STACKTRACE	10
+#endif
+
 struct srp_hazard {
 	struct srp		*sh_p;
 	void			*sh_v;
+#ifdef SRP_DEBUG
+	struct process		*sh_proc;
+	uintptr_t		*sh_stack[SRP_STACKTRACE];
+#endif
 };
 
 struct srp_ref {
@@ -184,6 +197,10 @@ void		srpl_rc_init(struct srpl_rc *, void (*)(void *, void *),
 	srp_update_locked(&(_rc)->srpl_gc, ref, n);			\
 	srp_update_locked(&(_rc)->srpl_gc, &c->_ENTRY.se_next, NULL);	\
 } while (0)
+
+#ifdef SRP_DEBUG
+int srp_print(void *v, int (*)(const char *, ...));
+#endif
 
 #endif /* _KERNEL */
 
