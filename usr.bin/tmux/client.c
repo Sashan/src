@@ -1,4 +1,4 @@
-/* $OpenBSD: client.c,v 1.128 2018/11/22 10:36:40 nicm Exp $ */
+/* $OpenBSD: client.c,v 1.130 2019/06/28 13:35:05 deraadt Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -215,14 +215,13 @@ client_exit_message(void)
 int
 client_main(struct event_base *base, int argc, char **argv, int flags)
 {
+	struct cmd_parse_result	*pr;
 	struct cmd		*cmd;
-	struct cmd_list		*cmdlist;
 	struct msg_command_data	*data;
 	int			 cmdflags, fd, i;
 	const char		*ttynam, *cwd;
 	pid_t			 ppid;
 	enum msgtype		 msg;
-	char			*cause;
 	struct termios		 tio, saved_tio;
 	size_t			 size;
 
@@ -248,14 +247,15 @@ client_main(struct event_base *base, int argc, char **argv, int flags)
 		 * later in server) but it is necessary to get the start server
 		 * flag.
 		 */
-		cmdlist = cmd_list_parse(argc, argv, NULL, 0, &cause);
-		if (cmdlist != NULL) {
-			TAILQ_FOREACH(cmd, &cmdlist->list, qentry) {
+		pr = cmd_parse_from_arguments(argc, argv, NULL);
+		if (pr->status == CMD_PARSE_SUCCESS) {
+			TAILQ_FOREACH(cmd, &pr->cmdlist->list, qentry) {
 				if (cmd->entry->flags & CMD_STARTSERVER)
 					cmdflags |= CMD_STARTSERVER;
 			}
-			cmd_list_free(cmdlist);
-		}
+			cmd_list_free(pr->cmdlist);
+		} else
+			free(pr->error);
 	}
 
 	/* Create client process structure (starts logging). */
@@ -434,7 +434,7 @@ client_stdin_callback(__unused int fd, __unused short events,
 	struct msg_stdin_data	data;
 
 	data.size = read(STDIN_FILENO, data.data, sizeof data.data);
-	if (data.size < 0 && (errno == EINTR || errno == EAGAIN))
+	if (data.size == -1 && (errno == EINTR || errno == EAGAIN))
 		return;
 
 	proc_send(client_peer, MSG_STDIN, -1, &data, sizeof data);

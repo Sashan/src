@@ -1,4 +1,4 @@
-/* $OpenBSD: softraid.c,v 1.393 2019/05/15 12:17:18 jan Exp $ */
+/* $OpenBSD: softraid.c,v 1.395 2019/07/04 18:09:17 bluhm Exp $ */
 /*
  * Copyright (c) 2007, 2008, 2009 Marco Peereboom <marco@peereboom.us>
  * Copyright (c) 2008 Chris Kuethe <ckuethe@openbsd.org>
@@ -1954,7 +1954,8 @@ sr_ccb_free(struct sr_discipline *sd)
 	while ((ccb = TAILQ_FIRST(&sd->sd_ccb_freeq)) != NULL)
 		TAILQ_REMOVE(&sd->sd_ccb_freeq, ccb, ccb_link);
 
-	free(sd->sd_ccb, M_DEVBUF, sizeof(*sd->sd_ccb));
+	free(sd->sd_ccb, M_DEVBUF, sd->sd_max_wu * sd->sd_max_ccb_per_wu *
+	    sizeof(struct sr_ccb));
 }
 
 struct sr_ccb *
@@ -2088,7 +2089,7 @@ sr_ccb_done(struct sr_ccb *ccb)
 }
 
 int
-sr_wu_alloc(struct sr_discipline *sd, int wu_size)
+sr_wu_alloc(struct sr_discipline *sd)
 {
 	struct sr_workunit	*wu;
 	int			i, no_wu;
@@ -2106,7 +2107,7 @@ sr_wu_alloc(struct sr_discipline *sd, int wu_size)
 	TAILQ_INIT(&sd->sd_wu_defq);
 
 	for (i = 0; i < no_wu; i++) {
-		wu = malloc(wu_size, M_DEVBUF, M_WAITOK | M_ZERO);
+		wu = malloc(sd->sd_wu_size, M_DEVBUF, M_WAITOK | M_ZERO);
 		TAILQ_INSERT_TAIL(&sd->sd_wu, wu, swu_next);
 		TAILQ_INIT(&wu->swu_ccb);
 		wu->swu_dis = sd;
@@ -2133,7 +2134,7 @@ sr_wu_free(struct sr_discipline *sd)
 
 	while ((wu = TAILQ_FIRST(&sd->sd_wu)) != NULL) {
 		TAILQ_REMOVE(&sd->sd_wu, wu, swu_next);
-		free(wu, M_DEVBUF, sizeof(*wu));
+		free(wu, M_DEVBUF, sd->sd_wu_size);
 	}
 }
 
@@ -3979,6 +3980,7 @@ sr_discipline_init(struct sr_discipline *sd, int level)
 	task_set(&sd->sd_hotspare_rebuild_task, sr_hotspare_rebuild_callback,
 	    sd);
 
+	sd->sd_wu_size = sizeof(struct sr_workunit);
 	switch (level) {
 	case 0:
 		sr_raid0_discipline_init(sd);
@@ -4300,7 +4302,7 @@ sr_raid_recreate_wu(struct sr_workunit *wu)
 int
 sr_alloc_resources(struct sr_discipline *sd)
 {
-	if (sr_wu_alloc(sd, sizeof(struct sr_workunit))) {
+	if (sr_wu_alloc(sd)) {
 		sr_error(sd->sd_sc, "unable to allocate work units");
 		return (ENOMEM);
 	}

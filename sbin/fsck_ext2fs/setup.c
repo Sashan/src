@@ -1,4 +1,4 @@
-/*	$OpenBSD: setup.c,v 1.31 2017/08/26 06:32:06 otto Exp $	*/
+/*	$OpenBSD: setup.c,v 1.33 2019/07/01 07:13:44 kevlo Exp $	*/
 /*	$NetBSD: setup.c,v 1.1 1997/06/11 11:22:01 bouyer Exp $	*/
 
 /*
@@ -76,7 +76,7 @@ setup(char *dev)
 	havesb = 0;
 	fswritefd = -1;
 	doskipclean = skipclean;
-	if (stat(dev, &statb) < 0) {
+	if (stat(dev, &statb) == -1) {
 		printf("Can't stat %s: %s\n", dev, strerror(errno));
 		return (0);
 	}
@@ -85,13 +85,13 @@ setup(char *dev)
 		if (reply("CONTINUE") == 0)
 			return (0);
 	}
-	if ((fsreadfd = open(dev, O_RDONLY)) < 0) {
+	if ((fsreadfd = open(dev, O_RDONLY)) == -1) {
 		printf("Can't open %s: %s\n", dev, strerror(errno));
 		return (0);
 	}
 	if (preen == 0)
 		printf("** %s", dev);
-	if (nflag || (fswritefd = open(dev, O_WRONLY)) < 0) {
+	if (nflag || (fswritefd = open(dev, O_WRONLY)) == -1) {
 		fswritefd = -1;
 		if (preen)
 			pfatal("NO WRITE ACCESS");
@@ -344,9 +344,9 @@ readsb(int listerr)
 	asblk.b_un.b_fs->e2fs_rgid = sblk.b_un.b_fs->e2fs_rgid;
 	asblk.b_un.b_fs->e2fs_block_group_nr =
 	    sblk.b_un.b_fs->e2fs_block_group_nr;
-	asblk.b_un.b_fs->e2fs_features_rocompat &= ~EXT2F_ROCOMPAT_LARGEFILE;
+	asblk.b_un.b_fs->e2fs_features_rocompat &= ~EXT2F_ROCOMPAT_LARGE_FILE;
 	asblk.b_un.b_fs->e2fs_features_rocompat |=
-	    sblk.b_un.b_fs->e2fs_features_rocompat & EXT2F_ROCOMPAT_LARGEFILE;
+	    sblk.b_un.b_fs->e2fs_features_rocompat & EXT2F_ROCOMPAT_LARGE_FILE;
 	if (sblock.e2fs.e2fs_rev > E2FS_REV0 &&
 	    ((sblock.e2fs.e2fs_features_incompat & ~EXT2F_INCOMPAT_SUPP) ||
 	    (sblock.e2fs.e2fs_features_rocompat & ~EXT2F_ROCOMPAT_SUPP))) {
@@ -487,7 +487,7 @@ getdisklabel(char *s, int fd)
 {
 	static struct disklabel lab;
 
-	if (ioctl(fd, DIOCGDINFO, (char *)&lab) < 0) {
+	if (ioctl(fd, DIOCGDINFO, (char *)&lab) == -1) {
 		if (s == NULL)
 			return (NULL);
 		pwarn("ioctl (GCINFO): %s\n", strerror(errno));
@@ -504,7 +504,7 @@ cgoverhead(int c)
 		1 /* inode bitmap */ +
 		sblock.e2fs_itpg;
 	if (sblock.e2fs.e2fs_rev > E2FS_REV0 &&
-	    sblock.e2fs.e2fs_features_rocompat & EXT2F_ROCOMPAT_SPARSESUPER) {
+	    sblock.e2fs.e2fs_features_rocompat & EXT2F_ROCOMPAT_SPARSE_SUPER) {
 		if (cg_has_sb(c) == 0)
 			return overh;
 	}

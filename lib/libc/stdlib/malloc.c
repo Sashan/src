@@ -1,4 +1,4 @@
-/*	$OpenBSD: malloc.c,v 1.260 2019/05/10 15:03:24 otto Exp $	*/
+/*	$OpenBSD: malloc.c,v 1.262 2019/06/28 13:32:42 deraadt Exp $	*/
 /*
  * Copyright (c) 2008, 2010, 2011, 2016 Otto Moerbeek <otto@drijf.net>
  * Copyright (c) 2012 Matthew Dempsky <matthew@openbsd.org>
@@ -897,7 +897,7 @@ omalloc_make_chunks(struct dir_info *d, int bits, int listnum)
 		return NULL;
 
 	/* memory protect the page allocated in the malloc(0) case */
-	if (bits == 0 && mprotect(pp, MALLOC_PAGESIZE, PROT_NONE) < 0)
+	if (bits == 0 && mprotect(pp, MALLOC_PAGESIZE, PROT_NONE) == -1)
 		goto err;
 
 	bp = alloc_chunk_info(d, bits);
@@ -1371,7 +1371,8 @@ ofree(struct dir_info **argpool, void *p, int clear, int check, size_t argsz)
 	REALSIZE(sz, r);
 	if (pool->mmap_flag) {
 		clear = 1;
-		argsz = sz;
+		if (!check)
+			argsz = sz;
 	}
 	if (check) {
 		if (sz <= MALLOC_MAXCHUNK) {

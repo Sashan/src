@@ -1,4 +1,4 @@
-/*	$OpenBSD: control.c,v 1.14 2019/01/14 16:30:21 florian Exp $ */
+/*	$OpenBSD: control.c,v 1.17 2019/07/10 05:53:37 otto Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -47,12 +47,12 @@ control_check(char *path)
 	strlcpy(sun.sun_path, path, sizeof(sun.sun_path));
 
 	if ((fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
-		log_warn("control_check: socket check");
+		log_debug("control_check: socket check");
 		return (-1);
 	}
 
 	if (connect(fd, (struct sockaddr *)&sun, sizeof(sun)) == 0) {
-		log_warnx("control_check: socket in use");
+		log_debug("control_check: socket in use");
 		close(fd);
 		return (-1);
 	}
@@ -339,21 +339,25 @@ build_show_peer(struct ctl_show_peer *cp, struct ntp_peer *p)
 {
 	const char	*a = "not resolved";
 	const char	*pool = "", *addr_head_name = "";
+	const char	*auth = "";
 	u_int8_t	 shift, best, validdelaycnt, jittercnt;
 	time_t		 now;
 
 	now = getmonotime();
 
-	if (p->addr)
+	if (p->addr) {
 		a = log_sockaddr((struct sockaddr *)&p->addr->ss);
+		if (p->addr->notauth)
+			auth = " (non-dnssec lookup)";
+	}
 	if (p->addr_head.pool)
 		pool = "from pool ";
 
-	if (0 != strcmp(a, p->addr_head.name))
+	if (0 != strcmp(a, p->addr_head.name) || p->addr_head.pool)
 		addr_head_name = p->addr_head.name;
 
 	snprintf(cp->peer_desc, sizeof(cp->peer_desc),
-	    "%s %s%s", a, pool, addr_head_name);
+	    "%s %s%s%s", a, pool, addr_head_name, auth);
 
 	validdelaycnt = best = 0;
 	cp->offset = cp->delay = 0.0;

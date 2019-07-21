@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.898 2019/05/13 20:10:23 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.922 2019/07/15 18:25:07 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -111,9 +111,10 @@ struct winlink;
 #define KEYC_CTRL 0x400000000000ULL
 #define KEYC_SHIFT 0x800000000000ULL
 #define KEYC_XTERM 0x1000000000000ULL
+#define KEYC_LITERAL 0x2000000000000ULL
 
 /* Mask to obtain key w/o modifiers. */
-#define KEYC_MASK_MOD (KEYC_ESCAPE|KEYC_CTRL|KEYC_SHIFT|KEYC_XTERM)
+#define KEYC_MASK_MOD (KEYC_ESCAPE|KEYC_CTRL|KEYC_SHIFT|KEYC_XTERM|KEYC_LITERAL)
 #define KEYC_MASK_KEY (~KEYC_MASK_MOD)
 
 /* Is this a mouse key? */
@@ -427,6 +428,7 @@ enum tty_code_code {
 	TTYC_SETAF,
 	TTYC_SETRGBB,
 	TTYC_SETRGBF,
+	TTYC_SETULC,
 	TTYC_SGR0,
 	TTYC_SITM,
 	TTYC_SMACS,
@@ -595,12 +597,13 @@ enum utf8_state {
 
 /* Grid cell data. */
 struct grid_cell {
-	u_char			flags;
+	struct utf8_data	data; /* 21 bytes */
 	u_short			attr;
+	u_char			flags;
 	int			fg;
 	int			bg;
-	struct utf8_data	data;
-};
+	int			us;
+} __packed;
 struct grid_cell_entry {
 	u_char			flags;
 	union {
@@ -680,6 +683,7 @@ TAILQ_HEAD(style_ranges, style_range);
 struct style {
 	struct grid_cell	gc;
 
+	int			fill;
 	enum style_align	align;
 	enum style_list		list;
 
@@ -752,12 +756,12 @@ struct screen_redraw_ctx {
 
 /* Menu. */
 struct menu_item {
-	char		*name;
-	char		*command;
+	const char	*name;
 	key_code	 key;
+	const char	*command;
 };
 struct menu {
-	char			*title;
+	const char		*title;
 	struct menu_item	*items;
 	u_int			 count;
 	u_int			 width;
@@ -810,6 +814,7 @@ struct window_pane {
 	u_int		 active_point;
 
 	struct window	*window;
+	struct options	*options;
 
 	struct layout_cell *layout_cell;
 	struct layout_cell *saved_layout_cell;
@@ -836,6 +841,7 @@ struct window_pane {
 #define PANE_STATUSREADY 0x200
 #define PANE_STATUSDRAWN 0x400
 #define PANE_EMPTY 0x800
+#define PANE_STYLECHANGED 0x1000
 
 	int		 argc;
 	char	       **argv;
@@ -854,7 +860,8 @@ struct window_pane {
 
 	struct input_ctx *ictx;
 
-	struct style	 style;
+	struct style	 cached_style;
+	struct style	 cached_active_style;
 	int		*palette;
 
 	int		 pipe_fd;
@@ -914,16 +921,12 @@ struct window {
 #define WINDOW_ACTIVITY 0x2
 #define WINDOW_SILENCE 0x4
 #define WINDOW_ZOOMED 0x8
-#define WINDOW_STYLECHANGED 0x10
 #define WINDOW_ALERTFLAGS (WINDOW_BELL|WINDOW_ACTIVITY|WINDOW_SILENCE)
 
 	int		 alerts_queued;
 	TAILQ_ENTRY(window) alerts_entry;
 
 	struct options	*options;
-
-	struct style	 style;
-	struct style	 active_style;
 
 	u_int		 references;
 	TAILQ_HEAD(, winlink) winlinks;
@@ -955,6 +958,11 @@ TAILQ_HEAD(winlink_stack, winlink);
 #define WINDOW_SIZE_LARGEST 0
 #define WINDOW_SIZE_SMALLEST 1
 #define WINDOW_SIZE_MANUAL 2
+
+/* Pane border status option. */
+#define PANE_STATUS_OFF 0
+#define PANE_STATUS_TOP 1
+#define PANE_STATUS_BOTTOM 2
 
 /* Layout direction. */
 enum layout_type {
@@ -1279,21 +1287,25 @@ struct cmd_find_state {
 
 /* Command and list of commands. */
 struct cmd {
-	const struct cmd_entry	*entry;
-	struct args		*args;
+	const struct cmd_entry	 *entry;
+	struct args		 *args;
+	u_int			  group;
 
-	char			*file;
-	u_int			 line;
+	char			 *file;
+	u_int			  line;
 
-#define CMD_CONTROL 0x1
-	int			 flags;
+	char			 *alias;
+	int			  argc;
+	char			**argv;
 
-	TAILQ_ENTRY(cmd)	 qentry;
+	TAILQ_ENTRY(cmd)	  qentry;
 };
+TAILQ_HEAD(cmds, cmd);
 
 struct cmd_list {
-	int			 references;
-	TAILQ_HEAD(, cmd)	 list;
+	int		references;
+	u_int		group;
+	struct cmds	list;
 };
 
 /* Command return values. */
@@ -1302,6 +1314,32 @@ enum cmd_retval {
 	CMD_RETURN_NORMAL = 0,
 	CMD_RETURN_WAIT,
 	CMD_RETURN_STOP
+};
+
+/* Command parse result. */
+enum cmd_parse_status {
+	CMD_PARSE_EMPTY,
+	CMD_PARSE_ERROR,
+	CMD_PARSE_SUCCESS
+};
+struct cmd_parse_result {
+	enum cmd_parse_status	 status;
+	struct cmd_list		*cmdlist;
+	char			*error;
+};
+struct cmd_parse_input {
+	int			 flags;
+#define CMD_PARSE_QUIET 0x1
+#define CMD_PARSE_PARSEONLY 0x2
+#define CMD_PARSE_NOALIAS 0x4
+#define CMD_PARSE_VERBOSE 0x8
+
+	const char		*file;
+	u_int			 line;
+
+	struct cmdq_item	*item;
+	struct client		*c;
+	struct cmd_find_state	 fs;
 };
 
 /* Command queue item type. */
@@ -1316,6 +1354,7 @@ struct cmdq_shared {
 
 	int			 flags;
 #define CMDQ_SHARED_REPEAT 0x1
+#define CMDQ_SHARED_CONTROL 0x2
 
 	struct format_tree	*formats;
 
@@ -1459,7 +1498,7 @@ struct client {
 #define CLIENT_REPEAT 0x20
 #define CLIENT_SUSPENDED 0x40
 #define CLIENT_ATTACHED 0x80
-/* 0x100 unused */
+#define CLIENT_EXITED 0x100
 #define CLIENT_DEAD 0x200
 #define CLIENT_REDRAWBORDERS 0x400
 #define CLIENT_READONLY 0x800
@@ -1477,6 +1516,7 @@ struct client {
 #define CLIENT_STATUSOFF 0x800000
 #define CLIENT_REDRAWSTATUSALWAYS 0x1000000
 #define CLIENT_REDRAWOVERLAY 0x2000000
+#define CLIENT_CONTROL_NOOUTPUT 0x4000000
 #define CLIENT_ALLREDRAWFLAGS		\
 	(CLIENT_REDRAWWINDOW|		\
 	 CLIENT_REDRAWSTATUS|		\
@@ -1574,12 +1614,11 @@ enum options_table_type {
 	OPTIONS_TABLE_COMMAND
 };
 
-enum options_table_scope {
-	OPTIONS_TABLE_NONE,
-	OPTIONS_TABLE_SERVER,
-	OPTIONS_TABLE_SESSION,
-	OPTIONS_TABLE_WINDOW
-};
+#define OPTIONS_TABLE_NONE 0
+#define OPTIONS_TABLE_SERVER 0x1
+#define OPTIONS_TABLE_SESSION 0x2
+#define OPTIONS_TABLE_WINDOW 0x4
+#define OPTIONS_TABLE_PANE 0x8
 
 #define OPTIONS_TABLE_IS_ARRAY 0x1
 #define OPTIONS_TABLE_IS_HOOK 0x2
@@ -1587,7 +1626,7 @@ enum options_table_scope {
 struct options_table_entry {
 	const char		 *name;
 	enum options_table_type	  type;
-	enum options_table_scope  scope;
+	int			  scope;
 	int                       flags;
 
 	u_int			  minimum;
@@ -1674,7 +1713,8 @@ void	proc_toggle_log(struct tmuxproc *);
 extern int cfg_finished;
 extern struct client *cfg_client;
 void	start_cfg(void);
-int	load_cfg(const char *, struct client *, struct cmdq_item *, int);
+int	load_cfg(const char *, struct client *, struct cmdq_item *, int,
+	    struct cmdq_item **);
 void	set_cfg_file(const char *);
 void printflike(1, 2) cfg_add_cause(const char *, ...);
 void	cfg_print_causes(struct cmdq_item *);
@@ -1748,6 +1788,7 @@ void	notify_pane(const char *, struct window_pane *);
 /* options.c */
 struct options	*options_create(struct options *);
 void		 options_free(struct options *);
+void		 options_set_parent(struct options *, struct options *);
 struct options_entry *options_first(struct options *);
 struct options_entry *options_next(struct options_entry *);
 struct options_entry *options_empty(struct options *,
@@ -1787,7 +1828,10 @@ struct options_entry *options_set_number(struct options *, const char *,
 		     long long);
 struct options_entry *options_set_style(struct options *, const char *, int,
 		     const char *);
-enum options_table_scope options_scope_from_flags(struct args *, int,
+int		 options_scope_from_name(struct args *, int,
+		     const char *, struct cmd_find_state *, struct options **,
+		     char **);
+int		 options_scope_from_flags(struct args *, int,
 		     struct cmd_find_state *, struct options **, char **);
 
 /* options-table.c */
@@ -1919,6 +1963,7 @@ void		 args_set(struct args *, u_char, const char *);
 struct args	*args_parse(const char *, int, char **);
 void		 args_free(struct args *);
 char		*args_print(struct args *);
+char		*args_escape(const char *);
 int		 args_has(struct args *, u_char);
 const char	*args_get(struct args *, u_char);
 const char	*args_first_value(struct args *, u_char, struct args_value **);
@@ -1955,13 +2000,17 @@ int		 cmd_find_from_mouse(struct cmd_find_state *,
 int		 cmd_find_from_nothing(struct cmd_find_state *, int);
 
 /* cmd.c */
-void		 cmd_log_argv(int, char **, const char *);
+void printflike(3, 4) cmd_log_argv(int, char **, const char *, ...);
+void		 cmd_prepend_argv(int *, char ***, char *);
+void		 cmd_append_argv(int *, char ***, char *);
 int		 cmd_pack_argv(int, char **, char *, size_t);
 int		 cmd_unpack_argv(char *, size_t, int, char ***);
 char	       **cmd_copy_argv(int, char **);
 void		 cmd_free_argv(int, char **);
 char		*cmd_stringify_argv(int, char **);
+char		*cmd_get_alias(const char *);
 struct cmd	*cmd_parse(int, char **, const char *, u_int, char **);
+void		 cmd_free(struct cmd *);
 char		*cmd_print(struct cmd *);
 int		 cmd_mouse_at(struct window_pane *, struct mouse_event *,
 		     u_int *, u_int *, int);
@@ -1973,32 +2022,40 @@ extern const struct cmd_entry *cmd_table[];
 
 /* cmd-attach-session.c */
 enum cmd_retval	 cmd_attach_session(struct cmdq_item *, const char *, int, int,
-		     const char *, int);
+		     int, const char *, int);
+
+/* cmd-parse.c */
+void	    	 cmd_parse_empty(struct cmd_parse_input *);
+struct cmd_parse_result *cmd_parse_from_file(FILE *, struct cmd_parse_input *);
+struct cmd_parse_result *cmd_parse_from_string(const char *,
+		     struct cmd_parse_input *);
+struct cmd_parse_result *cmd_parse_from_arguments(int, char **,
+		     struct cmd_parse_input *);
 
 /* cmd-list.c */
-struct cmd_list	*cmd_list_parse(int, char **, const char *, u_int, char **);
+struct cmd_list	*cmd_list_new(void);
+void		 cmd_list_append(struct cmd_list *, struct cmd *);
+void		 cmd_list_move(struct cmd_list *, struct cmd_list *);
 void		 cmd_list_free(struct cmd_list *);
-char		*cmd_list_print(struct cmd_list *);
+char		*cmd_list_print(struct cmd_list *, int);
 
 /* cmd-queue.c */
 struct cmdq_item *cmdq_get_command(struct cmd_list *, struct cmd_find_state *,
 		     struct mouse_event *, int);
 #define cmdq_get_callback(cb, data) cmdq_get_callback1(#cb, cb, data)
 struct cmdq_item *cmdq_get_callback1(const char *, cmdq_cb, void *);
+struct cmdq_item *cmdq_get_error(const char *);
 void		 cmdq_insert_after(struct cmdq_item *, struct cmdq_item *);
 void		 cmdq_append(struct client *, struct cmdq_item *);
 void		 cmdq_insert_hook(struct session *, struct cmdq_item *,
 		     struct cmd_find_state *, const char *, ...);
+void		 cmdq_continue(struct cmdq_item *);
 void printflike(3, 4) cmdq_format(struct cmdq_item *, const char *,
 		     const char *, ...);
 u_int		 cmdq_next(struct client *);
 void		 cmdq_guard(struct cmdq_item *, const char *, int);
 void printflike(2, 3) cmdq_print(struct cmdq_item *, const char *, ...);
 void printflike(2, 3) cmdq_error(struct cmdq_item *, const char *, ...);
-
-/* cmd-string.c */
-int		 cmd_string_split(const char *, int *, char ***);
-struct cmd_list	*cmd_string_parse(const char *, const char *, u_int, char **);
 
 /* cmd-wait-for.c */
 void	cmd_wait_for_flush(void);
@@ -2142,7 +2199,8 @@ int	 colour_join_rgb(u_char, u_char, u_char);
 void	 colour_split_rgb(int, u_char *, u_char *, u_char *);
 const char *colour_tostring(int);
 int	 colour_fromstring(const char *s);
-u_char	 colour_256to16(u_char);
+int	 colour_256toRGB(int);
+int	 colour_256to16(int);
 
 /* attributes.c */
 const char *attributes_tostring(int);
@@ -2176,6 +2234,7 @@ void	 grid_duplicate_lines(struct grid *, u_int, struct grid *, u_int,
 void	 grid_reflow(struct grid *, u_int);
 void	 grid_wrap_position(struct grid *, u_int, u_int, u_int *, u_int *);
 void	 grid_unwrap_position(struct grid *, u_int *, u_int *, u_int, u_int);
+u_int	 grid_line_length(struct grid *, u_int);
 
 /* grid-view.c */
 void	 grid_view_get_cell(struct grid *, u_int, u_int, struct grid_cell *);
@@ -2306,7 +2365,6 @@ struct window	*window_find_by_id_str(const char *);
 struct window	*window_find_by_id(u_int);
 void		 window_update_activity(struct window *);
 struct window	*window_create(u_int, u_int);
-void		 window_destroy(struct window *);
 void		 window_pane_set_event(struct window_pane *);
 struct window_pane *window_get_active_at(struct window *, u_int, u_int);
 struct window_pane *window_find_string(struct window *, const char *);
@@ -2351,7 +2409,8 @@ void		 window_pane_key(struct window_pane *, struct client *,
 		     struct session *, struct winlink *, key_code,
 		     struct mouse_event *);
 int		 window_pane_visible(struct window_pane *);
-u_int		 window_pane_search(struct window_pane *, const char *);
+u_int		 window_pane_search(struct window_pane *, const char *, int,
+		     int);
 const char	*window_printable_flags(struct winlink *);
 struct window_pane *window_pane_find_up(struct window_pane *);
 struct window_pane *window_pane_find_down(struct window_pane *);
@@ -2379,7 +2438,7 @@ void		 layout_set_size(struct layout_cell *, u_int, u_int, u_int,
 		     u_int);
 void		 layout_make_leaf(struct layout_cell *, struct window_pane *);
 void		 layout_make_node(struct layout_cell *, enum layout_type);
-void		 layout_fix_offsets(struct layout_cell *);
+void		 layout_fix_offsets(struct window *);
 void		 layout_fix_panes(struct window *);
 void		 layout_resize_adjust(struct window *, struct layout_cell *,
 		     enum layout_type, int);
@@ -2423,8 +2482,8 @@ void	 mode_tree_each_tagged(struct mode_tree_data *, mode_tree_each_cb,
 void	 mode_tree_down(struct mode_tree_data *, int);
 struct mode_tree_data *mode_tree_start(struct window_pane *, struct args *,
 	     mode_tree_build_cb, mode_tree_draw_cb, mode_tree_search_cb,
-	     mode_tree_menu_cb, void *, const char *, const char **, u_int,
-	     struct screen **);
+	     mode_tree_menu_cb, void *, const struct menu_item *, const char **,
+	     u_int, struct screen **);
 void	 mode_tree_zoom(struct mode_tree_data *, struct args *);
 void	 mode_tree_build(struct mode_tree_data *);
 void	 mode_tree_free(struct mode_tree_data *);
@@ -2540,6 +2599,7 @@ struct utf8_data *utf8_fromcstr(const char *);
 char		*utf8_tocstr(struct utf8_data *);
 u_int		 utf8_cstrwidth(const char *);
 char		*utf8_padcstr(const char *, u_int);
+int		 utf8_cstrhas(const char *, const struct utf8_data *);
 
 /* procname.c */
 char   *get_proc_name(int, char *);
@@ -2555,8 +2615,14 @@ __dead void printflike(1, 2) fatal(const char *, ...);
 __dead void printflike(1, 2) fatalx(const char *, ...);
 
 /* menu.c */
-struct menu	*menu_create(const char *, struct client *,
-		    struct cmd_find_state *, const char *);
+struct menu	*menu_create(const char *);
+void		 menu_add_items(struct menu *, const struct menu_item *,
+		    struct cmdq_item *, struct client *,
+		    struct cmd_find_state *);
+void 		 menu_add_item(struct menu *, const struct menu_item *,
+		    struct cmdq_item *, struct client *,
+		    struct cmd_find_state *);
+
 void		 menu_free(struct menu *);
 int		 menu_display(struct menu *, int, struct cmdq_item *, u_int,
 		    u_int, struct client *, struct cmd_find_state *,
@@ -2578,5 +2644,8 @@ int		 style_is_default(struct style *);
 /* spawn.c */
 struct winlink	*spawn_window(struct spawn_context *, char **);
 struct window_pane *spawn_pane(struct spawn_context *, char **);
+
+/* regsub.c */
+char		*regsub(const char *, const char *, const char *, int);
 
 #endif /* TMUX_H */

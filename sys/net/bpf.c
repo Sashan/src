@@ -1,4 +1,4 @@
-/*	$OpenBSD: bpf.c,v 1.174 2019/04/25 18:24:39 anton Exp $	*/
+/*	$OpenBSD: bpf.c,v 1.177 2019/06/13 21:14:53 mpi Exp $	*/
 /*	$NetBSD: bpf.c,v 1.33 1997/02/21 23:59:35 thorpej Exp $	*/
 
 /*
@@ -1289,8 +1289,14 @@ _bpf_mtap(caddr_t arg, const struct mbuf *m, u_int direction,
 		if (d->bd_fildrop != BPF_FILDROP_PASS)
 			drop = 1;
 		if (d->bd_fildrop != BPF_FILDROP_DROP) {
-			if (!gottime++)
-				microtime(&tv);
+			if (!gottime) {
+				if (ISSET(m->m_flags, M_PKTHDR))
+					m_microtime(m, &tv);
+				else
+					microtime(&tv);
+
+				gottime = 1;
+			}
 
 			mtx_enter(&d->bd_mtx);
 			bpf_catchpacket(d, (u_char *)m, pktlen, slen, cpfn,
@@ -1579,9 +1585,9 @@ bpf_d_smr(void *smr)
 {
 	struct bpf_d	*bd = smr;
 
-	free(bd->bd_sbuf, M_DEVBUF, 0);
-	free(bd->bd_hbuf, M_DEVBUF, 0);
-	free(bd->bd_fbuf, M_DEVBUF, 0);
+	free(bd->bd_sbuf, M_DEVBUF, bd->bd_bufsize);
+	free(bd->bd_hbuf, M_DEVBUF, bd->bd_bufsize);
+	free(bd->bd_fbuf, M_DEVBUF, bd->bd_bufsize);
 
 	if (bd->bd_rfilter != NULL)
 		bpf_prog_smr(bd->bd_rfilter);

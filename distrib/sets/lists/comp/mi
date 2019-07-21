@@ -484,6 +484,7 @@
 ./usr/include/dev/ofw/ofw_pinctrl.h
 ./usr/include/dev/ofw/ofw_power.h
 ./usr/include/dev/ofw/ofw_regulator.h
+./usr/include/dev/ofw/ofw_thermal.h
 ./usr/include/dev/ofw/openfirm.h
 ./usr/include/dev/onewire
 ./usr/include/dev/onewire/onewiredevs.h
@@ -2869,6 +2870,7 @@
 ./usr/share/man/man9/audio.9
 ./usr/share/man/man9/autoconf.9
 ./usr/share/man/man9/bemtoh32.9
+./usr/share/man/man9/bintimeadd.9
 ./usr/share/man/man9/bio_register.9
 ./usr/share/man/man9/boot.9
 ./usr/share/man/man9/bpf_mtap.9
@@ -2924,6 +2926,7 @@
 ./usr/share/man/man9/knote.9
 ./usr/share/man/man9/kthread.9
 ./usr/share/man/man9/ktrace.9
+./usr/share/man/man9/lim_cur.9
 ./usr/share/man/man9/loadfirmware.9
 ./usr/share/man/man9/log.9
 ./usr/share/man/man9/malloc.9
@@ -2959,6 +2962,7 @@
 ./usr/share/man/man9/rt_ifa_add.9
 ./usr/share/man/man9/rt_timer_add.9
 ./usr/share/man/man9/rtable_add.9
+./usr/share/man/man9/rtable_walk.9
 ./usr/share/man/man9/rtalloc.9
 ./usr/share/man/man9/rtlabel_id2name.9
 ./usr/share/man/man9/rtrequest.9

@@ -1,4 +1,4 @@
-/* $OpenBSD: mode-tree.c,v 1.29 2019/05/12 18:16:33 nicm Exp $ */
+/* $OpenBSD: mode-tree.c,v 1.35 2019/07/19 07:20:51 nicm Exp $ */
 
 /*
  * Copyright (c) 2017 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -35,7 +35,7 @@ struct mode_tree_data {
 
 	struct window_pane	 *wp;
 	void			 *modedata;
-	const char		 *menu;
+	const struct menu_item	 *menu;
 
 	const char		**sort_list;
 	u_int			  sort_size;
@@ -100,11 +100,14 @@ struct mode_tree_menu {
 
 static void mode_tree_free_items(struct mode_tree_list *);
 
-#define MODE_TREE_MENU \
-	"Scroll Left,<,|" \
-	"Scroll Right,>,|" \
-	"|" \
-	"Cancel,q,"
+static const struct menu_item mode_tree_menu_items[] = {
+	{ "Scroll Left", '<', NULL },
+	{ "Scroll Right", '>', NULL },
+	{ "", KEYC_NONE, NULL },
+	{ "Cancel", 'q', NULL },
+
+	{ NULL, KEYC_NONE, NULL }
+};
 
 static struct mode_tree_item *
 mode_tree_find_item(struct mode_tree_list *mtl, uint64_t tag)
@@ -315,7 +318,7 @@ struct mode_tree_data *
 mode_tree_start(struct window_pane *wp, struct args *args,
     mode_tree_build_cb buildcb, mode_tree_draw_cb drawcb,
     mode_tree_search_cb searchcb, mode_tree_menu_cb menucb, void *modedata,
-    const char *menu, const char **sort_list, u_int sort_size,
+    const struct menu_item *menu, const char **sort_list, u_int sort_size,
     struct screen **s)
 {
 	struct mode_tree_data	*mtd;
@@ -384,7 +387,7 @@ mode_tree_build(struct mode_tree_data *mtd)
 	if (mtd->line_list != NULL)
 		tag = mtd->line_list[mtd->current].item->tag;
 	else
-		tag = 0;
+		tag = UINT64_MAX;
 
 	TAILQ_CONCAT(&mtd->saved, &mtd->children, entry);
 	TAILQ_INIT(&mtd->children);
@@ -400,6 +403,8 @@ mode_tree_build(struct mode_tree_data *mtd)
 	mode_tree_clear_lines(mtd);
 	mode_tree_build_lines(mtd, &mtd->children, 0);
 
+	if (tag == UINT64_MAX)
+		tag = mtd->line_list[mtd->current].item->tag;
 	mode_tree_set_current(mtd, tag);
 
 	mtd->width = screen_size_x(s);
@@ -475,7 +480,7 @@ mode_tree_add(struct mode_tree_data *mtd, struct mode_tree_item *parent,
 
 	saved = mode_tree_find_item(&mtd->saved, tag);
 	if (saved != NULL) {
-		if (parent == NULL || (parent != NULL && parent->expanded))
+		if (parent == NULL || parent->expanded)
 			mti->tagged = saved->tagged;
 		mti->expanded = saved->expanded;
 	} else if (expanded == -1)
@@ -810,8 +815,8 @@ mode_tree_display_menu(struct mode_tree_data *mtd, struct client *c, u_int x,
 {
 	struct mode_tree_item	*mti;
 	struct menu		*menu;
+	const struct menu_item	*items;
 	struct mode_tree_menu	*mtm;
-	const char		*s;
 	char			*title;
 	u_int			 line;
 
@@ -822,16 +827,15 @@ mode_tree_display_menu(struct mode_tree_data *mtd, struct client *c, u_int x,
 	mti = mtd->line_list[line].item;
 
 	if (!outside) {
-		s = mtd->menu;
+		items = mtd->menu;
 		xasprintf(&title, "#[align=centre]%s", mti->name);
 	} else {
-		s = MODE_TREE_MENU;
+		items = mode_tree_menu_items;
 		title = xstrdup("");
 	}
-	menu = menu_create(s, c, NULL, title);
+	menu = menu_create(title);
+	menu_add_items(menu, items, NULL, NULL, NULL);
 	free(title);
-	if (menu == NULL)
-		return;
 
 	mtm = xmalloc(sizeof *mtm);
 	mtm->data = mtd;
@@ -929,6 +933,7 @@ mode_tree_key(struct mode_tree_data *mtd, struct client *c, key_code *key,
 	case '\016': /* C-n */
 		mode_tree_down(mtd, 1);
 		break;
+	case 'g':
 	case KEYC_PPAGE:
 	case '\002': /* C-b */
 		for (i = 0; i < mtd->height; i++) {
@@ -937,6 +942,7 @@ mode_tree_key(struct mode_tree_data *mtd, struct client *c, key_code *key,
 			mode_tree_up(mtd, 1);
 		}
 		break;
+	case 'G':
 	case KEYC_NPAGE:
 	case '\006': /* C-f */
 		for (i = 0; i < mtd->height; i++) {
@@ -1015,6 +1021,8 @@ mode_tree_key(struct mode_tree_data *mtd, struct client *c, key_code *key,
 			mode_tree_build(mtd);
 		}
 		break;
+	case '?':
+	case '/':
 	case '\023': /* C-s */
 		mtd->references++;
 		status_prompt_set(c, "(search) ", "",
@@ -1045,8 +1053,8 @@ mode_tree_run_command(struct client *c, struct cmd_find_state *fs,
     const char *template, const char *name)
 {
 	struct cmdq_item	*new_item;
-	struct cmd_list		*cmdlist;
-	char			*command, *cause;
+	char			*command;
+	struct cmd_parse_result	*pr;
 
 	command = cmd_template_replace(template, name, 1);
 	if (command == NULL || *command == '\0') {
@@ -1054,17 +1062,22 @@ mode_tree_run_command(struct client *c, struct cmd_find_state *fs,
 		return;
 	}
 
-	cmdlist = cmd_string_parse(command, NULL, 0, &cause);
-	if (cmdlist == NULL) {
-		if (cause != NULL && c != NULL) {
-			*cause = toupper((u_char)*cause);
-			status_message_set(c, "%s", cause);
+	pr = cmd_parse_from_string(command, NULL);
+	switch (pr->status) {
+	case CMD_PARSE_EMPTY:
+		break;
+	case CMD_PARSE_ERROR:
+		if (c != NULL) {
+			*pr->error = toupper((u_char)*pr->error);
+			status_message_set(c, "%s", pr->error);
 		}
-		free(cause);
-	} else {
-		new_item = cmdq_get_command(cmdlist, fs, NULL, 0);
+		free(pr->error);
+		break;
+	case CMD_PARSE_SUCCESS:
+		new_item = cmdq_get_command(pr->cmdlist, fs, NULL, 0);
 		cmdq_append(c, new_item);
-		cmd_list_free(cmdlist);
+		cmd_list_free(pr->cmdlist);
+		break;
 	}
 
 	free(command);

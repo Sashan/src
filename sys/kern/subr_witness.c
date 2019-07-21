@@ -1,4 +1,4 @@
-/*	$OpenBSD: subr_witness.c,v 1.31 2019/04/23 13:35:12 visa Exp $	*/
+/*	$OpenBSD: subr_witness.c,v 1.34 2019/07/20 23:06:51 mpi Exp $	*/
 
 /*-
  * Copyright (c) 2008 Isilon Systems, Inc.
@@ -104,7 +104,7 @@
 
 #include <machine/cpu.h>
 
-#include <uvm/uvm.h>	/* uvm_pageboot_alloc */
+#include <uvm/uvm_extern.h>	/* uvm_pageboot_alloc */
 
 #ifndef DDB
 #error "DDB is required for WITNESS"
@@ -654,6 +654,8 @@ witness_ddb_display_descendants(int(*prnt)(const char *fmt, ...),
 	w->w_displayed = 1;
 	if (!w->w_acquired)
 		prnt(" -- never acquired\n");
+	else
+		prnt("\n");
 	indent++;
 	WITNESS_INDEX_ASSERT(w->w_index);
 	for (i = 1; i <= w_max_used_index; i++) {
@@ -2049,7 +2051,7 @@ witness_ddb_list(struct proc *p)
 	struct witness_cpu *wc = &witness_cpu[cpu_number()];
 
 	KASSERTMSG(witness_cold == 0, "%s: witness_cold", __func__);
-	KASSERTMSG(db_is_active, "%s: not in the debugger", __func__);
+	KASSERTMSG(db_active, "%s: not in the debugger", __func__);
 
 	if (witness_watch < 1)
 		return;

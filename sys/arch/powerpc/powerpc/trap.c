@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.107 2018/04/12 17:13:44 deraadt Exp $	*/
+/*	$OpenBSD: trap.c,v 1.110 2019/07/20 23:03:55 mpi Exp $	*/
 /*	$NetBSD: trap.c,v 1.3 1996/10/13 03:31:37 christos Exp $	*/
 
 /*
@@ -234,26 +234,12 @@ trap(struct trapframe *frame)
 	db_expr_t offset;
 
 	if (frame->srr1 & PSL_PR) {
-		vaddr_t sp;
-
 		type |= EXC_USER;
 		refreshcreds(p);
-
-		sp = PROC_STACK(p);
-		if (p->p_vmspace->vm_map.serial != p->p_spserial ||
-		    p->p_spstart == 0 || sp < p->p_spstart ||
-		    sp >= p->p_spend) {
-			KERNEL_LOCK();
-			if (!uvm_map_check_stack_range(p, sp)) {
-				printf("trap [%s]%d/%d type %d: sp %lx not inside %lx-%lx\n",
-				    p->p_p->ps_comm, p->p_p->ps_pid, p->p_tid,
-				    type, sp, p->p_spstart, p->p_spend);
-				sv.sival_ptr = (void *)PROC_PC(p);
-				trapsignal(p, SIGSEGV, type, SEGV_ACCERR, sv);
-			}
-
-			KERNEL_UNLOCK();
-		}
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			return;
 	}
 
 	switch (type) {
@@ -583,9 +569,11 @@ for (i = 0; i < errnum; i++) {
 		/* should check for correct byte here or panic */
 #ifdef DDB
 		db_save_regs(frame);
+		db_active++;
 		cnpollc(TRUE);
 		db_trap(T_BREAKPOINT, 0);
 		cnpollc(FALSE);
+		db_active--;
 #else
 		panic("trap EXC_PGM");
 #endif

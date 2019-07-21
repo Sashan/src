@@ -238,8 +238,10 @@
 ./usr/share/man/man1/perl5260delta.1
 ./usr/share/man/man1/perl5261delta.1
 ./usr/share/man/man1/perl5262delta.1
+./usr/share/man/man1/perl5263delta.1
 ./usr/share/man/man1/perl5280delta.1
 ./usr/share/man/man1/perl5281delta.1
+./usr/share/man/man1/perl5282delta.1
 ./usr/share/man/man1/perl561delta.1
 ./usr/share/man/man1/perl56delta.1
 ./usr/share/man/man1/perl581delta.1
@@ -823,6 +825,7 @@
 ./usr/share/man/man3p/OpenBSD::RequiredBy.3p
 ./usr/share/man/man3p/OpenBSD::Search.3p
 ./usr/share/man/man3p/OpenBSD::State.3p
+./usr/share/man/man3p/OpenBSD::Unveil.3p
 ./usr/share/man/man3p/OpenBSD::Ustar.3p
 ./usr/share/man/man3p/OpenBSD::Vstat.3p
 ./usr/share/man/man3p/OpenBSD::md5.3p
@@ -1157,6 +1160,7 @@
 ./usr/share/man/man4/adtfsm.4
 ./usr/share/man/man4/adv.4
 ./usr/share/man/man4/age.4
+./usr/share/man/man4/aggr.4
 ./usr/share/man/man4/agp.4
 ./usr/share/man/man4/ahc.4
 ./usr/share/man/man4/ahci.4
@@ -1209,6 +1213,7 @@
 ./usr/share/man/man4/ams.4
 ./usr/share/man/man4/an.4
 ./usr/share/man/man4/andl.4
+./usr/share/man/man4/aplgpio.4
 ./usr/share/man/man4/aps.4
 ./usr/share/man/man4/arc.4
 ./usr/share/man/man4/arcofi.4
@@ -1365,6 +1370,7 @@
 ./usr/share/man/man4/gentbi.4
 ./usr/share/man/man4/gif.4
 ./usr/share/man/man4/glenv.4
+./usr/share/man/man4/glkgpio.4
 ./usr/share/man/man4/gpio.4
 ./usr/share/man/man4/gpiodcf.4
 ./usr/share/man/man4/gpioiic.4
@@ -1934,6 +1940,7 @@
 ./usr/share/man/man4/uk.4
 ./usr/share/man/man4/ukbd.4
 ./usr/share/man/man4/ukphy.4
+./usr/share/man/man4/ukspan.4
 ./usr/share/man/man4/ulpt.4
 ./usr/share/man/man4/umass.4
 ./usr/share/man/man4/umb.4

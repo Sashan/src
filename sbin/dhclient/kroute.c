@@ -1,4 +1,4 @@
-/*	$OpenBSD: kroute.c,v 1.162 2019/05/10 16:51:13 benno Exp $	*/
+/*	$OpenBSD: kroute.c,v 1.164 2019/06/30 19:19:08 krw Exp $	*/
 
 /*
  * Copyright 2012 Kenneth R Westerback <krw@openbsd.org>
@@ -85,7 +85,7 @@ delete_addresses(char *name, int ioctlfd, struct in_addr newaddr,
 	struct ifaddrs			*ifap, *ifa;
 	int				 found;
 
-	if (getifaddrs(&ifap) != 0)
+	if (getifaddrs(&ifap) == -1)
 		fatal("getifaddrs");
 
 	found = 0;
@@ -792,12 +792,18 @@ set_mtu(char *name, int ioctlfd, uint16_t mtu)
 	struct ifreq	 ifr;
 
 	memset(&ifr, 0, sizeof(ifr));
-
 	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
-	ifr.ifr_mtu = mtu;
 
+	if (ioctl(ioctlfd, SIOCGIFMTU, &ifr) == -1) {
+		log_warn("%s: SIOCGIFMTU", log_procname);
+		return;
+	}
+	if (ifr.ifr_mtu == mtu)
+		return;	/* Avoid unnecessary RTM_IFINFO! */
+
+	ifr.ifr_mtu = mtu;
 	if (ioctl(ioctlfd, SIOCSIFMTU, &ifr) == -1)
-		log_warn("%s: SIOCSIFMTU %d", log_procname, mtu);
+		log_warn("%s: SIOCSIFMTU %u", log_procname, mtu);
 }
 
 /*

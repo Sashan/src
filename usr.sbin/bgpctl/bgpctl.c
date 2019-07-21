@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpctl.c,v 1.237 2019/05/14 16:47:30 benno Exp $ */
+/*	$OpenBSD: bgpctl.c,v 1.242 2019/07/03 06:15:48 claudio Exp $ */
 
 /*
  * Copyright (c) 2003 Henning Brauer <henning@openbsd.org>
@@ -39,7 +39,6 @@
 #include "session.h"
 #include "rde.h"
 #include "parser.h"
-#include "irrfilter.h"
 #include "mrtparser.h"
 
 enum neighbor_views {
@@ -81,6 +80,7 @@ int		 show_rib_detail_msg(struct imsg *, int, int);
 void		 show_rib_brief(struct ctl_show_rib *, u_char *);
 void		 show_rib_detail(struct ctl_show_rib *, u_char *, int, int);
 void		 show_attr(void *, u_int16_t, int);
+void		 show_communities(u_char *, size_t, int);
 void		 show_community(u_char *, u_int16_t);
 void		 show_large_community(u_char *, u_int16_t);
 void		 show_ext_community(u_char *, u_int16_t);
@@ -88,6 +88,8 @@ int		 show_rib_memory_msg(struct imsg *);
 void		 send_filterset(struct imsgbuf *, struct filter_set_head *);
 const char	*get_errstr(u_int8_t, u_int8_t);
 int		 show_result(struct imsg *);
+void		 show_mrt_dump_neighbors(struct mrt_rib *, struct mrt_peer *,
+		    void *);
 void		 show_mrt_dump(struct mrt_rib *, struct mrt_peer *, void *);
 void		 network_mrt_dump(struct mrt_rib *, struct mrt_peer *, void *);
 void		 show_mrt_state(struct mrt_bgp_state *, void *);
@@ -158,11 +160,6 @@ main(int argc, char *argv[])
 	strlcpy(neighbor.shutcomm, res->shutcomm, sizeof(neighbor.shutcomm));
 
 	switch (res->action) {
-	case IRRFILTER:
-		if (!(res->flags & (F_IPV4|F_IPV6)))
-			res->flags |= (F_IPV4|F_IPV6);
-		irr_main(res->as.as_min, res->flags, res->irr_outdir);
-		break;
 	case SHOW_MRT:
 		if (pledge("stdio", NULL) == -1)
 			err(1, "pledge");
@@ -180,7 +177,9 @@ main(int argc, char *argv[])
 		ribreq.flags = res->flags;
 		ribreq.validation_state = res->validation_state;
 		show_mrt.arg = &ribreq;
-		if (!(res->flags & F_CTL_DETAIL))
+		if (res->flags & F_CTL_NEIGHBORS)
+			show_mrt.dump = show_mrt_dump_neighbors;
+		else if (!(res->flags & F_CTL_DETAIL))
 			show_rib_summary_head();
 		mrt_parse(res->mrtfd, &show_mrt, 1);
 		exit(0);
@@ -212,7 +211,6 @@ main(int argc, char *argv[])
 
 	switch (res->action) {
 	case NONE:
-	case IRRFILTER:
 	case SHOW_MRT:
 		usage();
 		/* NOTREACHED */
@@ -278,7 +276,7 @@ main(int argc, char *argv[])
 		}
 		if (res->as.type != AS_UNDEF)
 			ribreq.as = res->as;
-		if (res->community.type != COMMUNITY_TYPE_NONE)
+		if (res->community.flags != 0)
 			ribreq.community = res->community;
 		ribreq.neighbor = neighbor;
 		strlcpy(ribreq.rib, res->rib, sizeof(ribreq.rib));
@@ -474,7 +472,6 @@ main(int argc, char *argv[])
 			case NETWORK_FLUSH:
 			case NETWORK_BULK_ADD:
 			case NETWORK_BULK_REMOVE:
-			case IRRFILTER:
 			case LOG_VERBOSE:
 			case LOG_BRIEF:
 			case SHOW_MRT:
@@ -1248,6 +1245,12 @@ show_rib_detail_msg(struct imsg *imsg, int nodescr, int flag0)
 		asdata += sizeof(struct ctl_show_rib);
 		show_rib_detail(&rib, asdata, nodescr, flag0);
 		break;
+	case IMSG_CTL_SHOW_RIB_COMMUNITIES:
+		ilen = imsg->hdr.len - IMSG_HEADER_SIZE;
+		if (ilen % sizeof(struct community))
+			errx(1, "bad IMSG_CTL_SHOW_RIB_COMMUNITIES received");
+		show_communities(imsg->data, ilen, flag0);
+		break;
 	case IMSG_CTL_SHOW_RIB_ATTR:
 		ilen = imsg->hdr.len - IMSG_HEADER_SIZE;
 		if (ilen < 3)
@@ -1443,7 +1446,7 @@ show_attr(void *b, u_int16_t len, int flag0)
 		data += 4;
 		len -= 4;
 	} else {
-		alen = (u_char)data[2];
+		alen = data[2];
 		data += 3;
 		len -= 3;
 	}
@@ -1628,6 +1631,154 @@ show_attr(void *b, u_int16_t len, int flag0)
 	printf("%c", EOL0(flag0));
 }
 
+static void
+print_community(u_int16_t a, u_int16_t v)
+{
+	if (a == COMMUNITY_WELLKNOWN)
+		switch (v) {
+		case COMMUNITY_GRACEFUL_SHUTDOWN:
+			printf("GRACEFUL_SHUTDOWN");
+			break;
+		case COMMUNITY_NO_EXPORT:
+			printf("NO_EXPORT");
+			break;
+		case COMMUNITY_NO_ADVERTISE:
+			printf("NO_ADVERTISE");
+			break;
+		case COMMUNITY_NO_EXPSUBCONFED:
+			printf("NO_EXPORT_SUBCONFED");
+			break;
+		case COMMUNITY_NO_PEER:
+			printf("NO_PEER");
+			break;
+		case COMMUNITY_BLACKHOLE:
+			printf("BLACKHOLE");
+			break;
+		default:
+			printf("%hu:%hu", a, v);
+			break;
+		}
+	else
+		printf("%hu:%hu", a, v);
+}
+
+static void
+print_ext_community(u_int8_t *data)
+{
+	u_int64_t	ext;
+	struct in_addr	ip;
+	u_int32_t	as4, u32;
+	u_int16_t	as2, u16;
+	u_int8_t	type, subtype;
+
+	type = data[0];
+	subtype = data[1];
+
+	printf("%s ", log_ext_subtype(type, subtype));
+
+	switch (type) {
+	case EXT_COMMUNITY_TRANS_TWO_AS:
+		memcpy(&as2, data + 2, sizeof(as2));
+		memcpy(&u32, data + 4, sizeof(u32));
+		printf("%s:%u", log_as(ntohs(as2)), ntohl(u32));
+		break;
+	case EXT_COMMUNITY_TRANS_IPV4:
+		memcpy(&ip, data + 2, sizeof(ip));
+		memcpy(&u16, data + 6, sizeof(u16));
+		printf("%s:%hu", inet_ntoa(ip), ntohs(u16));
+		break;
+	case EXT_COMMUNITY_TRANS_FOUR_AS:
+		memcpy(&as4, data + 2, sizeof(as4));
+		memcpy(&u16, data + 6, sizeof(u16));
+		printf("%s:%hu", log_as(ntohl(as4)), ntohs(u16));
+		break;
+	case EXT_COMMUNITY_TRANS_OPAQUE:
+	case EXT_COMMUNITY_TRANS_EVPN:
+		memcpy(&ext, data, sizeof(ext));
+		ext = be64toh(ext) & 0xffffffffffffLL;
+		printf("0x%llx", (unsigned long long)ext);
+		break;
+	case EXT_COMMUNITY_NON_TRANS_OPAQUE:
+		memcpy(&ext, data, sizeof(ext));
+		ext = be64toh(ext) & 0xffffffffffffLL;
+		switch (ext) {
+		case EXT_COMMUNITY_OVS_VALID:
+			printf("valid ");
+			break;
+		case EXT_COMMUNITY_OVS_NOTFOUND:
+			printf("not-found ");
+			break;
+		case EXT_COMMUNITY_OVS_INVALID:
+			printf("invalid ");
+			break;
+		default:
+			printf("0x%llx ", (unsigned long long)ext);
+			break;
+		}
+		break;
+	default:
+		memcpy(&ext, data, sizeof(ext));
+		printf("0x%llx", (unsigned long long)be64toh(ext));
+	}
+}
+
+void
+show_communities(u_char *data, size_t len, int flag0)
+{
+	struct community c;
+	size_t	i;
+	u_int64_t ext;
+	u_int8_t type = 0, nt;
+
+	if (len % sizeof(c))
+		return;
+
+	for (i = 0; i < len; i += sizeof(c)) {
+		memcpy(&c, data + i, sizeof(c));
+
+		nt = c.flags;
+		if (type != nt) {
+			if (type != 0)
+				printf("%c", EOL0(flag0));
+			printf("    %s:", print_attr(nt,
+			    ATTR_OPTIONAL | ATTR_TRANSITIVE));
+			type = nt;
+		}
+		printf(" ");
+
+		switch (nt) {
+		case COMMUNITY_TYPE_BASIC:
+			print_community(c.data1, c.data2);
+			break;
+		case COMMUNITY_TYPE_LARGE:
+			printf("%u:%u:%u", c.data1, c.data2, c.data3);
+			break;
+		case COMMUNITY_TYPE_EXT:
+			ext = (u_int64_t)c.data3 << 48;
+			switch (c.data3 >> 8) {
+			case EXT_COMMUNITY_TRANS_TWO_AS:
+			case EXT_COMMUNITY_TRANS_OPAQUE:
+			case EXT_COMMUNITY_TRANS_EVPN:
+			case EXT_COMMUNITY_NON_TRANS_OPAQUE:
+				ext |= ((u_int64_t)c.data1 & 0xffff) << 32;
+				ext |= (u_int64_t)c.data2;
+				break;
+			case EXT_COMMUNITY_TRANS_FOUR_AS:
+			case EXT_COMMUNITY_TRANS_IPV4:
+				ext |= (u_int64_t)c.data1 << 16;
+				ext |= (u_int64_t)c.data2 & 0xffff;
+				break;
+			}
+			ext = htobe64(ext);
+
+			print_ext_community((void *)&ext);
+			break;
+		}
+	}
+
+	printf("%c", EOL0(flag0));
+}
+
 void
 show_community(u_char *data, u_int16_t len)
 {
@@ -1642,33 +1793,7 @@ show_community(u_char *data, u_int16_t len)
 		memcpy(&v, data + i + 2, sizeof(v));
 		a = ntohs(a);
 		v = ntohs(v);
-		if (a == COMMUNITY_WELLKNOWN)
-			switch (v) {
-			case COMMUNITY_GRACEFUL_SHUTDOWN:
-				printf("GRACEFUL_SHUTDOWN");
-				break;
-			case COMMUNITY_NO_EXPORT:
-				printf("NO_EXPORT");
-				break;
-			case COMMUNITY_NO_ADVERTISE:
-				printf("NO_ADVERTISE");
-				break;
-			case COMMUNITY_NO_EXPSUBCONFED:
-				printf("NO_EXPORT_SUBCONFED");
-				break;
-			case COMMUNITY_NO_PEER:
-				printf("NO_PEER");
-				break;
-			case COMMUNITY_BLACKHOLE:
-				printf("BLACKHOLE");
-				break;
-			default:
-				printf("%hu:%hu", a, v);
-				break;
-			}
-		else
-			printf("%hu:%hu", a, v);
-
+		print_community(a, v);
 		if (i + 4 < len)
 			printf(" ");
 	}
@@ -1700,67 +1825,16 @@ show_large_community(u_char *data, u_int16_t len)
 void
 show_ext_community(u_char *data, u_int16_t len)
 {
-	u_int64_t	ext;
-	struct in_addr	ip;
-	u_int32_t	as4, u32;
-	u_int16_t	i, as2, u16;
-	u_int8_t	type, subtype;
+	u_int16_t	i;
 
 	if (len & 0x7)
 		return;
 
 	for (i = 0; i < len; i += 8) {
-		type = data[i];
-		subtype = data[i + 1];
+		print_ext_community(data + i);
 
-		printf("%s ", log_ext_subtype(type, subtype));
-
-		switch (type) {
-		case EXT_COMMUNITY_TRANS_TWO_AS:
-			memcpy(&as2, data + i + 2, sizeof(as2));
-			memcpy(&u32, data + i + 4, sizeof(u32));
-			printf("%s:%u", log_as(ntohs(as2)), ntohl(u32));
-			break;
-		case EXT_COMMUNITY_TRANS_IPV4:
-			memcpy(&ip, data + i + 2, sizeof(ip));
-			memcpy(&u16, data + i + 6, sizeof(u16));
-			printf("%s:%hu", inet_ntoa(ip), ntohs(u16));
-			break;
-		case EXT_COMMUNITY_TRANS_FOUR_AS:
-			memcpy(&as4, data + i + 2, sizeof(as4));
-			memcpy(&u16, data + i + 6, sizeof(u16));
-			printf("%s:%hu", log_as(ntohl(as4)), ntohs(u16));
-			break;
-		case EXT_COMMUNITY_TRANS_OPAQUE:
-		case EXT_COMMUNITY_TRANS_EVPN:
-			memcpy(&ext, data + i, sizeof(ext));
-			ext = be64toh(ext) & 0xffffffffffffLL;
-			printf("0x%llx", (unsigned long long)ext);
-			break;
-		case EXT_COMMUNITY_NON_TRANS_OPAQUE:
-			memcpy(&ext, data + i, sizeof(ext));
-			ext = be64toh(ext) & 0xffffffffffffLL;
-			switch (ext) {
-			case EXT_COMMUNITY_OVS_VALID:
-				printf("valid ");
-				break;
-			case EXT_COMMUNITY_OVS_NOTFOUND:
-				printf("not-found ");
-				break;
-			case EXT_COMMUNITY_OVS_INVALID:
-				printf("invalid ");
-				break;
-			default:
-				printf("0x%llx ", (unsigned long long)ext);
-				break;
-			}
-			break;
-		default:
-			memcpy(&ext, data + i, sizeof(ext));
-			printf("0x%llx", (unsigned long long)be64toh(ext));
-		}
 		if (i + 8 < len)
-			printf(", ");
+			printf(" ");
 	}
 }
 
@@ -1813,6 +1887,12 @@ show_rib_memory_msg(struct imsg *imsg)
 		    "%s of memory\n\t   and holding %lld references\n",
 		    stats.aspath_cnt, fmt_mem(stats.aspath_size),
 		    stats.aspath_refs);
+		printf("%10lld entries for %lld BGP communities "
+		    "using %s of memory\n", stats.comm_cnt, stats.comm_nmemb,
+		    fmt_mem(stats.comm_cnt * sizeof(struct rde_community) +
+		    stats.comm_size * sizeof(struct community)));
+		printf("\t   and holding %lld references\n",
+		    stats.comm_refs);
 		printf("%10lld BGP attributes entries using %s of memory\n",
 		    stats.attr_cnt, fmt_mem(stats.attr_cnt *
 		    sizeof(struct attr)));
@@ -1975,6 +2055,27 @@ network_bulk(struct parse_result *res)
 }
 
 void
+show_mrt_dump_neighbors(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
+{
+	struct mrt_peer_entry *p;
+	struct in_addr ina;
+	u_int16_t i;
+
+	ina.s_addr = htonl(mp->bgp_id);
+	printf("view: %s BGP ID: %s Number of peers: %u\n\n",
+	    mp->view, inet_ntoa(ina), mp->npeers);
+	printf("%-30s %8s %15s\n", "Neighbor", "AS", "BGP ID");
+	for (i = 0; i < mp->npeers; i++) {
+		p = &mp->peers[i];
+		ina.s_addr = htonl(p->bgp_id);
+		printf("%-30s %8u %15s\n", log_addr(&p->addr), p->asnum,
+		    inet_ntoa(ina));
+	}
+	/* we only print the first message */
+	exit(0);
+}
+
+void
 show_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 {
 	struct ctl_show_rib		 ctl;
@@ -2004,7 +2105,7 @@ show_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 		/* filter by neighbor */
 		if (req->neighbor.addr.aid != AID_UNSPEC &&
 		    memcmp(&req->neighbor.addr, &ctl.remote_addr,
-		    sizeof(ctl.remote_addr)) != 0) 
+		    sizeof(ctl.remote_addr)) != 0)
 			continue;
 		/* filter by AF */
 		if (req->aid && req->aid != ctl.prefix.aid)
@@ -2023,7 +2124,7 @@ show_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 		}
 		/* filter by AS */
 		if (req->as.type != AS_UNDEF &&
-		   !match_aspath(mre->aspath, mre->aspath_len, &req->as))
+		    !match_aspath(mre->aspath, mre->aspath_len, &req->as))
 			continue;
 
 		if (req->flags & F_CTL_DETAIL) {
@@ -2068,7 +2169,7 @@ network_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 		/* filter by neighbor */
 		if (req->neighbor.addr.aid != AID_UNSPEC &&
 		    memcmp(&req->neighbor.addr, &ctl.remote_addr,
-		    sizeof(ctl.remote_addr)) != 0) 
+		    sizeof(ctl.remote_addr)) != 0)
 			continue;
 		/* filter by AF */
 		if (req->aid && req->aid != ctl.prefix.aid)
@@ -2087,7 +2188,7 @@ network_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 		}
 		/* filter by AS */
 		if (req->as.type != AS_UNDEF &&
-		   !match_aspath(mre->aspath, mre->aspath_len, &req->as))
+		    !match_aspath(mre->aspath, mre->aspath_len, &req->as))
 			continue;
 
 		bzero(&net, sizeof(net));
@@ -2374,7 +2475,7 @@ show_mrt_notification(u_char *p, u_int16_t len)
 		if (len > 1) {
 			shutcomm_len = *p++;
 			len--;
-			if(len < shutcomm_len) {
+			if (len < shutcomm_len) {
 				printf("truncated shutdown reason");
 				return;
 			}

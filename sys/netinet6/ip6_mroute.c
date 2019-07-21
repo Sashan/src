@@ -244,6 +244,9 @@ mrt6_ioctl(struct socket *so, u_long cmd, caddr_t data)
 	struct inpcb *inp = sotoinpcb(so);
 	int error;
 
+	if (inp == NULL)
+		return (ENOTCONN);
+
 	switch (cmd) {
 	case SIOCGETSGCNT_IN6:
 		NET_RLOCK();
@@ -451,8 +454,10 @@ mrt6_sysctl_mfc(void *oldp, size_t *oldlenp)
 	msa.ms6a_len = *oldlenp;
 	msa.ms6a_needed = 0;
 
-	for (rtableid = 0; rtableid <= RT_TABLEID_MAX; rtableid++)
-		rtable_walk(rtableid, AF_INET6, mrt6_rtwalk_mf6csysctl, &msa);
+	for (rtableid = 0; rtableid <= RT_TABLEID_MAX; rtableid++) {
+		rtable_walk(rtableid, AF_INET6, NULL, mrt6_rtwalk_mf6csysctl,
+		    &msa);
+	}
 
 	if (msa.ms6a_minfos != NULL && msa.ms6a_needed > 0 &&
 	    (error = copyout(msa.ms6a_minfos, oldp, msa.ms6a_needed)) != 0) {
@@ -520,7 +525,7 @@ ip6_mrouter_done(struct socket *so)
 	NET_ASSERT_LOCKED();
 
 	/* Delete all remaining installed multicast routes. */
-	rtable_walk(rtableid, AF_INET6, mrouter6_rtwalk_delete, NULL);
+	rtable_walk(rtableid, AF_INET6, NULL, mrouter6_rtwalk_delete, NULL);
 
 	/* Unregister all interfaces in the domain. */
 	TAILQ_FOREACH(ifp, &ifnet, if_list) {

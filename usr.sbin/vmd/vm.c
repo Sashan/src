@@ -1,4 +1,4 @@
-/*	$OpenBSD: vm.c,v 1.48 2019/05/12 20:56:34 pd Exp $	*/
+/*	$OpenBSD: vm.c,v 1.51 2019/07/17 05:51:07 pd Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -90,6 +90,7 @@ int dump_vmr(int , struct vm_mem_range *);
 int dump_mem(int, struct vm_create_params *);
 void restore_vmr(int, struct vm_mem_range *);
 void restore_mem(int, struct vm_create_params *);
+int restore_vm_params(int, struct vm_create_params *);
 void pause_vm(struct vm_create_params *);
 void unpause_vm(struct vm_create_params *);
 
@@ -132,7 +133,7 @@ static const struct vcpu_reg_state vcpu_init_flat64 = {
 	.vrs_gprs[VCPU_REGS_RFLAGS] = 0x2,
 	.vrs_gprs[VCPU_REGS_RIP] = 0x0,
 	.vrs_gprs[VCPU_REGS_RSP] = 0x0,
-	.vrs_crs[VCPU_REGS_CR0] = CR0_CD | CR0_NW | CR0_ET | CR0_PE | CR0_PG,
+	.vrs_crs[VCPU_REGS_CR0] = CR0_ET | CR0_PE | CR0_PG,
 	.vrs_crs[VCPU_REGS_CR3] = PML4_PAGE,
 	.vrs_crs[VCPU_REGS_CR4] = CR4_PAE | CR4_PSE,
 	.vrs_crs[VCPU_REGS_PDPTE0] = 0ULL,
@@ -366,6 +367,8 @@ start_vm(struct vmd_vm *vm, int fd)
 		    vm->vm_disks, vm->vm_cdrom);
 		mc146818_start();
 		restore_mem(vm->vm_receive_fd, vcp);
+		if (restore_vm_params(vm->vm_receive_fd, vcp))
+			fatal("restore vm params failed");
 	}
 
 	if (vmm_pipe(vm, fd, vm_dispatch_vmm) == -1)
@@ -503,6 +506,7 @@ int
 send_vm(int fd, struct vm_create_params *vcp)
 {
 	struct vm_rwregs_params	   vrp;
+	struct vm_rwvmparams_params vpp;
 	struct vmop_create_params *vmc;
 	struct vm_terminate_params vtp;
 	unsigned int		   flags = 0;
@@ -530,6 +534,8 @@ send_vm(int fd, struct vm_create_params *vcp)
 	vmc->vmc_flags = flags;
 	vrp.vrwp_vm_id = vcp->vcp_id;
 	vrp.vrwp_mask = VM_RWREGS_ALL;
+	vpp.vpp_mask = VM_RWVMPARAMS_ALL;
+	vpp.vpp_vm_id = vcp->vcp_id;
 
 	sz = atomicio(vwrite, fd, vmc,sizeof(struct vmop_create_params));
 	if (sz != sizeof(struct vmop_create_params)) {
@@ -570,8 +576,24 @@ send_vm(int fd, struct vm_create_params *vcp)
 	if ((ret = dump_mem(fd, vcp)))
 		goto err;
 
+	for (i = 0; i < vcp->vcp_ncpus; i++) {
+		vpp.vpp_vcpu_id = i;
+		if ((ret = ioctl(env->vmd_fd, VMM_IOC_READVMPARAMS, &vpp))) {
+			log_warn("%s: readvmparams failed", __func__);
+			goto err;
+		}
+
+		sz = atomicio(vwrite, fd, &vpp,
+		    sizeof(struct vm_rwvmparams_params));
+		if (sz != sizeof(struct vm_rwvmparams_params)) {
+			log_warn("%s: dumping vm params failed", __func__);
+			ret = -1;
+			goto err;
+		}
+	}
+
 	vtp.vtp_vm_id = vcp->vcp_id;
-	if (ioctl(env->vmd_fd, VMM_IOC_TERM, &vtp) < 0) {
+	if (ioctl(env->vmd_fd, VMM_IOC_TERM, &vtp) == -1) {
 		log_warnx("%s: term IOC error: %d, %d", __func__,
 		    errno, ENOENT);
 	}
@@ -634,6 +656,26 @@ dump_mem(int fd, struct vm_create_params *vcp)
 		ret = dump_vmr(fd, vmr);
 		if (ret)
 			return ret;
+	}
+	return (0);
+}
+
+int
+restore_vm_params(int fd, struct vm_create_params *vcp) {
+	unsigned int			i;
+	struct vm_rwvmparams_params    vpp;
+
+	for (i = 0; i < vcp->vcp_ncpus; i++) {
+		if (atomicio(read, fd, &vpp, sizeof(vpp)) != sizeof(vpp)) {
+			log_warn("%s: error restoring vm params", __func__);
+			return (-1);
+		}
+		vpp.vpp_vm_id = vcp->vcp_id;
+		vpp.vpp_vcpu_id = i;
+		if (ioctl(env->vmd_fd, VMM_IOC_WRITEVMPARAMS, &vpp) < 0) {
+			log_debug("%s: writing vm params failed", __func__);
+			return (-1);
+		}
 	}
 	return (0);
 }
@@ -746,7 +788,7 @@ vcpu_reset(uint32_t vmid, uint32_t vcpu_id, struct vcpu_reg_state *vrs)
 
 	log_debug("%s: resetting vcpu %d for vm %d", __func__, vcpu_id, vmid);
 
-	if (ioctl(env->vmd_fd, VMM_IOC_RESETCPU, &vrp) < 0)
+	if (ioctl(env->vmd_fd, VMM_IOC_RESETCPU, &vrp) == -1)
 		return (errno);
 
 	return (0);
@@ -897,7 +939,7 @@ vmm_create_vm(struct vm_create_params *vcp)
 	if (vcp->vcp_nnics > VMM_MAX_NICS_PER_VM)
 		return (EINVAL);
 
-	if (ioctl(env->vmd_fd, VMM_IOC_CREATE, vcp) < 0)
+	if (ioctl(env->vmd_fd, VMM_IOC_CREATE, vcp) == -1)
 		return (errno);
 
 	return (0);
@@ -1157,7 +1199,7 @@ run_vm(int child_cdrom, int child_disks[][VM_MAX_BASE_PER_DISK],
 			vregsp.vrwp_regs = *vrs;
 			vregsp.vrwp_mask = VM_RWREGS_ALL;
 			if ((ret = ioctl(env->vmd_fd, VMM_IOC_WRITEREGS,
-			    &vregsp)) < 0) {
+			    &vregsp)) == -1) {
 				log_warn("%s: writeregs failed", __func__);
 				return (ret);
 			}
@@ -1355,7 +1397,7 @@ vcpu_run_loop(void *arg)
 			}
 		}
 
-		if (ioctl(env->vmd_fd, VMM_IOC_RUN, vrp) < 0) {
+		if (ioctl(env->vmd_fd, VMM_IOC_RUN, vrp) == -1) {
 			/* If run ioctl failed, exit */
 			ret = errno;
 			log_warn("%s: vm %d / vcpu %d run ioctl failed",
@@ -1399,7 +1441,7 @@ vcpu_pic_intr(uint32_t vm_id, uint32_t vcpu_id, uint8_t intr)
 	vip.vip_vcpu_id = vcpu_id; /* XXX always 0? */
 	vip.vip_intr = intr;
 
-	if (ioctl(env->vmd_fd, VMM_IOC_INTR, &vip) < 0)
+	if (ioctl(env->vmd_fd, VMM_IOC_INTR, &vip) == -1)
 		return (errno);
 
 	return (0);

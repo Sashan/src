@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.52 2019/05/01 14:13:12 florian Exp $	*/
+/*	$OpenBSD: main.c,v 1.54 2019/06/28 13:32:53 deraadt Exp $	*/
 
 /*-
  * Copyright (c) 1980, 1993
@@ -196,6 +196,10 @@ main(int argc, char *argv[])
 		syslog(LOG_ERR, "%s: %m", tname);
 		exit(1);
 	}
+	if (unveil(NULL, NULL) == -1) {
+		syslog(LOG_ERR, "%s: %m", tname);
+		exit(1);
+	}
 	strlcpy(saveLO, LO, sizeof saveLO);
 
 	/*
@@ -252,7 +256,7 @@ main(int argc, char *argv[])
 	}
 
 	/* Start with default tty settings */
-	if (tcgetattr(0, &tmode) < 0) {
+	if (tcgetattr(0, &tmode) == -1) {
 		syslog(LOG_ERR, "%s: %m", ttyn);
 		exit(1);
 	}
@@ -282,7 +286,7 @@ main(int argc, char *argv[])
 			cfsetospeed(&tmode, SP);
 		setflags(0);
 		setchars();
-		if (tcsetattr(0, TCSANOW, &tmode) < 0) {
+		if (tcsetattr(0, TCSANOW, &tmode) == -1) {
 			syslog(LOG_ERR, "%s: %m", ttyn);
 			exit(1);
 		}
@@ -330,7 +334,7 @@ main(int argc, char *argv[])
 				tmode.c_oflag &= ~OLCUC;
 				tmode.c_lflag &= ~XCASE;
 			}
-			if (tcsetattr(0, TCSANOW, &tmode) < 0) {
+			if (tcsetattr(0, TCSANOW, &tmode) == -1) {
 				syslog(LOG_ERR, "%s: %m", ttyn);
 				exit(1);
 			}
@@ -372,7 +376,7 @@ getname(void)
 		sleep(PF);
 		PF = 0;
 	}
-	if (tcsetattr(0, TCSANOW, &tmode) < 0) {
+	if (tcsetattr(0, TCSANOW, &tmode) == -1) {
 		syslog(LOG_ERR, "%s: %m", ttyn);
 		exit(1);
 	}
