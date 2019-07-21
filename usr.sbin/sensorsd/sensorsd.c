@@ -1,4 +1,4 @@
-/*	$OpenBSD: sensorsd.c,v 1.64 2019/05/16 14:36:58 deraadt Exp $ */
+/*	$OpenBSD: sensorsd.c,v 1.66 2019/06/28 13:32:50 deraadt Exp $ */
 
 /*
  * Copyright (c) 2003 Henning Brauer <henning@openbsd.org>
@@ -152,11 +152,11 @@ main(int argc, char *argv[])
 	if (pledge("stdio rpath proc exec", NULL) == -1)
 		err(1, "pledge");
 
-	parse_config(configfile);
-
 	openlog("sensorsd", LOG_PID | LOG_NDELAY, LOG_DAEMON);
 
 	create();
+
+	parse_config(configfile);
 
 	if (debug == 0 && daemon(0, 0) == -1)
 		err(1, "unable to fork");
@@ -606,7 +606,7 @@ report_sdlim(struct sdlim_t *sdlim, time_t last_report)
 					    cmd[i]);
 					break;
 				}
-				if (r < 0 || (r >= len - n)) {
+				if (r == -1 || (r >= len - n)) {
 					syslog(LOG_CRIT, "could not parse "
 					    "command");
 					return;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_alc.c,v 1.49 2019/05/23 01:57:19 kevlo Exp $	*/
+/*	$OpenBSD: if_alc.c,v 1.52 2019/07/06 13:55:20 kevlo Exp $	*/
 /*-
  * Copyright (c) 2009, Pyun YongHyeon <yongari@FreeBSD.org>
  * All rights reserved.
@@ -187,9 +187,6 @@ alc_mii_readreg_813x(struct device *dev, int phy, int reg)
 	uint32_t v;
 	int i;
 
-	if (phy != sc->alc_phyaddr)
-		return (0);
-
 	/*
 	 * For AR8132 fast ethernet controller, do not report 1000baseT
 	 * capability to mii(4). Even though AR8132 uses the same
@@ -236,6 +233,12 @@ alc_mii_readreg_816x(struct device *dev, int phy, int reg)
 		v = CSR_READ_4(sc, ALC_MDIO);
 		if ((v & MDIO_OP_BUSY) == 0)
 			break;
+	}
+
+	if (i == 0) {
+		printf("%s: phy read timeout: phy %d, reg %d\n",
+		    sc->sc_dev.dv_xname, phy, reg);
+		return (0);
 	}
 
 	return ((v & MDIO_DATA_MASK) >> MDIO_DATA_SHIFT);
@@ -330,7 +333,6 @@ alc_miibus_statchg(struct device *dev)
 			break;
 		}
 	}
-	alc_stop_queue(sc);
 	/* Stop Rx/Tx MACs. */
 	alc_stop_mac(sc);
 
@@ -387,6 +389,12 @@ alc_miiext_readreg(struct alc_softc *sc, int devaddr, int reg)
 			break;
 	}
 
+	if (i == 0) {
+		printf("%s: phy ext read timeout: phy %d, reg %d\n",
+		    sc->sc_dev.dv_xname, devaddr, reg);
+		return (0);
+	}
+
 	return ((v & MDIO_DATA_MASK) >> MDIO_DATA_SHIFT);
 }
 
@@ -411,6 +419,10 @@ alc_miiext_writereg(struct alc_softc *sc, int devaddr, int reg, int val)
 		if ((v & MDIO_OP_BUSY) == 0)
 			break;
 	}
+
+	if (i == 0)
+		printf("%s: phy ext write timeout: phy %d, reg %d\n",
+		    sc->sc_dev.dv_xname, devaddr, reg);
 }
 
 void
@@ -656,6 +668,11 @@ alc_get_macaddr_816x(struct alc_softc *sc)
 			if ((reg & SLD_START) == 0)
 				break;
 		}
+		if (i != 0)
+			reloaded++;
+		else if (alcdebug)
+			printf("%s: reloading station address via TWSI timed"
+			    "out!\n", sc->sc_dev.dv_xname);
 	}
 
 	/* Try to reload station address from EEPROM or FLASH. */
@@ -679,7 +696,9 @@ alc_get_macaddr_816x(struct alc_softc *sc)
 					if ((reg & EEPROM_LD_START) == 0)
 						break;
 				}
-			}
+			} else if (alcdebug)
+				printf("%s: reloading EEPROM/FLASH timed out!\n",
+				    sc->sc_dev.dv_xname);
 		}
 	}
 

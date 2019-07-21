@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtsock.c,v 1.286 2019/05/11 16:47:02 claudio Exp $	*/
+/*	$OpenBSD: rtsock.c,v 1.289 2019/07/17 19:57:32 bluhm Exp $	*/
 /*	$NetBSD: rtsock.c,v 1.18 1996/03/29 00:32:10 cgd Exp $	*/
 
 /*
@@ -69,6 +69,7 @@
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/domain.h>
+#include <sys/pool.h>
 #include <sys/protosw.h>
 #include <sys/srp.h>
 
@@ -158,6 +159,7 @@ struct rtptable {
 	unsigned int		rtp_count;
 };
 
+struct pool rtpcb_pool;
 struct rtptable rtptable;
 
 /*
@@ -177,6 +179,8 @@ route_prinit(void)
 	srpl_rc_init(&rtptable.rtp_rc, rcb_ref, rcb_unref, NULL);
 	rw_init(&rtptable.rtp_lk, "rtsock");
 	SRPL_INIT(&rtptable.rtp_list);
+	pool_init(&rtpcb_pool, sizeof(struct rtpcb), 0,
+	    IPL_NONE, PR_WAITOK, "rtpcb", NULL);
 }
 
 void
@@ -294,7 +298,7 @@ route_attach(struct socket *so, int proto)
 	 * code does not care about the additional fields
 	 * and works directly on the raw socket.
 	 */
-	rop = malloc(sizeof(struct rtpcb), M_PCB, M_WAITOK|M_ZERO);
+	rop = pool_get(&rtpcb_pool, PR_WAITOK|PR_ZERO);
 	so->so_pcb = rop;
 	/* Init the timeout structure */
 	timeout_set(&rop->rop_timeout, rtm_senddesync_timer, so);
@@ -305,7 +309,7 @@ route_attach(struct socket *so, int proto)
 	else
 		error = soreserve(so, ROUTESNDQ, ROUTERCVQ);
 	if (error) {
-		free(rop, M_PCB, sizeof(struct rtpcb));
+		pool_put(&rtpcb_pool, rop);
 		return (error);
 	}
 
@@ -350,7 +354,7 @@ route_detach(struct socket *so)
 
 	so->so_pcb = NULL;
 	KASSERT((so->so_state & SS_NOFDREF) == 0);
-	free(rop, M_PCB, sizeof(struct rtpcb));
+	pool_put(&rtpcb_pool, rop);
 
 	return (0);
 }
@@ -931,7 +935,7 @@ rtm_output(struct rt_msghdr *rtm, struct rtentry **prt,
 			NET_LOCK();
 			ifp->if_rtrequest(ifp, RTM_INVALIDATE, rt);
 			/* Reset the MTU of the gateway route. */
-			rtable_walk(tableid, rt_key(rt)->sa_family,
+			rtable_walk(tableid, rt_key(rt)->sa_family, NULL,
 			    route_cleargateway, rt);
 			NET_UNLOCK();
 			if_put(ifp);
@@ -1359,15 +1363,8 @@ rtm_xaddrs(caddr_t cp, caddr_t cplim, struct rt_addrinfo *rtinfo)
 	for (i = 0; i < sizeof(rtinfo->rti_addrs) * 8; i++) {
 		if ((rtinfo->rti_addrs & (1 << i)) == 0)
 			continue;
-		if (i >= RTAX_MAX || cp + sizeof(socklen_t) > cplim) {
-			/*
-			 * Clear invalid bits, userland code may set them.
-			 * After OpenBSD 6.5 release, fix OpenVPN, remove
-			 * this workaround, and return EINVAL.  XXX
-			 */
-			rtinfo->rti_addrs &= (1 << i) - 1;
-			break;
-		}
+		if (i >= RTAX_MAX || cp + sizeof(socklen_t) > cplim)
+			return (EINVAL);
 		sa = (struct sockaddr *)cp;
 		if (cp + sa->sa_len > cplim)
 			return (EINVAL);
@@ -1918,7 +1915,8 @@ sysctl_rtable(int *name, u_int namelen, void *where, size_t *given, void *new,
 			if (af != 0 && af != i)
 				continue;
 
-			error = rtable_walk(tableid, i, sysctl_dumpentry, &w);
+			error = rtable_walk(tableid, i, NULL, sysctl_dumpentry,
+			    &w);
 			if (error == EAFNOSUPPORT)
 				error = 0;
 			if (error)

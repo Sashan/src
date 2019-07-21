@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.907 2019/05/28 07:18:42 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.922 2019/07/15 18:25:07 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -111,9 +111,10 @@ struct winlink;
 #define KEYC_CTRL 0x400000000000ULL
 #define KEYC_SHIFT 0x800000000000ULL
 #define KEYC_XTERM 0x1000000000000ULL
+#define KEYC_LITERAL 0x2000000000000ULL
 
 /* Mask to obtain key w/o modifiers. */
-#define KEYC_MASK_MOD (KEYC_ESCAPE|KEYC_CTRL|KEYC_SHIFT|KEYC_XTERM)
+#define KEYC_MASK_MOD (KEYC_ESCAPE|KEYC_CTRL|KEYC_SHIFT|KEYC_XTERM|KEYC_LITERAL)
 #define KEYC_MASK_KEY (~KEYC_MASK_MOD)
 
 /* Is this a mouse key? */
@@ -427,6 +428,7 @@ enum tty_code_code {
 	TTYC_SETAF,
 	TTYC_SETRGBB,
 	TTYC_SETRGBF,
+	TTYC_SETULC,
 	TTYC_SGR0,
 	TTYC_SITM,
 	TTYC_SMACS,
@@ -595,12 +597,13 @@ enum utf8_state {
 
 /* Grid cell data. */
 struct grid_cell {
-	u_char			flags;
+	struct utf8_data	data; /* 21 bytes */
 	u_short			attr;
+	u_char			flags;
 	int			fg;
 	int			bg;
-	struct utf8_data	data;
-};
+	int			us;
+} __packed;
 struct grid_cell_entry {
 	u_char			flags;
 	union {
@@ -680,6 +683,7 @@ TAILQ_HEAD(style_ranges, style_range);
 struct style {
 	struct grid_cell	gc;
 
+	int			fill;
 	enum style_align	align;
 	enum style_list		list;
 
@@ -810,6 +814,7 @@ struct window_pane {
 	u_int		 active_point;
 
 	struct window	*window;
+	struct options	*options;
 
 	struct layout_cell *layout_cell;
 	struct layout_cell *saved_layout_cell;
@@ -836,6 +841,7 @@ struct window_pane {
 #define PANE_STATUSREADY 0x200
 #define PANE_STATUSDRAWN 0x400
 #define PANE_EMPTY 0x800
+#define PANE_STYLECHANGED 0x1000
 
 	int		 argc;
 	char	       **argv;
@@ -854,7 +860,8 @@ struct window_pane {
 
 	struct input_ctx *ictx;
 
-	struct style	 style;
+	struct style	 cached_style;
+	struct style	 cached_active_style;
 	int		*palette;
 
 	int		 pipe_fd;
@@ -914,16 +921,12 @@ struct window {
 #define WINDOW_ACTIVITY 0x2
 #define WINDOW_SILENCE 0x4
 #define WINDOW_ZOOMED 0x8
-#define WINDOW_STYLECHANGED 0x10
 #define WINDOW_ALERTFLAGS (WINDOW_BELL|WINDOW_ACTIVITY|WINDOW_SILENCE)
 
 	int		 alerts_queued;
 	TAILQ_ENTRY(window) alerts_entry;
 
 	struct options	*options;
-
-	struct style	 style;
-	struct style	 active_style;
 
 	u_int		 references;
 	TAILQ_HEAD(, winlink) winlinks;
@@ -955,6 +958,11 @@ TAILQ_HEAD(winlink_stack, winlink);
 #define WINDOW_SIZE_LARGEST 0
 #define WINDOW_SIZE_SMALLEST 1
 #define WINDOW_SIZE_MANUAL 2
+
+/* Pane border status option. */
+#define PANE_STATUS_OFF 0
+#define PANE_STATUS_TOP 1
+#define PANE_STATUS_BOTTOM 2
 
 /* Layout direction. */
 enum layout_type {
@@ -1324,6 +1332,7 @@ struct cmd_parse_input {
 #define CMD_PARSE_QUIET 0x1
 #define CMD_PARSE_PARSEONLY 0x2
 #define CMD_PARSE_NOALIAS 0x4
+#define CMD_PARSE_VERBOSE 0x8
 
 	const char		*file;
 	u_int			 line;
@@ -1489,7 +1498,7 @@ struct client {
 #define CLIENT_REPEAT 0x20
 #define CLIENT_SUSPENDED 0x40
 #define CLIENT_ATTACHED 0x80
-/* 0x100 unused */
+#define CLIENT_EXITED 0x100
 #define CLIENT_DEAD 0x200
 #define CLIENT_REDRAWBORDERS 0x400
 #define CLIENT_READONLY 0x800
@@ -1507,6 +1516,7 @@ struct client {
 #define CLIENT_STATUSOFF 0x800000
 #define CLIENT_REDRAWSTATUSALWAYS 0x1000000
 #define CLIENT_REDRAWOVERLAY 0x2000000
+#define CLIENT_CONTROL_NOOUTPUT 0x4000000
 #define CLIENT_ALLREDRAWFLAGS		\
 	(CLIENT_REDRAWWINDOW|		\
 	 CLIENT_REDRAWSTATUS|		\
@@ -1604,12 +1614,11 @@ enum options_table_type {
 	OPTIONS_TABLE_COMMAND
 };
 
-enum options_table_scope {
-	OPTIONS_TABLE_NONE,
-	OPTIONS_TABLE_SERVER,
-	OPTIONS_TABLE_SESSION,
-	OPTIONS_TABLE_WINDOW
-};
+#define OPTIONS_TABLE_NONE 0
+#define OPTIONS_TABLE_SERVER 0x1
+#define OPTIONS_TABLE_SESSION 0x2
+#define OPTIONS_TABLE_WINDOW 0x4
+#define OPTIONS_TABLE_PANE 0x8
 
 #define OPTIONS_TABLE_IS_ARRAY 0x1
 #define OPTIONS_TABLE_IS_HOOK 0x2
@@ -1617,7 +1626,7 @@ enum options_table_scope {
 struct options_table_entry {
 	const char		 *name;
 	enum options_table_type	  type;
-	enum options_table_scope  scope;
+	int			  scope;
 	int                       flags;
 
 	u_int			  minimum;
@@ -1779,6 +1788,7 @@ void	notify_pane(const char *, struct window_pane *);
 /* options.c */
 struct options	*options_create(struct options *);
 void		 options_free(struct options *);
+void		 options_set_parent(struct options *, struct options *);
 struct options_entry *options_first(struct options *);
 struct options_entry *options_next(struct options_entry *);
 struct options_entry *options_empty(struct options *,
@@ -1818,7 +1828,10 @@ struct options_entry *options_set_number(struct options *, const char *,
 		     long long);
 struct options_entry *options_set_style(struct options *, const char *, int,
 		     const char *);
-enum options_table_scope options_scope_from_flags(struct args *, int,
+int		 options_scope_from_name(struct args *, int,
+		     const char *, struct cmd_find_state *, struct options **,
+		     char **);
+int		 options_scope_from_flags(struct args *, int,
 		     struct cmd_find_state *, struct options **, char **);
 
 /* options-table.c */
@@ -2009,7 +2022,7 @@ extern const struct cmd_entry *cmd_table[];
 
 /* cmd-attach-session.c */
 enum cmd_retval	 cmd_attach_session(struct cmdq_item *, const char *, int, int,
-		     const char *, int);
+		     int, const char *, int);
 
 /* cmd-parse.c */
 void	    	 cmd_parse_empty(struct cmd_parse_input *);
@@ -2036,6 +2049,7 @@ void		 cmdq_insert_after(struct cmdq_item *, struct cmdq_item *);
 void		 cmdq_append(struct client *, struct cmdq_item *);
 void		 cmdq_insert_hook(struct session *, struct cmdq_item *,
 		     struct cmd_find_state *, const char *, ...);
+void		 cmdq_continue(struct cmdq_item *);
 void printflike(3, 4) cmdq_format(struct cmdq_item *, const char *,
 		     const char *, ...);
 u_int		 cmdq_next(struct client *);
@@ -2185,7 +2199,8 @@ int	 colour_join_rgb(u_char, u_char, u_char);
 void	 colour_split_rgb(int, u_char *, u_char *, u_char *);
 const char *colour_tostring(int);
 int	 colour_fromstring(const char *s);
-u_char	 colour_256to16(u_char);
+int	 colour_256toRGB(int);
+int	 colour_256to16(int);
 
 /* attributes.c */
 const char *attributes_tostring(int);
@@ -2350,7 +2365,6 @@ struct window	*window_find_by_id_str(const char *);
 struct window	*window_find_by_id(u_int);
 void		 window_update_activity(struct window *);
 struct window	*window_create(u_int, u_int);
-void		 window_destroy(struct window *);
 void		 window_pane_set_event(struct window_pane *);
 struct window_pane *window_get_active_at(struct window *, u_int, u_int);
 struct window_pane *window_find_string(struct window *, const char *);
@@ -2395,7 +2409,8 @@ void		 window_pane_key(struct window_pane *, struct client *,
 		     struct session *, struct winlink *, key_code,
 		     struct mouse_event *);
 int		 window_pane_visible(struct window_pane *);
-u_int		 window_pane_search(struct window_pane *, const char *);
+u_int		 window_pane_search(struct window_pane *, const char *, int,
+		     int);
 const char	*window_printable_flags(struct winlink *);
 struct window_pane *window_pane_find_up(struct window_pane *);
 struct window_pane *window_pane_find_down(struct window_pane *);
@@ -2423,7 +2438,7 @@ void		 layout_set_size(struct layout_cell *, u_int, u_int, u_int,
 		     u_int);
 void		 layout_make_leaf(struct layout_cell *, struct window_pane *);
 void		 layout_make_node(struct layout_cell *, enum layout_type);
-void		 layout_fix_offsets(struct layout_cell *);
+void		 layout_fix_offsets(struct window *);
 void		 layout_fix_panes(struct window *);
 void		 layout_resize_adjust(struct window *, struct layout_cell *,
 		     enum layout_type, int);
@@ -2629,5 +2644,8 @@ int		 style_is_default(struct style *);
 /* spawn.c */
 struct winlink	*spawn_window(struct spawn_context *, char **);
 struct window_pane *spawn_pane(struct spawn_context *, char **);
+
+/* regsub.c */
+char		*regsub(const char *, const char *, const char *, int);
 
 #endif /* TMUX_H */

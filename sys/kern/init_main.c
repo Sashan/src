@@ -1,4 +1,4 @@
-/*	$OpenBSD: init_main.c,v 1.284 2019/02/26 14:24:21 visa Exp $	*/
+/*	$OpenBSD: init_main.c,v 1.290 2019/06/21 09:39:48 visa Exp $	*/
 /*	$NetBSD: init_main.c,v 1.84.4.1 1996/06/02 09:08:06 mrg Exp $	*/
 
 /*
@@ -96,6 +96,11 @@
 #include <crypto/cryptosoft.h>
 #endif
 
+#if defined(KUBSAN)
+extern void kubsan_init(void);
+extern void kubsan_start(void);
+#endif
+
 #if defined(NFSSERVER) || defined(NFSCLIENT)
 extern void nfs_init(void);
 #endif
@@ -191,8 +196,6 @@ main(void *framep)
 	struct proc *p;
 	struct process *pr;
 	struct pdevinit *pdev;
-	quad_t lim;
-	int i;
 	extern struct pdevinit pdevinit[];
 	extern void disk_init(void);
 
@@ -216,6 +219,11 @@ main(void *framep)
 	consinit();
 
 	printf("%s\n", copyright);
+
+#ifdef KUBSAN
+	/* Initialize kubsan. */
+	kubsan_init();
+#endif
 
 	WITNESS_INITIALIZE();
 
@@ -318,19 +326,8 @@ main(void *framep)
 	p->p_fd = pr->ps_fd = fdinit();
 
 	/* Create the limits structures. */
+	lim_startup(&limit0);
 	pr->ps_limit = &limit0;
-	for (i = 0; i < nitems(p->p_rlimit); i++)
-		limit0.pl_rlimit[i].rlim_cur =
-		    limit0.pl_rlimit[i].rlim_max = RLIM_INFINITY;
-	limit0.pl_rlimit[RLIMIT_NOFILE].rlim_cur = NOFILE;
-	limit0.pl_rlimit[RLIMIT_NOFILE].rlim_max = MIN(NOFILE_MAX,
-	    (maxfiles - NOFILE > NOFILE) ?  maxfiles - NOFILE : NOFILE);
-	limit0.pl_rlimit[RLIMIT_NPROC].rlim_cur = MAXUPRC;
-	lim = ptoa(uvmexp.free);
-	limit0.pl_rlimit[RLIMIT_RSS].rlim_max = lim;
-	limit0.pl_rlimit[RLIMIT_MEMLOCK].rlim_max = lim;
-	limit0.pl_rlimit[RLIMIT_MEMLOCK].rlim_cur = lim / 3;
-	limit0.p_refcnt = 1;
 
 	/* Allocate a prototype map so we have something to fork. */
 	uvmspace_init(&vmspace0, pmap_kernel(), round_page(VM_MIN_ADDRESS),
@@ -356,6 +353,11 @@ main(void *framep)
 	/* Initialize task queues */
 	taskq_init();
 
+#ifdef KUBSAN
+	/* Start reporting kubsan findings. */
+	kubsan_start();
+#endif
+
 	/* Initialize the interface/address trees */
 	ifinit();
 
@@ -371,7 +373,7 @@ main(void *framep)
 	cpu_configure();
 
 	/* Configure virtual memory system, set vm rlimits. */
-	uvm_init_limits(p);
+	uvm_init_limits(&limit0);
 
 	/* Per CPU memory allocation */
 	percpu_init();

@@ -1,4 +1,4 @@
-/* $OpenBSD: agintc.c,v 1.18 2019/05/13 20:55:22 drahn Exp $ */
+/* $OpenBSD: agintc.c,v 1.20 2019/06/23 15:41:00 kettenis Exp $ */
 /*
  * Copyright (c) 2007, 2009, 2011, 2017 Dale Rahn <drahn@dalerahn.com>
  * Copyright (c) 2018 Mark Kettenis <kettenis@openbsd.org>
@@ -1021,7 +1021,7 @@ agintc_intr_establish(int irqno, int level, int (*func)(void *),
 	} else {
 		uint8_t *prop = AGINTC_DMA_KVA(sc->sc_prop);
 
-		prop[irqno - LPI_BASE] = ((NIPL - ih->ih_ipl) << 4) |
+		prop[irqno - LPI_BASE] = (((0xff - ih->ih_ipl) << 4) & 0xff) |
 		    GICR_PROP_GROUP1 | GICR_PROP_ENABLE;
 
 		/* Make globally visible. */
@@ -1457,7 +1457,7 @@ agintc_intr_establish_msi(void *self, uint64_t *addr, uint64_t *data,
 		cmd.deviceid = deviceid;
 		cmd.eventid = eventid;
 		cmd.intid = LPI_BASE + i;
-		cmd.dw2 = GITS_CMD_VALID;
+		cmd.dw2 = 0;
 		agintc_msi_send_cmd(sc, &cmd);
 
 		memset(&cmd, 0, sizeof(cmd));

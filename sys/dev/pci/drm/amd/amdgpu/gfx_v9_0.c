@@ -80,6 +80,13 @@ MODULE_FIRMWARE("amdgpu/raven_mec.bin");
 MODULE_FIRMWARE("amdgpu/raven_mec2.bin");
 MODULE_FIRMWARE("amdgpu/raven_rlc.bin");
 
+MODULE_FIRMWARE("amdgpu/picasso_ce.bin");
+MODULE_FIRMWARE("amdgpu/picasso_pfp.bin");
+MODULE_FIRMWARE("amdgpu/picasso_me.bin");
+MODULE_FIRMWARE("amdgpu/picasso_mec.bin");
+MODULE_FIRMWARE("amdgpu/picasso_mec2.bin");
+MODULE_FIRMWARE("amdgpu/picasso_rlc.bin");
+
 static const struct soc15_reg_golden golden_settings_gc_9_0[] =
 {
 	SOC15_REG_GOLDEN_VALUE(GC, 0, mmDB_DEBUG2, 0xf00fffff, 0x00000420),
@@ -509,7 +516,10 @@ static int gfx_v9_0_init_microcode(struct amdgpu_device *adev)
 		chip_name = "vega20";
 		break;
 	case CHIP_RAVEN:
-		chip_name = "raven";
+		if (adev->pdev->device == 0x15d8)
+			chip_name = "picasso";
+		else
+			chip_name = "raven";
 		break;
 	default:
 		BUG();
@@ -1801,25 +1811,6 @@ static void gfx_v9_0_gpu_init(struct amdgpu_device *adev)
 	mutex_unlock(&adev->srbm_mutex);
 
 	gfx_v9_0_init_compute_vmid(adev);
-
-	mutex_lock(&adev->grbm_idx_mutex);
-	/*
-	 * making sure that the following register writes will be broadcasted
-	 * to all the shaders
-	 */
-	gfx_v9_0_select_se_sh(adev, 0xffffffff, 0xffffffff, 0xffffffff);
-
-	WREG32_SOC15(GC, 0, mmPA_SC_FIFO_SIZE,
-		   (adev->gfx.config.sc_prim_fifo_size_frontend <<
-			PA_SC_FIFO_SIZE__SC_FRONTEND_PRIM_FIFO_SIZE__SHIFT) |
-		   (adev->gfx.config.sc_prim_fifo_size_backend <<
-			PA_SC_FIFO_SIZE__SC_BACKEND_PRIM_FIFO_SIZE__SHIFT) |
-		   (adev->gfx.config.sc_hiz_tile_fifo_size <<
-			PA_SC_FIFO_SIZE__SC_HIZ_TILE_FIFO_SIZE__SHIFT) |
-		   (adev->gfx.config.sc_earlyz_tile_fifo_size <<
-			PA_SC_FIFO_SIZE__SC_EARLYZ_TILE_FIFO_SIZE__SHIFT));
-	mutex_unlock(&adev->grbm_idx_mutex);
-
 }
 
 static void gfx_v9_0_wait_for_rlc_serdes(struct amdgpu_device *adev)
