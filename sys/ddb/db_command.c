@@ -547,7 +547,6 @@ db_bcstats_print_cmd(db_expr_t addr, int have_addr, db_expr_t count, char *modif
 void
 db_show_srp_cmd(db_expr_t addr, int have_addr, db_expr_t count, char *modif)
 {
-	srp_print(NULL, db_printf);
 }
 
 /*

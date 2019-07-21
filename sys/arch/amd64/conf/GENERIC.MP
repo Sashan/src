@@ -5,6 +5,6 @@ include "arch/amd64/conf/GENERIC"
 option	MULTIPROCESSOR
 option	SRP_DEBUG
 #option	MP_LOCKDEBUG
-#option	WITNESS
+option	WITNESS
 
 cpu*		at mainbus?

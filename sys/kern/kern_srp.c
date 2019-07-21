@@ -25,6 +25,7 @@
 #include <machine/db_machdep.h>
 #include <ddb/db_sym.h>
 #include <sys/proc.h>
+#include <sys/witness.h>
 #endif
 
 void	srp_v_gc_start(struct srp_gc *, struct srp *, void *);
@@ -48,6 +49,16 @@ srp_gc_init(struct srp_gc *srp_gc, void (*dtor)(void *, void *), void *cookie)
 void
 srp_init(struct srp *srp)
 {
+#ifdef WITNESS
+	static const struct lock_type type = { .lt_name = "srp" };
+
+	srp->lock_obj.lo_flags =
+	    LO_SLEEPABLE | (LO_CLASS_SRP << LO_CLASSSHIFT);
+	srp->lock_obj.lo_name = "srp";
+	srp->lock_obj.lo_type = &type;
+	WITNESS_INIT(&srp->lock_obj, &type);
+#endif
+
 	srp->ref = NULL;
 }
 
@@ -219,24 +230,6 @@ srp_v(struct srp_hazard *hzrd, struct srp *srp)
 		membar_consumer();
 	} while (__predict_false(v != srp->ref));
 
-#ifdef SRP_DEBUG
-	hzrd->sh_stack[0] = __builtin_return_address(1);
-	hzrd->sh_stack[1] = __builtin_return_address(2);
-	hzrd->sh_stack[2] = __builtin_return_address(3);
-	hzrd->sh_stack[3] = __builtin_return_address(4);
-	hzrd->sh_stack[4] = __builtin_return_address(5);
-	hzrd->sh_stack[5] = __builtin_return_address(6);
-	hzrd->sh_stack[6] = __builtin_return_address(7);
-	hzrd->sh_stack[7] = __builtin_return_address(8);
-	hzrd->sh_stack[8] = __builtin_return_address(9);
-	hzrd->sh_stack[9] = __builtin_return_address(10);
-#if 0
-	hzrd->sh_stack[10] = __builtin_return_address(11);
-	hzrd->sh_stack[11] = __builtin_return_address(12);
-	hzrd->sh_stack[12] = __builtin_return_address(13);
-#endif
-	hzrd->sh_proc = curproc->p_p;
-#endif
 	return (v);
 }
 
@@ -247,6 +240,9 @@ srp_enter(struct srp_ref *sr, struct srp *srp)
 	struct srp_hazard *hzrd;
 	u_int i;
 
+#ifdef WITNESS
+	witness_lock(&srp->lock_obj, 0);
+#endif
 	for (i = 0; i < nitems(ci->ci_srp_hazards); i++) {
 		hzrd = &ci->ci_srp_hazards[i];
 		if (hzrd->sh_p == NULL) {
@@ -270,10 +266,6 @@ srp_follow(struct srp_ref *sr, struct srp *srp)
 void
 srp_leave(struct srp_ref *sr)
 {
-#ifdef SRP_DEBUG
-	memset(sr->hz->sh_stack, 0, sizeof (uintptr_t) * SRP_STACKTRACE);
-	sr->hz->sh_proc = NULL;
-#endif
 	sr->hz->sh_p = NULL;
 }
 
@@ -320,48 +312,3 @@ srp_v_gc_start(struct srp_gc *srp_gc, struct srp *srp, void *v)
 }
 
 #endif /* MULTIPROCESSOR */
-
-#ifdef SRP_DEBUG
-int
-srp_print(void *v,
-    int (*pr)(const char *, ...))
-{
-	int i, j, cpunum;
-	struct cpu_info	*ci;
-	CPU_INFO_ITERATOR cii;
-	struct srp_hazard *hzrd;
-	db_expr_t off;
-	char *name;
-	uintptr_t *pc;
-	Elf_Sym *sym;
-
-	cpunum = 0;
-	CPU_INFO_FOREACH(cii, ci) {
-		(*pr)("CPU: %d\n", cpunum);
-		cpunum++;
-		for (i = 0; i < nitems(ci->ci_srp_hazards); i++) {
-			hzrd = &ci->ci_srp_hazards[i];
-			(*pr)("  hzrd: %d\n", i);
-			if (hzrd->sh_proc != NULL) {
-				(*pr)("    owner: %p\t%s\n",
-				    hzrd->sh_proc, hzrd->sh_proc->ps_comm);
-				for (j = 0; j < SRP_STACKTRACE; j++) {
-					if (hzrd->sh_stack[j] == NULL)
-						break;
-					pc = hzrd->sh_stack[j];
-					sym = db_search_symbol((db_addr_t)pc,
-					    DB_STGY_ANY, &off);
-					db_symbol_values(sym, &name, NULL);
-					if (name[0] == '\0')
-						(*pr)("     %p\n", pc);
-					else
-						(*pr)("     %s()+0x%lx\n",
-						    name, off);
-				}
-			}
-		}
-	}
-
-	return (0);
-}
-#endif

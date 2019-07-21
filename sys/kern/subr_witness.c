@@ -195,6 +195,7 @@ union lock_stack {
 #define	LC_SLEEPABLE	0x00000004	/* Sleeping allowed with this lock. */
 #define	LC_RECURSABLE	0x00000008	/* Locks of this type may recurse. */
 #define	LC_UPGRADABLE	0x00000010	/* Upgrades and downgrades permitted. */
+#define LC_SRP		0x00000020	/* SRP (hazard pointer) */
 
 /*
  * Lock instances.  A lock instance is the data associated with a lock while
@@ -244,6 +245,7 @@ struct witness {
 	unsigned		w_acquired:1;
 	unsigned		w_displayed:1;
 	unsigned		w_reversed:1;
+	struct stack_db		*w_stack_db;
 };
 
 SIMPLEQ_HEAD(witness_list, witness);
@@ -290,6 +292,7 @@ struct witness_pendhelp {
 
 struct witness_cpu {
 	struct lock_list_entry	*wc_spinlocks;
+	struct lock_list_entry	*wc_srp;
 	struct lock_list_entry	*wc_lle_cache;
 	union lock_stack	*wc_stk_cache;
 	unsigned int		 wc_lle_count;
@@ -449,12 +452,18 @@ static struct lock_class lock_class_rrwlock = {
 	    LC_UPGRADABLE
 };
 
+static struct lock_class lock_class_srp = {
+	.lc_name = "srp",
+	.lc_flags = LC_SRP | LC_SLEEPABLE
+};
+
 static struct lock_class *lock_classes[] = {
 	&lock_class_kernel_lock,
 	&lock_class_sched_lock,
 	&lock_class_mutex,
 	&lock_class_rwlock,
 	&lock_class_rrwlock,
+	&lock_class_srp
 };
 
 /*
@@ -793,7 +802,9 @@ witness_checkorder(struct lock_object *lock, int flags,
 		lock_list = p->p_sleeplocks;
 		if (lock_list == NULL || lock_list->ll_count == 0)
 			return;
-	} else {
+	} else if (class->lc_flags & LC_SRP)
+		return;
+	else {
 
 		/*
 		 * If this is the first lock, just return as no order
@@ -1105,6 +1116,22 @@ out_splx:
 }
 
 void
+witness_srp_enter(struct lock_object *lock)
+{
+	struct lock_list_entry **lock_list, *lle;
+	struct lock_instance *instance;
+	int	s;
+
+	s = splhigh();
+
+	lock_list = &witness_cpu[cpu_number()].wc_srp;
+	instance = find_instance(*lock_list, lock);
+	if (instance != NULL) {
+		lle = NULL;
+	}
+}
+
+void
 witness_lock(struct lock_object *lock, int flags)
 {
 	struct lock_list_entry **lock_list, *lle;
@@ -1127,8 +1154,12 @@ witness_lock(struct lock_object *lock, int flags)
 	/* Determine lock list for this lock. */
 	if (LOCK_CLASS(lock)->lc_flags & LC_SLEEPLOCK)
 		lock_list = &p->p_sleeplocks;
-	else
-		lock_list = &witness_cpu[cpu_number()].wc_spinlocks;
+	else if (LOCK_CLASS(lock)->lc_flags & LC_SRP)
+		lock_list = &witness_cpu[cpu_number()].wc_srp;
+	else {
+		witness_srp_enter(lock);
+		return;
+	}
 
 	s = splhigh();
 
@@ -1456,6 +1487,11 @@ witness_warn(int flags, struct lock_object *lock, const char *fmt, ...)
 	return (n);
 }
 
+static void
+witness_init_srp(struct witness *w)
+{
+}
+
 static struct witness *
 enroll(const struct lock_type *type, const char *subtype,
     struct lock_class *lock_class)
@@ -1498,7 +1534,12 @@ enroll(const struct lock_type *type, const char *subtype,
 	/* Insert new witness into the hash */
 	witness_hash_put(w);
 	witness_increment_graph_generation();
+
+	if (lock_class->lc_flags & LC_SRP)
+		witness_init_srp(w);
+
 	mtx_leave(&w_mtx);
+
 	return (w);
 found:
 	mtx_leave(&w_mtx);
