@@ -1,4 +1,4 @@
-/*	$OpenBSD: vpci.c,v 1.24 2017/12/22 15:52:36 kettenis Exp $	*/
+/*	$OpenBSD: vpci.c,v 1.26 2019/07/05 19:06:50 kettenis Exp $	*/
 /*
  * Copyright (c) 2008 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -472,10 +472,10 @@ vpci_bus_map(bus_space_tag_t t, bus_space_tag_t t0, bus_addr_t offset,
 		if (offset < child || offset >= child + size)
 			continue;
 
-		paddr = pbm->vp_range[i].phys_lo + offset;
+		paddr = pbm->vp_range[i].phys_lo;
 		paddr |= ((bus_addr_t)pbm->vp_range[i].phys_hi) << 32;
 		return ((*t->parent->sparc_bus_map)
-		    (t, t0, paddr, size, flags, hp));
+		    (t, t0, paddr + offset - child, size, flags, hp));
 	}
 
 	return (EINVAL);
@@ -525,9 +525,9 @@ vpci_intr_establish(bus_space_tag_t t, bus_space_tag_t t0, int ihandle,
 	if (flags & BUS_INTR_ESTABLISH_MPSAFE)
 		ih->ih_mpsafe = 1;
 
-	if (ihandle & PCI_INTR_MSI) {
+	if (PCI_INTR_TYPE(ihandle) != PCI_INTR_INTX) {
 		pci_chipset_tag_t pc = pbm->vp_pc;
-		pcitag_t tag = ihandle & ~PCI_INTR_MSI;
+		pcitag_t tag = PCI_INTR_TAG(ihandle);
 		int msinum = pbm->vp_msinum++;
 
 		evcount_attach(&ih->ih_count, ih->ih_name, NULL);
@@ -537,7 +537,15 @@ vpci_intr_establish(bus_space_tag_t t, bus_space_tag_t t0, int ihandle,
 		pbm->vp_msi[msinum] = ih;
 		ih->ih_number = msinum;
 
-		pci_msi_enable(pc, tag, pbm->vp_msiaddr, msinum);
+		switch (PCI_INTR_TYPE(ihandle)) {
+		case PCI_INTR_MSI:
+			pci_msi_enable(pc, tag, pbm->vp_msiaddr, msinum);
+			break;
+		case PCI_INTR_MSIX:
+			pci_msix_enable(pc, tag, pbm->vp_memt,
+			    PCI_INTR_VEC(ihandle), pbm->vp_msiaddr, msinum);
+			break;
+		}
 
 		err = hv_pci_msi_setmsiq(pbm->vp_devhandle, msinum, 0, 0);
 		if (err != H_EOK) {

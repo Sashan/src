@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhclient.c,v 1.635 2019/05/22 12:56:31 krw Exp $	*/
+/*	$OpenBSD: dhclient.c,v 1.646 2019/07/19 20:50:22 krw Exp $	*/
 
 /*
  * Copyright 2004 Henning Brauer <henning@openbsd.org>
@@ -150,9 +150,9 @@ void make_release(struct interface_info *, struct client_lease *);
 void release_lease(struct interface_info *);
 void propose_release(struct interface_info *);
 
-void write_lease_db(struct interface_info *);
-void write_option_db(char *, struct client_lease *, struct client_lease *);
-char *lease_as_string(char *, char *, struct client_lease *);
+void write_lease_db(struct client_lease_tq *);
+void write_option_db(struct client_lease *, struct client_lease *);
+char *lease_as_string(char *, struct client_lease *);
 struct proposal *lease_as_proposal(struct client_lease *);
 void append_statement(char *, size_t, char *, char *);
 time_t lease_expiry(struct client_lease *);
@@ -163,7 +163,7 @@ struct client_lease *packet_to_lease(struct interface_info *,
     struct option_data *);
 void go_daemon(void);
 int rdaemon(int);
-void	take_charge(struct interface_info *, int);
+int take_charge(struct interface_info *, int, char *);
 struct client_lease *get_recorded_lease(struct interface_info *);
 
 #define ROUNDUP(a)	\
@@ -248,7 +248,7 @@ interface_state(struct interface_info *ifi)
 
 	oldlinkup = LINK_STATE_IS_UP(ifi->link_state);
 
-	if (getifaddrs(&ifap) != 0)
+	if (getifaddrs(&ifap) == -1)
 		fatal("getifaddrs");
 
 	ifa = get_link_ifa(ifi->name, ifap);
@@ -289,7 +289,7 @@ get_hw_address(struct interface_info *ifi)
 	struct ifaddrs		*ifap, *ifa;
 	struct sockaddr_dl	*sdl;
 
-	if (getifaddrs(&ifap) != 0)
+	if (getifaddrs(&ifap) == -1)
 		fatal("getifaddrs");
 
 	ifa = get_link_ifa(ifi->name, ifap);
@@ -450,7 +450,7 @@ main(int argc, char *argv[])
 
 	log_setverbose(0);	/* Don't show log_debug() messages. */
 
-	while ((ch = getopt(argc, argv, "c:di:l:L:nrv")) != -1)
+	while ((ch = getopt(argc, argv, "c:di:L:nrv")) != -1)
 		switch (ch) {
 		case 'c':
 			path_dhclient_conf = optarg;
@@ -462,14 +462,6 @@ main(int argc, char *argv[])
 			ignore_list = strdup(optarg);
 			if (ignore_list == NULL)
 				fatal("ignore_list");
-			break;
-		case 'l':
-			path_lease_db = optarg;
-			if (lstat(path_lease_db, &sb) != -1) {
-				if (S_ISREG(sb.st_mode) == 0)
-					fatalx("'%s' is not a regular file",
-					    path_lease_db);
-			}
 			break;
 		case 'L':
 			path_option_db = optarg;
@@ -574,8 +566,7 @@ main(int argc, char *argv[])
 	if ((pw = getpwnam("_dhcp")) == NULL)
 		fatalx("no such user: _dhcp");
 
-	if (path_lease_db == NULL && asprintf(&path_lease_db, "%s.%s",
-	    _PATH_LEASE_DB, ifi->name) == -1)
+	if (asprintf(&path_lease_db, "%s.%s", _PATH_LEASE_DB, ifi->name) == -1)
 		fatal("path_lease_db");
 
 	interface_state(ifi);
@@ -598,16 +589,12 @@ main(int argc, char *argv[])
 	    sizeof(ifi->rdomain)) == -1)
 		fatal("setsockopt(ROUTE_TABLEFILTER)");
 
-	take_charge(ifi, routefd);
+	fd = take_charge(ifi, routefd, path_lease_db);
+	read_lease_db(&ifi->lease_db);
 
-	if ((fd = open(path_lease_db,
-	    O_RDONLY|O_EXLOCK|O_CREAT|O_NOFOLLOW, 0640)) == -1)
-		fatal("open(%s)", path_lease_db);
-	read_lease_db(ifi->name, &ifi->lease_db);
 	if ((leaseFile = fopen(path_lease_db, "w")) == NULL)
 		fatal("fopen(%s)", path_lease_db);
-	write_lease_db(ifi);
-	close(fd);
+	write_lease_db(&ifi->lease_db);
 
 	if (path_option_db != NULL) {
 		/*
@@ -667,7 +654,7 @@ usage(void)
 
 	fprintf(stderr,
 	    "usage: %s [-dnrv] [-c file] [-i options] [-L file] "
-	    "[-l file] interface\n", __progname);
+	    "interface\n", __progname);
 	exit(1);
 }
 
@@ -1005,8 +992,8 @@ newlease:
 	 * the bind process is complete and all related information is in
 	 * place when dhclient(8) goes daemon.
 	 */
-	write_lease_db(ifi);
-	write_option_db(ifi->name, ifi->active, lease);
+	write_lease_db(&ifi->lease_db);
+	write_option_db(ifi->active, lease);
 	write_resolv_conf();
 
 	free_client_lease(lease);
@@ -1792,14 +1779,11 @@ free_client_lease(struct client_lease *lease)
 }
 
 void
-write_lease_db(struct interface_info *ifi)
+write_lease_db(struct client_lease_tq *lease_db)
 {
 	struct client_lease	*lp;
 	char			*leasestr;
 	time_t			 cur_time;
-
-	if (leaseFile == NULL)
-		fatalx("lease file not open");
 
 	rewind(leaseFile);
 
@@ -1812,10 +1796,10 @@ write_lease_db(struct interface_info *ifi)
 	 * the chonological order required.
 	 */
 	time(&cur_time);
-	TAILQ_FOREACH_REVERSE(lp, &ifi->lease_db, client_lease_tq, next) {
+	TAILQ_FOREACH_REVERSE(lp, lease_db, client_lease_tq, next) {
 		if (lease_expiry(lp) < cur_time)
 			continue;
-		leasestr = lease_as_string(ifi->name, "lease", lp);
+		leasestr = lease_as_string("lease", lp);
 		if (leasestr != NULL)
 			fprintf(leaseFile, "%s", leasestr);
 		else
@@ -1829,8 +1813,7 @@ write_lease_db(struct interface_info *ifi)
 }
 
 void
-write_option_db(char *name, struct client_lease *offered,
-    struct client_lease *effective)
+write_option_db(struct client_lease *offered, struct client_lease *effective)
 {
 	char	*leasestr;
 
@@ -1842,21 +1825,21 @@ write_option_db(char *name, struct client_lease *offered,
 		return;
 	}
 
-	leasestr = lease_as_string(name, "offered", offered);
+	leasestr = lease_as_string("offered", offered);
 	if (leasestr == NULL)
 		log_warnx("%s: cannot make offered lease into string",
 		    log_procname);
 	else if (fprintf(optionDB, "%s", leasestr) == -1)
 		log_warn("optionDB 'offered' fprintf()");
 
-	leasestr = lease_as_string(name, "effective", effective);
+	leasestr = lease_as_string("effective", effective);
 	if (leasestr == NULL)
 		log_warnx("%s: cannot make effective lease into string",
 		    log_procname);
 	else if (fprintf(optionDB, "%s", leasestr) == -1)
 		log_warn("optionDB 'effective' fprintf()");
 
-	if (fflush(optionDB) == -1)
+	if (fflush(optionDB) == EOF)
 		log_warn("optionDB fflush()");
 	else if (fsync(fileno(optionDB)) == -1)
 		log_warn("optionDB fsync()");
@@ -1964,7 +1947,7 @@ lease_as_proposal(struct client_lease *lease)
 }
 
 char *
-lease_as_string(char *ifname, char *type, struct client_lease *lease)
+lease_as_string(char *type, struct client_lease *lease)
 {
 	static char		 string[8192];
 	char			 timebuf[27];	/* 6 2017/04/08 05:47:50 UTC; */
@@ -2235,6 +2218,13 @@ fork_privchld(struct interface_info *ifi, int fd, int fd2)
 	if ((routefd = socket(AF_ROUTE, SOCK_RAW, 0)) == -1)
 		fatal("socket(AF_ROUTE, SOCK_RAW)");
 
+	if (unveil("/etc/resolv.conf", "wc") == -1)
+		fatal("unveil");
+	if (unveil("/etc/resolv.conf.tail", "r") == -1)
+		fatal("unveil");
+	if (unveil(NULL, NULL) == -1)
+		fatal("unveil");
+
 	while (quit == 0) {
 		pfd[0].fd = priv_ibuf->fd;
 		pfd[0].events = POLLIN;
@@ -2426,16 +2416,21 @@ cleanup:
 	return NULL;
 }
 
-void
-take_charge(struct interface_info *ifi, int routefd)
+int
+take_charge(struct interface_info *ifi, int routefd, char *leasespath)
 {
 	struct pollfd		 fds[1];
 	struct rt_msghdr	 rtm;
-	time_t			 start_time, cur_time;
-	int			 nfds, retries;
+	time_t			 cur_time, sent_time, start_time;
+	int			 fd, nfds;
+
+#define	MAXSECONDS		9
+#define	SENTSECONDS		3
+#define	POLLMILLISECONDS	3
 
 	if (time(&start_time) == -1)
 		fatal("time");
+	sent_time = start_time;
 
 	/*
 	 * Send RTM_PROPOSAL with RTF_PROTO3 set.
@@ -2458,34 +2453,44 @@ take_charge(struct interface_info *ifi, int routefd)
 	if (write(routefd, &rtm, sizeof(rtm)) == -1)
 		fatal("write(routefd)");
 
-	retries = 0;
-	while ((ifi->flags & IFI_IN_CHARGE) == 0) {
-		time(&cur_time);
-		if ((cur_time - start_time) > 3) {
-			if (++retries <= 3) {
-				if (time(&start_time) == -1)
-					fatal("time");
+	for (fd = -1; fd == -1;) {
+		if (time(&cur_time) == -1)
+			fatal("time");
+		if (cur_time - start_time >= MAXSECONDS)
+			fatalx("failed to take charge");
+
+		if ((ifi->flags & IFI_IN_CHARGE) == 0) {
+			if ((cur_time - sent_time) >= SENTSECONDS) {
+				sent_time = cur_time;
 				rtm.rtm_seq = ifi->xid = arc4random();
 				if (write(routefd, &rtm, sizeof(rtm)) == -1)
 					fatal("write(routefd)");
-			} else {
-				fatalx("failed to take charge");
 			}
 		}
+
 		fds[0].fd = routefd;
 		fds[0].events = POLLIN;
-		nfds = poll(fds, 1, 3);
+		nfds = poll(fds, 1, POLLMILLISECONDS);
 		if (nfds == -1) {
 			if (errno == EINTR)
 				continue;
 			fatal("poll(routefd)");
 		}
+
 		if ((fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
-			fatal("routefd: ERR|HUP|NVAL");
-		if (nfds == 0 || (fds[0].revents & POLLIN) == 0)
-			continue;
-		routefd_handler(ifi, routefd);
+			fatalx("routefd: ERR|HUP|NVAL");
+		if (nfds == 1 && (fds[0].revents & POLLIN) == POLLIN)
+			routefd_handler(ifi, routefd);
+
+		if ((ifi->flags & IFI_IN_CHARGE) == IFI_IN_CHARGE) {
+			fd = open(leasespath, O_NONBLOCK |
+			    O_RDONLY|O_EXLOCK|O_CREAT|O_NOFOLLOW, 0640);
+			if (fd == -1 && errno != EWOULDBLOCK)
+				fatal("open(%s)", leasespath);
+		}
 	}
+
+	return fd;
 }
 
 struct client_lease *
@@ -2669,7 +2674,7 @@ release_lease(struct interface_info *ifi)
 	imsg_flush(unpriv_ibuf);
 
 	TAILQ_REMOVE(&ifi->lease_db, ifi->active, next);
-	write_lease_db(ifi);
+	write_lease_db(&ifi->lease_db);
 
 	if (optionDB != NULL) {
 		ftruncate(fileno(optionDB), 0);
@@ -2738,7 +2743,7 @@ propose_release(struct interface_info *ifi)
 			fatal("poll(routefd)");
 		}
 		if ((fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
-			fatal("routefd: ERR|HUP|NVAL");
+			fatalx("routefd: ERR|HUP|NVAL");
 		if (nfds == 0 || (fds[0].revents & POLLIN) == 0)
 			continue;
 		routefd_handler(ifi, routefd);

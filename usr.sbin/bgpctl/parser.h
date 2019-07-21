@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.h,v 1.35 2019/02/11 15:47:55 claudio Exp $ */
+/*	$OpenBSD: parser.h,v 1.37 2019/06/25 07:44:20 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -52,7 +52,6 @@ enum actions {
 	NETWORK_FLUSH,
 	NETWORK_SHOW,
 	NETWORK_MRT,
-	IRRFILTER,
 	NETWORK_BULK_ADD,
 	NETWORK_BULK_REMOVE
 };
@@ -62,11 +61,10 @@ struct parse_result {
 	struct bgpd_addr	 peeraddr;
 	struct filter_as	 as;
 	struct filter_set_head	 set;
-	struct filter_community  community;
+	struct community	 community;
 	char			 peerdesc[PEER_DESCR_LEN];
 	char			 rib[PEER_DESCR_LEN];
 	char			 shutcomm[SHUT_COMM_LEN];
-	char			*irr_outdir;
 	const char		*ext_comm_subtype;
 	u_int64_t		 rd;
 	int			 flags;

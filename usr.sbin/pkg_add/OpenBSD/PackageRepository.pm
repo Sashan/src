@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: PackageRepository.pm,v 1.160 2018/04/22 09:16:15 espie Exp $
+# $OpenBSD: PackageRepository.pm,v 1.166 2019/07/17 19:00:55 sthen Exp $
 #
 # Copyright (c) 2003-2010 Marc Espie <espie@openbsd.org>
 #
@@ -37,8 +37,7 @@ sub make_error_file
 	my ($self, $object) = @_;
 	$object->{errors} = OpenBSD::Temp->file;
 	if (!defined $object->{errors}) {
-		$self->{state}->fatal("#1 not writable",
-		    $OpenBSD::Temp::tempbase);
+		$self->{state}->fatal(OpenBSD::Temp->last_error);
 	}
 }
 
@@ -89,7 +88,9 @@ my $cleanup = sub {
 	}
 };
 END {
+	my $a = $?;
 	&$cleanup;
+	$? = $a;
 }
 
 OpenBSD::Handler->register($cleanup);
@@ -641,7 +642,8 @@ sub pkg_copy
 	my $name = $object->{name};
 	my $dir = $object->{cache_dir};
 
-	my ($copy, $filename) = OpenBSD::Temp::permanent_file($dir, $name) or die "Can't write copy to cache";
+	my ($copy, $filename) = OpenBSD::Temp::permanent_file($dir, $name) or
+		$self->{state}->fatal(OpenBSD::Temp->last_error);
 	chmod((0666 & ~umask), $filename);
 	$object->{tempname} = $filename;
 	my $handler = sub {
@@ -956,8 +958,7 @@ sub list
 		$self->make_room;
 		my $error = OpenBSD::Temp->file;
 		if (!defined $error) {
-			$self->{state}->fatal("#1 not writable",
-			    $OpenBSD::Temp::tempbase);
+			$self->{state}->fatal(OpenBSD::Temp->last_error);
 		}
 		$self->{list} = $self->obtain_list($error);
 		$self->parse_problems($error);
@@ -1023,7 +1024,7 @@ sub setup_session
 	my ($fh, undef) = OpenBSD::Temp::fh_file("session",
 		sub { unlink(shift); });
 	if (!defined $fh) {
-		$self->{state}->fatal("Can't write session into tmp directory");
+		$self->{state}->fatal(OpenBSD::Temp->last_error);
 	}
 	$self->{fh} = $fh; # XXX store the full fh and not the fileno
 }

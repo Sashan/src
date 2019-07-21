@@ -1,4 +1,4 @@
-/*	$OpenBSD: in_proto.c,v 1.91 2018/11/19 10:15:04 claudio Exp $	*/
+/*	$OpenBSD: in_proto.c,v 1.93 2019/07/15 12:40:42 bluhm Exp $	*/
 /*	$NetBSD: in_proto.c,v 1.14 1996/02/18 18:58:32 christos Exp $	*/
 
 /*
@@ -441,8 +441,10 @@ const struct protosw inetsw[] = {
 struct domain inetdomain = {
   .dom_family = AF_INET,
   .dom_name = "internet",
+  .dom_init = in_init,
   .dom_protosw = inetsw,
   .dom_protoswNPROTOSW = &inetsw[nitems(inetsw)],
+  .dom_sasize = sizeof(struct sockaddr_in),
   .dom_rtoffset = offsetof(struct sockaddr_in, sin_addr),
   .dom_maxplen = 32
 };

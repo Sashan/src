@@ -1,6 +1,6 @@
 #! /usr/bin/perl
 # ex:ts=8 sw=4:
-# $OpenBSD: PkgCreate.pm,v 1.155 2019/05/28 23:24:44 espie Exp $
+# $OpenBSD: PkgCreate.pm,v 1.162 2019/07/17 19:00:55 sthen Exp $
 #
 # Copyright (c) 2003-2014 Marc Espie <espie@openbsd.org>
 #
@@ -635,7 +635,9 @@ sub format_source_page
 	my $fullname = $self->cwd."/".$dest;
 	my $d = dirname($fullname);
 	$state->{mandir} //= OpenBSD::Temp::permanent_dir(
-	    $ENV{TMPDIR} // '/tmp', "manpage");
+	    $ENV{TMPDIR} // '/tmp', "manpage") or
+	    	$state->error(OpenBSD::Temp->last_error) and
+		return 0;
 	my $tempname = $state->{mandir}.$fullname;
 	require File::Path;
 	File::Path::make_path($state->{mandir}.$d);
@@ -1396,7 +1398,11 @@ sub create_plist
 		    if defined $state->opt('v');
 		$state->set_status("reading plist");
 	}
-	$plist->set_infodir(OpenBSD::Temp->dir);
+	my $dir = OpenBSD::Temp->dir;
+	if (!$dir) {
+		$state->fatal(OpenBSD::Temp->last_error);
+	}
+	$plist->set_infodir($dir);
 	if (!defined $state->opt('S')) {
 		$self->read_all_fragments($state, $plist);
 	}
@@ -1587,6 +1593,7 @@ sub parse_and_run
 
 	my $regen_package = 0;
 	my $sign_only = 0;
+	my $rc = 0;
 
 	my $state = OpenBSD::PkgCreate::State->new($cmd);
 	$state->handle_options;
@@ -1694,11 +1701,11 @@ sub parse_and_run
 	if (!$state->defines("stub")) {
 		$self->finish_manpages($state, $plist);
 	}
-	}catch {
-		print STDERR "$0: $_\n";
-		return 1;
+	} catch {
+		$state->errsay("#1", $_);
+		$rc = 1;
 	};
-	return 0;
+	return $rc;
 }
 
 1;
