@@ -30,6 +30,8 @@
  *	Date:	7/90
  */
 
+#include <sys/queue.h>
+
 /*
  * Data access functions for debugger.
  */
@@ -46,5 +48,17 @@ struct db_stack_trace {
 	db_addr_t	st_pc[DB_STACK_TRACE_MAX];
 };
 
+struct db_stack_aggr;
+struct db_stack_record;
+
 void db_print_stack_trace(struct db_stack_trace *, int (*)(const char *, ...));
 void db_save_stack_trace(struct db_stack_trace *);
+
+struct db_stack_aggr *db_stack_aggr_create(unsigned int, unsigned int);
+void db_stack_aggr_destroy(struct db_stack_aggr *);
+struct db_stack_record *db_stack_record_alloc(struct db_stack_aggr *);
+void db_stack_record_free(struct db_stack_record *);
+struct db_stack_record *db_stack_aggr_insert(struct db_stack_aggr *,
+	struct db_stack_record *);
+struct db_stack_trace *db_stack_aggr_get_stack(struct db_stack_record *);
+void db_stack_aggr_print(struct db_stack_aggr *, int, int, int);
