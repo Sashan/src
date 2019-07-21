@@ -1,4 +1,4 @@
-/*	$OpenBSD: resolve.c,v 1.89 2019/04/21 04:11:42 deraadt Exp $ */
+/*	$OpenBSD: resolve.c,v 1.91 2019/07/21 03:54:16 guenther Exp $ */
 
 /*
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
@@ -225,7 +225,8 @@ _dl_origin_path(elf_object_t *object, char *origin_path)
 	if (dirname_path == NULL)
 		return -1;
 
-	if (_dl_realpath(dirname_path, origin_path) == NULL)
+	/* syscall in ld.so returns 0/-errno, where libc returns char* */
+	if (_dl___realpath(dirname_path, origin_path) < 0)
 		return -1;
 
 	return 0;
@@ -517,60 +518,19 @@ _dl_remove_object(elf_object_t *object)
 }
 
 
-sym_cache *_dl_symcache;
-int _dl_symcachestat_hits;
-int _dl_symcachestat_lookups;
-
-
 Elf_Addr
 _dl_find_symbol_bysym(elf_object_t *req_obj, unsigned int symidx,
-    const Elf_Sym **this, int flags, const Elf_Sym *ref_sym, const elf_object_t **pobj)
+    const Elf_Sym **this, int flags, const Elf_Sym *ref_sym,
+    const elf_object_t **pobj)
 {
-	Elf_Addr ret;
 	const Elf_Sym *sym;
 	const char *symn;
-	const elf_object_t *sobj;
-
-	_dl_symcachestat_lookups ++;
-	if (_dl_symcache != NULL &&
-	    symidx < req_obj->nchains &&
-	    _dl_symcache[symidx].obj != NULL &&
-	    _dl_symcache[symidx].sym != NULL &&
-	    _dl_symcache[symidx].flags == flags) {
-
-		_dl_symcachestat_hits++;
-		sobj = _dl_symcache[symidx].obj;
-		*this = _dl_symcache[symidx].sym;
-		if (pobj)
-			*pobj = sobj;
-		return sobj->obj_base;
-	}
 
 	sym = req_obj->dyn.symtab;
 	sym += symidx;
 	symn = req_obj->dyn.strtab + sym->st_name;
 
-	ret = _dl_find_symbol(symn, this, flags, ref_sym, req_obj, &sobj);
-
-	if (pobj)
-		*pobj = sobj;
-
-	if (_dl_symcache != NULL && symidx < req_obj->nchains) {
-#if 0
-		DL_DEB(("cache miss %d %p %p, %p %p %s %s %d %d %s\n",
-		    symidx,
-		    _dl_symcache[symidx].sym, *this,
-		    _dl_symcache[symidx].obj, sobj, sobj->load_name,
-		    sobj->dyn.strtab + (*this)->st_name,
-		    _dl_symcache[symidx].flags, flags, req_obj->load_name));
-#endif
-
-		_dl_symcache[symidx].sym = *this;
-		_dl_symcache[symidx].obj = sobj;
-		_dl_symcache[symidx].flags = flags;
-	}
-
-	return ret;
+	return _dl_find_symbol(symn, this, flags, ref_sym, req_obj, pobj);
 }
 
 static int

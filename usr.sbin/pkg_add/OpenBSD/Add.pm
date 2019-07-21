@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: Add.pm,v 1.180 2019/06/03 19:21:05 espie Exp $
+# $OpenBSD: Add.pm,v 1.182 2019/07/10 11:15:15 espie Exp $
 #
 # Copyright (c) 2003-2014 Marc Espie <espie@openbsd.org>
 #
@@ -415,7 +415,7 @@ sub find_extractible
 sub prepare_for_addition
 {
 	my ($self, $state, $pkgname) = @_;
-	my $fname = $state->{destdir}.$self->fullname;
+	my $fname = $self->retrieve_fullname($state, $pkgname);
 	# check for collisions with existing stuff
 	if ($state->vstat->exists($fname)) {
 		push(@{$state->{colliding}}, $self);
@@ -424,8 +424,8 @@ sub prepare_for_addition
 		return;
 	}
 	return if $state->defines('stub');
-	my $s = $state->vstat->add($fname, $self->{tieto} ? 0 : $self->{size},
-	    $pkgname);
+	my $s = $state->vstat->add($fname, 
+	    $self->{tieto} ? 0 : $self->retrieve_size, $pkgname);
 	return unless defined $s;
 	if ($s->ro) {
 		$s->report_ro($state, $fname);
@@ -484,9 +484,10 @@ sub create_temp
 	if (!defined $tempname) {
 		if ($state->allow_nonroot($fullname)) {
 			$state->errsay("Can't create temp file outside localbase for #1", $fullname);
+			$state->errsay(OpenBSD::Temp->last_error);
 			return undef;
 		}
-		$state->fatal("create temporary file in #1: #2", $d, $!);
+		$state->fatal(OpenBSD::Temp->last_error);
 	}
 	return ($fh, $tempname);
 }
@@ -820,26 +821,6 @@ sub install
 package OpenBSD::PackingElement::SpecialFile;
 use OpenBSD::PackageInfo;
 use OpenBSD::Error;
-
-sub prepare_for_addition
-{
-	my ($self, $state, $pkgname) = @_;
-
-	my $fname = installed_info($pkgname).$self->name;
-	my $cname = $self->fullname;
-	my $size = $self->{size};
-	if (!defined $size) {
-		$size = (stat $cname)[7];
-	}
-	my $s = $state->vstat->add($fname, $self->{size}, $pkgname);
-	return unless defined $s;
-	if ($s->ro) {
-		$s->report_ro($state, $fname);
-	}
-	if ($s->avail < 0) {
-		$s->report_overflow($state, $fname);
-	}
-}
 
 sub copy_info
 {

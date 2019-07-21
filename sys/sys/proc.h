@@ -1,4 +1,4 @@
-/*	$OpenBSD: proc.h,v 1.268 2019/06/01 22:42:18 deraadt Exp $	*/
+/*	$OpenBSD: proc.h,v 1.272 2019/07/08 18:53:18 mpi Exp $	*/
 /*	$NetBSD: proc.h,v 1.44 1996/04/22 01:23:21 christos Exp $	*/
 
 /*-
@@ -154,6 +154,12 @@ RBT_HEAD(unvname_rbt, unvname);
 struct futex;
 LIST_HEAD(futex_list, futex);
 struct unveil;
+
+/*
+ *  Locks used to protect struct members in this file:
+ *	m	this process' `ps_mtx'
+ *	r	rlimit_lock
+ */
 struct process {
 	/*
 	 * ps_mainproc is the original thread in the process.
@@ -181,6 +187,7 @@ struct process {
 
 	struct	futex_list ps_ftlist;	/* futexes attached to this process */
 	LIST_HEAD(, kqueue) ps_kqlist;	/* kqueues attached to this process */
+	struct  mutex	ps_mtx;		/* per-process mutex */
 
 /* The following fields are all zeroed upon creation in process_new. */
 #define	ps_startzero	ps_klist
@@ -203,7 +210,9 @@ struct process {
 	struct	tusage ps_tu;		/* accumulated times. */
 	struct	rusage ps_cru;		/* sum of stats for reaped children */
 	struct	itimerval ps_timer[3];	/* timers, indexed by ITIMER_* */
-	struct	timeout ps_rucheck_to;	/* resource limit check timer */
+	struct	timeout ps_rucheck_to;	/* [] resource limit check timer */
+	time_t	ps_nextxcpu;		/* when to send next SIGXCPU, */
+					/* in seconds of process runtime */
 
 	u_int64_t ps_wxcounter;
 
@@ -219,7 +228,7 @@ struct process {
 
 /* The following fields are all copied upon creation in process_new. */
 #define	ps_startcopy	ps_limit
-	struct	plimit *ps_limit;	/* Process limits. */
+	struct	plimit *ps_limit;	/* [m,r] Process limits. */
 	struct	pgrp *ps_pgrp;		/* Pointer to process group. */
 	struct	emul *ps_emul;		/* Emulation information */
 
@@ -306,13 +315,15 @@ struct p_inentry {
 
 /*
  *  Locks used to protect struct members in this file:
+ *	I	immutable after creation
  *	s	scheduler lock
+ *	l	read only reference, see lim_read_enter()
  */
 struct proc {
 	TAILQ_ENTRY(proc) p_runq;	/* [s] current run/sleep queue */
 	LIST_ENTRY(proc) p_list;	/* List of all threads. */
 
-	struct	process *p_p;		/* The process of this thread. */
+	struct	process *p_p;		/* [I] The process of this thread. */
 	TAILQ_ENTRY(proc) p_thr_link;	/* Threads in a process linkage. */
 
 	TAILQ_ENTRY(proc) p_fut_link;	/* Threads in a futex linkage. */
@@ -320,10 +331,10 @@ struct proc {
 
 	/* substructures: */
 	struct	filedesc *p_fd;		/* copy of p_p->ps_fd */
-	struct	vmspace *p_vmspace;	/* copy of p_p->ps_vmspace */
+	struct	vmspace *p_vmspace;	/* [I] copy of p_p->ps_vmspace */
 	struct	p_inentry p_spinentry;
 	struct	p_inentry p_pcinentry;
-#define	p_rlimit	p_p->ps_limit->pl_rlimit
+	struct	plimit	*p_limit;	/* [l] read ref. of p_p->ps_limit */
 
 	int	p_flag;			/* P_* flags. */
 	u_char	p_spare;		/* unused */
@@ -550,7 +561,7 @@ void	leavepgrp(struct process *);
 void	killjobc(struct process *);
 void	preempt(void);
 void	procinit(void);
-void	resetpriority(struct proc *);
+void	setpriority(struct proc *, uint32_t, uint8_t);
 void	setrunnable(struct proc *);
 void	endtsleep(void *);
 void	unsleep(struct proc *);

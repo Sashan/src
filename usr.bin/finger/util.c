@@ -1,4 +1,4 @@
-/*	$OpenBSD: util.c,v 1.34 2018/06/17 15:00:29 deraadt Exp $	*/
+/*	$OpenBSD: util.c,v 1.36 2019/07/03 03:24:02 deraadt Exp $	*/
 
 /*
  * Copyright (c) 1989 The Regents of the University of California.
@@ -60,7 +60,7 @@ find_idle_and_ttywrite(WHERE *w)
 	struct stat sb;
 
 	(void)snprintf(tbuf, sizeof(tbuf), "%s%s", _PATH_DEV, w->tty);
-	if (stat(tbuf, &sb) < 0) {
+	if (stat(tbuf, &sb) == -1) {
 		/* Don't bitch about it, just handle it... */
 		w->idletime = 0;
 		w->writable = 0;
@@ -120,7 +120,7 @@ userinfo(PERSON *pn, struct passwd *pw)
 	}
 	len = snprintf(tbuf, sizeof(tbuf), "%s/%s", _PATH_MAILSPOOL,
 	    pw->pw_name);
-	if (len != -1 && len < sizeof(tbuf)) {
+	if (len >= 0 && len < sizeof(tbuf)) {
 		if (stat(tbuf, &sb) < 0) {
 			if (errno != ENOENT) {
 				warn("%s", tbuf);
