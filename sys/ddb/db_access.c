@@ -32,10 +32,63 @@
 
 #include <sys/param.h>
 #include <sys/endian.h>
+#include <sys/queue.h>
+#include <sys/types.h>
+#include <sys/malloc.h>
+#include <sys/mutex.h>
 
 #include <machine/db_machdep.h>		/* type definitions */
 
 #include <ddb/db_access.h>
+
+#define DBSA_HASH_SIZE	32
+#define	DBSA_HASH(_k_)	((_k_) & 0x1f)
+
+#define DBSR_MARK_UNUSED(_dbsr_)	do {		\
+		(_dbsr_)->dbsr_used = 0;		\
+	} while (0)
+
+#define DBSR_CMP_PC(_a_dbsr, _b_dbsr, _lvl)	\
+	((_a_dbsr)->dbsr_st.st_pc[(_lvl)] == (_b_dbsr)->dbsr_st.st_pc[(_lvl)])
+
+#define DBSR_STACK_DPETH(_dbsr)	\
+	(MIN((_dbsr)->dbsr_my_dbsa->dbsa_depth, (_dbsr)->dbsr_st.st_count))
+
+/*
+ * Record is marked as used as long as it is either found in table or
+ * in the free list.
+ */
+#define DBSR_MARK_USED(_dbsr_)	do {		\
+		(_dbsr_)->dbsr_used = 1;	\
+	} while (0)
+
+struct db_stack_record {
+	LIST_ENTRY(db_stack_record)
+			 dbsr_le;
+	int		 dbsr_used;
+	uint64_t	 dbsr_hkey;
+	unsigned int	 dbsr_instances;
+	struct db_stack_aggr
+			*dbsr_my_dbsa;
+	struct db_stack_trace	
+			 dbsr_st;
+};
+
+LIST_HEAD(db_stack_list, db_stack_record);
+
+struct db_stack_aggr {
+	unsigned int	dbsa_stacks;
+	unsigned int	dbsa_depth;
+	unsigned int	dbsa_pool_limit;
+	unsigned int	dbsa_pool_used;
+	struct db_stack_list
+			dbsa_hash_dbsr[DBSA_HASH_SIZE];
+	struct db_stack_list
+			dbsa_free_list;
+	struct db_stack_record
+			*dbsa_pool;
+	struct mutex	dbsa_mx;
+};
 
 /*
  * Access unaligned data items on aligned (longword)
@@ -91,4 +144,136 @@ db_put_value(db_addr_t addr, size_t size, db_expr_t value)
 	}
 
 	db_write_bytes(addr, size, data);
+}
+
+struct db_stack_aggr *
+db_stack_aggr_create(unsigned int stacks, unsigned int stack_depth)
+{
+	struct db_stack_aggr	*rv_dbsa;
+	unsigned int	i;
+
+	rv_dbsa = malloc(sizeof(struct db_stack_aggr),
+	    M_TEMP, M_CANFAIL|M_ZERO);
+	if (rv_dbsa == NULL)
+		return (NULL);
+
+	rv_dbsa->dbsa_stacks = stacks;
+	rv_dbsa->dbsa_depth = stack_depth;
+
+	rv_dbsa->dbsa_pool_limit = stacks;
+	rv_dbsa->dbsa_pool = mallocarray(stacks, sizeof(struct db_stack_record),
+	    M_TEMP, M_CANFAIL|M_ZERO);
+
+	if (rv_dbsa->dbsa_pool == NULL) {
+		free(rv_dbsa, M_TEMP, sizeof(struct db_stack_aggr));
+		return (NULL);
+	}
+
+	for (i = 0; i < DBSA_HASH_SIZE; i++)
+		LIST_INIT(&rv_dbsa->dbsa_hash_dbsr[i]);
+
+	LIST_INIT(&rv_dbsa->dbsa_free_list);
+	for (i = 0; i < rv_dbsa->dbsa_pool_limit; i++) {
+		LIST_INSERT_HEAD(&rv_dbsa->dbsa_free_list,
+		    &rv_dbsa->dbsa_pool[i], dbsr_le);
+		rv_dbsa->dbsa_pool[i].dbsr_my_dbsa = rv_dbsa;
+		DBSR_MARK_USED(&rv_dbsa->dbsa_pool[i]);
+	}
+
+	return (rv_dbsa);
+}
+
+void
+db_stack_aggr_destroy(struct db_stack_aggr *dbsa)
+{
+	free(dbsa->dbsa_pool, M_TEMP,
+	    sizeof(struct db_stack_record) * dbsa->dbsa_pool_limit);
+	free(dbsa, M_TEMP, sizeof(struct db_stack_record));
+}
+
+struct db_stack_record *
+db_stack_record_alloc(struct db_stack_aggr *dbsa)
+{
+	struct db_stack_record *rv;
+
+	mtx_enter(&dbsa->dbsa_mx);
+	rv = LIST_FIRST(&dbsa->dbsa_free_list);
+	if (rv != NULL)
+		LIST_REMOVE(rv, dbsr_le);
+	DBSR_MARK_UNUSED(rv);
+	mtx_leave(&dbsa->dbsa_mx);
+
+	return (rv);
+}
+
+void
+db_stack_record_free(struct db_stack_record *dbsr)
+{
+	KASSERT(dbsr->dbsr_my_dbsa != NULL);
+	KASSERT(!dbsr->dbsr_used);
+
+	mtx_enter(&dbsr->dbsr_my_dbsa->dbsa_mx);
+	LIST_INSERT_HEAD(&dbsr->dbsr_my_dbsa->dbsa_free_list, dbsr, dbsr_le);
+	DBSR_MARK_USED(dbsr);
+	mtx_leave(&dbsr->dbsr_my_dbsa->dbsa_mx);
+}
+
+unsigned int
+db_stack_aggr_get_key(struct db_stack_aggr *dbsa, struct db_stack_record *dbsr)
+{
+	db_addr_t	rv = (db_addr_t)0xfeedfacefeedface;
+	unsigned int	i;
+
+	rv ^= dbsr->dbsr_st.st_count;
+	for (i = 0; i < DBSR_STACK_DPETH(dbsr); i++)
+		rv ^= dbsr->dbsr_st.st_pc[i];
+
+	return ((unsigned int)rv);
+}
+
+struct db_stack_record *
+db_stack_aggr_insert(struct db_stack_aggr *dbsa, struct db_stack_record *key_dbsr)
+{
+	struct db_stack_list	*bucket;
+	struct db_stack_record	*dbsr;
+
+	key_dbsr->dbsr_hkey = db_stack_aggr_get_key(dbsa, key_dbsr);
+	bucket = &dbsa->dbsa_hash_dbsr[dbsr->dbsr_hkey];
+	mtx_enter(&dbsa->dbsa_mx);
+	LIST_FOREACH(dbsr, bucket, dbsr_le) {
+		if (dbsr->dbsr_hkey == key_dbsr->dbsr_hkey) {
+			int	i;
+
+			for (i = 0; i < DBSR_STACK_DPETH(dbsr); i++)
+				if (!DBSR_CMP_PC(dbsr, key_dbsr, i))
+					break;
+
+			/*
+			 * found a match
+			 */
+			if (i == dbsr->dbsr_st.st_count)
+				break;
+		} 
+	}
+
+	if (dbsr == NULL) {
+		LIST_INSERT_HEAD(bucket, key_dbsr, dbsr_le);
+		key_dbsr->dbsr_instances = 1;
+		DBSR_MARK_USED(key_dbsr);
+		dbsr = key_dbsr;
+	} else {
+		dbsr->dbsr_instances++;
+		LIST_INSERT_HEAD(&dbsa->dbsa_free_list, key_dbsr, dbsr_le);
+		DBSR_MARK_USED(key_dbsr);
+	}
+
+	mtx_leave(&dbsa->dbsa_mx);
+
+	return (dbsr);
+}
+
+struct db_stack_trace *
+db_stack_aggr_get_stack(struct db_stack_record *dbsr)
+{
+	return (&dbsr->dbsr_st);
 }
