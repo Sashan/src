@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_syscalls.c,v 1.317 2019/05/30 13:11:53 deraadt Exp $	*/
+/*	$OpenBSD: vfs_syscalls.c,v 1.323 2019/07/15 15:05:21 beck Exp $	*/
 /*	$NetBSD: vfs_syscalls.c,v 1.71 1996/04/23 10:29:02 mycroft Exp $	*/
 
 /*
@@ -880,6 +880,9 @@ sys___realpath(struct proc *p, void *v, register_t *retval)
 	size_t pathlen;
 	int error = 0;
 
+	if (SCARG(uap, pathname) == NULL)
+		return (EINVAL);
+
 	pathname = pool_get(&namei_pool, PR_WAITOK);
 	rpbuf = pool_get(&namei_pool, PR_WAITOK);
 
@@ -925,7 +928,7 @@ sys___realpath(struct proc *p, void *v, register_t *retval)
 		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | SAVENAME | REALPATH,
 		    UIO_SYSSPACE, pathname, p);
 	else
-		NDINIT(&nd, CREATE, FOLLOW | LOCKLEAF | LOCKPARENT | SAVENAME |
+		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | LOCKPARENT | SAVENAME |
 		    REALPATH, UIO_SYSSPACE, pathname, p);
 
 	nd.ni_cnd.cn_rpbuf = rpbuf;
@@ -1988,16 +1991,6 @@ dofstatat(struct proc *p, int fd, const char *path, struct stat *buf, int flag)
 	vput(nd.ni_vp);
 	if (error)
 		return (error);
-	if (nd.ni_pledge & PLEDGE_STATLIE) {
-		if (S_ISDIR(sb.st_mode) || S_ISLNK(sb.st_mode)) {
-			if (sb.st_uid >= 1000) {
-				sb.st_uid = p->p_ucred->cr_uid;
-				sb.st_gid = p->p_ucred->cr_gid;;
-			}
-			sb.st_gen = 0;
-		} else
-			return (ENOENT);
-	}
 	/* Don't let non-root see generation numbers (for NFS security) */
 	if (suser(p))
 		sb.st_gen = 0;

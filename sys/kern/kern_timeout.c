@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_timeout.c,v 1.55 2019/04/23 13:35:12 visa Exp $	*/
+/*	$OpenBSD: kern_timeout.c,v 1.57 2019/07/19 00:11:38 cheloha Exp $	*/
 /*
  * Copyright (c) 2001 Thomas Nordin <nordin@openbsd.org>
  * Copyright (c) 2000-2001 Artur Grabowski <art@openbsd.org>
@@ -32,6 +32,7 @@
 #include <sys/mutex.h>
 #include <sys/kernel.h>
 #include <sys/queue.h>			/* _Q_INVALIDATE */
+#include <sys/sysctl.h>
 #include <sys/witness.h>
 
 #ifdef DDB
@@ -92,6 +93,8 @@ timeout_from_circq(struct circq *p)
  */
 struct mutex timeout_mutex = MUTEX_INITIALIZER(IPL_HIGH);
 
+struct timeoutstat tostat;
+
 /*
  * Circular queue definitions.
  */
@@ -106,6 +109,7 @@ struct mutex timeout_mutex = MUTEX_INITIALIZER(IPL_HIGH);
         (elem)->next = (list);                  \
         (list)->prev->next = (elem);            \
         (list)->prev = (elem);                  \
+        tostat.tos_pending++;                   \
 } while (0)
 
 #define CIRCQ_APPEND(fst, snd) do {             \
@@ -123,6 +127,7 @@ struct mutex timeout_mutex = MUTEX_INITIALIZER(IPL_HIGH);
         (elem)->prev->next = (elem)->next;      \
 	_Q_INVALIDATE((elem)->prev);		\
 	_Q_INVALIDATE((elem)->next);		\
+	tostat.tos_pending--;			\
 } while (0)
 
 #define CIRCQ_FIRST(elem) ((elem)->next)
@@ -250,11 +255,13 @@ timeout_add(struct timeout *new, int to_ticks)
 			CIRCQ_REMOVE(&new->to_list);
 			CIRCQ_INSERT(&new->to_list, &timeout_todo);
 		}
+		tostat.tos_readded++;
 		ret = 0;
 	} else {
 		new->to_flags |= TIMEOUT_ONQUEUE;
 		CIRCQ_INSERT(&new->to_list, &timeout_todo);
 	}
+	tostat.tos_added++;
 	mtx_leave(&timeout_mutex);
 
 	return (ret);
@@ -360,9 +367,11 @@ timeout_del(struct timeout *to)
 	if (to->to_flags & TIMEOUT_ONQUEUE) {
 		CIRCQ_REMOVE(&to->to_list);
 		to->to_flags &= ~TIMEOUT_ONQUEUE;
+		tostat.tos_cancelled++;
 		ret = 1;
 	}
 	to->to_flags &= ~TIMEOUT_TRIGGERED;
+	tostat.tos_deleted++;
 	mtx_leave(&timeout_mutex);
 
 	return (ret);
@@ -490,17 +499,22 @@ softclock(void *arg)
 		if (delta > 0) {
 			bucket = &BUCKET(delta, to->to_time);
 			CIRCQ_INSERT(&to->to_list, bucket);
+			tostat.tos_rescheduled++;
 		} else if (to->to_flags & TIMEOUT_NEEDPROCCTX) {
 			CIRCQ_INSERT(&to->to_list, &timeout_proc);
 			needsproc = 1;
 		} else {
+			if (delta < 0) {
+				tostat.tos_late++;
 #ifdef DEBUG
-			if (delta < 0)
 				printf("timeout delayed %d\n", delta);
 #endif
+			}
 			timeout_run(to);
+			tostat.tos_run_softclock++;
 		}
 	}
+	tostat.tos_softclocks++;
 	mtx_leave(&timeout_mutex);
 
 	if (needsproc)
@@ -541,7 +555,9 @@ softclock_thread(void *arg)
 			to = timeout_from_circq(CIRCQ_FIRST(&timeout_proc));
 			CIRCQ_REMOVE(&to->to_list);
 			timeout_run(to);
+			tostat.tos_run_thread++;
 		}
+		tostat.tos_thread_wakeups++;
 		mtx_leave(&timeout_mutex);
 	}
 }
@@ -578,36 +594,61 @@ timeout_adjust_ticks(int adj)
 }
 #endif
 
+int
+timeout_sysctl(void *oldp, size_t *oldlenp, void *newp, size_t newlen)
+{
+	struct timeoutstat status;
+
+	mtx_enter(&timeout_mutex);
+	memcpy(&status, &tostat, sizeof(status));
+	mtx_leave(&timeout_mutex);
+
+	return sysctl_rdstruct(oldp, oldlenp, newp, &status, sizeof(status));
+}
+
 #ifdef DDB
 void db_show_callout_bucket(struct circq *);
 
 void
 db_show_callout_bucket(struct circq *bucket)
 {
+	char buf[8];
 	struct timeout *to;
 	struct circq *p;
 	db_expr_t offset;
-	char *name;
+	char *name, *where;
+	int width = sizeof(long) * 2;
 
 	for (p = CIRCQ_FIRST(bucket); p != bucket; p = CIRCQ_FIRST(p)) {
 		to = timeout_from_circq(p);
 		db_find_sym_and_offset((db_addr_t)to->to_func, &name, &offset);
 		name = name ? name : "?";
-		db_printf("%9d %2td/%-4td %p  %s\n", to->to_time - ticks,
-		    (bucket - timeout_wheel) / WHEELSIZE,
-		    bucket - timeout_wheel, to->to_arg, name);
+		if (bucket == &timeout_todo)
+			where = "softint";
+		else if (bucket == &timeout_proc)
+			where = "thread";
+		else {
+			snprintf(buf, sizeof(buf), "%3ld/%1ld",
+			    (bucket - timeout_wheel) % WHEELSIZE,
+			    (bucket - timeout_wheel) / WHEELSIZE);
+			where = buf;
+		}
+		db_printf("%9d  %7s  0x%0*lx  %s\n",
+		    to->to_time - ticks, where, width, (ulong)to->to_arg, name);
 	}
 }
 
 void
 db_show_callout(db_expr_t addr, int haddr, db_expr_t count, char *modif)
 {
+	int width = sizeof(long) * 2 + 2;
 	int b;
 
 	db_printf("ticks now: %d\n", ticks);
-	db_printf("    ticks  wheel       arg  func\n");
+	db_printf("%9s  %7s  %*s  func\n", "ticks", "wheel", width, "arg");
 
 	db_show_callout_bucket(&timeout_todo);
+	db_show_callout_bucket(&timeout_proc);
 	for (b = 0; b < nitems(timeout_wheel); b++)
 		db_show_callout_bucket(&timeout_wheel[b]);
 }

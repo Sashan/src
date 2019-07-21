@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.384 2019/05/27 09:14:32 claudio Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.389 2019/07/19 07:40:41 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -48,6 +48,7 @@
 #define	MAX_PKTSIZE			4096
 #define	MIN_HOLDTIME			3
 #define	READ_BUF_SIZE			65535
+#define	MAX_SOCK_BUF			(4 * READ_BUF_SIZE)
 #define	RT_BUF_SIZE			16384
 #define	MAX_RTSOCK_BUF			(2 * 1024 * 1024)
 #define	MAX_COMM_MATCH			3
@@ -110,8 +111,8 @@
  * IMSG_XON message will be sent and the RDE will produce more messages again.
  */
 #define RDE_RUNNER_ROUNDS	100
-#define SESS_MSG_HIGH_MARK	300
-#define SESS_MSG_LOW_MARK	50
+#define SESS_MSG_HIGH_MARK	2000
+#define SESS_MSG_LOW_MARK	500
 #define CTL_MSG_HIGH_MARK	500
 #define CTL_MSG_LOW_MARK	100
 
@@ -397,6 +398,12 @@ struct peer_config {
 	u_int8_t		 flags;
 };
 
+#define	PEER_ID_NONE		0
+#define	PEER_ID_SELF		1
+#define	PEER_ID_STATIC_MIN	2	/* exclude self */
+#define	PEER_ID_STATIC_MAX	(UINT_MAX / 2)
+#define	PEER_ID_DYN_MAX		UINT_MAX
+
 #define PEERFLAG_TRANS_AS	0x01
 #define PEERFLAG_LOG_UPDATES	0x02
 
@@ -413,7 +420,6 @@ enum network_type {
 struct network_config {
 	struct bgpd_addr	 prefix;
 	struct filter_set_head	 attrset;
-	struct rde_aspath	*asp;
 	char			 psname[SET_NAME_LEN];
 	u_int64_t		 rd;
 	u_int16_t		 rtlabel;
@@ -447,6 +453,7 @@ enum imsg_type {
 	IMSG_CTL_SHOW_INTERFACE,
 	IMSG_CTL_SHOW_RIB,
 	IMSG_CTL_SHOW_RIB_PREFIX,
+	IMSG_CTL_SHOW_RIB_COMMUNITIES,
 	IMSG_CTL_SHOW_RIB_ATTR,
 	IMSG_CTL_SHOW_NETWORK,
 	IMSG_CTL_SHOW_RIB_MEM,
@@ -771,28 +778,21 @@ struct filter_ovs {
 	u_int8_t		 is_set;
 };
 
-struct filter_community {
-	u_int8_t	type;
-	u_int8_t	dflag1;	/* one of set, any, local-as, neighbor-as */
-	u_int8_t	dflag2;
-	u_int8_t	dflag3;
-	union {
-		struct basic {
-			u_int32_t	data1;
-			u_int32_t	data2;
-		} b;
-		struct large {
-			u_int32_t	data1;
-			u_int32_t	data2;
-			u_int32_t	data3;
-		} l;
-		struct ext {
-			u_int32_t	data1;
-			u_int64_t	data2;
-			short		type;
-			u_int8_t	subtype;	/* if extended type */
-		} e;
-	}		c;
+/*
+ * Communities are encoded depending on their type. The low byte of flags
+ * is the COMMUNITY_TYPE (BASIC, LARGE, EXT). BASIC encoding is just using
+ * data1 and data2, LARGE uses all data fields and EXT is also using all
+ * data fields. The 4-byte flags fields consists of up to 3 data flags
+ * for e.g. COMMUNITY_ANY and the low byte is the community type.
+ * If flags is 0 the community struct is unused. If the upper 24bit of
+ * flags is 0 a fast compare can be used.
+ * The code uses a type cast to u_int8_t to access the type.
+ */
+struct community {
+	u_int32_t	flags;
+	u_int32_t	data1;
+	u_int32_t	data2;
+	u_int32_t	data3;
 };
 
 struct ctl_show_rib_request {
@@ -800,7 +800,7 @@ struct ctl_show_rib_request {
 	struct ctl_neighbor	neighbor;
 	struct bgpd_addr	prefix;
 	struct filter_as	as;
-	struct filter_community community;
+	struct community	community;
 	u_int32_t		flags;
 	u_int8_t		validation_state;
 	pid_t			pid;
@@ -848,11 +848,11 @@ struct filter_peers {
 	u_int8_t	ibgp;
 };
 
-/* special community type */
+/* special community type, keep in sync with the attribute type */
 #define	COMMUNITY_TYPE_NONE		0
-#define	COMMUNITY_TYPE_BASIC		1
-#define	COMMUNITY_TYPE_EXT		2
-#define	COMMUNITY_TYPE_LARGE		3
+#define	COMMUNITY_TYPE_BASIC		8
+#define	COMMUNITY_TYPE_EXT		16
+#define	COMMUNITY_TYPE_LARGE		32
 
 #define	COMMUNITY_ANY			1
 #define	COMMUNITY_NEIGHBOR_AS		2
@@ -869,7 +869,7 @@ struct filter_peers {
 
 /* extended community definitions */
 #define EXT_COMMUNITY_IANA		0x80
-#define EXT_COMMUNITY_TRANSITIVE	0x40
+#define EXT_COMMUNITY_NON_TRANSITIVE	0x40
 #define EXT_COMMUNITY_VALUE		0x3f
 /* extended types transitive */
 #define EXT_COMMUNITY_TRANS_TWO_AS	0x00	/* 2 octet AS specific */
@@ -955,7 +955,7 @@ struct filter_match {
 	struct filter_nexthop		nexthop;
 	struct filter_as		as;
 	struct filter_aslen		aslen;
-	struct filter_community		community[MAX_COMM_MATCH];
+	struct community		community[MAX_COMM_MATCH];
 	struct filter_prefixset		prefixset;
 	struct filter_originset		originset;
 	struct filter_ovs		ovs;
@@ -1012,7 +1012,7 @@ struct filter_set {
 		int32_t				 relative;
 		struct bgpd_addr		 nexthop;
 		struct nexthop			*nh;
-		struct filter_community		 community;
+		struct community		 community;
 		char				 pftable[PFTABLE_LEN];
 		char				 rtlabel[RTLABEL_LEN];
 		u_int8_t			 origin;
@@ -1090,6 +1090,10 @@ struct rde_memstats {
 	long long	aspath_cnt;
 	long long	aspath_size;
 	long long	aspath_refs;
+	long long	comm_cnt;
+	long long	comm_nmemb;
+	long long	comm_size;
+	long long	comm_refs;
 	long long	attr_cnt;
 	long long	attr_refs;
 	long long	attr_data;
@@ -1266,7 +1270,7 @@ void		 as_sets_mark_dirty(struct as_set_head *, struct as_set_head *);
 int		 as_set_match(const struct as_set *, u_int32_t);
 
 struct set_table	*set_new(size_t, size_t);
-void		 	 set_free(struct set_table *);
+void			 set_free(struct set_table *);
 int			 set_add(struct set_table *, void *, size_t);
 void			*set_get(struct set_table *, size_t *);
 void			 set_prep(struct set_table *);
