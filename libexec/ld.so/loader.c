@@ -1,4 +1,4 @@
-/*	$OpenBSD: loader.c,v 1.178 2019/05/10 13:29:21 guenther Exp $ */
+/*	$OpenBSD: loader.c,v 1.183 2019/07/21 03:54:16 guenther Exp $ */
 
 /*
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
@@ -209,10 +209,14 @@ void
 _dl_clean_boot(void)
 {
 	extern char boot_text_start[], boot_text_end[];
+#if 0	/* XXX breaks boehm-gc?!? */
 	extern char boot_data_start[], boot_data_end[];
+#endif
 
 	_dl_munmap(boot_text_start, boot_text_end - boot_text_start);
+#if 0	/* XXX breaks boehm-gc?!? */
 	_dl_munmap(boot_data_start, boot_data_end - boot_data_start);
+#endif
 }
 #endif /* DO_CLEAN_BOOT */
 
@@ -228,7 +232,7 @@ _dl_dopreload(char *paths)
 
 	while ((cp = _dl_strsep(&dp, ":")) != NULL) {
 		shlib = _dl_load_shlib(cp, _dl_objects, OBJTYPE_LIB,
-		_dl_objects->obj_flags);
+		    _dl_objects->obj_flags);
 		if (shlib == NULL)
 			_dl_die("can't preload library '%s'", cp);
 		_dl_add_object(shlib);
@@ -683,13 +687,9 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 	return(dl_data[AUX_entry]);
 }
 
-#define DL_SM_SYMBUF_CNT 512
-sym_cache _dl_sm_symcache_buffer[DL_SM_SYMBUF_CNT];
-
 int
 _dl_rtld(elf_object_t *object)
 {
-	size_t sz;
 	struct load_list *llist;
 	int fails = 0;
 
@@ -698,26 +698,6 @@ _dl_rtld(elf_object_t *object)
 
 	if (object->status & STAT_RELOC_DONE)
 		return 0;
-
-	sz = 0;
-	if (object->nchains < DL_SM_SYMBUF_CNT) {
-		_dl_symcache = _dl_sm_symcache_buffer;
-//		DL_DEB(("using static buffer for %d entries\n",
-//		    object->nchains));
-		_dl_memset(_dl_symcache, 0,
-		    sizeof (sym_cache) * object->nchains);
-	} else {
-		sz = ELF_ROUND(sizeof (sym_cache) * object->nchains,
-		    _dl_pagesz);
-//		DL_DEB(("allocating symcache sz %x with mmap\n", sz));
-
-		_dl_symcache = (void *)_dl_mmap(0, sz, PROT_READ|PROT_WRITE,
-		    MAP_PRIVATE|MAP_ANON, -1, 0);
-		if (_dl_mmap_error(_dl_symcache)) {
-			sz = 0;
-			_dl_symcache = NULL;
-		}
-	}
 
 	/*
 	 * Do relocation information first, then GOT.
@@ -737,11 +717,6 @@ _dl_rtld(elf_object_t *object)
 		}
 	}
 
-	if (_dl_symcache != NULL) {
-		if (sz != 0)
-			_dl_munmap( _dl_symcache, sz);
-		_dl_symcache = NULL;
-	}
 	if (fails == 0)
 		object->status |= STAT_RELOC_DONE;
 
@@ -789,16 +764,15 @@ void
 _dl_call_init_recurse(elf_object_t *object, int initfirst)
 {
 	struct dep_node *n;
+	int visited_flag = initfirst ? STAT_VISIT_INITFIRST : STAT_VISIT_INIT;
 
-	object->status |= STAT_VISITED;
+	object->status |= visited_flag;
 
 	TAILQ_FOREACH(n, &object->child_list, next_sib) {
-		if (n->data->status & STAT_VISITED)
+		if (n->data->status & visited_flag)
 			continue;
 		_dl_call_init_recurse(n->data, initfirst);
 	}
-
-	object->status &= ~STAT_VISITED;
 
 	if (object->status & STAT_INIT_DONE)
 		return;

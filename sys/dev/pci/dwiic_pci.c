@@ -1,4 +1,4 @@
-/* $OpenBSD: dwiic_pci.c,v 1.4 2019/03/16 02:40:43 jcs Exp $ */
+/* $OpenBSD: dwiic_pci.c,v 1.8 2019/07/16 19:12:32 jcs Exp $ */
 /*
  * Synopsys DesignWare I2C controller
  * PCI attachment
@@ -62,12 +62,22 @@ struct cfattach dwiic_pci_ca = {
 const struct pci_matchid dwiic_pci_ids[] = {
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_100SERIES_LP_I2C_1 },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_100SERIES_LP_I2C_2 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_100SERIES_I2C0 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_100SERIES_I2C1 },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_300SERIES_U_I2C_1 },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_300SERIES_U_I2C_2 },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_300SERIES_U_I2C_3 },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_300SERIES_U_I2C_4 },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_300SERIES_U_I2C_5 },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_300SERIES_U_I2C_6 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_I2C_1 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_I2C_2 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_I2C_3 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_I2C_4 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_I2C_5 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_I2C_6 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_I2C_7 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_I2C_8 },
 };
 
 int
@@ -111,15 +121,8 @@ dwiic_pci_attach(struct device *parent, struct device *self, void *aux)
 	bus_space_write_4(sc->sc_iot, sc->sc_ioh, LPSS_RESETS,
 	    (LPSS_RESETS_I2C | LPSS_RESETS_IDMA));
 
-	/* fetch timing parameters */
-	sc->ss_hcnt = dwiic_read(sc, DW_IC_SS_SCL_HCNT);
-	sc->ss_lcnt = dwiic_read(sc, DW_IC_SS_SCL_LCNT);
-	sc->fs_hcnt = dwiic_read(sc, DW_IC_FS_SCL_HCNT);
-	sc->fs_lcnt = dwiic_read(sc, DW_IC_FS_SCL_LCNT);
-	sc->sda_hold_time = dwiic_read(sc, DW_IC_SDA_HOLD);
-
 #if NACPI > 0
-	/* fetch more accurate timing parameters from ACPI, if possible */
+	/* fetch timing parameters from ACPI, if possible */
 	node = acpi_pci_match(self, &sc->sc_paa);
 	if (node != NULL) {
 		sc->sc_devnode = node;
@@ -187,9 +190,6 @@ dwiic_pci_activate(struct device *self, int act)
 	case DVACT_WAKEUP:
 		bus_space_write_4(sc->sc_iot, sc->sc_ioh, LPSS_RESETS,
 		    (LPSS_RESETS_I2C | LPSS_RESETS_IDMA));
-
-		dwiic_init(sc);
-
 		break;
 	}
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ixl.c,v 1.38 2019/05/04 13:42:12 jsg Exp $ */
+/*	$OpenBSD: if_ixl.c,v 1.40 2019/07/21 06:22:27 dlg Exp $ */
 
 /*
  * Copyright (c) 2013-2015, Intel Corporation
@@ -1140,6 +1140,8 @@ struct ixl_softc {
 	unsigned int		 sc_dead;
 
 	struct rwlock		 sc_sff_lock;
+
+	uint8_t			 sc_enaddr[ETHER_ADDR_LEN];
 };
 #define DEVNAME(_sc) ((_sc)->sc_dev.dv_xname)
 
@@ -1190,8 +1192,10 @@ static void	ixl_hmc_pack(void *, const void *,
 static int	ixl_get_sffpage(struct ixl_softc *, struct if_sffpage *);
 static int	ixl_sff_get_byte(struct ixl_softc *, uint8_t, uint32_t,
 		    uint8_t *);
+#if 0
 static int	ixl_sff_set_byte(struct ixl_softc *, uint8_t, uint32_t,
 		    uint8_t);
+#endif
 
 static int	ixl_match(struct device *, void *, void *);
 static void	ixl_attach(struct device *, struct device *, void *);
@@ -1652,6 +1656,7 @@ ixl_attach(struct device *parent, struct device *self, void *aux)
 	    IXL_AQ_OP_ADD_MACVLAN_IGNORE_VLAN);
 	ixl_add_macvlan(sc, etherbroadcastaddr, 0,
 	    IXL_AQ_OP_ADD_MACVLAN_IGNORE_VLAN);
+	memcpy(sc->sc_enaddr, sc->sc_ac.ac_enaddr, ETHER_ADDR_LEN);
 
 	ixl_intr_enable(sc);
 
@@ -2005,6 +2010,13 @@ ixl_iff(struct ixl_softc *sc)
 	if (iaq->iaq_retval != htole16(IXL_AQ_RC_OK))
 		return (EIO);
 
+	if (memcmp(sc->sc_enaddr, sc->sc_ac.ac_enaddr, ETHER_ADDR_LEN) != 0) {
+		ixl_remove_macvlan(sc, sc->sc_enaddr, 0,
+		    IXL_AQ_OP_REMOVE_MACVLAN_IGNORE_VLAN);
+		ixl_add_macvlan(sc, sc->sc_ac.ac_enaddr, 0,
+		    IXL_AQ_OP_ADD_MACVLAN_IGNORE_VLAN);
+		memcpy(sc->sc_enaddr, sc->sc_ac.ac_enaddr, ETHER_ADDR_LEN);
+	}
 	return (0);
 }
 
@@ -3471,10 +3483,11 @@ ixl_get_link_status(struct ixl_softc *sc)
 static int
 ixl_get_sffpage(struct ixl_softc *sc, struct if_sffpage *sff)
 {
-	uint8_t page;
+	uint8_t page = sff->sff_page;
 	size_t i;
 	int error;
 
+#if 0
 	if (sff->sff_addr == IFSFF_ADDR_EEPROM) {
 		error = ixl_sff_get_byte(sc, IFSFF_ADDR_EEPROM, 127, &page);
 		if (error != 0)
@@ -3486,14 +3499,16 @@ ixl_get_sffpage(struct ixl_softc *sc, struct if_sffpage *sff)
 				return (error);
 		}
 	}
+#endif
 
 	for (i = 0; i < sizeof(sff->sff_data); i++) {
-		error = ixl_sff_get_byte(sc, sff->sff_addr, i,
+		error = ixl_sff_get_byte(sc, page, i,
 		    &sff->sff_data[i]);
 		if (error != 0)
 			return (error);
 	}
 
+#if 0
 	if (sff->sff_addr == IFSFF_ADDR_EEPROM) {
 		if (page != sff->sff_page) {
 			error = ixl_sff_set_byte(sc, IFSFF_ADDR_EEPROM, 127,
@@ -3502,6 +3517,7 @@ ixl_get_sffpage(struct ixl_softc *sc, struct if_sffpage *sff)
 				return (error);
 		}
 	}
+#endif
 
 	return (0);
 }
@@ -3523,6 +3539,12 @@ ixl_sff_get_byte(struct ixl_softc *sc, uint8_t dev, uint32_t reg, uint8_t *p)
 
 	ixl_atq_exec(sc, &iatq, "ixlsffget");
 
+	if (ISSET(sc->sc_ac.ac_if.if_flags, IFF_DEBUG)) {
+		printf("%s: %s(dev 0x%02x, reg 0x%02x) -> %04x\n",
+		    DEVNAME(sc), __func__,
+		    dev, reg, lemtoh16(&iaq->iaq_retval));
+	}
+
 	switch (iaq->iaq_retval) {
 	case htole16(IXL_AQ_RC_OK):
 		break;
@@ -3541,7 +3563,7 @@ ixl_sff_get_byte(struct ixl_softc *sc, uint8_t dev, uint32_t reg, uint8_t *p)
 	return (0);
 }
 
-
+#if 0
 static int
 ixl_sff_set_byte(struct ixl_softc *sc, uint8_t dev, uint32_t reg, uint8_t v)
 {
@@ -3560,6 +3582,12 @@ ixl_sff_set_byte(struct ixl_softc *sc, uint8_t dev, uint32_t reg, uint8_t v)
 
 	ixl_atq_exec(sc, &iatq, "ixlsffset");
 
+	if (ISSET(sc->sc_ac.ac_if.if_flags, IFF_DEBUG)) {
+		printf("%s: %s(dev 0x%02x, reg 0x%02x, val 0x%02x) -> %04x\n",
+		    DEVNAME(sc), __func__,
+		    dev, reg, v, lemtoh16(&iaq->iaq_retval));
+	}
+
 	switch (iaq->iaq_retval) {
 	case htole16(IXL_AQ_RC_OK):
 		break;
@@ -3575,6 +3603,7 @@ ixl_sff_set_byte(struct ixl_softc *sc, uint8_t dev, uint32_t reg, uint8_t v)
 
 	return (0);
 }
+#endif
 
 static int
 ixl_get_vsi(struct ixl_softc *sc)

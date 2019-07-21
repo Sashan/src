@@ -1,4 +1,4 @@
-/* $OpenBSD: pmap.c,v 1.61 2019/04/16 14:32:44 patrick Exp $ */
+/* $OpenBSD: pmap.c,v 1.66 2019/07/13 21:47:06 drahn Exp $ */
 /*
  * Copyright (c) 2008-2009,2014-2016 Dale Rahn <drahn@dalerahn.com>
  *
@@ -115,13 +115,11 @@ struct pool_allocator pmap_vp_allocator = {
 	pmap_vp_page_alloc, pmap_vp_page_free, sizeof(struct pmapvp0)
 };
 
-
 void pmap_remove_pted(pmap_t pm, struct pte_desc *pted);
 void pmap_kremove_pg(vaddr_t va);
-void pmap_set_l1(struct pmap *pm, uint64_t va, struct pmapvp1 *l1_va, paddr_t l1_pa);
-void pmap_set_l2(struct pmap *pm, uint64_t va, struct pmapvp2 *l2_va, paddr_t l2_pa);
-void pmap_set_l3(struct pmap *pm, uint64_t va, struct pmapvp3 *l3_va, paddr_t l3_pa);
-
+void pmap_set_l1(struct pmap *, uint64_t, struct pmapvp1 *);
+void pmap_set_l2(struct pmap *, uint64_t, struct pmapvp1 *, struct pmapvp2 *);
+void pmap_set_l3(struct pmap *, uint64_t, struct pmapvp2 *, struct pmapvp3 *);
 
 /* XXX */
 void
@@ -336,7 +334,7 @@ pmap_vp_enter(pmap_t pm, vaddr_t va, struct pte_desc *pted, int flags)
 					    __func__);
 				return ENOMEM;
 			}
-			pmap_set_l1(pm, va, vp1, 0);
+			pmap_set_l1(pm, va, vp1);
 		}
 	} else {
 		vp1 = pm->pm_vp.l1;
@@ -350,7 +348,7 @@ pmap_vp_enter(pmap_t pm, vaddr_t va, struct pte_desc *pted, int flags)
 				panic("%s: unable to allocate L2", __func__);
 			return ENOMEM;
 		}
-		pmap_set_l2(pm, va, vp2, 0);
+		pmap_set_l2(pm, va, vp1, vp2);
 	}
 
 	vp3 = vp2->vp[VP_IDX2(va)];
@@ -361,7 +359,7 @@ pmap_vp_enter(pmap_t pm, vaddr_t va, struct pte_desc *pted, int flags)
 				panic("%s: unable to allocate L3", __func__);
 			return ENOMEM;
 		}
-		pmap_set_l3(pm, va, vp3, 0);
+		pmap_set_l3(pm, va, vp2, vp3);
 	}
 
 	vp3->vp[VP_IDX3(va)] = pted;
@@ -963,6 +961,7 @@ pmap_vp_destroy(pmap_t pm)
 }
 
 vaddr_t virtual_avail, virtual_end;
+int	pmap_virtual_space_called;
 
 static inline uint64_t
 VP_Lx(paddr_t pa)
@@ -973,6 +972,12 @@ VP_Lx(paddr_t pa)
 	 */
 	return pa | Lx_TYPE_PT;
 }
+
+/*
+ * In pmap_bootstrap() we allocate the page tables for the first GB
+ * of the kernel address space.
+ */
+vaddr_t pmap_maxkvaddr = VM_MIN_KERNEL_ADDRESS + 1024 * 1024 * 1024;
 
 /*
  * Allocator for growing the kernel page tables.  We use a dedicated
@@ -990,7 +995,30 @@ const struct kmem_va_mode kv_kvp = {
 void *
 pmap_kvp_alloc(void)
 {
-	return km_alloc(sizeof(struct pmapvp0), &kv_kvp, &kp_zero, &kd_nowait);
+	void *kvp;
+
+	if (!uvm.page_init_done && !pmap_virtual_space_called) {
+		paddr_t pa[2];
+		vaddr_t va;
+
+		if (!uvm_page_physget(&pa[0]) || !uvm_page_physget(&pa[1]))
+			panic("%s: out of memory", __func__);
+
+		va = virtual_avail;
+		virtual_avail += 2 * PAGE_SIZE;
+		KASSERT(virtual_avail <= pmap_maxkvaddr);
+		kvp = (void *)va;
+
+		pmap_kenter_pa(va, pa[0], PROT_READ|PROT_WRITE);
+		pmap_kenter_pa(va + PAGE_SIZE, pa[1], PROT_READ|PROT_WRITE);
+		pagezero_cache(va);
+		pagezero_cache(va + PAGE_SIZE);
+	} else {
+		kvp = km_alloc(sizeof(struct pmapvp0), &kv_kvp, &kp_zero,
+		    &kd_nowait);
+	}
+
+	return kvp;
 }
 
 struct pte_desc *
@@ -1000,21 +1028,33 @@ pmap_kpted_alloc(void)
 	static int npted;
 
 	if (npted == 0) {
-		pted = km_alloc(PAGE_SIZE, &kv_kvp, &kp_zero, &kd_nowait);
-		if (pted == NULL)
-			return NULL;
+		if (!uvm.page_init_done && !pmap_virtual_space_called) {
+			paddr_t pa;
+			vaddr_t va;
+
+			if (!uvm_page_physget(&pa))
+				panic("%s: out of memory", __func__);
+
+			va = virtual_avail;
+			virtual_avail += PAGE_SIZE;
+			KASSERT(virtual_avail <= pmap_maxkvaddr);
+			pted = (struct pte_desc *)va;
+
+			pmap_kenter_pa(va, pa, PROT_READ|PROT_WRITE);
+			pagezero_cache(va);
+		} else {
+			pted = km_alloc(PAGE_SIZE, &kv_kvp, &kp_zero,
+			    &kd_nowait);
+			if (pted == NULL)
+				return NULL;
+		}
+				
 		npted = PAGE_SIZE / sizeof(struct pte_desc);
 	}
 
 	npted--;
 	return pted++;
 }
-
-/*
- * In pmap_bootstrap() we allocate the page tables for the first GB
- * of the kernel address space.
- */
-vaddr_t pmap_maxkvaddr = VM_MIN_KERNEL_ADDRESS + 1024 * 1024 * 1024;
 
 vaddr_t
 pmap_growkernel(vaddr_t maxkvaddr)
@@ -1097,7 +1137,7 @@ void pmap_setup_avail(uint64_t ram_start, uint64_t ram_end, uint64_t kvo);
  * ALL of the code which deals with avail needs rewritten as an actual
  * memory allocation.
  */
-CTASSERT(sizeof(struct pmapvp0) == 8192);
+CTASSERT(sizeof(struct pmapvp0) == 2 * PAGE_SIZE);
 
 int mappings_allocated = 0;
 int pted_allocated = 0;
@@ -1281,18 +1321,14 @@ pmap_bootstrap(long kvo, paddr_t lpt1, long kernelstart, long kernelend,
 }
 
 void
-pmap_set_l1(struct pmap *pm, uint64_t va, struct pmapvp1 *l1_va, paddr_t l1_pa)
+pmap_set_l1(struct pmap *pm, uint64_t va, struct pmapvp1 *l1_va)
 {
 	uint64_t pg_entry;
+	paddr_t l1_pa;
 	int idx0;
 
-	if (l1_pa == 0) {
-		/*
-		 * if this is called from pmap_vp_enter, this is a
-		 * normally mapped page, call pmap_extract to get pa
-		 */
-		pmap_extract(pmap_kernel(), (vaddr_t)l1_va, &l1_pa);
-	}
+	if (pmap_extract(pmap_kernel(), (vaddr_t)l1_va, &l1_pa) == 0)
+		panic("unable to find vp pa mapping %p\n", l1_va);
 
 	if (l1_pa & (Lx_TABLE_ALIGN-1))
 		panic("misaligned L2 table\n");
@@ -1305,64 +1341,43 @@ pmap_set_l1(struct pmap *pm, uint64_t va, struct pmapvp1 *l1_va, paddr_t l1_pa)
 }
 
 void
-pmap_set_l2(struct pmap *pm, uint64_t va, struct pmapvp2 *l2_va, paddr_t l2_pa)
+pmap_set_l2(struct pmap *pm, uint64_t va, struct pmapvp1 *vp1,
+    struct pmapvp2 *l2_va)
 {
 	uint64_t pg_entry;
-	struct pmapvp1 *vp1;
-	int idx0, idx1;
+	paddr_t l2_pa;
+	int idx1;
 
-	if (l2_pa == 0) {
-		/*
-		 * if this is called from pmap_vp_enter, this is a
-		 * normally mapped page, call pmap_extract to get pa
-		 */
-		pmap_extract(pmap_kernel(), (vaddr_t)l2_va, &l2_pa);
-	}
+	if (pmap_extract(pmap_kernel(), (vaddr_t)l2_va, &l2_pa) == 0)
+		panic("unable to find vp pa mapping %p\n", l2_va);
 
 	if (l2_pa & (Lx_TABLE_ALIGN-1))
 		panic("misaligned L2 table\n");
 
 	pg_entry = VP_Lx(l2_pa);
 
-	idx0 = VP_IDX0(va);
 	idx1 = VP_IDX1(va);
-	if (pm->have_4_level_pt)
-		vp1 = pm->pm_vp.l0->vp[idx0];
-	else
-		vp1 = pm->pm_vp.l1;
 	vp1->vp[idx1] = l2_va;
 	vp1->l1[idx1] = pg_entry;
 }
 
 void
-pmap_set_l3(struct pmap *pm, uint64_t va, struct pmapvp3 *l3_va, paddr_t l3_pa)
+pmap_set_l3(struct pmap *pm, uint64_t va, struct pmapvp2 *vp2,
+    struct pmapvp3 *l3_va)
 {
 	uint64_t pg_entry;
-	struct pmapvp1 *vp1;
-	struct pmapvp2 *vp2;
-	int idx0, idx1, idx2;
+	paddr_t l3_pa;
+	int idx2;
 
-	if (l3_pa == 0) {
-		/*
-		 * if this is called from pmap_vp_enter, this is a
-		 * normally mapped page, call pmap_extract to get pa
-		 */
-		pmap_extract(pmap_kernel(), (vaddr_t)l3_va, &l3_pa);
-	}
+	if (pmap_extract(pmap_kernel(), (vaddr_t)l3_va, &l3_pa) == 0)
+		panic("unable to find vp pa mapping %p\n", l3_va);
 
 	if (l3_pa & (Lx_TABLE_ALIGN-1))
 		panic("misaligned L2 table\n");
 
 	pg_entry = VP_Lx(l3_pa);
 
-	idx0 = VP_IDX0(va);
-	idx1 = VP_IDX1(va);
 	idx2 = VP_IDX2(va);
-	if (pm->have_4_level_pt)
-		vp1 = pm->pm_vp.l0->vp[idx0];
-	else
-		vp1 = pm->pm_vp.l1;
-	vp2 = vp1->vp[idx1];
 	vp2->vp[idx2] = l3_va;
 	vp2->l2[idx2] = pg_entry;
 }
@@ -1455,6 +1470,7 @@ pmap_page_protect(struct vm_page *pg, vm_prot_t prot)
 			pmap_page_ro(pted->pted_pmap, pted->pted_va, prot);
 		}
 		mtx_leave(&pg->mdpage.pv_mtx);
+		return;
 	}
 
 	mtx_enter(&pg->mdpage.pv_mtx);
@@ -1652,8 +1668,8 @@ pmap_pte_remove(struct pte_desc *pted, int remove_pted)
 		vp1 = pm->pm_vp.l0->vp[VP_IDX0(pted->pted_va)];
 	else
 		vp1 = pm->pm_vp.l1;
-	if (vp1->vp[VP_IDX1(pted->pted_va)] == NULL) {
-		panic("have a pted, but missing the l2 for %lx va pmap %p",
+	if (vp1 == NULL) {
+		panic("have a pted, but missing the l1 for %lx va pmap %p",
 		    pted->pted_va, pm);
 	}
 	vp2 = vp1->vp[VP_IDX1(pted->pted_va)];
@@ -1663,7 +1679,7 @@ pmap_pte_remove(struct pte_desc *pted, int remove_pted)
 	}
 	vp3 = vp2->vp[VP_IDX2(pted->pted_va)];
 	if (vp3 == NULL) {
-		panic("have a pted, but missing the l2 for %lx va pmap %p",
+		panic("have a pted, but missing the l3 for %lx va pmap %p",
 		    pted->pted_va, pm);
 	}
 	vp3->l3[VP_IDX3(pted->pted_va)] = 0;
@@ -1911,6 +1927,9 @@ pmap_virtual_space(vaddr_t *start, vaddr_t *end)
 {
 	*start = virtual_avail;
 	*end = virtual_end;
+
+	/* Prevent further KVA stealing. */
+	pmap_virtual_space_called = 1;
 }
 
 void
@@ -2187,13 +2206,29 @@ pmap_map_early(paddr_t spa, psize_t len)
 {
 	extern pd_entry_t pagetable_l0_ttbr0[];
 	extern pd_entry_t pagetable_l1_ttbr0[];
+	extern uint64_t pagetable_l1_ttbr0_idx[];
+	extern uint64_t pagetable_l1_ttbr0_num;
+	extern uint64_t pagetable_l1_ttbr0_pa;
 	paddr_t pa, epa = spa + len;
+	uint64_t i, idx = ~0;
 
 	for (pa = spa & ~(L1_SIZE - 1); pa < epa; pa += L1_SIZE) {
-		if (pagetable_l0_ttbr0[VP_IDX0(pa)] == 0)
-			panic("%s: outside existing L0 entry", __func__);
+		for (i = 0; i < pagetable_l1_ttbr0_num; i++) {
+			if (pagetable_l1_ttbr0_idx[i] == ~0)
+				break;
+			if (pagetable_l1_ttbr0_idx[i] == VP_IDX0(pa))
+				break;
+		}
+		if (i == pagetable_l1_ttbr0_num)
+			panic("%s: outside existing L0 entries", __func__);
+		if (pagetable_l1_ttbr0_idx[i] == ~0) {
+			pagetable_l0_ttbr0[VP_IDX0(pa)] =
+			    (pagetable_l1_ttbr0_pa + i * PAGE_SIZE) | L0_TABLE;
+			pagetable_l1_ttbr0_idx[i] = VP_IDX0(pa);
+		}
 
-		pagetable_l1_ttbr0[VP_IDX1(pa)] = pa | L1_BLOCK |
+		idx = i * (PAGE_SIZE / sizeof(uint64_t)) + VP_IDX1(pa);
+		pagetable_l1_ttbr0[idx] = pa | L1_BLOCK |
 		    ATTR_IDX(PTE_ATTR_WB) | ATTR_SH(SH_INNER) |
 		    ATTR_nG | ATTR_UXN | ATTR_AF | ATTR_AP(0);
 	}

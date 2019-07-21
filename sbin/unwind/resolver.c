@@ -1,4 +1,4 @@
-/*	$OpenBSD: resolver.c,v 1.39 2019/05/10 14:10:38 florian Exp $	*/
+/*	$OpenBSD: resolver.c,v 1.42 2019/05/23 15:11:58 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -462,7 +462,9 @@ resolver_dispatch_captiveportal(int fd, short event, void *bula)
 			if (captive_portal_state == NOT_BEHIND) {
 				evtimer_del(&captive_portal_check_ev);
 				schedule_recheck_all_resolvers();
-			}
+			} else if (captive_portal_state == BEHIND)
+				resolver_imsg_compose_frontend(
+				    IMSG_RESOLVER_DOWN, 0, NULL, 0);
 
 			break;
 		default:
@@ -485,7 +487,6 @@ void
 resolver_dispatch_main(int fd, short event, void *bula)
 {
 	static struct uw_conf	*nconf;
-	struct uw_forwarder	*uw_forwarder;
 	struct imsg		 imsg;
 	struct imsgev		*iev = bula;
 	struct imsgbuf		*ibuf;
@@ -575,73 +576,13 @@ resolver_dispatch_main(int fd, short event, void *bula)
 				fatal("pledge");
 			break;
 		case IMSG_RECONF_CONF:
-			if (nconf != NULL)
-				fatalx("%s: IMSG_RECONF_CONF already in "
-				    "progress", __func__);
-			if (IMSG_DATA_SIZE(imsg) != sizeof(struct uw_conf))
-				fatalx("%s: IMSG_RECONF_CONF wrong length: %lu",
-				    __func__, IMSG_DATA_SIZE(imsg));
-			if ((nconf = malloc(sizeof(struct uw_conf))) == NULL)
-				fatal(NULL);
-			memcpy(nconf, imsg.data, sizeof(struct uw_conf));
-			nconf->captive_portal_host = NULL;
-			nconf->captive_portal_path = NULL;
-			nconf->captive_portal_expected_response = NULL;
-			SIMPLEQ_INIT(&nconf->uw_forwarder_list);
-			SIMPLEQ_INIT(&nconf->uw_dot_forwarder_list);
-			break;
 		case IMSG_RECONF_CAPTIVE_PORTAL_HOST:
-			/* make sure this is a string */
-			((char *)imsg.data)[IMSG_DATA_SIZE(imsg) - 1] = '\0';
-			if ((nconf->captive_portal_host = strdup(imsg.data)) ==
-			    NULL)
-				fatal("%s: strdup", __func__);
-			break;
 		case IMSG_RECONF_CAPTIVE_PORTAL_PATH:
-			/* make sure this is a string */
-			((char *)imsg.data)[IMSG_DATA_SIZE(imsg) - 1] = '\0';
-			if ((nconf->captive_portal_path = strdup(imsg.data)) ==
-			    NULL)
-				fatal("%s: strdup", __func__);
-			break;
 		case IMSG_RECONF_CAPTIVE_PORTAL_EXPECTED_RESPONSE:
-			/* make sure this is a string */
-			((char *)imsg.data)[IMSG_DATA_SIZE(imsg) - 1] = '\0';
-			if ((nconf->captive_portal_expected_response =
-			    strdup(imsg.data)) == NULL)
-				fatal("%s: strdup", __func__);
-			break;
 		case IMSG_RECONF_BLOCKLIST_FILE:
-			/* make sure this is a string */
-			((char *)imsg.data)[IMSG_DATA_SIZE(imsg) - 1] = '\0';
-			if ((nconf->blocklist_file = strdup(imsg.data)) ==
-			    NULL)
-				fatal("%s: strdup", __func__);
-			break;
 		case IMSG_RECONF_FORWARDER:
-			if (IMSG_DATA_SIZE(imsg) != sizeof(struct uw_forwarder))
-				fatalx("%s: IMSG_RECONF_FORWARDER wrong length:"
-				    " %lu", __func__, IMSG_DATA_SIZE(imsg));
-			if ((uw_forwarder = malloc(sizeof(struct
-			    uw_forwarder))) == NULL)
-				fatal(NULL);
-			memcpy(uw_forwarder, imsg.data, sizeof(struct
-			    uw_forwarder));
-			SIMPLEQ_INSERT_TAIL(&nconf->uw_forwarder_list,
-			    uw_forwarder, entry);
-			break;
 		case IMSG_RECONF_DOT_FORWARDER:
-			if (IMSG_DATA_SIZE(imsg) != sizeof(struct uw_forwarder))
-				fatalx("%s: IMSG_RECONF_DOT_FORWARDER wrong "
-				    "length: %lu", __func__,
-				    IMSG_DATA_SIZE(imsg));
-			if ((uw_forwarder = malloc(sizeof(struct
-			    uw_forwarder))) == NULL)
-				fatal(NULL);
-			memcpy(uw_forwarder, imsg.data, sizeof(struct
-			    uw_forwarder));
-			SIMPLEQ_INSERT_TAIL(&nconf->uw_dot_forwarder_list,
-			    uw_forwarder, entry);
+			imsg_receive_config(&imsg, &nconf);
 			break;
 		case IMSG_RECONF_END:
 			if (nconf == NULL)
@@ -665,12 +606,13 @@ resolver_dispatch_main(int fd, short event, void *bula)
 				log_debug("static DoT forwarders changed");
 				new_static_dot_forwarders();
 			}
-			if (resolver_conf->captive_portal_host == NULL)
-				captive_portal_state = PORTAL_UNCHECKED;
-			else if (captive_portal_state == PORTAL_UNCHECKED ||
-			    captive_portal_changed) {
+			if (captive_portal_changed) {
 				if (resolver_conf->captive_portal_auto)
 					check_captive_portal(1);
+				else {
+					captive_portal_state = PORTAL_UNCHECKED;
+					schedule_recheck_all_resolvers();
+				}
 			}
 			break;
 		default:
@@ -1103,7 +1045,9 @@ out:
 
 	best = best_resolver();
 
-	if (best->state != global_state) {
+	if (captive_portal_state == BEHIND)
+		global_state = DEAD;
+	else if (best->state != global_state) {
 		if (best->state < RESOLVING && global_state > UNKNOWN)
 			resolver_imsg_compose_frontend(IMSG_RESOLVER_DOWN, 0,
 			    NULL, 0);
@@ -1222,7 +1166,8 @@ best_resolver(void)
 	    uw_resolver_state_str[resolvers[UW_RES_DOT]->state] :
 	    "NA", captive_portal_state_str[captive_portal_state]);
 
-	if (captive_portal_state == UNKNOWN || captive_portal_state == BEHIND) {
+	if (captive_portal_state == PORTAL_UNKNOWN || captive_portal_state ==
+	    BEHIND) {
 		if (resolvers[UW_RES_DHCP] != NULL) {
 			res = resolvers[UW_RES_DHCP];
 			goto out;
@@ -1362,6 +1307,8 @@ check_captive_portal(int timer_reset)
 
 	if (resolver_conf->captive_portal_host == NULL) {
 		log_debug("%s: no captive portal url configured", __func__);
+		captive_portal_state = PORTAL_UNCHECKED;
+		schedule_recheck_all_resolvers();
 		return;
 	}
 

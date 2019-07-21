@@ -1,4 +1,4 @@
-/* $OpenBSD: layout-custom.c,v 1.12 2018/10/18 08:38:01 nicm Exp $ */
+/* $OpenBSD: layout-custom.c,v 1.15 2019/07/15 18:25:07 nicm Exp $ */
 
 /*
  * Copyright (c) 2010 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -122,7 +122,7 @@ layout_parse(struct window *w, const char *layout)
 {
 	struct layout_cell	*lc, *lcchild;
 	struct window_pane	*wp;
-	u_int			 npanes, ncells, sx, sy;
+	u_int			 npanes, ncells;
 	u_short			 csum;
 
 	/* Check validity. */
@@ -153,8 +153,7 @@ layout_parse(struct window *w, const char *layout)
 		layout_destroy_cell(w, lcchild, &lc);
 	}
 
-	/* Save the old window size and resize to the layout size. */
-	sx = w->sx; sy = w->sy;
+	/* Resize to the layout size. */
 	window_resize(w, lc->sx, lc->sy);
 
 	/* Destroy the old layout and swap to the new. */
@@ -166,12 +165,9 @@ layout_parse(struct window *w, const char *layout)
 	layout_assign(&wp, lc);
 
 	/* Update pane offsets and sizes. */
-	layout_fix_offsets(lc);
+	layout_fix_offsets(w);
 	layout_fix_panes(w);
-
-	/* Then resize the layout back to the original window size. */
-	layout_resize(w, sx, sy);
-	window_resize(w, sx, sy);
+	recalculate_sizes();
 
 	layout_print_cell(lc, __func__, 0);
 

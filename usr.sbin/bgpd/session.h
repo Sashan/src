@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.h,v 1.137 2019/05/08 12:41:55 claudio Exp $ */
+/*	$OpenBSD: session.h,v 1.139 2019/05/27 09:14:33 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -196,7 +196,7 @@ TAILQ_HEAD(peer_timer_head, peer_timer);
 struct peer {
 	struct peer_config	 conf;
 	struct peer_stats	 stats;
-	TAILQ_ENTRY(peer)	 entry;
+	RB_ENTRY(peer)		 entry;
 	struct {
 		struct capabilities	ann;
 		struct capabilities	peer;
@@ -294,6 +294,8 @@ void	print_config(struct bgpd_config *, struct rib_names *);
 void	 rde_main(int, int);
 
 /* session.c */
+RB_PROTOTYPE(peer_head, peer, entry, peer_compare);
+
 void		 session_main(int, int);
 void		 bgp_fsm(struct peer *, enum session_events);
 int		 session_neighbor_rrefresh(struct peer *p);
@@ -308,8 +310,8 @@ void		 session_stop(struct peer *, u_int8_t);
 /* timer.c */
 time_t			 getmonotime(void);
 struct peer_timer	*timer_get(struct peer *, enum Timer);
-struct peer_timer	*timer_nextisdue(struct peer *);
-time_t			 timer_nextduein(struct peer *);
+struct peer_timer	*timer_nextisdue(struct peer *, time_t);
+time_t			 timer_nextduein(struct peer *, time_t);
 int			 timer_running(struct peer *, enum Timer, time_t *);
 void			 timer_set(struct peer *, enum Timer, u_int);
 void			 timer_stop(struct peer *, enum Timer);

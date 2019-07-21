@@ -1,4 +1,4 @@
-/* $OpenBSD: xhci.c,v 1.103 2019/04/30 20:09:12 ratchov Exp $ */
+/* $OpenBSD: xhci.c,v 1.105 2019/06/13 21:03:48 mpi Exp $ */
 
 /*
  * Copyright (c) 2014-2015 Martin Pieuchot
@@ -935,7 +935,7 @@ xhci_event_xfer_isoc(struct usbd_xfer *xfer, struct xhci_pipe *xp,
 	if (xp->skip) {
 		while (1) {
 			skipxfer = SIMPLEQ_FIRST(&xp->pipe.queue);
-			if (skipxfer == xfer || xfer == NULL)
+			if (skipxfer == xfer || skipxfer == NULL)
 				break;
 			DPRINTF(("%s: skipping %p\n", __func__, skipxfer));
 			skipxfer->status = USBD_NORMAL_COMPLETION;
@@ -2192,6 +2192,8 @@ xhci_abort_xfer(struct usbd_xfer *xfer, usbd_status status)
 	if (xhci_cmd_stop_ep(sc, xp->slot, xp->dci)) {
 		DPRINTF(("%s: error stopping endpoint\n", DEVNAME(sc)));
 		/* Assume the device is gone. */
+		xp->halted = 0;
+		xp->aborted_xfer = NULL;
 		xfer->status = status;
 		usb_transfer_complete(xfer);
 		return;

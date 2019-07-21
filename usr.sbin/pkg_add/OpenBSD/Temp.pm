@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: Temp.pm,v 1.29 2018/10/04 09:17:00 espie Exp $
+# $OpenBSD: Temp.pm,v 1.36 2019/07/17 19:00:55 sthen Exp $
 #
 # Copyright (c) 2003-2005 Marc Espie <espie@openbsd.org>
 #
@@ -29,6 +29,8 @@ our $tempbase = $ENV{'PKG_TMPDIR'} || OpenBSD::Paths->vartmp;
 my $dirs = {};
 my $files = {};
 
+my ($lastname, $lasterror, $lasttype);
+
 my $cleanup = sub {
 	while (my ($name, $pid) = each %$files) {
 		unlink($name) if $pid == $$;
@@ -39,7 +41,9 @@ my $cleanup = sub {
 };
 
 END {
+	my $r = $?;
 	&$cleanup;
+	$? = $r;
 }
 OpenBSD::Handler->register($cleanup);
 
@@ -56,12 +60,18 @@ sub dir
 	    local $SIG{'KILL'} = $h;
 	    local $SIG{'TERM'} = $h;
 	    $dir = permanent_dir($tempbase, "pkginfo");
-	    $dirs->{$dir} = $$;
+	    if (defined $dir) {
+		    $dirs->{$dir} = $$;
+	    }
 	}
 	if (defined $caught) {
 		kill $caught, $$;
 	}
-	return "$dir/";
+	if (defined $dir) {
+		return "$dir/";
+	} else {
+		return undef;
+	}
 }
 
 sub fh_file
@@ -108,7 +118,11 @@ sub permanent_file
 	if (defined $dir) {
 		$template = "$dir/$template";
 	}
-	return OpenBSD::MkTemp::mkstemp($template);
+	if (my @l = OpenBSD::MkTemp::mkstemp($template)) {
+		return @l;
+	}
+	($lastname, $lasttype, $lasterror) = ($template, 'file', $!);
+	return ();
 }
 
 sub permanent_dir
@@ -118,7 +132,19 @@ sub permanent_dir
 	if (defined $dir) {
 		$template = "$dir/$template";
 	}
-	return OpenBSD::MkTemp::mkdtemp($template);
+	if (my $d = OpenBSD::MkTemp::mkdtemp($template)) {
+		return $d;
+	}
+	($lastname, $lasttype, $lasterror) = ($template, 'dir', $!);
+	return undef;
 }
 
+sub last_error
+{
+	my ($class, $template) = @_;
+
+	my ($user) = getpwuid($>);
+	$template //= "User #1 couldn't create temp #2 as #3: #4";
+	return ($template, $user, $lasttype, $lastname, $lasterror);
+}
 1;

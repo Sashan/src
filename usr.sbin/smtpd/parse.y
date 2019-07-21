@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.251 2019/02/13 22:57:08 deraadt Exp $	*/
+/*	$OpenBSD: parse.y,v 1.253 2019/06/28 13:32:50 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -664,11 +664,11 @@ MBOX {
 } dispatcher_local_options
 | LMTP STRING {
 	asprintf(&dispatcher->u.local.command,
-	    "/usr/libexec/mail.lmtp -f %%{mbox.from} -d %s %%{user.username}", $2);
+	    "/usr/libexec/mail.lmtp -f \"%%{sender}\" -d %s %%{user.username}", $2);
 } dispatcher_local_options
 | LMTP STRING RCPT_TO {
 	asprintf(&dispatcher->u.local.command,
-	    "/usr/libexec/mail.lmtp -f %%{mbox.from} -d %s %%{dest}", $2);
+	    "/usr/libexec/mail.lmtp -f \"%%{sender}\" -d %s %%{dest}", $2);
 } dispatcher_local_options
 | MDA STRING {
 	asprintf(&dispatcher->u.local.command,
@@ -3161,7 +3161,7 @@ is_if_in_group(const char *ifname, const char *groupname)
 	int			 s;
 	int			 ret = 0;
 
-	if ((s = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+	if ((s = socket(AF_INET, SOCK_DGRAM, 0)) == -1)
 		err(1, "socket");
 
         memset(&ifgr, 0, sizeof(ifgr));

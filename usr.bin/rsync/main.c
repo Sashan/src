@@ -1,4 +1,4 @@
-/*	$Id: main.c,v 1.45 2019/05/08 20:00:25 benno Exp $ */
+/*	$Id: main.c,v 1.47 2019/06/03 15:37:48 naddy Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -271,7 +271,7 @@ main(int argc, char *argv[])
 {
 	struct opts	 opts;
 	pid_t		 child;
-	int		 fds[2], sd, rc, c, st, i;
+	int		 fds[2], sd = -1, rc, c, st, i;
 	struct sess	  sess;
 	struct fargs	*fargs;
 	char		**args;
@@ -428,8 +428,10 @@ main(int argc, char *argv[])
 
 	if (fargs->remote && opts.ssh_prog == NULL) {
 		assert(fargs->mode == FARGS_RECEIVER);
-		if ((rc = rsync_connect(&opts, &sd, fargs)) == 0)
+		if ((rc = rsync_connect(&opts, &sd, fargs)) == 0) {
 			rc = rsync_socket(&opts, sd, fargs);
+			close(sd);
+		}
 		exit(rc);
 	}
 
@@ -484,14 +486,7 @@ main(int argc, char *argv[])
 		break;
 	}
 
-	/*
-	 * If the client has an error and exits, the server may be
-	 * sitting around waiting to get data while we waitpid().
-	 * So close the connection here so that they don't hang.
-	 */
-
-	if (rc)
-		close(fds[0]);
+	close(fds[0]);
 
 	if (waitpid(child, &st, 0) == -1)
 		err(1, "waitpid");

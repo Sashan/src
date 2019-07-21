@@ -1,4 +1,4 @@
-/* $OpenBSD: spawn.c,v 1.3 2019/05/03 20:44:24 nicm Exp $ */
+/* $OpenBSD: spawn.c,v 1.6 2019/06/30 19:21:53 nicm Exp $ */
 
 /*
  * Copyright (c) 2019 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -161,6 +161,8 @@ spawn_window(struct spawn_context *sc, char **cause)
 			xasprintf(cause, "couldn't create window %d", idx);
 			return (NULL);
 		}
+		if (s->curw == NULL)
+			s->curw = sc->wl;
 		sc->wl->session = s;
 		winlink_set_window(sc->wl, w);
 	} else
@@ -170,10 +172,8 @@ spawn_window(struct spawn_context *sc, char **cause)
 	/* Spawn the pane. */
 	wp = spawn_pane(sc, cause);
 	if (wp == NULL) {
-		if (~sc->flags & SPAWN_RESPAWN) {
-			window_destroy(w);
+		if (~sc->flags & SPAWN_RESPAWN)
 			winlink_remove(&s->windows, sc->wl);
-		}
 		return (NULL);
 	}
 
@@ -329,7 +329,7 @@ spawn_pane(struct spawn_context *sc, char **cause)
 	}
 	if (cwd != NULL)
 		log_debug("%s: cwd=%s", __func__, cwd);
-	cmd_log_argv(new_wp->argc, new_wp->argv, __func__);
+	cmd_log_argv(new_wp->argc, new_wp->argv, "%s", __func__);
 	environ_log(child, "%s: environment ", __func__);
 
 	/* If the command is empty, don't fork a child process. */

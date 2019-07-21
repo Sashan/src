@@ -416,6 +416,13 @@ let isCodeGenOnly = 1, rs = 0, shamt = 0 in {
 // long branches.  See the comment in file MipsLongBranch.cpp for detailed
 // explanation.
 
+// Expands to: lui $dst, %highest/%higher/%hi/%lo($tgt)
+def LONG_BRANCH_LUi2Op_64 : PseudoSE<(outs GPR64Opnd:$dst),
+  (ins brtarget:$tgt), []>, GPR_64;
+// Expands to: addiu $dst, %highest/%higher/%hi/%lo($tgt)
+def LONG_BRANCH_DADDiu2Op : PseudoSE<(outs GPR64Opnd:$dst),
+  (ins GPR64Opnd:$src, brtarget:$tgt), []>, GPR_64;
+
 // Expands to: daddiu $dst, $src, %PART($tgt - $baltgt)
 // where %PART may be %hi or %lo, depending on the relocation kind
 // that $tgt is annotated with.
@@ -838,7 +845,7 @@ def : MipsPat<(i64 (sext (i32 (sub GPR32:$src, GPR32:$src2)))),
               (SUBu GPR32:$src, GPR32:$src2), sub_32)>;
 def : MipsPat<(i64 (sext (i32 (mul GPR32:$src, GPR32:$src2)))),
               (INSERT_SUBREG (i64 (IMPLICIT_DEF)),
-              (MUL GPR32:$src, GPR32:$src2), sub_32)>, ISA_MIPS3_NOT_32R6_64R6;
+              (MUL GPR32:$src, GPR32:$src2), sub_32)>, ISA_MIPS32_NOT_32R6_64R6;
 def : MipsPat<(i64 (sext (i32 (MipsMFHI ACC64:$src)))),
               (INSERT_SUBREG (i64 (IMPLICIT_DEF)),
               (PseudoMFHI ACC64:$src), sub_32)>;
@@ -1129,6 +1136,12 @@ let AdditionalPredicates = [NotInMicroMips] in {
 def NORImm64 : NORIMM_DESC_BASE<GPR64Opnd, imm64>, GPR_64;
 def : MipsInstAlias<"nor\t$rs, $imm", (NORImm64 GPR64Opnd:$rs, GPR64Opnd:$rs,
                                                 imm64:$imm)>, GPR_64;
+def SGEImm64 : MipsAsmPseudoInst<(outs GPR64Opnd:$rd),
+                                 (ins GPR64Opnd:$rs, imm64:$imm),
+                                 "sge\t$rd, $rs, $imm">, GPR_64;
+def SGEUImm64 : MipsAsmPseudoInst<(outs GPR64Opnd:$rd),
+                                  (ins GPR64Opnd:$rs, imm64:$imm),
+                                  "sgeu\t$rd, $rs, $imm">, GPR_64;
 def SLTImm64 : MipsAsmPseudoInst<(outs GPR64Opnd:$rs),
                                  (ins GPR64Opnd:$rt, imm64:$imm),
                                  "slt\t$rs, $rt, $imm">, GPR_64;

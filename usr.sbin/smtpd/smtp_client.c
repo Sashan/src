@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtp_client.c,v 1.8 2018/09/20 11:42:28 eric Exp $	*/
+/*	$OpenBSD: smtp_client.c,v 1.10 2019/06/12 17:42:53 eric Exp $	*/
 
 /*
  * Copyright (c) 2018 Eric Faurot <eric@openbsd.org>
@@ -188,7 +188,7 @@ void
 smtp_quit(struct smtp_client *proto)
 {
 	if (proto->state != STATE_READY)
-		fatalx("protoection is not ready");
+		fatalx("connection is not ready");
 
 	smtp_client_state(proto, STATE_QUIT);
 }
@@ -197,7 +197,7 @@ void
 smtp_sendmail(struct smtp_client *proto, struct smtp_mail *mail)
 {
 	if (proto->state != STATE_READY)
-		fatalx("protoection is not ready");
+		fatalx("connection is not ready");
 
 	proto->mail = mail;
 	smtp_client_state(proto, STATE_MAIL);
@@ -619,7 +619,7 @@ smtp_client_io(struct io *io, int evt, void *arg)
 	case IO_TLSREADY:
 		proto->flags |= FLAG_TLS;
 		io_pause(proto->io, IO_IN);
-		smtp_verify_server_cert(proto->tag, proto, io_ssl(proto->io));
+		smtp_verify_server_cert(proto->tag, proto, io_tls(proto->io));
 		break;
 
 	case IO_DATAIN:
@@ -636,7 +636,7 @@ smtp_client_io(struct io *io, int evt, void *arg)
 
 	case IO_TIMEOUT:
 		errno = ETIMEDOUT;
-		smtp_client_abort(proto, FAIL_CONN, "protoection timeout");
+		smtp_client_abort(proto, FAIL_CONN, "Connection timeout");
 		break;
 
 	case IO_ERROR:

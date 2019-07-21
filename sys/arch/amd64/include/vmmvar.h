@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmmvar.h,v 1.63 2019/04/01 12:02:43 mlarkin Exp $	*/
+/*	$OpenBSD: vmmvar.h,v 1.67 2019/07/17 05:51:07 pd Exp $	*/
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -451,6 +451,7 @@ struct vm_exit {
 	};
 
 	struct vcpu_reg_state		vrs;
+	int				cpl;
 };
 
 struct vm_create_params {
@@ -524,6 +525,20 @@ struct vm_intr_params {
 	uint16_t		vip_intr;
 };
 
+#define VM_RWVMPARAMS_PVCLOCK_SYSTEM_GPA 0x1	/* read/write pvclock gpa */
+#define VM_RWVMPARAMS_PVCLOCK_VERSION	 0x2	/* read/write pvclock version */
+#define VM_RWVMPARAMS_ALL	(VM_RWVMPARAMS_PVCLOCK_SYSTEM_GPA | \
+    VM_RWVMPARAMS_PVCLOCK_VERSION)
+
+struct vm_rwvmparams_params {
+	/* Input parameters to VMM_IOC_READVMPARAMS/VMM_IOC_WRITEVMPARAMS */
+	uint32_t		vpp_vm_id;
+	uint32_t		vpp_vcpu_id;
+	uint32_t		vpp_mask;
+	paddr_t			vpp_pvclock_system_gpa;
+	uint32_t		vpp_pvclock_version;
+};
+
 #define VM_RWREGS_GPRS	0x1	/* read/write GPRs */
 #define VM_RWREGS_SREGS	0x2	/* read/write segment registers */
 #define VM_RWREGS_CRS	0x4	/* read/write CRs */
@@ -552,6 +567,10 @@ struct vm_rwregs_params {
 #define VMM_IOC_INTR _IOW('V', 6, struct vm_intr_params) /* Intr pending */
 #define VMM_IOC_READREGS _IOWR('V', 7, struct vm_rwregs_params) /* Get regs */
 #define VMM_IOC_WRITEREGS _IOW('V', 8, struct vm_rwregs_params) /* Set regs */
+/* Get VM params */
+#define VMM_IOC_READVMPARAMS _IOWR('V', 9, struct vm_rwvmparams_params)
+/* Set VM params */
+#define VMM_IOC_WRITEVMPARAMS _IOW('V', 10, struct vm_rwvmparams_params)
 
 
 /* CPUID masks */
@@ -623,6 +642,9 @@ struct vm_rwregs_params {
     SEFF0EBX_AVX512ER | SEFF0EBX_AVX512CD | \
     SEFF0EBX_AVX512BW | SEFF0EBX_AVX512VL)
 #define VMM_SEFF0ECX_MASK ~(SEFF0ECX_AVX512VBMI)
+
+/* EDX mask contains the bits to include */
+#define VMM_SEFF0EDX_MASK (SEFF0EDX_MD_CLEAR)
 
 /*
  * Extended function flags - copy from host minus:
@@ -888,6 +910,10 @@ struct vcpu {
 	struct vcpu_gueststate vc_gueststate;
 
 	uint8_t vc_event;
+
+	uint32_t vc_pvclock_version;
+	paddr_t vc_pvclock_system_gpa;
+	uint32_t vc_pvclock_system_tsc_mul;
 
 	/* VMX only */
 	uint64_t vc_vmx_basic;

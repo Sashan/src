@@ -1,4 +1,4 @@
-/*	$OpenBSD: clparse.c,v 1.185 2019/04/02 02:59:43 krw Exp $	*/
+/*	$OpenBSD: clparse.c,v 1.189 2019/07/20 17:14:15 krw Exp $	*/
 
 /* Parser for dhclient config and lease files. */
 
@@ -72,8 +72,8 @@ int	parse_hex_octets(FILE *, unsigned int *, uint8_t **);
 int	parse_domain_list(FILE *, int *, char **);
 int	parse_option_list(FILE *, int *, uint8_t *);
 int	parse_interface(FILE *, char *);
-int	parse_lease(FILE *, char *, struct client_lease **);
-void	parse_lease_decl(FILE *, struct client_lease *, char *);
+int	parse_lease(FILE *, struct client_lease **);
+void	parse_lease_decl(FILE *, struct client_lease *);
 int	parse_option(FILE *, int *, struct option_data *);
 int	parse_reject_statement(FILE *);
 
@@ -183,13 +183,13 @@ read_conf(char *name, char *ignore_list, struct ether_addr *hwaddr)
  *	| leases lease
  */
 void
-read_lease_db(char *name, struct client_lease_tq *tq)
+read_lease_db(struct client_lease_tq *lease_db)
 {
 	struct client_lease	*lease, *lp, *nlp;
 	FILE			*cfile;
 	int			 i;
 
-	TAILQ_INIT(tq);
+	TAILQ_INIT(lease_db);
 
 	if ((cfile = fopen(path_lease_db, "r")) == NULL)
 		return;
@@ -198,7 +198,7 @@ read_lease_db(char *name, struct client_lease_tq *tq)
 
 	i = DHO_DHCP_CLIENT_IDENTIFIER;
 	while (feof(cfile) == 0) {
-		if (parse_lease(cfile, name, &lease) == 0)
+		if (parse_lease(cfile, &lease) == 0)
 			continue;
 
 		/*
@@ -206,7 +206,7 @@ read_lease_db(char *name, struct client_lease_tq *tq)
 		 * ssid AND the same Client Identifier AND the same
 		 * IP address.
 		 */
-		TAILQ_FOREACH_SAFE(lp, tq, next, nlp) {
+		TAILQ_FOREACH_SAFE(lp, lease_db, next, nlp) {
 			if (lp->ssid_len != lease->ssid_len)
 				continue;
 			if (memcmp(lp->ssid, lease->ssid, lp->ssid_len) != 0)
@@ -219,11 +219,11 @@ read_lease_db(char *name, struct client_lease_tq *tq)
 			if (lp->address.s_addr != lease->address.s_addr)
 				continue;
 
-			TAILQ_REMOVE(tq, lp, next);
+			TAILQ_REMOVE(lease_db, lp, next);
 			free_client_lease(lp);
 		}
 
-		TAILQ_INSERT_TAIL(tq, lease, next);
+		TAILQ_INSERT_TAIL(lease_db, lease, next);
 	}
 
 	fclose(cfile);
@@ -258,6 +258,7 @@ parse_conf_decl(FILE *cfile, char *name)
 {
 	uint8_t			 list[DHO_COUNT];
 	char			*val;
+	enum actions 		*p;
 	int			 action, count, i, token;
 	uint32_t		 t;
 
@@ -265,169 +266,151 @@ parse_conf_decl(FILE *cfile, char *name)
 
 	switch (token) {
 	case TOK_APPEND:
-		if (parse_option(cfile, &i, config->defaults) == 1) {
-			action = code_to_action(i, ACTION_APPEND);
-			if (action == ACTION_DEFAULT)
-				parse_warn("'append' treated as 'default'");
-			config->default_actions[i] = action;
-			parse_semi(cfile);
-		}
+		if (parse_option(cfile, &i, config->defaults) == 0)
+			return;
+		action = code_to_action(i, ACTION_APPEND);
+		if (action == ACTION_DEFAULT)
+			parse_warn("'append' treated as 'default'");
+		config->default_actions[i] = action;
 		break;
 	case TOK_BACKOFF_CUTOFF:
-		if (parse_number(cfile, (unsigned char *)&t, 'L') == 1) {
-			config->backoff_cutoff = ntohl(t);
-			parse_semi(cfile);
-		}
+		if (parse_number(cfile, (unsigned char *)&t, 'L') == 0)
+			return;
+		config->backoff_cutoff = ntohl(t);
 		break;
 	case TOK_DEFAULT:
-		if (parse_option(cfile, &i, config->defaults) == 1) {
-			config->default_actions[i] = ACTION_DEFAULT;
-			parse_semi(cfile);
-		}
+		if (parse_option(cfile, &i, config->defaults) == 0)
+			return;
+		config->default_actions[i] = ACTION_DEFAULT;
 		break;
 	case TOK_FILENAME:
-		if (parse_string(cfile, NULL, &val) == 1) {
-			free(config->filename);
-			config->filename = val;
-			parse_semi(cfile);
-		}
+		if (parse_string(cfile, NULL, &val) == 0)
+			return;
+		free(config->filename);
+		config->filename = val;
 		break;
 	case TOK_FIXED_ADDR:
-		if (parse_ip_addr(cfile, &config->address) == 1)
-			parse_semi(cfile);
+		if (parse_ip_addr(cfile, &config->address) == 0)
+			return;
 		break;
 	case TOK_IGNORE:
 		memset(list, 0, sizeof(list));
 		count = 0;
-		if (parse_option_list(cfile, &count, list) == 1) {
-			enum actions *p = config->default_actions;
-			if (count == 0) {
-				for (i = 0; i < DHO_COUNT; i++)
-					if (p[i] == ACTION_IGNORE)
-						p[i] = ACTION_USELEASE;
-			} else {
-				for (i = 0; i < count; i++)
-					p[list[i]] = ACTION_IGNORE;
-			}
-			parse_semi(cfile);
+		if (parse_option_list(cfile, &count, list) == 0)
+			return;
+		p = config->default_actions;
+		if (count == 0) {
+			for (i = 0; i < DHO_COUNT; i++)
+				if (p[i] == ACTION_IGNORE)
+					p[i] = ACTION_USELEASE;
+		} else {
+			for (i = 0; i < count; i++)
+				p[list[i]] = ACTION_IGNORE;
 		}
 		break;
 	case TOK_INITIAL_INTERVAL:
-		if (parse_number(cfile, (unsigned char *)&t, 'L') == 1) {
-			config->initial_interval = ntohl(t);
-			parse_semi(cfile);
-		}
+		if (parse_number(cfile, (unsigned char *)&t, 'L') == 0)
+			return;
+		config->initial_interval = ntohl(t);
 		break;
 	case TOK_INTERFACE:
-		if (parse_interface(cfile, name) == 1)
-			;
-		break;
-	case TOK_LEASE:
-		skip_to_semi(cfile);
-		break;
+		parse_interface(cfile, name);
+		return;
 	case TOK_LINK_TIMEOUT:
-		if (parse_number(cfile, (unsigned char *)&t, 'L') == 1) {
-			config->link_timeout = ntohl(t);
-			parse_semi(cfile);
-		}
+		if (parse_number(cfile, (unsigned char *)&t, 'L') == 0)
+			return;
+		config->link_timeout = ntohl(t);
 		break;
 	case TOK_NEXT_SERVER:
-		if (parse_ip_addr(cfile, &config->next_server) == 1)
-			parse_semi(cfile);
+		if (parse_ip_addr(cfile, &config->next_server) == 0)
+			return;
+		break;
+	case TOK_PREPEND:
+		if (parse_option(cfile, &i, config->defaults) == 0)
+			return;
+		action = code_to_action(i, ACTION_PREPEND);
+		if (action == ACTION_SUPERSEDE)
+			parse_warn("'prepend' treated as 'supersede'");
+		config->default_actions[i] = action;
+		break;
+	case TOK_REBOOT:
+		if (parse_number(cfile, (unsigned char *)&t, 'L') == 0)
+			return;
+		config->reboot_timeout = ntohl(t);
+		break;
+	case TOK_REJECT:
+		if (parse_reject_statement(cfile) == 0)
+			return;
+		break;
+	case TOK_REQUEST:
+		if (parse_option_list(cfile, &config->requested_option_count,
+		    config->requested_options) == 0)
+			return;
+		break;
+	case TOK_REQUIRE:
+		if (parse_option_list(cfile, &config->required_option_count,
+		    config->required_options) == 0)
+			return;
+		break;
+	case TOK_RETRY:
+		if (parse_number(cfile, (unsigned char *)&t, 'L') == 0)
+			return;
+		config->retry_interval = ntohl(t);
+		break;
+	case TOK_SELECT_TIMEOUT:
+		if (parse_number(cfile, (unsigned char *)&t, 'L') == 0)
+			return;
+		config->select_interval = ntohl(t);
+		break;
+	case TOK_SEND:
+		if (parse_option(cfile, &i, config->send_options) == 0)
+			return;
+		break;
+	case TOK_SERVER_NAME:
+		if (parse_string(cfile, NULL, &val) == 0)
+			return;
+		free(config->server_name);
+		config->server_name = val;
+		break;
+	case TOK_SUPERSEDE:
+		if (parse_option(cfile, &i, config->defaults) == 0)
+			return;
+		config->default_actions[i] = ACTION_SUPERSEDE;
+		break;
+	case TOK_TIMEOUT:
+		if (parse_number(cfile, (unsigned char *)&t, 'L') == 0)
+			return;
+		config->timeout = ntohl(t);
 		break;
 	case TOK_USELEASE:
 		memset(list, 0, sizeof(list));
 		count = 0;
-		if (parse_option_list(cfile, &count, list) == 1) {
-			enum actions *p = config->default_actions;
-			if (count == 0) {
-				for (i = 0; i < DHO_COUNT; i++) {
-					free(config->defaults[i].data);
-					config->defaults[i].data = NULL;
-					config->defaults[i].len = 0;
-					p[i] = ACTION_USELEASE;
-				}
-			} else {
-				for (i = 0; i < count; i++) {
-					free(config->defaults[list[i]].data);
-					config->defaults[list[i]].data = NULL;
-					config->defaults[list[i]].len = 0;
-					p[list[i]] = ACTION_USELEASE;
-				}
+		if (parse_option_list(cfile, &count, list) == 0)
+			return;
+		p = config->default_actions;
+		if (count == 0) {
+			for (i = 0; i < DHO_COUNT; i++) {
+				free(config->defaults[i].data);
+				config->defaults[i].data = NULL;
+				config->defaults[i].len = 0;
+				p[i] = ACTION_USELEASE;
 			}
-			parse_semi(cfile);
-		}
-		break;
-	case TOK_PREPEND:
-		if (parse_option(cfile, &i, config->defaults) == 1) {
-			action = code_to_action(i, ACTION_PREPEND);
-			if (action == ACTION_SUPERSEDE)
-				parse_warn("'prepend' treated as 'supersede'");
-			config->default_actions[i] = action;
-			parse_semi(cfile);
-		}
-		break;
-	case TOK_REBOOT:
-		if (parse_number(cfile, (unsigned char *)&t, 'L') == 1) {
-			config->reboot_timeout = ntohl(t);
-			parse_semi(cfile);
-		}
-		break;
-	case TOK_REJECT:
-		if (parse_reject_statement(cfile) == 1)
-			parse_semi(cfile);
-		break;
-	case TOK_REQUEST:
-		if (parse_option_list(cfile, &config->requested_option_count,
-		    config->requested_options) == 1)
-			parse_semi(cfile);
-		break;
-	case TOK_REQUIRE:
-		if (parse_option_list(cfile, &config->required_option_count,
-		    config->required_options) == 1)
-			parse_semi(cfile);
-		break;
-	case TOK_RETRY:
-		if (parse_number(cfile, (unsigned char *)&t, 'L') == 1) {
-			config->retry_interval = ntohl(t);
-			parse_semi(cfile);
-		}
-		break;
-	case TOK_SELECT_TIMEOUT:
-		if (parse_number(cfile, (unsigned char *)&t, 'L') == 1) {
-			config->select_interval = ntohl(t);
-			parse_semi(cfile);
-		}
-		break;
-	case TOK_SEND:
-		if (parse_option(cfile, &i, config->send_options) == 1)
-			parse_semi(cfile);
-		break;
-	case TOK_SERVER_NAME:
-		if (parse_string(cfile, NULL, &val) == 1) {
-			free(config->server_name);
-			config->server_name = val;
-			parse_semi(cfile);
-		}
-		break;
-	case TOK_SUPERSEDE:
-		if (parse_option(cfile, &i, config->defaults) == 1) {
-			config->default_actions[i] = ACTION_SUPERSEDE;
-			parse_semi(cfile);
-		}
-		break;
-	case TOK_TIMEOUT:
-		if (parse_number(cfile, (unsigned char *)&t, 'L') == 1) {
-			config->timeout = ntohl(t);
-			parse_semi(cfile);
+		} else {
+			for (i = 0; i < count; i++) {
+				free(config->defaults[list[i]].data);
+				config->defaults[list[i]].data = NULL;
+				config->defaults[list[i]].len = 0;
+				p[list[i]] = ACTION_USELEASE;
+			}
 		}
 		break;
 	default:
 		parse_warn("expecting statement.");
-		if (token != ';')
-			skip_to_semi(cfile);
-		break;
+		skip_to_semi(cfile);
+		return;
 	}
+
+	parse_semi(cfile);
 }
 
 int
@@ -629,8 +612,7 @@ parse_interface(FILE *cfile, char *name)
  *	| lease-decls lease-decl
  */
 int
-parse_lease(FILE *cfile, char *name,
-    struct client_lease **lp)
+parse_lease(FILE *cfile, struct client_lease **lp)
 {
 	struct client_lease	*lease;
 	int			 token;
@@ -669,7 +651,7 @@ parse_lease(FILE *cfile, char *name,
 			*lp = lease;
 			return 1;
 		}
-		parse_lease_decl(cfile, lease, name);
+		parse_lease_decl(cfile, lease);
 	}
 
 	return 0;
@@ -691,7 +673,7 @@ parse_lease(FILE *cfile, char *name,
  *	| SSID		string SEMI
  */
 void
-parse_lease_decl(FILE *cfile, struct client_lease *lease, char *name)
+parse_lease_decl(FILE *cfile, struct client_lease *lease)
 {
 	char		*val;
 	unsigned int	 len;
@@ -762,8 +744,7 @@ parse_lease_decl(FILE *cfile, struct client_lease *lease, char *name)
 		break;
 	default:
 		parse_warn("expecting lease declaration.");
-		if (token != ';')
-			skip_to_semi(cfile);
+		skip_to_semi(cfile);
 		return;
 	}
 

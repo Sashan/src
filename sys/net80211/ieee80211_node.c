@@ -1,4 +1,4 @@
-/*	$OpenBSD: ieee80211_node.c,v 1.164 2019/04/28 22:15:58 mpi Exp $	*/
+/*	$OpenBSD: ieee80211_node.c,v 1.168 2019/06/10 16:33:02 stsp Exp $	*/
 /*	$NetBSD: ieee80211_node.c,v 1.14 2004/05/09 09:18:47 dyoung Exp $	*/
 
 /*-
@@ -814,8 +814,7 @@ ieee80211_begin_scan(struct ifnet *ifp)
 	 * Reset the current mode. Setting the current mode will also
 	 * reset scan state.
 	 */
-	if (IFM_MODE(ic->ic_media.ifm_cur->ifm_media) == IFM_AUTO ||
-	    (ic->ic_caps & IEEE80211_C_SCANALLBAND))
+	if (IFM_MODE(ic->ic_media.ifm_cur->ifm_media) == IFM_AUTO)
 		ic->ic_curmode = IEEE80211_MODE_AUTO;
 	ieee80211_setmode(ic, ic->ic_curmode);
 
@@ -1063,7 +1062,7 @@ ieee80211_match_bss(struct ieee80211com *ic, struct ieee80211_node *ni)
 	}
 
 	if (ic->ic_if.if_flags & IFF_DEBUG) {
-		printf(" %c %s%c", fail ? '-' : '+',
+		printf("%s: %c %s%c", ic->ic_if.if_xname, fail ? '-' : '+',
 		    ether_sprintf(ni->ni_bssid),
 		    fail & 0x20 ? '!' : ' ');
 		printf(" %3d%c", ieee80211_chan2ieee(ic, ni->ni_chan),
@@ -1337,21 +1336,17 @@ ieee80211_end_scan(struct ifnet *ifp)
 		}
 #endif
 		/*
-		 * Scan the next mode if nothing has been found. This
-		 * is necessary if the device supports different
-		 * incompatible modes in the same channel range, like
-		 * like 11b and "pure" 11G mode.
+		 * Reset the list of channels to scan and scan the next mode
+		 * if nothing has been found.
 		 * If the device scans all bands in one fell swoop, return
 		 * current scan results to userspace regardless of mode.
-		 * This will loop forever except for user-initiated scans.
+		 * This will loop forever until an access point is found.
 		 */
+		ieee80211_reset_scan(ifp);
 		if (ieee80211_next_mode(ifp) == IEEE80211_MODE_AUTO ||
 		    (ic->ic_caps & IEEE80211_C_SCANALLBAND))
 			ic->ic_scan_count++;
 
-		/*
-		 * Reset the list of channels to scan and start again.
-		 */
 		ieee80211_next_scan(ifp);
 		return;
 	}

@@ -1,4 +1,4 @@
-/*	$OpenBSD: identcpu.c,v 1.110 2018/10/20 20:40:54 kettenis Exp $	*/
+/*	$OpenBSD: identcpu.c,v 1.113 2019/06/14 18:13:55 kettenis Exp $	*/
 /*	$NetBSD: identcpu.c,v 1.1 2003/04/26 18:39:28 fvdl Exp $	*/
 
 /*
@@ -172,6 +172,7 @@ const struct {
 	{ CPUIDECX_MWAITX,	"MWAITX" },
 }, cpu_seff0_ebxfeatures[] = {
 	{ SEFF0EBX_FSGSBASE,	"FSGSBASE" },
+	{ SEFF0EBX_TSC_ADJUST,	"TSC_ADJUST" },
 	{ SEFF0EBX_SGX,		"SGX" },
 	{ SEFF0EBX_BMI1,	"BMI1" },
 	{ SEFF0EBX_HLE,		"HLE" },
@@ -207,6 +208,8 @@ const struct {
 }, cpu_seff0_edxfeatures[] = {
 	{ SEFF0EDX_AVX512_4FNNIW, "AVX512FNNIW" },
 	{ SEFF0EDX_AVX512_4FMAPS, "AVX512FMAPS" },
+	{ SEFF0EDX_MD_CLEAR,	"MD_CLEAR" },
+	{ SEFF0EDX_TSXFA,	"TSXFA" },
 	{ SEFF0EDX_IBRS,	"IBRS,IBPB" },
 	{ SEFF0EDX_STIBP,	"STIBP" },
 	{ SEFF0EDX_L1DF,	"L1DF" },
@@ -1017,6 +1020,8 @@ cpu_check_vmm_cap(struct cpu_info *ci)
 
 	/*
 	 * Check "L1 flush on VM entry" (Intel L1TF vuln) semantics
+	 * Full details can be found here:
+	 * https://software.intel.com/security-software-guidance/insights/deep-dive-intel-analysis-l1-terminal-fault
 	 */
 	if (!strcmp(cpu_vendor, "GenuineIntel")) {
 		if (ci->ci_feature_sefflags_edx & SEFF0EDX_L1DF)
@@ -1026,12 +1031,15 @@ cpu_check_vmm_cap(struct cpu_info *ci)
 
 		/*
 		 * Certain CPUs may have the vulnerability remedied in
-		 * hardware, check for that and override the setting
-		 * calculated above.
+		 * hardware (RDCL_NO), or we may be nested in an VMM that
+		 * is doing flushes (SKIP_L1DFL_VMENTRY) using the MSR.
+		 * In either case no mitigation at all is necessary.
 		 */	
 		if (ci->ci_feature_sefflags_edx & SEFF0EDX_ARCH_CAP) {
 			msr = rdmsr(MSR_ARCH_CAPABILITIES);
-			if (msr & ARCH_CAPABILITIES_SKIP_L1DFL_VMENTRY)
+			if ((msr & ARCH_CAPABILITIES_RDCL_NO) ||
+			    ((msr & ARCH_CAPABILITIES_SKIP_L1DFL_VMENTRY) &&
+			    ci->ci_vmm_cap.vcc_vmx.vmx_has_l1_flush_msr))
 				ci->ci_vmm_cap.vcc_vmx.vmx_has_l1_flush_msr =
 				    VMX_SKIP_L1D_FLUSH;
 		}

@@ -1,4 +1,4 @@
-/*	$OpenBSD: sock.c,v 1.29 2018/06/26 07:39:59 ratchov Exp $	*/
+/*	$OpenBSD: sock.c,v 1.31 2019/07/12 06:30:55 ratchov Exp $	*/
 /*
  * Copyright (c) 2008-2012 Alexandre Ratchov <alex@caoua.org>
  *
@@ -320,7 +320,7 @@ sock_fdwrite(struct sock *f, void *data, int count)
 	int n;
 
 	n = write(f->fd, data, count);
-	if (n < 0) {
+	if (n == -1) {
 #ifdef DEBUG
 		if (errno == EFAULT) {
 			log_puts("sock_fdwrite: fault\n");
@@ -361,7 +361,7 @@ sock_fdread(struct sock *f, void *data, int count)
 	int n;
 
 	n = read(f->fd, data, count);
-	if (n < 0) {
+	if (n == -1) {
 #ifdef DEBUG
 		if (errno == EFAULT) {
 			log_puts("sock_fdread: fault\n");
@@ -768,8 +768,10 @@ sock_hello(struct sock *f)
 	struct dev *d;
 	struct opt *opt;
 	unsigned int mode;
+	unsigned int id;
 
 	mode = ntohs(p->mode);
+	id = ntohl(p->id);
 #ifdef DEBUG
 	if (log_level >= 3) {
 		sock_log(f);
@@ -841,7 +843,7 @@ sock_hello(struct sock *f)
 	opt = opt_byname(d, p->opt);
 	if (opt == NULL)
 		return 0;
-	f->slot = slot_new(d, opt, p->who, &sock_slotops, f, mode);
+	f->slot = slot_new(d, opt, id, p->who, &sock_slotops, f, mode);
 	if (f->slot == NULL)
 		return 0;
 	f->midi = NULL;

@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# $OpenBSD: appstest.sh,v 1.16 2019/02/16 02:39:18 inoguchi Exp $
+# $OpenBSD: appstest.sh,v 1.23 2019/07/17 12:06:53 inoguchi Exp $
 #
 # Copyright (c) 2016 Kinichiro Inoguchi <inoguchi@openbsd.org>
 #
@@ -160,23 +160,52 @@ function test_md {
 	echo $text > $dgstdat
 	hmac_key="test-hmac-key"
 	cmac_key="1234567890abcde1234567890abcde12"
+	dgstkey=$user1_dir/dgstkey.pem
+	dgstpass=test-dgst-pass
+	dgstpub=$user1_dir/dgstpub.pem
+	dgstsig=$user1_dir/dgst.sig
+
+	$openssl_bin genrsa -aes256 -passout pass:$dgstpass -out $dgstkey
+	check_exit_status $?
+	
+	$openssl_bin pkey -in $dgstkey -passin pass:$dgstpass -pubout \
+		-out $dgstpub
+	check_exit_status $?
 	
 	digests=`$openssl_bin list-message-digest-commands`
 	
 	for d in $digests ; do
 	
 		echo -n "$d ... "
-		$openssl_bin dgst -$d -out $dgstdat.$d $dgstdat
+		$openssl_bin dgst -$d -hex -out $dgstdat.$d $dgstdat
 		check_exit_status $?
 	
 		echo -n "$d HMAC ... "
-		$openssl_bin dgst -$d -hmac $hmac_key -out $dgstdat.$d.hmac \
+		$openssl_bin dgst -$d -c -hmac $hmac_key -out $dgstdat.$d.hmac \
 			$dgstdat
 		check_exit_status $?
 	
 		echo -n "$d CMAC ... "
-		$openssl_bin dgst -$d -mac cmac -macopt cipher:aes-128-cbc \
+		$openssl_bin dgst -$d -r -mac cmac -macopt cipher:aes-128-cbc \
 			-macopt hexkey:$cmac_key -out $dgstdat.$d.cmac $dgstdat
+		check_exit_status $?
+
+		echo -n "$d sign ... "
+		$openssl_bin dgst -sign $dgstkey -keyform pem \
+			-sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:8 \
+			-passin pass:$dgstpass -binary -out $dgstsig.$d $dgstdat
+		check_exit_status $?
+
+		echo -n "$d verify ... "
+		$openssl_bin dgst -verify $dgstpub \
+			-sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:8 \
+			-signature $dgstsig.$d $dgstdat
+		check_exit_status $?
+
+		echo -n "$d prverify ... "
+		$openssl_bin dgst -prverify $dgstkey -passin pass:$dgstpass \
+			-sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:8 \
+			-signature $dgstsig.$d $dgstdat
 		check_exit_status $?
 	done
 }
@@ -248,7 +277,7 @@ function test_key {
 	check_exit_status $?
 	
 	start_message "dsa"
-	$openssl_bin dsa -in $dsaparam512 -text -out $dsaparam512.out
+	$openssl_bin dsa -in $dsaparam512 -text -modulus -out $dsaparam512.out
 	check_exit_status $?
 	
 	start_message "gendsa - Superseded by genpkey and pkey."
@@ -548,12 +577,16 @@ __EOF__
 	if [ $mingw = 0 ] ; then
 		subj='/C=JP/ST=Tokyo/O=TEST_DUMMY_COMPANY/CN=testCA.test_dummy.com/'
 	else
-		subj='//C=JP\ST=Tokyo\O=TEST_DUMMY_COMPANY\CN=testTSA.test_dummy.com\'
+		subj='//C=JP\ST=Tokyo\O=TEST_DUMMY_COMPANY\CN=testCA.test_dummy.com\'
 	fi
 	
-	$openssl_bin req -new -x509 -newkey rsa:2048 -out $ca_cert \
-		-keyout $ca_key -days 1 -passout pass:$ca_pass -batch \
-		-subj $subj
+	$openssl_bin req -new -x509 -batch -newkey rsa:2048 \
+		-pkeyopt rsa_keygen_bits:2048 -pkeyopt rsa_keygen_pubexp:3 \
+		-sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:8 \
+		-config $ssldir/openssl.cnf -verbose \
+		-subj $subj -days 1 -set_serial 1 -multivalue-rdn \
+		-keyout $ca_key -passout pass:$ca_pass \
+		-out $ca_cert -outform pem
 	check_exit_status $?
 	
 	#---------#---------#---------#---------#---------#---------#---------
@@ -575,15 +608,19 @@ __EOF__
 	fi
 	
 	$openssl_bin req -new -keyout $tsa_key -out $tsa_csr \
-		-passout pass:$tsa_pass -subj $subj
+		-passout pass:$tsa_pass -subj $subj -asn1-kludge
 	check_exit_status $?
 	
 	start_message "ca ... sign by CA with TSA extensions"
 	
 	tsa_cert=$tsa_dir/tsa_cert.pem
 	
-	$openssl_bin ca -batch -cert $ca_cert -keyfile $ca_key -key $ca_pass \
-		-in $tsa_csr -out $tsa_cert -extensions tsa_ext
+	$openssl_bin ca -batch -cert $ca_cert -keyfile $ca_key -keyform pem \
+		-key $ca_pass -config $ssldir/openssl.cnf -create_serial \
+		-policy policy_match -days 1 -md sha256 -extensions tsa_ext \
+		-sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 \
+		-multivalue-rdn -preserveDN -noemailDN \
+		-in $tsa_csr -outdir $tsa_dir -out $tsa_cert -verbose -notext
 	check_exit_status $?
 	
 	#---------#---------#---------#---------#---------#---------#---------
@@ -604,23 +641,23 @@ __EOF__
 	fi
 	
 	$openssl_bin req -new -keyout $ocsp_key -nodes -out $ocsp_csr \
-		-subj $subj
+		-subj $subj -no-asn1-kludge
 	check_exit_status $?
 	
 	start_message "ca ... sign by CA with OCSP extensions"
 	
 	ocsp_cert=$ocsp_dir/ocsp_cert.pem
 	
-	$openssl_bin ca -batch -cert $ca_cert -keyfile $ca_key -key $ca_pass \
-		-in $ocsp_csr -out $ocsp_cert -extensions ocsp_ext
+	$openssl_bin ca -batch -cert $ca_cert -keyfile $ca_key -keyform pem \
+		-key $ca_pass -out $ocsp_cert -extensions ocsp_ext \
+		-startdate `date -u '+%y%m%d%H%M%SZ'` -enddate 491223235959Z \
+		-subj $subj -infiles $ocsp_csr 
 	check_exit_status $?
 	
 	#---------#---------#---------#---------#---------#---------#---------
 	
 	# --- server-admin operations (generate server key and csr) ---
 	section_message "server-admin operations (generate server key and csr)"
-	
-	start_message "req ... generate server csr#1"
 	
 	server_key=$server_dir/server_key.pem
 	server_csr=$server_dir/server_csr.pem
@@ -632,10 +669,26 @@ __EOF__
 		subj='//C=JP\ST=Tokyo\O=TEST_DUMMY_COMPANY\CN=localhost.test_dummy.com\'
 	fi
 	
-	$openssl_bin req -new -keyout $server_key -out $server_csr \
-		-passout pass:$server_pass -subj $subj
+	start_message "genrsa ... generate server key#1"
+
+	$openssl_bin genrsa -aes256 -passout pass:$server_pass -out $server_key
+	check_exit_status $?
+
+	start_message "req ... generate server csr#1"
+
+	$openssl_bin req -new -subj $subj -sha256 \
+		-key $server_key -keyform pem -passin pass:$server_pass \
+		-out $server_csr -outform pem
 	check_exit_status $?
 	
+	start_message "req ... verify server csr#1"
+
+	$openssl_bin req -verify -in $server_csr -inform pem \
+		-newhdr -noout -pubkey -subject -modulus -text \
+		-nameopt multiline -reqopt compatible \
+		-out $server_csr.verify.out
+	check_exit_status $?
+
 	start_message "req ... generate server csr#2 (interactive mode)"
 	
 	revoke_key=$server_dir/revoke_key.pem
@@ -666,7 +719,9 @@ __EOF__
 	start_message "x509 ... issue cert for server csr#2"
 	
 	revoke_cert=$server_dir/revoke_cert.pem
-	$openssl_bin x509 -req -in $revoke_csr -CA $ca_cert -CAkey $ca_key \
+	$openssl_bin x509 -req -in $revoke_csr -CA $ca_cert -CAform pem \
+		-CAkey $ca_key -CAkeyform pem \
+		-CAserial $ca_dir/serial -set_serial 10 \
 		-passin pass:$ca_pass -CAcreateserial -out $revoke_cert
 	check_exit_status $?
 	
@@ -677,11 +732,18 @@ __EOF__
 	
 	start_message "ca ... revoke server cert#2"
 	crl_file=$ca_dir/crl.pem
-	$openssl_bin ca -gencrl -out $crl_file -crldays 30 \
-		-revoke $revoke_cert \
+	$openssl_bin ca -gencrl -out $crl_file -revoke $revoke_cert \
+		-config $ssldir/openssl.cnf -name CA_default \
+		-crldays 30 -crlhours 12 -crlsec 30 -updatedb \
+		-crl_reason unspecified -crl_hold 1.2.840.10040.2.2 \
+		-crl_compromise `date -u '+%Y%m%d%H%M%SZ'` \
+		-crl_CA_compromise `date -u '+%Y%m%d%H%M%SZ'` \
 		-keyfile $ca_key -passin pass:$ca_pass -cert $ca_cert
 	check_exit_status $?
 	
+	start_message "ca ... show certificate status by serial number"
+	$openssl_bin ca -config $ssldir/openssl.cnf -status 1
+
 	start_message "crl ... CA generates CRL"
 	$openssl_bin crl -in $crl_file -fingerprint
 	check_exit_status $?
@@ -702,14 +764,17 @@ __EOF__
 	check_exit_status $?
 	
 	start_message "verify ... server cert#1"
-	$openssl_bin verify -verbose -CAfile $ca_cert $server_cert
+	$openssl_bin verify -verbose -CAfile $ca_cert -CRLfile $crl_file \
+	       	-crl_check -issuer_checks -purpose sslserver $server_cert
 	check_exit_status $?
 	
 	start_message "x509 ... get detail info about server cert#1"
 	$openssl_bin x509 -in $server_cert -text -C -dates -startdate -enddate \
 		-fingerprint -issuer -issuer_hash -issuer_hash_old \
-		-subject -subject_hash -subject_hash_old -ocsp_uri \
-		-ocspid -modulus -pubkey -serial -email > $server_cert.x509.out
+		-subject -hash -subject_hash -subject_hash_old -ocsp_uri \
+		-ocspid -modulus -pubkey -serial -email -noout -trustout \
+		-alias -clrtrust -clrreject -next_serial -checkend 3600 \
+		-nameopt multiline -certopt compatible > $server_cert.x509.out
 	check_exit_status $?
 	
 	if [ $mingw = 0 ] ; then
@@ -721,8 +786,9 @@ __EOF__
 	# self signed
 	start_message "x509 ... generate self signed server cert"
 	server_self_cert=$server_dir/server_self_cert.pem
-	$openssl_bin x509 -in $server_cert -signkey $server_key \
-		-passin pass:$server_pass -out $server_self_cert
+	$openssl_bin x509 -in $server_cert -signkey $server_key -keyform pem \
+		-sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:8 \
+		-passin pass:$server_pass -out $server_self_cert -days 1
 	check_exit_status $?
 	
 	#---------#---------#---------#---------#---------#---------#---------
@@ -840,7 +906,8 @@ __EOF__
 	
 	$openssl_bin ts -reply -queryfile $tsa_tsq -inkey $tsa_key \
 		-passin pass:$tsa_pass -signer $tsa_cert -chain $ca_cert \
-		-out $tsa_tsr
+		-config $ssldir/openssl.cnf -section tsa_config1 -cert \
+		-policy 1.3.6.1.4.1.4146.2.3 -out $tsa_tsr
 	check_exit_status $?
 	
 	# Verify
@@ -856,8 +923,12 @@ function test_smime {
 	section_message "S/MIME operations"
 	
 	smime_txt=$user1_dir/smime.txt
-	smime_msg=$user1_dir/smime.msg
+	smime_enc=$user1_dir/smime.enc
+	smime_sig=$user1_dir/smime.sig
+	smime_p7o=$user1_dir/smime.p7o
+	smime_sgr=$user1_dir/smime.sgr
 	smime_ver=$user1_dir/smime.ver
+	smime_dec=$user1_dir/smime.dec
 	
 	cat << __EOF__ > $smime_txt
 Hello Bob,
@@ -865,18 +936,47 @@ Sincerely yours
 Alice
 __EOF__
 	
+	# encrypt
+	start_message "smime ... encrypt message"
+
+	$openssl_bin smime -encrypt -aes256 -binary -in $smime_txt \
+		-out $smime_enc $server_cert
+	check_exit_status $?
+
 	# sign
 	start_message "smime ... sign to message"
 	
-	$openssl_bin smime -sign -in $smime_txt -text -out $smime_msg \
-		-signer $user1_cert -inkey $user1_key -passin pass:$user1_pass
+	$openssl_bin smime -sign -in $smime_enc -text -inform smime \
+		-out $smime_sig -outform smime \
+		-signer $user1_cert -inkey $user1_key -keyform pem \
+		-passin pass:$user1_pass -md sha256 \
+		-from user1@test_dummy.com -to server@test_dummy.com \
+		-subject "test openssl smime"
 	check_exit_status $?
 	
+	# pk7out
+	start_message "smime ... pk7out from message"
+
+	$openssl_bin smime -pk7out -in $smime_sig -out $smime_p7o
+	check_exit_status $?
+
 	# verify
 	start_message "smime ... verify message"
 	
-	$openssl_bin smime -verify -in $smime_msg -signer $user1_cert \
-		-CAfile $ca_cert -out $smime_ver
+	$openssl_bin smime -verify -in $smime_sig \
+		-CAfile $ca_cert -certfile $user1_cert -nointern \
+		-check_ss_sig -issuer_checks -policy_check -x509_strict \
+		-signer $smime_sgr -text -out $smime_ver
+	check_exit_status $?
+
+	# decrypt
+	start_message "smime ... decrypt message"
+
+	$openssl_bin smime -decrypt -in $smime_ver -out $smime_dec \
+		-recip $server_cert -inkey $server_key -passin pass:$server_pass
+	check_exit_status $?
+
+	diff $smime_dec $smime_txt
 	check_exit_status $?
 }
 
@@ -884,12 +984,21 @@ function test_ocsp {
 	# --- OCSP operations ---
 	section_message "OCSP operations"
 	
+	# get key without pass
+	user1_key_nopass=$user1_dir/user1_key_nopass.pem
+	$openssl_bin pkey -in $user1_key -passin pass:$user1_pass \
+		-out $user1_key_nopass
+	check_exit_status $?
+
 	# request
 	start_message "ocsp ... create OCSP request"
 	
 	ocsp_req=$user1_dir/ocsp_req.der
 	$openssl_bin ocsp -issuer $ca_cert -cert $server_cert \
-		-cert $revoke_cert -CAfile $ca_cert -reqout $ocsp_req
+		-cert $revoke_cert -serial 1 -nonce -no_certs -CAfile $ca_cert \
+		-signer $user1_cert -signkey $user1_key_nopass \
+		-sign_other $user1_cert -sha256 \
+		-reqout $ocsp_req -req_text -out $ocsp_req.out
 	check_exit_status $?
 	
 	# response
@@ -898,7 +1007,9 @@ function test_ocsp {
 	ocsp_res=$user1_dir/ocsp_res.der
 	$openssl_bin ocsp -index  $ca_dir/index.txt -CA $ca_cert \
 		-CAfile $ca_cert -rsigner $ocsp_cert -rkey $ocsp_key \
-		-reqin $ocsp_req -respout $ocsp_res -text > $ocsp_res.out 2>&1
+		-reqin $ocsp_req -rother $ocsp_cert -resp_no_certs -noverify \
+		-nmin 60 -validity_period 300 -status_age 300 \
+		-respout $ocsp_res -resp_text -out $ocsp_res.out
 	check_exit_status $?
 	
 	# ocsp server
@@ -906,9 +1017,11 @@ function test_ocsp {
 	
 	ocsp_port=8888
 	
+	ocsp_svr_log=$user1_dir/ocsp_svr.log
 	$openssl_bin ocsp -index  $ca_dir/index.txt -CA $ca_cert \
 		-CAfile $ca_cert -rsigner $ocsp_cert -rkey $ocsp_key \
-		-port '*:'$ocsp_port -nrequest 1 &
+		-host localhost -port $ocsp_port -path / -ndays 1 -nrequest 1 \
+		-resp_key_id -text -out $ocsp_svr_log &
 	check_exit_status $?
 	ocsp_svr_pid=$!
 	echo "ocsp server pid = [ $ocsp_svr_pid ]"
@@ -919,9 +1032,19 @@ function test_ocsp {
 	
 	ocsp_qry=$user1_dir/ocsp_qry.der
 	$openssl_bin ocsp -issuer $ca_cert -cert $server_cert \
-		-cert $revoke_cert -CAfile $ca_cert \
-		-url http://localhost:$ocsp_port -resp_text \
-		-respout $ocsp_qry > $ocsp_qry.out 2>&1
+		-cert $revoke_cert -CAfile $ca_cert -no_nonce \
+		-url http://localhost:$ocsp_port -timeout 10 -text \
+		-header Host localhost \
+		-respout $ocsp_qry -out $ocsp_qry.out
+	check_exit_status $?
+
+	# verify response from server
+	start_message "ocsp ... verify OCSP response from server"
+
+	$openssl_bin ocsp -respin $ocsp_qry -CAfile $ca_cert \
+	-ignore_err -no_signature_verify -no_cert_verify -no_chain \
+	-no_cert_checks -no_explicit -trust_other -no_intern \
+	-verify_other $ocsp_cert -VAfile $ocsp_cert
 	check_exit_status $?
 }
 
@@ -949,9 +1072,11 @@ function test_pkcs {
 	start_message "pkcs12 ... create"
 	$openssl_bin pkcs12 -export -in $server_cert -inkey $server_key \
 		-passin pass:$server_pass -certfile $ca_cert -CAfile $ca_cert \
-		-caname "server_p12" -passout pass:$pkcs_pass \
+		-caname "caname_server_p12" \
 		-certpbe AES-256-CBC -keypbe AES-256-CBC -chain \
-		-out $server_cert.p12
+		-name "name_server_p12" -des3 -maciter -macalg sha256 \
+		-CSP "csp_server_p12" -LMK -keyex \
+		-passout pass:$pkcs_pass -out $server_cert.p12
 	check_exit_status $?
 	
 	start_message "pkcs12 ... verify"
@@ -959,9 +1084,9 @@ function test_pkcs {
 		-noout
 	check_exit_status $?
 	
-	start_message "pkcs12 ... to PEM"
-	$openssl_bin pkcs12 -in $server_cert.p12 -passin pass:$pkcs_pass \
-		-passout pass:$pkcs_pass -out $server_cert.p12.pem
+	start_message "pkcs12 ... private key to PEM without encryption"
+	$openssl_bin pkcs12 -in $server_cert.p12 -password pass:$pkcs_pass \
+		-nocerts -nomacver -nodes -out $server_cert.p12.pem
 	check_exit_status $?
 }
 
@@ -1006,8 +1131,7 @@ function test_server_client {
 	$s_bin s_server -accept $port -CAfile $ca_cert \
 		-cert $server_cert -key $server_key -pass pass:$server_pass \
 		-context "appstest.sh" -id_prefix "APPSTEST.SH" -crl_check \
-		-nextprotoneg "http/1.1,spdy/3" -alpn "http/1.1,spdy/3" -www \
-		-cipher ALL $extra_opts \
+		-alpn "http/1.1,spdy/3" -www -cipher ALL $extra_opts \
 		-msg -tlsextdebug > $s_server_out 2>&1 &
 	check_exit_status $?
 	s_server_pid=$!
@@ -1108,8 +1232,7 @@ function test_server_client {
 	start_message "s_client ... connect to TLS/SSL test server to get session id"
 	sleep $test_pause_sec
 	$c_bin s_client -connect $host:$port -CAfile $ca_cert \
-		-nextprotoneg "spdy/3,http/1.1" -alpn "spdy/3,http/1.1" \
-		-sess_out $sess_dat \
+		-alpn "spdy/3,http/1.1" -sess_out $sess_dat \
 		-msg -tlsextdebug < /dev/null > $s_client_out 2>&1
 	check_exit_status $?
 	

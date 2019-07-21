@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.129 2019/01/19 20:45:06 tedu Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.131 2019/05/17 19:07:16 guenther Exp $	*/
 /*	$NetBSD: cpu.h,v 1.1 2003/04/26 18:39:39 fvdl Exp $	*/
 
 /*-
@@ -116,6 +116,10 @@ struct cpu_info {
 	u_int64_t ci_kern_rsp;	/* kernel-only stack */
 	u_int64_t ci_intr_rsp;	/* U<-->K trampoline stack */
 	u_int64_t ci_user_cr3;	/* U-K page table */
+
+	/* bits for mitigating Micro-architectural Data Sampling */
+	char		ci_mds_tmp[32];		/* 32byte aligned */
+	void		*ci_mds_buf;
 
 	struct pcb *ci_curpcb;
 	struct pcb *ci_idle_pcb;
@@ -371,9 +375,7 @@ void	x86_64_proc0_tss_ldt_init(void);
 void	x86_64_bufinit(void);
 void	cpu_proc_fork(struct proc *, struct proc *);
 int	amd64_pa_used(paddr_t);
-extern void (*cpu_idle_enter_fcn)(void);
 extern void (*cpu_idle_cycle_fcn)(void);
-extern void (*cpu_idle_leave_fcn)(void);
 
 struct region_descriptor;
 void	lgdt(struct region_descriptor *);

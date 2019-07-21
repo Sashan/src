@@ -1,4 +1,4 @@
-/* $OpenBSD: utf8.c,v 1.40 2019/03/18 20:53:33 nicm Exp $ */
+/* $OpenBSD: utf8.c,v 1.43 2019/05/26 17:34:45 nicm Exp $ */
 
 /*
  * Copyright (c) 2008 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -18,6 +18,7 @@
 
 #include <sys/types.h>
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -182,7 +183,13 @@ utf8_strvis(char *dst, const char *src, size_t len, int flag)
 			/* Not a complete, valid UTF-8 character. */
 			src -= ud.have;
 		}
-		if (src < end - 1)
+		if (src[0] == '$' && src < end - 1) {
+			if (isalpha((u_char)src[1]) ||
+			    src[1] == '_' ||
+			    src[1] == '{')
+				*dst++ = '\\';
+			*dst++ = '$';
+		} else if (src < end - 1)
 			dst = vis(dst, src[0], flag, src[1]);
 		else if (src < end)
 			dst = vis(dst, src[0], flag, '\0');
@@ -402,4 +409,24 @@ utf8_padcstr(const char *s, u_int width)
 		out[slen++] = ' ';
 	out[slen] = '\0';
 	return (out);
+}
+
+int
+utf8_cstrhas(const char *s, const struct utf8_data *ud)
+{
+	struct utf8_data	*copy, *loop;
+	int			 found = 0;
+
+	copy = utf8_fromcstr(s);
+	for (loop = copy; loop->size != 0; loop++) {
+		if (loop->size != ud->size)
+			continue;
+		if (memcmp(loop->data, ud->data, loop->size) == 0) {
+			found = 1;
+			break;
+		}
+	}
+	free(copy);
+
+	return (found);
 }

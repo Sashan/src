@@ -1,4 +1,4 @@
-/*	$OpenBSD: vm.c,v 1.45 2019/03/01 07:32:29 mlarkin Exp $	*/
+/*	$OpenBSD: vm.c,v 1.51 2019/07/17 05:51:07 pd Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -90,8 +90,11 @@ int dump_vmr(int , struct vm_mem_range *);
 int dump_mem(int, struct vm_create_params *);
 void restore_vmr(int, struct vm_mem_range *);
 void restore_mem(int, struct vm_create_params *);
+int restore_vm_params(int, struct vm_create_params *);
 void pause_vm(struct vm_create_params *);
 void unpause_vm(struct vm_create_params *);
+
+int translate_gva(struct vm_exit*, uint64_t, uint64_t *, int);
 
 static struct vm_mem_range *find_gpa_range(struct vm_create_params *, paddr_t,
     size_t);
@@ -130,7 +133,7 @@ static const struct vcpu_reg_state vcpu_init_flat64 = {
 	.vrs_gprs[VCPU_REGS_RFLAGS] = 0x2,
 	.vrs_gprs[VCPU_REGS_RIP] = 0x0,
 	.vrs_gprs[VCPU_REGS_RSP] = 0x0,
-	.vrs_crs[VCPU_REGS_CR0] = CR0_CD | CR0_NW | CR0_ET | CR0_PE | CR0_PG,
+	.vrs_crs[VCPU_REGS_CR0] = CR0_ET | CR0_PE | CR0_PG,
 	.vrs_crs[VCPU_REGS_CR3] = PML4_PAGE,
 	.vrs_crs[VCPU_REGS_CR4] = CR4_PAE | CR4_PSE,
 	.vrs_crs[VCPU_REGS_PDPTE0] = 0ULL,
@@ -279,7 +282,7 @@ start_vm(struct vmd_vm *vm, int fd)
 	setproctitle("%s", vcp->vcp_name);
 	log_procinit(vcp->vcp_name);
 
-	if (!vm->vm_received)
+	if (!(vm->vm_state & VM_STATE_RECEIVED))
 		create_memory_map(vcp);
 
 	ret = alloc_guest_mem(vcp);
@@ -311,7 +314,7 @@ start_vm(struct vmd_vm *vm, int fd)
 	if (pledge("stdio vmm recvfd", NULL) == -1)
 		fatal("pledge");
 
-	if (vm->vm_received) {
+	if (vm->vm_state & VM_STATE_RECEIVED) {
 		ret = read(vm->vm_receive_fd, &vrp, sizeof(vrp));
 		if (ret != sizeof(vrp)) {
 			fatal("received incomplete vrp - exiting");
@@ -359,11 +362,13 @@ start_vm(struct vmd_vm *vm, int fd)
 
 	event_init();
 
-	if (vm->vm_received) {
+	if (vm->vm_state & VM_STATE_RECEIVED) {
 		restore_emulated_hw(vcp, vm->vm_receive_fd, nicfds,
 		    vm->vm_disks, vm->vm_cdrom);
 		mc146818_start();
 		restore_mem(vm->vm_receive_fd, vcp);
+		if (restore_vm_params(vm->vm_receive_fd, vcp))
+			fatal("restore vm params failed");
 	}
 
 	if (vmm_pipe(vm, fd, vm_dispatch_vmm) == -1)
@@ -501,6 +506,7 @@ int
 send_vm(int fd, struct vm_create_params *vcp)
 {
 	struct vm_rwregs_params	   vrp;
+	struct vm_rwvmparams_params vpp;
 	struct vmop_create_params *vmc;
 	struct vm_terminate_params vtp;
 	unsigned int		   flags = 0;
@@ -528,6 +534,8 @@ send_vm(int fd, struct vm_create_params *vcp)
 	vmc->vmc_flags = flags;
 	vrp.vrwp_vm_id = vcp->vcp_id;
 	vrp.vrwp_mask = VM_RWREGS_ALL;
+	vpp.vpp_mask = VM_RWVMPARAMS_ALL;
+	vpp.vpp_vm_id = vcp->vcp_id;
 
 	sz = atomicio(vwrite, fd, vmc,sizeof(struct vmop_create_params));
 	if (sz != sizeof(struct vmop_create_params)) {
@@ -568,8 +576,24 @@ send_vm(int fd, struct vm_create_params *vcp)
 	if ((ret = dump_mem(fd, vcp)))
 		goto err;
 
+	for (i = 0; i < vcp->vcp_ncpus; i++) {
+		vpp.vpp_vcpu_id = i;
+		if ((ret = ioctl(env->vmd_fd, VMM_IOC_READVMPARAMS, &vpp))) {
+			log_warn("%s: readvmparams failed", __func__);
+			goto err;
+		}
+
+		sz = atomicio(vwrite, fd, &vpp,
+		    sizeof(struct vm_rwvmparams_params));
+		if (sz != sizeof(struct vm_rwvmparams_params)) {
+			log_warn("%s: dumping vm params failed", __func__);
+			ret = -1;
+			goto err;
+		}
+	}
+
 	vtp.vtp_vm_id = vcp->vcp_id;
-	if (ioctl(env->vmd_fd, VMM_IOC_TERM, &vtp) < 0) {
+	if (ioctl(env->vmd_fd, VMM_IOC_TERM, &vtp) == -1) {
 		log_warnx("%s: term IOC error: %d, %d", __func__,
 		    errno, ENOENT);
 	}
@@ -584,6 +608,9 @@ int
 dump_send_header(int fd) {
 	struct vm_dump_header	   vmh;
 	int			   i;
+
+	memcpy(&vmh.vmh_signature, VM_DUMP_SIGNATURE,
+	    sizeof(vmh.vmh_signature));
 
 	vmh.vmh_cpuids[0].code = 0x00;
 	vmh.vmh_cpuids[0].leaf = 0x00;
@@ -629,6 +656,26 @@ dump_mem(int fd, struct vm_create_params *vcp)
 		ret = dump_vmr(fd, vmr);
 		if (ret)
 			return ret;
+	}
+	return (0);
+}
+
+int
+restore_vm_params(int fd, struct vm_create_params *vcp) {
+	unsigned int			i;
+	struct vm_rwvmparams_params    vpp;
+
+	for (i = 0; i < vcp->vcp_ncpus; i++) {
+		if (atomicio(read, fd, &vpp, sizeof(vpp)) != sizeof(vpp)) {
+			log_warn("%s: error restoring vm params", __func__);
+			return (-1);
+		}
+		vpp.vpp_vm_id = vcp->vcp_id;
+		vpp.vpp_vcpu_id = i;
+		if (ioctl(env->vmd_fd, VMM_IOC_WRITEVMPARAMS, &vpp) < 0) {
+			log_debug("%s: writing vm params failed", __func__);
+			return (-1);
+		}
 	}
 	return (0);
 }
@@ -685,10 +732,10 @@ restore_vmr(int fd, struct vm_mem_range *vmr)
 void
 pause_vm(struct vm_create_params *vcp)
 {
-	if (current_vm->vm_paused)
+	if (current_vm->vm_state & VM_STATE_PAUSED)
 		return;
 
-	current_vm->vm_paused = 1;
+	current_vm->vm_state |= VM_STATE_PAUSED;
 
 	/* XXX: vcpu_run_loop is running in another thread and we have to wait
 	 * for the vm to exit before returning */
@@ -702,10 +749,10 @@ void
 unpause_vm(struct vm_create_params *vcp)
 {
 	unsigned int n;
-	if (!current_vm->vm_paused)
+	if (!(current_vm->vm_state & VM_STATE_PAUSED))
 		return;
 
-	current_vm->vm_paused = 0;
+	current_vm->vm_state &= ~VM_STATE_PAUSED;
 
 	i8253_start();
 	mc146818_start();
@@ -741,7 +788,7 @@ vcpu_reset(uint32_t vmid, uint32_t vcpu_id, struct vcpu_reg_state *vrs)
 
 	log_debug("%s: resetting vcpu %d for vm %d", __func__, vcpu_id, vmid);
 
-	if (ioctl(env->vmd_fd, VMM_IOC_RESETCPU, &vrp) < 0)
+	if (ioctl(env->vmd_fd, VMM_IOC_RESETCPU, &vrp) == -1)
 		return (errno);
 
 	return (0);
@@ -892,7 +939,7 @@ vmm_create_vm(struct vm_create_params *vcp)
 	if (vcp->vcp_nnics > VMM_MAX_NICS_PER_VM)
 		return (EINVAL);
 
-	if (ioctl(env->vmd_fd, VMM_IOC_CREATE, vcp) < 0)
+	if (ioctl(env->vmd_fd, VMM_IOC_CREATE, vcp) == -1)
 		return (errno);
 
 	return (0);
@@ -1094,7 +1141,7 @@ run_vm(int child_cdrom, int child_disks[][VM_MAX_BASE_PER_DISK],
 	log_debug("%s: initializing hardware for vm %s", __func__,
 	    vcp->vcp_name);
 
-	if (!current_vm->vm_received)
+	if (!(current_vm->vm_state & VM_STATE_RECEIVED))
 		init_emulated_hw(vmc, child_cdrom, child_disks, child_taps);
 
 	ret = pthread_mutex_init(&threadmutex, NULL);
@@ -1146,13 +1193,13 @@ run_vm(int child_cdrom, int child_disks[][VM_MAX_BASE_PER_DISK],
 		}
 
 		/* once more because reset_cpu changes regs */
-		if (current_vm->vm_received) {
+		if (current_vm->vm_state & VM_STATE_RECEIVED) {
 			vregsp.vrwp_vm_id = vcp->vcp_id;
 			vregsp.vrwp_vcpu_id = i;
 			vregsp.vrwp_regs = *vrs;
 			vregsp.vrwp_mask = VM_RWREGS_ALL;
 			if ((ret = ioctl(env->vmd_fd, VMM_IOC_WRITEREGS,
-			    &vregsp)) < 0) {
+			    &vregsp)) == -1) {
 				log_warn("%s: writeregs failed", __func__);
 				return (ret);
 			}
@@ -1295,7 +1342,7 @@ vcpu_run_loop(void *arg)
 
 		/* If we are halted or paused, wait */
 		if (vcpu_hlt[n]) {
-			while (current_vm->vm_paused == 1) {
+			while (current_vm->vm_state & VM_STATE_PAUSED) {
 				ret = pthread_cond_wait(&vcpu_run_cond[n],
 				    &vcpu_run_mtx[n]);
 				if (ret) {
@@ -1350,7 +1397,7 @@ vcpu_run_loop(void *arg)
 			}
 		}
 
-		if (ioctl(env->vmd_fd, VMM_IOC_RUN, vrp) < 0) {
+		if (ioctl(env->vmd_fd, VMM_IOC_RUN, vrp) == -1) {
 			/* If run ioctl failed, exit */
 			ret = errno;
 			log_warn("%s: vm %d / vcpu %d run ioctl failed",
@@ -1394,7 +1441,7 @@ vcpu_pic_intr(uint32_t vm_id, uint32_t vcpu_id, uint8_t intr)
 	vip.vip_vcpu_id = vcpu_id; /* XXX always 0? */
 	vip.vip_intr = intr;
 
-	if (ioctl(env->vmd_fd, VMM_IOC_INTR, &vip) < 0)
+	if (ioctl(env->vmd_fd, VMM_IOC_INTR, &vip) == -1)
 		return (errno);
 
 	return (0);
@@ -1946,4 +1993,138 @@ get_input_data(struct vm_exit *vei, uint32_t *data)
 		    vei->vei.vei_size);
 	}
 
+}
+
+/*
+ * translate_gva
+ *
+ * Translates a guest virtual address to a guest physical address by walking
+ * the currently active page table (if needed).
+ *
+ * Note - this function can possibly alter the supplied VCPU state.
+ *  Specifically, it may inject exceptions depending on the current VCPU
+ *  configuration, and may alter %cr2 on #PF. Consequently, this function
+ *  should only be used as part of instruction emulation.
+ *
+ * Parameters:
+ *  exit: The VCPU this translation should be performed for (guest MMU settings
+ *   are gathered from this VCPU)
+ *  va: virtual address to translate
+ *  pa: pointer to paddr_t variable that will receive the translated physical
+ *   address. 'pa' is unchanged on error.
+ *  mode: one of PROT_READ, PROT_WRITE, PROT_EXEC indicating the mode in which
+ *   the address should be translated
+ *
+ * Return values:
+ *  0: the address was successfully translated - 'pa' contains the physical
+ *     address currently mapped by 'va'.
+ *  EFAULT: the PTE for 'VA' is unmapped. A #PF will be injected in this case
+ *     and %cr2 set in the vcpu structure.
+ *  EINVAL: an error occurred reading paging table structures
+ */
+int
+translate_gva(struct vm_exit* exit, uint64_t va, uint64_t* pa, int mode)
+{
+	int level, shift, pdidx;
+	uint64_t pte, pt_paddr, pte_paddr, mask, low_mask, high_mask;
+	uint64_t shift_width, pte_size;
+	struct vcpu_reg_state *vrs;
+
+	vrs = &exit->vrs;
+
+	if (!pa)
+		return (EINVAL);
+
+	if (!(vrs->vrs_crs[VCPU_REGS_CR0] & CR0_PG)) {
+		log_debug("%s: unpaged, va=pa=0x%llx", __func__, va);
+		*pa = va;
+		return (0);
+	}
+
+	pt_paddr = vrs->vrs_crs[VCPU_REGS_CR3];
+
+	log_debug("%s: guest %%cr0=0x%llx, %%cr3=0x%llx", __func__,
+	    vrs->vrs_crs[VCPU_REGS_CR0], vrs->vrs_crs[VCPU_REGS_CR3]);
+
+	if (vrs->vrs_crs[VCPU_REGS_CR0] & CR0_PE) {
+		if (vrs->vrs_crs[VCPU_REGS_CR4] & CR4_PAE) {
+			pte_size = sizeof(uint64_t);
+			shift_width = 9;
+
+			if (vrs->vrs_msrs[VCPU_REGS_EFER] & EFER_LMA) {
+				/* 4 level paging */
+				level = 4;
+				mask = L4_MASK;
+				shift = L4_SHIFT;
+			} else {
+				/* 32 bit with PAE paging */
+				level = 3;
+				mask = L3_MASK;
+				shift = L3_SHIFT;
+			}
+		} else {
+			/* 32 bit paging */
+			level = 2;
+			shift_width = 10;
+			mask = 0xFFC00000;
+			shift = 22;
+			pte_size = sizeof(uint32_t);
+		}
+	} else
+		return (EINVAL);
+
+	/* XXX: Check for R bit in segment selector and set A bit */
+
+	for (;level > 0; level--) {
+		pdidx = (va & mask) >> shift;
+		pte_paddr = (pt_paddr) + (pdidx * pte_size);
+
+		log_debug("%s: read pte level %d @ GPA 0x%llx", __func__,
+		    level, pte_paddr);
+		if (read_mem(pte_paddr, &pte, pte_size)) {
+			log_warn("%s: failed to read pte", __func__);
+			return (EFAULT);
+		}
+
+		log_debug("%s: PTE @ 0x%llx = 0x%llx", __func__, pte_paddr,
+		    pte);
+
+		/* XXX: Set CR2  */
+		if (!(pte & PG_V))
+			return (EFAULT);
+
+		/* XXX: Check for SMAP */
+		if ((mode == PROT_WRITE) && !(pte & PG_RW))
+			return (EPERM);
+
+		if ((exit->cpl > 0) && !(pte & PG_u))
+			return (EPERM);
+
+		pte = pte | PG_U;
+		if (mode == PROT_WRITE)
+			pte = pte | PG_M;
+		if (write_mem(pte_paddr, &pte, pte_size)) {
+			log_warn("%s: failed to write back flags to pte",
+			    __func__);
+			return (EIO);
+		}
+
+		/* XXX: EINVAL if in 32bit and  PG_PS is 1 but CR4.PSE is 0 */
+		if (pte & PG_PS)
+			break;
+
+		if (level > 1) {
+			pt_paddr = pte & PG_FRAME;
+			shift -= shift_width;
+			mask = mask >> shift_width;
+		}
+	}
+
+	low_mask = (1 << shift) - 1;
+	high_mask = (((uint64_t)1ULL << ((pte_size * 8) - 1)) - 1) ^ low_mask;
+	*pa = (pte & high_mask) | (va & low_mask);
+
+	log_debug("%s: final GPA for GVA 0x%llx = 0x%llx\n", __func__, va, *pa);
+
+	return (0);
 }

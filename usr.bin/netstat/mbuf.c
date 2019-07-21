@@ -1,4 +1,4 @@
-/*	$OpenBSD: mbuf.c,v 1.40 2017/10/28 15:25:20 mikeb Exp $	*/
+/*	$OpenBSD: mbuf.c,v 1.43 2019/07/16 17:39:02 bluhm Exp $	*/
 /*	$NetBSD: mbuf.c,v 1.9 1996/05/07 02:55:03 thorpej Exp $	*/
 
 /*
@@ -104,7 +104,7 @@ mbpr(void)
 	mib[1] = KERN_MAXCLUSTERS;
 	size = sizeof(maxclusters);
 
-	if (sysctl(mib, 2, &maxclusters, &size, NULL, 0) < 0) {
+	if (sysctl(mib, 2, &maxclusters, &size, NULL, 0) == -1) {
 		printf("Can't retrieve value of maxclusters from the "
 		    "kernel: %s\n",  strerror(errno));
 		return;
@@ -114,7 +114,7 @@ mbpr(void)
 	mib[1] = KERN_MBSTAT;
 	size = sizeof(mbstat);
 
-	if (sysctl(mib, 2, &mbstat, &size, NULL, 0) < 0) {
+	if (sysctl(mib, 2, &mbstat, &size, NULL, 0) == -1) {
 		printf("Can't retrieve mbuf statistics from the kernel: %s\n",
 		    strerror(errno));
 		return;
@@ -125,7 +125,7 @@ mbpr(void)
 	mib[2] = KERN_POOL_NPOOLS;
 	size = sizeof(npools);
 
-	if (sysctl(mib, 3, &npools, &size, NULL, 0) < 0) {
+	if (sysctl(mib, 3, &npools, &size, NULL, 0) == -1) {
 		printf("Can't figure out number of pools in kernel: %s\n",
 		    strerror(errno));
 		return;
@@ -139,7 +139,7 @@ mbpr(void)
 		mib[2] = KERN_POOL_POOL;
 		mib[3] = i;
 		size = sizeof(pool);
-		if (sysctl(mib, 4, &pool, &size, NULL, 0) < 0) {
+		if (sysctl(mib, 4, &pool, &size, NULL, 0) == -1) {
 			if (errno == ENOENT)
 				continue;
 			printf("error getting pool: %s\n",
@@ -149,7 +149,7 @@ mbpr(void)
 		npools--;
 		mib[2] = KERN_POOL_NAME;
 		size = sizeof(name);
-		if (sysctl(mib, 4, &name, &size, NULL, 0) < 0) {
+		if (sysctl(mib, 4, &name, &size, NULL, 0) == -1) {
 			printf("error getting pool name: %s\n",
 			    strerror(errno));
 			return;
@@ -184,22 +184,24 @@ mbpr(void)
 			    mbstat.m_mtypes[i],
 			    plural(mbstat.m_mtypes[i]), i);
 		}
-	totmem = (mbpool.pr_npages * mbpool.pr_pgsize);
-	totpeak = mbpool.pr_hiwat * mbpool.pr_pgsize;
+	totmem = (unsigned long)mbpool.pr_npages * mbpool.pr_pgsize;
+	totpeak = (unsigned long)mbpool.pr_hiwat * mbpool.pr_pgsize;
 	for (i = 0; i < mclp; i++) {
 		printf("%u/%lu mbuf %d byte clusters in use"
 		    " (current/peak)\n",
 		    mclpools[i].pr_nout,
 		    (unsigned long)
-			(mclpools[i].pr_hiwat * mclpools[i].pr_itemsperpage),
+		    mclpools[i].pr_hiwat * mclpools[i].pr_itemsperpage,
 		    mclpools[i].pr_size);
-		totmem += (mclpools[i].pr_npages * mclpools[i].pr_pgsize);
-		totpeak += mclpools[i].pr_hiwat * mclpools[i].pr_pgsize;
+		totmem += (unsigned long)
+		    mclpools[i].pr_npages * mclpools[i].pr_pgsize;
+		totpeak += (unsigned long)
+		    mclpools[i].pr_hiwat * mclpools[i].pr_pgsize;
 	}
 
 	printf("%lu/%lu/%lu Kbytes allocated to network "
 	    "(current/peak/max)\n", totmem / 1024, totpeak / 1024,
-	    (unsigned long)(maxclusters * MCLBYTES) / 1024);
+	    ((unsigned long)maxclusters * MCLBYTES) / 1024);
 	printf("%lu requests for memory denied\n", mbstat.m_drops);
 	printf("%lu requests for memory delayed\n", mbstat.m_wait);
 	printf("%lu calls to protocol drain routines\n", mbstat.m_drain);

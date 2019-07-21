@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sysctl.c,v 1.355 2019/05/09 14:59:30 claudio Exp $	*/
+/*	$OpenBSD: kern_sysctl.c,v 1.364 2019/07/16 17:39:02 bluhm Exp $	*/
 /*	$NetBSD: kern_sysctl.c,v 1.17 1996/05/20 17:49:05 mrg Exp $	*/
 
 /*-
@@ -128,8 +128,6 @@ extern int audio_record_enable;
 #endif
 
 int allowkmem;
-
-extern void nmbclust_update(void);
 
 int sysctl_diskinit(int, struct proc *);
 int sysctl_proc_args(int *, u_int, void *, size_t *, struct proc *);
@@ -590,11 +588,13 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (sysctl_wdog(name + 1, namelen - 1, oldp, oldlenp,
 		    newp, newlen));
 #endif
-	case KERN_MAXCLUSTERS:
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &nmbclust);
-		if (!error)
-			nmbclust_update();
+	case KERN_MAXCLUSTERS: {
+		int val = nmbclust;
+		error = sysctl_int(oldp, oldlenp, newp, newlen, &val);
+		if (error == 0 && val != nmbclust)
+			error = nmbclust_update(val);
 		return (error);
+	}
 #ifndef SMALL_KERNEL
 	case KERN_EVCOUNT:
 		return (evcount_sysctl(name + 1, namelen - 1, oldp, oldlenp,
@@ -673,6 +673,8 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	case KERN_PFSTATUS:
 		return (pf_sysctl(oldp, oldlenp, newp, newlen));
 #endif
+	case KERN_TIMEOUT_STATS:
+		return (timeout_sysctl(oldp, oldlenp, newp, newlen));
 	default:
 		return (EOPNOTSUPP);
 	}
@@ -868,16 +870,20 @@ int
 sysctl_int(void *oldp, size_t *oldlenp, void *newp, size_t newlen, int *valp)
 {
 	int error = 0;
+	int val;
 
 	if (oldp && *oldlenp < sizeof(int))
 		return (ENOMEM);
 	if (newp && newlen != sizeof(int))
 		return (EINVAL);
 	*oldlenp = sizeof(int);
+	val = *valp;
 	if (oldp)
-		error = copyout(valp, oldp, sizeof(int));
+		error = copyout(&val, oldp, sizeof(int));
 	if (error == 0 && newp)
-		error = copyin(newp, valp, sizeof(int));
+		error = copyin(newp, &val, sizeof(int));
+	if (error == 0)
+		*valp = val;
 	return (error);
 }
 
@@ -1148,8 +1154,19 @@ fill_file(struct kinfo_file *kf, struct file *fp, struct filedesc *fdp,
 		break;
 
 	case DTYPE_SOCKET: {
-		if (so == NULL)
+		int locked = 0;
+
+		if (so == NULL) {
 			so = (struct socket *)fp->f_data;
+			/* if so is passed as parameter it is already locked */
+			switch (so->so_proto->pr_domain->dom_family) {
+			case AF_INET:
+			case AF_INET6:
+				NET_LOCK();
+				locked = 1;
+				break;
+			}
+		}
 
 		kf->so_type = so->so_type;
 		kf->so_state = so->so_state;
@@ -1168,12 +1185,16 @@ fill_file(struct kinfo_file *kf, struct file *fp, struct filedesc *fdp,
 			kf->so_splicelen = so->so_sp->ssp_len;
 		} else if (issplicedback(so))
 			kf->so_splicelen = -1;
-		if (!so->so_pcb)
+		if (so->so_pcb == NULL) {
+			if (locked)
+				NET_UNLOCK();
 			break;
+		}
 		switch (kf->so_family) {
 		case AF_INET: {
 			struct inpcb *inpcb = so->so_pcb;
 
+			NET_ASSERT_LOCKED();
 			if (show_pointers)
 				kf->inp_ppcb = PTRTOINT64(inpcb->inp_ppcb);
 			kf->inp_lport = inpcb->inp_lport;
@@ -1195,6 +1216,7 @@ fill_file(struct kinfo_file *kf, struct file *fp, struct filedesc *fdp,
 		case AF_INET6: {
 			struct inpcb *inpcb = so->so_pcb;
 
+			NET_ASSERT_LOCKED();
 			if (show_pointers)
 				kf->inp_ppcb = PTRTOINT64(inpcb->inp_ppcb);
 			kf->inp_lport = inpcb->inp_lport;
@@ -1240,6 +1262,8 @@ fill_file(struct kinfo_file *kf, struct file *fp, struct filedesc *fdp,
 			break;
 		    }
 		}
+		if (locked)
+			NET_UNLOCK();
 		break;
 	    }
 

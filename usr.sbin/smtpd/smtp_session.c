@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtp_session.c,v 1.389 2019/02/20 11:56:27 gilles Exp $	*/
+/*	$OpenBSD: smtp_session.c,v 1.400 2019/07/11 21:40:03 gilles Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -939,6 +939,7 @@ smtp_session_imsg(struct mproc *p, struct imsg *imsg)
 			    "result=ok",
 			    s->id, user);
 			s->flags |= SF_AUTHENTICATED;
+			report_smtp_link_auth("smtp-in", s->id, user, "pass");
 			smtp_reply(s, "235 %s: Authentication succeeded",
 			    esc_code(ESC_STATUS_OK, ESC_OTHER_STATUS));
 		}
@@ -947,6 +948,7 @@ smtp_session_imsg(struct mproc *p, struct imsg *imsg)
 			    "authentication user=%s "
 			    "result=permfail",
 			    s->id, user);
+			report_smtp_link_auth("smtp-in", s->id, user, "fail");
 			smtp_auth_failure_pause(s);
 			return;
 		}
@@ -955,6 +957,7 @@ smtp_session_imsg(struct mproc *p, struct imsg *imsg)
 			    "authentication user=%s "
 			    "result=tempfail",
 			    s->id, user);
+			report_smtp_link_auth("smtp-in", s->id, user, "error");
 			smtp_reply(s, "421 %s: Temporary failure",
 			    esc_code(ESC_STATUS_TEMPFAIL, ESC_OTHER_MAIL_SYSTEM_STATUS));
 		}
@@ -1031,7 +1034,7 @@ smtp_tls_verified(struct smtp_session *s)
 {
 	X509 *x;
 
-	x = SSL_get_peer_certificate(io_ssl(s->io));
+	x = SSL_get_peer_certificate(io_tls(s->io));
 	if (x) {
 		log_info("%016"PRIx64" smtp "
 		    "client-cert-check result=\"%s\"",
@@ -1066,9 +1069,9 @@ smtp_io(struct io *io, int evt, void *arg)
 
 	case IO_TLSREADY:
 		log_info("%016"PRIx64" smtp tls ciphers=%s",
-		    s->id, ssl_to_text(io_ssl(s->io)));
+		    s->id, ssl_to_text(io_tls(s->io)));
 
-		report_smtp_link_tls("smtp-in", s->id, ssl_to_text(io_ssl(s->io)));
+		report_smtp_link_tls("smtp-in", s->id, ssl_to_text(io_tls(s->io)));
 
 		s->flags |= SF_SECURE;
 		s->helo[0] = '\0';
@@ -1092,6 +1095,15 @@ smtp_io(struct io *io, int evt, void *arg)
 		/* No complete line received */
 		if (line == NULL)
 			return;
+
+		if (strchr(line, '\r')) {
+			s->flags |= SF_BADINPUT;
+			smtp_reply(s, "500 %s: <CR> is only allowed before <LF>",
+			    esc_code(ESC_STATUS_PERMFAIL, ESC_OTHER_STATUS));
+			smtp_enter_state(s, STATE_QUIT);
+			io_set_write(io);
+			return;
+		}
 
 		/* Message body */
 		eom = 0;
@@ -1191,19 +1203,26 @@ smtp_command(struct smtp_session *s, char *line)
 	int				cmd, i;
 
 	log_trace(TRACE_SMTP, "smtp: %p: <<< %s", s, line);
-	report_smtp_protocol_client("smtp-in", s->id, line);
 
 	/*
 	 * These states are special.
 	 */
 	if (s->state == STATE_AUTH_INIT) {
+		report_smtp_protocol_client("smtp-in", s->id, "********");
 		smtp_rfc4954_auth_plain(s, line);
 		return;
 	}
 	if (s->state == STATE_AUTH_USERNAME || s->state == STATE_AUTH_PASSWORD) {
+		report_smtp_protocol_client("smtp-in", s->id, "********");
 		smtp_rfc4954_auth_login(s, line);
 		return;
 	}
+
+	if (s->state == STATE_HELO && strncasecmp(line, "AUTH PLAIN ", 11) == 0)
+		report_smtp_protocol_client("smtp-in", s->id, "AUTH PLAIN ********");
+	else
+		report_smtp_protocol_client("smtp-in", s->id, line);
+
 
 	/*
 	 * Unlike other commands, "mail from" and "rcpt to" contain a
@@ -1705,6 +1724,8 @@ smtp_proceed_rset(struct smtp_session *s, const char *args)
 		smtp_tx_free(s->tx);
 	}
 
+	report_smtp_link_reset("smtp-in", s->id);
+
 	smtp_reply(s, "250 %s: Reset state",
 	    esc_code(ESC_STATUS_OK, ESC_OTHER_STATUS));
 }
@@ -1715,7 +1736,7 @@ smtp_proceed_helo(struct smtp_session *s, const char *args)
 	(void)strlcpy(s->helo, args, sizeof(s->helo));
 	s->flags &= SF_SECURE | SF_AUTHENTICATED | SF_VERIFIED;
 
-	report_smtp_link_identify("smtp-in", s->id, s->helo);
+	report_smtp_link_identify("smtp-in", s->id, "HELO", s->helo);
 
 	smtp_enter_state(s, STATE_HELO);
 	smtp_reply(s, "250 %s Hello %s [%s], pleased to meet you",
@@ -1732,7 +1753,7 @@ smtp_proceed_ehlo(struct smtp_session *s, const char *args)
 	s->flags |= SF_EHLO;
 	s->flags |= SF_8BITMIME;
 
-	report_smtp_link_identify("smtp-in", s->id, s->helo);
+	report_smtp_link_identify("smtp-in", s->id, "EHLO", s->helo);
 
 	smtp_enter_state(s, STATE_HELO);
 	smtp_reply(s, "250-%s Hello %s [%s], pleased to meet you",
@@ -2037,7 +2058,7 @@ smtp_reply(struct smtp_session *s, char *fmt, ...)
 	va_start(ap, fmt);
 	n = vsnprintf(buf, sizeof buf, fmt, ap);
 	va_end(ap);
-	if (n == -1 || n >= LINE_MAX)
+	if (n < 0 || n >= LINE_MAX)
 		fatalx("smtp_reply: line too long");
 	if (n < 4)
 		fatalx("smtp_reply: response too short");
@@ -2240,7 +2261,7 @@ smtp_cert_verify(struct smtp_session *s)
 		fallback = 1;
 	}
 
-	if (cert_verify(io_ssl(s->io), name, fallback, smtp_cert_verify_cb, s)) {
+	if (cert_verify(io_tls(s->io), name, fallback, smtp_cert_verify_cb, s)) {
 		tree_xset(&wait_ssl_verify, s->id, s);
 		io_pause(s->io, IO_IN);
 	}
@@ -2685,7 +2706,7 @@ smtp_tx_filtered_dataline(struct smtp_tx *tx, const char *line)
 		if (tx->error)
 			return 0;
 	}
-	io_printf(tx->filter, "%s\r\n", line ? line : ".");
+	io_printf(tx->filter, "%s\n", line ? line : ".");
 	return line ? 0 : 1;
 }
 
@@ -2789,11 +2810,11 @@ smtp_message_begin(struct smtp_tx *tx)
 	    tx->msgid);
 
 	if (s->flags & SF_SECURE) {
-		x = SSL_get_peer_certificate(io_ssl(s->io));
+		x = SSL_get_peer_certificate(io_tls(s->io));
 		m_printf(tx, " (%s:%s:%d:%s)",
-		    SSL_get_version(io_ssl(s->io)),
-		    SSL_get_cipher_name(io_ssl(s->io)),
-		    SSL_get_cipher_bits(io_ssl(s->io), NULL),
+		    SSL_get_version(io_tls(s->io)),
+		    SSL_get_cipher_name(io_tls(s->io)),
+		    SSL_get_cipher_bits(io_tls(s->io), NULL),
 		    (s->flags & SF_VERIFIED) ? "YES" : (x ? "FAIL" : "NO"));
 		X509_free(x);
 
@@ -2903,7 +2924,7 @@ smtp_message_printf(struct smtp_tx *tx, const char *fmt, ...)
 	len = vfprintf(tx->ofile, fmt, ap);
 	va_end(ap);
 
-	if (len < 0) {
+	if (len == -1) {
 		log_warn("smtp-in: session %016"PRIx64": vfprintf", tx->session->id);
 		tx->error = TX_ERROR_IO;
 	}

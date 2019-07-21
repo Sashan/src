@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: Add.pm,v 1.179 2018/12/13 12:48:53 espie Exp $
+# $OpenBSD: Add.pm,v 1.182 2019/07/10 11:15:15 espie Exp $
 #
 # Copyright (c) 2003-2014 Marc Espie <espie@openbsd.org>
 #
@@ -415,7 +415,7 @@ sub find_extractible
 sub prepare_for_addition
 {
 	my ($self, $state, $pkgname) = @_;
-	my $fname = $state->{destdir}.$self->fullname;
+	my $fname = $self->retrieve_fullname($state, $pkgname);
 	# check for collisions with existing stuff
 	if ($state->vstat->exists($fname)) {
 		push(@{$state->{colliding}}, $self);
@@ -424,8 +424,8 @@ sub prepare_for_addition
 		return;
 	}
 	return if $state->defines('stub');
-	my $s = $state->vstat->add($fname, $self->{tieto} ? 0 : $self->{size},
-	    $pkgname);
+	my $s = $state->vstat->add($fname, 
+	    $self->{tieto} ? 0 : $self->retrieve_size, $pkgname);
 	return unless defined $s;
 	if ($s->ro) {
 		$s->report_ro($state, $fname);
@@ -450,9 +450,32 @@ sub prepare_to_extract
 	$file->{destdir} = $destdir;
 }
 
+sub find_safe_dir
+{
+	my ($self, $filename) = @_;
+	# figure out a safe directory where to put the temp file
+	my $d = dirname($filename);
+
+	# we go back up until we find an existing directory.
+	# hopefully this will be on the same file system.
+	my @candidates = ();
+	while (!-d $d) {
+		push(@candidates, $d);
+		$d = dirname($d);
+	}
+	# and now we try to go back down, creating the best path we can
+	while (@candidates > 0) {
+		my $c = pop @candidates;
+		last if -e $c; # okay this exists, but is not a directory
+		$d = $c;
+	}
+	return $d;
+}
+
 sub create_temp
 {
 	my ($self, $d, $state, $fullname) = @_;
+	# XXX this takes over right after find_safe_dir
 	if (!-e _) {
 		$state->make_path($d, $fullname);
 	}
@@ -461,9 +484,10 @@ sub create_temp
 	if (!defined $tempname) {
 		if ($state->allow_nonroot($fullname)) {
 			$state->errsay("Can't create temp file outside localbase for #1", $fullname);
+			$state->errsay(OpenBSD::Temp->last_error);
 			return undef;
 		}
-		$state->fatal("create temporary file in #1: #2", $d, $!);
+		$state->fatal(OpenBSD::Temp->last_error);
 	}
 	return ($fh, $tempname);
 }
@@ -477,13 +501,7 @@ sub tie
 
 	$self->SUPER::extract($state);
 
-	# figure out a safe directory where to put the temp file
-	my $d = dirname($state->{destdir}.$self->fullname);
-	# we go back up until we find an existing directory.
-	# hopefully this will be on the same file system.
-	while (!-d $d && -e _) {
-		$d = dirname($d);
-	}
+	my $d = $self->find_safe_dir($state->{destdir}.$self->fullname);
 	if ($state->{not}) {
 		$state->say("link #1 -> #2", 
 		    $self->name, $d) if $state->verbose >= 3;
@@ -506,13 +524,7 @@ sub extract
 
 	$self->SUPER::extract($state);
 
-	# figure out a safe directory where to put the temp file
-	my $d = dirname($file->{destdir}.$file->name);
-	# we go back up until we find an existing directory.
-	# hopefully this will be on the same file system.
-	while (!-d $d && -e _) {
-		$d = dirname($d);
-	}
+	my $d = $self->find_safe_dir($file->{destdir}.$file->name);
 	if ($state->{not}) {
 		$state->say("extract #1 -> #2", 
 		    $self->name, $d) if $state->verbose >= 3;
@@ -809,26 +821,6 @@ sub install
 package OpenBSD::PackingElement::SpecialFile;
 use OpenBSD::PackageInfo;
 use OpenBSD::Error;
-
-sub prepare_for_addition
-{
-	my ($self, $state, $pkgname) = @_;
-
-	my $fname = installed_info($pkgname).$self->name;
-	my $cname = $self->fullname;
-	my $size = $self->{size};
-	if (!defined $size) {
-		$size = (stat $cname)[7];
-	}
-	my $s = $state->vstat->add($fname, $self->{size}, $pkgname);
-	return unless defined $s;
-	if ($s->ro) {
-		$s->report_ro($state, $fname);
-	}
-	if ($s->avail < 0) {
-		$s->report_overflow($state, $fname);
-	}
-}
 
 sub copy_info
 {

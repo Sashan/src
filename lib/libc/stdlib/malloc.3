@@ -30,9 +30,9 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\"	$OpenBSD: malloc.3,v 1.123 2019/05/10 15:03:24 otto Exp $
+.\"	$OpenBSD: malloc.3,v 1.125 2019/05/19 15:30:21 schwarze Exp $
 .\"
-.Dd $Mdocdate: May 10 2019 $
+.Dd $Mdocdate: May 19 2019 $
 .Dt MALLOC 3
 .Os
 .Sh NAME
@@ -270,6 +270,8 @@ and finally looks at the global variable
 in the program.
 Each is scanned for the flags documented below.
 Unless otherwise noted uppercase means on, lowercase means off.
+During initialization, flags occurring later modify the behaviour
+that was requested by flags processed earlier.
 .Bl -tag -width indent
 .It Cm C
 .Dq Canaries .
@@ -755,6 +757,12 @@ The
 .Fn aligned_alloc
 function appeared in
 .Ox 6.5 .
+The
+.Fn malloc_conceal
+and
+.Fn calloc_conceal
+functions appeared in
+.Ox 6.6 .
 .Sh CAVEATS
 When using
 .Fn malloc ,

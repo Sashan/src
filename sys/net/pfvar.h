@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfvar.h,v 1.490 2019/02/18 13:11:44 bluhm Exp $ */
+/*	$OpenBSD: pfvar.h,v 1.492 2019/07/09 11:30:19 yasuoka Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -1162,6 +1162,7 @@ struct pfi_kif {
 	int				 pfik_states;
 	int				 pfik_rules;
 	int				 pfik_routes;
+	int				 pfik_srcnodes;
 	TAILQ_HEAD(, pfi_dynaddr)	 pfik_dynaddrs;
 };
 
@@ -1169,7 +1170,8 @@ enum pfi_kif_refs {
 	PFI_KIF_REF_NONE,
 	PFI_KIF_REF_STATE,
 	PFI_KIF_REF_RULE,
-	PFI_KIF_REF_ROUTE
+	PFI_KIF_REF_ROUTE,
+	PFI_KIF_REF_SRCNODE
 };
 
 #define PFI_IFLAG_SKIP		0x0100	/* skip filtering on interface */
@@ -1712,7 +1714,7 @@ extern int			 pf_state_insert(struct pfi_kif *,
 int				 pf_insert_src_node(struct pf_src_node **,
 				    struct pf_rule *, enum pf_sn_types,
 				    sa_family_t, struct pf_addr *,
-				    struct pf_addr *);
+				    struct pf_addr *, struct pfi_kif *);
 void				 pf_remove_src_node(struct pf_src_node *);
 struct pf_src_node		*pf_get_src_node(struct pf_state *,
 				    enum pf_sn_types);

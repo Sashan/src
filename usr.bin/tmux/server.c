@@ -1,4 +1,4 @@
-/* $OpenBSD: server.c,v 1.184 2019/04/17 14:37:48 nicm Exp $ */
+/* $OpenBSD: server.c,v 1.187 2019/06/20 06:51:36 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -44,7 +44,7 @@
 struct clients		 clients;
 
 struct tmuxproc		*server_proc;
-static int		 server_fd;
+static int		 server_fd = -1;
 static int		 server_exit;
 static struct event	 server_ev_accept;
 
@@ -144,18 +144,6 @@ fail:
 	return (-1);
 }
 
-/* Server error callback. */
-static enum cmd_retval
-server_start_error(struct cmdq_item *item, void *data)
-{
-	char	*error = data;
-
-	cmdq_error(item, "%s", error);
-	free(error);
-
-	return (CMD_RETURN_NORMAL);
-}
-
 /* Fork new server. */
 int
 server_start(struct tmuxproc *client, struct event_base *base, int lockfd,
@@ -217,13 +205,12 @@ server_start(struct tmuxproc *client, struct event_base *base, int lockfd,
 	}
 
 	if (cause != NULL) {
-		cmdq_append(c, cmdq_get_callback(server_start_error, cause));
+		cmdq_append(c, cmdq_get_error(cause));
+		free(cause);
 		c->flags |= CLIENT_EXIT;
 	}
 
-	start_cfg();
 	server_add_accept(0);
-
 	proc_loop(server_proc, server_loop);
 
 	job_kill_all();
@@ -374,6 +361,9 @@ void
 server_add_accept(int timeout)
 {
 	struct timeval tv = { timeout, 0 };
+
+	if (server_fd == -1)
+		return;
 
 	if (event_initialized(&server_ev_accept))
 		event_del(&server_ev_accept);

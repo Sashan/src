@@ -1,5 +1,4 @@
-/* XXX - DSR */
-/*	$OpenBSD: loadfile_machdep.h,v 1.7 2019/04/10 04:17:33 deraadt Exp $	*/
+/*	$OpenBSD: loadfile_machdep.h,v 1.9 2019/05/28 04:51:26 mlarkin Exp $	*/
 /*	$NetBSD: loadfile_machdep.h,v 1.1 1999/04/29 03:17:12 tsubai Exp $	*/
 
 /*-
@@ -46,7 +45,7 @@ extern u_long			efi_loadaddr;
 #define LOADADDR(a)		(((((u_long)(a)) + offset)&0xfffffff) + \
 				    efi_loadaddr)
 #else
-#define LOADADDR(a)		((((u_long)(a)) + offset)&0xfffffff)
+#define LOADADDR(a)		((a) + offset)
 #endif
 #define ALIGNENTRY(a)		((u_long)(a))
 #define READ(f, b, c)		read((f), (void *)LOADADDR(b), (c))
