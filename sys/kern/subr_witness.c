@@ -245,7 +245,7 @@ struct witness {
 	unsigned		w_acquired:1;
 	unsigned		w_displayed:1;
 	unsigned		w_reversed:1;
-	struct stack_db		*w_stack_db;
+	struct db_stack_aggr	*w_stack_aggr;
 };
 
 SIMPLEQ_HEAD(witness_list, witness);
@@ -1120,6 +1120,7 @@ witness_srp_enter(struct lock_object *lock)
 {
 	struct lock_list_entry **lock_list, *lle;
 	struct lock_instance *instance;
+	struct witness *w;
 	int	s;
 
 	s = splhigh();
@@ -1487,9 +1488,13 @@ witness_warn(int flags, struct lock_object *lock, const char *fmt, ...)
 	return (n);
 }
 
-static void
+void
 witness_init_srp(struct witness *w)
 {
+	/*
+	 * up to 64 different stacks, each 8 frames deep.
+	 */
+	w->w_stack_aggr = db_stack_create_aggr(64, 8);
 }
 
 static struct witness *
