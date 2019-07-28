@@ -119,9 +119,9 @@ extern struct rwlock	pf_state_lock;
 	} while (0)
 
 #define PF_ASSERT_LOCKED()	do {			\
-		if (rw_status(&pf_lock) != RW_WRITE)	\
-			splassert_fail(RW_WRITE,	\
-			    rw_status(&pf_lock),__func__);\
+		if (RWLOCK_OWNER(&pf_lock) != curproc)	\
+			panic("%s pf_lock: not owner\n",\
+			    __func__);			\
 	} while (0)
 
 #define PF_ASSERT_UNLOCKED()	do {			\
