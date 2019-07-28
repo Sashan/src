@@ -1,4 +1,4 @@
-/*	$OpenBSD: clparse.c,v 1.189 2019/07/20 17:14:15 krw Exp $	*/
+/*	$OpenBSD: clparse.c,v 1.193 2019/07/23 14:09:47 krw Exp $	*/
 
 /* Parser for dhclient config and lease files. */
 
@@ -260,7 +260,6 @@ parse_conf_decl(FILE *cfile, char *name)
 	char			*val;
 	enum actions 		*p;
 	int			 action, count, i, token;
-	uint32_t		 t;
 
 	token = next_token(NULL, cfile);
 
@@ -274,9 +273,9 @@ parse_conf_decl(FILE *cfile, char *name)
 		config->default_actions[i] = action;
 		break;
 	case TOK_BACKOFF_CUTOFF:
-		if (parse_number(cfile, (unsigned char *)&t, 'L') == 0)
+		if (parse_number(cfile, &config->backoff_cutoff, 0, INT32_MAX)
+		    == 0)
 			return;
-		config->backoff_cutoff = ntohl(t);
 		break;
 	case TOK_DEFAULT:
 		if (parse_option(cfile, &i, config->defaults) == 0)
@@ -284,7 +283,7 @@ parse_conf_decl(FILE *cfile, char *name)
 		config->default_actions[i] = ACTION_DEFAULT;
 		break;
 	case TOK_FILENAME:
-		if (parse_string(cfile, NULL, &val) == 0)
+		if (parse_string(cfile, &val) == 0)
 			return;
 		free(config->filename);
 		config->filename = val;
@@ -309,17 +308,17 @@ parse_conf_decl(FILE *cfile, char *name)
 		}
 		break;
 	case TOK_INITIAL_INTERVAL:
-		if (parse_number(cfile, (unsigned char *)&t, 'L') == 0)
+		if (parse_number(cfile, &config->initial_interval, 0, INT32_MAX)
+		    == 0)
 			return;
-		config->initial_interval = ntohl(t);
 		break;
 	case TOK_INTERFACE:
 		parse_interface(cfile, name);
 		return;
 	case TOK_LINK_TIMEOUT:
-		if (parse_number(cfile, (unsigned char *)&t, 'L') == 0)
+		if (parse_number(cfile, &config->link_timeout, 0, INT32_MAX)
+		    == 0)
 			return;
-		config->link_timeout = ntohl(t);
 		break;
 	case TOK_NEXT_SERVER:
 		if (parse_ip_addr(cfile, &config->next_server) == 0)
@@ -334,9 +333,9 @@ parse_conf_decl(FILE *cfile, char *name)
 		config->default_actions[i] = action;
 		break;
 	case TOK_REBOOT:
-		if (parse_number(cfile, (unsigned char *)&t, 'L') == 0)
+		if (parse_number(cfile, &config->reboot_timeout, 0, INT32_MAX)
+		    == 0)
 			return;
-		config->reboot_timeout = ntohl(t);
 		break;
 	case TOK_REJECT:
 		if (parse_reject_statement(cfile) == 0)
@@ -353,21 +352,21 @@ parse_conf_decl(FILE *cfile, char *name)
 			return;
 		break;
 	case TOK_RETRY:
-		if (parse_number(cfile, (unsigned char *)&t, 'L') == 0)
+		if (parse_number(cfile, &config->retry_interval, 0, INT32_MAX)
+		    == 0)
 			return;
-		config->retry_interval = ntohl(t);
 		break;
 	case TOK_SELECT_TIMEOUT:
-		if (parse_number(cfile, (unsigned char *)&t, 'L') == 0)
+		if (parse_number(cfile, &config->select_interval, 0, INT32_MAX)
+		    == 0)
 			return;
-		config->select_interval = ntohl(t);
 		break;
 	case TOK_SEND:
 		if (parse_option(cfile, &i, config->send_options) == 0)
 			return;
 		break;
 	case TOK_SERVER_NAME:
-		if (parse_string(cfile, NULL, &val) == 0)
+		if (parse_string(cfile, &val) == 0)
 			return;
 		free(config->server_name);
 		config->server_name = val;
@@ -378,9 +377,8 @@ parse_conf_decl(FILE *cfile, char *name)
 		config->default_actions[i] = ACTION_SUPERSEDE;
 		break;
 	case TOK_TIMEOUT:
-		if (parse_number(cfile, (unsigned char *)&t, 'L') == 0)
+		if (parse_number(cfile, &config->timeout, 0, INT32_MAX) == 0)
 			return;
-		config->timeout = ntohl(t);
 		break;
 	case TOK_USELEASE:
 		memset(list, 0, sizeof(list));
@@ -466,7 +464,7 @@ parse_domain_list(FILE *cfile, int *len, char **dp)
 	count = 0;
 
 	do {
-		if (parse_string(cfile, NULL, &domain) == 0)
+		if (parse_string(cfile, &domain) == 0)
 			return 0;
 
 		count++;
@@ -686,17 +684,16 @@ parse_lease_decl(FILE *cfile, struct client_lease *lease)
 		/* 'bootp' is just a comment. See BOOTP_LEASE(). */
 		break;
 	case TOK_EPOCH:
-		if (parse_number(cfile, (unsigned char *)&lease->epoch, 't')
+		if (parse_number(cfile, &lease->epoch, INT64_MIN, INT64_MAX)
 		    == 0)
 			return;
-		lease->epoch = betoh64(lease->epoch);
 		break;
 	case TOK_EXPIRE:
 		/* 'expire' is just a comment. See 'epoch'. */
 		skip_to_semi(cfile);
 		return;
 	case TOK_FILENAME:
-		if (parse_string(cfile, NULL, &val) == 0)
+		if (parse_string(cfile, &val) == 0)
 			return;
 		free(lease->filename);
 		lease->filename = val;
@@ -723,14 +720,15 @@ parse_lease_decl(FILE *cfile, struct client_lease *lease)
 		skip_to_semi(cfile);
 		return;
 	case TOK_SERVER_NAME:
-		if (parse_string(cfile, NULL, &val) == 0)
+		if (parse_string(cfile, &val) == 0)
 			return;
 		free(lease->server_name);
 		lease->server_name = val;
 		break;
 	case TOK_SSID:
-		if (parse_string(cfile, &len, &val) == 0)
+		if (parse_string(cfile, &val) == 0)
 			return;
+		len = strlen(val);
 		if (len > sizeof(lease->ssid)) {
 			free(val);
 			parse_warn("ssid > 32 bytes");
@@ -776,6 +774,7 @@ parse_option(FILE *cfile, int *code, struct option_data *options)
 	struct in_addr		 ip_addr;
 	uint8_t			*dp;
 	char			*fmt, *val;
+	long long		 number;
 	unsigned int		 hunkix = 0;
 	int			 i, freedp, len, token;
 	int			 nul_term = 0;
@@ -797,18 +796,19 @@ parse_option(FILE *cfile, int *code, struct option_data *options)
 			switch (*fmt) {
 			case 'X':
 				if (peek_token(NULL, cfile) == TOK_STRING) {
-					if (parse_string(cfile, &len,
-					    (char **)&dp) == 0)
+					if (parse_string(cfile, (char **)&dp)
+					    == 0)
 						return 0;
+					len = strlen(dp);
 				} else if (parse_hex_octets(cfile, &len, &dp)
 				    == 0)
 					return 0;
 				freedp = 1;
 				break;
 			case 't': /* Text string. */
-				if (parse_string(cfile, &len, (char **)&dp)
-				    == 0)
+				if (parse_string(cfile, (char **)&dp) == 0)
 					return 0;
+				len = strlen(dp);
 				freedp = 1;
 				break;
 			case 'I': /* IP address. */
@@ -818,26 +818,34 @@ parse_option(FILE *cfile, int *code, struct option_data *options)
 				dp = (uint8_t *)&ip_addr;
 				break;
 			case 'l':	/* Signed 32-bit integer. */
-				if (parse_number(cfile, buf, 'l') == 0)
+				if (parse_number(cfile, &number, INT32_MIN,
+				    INT32_MAX) == 0)
 					return 0;
-				len = 4;
+				number = htobe64(number);
+				len = sizeof(int32_t);
+				memcpy(buf, (char *)&number + (sizeof(number) - len), len);
 				dp = buf;
 				break;
 			case 'L':	/* Unsigned 32-bit integer. */
-				if (parse_number(cfile, buf, 'L') == 0)
+				if (parse_number(cfile, &number, 0, UINT32_MAX) == 0)
 					return 0;
-				len = 4;
+				number = htobe64(number);
+				len = sizeof(uint32_t);
+				memcpy(buf, (char *)&number + (sizeof(number) - len), len);
 				dp = buf;
 				break;
 			case 'S':	/* Unsigned 16-bit integer. */
-				if (parse_number(cfile, buf, 'S') == 0)
+				if (parse_number(cfile, &number, 0, UINT16_MAX) == 0)
 					return 0;
-				len = 2;
+				number = htobe64(number);
+				len = sizeof(uint16_t);
+				memcpy(buf, (char *)&number + (sizeof(number) - len), len);
 				dp = buf;
 				break;
 			case 'B':	/* Unsigned 8-bit integer. */
-				if (parse_number(cfile, buf, 'B') == 0)
+				if (parse_number(cfile, &number, 0, UINT8_MAX) == 0)
 					return 0;
+				buf[0] = number;
 				len = 1;
 				dp = buf;
 				break;
@@ -861,14 +869,13 @@ parse_option(FILE *cfile, int *code, struct option_data *options)
 				} else if (parse_hex_octets(cfile, &len, &dp)
 				    == 0) {
 					return 0;
-				} else {
-					val = rfc1035_as_string(dp, len);
-					free(dp);
-					dp = strdup(val);
-					if (dp == NULL)
-						fatal("RFC1035 hex octets");
-					len = strlen(dp) + 1;
 				}
+				val = rfc1035_as_string(dp, len);
+				free(dp);
+				dp = strdup(val);
+				if (dp == NULL)
+					fatal("RFC1035 hex octets");
+				len = strlen(dp) + 1;
 				freedp = 1;
 				break;
 			default:
