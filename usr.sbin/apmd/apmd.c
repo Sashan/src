@@ -1,4 +1,4 @@
-/*	$OpenBSD: apmd.c,v 1.85 2019/06/28 13:32:46 deraadt Exp $	*/
+/*	$OpenBSD: apmd.c,v 1.88 2019/07/25 07:29:44 kn Exp $	*/
 
 /*
  *  Copyright (c) 1995, 1996 John T. Kohl
@@ -56,9 +56,6 @@
 
 #define AUTO_SUSPEND 1
 #define AUTO_HIBERNATE 2
-
-const char apmdev[] = _PATH_APM_CTLDEV;
-const char sockfile[] = _PATH_APM_SOCKET;
 
 int debug = 0;
 
@@ -204,7 +201,7 @@ power_status(int fd, int force, struct apm_power_info *pinfo)
 		if (pinfo)
 			*pinfo = bstate;
 	} else
-		logmsg(LOG_ERR, "cannot fetch power status: %m");
+		logmsg(LOG_ERR, "cannot fetch power status: %s", strerror(errno));
 
 	return acon;
 }
@@ -375,7 +372,7 @@ resumed(int ctl_fd)
 int
 main(int argc, char *argv[])
 {
-	const char *fname = apmdev;
+	const char *fname = _PATH_APM_CTLDEV;
 	int ctl_fd, sock_fd, ch, suspends, standbys, hibernates, resumes;
 	int autoaction = 0;
 	int autolimit = 0;
@@ -385,7 +382,7 @@ main(int argc, char *argv[])
 	struct timespec ts = {TIMO, 0}, sts = {0, 0};
 	struct apm_power_info pinfo;
 	time_t apmtimeout = 0;
-	const char *sockname = sockfile;
+	const char *sockname = _PATH_APM_SOCKET;
 	const char *errstr;
 	int kq, nchanges;
 	struct kevent ev[2];
@@ -686,7 +683,7 @@ do_etc_file(const char *file)
 	case 0:
 		/* We are the child. */
 		execl(file, prog, (char *)NULL);
-		logmsg(LOG_ERR, "failed to exec %s: %m", file, strerror(errno));
+		logmsg(LOG_ERR, "failed to exec %s: %s", file, strerror(errno));
 		_exit(1);
 		/* NOTREACHED */
 	default:
