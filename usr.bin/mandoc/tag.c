@@ -1,4 +1,4 @@
-/*	$OpenBSD: tag.c,v 1.23 2019/07/19 20:25:21 schwarze Exp $ */
+/*	$OpenBSD: tag.c,v 1.25 2019/07/27 13:40:42 schwarze Exp $ */
 /*
  * Copyright (c) 2015, 2016, 2018, 2019 Ingo Schwarze <schwarze@openbsd.org>
  *
@@ -51,7 +51,7 @@ static struct tag_files	 tag_files;
  * but for simplicity, create it anyway.
  */
 struct tag_files *
-tag_init(void)
+tag_init(char *tagname)
 {
 	struct sigaction	 sa;
 	int			 ofd;
@@ -59,6 +59,7 @@ tag_init(void)
 	ofd = -1;
 	tag_files.tfd = -1;
 	tag_files.tcpgid = -1;
+	tag_files.tagname = tagname;
 
 	/* Clean up when dying from a signal. */
 
@@ -127,6 +128,7 @@ fail:
 	*tag_files.tfn = '\0';
 	tag_files.ofd = -1;
 	tag_files.tfd = -1;
+	tag_files.tagname = NULL;
 	return NULL;
 }
 
@@ -149,11 +151,11 @@ tag_put(const char *s, int prio, size_t line)
 		s += 2;
 
 	/*
-	 * Skip whitespace and whatever follows it,
+	 * Skip whitespace and escapes and whatever follows,
 	 * and if there is any, downgrade the priority.
 	 */
 
-	len = strcspn(s, " \t");
+	len = strcspn(s, " \t\\");
 	if (len == 0)
 		return;
 

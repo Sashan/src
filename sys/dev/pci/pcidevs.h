@@ -2,7 +2,7 @@
  * THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
  *
  * generated from:
- *	OpenBSD: pcidevs,v 1.1890 2019/06/14 11:40:36 jsg Exp 
+ *	OpenBSD: pcidevs,v 1.1892 2019/07/28 11:01:10 jmatthew Exp 
  */
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
 
@@ -3762,6 +3762,7 @@
 #define	PCI_PRODUCT_INTEL_CORE5G_M_GT3_28W	0x162b		/* Iris Graphics 6100 */
 #define	PCI_PRODUCT_INTEL_CORE5G_D_GT3_2	0x162d		/* HD Graphics */
 #define	PCI_PRODUCT_INTEL_CORE5G_M_GT3_4	0x162e		/* HD Graphics */
+#define	PCI_PRODUCT_INTEL_ADAPTIVE_VF	0x1889		/* Adaptive VF */
 #define	PCI_PRODUCT_INTEL_CORE6G_H_HB_D	0x1900		/* Core 6G Host */
 #define	PCI_PRODUCT_INTEL_CORE6G_H_PCIE_X16	0x1901		/* Core 6G PCIE */
 #define	PCI_PRODUCT_INTEL_CORE6G_S_GT1	0x1902		/* HD Graphics 510 */
@@ -4662,6 +4663,7 @@
 #define	PCI_PRODUCT_INTEL_7300_FBD_0	0x360f		/* 7300 FBD */
 #define	PCI_PRODUCT_INTEL_7300_FBD_1	0x3610		/* 7300 FBD */
 #define	PCI_PRODUCT_INTEL_X722_10G_KX	0x37ce		/* X722 KX */
+#define	PCI_PRODUCT_INTEL_X722_VF	0x37cd		/* X722 VF */
 #define	PCI_PRODUCT_INTEL_X722_10G_QSFP	0x37cf		/* X722 QSFP+ */
 #define	PCI_PRODUCT_INTEL_X722_10G_SFP_1	0x37d0		/* X722 SFP+ */
 #define	PCI_PRODUCT_INTEL_X722_1G	0x37d1		/* X722 1GbE */
@@ -7572,6 +7574,8 @@
 #define	PCI_PRODUCT_SUN_CASSINI	0xabba		/* Cassini */
 #define	PCI_PRODUCT_SUN_NEPTUNE	0xabcd		/* Neptune */
 #define	PCI_PRODUCT_SUN_SBBC	0xc416		/* SBBC */
+#define	PCI_PRODUCT_SUN_SDIO	0xfa04		/* SDIO */
+#define	PCI_PRODUCT_SUN_SDIO_PCIE	0xfa05		/* SDIO PCIE */
 
 /* Sundance products */
 #define	PCI_PRODUCT_SUNDANCE_ST201_1	0x0200		/* ST201 */
