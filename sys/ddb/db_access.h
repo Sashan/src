@@ -61,4 +61,5 @@ void db_stack_record_free(struct db_stack_record *);
 struct db_stack_record *db_stack_aggr_insert(struct db_stack_aggr *,
 	struct db_stack_record *);
 struct db_stack_trace *db_stack_aggr_get_stack(struct db_stack_record *);
-void db_stack_aggr_print(struct db_stack_aggr *, int, int, int);
+void db_stack_aggr_print(int(*)(const char *, ...),
+	struct db_stack_aggr *, int, unsigned int, unsigned int);

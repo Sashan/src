@@ -204,6 +204,9 @@ db_stack_record_alloc(struct db_stack_aggr *dbsa)
 {
 	struct db_stack_record *rv;
 
+	if (dbsa == NULL)
+		return (NULL);
+
 	mtx_enter(&dbsa->dbsa_mtx);
 	rv = LIST_FIRST(&dbsa->dbsa_free_list);
 	if (rv != NULL) {
@@ -326,7 +329,8 @@ db_stack_aggr_sort(struct db_stack_aggr *dbsa, struct db_stack_list *sorted,
 }
 
 void
-db_stack_aggr_print(struct db_stack_aggr *dbsa, int asc, int top, int depth)
+db_stack_aggr_print(int(*prnt)(const char *format, ...),
+    struct db_stack_aggr *dbsa, int asc, unsigned int top, unsigned int depth)
 {
 	int(*cmp)(struct db_stack_record *, struct db_stack_record *);
 	struct db_stack_list	sorted;
@@ -343,18 +347,18 @@ db_stack_aggr_print(struct db_stack_aggr *dbsa, int asc, int top, int depth)
 
 	db_stack_aggr_sort(dbsa, &sorted, cmp);
 
-	db_printf("stack count:\t%u\n", dbsa->dbsa_pool_used);
+	prnt("stack count:\t%u\n", dbsa->dbsa_pool_used);
 	i = 0;
 	LIST_FOREACH(dbsr, &sorted, dbsr_sorted_le) {
-		if (i >= top)
+		if ((top != 0) && (i >= top))
 			break;
 
-		db_printf("callers:\t%u\n", dbsr->dbsr_instances);
+		prnt("callers:\t%u\n", dbsr->dbsr_instances);
 		for (j = 0; j < MIN(depth, DBSR_STACK_DPETH(dbsr)); j++) {
 			sym = db_search_symbol(dbsr->dbsr_st.st_pc[j],
 			    DB_STGY_ANY, &offset);
 			db_symbol_values(sym, &name, NULL);
-			db_printf("\t%s()\t(%p)\n", name,
+			prnt("\t%s()\t(%p)\n", name,
 			    (void *)dbsr->dbsr_st.st_pc[j]);
 		}
 	}
