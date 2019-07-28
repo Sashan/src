@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_vnops.c,v 1.101 2019/07/12 13:56:27 solene Exp $	*/
+/*	$OpenBSD: vfs_vnops.c,v 1.103 2019/07/23 19:07:31 anton Exp $	*/
 /*	$NetBSD: vfs_vnops.c,v 1.20 1996/02/04 02:18:41 christos Exp $	*/
 
 /*
@@ -345,12 +345,10 @@ vn_read(struct file *fp, struct uio *uio, int fflags)
 
 	KERNEL_LOCK();
 
-	/*
-	 * Check below can race.  We can block on the vnode lock
-	 * and resume with a different `fp->f_offset' value.
-	 */
+	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+
 	if ((fflags & FO_POSITION) == 0)
-		offset = fp->f_offset;
+		offset = uio->uio_offset = fp->f_offset;
 	else
 		offset = uio->uio_offset;
 
@@ -365,15 +363,12 @@ vn_read(struct file *fp, struct uio *uio, int fflags)
 		goto done;
 	}
 
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
-	if ((fflags & FO_POSITION) == 0)
-		uio->uio_offset = fp->f_offset;
 	error = VOP_READ(vp, uio, (fp->f_flag & FNONBLOCK) ? IO_NDELAY : 0,
 	    cred);
 	if ((fflags & FO_POSITION) == 0)
 		fp->f_offset += count - uio->uio_resid;
-	VOP_UNLOCK(vp);
 done:
+	VOP_UNLOCK(vp);
 	KERNEL_UNLOCK();
 	return (error);
 }
@@ -602,10 +597,14 @@ vn_seek(struct file *fp, off_t *offset, int whence, struct proc *p)
 	struct vnode *vp = fp->f_data;
 	struct vattr vattr;
 	off_t newoff;
-	int error, special;
+	int error = 0;
+	int special;
 
 	if (vp->v_type == VFIFO)
 		return (ESPIPE);
+
+	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+
 	if (vp->v_type == VCHR)
 		special = 1;
 	else
@@ -618,21 +617,25 @@ vn_seek(struct file *fp, off_t *offset, int whence, struct proc *p)
 	case SEEK_END:
 		error = VOP_GETATTR(vp, &vattr, cred, p);
 		if (error)
-			return (error);
+			goto out;
 		newoff = *offset + (off_t)vattr.va_size;
 		break;
 	case SEEK_SET:
 		newoff = *offset;
 		break;
 	default:
-		return (EINVAL);
+		error = EINVAL;
+		goto out;
 	}
-	if (!special) {
-		if (newoff < 0)
-			return(EINVAL);
+	if (!special && newoff < 0) {
+		error = EINVAL;
+		goto out;
 	}
 	fp->f_offset = *offset = newoff;
-	return (0);
+
+out:
+	VOP_UNLOCK(vp);
+	return (error);
 }
 
 /*
