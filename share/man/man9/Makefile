@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.294 2019/06/03 01:27:30 cheloha Exp $
+#	$OpenBSD: Makefile,v 1.296 2019/07/12 16:53:57 mpi Exp $
 #	$NetBSD: Makefile,v 1.4 1996/01/09 03:23:01 thorpej Exp $
 
 #	Makefile for section 9 (kernel function and variable) manual pages.
@@ -21,7 +21,7 @@ MAN=	aml_evalnode.9 atomic_add_int.9 atomic_cas_uint.9 \
 	ieee80211_radiotap.9 if_get.9 if_rxr_init.9 ifq_enqueue.9 \
 	ifq_deq_begin.9 imax.9 iic.9 intro.9 inittodr.9 intr_barrier.9 \
 	KASSERT.9 km_alloc.9 knote.9 kthread.9 ktrace.9 \
-	loadfirmware.9 log.9 \
+	lim_cur.9 loadfirmware.9 log.9 \
 	malloc.9 membar_sync.9 memcmp.9 mbuf.9 mbuf_tags.9 md5.9 mi_switch.9 \
 	microtime.9 ml_init.9 mq_init.9 mutex.9 \
 	namei.9 \
@@ -29,7 +29,8 @@ MAN=	aml_evalnode.9 atomic_add_int.9 atomic_cas_uint.9 \
 	pmap.9 pool.9 pool_cache_init.9 ppsratecheck.9 printf.9 psignal.9 \
 	RBT_INIT.9 \
 	radio.9 arc4random.9 rasops.9 ratecheck.9 refcnt_init.9 resettodr.9 \
-	rssadapt.9 route.9 rt_ifa_add.9 rt_timer_add.9 rtalloc.9 rtable_add.9 \
+	rssadapt.9 route.9 rt_ifa_add.9 rt_timer_add.9 \
+	rtalloc.9 rtable_add.9 rtable_walk.9 \
 	rtlabel_id2name.9 rtrequest.9 rwlock.9 SRPL_EMPTY_LOCKED.9 SipHash24.9 \
 	sensor_attach.9 sigio_init.9 \
 	SMR_LIST_INIT.9 SMR_PTR_GET.9 smr_call.9 \

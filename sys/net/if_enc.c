@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_enc.c,v 1.73 2018/07/08 16:41:12 jca Exp $	*/
+/*	$OpenBSD: if_enc.c,v 1.75 2019/07/14 06:37:01 florian Exp $	*/
 
 /*
  * Copyright (c) 2010 Reyk Floeter <reyk@vantronix.net>
@@ -71,14 +71,13 @@ enc_clone_create(struct if_clone *ifc, int unit)
 	struct enc_softc	*sc;
 	struct ifnet		*ifp;
 	struct ifnet		**new;
-	size_t			 newlen;
+	size_t			 oldlen;
 	int			 error;
 
 	if (unit > ENC_MAX_UNITS)
 		return (EINVAL);
 
-	if ((sc = malloc(sizeof(struct enc_softc),
-	    M_DEVBUF, M_NOWAIT|M_ZERO)) == NULL)
+	if ((sc = malloc(sizeof(*sc), M_DEVBUF, M_NOWAIT|M_ZERO)) == NULL)
 		return (ENOBUFS);
 
 	sc->sc_unit = unit;
@@ -116,7 +115,7 @@ enc_clone_create(struct if_clone *ifc, int unit)
 	if (error != 0) {
 		NET_UNLOCK();
 		if_detach(ifp);
-		free(sc, M_DEVBUF, 0);
+		free(sc, M_DEVBUF, sizeof(*sc));
 		return (error);
 	}
 
@@ -126,12 +125,11 @@ enc_clone_create(struct if_clone *ifc, int unit)
 			NET_UNLOCK();
 			return (ENOBUFS);
 		}
-		newlen = sizeof(struct ifnet *) * (unit + 1);
 
 		if (enc_allifps != NULL) {
-			memcpy(new, enc_allifps,
-			    sizeof(struct ifnet *) * (enc_max_unit + 1));
-			free(enc_allifps, M_DEVBUF, 0);
+			oldlen = sizeof(struct ifnet *) * (enc_max_unit + 1);
+			memcpy(new, enc_allifps, oldlen);
+			free(enc_allifps, M_DEVBUF, oldlen);
 		}
 		enc_allifps = new;
 		enc_max_unit = unit;
@@ -157,7 +155,7 @@ enc_clone_destroy(struct ifnet *ifp)
 	NET_UNLOCK();
 
 	if_detach(ifp);
-	free(sc, M_DEVBUF, 0);
+	free(sc, M_DEVBUF, sizeof(*sc));
 
 	return (0);
 }
@@ -253,7 +251,7 @@ int
 enc_setif(struct ifnet *ifp, u_int rdomain)
 {
 	struct ifnet	**new;
-	size_t		 newlen;
+	size_t		 oldlen;
 
 	NET_ASSERT_LOCKED();
 
@@ -275,12 +273,11 @@ enc_setif(struct ifnet *ifp, u_int rdomain)
 		if ((new = mallocarray(rdomain + 1, sizeof(struct ifnet *),
 		    M_DEVBUF, M_NOWAIT|M_ZERO)) == NULL)
 			return (ENOBUFS);
-		newlen = sizeof(struct ifnet *) * (rdomain + 1);
 
 		if (enc_ifps != NULL) {
-			memcpy(new, enc_ifps,
-			    sizeof(struct ifnet *) * (enc_max_rdomain + 1));
-			free(enc_ifps, M_DEVBUF, 0);
+			oldlen = sizeof(struct ifnet *) * (enc_max_rdomain + 1);
+			memcpy(new, enc_ifps, oldlen);
+			free(enc_ifps, M_DEVBUF, oldlen);
 		}
 		enc_ifps = new;
 		enc_max_rdomain = rdomain;

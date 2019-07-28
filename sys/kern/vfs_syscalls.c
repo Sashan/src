@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_syscalls.c,v 1.317 2019/05/30 13:11:53 deraadt Exp $	*/
+/*	$OpenBSD: vfs_syscalls.c,v 1.327 2019/07/25 01:43:21 cheloha Exp $	*/
 /*	$NetBSD: vfs_syscalls.c,v 1.71 1996/04/23 10:29:02 mycroft Exp $	*/
 
 /*
@@ -184,7 +184,7 @@ sys_mount(struct proc *p, void *v, register_t *retval)
 		error = EPERM;
 		goto fail;
 	}
-	if ((error = vinvalbuf(vp, V_SAVE, p->p_ucred, p, 0, 0)) != 0) {
+	if ((error = vinvalbuf(vp, V_SAVE, p->p_ucred, p, 0, INFSLP)) != 0) {
 		vput(vp);
 		goto fail;
 	}
@@ -880,6 +880,9 @@ sys___realpath(struct proc *p, void *v, register_t *retval)
 	size_t pathlen;
 	int error = 0;
 
+	if (SCARG(uap, pathname) == NULL)
+		return (EINVAL);
+
 	pathname = pool_get(&namei_pool, PR_WAITOK);
 	rpbuf = pool_get(&namei_pool, PR_WAITOK);
 
@@ -887,6 +890,10 @@ sys___realpath(struct proc *p, void *v, register_t *retval)
 	    &pathlen)))
 		goto end;
 
+	if (pathlen == 1) { /* empty string "" */
+		error = ENOENT;
+		goto end;
+	}
 	if (pathlen < 2) {
 		error = EINVAL;
 		goto end;
@@ -925,7 +932,7 @@ sys___realpath(struct proc *p, void *v, register_t *retval)
 		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | SAVENAME | REALPATH,
 		    UIO_SYSSPACE, pathname, p);
 	else
-		NDINIT(&nd, CREATE, FOLLOW | LOCKLEAF | LOCKPARENT | SAVENAME |
+		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | LOCKPARENT | SAVENAME |
 		    REALPATH, UIO_SYSSPACE, pathname, p);
 
 	nd.ni_cnd.cn_rpbuf = rpbuf;
@@ -1988,16 +1995,6 @@ dofstatat(struct proc *p, int fd, const char *path, struct stat *buf, int flag)
 	vput(nd.ni_vp);
 	if (error)
 		return (error);
-	if (nd.ni_pledge & PLEDGE_STATLIE) {
-		if (S_ISDIR(sb.st_mode) || S_ISLNK(sb.st_mode)) {
-			if (sb.st_uid >= 1000) {
-				sb.st_uid = p->p_ucred->cr_uid;
-				sb.st_gid = p->p_ucred->cr_gid;;
-			}
-			sb.st_gen = 0;
-		} else
-			return (ENOENT);
-	}
 	/* Don't let non-root see generation numbers (for NFS security) */
 	if (suser(p))
 		sb.st_gen = 0;
@@ -3011,15 +3008,11 @@ sys_getdents(struct proc *p, void *v, register_t *retval)
 	buflen = SCARG(uap, buflen);
 
 	if (buflen > INT_MAX)
-		return EINVAL;
+		return (EINVAL);
 	if ((error = getvnode(p, SCARG(uap, fd), &fp)) != 0)
 		return (error);
 	if ((fp->f_flag & FREAD) == 0) {
 		error = EBADF;
-		goto bad;
-	}
-	if (fp->f_offset < 0) {
-		error = EINVAL;
 		goto bad;
 	}
 	vp = fp->f_data;
@@ -3027,6 +3020,15 @@ sys_getdents(struct proc *p, void *v, register_t *retval)
 		error = EINVAL;
 		goto bad;
 	}
+
+	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+
+	if (fp->f_offset < 0) {
+		VOP_UNLOCK(vp);
+		error = EINVAL;
+		goto bad;
+	}
+
 	aiov.iov_base = SCARG(uap, buf);
 	aiov.iov_len = buflen;
 	auio.uio_iov = &aiov;
@@ -3035,7 +3037,6 @@ sys_getdents(struct proc *p, void *v, register_t *retval)
 	auio.uio_segflg = UIO_USERSPACE;
 	auio.uio_procp = p;
 	auio.uio_resid = buflen;
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 	auio.uio_offset = fp->f_offset;
 	error = VOP_READDIR(vp, &auio, fp->f_cred, &eofflag);
 	fp->f_offset = auio.uio_offset;

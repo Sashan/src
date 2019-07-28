@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.c,v 1.382 2019/05/27 09:14:33 claudio Exp $ */
+/*	$OpenBSD: session.c,v 1.388 2019/07/24 20:25:27 benno Exp $ */
 
 /*
  * Copyright (c) 2003, 2004, 2005 Henning Brauer <henning@openbsd.org>
@@ -43,7 +43,6 @@
 #include <unistd.h>
 
 #include "bgpd.h"
-#include "mrt.h"
 #include "session.h"
 #include "log.h"
 
@@ -422,7 +421,7 @@ session_main(int debug, int verbose)
 			if (p->wbuf.queued > 0 || p->state == STATE_CONNECT)
 				events |= POLLOUT;
 			/* is there still work to do? */
-			if (p->rpending)
+			if (p->rpending && p->rbuf && p->rbuf->wpos)
 				timeout = 0;
 
 			/* poll events */
@@ -888,6 +887,7 @@ change_state(struct peer *peer, enum session_state state,
 		msgbuf_clear(&peer->wbuf);
 		free(peer->rbuf);
 		peer->rbuf = NULL;
+		peer->rpending = 0;
 		bzero(&peer->capa.peer, sizeof(peer->capa.peer));
 		if (!peer->template)
 			imsg_compose(ibuf_main, IMSG_PFKEY_RELOAD,
@@ -1119,8 +1119,10 @@ session_setup_socket(struct peer *p)
 		}
 
 		if (p->conf.ebgp) {
-			/* set TTL to foreign router's distance
-			   1=direct n=multihop with ttlsec, we always use 255 */
+			/*
+			 * set TTL to foreign router's distance
+			 * 1=direct n=multihop with ttlsec, we always use 255
+			 */
 			if (p->conf.ttlsec) {
 				ttl = 256 - p->conf.distance;
 				if (setsockopt(p->fd, IPPROTO_IP, IP_MINTTL,
@@ -1143,8 +1145,10 @@ session_setup_socket(struct peer *p)
 		break;
 	case AID_INET6:
 		if (p->conf.ebgp) {
-			/* set hoplimit to foreign router's distance
-			   1=direct n=multihop with ttlsec, we always use 255 */
+			/*
+			 * set hoplimit to foreign router's distance
+			 * 1=direct n=multihop with ttlsec, we always use 255
+			 */
 			if (p->conf.ttlsec) {
 				ttl = 256 - p->conf.distance;
 				if (setsockopt(p->fd, IPPROTO_IPV6,
@@ -2270,7 +2274,7 @@ parse_notification(struct peer *peer)
 		if (datalen > 1) {
 			shutcomm_len = *p++;
 			datalen--;
-			if(datalen < shutcomm_len) {
+			if (datalen < shutcomm_len) {
 			    log_peer_warnx(&peer->conf,
 				"received truncated shutdown reason");
 			    return (0);
@@ -2555,7 +2559,7 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 				fatalx("reconf request not from parent");
 			nconf = new_config();
 
-			copy_config(nconf, imsg.data); 
+			copy_config(nconf, imsg.data);
 			pending_reconf = 1;
 			break;
 		case IMSG_RECONF_PEER:
@@ -2743,6 +2747,7 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 			break;
 		case IMSG_CTL_SHOW_RIB:
 		case IMSG_CTL_SHOW_RIB_PREFIX:
+		case IMSG_CTL_SHOW_RIB_COMMUNITIES:
 		case IMSG_CTL_SHOW_RIB_ATTR:
 		case IMSG_CTL_SHOW_RIB_MEM:
 		case IMSG_CTL_SHOW_RIB_HASH:
@@ -2942,7 +2947,7 @@ getpeerbyip(struct bgpd_config *c, struct sockaddr *ip)
 		if ((newpeer = malloc(sizeof(struct peer))) == NULL)
 			fatal(NULL);
 		memcpy(newpeer, loose, sizeof(struct peer));
-		for (id = UINT_MAX; id > UINT_MAX / 2; id--) {
+		for (id = PEER_ID_DYN_MAX; id > PEER_ID_STATIC_MAX; id--) {
 			RB_FOREACH(p, peer_head, &conf->peers)
 				if (p->conf.id == id)
 					break;
@@ -2954,6 +2959,7 @@ getpeerbyip(struct bgpd_config *c, struct sockaddr *ip)
 		newpeer->state = newpeer->prev_state = STATE_NONE;
 		newpeer->reconf_action = RECONF_KEEP;
 		newpeer->rbuf = NULL;
+		newpeer->rpending = 0;
 		init_peer(newpeer);
 		bgp_fsm(newpeer, EVNT_START);
 		if (RB_INSERT(peer_head, &c->peers, newpeer) != NULL)

@@ -1,4 +1,4 @@
-/* $OpenBSD: doas.c,v 1.74 2019/01/17 05:35:35 tedu Exp $ */
+/* $OpenBSD: doas.c,v 1.80 2019/07/03 03:24:02 deraadt Exp $ */
 /*
  * Copyright (c) 2015 Ted Unangst <tedu@openbsd.org>
  *
@@ -267,7 +267,7 @@ unveilcommands(const char *ipath, const char *cmd)
 
 		if (cp) {
 			int r = snprintf(buf, sizeof buf, "%s/%s", cp, cmd);
-			if (r != -1 && r < sizeof buf) {
+			if (r >= 0 && r < sizeof buf) {
 				if (unveil(buf, "x") != -1)
 					unveils++;
 			}
@@ -286,16 +286,18 @@ main(int argc, char **argv)
 	const char *confpath = NULL;
 	char *shargv[] = { NULL, NULL };
 	char *sh;
+	const char *p;
 	const char *cmd;
 	char cmdline[LINE_MAX];
-	char myname[_PW_NAME_LEN + 1];
-	struct passwd *pw;
+	char mypwbuf[_PW_BUF_LEN], targpwbuf[_PW_BUF_LEN];
+	struct passwd mypwstore, targpwstore;
+	struct passwd *mypw, *targpw;
 	const struct rule *rule;
 	uid_t uid;
 	uid_t target = 0;
 	gid_t groups[NGROUPS_MAX + 1];
 	int ngroups;
-	int i, ch;
+	int i, ch, rv;
 	int sflag = 0;
 	int nflag = 0;
 	char cwdpath[PATH_MAX];
@@ -346,11 +348,11 @@ main(int argc, char **argv)
 	} else if ((!sflag && !argc) || (sflag && argc))
 		usage();
 
-	pw = getpwuid(uid);
-	if (!pw)
-		err(1, "getpwuid failed");
-	if (strlcpy(myname, pw->pw_name, sizeof(myname)) >= sizeof(myname))
-		errx(1, "pw_name too long");
+	rv = getpwuid_r(uid, &mypwstore, mypwbuf, sizeof(mypwbuf), &mypw);
+	if (rv != 0)
+		err(1, "getpwuid_r failed");
+	if (mypw == NULL)
+		errx(1, "no passwd entry for self");
 	ngroups = getgroups(NGROUPS_MAX, groups);
 	if (ngroups == -1)
 		err(1, "can't get groups");
@@ -359,9 +361,7 @@ main(int argc, char **argv)
 	if (sflag) {
 		sh = getenv("SHELL");
 		if (sh == NULL || *sh == '\0') {
-			shargv[0] = strdup(pw->pw_shell);
-			if (shargv[0] == NULL)
-				err(1, NULL);
+			shargv[0] = mypw->pw_shell;
 		} else
 			shargv[0] = sh;
 		argv = shargv;
@@ -392,7 +392,7 @@ main(int argc, char **argv)
 	if (!permit(uid, groups, ngroups, &rule, target, cmd,
 	    (const char **)argv + 1)) {
 		syslog(LOG_AUTHPRIV | LOG_NOTICE,
-		    "failed command for %s: %s", myname, cmdline);
+		    "failed command for %s: %s", mypw->pw_name, cmdline);
 		errc(1, EPERM, NULL);
 	}
 
@@ -400,8 +400,13 @@ main(int argc, char **argv)
 		if (nflag)
 			errx(1, "Authorization required");
 
-		authuser(myname, login_style, rule->options & PERSIST);
+		authuser(mypw->pw_name, login_style, rule->options & PERSIST);
 	}
+
+	if ((p = getenv("PATH")) != NULL)
+		formerpath = strdup(p);
+	if (formerpath == NULL)
+		formerpath = "";
 
 	if (unveil(_PATH_LOGIN_CONF, "r") == -1)
 		err(1, "unveil");
@@ -415,11 +420,14 @@ main(int argc, char **argv)
 	if (pledge("stdio rpath getpw exec id", NULL) == -1)
 		err(1, "pledge");
 
-	pw = getpwuid(target);
-	if (!pw)
+	rv = getpwuid_r(target, &targpwstore, targpwbuf, sizeof(targpwbuf), &targpw);
+	if (rv != 0)
+		err(1, "getpwuid_r failed");
+	if (targpw == NULL)
 		errx(1, "no passwd entry for target");
 
-	if (setusercontext(NULL, pw, target, LOGIN_SETGROUP |
+	if (setusercontext(NULL, targpw, target, LOGIN_SETGROUP |
+	    LOGIN_SETPATH |
 	    LOGIN_SETPRIORITY | LOGIN_SETRESOURCES | LOGIN_SETUMASK |
 	    LOGIN_SETUSER) != 0)
 		errx(1, "failed to set user context for target");
@@ -436,10 +444,18 @@ main(int argc, char **argv)
 		err(1, "pledge");
 
 	syslog(LOG_AUTHPRIV | LOG_INFO, "%s ran command %s as %s from %s",
-	    myname, cmdline, pw->pw_name, cwd);
+	    mypw->pw_name, cmdline, targpw->pw_name, cwd);
 
-	envp = prepenv(rule);
+	envp = prepenv(rule, mypw, targpw);
 
+	/* setusercontext set path for the next process, so reset it for us */
+	if (rule->cmd) {
+		if (setenv("PATH", safepath, 1) == -1)
+			err(1, "failed to set PATH '%s'", safepath);
+	} else {
+		if (setenv("PATH", formerpath, 1) == -1)
+			err(1, "failed to set PATH '%s'", formerpath);
+	}
 	execvpe(cmd, argv, envp);
 fail:
 	if (errno == ENOENT)

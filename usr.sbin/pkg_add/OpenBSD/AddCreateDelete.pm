@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: AddCreateDelete.pm,v 1.43 2018/02/27 22:46:53 espie Exp $
+# $OpenBSD: AddCreateDelete.pm,v 1.47 2019/07/21 14:05:30 espie Exp $
 #
 # Copyright (c) 2007-2014 Marc Espie <espie@openbsd.org>
 #
@@ -171,6 +171,13 @@ sub ntogo_string
 	    $self->f("");
 }
 
+sub solve_dependency
+{
+	my ($self, $solver, $dep, $package) = @_;
+	# full dependency solving with everything
+	return $solver->really_solve_dependency($self, $dep, $package);
+}
+
 package OpenBSD::AddCreateDelete;
 use OpenBSD::Error;
 
@@ -178,6 +185,25 @@ sub handle_options
 {
 	my ($self, $opt_string, $state, @usage) = @_;
 	$state->handle_options($opt_string, $self, @usage);
+}
+
+sub try_and_run_command
+{
+	my ($self, $state) = @_;
+	if ($state->defines('debug')) {
+		$self->run_command($state);
+	} else {
+		try {
+			$self->run_command($state);
+		} catch {
+			$state->errsay("#1: #2", $state->{cmd}, $_);
+			OpenBSD::Handler->reset;
+			if ($_ =~ m/^Caught SIG(\w+)/o) {
+				kill $1, $$;
+			}
+			$state->{bad}++;
+		};
+	}
 }
 
 package OpenBSD::InteractiveStub;

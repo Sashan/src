@@ -1,4 +1,4 @@
-/*	$OpenBSD: bios.c,v 1.37 2018/10/23 17:51:32 kettenis Exp $	*/
+/*	$OpenBSD: bios.c,v 1.39 2019/07/24 04:04:44 jsg Exp $	*/
 /*
  * Copyright (c) 2006 Gordon Willem Klok <gklok@cogeco.ca>
  *
@@ -67,6 +67,8 @@ const char *smbios_uninfo[] = {
 	"SYS-"
 };
 
+char smbios_bios_date[64];
+
 int
 bios_match(struct device *parent, void *match , void *aux)
 {
@@ -90,6 +92,7 @@ bios_attach(struct device *parent, struct device *self, void *aux)
 	u_int8_t *p;
 	int smbiosrev = 0;
 	struct smbhdr *hdr = NULL;
+	char *sminfop;
 
 	if (bios_efiinfo != NULL && bios_efiinfo->config_smbios != 0)
 		hdr = smbios_find(PMAP_DIRECT_MAP(
@@ -141,8 +144,15 @@ bios_attach(struct device *parent, struct device *self, void *aux)
 				printf(" version \"%s\"",
 				    fixstring(scratch));
 			if ((smbios_get_string(&bios, sb->release,
-			    scratch, sizeof(scratch))) != NULL)
-				printf(" date %s", fixstring(scratch));
+			    scratch, sizeof(scratch))) != NULL) {
+				sminfop = fixstring(scratch);
+				if (sminfop != NULL) {
+					strlcpy(smbios_bios_date,
+					    sminfop,
+					    sizeof(smbios_bios_date));
+					printf(" date %s", sminfop);
+				}
+			}
 		}
 
 		smbios_info(sc->sc_dev.dv_xname);

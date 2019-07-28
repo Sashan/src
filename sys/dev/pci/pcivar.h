@@ -1,4 +1,4 @@
-/*	$OpenBSD: pcivar.h,v 1.70 2018/07/28 15:28:51 kettenis Exp $	*/
+/*	$OpenBSD: pcivar.h,v 1.72 2019/06/25 16:46:33 kettenis Exp $	*/
 /*	$NetBSD: pcivar.h,v 1.23 1997/06/06 23:48:05 thorpej Exp $	*/
 
 /*
@@ -222,6 +222,8 @@ int	pci_mapreg_probe(pci_chipset_tag_t, pcitag_t, int, pcireg_t *);
 pcireg_t pci_mapreg_type(pci_chipset_tag_t, pcitag_t, int);
 int	pci_mapreg_info(pci_chipset_tag_t, pcitag_t, int, pcireg_t,
 	    bus_addr_t *, bus_size_t *, int *);
+int	pci_mapreg_assign(struct pci_attach_args *, int, pcireg_t,
+	    bus_addr_t *, bus_size_t *);
 int	pci_mapreg_map(struct pci_attach_args *, int, pcireg_t, int,
 	    bus_space_tag_t *, bus_space_handle_t *, bus_addr_t *,
 	    bus_size_t *, bus_size_t);
@@ -235,6 +237,15 @@ int	pci_get_capability(pci_chipset_tag_t, pcitag_t, int,
 	    int *, pcireg_t *);
 int	pci_get_ht_capability(pci_chipset_tag_t, pcitag_t, int,
 	    int *, pcireg_t *);
+
+struct msix_vector;
+
+struct msix_vector *pci_alloc_msix_table(pci_chipset_tag_t, pcitag_t);
+void	pci_free_msix_table(pci_chipset_tag_t, pcitag_t, struct msix_vector *);
+void	pci_suspend_msix(pci_chipset_tag_t, pcitag_t, bus_space_tag_t,
+	    pcireg_t *, struct msix_vector *);
+void	pci_resume_msix(pci_chipset_tag_t, pcitag_t, bus_space_tag_t,
+	    pcireg_t, struct msix_vector *);
 
 uint16_t pci_requester_id(pci_chipset_tag_t, pcitag_t);
 

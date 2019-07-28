@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: UpdateSet.pm,v 1.83 2019/04/07 10:44:25 espie Exp $
+# $OpenBSD: UpdateSet.pm,v 1.85 2019/07/04 09:47:09 espie Exp $
 #
 # Copyright (c) 2007-2010 Marc Espie <espie@openbsd.org>
 #
@@ -128,10 +128,29 @@ sub has_error
 	&OpenBSD::Handle::has_error;
 }
 
+sub smart_join
+{
+	my $self = shift;
+	if (@_ <= 1) {
+		return join('+', @_);
+	}
+	my ($k, @stems);
+	for my $l (@_) {
+		my ($stem, @rest) = OpenBSD::PackageName::splitname($l);
+		my $k2 = join('-', @rest);
+		$k //= $k2;
+		if ($k2 ne $k) {
+			return join('+', sort @_);
+		}
+		push(@stems, $stem);
+	}
+	return join('+', sort @stems).'-'.$k;
+}
+
 sub print
 {
 	my $self = shift;
-	return join('+', sort $self->older_names);
+	return $self->smart_join($self->older_names);
 }
 
 sub todo_names
@@ -142,7 +161,7 @@ sub todo_names
 sub short_print
 {
 	my $self = shift;
-	my $result = join('+', sort $self->todo_names);
+	my $result = $self->smart_join($self->todo_names);
 	if (length $result > 30) {
 		return substr($result, 0, 27)."...";
 	} else {
@@ -382,25 +401,33 @@ sub print
 	my $self = shift;
 	my $result = "";
 	if ($self->kept > 0) {
-		$result = "[".join('+', sort $self->kept_names)."]";
+		$result = "[".$self->smart_join($self->kept_names)."]";
+	}
+	my ($old, $new);
+	if ($self->older > 0) {
+		$old = $self->SUPER::print;
+	}
+	if ($self->newer > 0) {
+		$new = $self->smart_join($self->newer_names);
 	}
 	# XXX common case
-	if ($self->newer == 1 && $self->older == 1) {
-		my ($a, $b) = ($self->older_names, $self->newer_names);
-		my $stema = OpenBSD::PackageName::splitstem($a);
-		my ($stemb, @rest) = OpenBSD::PackageName::splitname($b);
-		if ($stema eq $stemb) {
-			return $result .$a."->".join('-', @rest);
+	if (defined $old && defined $new) {
+		my ($stema, @resta) = OpenBSD::PackageName::splitname($old);
+		my $resta = join('-', @resta);
+		my ($stemb, @restb) = OpenBSD::PackageName::splitname($new);
+		my $restb = join('-', @restb);
+		if ($stema eq $stemb && $resta !~ /\+/ && $restb !~ /\+/) {
+			return $result .$old."->".$restb;
 		}
 	}
 
-	if ($self->older > 0) {
-		$result .= $self->SUPER::print."->";
+	if (defined $old) {
+		$result .= $old."->";
 	}
-	if ($self->newer > 0) {
-		$result .= join('+', sort $self->newer_names);
+	if (defined $new) {
+		$result .= $new;
 	} elsif ($self->hints > 0) {
-		$result .= join('+', sort $self->hint_names);
+		$result .= $self->smart_join($self->hint_names);
 	}
 	return $result;
 }
@@ -471,22 +498,6 @@ sub cleanup_old_shared
 		    $state->fatal("Can't continue");
 		delete $state->{recorder}{dirs}{$d};
 	}
-}
-
-sub create_new
-{
-	my ($class, $pkgname) = @_;
-	my $set = $class->new;
-	$set->add_newer(OpenBSD::Handle->create_new($pkgname));
-	return $set;
-}
-
-sub from_location
-{
-	my ($class, $location) = @_;
-	my $set = $class->new;
-	$set->add_newer(OpenBSD::Handle->from_location($location));
-	return $set;
 }
 
 my @extra = qw(solver conflict_cache);

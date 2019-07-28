@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.31 2019/06/01 04:30:52 jsg Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.33 2019/07/02 20:13:50 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2016 Dale Rahn <drahn@dalerahn.com>
@@ -32,6 +32,7 @@
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_clock.h>
 #include <dev/ofw/ofw_regulator.h>
+#include <dev/ofw/ofw_thermal.h>
 #include <dev/ofw/fdt.h>
 
 #include <machine/cpufunc.h>
@@ -600,13 +601,18 @@ void	cpu_opp_mountroot(struct device *);
 void	cpu_opp_dotask(void *);
 void	cpu_opp_setperf(int);
 
+uint32_t cpu_opp_get_cooling_level(void *, uint32_t *);
+void	cpu_opp_set_cooling_level(void *, uint32_t *, uint32_t);
+
 void
 cpu_opp_init(struct cpu_info *ci, uint32_t phandle)
 {
 	struct opp_table *ot;
+	struct cooling_device *cd;
 	int count, node, child;
+	uint32_t opp_hz, opp_microvolt;
 	uint32_t values[3];
-	int i, len;
+	int i, j, len;
 
 	LIST_FOREACH(ot, &opp_tables, ot_list) {
 		if (ot->ot_phandle == phandle) {
@@ -641,23 +647,27 @@ cpu_opp_init(struct cpu_info *ci, uint32_t phandle)
 	for (child = OF_child(node); child != 0; child = OF_peer(child)) {
 		if (OF_getproplen(child, "turbo-mode") == 0)
 			continue;
-		ot->ot_opp[count].opp_hz =
-		    OF_getpropint64(child, "opp-hz", 0);
+		opp_hz = OF_getpropint64(child, "opp-hz", 0);
 		len = OF_getpropintarray(child, "opp-microvolt",
 		    values, sizeof(values));
+		opp_microvolt = 0;
 		if (len == sizeof(uint32_t) || len == 3 * sizeof(uint32_t))
-			ot->ot_opp[count].opp_microvolt = values[0];
+			opp_microvolt = values[0];
+
+		/* Insert into the array, keeping things sorted. */
+		for (i = 0; i < count; i++) {
+			if (opp_hz < ot->ot_opp[i].opp_hz)
+				break;
+		}
+		for (j = count; j > i; j--)
+			ot->ot_opp[j] = ot->ot_opp[j - 1];
+		ot->ot_opp[i].opp_hz = opp_hz;
+		ot->ot_opp[i].opp_microvolt = opp_microvolt;
 		count++;
 	}
 
 	ot->ot_opp_hz_min = ot->ot_opp[0].opp_hz;
-	ot->ot_opp_hz_max = ot->ot_opp[0].opp_hz;
-	for (i = 1; i < ot->ot_nopp; i++) {
-		if (ot->ot_opp[i].opp_hz < ot->ot_opp_hz_min)
-			ot->ot_opp_hz_min = ot->ot_opp[i].opp_hz;
-		if (ot->ot_opp[i].opp_hz > ot->ot_opp_hz_max)
-			ot->ot_opp_hz_max = ot->ot_opp[i].opp_hz;
-	}
+	ot->ot_opp_hz_max = ot->ot_opp[count - 1].opp_hz;
 
 	if (OF_getproplen(node, "opp-shared") == 0)
 		ot->ot_master = ci;
@@ -665,7 +675,15 @@ cpu_opp_init(struct cpu_info *ci, uint32_t phandle)
 	LIST_INSERT_HEAD(&opp_tables, ot, ot_list);
 
 	ci->ci_opp_table = ot;
+	ci->ci_opp_max = ot->ot_nopp - 1;
 	ci->ci_cpu_supply = OF_getpropint(ci->ci_node, "cpu-supply", 0);
+
+	cd = malloc(sizeof(struct cooling_device), M_DEVBUF, M_ZERO | M_WAITOK);
+	cd->cd_node = ci->ci_node;
+	cd->cd_cookie = ci;
+	cd->cd_get_level = cpu_opp_get_cooling_level;
+	cd->cd_set_level = cpu_opp_set_cooling_level;
+	cooling_device_register(cd);
 
 	/*
 	 * Do addional checks at mountroot when all the clocks and
@@ -770,7 +788,7 @@ cpu_opp_dotask(void *arg)
 		if (ot->ot_master && ot->ot_master != ci)
 			continue;
 
-		opp_idx = ci->ci_opp_idx;
+		opp_idx = MIN(ci->ci_opp_idx, ci->ci_opp_max);
 		opp_hz = ot->ot_opp[opp_idx].opp_hz;
 		opp_microvolt = ot->ot_opp[opp_idx].opp_microvolt;
 
@@ -839,4 +857,30 @@ cpu_opp_setperf(int level)
 	 * regulators might need process context.
 	 */
 	task_add(systq, &cpu_opp_task);
+}
+
+uint32_t
+cpu_opp_get_cooling_level(void *cookie, uint32_t *cells)
+{
+	struct cpu_info *ci = cookie;
+	struct opp_table *ot = ci->ci_opp_table;
+	
+	return ot->ot_nopp - ci->ci_opp_max - 1;
+}
+
+void
+cpu_opp_set_cooling_level(void *cookie, uint32_t *cells, uint32_t level)
+{
+	struct cpu_info *ci = cookie;
+	struct opp_table *ot = ci->ci_opp_table;
+	int opp_max;
+
+	if (level > (ot->ot_nopp - 1))
+		level = ot->ot_nopp - 1;
+
+	opp_max = (ot->ot_nopp - level - 1);
+	if (ci->ci_opp_max != opp_max) {
+		ci->ci_opp_max = opp_max;
+		task_add(systq, &cpu_opp_task);
+	}
 }

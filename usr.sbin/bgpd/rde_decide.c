@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde_decide.c,v 1.74 2019/01/21 02:07:56 claudio Exp $ */
+/*	$OpenBSD: rde_decide.c,v 1.76 2019/07/22 07:34:16 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Claudio Jeker <claudio@openbsd.org>
@@ -245,23 +245,25 @@ prefix_evaluate(struct prefix *p, struct rib_entry *re)
 	if (re_rib(re)->flags & F_RIB_NOEVALUATE || rde_noevaluate()) {
 		/* decision process is turned off */
 		if (p != NULL)
-			LIST_INSERT_HEAD(&re->prefix_h, p, rib_l);
-		if (re->active != NULL)
-			re->active = NULL;
+			LIST_INSERT_HEAD(&re->prefix_h, p, entry.list.rib);
+		re->active = NULL;
 		return;
 	}
 
 	if (p != NULL) {
 		if (LIST_EMPTY(&re->prefix_h))
-			LIST_INSERT_HEAD(&re->prefix_h, p, rib_l);
+			LIST_INSERT_HEAD(&re->prefix_h, p, entry.list.rib);
 		else {
-			LIST_FOREACH(xp, &re->prefix_h, rib_l) {
+			LIST_FOREACH(xp, &re->prefix_h, entry.list.rib) {
 				if (prefix_cmp(p, xp) > 0) {
-					LIST_INSERT_BEFORE(xp, p, rib_l);
+					LIST_INSERT_BEFORE(xp, p,
+					    entry.list.rib);
 					break;
-				} else if (LIST_NEXT(xp, rib_l) == NULL) {
+				} else if (LIST_NEXT(xp, entry.list.rib) ==
+				    NULL) {
 					/* if xp last element ... */
-					LIST_INSERT_AFTER(xp, p, rib_l);
+					LIST_INSERT_AFTER(xp, p,
+					    entry.list.rib);
 					break;
 				}
 			}
