@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde_filter.c,v 1.117 2019/02/04 18:53:10 claudio Exp $ */
+/*	$OpenBSD: rde_filter.c,v 1.121 2019/07/01 07:07:08 claudio Exp $ */
 
 /*
  * Copyright (c) 2004 Claudio Jeker <claudio@openbsd.org>
@@ -43,9 +43,6 @@ rde_apply_set(struct filter_set_head *sh, struct filterstate *state,
 	u_int32_t		 prep_as;
 	u_int16_t		 nl;
 	u_int8_t		 prepend;
-
-	if (state == NULL)
-		return;
 
 	TAILQ_FOREACH(set, sh, entry) {
 		switch (set->type) {
@@ -149,35 +146,12 @@ rde_apply_set(struct filter_set_head *sh, struct filterstate *state,
 			    &state->nexthop, &state->nhflags);
 			break;
 		case ACTION_SET_COMMUNITY:
-			switch (set->action.community.type) {
-			case COMMUNITY_TYPE_BASIC:
-				community_set(&state->aspath,
-				    &set->action.community, peer);
-				break;
-			case COMMUNITY_TYPE_LARGE:
-				community_large_set(&state->aspath,
-				    &set->action.community, peer);
-				break;
-			case COMMUNITY_TYPE_EXT:
-				community_ext_set(&state->aspath,
-				    &set->action.community, peer);
-				break;
-			}
+			community_set(&state->communities,
+			    &set->action.community, peer);
 			break;
 		case ACTION_DEL_COMMUNITY:
-			switch (set->action.community.type) {
-			case COMMUNITY_TYPE_BASIC:
-				community_delete(&state->aspath,
-				    &set->action.community, peer);
-				break;
-			case COMMUNITY_TYPE_LARGE:
-				community_large_delete(&state->aspath,
-				    &set->action.community, peer);
-				break;
-			case COMMUNITY_TYPE_EXT:
-				community_ext_delete(&state->aspath,
-				    &set->action.community, peer);
-			}
+			community_delete(&state->communities,
+			    &set->action.community, peer);
 			break;
 		case ACTION_PFTABLE:
 			/* convert pftable name to an id */
@@ -208,11 +182,8 @@ int
 rde_filter_match(struct filter_rule *f, struct rde_peer *peer,
     struct filterstate *state, struct prefix *p)
 {
-	struct rde_aspath *asp = NULL;
+	struct rde_aspath *asp = &state->aspath;
 	int i;
-
-	if (state != NULL)
-		asp = &state->aspath;
 
 	if (f->peer.ebgp && !peer->conf.ebgp)
 		return (0);
@@ -235,29 +206,15 @@ rde_filter_match(struct filter_rule *f, struct rde_peer *peer,
 		    f->match.aslen.aslen) == 0)
 			return (0);
 
-	for (i = 0; asp != NULL && i < MAX_COMM_MATCH; i++) {
-		switch (f->match.community[i].type) {
-		case COMMUNITY_TYPE_NONE:
-			i = MAX_COMM_MATCH;
+	for (i = 0; i < MAX_COMM_MATCH; i++) {
+		if (f->match.community[i].flags == 0)
 			break;
-		case COMMUNITY_TYPE_BASIC:
-			if (community_match(asp, &f->match.community[i],
-			    peer) == 0)
-				return (0);
-			break;
-		case COMMUNITY_TYPE_LARGE:
-			if (community_large_match(asp, &f->match.community[i],
-			    peer) == 0)
-				return (0);
-			break;
-		case COMMUNITY_TYPE_EXT:
-			if (community_ext_match(asp, &f->match.community[i],
-			    peer) == 0)
-				return (0);
-		}
+		if (community_match(&state->communities,
+		    &f->match.community[i], peer) == 0)
+			return (0);
 	}
 
-	if (state != NULL && f->match.nexthop.flags != 0) {
+	if (f->match.nexthop.flags != 0) {
 		struct bgpd_addr *nexthop, *cmpaddr;
 		if (state->nexthop == NULL)
 			/* no nexthop, skip */
@@ -291,8 +248,8 @@ rde_filter_match(struct filter_rule *f, struct rde_peer *peer,
 		struct bgpd_addr addr, *prefix = &addr;
 		u_int8_t plen;
 
-		pt_getaddr(p->re->prefix, prefix);
-		plen = p->re->prefix->prefixlen;
+		pt_getaddr(p->pt, prefix);
+		plen = p->pt->prefixlen;
 		if (trie_roa_check(&f->match.originset.ps->th, prefix, plen,
 		    aspath_origin(asp->aspath)) != ROA_VALID)
 			return (0);
@@ -305,8 +262,8 @@ rde_filter_match(struct filter_rule *f, struct rde_peer *peer,
 		struct bgpd_addr addr, *prefix = &addr;
 		u_int8_t plen;
 
-		pt_getaddr(p->re->prefix, prefix);
-		plen = p->re->prefix->prefixlen;
+		pt_getaddr(p->pt, prefix);
+		plen = p->pt->prefixlen;
 		if (f->match.prefixset.ps == NULL ||
 		    !trie_match(&f->match.prefixset.ps->th, prefix, plen,
 		    (f->match.prefixset.flags & PREFIXSET_FLAG_LONGER)))
@@ -325,8 +282,8 @@ rde_prefix_match(struct filter_prefix *fp, struct prefix *p)
 	struct bgpd_addr addr, *prefix = &addr;
 	u_int8_t plen;
 
-	pt_getaddr(p->re->prefix, prefix);
-	plen = p->re->prefix->prefixlen;
+	pt_getaddr(p->pt, prefix);
+	plen = p->pt->prefixlen;
 
 	if (fp->addr.aid != prefix->aid)
 		/* don't use IPv4 rules for IPv6 and vice versa */
@@ -469,13 +426,15 @@ rde_filter_equal(struct filter_head *a, struct filter_head *b,
 
 void
 rde_filterstate_prep(struct filterstate *state, struct rde_aspath *asp,
-    struct nexthop *nh, u_int8_t nhflags)
+    struct rde_community *communities, struct nexthop *nh, u_int8_t nhflags)
 {
 	memset(state, 0, sizeof(*state));
 
 	path_prep(&state->aspath);
 	if (asp)
 		path_copy(&state->aspath, asp);
+	if (communities)
+		communities_copy(&state->communities, communities);
 	state->nexthop = nexthop_ref(nh);
 	state->nhflags = nhflags;
 }
@@ -484,7 +443,8 @@ void
 rde_filterstate_clean(struct filterstate *state)
 {
 	path_clean(&state->aspath);
-	nexthop_put(state->nexthop);
+	communities_clean(&state->communities);
+	nexthop_unref(state->nexthop);
 	state->nexthop = NULL;
 }
 
@@ -521,7 +481,7 @@ filterset_free(struct filter_set_head *sh)
 			pftable_unref(s->action.id);
 		else if (s->type == ACTION_SET_NEXTHOP &&
 		    bgpd_process == PROC_RDE)
-			nexthop_put(s->action.nh);
+			nexthop_unref(s->action.nh);
 		free(s);
 	}
 }
@@ -798,10 +758,7 @@ rde_filter(struct filter_head *rules, struct rde_peer *peer,
 	struct filter_rule	*f;
 	enum filter_actions	 action = ACTION_DENY; /* default deny */
 
-	if (state == NULL) /* withdraw should be accepted by default */
-		action = ACTION_ALLOW;
-
-	if (state && state->aspath.flags & F_ATTR_PARSE_ERR)
+	if (state->aspath.flags & F_ATTR_PARSE_ERR)
 		/*
 		 * don't try to filter bad updates just deny them
 		 * so they act as implicit withdraws
@@ -827,10 +784,8 @@ rde_filter(struct filter_head *rules, struct rde_peer *peer,
 		     f->skip[RDE_FILTER_SKIP_PEERID]);
 
 		if (rde_filter_match(f, peer, state, p)) {
-			if (state != NULL) {
-				rde_apply_set(&f->set, state,
-				    p->re->prefix->aid, prefix_peer(p), peer);
-			}
+			rde_apply_set(&f->set, state, p->pt->aid,
+			    prefix_peer(p), peer);
 			if (f->action != ACTION_NONE)
 				action = f->action;
 			if (f->quick)

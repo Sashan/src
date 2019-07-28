@@ -1,4 +1,4 @@
-/*	$OpenBSD: exec_elf.c,v 1.148 2019/04/20 23:11:20 deraadt Exp $	*/
+/*	$OpenBSD: exec_elf.c,v 1.151 2019/05/13 19:21:31 bluhm Exp $	*/
 
 /*
  * Copyright (c) 1996 Per Fogelstrom
@@ -852,7 +852,6 @@ int
 elf_os_pt_note(struct proc *p, struct exec_package *epp, Elf_Ehdr *eh,
     char *os_name, size_t name_size, size_t desc_size)
 {
-	char pathbuf[MAXPATHLEN];
 	Elf_Phdr *hph, *ph;
 	Elf_Note *np = NULL;
 	size_t phsize;
@@ -866,18 +865,6 @@ elf_os_pt_note(struct proc *p, struct exec_package *epp, Elf_Ehdr *eh,
 
 	for (ph = hph;  ph < &hph[eh->e_phnum]; ph++) {
 		if (ph->p_type == PT_OPENBSD_WXNEEDED) {
-			int wxallowed = (epp->ep_vp->v_mount &&
-			    (epp->ep_vp->v_mount->mnt_flag & MNT_WXALLOWED));
-			
-			if (!wxallowed) {
-				error = copyinstr(epp->ep_name, &pathbuf,
-				    sizeof(pathbuf), NULL);
-				log(LOG_NOTICE,
-				    "%s(%d): W^X binary outside wxallowed mountpoint\n",
-				    error ? "" : pathbuf, p->p_p->ps_pid);
-				error = EACCES;
-				goto out1;
-			}
 			epp->ep_flags |= EXEC_WXNEEDED;
 			break;
 		}
@@ -1143,7 +1130,9 @@ coredump_setup_elf(int segment_count, void *cookie)
 	 * the section sizes and offsets
 	 */
 	ws->psections = mallocarray(ws->npsections, sizeof(Elf_Phdr),
-	    M_TEMP, M_WAITOK|M_ZERO);
+	    M_TEMP, M_WAITOK|M_CANFAIL|M_ZERO);
+	if (ws->psections == NULL)
+		return ENOMEM;
 	ws->psectionslen = ws->npsections * sizeof(Elf_Phdr);
 
 	ws->notestart = ehdr.e_phoff + ws->psectionslen;
@@ -1222,7 +1211,7 @@ coredump_notes_elf(struct proc *p, void *iocookie, size_t *sizep)
 		cpi.cpi_signo = p->p_sisig;
 		cpi.cpi_sigcode = p->p_sicode;
 
-		cpi.cpi_sigpend = p->p_siglist;
+		cpi.cpi_sigpend = p->p_siglist | pr->ps_siglist;
 		cpi.cpi_sigmask = p->p_sigmask;
 		cpi.cpi_sigignore = pr->ps_sigacts->ps_sigignore;
 		cpi.cpi_sigcatch = pr->ps_sigacts->ps_sigcatch;

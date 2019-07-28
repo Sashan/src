@@ -1,4 +1,4 @@
-/*	$OpenBSD: sysctl.h,v 1.184 2019/02/07 15:11:38 visa Exp $	*/
+/*	$OpenBSD: sysctl.h,v 1.194 2019/07/12 00:04:59 cheloha Exp $	*/
 /*	$NetBSD: sysctl.h,v 1.16 1996/04/09 20:55:36 cgd Exp $	*/
 
 /*
@@ -186,7 +186,9 @@ struct ctlname {
 #define	KERN_CONSBUF		83	/* console message buffer */
 #define	KERN_AUDIO		84	/* struct: audio properties */
 #define	KERN_CPUSTATS		85	/* struct: cpu statistics */
-#define	KERN_MAXID		86	/* number of valid kern ids */
+#define	KERN_PFSTATUS		86	/* struct: pf status and stats */
+#define	KERN_TIMEOUT_STATS	87	/* struct: timeout status and stats */
+#define	KERN_MAXID		88	/* number of valid kern ids */
 
 #define	CTL_KERN_NAMES { \
 	{ 0, 0 }, \
@@ -275,6 +277,8 @@ struct ctlname {
 	{ "gap", 0 }, \
 	{ "audio", CTLTYPE_STRUCT }, \
 	{ "cpustats", CTLTYPE_STRUCT }, \
+	{ "pfstatus", CTLTYPE_STRUCT }, \
+	{ "timeout_stats", CTLTYPE_STRUCT }, \
 }
 
 /*
@@ -361,6 +365,8 @@ struct kinfo_proc {
 	int32_t	p_eflag;		/* LONG: extra kinfo_proc flags */
 #define	EPROC_CTTY	0x01	/* controlling tty vnode active */
 #define	EPROC_SLEADER	0x02	/* session leader */
+#define	EPROC_UNVEIL	0x04	/* has unveil settings */
+#define	EPROC_LKUNVEIL	0x08	/* unveil is locked */
 	int32_t	p_exitsig;		/* unused, always zero. */
 	int32_t	p_flag;			/* INT: P_* flags. */
 
@@ -462,6 +468,8 @@ struct kinfo_proc {
 	u_int64_t p_vm_map_size;	/* VSIZE_T: virtual size */
 	int32_t   p_tid;		/* PID_T: Thread identifier. */
 	u_int32_t p_rtableid;		/* U_INT: Routing table identifier. */
+
+	u_int64_t p_pledge;		/* U_INT64_T: Pledge flags. */
 };
 
 /*
@@ -534,6 +542,14 @@ struct kinfo_vmentry {
  * p_tpgid, p_tsess, p_vm_rssize, p_u[us]time_{sec,usec}, p_cpuid
  */
 
+#if defined(_KERNEL)
+#define PR_LOCK(pr)	mtx_enter(&(pr)->ps_mtx)
+#define PR_UNLOCK(pr)	mtx_leave(&(pr)->ps_mtx)
+#else
+#define PR_LOCK(pr)	/* nothing */
+#define PR_UNLOCK(pr)	/* nothing */
+#endif
+
 #define PTRTOINT64(_x)	((u_int64_t)(u_long)(_x))
 
 #define FILL_KPROC(kp, copy_str, p, pr, uc, pg, paddr, \
@@ -593,7 +609,7 @@ do {									\
 		(kp)->p_tracep = PTRTOINT64((pr)->ps_tracevp);		\
 	(kp)->p_traceflag = (pr)->ps_traceflag;				\
 									\
-	(kp)->p_siglist = (p)->p_siglist;				\
+	(kp)->p_siglist = (p)->p_siglist | (pr)->ps_siglist;		\
 	(kp)->p_sigmask = (p)->p_sigmask;				\
 	(kp)->p_sigignore = (sa) ? (sa)->ps_sigignore : 0;		\
 	(kp)->p_sigcatch = (sa) ? (sa)->ps_sigcatch : 0;		\
@@ -603,6 +619,7 @@ do {									\
 									\
 	(kp)->p_xstat = (p)->p_xstat;					\
 	(kp)->p_acflag = (pr)->ps_acflag;				\
+	(kp)->p_pledge = (pr)->ps_pledge;				\
 									\
 	/* XXX depends on e_name being an array and not a pointer */	\
 	copy_str((kp)->p_emul, (char *)(pr)->ps_emul +			\
@@ -613,8 +630,12 @@ do {									\
 									\
 	if ((sess)->s_ttyvp)						\
 		(kp)->p_eflag |= EPROC_CTTY;				\
-	if ((sess)->s_leader == (praddr))				\
-		(kp)->p_eflag |= EPROC_SLEADER;				\
+	if ((pr)->ps_uvpaths)						\
+		(kp)->p_eflag |= EPROC_UNVEIL;				\
+	if ((pr)->ps_uvdone ||						\
+	    (((pr)->ps_flags & PS_PLEDGE) &&				\
+	     ((pr)->ps_pledge & PLEDGE_UNVEIL) == 0))			\
+		(kp)->p_eflag |= EPROC_LKUNVEIL;			\
 									\
 	if (((pr)->ps_flags & (PS_EMBRYO | PS_ZOMBIE)) == 0) {		\
 		if ((vm) != NULL) {					\
@@ -636,9 +657,11 @@ do {									\
 			(kp)->p_wchan = PTRTOINT64((p)->p_wchan);	\
 	}								\
 									\
+	PR_LOCK(pr);							\
 	if (lim)							\
 		(kp)->p_rlim_rss_cur =					\
 		    (lim)->pl_rlimit[RLIMIT_RSS].rlim_cur;		\
+	PR_UNLOCK(pr);							\
 									\
 	if (((pr)->ps_flags & PS_ZOMBIE) == 0) {			\
 		struct timeval tv;					\
@@ -1010,10 +1033,12 @@ int sysctl_wdog(int *, u_int, void *, size_t *, void *, size_t);
 extern int (*cpu_cpuspeed)(int *);
 extern void (*cpu_setperf)(int);
 
+int net_ifiq_sysctl(int *, u_int, void *, size_t *, void *, size_t);
 int bpf_sysctl(int *, u_int, void *, size_t *, void *, size_t);
 int pflow_sysctl(int *, u_int, void *, size_t *, void *, size_t);
 int pipex_sysctl(int *, u_int, void *, size_t *, void *, size_t);
 int mpls_sysctl(int *, u_int, void *, size_t *, void *, size_t);
+int pf_sysctl(void *, size_t *, void *, size_t);
 
 #else	/* !_KERNEL */
 

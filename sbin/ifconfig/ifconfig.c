@@ -1,4 +1,4 @@
-/*	$OpenBSD: ifconfig.c,v 1.401 2019/04/19 04:24:25 dlg Exp $	*/
+/*	$OpenBSD: ifconfig.c,v 1.408 2019/07/25 15:23:38 krw Exp $	*/
 /*	$NetBSD: ifconfig.c,v 1.40 1997/10/01 02:19:43 enami Exp $	*/
 
 /*
@@ -75,7 +75,6 @@
 #include <arpa/inet.h>
 #include <netinet/ip_ipsp.h>
 #include <netinet/if_ether.h>
-#include <net/if_enc.h>
 #include <net80211/ieee80211.h>
 #include <net80211/ieee80211_ioctl.h>
 #include <net/pfvar.h>
@@ -924,7 +923,7 @@ nextarg:
 
 	if (clearaddr) {
 		(void) strlcpy(rafp->af_ridreq, name, sizeof(ifr.ifr_name));
-		if (ioctl(s, rafp->af_difaddr, rafp->af_ridreq) < 0) {
+		if (ioctl(s, rafp->af_difaddr, rafp->af_ridreq) == -1) {
 			if (errno == EADDRNOTAVAIL && (doalias >= 0)) {
 				/* means no previous address for interface */
 			} else
@@ -933,7 +932,7 @@ nextarg:
 	}
 	if (newaddr) {
 		(void) strlcpy(rafp->af_addreq, name, sizeof(ifr.ifr_name));
-		if (ioctl(s, rafp->af_aifaddr, rafp->af_addreq) < 0)
+		if (ioctl(s, rafp->af_aifaddr, rafp->af_addreq) == -1)
 			err(1, "SIOCAIFADDR");
 	}
 	return (0);
@@ -949,7 +948,7 @@ getsock(int naf)
 	if (oaf != -1)
 		close(s);
 	s = socket(naf, SOCK_DGRAM, 0);
-	if (s < 0)
+	if (s == -1)
 		oaf = -1;
 	else
 		oaf = naf;
@@ -960,45 +959,45 @@ getinfo(struct ifreq *ifr, int create)
 {
 
 	getsock(af);
-	if (s < 0)
+	if (s == -1)
 		err(1, "socket");
 	if (!isdigit((unsigned char)name[strlen(name) - 1]))
 		return (-1);	/* ignore groups here */
-	if (ioctl(s, SIOCGIFFLAGS, (caddr_t)ifr) < 0) {
+	if (ioctl(s, SIOCGIFFLAGS, (caddr_t)ifr) == -1) {
 		int oerrno = errno;
 
 		if (!create)
 			return (-1);
-		if (ioctl(s, SIOCIFCREATE, (caddr_t)ifr) < 0) {
+		if (ioctl(s, SIOCIFCREATE, (caddr_t)ifr) == -1) {
 			errno = oerrno;
 			return (-1);
 		}
-		if (ioctl(s, SIOCGIFFLAGS, (caddr_t)ifr) < 0)
+		if (ioctl(s, SIOCGIFFLAGS, (caddr_t)ifr) == -1)
 			return (-1);
 	}
 	flags = ifr->ifr_flags & 0xffff;
-	if (ioctl(s, SIOCGIFXFLAGS, (caddr_t)ifr) < 0)
+	if (ioctl(s, SIOCGIFXFLAGS, (caddr_t)ifr) == -1)
 		ifr->ifr_flags = 0;
 	xflags = ifr->ifr_flags;
-	if (ioctl(s, SIOCGIFMETRIC, (caddr_t)ifr) < 0)
+	if (ioctl(s, SIOCGIFMETRIC, (caddr_t)ifr) == -1)
 		metric = 0;
 	else
 		metric = ifr->ifr_metric;
 #ifdef SMALL
-	if (ioctl(s, SIOCGIFMTU, (caddr_t)ifr) < 0)
+	if (ioctl(s, SIOCGIFMTU, (caddr_t)ifr) == -1)
 #else
-	if (is_bridge(name) || ioctl(s, SIOCGIFMTU, (caddr_t)ifr) < 0)
+	if (is_bridge(name) || ioctl(s, SIOCGIFMTU, (caddr_t)ifr) == -1)
 #endif
 		mtu = 0;
 	else
 		mtu = ifr->ifr_mtu;
 #ifndef SMALL
-	if (ioctl(s, SIOCGIFRDOMAIN, (caddr_t)ifr) < 0)
+	if (ioctl(s, SIOCGIFRDOMAIN, (caddr_t)ifr) == -1)
 		rdomainid = 0;
 	else
 		rdomainid = ifr->ifr_rdomainid;
 #endif
-	if (ioctl(s, SIOCGIFLLPRIO, (caddr_t)ifr) < 0)
+	if (ioctl(s, SIOCGIFLLPRIO, (caddr_t)ifr) == -1)
 		llprio = 0;
 	else
 		llprio = ifr->ifr_llprio;
@@ -1284,7 +1283,7 @@ setifrtlabel(const char *label, int d)
 		ifr.ifr_data = (caddr_t)(const char *)"";
 	else
 		ifr.ifr_data = (caddr_t)label;
-	if (ioctl(s, SIOCSIFRTLABEL, &ifr) < 0)
+	if (ioctl(s, SIOCSIFRTLABEL, &ifr) == -1)
 		warn("SIOCSIFRTLABEL");
 }
 #endif
@@ -1309,7 +1308,7 @@ void
 setifdesc(const char *val, int ignored)
 {
 	ifr.ifr_data = (caddr_t)val;
-	if (ioctl(s, SIOCSIFDESCR, &ifr) < 0)
+	if (ioctl(s, SIOCSIFDESCR, &ifr) == -1)
 		warn("SIOCSIFDESCR");
 }
 
@@ -1318,7 +1317,7 @@ void
 unsetifdesc(const char *noval, int ignored)
 {
 	ifr.ifr_data = (caddr_t)(const char *)"";
-	if (ioctl(s, SIOCSIFDESCR, &ifr) < 0)
+	if (ioctl(s, SIOCSIFDESCR, &ifr) == -1)
 		warn("SIOCSIFDESCR");
 }
 
@@ -1371,7 +1370,7 @@ setifflags(const char *vname, int value)
 
 	bcopy((char *)&ifr, (char *)&my_ifr, sizeof(struct ifreq));
 
-	if (ioctl(s, SIOCGIFFLAGS, (caddr_t)&my_ifr) < 0)
+	if (ioctl(s, SIOCGIFFLAGS, (caddr_t)&my_ifr) == -1)
 		err(1, "SIOCGIFFLAGS");
 	(void) strlcpy(my_ifr.ifr_name, name, sizeof(my_ifr.ifr_name));
 	flags = my_ifr.ifr_flags;
@@ -1382,7 +1381,7 @@ setifflags(const char *vname, int value)
 	} else
 		flags |= value;
 	my_ifr.ifr_flags = flags;
-	if (ioctl(s, SIOCSIFFLAGS, (caddr_t)&my_ifr) < 0)
+	if (ioctl(s, SIOCSIFFLAGS, (caddr_t)&my_ifr) == -1)
 		err(1, "SIOCSIFFLAGS");
 }
 
@@ -1394,7 +1393,7 @@ setifxflags(const char *vname, int value)
 
 	bcopy((char *)&ifr, (char *)&my_ifr, sizeof(struct ifreq));
 
-	if (ioctl(s, SIOCGIFXFLAGS, (caddr_t)&my_ifr) < 0)
+	if (ioctl(s, SIOCGIFXFLAGS, (caddr_t)&my_ifr) == -1)
 		warn("SIOCGIFXFLAGS");
 	(void) strlcpy(my_ifr.ifr_name, name, sizeof(my_ifr.ifr_name));
 	xflags = my_ifr.ifr_flags;
@@ -1405,7 +1404,7 @@ setifxflags(const char *vname, int value)
 	} else
 		xflags |= value;
 	my_ifr.ifr_flags = xflags;
-	if (ioctl(s, SIOCSIFXFLAGS, (caddr_t)&my_ifr) < 0)
+	if (ioctl(s, SIOCSIFXFLAGS, (caddr_t)&my_ifr) == -1)
 		warn("SIOCSIFXFLAGS");
 }
 
@@ -1416,7 +1415,7 @@ addaf(const char *vname, int value)
 
 	strlcpy(ifar.ifar_name, name, sizeof(ifar.ifar_name));
 	ifar.ifar_af = value;
-	if (ioctl(s, SIOCIFAFATTACH, (caddr_t)&ifar) < 0)
+	if (ioctl(s, SIOCIFAFATTACH, (caddr_t)&ifar) == -1)
 		warn("SIOCIFAFATTACH");
 }
 
@@ -1427,7 +1426,7 @@ removeaf(const char *vname, int value)
 
 	strlcpy(ifar.ifar_name, name, sizeof(ifar.ifar_name));
 	ifar.ifar_af = value;
-	if (ioctl(s, SIOCIFAFDETACH, (caddr_t)&ifar) < 0)
+	if (ioctl(s, SIOCIFAFDETACH, (caddr_t)&ifar) == -1)
 		warn("SIOCIFAFDETACH");
 }
 
@@ -1519,6 +1518,9 @@ void
 setautoconf(const char *cmd, int val)
 {
 	switch (afp->af_af) {
+	case AF_INET:
+		setifxflags("inet", val * IFXF_AUTOCONF4);
+		break;
 	case AF_INET6:
 		setifxflags("inet6", val * IFXF_AUTOCONF6);
 		break;
@@ -1539,7 +1541,7 @@ setifmetric(const char *val, int ignored)
 	ifr.ifr_metric = strtonum(val, 0, INT_MAX, &errmsg);
 	if (errmsg)
 		errx(1, "metric %s: %s", val, errmsg);
-	if (ioctl(s, SIOCSIFMETRIC, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSIFMETRIC, (caddr_t)&ifr) == -1)
 		warn("SIOCSIFMETRIC");
 }
 #endif
@@ -1555,7 +1557,7 @@ setifmtu(const char *val, int d)
 	ifr.ifr_mtu = strtonum(val, 0, INT_MAX, &errmsg);
 	if (errmsg)
 		errx(1, "mtu %s: %s", val, errmsg);
-	if (ioctl(s, SIOCSIFMTU, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSIFMTU, (caddr_t)&ifr) == -1)
 		warn("SIOCSIFMTU");
 }
 
@@ -1570,7 +1572,7 @@ setifllprio(const char *val, int d)
 	ifr.ifr_llprio = strtonum(val, 0, UCHAR_MAX, &errmsg);
 	if (errmsg)
 		errx(1, "llprio %s: %s", val, errmsg);
-	if (ioctl(s, SIOCSIFLLPRIO, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSIFLLPRIO, (caddr_t)&ifr) == -1)
 		warn("SIOCSIFLLPRIO");
 }
 
@@ -1744,7 +1746,7 @@ setifnwid(const char *val, int d)
 	(void)strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	(void)strlcpy(nwidname, nwid.i_nwid, sizeof(nwidname));
 	ifr.ifr_data = (caddr_t)&nwid;
-	if (ioctl(s, SIOCS80211NWID, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCS80211NWID, (caddr_t)&ifr) == -1)
 		warn("SIOCS80211NWID");
 }
 
@@ -1756,7 +1758,7 @@ process_join_commands(void)
 		return;
 
 	ifr.ifr_data = (caddr_t)&join;
-	if (ioctl(s, SIOCS80211JOIN, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCS80211JOIN, (caddr_t)&ifr) == -1)
 		err(1, "SIOCS80211JOIN");
 }
 
@@ -1803,7 +1805,7 @@ delifjoin(const char *val, int d)
 
 	if (d == -1) {
 		ifr.ifr_data = (caddr_t)&join;
-		if (ioctl(s, SIOCS80211JOIN, (caddr_t)&ifr) < 0)
+		if (ioctl(s, SIOCS80211JOIN, (caddr_t)&ifr) == -1)
 			err(1, "SIOCS80211JOIN");
 	}
 
@@ -1815,7 +1817,7 @@ delifjoin(const char *val, int d)
 		join.i_flags |= IEEE80211_JOIN_ANY;
 	(void)strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	ifr.ifr_data = (caddr_t)&join;
-	if (ioctl(s, SIOCS80211JOIN, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCS80211JOIN, (caddr_t)&ifr) == -1)
 		err(1, "SIOCS80211JOIN");
 }
 
@@ -1831,13 +1833,13 @@ delifjoinlist(const char *val, int d)
 
 	if (d == -1) {
 		ifr.ifr_data = (caddr_t)&join;
-		if (ioctl(s, SIOCS80211JOIN, (caddr_t)&ifr) < 0)
+		if (ioctl(s, SIOCS80211JOIN, (caddr_t)&ifr) == -1)
 			err(1, "SIOCS80211JOIN");
 		return;
 	}
 
 	ifr.ifr_data = (caddr_t)&join;
-	if (ioctl(s, SIOCS80211JOIN, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCS80211JOIN, (caddr_t)&ifr) == -1)
 		err(1, "SIOCS80211JOIN");
 }
 
@@ -1981,7 +1983,7 @@ setifwpa(const char *val, int d)
 		return;
 	}
 
-	if (ioctl(s, SIOCS80211WPAPARMS, (caddr_t)&wpa) < 0)
+	if (ioctl(s, SIOCS80211WPAPARMS, (caddr_t)&wpa) == -1)
 		err(1, "SIOCS80211WPAPARMS");
 }
 
@@ -2015,14 +2017,14 @@ setifwpaprotos(const char *val, int d)
 
 	memset(&wpa, 0, sizeof(wpa));
 	(void)strlcpy(wpa.i_name, name, sizeof(wpa.i_name));
-	if (ioctl(s, SIOCG80211WPAPARMS, (caddr_t)&wpa) < 0)
+	if (ioctl(s, SIOCG80211WPAPARMS, (caddr_t)&wpa) == -1)
 		err(1, "SIOCG80211WPAPARMS");
 	wpa.i_protos = rval;
 	/* Let the kernel set up the appropriate default ciphers. */
 	wpa.i_ciphers = 0;
 	wpa.i_groupcipher = 0;
 
-	if (ioctl(s, SIOCS80211WPAPARMS, (caddr_t)&wpa) < 0)
+	if (ioctl(s, SIOCS80211WPAPARMS, (caddr_t)&wpa) == -1)
 		err(1, "SIOCS80211WPAPARMS");
 }
 
@@ -2058,13 +2060,13 @@ setifwpaakms(const char *val, int d)
 
 	memset(&wpa, 0, sizeof(wpa));
 	(void)strlcpy(wpa.i_name, name, sizeof(wpa.i_name));
-	if (ioctl(s, SIOCG80211WPAPARMS, (caddr_t)&wpa) < 0)
+	if (ioctl(s, SIOCG80211WPAPARMS, (caddr_t)&wpa) == -1)
 		err(1, "SIOCG80211WPAPARMS");
 	wpa.i_akms = rval;
 	/* Enable WPA for 802.1x here. PSK case is handled in setifwpakey(). */
 	wpa.i_enabled = ((rval & IEEE80211_WPA_AKM_8021X) != 0);
 
-	if (ioctl(s, SIOCS80211WPAPARMS, (caddr_t)&wpa) < 0)
+	if (ioctl(s, SIOCS80211WPAPARMS, (caddr_t)&wpa) == -1)
 		err(1, "SIOCS80211WPAPARMS");
 }
 
@@ -2119,11 +2121,11 @@ setifwpaciphers(const char *val, int d)
 
 	memset(&wpa, 0, sizeof(wpa));
 	(void)strlcpy(wpa.i_name, name, sizeof(wpa.i_name));
-	if (ioctl(s, SIOCG80211WPAPARMS, (caddr_t)&wpa) < 0)
+	if (ioctl(s, SIOCG80211WPAPARMS, (caddr_t)&wpa) == -1)
 		err(1, "SIOCG80211WPAPARMS");
 	wpa.i_ciphers = rval;
 
-	if (ioctl(s, SIOCS80211WPAPARMS, (caddr_t)&wpa) < 0)
+	if (ioctl(s, SIOCS80211WPAPARMS, (caddr_t)&wpa) == -1)
 		err(1, "SIOCS80211WPAPARMS");
 }
 
@@ -2140,7 +2142,7 @@ setifwpagroupcipher(const char *val, int d)
 
 	memset(&wpa, 0, sizeof(wpa));
 	(void)strlcpy(wpa.i_name, name, sizeof(wpa.i_name));
-	if (ioctl(s, SIOCG80211WPAPARMS, (caddr_t)&wpa) < 0)
+	if (ioctl(s, SIOCG80211WPAPARMS, (caddr_t)&wpa) == -1)
 		err(1, "SIOCG80211WPAPARMS");
 	wpa.i_groupcipher = cipher;
 
@@ -2150,7 +2152,7 @@ setifwpagroupcipher(const char *val, int d)
 		return;
 	}
 
-	if (ioctl(s, SIOCS80211WPAPARMS, (caddr_t)&wpa) < 0)
+	if (ioctl(s, SIOCS80211WPAPARMS, (caddr_t)&wpa) == -1)
 		err(1, "SIOCS80211WPAPARMS");
 }
 
@@ -2178,7 +2180,7 @@ setifwpakey(const char *val, int d)
 		} else {
 			warnx("no nwid or join command, guessing nwid to use");
 
-			if (ioctl(s, SIOCG80211NWID, (caddr_t)&ifr))
+			if (ioctl(s, SIOCG80211NWID, (caddr_t)&ifr) == -1)
 				err(1, "SIOCG80211NWID");
 		}
 
@@ -2215,16 +2217,16 @@ setifwpakey(const char *val, int d)
 		return;
 	}
 
-	if (ioctl(s, SIOCS80211WPAPSK, (caddr_t)&psk) < 0)
+	if (ioctl(s, SIOCS80211WPAPSK, (caddr_t)&psk) == -1)
 		err(1, "SIOCS80211WPAPSK");
 
 	/* And ... automatically enable or disable WPA */
 	memset(&wpa, 0, sizeof(wpa));
 	(void)strlcpy(wpa.i_name, name, sizeof(wpa.i_name));
-	if (ioctl(s, SIOCG80211WPAPARMS, (caddr_t)&wpa) < 0)
+	if (ioctl(s, SIOCG80211WPAPARMS, (caddr_t)&wpa) == -1)
 		err(1, "SIOCG80211WPAPARMS");
 	wpa.i_enabled = psk.i_enabled;
-	if (ioctl(s, SIOCS80211WPAPARMS, (caddr_t)&wpa) < 0)
+	if (ioctl(s, SIOCS80211WPAPARMS, (caddr_t)&wpa) == -1)
 		err(1, "SIOCS80211WPAPARMS");
 }
 
@@ -2763,7 +2765,7 @@ init_current_media(void)
 		(void) memset(&ifmr, 0, sizeof(ifmr));
 		(void) strlcpy(ifmr.ifm_name, name, sizeof(ifmr.ifm_name));
 
-		if (ioctl(s, SIOCGIFMEDIA, (caddr_t)&ifmr) < 0) {
+		if (ioctl(s, SIOCGIFMEDIA, (caddr_t)&ifmr) == -1) {
 			/*
 			 * If we get E2BIG, the kernel is telling us
 			 * that there are more, so we can ignore it.
@@ -2799,7 +2801,7 @@ process_media_commands(void)
 	(void) strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	ifr.ifr_media = media_current;
 
-	if (ioctl(s, SIOCSIFMEDIA, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSIFMEDIA, (caddr_t)&ifr) == -1)
 		err(1, "SIOCSIFMEDIA");
 }
 
@@ -3170,7 +3172,7 @@ phys_status(int force)
 
 	memset(&req, 0, sizeof(req));
 	(void) strlcpy(req.iflr_name, name, sizeof(req.iflr_name));
-	if (ioctl(s, SIOCGLIFPHYADDR, (caddr_t)&req) < 0) {
+	if (ioctl(s, SIOCGLIFPHYADDR, (caddr_t)&req) == -1) {
 		if (errno != EADDRNOTAVAIL)
 			return;
 
@@ -3310,7 +3312,7 @@ status(int link, struct sockaddr_dl *sdl, int ls)
 	(void) memset(&ifmr, 0, sizeof(ifmr));
 	(void) strlcpy(ifmr.ifm_name, name, sizeof(ifmr.ifm_name));
 
-	if (ioctl(s, SIOCGIFMEDIA, (caddr_t)&ifmr) < 0) {
+	if (ioctl(s, SIOCGIFMEDIA, (caddr_t)&ifmr) == -1) {
 		/*
 		 * Interface doesn't support SIOC{G,S}IFMEDIA.
 		 */
@@ -3330,7 +3332,7 @@ status(int link, struct sockaddr_dl *sdl, int ls)
 		err(1, "calloc");
 	ifmr.ifm_ulist = media_list;
 
-	if (ioctl(s, SIOCGIFMEDIA, (caddr_t)&ifmr) < 0)
+	if (ioctl(s, SIOCGIFMEDIA, (caddr_t)&ifmr) == -1)
 		err(1, "SIOCGIFMEDIA");
 
 	printf("\tmedia: ");
@@ -3441,7 +3443,7 @@ in_status(int force)
 	struct sockaddr_in *sin, sin2;
 
 	getsock(AF_INET);
-	if (s < 0) {
+	if (s == -1) {
 		if (errno == EPROTONOSUPPORT)
 			return;
 		err(1, "socket");
@@ -3459,7 +3461,7 @@ in_status(int force)
 
 	printf("\tinet %s", inet_ntoa(sin->sin_addr));
 	(void) strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
-	if (ioctl(s, SIOCGIFNETMASK, (caddr_t)&ifr) < 0) {
+	if (ioctl(s, SIOCGIFNETMASK, (caddr_t)&ifr) == -1) {
 		if (errno != EADDRNOTAVAIL)
 			warn("SIOCGIFNETMASK");
 		memset(&ifr.ifr_addr, 0, sizeof(ifr.ifr_addr));
@@ -3468,7 +3470,7 @@ in_status(int force)
 		    ((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr;
 	if (flags & IFF_POINTOPOINT) {
 		memcpy(&ifr.ifr_addr, &sin2, sizeof(sin2));
-		if (ioctl(s, SIOCGIFDSTADDR, (caddr_t)&ifr) < 0) {
+		if (ioctl(s, SIOCGIFDSTADDR, (caddr_t)&ifr) == -1) {
 			if (errno == EADDRNOTAVAIL)
 			    memset(&ifr.ifr_addr, 0, sizeof(ifr.ifr_addr));
 			else
@@ -3481,7 +3483,7 @@ in_status(int force)
 	printf(" netmask 0x%x", ntohl(netmask.sin_addr.s_addr));
 	if (flags & IFF_BROADCAST) {
 		memcpy(&ifr.ifr_addr, &sin2, sizeof(sin2));
-		if (ioctl(s, SIOCGIFBRDADDR, (caddr_t)&ifr) < 0) {
+		if (ioctl(s, SIOCGIFBRDADDR, (caddr_t)&ifr) == -1) {
 			if (errno == EADDRNOTAVAIL)
 			    memset(&ifr.ifr_addr, 0, sizeof(ifr.ifr_addr));
 			else
@@ -3528,7 +3530,7 @@ in6_alias(struct in6_ifreq *creq)
 
 	/* Get the non-alias address for this interface. */
 	getsock(AF_INET6);
-	if (s < 0) {
+	if (s == -1) {
 		if (errno == EPROTONOSUPPORT)
 			return;
 		err(1, "socket");
@@ -3547,7 +3549,7 @@ in6_alias(struct in6_ifreq *creq)
 		(void) memset(&ifr6, 0, sizeof(ifr6));
 		(void) strlcpy(ifr6.ifr_name, name, sizeof(ifr6.ifr_name));
 		ifr6.ifr_addr = creq->ifr_addr;
-		if (ioctl(s, SIOCGIFDSTADDR_IN6, (caddr_t)&ifr6) < 0) {
+		if (ioctl(s, SIOCGIFDSTADDR_IN6, (caddr_t)&ifr6) == -1) {
 			if (errno != EADDRNOTAVAIL)
 				warn("SIOCGIFDSTADDR_IN6");
 			(void) memset(&ifr6.ifr_addr, 0, sizeof(ifr6.ifr_addr));
@@ -3565,7 +3567,7 @@ in6_alias(struct in6_ifreq *creq)
 	(void) memset(&ifr6, 0, sizeof(ifr6));
 	(void) strlcpy(ifr6.ifr_name, name, sizeof(ifr6.ifr_name));
 	ifr6.ifr_addr = creq->ifr_addr;
-	if (ioctl(s, SIOCGIFNETMASK_IN6, (caddr_t)&ifr6) < 0) {
+	if (ioctl(s, SIOCGIFNETMASK_IN6, (caddr_t)&ifr6) == -1) {
 		if (errno != EADDRNOTAVAIL)
 			warn("SIOCGIFNETMASK_IN6");
 	} else {
@@ -3577,7 +3579,7 @@ in6_alias(struct in6_ifreq *creq)
 	(void) memset(&ifr6, 0, sizeof(ifr6));
 	(void) strlcpy(ifr6.ifr_name, name, sizeof(ifr6.ifr_name));
 	ifr6.ifr_addr = creq->ifr_addr;
-	if (ioctl(s, SIOCGIFAFLAG_IN6, (caddr_t)&ifr6) < 0) {
+	if (ioctl(s, SIOCGIFAFLAG_IN6, (caddr_t)&ifr6) == -1) {
 		if (errno != EADDRNOTAVAIL)
 			warn("SIOCGIFAFLAG_IN6");
 	} else {
@@ -3607,7 +3609,7 @@ in6_alias(struct in6_ifreq *creq)
 		(void) strlcpy(ifr6.ifr_name, name, sizeof(ifr6.ifr_name));
 		ifr6.ifr_addr = creq->ifr_addr;
 		lifetime = &ifr6.ifr_ifru.ifru_lifetime;
-		if (ioctl(s, SIOCGIFALIFETIME_IN6, (caddr_t)&ifr6) < 0) {
+		if (ioctl(s, SIOCGIFALIFETIME_IN6, (caddr_t)&ifr6) == -1) {
 			if (errno != EADDRNOTAVAIL)
 				warn("SIOCGIFALIFETIME_IN6");
 		} else if (lifetime->ia6t_preferred || lifetime->ia6t_expire) {
@@ -3678,7 +3680,7 @@ settunnel(const char *src, const char *dst)
 	(void) strlcpy(req.iflr_name, name, sizeof(req.iflr_name));
 	memcpy(&req.addr, srcres->ai_addr, srcres->ai_addrlen);
 	memcpy(&req.dstaddr, dstres->ai_addr, dstres->ai_addrlen);
-	if (ioctl(s, SIOCSLIFPHYADDR, &req) < 0)
+	if (ioctl(s, SIOCSLIFPHYADDR, &req) == -1)
 		warn("SIOCSLIFPHYADDR");
 
 	freeaddrinfo(srcres);
@@ -3713,7 +3715,7 @@ settunneladdr(const char *addr, int ignored)
 	req.dstaddr.ss_len = 2;
 	req.dstaddr.ss_family = AF_UNSPEC;
 
-	if (ioctl(s, SIOCSLIFPHYADDR, &req) < 0)
+	if (ioctl(s, SIOCSLIFPHYADDR, &req) == -1)
 		warn("tunneladdr %s", addr);
 
 	freeaddrinfo(res);
@@ -3723,7 +3725,7 @@ settunneladdr(const char *addr, int ignored)
 void
 deletetunnel(const char *ignored, int alsoignored)
 {
-	if (ioctl(s, SIOCDIFPHYADDR, &ifr) < 0)
+	if (ioctl(s, SIOCDIFPHYADDR, &ifr) == -1)
 		warn("SIOCDIFPHYADDR");
 }
 
@@ -3739,7 +3741,7 @@ settunnelinst(const char *id, int param)
 
 	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	ifr.ifr_rdomainid = rdomainid;
-	if (ioctl(s, SIOCSLIFPHYRTABLE, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSLIFPHYRTABLE, (caddr_t)&ifr) == -1)
 		warn("SIOCSLIFPHYRTABLE");
 }
 
@@ -3748,7 +3750,7 @@ unsettunnelinst(const char *ignored, int alsoignored)
 {
 	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	ifr.ifr_rdomainid = 0;
-	if (ioctl(s, SIOCSLIFPHYRTABLE, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSLIFPHYRTABLE, (caddr_t)&ifr) == -1)
 		warn("SIOCSLIFPHYRTABLE");
 }
 
@@ -3768,7 +3770,7 @@ settunnelttl(const char *id, int param)
 
 	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	ifr.ifr_ttl = ttl;
-	if (ioctl(s, SIOCSLIFPHYTTL, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSLIFPHYTTL, (caddr_t)&ifr) == -1)
 		warn("SIOCSLIFPHYTTL");
 }
 
@@ -3777,7 +3779,7 @@ settunneldf(const char *ignored, int alsoignored)
 {
 	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	ifr.ifr_df = 1;
-	if (ioctl(s, SIOCSLIFPHYDF, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSLIFPHYDF, (caddr_t)&ifr) == -1)
 		warn("SIOCSLIFPHYDF");
 }
 
@@ -3786,7 +3788,7 @@ settunnelnodf(const char *ignored, int alsoignored)
 {
 	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	ifr.ifr_df = 0;
-	if (ioctl(s, SIOCSLIFPHYDF, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSLIFPHYDF, (caddr_t)&ifr) == -1)
 		warn("SIOCSLIFPHYDF");
 }
 
@@ -3795,7 +3797,7 @@ settunnelecn(const char *ignored, int alsoignored)
 {
 	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	ifr.ifr_metric = 1;
-	if (ioctl(s, SIOCSLIFPHYECN, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSLIFPHYECN, (caddr_t)&ifr) == -1)
 		warn("SIOCSLIFPHYECN");
 }
 
@@ -3804,7 +3806,7 @@ settunnelnoecn(const char *ignored, int alsoignored)
 {
 	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	ifr.ifr_metric = 0;
-	if (ioctl(s, SIOCSLIFPHYECN, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSLIFPHYECN, (caddr_t)&ifr) == -1)
 		warn("SIOCSLIFPHYECN");
 }
 
@@ -3816,7 +3818,7 @@ setvnetflowid(const char *ignored, int alsoignored)
 		errx(1, "vnetflowid: name is too long");
 
 	ifr.ifr_vnetid = 1;
-	if (ioctl(s, SIOCSVNETFLOWID, &ifr) < 0)
+	if (ioctl(s, SIOCSVNETFLOWID, &ifr) == -1)
 		warn("SIOCSVNETFLOWID");
 }
 
@@ -3828,7 +3830,7 @@ delvnetflowid(const char *ignored, int alsoignored)
 		errx(1, "vnetflowid: name is too long");
 
 	ifr.ifr_vnetid = 0;
-	if (ioctl(s, SIOCSVNETFLOWID, &ifr) < 0)
+	if (ioctl(s, SIOCSVNETFLOWID, &ifr) == -1)
 		warn("SIOCSVNETFLOWID");
 }
 
@@ -4096,7 +4098,7 @@ setvnetid(const char *id, int param)
 	}
 
 	ifr.ifr_vnetid = vnetid;
-	if (ioctl(s, SIOCSVNETID, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSVNETID, (caddr_t)&ifr) == -1)
 		warn("SIOCSVNETID");
 }
 
@@ -4104,7 +4106,7 @@ setvnetid(const char *id, int param)
 void
 delvnetid(const char *ignored, int alsoignored)
 {
-	if (ioctl(s, SIOCDVNETID, &ifr) < 0)
+	if (ioctl(s, SIOCDVNETID, &ifr) == -1)
 		warn("SIOCDVNETID");
 }
 
@@ -4145,7 +4147,7 @@ setifparent(const char *id, int param)
 	    sizeof(ifp.ifp_parent))
 		errx(1, "parent: parent too long");
 
-	if (ioctl(s, SIOCSIFPARENT, (caddr_t)&ifp) < 0)
+	if (ioctl(s, SIOCSIFPARENT, (caddr_t)&ifp) == -1)
 		warn("SIOCSIFPARENT");
 }
 
@@ -4153,7 +4155,7 @@ setifparent(const char *id, int param)
 void
 delifparent(const char *ignored, int alsoignored)
 {
-	if (ioctl(s, SIOCDIFPARENT, &ifr) < 0)
+	if (ioctl(s, SIOCDIFPARENT, &ifr) == -1)
 		warn("SIOCDIFPARENT");
 }
 
@@ -4214,7 +4216,7 @@ settxprio(const char *val, int d)
 			errx(1, "tx prio %s: %s", val, errmsg);
 	}
 
-	if (ioctl(s, SIOCSTXHPRIO, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSTXHPRIO, (caddr_t)&ifr) == -1)
 		warn("SIOCSTXHPRIO");
 }
 
@@ -4254,7 +4256,7 @@ setrxprio(const char *val, int d)
 			errx(1, "rx prio %s: %s", val, errmsg);
 	}
 
-	if (ioctl(s, SIOCSRXHPRIO, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSRXHPRIO, (caddr_t)&ifr) == -1)
 		warn("SIOCSRXHPRIO");
 }
 #endif
@@ -4347,7 +4349,7 @@ settrunkport(const char *val, int d)
 	strlcpy(rp.rp_ifname, name, sizeof(rp.rp_ifname));
 	strlcpy(rp.rp_portname, val, sizeof(rp.rp_portname));
 
-	if (ioctl(s, SIOCSTRUNKPORT, &rp))
+	if (ioctl(s, SIOCSTRUNKPORT, &rp) == -1)
 		err(1, "SIOCSTRUNKPORT");
 }
 
@@ -4360,7 +4362,7 @@ unsettrunkport(const char *val, int d)
 	strlcpy(rp.rp_ifname, name, sizeof(rp.rp_ifname));
 	strlcpy(rp.rp_portname, val, sizeof(rp.rp_portname));
 
-	if (ioctl(s, SIOCSTRUNKDELPORT, &rp))
+	if (ioctl(s, SIOCSTRUNKDELPORT, &rp) == -1)
 		err(1, "SIOCSTRUNKDELPORT");
 }
 
@@ -4510,19 +4512,38 @@ trunk_status(void)
 		for (i = 0; i < ra.ra_ports; i++) {
 			lp = (struct lacp_opreq *)&(rpbuf[i].rp_lacpreq);
 			if (ra.ra_proto == TRUNK_PROTO_LACP) {
-				printf("\t\ttrunkport %s lacp_state actor ",
+				printf("\t\t%s lacp actor "
+				    "system pri 0x%x mac %s, key 0x%x, "
+				    "port pri 0x%x number 0x%x\n",
+				    rpbuf[i].rp_portname,
+				    lp->actor_prio,
+				    ether_ntoa((struct ether_addr*)
+				     lp->actor_mac),
+				    lp->actor_key,
+				    lp->actor_portprio, lp->actor_portno);
+				printf("\t\t%s lacp actor state ",
 				    rpbuf[i].rp_portname);
 				printb_status(lp->actor_state,
 				    LACP_STATE_BITS);
 				putchar('\n');
-				printf("\t\ttrunkport %s lacp_state partner ",
+
+				printf("\t\t%s lacp partner "
+				    "system pri 0x%x mac %s, key 0x%x, "
+				    "port pri 0x%x number 0x%x\n",
+				    rpbuf[i].rp_portname,
+				    lp->partner_prio,
+				    ether_ntoa((struct ether_addr*)
+				     lp->partner_mac),
+				    lp->partner_key,
+				    lp->partner_portprio, lp->partner_portno);
+				printf("\t\t%s lacp partner state ",
 				    rpbuf[i].rp_portname);
 				printb_status(lp->partner_state,
 				    LACP_STATE_BITS);
 				putchar('\n');
 			}
 
-			printf("\t\ttrunkport %s ", rpbuf[i].rp_portname);
+			printf("\t\t%s port ", rpbuf[i].rp_portname);
 			printb_status(rpbuf[i].rp_flags, TRUNK_PORT_BITS);
 			putchar('\n');
 		}
@@ -5218,7 +5239,7 @@ pppoe_status(void)
 	memset(&state, 0, sizeof(state));
 
 	strlcpy(parms.ifname, name, sizeof(parms.ifname));
-	if (ioctl(s, PPPOEGETPARMS, &parms))
+	if (ioctl(s, PPPOEGETPARMS, &parms) == -1)
 		return;
 
 	printf("\tdev: %s ", parms.eth_ifname);
@@ -5229,7 +5250,7 @@ pppoe_status(void)
 		printf("svc: %s ", parms.service_name);
 
 	strlcpy(state.ifname, name, sizeof(state.ifname));
-	if (ioctl(s, PPPOEGETSESSION, &state))
+	if (ioctl(s, PPPOEGETSESSION, &state) == -1)
 		err(1, "PPPOEGETSESSION");
 
 	printf("state: ");
@@ -5285,12 +5306,12 @@ setpppoe_dev(const char *val, int d)
 	struct pppoediscparms parms;
 
 	strlcpy(parms.ifname, name, sizeof(parms.ifname));
-	if (ioctl(s, PPPOEGETPARMS, &parms))
+	if (ioctl(s, PPPOEGETPARMS, &parms) == -1)
 		return;
 
 	strlcpy(parms.eth_ifname, val, sizeof(parms.eth_ifname));
 
-	if (ioctl(s, PPPOESETPARMS, &parms))
+	if (ioctl(s, PPPOESETPARMS, &parms) == -1)
 		err(1, "PPPOESETPARMS");
 }
 
@@ -5301,7 +5322,7 @@ setpppoe_svc(const char *val, int d)
 	struct pppoediscparms parms;
 
 	strlcpy(parms.ifname, name, sizeof(parms.ifname));
-	if (ioctl(s, PPPOEGETPARMS, &parms))
+	if (ioctl(s, PPPOEGETPARMS, &parms) == -1)
 		return;
 
 	if (d == 0)
@@ -5309,7 +5330,7 @@ setpppoe_svc(const char *val, int d)
 	else
 		memset(parms.service_name, 0, sizeof(parms.service_name));
 
-	if (ioctl(s, PPPOESETPARMS, &parms))
+	if (ioctl(s, PPPOESETPARMS, &parms) == -1)
 		err(1, "PPPOESETPARMS");
 }
 
@@ -5320,7 +5341,7 @@ setpppoe_ac(const char *val, int d)
 	struct pppoediscparms parms;
 
 	strlcpy(parms.ifname, name, sizeof(parms.ifname));
-	if (ioctl(s, PPPOEGETPARMS, &parms))
+	if (ioctl(s, PPPOEGETPARMS, &parms) == -1)
 		return;
 
 	if (d == 0)
@@ -5328,7 +5349,7 @@ setpppoe_ac(const char *val, int d)
 	else
 		memset(parms.ac_name, 0, sizeof(parms.ac_name));
 
-	if (ioctl(s, PPPOESETPARMS, &parms))
+	if (ioctl(s, PPPOESETPARMS, &parms) == -1)
 		err(1, "PPPOESETPARMS");
 }
 
@@ -5535,7 +5556,7 @@ setkeepalive(const char *timeout, const char *count)
 	strlcpy(ikar.ikar_name, name, sizeof(ikar.ikar_name));
 	ikar.ikar_timeo = t;
 	ikar.ikar_cnt = c;
-	if (ioctl(s, SIOCSETKALIVE, (caddr_t)&ikar) < 0)
+	if (ioctl(s, SIOCSETKALIVE, (caddr_t)&ikar) == -1)
 		warn("SIOCSETKALIVE");
 }
 
@@ -5546,7 +5567,7 @@ unsetkeepalive(const char *val, int d)
 
 	bzero(&ikar, sizeof(ikar));
 	strlcpy(ikar.ikar_name, name, sizeof(ikar.ikar_name));
-	if (ioctl(s, SIOCSETKALIVE, (caddr_t)&ikar) < 0)
+	if (ioctl(s, SIOCSETKALIVE, (caddr_t)&ikar) == -1)
 		warn("SIOCSETKALIVE");
 }
 
@@ -5562,7 +5583,7 @@ setifpriority(const char *id, int param)
 
 	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	ifr.ifr_metric = prio;
-	if (ioctl(s, SIOCSIFPRIORITY, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSIFPRIORITY, (caddr_t)&ifr) == -1)
 		warn("SIOCSIFPRIORITY");
 }
 
@@ -5985,7 +6006,7 @@ in_getaddr(const char *s, int which)
 	    (bits = inet_net_pton(AF_INET, s, &tsin.sin_addr,
 	    sizeof(tsin.sin_addr))) != -1) {
 		l = snprintf(p, sizeof(p), "%d", bits);
-		if (l >= sizeof(p) || l == -1)
+		if (l < 0 || l >= sizeof(p))
 			errx(1, "%d: bad prefixlen", bits);
 		in_getprefix(p, MASK);
 		memcpy(&sin->sin_addr, &tsin.sin_addr, sizeof(sin->sin_addr));
@@ -6289,7 +6310,7 @@ setiflladdr(const char *addr, int param)
 	ifr.ifr_addr.sa_len = ETHER_ADDR_LEN;
 	ifr.ifr_addr.sa_family = AF_LINK;
 	bcopy(eap, ifr.ifr_addr.sa_data, ETHER_ADDR_LEN);
-	if (ioctl(s, SIOCSIFLLADDR, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSIFLLADDR, (caddr_t)&ifr) == -1)
 		warn("SIOCSIFLLADDR");
 }
 
@@ -6306,7 +6327,7 @@ setrdomain(const char *id, int param)
 
 	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	ifr.ifr_rdomainid = rdomainid;
-	if (ioctl(s, SIOCSIFRDOMAIN, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSIFRDOMAIN, (caddr_t)&ifr) == -1)
 		warn("SIOCSIFRDOMAIN");
 }
 
@@ -6315,7 +6336,7 @@ unsetrdomain(const char *ignored, int alsoignored)
 {
 	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	ifr.ifr_rdomainid = 0;
-	if (ioctl(s, SIOCSIFRDOMAIN, (caddr_t)&ifr) < 0) 	
+	if (ioctl(s, SIOCSIFRDOMAIN, (caddr_t)&ifr) == -1) 	
 		warn("SIOCSIFRDOMAIN");
 }
 #endif
@@ -6329,7 +6350,7 @@ setpair(const char *val, int d)
 		errno = ENOENT;
 		err(1, "patch %s", val);
 	}
-	if (ioctl(s, SIOCSIFPAIR, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSIFPAIR, (caddr_t)&ifr) == -1)
 		warn("SIOCSIFPAIR");
 }
 
@@ -6338,7 +6359,7 @@ unsetpair(const char *val, int d)
 {
 	ifr.ifr_index = 0;
 	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
-	if (ioctl(s, SIOCSIFPAIR, (caddr_t)&ifr) < 0)
+	if (ioctl(s, SIOCSIFPAIR, (caddr_t)&ifr) == -1)
 		warn("SIOCSIFPAIR");
 }
 #endif

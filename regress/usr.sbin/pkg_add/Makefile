@@ -1,69 +1,51 @@
-# $OpenBSD: Makefile,v 1.61 2018/12/21 14:04:53 espie Exp $
+# $OpenBSD: Makefile,v 1.73 2019/07/11 07:15:02 espie Exp $
 
 REGRESS_TARGETS=pkgnames pkgpaths signatures depends-check longnames pkgcfl \
-	collision-check1-disabled collision-check2-disabled collision-check3 \
-	collision-check4 collision-check5-disabled collision-check6-disabled \
-	collision-check7-disabled \
+	collision-check1 collision-check2 collision-check3 \
+	collision-check4 collision-check5 collision-check6 \
+	collision-check7 \
 	update-check1 partial-update-test conflict-update \
 	merge-update split-update big-merge family-circus missing \
 	lib-report1 lib-report2 lib-report3 loop1 \
 	lib-report4 lib-report5 lib-report6 lib-report7 \
-	qttest gstest exotest-disabled inter1 manual1 oldlib1 \
-	usertest-1 usertest-2 usertest-3 cups-bug nettle-bug
+	qttest gstest exotest inter1 manual1 oldlib1 \
+	usertest-1 usertest-2 usertest-3 cups-bug nettle-bug \
+	tying-1 tying-2 tag-delete setsprint temp-error1 \
+	temp-error2 temp-error2-as-root temp-error3 temp-error4
 
-collision-check{1,2}-disabled:
-	@! ${MAKE} -C ${.CURDIR} ${@:S/-disabled$//}
-	# Failing test ${@:S/-disabled$//} added in rev 1.8.
-	# more half-baked regress-targets
-	@echo DISABLED
+REGRESS_ROOT_TARGETS = temp-error2-as-root
 
-collision-check5-disabled:
-	@! ${MAKE} -C ${.CURDIR} ${@:S/-disabled$//}
-	# Failing test ${@:S/-disabled$//} added in rev 1.35.
-	# new test for vstat
-	@echo DISABLED
+# lots of tests that really require a vstat overhaul
+REGRESS_EXPECTED_FAILURES = collision-check1 collision-check2 \
+	collision-check5 collision-check6 collision-check7 \
+	exotest tying-2
 
-collision-check6-disabled:
-	@! ${MAKE} -C ${.CURDIR} ${@:S/-disabled$//}
-	# Failing test ${@:S/-disabled$//} added in rev 1.9.
-	# more tests
-	@echo DISABLED
-
-collision-check7-disabled:
-	@! ${MAKE} -C ${.CURDIR} ${@:S/-disabled$//}
-	# Failing test added in rev 1.48.
-	# pure display check, not linked since it fails
-	@echo DISABLED
-
-exotest-disabled:
-	@! ${MAKE} -C ${.CURDIR} ${@:S/-disabled$//}
-	# Failing test ${@:S/-disabled$//} added in rev 1.41.
-	# Workaround in ports/x11/xfce4/exo/Makefile rev 1.32.
-	@echo DISABLED
-
-ADD_PKG=perl ${.CURDIR}/my add
-DELETE_PKG=perl ${.CURDIR}/my delete
-INFO_PKG=perl ${.CURDIR}/my info
-CREATE_PKG=perl ${.CURDIR}/mycreate
+ADD_PKG=perl -I${.CURDIR} ${.CURDIR}/my add
+DELETE_PKG=perl -I${.CURDIR} ${.CURDIR}/my delete
+INFO_PKG=perl -I${.CURDIR} ${.CURDIR}/my info
+CREATE_PKG=perl -I${.CURDIR} ${.CURDIR}/mycreate
 LONG1=iamareallongfilenamethatcantberepresentedcorrectlyinatararchivebutwewantittohappenanywaysohmygodaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa42
 LONG2=iamanotherreallygfilenamethatcantberepresentedcorrectlyinatararchivebutwewantittohappenanywaysohmygodaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa42
 LONG3=iamanotherreallylonglinkthatcantberepresentedcorrectlyinatararchivebutwewantittohappenanywaysohmygodaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa42
 LONG4=iamanotherreallylonghardlinkthatcantberepresentedcorrectlyinatararchivebutwewantittohappenanywaysohmygodaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa42
 
-.for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 \
-    26 27 28 29 30 31 32 33 34 35 36 37
+NUMBERS != jot 50
+.for i in ${NUMBERS}
 S$i ?= ${.OBJDIR}/src$i
 SRC$i ?= ${S$i}/usr/local
 D$i ?= ${.OBJDIR}/dest$i
 DEST$i ?= ${D$i}/usr/local
 .endfor
 
-# current maxes (used): D37, SRC24, plist22
+# current maxes (used): D41, SRC26, plist24, rep5
 pkgnames:
 	perl ${.CURDIR}/check-name
 
 pkgcfl:
 	perl ${.CURDIR}/check-cfl
+
+setsprint:
+	perl ${.CURDIR}/check-beautify
 
 pkgpaths:
 	perl ${.CURDIR}/check-path
@@ -661,8 +643,8 @@ rep3/$n.tgz: ${.CURDIR}/newcups/$n/+CONTENTS
 cups-bug: ${CUPS_FILES}
 	rm -rf ${D36}
 	mkdir -p ${D36}/vardbpkg ${D36}/usr/local
-	PKG_DBDIR=${D36}/vardbpkg PKG_PATH=${.OBJDIR}/rep2 perl ${.CURDIR}/injectadd -Dstub -Dunsigned -Dnonroot -B ${D36} cups
-	PKG_DBDIR=${D36}/vardbpkg PKG_PATH=${.OBJDIR}/rep3 perl ${.CURDIR}/injectadd -Dstub -Dunsigned -Dnonroot -B ${D36} -u
+	ROOT=${D36} PKG_PATH=${.OBJDIR}/rep2 INJECT=inject-order ${ADD_PKG} -Dstub cups
+	ROOT=${D36} PKG_PATH=${.OBJDIR}/rep3 INJECT=inject-order ${ADD_PKG} -Dstub -u
 
 usertest-1:
 	@if ${CREATE_PKG} -u ${.CURDIR}/baduser1 \
@@ -692,7 +674,7 @@ keys:
 	signify -G -n -s signify/test-pkg.sec -p signify/test-pkg.pub
 
 plist22:
-	@echo "@owner "`id -un` >>$@
+	@echo "@owner "`id -un` >$@
 	@echo "@group "`id -gn` >>$@
 	@echo '@lib lib/libnettle.so.$${LIBnettle_VERSION}' >>$@
 
@@ -731,9 +713,96 @@ nettle-bug: rep4/cups-libs-0.tgz rep4/gtk+3-cups-0.tgz rep4/gnutls-0.tgz \
 	@ROOT=${D37} ${ADD_PKG} rep4/gtk+3-cups
 	@ROOT=${D37} PKG_PATH=${.OBJDIR}/rep5 ${ADD_PKG} -u gtk+3-cups
 
+plist23:
+	@echo "@owner "`id -un` >$@
+	@echo "@group "`id -gn` >>$@
+	@echo "share/" >>$@
+	@echo "share/bg/" >>$@
+	@echo "share/bg/portrait" >>$@
+	@echo "share/bg/pictures/" >>$@
+	@echo "share/bg/pictures/a/" >>$@
+	@echo "share/bg/pictures/a/zoinx" >>$@
+
+plist24:
+	@echo "@owner "`id -un` >$@
+	@echo "@group "`id -gn` >>$@
+	@echo "share/" >>$@
+	@echo "share/bg/" >>$@
+	@echo "share/bg/portrait/" >>$@
+	@echo "share/bg/portrait/a/" >>$@
+	@echo "share/bg/portrait/a/zoinx" >>$@
+
+rep0/bg-0.tgz: plist23
+	@mkdir -p ${SRC25}/share/bg ${SRC25}/share/bg/pictures/a
+	@echo "a file" >${SRC25}/share/bg/portrait
+	@echo "zoinx" >${SRC25}/share/bg/pictures/a/zoinx
+	@${CREATE_PKG} -B src25 -f plist23 $@
+
+rep0/bg-1.tgz: plist24
+	@mkdir -p ${SRC26}/share/bg/portrait/a
+	@echo "zoinx" >${SRC26}/share/bg/portrait/a/zoinx
+	@${CREATE_PKG} -B src26 -f plist24 $@
+
+# these exemplify issues with directory moving around
+tying-1: rep0/bg-0.tgz rep0/bg-1.tgz
+	@-rm -rf ${D38}
+	@ROOT=${D38} ${ADD_PKG} rep0/bg-0.tgz
+	@ROOT=${D38} ${ADD_PKG} -r rep0/bg-1.tgz
+
+tying-2: rep0/bg-0.tgz rep0/bg-1.tgz
+	@-rm -rf ${D39}
+	@ROOT=${D39} ${ADD_PKG} rep0/bg-1.tgz
+	@ROOT=${D39} ${ADD_PKG} -r rep0/bg-0.tgz
+
+# this comes from solve_tags
+# pkg_delete finds new dependencies, and so the solver needs to be made
+# "safe" when it can't find them
+tag-delete: rep1/d-0.tgz
+	@-rm -rf ${D40}
+	@ROOT=${D40} ${ADD_PKG} rep1/d-0.tgz
+	# needs a tag to trigger the bug
+	echo "@tag zoinx" >> ${D40}/pkgdb/d-0/+CONTENTS
+	# and an "unsolved" dependency for DeleteSet to look harder
+	echo "@depend graphics/zoinx:zoinx-*:zoinx-2" >> ${D40}/pkgdb/d-0/+CONTENTS
+	@ROOT=${D40} ${DELETE_PKG} d
+
+SED_PIPE = sed -n -e s/`whoami`/USER/ -e 1p -e '$$p'
+SED_PIPE2 = { u=`whoami`; case $$u in root) u=_pkgfetch;; esac; sed -n -e s/$$u/USER/ -e 1p -e '$$p'; }
+
+
+XXXD=${D40}
+XXXBASE=temp2
+
+temp-error1: rep0/a-0.tgz rep0/b-0.tgz temp1.ref
+	@-rm -rf ${D40}
+	@{ INJECT=inject-temp1 ROOT=${D40} SILENT=1 ${ADD_PKG} rep0/a-0.tgz 1>/dev/null|| echo $$? ; } 2>&1|${SED_PIPE} >temp1.out
+	@diff -u temp1.out ${.CURDIR}/temp1.ref
+
+temp-error2: 
+	@-rm -rf ${XXXD}
+	@{ INJECT=inject-temp2 ROOT=${XXXD} SILENT=1 PKG_PATH=https://www.google.com/ ${ADD_PKG} rep0/a-0.tgz 1>/dev/null|| echo $$? ; } 2>&1|${SED_PIPE2} >${XXXBASE}.out
+	@diff -u ${XXXBASE}.out ${.CURDIR}/temp2.ref
+
+temp-error2-as-root: 
+	@# XXX thx tedu for not allowing env thru
+	@${SUDO} make -C ${.CURDIR} temp-error2 XXXBASE=temp2bis XXXD=${D41}
+
+temp-error3: rep1/d-0.tgz temp3.ref
+	@-rm -rf ${D42}
+	@{ INJECT=inject-temp3 ROOT=${D42} SILENT=1 ${ADD_PKG} rep1/d-0.tgz 1>/dev/null|| echo $$?; } 2>&1|${SED_PIPE} >temp3.out
+	@diff -u temp3.out ${.CURDIR}/temp3.ref
+
+temp-error4: rep0/qt-0.tgz rep1/qt-1.tgz
+	@-rm -rf ${D43}
+	@ROOT=${D43} SILENT=1 ${ADD_PKG} rep0/qt-0.tgz
+	@rm -f ${D43}/usr/local/phonon/a
+	@echo zoinx >${D43}/usr/local/phonon/a
+	@{ INJECT=inject-temp4 PKG_PATH=${.OBJDIR}/rep1 SILENT=1 ROOT=${D43} ${ADD_PKG} -Dchecksum -u qt || echo $$?; } 2>&1|${SED_PIPE} >temp4.out
+
 .PHONY: ${REGRESS_TARGETS}
 
 clean:
-	-rm -rf rep* dest* plist* src* signatures.out
+	-rm -rf rep* dest* plist* src* signatures.out *.ref *.out
+	-${SUDO} rm -rf rep* dest* plist* src* signatures.out *.ref *.out
 
 .include <bsd.regress.mk>

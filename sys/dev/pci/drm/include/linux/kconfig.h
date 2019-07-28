@@ -21,8 +21,10 @@
 #define CONFIG_PM				0
 #define CONFIG_DRM_AMD_DC			1
 #define CONFIG_DRM_AMD_DC_DCN1_0		1
+#if 0
 #define CONFIG_DRM_AMDGPU_CIK			1
 #define CONFIG_DRM_AMDGPU_SI			1
+#endif
 
 #if BYTE_ORDER == BIG_ENDIAN
 #define __BIG_ENDIAN
@@ -32,6 +34,10 @@
 
 #if NAGP > 0
 #define CONFIG_AGP				1
+#endif
+
+#if defined(__amd64__) || defined(__i386__)
+#define CONFIG_DMI				1
 #endif
 
 #endif

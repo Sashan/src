@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_syscalls.c,v 1.314 2019/03/24 18:14:20 beck Exp $	*/
+/*	$OpenBSD: vfs_syscalls.c,v 1.327 2019/07/25 01:43:21 cheloha Exp $	*/
 /*	$NetBSD: vfs_syscalls.c,v 1.71 1996/04/23 10:29:02 mycroft Exp $	*/
 
 /*
@@ -184,7 +184,7 @@ sys_mount(struct proc *p, void *v, register_t *retval)
 		error = EPERM;
 		goto fail;
 	}
-	if ((error = vinvalbuf(vp, V_SAVE, p->p_ucred, p, 0, 0)) != 0) {
+	if ((error = vinvalbuf(vp, V_SAVE, p->p_ucred, p, 0, INFSLP)) != 0) {
 		vput(vp);
 		goto fail;
 	}
@@ -864,6 +864,106 @@ change_dir(struct nameidata *ndp, struct proc *p)
 		vput(vp);
 	else
 		VOP_UNLOCK(vp);
+	return (error);
+}
+
+int
+sys___realpath(struct proc *p, void *v, register_t *retval)
+{
+	struct sys___realpath_args /* {
+		syscallarg(const char *) pathname;
+		syscallarg(char *) resolved;
+	} */ *uap = v;
+	char *pathname;
+	char *rpbuf;
+	struct nameidata nd;
+	size_t pathlen;
+	int error = 0;
+
+	if (SCARG(uap, pathname) == NULL)
+		return (EINVAL);
+
+	pathname = pool_get(&namei_pool, PR_WAITOK);
+	rpbuf = pool_get(&namei_pool, PR_WAITOK);
+
+	if ((error = copyinstr(SCARG(uap, pathname), pathname, MAXPATHLEN,
+	    &pathlen)))
+		goto end;
+
+	if (pathlen == 1) { /* empty string "" */
+		error = ENOENT;
+		goto end;
+	}
+	if (pathlen < 2) {
+		error = EINVAL;
+		goto end;
+	}
+
+	/* Get cwd for relative path if needed, prepend to rpbuf */
+	rpbuf[0] = '\0';
+	if (pathname[0] != '/') {
+		int cwdlen = MAXPATHLEN * 4; /* for vfs_getcwd_common */
+		char *cwdbuf, *bp;
+
+		cwdbuf = malloc(cwdlen, M_TEMP, M_WAITOK);
+
+		/* vfs_getcwd_common fills this in backwards */
+		bp = &cwdbuf[cwdlen - 1];
+		*bp = '\0';
+
+		error = vfs_getcwd_common(p->p_fd->fd_cdir, NULL, &bp, cwdbuf,
+		    cwdlen/2, GETCWD_CHECK_ACCESS, p);
+
+		if (error) {
+			free(cwdbuf, M_TEMP, cwdlen);
+			goto end;
+		}
+
+		if (strlcpy(rpbuf, bp, MAXPATHLEN) >= MAXPATHLEN) {
+			free(cwdbuf, M_TEMP, cwdlen);
+			error = ENAMETOOLONG;
+			goto end;
+		}
+
+		free(cwdbuf, M_TEMP, cwdlen);
+	}
+
+	if (pathlen == 2 && pathname[0] == '/')
+		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | SAVENAME | REALPATH,
+		    UIO_SYSSPACE, pathname, p);
+	else
+		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | LOCKPARENT | SAVENAME |
+		    REALPATH, UIO_SYSSPACE, pathname, p);
+
+	nd.ni_cnd.cn_rpbuf = rpbuf;
+	nd.ni_cnd.cn_rpi = strlen(rpbuf);
+
+	nd.ni_pledge = PLEDGE_RPATH;
+	nd.ni_unveil = UNVEIL_READ;
+	if ((error = namei(&nd)) != 0)
+		goto end;
+
+	/* release lock and reference from namei */
+	if (nd.ni_vp) {
+		VOP_UNLOCK(nd.ni_vp);
+		vrele(nd.ni_vp);
+	}
+	if (nd.ni_dvp && nd.ni_dvp != nd.ni_vp){
+		VOP_UNLOCK(nd.ni_dvp);
+		vrele(nd.ni_dvp);
+	}
+
+	error = copyoutstr(nd.ni_cnd.cn_rpbuf, SCARG(uap, resolved),
+	    MAXPATHLEN, NULL);
+
+#ifdef KTRACE
+	if (KTRPOINT(p, KTR_NAMEI))
+		ktrnamei(p, nd.ni_cnd.cn_rpbuf);
+#endif
+	pool_put(&namei_pool, nd.ni_cnd.cn_pnbuf);
+end:
+	pool_put(&namei_pool, rpbuf);
+	pool_put(&namei_pool, pathname);
 	return (error);
 }
 
@@ -1895,16 +1995,6 @@ dofstatat(struct proc *p, int fd, const char *path, struct stat *buf, int flag)
 	vput(nd.ni_vp);
 	if (error)
 		return (error);
-	if (nd.ni_pledge & PLEDGE_STATLIE) {
-		if (S_ISDIR(sb.st_mode) || S_ISLNK(sb.st_mode)) {
-			if (sb.st_uid >= 1000) {
-				sb.st_uid = p->p_ucred->cr_uid;
-				sb.st_gid = p->p_ucred->cr_gid;;
-			}
-			sb.st_gen = 0;
-		} else
-			return (ENOENT);
-	}
 	/* Don't let non-root see generation numbers (for NFS security) */
 	if (suser(p))
 		sb.st_gen = 0;
@@ -2918,15 +3008,11 @@ sys_getdents(struct proc *p, void *v, register_t *retval)
 	buflen = SCARG(uap, buflen);
 
 	if (buflen > INT_MAX)
-		return EINVAL;
+		return (EINVAL);
 	if ((error = getvnode(p, SCARG(uap, fd), &fp)) != 0)
 		return (error);
 	if ((fp->f_flag & FREAD) == 0) {
 		error = EBADF;
-		goto bad;
-	}
-	if (fp->f_offset < 0) {
-		error = EINVAL;
 		goto bad;
 	}
 	vp = fp->f_data;
@@ -2934,6 +3020,15 @@ sys_getdents(struct proc *p, void *v, register_t *retval)
 		error = EINVAL;
 		goto bad;
 	}
+
+	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+
+	if (fp->f_offset < 0) {
+		VOP_UNLOCK(vp);
+		error = EINVAL;
+		goto bad;
+	}
+
 	aiov.iov_base = SCARG(uap, buf);
 	aiov.iov_len = buflen;
 	auio.uio_iov = &aiov;
@@ -2942,7 +3037,6 @@ sys_getdents(struct proc *p, void *v, register_t *retval)
 	auio.uio_segflg = UIO_USERSPACE;
 	auio.uio_procp = p;
 	auio.uio_resid = buflen;
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 	auio.uio_offset = fp->f_offset;
 	error = VOP_READDIR(vp, &auio, fp->f_cred, &eofflag);
 	fp->f_offset = auio.uio_offset;

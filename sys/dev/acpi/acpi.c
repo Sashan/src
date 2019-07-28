@@ -1,4 +1,4 @@
-/* $OpenBSD: acpi.c,v 1.363 2019/04/04 07:10:05 kettenis Exp $ */
+/* $OpenBSD: acpi.c,v 1.371 2019/07/02 21:17:24 jcs Exp $ */
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  * Copyright (c) 2005 Jordan Hargrave <jordan@openbsd.org>
@@ -409,7 +409,7 @@ int
 acpi_inidev(struct aml_node *node, void *arg)
 {
 	struct acpi_softc	*sc = (struct acpi_softc *)arg;
-	int64_t st;
+	int64_t sta;
 
 	/*
 	 * Per the ACPI spec 6.5.1, only run _INI when device is there or
@@ -418,19 +418,18 @@ acpi_inidev(struct aml_node *node, void *arg)
 	 */
 
 	/* Evaluate _STA to decide _INI fate and walk fate */
-	if (aml_evalinteger(sc, node->parent, "_STA", 0, NULL, &st))
-		st = STA_PRESENT | STA_ENABLED | STA_DEV_OK | 0x1000;
+	sta = acpi_getsta(sc, node->parent);
 
 	/* Evaluate _INI if we are present */
-	if (st & STA_PRESENT)
+	if (sta & STA_PRESENT)
 		aml_evalnode(sc, node, 0, NULL, NULL);
 
 	/* If we are functioning, we walk/search our children */
-	if (st & STA_DEV_OK)
+	if (sta & STA_DEV_OK)
 		return 0;
 
 	/* If we are not enabled, or not present, terminate search */
-	if (!(st & (STA_PRESENT|STA_ENABLED)))
+	if (!(sta & (STA_PRESENT|STA_ENABLED)))
 		return 1;
 
 	/* Default just continue search */
@@ -443,15 +442,13 @@ acpi_foundprt(struct aml_node *node, void *arg)
 	struct acpi_softc	*sc = (struct acpi_softc *)arg;
 	struct device		*self = (struct device *)arg;
 	struct acpi_attach_args	aaa;
-	int64_t st = 0;
+	int64_t sta;
 
 	dnprintf(10, "found prt entry: %s\n", node->parent->name);
 
 	/* Evaluate _STA to decide _PRT fate and walk fate */
-	if (aml_evalinteger(sc, node->parent, "_STA", 0, NULL, &st))
-		st = STA_PRESENT | STA_ENABLED | STA_DEV_OK | 0x1000;
-
-	if (st & STA_PRESENT) {
+	sta = acpi_getsta(sc, node->parent);
+	if (sta & STA_PRESENT) {
 		memset(&aaa, 0, sizeof(aaa));
 		aaa.aaa_iot = sc->sc_iot;
 		aaa.aaa_memt = sc->sc_memt;
@@ -462,11 +459,11 @@ acpi_foundprt(struct aml_node *node, void *arg)
 	}
 
 	/* If we are functioning, we walk/search our children */
-	if (st & STA_DEV_OK)
+	if (sta & STA_DEV_OK)
 		return 0;
 
 	/* If we are not enabled, or not present, terminate search */
-	if (!(st & (STA_PRESENT|STA_ENABLED)))
+	if (!(sta & (STA_PRESENT|STA_ENABLED)))
 		return 1;
 
 	/* Default just continue search */
@@ -554,6 +551,18 @@ acpi_matchhids(struct acpi_attach_args *aa, const char *hids[],
 	return (0);
 }
 
+int64_t
+acpi_getsta(struct acpi_softc *sc, struct aml_node *node)
+{
+	int64_t sta;
+
+	if (aml_evalinteger(sc, node, "_STA", 0, NULL, &sta))
+		sta = STA_PRESENT | STA_ENABLED | STA_SHOW_UI |
+		    STA_DEV_OK | STA_BATTERY;
+
+	return sta;
+}
+
 /* Map ACPI device node to PCI */
 int
 acpi_getpci(struct aml_node *node, void *arg)
@@ -565,7 +574,12 @@ acpi_getpci(struct aml_node *node, void *arg)
 	pci_chipset_tag_t pc;
 	pcitag_t tag;
 	uint64_t val;
+	int64_t sta;
 	uint32_t reg;
+
+	sta = acpi_getsta(sc, node);
+	if ((sta & STA_PRESENT) == 0)
+		return 0;
 
 	if (!node->value || node->value->type != AML_OBJTYPE_DEVICE)
 		return 0;
@@ -980,10 +994,7 @@ acpi_attach_common(struct acpi_softc *sc, paddr_t base)
 		printf(": can't map memory\n");
 		return;
 	}
-
 	rsdp = (struct acpi_rsdp *)handle.va;
-	sc->sc_revision = (int)rsdp->rsdp_revision;
-	printf(": rev %d", sc->sc_revision);
 
 	SIMPLEQ_INIT(&sc->sc_tables);
 	SIMPLEQ_INIT(&sc->sc_wakedevs);
@@ -995,14 +1006,14 @@ acpi_attach_common(struct acpi_softc *sc, paddr_t base)
 #ifndef SMALL_KERNEL
 	sc->sc_note = malloc(sizeof(struct klist), M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (sc->sc_note == NULL) {
-		printf(", can't allocate memory\n");
+		printf(": can't allocate memory\n");
 		acpi_unmap(&handle);
 		return;
 	}
 #endif /* SMALL_KERNEL */
 
 	if (acpi_loadtables(sc, rsdp)) {
-		printf(", can't load tables\n");
+		printf(": can't load tables\n");
 		acpi_unmap(&handle);
 		return;
 	}
@@ -1020,9 +1031,14 @@ acpi_attach_common(struct acpi_softc *sc, paddr_t base)
 		}
 	}
 	if (sc->sc_fadt == NULL) {
-		printf(", no FADT\n");
+		printf(": no FADT\n");
 		return;
 	}
+
+	sc->sc_major = sc->sc_fadt->hdr.revision;
+	if (sc->sc_major > 4)
+		sc->sc_minor = sc->sc_fadt->fadt_minor;
+	printf(": ACPI %d.%d", sc->sc_major, sc->sc_minor);
 
 	/*
 	 * A bunch of things need to be done differently for
@@ -1349,7 +1365,7 @@ acpi_loadtables(struct acpi_softc *sc, struct acpi_rsdp *rsdp)
 
 		sdt = acpi_maptable(sc, rsdp->rsdp_xsdt, NULL, NULL, NULL, 0);
 		if (sdt == NULL) {
-			printf("couldn't map rsdt\n");
+			printf("couldn't map xsdt\n");
 			return (ENOMEM);
 		}
 
@@ -1362,7 +1378,7 @@ acpi_loadtables(struct acpi_softc *sc, struct acpi_rsdp *rsdp)
 			acpi_maptable(sc, xsdt->table_offsets[i], NULL, NULL,
 			    NULL, 1);
 
-		free(sdt, M_DEVBUF, 0);
+		free(sdt, M_DEVBUF, sizeof(*sdt) + len);
 	} else {
 		struct acpi_rsdt *rsdt;
 
@@ -1381,7 +1397,7 @@ acpi_loadtables(struct acpi_softc *sc, struct acpi_rsdp *rsdp)
 			acpi_maptable(sc, rsdt->table_offsets[i], NULL, NULL,
 			    NULL, 1);
 
-		free(sdt, M_DEVBUF, 0);
+		free(sdt, M_DEVBUF, sizeof(*sdt) + len);
 	}
 
 	return (0);
@@ -1575,6 +1591,7 @@ acpi_write_pmreg(struct acpi_softc *sc, int reg, int offset, int regval)
 void
 acpi_map_pmregs(struct acpi_softc *sc)
 {
+	struct acpi_fadt *fadt = sc->sc_fadt;
 	bus_addr_t addr;
 	bus_size_t size, access;
 	const char *name;
@@ -1591,14 +1608,19 @@ acpi_map_pmregs(struct acpi_softc *sc)
 		case ACPIREG_SMICMD:
 			name = "smi";
 			size = access = 1;
-			addr = sc->sc_fadt->smi_cmd;
+			addr = fadt->smi_cmd;
 			break;
 		case ACPIREG_PM1A_STS:
 		case ACPIREG_PM1A_EN:
 			name = "pm1a_sts";
-			size = sc->sc_fadt->pm1_evt_len >> 1;
-			addr = sc->sc_fadt->pm1a_evt_blk;
-			access = 2;
+			size = fadt->pm1_evt_len >> 1;
+			if (fadt->pm1a_evt_blk) {
+				addr = fadt->pm1a_evt_blk;
+				access = 2;
+			} else if (fadt->hdr_revision >= 3) {
+				addr = fadt->x_pm1a_evt_blk.address;
+				access = 1 << fadt->x_pm1a_evt_blk.access_size;
+			}
 			if (reg == ACPIREG_PM1A_EN && addr) {
 				addr += size;
 				name = "pm1a_en";
@@ -1606,16 +1628,26 @@ acpi_map_pmregs(struct acpi_softc *sc)
 			break;
 		case ACPIREG_PM1A_CNT:
 			name = "pm1a_cnt";
-			size = sc->sc_fadt->pm1_cnt_len;
-			addr = sc->sc_fadt->pm1a_cnt_blk;
-			access = 2;
+			size = fadt->pm1_cnt_len;
+			if (fadt->pm1a_cnt_blk) {
+				addr = fadt->pm1a_cnt_blk;
+				access = 2;
+			} else if (fadt->hdr_revision >= 3) {
+				addr = fadt->x_pm1a_cnt_blk.address;
+				access = 1 << fadt->x_pm1a_cnt_blk.access_size;
+			}
 			break;
 		case ACPIREG_PM1B_STS:
 		case ACPIREG_PM1B_EN:
 			name = "pm1b_sts";
-			size = sc->sc_fadt->pm1_evt_len >> 1;
-			addr = sc->sc_fadt->pm1b_evt_blk;
-			access = 2;
+			size = fadt->pm1_evt_len >> 1;
+			if (fadt->pm1b_evt_blk) {
+				addr = fadt->pm1b_evt_blk;
+				access = 2;
+			} else if (fadt->hdr_revision >= 3) {
+				addr = fadt->x_pm1b_evt_blk.address;
+				access = 1 << fadt->x_pm1b_evt_blk.access_size;
+			}
 			if (reg == ACPIREG_PM1B_EN && addr) {
 				addr += size;
 				name = "pm1b_en";
@@ -1623,36 +1655,56 @@ acpi_map_pmregs(struct acpi_softc *sc)
 			break;
 		case ACPIREG_PM1B_CNT:
 			name = "pm1b_cnt";
-			size = sc->sc_fadt->pm1_cnt_len;
-			addr = sc->sc_fadt->pm1b_cnt_blk;
-			access = 2;
+			size = fadt->pm1_cnt_len;
+			if (fadt->pm1b_cnt_blk) {
+				addr = fadt->pm1b_cnt_blk;
+				access = 2;
+			} else if (fadt->hdr_revision >= 3) {
+				addr = fadt->x_pm1b_cnt_blk.address;
+				access = 1 << fadt->x_pm1b_cnt_blk.access_size;
+			}
 			break;
 		case ACPIREG_PM2_CNT:
 			name = "pm2_cnt";
-			size = sc->sc_fadt->pm2_cnt_len;
-			addr = sc->sc_fadt->pm2_cnt_blk;
-			access = size;
+			size = fadt->pm2_cnt_len;
+			if (fadt->pm2_cnt_blk) {
+				addr = fadt->pm2_cnt_blk;
+				access = size;
+			} else if (fadt->hdr_revision >= 3) {
+				addr = fadt->x_pm2_cnt_blk.address;
+				access = 1 << fadt->x_pm2_cnt_blk.access_size;
+			}
 			break;
 #if 0
 		case ACPIREG_PM_TMR:
 			/* Allocated in acpitimer */
 			name = "pm_tmr";
-			size = sc->sc_fadt->pm_tmr_len;
-			addr = sc->sc_fadt->pm_tmr_blk;
-			access = 4;
+			size = fadt->pm_tmr_len;
+			if (fadt->pm_tmr_blk) {
+				addr = fadt->pm_tmr_blk;
+				access = 4;
+			} else if (fadt->hdr_revision >= 3) {
+				addr = fadt->x_pm_tmr_blk.address;
+				access = 1 << fadt->x_pm_tmr_blk.access_size;
+			}
 			break;
 #endif
 		case ACPIREG_GPE0_STS:
 		case ACPIREG_GPE0_EN:
 			name = "gpe0_sts";
-			size = sc->sc_fadt->gpe0_blk_len >> 1;
-			addr = sc->sc_fadt->gpe0_blk;
-			access = 1;
+			size = fadt->gpe0_blk_len >> 1;
+			if (fadt->gpe0_blk) {
+				addr = fadt->gpe0_blk;
+				access = 1;
+			} else if (fadt->hdr_revision >= 3) {
+				addr = fadt->x_gpe0_blk.address;
+				access = 1 << fadt->x_gpe0_blk.access_size;
+			}
 
 			dnprintf(20, "gpe0 block len : %x\n",
-			    sc->sc_fadt->gpe0_blk_len >> 1);
+			    fadt->gpe0_blk_len >> 1);
 			dnprintf(20, "gpe0 block addr: %x\n",
-			    sc->sc_fadt->gpe0_blk);
+			    fadt->gpe0_blk);
 			if (reg == ACPIREG_GPE0_EN && addr) {
 				addr += size;
 				name = "gpe0_en";
@@ -1661,14 +1713,19 @@ acpi_map_pmregs(struct acpi_softc *sc)
 		case ACPIREG_GPE1_STS:
 		case ACPIREG_GPE1_EN:
 			name = "gpe1_sts";
-			size = sc->sc_fadt->gpe1_blk_len >> 1;
-			addr = sc->sc_fadt->gpe1_blk;
-			access = 1;
+			size = fadt->gpe1_blk_len >> 1;
+			if (fadt->gpe1_blk) {
+				addr = fadt->gpe1_blk;
+				access = 1;
+			} else if (fadt->hdr_revision >= 3) {
+				addr = fadt->x_gpe1_blk.address;
+				access = 1 << fadt->x_gpe1_blk.access_size;
+			}
 
 			dnprintf(20, "gpe1 block len : %x\n",
-			    sc->sc_fadt->gpe1_blk_len >> 1);
+			    fadt->gpe1_blk_len >> 1);
 			dnprintf(20, "gpe1 block addr: %x\n",
-			    sc->sc_fadt->gpe1_blk);
+			    fadt->gpe1_blk);
 			if (reg == ACPIREG_GPE1_EN && addr) {
 				addr += size;
 				name = "gpe1_en";
@@ -2016,6 +2073,7 @@ acpi_interrupt(void *arg)
 	struct acpi_softc *sc = (struct acpi_softc *)arg;
 	uint32_t processed = 0, idx, jdx;
 	uint16_t sts, en;
+	int gpe;
 
 	dnprintf(40, "ACPI Interrupt\n");
 	for (idx = 0; idx < sc->sc_lastgpe; idx += 8) {
@@ -2027,26 +2085,38 @@ acpi_interrupt(void *arg)
 			/* Mask the GPE until it is serviced */
 			acpi_write_pmreg(sc, ACPIREG_GPE_EN, idx>>3, en & ~sts);
 			for (jdx = 0; jdx < 8; jdx++) {
-				if (en & sts & (1L << jdx)) {
-					/* Signal this GPE */
-					sc->gpe_table[idx+jdx].active = 1;
-					dnprintf(10, "queue gpe: %x\n",
-					    idx+jdx);
-					acpi_addtask(sc, acpi_gpe_task, NULL,
-					    idx+jdx);
+				if (!(en & sts & (1L << jdx)))
+					continue;
 
-					/*
-					 * Edge interrupts need their STS bits
-					 * cleared now.  Level interrupts will
-					 * have their STS bits cleared just
-					 * before they are re-enabled.
-					 */
-					if (sc->gpe_table[idx+jdx].edge)
-						acpi_write_pmreg(sc,
-						    ACPIREG_GPE_STS, idx>>3,
-						    1L << jdx);
-					processed = 1;
+				/* Signal this GPE */
+				gpe = idx + jdx;
+				if (sc->gpe_table[gpe].flags & GPE_DIRECT) {
+					dnprintf(10, "directly handle gpe: %x\n",
+					    gpe);
+					sc->gpe_table[gpe].handler(sc, gpe,
+					    sc->gpe_table[gpe].arg);
+					if (sc->gpe_table[gpe].flags &
+					    GPE_LEVEL)
+						acpi_gpe(sc, gpe,
+						    sc->gpe_table[gpe].arg);
+				} else {
+					sc->gpe_table[gpe].active = 1;
+					dnprintf(10, "queue gpe: %x\n", gpe);
+					acpi_addtask(sc, acpi_gpe_task, NULL,
+					    gpe);
 				}
+
+				/*
+				 * Edge interrupts need their STS bits cleared
+				 * now.  Level interrupts will have their STS
+				 * bits cleared just before they are
+				 * re-enabled.
+				 */
+				if (sc->gpe_table[gpe].flags & GPE_EDGE)
+					acpi_write_pmreg(sc,
+					    ACPIREG_GPE_STS, idx>>3, 1L << jdx);
+
+				processed = 1;
 			}
 		}
 	}
@@ -2196,21 +2266,25 @@ acpi_enable_wakegpes(struct acpi_softc *sc, int state)
 
 int
 acpi_set_gpehandler(struct acpi_softc *sc, int gpe, int (*handler)
-    (struct acpi_softc *, int, void *), void *arg, int edge)
+    (struct acpi_softc *, int, void *), void *arg, int flags)
 {
 	struct gpe_block *ptbl;
 
 	ptbl = acpi_find_gpe(sc, gpe);
 	if (ptbl == NULL || handler == NULL)
 		return -EINVAL;
-	if (ptbl->handler != NULL)
+	if ((flags & GPE_LEVEL) && (flags & GPE_EDGE))
+		return -EINVAL;
+	if (!(flags & (GPE_LEVEL | GPE_EDGE)))
+		return -EINVAL;
+	if (ptbl->handler != NULL && !(flags & GPE_DIRECT))
 		printf("%s: GPE 0x%.2x already enabled\n", DEVNAME(sc), gpe);
 
 	dnprintf(50, "Adding GPE handler 0x%.2x (%s)\n", gpe,
-	    edge ? "edge" : "level");
+	    (flags & GPE_EDGE ? "edge" : "level"));
 	ptbl->handler = handler;
 	ptbl->arg = arg;
-	ptbl->edge = edge;
+	ptbl->flags = flags;
 
 	return (0);
 }
@@ -2225,7 +2299,7 @@ acpi_gpe(struct acpi_softc *sc, int gpe, void *arg)
 	aml_evalnode(sc, node, 0, NULL, NULL);
 
 	mask = (1L << (gpe & 7));
-	if (!sc->gpe_table[gpe].edge)
+	if (sc->gpe_table[gpe].flags & GPE_LEVEL)
 		acpi_write_pmreg(sc, ACPIREG_GPE_STS, gpe>>3, mask);
 	en = acpi_read_pmreg(sc, ACPIREG_GPE_EN,  gpe>>3);
 	acpi_write_pmreg(sc, ACPIREG_GPE_EN,  gpe>>3, en | mask);
@@ -2249,9 +2323,7 @@ acpi_foundprw(struct aml_node *node, void *arg)
 	struct acpi_wakeq *wq;
 	int64_t sta;
 
-	if (aml_evalinteger(sc, node->parent, "_STA", 0, NULL, &sta))
-		sta = STA_PRESENT | STA_ENABLED | STA_DEV_OK | 0x1000;
-
+	sta = acpi_getsta(sc, node->parent);
 	if ((sta & STA_PRESENT) == 0)
 		return 0;
 
@@ -2315,13 +2387,14 @@ acpi_init_gpes(struct acpi_softc *sc)
 		snprintf(name, sizeof(name), "\\_GPE._L%.2X", idx);
 		gpe = aml_searchname(&aml_root, name);
 		if (gpe != NULL)
-			acpi_set_gpehandler(sc, idx, acpi_gpe, gpe, 0);
+			acpi_set_gpehandler(sc, idx, acpi_gpe, gpe, GPE_LEVEL);
 		if (gpe == NULL) {
 			/* Search Edge-sensitive GPES */
 			snprintf(name, sizeof(name), "\\_GPE._E%.2X", idx);
 			gpe = aml_searchname(&aml_root, name);
 			if (gpe != NULL)
-				acpi_set_gpehandler(sc, idx, acpi_gpe, gpe, 1);
+				acpi_set_gpehandler(sc, idx, acpi_gpe, gpe,
+				    GPE_EDGE);
 		}
 	}
 	aml_find_node(&aml_root, "_PRW", acpi_foundprw, sc);
@@ -3057,9 +3130,7 @@ acpi_foundhid(struct aml_node *node, void *arg)
 	if (acpi_parsehid(node, arg, cdev, dev, sizeof(dev)) != 0)
 		return (0);
 
-	if (aml_evalinteger(sc, node->parent, "_STA", 0, NULL, &sta))
-		sta = STA_PRESENT | STA_ENABLED | STA_DEV_OK | 0x1000;
-
+	sta = acpi_getsta(sc, node->parent);
 	if ((sta & STA_PRESENT) == 0)
 		return (0);
 
@@ -3147,9 +3218,7 @@ acpi_foundsbs(struct aml_node *node, void *arg)
 	if (acpi_parsehid(node, arg, cdev, dev, sizeof(dev)) != 0)
 		return (0);
 
-	if (aml_evalinteger(sc, node->parent, "_STA", 0, NULL, &sta))
-		sta = STA_PRESENT | STA_ENABLED | STA_DEV_OK | 0x1000;
-
+	sta = acpi_getsta(sc, node->parent);
 	if ((sta & STA_PRESENT) == 0)
 		return (0);
 

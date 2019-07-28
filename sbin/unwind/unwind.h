@@ -1,4 +1,4 @@
-/*	$OpenBSD: unwind.h,v 1.14 2019/04/02 07:47:23 florian Exp $	*/
+/*	$OpenBSD: unwind.h,v 1.17 2019/05/14 14:51:31 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -86,6 +86,7 @@ enum imsg_type {
 	IMSG_RECONF_CAPTIVE_PORTAL_HOST,
 	IMSG_RECONF_CAPTIVE_PORTAL_PATH,
 	IMSG_RECONF_CAPTIVE_PORTAL_EXPECTED_RESPONSE,
+	IMSG_RECONF_BLOCKLIST_FILE,
 	IMSG_RECONF_FORWARDER,
 	IMSG_RECONF_DOT_FORWARDER,
 	IMSG_RECONF_END,
@@ -120,6 +121,7 @@ enum imsg_type {
 	IMSG_NEW_TAS_DONE,
 	IMSG_RECHECK_RESOLVERS,
 	IMSG_RESOLVE_CAPTIVE_PORTAL,
+	IMSG_BLFD,
 };
 
 struct uw_forwarder {
@@ -131,7 +133,6 @@ SIMPLEQ_HEAD(uw_forwarder_head, uw_forwarder);
 struct uw_conf {
 	struct uw_forwarder_head	 uw_forwarder_list;
 	struct uw_forwarder_head	 uw_dot_forwarder_list;
-	int				 uw_options;
 	enum uw_resolver_type		 res_pref[UW_RES_NONE];
 	int				 res_pref_len;
 	char				*captive_portal_host;
@@ -139,6 +140,7 @@ struct uw_conf {
 	char				*captive_portal_expected_response;
 	int				 captive_portal_expected_status;
 	int				 captive_portal_auto;
+	char				*blocklist_file;
 };
 
 struct query_imsg {
@@ -165,6 +167,7 @@ void	merge_config(struct uw_conf *, struct uw_conf *);
 void	imsg_event_add(struct imsgev *);
 int	imsg_compose_event(struct imsgev *, uint16_t, uint32_t, pid_t,
 	    int, void *, uint16_t);
+void	imsg_receive_config(struct imsg *, struct uw_conf **);
 
 struct uw_conf	*config_new_empty(void);
 void		 config_clear(struct uw_conf *);

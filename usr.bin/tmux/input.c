@@ -1,4 +1,4 @@
-/* $OpenBSD: input.c,v 1.152 2019/05/07 10:25:15 nicm Exp $ */
+/* $OpenBSD: input.c,v 1.158 2019/06/27 15:17:41 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -1829,6 +1829,8 @@ input_csi_dispatch_sgr_256_do(struct input_ctx *ictx, int fgbg, int c)
 			gc->fg = c | COLOUR_FLAG_256;
 		else if (fgbg == 48)
 			gc->bg = c | COLOUR_FLAG_256;
+		else if (fgbg == 58)
+			gc->us = c | COLOUR_FLAG_256;
 	}
 	return (1);
 }
@@ -1862,6 +1864,8 @@ input_csi_dispatch_sgr_rgb_do(struct input_ctx *ictx, int fgbg, int r, int g,
 		gc->fg = colour_join_rgb(r, g, b);
 	else if (fgbg == 48)
 		gc->bg = colour_join_rgb(r, g, b);
+	else if (fgbg == 58)
+		gc->us = colour_join_rgb(r, g, b);
 	return (1);
 }
 
@@ -1938,23 +1942,25 @@ input_csi_dispatch_sgr_colon(struct input_ctx *ictx, u_int i)
 		}
 		return;
 	}
-	if (p[0] != 38 && p[0] != 48)
+	if (n < 2 || (p[0] != 38 && p[0] != 48 && p[0] != 58))
 		return;
-	if (p[1] == -1)
-		i = 2;
-	else
-		i = 1;
-	switch (p[i]) {
+	switch (p[1]) {
 	case 2:
-		if (n < i + 4)
+		if (n < 3)
 			break;
-		input_csi_dispatch_sgr_rgb_do(ictx, p[0], p[i + 1], p[i + 2],
-		    p[i + 3]);
+		if (n == 5)
+			i = 2;
+		else
+			i = 3;
+		if (n < i + 3)
+			break;
+		input_csi_dispatch_sgr_rgb_do(ictx, p[0], p[i], p[i + 1],
+		    p[i + 2]);
 		break;
 	case 5:
-		if (n < i + 2)
+		if (n < 3)
 			break;
-		input_csi_dispatch_sgr_256_do(ictx, p[0], p[i + 1]);
+		input_csi_dispatch_sgr_256_do(ictx, p[0], p[2]);
 		break;
 	}
 }
@@ -1981,7 +1987,7 @@ input_csi_dispatch_sgr(struct input_ctx *ictx)
 		if (n == -1)
 			continue;
 
-		if (n == 38 || n == 48) {
+		if (n == 38 || n == 48 || n == 58) {
 			i++;
 			switch (input_get(ictx, i, 0, -1)) {
 			case 2:
@@ -2069,6 +2075,15 @@ input_csi_dispatch_sgr(struct input_ctx *ictx)
 			break;
 		case 49:
 			gc->bg = 8;
+			break;
+		case 53:
+			gc->attr |= GRID_ATTR_OVERLINE;
+			break;
+		case 55:
+			gc->attr &= ~GRID_ATTR_OVERLINE;
+			break;
+		case 59:
+			gc->us = 0;
 			break;
 		case 90:
 		case 91:
@@ -2251,7 +2266,7 @@ input_exit_rename(struct input_ctx *ictx)
 {
 	if (ictx->flags & INPUT_DISCARD)
 		return;
-	if (!options_get_number(ictx->wp->window->options, "allow-rename"))
+	if (!options_get_number(ictx->wp->options, "allow-rename"))
 		return;
 	log_debug("%s: \"%s\"", __func__, ictx->input_buf);
 
@@ -2339,12 +2354,14 @@ input_osc_10(struct input_ctx *ictx, const char *p)
 {
 	struct window_pane	*wp = ictx->wp;
 	u_int			 r, g, b;
+	char			 tmp[16];
 
 	if (sscanf(p, "rgb:%2x/%2x/%2x", &r, &g, &b) != 3)
 	    goto bad;
-
-	wp->style.gc.fg = colour_join_rgb(r, g, b);
-	wp->flags |= PANE_REDRAW;
+	xsnprintf(tmp, sizeof tmp, "fg=#%02x%02x%02x", r, g, b);
+	options_set_style(wp->options, "window-style", 1, tmp);
+	options_set_style(wp->options, "window-active-style", 1, tmp);
+	wp->flags |= (PANE_REDRAW|PANE_STYLECHANGED);
 
 	return;
 
@@ -2358,12 +2375,14 @@ input_osc_11(struct input_ctx *ictx, const char *p)
 {
 	struct window_pane	*wp = ictx->wp;
 	u_int			 r, g, b;
+	char			 tmp[16];
 
 	if (sscanf(p, "rgb:%2x/%2x/%2x", &r, &g, &b) != 3)
 	    goto bad;
-
-	wp->style.gc.bg = colour_join_rgb(r, g, b);
-	wp->flags |= PANE_REDRAW;
+	xsnprintf(tmp, sizeof tmp, "bg=#%02x%02x%02x", r, g, b);
+	options_set_style(wp->options, "window-style", 1, tmp);
+	options_set_style(wp->options, "window-active-style", 1, tmp);
+	wp->flags |= (PANE_REDRAW|PANE_STYLECHANGED);
 
 	return;
 
@@ -2401,7 +2420,6 @@ input_osc_52(struct input_ctx *ictx, const char *p)
 			outlen = 4 * ((len + 2) / 3) + 1;
 			out = xmalloc(outlen);
 			if ((outlen = b64_ntop(buf, len, out, outlen)) == -1) {
-				abort();
 				free(out);
 				return;
 			}

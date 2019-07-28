@@ -1,4 +1,4 @@
-#	$OpenBSD: GENERIC,v 1.310 2019/03/22 12:07:00 sthen Exp $
+#	$OpenBSD: GENERIC,v 1.313 2019/06/29 15:39:06 deraadt Exp $
 #
 # For further information on compiling OpenBSD kernels, see the config(8)
 # man page.
@@ -86,6 +86,7 @@ em*	at pci?			# Intel Pro/1000 ethernet
 ix*	at pci?			# Intel 82598EB 10Gb ethernet
 ixl*	at pci?			# Intel 700 Series Ethernet
 myx*	at pci?			# Myricom Myri-10G 10Gb ethernet
+mcx*	at pci?			# Mellanox 5th Generation Ethernet
 oce*	at pci?			# Emulex OneConnect 10Gb ethernet
 bge*	at pci?			# Broadcom BCM570x (aka Tigon3)
 bnx*	at pci?			# Broadcom BCM5706/5708 GigE
@@ -196,6 +197,8 @@ uslcom*	at uhub?		# Silicon Laboratories CP210x serial
 ucom*	at uslcom?
 uscom*	at uhub?		# Simple USB serial adapters
 ucom*	at uscom?
+ucrcom*	at uhub?		# Chromebook serial
+ucom*	at ucrcom?
 uark*	at uhub?		# Arkmicro ARK3116 serial
 ucom*	at uark?
 uipaq*	at uhub?		# iPAQ serial adapter
@@ -217,6 +220,8 @@ ucycom*	at uhidev?		# Cypress serial
 ucom*	at ucycom?
 uslhcom* at uhidev?		# Silicon Labs CP2110 USB HID UART
 ucom*	at uslhcom?
+umsm*	at uhub?		# Qualcomm MSM EVDO
+ucom*	at umsm?
 uhid*	at uhidev?		# USB generic HID support
 upd*	at uhidev?		# USB Power Devices sensors
 aue*	at uhub?		# ADMtek AN986 Pegasus Ethernet

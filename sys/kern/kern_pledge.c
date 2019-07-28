@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_pledge.c,v 1.251 2019/02/14 15:41:47 florian Exp $	*/
+/*	$OpenBSD: kern_pledge.c,v 1.254 2019/06/26 17:04:55 robert Exp $	*/
 
 /*
  * Copyright (c) 2015 Nicholas Marriott <nicm@openbsd.org>
@@ -253,6 +253,7 @@ const uint64_t pledge_syscalls[SYS_MAXSYSCALL] = {
 	[SYS_stat] = PLEDGE_STDIO,
 	[SYS_access] = PLEDGE_STDIO,
 	[SYS_readlink] = PLEDGE_STDIO,
+	[SYS___realpath] = PLEDGE_STDIO,
 
 	[SYS_adjtime] = PLEDGE_STDIO,   /* setting requires "settime" */
 	[SYS_adjfreq] = PLEDGE_SETTIME,
@@ -1175,6 +1176,19 @@ pledge_ioctl(struct proc *p, long com, struct file *fp)
 		case VIDIOC_STREAMOFF:
 		case VIDIOC_ENUM_FRAMESIZES:
 		case VIDIOC_ENUM_FRAMEINTERVALS:
+		case VIDIOC_DQEVENT:
+		case VIDIOC_ENCODER_CMD:
+		case VIDIOC_EXPBUF:
+		case VIDIOC_G_CROP:
+		case VIDIOC_G_EXT_CTRLS:
+		case VIDIOC_G_FMT:
+		case VIDIOC_G_SELECTION:
+		case VIDIOC_QUERYMENU:
+		case VIDIOC_SUBSCRIBE_EVENT:
+		case VIDIOC_S_EXT_CTRLS:
+		case VIDIOC_S_SELECTION:
+		case VIDIOC_TRY_DECODER_CMD:
+		case VIDIOC_TRY_ENCODER_CMD:
 			if (fp->f_type == DTYPE_VNODE &&
 			    vp->v_type == VCHR &&
 			    cdevsw[major(vp->v_rdev)].d_open == videoopen)

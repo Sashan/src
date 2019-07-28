@@ -1,4 +1,4 @@
-/*	$OpenBSD: ldasm.S,v 1.32 2017/08/27 21:59:52 deraadt Exp $ */
+/*	$OpenBSD: ldasm.S,v 1.34 2019/07/01 15:57:34 kettenis Exp $ */
 
 /*
  * Copyright (c) 1999 Dale Rahn
@@ -31,7 +31,11 @@
 #include <machine/asm.h>
 #include <sys/syscall.h>
 
-ENTRY(_dl_start)
+	.section .boot.text,"ax",@progbits
+	.align	2
+	.globl	_dl_start
+	.type	_dl_start,@function
+_dl_start:
 	mr	19, 1
 	stwu	1, (-16 -((AUX_entry+3)*4))(1)	# Some space.
 
@@ -50,7 +54,7 @@ ENTRY(_dl_start)
 	addi	30, 30, _GLOBAL_OFFSET_TABLE_-1b@l
 
 	bcl	20, 31, 1f
-1:	mflr	18,
+1:	mflr	18
 	addis	18, 18, _DYNAMIC-1b@ha
 	addi	18, 18, _DYNAMIC-1b@l
 	lwz	4, 0(30)	# load address of _DYNAMIC according to got.
@@ -84,6 +88,7 @@ ENTRY(_dl_start)
 	mtlr	27
 	lwz	1, 0(1)		# Restore stack pointer.
 	bctr			# Go execute the 'real' program.
+END(_dl_start)
 
 ENTRY(_dl_bind_start)
 	stwu	1,-72(1)
@@ -121,3 +126,4 @@ ENTRY(_dl_bind_start)
 
 	addi	1,1,72
 	bctr
+END(_dl_bind_start)

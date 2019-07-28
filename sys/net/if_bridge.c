@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_bridge.c,v 1.329 2019/05/03 16:53:07 bluhm Exp $	*/
+/*	$OpenBSD: if_bridge.c,v 1.337 2019/07/20 23:01:51 mpi Exp $	*/
 
 /*
  * Copyright (c) 1999, 2000 Jason L. Wright (jason@thought.net)
@@ -137,7 +137,6 @@ int bridge_ipsec(struct ifnet *, struct ether_header *, int, struct llc *,
 #endif
 int     bridge_clone_create(struct if_clone *, int);
 int	bridge_clone_destroy(struct ifnet *);
-int	bridge_delete(struct bridge_softc *, struct bridge_iflist *);
 
 #define	ETHERADDR_IS_IP_MCAST(a) \
 	/* struct etheraddr *a;	*/				\
@@ -173,8 +172,8 @@ bridge_clone_create(struct if_clone *ifc, int unit)
 	sc->sc_brtmax = BRIDGE_RTABLE_MAX;
 	sc->sc_brttimeout = BRIDGE_RTABLE_TIMEOUT;
 	timeout_set(&sc->sc_brtimeout, bridge_rtage, sc);
-	SLIST_INIT(&sc->sc_iflist);
-	SLIST_INIT(&sc->sc_spanlist);
+	SMR_SLIST_INIT(&sc->sc_iflist);
+	SMR_SLIST_INIT(&sc->sc_spanlist);
 	mtx_init(&sc->sc_mtx, IPL_MPFLOOR);
 	for (i = 0; i < BRIDGE_RTABLE_SIZE; i++)
 		LIST_INIT(&sc->sc_rts[i]);
@@ -218,11 +217,18 @@ bridge_clone_destroy(struct ifnet *ifp)
 	struct bridge_softc *sc = ifp->if_softc;
 	struct bridge_iflist *bif;
 
+	/*
+	 * bridge(4) detach hook doesn't need the NET_LOCK(), worst the
+	 * use of smr_barrier() while holding the lock might lead to a
+	 * deadlock situation.
+	 */
+	NET_ASSERT_UNLOCKED();
+
 	bridge_stop(sc);
 	bridge_rtflush(sc, IFBF_FLUSHALL);
-	while ((bif = SLIST_FIRST(&sc->sc_iflist)) != NULL)
+	while ((bif = SMR_SLIST_FIRST_LOCKED(&sc->sc_iflist)) != NULL)
 		bridge_ifremove(bif);
-	while ((bif = SLIST_FIRST(&sc->sc_spanlist)) != NULL)
+	while ((bif = SMR_SLIST_FIRST_LOCKED(&sc->sc_spanlist)) != NULL)
 		bridge_spanremove(bif);
 
 	bstp_destroy(sc->sc_stp);
@@ -241,26 +247,6 @@ bridge_clone_destroy(struct ifnet *ifp)
 }
 
 int
-bridge_delete(struct bridge_softc *sc, struct bridge_iflist *bif)
-{
-	int error;
-
-	if (bif->bif_flags & IFBIF_STP)
-		bstp_delete(bif->bif_stp);
-
-	bif->ifp->if_bridgeidx = 0;
-	error = ifpromisc(bif->ifp, 0);
-	hook_disestablish(bif->ifp->if_detachhooks, bif->bif_dhcookie);
-
-	if_ih_remove(bif->ifp, bridge_input, NULL);
-	bridge_rtdelete(sc, bif->ifp, 0);
-	bridge_flushrule(bif);
-	free(bif, M_DEVBUF, sizeof *bif);
-
-	return (error);
-}
-
-int
 bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 {
 	struct bridge_softc *sc = (struct bridge_softc *)ifp->if_softc;
@@ -272,6 +258,13 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	struct bstp_state *bs = sc->sc_stp;
 	int error = 0;
 
+	/*
+	 * bridge(4) data structure aren't protected by the NET_LOCK().
+	 * Idealy it shouldn't be taken before calling `ifp->if_ioctl'
+	 * but we aren't there yet.
+	 */
+	NET_UNLOCK();
+
 	switch (cmd) {
 	case SIOCBRDGADD:
 	/* bridge(4) does not distinguish between routing/forwarding ports */
@@ -282,14 +275,20 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		ifs = ifunit(req->ifbr_ifsname);
 
 		/* try to create the interface if it does't exist */
-		if (ifs == NULL && if_clone_create(req->ifbr_ifsname, 0) == 0)
-			ifs = ifunit(req->ifbr_ifsname);
+		if (ifs == NULL) {
+			error = if_clone_create(req->ifbr_ifsname, 0);
+			if (error == 0)
+				ifs = ifunit(req->ifbr_ifsname);
+		}
 
 		if (ifs == NULL) {			/* no such interface */
 			error = ENOENT;
 			break;
 		}
-
+		if (ifs->if_type != IFT_ETHER) {
+			error = EINVAL;
+			break;
+		}
 		if (ifs->if_bridgeidx != 0) {
 			if (ifs->if_bridgeidx == ifp->if_index)
 				error = EEXIST;
@@ -299,7 +298,7 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		}
 
 		/* If it's in the span list, it can't be a member. */
-		SLIST_FOREACH(bif, &sc->sc_spanlist, bif_next) {
+		SMR_SLIST_FOREACH_LOCKED(bif, &sc->sc_spanlist, bif_next) {
 			if (bif->ifp == ifs)
 				break;
 		}
@@ -308,20 +307,15 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			break;
 		}
 
-		if (ifs->if_type == IFT_ETHER) {
-			error = ifpromisc(ifs, 1);
-			if (error != 0)
-				break;
-		} else {
-			error = EINVAL;
+		bif = malloc(sizeof(*bif), M_DEVBUF, M_NOWAIT|M_ZERO);
+		if (bif == NULL) {
+			error = ENOMEM;
 			break;
 		}
 
-		bif = malloc(sizeof(*bif), M_DEVBUF, M_NOWAIT|M_ZERO);
-		if (bif == NULL) {
-			if (ifs->if_type == IFT_ETHER)
-				ifpromisc(ifs, 0);
-			error = ENOMEM;
+		error = ifpromisc(ifs, 1);
+		if (error != 0) {
+			free(bif, M_DEVBUF, sizeof(*bif));
 			break;
 		}
 
@@ -334,7 +328,7 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		bif->bif_dhcookie = hook_establish(ifs->if_detachhooks, 0,
 		    bridge_ifdetach, bif);
 		if_ih_insert(bif->ifp, bridge_input, NULL);
-		SLIST_INSERT_HEAD(&sc->sc_iflist, bif, bif_next);
+		SMR_SLIST_INSERT_HEAD_LOCKED(&sc->sc_iflist, bif, bif_next);
 		break;
 	case SIOCBRDGDEL:
 		if ((error = suser(curproc)) != 0)
@@ -349,7 +343,7 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			break;
 		}
 		bif = bridge_getbif(ifs);
-		error = bridge_ifremove(bif);
+		bridge_ifremove(bif);
 		break;
 	case SIOCBRDGIFS:
 		error = bridge_bifconf(sc, (struct ifbifconf *)data);
@@ -367,10 +361,13 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			break;
 		}
 		if (ifs->if_bridgeidx != 0) {
-			error = EBUSY;
+			if (ifs->if_bridgeidx == ifp->if_index)
+				error = EEXIST;
+			else
+				error = EBUSY;
 			break;
 		}
-		SLIST_FOREACH(bif, &sc->sc_spanlist, bif_next) {
+		SMR_SLIST_FOREACH_LOCKED(bif, &sc->sc_spanlist, bif_next) {
 			if (bif->ifp == ifs)
 				break;
 		}
@@ -383,14 +380,14 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			error = ENOMEM;
 			break;
 		}
+		bif->bridge_sc = sc;
 		bif->ifp = ifs;
 		bif->bif_flags = IFBIF_SPAN;
-		bif->bridge_sc = sc;
-		bif->bif_dhcookie = hook_establish(ifs->if_detachhooks, 0,
-		    bridge_spandetach, bif);
 		SIMPLEQ_INIT(&bif->bif_brlin);
 		SIMPLEQ_INIT(&bif->bif_brlout);
-		SLIST_INSERT_HEAD(&sc->sc_spanlist, bif, bif_next);
+		bif->bif_dhcookie = hook_establish(ifs->if_detachhooks, 0,
+		    bridge_spandetach, bif);
+		SMR_SLIST_INSERT_HEAD_LOCKED(&sc->sc_spanlist, bif, bif_next);
 		break;
 	case SIOCBRDGDELS:
 		if ((error = suser(curproc)) != 0)
@@ -400,7 +397,7 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			error = ENOENT;
 			break;
 		}
-		SLIST_FOREACH(bif, &sc->sc_spanlist, bif_next) {
+		SMR_SLIST_FOREACH_LOCKED(bif, &sc->sc_spanlist, bif_next) {
 			if (bif->ifp == ifs)
 				break;
 		}
@@ -538,6 +535,7 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	if (!error)
 		error = bstp_ioctl(ifp, cmd, data);
 
+	NET_LOCK();
 	return (error);
 }
 
@@ -546,9 +544,29 @@ int
 bridge_ifremove(struct bridge_iflist *bif)
 {
 	struct bridge_softc *sc = bif->bridge_sc;
+	int error;
 
-	SLIST_REMOVE(&sc->sc_iflist, bif, bridge_iflist, bif_next);
-	return (bridge_delete(sc, bif));
+	SMR_SLIST_REMOVE_LOCKED(&sc->sc_iflist, bif, bridge_iflist, bif_next);
+	hook_disestablish(bif->ifp->if_detachhooks, bif->bif_dhcookie);
+	if_ih_remove(bif->ifp, bridge_input, NULL);
+
+	smr_barrier();
+
+	if (bif->bif_flags & IFBIF_STP) {
+		bstp_delete(bif->bif_stp);
+		bif->bif_stp = NULL;
+	}
+
+	bif->ifp->if_bridgeidx = 0;
+	error = ifpromisc(bif->ifp, 0);
+
+	bridge_rtdelete(sc, bif->ifp, 0);
+	bridge_flushrule(bif);
+
+	bif->ifp = NULL;
+	free(bif, M_DEVBUF, sizeof(*bif));
+
+	return (error);
 }
 
 void
@@ -556,8 +574,12 @@ bridge_spanremove(struct bridge_iflist *bif)
 {
 	struct bridge_softc *sc = bif->bridge_sc;
 
-	SLIST_REMOVE(&sc->sc_spanlist, bif, bridge_iflist, bif_next);
+	SMR_SLIST_REMOVE_LOCKED(&sc->sc_spanlist, bif, bridge_iflist, bif_next);
 	hook_disestablish(bif->ifp->if_detachhooks, bif->bif_dhcookie);
+
+	smr_barrier();
+
+	bif->ifp = NULL;
 	free(bif, M_DEVBUF, sizeof(*bif));
 }
 
@@ -566,7 +588,14 @@ bridge_ifdetach(void *xbif)
 {
 	struct bridge_iflist *bif = xbif;
 
+	/*
+	 * bridge(4) detach hook doesn't need the NET_LOCK(), worst the
+	 * use of smr_barrier() while holding the lock might lead to a
+	 * deadlock situation.
+	 */
+	NET_UNLOCK();
 	bridge_ifremove(bif);
+	NET_LOCK();
 }
 
 void
@@ -574,7 +603,14 @@ bridge_spandetach(void *xbif)
 {
 	struct bridge_iflist *bif = xbif;
 
+	/*
+	 * bridge(4) detach hook doesn't need the NET_LOCK(), worst the
+	 * use of smr_barrier() while holding the lock might lead to a
+	 * deadlock situation.
+	 */
+	NET_UNLOCK();
 	bridge_spanremove(bif);
+	NET_LOCK();
 }
 
 void
@@ -616,10 +652,10 @@ bridge_bifconf(struct bridge_softc *sc, struct ifbifconf *bifc)
 	int error = 0;
 	struct ifbreq *breq, *breqs = NULL;
 
-	SLIST_FOREACH(bif, &sc->sc_iflist, bif_next)
+	SMR_SLIST_FOREACH_LOCKED(bif, &sc->sc_iflist, bif_next)
 		total++;
 
-	SLIST_FOREACH(bif, &sc->sc_spanlist, bif_next)
+	SMR_SLIST_FOREACH_LOCKED(bif, &sc->sc_spanlist, bif_next)
 		total++;
 
 	if (bifc->ifbic_len == 0) {
@@ -631,7 +667,7 @@ bridge_bifconf(struct bridge_softc *sc, struct ifbifconf *bifc)
 	if (breqs == NULL)
 		goto done;
 
-	SLIST_FOREACH(bif, &sc->sc_iflist, bif_next) {
+	SMR_SLIST_FOREACH_LOCKED(bif, &sc->sc_iflist, bif_next) {
 		if (bifc->ifbic_len < (i + 1) * sizeof(*breqs))
 			break;
 		breq = &breqs[i];
@@ -644,7 +680,7 @@ bridge_bifconf(struct bridge_softc *sc, struct ifbifconf *bifc)
 			bridge_bifgetstp(sc, bif, breq);
 		i++;
 	}
-	SLIST_FOREACH(bif, &sc->sc_spanlist, bif_next) {
+	SMR_SLIST_FOREACH_LOCKED(bif, &sc->sc_spanlist, bif_next) {
 		if (bifc->ifbic_len < (i + 1) * sizeof(*breqs))
 			break;
 		breq = &breqs[i];
@@ -669,12 +705,14 @@ bridge_getbif(struct ifnet *ifp)
 	struct bridge_softc *sc;
 	struct ifnet *bifp;
 
+	KERNEL_ASSERT_LOCKED();
+
 	bifp = if_get(ifp->if_bridgeidx);
 	if (bifp == NULL)
 		return (NULL);
 
 	sc = bifp->if_softc;
-	SLIST_FOREACH(bif, &sc->sc_iflist, bif_next) {
+	SMR_SLIST_FOREACH_LOCKED(bif, &sc->sc_iflist, bif_next) {
 		if (bif->ifp == ifp)
 			break;
 	}
@@ -786,10 +824,9 @@ bridge_enqueue(struct ifnet *ifp, struct mbuf *m)
 		struct bridge_softc *sc = brifp->if_softc;
 		struct bridge_iflist *bif;
 		struct mbuf *mc;
-		int used = 0;
 
-		KERNEL_LOCK();
-		SLIST_FOREACH(bif, &sc->sc_iflist, bif_next) {
+		smr_read_enter();
+		SMR_SLIST_FOREACH(bif, &sc->sc_iflist, bif_next) {
 			dst_if = bif->ifp;
 			if ((dst_if->if_flags & IFF_RUNNING) == 0)
 				continue;
@@ -808,28 +845,22 @@ bridge_enqueue(struct ifnet *ifp, struct mbuf *m)
 			    (m->m_flags & (M_BCAST | M_MCAST)) == 0)
 				continue;
 
-			if (SLIST_NEXT(bif, bif_next) == NULL) {
-				used = 1;
-				mc = m;
-			} else {
-				mc = m_dup_pkt(m, ETHER_ALIGN, M_NOWAIT);
-				if (mc == NULL) {
-					brifp->if_oerrors++;
-					continue;
-				}
-			}
-
-			if (bridge_filterrule(&bif->bif_brlout, eh, mc) ==
+			if (bridge_filterrule(&bif->bif_brlout, eh, m) ==
 			    BRL_ACTION_BLOCK)
 				continue;
+
+			mc = m_dup_pkt(m, ETHER_ALIGN, M_NOWAIT);
+			if (mc == NULL) {
+				brifp->if_oerrors++;
+				continue;
+			}
 
 			error = bridge_ifenqueue(brifp, dst_if, mc);
 			if (error)
 				continue;
 		}
-		KERNEL_UNLOCK();
-		if (!used)
-			m_freem(m);
+		smr_read_leave();
+		m_freem(m);
 		goto out;
 	}
 
@@ -900,10 +931,6 @@ bridgeintr_frame(struct ifnet *brifp, struct ifnet *src_if, struct mbuf *m)
 	bif = bridge_getbif(src_if);
 	KASSERT(bif != NULL);
 
-	if (m->m_pkthdr.len < sizeof(eh)) {
-		m_freem(m);
-		return;
-	}
 	m_copydata(m, 0, ETHER_HDR_LEN, (caddr_t)&eh);
 	dst = (struct ether_addr *)&eh.ether_dhost[0];
 	src = (struct ether_addr *)&eh.ether_shost[0];
@@ -913,10 +940,8 @@ bridgeintr_frame(struct ifnet *brifp, struct ifnet *src_if, struct mbuf *m)
 	 * is not broadcast or multicast, record its address.
 	 */
 	if ((bif->bif_flags & IFBIF_LEARNING) &&
-	    (eh.ether_shost[0] & 1) == 0 &&
-	    !(eh.ether_shost[0] == 0 && eh.ether_shost[1] == 0 &&
-	    eh.ether_shost[2] == 0 && eh.ether_shost[3] == 0 &&
-	    eh.ether_shost[4] == 0 && eh.ether_shost[5] == 0))
+	    !ETHER_IS_MULTICAST(eh.ether_shost) &&
+	    !ETHER_IS_ANYADDR(eh.ether_shost))
 		bridge_rtupdate(sc, src, src_if, 0, IFBAF_DYNAMIC, m);
 
 	if ((bif->bif_flags & IFBIF_STP) &&
@@ -941,8 +966,7 @@ bridgeintr_frame(struct ifnet *brifp, struct ifnet *src_if, struct mbuf *m)
 			return;
 		}
 	} else {
-		if (memcmp(etherbroadcastaddr, eh.ether_dhost,
-		    sizeof(etherbroadcastaddr)) == 0)
+		if (ETHER_IS_BROADCAST(eh.ether_dhost))
 			m->m_flags |= M_BCAST;
 		else
 			m->m_flags |= M_MCAST;
@@ -1012,8 +1036,8 @@ bridgeintr_frame(struct ifnet *brifp, struct ifnet *src_if, struct mbuf *m)
 	if (!ISSET(dst_if->if_flags, IFF_RUNNING))
 		goto bad;
 	bif = bridge_getbif(dst_if);
-	if ((bif->bif_flags & IFBIF_STP) &&
-	    (bif->bif_state == BSTP_IFSTATE_DISCARDING))
+	if ((bif == NULL) || ((bif->bif_flags & IFBIF_STP) &&
+	    (bif->bif_state == BSTP_IFSTATE_DISCARDING)))
 		goto bad;
 	/*
 	 * Do not transmit if both ports are part of the same protected
@@ -1087,7 +1111,7 @@ bridge_process(struct ifnet *ifp, struct mbuf *m)
 {
 	struct ifnet *brifp;
 	struct bridge_softc *sc;
-	struct bridge_iflist *bif, *bif0;
+	struct bridge_iflist *bif = NULL, *bif0 = NULL;
 	struct ether_header *eh;
 	struct mbuf *mc;
 #if NBPFILTER > 0
@@ -1099,6 +1123,9 @@ bridge_process(struct ifnet *ifp, struct mbuf *m)
 	brifp = if_get(ifp->if_bridgeidx);
 	if ((brifp == NULL) || !ISSET(brifp->if_flags, IFF_RUNNING))
 		goto reenqueue;
+
+	if (m->m_pkthdr.len < sizeof(*eh))
+		goto bad;
 
 #if NVLAN > 0
 	/*
@@ -1118,17 +1145,20 @@ bridge_process(struct ifnet *ifp, struct mbuf *m)
 		bpf_mtap_ether(if_bpf, m, BPF_DIRECTION_IN);
 #endif
 
+	eh = mtod(m, struct ether_header *);
+
 	sc = brifp->if_softc;
-	SLIST_FOREACH(bif, &sc->sc_iflist, bif_next) {
+	SMR_SLIST_FOREACH_LOCKED(bif, &sc->sc_iflist, bif_next) {
+		if (bridge_ourether(bif->ifp, eh->ether_shost))
+			goto bad;
 		if (bif->ifp == ifp)
-			break;
+			bif0 = bif;
 	}
-	if (bif == NULL)
+	if (bif0 == NULL)
 		goto reenqueue;
 
 	bridge_span(brifp, m);
 
-	eh = mtod(m, struct ether_header *);
 	if (ETHER_IS_MULTICAST(eh->ether_dhost)) {
 		/*
 		 * Reserved destination MAC addresses (01:80:C2:00:00:0x)
@@ -1141,7 +1171,8 @@ bridge_process(struct ifnet *ifp, struct mbuf *m)
 		    ETHER_ADDR_LEN - 1) == 0) {
 			if (eh->ether_dhost[ETHER_ADDR_LEN - 1] == 0) {
 				/* STP traffic */
-				m = bstp_input(sc->sc_stp, bif->bif_stp, eh, m);
+				m = bstp_input(sc->sc_stp, bif0->bif_stp, eh,
+				    m);
 				if (m == NULL)
 					goto bad;
 			} else if (eh->ether_dhost[ETHER_ADDR_LEN - 1] <= 0xf)
@@ -1151,8 +1182,8 @@ bridge_process(struct ifnet *ifp, struct mbuf *m)
 		/*
 		 * No need to process frames for ifs in the discarding state
 		 */
-		if ((bif->bif_flags & IFBIF_STP) &&
-		    (bif->bif_state == BSTP_IFSTATE_DISCARDING))
+		if ((bif0->bif_flags & IFBIF_STP) &&
+		    (bif0->bif_state == BSTP_IFSTATE_DISCARDING))
 			goto reenqueue;
 
 		mc = m_dup_pkt(m, ETHER_ALIGN, M_NOWAIT);
@@ -1169,29 +1200,32 @@ bridge_process(struct ifnet *ifp, struct mbuf *m)
 	/*
 	 * Unicast, make sure it's not for us.
 	 */
-	bif0 = bif;
-	SLIST_FOREACH(bif, &sc->sc_iflist, bif_next) {
-		if (bif->ifp->if_type != IFT_ETHER)
-			continue;
-		if (bridge_ourether(bif->ifp, eh->ether_dhost)) {
-			if (bif0->bif_flags & IFBIF_LEARNING)
-				bridge_rtupdate(sc,
-				    (struct ether_addr *)&eh->ether_shost,
-				    ifp, 0, IFBAF_DYNAMIC, m);
-			if (bridge_filterrule(&bif0->bif_brlin, eh, m) ==
-			    BRL_ACTION_BLOCK) {
-			    	goto bad;
-			}
-
-			/* Count for the bridge */
-			brifp->if_ipackets++;
-			brifp->if_ibytes += m->m_pkthdr.len;
-
-			ifp = bif->ifp;
-			goto reenqueue;
+	if (bridge_ourether(bif0->ifp, eh->ether_dhost)) {
+		bif = bif0;
+	} else {
+		SMR_SLIST_FOREACH_LOCKED(bif, &sc->sc_iflist, bif_next) {
+			if (bif->ifp == ifp)
+				continue;
+			if (bridge_ourether(bif->ifp, eh->ether_dhost))
+				break;
 		}
-		if (bridge_ourether(bif->ifp, eh->ether_shost))
+	}
+	if (bif != NULL) {
+		if (bif0->bif_flags & IFBIF_LEARNING)
+			bridge_rtupdate(sc,
+			    (struct ether_addr *)&eh->ether_shost,
+			    ifp, 0, IFBAF_DYNAMIC, m);
+		if (bridge_filterrule(&bif0->bif_brlin, eh, m) ==
+		    BRL_ACTION_BLOCK) {
 			goto bad;
+		}
+
+		/* Count for the bridge */
+		brifp->if_ipackets++;
+		brifp->if_ibytes += m->m_pkthdr.len;
+
+		ifp = bif->ifp;
+		goto reenqueue;
 	}
 
 	bridgeintr_frame(brifp, ifp, m);
@@ -1221,9 +1255,10 @@ bridge_broadcast(struct bridge_softc *sc, struct ifnet *ifp,
 	u_int32_t protected;
 
 	bif = bridge_getbif(ifp);
+	KASSERT(bif != NULL);
 	protected = bif->bif_protected;
 
-	SLIST_FOREACH(bif, &sc->sc_iflist, bif_next) {
+	SMR_SLIST_FOREACH_LOCKED(bif, &sc->sc_iflist, bif_next) {
 		dst_if = bif->ifp;
 
 		if ((dst_if->if_flags & IFF_RUNNING) == 0)
@@ -1249,7 +1284,8 @@ bridge_broadcast(struct bridge_softc *sc, struct ifnet *ifp,
 		if (protected != 0 && (protected & bif->bif_protected))
 			continue;
 
-		if (bridge_filterrule(&bif->bif_brlout, eh, m) == BRL_ACTION_BLOCK)
+		if (bridge_filterrule(&bif->bif_brlout, eh, m) ==
+		    BRL_ACTION_BLOCK)
 			continue;
 
 		/*
@@ -1263,7 +1299,7 @@ bridge_broadcast(struct bridge_softc *sc, struct ifnet *ifp,
 			sc->sc_if.if_oerrors++;
 
 		/* If last one, reuse the passed-in mbuf */
-		if (SLIST_NEXT(bif, bif_next) == NULL) {
+		if (SMR_SLIST_NEXT_LOCKED(bif, bif_next) == NULL) {
 			mc = m;
 			used = 1;
 		} else {
@@ -1339,11 +1375,8 @@ bridge_span(struct ifnet *brifp, struct mbuf *m)
 	struct mbuf *mc;
 	int error;
 
-	if (SLIST_EMPTY(&sc->sc_spanlist))
-		return;
-
-	KERNEL_LOCK();
-	SLIST_FOREACH(bif, &sc->sc_spanlist, bif_next) {
+	smr_read_enter();
+	SMR_SLIST_FOREACH(bif, &sc->sc_spanlist, bif_next) {
 		ifp = bif->ifp;
 
 		if ((ifp->if_flags & IFF_RUNNING) == 0)
@@ -1359,7 +1392,7 @@ bridge_span(struct ifnet *brifp, struct mbuf *m)
 		if (error)
 			continue;
 	}
-	KERNEL_UNLOCK();
+	smr_read_leave();
 }
 
 /*

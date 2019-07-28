@@ -1,4 +1,4 @@
-/*	$OpenBSD: printconf.c,v 1.8 2019/04/02 07:47:22 florian Exp $	*/
+/*	$OpenBSD: printconf.c,v 1.10 2019/05/13 23:13:24 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -68,10 +68,6 @@ print_config(struct uw_conf *conf)
 	struct uw_forwarder	*uw_forwarder;
 	int			 i;
 
-#if notyet
-	printf("strict %s\n", yesno(conf->uw_options));
-#endif
-
 	if (conf->res_pref_len > 0) {
 		printf("preference {");
 		for (i = 0; i < conf->res_pref_len; i++) {
@@ -109,4 +105,7 @@ print_config(struct uw_conf *conf)
 		printf("\tauto %s\n", yesno(conf->captive_portal_auto));
 		printf("}\n");
 	}
+
+	if (conf->blocklist_file != NULL)
+		printf("block list \"%s\"\n", conf->blocklist_file);
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.c,v 1.379 2019/04/25 12:12:16 claudio Exp $ */
+/*	$OpenBSD: session.c,v 1.388 2019/07/24 20:25:27 benno Exp $ */
 
 /*
  * Copyright (c) 2003, 2004, 2005 Henning Brauer <henning@openbsd.org>
@@ -43,7 +43,6 @@
 #include <unistd.h>
 
 #include "bgpd.h"
-#include "mrt.h"
 #include "session.h"
 #include "log.h"
 
@@ -52,8 +51,7 @@
 #define PFD_PIPE_ROUTE_CTL	2
 #define PFD_SOCK_CTL		3
 #define PFD_SOCK_RCTL		4
-#define PFD_SOCK_PFKEY		5
-#define PFD_LISTENERS_START	6
+#define PFD_LISTENERS_START	5
 
 void	session_sighdlr(int);
 int	setup_listeners(u_int *);
@@ -114,6 +112,14 @@ struct imsgbuf		*ibuf_main;
 struct mrt_head		 mrthead;
 time_t			 pauseaccept;
 
+static inline int
+peer_compare(const struct peer *a, const struct peer *b)
+{
+	return a->conf.id - b->conf.id;
+}
+
+RB_GENERATE(peer_head, peer, entry, peer_compare);
+
 void
 session_sighdlr(int sig)
 {
@@ -129,7 +135,6 @@ int
 setup_listeners(u_int *la_cnt)
 {
 	int			 ttl = 255;
-	int			 opt;
 	struct listen_addr	*la;
 	u_int			 cnt = 0;
 
@@ -147,15 +152,8 @@ setup_listeners(u_int *la_cnt)
 			continue;
 		}
 
-		opt = 1;
-		if (setsockopt(la->fd, IPPROTO_TCP, TCP_MD5SIG,
-		    &opt, sizeof(opt)) == -1) {
-			if (errno == ENOPROTOOPT) {	/* system w/o md5sig */
-				log_warnx("md5sig not available, disabling");
-				sysdep.no_md5sig = 1;
-			} else
-				fatal("setsockopt TCP_MD5SIG");
-		}
+		if (tcp_md5_listen(la->fd, &conf->peers) == -1)
+			fatal("tcp_md5_listen");
 
 		/* set ttl to 255 so that ttl-security works */
 		if (la->sa.ss_family == AF_INET && setsockopt(la->fd,
@@ -188,7 +186,7 @@ setup_listeners(u_int *la_cnt)
 void
 session_main(int debug, int verbose)
 {
-	int			 timeout, pfkeysock;
+	int			 timeout;
 	unsigned int		 i, j, idx_peers, idx_listeners, idx_mrts;
 	u_int			 pfd_elms = 0, peer_l_elms = 0, mrt_l_elms = 0;
 	u_int			 listener_cnt, ctl_cnt, mrt_cnt;
@@ -200,6 +198,7 @@ session_main(int debug, int verbose)
 	struct ctl_conn		*ctl_conn;
 	struct listen_addr	*la;
 	void			*newp;
+	time_t			 now;
 	short			 events;
 
 	log_init(debug, LOG_DAEMON);
@@ -217,7 +216,6 @@ session_main(int debug, int verbose)
 		fatal("chdir(\"/\")");
 
 	setproctitle("session engine");
-	pfkeysock = pfkey_init(&sysdep);
 
 	if (setgroups(1, &pw->pw_gid) ||
 	    setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid) ||
@@ -250,9 +248,7 @@ session_main(int debug, int verbose)
 	while (session_quit == 0) {
 		/* check for peers to be initialized or deleted */
 		if (!pending_reconf) {
-			for (p = TAILQ_FIRST(&conf->peers); p != NULL;
-			   p = next) {
-				next = TAILQ_NEXT(p, entry);
+			RB_FOREACH_SAFE(p, peer_head, &conf->peers, next) {
 				/* cloned peer that idled out? */
 				if (p->template && (p->state == STATE_IDLE ||
 				    p->state == STATE_ACTIVE) &&
@@ -278,7 +274,7 @@ session_main(int debug, int verbose)
 					p->conf.demote_group[0] = 0;
 					session_stop(p, ERR_CEASE_PEER_UNCONF);
 					log_peer_warnx(&p->conf, "removed");
-					TAILQ_REMOVE(&conf->peers, p, entry);
+					RB_REMOVE(peer_head, &conf->peers, p);
 					timer_remove_all(p);
 					pfkey_remove(p);
 					free(p);
@@ -355,8 +351,6 @@ session_main(int debug, int verbose)
 			pfd[PFD_SOCK_CTL].fd = -1;
 			pfd[PFD_SOCK_RCTL].fd = -1;
 		}
-		pfd[PFD_SOCK_PFKEY].fd = pfkeysock;
-		pfd[PFD_SOCK_PFKEY].events = POLLIN;
 
 		i = PFD_LISTENERS_START;
 		TAILQ_FOREACH(la, conf->listen_addrs, entry) {
@@ -370,12 +364,13 @@ session_main(int debug, int verbose)
 		idx_listeners = i;
 		timeout = 240;	/* loop every 240s at least */
 
-		TAILQ_FOREACH(p, &conf->peers, entry) {
+		now = getmonotime();
+		RB_FOREACH(p, peer_head, &conf->peers) {
 			time_t	nextaction;
 			struct peer_timer *pt;
 
 			/* check timers */
-			if ((pt = timer_nextisdue(p)) != NULL) {
+			if ((pt = timer_nextisdue(p, now)) != NULL) {
 				switch (pt->type) {
 				case Timer_Hold:
 					bgp_fsm(p, EVNT_TIMER_HOLDTIME);
@@ -417,7 +412,7 @@ session_main(int debug, int verbose)
 					fatalx("King Bula lost in time");
 				}
 			}
-			if ((nextaction = timer_nextduein(p)) != -1 &&
+			if ((nextaction = timer_nextduein(p, now)) != -1 &&
 			    nextaction < timeout)
 				timeout = nextaction;
 
@@ -426,7 +421,7 @@ session_main(int debug, int verbose)
 			if (p->wbuf.queued > 0 || p->state == STATE_CONNECT)
 				events |= POLLOUT;
 			/* is there still work to do? */
-			if (p->rpending)
+			if (p->rpending && p->rbuf && p->rbuf->wpos)
 				timeout = 0;
 
 			/* poll events */
@@ -506,13 +501,6 @@ session_main(int debug, int verbose)
 		if (pfd[PFD_SOCK_RCTL].revents & POLLIN)
 			ctl_cnt += control_accept(rcsock, 1);
 
-		if (pfd[PFD_SOCK_PFKEY].revents & POLLIN) {
-			if (pfkey_read(pfkeysock, NULL) == -1) {
-				log_warnx("pfkey_read failed, exiting...");
-				session_quit = 1;
-			}
-		}
-
 		for (j = PFD_LISTENERS_START; j < idx_listeners; j++)
 			if (pfd[j].revents & POLLIN)
 				session_accept(pfd[j].fd);
@@ -521,7 +509,7 @@ session_main(int debug, int verbose)
 			session_dispatch_msg(&pfd[j],
 			    peer_l[j - idx_listeners]);
 
-		TAILQ_FOREACH(p, &conf->peers, entry)
+		RB_FOREACH(p, peer_head, &conf->peers)
 			if (p->rbuf && p->rbuf->wpos)
 				session_process_msg(p);
 
@@ -533,14 +521,13 @@ session_main(int debug, int verbose)
 			control_dispatch_msg(&pfd[j], &ctl_cnt, &conf->peers);
 	}
 
-	while ((p = TAILQ_FIRST(&conf->peers)) != NULL) {
-		TAILQ_REMOVE(&conf->peers, p, entry);
+	RB_FOREACH_SAFE(p, peer_head, &conf->peers, next) {
+		RB_REMOVE(peer_head, &conf->peers, p);
 		strlcpy(p->conf.shutcomm,
 		    "bgpd shutting down",
 		    sizeof(p->conf.shutcomm));
 		session_stop(p, ERR_CEASE_ADMIN_DOWN);
 		timer_remove_all(p);
-		pfkey_remove(p);
 		free(p);
 	}
 
@@ -628,14 +615,6 @@ bgp_fsm(struct peer *peer, enum session_events event)
 
 			/* init write buffer */
 			msgbuf_init(&peer->wbuf);
-
-			/* init pfkey - remove old if any, load new ones */
-			pfkey_remove(peer);
-			if (pfkey_establish(peer) == -1) {
-				log_peer_warnx(&peer->conf,
-				    "pfkey setup failed");
-				return;
-			}
 
 			peer->stats.last_sent_errcode = 0;
 			peer->stats.last_sent_suberr = 0;
@@ -908,7 +887,11 @@ change_state(struct peer *peer, enum session_state state,
 		msgbuf_clear(&peer->wbuf);
 		free(peer->rbuf);
 		peer->rbuf = NULL;
+		peer->rpending = 0;
 		bzero(&peer->capa.peer, sizeof(peer->capa.peer));
+		if (!peer->template)
+			imsg_compose(ibuf_main, IMSG_PFKEY_RELOAD,
+			    peer->conf.id, 0, -1, NULL, 0);
 
 		if (event != EVNT_STOP) {
 			timer_set(peer, Timer_IdleHold, peer->IdleHoldTime);
@@ -953,6 +936,9 @@ change_state(struct peer *peer, enum session_state state,
 		}
 		break;
 	case STATE_ACTIVE:
+		if (!peer->template)
+			imsg_compose(ibuf_main, IMSG_PFKEY_RELOAD,
+			    peer->conf.id, 0, -1, NULL, 0);
 		break;
 	case STATE_OPENSENT:
 		break;
@@ -986,7 +972,6 @@ void
 session_accept(int listenfd)
 {
 	int			 connfd;
-	int			 opt;
 	socklen_t		 len;
 	struct sockaddr_storage	 cliaddr;
 	struct peer		*p = NULL;
@@ -1032,23 +1017,9 @@ open:
 			return;
 		}
 
-		if (p->conf.auth.method == AUTH_MD5SIG) {
-			if (sysdep.no_md5sig) {
-				log_peer_warnx(&p->conf,
-				    "md5sig configured but not available");
-				close(connfd);
-				return;
-			}
-			len = sizeof(opt);
-			if (getsockopt(connfd, IPPROTO_TCP, TCP_MD5SIG,
-			    &opt, &len) == -1)
-				fatal("getsockopt TCP_MD5SIG");
-			if (!opt) {	/* non-md5'd connection! */
-				log_peer_warnx(&p->conf,
-				    "connection attempt without md5 signature");
-				close(connfd);
-				return;
-			}
+		if (tcp_md5_check(connfd, p) == -1) {
+			close(connfd);
+			return;
 		}
 		p->fd = p->wbuf.fd = connfd;
 		if (session_setup_socket(p)) {
@@ -1072,7 +1043,6 @@ open:
 int
 session_connect(struct peer *peer)
 {
-	int			 opt = 1;
 	struct sockaddr		*sa;
 	socklen_t		 sa_len;
 
@@ -1098,20 +1068,7 @@ session_connect(struct peer *peer)
 		return (-1);
 	}
 
-	if (peer->conf.auth.method == AUTH_MD5SIG) {
-		if (sysdep.no_md5sig) {
-			log_peer_warnx(&peer->conf,
-			    "md5sig configured but not available");
-			bgp_fsm(peer, EVNT_CON_OPENFAIL);
-			return (-1);
-		}
-		if (setsockopt(peer->fd, IPPROTO_TCP, TCP_MD5SIG,
-		    &opt, sizeof(opt)) == -1) {
-			log_peer_warn(&peer->conf, "setsockopt md5sig");
-			bgp_fsm(peer, EVNT_CON_OPENFAIL);
-			return (-1);
-		}
-	}
+	tcp_md5_set(peer->fd, peer);
 	peer->wbuf.fd = peer->fd;
 
 	/* if update source is set we need to bind() */
@@ -1162,8 +1119,10 @@ session_setup_socket(struct peer *p)
 		}
 
 		if (p->conf.ebgp) {
-			/* set TTL to foreign router's distance
-			   1=direct n=multihop with ttlsec, we always use 255 */
+			/*
+			 * set TTL to foreign router's distance
+			 * 1=direct n=multihop with ttlsec, we always use 255
+			 */
 			if (p->conf.ttlsec) {
 				ttl = 256 - p->conf.distance;
 				if (setsockopt(p->fd, IPPROTO_IP, IP_MINTTL,
@@ -1186,8 +1145,10 @@ session_setup_socket(struct peer *p)
 		break;
 	case AID_INET6:
 		if (p->conf.ebgp) {
-			/* set hoplimit to foreign router's distance
-			   1=direct n=multihop with ttlsec, we always use 255 */
+			/*
+			 * set hoplimit to foreign router's distance
+			 * 1=direct n=multihop with ttlsec, we always use 255
+			 */
 			if (p->conf.ttlsec) {
 				ttl = 256 - p->conf.distance;
 				if (setsockopt(p->fd, IPPROTO_IPV6,
@@ -2313,7 +2274,7 @@ parse_notification(struct peer *peer)
 		if (datalen > 1) {
 			shutcomm_len = *p++;
 			datalen--;
-			if(datalen < shutcomm_len) {
+			if (datalen < shutcomm_len) {
 			    log_peer_warnx(&peer->conf,
 				"received truncated shutdown reason");
 			    return (0);
@@ -2598,7 +2559,7 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 				fatalx("reconf request not from parent");
 			nconf = new_config();
 
-			copy_config(nconf, imsg.data); 
+			copy_config(nconf, imsg.data);
 			pending_reconf = 1;
 			break;
 		case IMSG_RECONF_PEER:
@@ -2609,7 +2570,8 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 			memcpy(&p->conf, imsg.data, sizeof(struct peer_config));
 			p->state = p->prev_state = STATE_NONE;
 			p->reconf_action = RECONF_REINIT;
-			TAILQ_INSERT_TAIL(&nconf->peers, p, entry);
+			if (RB_INSERT(peer_head, &nconf->peers, p) != NULL)
+				fatalx("%s: peer tree is corrupt", __func__);
 			break;
 		case IMSG_RECONF_LISTENER:
 			if (idx != PFD_PIPE_MAIN)
@@ -2722,7 +2684,7 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 			kif = imsg.data;
 			depend_ok = kif->depend_state;
 
-			TAILQ_FOREACH(p, &conf->peers, entry)
+			RB_FOREACH(p, peer_head, &conf->peers)
 				if (!strcmp(p->conf.if_depend, kif->ifname)) {
 					if (depend_ok && !p->depend_ok) {
 						p->depend_ok = depend_ok;
@@ -2785,6 +2747,7 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 			break;
 		case IMSG_CTL_SHOW_RIB:
 		case IMSG_CTL_SHOW_RIB_PREFIX:
+		case IMSG_CTL_SHOW_RIB_COMMUNITIES:
 		case IMSG_CTL_SHOW_RIB_ATTR:
 		case IMSG_CTL_SHOW_RIB_MEM:
 		case IMSG_CTL_SHOW_RIB_HASH:
@@ -2939,7 +2902,7 @@ getpeerbydesc(struct bgpd_config *c, const char *descr)
 	struct peer	*p, *res = NULL;
 	int		 match = 0;
 
-	TAILQ_FOREACH(p, &c->peers, entry)
+	RB_FOREACH(p, peer_head, &conf->peers)
 		if (!strcmp(p->conf.descr, descr)) {
 			res = p;
 			match++;
@@ -2965,13 +2928,13 @@ getpeerbyip(struct bgpd_config *c, struct sockaddr *ip)
 	sa2addr(ip, &addr, NULL);
 
 	/* we might want a more effective way to find peers by IP */
-	TAILQ_FOREACH(p, &c->peers, entry)
+	RB_FOREACH(p, peer_head, &conf->peers)
 		if (!p->conf.template &&
 		    !memcmp(&addr, &p->conf.remote_addr, sizeof(addr)))
 			return (p);
 
 	/* try template matching */
-	TAILQ_FOREACH(p, &c->peers, entry)
+	RB_FOREACH(p, peer_head, &conf->peers)
 		if (p->conf.template &&
 		    p->conf.remote_addr.aid == addr.aid &&
 		    session_match_mask(p, &addr))
@@ -2984,8 +2947,8 @@ getpeerbyip(struct bgpd_config *c, struct sockaddr *ip)
 		if ((newpeer = malloc(sizeof(struct peer))) == NULL)
 			fatal(NULL);
 		memcpy(newpeer, loose, sizeof(struct peer));
-		for (id = UINT_MAX; id > UINT_MAX / 2; id--) {
-			TAILQ_FOREACH(p, &c->peers, entry)
+		for (id = PEER_ID_DYN_MAX; id > PEER_ID_STATIC_MAX; id--) {
+			RB_FOREACH(p, peer_head, &conf->peers)
 				if (p->conf.id == id)
 					break;
 			if (p == NULL)		/* we found a free id */
@@ -2996,9 +2959,11 @@ getpeerbyip(struct bgpd_config *c, struct sockaddr *ip)
 		newpeer->state = newpeer->prev_state = STATE_NONE;
 		newpeer->reconf_action = RECONF_KEEP;
 		newpeer->rbuf = NULL;
+		newpeer->rpending = 0;
 		init_peer(newpeer);
 		bgp_fsm(newpeer, EVNT_START);
-		TAILQ_INSERT_TAIL(&c->peers, newpeer, entry);
+		if (RB_INSERT(peer_head, &c->peers, newpeer) != NULL)
+			fatalx("%s: peer tree is corrupt", __func__);
 		return (newpeer);
 	}
 
@@ -3008,13 +2973,11 @@ getpeerbyip(struct bgpd_config *c, struct sockaddr *ip)
 struct peer *
 getpeerbyid(struct bgpd_config *c, u_int32_t peerid)
 {
-	struct peer *p;
+	static struct peer lookup;
 
-	/* we might want a more effective way to find peers by id */
-	TAILQ_FOREACH(p, &c->peers, entry)
-		if (p->conf.id == peerid)
-			return (p);
-	return (NULL);
+	lookup.conf.id = peerid;
+
+	return RB_FIND(peer_head, &c->peers, &lookup);
 }
 
 int
@@ -3216,9 +3179,9 @@ session_stop(struct peer *peer, u_int8_t subcode)
 void
 merge_peers(struct bgpd_config *c, struct bgpd_config *nc)
 {
-	struct peer *p, *np;
+	struct peer *p, *np, *next;
 
-	TAILQ_FOREACH(p, &c->peers, entry) {
+	RB_FOREACH(p, peer_head, &conf->peers) {
 		/* templates are handled specially */
 		if (p->template != NULL)
 			continue;
@@ -3229,7 +3192,7 @@ merge_peers(struct bgpd_config *c, struct bgpd_config *nc)
 		}
 
 		memcpy(&p->conf, &np->conf, sizeof(p->conf));
-		TAILQ_REMOVE(&nc->peers, np, entry);
+		RB_REMOVE(peer_head, &nc->peers, np);
 		free(np);
 
 		p->reconf_action = RECONF_KEEP;
@@ -3237,6 +3200,11 @@ merge_peers(struct bgpd_config *c, struct bgpd_config *nc)
 		/* had demotion, is demoted, demote removed? */
 		if (p->demoted && !p->conf.demote_group[0])
 			session_demote(p, -1);
+
+		/* if session is not open then refresh pfkey data */
+		if (p->state < STATE_OPENSENT && !p->template)
+			imsg_compose(ibuf_main, IMSG_PFKEY_RELOAD,
+			    p->conf.id, 0, -1, NULL, 0);
 
 		/* sync the RDE in case we keep the peer */
 		if (imsg_rde(IMSG_SESSION_ADD, p->conf.id,
@@ -3246,7 +3214,7 @@ merge_peers(struct bgpd_config *c, struct bgpd_config *nc)
 		/* apply the config to all clones of a template */
 		if (p->conf.template) {
 			struct peer *xp;
-			TAILQ_FOREACH(xp, &conf->peers, entry) {
+			RB_FOREACH(xp, peer_head, &conf->peers) {
 				if (xp->template != p)
 					continue;
 				session_template_clone(xp, NULL, xp->conf.id,
@@ -3258,5 +3226,10 @@ merge_peers(struct bgpd_config *c, struct bgpd_config *nc)
 		}
 	}
 
-	TAILQ_CONCAT(&c->peers, &nc->peers, entry);
+	/* pfkeys of new peers already loaded by the parent process */
+	RB_FOREACH_SAFE(np, peer_head, &nc->peers, next) {
+		RB_REMOVE(peer_head, &nc->peers, np);
+		if (RB_INSERT(peer_head, &conf->peers, np) != NULL)
+			fatalx("%s: peer tree is corrupt", __func__);
+	}
 }

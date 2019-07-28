@@ -1,4 +1,4 @@
-/*	$OpenBSD: file.h,v 1.53 2018/08/20 16:00:22 mpi Exp $	*/
+/*	$OpenBSD: file.h,v 1.57 2019/07/12 13:56:28 solene Exp $	*/
 /*	$NetBSD: file.h,v 1.11 1995/03/26 20:24:13 jtc Exp $	*/
 
 /*
@@ -46,6 +46,13 @@ struct stat;
 struct file;
 struct ucred;
 
+/**
+ * File operations.
+ * The following entries could be called without KERNEL_LOCK hold:
+ * - fo_read
+ * - fo_write
+ * - fo_close
+ */
 struct	fileops {
 	int	(*fo_read)(struct file *, struct uio *, int);
 	int	(*fo_write)(struct file *, struct uio *, int);
@@ -56,8 +63,7 @@ struct	fileops {
 	int	(*fo_close)(struct file *, struct proc *);
 	int	(*fo_seek)(struct file *, off_t *, int, struct proc *);
 };
-#define FO_POSITION 0x01	/* positioned read/write */
-
+#define FO_POSITION	0x00000001	/* positioned read/write */
 
 /*
  * Kernel descriptor table.

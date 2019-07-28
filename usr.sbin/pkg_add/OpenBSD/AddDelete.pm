@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: AddDelete.pm,v 1.84 2019/04/07 12:30:39 espie Exp $
+# $OpenBSD: AddDelete.pm,v 1.90 2019/07/21 14:05:30 espie Exp $
 #
 # Copyright (c) 2007-2010 Marc Espie <espie@openbsd.org>
 #
@@ -23,11 +23,47 @@ use warnings;
 package main;
 our $not;
 
+package OpenBSD::PackingElement::FileObject;
+sub retrieve_fullname
+{
+	my ($self, $state, $pkgname) = @_;
+	return $state->{destdir}.$self->fullname;
+}
+
+package OpenBSD::PackingElement::FileBase;
+sub retrieve_size
+{
+	my $self = shift;
+	return $self->{size};
+}
+
+package OpenBSD::PackingElement::SpecialFile;
+use OpenBSD::PackageInfo;
+sub retrieve_fullname
+{
+	my ($self, $state, $pkgname);
+	return installed_info($pkgname).$self->name;
+}
+
+package OpenBSD::PackingElement::FCONTENTS;
+sub retrieve_size
+{
+	my $self = shift;
+	my $size = 0;
+	my $cname = $self->fullname;
+	if (defined $cname) {
+		$size = (stat $cname)[7];
+	}
+	return $size;
+}
+
+
 package OpenBSD::AddDelete;
 use OpenBSD::Error;
 use OpenBSD::Paths;
 use OpenBSD::PackageInfo;
 use OpenBSD::AddCreateDelete;
+our @ISA = qw(OpenBSD::AddCreateDelete);
 
 sub do_the_main_work
 {
@@ -67,49 +103,32 @@ sub handle_end_tags
 	    });
 }
 
-sub framework
+sub run_command
 {
 	my ($self, $state) = @_;
 
-	my $do = sub {
-		lock_db($state->{not}, $state) unless $state->defines('nolock');
-		$state->check_root;
-		$self->process_parameters($state);
-		my $dielater = $self->do_the_main_work($state);
-		# cleanup various things
-		$self->handle_end_tags($state);
-		$state->{recorder}->cleanup($state);
-		$state->ldconfig->ensure;
-		OpenBSD::PackingElement->finish($state);
-		$state->progress->clear;
-		$state->log->dump;
-		$self->finish_display($state);
-		if ($state->verbose >= 2 || $state->{size_only} ||
-		    $state->defines('tally')) {
-			$state->vstat->tally;
-		}
-		$state->say("Extracted #1 from #2", 
-		    $state->{stats}{donesize},
-		    $state->{stats}{totsize}) 
-			if defined $state->{stats} and $state->verbose;
-		# show any error, and show why we died...
-		rethrow $dielater;
-	};
-	if ($state->defines('debug')) {
-		&$do;
-	} else {
-		try {
-			&$do;
-		} catch {
-			$state->errsay("#1: #2", $0, $_);
-			OpenBSD::Handler->reset;
-			if ($_ =~ m/^Caught SIG(\w+)/o) {
-				kill $1, $$;
-			}
-			$state->{bad}++;
-		};
+	lock_db($state->{not}, $state) unless $state->defines('nolock');
+	$state->check_root;
+	$self->process_parameters($state);
+	my $dielater = $self->do_the_main_work($state);
+	# cleanup various things
+	$self->handle_end_tags($state);
+	$state->{recorder}->cleanup($state);
+	$state->ldconfig->ensure;
+	OpenBSD::PackingElement->finish($state);
+	$state->progress->clear;
+	$state->log->dump;
+	$self->finish_display($state);
+	if ($state->verbose >= 2 || $state->{size_only} ||
+	    $state->defines('tally')) {
+		$state->vstat->tally;
 	}
-
+	$state->say("Extracted #1 from #2", 
+	    $state->{stats}{donesize},
+	    $state->{stats}{totsize}) 
+		if defined $state->{stats} and $state->verbose;
+	# show any error, and show why we died...
+	rethrow $dielater;
 }
 
 sub parse_and_run
@@ -139,7 +158,7 @@ sub parse_and_run
 		}
 	}
 
-	$self->framework($state);
+	$self->try_and_run_command($state);
 
 	if (defined $lflag) {
 		$termios->setlflag($lflag);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: route.c,v 1.102 2019/04/28 17:59:51 mpi Exp $	*/
+/*	$OpenBSD: route.c,v 1.104 2019/06/28 13:35:02 deraadt Exp $	*/
 /*	$NetBSD: route.c,v 1.15 1996/05/07 02:55:06 thorpej Exp $	*/
 
 /*
@@ -36,7 +36,6 @@
 #include <sys/socket.h>
 
 #include <net/if.h>
-#include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/route.h>
 #include <netinet/ip_ipsp.h>
@@ -331,7 +330,7 @@ rt_stats(void)
 	mib[5] = 0;
 	size = sizeof (rtstat);
 
-	if (sysctl(mib, 6, &rtstat, &size, NULL, 0) < 0) {
+	if (sysctl(mib, 6, &rtstat, &size, NULL, 0) == -1) {
 		perror("sysctl of routing table statistics");
 		exit(1);
 	}

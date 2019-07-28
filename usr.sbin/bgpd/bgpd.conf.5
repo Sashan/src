@@ -1,4 +1,4 @@
-.\" $OpenBSD: bgpd.conf.5,v 1.188 2019/03/28 19:44:59 jmc Exp $
+.\" $OpenBSD: bgpd.conf.5,v 1.191 2019/06/17 14:00:45 claudio Exp $
 .\"
 .\" Copyright (c) 2004 Claudio Jeker <claudio@openbsd.org>
 .\" Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -16,7 +16,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: March 28 2019 $
+.Dd $Mdocdate: June 17 2019 $
 .Dt BGPD.CONF 5
 .Os
 .Sh NAME
@@ -434,7 +434,7 @@ holds a collection of prefix/source-as pairs and can be used in place
 where a rules filter for source-as and prefix at the same time.
 .Bd -literal -offset indent
 origin-set private { 10.0.0.0/8 maxlen 24 source-as 64511
-          203.0.113.0/24 source-as 64496 }
+	203.0.113.0/24 source-as 64496 }
 .Ed
 .Pp
 .It Xo
@@ -483,7 +483,7 @@ Each received prefix is checked against the
 and the Origin Validation State (OVS) is set.
 .Bd -literal -offset indent
 roa-set { 192.0.2.0/24 maxlen 24 source-as 64511
-          203.0.113.0/24 source-as 64496 }
+	203.0.113.0/24 source-as 64496 }
 .Ed
 .El
 .Sh NETWORK ANNOUNCEMENTS
@@ -569,7 +569,7 @@ The vpn configuration section allows properties to be set specifically
 for that VPN:
 .Bd -literal -offset indent
 vpn "description" on mpe1 {
-        rd 65002:1
+	rd 65002:1
 	import-target rt 65002:42
 	export-target rt 65002:42
 	network 192.168.1/24
@@ -940,6 +940,9 @@ messages will be sent to the neighbor.
 If set to
 .Ic default-route ,
 only the default route will be announced to the neighbor.
+When
+.Ic export
+is modified the neighbor session needs to be reset to become active.
 .Pp
 .It Ic holdtime Ar seconds
 Set the holdtime in seconds.
@@ -984,6 +987,7 @@ aes-128-cbc <key>
 .Ed
 .Pp
 Keys must be given in hexadecimal format.
+After changing settings a session needs to be reset to use the new keys.
 .Pp
 .It Xo
 .Ic ipsec
@@ -1018,6 +1022,7 @@ After starting the
 and
 .Xr bgpd 8
 daemons on both sides, the session should be established.
+After changing settings a session needs to be reset to use the new keys.
 .Pp
 .It Ic local-address Ar address
 When
@@ -1115,6 +1120,7 @@ The shared secret can either be given as a password or hexadecimal key.
 tcp md5sig password mekmitasdigoat
 tcp md5sig key deadbeef
 .Ed
+After changing keys a session needs to be reset to use the new keys.
 .Pp
 .It Xo
 .Ic transparent-as
@@ -1801,15 +1807,28 @@ Set the
 .Em NEXTHOP
 AS path attribute
 to a different nexthop address or use blackhole or reject routes.
-If set to
-.Em no-modify ,
-the nexthop attribute is not modified.
-Unless set to
-.Em self ,
-the nexthop is left unmodified for IBGP
-sessions.
+.Em blackhole
+and
+.Em reject
+only affect the FIB and will not alter the nexthop address.
 .Em self
 forces the nexthop to be set to the local interface address.
+If set to
+.Em no-modify ,
+the nexthop attribute is not modified for EBGP multihop sessions.
+By default EBGP multihop sessions use the local interface address.
+On other IBGP and directly connected EBGP sessions
+.Em no-modify
+is ignored.
+The set
+.Ar address
+is used on IBGP session and on directly connected EBGP session if the
+.Ar address
+is part of the connected network.
+On EBGP multihop session
+.Em no-modify
+has to be set to force the nexthop to
+.Ar address .
 .Bd -literal -offset indent
 set nexthop 192.168.0.1
 set nexthop blackhole

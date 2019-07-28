@@ -1,4 +1,4 @@
-/*	$OpenBSD: bios.c,v 1.120 2018/10/23 17:51:32 kettenis Exp $	*/
+/*	$OpenBSD: bios.c,v 1.122 2019/07/24 04:04:44 jsg Exp $	*/
 
 /*
  * Copyright (c) 1997-2001 Michael Shalayeff
@@ -140,6 +140,8 @@ const char *smbios_uninfo[] = {
 };
 
 
+char smbios_bios_date[64];
+
 int
 biosprobe(struct device *parent, void *match, void *aux)
 {
@@ -243,6 +245,7 @@ biosattach(struct device *parent, struct device *self, void *aux)
 		for (va = ISA_HOLE_VADDR(SMBIOS_START);
 		    va < (u_int8_t *)ISA_HOLE_VADDR(SMBIOS_END); va+= 16) {
 			struct smbhdr *sh = (struct smbhdr *)va;
+			char *sminfop;
 			u_int8_t chksum;
 			vaddr_t eva;
 			paddr_t pa, end;
@@ -305,8 +308,15 @@ biosattach(struct device *parent, struct device *self, void *aux)
 					printf(" version \"%s\"",
 					    fixstring(scratch));
 				if ((smbios_get_string(&bios, sb->release,
-				    scratch, sizeof(scratch))) != NULL)
-					printf(" date %s", fixstring(scratch));
+				    scratch, sizeof(scratch))) != NULL) {
+					sminfop = fixstring(scratch);
+					if (sminfop != NULL) {
+						strlcpy(smbios_bios_date,
+						    sminfop,
+						    sizeof(smbios_bios_date));
+						printf(" date %s", sminfop);
+					}
+				}
 			}
 			smbios_info(sc->sc_dev.dv_xname);
 

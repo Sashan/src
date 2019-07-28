@@ -1,4 +1,4 @@
-/*	$OpenBSD: nfs_bio.c,v 1.82 2017/02/22 11:42:46 mpi Exp $	*/
+/*	$OpenBSD: nfs_bio.c,v 1.84 2019/07/25 01:43:21 cheloha Exp $	*/
 /*	$NetBSD: nfs_bio.c,v 1.25.4.2 1996/07/08 20:47:04 jtc Exp $	*/
 
 /*
@@ -431,14 +431,14 @@ nfs_getcacheblk(struct vnode *vp, daddr_t bn, int size, struct proc *p)
 	struct nfsmount *nmp = VFSTONFS(vp->v_mount);
 
 	if (nmp->nm_flag & NFSMNT_INT) {
-		bp = getblk(vp, bn, size, PCATCH, 0);
+		bp = getblk(vp, bn, size, PCATCH, INFSLP);
 		while (bp == NULL) {
 			if (nfs_sigintr(nmp, NULL, p))
 				return (NULL);
-			bp = getblk(vp, bn, size, 0, 2 * hz);
+			bp = getblk(vp, bn, size, 0, SEC_TO_NSEC(2));
 		}
 	} else
-		bp = getblk(vp, bn, size, 0, 0);
+		bp = getblk(vp, bn, size, 0, INFSLP);
 	return (bp);
 }
 
@@ -451,26 +451,29 @@ nfs_vinvalbuf(struct vnode *vp, int flags, struct ucred *cred, struct proc *p)
 {
 	struct nfsmount		*nmp= VFSTONFS(vp->v_mount);
 	struct nfsnode		*np = VTONFS(vp);
-	int			 error, sintr, stimeo;
+	uint64_t		 stimeo;
+	int			 error, sintr;
 
-	error = sintr = stimeo = 0;
+	stimeo = INFSLP;
+	error = sintr = 0;
 
 	if (ISSET(nmp->nm_flag, NFSMNT_INT)) {
 		sintr = PCATCH;
-		stimeo = 2 * hz;
+		stimeo = SEC_TO_NSEC(2);
 	}
 
 	/* First wait for any other process doing a flush to complete. */
 	while (np->n_flag & NFLUSHINPROG) {
 		np->n_flag |= NFLUSHWANT;
-		error = tsleep(&np->n_flag, PRIBIO|sintr, "nfsvinval", stimeo);
+		error = tsleep_nsec(&np->n_flag, PRIBIO|sintr, "nfsvinval",
+		    stimeo);
 		if (error && sintr && nfs_sigintr(nmp, NULL, p))
 			return (EINTR);
 	}
 
 	/* Now, flush as required. */
 	np->n_flag |= NFLUSHINPROG;
-	error = vinvalbuf(vp, flags, cred, p, sintr, 0);
+	error = vinvalbuf(vp, flags, cred, p, sintr, INFSLP);
 	while (error) {
 		if (sintr && nfs_sigintr(nmp, NULL, p)) {
 			np->n_flag &= ~NFLUSHINPROG;
@@ -505,7 +508,7 @@ nfs_asyncio(struct buf *bp, int readahead)
 		if (readahead)
 			goto out;
 		else
-			tsleep(&nfs_bufqlen, PRIBIO, "nfs_bufq", 0);
+			tsleep_nsec(&nfs_bufqlen, PRIBIO, "nfs_bufq", INFSLP);
 
 	if ((bp->b_flags & B_READ) == 0) {
 		bp->b_flags |= B_WRITEINPROG;

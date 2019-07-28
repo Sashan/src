@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.134 2019/05/06 12:57:56 visa Exp $	*/
+/*	$OpenBSD: trap.c,v 1.138 2019/07/09 23:48:08 deraadt Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -260,27 +260,11 @@ trap(struct trapframe *trapframe)
 #endif
 
 	if (type & T_USER) {
-		vaddr_t sp;
-
 		refreshcreds(p);
-
-		sp = trapframe->sp;
-		if (p->p_vmspace->vm_map.serial != p->p_spserial ||
-		    p->p_spstart == 0 || sp < p->p_spstart ||
-		    sp >= p->p_spend) {
-			KERNEL_LOCK();
-			if (!uvm_map_check_stack_range(p, sp)) {
-				union sigval sv;
-
-				printf("trap [%s]%d/%d type %d: sp %lx not inside %lx-%lx\n",
-				    p->p_p->ps_comm, p->p_p->ps_pid, p->p_tid, type,
-				    sp, p->p_spstart, p->p_spend);
-
-				sv.sival_ptr = (void *)trapframe->pc;
-				trapsignal(p, SIGSEGV, 0, SEGV_ACCERR, sv);
-			}
-			KERNEL_UNLOCK();
-		}
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			return;
 	}
 
 	itsa(trapframe, ci, p, type);
@@ -1699,7 +1683,7 @@ fpe_branch_emulate(struct proc *p, struct trapframe *tf, uint32_t insn,
 	 */
 
 	rc = uvm_map_protect(map, p->p_md.md_fppgva,
-	    p->p_md.md_fppgva + PAGE_SIZE, PROT_MASK, FALSE);
+	    p->p_md.md_fppgva + PAGE_SIZE, PROT_READ | PROT_WRITE, FALSE);
 	if (rc != 0) {
 #ifdef DEBUG
 		printf("%s: uvm_map_protect on %p failed: %d\n",
@@ -1709,7 +1693,7 @@ fpe_branch_emulate(struct proc *p, struct trapframe *tf, uint32_t insn,
 	}
 	KERNEL_LOCK();
 	rc = uvm_fault_wire(map, p->p_md.md_fppgva,
-	    p->p_md.md_fppgva + PAGE_SIZE, PROT_MASK);
+	    p->p_md.md_fppgva + PAGE_SIZE, PROT_READ | PROT_WRITE);
 	KERNEL_UNLOCK();
 	if (rc != 0) {
 #ifdef DEBUG
@@ -1743,7 +1727,6 @@ fpe_branch_emulate(struct proc *p, struct trapframe *tf, uint32_t insn,
 	p->p_md.md_fpslotva = (vaddr_t)tf->pc + 4;
 	p->p_md.md_flags |= MDP_FPUSED;
 	tf->pc = p->p_md.md_fppgva;
-	pmap_proc_iflush(p->p_p, tf->pc, 2 * 4);
 
 	return 0;
 

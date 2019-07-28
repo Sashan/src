@@ -1,4 +1,4 @@
-/*	$OpenBSD: tty.c,v 1.143 2018/09/06 11:50:54 jsg Exp $	*/
+/*	$OpenBSD: tty.c,v 1.148 2019/07/19 00:17:15 cheloha Exp $	*/
 /*	$NetBSD: tty.c,v 1.68.4.2 1996/06/06 16:04:52 thorpej Exp $	*/
 
 /*-
@@ -742,7 +742,7 @@ ttioctl(struct tty *tp, u_long cmd, caddr_t data, int flag, struct proc *p)
 				return (EIO);
 			pgsignal(pr->ps_pgrp, SIGTTOU, 1);
 			error = ttysleep(tp, &lbolt, TTOPRI | PCATCH,
-			    ttybg, 0);
+			    ttybg);
 			if (error)
 				return (error);
 		}
@@ -1220,7 +1220,7 @@ ttywait(struct tty *tp)
 		    (ISSET(tp->t_state, TS_CARR_ON) || ISSET(tp->t_cflag, CLOCAL))
 		    && tp->t_oproc) {
 			SET(tp->t_state, TS_ASLEEP);
-			error = ttysleep(tp, &tp->t_outq, TTOPRI | PCATCH, ttyout, 0);
+			error = ttysleep(tp, &tp->t_outq, TTOPRI | PCATCH, ttyout);
 			if (error)
 				break;
 		} else
@@ -1489,7 +1489,7 @@ loop:	lflag = tp->t_lflag;
 			goto out;
 		}
 		pgsignal(pr->ps_pgrp, SIGTTIN, 1);
-		error = ttysleep(tp, &lbolt, TTIPRI | PCATCH, ttybg, 0);
+		error = ttysleep(tp, &lbolt, TTIPRI | PCATCH, ttybg);
 		if (error)
 			goto out;
 		goto loop;
@@ -1497,43 +1497,36 @@ loop:	lflag = tp->t_lflag;
 
 	s = spltty();
 	if (!ISSET(lflag, ICANON)) {
-		int m = cc[VMIN];
-		long t;
-
-		/*
-		 * Note - since cc[VTIME] is a u_char, this won't overflow
-		 * until we have 32-bit longs and a hz > 8388608.
-		 * Hopefully this code and 32-bit longs are obsolete by then.
-		 */
-		t = cc[VTIME] * hz / 10;
+		int min = cc[VMIN];
+		int time = cc[VTIME] * 100;	/* tenths of a second (ms) */
 
 		qp = &tp->t_rawq;
 		/*
 		 * Check each of the four combinations.
-		 * (m > 0 && t == 0) is the normal read case.
+		 * (min > 0 && time == 0) is the normal read case.
 		 * It should be fairly efficient, so we check that and its
-		 * companion case (m == 0 && t == 0) first.
+		 * companion case (min == 0 && time == 0) first.
 		 */
-		if (t == 0) {
-			if (qp->c_cc < m)
+		if (time == 0) {
+			if (qp->c_cc < min)
 				goto sleep;
 			goto read;
 		}
-		if (m > 0) {
+		if (min > 0) {
 			if (qp->c_cc <= 0)
 				goto sleep;
-			if (qp->c_cc >= m)
+			if (qp->c_cc >= min)
 				goto read;
 			if (stime == NULL) {
 alloc_timer:
 				stime = malloc(sizeof(*stime), M_TEMP, M_WAITOK);
 				timeout_set(stime, ttvtimeout, tp);
-				timeout_add(stime, t);
+				timeout_add_msec(stime, time);
 			} else if (qp->c_cc > last_cc) {
 				/* got a character, restart timer */
-				timeout_add(stime, t);
+				timeout_add_msec(stime, time);
 			}
-		} else {	/* m == 0 */
+		} else {	/* min == 0 */
 			if (qp->c_cc > 0)
 				goto read;
 			if (stime == NULL) {
@@ -1566,7 +1559,7 @@ sleep:
 			goto out;
 		}
 		error = ttysleep(tp, &tp->t_rawq, TTIPRI | PCATCH,
-		    carrier ? ttyin : ttopen, 0);
+		    carrier ? ttyin : ttopen);
 		splx(s);
 		if (stime && timeout_triggered(stime))
 			error = EWOULDBLOCK;
@@ -1595,7 +1588,7 @@ read:
 			pgsignal(tp->t_pgrp, SIGTSTP, 1);
 			if (first) {
 				error = ttysleep(tp, &lbolt, TTIPRI | PCATCH,
-				    ttybg, 0);
+				    ttybg);
 				if (error)
 					break;
 				goto loop;
@@ -1676,11 +1669,11 @@ ttycheckoutq(struct tty *tp, int wait)
 
 	hiwat = tp->t_hiwat;
 	s = spltty();
-	oldsig = wait ? curproc->p_siglist : 0;
+	oldsig = wait ? SIGPENDING(curproc) : 0;
 	if (tp->t_outq.c_cc > hiwat + TTHIWATMINSPACE)
 		while (tp->t_outq.c_cc > hiwat) {
 			ttstart(tp);
-			if (wait == 0 || curproc->p_siglist != oldsig) {
+			if (wait == 0 || SIGPENDING(curproc) != oldsig) {
 				splx(s);
 				return (0);
 			}
@@ -1724,7 +1717,7 @@ loop:
 		} else {
 			/* Sleep awaiting carrier. */
 			error = ttysleep(tp,
-			    &tp->t_rawq, TTIPRI | PCATCH, ttopen, 0);
+			    &tp->t_rawq, TTIPRI | PCATCH, ttopen);
 			splx(s);
 			if (error)
 				goto out;
@@ -1746,7 +1739,7 @@ loop:
 			goto out;
 		}
 		pgsignal(pr->ps_pgrp, SIGTTOU, 1);
-		error = ttysleep(tp, &lbolt, TTIPRI | PCATCH, ttybg, 0);
+		error = ttysleep(tp, &lbolt, TTIPRI | PCATCH, ttybg);
 		if (error)
 			goto out;
 		goto loop;
@@ -1878,7 +1871,7 @@ ovhiwat:
 		return (uio->uio_resid == cnt ? EWOULDBLOCK : 0);
 	}
 	SET(tp->t_state, TS_ASLEEP);
-	error = ttysleep(tp, &tp->t_outq, TTOPRI | PCATCH, ttyout, 0);
+	error = ttysleep(tp, &tp->t_outq, TTOPRI | PCATCH, ttyout);
 	splx(s);
 	if (error)
 		goto out;
@@ -2286,13 +2279,13 @@ tputchar(int c, struct tty *tp)
  * at the start of the call.
  */
 int
-ttysleep(struct tty *tp, void *chan, int pri, char *wmesg, int timo)
+ttysleep(struct tty *tp, void *chan, int pri, char *wmesg)
 {
 	int error;
 	short gen;
 
 	gen = tp->t_gen;
-	if ((error = tsleep(chan, pri, wmesg, timo)) != 0)
+	if ((error = tsleep_nsec(chan, pri, wmesg, INFSLP)) != 0)
 		return (error);
 	return (tp->t_gen == gen ? 0 : ERESTART);
 }

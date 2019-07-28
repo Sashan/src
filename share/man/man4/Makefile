@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.708 2019/05/04 10:20:11 dlg Exp $
+#	$OpenBSD: Makefile,v 1.716 2019/07/05 01:41:14 dlg Exp $
 
 MAN=	aac.4 abcrtc.4 ac97.4 acphy.4 acrtc.4 \
 	acpi.4 acpiac.4 acpials.4 acpiasus.4 acpibat.4 \
@@ -7,10 +7,11 @@ MAN=	aac.4 abcrtc.4 ac97.4 acphy.4 acrtc.4 \
 	acpisbs.4 acpisony.4 acpisurface.4 acpithinkpad.4 acpitoshiba.4 \
 	acpitimer.4 acpivideo.4 acpivout.4 acpitz.4 \
 	acx.4 adc.4 addcom.4 adl.4 admcts.4 admlc.4 admtemp.4 \
-	admtm.4 admtmp.4 admtt.4 adt.4 adtfsm.4 adv.4 age.4 alc.4 ale.4 agp.4 \
+	admtm.4 admtmp.4 admtt.4 adt.4 adtfsm.4 adv.4 age.4 alc.4 ale.4 \
+	aggr.4 agp.4 \
 	ahc.4 ahci.4 ahd.4 aibs.4 aic.4 \
 	akbd.4 alipm.4 amas.4 amdiic.4 amdpm.4 ami.4 amphy.4 \
-	ams.4 an.4 andl.4 aps.4 arc.4 arcofi.4 \
+	ams.4 an.4 andl.4 aplgpio.4 aps.4 arc.4 arcofi.4 \
 	asbtm.4 asmc.4 ast.4 atapiscsi.4 atphy.4 ath.4 athn.4 atu.4 atw.4 \
 	auacer.4 audio.4 aue.4 auglx.4 auich.4 auixp.4 autri.4 auvia.4 \
 	axe.4 axen.4 axppmic.4 azalia.4 \
@@ -25,9 +26,10 @@ MAN=	aac.4 abcrtc.4 ac97.4 acphy.4 acrtc.4 \
 	eap.4 ec.4 eephy.4 ef.4 eg.4 ehci.4 eisa.4 el.4 em.4 emc.4 gcu.4 \
 	emu.4 enc.4 endrun.4 envy.4 eoip.4 ep.4 epic.4 esa.4 \
 	eso.4 ess.4 et.4 etherip.4 etphy.4 ex.4 exphy.4 exrtc.4 \
-	fanpwr.4 fd.4 fdc.4 fec.4 fins.4 fintek.4 fms.4 fuse.4 fxp.4 gdt.4 \
-	gentbi.4 gem.4 gif.4 \
-	glenv.4 gpio.4 gpiodcf.4 gpioiic.4 gpioow.4 gpr.4 gre.4 gscsio.4 \
+	fanpwr.4 fd.4 fdc.4 fec.4 fins.4 fintek.4 fms.4 fusbtc.4 fuse.4 \
+	fxp.4 gdt.4 gentbi.4 gem.4 gif.4 \
+	glenv.4 glkgpio.4 gpio.4 gpiodcf.4 gpioiic.4 gpioow.4 \
+	gpr.4 gre.4 gscsio.4 \
 	hds.4 hiclock.4 hidwusb.4 hifn.4 hil.4 hilid.4 hilkbd.4 hilms.4 \
 	hireset.4 hitemp.4 hme.4 hotplug.4 hsq.4 \
 	hvn.4 hvs.4 hyperv.4 \
@@ -45,7 +47,7 @@ MAN=	aac.4 abcrtc.4 ac97.4 acphy.4 acrtc.4 \
 	mfii.4 mlphy.4 mobileip.4 moscom.4 mos.4 mpe.4 mpath.4 mpi.4 mpii.4 \
 	mpip.4 mpu.4 msk.4 mpw.4 msts.4 mtd.4 mtdphy.4 mtio.4 mue.4 \
 	multicast.4 mvclock.4 mvgicp.4 mvgpio.4 mvicu.4 mvneta.4 \
-	mvpinctrl.4 mvrng.4 mvrtc.4 mvtemp.4 myx.4 \
+	mvpinctrl.4 mvrng.4 mvrtc.4 mvtemp.4 mvuart.4 myx.4 \
 	ne.4 neo.4 nep.4 netintro.4 nfe.4 nge.4 nmea.4 \
 	nsclpcsio.4 nsgphy.4 nsphy.4 nsphyter.4 null.4 nviic.4 nvme.4 nvt.4 \
 	oce.4 ohci.4 onewire.4 oosiop.4 openprom.4 options.4 osiop.4 otus.4 \
@@ -71,8 +73,8 @@ MAN=	aac.4 abcrtc.4 ac97.4 acphy.4 acrtc.4 \
 	tlphy.4 thmc.4 tpm.4 tqphy.4 trm.4 trunk.4 tsl.4 tty.4 tun.4 tap.4 \
 	twe.4 \
 	txp.4 txphy.4 uaudio.4 uark.4 uath.4 ubcmtp.4 uberry.4 ubsa.4 \
-	ubsec.4 \
-	ucom.4 uchcom.4 ucycom.4 uslhcom.4 udav.4 udcf.4 udl.4 udp.4 udsbr.4 \
+	ubsec.4 ucom.4 uchcom.4 ucrcom.4 ucycom.4 ukspan.4 uslhcom.4 \
+	udav.4 udcf.4 udl.4 udp.4 udsbr.4 \
 	uftdi.4 ugen.4 ugl.4 ugold.4 uguru.4 uhci.4 uhid.4 uhidev.4 uipaq.4 \
 	uk.4 ukbd.4 \
 	ukphy.4 ulpt.4 umass.4 umb.4 umbg.4 umcs.4 umct.4 umidi.4 umodem.4 \
@@ -93,8 +95,7 @@ MAN=	aac.4 abcrtc.4 ac97.4 acphy.4 acrtc.4 \
 
 SUBDIR=	man4.alpha man4.amd64 man4.arm64 man4.armv7 \
 	man4.hppa man4.i386 man4.landisk man4.loongson man4.luna88k \
-	man4.macppc man4.octeon \
-	man4.sgi man4.socppc man4.sparc64
+	man4.macppc man4.octeon man4.sgi man4.sparc64
 
 CLEANFILES+= wi.4
 

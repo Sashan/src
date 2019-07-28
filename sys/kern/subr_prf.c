@@ -1,4 +1,4 @@
-/*	$OpenBSD: subr_prf.c,v 1.97 2018/10/29 14:29:44 deraadt Exp $	*/
+/*	$OpenBSD: subr_prf.c,v 1.99 2019/07/20 23:06:51 mpi Exp $	*/
 /*	$NetBSD: subr_prf.c,v 1.45 1997/10/24 18:14:25 chuck Exp $	*/
 
 /*-
@@ -118,17 +118,16 @@ int	db_console = 1;
 #else
 int	db_console = 0;
 #endif
-
-/*
- * flag to indicate if we are currently in ddb (on some processor)
- */
-int db_is_active;
 #endif
 
 /*
  * panic on spl assertion failure?
  */
+#ifdef SPLASSERT_WATCH
+int splassert_ctl = 3;
+#else
 int splassert_ctl = 1;
+#endif
 
 /*
  * v_putc: routine to putc on virtual console
@@ -326,16 +325,11 @@ void
 kputchar(int c, int flags, struct tty *tp)
 {
 	extern int msgbufmapped;
-	int ddb_active = 0;
-
-#ifdef DDB
-	ddb_active = db_is_active;
-#endif
 
 	if (panicstr)
 		constty = NULL;
 
-	if ((flags & TOCONS) && tp == NULL && constty && !ddb_active) {
+	if ((flags & TOCONS) && tp == NULL && constty != NULL && !db_active) {
 		tp = constty;
 		flags |= TOTTY;
 	}
@@ -345,7 +339,7 @@ kputchar(int c, int flags, struct tty *tp)
 	if ((flags & TOLOG) &&
 	    c != '\0' && c != '\r' && c != 0177 && msgbufmapped)
 		msgbuf_putchar(msgbufp, c);
-	if ((flags & TOCONS) && (constty == NULL || ddb_active) && c != '\0')
+	if ((flags & TOCONS) && (constty == NULL || db_active) && c != '\0')
 		(*v_putc)(c);
 #ifdef DDB
 	if (flags & TODDB)

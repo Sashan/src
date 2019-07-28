@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.101 2019/04/30 20:22:54 patrick Exp $
+# $OpenBSD: GENERIC,v 1.104 2019/06/07 04:03:04 jmatthew Exp $
 #
 # GENERIC machine description file
 #
@@ -189,6 +189,7 @@ pci*		at ppb?
 bnxt*		at pci?			# Broadcom BCM573xx, BCM574xx
 em*		at pci?			# Intel Pro/1000 Ethernet
 ix*		at pci?			# Intel 82598EB 10Gb Ethernet
+mcx*		at pci?			# Mellanox ConnectX-4/5 Ethernet
 mskc*		at pci?			# Marvell Yukon-2
 msk*		at mskc?		#  each port of above
 re*		at pci?			# Realtek 8169/8169S/8110S
@@ -233,6 +234,8 @@ uslcom*		at uhub?		# Silicon Laboratories CP210x serial
 ucom*		at uslcom?
 uscom*		at uhub?		# Simple USB serial adapters
 ucom*		at uscom?
+ucrcom*		at uhub?		# Chromebook serial
+ucom*		at ucrcom?
 uark*		at uhub?		# Arkmicro ARK3116 serial
 ucom*		at uark?
 moscom*		at uhub?		# MosChip MCS7703 serial
@@ -342,6 +345,7 @@ fanpwr*		at iic?			# FAN53555 regulator
 islrtc*		at iic?			# ISL1208 RTC
 rkpmic*		at iic?			# RK808 PMIC
 sypwr*		at iic?			# SY8106A regulator
+fusbtc*		at iic?			# USB Type-C controller
 
 # GPIO "pin bus" drivers
 gpioiic*	at gpio?		# I2C bus bit-banging

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwm.c,v 1.239 2019/04/01 10:47:13 kn Exp $	*/
+/*	$OpenBSD: if_iwm.c,v 1.243 2019/07/25 01:46:14 cheloha Exp $	*/
 
 /*
  * Copyright (c) 2014, 2016 genua gmbh <info@genua.de>
@@ -594,7 +594,7 @@ iwm_read_firmware(struct iwm_softc *sc, enum iwm_ucode_type ucode_type)
 		return 0;
 
 	while (fw->fw_status == IWM_FW_STATUS_INPROGRESS)
-		tsleep(&sc->sc_fw, 0, "iwmfwp", 0);
+		tsleep_nsec(&sc->sc_fw, 0, "iwmfwp", INFSLP);
 	fw->fw_status = IWM_FW_STATUS_INPROGRESS;
 
 	if (fw->fw_rawdata != NULL)
@@ -2566,7 +2566,7 @@ iwm_sta_rx_agg(struct iwm_softc *sc, struct ieee80211_node *ni, uint8_t tid,
 	    &status);
 
 	s = splnet();
-	if (err == 0 && status == IWM_ADD_STA_SUCCESS) {
+	if (!err && (status & IWM_ADD_STA_STATUS_MASK) == IWM_ADD_STA_SUCCESS) {
 		if (start) {
 			sc->sc_rx_ba_sessions++;
 			ieee80211_addba_req_accept(ic, ni, tid);
@@ -2970,7 +2970,7 @@ iwm_firmware_load_chunk(struct iwm_softc *sc, uint32_t dst_addr,
 	/* Wait for this segment to load. */
 	err = 0;
 	while (!sc->sc_fw_chunk_done) {
-		err = tsleep(&sc->sc_fw, 0, "iwmfw", hz);
+		err = tsleep_nsec(&sc->sc_fw, 0, "iwmfw", SEC_TO_NSEC(1));
 		if (err)
 			break;
 	}
@@ -3139,7 +3139,7 @@ iwm_load_firmware(struct iwm_softc *sc, enum iwm_ucode_type ucode_type)
 
 	/* wait for the firmware to load */
 	for (w = 0; !sc->sc_uc.uc_intr && w < 10; w++) {
-		err = tsleep(&sc->sc_uc, 0, "iwmuc", hz/10);
+		err = tsleep_nsec(&sc->sc_uc, 0, "iwmuc", MSEC_TO_NSEC(100));
 	}
 	if (err || !sc->sc_uc.uc_ok)
 		printf("%s: could not load firmware\n", DEVNAME(sc));
@@ -3284,7 +3284,8 @@ iwm_run_init_mvm_ucode(struct iwm_softc *sc, int justnvm)
 	 * notifications from the firmware.
 	 */
 	while ((sc->sc_init_complete & wait_flags) != wait_flags) {
-		err = tsleep(&sc->sc_init_complete, 0, "iwminit", 2*hz);
+		err = tsleep_nsec(&sc->sc_init_complete, 0, "iwminit",
+		    SEC_TO_NSEC(2));
 		if (err)
 			break;
 	}
@@ -3981,7 +3982,7 @@ iwm_send_cmd(struct iwm_softc *sc, struct iwm_host_cmd *hcmd)
 	IWM_WRITE(sc, IWM_HBUS_TARG_WRPTR, ring->qid << 8 | ring->cur);
 
 	if (!async) {
-		err = tsleep(desc, PCATCH, "iwmcmd", hz);
+		err = tsleep_nsec(desc, PCATCH, "iwmcmd", SEC_TO_NSEC(1));
 		if (err == 0) {
 			/* if hardware is no longer up, return error */
 			if (generation != sc->sc_generation) {
@@ -4454,6 +4455,8 @@ iwm_led_is_enabled(struct iwm_softc *sc)
 	return (IWM_READ(sc, IWM_CSR_LED_REG) == IWM_CSR_LED_REG_TURN_ON);
 }
 
+#define IWM_LED_BLINK_TIMEOUT_MSEC    200
+
 void
 iwm_led_blink_timeout(void *arg)
 {
@@ -4464,13 +4467,14 @@ iwm_led_blink_timeout(void *arg)
 	else
 		iwm_led_enable(sc);
 
-	timeout_add_msec(&sc->sc_led_blink_to, 200);
+	timeout_add_msec(&sc->sc_led_blink_to, IWM_LED_BLINK_TIMEOUT_MSEC);
 }
 
 void
 iwm_led_blink_start(struct iwm_softc *sc)
 {
-	timeout_add(&sc->sc_led_blink_to, 0);
+	timeout_add_msec(&sc->sc_led_blink_to, IWM_LED_BLINK_TIMEOUT_MSEC);
+	iwm_led_enable(sc);
 }
 
 void
@@ -4675,7 +4679,7 @@ iwm_add_sta_cmd(struct iwm_softc *sc, struct iwm_node *in, int update)
 	status = IWM_ADD_STA_SUCCESS;
 	err = iwm_send_cmd_pdu_status(sc, IWM_ADD_STA, sizeof(add_sta_cmd),
 	    &add_sta_cmd, &status);
-	if (err == 0 && status != IWM_ADD_STA_SUCCESS)
+	if (!err && (status & IWM_ADD_STA_STATUS_MASK) != IWM_ADD_STA_SUCCESS)
 		err = EIO;
 
 	return err;
@@ -4702,7 +4706,7 @@ iwm_add_aux_sta(struct iwm_softc *sc)
 	status = IWM_ADD_STA_SUCCESS;
 	err = iwm_send_cmd_pdu_status(sc, IWM_ADD_STA, sizeof(cmd), &cmd,
 	    &status);
-	if (err == 0 && status != IWM_ADD_STA_SUCCESS)
+	if (!err && (status & IWM_ADD_STA_STATUS_MASK) != IWM_ADD_STA_SUCCESS)
 		err = EIO;
 
 	return err;
@@ -6521,7 +6525,8 @@ iwm_init(struct ifnet *ifp)
 	 * Wait until the transition to SCAN state has completed.
 	 */
 	do {
-		err = tsleep(&ic->ic_state, PCATCH, "iwminit", hz);
+		err = tsleep_nsec(&ic->ic_state, PCATCH, "iwminit",
+		    SEC_TO_NSEC(1));
 		if (generation != sc->sc_generation)
 			return ENXIO;
 		if (err)
@@ -7000,10 +7005,11 @@ iwm_notif_intr(struct iwm_softc *sc)
 	    0, sc->rxq.stat_dma.size, BUS_DMASYNC_POSTREAD);
 
 	hw = le16toh(sc->rxq.stat->closed_rb_num) & 0xfff;
+	hw &= (IWM_RX_RING_COUNT - 1);
 	while (sc->rxq.cur != hw) {
 		struct iwm_rx_data *data = &sc->rxq.data[sc->rxq.cur];
 		struct iwm_rx_packet *pkt;
-		int qid, idx, code;
+		int qid, idx, code, handled = 1;
 
 		bus_dmamap_sync(sc->sc_dmat, data->map, 0, sizeof(*pkt),
 		    BUS_DMASYNC_POSTREAD);
@@ -7256,6 +7262,7 @@ iwm_notif_intr(struct iwm_softc *sc)
 		}
 
 		default:
+			handled = 0;
 			printf("%s: unhandled firmware response 0x%x/0x%x "
 			    "rx ring %d[%d]\n",
 			    DEVNAME(sc), pkt->hdr.code, pkt->len_n_flags, qid,
@@ -7270,7 +7277,7 @@ iwm_notif_intr(struct iwm_softc *sc)
 		 * For example, uCode issues IWM_REPLY_RX when it sends a
 		 * received frame to the driver.
 		 */
-		if (!(pkt->hdr.qid & (1 << 7))) {
+		if (handled && !(pkt->hdr.qid & (1 << 7))) {
 			iwm_cmd_done(sc, pkt);
 		}
 

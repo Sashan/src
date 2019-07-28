@@ -1,4 +1,4 @@
-/*	$Id: main.c,v 1.44 2019/04/04 04:19:54 bket Exp $ */
+/*	$Id: main.c,v 1.47 2019/06/03 15:37:48 naddy Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -28,6 +28,8 @@
 #include <unistd.h>
 
 #include "extern.h"
+
+int verbose;
 
 /*
  * A remote host is has a colon before the first path separator.
@@ -269,7 +271,7 @@ main(int argc, char *argv[])
 {
 	struct opts	 opts;
 	pid_t		 child;
-	int		 fds[2], sd, rc, c, st, i;
+	int		 fds[2], sd = -1, rc, c, st, i;
 	struct sess	  sess;
 	struct fargs	*fargs;
 	char		**args;
@@ -303,8 +305,8 @@ main(int argc, char *argv[])
 		{ "no-specials", no_argument,	&opts.specials,		0 },
 		{ "times",	no_argument,	&opts.preserve_times,	1 },
 		{ "no-times",	no_argument,	&opts.preserve_times,	0 },
-		{ "verbose",	no_argument,	&opts.verbose,		1 },
-		{ "no-verbose",	no_argument,	&opts.verbose,		0 },
+		{ "verbose",	no_argument,	&verbose,		1 },
+		{ "no-verbose",	no_argument,	&verbose,		0 },
 		{ NULL,		0,		NULL,			0 }};
 
 	/* Global pledge. */
@@ -357,7 +359,7 @@ main(int argc, char *argv[])
 			opts.preserve_times = 1;
 			break;
 		case 'v':
-			opts.verbose++;
+			verbose++;
 			break;
 		case 'x':
 			opts.one_file_system++;
@@ -426,8 +428,10 @@ main(int argc, char *argv[])
 
 	if (fargs->remote && opts.ssh_prog == NULL) {
 		assert(fargs->mode == FARGS_RECEIVER);
-		if ((rc = rsync_connect(&opts, &sd, fargs)) == 0)
+		if ((rc = rsync_connect(&opts, &sd, fargs)) == 0) {
 			rc = rsync_socket(&opts, sd, fargs);
+			close(sd);
+		}
 		exit(rc);
 	}
 
@@ -454,20 +458,20 @@ main(int argc, char *argv[])
 		sess.opts = &opts;
 
 		if ((args = fargs_cmdline(&sess, fargs, NULL)) == NULL) {
-			ERRX1(&sess, "fargs_cmdline");
+			ERRX1("fargs_cmdline");
 			_exit(1);
 		}
 
 		for (i = 0; args[i] != NULL; i++)
-			LOG2(&sess, "exec[%d] = %s", i, args[i]);
+			LOG2("exec[%d] = %s", i, args[i]);
 
 		/* Make sure the child's stdin is from the sender. */
 		if (dup2(fds[1], STDIN_FILENO) == -1) {
-			ERR(&sess, "dup2");
+			ERR("dup2");
 			_exit(1);
 		}
 		if (dup2(fds[1], STDOUT_FILENO) == -1) {
-			ERR(&sess, "dup2");
+			ERR("dup2");
 			_exit(1);
 		}
 		execvp(args[0], args);
@@ -482,14 +486,7 @@ main(int argc, char *argv[])
 		break;
 	}
 
-	/*
-	 * If the client has an error and exits, the server may be
-	 * sitting around waiting to get data while we waitpid().
-	 * So close the connection here so that they don't hang.
-	 */
-
-	if (rc)
-		close(fds[0]);
+	close(fds[0]);
 
 	if (waitpid(child, &st, 0) == -1)
 		err(1, "waitpid");

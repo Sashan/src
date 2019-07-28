@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_trunk.c,v 1.139 2019/04/29 04:26:47 dlg Exp $	*/
+/*	$OpenBSD: if_trunk.c,v 1.141 2019/07/05 01:24:56 dlg Exp $	*/
 
 /*
  * Copyright (c) 2005, 2006, 2007 Reyk Floeter <reyk@openbsd.org>
@@ -33,6 +33,7 @@
 #include <net/if_dl.h>
 #include <net/if_media.h>
 #include <net/if_types.h>
+#include <net/route.h>
 
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
@@ -284,6 +285,7 @@ trunk_port_create(struct trunk_softc *tr, struct ifnet *ifp)
 {
 	struct trunk_softc *tr_ptr;
 	struct trunk_port *tp;
+	struct arpcom *ac0;
 	int error = 0;
 
 	/* Limit the maximal number of trunk ports */
@@ -297,6 +299,10 @@ trunk_port_create(struct trunk_softc *tr, struct ifnet *ifp)
 	/* XXX Disallow non-ethernet interfaces (this should be any of 802) */
 	if (ifp->if_type != IFT_ETHER)
 		return (EPROTONOSUPPORT);
+
+	ac0 = (struct arpcom *)ifp;
+	if (ac0->ac_trunkport != NULL)
+		return (EBUSY);
 
 	/* Take MTU from the first member port */
 	if (SLIST_EMPTY(&tr->tr_ports)) {
@@ -376,6 +382,7 @@ trunk_port_create(struct trunk_softc *tr, struct ifnet *ifp)
 	if (tr->tr_port_create != NULL)
 		error = (*tr->tr_port_create)(tp);
 
+	ac0->ac_trunkport = tp;
 	/* Change input handler of the physical interface. */
 	if_ih_insert(ifp, trunk_input, tp);
 
@@ -405,9 +412,11 @@ trunk_port_destroy(struct trunk_port *tp)
 	struct trunk_softc *tr = (struct trunk_softc *)tp->tp_trunk;
 	struct trunk_port *tp_ptr;
 	struct ifnet *ifp = tp->tp_if;
+	struct arpcom *ac0 = (struct arpcom *)ifp;
 
 	/* Restore previous input handler. */
 	if_ih_remove(ifp, trunk_input, tp);
+	ac0->ac_trunkport = NULL;
 
 	/* Remove multicast addresses from this port */
 	trunk_ether_cmdmulti(tp, SIOCDELMULTI);
@@ -1211,6 +1220,7 @@ trunk_port_state(void *arg)
 	if (tr->tr_linkstate != NULL)
 		(*tr->tr_linkstate)(tp);
 	trunk_link_active(tr, tp);
+	rtm_ifchg(&tr->tr_ac.ac_if);
 }
 
 struct trunk_port *

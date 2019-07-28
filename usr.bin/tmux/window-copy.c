@@ -1,4 +1,4 @@
-/* $OpenBSD: window-copy.c,v 1.221 2019/05/07 19:46:17 nicm Exp $ */
+/* $OpenBSD: window-copy.c,v 1.228 2019/07/08 20:29:11 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -577,6 +577,7 @@ window_copy_resize(struct window_mode_entry *wme, u_int sx, u_int sy)
 	struct window_copy_mode_data	*data = wme->data;
 	struct screen			*s = &data->screen;
 	struct screen_write_ctx	 	 ctx;
+	int				 search;
 
 	screen_resize(s, sx, sy, 1);
 	if (data->backing != &wp->base)
@@ -589,13 +590,15 @@ window_copy_resize(struct window_mode_entry *wme, u_int sx, u_int sy)
 	if (data->oy > screen_hsize(data->backing))
 		data->oy = screen_hsize(data->backing);
 
+	search = (data->searchmark != NULL);
 	window_copy_clear_selection(wme);
+	window_copy_clear_marks(wme);
 
 	screen_write_start(&ctx, NULL, s);
 	window_copy_write_lines(wme, &ctx, 0, screen_size_y(s) - 1);
 	screen_write_stop(&ctx);
 
-	if (data->searchmark != NULL)
+	if (search)
 		window_copy_search_marks(wme, NULL);
 	data->searchx = data->cx;
 	data->searchy = data->cy;
@@ -1046,8 +1049,6 @@ window_copy_cmd_previous_matching_bracket(struct window_copy_cmd_state *cs)
 					goto retry;
 				}
 				window_copy_cursor_previous_word(wme, "}]) ");
-				px = data->cx;
-				continue;
 			}
 			continue;
 		}
@@ -1161,7 +1162,6 @@ window_copy_cmd_next_matching_bracket(struct window_copy_cmd_state *cs)
 					goto retry;
 				}
 				window_copy_cursor_next_word_end(wme, "{[( ");
-				px = data->cx;
 				continue;
 			}
 			/* For vi, continue searching for bracket until EOL. */
@@ -1671,9 +1671,11 @@ window_copy_cmd_search_backward_incremental(struct window_copy_cmd_state *cs)
 	struct window_mode_entry	*wme = cs->wme;
 	struct window_copy_mode_data	*data = wme->data;
 	const char			*argument = cs->args->argv[1];
-	enum window_copy_cmd_action	 action = WINDOW_COPY_CMD_NOTHING;
 	const char			*ss = data->searchstr;
+	char				 prefix;
+	enum window_copy_cmd_action	 action = WINDOW_COPY_CMD_NOTHING;
 
+	prefix = *argument++;
 	if (data->searchx == -1 || data->searchy == -1) {
 		data->searchx = data->cx;
 		data->searchy = data->cy;
@@ -1684,13 +1686,11 @@ window_copy_cmd_search_backward_incremental(struct window_copy_cmd_state *cs)
 		data->oy = data->searcho;
 		action = WINDOW_COPY_CMD_REDRAW;
 	}
-
 	if (*argument == '\0') {
 		window_copy_clear_marks(wme);
 		return (WINDOW_COPY_CMD_REDRAW);
 	}
-
-	switch (*argument++) {
+	switch (prefix) {
 	case '=':
 	case '-':
 		data->searchtype = WINDOW_COPY_SEARCHUP;
@@ -1720,9 +1720,11 @@ window_copy_cmd_search_forward_incremental(struct window_copy_cmd_state *cs)
 	struct window_mode_entry	*wme = cs->wme;
 	struct window_copy_mode_data	*data = wme->data;
 	const char			*argument = cs->args->argv[1];
-	enum window_copy_cmd_action	 action = WINDOW_COPY_CMD_NOTHING;
 	const char			*ss = data->searchstr;
+	char				 prefix;
+	enum window_copy_cmd_action	 action = WINDOW_COPY_CMD_NOTHING;
 
+	prefix = *argument++;
 	if (data->searchx == -1 || data->searchy == -1) {
 		data->searchx = data->cx;
 		data->searchy = data->cy;
@@ -1733,13 +1735,11 @@ window_copy_cmd_search_forward_incremental(struct window_copy_cmd_state *cs)
 		data->oy = data->searcho;
 		action = WINDOW_COPY_CMD_REDRAW;
 	}
-
 	if (*argument == '\0') {
 		window_copy_clear_marks(wme);
 		return (WINDOW_COPY_CMD_REDRAW);
 	}
-
-	switch (*argument++) {
+	switch (prefix) {
 	case '=':
 	case '+':
 		data->searchtype = WINDOW_COPY_SEARCHDOWN;
@@ -2703,7 +2703,7 @@ window_copy_append_selection(struct window_mode_entry *wme)
 	struct window_pane		*wp = wme->wp;
 	char				*buf;
 	struct paste_buffer		*pb;
-	const char			*bufdata, *bufname;
+	const char			*bufdata, *bufname = NULL;
 	size_t				 len, bufsize;
 	struct screen_write_ctx		 ctx;
 
@@ -2813,54 +2813,19 @@ window_copy_in_set(struct window_mode_entry *wme, u_int px, u_int py,
 {
 	struct window_copy_mode_data	*data = wme->data;
 	struct grid_cell		 gc;
-	const struct utf8_data		*ud;
-	struct utf8_data		*copy;
-	struct utf8_data		*loop;
-	int				 found = 0;
 
 	grid_get_cell(data->backing->grid, px, py, &gc);
 	if (gc.flags & GRID_FLAG_PADDING)
 		return (0);
-	ud = &gc.data;
-
-	copy = utf8_fromcstr(set);
-	for (loop = copy; loop->size != 0; loop++) {
-		if (loop->size != ud->size)
-			continue;
-		if (memcmp(loop->data, ud->data, loop->size) == 0) {
-			found = 1;
-			break;
-		}
-	}
-	free(copy);
-
-	return (found);
+	return (utf8_cstrhas(set, &gc.data));
 }
 
 static u_int
 window_copy_find_length(struct window_mode_entry *wme, u_int py)
 {
 	struct window_copy_mode_data	*data = wme->data;
-	struct screen			*s = data->backing;
-	struct grid_cell		 gc;
-	u_int				 px;
 
-	/*
-	 * If the pane has been resized, its grid can contain old overlong
-	 * lines. grid_peek_cell does not allow accessing cells beyond the
-	 * width of the grid, and screen_write_copy treats them as spaces, so
-	 * ignore them here too.
-	 */
-	px = grid_get_line(s->grid, py)->cellsize;
-	if (px > screen_size_x(s))
-		px = screen_size_x(s);
-	while (px > 0) {
-		grid_get_cell(s->grid, px - 1, py, &gc);
-		if (gc.data.size != 1 || *gc.data.data != ' ')
-			break;
-		px--;
-	}
-	return (px);
+	return (grid_line_length(data->backing->grid, py));
 }
 
 static void
@@ -3065,8 +3030,8 @@ window_copy_cursor_up(struct window_mode_entry *wme, int scroll_only)
 	if (data->lineflag == LINE_SEL_LEFT_RIGHT && oy == data->sely)
 		window_copy_other_end(wme);
 
-	data->cx = data->lastcx;
 	if (scroll_only || data->cy == 0) {
+		data->cx = data->lastcx;
 		window_copy_scroll_down(wme, 1);
 		if (scroll_only) {
 			if (data->cy == screen_size_y(s) - 1)
@@ -3075,7 +3040,7 @@ window_copy_cursor_up(struct window_mode_entry *wme, int scroll_only)
 				window_copy_redraw_lines(wme, data->cy, 2);
 		}
 	} else {
-		window_copy_update_cursor(wme, data->cx, data->cy - 1);
+		window_copy_update_cursor(wme, data->lastcx, data->cy - 1);
 		if (window_copy_update_selection(wme, 1)) {
 			if (data->cy == screen_size_y(s) - 1)
 				window_copy_redraw_lines(wme, data->cy, 1);
@@ -3115,13 +3080,13 @@ window_copy_cursor_down(struct window_mode_entry *wme, int scroll_only)
 	if (data->lineflag == LINE_SEL_RIGHT_LEFT && oy == data->endsely)
 		window_copy_other_end(wme);
 
-	data->cx = data->lastcx;
 	if (scroll_only || data->cy == screen_size_y(s) - 1) {
+		data->cx = data->lastcx;
 		window_copy_scroll_up(wme, 1);
 		if (scroll_only && data->cy > 0)
 			window_copy_redraw_lines(wme, data->cy - 1, 2);
 	} else {
-		window_copy_update_cursor(wme, data->cx, data->cy + 1);
+		window_copy_update_cursor(wme, data->lastcx, data->cy + 1);
 		if (window_copy_update_selection(wme, 1))
 			window_copy_redraw_lines(wme, data->cy - 1, 2);
 	}
@@ -3480,7 +3445,9 @@ window_copy_move_mouse(struct mouse_event *m)
 	if (wp == NULL)
 		return;
 	wme = TAILQ_FIRST(&wp->modes);
-	if (wme == NULL || wme->mode != &window_copy_mode)
+	if (wme == NULL)
+		return;
+	if (wme->mode != &window_copy_mode && wme->mode != &window_view_mode)
 		return;
 
 	if (cmd_mouse_at(wp, m, &x, &y, 0) != 0)
@@ -3503,7 +3470,9 @@ window_copy_start_drag(struct client *c, struct mouse_event *m)
 	if (wp == NULL)
 		return;
 	wme = TAILQ_FIRST(&wp->modes);
-	if (wme == NULL || wme->mode != &window_copy_mode)
+	if (wme == NULL)
+		return;
+	if (wme->mode != &window_copy_mode && wme->mode != &window_view_mode)
 		return;
 
 	if (cmd_mouse_at(wp, m, &x, &y, 1) != 0)
@@ -3537,7 +3506,9 @@ window_copy_drag_update(struct client *c, struct mouse_event *m)
 	if (wp == NULL)
 		return;
 	wme = TAILQ_FIRST(&wp->modes);
-	if (wme == NULL || wme->mode != &window_copy_mode)
+	if (wme == NULL)
+		return;
+	if (wme->mode != &window_copy_mode && wme->mode != &window_view_mode)
 		return;
 
 	data = wme->data;
@@ -3576,7 +3547,9 @@ window_copy_drag_release(struct client *c, struct mouse_event *m)
 	if (wp == NULL)
 		return;
 	wme = TAILQ_FIRST(&wp->modes);
-	if (wme == NULL || wme->mode != &window_copy_mode)
+	if (wme == NULL)
+		return;
+	if (wme->mode != &window_copy_mode && wme->mode != &window_view_mode)
 		return;
 
 	data = wme->data;

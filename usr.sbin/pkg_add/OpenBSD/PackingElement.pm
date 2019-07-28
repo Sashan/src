@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: PackingElement.pm,v 1.269 2018/09/17 12:39:46 espie Exp $
+# $OpenBSD: PackingElement.pm,v 1.271 2019/07/05 06:21:14 espie Exp $
 #
 # Copyright (c) 2003-2014 Marc Espie <espie@openbsd.org>
 #
@@ -496,8 +496,8 @@ sub destate
 {
 	my ($self, $state) = @_;
 	if ($state->{lastfile}->isa("OpenBSD::PackingElement::SpecialFile")) {
-		die "Can't \@sample a specialfile: ". 
-		    $state->{lastfile}->stringize. "\n";
+		die "Can't \@sample a specialfile: ",
+		    $state->{lastfile}->stringize;
 	}
 	$self->{copyfrom} = $state->{lastfile};
 	$self->compute_fullname($state);
@@ -621,7 +621,7 @@ sub format
 		$state->error("empty source manpage: #1", $fname);
 		return;
 	}
-	open(my $fh, '<', $fname) or die "Can't read $fname";
+	open(my $fh, '<', $fname) or die "Can't read $fname: $!";
 	my $line = <$fh>;
 	close $fh;
 	my @extra = ();
@@ -642,9 +642,9 @@ sub format
 	if (my ($dir, $file) = $fname =~ m/^(.*)\/([^\/]+\/[^\/]+)$/) {
 		my $r = $state->system(sub {
 		    open STDOUT, '>&', $destfh or
-			die "Can't write to $dest";
+			die "Can't write to $dest: $!";
 		    close $destfh;
-		    chdir($dir) or die "Can't chdir to $dir";
+		    chdir($dir) or die "Can't chdir to $dir: $!";
 		    },
 		    $state->{groff} // OpenBSD::Paths->groff,
 		    qw(-mandoc -mtty-char -E -Ww -Tascii -P -c),
@@ -725,6 +725,8 @@ sub add
 		return OpenBSD::PackingElement::CVSTag->add($plist, $args);
 	} elsif ($args =~ m/^(?:subdir|pkgpath)\=(.*?)\s+cdrom\=(.*?)\s+ftp\=(.*?)\s*$/o) {
 		return OpenBSD::PackingElement::ExtraInfo->add($plist, $1, $2, $3);
+	} elsif ($args =~ m/^(?:subdir|pkgpath)\=(.*?)\s+ftp\=(.*?)\s*$/o) {
+		return OpenBSD::PackingElement::ExtraInfo->add($plist, $1, undef, $2);
 	} elsif ($args eq 'no checksum') {
 		$plist->{state}->{nochecksum} = 1;
 		return;
@@ -907,14 +909,17 @@ sub new
 {
 	my ($class, $subdir, $cdrom, $ftp) = @_;
 
-	$cdrom =~ s/^\"(.*)\"$/$1/;
-	$cdrom =~ s/^\'(.*)\'$/$1/;
 	$ftp =~ s/^\"(.*)\"$/$1/;
 	$ftp =~ s/^\'(.*)\'$/$1/;
-	bless { subdir => $subdir,
-		path => OpenBSD::PkgPath->new($subdir),
-	    cdrom => $cdrom,
+	my $o = bless { subdir => $subdir,
+	    path => OpenBSD::PkgPath->new($subdir),
 	    ftp => $ftp}, $class;
+	if (defined $cdrom) {
+		$cdrom =~ s/^\"(.*)\"$/$1/;
+		$cdrom =~ s/^\'(.*)\'$/$1/;
+		$o->{cdrom} = $cdrom;
+	}
+	return $o;
 }
 
 sub subdir
@@ -935,10 +940,13 @@ sub may_quote
 sub stringize
 {
 	my $self = shift;
-	return join(' ',
-	    "pkgpath=".$self->{subdir},
-	    "cdrom=".may_quote($self->{cdrom}),
-	    "ftp=".may_quote($self->{ftp}));
+	my @l = (
+	    "pkgpath=".$self->{subdir});
+	if (defined $self->{cdrom}) {
+		push @l, "cdrom=".may_quote($self->{cdrom});
+	}
+	push(@l, "ftp=".may_quote($self->{ftp}));
+	return join(' ', @l);
 }
 
 package OpenBSD::PackingElement::Name;
@@ -1936,7 +1944,7 @@ sub new
 {
 	my ($class, $args) = @_;
 	unless ($args =~ m/^[\w\d\.\-\+\@]+$/) {
-		die "Invalid characters in signer $args\n";
+		die "Invalid characters in signer $args";
 	}
 	$class->SUPER::new($args);
 }

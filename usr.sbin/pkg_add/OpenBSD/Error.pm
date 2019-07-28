@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: Error.pm,v 1.32 2017/04/18 15:12:00 espie Exp $
+# $OpenBSD: Error.pm,v 1.40 2019/07/24 18:05:26 espie Exp $
 #
 # Copyright (c) 2004-2010 Marc Espie <espie@openbsd.org>
 #
@@ -17,6 +17,8 @@
 use strict;
 use warnings;
 
+# this is a set of common classes related to error handling in pkg land
+
 package OpenBSD::Auto;
 sub cache(*&)
 {
@@ -30,32 +32,112 @@ sub cache(*&)
 	*{$callpkg."::$sym"} = $actual;
 }
 
+package OpenBSD::SigHandler;
+
+# instead of "local" sighandlers, let's do objects that revert
+# to their former state afterwards
+sub new
+{
+	my $class = shift;
+	# keep previous state
+	bless {}, $class;
+}
+
+
+sub DESTROY
+{
+	my $self = shift;
+	while (my ($s, $v) = each %$self) {
+		$SIG{$s} = $v;
+	}
+}
+
+sub set
+{
+	my $self = shift;
+	my $v = pop;
+	for my $s (@_) {
+		$self->{$s} = $SIG{$s};
+		$SIG{$s} = $v;
+	}
+	return $self;
+}
+
+sub intercept
+{
+	my $self = shift;
+	my $v = pop;
+	return $self->set(@_, 
+	    sub { 
+		my $sig = shift; 
+		&$v($sig); 
+		$SIG{$sig} = $self->{$sig}; 
+		kill -$sig, $$; 
+	    });
+}
+
 package OpenBSD::Handler;
 
-my $list = [];
+# a bunch of other modules create persistent state that must be cleaned up
+# on exit (temporary files, network connections to abort properly...)
+# END blocks would do that (but see below...) but sig handling bypasses that,
+# so we MUST install SIG handlers.
 
+# note that END will be run for *each* process, so beware!
+# (temp files are registered per pid, for instance, so they only
+# get cleaned when the proper pid is used)
+# hash of code to run on ANY exit
+
+# hash of code to run on ANY exit
+my $atend = {};
+# hash of code to run on fatal signals
+my $cleanup = {};
+
+sub cleanup
+{
+	my ($class, $sig) = @_;
+	# XXX note that order of cleanup is "unpredictable"
+	for my $v (values %$cleanup) {
+		&$v($sig);
+	}
+}
+
+END {
+	# XXX localize $? so that cleanup doesn't fuck up our exit code
+	local $?;
+	for my $v (values %$atend) {
+		&$v();
+	}
+}
+
+# register each code block "by name" so that we can re-register each
+# block several times
 sub register
 {
 	my ($class, $code) = @_;
-	push(@$list, $code);
+	$cleanup->{$code} = $code;
+}
+
+sub atend
+{
+	my ($class, $code) = @_;
+	$cleanup->{$code} = $code;
+	$atend->{$code} = $code;
 }
 
 my $handler = sub {
 	my $sig = shift;
-	for my $c (@$list) {
-		&$c($sig);
-	}
+	__PACKAGE__->cleanup($sig);
+	# after cleanup, just propagate the signal
 	$SIG{$sig} = 'DEFAULT';
 	kill $sig, $$;
 };
 
 sub reset
 {
-	$SIG{'INT'} = $handler;
-	$SIG{'QUIT'} = $handler;
-	$SIG{'HUP'} = $handler;
-	$SIG{'KILL'} = $handler;
-	$SIG{'TERM'} = $handler;
+	for my $sig (qw(INT QUIT HUP KILL TERM)) {
+		$SIG{$sig} = $handler;
+	}
 }
 
 __PACKAGE__->reset;
@@ -63,95 +145,14 @@ __PACKAGE__->reset;
 package OpenBSD::Error;
 require Exporter;
 our @ISA=qw(Exporter);
-our @EXPORT=qw(Copy Unlink try throw catch catchall rethrow);
+our @EXPORT=qw(try throw catch rethrow INTetc);
+
 
 our ($FileName, $Line, $FullMessage);
 
-my @signal_name = ();
+our @INTetc = (qw(INT QUIT HUP TERM));
 
 use Carp;
-
-sub fillup_names
-{
-	{
-	# XXX force autoload
-	package verylocal;
-
-	require POSIX;
-	POSIX->import(qw(signal_h));
-	}
-
-	for my $sym (keys %POSIX::) {
-		next unless $sym =~ /^SIG([A-Z].*)/;
-		my $i = eval "&POSIX::$sym()";
-		next unless defined $i;
-		$signal_name[$i] = $1;
-	}
-	# extra BSD signals
-	$signal_name[5] = 'TRAP';
-	$signal_name[7] = 'IOT';
-	$signal_name[10] = 'BUS';
-	$signal_name[12] = 'SYS';
-	$signal_name[16] = 'URG';
-	$signal_name[23] = 'IO';
-	$signal_name[24] = 'XCPU';
-	$signal_name[25] = 'XFSZ';
-	$signal_name[26] = 'VTALRM';
-	$signal_name[27] = 'PROF';
-	$signal_name[28] = 'WINCH';
-	$signal_name[29] = 'INFO';
-}
-
-sub find_signal
-{
-	my $number =  shift;
-
-	if (@signal_name == 0) {
-		fillup_names();
-	}
-
-	return $signal_name[$number] || $number;
-}
-
-sub child_error
-{
-	my $error = shift // $?;
-
-	my $extra = "";
-
-	if ($error & 128) {
-		$extra = " (core dumped)";
-	}
-	if ($error & 127) {
-		return "killed by signal ". find_signal($error & 127).$extra;
-	} else {
-		return "exit(". ($error >> 8) . ")$extra";
-	}
-}
-
-sub Copy
-{
-	require File::Copy;
-
-	my $r = File::Copy::copy(@_);
-	if (!$r) {
-		print "copy(", join(',', @_),") failed: $!\n";
-	}
-	return $r;
-}
-
-sub Unlink
-{
-	my $verbose = shift;
-	my $r = unlink @_;
-	if ($r != @_) {
-		print "rm @_ failed: removed only $r targets, $!\n";
-	} elsif ($verbose) {
-		print "rm @_\n";
-	}
-	return $r;
-}
-
 sub dienow
 {
 	my ($error, $handler) = @_;
@@ -162,7 +163,7 @@ sub dienow
 			$Line = $3;
 			$FullMessage = $error;
 
-			$handler->exec($error, '', $1, $2, $3);
+			$handler->exec($error, $1, $2, $3);
 		} else {
 			die "Fatal error: can't parse $error";
 		}
@@ -193,11 +194,6 @@ sub catch(&)
 		bless $_[0], "OpenBSD::Error::catch";
 }
 
-sub catchall(&)
-{
-	bless $_[0], "OpenBSD::Error::catchall";
-}
-
 sub rmtree
 {
 	my $class = shift;
@@ -211,17 +207,6 @@ sub rmtree
 }
 
 package OpenBSD::Error::catch;
-sub exec
-{
-	my ($self, $full, $e) = @_;
-	if ($e) {
-		&$self;
-	} else {
-		die $full;
-	}
-}
-
-package OpenBSD::Error::catchall;
 sub exec
 {
 	my ($self, $full, $e) = @_;

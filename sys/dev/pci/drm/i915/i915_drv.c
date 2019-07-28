@@ -45,6 +45,7 @@
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/i915_drm.h>
+#include <drm/drm_utils.h>
 
 #include "i915_drv.h"
 #include "i915_trace.h"
@@ -1643,7 +1644,9 @@ out_fini:
 	drm_dev_fini(&dev_priv->drm);
 out_free:
 #endif
+#ifdef __linux__
 	kfree(dev_priv);
+#endif
 	pci_set_drvdata(pdev, NULL);
 	return ret;
 }
@@ -3583,9 +3586,11 @@ inteldrm_forcedetach(struct inteldrm_softc *dev_priv)
 		efifb_reattach();
 #endif
 	}
-	
+
+#ifdef notyet
 	config_detach(&dev_priv->sc_dev, 0);
 	pci_probe_device(psc, tag, NULL, NULL);
+#endif
 }
 
 void
@@ -3596,6 +3601,7 @@ inteldrm_attachhook(struct device *self)
 	struct wsemuldisplaydev_attach_args aa;
 	const struct drm_pcidev *id = dev_priv->id;
 	struct drm_device *dev = &dev_priv->drm;
+	int orientation_quirk;
 
 	if (i915_driver_load(dev_priv, id))
 		goto fail;
@@ -3611,24 +3617,14 @@ inteldrm_attachhook(struct device *self)
 	inteldrm_init_backlight(dev_priv);
 
 	ri->ri_flg = RI_CENTER | RI_WRONLY | RI_VCONS | RI_CLEAR;
-	if (ri->ri_width < ri->ri_height) {
-		pcireg_t subsys;
 
-#define PCI_PRODUCT_ASUSTEK_T100HA	0x1bdd
+	orientation_quirk = drm_get_panel_orientation_quirk(ri->ri_width,
+	    ri->ri_height);
+	if (orientation_quirk == DRM_MODE_PANEL_ORIENTATION_LEFT_UP)
+		ri->ri_flg |= RI_ROTATE_CCW;
+	else if (orientation_quirk == DRM_MODE_PANEL_ORIENTATION_RIGHT_UP)
+		ri->ri_flg |= RI_ROTATE_CW;
 
-		/*
-		 * Asus T100HA needs to be rotated counter-clockwise.
-		 * Everybody else seems to mount their panels the
-		 * other way around.
-		 */
-		subsys = pci_conf_read(dev_priv->pc, dev_priv->tag,
-		    PCI_SUBSYS_ID_REG);
-		if (PCI_VENDOR(subsys) == PCI_VENDOR_ASUSTEK &&
-		    PCI_PRODUCT(subsys) == PCI_PRODUCT_ASUSTEK_T100HA)
-			ri->ri_flg |= RI_ROTATE_CCW;
-		else
-			ri->ri_flg |= RI_ROTATE_CW;
-	}
 	ri->ri_hw = dev_priv;
 	rasops_init(ri, 160, 160);
 

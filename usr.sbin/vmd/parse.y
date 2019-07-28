@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.50 2019/02/13 22:57:08 deraadt Exp $	*/
+/*	$OpenBSD: parse.y,v 1.52 2019/05/14 06:05:45 anton Exp $	*/
 
 /*
  * Copyright (c) 2007-2016 Reyk Floeter <reyk@openbsd.org>
@@ -120,12 +120,13 @@ typedef struct {
 
 
 %token	INCLUDE ERROR
-%token	ADD ALLOW BOOT CDROM DISABLE DISK DOWN ENABLE FORMAT GROUP INET6
-%token	INSTANCE INTERFACE LLADDR LOCAL LOCKED MEMORY NIFS OWNER PATH PREFIX
-%token	RDOMAIN SIZE SOCKET SWITCH UP VM VMID
+%token	ADD ALLOW BOOT CDROM DEVICE DISABLE DISK DOWN ENABLE FORMAT GROUP
+%token	INET6 INSTANCE INTERFACE LLADDR LOCAL LOCKED MEMORY NET NIFS OWNER
+%token	PATH PREFIX RDOMAIN SIZE SOCKET SWITCH UP VM VMID
 %token	<v.number>	NUMBER
 %token	<v.string>	STRING
 %type	<v.lladdr>	lladdr
+%type	<v.number>	bootdevice
 %type	<v.number>	disable
 %type	<v.number>	image_format
 %type	<v.number>	local
@@ -357,7 +358,8 @@ vm		: VM string vm_instance		{
 					log_debug("%s:%d: vm \"%s\""
 					    " skipped (%s)",
 					    file->name, yylval.lineno,
-					    vcp->vcp_name, vm->vm_running ?
+					    vcp->vcp_name,
+					    (vm->vm_state & VM_STATE_RUNNING) ?
 					    "running" : "already exists");
 				} else if (ret == -1) {
 					yyerror("vm \"%s\" failed: %s",
@@ -365,7 +367,7 @@ vm		: VM string vm_instance		{
 					YYERROR;
 				} else {
 					if (vcp_disable)
-						vm->vm_disabled = 1;
+						vm->vm_state |= VM_STATE_DISABLED;
 					log_debug("%s:%d: vm \"%s\" "
 					    "registered (%s)",
 					    file->name, yylval.lineno,
@@ -455,6 +457,9 @@ vm_opts		: disable			{
 				YYERROR;
 			}
 			vmc.vmc_flags |= VMOP_CREATE_KERNEL;
+		}
+		| BOOT DEVICE bootdevice	{
+			vmc.vmc_bootdevice = $3;
 		}
 		| CDROM string			{
 			if (vcp->vcp_cdrom[0] != '\0') {
@@ -703,6 +708,11 @@ disable		: ENABLE			{ $$ = 0; }
 		| DISABLE			{ $$ = 1; }
 		;
 
+bootdevice	: CDROM				{ $$ = VMBOOTDEV_CDROM; }
+		| DISK				{ $$ = VMBOOTDEV_DISK; }
+		| NET				{ $$ = VMBOOTDEV_NET; }
+		;
+
 optcomma	: ','
 		|
 		;
@@ -756,6 +766,7 @@ lookup(char *s)
 		{ "allow",		ALLOW },
 		{ "boot",		BOOT },
 		{ "cdrom",		CDROM },
+		{ "device",		DEVICE },
 		{ "disable",		DISABLE },
 		{ "disk",		DISK },
 		{ "down",		DOWN },
@@ -772,6 +783,7 @@ lookup(char *s)
 		{ "local",		LOCAL },
 		{ "locked",		LOCKED },
 		{ "memory",		MEMORY },
+		{ "net",		NET },
 		{ "owner",		OWNER },
 		{ "prefix",		PREFIX },
 		{ "rdomain",		RDOMAIN },

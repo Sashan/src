@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.73 2018/08/29 15:56:46 robert Exp $
+#	$OpenBSD: Makefile,v 1.75 2019/07/14 03:23:12 guenther Exp $
 
 SUBDIR=ldconfig ldd
 MAN=	ld.so.1
@@ -18,11 +18,11 @@ VPATH=${.CURDIR}/../../lib/libc/string
 
 SRCS=	ldasm.S boot.c loader.c resolve.c dlfcn.c dl_printf.c rtld_machine.c
 SRCS+=	path.c util.c sod.c strsep.c strtol.c dir.c library_subr.c
-SRCS+=	dl_realpath.c dl_uname.c dl_dirname.c strlcat.c strlen.c trace.c
+SRCS+=	dl_uname.c dl_dirname.c strlcat.c strlen.c trace.c
 SRCS+=	malloc.c reallocarray.c tib.c ffs.c
 
-syscall=__syscall close exit fstat __getcwd getdents getentropy getthrid \
-	issetugid mprotect munmap open pledge read readlink sendsyslog \
+syscall=__syscall close exit fstat getdents getentropy getthrid issetugid \
+	mprotect munmap open pledge read __realpath sendsyslog \
 	__set_tcb sysctl thrkill utrace write
 
 GEN_PREFIX=\t.file "${@:R}.c"\n\#include "SYS.h"
@@ -43,6 +43,11 @@ SRCS+=	library.c
 .include "${.CURDIR}/${MACHINE_CPU}/Makefile.inc"
 .PATH:	${.CURDIR}/${MACHINE_CPU}
 
+.ifdef LD_SCRIPT
+ ELF_LDFLAGS+=-T ${LD_SCRIPT}
+ CFLAGS	+= -DDO_CLEAN_BOOT
+.endif
+
 DEBUG?=	-g
 CFLAGS += -fno-builtin
 CFLAGS += -Wall -Werror
@@ -60,10 +65,10 @@ candidate=	$(PROG).test
 CLEANFILES+=	${candidate}
 
 $(test_prog):
-	printf '#include <stdio.h>\nint main(int argc, char **argv){ printf("%%s: ", argv[0]); printf("%%s!\\n", argv[1] ? argv[1] : "foo"); }\n' | \
-	$(CC) -P -x c - -Wl,-dynamic-linker,./$(candidate) -o $@
+	printf '#include <stdio.h>\n#include <pthread.h>\nint main(int argc, char **argv){ pthread_attr_t attr; printf("%%s: ", argv[0]); pthread_attr_init(&attr); printf("%%s!\\n", argv[1] ? argv[1] : "foo"); }\n' | \
+	$(CC) -P -x c - -Wl,-dynamic-linker,./$(candidate) -o $@ -lpthread
 
-$(PROG): $(test_prog) ${VERSION_SCRIPT} $(OBJS)
+$(PROG): $(test_prog) ${VERSION_SCRIPT} $(OBJS) ${LD_SCRIPT}
 .if defined(SYSPATCH_PATH)
 	$(LD) ${DEBUG} -e _dl_start $(ELF_LDFLAGS) -o $(candidate) \
             `readelf -Ws ${SYSPATCH_PATH}/usr/libexec/${.TARGET} | \
@@ -88,7 +93,7 @@ CLEANFILES+=	ld.so.a
 
 all: ld.so.a
 
-ld.so.a: ${OBJS} ${.CURDIR}/Symbols.map ${test_prog}
+ld.so.a: ${OBJS} ${.CURDIR}/Symbols.map ${test_prog} ${LD_SCRIPT}
 	ar cqD $@ $?
 
 afterinstall: ld.so.a

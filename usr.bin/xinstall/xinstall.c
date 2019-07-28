@@ -1,4 +1,4 @@
-/*	$OpenBSD: xinstall.c,v 1.71 2019/02/14 11:51:42 espie Exp $	*/
+/*	$OpenBSD: xinstall.c,v 1.73 2019/06/28 13:35:05 deraadt Exp $	*/
 /*	$NetBSD: xinstall.c,v 1.9 1995/12/20 10:25:17 jonathan Exp $	*/
 
 /*
@@ -47,7 +47,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <limits.h>
-#include <utime.h>
 #include <libgen.h>
 
 #include "pathnames.h"
@@ -257,7 +256,7 @@ install(char *from_name, char *to_name, u_long fset, u_int flags)
 	}
 
 	if (!devnull) {
-		if ((from_fd = open(from_name, O_RDONLY, 0)) < 0)
+		if ((from_fd = open(from_name, O_RDONLY, 0)) == -1)
 			err(1, "%s", from_name);
 	}
 
@@ -277,7 +276,7 @@ install(char *from_name, char *to_name, u_long fset, u_int flags)
 		 *  that does not work in-place -- like gnu binutils strip.
 		 */
 		close(to_fd);
-		if ((to_fd = open(tempfile, O_RDONLY, 0)) < 0)
+		if ((to_fd = open(tempfile, O_RDONLY, 0)) == -1)
 			err(1, "stripping %s", to_name);
 	}
 
@@ -289,7 +288,7 @@ install(char *from_name, char *to_name, u_long fset, u_int flags)
 		struct stat temp_sb;
 
 		/* Re-open to_fd using the real target name. */
-		if ((to_fd = open(to_name, O_RDONLY, 0)) < 0)
+		if ((to_fd = open(to_name, O_RDONLY, 0)) == -1)
 			err(1, "%s", to_name);
 
 		if (fstat(temp_fd, &temp_sb)) {
@@ -378,14 +377,14 @@ install(char *from_name, char *to_name, u_long fset, u_int flags)
 			(void)snprintf(backup, PATH_MAX, "%s%s", to_name,
 			    suffix);
 			/* It is ok for the target file not to exist. */
-			if (rename(to_name, backup) < 0 && errno != ENOENT) {
+			if (rename(to_name, backup) == -1 && errno != ENOENT) {
 				serrno = errno;
 				unlink(tempfile);
 				errx(1, "rename: %s to %s: %s", to_name,
 				     backup, strerror(serrno));
 			}
 		}
-		if (rename(tempfile, to_name) < 0 ) {
+		if (rename(tempfile, to_name) == -1 ) {
 			serrno = errno;
 			unlink(tempfile);
 			errx(1, "rename: %s to %s: %s", tempfile,
@@ -727,7 +726,7 @@ file_write(int fd, char *str, size_t cnt, int *rem, int *isempt, int sz)
 				/*
 				 * skip, buf is empty so far
 				 */
-				if (lseek(fd, (off_t)wcnt, SEEK_CUR) < 0) {
+				if (lseek(fd, (off_t)wcnt, SEEK_CUR) == -1) {
 					warn("lseek");
 					return(-1);
 				}
@@ -773,12 +772,12 @@ file_flush(int fd, int isempt)
 	/*
 	 * move back one byte and write a zero
 	 */
-	if (lseek(fd, (off_t)-1, SEEK_CUR) < 0) {
+	if (lseek(fd, (off_t)-1, SEEK_CUR) == -1) {
 		warn("Failed seek on file");
 		return;
 	}
 
-	if (write(fd, blnk, 1) < 0)
+	if (write(fd, blnk, 1) == -1)
 		warn("Failed write to file");
 	return;
 }

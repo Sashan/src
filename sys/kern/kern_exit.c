@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_exit.c,v 1.173 2019/01/23 22:39:47 tedu Exp $	*/
+/*	$OpenBSD: kern_exit.c,v 1.178 2019/06/21 09:39:48 visa Exp $	*/
 /*	$NetBSD: kern_exit.c,v 1.39 1996/04/22 01:38:25 christos Exp $	*/
 
 /*
@@ -164,7 +164,7 @@ exit1(struct proc *p, int rv, int flags)
 	if ((p->p_flag & P_THREAD) == 0) {
 		/* main thread gotta wait because it has the pid, et al */
 		while (pr->ps_refcnt > 1)
-			tsleep(&pr->ps_threads, PUSER, "thrdeath", 0);
+			tsleep(&pr->ps_threads, PWAIT, "thrdeath", 0);
 		if (pr->ps_flags & PS_PROFIL)
 			stopprofclock(pr);
 	}
@@ -180,6 +180,8 @@ exit1(struct proc *p, int rv, int flags)
 		}
 	}
 	p->p_siglist = 0;
+	if ((p->p_flag & P_THREAD) == 0)
+		pr->ps_siglist = 0;
 
 #if NKCOV > 0
 	kcov_exit(p);
@@ -324,6 +326,15 @@ exit1(struct proc *p, int rv, int flags)
 		if (--pr->ps_refcnt == 1)
 			wakeup(&pr->ps_threads);
 		KASSERT(pr->ps_refcnt > 0);
+	}
+
+	/* Release the thread's read reference of resource limit structure. */
+	if (p->p_limit != NULL) {
+		struct plimit *limit;
+
+		limit = p->p_limit;
+		p->p_limit = NULL;
+		lim_free(limit);
 	}
 
 	/*
@@ -634,7 +645,7 @@ process_zap(struct process *pr)
 		free(pr->ps_ptstat, M_SUBPROC, sizeof(*pr->ps_ptstat));
 	pool_put(&rusage_pool, pr->ps_ru);
 	KASSERT(TAILQ_EMPTY(&pr->ps_threads));
-	limfree(pr->ps_limit);
+	lim_free(pr->ps_limit);
 	crfree(pr->ps_ucred);
 	pool_put(&process_pool, pr);
 	nprocesses--;

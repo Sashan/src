@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_pmemrange.c,v 1.53 2016/09/16 02:52:24 dlg Exp $	*/
+/*	$OpenBSD: uvm_pmemrange.c,v 1.55 2019/07/03 22:39:33 cheloha Exp $	*/
 
 /*
  * Copyright (c) 2009, 2010 Ariane van der Steldt <ariane@stack.nl>
@@ -702,6 +702,13 @@ uvm_pmr_extract_range(struct uvm_pmemrange *pmr, struct vm_page *pg,
 }
 
 /*
+ * Indicate to the page daemon that a nowait call failed and it should
+ * recover at least some memory in the most restricted region (assumed
+ * to be dma_constraint).
+ */
+extern volatile int uvm_nowait_failed;
+
+/*
  * Acquire a number of pages.
  *
  * count:	the number of pages returned
@@ -1014,8 +1021,12 @@ fail:
 		    flags & UVM_PLA_FAILOK) == 0)
 			goto retry;
 		KASSERT(flags & UVM_PLA_FAILOK);
-	} else
-		wakeup(&uvm.pagedaemon);
+	} else {
+		if (!(flags & UVM_PLA_NOWAKE)) {
+			uvm_nowait_failed = 1;
+			wakeup(&uvm.pagedaemon);
+		}
+	}
 	uvm_unlock_fpageq();
 
 	return ENOMEM;
@@ -1917,7 +1928,8 @@ uvm_wait_pla(paddr_t low, paddr_t high, paddr_t size, int failok)
 		 * uvm_wait(), as this is exactly the same issue.
 		 */
 		printf("pagedaemon: wait_pla deadlock detected!\n");
-		msleep(&uvmexp.free, &uvm.fpageqlock, PVM, wmsg, hz >> 3);
+		msleep_nsec(&uvmexp.free, &uvm.fpageqlock, PVM, wmsg,
+		    MSEC_TO_NSEC(125));
 #if defined(DEBUG)
 		/* DEBUG: panic so we can debug it */
 		panic("wait_pla pagedaemon deadlock");

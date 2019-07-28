@@ -1,4 +1,4 @@
-/*	$OpenBSD: roaming.c,v 1.6 2015/01/16 06:40:17 deraadt Exp $	*/
+/*	$OpenBSD: roaming.c,v 1.8 2019/06/28 13:32:47 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2005, 2006 Reyk Floeter <reyk@openbsd.org>
@@ -22,7 +22,6 @@
 #include <sys/ioctl.h>
 
 #include <net/if.h>
-#include <net/if_dl.h>
 #include <net/if_media.h>
 #include <net/if_arp.h>
 #include <net/if_llc.h>
@@ -173,7 +172,7 @@ hostapd_roaming_addr(struct hostapd_apme *apme, struct hostapd_inaddr *addr,
 	}
 
 	(void)strlcpy(ifra.ifra_name, apme->a_iface, sizeof(ifra.ifra_name));
-	if (ioctl(cfg->c_apme_ctl, SIOCDIFADDR, &ifra) < 0) {
+	if (ioctl(cfg->c_apme_ctl, SIOCDIFADDR, &ifra) == -1) {
 		if (errno != EADDRNOTAVAIL) {
 			hostapd_log(HOSTAPD_LOG_VERBOSE,
 			    "%s/%s: failed to delete address %s",
@@ -182,7 +181,7 @@ hostapd_roaming_addr(struct hostapd_apme *apme, struct hostapd_inaddr *addr,
 			return (errno);
 		}
 	}
-	if (add && ioctl(cfg->c_apme_ctl, SIOCAIFADDR, &ifra) < 0) {
+	if (add && ioctl(cfg->c_apme_ctl, SIOCAIFADDR, &ifra) == -1) {
 		if (errno != EEXIST) {
 			hostapd_log(HOSTAPD_LOG_VERBOSE,
 			    "%s/%s: failed to add address %s",

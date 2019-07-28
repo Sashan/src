@@ -1,4 +1,4 @@
-.\" $OpenBSD: doas.1,v 1.19 2016/09/04 15:20:37 tedu Exp $
+.\" $OpenBSD: doas.1,v 1.23 2019/07/04 19:04:17 tedu Exp $
 .\"
 .\"Copyright (c) 2015 Ted Unangst <tedu@openbsd.org>
 .\"
@@ -13,7 +13,7 @@
 .\"WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 .\"ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\"OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-.Dd $Mdocdate: September 4 2016 $
+.Dd $Mdocdate: July 4 2019 $
 .Dt DOAS 1
 .Os
 .Sh NAME
@@ -39,6 +39,31 @@ argument is mandatory unless
 or
 .Fl s
 is specified.
+.Pp
+The user will be required to authenticate by entering their password,
+unless configured otherwise.
+.Pp
+By default, a new environment is created.
+The variables
+.Ev HOME ,
+.Ev LOGNAME ,
+.Ev PATH ,
+.Ev SHELL ,
+and
+.Ev USER
+and the
+.Xr umask 2
+are set to values appropriate for the target user.
+.Ev DOAS_USER
+is set to the name of the user executing
+.Nm .
+The variables
+.Ev DISPLAY
+and
+.Ev TERM
+are inherited from the current environment.
+This behavior may be modified by the config file.
+The working directory is not changed.
 .Pp
 The options are as follows:
 .Bl -tag -width tenletters

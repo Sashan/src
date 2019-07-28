@@ -1,4 +1,4 @@
-/*	$OpenBSD: frontend.c,v 1.28 2019/04/12 07:03:11 florian Exp $	*/
+/*	$OpenBSD: frontend.c,v 1.30 2019/06/28 13:32:49 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -56,7 +56,6 @@
 #include <sys/uio.h>
 
 #include <net/if.h>
-#include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/route.h>
 
@@ -201,7 +200,7 @@ frontend(int debug, int verbose)
 		fatal("can't drop privileges");
 
 	/* XXX pass in from main */
-	if ((ioctlsock = socket(AF_INET6, SOCK_DGRAM | SOCK_CLOEXEC, 0)) < 0)
+	if ((ioctlsock = socket(AF_INET6, SOCK_DGRAM | SOCK_CLOEXEC, 0)) == -1)
 		fatal("socket");
 
 	if (pledge("stdio inet unix recvfd route mcast", NULL) == -1)
@@ -607,7 +606,7 @@ icmp6_receive(int fd, short events, void *arg)
 	int			 if_index = 0, *hlimp = NULL;
 	char			 ntopbuf[INET6_ADDRSTRLEN], ifnamebuf[IFNAMSIZ];
 
-	if ((len = recvmsg(fd, &icmp6ev.rcvmhdr, 0)) < 0) {
+	if ((len = recvmsg(fd, &icmp6ev.rcvmhdr, 0)) == -1) {
 		log_warn("recvmsg");
 		return;
 	}
@@ -909,7 +908,7 @@ get_interface_prefixes(struct ra_iface *ra_iface, struct ra_prefix_conf
 		    sizeof(ifr6.ifr_name));
 		memcpy(&ifr6.ifr_addr, sin6, sizeof(ifr6.ifr_addr));
 
-		if (ioctl(ioctlsock, SIOCGIFNETMASK_IN6, (caddr_t)&ifr6) < 0)
+		if (ioctl(ioctlsock, SIOCGIFNETMASK_IN6, (caddr_t)&ifr6) == -1)
 			continue; /* addr got deleted while we were looking */
 
 		prefixlen = in6_mask2prefixlen(&((struct sockaddr_in6 *)
@@ -1159,7 +1158,7 @@ ra_output(struct ra_iface *ra_iface, struct sockaddr_in6 *to)
 	log_debug("send RA on %s", ra_iface->name);
 
 	len = sendmsg(icmp6sock, &sndmhdr, 0);
-	if (len < 0)
+	if (len == -1)
 		log_warn("sendmsg on %s", ra_iface->name);
 
 }

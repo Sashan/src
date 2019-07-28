@@ -1,4 +1,4 @@
-/*	$OpenBSD: ntpd.h,v 1.138 2019/01/14 16:30:21 florian Exp $ */
+/*	$OpenBSD: ntpd.h,v 1.146 2019/07/16 14:15:40 otto Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -32,6 +32,7 @@
 #include <imsg.h>
 
 #include "ntp.h"
+#include "log.h"
 
 #define MAXIMUM(a, b)	((a) > (b) ? (a) : (b))
 
@@ -43,6 +44,7 @@
 #define	INTERVAL_QUERY_NORMAL		30	/* sync to peers every n secs */
 #define	INTERVAL_QUERY_PATHETIC		60
 #define	INTERVAL_QUERY_AGGRESSIVE	5
+#define	INTERVAL_QUERY_ULTRA_VIOLENCE	1	/* used at startup for auto */
 
 #define	TRUSTLEVEL_BADPEER		6
 #define	TRUSTLEVEL_PATHETIC		2
@@ -66,6 +68,11 @@
 #define	MAX_DISPLAY_WIDTH	80	/* max chars in ctl_show report line */
 
 #define FILTER_ADJFREQ		0x01	/* set after doing adjfreq */
+#define AUTO_REPLIES    	4	/* # of ntp replies we want for auto */
+#define AUTO_THRESHOLD		60	/* dont bother auto setting < this */
+#define INTERVAL_AUIO_DNSFAIL	1	/* DNS tmpfail interval for auto */
+#define TRIES_AUTO_DNSFAIL	4	/* DNS tmpfail quick retries */
+
 
 #define	SENSOR_DATA_MAXAGE		(15*60)
 #define	SENSOR_QUERY_INTERVAL		15
@@ -74,6 +81,7 @@
 #define	SENSOR_DEFAULT_REFID		"HARD"
 
 #define CONSTRAINT_ERROR_MARGIN		(4)
+#define CONSTRAINT_RETRY_INTERVAL	(15)
 #define CONSTRAINT_SCAN_INTERVAL	(15*60)
 #define CONSTRAINT_SCAN_TIMEOUT		(10)
 #define CONSTRAINT_MARGIN		(2.0*60)
@@ -108,6 +116,7 @@ struct listen_addr {
 struct ntp_addr {
 	struct ntp_addr		*next;
 	struct sockaddr_storage	 ss;
+	int			 notauth;
 };
 
 struct ntp_addr_wrap {
@@ -193,6 +202,7 @@ struct constraint {
 	struct imsgbuf			 ibuf;
 	time_t				 last;
 	time_t				 constraint;
+	int				 dnstries;
 };
 
 struct ntp_conf_sensor {
@@ -227,6 +237,7 @@ struct ntpd_conf {
 	int				        	verbose;
 	u_int8_t					listen_all;
 	u_int8_t					settime;
+	u_int8_t					automatic;
 	u_int8_t					noaction;
 	u_int8_t					filters;
 	time_t						constraint_last;
@@ -234,6 +245,7 @@ struct ntpd_conf {
 	u_int						constraint_errors;
 	u_int8_t					*ca;
 	size_t						ca_len;
+	int						tmpfail;
 };
 
 struct ctl_show_status {
@@ -298,7 +310,10 @@ enum imsg_type {
 	IMSG_CTL_SHOW_SENSORS,
 	IMSG_CTL_SHOW_SENSORS_END,
 	IMSG_CTL_SHOW_ALL,
-	IMSG_CTL_SHOW_ALL_END
+	IMSG_CTL_SHOW_ALL_END,
+	IMSG_SYNCED,
+	IMSG_UNSYNCED,
+	IMSG_PROBE_ROOT
 };
 
 enum ctl_actions {
@@ -312,8 +327,9 @@ enum ctl_actions {
 
 /* ntp.c */
 void	 ntp_main(struct ntpd_conf *, struct passwd *, int, char **);
+void	 peer_addr_head_clear(struct ntp_peer *);
 int	 priv_adjtime(void);
-void	 priv_settime(double);
+void	 priv_settime(double, char *);
 void	 priv_dns(int, char *, u_int32_t);
 int	 offset_compare(const void *, const void *);
 void	 update_scale(double);
@@ -327,7 +343,7 @@ int	 parse_config(const char *, struct ntpd_conf *);
 
 /* config.c */
 void			 host(const char *, struct ntp_addr **);
-int			 host_dns(const char *, struct ntp_addr **);
+int			 host_dns(const char *, int, struct ntp_addr **);
 void			 host_dns_free(struct ntp_addr *);
 struct ntp_peer		*new_peer(void);
 struct ntp_conf_sensor	*new_sensor(char *);
@@ -347,7 +363,7 @@ int	client_peer_init(struct ntp_peer *);
 int	client_addr_init(struct ntp_peer *);
 int	client_nextaddr(struct ntp_peer *);
 int	client_query(struct ntp_peer *);
-int	client_dispatch(struct ntp_peer *, u_int8_t);
+int	client_dispatch(struct ntp_peer *, u_int8_t, u_int8_t);
 void	client_log_error(struct ntp_peer *, const char *, int);
 void	set_next(struct ntp_peer *, time_t);
 
@@ -355,6 +371,7 @@ void	set_next(struct ntp_peer *, time_t);
 void	 constraint_add(struct constraint *);
 void	 constraint_remove(struct constraint *);
 void	 constraint_purge(void);
+void	 constraint_reset(void);
 int	 constraint_init(struct constraint *);
 int	 constraint_query(struct constraint *);
 int	 constraint_check(double);
@@ -408,24 +425,3 @@ void			 build_show_peer(struct ctl_show_peer *,
 void			 build_show_sensor(struct ctl_show_sensor *,
 			     struct ntp_sensor *);
 
-/* log.c */
-void	log_init(int, int);
-void	log_procinit(const char *);
-void	log_setverbose(int);
-int	log_getverbose(void);
-void	log_warn(const char *, ...)
-	    __attribute__((__format__ (printf, 1, 2)));
-void	log_warnx(const char *, ...)
-	    __attribute__((__format__ (printf, 1, 2)));
-void	log_info(const char *, ...)
-	    __attribute__((__format__ (printf, 1, 2)));
-void	log_debug(const char *, ...)
-	    __attribute__((__format__ (printf, 1, 2)));
-void	logit(int, const char *, ...)
-	    __attribute__((__format__ (printf, 2, 3)));
-void	vlog(int, const char *, va_list)
-	    __attribute__((__format__ (printf, 2, 0)));
-__dead void fatal(const char *, ...)
-	    __attribute__((__format__ (printf, 1, 2)));
-__dead void fatalx(const char *, ...)
-	    __attribute__((__format__ (printf, 1, 2)));

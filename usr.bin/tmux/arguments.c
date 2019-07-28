@@ -1,4 +1,4 @@
-/* $OpenBSD: arguments.c,v 1.21 2019/04/28 20:05:50 nicm Exp $ */
+/* $OpenBSD: arguments.c,v 1.27 2019/07/09 14:03:12 nicm Exp $ */
 
 /*
  * Copyright (c) 2010 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -38,6 +38,7 @@ TAILQ_HEAD(args_values, args_value);
 struct args_entry {
 	u_char			 flag;
 	struct args_values	 values;
+	u_int			 count;
 	RB_ENTRY(args_entry)	 entry;
 };
 
@@ -141,23 +142,15 @@ static void
 args_print_add_value(char **buf, size_t *len, struct args_entry *entry,
     struct args_value *value)
 {
-	static const char	 quoted[] = " #\"';$";
-	char			*escaped;
-	int			 flags;
+	char	*escaped;
 
 	if (**buf != '\0')
 		args_print_add(buf, len, " -%c ", entry->flag);
 	else
 		args_print_add(buf, len, "-%c ", entry->flag);
 
-	flags = VIS_OCTAL|VIS_TAB|VIS_NL;
-	if (value->value[strcspn(value->value, quoted)] != '\0')
-		flags |= VIS_DQ;
-	utf8_stravis(&escaped, value->value, flags);
-	if (flags & VIS_DQ)
-		args_print_add(buf, len, "\"%s\"", escaped);
-	else
-		args_print_add(buf, len, "%s", escaped);
+	escaped = args_escape(value->value);
+	args_print_add(buf, len, "%s", escaped);
 	free(escaped);
 }
 
@@ -165,21 +158,13 @@ args_print_add_value(char **buf, size_t *len, struct args_entry *entry,
 static void
 args_print_add_argument(char **buf, size_t *len, const char *argument)
 {
-	static const char	 quoted[] = " #\"';$";
-	char			*escaped;
-	int			 flags;
+	char	*escaped;
 
 	if (**buf != '\0')
 		args_print_add(buf, len, " ");
 
-	flags = VIS_OCTAL|VIS_TAB|VIS_NL;
-	if (argument[strcspn(argument, quoted)] != '\0')
-		flags |= VIS_DQ;
-	utf8_stravis(&escaped, argument, flags);
-	if (flags & VIS_DQ)
-		args_print_add(buf, len, "\"%s\"", escaped);
-	else
-		args_print_add(buf, len, "%s", escaped);
+	escaped = args_escape(argument);
+	args_print_add(buf, len, "%s", escaped);
 	free(escaped);
 }
 
@@ -190,6 +175,7 @@ args_print(struct args *args)
 	size_t		 	 len;
 	char			*buf;
 	int			 i;
+	u_int			 j;
 	struct args_entry	*entry;
 	struct args_value	*value;
 
@@ -203,7 +189,8 @@ args_print(struct args *args)
 
 		if (*buf == '\0')
 			args_print_add(&buf, &len, "-");
-		args_print_add(&buf, &len, "%c", entry->flag);
+		for (j = 0; j < entry->count; j++)
+			args_print_add(&buf, &len, "%c", entry->flag);
 	}
 
 	/* Then the flags with arguments. */
@@ -219,11 +206,53 @@ args_print(struct args *args)
 	return (buf);
 }
 
+/* Escape an argument. */
+char *
+args_escape(const char *s)
+{
+	static const char	 quoted[] = " #\"';${}";
+	char			*escaped, *result;
+	int			 flags;
+
+	if (*s == '\0')
+		return (xstrdup(s));
+	if (s[0] != ' ' &&
+	    (strchr(quoted, s[0]) != NULL || s[0] == '~') &&
+	    s[1] == '\0') {
+		xasprintf(&escaped, "\\%c", s[0]);
+		return (escaped);
+	}
+
+	flags = VIS_OCTAL|VIS_CSTYLE|VIS_TAB|VIS_NL;
+	if (s[strcspn(s, quoted)] != '\0')
+		flags |= VIS_DQ;
+	utf8_stravis(&escaped, s, flags);
+
+	if (flags & VIS_DQ) {
+		if (*escaped == '~')
+			xasprintf(&result, "\"\\%s\"", escaped);
+		else
+			xasprintf(&result, "\"%s\"", escaped);
+	} else {
+		if (*escaped == '~')
+			xasprintf(&result, "\\%s", escaped);
+		else
+			result = xstrdup(escaped);
+	}
+	free(escaped);
+	return (result);
+}
+
 /* Return if an argument is present. */
 int
 args_has(struct args *args, u_char ch)
 {
-	return (args_find(args, ch) != NULL);
+	struct args_entry	*entry;
+
+	entry = args_find(args, ch);
+	if (entry == NULL)
+		return (0);
+	return (entry->count);
 }
 
 /* Set argument value in the arguments tree. */
@@ -237,9 +266,11 @@ args_set(struct args *args, u_char ch, const char *s)
 	if (entry == NULL) {
 		entry = xcalloc(1, sizeof *entry);
 		entry->flag = ch;
+		entry->count = 1;
 		TAILQ_INIT(&entry->values);
 		RB_INSERT(args_tree, &args->tree, entry);
-	}
+	} else
+		entry->count++;
 
 	if (s != NULL) {
 		value = xcalloc(1, sizeof *value);

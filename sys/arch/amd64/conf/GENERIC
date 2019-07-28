@@ -1,4 +1,4 @@
-#	$OpenBSD: GENERIC,v 1.470 2019/05/04 17:59:40 deraadt Exp $
+#	$OpenBSD: GENERIC,v 1.475 2019/06/24 21:33:27 kettenis Exp $
 #
 # For further information on compiling OpenBSD kernels, see the config(8)
 # man page.
@@ -61,8 +61,10 @@ acpivideo*	at acpi?
 acpivout*	at acpivideo?
 acpipwrres*	at acpi?
 aibs*		at acpi?
+aplgpio*	at acpi?
 bytgpio*	at acpi?
 chvgpio*	at acpi?
+glkgpio*	at acpi?
 sdhc*		at acpi?
 acpicbkbd*	at acpi?
 acpials*	at acpi?
@@ -224,6 +226,8 @@ uvscom*	at uhub?		# SUNTAC Slipper U VS-10U serial
 ucom*	at uvscom?
 ubsa*	at uhub?		# Belkin serial adapter
 ucom*	at ubsa?
+ukspan* at uhub?		# Keyspan USA19HS serial adapter
+ucom*	at ukspan?
 uftdi*	at uhub?		# FTDI FT8U100AX serial adapter
 ucom*	at uftdi?
 uplcom* at uhub?		# I/O DATA USB-RSAQ2 serial adapter
@@ -234,6 +238,8 @@ uslcom*	at uhub?		# Silicon Laboratories CP210x serial
 ucom*	at uslcom?
 uscom*	at uhub?		# Simple USB serial adapters
 ucom*	at uscom?
+ucrcom*	at uhub?		# Chromebook serial
+ucom*	at ucrcom?
 uark*	at uhub?		# Arkmicro ARK3116 serial
 ucom*	at uark?
 moscom*	at uhub?		# MosChip MCS7703 serial
@@ -368,6 +374,11 @@ drm0		at radeondrm? primary 1
 drm*		at radeondrm?
 wsdisplay0	at radeondrm? primary 1
 wsdisplay*	at radeondrm? mux -1
+#amdgpu*	at pci?
+#drm0		at amdgpu? primary 1
+#drm*		at amdgpu?
+#wsdisplay0	at amdgpu? primary 1
+#wsdisplay*	at amdgpu? mux -1
 
 pcppi0		at isa?
 

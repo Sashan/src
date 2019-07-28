@@ -1,4 +1,4 @@
-/*	$OpenBSD: defs.h,v 1.2 2012/12/07 08:04:58 ratchov Exp $	*/
+/*	$OpenBSD: defs.h,v 1.4 2019/07/28 09:44:10 ratchov Exp $	*/
 /*
  * Copyright (c) 2008-2012 Alexandre Ratchov <alex@caoua.org>
  *
@@ -23,7 +23,8 @@
 #define MIDI_BUFSZ		3125	/* 1 second at 31.25kbit/s */
 
 /*
- * units used for MTC clock.
+ * units used for MTC clock. Must allow a quarter of frame to be
+ * represented at any of the standard 24, 25, or 30 fps.
  */
 #define MTC_SEC			2400	/* 1 second is 2400 ticks */
 
@@ -50,7 +51,7 @@
 /*
  * limits
  */
-#define NCHAN_MAX	16		/* max channel in a stream */
+#define NCHAN_MAX	64		/* max channel in a stream */
 #define RATE_MIN	4000		/* min sample rate */
 #define RATE_MAX	192000		/* max sample rate */
 #define BITS_MIN	1		/* min bits per sample */

@@ -1,4 +1,4 @@
-/*	$OpenBSD: unwind.c,v 1.25 2019/05/03 13:02:00 florian Exp $	*/
+/*	$OpenBSD: unwind.c,v 1.29 2019/06/28 13:32:46 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -75,6 +75,7 @@ void		open_dhcp_lease(int);
 void		open_ports(void);
 void		resolve_captive_portal(void);
 void		resolve_captive_portal_done(struct asr_result *, void *);
+void		send_blocklist_fd(void);
 
 struct uw_conf	*main_conf;
 struct imsgev	*iev_frontend;
@@ -288,13 +289,13 @@ main(int argc, char *argv[])
 		fatalx("control socket setup failed");
 
 	if ((frontend_routesock = socket(AF_ROUTE, SOCK_RAW | SOCK_CLOEXEC,
-	    AF_INET)) < 0)
+	    AF_INET)) == -1)
 		fatal("route socket");
 
 	rtfilter = ROUTE_FILTER(RTM_IFINFO) | ROUTE_FILTER(RTM_PROPOSAL) |
 	    ROUTE_FILTER(RTM_GET);
 	if (setsockopt(frontend_routesock, AF_ROUTE, ROUTE_MSGFILTER,
-	    &rtfilter, sizeof(rtfilter)) < 0)
+	    &rtfilter, sizeof(rtfilter)) == -1)
 		fatal("setsockopt(ROUTE_MSGFILTER)");
 
 	if ((ta_fd = open(TRUST_ANCHOR_FILE, O_RDWR | O_CREAT, 0644)) == -1)
@@ -306,6 +307,9 @@ main(int argc, char *argv[])
 	main_imsg_compose_frontend_fd(IMSG_CONTROLFD, 0, control_fd);
 	main_imsg_compose_frontend_fd(IMSG_ROUTESOCK, 0, frontend_routesock);
 	main_imsg_send_config(main_conf);
+
+	if (main_conf->blocklist_file != NULL)
+		send_blocklist_fd();
 
 	if (pledge("stdio inet dns rpath sendfd", NULL) == -1)
 		fatal("pledge");
@@ -696,6 +700,9 @@ main_reload(void)
 
 	merge_config(main_conf, xconf);
 
+	if (main_conf->blocklist_file != NULL)
+		send_blocklist_fd();
+
 	return (0);
 }
 
@@ -725,6 +732,13 @@ main_imsg_send_config(struct uw_conf *xconf)
 		if (main_sendall(IMSG_RECONF_CAPTIVE_PORTAL_EXPECTED_RESPONSE,
 		    xconf->captive_portal_expected_response,
 		    strlen(xconf->captive_portal_expected_response) + 1)
+		    == -1)
+			return (-1);
+	}
+
+	if (xconf->blocklist_file != NULL) {
+		if (main_sendall(IMSG_RECONF_BLOCKLIST_FILE,
+		    xconf->blocklist_file, strlen(xconf->blocklist_file) + 1)
 		    == -1)
 			return (-1);
 	}
@@ -781,7 +795,6 @@ merge_config(struct uw_conf *conf, struct uw_conf *xconf)
 		free(uw_forwarder);
 	}
 
-	conf->uw_options = xconf->uw_options;
 	conf->res_pref_len = xconf->res_pref_len;
 	memcpy(&conf->res_pref, &xconf->res_pref,
 	    sizeof(conf->res_pref));
@@ -800,6 +813,9 @@ merge_config(struct uw_conf *conf, struct uw_conf *xconf)
 	    xconf->captive_portal_expected_status;
 
 	conf->captive_portal_auto = xconf->captive_portal_auto;
+
+	free(conf->blocklist_file);
+	conf->blocklist_file = xconf->blocklist_file;
 
 	/* Add new forwarders. */
 	while ((uw_forwarder = SIMPLEQ_FIRST(&xconf->uw_forwarder_list)) !=
@@ -994,4 +1010,101 @@ resolve_captive_portal_done(struct asr_result *ar, void *arg)
 	}
 
 	freeaddrinfo(ar->ar_addrinfo);
+}
+
+void
+send_blocklist_fd(void)
+{
+	int	bl_fd;
+
+	if ((bl_fd = open(main_conf->blocklist_file, O_RDONLY)) != -1)
+		main_imsg_compose_frontend_fd(IMSG_BLFD, 0, bl_fd);
+	else
+		log_warn("%s", main_conf->blocklist_file);
+}
+
+void
+imsg_receive_config(struct imsg *imsg, struct uw_conf **xconf)
+{
+	struct uw_conf		*nconf;
+	struct uw_forwarder	*uw_forwarder;
+
+	nconf = *xconf;
+
+	switch (imsg->hdr.type) {
+	case IMSG_RECONF_CONF:
+		if (nconf != NULL)
+			fatalx("%s: IMSG_RECONF_CONF already in "
+			    "progress", __func__);
+		if (IMSG_DATA_SIZE(*imsg) != sizeof(struct uw_conf))
+			fatalx("%s: IMSG_RECONF_CONF wrong length: %lu",
+			    __func__, IMSG_DATA_SIZE(*imsg));
+		if ((*xconf = malloc(sizeof(struct uw_conf))) == NULL)
+			fatal(NULL);
+		nconf = *xconf;
+		memcpy(nconf, imsg->data, sizeof(struct uw_conf));
+		nconf->captive_portal_host = NULL;
+		nconf->captive_portal_path = NULL;
+		nconf->captive_portal_expected_response = NULL;
+		SIMPLEQ_INIT(&nconf->uw_forwarder_list);
+		SIMPLEQ_INIT(&nconf->uw_dot_forwarder_list);
+		break;
+	case IMSG_RECONF_CAPTIVE_PORTAL_HOST:
+		/* make sure this is a string */
+		((char *)imsg->data)[IMSG_DATA_SIZE(*imsg) - 1] = '\0';
+		if ((nconf->captive_portal_host = strdup(imsg->data)) ==
+		    NULL)
+			fatal("%s: strdup", __func__);
+		break;
+	case IMSG_RECONF_CAPTIVE_PORTAL_PATH:
+		/* make sure this is a string */
+		((char *)imsg->data)[IMSG_DATA_SIZE(*imsg) - 1] = '\0';
+		if ((nconf->captive_portal_path = strdup(imsg->data)) ==
+		    NULL)
+			fatal("%s: strdup", __func__);
+		break;
+	case IMSG_RECONF_CAPTIVE_PORTAL_EXPECTED_RESPONSE:
+		/* make sure this is a string */
+		((char *)imsg->data)[IMSG_DATA_SIZE(*imsg) - 1] = '\0';
+		if ((nconf->captive_portal_expected_response =
+		    strdup(imsg->data)) == NULL)
+			fatal("%s: strdup", __func__);
+		break;
+	case IMSG_RECONF_BLOCKLIST_FILE:
+		/* make sure this is a string */
+		((char *)imsg->data)[IMSG_DATA_SIZE(*imsg) - 1] = '\0';
+		if ((nconf->blocklist_file = strdup(imsg->data)) ==
+		    NULL)
+			fatal("%s: strdup", __func__);
+		break;
+	case IMSG_RECONF_FORWARDER:
+		if (IMSG_DATA_SIZE(*imsg) != sizeof(struct uw_forwarder))
+			fatalx("%s: IMSG_RECONF_FORWARDER wrong length:"
+			    " %lu", __func__, IMSG_DATA_SIZE(*imsg));
+		if ((uw_forwarder = malloc(sizeof(struct
+		    uw_forwarder))) == NULL)
+			fatal(NULL);
+		memcpy(uw_forwarder, imsg->data, sizeof(struct
+		    uw_forwarder));
+		SIMPLEQ_INSERT_TAIL(&nconf->uw_forwarder_list,
+		    uw_forwarder, entry);
+		break;
+	case IMSG_RECONF_DOT_FORWARDER:
+		if (IMSG_DATA_SIZE(*imsg) != sizeof(struct uw_forwarder))
+			fatalx("%s: IMSG_RECONF_DOT_FORWARDER wrong "
+			    "length: %lu", __func__,
+			    IMSG_DATA_SIZE(*imsg));
+		if ((uw_forwarder = malloc(sizeof(struct
+		    uw_forwarder))) == NULL)
+			fatal(NULL);
+		memcpy(uw_forwarder, imsg->data, sizeof(struct
+		    uw_forwarder));
+		SIMPLEQ_INSERT_TAIL(&nconf->uw_dot_forwarder_list,
+		    uw_forwarder, entry);
+		break;
+	default:
+		log_debug("%s: error handling imsg %d", __func__,
+		    imsg->hdr.type);
+		break;
+	}
 }

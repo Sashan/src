@@ -1,4 +1,4 @@
-/* $OpenBSD: ber_test.c,v 1.10 2019/03/31 01:00:32 rob Exp $
+/* $OpenBSD: ber_test.c,v 1.17 2019/06/01 19:44:47 rob Exp $
 */
 /*
  * Copyright (c) Rob Pierce <rob@openbsd.org>
@@ -45,12 +45,66 @@ struct test_vector test_vectors[] = {
 		},
 	},
 	{
+		FAIL,
+		0,
+		"boolean (constructed - expected failure)",
+		3,
+		{
+			0x21, 0x01, 0xff
+		},
+	},
+	{
+		FAIL,
+		0,
+		"boolean (more than 1 content octet - expected failure)",
+		4,
+		{
+			0x01, 0x02, 0x00, 0xff
+		},
+	},
+	{
+		SUCCEED,
+		1,
+		"enum",
+		3,
+		{
+			0x0a, 0x01, 0x00
+		},
+	},
+	{
+		FAIL,
+		0,
+		"enum (constructed - expected failure)",
+		3,
+		{
+			0x2a, 0x01, 0x00
+		},
+	},
+	{
+		FAIL,
+		0,
+		"enum minimal contents octets (expected failure)",
+		4,
+		{
+			0x0a, 0x02, 0x00, 0x01
+		},
+	},
+	{
 		SUCCEED,
 		1,
 		"integer (zero)",
 		3,
 		{
 			0x02, 0x01, 0x00
+		},
+	},
+	{
+		FAIL,
+		0,
+		"integer (constructed - expected failure)",
+		3,
+		{
+			0x22, 0x01, 0x01
 		},
 	},
 	{
@@ -81,6 +135,15 @@ struct test_vector test_vectors[] = {
 		},
 	},
 	{
+		FAIL,
+		0,
+		"integer minimal contents octets (expected failure)",
+		4,
+		{
+			0x02, 0x02, 0x00, 0x01
+		},
+	},
+	{
 		SUCCEED,
 		1,
 		"bit string",
@@ -106,6 +169,15 @@ struct test_vector test_vectors[] = {
 		2,
 		{
 			0x05, 0x00
+		},
+	},
+	{
+		FAIL,
+		0,
+		"null (constructed - expected failure)",
+		2,
+		{
+			0x25, 0x00
 		},
 	},
 	{
@@ -181,41 +253,39 @@ struct test_vector test_vectors[] = {
 		}
 	},
 	{
-		SUCCEED,
+		FAIL,
 		0,
-		"maximum long form tagging (i.e. 4 byte tag id)",
-		7,
+		"reserved for future use (expected failure)",
+		4,
 		{
-			0x1f, 0x80, 0x80, 0x80, 0x02, 0x01, 0x01
-		},
+			0x30, 0xff, 0x01, 0x01
+		}
 	},
 	{
 		FAIL,
 		0,
-		"overflow long form tagging (expected failure)",
-		8,
+		"long form tagging prohibited (expected failure)",
+		5,
 		{
-			0x1f, 0x80, 0x80, 0x80, 0x80, 0x02, 0x01, 0x01
+			0x1f, 0x80, 0x02, 0x01, 0x01
 		},
 	},
 	{
 		SUCCEED,
 		0,
-		"max long form length octets (i.e. 8 bytes)", 
-		12,
+		"max long form length octets (i.e. 4 bytes)", 
+		7,
 		{
-			0x02, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-			0x00, 0x00, 0x01, 0x01
+			0x02, 0x84, 0x00, 0x00, 0x00, 0x01, 0x01
 		},
 	},
 	{
 		FAIL,
 		0,
 		"overflow long form length octets (expected failure)",
-		13,
+		8,
 		{
-			0x02, 0x89, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-			0x00, 0x00, 0x00, 0x01, 0x01
+			0x02, 0x85, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01
 		},
 	},
 	{
@@ -324,11 +394,16 @@ test(int i)
 			return 1;
 		}
 		break;
-	/*
-	 * the current ber.c does not support bit strings
-	 * however, simply processing a bit string as an octet string seems
-	 * to work fine (as suspected by claudio)
-	 */
+	case BER_TYPE_ENUMERATED:
+		if (ber_get_enumerated(elm, &val) == -1) {
+			printf("failed (enum) encoding check\n");
+			return 1;
+		}
+		if (ber_scanf_elements(elm, "E", &val) == -1) {
+			printf("failed (enum) ber_scanf_elements (E)\n");
+			return 1;
+		}
+		break;
 	case BER_TYPE_BITSTRING:
 		if (ber_get_bitstring(elm, &bstring, &len) == -1) {
 			printf("failed (bit string) encoding check\n");

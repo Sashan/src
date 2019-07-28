@@ -1,4 +1,4 @@
-/*	$OpenBSD: vnode.h,v 1.150 2019/02/17 22:17:28 tedu Exp $	*/
+/*	$OpenBSD: vnode.h,v 1.152 2019/07/25 01:43:21 cheloha Exp $	*/
 /*	$NetBSD: vnode.h,v 1.38 1996/02/29 20:59:05 cgd Exp $	*/
 
 /*
@@ -598,9 +598,9 @@ int	vget(struct vnode *, int);
 void	vgone(struct vnode *);
 void	vgonel(struct vnode *, struct proc *);
 int	vinvalbuf(struct vnode *, int, struct ucred *, struct proc *,
-	    int, int);
+	    int, uint64_t);
 void	vntblinit(void);
-int	vwaitforio(struct vnode *, int, char *, int);
+int	vwaitforio(struct vnode *, int, char *, uint64_t);
 void	vwakeup(struct vnode *);
 void	vput(struct vnode *);
 int	vrecycle(struct vnode *, struct proc *);

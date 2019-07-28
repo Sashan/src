@@ -1,4 +1,4 @@
-/*	$OpenBSD: tftpd.c,v 1.41 2018/01/26 16:40:14 naddy Exp $	*/
+/*	$OpenBSD: tftpd.c,v 1.43 2019/07/03 03:24:03 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2012 David Gwynne <dlg@uq.edu.au>
@@ -744,7 +744,7 @@ tftpd_recv(int fd, short events, void *arg)
 		    &on, sizeof(on));
 
 		if (bind(client->sock, (struct sockaddr *)&s_in,
-		    s_in.ss_len) < 0) {
+		    s_in.ss_len) == -1) {
 			lwarn("bind to %s", getip(&s_in));
 			goto err;
 		}
@@ -991,7 +991,7 @@ validate_access(struct tftp_client *client, const char *requested)
 		 */
 		ret = snprintf(rewritten, sizeof(rewritten), "%s/%s",
 		    getip(&client->ss), requested);
-		if (ret == -1 || ret >= sizeof(rewritten))
+		if (ret < 0 || ret >= sizeof(rewritten))
 			return (ENAMETOOLONG + 100);
 		filename = rewritten;
 	} else {
@@ -1004,7 +1004,7 @@ retryread:
 	 * set.
 	 */
 	wmode = O_TRUNC;
-	if (stat(filename, &stbuf) < 0) {
+	if (stat(filename, &stbuf) == -1) {
 		if (!cancreate) {
 			/*
 			 * In -i mode, retry failed read requests from
@@ -1043,12 +1043,12 @@ retryread:
 		}
 	}
 	fd = open(filename, mode == RRQ ? O_RDONLY : (O_WRONLY|wmode), 0666);
-	if (fd < 0)
+	if (fd == -1)
 		return (errno + 100);
 	/*
 	 * If the file was created, set default permissions.
 	 */
-	if ((wmode & O_CREAT) && fchmod(fd, 0666) < 0) {
+	if ((wmode & O_CREAT) && fchmod(fd, 0666) == -1) {
 		int serrno = errno;
 
 		close(fd);
@@ -1502,7 +1502,7 @@ oack(struct tftp_client *client)
 
 		n = snprintf(bp, size, "%s%c%lld", opt_names[i], '\0',
 		    options[i].o_reply);
-		if (n == -1 || n >= size) {
+		if (n < 0 || n >= size) {
 			lwarnx("oack: no buffer space");
 			goto error;
 		}

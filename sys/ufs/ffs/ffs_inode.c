@@ -1,4 +1,4 @@
-/*	$OpenBSD: ffs_inode.c,v 1.77 2018/03/30 17:35:20 dhill Exp $	*/
+/*	$OpenBSD: ffs_inode.c,v 1.80 2019/07/25 01:43:21 cheloha Exp $	*/
 /*	$NetBSD: ffs_inode.c,v 1.10 1996/05/11 18:27:19 mycroft Exp $	*/
 
 /*
@@ -168,6 +168,10 @@ ffs_truncate(struct inode *oip, off_t length, int flags, struct ucred *cred)
 	if ((error = getinoquota(oip)) != 0)
 		return (error);
 
+	fs = oip->i_fs;
+	if (length > fs->fs_maxfilesize)
+		return (EFBIG);
+
 	uvm_vnp_setsize(ovp, length);
 	oip->i_ci.ci_lasta = oip->i_ci.ci_clen 
 	    = oip->i_ci.ci_cstart = oip->i_ci.ci_lastw = 0;
@@ -190,13 +194,12 @@ ffs_truncate(struct inode *oip, off_t length, int flags, struct ucred *cred)
 			(void)ufs_quota_free_blocks(oip, DIP(oip, blocks),
 			    NOCRED);
 			softdep_setup_freeblocks(oip, length);
-			(void) vinvalbuf(ovp, 0, cred, curproc, 0, 0);
+			vinvalbuf(ovp, 0, cred, curproc, 0, INFSLP);
 			oip->i_flag |= IN_CHANGE | IN_UPDATE;
 			return (UFS_UPDATE(oip, 0));
 		}
 	}
 
-	fs = oip->i_fs;
 	osize = DIP(oip, size);
 	/*
 	 * Lengthen the size of the file. We must ensure that the
@@ -204,8 +207,6 @@ ffs_truncate(struct inode *oip, off_t length, int flags, struct ucred *cred)
 	 * value of osize is 0, length will be at least 1.
 	 */
 	if (osize < length) {
-		if (length > fs->fs_maxfilesize)
-			return (EFBIG);
 		aflags = B_CLRBUF;
 		if (flags & IO_SYNC)
 			aflags |= B_SYNC;
@@ -322,7 +323,7 @@ ffs_truncate(struct inode *oip, off_t length, int flags, struct ucred *cred)
 
 	DIP_ASSIGN(oip, size, osize);
 	vflags = ((length > 0) ? V_SAVE : 0) | V_SAVEMETA;
-	allerror = vinvalbuf(ovp, vflags, cred, curproc, 0, 0);
+	allerror = vinvalbuf(ovp, vflags, cred, curproc, 0, INFSLP);
 
 	/*
 	 * Indirect blocks first.
@@ -478,7 +479,7 @@ ffs_indirtrunc(struct inode *ip, daddr_t lbn, daddr_t dbn,
 	 * explicitly instead of letting bread do everything for us.
 	 */
 	vp = ITOV(ip);
-	bp = getblk(vp, lbn, (int)fs->fs_bsize, 0, 0);
+	bp = getblk(vp, lbn, (int)fs->fs_bsize, 0, INFSLP);
 	if (!(bp->b_flags & (B_DONE | B_DELWRI))) {
 		curproc->p_ru.ru_inblock++;		/* pay for read */
 		bcstats.pendingreads++;

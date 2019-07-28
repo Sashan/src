@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_extern.h,v 1.145 2019/03/01 01:46:18 cheloha Exp $	*/
+/*	$OpenBSD: uvm_extern.h,v 1.148 2019/07/01 21:13:03 mpi Exp $	*/
 /*	$NetBSD: uvm_extern.h,v 1.57 2001/03/09 01:02:12 chs Exp $	*/
 
 /*
@@ -151,6 +151,7 @@ typedef int		vm_prot_t;
 #define UVM_PLA_ZERO		0x0004	/* zero all pages before returning */
 #define UVM_PLA_TRYCONTIG	0x0008	/* try to allocate contig physmem */
 #define UVM_PLA_FAILOK		0x0010	/* caller can handle failure */
+#define UVM_PLA_NOWAKE		0x0020	/* don't wake the page daemon on failure */
 
 /*
  * lockflags that control the locking behavior of various functions.
@@ -191,6 +192,9 @@ struct pmap;
  * Shareable process virtual address space.
  * May eventually be merged with vm_map.
  * Several fields are temporary (text, data stuff).
+ *
+ *  Locks used to protect struct members in this file:
+ *	I	immutable after creation
  */
 struct vmspace {
 	struct	vm_map vm_map;	/* VM address map */
@@ -206,8 +210,8 @@ struct vmspace {
 	segsz_t vm_ssize;	/* stack size (pages) */
 	caddr_t	vm_taddr;	/* user virtual address of text XXX */
 	caddr_t	vm_daddr;	/* user virtual address of data XXX */
-	caddr_t vm_maxsaddr;	/* user VA at max stack growth */
-	caddr_t vm_minsaddr;	/* user VA at top of stack */
+	caddr_t vm_maxsaddr;	/* [I] user VA at max stack growth */
+	caddr_t vm_minsaddr;	/* [I] user VA at top of stack */
 };
 
 /*
@@ -258,6 +262,8 @@ extern vaddr_t vm_min_kernel_address;
 
 #define vm_resident_count(vm) (pmap_resident_count((vm)->vm_map.pmap))
 
+struct plimit;
+
 void			vmapbuf(struct buf *, vsize_t);
 void			vunmapbuf(struct buf *, vsize_t);
 struct uvm_object	*uao_create(vsize_t, int);
@@ -270,7 +276,7 @@ int			uvm_fault(vm_map_t, vaddr_t, vm_fault_t, vm_prot_t);
 vaddr_t			uvm_uarea_alloc(void);
 void			uvm_uarea_free(struct proc *);
 void			uvm_exit(struct process *);
-void			uvm_init_limits(struct proc *);
+void			uvm_init_limits(struct plimit *);
 boolean_t		uvm_kernacc(caddr_t, size_t, int);
 
 int			uvm_vslock(struct proc *, caddr_t, size_t,

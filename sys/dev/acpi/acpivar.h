@@ -1,4 +1,4 @@
-/*	$OpenBSD: acpivar.h,v 1.99 2018/08/25 09:39:20 kettenis Exp $	*/
+/*	$OpenBSD: acpivar.h,v 1.102 2019/07/02 21:17:24 jcs Exp $	*/
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  *
@@ -172,7 +172,7 @@ struct gpe_block {
 	int  (*handler)(struct acpi_softc *, int, void *);
 	void *arg;
 	int   active;
-	int   edge;
+	int   flags;
 };
 
 struct acpi_devlist {
@@ -264,7 +264,8 @@ struct acpi_softc {
 
 	struct timeout		sc_dev_timeout;
 
-	int			sc_revision;
+	int			sc_major;
+	int			sc_minor;
 
 	int			sc_pse;		/* passive cooling enabled */
 
@@ -277,9 +278,10 @@ extern struct acpi_softc *acpi_softc;
 #define	SCFLAG_OWRITE	0x0000002
 #define	SCFLAG_OPEN	(SCFLAG_OREAD|SCFLAG_OWRITE)
 
-#define GPE_NONE  0x00
-#define GPE_LEVEL 0x01
-#define GPE_EDGE  0x02
+#define GPE_NONE	0x00
+#define GPE_LEVEL	0x01
+#define GPE_EDGE	0x02
+#define GPE_DIRECT	0x04
 
 struct acpi_table {
 	int	offset;
@@ -368,6 +370,7 @@ void	acpi_sleep(int, char *);
 int	acpi_matchcls(struct acpi_attach_args *, int, int, int);
 int	acpi_matchhids(struct acpi_attach_args *, const char *[], const char *);
 int	acpi_parsehid(struct aml_node *, void *, char *, char *, size_t);
+int64_t	acpi_getsta(struct acpi_softc *sc, struct aml_node *);
 
 uint32_t acpi_getpropint(struct aml_node *, const char *, uint32_t);
 

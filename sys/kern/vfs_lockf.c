@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_lockf.c,v 1.40 2019/05/06 16:29:19 anton Exp $	*/
+/*	$OpenBSD: vfs_lockf.c,v 1.43 2019/05/12 19:43:34 anton Exp $	*/
 /*	$NetBSD: vfs_lockf.c,v 1.7 1996/02/04 02:18:21 christos Exp $	*/
 
 /*
@@ -104,6 +104,8 @@ void	lf_printlist(const char *, struct lockf *);
 #define	LFPRINT(args, level)
 #endif
 
+struct lockf *lf_alloc(uid_t, int);
+void lf_free(struct lockf *);
 int lf_clearlock(struct lockf *);
 int lf_findoverlap(struct lockf *, struct lockf *, int, struct lockf **);
 struct lockf *lf_getblock(struct lockf *, struct lockf *);
@@ -129,9 +131,6 @@ lf_init(void)
 	pool_init(&lockf_pool, sizeof(struct lockf), 0, IPL_NONE,
 	    PR_WAITOK | PR_RWLOCK, "lockfpl", NULL);
 }
-
-struct lockf *lf_alloc(uid_t, int);
-void lf_free(struct lockf *);
 
 void
 ls_ref(struct lockf_state *ls)
@@ -328,7 +327,6 @@ lf_setlock(struct lockf *lock)
 {
 	struct lockf *block;
 	struct lockf *overlap, *ltmp;
-	static char lockstr[] = "lockf";
 	int ovcase, priority, needtolink, error;
 
 	rw_assert_wrlock(&lockf_lock);
@@ -356,10 +354,9 @@ lf_setlock(struct lockf *lock)
 		/*
 		 * Lock is blocked, check for deadlock before proceeding.
 		 * Note: flock style locks cover the whole file, there is no
-		 * chance for deadlock. But for simplicity, all types of locks
-		 * are checked.
+		 * chance for deadlock.
 		 */
-		if (lf_deadlock(lock)) {
+		if ((lock->lf_flags & F_POSIX) && lf_deadlock(lock)) {
 			lf_free(lock);
 			return (EDEADLK);
 		}
@@ -384,7 +381,7 @@ lf_setlock(struct lockf *lock)
 		TAILQ_INSERT_TAIL(&block->lf_blkhd, lock, lf_block);
 		TAILQ_INSERT_TAIL(&lock->lf_state->ls_pending, lock, lf_entry);
 		KERNEL_LOCK();
-		error = rwsleep(lock, &lockf_lock, priority, lockstr, 0);
+		error = rwsleep(lock, &lockf_lock, priority, "lockf", 0);
 		KERNEL_UNLOCK();
 		TAILQ_REMOVE(&lock->lf_state->ls_pending, lock, lf_entry);
 		wakeup_one(lock->lf_state);
@@ -845,7 +842,11 @@ lf_deadlock(struct lockf *lock)
 	struct lockf *block, *lf, *pending;
 
 	lf = TAILQ_FIRST(&lock->lf_state->ls_locks);
-	while ((block = lf_getblock(lf, lock)) != NULL) {
+	for (; (block = lf_getblock(lf, lock)) != NULL;
+	    lf = TAILQ_NEXT(block, lf_entry)) {
+		if ((block->lf_flags & F_POSIX) == 0)
+			continue;
+
 		TAILQ_FOREACH(pending, &lock->lf_state->ls_pending, lf_entry) {
 			if (pending->lf_blk == NULL)
 				continue; /* lock already unblocked */
@@ -854,8 +855,6 @@ lf_deadlock(struct lockf *lock)
 			    pending->lf_blk->lf_pid == lock->lf_pid)
 				return (1);
 		}
-
-		lf = TAILQ_NEXT(lf, lf_entry);
 	}
 
 	return (0);

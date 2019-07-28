@@ -1,4 +1,4 @@
-/*	$OpenBSD: lka.c,v 1.233 2019/01/05 09:43:39 gilles Exp $	*/
+/*	$OpenBSD: lka.c,v 1.239 2019/07/26 06:30:13 gilles Exp $	*/
 
 /*
  * Copyright (c) 2008 Pierre-Yves Ritschard <pyr@openbsd.org>
@@ -80,11 +80,14 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 	struct timeval		 tv;
 	const char		*direction;
 	const char		*rdns;
-	const char		*command, *response;
+	const char		*command;
+	const char		*response;
 	const char		*ciphers;
 	const char		*address;
+	const char		*helomethod;
 	const char		*heloname;
 	const char		*filter_name;
+	const char		*result;
 	struct sockaddr_storage	ss_src, ss_dest;
 	int                      filter_response;
 	int                      filter_phase;
@@ -102,6 +105,7 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 
 	case IMSG_GETADDRINFO:
 	case IMSG_GETNAMEINFO:
+	case IMSG_RES_QUERY:
 		resolver_dispatch_request(p, imsg);
 		return;
 
@@ -359,9 +363,21 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 		m_get_string(&m, &procname);
 		m_end(&m);
 
+		m_create(p, IMSG_LKA_PROCESSOR_ERRFD, 0, 0, -1);
+		m_add_string(p, procname);
+		m_close(p);
+
 		lka_proc_forked(procname, imsg->fd);
 		return;
 
+	case IMSG_LKA_PROCESSOR_ERRFD:
+		m_msg(&m, imsg);
+		m_get_string(&m, &procname);
+		m_end(&m);
+
+		lka_proc_errfd(procname, imsg->fd);
+		shutdown(imsg->fd, SHUT_WR);
+		return;
 
 	case IMSG_REPORT_SMTP_LINK_CONNECT:
 		m_msg(&m, imsg);
@@ -392,10 +408,11 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 		m_get_string(&m, &direction);
 		m_get_timeval(&m, &tv);
 		m_get_id(&m, &reqid);
+		m_get_string(&m, &helomethod);
 		m_get_string(&m, &heloname);
 		m_end(&m);
 
-		lka_report_smtp_link_identify(direction, &tv, reqid, heloname);
+		lka_report_smtp_link_identify(direction, &tv, reqid, helomethod, heloname);
 		return;
 
 	case IMSG_REPORT_SMTP_LINK_TLS:
@@ -407,6 +424,29 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 		m_end(&m);
 
 		lka_report_smtp_link_tls(direction, &tv, reqid, ciphers);
+		return;
+
+	case IMSG_REPORT_SMTP_LINK_AUTH:
+		m_msg(&m, imsg);
+		m_get_string(&m, &direction);
+		m_get_timeval(&m, &tv);
+		m_get_id(&m, &reqid);
+		m_get_string(&m, &username);
+		m_get_string(&m, &result);
+		m_end(&m);
+
+		lka_report_smtp_link_auth(direction, &tv, reqid, username, result);
+		return;
+
+	case IMSG_REPORT_SMTP_TX_RESET:
+		m_msg(&m, imsg);
+		m_get_string(&m, &direction);
+		m_get_timeval(&m, &tv);
+		m_get_id(&m, &reqid);
+		m_get_u32(&m, &msgid);
+		m_end(&m);
+
+		lka_report_smtp_tx_reset(direction, &tv, reqid, msgid);
 		return;
 
 	case IMSG_REPORT_SMTP_TX_BEGIN:

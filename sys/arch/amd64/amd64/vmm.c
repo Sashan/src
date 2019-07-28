@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmm.c,v 1.241 2019/04/22 20:31:37 mlarkin Exp $	*/
+/*	$OpenBSD: vmm.c,v 1.249 2019/07/17 05:51:07 pd Exp $	*/
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -28,6 +28,7 @@
 #include <sys/rwlock.h>
 #include <sys/pledge.h>
 #include <sys/memrange.h>
+#include <sys/timetc.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -39,6 +40,7 @@
 #include <machine/vmmvar.h>
 
 #include <dev/isa/isareg.h>
+#include <dev/pv/pvreg.h>
 
 /* #define VMM_DEBUG */
 
@@ -122,6 +124,7 @@ int vm_get_info(struct vm_info_params *);
 int vm_resetcpu(struct vm_resetcpu_params *);
 int vm_intr_pending(struct vm_intr_params *);
 int vm_rwregs(struct vm_rwregs_params *, int);
+int vm_rwvmparams(struct vm_rwvmparams_params *, int);
 int vm_find(uint32_t, struct vm **);
 int vcpu_readregs_vmx(struct vcpu *, uint64_t, struct vcpu_reg_state *);
 int vcpu_readregs_svm(struct vcpu *, uint64_t, struct vcpu_reg_state *);
@@ -198,6 +201,9 @@ void vmx_setmsrbw(struct vcpu *, uint32_t);
 void vmx_setmsrbrw(struct vcpu *, uint32_t);
 void svm_set_clean(struct vcpu *, uint32_t);
 void svm_set_dirty(struct vcpu *, uint32_t);
+
+void vmm_init_pvclock(struct vcpu *, paddr_t);
+int vmm_update_pvclock(struct vcpu *);
 
 #ifdef VMM_DEBUG
 void dump_vcpu(struct vcpu *);
@@ -305,7 +311,7 @@ vmm_enabled(void)
 {
 	struct cpu_info *ci;
 	CPU_INFO_ITERATOR cii;
-	int found_vmx = 0, found_svm = 0, vmm_disabled = 0;
+	int found_vmx = 0, found_svm = 0;
 
 	/* Check if we have at least one CPU with either VMX or SVM */
 	CPU_INFO_FOREACH(cii, ci) {
@@ -313,8 +319,6 @@ vmm_enabled(void)
 			found_vmx = 1;
 		if (ci->ci_vmm_flags & CI_VMM_SVM)
 			found_svm = 1;
-		if (ci->ci_vmm_flags & CI_VMM_DIS)
-			vmm_disabled = 1;
 	}
 
 	/* Don't support both SVM and VMX at the same time */
@@ -482,6 +486,13 @@ vmmioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 	case VMM_IOC_WRITEREGS:
 		ret = vm_rwregs((struct vm_rwregs_params *)data, 1);
 		break;
+	case VMM_IOC_READVMPARAMS:
+		ret = vm_rwvmparams((struct vm_rwvmparams_params *)data, 0);
+		break;
+	case VMM_IOC_WRITEVMPARAMS:
+		ret = vm_rwvmparams((struct vm_rwvmparams_params *)data, 1);
+		break;
+
 	default:
 		DPRINTF("%s: unknown ioctl code 0x%lx\n", __func__, cmd);
 		ret = ENOTTY;
@@ -513,6 +524,8 @@ pledge_ioctl_vmm(struct proc *p, long com)
 	case VMM_IOC_INTR:
 	case VMM_IOC_READREGS:
 	case VMM_IOC_WRITEREGS:
+	case VMM_IOC_READVMPARAMS:
+	case VMM_IOC_WRITEVMPARAMS:
 		return (0);
 	}
 
@@ -578,10 +591,10 @@ vm_resetcpu(struct vm_resetcpu_params *vrp)
 
 	if (vcpu->vc_state != VCPU_STATE_STOPPED) {
 		DPRINTF("%s: reset of vcpu %u on vm %u attempted "
-		    "while vcpu was in state %u (%s)\n", __func__, 
+		    "while vcpu was in state %u (%s)\n", __func__,
 		    vrp->vrp_vcpu_id, vrp->vrp_vm_id, vcpu->vc_state,
 		    vcpu_state_decode(vcpu->vc_state));
-		
+
 		return (EBUSY);
 	}
 
@@ -618,7 +631,7 @@ vm_intr_pending(struct vm_intr_params *vip)
 	struct vm *vm;
 	struct vcpu *vcpu;
 	int error;
-	
+
 	/* Find the desired VM */
 	rw_enter_read(&vmm_softc->vm_lock);
 	error = vm_find(vip->vip_vm_id, &vm);
@@ -661,6 +674,66 @@ vm_intr_pending(struct vm_intr_params *vip)
 #endif /* MULTIPROCESSOR */
 
 	return (0);
+}
+
+/*
+ * vm_rwvmparams
+ *
+ * IOCTL handler to read/write the current vmm params like pvclock gpa, pvclock
+ * version, etc.
+ *
+ * Parameters:
+ *   vrwp: Describes the VM and VCPU to get/set the params from
+ *   dir: 0 for reading, 1 for writing
+ *
+ * Return values:
+ *  0: if successful
+ *  ENOENT: if the VM/VCPU defined by 'vpp' cannot be found
+ *  EINVAL: if an error occured reading the registers of the guest
+ */
+int
+vm_rwvmparams(struct vm_rwvmparams_params *vpp, int dir) {
+	struct vm *vm;
+	struct vcpu *vcpu;
+	int error;
+
+	/* Find the desired VM */
+	rw_enter_read(&vmm_softc->vm_lock);
+	error = vm_find(vpp->vpp_vm_id, &vm);
+
+	/* Not found? exit. */
+	if (error != 0) {
+		rw_exit_read(&vmm_softc->vm_lock);
+		return (error);
+	}
+
+	rw_enter_read(&vm->vm_vcpu_lock);
+	SLIST_FOREACH(vcpu, &vm->vm_vcpu_list, vc_vcpu_link) {
+		if (vcpu->vc_id == vpp->vpp_vcpu_id)
+			break;
+	}
+	rw_exit_read(&vm->vm_vcpu_lock);
+	rw_exit_read(&vmm_softc->vm_lock);
+
+	if (vcpu == NULL)
+		return (ENOENT);
+
+	if (dir == 0) {
+		if (vpp->vpp_mask & VM_RWVMPARAMS_PVCLOCK_VERSION)
+			vpp->vpp_pvclock_version = vcpu->vc_pvclock_version;
+		if (vpp->vpp_mask & VM_RWVMPARAMS_PVCLOCK_SYSTEM_GPA)
+			vpp->vpp_pvclock_system_gpa = \
+			    vcpu->vc_pvclock_system_gpa;
+		return (0);
+	}
+
+	if (vpp->vpp_mask & VM_RWVMPARAMS_PVCLOCK_VERSION)
+		vcpu->vc_pvclock_version = vpp->vpp_pvclock_version;
+	if (vpp->vpp_mask & VM_RWVMPARAMS_PVCLOCK_SYSTEM_GPA) {
+		vmm_init_pvclock(vcpu, vpp->vpp_pvclock_system_gpa);
+	}
+	return (0);
+
 }
 
 /*
@@ -749,7 +822,7 @@ vm_find(uint32_t id, struct vm **res)
 	*res = NULL;
 	SLIST_FOREACH(vm, &vmm_softc->vm_list, vm_link) {
 		if (vm->vm_id == id) {
-			/* 
+			/*
 			 * In the pledged VM process, only allow to find
 			 * the VM that is running in the current process.
 			 * The managing vmm parent process can lookup all
@@ -1369,7 +1442,7 @@ vm_impl_deinit(struct vm *vm)
  * Return values:
  *  0: if successful
  *  EINVAL: an error occurred during flush or reload
- */ 
+ */
 int
 vcpu_reload_vmcs_vmx(uint64_t *vmcs)
 {
@@ -1934,7 +2007,7 @@ vcpu_writeregs_svm(struct vcpu *vcpu, uint64_t regmask,
  * Parameters:
  *  vcpu: the vcpu whose register state is to be initialized
  *  vrs: the register state to set
- * 
+ *
  * Return values:
  *  0: registers init'ed successfully
  *  EINVAL: an error occurred setting register state
@@ -1970,6 +2043,8 @@ vcpu_reset_regs_svm(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 	 * MWAIT instruction (SVM_INTERCEPT_MWAIT_UNCOND)
 	 * MWAIT instruction (SVM_INTERCEPT_MWAIT_COND)
 	 * MONITOR instruction (SVM_INTERCEPT_MONITOR)
+	 * RDTSCP instruction (SVM_INTERCEPT_RDTSCP)
+	 * INVLPGA instruction (SVM_INTERCEPT_INVLPGA)
 	 * XSETBV instruction (SVM_INTERCEPT_XSETBV) (if available)
 	 */
 	vmcb->v_intercept1 = SVM_INTERCEPT_INTR | SVM_INTERCEPT_NMI |
@@ -1980,7 +2055,8 @@ vcpu_reset_regs_svm(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 	    SVM_INTERCEPT_VMLOAD | SVM_INTERCEPT_VMSAVE | SVM_INTERCEPT_STGI |
 	    SVM_INTERCEPT_CLGI | SVM_INTERCEPT_SKINIT | SVM_INTERCEPT_ICEBP |
 	    SVM_INTERCEPT_MWAIT_UNCOND | SVM_INTERCEPT_MONITOR |
-	    SVM_INTERCEPT_MWAIT_COND;
+	    SVM_INTERCEPT_MWAIT_COND | SVM_INTERCEPT_RDTSCP |
+	    SVM_INTERCEPT_INVLPGA;
 
 	if (xsave_mask)
 		vmcb->v_intercept2 |= SVM_INTERCEPT_XSETBV;
@@ -2230,7 +2306,7 @@ vmx_setmsrbrw(struct vcpu *vcpu, uint32_t msr)
 /*
  * svm_set_clean
  *
- * Sets (mark as unmodified) the VMCB clean bit set in 'value'. 
+ * Sets (mark as unmodified) the VMCB clean bit set in 'value'.
  * For example, to set the clean bit for the VMCB intercepts (bit position 0),
  * the caller provides 'SVM_CLEANBITS_I' (0x1) for the 'value' argument.
  * Multiple cleanbits can be provided in 'value' at the same time (eg,
@@ -2260,7 +2336,7 @@ svm_set_clean(struct vcpu *vcpu, uint32_t value)
 /*
  * svm_set_dirty
  *
- * Clears (mark as modified) the VMCB clean bit set in 'value'. 
+ * Clears (mark as modified) the VMCB clean bit set in 'value'.
  * For example, to clear the bit for the VMCB intercepts (bit position 0)
  * the caller provides 'SVM_CLEANBITS_I' (0x1) for the 'value' argument.
  * Multiple dirty bits can be provided in 'value' at the same time (eg,
@@ -2292,7 +2368,7 @@ svm_set_dirty(struct vcpu *vcpu, uint32_t value)
  * Parameters:
  *  vcpu: the vcpu whose register state is to be initialized
  *  vrs: the register state to set
- * 
+ *
  * Return values:
  *  0: registers init'ed successfully
  *  EINVAL: an error occurred setting register state
@@ -2734,11 +2810,11 @@ vcpu_reset_regs_vmx(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 	 * and some of the content is based on the host.
 	 */
 	msr_store[VCPU_REGS_MISC_ENABLE].vms_data = rdmsr(MSR_MISC_ENABLE);
-	msr_store[VCPU_REGS_MISC_ENABLE].vms_data &= 
+	msr_store[VCPU_REGS_MISC_ENABLE].vms_data &=
 	    ~(MISC_ENABLE_TCC | MISC_ENABLE_PERF_MON_AVAILABLE |
 	      MISC_ENABLE_EIST_ENABLED | MISC_ENABLE_ENABLE_MONITOR_FSM |
 	      MISC_ENABLE_xTPR_MESSAGE_DISABLE);
-	msr_store[VCPU_REGS_MISC_ENABLE].vms_data |= 
+	msr_store[VCPU_REGS_MISC_ENABLE].vms_data |=
 	      MISC_ENABLE_BTS_UNAVAILABLE | MISC_ENABLE_PEBS_UNAVAILABLE;
 
 	/*
@@ -3080,7 +3156,7 @@ exit:
  *  !0: the vcpu's registers could not be reset (see arch-specific reset
  *      function for various values that can be returned here)
  */
-int 
+int
 vcpu_reset_regs(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 {
 	int ret;
@@ -3231,6 +3307,7 @@ vcpu_init(struct vcpu *vcpu)
 	vcpu->vc_virt_mode = vmm_softc->mode;
 	vcpu->vc_state = VCPU_STATE_STOPPED;
 	vcpu->vc_vpid = 0;
+	vcpu->vc_pvclock_system_gpa = 0;
 	if (vmm_softc->mode == VMM_MODE_VMX ||
 	    vmm_softc->mode == VMM_MODE_EPT)
 		ret = vcpu_init_vmx(vcpu);
@@ -3482,7 +3559,7 @@ vcpu_vmx_compute_ctrl(uint64_t ctrlval, uint16_t ctrl, uint32_t want1,
 		if (set && !clear) {
 			if (want0 & (1ULL << i))
 				return (EINVAL);
-			else 
+			else
 				*out |= (1ULL << i);
 		} else if (clear && !set) {
 			if (want1 & (1ULL << i))
@@ -3941,10 +4018,164 @@ vmm_fpusave(struct vcpu *vcpu)
 	/*
 	 * Save full copy of FPU state - guest content is always
 	 * a subset of host's save area (see xsetbv exit handler)
-	 */	
+	 */
 	fpusavereset(&vcpu->vc_g_fpu);
 	vcpu->vc_fpuinited = 1;
 }
+
+/*
+ * vmm_translate_gva
+ *
+ * Translates a guest virtual address to a guest physical address by walking
+ * the currently active page table (if needed).
+ *
+ * Note - this function can possibly alter the supplied VCPU state.
+ *  Specifically, it may inject exceptions depending on the current VCPU
+ *  configuration, and may alter %cr2 on #PF. Consequently, this function
+ *  should only be used as part of instruction emulation.
+ *
+ * Parameters:
+ *  vcpu: The VCPU this translation should be performed for (guest MMU settings
+ *   are gathered from this VCPU)
+ *  va: virtual address to translate
+ *  pa: pointer to paddr_t variable that will receive the translated physical
+ *   address. 'pa' is unchanged on error.
+ *  mode: one of PROT_READ, PROT_WRITE, PROT_EXEC indicating the mode in which
+ *   the address should be translated
+ *
+ * Return values:
+ *  0: the address was successfully translated - 'pa' contains the physical
+ *     address currently mapped by 'va'.
+ *  EFAULT: the PTE for 'VA' is unmapped. A #PF will be injected in this case
+ *     and %cr2 set in the vcpu structure.
+ *  EINVAL: an error occurred reading paging table structures
+ */
+int
+vmm_translate_gva(struct vcpu *vcpu, uint64_t va, uint64_t *pa, int mode)
+{
+	int level, shift, pdidx;
+	uint64_t pte, pt_paddr, pte_paddr, mask, low_mask, high_mask;
+	uint64_t shift_width, pte_size, *hva;
+	paddr_t hpa;
+	struct vcpu_reg_state vrs;
+
+	level = 0;
+
+	if (vmm_softc->mode == VMM_MODE_EPT ||
+	    vmm_softc->mode == VMM_MODE_VMX) {
+		if (vcpu_readregs_vmx(vcpu, VM_RWREGS_ALL, &vrs))
+			return (EINVAL);
+	} else if (vmm_softc->mode == VMM_MODE_RVI ||
+	    vmm_softc->mode == VMM_MODE_SVM) {
+		if (vcpu_readregs_svm(vcpu, VM_RWREGS_ALL, &vrs))
+			return (EINVAL);
+	}
+
+	DPRINTF("%s: guest %%cr0=0x%llx, %%cr3=0x%llx\n", __func__,
+	    vrs.vrs_crs[VCPU_REGS_CR0], vrs.vrs_crs[VCPU_REGS_CR3]);
+
+	if (!(vrs.vrs_crs[VCPU_REGS_CR0] & CR0_PG)) {
+		DPRINTF("%s: unpaged, va=pa=0x%llx\n", __func__,
+		    va);
+		*pa = va;
+		return (0);
+	}
+
+	pt_paddr = vrs.vrs_crs[VCPU_REGS_CR3];
+
+	if (vrs.vrs_crs[VCPU_REGS_CR0] & CR0_PE) {
+		if (vrs.vrs_crs[VCPU_REGS_CR4] & CR4_PAE) {
+			pte_size = sizeof(uint64_t);
+			shift_width = 9;
+
+			if (vrs.vrs_msrs[VCPU_REGS_EFER] & EFER_LMA) {
+				level = 4;
+				mask = L4_MASK;
+				shift = L4_SHIFT;
+			} else {
+				level = 3;
+				mask = L3_MASK;
+				shift = L3_SHIFT;
+			}
+		} else {
+			level = 2;
+			shift_width = 10;
+			mask = 0xFFC00000;
+			shift = 22;
+			pte_size = sizeof(uint32_t);
+		}
+	} else {
+		return (EINVAL);
+	}
+
+	DPRINTF("%s: pte size=%lld level=%d mask=0x%llx, shift=%d, "
+	    "shift_width=%lld\n", __func__, pte_size, level, mask, shift,
+	    shift_width);
+
+	/* XXX: Check for R bit in segment selector and set A bit */
+
+	for (;level > 0; level--) {
+		pdidx = (va & mask) >> shift;
+		pte_paddr = (pt_paddr) + (pdidx * pte_size);
+
+		DPRINTF("%s: read pte level %d @ GPA 0x%llx\n", __func__,
+		    level, pte_paddr);
+		if (!pmap_extract(vcpu->vc_parent->vm_map->pmap, pte_paddr,
+		    &hpa)) {
+			DPRINTF("%s: cannot extract HPA for GPA 0x%llx\n",
+			    __func__, pte_paddr);
+			return (EINVAL);
+		}
+
+		hpa = hpa | (pte_paddr & 0xFFF);
+		hva = (uint64_t *)PMAP_DIRECT_MAP(hpa);
+		DPRINTF("%s: GPA 0x%llx -> HPA 0x%llx -> HVA 0x%llx\n",
+		    __func__, pte_paddr, (uint64_t)hpa, (uint64_t)hva);
+		if (pte_size == 8)
+			pte = *hva;
+		else
+			pte = *(uint32_t *)hva;
+
+		DPRINTF("%s: PTE @ 0x%llx = 0x%llx\n", __func__, pte_paddr,
+		    pte);
+
+		/* XXX: Set CR2  */
+		if (!(pte & PG_V))
+			return (EFAULT);
+
+		/* XXX: Check for SMAP */
+		if ((mode == PROT_WRITE) && !(pte & PG_RW))
+			return (EPERM);
+
+		if ((vcpu->vc_exit.cpl > 0) && !(pte & PG_u))
+			return (EPERM);
+
+		pte = pte | PG_U;
+		if (mode == PROT_WRITE)
+			pte = pte | PG_M;
+		*hva = pte;
+
+		/* XXX: EINVAL if in 32bit and  PG_PS is 1 but CR4.PSE is 0 */
+		if (pte & PG_PS)
+			break;
+
+		if (level > 1) {
+			pt_paddr = pte & PG_FRAME;
+			shift -= shift_width;
+			mask = mask >> shift_width;
+		}
+	}
+
+	low_mask = (1 << shift) - 1;
+	high_mask = (((uint64_t)1ULL << ((pte_size * 8) - 1)) - 1) ^ low_mask;
+	*pa = (pte & high_mask) | (va & low_mask);
+
+	DPRINTF("%s: final GPA for GVA 0x%llx = 0x%llx\n", __func__,
+	    va, *pa);
+
+	return (0);
+}
+
 
 /*
  * vcpu_run_vmx
@@ -4033,6 +4264,7 @@ vcpu_run_vmx(struct vcpu *vcpu, struct vm_run_params *vrp)
 	}
 
 	while (ret == 0) {
+		vmm_update_pvclock(vcpu);
 		if (!resume) {
 			/*
 			 * We are launching for the first time, or we are
@@ -4352,6 +4584,7 @@ vcpu_run_vmx(struct vcpu *vcpu, struct vm_run_params *vrp)
 	/* Copy the VCPU register state to the exit structure */
 	if (vcpu_readregs_vmx(vcpu, VM_RWREGS_ALL, &vcpu->vc_exit.vrs))
 		ret = EINVAL;
+	vcpu->vc_exit.cpl = vmm_get_guest_cpu_cpl(vcpu);
 	/*
 	 * We are heading back to userspace (vmd), either because we need help
 	 * handling an exit, a guest interrupt is pending, or we failed in some
@@ -4568,6 +4801,16 @@ svm_handle_exit(struct vcpu *vcpu)
 	case SVM_VMEXIT_MWAIT:
 	case SVM_VMEXIT_MWAIT_CONDITIONAL:
 	case SVM_VMEXIT_MONITOR:
+	case SVM_VMEXIT_VMRUN:
+	case SVM_VMEXIT_VMMCALL:
+	case SVM_VMEXIT_VMLOAD:
+	case SVM_VMEXIT_VMSAVE:
+	case SVM_VMEXIT_STGI:
+	case SVM_VMEXIT_CLGI:
+	case SVM_VMEXIT_SKINIT:
+	case SVM_VMEXIT_RDTSCP:
+	case SVM_VMEXIT_ICEBP:
+	case SVM_VMEXIT_INVLPGA:
 		ret = vmm_inject_ud(vcpu);
 		update_rip = 0;
 		break;
@@ -4747,7 +4990,7 @@ vmm_inject_gp(struct vcpu *vcpu)
 	DPRINTF("%s: injecting #GP at guest %%rip 0x%llx\n", __func__,
 	    vcpu->vc_gueststate.vg_rip);
 	vcpu->vc_event = VMM_EX_GP;
-	
+
 	return (0);
 }
 
@@ -4768,7 +5011,7 @@ vmm_inject_ud(struct vcpu *vcpu)
 	DPRINTF("%s: injecting #UD at guest %%rip 0x%llx\n", __func__,
 	    vcpu->vc_gueststate.vg_rip);
 	vcpu->vc_event = VMM_EX_UD;
-	
+
 	return (0);
 }
 
@@ -4789,7 +5032,7 @@ vmm_inject_db(struct vcpu *vcpu)
 	DPRINTF("%s: injecting #DB at guest %%rip 0x%llx\n", __func__,
 	    vcpu->vc_gueststate.vg_rip);
 	vcpu->vc_event = VMM_EX_DB;
-	
+
 	return (0);
 }
 
@@ -4938,7 +5181,7 @@ svm_handle_np_fault(struct vcpu *vcpu)
 
 	ret = 0;
 
-	gpa = vmcb->v_exitinfo2;		
+	gpa = vmcb->v_exitinfo2;
 
 	gpa_memtype = vmm_get_guest_memtype(vcpu->vc_parent, gpa);
 	switch (gpa_memtype) {
@@ -5054,7 +5297,7 @@ vmm_get_guest_cpu_cpl(struct vcpu *vcpu)
 		return ((ss_ar & 0x60) >> 5);
 	} else
 		return (-1);
-}			
+}
 
 /*
  * vmm_get_guest_cpu_mode
@@ -5212,7 +5455,7 @@ svm_handle_inout(struct vcpu *vcpu)
 				vcpu->vc_gueststate.vg_rax |= 0xFFFFFFFF;
 				vmcb->v_rax |= 0xFFFFFFFF;
 				break;
-			}	
+			}
 		}
 		ret = 0;
 	}
@@ -5415,7 +5658,7 @@ exit:
  * Return values:
  *  0: if succesful
  *  EINVAL: if an error occurred
- */ 
+ */
 int
 vmx_handle_cr0_write(struct vcpu *vcpu, uint64_t r)
 {
@@ -5530,7 +5773,7 @@ vmx_handle_cr0_write(struct vcpu *vcpu, uint64_t r)
  * Return values:
  *  0: if succesful
  *  EINVAL: if an error occurred
- */ 
+ */
 int
 vmx_handle_cr4_write(struct vcpu *vcpu, uint64_t r)
 {
@@ -5581,7 +5824,7 @@ vmx_handle_cr(struct vcpu *vcpu)
 {
 	uint64_t insn_length, exit_qual, r;
 	uint8_t crnum, dir, reg;
-	
+
 	if (vmread(VMCS_INSTRUCTION_LENGTH, &insn_length)) {
 		printf("%s: can't obtain instruction length\n", __func__);
 		return (EINVAL);
@@ -5636,7 +5879,7 @@ vmx_handle_cr(struct vcpu *vcpu)
 
 		if (crnum == 0)
 			vmx_handle_cr0_write(vcpu, r);
-			
+
 		if (crnum == 4)
 			vmx_handle_cr4_write(vcpu, r);
 
@@ -5856,10 +6099,10 @@ vmx_handle_misc_enable_msr(struct vcpu *vcpu)
 	/* Filter out guest writes to TCC, EIST, and xTPR */
 	*rax &= ~(MISC_ENABLE_TCC | MISC_ENABLE_EIST_ENABLED |
 	    MISC_ENABLE_xTPR_MESSAGE_DISABLE);
-	
+
 	msr_store[VCPU_REGS_MISC_ENABLE].vms_data = *rax | (*rdx << 32);
 }
-	
+
 /*
  * vmx_handle_wrmsr
  *
@@ -5897,26 +6140,30 @@ vmx_handle_wrmsr(struct vcpu *vcpu)
 	rdx = &vcpu->vc_gueststate.vg_rdx;
 
 	switch (*rcx) {
-		case MSR_MISC_ENABLE:
-			vmx_handle_misc_enable_msr(vcpu);
-			break;
-		case MSR_SMM_MONITOR_CTL:
-			/*
-			 * 34.15.5 - Enabling dual monitor treatment
-			 *
-			 * Unsupported, so inject #GP and return without
-			 * advancing %rip.
-			 */
-			ret = vmm_inject_gp(vcpu);
-			return (ret);
+	case MSR_MISC_ENABLE:
+		vmx_handle_misc_enable_msr(vcpu);
+		break;
+	case MSR_SMM_MONITOR_CTL:
+		/*
+		 * 34.15.5 - Enabling dual monitor treatment
+		 *
+		 * Unsupported, so inject #GP and return without
+		 * advancing %rip.
+		 */
+		ret = vmm_inject_gp(vcpu);
+		return (ret);
+	case KVM_MSR_SYSTEM_TIME:
+		vmm_init_pvclock(vcpu,
+		    (*rax & 0xFFFFFFFFULL) | (*rdx  << 32));
+		break;
 #ifdef VMM_DEBUG
-		default:
-			/*
-			 * Log the access, to be able to identify unknown MSRs
-			 */
-			DPRINTF("%s: wrmsr exit, msr=0x%llx, discarding data "
-			    "written from guest=0x%llx:0x%llx\n", __func__,
-			    *rcx, *rdx, *rax);
+	default:
+		/*
+		 * Log the access, to be able to identify unknown MSRs
+		 */
+		DPRINTF("%s: wrmsr exit, msr=0x%llx, discarding data "
+		    "written from guest=0x%llx:0x%llx\n", __func__,
+		    *rcx, *rdx, *rax);
 #endif /* VMM_DEBUG */
 	}
 
@@ -5954,6 +6201,9 @@ svm_handle_msr(struct vcpu *vcpu)
 	if (vmcb->v_exitinfo1 == 1) {
 		if (*rcx == MSR_EFER) {
 			vmcb->v_efer = *rax | EFER_SVME;
+		} else if (*rcx == KVM_MSR_SYSTEM_TIME) {
+			vmm_init_pvclock(vcpu,
+			    (*rax & 0xFFFFFFFFULL) | (*rdx  << 32));
 		} else {
 #ifdef VMM_DEBUG
 			/* Log the access, to be able to identify unknown MSRs */
@@ -6152,7 +6402,7 @@ vmm_handle_cpuid(struct vcpu *vcpu)
 			*rax = 0;	/* Highest subleaf supported */
 			*rbx = curcpu()->ci_feature_sefflags_ebx & VMM_SEFF0EBX_MASK;
 			*rcx = curcpu()->ci_feature_sefflags_ecx & VMM_SEFF0ECX_MASK;
-			*rdx = 0;
+			*rdx = curcpu()->ci_feature_sefflags_edx & VMM_SEFF0EDX_MASK;
 		} else {
 			/* Unsupported subleaf */
 			DPRINTF("%s: function 0x07 (SEFF) unsupported subleaf "
@@ -6237,19 +6487,24 @@ vmm_handle_cpuid(struct vcpu *vcpu)
 			*rdx = 0;
 		}
 		break;
-	case 0x16:	/* Processor frequency info (not supported) */
-		DPRINTF("%s: function 0x16 (frequency info) not supported\n",
-		    __func__);
-		*rax = 0;
-		*rbx = 0;
-		*rcx = 0;
-		*rdx = 0;
+	case 0x16:	/* Processor frequency info */
+		*rax = eax;
+		*rbx = ebx;
+		*rcx = ecx;
+		*rdx = edx;
 		break;
 	case 0x40000000:	/* Hypervisor information */
 		*rax = 0;
 		*rbx = *((uint32_t *)&vmm_hv_signature[0]);
 		*rcx = *((uint32_t *)&vmm_hv_signature[4]);
 		*rdx = *((uint32_t *)&vmm_hv_signature[8]);
+		break;
+	case 0x40000001:	/* KVM hypervisor features */
+		*rax = (1 << KVM_FEATURE_CLOCKSOURCE2) |
+		    (1 << KVM_FEATURE_CLOCKSOURCE_STABLE_BIT);
+		*rbx = 0;
+		*rcx = 0;
+		*rdx = 0;
 		break;
 	case 0x80000000:	/* Extended function level */
 		*rax = 0x80000008; /* curcpu()->ci_pnfeatset */
@@ -6369,6 +6624,7 @@ vcpu_run_svm(struct vcpu *vcpu, struct vm_run_params *vrp)
 	}
 
 	while (ret == 0) {
+		vmm_update_pvclock(vcpu);
 		if (!resume) {
 			/*
 			 * We are launching for the first time, or we are
@@ -6406,7 +6662,7 @@ vcpu_run_svm(struct vcpu *vcpu, struct vm_run_params *vrp)
 		if (irq != 0xFFFF && vcpu->vc_irqready) {
 			vmcb->v_eventinj = (irq & 0xFF) | (1 << 31);
 			irq = 0xFFFF;
-		} 
+		}
 
 		/* Inject event if present */
 		if (vcpu->vc_event != 0) {
@@ -6471,7 +6727,7 @@ vcpu_run_svm(struct vcpu *vcpu, struct vm_run_params *vrp)
 		if (ret == 0) {
 			exit_reason = vmcb->v_exitcode;
 			vcpu->vc_gueststate.vg_exit_reason = exit_reason;
-		}	
+		}
 
 		/* If we exited successfully ... */
 		if (ret == 0) {
@@ -6559,7 +6815,7 @@ vmm_alloc_vpid(uint16_t *vpid)
 	uint8_t idx, bit;
 	struct vmm_softc *sc = vmm_softc;
 
-	rw_enter_write(&vmm_softc->vpid_lock);	
+	rw_enter_write(&vmm_softc->vpid_lock);
 	for (i = 1; i <= sc->max_vpid; i++) {
 		idx = i / 8;
 		bit = i - (idx * 8);
@@ -6569,7 +6825,7 @@ vmm_alloc_vpid(uint16_t *vpid)
 			*vpid = i;
 			DPRINTF("%s: allocated VPID/ASID %d\n", __func__,
 			    i);
-			rw_exit_write(&vmm_softc->vpid_lock);	
+			rw_exit_write(&vmm_softc->vpid_lock);
 			return 0;
 		}
 	}
@@ -6578,7 +6834,7 @@ vmm_alloc_vpid(uint16_t *vpid)
 	    (sc->mode == VMM_MODE_EPT || sc->mode == VMM_MODE_VMX) ? "VPID" :
 	    "ASID");
 
-	rw_exit_write(&vmm_softc->vpid_lock);	
+	rw_exit_write(&vmm_softc->vpid_lock);
 	return ENOMEM;
 }
 
@@ -6603,6 +6859,48 @@ vmm_free_vpid(uint16_t vpid)
 
 	DPRINTF("%s: freed VPID/ASID %d\n", __func__, vpid);
 	rw_exit_write(&vmm_softc->vpid_lock);
+}
+
+void
+vmm_init_pvclock(struct vcpu *vcpu, paddr_t gpa)
+{
+	vcpu->vc_pvclock_system_gpa = gpa;
+	vcpu->vc_pvclock_system_tsc_mul =
+	    (int) ((1000000000L << 20) / tc_getfrequency());
+	vmm_update_pvclock(vcpu);
+}
+
+int
+vmm_update_pvclock(struct vcpu *vcpu)
+{
+	struct pvclock_time_info *pvclock_ti;
+	struct timespec tv;
+	struct vm *vm = vcpu->vc_parent;
+	paddr_t pvclock_hpa, pvclock_gpa;
+
+	if (vcpu->vc_pvclock_system_gpa & PVCLOCK_SYSTEM_TIME_ENABLE) {
+		pvclock_gpa = vcpu->vc_pvclock_system_gpa & 0xFFFFFFFFFFFFFFF0;
+		if (!pmap_extract(vm->vm_map->pmap, pvclock_gpa, &pvclock_hpa))
+			return (EINVAL);
+		pvclock_ti = (void*) PMAP_DIRECT_MAP(pvclock_hpa);
+
+		/* START next cycle (must be odd) */
+		pvclock_ti->ti_version =
+		    (++vcpu->vc_pvclock_version << 1) | 0x1;
+
+		pvclock_ti->ti_tsc_timestamp = rdtsc();
+		nanotime(&tv);
+		pvclock_ti->ti_system_time =
+		    tv.tv_sec * 1000000000L + tv.tv_nsec;
+		pvclock_ti->ti_tsc_shift = -20;
+		pvclock_ti->ti_tsc_to_system_mul =
+		    vcpu->vc_pvclock_system_tsc_mul;
+		pvclock_ti->ti_flags = PVCLOCK_FLAG_TSC_STABLE;
+
+		/* END (must be even) */
+		pvclock_ti->ti_version &= ~0x1;
+	}
+	return (0);
 }
 
 /*
@@ -7054,10 +7352,10 @@ vmx_dump_vmcs(struct vcpu *vcpu)
 	    curcpu()->ci_vmm_cap.vcc_vmx.vmx_cr4_fixed1);
 	DPRINTF("MSR table size: 0x%x\n",
 	    512 * (curcpu()->ci_vmm_cap.vcc_vmx.vmx_msr_table_size + 1));
-	
+
 	has_sec = vcpu_vmx_check_cap(vcpu, IA32_VMX_PROCBASED_CTLS,
 	    IA32_VMX_ACTIVATE_SECONDARY_CONTROLS, 1);
-	
+
 	if (has_sec) {
 		if (vcpu_vmx_check_cap(vcpu, IA32_VMX_PROCBASED2_CTLS,
 		    IA32_VMX_ENABLE_VPID, 1)) {
@@ -7385,7 +7683,7 @@ vmx_dump_vmcs(struct vcpu *vcpu)
 	vmx_dump_vmcs_field(VMCS_INSTRUCTION_LENGTH, "Insn Len");
 	vmx_dump_vmcs_field(VMCS_EXIT_INSTRUCTION_INFO, "Exit Insn Info");
 	DPRINTF("\n");
-	
+
 	vmx_dump_vmcs_field(VMCS_GUEST_IA32_ES_LIMIT, "G. ES Lim");
 	vmx_dump_vmcs_field(VMCS_GUEST_IA32_CS_LIMIT, "G. CS Lim");
 	DPRINTF("\n");
@@ -7646,7 +7944,7 @@ vmx_vcpu_dump_regs(struct vcpu *vcpu)
 	else {
 		DPRINTF("0x%04llx\n  ", r);
 		vmm_segment_desc_decode(r);
-	}	
+	}
 
 	DPRINTF(" ds=");
 	if (vmread(VMCS_GUEST_IA32_DS_SEL, &r))
@@ -7672,7 +7970,7 @@ vmx_vcpu_dump_regs(struct vcpu *vcpu)
 	else {
 		DPRINTF("0x%04llx\n  ", r);
 		vmm_segment_desc_decode(r);
-	}	
+	}
 
 	DPRINTF(" es=");
 	if (vmread(VMCS_GUEST_IA32_ES_SEL, &r))
@@ -7698,7 +7996,7 @@ vmx_vcpu_dump_regs(struct vcpu *vcpu)
 	else {
 		DPRINTF("0x%04llx\n  ", r);
 		vmm_segment_desc_decode(r);
-	}	
+	}
 
 	DPRINTF(" fs=");
 	if (vmread(VMCS_GUEST_IA32_FS_SEL, &r))
@@ -7750,7 +8048,7 @@ vmx_vcpu_dump_regs(struct vcpu *vcpu)
 	else {
 		DPRINTF("0x%04llx\n  ", r);
 		vmm_segment_desc_decode(r);
-	}	
+	}
 
 	DPRINTF(" ss=");
 	if (vmread(VMCS_GUEST_IA32_SS_SEL, &r))
@@ -7776,7 +8074,7 @@ vmx_vcpu_dump_regs(struct vcpu *vcpu)
 	else {
 		DPRINTF("0x%04llx\n  ", r);
 		vmm_segment_desc_decode(r);
-	}	
+	}
 
 	DPRINTF(" tr=");
 	if (vmread(VMCS_GUEST_IA32_TR_SEL, &r))
@@ -7802,8 +8100,8 @@ vmx_vcpu_dump_regs(struct vcpu *vcpu)
 	else {
 		DPRINTF("0x%04llx\n  ", r);
 		vmm_segment_desc_decode(r);
-	}	
-		
+	}
+
 	DPRINTF(" gdtr base=");
 	if (vmread(VMCS_GUEST_IA32_GDTR_BASE, &r))
 		DPRINTF("(error reading)   ");
@@ -7827,7 +8125,7 @@ vmx_vcpu_dump_regs(struct vcpu *vcpu)
 		DPRINTF("(error reading)\n");
 	else
 		DPRINTF("0x%016llx\n", r);
-	
+
 	DPRINTF(" ldtr=");
 	if (vmread(VMCS_GUEST_IA32_LDTR_SEL, &r))
 		DPRINTF("(error reading)");
@@ -7852,7 +8150,7 @@ vmx_vcpu_dump_regs(struct vcpu *vcpu)
 	else {
 		DPRINTF("0x%04llx\n  ", r);
 		vmm_segment_desc_decode(r);
-	}	
+	}
 
 	DPRINTF(" --Guest MSRs @ 0x%016llx (paddr: 0x%016llx)--\n",
 	    (uint64_t)vcpu->vc_vmx_msr_exit_save_va,
@@ -7865,7 +8163,7 @@ vmx_vcpu_dump_regs(struct vcpu *vcpu)
 		    "value=0x%016llx ",
 		    i, &msr_store[i], msr_store[i].vms_index,
 		    msr_name_decode(msr_store[i].vms_index),
-		    msr_store[i].vms_data); 
+		    msr_store[i].vms_data);
 		vmm_decode_msr_value(msr_store[i].vms_index,
 		    msr_store[i].vms_data);
 	}
@@ -8020,7 +8318,7 @@ vmm_decode_cr0(uint64_t cr0)
 			DPRINTF("%s", cr0_info[i].vrdi_present);
 		else
 			DPRINTF("%s", cr0_info[i].vrdi_absent);
-	
+
 	DPRINTF(")\n");
 }
 
@@ -8088,7 +8386,7 @@ vmm_decode_cr4(uint64_t cr4)
 			DPRINTF("%s", cr4_info[i].vrdi_present);
 		else
 			DPRINTF("%s", cr4_info[i].vrdi_absent);
-	
+
 	DPRINTF(")\n");
 }
 
@@ -8109,7 +8407,7 @@ vmm_decode_apicbase_msr_value(uint64_t apicbase)
 			DPRINTF("%s", apicbase_info[i].vrdi_present);
 		else
 			DPRINTF("%s", apicbase_info[i].vrdi_absent);
-	
+
 	DPRINTF(")\n");
 }
 

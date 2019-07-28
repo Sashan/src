@@ -1,4 +1,4 @@
-#	$OpenBSD: files.usb,v 1.137 2019/03/27 22:08:51 kettenis Exp $
+#	$OpenBSD: files.usb,v 1.140 2019/07/09 05:43:03 kevlo Exp $
 #	$NetBSD: files.usb,v 1.16 2000/02/14 20:29:54 augustss Exp $
 #
 # Config file and device description for machine-independent USB code.
@@ -276,12 +276,12 @@ attach	ugl at uhub
 file	dev/usb/if_ugl.c		ugl
 
 # Realtek RTL8150L(M)
-device	url: ether, ifnet, mii
+device	url: ether, ifnet, mii, ifmedia
 attach	url at uhub
 file	dev/usb/if_url.c		url
 
 # Realtek RTL8152
-device	ure: ether, ifnet, mii
+device	ure: ether, ifnet, mii, ifmedia
 attach	ure at uhub
 file	dev/usb/if_ure.c		ure
 
@@ -317,6 +317,11 @@ device	ubsa: ucombus
 attach	ubsa at uhub
 file	dev/usb/ubsa.c			ubsa
 
+# Keyspan USA19HS serial
+device	ukspan: ucombus
+attach	ukspan at uhub
+file	dev/usb/ukspan.c		ukspan
+
 # Silicon Laboratories CP210x serial
 device	uslcom: ucombus
 attach	uslcom at uhub
@@ -341,6 +346,11 @@ file	dev/usb/umcs.c			umcs
 device	uscom: ucombus
 attach	uscom at uhub
 file	dev/usb/uscom.c			uscom
+
+# Chromebook serial
+device	ucrcom: ucombus
+attach	ucrcom at uhub
+file	dev/usb/ucrcom.c		ucrcom
 
 # Exar XR21V1410
 device	uxrcom: ucombus

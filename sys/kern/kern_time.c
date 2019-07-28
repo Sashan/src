@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_time.c,v 1.114 2019/03/26 16:43:56 cheloha Exp $	*/
+/*	$OpenBSD: kern_time.c,v 1.121 2019/07/25 15:13:52 cheloha Exp $	*/
 /*	$NetBSD: kern_time.c,v 1.20 1996/02/18 11:57:06 fvdl Exp $	*/
 
 /*
@@ -96,7 +96,9 @@ settime(const struct timespec *ts)
 	}
 
 	tc_setrealtimeclock(ts);
+	KERNEL_LOCK();
 	resettodr();
+	KERNEL_UNLOCK();
 
 	return (0);
 }
@@ -114,8 +116,8 @@ clock_gettime(struct proc *p, clockid_t clock_id, struct timespec *tp)
 		break;
 	case CLOCK_UPTIME:
 		binuptime(&bt);
-		bintime_sub(&bt, &naptime);
-		bintime2timespec(&bt, tp);
+		bintimesub(&bt, &naptime, &bt);
+		BINTIME_TO_TIMESPEC(&bt, tp);
 		break;
 	case CLOCK_MONOTONIC:
 	case CLOCK_BOOTTIME:
@@ -387,7 +389,7 @@ sys_adjfreq(struct proc *p, void *v, register_t *retval)
 		syscallarg(const int64_t *) freq;
 		syscallarg(int64_t *) oldfreq;
 	} */ *uap = v;
-	int error;
+	int error = 0;
 	int64_t f;
 	const int64_t *freq = SCARG(uap, freq);
 	int64_t *oldfreq = SCARG(uap, oldfreq);
@@ -637,20 +639,6 @@ realitexpire(void *arg)
 }
 
 /*
- * Check that a timespec value is legit
- */
-int
-timespecfix(struct timespec *ts)
-{
-	if (ts->tv_sec < 0 ||
-	    ts->tv_nsec < 0 || ts->tv_nsec >= 1000000000)
-		return (EINVAL);
-	if (ts->tv_sec > 100000000)
-		ts->tv_sec = 100000000;
-	return (0);
-}
-
-/*
  * Check that a proposed value to load into the .it_value or
  * .it_interval part of an interval timer is acceptable.
  */
@@ -680,45 +668,32 @@ itimerround(struct timeval *tv)
 }
 
 /*
- * Decrement an interval timer by a specified number
- * of microseconds, which must be less than a second,
- * i.e. < 1000000.  If the timer expires, then reload
- * it.  In this case, carry over (usec - old value) to
- * reduce the value reloaded into the timer so that
- * the timer does not drift.  This routine assumes
- * that it is called in a context where the timers
- * on which it is operating cannot change in value.
+ * Decrement an interval timer by the given number of microseconds.
+ * If the timer expires and it is periodic then reload it.  When reloading
+ * the timer we subtract any overrun from the next period so that the timer
+ * does not drift.
  */
 int
 itimerdecr(struct itimerval *itp, int usec)
 {
+	struct timeval decrement;
+
+	decrement.tv_sec = usec / 1000000;
+	decrement.tv_usec = usec % 1000000;
+
 	mtx_enter(&itimer_mtx);
-	if (itp->it_value.tv_usec < usec) {
-		if (itp->it_value.tv_sec == 0) {
-			/* expired, and already in next interval */
-			usec -= itp->it_value.tv_usec;
-			goto expire;
-		}
-		itp->it_value.tv_usec += 1000000;
-		itp->it_value.tv_sec--;
-	}
-	itp->it_value.tv_usec -= usec;
-	usec = 0;
-	if (timerisset(&itp->it_value)) {
+	timersub(&itp->it_value, &decrement, &itp->it_value);
+	if (itp->it_value.tv_sec >= 0 && timerisset(&itp->it_value)) {
 		mtx_leave(&itimer_mtx);
 		return (1);
 	}
-	/* expired, exactly at end of interval */
-expire:
-	if (timerisset(&itp->it_interval)) {
-		itp->it_value = itp->it_interval;
-		itp->it_value.tv_usec -= usec;
-		if (itp->it_value.tv_usec < 0) {
-			itp->it_value.tv_usec += 1000000;
-			itp->it_value.tv_sec--;
-		}
-	} else
-		itp->it_value.tv_usec = 0;		/* sec is already 0 */
+	if (!timerisset(&itp->it_interval)) {
+		timerclear(&itp->it_value);
+		mtx_leave(&itimer_mtx);
+		return (0);
+	}
+	while (itp->it_value.tv_sec < 0 || !timerisset(&itp->it_value))
+		timeradd(&itp->it_value, &itp->it_interval, &itp->it_value);
 	mtx_leave(&itimer_mtx);
 	return (0);
 }

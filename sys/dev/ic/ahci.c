@@ -1,4 +1,4 @@
-/*	$OpenBSD: ahci.c,v 1.32 2017/08/21 21:43:46 jmatthew Exp $ */
+/*	$OpenBSD: ahci.c,v 1.34 2019/07/08 22:02:59 mlarkin Exp $ */
 
 /*
  * Copyright (c) 2006 David Gwynne <dlg@openbsd.org>
@@ -921,11 +921,6 @@ ahci_default_port_start(struct ahci_port *ap, int fre_only)
 		    ap->ap_sc->sc_ccc_ports_cur);
 	}
 #endif
-
-	/* Wait for CR to come on */
-	if (!fre_only &&
-	    ahci_pwait_set(ap, AHCI_PREG_CMD, AHCI_PREG_CMD_CR, 1))
-		return (1);
 
 	return (0);
 }
@@ -3150,11 +3145,9 @@ ahci_hibernate_io_poll(struct ahci_port *ap, struct ahci_ccb *ccb)
 	if (is & AHCI_PREG_IS_DHRS) {
 		u_int32_t tfd;
 		u_int32_t cmd;
-		u_int32_t serr;
 
 		tfd = ahci_pread(ap, AHCI_PREG_TFD);
 		cmd = ahci_pread(ap, AHCI_PREG_CMD);
-		serr = ahci_pread(ap, AHCI_PREG_SERR);
 		if ((tfd & AHCI_PREG_TFD_STS_ERR) &&
 		    (cmd & AHCI_PREG_CMD_CR) == 0) {
 			process_error = 1;
@@ -3191,7 +3184,7 @@ void
 ahci_hibernate_load_prdt(struct ahci_ccb *ccb)
 {
 	struct ata_xfer			*xa = &ccb->ccb_xa;
-	struct ahci_prdt		*prdt = ccb->ccb_cmd_table->prdt, *prd;
+	struct ahci_prdt		*prdt = ccb->ccb_cmd_table->prdt;
 	struct ahci_cmd_hdr		*cmd_slot = ccb->ccb_cmd_hdr;
 	int				i;
 	paddr_t				data_phys;
@@ -3212,8 +3205,6 @@ ahci_hibernate_load_prdt(struct ahci_ccb *ccb)
 	buflen = xa->datalen;
 	data_addr = (vaddr_t)xa->data;
 	for (i = 0; buflen > 0; i++) {
-		prd = &prdt[i];
-
 		pmap_extract(pmap_kernel(), data_addr, &data_phys);
 		data_bus_phys = data_phys;
 

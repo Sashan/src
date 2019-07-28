@@ -1,4 +1,4 @@
-/*	$OpenBSD: lock.c,v 1.41 2017/09/06 21:02:31 tb Exp $	*/
+/*	$OpenBSD: lock.c,v 1.46 2019/07/24 20:23:09 schwarze Exp $	*/
 /*	$NetBSD: lock.c,v 1.8 1996/05/07 18:32:31 jtc Exp $	*/
 
 /*
@@ -34,11 +34,8 @@
  */
 
 /*
- * Lock a terminal up until the given key is entered, until the root
- * password is entered, or the given interval times out.
- *
- * Timeout interval is by default TIMEOUT, it can be changed with
- * an argument of the form -time where time is in minutes
+ * Lock a terminal up until the given key or user password is entered,
+ * or the given interval times out.
  */
 
 #include <sys/stat.h>
@@ -59,12 +56,11 @@
 #include <login_cap.h>
 #include <bsd_auth.h>
 
-#define	TIMEOUT	15
-
 void bye(int);
 void hi(int);
+void usage(void);
 
-int	no_timeout;			/* lock terminal forever */
+int	no_timeout = 0;			/* lock terminal forever */
 
 int
 main(int argc, char *argv[])
@@ -81,10 +77,9 @@ main(int argc, char *argv[])
 	time_t curtime;
 	login_cap_t *lc;
 
-	sectimeout = TIMEOUT;
+	sectimeout = 0;
 	style = NULL;
 	usemine = 0;
-	no_timeout = 0;
 	memset(&timeout, 0, sizeof(timeout));
 
 	if (pledge("stdio rpath wpath getpw tty proc exec", NULL) == -1)
@@ -127,13 +122,11 @@ main(int argc, char *argv[])
 			no_timeout = 1;
 			break;
 		default:
-			fprintf(stderr,
-			    "usage: %s [-np] [-a style] [-t timeout]\n",
-			    getprogname());
-			exit(1);
+			usage();
 		}
 	}
-	timeout.tv_sec = sectimeout * 60;
+	if (sectimeout == 0)
+		no_timeout = 1;
 
 	gethostname(hostname, sizeof(hostname));
 	if (usemine && lc == NULL)
@@ -169,10 +162,12 @@ main(int argc, char *argv[])
 	signal(SIGTSTP, hi);
 	signal(SIGALRM, bye);
 
-	memset(&ntimer, 0, sizeof(ntimer));
-	ntimer.it_value = timeout;
-	if (!no_timeout)
+	if (!no_timeout) {
+		timeout.tv_sec = (time_t)sectimeout * 60;
+		memset(&ntimer, 0, sizeof(ntimer));
+		ntimer.it_value = timeout;
 		setitimer(ITIMER_REAL, &ntimer, &otimer);
+	}
 
 	/* header info */
 	if (no_timeout) {
@@ -251,4 +246,12 @@ bye(int signo)
 	if (!no_timeout)
 		warnx("timeout");
 	_exit(1);
+}
+
+void
+usage(void)
+{
+	fprintf(stderr, "usage: %s [-np] [-a style] [-t timeout]\n",
+	    getprogname());
+	exit(1);
 }
