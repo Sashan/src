@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.33 2016/09/16 17:17:40 tedu Exp $
+# $OpenBSD: Makefile,v 1.35 2019/07/18 05:57:48 lum Exp $
 
 PROG=	mg
 
@@ -9,6 +9,7 @@ DPADD+=	${LIBCURSES} ${LIBUTIL}
 #
 #	REGEX		-- create regular expression functions.
 #	STARTUPFILE	-- look for and handle initialization file.
+#	MGLOG		-- debug mg internals to a log file.
 #
 CFLAGS+=-Wall -DREGEX
 
@@ -21,7 +22,12 @@ SRCS=	autoexec.c basic.c bell.c buffer.c cinfo.c dir.c display.c \
 #
 # More or less standalone extensions.
 #
-SRCS+=	cmode.c cscope.c dired.c grep.c tags.c
+SRCS+=	cmode.c cscope.c dired.c grep.c interpreter.c tags.c
+
+#
+# -DMGLOG source file.
+#
+#SRCS+=	log.c
 
 afterinstall:
 	${INSTALL} -d -o root -g wheel ${DESTDIR}${DOCDIR}/mg

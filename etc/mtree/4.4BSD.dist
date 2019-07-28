@@ -1,4 +1,4 @@
-#	$OpenBSD: 4.4BSD.dist,v 1.310 2019/05/11 07:18:15 deraadt Exp $
+#	$OpenBSD: 4.4BSD.dist,v 1.312 2019/07/27 14:10:21 deraadt Exp $
 
 /set type=dir uname=root gname=wheel mode=0755
 
@@ -89,6 +89,8 @@ etc
     ppp
     ..
     rc.d
+    ..
+    rpki
     ..
     skel
         .ssh			uname=root mode=0700
@@ -514,6 +516,8 @@ usr
 
             # ./usr/share/man/man5
             man5
+                sparc64
+                ..
             ..
             man6
             ..

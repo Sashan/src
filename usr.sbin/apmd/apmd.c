@@ -1,4 +1,4 @@
-/*	$OpenBSD: apmd.c,v 1.84 2018/12/04 18:00:57 tedu Exp $	*/
+/*	$OpenBSD: apmd.c,v 1.88 2019/07/25 07:29:44 kn Exp $	*/
 
 /*
  *  Copyright (c) 1995, 1996 John T. Kohl
@@ -56,9 +56,6 @@
 
 #define AUTO_SUSPEND 1
 #define AUTO_HIBERNATE 2
-
-const char apmdev[] = _PATH_APM_CTLDEV;
-const char sockfile[] = _PATH_APM_SOCKET;
 
 int debug = 0;
 
@@ -204,7 +201,7 @@ power_status(int fd, int force, struct apm_power_info *pinfo)
 		if (pinfo)
 			*pinfo = bstate;
 	} else
-		logmsg(LOG_ERR, "cannot fetch power status: %m");
+		logmsg(LOG_ERR, "cannot fetch power status: %s", strerror(errno));
 
 	return acon;
 }
@@ -316,7 +313,7 @@ handle_client(int sock_fd, int ctl_fd)
 		break;
 	}
 
-	if (sysctl(cpuspeed_mib, 2, &cpuspeed, &cpuspeed_sz, NULL, 0) < 0)
+	if (sysctl(cpuspeed_mib, 2, &cpuspeed, &cpuspeed_sz, NULL, 0) == -1)
 		logmsg(LOG_INFO, "cannot read hw.cpuspeed");
 
 	reply.cpuspeed = cpuspeed;
@@ -375,7 +372,7 @@ resumed(int ctl_fd)
 int
 main(int argc, char *argv[])
 {
-	const char *fname = apmdev;
+	const char *fname = _PATH_APM_CTLDEV;
 	int ctl_fd, sock_fd, ch, suspends, standbys, hibernates, resumes;
 	int autoaction = 0;
 	int autolimit = 0;
@@ -385,7 +382,7 @@ main(int argc, char *argv[])
 	struct timespec ts = {TIMO, 0}, sts = {0, 0};
 	struct apm_power_info pinfo;
 	time_t apmtimeout = 0;
-	const char *sockname = sockfile;
+	const char *sockname = _PATH_APM_SOCKET;
 	const char *errstr;
 	int kq, nchanges;
 	struct kevent ev[2];
@@ -464,7 +461,7 @@ main(int argc, char *argv[])
 		doperf = PERF_MANUAL;
 
 	if (debug == 0) {
-		if (daemon(0, 0) < 0)
+		if (daemon(0, 0) == -1)
 			error("failed to daemonize", NULL);
 		openlog(__progname, LOG_CONS, LOG_DAEMON);
 		setlogmask(LOG_UPTO(LOG_NOTICE));
@@ -501,10 +498,10 @@ main(int argc, char *argv[])
 		    EV_CLEAR, 0, 0, NULL);
 		nchanges = 2;
 	}
-	if (kevent(kq, ev, nchanges, NULL, 0, &sts) < 0)
+	if (kevent(kq, ev, nchanges, NULL, 0, &sts) == -1)
 		error("kevent", NULL);
 
-	if (sysctl(ncpu_mib, 2, &ncpu, &ncpu_sz, NULL, 0) < 0)
+	if (sysctl(ncpu_mib, 2, &ncpu, &ncpu_sz, NULL, 0) == -1)
 		error("cannot read hw.ncpu", NULL);
 
 	for (;;) {
@@ -513,7 +510,7 @@ main(int argc, char *argv[])
 		sts = ts;
 
 		apmtimeout += 1;
-		if ((rv = kevent(kq, NULL, 0, ev, 1, &sts)) < 0)
+		if ((rv = kevent(kq, NULL, 0, ev, 1, &sts)) == -1)
 			break;
 
 		if (apmtimeout >= ts.tv_sec) {
@@ -645,7 +642,8 @@ setperfpolicy(char *policy)
 		setlo = 1;
 	}
 
-	if (sysctl(hw_perfpol_mib, 2, oldpolicy, &oldsz, policy, strlen(policy) + 1) < 0)
+	if (sysctl(hw_perfpol_mib, 2, oldpolicy, &oldsz,
+	    policy, strlen(policy) + 1) == -1)
 		logmsg(LOG_INFO, "cannot set hw.perfpolicy");
 
 	if (setlo == 1) {
@@ -653,7 +651,7 @@ setperfpolicy(char *policy)
 		int perf;
 		int new_perf = 0;
 		size_t perf_sz = sizeof(perf);
-		if (sysctl(hw_perf_mib, 2, &perf, &perf_sz, &new_perf, perf_sz) < 0)
+		if (sysctl(hw_perf_mib, 2, &perf, &perf_sz, &new_perf, perf_sz) == -1)
 			logmsg(LOG_INFO, "cannot set hw.setperf");
 	}
 }
@@ -685,7 +683,7 @@ do_etc_file(const char *file)
 	case 0:
 		/* We are the child. */
 		execl(file, prog, (char *)NULL);
-		logmsg(LOG_ERR, "failed to exec %s: %m", file, strerror(errno));
+		logmsg(LOG_ERR, "failed to exec %s: %s", file, strerror(errno));
 		_exit(1);
 		/* NOTREACHED */
 	default:

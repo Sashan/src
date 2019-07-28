@@ -1,4 +1,4 @@
-/* $OpenBSD: dwiic_acpi.c,v 1.8 2018/07/01 11:37:11 kettenis Exp $ */
+/* $OpenBSD: dwiic_acpi.c,v 1.10 2019/07/22 14:37:06 jcs Exp $ */
 /*
  * Synopsys DesignWare I2C controller
  *
@@ -143,11 +143,6 @@ dwiic_acpi_attach(struct device *parent, struct device *self, void *aux)
 	dwiic_acpi_power(sc, 1);
 
 	/* fetch timing parameters */
-	sc->ss_hcnt = dwiic_read(sc, DW_IC_SS_SCL_HCNT);
-	sc->ss_lcnt = dwiic_read(sc, DW_IC_SS_SCL_LCNT);
-	sc->fs_hcnt = dwiic_read(sc, DW_IC_FS_SCL_HCNT);
-	sc->fs_lcnt = dwiic_read(sc, DW_IC_FS_SCL_LCNT);
-	sc->sda_hold_time = dwiic_read(sc, DW_IC_SDA_HOLD);
 	dwiic_acpi_get_params(sc, "SSCN", &sc->ss_hcnt, &sc->ss_lcnt, NULL);
 	dwiic_acpi_get_params(sc, "FMCN", &sc->fs_hcnt, &sc->fs_lcnt,
 	    &sc->sda_hold_time);
@@ -462,8 +457,9 @@ dwiic_acpi_found_ihidev(struct dwiic_softc *sc, struct aml_node *node,
 
 	aml_freevalue(&res);
 
-	if (!sc->sc_poll_ihidev &&
-	    !(crs.irq_int == 0 && crs.gpio_int_node == NULL))
+	if (sc->sc_poll_ihidev)
+		ia.ia_poll = 1;
+	if (!(crs.irq_int == 0 && crs.gpio_int_node == NULL))
 		ia.ia_intr = &crs;
 
 	if (config_found(sc->sc_iic, &ia, dwiic_i2c_print)) {

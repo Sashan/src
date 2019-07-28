@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.c,v 1.583 2019/05/12 16:38:02 sashan Exp $	*/
+/*	$OpenBSD: if.c,v 1.586 2019/06/30 23:02:28 dlg Exp $	*/
 /*	$NetBSD: if.c,v 1.35 1996/05/07 05:26:04 thorpej Exp $	*/
 
 /*
@@ -469,8 +469,7 @@ if_alloc_sadl(struct ifnet *ifp)
 	 * now.  This is useful for interfaces that can change
 	 * link types, and thus switch link names often.
 	 */
-	if (ifp->if_sadl != NULL)
-		if_free_sadl(ifp);
+	if_free_sadl(ifp);
 
 	namelen = strlen(ifp->if_xname);
 	masklen = offsetof(struct sockaddr_dl, sdl_data[0]) + namelen;
@@ -498,7 +497,10 @@ if_alloc_sadl(struct ifnet *ifp)
 void
 if_free_sadl(struct ifnet *ifp)
 {
-	free(ifp->if_sadl, M_IFADDR, 0);
+	if (ifp->if_sadl == NULL)
+		return;
+
+	free(ifp->if_sadl, M_IFADDR, ifp->if_sadl->sdl_len);
 	ifp->if_sadl = NULL;
 }
 
@@ -961,7 +963,7 @@ if_vinput(struct ifnet *ifp, struct mbuf *m)
 #if NBPFILTER > 0
 	if_bpf = ifp->if_bpf;
 	if (if_bpf) {
-		if (bpf_mtap_ether(if_bpf, m, BPF_DIRECTION_OUT)) {
+		if (bpf_mtap_ether(if_bpf, m, BPF_DIRECTION_IN)) {
 			m_freem(m);
 			return;
 		}
@@ -976,14 +978,14 @@ if_netisr(void *unused)
 {
 	int n, t = 0;
 
-	NET_LOCK();
+	NET_RLOCK();
 
 	while ((n = netisr) != 0) {
 		/* Like sched_pause() but with a rwlock dance. */
 		if (curcpu()->ci_schedstate.spc_schedflags & SPCF_SHOULDYIELD) {
-			NET_UNLOCK();
+			NET_RUNLOCK();
 			yield();
-			NET_LOCK();
+			NET_RLOCK();
 		}
 
 		atomic_clearbits_int(&netisr, n);
@@ -1044,7 +1046,7 @@ if_netisr(void *unused)
 	}
 #endif
 
-	NET_UNLOCK();
+	NET_RUNLOCK();
 }
 
 void
@@ -1134,9 +1136,9 @@ if_detach(struct ifnet *ifp)
 		}
 	}
 
-	free(ifp->if_addrhooks, M_TEMP, 0);
-	free(ifp->if_linkstatehooks, M_TEMP, 0);
-	free(ifp->if_detachhooks, M_TEMP, 0);
+	free(ifp->if_addrhooks, M_TEMP, sizeof(*ifp->if_addrhooks));
+	free(ifp->if_linkstatehooks, M_TEMP, sizeof(*ifp->if_linkstatehooks));
+	free(ifp->if_detachhooks, M_TEMP, sizeof(*ifp->if_detachhooks));
 
 	for (i = 0; (dp = domains[i]) != NULL; i++) {
 		if (dp->dom_ifdetach && ifp->if_afdata[dp->dom_family])

@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_subr.c,v 1.288 2019/04/19 09:41:07 visa Exp $	*/
+/*	$OpenBSD: vfs_subr.c,v 1.292 2019/07/25 01:43:21 cheloha Exp $	*/
 /*	$NetBSD: vfs_subr.c,v 1.53 1996/04/22 01:39:13 christos Exp $	*/
 
 /*
@@ -1011,7 +1011,7 @@ vclean(struct vnode *vp, int flags, struct proc *p)
 	 * Clean out any buffers associated with the vnode.
 	 */
 	if (flags & DOCLOSE)
-		vinvalbuf(vp, V_SAVE, NOCRED, p, 0, 0);
+		vinvalbuf(vp, V_SAVE, NOCRED, p, 0, INFSLP);
 	/*
 	 * If purging an active vnode, it must be closed and
 	 * deactivated before being reclaimed. Note that the
@@ -1624,6 +1624,7 @@ vnoperm(struct vnode *vp)
 }
 
 struct rwlock vfs_stall_lock = RWLOCK_INITIALIZER("vfs_stall");
+unsigned int vfs_stalling = 0;
 
 int
 vfs_stall(struct proc *p, int stall)
@@ -1631,8 +1632,10 @@ vfs_stall(struct proc *p, int stall)
 	struct mount *mp;
 	int allerror = 0, error;
 
-	if (stall)
+	if (stall) {
+		atomic_inc_int(&vfs_stalling);
 		rw_enter_write(&vfs_stall_lock);
+	}
 
 	/*
 	 * The loop variable mp is protected by vfs_busy() so that it cannot
@@ -1664,8 +1667,10 @@ vfs_stall(struct proc *p, int stall)
 		}
 	}
 
-	if (!stall)
+	if (!stall) {
 		rw_exit_write(&vfs_stall_lock);
+		atomic_dec_int(&vfs_stalling);
+	}
 
 	return (allerror);
 }
@@ -1673,8 +1678,10 @@ vfs_stall(struct proc *p, int stall)
 void
 vfs_stall_barrier(void)
 {
-	rw_enter_read(&vfs_stall_lock);
-	rw_exit_read(&vfs_stall_lock);
+	if (__predict_false(vfs_stalling)) {
+		rw_enter_read(&vfs_stall_lock);
+		rw_exit_read(&vfs_stall_lock);
+	}
 }
 
 /*
@@ -1851,7 +1858,7 @@ fs_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
  * Manipulates v_numoutput. Must be called at splbio()
  */
 int
-vwaitforio(struct vnode *vp, int slpflag, char *wmesg, int timeo)
+vwaitforio(struct vnode *vp, int slpflag, char *wmesg, uint64_t timeo)
 {
 	int error = 0;
 
@@ -1859,7 +1866,7 @@ vwaitforio(struct vnode *vp, int slpflag, char *wmesg, int timeo)
 
 	while (vp->v_numoutput) {
 		vp->v_bioflag |= VBIOWAIT;
-		error = tsleep(&vp->v_numoutput,
+		error = tsleep_nsec(&vp->v_numoutput,
 		    slpflag | (PRIBIO + 1), wmesg, timeo);
 		if (error)
 			break;
@@ -1894,7 +1901,7 @@ vwakeup(struct vnode *vp)
  */
 int
 vinvalbuf(struct vnode *vp, int flags, struct ucred *cred, struct proc *p,
-    int slpflag, int slptimeo)
+    int slpflag, uint64_t slptimeo)
 {
 	struct buf *bp;
 	struct buf *nbp, *blist;
@@ -1907,7 +1914,7 @@ vinvalbuf(struct vnode *vp, int flags, struct ucred *cred, struct proc *p,
 
 	if (flags & V_SAVE) {
 		s = splbio();
-		vwaitforio(vp, 0, "vinvalbuf", 0);
+		vwaitforio(vp, 0, "vinvalbuf", INFSLP);
 		if (!LIST_EMPTY(&vp->v_dirtyblkhd)) {
 			splx(s);
 			if ((error = VOP_FSYNC(vp, cred, MNT_WAIT, p)) != 0)
@@ -1922,6 +1929,7 @@ vinvalbuf(struct vnode *vp, int flags, struct ucred *cred, struct proc *p,
 loop:
 	s = splbio();
 	for (;;) {
+		int count = 0;
 		if ((blist = LIST_FIRST(&vp->v_cleanblkhd)) &&
 		    (flags & V_SAVEMETA))
 			while (blist && blist->b_lblkno < 0)
@@ -1940,7 +1948,7 @@ loop:
 				continue;
 			if (bp->b_flags & B_BUSY) {
 				bp->b_flags |= B_WANTED;
-				error = tsleep(bp, slpflag | (PRIBIO + 1),
+				error = tsleep_nsec(bp, slpflag | (PRIBIO + 1),
 				    "vinvalbuf", slptimeo);
 				if (error) {
 					splx(s);
@@ -1963,6 +1971,22 @@ loop:
 			buf_acquire_nomap(bp);
 			bp->b_flags |= B_INVAL;
 			brelse(bp);
+			count++;
+			/*
+			 * XXX Temporary workaround XXX
+			 *
+			 * If this is a gigantisch vnode and we are
+			 * trashing a ton of buffers, drop the lock
+			 * and yield every so often. The longer term
+			 * fix is to add a separate list for these
+			 * invalid buffers so we don't have to do the
+			 * work to free these here.
+			 */
+			if (count > 100) {
+				splx(s);
+				sched_pause(yield);
+				goto loop;
+			}
 		}
 	}
 	if (!(flags & V_SAVEMETA) &&
@@ -2002,7 +2026,7 @@ loop:
 		splx(s);
 		return;
 	}
-	vwaitforio(vp, 0, "vflushbuf", 0);
+	vwaitforio(vp, 0, "vflushbuf", INFSLP);
 	if (!LIST_EMPTY(&vp->v_dirtyblkhd)) {
 		splx(s);
 #ifdef DIAGNOSTIC

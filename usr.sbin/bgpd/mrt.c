@@ -1,4 +1,4 @@
-/*	$OpenBSD: mrt.c,v 1.94 2019/03/07 07:42:36 claudio Exp $ */
+/*	$OpenBSD: mrt.c,v 1.99 2019/07/24 08:58:24 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Claudio Jeker <claudio@openbsd.org>
@@ -34,7 +34,8 @@
 #include "mrt.h"
 #include "log.h"
 
-int mrt_attr_dump(struct ibuf *, struct rde_aspath *, struct bgpd_addr *, int);
+int mrt_attr_dump(struct ibuf *, struct rde_aspath *, struct rde_community *,
+    struct bgpd_addr *, int);
 int mrt_dump_entry_mp(struct mrt *, struct prefix *, u_int16_t,
     struct rde_peer*);
 int mrt_dump_entry(struct mrt *, struct prefix *, u_int16_t, struct rde_peer*);
@@ -143,8 +144,8 @@ fail:
 }
 
 int
-mrt_attr_dump(struct ibuf *buf, struct rde_aspath *a, struct bgpd_addr *nexthop,
-    int v2)
+mrt_attr_dump(struct ibuf *buf, struct rde_aspath *a, struct rde_community *c,
+    struct bgpd_addr *nexthop, int v2)
 {
 	struct attr	*oa;
 	u_char		*pdata;
@@ -188,6 +189,10 @@ mrt_attr_dump(struct ibuf *buf, struct rde_aspath *a, struct bgpd_addr *nexthop,
 	if (attr_writebuf(buf, ATTR_WELL_KNOWN, ATTR_LOCALPREF, &tmp, 4) == -1)
 		return (-1);
 
+	/* communities */
+	if (community_writebuf(buf, c) == -1)
+		return (-1);
+
 	/* dump all other path attributes without modification */
 	for (l = 0; l < a->others_len; l++) {
 		if ((oa = a->others[l]) == NULL)
@@ -212,8 +217,8 @@ mrt_attr_dump(struct ibuf *buf, struct rde_aspath *a, struct bgpd_addr *nexthop,
 		case AID_INET6:
 			DUMP_BYTE(nhbuf, sizeof(struct in6_addr));
 			if (ibuf_add(nhbuf, &nexthop->v6,
-			    sizeof(struct in6_addr)) == -1) {
-			}
+			    sizeof(struct in6_addr)) == -1)
+				goto fail;
 			break;
 		case AID_VPN_IPv4:
 			DUMP_BYTE(nhbuf, sizeof(u_int64_t) +
@@ -228,8 +233,8 @@ mrt_attr_dump(struct ibuf *buf, struct rde_aspath *a, struct bgpd_addr *nexthop,
 			DUMP_NLONG(nhbuf, 0);	/* set RD to 0 */
 			DUMP_NLONG(nhbuf, 0);
 			if (ibuf_add(nhbuf, &nexthop->v6,
-			    sizeof(struct in6_addr)) == -1) {
-			}
+			    sizeof(struct in6_addr)) == -1) 
+				goto fail;
 			break;
 		}
 		if (!v2)
@@ -272,7 +277,8 @@ mrt_dump_entry_mp(struct mrt *mrt, struct prefix *p, u_int16_t snum,
 		return (-1);
 	}
 
-	if (mrt_attr_dump(buf, prefix_aspath(p), NULL, 0) == -1) {
+	if (mrt_attr_dump(buf, prefix_aspath(p), prefix_communities(p),
+	    NULL, 0) == -1) {
 		log_warnx("mrt_dump_entry_mp: mrt_attr_dump error");
 		goto fail;
 	}
@@ -290,15 +296,17 @@ mrt_dump_entry_mp(struct mrt *mrt, struct prefix *p, u_int16_t snum,
 	DUMP_SHORT(h2buf, /* ifindex */ 0);
 
 	/* XXX is this for peer self? */
-	aid = peer->remote_addr.aid == AID_UNSPEC ? p->re->prefix->aid :
+	aid = peer->remote_addr.aid == AID_UNSPEC ? p->pt->aid :
 	     peer->remote_addr.aid;
 	switch (aid) {
 	case AID_INET:
+	case AID_VPN_IPv4:
 		DUMP_SHORT(h2buf, AFI_IPv4);
 		DUMP_NLONG(h2buf, peer->local_v4_addr.v4.s_addr);
 		DUMP_NLONG(h2buf, peer->remote_addr.v4.s_addr);
 		break;
 	case AID_INET6:
+	case AID_VPN_IPv6:
 		DUMP_SHORT(h2buf, AFI_IPv6);
 		if (ibuf_add(h2buf, &peer->local_v6_addr.v6,
 		    sizeof(struct in6_addr)) == -1 ||
@@ -309,7 +317,7 @@ mrt_dump_entry_mp(struct mrt *mrt, struct prefix *p, u_int16_t snum,
 		}
 		break;
 	default:
-		log_warnx("king bula found new AF in mrt_dump_entry_mp");
+		log_warnx("king bula found new AF %d in %s", aid, __func__);
 		goto fail;
 	}
 
@@ -317,7 +325,7 @@ mrt_dump_entry_mp(struct mrt *mrt, struct prefix *p, u_int16_t snum,
 	DUMP_SHORT(h2buf, 1);		/* status */
 	DUMP_LONG(h2buf, p->lastchange);	/* originated */
 
-	pt_getaddr(p->re->prefix, &addr);
+	pt_getaddr(p->pt, &addr);
 
 	n = prefix_nexthop(p);
 	if (n == NULL) {
@@ -343,13 +351,32 @@ mrt_dump_entry_mp(struct mrt *mrt, struct prefix *p, u_int16_t snum,
 			goto fail;
 		}
 		break;
+	case AID_VPN_IPv4:
+		DUMP_SHORT(h2buf, AFI_IPv4);	/* afi */
+		DUMP_BYTE(h2buf, SAFI_MPLSVPN);	/* safi */
+		DUMP_BYTE(h2buf, sizeof(u_int64_t) + sizeof(struct in_addr));
+		DUMP_NLONG(h2buf, 0);	/* set RD to 0 */
+		DUMP_NLONG(h2buf, 0);
+		DUMP_NLONG(h2buf, nh->v4.s_addr);	/* nexthop */
+		break;
+	case AID_VPN_IPv6:
+		DUMP_SHORT(h2buf, AFI_IPv6);	/* afi */
+		DUMP_BYTE(h2buf, SAFI_MPLSVPN);	/* safi */
+		DUMP_BYTE(h2buf, sizeof(u_int64_t) + sizeof(struct in6_addr));
+		DUMP_NLONG(h2buf, 0);	/* set RD to 0 */
+		DUMP_NLONG(h2buf, 0);
+		if (ibuf_add(h2buf, &nh->v6, sizeof(struct in6_addr)) == -1) {
+			log_warn("mrt_dump_entry_mp: ibuf_add error");
+			goto fail;
+		}
+		break;
 	default:
-		log_warnx("king bula found new AF in mrt_dump_entry_mp");
+		log_warnx("king bula found new AF in %s", __func__);
 		goto fail;
 	}
 
-	if (prefix_writebuf(h2buf, &addr, p->re->prefix->prefixlen) == -1) {
-		log_warn("mrt_dump_entry_mp: prefix_writebuf error");
+	if (prefix_writebuf(h2buf, &addr, p->pt->prefixlen) == -1) {
+		log_warnx("%s: prefix_writebuf error", __func__);
 		goto fail;
 	}
 
@@ -384,8 +411,8 @@ mrt_dump_entry(struct mrt *mrt, struct prefix *p, u_int16_t snum,
 	u_int16_t	 subtype;
 	u_int8_t	 dummy;
 
-	if (p->re->prefix->aid != peer->remote_addr.aid &&
-	    p->re->prefix->aid != AID_INET && p->re->prefix->aid != AID_INET6)
+	if (p->pt->aid != peer->remote_addr.aid &&
+	    p->pt->aid != AID_INET && p->pt->aid != AID_INET6)
 		/* only able to dump pure IPv4/IPv6 */
 		return (0);
 
@@ -397,17 +424,18 @@ mrt_dump_entry(struct mrt *mrt, struct prefix *p, u_int16_t snum,
 	nexthop = prefix_nexthop(p);
 	if (nexthop == NULL) {
 		bzero(&addr, sizeof(struct bgpd_addr));
-		addr.aid = p->re->prefix->aid;
+		addr.aid = p->pt->aid;
 		nh = &addr;
 	} else
 		nh = &nexthop->exit_nexthop;
-	if (mrt_attr_dump(buf, prefix_aspath(p), nh, 0) == -1) {
+	if (mrt_attr_dump(buf, prefix_aspath(p), prefix_communities(p),
+	    nh, 0) == -1) {
 		log_warnx("mrt_dump_entry: mrt_attr_dump error");
 		ibuf_free(buf);
 		return (-1);
 	}
 	len = ibuf_size(buf);
-	aid2afi(p->re->prefix->aid, &subtype, &dummy);
+	aid2afi(p->pt->aid, &subtype, &dummy);
 	if (mrt_dump_hdr_rde(&hbuf, MSG_TABLE_DUMP, subtype, len) == -1) {
 		ibuf_free(buf);
 		return (-1);
@@ -416,8 +444,8 @@ mrt_dump_entry(struct mrt *mrt, struct prefix *p, u_int16_t snum,
 	DUMP_SHORT(hbuf, 0);
 	DUMP_SHORT(hbuf, snum);
 
-	pt_getaddr(p->re->prefix, &addr);
-	switch (p->re->prefix->aid) {
+	pt_getaddr(p->pt, &addr);
+	switch (p->pt->aid) {
 	case AID_INET:
 		DUMP_NLONG(hbuf, addr.v4.s_addr);
 		break;
@@ -428,11 +456,11 @@ mrt_dump_entry(struct mrt *mrt, struct prefix *p, u_int16_t snum,
 		}
 		break;
 	}
-	DUMP_BYTE(hbuf, p->re->prefix->prefixlen);
+	DUMP_BYTE(hbuf, p->pt->prefixlen);
 
 	DUMP_BYTE(hbuf, 1);		/* state */
 	DUMP_LONG(hbuf, p->lastchange);	/* originated */
-	switch (p->re->prefix->aid) {
+	switch (p->pt->aid) {
 	case AID_INET:
 		DUMP_NLONG(hbuf, peer->remote_addr.v4.s_addr);
 		break;
@@ -495,7 +523,7 @@ mrt_dump_entry_v2(struct mrt *mrt, struct rib_entry *re, u_int32_t snum)
 		DUMP_BYTE(buf, safi);
 	}
 	if (prefix_writebuf(buf, &addr, re->prefix->prefixlen) == -1) {
-		log_warn("%s: prefix_writebuf error", __func__);
+		log_warnx("%s: prefix_writebuf error", __func__);
 		goto fail;
 	}
 
@@ -505,14 +533,10 @@ mrt_dump_entry_v2(struct mrt *mrt, struct rib_entry *re, u_int32_t snum)
 		goto fail;
 	}
 	nump = 0;
-	LIST_FOREACH(p, &re->prefix_h, rib_l) {
+	LIST_FOREACH(p, &re->prefix_h, entry.list.rib) {
 		struct nexthop		*nexthop;
 		struct bgpd_addr	*nh;
 		struct ibuf		*tbuf;
-
-		/* skip pending withdraw in Adj-RIB-Out */
-		if (prefix_aspath(p) == NULL)
-			continue;
 
 		nexthop = prefix_nexthop(p);
 		if (nexthop == NULL) {
@@ -527,19 +551,20 @@ mrt_dump_entry_v2(struct mrt *mrt, struct rib_entry *re, u_int32_t snum)
 
 		if ((tbuf = ibuf_dynamic(0, MAX_PKTSIZE)) == NULL) {
 			log_warn("%s: ibuf_dynamic", __func__);
-			return (-1);
+			goto fail;
 		}
-		if (mrt_attr_dump(tbuf, prefix_aspath(p), nh, 1) == -1) {
+		if (mrt_attr_dump(tbuf, prefix_aspath(p), prefix_communities(p),
+		    nh, 1) == -1) {
 			log_warnx("%s: mrt_attr_dump error", __func__);
-			ibuf_free(buf);
-			return (-1);
+			ibuf_free(tbuf);
+			goto fail;
 		}
 		len = ibuf_size(tbuf);
 		DUMP_SHORT(buf, (u_int16_t)len);
-		if (ibuf_add(buf, tbuf->buf, ibuf_size(tbuf)) == -1) {
+		if (ibuf_add(buf, tbuf->buf, len) == -1) {
 			log_warn("%s: ibuf_add error", __func__);
 			ibuf_free(tbuf);
-			return (-1);
+			goto fail;
 		}
 		ibuf_free(tbuf);
 		nump++;
@@ -641,11 +666,11 @@ mrt_dump_peer(struct ibuf *buf, struct rde_peer *peer)
 			goto fail;
 		}
 		break;
-	case AID_UNSPEC: /* XXX special handling for peer_self? */
+	case AID_UNSPEC: /* XXX special handling for peerself? */
 		DUMP_NLONG(buf, 0);
 		break;
 	default:
-		log_warnx("king bula found new AF in mrt_dump_entry_mp");
+		log_warnx("king bula found new AF in %s", __func__);
 		goto fail;
 	}
 
@@ -675,10 +700,7 @@ mrt_dump_upcall(struct rib_entry *re, void *ptr)
 	 * dumps the table so we do the same. If only the active route should
 	 * be dumped p should be set to p = pt->active.
 	 */
-	LIST_FOREACH(p, &re->prefix_h, rib_l) {
-		/* skip pending withdraw in Adj-RIB-Out */
-		if (prefix_aspath(p) == NULL)
-			continue;
+	LIST_FOREACH(p, &re->prefix_h, entry.list.rib) {
 		if (mrtbuf->type == MRT_TABLE_DUMP)
 			mrt_dump_entry(mrtbuf, p, mrtbuf->seqnum++,
 			    prefix_peer(p));
@@ -730,7 +752,7 @@ mrt_dump_hdr_se(struct ibuf ** bp, struct peer *peer, u_int16_t type,
 	case 0:
 		goto fail;
 	default:
-		log_warnx("king bula found new AF in mrt_dump_hdr_se");
+		log_warnx("king bula found new AF in %s", __func__);
 		goto fail;
 	}
 
@@ -835,6 +857,7 @@ mrt_dump_hdr_rde(struct ibuf **bp, u_int16_t type, u_int16_t subtype,
 
 fail:
 	ibuf_free(*bp);
+	*bp = NULL;
 	return (-1);
 }
 
@@ -843,7 +866,7 @@ mrt_write(struct mrt *mrt)
 {
 	int	r;
 
-	if ((r = ibuf_write(&mrt->wbuf)) < 0 && errno != EAGAIN) {
+	if ((r = ibuf_write(&mrt->wbuf)) == -1 && errno != EAGAIN) {
 		log_warn("mrt dump aborted, mrt_write");
 		mrt_clean(mrt);
 		mrt_done(mrt);

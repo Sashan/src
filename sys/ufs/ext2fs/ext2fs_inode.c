@@ -1,4 +1,4 @@
-/*	$OpenBSD: ext2fs_inode.c,v 1.59 2018/04/28 03:13:05 visa Exp $	*/
+/*	$OpenBSD: ext2fs_inode.c,v 1.62 2019/07/25 01:43:21 cheloha Exp $	*/
 /*	$NetBSD: ext2fs_inode.c,v 1.24 2001/06/19 12:59:18 wiz Exp $	*/
 
 /*
@@ -87,8 +87,8 @@ ext2fs_setsize(struct inode *ip, u_int64_t size)
 	if (fs->e2fs.e2fs_rev <= E2FS_REV0)
 		return (EFBIG);
 
-	if ((fs->e2fs.e2fs_features_rocompat & EXT2F_ROCOMPAT_LARGEFILE) == 0) {
-		fs->e2fs.e2fs_features_rocompat |= EXT2F_ROCOMPAT_LARGEFILE;
+	if (!(fs->e2fs.e2fs_features_rocompat & EXT2F_ROCOMPAT_LARGE_FILE)) {
+		fs->e2fs.e2fs_features_rocompat |= EXT2F_ROCOMPAT_LARGE_FILE;
 		fs->e2fs_fmod = 1;
 	}
 	return (EFBIG);
@@ -341,7 +341,7 @@ ext2fs_truncate(struct inode *oip, off_t length, int flags, struct ucred *cred)
 	memcpy(&oip->i_e2fs_blocks[0], oldblks, sizeof(oldblks));
 	(void)ext2fs_setsize(oip, osize);
 	vflags = ((length > 0) ? V_SAVE : 0) | V_SAVEMETA;
-	allerror = vinvalbuf(ovp, vflags, cred, curproc, 0, 0);
+	allerror = vinvalbuf(ovp, vflags, cred, curproc, 0, INFSLP);
 
 	/*
 	 * Indirect blocks first.
@@ -448,7 +448,7 @@ ext2fs_indirtrunc(struct inode *ip, int32_t lbn, int32_t dbn, int32_t lastbn, in
 	 * explicitly instead of letting bread do everything for us.
 	 */
 	vp = ITOV(ip);
-	bp = getblk(vp, lbn, (int)fs->e2fs_bsize, 0, 0);
+	bp = getblk(vp, lbn, (int)fs->e2fs_bsize, 0, INFSLP);
 	if (!(bp->b_flags & (B_DONE | B_DELWRI))) {
 		curproc->p_ru.ru_inblock++;		/* pay for read */
 		bcstats.pendingreads++;

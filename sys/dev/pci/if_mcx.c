@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_mcx.c,v 1.14 2019/06/03 04:38:30 jmatthew Exp $ */
+/*	$OpenBSD: if_mcx.c,v 1.31 2019/06/22 08:36:55 jmatthew Exp $ */
 
 /*
  * Copyright (c) 2017 David Gwynne <dlg@openbsd.org>
@@ -71,9 +71,13 @@
 
 /* queue sizes */
 #define MCX_LOG_EQ_SIZE		 6		/* one page */
-#define MCX_LOG_CQ_SIZE		 10
-#define MCX_LOG_RQ_SIZE		 5
-#define MCX_LOG_SQ_SIZE		 10
+#define MCX_LOG_CQ_SIZE		 11
+#define MCX_LOG_RQ_SIZE		 10
+#define MCX_LOG_SQ_SIZE		 11
+
+/* completion event moderation - about 10khz, or 90% of the cq */
+#define MCX_CQ_MOD_PERIOD	50
+#define MCX_CQ_MOD_COUNTER	(((1 << (MCX_LOG_CQ_SIZE - 1)) * 9) / 10)
 
 #define MCX_LOG_SQ_ENTRY_SIZE	 6
 #define MCX_SQ_ENTRY_MAX_SLOTS	 4
@@ -100,10 +104,6 @@
 #define MCX_UAR_EQ_DOORBELL_ARM	 0x40
 #define MCX_UAR_EQ_DOORBELL	 0x48
 #define MCX_UAR_BF		 0x800
-
-/* syndromes */
-#define MCX_SYNDROME_ENTRY_NOT_FOUND \
-				0x4EFC3D
 
 #define MCX_CMDQ_ADDR_HI		 0x0010
 #define MCX_CMDQ_ADDR_LO		 0x0014
@@ -398,7 +398,14 @@ struct mcx_reg_paos {
 	uint8_t			rp_reserved1;
 	uint8_t			rp_local_port;
 	uint8_t			rp_admin_status;
+#define MCX_REG_PAOS_ADMIN_STATUS_UP		1
+#define MCX_REG_PAOS_ADMIN_STATUS_DOWN		2
+#define MCX_REG_PAOS_ADMIN_STATUS_UP_ONCE	3
+#define MCX_REG_PAOS_ADMIN_STATUS_DISABLED	4
 	uint8_t			rp_oper_status;
+#define MCX_REG_PAOS_OPER_STATUS_UP		1
+#define MCX_REG_PAOS_OPER_STATUS_DOWN		2
+#define MCX_REG_PAOS_OPER_STATUS_FAILED		4
 	uint8_t			rp_admin_state_update;
 #define MCX_REG_PAOS_ADMIN_STATE_UPDATE_EN	(1 << 7)
 	uint8_t			rp_reserved2[11];
@@ -1236,20 +1243,22 @@ struct mcx_cmd_destroy_cq_out {
 } __packed __aligned(4);
 
 struct mcx_cq_entry {
-	uint32_t		cq_reserved1;
+	uint32_t		__reserved__;
 	uint32_t		cq_lro;
 	uint32_t		cq_lro_ack_seq_num;
 	uint32_t		cq_rx_hash;
-	uint32_t		cq_rx_hash_type;
+	uint8_t			cq_rx_hash_type;
+	uint8_t			cq_ml_path;
+	uint16_t		__reserved__;
 	uint32_t		cq_checksum;
-	uint32_t		cq_reserved2;
+	uint32_t		__reserved__;
 	uint32_t		cq_flags;
 	uint32_t		cq_lro_srqn;
-	uint32_t		cq_reserved3[2];
+	uint32_t		__reserved__[2];
 	uint32_t		cq_byte_cnt;
-	uint32_t		cq_lro_ts_value;
-	uint32_t		cq_lro_ts_echo;
-	uint32_t		cq_flow_tag;
+	uint64_t		cq_timestamp;
+	uint8_t			cq_rx_drops;
+	uint8_t			cq_flow_tag[3];
 	uint16_t		cq_wqe_count;
 	uint8_t			cq_signature;
 	uint8_t			cq_opcode_owner;
@@ -1888,6 +1897,18 @@ struct mcx_cq {
 	int			 cq_count;
 };
 
+struct mcx_calibration {
+	uint64_t		 c_timestamp;	/* previous mcx chip time */
+	uint64_t		 c_uptime;	/* previous kernel nanouptime */
+	uint64_t		 c_tbase;	/* mcx chip time */
+	uint64_t		 c_ubase;	/* kernel nanouptime */
+	uint64_t		 c_tdiff;
+	uint64_t		 c_udiff;
+};
+
+#define MCX_CALIBRATE_FIRST    2
+#define MCX_CALIBRATE_NORMAL   30
+
 struct mcx_softc {
 	struct device		 sc_dev;
 	struct arpcom		 sc_ac;
@@ -1927,6 +1948,8 @@ struct mcx_softc {
 	struct mcx_dmamem	 sc_eq_mem;
 	int			 sc_hardmtu;
 
+	struct task		 sc_port_change;
+
 	int			 sc_flow_table_id;
 #define MCX_FLOW_GROUP_PROMISC	 0
 #define MCX_FLOW_GROUP_ALLMULTI	 1
@@ -1937,9 +1960,13 @@ struct mcx_softc {
 	int			 sc_flow_group_start[MCX_NUM_FLOW_GROUPS];
 	int			 sc_promisc_flow_enabled;
 	int			 sc_allmulti_flow_enabled;
-	int			 sc_first_mcast_flow_entry;
+	int			 sc_mcast_flow_base;
 	int			 sc_extra_mcast;
 	uint8_t			 sc_mcast_flows[MCX_NUM_MCAST_FLOWS][ETHER_ADDR_LEN];
+
+	struct mcx_calibration	 sc_calibration[2];
+	unsigned int		 sc_calibration_gen;
+	struct timeout		 sc_calibrate;
 
 	struct mcx_cq		 sc_cq[MCX_MAX_CQS];
 	int			 sc_num_cq;
@@ -2032,8 +2059,8 @@ static void	mcx_cmdq_dump(const struct mcx_cmdq_entry *);
 static void	mcx_cmdq_mbox_dump(struct mcx_dmamem *, int);
 */
 static void	mcx_refill(void *);
-static void	mcx_process_rx(struct mcx_softc *, struct mcx_cq_entry *,
-		    struct mbuf_list *, int *);
+static int	mcx_process_rx(struct mcx_softc *, struct mcx_cq_entry *,
+		    struct mbuf_list *, const struct mcx_calibration *);
 static void	mcx_process_txeof(struct mcx_softc *, struct mcx_cq_entry *,
 		    int *);
 static void	mcx_process_cq(struct mcx_softc *, struct mcx_cq *);
@@ -2048,9 +2075,14 @@ static int	mcx_ioctl(struct ifnet *, u_long, caddr_t);
 static int	mcx_rxrinfo(struct mcx_softc *, struct if_rxrinfo *);
 static void	mcx_start(struct ifqueue *);
 static void	mcx_watchdog(struct ifnet *);
+static void	mcx_media_add_types(struct mcx_softc *);
 static void	mcx_media_status(struct ifnet *, struct ifmediareq *);
 static int	mcx_media_change(struct ifnet *);
 static int	mcx_get_sffpage(struct ifnet *, struct if_sffpage *);
+static void	mcx_port_change(void *);
+
+static void	mcx_calibrate_first(struct mcx_softc *);
+static void	mcx_calibrate(void *);
 
 static inline uint32_t
 		mcx_rd(struct mcx_softc *, bus_size_t);
@@ -2058,6 +2090,8 @@ static inline void
 		mcx_wr(struct mcx_softc *, bus_size_t, uint32_t);
 static inline void
 		mcx_bar(struct mcx_softc *, bus_size_t, bus_size_t, int);
+
+static uint64_t	mcx_timer(struct mcx_softc *);
 
 static int	mcx_dmamem_alloc(struct mcx_softc *, struct mcx_dmamem *,
 		    bus_size_t, u_int align);
@@ -2083,6 +2117,43 @@ struct cfattach mcx_ca = {
 static const struct pci_matchid mcx_devices[] = {
 	{ PCI_VENDOR_MELLANOX,	PCI_PRODUCT_MELLANOX_MT27700 },
 	{ PCI_VENDOR_MELLANOX,	PCI_PRODUCT_MELLANOX_MT27710 },
+	{ PCI_VENDOR_MELLANOX,	PCI_PRODUCT_MELLANOX_MT27800 },
+	{ PCI_VENDOR_MELLANOX,	PCI_PRODUCT_MELLANOX_MT28800 },
+};
+
+static const uint64_t mcx_eth_cap_map[] = {
+	IFM_1000_SGMII,
+	IFM_1000_KX,
+	IFM_10G_CX4,
+	IFM_10G_KX4,
+	IFM_10G_KR,
+	0,
+	IFM_40G_CR4,
+	IFM_40G_KR4,
+	0,
+	0,
+	0,
+	0,
+	IFM_10G_SFP_CU,
+	IFM_10G_SR,
+	IFM_10G_LR,
+	IFM_40G_SR4,
+	IFM_40G_LR4,
+	0,
+	0, /* IFM_50G_SR2 */
+	0,
+	IFM_100G_CR4,
+	IFM_100G_SR4,
+	IFM_100G_KR4,
+	0,
+	0,
+	0,
+	0,
+	IFM_25G_CR,
+	IFM_25G_KR,
+	IFM_25G_SR,
+	IFM_50G_CR2,
+	IFM_50G_KR2
 };
 
 static int
@@ -2232,6 +2303,26 @@ mcx_attach(struct device *parent, struct device *self, void *aux)
 		goto teardown;
 	}
 
+	/*
+	 * PRM makes no mention of msi interrupts, just legacy and msi-x.
+	 * mellanox support tells me legacy interrupts are not supported,
+	 * so we're stuck with just msi-x.
+	 */
+	if (pci_intr_map_msix(pa, 0, &sc->sc_ih) != 0) {
+		printf(": unable to map interrupt\n");
+		goto teardown;
+	}
+	intrstr = pci_intr_string(sc->sc_pc, sc->sc_ih);
+	sc->sc_ihc = pci_intr_establish(sc->sc_pc, sc->sc_ih,
+	    IPL_NET | IPL_MPSAFE, mcx_intr, sc, DEVNAME(sc));
+	if (sc->sc_ihc == NULL) {
+		printf(": unable to establish interrupt");
+		if (intrstr != NULL)
+			printf(" at %s", intrstr);
+		printf("\n");
+		goto teardown;
+	}
+
 	if (mcx_create_eq(sc) != 0) {
 		/* error printed by mcx_create_eq */
 		goto teardown;
@@ -2252,25 +2343,6 @@ mcx_attach(struct device *parent, struct device *self, void *aux)
 		goto teardown;
 	}
 
-	/*
-	 * PRM makes no mention of msi interrupts, just legacy and msi-x.
-	 * mellanox support tells me legacy interrupts are not supported,
-	 * so we're stuck with just msi-x.
-	 */
-	if (pci_intr_map_msix(pa, 0, &sc->sc_ih) != 0) {
-		printf(": unable to map interrupt\n");
-		goto teardown;
-	}
-	intrstr = pci_intr_string(sc->sc_pc, sc->sc_ih);
-	sc->sc_ihc = pci_intr_establish(sc->sc_pc, sc->sc_ih,
-	    IPL_NET | IPL_MPSAFE, mcx_intr, sc, DEVNAME(sc));
-	if (sc->sc_ihc == NULL) {
-		printf(": unable to establish interrupt");
-		if (intrstr != NULL)
-			printf(" at %s", intrstr);
-		printf("\n");
-		goto teardown;
-	}
 	printf(", %s, address %s\n", intrstr,
 	    ether_sprintf(sc->sc_ac.ac_enaddr));
 
@@ -2287,13 +2359,18 @@ mcx_attach(struct device *parent, struct device *self, void *aux)
 
 	ifmedia_init(&sc->sc_media, IFM_IMASK, mcx_media_change,
 	    mcx_media_status);
+	mcx_media_add_types(sc);
+	ifmedia_add(&sc->sc_media, IFM_ETHER | IFM_AUTO, 0, NULL);
+	ifmedia_set(&sc->sc_media, IFM_ETHER | IFM_AUTO);
 
 	if_attach(ifp);
 	ether_ifattach(ifp);
 
-	mcx_media_status(ifp, NULL);
-
 	timeout_set(&sc->sc_rx_refill, mcx_refill, sc);
+	timeout_set(&sc->sc_calibrate, mcx_calibrate, sc);
+
+	task_set(&sc->sc_port_change, mcx_port_change, sc);
+	mcx_port_change(sc);
 
 	sc->sc_flow_table_id = -1;
 	for (i = 0; i < MCX_NUM_FLOW_GROUPS; i++) {
@@ -2301,9 +2378,8 @@ mcx_attach(struct device *parent, struct device *self, void *aux)
 		sc->sc_flow_group_size[i] = 0;
 		sc->sc_flow_group_start[i] = 0;
 	}
-
-	/* set interface admin down, so bringing it up will start autoneg */
-
+	sc->sc_extra_mcast = 0;
+	memset(sc->sc_mcast_flows, 0, sizeof(sc->sc_mcast_flows));
 	return;
 
 teardown:
@@ -2797,20 +2873,23 @@ mcx_access_hca_reg(struct mcx_softc *sc, uint16_t reg, int op, void *data,
 	mcx_cmdq_mboxes_sync(sc, &mxm, BUS_DMASYNC_POSTRW);
 
 	if (error != 0) {
-		printf("%s: access reg (read %x) timeout\n", DEVNAME(sc), reg);
+		printf("%s: access reg (%s %x) timeout\n", DEVNAME(sc),
+		    (op == MCX_REG_OP_WRITE ? "write" : "read"), reg);
 		goto free;
 	}
 	error = mcx_cmdq_verify(cqe);
 	if (error != 0) {
-		printf("%s: access reg (read %x) reply corrupt\n",
-		    DEVNAME(sc), reg);
+		printf("%s: access reg (%s %x) reply corrupt\n",
+		    (op == MCX_REG_OP_WRITE ? "write" : "read"), DEVNAME(sc),
+		    reg);
 		goto free;
 	}
 
 	out = mcx_cmdq_out(cqe);
 	if (out->cmd_status != MCX_CQ_STATUS_OK) {
-		printf("%s: access reg (read %x) failed (%x, %.6x)\n",
-		    DEVNAME(sc), reg, out->cmd_status, out->cmd_syndrome);
+		printf("%s: access reg (%s %x) failed (%x, %.6x)\n",
+		    DEVNAME(sc), (op == MCX_REG_OP_WRITE ? "write" : "read"),
+		    reg, out->cmd_status, out->cmd_syndrome);
 		error = -1;
 		goto free;
 	}
@@ -3813,7 +3892,9 @@ mcx_create_cq(struct mcx_softc *sc, int eqn)
 	mbin->cmd_cq_ctx.cq_uar_size = htobe32(
 	    (MCX_LOG_CQ_SIZE << MCX_CQ_CTX_LOG_CQ_SIZE_SHIFT) | sc->sc_uar);
 	mbin->cmd_cq_ctx.cq_eqn = htobe32(eqn);
-	/* set event moderation bits here */
+	mbin->cmd_cq_ctx.cq_period_max_count = htobe32(
+	    (MCX_CQ_MOD_PERIOD << MCX_CQ_CTX_PERIOD_SHIFT) |
+	    MCX_CQ_MOD_COUNTER);
 	mbin->cmd_cq_ctx.cq_doorbell = htobe64(
 	    MCX_DMA_DVA(&sc->sc_doorbell_mem) +
 	    MCX_CQ_DOORBELL_OFFSET + (MCX_CQ_DOORBELL_SIZE * sc->sc_num_cq));
@@ -4889,11 +4970,9 @@ mcx_delete_flow_table_entry(struct mcx_softc *sc, int group, int index)
 	}
 
 	out = mcx_cmdq_out(cqe);
-	/* don't complain if the entry didn't exist */
-	if (out->cmd_status != MCX_CQ_STATUS_OK &&
-	    (betoh32(out->cmd_syndrome) != MCX_SYNDROME_ENTRY_NOT_FOUND)) {
-		printf("%s: delete flow table entry %d failed (%x, %x)\n",
-		    DEVNAME(sc), index, out->cmd_status,
+	if (out->cmd_status != MCX_CQ_STATUS_OK) {
+		printf("%s: delete flow table entry %d:%d failed (%x, %x)\n",
+		    DEVNAME(sc), group, index, out->cmd_status,
 		    betoh32(out->cmd_syndrome));
 		error = -1;
 		goto free;
@@ -5513,9 +5592,65 @@ mcx_process_txeof(struct mcx_softc *sc, struct mcx_cq_entry *cqe, int *txfree)
 	ms->ms_m = NULL;
 }
 
-void
+static uint64_t
+mcx_uptime(void)
+{
+	struct timespec ts;
+
+	nanouptime(&ts);
+
+	return ((uint64_t)ts.tv_sec * 1000000000 + (uint64_t)ts.tv_nsec);
+}
+
+static void
+mcx_calibrate_first(struct mcx_softc *sc)
+{
+	struct mcx_calibration *c = &sc->sc_calibration[0];
+
+	sc->sc_calibration_gen = 0;
+
+	c->c_ubase = mcx_uptime();
+	c->c_tbase = mcx_timer(sc);
+	c->c_tdiff = 0;
+
+	timeout_add_sec(&sc->sc_calibrate, MCX_CALIBRATE_FIRST);
+}
+
+#define MCX_TIMESTAMP_SHIFT 10
+
+static void
+mcx_calibrate(void *arg)
+{
+	struct mcx_softc *sc = arg;
+	struct mcx_calibration *nc, *pc;
+	unsigned int gen;
+
+	if (!ISSET(sc->sc_ac.ac_if.if_flags, IFF_RUNNING))
+		return;
+
+	timeout_add_sec(&sc->sc_calibrate, MCX_CALIBRATE_NORMAL);
+
+	gen = sc->sc_calibration_gen;
+	pc = &sc->sc_calibration[gen % nitems(sc->sc_calibration)];
+	gen++;
+	nc = &sc->sc_calibration[gen % nitems(sc->sc_calibration)];
+
+	nc->c_uptime = pc->c_ubase;
+	nc->c_timestamp = pc->c_tbase;
+
+	nc->c_ubase = mcx_uptime();
+	nc->c_tbase = mcx_timer(sc);
+
+	nc->c_udiff = (nc->c_ubase - nc->c_uptime) >> MCX_TIMESTAMP_SHIFT;
+	nc->c_tdiff = (nc->c_tbase - nc->c_timestamp) >> MCX_TIMESTAMP_SHIFT;
+
+	membar_producer();
+	sc->sc_calibration_gen = gen;
+}
+
+static int
 mcx_process_rx(struct mcx_softc *sc, struct mcx_cq_entry *cqe,
-    struct mbuf_list *ml, int *slots)
+    struct mbuf_list *ml, const struct mcx_calibration *c)
 {
 	struct mcx_slot *ms;
 	struct mbuf *m;
@@ -5530,10 +5665,26 @@ mcx_process_rx(struct mcx_softc *sc, struct mcx_cq_entry *cqe,
 
 	m = ms->ms_m;
 	ms->ms_m = NULL;
-	m->m_pkthdr.len = m->m_len = betoh32(cqe->cq_byte_cnt);
-	(*slots)++;
+
+	m->m_pkthdr.len = m->m_len = bemtoh32(&cqe->cq_byte_cnt);
+
+	if (cqe->cq_rx_hash_type) {
+		m->m_pkthdr.ph_flowid = M_FLOWID_VALID |
+		    betoh32(cqe->cq_rx_hash);
+	}
+
+	if (c->c_tdiff) {
+		uint64_t t = bemtoh64(&cqe->cq_timestamp) - c->c_timestamp;
+		t *= c->c_udiff;
+		t /= c->c_tdiff;
+
+		m->m_pkthdr.ph_timestamp = c->c_uptime + t;
+		SET(m->m_pkthdr.csum_flags, M_TIMESTAMP);
+	}
 
 	ml_enqueue(ml, m);
+
+	return (1);
 }
 
 static struct mcx_cq_entry *
@@ -5573,17 +5724,24 @@ mcx_arm_cq(struct mcx_softc *sc, struct mcx_cq *cq)
 	uval |= cq->cq_n;
 	bus_space_write_raw_8(sc->sc_memt, sc->sc_memh,
 	    offset + MCX_UAR_CQ_DOORBELL, htobe64(uval));
-	/* barrier? */
+	mcx_bar(sc, offset + MCX_UAR_CQ_DOORBELL, sizeof(uint64_t),
+	    BUS_SPACE_BARRIER_WRITE);
 }
 
 void
 mcx_process_cq(struct mcx_softc *sc, struct mcx_cq *cq)
 {
 	struct ifnet *ifp = &sc->sc_ac.ac_if;
+	const struct mcx_calibration *c;
+	unsigned int gen;
 	struct mcx_cq_entry *cqe;
 	uint8_t *cqp;
 	struct mbuf_list ml = MBUF_LIST_INITIALIZER();
 	int rxfree, txfree;
+
+	gen = sc->sc_calibration_gen;
+	membar_consumer();
+	c = &sc->sc_calibration[gen % nitems(sc->sc_calibration)];
 
 	rxfree = 0;
 	txfree = 0;
@@ -5595,7 +5753,7 @@ mcx_process_cq(struct mcx_softc *sc, struct mcx_cq *cq)
 			mcx_process_txeof(sc, cqe, &txfree);
 			break;
 		case MCX_CQ_ENTRY_OPCODE_SEND:
-			mcx_process_rx(sc, cqe, &ml, &rxfree);
+			rxfree += mcx_process_rx(sc, cqe, &ml, c);
 			break;
 		case MCX_CQ_ENTRY_OPCODE_REQ_ERR:
 		case MCX_CQ_ENTRY_OPCODE_SEND_ERR:
@@ -5616,10 +5774,11 @@ mcx_process_cq(struct mcx_softc *sc, struct mcx_cq *cq)
 
 	if (rxfree > 0) {
 		if_rxr_put(&sc->sc_rxr, rxfree);
+		if (ifiq_input(&sc->sc_ac.ac_if.if_rcv, &ml))
+			if_rxr_livelocked(&sc->sc_rxr);
+
 		mcx_rx_fill(sc);
 		/* timeout if full somehow */
-
-		if_input(&sc->sc_ac.ac_if, &ml);
 	}
 	if (txfree > 0) {
 		sc->sc_tx_cons += txfree;
@@ -5688,7 +5847,7 @@ mcx_intr(void *xsc)
 			break;
 
 		case MCX_EVENT_TYPE_PORT_CHANGE:
-			/* printf("%s: port change\n", DEVNAME(sc)); */
+			task_add(systq, &sc->sc_port_change);
 			break;
 
 		default:
@@ -5734,7 +5893,8 @@ mcx_up(struct mcx_softc *sc)
 	for (i = 0; i < (1 << MCX_LOG_RQ_SIZE); i++) {
 		ms = &sc->sc_rx_slots[i];
 		if (bus_dmamap_create(sc->sc_dmat, sc->sc_hardmtu, 1,
-		    sc->sc_hardmtu, 0, BUS_DMA_WAITOK | BUS_DMA_ALLOCNOW,
+		    sc->sc_hardmtu, 0,
+		    BUS_DMA_WAITOK | BUS_DMA_ALLOCNOW | BUS_DMA_64BIT,
 		    &ms->ms_map) != 0) {
 			printf("%s: failed to allocate rx dma maps\n",
 			    DEVNAME(sc));
@@ -5752,8 +5912,9 @@ mcx_up(struct mcx_softc *sc)
 	for (i = 0; i < (1 << MCX_LOG_SQ_SIZE); i++) {
 		ms = &sc->sc_tx_slots[i];
 		if (bus_dmamap_create(sc->sc_dmat, sc->sc_hardmtu,
-		    MCX_SQ_MAX_SEGMENTS, sc->sc_hardmtu, 0, BUS_DMA_WAITOK |
-		    BUS_DMA_ALLOCNOW, &ms->ms_map) != 0) {
+		    MCX_SQ_MAX_SEGMENTS, sc->sc_hardmtu, 0,
+		    BUS_DMA_WAITOK | BUS_DMA_ALLOCNOW | BUS_DMA_64BIT,
+		    &ms->ms_map) != 0) {
 			printf("%s: failed to allocate tx dma maps\n",
 			    DEVNAME(sc));
 			goto destroy_tx_slots;
@@ -5817,9 +5978,16 @@ mcx_up(struct mcx_softc *sc)
 	start++;
 
 	/* multicast entries go after that */
-	sc->sc_first_mcast_flow_entry = start;
-	sc->sc_extra_mcast = 0;
-	memset(sc->sc_mcast_flows, 0, sizeof(sc->sc_mcast_flows));
+	sc->sc_mcast_flow_base = start;
+
+	/* re-add any existing multicast flows */
+	for (i = 0; i < MCX_NUM_MCAST_FLOWS; i++) {
+		if (sc->sc_mcast_flows[i][0] != 0) {
+			mcx_set_flow_table_entry(sc, MCX_FLOW_GROUP_MAC,
+			    sc->sc_mcast_flow_base + i,
+			    sc->sc_mcast_flows[i]);
+		}
+	}
 
 	if (mcx_set_flow_table_root(sc) != 0)
 		goto down;
@@ -5835,6 +6003,8 @@ mcx_up(struct mcx_softc *sc)
 	sc->sc_rx_cons = 0;
 	sc->sc_rx_prod = 0;
 	mcx_rx_fill(sc);
+
+	mcx_calibrate_first(sc);
 
 	SET(ifp->if_flags, IFF_RUNNING);
 
@@ -5868,13 +6038,23 @@ mcx_down(struct mcx_softc *sc)
 	 * delete flow table entries first, so no packets can arrive
 	 * after the barriers
 	 */
-	for (group = 0; group < MCX_NUM_FLOW_GROUPS; group++) {
-		for (i = 0; i < sc->sc_flow_group_size[group]; i++)
-			mcx_delete_flow_table_entry(sc, group, i);
+	if (sc->sc_promisc_flow_enabled)
+		mcx_delete_flow_table_entry(sc, MCX_FLOW_GROUP_PROMISC, 0);
+	if (sc->sc_allmulti_flow_enabled)
+		mcx_delete_flow_table_entry(sc, MCX_FLOW_GROUP_ALLMULTI, 0);
+	mcx_delete_flow_table_entry(sc, MCX_FLOW_GROUP_MAC, 0);
+	mcx_delete_flow_table_entry(sc, MCX_FLOW_GROUP_MAC, 1);
+	for (i = 0; i < MCX_NUM_MCAST_FLOWS; i++) {
+		if (sc->sc_mcast_flows[i][0] != 0) {
+			mcx_delete_flow_table_entry(sc, MCX_FLOW_GROUP_MAC,
+			    sc->sc_mcast_flow_base + i);
+		}
 	}
 
-	intr_barrier(&sc->sc_ih);
+	intr_barrier(sc->sc_ihc);
 	ifq_barrier(&ifp->if_snd);
+
+	timeout_del_barrier(&sc->sc_calibrate);
 
 	for (group = 0; group < MCX_NUM_FLOW_GROUPS; group++) {
 		if (sc->sc_flow_group_id[group] != -1)
@@ -5960,10 +6140,12 @@ mcx_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 				if (sc->sc_mcast_flows[i][0] == 0) {
 					memcpy(sc->sc_mcast_flows[i], addrlo,
 					    ETHER_ADDR_LEN);
-					mcx_set_flow_table_entry(sc,
-					    MCX_FLOW_GROUP_MAC,
-					    sc->sc_first_mcast_flow_entry + i,
-					    sc->sc_mcast_flows[i]);
+					if (ISSET(ifp->if_flags, IFF_RUNNING)) {
+						mcx_set_flow_table_entry(sc,
+						    MCX_FLOW_GROUP_MAC,
+						    sc->sc_mcast_flow_base + i,
+						    sc->sc_mcast_flows[i]);
+					}
 					break;
 				}
 			}
@@ -5992,9 +6174,11 @@ mcx_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			for (i = 0; i < MCX_NUM_MCAST_FLOWS; i++) {
 				if (memcmp(sc->sc_mcast_flows[i], addrlo,
 				    ETHER_ADDR_LEN) == 0) {
-					mcx_delete_flow_table_entry(sc,
-					    MCX_FLOW_GROUP_MAC,
-					    sc->sc_first_mcast_flow_entry + i);
+					if (ISSET(ifp->if_flags, IFF_RUNNING)) {
+						mcx_delete_flow_table_entry(sc,
+						    MCX_FLOW_GROUP_MAC,
+						    sc->sc_mcast_flow_base + i);
+					}
 					sc->sc_mcast_flows[i][0] = 0;
 					break;
 				}
@@ -6232,47 +6416,37 @@ mcx_watchdog(struct ifnet *ifp)
 }
 
 static void
+mcx_media_add_types(struct mcx_softc *sc)
+{
+	struct mcx_reg_ptys ptys;
+	int i;
+	uint32_t proto_cap;
+
+	memset(&ptys, 0, sizeof(ptys));
+	ptys.rp_local_port = 1;
+	ptys.rp_proto_mask = MCX_REG_PTYS_PROTO_MASK_ETH;
+	if (mcx_access_hca_reg(sc, MCX_REG_PTYS, MCX_REG_OP_READ, &ptys,
+	    sizeof(ptys)) != 0) {
+		printf("%s: unable to read port type/speed\n", DEVNAME(sc));
+		return;
+	}
+
+	proto_cap = betoh32(ptys.rp_eth_proto_cap);
+	for (i = 0; i < nitems(mcx_eth_cap_map); i++) {
+		if ((proto_cap & (1 << i)) && (mcx_eth_cap_map[i] != 0))
+			ifmedia_add(&sc->sc_media, IFM_ETHER |
+			    mcx_eth_cap_map[i], 0, NULL);
+	}
+}
+
+static void
 mcx_media_status(struct ifnet *ifp, struct ifmediareq *ifmr)
 {
 	struct mcx_softc *sc = (struct mcx_softc *)ifp->if_softc;
 	struct mcx_reg_ptys ptys;
 	int i;
-	uint32_t proto_cap, proto_admin, proto_oper;
+	uint32_t proto_cap, proto_oper;
 	uint64_t media_oper;
-	uint64_t eth_cap_map[] = {
-		IFM_1000_SGMII,
-		IFM_1000_KX,
-		IFM_10G_CX4,
-		IFM_10G_KX4,
-		IFM_10G_KR,
-		0,
-		IFM_40G_CR4,
-		IFM_40G_KR4,
-		0,
-		0,
-		0,
-		0,
-		IFM_10G_SFP_CU,
-		IFM_10G_SR,
-		IFM_10G_LR,
-		IFM_40G_SR4,
-		IFM_40G_LR4,
-		0,
-		0, /* IFM_50G_SR2 */
-		0,
-		IFM_100G_CR4,
-		IFM_100G_SR4,
-		IFM_100G_KR4,
-		0,
-		0,
-		0,
-		0,
-		IFM_25G_CR,
-		IFM_25G_KR,
-		IFM_25G_SR,
-		IFM_50G_CR2,
-		IFM_50G_KR2
-	};
 
 	memset(&ptys, 0, sizeof(ptys));
 	ptys.rp_local_port = 1;
@@ -6285,38 +6459,119 @@ mcx_media_status(struct ifnet *ifp, struct ifmediareq *ifmr)
 	}
 
 	proto_cap = betoh32(ptys.rp_eth_proto_cap);
-	proto_admin = betoh32(ptys.rp_eth_proto_admin);
 	proto_oper = betoh32(ptys.rp_eth_proto_oper);
 
-	ifmedia_delete_instance(&sc->sc_media, IFM_INST_ANY);
-	ifmedia_add(&sc->sc_media, IFM_ETHER | IFM_AUTO, 0, NULL);
-	ifmedia_set(&sc->sc_media, IFM_ETHER | IFM_AUTO);
 	media_oper = 0;
-	for (i = 0; i < nitems(eth_cap_map); i++) {
-		if (proto_cap & (1 << i))
-			ifmedia_add(&sc->sc_media, IFM_ETHER | eth_cap_map[i],
-			    0, NULL);
-
+	for (i = 0; i < nitems(mcx_eth_cap_map); i++) {
 		if (proto_oper & (1 << i)) {
-			media_oper = eth_cap_map[i];
+			media_oper = mcx_eth_cap_map[i];
 		}
 	}
 
-	if (ifmr != NULL) {
-		ifmr->ifm_status = IFM_AVALID;
-		/* not sure if this is the right thing to check, maybe paos? */
-		if (proto_oper != 0) {
-			ifmr->ifm_status |= IFM_ACTIVE;
-			ifmr->ifm_active = IFM_ETHER | IFM_AUTO |media_oper;
-			/* txpause, rxpause, duplex? */
-		}
+	ifmr->ifm_status = IFM_AVALID;
+	/* not sure if this is the right thing to check, maybe paos? */
+	if (proto_oper != 0) {
+		ifmr->ifm_status |= IFM_ACTIVE;
+		ifmr->ifm_active = IFM_ETHER | IFM_AUTO | media_oper;
+		/* txpause, rxpause, duplex? */
 	}
 }
 
 static int
 mcx_media_change(struct ifnet *ifp)
 {
-	return (ENOTTY);
+	struct mcx_softc *sc = (struct mcx_softc *)ifp->if_softc;
+	struct mcx_reg_ptys ptys;
+	struct mcx_reg_paos paos;
+	uint32_t media;
+	int i, error;
+
+	if (IFM_TYPE(sc->sc_media.ifm_media) != IFM_ETHER)
+		return EINVAL;
+
+	error = 0;
+
+	if (IFM_SUBTYPE(sc->sc_media.ifm_media) == IFM_AUTO) {
+		/* read ptys to get supported media */
+		memset(&ptys, 0, sizeof(ptys));
+		ptys.rp_local_port = 1;
+		ptys.rp_proto_mask = MCX_REG_PTYS_PROTO_MASK_ETH;
+		if (mcx_access_hca_reg(sc, MCX_REG_PTYS, MCX_REG_OP_READ,
+		    &ptys, sizeof(ptys)) != 0) {
+			printf("%s: unable to read port type/speed\n",
+			    DEVNAME(sc));
+			return EIO;
+		}
+
+		media = betoh32(ptys.rp_eth_proto_cap);
+	} else {
+		/* map media type */
+		media = 0;
+		for (i = 0; i < nitems(mcx_eth_cap_map); i++) {
+			if (mcx_eth_cap_map[i] ==
+			    IFM_SUBTYPE(sc->sc_media.ifm_media)) {
+				media = (1 << i);
+				break;
+			}
+		}
+	}
+
+	/* disable the port */
+	memset(&paos, 0, sizeof(paos));
+	paos.rp_local_port = 1;
+	paos.rp_admin_status = MCX_REG_PAOS_ADMIN_STATUS_DOWN;
+	paos.rp_admin_state_update = MCX_REG_PAOS_ADMIN_STATE_UPDATE_EN;
+	if (mcx_access_hca_reg(sc, MCX_REG_PAOS, MCX_REG_OP_WRITE, &paos,
+	    sizeof(paos)) != 0) {
+		printf("%s: unable to set port state to down\n", DEVNAME(sc));
+		return EIO;
+	}
+
+	memset(&ptys, 0, sizeof(ptys));
+	ptys.rp_local_port = 1;
+	ptys.rp_proto_mask = MCX_REG_PTYS_PROTO_MASK_ETH;
+	ptys.rp_eth_proto_admin = htobe32(media);
+	if (mcx_access_hca_reg(sc, MCX_REG_PTYS, MCX_REG_OP_WRITE, &ptys,
+	    sizeof(ptys)) != 0) {
+		printf("%s: unable to set port media type/speed\n",
+		    DEVNAME(sc));
+		error = EIO;
+	}
+
+	/* re-enable the port to start negotiation */
+	memset(&paos, 0, sizeof(paos));
+	paos.rp_local_port = 1;
+	paos.rp_admin_status = MCX_REG_PAOS_ADMIN_STATUS_UP;
+	paos.rp_admin_state_update = MCX_REG_PAOS_ADMIN_STATE_UPDATE_EN;
+	if (mcx_access_hca_reg(sc, MCX_REG_PAOS, MCX_REG_OP_WRITE, &paos,
+	    sizeof(paos)) != 0) {
+		printf("%s: unable to set port state to up\n", DEVNAME(sc));
+		error = EIO;
+	}
+
+	return error;
+}
+
+static void
+mcx_port_change(void *xsc)
+{
+	struct mcx_softc *sc = xsc;
+	struct ifnet *ifp = &sc->sc_ac.ac_if;
+	struct mcx_reg_paos paos;
+	int link_state = LINK_STATE_DOWN;
+
+	memset(&paos, 0, sizeof(paos));
+	paos.rp_local_port = 1;
+	if (mcx_access_hca_reg(sc, MCX_REG_PAOS, MCX_REG_OP_READ, &paos,
+	    sizeof(paos)) == 0) {
+		if (paos.rp_oper_status == MCX_REG_PAOS_OPER_STATUS_UP)
+			link_state = LINK_STATE_FULL_DUPLEX;
+	}
+
+	if (link_state != ifp->if_link_state) {
+		ifp->if_link_state = link_state;
+		if_link_state_change(ifp);
+	}
 }
 
 
@@ -6340,6 +6595,26 @@ static inline void
 mcx_bar(struct mcx_softc *sc, bus_size_t r, bus_size_t l, int f)
 {
 	bus_space_barrier(sc->sc_memt, sc->sc_memh, r, l, f);
+}
+
+static uint64_t
+mcx_timer(struct mcx_softc *sc)
+{
+	uint32_t hi, lo, ni;
+
+	hi = mcx_rd(sc, MCX_INTERNAL_TIMER_H);
+	for (;;) {
+		lo = mcx_rd(sc, MCX_INTERNAL_TIMER_L);
+		mcx_bar(sc, MCX_INTERNAL_TIMER_L, 8, BUS_SPACE_BARRIER_READ);
+		ni = mcx_rd(sc, MCX_INTERNAL_TIMER_H);
+
+		if (ni == hi)
+			break;
+
+		hi = ni;
+	}
+
+	return (((uint64_t)hi << 32) | (uint64_t)lo);
 }
 
 static int

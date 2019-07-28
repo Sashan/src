@@ -1,4 +1,4 @@
-/*	$OpenBSD: realpathtest.c,v 1.7 2019/05/29 13:53:59 beck Exp $ */
+/*	$OpenBSD: realpathtest.c,v 1.11 2019/07/23 11:01:32 stsp Exp $ */
 
 /*
  * Copyright (c) 2019 Bob Beck <beck@openbsd.org>
@@ -63,29 +63,29 @@ rpcompare(const char *pathname, char *resolv2,
 	struct rp_compare rc = rpcompare(A, B, C);			\
 	if (rc.r2 == NULL)  {						\
 		errno = rc.e2;						\
-		err(1, "%s:%d - realpath of '%s' failed", __FILE__, 	\
+		err(1, "%s:%d - realpath of '%s' failed", __FILE__,	\
 		    __LINE__, (A));					\
-	} 								\
+	}								\
 	if (rc.r3 == NULL)  {						\
 		errno = rc.e3;						\
 		err(1, "%s:%d - realpath3 of '%s' failed", __FILE__,	\
 		    __LINE__, (A));					\
 	}								\
 	if (strcmp(rc.r2, rc.r3) != 0)					\
-		errx(1, "%s:%d - realpath of '%s' result '%s',"		\
+		errx(1, "%s:%d - realpath of '%s' result '%s', "	\
 		    "expected '%s", __FILE__, __LINE__, (A), rc.r2,	\
 		    rc.r3);						\
 } while(0);
 
 #define RP_SHOULD_FAIL(A, B, C) do {					\
-	struct rp_compare rc = rpcompare(A, B, C); 			\
-	if (rc.r2 != NULL) 						\
-		errx(1, "%s:%d - realpath of '%s' should have failed,"	\
-		    "returned '%s'", __FILE__, __LINE__, (A), rc.r2); 	\
-	if (rc.r3 != NULL) 						\
-		errx(1, "%s:%d - realpath3 of '%s' should have failed,"	\
-		    "returned '%s'", __FILE__, __LINE__, (A), rc.r3); 	\
-	if (rc.e2 != rc.e3) 						\
+	struct rp_compare rc = rpcompare(A, B, C);			\
+	if (rc.r2 != NULL)						\
+		errx(1, "%s:%d - realpath of '%s' should have failed, "	\
+		    "returned '%s'", __FILE__, __LINE__, (A), rc.r2);	\
+	if (rc.r3 != NULL)						\
+		errx(1, "%s:%d - realpath3 of '%s' should have failed, "\
+		    "returned '%s'", __FILE__, __LINE__, (A), rc.r3);	\
+	if (rc.e2 != rc.e3)						\
 		errx(1, "%s:%d - realpath of '%s' errno %d does not "	\
 		    "match realpath3 errno %d", __FILE__, __LINE__, (A),\
 		    rc.e2, rc.e3 );					\
@@ -100,14 +100,16 @@ main(int argc, char *argv[])
 	char r3[PATH_MAX];
 
 	/* some basics */
-	RP_SHOULD_SUCCEED("/bin/c++", NULL, NULL);
+	RP_SHOULD_FAIL(NULL, NULL, NULL);
+	RP_SHOULD_FAIL("", NULL, NULL);
+	RP_SHOULD_SUCCEED("/", NULL, NULL);
 	RP_SHOULD_SUCCEED("/tmp", NULL, NULL);
-	RP_SHOULD_SUCCEED("/tmp/noreallydoesntexist", NULL, NULL);
+	RP_SHOULD_FAIL("/tmp/noreallydoesntexist", NULL, NULL);
 	RP_SHOULD_FAIL("/tmp/noreallydoesntexist/stillnope", NULL, NULL);
 	RP_SHOULD_SUCCEED("/bin", NULL, NULL);
-	RP_SHOULD_SUCCEED("/bin/herp", NULL, NULL);
+	RP_SHOULD_FAIL("/bin/herp", NULL, NULL);
 	RP_SHOULD_SUCCEED("////usr/bin", NULL, NULL);
-	RP_SHOULD_SUCCEED("//.//usr/bin/.././../herp", r2, r3);
+	RP_SHOULD_FAIL("//.//usr/bin/.././../herp", r2, r3);
 	RP_SHOULD_SUCCEED("/usr/include/machine/setjmp.h", r2, r3);
 	RP_SHOULD_FAIL("//.//usr/bin/.././../herp/derp", r2, r3);
 	RP_SHOULD_FAIL("/../.../usr/bin", r2, r3);
@@ -119,7 +121,7 @@ main(int argc, char *argv[])
 			err(1, "mkdir");
 	}
 	RP_SHOULD_SUCCEED("hoobla", r2, r3);
-	RP_SHOULD_SUCCEED("hoobla/porkrind", r2, r3); /* XXX posix */
+	RP_SHOULD_FAIL("hoobla/porkrind", r2, r3);
 	RP_SHOULD_FAIL("hoobla/porkrind/peepee", r2, r3);
 
 	/* total size */
@@ -130,7 +132,7 @@ main(int argc, char *argv[])
 	memset(big, 'a', PATH_MAX + 1);
 	big[0] = '/';
 	big[NAME_MAX+1] = '\0';
-	RP_SHOULD_SUCCEED(big, r2, r3);
+	RP_SHOULD_FAIL(big, r2, r3);
 	memset(big, 'a', PATH_MAX + 1);
 	big[0] = '/';
 	big[NAME_MAX+2] = '\0';
@@ -153,7 +155,7 @@ main(int argc, char *argv[])
 	}
 	i-= 3;
 	strlcpy(big+i, "bsd/", 5);
-	RP_SHOULD_SUCCEED(big, r2, r3);	/* XXX This is wrong by posix */
+	RP_SHOULD_FAIL(big, r2, r3);
 
 	for (i = 0; i < (PATH_MAX - 5); i += 3) {
 		big[i] = '.';
@@ -162,7 +164,7 @@ main(int argc, char *argv[])
 	}
 	i-= 3;
 	strlcpy(big+i, "derp", 5);
-	RP_SHOULD_SUCCEED(big, r2, r3);	/* XXX this is wrong by posix */
+	RP_SHOULD_FAIL(big, r2, r3);
 
 	for (i = 0; i < (PATH_MAX - 6); i += 3) {
 		big[i] = '.';
@@ -171,7 +173,7 @@ main(int argc, char *argv[])
 	}
 	i-= 3;
 	strlcpy(big+i, "derp/", 6);
-	RP_SHOULD_FAIL(big, r2, r3);	/* XXX this is correct by posix */
+	RP_SHOULD_FAIL(big, r2, r3);
 
 	for (i = 0; i < (PATH_MAX - 4); i += 3) {
 		big[i] = '.';
@@ -180,7 +182,7 @@ main(int argc, char *argv[])
 	}
 	i-= 3;
 	strlcpy(big+i, "xxx", 4);
-	RP_SHOULD_SUCCEED(big, r2, r3);
+	RP_SHOULD_FAIL(big, r2, r3);
 
 	for (i = 0; i < (PATH_MAX - 8); i += 3) {
 		big[i] = '.';

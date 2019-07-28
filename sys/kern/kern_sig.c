@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sig.c,v 1.230 2019/05/13 19:21:31 bluhm Exp $	*/
+/*	$OpenBSD: kern_sig.c,v 1.232 2019/07/10 15:52:17 mpi Exp $	*/
 /*	$NetBSD: kern_sig.c,v 1.54 1996/04/22 01:38:32 christos Exp $	*/
 
 /*
@@ -1548,8 +1548,7 @@ coredump(struct proc *p)
 	}
 
 	/* Don't dump if will exceed file size limit. */
-	if (USPACE + ptoa(vm->vm_dsize + vm->vm_ssize) >=
-	    p->p_rlimit[RLIMIT_CORE].rlim_cur)
+	if (USPACE + ptoa(vm->vm_dsize + vm->vm_ssize) >= lim_cur(RLIMIT_CORE))
 		return (EFBIG);
 
 	if (incrash && nosuidcoredump == 3) {
@@ -2050,7 +2049,7 @@ single_thread_wait(struct process *pr)
 {
 	/* wait until they're all suspended */
 	while (pr->ps_singlecount > 0)
-		tsleep(&pr->ps_singlecount, PUSER, "suspend", 0);
+		tsleep(&pr->ps_singlecount, PWAIT, "suspend", 0);
 }
 
 void

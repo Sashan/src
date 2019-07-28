@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf.c,v 1.1081 2019/03/20 20:07:28 bluhm Exp $ */
+/*	$OpenBSD: pf.c,v 1.1087 2019/07/18 20:45:10 sashan Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -222,7 +222,7 @@ int			 pf_test_state_icmp(struct pf_pdesc *,
 u_int16_t		 pf_calc_mss(struct pf_addr *, sa_family_t, int,
 			    u_int16_t);
 static __inline int	 pf_set_rt_ifp(struct pf_state *, struct pf_addr *,
-			    sa_family_t);
+			    sa_family_t, struct pf_src_node **);
 struct pf_divert	*pf_get_divert(struct mbuf *);
 int			 pf_walk_header(struct pf_pdesc *, struct ip *,
 			    u_short *);
@@ -542,7 +542,7 @@ pf_src_connlimit(struct pf_state **state)
 int
 pf_insert_src_node(struct pf_src_node **sn, struct pf_rule *rule,
     enum pf_sn_types type, sa_family_t af, struct pf_addr *src,
-    struct pf_addr *raddr)
+    struct pf_addr *raddr, struct pfi_kif *kif)
 {
 	struct pf_src_node	k;
 
@@ -586,6 +586,10 @@ pf_insert_src_node(struct pf_src_node **sn, struct pf_rule *rule,
 		}
 		(*sn)->creation = time_uptime;
 		(*sn)->rule.ptr->src_nodes++;
+		if (kif != NULL) {
+			(*sn)->kif = kif;
+			pfi_kif_ref(kif, PFI_KIF_REF_SRCNODE);
+		}
 		pf_status.scounters[SCNT_SRC_NODE_INSERT]++;
 		pf_status.src_nodes++;
 	} else {
@@ -611,6 +615,7 @@ pf_remove_src_node(struct pf_src_node *sn)
 	RB_REMOVE(pf_src_tree, &tree_src_tracking, sn);
 	pf_status.scounters[SCNT_SRC_NODE_REMOVALS]++;
 	pf_status.src_nodes--;
+	pfi_kif_unref(sn->kif, PFI_KIF_REF_SRCNODE);
 	pool_put(&pf_src_tree_pl, sn);
 }
 
@@ -3410,17 +3415,16 @@ pf_calc_mss(struct pf_addr *addr, sa_family_t af, int rtableid, u_int16_t offer)
 }
 
 static __inline int
-pf_set_rt_ifp(struct pf_state *s, struct pf_addr *saddr, sa_family_t af)
+pf_set_rt_ifp(struct pf_state *s, struct pf_addr *saddr, sa_family_t af,
+    struct pf_src_node **sns)
 {
 	struct pf_rule *r = s->rule.ptr;
-	struct pf_src_node *sns[PF_SN_MAX];
 	int	rv;
 
 	s->rt_kif = NULL;
 	if (!r->rt)
 		return (0);
 
-	memset(sns, 0, sizeof(sns));
 	switch (af) {
 	case AF_INET:
 		rv = pf_map_addr(AF_INET, r, saddr, &s->rt_addr, NULL, sns,
@@ -3860,6 +3864,13 @@ pf_test_rule(struct pf_pdesc *pd, struct pf_rule **rm, struct pf_state **sm,
 	if (r->action == PF_DROP)
 		goto cleanup;
 
+	/*
+	 * If an expired "once" rule has not been purged, drop any new matching
+	 * packets.
+	 */
+	if (r->rule_flag & PFRULE_EXPIRED)
+		goto cleanup;
+
 	pf_tag_packet(pd->m, ctx.tag, ctx.act.rtableid);
 	if (ctx.act.rtableid >= 0 &&
 	    rtable_l2(ctx.act.rtableid) != pd->rdomain)
@@ -3882,7 +3893,7 @@ pf_test_rule(struct pf_pdesc *pd, struct pf_rule **rm, struct pf_state **sm,
 
 		if (r->rule_flag & PFRULE_SRCTRACK &&
 		    pf_insert_src_node(&ctx.sns[PF_SN_NONE], r, PF_SN_NONE,
-		    pd->af, pd->src, NULL) != 0) {
+		    pd->af, pd->src, NULL, NULL) != 0) {
 			REASON_SET(&ctx.reason, PFRES_SRCLIMIT);
 			goto cleanup;
 		}
@@ -3945,9 +3956,19 @@ pf_test_rule(struct pf_pdesc *pd, struct pf_rule **rm, struct pf_state **sm,
 #endif	/* NPFSYNC > 0 */
 
 	if (r->rule_flag & PFRULE_ONCE) {
-		r->rule_flag |= PFRULE_EXPIRED;
-		r->exptime = time_second;
-		SLIST_INSERT_HEAD(&pf_rule_gcl, r, gcle);
+		u_int32_t	rule_flag;
+
+		/*
+		 * Use atomic_cas() to determine a clear winner, which will
+		 * insert an expired rule to gcl.
+		 */
+		rule_flag = r->rule_flag;
+		if (((rule_flag & PFRULE_EXPIRED) == 0) &&
+		    atomic_cas_uint(&r->rule_flag, rule_flag,
+			rule_flag | PFRULE_EXPIRED) == rule_flag) {
+			r->exptime = time_second;
+			SLIST_INSERT_HEAD(&pf_rule_gcl, r, gcle);
+		}
 	}
 
 	return (action);
@@ -4089,6 +4110,11 @@ pf_create_state(struct pf_pdesc *pd, struct pf_rule *r, struct pf_rule *a,
 		goto csfailed;
 	}
 
+	if (pf_set_rt_ifp(s, pd->src, (*skw)->af, sns) != 0) {
+		REASON_SET(&reason, PFRES_NOROUTE);
+		goto csfailed;
+	}
+
 	for (i = 0; i < PF_SN_MAX; i++)
 		if (sns[i] != NULL) {
 			struct pf_sn_item	*sni;
@@ -4102,11 +4128,6 @@ pf_create_state(struct pf_pdesc *pd, struct pf_rule *r, struct pf_rule *a,
 			SLIST_INSERT_HEAD(&s->src_nodes, sni, next);
 			sni->sn->states++;
 		}
-
-	if (pf_set_rt_ifp(s, pd->src, (*skw)->af) != 0) {
-		REASON_SET(&reason, PFRES_NOROUTE);
-		goto csfailed;
-	}
 
 	if (pf_state_insert(BOUND_IFACE(r, pd->kif), skw, sks, s)) {
 		pf_detach_state(s);

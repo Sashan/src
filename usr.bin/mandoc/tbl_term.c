@@ -1,4 +1,4 @@
-/*	$OpenBSD: tbl_term.c,v 1.58 2019/03/18 08:00:26 schwarze Exp $ */
+/*	$OpenBSD: tbl_term.c,v 1.60 2019/07/01 22:43:03 schwarze Exp $ */
 /*
  * Copyright (c) 2009, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
  * Copyright (c) 2011-2019 Ingo Schwarze <schwarze@openbsd.org>
@@ -162,7 +162,7 @@ term_tbl(struct termp *tp, const struct tbl_span *sp)
 	const struct tbl_cell	*cp, *cpn, *cpp, *cps;
 	const struct tbl_dat	*dp;
 	static size_t		 offset;
-	size_t		 	 save_offset;
+	size_t			 save_offset;
 	size_t			 coloff, tsz;
 	int			 hspans, ic, more;
 	int			 dvert, fc, horiz, lhori, rhori, uvert;
@@ -620,8 +620,12 @@ tbl_hrule(struct termp *tp, const struct tbl_span *spp,
 		    (spp == NULL || cpn == NULL ||
 		     cpn->pos != TBL_CELL_DOWN ? BRIGHT * hw : 0), 1);
 
+	col = tp->tbl.cols;
 	for (;;) {
-		col = tp->tbl.cols + cp->col;
+		if (cp == NULL)
+			col++;
+		else
+			col = tp->tbl.cols + cp->col;
 
 		/* Print the horizontal line inside this column. */
 
@@ -647,7 +651,8 @@ tbl_hrule(struct termp *tp, const struct tbl_span *spp,
 					uw = 1;
 			}
 			cpp = cpp->next;
-		}
+		} else if (spp != NULL && opts & TBL_OPT_ALLBOX)
+			uw = 1;
 		if (cp != NULL)
 			cp = cp->next;
 		if (cpn != NULL) {
@@ -659,8 +664,9 @@ tbl_hrule(struct termp *tp, const struct tbl_span *spp,
 			cpn = cpn->next;
 			while (dpn != NULL && dpn->layout != cpn)
 				dpn = dpn->next;
-		}
-		if (cpp == NULL && cp == NULL && cpn == NULL)
+		} else if (spn != NULL && opts & TBL_OPT_ALLBOX)
+			dw = 1;
+		if (col + 1 == tp->tbl.cols + sp->opts->cols)
 			break;
 
 		/* Vertical lines do not cross spanned cells. */
