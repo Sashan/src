@@ -195,7 +195,6 @@ union lock_stack {
 #define	LC_SLEEPABLE	0x00000004	/* Sleeping allowed with this lock. */
 #define	LC_RECURSABLE	0x00000008	/* Locks of this type may recurse. */
 #define	LC_UPGRADABLE	0x00000010	/* Upgrades and downgrades permitted. */
-#define LC_SRP		0x00000020	/* SRP (hazard pointer) */
 
 /*
  * Lock instances.  A lock instance is the data associated with a lock while
@@ -245,8 +244,6 @@ struct witness {
 	unsigned		w_acquired:1;
 	unsigned		w_displayed:1;
 	unsigned		w_reversed:1;
-	struct db_stack_aggr	*w_stack_aggr;
-	struct lock_object	*w_lobj;
 };
 
 SIMPLEQ_HEAD(witness_list, witness);
@@ -293,7 +290,6 @@ struct witness_pendhelp {
 
 struct witness_cpu {
 	struct lock_list_entry	*wc_spinlocks;
-	struct lock_list_entry	*wc_srp;
 	struct lock_list_entry	*wc_lle_cache;
 	union lock_stack	*wc_stk_cache;
 	unsigned int		 wc_lle_count;
@@ -345,7 +341,6 @@ static void	witness_ddb_display_list(int(*prnt)(const char *fmt, ...),
 		    struct witness_list *list);
 static void	witness_ddb_level_descendants(struct witness *parent, int l);
 static void	witness_ddb_list(struct proc *td);
-static void	witness_ddb_display_srp(int(*)(const char *fmt, ...));
 #endif
 static int	witness_alloc_stacks(void);
 static void	witness_debugger(int dump);
@@ -405,14 +400,13 @@ static struct witness_list w_all = SIMPLEQ_HEAD_INITIALIZER(w_all);
 /* w_typelist */
 static struct witness_list w_spin = SIMPLEQ_HEAD_INITIALIZER(w_spin);
 static struct witness_list w_sleep = SIMPLEQ_HEAD_INITIALIZER(w_sleep);
-static struct witness_list w_srp = SIMPLEQ_HEAD_INITIALIZER(w_srp);
 
 /* lock list */
 static struct lock_list_entry *w_lock_list_free = NULL;
 static struct witness_pendhelp pending_locks[WITNESS_PENDLIST];
 static u_int pending_cnt;
 
-static int w_free_cnt, w_spin_cnt, w_sleep_cnt, w_srp_cnt;
+static int w_free_cnt, w_spin_cnt, w_sleep_cnt;
 
 static struct witness *w_data;
 static uint8_t **w_rmatrix;
@@ -455,18 +449,12 @@ static struct lock_class lock_class_rrwlock = {
 	    LC_UPGRADABLE
 };
 
-static struct lock_class lock_class_srp = {
-	.lc_name = "srp",
-	.lc_flags = LC_SRP | LC_SLEEPABLE
-};
-
 static struct lock_class *lock_classes[] = {
 	&lock_class_kernel_lock,
 	&lock_class_sched_lock,
 	&lock_class_mutex,
 	&lock_class_rwlock,
 	&lock_class_rrwlock,
-	&lock_class_srp
 };
 
 /*
@@ -549,7 +537,6 @@ witness_initialize(void)
 		    __func__, lock->lo_name);
 		lock->lo_witness = enroll(pending_locks[i].wh_type,
 		    lock->lo_name, LOCK_CLASS(lock));
-		lock->lo_witness->w_lobj = lock;
 	}
 
 	/* Mark the witness code as being ready for use. */
@@ -595,10 +582,8 @@ witness_init(struct lock_object *lock, const struct lock_type *type)
 			panic("%s: pending locks list is too small, "
 			    "increase WITNESS_PENDLIST",
 			    __func__);
-	} else {
+	} else
 		lock->lo_witness = enroll(type, lock->lo_name, class);
-		lock->lo_witness->w_lobj = lock;
-	}
 }
 
 static inline int
@@ -731,19 +716,6 @@ witness_ddb_display(int(*prnt)(const char *fmt, ...))
 		    w->w_class->lc_name, w->w_ddb_level);
 	}
 }
-
-static void
-witness_ddb_display_srp(int(*prnt)(const char *fmt, ...))
-{
-	struct witness *w;
-
-	SIMPLEQ_FOREACH(w, &w_srp, w_typelist) {
-		prnt("lock_obj: %p\n", w->w_lobj);
-		db_stack_aggr_print(prnt, w->w_stack_aggr, 0, 0, 8);
-		prnt("........\n");
-	}
-}
-
 #endif /* DDB */
 
 int
@@ -795,11 +767,9 @@ witness_checkorder(struct lock_object *lock, int flags,
 	w = lock->lo_witness;
 	class = LOCK_CLASS(lock);
 
-	if (w == NULL) {
+	if (w == NULL)
 		w = lock->lo_witness =
 		    enroll(lock->lo_type, lock->lo_name, class);
-		w->w_lobj = lock;
-	}
 
 	p = curproc;
 
@@ -823,9 +793,6 @@ witness_checkorder(struct lock_object *lock, int flags,
 		lock_list = p->p_sleeplocks;
 		if (lock_list == NULL || lock_list->ll_count == 0)
 			return;
-	} else if (class->lc_flags & LC_SRP) {
-		/* order does not matter for SRP */
-		return;
 	} else {
 
 		/*
@@ -1138,28 +1105,6 @@ out_splx:
 }
 
 void
-witness_srp_enter(struct witness *w)
-{
-	struct db_stack_record *stack_rec;
-	struct db_stack_trace *stack;
-
-	stack_rec = db_stack_record_alloc(w->w_stack_aggr);
-	if (stack != NULL) {
-		stack = db_stack_aggr_get_stack(stack_rec);
-		db_save_stack_trace(stack);
-		db_stack_aggr_insert(w->w_stack_aggr, stack_rec);
-	}
-}
-
-void
-witness_srp_leave(struct witness *w)
-{
-	if (w == NULL)
-		panic("srp_leave() with no matching srp_enter()\n");
-	witness_srp_enter(w);
-}
-
-void
 witness_lock(struct lock_object *lock, int flags)
 {
 	struct lock_list_entry **lock_list, *lle;
@@ -1173,23 +1118,17 @@ witness_lock(struct lock_object *lock, int flags)
 		return;
 
 	w = lock->lo_witness;
-	if (w == NULL) {
+	if (w == NULL)
 		w = lock->lo_witness =
 		    enroll(lock->lo_type, lock->lo_name, LOCK_CLASS(lock));
-		w->w_lobj = lock;
-	}
 
 	p = curproc;
 
 	/* Determine lock list for this lock. */
 	if (LOCK_CLASS(lock)->lc_flags & LC_SLEEPLOCK)
 		lock_list = &p->p_sleeplocks;
-	else if (LOCK_CLASS(lock)->lc_flags & LC_SRP)
-		lock_list = &witness_cpu[cpu_number()].wc_srp;
-	else {
-		witness_srp_enter(w);
-		return;
-	}
+	else
+		lock_list = &witness_cpu[cpu_number()].wc_spinlocks;
 
 	s = splhigh();
 
@@ -1327,14 +1266,10 @@ witness_unlock(struct lock_object *lock, int flags)
 	class = LOCK_CLASS(lock);
 
 	/* Find lock instance associated with this lock. */
-	if (class->lc_flags & LC_SLEEPLOCK) {
+	if (class->lc_flags & LC_SLEEPLOCK)
 		lock_list = &p->p_sleeplocks;
-	} else if (class->lc_flags & LC_SRP) {
-		witness_srp_leave(lock->lo_witness);
-		return;
-	} else {
+	else
 		lock_list = &witness_cpu[cpu_number()].wc_spinlocks;
-	}
 
 	s = splhigh();
 
@@ -1521,15 +1456,6 @@ witness_warn(int flags, struct lock_object *lock, const char *fmt, ...)
 	return (n);
 }
 
-void
-witness_init_srp(struct witness *w)
-{
-	/*
-	 * up to 64 different stacks, each 8 frames deep.
-	 */
-	w->w_stack_aggr = db_stack_aggr_create(64, 8);
-}
-
 static struct witness *
 enroll(const struct lock_type *type, const char *subtype,
     struct lock_class *lock_class)
@@ -1545,8 +1471,6 @@ enroll(const struct lock_type *type, const char *subtype,
 		typelist = &w_spin;
 	} else if ((lock_class->lc_flags & LC_SLEEPLOCK)) {
 		typelist = &w_sleep;
-	} else if (lock_class->lc_flags & LC_SRP) {
-		typelist = &w_srp;
 	} else {
 		panic("lock class %s is not sleep or spin",
 		    lock_class->lc_name);
@@ -1569,10 +1493,6 @@ enroll(const struct lock_type *type, const char *subtype,
 	} else if (lock_class->lc_flags & LC_SLEEPLOCK) {
 		SIMPLEQ_INSERT_HEAD(&w_sleep, w, w_typelist);
 		w_sleep_cnt++;
-	} else if (lock_class->lc_flags & LC_SRP) {
-		SIMPLEQ_INSERT_HEAD(&w_srp, w, w_typelist);
-		witness_init_srp(w);
-		w_srp_cnt++;
 	}
 
 	/* Insert new witness into the hash */
@@ -2332,9 +2252,6 @@ db_witness_display(db_expr_t addr, int have_addr, db_expr_t count, char *modif)
 	switch (modif[0]) {
 	case 'b':
 		witness_print_badstacks();
-		break;
-	case 's':
-		witness_ddb_display_srp(db_printf);
 		break;
 	default:
 		witness_ddb_display(db_printf);

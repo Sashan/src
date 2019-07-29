@@ -53,8 +53,7 @@ enum lock_class_index {
 	LO_CLASS_SCHED_LOCK,
 	LO_CLASS_MUTEX,
 	LO_CLASS_RWLOCK,
-	LO_CLASS_RRWLOCK,
-	LO_CLASS_SRP
+	LO_CLASS_RRWLOCK
 };
 
 struct lock_object {
