@@ -21,10 +21,6 @@
 
 #include <sys/refcnt.h>
 
-#ifdef WITNESS
-#include <sys/_lock.h>
-#endif
-
 #ifndef __upunused
 #ifdef MULTIPROCESSOR
 #define __upunused
@@ -35,8 +31,27 @@
 
 struct srp {
 	void			*ref;
-#ifdef WITNESS
-	struct lock_object	lock_obj;
+#ifdef SRP_DEBUG
+	struct db_stack_aggr	*srp_stacks;
+	/*
+	 * we can't get definition of db_stack_trace here.
+	 * after including desired header files I ran into
+	 * compile error as follows:
+	 * amd64/compile/GENERIC.MP/obj/machine/cpu.h:192:34:
+	 * 	error: array has incomplete element type 'struct srp_hazard'
+	 *	struct srp_hazard       ci_srp_hazards[SRP_HAZARD_NUM];
+	 *
+	 * the possible fix is to move definition of DB_STACK_TRACE_MAX
+	 * to sys/param.h or ddb/db_param.h, which will be safe to include.
+	 *
+	 * 256, should be enough 20 * 8 = 160 < 256
+	 */
+	union {
+		struct db_stack_trace	*u_srp_stack;
+		char 			 u_buf[256];
+	} srp_u;
+#define srp_stack	srp_u.u_srp_stack
+#define srp_buf		srp_u.u_buf
 #endif
 };
 

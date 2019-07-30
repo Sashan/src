@@ -24,11 +24,37 @@
 #ifdef SRP_DEBUG
 #include <machine/db_machdep.h>
 #include <ddb/db_sym.h>
+#include <ddb/db_access.h>
+#include <ddb/db_output.h>
 #include <sys/proc.h>
-#include <sys/witness.h>
 #endif
 
 void	srp_v_gc_start(struct srp_gc *, struct srp *, void *);
+
+#ifdef SRP_DEBUG
+#define	SRP_STACK_TRACE(_srp_)	do {	\
+		struct db_stack_record	*stack_record;	\
+		struct db_stack_trace	*stack_trace;	\
+		if ((_srp_)->srp_stacks != NULL) {	\
+			stack_record = db_alloc_stack_record(		\
+			    (_srp_)->srp_stacks);			\
+			if (stack_record != NULL) {			\
+				stack_trace =  db_get_stack_trace_aggr(	\
+				    stack_record);		\
+				if (stack_trace != NULL) {		\
+					db_save_stack_trace(stack_trace);\
+					memcpy((_srp_)->srp_buf,	\
+					    stack_trace,		\
+					    sizeof(struct db_stack_trace));\
+					db_insert_stack_record(		\
+					    (_srp_)->srp_stacks, stack_record);\
+				}					\
+			}						\
+		}							\
+	} while (0)
+#else
+#define SRP_STACK_TRACE(_srp_)	(void)(0)
+#endif
 
 void
 srpl_rc_init(struct srpl_rc *rc,  void (*ref)(void *, void *),
@@ -49,17 +75,10 @@ srp_gc_init(struct srp_gc *srp_gc, void (*dtor)(void *, void *), void *cookie)
 void
 srp_init(struct srp *srp)
 {
-#ifdef WITNESS
-	static const struct lock_type type = { .lt_name = "srp" };
-
-	srp->lock_obj.lo_flags =
-	    LO_SLEEPABLE | (LO_CLASS_SRP << LO_CLASSSHIFT);
-	srp->lock_obj.lo_name = "srp";
-	srp->lock_obj.lo_type = &type;
-	WITNESS_INIT(&srp->lock_obj, &type);
-#endif
-
 	srp->ref = NULL;
+#ifdef SRP_DEBUG
+	srp->srp_stacks = db_create_stack_aggr(256, 8);
+#endif
 }
 
 void *
@@ -240,9 +259,8 @@ srp_enter(struct srp_ref *sr, struct srp *srp)
 	struct srp_hazard *hzrd;
 	u_int i;
 
-#ifdef WITNESS
-	witness_lock(&srp->lock_obj, 0);
-#endif
+	SRP_STACK_TRACE(srp);
+
 	for (i = 0; i < nitems(ci->ci_srp_hazards); i++) {
 		hzrd = &ci->ci_srp_hazards[i];
 		if (hzrd->sh_p == NULL) {
@@ -266,6 +284,7 @@ srp_follow(struct srp_ref *sr, struct srp *srp)
 void
 srp_leave(struct srp_ref *sr)
 {
+	SRP_STACK_TRACE(sr->hz->sh_p);
 	sr->hz->sh_p = NULL;
 }
 
@@ -312,3 +331,75 @@ srp_v_gc_start(struct srp_gc *srp_gc, struct srp *srp, void *v)
 }
 
 #endif /* MULTIPROCESSOR */
+
+#ifdef SRP_DEBUG
+void
+db_srp_display(db_expr_t *addr, int have_addr, db_expr_t count, char *modif)
+{
+	CPU_INFO_ITERATOR	cii;
+	struct cpu_info	*ci;
+	unsigned int	busy_hzrds;
+	unsigned int	i;
+	db_expr_t	offset;
+	Elf_Sym		*sym;
+	char		*name;
+	struct srp	*srp;
+	struct db_stack_trace *stack;
+
+	if ((modif == NULL) || (*modif == '\0')) {
+		CPU_INFO_FOREACH(cii, ci) {
+			busy_hzrds = 0;
+			for (i = 0; i < SRP_HAZARD_NUM; i++) {
+				if (ci->ci_srp_hazards[i].sh_p != NULL)
+					busy_hzrds++;
+			}
+
+			db_printf("cpu %u, %u of %u in use\n", ci->ci_cpuid,
+			    busy_hzrds, SRP_HAZARD_NUM);
+		}
+
+		return;
+	}
+
+	switch (*modif) {
+	case 'c':
+		ci = NULL;
+		CPU_INFO_FOREACH(cii, ci) {
+			if (ci->ci_cpuid == (u_int)count)
+				break;
+		}
+
+		if (ci == NULL) {
+			db_printf("no such CPU (%u)\n", (unsigned int)count);
+			return;
+		}
+
+		for (i = 0; i < SRP_HAZARD_NUM; i++) {
+			if (ci->ci_srp_hazards[i].sh_p != NULL) {
+				srp = ci->ci_srp_hazards[i].sh_p;
+				stack = (struct db_stack_trace *)&srp->srp_stack;
+				sym = db_search_symbol(stack->st_pc[1],
+				    DB_STGY_ANY, &offset);
+				db_symbol_values(sym, &name, NULL);
+				db_printf("[%u] %p\t%s()\n", i, srp, name);
+			} else {
+				db_printf("[%u] --\n", i);
+			}
+		}
+	default:
+		db_printf("unknown option %c\n", *modif);
+	}
+}
+
+void
+db_srp_list_all(db_expr_t addr, int have_addr, db_expr_t count, char *modif)
+{
+	return;
+}
+
+void
+db_srp_list(db_expr_t addr, int have_addr, db_expr_t count, char *modif)
+{
+	return;
+}
+#endif

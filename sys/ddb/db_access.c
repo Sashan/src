@@ -153,7 +153,7 @@ db_put_value(db_addr_t addr, size_t size, db_expr_t value)
 }
 
 struct db_stack_aggr *
-db_stack_aggr_create(unsigned int stacks, unsigned int stack_depth)
+db_create_stack_aggr(unsigned int stacks, unsigned int stack_depth)
 {
 	struct db_stack_aggr	*rv_dbsa;
 	unsigned int	i;
@@ -192,7 +192,7 @@ db_stack_aggr_create(unsigned int stacks, unsigned int stack_depth)
 }
 
 void
-db_stack_aggr_destroy(struct db_stack_aggr *dbsa)
+db_destroy_stack_aggr(struct db_stack_aggr *dbsa)
 {
 	free(dbsa->dbsa_pool, M_TEMP,
 	    sizeof(struct db_stack_record) * dbsa->dbsa_pool_limit);
@@ -200,7 +200,7 @@ db_stack_aggr_destroy(struct db_stack_aggr *dbsa)
 }
 
 struct db_stack_record *
-db_stack_record_alloc(struct db_stack_aggr *dbsa)
+db_alloc_stack_record(struct db_stack_aggr *dbsa)
 {
 	struct db_stack_record *rv;
 
@@ -221,7 +221,7 @@ db_stack_record_alloc(struct db_stack_aggr *dbsa)
 }
 
 void
-db_stack_record_free(struct db_stack_record *dbsr)
+db_free_stack_record(struct db_stack_record *dbsr)
 {
 	KASSERT(dbsr->dbsr_my_dbsa != NULL);
 	KASSERT(!dbsr->dbsr_used);
@@ -234,7 +234,7 @@ db_stack_record_free(struct db_stack_record *dbsr)
 }
 
 unsigned int
-db_stack_aggr_get_key(struct db_stack_aggr *dbsa, struct db_stack_record *dbsr)
+db_get_stack_key(struct db_stack_aggr *dbsa, struct db_stack_record *dbsr)
 {
 	db_addr_t	rv = (db_addr_t)0xfeedfacefeedface;
 	unsigned int	i;
@@ -247,12 +247,13 @@ db_stack_aggr_get_key(struct db_stack_aggr *dbsa, struct db_stack_record *dbsr)
 }
 
 struct db_stack_record *
-db_stack_aggr_insert(struct db_stack_aggr *dbsa, struct db_stack_record *key_dbsr)
+db_insert_stack_record(struct db_stack_aggr *dbsa,
+    struct db_stack_record *key_dbsr)
 {
 	struct db_stack_list	*bucket;
 	struct db_stack_record	*dbsr;
 
-	key_dbsr->dbsr_hkey = db_stack_aggr_get_key(dbsa, key_dbsr);
+	key_dbsr->dbsr_hkey = db_get_stack_key(dbsa, key_dbsr);
 	bucket = &dbsa->dbsa_hash_dbsr[dbsr->dbsr_hkey];
 	mtx_enter(&dbsa->dbsa_mtx);
 	LIST_FOREACH(dbsr, bucket, dbsr_le) {
@@ -288,7 +289,7 @@ db_stack_aggr_insert(struct db_stack_aggr *dbsa, struct db_stack_record *key_dbs
 }
 
 struct db_stack_trace *
-db_stack_aggr_get_stack(struct db_stack_record *dbsr)
+db_get_stack_trace_aggr(struct db_stack_record *dbsr)
 {
 	return (&dbsr->dbsr_st);
 }
@@ -307,7 +308,7 @@ db_stack_sort_desc(struct db_stack_record * a_dbsr, struct db_stack_record *b_db
 
 
 void
-db_stack_aggr_sort(struct db_stack_aggr *dbsa, struct db_stack_list *sorted,
+db_sort_stack_aggr(struct db_stack_aggr *dbsa, struct db_stack_list *sorted,
     int(*cmp)(struct db_stack_record *, struct db_stack_record *))
 {
 	struct db_stack_record	*bucket_dbsr, *sorted_dbsr;
@@ -329,7 +330,7 @@ db_stack_aggr_sort(struct db_stack_aggr *dbsa, struct db_stack_list *sorted,
 }
 
 void
-db_stack_aggr_print(int(*prnt)(const char *format, ...),
+db_print_stack_aggr(int(*prnt)(const char *format, ...),
     struct db_stack_aggr *dbsa, int asc, unsigned int top, unsigned int depth)
 {
 	int(*cmp)(struct db_stack_record *, struct db_stack_record *);
@@ -345,7 +346,7 @@ db_stack_aggr_print(int(*prnt)(const char *format, ...),
 	else
 		cmp = db_stack_sort_desc;
 
-	db_stack_aggr_sort(dbsa, &sorted, cmp);
+	db_sort_stack_aggr(dbsa, &sorted, cmp);
 
 	prnt("stack count:\t%u\n", dbsa->dbsa_pool_used);
 	i = 0;
