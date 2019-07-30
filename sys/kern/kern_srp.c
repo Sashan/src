@@ -43,10 +43,8 @@ void	srp_v_gc_start(struct srp_gc *, struct srp *, void *);
 				    stack_record);		\
 				if (stack_trace != NULL) {		\
 					db_save_stack_trace(stack_trace);\
-					memcpy((_srp_)->srp_buf,	\
-					    stack_trace,		\
-					    sizeof(struct db_stack_trace));\
-					db_insert_stack_record(		\
+					(_srp_)->srp_stack =		\
+					    db_insert_stack_record(	\
 					    (_srp_)->srp_stacks, stack_record);\
 				}					\
 			}						\
