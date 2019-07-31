@@ -21,6 +21,10 @@
 
 #include <sys/refcnt.h>
 
+#ifdef SRP_DEBUG
+#include <sys/tree.h>
+#endif
+
 #ifndef __upunused
 #ifdef MULTIPROCESSOR
 #define __upunused
@@ -31,11 +35,18 @@
 
 struct srp {
 	void			*ref;
+};
+
 #ifdef SRP_DEBUG
+struct srp_shadow {
+	struct srp		*srp;
 	struct db_stack_aggr	*srp_stacks;
 	struct db_stack_trace	*srp_stack;	/* srp owner call stack */
-#endif
+	SPLAY_ENTRY(srp_shadow)	 srp_entry;
 };
+
+SPLAY_HEAD(srp_shadow_table, srp_shadow);
+#endif
 
 #define SRP_INITIALIZER() { NULL }
 

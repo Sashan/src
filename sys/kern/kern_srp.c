@@ -23,6 +23,7 @@
 #include <sys/atomic.h>
 #ifdef SRP_DEBUG
 #include <machine/db_machdep.h>
+#include <sys/malloc.h>
 #include <ddb/db_sym.h>
 #include <ddb/db_access.h>
 #include <ddb/db_output.h>
@@ -32,24 +33,29 @@
 void	srp_v_gc_start(struct srp_gc *, struct srp *, void *);
 
 #ifdef SRP_DEBUG
-#define	SRP_STACK_TRACE(_srp_)	do {	\
-		struct db_stack_record	*stack_record;	\
-		struct db_stack_trace	*stack_trace;	\
-		if ((_srp_)->srp_stacks != NULL) {	\
-			stack_record = db_alloc_stack_record(		\
-			    (_srp_)->srp_stacks);			\
-			if (stack_record != NULL) {			\
-				stack_trace =  db_get_stack_trace_aggr(	\
-				    stack_record);		\
-				if (stack_trace != NULL) {		\
-					db_save_stack_trace(stack_trace);\
-					stack_record = db_insert_stack_record(\
-					    (_srp_)->srp_stacks, stack_record);\
-					(_srp_)->srp_stack = 		\
-					    db_get_stack_trace_aggr(	\
-					    stack_record);		\
-				}					\
-			}						\
+
+int db_srp_shadow_cmp(struct srp_shadow *, struct srp_shadow *);
+
+struct srp_shadow *db_get_srp_shadow(struct srp *);
+struct db_stack_record *db_get_stackrecord_for_shadow(struct srp_shadow *);
+
+SPLAY_PROTOTYPE(srp_shadow_table, srp_shadow, srp_entry, db_srp_shadow_cmp)
+SPLAY_GENERATE(srp_shadow_table, srp_shadow, srp_entry, db_srp_shadow_cmp)
+
+#define	SRP_STACK_TRACE(_srp_)	do {					\
+		struct srp_shadow	*srp_shadow;			\
+		struct db_stack_record	*stack_record;			\
+		struct db_stack_trace	*stack_trace;			\
+									\
+		srp_shadow = db_get_srp_shadow((_srp_));		\
+		stack_record = db_get_stackrecord_for_shadow(srp_shadow);\
+		if (stack_record != NULL) {				\
+			stack_trace = db_get_stack_trace_aggr(stack_record);\
+			db_save_stack_trace(stack_trace);		\
+			stack_record = db_insert_stack_record(		\
+			    srp_shadow->srp_stacks, stack_record);	\
+			srp_shadow->srp_stack =				\
+			    db_get_stack_trace_aggr(stack_record);	\
 		}							\
 	} while (0)
 #else
@@ -76,9 +82,6 @@ void
 srp_init(struct srp *srp)
 {
 	srp->ref = NULL;
-#ifdef SRP_DEBUG
-	srp->srp_stacks = db_create_stack_aggr(256, 8);
-#endif
 }
 
 void *
@@ -333,18 +336,73 @@ srp_v_gc_start(struct srp_gc *srp_gc, struct srp *srp, void *v)
 #endif /* MULTIPROCESSOR */
 
 #ifdef SRP_DEBUG
+
+int
+db_srp_shadow_cmp(struct srp_shadow *a, struct srp_shadow *b)
+{
+	if (a->srp < b->srp)
+		return (-1);
+	else if (a->srp > b->srp)
+		return (1);
+	else
+		return (0);
+}
+
+struct srp_shadow *
+db_get_srp_shadow(struct srp *srp)
+{
+	struct srp_shadow	key;
+	struct srp_shadow	*srp_shadow;
+	struct cpu_info		*ci;
+	struct srp_shadow_table	*srp_table;
+
+	ci = curcpu();
+	srp_table = &ci->ci_srp_table;
+	key.srp = srp;
+	srp_shadow = SPLAY_FIND(srp_shadow_table, srp_table, &key);
+	if (srp_shadow == NULL) {
+		srp_shadow = malloc(sizeof(struct srp_shadow), M_TEMP,
+		    M_NOWAIT|M_ZERO);
+		if (srp_shadow == NULL)
+			return (NULL);
+
+		srp_shadow->srp = srp;
+		srp_shadow->srp_stacks = db_create_stack_aggr(256, 8);
+		if (srp_shadow->srp_stacks == NULL) {
+			free(srp_shadow, M_TEMP, sizeof(struct srp_shadow));
+			return (NULL);
+		}
+
+		SPLAY_INSERT(srp_shadow_table, srp_table, srp_shadow);
+	}
+
+	return (srp_shadow);
+}
+
+struct db_stack_record *
+db_get_stackrecord_for_shadow(struct srp_shadow *srp_shadow)
+{
+	struct db_stack_record *stack_record;
+
+	if (srp_shadow == NULL)
+		return (NULL);
+
+	stack_record = db_alloc_stack_record(srp_shadow->srp_stacks);
+	return (stack_record);
+}
+
 void
 db_srp_display(db_expr_t *addr, int have_addr, db_expr_t count, char *modif)
 {
-	CPU_INFO_ITERATOR	cii;
-	struct cpu_info	*ci;
-	unsigned int	busy_hzrds;
-	unsigned int	i;
-	db_expr_t	offset;
-	Elf_Sym		*sym;
-	char		*name;
-	struct srp	*srp;
-	struct db_stack_trace *stack;
+	CPU_INFO_ITERATOR	 cii;
+	struct cpu_info		*ci;
+	unsigned int		 busy_hzrds;
+	unsigned int		 i;
+	db_expr_t		 offset;
+	Elf_Sym			*sym;
+	char			*name;
+	struct srp_shadow	*srp_shadow;
+	struct srp_shadow	 key;
 
 	if ((modif == NULL) || (*modif == '\0')) {
 		CPU_INFO_FOREACH(cii, ci) {
@@ -376,12 +434,19 @@ db_srp_display(db_expr_t *addr, int have_addr, db_expr_t count, char *modif)
 
 		for (i = 0; i < SRP_HAZARD_NUM; i++) {
 			if (ci->ci_srp_hazards[i].sh_p != NULL) {
-				srp = ci->ci_srp_hazards[i].sh_p;
-				stack = (struct db_stack_trace *)&srp->srp_stack;
-				sym = db_search_symbol(stack->st_pc[1],
-				    DB_STGY_ANY, &offset);
-				db_symbol_values(sym, &name, NULL);
-				db_printf("[%u] %p\t%s()\n", i, srp, name);
+				key.srp = ci->ci_srp_hazards[i].sh_p;
+				srp_shadow = SPLAY_FIND(srp_shadow_table,
+				    &ci->ci_srp_table, &key);
+				if (srp_shadow == NULL) {
+					db_printf("[%u] no shadow\n", i);
+				} else {
+					sym = db_search_symbol(
+					    srp_shadow->srp_stack->st_pc[1],
+					    DB_STGY_ANY, &offset);
+					db_symbol_values(sym, &name, NULL);
+					db_printf("[%u] %p\t%s()\n", i, key.srp,
+					    name);
+				}
 			} else {
 				db_printf("[%u] --\n", i);
 			}

@@ -159,7 +159,7 @@ db_create_stack_aggr(unsigned int stacks, unsigned int stack_depth)
 	unsigned int	i;
 
 	rv_dbsa = malloc(sizeof(struct db_stack_aggr),
-	    M_TEMP, M_WAITOK|M_ZERO);
+	    M_TEMP, M_NOWAIT|M_ZERO);
 	if (rv_dbsa == NULL)
 		return (NULL);
 
@@ -168,7 +168,7 @@ db_create_stack_aggr(unsigned int stacks, unsigned int stack_depth)
 
 	rv_dbsa->dbsa_pool_limit = stacks;
 	rv_dbsa->dbsa_pool = mallocarray(stacks, sizeof(struct db_stack_record),
-	    M_TEMP, M_WAITOK|M_ZERO);
+	    M_TEMP, M_NOWAIT|M_ZERO);
 
 	if (rv_dbsa->dbsa_pool == NULL) {
 		free(rv_dbsa, M_TEMP, sizeof(struct db_stack_aggr));

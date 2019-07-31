@@ -190,6 +190,9 @@ struct cpu_info {
 
 #ifdef MULTIPROCESSOR
 	struct srp_hazard	ci_srp_hazards[SRP_HAZARD_NUM];
+#ifdef SRP_DEBUG
+	struct srp_shadow_table	ci_srp_table;
+#endif
 #endif
 
 	struct ksensordev	ci_sensordev;
