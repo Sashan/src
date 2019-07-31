@@ -292,7 +292,7 @@ srp_follow(struct srp_ref *sr, struct srp *srp)
 void
 srp_leave(struct srp_ref *sr)
 {
-	SRP_STACK_TRACE(sr->hz->sh_p);
+	SRP_STACK_STOP(sr->hz->sh_p);
 	sr->hz->sh_p = NULL;
 }
 
