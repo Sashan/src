@@ -38,6 +38,7 @@ int db_srp_shadow_cmp(struct srp_shadow *, struct srp_shadow *);
 
 struct srp_shadow *db_get_srp_shadow(struct srp *);
 struct db_stack_record *db_get_stackrecord_for_shadow(struct srp_shadow *);
+void db_stack_stop(struct srp *);
 
 SPLAY_PROTOTYPE(srp_shadow_table, srp_shadow, srp_entry, db_srp_shadow_cmp)
 SPLAY_GENERATE(srp_shadow_table, srp_shadow, srp_entry, db_srp_shadow_cmp)
