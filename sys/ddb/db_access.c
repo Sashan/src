@@ -196,7 +196,7 @@ db_destroy_stack_aggr(struct db_stack_aggr *dbsa)
 {
 	free(dbsa->dbsa_pool, M_TEMP,
 	    sizeof(struct db_stack_record) * dbsa->dbsa_pool_limit);
-	free(dbsa, M_TEMP, sizeof(struct db_stack_record));
+	free(dbsa, M_TEMP, sizeof(struct db_stack_aggr));
 }
 
 struct db_stack_record *

@@ -58,8 +58,13 @@ SPLAY_GENERATE(srp_shadow_table, srp_shadow, srp_entry, db_srp_shadow_cmp)
 			    db_get_stack_trace_aggr(stack_record);	\
 		}							\
 	} while (0)
+
+#define SRP_STACK_STOP(_srp_) do {					\
+		db_stack_stop((_srp_));					\
+	} while (0)
 #else
 #define SRP_STACK_TRACE(_srp_)	(void)(0)
+#define SRP_STACK_STOP(_srp_)	(void)(0)
 #endif
 
 void
@@ -377,6 +382,26 @@ db_get_srp_shadow(struct srp *srp)
 	}
 
 	return (srp_shadow);
+}
+
+void
+db_stack_stop(struct srp *srp)
+{
+	struct srp_shadow	*srp_shadow;
+	struct srp_shadow	key;
+	struct cpu_info		*ci;
+	struct srp_shadow_table	*srp_table;
+
+	ci = curcpu();
+	srp_table = &ci->ci_srp_table;
+	key.srp = srp;
+	srp_shadow = SPLAY_FIND(srp_shadow_table, srp_table, &key);
+
+	if (srp_shadow != NULL) {
+		SPLAY_REMOVE(srp_shadow_table, srp_table, srp_shadow);
+		db_destroy_stack_aggr(srp_shadow->srp_stacks);
+		free(srp_shadow, M_TEMP, sizeof(struct srp_shadow));
+	}
 }
 
 struct db_stack_record *
