@@ -2440,7 +2440,9 @@ pfsync_send_plus(void *plus, size_t pluslen)
 	sc->sc_plus = plus;
 	sc->sc_len += (sc->sc_pluslen = pluslen);
 
+	PF_LOCK();
 	pfsync_sendout();
+	PF_UNLOCK();
 }
 
 int
