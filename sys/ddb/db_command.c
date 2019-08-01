@@ -117,7 +117,9 @@ void	db_write_cmd(db_expr_t, boolean_t, db_expr_t, char *);
 void	db_witness_display(db_expr_t, int, db_expr_t, char *);
 void	db_witness_list(db_expr_t, int, db_expr_t, char *);
 void	db_witness_list_all(db_expr_t, int, db_expr_t, char *);
-
+void	db_srp_display(db_expr_t, int, db_expr_t, char *);
+void	db_srp_list_all(db_expr_t, int, db_expr_t, char *);
+void	db_srp_list(db_expr_t, int, db_expr_t, char *);
 
 /*
  * Utility routine - discard tokens through end-of-line.
@@ -559,6 +561,9 @@ struct db_command db_show_all_cmds[] = {
 #ifdef WITNESS
 	{ "locks",	db_witness_list_all,	0, NULL },
 #endif
+#ifdef SRP_DEBUG
+	{ "srp",	db_srp_list_all,	0, NULL },
+#endif
 	{ NULL, 	NULL, 			0, NULL }
 };
 
@@ -592,6 +597,9 @@ struct db_command db_show_cmds[] = {
 	{ "watches",	db_listwatch_cmd, 	0,	NULL },
 #ifdef WITNESS
 	{ "witness",	db_witness_display,	0,	NULL },
+#endif
+#ifdef SRP_DEBUG
+	{ "srp",	db_srp_display,		0,	NULL },
 #endif
 	{ NULL,		NULL,			0,	NULL }
 };
