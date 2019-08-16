@@ -50,21 +50,12 @@
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
-#include <netinet/ip_icmp.h>
-#include <netinet/tcp.h>
-#include <netinet/udp.h>
-
-#ifdef INET6
-#include <netinet6/in6_var.h>
-#include <netinet/ip6.h>
-#include <netinet6/ip6_var.h>
-#include <netinet/icmp6.h>
-#include <netinet6/nd6.h>
-#include <netinet6/ip6_divert.h>
-#endif /* INET6 */
 
 #include <net/pfvar.h>
-#include <net/pfvar_priv.h>
+
+#ifdef INET6
+#include <netinet/ip6.h>
+#endif /* INET6 */
 
 struct pfi_kif		 *pfi_all = NULL;
 struct pool		  pfi_addr_pl;
@@ -112,7 +103,6 @@ pfi_kif_find(const char *kif_name)
 {
 	struct pfi_kif_cmp	 s;
 
-	PF_ASSERT_LOCKED();
 	memset(&s, 0, sizeof(s));
 	strlcpy(s.pfik_name, kif_name, sizeof(s.pfik_name));
 	return (RB_FIND(pfi_ifhead, &pfi_ifs, (struct pfi_kif *)&s));
