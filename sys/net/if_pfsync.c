@@ -1578,7 +1578,7 @@ pfsync_grab_snapshot(struct pfsync_snapshot *sn, struct pfsync_softc *sc)
 	sc->sc_pluslen = 0;
 
 	mtx_leave(&sc->sc_tdb_mtx);
-	mtx_enter(&sc->sc_upd_req_mtx);
+	mtx_leave(&sc->sc_upd_req_mtx);
 
 	for (q = (PFSYNC_S_COUNT - 1); q >= 0; q--)
 		mtx_leave(&sc->sc_mtx[q]);
