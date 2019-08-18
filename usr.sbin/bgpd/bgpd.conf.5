@@ -1,4 +1,4 @@
-.\" $OpenBSD: bgpd.conf.5,v 1.191 2019/06/17 14:00:45 claudio Exp $
+.\" $OpenBSD: bgpd.conf.5,v 1.194 2019/08/08 20:37:08 fcambus Exp $
 .\"
 .\" Copyright (c) 2004 Claudio Jeker <claudio@openbsd.org>
 .\" Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -16,7 +16,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: June 17 2019 $
+.Dd $Mdocdate: August 8 2019 $
 .Dt BGPD.CONF 5
 .Os
 .Sh NAME
@@ -303,7 +303,8 @@ where the metric is only compared between peers belonging to the same AS.
 .Xc
 Create an additional RIB named
 .Ar name .
-It is possible to disable the decision process per RIB with the
+It may be excluded from the decision process that selects usable routes
+with the
 .Ic no Ic evaluate
 flag.
 If a
@@ -333,16 +334,6 @@ more stable, route.
 In this case the decision process is no longer deterministic.
 The default is
 .Ic ignore .
-.Pp
-.It Xo
-.Ic route-collector
-.Pq Ic yes Ns | Ns Ic no
-.Xc
-If set to
-.Ic yes ,
-the route selection process is turned off.
-The default is
-.Ic no .
 .Pp
 .It Ic router-id Ar address
 Set the router ID to the given IP address, which must be local to the
@@ -393,7 +384,7 @@ The default is
 .El
 .Sh SET CONFIGURATION
 .Xr bgpd 8
-supports sets for looking up collections in an efficent way.
+supports sets for looking up collections in an efficient way.
 .Ic as-set ,
 .Ic prefix-set ,
 and
@@ -582,7 +573,7 @@ The description is used when logging but has no further meaning to
 The
 .Xr mpe 4
 interface will be used as the outgoing interface for routes to
-the VPN, and local networks will be annouced with the MPLS label
+the VPN, and local networks will be announced with the MPLS label
 specified on the interface.
 The interface can provide VPN connectivity for another rdomain by
 being configured in that rdomain.

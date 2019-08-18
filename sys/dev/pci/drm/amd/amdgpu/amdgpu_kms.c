@@ -1337,10 +1337,23 @@ int amdgpu_debugfs_firmware_init(struct amdgpu_device *adev)
 int
 amdgpu_probe(struct device *parent, void *match, void *aux)
 {
+	struct pci_attach_args *pa = aux;
+	const struct drm_pcidev *id_entry;
+	unsigned long flags = 0;
+
 	if (amdgpu_fatal_error)
 		return 0;
-	if (drm_pciprobe(aux, amdgpu_pciidlist))
-		return 20;
+
+	id_entry = drm_find_description(PCI_VENDOR(pa->pa_id),
+	    PCI_PRODUCT(pa->pa_id), amdgpu_pciidlist);
+	if (id_entry != NULL) {
+		flags = id_entry->driver_data;
+		if (flags & AMD_EXP_HW_SUPPORT)
+			return 0;
+		else
+			return 20;		
+	}
+	
 	return 0;
 }
 
@@ -1651,6 +1664,9 @@ int
 amdgpu_wsioctl(void *v, u_long cmd, caddr_t data, int flag, struct proc *p)
 {
 	struct rasops_info *ri = v;
+	struct amdgpu_device *adev = ri->ri_hw;
+	struct backlight_device *bd = adev->dm.backlight_dev;
+	struct wsdisplay_param *dp = (struct wsdisplay_param *)data;
 	struct wsdisplay_fbinfo *wdf;
 
 	switch (cmd) {
@@ -1664,9 +1680,32 @@ amdgpu_wsioctl(void *v, u_long cmd, caddr_t data, int flag, struct proc *p)
 		wdf->depth = ri->ri_depth;
 		wdf->cmsize = 0;
 		return 0;
-	default:
-		return -1;
+	case WSDISPLAYIO_GETPARAM:
+		if (bd == NULL)
+			return -1;
+
+		switch (dp->param) {
+		case WSDISPLAYIO_PARAM_BRIGHTNESS:
+			dp->min = 0;
+			dp->max = bd->props.max_brightness;
+			dp->curval = bd->ops->get_brightness(bd);
+			return (dp->max > dp->min) ? 0 : -1;
+		}
+		break;
+	case WSDISPLAYIO_SETPARAM:
+		if (bd == NULL || dp->curval > bd->props.max_brightness)
+			return -1;
+
+		switch (dp->param) {
+		case WSDISPLAYIO_PARAM_BRIGHTNESS:
+			bd->props.brightness = dp->curval;
+			backlight_update_status(bd);
+			return 0;
+		}
+		break;
 	}
+
+	return (-1);
 }
 
 paddr_t
