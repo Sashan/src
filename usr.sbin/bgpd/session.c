@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.c,v 1.388 2019/07/24 20:25:27 benno Exp $ */
+/*	$OpenBSD: session.c,v 1.390 2019/08/13 12:13:26 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004, 2005 Henning Brauer <henning@openbsd.org>
@@ -385,18 +385,10 @@ session_main(int debug, int verbose)
 					bgp_fsm(p, EVNT_START);
 					break;
 				case Timer_IdleHoldReset:
-					p->IdleHoldTime /= 2;
-					if (p->IdleHoldTime <=
-					    INTERVAL_IDLE_HOLD_INITIAL) {
-						p->IdleHoldTime =
-						    INTERVAL_IDLE_HOLD_INITIAL;
-						timer_stop(p,
-						    Timer_IdleHoldReset);
-						p->errcnt = 0;
-					} else
-						timer_set(p,
-						    Timer_IdleHoldReset,
-						    p->IdleHoldTime);
+					p->IdleHoldTime =
+					    INTERVAL_IDLE_HOLD_INITIAL;
+					p->errcnt = 0;
+					timer_stop(p, Timer_IdleHoldReset);
 					break;
 				case Timer_CarpUndemote:
 					timer_stop(p, Timer_CarpUndemote);
@@ -2902,7 +2894,7 @@ getpeerbydesc(struct bgpd_config *c, const char *descr)
 	struct peer	*p, *res = NULL;
 	int		 match = 0;
 
-	RB_FOREACH(p, peer_head, &conf->peers)
+	RB_FOREACH(p, peer_head, &c->peers)
 		if (!strcmp(p->conf.descr, descr)) {
 			res = p;
 			match++;
@@ -2928,13 +2920,13 @@ getpeerbyip(struct bgpd_config *c, struct sockaddr *ip)
 	sa2addr(ip, &addr, NULL);
 
 	/* we might want a more effective way to find peers by IP */
-	RB_FOREACH(p, peer_head, &conf->peers)
+	RB_FOREACH(p, peer_head, &c->peers)
 		if (!p->conf.template &&
 		    !memcmp(&addr, &p->conf.remote_addr, sizeof(addr)))
 			return (p);
 
 	/* try template matching */
-	RB_FOREACH(p, peer_head, &conf->peers)
+	RB_FOREACH(p, peer_head, &c->peers)
 		if (p->conf.template &&
 		    p->conf.remote_addr.aid == addr.aid &&
 		    session_match_mask(p, &addr))
@@ -2948,10 +2940,7 @@ getpeerbyip(struct bgpd_config *c, struct sockaddr *ip)
 			fatal(NULL);
 		memcpy(newpeer, loose, sizeof(struct peer));
 		for (id = PEER_ID_DYN_MAX; id > PEER_ID_STATIC_MAX; id--) {
-			RB_FOREACH(p, peer_head, &conf->peers)
-				if (p->conf.id == id)
-					break;
-			if (p == NULL)		/* we found a free id */
+			if (getpeerbyid(c, id) == NULL)	/* we found a free id */
 				break;
 		}
 		newpeer->template = loose;
