@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.c,v 1.36 2019/04/10 04:19:32 deraadt Exp $	*/
+/*	$OpenBSD: conf.c,v 1.38 2019/08/04 13:45:15 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2004 Tom Cosgrove
@@ -42,7 +42,7 @@
 #include <dev/cons.h>
 #include "debug.h"
 
-const char version[] = "3.33";
+const char version[] = "3.34";
 int	debug = 1;
 
 void (*sa_cleanup)(void) = NULL;
@@ -64,7 +64,7 @@ int nibprobes = nitems(probe_list);
 
 struct fs_ops file_system[] = {
 	{ ufs_open,    ufs_close,    ufs_read,    ufs_write,    ufs_seek,
-	  ufs_stat,    ufs_readdir    },
+	  ufs_stat,    ufs_readdir,  ufs_fchmod },
 	{ cd9660_open, cd9660_close, cd9660_read, cd9660_write, cd9660_seek,
 	  cd9660_stat, cd9660_readdir },
 #ifdef notdef

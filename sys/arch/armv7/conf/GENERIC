@@ -1,4 +1,4 @@
-#	$OpenBSD: GENERIC,v 1.122 2019/05/08 23:54:39 kettenis Exp $
+#	$OpenBSD: GENERIC,v 1.124 2019/08/11 14:46:18 kettenis Exp $
 #
 # For further information on compiling OpenBSD kernels, see the config(8)
 # man page.
@@ -103,7 +103,7 @@ sxirsb*		at fdt? early 1		# Reduced Serial Bus
 acrtc*		at rsb?
 axppmic*	at rsb?
 sxidog*		at fdt?			# watchdog timer
-sxirtc*		at fdt?			# Real Time Clock
+sxirtc*		at fdt? early 1		# Real Time Clock
 sxie*		at fdt?
 dwge*		at fdt?
 dwxe*		at fdt?
@@ -114,6 +114,7 @@ ehci*		at fdt?			# EHCI (shim)
 usb*		at ehci?	#flags 0x1
 ohci*		at fdt?
 usb*		at ohci?
+sxisyscon*	at fdt?	early 1		# System controller
 sxitemp*	at fdt?			# Temperature sensor
 sxits*		at fdt?			# Touchpad controller
 sxitwi*		at fdt?			# Two-Wire Serial Interface

@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.390 2019/07/23 06:26:44 claudio Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.392 2019/08/07 10:26:41 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -58,10 +58,9 @@
 #define	BGPD_OPT_NOACTION		0x0004
 #define	BGPD_OPT_FORCE_DEMOTE		0x0008
 
-#define	BGPD_FLAG_NO_EVALUATE		0x0002
 #define	BGPD_FLAG_REFLECTOR		0x0004
-#define	BGPD_FLAG_NEXTHOP_BGP		0x0080
-#define	BGPD_FLAG_NEXTHOP_DEFAULT	0x1000
+#define	BGPD_FLAG_NEXTHOP_BGP		0x0010
+#define	BGPD_FLAG_NEXTHOP_DEFAULT	0x0020
 #define	BGPD_FLAG_DECISION_MASK		0x0f00
 #define	BGPD_FLAG_DECISION_ROUTEAGE	0x0100
 #define	BGPD_FLAG_DECISION_TRANS_AS	0x0200
@@ -284,7 +283,7 @@ struct bgpd_config {
 	struct rde_prefixset_head		 rde_prefixsets;
 	struct rde_prefixset_head		 rde_originsets;
 	struct rde_prefixset			 rde_roa;
-	struct as_set_head			*as_sets;
+	struct as_set_head			 as_sets;
 	char					*csock;
 	char					*rcsock;
 	int					 flags;
@@ -1170,6 +1169,7 @@ int	control_imsg_relay(struct imsg *);
 /* config.c */
 struct bgpd_config	*new_config(void);
 void		copy_config(struct bgpd_config *, struct bgpd_config *);
+void		free_l3vpns(struct l3vpn_head *);
 void		free_config(struct bgpd_config *);
 void		free_prefixsets(struct prefixset_head *);
 void		free_rde_prefixsets(struct rde_prefixset_head *);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.c,v 1.12 2019/04/10 04:19:32 deraadt Exp $	*/
+/*	$OpenBSD: conf.c,v 1.14 2019/08/04 13:45:15 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2006 Michael Shalayeff
@@ -29,12 +29,12 @@
 #endif
 #include <dev/cons.h>
 
-const char version[] = "1.06";
+const char version[] = "1.07";
 int	debug = 1;
 
 struct fs_ops file_system[] = {
 	{ ufs_open,    ufs_close,    ufs_read,    ufs_write,    ufs_seek,
-	  ufs_stat,    ufs_readdir    },
+	  ufs_stat,    ufs_readdir,  ufs_fchmod },
 #ifdef notdef
 	{ fat_open,    fat_close,    fat_read,    fat_write,    fat_seek,
 	  fat_stat,    fat_readdir    },
