@@ -1,5 +1,5 @@
 #!/bin/ksh
-#	$OpenBSD: install.sub,v 1.1135 2019/05/14 14:27:49 ajacoutot Exp $
+#	$OpenBSD: install.sub,v 1.1139 2019/08/14 19:32:41 naddy Exp $
 #
 # Copyright (c) 1997-2015 Todd Miller, Theo de Raadt, Ken Westerback
 # Copyright (c) 2015, Robert Peichaer <rpe@openbsd.org>
@@ -1506,9 +1506,9 @@ install_files() {
 	# Fetch sets from local sources (disk, cdrom, nfs) as root.
 	[[ $_src == file://* ]] && _srclocal=true _unpriv=
 
-	# Based on the file list in $_files, create two list for select_sets().
+	# Based on the file list in $_files, create two lists for select_sets().
 	# _sets:     the list of files the user can select from
-	# _get_sets: the list of files that are shown as pre-selectd
+	# _get_sets: the list of files that are shown as pre-selected
 	#
 	# Sets will be installed in the order given in ALLSETS to ensure proper
 	# installation.  So, to minimize user confusion display the sets in the
@@ -1592,7 +1592,7 @@ install_files() {
 		! $_unpriv ftp -D "$_t" -Vmo - "$_src/SHA256.sig" >"$_cfile.sig" &&
 			_issue="Cannot fetch SHA256.sig" && break
 
-		# The bsd.rd only download/verify/install assumes that the sets
+		# The bsd.rd only download/verify/install assumes the sets
 		# location of the next release. So use the right signature file.
 		$UPGRADE_BSDRD &&
 			PUB_KEY=/mnt/etc/signify/openbsd-$((VERSION + 1))-base.pub
@@ -1604,6 +1604,8 @@ install_files() {
 
 		# Fetch and verify the set files.
 		for _f in $_get_sets; do
+			$UU && reset_watchdog
+
 			rm -f /tmp/h /tmp/fail
 
 			# Fetch set file and create a checksum by piping through
@@ -2858,14 +2860,13 @@ __EOT
 }
 
 clean_old() {
-	if [[ -f /mnt/usr/bin/gcc ]]; then
-		rm -rf -- `ls -d /mnt/usr/lib/gcc-lib/* | grep -v ${VNAME}$`
-	fi
-	if [[ -f /mnt/usr/bin/clang ]]; then
-		CVER=$(cd /mnt/usr/lib/clang && ls -r | sed -e 1q)
-		rm -rf -- `ls -d /mnt/usr/lib/clang/* | grep -v "${CVER}$"`
-	fi
-	rm -rf /var/syspatch/*
+	local _cver
+
+	rm -rf /mnt/usr/lib/gcc-lib/!(*$VNAME)
+	set -A _cver -- /mnt/usr/lib/clang/* &&
+		unset _cver[${#_cver[@]}-1] &&
+		rm -rf "${_cver[@]}"
+	rm -rf /mnt/var/syspatch/*
 }	
 
 do_autoinstall() {
@@ -3238,6 +3239,26 @@ check_unattendedupgrade() {
 	) > /dev/null 2>&1
 }
 
+WATCHDOG_PERIOD_SEC=$((45 * 60))
+
+# Restart the background timer.
+reset_watchdog() {
+	kill -KILL $WDPID 2>/dev/null
+	start_watchdog
+}
+
+# Start a co-process to reboot a stalled sysupgrade.
+# This mechanism is only used during non-interactive sysupgrade.
+start_watchdog() {
+	(
+		sleep $WATCHDOG_PERIOD_SEC && reboot
+	) |&
+	WDPID=$!
+
+	# Close standard input of the co-process.
+	exec 3>&p; exec 3>&-
+}
+
 # ------------------------------------------------------------------------------
 # Initial actions common to both installs and upgrades.
 #
@@ -3386,8 +3407,7 @@ elif $UU; then
 	MODE=upgrade
 	check_unattendedupgrade || exit 1
 
-	# trigger watchdog
-	(sleep 1800 && reboot) &
+	start_watchdog
 
 	cat <<__EOT > /auto_upgrade.conf
 Location of sets = disk

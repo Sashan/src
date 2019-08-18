@@ -2,7 +2,7 @@
  * THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
  *
  * generated from:
- *	OpenBSD: pcidevs,v 1.1892 2019/07/28 11:01:10 jmatthew Exp 
+ *	OpenBSD: pcidevs,v 1.1894 2019/08/13 03:17:11 jsg Exp 
  */
 
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
@@ -26880,6 +26880,38 @@ static const struct pci_known_product pci_known_products[] = {
 	    "B2C2 Sky2PC",
 	},
 	{
+	    PCI_VENDOR_AMPERE, PCI_PRODUCT_AMPERE_EMAG_PCIE_1,
+	    "eMAG PCIE",
+	},
+	{
+	    PCI_VENDOR_AMPERE, PCI_PRODUCT_AMPERE_EMAG_PCIE_2,
+	    "eMAG PCIE",
+	},
+	{
+	    PCI_VENDOR_AMPERE, PCI_PRODUCT_AMPERE_EMAG_PCIE_3,
+	    "eMAG PCIE",
+	},
+	{
+	    PCI_VENDOR_AMPERE, PCI_PRODUCT_AMPERE_EMAG_PCIE_4,
+	    "eMAG PCIE",
+	},
+	{
+	    PCI_VENDOR_AMPERE, PCI_PRODUCT_AMPERE_EMAG_PCIE_5,
+	    "eMAG PCIE",
+	},
+	{
+	    PCI_VENDOR_AMPERE, PCI_PRODUCT_AMPERE_EMAG_PCIE_6,
+	    "eMAG PCIE",
+	},
+	{
+	    PCI_VENDOR_AMPERE, PCI_PRODUCT_AMPERE_EMAG_PCIE_7,
+	    "eMAG PCIE",
+	},
+	{
+	    PCI_VENDOR_AMPERE, PCI_PRODUCT_AMPERE_EMAG_PCIE_8,
+	    "eMAG PCIE",
+	},
+	{
 	    PCI_VENDOR_TEHUTI, PCI_PRODUCT_TEHUTI_TN3009,
 	    "TN3009",
 	},
@@ -27512,6 +27544,10 @@ static const struct pci_known_product pci_known_products[] = {
 	    "Santa Cruz",
 	},
 	{
+	    PCI_VENDOR_ULSI, PCI_PRODUCT_ULSI_US201,
+	    "US201",
+	},
+	{
 	    PCI_VENDOR_UMC, PCI_PRODUCT_UMC_UM82C881,
 	    "UM82C881 486",
 	},
@@ -27580,8 +27616,8 @@ static const struct pci_known_product pci_known_products[] = {
 	    "UM8891N",
 	},
 	{
-	    PCI_VENDOR_ULSI, PCI_PRODUCT_ULSI_US201,
-	    "US201",
+	    PCI_VENDOR_UMIS, PCI_PRODUCT_UMIS_NVME,
+	    "NVMe",
 	},
 	{
 	    PCI_VENDOR_USR2, PCI_PRODUCT_USR2_USR997902,
@@ -30368,12 +30404,20 @@ static const struct pci_known_vendor pci_known_vendors[] = {
 	    "Symphony Labs",
 	},
 	{
+	    PCI_VENDOR_UMIS,
+	    "Union Memory",
+	},
+	{
 	    PCI_VENDOR_ROCKCHIP,
 	    "Rockchip",
 	},
 	{
 	    PCI_VENDOR_TEKRAM2,
 	    "Tekram",
+	},
+	{
+	    PCI_VENDOR_AMPERE,
+	    "Ampere",
 	},
 	{
 	    PCI_VENDOR_TEHUTI,

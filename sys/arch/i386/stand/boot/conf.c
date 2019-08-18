@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.c,v 1.69 2019/06/08 02:52:20 jsg Exp $	*/
+/*	$OpenBSD: conf.c,v 1.71 2019/08/04 13:45:15 deraadt Exp $	*/
 
 /*
  * Copyright (c) 1996 Michael Shalayeff
@@ -41,7 +41,7 @@
 #include <dev/cons.h>
 #include "debug.h"
 
-const char version[] = "3.38";
+const char version[] = "3.39";
 int	debug = 1;
 
 
@@ -65,7 +65,7 @@ int nibprobes = nitems(probe_list);
 
 struct fs_ops file_system[] = {
 	{ ufs_open,    ufs_close,    ufs_read,    ufs_write,    ufs_seek,
-	  ufs_stat,    ufs_readdir    },
+	  ufs_stat,    ufs_readdir,  ufs_fchmod },
 #ifdef notdef
 	{ fat_open,    fat_close,    fat_read,    fat_write,    fat_seek,
 	  fat_stat,    fat_readdir    },
