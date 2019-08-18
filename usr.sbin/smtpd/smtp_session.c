@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtp_session.c,v 1.402 2019/07/26 06:30:13 gilles Exp $	*/
+/*	$OpenBSD: smtp_session.c,v 1.407 2019/08/14 21:11:25 gilles Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -592,7 +592,6 @@ smtp_session(struct listener *listener, int sock,
 	io_set_fd(s->io, sock);
 	io_set_timeout(s->io, SMTPD_SESSION_TIMEOUT * 1000);
 	io_set_write(s->io);
-
 	s->state = STATE_NEW;
 
 	(void)strlcpy(s->smtpname, listener->hostname, sizeof(s->smtpname));
@@ -1498,6 +1497,7 @@ smtp_check_mail_from(struct smtp_session *s, const char *args)
 {
 	char *copy;
 	char tmp[SMTP_LINE_MAX];
+	struct mailaddr	sender;
 
 	(void)strlcpy(tmp, args, sizeof tmp);
 	copy = tmp;  
@@ -1535,18 +1535,10 @@ smtp_check_mail_from(struct smtp_session *s, const char *args)
 		return 0;
 	}
 
-	if (!smtp_tx(s)) {
-		smtp_reply(s, "421 %s Temporary Error",
-		    esc_code(ESC_STATUS_TEMPFAIL, ESC_OTHER_MAIL_SYSTEM_STATUS));
-		smtp_enter_state(s, STATE_QUIT);
-		return 0;
-	}
-
-	if (smtp_mailaddr(&s->tx->evp.sender, copy, 1, &copy,
-		s->tx->session->smtpname) == 0) {
+	if (smtp_mailaddr(&sender, copy, 1, &copy,
+		s->smtpname) == 0) {
 		smtp_reply(s, "553 %s Sender address syntax error",
 		    esc_code(ESC_STATUS_PERMFAIL, ESC_OTHER_ADDRESS_STATUS));
-		smtp_tx_free(s->tx);
 		return 0;
 	}
 
@@ -1807,6 +1799,27 @@ smtp_proceed_starttls(struct smtp_session *s, const char *args)
 static void
 smtp_proceed_mail_from(struct smtp_session *s, const char *args)
 {
+	char *copy;
+	char tmp[SMTP_LINE_MAX];
+
+	(void)strlcpy(tmp, args, sizeof tmp);
+	copy = tmp;  
+
+       	if (!smtp_tx(s)) {
+		smtp_reply(s, "421 %s Temporary Error",
+		    esc_code(ESC_STATUS_TEMPFAIL, ESC_OTHER_MAIL_SYSTEM_STATUS));
+		smtp_enter_state(s, STATE_QUIT);
+		return;
+	}
+
+	if (smtp_mailaddr(&s->tx->evp.sender, copy, 1, &copy,
+		s->smtpname) == 0) {
+		smtp_reply(s, "553 %s Sender address syntax error",
+		    esc_code(ESC_STATUS_PERMFAIL, ESC_OTHER_ADDRESS_STATUS));
+		smtp_tx_free(s->tx);
+		return;
+	}
+
 	smtp_tx_mail_from(s->tx, args);
 }
 
@@ -2052,15 +2065,21 @@ smtp_reply(struct smtp_session *s, char *fmt, ...)
 {
 	va_list	 ap;
 	int	 n;
-	char	 buf[LINE_MAX], tmp[LINE_MAX];
+	char	 buf[LINE_MAX*2], tmp[LINE_MAX*2];
 
 	va_start(ap, fmt);
 	n = vsnprintf(buf, sizeof buf, fmt, ap);
 	va_end(ap);
-	if (n < 0 || n >= LINE_MAX)
-		fatalx("smtp_reply: line too long");
+	if (n < 0)
+		fatalx("smtp_reply: response format error");
 	if (n < 4)
 		fatalx("smtp_reply: response too short");
+	if (n >= (int)sizeof buf) {
+		/* only first three bytes are used by SMTP logic,
+		 * so if _our_ reply does not fit entirely in the
+		 * buffer, it's ok to truncate.
+		 */
+	}
 
 	log_trace(TRACE_SMTP, "smtp: %p: >>> %s", s, buf);
 

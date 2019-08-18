@@ -1,4 +1,4 @@
-/*	$OpenBSD: diskmap.c,v 1.24 2018/08/20 14:59:02 visa Exp $	*/
+/*	$OpenBSD: diskmap.c,v 1.26 2019/08/06 07:16:48 anton Exp $	*/
 
 /*
  * Copyright (c) 2009, 2010 Joel Sing <jsing@openbsd.org>
@@ -60,10 +60,10 @@ diskmapioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	struct file *fp0 = NULL, *fp = NULL;
 	struct vnode *vp = NULL;
 	char *devname, flags;
-	int fd, error = EINVAL;
+	int error, fd;
 
 	if (cmd != DIOCMAP)
-		return EINVAL;
+		return ENOTTY;
 
 	/*
 	 * Map a request for a disk to the correct device. We should be
@@ -73,11 +73,13 @@ diskmapioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	dm = (struct dk_diskmap *)addr;
 	fd = dm->fd;
 	devname = malloc(PATH_MAX, M_DEVBUF, M_WAITOK);
-	if (copyinstr(dm->device, devname, PATH_MAX, NULL))
+	if ((error = copyinstr(dm->device, devname, PATH_MAX, NULL)) != 0)
 		goto invalid;
-	if (disk_map(devname, devname, PATH_MAX, dm->flags) == 0)
-		if (copyoutstr(devname, dm->device, PATH_MAX, NULL))
+	if (disk_map(devname, devname, PATH_MAX, dm->flags) == 0) {
+		error = copyoutstr(devname, dm->device, PATH_MAX, NULL);
+		if (error != 0)
 			goto invalid;
+	}
 
 	/* Attempt to open actual device. */
 	if ((error = getvnode(p, fd, &fp0)) != 0)
@@ -135,16 +137,14 @@ diskmapioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 
 bad:
 	fdpunlock(fdp);
-
-	if (vp)
-		vrele(vp);
+	(void)vn_close(vp, fp0->f_flag, p->p_ucred, p);
 invalid:
 	if (fp0)
 		FRELE(fp0, p);
 
 	free(devname, M_DEVBUF, PATH_MAX);
 
-	return (error);
+	return error;
 }
 
 int

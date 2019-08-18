@@ -1,4 +1,4 @@
-/*	$OpenBSD: audio.c,v 1.178 2019/04/05 06:14:13 ratchov Exp $	*/
+/*	$OpenBSD: audio.c,v 1.180 2019/08/17 05:04:56 ratchov Exp $	*/
 /*
  * Copyright (c) 2015 Alexandre Ratchov <alex@caoua.org>
  *
@@ -74,6 +74,7 @@ struct audio_buf {
 	size_t start;			/* first byte used in the FIFO */
 	size_t used;			/* bytes used in the FIFO */
 	size_t blksz;			/* DMA block size */
+	unsigned int nblks;		/* number of blocks */
 	struct selinfo sel;		/* to record & wakeup poll(2) */
 	unsigned int pos;		/* bytes transferred */
 	unsigned int xrun;		/* bytes lost by xruns */
@@ -112,7 +113,6 @@ struct audio_softc {
 	unsigned int msb;		/* sample are MSB aligned */
 	unsigned int rate;		/* rate in Hz */
 	unsigned int round;		/* block size in frames */
-	unsigned int nblks;		/* number of play blocks */
 	unsigned int pchan, rchan;	/* number of channels */
 	unsigned char silence[4];	/* a sample of silence */
 	int pause;			/* not trying to start DMA */
@@ -625,17 +625,123 @@ audio_canstart(struct audio_softc *sc)
 }
 
 int
+audio_setpar_blksz(struct audio_softc *sc)
+{
+	unsigned int nr, np, max, min, mult;
+	unsigned int blk_mult, blk_max;
+
+	/*
+	 * get least multiplier of the number of frames per block
+	 */
+	if (sc->ops->round_blocksize) {
+		blk_mult = sc->ops->round_blocksize(sc->arg, 1);
+		if (blk_mult == 0) {
+			printf("%s: 0x%x: bad block size multiplier\n",
+			    DEVNAME(sc), blk_mult);
+			return ENODEV;
+		}
+	} else
+		blk_mult = 1;
+	DPRINTF("%s: hw block size multiplier: %u\n", DEVNAME(sc), blk_mult);
+	if (sc->mode & AUMODE_PLAY) {
+		np = blk_mult / audio_gcd(sc->pchan * sc->bps, blk_mult);
+		if (!(sc->mode & AUMODE_RECORD))
+			nr = np;
+		DPRINTF("%s: play number of frames multiplier: %u\n",
+		    DEVNAME(sc), np);
+	}
+	if (sc->mode & AUMODE_RECORD) {
+		nr = blk_mult / audio_gcd(sc->rchan * sc->bps, blk_mult);
+		if (!(sc->mode & AUMODE_PLAY))
+			np = nr;
+		DPRINTF("%s: record number of frames multiplier: %u\n",
+		    DEVNAME(sc), nr);
+	}
+	mult = nr * np / audio_gcd(nr, np);
+	DPRINTF("%s: least common number of frames multiplier: %u\n",
+	    DEVNAME(sc), mult);
+
+	/*
+	 * get minimum and maximum frames per block
+	 */
+	if (sc->ops->round_blocksize)
+		blk_max = sc->ops->round_blocksize(sc->arg, AUDIO_BUFSZ);
+	else
+		blk_max = AUDIO_BUFSZ;
+	if ((sc->mode & AUMODE_PLAY) && blk_max > sc->play.datalen / 2)
+		blk_max = sc->play.datalen / 2;
+	if ((sc->mode & AUMODE_RECORD) && blk_max > sc->rec.datalen / 2)
+		blk_max = sc->rec.datalen / 2;
+	if (sc->mode & AUMODE_PLAY) {
+		np = blk_max / (sc->pchan * sc->bps);
+		if (!(sc->mode & AUMODE_RECORD))
+			nr = np;
+	}
+	if (sc->mode & AUMODE_RECORD) {
+		nr = blk_max / (sc->rchan * sc->bps);
+		if (!(sc->mode & AUMODE_PLAY))
+			np = nr;
+	}
+	max = np < nr ? np : nr;
+	max -= max % mult;
+	min = sc->rate / 1000 + mult - 1;
+	min -= min % mult;
+	DPRINTF("%s: frame number range: %u..%u\n", DEVNAME(sc), min, max);
+	if (max < min) {
+		printf("%s: %u: bad max frame number\n", DEVNAME(sc), max);
+		return EIO;
+	}
+
+	/*
+	 * adjust the frame per block to match our constraints
+	 */
+	sc->round += mult / 2;
+	sc->round -= sc->round % mult;
+	if (sc->round > max)
+		sc->round = max;
+	else if (sc->round < min)
+		sc->round = min;
+
+	return 0;
+}
+
+int
+audio_setpar_nblks(struct audio_softc *sc)
+{
+	unsigned int max;
+
+	/*
+	 * set buffer size (number of blocks)
+	 */
+	if (sc->mode & AUMODE_PLAY) {
+		max = sc->play.datalen / (sc->round * sc->pchan * sc->bps);
+		if (sc->play.nblks > max)
+			sc->play.nblks = max;
+		else if (sc->play.nblks < 2)
+			sc->play.nblks = 2;
+	}
+	if (sc->mode & AUMODE_RECORD) {
+		/*
+		 * for recording, buffer size is not the latency (it's
+		 * exactly one block), so let's get the maximum buffer
+		 * size of maximum reliability during xruns
+		 */
+		max = sc->rec.datalen / (sc->round * sc->rchan * sc->bps);
+		sc->rec.nblks = max;
+	}
+	return 0;
+}
+
+int
 audio_setpar(struct audio_softc *sc)
 {
 	struct audio_params p, r;
-	unsigned int nr, np, max, min, mult;
-	unsigned int blk_mult, blk_max;
 	int error;
 
 	DPRINTF("%s: setpar: req enc=%d bits=%d, bps=%d, msb=%d "
 	    "rate=%d, pchan=%d, rchan=%d, round=%u, nblks=%d\n",
 	    DEVNAME(sc), sc->sw_enc, sc->bits, sc->bps, sc->msb,
-	    sc->rate, sc->pchan, sc->rchan, sc->round, sc->nblks);
+	    sc->rate, sc->pchan, sc->rchan, sc->round, sc->play.nblks);
 
 	/*
 	 * check if requested parameters are in the allowed ranges
@@ -768,106 +874,30 @@ audio_setpar(struct audio_softc *sc)
 	}
 	audio_calc_sil(sc);
 
-	/*
-	 * get least multiplier of the number of frames per block
-	 */
-	if (sc->ops->round_blocksize) {
-		blk_mult = sc->ops->round_blocksize(sc->arg, 1);
-		if (blk_mult == 0) {
-			printf("%s: 0x%x: bad block size multiplier\n",
-			    DEVNAME(sc), blk_mult);
-			return ENODEV;
-		}
-	} else
-		blk_mult = 1;
-	DPRINTF("%s: hw block size multiplier: %u\n", DEVNAME(sc), blk_mult);
-	if (sc->mode & AUMODE_PLAY) {
-		np = blk_mult / audio_gcd(sc->pchan * sc->bps, blk_mult);
-		if (!(sc->mode & AUMODE_RECORD))
-			nr = np;
-		DPRINTF("%s: play number of frames multiplier: %u\n",
-		    DEVNAME(sc), np);
-	}
-	if (sc->mode & AUMODE_RECORD) {
-		nr = blk_mult / audio_gcd(sc->rchan * sc->bps, blk_mult);
-		if (!(sc->mode & AUMODE_PLAY))
-			np = nr;
-		DPRINTF("%s: record number of frames multiplier: %u\n",
-		    DEVNAME(sc), nr);
-	}
-	mult = nr * np / audio_gcd(nr, np);
-	DPRINTF("%s: least common number of frames multiplier: %u\n",
-	    DEVNAME(sc), mult);
+	error = audio_setpar_blksz(sc);
+	if (error)
+		return error;
+
+	error = audio_setpar_nblks(sc);
+	if (error)
+		return error;
 
 	/*
-	 * get minimum and maximum frames per block
-	 */
-	if (sc->ops->round_blocksize)
-		blk_max = sc->ops->round_blocksize(sc->arg, AUDIO_BUFSZ);
-	else
-		blk_max = AUDIO_BUFSZ;
-	if ((sc->mode & AUMODE_PLAY) && blk_max > sc->play.datalen / 2)
-		blk_max = sc->play.datalen / 2;
-	if ((sc->mode & AUMODE_RECORD) && blk_max > sc->rec.datalen / 2)
-		blk_max = sc->rec.datalen / 2;
-	if (sc->mode & AUMODE_PLAY) {
-		np = blk_max / (sc->pchan * sc->bps);
-		if (!(sc->mode & AUMODE_RECORD))
-			nr = np;
-	}
-	if (sc->mode & AUMODE_RECORD) {
-		nr = blk_max / (sc->rchan * sc->bps);
-		if (!(sc->mode & AUMODE_PLAY))
-			np = nr;
-	}
-	max = np < nr ? np : nr;
-	max -= max % mult;
-	min = sc->rate / 1000 + mult - 1;
-	min -= min % mult;
-	DPRINTF("%s: frame number range: %u..%u\n", DEVNAME(sc), min, max);
-	if (max < min) {
-		printf("%s: %u: bad max frame number\n", DEVNAME(sc), max);
-		return EIO;
-	}
-
-	/*
-	 * adjust the frame per block to match our constraints
-	 */
-	sc->round += mult / 2;
-	sc->round -= sc->round % mult;
-	if (sc->round > max)
-		sc->round = max;
-	else if (sc->round < min)
-		sc->round = min;
-
-	/*
-	 * set buffer size (number of blocks)
+	 * set buffer
 	 */
 	if (sc->mode & AUMODE_PLAY) {
 		sc->play.blksz = sc->round * sc->pchan * sc->bps;
-		max = sc->play.datalen / sc->play.blksz;
-		if (sc->nblks > max)
-			sc->nblks = max;
-		else if (sc->nblks < 2)
-			sc->nblks = 2;
-		sc->play.len = sc->nblks * sc->play.blksz;
-		sc->nblks = sc->nblks;
+		sc->play.len = sc->play.nblks * sc->play.blksz;
 	}
 	if (sc->mode & AUMODE_RECORD) {
-		/*
-		 * for recording, buffer size is not the latency (it's
-		 * exactly one block), so let's get the maximum buffer
-		 * size of maximum reliability during xruns
-		 */
 		sc->rec.blksz = sc->round * sc->rchan * sc->bps;
-		sc->rec.len = sc->rec.datalen;
-		sc->rec.len -= sc->rec.datalen % sc->rec.blksz;
+		sc->rec.len = sc->rec.nblks * sc->rec.blksz;
 	}
 
 	DPRINTF("%s: setpar: new enc=%d bits=%d, bps=%d, msb=%d "
 	    "rate=%d, pchan=%d, rchan=%d, round=%u, nblks=%d\n",
 	    DEVNAME(sc), sc->sw_enc, sc->bits, sc->bps, sc->msb,
-	    sc->rate, sc->pchan, sc->rchan, sc->round, sc->nblks);
+	    sc->rate, sc->pchan, sc->rchan, sc->round, sc->play.nblks);
 	return 0;
 }
 
@@ -916,7 +946,7 @@ audio_ioc_getpar(struct audio_softc *sc, struct audio_swpar *p)
 	p->msb = sc->msb;
 	p->pchan = sc->pchan;
 	p->rchan = sc->rchan;
-	p->nblks = sc->nblks;
+	p->nblks = sc->play.nblks;
 	p->round = sc->round;
 	return 0;
 }
@@ -969,7 +999,7 @@ audio_ioc_setpar(struct audio_softc *sc, struct audio_swpar *p)
 	if (p->round != ~0)
 		sc->round = p->round;
 	if (p->nblks != ~0)
-		sc->nblks = p->nblks;
+		sc->play.nblks = p->nblks;
 
 	/*
 	 * if the device is not opened for playback or recording don't
@@ -1082,7 +1112,7 @@ audio_attach(struct device *parent, struct device *self, void *aux)
 	sc->pchan = 2;
 	sc->rchan = 2;
 	sc->round = 960;
-	sc->nblks = 2;
+	sc->play.nblks = 2;
 	sc->play.pos = sc->play.xrun = sc->rec.pos = sc->rec.xrun = 0;
 	sc->record_enable = MIXER_RECORD_ENABLE_SYSCTL;
 

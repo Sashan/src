@@ -1,4 +1,4 @@
-/*	$OpenBSD: iked.h,v 1.121 2019/05/11 16:30:23 patrick Exp $	*/
+/*	$OpenBSD: iked.h,v 1.123 2019/08/14 08:35:46 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -514,6 +514,7 @@ struct iked_message {
 	int			 msg_valid;
 	int			 msg_natt;
 	int			 msg_natt_rcvd;
+	int			 msg_nat_detected;
 	int			 msg_error;
 	int			 msg_e;
 	struct iked_message	*msg_parent;
@@ -842,6 +843,11 @@ void	 ikev2_disable_rekeying(struct iked *, struct iked_sa *);
 int	 ikev2_rekey_sa(struct iked *, struct iked_spi *);
 int	 ikev2_drop_sa(struct iked *, struct iked_spi *);
 int	 ikev2_print_id(struct iked_id *, char *, size_t);
+
+const char	*ikev2_ikesa_info(uint64_t, const char *msg);
+#define SPI_IH(hdr)      ikev2_ikesa_info(betoh64((hdr)->ike_ispi), NULL)
+#define SPI_SH(sh, f)    ikev2_ikesa_info((sh)->sh_ispi, (f))
+#define SPI_SA(sa, f)    SPI_SH(&(sa)->sa_hdr, (f))
 
 /* ikev2_msg.c */
 void	 ikev2_msg_cb(int, short, void *);
