@@ -2,7 +2,7 @@
  * THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
  *
  * generated from:
- *	OpenBSD: pcidevs,v 1.1892 2019/07/28 11:01:10 jmatthew Exp 
+ *	OpenBSD: pcidevs,v 1.1894 2019/08/13 03:17:11 jsg Exp 
  */
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
 
@@ -341,8 +341,10 @@
 #define	PCI_VENDOR_FRESCO	0x1b73		/* Fresco Logic */
 #define	PCI_VENDOR_WCH2	0x1c00		/* Nanjing QinHeng Electronics */
 #define	PCI_VENDOR_SYMPHONY2	0x1c1c		/* Symphony Labs */
+#define	PCI_VENDOR_UMIS	0x1cc4		/* Union Memory */
 #define	PCI_VENDOR_ROCKCHIP	0x1d87		/* Rockchip */
 #define	PCI_VENDOR_TEKRAM2	0x1de1		/* Tekram */
+#define	PCI_VENDOR_AMPERE	0x1def		/* Ampere */
 #define	PCI_VENDOR_TEHUTI	0x1fc9		/* Tehuti Networks */
 #define	PCI_VENDOR_SUNIX2	0x1fd4		/* Sunix */
 #define	PCI_VENDOR_HINT	0x3388		/* Hint */
@@ -7618,6 +7620,16 @@
 #define	PCI_PRODUCT_TECHSAN_B2C2_SKY2PC	0x2104		/* B2C2 Sky2PC */
 #define	PCI_PRODUCT_TECHSAN_B2C2_SKY2PC_2	0x2200		/* B2C2 Sky2PC */
 
+/* Ampere Computing */
+#define	PCI_PRODUCT_AMPERE_EMAG_PCIE_1	0xe005		/* eMAG PCIE */
+#define	PCI_PRODUCT_AMPERE_EMAG_PCIE_2	0xe006		/* eMAG PCIE */
+#define	PCI_PRODUCT_AMPERE_EMAG_PCIE_3	0xe007		/* eMAG PCIE */
+#define	PCI_PRODUCT_AMPERE_EMAG_PCIE_4	0xe008		/* eMAG PCIE */
+#define	PCI_PRODUCT_AMPERE_EMAG_PCIE_5	0xe009		/* eMAG PCIE */
+#define	PCI_PRODUCT_AMPERE_EMAG_PCIE_6	0xe00a		/* eMAG PCIE */
+#define	PCI_PRODUCT_AMPERE_EMAG_PCIE_7	0xe00b		/* eMAG PCIE */
+#define	PCI_PRODUCT_AMPERE_EMAG_PCIE_8	0xe00c		/* eMAG PCIE */
+
 /* Tehuti Networks Ltd */
 #define	PCI_PRODUCT_TEHUTI_TN3009	0x3009		/* TN3009 */
 #define	PCI_PRODUCT_TEHUTI_TN3010	0x3010		/* TN3010 */
@@ -7808,6 +7820,9 @@
 /* Turtle Beach products */
 #define	PCI_PRODUCT_TURTLEBEACH_SANTA_CRUZ	0x3357		/* Santa Cruz */
 
+/* ULSI Systems products */
+#define	PCI_PRODUCT_ULSI_US201	0x0201		/* US201 */
+
 /* UMC products */
 #define	PCI_PRODUCT_UMC_UM82C881	0x0001		/* UM82C881 486 */
 #define	PCI_PRODUCT_UMC_UM82C886	0x0002		/* UM82C886 ISA */
@@ -7827,8 +7842,8 @@
 #define	PCI_PRODUCT_UMC_UM8886N	0xe88a		/* UM8886N */
 #define	PCI_PRODUCT_UMC_UM8891N	0xe891		/* UM8891N */
 
-/* ULSI Systems products */
-#define	PCI_PRODUCT_ULSI_US201	0x0201		/* US201 */
+/* Shenzhen Unionmemory Information System products */
+#define	PCI_PRODUCT_UMIS_NVME	0x2263		/* NVMe */
 
 /* US Robotics */
 #define	PCI_PRODUCT_USR2_USR997902	0x0116		/* USR997902 */

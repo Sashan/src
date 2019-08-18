@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.104 2019/06/07 04:03:04 jmatthew Exp $
+# $OpenBSD: GENERIC,v 1.109 2019/08/11 14:46:18 kettenis Exp $
 #
 # GENERIC machine description file
 #
@@ -20,7 +20,7 @@
 
 machine		arm64
 include		"../../../conf/GENERIC"
-maxusers	32
+maxusers	80
 
 option		TIMEZONE=0	# time zone to adjust RTC time by
 option		DST=0		# daylight saving time used by RTC
@@ -38,6 +38,7 @@ mainbus0	at root
 cpu0		at mainbus?
 apm0		at mainbus?
 efi0		at mainbus?
+smbios0		at efi?
 acpi0		at mainbus?
 acpibtn*	at acpi?
 acpiec*		at acpi?
@@ -47,6 +48,8 @@ pci*		at acpipci?
 ahci*		at acpi?
 ccp*		at acpi?		# AMD Cryptographic Co-processor
 com*		at acpi?
+dwiic*		at acpi?
+iic*		at dwiic?
 pluart*		at acpi?
 xhci*		at acpi?
 simplebus*	at fdt?
@@ -173,9 +176,10 @@ gpio*		at sxipio?
 sxiccmu*	at fdt? early 1	# Clock Control Module/Unit
 sxirsb*		at fdt? early 1	# Reduced Serial Bus
 axppmic*	at rsb?
-sxirtc*		at fdt?		# Real Time Clock
+sxirtc*		at fdt? early 1	# Real Time Clock
 sximmc*		at fdt?		# SD/MMC card controller
 sdmmc*		at sximmc?	# SD/MMC bus
+sxisyscon*	at fdt? early 1	# System controller
 sxitemp*	at fdt?		# Temperature sensor
 sxitwi*		at fdt?		# I2C controller
 iic*		at sxitwi?	# I2C bus
