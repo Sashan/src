@@ -2343,6 +2343,16 @@ pfsync_q_ins(struct pf_state *st, int q)
 #endif
 	do {
 		mtx_enter(&sc->sc_mtx[q]);
+
+		/*
+		 * If two threads are competing to insert the same state, then
+		 * there must be just single winner.
+		 */
+		if (st->sync_state == PFSYNC_S_NONE) {
+			mtx_leave(&sc->sc_mtx[q]);
+			break;
+		}
+
 		nlen = pfsync_qs[q].len;
 
 		if (TAILQ_EMPTY(&sc->sc_qs[q]))
