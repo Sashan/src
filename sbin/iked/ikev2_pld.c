@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2_pld.c,v 1.71 2019/05/11 16:30:23 patrick Exp $	*/
+/*	$OpenBSD: ikev2_pld.c,v 1.73 2019/08/14 08:35:46 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -1023,18 +1023,12 @@ ikev2_pld_notify(struct iked *env, struct ikev2_payload *pld,
 		if (ikev2_nat_detection(env, msg, md, sizeof(md), type) == -1)
 			return (-1);
 		if (memcmp(buf, md, len) != 0) {
-			log_debug("%s: %s detected NAT, enabling "
-			    "UDP encapsulation", __func__,
+			log_debug("%s: %s detected NAT", __func__,
 			    print_map(type, ikev2_n_map));
-
-			/*
-			 * Enable UDP encapsulation of ESP packages if
-			 * the check detected NAT.
-			 */
-			if (msg->msg_sa != NULL)
-				msg->msg_sa->sa_udpencap = 1;
+			msg->msg_parent->msg_nat_detected = 1;
 			/* Send keepalive, since we are behind a NAT-gw */
-			if (type == IKEV2_N_NAT_DETECTION_DESTINATION_IP)
+			if (msg->msg_sa != NULL &&
+			    type == IKEV2_N_NAT_DETECTION_DESTINATION_IP)
 				msg->msg_sa->sa_usekeepalive = 1;
 		}
 		print_hex(md, 0, sizeof(md));
@@ -1479,7 +1473,7 @@ ikev2_pld_delete(struct iked *env, struct ikev2_payload *pld,
 			}
 		}
 
-		log_warnx("%s: deleted %zu spis", __func__, found);
+		log_warnx("%s: deleted %zu spis", SPI_SA(sa, __func__), found);
 	}
 
 	if (found) {

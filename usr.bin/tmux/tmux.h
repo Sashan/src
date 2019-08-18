@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.922 2019/07/15 18:25:07 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.925 2019/08/16 11:49:12 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -420,6 +420,7 @@ enum tty_code_code {
 	TTYC_REV,
 	TTYC_RGB,
 	TTYC_RI,
+	TTYC_RIN,
 	TTYC_RMACS,
 	TTYC_RMCUP,
 	TTYC_RMKX,
@@ -921,6 +922,7 @@ struct window {
 #define WINDOW_ACTIVITY 0x2
 #define WINDOW_SILENCE 0x4
 #define WINDOW_ZOOMED 0x8
+#define WINDOW_WASZOOMED 0x10
 #define WINDOW_ALERTFLAGS (WINDOW_BELL|WINDOW_ACTIVITY|WINDOW_SILENCE)
 
 	int		 alerts_queued;
@@ -1680,6 +1682,12 @@ struct spawn_context {
 #define SPAWN_EMPTY 0x40
 };
 
+/* Mode tree sort order. */
+struct mode_tree_sort_criteria {
+	u_int	field;
+	int	reversed;
+};
+
 /* tmux.c */
 extern struct options	*global_options;
 extern struct options	*global_s_options;
@@ -1925,6 +1933,7 @@ void	tty_cmd_insertcharacter(struct tty *, const struct tty_ctx *);
 void	tty_cmd_insertline(struct tty *, const struct tty_ctx *);
 void	tty_cmd_linefeed(struct tty *, const struct tty_ctx *);
 void	tty_cmd_scrollup(struct tty *, const struct tty_ctx *);
+void	tty_cmd_scrolldown(struct tty *, const struct tty_ctx *);
 void	tty_cmd_reverseindex(struct tty *, const struct tty_ctx *);
 void	tty_cmd_setselection(struct tty *, const struct tty_ctx *);
 void	tty_cmd_rawstring(struct tty *, const struct tty_ctx *);
@@ -2301,6 +2310,7 @@ void	 screen_write_reverseindex(struct screen_write_ctx *, u_int);
 void	 screen_write_scrollregion(struct screen_write_ctx *, u_int, u_int);
 void	 screen_write_linefeed(struct screen_write_ctx *, int, u_int);
 void	 screen_write_scrollup(struct screen_write_ctx *, u_int, u_int);
+void	 screen_write_scrolldown(struct screen_write_ctx *, u_int, u_int);
 void	 screen_write_carriagereturn(struct screen_write_ctx *);
 void	 screen_write_clearendofscreen(struct screen_write_ctx *, u_int);
 void	 screen_write_clearstartofscreen(struct screen_write_ctx *, u_int);
@@ -2378,6 +2388,8 @@ struct window_pane *window_add_pane(struct window *, struct window_pane *,
 void		 window_resize(struct window *, u_int, u_int);
 int		 window_zoom(struct window_pane *);
 int		 window_unzoom(struct window *);
+int		 window_push_zoom(struct window *, int);
+int		 window_pop_zoom(struct window *);
 void		 window_lost_pane(struct window *, struct window_pane *);
 void		 window_remove_pane(struct window *, struct window_pane *);
 struct window_pane *window_pane_at_index(struct window *, u_int);
@@ -2467,7 +2479,8 @@ u_int		 layout_set_next(struct window *);
 u_int		 layout_set_previous(struct window *);
 
 /* mode-tree.c */
-typedef void (*mode_tree_build_cb)(void *, u_int, uint64_t *, const char *);
+typedef void (*mode_tree_build_cb)(void *, struct mode_tree_sort_criteria *,
+				   uint64_t *, const char *);
 typedef void (*mode_tree_draw_cb)(void *, void *, struct screen_write_ctx *,
 	     u_int, u_int);
 typedef int (*mode_tree_search_cb)(void *, void *, const char *);

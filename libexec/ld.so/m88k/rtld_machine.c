@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtld_machine.c,v 1.23 2018/11/16 21:15:47 guenther Exp $	*/
+/*	$OpenBSD: rtld_machine.c,v 1.25 2019/08/06 04:01:42 guenther Exp $	*/
 
 /*
  * Copyright (c) 2013 Miodrag Vallat.
@@ -67,7 +67,6 @@ _dl_md_reloc(elf_object_t *object, int rel, int relasz)
 	int	numrela;
 	int	relrela;
 	int	fails = 0;
-	struct load_list *llist;
 	Elf32_Addr loff;
 	Elf32_Rela  *relas;
 	Elf32_Addr prev_value = 0, prev_ooff = 0;
@@ -90,21 +89,6 @@ _dl_md_reloc(elf_object_t *object, int rel, int relasz)
 	if (relrela > numrela)
 		_dl_die("relacount > numrel: %d > %d", relrela, numrela);
 
-	/*
-	 * Change protection of all write protected segments in the object
-	 * so we can do relocations such as DISP26. After relocation,
-	 * restore protection.
-	 */
-	if (object->dyn.textrel == 1 && (rel == DT_REL || rel == DT_RELA)) {
-		for (llist = object->load_list; llist != NULL;
-		    llist = llist->next) {
-			if (!(llist->prot & PROT_WRITE)) {
-				_dl_mprotect(llist->start, llist->size,
-				    PROT_READ | PROT_WRITE);
-			}
-		}
-	}
-
 	/* tight loop for leading RELATIVE relocs */
 	for (i = 0; i < relrela; i++, relas++) {
 		Elf32_Addr *r_addr;
@@ -114,8 +98,8 @@ _dl_md_reloc(elf_object_t *object, int rel, int relasz)
 	}
 	for (; i < numrela; i++, relas++) {
 		Elf32_Addr *r_addr = (Elf32_Addr *)(relas->r_offset + loff);
-		Elf32_Addr ooff, addend, newval;
-		const Elf32_Sym *sym, *this;
+		Elf32_Addr addend, newval;
+		const Elf32_Sym *sym;
 		const char *symn;
 		int type;
 
@@ -138,24 +122,14 @@ _dl_md_reloc(elf_object_t *object, int rel, int relasz)
 			 * searching all objects but _not_ the current object,
 			 * first one found wins.
 			 */
-			const Elf32_Sym *cpysrc = NULL;
-			Elf32_Addr src_loff;
-			int size;
+			struct sym_res sr;
 
-			src_loff = 0;
-			src_loff = _dl_find_symbol(symn, &cpysrc,
+			sr = _dl_find_symbol(symn,
 			    SYM_SEARCH_OTHER | SYM_WARNNOTFOUND | SYM_NOTPLT,
 			    sym, object, NULL);
-			if (cpysrc != NULL) {
-				size = sym->st_size;
-				if (sym->st_size != cpysrc->st_size) {
-					/* _dl_find_symbol() has warned
-					   about this already */
-					size = sym->st_size < cpysrc->st_size ?
-					    sym->st_size : cpysrc->st_size;
-				}
-				_dl_bcopy((void *)(src_loff + cpysrc->st_value),
-				    r_addr, size);
+			if (sr.sym != NULL) {
+				_dl_bcopy((void *)(sr.obj->obj_base +
+				    sr.sym->st_value), r_addr, sym->st_size);
 			} else
 				fails++;
 
@@ -172,22 +146,22 @@ _dl_md_reloc(elf_object_t *object, int rel, int relasz)
 				prev_value = 0;
 				prev_ooff = object->obj_base;
 			} else {
-				this = NULL;
-				ooff = _dl_find_symbol_bysym(object,
-				    ELF32_R_SYM(relas->r_info), &this,
+				struct sym_res sr;
+
+				sr = _dl_find_symbol(symn,
 				    SYM_SEARCH_ALL | SYM_WARNNOTFOUND |
 				    ((type == RELOC_GOTP_ENT) ?
-				    SYM_PLT : SYM_NOTPLT), sym, NULL);
+				    SYM_PLT : SYM_NOTPLT), sym, object, NULL);
 
-				if (this == NULL) {
+				if (sr.sym == NULL) {
 					if (ELF_ST_BIND(sym->st_info) !=
 					    STB_WEAK)
 						fails++;
 					continue;
 				}
 				prev_sym = sym;
-				prev_value = this->st_value;
-				prev_ooff = ooff;
+				prev_value = sr.sym->st_value;
+				prev_ooff = sr.obj->obj_base;
 			}
 		}
 
@@ -238,16 +212,6 @@ _dl_md_reloc(elf_object_t *object, int rel, int relasz)
 		default:
 			_dl_die("%s: unsupported relocation '%s' %d at %p\n",
 			    object->load_name, symn, type, (void *)r_addr);
-		}
-	}
-
-	/* reprotect the unprotected segments */
-	if (object->dyn.textrel == 1 && (rel == DT_REL || rel == DT_RELA)) {
-		for (llist = object->load_list; llist != NULL;
-		    llist = llist->next) {
-			if (!(llist->prot & PROT_WRITE))
-				_dl_mprotect(llist->start, llist->size,
-				    llist->prot);
 		}
 	}
 
@@ -337,10 +301,9 @@ Elf_Addr
 _dl_bind(elf_object_t *object, int reloff)
 {
 	Elf_RelA *rel;
-	Elf_Addr ooff;
-	const Elf_Sym *sym, *this;
+	struct sym_res sr;
+	const Elf_Sym *sym;
 	const char *symn;
-	const elf_object_t *sobj;
 	uint64_t cookie = pcookie;
 	struct {
 		struct __kbind param;
@@ -353,15 +316,14 @@ _dl_bind(elf_object_t *object, int reloff)
 	sym += ELF_R_SYM(rel->r_info);
 	symn = object->dyn.strtab + sym->st_name;
 
-	this = NULL;
-	ooff = _dl_find_symbol(symn, &this,
-	    SYM_SEARCH_ALL | SYM_WARNNOTFOUND | SYM_PLT, sym, object, &sobj);
-	if (this == NULL)
+	sr = _dl_find_symbol(symn, SYM_SEARCH_ALL|SYM_WARNNOTFOUND|SYM_PLT,
+	    sym, object);
+	if (sr.sym == NULL)
 		_dl_die("lazy binding failed!");
 
-	buf.newval = ooff + this->st_value;
+	buf.newval = sr.obj->obj_base + sr.sym->st_value;
 
-	if (__predict_false(sobj->traced) && _dl_trace_plt(sobj, symn))
+	if (__predict_false(sr.obj->traced) && _dl_trace_plt(sr.obj, symn))
 		return (buf.newval);
 
 	buf.param.kb_addr = (Elf_Addr *)(object->obj_base + rel->r_offset);

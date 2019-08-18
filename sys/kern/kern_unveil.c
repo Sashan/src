@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_unveil.c,v 1.28 2019/07/25 09:37:32 bluhm Exp $	*/
+/*	$OpenBSD: kern_unveil.c,v 1.32 2019/08/05 13:31:07 bluhm Exp $	*/
 
 /*
  * Copyright (c) 2017-2019 Bob Beck <beck@openbsd.org>
@@ -42,9 +42,6 @@
 
 #define UNVEIL_MAX_VNODES	128
 #define UNVEIL_MAX_NAMES	128
-
-struct unveil *unveil_lookup(struct vnode *vp, struct proc *p,
-    ssize_t *position);
 
 static inline int
 unvname_compare(const struct unvname *n1, const struct unvname *n2)
@@ -309,8 +306,7 @@ unveil_find_cover(struct vnode *dp, struct proc *p)
 			break;
 		}
 
-		if (parent != vp)
-			vrele(vp);
+		vrele(vp);
 		(void) unveil_lookup(parent, p, &ret);
 		vput(parent);
 
@@ -440,7 +436,7 @@ unveil_setflags(u_char *flags, u_char nflags)
 }
 
 struct unveil *
-unveil_add_vnode(struct process *pr, struct vnode *vp, struct vnode *rootvnode)
+unveil_add_vnode(struct process *pr, struct vnode *vp)
 {
 	struct unveil *uv = NULL;
 	ssize_t i, j;
@@ -505,8 +501,7 @@ unveil_add_traversed_vnodes(struct proc *p, struct nameidata *ndp)
 			if (unveil_lookup(vp, p, NULL) == NULL) {
 				vref(vp);
 				vp->v_uvcount++;
-				uv = unveil_add_vnode(p->p_p, vp,
-				    ndp->ni_rootdir);
+				uv = unveil_add_vnode(p->p_p, vp);
 			}
 		}
 	}
@@ -601,7 +596,7 @@ unveil_add(struct proc *p, struct nameidata *ndp, const char *permissions)
 		/*
 		 * New unveil involving this directory vnode.
 		 */
-		uv = unveil_add_vnode(pr, vp, ndp->ni_rootdir);
+		uv = unveil_add_vnode(pr, vp);
 	}
 
 	/*
@@ -864,7 +859,7 @@ unveil_check_final(struct proc *p, struct nameidata *ni)
 #endif
 			/*
 			 * If dir has user set restrictions fail with
-			 * EACCESS. Otherwise, use any covering match
+			 * EACCES. Otherwise, use any covering match
 			 * that we found above this dir.
 			 */
 			if (uv->uv_flags & UNVEIL_USERSET) {
