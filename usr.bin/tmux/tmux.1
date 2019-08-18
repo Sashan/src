@@ -1,4 +1,4 @@
-.\" $OpenBSD: tmux.1,v 1.678 2019/07/19 07:18:03 nicm Exp $
+.\" $OpenBSD: tmux.1,v 1.682 2019/08/16 11:49:12 nicm Exp $
 .\"
 .\" Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
 .\"
@@ -14,7 +14,7 @@
 .\" IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING
 .\" OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: July 19 2019 $
+.Dd $Mdocdate: August 16 2019 $
 .Dt TMUX 1
 .Os
 .Sh NAME
@@ -1291,7 +1291,7 @@ Suspend a client by sending
 .Dv SIGTSTP
 (tty stop).
 .It Xo Ic switch-client
-.Op Fl Elnpr
+.Op Fl ElnprZ
 .Op Fl c Ar target-client
 .Op Fl t Ar target-session
 .Op Fl T Ar key-table
@@ -1308,7 +1308,10 @@ may refer to a pane (a target that contains
 .Ql \&.
 or
 .Ql % ) ,
-in which case the session, window and pane are all changed.
+to change session, window and pane.
+In that case,
+.Fl Z
+keeps the window zoomed if it was zoomed.
 If
 .Fl l ,
 .Fl n
@@ -1344,11 +1347,41 @@ bind-key -Troot   a switch-client -Ttable1
 .Ed
 .El
 .Sh WINDOWS AND PANES
-A
+Each window displayed by
 .Nm
-window may be in one of two modes.
-The default permits direct access to the terminal attached to the window.
-The other is copy mode, which permits a section of a window or its
+may be split into one or more
+.Em panes ;
+each pane takes up a certain area of the display and is a separate terminal.
+A window may be split into panes using the
+.Ic split-window
+command.
+Windows may be split horizontally (with the
+.Fl h
+flag) or vertically.
+Panes may be resized with the
+.Ic resize-pane
+command (bound to
+.Ql C-Up ,
+.Ql C-Down
+.Ql C-Left
+and
+.Ql C-Right
+by default), the current pane may be changed with the
+.Ic select-pane
+command and the
+.Ic rotate-window
+and
+.Ic swap-pane
+commands may be used to swap panes without changing their position.
+Panes are numbered beginning from zero in the order they are created.
+.Pp
+By default, a
+.Nm
+pane permits direct access to the terminal contained in the pane.
+A pane may also be put into one of several modes:
+.Bl -dash -offset indent
+.It
+Copy mode, which permits a section of a window or its
 history to be copied to a
 .Em paste buffer
 for later insertion into another window.
@@ -1357,9 +1390,21 @@ This mode is entered with the
 command, bound to
 .Ql \&[
 by default.
-It is also entered when a command that produces output, such as
+.It
+View mode, which is like copy mode but is entered when a command that produces
+output, such as
 .Ic list-keys ,
 is executed from a key binding.
+.It
+Choose mode, which allows an item to be chosen from a list.
+This may be a client, a session or window or pane, or a buffer.
+This mode is entered with the
+.Ic choose-buffer ,
+.Ic choose-client
+and
+.Ic choose-tree
+commands.
+.El
 .Pp
 In copy mode an indicator is displayed in the top-right corner of the pane with
 the current position and the number of lines in the history.
@@ -1521,37 +1566,7 @@ bind PageUp copy-mode -eu
 .Ed
 .El
 .Pp
-Each window displayed by
-.Nm
-may be split into one or more
-.Em panes ;
-each pane takes up a certain area of the display and is a separate terminal.
-A window may be split into panes using the
-.Ic split-window
-command.
-Windows may be split horizontally (with the
-.Fl h
-flag) or vertically.
-Panes may be resized with the
-.Ic resize-pane
-command (bound to
-.Ql C-Up ,
-.Ql C-Down
-.Ql C-Left
-and
-.Ql C-Right
-by default), the current pane may be changed with the
-.Ic select-pane
-command and the
-.Ic rotate-window
-and
-.Ic swap-pane
-commands may be used to swap panes without changing their position.
-Panes are numbered beginning from zero in the order they are created.
-.Pp
-A number of preset
-.Em layouts
-are available.
+A number of preset arrangements of panes are available, these are called layouts.
 These may be selected with the
 .Ic select-layout
 command or cycled with
@@ -1630,7 +1645,7 @@ By default, it uses the format
 but a different format may be specified with
 .Fl F .
 .It Xo Ic capture-pane
-.Op Fl aepPqCJ
+.Op Fl aepPqCJN
 .Op Fl b Ar buffer-name
 .Op Fl E Ar end-line
 .Op Fl S Ar start-line
@@ -1655,8 +1670,10 @@ is given, the output includes escape sequences for text and background
 attributes.
 .Fl C
 also escapes non-printable characters as octal \exxx.
+.Fl N
+preserves trailing spaces at each line's end and
 .Fl J
-joins wrapped lines and preserves trailing spaces at each line's end.
+preserves trailing spaces and joins any wrapped lines.
 .Fl P
 captures only any output that the pane has received that is the beginning of an
 as-yet incomplete escape sequence.
@@ -1675,7 +1692,7 @@ the end of the visible pane.
 The default is to capture only the visible contents of the pane.
 .It Xo
 .Ic choose-client
-.Op Fl NZ
+.Op Fl NrZ
 .Op Fl F Ar format
 .Op Fl f Ar filter
 .Op Fl O Ar sort-order
@@ -1704,7 +1721,8 @@ The following keys may be used in client mode:
 .It Li "z" Ta "Suspend selected client"
 .It Li "Z" Ta "Suspend tagged clients"
 .It Li "f" Ta "Enter a format to filter items"
-.It Li "O" Ta "Change sort order"
+.It Li "O" Ta "Change sort field"
+.It Li "r" Ta "Reverse sort order"
 .It Li "v" Ta "Toggle preview"
 .It Li "q" Ta "Exit mode"
 .El
@@ -1719,12 +1737,14 @@ If
 is not given, "detach-client -t '%%'" is used.
 .Pp
 .Fl O
-specifies the initial sort order: one of
+specifies the initial sort field: one of
 .Ql name ,
 .Ql size ,
 .Ql creation ,
 or
 .Ql activity .
+.Fl r
+reverses the sort order.
 .Fl f
 specifies an initial filter: the filter is a format - if it evaluates to zero,
 the item in the list is not shown, otherwise it is shown.
@@ -1736,7 +1756,7 @@ starts without the preview.
 This command works only if at least one client is attached.
 .It Xo
 .Ic choose-tree
-.Op Fl GNswZ
+.Op Fl GNrswZ
 .Op Fl F Ar format
 .Op Fl f Ar filter
 .Op Fl O Ar sort-order
@@ -1768,7 +1788,8 @@ The following keys may be used in tree mode:
 .It Li "C-t" Ta "Tag all items"
 .It Li "\&:" Ta "Run a command for each tagged item"
 .It Li "f" Ta "Enter a format to filter items"
-.It Li "O" Ta "Change sort order"
+.It Li "O" Ta "Change sort field"
+.It Li "r" Ta "Reverse sort order"
 .It Li "v" Ta "Toggle preview"
 .It Li "q" Ta "Exit mode"
 .El
@@ -1783,11 +1804,13 @@ If
 is not given, "switch-client -t '%%'" is used.
 .Pp
 .Fl O
-specifies the initial sort order: one of
+specifies the initial sort field: one of
 .Ql index ,
 .Ql name ,
 or
 .Ql time .
+.Fl r
+reverses the sort order.
 .Fl f
 specifies an initial filter: the filter is a format - if it evaluates to zero,
 the item in the list is not shown, otherwise it is shown.
@@ -1920,11 +1943,13 @@ The
 option kills all but the window given with
 .Fl t .
 .It Xo Ic last-pane
-.Op Fl de
+.Op Fl deZ
 .Op Fl t Ar target-window
 .Xc
 .D1 (alias: Ic lastp )
 Select the last (previously selected) pane.
+.Fl Z
+keeps the window zoomed if it was zoomed.
 .Fl e
 enables or
 .Fl d
@@ -2306,7 +2331,7 @@ option has the same meaning as for the
 .Ic new-window
 command.
 .It Xo Ic rotate-window
-.Op Fl DU
+.Op Fl DUZ
 .Op Fl t Ar target-window
 .Xc
 .D1 (alias: Ic rotatew )
@@ -2314,6 +2339,8 @@ Rotate the positions of the panes within a window, either upward (numerically
 lower) with
 .Fl U
 or downward (numerically higher).
+.Fl Z
+keeps the window zoomed if it was zoomed.
 .It Xo Ic select-layout
 .Op Fl Enop
 .Op Fl t Ar target-pane
@@ -2337,7 +2364,7 @@ applies the last set layout if possible (undoes the most recent layout change).
 .Fl E
 spreads the current pane and any panes next to it out evenly.
 .It Xo Ic select-pane
-.Op Fl DdeLlMmRU
+.Op Fl DdeLlMmRUZ
 .Op Fl T Ar title
 .Op Fl t Ar target-pane
 .Xc
@@ -2354,6 +2381,8 @@ or
 .Fl U
 is used, respectively the pane below, to the left, to the right, or above the
 target pane is used.
+.Fl Z
+keeps the window zoomed if it was zoomed.
 .Fl l
 is the same as using the
 .Ic last-pane
@@ -2459,7 +2488,7 @@ All other options have the same meaning as for the
 .Ic new-window
 command.
 .It Xo Ic swap-pane
-.Op Fl dDU
+.Op Fl dDUZ
 .Op Fl s Ar src-pane
 .Op Fl t Ar dst-pane
 .Xc
@@ -2476,7 +2505,9 @@ swaps with the next pane (after it numerically).
 .Fl d
 instructs
 .Nm
-not to change the active pane.
+not to change the active pane and
+.Fl Z
+keeps the window zoomed if it was zoomed.
 .Pp
 If
 .Fl s
@@ -4835,7 +4866,7 @@ The buffer commands are as follows:
 .Bl -tag -width Ds
 .It Xo
 .Ic choose-buffer
-.Op Fl NZ
+.Op Fl NZr
 .Op Fl F Ar format
 .Op Fl f Ar filter
 .Op Fl O Ar sort-order
@@ -4862,7 +4893,8 @@ The following keys may be used in buffer mode:
 .It Li "d" Ta "Delete selected buffer"
 .It Li "D" Ta "Delete tagged buffers"
 .It Li "f" Ta "Enter a format to filter items"
-.It Li "O" Ta "Change sort order"
+.It Li "O" Ta "Change sort field"
+.It Li "r" Ta "Reverse sort order"
 .It Li "v" Ta "Toggle preview"
 .It Li "q" Ta "Exit mode"
 .El
@@ -4877,11 +4909,13 @@ If
 is not given, "paste-buffer -b '%%'" is used.
 .Pp
 .Fl O
-specifies the initial sort order: one of
+specifies the initial sort field: one of
 .Ql time ,
 .Ql name
 or
 .Ql size .
+.Fl r
+reverses the sort order.
 .Fl f
 specifies an initial filter: the filter is a format - if it evaluates to zero,
 the item in the list is not shown, otherwise it is shown.

@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhclient.c,v 1.647 2019/07/24 17:53:33 krw Exp $	*/
+/*	$OpenBSD: dhclient.c,v 1.651 2019/08/06 11:07:36 krw Exp $	*/
 
 /*
  * Copyright 2004 Henning Brauer <henning@openbsd.org>
@@ -379,6 +379,15 @@ rtm_dispatch(struct interface_info *ifi, struct rt_msghdr *rtm)
 		if ((rtm->rtm_flags & RTF_UP) == 0)
 			fatalx("down");
 
+ 		if ((ifm->ifm_xflags & IFXF_AUTOCONF4) == 0)
+ 			ifi->flags &= ~IFI_AUTOCONF;
+		else if ((ifi->flags & IFI_AUTOCONF) == 0) {
+			/* Get new lease when AUTOCONF4 gets set. */
+			ifi->flags |= IFI_AUTOCONF;
+			quit = RESTART;
+			break;
+		}
+
 		oldmtu = ifi->mtu;
 		interface_state(ifi);
 		if (oldmtu == ifi->mtu)
@@ -573,6 +582,19 @@ main(int argc, char *argv[])
 	interface_state(ifi);
 	if (!LINK_STATE_IS_UP(ifi->link_state))
 		interface_link_forceup(ifi->name, ioctlfd);
+
+	/* Running dhclient(8) means this interface is AUTOCONF4. */
+	ifi->flags |= IFI_AUTOCONF;
+	memset(&ifr, 0, sizeof(ifr));
+	strlcpy(ifr.ifr_name, ifi->name, sizeof(ifr.ifr_name));
+	if (ioctl(ioctlfd, SIOCGIFXFLAGS, (caddr_t)&ifr) < 0)
+		fatal("SIOGIFXFLAGS");
+	if ((ifr.ifr_flags & IFXF_AUTOCONF4) == 0) {
+		ifr.ifr_flags |= IFXF_AUTOCONF4;
+		if (ioctl(ioctlfd, SIOCSIFXFLAGS, (caddr_t)&ifr) == -1)
+			fatal("SIOCSIFXFLAGS");
+	}
+
 	close(ioctlfd);
 	ioctlfd = -1;
 
@@ -591,13 +613,11 @@ main(int argc, char *argv[])
 		fatal("setsockopt(ROUTE_TABLEFILTER)");
 
 	fd = take_charge(ifi, routefd, path_lease_db);
-	if (fd == -1)
-		fatalx("failed to take charge");
-
-	read_lease_db(&ifi->lease_db);
+	if (fd != -1)
+		read_lease_db(&ifi->lease_db);
 
 	if ((leaseFile = fopen(path_lease_db, "w")) == NULL)
-		fatal("fopen(%s)", path_lease_db);
+		log_warn("%s: fopen(%s)", log_procname, path_lease_db);
 	write_lease_db(&ifi->lease_db);
 
 	if (path_option_db != NULL) {
@@ -622,8 +642,8 @@ main(int argc, char *argv[])
 		ifi->rbuf_max = newsize;
 	}
 
-	if (chroot(_PATH_VAREMPTY) == -1)
-		fatal("chroot(%s)", _PATH_VAREMPTY);
+	if (chroot(pw->pw_dir) == -1)
+		fatal("chroot(%s)", pw->pw_dir);
 	if (chdir("/") == -1)
 		fatal("chdir(\"/\")");
 
@@ -958,7 +978,7 @@ bind_lease(struct interface_info *ifi)
 	effective_proposal = NULL;
 
 	propose(ifi->configured);
-	rslt = asprintf(&msg, "bound to %s from %s",
+	rslt = asprintf(&msg, "%s lease accepted from %s",
 	    inet_ntoa(ifi->active->address),
 	    (ifi->offer_src == NULL) ? "<unknown>" : ifi->offer_src);
 	if (rslt == -1)
@@ -1788,6 +1808,9 @@ write_lease_db(struct client_lease_tq *lease_db)
 	char			*leasestr;
 	time_t			 cur_time;
 
+	if (leaseFile == NULL)
+		return;
+
 	rewind(leaseFile);
 
 	/*
@@ -2460,7 +2483,7 @@ take_charge(struct interface_info *ifi, int routefd, char *leasespath)
 		if (time(&cur_time) == -1)
 			fatal("time");
 		if (cur_time - start_time >= MAXSECONDS)
-			break;
+			fatalx("failed to take charge");
 
 		if ((ifi->flags & IFI_IN_CHARGE) == 0) {
 			if ((cur_time - sent_time) >= SENTSECONDS) {
@@ -2489,7 +2512,7 @@ take_charge(struct interface_info *ifi, int routefd, char *leasespath)
 			fd = open(leasespath, O_NONBLOCK |
 			    O_RDONLY|O_EXLOCK|O_CREAT|O_NOFOLLOW, 0640);
 			if (fd == -1 && errno != EWOULDBLOCK)
-				fatal("open(%s)", leasespath);
+				break;
 		}
 	}
 

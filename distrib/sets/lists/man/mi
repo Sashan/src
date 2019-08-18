@@ -432,6 +432,7 @@
 ./usr/share/man/man1/skeyinit.1
 ./usr/share/man/man1/sleep.1
 ./usr/share/man/man1/smtp.1
+./usr/share/man/man1/snmp.1
 ./usr/share/man/man1/sort.1
 ./usr/share/man/man1/sparc64/fdformat.1
 ./usr/share/man/man1/sparc64/mksuncd.1
@@ -1223,6 +1224,7 @@
 ./usr/share/man/man4/arm64/apm.4
 ./usr/share/man/man4/arm64/efi.4
 ./usr/share/man/man4/arm64/intro.4
+./usr/share/man/man4/arm64/smbios.4
 ./usr/share/man/man4/armv7/agtimer.4
 ./usr/share/man/man4/armv7/amdisplay.4
 ./usr/share/man/man4/armv7/ampintc.4
@@ -1455,6 +1457,7 @@
 ./usr/share/man/man4/i386/wds.4
 ./usr/share/man/man4/i386/wdt.4
 ./usr/share/man/man4/iatp.4
+./usr/share/man/man4/iavf.4
 ./usr/share/man/man4/ichiic.4
 ./usr/share/man/man4/ichwdt.4
 ./usr/share/man/man4/icmp.4
@@ -1887,6 +1890,7 @@
 ./usr/share/man/man4/sxipio.4
 ./usr/share/man/man4/sxirsb.4
 ./usr/share/man/man4/sxirtc.4
+./usr/share/man/man4/sxisyscon.4
 ./usr/share/man/man4/sxitemp.4
 ./usr/share/man/man4/sxitwi.4
 ./usr/share/man/man4/sym.4
@@ -1903,6 +1907,7 @@
 ./usr/share/man/man4/tl.4
 ./usr/share/man/man4/tlphy.4
 ./usr/share/man/man4/tpm.4
+./usr/share/man/man4/tpmr.4
 ./usr/share/man/man4/tqphy.4
 ./usr/share/man/man4/trm.4
 ./usr/share/man/man4/trunk.4
@@ -2478,7 +2483,6 @@
 ./usr/share/man/man8/smtpctl.8
 ./usr/share/man/man8/smtpd.8
 ./usr/share/man/man8/sndiod.8
-./usr/share/man/man8/snmpctl.8
 ./usr/share/man/man8/snmpd.8
 ./usr/share/man/man8/spamd-setup.8
 ./usr/share/man/man8/spamd.8
