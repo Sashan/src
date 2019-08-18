@@ -1,4 +1,4 @@
-/*	$OpenBSD: loader.c,v 1.183 2019/07/21 03:54:16 guenther Exp $ */
+/*	$OpenBSD: loader.c,v 1.185 2019/08/06 04:01:41 guenther Exp $ */
 
 /*
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
@@ -58,6 +58,8 @@ void _dl_fixup_user_env(void) __boot;
 void _dl_call_preinit(elf_object_t *) __boot;
 void _dl_call_init_recurse(elf_object_t *object, int initfirst);
 void _dl_clean_boot(void);
+static inline void unprotect_if_textrel(elf_object_t *_object);
+static inline void reprotect_if_textrel(elf_object_t *_object);
 
 int _dl_pagesz __relro = 4096;
 int _dl_bindnow __relro = 0;
@@ -702,8 +704,10 @@ _dl_rtld(elf_object_t *object)
 	/*
 	 * Do relocation information first, then GOT.
 	 */
+	unprotect_if_textrel(object);
 	fails =_dl_md_reloc(object, DT_REL, DT_RELSZ);
 	fails += _dl_md_reloc(object, DT_RELA, DT_RELASZ);
+	reprotect_if_textrel(object);
 	fails += _dl_md_reloc_got(object, !(_dl_bindnow ||
 	    object->obj_flags & DF_1_NOW));
 
@@ -847,6 +851,23 @@ _dl_unsetenv(const char *var, char **env)
 	}
 }
 
+static inline void
+fixup_sym(struct elf_object *dummy_obj, const char *name, void *addr)
+{
+	struct sym_res sr;
+
+	sr = _dl_find_symbol(name, SYM_SEARCH_ALL|SYM_NOWARNNOTFOUND|SYM_PLT,
+	    NULL, dummy_obj);
+	if (sr.sym != NULL) {
+		void *p = (void *)(sr.sym->st_value + sr.obj->obj_base);
+		if (p != addr) {
+			DL_DEB(("setting %s %p@%s[%p] from %p\n", name,
+			    p, sr.obj->load_name, (void *)sr.obj, addr));
+			*(void **)p = *(void **)addr;
+		}
+	}
+}
+
 /*
  * _dl_fixup_user_env()
  *
@@ -856,35 +877,12 @@ _dl_unsetenv(const char *var, char **env)
 void
 _dl_fixup_user_env(void)
 {
-	const struct elf_object *obj;
-	const Elf_Sym *sym;
-	Elf_Addr ooff;
 	struct elf_object dummy_obj;
 
 	dummy_obj.dyn.symbolic = 0;
 	dummy_obj.load_name = "ld.so";
-
-	sym = NULL;
-	ooff = _dl_find_symbol("environ", &sym,
-	    SYM_SEARCH_ALL|SYM_NOWARNNOTFOUND|SYM_PLT, NULL, &dummy_obj, &obj);
-	if (sym != NULL) {
-		DL_DEB(("setting environ %p@%s[%p] from %p\n",
-		    (void *)(sym->st_value + ooff), obj->load_name,
-		    (void *)obj, (void *)&environ));
-		if ((char ***)(sym->st_value + ooff) != &environ)
-			*((char ***)(sym->st_value + ooff)) = environ;
-	}
-
-	sym = NULL;
-	ooff = _dl_find_symbol("__progname", &sym,
-	    SYM_SEARCH_ALL|SYM_NOWARNNOTFOUND|SYM_PLT, NULL, &dummy_obj, &obj);
-	if (sym != NULL) {
-		DL_DEB(("setting __progname %p@%s[%p] from %p\n",
-		    (void *)(sym->st_value + ooff), obj->load_name,
-		    (void *)obj, (void *)&__progname));
-		if ((char **)(sym->st_value + ooff) != &__progname)
-			*((char **)(sym->st_value + ooff)) = __progname;
-	}
+	fixup_sym(&dummy_obj, "environ", &environ);
+	fixup_sym(&dummy_obj, "__progname", &__progname);
 }
 
 const void *
@@ -894,4 +892,31 @@ _dl_cb_cb(int version)
 	if (version == 0)
 		return &callbacks_0;
 	return NULL;
+}
+
+static inline void
+unprotect_if_textrel(elf_object_t *object)
+{
+	struct load_list *ll;
+
+	if (__predict_false(object->dyn.textrel == 1)) {
+		for (ll = object->load_list; ll != NULL; ll = ll->next) {
+			if ((ll->prot & PROT_WRITE) == 0)
+				_dl_mprotect(ll->start, ll->size,
+				    PROT_READ | PROT_WRITE);
+		}
+	}
+}
+
+static inline void
+reprotect_if_textrel(elf_object_t *object)
+{
+	struct load_list *ll;
+
+	if (__predict_false(object->dyn.textrel == 1)) {
+		for (ll = object->load_list; ll != NULL; ll = ll->next) {
+			if ((ll->prot & PROT_WRITE) == 0)
+				_dl_mprotect(ll->start, ll->size, ll->prot);
+		}
+	}
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmm.c,v 1.249 2019/07/17 05:51:07 pd Exp $	*/
+/*	$OpenBSD: vmm.c,v 1.251 2019/07/30 06:21:23 mlarkin Exp $	*/
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -5673,8 +5673,7 @@ vmx_handle_cr0_write(struct vcpu *vcpu, uint64_t r)
 		/* Inject #GP, let the guest handle it */
 		DPRINTF("%s: guest set invalid bits in %%cr0. Zeros "
 		    "mask=0x%llx, data=0x%llx\n", __func__,
-		    curcpu()->ci_vmm_cap.vcc_vmx.vmx_cr0_fixed1,
-		    r);
+		    curcpu()->ci_vmm_cap.vcc_vmx.vmx_cr0_fixed1, r);
 		vmm_inject_gp(vcpu);
 		return (0);
 	}
@@ -5685,8 +5684,7 @@ vmx_handle_cr0_write(struct vcpu *vcpu, uint64_t r)
 		/* Inject #GP, let the guest handle it */
 		DPRINTF("%s: guest set invalid bits in %%cr0. Ones "
 		    "mask=0x%llx, data=0x%llx\n", __func__,
-		    curcpu()->ci_vmm_cap.vcc_vmx.vmx_cr0_fixed0,
-		    r);
+		    curcpu()->ci_vmm_cap.vcc_vmx.vmx_cr0_fixed0, r);
 		vmm_inject_gp(vcpu);
 		return (0);
 	}

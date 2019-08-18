@@ -1,4 +1,4 @@
-/*	$OpenBSD: ber.c,v 1.9 2019/06/01 19:40:05 rob Exp $ */
+/*	$OpenBSD: ber.c,v 1.14 2019/08/15 06:11:18 martijn Exp $ */
 
 /*
  * Copyright (c) 2007, 2012 Reyk Floeter <reyk@openbsd.org>
@@ -456,23 +456,23 @@ int
 ber_oid_cmp(struct ber_oid *a, struct ber_oid *b)
 {
 	size_t	 i;
-	for (i = 0; i < BER_MAX_OID_LEN; i++) {
-		if (a->bo_id[i] != 0) {
-			if (a->bo_id[i] == b->bo_id[i])
-				continue;
-			else if (a->bo_id[i] < b->bo_id[i]) {
-				/* b is a successor of a */
-				return (1);
-			} else {
-				/* b is a predecessor of a */
-				return (-1);
-			}
-		} else if (b->bo_id[i] != 0) {
-			/* b is larger, but a child of a */
-			return (2);
-		} else
-			break;
+	for (i = 0; i < a->bo_n && i < b->bo_n; i++) {
+		if (a->bo_id[i] == b->bo_id[i])
+			continue;
+		else if (a->bo_id[i] < b->bo_id[i]) {
+			/* b is a successor of a */
+			return (1);
+		} else {
+			/* b is a predecessor of a */
+			return (-1);
+		}
 	}
+	/* b is larger, but a child of a */
+	if (a->bo_n < b->bo_n)
+		return (2);
+	/* b is a predecessor of a */
+	if (a->bo_n > b->bo_n)
+		return -1;
 
 	/* b and a are identical */
 	return (0);
@@ -545,9 +545,6 @@ ber_get_oid(struct ber_element *elm, struct ber_oid *o)
 
 	buf = elm->be_val;
 	len = elm->be_len;
-
-	if (!buf[i])
-		return (-1);
 
 	memset(o, 0, sizeof(*o));
 	o->bo_id[j++] = buf[i] / 40;
@@ -687,6 +684,8 @@ ber_scanf_elements(struct ber_element *ber, char *fmt, ...)
 
 	va_start(ap, fmt);
 	while (*fmt) {
+		if (ber == NULL && *fmt != '}' && *fmt != ')')
+			goto fail;
 		switch (*fmt++) {
 		case 'B':
 			ptr = va_arg(ap, void **);
@@ -791,8 +790,6 @@ ber_scanf_elements(struct ber_element *ber, char *fmt, ...)
 			goto fail;
 		}
 
-		if (ber->be_next == NULL)
-			continue;
 		ber = ber->be_next;
 	}
 	va_end(ap);

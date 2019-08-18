@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_syscalls.c,v 1.327 2019/07/25 01:43:21 cheloha Exp $	*/
+/*	$OpenBSD: vfs_syscalls.c,v 1.334 2019/08/07 20:30:30 bluhm Exp $	*/
 /*	$NetBSD: vfs_syscalls.c,v 1.71 1996/04/23 10:29:02 mycroft Exp $	*/
 
 /*
@@ -90,11 +90,6 @@ int doutimensat(struct proc *, int, const char *, struct timespec [2], int);
 int dovutimens(struct proc *, struct vnode *, struct timespec [2]);
 int dofutimens(struct proc *, int, struct timespec [2]);
 int dounmount_leaf(struct mount *, int, struct proc *);
-int unveil_add(struct proc *, struct nameidata *, const char *);
-void unveil_removevnode(struct vnode *vp);
-void unveil_free_traversed_vnodes(struct nameidata *);
-ssize_t unveil_find_cover(struct vnode *, struct proc *);
-struct unveil *unveil_lookup(struct vnode *, struct proc *, ssize_t *);
 
 /*
  * Virtual File System System Calls
@@ -438,10 +433,10 @@ dounmount(struct mount *mp, int flags, struct proc *p)
 			if (error) {
 				if ((flags & MNT_DOOMED)) {
 					/*
-					 * If the mount point was busy due to 
+					 * If the mount point was busy due to
 					 * being unmounted, it has been removed
 					 * from the mount list already.
-					 * Restart the iteration from the last 
+					 * Restart the iteration from the last
 					 * collected busy entry.
 					 */
 					mp = SLIST_FIRST(&mplist);
@@ -454,7 +449,7 @@ dounmount(struct mount *mp, int flags, struct proc *p)
 		}
 	}
 
-	/* 
+	/*
 	 * Nested mount points cannot appear during this loop as mounting
 	 * requires a read lock for the parent mount point.
 	 */
@@ -874,7 +869,7 @@ sys___realpath(struct proc *p, void *v, register_t *retval)
 		syscallarg(const char *) pathname;
 		syscallarg(char *) resolved;
 	} */ *uap = v;
-	char *pathname;
+	char *pathname, *c;
 	char *rpbuf;
 	struct nameidata nd;
 	size_t pathlen;
@@ -928,7 +923,13 @@ sys___realpath(struct proc *p, void *v, register_t *retval)
 		free(cwdbuf, M_TEMP, cwdlen);
 	}
 
-	if (pathlen == 2 && pathname[0] == '/')
+	/* find root "/" or "//" */
+	for (c = pathname; *c != '\0'; c++) {
+		if (*c != '/')
+			break;
+	}
+	if (*c == '\0')
+		/* root directory */
 		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | SAVENAME | REALPATH,
 		    UIO_SYSSPACE, pathname, p);
 	else
@@ -948,10 +949,10 @@ sys___realpath(struct proc *p, void *v, register_t *retval)
 		VOP_UNLOCK(nd.ni_vp);
 		vrele(nd.ni_vp);
 	}
-	if (nd.ni_dvp && nd.ni_dvp != nd.ni_vp){
+	if (nd.ni_dvp && nd.ni_dvp != nd.ni_vp)
 		VOP_UNLOCK(nd.ni_dvp);
+	if (nd.ni_dvp)
 		vrele(nd.ni_dvp);
-	}
 
 	error = copyoutstr(nd.ni_cnd.cn_rpbuf, SCARG(uap, resolved),
 	    MAXPATHLEN, NULL);
@@ -974,7 +975,7 @@ sys_unveil(struct proc *p, void *v, register_t *retval)
 		syscallarg(const char *) path;
 		syscallarg(const char *) permissions;
 	} */ *uap = v;
-	char pathname[MAXPATHLEN];
+	char *pathname, *c;
 	struct nameidata nd;
 	size_t pathlen;
 	char permissions[5];
@@ -991,19 +992,28 @@ sys_unveil(struct proc *p, void *v, register_t *retval)
 	error = copyinstr(SCARG(uap, permissions), permissions,
 	    sizeof(permissions), NULL);
 	if (error)
-		return(error);
-	error = copyinstr(SCARG(uap, path), pathname, sizeof(pathname), &pathlen);
+		return (error);
+	pathname = pool_get(&namei_pool, PR_WAITOK);
+	error = copyinstr(SCARG(uap, path), pathname, MAXPATHLEN, &pathlen);
 	if (error)
-		return(error);
+		goto end;
 
 #ifdef KTRACE
 	if (KTRPOINT(p, KTR_STRUCT))
 		ktrstruct(p, "unveil", permissions, strlen(permissions));
 #endif
-	if (pathlen < 2)
-		return EINVAL;
+	if (pathlen < 2) {
+		error = EINVAL;
+		goto end;
+	}
 
-	if (pathlen == 2 && pathname[0] == '/')
+	/* find root "/" or "//" */
+	for (c = pathname; *c != '\0'; c++) {
+		if (*c != '/')
+			break;
+	}
+	if (*c == '\0')
+		/* root directory */
 		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | SAVENAME,
 		    UIO_SYSSPACE, pathname, p);
 	else
@@ -1012,7 +1022,7 @@ sys_unveil(struct proc *p, void *v, register_t *retval)
 
 	nd.ni_pledge = PLEDGE_UNVEIL;
 	if ((error = namei(&nd)) != 0)
-		goto end;
+		goto ndfree;
 
 	/*
 	 * XXX Any access to the file or directory will allow us to
@@ -1048,12 +1058,14 @@ sys_unveil(struct proc *p, void *v, register_t *retval)
 	/* release vref from namei, but not vref from unveil_add */
 	if (nd.ni_vp)
 		vrele(nd.ni_vp);
-	if (nd.ni_dvp && nd.ni_dvp != nd.ni_vp)
+	if (nd.ni_dvp)
 		vrele(nd.ni_dvp);
 
 	pool_put(&namei_pool, nd.ni_cnd.cn_pnbuf);
-end:
+ndfree:
 	unveil_free_traversed_vnodes(&nd);
+end:
+	pool_put(&namei_pool, pathname);
 
 	return (error);
 }
@@ -3039,7 +3051,9 @@ sys_getdents(struct proc *p, void *v, register_t *retval)
 	auio.uio_resid = buflen;
 	auio.uio_offset = fp->f_offset;
 	error = VOP_READDIR(vp, &auio, fp->f_cred, &eofflag);
+	mtx_enter(&fp->f_mtx);
 	fp->f_offset = auio.uio_offset;
+	mtx_leave(&fp->f_mtx);
 	VOP_UNLOCK(vp);
 	if (error)
 		goto bad;
@@ -3193,7 +3207,7 @@ sys_preadv(struct proc *p, void *v, register_t *retval)
 	error = dofilereadv(p, SCARG(uap, fd), &auio, FO_POSITION, retval);
  done:
 	iovec_free(iov, iovcnt);
- 	return (error);
+	return (error);
 }
 
 /*
@@ -3255,5 +3269,5 @@ sys_pwritev(struct proc *p, void *v, register_t *retval)
 	error = dofilewritev(p, SCARG(uap, fd), &auio, FO_POSITION, retval);
  done:
 	iovec_free(iov, iovcnt);
- 	return (error);
+	return (error);
 }

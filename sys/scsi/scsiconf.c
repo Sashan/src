@@ -1,4 +1,4 @@
-/*	$OpenBSD: scsiconf.c,v 1.196 2017/09/08 05:36:53 deraadt Exp $	*/
+/*	$OpenBSD: scsiconf.c,v 1.199 2019/08/14 21:02:02 krw Exp $	*/
 /*	$NetBSD: scsiconf.c,v 1.57 1996/05/02 01:09:01 neil Exp $	*/
 
 /*
@@ -71,6 +71,8 @@
  * Declarations
  */
 int	scsi_probedev(struct scsibus_softc *, int, int);
+void	scsi_add_link(struct scsibus_softc *, struct scsi_link *);
+void	scsi_remove_link(struct scsibus_softc *, struct scsi_link *);
 
 void	scsi_devid(struct scsi_link *);
 int	scsi_devid_pg80(struct scsi_link *);
@@ -490,28 +492,28 @@ scsi_detach_lun(struct scsibus_softc *sb, int target, int lun, int flags)
 	if (((flags & DETACH_FORCE) == 0) && (link->flags & SDEV_OPEN))
 		return (EBUSY);
 
-	/* detaching a device from scsibus is a five step process... */
+	/* Detaching a device from scsibus is a five step process. */
 
-	/* 1. wake up processes sleeping for an xs */
+	/* 1. Wake up processes sleeping for an xs. */
 	scsi_link_shutdown(link);
 
-	/* 2. detach the device */
+	/* 2. Detach the device. */
 	rv = config_detach(link->device_softc, flags);
 
 	if (rv != 0)
 		return (rv);
 
-	/* 3. if its using the openings io allocator, clean it up */
+	/* 3. If it's using the openings io allocator, clean that up. */
 	if (ISSET(link->flags, SDEV_OWN_IOPL)) {
 		scsi_iopool_destroy(link->pool);
 		free(link->pool, M_DEVBUF, sizeof(*link->pool));
 	}
 
-	/* 4. free up its state in the adapter */
+	/* 4. Free up its state in the adapter. */
 	if (alink->adapter->dev_free != NULL)
 		alink->adapter->dev_free(link);
 
-	/* 5. free up its state in the midlayer */
+	/* 5. Free up its state in the midlayer. */
 	if (link->id != NULL)
 		devid_free(link->id);
 	scsi_remove_link(sb, link);
@@ -525,9 +527,10 @@ scsi_get_link(struct scsibus_softc *sb, int target, int lun)
 {
 	struct scsi_link *link;
 
-	SLIST_FOREACH(link, &sb->sc_link_list, bus_list)
+	SLIST_FOREACH(link, &sb->sc_link_list, bus_list) {
 		if (link->target == target && link->lun == lun)
 			return (link);
+	}
 
 	return (NULL);
 }
@@ -909,7 +912,7 @@ scsi_probedev(struct scsibus_softc *sb, int target, int lun)
 	 */
 #ifdef SCSIDEBUG
 	if (((sb->sc_dev.dv_unit < 32) &&
-	     ((1U << sb->sc_dev.dv_unit) & scsidebug_buses)) &&
+	    ((1U << sb->sc_dev.dv_unit) & scsidebug_buses)) &&
 	    ((target < 32) && ((1U << target) & scsidebug_targets)) &&
 	    ((lun < 32) && ((1U << lun) & scsidebug_luns)))
 		link->flags |= scsidebug_level;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.11 2019/06/28 13:32:50 deraadt Exp $ */
+/*	$OpenBSD: main.c,v 1.15 2019/08/13 13:27:26 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -33,7 +33,8 @@
 #include <unistd.h>
 
 #include <openssl/err.h>
-#include <openssl/ssl.h>
+#include <openssl/evp.h>
+#include <openssl/x509v3.h>
 
 #include "extern.h"
 
@@ -76,6 +77,7 @@ struct	repo {
  * of which process maps to which request.
  */
 struct	rsyncproc {
+	char	*uri; /* uri of this rsync proc */
 	size_t	 id; /* identity of request */
 	pid_t	 pid; /* pid of process or 0 if unassociated */
 };
@@ -112,12 +114,12 @@ TAILQ_HEAD(entityq, entity);
  */
 static void	 proc_parser(int, int, int)
 			__attribute__((noreturn));
-static void	 proc_rsync(const char *, int, int)
+static void	 proc_rsync(const char *, const char *, int, int)
 			__attribute__((noreturn));
 static void	 logx(const char *fmt, ...)
 			__attribute__((format(printf, 1, 2)));
 
-static int	 verbose;
+int	 verbose;
 
 /*
  * Log a message to stderr if and only if "verbose" is non-zero.
@@ -521,7 +523,7 @@ proc_child(int signal)
  * repositories and saturate our system.
  */
 static void
-proc_rsync(const char *prog, int fd, int noop)
+proc_rsync(const char *prog, const char *bind_addr, int fd, int noop)
 {
 	size_t			 id, i, idsz = 0;
 	ssize_t			 ssz;
@@ -604,20 +606,22 @@ proc_rsync(const char *prog, int fd, int noop)
 			if ((pid = waitpid(WAIT_ANY, &st, 0)) == -1)
 				err(EXIT_FAILURE, "waitpid");
 
-			if (!WIFEXITED(st)) {
-				warnx("rsync did not exit");
-				goto out;
-			} else if (WEXITSTATUS(st) != EXIT_SUCCESS) {
-				warnx("rsync failed");
-				goto out;
-			}
-
 			for (i = 0; i < idsz; i++)
 				if (ids[i].pid == pid)
 					break;
-
 			assert(i < idsz);
+
+			if (!WIFEXITED(st)) {
+				warnx("rsync %s did not exit", ids[i].uri);
+				goto out;
+			} else if (WEXITSTATUS(st) != EXIT_SUCCESS) {
+				warnx("rsync %s failed", ids[i].uri);
+				goto out;
+			}
+
 			io_simple_write(fd, &ids[i].id, sizeof(size_t));
+			free(ids[i].uri);
+			ids[i].uri = NULL;
 			ids[i].pid = 0;
 			ids[i].id = 0;
 			continue;
@@ -675,10 +679,12 @@ proc_rsync(const char *prog, int fd, int noop)
 				err(EXIT_FAILURE, "pledge");
 			i = 0;
 			args[i++] = (char *)prog;
-			args[i++] = "-r";
-			args[i++] = "-l";
-			args[i++] = "-t";
+			args[i++] = "-rlt";
 			args[i++] = "--delete";
+			if (bind_addr != NULL) {
+				args[i++] = "--address";
+				args[i++] = (char *)bind_addr;
+			}
 			args[i++] = uri;
 			args[i++] = dst;
 			args[i] = NULL;
@@ -689,28 +695,24 @@ proc_rsync(const char *prog, int fd, int noop)
 		/* Augment the list of running processes. */
 
 		for (i = 0; i < idsz; i++)
-			if (ids[i].pid == 0) {
-				ids[i].id = id;
-				ids[i].pid = pid;
+			if (ids[i].pid == 0)
 				break;
-			}
-
 		if (i == idsz) {
-			ids = reallocarray(ids, idsz + 1,
-				sizeof(struct rsyncproc));
+			ids = reallocarray(ids, idsz + 1, sizeof(*ids));
 			if (ids == NULL)
 				err(EXIT_FAILURE, NULL);
-			ids[idsz].id = id;
-			ids[idsz].pid = pid;
 			idsz++;
 		}
+
+		ids[i].id = id;
+		ids[i].pid = pid;
+		ids[i].uri = uri;
 
 		/* Clean up temporary values. */
 
 		free(mod);
 		free(dst);
 		free(host);
-		free(uri);
 	}
 	rc = 1;
 out:
@@ -718,8 +720,10 @@ out:
 	/* No need for these to be hanging around. */
 
 	for (i = 0; i < idsz; i++)
-		if (ids[i].pid > 0)
+		if (ids[i].pid > 0) {
 			kill(ids[i].pid, SIGTERM);
+			free(ids[i].uri);
+		}
 
 	free(ids);
 	exit(rc ? EXIT_SUCCESS : EXIT_FAILURE);
@@ -977,8 +981,9 @@ proc_parser(int fd, int force, int norev)
 	struct auth	*auths = NULL;
 	int		 first_tals = 1;
 
-	SSL_library_init();
-	SSL_load_error_strings();
+	ERR_load_crypto_strings();
+	OpenSSL_add_all_ciphers();
+	OpenSSL_add_all_digests();
 
 	if ((store = X509_STORE_new()) == NULL)
 		cryptoerrx("X509_STORE_new");
@@ -1269,12 +1274,16 @@ main(int argc, char *argv[])
 	struct stats	 stats;
 	struct roa	**out = NULL;
 	const char	*rsync_prog = "openrsync";
+	const char	*bind_addr = NULL;
 
 	if (pledge("stdio rpath proc exec cpath unveil", NULL) == -1)
 		err(EXIT_FAILURE, "pledge");
 
-	while ((c = getopt(argc, argv, "e:fnqrv")) != -1)
+	while ((c = getopt(argc, argv, "b:e:fnqrv")) != -1)
 		switch (c) {
+		case 'b':
+			bind_addr = optarg;
+			break;
 		case 'e':
 			rsync_prog = optarg;
 			break;
@@ -1349,7 +1358,7 @@ main(int argc, char *argv[])
 
 		if (noop && pledge("stdio", NULL) == -1)
 			err(EXIT_FAILURE, "pledge");
-		proc_rsync(rsync_prog, fd[0], noop);
+		proc_rsync(rsync_prog, bind_addr, fd[0], noop);
 		/* NOTREACHED */
 	}
 
@@ -1363,11 +1372,6 @@ main(int argc, char *argv[])
 	 * data downloaded by the rsync process and parsed by the
 	 * parsing process.
 	 */
-
-	/* Initialise SSL, errors, and our structures. */
-
-	SSL_library_init();
-	SSL_load_error_strings();
 
 	if (pledge("stdio", NULL) == -1)
 		err(EXIT_FAILURE, "pledge");
@@ -1496,14 +1500,11 @@ main(int argc, char *argv[])
 		roa_free(out[i]);
 	free(out);
 
-	EVP_cleanup();
-	CRYPTO_cleanup_all_ex_data();
-	ERR_remove_state(0);
-	ERR_free_strings();
 	return rc ? EXIT_SUCCESS : EXIT_FAILURE;
 
 usage:
 	fprintf(stderr,
-	    "usage: rpki-client [-fnqrv] [-e rsync_prog] tal ...\n");
+	    "usage: rpki-client [-fnqrv] [-b bind_addr] [-e rsync_prog] "
+	    "tal ...\n");
 	return EXIT_FAILURE;
 }
