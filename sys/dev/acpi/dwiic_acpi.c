@@ -1,4 +1,4 @@
-/* $OpenBSD: dwiic_acpi.c,v 1.10 2019/07/22 14:37:06 jcs Exp $ */
+/* $OpenBSD: dwiic_acpi.c,v 1.12 2019/08/04 15:44:17 kettenis Exp $ */
 /*
  * Synopsys DesignWare I2C controller
  *
@@ -66,6 +66,7 @@ struct cfattach dwiic_acpi_ca = {
 };
 
 const char *dwiic_hids[] = {
+	"APMC0D0F",
 	"INT33C2",
 	"INT33C3",
 	"INT3432",
@@ -298,7 +299,11 @@ dwiic_i2c_intr_establish(void *cookie, void *ih, int level,
 {
 	struct dwiic_crs *crs = ih;
 
-	if (crs->gpio_int_node && crs->gpio_int_node->gpio) {
+	if (crs->gpio_int_node) {
+		if (!crs->gpio_int_node->gpio)
+			/* found ACPI device but no driver for it */
+			return NULL;
+
 		struct acpi_gpio *gpio = crs->gpio_int_node->gpio;
 		gpio->intr_establish(gpio->cookie, crs->gpio_int_pin,
 				     crs->gpio_int_flags, func, arg);
@@ -315,9 +320,11 @@ dwiic_i2c_intr_string(void *cookie, void *ih)
 	struct dwiic_crs *crs = ih;
 	static char irqstr[64];
 
-	if (crs->gpio_int_node && crs->gpio_int_node->gpio)
-		snprintf(irqstr, sizeof(irqstr), "gpio %d", crs->gpio_int_pin);
-	else
+	if (crs->gpio_int_node) {
+		if (crs->gpio_int_node->gpio)
+			snprintf(irqstr, sizeof(irqstr), "gpio %d",
+			    crs->gpio_int_pin);
+	} else
 		snprintf(irqstr, sizeof(irqstr), "irq %d", crs->irq_int);
 
 	return irqstr;
