@@ -130,7 +130,7 @@ extern struct rwlock	pf_state_lock;
 
 #ifdef DIAGNOSTIC
 #define PF_ASSERT_NOTOWNER()	do {			\
-		if (RWLOCK_OWNER(&pf_lock) != curproc)	\
+		if (RWLOCK_OWNER(&pf_lock) == curproc)	\
 			panic("%s pf_lock: already held\n",\
 			    __func__);			\
 	} while (0)
@@ -157,7 +157,7 @@ extern struct rwlock	pf_state_lock;
 
 #ifdef DIAGNOSTIC
 #define PF_ASSERT_STATE_LOCKED()	do {		\
-		if (RWLOCK_OWNER(&pf_lock) != curproc)	\
+		if (RWLOCK_OWNER(&pf_state_lock) != curproc)\
 			panic("%s: state_lock: not owner\n",\
 			    __func__);			\
 	} while (0)
