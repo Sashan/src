@@ -162,7 +162,7 @@ extern struct rwlock	pf_state_lock;
 			    __func__);			\
 	} while (0)
 #else
-#define PF_ASSERT_LOCKED()	(void)(0)
+#define PF_ASSERT_STATE_LOCKED()	(void)(0)
 #endif
 
 #else /* !WITH_PF_LOCK */
