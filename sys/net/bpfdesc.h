@@ -93,6 +93,7 @@ struct bpf_d {
 	pid_t		bd_pgid;	/* process or group id for signal */
 	uid_t		bd_siguid;	/* uid for process that set pgid */
 	uid_t		bd_sigeuid;	/* euid for process that set pgid */
+	u_int		bd_ref;		/* reference count */
 	struct selinfo	bd_sel;		/* bsd select info */
 	int		bd_unit;	/* logical unit number */
 	LIST_ENTRY(bpf_d) bd_list;	/* descriptor list */
