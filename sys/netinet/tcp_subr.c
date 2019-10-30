@@ -574,10 +574,14 @@ tcp_notify(struct inpcb *inp, int error)
 	 */
 	if (tp->t_state == TCPS_ESTABLISHED &&
 	     (error == EHOSTUNREACH || error == ENETUNREACH ||
-	      error == EHOSTDOWN)) {
+	      error == EHOSTDOWN))
 		return;
-	} else if (TCPS_HAVEESTABLISHED(tp->t_state) == 0 &&
-	    tp->t_softerror)
+	else if (TCPS_HAVEESTABLISHED(tp->t_state) == 0 &&
+	     (error == EHOSTUNREACH || error == ENETUNREACH ||
+	      error == EHOSTDOWN || error = ECONNREFUSED))
+		so->so_error = error;
+	else if (TCPS_HAVEESTABLISHED(tp->t_state) == 0 &&
+	    tp->t_rxtshift > 3 && tp->t_softerror)
 		so->so_error = error;
 	else
 		tp->t_softerror = error;
