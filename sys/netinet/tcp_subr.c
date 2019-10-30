@@ -578,7 +578,7 @@ tcp_notify(struct inpcb *inp, int error)
 		return;
 	else if (TCPS_HAVEESTABLISHED(tp->t_state) == 0 &&
 	     (error == EHOSTUNREACH || error == ENETUNREACH ||
-	      error == EHOSTDOWN || error = ECONNREFUSED))
+	      error == EHOSTDOWN || error == ECONNREFUSED))
 		so->so_error = error;
 	else if (TCPS_HAVEESTABLISHED(tp->t_state) == 0 &&
 	    tp->t_rxtshift > 3 && tp->t_softerror)
