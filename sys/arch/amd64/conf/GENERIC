@@ -1,4 +1,4 @@
-#	$OpenBSD: GENERIC,v 1.476 2019/08/14 00:08:46 jsg Exp $
+#	$OpenBSD: GENERIC,v 1.481 2019/11/18 03:03:37 kevlo Exp $
 #
 # For further information on compiling OpenBSD kernels, see the config(8)
 # man page.
@@ -103,6 +103,7 @@ amdpcib* at pci?		# AMD 8111 LPC bridge
 tcpcib*	at pci?			# Intel Atom E600 LPC bridge
 kate*	at pci?			# AMD K8 temperature sensor
 km*	at pci?			# AMD K10 temperature sensor
+ksmn*	at pci?			# AMD K17 temperature sensor
 amas*	at pci? disable		# AMD memory configuration
 pchtemp* at pci?		# Intel C610 termperature sensor
 ccp*	at pci?			# AMD Cryptographic Co-processor
@@ -512,6 +513,7 @@ bge*	at pci?				# Broadcom BCM57xx (aka Tigon3)
 bnx*	at pci?				# Broadcom BCM5706/5708 GigE
 re*	at pci?				# Realtek 8169/8169S/8110S
 re*	at cardbus?			# Realtek 8169/8169S/8110S
+rge*	at pci?				# Realtek 8125
 stge*	at pci?				# Sundance TC9021 GigE
 #lge*	at pci?				# Level1 LXT1001 GigE
 hme*	at pci?				# Sun Happy Meal
@@ -534,6 +536,7 @@ jme*	at pci?				# JMicron JMC250/JMC260 Ethernet
 bnxt*	at pci?				# Broadcom BCM573xx, BCM574xx
 ixl*	at pci?				# Intel Ethernet 700 Series
 mcx*	at pci?				# Mellanox ConnectX-4
+iavf*	at pci?				# Intel Ethernet Adaptive VF
 
 # Wireless network cards
 acx*	at pci?				# TI ACX100/ACX111 (802.11b/g)

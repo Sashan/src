@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.925 2019/08/16 11:49:12 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.933 2019/11/25 15:04:15 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -680,6 +680,13 @@ struct style_range {
 };
 TAILQ_HEAD(style_ranges, style_range);
 
+/* Style default. */
+enum style_default_type {
+	STYLE_DEFAULT_BASE,
+	STYLE_DEFAULT_PUSH,
+	STYLE_DEFAULT_POP
+};
+
 /* Style option. */
 struct style {
 	struct grid_cell	gc;
@@ -690,6 +697,8 @@ struct style {
 
 	enum style_range_type	range_type;
 	u_int			range_argument;
+
+	enum style_default_type	default_type;
 };
 
 /* Virtual screen. */
@@ -697,6 +706,7 @@ struct screen_sel;
 struct screen_titles;
 struct screen {
 	char			*title;
+	char			*path;
 	struct screen_titles	*titles;
 
 	struct grid		*grid;		/* grid data */
@@ -843,6 +853,7 @@ struct window_pane {
 #define PANE_STATUSDRAWN 0x400
 #define PANE_EMPTY 0x800
 #define PANE_STYLECHANGED 0x1000
+#define PANE_RESIZED 0x2000
 
 	int		 argc;
 	char	       **argv;
@@ -895,6 +906,7 @@ RB_HEAD(window_pane_tree, window_pane);
 /* Window structure. */
 struct window {
 	u_int		 id;
+	void		*latest;
 
 	char		*name;
 	struct event	 name_event;
@@ -960,6 +972,7 @@ TAILQ_HEAD(winlink_stack, winlink);
 #define WINDOW_SIZE_LARGEST 0
 #define WINDOW_SIZE_SMALLEST 1
 #define WINDOW_SIZE_MANUAL 2
+#define WINDOW_SIZE_LATEST 3
 
 /* Pane border status option. */
 #define PANE_STATUS_OFF 0
@@ -1190,6 +1203,7 @@ struct tty {
 		TTY_VT220,
 		TTY_VT320,
 		TTY_VT420,
+		TTY_VT520,
 		TTY_UNKNOWN
 	} term_type;
 
@@ -1206,7 +1220,14 @@ struct tty {
 	struct tty_key	*key_tree;
 };
 #define TTY_TYPES \
-	{ "VT100", "VT101", "VT102", "VT220", "VT320", "VT420", "Unknown" }
+	{ "VT100", \
+	  "VT101", \
+	  "VT102", \
+	  "VT220", \
+	  "VT320", \
+	  "VT420", \
+	  "VT520", \
+	  "Unknown" }
 
 /* TTY command context. */
 struct tty_ctx {
@@ -1660,6 +1681,7 @@ struct spawn_context {
 
 	struct session		 *s;
 	struct winlink		 *wl;
+	struct client		 *c;
 
 	struct window_pane	 *wp0;
 	struct layout_cell	 *lc;
@@ -1774,6 +1796,8 @@ void		 format_defaults_pane(struct format_tree *,
 void		 format_defaults_paste_buffer(struct format_tree *,
 		     struct paste_buffer *);
 void		 format_lost_client(struct client *);
+char		*format_grid_word(struct grid *, u_int, u_int);
+char		*format_grid_line(struct grid *, u_int);
 
 /* format-draw.c */
 void		 format_draw(struct screen_write_ctx *,
@@ -2183,8 +2207,9 @@ void	 status_prompt_save_history(void);
 
 /* resize.c */
 void	 resize_window(struct window *, u_int, u_int);
-void	 default_window_size(struct session *, struct window *, u_int *,
-	     u_int *, int);
+void	 default_window_size(struct client *, struct session *, struct window *,
+	     u_int *, u_int *, int);
+void	 recalculate_size(struct window *);
 void	 recalculate_sizes(void);
 
 /* input.c */
@@ -2335,6 +2360,7 @@ void	 screen_reset_tabs(struct screen *);
 void	 screen_set_cursor_style(struct screen *, u_int);
 void	 screen_set_cursor_colour(struct screen *, const char *);
 void	 screen_set_title(struct screen *, const char *);
+void	 screen_set_path(struct screen *, const char *);
 void	 screen_push_title(struct screen *);
 void	 screen_pop_title(struct screen *);
 void	 screen_resize(struct screen *, u_int, u_int, int);
@@ -2612,6 +2638,7 @@ struct utf8_data *utf8_fromcstr(const char *);
 char		*utf8_tocstr(struct utf8_data *);
 u_int		 utf8_cstrwidth(const char *);
 char		*utf8_padcstr(const char *, u_int);
+char		*utf8_rpadcstr(const char *, u_int);
 int		 utf8_cstrhas(const char *, const struct utf8_data *);
 
 /* procname.c */
@@ -2646,8 +2673,6 @@ int		 style_parse(struct style *,const struct grid_cell *,
 		     const char *);
 const char	*style_tostring(struct style *);
 void		 style_apply(struct grid_cell *, struct options *,
-		     const char *);
-void		 style_apply_update(struct grid_cell *, struct options *,
 		     const char *);
 int		 style_equal(struct style *, struct style *);
 void		 style_set(struct style *, const struct grid_cell *);

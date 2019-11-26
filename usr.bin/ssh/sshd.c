@@ -1,4 +1,4 @@
-/* $OpenBSD: sshd.c,v 1.537 2019/06/28 13:35:04 deraadt Exp $ */
+/* $OpenBSD: sshd.c,v 1.541 2019/11/18 16:10:05 naddy Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -60,6 +60,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <limits.h>
 
@@ -272,10 +273,7 @@ close_startup_pipes(void)
 static void
 sighup_handler(int sig)
 {
-	int save_errno = errno;
-
 	received_sighup = 1;
-	errno = save_errno;
 }
 
 /*
@@ -1101,6 +1099,7 @@ server_accept_loop(int *sock_in, int *sock_out, int *newsock, int *config_s)
 			if (drop_connection(startups) == 1) {
 				char *laddr = get_local_ipaddr(*newsock);
 				char *raddr = get_peer_ipaddr(*newsock);
+				char msg[] = "Exceeded MaxStartups\r\n";
 
 				verbose("drop connection #%d from [%s]:%d "
 				    "on [%s]:%d past MaxStartups", startups,
@@ -1108,6 +1107,8 @@ server_accept_loop(int *sock_in, int *sock_out, int *newsock, int *config_s)
 				    laddr, get_local_port(*newsock));
 				free(laddr);
 				free(raddr);
+				/* best-effort notification to client */
+				(void)write(*newsock, msg, strlen(msg));
 				close(*newsock);
 				continue;
 			}
@@ -2031,17 +2032,17 @@ sshd_hostkey_sign(struct ssh *ssh, struct sshkey *privkey,
 	if (use_privsep) {
 		if (privkey) {
 			if (mm_sshkey_sign(ssh, privkey, signature, slenp,
-			    data, dlen, alg, ssh->compat) < 0)
+			    data, dlen, alg, NULL, ssh->compat) < 0)
 				fatal("%s: privkey sign failed", __func__);
 		} else {
 			if (mm_sshkey_sign(ssh, pubkey, signature, slenp,
-			    data, dlen, alg, ssh->compat) < 0)
+			    data, dlen, alg, NULL, ssh->compat) < 0)
 				fatal("%s: pubkey sign failed", __func__);
 		}
 	} else {
 		if (privkey) {
 			if (sshkey_sign(privkey, signature, slenp, data, dlen,
-			    alg, ssh->compat) < 0)
+			    alg, NULL, ssh->compat) < 0)
 				fatal("%s: privkey sign failed", __func__);
 		} else {
 			if ((r = ssh_agent_sign(auth_sock, pubkey,

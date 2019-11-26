@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.12 2019/08/03 15:22:20 deraadt Exp $
+#	$OpenBSD: Makefile,v 1.14 2019/10/29 02:55:51 deraadt Exp $
 
 NOMAN=		#
 
@@ -29,12 +29,12 @@ SRCS+=	alloc.c ctime.c exit.c getchar.c memcmp.c memcpy.c memmove.c memset.c \
 	strncpy.c strtol.c
 SRCS+=	close.c closeall.c cons.c cread.c dev.c disklabel.c dkcksum.c fchmod.c \
 	fstat.c lseek.c open.c read.c readdir.c stat.c
-SRCS+=	loadfile.c
+SRCS+=	loadfile.c arc4.c
 SRCS+=	ufs.c
 SRCS+=	arp.c ether.c globals.c in_cksum.c net.c netif.c netudp.c tftp.c
 
 .PATH:	${S}/lib/libkern/arch/arm ${S}/lib/libkern
-SRCS+=	divsi3.S divdi3.c moddi3.c qdivrem.c strlcpy.c strlen.c
+SRCS+=	divsi3.S divdi3.c moddi3.c qdivrem.c strlcat.c strlcpy.c strlen.c
 SRCS+=	__aeabi_ldivmod.S
 
 .PATH:	${S}/lib/libz

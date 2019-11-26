@@ -1,4 +1,4 @@
-/*	$OpenBSD: mta_session.c,v 1.120 2019/08/11 11:11:02 gilles Exp $	*/
+/*	$OpenBSD: mta_session.c,v 1.122 2019/09/20 17:46:05 gilles Exp $	*/
 
 /*
  * Copyright (c) 2008 Pierre-Yves Ritschard <pyr@openbsd.org>
@@ -103,6 +103,7 @@ struct mta_session {
 	struct mta_relay	*relay;
 	struct mta_route	*route;
 	char			*helo;
+	char			*mxname;
 
 	int			 flags;
 
@@ -187,7 +188,7 @@ mta_session_init(void)
 }
 
 void
-mta_session(struct mta_relay *relay, struct mta_route *route)
+mta_session(struct mta_relay *relay, struct mta_route *route, const char *mxname)
 {
 	struct mta_session	*s;
 	struct timeval		 tv;
@@ -198,6 +199,7 @@ mta_session(struct mta_relay *relay, struct mta_route *route)
 	s->id = generate_uid();
 	s->relay = relay;
 	s->route = route;
+	s->mxname = xstrdup(mxname);
 
 	if (relay->flags & RELAY_LMTP)
 		s->flags |= MTA_LMTP;
@@ -366,6 +368,7 @@ mta_free(struct mta_session *s)
 
 	relay = s->relay;
 	route = s->route;
+	free(s->mxname);
 	free(s);
 	stat_decrement("mta.session", 1);
 	mta_route_collect(relay, route);
@@ -526,8 +529,9 @@ mta_enter_state(struct mta_session *s, int newstate)
 	char			 ibuf[LINE_MAX];
 	char			 obuf[LINE_MAX];
 	int			 offset;
+	const char     		*srs_sender;
 
-    again:
+again:
 	oldstate = s->state;
 
 	log_trace(TRACE_MTA, "mta: %p: %s -> %s", s,
@@ -725,6 +729,25 @@ mta_enter_state(struct mta_session *s, int newstate)
 		s->hangon = 0;
 		s->msgtried++;
 		envid_sz = strlen(e->dsn_envid);
+
+		/* SRS-encode if requested for the relay action, AND we're not
+		 * bouncing, AND we have an RCPT which means we are forwarded,
+		 * AND the RCPT has a '@' just for sanity check (will always).
+		 */
+		if (env->sc_srs_key != NULL &&
+		    s->relay->srs &&
+		    strchr(s->task->sender, '@') &&
+		    e->rcpt &&
+		    strchr(e->rcpt, '@')) {
+			/* encode and replace task sender with new SRS-sender */
+			srs_sender = srs_encode(s->task->sender,
+			    strchr(e->rcpt, '@') + 1);
+			if (srs_sender) {
+				free(s->task->sender);
+				s->task->sender = xstrdup(srs_sender);
+			}
+		}
+
 		if (s->ext & MTA_EXT_DSN) {
 			mta_send(s, "MAIL FROM:<%s>%s%s%s%s",
 			    s->task->sender,
@@ -1521,11 +1544,25 @@ static void
 mta_cert_verify_cb(void *arg, int status)
 {
 	struct mta_session *s = arg;
-	int resume = 0;
+	int match, resume = 0;
+	X509 *cert;
 
 	if (s->flags & MTA_WAIT) {
 		mta_tree_pop(&wait_tls_verify, s->id);
 		resume = 1;
+	}
+
+	if (status == CERT_OK) {
+		cert = SSL_get_peer_certificate(io_tls(s->io));
+		if (!cert)
+			status = CERT_NOCERT;
+		else {
+			match = 0;
+			(void)ssl_check_name(cert, s->mxname, &match);
+			X509_free(cert);
+			if (!match)
+				status = CERT_INVALID;
+		}
 	}
 
 	if (status == CERT_OK)

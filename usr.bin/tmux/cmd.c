@@ -1,4 +1,4 @@
-/* $OpenBSD: cmd.c,v 1.153 2019/07/06 20:56:34 nicm Exp $ */
+/* $OpenBSD: cmd.c,v 1.155 2019/10/03 10:24:05 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -385,7 +385,7 @@ cmd_find(const char *name, char **cause)
 {
 	const struct cmd_entry	**loop, *entry, *found = NULL;
 	int			  ambiguous;
-	char			  s[BUFSIZ];
+	char			  s[8192];
 
 	ambiguous = 0;
 	for (loop = cmd_table; *loop != NULL; loop++) {
@@ -661,7 +661,7 @@ char *
 cmd_template_replace(const char *template, const char *s, int idx)
 {
 	char		 ch, *buf;
-	const char	*ptr, *cp, quote[] = "\"\\$";
+	const char	*ptr, *cp, quote[] = "\"\\$;";
 	int		 replaced, quoted;
 	size_t		 len;
 
@@ -692,10 +692,6 @@ cmd_template_replace(const char *template, const char *s, int idx)
 			for (cp = s; *cp != '\0'; cp++) {
 				if (quoted && strchr(quote, *cp) != NULL)
 					buf[len++] = '\\';
-				if (quoted && *cp == ';') {
-					buf[len++] = '\\';
-					buf[len++] = '\\';
-				}
 				buf[len++] = *cp;
 			}
 			buf[len] = '\0';

@@ -1,4 +1,4 @@
-/* $OpenBSD: window.c,v 1.241 2019/08/14 09:58:31 nicm Exp $ */
+/* $OpenBSD: window.c,v 1.244 2019/10/28 09:07:59 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -313,7 +313,7 @@ window_create(u_int sx, u_int sy)
 	struct window	*w;
 
 	w = xcalloc(1, sizeof *w);
-	w->name = NULL;
+	w->name = xstrdup("");
 	w->flags = 0;
 
 	TAILQ_INIT(&w->panes);
@@ -953,7 +953,7 @@ window_pane_resize(struct window_pane *wp, u_int sx, u_int sy)
 	if (wme != NULL && wme->mode->resize != NULL)
 		wme->mode->resize(wme, sx, sy);
 
-	wp->flags |= PANE_RESIZE;
+	wp->flags |= (PANE_RESIZE|PANE_RESIZED);
 }
 
 /*
@@ -1572,6 +1572,10 @@ window_pane_input_callback(struct client *c, int closed, void *data)
 
 	wp = window_pane_find_by_id(cdata->wp);
 	if (wp == NULL || closed || c->flags & CLIENT_DEAD) {
+		if (wp == NULL)
+			c->flags |= CLIENT_EXIT;
+		evbuffer_drain(evb, len);
+
 		c->stdin_callback = NULL;
 		server_client_unref(c);
 

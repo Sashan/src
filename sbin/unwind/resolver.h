@@ -1,4 +1,4 @@
-/*	$OpenBSD: resolver.h,v 1.6 2019/04/02 07:47:23 florian Exp $	*/
+/*	$OpenBSD: resolver.h,v 1.10 2019/11/25 18:10:42 otto Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -32,7 +32,6 @@ static const char * const	uw_resolver_state_str[] = {
 };
 
 static const int64_t		histogram_limits[] = {
-	-1,
 	10,
 	20,
 	40,
@@ -51,6 +50,13 @@ struct ctl_resolver_info {
 	enum uw_resolver_state	 state;
 	enum uw_resolver_type	 type;
 	int			 selected;
+	int			 oppdot;
+};
+
+struct ctl_forwarder_info {
+	char		 name[1024]; /* XXX, keep in sync with uw_forwarder */
+	uint32_t	 if_index;
+	int		 src;
 };
 
 void	 resolver(int, int);

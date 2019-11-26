@@ -1,4 +1,4 @@
-/*	$OpenBSD: report_smtp.c,v 1.8 2019/07/26 06:30:13 gilles Exp $	*/
+/*	$OpenBSD: report_smtp.c,v 1.10 2019/09/19 14:40:53 gilles Exp $	*/
 
 /*
  * Copyright (c) 2018 Gilles Chehade <gilles@poolp.org>
@@ -60,6 +60,22 @@ report_smtp_link_connect(const char *direction, uint64_t qid, const char *rdns, 
 	m_add_int(p_lka, fcrdns);
 	m_add_sockaddr(p_lka, (const struct sockaddr *)ss_src);
 	m_add_sockaddr(p_lka, (const struct sockaddr *)ss_dest);
+	m_close(p_lka);
+}
+
+void
+report_smtp_link_greeting(const char *direction, uint64_t qid,
+    const char *domain)
+{
+	struct timeval	tv;
+
+	gettimeofday(&tv, NULL);
+
+	m_create(p_lka, IMSG_REPORT_SMTP_LINK_GREETING, 0, 0, -1);
+	m_add_string(p_lka, direction);
+	m_add_timeval(p_lka, &tv);
+	m_add_id(p_lka, qid);
+	m_add_string(p_lka, domain);
 	m_close(p_lka);
 }
 
@@ -158,6 +174,15 @@ void
 report_smtp_tx_mail(const char *direction, uint64_t qid, uint32_t msgid, const char *address, int ok)
 {
 	struct timeval	tv;
+	char buffer[SMTPD_MAXMAILADDRSIZE];
+	char *p;
+
+	if ((p = strchr(address, '<')) == NULL)
+		return;
+	(void)strlcpy(buffer, p + 1, sizeof buffer);
+	if ((p = strchr(buffer, '>')) == NULL)
+		return;
+	*p = '\0';
 
 	gettimeofday(&tv, NULL);
 
@@ -166,7 +191,7 @@ report_smtp_tx_mail(const char *direction, uint64_t qid, uint32_t msgid, const c
 	m_add_timeval(p_lka, &tv);
 	m_add_id(p_lka, qid);
 	m_add_u32(p_lka, msgid);
-	m_add_string(p_lka, address);
+	m_add_string(p_lka, buffer);
 	m_add_int(p_lka, ok);
 	m_close(p_lka);
 }
@@ -175,6 +200,15 @@ void
 report_smtp_tx_rcpt(const char *direction, uint64_t qid, uint32_t msgid, const char *address, int ok)
 {
 	struct timeval	tv;
+	char buffer[SMTPD_MAXMAILADDRSIZE];
+	char *p;
+
+	if ((p = strchr(address, '<')) == NULL)
+		return;
+	(void)strlcpy(buffer, p + 1, sizeof buffer);
+	if ((p = strchr(buffer, '>')) == NULL)
+		return;
+	*p = '\0';
 
 	gettimeofday(&tv, NULL);
 
@@ -183,7 +217,7 @@ report_smtp_tx_rcpt(const char *direction, uint64_t qid, uint32_t msgid, const c
 	m_add_timeval(p_lka, &tv);
 	m_add_id(p_lka, qid);
 	m_add_u32(p_lka, msgid);
-	m_add_string(p_lka, address);
+	m_add_string(p_lka, buffer);
 	m_add_int(p_lka, ok);
 	m_close(p_lka);
 }

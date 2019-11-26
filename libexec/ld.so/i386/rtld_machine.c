@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtld_machine.c,v 1.41 2019/08/06 04:01:42 guenther Exp $ */
+/*	$OpenBSD: rtld_machine.c,v 1.45 2019/11/26 02:50:11 guenther Exp $ */
 
 /*
  * Copyright (c) 2002 Dale Rahn
@@ -98,7 +98,6 @@ int64_t pcookie __attribute__((section(".openbsd.randomdata"))) __dso_hidden;
 #define _RF_P		0x20000000		/* Location relative */
 #define _RF_G		0x10000000		/* GOT offset */
 #define _RF_B		0x08000000		/* Load address relative */
-#define _RF_U		0x04000000		/* Unaligned */
 #define _RF_SZ(s)	(((s) & 0xff) << 8)	/* memory target size */
 #define _RF_RS(s)	((s) & 0xff)		/* right shift */
 static const int reloc_target_flags[] = {
@@ -131,7 +130,6 @@ static const int reloc_target_flags[] = {
 #define RELOC_RESOLVE_SYMBOL(t)		((reloc_target_flags[t] & _RF_S) != 0)
 #define RELOC_PC_RELATIVE(t)		((reloc_target_flags[t] & _RF_P) != 0)
 #define RELOC_BASE_RELATIVE(t)		((reloc_target_flags[t] & _RF_B) != 0)
-#define RELOC_UNALIGNED(t)		((reloc_target_flags[t] & _RF_U) != 0)
 #define RELOC_USE_ADDEND(t)		((reloc_target_flags[t] & _RF_A) != 0)
 #define RELOC_TARGET_SIZE(t)		((reloc_target_flags[t] >> 8) & 0xff)
 #define RELOC_VALUE_RIGHTSHIFT(t)	(reloc_target_flags[t] & 0xff)
@@ -166,8 +164,6 @@ static const long reloc_target_bitmask[] = {
 };
 #define RELOC_VALUE_BITMASK(t)	(reloc_target_bitmask[t])
 
-void _dl_reloc_plt(Elf_Addr *where, Elf_Addr value);
-
 int
 _dl_md_reloc(elf_object_t *object, int rel, int relsz)
 {
@@ -181,11 +177,11 @@ _dl_md_reloc(elf_object_t *object, int rel, int relsz)
 	Elf_Rel *rels;
 
 	loff = object->obj_base;
-	numrel = object->Dyn.info[relsz] / sizeof(Elf32_Rel);
+	numrel = object->Dyn.info[relsz] / sizeof(Elf_Rel);
 	relrel = rel == DT_REL ? object->relcount : 0;
-	rels = (Elf32_Rel *)(object->Dyn.info[rel]);
+	rels = (Elf_Rel *)(object->Dyn.info[rel]);
 	if (rels == NULL)
-		return(0);
+		return 0;
 
 	if (relrel > numrel)
 		_dl_die("relcount > numrel: %ld > %ld", relrel, numrel);
@@ -194,10 +190,6 @@ _dl_md_reloc(elf_object_t *object, int rel, int relsz)
 	for (i = 0; i < relrel; i++, rels++) {
 		Elf_Addr *where;
 
-#ifdef DEBUG
-		if (ELF_R_TYPE(rels->r_info) != R_TYPE(RELATIVE))
-			_dl_die("RELCOUNT wrong");
-#endif
 		where = (Elf_Addr *)(rels->r_offset + loff);
 		*where += loff;
 	}
@@ -212,7 +204,7 @@ _dl_md_reloc(elf_object_t *object, int rel, int relsz)
 		if (type == R_TYPE(NONE))
 			continue;
 
-		if (type == R_TYPE(JUMP_SLOT) && rel != DT_JMPREL)
+		if (type == R_TYPE(JUMP_SLOT))
 			continue;
 
 		where = (Elf_Addr *)(rels->r_offset + loff);
@@ -238,9 +230,8 @@ _dl_md_reloc(elf_object_t *object, int rel, int relsz)
 				struct sym_res sr;
 
 				sr = _dl_find_symbol(symn,
-				    SYM_SEARCH_ALL|SYM_WARNNOTFOUND|
-				    ((type == R_TYPE(JUMP_SLOT))?
-					SYM_PLT:SYM_NOTPLT), sym, object);
+				    SYM_SEARCH_ALL|SYM_WARNNOTFOUND|SYM_NOTPLT,
+				    sym, object);
 				if (sr.sym == NULL) {
 resolve_failed:
 					if (ELF_ST_BIND(sym->st_info) !=
@@ -253,11 +244,6 @@ resolve_failed:
 				    sr.sym->st_value);
 				value += prev_value;
 			}
-		}
-
-		if (type == R_TYPE(JUMP_SLOT)) {
-			_dl_reloc_plt((Elf_Word *)where, value);
-			continue;
 		}
 
 		if (type == R_TYPE(COPY)) {
@@ -286,34 +272,11 @@ resolve_failed:
 		value >>= RELOC_VALUE_RIGHTSHIFT(type);
 		value &= mask;
 
-		if (RELOC_UNALIGNED(type)) {
-			/* Handle unaligned relocations. */
-			Elf_Addr tmp = 0;
-			char *ptr = (char *)where;
-			int i, size = RELOC_TARGET_SIZE(type)/8;
-
-			/* Read it in one byte at a time. */
-			for (i=0; i<size; i++)
-				tmp = (tmp << 8) | ptr[i];
-
-			tmp &= ~mask;
-			tmp |= value;
-
-			/* Write it back out. */
-			for (i=0; i<size; i++)
-				ptr[i] = ((tmp >> (8*i)) & 0xff);
-		} else if (RELOC_TARGET_SIZE(type) > 32) {
-			*where &= ~mask;
-			*where |= value;
-		} else {
-			Elf32_Addr *where32 = (Elf32_Addr *)where;
-
-			*where32 &= ~mask;
-			*where32 |= value;
-		}
+		*where &= ~mask;
+		*where |= value;
 	}
 
-	return (fails);
+	return fails;
 }
 
 #if 0
@@ -325,12 +288,6 @@ struct jmpslot {
 };
 #define JUMP			0xe990	/* NOP + JMP opcode */
 #endif
-
-void
-_dl_reloc_plt(Elf_Addr *where, Elf_Addr value)
-{
-	*where = value;
-}
 
 /*
  * Resolve a symbol at run-time.
@@ -364,7 +321,7 @@ _dl_bind(elf_object_t *object, int index)
 	buf.newval = sr.obj->obj_base + sr.sym->st_value;
 
 	if (__predict_false(sr.obj->traced) && _dl_trace_plt(sr.obj, symn))
-		return (buf.newval);
+		return buf.newval;
 
 	buf.param.kb_addr = (Elf_Word *)(object->obj_base + rel->r_offset);
 	buf.param.kb_size = sizeof(Elf_Addr);
@@ -380,41 +337,69 @@ _dl_bind(elf_object_t *object, int index)
 		    "m" (cookie) : "edx", "cc", "memory");
 	}
 
-	return (buf.newval);
+	return buf.newval;
+}
+
+static int
+_dl_md_reloc_all_plt(elf_object_t *object, const Elf_Rel *reloc,
+    const Elf_Rel *rend)
+{
+	for (; reloc < rend; reloc++) {
+		const Elf_Sym *sym;
+		const char *symn;
+		Elf_Addr *where;
+		struct sym_res sr;
+
+		sym = object->dyn.symtab;
+		sym += ELF_R_SYM(reloc->r_info);
+		symn = object->dyn.strtab + sym->st_name;
+
+		sr = _dl_find_symbol(symn,
+		    SYM_SEARCH_ALL|SYM_WARNNOTFOUND|SYM_PLT, sym, object);
+		if (sr.sym == NULL) {
+			if (ELF_ST_BIND(sym->st_info) != STB_WEAK)
+				return 1;
+			continue;
+		}
+
+		where = (Elf_Addr *)(reloc->r_offset + object->obj_base);
+		*where = sr.obj->obj_base + sr.sym->st_value; 
+	}
+
+	return 0;
 }
 
 int
 _dl_md_reloc_got(elf_object_t *object, int lazy)
 {
 	extern void _dl_bind_start(void);	/* XXX */
-	int	fails = 0;
-	Elf_Addr *pltgot = (Elf_Addr *)object->Dyn.info[DT_PLTGOT];
-	int i, num;
-	Elf_Rel *rel;
+	Elf_Addr	*pltgot = (Elf_Addr *)object->Dyn.info[DT_PLTGOT];
+	const Elf_Rel	*reloc, *rend;
 
 	if (pltgot == NULL)
-		return (0); /* it is possible to have no PLT/GOT relocations */
+		return 0; /* it is possible to have no PLT/GOT relocations */
 
 	if (object->Dyn.info[DT_PLTREL] != DT_REL)
-		return (0);
+		return 0;
 
 	if (object->traced)
 		lazy = 1;
 
-	if (!lazy) {
-		fails = _dl_md_reloc(object, DT_JMPREL, DT_PLTRELSZ);
-	} else {
-		pltgot[1] = (Elf_Addr)object;
-		pltgot[2] = (Elf_Addr)&_dl_bind_start;
+	reloc = (const Elf_Rel *)(object->Dyn.info[DT_JMPREL]);
+	rend = (const Elf_Rel *)((char *)reloc + object->Dyn.info[DT_PLTRELSZ]);
 
-		rel = (Elf_Rel *)(object->Dyn.info[DT_JMPREL]);
-		num = (object->Dyn.info[DT_PLTRELSZ]);
-		for (i = 0; i < num/sizeof(Elf_Rel); i++, rel++) {
-			Elf_Addr *where;
-			where = (Elf_Addr *)(rel->r_offset + object->obj_base);
-			*where += object->obj_base;
-		}
+	if (!lazy)
+		return _dl_md_reloc_all_plt(object, reloc, rend);
+
+	/* Lazy */
+	pltgot[1] = (Elf_Addr)object;
+	pltgot[2] = (Elf_Addr)&_dl_bind_start;
+
+	for (; reloc < rend; reloc++) {
+		Elf_Addr *where;
+		where = (Elf_Addr *)(reloc->r_offset + object->obj_base);
+		*where += object->obj_base;
 	}
 
-	return (fails);
+	return 0;
 }

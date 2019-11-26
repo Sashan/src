@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.392 2019/08/07 10:26:41 claudio Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.394 2019/10/01 08:57:47 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -80,7 +80,8 @@
 #define	F_REJECT		0x0080
 #define	F_BLACKHOLE		0x0100
 #define	F_LONGER		0x0200
-#define	F_MPLS			0x0400
+#define	F_SHORTER		0x0400
+#define	F_MPLS			0x0800
 #define	F_CTL_DETAIL		0x1000	/* only set on requests */
 #define	F_CTL_ADJ_IN		0x2000	/* only set on requests */
 #define	F_CTL_ADJ_OUT		0x4000	/* only set on requests */
@@ -1184,7 +1185,7 @@ int		prefixset_cmp(struct prefixset_item *, struct prefixset_item *);
 RB_PROTOTYPE(prefixset_tree, prefixset_item, entry, prefixset_cmp);
 
 /* kroute.c */
-int		 kr_init(void);
+int		 kr_init(int *);
 int		 ktable_update(u_int, char *, int, u_int8_t);
 void		 ktable_preload(void);
 void		 ktable_postload(u_int8_t);

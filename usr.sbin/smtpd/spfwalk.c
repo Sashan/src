@@ -78,9 +78,6 @@ spfwalk(int argc, struct parameter *argv)
 			errx(1, "invalid ip_family");
 	}
 
-	argv += optind;
-	argc -= optind;
-
 	dict_init(&seen);
   	event_init();
 
@@ -190,6 +187,13 @@ dispatch_txt(struct dns_rr *rr)
 				printf("%s\n", *(ap) + 4);
 			continue;
 		}
+		if (strcasecmp("a", *ap) == 0) {
+			print_dname(rr->rr_dname, buf2, sizeof(buf2));
+			buf2[strlen(buf2) - 1] = '\0';
+			lookup_record(T_A, buf2, dispatch_a);
+			lookup_record(T_AAAA, buf2, dispatch_aaaa);
+			continue;
+		}
 		if (strncasecmp("a:", *ap, 2) == 0) {
 			lookup_record(T_A, *(ap) + 2, dispatch_a);
 			lookup_record(T_AAAA, *(ap) + 2, dispatch_aaaa);
@@ -207,17 +211,14 @@ dispatch_txt(struct dns_rr *rr)
 			lookup_record(T_TXT, *(ap) + 9, dispatch_txt);
 			continue;
 		}
-		if (strcasecmp(*ap, "mx") == 0 || strcasecmp(*ap, "+mx") == 0) {
+		if (strcasecmp("mx", *ap) == 0) {
 			print_dname(rr->rr_dname, buf2, sizeof(buf2));
 			buf2[strlen(buf2) - 1] = '\0';
 			lookup_record(T_MX, buf2, dispatch_mx);
 			continue;
 		}
-		if (strcasecmp(*ap, "a") == 0 || strcasecmp(*ap, "+a") == 0) {
-			print_dname(rr->rr_dname, buf2, sizeof(buf2));
-			buf2[strlen(buf2) - 1] = '\0';
-			lookup_record(T_A, buf2, dispatch_a);
-			lookup_record(T_AAAA, buf2, dispatch_aaaa);
+		if (strncasecmp("mx:", *ap, 3) == 0) {
+			lookup_record(T_MX, *(ap) + 3, dispatch_mx);
 			continue;
 		}
 	}
@@ -228,6 +229,9 @@ void
 dispatch_mx(struct dns_rr *rr)
 {
 	char buf[512];
+
+	if (rr->rr_type != T_MX)
+		return;
 
 	print_dname(rr->rr.mx.exchange, buf, sizeof(buf));
 	buf[strlen(buf) - 1] = '\0';
@@ -243,6 +247,9 @@ dispatch_a(struct dns_rr *rr)
 	char buffer[512];
 	const char *ptr;
 
+	if (rr->rr_type != T_A)
+		return;
+
 	if ((ptr = inet_ntop(AF_INET, &rr->rr.in_a.addr,
 	    buffer, sizeof buffer)))
 		printf("%s\n", ptr);
@@ -253,6 +260,9 @@ dispatch_aaaa(struct dns_rr *rr)
 {
 	char buffer[512];
 	const char *ptr;
+
+	if (rr->rr_type != T_AAAA)
+		return;
 
 	if ((ptr = inet_ntop(AF_INET6, &rr->rr.in_aaaa.addr6,
 	    buffer, sizeof buffer)))

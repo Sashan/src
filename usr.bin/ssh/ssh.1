@@ -33,8 +33,8 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.\" $OpenBSD: ssh.1,v 1.403 2019/06/12 11:31:50 jmc Exp $
-.Dd $Mdocdate: June 12 2019 $
+.\" $OpenBSD: ssh.1,v 1.406 2019/11/18 23:16:49 naddy Exp $
+.Dd $Mdocdate: November 18 2019 $
 .Dt SSH 1
 .Os
 .Sh NAME
@@ -279,7 +279,9 @@ public key authentication is read.
 The default is
 .Pa ~/.ssh/id_dsa ,
 .Pa ~/.ssh/id_ecdsa ,
-.Pa ~/.ssh/id_ed25519
+.Pa ~/.ssh/id_ecdsa_sk ,
+.Pa ~/.ssh/id_ed25519 ,
+.Pa ~/.ssh/id_ed25519_sk
 and
 .Pa ~/.ssh/id_rsa .
 Identity files may also be specified on
@@ -896,8 +898,12 @@ This stores the private key in
 (DSA),
 .Pa ~/.ssh/id_ecdsa
 (ECDSA),
+.Pa ~/.ssh/id_ecdsa_sk
+(security key-hosted ECDSA),
 .Pa ~/.ssh/id_ed25519
 (Ed25519),
+.Pa ~/.ssh/id_ed25519_sk
+(security key-hosted Ed25519),
 or
 .Pa ~/.ssh/id_rsa
 (RSA)
@@ -906,8 +912,12 @@ and stores the public key in
 (DSA),
 .Pa ~/.ssh/id_ecdsa.pub
 (ECDSA),
+.Pa ~/.ssh/id_ecdsa_sk.pub
+(security key-hosted ECDSA),
 .Pa ~/.ssh/id_ed25519.pub
 (Ed25519),
+.Pa ~/.ssh/id_ed25519_sk.pub
+(security key-hosted Ed25519),
 or
 .Pa ~/.ssh/id_rsa.pub
 (RSA)
@@ -1484,7 +1494,9 @@ above.
 .Pp
 .It Pa ~/.ssh/id_dsa
 .It Pa ~/.ssh/id_ecdsa
+.It Pa ~/.ssh/id_ecdsa_sk
 .It Pa ~/.ssh/id_ed25519
+.It Pa ~/.ssh/id_ed25519_sk
 .It Pa ~/.ssh/id_rsa
 Contains the private key for authentication.
 These files
@@ -1498,7 +1510,9 @@ sensitive part of this file using AES-128.
 .Pp
 .It Pa ~/.ssh/id_dsa.pub
 .It Pa ~/.ssh/id_ecdsa.pub
+.It Pa ~/.ssh/id_ecdsa_sk.pub
 .It Pa ~/.ssh/id_ed25519.pub
+.It Pa ~/.ssh/id_ed25519_sk.pub
 .It Pa ~/.ssh/id_rsa.pub
 Contains the public key for authentication.
 These files are not

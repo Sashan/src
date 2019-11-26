@@ -1,4 +1,4 @@
-/* $OpenBSD: auth.c,v 1.139 2019/06/28 13:35:04 deraadt Exp $ */
+/* $OpenBSD: auth.c,v 1.143 2019/11/25 00:54:23 djm Exp $ */
 /*
  * Copyright (c) 2000 Markus Friedl.  All rights reserved.
  *
@@ -28,6 +28,7 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 
+#include <stdlib.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <login_cap.h>
@@ -60,7 +61,6 @@
 #endif
 #include "authfile.h"
 #include "monitor_wrap.h"
-#include "authfile.h"
 #include "ssherr.h"
 #include "compat.h"
 #include "channels.h"
@@ -399,7 +399,7 @@ check_key_in_hostfiles(struct passwd *pw, struct sshkey *key, const char *host,
 	host_status = check_key_in_hostkeys(hostkeys, key, &found);
 	if (host_status == HOST_REVOKED)
 		error("WARNING: revoked key for %s attempted authentication",
-		    found->host);
+		    host);
 	else if (host_status == HOST_OK)
 		debug("%s: key for %s found at %s:%ld", __func__,
 		    found->host, found->file, found->line);
@@ -884,7 +884,7 @@ auth_log_authopts(const char *loc, const struct sshauthopt *opts, int do_remote)
 
 	snprintf(buf, sizeof(buf), "%d", opts->force_tun_device);
 	/* Try to keep this alphabetically sorted */
-	snprintf(msg, sizeof(msg), "key options:%s%s%s%s%s%s%s%s%s%s%s%s%s",
+	snprintf(msg, sizeof(msg), "key options:%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
 	    opts->permit_agent_forwarding_flag ? " agent-forwarding" : "",
 	    opts->force_command == NULL ? "" : " command",
 	    do_env ?  " environment" : "",
@@ -897,7 +897,8 @@ auth_log_authopts(const char *loc, const struct sshauthopt *opts, int do_remote)
 	    opts->force_tun_device == -1 ? "" : " tun=",
 	    opts->force_tun_device == -1 ? "" : buf,
 	    opts->permit_user_rc ? " user-rc" : "",
-	    opts->permit_x11_forwarding_flag ? " x11-forwarding" : "");
+	    opts->permit_x11_forwarding_flag ? " x11-forwarding" : "",
+	    opts->no_require_user_presence ? " no-touch-required" : "");
 
 	debug("%s: %s", loc, msg);
 	if (do_remote)

@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.82 2019/08/16 07:42:13 tobhe Exp $	*/
+/*	$OpenBSD: parse.y,v 1.85 2019/11/12 16:45:04 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -66,7 +66,7 @@ static struct file {
 	int			 eof_reached;
 	int			 lineno;
 	int			 errors;
-} *file;
+} *file, *topfile;
 EVP_PKEY	*wrap_pubkey(FILE *);
 EVP_PKEY	*find_pubkey(const char *);
 int		 set_policy(char *, int, struct iked_policy *);
@@ -127,6 +127,8 @@ struct ipsec_transforms {
 	unsigned int		  nencxf;
 	const struct ipsec_xf	**groupxf;
 	unsigned int		  ngroupxf;
+	const struct ipsec_xf	**esnxf;
+	unsigned int		  nesnxf;
 };
 
 struct ipsec_mode {
@@ -259,6 +261,12 @@ const struct ipsec_xf groupxfs[] = {
 	{ NULL }
 };
 
+const struct ipsec_xf esnxfs[] = {
+	{ "esn",		IKEV2_XFORMESN_ESN },
+	{ "noesn",		IKEV2_XFORMESN_NONE },
+	{ NULL }
+};
+
 const struct ipsec_xf methodxfs[] = {
 	{ "none",		IKEV2_AUTH_NONE },
 	{ "rsa",		IKEV2_AUTH_RSA_SIG },
@@ -354,10 +362,13 @@ int			 get_id_type(char *);
 uint8_t			 x2i(unsigned char *);
 int			 parsekey(unsigned char *, size_t, struct iked_auth *);
 int			 parsekeyfile(char *, struct iked_auth *);
+void			 iaw_free(struct ipsec_addr_wrap *);
 
 struct ipsec_transforms *ipsec_transforms;
 struct ipsec_filters *ipsec_filters;
 struct ipsec_mode *ipsec_mode;
+/* interface lookup routintes */
+struct ipsec_addr_wrap	*iftab;
 
 typedef struct {
 	union {
@@ -392,7 +403,7 @@ typedef struct {
 %}
 
 %token	FROM ESP AH IN PEER ON OUT TO SRCID DSTID PSK PORT
-%token	FILENAME AUTHXF PRFXF ENCXF ERROR IKEV2 IKESA CHILDSA
+%token	FILENAME AUTHXF PRFXF ENCXF ERROR IKEV2 IKESA CHILDSA ESN NOESN
 %token	PASSIVE ACTIVE ANY TAG TAP PROTO LOCAL GROUP NAME CONFIG EAP USER
 %token	IKEV1 FLOW SA TCPMD5 TUNNEL TRANSPORT COUPLE DECOUPLE SET
 %token	INCLUDE LIFETIME BYTES INET INET6 QUICK SKIP DEFAULT
@@ -422,6 +433,7 @@ typedef struct {
 %type	<v.number>		byte_spec time_spec ikelifetime
 %type	<v.string>		name
 %type	<v.cfg>			cfg ikecfg ikecfgvals
+%type	<v.string>		transform_esn
 %%
 
 grammar		: /* empty */
@@ -799,6 +811,24 @@ transform	: AUTHXF STRING			{
 			ipsec_transforms->groupxf = xfs;
 			ipsec_transforms->ngroupxf++;
 		}
+		| transform_esn				{
+			const struct ipsec_xf **xfs = ipsec_transforms->esnxf;
+			size_t nxfs = ipsec_transforms->nesnxf;
+			xfs = recallocarray(xfs, nxfs, nxfs + 1,
+			    sizeof(struct ipsec_xf *));
+			if (xfs == NULL)
+				err(1, "transform: recallocarray");
+			if ((xfs[nxfs] = parse_xf($1, 0, esnxfs)) == NULL) {
+				yyerror("%s not a valid transform", $1);
+				YYERROR;
+			}
+			ipsec_transforms->esnxf = xfs;
+			ipsec_transforms->nesnxf++;
+		}
+		;
+
+transform_esn	: ESN		{ $$ = "esn"; }
+		| NOESN		{ $$ = "noesn"; }
 		;
 
 ike_sas		:					{
@@ -1177,6 +1207,7 @@ lookup(char *s)
 		{ "dstid",		DSTID },
 		{ "eap",		EAP },
 		{ "enc",		ENCXF },
+		{ "esn",		ESN },
 		{ "esp",		ESP },
 		{ "file",		FILENAME },
 		{ "flow",		FLOW },
@@ -1195,6 +1226,7 @@ lookup(char *s)
 		{ "local",		LOCAL },
 		{ "mobike",		MOBIKE },
 		{ "name",		NAME },
+		{ "noesn",		NOESN },
 		{ "nofragmentation",	NOFRAGMENTATION },
 		{ "nomobike",		NOMOBIKE },
 		{ "ocsp",		OCSP },
@@ -1268,7 +1300,7 @@ lgetc(int quotec)
 		if ((c = igetc()) == EOF) {
 			yyerror("reached end of file while parsing "
 			    "quoted string");
-			if (popfile() == EOF)
+			if (file == topfile || popfile() == EOF)
 				return (EOF);
 			return (quotec);
 		}
@@ -1296,7 +1328,7 @@ lgetc(int quotec)
 			return ('\n');
 		}
 		while (c == EOF) {
-			if (popfile() == EOF)
+			if (file == topfile || popfile() == EOF)
 				return (EOF);
 			c = igetc();
 		}
@@ -1566,17 +1598,17 @@ popfile(void)
 {
 	struct file	*prev;
 
-	if ((prev = TAILQ_PREV(file, files, entry)) != NULL) {
+	if ((prev = TAILQ_PREV(file, files, entry)) != NULL)
 		prev->errors += file->errors;
-		TAILQ_REMOVE(&files, file, entry);
-		fclose(file->stream);
-		free(file->name);
-		free(file->ungetbuf);
-		free(file);
-		file = prev;
-		return (0);
-	}
-	return (EOF);
+
+	TAILQ_REMOVE(&files, file, entry);
+	fclose(file->stream);
+	free(file->name);
+	free(file->ungetbuf);
+	free(file);
+	file = prev;
+
+	return (file ? 0 : EOF);
 }
 
 int
@@ -1590,6 +1622,7 @@ parse_config(const char *filename, struct iked *x_env)
 
 	if ((file = pushfile(filename, 1)) == NULL)
 		return (-1);
+	topfile = file;
 
 	free(ocsp_url);
 
@@ -1628,6 +1661,9 @@ parse_config(const char *filename, struct iked *x_env)
 		TAILQ_REMOVE(&symhead, sym, entry);
 		free(sym);
 	}
+
+	iaw_free(iftab);
+	iftab = NULL;
 
 	return (errors ? -1 : 0);
 }
@@ -2183,10 +2219,6 @@ host_any(void)
 	return (ipa);
 }
 
-/* interface lookup routintes */
-
-struct ipsec_addr_wrap	*iftab;
-
 void
 ifa_load(void)
 {
@@ -2575,6 +2607,10 @@ print_policy(struct iked_policy *pol)
 						print_verbose(" group ");
 						xfs = groupxfs;
 						break;
+					case IKEV2_XFORMTYPE_ESN:
+						print_verbose(" ");
+						xfs = esnxfs;
+						break;
 					default:
 						continue;
 					}
@@ -2827,6 +2863,11 @@ create_ike(char *name, int af, uint8_t ipproto, struct ipsec_hosts *hosts,
 		pol.pol_nproposals++;
 	} else {
 		for (i = 0; i < ike_sa->nxfs; i++) {
+			if (ike_sa->xfs[i]->nesnxf) {
+				yyerror("cannot use ESN with ikesa.");
+				goto done;
+			}
+
 			if ((p = calloc(1, sizeof(*p))) == NULL)
 				err(1, "%s", __func__);
 
@@ -2911,7 +2952,8 @@ create_ike(char *name, int af, uint8_t ipproto, struct ipsec_hosts *hosts,
 			    ikev2_default_esp_transforms,
 			    ikev2_default_nesp_transforms);
 			copy_transforms(IKEV2_XFORMTYPE_ESN,
-			    NULL, 0, &xf, &xfi,
+			    ipsec_sa->xfs[i]->esnxf,
+			    ipsec_sa->xfs[i]->nesnxf, &xf, &xfi,
 			    ikev2_default_esp_transforms,
 			    ikev2_default_nesp_transforms);
 
@@ -3039,7 +3081,17 @@ done:
 			free(p->prop_xforms);
 		free(p);
 	}
-
+	if (peers != NULL) {
+		iaw_free(peers->src);
+		iaw_free(peers->dst);
+		/* peers is static, cannot be freed */
+	}
+	if (hosts != NULL) {
+		iaw_free(hosts->src);
+		iaw_free(hosts->dst);
+		free(hosts);
+	}
+	iaw_free(ikecfg);
 	return (ret);
 }
 
@@ -3065,4 +3117,24 @@ create_user(const char *user, const char *pass)
 
 	rules++;
 	return (0);
+}
+
+void
+iaw_free(struct ipsec_addr_wrap *head)
+{
+	struct ipsec_addr_wrap *n, *cur;
+
+	if (head == NULL)
+		return;
+
+	for (n = head; n != NULL; ) {
+		cur = n;
+		n = n->next;
+		if (cur->srcnat != NULL) {
+			free(cur->srcnat->name);
+			free(cur->srcnat);
+		}
+		free(cur->name);
+		free(cur);
+	}
 }

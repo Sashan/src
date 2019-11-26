@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmm.c,v 1.251 2019/07/30 06:21:23 mlarkin Exp $	*/
+/*	$OpenBSD: vmm.c,v 1.255 2019/11/26 05:39:11 pd Exp $	*/
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -28,7 +28,6 @@
 #include <sys/rwlock.h>
 #include <sys/pledge.h>
 #include <sys/memrange.h>
-#include <sys/timetc.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -430,7 +429,15 @@ vmm_attach(struct device *parent, struct device *self, void *aux)
 /*
  * vmmopen
  *
- * Called during open of /dev/vmm. Presently unused.
+ * Called during open of /dev/vmm.
+ *
+ * Parameters:
+ *  dev, flag, mode, p: These come from the character device and are
+ *   all unused for this function
+ *
+ * Return values:
+ *  ENODEV: if vmm(4) didn't attach or no supported CPUs detected
+ *  0: successful open
  */
 int
 vmmopen(dev_t dev, int flag, int mode, struct proc *p)
@@ -1161,14 +1168,16 @@ vm_create(struct vm_create_params *vcp, struct proc *p)
 	vm->vm_memory_size = memsize;
 	strncpy(vm->vm_name, vcp->vcp_name, VMM_MAX_NAME_LEN);
 
+	rw_enter_write(&vmm_softc->vm_lock);
+
 	if (vm_impl_init(vm, p)) {
 		printf("failed to init arch-specific features for vm 0x%p\n",
 		    vm);
 		vm_teardown(vm);
+		rw_exit_write(&vmm_softc->vm_lock);
 		return (ENOMEM);
 	}
 
-	rw_enter_write(&vmm_softc->vm_lock);
 	vmm_softc->vm_ct++;
 	vmm_softc->vm_idx++;
 
@@ -1183,7 +1192,6 @@ vm_create(struct vm_create_params *vcp, struct proc *p)
 		if ((ret = vcpu_init(vcpu)) != 0) {
 			printf("failed to init vcpu %d for vm 0x%p\n", i, vm);
 			vm_teardown(vm);
-			vmm_softc->vm_ct--;
 			vmm_softc->vm_idx--;
 			rw_exit_write(&vmm_softc->vm_lock);
 			return (ret);
@@ -3409,6 +3417,8 @@ vm_teardown(struct vm *vm)
 {
 	struct vcpu *vcpu, *tmp;
 
+	rw_assert_wrlock(&vmm_softc->vm_lock);
+
 	/* Free VCPUs */
 	rw_enter_write(&vm->vm_vcpu_lock);
 	SLIST_FOREACH_SAFE(vcpu, &vm->vm_vcpu_list, vc_vcpu_link, tmp) {
@@ -3425,9 +3435,11 @@ vm_teardown(struct vm *vm)
 		vm->vm_map = NULL;
 	}
 
-	vmm_softc->vm_ct--;
-	if (vmm_softc->vm_ct < 1)
-		vmm_stop();
+	if (vm->vm_id > 0) {
+		vmm_softc->vm_ct--;
+		if (vmm_softc->vm_ct < 1)
+			vmm_stop();
+	}
 	rw_exit_write(&vm->vm_vcpu_lock);
 	pool_put(&vm_pool, vm);
 }
@@ -3909,8 +3921,11 @@ vm_run(struct vm_run_params *vrp)
 	if (vcpu->vc_state == VCPU_STATE_REQTERM) {
 		vrp->vrp_exit_reason = VM_EXIT_TERMINATED;
 		vcpu->vc_state = VCPU_STATE_TERMINATED;
-		if (vm->vm_vcpus_running == 0)
+		if (vm->vm_vcpus_running == 0) {
+			rw_enter_write(&vmm_softc->vm_lock);
 			vm_teardown(vm);
+			rw_exit_write(&vmm_softc->vm_lock);
+		}
 		ret = 0;
 	} else if (ret == EAGAIN) {
 		/* If we are exiting, populate exit data so vmd can help. */
@@ -6863,8 +6878,11 @@ void
 vmm_init_pvclock(struct vcpu *vcpu, paddr_t gpa)
 {
 	vcpu->vc_pvclock_system_gpa = gpa;
-	vcpu->vc_pvclock_system_tsc_mul =
-	    (int) ((1000000000L << 20) / tc_getfrequency());
+	if (tsc_frequency > 0)
+		vcpu->vc_pvclock_system_tsc_mul =
+		    (int) ((1000000000L << 20) / tsc_frequency);
+	else
+		vcpu->vc_pvclock_system_tsc_mul = 0;
 	vmm_update_pvclock(vcpu);
 }
 
@@ -6890,7 +6908,7 @@ vmm_update_pvclock(struct vcpu *vcpu)
 		nanotime(&tv);
 		pvclock_ti->ti_system_time =
 		    tv.tv_sec * 1000000000L + tv.tv_nsec;
-		pvclock_ti->ti_tsc_shift = -20;
+		pvclock_ti->ti_tsc_shift = 12;
 		pvclock_ti->ti_tsc_to_system_mul =
 		    vcpu->vc_pvclock_system_tsc_mul;
 		pvclock_ti->ti_flags = PVCLOCK_FLAG_TSC_STABLE;

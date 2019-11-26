@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.257 2019/08/11 17:23:12 gilles Exp $	*/
+/*	$OpenBSD: parse.y,v 1.266 2019/11/26 07:28:37 gilles Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -108,7 +108,6 @@ struct rule		*rule;
 struct processor	*processor;
 struct filter_config	*filter_config;
 static uint32_t		 last_dynchain_id = 1;
-static uint32_t		 last_dynproc_id = 1;
 
 enum listen_options {
 	LO_FAMILY	= 0x000001,
@@ -192,7 +191,7 @@ typedef struct {
 %token	PHASE PKI PORT PROC PROC_EXEC PROXY_V2
 %token	QUEUE QUIT
 %token	RCPT_TO RDNS RECIPIENT RECEIVEDAUTH REGEX RELAY REJECT REPORT REWRITE RSET
-%token	SCHEDULER SENDER SENDERS SMTP SMTP_IN SMTP_OUT SMTPS SOCKET SRC SUB_ADDR_DELIM
+%token	SCHEDULER SENDER SENDERS SMTP SMTP_IN SMTP_OUT SMTPS SOCKET SRC SRS SUB_ADDR_DELIM
 %token	TABLE TAG TAGGED TLS TLS_REQUIRE TTL
 %token	USER USERBASE
 %token	VERIFY VIRTUAL
@@ -218,6 +217,7 @@ grammar		: /* empty */
 		| grammar queue '\n'
 		| grammar scheduler '\n'
 		| grammar smtp '\n'
+		| grammar srs '\n'
 		| grammar listen '\n'
 		| grammar table '\n'
 		| grammar dispatcher '\n'
@@ -538,6 +538,31 @@ SMTP LIMIT limits_smtp
 }
 ;
 
+srs:
+SRS KEY STRING {
+	conf->sc_srs_key = $3;
+}
+| SRS KEY BACKUP STRING {
+	conf->sc_srs_key_backup = $4;
+}
+| SRS TTL STRING {
+	conf->sc_srs_ttl = delaytonum($3);
+	if (conf->sc_srs_ttl == -1) {
+		yyerror("ttl delay \"%s\" is invalid", $3);
+		free($3);
+		YYERROR;
+	}
+
+	conf->sc_srs_ttl /= 86400;
+	if (conf->sc_srs_ttl == 0) {
+		yyerror("ttl delay \"%s\" is too short", $3);
+		free($3);
+		YYERROR;
+	}
+	free($3);
+}
+;
+
 
 dispatcher_local_option:
 USER STRING {
@@ -830,6 +855,18 @@ HELO STRING {
 	}
 
 	dispatcher->u.remote.auth = strdup(t->t_name);
+}
+| SRS {
+	if (conf->sc_srs_key == NULL) {
+		yyerror("an srs key is required for srs to be specified in an action");
+		YYERROR;
+	}
+	if (dispatcher->u.remote.srs == 1) {
+		yyerror("srs already specified for this dispatcher");
+		YYERROR;
+	}
+
+	dispatcher->u.remote.srs = 1;
 }
 ;
 
@@ -1190,7 +1227,47 @@ negation TAG REGEX tables {
 	rule->flag_from_rdns = 1;
 	rule->table_from = strdup(t->t_name);
 }
+| negation FROM MAIL_FROM tables {
+	struct table	*anyhost = table_find(conf, "<anyhost>");
+	struct table	*t = $4;
 
+	if (rule->flag_from) {
+		yyerror("from already specified for this rule");
+		YYERROR;
+	}
+
+	if (!table_check_use(t, T_DYNAMIC|T_LIST, K_MAILADDR)) {
+		yyerror("table \"%s\" may not be used for from lookups",
+		    t->t_name);
+		YYERROR;
+	}
+
+	rule->flag_from = 1;
+	rule->table_from = strdup(anyhost->t_name);
+	rule->flag_smtp_mail_from = $1 ? -1 : 1;
+	rule->table_smtp_mail_from = strdup(t->t_name);
+}
+| negation FROM MAIL_FROM REGEX tables {
+	struct table	*anyhost = table_find(conf, "<anyhost>");
+	struct table	*t = $5;
+
+	if (rule->flag_from) {
+		yyerror("from already specified for this rule");
+		YYERROR;
+	}
+
+	if (!table_check_use(t, T_DYNAMIC|T_LIST, K_REGEX)) {
+		yyerror("table \"%s\" may not be used for from lookups",
+		    t->t_name);
+		YYERROR;
+	}
+
+	rule->flag_from = 1;
+	rule->table_from = strdup(anyhost->t_name);
+	rule->flag_smtp_mail_from = $1 ? -1 : 1;
+	rule->flag_smtp_mail_from_regex = 1;
+	rule->table_smtp_mail_from = strdup(t->t_name);
+}
 
 | negation FOR LOCAL {
 	struct table   *t = table_find(conf, "<localnames>");
@@ -1247,6 +1324,47 @@ negation TAG REGEX tables {
 	rule->flag_for_regex = 1;
 	rule->table_for = strdup(t->t_name);
 }
+| negation FOR RCPT_TO tables {
+	struct table	*anyhost = table_find(conf, "<anydestination>");
+	struct table	*t = $4;
+
+	if (rule->flag_for) {
+		yyerror("for already specified for this rule");
+		YYERROR;
+	}
+
+	if (!table_check_use(t, T_DYNAMIC|T_LIST, K_MAILADDR)) {
+		yyerror("table \"%s\" may not be used for for lookups",
+		    t->t_name);
+		YYERROR;
+	}
+
+	rule->flag_for = 1;
+	rule->table_for = strdup(anyhost->t_name);
+	rule->flag_smtp_rcpt_to = $1 ? -1 : 1;
+	rule->table_smtp_rcpt_to = strdup(t->t_name);
+}
+| negation FOR RCPT_TO REGEX tables {
+	struct table	*anyhost = table_find(conf, "<anydestination>");
+	struct table	*t = $5;
+
+	if (rule->flag_for) {
+		yyerror("for already specified for this rule");
+		YYERROR;
+	}
+
+	if (!table_check_use(t, T_DYNAMIC|T_LIST, K_REGEX)) {
+		yyerror("table \"%s\" may not be used for for lookups",
+		    t->t_name);
+		YYERROR;
+	}
+
+	rule->flag_for = 1;
+	rule->table_for = strdup(anyhost->t_name);
+	rule->flag_smtp_rcpt_to = $1 ? -1 : 1;
+	rule->flag_smtp_rcpt_to_regex = 1;
+	rule->table_smtp_rcpt_to = strdup(t->t_name);
+}
 ;
 
 match_options:
@@ -1289,6 +1407,13 @@ MATCH {
 ;
 
 filter_action_builtin:
+filter_action_builtin_nojunk
+| JUNK {
+	filter_config->junk = 1;
+}
+;
+
+filter_action_builtin_nojunk:
 REJECT STRING {
 	filter_config->reject = $2;
 }
@@ -1297,6 +1422,9 @@ REJECT STRING {
 }
 | REWRITE STRING {
 	filter_config->rewrite = $2;
+}
+| REPORT STRING {
+	filter_config->report = $2;
 }
 ;
 
@@ -1509,7 +1637,7 @@ NOOP {
 filter_phase_commit:
 COMMIT {
 	filter_config->phase = FILTER_COMMIT;
-} MATCH filter_phase_commit_options filter_action_builtin
+} MATCH filter_phase_commit_options filter_action_builtin_nojunk
 ;
 
 
@@ -1598,12 +1726,6 @@ FILTER STRING PROC STRING {
 }
 |
 FILTER STRING PROC_EXEC STRING {
-	char	buffer[128];
-
-	do {
-		(void)snprintf(buffer, sizeof buffer, "<dynproc:%08x>", last_dynproc_id++);
-	} while (dict_check(conf->sc_processors_dict, buffer));
-
 	if (dict_get(conf->sc_filters_dict, $2)) {
 		yyerror("filter already exists with that name: %s", $2);
 		free($2);
@@ -1617,7 +1739,7 @@ FILTER STRING PROC_EXEC STRING {
 	filter_config = xcalloc(1, sizeof *filter_config);
 	filter_config->filter_type = FILTER_TYPE_PROC;
 	filter_config->name = $2;
-	filter_config->proc = xstrdup(buffer);
+	filter_config->proc = xstrdup($2);
 	dict_set(conf->sc_filters_dict, $2, filter_config);
 } proc_params {
 	dict_set(conf->sc_processors_dict, filter_config->proc, processor);
@@ -1834,6 +1956,20 @@ opt_sock_listen : FILTER STRING {
 				YYERROR;
 			}
 		}
+		| TAG STRING			{
+			if (listen_opts.options & LO_TAG) {
+				yyerror("tag already specified");
+				YYERROR;
+			}
+			listen_opts.options |= LO_TAG;
+
+			if (strlen($2) >= SMTPD_TAG_SIZE) {
+				yyerror("tag name too long");
+				free($2);
+				YYERROR;
+			}
+			listen_opts.tag = $2;
+		}
 		;
 
 opt_if_listen : INET4 {
@@ -1868,6 +2004,38 @@ opt_if_listen : INET4 {
 				YYERROR;
 			}
 			free($2);
+			listen_opts.port = ntohs(servent->s_port);
+		}
+		| PORT SMTP			{
+			struct servent *servent;
+
+			if (listen_opts.options & LO_PORT) {
+				yyerror("port already specified");
+				YYERROR;
+			}
+			listen_opts.options |= LO_PORT;
+
+			servent = getservbyname("smtp", "tcp");
+			if (servent == NULL) {
+				yyerror("invalid port: smtp");
+				YYERROR;
+			}
+			listen_opts.port = ntohs(servent->s_port);
+		}
+		| PORT SMTPS			{
+			struct servent *servent;
+
+			if (listen_opts.options & LO_PORT) {
+				yyerror("port already specified");
+				YYERROR;
+			}
+			listen_opts.options |= LO_PORT;
+
+			servent = getservbyname("smtps", "tcp");
+			if (servent == NULL) {
+				yyerror("invalid port: smtps");
+				YYERROR;
+			}
 			listen_opts.port = ntohs(servent->s_port);
 		}
 		| PORT NUMBER			{
@@ -2331,6 +2499,7 @@ lookup(char *s)
 		{ "regex",		REGEX },
 		{ "reject",		REJECT },
 		{ "relay",		RELAY },
+		{ "report",		REPORT },
 		{ "rewrite",		REWRITE },
 		{ "rset",		RSET },
 		{ "scheduler",		SCHEDULER },
@@ -2341,6 +2510,7 @@ lookup(char *s)
 		{ "smtps",		SMTPS },
 		{ "socket",		SOCKET },
 		{ "src",		SRC },
+		{ "srs",		SRS },
 		{ "sub-addr-delim",	SUB_ADDR_DELIM },
 		{ "table",		TABLE },
 		{ "tag",		TAG },
@@ -2840,7 +3010,6 @@ static void
 create_sock_listener(struct listen_opts *lo)
 {
 	struct listener *l = xcalloc(1, sizeof(*l));
-	lo->tag = "local";
 	lo->hostname = conf->sc_hostname;
 	l->ss.ss_family = AF_LOCAL;
 	l->ss.ss_len = sizeof(struct sockaddr *);

@@ -1,7 +1,7 @@
 #! /usr/bin/perl
 
 # ex:ts=8 sw=4:
-# $OpenBSD: PkgAdd.pm,v 1.114 2019/07/24 18:05:26 espie Exp $
+# $OpenBSD: PkgAdd.pm,v 1.116 2019/11/16 11:07:43 espie Exp $
 #
 # Copyright (c) 2003-2014 Marc Espie <espie@openbsd.org>
 #
@@ -112,17 +112,14 @@ our @ISA = qw(OpenBSD::AddDelete::State);
 sub handle_options
 {
 	my $state = shift;
-	$state->SUPER::handle_options('ruUzl:A:P:',
-	    '[-acinqrsUuVvxz] [-A arch] [-B pkg-destdir] [-D name[=value]]',
+	$state->SUPER::handle_options('druUzl:A:P:',
+	    '[-adcinqrsUuVvxz] [-A arch] [-B pkg-destdir] [-D name[=value]]',
 	    '[-L localbase] [-l file] [-P type] pkg-name ...');
 
 	$state->{arch} = $state->opt('A');
 
 	if ($state->opt('P')) {
-		if ($state->opt('P') eq 'cdrom') {
-			$state->{cdrom_only} = 1;
-		}
-		elsif ($state->opt('P') eq 'ftp') {
+		if ($state->opt('P') eq 'ftp') {
 			$state->{ftp_only} = 1;
 		}
 		else {
@@ -136,6 +133,7 @@ sub handle_options
 	$state->{pkglist} = $state->opt('l');
 	$state->{update} = $state->opt('u');
 	$state->{fuzzy} = $state->opt('z');
+	$state->{debug_packages} = $state->opt('d');
 	if ($state->defines('snapshot')) {
 		$state->{subst}->add('snap', 1);
 	}

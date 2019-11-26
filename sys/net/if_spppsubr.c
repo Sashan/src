@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_spppsubr.c,v 1.179 2019/06/24 21:36:53 kn Exp $	*/
+/*	$OpenBSD: if_spppsubr.c,v 1.181 2019/11/13 10:15:10 bluhm Exp $	*/
 /*
  * Synchronous PPP link level subroutines.
  *
@@ -873,6 +873,8 @@ sppp_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		break;
 
 	case SIOCSSPPPPARAMS:
+		if ((rv = suser(curproc)) != 0)
+			break;
 		rv = sppp_set_params(sp, ifr);
 		break;
 
@@ -4230,7 +4232,7 @@ sppp_set_ip_addrs(void *arg1)
 			}
 		}
 		if (!(error = in_ifinit(ifp, ifatoia(ifa), &new_sin, 0)))
-			dohooks(ifp->if_addrhooks, 0);
+			if_addrhooks_run(ifp);
 		if (debug && error) {
 			log(LOG_DEBUG, SPP_FMT "sppp_set_ip_addrs: in_ifinit "
 			" failed, error=%d\n", SPP_ARGS(ifp), error);
@@ -4290,7 +4292,7 @@ sppp_clear_ip_addrs(void *arg1)
 			/* replace peer addr in place */
 			dest->sin_addr.s_addr = sp->ipcp.saved_hisaddr;
 		if (!(error = in_ifinit(ifp, ifatoia(ifa), &new_sin, 0)))
-			dohooks(ifp->if_addrhooks, 0);
+			if_addrhooks_run(ifp);
 		if (debug && error) {
 			log(LOG_DEBUG, SPP_FMT "sppp_clear_ip_addrs: in_ifinit "
 			" failed, error=%d\n", SPP_ARGS(ifp), error);

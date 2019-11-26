@@ -1,4 +1,4 @@
-/*	$OpenBSD: roa.c,v 1.4 2019/06/19 16:30:37 deraadt Exp $ */
+/*	$OpenBSD: roa.c,v 1.7 2019/11/18 08:38:27 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -119,7 +119,8 @@ roa_parse_addr(const ASN1_OCTET_STRING *os, enum afi afi, struct parse *p)
 
 	res->addr = addr;
 	res->afi = afi;
-	res->maxlength = (maxlength == NULL) ? 0: ASN1_INTEGER_get(maxlength);
+	res->maxlength = (maxlength == NULL) ? addr.prefixlen :
+	    ASN1_INTEGER_get(maxlength);
 	ip_roa_compose_ranges(res);
 
 	rc = 1;
@@ -380,6 +381,7 @@ roa_free(struct roa *p)
 	free(p->aki);
 	free(p->ski);
 	free(p->ips);
+	free(p->tal);
 	free(p);
 }
 
@@ -410,6 +412,7 @@ roa_buffer(char **b, size_t *bsz, size_t *bmax, const struct roa *p)
 
 	io_str_buffer(b, bsz, bmax, p->aki);
 	io_str_buffer(b, bsz, bmax, p->ski);
+	io_str_buffer(b, bsz, bmax, p->tal);
 }
 
 /*
@@ -443,5 +446,76 @@ roa_read(int fd)
 
 	io_str_read(fd, &p->aki);
 	io_str_read(fd, &p->ski);
+	io_str_read(fd, &p->tal);
 	return p;
 }
+
+/*
+ * Add each IP address in the ROA into the VRP tree.
+ * Updates "vrps" to be the number of VRPs and "uniqs" to be the unique
+ * number of addresses.
+ */
+void
+roa_insert_vrps(struct vrp_tree *tree, struct roa *roa, size_t *vrps,
+    size_t *uniqs)
+{
+	struct vrp *v;
+	size_t i;
+
+	for (i = 0; i < roa->ipsz; i++) {
+		if ((v = malloc(sizeof(*v))) == NULL)
+			err(EXIT_FAILURE, NULL);
+		v->afi = roa->ips[i].afi;
+		v->addr = roa->ips[i].addr;
+		v->maxlength = roa->ips[i].maxlength;
+		v->asid = roa->asid;
+		if ((v->tal = strdup(roa->tal)) == NULL)
+			err(EXIT_FAILURE, NULL);
+		if (RB_INSERT(vrp_tree, tree, v) == NULL)
+			(*uniqs)++;
+		else /* already exists */
+			free(v);
+		(*vrps)++;
+	}
+}
+
+static inline int
+vrpcmp(struct vrp *a, struct vrp *b)
+{
+	int rv;
+
+	if (a->afi > b->afi)
+		return 1;
+	if (a->afi < b->afi)
+		return -1;
+	switch (a->afi) {
+	case AFI_IPV4:
+		rv = memcmp(&a->addr.addr, &b->addr.addr, 4);
+		if (rv)
+			return rv;
+		break;
+	case AFI_IPV6:
+		rv = memcmp(&a->addr.addr, &b->addr.addr, 16);
+		if (rv)
+			return rv;
+		break;
+	}
+	/* a smaller prefixlen is considered bigger, e.g. /8 vs /10 */
+	if (a->addr.prefixlen < b->addr.prefixlen)
+		return 1;
+	if (a->addr.prefixlen > b->addr.prefixlen)
+		return -1;
+	if (a->maxlength < b->maxlength)
+		return 1;
+	if (a->maxlength > b->maxlength)
+		return -1;
+
+	if (a->asid > b->asid)
+		return 1;
+	if (a->asid < b->asid)
+		return -1;
+
+	return 0;
+}
+
+RB_GENERATE(vrp_tree, vrp, entry, vrpcmp);

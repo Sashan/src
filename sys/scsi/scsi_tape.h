@@ -1,4 +1,4 @@
-/*	$OpenBSD: scsi_tape.h,v 1.9 2015/06/07 19:13:27 krw Exp $	*/
+/*	$OpenBSD: scsi_tape.h,v 1.11 2019/09/27 23:07:42 krw Exp $	*/
 /*	$NetBSD: scsi_tape.h,v 1.9 1996/05/24 02:04:47 thorpej Exp $	*/
 
 /*
@@ -51,8 +51,8 @@
  * SCSI tape interface description
  */
 
-#ifndef	_SCSI_TAPE_H_
-#define _SCSI_TAPE_H_ 1
+#ifndef	_SCSI_SCSI_TAPE_H
+#define _SCSI_SCSI_TAPE_H
 
 /*
  * SCSI command formats
@@ -174,17 +174,6 @@ struct scsi_tape_dev_conf_page {
 #define	SMH_DSP_BUFF_MODE_ON	0x10
 #define	SMH_DSP_BUFF_MODE_MLTI	0x20
 
-/* A special for the CIPHER ST150S(old drive) */
-struct block_desc_cipher {
-	u_int8_t density;
-	u_int8_t nblocks[3];
-	u_int8_t reserved;
-	u_int8_t blklen[3];
-	u_int8_t other;
-#define ST150_SEC		0x01	/* soft error count */
-#define	SR150_AUI		0x02	/* autoload inhibit */
-};
-
 /**********************************************************************
 			from the scsi2 spec
                 Value Tracks Density(bpi) Code Type  Reference     Note
@@ -248,4 +237,4 @@ struct block_desc_cipher {
 #define QIC_3080	0x29
 #define QIC_3095	0x45
 
-#endif /* _SCSI_TAPE_H_ */
+#endif /* _SCSI_SCSI_TAPE_H */

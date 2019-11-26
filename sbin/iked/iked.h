@@ -1,4 +1,4 @@
-/*	$OpenBSD: iked.h,v 1.123 2019/08/14 08:35:46 tobhe Exp $	*/
+/*	$OpenBSD: iked.h,v 1.125 2019/11/13 12:24:40 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -412,6 +412,7 @@ struct iked_sa {
 	struct timeval			 sa_timeused;
 
 	char				*sa_tag;
+	const char			*sa_reason;	/* reason for close */
 
 	struct iked_kex			 sa_kex;
 /* XXX compat defines until everything is converted */
@@ -820,6 +821,7 @@ int	 ikev2_childsa_delete(struct iked *, struct iked_sa *,
 	    uint8_t, uint64_t, uint64_t *, int);
 void	 ikev2_ikesa_recv_delete(struct iked *, struct iked_sa *);
 void	 ikev2_ike_sa_timeout(struct iked *env, void *);
+void	 ikev2_ike_sa_setreason(struct iked_sa *, char *);
 
 struct ibuf *
 	 ikev2_prfplus(struct iked_hash *, struct ibuf *, struct ibuf *,
@@ -890,6 +892,12 @@ void	 ikev2_msg_flushqueue(struct iked *, struct iked_msgqueue *);
 struct iked_message *
 	 ikev2_msg_lookup(struct iked *, struct iked_msgqueue *,
 	    struct iked_message *, struct ike_header *);
+void	 ikev2_msg_lookup_dispose_all(struct iked *env,
+	    struct iked_msgqueue *queue, struct iked_message *msg,
+	    struct ike_header *hdr);
+int	 ikev2_msg_lookup_retransmit_all(struct iked *env,
+	    struct iked_msgqueue *queue, struct iked_message *msg,
+	    struct ike_header *hdr, struct iked_sa *sa);
 
 /* ikev2_pld.c */
 int	 ikev2_pld_parse(struct iked *, struct ike_header *,

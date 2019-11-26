@@ -1,4 +1,4 @@
-.\"	$OpenBSD: tcpdump.8,v 1.102 2019/05/26 22:42:42 dlg Exp $
+.\"	$OpenBSD: tcpdump.8,v 1.109 2019/11/06 12:49:50 sthen Exp $
 .\"
 .\" Copyright (c) 1987, 1988, 1989, 1990, 1991, 1992, 1994, 1995, 1996
 .\"	The Regents of the University of California.  All rights reserved.
@@ -19,7 +19,7 @@
 .\" WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTIES OF
 .\" MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 .\"
-.Dd $Mdocdate: May 26 2019 $
+.Dd $Mdocdate: November 6 2019 $
 .Dt TCPDUMP 8
 .Os
 .Sh NAME
@@ -146,6 +146,9 @@ searches the system interface list for the lowest numbered, configured
 interface
 .Pq excluding loopback .
 Ties are broken by choosing the earliest match.
+.Ar interface
+may be either a network interface or a USB interface, for example
+.Ar usb0 .
 .It Fl L
 List the supported data link types for the interface and exit.
 .It Fl l
@@ -534,7 +537,7 @@ True if the Ethernet destination address is
 may be either a name from
 .Pa /etc/ethers
 or a number (see
-.Xr ethers 3
+.Xr ether_aton 3
 for a numeric format).
 .It Cm ether src Ar ehost
 True if the Ethernet source address is
@@ -1259,7 +1262,7 @@ end of this connection.
 .Ar window
 is the number of bytes of receive buffer space available
 at the other end of this connection.
-.Ar urg
+.Ar urgent
 indicates there is urgent data in the packet.
 .Ar options
 are TCP options enclosed in angle brackets e.g.,
@@ -1706,9 +1709,8 @@ since the checksum is not calculated until after
 sees the packet.
 .Sh SEE ALSO
 .\" traffic(1C), nit(4P),
-.Xr ethers 3 ,
-.Xr pcap 3 ,
-.Xr pcap-filter 3 ,
+.Xr ether_aton 3 ,
+.Xr pcap_open_live 3 ,
 .Xr bpf 4 ,
 .Xr ip 4 ,
 .Xr pf 4 ,
@@ -1716,6 +1718,7 @@ sees the packet.
 .Xr tcp 4 ,
 .Xr udp 4 ,
 .Xr hosts 5 ,
+.Xr pcap-filter 5 ,
 .Xr pf.os 5 ,
 .Xr protocols 5 ,
 .Xr services 5

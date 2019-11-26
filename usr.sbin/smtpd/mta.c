@@ -1,4 +1,4 @@
-/*	$OpenBSD: mta.c,v 1.228 2019/06/14 19:55:25 eric Exp $	*/
+/*	$OpenBSD: mta.c,v 1.232 2019/09/20 17:46:05 gilles Exp $	*/
 
 /*
  * Copyright (c) 2008 Pierre-Yves Ritschard <pyr@openbsd.org>
@@ -76,7 +76,7 @@ static void mta_drain(struct mta_relay *);
 static void mta_delivery_flush_event(int, short, void *);
 static void mta_flush(struct mta_relay *, int, const char *);
 static struct mta_route *mta_find_route(struct mta_connector *, time_t, int*,
-    time_t*);
+    time_t*, struct mta_mx **);
 static void mta_log(const struct mta_envelope *, const char *, const char *,
     const char *, const char *);
 
@@ -255,11 +255,13 @@ mta_imsg(struct mproc *p, struct imsg *imsg)
 	case IMSG_MTA_DNS_HOST:
 		m_msg(&m, imsg);
 		m_get_id(&m, &reqid);
+		m_get_string(&m, &hostname);
 		m_get_sockaddr(&m, (struct sockaddr*)&ss);
 		m_get_int(&m, &preference);
 		m_end(&m);
 		domain = tree_xget(&wait_mx, reqid);
 		mx = xcalloc(1, sizeof *mx);
+		mx->mxname = xstrdup(hostname);
 		mx->host = mta_host((struct sockaddr*)&ss);
 		mx->preference = preference;
 		TAILQ_FOREACH(imx, &domain->mxs, entry) {
@@ -1005,7 +1007,10 @@ mta_on_mx(void *tag, void *arg, void *data)
 		break;
 	case DNS_ENOTFOUND:
 		relay->fail = IMSG_MTA_DELIVERY_TEMPFAIL;
-		relay->failstr = "No MX found for domain";
+		if (relay->domain->as_host)
+			relay->failstr = "Host not found";
+		else
+			relay->failstr = "No MX found for domain";
 		break;
 	default:
 		fatalx("bad DNS lookup error code");
@@ -1143,6 +1148,7 @@ static void
 mta_connect(struct mta_connector *c)
 {
 	struct mta_route	*route;
+	struct mta_mx		*mx;
 	struct mta_limits	*l = c->relay->limits;
 	int			 limits;
 	time_t			 nextconn, now;
@@ -1231,7 +1237,7 @@ mta_connect(struct mta_connector *c)
 
 	/* We can connect now, find a route */
 	if (!limits && nextconn <= now)
-		route = mta_find_route(c, now, &limits, &nextconn);
+		route = mta_find_route(c, now, &limits, &nextconn, &mx);
 	else
 		route = NULL;
 
@@ -1278,7 +1284,7 @@ mta_connect(struct mta_connector *c)
 	route->dst->nconn += 1;
 	route->dst->lastconn = c->lastconn;
 
-	mta_session(c->relay, route);	/* this never fails synchronously */
+	mta_session(c->relay, route, mx->mxname);	/* this never fails synchronously */
 	mta_relay_ref(c->relay);
 
     goto again;
@@ -1507,7 +1513,7 @@ mta_flush(struct mta_relay *relay, int fail, const char *error)
  */
 static struct mta_route *
 mta_find_route(struct mta_connector *c, time_t now, int *limits,
-    time_t *nextconn)
+    time_t *nextconn, struct mta_mx **pmx)
 {
 	struct mta_route	*route, *best;
 	struct mta_limits	*l = c->relay->limits;
@@ -1651,6 +1657,7 @@ mta_find_route(struct mta_connector *c, time_t now, int *limits,
 		if (best)
 			mta_route_unref(best); /* from here */
 		best = route;
+		*pmx = mx;
 		log_debug("debug: mta-routing: selecting candidate route %s",
 		    mta_route_to_text(route));
 	}
@@ -1728,6 +1735,7 @@ mta_relay(struct envelope *e, struct relayhost *relayh)
 	key.sourcetable = dispatcher->u.remote.source;
 	key.helotable = dispatcher->u.remote.helo_source;
 	key.heloname = dispatcher->u.remote.helo;
+	key.srs = dispatcher->u.remote.srs;
 
 	if (relayh->hostname[0]) {
 		key.domain = mta_domain(relayh->hostname, 1);
@@ -1775,6 +1783,7 @@ mta_relay(struct envelope *e, struct relayhost *relayh)
 			r->helotable = xstrdup(key.helotable);
 		if (key.heloname)
 			r->heloname = xstrdup(key.heloname);
+		r->srs = key.srs;
 		SPLAY_INSERT(mta_relay_tree, &relays, r);
 		stat_increment("mta.relay", 1);
 	} else {
@@ -2036,6 +2045,10 @@ mta_relay_cmp(const struct mta_relay *a, const struct mta_relay *b)
 		return (1);
 	if (a->authtable && ((r = strcmp(a->authtable, b->authtable))))
 		return (r);
+	if (a->authlabel == NULL && b->authlabel)
+		return (-1);
+	if (a->authlabel && b->authlabel == NULL)
+		return (1);
 	if (a->authlabel && ((r = strcmp(a->authlabel, b->authlabel))))
 		return (r);
 	if (a->sourcetable == NULL && b->sourcetable)
@@ -2071,8 +2084,17 @@ mta_relay_cmp(const struct mta_relay *a, const struct mta_relay *b)
 	if (a->ca_name && ((r = strcmp(a->ca_name, b->ca_name))))
 		return (r);
 
+	if (a->backupname == NULL && b->backupname)
+		return (-1);
+	if (a->backupname && b->backupname == NULL)
+		return (1);
 	if (a->backupname && ((r = strcmp(a->backupname, b->backupname))))
 		return (r);
+
+	if (a->srs < b->srs)
+		return (-1);
+	if (a->srs > b->srs)
+		return (1);
 
 	return (0);
 }
@@ -2186,6 +2208,7 @@ mta_domain_unref(struct mta_domain *d)
 	while ((mx = TAILQ_FIRST(&d->mxs))) {
 		TAILQ_REMOVE(&d->mxs, mx, entry);
 		mta_host_unref(mx->host); /* from IMSG_DNS_HOST */
+		free(mx->mxname);
 		free(mx);
 	}
 

@@ -1,4 +1,4 @@
-/* $OpenBSD: server-client.c,v 1.293 2019/07/17 17:46:51 nicm Exp $ */
+/* $OpenBSD: server-client.c,v 1.296 2019/11/01 20:26:21 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -44,6 +44,7 @@ static void	server_client_set_title(struct client *);
 static void	server_client_reset_state(struct client *);
 static int	server_client_assume_paste(struct session *);
 static void	server_client_clear_overlay(struct client *);
+static void	server_client_resize_event(int, short, void *);
 
 static void	server_client_dispatch(struct imsg *, void *);
 static void	server_client_dispatch_command(struct client *, struct imsg *);
@@ -995,6 +996,24 @@ server_client_assume_paste(struct session *s)
 	return (0);
 }
 
+/* Has the latest client changed? */
+static void
+server_client_update_latest(struct client *c)
+{
+	struct window	*w;
+
+	if (c->session == NULL)
+		return;
+	w = c->session->curw->window;
+
+	if (w->latest == c)
+		return;
+	w->latest = c;
+
+	if (options_get_number(w->options, "window-size") == WINDOW_SIZE_LATEST)
+		recalculate_size(w);
+}
+
 /*
  * Handle data key input from client. This owns and can modify the key event it
  * is given and is responsible for freeing it.
@@ -1191,6 +1210,8 @@ forward_key:
 		window_pane_key(wp, c, s, wl, key, m);
 
 out:
+	if (s != NULL)
+		server_client_update_latest(c);
 	free(event);
 	return (CMD_RETURN_NORMAL);
 }
@@ -1247,7 +1268,7 @@ server_client_loop(void)
 	struct window_pane	*wp;
 	struct winlink		*wl;
 	struct session		*s;
-	int			 focus;
+	int			 focus, attached, resize;
 
 	TAILQ_FOREACH(c, &clients, entry) {
 		server_client_check_exit(c);
@@ -1260,19 +1281,33 @@ server_client_loop(void)
 	/*
 	 * Any windows will have been redrawn as part of clients, so clear
 	 * their flags now. Also check pane focus and resize.
+	 *
+	 * As an optimization, panes in windows that are in an attached session
+	 * but not the current window are not resized (this reduces the amount
+	 * of work needed when, for example, resizing an X terminal a
+	 * lot). Windows in no attached session are resized immediately since
+	 * that is likely to have come from a command like split-window and be
+	 * what the user wanted.
 	 */
 	focus = options_get_number(global_options, "focus-events");
 	RB_FOREACH(w, windows, &windows) {
+		attached = resize = 0;
 		TAILQ_FOREACH(wl, &w->winlinks, wentry) {
 			s = wl->session;
-			if (s->attached != 0 && s->curw == wl)
+			if (s->attached != 0)
+				attached = 1;
+			if (s->attached != 0 && s->curw == wl) {
+				resize = 1;
 				break;
+			}
 		}
+		if (!attached)
+			resize = 1;
 		TAILQ_FOREACH(wp, &w->panes, entry) {
 			if (wp->fd != -1) {
 				if (focus)
 					server_client_check_focus(wp);
-				if (wl != NULL)
+				if (resize)
 					server_client_check_resize(wp);
 			}
 			wp->flags &= ~PANE_REDRAW;
@@ -1319,19 +1354,11 @@ server_client_resize_force(struct window_pane *wp)
 	return (1);
 }
 
-/* Resize timer event. */
+/* Resize a pane. */
 static void
-server_client_resize_event(__unused int fd, __unused short events, void *data)
+server_client_resize_pane(struct window_pane *wp)
 {
-	struct window_pane	*wp = data;
-	struct winsize		 ws;
-
-	evtimer_del(&wp->resize_timer);
-
-	if (!(wp->flags & PANE_RESIZE))
-		return;
-	if (server_client_resize_force(wp))
-		return;
+	struct winsize	ws;
 
 	memset(&ws, 0, sizeof ws);
 	ws.ws_col = wp->sx;
@@ -1346,35 +1373,55 @@ server_client_resize_event(__unused int fd, __unused short events, void *data)
 	wp->osy = wp->sy;
 }
 
+/* Start the resize timer. */
+static void
+server_client_start_resize_timer(struct window_pane *wp)
+{
+	struct timeval	tv = { .tv_usec = 250000 };
+
+	if (!evtimer_pending(&wp->resize_timer, NULL))
+		evtimer_add(&wp->resize_timer, &tv);
+}
+
+/* Resize timer event. */
+static void
+server_client_resize_event(__unused int fd, __unused short events, void *data)
+{
+	struct window_pane	*wp = data;
+
+	evtimer_del(&wp->resize_timer);
+
+	if (~wp->flags & PANE_RESIZE)
+		return;
+	log_debug("%s: %%%u timer fired (was%s resized)", __func__, wp->id,
+	    (wp->flags & PANE_RESIZED) ? "" : " not");
+
+	if (wp->saved_grid == NULL && (wp->flags & PANE_RESIZED)) {
+		log_debug("%s: %%%u deferring timer", __func__, wp->id);
+		server_client_start_resize_timer(wp);
+	} else if (!server_client_resize_force(wp)) {
+		log_debug("%s: %%%u resizing pane", __func__, wp->id);
+		server_client_resize_pane(wp);
+	}
+	wp->flags &= ~PANE_RESIZED;
+}
+
 /* Check if pane should be resized. */
 static void
 server_client_check_resize(struct window_pane *wp)
 {
-	struct timeval	 tv = { .tv_usec = 250000 };
-
-	if (!(wp->flags & PANE_RESIZE))
+	if (~wp->flags & PANE_RESIZE)
 		return;
-	log_debug("%s: %%%u resize to %u,%u", __func__, wp->id, wp->sx, wp->sy);
 
 	if (!event_initialized(&wp->resize_timer))
 		evtimer_set(&wp->resize_timer, server_client_resize_event, wp);
 
-	/*
-	 * The first resize should happen immediately, so if the timer is not
-	 * running, do it now.
-	 */
-	if (!evtimer_pending(&wp->resize_timer, NULL))
-		server_client_resize_event(-1, 0, wp);
-
-	/*
-	 * If the pane is in the alternate screen, let the timer expire and
-	 * resize to give the application a chance to redraw. If not, keep
-	 * pushing the timer back.
-	 */
-	if (wp->saved_grid != NULL && evtimer_pending(&wp->resize_timer, NULL))
-		return;
-	evtimer_del(&wp->resize_timer);
-	evtimer_add(&wp->resize_timer, &tv);
+	if (!evtimer_pending(&wp->resize_timer, NULL)) {
+		log_debug("%s: %%%u starting timer", __func__, wp->id);
+		server_client_resize_pane(wp);
+		server_client_start_resize_timer(wp);
+	} else
+		log_debug("%s: %%%u timer running", __func__, wp->id);
 }
 
 /* Check whether pane should be focused. */
@@ -1724,6 +1771,7 @@ server_client_dispatch(struct imsg *imsg, void *arg)
 
 		if (c->flags & CLIENT_CONTROL)
 			break;
+		server_client_update_latest(c);
 		server_client_clear_overlay(c);
 		tty_resize(&c->tty);
 		recalculate_sizes();

@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_vnops.c,v 1.106 2019/08/13 07:09:21 anton Exp $	*/
+/*	$OpenBSD: vfs_vnops.c,v 1.109 2019/11/10 05:00:36 beck Exp $	*/
 /*	$NetBSD: vfs_vnops.c,v 1.20 1996/02/04 02:18:41 christos Exp $	*/
 
 /*
@@ -91,13 +91,23 @@ vn_open(struct nameidata *ndp, int fmode, int cmode)
 	struct cloneinfo *cip;
 	int error;
 
-	if ((fmode & (FREAD|FWRITE)) == 0)
+	/*
+	 * The only valid flag to pass in here from NDINIT is
+	 * KERNELPATH, This function will override the nameiop based
+	 * on the fmode and cmode flags, So validate that our caller
+	 * has not set other flags or operations in the nameidata
+	 * structure.
+	 */
+	KASSERT(ndp->ni_cnd.cn_flags == 0 || ndp->ni_cnd.cn_flags == KERNELPATH);
+	KASSERT(ndp->ni_cnd.cn_nameiop == 0);
+
+        if ((fmode & (FREAD|FWRITE)) == 0)
 		return (EINVAL);
 	if ((fmode & (O_TRUNC | FWRITE)) == O_TRUNC)
 		return (EINVAL);
 	if (fmode & O_CREAT) {
 		ndp->ni_cnd.cn_nameiop = CREATE;
-		ndp->ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
+		ndp->ni_cnd.cn_flags |= LOCKPARENT | LOCKLEAF;
 		if ((fmode & O_EXCL) == 0 && (fmode & O_NOFOLLOW) == 0)
 			ndp->ni_cnd.cn_flags |= FOLLOW;
 		if ((error = namei(ndp)) != 0)
@@ -132,8 +142,7 @@ vn_open(struct nameidata *ndp, int fmode, int cmode)
 		}
 	} else {
 		ndp->ni_cnd.cn_nameiop = LOOKUP;
-		ndp->ni_cnd.cn_flags =
-		    ((fmode & O_NOFOLLOW) ? NOFOLLOW : FOLLOW) | LOCKLEAF;
+		ndp->ni_cnd.cn_flags |= ((fmode & O_NOFOLLOW) ? NOFOLLOW : FOLLOW) | LOCKLEAF;
 		if ((error = namei(ndp)) != 0)
 			return (error);
 		vp = ndp->ni_vp;
@@ -558,9 +567,23 @@ vn_lock(struct vnode *vp, int flags)
 			tsleep(vp, PINOD, "vn_lock", 0);
 			error = ENOENT;
 		} else {
+			vp->v_lockcount++;
 			error = VOP_LOCK(vp, flags);
-			if (error == 0)
-				return (error);
+			vp->v_lockcount--;
+			if (error == 0) {
+				if ((vp->v_flag & VXLOCK) == 0)
+					return (0);
+
+				/*
+				 * The vnode was exclusively locked while
+				 * acquiring the requested lock. Release it and
+				 * try again.
+				 */
+				error = ENOENT;
+				VOP_UNLOCK(vp);
+				if (vp->v_lockcount == 0)
+					wakeup_one(&vp->v_lockcount);
+			}
 		}
 	} while (flags & LK_RETRY);
 	return (error);

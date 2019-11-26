@@ -1,4 +1,4 @@
-/*	$OpenBSD: unwind.h,v 1.17 2019/05/14 14:51:31 florian Exp $	*/
+/*	$OpenBSD: unwind.h,v 1.34 2019/11/25 17:36:48 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -28,7 +28,7 @@
 #endif
 
 #define CONF_FILE	"/etc/unwind.conf"
-#define	UNWIND_SOCKET	"/var/run/unwind.sock"
+#define	UNWIND_SOCKET	"/dev/unwind.sock"
 #define UNWIND_USER	"_unwind"
 
 #define OPT_VERBOSE	0x00000001
@@ -57,6 +57,7 @@ static const char * const log_procnames[] = {
 enum uw_resolver_type {
 	UW_RES_RECURSOR,
 	UW_RES_DHCP,
+	UW_RES_ASR,
 	UW_RES_FORWARDER,
 	UW_RES_DOT,
 	UW_RES_NONE
@@ -65,6 +66,7 @@ enum uw_resolver_type {
 static const char * const	uw_resolver_type_str[] = {
 	"recursor",
 	"dhcp",
+	"stub",
 	"forwarder",
 	"DoT"
 };
@@ -102,15 +104,10 @@ enum imsg_type {
 	IMSG_QUERY,
 	IMSG_ANSWER_HEADER,
 	IMSG_ANSWER,
-	IMSG_OPEN_DHCP_LEASE,
-	IMSG_LEASEFD,
-	IMSG_FORWARDER,
-	IMSG_RESOLVER_DOWN,
-	IMSG_RESOLVER_UP,
-	IMSG_OPEN_PORTS,
 	IMSG_CTL_RESOLVER_INFO,
 	IMSG_CTL_RESOLVER_WHY_BOGUS,
 	IMSG_CTL_RESOLVER_HISTOGRAM,
+	IMSG_CTL_AUTOCONF_RESOLVER_INFO,
 	IMSG_CTL_END,
 	IMSG_CTL_RECHECK_CAPTIVEPORTAL,
 	IMSG_HTTPSOCK,
@@ -119,17 +116,21 @@ enum imsg_type {
 	IMSG_NEW_TA,
 	IMSG_NEW_TAS_ABORT,
 	IMSG_NEW_TAS_DONE,
-	IMSG_RECHECK_RESOLVERS,
-	IMSG_RESOLVE_CAPTIVE_PORTAL,
+	IMSG_NETWORK_CHANGED,
+	IMSG_CONNECT_CAPTIVE_PORTAL_HOST,
 	IMSG_BLFD,
+	IMSG_REPLACE_DNS,
 };
 
 struct uw_forwarder {
-	SIMPLEQ_ENTRY(uw_forwarder)		 entry;
+	TAILQ_ENTRY(uw_forwarder)		 entry;
 	char					 name[1024]; /* XXX */
+	uint32_t				 if_index;
+	int					 src;
+	uint16_t				 port;
 };
 
-SIMPLEQ_HEAD(uw_forwarder_head, uw_forwarder);
+TAILQ_HEAD(uw_forwarder_head, uw_forwarder);
 struct uw_conf {
 	struct uw_forwarder_head	 uw_forwarder_list;
 	struct uw_forwarder_head	 uw_dot_forwarder_list;
@@ -141,6 +142,7 @@ struct uw_conf {
 	int				 captive_portal_expected_status;
 	int				 captive_portal_auto;
 	char				*blocklist_file;
+	int				 blocklist_log;
 };
 
 struct query_imsg {
@@ -150,8 +152,6 @@ struct query_imsg {
 	int		 c;
 	int		 err;
 	int		 bogus;
-	int		 async_id;
-	void		*resolver;
 	struct timespec	 tp;
 };
 

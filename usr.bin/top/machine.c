@@ -1,4 +1,4 @@
-/* $OpenBSD: machine.c,v 1.97 2019/06/28 13:35:05 deraadt Exp $	 */
+/* $OpenBSD: machine.c,v 1.100 2019/10/08 20:51:03 kn Exp $	 */
 
 /*-
  * Copyright (c) 1994 Thorsten Lockert <tholo@sigmasoft.com>
@@ -237,15 +237,12 @@ machine_init(struct statics *statics)
 }
 
 char *
-format_header(char *second_field, int show_threads)
+format_header(char *second_field)
 {
 	char *field_name, *thread_field = "     TID";
 	char *ptr;
 
-	if (show_threads)
-		field_name = thread_field;
-	else
-		field_name = second_field;
+	field_name = second_field ? second_field : thread_field;
 
 	ptr = header + UNAME_START;
 	while (*field_name != '\0')
@@ -422,7 +419,7 @@ cmd_matches(struct kinfo_proc *proc, char *term)
 	return 0;
 }
 
-caddr_t
+struct handle *
 get_process_info(struct system_info *si, struct process_select *sel,
     int (*compare) (const void *, const void *))
 {
@@ -501,7 +498,7 @@ get_process_info(struct system_info *si, struct process_select *sel,
 	/* pass back a handle */
 	handle.next_proc = pref;
 	handle.remaining = active_procs;
-	return ((caddr_t) & handle);
+	return &handle;
 }
 
 char fmt[MAX_COLS];	/* static area where result is built */
@@ -546,20 +543,18 @@ format_comm(struct kinfo_proc *kp)
 }
 
 char *
-format_next_process(caddr_t hndl, const char *(*get_userid)(uid_t, int),
-    pid_t *pid, int show_threads)
+format_next_process(struct handle *hndl, const char *(*get_userid)(uid_t, int),
+    pid_t *pid)
 {
 	char *p_wait;
 	struct kinfo_proc *pp;
-	struct handle *hp;
 	int cputime;
 	double pct;
 	char buf[16];
 
 	/* find and remember the next proc structure */
-	hp = (struct handle *) hndl;
-	pp = *(hp->next_proc++);
-	hp->remaining--;
+	pp = *(hndl->next_proc++);
+	hndl->remaining--;
 
 	cputime = pp->p_rtime_sec + ((pp->p_rtime_usec + 500000) / 1000000);
 
@@ -571,7 +566,7 @@ format_next_process(caddr_t hndl, const char *(*get_userid)(uid_t, int),
 	else
 		p_wait = "-";
 
-	if (show_threads)
+	if (get_userid == NULL)
 		snprintf(buf, sizeof(buf), "%8d", pp->p_tid);
 	else
 		snprintf(buf, sizeof(buf), "%s", (*get_userid)(pp->p_ruid, 0));
@@ -636,11 +631,11 @@ extern int rev_order;
 /* remove one level of indirection and set sort order */
 #define SETORDER do { \
 		if (rev_order) { \
-			p1 = *(struct kinfo_proc **) pp2; \
-			p2 = *(struct kinfo_proc **) pp1; \
+			p1 = *(struct kinfo_proc **) v2; \
+			p2 = *(struct kinfo_proc **) v1; \
 		} else { \
-			p1 = *(struct kinfo_proc **) pp1; \
-			p2 = *(struct kinfo_proc **) pp2; \
+			p1 = *(struct kinfo_proc **) v1; \
+			p2 = *(struct kinfo_proc **) v2; \
 		} \
 	} while (0)
 
@@ -648,8 +643,6 @@ extern int rev_order;
 static int
 compare_cpu(const void *v1, const void *v2)
 {
-	struct proc **pp1 = (struct proc **) v1;
-	struct proc **pp2 = (struct proc **) v2;
 	struct kinfo_proc *p1, *p2;
 	int result;
 
@@ -669,8 +662,6 @@ compare_cpu(const void *v1, const void *v2)
 static int
 compare_size(const void *v1, const void *v2)
 {
-	struct proc **pp1 = (struct proc **) v1;
-	struct proc **pp2 = (struct proc **) v2;
 	struct kinfo_proc *p1, *p2;
 	int result;
 
@@ -690,8 +681,6 @@ compare_size(const void *v1, const void *v2)
 static int
 compare_res(const void *v1, const void *v2)
 {
-	struct proc **pp1 = (struct proc **) v1;
-	struct proc **pp2 = (struct proc **) v2;
 	struct kinfo_proc *p1, *p2;
 	int result;
 
@@ -711,8 +700,6 @@ compare_res(const void *v1, const void *v2)
 static int
 compare_time(const void *v1, const void *v2)
 {
-	struct proc **pp1 = (struct proc **) v1;
-	struct proc **pp2 = (struct proc **) v2;
 	struct kinfo_proc *p1, *p2;
 	int result;
 
@@ -732,8 +719,6 @@ compare_time(const void *v1, const void *v2)
 static int
 compare_prio(const void *v1, const void *v2)
 {
-	struct proc   **pp1 = (struct proc **) v1;
-	struct proc   **pp2 = (struct proc **) v2;
 	struct kinfo_proc *p1, *p2;
 	int result;
 
@@ -752,8 +737,6 @@ compare_prio(const void *v1, const void *v2)
 static int
 compare_pid(const void *v1, const void *v2)
 {
-	struct proc **pp1 = (struct proc **) v1;
-	struct proc **pp2 = (struct proc **) v2;
 	struct kinfo_proc *p1, *p2;
 	int result;
 
@@ -773,8 +756,6 @@ compare_pid(const void *v1, const void *v2)
 static int
 compare_cmd(const void *v1, const void *v2)
 {
-	struct proc **pp1 = (struct proc **) v1;
-	struct proc **pp2 = (struct proc **) v2;
 	struct kinfo_proc *p1, *p2;
 	int result;
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_aggr.c,v 1.19 2019/08/05 10:42:51 dlg Exp $ */
+/*	$OpenBSD: if_aggr.c,v 1.24 2019/11/11 03:37:41 dlg Exp $ */
 
 /*
  * Copyright (c) 2019 The University of Queensland
@@ -29,7 +29,7 @@
  * of the Link Aggregation Control Protocol (LACP) for use on the wire,
  * and how to process it and select ports and aggregations based on
  * it.
- * 
+ *
  * This driver implements a simplified or constrained model where each
  * aggr(4) interface is effectively an independent system, and will
  * only support one aggregation. This supports the use of the kernel
@@ -335,8 +335,8 @@ struct aggr_port {
 	int (*p_output)(struct ifnet *, struct mbuf *, struct sockaddr *,
 	    struct rtentry *);
 
-	void			*p_lcookie;
-	void			*p_dcookie;
+	struct task		 p_lhook;
+	struct task		 p_dhook;
 
 	struct aggr_softc	*p_aggr;
 	TAILQ_ENTRY(aggr_port)	 p_entry;
@@ -351,7 +351,7 @@ struct aggr_port {
 	enum aggr_port_selected	 p_selected;		/* Selected */
 	struct lacp_port_info	 p_partner;
 #define p_partner_state		 p_partner.lacp_state
-	
+
 	uint8_t			 p_actor_state;
 	uint8_t			 p_lacp_timeout;
 
@@ -624,7 +624,7 @@ aggr_port_enabled(struct aggr_port *p)
 	return (1);
 }
 
-/* 
+/*
  * port_moved
  *
  * This variable is set to TRUE if the Receive machine for an Aggregation
@@ -634,7 +634,7 @@ aggr_port_enabled(struct aggr_port *p)
  * different Aggregation Port. This variable is set to FALSE once the
  * INITIALIZE state of the Receive machine has set the Partner information
  * for the Aggregation Port to administrative default values.
- * 
+ *
  * Value: Boolean
 */
 static int
@@ -811,7 +811,7 @@ aggr_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		error = suser(curproc);
 		if (error != 0)
 			break;
- 
+
 		if (((struct trunk_reqall *)data)->ra_proto !=
 		    TRUNK_PROTO_LACP) {
 			error = EPROTONOSUPPORT;
@@ -859,10 +859,10 @@ aggr_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		break;
 
 	case SIOCADDMULTI:
-		error = aggr_multi_add(sc, ifr); 
+		error = aggr_multi_add(sc, ifr);
 		break;
 	case SIOCDELMULTI:
-		error = aggr_multi_del(sc, ifr); 
+		error = aggr_multi_del(sc, ifr);
 		break;
 
 	case SIOCSIFMEDIA:
@@ -899,16 +899,16 @@ aggr_get_trunk(struct aggr_softc *sc, struct trunk_reqall *ra)
 		SET(state, LACP_STATE_ACTIVITY);
 	if (sc->sc_lacp_timeout == AGGR_LACP_TIMEOUT_FAST)
 		SET(state, LACP_STATE_TIMEOUT);
-	
+
 	ra->ra_proto = TRUNK_PROTO_LACP;
 	memset(&ra->ra_psc, 0, sizeof(ra->ra_psc));
 
 	/*
-         * aggr(4) does not support Individual links so don't bother
-         * with portprio, portno, and state, as per the spec.
+	 * aggr(4) does not support Individual links so don't bother
+	 * with portprio, portno, and state, as per the spec.
 	 */
 
-	req = &ra->ra_lacpreq; 
+	req = &ra->ra_lacpreq;
 	req->actor_prio = sc->sc_lacp_prio;
 	CTASSERT(sizeof(req->actor_mac) == sizeof(sc->sc_ac.ac_enaddr));
 	memcpy(req->actor_mac, &sc->sc_ac.ac_enaddr, sizeof(req->actor_mac));
@@ -1131,15 +1131,16 @@ aggr_add_port(struct aggr_softc *sc, const struct trunk_reqport *rp)
 	TAILQ_FOREACH(ma, &sc->sc_multiaddrs, m_entry) {
 		if (aggr_multi(sc, p, ma, SIOCADDMULTI) != 0) {
 			log(LOG_WARNING, "%s %s: "
-			    "unable to add multicast address",
+			    "unable to add multicast address\n",
 			    ifp->if_xname, ifp0->if_xname);
 		}
 	}
 
-	p->p_lcookie = hook_establish(ifp0->if_linkstatehooks, 1,
-	    aggr_p_linkch, p);
-	p->p_dcookie = hook_establish(ifp0->if_detachhooks, 0,
-	    aggr_p_detach, p);
+	task_set(&p->p_lhook, aggr_p_linkch, p);
+	if_linkstatehook_add(ifp0, &p->p_lhook);
+
+	task_set(&p->p_dhook, aggr_p_detach, p);
+	if_detachhook_add(ifp0, &p->p_dhook);
 
 	task_set(&p->p_rxm_task, aggr_rx, p);
 	mq_init(&p->p_rxm_mq, 3, IPL_NET);
@@ -1180,18 +1181,18 @@ aggr_add_port(struct aggr_softc *sc, const struct trunk_reqport *rp)
 
 unmtu:
 	if (aggr_p_set_mtu(p, p->p_mtu) != 0) {
-		log(LOG_WARNING, "%s add %s: unable to reset mtu %u",
+		log(LOG_WARNING, "%s add %s: unable to reset mtu %u\n",
 		    ifp->if_xname, ifp0->if_xname, p->p_mtu);
 	}
 resetlladdr:
 	if (aggr_p_setlladdr(p, p->p_lladdr) != 0) {
-		log(LOG_WARNING, "%s add %s: unable to reset lladdr",
+		log(LOG_WARNING, "%s add %s: unable to reset lladdr\n",
 		    ifp->if_xname, ifp0->if_xname);
 	}
 ungroup:
 	if (aggr_group(sc, p, SIOCDELMULTI) != 0) {
 		log(LOG_WARNING, "%s add %s: "
-		    "unable to remove LACP group address",
+		    "unable to remove LACP group address\n",
 		    ifp->if_xname, ifp0->if_xname);
 	}
 free:
@@ -1373,6 +1374,7 @@ aggr_p_dtor(struct aggr_softc *sc, struct aggr_port *p, const char *op)
 	struct arpcom *ac0 = (struct arpcom *)ifp0;
 	struct aggr_multiaddr *ma;
 	enum aggr_port_selected selected;
+	int error;
 
 	DPRINTF(sc, "%s %s %s: destroying port\n",
 	    ifp->if_xname, ifp0->if_xname, op);
@@ -1399,36 +1401,44 @@ aggr_p_dtor(struct aggr_softc *sc, struct aggr_port *p, const char *op)
 	sc->sc_nports--;
 
 	TAILQ_FOREACH(ma, &sc->sc_multiaddrs, m_entry) {
-		if (aggr_multi(sc, p, ma, SIOCDELMULTI) != 0) {
+		error = aggr_multi(sc, p, ma, SIOCDELMULTI);
+		if (error != 0) {
 			log(LOG_WARNING, "%s %s %s: "
-			    "unable to remove multicast address",
-			    ifp->if_xname, op, ifp0->if_xname);
+			    "unable to remove multicast address (%d)\n",
+			    ifp->if_xname, op, ifp0->if_xname, error);
 		}
 	}
 
-	if (sc->sc_promisc && ifpromisc(ifp0, 0) != 0) {
-		log(LOG_WARNING, "%s %s %s: unable to disable promisc",
-		    ifp->if_xname, op, ifp0->if_xname);
+	if (sc->sc_promisc) {
+		error = ifpromisc(ifp0, 0);
+		if (error != 0) {
+			log(LOG_WARNING, "%s %s %s: "
+			    "unable to disable promisc (%d)\n",
+			    ifp->if_xname, op, ifp0->if_xname, error);
+		}
 	}
 
-	if (aggr_p_set_mtu(p, p->p_mtu) != 0) {
-		log(LOG_WARNING, "%s %s %s: unable to restore mtu %u",
-		    ifp->if_xname, op, ifp0->if_xname, p->p_mtu);
+	error = aggr_p_set_mtu(p, p->p_mtu);
+	if (error != 0) {
+		log(LOG_WARNING, "%s %s %s: unable to restore mtu %u (%d)\n",
+		    ifp->if_xname, op, ifp0->if_xname, p->p_mtu, error);
 	}
 
-	if (aggr_p_setlladdr(p, p->p_lladdr) != 0) {
-		log(LOG_WARNING, "%s %s %s: unable to restore lladdr",
-		    ifp->if_xname, op, ifp0->if_xname);
+	error = aggr_p_setlladdr(p, p->p_lladdr);
+	if (error != 0) {
+		log(LOG_WARNING, "%s %s %s: unable to restore lladdr (%d)\n",
+		    ifp->if_xname, op, ifp0->if_xname, error);
 	}
 
-	if (aggr_group(sc, p, SIOCDELMULTI) != 0) {
+	error = aggr_group(sc, p, SIOCDELMULTI);
+	if (error != 0) {
 		log(LOG_WARNING, "%s %s %s: "
-		    "unable to remove LACP group address",
-		    ifp->if_xname, op, ifp0->if_xname);
+		    "unable to remove LACP group address (%d)\n",
+		    ifp->if_xname, op, ifp0->if_xname, error);
 	}
 
-	hook_disestablish(ifp0->if_detachhooks, p->p_dcookie);
-	hook_disestablish(ifp0->if_linkstatehooks, p->p_lcookie);
+	if_detachhook_del(ifp0, &p->p_dhook);
+	if_linkstatehook_del(ifp0, &p->p_lhook);
 
 	if_put(ifp0);
 	free(p, M_DEVBUF, sizeof(*p));
@@ -1642,17 +1652,17 @@ aggr_update_ntt(struct aggr_port *p, const struct lacp_du *lacpdu)
 	if (pi->lacp_portid.lacp_portid_number != htons(ifp0->if_index))
 		goto ntt;
 	if (pi->lacp_portid.lacp_portid_priority !=
-	     htons(sc->sc_lacp_port_prio))
+	    htons(sc->sc_lacp_port_prio))
 		goto ntt;
 	if (!ETHER_IS_EQ(pi->lacp_sysid.lacp_sysid_mac, ac->ac_enaddr))
 		goto ntt;
 	if (pi->lacp_sysid.lacp_sysid_priority !=
-	     htons(sc->sc_lacp_prio))
+	    htons(sc->sc_lacp_prio))
 		goto ntt;
 	if (pi->lacp_key != htons(ifp->if_index))
 		goto ntt;
 	if (ISSET(pi->lacp_state, LACP_STATE_SYNC) !=
-	     ISSET(state, LACP_STATE_SYNC))
+	    ISSET(state, LACP_STATE_SYNC))
 		goto ntt;
 	sync = 1;
 
@@ -1889,9 +1899,9 @@ aggr_mux(struct aggr_softc *sc, struct aggr_port *p, enum lacp_mux_event ev)
 	int ntt = 0;
 
 	/*
-         * the mux can move through multiple states based on a
-         * single event, so loop until the event is completely consumed.
-         * debounce NTT = TRUE through the multiple state transitions.
+	 * the mux can move through multiple states based on a
+	 * single event, so loop until the event is completely consumed.
+	 * debounce NTT = TRUE through the multiple state transitions.
 	 */
 
 	while (aggr_mux_ev(sc, p, ev, &ntt) != 0)
@@ -2190,7 +2200,7 @@ aggr_rxm_ev(struct aggr_softc *sc, struct aggr_port *p,
     enum lacp_rxm_event ev, const struct lacp_du *lacpdu)
 {
 	unsigned int port_disabled = 0;
-	enum lacp_rxm_state nstate = LACP_RXM_S_BEGIN; 
+	enum lacp_rxm_state nstate = LACP_RXM_S_BEGIN;
 
 	KASSERT((ev == LACP_RXM_E_LACPDU) == (lacpdu != NULL));
 
@@ -2435,7 +2445,7 @@ aggr_iff(struct aggr_softc *sc)
 			struct ifnet *ifp0 = p->p_ifp0;
 			if (ifpromisc(ifp0, promisc) != 0) {
 				log(LOG_WARNING, "%s iff %s: "
-				    "unable to turn promisc %s",
+				    "unable to turn promisc %s\n",
 				    ifp->if_xname, ifp0->if_xname,
 				    promisc ? "on" : "off");
 			}
@@ -2488,7 +2498,7 @@ aggr_set_lladdr(struct aggr_softc *sc, const struct ifreq *ifr)
 		if (aggr_p_setlladdr(p, lladdr) != 0) {
 			struct ifnet *ifp0 = p->p_ifp0;
 			log(LOG_WARNING, "%s setlladdr %s: "
-			    "unable to set lladdr",
+			    "unable to set lladdr\n",
 			    ifp->if_xname, ifp0->if_xname);
 		}
 	}
@@ -2511,7 +2521,7 @@ aggr_set_mtu(struct aggr_softc *sc, uint32_t mtu)
 	TAILQ_FOREACH(p, &sc->sc_ports, p_entry) {
 		if (aggr_p_set_mtu(p, mtu) != 0) {
 			struct ifnet *ifp0 = p->p_ifp0;
-			log(LOG_WARNING, "%s %s: unable to set mtu %u",
+			log(LOG_WARNING, "%s %s: unable to set mtu %u\n",
 			    ifp->if_xname, ifp0->if_xname, mtu);
 		}
 	}
@@ -2613,7 +2623,7 @@ aggr_ptm_tx(void *arg)
 static inline void
 aggr_lacp_tlv_set(struct lacp_tlv_hdr *tlv, uint8_t type, uint8_t len)
 {
-	tlv->lacp_tlv_type = type; 
+	tlv->lacp_tlv_type = type;
 	tlv->lacp_tlv_length = sizeof(*tlv) + len;
 }
 
@@ -2804,9 +2814,9 @@ aggr_multi_add(struct aggr_softc *sc, struct ifreq *ifr)
 	uint8_t addrlo[ETHER_ADDR_LEN];
 	uint8_t addrhi[ETHER_ADDR_LEN];
 	int error;
- 
+
 	error = ether_multiaddr(&ifr->ifr_addr, addrlo, addrhi);
-        if (error != 0)
+	if (error != 0)
 		return (error);
 
 	TAILQ_FOREACH(ma, &sc->sc_multiaddrs, m_entry) {
@@ -2831,7 +2841,7 @@ aggr_multi_add(struct aggr_softc *sc, struct ifreq *ifr)
 
 		if (aggr_multi(sc, p, ma, SIOCADDMULTI) != 0) {
 			log(LOG_WARNING, "%s %s: "
-			    "unable to add multicast address",
+			    "unable to add multicast address\n",
 			    ifp->if_xname, ifp0->if_xname);
 		}
 	}
@@ -2850,7 +2860,7 @@ aggr_multi_del(struct aggr_softc *sc, struct ifreq *ifr)
 	int error;
 
 	error = ether_multiaddr(&ifr->ifr_addr, addrlo, addrhi);
-        if (error != 0)
+	if (error != 0)
 		return (error);
 
 	TAILQ_FOREACH(ma, &sc->sc_multiaddrs, m_entry) {
@@ -2871,7 +2881,7 @@ aggr_multi_del(struct aggr_softc *sc, struct ifreq *ifr)
 
 		if (aggr_multi(sc, p, ma, SIOCDELMULTI) != 0) {
 			log(LOG_WARNING, "%s %s: "
-			    "unable to delete multicast address",
+			    "unable to delete multicast address\n",
 			    ifp->if_xname, ifp0->if_xname);
 		}
 	}

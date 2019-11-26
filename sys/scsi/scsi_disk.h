@@ -1,4 +1,4 @@
-/*	$OpenBSD: scsi_disk.h,v 1.35 2015/06/07 19:13:27 krw Exp $	*/
+/*	$OpenBSD: scsi_disk.h,v 1.39 2019/11/25 17:02:57 krw Exp $	*/
 /*	$NetBSD: scsi_disk.h,v 1.10 1996/07/05 16:19:05 christos Exp $	*/
 
 /*
@@ -55,7 +55,7 @@
  */
 
 #ifndef	_SCSI_SCSI_DISK_H
-#define _SCSI_SCSI_DISK_H 1
+#define _SCSI_SCSI_DISK_H
 
 /*
  * XXX Is this also used by ATAPI?
@@ -109,7 +109,7 @@ struct scsi_initialization_pattern_descriptor {
 	u_int8_t pattern_length[2];
 #if 0
 	u_int8_t pattern[...];
-#endif
+#endif /* 0 */
 };
 
 /*
@@ -303,22 +303,6 @@ struct scsi_synchronize_cache {
 #define WRITE_SAME_16		0x93
 #define UNMAP			0x42
 
-
-struct scsi_read_cap_data {
-	u_int8_t addr[4];
-	u_int8_t length[4];
-};
-
-struct scsi_read_cap_data_16 {
-	u_int8_t addr[8];
-	u_int8_t length[4];
-	u_int8_t p_type_prot;
-	u_int8_t logical_per_phys;
-	u_int8_t lowest_aligned[2];
-#define READ_CAP_16_TPE		0x8000
-#define READ_CAP_16_TPRZ	0x4000
-	u_int8_t reserved[16];
-};
 
 struct scsi_reassign_blocks_data {
 	u_int8_t reserved[2];

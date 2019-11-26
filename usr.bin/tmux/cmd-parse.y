@@ -1,4 +1,4 @@
-/* $OpenBSD: cmd-parse.y,v 1.17 2019/06/18 11:17:40 nicm Exp $ */
+/* $OpenBSD: cmd-parse.y,v 1.20 2019/10/14 08:38:07 nicm Exp $ */
 
 /*
  * Copyright (c) 2019 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -176,18 +176,18 @@ expanded	: format
 			struct cmd_parse_input	*pi = ps->input;
 			struct format_tree	*ft;
 			struct client		*c = pi->c;
-			struct cmd_find_state	*fs;
+			struct cmd_find_state	*fsp;
+			struct cmd_find_state	 fs;
 			int			 flags = FORMAT_NOJOBS;
 
 			if (cmd_find_valid_state(&pi->fs))
-				fs = &pi->fs;
-			else
-				fs = NULL;
+				fsp = &pi->fs;
+			else {
+				cmd_find_from_client(&fs, c, 0);
+				fsp = &fs;
+			}
 			ft = format_create(NULL, pi->item, FORMAT_NONE, flags);
-			if (fs != NULL)
-				format_defaults(ft, c, fs->s, fs->wl, fs->wp);
-			else
-				format_defaults(ft, c, NULL, NULL, NULL);
+			format_defaults(ft, c, fsp->s, fsp->wl, fsp->wp);
 
 			$$ = format_expand(ft, $1);
 			format_free(ft);
@@ -696,6 +696,7 @@ cmd_parse_build_commands(struct cmd_parse_commands *cmds,
 			pr.status = CMD_PARSE_ERROR;
 			pr.error = cmd_parse_get_error(pi->file, line, cause);
 			free(cause);
+			cmd_list_free(cmdlist);
 			goto out;
 		}
 		cmd_list_append(cmdlist, add);
@@ -1245,7 +1246,7 @@ yylex_token_variable(char **buf, size_t *len)
 {
 	struct environ_entry	*envent;
 	int			 ch, brackets = 0;
-	char			 name[BUFSIZ];
+	char			 name[1024];
 	size_t			 namelen = 0;
 	const char		*value;
 
@@ -1297,7 +1298,7 @@ yylex_token_tilde(char **buf, size_t *len)
 {
 	struct environ_entry	*envent;
 	int			 ch;
-	char			 name[BUFSIZ];
+	char			 name[1024];
 	size_t			 namelen = 0;
 	struct passwd		*pw;
 	const char		*home = NULL;

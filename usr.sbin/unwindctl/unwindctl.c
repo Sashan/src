@@ -1,4 +1,4 @@
-/*	$OpenBSD: unwindctl.c,v 1.6 2019/04/02 07:47:23 florian Exp $	*/
+/*	$OpenBSD: unwindctl.c,v 1.14 2019/11/25 18:10:42 otto Exp $	*/
 
 /*
  * Copyright (c) 2005 Claudio Jeker <claudio@openbsd.org>
@@ -27,6 +27,7 @@
 #include <net/if.h>
 #include <net/if_media.h>
 #include <net/if_types.h>
+#include <net/route.h>
 
 #include <err.h>
 #include <errno.h>
@@ -96,8 +97,8 @@ main(int argc, char *argv[])
 
 	memset(&sun, 0, sizeof(sun));
 	sun.sun_family = AF_UNIX;
-
 	strlcpy(sun.sun_path, sockname, sizeof(sun.sun_path));
+
 	if (connect(ctl_sock, (struct sockaddr *)&sun, sizeof(sun)) == -1)
 		err(1, "connect: %s", sockname);
 
@@ -167,6 +168,11 @@ main(int argc, char *argv[])
 		imsg_compose(ibuf, IMSG_CTL_STATUS, 0, 0, -1, &type,
 		    sizeof(type));
 		break;
+	case STATUS_STUB:
+		type = UW_RES_ASR;
+		imsg_compose(ibuf, IMSG_CTL_STATUS, 0, 0, -1, &type,
+		    sizeof(type));
+		break;
 	case STATUS:
 		type = UW_RES_NONE;
 		imsg_compose(ibuf, IMSG_CTL_STATUS, 0, 0, -1, &type,
@@ -198,6 +204,7 @@ main(int argc, char *argv[])
 			case STATUS_DHCP:
 			case STATUS_STATIC:
 			case STATUS_DOT:
+			case STATUS_STUB:
 				done = show_status_msg(&imsg);
 				break;
 			default:
@@ -215,9 +222,12 @@ main(int argc, char *argv[])
 int
 show_status_msg(struct imsg *imsg)
 {
-	static int			 header;
+	static int			 header, autoconf_forwarders;
 	struct ctl_resolver_info	*cri;
+	struct ctl_forwarder_info	*cfi;
 	enum captive_portal_state	 captive_portal_state;
+	char				 ifnamebuf[IFNAMSIZ];
+	char				*if_name;
 
 	if (imsg->hdr.type != IMSG_CTL_CAPTIVEPORTAL_INFO && !header++)
 		printf("%8s %16s %s\n", "selected", "type", "status");
@@ -241,9 +251,19 @@ show_status_msg(struct imsg *imsg)
 		break;
 	case IMSG_CTL_RESOLVER_INFO:
 		cri = imsg->data;
-		printf("%8s %16s %s\n", cri->selected ? "*" : " ",
+		printf("%8s %16s %s%s\n", cri->selected ? "*" : " ",
 		    uw_resolver_type_str[cri->type],
-		    uw_resolver_state_str[cri->state]);
+		    uw_resolver_state_str[cri->state],
+		    cri->oppdot ? " (opportunistic DoT)" : "");
+		break;
+	case IMSG_CTL_AUTOCONF_RESOLVER_INFO:
+		cfi = imsg->data;
+		if (!autoconf_forwarders++)
+			printf("\nlearned forwarders:\n");
+		if_name = if_indextoname(cfi->if_index, ifnamebuf);
+		printf("%s - %s[%s]\n", cfi->name,
+		    cfi->src == RTP_PROPOSAL_DHCLIENT ? "DHCP" : "SLAAC",
+		    if_name ? if_name : "unknown");
 		break;
 	case IMSG_CTL_RESOLVER_WHY_BOGUS:
 		/* make sure this is a string */
@@ -308,12 +328,12 @@ print_histogram(void* data, size_t len)
 
 	memcpy(histogram, data, len);
 
-	for(i = 1; i < nitems(histogram_limits) - 1; i++) {
+	for(i = 0; i < nitems(histogram_limits) - 1; i++) {
 		snprintf(buf, sizeof(buf), "<%lld", histogram_limits[i]);
 		printf("%6s", buf);
 	}
 	printf("%6s\n", ">");
-	for(i = 1; i < nitems(histogram); i++)
+	for(i = 0; i < nitems(histogram); i++)
 		printf("%6lld", histogram[i]);
 	printf("\n");
 }

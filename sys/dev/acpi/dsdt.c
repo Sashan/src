@@ -1,4 +1,4 @@
-/* $OpenBSD: dsdt.c,v 1.246 2019/07/31 15:58:00 jcs Exp $ */
+/* $OpenBSD: dsdt.c,v 1.249 2019/10/16 01:43:50 mlarkin Exp $ */
 /*
  * Copyright (c) 2005 Jordan Hargrave <jordan@openbsd.org>
  *
@@ -1503,6 +1503,12 @@ char *aml_valid_osi[] = {
 	"Windows 2012",
 	"Windows 2013",
 	"Windows 2015",
+	"Windows 2016",
+	"Windows 2017",
+	"Windows 2017.2",
+	"Windows 2018",
+	"Windows 2018.2",
+	"Windows 2019",
 	NULL
 };
 
@@ -3086,7 +3092,7 @@ aml_disasm(struct aml_scope *scope, int lvl,
 		strlcpy(mch, aml_nodename(rv->node), sizeof(mch));
 		if (rv->type == AML_OBJTYPE_METHOD) {
 			strlcat(mch, "(", sizeof(mch));
-			for (ival=0; 
+			for (ival=0;
 			    ival < AML_METHOD_ARGCOUNT(rv->v_method.flags);
 			    ival++) {
 				strlcat(mch, ival ? ", %z" : "%z",
@@ -4037,13 +4043,9 @@ aml_parse(struct aml_scope *scope, int ret_type, const char *stype)
 	case AMLOP_INDEX:
 		/* Index: tir => ObjRef */
 		idx = opargs[1]->v_integer;
-		if (idx >= opargs[0]->length || idx < 0) {
-#ifndef SMALL_KERNEL
-			aml_showvalue(opargs[0]);
-#endif
-			aml_die("Index out of bounds %d/%d\n", idx,
-			    opargs[0]->length);
-		}
+		/* Reading past the end of the array? - Ignore */
+		if (idx >= opargs[0]->length || idx < 0)
+			break;
 		switch (opargs[0]->type) {
 		case AML_OBJTYPE_PACKAGE:
 			/* Don't set opargs[0] to NULL */

@@ -1,4 +1,4 @@
-/*	$OpenBSD: db_interface.c,v 1.6 2019/03/23 05:47:22 visa Exp $	*/
+/*	$OpenBSD: db_interface.c,v 1.8 2019/11/07 14:44:52 mpi Exp $	*/
 /*	$NetBSD: db_interface.c,v 1.34 2003/10/26 23:11:15 chris Exp $	*/
 
 /*
@@ -105,7 +105,7 @@ struct db_variable db_regs[] = {
 struct db_mutex ddb_mp_mutex = DB_MUTEX_INITIALIZER;
 volatile int ddb_state = DDB_STATE_NOT_RUNNING;
 volatile cpuid_t ddb_active_cpu;
-boolean_t        db_switch_cpu;
+int		 db_switch_cpu;
 long             db_switch_to_cpu;
 
 void db_cpuinfo_cmd(db_expr_t, int, db_expr_t, char *);
@@ -156,9 +156,9 @@ kdb_trap(int type, db_regs_t *regs)
 
 	s = splhigh();
 	db_active++;
-	cnpollc(TRUE);
+	cnpollc(1);
 	db_trap(type, 0/*code*/);
-	cnpollc(FALSE);
+	cnpollc(0);
 	db_active--;
 	splx(s);
 
@@ -509,8 +509,8 @@ db_machine_init(void)
 #endif
 }
 
-db_addr_t
-db_branch_taken(u_int insn, db_addr_t pc, db_regs_t *db_regs)
+vaddr_t
+db_branch_taken(u_int insn, vaddr_t pc, db_regs_t *db_regs)
 {
 	// implment
 	return pc + 4;

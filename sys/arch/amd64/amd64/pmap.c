@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.134 2019/07/15 08:35:48 mlarkin Exp $	*/
+/*	$OpenBSD: pmap.c,v 1.136 2019/11/03 09:44:23 mpi Exp $	*/
 /*	$NetBSD: pmap.c,v 1.3 2003/05/08 18:13:13 thorpej Exp $	*/
 
 /*
@@ -180,15 +180,11 @@
  *
  * [A] new process' page directory page (PDP)
  *	- plan 1: done at pmap_create() we use
- *	  uvm_km_alloc(kernel_map, PAGE_SIZE)  [fka kmem_alloc] to do this
- *	  allocation.
+ *	  pool_get(&pmap_pmap_pool, PR_WAITOK) to do this allocation.
  *
  * if we are low in free physical memory then we sleep in
- * uvm_km_alloc -- in this case this is ok since we are creating
+ * pool_get() -- in this case this is ok since we are creating
  * a new pmap and should not be holding any locks.
- *
- * if the kernel is totally out of virtual space
- * (i.e. uvm_km_alloc returns NULL), then we panic.
  *
  * XXX: the fork code currently has no way to return an "out of
  * memory, try again" error code since uvm_fork [fka vm_fork]
@@ -705,7 +701,7 @@ pmap_bootstrap(paddr_t first_avail, paddr_t max_pa)
 	kpm->pm_pdir[PDIR_SLOT_DIRECT] = dmpdp | PG_V | PG_KW | PG_U |
 	    PG_M | pg_nx;
 
-	/* Map any remaining physical memory > 512GB */	
+	/* Map any remaining physical memory > 512GB */
 	for (curslot = 1 ; curslot < NUM_L4_SLOT_DIRECT ; curslot++) {
 		/*
 		 * Start of current range starts at PA (curslot) * 512GB
@@ -840,7 +836,7 @@ pmap_randomize(void)
 	pmap_kernel()->pm_pdir = pml4va;
 	proc0.p_addr->u_pcb.pcb_cr3 = pml4pa;
 
-	/* Fixup recursive PTE PML4E slot. We are only changing the PA */	
+	/* Fixup recursive PTE PML4E slot. We are only changing the PA */
 	pml4va[PDIR_SLOT_PTE] = pml4pa | (pml4va[PDIR_SLOT_PTE] & ~PG_FRAME);
 
 	for (i = 0; i < NPDPG; i++) {
@@ -2294,7 +2290,8 @@ pmap_enter_special(vaddr_t va, paddr_t pa, vm_prot_t prot)
 	DPRINTF("%s: setting PTE[%lld] = 0x%llx\n", __func__, l1idx, pd[l1idx]);
 }
 
-void pmap_remove_ept(struct pmap *pmap, vaddr_t sgpa, vaddr_t egpa)
+void
+pmap_remove_ept(struct pmap *pmap, vaddr_t sgpa, vaddr_t egpa)
 {
 	vaddr_t v;
 #if NVMM > 0

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ntpd.c,v 1.124 2019/06/28 13:32:49 deraadt Exp $ */
+/*	$OpenBSD: ntpd.c,v 1.128 2019/11/11 06:32:52 otto Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -99,7 +99,7 @@ usage(void)
 		fprintf(stderr,
 		    "usage: ntpctl -s all | peers | Sensors | status\n");
 	else
-		fprintf(stderr, "usage: %s [-dnSsv] [-f file]\n",
+		fprintf(stderr, "usage: %s [-dnv] [-f file]\n",
 		    __progname);
 	exit(1);
 }
@@ -114,7 +114,8 @@ auto_preconditions(const struct ntpd_conf *cnf)
 	if (sysctl(mib, 2, &securelevel, &sz, NULL, 0) == -1)
 		err(1, "sysctl");
 	constraints = !TAILQ_EMPTY(&cnf->constraints);
-	return !cnf->settime && constraints && securelevel == 0;
+	return !cnf->settime && (constraints || cnf->trusted_peers ||
+	    conf->trusted_sensors) && securelevel == 0;
 }
 
 #define POLL_MAX		8
@@ -138,6 +139,8 @@ main(int argc, char *argv[])
 	int			argc0 = argc, logdest;
 	char			**argv0 = argv;
 	char			*pname = NULL;
+	time_t			 settime_deadline;
+	int			 sopt = 0;
 
 	if (strcmp(__progname, "ntpctl") == 0) {
 		ctl_main(argc, argv);
@@ -164,10 +167,8 @@ main(int argc, char *argv[])
 			pname = optarg;
 			break;
 		case 's':
-			lconf.settime = 1;
-			break;
 		case 'S':
-			lconf.settime = 0;
+			sopt = ch;
 			break;
 		case 'v':
 			lconf.verbose++;
@@ -184,6 +185,12 @@ main(int argc, char *argv[])
 		logdest |= LOG_TO_SYSLOG;
 
 	log_init(logdest, lconf.verbose, LOG_DAEMON);
+
+	if (sopt) {
+		log_warnx("-%c option no longer works and will be removed soon.",
+		    sopt);
+		log_warnx("Please reconfigure to use constraints or trusted servers.");
+	}
 
 	argc -= optind;
 	argv += optind;
@@ -240,8 +247,10 @@ main(int argc, char *argv[])
 		if (!lconf.debug)
 			if (daemon(1, 0))
 				fatal("daemon");
-	} else
-		timeout = SETTIME_TIMEOUT * 1000;
+	} else {
+		settime_deadline = getmonotime();
+		timeout = 100;
+	}
 
 	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, PF_UNSPEC,
 	    pipe_chld) == -1)
@@ -314,7 +323,8 @@ main(int argc, char *argv[])
 				quit = 1;
 			}
 
-		if (nfds == 0 && lconf.settime) {
+		if (nfds == 0 && lconf.settime &&
+		    getmonotime() > settime_deadline + SETTIME_TIMEOUT) {
 			lconf.settime = 0;
 			timeout = INFTIM;
 			log_init(logdest, lconf.verbose, LOG_DAEMON);

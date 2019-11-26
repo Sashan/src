@@ -1,4 +1,4 @@
-/*	$OpenBSD: sysctl.c,v 1.246 2019/07/12 00:04:59 cheloha Exp $	*/
+/*	$OpenBSD: sysctl.c,v 1.248 2019/10/29 04:20:36 dlg Exp $	*/
 /*	$NetBSD: sysctl.c,v 1.9 1995/09/30 07:12:50 thorpej Exp $	*/
 
 /*
@@ -262,9 +262,9 @@ main(int argc, char *argv[])
 
 	ctime(&boottime); /* satisfy potential $TZ expansion before unveil() */
 
-	if (unveil(_PATH_DEVDB, "r") == -1)
+	if (unveil(_PATH_DEVDB, "r") == -1 && errno != ENOENT)
 		err(1,"unveil");
-	if (unveil("/dev", "r") == -1)
+	if (unveil("/dev", "r") == -1 && errno != ENOENT)
 		err(1, "unveil");
 	if (unveil(NULL, NULL) == -1)
 		err(1, "unveil");
@@ -1485,7 +1485,6 @@ struct ctlname espname[] = ESPCTL_NAMES;
 struct ctlname ahname[] = AHCTL_NAMES;
 struct ctlname etheripname[] = ETHERIPCTL_NAMES;
 struct ctlname grename[] = GRECTL_NAMES;
-struct ctlname mobileipname[] = MOBILEIPCTL_NAMES;
 struct ctlname ipcompname[] = IPCOMPCTL_NAMES;
 struct ctlname carpname[] = CARPCTL_NAMES;
 struct ctlname pfsyncname[] = PFSYNCCTL_NAMES;
@@ -1550,7 +1549,7 @@ struct list inetvars[] = {
 	{ 0, 0 },
 	{ 0, 0 },
 	{ 0, 0 },
-	{ mobileipname, MOBILEIPCTL_MAXID }, /* mobileip */
+	{ 0, 0 },
 	{ 0, 0 },
 	{ 0, 0 },
 	{ 0, 0 },

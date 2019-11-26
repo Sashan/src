@@ -1,4 +1,4 @@
-/*	$OpenBSD: proc.h,v 1.273 2019/08/02 02:17:35 cheloha Exp $	*/
+/*	$OpenBSD: proc.h,v 1.279 2019/11/12 04:20:21 visa Exp $	*/
 /*	$NetBSD: proc.h,v 1.44 1996/04/22 01:23:21 christos Exp $	*/
 
 /*-
@@ -260,7 +260,7 @@ struct process {
 #define ps_endcopy	ps_refcnt
 	int	ps_refcnt;		/* Number of references. */
 
-	struct	timespec ps_start;	/* starting time. */
+	struct	timespec ps_start;	/* starting uptime. */
 	struct	timeout ps_realit_to;	/* real-time itimer trampoline. */
 };
 
@@ -318,6 +318,7 @@ struct p_inentry {
  *	I	immutable after creation
  *	s	scheduler lock
  *	l	read only reference, see lim_read_enter()
+ *	o	owned (read/modified only) by this thread
  */
 struct proc {
 	TAILQ_ENTRY(proc) p_runq;	/* [s] current run/sleep queue */
@@ -332,8 +333,8 @@ struct proc {
 	/* substructures: */
 	struct	filedesc *p_fd;		/* copy of p_p->ps_fd */
 	struct	vmspace *p_vmspace;	/* [I] copy of p_p->ps_vmspace */
-	struct	p_inentry p_spinentry;
-	struct	p_inentry p_pcinentry;
+	struct	p_inentry p_spinentry;	/* [o] cache for SP check */
+	struct	p_inentry p_pcinentry;	/* [o] cache for PC check */
 	struct	plimit	*p_limit;	/* [l] read ref. of p_p->ps_limit */
 
 	int	p_flag;			/* P_* flags. */
@@ -349,10 +350,7 @@ struct proc {
 #define	p_startzero	p_dupfd
 	int	p_dupfd;	 /* Sideways return value from filedescopen. XXX */
 
-	long 	p_thrslpid;	/* for thrsleep syscall */
-
 	/* scheduling */
-	u_int	p_estcpu;		/* [s] Time averaged val of p_cpticks */
 	int	p_cpticks;	 /* Ticks of cpu time. */
 	const volatile void *p_wchan;	/* [s] Sleep address. */
 	struct	timeout p_sleep_to;/* timeout for tsleep() */
@@ -363,6 +361,8 @@ struct proc {
 	u_int	p_sticks;		/* Statclock hits in system mode. */
 	u_int	p_iticks;		/* Statclock hits processing intr. */
 	struct	cpu_info * volatile p_cpu; /* [s] CPU we're running on. */
+
+	long 	p_thrslpid;		/* for thrsleep syscall */
 
 	struct	rusage p_ru;		/* Statistics */
 	struct	tusage p_tu;		/* accumulated times. */
@@ -379,6 +379,7 @@ struct proc {
 
 	u_char	p_priority;	/* [s] Process priority. */
 	u_char	p_usrpri;	/* [s] User-prio based on p_estcpu & ps_nice. */
+	u_int	p_estcpu;		/* [s] Time averaged val of p_cpticks */
 	int	p_pledge_syscall;	/* Cache of current syscall */
 
 	struct	ucred *p_ucred;		/* cached credentials */
@@ -612,6 +613,7 @@ struct sleep_state {
 	int sls_catch;
 	int sls_do_sleep;
 	int sls_sig;
+	int sls_timeout;
 };
 
 struct cond {

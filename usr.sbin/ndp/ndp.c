@@ -1,4 +1,4 @@
-/*	$OpenBSD: ndp.c,v 1.93 2019/06/28 13:32:49 deraadt Exp $	*/
+/*	$OpenBSD: ndp.c,v 1.98 2019/08/31 13:46:14 bluhm Exp $	*/
 /*	$KAME: ndp.c,v 1.101 2002/07/17 08:46:33 itojun Exp $	*/
 
 /*
@@ -108,6 +108,7 @@
 /* packing rule for routing socket */
 #define ROUNDUP(a) \
 	((a) > 0 ? (1 + (((a) - 1) | (sizeof(long) - 1))) : sizeof(long))
+#define ADVANCE(x, n) (x += ROUNDUP((n)->sa_len))
 
 static pid_t pid;
 static int nflag;
@@ -121,17 +122,18 @@ char ifix_buf[IFNAMSIZ];		/* if_indextoname() */
 
 int file(char *);
 void getsocket(void);
+int parse_host(const char *, struct in6_addr *);
 int set(int, char **);
-void get(char *);
-int delete(char *);
+void get(const char *);
+int delete(const char *);
 void dump(struct in6_addr *, int);
 static struct in6_nbrinfo *getnbrinfo(struct in6_addr *, int, int);
 static char *ether_str(struct sockaddr_dl *);
-int ndp_ether_aton(char *, u_char *);
+int ndp_ether_aton(const char *, u_char *);
 void usage(void);
 int rtmsg(int);
 int rtget(struct sockaddr_in6 **, struct sockaddr_dl **);
-void ifinfo(char *);
+void ifinfo(const char *);
 static char *sec2str(time_t);
 static void ts_print(const struct timeval *);
 static int rdomain;
@@ -157,7 +159,6 @@ main(int argc, char *argv[])
 		case 's':
 			if (mode) {
 				usage();
-				/*NOTREACHED*/
 			}
 			mode = ch;
 			arg = NULL;
@@ -167,7 +168,6 @@ main(int argc, char *argv[])
 		case 'i' :
 			if (mode) {
 				usage();
-				/*NOTREACHED*/
 			}
 			mode = ch;
 			arg = optarg;
@@ -181,13 +181,11 @@ main(int argc, char *argv[])
 		case 'A':
 			if (mode) {
 				usage();
-				/*NOTREACHED*/
 			}
 			mode = 'a';
 			repeat = strtonum(optarg, 1, INT_MAX, &errstr);
 			if (errstr) {
 				usage();
-				/*NOTREACHED*/
 			}
 			break;
 		case 'V':
@@ -195,7 +193,6 @@ main(int argc, char *argv[])
 			if (errstr != NULL) {
 				warn("bad rdomain: %s", errstr);
 				usage();
-				/*NOTREACHED*/
 			}
 			break;
 		default:
@@ -210,14 +207,12 @@ main(int argc, char *argv[])
 	case 'c':
 		if (argc != 0) {
 			usage();
-			/*NOTREACHED*/
 		}
 		dump(0, mode == 'c');
 		break;
 	case 'd':
 		if (argc != 0) {
 			usage();
-			/*NOTREACHED*/
 		}
 		delete(arg);
 		break;
@@ -238,7 +233,6 @@ main(int argc, char *argv[])
 	case 0:
 		if (argc != 1) {
 			usage();
-			/*NOTREACHED*/
 		}
 		get(argv[0]);
 		break;
@@ -257,8 +251,7 @@ file(char *name)
 	char line[100], arg[5][50], *args[5];
 
 	if ((fp = fopen(name, "r")) == NULL) {
-		fprintf(stderr, "ndp: cannot open %s\n", name);
-		exit(1);
+		err(1, "cannot open %s", name);
 	}
 	args[0] = &arg[0][0];
 	args[1] = &arg[1][0];
@@ -270,7 +263,7 @@ file(char *name)
 		i = sscanf(line, "%49s %49s %49s %49s %49s",
 		    arg[0], arg[1], arg[2], arg[3], arg[4]);
 		if (i < 2) {
-			fprintf(stderr, "ndp: bad line: %s\n", line);
+			warnx("bad line: %s", line);
 			retval = 1;
 			continue;
 		}
@@ -298,10 +291,40 @@ getsocket(void)
 		err(1, "pledge");
 }
 
+int
+parse_host(const char *host, struct in6_addr *in6)
+{
+	struct addrinfo hints, *res;
+	struct sockaddr_in6 *sin6;
+	int gai_error;
+
+	bzero(&hints, sizeof(hints));
+	hints.ai_family = AF_INET6;
+	if (nflag)
+		hints.ai_flags = AI_NUMERICHOST;
+
+	gai_error = getaddrinfo(host, NULL, &hints, &res);
+	if (gai_error) {
+		warnx("%s: %s", host, gai_strerror(gai_error));
+		return 1;
+	}
+
+	sin6 = (struct sockaddr_in6 *)res->ai_addr;
+	*in6 = sin6->sin6_addr;
+#ifdef __KAME__
+	if (IN6_IS_ADDR_LINKLOCAL(in6)) {
+		in6->s6_addr[2] = htons(sin6->sin6_scope_id);
+	}
+#endif
+
+	freeaddrinfo(res);
+	return 0;
+}
+
 struct	sockaddr_in6 so_mask = {sizeof(so_mask), AF_INET6 };
 struct	sockaddr_in6 blank_sin = {sizeof(blank_sin), AF_INET6 }, sin_m;
 struct	sockaddr_dl blank_sdl = {sizeof(blank_sdl), AF_LINK }, sdl_m;
-struct	sockaddr_dl ifp_m = { sizeof(&ifp_m), AF_LINK };
+struct	sockaddr_dl ifp_m = { sizeof(ifp_m), AF_LINK };
 time_t	expire_time;
 int	flags, found_entry;
 struct	{
@@ -313,15 +336,13 @@ struct	{
  * Set an individual neighbor cache entry
  */
 int
-set(int argc, char **argv)
+set(int argc, char *argv[])
 {
 	struct sockaddr_in6 *sin = &sin_m;
 	struct sockaddr_dl *sdl;
 	struct rt_msghdr *rtm = &(m_rtmsg.m_rtm);
-	struct addrinfo hints, *res;
-	int gai_error;
 	u_char *ea;
-	char *host = argv[0], *eaddr = argv[1];
+	const char *host = argv[0], *eaddr = argv[1];
 
 	getsocket();
 	argc -= 2;
@@ -329,22 +350,8 @@ set(int argc, char **argv)
 	sdl_m = blank_sdl;
 	sin_m = blank_sin;
 
-	bzero(&hints, sizeof(hints));
-	hints.ai_family = AF_INET6;
-	gai_error = getaddrinfo(host, NULL, &hints, &res);
-	if (gai_error) {
-		fprintf(stderr, "ndp: %s: %s\n", host,
-			gai_strerror(gai_error));
+	if (parse_host(host, &sin->sin6_addr))
 		return 1;
-	}
-	sin->sin6_addr = ((struct sockaddr_in6 *)res->ai_addr)->sin6_addr;
-#ifdef __KAME__
-	if (IN6_IS_ADDR_LINKLOCAL(&sin->sin6_addr)) {
-		*(u_int16_t *)&sin->sin6_addr.s6_addr[2] =
-		    htons(((struct sockaddr_in6 *)res->ai_addr)->sin6_scope_id);
-	}
-#endif
-	freeaddrinfo(res);
 	ea = (u_char *)LLADDR(&sdl_m);
 	if (ndp_ether_aton(eaddr, ea) == 0)
 		sdl_m.sdl_alen = 6;
@@ -363,7 +370,6 @@ set(int argc, char **argv)
 
 	if (rtget(&sin, &sdl)) {
 		errx(1, "RTM_GET(%s) failed", host);
-		/* NOTREACHED */
 	}
 
 	if (IN6_ARE_ADDR_EQUAL(&sin->sin6_addr, &sin_m.sin6_addr)) {
@@ -379,7 +385,7 @@ set(int argc, char **argv)
 		/*
 		 * IPv4 arp command retries with sin_other = SIN_PROXY here.
 		 */
-		fprintf(stderr, "set: cannot configure a new entry\n");
+		warnx("set: cannot configure a new entry");
 		return 1;
 	}
 
@@ -397,29 +403,14 @@ overwrite:
  * Display an individual neighbor cache entry
  */
 void
-get(char *host)
+get(const char *host)
 {
 	struct sockaddr_in6 *sin = &sin_m;
-	struct addrinfo hints, *res;
-	int gai_error;
 
 	sin_m = blank_sin;
-	bzero(&hints, sizeof(hints));
-	hints.ai_family = AF_INET6;
-	gai_error = getaddrinfo(host, NULL, &hints, &res);
-	if (gai_error) {
-		fprintf(stderr, "ndp: %s: %s\n", host,
-		    gai_strerror(gai_error));
+	if (parse_host(host, &sin->sin6_addr))
 		return;
-	}
-	sin->sin6_addr = ((struct sockaddr_in6 *)res->ai_addr)->sin6_addr;
-#ifdef __KAME__
-	if (IN6_IS_ADDR_LINKLOCAL(&sin->sin6_addr)) {
-		*(u_int16_t *)&sin->sin6_addr.s6_addr[2] =
-		    htons(((struct sockaddr_in6 *)res->ai_addr)->sin6_scope_id);
-	}
-#endif
-	freeaddrinfo(res);
+
 	dump(&sin->sin6_addr, 0);
 	if (found_entry == 0) {
 		getnameinfo((struct sockaddr *)sin, sin->sin6_len, host_buf,
@@ -434,38 +425,18 @@ get(char *host)
  * Delete a neighbor cache entry
  */
 int
-delete(char *host)
+delete(const char *host)
 {
 	struct sockaddr_in6 *sin = &sin_m;
 	struct rt_msghdr *rtm = &m_rtmsg.m_rtm;
 	struct sockaddr_dl *sdl;
-	struct addrinfo hints, *res;
-	int gai_error;
 
 	getsocket();
 	sin_m = blank_sin;
-
-	bzero(&hints, sizeof(hints));
-	hints.ai_family = AF_INET6;
-	if (nflag)
-		hints.ai_flags = AI_NUMERICHOST;
-	gai_error = getaddrinfo(host, NULL, &hints, &res);
-	if (gai_error) {
-		fprintf(stderr, "ndp: %s: %s\n", host,
-		    gai_strerror(gai_error));
+	if (parse_host(host, &sin->sin6_addr))
 		return 1;
-	}
-	sin->sin6_addr = ((struct sockaddr_in6 *)res->ai_addr)->sin6_addr;
-#ifdef __KAME__
-	if (IN6_IS_ADDR_LINKLOCAL(&sin->sin6_addr)) {
-		*(u_int16_t *)&sin->sin6_addr.s6_addr[2] =
-		    htons(((struct sockaddr_in6 *)res->ai_addr)->sin6_scope_id);
-	}
-#endif
-	freeaddrinfo(res);
 	if (rtget(&sin, &sdl)) {
 		errx(1, "RTM_GET(%s) failed", host);
-		/* NOTREACHED */
 	}
 
 	if (IN6_ARE_ADDR_EQUAL(&sin->sin6_addr, &sin_m.sin6_addr)) {
@@ -478,7 +449,7 @@ delete(char *host)
 		/*
 		 * IPv4 arp command retries with sin_other = SIN_PROXY here.
 		 */
-		fprintf(stderr, "delete: cannot delete non-NDP entry\n");
+		warnx("delete: cannot delete non-NDP entry");
 		return 1;
 	}
 
@@ -734,14 +705,14 @@ ether_str(struct sockaddr_dl *sdl)
 }
 
 int
-ndp_ether_aton(char *a, u_char *n)
+ndp_ether_aton(const char *a, u_char *n)
 {
 	int i, o[6];
 
 	i = sscanf(a, "%x:%x:%x:%x:%x:%x", &o[0], &o[1], &o[2],
 	    &o[3], &o[4], &o[5]);
 	if (i != 6) {
-		fprintf(stderr, "ndp: invalid Ethernet address '%s'\n", a);
+		warnx("invalid Ethernet address '%s'", a);
 		return (1);
 	}
 	for (i = 0; i < 6; i++)
@@ -778,8 +749,7 @@ rtmsg(int cmd)
 
 	switch (cmd) {
 	default:
-		fprintf(stderr, "ndp: internal wrong cmd\n");
-		exit(1);
+		errx(1, "internal wrong cmd");
 	case RTM_ADD:
 		rtm->rtm_addrs |= RTA_GATEWAY;
 		if (expire_time) {
@@ -797,9 +767,12 @@ rtmsg(int cmd)
 	case RTM_GET:
 		rtm->rtm_addrs |= (RTA_DST | RTA_IFP);
 	}
-#define NEXTADDR(w, s) \
-	if (rtm->rtm_addrs & (w)) { \
-		bcopy((char *)&s, cp, sizeof(s)); cp += ROUNDUP(sizeof(s));}
+
+#define NEXTADDR(w, s)							\
+	if (rtm->rtm_addrs & (w)) {					\
+		memcpy(cp, &(s), sizeof(s));				\
+		ADVANCE(cp, (struct sockaddr *)&(s));			\
+	}
 
 	NEXTADDR(RTA_DST, sin_m);
 	NEXTADDR(RTA_GATEWAY, sdl_m);
@@ -817,7 +790,6 @@ doit:
 	if ((rlen = write(rtsock, (char *)&m_rtmsg, l)) == -1) {
 		if (errno != ESRCH || cmd != RTM_DELETE) {
 			err(1, "writing to routing socket");
-			/* NOTREACHED */
 		}
 	}
 	do {
@@ -825,8 +797,7 @@ doit:
 	} while (l > 0 && (rtm->rtm_version != RTM_VERSION ||
 	    rtm->rtm_seq != seq || rtm->rtm_pid != pid));
 	if (l == -1)
-		(void) fprintf(stderr, "ndp: read from routing socket: %s\n",
-		    strerror(errno));
+		warn("read from routing socket");
 	return (0);
 }
 
@@ -858,7 +829,7 @@ rtget(struct sockaddr_in6 **sinp, struct sockaddr_dl **sdlp)
 				default:
 					break;
 				}
-				cp += ROUNDUP(sa->sa_len);
+				ADVANCE(cp, sa);
 			}
 		}
 	}
@@ -873,14 +844,13 @@ rtget(struct sockaddr_in6 **sinp, struct sockaddr_dl **sdlp)
 }
 
 void
-ifinfo(char *ifname)
+ifinfo(const char *ifname)
 {
 	struct in6_ndireq nd;
 	int s;
 
 	if ((s = socket(AF_INET6, SOCK_DGRAM, 0)) == -1) {
 		err(1, "socket");
-		/* NOTREACHED */
 	}
 	bzero(&nd, sizeof(nd));
 	strlcpy(nd.ifname, ifname, sizeof(nd.ifname));

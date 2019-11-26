@@ -146,6 +146,27 @@ init_charset(void)
 }
 
 /*
+ * Like mbtowc(3), except that it converts the multibyte character
+ * preceding ps rather than the one starting at ps.
+ */
+int
+mbtowc_left(wchar_t *pwc, const char *ps, size_t psz)
+{
+	size_t sz = 0;
+	int len;
+
+	do {
+		if (++sz > psz)
+			return -1;
+	} while (utf_mode && IS_UTF8_TRAIL(ps[-sz]));
+	if ((len = mbtowc(pwc, ps - sz, sz)) == -1) {
+		(void)mbtowc(NULL, NULL, 0);
+		return -1;
+	}
+	return len == sz || (len == 0 && sz == 1) ? len : -1;
+}
+
+/*
  * Is a given character a "control" character?
  */
 static int
@@ -450,13 +471,6 @@ static struct wchar_range comp_table[] = {
 	{ 0x1D167, 0x1D169} /* Mn */, { 0x1D17B, 0x1D182} /* Mn */,
 	{ 0x1D185, 0x1D18B} /* Mn */, { 0x1D1AA, 0x1D1AD} /* Mn */,
 	{ 0x1D242, 0x1D244} /* Mn */, { 0xE0100, 0xE01EF} /* Mn */,
-};
-
-/*
- * Special pairs, not ranges.
- */
-static struct wchar_range comb_table[] = {
-	{0x0644, 0x0622}, {0x0644, 0x0623}, {0x0644, 0x0625}, {0x0644, 0x0627},
 };
 
 /*
@@ -804,22 +818,4 @@ is_wide_char(LWCHAR ch)
 {
 	return (is_in_table(ch, wide_table,
 	    (sizeof (wide_table) / sizeof (*wide_table))));
-}
-
-/*
- * Is a character a UTF-8 combining character?
- * A combining char acts like an ordinary char, but if it follows
- * a specific char (not any char), the two combine into one glyph.
- */
-int
-is_combining_char(LWCHAR ch1, LWCHAR ch2)
-{
-	/* The table is small; use linear search. */
-	int i;
-	for (i = 0; i < sizeof (comb_table) / sizeof (*comb_table); i++) {
-		if (ch1 == comb_table[i].first &&
-		    ch2 == comb_table[i].last)
-			return (1);
-	}
-	return (0);
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: apmd.c,v 1.88 2019/07/25 07:29:44 kn Exp $	*/
+/*	$OpenBSD: apmd.c,v 1.91 2019/11/02 00:41:36 jca Exp $	*/
 
 /*
  *  Copyright (c) 1995, 1996 John T. Kohl
@@ -36,7 +36,6 @@
 #include <sys/wait.h>
 #include <sys/event.h>
 #include <sys/time.h>
-#include <sys/sched.h>
 #include <sys/sysctl.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -67,9 +66,6 @@ void usage(void);
 int power_status(int fd, int force, struct apm_power_info *pinfo);
 int bind_socket(const char *sn);
 enum apm_state handle_client(int sock_fd, int ctl_fd);
-int  get_avg_idle_mp(int ncpu);
-int  get_avg_idle_up(void);
-void perf_status(struct apm_power_info *pinfo, int ncpu);
 void suspend(int ctl_fd);
 void stand_by(int ctl_fd);
 void hibernate(int ctl_fd);
@@ -96,8 +92,8 @@ logmsg(int prio, const char *msg, ...)
 
 	va_start(ap, msg);
 	if (debug) {
-		vfprintf(stdout, msg, ap);
-		fprintf(stdout, "\n");
+		vfprintf(stderr, msg, ap);
+		fprintf(stderr, "\n");
 	} else {
 		vsyslog(prio, msg, ap);
 	}
@@ -145,7 +141,7 @@ power_status(int fd, int force, struct apm_power_info *pinfo)
 {
 	struct apm_power_info bstate;
 	static struct apm_power_info last;
-	int acon = 0;
+	int acon = 0, priority = LOG_NOTICE;
 
 	if (fd == -1) {
 		if (pinfo) {
@@ -164,6 +160,9 @@ power_status(int fd, int force, struct apm_power_info *pinfo)
 	 * enough since last report, or asked to force a print */
 		if (bstate.ac_state == APM_AC_ON)
 			acon = 1;
+		if (bstate.battery_state == APM_BATT_CRITICAL &&
+		    bstate.battery_state != last.battery_state)
+			priority = LOG_EMERG;
 		if (force ||
 		    bstate.ac_state != last.ac_state ||
 		    bstate.battery_state != last.battery_state ||
@@ -182,7 +181,7 @@ power_status(int fd, int force, struct apm_power_info *pinfo)
 #else
 			if ((int)bstate.minutes_left > 0)
 #endif
-				logmsg(LOG_NOTICE, "battery status: %s. "
+				logmsg(priority, "battery status: %s. "
 				    "external power status: %s. "
 				    "estimated battery life %d%% (%u minutes)",
 				    battstate(bstate.battery_state),
@@ -190,7 +189,7 @@ power_status(int fd, int force, struct apm_power_info *pinfo)
 				    bstate.battery_life,
 				    bstate.minutes_left);
 			else
-				logmsg(LOG_NOTICE, "battery status: %s. "
+				logmsg(priority, "battery status: %s. "
 				    "external power status: %s. "
 				    "estimated battery life %d%%",
 				    battstate(bstate.battery_state),
@@ -386,9 +385,6 @@ main(int argc, char *argv[])
 	const char *errstr;
 	int kq, nchanges;
 	struct kevent ev[2];
-	int ncpu_mib[2] = { CTL_HW, HW_NCPU };
-	int ncpu;
-	size_t ncpu_sz = sizeof(ncpu);
 
 	while ((ch = getopt(argc, argv, "aACdHLsf:t:S:z:Z:")) != -1)
 		switch(ch) {
@@ -500,9 +496,6 @@ main(int argc, char *argv[])
 	}
 	if (kevent(kq, ev, nchanges, NULL, 0, &sts) == -1)
 		error("kevent", NULL);
-
-	if (sysctl(ncpu_mib, 2, &ncpu, &ncpu_sz, NULL, 0) == -1)
-		error("cannot read hw.ncpu", NULL);
 
 	for (;;) {
 		int rv;

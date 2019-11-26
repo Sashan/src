@@ -1,5 +1,5 @@
 
-/* $OpenBSD: servconf.c,v 1.351 2019/04/18 18:56:16 dtucker Exp $ */
+/* $OpenBSD: servconf.c,v 1.354 2019/11/25 00:52:46 djm Exp $ */
 /*
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
  *                    All rights reserved
@@ -104,6 +104,7 @@ initialize_server_options(ServerOptions *options)
 	options->hostbased_key_types = NULL;
 	options->hostkeyalgorithms = NULL;
 	options->pubkey_authentication = -1;
+	options->pubkey_auth_options = -1;
 	options->pubkey_key_types = NULL;
 	options->kerberos_authentication = -1;
 	options->kerberos_or_local_passwd = -1;
@@ -196,7 +197,7 @@ assemble_algorithms(ServerOptions *o)
 	ASSEMBLE(kex_algorithms, KEX_SERVER_KEX, all_kex);
 	ASSEMBLE(hostkeyalgorithms, KEX_DEFAULT_PK_ALG, all_key);
 	ASSEMBLE(hostbased_key_types, KEX_DEFAULT_PK_ALG, all_key);
-	ASSEMBLE(pubkey_key_types, KEX_DEFAULT_PK_ALG, all_key);
+	ASSEMBLE(pubkey_key_types, PUBKEY_DEFAULT_PK_ALG, all_key);
 	ASSEMBLE(ca_sign_algorithms, SSH_ALLOWED_CA_SIGALGS, all_sig);
 #undef ASSEMBLE
 	free(all_cipher);
@@ -320,6 +321,8 @@ fill_default_server_options(ServerOptions *options)
 		options->hostbased_uses_name_from_packet_only = 0;
 	if (options->pubkey_authentication == -1)
 		options->pubkey_authentication = 1;
+	if (options->pubkey_auth_options == -1)
+		options->pubkey_auth_options = 0;
 	if (options->kerberos_authentication == -1)
 		options->kerberos_authentication = 0;
 	if (options->kerberos_or_local_passwd == -1)
@@ -475,7 +478,7 @@ typedef enum {
 	sAuthenticationMethods, sHostKeyAgent, sPermitUserRC,
 	sStreamLocalBindMask, sStreamLocalBindUnlink,
 	sAllowStreamLocalForwarding, sFingerprintHash, sDisableForwarding,
-	sExposeAuthInfo, sRDomain,
+	sExposeAuthInfo, sRDomain, sPubkeyAuthOptions,
 	sDeprecated, sIgnore, sUnsupported
 } ServerOpCodes;
 
@@ -509,6 +512,7 @@ static struct {
 	{ "rsaauthentication", sDeprecated, SSHCFG_ALL },
 	{ "pubkeyauthentication", sPubkeyAuthentication, SSHCFG_ALL },
 	{ "pubkeyacceptedkeytypes", sPubkeyAcceptedKeyTypes, SSHCFG_ALL },
+	{ "pubkeyauthoptions", sPubkeyAuthOptions, SSHCFG_ALL },
 	{ "dsaauthentication", sPubkeyAuthentication, SSHCFG_GLOBAL }, /* alias */
 #ifdef KRB5
 	{ "kerberosauthentication", sKerberosAuthentication, SSHCFG_ALL },
@@ -1381,7 +1385,8 @@ process_server_config_line(ServerOptions *options, char *line,
 			fatal("%s line %d: Missing argument.",
 			    filename, linenum);
 		if (*arg != '-' &&
-		    !sshkey_names_valid2(*arg == '+' ? arg + 1 : arg, 1))
+		    !sshkey_names_valid2(*arg == '+' || *arg == '^' ?
+		    arg + 1 : arg, 1))
 			fatal("%s line %d: Bad key types '%s'.",
 			    filename, linenum, arg ? arg : "<NONE>");
 		if (*activep && *charptr == NULL)
@@ -1403,6 +1408,24 @@ process_server_config_line(ServerOptions *options, char *line,
 	case sPubkeyAcceptedKeyTypes:
 		charptr = &options->pubkey_key_types;
 		goto parse_keytypes;
+
+	case sPubkeyAuthOptions:
+		intptr = &options->pubkey_auth_options;
+		value = 0;
+		while ((arg = strdelim(&cp)) && *arg != '\0') {
+			if (strcasecmp(arg, "none") == 0)
+				continue;
+			if (strcasecmp(arg, "touch-required") == 0)
+				value |= PUBKEYAUTH_TOUCH_REQUIRED;
+			else {
+				fatal("%s line %d: unsupported "
+				    "PubkeyAuthOptions option %s",
+				    filename, linenum, arg);
+			}
+		}
+		if (*activep && *intptr == -1)
+			*intptr = value;
+		break;
 
 	case sKerberosAuthentication:
 		intptr = &options->kerberos_authentication;
@@ -1652,7 +1675,8 @@ process_server_config_line(ServerOptions *options, char *line,
 		arg = strdelim(&cp);
 		if (!arg || *arg == '\0')
 			fatal("%s line %d: Missing argument.", filename, linenum);
-		if (*arg != '-' && !ciphers_valid(*arg == '+' ? arg + 1 : arg))
+		if (*arg != '-' &&
+		    !ciphers_valid(*arg == '+' || *arg == '^' ? arg + 1 : arg))
 			fatal("%s line %d: Bad SSH2 cipher spec '%s'.",
 			    filename, linenum, arg ? arg : "<NONE>");
 		if (options->ciphers == NULL)
@@ -1663,7 +1687,8 @@ process_server_config_line(ServerOptions *options, char *line,
 		arg = strdelim(&cp);
 		if (!arg || *arg == '\0')
 			fatal("%s line %d: Missing argument.", filename, linenum);
-		if (*arg != '-' && !mac_valid(*arg == '+' ? arg + 1 : arg))
+		if (*arg != '-' &&
+		    !mac_valid(*arg == '+' || *arg == '^' ? arg + 1 : arg))
 			fatal("%s line %d: Bad SSH2 mac spec '%s'.",
 			    filename, linenum, arg ? arg : "<NONE>");
 		if (options->macs == NULL)
@@ -1676,7 +1701,8 @@ process_server_config_line(ServerOptions *options, char *line,
 			fatal("%s line %d: Missing argument.",
 			    filename, linenum);
 		if (*arg != '-' &&
-		    !kex_names_valid(*arg == '+' ? arg + 1 : arg))
+		    !kex_names_valid(*arg == '+' || *arg == '^' ?
+		    arg + 1 : arg))
 			fatal("%s line %d: Bad SSH2 KexAlgorithms '%s'.",
 			    filename, linenum, arg ? arg : "<NONE>");
 		if (options->kex_algorithms == NULL)
@@ -2223,6 +2249,7 @@ copy_set_server_options(ServerOptions *dst, ServerOptions *src, int preauth)
 	M_CP_INTOPT(password_authentication);
 	M_CP_INTOPT(gss_authentication);
 	M_CP_INTOPT(pubkey_authentication);
+	M_CP_INTOPT(pubkey_auth_options);
 	M_CP_INTOPT(kerberos_authentication);
 	M_CP_INTOPT(hostbased_authentication);
 	M_CP_INTOPT(hostbased_uses_name_from_packet_only);
@@ -2567,7 +2594,7 @@ dump_config(ServerOptions *o)
 	dump_cfg_string(sHostKeyAlgorithms, o->hostkeyalgorithms ?
 	    o->hostkeyalgorithms : KEX_DEFAULT_PK_ALG);
 	dump_cfg_string(sPubkeyAcceptedKeyTypes, o->pubkey_key_types ?
-	    o->pubkey_key_types : KEX_DEFAULT_PK_ALG);
+	    o->pubkey_key_types : PUBKEY_DEFAULT_PK_ALG);
 	dump_cfg_string(sRDomain, o->routing_domain);
 
 	/* string arguments requiring a lookup */
@@ -2637,4 +2664,10 @@ dump_config(ServerOptions *o)
 		    o->permit_user_env_whitelist);
 	}
 
+	printf("pubkeyauthoptions");
+	if (o->pubkey_auth_options == 0)
+		printf(" none");
+	if (o->pubkey_auth_options & PUBKEYAUTH_TOUCH_REQUIRED)
+		printf(" touch-required");
+	printf("\n");
 }

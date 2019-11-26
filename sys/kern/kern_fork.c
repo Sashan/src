@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_fork.c,v 1.213 2019/06/21 09:39:48 visa Exp $	*/
+/*	$OpenBSD: kern_fork.c,v 1.216 2019/10/22 21:19:22 cheloha Exp $	*/
 /*	$NetBSD: kern_fork.c,v 1.29 1996/02/09 18:59:34 christos Exp $	*/
 
 /*
@@ -170,13 +170,6 @@ thread_new(struct proc *parent, vaddr_t uaddr)
 	 */
 	timeout_set(&p->p_sleep_to, endtsleep, p);
 
-	/*
-	 * set priority of child to be that of parent
-	 * XXX should move p_estcpu into the region of struct proc which gets
-	 * copied.
-	 */
-	scheduler_fork_hook(parent, p);
-
 #ifdef WITNESS
 	p->p_sleeplocks = NULL;
 #endif
@@ -326,12 +319,12 @@ fork_check_maxthread(uid_t uid)
 static inline void
 fork_thread_start(struct proc *p, struct proc *parent, int flags)
 {
+	struct cpu_info *ci;
 	int s;
 
 	SCHED_LOCK(s);
-	p->p_stat = SRUN;
-	p->p_cpu = sched_choosecpu_fork(parent, flags);
-	setrunqueue(p);
+	ci = sched_choosecpu_fork(parent, flags);
+	setrunqueue(ci, p, p->p_priority);
 	SCHED_UNLOCK(s);
 }
 
@@ -469,7 +462,7 @@ fork1(struct proc *curp, int flags, void (*func)(void *), void *arg,
 	/*
 	 * For new processes, set accounting bits and mark as complete.
 	 */
-	getnanotime(&pr->ps_start);
+	nanouptime(&pr->ps_start);
 	pr->ps_acflag = AFORK;
 	atomic_clearbits_int(&pr->ps_flags, PS_EMBRYO);
 

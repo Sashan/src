@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.7 2019/07/03 03:24:02 deraadt Exp $	*/
+/*	$OpenBSD: parse.y,v 1.15 2019/11/09 16:28:10 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -84,7 +84,6 @@ int	 check_pref_uniq(enum uw_resolver_type);
 
 static struct uw_conf		*conf;
 static int			 errors;
-static struct uw_forwarder	*uw_forwarder;
 
 void			 clear_config(struct uw_conf *xconf);
 struct sockaddr_storage	*host_ip(const char *);
@@ -101,13 +100,13 @@ typedef struct {
 
 %token	YES NO INCLUDE ERROR
 %token	FORWARDER DOT PORT CAPTIVE PORTAL URL EXPECTED RESPONSE
-%token	STATUS AUTO AUTHENTICATION NAME PREFERENCE RECURSOR DHCP
-%token	BLOCK LIST
+%token	STATUS AUTO AUTHENTICATION NAME PREFERENCE RECURSOR DHCP STUB
+%token	BLOCK LIST LOG
 
 %token	<v.string>	STRING
 %token	<v.number>	NUMBER
-%type	<v.number>	yesno
-%type	<v.string>	string
+%type	<v.number>	yesno port dot prefopt log
+%type	<v.string>	string authname
 
 %%
 
@@ -162,6 +161,8 @@ varset		: STRING '=' string		{
 				if (isspace((unsigned char)*s)) {
 					yyerror("macro name cannot contain "
 					    "whitespace");
+					free($1);
+					free($3);
 					YYERROR;
 				}
 			}
@@ -177,7 +178,7 @@ optnl		: '\n' optnl		/* zero or more newlines */
 		| /*empty*/
 		;
 
-block_list		: BLOCK LIST STRING {
+block_list		: BLOCK LIST STRING log {
 				if (conf->blocklist_file != NULL) {
 					yyerror("block list already "
 					    "configured");
@@ -188,6 +189,7 @@ block_list		: BLOCK LIST STRING {
 					if (conf->blocklist_file == NULL)
 						err(1, "strdup");
 					free($3);
+					conf->blocklist_log = $4;
 				}
 			}
 			;
@@ -253,46 +255,22 @@ prefopts_l		: prefopts_l prefoptsl optnl
 			| prefoptsl optnl
 			;
 
-prefoptsl		: DOT {
-				if (!check_pref_uniq(UW_RES_DOT))
+prefoptsl		: prefopt {
+				if (!check_pref_uniq($1))
 					YYERROR;
 				if (conf->res_pref_len >= UW_RES_NONE) {
 					yyerror("preference list too long");
 					YYERROR;
 				}
-				conf->res_pref[conf->res_pref_len++] =
-				    UW_RES_DOT;
+				conf->res_pref[conf->res_pref_len++] = $1;
 			}
-			| FORWARDER {
-				if (!check_pref_uniq(UW_RES_FORWARDER))
-					YYERROR;
-				if (conf->res_pref_len >= UW_RES_NONE) {
-					yyerror("preference list too long");
-					YYERROR;
-				}
-				conf->res_pref[conf->res_pref_len++] =
-				    UW_RES_FORWARDER;
-			}
-			| RECURSOR {
-				if (!check_pref_uniq(UW_RES_RECURSOR))
-					YYERROR;
-				if (conf->res_pref_len >= UW_RES_NONE) {
-					yyerror("preference list too long");
-					YYERROR;
-				}
-				conf->res_pref[conf->res_pref_len++] =
-				    UW_RES_RECURSOR;
-			}
-			| DHCP {
-				if(!check_pref_uniq(UW_RES_DHCP))
-					YYERROR;
-				if (conf->res_pref_len >= UW_RES_NONE) {
-					yyerror("preference list too long");
-					YYERROR;
-				}
-				conf->res_pref[conf->res_pref_len++] =
-				    UW_RES_DHCP;
-			}
+			;
+
+prefopt			: DOT		{ $$ = UW_RES_DOT; }
+			| FORWARDER	{ $$ = UW_RES_FORWARDER; }
+			| RECURSOR	{ $$ = UW_RES_RECURSOR; }
+			| DHCP		{ $$ = UW_RES_DHCP; }
+			| STUB		{ $$ = UW_RES_ASR; }
 			;
 
 uw_forwarder		: FORWARDER forwarder_block
@@ -306,8 +284,11 @@ forwarderopts_l		: forwarderopts_l forwarderoptsl optnl
 			| forwarderoptsl optnl
 			;
 
-forwarderoptsl		: STRING {
+forwarderoptsl		: STRING port authname dot {
+				int ret, port;
+				struct uw_forwarder *uw_fwd;
 				struct sockaddr_storage *ss;
+
 				if ((ss = host_ip($1)) == NULL) {
 					yyerror("%s is not an ip-address", $1);
 					free($1);
@@ -315,184 +296,79 @@ forwarderoptsl		: STRING {
 				}
 				free(ss);
 
-				if ((uw_forwarder = calloc(1,
-				    sizeof(*uw_forwarder))) == NULL)
+				if ($2 < 0 || $2 > (int)USHRT_MAX) {
+					yyerror("invalid port: %lld", $2);
+					free($1);
+					YYERROR;
+				}
+				if ($2 == 0)
+					port = $4 == DOT ? 853 : 53;
+				else
+					port = $2;
+
+				if ($3 != NULL && $4 == 0) {
+					yyerror("authentication name can only "
+					    "be used with DoT");
+					free($1);
+					YYERROR;
+				}
+
+
+				if ((uw_fwd = calloc(1,
+				    sizeof(*uw_fwd))) == NULL)
 					err(1, NULL);
 
-				if(strlcpy(uw_forwarder->name, $1,
-				    sizeof(uw_forwarder->name)) >=
-				    sizeof(uw_forwarder->name)) {
-					free(uw_forwarder);
-					yyerror("forwarder %s too long", $1);
-					free($1);
-					YYERROR;
+				if ($4 == DOT) {
+					if ($3 == NULL)
+						ret = snprintf(uw_fwd->name,
+						    sizeof(uw_fwd->name),
+						    "%s@%d", $1, port);
+					else
+						ret = snprintf(uw_fwd->name,
+						    sizeof(uw_fwd->name),
+						    "%s@%d#%s", $1, port, $3);
+				} else {
+					uw_fwd->port = $2;
+					/* complete string will be done later */
+					ret = snprintf(uw_fwd->name,
+					    sizeof(uw_fwd->name), "%s", $1);
 				}
-
-				SIMPLEQ_INSERT_TAIL(&conf->uw_forwarder_list,
-				    uw_forwarder, entry);
-			}
-			| STRING PORT NUMBER {
-				int ret;
-				struct sockaddr_storage *ss;
-				if ((ss = host_ip($1)) == NULL) {
-					yyerror("%s is not an ip-address", $1);
-					free($1);
-					YYERROR;
-				}
-				free(ss);
-
-				if ($3 <= 0 || $3 > (int)USHRT_MAX) {
-					yyerror("invalid port: %lld", $3);
-					free($1);
-					YYERROR;
-				}
-
-				if ((uw_forwarder = calloc(1,
-				    sizeof(*uw_forwarder))) == NULL)
-					err(1, NULL);
-
-				ret = snprintf(uw_forwarder->name,
-				    sizeof(uw_forwarder->name), "%s@%d", $1,
-				    (int)$3);
 				if (ret < 0 || (size_t)ret >=
-				    sizeof(uw_forwarder->name)) {
-					free(uw_forwarder);
+				    sizeof(uw_fwd->name)) {
+					free(uw_fwd);
 					yyerror("forwarder %s too long", $1);
 					free($1);
 					YYERROR;
 				}
 
-				SIMPLEQ_INSERT_TAIL(&conf->uw_forwarder_list,
-				    uw_forwarder, entry);
+				if ($4 == DOT)
+					TAILQ_INSERT_TAIL(
+					    &conf->uw_dot_forwarder_list,
+					    uw_fwd, entry);
+				else {
+					TAILQ_INSERT_TAIL(
+					    &conf->uw_forwarder_list,
+					    uw_fwd, entry);
+				}
+				free($1);
 			}
-			| STRING DOT {
-				int ret;
-				struct sockaddr_storage *ss;
-				if ((ss = host_ip($1)) == NULL) {
-					yyerror("%s is not an ip-address", $1);
-					free($1);
-					YYERROR;
-				}
-				free(ss);
+	;
 
-				if ((uw_forwarder = calloc(1,
-				    sizeof(*uw_forwarder))) == NULL)
-					err(1, NULL);
+port	:	PORT NUMBER	{ $$ = $2; }
+	|	/* empty */	{ $$ = 0; }
+	;
 
-				ret = snprintf(uw_forwarder->name,
-				    sizeof(uw_forwarder->name), "%s@853", $1);
-				if (ret < 0 || (size_t)ret >=
-				    sizeof(uw_forwarder->name)) {
-					free(uw_forwarder);
-					yyerror("forwarder %s too long", $1);
-					free($1);
-					YYERROR;
-				}
+authname:	AUTHENTICATION NAME STRING	{ $$ = $3; }
+	|	/* empty */			{ $$ = NULL; }
+	;
 
-				SIMPLEQ_INSERT_TAIL(
-				    &conf->uw_dot_forwarder_list, uw_forwarder,
-				    entry);
-			}
-			| STRING PORT NUMBER DOT {
-				int ret;
-				struct sockaddr_storage *ss;
-				if ((ss = host_ip($1)) == NULL) {
-					yyerror("%s is not an ip-address", $1);
-					free($1);
-					YYERROR;
-				}
-				free(ss);
+dot	:	DOT				{ $$ = DOT; }
+	|	/* empty */			{ $$ = 0; }
+	;
 
-				if ($3 <= 0 || $3 > (int)USHRT_MAX) {
-					yyerror("invalid port: %lld", $3);
-					free($1);
-					YYERROR;
-				}
-
-				if ((uw_forwarder = calloc(1,
-				    sizeof(*uw_forwarder))) == NULL)
-					err(1, NULL);
-
-				ret = snprintf(uw_forwarder->name,
-				    sizeof(uw_forwarder->name), "%s@%d", $1,
-				    (int)$3);
-				if (ret < 0 || (size_t)ret >=
-				    sizeof(uw_forwarder->name)) {
-					free(uw_forwarder);
-					yyerror("forwarder %s too long", $1);
-					free($1);
-					YYERROR;
-				}
-
-				SIMPLEQ_INSERT_TAIL(
-				    &conf->uw_dot_forwarder_list, uw_forwarder,
-				    entry);
-			}
-			| STRING AUTHENTICATION NAME STRING DOT {
-				int ret;
-				struct sockaddr_storage *ss;
-				if ((ss = host_ip($1)) == NULL) {
-					yyerror("%s is not an ip-address", $1);
-					free($1);
-					YYERROR;
-				}
-				free(ss);
-
-				if ((uw_forwarder = calloc(1,
-				    sizeof(*uw_forwarder))) == NULL)
-					err(1, NULL);
-
-				ret = snprintf(uw_forwarder->name,
-				    sizeof(uw_forwarder->name), "%s@853#%s", $1,
-				    $4);
-				if (ret < 0 || (size_t)ret >=
-				    sizeof(uw_forwarder->name)) {
-					free(uw_forwarder);
-					yyerror("forwarder %s too long", $1);
-					free($1);
-					YYERROR;
-				}
-
-				SIMPLEQ_INSERT_TAIL(
-				    &conf->uw_dot_forwarder_list, uw_forwarder,
-				    entry);
-			}
-			| STRING PORT NUMBER AUTHENTICATION NAME STRING DOT {
-				int ret;
-				struct sockaddr_storage *ss;
-				if ((ss = host_ip($1)) == NULL) {
-					yyerror("%s is not an ip-address", $1);
-					free($1);
-					YYERROR;
-				}
-				free(ss);
-
-				if ($3 <= 0 || $3 > (int)USHRT_MAX) {
-					yyerror("invalid port: %lld", $3);
-					free($1);
-					YYERROR;
-				}
-
-				if ((uw_forwarder = calloc(1,
-				    sizeof(*uw_forwarder))) == NULL)
-					err(1, NULL);
-
-				ret = snprintf(uw_forwarder->name,
-				    sizeof(uw_forwarder->name), "%s@%d#%s", $1,
-				    (int)$3, $6);
-				if (ret < 0 || (size_t)ret >=
-				    sizeof(uw_forwarder->name)) {
-					free(uw_forwarder);
-					yyerror("forwarder %s too long", $1);
-					free($1);
-					YYERROR;
-				}
-
-				SIMPLEQ_INSERT_TAIL(
-				    &conf->uw_dot_forwarder_list, uw_forwarder,
-				    entry);
-			}
-			;
+log	:	LOG				{ $$ = 1; }
+	|	/* empty */			{ $$ = 0; }
+	;
 %%
 
 struct keywords {
@@ -538,6 +414,7 @@ lookup(char *s)
 		{"forwarder",		FORWARDER},
 		{"include",		INCLUDE},
 		{"list",		LIST},
+		{"log",			LOG},
 		{"name",		NAME},
 		{"no",			NO},
 		{"port",		PORT},
@@ -546,6 +423,7 @@ lookup(char *s)
 		{"recursor",		RECURSOR},
 		{"response",		RESPONSE},
 		{"status",		STATUS},
+		{"stub",		STUB},
 		{"tls",			DOT},
 		{"url",			URL},
 		{"yes",			YES},
@@ -1013,14 +891,17 @@ symget(const char *nam)
 void
 clear_config(struct uw_conf *xconf)
 {
-	while((uw_forwarder = SIMPLEQ_FIRST(&xconf->uw_forwarder_list)) !=
+	struct uw_forwarder	*uw_forwarder;
+
+	while ((uw_forwarder = TAILQ_FIRST(&xconf->uw_forwarder_list)) !=
 	    NULL) {
-		SIMPLEQ_REMOVE_HEAD(&xconf->uw_forwarder_list, entry);
+		TAILQ_REMOVE(&xconf->uw_forwarder_list, uw_forwarder, entry);
 		free(uw_forwarder);
 	}
-	while((uw_forwarder = SIMPLEQ_FIRST(&xconf->uw_dot_forwarder_list)) !=
+	while ((uw_forwarder = TAILQ_FIRST(&xconf->uw_dot_forwarder_list)) !=
 	    NULL) {
-		SIMPLEQ_REMOVE_HEAD(&xconf->uw_dot_forwarder_list, entry);
+		TAILQ_REMOVE(&xconf->uw_dot_forwarder_list, uw_forwarder,
+		    entry);
 		free(uw_forwarder);
 	}
 

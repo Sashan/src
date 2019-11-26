@@ -1,4 +1,4 @@
-/*	$OpenBSD: scsiconf.h,v 1.167 2019/08/14 21:02:02 krw Exp $	*/
+/*	$OpenBSD: scsiconf.h,v 1.177 2019/11/25 17:02:57 krw Exp $	*/
 /*	$NetBSD: scsiconf.h,v 1.35 1997/04/02 02:29:38 mycroft Exp $	*/
 
 /*
@@ -47,8 +47,8 @@
  * Ported to run under 386BSD by Julian Elischer (julian@tfs.com) Sept 1992
  */
 
-#ifndef	SCSI_SCSICONF_H
-#define SCSI_SCSICONF_H
+#ifndef	_SCSI_SCSICONF_H
+#define _SCSI_SCSICONF_H
 
 #include <sys/queue.h>
 #include <sys/timeout.h>
@@ -376,7 +376,6 @@ struct scsibus_softc {
 	struct device sc_dev;
 	struct scsi_link *adapter_link;	/* prototype supplied by adapter */
 	SLIST_HEAD(, scsi_link) sc_link_list;
-	u_int16_t sc_buswidth;
 };
 
 /*
@@ -476,6 +475,9 @@ const void *scsi_inqmatch(struct scsi_inquiry_data *, const void *, int,
 void	scsi_init(void);
 int	scsi_test_unit_ready(struct scsi_link *, int, int);
 int	scsi_inquire(struct scsi_link *, struct scsi_inquiry_data *, int);
+int	scsi_read_cap_10(struct scsi_link *, struct scsi_read_cap_data *, int);
+int	scsi_read_cap_16(struct scsi_link *, struct scsi_read_cap_data_16 *,
+	    int);
 int	scsi_inquire_vpd(struct scsi_link *, void *, u_int, u_int8_t, int);
 void	scsi_init_inquiry(struct scsi_xfer *, u_int8_t, u_int8_t,
 	    void *, size_t);
@@ -502,19 +504,16 @@ int	scsi_report_luns(struct scsi_link *, int,
 void	scsi_minphys(struct buf *, struct scsi_link *);
 int	scsi_interpret_sense(struct scsi_xfer *);
 
-void	scsi_xs_show(struct scsi_xfer *);
 void	scsi_print_sense(struct scsi_xfer *);
-void	scsi_show_mem(u_char *, int);
 void	scsi_strvis(u_char *, u_char *, int);
 int	scsi_delay(struct scsi_xfer *, int);
 
 int	scsi_probe(struct scsibus_softc *, int, int);
-int	scsi_probe_bus(struct scsibus_softc *);
+void	scsi_probe_bus(struct scsibus_softc *);
 int	scsi_probe_target(struct scsibus_softc *, int);
 int	scsi_probe_lun(struct scsibus_softc *, int, int);
 
 int	scsi_detach(struct scsibus_softc *, int, int, int);
-int	scsi_detach_bus(struct scsibus_softc *, int);
 int	scsi_detach_target(struct scsibus_softc *, int, int);
 int	scsi_detach_lun(struct scsibus_softc *, int, int, int);
 
@@ -525,16 +524,22 @@ int	scsi_activate(struct scsibus_softc *, int, int, int);
 
 struct scsi_link *	scsi_get_link(struct scsibus_softc *, int, int);
 
-extern const u_int8_t version_to_spc[];
-#define SCSISPC(x)	(version_to_spc[(x) & SID_ANSII])
+#define SID_ANSII_REV(x)	((x)->version & SID_ANSII)
+#define SID_RESPONSE_FORMAT(x)	((x)->response_format & SID_RESPONSE_DATA_FMT)
+
+#define SCSI_REV_0	0x00	/* No conformance to any standard. */
+#define SCSI_REV_1	0x01	/* (Obsolete) SCSI-1 in olden times. */
+#define SCSI_REV_2	0x02	/* (Obsolete) SCSI-2 in olden times. */
+#define SCSI_REV_SPC	0x03	/* ANSI INCITS 301-1997 (SPC).	*/
+#define SCSI_REV_SPC2	0x04	/* ANSI INCITS 351-2001 (SPC-2)	*/
+#define SCSI_REV_SPC3	0x05	/* ANSI INCITS 408-2005 (SPC-3)	*/
+#define SCSI_REV_SPC4	0x06	/* ANSI INCITS 513-2015 (SPC-4)	*/
+#define SCSI_REV_SPC5	0x07	/* T10/BSR INCITS 503   (SPC-5)	*/
 
 struct scsi_xfer *	scsi_xs_get(struct scsi_link *, int);
 void			scsi_xs_exec(struct scsi_xfer *);
 int			scsi_xs_sync(struct scsi_xfer *);
 void			scsi_xs_put(struct scsi_xfer *);
-#ifdef SCSIDEBUG
-void			scsi_sense_print_debug(struct scsi_xfer *);
-#endif
 
 /*
  * iopool stuff
@@ -580,4 +585,4 @@ int	scsi_pending_finish(struct mutex *, u_int *);
 void	scsi_cmd_rw_decode(struct scsi_generic *, u_int64_t *, u_int32_t *);
 
 #endif /* _KERNEL */
-#endif /* SCSI_SCSICONF_H */
+#endif /* _SCSI_SCSICONF_H */

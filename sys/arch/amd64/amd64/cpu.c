@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.139 2019/08/09 15:20:04 pirofti Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.142 2019/10/12 14:05:50 kettenis Exp $	*/
 /* $NetBSD: cpu.c,v 1.1 2003/04/26 18:39:26 fvdl Exp $ */
 
 /*-
@@ -636,6 +636,7 @@ cpu_attach(struct device *parent, struct device *self, void *aux)
 #ifdef MTRR
 		mem_range_attach();
 #endif /* MTRR */
+		/* XXX SP fpuinit(ci) is done earlier */
 		cpu_init(ci);
 		cpu_init_mwait(sc);
 		break;
@@ -644,14 +645,10 @@ cpu_attach(struct device *parent, struct device *self, void *aux)
 		printf("apid %d (boot processor)\n", caa->cpu_apicid);
 		ci->ci_flags |= CPUF_PRESENT | CPUF_BSP | CPUF_PRIMARY;
 		cpu_intr_init(ci);
-#ifndef SMALL_KERNEL
-		cpu_ucode_apply(ci);
-#endif
 		identifycpu(ci);
 #ifdef MTRR
 		mem_range_attach();
 #endif /* MTRR */
-		cpu_init(ci);
 
 #if NLAPIC > 0
 		/*
@@ -660,6 +657,9 @@ cpu_attach(struct device *parent, struct device *self, void *aux)
 		lapic_enable();
 		lapic_calibrate_timer(ci);
 #endif
+		/* XXX BP fpuinit(ci) is done earlier */
+		cpu_init(ci);
+
 #if NIOAPIC > 0
 		ioapic_bsp_id = caa->cpu_apicid;
 #endif
@@ -890,7 +890,9 @@ cpu_start_secondary(struct cpu_info *ci)
 		wbinvd();
 		tsc_sync_bp(ci);
 		intr_restore(s);
+#ifdef TSC_DEBUG
 		printf("TSC skew=%lld\n", (long long)ci->ci_tsc_skew);
+#endif
 	}
 
 	if ((ci->ci_flags & CPUF_IDENTIFIED) == 0) {
@@ -937,8 +939,10 @@ cpu_boot_secondary(struct cpu_info *ci)
 		tsc_sync_bp(ci);
 		intr_restore(s);
 		drift -= ci->ci_tsc_skew;
+#ifdef TSC_DEBUG
 		printf("TSC skew=%lld drift=%lld\n",
 		    (long long)ci->ci_tsc_skew, (long long)drift);
+#endif
 		tsc_sync_drift(drift);
 	}
 }
