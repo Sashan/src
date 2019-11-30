@@ -122,7 +122,7 @@ extern struct niqueue		arpinq;
 
 int	ip_ours(struct mbuf **, int *, int, int);
 int	ip_dooptions(struct mbuf *, struct ifnet *);
-int	in_ouraddr(struct mbuf *, struct ifnet *, struct rtentry **);
+int	in_ouraddr(struct mbuf *, struct ifnet *, struct rtentry **, int);
 
 static void ip_send_dispatch(void *);
 static struct task ipsend_task = TASK_INITIALIZER(ip_send_dispatch, &ipsend_mq);
@@ -341,7 +341,11 @@ ip_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 		goto out;
 	}
 
-	if (in_ouraddr(m, ifp, &rt)) {
+	/*
+	 * Only IP address bound to ifp, where packet is coming from,can accept
+	 * packet now.
+	 */
+	if (in_ouraddr(m, ifp, &rt, 1)) {
 		nxt = ip_ours(mp, offp, nxt, af);
 		goto out;
 	}
@@ -424,6 +428,17 @@ ip_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 		ipstat_inc(ips_cantforward);
 		goto bad;
 	}
+
+	/*
+	 * If forwarding is enabled try to relax packet match parameter
+	 * so any IP address known to host (and rdomain) will accept
+	 * the packet.
+	 */
+	if (in_ouraddr(m, ifp, &rt, 0)) {
+		nxt = ip_ours(mp, offp, nxt, af);
+		goto out;
+	}
+
 #ifdef IPSEC
 	if (ipsec_in_use) {
 		int rv;
@@ -673,12 +688,14 @@ ip_deliver(struct mbuf **mp, int *offp, int nxt, int af)
 #undef IPSTAT_INC
 
 int
-in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
+in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt,
+    int paranoid)
 {
 	struct rtentry		*rt;
 	struct ip		*ip;
 	struct sockaddr_in	 sin;
 	int			 match = 0;
+	int			 addrmatch = 0;
 
 #if NPF > 0
 	switch (pf_ouraddr(m)) {
@@ -694,12 +711,18 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 
 	ip = mtod(m, struct ip *);
 
-	memset(&sin, 0, sizeof(sin));
-	sin.sin_len = sizeof(sin);
-	sin.sin_family = AF_INET;
-	sin.sin_addr = ip->ip_dst;
-	rt = rtalloc_mpath(sintosa(&sin), &ip->ip_src.s_addr,
-	    m->m_pkthdr.ph_rtableid);
+	if (*prt == NULL) {
+		memset(&sin, 0, sizeof(sin));
+		sin.sin_len = sizeof(sin);
+		sin.sin_family = AF_INET;
+		sin.sin_addr = ip->ip_dst;
+		rt = rtalloc_mpath(sintosa(&sin), &ip->ip_src.s_addr,
+		    m->m_pkthdr.ph_rtableid);
+		*prt = rt;
+	} else {
+		rt = *prt;
+	}
+
 	if (rtisvalid(rt)) {
 		if (ISSET(rt->rt_flags, RTF_LOCAL))
 			match = 1;
@@ -716,9 +739,8 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 			m->m_flags |= M_BCAST;
 		}
 	}
-	*prt = rt;
 
-	if (!match) {
+	if (!match || paranoid == 1) {
 		struct ifaddr *ifa;
 
 		/*
@@ -727,8 +749,9 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 		 * It must have been broadcast on the link layer, and for an
 		 * address on the interface it was received on.
 		 */
-		if (!ISSET(m->m_flags, M_BCAST) ||
-		    !IN_CLASSFULBROADCAST(ip->ip_dst.s_addr, ip->ip_dst.s_addr))
+		if ((paranoid == 0) && (!ISSET(m->m_flags, M_BCAST) ||
+		    !IN_CLASSFULBROADCAST(ip->ip_dst.s_addr,
+			ip->ip_dst.s_addr)))
 			return (0);
 
 		if (ifp->if_rdomain != rtable_l2(m->m_pkthdr.ph_rtableid))
@@ -740,16 +763,27 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 		 */
 		NET_ASSERT_LOCKED();
 		TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_list) {
+			struct in_ifaddr *ia;
+
 			if (ifa->ifa_addr->sa_family != AF_INET)
 				continue;
 
+			ia = ifatoia(ifa);
 			if (IN_CLASSFULBROADCAST(ip->ip_dst.s_addr,
-			    ifatoia(ifa)->ia_addr.sin_addr.s_addr)) {
+			    ia->ia_addr.sin_addr.s_addr)) {
 				match = 1;
+				addrmatch = 1;
 				break;
+			} else if (ip->ip_dst.s_addr ==
+			    ia->ia_addr.sin_addr.s_addr) {
+				match = 1;
+				addrmatch = 1;
 			}
 		}
 	}
+
+	if (paranoid)
+		match = addrmatch;
 
 	return (match);
 }
