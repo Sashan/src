@@ -447,6 +447,30 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 			    __func__, src, dst));
 
 			goto bad;
+		} else if (!ip6_forwarding) {
+			struct ifaddr *ifa;
+			/*
+			 * Do strict address checking when forwarding is
+			 * disabled. We need packet destination IP address to
+			 * match address bound to interface to accept packet.
+			 */
+			if (ISSET(m->m_flags, M_ACAST)) {
+				nxt = ip6_ours(mp, offp, nxt, af);
+				goto out;
+			}
+					
+			NET_ASSERT_LOCKED();
+			TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_list) {
+				if (ifa->ifa_addr->sa_family != AF_INET6)
+					continue;
+
+				ia6 = ifatoia6(ifa);
+				if (IN6_ARE_ADDR_EQUAL(&ip6->ip6_dst,
+				    &ia6->ia_addr.sin6_addr)) {
+					nxt = ip6_ours(mp, offp, nxt, af);
+					goto out;
+				}
+			}
 		} else {
 			nxt = ip6_ours(mp, offp, nxt, af);
 			goto out;
