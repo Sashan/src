@@ -432,6 +432,37 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 		struct in6_ifaddr *ia6 = ifatoia6(rt->rt_ifa);
 		if (ia6->ia6_flags & IN6_IFF_ANYCAST)
 			m->m_flags |= M_ACAST;
+#ifdef GENUGATE
+		/* received on wrong interface */
+		if (rt->rt_ifidx != ifp->if_index &&
+		    !(
+		      (ifp->if_flags & IFF_LOOPBACK) ||
+		      (ifp->if_type == IFT_ENC)
+		     )
+		) {
+			struct ifnet *out_if;
+			out_if = if_get(rt->rt_ifidx);
+			if ( !( out_if && (
+			    /* outgoing if CARP & incoming if is its parent */
+			    (out_if->if_type == IFT_CARP &&
+			     ifp == out_if->if_carpdev) ||
+			    /* incoming if CARP & outgoing if is its parent */
+			    (ifp->if_type == IFT_CARP &&
+			     out_if == ifp->if_carpdev) ||
+			    /* incoming and outgoing if is CARP and both have
+			    * the same parent if */
+			    (out_if->if_type == IFT_CARP &&
+			     ifp->if_type == IFT_CARP &&
+			     ifp->if_carpdev == out_if->if_carpdev)
+			    ))
+			) {
+				ip6stat_inc(ip6s_badscope);
+				if_put(out_if);
+				goto bad;
+			}
+			if_put(out_if);
+		}
+#endif /* GENUGATE */
 		/*
 		 * packets to a tentative, duplicated, or somehow invalid
 		 * address must not be accepted.
