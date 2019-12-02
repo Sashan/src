@@ -341,10 +341,20 @@ ip_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 		goto out;
 	}
 
+#ifdef GENUGATE
+	switch(in_ouraddr(m, ifp, &rt)) {
+	case 2:
+		goto bad;
+	case 1:
+		nxt = ip_ours(mp, offp, nxt, af);
+		goto out;
+	}
+#else
 	if (in_ouraddr(m, ifp, &rt)) {
 		nxt = ip_ours(mp, offp, nxt, af);
 		goto out;
 	}
+#endif
 
 	if (IN_MULTICAST(ip->ip_dst.s_addr)) {
 		/*
@@ -749,6 +759,37 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 				break;
 			}
 		}
+#ifdef GENUGATE
+	} else {
+		/* received on wrong interface. */
+		if (rt->rt_ifidx != ifp->if_index &&
+		  !(
+		    (ifp->if_flags & IFF_LOOPBACK) ||
+		    (ifp->if_type == IFT_ENC)
+		   )
+		) {
+			struct ifnet *out_if;
+			out_if = if_get(rt->rt_ifidx);
+			if ( !( out_if && (
+			    /* outgoing if CARP & incoming if is the parent */
+			    (out_if->if_type == IFT_CARP &&
+			     ifp == out_if->if_carpdev) ||
+			    /* incoming if CARP & outgoing if is the parent */
+			    (ifp->if_type == IFT_CARP &&
+			     out_if == ifp->if_carpdev) ||
+			    /* incoming and outgoing if is CARP and both have
+			    * the same parent if */
+			    (out_if->if_type == IFT_CARP &&
+			     ifp->if_type == IFT_CARP &&
+			     ifp->if_carpdev == out_if->if_carpdev)
+			    ))
+			) {
+				ipstat_inc(ips_badaddr);
+				match = 2;
+			}
+			if_put(out_if);
+		}
+#endif
 	}
 
 	return (match);
