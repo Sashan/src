@@ -673,13 +673,30 @@ ip_deliver(struct mbuf **mp, int *offp, int nxt, int af)
 #undef IPSTAT_INC
 
 int
+in_match_carp(struct ifnet *ifp, struct rtentry *rt)
+{
+	struct ifnet		*ifp_carp;
+	int			 match;
+
+	ifp_carp = if_get(rt->rt_ifidx);
+	if (ifp_carp == NULL)
+		match = 0;
+	else {
+		match = ((ifp_carp->if_type == IFT_CARP) &&
+		    (ifp_carp->if_carpdev == ifp));
+		if_put(ifp_carp);
+	}
+
+	return (match);
+}
+
+int
 in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 {
 	struct rtentry		*rt;
 	struct ip		*ip;
 	struct sockaddr_in	 sin;
 	int			 match = 0;
-	int			 dstmatch = 0;
 
 #if NPF > 0
 	switch (pf_ouraddr(m)) {
@@ -702,8 +719,15 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 	rt = rtalloc_mpath(sintosa(&sin), &ip->ip_src.s_addr,
 	    m->m_pkthdr.ph_rtableid);
 	if (rtisvalid(rt)) {
-		if (ISSET(rt->rt_flags, RTF_LOCAL))
-			match = 1;
+		if (ISSET(rt->rt_flags, RTF_LOCAL)) {
+			if (ipforwarding != 0) {
+				if (rt->rt_ifidx == ifp->if_index)
+					match = 1;
+				else
+					match = in_match_carp(ifp, rt);
+			} else
+				match = 1;
+		}
 
 		/*
 		 * If directedbcast is enabled we only consider it local
@@ -719,55 +743,7 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 	}
 	*prt = rt;
 
-	/*
-	 * We are done with source validation of IP datagram, now we are going
-	 * to validate destination address.  If IP forwarding is disabled the
-	 * destination address must match address bound to interface. 
-	 */
-	if (ipforwarding == 0) {
-		struct ifaddr *ifa;
-
-		/*
-		 * accept broadcast right away.
-		 */
-		if (match && ISSET(m->m_flags, M_BCAST))
-			return (1);
-
-		if (ifp->if_rdomain != rtable_l2(m->m_pkthdr.ph_rtableid))
-			return (0);
-
-		/*
-		 * Check if source validated packet comes to right interface.
-		 * We still have to check for ancient broadcast address, which
-		 * we also allow here.
-		 */
-		NET_ASSERT_LOCKED();
-		TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_list) {
-			struct in_ifaddr *ia;
-
-			if (ifa->ifa_addr->sa_family != AF_INET)
-				continue;
-
-			ia = ifatoia(ifa);
-			/*
-			 * Here we handle ancient broadcast, which did not pass through
-			 * source validation. We should at least check packet has
-			 * broadcast set.
-			 */
-			if (!match && IN_CLASSFULBROADCAST(ip->ip_dst.s_addr,
-			    ia->ia_addr.sin_addr.s_addr) &&
-			    ISSET(m->m_flags, M_BCAST)) {
-				dstmatch = 1;
-				break;
-			}
-
-			if (match &&
-			    ip->ip_dst.s_addr == ia->ia_addr.sin_addr.s_addr) {
-				dstmatch = 1;
-				break;
-			}
-		}
-	} else if (!match) {
+	if (!match) {
 		struct ifaddr *ifa;
 
 		/*
@@ -799,9 +775,6 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 			}
 		}
 	}
-
-	if (ipforwarding == 0)
-		match = (((dstmatch) || ISSET(m->m_flags, M_BCAST)) != 0);
 
 	return (match);
 }
