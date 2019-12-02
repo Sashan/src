@@ -728,21 +728,18 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 		struct ifaddr *ifa;
 
 		/*
-		 * No local address or broadcast address found, so check for
-		 * ancient classful broadcast addresses.
-		 * It must have been broadcast on the link layer, and for an
-		 * address on the interface it was received on.
+		 * accept broadcast right away.
 		 */
-		if (!ISSET(m->m_flags, M_BCAST) ||
-		    !IN_CLASSFULBROADCAST(ip->ip_dst.s_addr, ip->ip_dst.s_addr))
-			return (0);
+		if (match && ISSET(m->m_flags, M_BCAST))
+			return (1);
 
 		if (ifp->if_rdomain != rtable_l2(m->m_pkthdr.ph_rtableid))
 			return (0);
+
 		/*
-		 * The check in the loop assumes you only rx a packet on an UP
-		 * interface, and that M_BCAST will only be set on a BROADCAST
-		 * interface.
+		 * Check if source validated packet comes to right interface.
+		 * We still have to check for ancient broadcast address, which
+		 * we also allow here.
 		 */
 		NET_ASSERT_LOCKED();
 		TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_list) {
@@ -752,12 +749,19 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 				continue;
 
 			ia = ifatoia(ifa);
+			/*
+			 * Here we handle ancient broadcast, which did not pass through
+			 * source validation. We should at least check packet has
+			 * broadcast set.
+			 */
 			if (!match && IN_CLASSFULBROADCAST(ip->ip_dst.s_addr,
-			    ia->ia_addr.sin_addr.s_addr)) {
-				match = 1;
+			    ia->ia_addr.sin_addr.s_addr) &&
+			    ISSET(m->m_flags, M_BCAST)) {
 				dstmatch = 1;
 				break;
-			} else if (match &&
+			}
+
+			if (match &&
 			    ip->ip_dst.s_addr == ia->ia_addr.sin_addr.s_addr) {
 				dstmatch = 1;
 				break;
@@ -797,7 +801,7 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 	}
 
 	if (ipforwarding == 0)
-		match = ((dstmatch) || ISSET(m->m_flags, M_BCAST));
+		match = (((dstmatch) || ISSET(m->m_flags, M_BCAST)) != 0);
 
 	return (match);
 }
