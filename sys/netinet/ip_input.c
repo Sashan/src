@@ -673,24 +673,6 @@ ip_deliver(struct mbuf **mp, int *offp, int nxt, int af)
 #undef IPSTAT_INC
 
 int
-in_match_carp(struct ifnet *ifp, struct rtentry *rt)
-{
-	struct ifnet		*ifp_carp;
-	int			 match;
-
-	ifp_carp = if_get(rt->rt_ifidx);
-	if (ifp_carp == NULL)
-		match = 0;
-	else {
-		match = ((ifp_carp->if_type == IFT_CARP) &&
-		    (ifp_carp->if_carpdev == ifp));
-		if_put(ifp_carp);
-	}
-
-	return (match);
-}
-
-int
 in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 {
 	struct rtentry		*rt;
@@ -724,7 +706,7 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 				if (rt->rt_ifidx == ifp->if_index)
 					match = 1;
 				else
-					match = in_match_carp(ifp, rt);
+					match = if_match_carp(ifp, rt);
 			} else
 				match = 1;
 		}

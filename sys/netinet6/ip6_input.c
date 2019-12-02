@@ -448,7 +448,6 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 
 			goto bad;
 		} else if (!ip6_forwarding) {
-			struct ifaddr *ifa;
 			/*
 			 * Do strict address checking when forwarding is
 			 * disabled. We need packet destination IP address to
@@ -458,18 +457,15 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 				nxt = ip6_ours(mp, offp, nxt, af);
 				goto out;
 			}
-					
-			NET_ASSERT_LOCKED();
-			TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_list) {
-				if (ifa->ifa_addr->sa_family != AF_INET6)
-					continue;
 
-				ia6 = ifatoia6(ifa);
-				if (IN6_ARE_ADDR_EQUAL(&ip6->ip6_dst,
-				    &ia6->ia_addr.sin6_addr)) {
-					nxt = ip6_ours(mp, offp, nxt, af);
-					goto out;
-				}
+			if (rt->rt_ifidx == ifp->if_index) {
+				nxt = ip6_ours(mp, offp, nxt, af);
+				goto out;
+			}
+
+			if (if_match_carp(ifp, rt)) {
+				nxt = ip6_ours(mp, offp, nxt, af);
+				goto out;
 			}
 		} else {
 			nxt = ip6_ours(mp, offp, nxt, af);
