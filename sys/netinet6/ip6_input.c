@@ -434,11 +434,11 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 			m->m_flags |= M_ACAST;
 #ifdef GENUGATE
 		/* received on wrong interface */
-		if (rt->rt_ifidx != ifp->if_index &&
+		if (((rt->rt_ifidx != ifp->if_index) &&
 		    !(
 		      (ifp->if_flags & IFF_LOOPBACK) ||
 		      (ifp->if_type == IFT_ENC)
-		     )
+		     )) && !ip6_forwarding
 		) {
 			struct ifnet *out_if;
 			out_if = if_get(rt->rt_ifidx);

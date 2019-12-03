@@ -767,7 +767,7 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 			}
 		}
 #ifdef GENUGATE
-	} else {
+	} else if (ipforwarding != 0) {
 		/* received on wrong interface. */
 		if (rt->rt_ifidx != ifp->if_index &&
 		  !(
