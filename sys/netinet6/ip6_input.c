@@ -432,7 +432,6 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 		struct in6_ifaddr *ia6 = ifatoia6(rt->rt_ifa);
 		if (ia6->ia6_flags & IN6_IFF_ANYCAST)
 			m->m_flags |= M_ACAST;
-#ifdef GENUGATE
 		/* received on wrong interface */
 		if (((rt->rt_ifidx != ifp->if_index) &&
 		    !(
@@ -462,7 +461,6 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 			}
 			if_put(out_if);
 		}
-#endif /* GENUGATE */
 		/*
 		 * packets to a tentative, duplicated, or somehow invalid
 		 * address must not be accepted.
@@ -490,11 +488,6 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 			}
 
 			if (rt->rt_ifidx == ifp->if_index) {
-				nxt = ip6_ours(mp, offp, nxt, af);
-				goto out;
-			}
-
-			if (if_match_carp(ifp, rt)) {
 				nxt = ip6_ours(mp, offp, nxt, af);
 				goto out;
 			}

@@ -523,7 +523,6 @@ struct if_sffpage {
 struct socket;
 struct ifnet;
 struct ifq_ops;
-struct rtentry;
 
 void	if_alloc_sadl(struct ifnet *);
 void	if_free_sadl(struct ifnet *);
@@ -555,7 +554,6 @@ void	if_congestion(void);
 int	if_congested(void);
 __dead void	unhandled_af(int);
 int	if_setlladdr(struct ifnet *, const uint8_t *);
-int	if_match_carp(struct ifnet *, struct rtentry *);
 struct taskq * net_tq(unsigned int);
 
 #endif /* _KERNEL */

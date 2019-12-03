@@ -3307,27 +3307,6 @@ if_rxr_ioctl(struct if_rxrinfo *ifri, const char *name, u_int size,
 	return (if_rxr_info_ioctl(ifri, 1, &ifr));
 }
 
-int
-if_match_carp(struct ifnet *ifp, struct rtentry *rt)
-{
-	struct ifnet		*ifp_carp;
-	int			 match;
-
-	if (rt == NULL)
-		return (0);
-
-	ifp_carp = if_get(rt->rt_ifidx);
-	if (ifp_carp == NULL)
-		match = 0;
-	else {
-		match = ((ifp_carp->if_type == IFT_CARP) &&
-		    (ifp_carp->if_carpdev == ifp));
-		if_put(ifp_carp);
-	}
-
-	return (match);
-}
-
 /*
  * Network stack input queues.
  */

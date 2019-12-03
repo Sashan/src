@@ -3,7 +3,6 @@
 include "arch/amd64/conf/GENERIC"
 
 option	MULTIPROCESSOR
-option	GENUGATE
 #option	MP_LOCKDEBUG
 #option	WITNESS
 
