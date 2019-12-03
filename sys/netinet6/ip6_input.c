@@ -433,11 +433,11 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 		if (ia6->ia6_flags & IN6_IFF_ANYCAST)
 			m->m_flags |= M_ACAST;
 		/* received on wrong interface */
-		if (((rt->rt_ifidx != ifp->if_index) &&
+		if ((rt->rt_ifidx != ifp->if_index &&
 		    !(
 		      (ifp->if_flags & IFF_LOOPBACK) ||
 		      (ifp->if_type == IFT_ENC)
-		     )) && !ip6_forwarding
+		     )) && (ip6_forwarding == 0)
 		) {
 			struct ifnet *out_if;
 			out_if = if_get(rt->rt_ifidx);
@@ -476,21 +476,6 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 			    __func__, src, dst));
 
 			goto bad;
-		} else if (!ip6_forwarding) {
-			/*
-			 * Do strict address checking when forwarding is
-			 * disabled. We need packet destination IP address to
-			 * match address bound to interface to accept packet.
-			 */
-			if (ISSET(m->m_flags, M_ACAST)) {
-				nxt = ip6_ours(mp, offp, nxt, af);
-				goto out;
-			}
-
-			if (rt->rt_ifidx == ifp->if_index) {
-				nxt = ip6_ours(mp, offp, nxt, af);
-				goto out;
-			}
 		} else {
 			nxt = ip6_ours(mp, offp, nxt, af);
 			goto out;

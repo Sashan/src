@@ -704,41 +704,8 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 	rt = rtalloc_mpath(sintosa(&sin), &ip->ip_src.s_addr,
 	    m->m_pkthdr.ph_rtableid);
 	if (rtisvalid(rt)) {
-		if (ISSET(rt->rt_flags, RTF_LOCAL)) {
-			if (ipforwarding != 0)
-				match = 1;
-			else if (rt->rt_ifidx == ifp->if_index)
-				match = 1;
-			else if (!((ifp->if_flags & IFF_LOOPBACK) ||
-			    (ifp->if_type == IFT_ENC))) {
-				struct ifnet *out_if;
-				out_if = if_get(rt->rt_ifidx);
-				if ( !( out_if && (
-			    	/* outgoing if CARP & incoming if is the parent
-				 */
-				    (out_if->if_type == IFT_CARP &&
-				     ifp == out_if->if_carpdev) ||
-				    /* incoming if CARP & outgoing if is the
-				     * parent
-				     */
-				    (ifp->if_type == IFT_CARP &&
-				     out_if == ifp->if_carpdev) ||
-				    /* incoming and outgoing if is CARP and
-				     * both have the same parent if
-				     */
-				    (out_if->if_type == IFT_CARP &&
-				     ifp->if_type == IFT_CARP &&
-				     ifp->if_carpdev == out_if->if_carpdev)
-				    ))
-				) {
-					ipstat_inc(ips_badaddr);
-					if_put(out_if);
-					return (2);
-				}
-				if_put(out_if);
-			} else
-				match = 1;
-		}
+		if (ISSET(rt->rt_flags, RTF_LOCAL))
+			match = 1;
 
 		/*
 		 * If directedbcast is enabled we only consider it local
@@ -784,6 +751,35 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 				match = 1;
 				break;
 			}
+		}
+	} else {
+		/* received on wrong interface. */
+		if ((rt->rt_ifidx != ifp->if_index &&
+		  !(
+		    (ifp->if_flags & IFF_LOOPBACK) ||
+		    (ifp->if_type == IFT_ENC)
+		   )) && (ipforwarding == 0)
+		) {
+			struct ifnet *out_if;
+			out_if = if_get(rt->rt_ifidx);
+			if ( !( out_if && (
+			    /* outgoing if CARP & incoming if is the parent */
+			    (out_if->if_type == IFT_CARP &&
+			     ifp == out_if->if_carpdev) ||
+			    /* incoming if CARP & outgoing if is the parent */
+			    (ifp->if_type == IFT_CARP &&
+			     out_if == ifp->if_carpdev) ||
+			    /* incoming and outgoing if is CARP and both have
+			    * the same parent if */
+			    (out_if->if_type == IFT_CARP &&
+			     ifp->if_type == IFT_CARP &&
+			     ifp->if_carpdev == out_if->if_carpdev)
+			    ))
+			) {
+				ipstat_inc(ips_badaddr);
+				match = 2;
+			}
+			if_put(out_if);
 		}
 	}
 
