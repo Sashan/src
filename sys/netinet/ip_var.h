@@ -87,6 +87,7 @@ struct	ipstat {
 	u_long	ips_inswcsum;		/* software checksummed on input */
 	u_long	ips_outswcsum;		/* software checksummed on output */
 	u_long	ips_notmember;		/* multicasts for unregistered groups */
+	u_long	ips_wrongif;		/* packet received on wrong interface */
 };
 
 struct ipoption {
@@ -131,6 +132,7 @@ enum ipstat_counters {
 	ips_inswcsum,		/* software checksummed on input */
 	ips_outswcsum,		/* software checksummed on output */
 	ips_notmember,		/* multicasts for unregistered groups */
+	ips_wrongif,		/* packet received on wrong interface */
 
 	ips_ncounters
 };

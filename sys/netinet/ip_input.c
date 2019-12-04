@@ -761,16 +761,17 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 		struct ifnet *out_if;
 
 		/*
-		 * The only exception might be a forwarding between two carp
+		 * The only exception might be forwarding between two carp
 		 * interfaces, which share same device.
 		 */
 		out_if = if_get(rt->rt_ifidx);
-		if (!(out_if && CARP_STRICT_ADDR_CHK(out_if, ifp))) {
-			ipstat_inc(ips_badaddr);
+		if (!(out_if && carp_strict_addr_chk(out_if, ifp))) {
+			ipstat_inc(ips_wrongif);
 			match = 2;
 		}
 		if_put(out_if);
 #else
+		ipstat_inc(ips_wrongif);
 		match = 2;
 #endif
 	}

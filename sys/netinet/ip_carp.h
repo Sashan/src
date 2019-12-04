@@ -163,6 +163,7 @@ struct carpreq {
 
 #ifdef _KERNEL
 
+#include <net/if_types.h>
 #include <sys/percpu.h>
 
 enum carpstat_counters {
@@ -193,18 +194,18 @@ carpstat_inc(enum carpstat_counters c)
 	counters_inc(carpcounters, c);
 }
 
-#define CARP_CHK(ifp)	((ifp)->if_type == IFT_CARP)
-#define CARP_DEV(ifp)	((ifp)->if_carpdev)
-
 /*
  * If two carp interfaces share same physical interface, then we pretend all IP
- * addresses belong to single interfaace.
+ * addresses belong to single interface.
  */
-#define CARP_STRICT_ADDR_CHK(ifp_a, ifp_b)	\
-	((CARP_CHK(ifp_a) && (ifp_b) == CARP_DEV(ifp_a)) ||	\
-	(CARP_CHK(ifp_b) && (ifp_a) == CARP_DEV(ifp_b)) ||	\
-	(CARP_CHK(ifp_a) && CARP_CHK(ifp_b) && 			\
-	    CARP_DEV(ifp_a) == CARP_DEV(ifp_b)))
+static inline int
+carp_strict_addr_chk(struct ifnet *ifp_a, struct ifnet *ifp_b)
+{
+	return ((ifp_a->if_type == IFT_CARP && ifp_b == ifp_a->if_carpdev) ||
+	    (ifp_b->if_type == IFT_CARP && ifp_a == ifp_b->if_carpdev) ||
+	    (ifp_a->if_type == IFT_CARP && ifp_b->if_type == IFT_CARP &&
+	    ifp_a->if_carpdev == ifp_b->if_carpdev));
+}
 
 int		 carp_proto_input(struct mbuf **, int *, int, int);
 void		 carp_carpdev_state(void *);
@@ -217,6 +218,5 @@ int		 carp_output(struct ifnet *, struct mbuf *, struct sockaddr *,
 int		 carp_sysctl(int *, u_int,  void *, size_t *, void *, size_t);
 int		 carp_lsdrop(struct ifnet *, struct mbuf *, sa_family_t,
 		    u_int32_t *, u_int32_t *, int);
-int		 carp_same_dev(struct ifnet *, struct ifnet *);
 #endif /* _KERNEL */
 #endif /* _NETINET_IP_CARP_H_ */

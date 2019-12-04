@@ -441,18 +441,18 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 			struct ifnet *out_if;
 			
 			/*
-			 * The only exceptionmight be a forwarding between two
+			 * The only exception might be forwarding between two
 			 * carp interfaces, which share same device.
 			 */
 			out_if = if_get(rt->rt_ifidx);
-			if (!(out_if && CARP_STRICT_ADDR_CHK(out_if, ifp))) {
-				ip6stat_inc(ip6s_badscope);
+			if (!(out_if && carp_strict_addr_chk(out_if, ifp))) {
+				ip6stat_inc(ip6s_wrongif);
 				if_put(out_if);
 				goto bad;
 			}
 			if_put(out_if);
 #else
-			ip6stat_inc(ip6s_badscope);
+			ip6stat_inc(ip6s_wrongif);
 			goto bad;
 #endif
 		}

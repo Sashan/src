@@ -612,6 +612,7 @@ ip_stats(char *name)
 	p(ips_inswcsum, "\t%lu input datagram%s software-checksummed\n");
 	p(ips_outswcsum, "\t%lu output datagram%s software-checksummed\n");
 	p(ips_notmember, "\t%lu multicast packet%s which we don't join\n");
+	p(ips_wrongif, "\t%lu packet%s received on wrong interface\n");
 #undef p
 #undef p1
 }
