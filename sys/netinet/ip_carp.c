@@ -267,9 +267,6 @@ struct if_clone carp_cloner =
 #define carp_cksum(_m, _l)	((u_int16_t)in_cksum((_m), (_l)))
 #define CARP_IFQ_PRIO	6
 
-#define IS_CARP(ifp)	((ifp)->if_type == IFT_CARP)
-#define CARP_DEV(ifp)	((ifp)->if_carpdev)
-
 void
 carp_hmac_prepare(struct carp_softc *sc)
 {
@@ -2638,17 +2635,4 @@ carp_sc_unref(void *null, void *s)
 	struct carp_softc *sc = s;
 
 	refcnt_rele_wake(&sc->sc_refcnt);
-}
-
-int
-carp_same_dev(struct ifnet *ifp_a, struct ifnet *ifp_b)
-{
-	int	same;
-
-	same = ((IS_CARP(ifp_a) && ifp_b == CARP_DEV(ifp_a)) ||
-	    (IS_CARP(ifp_b) && ifp_a == CARP_DEV(ifp_b)) ||
-	    (IS_CARP(ifp_a) && IS_CARP(ifp_b) &&
-		CARP_DEV(ifp_a) == CARP_DEV(ifp_b)));
-
-	return (same);
 }

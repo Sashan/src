@@ -765,7 +765,7 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 		 * interfaces, which share same device.
 		 */
 		out_if = if_get(rt->rt_ifidx);
-		if (!(out_if && carp_same_dev(out_if, ifp))) {
+		if (!(out_if && CARP_STRICT_ADDR_CHK(out_if, ifp))) {
 			ipstat_inc(ips_badaddr);
 			match = 2;
 		}

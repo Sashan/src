@@ -193,6 +193,19 @@ carpstat_inc(enum carpstat_counters c)
 	counters_inc(carpcounters, c);
 }
 
+#define CARP_CHK(ifp)	((ifp)->if_type == IFT_CARP)
+#define CARP_DEV(ifp)	((ifp)->if_carpdev)
+
+/*
+ * If two carp interfaces share same physical interface, then we pretend all IP
+ * addresses belong to single interfaace.
+ */
+#define CARP_STRICT_ADDR_CHK(ifp_a, ifp_b)	\
+	((CARP_CHK(ifp_a) && (ifp_b) == CARP_DEV(ifp_a)) ||	\
+	(CARP_CHK(ifp_b) && (ifp_a) == CARP_DEV(ifp_b)) ||	\
+	(CARP_CHK(ifp_a) && CARP_CHK(ifp_b) && 			\
+	    CARP_DEV(ifp_a) == CARP_DEV(ifp_b)))
+
 int		 carp_proto_input(struct mbuf **, int *, int, int);
 void		 carp_carpdev_state(void *);
 void		 carp_group_demote_adj(struct ifnet *, int, char *);

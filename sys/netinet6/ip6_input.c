@@ -445,7 +445,7 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 			 * carp interfaces, which share same device.
 			 */
 			out_if = if_get(rt->rt_ifidx);
-			if (!(out_if && carp_same_dev(out_if, ifp))) {
+			if (!(out_if && CARP_STRICT_ADDR_CHK(out_if, ifp))) {
 				ip6stat_inc(ip6s_badscope);
 				if_put(out_if);
 				goto bad;
