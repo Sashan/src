@@ -752,35 +752,27 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 				break;
 			}
 		}
-	} else {
+	} else if ((rt->rt_ifidx != ifp->if_index) &&
+		!((ifp->if_flags & IFF_LOOPBACK) ||
+		    (ifp->if_type == IFT_ENC)) &&
+		(ipforwarding == 0)) {
 		/* received on wrong interface. */
-		if ((rt->rt_ifidx != ifp->if_index &&
-		  !(
-		    (ifp->if_flags & IFF_LOOPBACK) ||
-		    (ifp->if_type == IFT_ENC)
-		   )) && (ipforwarding == 0)
-		) {
-			struct ifnet *out_if;
-			out_if = if_get(rt->rt_ifidx);
-			if ( !( out_if && (
-			    /* outgoing if CARP & incoming if is the parent */
-			    (out_if->if_type == IFT_CARP &&
-			     ifp == out_if->if_carpdev) ||
-			    /* incoming if CARP & outgoing if is the parent */
-			    (ifp->if_type == IFT_CARP &&
-			     out_if == ifp->if_carpdev) ||
-			    /* incoming and outgoing if is CARP and both have
-			    * the same parent if */
-			    (out_if->if_type == IFT_CARP &&
-			     ifp->if_type == IFT_CARP &&
-			     ifp->if_carpdev == out_if->if_carpdev)
-			    ))
-			) {
-				ipstat_inc(ips_badaddr);
-				match = 2;
-			}
-			if_put(out_if);
+#if NCARP > 0
+		struct ifnet *out_if;
+
+		/*
+		 * The only exception might be a forwarding between two carp
+		 * interfaces, which share same device.
+		 */
+		out_if = if_get(rt->rt_ifidx);
+		if (!(out_if && carp_same_dev(out_if, ifp))) {
+			ipstat_inc(ips_badaddr);
+			match = 2;
 		}
+		if_put(out_if);
+#else
+		match = 2;
+#endif
 	}
 
 	return (match);
