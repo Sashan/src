@@ -752,17 +752,16 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 				break;
 			}
 		}
-	} else if ((rt->rt_ifidx != ifp->if_index) &&
-		!((ifp->if_flags & IFF_LOOPBACK) ||
-		    (ifp->if_type == IFT_ENC)) &&
-		(ipforwarding == 0)) {
+	} else if (ipforwarding == 0 && rt->rt_ifidx != ifp->if_index &&
+	    !((ifp->if_flags & IFF_LOOPBACK) || (ifp->if_type == IFT_ENC))) {
 		/* received on wrong interface. */
 #if NCARP > 0
 		struct ifnet *out_if;
 
 		/*
-		 * The only exception might be forwarding between two carp
-		 * interfaces, which share same device.
+		 * Virtual IPs on carp interfaces need to be checked also
+		 * against the parent interface and other carp interfaces
+		 * sharing the same parent.
 		 */
 		out_if = if_get(rt->rt_ifidx);
 		if (!(out_if && carp_strict_addr_chk(out_if, ifp))) {
