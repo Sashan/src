@@ -439,7 +439,7 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 			/* received on wrong interface */
 #if NCARP > 0
 			struct ifnet *out_if;
-			
+
 			/*
 			 * Virtual IPs on carp interfaces need to be checked
 			 * also against the parent interface and other carp
