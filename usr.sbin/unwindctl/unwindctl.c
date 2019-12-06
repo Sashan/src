@@ -1,4 +1,4 @@
-/*	$OpenBSD: unwindctl.c,v 1.14 2019/11/25 18:10:42 otto Exp $	*/
+/*	$OpenBSD: unwindctl.c,v 1.23 2019/12/06 12:59:48 otto Exp $	*/
 
 /*
  * Copyright (c) 2005 Claudio Jeker <claudio@openbsd.org>
@@ -39,17 +39,18 @@
 #include <unistd.h>
 
 #include "unwind.h"
-#include "captiveportal.h"
 #include "frontend.h"
 #include "resolver.h"
 #include "parser.h"
 
 __dead void	 usage(void);
 int		 show_status_msg(struct imsg *);
-void		 print_indented_str(char *);
-void		 print_histogram(void*, size_t len);
+void		 histogram_header(void);
+void		 print_histogram(const char *name, int64_t[], size_t);
 
-struct imsgbuf	*ibuf;
+struct imsgbuf		*ibuf;
+int		 	 histogram_cnt;
+struct ctl_resolver_info info[UW_RES_NONE];
 
 __dead void
 usage(void)
@@ -69,9 +70,8 @@ main(int argc, char *argv[])
 	struct imsg		 imsg;
 	int			 ctl_sock;
 	int			 done = 0;
-	int			 n, verbose = 0;
+	int			 i, n, verbose = 0;
 	int			 ch;
-	int			 type;
 	char			*sockname;
 
 	sockname = UNWIND_SOCKET;
@@ -142,41 +142,8 @@ main(int argc, char *argv[])
 		printf("reload request sent.\n");
 		done = 1;
 		break;
-	case PORTAL:
-		imsg_compose(ibuf, IMSG_CTL_RECHECK_CAPTIVEPORTAL, 0, 0, -1,
-		    NULL, 0);
-		printf("recheck request sent.\n");
-		done = 1;
-		break;
-	case STATUS_RECURSOR:
-		type = UW_RES_RECURSOR;
-		imsg_compose(ibuf, IMSG_CTL_STATUS, 0, 0, -1, &type,
-		    sizeof(type));
-		break;
-	case STATUS_DHCP:
-		type = UW_RES_DHCP;
-		imsg_compose(ibuf, IMSG_CTL_STATUS, 0, 0, -1, &type,
-		    sizeof(type));
-		break;
-	case STATUS_STATIC:
-		type = UW_RES_FORWARDER;
-		imsg_compose(ibuf, IMSG_CTL_STATUS, 0, 0, -1, &type,
-		    sizeof(type));
-		break;
-	case STATUS_DOT:
-		type = UW_RES_DOT;
-		imsg_compose(ibuf, IMSG_CTL_STATUS, 0, 0, -1, &type,
-		    sizeof(type));
-		break;
-	case STATUS_STUB:
-		type = UW_RES_ASR;
-		imsg_compose(ibuf, IMSG_CTL_STATUS, 0, 0, -1, &type,
-		    sizeof(type));
-		break;
 	case STATUS:
-		type = UW_RES_NONE;
-		imsg_compose(ibuf, IMSG_CTL_STATUS, 0, 0, -1, &type,
-		    sizeof(type));
+		imsg_compose(ibuf, IMSG_CTL_STATUS, 0, 0, -1, NULL, 0);
 		break;
 	default:
 		usage();
@@ -200,11 +167,6 @@ main(int argc, char *argv[])
 
 			switch (res->action) {
 			case STATUS:
-			case STATUS_RECURSOR:
-			case STATUS_DHCP:
-			case STATUS_STATIC:
-			case STATUS_DOT:
-			case STATUS_STUB:
 				done = show_status_msg(&imsg);
 				break;
 			default:
@@ -216,66 +178,76 @@ main(int argc, char *argv[])
 	close(ctl_sock);
 	free(ibuf);
 
+	if (histogram_cnt)
+		histogram_header();
+	for (i = 0; i < histogram_cnt; i++) {
+		print_histogram(uw_resolver_type_short[info[i].type],
+		    info[i].histogram, nitems(info[i].histogram));
+		print_histogram("", info[i].latest_histogram,
+		    nitems(info[i].latest_histogram));
+	}
 	return (0);
 }
 
 int
 show_status_msg(struct imsg *imsg)
 {
-	static int			 header, autoconf_forwarders;
+	static int			 header, autoconf_forwarders, last_src;
+	static int			 label_len, line_len;
+	static uint32_t			 last_if_index;
+	static char			 fwd_line[80];
 	struct ctl_resolver_info	*cri;
 	struct ctl_forwarder_info	*cfi;
-	enum captive_portal_state	 captive_portal_state;
 	char				 ifnamebuf[IFNAMSIZ];
 	char				*if_name;
 
-	if (imsg->hdr.type != IMSG_CTL_CAPTIVEPORTAL_INFO && !header++)
-		printf("%8s %16s %s\n", "selected", "type", "status");
+	if (!header++)
+		printf("preference:\n");
 
 	switch (imsg->hdr.type) {
-	case IMSG_CTL_CAPTIVEPORTAL_INFO:
-		memcpy(&captive_portal_state, imsg->data,
-		    sizeof(captive_portal_state));
-		switch (captive_portal_state) {
-		case PORTAL_UNCHECKED:
-		case PORTAL_UNKNOWN:
-			printf("captive portal is %s\n\n",
-			    captive_portal_state_str[captive_portal_state]);
-			break;
-		case BEHIND:
-		case NOT_BEHIND:
-			printf("%s captive portal\n\n",
-			    captive_portal_state_str[captive_portal_state]);
-			break;
-		}
-		break;
 	case IMSG_CTL_RESOLVER_INFO:
 		cri = imsg->data;
-		printf("%8s %16s %s%s\n", cri->selected ? "*" : " ",
+		printf("%-10s %s%s, median RTT: ",
 		    uw_resolver_type_str[cri->type],
 		    uw_resolver_state_str[cri->state],
 		    cri->oppdot ? " (opportunistic DoT)" : "");
+		if (cri->median == 0)
+			printf("N/A\n");
+		else if (cri->median == INT64_MAX)
+			printf("Inf\n");
+		else
+			printf("%lldms\n", cri->median);
+		memcpy(&info[histogram_cnt++], cri, sizeof(info[0]));
 		break;
 	case IMSG_CTL_AUTOCONF_RESOLVER_INFO:
 		cfi = imsg->data;
 		if (!autoconf_forwarders++)
 			printf("\nlearned forwarders:\n");
-		if_name = if_indextoname(cfi->if_index, ifnamebuf);
-		printf("%s - %s[%s]\n", cfi->name,
-		    cfi->src == RTP_PROPOSAL_DHCLIENT ? "DHCP" : "SLAAC",
-		    if_name ? if_name : "unknown");
-		break;
-	case IMSG_CTL_RESOLVER_WHY_BOGUS:
-		/* make sure this is a string */
-		((char *)imsg->data)[imsg->hdr.len - IMSG_HEADER_SIZE -1] =
-		    '\0';
-		printf("\nReason for not validating:\n");
-		print_indented_str(imsg->data);
-		break;
-	case IMSG_CTL_RESOLVER_HISTOGRAM:
-		print_histogram(imsg->data, imsg->hdr.len - IMSG_HEADER_SIZE);
+		if (cfi->if_index != last_if_index || cfi->src != last_src) {
+			if_name = if_indextoname(cfi->if_index, ifnamebuf);
+			if (fwd_line[0] != '\0') {
+				printf("%s\n", fwd_line);
+				fwd_line[0] = '\0';
+			}
+			label_len = snprintf(fwd_line, sizeof(fwd_line),
+			    "%s[%s]:", cfi->src == RTP_PROPOSAL_DHCLIENT ?
+			    " DHCP" : "SLAAC", if_name ? if_name : "unknown");
+			line_len = label_len;
+			last_if_index = cfi->if_index;
+			last_src = cfi->src;
+		}
+
+		if (line_len + 1 + strlen(cfi->ip) > sizeof(fwd_line)) {
+			printf("%s\n", fwd_line);
+			snprintf(fwd_line, sizeof(fwd_line), "%*s", label_len,
+			    " ");
+		}
+		strlcat(fwd_line, " ", sizeof(fwd_line));
+		line_len = strlcat(fwd_line, cfi->ip, sizeof(fwd_line));
 		break;
 	case IMSG_CTL_END:
+		if (fwd_line[0] != '\0')
+			printf("%s\n", fwd_line);
 		return (1);
 	default:
 		break;
@@ -285,55 +257,28 @@ show_status_msg(struct imsg *imsg)
 }
 
 void
-print_indented_str(char * str)
+histogram_header(void)
 {
-	int	 i;
-	char	*cur;
+	const char	 head[] = "histograms: lifetime[ms], decaying[ms]";
+	char	 	 buf[10];
+	size_t	 	 i;
 
-	if (strlen(str) <= 72) {
-		printf("\t%s\n", str);
-		return;
-	}
-	
-	for (i = 71; i >= 0; i--)
-		if (str[i] == ' ')
-			break;
-
-	if (i < 0)
-		cur = strchr(str, ' ');
-	else
-		cur = &str[i];
-
-
-	if (cur == NULL)
-		printf("\t%s\n", str);
-	else {
-		*cur = '\0';
-		printf("\t%s\n", str);
-		print_indented_str(cur + 1);
-	}
-}
-
-void
-print_histogram(void* data, size_t len)
-{
-	int64_t	 histogram[nitems(histogram_limits)];
-	size_t	 i;
-	char	 buf[10];
-
-	if (len != sizeof(histogram))
-		errx(1, "invalid histogram size");
-
-	printf("\n%40s\n", "histogram[ms]");
-
-	memcpy(histogram, data, len);
-
+	printf("\n%*s%*s\n%*s", 5, "",
+	    (int)(72/2 + (sizeof(head)-1)/2), head, 5, "");
 	for(i = 0; i < nitems(histogram_limits) - 1; i++) {
 		snprintf(buf, sizeof(buf), "<%lld", histogram_limits[i]);
 		printf("%6s", buf);
 	}
 	printf("%6s\n", ">");
-	for(i = 0; i < nitems(histogram); i++)
+}
+
+void
+print_histogram(const char *name, int64_t histogram[], size_t n)
+{
+	size_t	 i;
+
+	printf("%4s ", name);
+	for(i = 0; i < n; i++)
 		printf("%6lld", histogram[i]);
 	printf("\n");
 }

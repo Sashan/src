@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.c,v 1.6 2019/11/06 14:19:59 florian Exp $	*/
+/*	$OpenBSD: parser.c,v 1.9 2019/12/03 14:35:05 otto Exp $	*/
 
 /*
  * Copyright (c) 2004 Esben Norby <norby@openbsd.org>
@@ -50,14 +50,11 @@ struct token {
 
 static const struct token t_main[];
 static const struct token t_log[];
-static const struct token t_status[];
-static const struct token t_recheck[];
 
 static const struct token t_main[] = {
 	{KEYWORD,	"reload",	RELOAD,		NULL},
-	{KEYWORD,	"status",	STATUS,		t_status},
+	{KEYWORD,	"status",	STATUS,		NULL},
 	{KEYWORD,	"log",		NONE,		t_log},
-	{KEYWORD,	"recheck",	NONE,		t_recheck},
 	{ENDTOKEN,	"",		NONE,		NULL}
 };
 
@@ -65,21 +62,6 @@ static const struct token t_log[] = {
 	{KEYWORD,	"debug",	LOG_DEBUG,	NULL},
 	{KEYWORD,	"verbose",	LOG_VERBOSE,	NULL},
 	{KEYWORD,	"brief",	LOG_BRIEF,	NULL},
-	{ENDTOKEN,	"",		NONE,		NULL}
-};
-
-static const struct token t_status[] = {
-	{NOTOKEN,	"",		NONE,			NULL},
-	{KEYWORD,	"recursor",	STATUS_RECURSOR,	NULL},
-	{KEYWORD,	"dhcp",		STATUS_DHCP,		NULL},
-	{KEYWORD,	"forwarder",	STATUS_STATIC,		NULL},
-	{KEYWORD,	"DoT",		STATUS_DOT,		NULL},
-	{KEYWORD,	"stub",		STATUS_STUB,		NULL},
-	{ENDTOKEN,	"",		STATUS,			NULL}
-};
-
-static const struct token t_recheck[] = {
-	{KEYWORD,	"portal",	PORTAL,		NULL},
 	{ENDTOKEN,	"",		NONE,		NULL}
 };
 

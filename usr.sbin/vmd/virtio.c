@@ -1,4 +1,4 @@
-/*	$OpenBSD: virtio.c,v 1.79 2019/09/24 12:14:54 mlarkin Exp $	*/
+/*	$OpenBSD: virtio.c,v 1.81 2019/11/30 00:51:29 mlarkin Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -48,7 +48,6 @@
 #include "atomicio.h"
 
 extern char *__progname;
-
 struct viornd_dev viornd;
 struct vioblk_dev *vioblk;
 struct vionet_dev *vionet;

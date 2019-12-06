@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.15 2019/11/09 16:28:10 florian Exp $	*/
+/*	$OpenBSD: parse.y,v 1.21 2019/12/01 14:37:34 otto Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -90,23 +90,25 @@ struct sockaddr_storage	*host_ip(const char *);
 
 typedef struct {
 	union {
-		int64_t		 number;
-		char		*string;
+		int64_t				 number;
+		char				*string;
+		struct force_tree		 force;
 	} v;
 	int lineno;
 } YYSTYPE;
 
 %}
 
-%token	YES NO INCLUDE ERROR
-%token	FORWARDER DOT PORT CAPTIVE PORTAL URL EXPECTED RESPONSE
-%token	STATUS AUTO AUTHENTICATION NAME PREFERENCE RECURSOR DHCP STUB
-%token	BLOCK LIST LOG
+%token	INCLUDE ERROR
+%token	FORWARDER DOT PORT 
+%token	AUTHENTICATION NAME PREFERENCE RECURSOR DHCP STUB
+%token	BLOCK LIST LOG FORCE ACCEPT BOGUS
 
 %token	<v.string>	STRING
 %token	<v.number>	NUMBER
-%type	<v.number>	yesno port dot prefopt log
+%type	<v.number>	port dot prefopt log acceptbogus
 %type	<v.string>	string authname
+%type	<v.force>	force_list
 
 %%
 
@@ -116,8 +118,8 @@ grammar		: /* empty */
 		| grammar varset '\n'
 		| grammar uw_pref '\n'
 		| grammar uw_forwarder '\n'
-		| grammar captive_portal '\n'
 		| grammar block_list '\n'
+		| grammar force '\n'
 		| grammar error '\n'		{ file->errors++; }
 		;
 
@@ -147,10 +149,6 @@ string		: string STRING	{
 			free($2);
 		}
 		| STRING
-		;
-
-yesno		: YES	{ $$ = 1; }
-		| NO	{ $$ = 0; }
 		;
 
 varset		: STRING '=' string		{
@@ -194,57 +192,7 @@ block_list		: BLOCK LIST STRING log {
 			}
 			;
 
-captive_portal		: CAPTIVE PORTAL captive_portal_block
-			;
-captive_portal_block	: '{' optnl captive_portal_opts_l '}'
-			| captive_portal_optsl
-			;
-
-captive_portal_opts_l	: captive_portal_opts_l captive_portal_optsl optnl
-			| captive_portal_optsl optnl
-			;
-
-captive_portal_optsl	: URL STRING {
-				char *ep;
-				if (strncmp($2, "http://", 7) != 0) {
-					yyerror("only http:// urls are "
-					    "supported: %s", $2);
-					free($2);
-					YYERROR;
-				}
-				if ((ep = strchr($2 + 7, '/')) != NULL) {
-					conf->captive_portal_path =
-					    strdup(ep);
-					*ep = '\0';
-				} else
-					conf->captive_portal_path = strdup("/");
-				if (conf->captive_portal_path == NULL)
-					err(1, "strdup");
-				if ((conf->captive_portal_host =
-				    strdup($2 + 7)) == NULL)
-					err(1, "strdup");
-				free($2);
-			}
-			| EXPECTED RESPONSE STRING {
-				if ((conf->captive_portal_expected_response =
-				   strdup($3)) == NULL)
-					err(1, "strdup");
-				free($3);
-			}
-			| EXPECTED STATUS NUMBER {
-				if ($3 < 100 || $3 > 599) {
-					yyerror("%lld is an invalid http "
-					    "status", $3);
-					YYERROR;
-				}
-				conf->captive_portal_expected_status = $3;
-			}
-			| AUTO yesno {
-				conf->captive_portal_auto = $2;
-			}
-			;
-
-uw_pref			: PREFERENCE { conf->res_pref_len = 0; } pref_block
+uw_pref			: PREFERENCE { conf->res_pref.len = 0; } pref_block
 			;
 
 pref_block		: '{' optnl prefopts_l '}'
@@ -258,11 +206,11 @@ prefopts_l		: prefopts_l prefoptsl optnl
 prefoptsl		: prefopt {
 				if (!check_pref_uniq($1))
 					YYERROR;
-				if (conf->res_pref_len >= UW_RES_NONE) {
+				if (conf->res_pref.len >= UW_RES_NONE) {
 					yyerror("preference list too long");
 					YYERROR;
 				}
-				conf->res_pref[conf->res_pref_len++] = $1;
+				conf->res_pref.types[conf->res_pref.len++] = $1;
 			}
 			;
 
@@ -285,7 +233,6 @@ forwarderopts_l		: forwarderopts_l forwarderoptsl optnl
 			;
 
 forwarderoptsl		: STRING port authname dot {
-				int ret, port;
 				struct uw_forwarder *uw_fwd;
 				struct sockaddr_storage *ss;
 
@@ -296,49 +243,47 @@ forwarderoptsl		: STRING port authname dot {
 				}
 				free(ss);
 
+				if ((uw_fwd = calloc(1, sizeof(*uw_fwd))) ==
+				    NULL)
+					err(1, NULL);
+
 				if ($2 < 0 || $2 > (int)USHRT_MAX) {
 					yyerror("invalid port: %lld", $2);
 					free($1);
+					free(uw_fwd);
 					YYERROR;
 				}
 				if ($2 == 0)
-					port = $4 == DOT ? 853 : 53;
+					uw_fwd->port = $4 == DOT ? 853 : 53;
 				else
-					port = $2;
+					uw_fwd->port = $2;
 
 				if ($3 != NULL && $4 == 0) {
 					yyerror("authentication name can only "
 					    "be used with DoT");
 					free($1);
+					free(uw_fwd);
 					YYERROR;
 				}
 
-
-				if ((uw_fwd = calloc(1,
-				    sizeof(*uw_fwd))) == NULL)
-					err(1, NULL);
-
-				if ($4 == DOT) {
-					if ($3 == NULL)
-						ret = snprintf(uw_fwd->name,
-						    sizeof(uw_fwd->name),
-						    "%s@%d", $1, port);
-					else
-						ret = snprintf(uw_fwd->name,
-						    sizeof(uw_fwd->name),
-						    "%s@%d#%s", $1, port, $3);
-				} else {
-					uw_fwd->port = $2;
-					/* complete string will be done later */
-					ret = snprintf(uw_fwd->name,
-					    sizeof(uw_fwd->name), "%s", $1);
-				}
-				if (ret < 0 || (size_t)ret >=
-				    sizeof(uw_fwd->name)) {
+				if (strlcpy(uw_fwd->ip, $1, sizeof(uw_fwd->ip))
+				    >= sizeof(uw_fwd->ip)) {
 					free(uw_fwd);
 					yyerror("forwarder %s too long", $1);
 					free($1);
 					YYERROR;
+				}
+
+				if ($4 == DOT && $3 != NULL) {
+					if (strlcpy(uw_fwd->auth_name, $3,
+					    sizeof(uw_fwd->auth_name))
+					    >= sizeof(uw_fwd->auth_name)) {
+						free(uw_fwd);
+						yyerror("authentication name "
+						    "%s too long", $3);
+						free($1);
+						YYERROR;
+					}
 				}
 
 				if ($4 == DOT)
@@ -369,6 +314,63 @@ dot	:	DOT				{ $$ = DOT; }
 log	:	LOG				{ $$ = 1; }
 	|	/* empty */			{ $$ = 0; }
 	;
+
+force	:	FORCE acceptbogus prefopt '{' force_list optnl '}' {
+			struct force_tree_entry *n, *nxt;
+			int error = 0;
+
+			for (n = RB_MIN(force_tree, &$5); n != NULL;
+			    n = nxt) {
+				nxt = RB_NEXT(force_tree, &conf->force, n);
+				n->acceptbogus = $2;
+				n->type = $3;
+				RB_REMOVE(force_tree, &$5, n);
+				if (RB_INSERT(force_tree, &conf->force,
+				    n)) {
+					yyerror("%s already in an force "
+					    "list", n->domain);
+					error = 1;
+				}
+			}
+			if (error)
+				YYERROR;
+		}
+	;
+
+acceptbogus:	ACCEPT BOGUS	{ $$ = 1; }
+	|	/* empty */	{ $$ = 0; }
+	;
+
+force_list:	force_list optnl STRING {
+			struct force_tree_entry	*e;
+			size_t				 len;
+
+			len = strlen($3);
+			e = malloc(sizeof(*e));
+			if (e == NULL)
+				err(1, NULL);
+			if (strlcpy(e->domain, $3, sizeof(e->domain)) >=
+			    sizeof(e->domain)) {
+				yyerror("force %s too long", $3);
+				free($3);
+				YYERROR;
+			}
+			free($3);
+			if (len == 0 || e->domain[len-1] != '.') {
+				if (strlcat(e->domain, ".",
+				    sizeof((e->domain))) >=
+				    sizeof((e->domain))) {
+					yyerror("force %s too long", $3);
+					YYERROR;
+				}
+			}
+			RB_INSERT(force_tree, &$$, e);
+		}
+	|	/* empty */ {
+			RB_INIT(&$$);
+		}
+	;
+
 %%
 
 struct keywords {
@@ -404,29 +406,23 @@ lookup(char *s)
 	/* This has to be sorted always. */
 	static const struct keywords keywords[] = {
 		{"DoT",			DOT},
+		{"accept",		ACCEPT},
 		{"authentication",	AUTHENTICATION},
-		{"auto",		AUTO},
 		{"block",		BLOCK},
-		{"captive",		CAPTIVE},
+		{"bogus",		BOGUS},
 		{"dhcp",		DHCP},
 		{"dot",			DOT},
-		{"expected",		EXPECTED},
+		{"force",		FORCE},
 		{"forwarder",		FORWARDER},
 		{"include",		INCLUDE},
 		{"list",		LIST},
 		{"log",			LOG},
 		{"name",		NAME},
-		{"no",			NO},
 		{"port",		PORT},
-		{"portal",		PORTAL},
 		{"preference",		PREFERENCE},
 		{"recursor",		RECURSOR},
-		{"response",		RESPONSE},
-		{"status",		STATUS},
 		{"stub",		STUB},
 		{"tls",			DOT},
-		{"url",			URL},
-		{"yes",			YES},
 	};
 	const struct keywords	*p;
 
@@ -782,9 +778,10 @@ parse_config(char *filename)
 
 	conf = config_new_empty();
 
-	file = pushfile(filename, 0);
+	file = pushfile(filename != NULL ? filename : CONF_FILE, 0);
 	if (file == NULL) {
-		if (errno == ENOENT)	/* no config file is fine */
+		/* no default config file is fine */
+		if (errno == ENOENT && filename == NULL)
 			return (conf);
 		log_warn("%s", filename);
 		free(conf);
@@ -936,8 +933,8 @@ check_pref_uniq(enum uw_resolver_type type)
 {
 	int	 i;
 
-	for (i = 0; i < conf->res_pref_len; i++)
-		if (conf->res_pref[i] == type) {
+	for (i = 0; i < conf->res_pref.len; i++)
+		if (conf->res_pref.types[i] == type) {
 			yyerror("%s is already in the preference list",
 			    uw_resolver_type_str[type]);
 			return (0);

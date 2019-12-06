@@ -1,4 +1,4 @@
-/*	$OpenBSD: frontend.c,v 1.39 2019/11/25 17:36:48 florian Exp $	*/
+/*	$OpenBSD: frontend.c,v 1.45 2019/12/03 16:17:48 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -121,7 +121,6 @@ void			 free_bl(void);
 struct uw_conf		*frontend_conf;
 struct imsgev		*iev_main;
 struct imsgev		*iev_resolver;
-struct imsgev		*iev_captiveportal;
 struct event		 ev_route;
 int			 udp4sock = -1, udp6sock = -1, routesock = -1;
 int			 ta_fd = -1;
@@ -247,9 +246,6 @@ frontend_shutdown(void)
 	msgbuf_write(&iev_resolver->ibuf.w);
 	msgbuf_clear(&iev_resolver->ibuf.w);
 	close(iev_resolver->ibuf.fd);
-	msgbuf_write(&iev_captiveportal->ibuf.w);
-	msgbuf_clear(&iev_captiveportal->ibuf.w);
-	close(iev_captiveportal->ibuf.fd);
 	msgbuf_write(&iev_main->ibuf.w);
 	msgbuf_clear(&iev_main->ibuf.w);
 	close(iev_main->ibuf.fd);
@@ -257,7 +253,6 @@ frontend_shutdown(void)
 	config_clear(frontend_conf);
 
 	free(iev_resolver);
-	free(iev_captiveportal);
 	free(iev_main);
 
 	log_info("frontend exiting");
@@ -275,14 +270,6 @@ frontend_imsg_compose_resolver(int type, pid_t pid, void *data,
     uint16_t datalen)
 {
 	return (imsg_compose_event(iev_resolver, type, 0, pid, -1, data,
-	    datalen));
-}
-
-int
-frontend_imsg_compose_captiveportal(int type, pid_t pid, void *data,
-    uint16_t datalen)
-{
-	return (imsg_compose_event(iev_captiveportal, type, 0, pid, -1, data,
 	    datalen));
 }
 
@@ -345,45 +332,11 @@ frontend_dispatch_main(int fd, short event, void *bula)
 			    iev_resolver);
 			event_add(&iev_resolver->ev, NULL);
 			break;
-		case IMSG_SOCKET_IPC_CAPTIVEPORTAL:
-			/*
-			 * Setup pipe and event handler to the captiveportal
-			 * process.
-			 */
-			if (iev_captiveportal) {
-				fatalx("%s: received unexpected imsg fd "
-				    "to frontend", __func__);
-				break;
-			}
-			if ((fd = imsg.fd) == -1) {
-				fatalx("%s: expected to receive imsg fd to "
-				   "frontend but didn't receive any",
-				   __func__);
-				break;
-			}
-
-			iev_captiveportal = malloc(sizeof(struct imsgev));
-			if (iev_captiveportal == NULL)
-				fatal(NULL);
-
-			imsg_init(&iev_captiveportal->ibuf, fd);
-			iev_captiveportal->handler =
-			    frontend_dispatch_captiveportal;
-			iev_captiveportal->events = EV_READ;
-
-			event_set(&iev_captiveportal->ev,
-			    iev_captiveportal->ibuf.fd,
-			    iev_captiveportal->events,
-			    iev_captiveportal->handler, iev_captiveportal);
-			event_add(&iev_captiveportal->ev, NULL);
-			break;
 		case IMSG_RECONF_CONF:
-		case IMSG_RECONF_CAPTIVE_PORTAL_HOST:
-		case IMSG_RECONF_CAPTIVE_PORTAL_PATH:
-		case IMSG_RECONF_CAPTIVE_PORTAL_EXPECTED_RESPONSE:
 		case IMSG_RECONF_BLOCKLIST_FILE:
 		case IMSG_RECONF_FORWARDER:
 		case IMSG_RECONF_DOT_FORWARDER:
+		case IMSG_RECONF_FORCE:
 			imsg_receive_config(&imsg, &nconf);
 			break;
 		case IMSG_RECONF_END:
@@ -533,9 +486,6 @@ frontend_dispatch_resolver(int fd, short event, void *bula)
 			send_answer(pq);
 			break;
 		case IMSG_CTL_RESOLVER_INFO:
-		case IMSG_CTL_CAPTIVEPORTAL_INFO:
-		case IMSG_CTL_RESOLVER_WHY_BOGUS:
-		case IMSG_CTL_RESOLVER_HISTOGRAM:
 		case IMSG_CTL_AUTOCONF_RESOLVER_INFO:
 		case IMSG_CTL_END:
 			control_imsg_relay(&imsg);
@@ -546,16 +496,13 @@ frontend_dispatch_resolver(int fd, short event, void *bula)
 			add_new_ta(&new_trust_anchors, imsg.data);
 			break;
 		case IMSG_NEW_TAS_ABORT:
-			log_debug("%s: IMSG_NEW_TAS_ABORT", __func__);
 			free_tas(&new_trust_anchors);
 			break;
 		case IMSG_NEW_TAS_DONE:
 			chg = merge_tas(&new_trust_anchors, &trust_anchors);
-			log_debug("%s: IMSG_NEW_TAS_DONE: change: %d",
-			    __func__, chg);
-			if (chg) {
+			if (chg)
 				send_trust_anchors(&trust_anchors);
-			}
+
 			/*
 			 * always write trust anchors, the modify date on
 			 * the file is an indication when we made progress
@@ -563,50 +510,6 @@ frontend_dispatch_resolver(int fd, short event, void *bula)
 			if (ta_fd != -1)
 				write_trust_anchors(&trust_anchors, ta_fd);
 			break;
-		default:
-			log_debug("%s: error handling imsg %d", __func__,
-			    imsg.hdr.type);
-			break;
-		}
-		imsg_free(&imsg);
-	}
-	if (!shut)
-		imsg_event_add(iev);
-	else {
-		/* This pipe is dead. Remove its event handler. */
-		event_del(&iev->ev);
-		event_loopexit(NULL);
-	}
-}
-
-void
-frontend_dispatch_captiveportal(int fd, short event, void *bula)
-{
-	struct imsgev	*iev = bula;
-	struct imsgbuf	*ibuf = &iev->ibuf;
-	struct imsg	 imsg;
-	int		 n, shut = 0;
-
-	if (event & EV_READ) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			fatal("imsg_read error");
-		if (n == 0)	/* Connection closed. */
-			shut = 1;
-	}
-	if (event & EV_WRITE) {
-		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
-			fatal("msgbuf_write");
-		if (n == 0)	/* Connection closed. */
-			shut = 1;
-	}
-
-	for (;;) {
-		if ((n = imsg_get(ibuf, &imsg)) == -1)
-			fatal("%s: imsg_get error", __func__);
-		if (n == 0)	/* No more messages. */
-			break;
-
-		switch (imsg.hdr.type) {
 		default:
 			log_debug("%s: error handling imsg %d", __func__,
 			    imsg.hdr.type);
@@ -645,7 +548,7 @@ udp_receive(int fd, short events, void *arg)
 	struct bl_node		 find;
 	ssize_t			 len, dname_len;
 	int			 ret;
-	char			*str_from, *str;
+	char			*str;
 	char			 dname[LDNS_MAX_DOMAINLEN + 1];
 
 	memset(&qinfo, 0, sizeof(qinfo));
@@ -677,10 +580,10 @@ udp_receive(int fd, short events, void *arg)
 	sldns_buffer_write(pq->qbuf, udpev->query, len);
 	sldns_buffer_flip(pq->qbuf);
 
-	str_from = ip_port((struct sockaddr *)&udpev->from);
-	log_debug("query from %s", str_from);
-	if ((str = sldns_wire2str_pkt(udpev->query, len)) != NULL) {
-		log_debug("%s", str);
+	if (log_getverbose() & OPT_VERBOSE2 && (str =
+	    sldns_wire2str_pkt(udpev->query, len)) != NULL) {
+		log_debug("from: %s\n%s", ip_port((struct sockaddr *)
+		    &udpev->from), str);
 		free(str);
 	}
 
@@ -703,8 +606,9 @@ udp_receive(int fd, short events, void *arg)
 	}
 	dname_str(qinfo.qname, dname);
 
-	log_debug("%s: query_info_parse, qname_len: %ld dname[%ld]: %s",
-	    __func__, qinfo.qname_len, dname_len, dname);
+	log_debug("%s: %s %s %s ?", ip_port((struct sockaddr *)&udpev->from),
+	    dname, sldns_wire2str_class(qinfo.qclass),
+	    sldns_wire2str_type(qinfo.qtype));
 
 	find.domain = dname;
 	if (RB_FIND(bl_tree, &bl_head, &find) != NULL) {
@@ -781,7 +685,7 @@ chaos_answer(struct pending_query *pq)
 {
 	struct sldns_buffer	 buf, *pkt = &buf;
 	size_t			 size, len;
-	char			*name = "unwind", *str;
+	char			*name = "unwind";
 
 	len = strlen(name);
 	size = sldns_buffer_capacity(pq->qbuf) + COMPRESSED_RR_SIZE + 1 + len;
@@ -819,11 +723,6 @@ chaos_answer(struct pending_query *pq)
 	sldns_buffer_write_u16(pkt, 1 + len);		/* RDLENGTH */
 	sldns_buffer_write_u8(pkt, len);		/* length octed */
 	sldns_buffer_write(pkt, name, len);
-
-	if ((str = sldns_wire2str_pkt(pq->answer, pq->answer_len)) != NULL) {
-		log_debug("%s: %s", __func__, str);
-		free(str);
-	}
 }
 
 int
@@ -871,9 +770,8 @@ void
 send_answer(struct pending_query *pq)
 {
 	ssize_t	 len;
+	char	*str;
 	uint8_t	*answer;
-
-	log_debug("result for %s", ip_port((struct sockaddr*)&pq->from));
 
 	answer = pq->answer;
 	len = pq->answer_len;
@@ -906,6 +804,13 @@ send_answer(struct pending_query *pq)
 			LDNS_ID_SET(answer, LDNS_ID_WIRE(sldns_buffer_begin(
 			    pq->qbuf)));
 		}
+	}
+
+	if (log_getverbose() & OPT_VERBOSE2 && (str =
+	    sldns_wire2str_pkt(answer, len)) != NULL) {
+		log_debug("to: %s\n%s",
+		    ip_port((struct sockaddr *)&pq->from),str);
+		free(str);
 	}
 
 	if(sendto(pq->fd, answer, len, 0, (struct sockaddr *)&pq->from,
@@ -1190,8 +1095,6 @@ write_trust_anchors(struct trust_anchor_head *tah, int fd)
 	size_t			 len = 0;
 	ssize_t			 n;
 	char			*str;
-
-	log_debug("%s", __func__);
 
 	if (lseek(fd, 0, SEEK_SET) == -1) {
 		log_warn("%s", __func__);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: timeout.h,v 1.30 2019/11/02 16:56:18 cheloha Exp $	*/
+/*	$OpenBSD: timeout.h,v 1.32 2019/12/02 21:47:54 cheloha Exp $	*/
 /*
  * Copyright (c) 2000-2001 Artur Grabowski <art@openbsd.org>
  * All rights reserved. 

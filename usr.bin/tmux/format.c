@@ -1,4 +1,4 @@
-/* $OpenBSD: format.c,v 1.217 2019/11/25 15:04:15 nicm Exp $ */
+/* $OpenBSD: format.c,v 1.220 2019/11/28 21:18:38 nicm Exp $ */
 
 /*
  * Copyright (c) 2011 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -1112,11 +1112,10 @@ format_find(struct format_tree *ft, const char *key, int modifiers)
 			xasprintf(&found, "%lld", (long long)fe->t);
 			goto found;
 		}
-		if (fe->value == NULL && fe->cb != NULL) {
+		if (fe->value == NULL && fe->cb != NULL)
 			fe->cb(ft, fe);
-			if (fe->value == NULL)
-				fe->value = xstrdup("");
-		}
+		if (fe->value == NULL)
+			fe->value = xstrdup("");
 		found = xstrdup(fe->value);
 		goto found;
 	}
@@ -2158,6 +2157,8 @@ format_defaults_client(struct format_tree *ft, struct client *c)
 	format_add(ft, "client_pid", "%ld", (long) c->pid);
 	format_add(ft, "client_height", "%u", tty->sy);
 	format_add(ft, "client_width", "%u", tty->sx);
+	format_add(ft, "client_cell_width", "%u", tty->xpixel);
+	format_add(ft, "client_cell_height", "%u", tty->ypixel);
 	format_add(ft, "client_tty", "%s", c->ttyname);
 	format_add(ft, "client_control_mode", "%d",
 		!!(c->flags & CLIENT_CONTROL));
@@ -2209,6 +2210,8 @@ format_defaults_window(struct format_tree *ft, struct window *w)
 	format_add(ft, "window_name", "%s", w->name);
 	format_add(ft, "window_width", "%u", w->sx);
 	format_add(ft, "window_height", "%u", w->sy);
+	format_add(ft, "window_cell_width", "%u", w->xpixel);
+	format_add(ft, "window_cell_height", "%u", w->ypixel);
 	format_add_cb(ft, "window_layout", format_cb_window_layout);
 	format_add_cb(ft, "window_visible_layout",
 	    format_cb_window_visible_layout);

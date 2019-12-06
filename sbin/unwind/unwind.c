@@ -1,4 +1,4 @@
-/*	$OpenBSD: unwind.c,v 1.37 2019/11/19 14:46:33 florian Exp $	*/
+/*	$OpenBSD: unwind.c,v 1.44 2019/12/03 16:16:25 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -47,7 +47,6 @@
 #include "frontend.h"
 #include "resolver.h"
 #include "control.h"
-#include "captiveportal.h"
 
 #define	TRUST_ANCHOR_FILE	"/var/db/unwind.key"
 
@@ -60,28 +59,23 @@ static pid_t	start_child(int, char *, int, int, int);
 
 void		main_dispatch_frontend(int, short, void *);
 void		main_dispatch_resolver(int, short, void *);
-void		main_dispatch_captiveportal(int, short, void *);
 
-static int	main_imsg_send_ipc_sockets(struct imsgbuf *, struct imsgbuf *,
-		    struct imsgbuf *);
+static int	main_imsg_send_ipc_sockets(struct imsgbuf *, struct imsgbuf *);
 static int	main_imsg_send_config(struct uw_conf *);
 
 int		main_reload(void);
 int		main_sendall(enum imsg_type, void *, uint16_t);
 void		open_ports(void);
 void		solicit_dns_proposals(void);
-void		connect_captive_portal_host(struct in_addr *);
 void		send_blocklist_fd(void);
 
 struct uw_conf	*main_conf;
 struct imsgev	*iev_frontend;
 struct imsgev	*iev_resolver;
-struct imsgev	*iev_captiveportal;
 char		*conffile;
 
 pid_t		 frontend_pid;
 pid_t		 resolver_pid;
-pid_t		 captiveportal_pid;
 
 uint32_t	 cmd_opts;
 
@@ -126,13 +120,11 @@ main(int argc, char *argv[])
 {
 	struct event	 ev_sigint, ev_sigterm, ev_sighup;
 	int		 ch, debug = 0, resolver_flag = 0, frontend_flag = 0;
-	int		 captiveportal_flag = 0, frontend_routesock, rtfilter;
+	int		 frontend_routesock, rtfilter;
 	int		 pipe_main2frontend[2], pipe_main2resolver[2];
-	int		 pipe_main2captiveportal[2];
 	int		 control_fd, ta_fd;
 	char		*csock, *saved_argv0;
 
-	conffile = CONF_FILE;
 	csock = UNWIND_SOCKET;
 
 	log_init(1, LOG_DAEMON);	/* Log to stderr until daemonized. */
@@ -142,11 +134,8 @@ main(int argc, char *argv[])
 	if (saved_argv0 == NULL)
 		saved_argv0 = "unwind";
 
-	while ((ch = getopt(argc, argv, "CdEFf:ns:v")) != -1) {
+	while ((ch = getopt(argc, argv, "dEFf:ns:v")) != -1) {
 		switch (ch) {
-		case 'C':
-			captiveportal_flag = 1;
-			break;
 		case 'd':
 			debug = 1;
 			break;
@@ -166,6 +155,8 @@ main(int argc, char *argv[])
 			csock = optarg;
 			break;
 		case 'v':
+			if (cmd_opts & OPT_VERBOSE2)
+				cmd_opts |= OPT_VERBOSE3;
 			if (cmd_opts & OPT_VERBOSE)
 				cmd_opts |= OPT_VERBOSE2;
 			cmd_opts |= OPT_VERBOSE;
@@ -177,15 +168,15 @@ main(int argc, char *argv[])
 
 	argc -= optind;
 	argv += optind;
-	if (argc > 0 || (resolver_flag && frontend_flag && captiveportal_flag))
+	if (argc > 0 || (resolver_flag && frontend_flag))
 		usage();
 
 	if (resolver_flag)
-		resolver(debug, cmd_opts & (OPT_VERBOSE | OPT_VERBOSE2));
+		resolver(debug, cmd_opts & (OPT_VERBOSE | OPT_VERBOSE2 |
+		    OPT_VERBOSE3));
 	else if (frontend_flag)
-		frontend(debug, cmd_opts & (OPT_VERBOSE | OPT_VERBOSE2));
-	else if (captiveportal_flag)
-		captiveportal(debug, cmd_opts & (OPT_VERBOSE | OPT_VERBOSE2));
+		frontend(debug, cmd_opts & (OPT_VERBOSE | OPT_VERBOSE2 |
+		    OPT_VERBOSE3));
 
 	if ((main_conf = parse_config(conffile)) == NULL)
 		exit(1);
@@ -207,7 +198,7 @@ main(int argc, char *argv[])
 		errx(1, "unknown user %s", UNWIND_USER);
 
 	log_init(debug, LOG_DAEMON);
-	log_setverbose(cmd_opts & OPT_VERBOSE);
+	log_setverbose(cmd_opts & (OPT_VERBOSE | OPT_VERBOSE2 | OPT_VERBOSE3));
 
 	if (!debug)
 		daemon(1, 0);
@@ -220,20 +211,14 @@ main(int argc, char *argv[])
 	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK,
 	    PF_UNSPEC, pipe_main2resolver) == -1)
 		fatal("main2resolver socketpair");
-	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK,
-	    PF_UNSPEC, pipe_main2captiveportal) == -1)
-		fatal("main2captiveportal socketpair");
 
 	/* Start children. */
 	resolver_pid = start_child(PROC_RESOLVER, saved_argv0,
 	    pipe_main2resolver[1], debug, cmd_opts & (OPT_VERBOSE |
-	    OPT_VERBOSE2));
+	    OPT_VERBOSE2 | OPT_VERBOSE3));
 	frontend_pid = start_child(PROC_FRONTEND, saved_argv0,
 	    pipe_main2frontend[1], debug, cmd_opts & (OPT_VERBOSE |
-	    OPT_VERBOSE2));
-	captiveportal_pid = start_child(PROC_CAPTIVEPORTAL, saved_argv0,
-	    pipe_main2captiveportal[1], debug, cmd_opts & (OPT_VERBOSE |
-	    OPT_VERBOSE2));
+	    OPT_VERBOSE2 | OPT_VERBOSE3));
 
 	uw_process = PROC_MAIN;
 	log_procinit(log_procnames[uw_process]);
@@ -252,15 +237,12 @@ main(int argc, char *argv[])
 	/* Setup pipes to children. */
 
 	if ((iev_frontend = malloc(sizeof(struct imsgev))) == NULL ||
-	    (iev_captiveportal = malloc(sizeof(struct imsgev))) == NULL ||
 	    (iev_resolver = malloc(sizeof(struct imsgev))) == NULL)
 		fatal(NULL);
 	imsg_init(&iev_frontend->ibuf, pipe_main2frontend[0]);
 	iev_frontend->handler = main_dispatch_frontend;
 	imsg_init(&iev_resolver->ibuf, pipe_main2resolver[0]);
 	iev_resolver->handler = main_dispatch_resolver;
-	imsg_init(&iev_captiveportal->ibuf, pipe_main2captiveportal[0]);
-	iev_captiveportal->handler = main_dispatch_captiveportal;
 
 	/* Setup event handlers for pipes. */
 	iev_frontend->events = EV_READ;
@@ -273,14 +255,8 @@ main(int argc, char *argv[])
 	    iev_resolver->events, iev_resolver->handler, iev_resolver);
 	event_add(&iev_resolver->ev, NULL);
 
-	iev_captiveportal->events = EV_READ;
-	event_set(&iev_captiveportal->ev, iev_captiveportal->ibuf.fd,
-	    iev_captiveportal->events, iev_captiveportal->handler,
-	    iev_captiveportal);
-	event_add(&iev_captiveportal->ev, NULL);
-
 	if (main_imsg_send_ipc_sockets(&iev_frontend->ibuf,
-	    &iev_resolver->ibuf, &iev_captiveportal->ibuf))
+	    &iev_resolver->ibuf))
 		fatal("could not establish imsg links");
 
 	if ((control_fd = control_init(csock)) == -1)
@@ -336,8 +312,6 @@ main_shutdown(void)
 	close(iev_frontend->ibuf.fd);
 	msgbuf_clear(&iev_resolver->ibuf.w);
 	close(iev_resolver->ibuf.fd);
-	msgbuf_clear(&iev_captiveportal->ibuf.w);
-	close(iev_captiveportal->ibuf.fd);
 
 	config_clear(main_conf);
 
@@ -355,7 +329,6 @@ main_shutdown(void)
 
 	free(iev_frontend);
 	free(iev_resolver);
-	free(iev_captiveportal);
 
 	log_info("terminating");
 	exit(0);
@@ -394,15 +367,14 @@ start_child(int p, char *argv0, int fd, int debug, int verbose)
 	case PROC_FRONTEND:
 		argv[argc++] = "-F";
 		break;
-	case PROC_CAPTIVEPORTAL:
-		argv[argc++] = "-C";
-		break;
 	}
 	if (debug)
 		argv[argc++] = "-d";
 	if (verbose & OPT_VERBOSE)
 		argv[argc++] = "-v";
 	if (verbose & OPT_VERBOSE2)
+		argv[argc++] = "-v";
+	if (verbose & OPT_VERBOSE3)
 		argv[argc++] = "-v";
 	argv[argc++] = NULL;
 
@@ -480,64 +452,8 @@ main_dispatch_resolver(int fd, short event, void *bula)
 	struct imsgev		*iev = bula;
 	struct imsgbuf		*ibuf;
 	struct imsg		 imsg;
-	struct in_addr		*in;
 	ssize_t			 n;
 	int			 shut = 0;
-
-	ibuf = &iev->ibuf;
-
-	if (event & EV_READ) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			fatal("imsg_read error");
-		if (n == 0)	/* Connection closed. */
-			shut = 1;
-	}
-	if (event & EV_WRITE) {
-		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
-			fatal("msgbuf_write");
-		if (n == 0)	/* Connection closed. */
-			shut = 1;
-	}
-
-	for (;;) {
-		if ((n = imsg_get(ibuf, &imsg)) == -1)
-			fatal("imsg_get");
-		if (n == 0)	/* No more messages. */
-			break;
-
-		switch (imsg.hdr.type) {
-		case IMSG_CONNECT_CAPTIVE_PORTAL_HOST:
-			if (IMSG_DATA_SIZE(imsg) != sizeof(*in))
-				fatalx("%s: IMSG_CONNECT_CAPTIVE_PORTAL_HOST "
-				    "wrong length: %lu", __func__,
-				    IMSG_DATA_SIZE(imsg));
-			in = (struct in_addr *)imsg.data;
-			connect_captive_portal_host(in);
-			break;
-		default:
-			log_debug("%s: error handling imsg %d", __func__,
-			    imsg.hdr.type);
-			break;
-		}
-		imsg_free(&imsg);
-	}
-	if (!shut)
-		imsg_event_add(iev);
-	else {
-		/* This pipe is dead. Remove its event handler. */
-		event_del(&iev->ev);
-		event_loopexit(NULL);
-	}
-}
-
-void
-main_dispatch_captiveportal(int fd, short event, void *bula)
-{
-	struct imsgev	*iev = bula;
-	struct imsgbuf  *ibuf;
-	struct imsg	 imsg;
-	ssize_t		 n;
-	int		 shut = 0;
 
 	ibuf = &iev->ibuf;
 
@@ -601,23 +517,6 @@ main_imsg_compose_resolver(int type, pid_t pid, void *data, uint16_t datalen)
 }
 
 void
-main_imsg_compose_captiveportal(int type, pid_t pid, void *data,
-    uint16_t datalen)
-{
-	if (iev_captiveportal)
-		imsg_compose_event(iev_captiveportal, type, 0, pid, -1, data,
-		    datalen);
-}
-
-void
-main_imsg_compose_captiveportal_fd(int type, pid_t pid, int fd)
-{
-	if (iev_frontend)
-		imsg_compose_event(iev_captiveportal, type, 0, pid, fd, NULL,
-		    0);
-}
-
-void
 imsg_event_add(struct imsgev *iev)
 {
 	iev->events = EV_READ;
@@ -644,22 +543,12 @@ imsg_compose_event(struct imsgev *iev, uint16_t type, uint32_t peerid,
 
 static int
 main_imsg_send_ipc_sockets(struct imsgbuf *frontend_buf,
-    struct imsgbuf *resolver_buf, struct imsgbuf *captiveportal_buf)
+    struct imsgbuf *resolver_buf)
 {
 	int pipe_frontend2resolver[2];
-	int pipe_frontend2captiveportal[2];
-	int pipe_resolver2captiveportal[2];
 
 	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK,
 	    PF_UNSPEC, pipe_frontend2resolver) == -1)
-		return (-1);
-
-	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK,
-	    PF_UNSPEC, pipe_frontend2captiveportal) == -1)
-		return (-1);
-
-	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK,
-	    PF_UNSPEC, pipe_resolver2captiveportal) == -1)
 		return (-1);
 
 	if (imsg_compose(frontend_buf, IMSG_SOCKET_IPC_RESOLVER, 0, 0,
@@ -667,20 +556,6 @@ main_imsg_send_ipc_sockets(struct imsgbuf *frontend_buf,
 		return (-1);
 	if (imsg_compose(resolver_buf, IMSG_SOCKET_IPC_FRONTEND, 0, 0,
 	    pipe_frontend2resolver[1], NULL, 0) == -1)
-		return (-1);
-
-	if (imsg_compose(frontend_buf, IMSG_SOCKET_IPC_CAPTIVEPORTAL, 0, 0,
-	    pipe_frontend2captiveportal[0], NULL, 0) == -1)
-		return (-1);
-	if (imsg_compose(captiveportal_buf, IMSG_SOCKET_IPC_FRONTEND, 0, 0,
-	    pipe_frontend2captiveportal[1], NULL, 0) == -1)
-		return (-1);
-
-	if (imsg_compose(resolver_buf, IMSG_SOCKET_IPC_CAPTIVEPORTAL, 0, 0,
-	    pipe_resolver2captiveportal[0], NULL, 0) == -1)
-		return (-1);
-	if (imsg_compose(captiveportal_buf, IMSG_SOCKET_IPC_RESOLVER, 0, 0,
-	    pipe_resolver2captiveportal[1], NULL, 0) == -1)
 		return (-1);
 
 	return (0);
@@ -708,32 +583,12 @@ main_reload(void)
 int
 main_imsg_send_config(struct uw_conf *xconf)
 {
-	struct uw_forwarder	*uw_forwarder;
+	struct uw_forwarder		*uw_forwarder;
+	struct force_tree_entry	*force_entry;
 
 	/* Send fixed part of config to children. */
 	if (main_sendall(IMSG_RECONF_CONF, xconf, sizeof(*xconf)) == -1)
 		return (-1);
-	if (xconf->captive_portal_host != NULL) {
-		if (main_sendall(IMSG_RECONF_CAPTIVE_PORTAL_HOST,
-		    xconf->captive_portal_host,
-		    strlen(xconf->captive_portal_host) + 1) == -1)
-			return (-1);
-	}
-
-	if (xconf->captive_portal_path != NULL) {
-		if (main_sendall(IMSG_RECONF_CAPTIVE_PORTAL_PATH,
-		    xconf->captive_portal_path,
-		    strlen(xconf->captive_portal_path) + 1) == -1)
-			return (-1);
-	}
-
-	if (xconf->captive_portal_expected_response != NULL) {
-		if (main_sendall(IMSG_RECONF_CAPTIVE_PORTAL_EXPECTED_RESPONSE,
-		    xconf->captive_portal_expected_response,
-		    strlen(xconf->captive_portal_expected_response) + 1)
-		    == -1)
-			return (-1);
-	}
 
 	if (xconf->blocklist_file != NULL) {
 		if (main_sendall(IMSG_RECONF_BLOCKLIST_FILE,
@@ -756,6 +611,11 @@ main_imsg_send_config(struct uw_conf *xconf)
 		    sizeof(*uw_forwarder)) == -1)
 			return (-1);
 	}
+	RB_FOREACH(force_entry, force_tree, &xconf->force) {
+		if (main_sendall(IMSG_RECONF_FORCE, force_entry,
+		    sizeof(*force_entry)) == -1)
+			return (-1);
+	}
 
 	/* Tell children the revised config is now complete. */
 	if (main_sendall(IMSG_RECONF_END, NULL, 0) == -1)
@@ -771,16 +631,14 @@ main_sendall(enum imsg_type type, void *buf, uint16_t len)
 		return (-1);
 	if (imsg_compose_event(iev_resolver, type, 0, 0, -1, buf, len) == -1)
 		return (-1);
-	if (imsg_compose_event(iev_captiveportal, type, 0, 0, -1, buf, len) ==
-	    -1)
-		return (-1);
 	return (0);
 }
 
 void
 merge_config(struct uw_conf *conf, struct uw_conf *xconf)
 {
-	struct uw_forwarder	*uw_forwarder;
+	struct uw_forwarder		*uw_forwarder;
+	struct force_tree_entry	*n, *nxt;
 
 	/* Remove & discard existing forwarders. */
 	while ((uw_forwarder = TAILQ_FIRST(&conf->uw_forwarder_list)) !=
@@ -794,42 +652,30 @@ merge_config(struct uw_conf *conf, struct uw_conf *xconf)
 		free(uw_forwarder);
 	}
 
-	conf->res_pref_len = xconf->res_pref_len;
+	/* Remove & discard existing force tree. */
+	for (n = RB_MIN(force_tree, &conf->force); n != NULL; n = nxt) {
+		nxt = RB_NEXT(force_tree, &conf->force, n);
+		RB_REMOVE(force_tree, &conf->force, n);
+		free(n);
+	}
+
 	memcpy(&conf->res_pref, &xconf->res_pref,
 	    sizeof(conf->res_pref));
-
-	free(conf->captive_portal_host);
-	conf->captive_portal_host = xconf->captive_portal_host;
-
-	free(conf->captive_portal_path);
-	conf->captive_portal_path = xconf->captive_portal_path;
-
-	free(conf->captive_portal_expected_response);
-	conf->captive_portal_expected_response =
-	    xconf->captive_portal_expected_response;
-
-	conf->captive_portal_expected_status =
-	    xconf->captive_portal_expected_status;
-
-	conf->captive_portal_auto = xconf->captive_portal_auto;
 
 	free(conf->blocklist_file);
 	conf->blocklist_file = xconf->blocklist_file;
 	conf->blocklist_log = xconf->blocklist_log;
 
 	/* Add new forwarders. */
-	while ((uw_forwarder = TAILQ_FIRST(&xconf->uw_forwarder_list)) !=
-	    NULL) {
-		TAILQ_REMOVE(&xconf->uw_forwarder_list, uw_forwarder, entry);
-		TAILQ_INSERT_TAIL(&conf->uw_forwarder_list,
-		    uw_forwarder, entry);
-	}
-	while ((uw_forwarder = TAILQ_FIRST(&xconf->uw_dot_forwarder_list)) !=
-	    NULL) {
-		TAILQ_REMOVE(&xconf->uw_dot_forwarder_list, uw_forwarder,
-		    entry);
-		TAILQ_INSERT_TAIL(&conf->uw_dot_forwarder_list,
-		    uw_forwarder, entry);
+	TAILQ_CONCAT(&conf->uw_forwarder_list, &xconf->uw_forwarder_list,
+	    entry);
+	TAILQ_CONCAT(&conf->uw_dot_forwarder_list,
+	    &xconf->uw_dot_forwarder_list, entry);
+
+	for (n = RB_MIN(force_tree, &xconf->force); n != NULL; n = nxt) {
+		nxt = RB_NEXT(force_tree, &xconf->force, n);
+		RB_REMOVE(force_tree, &xconf->force, n);
+		RB_INSERT(force_tree, &conf->force, n);
 	}
 
 	free(xconf);
@@ -850,18 +696,14 @@ config_new_empty(void)
 	if (xconf == NULL)
 		fatal(NULL);
 
-	memcpy(&xconf->res_pref, &default_res_pref,
+	memcpy(&xconf->res_pref.types, &default_res_pref,
 	    sizeof(default_res_pref));
-	xconf->res_pref_len = 5;
+	xconf->res_pref.len = nitems(default_res_pref);
 
 	TAILQ_INIT(&xconf->uw_forwarder_list);
 	TAILQ_INIT(&xconf->uw_dot_forwarder_list);
 
-	if ((xconf->captive_portal_expected_response = strdup("")) == NULL)
-		fatal(NULL);
-
-	xconf->captive_portal_expected_status = 200;
-	xconf->captive_portal_auto = 1;
+	RB_INIT(&xconf->force);
 
 	return (xconf);
 }
@@ -952,38 +794,6 @@ solicit_dns_proposals(void)
 }
 
 void
-connect_captive_portal_host(struct in_addr *in)
-{
-	struct sockaddr		*sa;
-	struct sockaddr_in	 sin;
-	int			 httpsock;
-
-	sa = (struct sockaddr *)&sin;
-	memset(&sin, 0, sizeof(sin));
-	sin.sin_len = sizeof(sin);
-	sin.sin_family = AF_INET;
-	sin.sin_addr = *in;
-	sin.sin_port = htons(80);
-	log_debug("%s: ip_port: %s", __func__, ip_port(sa));
-
-	if ((httpsock = socket(AF_INET, SOCK_STREAM |
-	    SOCK_CLOEXEC | SOCK_NONBLOCK, 0)) == -1) {
-		log_warn("%s: socket", __func__);
-		return;
-	}
-	if (connect(httpsock, sa, sizeof(sin)) == -1) {
-		if (errno != EINPROGRESS) {
-			log_warn("%s: connect", __func__);
-			close(httpsock);
-			return;
-		}
-	}
-
-	main_imsg_compose_captiveportal_fd(IMSG_HTTPSOCK, 0,
-	    httpsock);
-}
-
-void
 send_blocklist_fd(void)
 {
 	int	bl_fd;
@@ -997,8 +807,9 @@ send_blocklist_fd(void)
 void
 imsg_receive_config(struct imsg *imsg, struct uw_conf **xconf)
 {
-	struct uw_conf		*nconf;
-	struct uw_forwarder	*uw_forwarder;
+	struct uw_conf			*nconf;
+	struct uw_forwarder		*uw_forwarder;
+	struct force_tree_entry	*force_entry;
 
 	nconf = *xconf;
 
@@ -1014,32 +825,9 @@ imsg_receive_config(struct imsg *imsg, struct uw_conf **xconf)
 			fatal(NULL);
 		nconf = *xconf;
 		memcpy(nconf, imsg->data, sizeof(struct uw_conf));
-		nconf->captive_portal_host = NULL;
-		nconf->captive_portal_path = NULL;
-		nconf->captive_portal_expected_response = NULL;
 		TAILQ_INIT(&nconf->uw_forwarder_list);
 		TAILQ_INIT(&nconf->uw_dot_forwarder_list);
-		break;
-	case IMSG_RECONF_CAPTIVE_PORTAL_HOST:
-		/* make sure this is a string */
-		((char *)imsg->data)[IMSG_DATA_SIZE(*imsg) - 1] = '\0';
-		if ((nconf->captive_portal_host = strdup(imsg->data)) ==
-		    NULL)
-			fatal("%s: strdup", __func__);
-		break;
-	case IMSG_RECONF_CAPTIVE_PORTAL_PATH:
-		/* make sure this is a string */
-		((char *)imsg->data)[IMSG_DATA_SIZE(*imsg) - 1] = '\0';
-		if ((nconf->captive_portal_path = strdup(imsg->data)) ==
-		    NULL)
-			fatal("%s: strdup", __func__);
-		break;
-	case IMSG_RECONF_CAPTIVE_PORTAL_EXPECTED_RESPONSE:
-		/* make sure this is a string */
-		((char *)imsg->data)[IMSG_DATA_SIZE(*imsg) - 1] = '\0';
-		if ((nconf->captive_portal_expected_response =
-		    strdup(imsg->data)) == NULL)
-			fatal("%s: strdup", __func__);
+		RB_INIT(&nconf->force);
 		break;
 	case IMSG_RECONF_BLOCKLIST_FILE:
 		/* make sure this is a string */
@@ -1072,6 +860,18 @@ imsg_receive_config(struct imsg *imsg, struct uw_conf **xconf)
 		    uw_forwarder));
 		TAILQ_INSERT_TAIL(&nconf->uw_dot_forwarder_list,
 		    uw_forwarder, entry);
+		break;
+	case IMSG_RECONF_FORCE:
+		if (IMSG_DATA_SIZE(*imsg) != sizeof(struct force_tree_entry))
+			fatalx("%s: IMSG_RECONF_FORCE wrong "
+			    "length: %lu", __func__,
+			    IMSG_DATA_SIZE(*imsg));
+		if ((force_entry = malloc(sizeof(struct
+		    force_tree_entry))) == NULL)
+			fatal(NULL);
+		memcpy(force_entry, imsg->data, sizeof(struct
+		    force_tree_entry));
+		RB_INSERT(force_tree, &nconf->force, force_entry);
 		break;
 	default:
 		log_debug("%s: error handling imsg %d", __func__,
