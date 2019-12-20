@@ -1371,6 +1371,7 @@
 ./usr/share/man/man4/fd.4
 ./usr/share/man/man4/fdc.4
 ./usr/share/man/man4/fec.4
+./usr/share/man/man4/fido.4
 ./usr/share/man/man4/fins.4
 ./usr/share/man/man4/fintek.4
 ./usr/share/man/man4/fms.4
@@ -1388,7 +1389,6 @@
 ./usr/share/man/man4/gpiodcf.4
 ./usr/share/man/man4/gpioiic.4
 ./usr/share/man/man4/gpioow.4
-./usr/share/man/man4/gpr.4
 ./usr/share/man/man4/gre.4
 ./usr/share/man/man4/gscsio.4
 ./usr/share/man/man4/hds.4
@@ -1460,7 +1460,6 @@
 ./usr/share/man/man4/i386/pas.4
 ./usr/share/man/man4/i386/pcibios.4
 ./usr/share/man/man4/i386/pctr.4
-./usr/share/man/man4/i386/piixpcib.4
 ./usr/share/man/man4/i386/sb.4
 ./usr/share/man/man4/i386/skgpio.4
 ./usr/share/man/man4/i386/tcpcib.4
@@ -1738,6 +1737,7 @@
 ./usr/share/man/man4/pvclock.4
 ./usr/share/man/man4/pwdog.4
 ./usr/share/man/man4/pwmbl.4
+./usr/share/man/man4/pwmfan.4
 ./usr/share/man/man4/pwmreg.4
 ./usr/share/man/man4/qla.4
 ./usr/share/man/man4/qle.4
@@ -1756,12 +1756,14 @@
 ./usr/share/man/man4/ricohrtc.4
 ./usr/share/man/man4/rkclock.4
 ./usr/share/man/man4/rkdwusb.4
+./usr/share/man/man4/rkemmcphy.4
 ./usr/share/man/man4/rkgpio.4
 ./usr/share/man/man4/rkgrf.4
 ./usr/share/man/man4/rkiic.4
 ./usr/share/man/man4/rkpcie.4
 ./usr/share/man/man4/rkpinctrl.4
 ./usr/share/man/man4/rkpmic.4
+./usr/share/man/man4/rkpwm.4
 ./usr/share/man/man4/rktemp.4
 ./usr/share/man/man4/rl.4
 ./usr/share/man/man4/rlphy.4

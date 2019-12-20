@@ -1,4 +1,4 @@
-#	$OpenBSD: files.fdt,v 1.102 2019/10/23 20:32:20 kettenis Exp $
+#	$OpenBSD: files.fdt,v 1.106 2019/12/03 09:12:45 patrick Exp $
 #
 # Config file and device description for machine-independent FDT code.
 # Included by ports that need it.
@@ -144,6 +144,10 @@ device	pwmbl
 attach	pwmbl at fdt
 file	dev/fdt/pwmbl.c			pwmbl
 
+device	pwmfan
+attach	pwmfan at fdt
+file	dev/fdt/pwmfan.c		pwmfan
+
 device	pwmreg
 attach	pwmreg at fdt
 file	dev/fdt/pwmreg.c		pwmreg
@@ -216,7 +220,11 @@ device	rkdwusb: fdt
 attach	rkdwusb at fdt
 file	dev/fdt/rkdwusb.c		rkdwusb
 
-device	rkgrf
+device	rkemmcphy
+attach	rkemmcphy at fdt
+file	dev/fdt/rkemmcphy.c		rkemmcphy
+
+device	rkgrf: fdt
 attach	rkgrf at fdt
 file	dev/fdt/rkgrf.c			rkgrf
 
@@ -239,6 +247,10 @@ file	dev/fdt/rkpinctrl.c		rkpinctrl
 device	rkpcie: pcibus
 attach	rkpcie at fdt
 file	dev/fdt/rkpcie.c		rkpcie
+
+device	rkpwm
+attach	rkpwm at fdt
+file	dev/fdt/rkpwm.c			rkpwm
 
 device	rktemp
 attach	rktemp at fdt

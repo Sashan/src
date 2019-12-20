@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1998-2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -19,20 +18,20 @@
 #ifndef GENERIC_TXT_16_H
 #define GENERIC_TXT_16_H 1
 
-/* $ISC: txt_16.h,v 1.24.18.2 2005/04/29 00:16:40 marka Exp $ */
+/* $Id: txt_16.h,v 1.3 2019/12/17 01:46:33 sthen Exp $ */
 
 typedef struct dns_rdata_txt_string {
-                isc_uint8_t    length;
-                unsigned char   *data;
+		isc_uint8_t    length;
+		unsigned char   *data;
 } dns_rdata_txt_string_t;
 
 typedef struct dns_rdata_txt {
-        dns_rdatacommon_t       common;
-        isc_mem_t               *mctx;
-        unsigned char           *txt;
-        isc_uint16_t            txt_len;
-        /* private */
-        isc_uint16_t            offset;
+	dns_rdatacommon_t       common;
+	isc_mem_t               *mctx;
+	unsigned char           *txt;
+	isc_uint16_t            txt_len;
+	/* private */
+	isc_uint16_t            offset;
 } dns_rdata_txt_t;
 
 /*

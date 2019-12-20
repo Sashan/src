@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 2000, 2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: lwres_grbn.c,v 1.6.18.2 2005/04/29 00:17:20 marka Exp $ */
+/* $Id: lwres_grbn.c,v 1.3 2019/12/17 01:46:38 sthen Exp $ */
 
 /*! \file lwres_grbn.c
 
@@ -61,9 +60,9 @@ lwres_grbnrequest_render(lwres_context_t *ctx, lwres_grbnrequest_t *req,
 	if (buf == NULL)
 		return (LWRES_R_NOMEMORY);
 
-	lwres_buffer_init(b, buf, buflen);
+	lwres_buffer_init(b, buf, (unsigned int)buflen);
 
-	pkt->length = buflen;
+	pkt->length = (lwres_uint32_t)buflen;
 	pkt->version = LWRES_LWPACKETVERSION_0;
 	pkt->pktflags &= ~LWRES_LWPACKETFLAG_RESPONSE;
 	pkt->opcode = LWRES_OPCODE_GETRDATABYNAME;
@@ -139,9 +138,9 @@ lwres_grbnresponse_render(lwres_context_t *ctx, lwres_grbnresponse_t *req,
 	buf = CTXMALLOC(buflen);
 	if (buf == NULL)
 		return (LWRES_R_NOMEMORY);
-	lwres_buffer_init(b, buf, buflen);
+	lwres_buffer_init(b, buf, (unsigned int)buflen);
 
-	pkt->length = buflen;
+	pkt->length = (lwres_uint32_t)buflen;
 	pkt->version = LWRES_LWPACKETVERSION_0;
 	pkt->pktflags |= LWRES_LWPACKETFLAG_RESPONSE;
 	pkt->opcode = LWRES_OPCODE_GETRDATABYNAME;
@@ -250,7 +249,7 @@ lwres_grbnrequest_parse(lwres_context_t *ctx, lwres_buffer_t *b,
 	return (LWRES_R_SUCCESS);
 }
 
-/*% Thread-save equivalent to \link lwres_gabn.c lwres_gabn* \endlink routines. */
+/*% Thread-safe equivalent to \link lwres_gabn.c lwres_gabn* \endlink routines. */
 lwres_result_t
 lwres_grbnresponse_parse(lwres_context_t *ctx, lwres_buffer_t *b,
 			lwres_lwpacket_t *pkt, lwres_grbnresponse_t **structp)

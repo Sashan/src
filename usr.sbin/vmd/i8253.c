@@ -1,4 +1,4 @@
-/* $OpenBSD: i8253.c,v 1.29 2018/12/10 21:24:22 claudio Exp $ */
+/* $OpenBSD: i8253.c,v 1.31 2019/11/30 00:51:29 mlarkin Exp $ */
 /*
  * Copyright (c) 2016 Mike Larkin <mlarkin@openbsd.org>
  *

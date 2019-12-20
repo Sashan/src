@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 2000, 2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: soa.h,v 1.3.18.2 2005/04/29 00:16:22 marka Exp $ */
+/* $Id: soa.h,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
 
 #ifndef DNS_SOA_H
 #define DNS_SOA_H 1
@@ -24,7 +23,7 @@
  ***** Module Info
  *****/
 
-/*! \file
+/*! \file dns/soa.h
  * \brief
  * SOA utilities.
  */
@@ -39,6 +38,28 @@
 #include <dns/types.h>
 
 ISC_LANG_BEGINDECLS
+
+#define DNS_SOA_BUFFERSIZE      ((2 * DNS_NAME_MAXWIRE) + (4 * 5))
+
+isc_result_t
+dns_soa_buildrdata(dns_name_t *origin, dns_name_t *contact,
+		   dns_rdataclass_t rdclass,
+		   isc_uint32_t serial, isc_uint32_t refresh,
+		   isc_uint32_t retry, isc_uint32_t expire,
+		   isc_uint32_t minimum, unsigned char *buffer,
+		   dns_rdata_t *rdata);
+/*%<
+ * Build the rdata of an SOA record.
+ *
+ * Requires:
+ *\li   buffer  Points to a temporary buffer of at least
+ *              DNS_SOA_BUFFERSIZE bytes.
+ *\li   rdata   Points to an initialized dns_rdata_t.
+ *
+ * Ensures:
+ *  \li    *rdata       Contains a valid SOA rdata.  The 'data' member
+ *  			refers to 'buffer'.
+ */
 
 isc_uint32_t
 dns_soa_getserial(dns_rdata_t *rdata);

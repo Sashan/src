@@ -1,4 +1,4 @@
-/*	$OpenBSD: policy.c,v 1.49 2019/11/13 12:24:40 tobhe Exp $	*/
+/*	$OpenBSD: policy.c,v 1.52 2019/12/10 12:20:17 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2010-2013 Reyk Floeter <reyk@openbsd.org>
@@ -41,6 +41,10 @@ static __inline int
 	 childsa_cmp(struct iked_childsa *, struct iked_childsa *);
 static __inline int
 	 flow_cmp(struct iked_flow *, struct iked_flow *);
+static __inline int
+	 addr_cmp(struct iked_addr *, struct iked_addr *, int);
+static __inline int
+	 ts_insert_unique(struct iked_addr *, struct iked_tss *, int);
 
 
 void
@@ -240,13 +244,14 @@ sa_state(struct iked *env, struct iked_sa *sa, int state)
 	sa->sa_state = state;
 	if (ostate != IKEV2_STATE_INIT &&
 	    !sa_stateok(sa, state)) {
-		log_debug("%s: cannot switch: %s -> %s", SPI_SA(sa, __func__), a, b);
+		log_debug("%s: cannot switch: %s -> %s",
+		    SPI_SA(sa, __func__), a, b);
 		sa->sa_state = ostate;
 	} else if (ostate != sa->sa_state) {
 		switch (state) {
 		case IKEV2_STATE_ESTABLISHED:
 		case IKEV2_STATE_CLOSED:
-			log_info("%s: %s -> %s from %s to %s policy '%s'",
+			log_debug("%s: %s -> %s from %s to %s policy '%s'",
 			    SPI_SA(sa, __func__), a, b,
 			    print_host((struct sockaddr *)&sa->sa_peer.addr,
 			    NULL, 0),
@@ -256,7 +261,8 @@ sa_state(struct iked *env, struct iked_sa *sa, int state)
 			    "<unknown>");
 			break;
 		default:
-			log_debug("%s: %s -> %s", __func__, a, b);
+			log_debug("%s: %s -> %s",
+			    SPI_SA(sa, __func__), a, b);
 			break;
 		}
 	}
@@ -385,9 +391,53 @@ sa_new(struct iked *env, uint64_t ispi, uint64_t rspi,
 	return (sa);
 }
 
+int
+policy_generate_ts(struct iked_policy *pol)
+{
+	struct iked_flow	*flow;
+
+	/* Generate list of traffic selectors from flows */
+	RB_FOREACH(flow, iked_flows, &pol->pol_flows) {
+		if (ts_insert_unique(&flow->flow_src, &pol->pol_tssrc,
+		    flow->flow_ipproto) == 1)
+			pol->pol_tssrc_count++;
+		if (ts_insert_unique(&flow->flow_dst, &pol->pol_tsdst,
+		    flow->flow_ipproto) == 1)
+			pol->pol_tsdst_count++;
+	}
+	if (pol->pol_tssrc_count > IKEV2_MAXNUM_TSS ||
+	    pol->pol_tsdst_count > IKEV2_MAXNUM_TSS)
+		return (-1);
+
+	return (0);
+}
+
+int
+ts_insert_unique(struct iked_addr *addr, struct iked_tss *tss, int ipproto)
+{
+	struct iked_ts		*ts;
+
+	/* Remove duplicates */
+	TAILQ_FOREACH(ts, tss, ts_entry) {
+		if (addr_cmp(addr, &ts->ts_addr, 1) == 0)
+			return (0);
+	}
+
+	if ((ts = calloc(1, sizeof(*ts))) == NULL)
+		return (-1);
+
+	ts->ts_ipproto = ipproto;
+	ts->ts_addr = *addr;
+
+	TAILQ_INSERT_TAIL(tss, ts, ts_entry);
+	return (1);
+}
+
 void
 sa_free(struct iked *env, struct iked_sa *sa)
 {
+	struct iked_sa	*osa;
+
 	if (sa->sa_reason)
 		log_info("%s: %s", SPI_SA(sa, __func__), sa->sa_reason);
 	else
@@ -395,7 +445,7 @@ sa_free(struct iked *env, struct iked_sa *sa)
 		    print_spi(sa->sa_hdr.sh_ispi, 8),
 		    print_spi(sa->sa_hdr.sh_rspi, 8));
 
-	/* IKE rekeying running? */
+	/* IKE rekeying running? (old sa freed before new sa) */
 	if (sa->sa_nexti) {
 		RB_REMOVE(iked_sas, &env->sc_sas, sa->sa_nexti);
 		config_free_sa(env, sa->sa_nexti);
@@ -403,6 +453,31 @@ sa_free(struct iked *env, struct iked_sa *sa)
 	if (sa->sa_nextr) {
 		RB_REMOVE(iked_sas, &env->sc_sas, sa->sa_nextr);
 		config_free_sa(env, sa->sa_nextr);
+	}
+	/* reset matching backpointers (new sa freed before old sa) */
+	if ((osa = sa->sa_previ) != NULL) {
+		if (osa->sa_nexti == sa) {
+			log_debug("%s: resetting: sa %p == osa->sa_nexti %p"
+			    " (osa %p)",
+			    SPI_SA(sa, __func__), osa, sa, osa->sa_nexti);
+			osa->sa_nexti = NULL;
+		} else {
+			log_info("%s: inconsistent: sa %p != osa->sa_nexti %p"
+			    " (osa %p)",
+			    SPI_SA(sa, __func__), osa, sa, osa->sa_nexti);
+		}
+	}
+	if ((osa = sa->sa_prevr) != NULL) {
+		if (osa->sa_nextr == sa) {
+			log_debug("%s: resetting: sa %p == osa->sa_nextr %p"
+			    " (osa %p)",
+			    SPI_SA(sa, __func__), osa, sa, osa->sa_nextr);
+			osa->sa_nextr = NULL;
+		} else {
+			log_info("%s: inconsistent: sa %p != osa->sa_nextr %p"
+			    " (osa %p)",
+			    SPI_SA(sa, __func__), osa, sa, osa->sa_nextr);
+		}
 	}
 	RB_REMOVE(iked_sas, &env->sc_sas, sa);
 	config_free_sa(env, sa);

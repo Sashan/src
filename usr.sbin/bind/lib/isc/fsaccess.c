@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 2000, 2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,13 +14,14 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: fsaccess.c,v 1.6.18.2 2005/04/29 00:16:45 marka Exp $ */
+/* $Id: fsaccess.c,v 1.3 2019/12/17 01:46:34 sthen Exp $ */
 
 /*! \file
  * \brief
  * This file contains the OS-independent functionality of the API.
  */
 #include <isc/fsaccess.h>
+#include <isc/print.h>
 #include <isc/result.h>
 #include <isc/util.h>
 

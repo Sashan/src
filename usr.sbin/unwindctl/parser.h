@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.h,v 1.5 2019/11/06 14:19:59 florian Exp $	*/
+/*	$OpenBSD: parser.h,v 1.9 2019/12/18 09:18:28 florian Exp $	*/
 
 /*
  * Copyright (c) 2004 Esben Norby <norby@openbsd.org>
@@ -25,11 +25,8 @@ enum actions {
 	RELOAD,
 	PORTAL,
 	STATUS,
-	STATUS_RECURSOR,
-	STATUS_DHCP,
-	STATUS_STATIC,
-	STATUS_DOT,
-	STATUS_STUB
+	AUTOCONF,
+	MEM
 };
 
 struct parse_result {

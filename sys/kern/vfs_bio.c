@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_bio.c,v 1.192 2019/11/15 09:27:48 mlarkin Exp $	*/
+/*	$OpenBSD: vfs_bio.c,v 1.194 2019/12/08 12:29:42 mpi Exp $	*/
 /*	$NetBSD: vfs_bio.c,v 1.44 1996/06/11 11:15:36 pk Exp $	*/
 
 /*
@@ -551,6 +551,24 @@ bread_cluster_callback(struct buf *bp)
 	for (i = 1; xbpp[i] != NULL; i++) {
 		if (ISSET(bp->b_flags, B_ERROR))
 			SET(xbpp[i]->b_flags, B_INVAL | B_ERROR);
+		/*
+		 * Move the pages from the master buffer's uvm object
+		 * into the individual buffer's uvm objects.
+		 */
+		struct uvm_object *newobj = &xbpp[i]->b_uobj;
+		struct uvm_object *oldobj = &bp->b_uobj;
+		int page;
+
+		uvm_objinit(newobj, NULL, 1);
+		for (page = 0; page < atop(xbpp[i]->b_bufsize); page++) {
+			struct vm_page *pg = uvm_pagelookup(oldobj,
+			    xbpp[i]->b_poffs + ptoa(page));
+			KASSERT(pg != NULL);
+			KASSERT(pg->wire_count = 1);
+			uvm_pagerealloc(pg, newobj, xbpp[i]->b_poffs + ptoa(page));
+		}
+		xbpp[i]->b_pobj = newobj;
+
 		biodone(xbpp[i]);
 	}
 
@@ -1083,14 +1101,14 @@ buf_get(struct vnode *vp, daddr_t blkno, size_t size)
 		    curproc != syncerproc && curproc != cleanerproc) {
 			wakeup(&bd_req);
 			needbuffer++;
-			tsleep(&needbuffer, PRIBIO, "needbuffer", 0);
+			tsleep_nsec(&needbuffer, PRIBIO, "needbuffer", INFSLP);
 			splx(s);
 			return (NULL);
 		}
 		if (bcstats.dmapages + npages > bufpages) {
 			/* cleaner or syncer */
 			nobuffers = 1;
-			tsleep(&nobuffers, PRIBIO, "nobuffers", 0);
+			tsleep_nsec(&nobuffers, PRIBIO, "nobuffers", INFSLP);
 			splx(s);
 			return (NULL);
 		}
@@ -1173,7 +1191,7 @@ buf_daemon(void *arg)
 				needbuffer = 0;
 				wakeup(&needbuffer);
 			}
-			tsleep(&bd_req, PRIBIO - 7, "cleaner", 0);
+			tsleep_nsec(&bd_req, PRIBIO - 7, "cleaner", INFSLP);
 		}
 
 		while ((bp = bufcache_getdirtybuf())) {
@@ -1229,7 +1247,7 @@ biowait(struct buf *bp)
 
 	s = splbio();
 	while (!ISSET(bp->b_flags, B_DONE))
-		tsleep(bp, PRIBIO + 1, "biowait", 0);
+		tsleep_nsec(bp, PRIBIO + 1, "biowait", INFSLP);
 	splx(s);
 
 	/* check for interruption of I/O (e.g. via NFS), then errors. */

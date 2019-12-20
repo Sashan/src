@@ -1,7 +1,7 @@
 #! /usr/bin/perl
 
 # ex:ts=8 sw=4:
-# $OpenBSD: PkgAdd.pm,v 1.116 2019/11/16 11:07:43 espie Exp $
+# $OpenBSD: PkgAdd.pm,v 1.118 2019/12/08 10:35:17 espie Exp $
 #
 # Copyright (c) 2003-2014 Marc Espie <espie@openbsd.org>
 #
@@ -148,6 +148,16 @@ OpenBSD::Auto::cache(cache_directory,
 		my $self = shift;
 		if (defined $ENV{PKG_CACHE}) {
 			return $ENV{PKG_CACHE};
+		} else {
+			return undef;
+		}
+	});
+
+OpenBSD::Auto::cache(debug_cache_directory,
+	sub {
+		my $self = shift;
+		if (defined $ENV{DEBUG_PKG_CACHE}) {
+			return $ENV{DEBUG_PKG_CACHE};
 		} else {
 			return undef;
 		}
@@ -352,6 +362,9 @@ sub find_kept_handle
 	$o->{tweaked} =
 	    OpenBSD::Add::tweak_package_status($pkgname, $state);
 	$state->updater->progress_message($state, "No change in $pkgname");
+	if (defined $state->debug_cache_directory) {
+		OpenBSD::PkgAdd->may_grab_debug_for($pkgname, 1, $state);
+	}
 	delete $set->{newer}{$pkgname};
 	$n->cleanup;
 }
@@ -1039,7 +1052,59 @@ sub process_set
 	}
 	$set->cleanup;
 	$state->tracker->done($set);
+	if (defined $state->debug_cache_directory) {
+		for my $p ($set->newer_names) {
+			$self->may_grab_debug_for($p, 0, $state);
+		}
+	}
 	return ();
+}
+
+sub may_grab_debug_for
+{
+	my ($class, $orig, $kept, $state) = @_;
+	return if $orig =~ m/^debug\-/;
+	my $dbg = "debug-$orig";
+	return if $state->tracker->is_known($dbg);
+	return if OpenBSD::PackageInfo::is_installed($dbg);
+	my $d = $state->debug_cache_directory;
+	return if $kept && -f "$d/$dbg.tgz";
+	$class->grab_debug_package($d, $dbg, $state);
+}
+
+sub grab_debug_package
+{
+	my ($class, $d, $dbg, $state) = @_;
+
+	my $o = $state->locator->find($dbg);
+	return if !defined $o;
+	require OpenBSD::Temp;
+	my ($fh, $name) = OpenBSD::Temp::permanent_file($d, "debug-pkg");
+	if (!defined $fh) {
+		$state->errsay(OpenBSD::Temp->last_error);
+		return;
+	}
+	my $r = fork;
+	if (!defined $r) {
+		$state->fatal("Cannot fork: #1", $!);
+	} elsif ($r == 0) {
+		$DB::inhibit_exit = 0;
+		open(STDOUT, '>&', $fh);
+		open(STDERR, '>>', $o->{errors});
+		$o->{repository}->grab_object($o);
+	} else {
+		close($fh);
+		waitpid($r, 0);
+		my $c = $?;
+		$o->{repository}->parse_problems($o->{errors}, 1, $o);
+		if ($c == 0) {
+			rename($name, "$d/$dbg.tgz");
+		} else {
+			unlink($name);
+			$state->errsay("Grabbing debug package failed: #1",
+				$state->child_error($c));
+		}
+	}
 }
 
 sub inform_user_of_problems

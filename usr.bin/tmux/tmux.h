@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.933 2019/11/25 15:04:15 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.942 2019/12/19 09:22:33 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -60,9 +60,9 @@ struct winlink;
 /* Client-server protocol version. */
 #define PROTOCOL_VERSION 8
 
-/* Default global configuration file. */
+/* Default configuration files. */
 #ifndef TMUX_CONF
-#define TMUX_CONF "/etc/tmux.conf"
+#define TMUX_CONF "/etc/tmux.conf:~/.tmux.conf"
 #endif
 
 /* Minimum layout cell size, NOT including border lines. */
@@ -77,6 +77,10 @@ struct winlink;
 
 /* Maximum size of data to hold from a pane. */
 #define READ_SIZE 4096
+
+/* Default pixel cell sizes. */
+#define DEFAULT_XPIXEL 16
+#define DEFAULT_YPIXEL 32
 
 /* Attribute to make GCC check printf-like arguments. */
 #define printflike(a, b) __attribute__ ((format (printf, a, b)))
@@ -474,13 +478,21 @@ enum msgtype {
 	MSG_RESIZE,
 	MSG_SHELL,
 	MSG_SHUTDOWN,
-	MSG_STDERR,
-	MSG_STDIN,
-	MSG_STDOUT,
+	MSG_OLDSTDERR, /* unused */
+	MSG_OLDSTDIN, /* unused */
+	MSG_OLDSTDOUT, /* unused */
 	MSG_SUSPEND,
 	MSG_UNLOCK,
 	MSG_WAKEUP,
 	MSG_EXEC,
+
+	MSG_READ_OPEN = 300,
+	MSG_READ,
+	MSG_READ_DONE,
+	MSG_WRITE_OPEN,
+	MSG_WRITE,
+	MSG_WRITE_READY,
+	MSG_WRITE_CLOSE
 };
 
 /*
@@ -488,23 +500,41 @@ enum msgtype {
  *
  * Don't forget to bump PROTOCOL_VERSION if any of these change!
  */
-struct msg_command_data {
+struct msg_command {
 	int	argc;
 }; /* followed by packed argv */
 
-struct msg_stdin_data {
-	ssize_t	size;
-	char	data[BUFSIZ];
+struct msg_read_open {
+	int	stream;
+	int	fd;
+}; /* followed by path */
+
+struct msg_read_data {
+	int	stream;
 };
 
-struct msg_stdout_data {
-	ssize_t	size;
-	char	data[BUFSIZ];
+struct msg_read_done {
+	int	stream;
+	int	error;
 };
 
-struct msg_stderr_data {
-	ssize_t	size;
-	char	data[BUFSIZ];
+struct msg_write_open {
+	int	stream;
+	int	fd;
+	int	flags;
+}; /* followed by path */
+
+struct msg_write_data {
+	int	stream;
+}; /* followed by data */
+
+struct msg_write_ready {
+	int	stream;
+	int	error;
+};
+
+struct msg_write_close {
+	int	stream;
 };
 
 /* Mode keys. */
@@ -928,6 +958,8 @@ struct window {
 
 	u_int		 sx;
 	u_int		 sy;
+	u_int		 xpixel;
+	u_int		 ypixel;
 
 	int		 flags;
 #define WINDOW_BELL 0x1
@@ -1148,6 +1180,8 @@ struct tty {
 
 	u_int		 sx;
 	u_int		 sy;
+	u_int		 xpixel;
+	u_int		 ypixel;
 
 	u_int		 cx;
 	u_int		 cy;
@@ -1236,8 +1270,8 @@ struct tty_ctx {
 	const struct grid_cell	*cell;
 	int			 wrapped;
 
-	u_int		 num;
-	void		*ptr;
+	u_int			 num;
+	void			*ptr;
 
 	/*
 	 * Cursor and region position before the screen was updated - this is
@@ -1466,6 +1500,29 @@ struct status_line {
 	struct status_line_entry entries[STATUS_LINES_LIMIT];
 };
 
+/* File in client. */
+typedef void (*client_file_cb) (struct client *, const char *, int, int,
+    struct evbuffer *, void *);
+struct client_file {
+	struct client			*c;
+	int				 references;
+	int				 stream;
+
+	char				*path;
+	struct evbuffer			*buffer;
+	struct bufferevent		*event;
+
+	int				 fd;
+	int				 error;
+	int				 closed;
+
+	client_file_cb			 cb;
+	void				*data;
+
+	RB_ENTRY (client_file)		 entry;
+};
+RB_HEAD(client_files, client_file);
+
 /* Client connection. */
 typedef int (*prompt_input_cb)(struct client *, void *, const char *, int);
 typedef void (*prompt_free_cb)(void *);
@@ -1498,13 +1555,6 @@ struct client {
 	size_t		 written;
 	size_t		 discarded;
 	size_t		 redraw;
-
-	void		(*stdin_callback)(struct client *, int, void *);
-	void		*stdin_callback_data;
-	struct evbuffer	*stdin_data;
-	int		 stdin_closed;
-	struct evbuffer	*stdout_data;
-	struct evbuffer	*stderr_data;
 
 	struct event	 repeat_timer;
 
@@ -1588,6 +1638,8 @@ struct client {
 	overlay_free_cb	 overlay_free;
 	void		*overlay_data;
 	struct event	 overlay_timer;
+
+	struct client_files files;
 
 	TAILQ_ENTRY(client) entry;
 };
@@ -1745,6 +1797,8 @@ extern struct client *cfg_client;
 void	start_cfg(void);
 int	load_cfg(const char *, struct client *, struct cmdq_item *, int,
 	    struct cmdq_item **);
+int	load_cfg_from_buffer(const void *, size_t, const char *,
+	    struct client *, struct cmdq_item *, int, struct cmdq_item **);
 void	set_cfg_file(const char *);
 void printflike(1, 2) cfg_add_cause(const char *, ...);
 void	cfg_print_causes(struct cmdq_item *);
@@ -1927,7 +1981,7 @@ void	tty_putc(struct tty *, u_char);
 void	tty_putn(struct tty *, const void *, size_t, u_int);
 int	tty_init(struct tty *, struct client *, int, char *);
 void	tty_resize(struct tty *);
-void	tty_set_size(struct tty *, u_int, u_int);
+void	tty_set_size(struct tty *, u_int, u_int, u_int, u_int);
 void	tty_start_tty(struct tty *);
 void	tty_stop_tty(struct tty *);
 void	tty_set_title(struct tty *, const char *);
@@ -2062,6 +2116,8 @@ void	    	 cmd_parse_empty(struct cmd_parse_input *);
 struct cmd_parse_result *cmd_parse_from_file(FILE *, struct cmd_parse_input *);
 struct cmd_parse_result *cmd_parse_from_string(const char *,
 		     struct cmd_parse_input *);
+struct cmd_parse_result *cmd_parse_from_buffer(const void *, size_t,
+		     struct cmd_parse_input *);
 struct cmd_parse_result *cmd_parse_from_arguments(int, char **,
 		     struct cmd_parse_input *);
 
@@ -2078,8 +2134,8 @@ struct cmdq_item *cmdq_get_command(struct cmd_list *, struct cmd_find_state *,
 #define cmdq_get_callback(cb, data) cmdq_get_callback1(#cb, cb, data)
 struct cmdq_item *cmdq_get_callback1(const char *, cmdq_cb, void *);
 struct cmdq_item *cmdq_get_error(const char *);
-void		 cmdq_insert_after(struct cmdq_item *, struct cmdq_item *);
-void		 cmdq_append(struct client *, struct cmdq_item *);
+struct cmdq_item *cmdq_insert_after(struct cmdq_item *, struct cmdq_item *);
+struct cmdq_item *cmdq_append(struct client *, struct cmdq_item *);
 void		 cmdq_insert_hook(struct session *, struct cmdq_item *,
 		     struct cmd_find_state *, const char *, ...);
 void		 cmdq_continue(struct cmdq_item *);
@@ -2121,6 +2177,23 @@ void	alerts_reset_all(void);
 void	alerts_queue(struct window *, int);
 void	alerts_check_session(struct session *);
 
+/* file.c */
+int	 file_cmp(struct client_file *, struct client_file *);
+RB_PROTOTYPE(client_files, client_file, entry, file_cmp);
+struct client_file *file_create(struct client *, int, client_file_cb, void *);
+void	 file_free(struct client_file *);
+void	 file_fire_done(struct client_file *);
+void	 file_fire_read(struct client_file *);
+int	 file_can_print(struct client *);
+void printflike(2, 3) file_print(struct client *, const char *, ...);
+void 	 file_vprint(struct client *, const char *, va_list);
+void 	 file_print_buffer(struct client *, void *, size_t);
+void printflike(2, 3) file_error(struct client *, const char *, ...);
+void	 file_write(struct client *, const char *, int, const void *, size_t,
+	     client_file_cb, void *);
+void	 file_read(struct client *, const char *, client_file_cb, void *);
+void	 file_push(struct client_file *);
+
 /* server.c */
 extern struct tmuxproc *server_proc;
 extern struct clients clients;
@@ -2155,7 +2228,6 @@ void	 server_client_push_stdout(struct client *);
 void	 server_client_push_stderr(struct client *);
 void printflike(2, 3) server_client_add_message(struct client *, const char *,
 	     ...);
-char	*server_client_get_path(struct client *, const char *);
 const char *server_client_get_cwd(struct client *, struct session *);
 
 /* server-fn.c */
@@ -2179,8 +2251,6 @@ void	 server_unlink_window(struct session *, struct winlink *);
 void	 server_destroy_pane(struct window_pane *, int);
 void	 server_destroy_session(struct session *);
 void	 server_check_unattached(void);
-int	 server_set_stdin_callback(struct client *, void (*)(struct client *,
-	     int, void *), void *, char **);
 void	 server_unzoom_window(struct window *);
 
 /* status.c */
@@ -2206,9 +2276,9 @@ void	 status_prompt_load_history(void);
 void	 status_prompt_save_history(void);
 
 /* resize.c */
-void	 resize_window(struct window *, u_int, u_int);
+void	 resize_window(struct window *, u_int, u_int, int, int);
 void	 default_window_size(struct client *, struct session *, struct window *,
-	     u_int *, u_int *, int);
+	     u_int *, u_int *, u_int *, u_int *, int);
 void	 recalculate_size(struct window *);
 void	 recalculate_sizes(void);
 
@@ -2400,7 +2470,7 @@ void		 winlink_stack_remove(struct winlink_stack *, struct winlink *);
 struct window	*window_find_by_id_str(const char *);
 struct window	*window_find_by_id(u_int);
 void		 window_update_activity(struct window *);
-struct window	*window_create(u_int, u_int);
+struct window	*window_create(u_int, u_int, u_int, u_int);
 void		 window_pane_set_event(struct window_pane *);
 struct window_pane *window_get_active_at(struct window *, u_int, u_int);
 struct window_pane *window_find_string(struct window *, const char *);
@@ -2411,7 +2481,8 @@ void		 window_redraw_active_switch(struct window *,
 		     struct window_pane *);
 struct window_pane *window_add_pane(struct window *, struct window_pane *,
 		     u_int, int);
-void		 window_resize(struct window *, u_int, u_int);
+void		 window_resize(struct window *, u_int, u_int, int, int);
+void		 window_pane_send_resize(struct window_pane *, int);
 int		 window_zoom(struct window_pane *);
 int		 window_unzoom(struct window *);
 int		 window_push_zoom(struct window *, int);
@@ -2564,9 +2635,8 @@ char	*default_window_name(struct window *);
 char	*parse_window_name(const char *);
 
 /* control.c */
-void	control_callback(struct client *, int, void *);
+void	control_start(struct client *);
 void printflike(2, 3) control_write(struct client *, const char *, ...);
-void	control_write_buffer(struct client *, struct evbuffer *);
 
 /* control-notify.c */
 void	control_notify_input(struct client *, struct window_pane *,

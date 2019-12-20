@@ -1,4 +1,4 @@
-#	$OpenBSD: principals-command.sh,v 1.8 2019/11/01 01:55:41 djm Exp $
+#	$OpenBSD: principals-command.sh,v 1.11 2019/12/16 02:39:05 djm Exp $
 #	Placed in the Public Domain.
 
 tid="authorized principals command"
@@ -10,7 +10,7 @@ if [ -z "$SUDO" -a ! -w /var/run ]; then
 	fatal "need SUDO to create file in /var/run, test won't work without"
 fi
 
-case "`${SSH} -Q key-plain | grep -v ^sk-`" in
+case "$SSH_KEYTYPES" in
 	*ssh-rsa*)	userkeytype=rsa ;;
 	*)		userkeytype=ed25519 ;;
 esac
@@ -53,7 +53,7 @@ test $? -eq 0 || fatal "couldn't prepare principals command"
 $SUDO chmod 0755 "$PRINCIPALS_COMMAND"
 
 # Test explicitly-specified principals
-for privsep in yes sandbox ; do
+for privsep in yes ; do
 	_prefix="privsep $privsep"
 
 	# Setup for AuthorizedPrincipalsCommand
