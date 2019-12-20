@@ -1,4 +1,4 @@
-/*	$OpenBSD: mft.c,v 1.7 2019/08/13 13:27:26 claudio Exp $ */
+/*	$OpenBSD: mft.c,v 1.10 2019/11/29 05:05:46 benno Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -35,49 +35,58 @@ struct	parse {
 	struct mft	*res; /* result object */
 };
 
-/*
- * Convert from the ASN.1 generalised time to a time_t.
- * Return the time.
- * This is a stupid requirement due to using ASN1_GENERALIZEDTIME
- * instead of the native ASN1_TIME functions for comparing time.
- */
-static time_t
-gentime2time(struct parse *p, const ASN1_GENERALIZEDTIME *tp)
+static const char *
+gentime2str(const ASN1_GENERALIZEDTIME *time)
 {
+	static char	buf[64];
 	BIO		*mem;
-	char		*pp;
-	char		 buf[64];
-	long		 len;
-	struct tm	 tm;
-	time_t		 t;
 
 	if ((mem = BIO_new(BIO_s_mem())) == NULL)
 		cryptoerrx("BIO_new");
-	if (!ASN1_GENERALIZEDTIME_print(mem, tp))
+	if (!ASN1_GENERALIZEDTIME_print(mem, time))
 		cryptoerrx("ASN1_GENERALIZEDTIME_print");
+	if (BIO_gets(mem, buf, sizeof(buf)) < 0)
+		cryptoerrx("BIO_gets");
 
-	/*
-	 * The manpage says nothing about being NUL terminated and
-	 * strptime(3) needs a string.
-	 * So convert into a static buffer of decent size and NUL
-	 * terminate in that way.
-	 */
-
-	len = BIO_get_mem_data(mem, &pp);
-	if (len < 0 || (size_t)len > sizeof(buf) - 1)
-		errx(EXIT_FAILURE, "BIO_get_mem_data");
-
-	memcpy(buf, pp, len);
-	buf[len] = '\0';
 	BIO_free(mem);
+	return buf;
+}
 
-	memset(&tm, 0, sizeof(struct tm));
-	if (strptime(buf, "%b %d %T %Y %Z", &tm) == NULL)
-		errx(EXIT_FAILURE, "%s: strptime", buf);
-	if ((t = mktime(&tm)) == -1)
-		errx(EXIT_FAILURE, "%s: mktime", buf);
+/*
+ * Validate and verify the time validity of the mft.
+ * Returns 1 if all is good, 0 if mft is stale, any other case -1.
+ * XXX should use ASN1_time_tm_cmp() once libressl is used.
+ */
+static time_t
+check_validity(const ASN1_GENERALIZEDTIME *from,
+    const ASN1_GENERALIZEDTIME *until, const char *fn, int force)
+{
+	time_t now = time(NULL);
 
-	return t;
+	if (!ASN1_GENERALIZEDTIME_check(from) ||
+	    !ASN1_GENERALIZEDTIME_check(until)) {
+		warnx("%s: embedded time format invalid", fn);
+		return -1;
+	}
+	/* check that until is not before from */
+	if (ASN1_STRING_cmp(until, from) < 0) {
+		warnx("%s: bad update interval", fn);
+		return -1;
+	}
+	/* check that now is not before from */
+	if (X509_cmp_time(from, &now) > 0) {
+		warnx("%s: mft not yet valid %s", fn, gentime2str(from));
+		return -1;
+	}
+	/* check that now is not after until */
+	if (X509_cmp_time(until, &now) < 0) {
+		warnx("%s: mft expired on %s%s", fn, gentime2str(until),
+		    force ? " (ignoring)" : "");
+		if (!force)
+			return 0;
+	}
+
+	return 1;
 }
 
 /*
@@ -87,7 +96,7 @@ gentime2time(struct parse *p, const ASN1_GENERALIZEDTIME *tp)
 static int
 mft_parse_filehash(struct parse *p, const ASN1_OCTET_STRING *os)
 {
-	const ASN1_SEQUENCE_ANY *seq;
+	ASN1_SEQUENCE_ANY	*seq;
 	const ASN1_TYPE		*file, *hash;
 	char			*fn = NULL;
 	const unsigned char	*d = os->data;
@@ -118,7 +127,7 @@ mft_parse_filehash(struct parse *p, const ASN1_OCTET_STRING *os)
 	fn = strndup((const char *)file->value.ia5string->data,
 	    file->value.ia5string->length);
 	if (fn == NULL)
-		err(EXIT_FAILURE, NULL);
+		err(1, NULL);
 
 	/*
 	 * Make sure we're just a pathname and either an ROA or CER.
@@ -168,7 +177,7 @@ mft_parse_filehash(struct parse *p, const ASN1_OCTET_STRING *os)
 	p->res->files = reallocarray(p->res->files, p->res->filesz + 1,
 	    sizeof(struct mftfile));
 	if (p->res->files == NULL)
-		err(EXIT_FAILURE, NULL);
+		err(1, NULL);
 
 	fent = &p->res->files[p->res->filesz++];
 	memset(fent, 0, sizeof(struct mftfile));
@@ -229,9 +238,8 @@ mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p, int forc
 {
 	ASN1_SEQUENCE_ANY	*seq;
 	const ASN1_TYPE		*t;
+	const ASN1_GENERALIZEDTIME *from, *until;
 	int			 i, rc = -1;
-	time_t			 this, next, now = time(NULL);
-	char			 buf[64];
 
 	if ((seq = d2i_ASN1_SEQUENCE_ANY(NULL, &d, dsz)) == NULL) {
 		cryptowarnx("%s: RFC 6486 section 4.2: Manifest: "
@@ -289,7 +297,7 @@ mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p, int forc
 		    p->fn, ASN1_tag2str(t->type), t->type);
 		goto out;
 	}
-	this = gentime2time(p, t->value.generalizedtime);
+	from = t->value.generalizedtime;
 
 	t = sk_ASN1_TYPE_value(seq, i++);
 	if (t->type != V_ASN1_GENERALIZEDTIME) {
@@ -298,26 +306,11 @@ mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p, int forc
 		    p->fn, ASN1_tag2str(t->type), t->type);
 		goto out;
 	}
-	next = gentime2time(p, t->value.generalizedtime);
+	until = t->value.generalizedtime;
 
-	if (this >= next) {
-		warnx("%s: bad update interval", p->fn);
+	rc = check_validity(from, until, p->fn, force);
+	if (rc != 1)
 		goto out;
-	} else if (now < this) {
-		warnx("%s: before date interval (clock drift?)", p->fn);
-		goto out;
-	} else if (now >= next) {
-		ctime_r(&next, buf);
-		buf[strlen(buf) - 1] = '\0';
-		if (!force) {
-			if (verbose > 0)
-				warnx("%s: stale: expired %s", p->fn, buf);
-			rc = 0;
-			goto out;
-		}
-		if (verbose > 0)
-			warnx("%s: stale: expired %s (ignoring)", p->fn, buf);
-	}
 
 	/* File list algorithm. */
 
@@ -377,9 +370,9 @@ mft_parse(X509 **x509, const char *fn, int force)
 	assert(*x509 != NULL);
 
 	if ((p.res = calloc(1, sizeof(struct mft))) == NULL)
-		err(EXIT_FAILURE, NULL);
+		err(1, NULL);
 	if ((p.res->file = strdup(fn)) == NULL)
-		err(EXIT_FAILURE, NULL);
+		err(1, NULL);
 	if (!x509_get_ski_aki(*x509, fn, &p.res->ski, &p.res->aki))
 		goto out;
 
@@ -475,14 +468,14 @@ mft_read(int fd)
 	size_t		 i;
 
 	if ((p = calloc(1, sizeof(struct mft))) == NULL)
-		err(EXIT_FAILURE, NULL);
+		err(1, NULL);
 
 	io_simple_read(fd, &p->stale, sizeof(int));
 	io_str_read(fd, &p->file);
 	io_simple_read(fd, &p->filesz, sizeof(size_t));
 
 	if ((p->files = calloc(p->filesz, sizeof(struct mftfile))) == NULL)
-		err(EXIT_FAILURE, NULL);
+		err(1, NULL);
 
 	for (i = 0; i < p->filesz; i++) {
 		io_str_read(fd, &p->files[i].file);

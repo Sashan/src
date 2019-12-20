@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_exit.c,v 1.178 2019/06/21 09:39:48 visa Exp $	*/
+/*	$OpenBSD: kern_exit.c,v 1.182 2019/12/19 17:40:10 mpi Exp $	*/
 /*	$NetBSD: kern_exit.c,v 1.39 1996/04/22 01:38:25 christos Exp $	*/
 
 /*
@@ -95,7 +95,7 @@ sys_exit(struct proc *p, void *v, register_t *retval)
 		syscallarg(int) rval;
 	} */ *uap = v;
 
-	exit1(p, W_EXITCODE(SCARG(uap, rval), 0), EXIT_NORMAL);
+	exit1(p, SCARG(uap, rval), 0, EXIT_NORMAL);
 	/* NOTREACHED */
 	return (0);
 }
@@ -112,7 +112,7 @@ sys___threxit(struct proc *p, void *v, register_t *retval)
 		if (copyout(&zero, SCARG(uap, notdead), sizeof(zero)))
 			psignal(p, SIGSEGV);
 	}
-	exit1(p, 0, EXIT_THREAD);
+	exit1(p, 0, 0, EXIT_THREAD);
 
 	return (0);
 }
@@ -123,7 +123,7 @@ sys___threxit(struct proc *p, void *v, register_t *retval)
  * status and rusage for wait().  Check for child processes and orphan them.
  */
 void
-exit1(struct proc *p, int rv, int flags)
+exit1(struct proc *p, int xexit, int xsig, int flags)
 {
 	struct process *pr, *qr, *nqr;
 	struct rusage *rup;
@@ -145,11 +145,11 @@ exit1(struct proc *p, int rv, int flags)
 
 	if (flags == EXIT_NORMAL) {
 		if (pr->ps_pid == 1)
-			panic("init died (signal %d, exit %d)",
-			    WTERMSIG(rv), WEXITSTATUS(rv));
+			panic("init died (signal %d, exit %d)", xsig, xexit);
 
 		atomic_setbits_int(&pr->ps_flags, PS_EXITING);
-		pr->ps_mainproc->p_xstat = rv;
+		pr->ps_xexit = xexit;
+		pr->ps_xsig  = xsig;
 
 		/*
 		 * If parent is waiting for us to exit or exec, PS_PPWAIT
@@ -168,7 +168,7 @@ exit1(struct proc *p, int rv, int flags)
 	if ((p->p_flag & P_THREAD) == 0) {
 		/* main thread gotta wait because it has the pid, et al */
 		while (pr->ps_refcnt > 1)
-			tsleep(&pr->ps_threads, PWAIT, "thrdeath", 0);
+			tsleep_nsec(&pr->ps_threads, PWAIT, "thrdeath", INFSLP);
 		if (pr->ps_flags & PS_PROFIL)
 			stopprofclock(pr);
 	}
@@ -419,7 +419,8 @@ reaper(void *arg)
 	for (;;) {
 		mtx_enter(&deadproc_mutex);
 		while ((p = LIST_FIRST(&deadproc)) == NULL)
-			msleep(&deadproc, &deadproc_mutex, PVM, "reaper", 0);
+			msleep_nsec(&deadproc, &deadproc_mutex, PVM, "reaper",
+			    INFSLP);
 
 		/* Remove us from the deadproc list. */
 		LIST_REMOVE(p, p_hash);
@@ -521,7 +522,8 @@ loop:
 			retval[0] = pr->ps_pid;
 
 			if (statusp != NULL)
-				*statusp = p->p_xstat;	/* convert to int */
+				*statusp = W_EXITCODE(pr->ps_xexit,
+				    pr->ps_xsig);
 			if (rusage != NULL)
 				memcpy(rusage, pr->ps_ru, sizeof(*rusage));
 			proc_finish_wait(q, p);
@@ -537,7 +539,7 @@ loop:
 			retval[0] = pr->ps_pid;
 
 			if (statusp != NULL)
-				*statusp = W_STOPCODE(pr->ps_single->p_xstat);
+				*statusp = W_STOPCODE(pr->ps_xsig);
 			if (rusage != NULL)
 				memset(rusage, 0, sizeof(*rusage));
 			return (0);
@@ -551,7 +553,7 @@ loop:
 			retval[0] = pr->ps_pid;
 
 			if (statusp != NULL)
-				*statusp = W_STOPCODE(p->p_xstat);
+				*statusp = W_STOPCODE(pr->ps_xsig);
 			if (rusage != NULL)
 				memset(rusage, 0, sizeof(*rusage));
 			return (0);
@@ -573,7 +575,7 @@ loop:
 		retval[0] = 0;
 		return (0);
 	}
-	if ((error = tsleep(q->p_p, PWAIT | PCATCH, "wait", 0)) != 0)
+	if ((error = tsleep_nsec(q->p_p, PWAIT | PCATCH, "wait", INFSLP)) != 0)
 		return (error);
 	goto loop;
 }
@@ -597,7 +599,6 @@ proc_finish_wait(struct proc *waiter, struct proc *p)
 		wakeup(tr);
 	} else {
 		scheduler_wait_hook(waiter, p);
-		p->p_xstat = 0;
 		rup = &waiter->p_p->ps_cru;
 		ruadd(rup, pr->ps_ru);
 		LIST_REMOVE(pr, ps_list);	/* off zombprocess */

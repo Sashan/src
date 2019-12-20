@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: strerror.c,v 1.4.18.2 2005/04/29 00:17:08 marka Exp $ */
+/* $Id: strerror.c,v 1.3 2019/12/17 01:46:37 sthen Exp $ */
 
 /*! \file */
 
@@ -47,7 +46,7 @@ void
 isc__strerror(int num, char *buf, size_t size) {
 #ifdef HAVE_STRERROR
 	char *msg;
-	unsigned int unum = num;
+	unsigned int unum = (unsigned int)num;
 	static isc_once_t once = ISC_ONCE_INIT;
 
 	REQUIRE(buf != NULL);
@@ -62,7 +61,7 @@ isc__strerror(int num, char *buf, size_t size) {
 		snprintf(buf, size, "Unknown error: %u", unum);
 	UNLOCK(&isc_strerror_lock);
 #else
-	unsigned int unum = num;
+	unsigned int unum = (unsigned int)num;
 
 	REQUIRE(buf != NULL);
 

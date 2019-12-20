@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_exec.c,v 1.208 2019/08/02 02:17:35 cheloha Exp $	*/
+/*	$OpenBSD: kern_exec.c,v 1.212 2019/12/11 07:30:09 guenther Exp $	*/
 /*	$NetBSD: kern_exec.c,v 1.75 1996/02/09 18:59:28 christos Exp $	*/
 
 /*-
@@ -125,10 +125,6 @@ check_exec(struct proc *p, struct exec_package *epp)
 	epp->ep_vp = vp = ndp->ni_vp;
 
 	/* check for regular file */
-	if (vp->v_type == VDIR) {
-		error = EISDIR;
-		goto bad1;
-	}
 	if (vp->v_type != VREG) {
 		error = EACCES;
 		goto bad1;
@@ -749,8 +745,7 @@ exec_abort:
 	 * get rid of the (new) address space we have created, if any, get rid
 	 * of our namei data and vnode, and exit noting failure
 	 */
-	uvm_deallocate(&vm->vm_map, VM_MIN_ADDRESS,
-		VM_MAXUSER_ADDRESS - VM_MIN_ADDRESS);
+	uvm_unmap(&vm->vm_map, VM_MIN_ADDRESS, VM_MAXUSER_ADDRESS);
 	if (pack.ep_interp != NULL)
 		pool_put(&namei_pool, pack.ep_interp);
 	if (pack.ep_emul_arg != NULL)
@@ -761,7 +756,7 @@ exec_abort:
 
 free_pack_abort:
 	free(pack.ep_hdr, M_EXEC, pack.ep_hdrlen);
-	exit1(p, W_EXITCODE(0, SIGABRT), EXIT_NORMAL);
+	exit1(p, 0, SIGABRT, EXIT_NORMAL);
 
 	/* NOTREACHED */
 	atomic_clearbits_int(&pr->ps_flags, PS_INEXEC);
@@ -857,7 +852,7 @@ exec_sigcode_map(struct process *pr, struct emul *e)
 	if (uvm_map(&pr->ps_vmspace->vm_map, &pr->ps_sigcode, round_page(sz),
 	    e->e_sigobject, 0, 0, UVM_MAPFLAG(PROT_READ | PROT_EXEC,
 	    PROT_READ | PROT_WRITE | PROT_EXEC, MAP_INHERIT_COPY,
-	    MADV_RANDOM, UVM_FLAG_COPYONW))) {
+	    MADV_RANDOM, UVM_FLAG_COPYONW | UVM_FLAG_SYSCALL))) {
 		uao_detach(e->e_sigobject);
 		return (ENOMEM);
 	}

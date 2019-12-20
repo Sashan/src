@@ -1,4 +1,4 @@
-/*	$OpenBSD: proc.h,v 1.273 2019/08/02 02:17:35 cheloha Exp $	*/
+/*	$OpenBSD: proc.h,v 1.283 2019/12/11 07:30:09 guenther Exp $	*/
 /*	$NetBSD: proc.h,v 1.44 1996/04/22 01:23:21 christos Exp $	*/
 
 /*-
@@ -166,7 +166,7 @@ struct unveil;
 struct process {
 	/*
 	 * ps_mainproc is the original thread in the process.
-	 * It's only still special for the handling of p_xstat and
+	 * It's only still special for the handling of
 	 * some signal and ptrace behaviors that need to be fixed.
 	 */
 	struct	proc *ps_mainproc;
@@ -204,6 +204,9 @@ struct process {
 	int	ps_traceflag;		/* Kernel trace points. */
 	struct	vnode *ps_tracevp;	/* Trace to vnode. */
 	struct	ucred *ps_tracecred;	/* Creds for writing trace */
+
+	u_int	ps_xexit;		/* Exit status for wait */
+	int	ps_xsig;		/* Stopping or killing signal */
 
 	pid_t	ps_oppid;	 	/* Save parent pid during ptrace. */
 	int	ps_ptmask;		/* Ptrace event mask */
@@ -263,7 +266,7 @@ struct process {
 #define ps_endcopy	ps_refcnt
 	int	ps_refcnt;		/* Number of references. */
 
-	struct	timespec ps_start;	/* starting time. */
+	struct	timespec ps_start;	/* starting uptime. */
 	struct	timeout ps_realit_to;	/* real-time itimer trampoline. */
 };
 
@@ -321,6 +324,7 @@ struct p_inentry {
  *	I	immutable after creation
  *	s	scheduler lock
  *	l	read only reference, see lim_read_enter()
+ *	o	owned (read/modified only) by this thread
  */
 struct proc {
 	TAILQ_ENTRY(proc) p_runq;	/* [s] current run/sleep queue */
@@ -335,9 +339,8 @@ struct proc {
 	/* substructures: */
 	struct	filedesc *p_fd;		/* copy of p_p->ps_fd */
 	struct	vmspace *p_vmspace;	/* [I] copy of p_p->ps_vmspace */
-	struct	p_inentry p_spinentry;
-	struct	p_inentry p_pcinentry;
-	struct	plimit	*p_limit;	/* [l] read ref. of p_p->ps_limit */
+	struct	p_inentry p_spinentry;	/* [o] cache for SP check */
+	struct	p_inentry p_pcinentry;	/* [o] cache for PC check */
 
 	int	p_flag;			/* P_* flags. */
 	u_char	p_spare;		/* unused */
@@ -352,10 +355,7 @@ struct proc {
 #define	p_startzero	p_dupfd
 	int	p_dupfd;	 /* Sideways return value from filedescopen. XXX */
 
-	long 	p_thrslpid;	/* for thrsleep syscall */
-
 	/* scheduling */
-	u_int	p_estcpu;		/* [s] Time averaged val of p_cpticks */
 	int	p_cpticks;	 /* Ticks of cpu time. */
 	const volatile void *p_wchan;	/* [s] Sleep address. */
 	struct	timeout p_sleep_to;/* timeout for tsleep() */
@@ -367,9 +367,15 @@ struct proc {
 	u_int	p_iticks;		/* Statclock hits processing intr. */
 	struct	cpu_info * volatile p_cpu; /* [s] CPU we're running on. */
 
+	long 	p_thrslpid;		/* for thrsleep syscall */
+
 	struct	rusage p_ru;		/* Statistics */
 	struct	tusage p_tu;		/* accumulated times. */
 	struct	timespec p_rtime;	/* Real time. */
+
+	struct	plimit	*p_limit;	/* [l] read ref. of p_p->ps_limit */
+	struct	kcov_dev *p_kd;		/* kcov device handle */
+	struct	lock_list_entry *p_sleeplocks;	/* WITNESS lock tracking */ 
 
 	int	 p_siglist;		/* Signals arrived but not delivered. */
 
@@ -382,6 +388,7 @@ struct proc {
 
 	u_char	p_priority;	/* [s] Process priority. */
 	u_char	p_usrpri;	/* [s] User-prio based on p_estcpu & ps_nice. */
+	u_int	p_estcpu;		/* [s] Time averaged val of p_cpticks */
 	int	p_pledge_syscall;	/* Cache of current syscall */
 
 	struct	ucred *p_ucred;		/* cached credentials */
@@ -575,7 +582,7 @@ void	setrunnable(struct proc *);
 void	endtsleep(void *);
 void	unsleep(struct proc *);
 void	reaper(void *);
-void	exit1(struct proc *, int, int);
+void	exit1(struct proc *, int, int, int);
 void	exit2(struct proc *);
 int	dowait4(struct proc *, pid_t, int *, int, struct rusage *,
 	    register_t *);
@@ -620,7 +627,9 @@ struct sleep_state {
 	int sls_s;
 	int sls_catch;
 	int sls_do_sleep;
+	int sls_locked;
 	int sls_sig;
+	int sls_timeout;
 };
 
 struct cond {

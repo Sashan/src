@@ -1,4 +1,4 @@
-.\"     $OpenBSD: ldomctl.8,v 1.13 2019/07/27 13:59:03 jmc Exp $
+.\"     $OpenBSD: ldomctl.8,v 1.20 2019/12/06 23:01:03 kn Exp $
 .\"
 .\" Copyright (c) 2012 Mark Kettenis <kettenis@openbsd.org>
 .\"
@@ -14,7 +14,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: July 27 2019 $
+.Dd $Mdocdate: December 6 2019 $
 .Dt LDOMCTL 8 sparc64
 .Os
 .Sh NAME
@@ -34,6 +34,20 @@ information about domains running on the system.
 .Pp
 The following commands are available:
 .Bl -tag -width Ds
+.It Cm create-vdisk Fl s Ar size Ar file
+Create a virtual disk image with the specified
+.Ar file
+path and
+.Ar size ,
+in bytes.
+.Ar size
+can be specified with a human-readable scale, using the format described in
+.Xr scan_scaled 3 ,
+e.g. 512M.
+.It Cm console Ar domain
+Using
+.Xr cu 1
+connect to the console of the guest domain.
 .It Cm delete Ar configuration
 Delete the specified configuration from non-volatile storage.
 .It Cm download Ar directory
@@ -60,6 +74,8 @@ List configurations stored in non-volatile storage.
 Indicate the currently running configuration,
 and the configuration which will be used next
 (after rebooting the primary domain) if it differs from the currently running one.
+.It Cm list-io
+List available PCIe devices.
 .It Cm panic Ar domain
 Panic a guest domain.
 The exact behaviour of this command depends on the OS running in the domain.
@@ -113,8 +129,8 @@ openbsd [next]
 .Pp
 Create a virtual disk image for each guest domain:
 .Bd -literal -offset indent
-# dd if=/dev/zero of=/home/puffy/vdisk0 bs=1m count=8192
-# dd if=/dev/zero of=/home/salmah/vdisk0 bs=1m count=8192
+# ldomctl create-vdisk -s 8G /home/puffy/vdisk0
+# ldomctl create-vdisk -s 8G /home/salmah/vdisk0
 .Ed
 .Pp
 The minirootfs install media can be used to boot guest domains:
@@ -123,18 +139,22 @@ The minirootfs install media can be used to boot guest domains:
 # cp miniroot56.fs /home/salmah/vdisk1
 .Ed
 .Pp
-Enable
-.Xr ldomd 8
-by adding the following
-to
-.Pa /etc/rc.conf.local :
+To have
+.Nm
+enabled at boot time, use
+.Dq rcctl enable ldomd ,
+which sets
 .Pp
-.Dl ldomd_flags=
+.Dl ldomd_flags=\(dq\(dq
 .Pp
-Halt the primary domain and reset the machine from ALOM:
+in
+.Xr rc.conf.local 8 .
+.Pp
+Halt the primary domain and reset the hardware:
 .Bd -literal -offset indent
 # halt
-sc> reset -c
+sc> reset -c	# ALOM
+-> reset /SYS	# ILOM
 .Ed
 .Pp
 The machine will now reset and boot into the new configuration.
@@ -142,9 +162,9 @@ The primary domain should have less CPUs and memory, since they
 are now assigned to the guest domains:
 .Bd -literal -offset indent
 # ldomctl status
-primary      running      OpenBSD running                   1%
-puffy        running      OpenBoot Primary Boot Loader      8%
-salmah       running      OpenBoot Primary Boot Loader     12%
+primary     -         running     OpenBSD running                1%
+puffy       ttyV0     running     OpenBoot Primary Boot Loader   8%
+salmah      ttyV1     running     OpenBoot Primary Boot Loader  12%
 .Ed
 .Pp
 Configure the
@@ -160,7 +180,7 @@ This example bridges guest domains into the physical network:
 .Pp
 Access the console of the first domain and boot it:
 .Bd -literal -offset indent
-# cu -l ttyV0
+# ldomctl console puffy
 ok boot disk1
 .Ed
 .Sh SEE ALSO

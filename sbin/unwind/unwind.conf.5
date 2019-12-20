@@ -1,4 +1,4 @@
-.\"	$OpenBSD: unwind.conf.5,v 1.14 2019/05/10 14:10:38 florian Exp $
+.\"	$OpenBSD: unwind.conf.5,v 1.23 2019/12/08 09:47:50 florian Exp $
 .\"
 .\" Copyright (c) 2018 Florian Obser <florian@openbsd.org>
 .\" Copyright (c) 2005 Esben Norby <norby@openbsd.org>
@@ -18,7 +18,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: May 10 2019 $
+.Dd $Mdocdate: December 8 2019 $
 .Dt UNWIND.CONF 5
 .Os
 .Sh NAME
@@ -63,51 +63,15 @@ forwarder { $fwd1 $fwd2 }
 .Ed
 .Sh GLOBAL CONFIGURATION
 .Bl -tag -width Ds
-.It Ic block list Ar file
+.It Ic block list Ar file Op Cm log
 A file containing domains to block, one per line.
 If a domain from this list is queried
 .Nm unwind
 answers with a return code of
 .Cm refused .
-.It Ic captive portal Brq ...
-.Nm unwind
-can detect when it is running behind a
-.Dq captive portal
-by sending an HTTP request and checking the response against the
-configured expected response.
-The check is triggered when
-.Xr dhclient 8
-reports new nameservers.
-If the response does not match,
-.Nm unwind
-uses the DHCP provided nameservers and periodically re-checks if the user
-passed the captive portal.
-.Bl -tag -width Ds
-.It Ic auto Op Cm yes | no
-When
-.Ic auto
-is set to
-.Cm yes
-.Nm unwind
-automatically triggers a captive portal check
-when the network is changed.
-When set to
-.Cm no
-a captive portal check can be triggered by
-.Xr unwindctl 8 .
-The default is
-.Cm yes .
-.It Ic expected response Ar response
-The body of the HTTP response is compared to
-.Ar response .
-The default is the empty string.
-.It Ic expected status Ar status
-The expected HTTP status code.
-The default is 200.
-.It Ic url Ar URL
-URL to send HTTP queries to.
-This parameter is required.
-.El
+With
+.Cm log
+blocked queries are logged.
 .It Ic forwarder Brq Ar address Oo Ic port Ar number Oc Oo Oo Ic authentication name Ar name Oc Ic DoT Oc ...
 A list of addresses of DNS name servers to forward queries to.
 .Ic port
@@ -122,32 +86,54 @@ is 853.
 .Ar name
 validates the certificate of the DNS over TLS server.
 .It Ic preference Brq Ar type ...
-A list of DNS name server types to specify the preference in which
-name servers are picked.
+A list of DNS name server types to specify the order in which
+name servers are picked when measured round-trip time medians are equal.
+Additionally, the first mentioned type gets a time bonus.
 Validating name servers are always picked over non-validating name servers.
 DNS name server types are:
 .Pp
 .Bl -tag -width "forwarder" -compact
+.It Ic stub
+Name servers learned via DHCP, queried using the libc functions.
+See
+.Xr asr_run 3 .
+Will never validate.
+Useful when running behind broken middle boxes that do not like edns0.
 .It Ic dhcp
-Name servers learned via DHCP.
+Name servers learned via DHCP or SLAAC.
+.It Ic oDoT-dhcp
+Name servers learned via DHCP or SLAAC.
+.Nm unwind
+tries to opportunistically use DNS over TLS.
 .It Ic DoT
 DNS over TLS name servers configured in
 .Nm .
 .It Ic forwarder
 Name servers configured in
 .Nm .
+.It Ic oDoT-forwarder
+Name servers configured in
+.Nm .
+.Nm unwind
+tries to opportunistically use DNS over TLS.
 .It Ic recursor
 .Nm unwind
 itself recursively resolves names.
 .El
 .Pp
 The default preference is
-.Ic DoT forwarder recursor dhcp .
+.Ic DoT forwarder recursor dhcp stub .
+.It Ic force Oo Cm accept bogus Oc Ar type Brq Ar name ...
+Force resolving of
+.Ar name
+and its subdomains by the given resolver
+.Ar type .
+If
+.Cm accept bogus
+is specified validation is not enforced.
 .El
 .Sh FILES
-.Bl -tag -width "/etc/examples/unwind.conf" -compact
-.It Pa /etc/examples/unwind.conf
-Example configuration file.
+.Bl -tag -width "/etc/unwind.conf" -compact
 .It Pa /etc/unwind.conf
 The default
 .Xr unwind 8

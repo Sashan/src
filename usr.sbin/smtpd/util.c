@@ -1,4 +1,4 @@
-/*	$OpenBSD: util.c,v 1.144 2019/08/10 15:46:22 gilles Exp $	*/
+/*	$OpenBSD: util.c,v 1.150 2019/10/03 04:49:12 gilles Exp $	*/
 
 /*
  * Copyright (c) 2000,2001 Markus Friedl.  All rights reserved.
@@ -182,65 +182,6 @@ bsnprintf(char *str, size_t size, const char *format, ...)
 	return 1;
 }
 
-
-static int
-mkdirs_component(char *path, mode_t mode)
-{
-	struct stat	sb;
-
-	if (stat(path, &sb) == -1) {
-		if (errno != ENOENT)
-			return 0;
-		if (mkdir(path, mode | S_IWUSR | S_IXUSR) == -1)
-			return 0;
-	}
-	else if (!S_ISDIR(sb.st_mode))
-		return 0;
-
-	return 1;
-}
-
-int
-mkdirs(char *path, mode_t mode)
-{
-	char	 buf[PATH_MAX];
-	int	 i = 0;
-	int	 done = 0;
-	char	*p;
-
-	/* absolute path required */
-	if (*path != '/')
-		return 0;
-
-	/* make sure we don't exceed PATH_MAX */
-	if (strlen(path) >= sizeof buf)
-		return 0;
-
-	memset(buf, 0, sizeof buf);
-	for (p = path; *p; p++) {
-		if (*p == '/') {
-			if (buf[0] != '\0')
-				if (!mkdirs_component(buf, mode))
-					return 0;
-			while (*p == '/')
-				p++;
-			buf[i++] = '/';
-			buf[i++] = *p;
-			if (*p == '\0' && ++done)
-				break;
-			continue;
-		}
-		buf[i++] = *p;
-	}
-	if (!done)
-		if (!mkdirs_component(buf, mode))
-			return 0;
-
-	if (chmod(path, mode) == -1)
-		return 0;
-
-	return 1;
-}
 
 int
 ckdir(const char *path, mode_t mode, uid_t owner, gid_t group, int create)
@@ -548,6 +489,46 @@ valid_domainpart(const char *s)
 	return res_hnok(s);
 }
 
+#define LABELCHR(c) ((c) == '-' || (c) == '_' || isalpha((int)(c)) || isdigit((int)(c)))
+#define LABELMAX 63
+#define DNAMEMAX 253
+
+int
+valid_domainname(const char *str)
+{
+	const char *label, *s;
+
+	/*
+	 * Expect a sequence of dot-separated labels, possibly with a trailing
+	 * dot. The empty string is rejected, as well a single dot.
+	 */
+	for (s = str; *s; s++) {
+
+		/* Start of a new label. */
+		label = s;
+		while (LABELCHR(*s))
+			s++;
+
+		/* Must have at least one char and at most LABELMAX. */
+		if (s == label || s - label > LABELMAX)
+			return 0;
+
+		/* If last label, stop here. */
+		if (*s == '\0')
+			break;
+
+		/* Expect a dot as label separator or last char. */
+		if (*s != '.')
+			return 0;
+	}
+
+	/* Must have at leat one label and no more than DNAMEMAX chars. */
+	if (s == str || s - str > DNAMEMAX)
+		return 0;
+
+	return 1;
+}
+
 int
 valid_smtp_response(const char *s)
 {
@@ -800,6 +781,7 @@ getmailname(char *hostname, size_t len)
 
 	if (strlcpy(hostname, res->ai_canonname, len) >= len) {
 		fprintf(stderr, "hostname too long");
+		freeaddrinfo(res);
 		return -1;
 	}
 
@@ -818,6 +800,26 @@ int
 base64_decode(char const *src, unsigned char *dest, size_t destsize)
 {
 	return __b64_pton(src, dest, destsize);
+}
+
+int
+base64_encode_rfc3548(unsigned char const *src, size_t srclen,
+	      char *dest, size_t destsize)
+{
+	size_t i;
+	int ret;
+
+	if ((ret = base64_encode(src, srclen, dest, destsize)) == -1)
+		return -1;
+
+	for (i = 0; i < destsize; ++i) {
+		if (dest[i] == '/')
+			dest[i] = '_';
+		else if (dest[i] == '+')
+			dest[i] = '-';
+	}
+
+	return ret;
 }
 
 void

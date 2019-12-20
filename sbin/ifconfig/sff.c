@@ -1,4 +1,4 @@
-/*	$OpenBSD: sff.c,v 1.12 2019/04/26 15:04:29 denis Exp $ */
+/*	$OpenBSD: sff.c,v 1.23 2019/10/24 18:54:10 bluhm Exp $ */
 
 /*
  * Copyright (c) 2019 David Gwynne <dlg@openbsd.org>
@@ -34,6 +34,8 @@
 #include <limits.h>
 #include <vis.h>
 
+#include "ifconfig.h"
+
 #ifndef nitems
 #define nitems(_a)	(sizeof((_a)) / sizeof((_a)[0]))
 #endif
@@ -41,6 +43,33 @@
 #ifndef ISSET
 #define ISSET(_w, _m)	((_w) & (_m))
 #endif
+
+#define SFF_THRESH_HI_ALARM	0
+#define SFF_THRESH_LO_ALARM	1
+#define SFF_THRESH_HI_WARN	2
+#define SFF_THRESH_LO_WARN	3
+#define SFF_THRESH_COUNT	4
+
+#define SFF_THRESH_REG(_i)	((_i) * 2)
+
+struct sff_thresholds {
+	 float		thresholds[SFF_THRESH_COUNT];
+};
+
+struct sff_media_map {
+	float		factor_wavelength;
+	int		scale_om1;
+	int		scale_om2;
+	int		scale_om3;
+	uint8_t		connector_type;
+	uint8_t		wavelength;
+	uint8_t		dist_smf_m;
+	uint8_t		dist_smf_km;
+	uint8_t		dist_om1;
+	uint8_t		dist_om2;
+	uint8_t		dist_om3;
+	uint8_t		dist_cu;
+};
 
 #define SFF8024_ID_UNKNOWN	0x00
 #define SFF8024_ID_GBIC		0x01
@@ -66,8 +95,8 @@
 				     /* using SFF-8665 et al */
 #define SFF8024_ID_CXP2		0x12 /* aka CXP28, or later */
 #define SFF8024_ID_CDFP		0x13 /* style 1/style 2 */
-#define SFF8024_ID_HD4X_FAN	0x14 /* shielded mini multilane HD 4X fanout */ 
-#define SFF8024_ID_HD8X_FAN	0x15 /* shielded mini multilane HD 8X fanout */ 
+#define SFF8024_ID_HD4X_FAN	0x14 /* shielded mini multilane HD 4X fanout */
+#define SFF8024_ID_HD8X_FAN	0x15 /* shielded mini multilane HD 8X fanout */
 #define SFF8024_ID_CDFP3	0x16 /* style 3 */
 #define SFF8024_ID_uQSFP	0x17 /* microQSFP */
 #define SFF8024_ID_QSFP_DD	0x18 /* QSFP-DD double density 8x */
@@ -149,7 +178,7 @@ static const char *sff8024_con_names[] = {
 	[SFF8024_CON_Cu_PIGTAIL]
 				= "DAC",
 	[SFF8024_CON_RJ45]	= "RJ45",
-	[SFF8024_CON_NO]	= "No separable connector",
+	[SFF8024_CON_NO]	= "No connector",
 	[SFF8024_CON_MXC_2x16]	= "MXC 2x16",
 };
 
@@ -196,6 +225,21 @@ static const char *sff8024_con_names[] = {
 #define SFF8472_COMPLIANCE_11_4			0x07 /* SFF-8472 Rev 11.4 */
 #define SFF8472_COMPLIANCE_12_3			0x08 /* SFF-8472 Rev 12.3 */
 
+static const struct sff_media_map sff8472_media_map = {
+	.connector_type		= SFF8472_CON,
+	.wavelength		= SFF8472_WAVELENGTH,
+	.factor_wavelength	= 1.0,
+	.dist_smf_m		= SFF8472_DIST_SMF_M,
+	.dist_smf_km		= SFF8472_DIST_SMF_KM,
+	.dist_om1		= SFF8472_DIST_OM1,
+	.scale_om1		= 10,
+	.dist_om2		= SFF8472_DIST_OM2,
+	.scale_om2		= 10,
+	.dist_om3		= SFF8472_DIST_OM3,
+	.scale_om3		= 20,
+	.dist_cu		= SFF8472_DIST_CU,
+};
+
 /*
  * page 0xa2
  */
@@ -228,6 +272,36 @@ static const char *sff8024_con_names[] = {
  * updated and maintained by SFF-8636.
  */
 
+#define SFF8436_STATUS1		1
+#define SFF8436_STATUS2		2
+#define SFF8436_STATUS2_DNR		(1 << 0) /* Data_Not_Ready */
+#define SFF8436_STATUS2_INTL		(1 << 1) /* Interrupt output state */
+#define SFF8436_STATUS2_FLAT_MEM	(1 << 2) /* Upper memory flat/paged */
+
+#define SFF8436_TEMP		22
+#define SFF8436_VCC		26
+
+#define SFF8436_CHANNELS	4	/* number of TX and RX channels */
+#define SFF8436_RX_POWER_BASE	34
+#define SFF8436_RX_POWER(_i)	(SFF8436_RX_POWER_BASE + ((_i) * 2))
+#define SFF8436_TX_BIAS_BASE	42
+#define SFF8436_TX_BIAS(_i)	(SFF8436_TX_BIAS_BASE + ((_i) * 2))
+#define SFF8436_TX_POWER_BASE	50
+#define SFF8436_TX_POWER(_i)	(SFF8436_TX_POWER_BASE + ((_i) * 2))
+
+/* Upper Page 00h */
+
+#define SFF8436_MAXCASETEMP	190	/* C */
+#define SFF8436_MAXCASETEMP_DEFAULT	70 /* if SFF8436_MAXCASETEMP is 0 */
+
+/* Upper page 03h */
+
+#define SFF8436_AW_TEMP		128
+#define SFF8436_AW_VCC		144
+#define SFF8436_AW_RX_POWER	176
+#define SFF8436_AW_TX_BIAS	184
+#define SFF8436_AW_TX_POWER	192
+
 /*
  * XFP stuff is defined by INF-8077.
  *
@@ -235,6 +309,14 @@ static const char *sff8024_con_names[] = {
  */
 
 /* SFF-8636 and INF-8077 share a layout for various strings */
+
+#define UPPER_CON			130 /* connector type */
+#define UPPER_DIST_SMF			142
+#define UPPER_DIST_OM3			143
+#define UPPER_DIST_OM2			144
+#define UPPER_DIST_OM1			145
+#define UPPER_DIST_CU			146
+#define UPPER_WAVELENGTH		186
 
 #define UPPER_VENDOR_START		148
 #define UPPER_VENDOR_END		163
@@ -248,10 +330,25 @@ static const char *sff8024_con_names[] = {
 #define UPPER_LOT_START			218
 #define UPPER_LOT_END			219
 
+static const struct sff_media_map upper_media_map = {
+	.connector_type		= UPPER_CON,
+	.wavelength		= UPPER_WAVELENGTH,
+	.factor_wavelength	= 20.0,
+	.dist_smf_m		= 0,
+	.dist_smf_km		= UPPER_DIST_SMF,
+	.dist_om1		= UPPER_DIST_OM1,
+	.scale_om1		= 1,
+	.dist_om2		= UPPER_DIST_OM1,
+	.scale_om2		= 1,
+	.dist_om3		= UPPER_DIST_OM3,
+	.scale_om3		= 2,
+	.dist_cu		= UPPER_DIST_CU,
+};
+
 static void	hexdump(const void *, size_t);
-static int	if_sff8472(int, const char *, int, const struct if_sffpage *);
-static int	if_sff8636(int, const char *, int, const struct if_sffpage *);
-static int	if_inf8077(int, const char *, int, const struct if_sffpage *);
+static int	if_sff8472(int, const struct if_sffpage *);
+static int	if_sff8636(int, const struct if_sffpage *);
+static int	if_inf8077(int, const struct if_sffpage *);
 
 static const char *
 sff_id_name(uint8_t id)
@@ -288,8 +385,7 @@ sff_con_name(uint8_t id)
 }
 
 static void
-if_sffpage_init(struct if_sffpage *sff, const char *ifname,
-    uint8_t addr, uint8_t page)
+if_sffpage_init(struct if_sffpage *sff, uint8_t addr, uint8_t page)
 {
 	memset(sff, 0, sizeof(*sff));
 
@@ -302,7 +398,7 @@ if_sffpage_init(struct if_sffpage *sff, const char *ifname,
 }
 
 static void
-if_sffpage_dump(const char *ifname, const struct if_sffpage *sff)
+if_sffpage_dump(const struct if_sffpage *sff)
 {
 	printf("%s: addr %02x", ifname, sff->sff_addr);
 	if (sff->sff_addr == IFSFF_ADDR_EEPROM)
@@ -312,25 +408,25 @@ if_sffpage_dump(const char *ifname, const struct if_sffpage *sff)
 }
 
 int
-if_sff_info(int s, const char *ifname, int dump)
+if_sff_info(int dump)
 {
 	struct if_sffpage pg0;
 	int error = 0;
 	uint8_t id, ext_id;
 
-	if_sffpage_init(&pg0, ifname, IFSFF_ADDR_EEPROM, 0);
-	if (ioctl(s, SIOCGIFSFFPAGE, (caddr_t)&pg0) == -1) {
+	if_sffpage_init(&pg0, IFSFF_ADDR_EEPROM, 0);
+	if (ioctl(sock, SIOCGIFSFFPAGE, (caddr_t)&pg0) == -1) {
 		if (errno == ENXIO) {
 			/* try 1 for XFP cos myx which can't switch pages... */
-			if_sffpage_init(&pg0, ifname, IFSFF_ADDR_EEPROM, 1);
-			if (ioctl(s, SIOCGIFSFFPAGE, (caddr_t)&pg0) == -1)
+			if_sffpage_init(&pg0, IFSFF_ADDR_EEPROM, 1);
+			if (ioctl(sock, SIOCGIFSFFPAGE, (caddr_t)&pg0) == -1)
 				return (-1);
 		} else
 			return (-1);
 	}
 
 	if (dump)
-		if_sffpage_dump(ifname, &pg0);
+		if_sffpage_dump(&pg0);
 
 	id = pg0.sff_data[0]; /* SFF8472_ID */
 
@@ -344,22 +440,22 @@ if_sff_info(int s, const char *ifname, int dump)
 		}
 		/* FALLTHROUGH */
 	case SFF8024_ID_GBIC:
-		error = if_sff8472(s, ifname, dump, &pg0);
+		error = if_sff8472(dump, &pg0);
 		break;
 	case SFF8024_ID_XFP:
 		if (pg0.sff_page != 1) {
-			if_sffpage_init(&pg0, ifname, IFSFF_ADDR_EEPROM, 1);
-			if (ioctl(s, SIOCGIFSFFPAGE, (caddr_t)&pg0) == -1)
+			if_sffpage_init(&pg0, IFSFF_ADDR_EEPROM, 1);
+			if (ioctl(sock, SIOCGIFSFFPAGE, (caddr_t)&pg0) == -1)
 				return (-1);
 			if (dump)
-				if_sffpage_dump(ifname, &pg0);
+				if_sffpage_dump(&pg0);
 		}
-		error = if_inf8077(s, ifname, dump, &pg0);
+		error = if_inf8077(dump, &pg0);
 		break;
 	case SFF8024_ID_QSFP:
 	case SFF8024_ID_QSFP_PLUS:
 	case SFF8024_ID_QSFP28:
-		error = if_sff8636(s, ifname, dump, &pg0);
+		error = if_sff8636(dump, &pg0);
 		break;
 	default:
 		printf("\n");
@@ -389,7 +485,7 @@ if_sff_ascii_print(const struct if_sffpage *sff, const char *name,
 	printf("%s", name);
 
 	for (;;) {
-		int ch = d[end];
+		ch = d[end];
 		if (!isspace(ch) && ch != '\0')
 			break;
 
@@ -480,38 +576,48 @@ if_sff_printdist(const char *type, int value, int scale)
 		    distance / 1000.0, type);
 }
 
-static int
-if_sff8472(int s, const char *ifname, int dump, const struct if_sffpage *pg0)
+static void
+if_sff_printmedia(const struct if_sffpage *pg, const struct sff_media_map *m)
 {
-	struct if_sffpage ddm;
-	uint8_t con, ddm_types;
-	int i;
+	uint8_t con;
+	unsigned int wavelength;
 
-	con = pg0->sff_data[SFF8472_CON];
+	con = pg->sff_data[m->connector_type];
 	printf("%s", sff_con_name(con));
 
-	i = if_sff_int(pg0, SFF8472_WAVELENGTH);
-	switch (i) {
+	wavelength = if_sff_uint(pg, m->wavelength);
+	switch (wavelength) {
+	case 0x0000:
+		/* not known or is unavailable */
+		break;
 	/* Copper Cable */
 	case 0x0100: /* SFF-8431 Appendix E */
 	case 0x0400: /* SFF-8431 limiting */
 	case 0x0c00: /* SFF-8431 limiting and FC-PI-4 limiting */
 		break;
 	default:
-		printf(", %.02u nm", i);
+		printf(", %.f nm", wavelength / m->factor_wavelength);
 	}
 
-	if (pg0->sff_data[SFF8472_DIST_SMF_M] > 0 &&
-	    pg0->sff_data[SFF8472_DIST_SMF_M] < 255)
-		if_sff_printdist("m SMF",
-		    pg0->sff_data[SFF8472_DIST_SMF_M], 100);
+	if (m->dist_smf_m != 0 &&
+	    pg->sff_data[m->dist_smf_m] > 0 &&
+	    pg->sff_data[m->dist_smf_m] < 255)
+		if_sff_printdist("m SMF", pg->sff_data[m->dist_smf_m], 100);
 	else
-		if_sff_printdist("km SMF",
-		    pg0->sff_data[SFF8472_DIST_SMF_KM], 1);
-	if_sff_printdist("m OM2", pg0->sff_data[SFF8472_DIST_OM2], 10);
-	if_sff_printdist("m OM1", pg0->sff_data[SFF8472_DIST_OM1], 10);
-	if_sff_printdist("m OM3", pg0->sff_data[SFF8472_DIST_OM3], 10);
-	if_sff_printdist("m", pg0->sff_data[SFF8472_DIST_CU], 1);
+		if_sff_printdist("km SMF", pg->sff_data[m->dist_smf_km], 1);
+	if_sff_printdist("m OM1", pg->sff_data[m->dist_om1], m->scale_om1);
+	if_sff_printdist("m OM2", pg->sff_data[m->dist_om2], m->scale_om2);
+	if_sff_printdist("m OM3", pg->sff_data[m->dist_om3], m->scale_om3);
+	if_sff_printdist("m", pg->sff_data[m->dist_cu], 1);
+}
+
+static int
+if_sff8472(int dump, const struct if_sffpage *pg0)
+{
+	struct if_sffpage ddm;
+	uint8_t ddm_types;
+
+	if_sff_printmedia(pg0, &sff8472_media_map);
 
 	printf("\n\tmodel: ");
 	if_sff_ascii_print(pg0, "",
@@ -530,12 +636,12 @@ if_sff8472(int s, const char *ifname, int dump, const struct if_sffpage *pg0)
 	    !ISSET(ddm_types, SFF8472_DDM_TYPE_IMPL))
 		return (0);
 
-	if_sffpage_init(&ddm, ifname, IFSFF_ADDR_DDM, 0);
-	if (ioctl(s, SIOCGIFSFFPAGE, (caddr_t)&ddm) == -1)
+	if_sffpage_init(&ddm, IFSFF_ADDR_DDM, 0);
+	if (ioctl(sock, SIOCGIFSFFPAGE, (caddr_t)&ddm) == -1)
 		return (-1);
 
 	if (dump)
-		if_sffpage_dump(ifname, &ddm);
+		if_sffpage_dump(&ddm);
 
 	if (ISSET(ddm_types, SFF8472_DDM_TYPE_CAL_EXT)) {
 		printf("\tcalibration: external "
@@ -589,6 +695,8 @@ if_sff8472(int s, const char *ifname, int dump, const struct if_sffpage *pg0)
 static void
 if_upper_strings(const struct if_sffpage *pg)
 {
+	if_sff_printmedia(pg, &upper_media_map);
+
 	printf("\n\tmodel: ");
 	if_sff_ascii_print(pg, "",
 	    UPPER_VENDOR_START, UPPER_VENDOR_END, " ");
@@ -607,7 +715,7 @@ if_upper_strings(const struct if_sffpage *pg)
 }
 
 static int
-if_inf8077(int s, const char *ifname, int dump, const struct if_sffpage *pg1)
+if_inf8077(int dump, const struct if_sffpage *pg1)
 {
 	if_upper_strings(pg1);
 
@@ -615,9 +723,152 @@ if_inf8077(int s, const char *ifname, int dump, const struct if_sffpage *pg1)
 }
 
 static int
-if_sff8636(int s, const char *ifname, int dump, const struct if_sffpage *pg0)
+if_sff8636_thresh(int dump, const struct if_sffpage *pg0)
 {
+	struct if_sffpage pg3;
+	unsigned int i;
+	struct sff_thresholds temp, vcc, tx, rx, bias;
+
+	if_sffpage_init(&pg3, IFSFF_ADDR_EEPROM, 3);
+	if (ioctl(sock, SIOCGIFSFFPAGE, (caddr_t)&pg3) == -1) {
+		if (dump)
+			warn("%s SIOCGIFSFFPAGE page 3", ifname);
+		return (-1);
+	}
+
+	if (dump)
+		if_sffpage_dump(&pg3);
+
+	if (pg3.sff_data[0x7f] != 3) { /* just in case... */
+		if (dump) {
+			warnx("%s SIOCGIFSFFPAGE: page select unsupported",
+			    ifname);
+		}
+		return (-1);
+	}
+
+	for (i = 0; i < SFF_THRESH_COUNT; i++) {
+		temp.thresholds[i] = if_sff_int(&pg3,
+		    SFF8436_AW_TEMP + SFF_THRESH_REG(i)) / SFF_TEMP_FACTOR;
+
+		vcc.thresholds[i] = if_sff_uint(&pg3,
+		    SFF8436_AW_VCC + SFF_THRESH_REG(i)) / SFF_VCC_FACTOR;
+
+		rx.thresholds[i] = if_sff_power2dbm(&pg3,
+		    SFF8436_AW_RX_POWER + SFF_THRESH_REG(i));
+
+		bias.thresholds[i] = if_sff_uint(&pg3,
+		    SFF8436_AW_TX_BIAS + SFF_THRESH_REG(i)) / SFF_BIAS_FACTOR;
+
+		tx.thresholds[i] = if_sff_power2dbm(&pg3,
+		    SFF8436_AW_TX_POWER + SFF_THRESH_REG(i));
+	}
+
+	printf("\ttemp: ");
+	if_sff_printalarm(" C", 1,
+	    if_sff_int(&pg3, SFF8436_TEMP) / SFF_TEMP_FACTOR,
+	    temp.thresholds[SFF_THRESH_HI_ALARM],
+	    temp.thresholds[SFF_THRESH_LO_ALARM],
+	    temp.thresholds[SFF_THRESH_HI_WARN],
+	    temp.thresholds[SFF_THRESH_LO_WARN]);
+	printf("\n");
+
+	printf("\tvoltage: ");
+	if_sff_printalarm(" V", 1,
+	    if_sff_uint(&pg3, SFF8436_VCC) / SFF_VCC_FACTOR,
+	    vcc.thresholds[SFF_THRESH_HI_ALARM],
+	    vcc.thresholds[SFF_THRESH_LO_ALARM],
+	    vcc.thresholds[SFF_THRESH_HI_WARN],
+	    vcc.thresholds[SFF_THRESH_LO_WARN]);
+	printf("\n");
+
+	for (i = 0; i < SFF8436_CHANNELS; i++) {
+		unsigned int channel = i + 1;
+
+		printf("\tchannel %u bias current: ", channel);
+		if_sff_printalarm(" mA", 1,
+		    if_sff_uint(&pg3, SFF8436_TX_BIAS(i)) / SFF_BIAS_FACTOR,
+		    bias.thresholds[SFF_THRESH_HI_ALARM],
+		    bias.thresholds[SFF_THRESH_LO_ALARM],
+		    bias.thresholds[SFF_THRESH_HI_WARN],
+		    bias.thresholds[SFF_THRESH_LO_WARN]);
+		printf("\n");
+
+		printf("\tchannel %u tx: ", channel);
+		if_sff_printalarm(" dBm", 1,
+		    if_sff_power2dbm(&pg3, SFF8436_TX_POWER(i)),
+		    tx.thresholds[SFF_THRESH_HI_ALARM],
+		    tx.thresholds[SFF_THRESH_LO_ALARM],
+		    tx.thresholds[SFF_THRESH_HI_WARN],
+		    tx.thresholds[SFF_THRESH_LO_WARN]);
+		printf("\n");
+
+		printf("\tchannel %u rx: ", channel);
+		if_sff_printalarm(" dBm", 1,
+		    if_sff_power2dbm(&pg3, SFF8436_RX_POWER(i)),
+		    rx.thresholds[SFF_THRESH_HI_ALARM],
+		    rx.thresholds[SFF_THRESH_LO_ALARM],
+		    rx.thresholds[SFF_THRESH_HI_WARN],
+		    rx.thresholds[SFF_THRESH_LO_WARN]);
+		printf("\n");
+	}
+
+	return (0);
+}
+
+static int
+if_sff8636(int dump, const struct if_sffpage *pg0)
+{
+	int16_t temp;
+	uint8_t maxcasetemp;
+	uint8_t flat;
+	unsigned int i;
+
 	if_upper_strings(pg0);
+
+	if (pg0->sff_data[SFF8436_STATUS2] & SFF8436_STATUS2_DNR) {
+		printf("\tmonitor data not ready\n");
+		return (0);
+	}
+
+	maxcasetemp = pg0->sff_data[SFF8436_MAXCASETEMP];
+	if (maxcasetemp == 0x00)
+		maxcasetemp = SFF8436_MAXCASETEMP_DEFAULT;
+	printf("\tmax case temp: %u C\n", maxcasetemp);
+
+	temp = if_sff_int(pg0, SFF8436_TEMP);
+	/* the temp reading look unset, assume the rest will be unset too */
+	if ((uint16_t)temp == 0 || (uint16_t)temp == 0xffffU) {
+		if (!dump)
+			return (0);
+	}
+
+	flat = pg0->sff_data[SFF8436_STATUS2] & SFF8436_STATUS2_FLAT_MEM;
+	if (!flat && if_sff8636_thresh(dump, pg0) == 0) {
+		if (!dump)
+			return (0);
+	}
+
+	printf("\t");
+	printf("temp: %.02f%s", temp / SFF_TEMP_FACTOR, " C");
+	printf(", ");
+	printf("voltage: %.02f%s",
+	    if_sff_uint(pg0, SFF8436_VCC) / SFF_VCC_FACTOR, " V");
+	printf("\n");
+
+	for (i = 0; i < SFF8436_CHANNELS; i++) {
+		printf("\t");
+		printf("channel %u: ", i + 1);
+		printf("bias current: %.02f mA",
+		    if_sff_uint(pg0, SFF8436_TX_BIAS(i)) / SFF_BIAS_FACTOR);
+		printf(", ");
+		printf("rx: %.02f dBm",
+		    if_sff_power2dbm(pg0, SFF8436_RX_POWER(i)));
+		printf(", ");
+		printf("tx: %.02f dBm",
+		    if_sff_power2dbm(pg0, SFF8436_TX_POWER(i)));
+		printf("\n");
+	}
 
 	return (0);
 }

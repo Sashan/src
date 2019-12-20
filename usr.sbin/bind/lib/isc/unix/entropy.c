@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004-2006  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 2000-2003  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: entropy.c,v 1.71.18.7 2006/12/07 04:53:03 marka Exp $ */
+/* $Id: entropy.c,v 1.8 2019/12/17 01:46:37 sthen Exp $ */
 
 /* \file unix/entropy.c
  * \brief
@@ -31,10 +30,15 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
+#ifdef HAVE_NANOSLEEP
+#include <time.h>
+#endif
 #include <unistd.h>
 
 #include <isc/platform.h>
+#include <isc/print.h>
 #include <isc/strerror.h>
+#include <isc/string.h>
 
 #ifdef ISC_PLATFORM_NEEDSYSSELECTH
 #include <sys/select.h>
@@ -153,12 +157,12 @@ get_from_usocketsource(isc_entropysource_t *source, isc_uint32_t desired) {
 				source->sources.usocket.status =
 					isc_usocketsource_ndesired;
 				goto eagain_loop;
-			}	
+			}
 			INSIST(n == 2);
 			source->sources.usocket.status =
 						isc_usocketsource_wrote;
-			/*FALLTHROUGH*/
-		
+			/* FALLTHROUGH */
+
 		case isc_usocketsource_wrote:
 			if (recvfrom(fd, buf, 1, 0, NULL, NULL) != 1) {
 				if (errno == EAGAIN) {
@@ -166,15 +170,23 @@ get_from_usocketsource(isc_entropysource_t *source, isc_uint32_t desired) {
 					 * The problem of EAGAIN (try again
 					 * later) is a major issue on HP-UX.
 					 * Solaris actually tries the recvfrom
-					 * call again, while HP-UX just dies. 
+					 * call again, while HP-UX just dies.
 					 * This code is an attempt to let the
 					 * entropy pool fill back up (at least
 					 * that's what I think the problem is.)
-					 * We go to eagain_loop because if we 
+					 * We go to eagain_loop because if we
 					 * just "break", then the "desired"
 					 * amount gets borked.
 					 */
+#ifdef HAVE_NANOSLEEP
+					struct timespec ts;
+
+					ts.tv_sec = 0;
+					ts.tv_nsec = 1000000;
+					nanosleep(&ts, NULL);
+#else
 					usleep(1000);
+#endif
 					goto eagain_loop;
 				}
 				if (errno == EWOULDBLOCK || errno == EINTR)
@@ -187,7 +199,7 @@ get_from_usocketsource(isc_entropysource_t *source, isc_uint32_t desired) {
 			source->sources.usocket.sz_to_recv = sz_to_recv;
 			if (sz_to_recv > sizeof(buf))
 				goto err;
-			/*FALLTHROUGH*/
+			/* FALLTHROUGH */
 
 		case isc_usocketsource_reading:
 			if (sz_to_recv != 0U) {
@@ -201,7 +213,7 @@ get_from_usocketsource(isc_entropysource_t *source, isc_uint32_t desired) {
 			} else
 				n = 0;
 			break;
-		
+
 		default:
 			goto err;
 		}
@@ -445,14 +457,17 @@ destroyusocketsource(isc_entropyusocketsource_t *source) {
 static isc_result_t
 make_nonblock(int fd) {
 	int ret;
-	int flags;
 	char strbuf[ISC_STRERRORSIZE];
 #ifdef USE_FIONBIO_IOCTL
 	int on = 1;
+#else
+	int flags;
+#endif
 
+#ifdef USE_FIONBIO_IOCTL
 	ret = ioctl(fd, FIONBIO, (char *)&on);
 #else
-	flags = fcntl(fd, F_GETFL);
+	flags = fcntl(fd, F_GETFL, 0);
 	flags |= PORT_NONBLOCK;
 	ret = fcntl(fd, F_SETFL, flags);
 #endif
@@ -491,7 +506,7 @@ isc_entropy_createfilesource(isc_entropy_t *ent, const char *fname) {
 		ret = isc__errno2result(errno);
 		goto errout;
 	}
-	/* 
+	/*
 	 * Solaris 2.5.1 does not have support for sockets (S_IFSOCK),
 	 * but it does return type S_IFIFO (the OS believes that
 	 * the socket is a fifo).  This may be an issue if we tell

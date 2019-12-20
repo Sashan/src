@@ -1,4 +1,4 @@
-#	$OpenBSD: GENERIC,v 1.47 2019/05/08 23:54:39 kettenis Exp $
+#	$OpenBSD: GENERIC,v 1.54 2019/12/17 13:08:56 reyk Exp $
 #
 # For further information on compiling OpenBSD kernels, see the config(8)
 # man page.
@@ -42,27 +42,34 @@ octcf0		at iobus0
 amdcf0		at iobus0
 octrng0		at iobus0
 
+octpcie*	at iobus0
+pci*		at octpcie?
 pcibus*		at iobus0
 pci*		at pcibus?
 
 ppb*		at pci?		# PCI-PCI bridges
 pci*		at ppb?
 
-cn30xxsmi*	at fdt?		# MDIO controller
+octsmi*		at fdt?		# MDIO controller
 com*		at fdt_octeon?
 octcib*		at fdt?		# Interrupt controller
 octcit*		at fdt?		# Interrupt controller v3
 octciu*		at fdt?		# Interrupt controller v1
 octgpio*	at fdt?		# GPIO controller
 octmmc*		at fdt?		# MMC host controller
+octpip*		at fdt?		# Packet input processing unit
 sdmmc*		at octmmc?	# SD/MMC bus
 
-cn30xxgmx*	at iobus? irq 48
-cnmac*		at cn30xxgmx?
+octgmx*		at octpip?
+cnmac*		at octgmx?
+
+ogxnexus*	at fdt?
+ogx*		at ogxnexus?
 
 rgephy*		at mii?
 ukphy*		at mii?
 atphy*		at mii?
+eephy*		at mii?
 brswphy*	at mii?
 brgphy*		at mii?
 
@@ -75,6 +82,9 @@ wd*		at pciide? flags 0x0000
 # AHCI controllers
 octsctl*	at fdt?
 ahci*		at octsctl?
+
+# NVMe controllers
+nvme*		at pci?
 
 # USB Controllers
 dwctwo0 	at iobus? irq 56
@@ -145,6 +155,7 @@ ucom*		at ucycom?
 uslhcom*	at uhidev?	# Silicon Labs CP2110 USB HID UART
 ucom*		at uslhcom?
 uhid*		at uhidev?	# USB generic HID support
+fido*		at uhidev?	# FIDO/U2F security key support
 upd*		at uhidev?	# USB Power Devices sensors
 aue*		at uhub?	# ADMtek AN986 Pegasus Ethernet
 atu*		at uhub?	# Atmel AT76c50x based 802.11b

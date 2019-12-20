@@ -1,4 +1,4 @@
-/*	$OpenBSD: sxiccmu.c,v 1.22 2019/02/12 21:34:11 kettenis Exp $	*/
+/*	$OpenBSD: sxiccmu.c,v 1.26 2019/09/21 15:01:26 kettenis Exp $	*/
 /*
  * Copyright (c) 2007,2009 Dale Rahn <drahn@openbsd.org>
  * Copyright (c) 2013 Artturi Alm
@@ -101,6 +101,9 @@ int	sxiccmu_a80_set_frequency(struct sxiccmu_softc *, uint32_t, uint32_t);
 uint32_t sxiccmu_h3_get_frequency(struct sxiccmu_softc *, uint32_t);
 int	sxiccmu_h3_set_frequency(struct sxiccmu_softc *, uint32_t, uint32_t);
 uint32_t sxiccmu_h3_r_get_frequency(struct sxiccmu_softc *, uint32_t);
+uint32_t sxiccmu_h6_get_frequency(struct sxiccmu_softc *, uint32_t);
+int	sxiccmu_h6_set_frequency(struct sxiccmu_softc *, uint32_t, uint32_t);
+uint32_t sxiccmu_h6_r_get_frequency(struct sxiccmu_softc *, uint32_t);
 uint32_t sxiccmu_r40_get_frequency(struct sxiccmu_softc *, uint32_t);
 int	sxiccmu_r40_set_frequency(struct sxiccmu_softc *, uint32_t, uint32_t);
 uint32_t sxiccmu_v3s_get_frequency(struct sxiccmu_softc *, uint32_t);
@@ -144,7 +147,9 @@ sxiccmu_match(struct device *parent, void *match, void *aux)
 	    OF_is_compatible(node, "allwinner,sun9i-a80-mmc-config-clk") ||
 	    OF_is_compatible(node, "allwinner,sun50i-a64-ccu") ||
 	    OF_is_compatible(node, "allwinner,sun50i-a64-r-ccu") ||
-	    OF_is_compatible(node, "allwinner,sun50i-h5-ccu"));
+	    OF_is_compatible(node, "allwinner,sun50i-h5-ccu") ||
+	    OF_is_compatible(node, "allwinner,sun50i-h6-ccu") ||
+	    OF_is_compatible(node, "allwinner,sun50i-h6-r-ccu"));
 }
 
 void
@@ -255,6 +260,22 @@ sxiccmu_attach(struct device *parent, struct device *self, void *aux)
 		sc->sc_nresets = nitems(sun50i_a64_resets);
 		sc->sc_get_frequency = sxiccmu_a64_get_frequency;
 		sc->sc_set_frequency = sxiccmu_a64_set_frequency;
+	} else if (OF_is_compatible(node, "allwinner,sun50i-h6-ccu")) {
+		KASSERT(faa->fa_nreg > 0);
+		sc->sc_gates = sun50i_h6_gates;
+		sc->sc_ngates = nitems(sun50i_h6_gates);
+		sc->sc_resets = sun50i_h6_resets;
+		sc->sc_nresets = nitems(sun50i_h6_resets);
+		sc->sc_get_frequency = sxiccmu_h6_get_frequency;
+		sc->sc_set_frequency = sxiccmu_h6_set_frequency;
+	} else if (OF_is_compatible(node, "allwinner,sun50i-h6-r-ccu")) {
+		KASSERT(faa->fa_nreg > 0);
+		sc->sc_gates = sun50i_h6_r_gates;
+		sc->sc_ngates = nitems(sun50i_h6_r_gates);
+		sc->sc_resets = sun50i_h6_r_resets;
+		sc->sc_nresets = nitems(sun50i_h6_r_resets);
+		sc->sc_get_frequency = sxiccmu_h6_r_get_frequency;
+		sc->sc_set_frequency = sxiccmu_nop_set_frequency;
 	} else {
 		for (node = OF_child(node); node; node = OF_peer(node))
 			sxiccmu_attach_clock(sc, node, faa->fa_nreg);
@@ -856,22 +877,33 @@ sxiccmu_ccu_get_frequency(void *cookie, uint32_t *cells)
 
 /* Allwinner A10/A20 */
 #define A10_PLL1_CFG_REG		0x0000
+#define A10_PLL1_OUT_EXT_DIVP_MASK	(0x3 << 16)
+#define A10_PLL1_OUT_EXT_DIVP_SHIFT	16
 #define A10_PLL1_OUT_EXT_DIVP(x)	(((x) >> 16) & 0x3)
 #define A10_PLL1_FACTOR_N(x)		(((x) >> 8) & 0x1f)
+#define A10_PLL1_FACTOR_N_MASK		(0x1f << 8)
+#define A10_PLL1_FACTOR_N_SHIFT		8
 #define A10_PLL1_FACTOR_K(x)		(((x) >> 4) & 0x3)
+#define A10_PLL1_FACTOR_K_MASK		(0x3 << 4)
+#define A10_PLL1_FACTOR_K_SHIFT		4
 #define A10_PLL1_FACTOR_M(x)		(((x) >> 0) & 0x3)
+#define A10_PLL1_FACTOR_M_MASK		(0x3 << 0)
+#define A10_PLL1_FACTOR_M_SHIFT		0
 #define A10_CPU_AHB_APB0_CFG_REG	0x0054
 #define A10_CPU_CLK_SRC_SEL		(0x3 << 16)
 #define A10_CPU_CLK_SRC_SEL_LOSC	(0x0 << 16)
 #define A10_CPU_CLK_SRC_SEL_OSC24M	(0x1 << 16)
 #define A10_CPU_CLK_SRC_SEL_PLL1	(0x2 << 16)
 #define A10_CPU_CLK_SRC_SEL_200MHZ	(0x3 << 16)
+#define A10_AHB_CLK_DIV_RATIO(x)	(((x) >> 8) & 0x3)
+#define A10_AXI_CLK_DIV_RATIO(x)	(((x) >> 0) & 0x3)
 
 uint32_t
 sxiccmu_a10_get_frequency(struct sxiccmu_softc *sc, uint32_t idx)
 {
 	uint32_t parent;
-	uint32_t reg, k, m, n, p;
+	uint32_t reg, div;
+	uint32_t k, m, n, p;
 
 	switch (idx) {
 	case A10_CLK_LOSC:
@@ -906,6 +938,16 @@ sxiccmu_a10_get_frequency(struct sxiccmu_softc *sc, uint32_t idx)
 			return 200000000;
 		}
 		return sxiccmu_ccu_get_frequency(sc, &parent);
+	case A10_CLK_AXI:
+		reg = SXIREAD4(sc, A10_CPU_AHB_APB0_CFG_REG);
+		div = 1 << A10_AXI_CLK_DIV_RATIO(reg);
+		parent = A10_CLK_CPU;
+		return sxiccmu_ccu_get_frequency(sc, &parent) / div;
+	case A10_CLK_AHB:
+		reg = SXIREAD4(sc, A10_CPU_AHB_APB0_CFG_REG);
+		div = 1 << A10_AHB_CLK_DIV_RATIO(reg);
+		parent = A10_CLK_AXI;
+		return sxiccmu_ccu_get_frequency(sc, &parent) / div;
 	case A10_CLK_APB1:
 		/* XXX Controlled by a MUX. */
 		return 24000000;
@@ -971,13 +1013,55 @@ sxiccmu_a23_get_frequency(struct sxiccmu_softc *sc, uint32_t idx)
 	return 0;
 }
 
+#define A64_PLL_CPUX_CTRL_REG		0x0000
+#define A64_PLL_CPUX_LOCK		(1 << 28)
+#define A64_PLL_CPUX_OUT_EXT_DIVP(x)	(((x) >> 16) & 0x3)
+#define A64_PLL_CPUX_OUT_EXT_DIVP_MASK	(0x3 << 16)
+#define A64_PLL_CPUX_FACTOR_N(x)	(((x) >> 8) & 0x1f)
+#define A64_PLL_CPUX_FACTOR_N_MASK	(0x1f << 8)
+#define A64_PLL_CPUX_FACTOR_N_SHIFT	8
+#define A64_PLL_CPUX_FACTOR_K(x)	(((x) >> 4) & 0x3)
+#define A64_PLL_CPUX_FACTOR_K_MASK	(0x3 << 4)
+#define A64_PLL_CPUX_FACTOR_K_SHIFT	4
+#define A64_PLL_CPUX_FACTOR_M(x)	(((x) >> 0) & 0x3)
+#define A64_PLL_CPUX_FACTOR_M_MASK	(0x3 << 0)
+#define A64_CPUX_AXI_CFG_REG		0x0050
+#define A64_CPUX_CLK_SRC_SEL		(0x3 << 16)
+#define A64_CPUX_CLK_SRC_SEL_LOSC	(0x0 << 16)
+#define A64_CPUX_CLK_SRC_SEL_OSC24M	(0x1 << 16)
+#define A64_CPUX_CLK_SRC_SEL_PLL_CPUX	(0x2 << 16)
+
 uint32_t
 sxiccmu_a64_get_frequency(struct sxiccmu_softc *sc, uint32_t idx)
 {
 	uint32_t parent;
 	uint32_t reg, div;
+	uint32_t k, m, n, p;
 
 	switch (idx) {
+	case A64_CLK_PLL_CPUX:
+		reg = SXIREAD4(sc, A64_PLL_CPUX_CTRL_REG);
+		k = A64_PLL_CPUX_FACTOR_K(reg) + 1;
+		m = A64_PLL_CPUX_FACTOR_M(reg) + 1;
+		n = A64_PLL_CPUX_FACTOR_N(reg) + 1;
+		p = 1 << A64_PLL_CPUX_OUT_EXT_DIVP(reg);
+		return (24000000 * n * k) / (m * p);
+	case A64_CLK_CPUX:
+		reg = SXIREAD4(sc, A64_CPUX_AXI_CFG_REG);
+		switch (reg & A64_CPUX_CLK_SRC_SEL) {
+		case A64_CPUX_CLK_SRC_SEL_LOSC:
+			parent = A64_CLK_LOSC;
+			break;
+		case A64_CPUX_CLK_SRC_SEL_OSC24M:
+			parent = A64_CLK_HOSC;
+			break;
+		case A64_CPUX_CLK_SRC_SEL_PLL_CPUX:
+			parent = A64_CLK_PLL_CPUX;
+			break;
+		default:
+			return 0;
+		}
+		return sxiccmu_ccu_get_frequency(sc, &parent);
 	case A64_CLK_LOSC:
 		return clock_get_frequency(sc->sc_node, "losc");
 	case A64_CLK_HOSC:
@@ -1201,6 +1285,39 @@ sxiccmu_h3_r_get_frequency(struct sxiccmu_softc *sc, uint32_t idx)
 }
 
 uint32_t
+sxiccmu_h6_get_frequency(struct sxiccmu_softc *sc, uint32_t idx)
+{
+	switch (idx) {
+	case H6_CLK_PLL_PERIPH0:
+		/* Not hardcoded, but recommended. */
+		return 600000000;
+	case H6_CLK_PLL_PERIPH0_2X:
+		return sxiccmu_h6_get_frequency(sc, H6_CLK_PLL_PERIPH0) * 2;
+	case H6_CLK_APB2:
+		/* XXX Controlled by a MUX. */
+		return 24000000;
+		break;
+	}
+
+	printf("%s: 0x%08x\n", __func__, idx);
+	return 0;
+}
+
+uint32_t
+sxiccmu_h6_r_get_frequency(struct sxiccmu_softc *sc, uint32_t idx)
+{
+	switch (idx) {
+	case H6_R_CLK_APB2:
+		/* XXX Controlled by a MUX. */
+		return 24000000;
+		break;
+	}
+
+	printf("%s: 0x%08x\n", __func__, idx);
+	return 0;
+}
+
+uint32_t
 sxiccmu_r40_get_frequency(struct sxiccmu_softc *sc, uint32_t idx)
 {
 	uint32_t parent;
@@ -1324,8 +1441,45 @@ sxiccmu_a10_set_frequency(struct sxiccmu_softc *sc, uint32_t idx, uint32_t freq)
 {
 	struct sxiccmu_clock clock;
 	uint32_t parent, parent_freq;
+	uint32_t reg;
+	int k, n;
+	int error;
 
 	switch (idx) {
+	case A10_CLK_PLL_CORE:
+		k = 1; n = 32;
+		while (k <= 4 && (24000000 * n * k) < freq)
+			k++;
+		while (n >= 1 && (24000000 * n * k) > freq)
+			n--;
+
+		reg = SXIREAD4(sc, A10_PLL1_CFG_REG);
+		reg &= ~A10_PLL1_OUT_EXT_DIVP_MASK;
+		reg &= ~A10_PLL1_FACTOR_N_MASK;
+		reg &= ~A10_PLL1_FACTOR_K_MASK;
+		reg &= ~A10_PLL1_FACTOR_M_MASK;
+		reg |= (n << A10_PLL1_FACTOR_N_SHIFT);
+		reg |= ((k - 1) << A10_PLL1_FACTOR_K_SHIFT);
+		SXIWRITE4(sc, A10_PLL1_CFG_REG, reg);
+
+		/* No need to wait PLL to lock? */
+
+		return 0;
+	case A10_CLK_CPU:
+		/* Switch to 24 MHz clock. */
+		reg = SXIREAD4(sc, A10_CPU_AHB_APB0_CFG_REG);
+		reg &= ~A10_CPU_CLK_SRC_SEL;
+		reg |= A10_CPU_CLK_SRC_SEL_OSC24M;
+		SXIWRITE4(sc, A10_CPU_AHB_APB0_CFG_REG, reg);
+
+		error = sxiccmu_a10_set_frequency(sc, A10_CLK_PLL_CORE, freq);
+
+		/* Switch back to PLL. */
+		reg = SXIREAD4(sc, A10_CPU_AHB_APB0_CFG_REG);
+		reg &= ~A10_CPU_CLK_SRC_SEL;
+		reg |= A10_CPU_CLK_SRC_SEL_PLL1;
+		SXIWRITE4(sc, A10_CPU_AHB_APB0_CFG_REG, reg);
+		return error;
 	case A10_CLK_MMC0:
 	case A10_CLK_MMC1:
 	case A10_CLK_MMC2:
@@ -1369,8 +1523,49 @@ sxiccmu_a64_set_frequency(struct sxiccmu_softc *sc, uint32_t idx, uint32_t freq)
 {
 	struct sxiccmu_clock clock;
 	uint32_t parent, parent_freq;
+	uint32_t reg;
+	int k, n;
+	int error;
 
 	switch (idx) {
+	case A64_CLK_PLL_CPUX:
+		k = 1; n = 32;
+		while (k <= 4 && (24000000 * n * k) < freq)
+			k++;
+		while (n >= 1 && (24000000 * n * k) > freq)
+			n--;
+
+		reg = SXIREAD4(sc, A64_PLL_CPUX_CTRL_REG);
+		reg &= ~A64_PLL_CPUX_OUT_EXT_DIVP_MASK;
+		reg &= ~A64_PLL_CPUX_FACTOR_N_MASK;
+		reg &= ~A64_PLL_CPUX_FACTOR_K_MASK;
+		reg &= ~A64_PLL_CPUX_FACTOR_M_MASK;
+		reg |= ((n - 1) << A64_PLL_CPUX_FACTOR_N_SHIFT);
+		reg |= ((k - 1) << A64_PLL_CPUX_FACTOR_K_SHIFT);
+		SXIWRITE4(sc, A64_PLL_CPUX_CTRL_REG, reg);
+
+		/* Wait for PLL to lock. */
+		while ((SXIREAD4(sc, A64_PLL_CPUX_CTRL_REG) &
+		    A64_PLL_CPUX_LOCK) == 0) {
+			delay(200);
+		}
+
+		return 0;
+	case A64_CLK_CPUX:
+		/* Switch to 24 MHz clock. */
+		reg = SXIREAD4(sc, A64_CPUX_AXI_CFG_REG);
+		reg &= ~A64_CPUX_CLK_SRC_SEL;
+		reg |= A64_CPUX_CLK_SRC_SEL_OSC24M;
+		SXIWRITE4(sc, A64_CPUX_AXI_CFG_REG, reg);
+
+		error = sxiccmu_a64_set_frequency(sc, A64_CLK_PLL_CPUX, freq);
+
+		/* Switch back to PLL. */
+		reg = SXIREAD4(sc, A64_CPUX_AXI_CFG_REG);
+		reg &= ~A64_CPUX_CLK_SRC_SEL;
+		reg |= A64_CPUX_CLK_SRC_SEL_PLL_CPUX;
+		SXIWRITE4(sc, A64_CPUX_AXI_CFG_REG, reg);
+		return error;
 	case A64_CLK_MMC0:
 	case A64_CLK_MMC1:
 	case A64_CLK_MMC2:
@@ -1470,6 +1665,76 @@ sxiccmu_h3_set_frequency(struct sxiccmu_softc *sc, uint32_t idx, uint32_t freq)
 	return -1;
 }
 
+#define H6_SMHC0_CLK_REG		0x0830
+#define H6_SMHC1_CLK_REG		0x0834
+#define H6_SMHC2_CLK_REG		0x0838
+#define H6_SMHC_CLK_SRC_SEL			(0x3 << 24)
+#define H6_SMHC_CLK_SRC_SEL_OSC24M		(0x0 << 24)
+#define H6_SMHC_CLK_SRC_SEL_PLL_PERIPH0_2X	(0x1 << 24)
+#define H6_SMHC_FACTOR_N_MASK			(0x3 << 8)
+#define H6_SMHC_FACTOR_N_SHIFT			8
+#define H6_SMHC_FACTOR_M_MASK			(0xf << 0)
+#define H6_SMHC_FACTOR_M_SHIFT			0
+
+int
+sxiccmu_h6_mmc_set_frequency(struct sxiccmu_softc *sc, bus_size_t offset,
+    uint32_t freq)
+{
+	uint32_t parent_freq;
+	uint32_t reg, m, n;
+	uint32_t clk_src;
+
+	switch (freq) {
+	case 400000:
+		n = 2, m = 15;
+		clk_src = H6_SMHC_CLK_SRC_SEL_OSC24M;
+		break;
+	case 20000000:
+	case 25000000:
+	case 26000000:
+	case 50000000:
+	case 52000000:
+		n = 0, m = 0;
+		clk_src = H6_SMHC_CLK_SRC_SEL_PLL_PERIPH0_2X;
+		parent_freq =
+		    sxiccmu_h6_get_frequency(sc, H6_CLK_PLL_PERIPH0_2X);
+		while ((parent_freq / (1 << n) / 16) > freq)
+			n++;
+		while ((parent_freq / (1 << n) / (m + 1)) > freq)
+			m++;
+		break;
+	default:
+		return -1;
+	}
+
+	reg = SXIREAD4(sc, offset);
+	reg &= ~H6_SMHC_CLK_SRC_SEL;
+	reg |= clk_src;
+	reg &= ~H6_SMHC_FACTOR_N_MASK;
+	reg |= n << H6_SMHC_FACTOR_N_SHIFT;
+	reg &= ~H6_SMHC_FACTOR_M_MASK;
+	reg |= m << H6_SMHC_FACTOR_M_SHIFT;
+	SXIWRITE4(sc, offset, reg);
+
+	return 0;
+}
+
+int
+sxiccmu_h6_set_frequency(struct sxiccmu_softc *sc, uint32_t idx, uint32_t freq)
+{
+	switch (idx) {
+	case H6_CLK_MMC0:
+		return sxiccmu_h6_mmc_set_frequency(sc, H6_SMHC0_CLK_REG, freq);
+	case H6_CLK_MMC1:
+		return sxiccmu_h6_mmc_set_frequency(sc, H6_SMHC1_CLK_REG, freq);
+	case H6_CLK_MMC2:
+		return sxiccmu_h6_mmc_set_frequency(sc, H6_SMHC2_CLK_REG, freq);
+	}
+
+	printf("%s: 0x%08x\n", __func__, idx);
+	return -1;
+}
+
 int
 sxiccmu_r40_set_frequency(struct sxiccmu_softc *sc, uint32_t idx, uint32_t freq)
 {
@@ -1536,6 +1801,10 @@ sxiccmu_ccu_enable(void *cookie, uint32_t *cells, int on)
 		printf("%s: 0x%08x\n", __func__, cells[0]);
 		return;
 	}
+
+	/* If the clock can't be gated, simply return. */
+	if (sc->sc_gates[idx].reg == 0xffff && sc->sc_gates[idx].bit == 0xff)
+		return;
 
 	reg = sc->sc_gates[idx].reg;
 	bit = sc->sc_gates[idx].bit;

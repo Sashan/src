@@ -1,4 +1,4 @@
-/*	$OpenBSD: ofw_thermal.c,v 1.3 2019/07/03 22:12:30 kettenis Exp $	*/
+/*	$OpenBSD: ofw_thermal.c,v 1.5 2019/12/03 09:17:20 patrick Exp $	*/
 /*
  * Copyright (c) 2019 Mark Kettenis
  *
@@ -355,14 +355,29 @@ thermal_zone_init(int node)
 
 	tz->tz_trips = mallocarray(tz->tz_ntrips, sizeof(struct trippoint),
 	    M_DEVBUF, M_ZERO | M_WAITOK);
-	tp = tz->tz_trips;
 
 	node = OF_getnodebyname(tz->tz_node, "trips");
 	for (node = OF_child(node); node != 0; node = OF_peer(node)) {
 		char type[32] = "none";
+		int32_t temp;
 
-		tp->tp_temperature =
-		    OF_getpropint(node, "temperature", THERMAL_SENSOR_MAX);
+		temp = OF_getpropint(node, "temperature", THERMAL_SENSOR_MAX);
+
+		/* Sorted insertion, since tree might not be */
+		for (i = 0; i < tz->tz_ntrips; i++) {
+			/* No trip point should be 0 degC, take it */
+			if (tz->tz_trips[i].tp_temperature == 0)
+				break;
+			/* We should be bigger than the one before us */
+			if (tz->tz_trips[i].tp_temperature < temp)
+				continue;
+			/* Free current slot */
+			memmove(&tz->tz_trips[i + 1], &tz->tz_trips[i],
+			    (tz->tz_ntrips - (i + 1)) * sizeof(*tp));
+			break;
+		}
+		tp = &tz->tz_trips[i];
+		tp->tp_temperature = temp;
 		tp->tp_hysteresis = OF_getpropint(node, "hysteresis", 0);
 		OF_getprop(node, "type", type, sizeof(type));
 		if (strcmp(type, "active") == 0)
@@ -442,7 +457,7 @@ thermal_init(void)
 	if (node == -1)
 		return;
 
-	tztq = taskq_create("tztq", 1, IPL_NONE, 0);
+	tztq = taskq_create("tztq", 1, IPL_SOFTCLOCK, 0);
 
 	for (node = OF_child(node); node != 0; node = OF_peer(node))
 		thermal_zone_init(node);

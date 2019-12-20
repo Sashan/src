@@ -1,11 +1,11 @@
-#	$OpenBSD: Makefile.inc,v 1.24 2016/09/03 16:25:03 tedu Exp $
+#	$OpenBSD: Makefile.inc,v 1.25 2019/08/30 22:20:43 deraadt Exp $
 
 # hash functions
 .PATH: ${LIBCSRCDIR}/hash
 
 HELPER=	md5hl.c rmd160hl.c sha1hl.c sha224hl.c sha256hl.c sha384hl.c sha512hl.c sha512_256hl.c
 SRCS+=	md5.c rmd160.c sha1.c sha2.c ${HELPER} siphash.c
-MAN+=	md5.3 rmd160.3 sha1.3 sha2.3 SipHash24.3
+MAN+=	MD5Init.3 RMD160Init.3 SHA1Init.3 SHA256Init.3 SipHash24_Init.3
 
 CLEANFILES+= ${HELPER}
 

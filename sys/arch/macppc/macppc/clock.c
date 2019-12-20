@@ -1,4 +1,4 @@
-/*	$OpenBSD: clock.c,v 1.40 2015/06/13 07:16:36 jsg Exp $	*/
+/*	$OpenBSD: clock.c,v 1.42 2019/09/03 17:51:52 deraadt Exp $	*/
 /*	$NetBSD: clock.c,v 1.1 1996/09/30 16:34:40 ws Exp $	*/
 
 /*
@@ -124,10 +124,7 @@ inittodr(time_t base)
 	} else {
 		int deltat;
 
-		tv.tv_sec += tz.tz_minuteswest * 60;
-		if (tz.tz_dsttime)
-			tv.tv_sec -= 3600;
-
+		tv.tv_sec -= utc_offset;
 		deltat = tv.tv_sec - base;
 
 		if (deltat < 0)
@@ -167,13 +164,8 @@ resettodr(void)
 
 	microtime(&tv);
 
-	if (time_write != NULL) {
-		tv.tv_sec -= tz.tz_minuteswest * 60;
-		if (tz.tz_dsttime) {
-			tv.tv_sec += 3600;
-		}
-		(*time_write)(tv.tv_sec);
-	}
+	if (time_write != NULL)
+		(*time_write)(tv.tv_sec + utc_offset);
 }
 
 void
@@ -262,7 +254,7 @@ decr_intr(struct clockframe *frame)
 void cpu_startclock(void);
 
 void
-cpu_initclocks()
+cpu_initclocks(void)
 {
 	int intrstate;
 	int minint;
@@ -325,7 +317,7 @@ cpu_initclocks()
 }
 
 void
-cpu_startclock()
+cpu_startclock(void)
 {
 	struct cpu_info *ci = curcpu();
 	u_int64_t nextevent;

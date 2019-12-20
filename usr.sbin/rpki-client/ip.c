@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip.c,v 1.7 2019/06/20 13:43:10 claudio Exp $ */
+/*	$OpenBSD: ip.c,v 1.9 2019/11/27 17:18:24 deraadt Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -110,7 +110,7 @@ int
 ip_addr_check_overlap(const struct cert_ip *ip, const char *fn,
     const struct cert_ip *ips, size_t ipsz)
 {
-	size_t	 i, sz = AFI_IPV4 == ip->afi ? 4 : 16;
+	size_t	 i, sz = ip->afi == AFI_IPV4 ? 4 : 16;
 	int	 inherit_v4 = 0, inherit_v6 = 0;
 	int	 has_v4 = 0, has_v6 = 0, socktype;
 	char	 buf[64];
@@ -225,6 +225,7 @@ ip_addr_parse(const ASN1_BIT_STRING *p,
 		return 0;
 	}
 
+	memset (addr, 0, sizeof(struct ip_addr));
 	addr->prefixlen = p->length * 8 - unused;
 	memcpy(addr->addr, p->data, p->length);
 	return 1;

@@ -1,4 +1,4 @@
-/* $OpenBSD: tls13_client.c,v 1.16 2019/04/05 20:23:38 tb Exp $ */
+/* $OpenBSD: tls13_client.c,v 1.19 2019/11/17 06:30:12 jsing Exp $ */
 /*
  * Copyright (c) 2018, 2019 Joel Sing <jsing@openbsd.org>
  *
@@ -25,7 +25,7 @@
 #include "tls13_handshake.h"
 #include "tls13_internal.h"
 
-int
+static int
 tls13_connect(struct tls13_ctx *ctx)
 {
 	if (ctx->mode != TLS13_HS_CLIENT)
@@ -62,6 +62,12 @@ tls13_legacy_connect(SSL *ssl)
 {
 	struct tls13_ctx *ctx = ssl->internal->tls13;
 	int ret;
+
+	/* XXX drop back to legacy for client auth for now */
+	if (ssl->cert->key->privatekey != NULL) {
+		ssl->method = tls_legacy_client_method();
+		return ssl->method->internal->ssl_connect(ssl);
+	}
 
 	if (ctx == NULL) {
 		if ((ctx = tls13_ctx_new(TLS13_HS_CLIENT)) == NULL) {

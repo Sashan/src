@@ -1,4 +1,4 @@
-/*	$OpenBSD: synch.h,v 1.4 2018/06/08 13:53:01 pirofti Exp $ */
+/*	$OpenBSD: synch.h,v 1.6 2019/10/24 12:32:18 sthen Exp $ */
 /*
  * Copyright (c) 2017 Martin Pieuchot
  *

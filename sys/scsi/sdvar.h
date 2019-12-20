@@ -1,4 +1,4 @@
-/*	$OpenBSD: sdvar.h,v 1.42 2013/10/02 18:59:04 krw Exp $	*/
+/*	$OpenBSD: sdvar.h,v 1.45 2019/11/08 16:13:28 krw Exp $	*/
 /*	$NetBSD: sdvar.h,v 1.7 1998/08/17 00:49:03 mycroft Exp $	*/
 
 /*-
@@ -47,6 +47,9 @@
  * Ported to run under 386BSD by Julian Elischer (julian@dialix.oz.au) Sept 1992
  */
 
+#ifndef _SCSI_SDVAR_H
+#define _SCSI_SDVAR_H
+
 #ifdef _KERNEL
 struct sd_softc {
 	struct device		sc_dev;
@@ -61,10 +64,10 @@ struct sd_softc {
 #define	SDF_THIN	0x01		/* disk is thin provisioned */
 	struct scsi_link	*sc_link; /* contains our targ, lun, etc. */
 	struct disk_parms {
-		u_long	heads;		/* number of heads */
-		u_long	cyls;		/* number of cylinders */
-		u_long	sectors;	/* number of sectors/track */
-		u_long	secsize;	/* number of bytes/sector */
+		u_int32_t	heads;		/* number of heads */
+		u_int32_t	cyls;		/* number of cylinders */
+		u_int32_t	sectors;	/* number of sectors/track */
+		u_int32_t	secsize;	/* number of bytes/sector */
 		u_int64_t	disksize;	/* total number sectors */
 		u_int32_t	unmap_sectors;	/* maximum sectors/unmap */
 		u_int32_t	unmap_descs;	/* maximum descriptors/unmap */
@@ -74,8 +77,5 @@ struct sd_softc {
 
 	struct scsi_xshandler sc_xsh;
 };
-
-#define	SDGP_RESULT_OK		0	/* parameters obtained */
-#define	SDGP_RESULT_OFFLINE	1	/* no media, or otherwise losing */
-
 #endif /* _KERNEL */
+#endif /* _SCSI_SDVAR_H */

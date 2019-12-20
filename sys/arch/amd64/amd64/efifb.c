@@ -1,4 +1,4 @@
-/*	$OpenBSD: efifb.c,v 1.24 2019/05/04 11:34:47 kettenis Exp $	*/
+/*	$OpenBSD: efifb.c,v 1.26 2019/11/26 02:20:50 jsg Exp $	*/
 
 /*
  * Copyright (c) 2015 YASUOKA Masahiko <yasuoka@yasuoka.net>
@@ -107,9 +107,6 @@ void	 efifb_efiinfo_init(struct efifb *);
 void	 efifb_cnattach_common(void);
 
 struct cb_framebuffer *cb_find_fb(paddr_t);
-
-extern int	(*ws_get_param)(struct wsdisplay_param *);
-extern int	(*ws_set_param)(struct wsdisplay_param *);
 
 const struct cfattach efifb_ca = {
 	sizeof(struct efifb_softc), efifb_match, efifb_attach, NULL
@@ -523,15 +520,20 @@ efifb_is_primary(struct pci_attach_args *pa)
 		if (pci_mapreg_info(pc, tag, reg, type, &base, &size, NULL))
 			continue;
 
-		if (bios_efiinfo != NULL && bios_efiinfo->fb_addr != 0)
-			return (1);
+		if (bios_efiinfo != NULL &&
+		    bios_efiinfo->fb_addr >= base &&
+		    bios_efiinfo->fb_addr < base + size)
+			return 1;
+
+		if (efifb_console.paddr >= base &&
+		    efifb_console.paddr < base + size)
+			return 1;
 
 		if (type & PCI_MAPREG_MEM_TYPE_64BIT)
 			reg += 4;
 	}
 
-	/* XXX coreboot framebuffer isn't matched above. */
-	return efifb_is_console(pa);;
+	return 0;
 }
 
 void

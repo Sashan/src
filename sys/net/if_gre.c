@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_gre.c,v 1.152 2019/07/29 16:28:25 bluhm Exp $ */
+/*	$OpenBSD: if_gre.c,v 1.155 2019/11/10 11:44:10 dlg Exp $ */
 /*	$NetBSD: if_gre.c,v 1.9 1999/10/25 19:18:11 drochner Exp $ */
 
 /*
@@ -387,7 +387,7 @@ static int	egre_input(const struct gre_tunnel *, struct mbuf *, int,
 		    uint8_t);
 struct if_clone egre_cloner =
     IF_CLONE_INITIALIZER("egre", egre_clone_create, egre_clone_destroy);
- 
+
 /* protected by NET_LOCK */
 struct egre_tree egre_tree = RBT_INITIALIZER();
 
@@ -429,8 +429,8 @@ struct nvgre_softc {
 	struct task		 sc_send_task;
 
 	void			*sc_inm;
-	void			*sc_lhcookie;
-	void			*sc_dhcookie;
+	struct task		 sc_ltask;
+	struct task		 sc_dtask;
 
 	struct rwlock		 sc_ether_lock;
 	struct nvgre_map	 sc_ether_map;
@@ -540,7 +540,7 @@ static struct mbuf *
 		    const struct gre_header *, uint8_t, int);
 struct if_clone eoip_cloner =
     IF_CLONE_INITIALIZER("eoip", eoip_clone_create, eoip_clone_destroy);
- 
+
 /* protected by NET_LOCK */
 struct eoip_tree eoip_tree = RBT_INITIALIZER();
 
@@ -792,6 +792,8 @@ nvgre_clone_create(struct if_clone *ifc, int unit)
 
 	mq_init(&sc->sc_send_list, IFQ_MAXLEN * 2, IPL_SOFTNET);
 	task_set(&sc->sc_send_task, nvgre_send, sc);
+	task_set(&sc->sc_ltask, nvgre_link_change, sc);
+	task_set(&sc->sc_dtask, nvgre_detach, sc);
 
 	rw_init(&sc->sc_ether_lock, "nvgrelk");
 	RBT_INIT(nvgre_map, &sc->sc_ether_map);
@@ -1162,7 +1164,7 @@ gre_input_key(struct mbuf **mp, int *offp, int type, int af, uint8_t otos,
 
 	m = (*patch)(tunnel, m, &itos, otos);
 	if (m == NULL)
-		return (IPPROTO_DONE); 
+		return (IPPROTO_DONE);
 
 	if (tunnel->t_key_mask == GRE_KEY_ENTROPY) {
 		m->m_pkthdr.ph_flowid = M_FLOWID_VALID |
@@ -1892,7 +1894,7 @@ mgre_output(struct ifnet *ifp, struct mbuf *m, struct sockaddr *dest,
 		error = EAGAIN;
 		goto drop;
 	}
- 
+
 	/* Try to limit infinite recursion through misconfiguration. */
 	for (mtag = m_tag_find(m, PACKET_TAG_GRE, NULL); mtag;
 	     mtag = m_tag_find(m, PACKET_TAG_GRE, mtag)) {
@@ -1978,9 +1980,9 @@ mgre_start(struct ifnet *ifp)
 #endif
 
 		if (gre_ip_output(&sc->sc_tunnel, m) != 0) {
- 			ifp->if_oerrors++;
- 			continue;
- 		}
+			ifp->if_oerrors++;
+			continue;
+		}
 	}
 }
 
@@ -2079,7 +2081,7 @@ gre_l3_encap_dst(const struct gre_tunnel *tunnel, const void *dst,
 		itos = (shim >> MPLS_EXP_OFFSET) << 5;
 
 		ttloff = 3;
- 
+
 		if (m->m_flags & (M_BCAST | M_MCAST))
 			proto = htons(ETHERTYPE_MPLS_MCAST);
 		else
@@ -2090,10 +2092,10 @@ gre_l3_encap_dst(const struct gre_tunnel *tunnel, const void *dst,
 	default:
 		unhandled_af(af);
 	}
- 
+
 	if (tttl == -1) {
 		KASSERT(m->m_len > ttloff); /* m_pullup has happened */
- 
+
 		ttl = *(m->m_data + ttloff);
 	} else
 		ttl = tttl;
@@ -2541,8 +2543,8 @@ mgre_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		/* FALLTHROUGH */
 	default:
 		error = gre_tunnel_ioctl(ifp, &sc->sc_tunnel, cmd, data);
- 		break;
- 	}
+		break;
+	}
 
 	return (error);
 }
@@ -3656,19 +3658,8 @@ nvgre_up(struct nvgre_softc *sc)
 		unhandled_af(tunnel->t_af);
 	}
 
-	sc->sc_lhcookie = hook_establish(ifp0->if_linkstatehooks, 0,
-	    nvgre_link_change, sc);
-	if (sc->sc_lhcookie == NULL) {
-		error = ENOMEM;
-		goto delmulti;
-	}
-
-	sc->sc_dhcookie = hook_establish(ifp0->if_detachhooks, 0,
-	    nvgre_detach, sc);
-	if (sc->sc_dhcookie == NULL) {
-		error = ENOMEM;
-		goto dislh;
-	}
+	if_linkstatehook_add(ifp0, &sc->sc_ltask);
+	if_detachhook_add(ifp0, &sc->sc_dtask);
 
 	if_put(ifp0);
 
@@ -3679,21 +3670,6 @@ nvgre_up(struct nvgre_softc *sc)
 
 	return (0);
 
-dislh:
-	hook_disestablish(ifp0->if_linkstatehooks, sc->sc_lhcookie);
-delmulti:
-	switch (tunnel->t_af) {
-	case AF_INET:
-		in_delmulti(inm);
-		break;
-#ifdef INET6
-	case AF_INET6:
-		in6_delmulti(inm);
-		break;
-#endif
-	default:
-		unhandled_af(tunnel->t_af);
-	}
 remove_ucast:
 	RBT_REMOVE(nvgre_ucast_tree, &nvgre_ucast_tree, sc);
 remove_mcast:
@@ -3726,8 +3702,8 @@ nvgre_down(struct nvgre_softc *sc)
 
 	ifp0 = if_get(sc->sc_ifp0);
 	if (ifp0 != NULL) {
-		hook_disestablish(ifp0->if_detachhooks, sc->sc_dhcookie);
-		hook_disestablish(ifp0->if_linkstatehooks, sc->sc_lhcookie);
+		if_detachhook_del(ifp0, &sc->sc_dtask);
+		if_linkstatehook_del(ifp0, &sc->sc_ltask);
 	}
 	if_put(ifp0);
 

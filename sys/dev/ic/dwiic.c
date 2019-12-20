@@ -1,4 +1,4 @@
-/* $OpenBSD: dwiic.c,v 1.6 2019/08/06 06:56:29 kettenis Exp $ */
+/* $OpenBSD: dwiic.c,v 1.8 2019/08/18 15:52:45 kettenis Exp $ */
 /*
  * Synopsys DesignWare I2C controller
  *
@@ -350,7 +350,7 @@ dwiic_i2c_exec(void *cookie, i2c_op_t op, i2c_addr_t addr, const void *cmdbuf,
 			    sc->sc_dev.dv_xname, __func__, tx_limit, x));
 
 			if (flags & I2C_F_POLL) {
-				for (retries = 100; retries > 0; retries--) {
+				for (retries = 1000; retries > 0; retries--) {
 					rx_avail = dwiic_read(sc, DW_IC_RXFLR);
 					if (rx_avail > 0)
 						break;
@@ -407,14 +407,13 @@ dwiic_i2c_exec(void *cookie, i2c_op_t op, i2c_addr_t addr, const void *cmdbuf,
 
 	if (I2C_OP_STOP_P(op) && I2C_OP_WRITE_P(op)) {
 		if (flags & I2C_F_POLL) {
-			/* wait for bus to be idle */
 			for (retries = 100; retries > 0; retries--) {
-				st = dwiic_read(sc, DW_IC_STATUS);
-				if (!(st & DW_IC_STATUS_ACTIVITY))
+				st = dwiic_read(sc, DW_IC_RAW_INTR_STAT);
+				if (st & DW_IC_INTR_STOP_DET)
 					break;
 				DELAY(1000);
 			}
-			if (st & DW_IC_STATUS_ACTIVITY)
+			if (!(st & DW_IC_INTR_STOP_DET))
 				printf("%s: timed out waiting for bus idle\n",
 				    sc->sc_dev.dv_xname);
 		} else {

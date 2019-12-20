@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1999-2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: fixedname.h,v 1.13.18.2 2005/04/29 00:16:13 marka Exp $ */
+/* $Id: fixedname.h,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
 
 #ifndef DNS_FIXEDNAME_H
 #define DNS_FIXEDNAME_H 1
@@ -24,7 +23,7 @@
  ***** Module Info
  *****/
 
-/*! \file
+/*! \file dns/fixedname.h
  * \brief
  * Fixed-size Names
  *
@@ -74,7 +73,7 @@ struct dns_fixedname {
 	do { \
 		dns_name_init(&((fn)->name), (fn)->offsets); \
 		isc_buffer_init(&((fn)->buffer), (fn)->data, \
-                                  DNS_NAME_MAXWIRE); \
+				  DNS_NAME_MAXWIRE); \
 		dns_name_setbuffer(&((fn)->name), &((fn)->buffer)); \
 	} while (0)
 

@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_tlsext.c,v 1.49 2019/05/29 17:28:37 jsing Exp $ */
+/* $OpenBSD: ssl_tlsext.c,v 1.51 2019/11/16 15:36:53 beck Exp $ */
 /*
  * Copyright (c) 2016, 2017, 2019 Joel Sing <jsing@openbsd.org>
  * Copyright (c) 2017 Doug Hogan <doug@openbsd.org>

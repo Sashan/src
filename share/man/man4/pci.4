@@ -1,4 +1,4 @@
-.\"	$OpenBSD: pci.4,v 1.372 2019/08/04 06:55:42 jmc Exp $
+.\"	$OpenBSD: pci.4,v 1.377 2019/12/06 10:42:23 jsg Exp $
 .\"	$NetBSD: pci.4,v 1.29 2000/04/01 00:32:23 tsarna Exp $
 .\"
 .\" Copyright (c) 2000 Theo de Raadt.  All rights reserved.
@@ -31,7 +31,7 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.Dd $Mdocdate: August 4 2019 $
+.Dd $Mdocdate: December 6 2019 $
 .Dt PCI 4
 .Os
 .Sh NAME
@@ -74,6 +74,9 @@
 .Cd "pci* at mpcpcibr?"
 .Cd "pci* at ht?"
 .Cd "pci* at hpb?"
+.Pp
+.Cd "# octeon"
+.Cd "pci* at octpcie?"
 .Pp
 .Cd "# sgi"
 .Cd "pci* at macepcibr?"
@@ -250,6 +253,8 @@ Emulex OneConnect 10Gb Ethernet device
 AMD PCnet-PCI 10/100 Ethernet device
 .It Xr re 4
 Realtek 8139C+/8169/816xS/811xS/8168/810xE 10/100/Gigabit Ethernet device
+.It Xr rge 4
+Realtek 8125 PCI Express 2.5Gb Ethernet device
 .It Xr rl 4
 Realtek 8129/8139 10/100 Ethernet device
 .It Xr se 4
@@ -313,7 +318,7 @@ PRO/Wireless 2200BG/2225BG/2915ABG IEEE 802.11a/b/g wireless network device
 .It Xr iwn 4
 Intel WiFi Link and Centrino IEEE 802.11a/b/g/n wireless network devices
 .It Xr iwm 4
-Intel 7000/8000 IEEE 802.11a/ac/b/g/n wireless network devices
+Intel 7000/8000/9000 IEEE 802.11a/ac/b/g/n wireless network devices
 .It Xr malo 4
 Marvell Libertas IEEE 802.11b/g wireless network device
 .It Xr pgt 4
@@ -433,6 +438,8 @@ Intel 3400 temperature sensor
 AMD K8 temperature sensor
 .It Xr km 4
 AMD K10 temperature sensor
+.It Xr ksmn 4
+AMD K17 temperature sensor over SMN
 .It Xr pchtemp 4
 Intel PCH temperature sensor
 .It Xr pwdog 4
@@ -443,7 +450,7 @@ VIA SMBus controller and VIA VT82C686A/VT8231 hardware monitor
 ICS PCI-WDT500/501 watchdog timer device
 .El
 .Ss Miscellaneous devices
-.Bl -tag -width "piixpcib(4)" -offset ind -compact
+.Bl -tag -width "amdpcib(4)" -offset ind -compact
 .It Xr alipm 4
 Acer Labs M7101 SMBus controller
 .It Xr amas 4
@@ -485,8 +492,6 @@ PCI-ISA bridge
 .Tn PCI
 .Tn PCMCIA
 controllers, including the Cirrus Logic GD6729
-.It Xr piixpcib 4
-Intel PIIX4 ISA bridges
 .It Xr piixpm 4
 Intel PIIX SMBus controller
 .It Xr ppb 4
