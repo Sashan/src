@@ -1,4 +1,4 @@
-/* $OpenBSD: window-tree.c,v 1.40 2019/08/16 11:49:12 nicm Exp $ */
+/* $OpenBSD: window-tree.c,v 1.43 2019/12/03 10:47:23 nicm Exp $ */
 
 /*
  * Copyright (c) 2017 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -191,7 +191,7 @@ window_tree_cmp_session(const void *a0, const void *b0)
 	const struct session *const	*b = b0;
 	const struct session		*sa = *a;
 	const struct session		*sb = *b;
-	int				 result;
+	int				 result = 0;
 
 	switch (window_tree_sort->field) {
 	case WINDOW_TREE_BY_INDEX:
@@ -226,7 +226,7 @@ window_tree_cmp_window(const void *a0, const void *b0)
 	const struct winlink		*wlb = *b;
 	struct window			*wa = wla->window;
 	struct window			*wb = wlb->window;
-	int				 result;
+	int				 result = 0;
 
 	switch (window_tree_sort->field) {
 	case WINDOW_TREE_BY_INDEX:
@@ -269,7 +269,7 @@ window_tree_cmp_pane(const void *a0, const void *b0)
 		result = (*a)->id - (*b)->id;
 	}
 	if (window_tree_sort->reversed)
-		result *= -1;
+		result = -result;
 	return (result);
 }
 
@@ -317,7 +317,7 @@ window_tree_filter_pane(struct session *s, struct winlink *wl,
 
 static int
 window_tree_build_window(struct session *s, struct winlink *wl,
-    void* modedata, struct mode_tree_sort_criteria *sort_crit,
+    void *modedata, struct mode_tree_sort_criteria *sort_crit,
     struct mode_tree_item *parent, const char *filter)
 {
 	struct window_tree_modedata	*data = modedata;
@@ -383,7 +383,7 @@ empty:
 }
 
 static void
-window_tree_build_session(struct session *s, void* modedata,
+window_tree_build_session(struct session *s, void *modedata,
     struct mode_tree_sort_criteria *sort_crit, const char *filter)
 {
 	struct window_tree_modedata	*data = modedata;
@@ -973,7 +973,7 @@ window_tree_get_target(struct window_tree_itemdata *item,
 }
 
 static void
-window_tree_command_each(void* modedata, void* itemdata, struct client *c,
+window_tree_command_each(void *modedata, void *itemdata, struct client *c,
     __unused key_code key)
 {
 	struct window_tree_modedata	*data = modedata;
@@ -1030,7 +1030,7 @@ window_tree_command_free(void *modedata)
 }
 
 static void
-window_tree_kill_each(__unused void* modedata, void* itemdata,
+window_tree_kill_each(__unused void *modedata, void *itemdata,
     __unused struct client *c, __unused key_code key)
 {
 	struct window_tree_itemdata	*item = itemdata;

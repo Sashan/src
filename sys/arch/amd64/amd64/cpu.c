@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.139 2019/08/09 15:20:04 pirofti Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.143 2019/12/20 07:49:31 jsg Exp $	*/
 /* $NetBSD: cpu.c,v 1.1 2003/04/26 18:39:26 fvdl Exp $ */
 
 /*-
@@ -632,10 +632,12 @@ cpu_attach(struct device *parent, struct device *self, void *aux)
 #ifndef SMALL_KERNEL
 		cpu_ucode_apply(ci);
 #endif
+		cpu_tsx_disable(ci);
 		identifycpu(ci);
 #ifdef MTRR
 		mem_range_attach();
 #endif /* MTRR */
+		/* XXX SP fpuinit(ci) is done earlier */
 		cpu_init(ci);
 		cpu_init_mwait(sc);
 		break;
@@ -644,14 +646,10 @@ cpu_attach(struct device *parent, struct device *self, void *aux)
 		printf("apid %d (boot processor)\n", caa->cpu_apicid);
 		ci->ci_flags |= CPUF_PRESENT | CPUF_BSP | CPUF_PRIMARY;
 		cpu_intr_init(ci);
-#ifndef SMALL_KERNEL
-		cpu_ucode_apply(ci);
-#endif
 		identifycpu(ci);
 #ifdef MTRR
 		mem_range_attach();
 #endif /* MTRR */
-		cpu_init(ci);
 
 #if NLAPIC > 0
 		/*
@@ -660,6 +658,9 @@ cpu_attach(struct device *parent, struct device *self, void *aux)
 		lapic_enable();
 		lapic_calibrate_timer(ci);
 #endif
+		/* XXX BP fpuinit(ci) is done earlier */
+		cpu_init(ci);
+
 #if NIOAPIC > 0
 		ioapic_bsp_id = caa->cpu_apicid;
 #endif
@@ -890,7 +891,9 @@ cpu_start_secondary(struct cpu_info *ci)
 		wbinvd();
 		tsc_sync_bp(ci);
 		intr_restore(s);
+#ifdef TSC_DEBUG
 		printf("TSC skew=%lld\n", (long long)ci->ci_tsc_skew);
+#endif
 	}
 
 	if ((ci->ci_flags & CPUF_IDENTIFIED) == 0) {
@@ -937,8 +940,10 @@ cpu_boot_secondary(struct cpu_info *ci)
 		tsc_sync_bp(ci);
 		intr_restore(s);
 		drift -= ci->ci_tsc_skew;
+#ifdef TSC_DEBUG
 		printf("TSC skew=%lld drift=%lld\n",
 		    (long long)ci->ci_tsc_skew, (long long)drift);
+#endif
 		tsc_sync_drift(drift);
 	}
 }
@@ -976,6 +981,7 @@ cpu_hatch(void *v)
 	lapic_enable();
 	lapic_startclock();
 	cpu_ucode_apply(ci);
+	cpu_tsx_disable(ci);
 
 	if ((ci->ci_flags & CPUF_IDENTIFIED) == 0) {
 		/*
@@ -1152,6 +1158,26 @@ cpu_init_msrs(struct cpu_info *ci)
 	}
 
 	patinit(ci);
+}
+
+void
+cpu_tsx_disable(struct cpu_info *ci)
+{
+	uint64_t msr;
+	uint32_t dummy, sefflags_edx;
+
+	/* this runs before identifycpu() populates ci_feature_sefflags_edx */
+	if (cpuid_level >= 0x07)
+		CPUID_LEAF(0x7, 0, dummy, dummy, dummy, sefflags_edx);
+	if (strcmp(cpu_vendor, "GenuineIntel") == 0 &&
+	    (sefflags_edx & SEFF0EDX_ARCH_CAP)) {
+		msr = rdmsr(MSR_ARCH_CAPABILITIES);
+		if (msr & ARCH_CAPABILITIES_TSX_CTRL) {
+			msr = rdmsr(MSR_TSX_CTRL);
+			msr |= TSX_CTRL_RTM_DISABLE | TSX_CTRL_TSX_CPUID_CLEAR;
+			wrmsr(MSR_TSX_CTRL, msr);
+		}
+	}
 }
 
 void

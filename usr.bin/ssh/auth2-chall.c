@@ -1,4 +1,4 @@
-/* $OpenBSD: auth2-chall.c,v 1.50 2018/07/11 18:55:11 markus Exp $ */
+/* $OpenBSD: auth2-chall.c,v 1.52 2019/11/13 04:47:52 deraadt Exp $ */
 /*
  * Copyright (c) 2001 Markus Friedl.  All rights reserved.
  * Copyright (c) 2001 Per Allansson.  All rights reserved.
@@ -26,8 +26,10 @@
 
 #include <sys/types.h>
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
 
 #include "xmalloc.h"
 #include "ssh2.h"

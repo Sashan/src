@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm.h,v 1.65 2019/07/18 23:47:33 cheloha Exp $	*/
+/*	$OpenBSD: uvm.h,v 1.67 2019/12/06 08:33:25 mpi Exp $	*/
 /*	$NetBSD: uvm.h,v 1.24 2000/11/27 08:40:02 chs Exp $	*/
 
 /*
@@ -80,8 +80,9 @@ struct uvm {
 
 /*
  * vm_map_entry etype bits:
+ *
+ * keep in sync with KVM_ET_*
  */
-
 #define UVM_ET_OBJ		0x0001	/* it is a uvm_object */
 #define UVM_ET_SUBMAP		0x0002	/* it is a vm_map submap */
 #define UVM_ET_COPYONWRITE 	0x0004	/* copy_on_write */
@@ -91,6 +92,7 @@ struct uvm {
 #define UVM_ET_STACK		0x0040	/* this is a stack */
 #define UVM_ET_WC		0x0080	/* write combining */
 #define UVM_ET_CONCEAL		0x0100	/* omit from dumps */
+#define UVM_ET_SYSCALL		0x0200	/* syscall text segment */
 #define UVM_ET_FREEMAPPED	0x8000	/* map entry is on free list (DEBUG) */
 
 #define UVM_ET_ISOBJ(E)		(((E)->etype & UVM_ET_OBJ) != 0)

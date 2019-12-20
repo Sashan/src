@@ -1,4 +1,4 @@
-/*	$OpenBSD: smi.c,v 1.3 2019/08/11 15:52:46 deraadt Exp $	*/
+/*	$OpenBSD: smi.c,v 1.6 2019/10/24 12:39:26 tb Exp $	*/
 
 /*
  * Copyright (c) 2019 Martijn van Duren <martijn@openbsd.org>
@@ -65,7 +65,7 @@ smi_debug_elements(struct ber_element *root)
 	int		 constructed;
 
 	/* calculate lengths */
-	ber_calc_len(root);
+	ober_calc_len(root);
 
 	switch (root->be_encoding) {
 	case BER_TYPE_SEQUENCE:
@@ -240,10 +240,10 @@ smi_print_element(struct ber_element *root, int print_hint,
     enum smi_output_string output_string, enum smi_oid_lookup lookup)
 {
 	char		*str = NULL, *buf, *p;
-	size_t		 len, i;
+	size_t		 len, i, slen;
 	long long	 v, ticks;
 	int		 d;
-	int		 is_hex = 0;
+	int		 is_hex = 0, ret;
 	struct ber_oid	 o;
 	char		 strbuf[BUFSIZ];
 	char		*hint;
@@ -251,7 +251,7 @@ smi_print_element(struct ber_element *root, int print_hint,
 
 	switch (root->be_encoding) {
 	case BER_TYPE_BOOLEAN:
-		if (ber_get_boolean(root, &d) == -1)
+		if (ober_get_boolean(root, &d) == -1)
 			goto fail;
 		if (print_hint) {
 			if (asprintf(&str, "INTEGER: %s(%d)",
@@ -263,7 +263,7 @@ smi_print_element(struct ber_element *root, int print_hint,
 		break;
 	case BER_TYPE_INTEGER:
 	case BER_TYPE_ENUMERATED:
-		if (ber_get_integer(root, &v) == -1)
+		if (ober_get_integer(root, &v) == -1)
 			goto fail;
 		if (root->be_class == BER_CLASS_APPLICATION &&
 		    root->be_type == SNMP_T_TIMETICKS) {
@@ -333,13 +333,14 @@ smi_print_element(struct ber_element *root, int print_hint,
 			goto fail;
 		break;
 	case BER_TYPE_BITSTRING:
-		if (ber_get_bitstring(root, (void *)&buf, &len) == -1)
+		if (ober_get_bitstring(root, (void *)&buf, &len) == -1)
 			goto fail;
-		if ((str = calloc(1, len * 2 + 1 + sizeof("BITS: "))) == NULL)
+		slen = len * 2 + 1 + sizeof("BITS: ");
+		if ((str = calloc(1, slen)) == NULL)
 			goto fail;
 		p = str;
 		if (print_hint) {
-			strlcpy(str, "BITS: ", sizeof(str));
+			strlcpy(str, "BITS: ", slen);
 			p += sizeof("BITS: ");
 		}
 		for (i = 0; i < len; i++) {
@@ -348,7 +349,7 @@ smi_print_element(struct ber_element *root, int print_hint,
 		}
 		break;
 	case BER_TYPE_OBJECT:
-		if (ber_get_oid(root, &o) == -1)
+		if (ober_get_oid(root, &o) == -1)
 			goto fail;
 		if (asprintf(&str, "%s%s",
 		    print_hint ? "OID: " : "",
@@ -356,7 +357,7 @@ smi_print_element(struct ber_element *root, int print_hint,
 			goto fail;
 		break;
 	case BER_TYPE_OCTETSTRING:
-		if (ber_get_string(root, &buf) == -1)
+		if (ober_get_string(root, &buf) == -1)
 			goto fail;
 		if (root->be_class == BER_CLASS_APPLICATION &&
 		    root->be_type == SNMP_T_IPADDR) {
@@ -381,12 +382,15 @@ smi_print_element(struct ber_element *root, int print_hint,
 			 * hex is 3 * n (2 digits + n - 1 spaces + NUL-byte)
 			 * ascii can be max (2 * n) + 2 quotes + NUL-byte
 			 */
-			if ((p = str = reallocarray(NULL,
-			    output_string == smi_os_hex ? 3 : 2,
-			    root->be_len + 2)) == NULL)
+			len = output_string == smi_os_hex ? 3 : 2;
+			p = str = reallocarray(NULL, root->be_len + 2, len);
+			if (p == NULL)
 				goto fail;
-			if (is_hex)
+			len *= root->be_len + 2;
+			if (is_hex) {
 				*str++ = '"';
+				len--;
+			}
 			for (i = 0; i < root->be_len; i++) {
 				switch (output_string) {
 				case smi_os_default:
@@ -396,20 +400,34 @@ smi_print_element(struct ber_element *root, int print_hint,
 					 * There's probably more edgecases here,
 					 * not fully investigated
 					 */
-					if (is_hex && buf[i] == '\\')
+					if (len < 2)
+						goto fail;
+					if (is_hex && buf[i] == '\\') {
 						*str++ = '\\';
+						len--;
+					}
 					*str++ = isprint(buf[i]) ? buf[i] : '.';
+					len--;
 					break;
 				case smi_os_hex:
-					sprintf(str, "%s%02hhX",
+					ret = snprintf(str, len, "%s%02hhX",
 					    i == 0 ? "" :
 					    i % 16 == 0 ? "\n" : " ", buf[i]);
-					str += i == 0 ? 2 : 3;
+					if (ret == -1 || ret > (int) len)
+						goto fail;
+					len -= ret;
+					str += ret;
 					break;
 				}
 			}
-			if (is_hex)
+			if (is_hex) {
+				if (len < 2)
+					goto fail;
 				*str++ = '"';
+				len--;
+			}
+			if (len == 0)
+				goto fail;
 			*str = '\0';
 			str = NULL;
 			if (asprintf(&str, "%s%s",
@@ -453,7 +471,7 @@ smi_string2oid(const char *oidstr, struct ber_oid *o)
 
 	/*
 	 * Parse OID strings in the common form n.n.n or n-n-n.
-	 * Based on ber_string2oid with additional support for symbolic names.
+	 * Based on ober_string2oid with additional support for symbolic names.
 	 */
 	p = sp = str[0] == '.' ? str + 1 : str;
 	for (; p != NULL; sp = p) {
@@ -461,7 +479,7 @@ smi_string2oid(const char *oidstr, struct ber_oid *o)
 			*p++ = '\0';
 		if ((oid = smi_findkey(sp)) != NULL) {
 			bcopy(&oid->o_id, &ko, sizeof(ko));
-			if (o->bo_n && ber_oid_cmp(o, &ko) != 2)
+			if (o->bo_n && ober_oid_cmp(o, &ko) != 2)
 				return (-1);
 			bcopy(&ko, o, sizeof(*o));
 			errstr = NULL;

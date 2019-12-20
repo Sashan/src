@@ -1,4 +1,4 @@
-.\" $OpenBSD: vm.conf.5,v 1.44 2019/05/14 12:47:17 schwarze Exp $
+.\" $OpenBSD: vm.conf.5,v 1.49 2019/12/17 19:57:22 kn Exp $
 .\"
 .\" Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
 .\" Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -15,7 +15,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: May 14 2019 $
+.Dd $Mdocdate: December 17 2019 $
 .Dt VM.CONF 5
 .Os
 .Sh NAME
@@ -109,16 +109,33 @@ network range
 .Ar fd00::/8
 will be generated on startup.
 The specified prefix length must be /64 or smaller.
-.It Cm socket owner Ar user Ns Op : Ns Ar group
-Set the control socket owner to the specified user or group.
+.It Cm socket owner Ar user : Ns Ar group
+Set the control socket owner to the specified user and group.
 Users with access to the control socket will be allowed to use
 .Nm vmctl
 for restricted access to
 .Nm vmd .
+If only
+.Ar user
+is given,
+only the user is set.
+If only
+.Pf : Ar group
+is given,
+only the group is set.
 The default is
-.Ar root:wheel .
-.It Cm socket owner Pf : Ar group
-Set the control socket owner to the specified group.
+.Ar root : Ns Ar wheel .
+.It Ic staggered start parallel Ar parallelism Ic delay Ar seconds
+Start all configured VMs in a staggered fashion with
+.Ar parallelism
+instances in parallel every
+.Ar delay
+seconds.
+Defaults to
+.Ar parallelism
+equal to number of CPUs and a
+.Ar delay
+of 30 seconds.
 .El
 .Sh VM CONFIGURATION
 Each
@@ -136,7 +153,7 @@ Typically this is a hostname.
 .Pp
 Followed by a block of parameters that is enclosed in curly brackets:
 .Bl -tag -width Ds
-.It Cm allow instance Op Brq ...
+.It Cm allow instance Brq ...
 Set the permissions to create VM instances.
 See
 .Sx VM INSTANCES .
@@ -282,12 +299,18 @@ statements, additional default interfaces will be added.
 .It Cm memory Ar bytes
 Memory size of the VM, in bytes, rounded to megabytes.
 The default is 512M.
-.It Cm owner Ar user Ns Op : Ns Ar group
-Set the owner of the VM to the specified user or group.
+.It Cm owner Ar user : Ns Ar group
+Set the owner of the VM to the specified user and group.
 The owner will be allowed to start or stop the VM, pause or unpause the VM,
 and open the VM's console.
-.It Cm owner Pf : Ar group
-Set the owner to the specified group.
+If only
+.Ar user
+is given,
+only the user is set.
+If only
+.Pf : Ar group
+is given,
+only the group is set.
 .El
 .Sh VM INSTANCES
 It is possible to use configured or running VMs as a template for
@@ -316,7 +339,7 @@ The allowed instance options are configured in the
 .Ar parent
 VM:
 .Bl -tag -width Ds
-.It Cm allow instance Op Brq ...
+.It Cm allow instance Brq ...
 Allow users to use this VM as a template for VM instances.
 By default, the root user can always create instances without
 restrictions and users or non-root owners cannot create instances.

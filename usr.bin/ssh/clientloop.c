@@ -1,4 +1,4 @@
-/* $OpenBSD: clientloop.c,v 1.327 2019/07/24 08:57:00 mestre Exp $ */
+/* $OpenBSD: clientloop.c,v 1.329 2019/11/25 00:51:37 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -74,6 +74,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <termios.h>
 #include <pwd.h>
 #include <unistd.h>
@@ -1988,7 +1989,8 @@ client_global_hostkeys_private_confirm(struct ssh *ssh, int type,
 		    sshkey_type_plain(ctx->keys[i]->type) == KEY_RSA;
 		if ((r = sshkey_verify(ctx->keys[i], sig, siglen,
 		    sshbuf_ptr(signdata), sshbuf_len(signdata),
-		    use_kexsigtype ? ssh->kex->hostkey_alg : NULL, 0)) != 0) {
+		    use_kexsigtype ? ssh->kex->hostkey_alg : NULL, 0,
+		    NULL)) != 0) {
 			error("%s: server gave bad signature for %s key %zu",
 			    __func__, sshkey_type(ctx->keys[i]), i);
 			goto out;

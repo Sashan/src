@@ -1,4 +1,4 @@
-/*	$OpenBSD: library_mquery.c,v 1.59 2019/01/25 18:13:13 kurt Exp $ */
+/*	$OpenBSD: library_mquery.c,v 1.64 2019/12/09 23:15:03 bluhm Exp $ */
 
 /*
  * Copyright (c) 2002 Dale Rahn
@@ -69,7 +69,7 @@ _dl_unload_shlib(elf_object_t *object)
 	 * If our load object has become unreferenced then we lost the
 	 * last group reference to it, so the entire group should be taken
 	 * down.  The current object is somewhere below load_object in
-	 * the child_list tree, so it'll get cleaned up by the recursion.
+	 * the child_vec tree, so it'll get cleaned up by the recursion.
 	 * That means we can just switch here to the load object.
 	 */
 	if (load_object != object && OBJECT_REF_CNT(load_object) == 0 &&
@@ -83,10 +83,12 @@ _dl_unload_shlib(elf_object_t *object)
 	DL_DEB(("unload_shlib called on %s\n", object->load_name));
 	if (OBJECT_REF_CNT(object) == 0 &&
 	    (object->status & STAT_UNLOADED) == 0) {
+		struct object_vector vec;
+		int i;
 unload:
 		object->status |= STAT_UNLOADED;
-		TAILQ_FOREACH(n, &object->child_list, next_sib)
-			_dl_unload_shlib(n->data);
+		for (vec = object->child_vec, i = 0; i < vec.len; i++)
+			_dl_unload_shlib(vec.vec[i]);
 		TAILQ_FOREACH(n, &object->grpref_list, next_sib)
 			_dl_unload_shlib(n->data);
 		DL_DEB(("unload_shlib unloading on %s\n", object->load_name));
@@ -110,7 +112,8 @@ _dl_tryload_shlib(const char *libname, int type, int flags)
 	Elf_Phdr *ptls = NULL;
 	Elf_Addr relro_addr = 0, relro_size = 0;
 	struct stat sb;
-	char hbuf[4096];
+	char hbuf[4096], *exec_start;
+	size_t exec_size;
 
 #define ROUND_PG(x) (((x) + align) & ~(align))
 #define TRUNC_PG(x) ((x) & ~(align))
@@ -229,6 +232,8 @@ _dl_tryload_shlib(const char *libname, int type, int flags)
 #define LOFF ((Elf_Addr)lowld->start - lowld->moff)
 
 retry:
+	exec_start = NULL;
+	exec_size = 0;
 	for (ld = lowld; ld != NULL; ld = ld->next) {
 		off_t foff;
 		int fd, flags;
@@ -261,7 +266,6 @@ retry:
 
 		res = _dl_mmap((void *)(LOFF + ld->moff), ROUND_PG(ld->size),
 		    ld->prot, flags | MAP_FIXED | __MAP_NOREPLACE, fd, foff);
-
 		if (_dl_mmap_error(res)) {
 			struct load_list *ll;
 
@@ -273,6 +277,11 @@ retry:
 
 			lowld->start += ROUND_PG(ld->size);
 			goto retry;
+		}
+
+		if ((ld->prot & PROT_EXEC) && exec_start == NULL) {
+			exec_start = (void *)(LOFF + ld->moff);
+			exec_size = ROUND_PG(ld->size);
 		}
 
 		ld->start = res;
@@ -304,6 +313,8 @@ retry:
 	    (Elf_Phdr *)((char *)lowld->start + ehdr->e_phoff), ehdr->e_phnum,
 	    type, (Elf_Addr)lowld->start, LOFF);
 	if (object) {
+		char *soname = (char *)object->Dyn.info[DT_SONAME];
+
 		object->load_size = (Elf_Addr)load_end - (Elf_Addr)lowld->start;
 		object->load_list = lowld;
 		/* set inode, dev from stat info */
@@ -316,6 +327,14 @@ retry:
 		if (ptls != NULL && ptls->p_memsz)
 			_dl_set_tls(object, ptls, (Elf_Addr)lowld->start,
 			    libname);
+
+		/* Request permission for system calls in libc.so's text segment */
+		if (soname != NULL &&
+		    _dl_strncmp(soname, "libc.so.", 8) == 0) {
+			if (_dl_msyscall(exec_start, exec_size) == -1)
+				_dl_printf("msyscall %lx %lx error\n",
+				    exec_start, exec_size);
+		}
 	} else {
 		_dl_load_list_free(lowld);
 	}

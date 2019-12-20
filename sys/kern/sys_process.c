@@ -1,4 +1,4 @@
-/*	$OpenBSD: sys_process.c,v 1.80 2018/02/19 09:25:13 mpi Exp $	*/
+/*	$OpenBSD: sys_process.c,v 1.82 2019/12/11 07:30:09 guenther Exp $	*/
 /*	$NetBSD: sys_process.c,v 1.55 1996/05/15 06:17:47 tls Exp $	*/
 
 /*-
@@ -282,6 +282,8 @@ ptrace_ctrl(struct proc *p, int req, pid_t pid, caddr_t addr, int data)
 	case PT_TRACE_ME:
 		/* Just set the trace flag. */
 		tr = p->p_p;
+		if (ISSET(tr->ps_flags, PS_TRACED))
+			return EBUSY;
 		atomic_setbits_int(&tr->ps_flags, PS_TRACED);
 		tr->ps_oppid = tr->ps_pptr->ps_pid;
 		if (tr->ps_ptstat == NULL)
@@ -491,7 +493,7 @@ ptrace_ctrl(struct proc *p, int req, pid_t pid, caddr_t addr, int data)
 
 		/* Finally, deliver the requested signal (or none). */
 		if (t->p_stat == SSTOP) {
-			t->p_xstat = data;
+			tr->ps_xsig = data;
 			SCHED_LOCK(s);
 			setrunnable(t);
 			SCHED_UNLOCK(s);

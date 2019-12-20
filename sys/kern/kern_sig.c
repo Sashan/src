@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sig.c,v 1.233 2019/08/07 14:14:01 deraadt Exp $	*/
+/*	$OpenBSD: kern_sig.c,v 1.237 2019/12/19 17:40:11 mpi Exp $	*/
 /*	$NetBSD: kern_sig.c,v 1.54 1996/04/22 01:38:32 christos Exp $	*/
 
 /*
@@ -507,7 +507,7 @@ sys_sigsuspend(struct proc *p, void *v, register_t *retval)
 	struct sigacts *ps = pr->ps_sigacts;
 
 	dosigsuspend(p, SCARG(uap, mask) &~ sigcantmask);
-	while (tsleep(ps, PPAUSE|PCATCH, "pause", 0) == 0)
+	while (tsleep_nsec(ps, PPAUSE|PCATCH, "pause", INFSLP) == 0)
 		/* void */;
 	/* always return EINTR rather than ERESTART... */
 	return (EINTR);
@@ -907,9 +907,7 @@ ptsignal(struct proc *p, int signum, enum signal_type type)
 	if (type == SPROCESS) {
 		/* Accept SIGKILL to coredumping processes */
 		if (pr->ps_flags & PS_COREDUMP && signum == SIGKILL) {
-			if (pr->ps_single != NULL)
-				p = pr->ps_single;
-			atomic_setbits_int(&p->p_p->ps_siglist, mask);
+			atomic_setbits_int(&pr->ps_siglist, mask);
 			return;
 		}
 
@@ -1067,7 +1065,7 @@ ptsignal(struct proc *p, int signum, enum signal_type type)
 			if (pr->ps_flags & PS_PPWAIT)
 				goto out;
 			atomic_clearbits_int(siglist, mask);
-			p->p_xstat = signum;
+			pr->ps_xsig = signum;
 			proc_stop(p, 0);
 			goto out;
 		}
@@ -1196,7 +1194,7 @@ issignal(struct proc *p)
 		signum = ffs((long)mask);
 		mask = sigmask(signum);
 		atomic_clearbits_int(&p->p_siglist, mask);
-		atomic_clearbits_int(&p->p_p->ps_siglist, mask);
+		atomic_clearbits_int(&pr->ps_siglist, mask);
 
 		/*
 		 * We should see pending but ignored signals
@@ -1213,7 +1211,7 @@ issignal(struct proc *p)
 		 */
 		if (((pr->ps_flags & (PS_TRACED | PS_PPWAIT)) == PS_TRACED) &&
 		    signum != SIGKILL) {
-			p->p_xstat = signum;
+			pr->ps_xsig = signum;
 
 			if (dolock)
 				KERNEL_LOCK();
@@ -1237,21 +1235,22 @@ issignal(struct proc *p)
 			 * If we are no longer being traced, or the parent
 			 * didn't give us a signal, look for more signals.
 			 */
-			if ((pr->ps_flags & PS_TRACED) == 0 || p->p_xstat == 0)
+			if ((pr->ps_flags & PS_TRACED) == 0 ||
+			    pr->ps_xsig == 0)
 				continue;
 
 			/*
 			 * If the new signal is being masked, look for other
 			 * signals.
 			 */
-			signum = p->p_xstat;
+			signum = pr->ps_xsig;
 			mask = sigmask(signum);
 			if ((p->p_sigmask & mask) != 0)
 				continue;
 
 			/* take the signal! */
 			atomic_clearbits_int(&p->p_siglist, mask);
-			atomic_clearbits_int(&p->p_p->ps_siglist, mask);
+			atomic_clearbits_int(&pr->ps_siglist, mask);
 		}
 
 		prop = sigprop[signum];
@@ -1289,7 +1288,7 @@ issignal(struct proc *p)
 		    		    (pr->ps_pgrp->pg_jobc == 0 &&
 				    prop & SA_TTYSTOP))
 					break;	/* == ignore */
-				p->p_xstat = signum;
+				pr->ps_xsig = signum;
 				if (dolock)
 					SCHED_LOCK(s);
 				proc_stop(p, 1);
@@ -1496,7 +1495,7 @@ sigexit(struct proc *p, int signum)
 		if (coredump(p) == 0)
 			signum |= WCOREFLAG;
 	}
-	exit1(p, W_EXITCODE(0, signum), EXIT_NORMAL);
+	exit1(p, 0, signum, EXIT_NORMAL);
 	/* NOTREACHED */
 }
 
@@ -1535,36 +1534,37 @@ coredump(struct proc *p)
 
 	pr->ps_flags |= PS_COREDUMP;
 
-	/*
-	 * If the process has inconsistent uids, nosuidcoredump
-	 * determines coredump placement policy.
-	 */
-	if (((pr->ps_flags & PS_SUGID) && (error = suser(p))) ||
-	   ((pr->ps_flags & PS_SUGID) && nosuidcoredump)) {
-		if (nosuidcoredump == 3 || nosuidcoredump == 2)
-			incrash = 1;
-		else
-			return (EPERM);
-	}
-
 	/* Don't dump if will exceed file size limit. */
 	if (USPACE + ptoa(vm->vm_dsize + vm->vm_ssize) >= lim_cur(RLIMIT_CORE))
 		return (EFBIG);
 
 	name = pool_get(&namei_pool, PR_WAITOK);
 
-	if (incrash && nosuidcoredump == 3) {
-		/*
-		 * If the program directory does not exist, dumps of
-		 * that core will silently fail.
-		 */
-		len = snprintf(name, MAXPATHLEN, "%s/%s/%u.core",
-		    dir, pr->ps_comm, pr->ps_pid);
-	} else if (incrash && nosuidcoredump == 2)
-		len = snprintf(name, MAXPATHLEN, "%s/%s.core",
-		    dir, pr->ps_comm);
-	else
+	/*
+	 * If the process has inconsistent uids, nosuidcoredump
+	 * determines coredump placement policy.
+	 */
+	if (((pr->ps_flags & PS_SUGID) && (error = suser(p))) ||
+	   ((pr->ps_flags & PS_SUGID) && nosuidcoredump)) {
+		if (nosuidcoredump == 3) {
+			/*
+			 * If the program directory does not exist, dumps of
+			 * that core will silently fail.
+			 */
+			len = snprintf(name, MAXPATHLEN, "%s/%s/%u.core",
+			    dir, pr->ps_comm, pr->ps_pid);
+			incrash = KERNELPATH;
+		} else if (nosuidcoredump == 2) {
+			len = snprintf(name, MAXPATHLEN, "%s/%s.core",
+			    dir, pr->ps_comm);
+			incrash = KERNELPATH;
+		} else {
+			pool_put(&namei_pool, name);
+			return (EPERM);
+		}
+	} else
 		len = snprintf(name, MAXPATHLEN, "%s.core", pr->ps_comm);
+
 	if (len >= MAXPATHLEN) {
 		pool_put(&namei_pool, name);
 		return (EACCES);
@@ -1592,7 +1592,8 @@ coredump(struct proc *p)
 		cred->cr_gid = 0;
 	}
 
-	NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_SYSSPACE, name, p);
+	/* incrash should be 0 or KERNELPATH only */
+	NDINIT(&nd, 0, incrash, UIO_SYSSPACE, name, p);
 
 	error = vn_open(&nd, O_CREAT | FWRITE | O_NOFOLLOW | O_NONBLOCK,
 	    S_IRUSR | S_IWUSR);
@@ -1936,7 +1937,7 @@ single_thread_check(struct proc *p, int deep)
 			if (--pr->ps_singlecount == 0)
 				wakeup(&pr->ps_singlecount);
 			if (pr->ps_flags & PS_SINGLEEXIT)
-				exit1(p, 0, EXIT_THREAD_NOCHECK);
+				exit1(p, 0, 0, EXIT_THREAD_NOCHECK);
 
 			/* not exiting and don't need to unwind, so suspend */
 			SCHED_LOCK(s);
@@ -2054,7 +2055,7 @@ single_thread_wait(struct process *pr)
 {
 	/* wait until they're all suspended */
 	while (pr->ps_singlecount > 0)
-		tsleep(&pr->ps_singlecount, PWAIT, "suspend", 0);
+		tsleep_nsec(&pr->ps_singlecount, PWAIT, "suspend", INFSLP);
 }
 
 void

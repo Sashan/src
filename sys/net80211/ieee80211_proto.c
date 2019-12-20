@@ -1,4 +1,4 @@
-/*	$OpenBSD: ieee80211_proto.c,v 1.94 2019/07/29 10:50:09 stsp Exp $	*/
+/*	$OpenBSD: ieee80211_proto.c,v 1.96 2019/11/06 13:55:44 stsp Exp $	*/
 /*	$NetBSD: ieee80211_proto.c,v 1.8 2004/04/30 23:58:20 dyoung Exp $	*/
 
 /*-
@@ -909,10 +909,11 @@ ieee80211_set_beacon_miss_threshold(struct ieee80211com *ic)
 
 	/*
 	 * Scale the missed beacon counter threshold to the AP's actual
-	 * beacon interval. Give the AP at least 700 ms to time out and
-	 * round up to ensure that at least one beacon may be missed.
+	 * beacon interval.
 	 */
-	int btimeout = MIN(7 * ic->ic_bss->ni_intval, 700);
+	int btimeout = MIN(IEEE80211_BEACON_MISS_THRES * ic->ic_bss->ni_intval,
+	    IEEE80211_BEACON_MISS_THRES * (IEEE80211_DUR_TU / 10));
+	/* Ensure that at least one beacon may be missed. */
 	btimeout = MAX(btimeout, 2 * ic->ic_bss->ni_intval);
 	if (ic->ic_bss->ni_intval > 0) /* don't crash if interval is bogus */
 		ic->ic_bmissthres = btimeout / ic->ic_bss->ni_intval;
@@ -937,6 +938,33 @@ ieee80211_stop_ampdu_tx(struct ieee80211com *ic, struct ieee80211_node *ni,
 		ieee80211_delba_request(ic, ni,
 		    mgt == -1 ? 0 : IEEE80211_REASON_AUTH_LEAVE, 1, tid);
 	}
+}
+
+void
+ieee80211_check_wpa_supplicant_failure(struct ieee80211com *ic,
+    struct ieee80211_node *ni)
+{
+	struct ieee80211_node *ni2;
+
+	if (ic->ic_opmode != IEEE80211_M_STA
+#ifndef IEEE80211_STA_ONLY
+	    && ic->ic_opmode != IEEE80211_M_IBSS
+#endif
+	    )
+		return;
+
+	if (ni->ni_rsn_supp_state != RSNA_SUPP_PTKNEGOTIATING)
+		return;
+
+	ni->ni_assoc_fail |= IEEE80211_NODE_ASSOCFAIL_WPA_KEY;
+
+	if (ni != ic->ic_bss)
+		return;
+
+	/* Also update the copy of our AP's node in the node cache. */
+	ni2 = ieee80211_find_node(ic, ic->ic_bss->ni_macaddr);
+	if (ni2)
+		ni2->ni_assoc_fail |= ic->ic_bss->ni_assoc_fail;
 }
 
 int
@@ -1037,6 +1065,7 @@ justcleanup:
 			break;
 		}
 		ni->ni_rsn_supp_state = RSNA_SUPP_INITIALIZE;
+		ni->ni_assoc_fail = 0;
 		if (ic->ic_flags & IEEE80211_F_RSNON)
 			ieee80211_crypto_clear_groupkeys(ic);
 		break;
@@ -1097,6 +1126,8 @@ justcleanup:
 		}
 		break;
 	case IEEE80211_S_AUTH:
+		if (ostate == IEEE80211_S_RUN)
+			ieee80211_check_wpa_supplicant_failure(ic, ni);
 		ni->ni_rsn_supp_state = RSNA_SUPP_INITIALIZE;
 		if (ic->ic_flags & IEEE80211_F_RSNON)
 			ieee80211_crypto_clear_groupkeys(ic);
@@ -1218,6 +1249,7 @@ justcleanup:
 				 * the link up until the port is valid.
 				 */
 				ieee80211_set_link_state(ic, LINK_STATE_UP);
+				ni->ni_assoc_fail = 0;
 			}
 			ic->ic_mgt_timer = 0;
 			ieee80211_set_beacon_miss_threshold(ic);

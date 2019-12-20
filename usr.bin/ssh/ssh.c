@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh.c,v 1.505 2019/06/28 13:35:04 deraadt Exp $ */
+/* $OpenBSD: ssh.c,v 1.509 2019/11/18 16:10:05 naddy Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -60,6 +60,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <limits.h>
 #include <locale.h>
@@ -851,7 +852,7 @@ main(int ac, char **av)
 			}
 			break;
 		case 'c':
-			if (!ciphers_valid(*optarg == '+' ?
+			if (!ciphers_valid(*optarg == '+' || *optarg == '^' ?
 			    optarg + 1 : optarg)) {
 				fprintf(stderr, "Unknown cipher type '%s'\n",
 				    optarg);
@@ -1323,6 +1324,22 @@ main(int ac, char **av)
 		exit(0);
 	}
 
+	/* Expand SecurityKeyProvider if it refers to an environment variable */
+	if (options.sk_provider != NULL && *options.sk_provider == '$' &&
+	    strlen(options.sk_provider) > 1) {
+		if ((cp = getenv(options.sk_provider + 1)) == NULL) {
+			debug("Security key provider %s did not resolve; "
+			    "disabling", options.sk_provider);
+			free(options.sk_provider);
+			options.sk_provider = NULL;
+		} else {
+			debug2("resolved SecurityKeyProvider %s => %s",
+			    options.sk_provider, cp);
+			free(options.sk_provider);
+			options.sk_provider = xstrdup(cp);
+		}
+	}
+
 	if (muxclient_command != 0 && options.control_path == NULL)
 		fatal("No ControlPath specified for \"-O\" command");
 	if (options.control_path != NULL) {
@@ -1348,7 +1365,7 @@ main(int ac, char **av)
 	timeout_ms = options.connection_timeout * 1000;
 
 	/* Open a connection to the remote host. */
-	if (ssh_connect(ssh, host, addrs, &hostaddr, options.port,
+	if (ssh_connect(ssh, host_arg, host, addrs, &hostaddr, options.port,
 	    options.address_family, options.connection_attempts,
 	    &timeout_ms, options.tcp_keep_alive) != 0)
 		exit(255);

@@ -1,4 +1,4 @@
-/* $OpenBSD: monitor.c,v 1.77 2019/06/28 13:32:44 deraadt Exp $	 */
+/* $OpenBSD: monitor.c,v 1.80 2019/12/19 19:09:53 bluhm Exp $	 */
 
 /*
  * Copyright (c) 2003 Håkan Olsson.  All rights reserved.
@@ -71,7 +71,7 @@ static void	m_priv_setsockopt(void);
 static void	m_priv_req_readdir(void);
 static void	m_priv_bind(void);
 static void	m_priv_pfkey_open(void);
-static int	m_priv_local_sanitize_path(char *, size_t, int);
+static int	m_priv_local_sanitize_path(const char *, size_t, int);
 static int	m_priv_check_sockopt(int, int);
 static int	m_priv_check_bind(const struct sockaddr *, socklen_t);
 
@@ -518,9 +518,9 @@ m_priv_getfd(void)
 
 	if ((ret = m_priv_local_sanitize_path(path, sizeof path, flags))
 	    != 0) {
-		if (ret == 1)
+		if (errno != ENOENT)
 			log_print("m_priv_getfd: illegal path \"%s\"", path);
-		err = EACCES;
+		err = errno;
 		v = -1;
 	} else {
 		if ((v = open(path, flags, mode)) == -1)
@@ -684,9 +684,9 @@ must_write(const void *buf, size_t n)
 
 /* Check that path/mode is permitted.  */
 static int
-m_priv_local_sanitize_path(char *path, size_t pmax, int flags)
+m_priv_local_sanitize_path(const char *path, size_t pmax, int flags)
 {
-	char new_path[PATH_MAX], var_run[PATH_MAX];
+	char new_path[PATH_MAX], var_run[PATH_MAX], *enddir;
 
 	/*
 	 * We only permit paths starting with
@@ -694,16 +694,30 @@ m_priv_local_sanitize_path(char *path, size_t pmax, int flags)
 	 *  /var/run/		(rw)
 	 */
 
-	if (realpath(path, new_path) == NULL ||
-	    realpath("/var/run", var_run) == NULL) {
+	if (realpath(path, new_path) == NULL) {
+		if (errno != ENOENT)
+			return 1;
 		/*
-                 * We could not decide whether the path is ok or not.
-                 * Indicate this be returning 2.
+		 * It is ok if the directory exists,
+		 * but the file should be created.
 		 */
-		if (errno == ENOENT)
-			return 2;
-		goto bad_path;
+		if (strlcpy(new_path, path, sizeof(new_path)) >=
+		    sizeof(new_path))
+			return 1;
+		enddir = strrchr(new_path, '/');
+		if (enddir == NULL || enddir[1] == '\0')
+			return 1;
+		enddir[1] = '\0';
+		if (realpath(new_path, new_path) == NULL) {
+			errno = ENOENT;
+			return 1;
+		}
+		enddir = strrchr(path, '/');
+		strlcat(new_path, enddir, sizeof(new_path));
 	}
+
+	if (realpath("/var/run/", var_run) == NULL)
+		return 1;
 	strlcat(var_run, "/", sizeof(var_run));
 
 	if (strncmp(var_run, new_path, strlen(var_run)) == 0)
@@ -713,7 +727,7 @@ m_priv_local_sanitize_path(char *path, size_t pmax, int flags)
 	    (flags & O_ACCMODE) == O_RDONLY)
 		return 0;
 
-bad_path:
+	errno = EACCES;
 	return 1;
 }
 

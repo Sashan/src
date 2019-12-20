@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.296 2019/07/12 16:53:57 mpi Exp $
+#	$OpenBSD: Makefile,v 1.299 2019/12/06 10:42:33 mpi Exp $
 #	$NetBSD: Makefile,v 1.4 1996/01/09 03:23:01 thorpej Exp $
 
 #	Makefile for section 9 (kernel function and variable) manual pages.
@@ -18,7 +18,8 @@ MAN=	aml_evalnode.9 atomic_add_int.9 atomic_cas_uint.9 \
 	hardclock.9 hook_establish.9 hz.9 idgen32.9 \
 	ieee80211.9 ieee80211_crypto.9 ieee80211_input.9 ieee80211_ioctl.9 \
 	ieee80211_node.9 ieee80211_output.9 ieee80211_proto.9 \
-	ieee80211_radiotap.9 if_get.9 if_rxr_init.9 ifq_enqueue.9 \
+	ieee80211_radiotap.9 if_addrhook_add.9 if_get.9 if_rxr_init.9 \
+	ifq_enqueue.9 \
 	ifq_deq_begin.9 imax.9 iic.9 intro.9 inittodr.9 intr_barrier.9 \
 	KASSERT.9 km_alloc.9 knote.9 kthread.9 ktrace.9 \
 	lim_cur.9 loadfirmware.9 log.9 \
@@ -38,8 +39,12 @@ MAN=	aml_evalnode.9 atomic_add_int.9 atomic_cas_uint.9 \
 	socreate.9 sosplice.9 strcmp.9 style.9 syscall.9 sysctl_int.9 \
 	task_add.9 tc_init.9 tfind.9 thread_fork.9 \
 	time_second.9 timeout.9 tsleep.9 tvtohz.9 \
-	uiomove.9 uvm.9 usb_add_task.9 usbd_close_pipe.9 usbd_open_pipe.9 \
-	usbd_ref_wait.9 usbd_transfer.9 vfs.9 vfs_busy.9 \
+	uiomove.9 \
+	usb_add_task.9 usbd_close_pipe.9 usbd_open_pipe.9 \
+	usbd_ref_wait.9 usbd_transfer.9 \
+	uvm_fault.9 uvm_init.9 uvm_km_alloc.9 uvm_map.9 uvm_pagealloc.9 \
+	uvm_vslock.9 uvn_attach.9 \
+	vfs.9 vfs_busy.9 \
 	vfs_cache.9 vaccess.9 vclean.9 vcount.9 vdevgone.9 vfinddev.9 vflush.9 \
 	vflushbuf.9 vget.9 vgone.9 vhold.9 vinvalbuf.9 vnode.9 vnsubr.9 \
 	VOP_LOOKUP.9 vput.9 vrecycle.9 vref.9 vrele.9 \

@@ -1,4 +1,4 @@
-/*	$OpenBSD: in_pcb.h,v 1.116 2019/07/15 12:40:42 bluhm Exp $	*/
+/*	$OpenBSD: in_pcb.h,v 1.118 2019/11/13 17:36:02 deraadt Exp $	*/
 /*	$NetBSD: in_pcb.h,v 1.14 1996/02/13 23:42:00 christos Exp $	*/
 
 /*
@@ -228,7 +228,7 @@ struct inpcbtable {
 
 /* default values for baddynamicports [see ip_init()] */
 #define	DEFBADDYNAMICPORTS_TCP	{ \
-	587, 749, 750, 751, 871, 2049, \
+	587, 749, 750, 751, 853, 871, 2049, \
 	6000, 6001, 6002, 6003, 6004, 6005, 6006, 6007, 6008, 6009, 6010, \
 	0 }
 #define	DEFBADDYNAMICPORTS_UDP	{ 623, 664, 749, 750, 751, 2049, \
@@ -287,8 +287,8 @@ struct inpcb *
 int	 in6_pcbaddrisavail(struct inpcb *, struct sockaddr_in6 *, int,
 	    struct proc *);
 int	 in6_pcbconnect(struct inpcb *, struct mbuf *);
-int	 in6_setsockaddr(struct inpcb *, struct mbuf *);
-int	 in6_setpeeraddr(struct inpcb *, struct mbuf *);
+void	 in6_setsockaddr(struct inpcb *, struct mbuf *);
+void	 in6_setpeeraddr(struct inpcb *, struct mbuf *);
 #endif /* INET6 */
 void	 in_pcbinit(struct inpcbtable *, int);
 struct inpcb *

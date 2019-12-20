@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.139 2019/08/02 07:41:13 visa Exp $	*/
+/*	$OpenBSD: trap.c,v 1.142 2019/09/06 16:22:40 visa Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -265,11 +265,11 @@ trap(struct trapframe *trapframe)
 		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
 		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
 		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			return;
+			goto out;
 	}
 
 	itsa(trapframe, ci, p, type);
-
+out:
 	if (type & T_USER)
 		userret(p);
 }
@@ -1513,8 +1513,9 @@ db_save_stack_trace(struct db_stack_trace *st)
 		db_symbol_values(sym, &name, NULL);
 		subr = pc - (vaddr_t)diff;
 
-		if (subr == (vaddr_t)k_general || subr == (vaddr_t)k_intr ||
-		    subr == (vaddr_t)u_general || subr == (vaddr_t)u_intr) {
+		if (subr == (vaddr_t)u_general || subr == (vaddr_t)u_intr)
+			break;
+		if (subr == (vaddr_t)k_general || subr == (vaddr_t)k_intr) {
 			tf = (struct trapframe *)*(register_t *)sp;
 			pc = tf->pc;
 			ra = tf->ra;
@@ -1530,8 +1531,7 @@ db_save_stack_trace(struct db_stack_trace *st)
 		framesize = 0;
 		for (va = subr; va < pc && !done; va += 4) {
 			inst.word = kdbpeek(va);
-			if (inst_branch(inst.word) || inst_call(inst.word) ||
-			    inst_return(inst.word)) {
+			if (inst_call(inst.word) || inst_return(inst.word)) {
 				/* Check the delay slot and stop. */
 				va += 4;
 				inst.word = kdbpeek(va);
