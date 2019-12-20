@@ -1,4 +1,4 @@
-/*	$OpenBSD: output-bgpd.c,v 1.9 2019/08/13 13:53:49 claudio Exp $ */
+/*	$OpenBSD: output-bgpd.c,v 1.16 2019/12/04 23:03:05 benno Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -15,70 +15,32 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include <assert.h>
-#include <err.h>
-#include <inttypes.h>
-#include <stdarg.h>
 #include <stdlib.h>
-
 #include <openssl/ssl.h>
 
 #include "extern.h"
 
-static int
-cmp(const void *p1, const void *p2)
-{
-	const char *a1 = *(const char **)p1, *a2 = *(const char **)p2;
-
-	return strcmp(a1, a2);
-}
-
-void
-output_bgpd(const struct roa **roas, size_t roasz,
-    int quiet, size_t *vrps, size_t *unique)
+int
+output_bgpd(FILE *out, struct vrp_tree *vrps)
 {
 	char		 buf1[64], buf2[32];
-	char		**lines = NULL;
-	size_t		 i, j, k;
+	struct vrp	*v;
 
-	*vrps = *unique = 0;
+	if (fprintf(out, "roa-set {\n") < 0)
+		return -1;
 
-	for (i = 0; i < roasz; i++)
-		*vrps += roas[i]->ipsz;
+	RB_FOREACH(v, vrp_tree, vrps) {
+		ip_addr_print(&v->addr, v->afi, buf1, sizeof(buf1));
+		if (v->maxlength > v->addr.prefixlen)
+			snprintf(buf2, sizeof(buf2), "maxlen %u ",
+			    v->maxlength);
+		else
+			buf2[0] = '\0';
+		if (fprintf(out, "\t%s %ssource-as %u\n", buf1, buf2, v->asid) < 0)
+			return -1;
+	}
 
-	if ((lines = calloc(*vrps, sizeof(char *))) == NULL)
-		err(EXIT_FAILURE, NULL);
-
-	for (i = k = 0; i < roasz; i++)
-		for (j = 0; j < roas[i]->ipsz; j++) {
-			ip_addr_print(&roas[i]->ips[j].addr,
-			    roas[i]->ips[j].afi, buf1, sizeof(buf1));
-			if (roas[i]->ips[j].maxlength >
-			    roas[i]->ips[j].addr.prefixlen)
-				snprintf(buf2, sizeof(buf2), "maxlen %zu ",
-				    roas[i]->ips[j].maxlength);
-			else
-				buf2[0] = '\0';
-			if (asprintf(&lines[k++], "%s %ssource-as %u",
-			    buf1, buf2, roas[i]->asid) == -1)
-				err(EXIT_FAILURE, NULL);
-		}
-
-	assert(k == *vrps);
-	qsort(lines, *vrps, sizeof(char *), cmp);
-
-	if (!quiet)
-		puts("roa-set {");
-	for (i = 0; i < *vrps; i++)
-		if (i == 0 || strcmp(lines[i], lines[i - 1])) {
-			if (!quiet)
-				printf("    %s\n", lines[i]);
-			(*unique)++;
-		}
-	if (!quiet)
-		puts("}");
-
-	for (i = 0; i < *vrps; i++)
-		free(lines[i]);
-	free(lines);
+	if (fprintf(out, "}\n") < 0)
+		return -1;
+	return 0;
 }

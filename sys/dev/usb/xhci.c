@@ -1,4 +1,4 @@
-/* $OpenBSD: xhci.c,v 1.105 2019/06/13 21:03:48 mpi Exp $ */
+/* $OpenBSD: xhci.c,v 1.109 2019/11/28 21:49:41 patrick Exp $ */
 
 /*
  * Copyright (c) 2014-2015 Martin Pieuchot
@@ -810,6 +810,29 @@ xhci_event_xfer(struct xhci_softc *sc, uint64_t paddr, uint32_t status,
 	xhci_xfer_done(xfer);
 }
 
+uint32_t
+xhci_xfer_length_generic(struct xhci_xfer *xx, struct xhci_pipe *xp,
+    int trb_idx)
+{
+	int	 trb0_idx;
+	uint32_t len = 0, type;
+
+	trb0_idx =
+	    ((xx->index + xp->ring.ntrb) - xx->ntrb) % (xp->ring.ntrb - 1);
+
+	while (1) {
+		type = xp->ring.trbs[trb0_idx].trb_flags & XHCI_TRB_TYPE_MASK;
+		if (type == XHCI_TRB_TYPE_NORMAL || type == XHCI_TRB_TYPE_DATA)
+			len += le32toh(XHCI_TRB_LEN(
+			    xp->ring.trbs[trb0_idx].trb_status));
+		if (trb0_idx == trb_idx)
+			break;
+		if (++trb0_idx == xp->ring.ntrb)
+			trb0_idx = 0;
+	}
+	return len;
+}
+
 int
 xhci_event_xfer_generic(struct xhci_softc *sc, struct usbd_xfer *xfer,
     struct xhci_pipe *xp, uint32_t remain, int trb_idx,
@@ -819,16 +842,23 @@ xhci_event_xfer_generic(struct xhci_softc *sc, struct usbd_xfer *xfer,
 
 	switch (code) {
 	case XHCI_CODE_SUCCESS:
-		/*
-		 * This might be the last TRB of a TD that ended up
-		 * with a Short Transfer condition, see below.
-		 */
-		if (xfer->actlen == 0)
-			xfer->actlen = xfer->length - remain;
+		if (xfer->actlen == 0) {
+			if (remain)
+				xfer->actlen =
+				    xhci_xfer_length_generic(xx, xp, trb_idx) -
+				    remain;
+			else
+				xfer->actlen = xfer->length;
+		}
 		xfer->status = USBD_NORMAL_COMPLETION;
 		break;
 	case XHCI_CODE_SHORT_XFER:
-		xfer->actlen = xfer->length - remain;
+		/*
+		 * Use values from the transfer TRB instead of the status TRB.
+		 */
+		if (xfer->actlen == 0)
+			xfer->actlen =
+			    xhci_xfer_length_generic(xx, xp, trb_idx) - remain;
 		/*
 		 * If this is not the last TRB of a transfer, we should
 		 * theoretically clear the IOC at the end of the chain
@@ -1804,8 +1834,7 @@ xhci_command_submit(struct xhci_softc *sc, struct xhci_trb *trb0, int timeout)
 	s = splusb();
 	sc->sc_cmd_trb = trb;
 	XDWRITE4(sc, XHCI_DOORBELL(0), 0);
-	error = tsleep(&sc->sc_cmd_trb, PZERO, "xhcicmd",
-	    (timeout*hz+999)/ 1000 + 1);
+	error = tsleep_nsec(&sc->sc_cmd_trb, PZERO, "xhcicmd", timeout);
 	if (error) {
 #ifdef XHCI_DEBUG
 		printf("%s: tsleep() = %d\n", __func__, error);
@@ -2219,7 +2248,7 @@ xhci_abort_xfer(struct usbd_xfer *xfer, usbd_status status)
 	 */
 	xhci_cmd_set_tr_deq_async(sc, xp->slot, xp->dci,
 	    DEQPTR(xp->ring) | xp->ring.toggle);
-	error = tsleep(xp, PZERO, "xhciab", (XHCI_CMD_TIMEOUT*hz+999)/1000 + 1);
+	error = tsleep_nsec(xp, PZERO, "xhciab", XHCI_CMD_TIMEOUT);
 	if (error)
 		printf("%s: timeout aborting transfer\n", DEVNAME(sc));
 }
@@ -2872,7 +2901,7 @@ xhci_device_generic_start(struct usbd_xfer *xfer)
 	/* If the buffer crosses a 64k boundary, we need one more. */
 	len = XHCI_TRB_MAXSIZE - (paddr & (XHCI_TRB_MAXSIZE - 1));
 	if (len < xfer->length)
-		ntrb++;
+		ntrb = howmany(xfer->length - len, XHCI_TRB_MAXSIZE) + 1;
 	else
 		len = xfer->length;
 

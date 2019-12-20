@@ -1,4 +1,4 @@
-/*	$OpenBSD: virtio.c,v 1.77 2019/01/22 10:12:36 mlarkin Exp $	*/
+/*	$OpenBSD: virtio.c,v 1.82 2019/12/11 06:45:16 pd Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -48,7 +48,6 @@
 #include "atomicio.h"
 
 extern char *__progname;
-
 struct viornd_dev viornd;
 struct vioblk_dev *vioblk;
 struct vionet_dev *vionet;
@@ -1533,6 +1532,9 @@ vionet_notify_tx(struct vionet_dev *dev)
 		num_enq++;
 
 		idx = dev->vq[TXQ].last_avail & VIONET_QUEUE_MASK;
+
+		free(pkt);
+		pkt = NULL;
 	}
 
 	if (write_mem(q_gpa, vr, vr_sz)) {
@@ -1766,7 +1768,7 @@ static int
 virtio_init_disk(struct virtio_backing *file, off_t *sz,
     int *fd, size_t nfd, int type)
 {
-	/* 
+	/*
 	 * probe disk types in order of preference, first one to work wins.
 	 * TODO: provide a way of specifying the type and options.
 	 */
@@ -2138,11 +2140,6 @@ vionet_restore(int fd, struct vmd_vm *vm, int *child_taps)
 			memset(&vionet[i].event, 0, sizeof(struct event));
 			event_set(&vionet[i].event, vionet[i].fd,
 			    EV_READ | EV_PERSIST, vionet_rx_event, &vionet[i]);
-			if (event_add(&vionet[i].event, NULL)) {
-				log_warn("could not initialize vionet event "
-				    "handler");
-				return (-1);
-			}
 		}
 	}
 	return (0);
@@ -2335,4 +2332,30 @@ virtio_dump(int fd)
 		return ret;
 
 	return (0);
+}
+
+void
+virtio_stop(struct vm_create_params *vcp)
+{
+	uint8_t i;
+	for (i = 0; i < vcp->vcp_nnics; i++) {
+		if (event_del(&vionet[i].event)) {
+			log_warn("could not initialize vionet event "
+			    "handler");
+			return;
+		}
+	}
+}
+
+void
+virtio_start(struct vm_create_params *vcp)
+{
+	uint8_t i;
+	for (i = 0; i < vcp->vcp_nnics; i++) {
+		if (event_add(&vionet[i].event, NULL)) {
+			log_warn("could not initialize vionet event "
+			    "handler");
+			return;
+		}
+	}
 }

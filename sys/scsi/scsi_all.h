@@ -1,4 +1,4 @@
-/*	$OpenBSD: scsi_all.h,v 1.55 2015/06/07 19:13:27 krw Exp $	*/
+/*	$OpenBSD: scsi_all.h,v 1.61 2019/11/25 17:02:56 krw Exp $	*/
 /*	$NetBSD: scsi_all.h,v 1.10 1996/09/12 01:57:17 thorpej Exp $	*/
 
 /*
@@ -23,7 +23,7 @@
  */
 
 #ifndef	_SCSI_SCSI_ALL_H
-#define _SCSI_SCSI_ALL_H 1
+#define _SCSI_SCSI_ALL_H
 
 /*
  * SCSI command format
@@ -201,63 +201,96 @@ struct scsi_report_luns {
 #define GENRETRY		1
 
 /*
- * sense data format
+ * Device Types
  */
-#define T_DIRECT	0
-#define T_SEQUENTIAL	1
-#define T_PRINTER	2
-#define T_PROCESSOR	3
-#define T_WORM		4
-#define T_CDROM		5
-#define T_SCANNER	6
-#define T_OPTICAL	7
-#define T_RDIRECT	14
-#define T_NODEVICE	0x1F
-
-#define T_CHANGER	8
-#define T_COMM		9
-#define	T_ENCLOSURE	13
+#define T_DIRECT	0x00	/* Direct access block device (SBC-4) */
+#define T_SEQUENTIAL	0x01	/* Sequential access device (SSC-3) */
+#define T_PRINTER	0x02	/* Printer device (SSC) */
+#define T_PROCESSOR	0x03	/* Processor device (SPC-2) */
+#define T_WORM		0x04	/* Write once device (SBC) */
+#define T_CDROM		0x05	/* CD/DVD device (MMC-5) */
+#define T_SCANNER	0x06	/* Scanner device (Obsolete) */
+#define T_OPTICAL	0x07	/* Optical memory device (SBC) */
+#define T_CHANGER	0x08	/* Media changer device (SMC-3) */
+#define T_COMM		0x09	/* Communications device (Obsolete) */
+#define T_ASC0		0x0a	/* Obsolete */
+#define T_ASC1		0x0b	/* Obsolete */
+#define T_STORARRAY	0x0c	/* Storage Array controller device (RAID) */
+#define T_ENCLOSURE	0x0d	/* Enclosure services device (SES) */
+#define T_RDIRECT	0x0e	/* Simplified direct access device (RBC) */
+#define T_OCRW		0x0f	/* Optical card reader/writer (OCRW) */
+#define T_BCC		0x10	/* Bridge Controller Commands (BCC) */
+#define T_OSD		0x11	/* Object-based Storage device (OSD) */
+#define T_ADC		0x12	/* Automation/Drive Interface (ADC-2) */
+/* 0x13 - 0x1d RESERVED */
+#define T_WELL_KNOWN_LU	0x1e	/* Well known logial unut */
+#define T_NODEVICE	0x1F	/* Unknown or no device type */
 
 #define T_REMOV		1
 #define	T_FIXED		0
 
 struct scsi_inquiry_data {
 	u_int8_t device;
-#define	SID_TYPE	0x1F
-#define	SID_QUAL	0xE0
-#define	SID_QUAL_LU_OK	0x00
-#define	SID_QUAL_LU_OFFLINE	0x20
-#define	SID_QUAL_RSVD	0x40
-#define	SID_QUAL_BAD_LU	0x60
+#define	SID_TYPE		0x1f
+#define	SID_QUAL		0xe0
+#define		SID_QUAL_LU_OK		0x00
+#define		SID_QUAL_LU_OFFLINE	0x20
+#define		SID_QUAL_RSVD		0x40
+#define		SID_QUAL_BAD_LU		0x60
 	u_int8_t dev_qual2;
-#define	SID_QUAL2	0x7F
-#define	SID_REMOVABLE	0x80
+#define	SID_QUAL2		0x7f
+#define	SID_REMOVABLE		0x80
 	u_int8_t version;
-#define SID_ANSII	0x07
-#define SID_ECMA	0x38
-#define SID_ISO		0xC0
+#define SID_ANSII		0x07
+#define SID_ECMA		0x38
+#define SID_ISO			0xc0
 	u_int8_t response_format;
+#define SID_RESPONSE_DATA_FMT	0x0f	/* < 2 == obsolete, > 2 reserved! */
+#define SID_HiSup		0x10	/* Hierarchical LUNs */
+#define SID_NormACA		0x20	/* Normal ACA bit in CCB supported */
+#define SID_TrmIOP		0x40	/* obsolete */
+#define SID_AENC		0x80	/* obsolete */
 	u_int8_t additional_length;
 #define SID_INQUIRY_HDR	5	/* Bytes up to & including additional_length */
 #define SID_SCSI2_ALEN	31	/* Additional bytes of basic SCSI2 info */
-	u_int8_t unused[2];
+	u_int8_t spc3_flags;
+#define SPC3_SID_PROTECT	0x01	/* 0 == Type 0, 1 == Type 1, 2 or 3 */
+#define SPC3_SID_RESERVED	0x06
+#define SPC3_SID_3PC		0x08	/* 3rd party copy */
+#define SPC3_SID_TPGS_IMPLICIT	0x10	/* Implicit asymmetric LU access */
+#define SPC3_SID_TPGS_EXPLICIT	0x20	/* Explicit asymmetric LU access */
+#define SPC3_SID_ACC		0x40	/* Access controls controller */
+#define SPC3_SID_SCCS		0x80	/* Embedded storage array controller */
+	u_int8_t spc2_flags;
+#define SPC2_SID_ADDR16		0x01	/* obsolete */
+#define SPC2_RESERVED		0x06
+#define SPC2_SID_NChngr		0x08	/* obsolete */
+#define SPC2_SID_MultiP		0x10	/* multi-port target */
+#define SPC2_VS			0x20	/* ??? */
+#define SPC2_SID_EncServ	0x40	/* Embedded enclosure services */
+#define SPC2_SID_BQueue		0x80	/* obsolete */
 	u_int8_t flags;
-#define	SID_SftRe	0x01
-#define	SID_CmdQue	0x02
-#define	SID_Linked	0x08
-#define	SID_Sync	0x10
-#define	SID_WBus16	0x20
-#define	SID_WBus32	0x40
-#define	SID_RelAdr	0x80
+#define	SID_VS			0x01	/* ??? */
+#define	SID_CmdQue		0x02	/* Task manageent mode supported */
+#define	SID_Linked		0x08	/* obsolete */
+#define	SID_Sync		0x10	/* obsolete */
+#define	SID_WBus16		0x20	/* obsolete */
+#define	SID_WBus32		0x40	/* obsolete */
+#define	SID_RelAdr		0x80	/* obsolete */
 	char	vendor[8];
 	char	product[16];
 	char	revision[4];
 	u_int8_t extra[20];
-	u_int8_t flags2;
-#define SID_IUS		0x01
-#define SID_QAS		0x02
-#define SID_CLOCKING	0x0c /* 0 == ST only, 1 == DT only, 3 == both */
-	u_int8_t reserved;
+	u_int8_t reserved[2];
+	u_int8_t version_descriptor0[2];
+	u_int8_t version_descriptor1[2];
+	u_int8_t version_descriptor2[2];
+	u_int8_t version_descriptor3[2];
+	u_int8_t version_descriptor4[2];
+	u_int8_t version_descriptor5[2];
+	u_int8_t version_descriptor6[2];
+	u_int8_t version_descriptor7[2];
+	u_int8_t reserved2[22];
 };
 
 struct scsi_vpd_hdr {
@@ -322,6 +355,35 @@ struct scsi_vpd_ata {
 #define VPD_ATA_COMMAND_CODE_ATAPI	0xa1
 	u_int8_t _reserved2[3];
 	u_int8_t identify[512];
+};
+
+struct scsi_read_cap_data {
+	u_int8_t addr[4];
+	u_int8_t length[4];
+};
+
+struct scsi_read_cap_data_16 {
+	u_int8_t addr[8];
+	u_int8_t length[4];
+	u_int8_t p_type_prot;
+#define RC16_PROT_EN		0x01	/* Protection type is 0 when 0 */
+#define RC16_PROT_P_TYPE	0x0e
+#define		RC16_P_TYPE_1		0x00	/* Protection type 1 */
+#define		RC16_P_TYPE_2		0x02	/* Protection type 2 */
+#define		RC16_P_TYPE_3		0x04	/* Protection type 3 */
+#define RC16_BASIS		0x30	/* Meaning of addr */
+#define		RC16_BASIS_HIGH		0x00	/* highest LBA of zone */
+#define		RC16_BASIS_LAST		0x10	/* last LBA on unit */
+	u_int8_t logical_per_phys;	/* Logical Blks Per Physical Blk Exp */
+#define RC16_LBPPB_EXPONENT	0x0f	/* 2**N LB per PB, 0 means unknown */
+#define RC16_PIIPLB_EXPONENT	0xf0	/* 2**N Prot info intervals per LB */
+	u_int8_t lowest_aligned[2];
+#define RC16_LALBA		0x3fff	/* lowest aligned LBA */
+#define RC16_LBPRZ		0x4000	/* unmapped LBA returns all zeros */
+#define READ_CAP_16_TPRZ	0x4000	/* XXX old name used in driver(s) */
+#define RC16_LBPME		0x8000	/* LB provisioning management enabled */
+#define READ_CAP_16_TPE		0x8000	/* XXX old name used in driver(s) */
+	u_int8_t reserved[16];
 };
 
 struct scsi_sense_data_unextended {
@@ -474,6 +536,12 @@ struct scsi_report_luns_data {
 	} luns[256];		/* scsi_link->luns is u_int8_t. */
 };
 #define	RPL_LUNDATA_T0LUN	1	/* Type 0 LUN is in lundata[1] */
+
+struct scsi_lun_array {
+	uint8_t	luns[256];
+	int	count;
+	int	dumbscan;
+};
 
 /*
  * ATA PASS-THROUGH as per SAT2

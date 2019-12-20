@@ -1,4 +1,4 @@
-/*	$OpenBSD: dlfcn.c,v 1.104 2019/08/04 23:51:45 guenther Exp $ */
+/*	$OpenBSD: dlfcn.c,v 1.106 2019/10/04 17:42:16 guenther Exp $ */
 
 /*
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
@@ -90,12 +90,9 @@ dlopen(const char *libname, int flags)
 	_dl_link_dlopen(object);
 
 	if (OBJECT_REF_CNT(object) > 1) {
-		/* if opened but grpsym_list has not been created */
-		if (OBJECT_DLREF_CNT(object) == 1) {
-			/* add first object manually */
-			_dl_link_grpsym(object, 1);
-			_dl_cache_grpsym_list(object);
-		}
+		/* if opened but grpsym_vec has not been filled in */
+		if (object->grpsym_vec.len == 0)
+			_dl_cache_grpsym_list_setup(object);
 		goto loaded;
 	}
 
@@ -240,8 +237,11 @@ dlctl(void *handle, int command, void *data)
 		break;
 	case 0x21:
 	{
+		struct object_vector vec;
 		struct dep_node *n, *m;
 		elf_object_t *obj;
+		int i;
+
 		_dl_printf("Load Groups:\n");
 
 		TAILQ_FOREACH(n, &_dlopened_child_list, next_sib) {
@@ -249,8 +249,8 @@ dlctl(void *handle, int command, void *data)
 			_dl_printf("%s\n", obj->load_name);
 
 			_dl_printf("  children\n");
-			TAILQ_FOREACH(m, &obj->child_list, next_sib)
-				_dl_printf("\t[%s]\n", m->data->load_name);
+			for (vec = obj->child_vec, i = 0; i < vec.len; i++)
+				_dl_printf("\t[%s]\n", vec.vec[i]->load_name);
 
 			_dl_printf("  grpref\n");
 			TAILQ_FOREACH(m, &obj->grpref_list, next_sib)

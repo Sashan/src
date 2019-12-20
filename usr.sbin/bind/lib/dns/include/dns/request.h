@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 2000-2002  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: request.h,v 1.21.18.2 2005/04/29 00:16:20 marka Exp $ */
+/* $Id: request.h,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
 
 #ifndef DNS_REQUEST_H
 #define DNS_REQUEST_H 1
@@ -24,7 +23,7 @@
  ***** Module Info
  *****/
 
-/*! \file
+/*! \file dns/request.h
  *
  * \brief
  * The request module provides simple request/response services useful for
@@ -47,9 +46,11 @@
 #include <dns/types.h>
 
 #define DNS_REQUESTOPT_TCP 0x00000001U
+#define DNS_REQUESTOPT_CASE 0x00000002U
+#define DNS_REQUESTOPT_FIXEDID 0x00000004U
 
 typedef struct dns_requestevent {
-        ISC_EVENT_COMMON(struct dns_requestevent);
+	ISC_EVENT_COMMON(struct dns_requestevent);
 	isc_result_t result;
 	dns_request_t *request;
 } dns_requestevent_t;
@@ -175,6 +176,9 @@ dns_request_create(dns_requestmgr_t *requestmgr, dns_message_t *message,
  *	#DNS_REQUESTOPT_TCP option is set, TCP will be used.  The request
  *	will timeout after 'timeout' seconds.
  *
+ *\li	If the #DNS_REQUESTOPT_CASE option is set, use case sensitive
+ *	compression.
+ *
  *\li	When the request completes, successfully, due to a timeout, or
  *	because it was canceled, a completion event will be sent to 'task'.
  *
@@ -191,7 +195,7 @@ dns_request_create(dns_requestmgr_t *requestmgr, dns_message_t *message,
  *\li	requestp != NULL && *requestp == NULL
  */
 
-/*% See dns_request_createvia3() */
+/*% See dns_request_createvia4() */
 isc_result_t
 dns_request_createvia(dns_requestmgr_t *requestmgr, dns_message_t *message,
 		      isc_sockaddr_t *srcaddr, isc_sockaddr_t *destaddr,
@@ -200,7 +204,7 @@ dns_request_createvia(dns_requestmgr_t *requestmgr, dns_message_t *message,
 		      isc_taskaction_t action, void *arg,
 		      dns_request_t **requestp);
 
-/*% See dns_request_createvia3() */
+/*% See dns_request_createvia4() */
 isc_result_t
 dns_request_createvia2(dns_requestmgr_t *requestmgr, dns_message_t *message,
 		       isc_sockaddr_t *srcaddr, isc_sockaddr_t *destaddr,
@@ -209,6 +213,7 @@ dns_request_createvia2(dns_requestmgr_t *requestmgr, dns_message_t *message,
 		       isc_task_t *task, isc_taskaction_t action, void *arg,
 		       dns_request_t **requestp);
 
+/*% See dns_request_createvia4() */
 isc_result_t
 dns_request_createvia3(dns_requestmgr_t *requestmgr, dns_message_t *message,
 		       isc_sockaddr_t *srcaddr, isc_sockaddr_t *destaddr,
@@ -217,7 +222,16 @@ dns_request_createvia3(dns_requestmgr_t *requestmgr, dns_message_t *message,
 		       unsigned int udpretries, isc_task_t *task,
 		       isc_taskaction_t action, void *arg,
 		       dns_request_t **requestp);
-/*%< 
+
+isc_result_t
+dns_request_createvia4(dns_requestmgr_t *requestmgr, dns_message_t *message,
+		       isc_sockaddr_t *srcaddr, isc_sockaddr_t *destaddr,
+		       isc_dscp_t dscp, unsigned int options,
+		       dns_tsigkey_t *key, unsigned int timeout,
+		       unsigned int udptimeout, unsigned int udpretries,
+		       isc_task_t *task, isc_taskaction_t action, void *arg,
+		       dns_request_t **requestp);
+/*%<
  * Create and send a request.
  *
  * Notes:
@@ -226,6 +240,9 @@ dns_request_createvia3(dns_requestmgr_t *requestmgr, dns_message_t *message,
  *	#DNS_REQUESTOPT_TCP option is set, TCP will be used.  The request
  *	will timeout after 'timeout' seconds.  UDP requests will be resent
  *	at 'udptimeout' intervals if non-zero or 'udpretries' is non-zero.
+ *
+ *\li	If the #DNS_REQUESTOPT_CASE option is set, use case sensitive
+ *	compression.
  *
  *\li	When the request completes, successfully, due to a timeout, or
  *	because it was canceled, a completion event will be sent to 'task'.
@@ -247,7 +264,7 @@ dns_request_createvia3(dns_requestmgr_t *requestmgr, dns_message_t *message,
  *\li	requestp != NULL && *requestp == NULL
  */
 
-/*% See dns_request_createraw3() */
+/*% See dns_request_createraw4() */
 isc_result_t
 dns_request_createraw(dns_requestmgr_t *requestmgr, isc_buffer_t *msgbuf,
 		      isc_sockaddr_t *srcaddr, isc_sockaddr_t *destaddr,
@@ -255,7 +272,7 @@ dns_request_createraw(dns_requestmgr_t *requestmgr, isc_buffer_t *msgbuf,
 		      isc_task_t *task, isc_taskaction_t action, void *arg,
 		      dns_request_t **requestp);
 
-/*% See dns_request_createraw3() */
+/*% See dns_request_createraw4() */
 isc_result_t
 dns_request_createraw2(dns_requestmgr_t *requestmgr, isc_buffer_t *msgbuf,
 		       isc_sockaddr_t *srcaddr, isc_sockaddr_t *destaddr,
@@ -264,6 +281,7 @@ dns_request_createraw2(dns_requestmgr_t *requestmgr, isc_buffer_t *msgbuf,
 		       isc_taskaction_t action, void *arg,
 		       dns_request_t **requestp);
 
+/*% See dns_request_createraw4() */
 isc_result_t
 dns_request_createraw3(dns_requestmgr_t *requestmgr, isc_buffer_t *msgbuf,
 		       isc_sockaddr_t *srcaddr, isc_sockaddr_t *destaddr,
@@ -271,7 +289,16 @@ dns_request_createraw3(dns_requestmgr_t *requestmgr, isc_buffer_t *msgbuf,
 		       unsigned int udptimeout, unsigned int udpretries,
 		       isc_task_t *task, isc_taskaction_t action, void *arg,
 		       dns_request_t **requestp);
-/*!< 
+
+isc_result_t
+dns_request_createraw4(dns_requestmgr_t *requestmgr, isc_buffer_t *msgbuf,
+		       isc_sockaddr_t *srcaddr, isc_sockaddr_t *destaddr,
+		       isc_dscp_t dscp, unsigned int options,
+		       unsigned int timeout, unsigned int udptimeout,
+		       unsigned int udpretries, isc_task_t *task,
+		       isc_taskaction_t action, void *arg,
+		       dns_request_t **requestp);
+/*!<
  * \brief Create and send a request.
  *
  * Notes:
@@ -280,7 +307,7 @@ dns_request_createraw3(dns_requestmgr_t *requestmgr, isc_buffer_t *msgbuf,
  *	#DNS_REQUESTOPT_TCP option is set, TCP will be used.  The request
  *	will timeout after 'timeout' seconds.   UDP requests will be resent
  *	at 'udptimeout' intervals if non-zero or if 'udpretries' is not zero.
- *	
+ *
  *\li	When the request completes, successfully, due to a timeout, or
  *	because it was canceled, a completion event will be sent to 'task'.
  *
@@ -344,7 +371,7 @@ dns_request_usedtcp(dns_request_t *request);
 /*%<
  * Return whether this query used TCP or not.  Setting #DNS_REQUESTOPT_TCP
  * in the call to dns_request_create() will cause the function to return
- * #ISC_TRUE, othewise the result is based on the query message size.
+ * #ISC_TRUE, otherwise the result is based on the query message size.
  *
  * Requires:
  *\li	'request' is a valid request.

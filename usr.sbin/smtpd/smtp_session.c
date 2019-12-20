@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtp_session.c,v 1.407 2019/08/14 21:11:25 gilles Exp $	*/
+/*	$OpenBSD: smtp_session.c,v 1.416 2019/11/25 14:18:33 gilles Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -126,6 +126,8 @@ struct smtp_tx {
 	int			 rcvcount;
 	int			 has_date;
 	int			 has_message_id;
+
+	uint8_t			 junk;
 };
 
 struct smtp_session {
@@ -154,6 +156,8 @@ struct smtp_session {
 	enum smtp_command	 last_cmd;
 	enum filter_phase	 filter_phase;
 	const char		*filter_param;
+
+	uint8_t			 junk;
 };
 
 #define ADVERTISE_TLS(s) \
@@ -211,8 +215,10 @@ static void smtp_filter_fd(struct smtp_tx *, int);
 static int  smtp_message_fd(struct smtp_tx *, int);
 static void smtp_message_begin(struct smtp_tx *);
 static void smtp_message_end(struct smtp_tx *);
-static int  smtp_filter_printf(struct smtp_tx *, const char *, ...);
-static int  smtp_message_printf(struct smtp_tx *, const char *, ...);
+static int  smtp_filter_printf(struct smtp_tx *, const char *, ...)
+    __attribute__((__format__ (printf, 2, 3)));
+static int  smtp_message_printf(struct smtp_tx *, const char *, ...)
+    __attribute__((__format__ (printf, 2, 3)));
 
 static int  smtp_check_rset(struct smtp_session *, const char *);
 static int  smtp_check_helo(struct smtp_session *, const char *);
@@ -292,7 +298,6 @@ header_append_domain_buffer(char *buffer, char *domain, size_t len)
 	int	pos_bracket, pos_component, pos_insert;
 	char	copy[APPEND_DOMAIN_BUFFER_SIZE];
 
-	i = 0;
 	escape = quote = comment = bracket = 0;
 	has_domain = has_bracket = has_group = 0;
 	pos_bracket = pos_insert = pos_component = 0;
@@ -777,9 +782,9 @@ smtp_session_imsg(struct mproc *p, struct imsg *imsg)
 			smtp_reply(s, "250 %s Ok",
 			    esc_code(ESC_STATUS_OK, ESC_OTHER_STATUS));
 		} else {
-			smtp_tx_free(s->tx);
 			smtp_reply(s, "421 %s Temporary Error",
 			    esc_code(ESC_STATUS_TEMPFAIL, ESC_OTHER_MAIL_SYSTEM_STATUS));
+			smtp_tx_free(s->tx);
 			smtp_enter_state(s, STATE_QUIT);
 		}
 		m_end(&m);
@@ -970,7 +975,8 @@ smtp_session_imsg(struct mproc *p, struct imsg *imsg)
 		m_msg(&m, imsg);
 		m_get_id(&m, &reqid);
 		m_get_int(&m, &filter_response);
-		if (filter_response != FILTER_PROCEED)
+		if (filter_response != FILTER_PROCEED &&
+		    filter_response != FILTER_JUNK)
 			m_get_string(&m, &filter_param);
 		else
 			filter_param = NULL;
@@ -998,9 +1004,17 @@ smtp_session_imsg(struct mproc *p, struct imsg *imsg)
 				smtp_proceed_rollback(s, NULL);
 			break;
 
+
+		case FILTER_JUNK:
+			if (s->tx)
+				s->tx->junk = 1;
+			else
+				s->junk = 1;
+			/* fallthrough */
+
 		case FILTER_PROCEED:
 			filter_param = s->filter_param;
-			/* fallthrough*/
+			/* fallthrough */
 
 		case FILTER_REWRITE:
 			report_smtp_filter_response("smtp-in", s->id, s->filter_phase,
@@ -1094,15 +1108,6 @@ smtp_io(struct io *io, int evt, void *arg)
 		/* No complete line received */
 		if (line == NULL)
 			return;
-
-		if (strchr(line, '\r')) {
-			s->flags |= SF_BADINPUT;
-			smtp_reply(s, "500 %s <CR> is only allowed before <LF>",
-			    esc_code(ESC_STATUS_PERMFAIL, ESC_OTHER_STATUS));
-			smtp_enter_state(s, STATE_QUIT);
-			io_set_write(io);
-			return;
-		}
 
 		/* Message body */
 		eom = 0;
@@ -1729,10 +1734,13 @@ smtp_proceed_helo(struct smtp_session *s, const char *args)
 	report_smtp_link_identify("smtp-in", s->id, "HELO", s->helo);
 
 	smtp_enter_state(s, STATE_HELO);
-	smtp_reply(s, "250 %s Hello %s [%s], pleased to meet you",
+
+	smtp_reply(s, "250 %s Hello %s %s%s%s, pleased to meet you",
 	    s->smtpname,
 	    s->helo,
-	    ss_to_text(&s->ss));
+	    s->ss.ss_family == AF_INET6 ? "" : "[",
+	    ss_to_text(&s->ss),
+	    s->ss.ss_family == AF_INET6 ? "" : "]");
 }
 
 static void
@@ -1746,10 +1754,12 @@ smtp_proceed_ehlo(struct smtp_session *s, const char *args)
 	report_smtp_link_identify("smtp-in", s->id, "EHLO", s->helo);
 
 	smtp_enter_state(s, STATE_HELO);
-	smtp_reply(s, "250-%s Hello %s [%s], pleased to meet you",
+	smtp_reply(s, "250-%s Hello %s %s%s%s, pleased to meet you",
 	    s->smtpname,
 	    s->helo,
-	    ss_to_text(&s->ss));
+	    s->ss.ss_family == AF_INET6 ? "" : "[",
+	    ss_to_text(&s->ss),
+	    s->ss.ss_family == AF_INET6 ? "" : "]");
 
 	smtp_reply(s, "250-8BITMIME");
 	smtp_reply(s, "250-ENHANCEDSTATUSCODES");
@@ -2048,6 +2058,7 @@ smtp_send_banner(struct smtp_session *s)
 {
 	smtp_reply(s, "220 %s ESMTP %s", s->smtpname, SMTPD_NAME);
 	s->banner_sent = 1;
+	report_smtp_link_greeting("smtp-in", s->id, s->smtpname);
 }
 
 void
@@ -2085,14 +2096,18 @@ smtp_reply(struct smtp_session *s, char *fmt, ...)
 
 	switch (buf[0]) {
 	case '2':
-		if (s->last_cmd == CMD_MAIL_FROM)
-			report_smtp_tx_mail("smtp-in", s->id, s->tx->msgid, s->cmd + 10, 1);
-		else if (s->last_cmd == CMD_RCPT_TO)
-			report_smtp_tx_rcpt("smtp-in", s->id, s->tx->msgid, s->cmd + 8, 1);
+		if (s->tx) {
+			if (s->last_cmd == CMD_MAIL_FROM)
+				report_smtp_tx_mail("smtp-in", s->id, s->tx->msgid, s->cmd + 10, 1);
+			else if (s->last_cmd == CMD_RCPT_TO)
+				report_smtp_tx_rcpt("smtp-in", s->id, s->tx->msgid, s->cmd + 8, 1);
+		}
 		break;
 	case '3':
-		if (s->last_cmd == CMD_DATA)
-			report_smtp_tx_data("smtp-in", s->id, s->tx->msgid, 1);
+		if (s->tx) {
+			if (s->last_cmd == CMD_DATA)
+				report_smtp_tx_data("smtp-in", s->id, s->tx->msgid, 1);
+		}
 		break;
 	case '5':
 	case '4':
@@ -2370,6 +2385,7 @@ smtp_tx(struct smtp_session *s)
 	(void)strlcpy(tx->evp.smtpname, s->smtpname, sizeof(tx->evp.smtpname));
 	(void)strlcpy(tx->evp.hostname, s->rdns, sizeof tx->evp.hostname);
 	(void)strlcpy(tx->evp.helo, s->helo, sizeof(tx->evp.helo));
+	(void)strlcpy(tx->evp.username, s->username, sizeof(tx->evp.username));
 
 	if (s->flags & SF_BOUNCE)
 		tx->evp.flags |= EF_BOUNCE;
@@ -2814,12 +2830,17 @@ smtp_message_begin(struct smtp_tx *tx)
 	smtp_reply(s, "354 Enter mail, end with \".\""
 	    " on a line by itself");	
 	
+	if (s->junk || (s->tx && s->tx->junk))
+		m_printf(tx, "X-Spam: Yes\n");
+
 	m_printf(tx, "Received: ");
 	if (!(s->listener->flags & F_MASK_SOURCE)) {
-		m_printf(tx, "from %s (%s [%s])",
+		m_printf(tx, "from %s (%s %s%s%s)",
 		    s->helo,
 		    s->rdns,
-		    ss_to_text(&s->ss));
+		    s->ss.ss_family == AF_INET6 ? "" : "[",
+		    ss_to_text(&s->ss),
+		    s->ss.ss_family == AF_INET6 ? "" : "]");
 	}
 	m_printf(tx, "\n\tby %s (%s) with %sSMTP%s%s id %08x",
 	    s->smtpname,

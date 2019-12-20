@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1999-2002  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,18 +14,19 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: callbacks.h,v 1.18.18.2 2005/04/29 00:16:10 marka Exp $ */
+/* $Id: callbacks.h,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
 
 #ifndef DNS_CALLBACKS_H
 #define DNS_CALLBACKS_H 1
 
-/*! \file */
+/*! \file dns/callbacks.h */
 
 /***
  ***	Imports
  ***/
 
 #include <isc/lang.h>
+#include <isc/magic.h>
 
 #include <dns/types.h>
 
@@ -36,11 +36,30 @@ ISC_LANG_BEGINDECLS
  ***	Types
  ***/
 
+#define DNS_CALLBACK_MAGIC	ISC_MAGIC('C','L','L','B')
+#define DNS_CALLBACK_VALID(cb)	ISC_MAGIC_VALID(cb, DNS_CALLBACK_MAGIC)
+
 struct dns_rdatacallbacks {
+	unsigned int magic;
+
 	/*%
 	 * dns_load_master calls this when it has rdatasets to commit.
 	 */
 	dns_addrdatasetfunc_t add;
+
+	/*%
+	 * This is called when reading in a database image from a 'map'
+	 * format zone file.
+	 */
+	dns_deserializefunc_t deserialize;
+
+	/*%
+	 * dns_master_load*() call this when loading a raw zonefile,
+	 * to pass back information obtained from the file header
+	 */
+	dns_rawdatafunc_t rawdata;
+	dns_zone_t *zone;
+
 	/*%
 	 * dns_load_master / dns_rdata_fromtext call this to issue a error.
 	 */
@@ -53,6 +72,7 @@ struct dns_rdatacallbacks {
 	 * Private data handles for use by the above callback functions.
 	 */
 	void	*add_private;
+	void	*deserialize_private;
 	void	*error_private;
 	void	*warn_private;
 };
@@ -66,6 +86,7 @@ dns_rdatacallbacks_init(dns_rdatacallbacks_t *callbacks);
 /*%<
  * Initialize 'callbacks'.
  *
+ * \li	'magic' is set to DNS_CALLBACK_MAGIC
  *
  * \li	'error' and 'warn' are set to default callbacks that print the
  *	error message through the DNS library log context.

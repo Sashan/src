@@ -1,4 +1,4 @@
-/*	$OpenBSD: bpf.c,v 1.177 2019/06/13 21:14:53 mpi Exp $	*/
+/*	$OpenBSD: bpf.c,v 1.182 2019/10/21 23:02:05 sashan Exp $	*/
 /*	$NetBSD: bpf.c,v 1.33 1997/02/21 23:59:35 thorpej Exp $	*/
 
 /*
@@ -94,8 +94,6 @@ LIST_HEAD(, bpf_d) bpf_d_list;
 
 int	bpf_allocbufs(struct bpf_d *);
 void	bpf_ifname(struct bpf_if*, struct ifreq *);
-int	_bpf_mtap(caddr_t, const struct mbuf *, u_int,
-	    void (*)(const void *, void *, size_t));
 void	bpf_mcopy(const void *, void *, size_t);
 int	bpf_movein(struct uio *, struct bpf_d *, struct mbuf **,
 	    struct sockaddr *);
@@ -105,7 +103,7 @@ int	bpfkqfilter(dev_t, struct knote *);
 void	bpf_wakeup(struct bpf_d *);
 void	bpf_wakeup_cb(void *);
 void	bpf_catchpacket(struct bpf_d *, u_char *, size_t, size_t,
-	    void (*)(const void *, void *, size_t), struct timeval *);
+	    struct timeval *);
 int	bpf_getdltlist(struct bpf_d *, struct bpf_dltlist *);
 int	bpf_setdlt(struct bpf_d *, u_int);
 
@@ -125,6 +123,13 @@ void	bpf_resetd(struct bpf_d *);
 
 void	bpf_prog_smr(void *);
 void	bpf_d_smr(void *);
+
+/*
+ * Reference count access to descriptor buffers
+ */
+void	bpf_get(struct bpf_d *);
+void	bpf_put(struct bpf_d *);
+
 
 struct rwlock bpf_sysctl_lk = RWLOCK_INITIALIZER("bpfsz");
 
@@ -320,11 +325,13 @@ bpf_detachd(struct bpf_d *d)
 
 		d->bd_promisc = 0;
 
+		bpf_get(d);
 		mtx_leave(&d->bd_mtx);
 		NET_LOCK();
 		error = ifpromisc(bp->bif_ifp, 0);
 		NET_UNLOCK();
 		mtx_enter(&d->bd_mtx);
+		bpf_put(d);
 
 		if (error && !(error == EINVAL || error == ENODEV ||
 		    error == ENXIO))
@@ -373,6 +380,7 @@ bpfopen(dev_t dev, int flag, int mode, struct proc *p)
 	if (flag & FNONBLOCK)
 		bd->bd_rtout = -1;
 
+	bpf_get(bd);
 	LIST_INSERT_HEAD(&bpf_d_list, bd, bd_list);
 
 	return (0);
@@ -393,13 +401,7 @@ bpfclose(dev_t dev, int flag, int mode, struct proc *p)
 	bpf_wakeup(d);
 	LIST_REMOVE(d, bd_list);
 	mtx_leave(&d->bd_mtx);
-
-	/*
-	 * Wait for the task to finish here, before proceeding to garbage
-	 * collection.
-	 */
-	taskq_barrier(systq);
-	smr_call(&d->bd_smr, bpf_d_smr, d);
+	bpf_put(d);
 
 	return (0);
 }
@@ -433,6 +435,7 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 	if (d->bd_bif == NULL)
 		return (ENXIO);
 
+	bpf_get(d);
 	mtx_enter(&d->bd_mtx);
 
 	/*
@@ -538,6 +541,7 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 	d->bd_in_uiomove = 0;
 out:
 	mtx_leave(&d->bd_mtx);
+	bpf_put(d);
 
 	return (error);
 }
@@ -556,7 +560,9 @@ bpf_wakeup(struct bpf_d *d)
 	 * by the KERNEL_LOCK() we have to delay the wakeup to
 	 * another context to keep the hot path KERNEL_LOCK()-free.
 	 */
-	task_add(systq, &d->bd_wake_task);
+	bpf_get(d);
+	if (!task_add(systq, &d->bd_wake_task))
+		bpf_put(d);
 }
 
 void
@@ -571,6 +577,7 @@ bpf_wakeup_cb(void *xd)
 		csignal(d->bd_pgid, d->bd_sig, d->bd_siguid, d->bd_sigeuid);
 
 	selwakeup(&d->bd_sel);
+	bpf_put(d);
 }
 
 int
@@ -588,6 +595,7 @@ bpfwrite(dev_t dev, struct uio *uio, int ioflag)
 	if (d->bd_bif == NULL)
 		return (ENXIO);
 
+	bpf_get(d);
 	ifp = d->bd_bif->bif_ifp;
 
 	if (ifp == NULL || (ifp->if_flags & IFF_UP) == 0) {
@@ -621,6 +629,7 @@ bpfwrite(dev_t dev, struct uio *uio, int ioflag)
 	NET_UNLOCK();
 
 out:
+	bpf_put(d);
 	return (error);
 }
 
@@ -695,6 +704,8 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 			return (EPERM);
 		}
 	}
+
+	bpf_get(d);
 
 	switch (cmd) {
 	default:
@@ -993,6 +1004,7 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		break;
 	}
 
+	bpf_put(d);
 	return (error);
 }
 
@@ -1180,6 +1192,7 @@ bpfkqfilter(dev_t dev, struct knote *kn)
 		return (EINVAL);
 	}
 
+	bpf_get(d);
 	kn->kn_hook = d;
 	SLIST_INSERT_HEAD(klist, kn, kn_selnext);
 
@@ -1199,6 +1212,7 @@ filt_bpfrdetach(struct knote *kn)
 	KERNEL_ASSERT_LOCKED();
 
 	SLIST_REMOVE(&d->bd_sel.si_note, kn, knote, kn_selnext);
+	bpf_put(d);
 }
 
 int
@@ -1241,12 +1255,8 @@ bpf_mcopy(const void *src_arg, void *dst_arg, size_t len)
 	}
 }
 
-/*
- * like bpf_mtap, but copy fn can be given. used by various bpf_mtap*
- */
 int
-_bpf_mtap(caddr_t arg, const struct mbuf *m, u_int direction,
-    void (*cpfn)(const void *, void *, size_t))
+bpf_mtap(caddr_t arg, const struct mbuf *m, u_int direction)
 {
 	struct bpf_if *bp = (struct bpf_if *)arg;
 	struct bpf_d *d;
@@ -1258,9 +1268,6 @@ _bpf_mtap(caddr_t arg, const struct mbuf *m, u_int direction,
 
 	if (m == NULL)
 		return (0);
-
-	if (cpfn == NULL)
-		cpfn = bpf_mcopy;
 
 	if (bp == NULL)
 		return (0);
@@ -1299,8 +1306,7 @@ _bpf_mtap(caddr_t arg, const struct mbuf *m, u_int direction,
 			}
 
 			mtx_enter(&d->bd_mtx);
-			bpf_catchpacket(d, (u_char *)m, pktlen, slen, cpfn,
-			    &tv);
+			bpf_catchpacket(d, (u_char *)m, pktlen, slen, &tv);
 			mtx_leave(&d->bd_mtx);
 		}
 	}
@@ -1345,16 +1351,7 @@ bpf_tap_hdr(caddr_t arg, const void *hdr, unsigned int hdrlen,
 		*mp = (struct mbuf *)&md;
 	}
 
-	return _bpf_mtap(arg, m0, direction, bpf_mcopy);
-}
-
-/*
- * Incoming linkage from device drivers, when packet is in an mbuf chain.
- */
-int
-bpf_mtap(caddr_t arg, const struct mbuf *m, u_int direction)
-{
-	return _bpf_mtap(arg, m, direction, NULL);
+	return bpf_mtap(arg, m0, direction);
 }
 
 /*
@@ -1367,8 +1364,8 @@ bpf_mtap(caddr_t arg, const struct mbuf *m, u_int direction)
  * it or keep a pointer to it.
  */
 int
-bpf_mtap_hdr(caddr_t arg, caddr_t data, u_int dlen, const struct mbuf *m,
-    u_int direction, void (*cpfn)(const void *, void *, size_t))
+bpf_mtap_hdr(caddr_t arg, const void *data, u_int dlen, const struct mbuf *m,
+    u_int direction)
 {
 	struct m_hdr mh;
 	const struct mbuf *m0;
@@ -1377,12 +1374,12 @@ bpf_mtap_hdr(caddr_t arg, caddr_t data, u_int dlen, const struct mbuf *m,
 		mh.mh_flags = 0;
 		mh.mh_next = (struct mbuf *)m;
 		mh.mh_len = dlen;
-		mh.mh_data = data;
+		mh.mh_data = (void *)data;
 		m0 = (struct mbuf *)&mh;
 	} else 
 		m0 = m;
 
-	return _bpf_mtap(arg, m0, direction, cpfn);
+	return bpf_mtap(arg, m0, direction);
 }
 
 /*
@@ -1401,8 +1398,7 @@ bpf_mtap_af(caddr_t arg, u_int32_t af, const struct mbuf *m, u_int direction)
 
 	afh = htonl(af);
 
-	return bpf_mtap_hdr(arg, (caddr_t)&afh, sizeof(afh),
-	    m, direction, NULL);
+	return bpf_mtap_hdr(arg, &afh, sizeof(afh), m, direction);
 }
 
 /*
@@ -1446,8 +1442,8 @@ bpf_mtap_ether(caddr_t arg, const struct mbuf *m, u_int direction)
 	mh.mh_len = m->m_len - ETHER_HDR_LEN;
 	mh.mh_next = m->m_next;
 
-	return bpf_mtap_hdr(arg, (caddr_t)&evh, sizeof(evh),
-	    (struct mbuf *)&mh, direction, NULL);
+	return bpf_mtap_hdr(arg, &evh, sizeof(evh),
+	    (struct mbuf *)&mh, direction);
 #endif
 }
 
@@ -1461,7 +1457,7 @@ bpf_mtap_ether(caddr_t arg, const struct mbuf *m, u_int direction)
  */
 void
 bpf_catchpacket(struct bpf_d *d, u_char *pkt, size_t pktlen, size_t snaplen,
-    void (*cpfn)(const void *, void *, size_t), struct timeval *tv)
+    struct timeval *tv)
 {
 	struct bpf_hdr *hp;
 	int totlen, curlen;
@@ -1514,10 +1510,12 @@ bpf_catchpacket(struct bpf_d *d, u_char *pkt, size_t pktlen, size_t snaplen,
 	hp->bh_tstamp.tv_usec = tv->tv_usec;
 	hp->bh_datalen = pktlen;
 	hp->bh_hdrlen = hdrlen;
+
 	/*
 	 * Copy the packet data into the store buffer and update its length.
 	 */
-	(*cpfn)(pkt, (u_char *)hp + hdrlen, (hp->bh_caplen = totlen - hdrlen));
+	bpf_mcopy(pkt, (u_char *)hp + hdrlen,
+	    (hp->bh_caplen = totlen - hdrlen));
 	d->bd_slen = curlen + totlen;
 
 	if (d->bd_immediate) {
@@ -1595,6 +1593,25 @@ bpf_d_smr(void *smr)
 		bpf_prog_smr(bd->bd_wfilter);
 
 	free(bd, M_DEVBUF, sizeof(*bd));
+}
+
+void
+bpf_get(struct bpf_d *bd)
+{
+	atomic_inc_int(&bd->bd_ref);
+}
+
+/*
+ * Free buffers currently in use by a descriptor
+ * when the reference count drops to zero.
+ */
+void
+bpf_put(struct bpf_d *bd)
+{
+	if (atomic_dec_int_nv(&bd->bd_ref) > 0)
+		return;
+
+	smr_call(&bd->bd_smr, bpf_d_smr, bd);
 }
 
 void *

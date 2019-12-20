@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: PackageRepository.pm,v 1.167 2019/07/22 06:59:41 espie Exp $
+# $OpenBSD: PackageRepository.pm,v 1.171 2019/11/08 14:50:58 espie Exp $
 #
 # Copyright (c) 2003-2010 Marc Espie <espie@openbsd.org>
 #
@@ -267,6 +267,7 @@ sub find
 	if ($self->contents) {
 		return $self;
 	}
+	return undef;
 }
 
 sub grabPlist
@@ -281,8 +282,12 @@ sub parse_problems
 {
 	my ($self, $filename, $hint, $object) = @_;
 	CORE::open(my $fh, '<', $filename) or return;
-
 	my $baseurl = $self->url;
+	my $objecturl = $baseurl;
+	if (defined $object) {
+		$objecturl = $object->url;
+		$object->{error_reported} = 1;
+	}
 	my $notyet = 1;
 	my $broken = 0;
 	my $signify_error = 0;
@@ -306,7 +311,9 @@ sub parse_problems
 		next if m/^(?:200|220|221|226|229|230|227|250|331|500|150)[\s\-]/o;
 		next if m/^EPSV command not understood/o;
 		next if m/^Trying [\da-f\.\:]+\.\.\./o;
-		next if m/^Requesting \Q$baseurl\E/;
+		# XXX make_room may call close_now on objects of the right
+		# type, but from a different repository
+		next if m/^Requesting (?:\Q$baseurl\E|\Q$objecturl\E)/;
 		next if m/^Remote system type is\s+/o;
 		next if m/^Connected to\s+/o;
 		next if m/^remote\:\s+/o;
@@ -334,12 +341,11 @@ sub parse_problems
 			next;
 		}
 		# http error
-		if (m/^ftp: Error retrieving file: 404/o) {
+		if (m/^ftp: Error retrieving .*: 404/o) {
+			$self->{lasterror} = 404;
 			if (!defined $object) {
 				$self->{no_such_dir} = 1;
 				next;
-			} else {
-				$self->{lasterror} = 404;
 			}
 			# ignore errors for stable packages
 			next if $self->can_be_empty;
@@ -354,17 +360,12 @@ sub parse_problems
 		# so it's superfluous
 		next if m/^signify:/ && $self->{lasterror};
 		if ($notyet) {
-			my $url = $baseurl;
-			if (defined $object) {
-				$url = $object->url;
-				$object->{error_reported} = 1;
-			}
-			$self->{state}->errprint("#1: ", $url);
+			$self->{state}->errprint("#1: ", $objecturl);
 			$notyet = 0;
 		}
 		if (m/^signify:/) {
 			$signify_error = 1;
-			s/.*unsigned .*archive.*/unsigned package (signify(1) doesn't see old-style signatures)/;
+			s/.*unsigned .*archive.*/unsigned package/;
 		}
 		if (m/^421\s+/o ||
 		    m/^ftp: connect: Connection timed out/o ||

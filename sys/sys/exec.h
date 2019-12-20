@@ -1,4 +1,4 @@
-/*	$OpenBSD: exec.h,v 1.38 2018/06/01 03:27:59 mortimer Exp $	*/
+/*	$OpenBSD: exec.h,v 1.40 2019/11/29 06:34:46 deraadt Exp $	*/
 /*	$NetBSD: exec.h,v 1.59 1996/02/09 18:25:09 christos Exp $	*/
 
 /*-
@@ -84,7 +84,6 @@ typedef int (*exec_makecmds_fcn)(struct proc *, struct exec_package *);
 struct execsw {
 	u_int	es_hdrsz;		/* size of header for this format */
 	exec_makecmds_fcn es_check;	/* function to check exec format */
-	struct emul *es_emul;		/* emulation */
 };
 
 struct exec_vmcmd {
@@ -99,6 +98,7 @@ struct exec_vmcmd {
 #define VMCMD_RELATIVE  0x0001  /* ev_addr is relative to base entry */
 #define VMCMD_BASE      0x0002  /* marks a base entry */
 #define VMCMD_STACK     0x0004  /* create with UVM_FLAG_STACK */
+#define VMCMD_SYSCALL   0x0008  /* create with UVM_FLAG_SYSCALL */
 };
 
 #define	EXEC_DEFAULT_VMCMD_SETSIZE	8	/* # of cmds in set to start */

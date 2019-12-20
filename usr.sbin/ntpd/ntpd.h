@@ -1,4 +1,4 @@
-/*	$OpenBSD: ntpd.h,v 1.146 2019/07/16 14:15:40 otto Exp $ */
+/*	$OpenBSD: ntpd.h,v 1.148 2019/11/11 06:32:52 otto Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -171,6 +171,7 @@ struct ntp_peer {
 	u_int8_t			 shift;
 	u_int8_t			 trustlevel;
 	u_int8_t			 weight;
+	u_int8_t			 trusted;
 	int				 lasterror;
 	int				 senderrors;
 };
@@ -188,6 +189,7 @@ struct ntp_sensor {
 	u_int8_t			 stratum;
 	u_int8_t			 weight;
 	u_int8_t			 shift;
+	u_int8_t			 trusted;
 };
 
 struct constraint {
@@ -212,6 +214,7 @@ struct ntp_conf_sensor {
 	int					 correction;
 	u_int8_t				 stratum;
 	u_int8_t				 weight;
+	u_int8_t				 trusted;
 };
 
 struct ntp_freq {
@@ -240,6 +243,8 @@ struct ntpd_conf {
 	u_int8_t					automatic;
 	u_int8_t					noaction;
 	u_int8_t					filters;
+	u_int8_t					trusted_peers;
+	u_int8_t					trusted_sensors;
 	time_t						constraint_last;
 	time_t						constraint_median;
 	u_int						constraint_errors;

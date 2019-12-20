@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.57 2019/07/05 22:22:40 jmc Exp $	*/
+/*	$OpenBSD: main.c,v 1.60 2019/12/17 09:43:00 kn Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -373,9 +373,9 @@ parse_ifs(struct parse_result *res, char *word, int val)
 	const char	*error;
 
 	if (word != NULL) {
-		val = strtonum(word, 0, INT_MAX, &error);
+		val = strtonum(word, 1, INT_MAX, &error);
 		if (error != NULL)  {
-			warnx("invalid count \"%s\": %s", word, error);
+			warnx("count is %s: %s", error, word);
 			return (-1);
 		}
 	}
@@ -407,8 +407,10 @@ parse_network(struct parse_result *res, char *word)
 }
 
 int
-parse_size(struct parse_result *res, char *word, long long val)
+parse_size(struct parse_result *res, char *word)
 {
+	long long val = 0;
+
 	if (word != NULL) {
 		if (scan_scaled(word, &val) != 0) {
 			warn("invalid size: %s", word);
@@ -576,7 +578,7 @@ ctl_create(struct parse_result *res, int argc, char *argv[])
 				err(1, "unveil");
 			break;
 		case 's':
-			if (parse_size(res, optarg, 0) != 0)
+			if (parse_size(res, optarg) != 0)
 				errx(1, "invalid size: %s", optarg);
 			break;
 		default:
@@ -872,7 +874,7 @@ ctl_start(struct parse_result *res, int argc, char *argv[])
 		case 'm':
 			if (res->size)
 				errx(1, "memory specified multiple times");
-			if (parse_size(res, optarg, 0) != 0)
+			if (parse_size(res, optarg) != 0)
 				errx(1, "invalid memory size: %s", optarg);
 			break;
 		case 'n':
@@ -945,7 +947,10 @@ ctl_stop(struct parse_result *res, int argc, char *argv[])
 	argc -= optind;
 	argv += optind;
 
-	if (argc > 1)
+	if (argc == 0) {
+		if (res->action != CMD_STOPALL)
+			ctl_usage(res->ctl);
+	} else if (argc > 1)
 		ctl_usage(res->ctl);
 	else if (argc == 1)
 		ret = parse_vmid(res, argv[0], 0);

@@ -1,7 +1,8 @@
-/*	$OpenBSD: bgpctl.c,v 1.243 2019/08/05 12:51:32 claudio Exp $ */
+/*	$OpenBSD: bgpctl.c,v 1.254 2019/12/20 09:16:05 claudio Exp $ */
 
 /*
  * Copyright (c) 2003 Henning Brauer <henning@openbsd.org>
+ * Copyright (c) 2004-2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2016 Job Snijders <job@instituut.net>
  * Copyright (c) 2016 Peter Hessler <phessler@openbsd.org>
  *
@@ -38,56 +39,20 @@
 #include "bgpd.h"
 #include "session.h"
 #include "rde.h"
+
+#include "bgpctl.h"
 #include "parser.h"
 #include "mrtparser.h"
 
-enum neighbor_views {
-	NV_DEFAULT,
-	NV_TIMERS
-};
-
-#define EOL0(flag)	((flag & F_CTL_SSV) ? ';' : '\n')
-
 int		 main(int, char *[]);
-char		*fmt_peer(const char *, const struct bgpd_addr *, int, int);
-void		 show_summary_head(void);
-int		 show_summary_msg(struct imsg *, int);
-int		 show_summary_terse_msg(struct imsg *, int);
-int		 show_neighbor_terse(struct imsg *);
-int		 show_neighbor_msg(struct imsg *, enum neighbor_views);
-void		 print_neighbor_capa_mp(struct peer *);
-void		 print_neighbor_capa_restart(struct peer *);
-void		 print_neighbor_msgstats(struct peer *);
+int		 show(struct imsg *, struct parse_result *);
 void		 print_timer(const char *, time_t);
-static char	*fmt_timeframe(time_t t);
-static char	*fmt_timeframe_core(time_t t);
-void		 show_fib_head(void);
-void		 show_fib_tables_head(void);
-void		 show_network_head(void);
-void		 show_fib_flags(u_int16_t);
-int		 show_fib_msg(struct imsg *);
-void		 show_nexthop_head(void);
-int		 show_nexthop_msg(struct imsg *);
-void		 show_interface_head(void);
-int		 show_interface_msg(struct imsg *);
-void		 show_rib_summary_head(void);
-void		 print_prefix(struct bgpd_addr *, u_int8_t, u_int8_t, u_int8_t);
-const char *	 print_origin(u_int8_t, int);
-const char *	 print_ovs(u_int8_t, int);
-void		 print_flags(u_int8_t, int);
-int		 show_rib_summary_msg(struct imsg *);
-int		 show_rib_detail_msg(struct imsg *, int, int);
-void		 show_rib_brief(struct ctl_show_rib *, u_char *);
-void		 show_rib_detail(struct ctl_show_rib *, u_char *, int, int);
 void		 show_attr(void *, u_int16_t, int);
 void		 show_communities(u_char *, size_t, int);
 void		 show_community(u_char *, u_int16_t);
 void		 show_large_community(u_char *, u_int16_t);
 void		 show_ext_community(u_char *, u_int16_t);
-int		 show_rib_memory_msg(struct imsg *);
 void		 send_filterset(struct imsgbuf *, struct filter_set_head *);
-const char	*get_errstr(u_int8_t, u_int8_t);
-int		 show_result(struct imsg *);
 void		 show_mrt_dump_neighbors(struct mrt_rib *, struct mrt_peer *,
 		    void *);
 void		 show_mrt_dump(struct mrt_rib *, struct mrt_peer *, void *);
@@ -96,13 +61,13 @@ void		 show_mrt_state(struct mrt_bgp_state *, void *);
 void		 show_mrt_msg(struct mrt_bgp_msg *, void *);
 const char	*msg_type(u_int8_t);
 void		 network_bulk(struct parse_result *);
-const char	*print_auth_method(enum auth_method);
 int		 match_aspath(void *, u_int16_t, struct filter_as *);
 
 struct imsgbuf	*ibuf;
 struct mrt_parser show_mrt = { show_mrt_dump, show_mrt_state, show_mrt_msg };
 struct mrt_parser net_mrt = { network_mrt_dump, NULL, NULL };
 int tableid;
+int nodescr;
 
 __dead void
 usage(void)
@@ -118,7 +83,7 @@ int
 main(int argc, char *argv[])
 {
 	struct sockaddr_un	 sun;
-	int			 fd, n, done, ch, nodescr = 0, verbose = 0;
+	int			 fd, n, done, ch, verbose = 0;
 	struct imsg		 imsg;
 	struct network_config	 net;
 	struct parse_result	*res;
@@ -179,8 +144,8 @@ main(int argc, char *argv[])
 		show_mrt.arg = &ribreq;
 		if (res->flags & F_CTL_NEIGHBORS)
 			show_mrt.dump = show_mrt_dump_neighbors;
-		else if (!(res->flags & F_CTL_DETAIL))
-			show_rib_summary_head();
+		else
+			show_head(res);
 		mrt_parse(res->mrtfd, &show_mrt, 1);
 		exit(0);
 	default:
@@ -217,7 +182,6 @@ main(int argc, char *argv[])
 	case SHOW:
 	case SHOW_SUMMARY:
 		imsg_compose(ibuf, IMSG_CTL_SHOW_NEIGHBOR, 0, 0, -1, NULL, 0);
-		show_summary_head();
 		break;
 	case SHOW_SUMMARY_TERSE:
 		imsg_compose(ibuf, IMSG_CTL_SHOW_TERSE, 0, 0, -1, NULL, 0);
@@ -240,20 +204,16 @@ main(int argc, char *argv[])
 		} else
 			imsg_compose(ibuf, IMSG_CTL_KROUTE_ADDR, res->rtableid,
 			    0, -1, &res->addr, sizeof(res->addr));
-		show_fib_head();
 		break;
 	case SHOW_FIB_TABLES:
 		imsg_compose(ibuf, IMSG_CTL_SHOW_FIB_TABLES, 0, 0, -1, NULL, 0);
-		show_fib_tables_head();
 		break;
 	case SHOW_NEXTHOP:
 		imsg_compose(ibuf, IMSG_CTL_SHOW_NEXTHOP, res->rtableid, 0, -1,
 		    NULL, 0);
-		show_nexthop_head();
 		break;
 	case SHOW_INTERFACE:
 		imsg_compose(ibuf, IMSG_CTL_SHOW_INTERFACE, 0, 0, -1, NULL, 0);
-		show_interface_head();
 		break;
 	case SHOW_NEIGHBOR:
 	case SHOW_NEIGHBOR_TIMERS:
@@ -283,8 +243,6 @@ main(int argc, char *argv[])
 		ribreq.aid = res->aid;
 		ribreq.flags = res->flags;
 		imsg_compose(ibuf, type, 0, 0, -1, &ribreq, sizeof(ribreq));
-		if (!(res->flags & F_CTL_DETAIL))
-			show_rib_summary_head();
 		break;
 	case SHOW_RIB_MEM:
 		imsg_compose(ibuf, IMSG_CTL_SHOW_RIB_MEM, 0, 0, -1, NULL, 0);
@@ -367,7 +325,6 @@ main(int argc, char *argv[])
 		strlcpy(ribreq.rib, res->rib, sizeof(ribreq.rib));
 		imsg_compose(ibuf, IMSG_CTL_SHOW_NETWORK, 0, 0, -1,
 		    &ribreq, sizeof(ribreq));
-		show_network_head();
 		break;
 	case NETWORK_MRT:
 		bzero(&ribreq, sizeof(ribreq));
@@ -400,6 +357,8 @@ main(int argc, char *argv[])
 		if (msgbuf_write(&ibuf->w) <= 0 && errno != EAGAIN)
 			err(1, "write error");
 
+	show_head(res);
+
 	while (!done) {
 		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
 			err(1, "imsg_read error");
@@ -412,72 +371,7 @@ main(int argc, char *argv[])
 			if (n == 0)
 				break;
 
-			if (imsg.hdr.type == IMSG_CTL_RESULT) {
-				done = show_result(&imsg);
-				imsg_free(&imsg);
-				continue;
-			}
-
-			switch (res->action) {
-			case SHOW:
-			case SHOW_SUMMARY:
-				done = show_summary_msg(&imsg, nodescr);
-				break;
-			case SHOW_SUMMARY_TERSE:
-				done = show_summary_terse_msg(&imsg, nodescr);
-				break;
-			case SHOW_FIB:
-			case SHOW_FIB_TABLES:
-			case NETWORK_SHOW:
-				done = show_fib_msg(&imsg);
-				break;
-			case SHOW_NEXTHOP:
-				done = show_nexthop_msg(&imsg);
-				break;
-			case SHOW_INTERFACE:
-				done = show_interface_msg(&imsg);
-				break;
-			case SHOW_NEIGHBOR:
-				done = show_neighbor_msg(&imsg, NV_DEFAULT);
-				break;
-			case SHOW_NEIGHBOR_TIMERS:
-				done = show_neighbor_msg(&imsg, NV_TIMERS);
-				break;
-			case SHOW_NEIGHBOR_TERSE:
-				done = show_neighbor_terse(&imsg);
-				break;
-			case SHOW_RIB:
-				if (res->flags & F_CTL_DETAIL)
-					done = show_rib_detail_msg(&imsg,
-					    nodescr, res->flags);
-				else
-					done = show_rib_summary_msg(&imsg);
-				break;
-			case SHOW_RIB_MEM:
-				done = show_rib_memory_msg(&imsg);
-				break;
-			case NEIGHBOR:
-			case NEIGHBOR_UP:
-			case NEIGHBOR_DOWN:
-			case NEIGHBOR_CLEAR:
-			case NEIGHBOR_RREFRESH:
-			case NEIGHBOR_DESTROY:
-			case NONE:
-			case RELOAD:
-			case FIB:
-			case FIB_COUPLE:
-			case FIB_DECOUPLE:
-			case NETWORK_ADD:
-			case NETWORK_REMOVE:
-			case NETWORK_FLUSH:
-			case NETWORK_BULK_ADD:
-			case NETWORK_BULK_REMOVE:
-			case LOG_VERBOSE:
-			case LOG_BRIEF:
-			case SHOW_MRT:
-			case NETWORK_MRT:
-				break;
-			}
+			done = show(&imsg, res);
 			imsg_free(&imsg);
 		}
 	}
@@ -487,14 +381,113 @@ main(int argc, char *argv[])
 	exit(0);
 }
 
+int
+show(struct imsg *imsg, struct parse_result *res)
+{
+	struct peer		*p;
+	struct ctl_timer	*t;
+	struct ctl_show_interface	*iface;
+	struct ctl_show_nexthop	*nh;
+	struct kroute_full	*kf;
+	struct ktable		*kt;
+	struct ctl_show_rib	 rib;
+	u_char			*asdata;
+	struct rde_memstats	stats;
+	struct rde_hashstats	hash;
+	u_int			rescode, ilen;
+	size_t			aslen;
+
+	switch (imsg->hdr.type) {
+	case IMSG_CTL_SHOW_NEIGHBOR:
+		p = imsg->data;
+		show_neighbor(p, res);
+		break;
+	case IMSG_CTL_SHOW_TIMER:
+		t = imsg->data;
+		if (t->type > 0 && t->type < Timer_Max)
+			print_timer(timernames[t->type], t->val);
+		break;
+	case IMSG_CTL_SHOW_INTERFACE:
+		iface = imsg->data;
+		show_interface(iface);
+		break;
+	case IMSG_CTL_SHOW_NEXTHOP:
+		nh = imsg->data;
+		show_nexthop(nh);
+		break;
+	case IMSG_CTL_KROUTE:
+	case IMSG_CTL_SHOW_NETWORK:
+		if (imsg->hdr.len < IMSG_HEADER_SIZE + sizeof(*kf))
+			errx(1, "wrong imsg len");
+		kf = imsg->data;
+		show_fib(kf);
+		break;
+	case IMSG_CTL_SHOW_FIB_TABLES:
+		if (imsg->hdr.len < IMSG_HEADER_SIZE + sizeof(*kt))
+			errx(1, "wrong imsg len");
+		kt = imsg->data;
+
+		show_fib_table(kt);
+		break;
+	case IMSG_CTL_SHOW_RIB:
+		if (imsg->hdr.len < IMSG_HEADER_SIZE + sizeof(rib))
+			errx(1, "wrong imsg len");
+		memcpy(&rib, imsg->data, sizeof(rib));
+		aslen = imsg->hdr.len - IMSG_HEADER_SIZE - sizeof(rib);
+		asdata = imsg->data;
+		asdata += sizeof(rib);
+		show_rib(&rib, asdata, aslen, res);
+		break;
+	case IMSG_CTL_SHOW_RIB_COMMUNITIES:
+		ilen = imsg->hdr.len - IMSG_HEADER_SIZE;
+		if (ilen % sizeof(struct community)) {
+			warnx("bad IMSG_CTL_SHOW_RIB_COMMUNITIES received");
+			break;
+		}
+		show_communities(imsg->data, ilen, res->flags);
+		break;
+	case IMSG_CTL_SHOW_RIB_ATTR:
+		ilen = imsg->hdr.len - IMSG_HEADER_SIZE;
+		if (ilen < 3) {
+			warnx("bad IMSG_CTL_SHOW_RIB_ATTR received");
+			break;
+		}
+		show_attr(imsg->data, ilen, res->flags);
+		break;
+	case IMSG_CTL_SHOW_RIB_MEM:
+		memcpy(&stats, imsg->data, sizeof(stats));
+		show_rib_mem(&stats);
+		break;
+	case IMSG_CTL_SHOW_RIB_HASH:
+		memcpy(&hash, imsg->data, sizeof(hash));
+		show_rib_hash(&hash);
+		break;
+	case IMSG_CTL_RESULT:
+		if (imsg->hdr.len != IMSG_HEADER_SIZE + sizeof(rescode)) {
+			warnx("got IMSG_CTL_RESULT with wrong len");
+			break;
+		}
+		memcpy(&rescode, imsg->data, sizeof(rescode));
+		show_result(rescode);
+		return (1);
+	case IMSG_CTL_END:
+		return (1);
+	default:
+		warnx("unknown imsg %d received", imsg->hdr.type);
+		break;
+	}
+
+	return (0);
+}
+
 char *
 fmt_peer(const char *descr, const struct bgpd_addr *remote_addr,
-    int masklen, int nodescr)
+    int masklen)
 {
 	const char	*ip;
 	char		*p;
 
-	if (descr[0] && !nodescr) {
+	if (descr && descr[0] && !nodescr) {
 		if ((p = strdup(descr)) == NULL)
 			err(1, NULL);
 		return (p);
@@ -511,120 +504,6 @@ fmt_peer(const char *descr, const struct bgpd_addr *remote_addr,
 	}
 
 	return (p);
-}
-
-void
-show_summary_head(void)
-{
-	printf("%-20s %8s %10s %10s %5s %-8s %s\n", "Neighbor", "AS",
-	    "MsgRcvd", "MsgSent", "OutQ", "Up/Down", "State/PrfRcvd");
-}
-
-int
-show_summary_msg(struct imsg *imsg, int nodescr)
-{
-	struct peer		*p;
-	char			*s;
-	const char		*a;
-	size_t			alen;
-
-	switch (imsg->hdr.type) {
-	case IMSG_CTL_SHOW_NEIGHBOR:
-		p = imsg->data;
-		s = fmt_peer(p->conf.descr, &p->conf.remote_addr,
-		    p->conf.remote_masklen, nodescr);
-
-		a = log_as(p->conf.remote_as);
-		alen = strlen(a);
-		/* max displayed length of the peers name is 28 */
-		if (alen < 28) {
-			if (strlen(s) > 28 - alen)
-				s[28 - alen] = 0;
-		} else
-			alen = 0;
-
-		printf("%-*s %s %10llu %10llu %5u %-8s ",
-		    (28 - (int)alen), s, a,
-		    p->stats.msg_rcvd_open + p->stats.msg_rcvd_notification +
-		    p->stats.msg_rcvd_update + p->stats.msg_rcvd_keepalive +
-		    p->stats.msg_rcvd_rrefresh,
-		    p->stats.msg_sent_open + p->stats.msg_sent_notification +
-		    p->stats.msg_sent_update + p->stats.msg_sent_keepalive +
-		    p->stats.msg_sent_rrefresh,
-		    p->wbuf.queued,
-		    fmt_timeframe(p->stats.last_updown));
-		if (p->state == STATE_ESTABLISHED) {
-			printf("%6u", p->stats.prefix_cnt);
-			if (p->conf.max_prefix != 0)
-				printf("/%u", p->conf.max_prefix);
-		} else if (p->conf.template)
-			printf("Template");
-		else
-			printf("%s", statenames[p->state]);
-		printf("\n");
-		free(s);
-		break;
-	case IMSG_CTL_END:
-		return (1);
-	default:
-		break;
-	}
-
-	return (0);
-}
-
-int
-show_summary_terse_msg(struct imsg *imsg, int nodescr)
-{
-	struct peer		*p;
-	char			*s;
-
-	switch (imsg->hdr.type) {
-	case IMSG_CTL_SHOW_NEIGHBOR:
-		p = imsg->data;
-		s = fmt_peer(p->conf.descr, &p->conf.remote_addr,
-		    p->conf.remote_masklen, nodescr);
-		printf("%s %s %s\n", s, log_as(p->conf.remote_as),
-		    p->conf.template ? "Template" : statenames[p->state]);
-		free(s);
-		break;
-	case IMSG_CTL_END:
-		return (1);
-	default:
-		break;
-	}
-
-	return (0);
-}
-
-int
-show_neighbor_terse(struct imsg *imsg)
-{
-	struct peer		*p;
-
-	switch (imsg->hdr.type) {
-	case IMSG_CTL_SHOW_NEIGHBOR:
-		p = imsg->data;
-		printf("%llu %llu %llu %llu %llu %llu %llu "
-		    "%llu %llu %llu %u %u %llu %llu %llu %llu\n",
-		    p->stats.msg_sent_open, p->stats.msg_rcvd_open,
-		    p->stats.msg_sent_notification,
-		    p->stats.msg_rcvd_notification,
-		    p->stats.msg_sent_update, p->stats.msg_rcvd_update,
-		    p->stats.msg_sent_keepalive, p->stats.msg_rcvd_keepalive,
-		    p->stats.msg_sent_rrefresh, p->stats.msg_rcvd_rrefresh,
-		    p->stats.prefix_cnt, p->conf.max_prefix,
-		    p->stats.prefix_sent_update, p->stats.prefix_rcvd_update,
-		    p->stats.prefix_sent_withdraw,
-		    p->stats.prefix_rcvd_withdraw);
-		break;
-	case IMSG_CTL_END:
-		return (1);
-	default:
-		break;
-	}
-
-	return (0);
 }
 
 const char *
@@ -645,137 +524,6 @@ print_auth_method(enum auth_method method)
 	default:
 		return "";
 	}
-}
-
-int
-show_neighbor_msg(struct imsg *imsg, enum neighbor_views nv)
-{
-	struct peer		*p;
-	struct ctl_timer	*t;
-	struct in_addr		 ina;
-	char			*s;
-	int			 hascapamp = 0;
-	u_int8_t		 i;
-
-	switch (imsg->hdr.type) {
-	case IMSG_CTL_SHOW_NEIGHBOR:
-		p = imsg->data;
-		if ((p->conf.remote_addr.aid == AID_INET &&
-		    p->conf.remote_masklen != 32) ||
-		    (p->conf.remote_addr.aid == AID_INET6 &&
-		    p->conf.remote_masklen != 128)) {
-			if (asprintf(&s, "%s/%u",
-			    log_addr(&p->conf.remote_addr),
-			    p->conf.remote_masklen) == -1)
-				err(1, NULL);
-		} else
-			if ((s = strdup(log_addr(&p->conf.remote_addr))) ==
-			    NULL)
-				err(1, "strdup");
-
-		ina.s_addr = p->remote_bgpid;
-		printf("BGP neighbor is %s, ", s);
-		free(s);
-		if (p->conf.remote_as == 0 && p->conf.template)
-			printf("remote AS: accept any");
-		else
-			printf("remote AS %s", log_as(p->conf.remote_as));
-		if (p->conf.template)
-			printf(", Template");
-		if (p->template)
-			printf(", Cloned");
-		if (p->conf.passive)
-			printf(", Passive");
-		if (p->conf.ebgp && p->conf.distance > 1)
-			printf(", Multihop (%u)", (int)p->conf.distance);
-		printf("\n");
-		if (p->conf.descr[0])
-			printf(" Description: %s\n", p->conf.descr);
-		if (p->conf.max_prefix) {
-			printf(" Max-prefix: %u", p->conf.max_prefix);
-			if (p->conf.max_prefix_restart)
-				printf(" (restart %u)",
-				    p->conf.max_prefix_restart);
-			printf("\n");
-		}
-		printf("  BGP version 4, remote router-id %s",
-		    inet_ntoa(ina));
-		printf("%s\n", print_auth_method(p->auth.method));
-		printf("  BGP state = %s", statenames[p->state]);
-		if (p->conf.down) {
-			printf(", marked down");
-			if (*(p->conf.shutcomm)) {
-				printf(" with shutdown reason \"%s\"",
-				    log_shutcomm(p->conf.shutcomm));
-			}
-		}
-		if (p->stats.last_updown != 0)
-			printf(", %s for %s",
-			    p->state == STATE_ESTABLISHED ? "up" : "down",
-			    fmt_timeframe(p->stats.last_updown));
-		printf("\n");
-		printf("  Last read %s, holdtime %us, keepalive interval %us\n",
-		    fmt_timeframe(p->stats.last_read),
-		    p->holdtime, p->holdtime/3);
-		for (i = 0; i < AID_MAX; i++)
-			if (p->capa.peer.mp[i])
-				hascapamp = 1;
-		if (hascapamp || p->capa.peer.refresh ||
-		    p->capa.peer.grestart.restart || p->capa.peer.as4byte) {
-			printf("  Neighbor capabilities:\n");
-			if (hascapamp) {
-				printf("    Multiprotocol extensions: ");
-				print_neighbor_capa_mp(p);
-				printf("\n");
-			}
-			if (p->capa.peer.refresh)
-				printf("    Route Refresh\n");
-			if (p->capa.peer.grestart.restart) {
-				printf("    Graceful Restart");
-				print_neighbor_capa_restart(p);
-				printf("\n");
-			}
-			if (p->capa.peer.as4byte)
-				printf("    4-byte AS numbers\n");
-		}
-		printf("\n");
-		if (nv == NV_TIMERS)
-			break;
-		print_neighbor_msgstats(p);
-		printf("\n");
-		if (*(p->stats.last_shutcomm)) {
-			printf("  Last received shutdown reason: \"%s\"\n",
-			    log_shutcomm(p->stats.last_shutcomm));
-		}
-		if (p->state == STATE_IDLE) {
-			static const char	*errstr;
-
-			errstr = get_errstr(p->stats.last_sent_errcode,
-			    p->stats.last_sent_suberr);
-			if (errstr)
-				printf("  Last error: %s\n\n", errstr);
-		} else {
-			printf("  Local host:  %20s, Local port:  %5u\n",
-			    log_addr(&p->local), p->local_port);
-
-			printf("  Remote host: %20s, Remote port: %5u\n",
-			    log_addr(&p->remote), p->remote_port);
-			printf("\n");
-		}
-		break;
-	case IMSG_CTL_SHOW_TIMER:
-		t = imsg->data;
-		if (t->type > 0 && t->type < Timer_Max)
-			print_timer(timernames[t->type], t->val);
-		break;
-	case IMSG_CTL_END:
-		return (1);
-		break;
-	default:
-		break;
-	}
-
-	return (0);
 }
 
 void
@@ -845,30 +593,10 @@ print_neighbor_msgstats(struct peer *p)
 	    p->stats.prefix_sent_eor, p->stats.prefix_rcvd_eor);
 }
 
-void
-print_timer(const char *name, time_t d)
-{
-	printf("  %-20s ", name);
-
-	if (d <= 0)
-		printf("%-20s\n", "due");
-	else
-		printf("due in %-13s\n", fmt_timeframe_core(d));
-}
-
 #define TF_BUFS	8
 #define TF_LEN	9
 
-static char *
-fmt_timeframe(time_t t)
-{
-	if (t == 0)
-		return ("Never");
-	else
-		return (fmt_timeframe_core(time(NULL) - t));
-}
-
-static char *
+static const char *
 fmt_timeframe_core(time_t t)
 {
 	char		*buf;
@@ -902,28 +630,29 @@ fmt_timeframe_core(time_t t)
 	return (buf);
 }
 
-void
-show_fib_head(void)
+const char *
+fmt_timeframe(time_t t)
 {
-	printf("flags: "
-	    "* = valid, B = BGP, C = Connected, S = Static, D = Dynamic\n");
-	printf("       "
-	    "N = BGP Nexthop reachable via this route\n");
-	printf("       r = reject route, b = blackhole route\n\n");
-	printf("flags prio destination          gateway\n");
+	time_t now;
+
+	if (t == 0)
+		return ("Never");
+
+	now = time(NULL);
+	if (t > now)	/* time in the future is not possible */
+		t = now;
+	return (fmt_timeframe_core(now - t));
 }
 
 void
-show_fib_tables_head(void)
+print_timer(const char *name, time_t d)
 {
-	printf("%-5s %-20s %-8s\n", "Table", "Description", "State");
-}
+	printf("  %-20s ", name);
 
-void
-show_network_head(void)
-{
-	printf("flags: S = Static\n");
-	printf("flags prio destination          gateway\n");
+	if (d <= 0)
+		printf("%-20s\n", "due");
+	else
+		printf("due in %-13s\n", fmt_timeframe_core(d));
 }
 
 void
@@ -960,174 +689,6 @@ show_fib_flags(u_int16_t flags)
 		printf(" ");
 
 	printf(" ");
-}
-
-int
-show_fib_msg(struct imsg *imsg)
-{
-	struct kroute_full	*kf;
-	struct ktable		*kt;
-	char			*p;
-
-	switch (imsg->hdr.type) {
-	case IMSG_CTL_KROUTE:
-	case IMSG_CTL_SHOW_NETWORK:
-		if (imsg->hdr.len < IMSG_HEADER_SIZE + sizeof(*kf))
-			errx(1, "wrong imsg len");
-		kf = imsg->data;
-
-		show_fib_flags(kf->flags);
-
-		if (asprintf(&p, "%s/%u", log_addr(&kf->prefix),
-		    kf->prefixlen) == -1)
-			err(1, NULL);
-		printf("%4i %-20s ", kf->priority, p);
-		free(p);
-
-		if (kf->flags & F_CONNECTED)
-			printf("link#%u", kf->ifindex);
-		else
-			printf("%s", log_addr(&kf->nexthop));
-		printf("\n");
-
-		break;
-	case IMSG_CTL_SHOW_FIB_TABLES:
-		if (imsg->hdr.len < IMSG_HEADER_SIZE + sizeof(*kt))
-			errx(1, "wrong imsg len");
-		kt = imsg->data;
-
-		printf("%5i %-20s %-8s%s\n", kt->rtableid, kt->descr,
-		    kt->fib_sync ? "coupled" : "decoupled",
-		    kt->fib_sync != kt->fib_conf ? "*" : "");
-
-		break;
-	case IMSG_CTL_END:
-		return (1);
-	default:
-		break;
-	}
-
-	return (0);
-}
-
-void
-show_nexthop_head(void)
-{
-	printf("Flags: * = nexthop valid\n");
-	printf("\n  %-15s %-19s%-4s %-15s %-20s\n", "Nexthop", "Route",
-	     "Prio", "Gateway", "Iface");
-}
-
-int
-show_nexthop_msg(struct imsg *imsg)
-{
-	struct ctl_show_nexthop	*p;
-	struct kroute		*k;
-	struct kroute6		*k6;
-	char			*s;
-
-	switch (imsg->hdr.type) {
-	case IMSG_CTL_SHOW_NEXTHOP:
-		p = imsg->data;
-		printf("%s %-15s ", p->valid ? "*" : " ", log_addr(&p->addr));
-		if (!p->krvalid) {
-			printf("\n");
-			return (0);
-		}
-		switch (p->addr.aid) {
-		case AID_INET:
-			k = &p->kr.kr4;
-			if (asprintf(&s, "%s/%u", inet_ntoa(k->prefix),
-			    k->prefixlen) == -1)
-				err(1, NULL);
-			printf("%-20s", s);
-			free(s);
-			printf("%3i %-15s ", k->priority,
-			    k->flags & F_CONNECTED ? "connected" :
-			    inet_ntoa(k->nexthop));
-			break;
-		case AID_INET6:
-			k6 = &p->kr.kr6;
-			if (asprintf(&s, "%s/%u", log_in6addr(&k6->prefix),
-			    k6->prefixlen) == -1)
-				err(1, NULL);
-			printf("%-20s", s);
-			free(s);
-			printf("%3i %-15s ", k6->priority,
-			    k6->flags & F_CONNECTED ? "connected" :
-			    log_in6addr(&k6->nexthop));
-			break;
-		default:
-			printf("unknown address family\n");
-			return (0);
-		}
-		if (p->iface.ifname[0]) {
-			printf("%s (%s, %s)", p->iface.ifname,
-			    p->iface.is_up ? "UP" : "DOWN",
-			    p->iface.baudrate ?
-			    get_baudrate(p->iface.baudrate, "bps") :
-			    p->iface.linkstate);
-		}
-		printf("\n");
-		break;
-	case IMSG_CTL_END:
-		return (1);
-		break;
-	default:
-		break;
-	}
-
-	return (0);
-}
-
-
-void
-show_interface_head(void)
-{
-	printf("%-15s%-9s%-9s%-7s%s\n", "Interface", "rdomain", "Nexthop", "Flags",
-	    "Link state");
-}
-
-int
-show_interface_msg(struct imsg *imsg)
-{
-	struct ctl_show_interface	*iface;
-
-	switch (imsg->hdr.type) {
-	case IMSG_CTL_SHOW_INTERFACE:
-		iface = imsg->data;
-		printf("%-15s", iface->ifname);
-		printf("%-9u", iface->rdomain);
-		printf("%-9s", iface->nh_reachable ? "ok" : "invalid");
-		printf("%-7s", iface->is_up ? "UP" : "");
-
-		if (iface->media[0])
-			printf("%s, ", iface->media);
-		printf("%s", iface->linkstate);
-
-		if (iface->baudrate > 0)
-			printf(", %s", get_baudrate(iface->baudrate, "Bit/s"));
-		printf("\n");
-		break;
-	case IMSG_CTL_END:
-		return (1);
-		break;
-	default:
-		break;
-	}
-
-	return (0);
-}
-
-void
-show_rib_summary_head(void)
-{
-	printf("flags: * = Valid, > = Selected, I = via IBGP, A = Announced,\n"
-	    "       S = Stale, E = Error\n");
-	printf("origin validation state: N = not-found, V = valid, ! = invalid\n");
-	printf("origin: i = IGP, e = EGP, ? = Incomplete\n\n");
-	printf("%-5s %3s %-20s %-15s  %5s %5s %s\n", "flags", "ovs", "destination",
-	    "gateway", "lpref", "med", "aspath origin");
 }
 
 void
@@ -1207,121 +768,6 @@ print_ovs(u_int8_t validation_state, int sum)
 	default:
 		return (sum ? "N" : "not-found");
 	}
-}
-
-int
-show_rib_summary_msg(struct imsg *imsg)
-{
-	struct ctl_show_rib	 rib;
-	u_char			*asdata;
-
-	switch (imsg->hdr.type) {
-	case IMSG_CTL_SHOW_RIB:
-		memcpy(&rib, imsg->data, sizeof(rib));
-		asdata = imsg->data;
-		asdata += sizeof(struct ctl_show_rib);
-		show_rib_brief(&rib, asdata);
-		break;
-	case IMSG_CTL_END:
-		return (1);
-	default:
-		break;
-	}
-
-	return (0);
-}
-
-int
-show_rib_detail_msg(struct imsg *imsg, int nodescr, int flag0)
-{
-	struct ctl_show_rib	 rib;
-	u_char			*asdata;
-	u_int16_t		 ilen;
-
-	switch (imsg->hdr.type) {
-	case IMSG_CTL_SHOW_RIB:
-		memcpy(&rib, imsg->data, sizeof(rib));
-		asdata = imsg->data;
-		asdata += sizeof(struct ctl_show_rib);
-		show_rib_detail(&rib, asdata, nodescr, flag0);
-		break;
-	case IMSG_CTL_SHOW_RIB_COMMUNITIES:
-		ilen = imsg->hdr.len - IMSG_HEADER_SIZE;
-		if (ilen % sizeof(struct community))
-			errx(1, "bad IMSG_CTL_SHOW_RIB_COMMUNITIES received");
-		show_communities(imsg->data, ilen, flag0);
-		break;
-	case IMSG_CTL_SHOW_RIB_ATTR:
-		ilen = imsg->hdr.len - IMSG_HEADER_SIZE;
-		if (ilen < 3)
-			errx(1, "bad IMSG_CTL_SHOW_RIB_ATTR received");
-		show_attr(imsg->data, ilen, flag0);
-		break;
-	case IMSG_CTL_END:
-		printf("\n");
-		return (1);
-	default:
-		break;
-	}
-
-	return (0);
-}
-
-void
-show_rib_brief(struct ctl_show_rib *r, u_char *asdata)
-{
-	char			*aspath;
-
-	print_prefix(&r->prefix, r->prefixlen, r->flags, r->validation_state);
-	printf(" %-15s ", log_addr(&r->exit_nexthop));
-	printf(" %5u %5u ", r->local_pref, r->med);
-
-	if (aspath_asprint(&aspath, asdata, r->aspath_len) == -1)
-		err(1, NULL);
-	if (strlen(aspath) > 0)
-		printf("%s ", aspath);
-	free(aspath);
-
-	printf("%s\n", print_origin(r->origin, 1));
-}
-
-void
-show_rib_detail(struct ctl_show_rib *r, u_char *asdata, int nodescr, int flag0)
-{
-	struct in_addr		 id;
-	char			*aspath, *s;
-	time_t			 now;
-
-	printf("\nBGP routing table entry for %s/%u%c",
-	    log_addr(&r->prefix), r->prefixlen,
-	    EOL0(flag0));
-
-	if (aspath_asprint(&aspath, asdata, r->aspath_len) == -1)
-		err(1, NULL);
-	if (strlen(aspath) > 0)
-		printf("    %s%c", aspath, EOL0(flag0));
-	free(aspath);
-
-	s = fmt_peer(r->descr, &r->remote_addr, -1, nodescr);
-	printf("    Nexthop %s ", log_addr(&r->exit_nexthop));
-	printf("(via %s) Neighbor %s (", log_addr(&r->true_nexthop), s);
-	free(s);
-	id.s_addr = htonl(r->remote_id);
-	printf("%s)%c", inet_ntoa(id), EOL0(flag0));
-
-	printf("    Origin %s, metric %u, localpref %u, weight %u, ovs %s, ",
-	    print_origin(r->origin, 0), r->med, r->local_pref, r->weight,
-	    print_ovs(r->validation_state, 0));
-	print_flags(r->flags, 0);
-
-	now = time(NULL);
-	if (now > r->lastchange)
-		now -= r->lastchange;
-	else
-		now = 0;
-
-	printf("%c    Last update: %s ago%c", EOL0(flag0),
-	    fmt_timeframe_core(now), EOL0(flag0));
 }
 
 static const char *
@@ -1838,7 +1284,7 @@ show_ext_community(u_char *data, u_int16_t len)
 	}
 }
 
-static char *
+const char *
 fmt_mem(long long num)
 {
 	static char	buf[16];
@@ -1847,90 +1293,6 @@ fmt_mem(long long num)
 		snprintf(buf, sizeof(buf), "%lldB", num);
 
 	return (buf);
-}
-
-size_t  pt_sizes[AID_MAX] = AID_PTSIZE;
-
-int
-show_rib_memory_msg(struct imsg *imsg)
-{
-	struct rde_memstats	stats;
-	struct rde_hashstats	hash;
-	size_t			pts = 0;
-	int			i;
-	double			avg, dev;
-
-	switch (imsg->hdr.type) {
-	case IMSG_CTL_SHOW_RIB_MEM:
-		memcpy(&stats, imsg->data, sizeof(stats));
-		printf("RDE memory statistics\n");
-		for (i = 0; i < AID_MAX; i++) {
-			if (stats.pt_cnt[i] == 0)
-				continue;
-			pts += stats.pt_cnt[i] * pt_sizes[i];
-			printf("%10lld %s network entries using %s of memory\n",
-			    stats.pt_cnt[i], aid_vals[i].name,
-			    fmt_mem(stats.pt_cnt[i] * pt_sizes[i]));
-		}
-		printf("%10lld rib entries using %s of memory\n",
-		    stats.rib_cnt, fmt_mem(stats.rib_cnt *
-		    sizeof(struct rib_entry)));
-		printf("%10lld prefix entries using %s of memory\n",
-		    stats.prefix_cnt, fmt_mem(stats.prefix_cnt *
-		    sizeof(struct prefix)));
-		printf("%10lld BGP path attribute entries using %s of memory\n",
-		    stats.path_cnt, fmt_mem(stats.path_cnt *
-		    sizeof(struct rde_aspath)));
-		printf("\t   and holding %lld references\n",
-		    stats.path_refs);
-		printf("%10lld BGP AS-PATH attribute entries using "
-		    "%s of memory\n\t   and holding %lld references\n",
-		    stats.aspath_cnt, fmt_mem(stats.aspath_size),
-		    stats.aspath_refs);
-		printf("%10lld entries for %lld BGP communities "
-		    "using %s of memory\n", stats.comm_cnt, stats.comm_nmemb,
-		    fmt_mem(stats.comm_cnt * sizeof(struct rde_community) +
-		    stats.comm_size * sizeof(struct community)));
-		printf("\t   and holding %lld references\n",
-		    stats.comm_refs);
-		printf("%10lld BGP attributes entries using %s of memory\n",
-		    stats.attr_cnt, fmt_mem(stats.attr_cnt *
-		    sizeof(struct attr)));
-		printf("\t   and holding %lld references\n",
-		    stats.attr_refs);
-		printf("%10lld BGP attributes using %s of memory\n",
-		    stats.attr_dcnt, fmt_mem(stats.attr_data));
-		printf("%10lld as-set elements in %lld tables using "
-		    "%s of memory\n", stats.aset_nmemb, stats.aset_cnt,
-		    fmt_mem(stats.aset_size));
-		printf("%10lld prefix-set elements using %s of memory\n",
-		    stats.pset_cnt, fmt_mem(stats.pset_size));
-		printf("RIB using %s of memory\n", fmt_mem(pts +
-		    stats.prefix_cnt * sizeof(struct prefix) +
-		    stats.rib_cnt * sizeof(struct rib_entry) +
-		    stats.path_cnt * sizeof(struct rde_aspath) +
-		    stats.aspath_size + stats.attr_cnt * sizeof(struct attr) +
-		    stats.attr_data));
-		printf("Sets using %s of memory\n", fmt_mem(stats.aset_size +
-		    stats.pset_size));
-		printf("\nRDE hash statistics\n");
-		break;
-	case IMSG_CTL_SHOW_RIB_HASH:
-		memcpy(&hash, imsg->data, sizeof(hash));
-		printf("\t%s: size %lld, %lld entries\n", hash.name, hash.num,
-		    hash.sum);
-		avg = (double)hash.sum / (double)hash.num;
-		dev = sqrt(fmax(0, hash.sumq / hash.num - avg * avg));
-		printf("\t    min %lld max %lld avg/std-dev = %.3f/%.3f\n",
-		    hash.min, hash.max, avg, dev);
-		break;
-	case IMSG_CTL_END:
-		return (1);
-	default:
-		break;
-	}
-
-	return (0);
 }
 
 void
@@ -1979,28 +1341,6 @@ get_errstr(u_int8_t errcode, u_int8_t subcode)
 	}
 
 	return (errstr);
-}
-
-int
-show_result(struct imsg *imsg)
-{
-	u_int	rescode;
-
-	if (imsg->hdr.len != IMSG_HEADER_SIZE + sizeof(rescode))
-		errx(1, "got IMSG_CTL_RESULT with wrong len");
-	memcpy(&rescode, imsg->data, sizeof(rescode));
-
-	if (rescode == 0)
-		printf("request processed\n");
-	else {
-		if (rescode >
-		    sizeof(ctl_res_strerror)/sizeof(ctl_res_strerror[0]))
-			printf("unknown result error code %u\n", rescode);
-		else
-			printf("%s\n", ctl_res_strerror[rescode]);
-	}
-
-	return (1);
 }
 
 void
@@ -2083,9 +1423,13 @@ void
 show_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 {
 	struct ctl_show_rib		 ctl;
+	struct parse_result		 res;
 	struct ctl_show_rib_request	*req = arg;
 	struct mrt_rib_entry		*mre;
 	u_int16_t			 i, j;
+
+	memset(&res, 0, sizeof(res));
+	res.flags = req->flags;
 
 	for (i = 0; i < mr->nentries; i++) {
 		mre = &mr->entries[i];
@@ -2099,7 +1443,6 @@ show_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 		ctl.local_pref = mre->local_pref;
 		ctl.med = mre->med;
 		/* weight is not part of the mrt dump so it can't be set */
-		ctl.aspath_len = mre->aspath_len;
 
 		if (mre->peer_idx < mp->npeers) {
 			ctl.remote_addr = mp->peers[mre->peer_idx].addr;
@@ -2116,29 +1459,38 @@ show_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 			return;
 		/* filter by prefix */
 		if (req->prefix.aid != AID_UNSPEC) {
-			if (!prefix_compare(&req->prefix, &ctl.prefix,
-			    req->prefixlen)) {
-				if (req->flags & F_LONGER) {
-					if (req->prefixlen > ctl.prefixlen)
-						return;
-				} else if (req->prefixlen != ctl.prefixlen)
+			if (req->flags & F_LONGER) {
+				if (req->prefixlen > ctl.prefixlen)
 					return;
-			} else
-				return;
+				if (prefix_compare(&req->prefix, &ctl.prefix,
+				    req->prefixlen))
+					return;
+			} else if (req->flags & F_SHORTER) {
+				if (req->prefixlen < ctl.prefixlen)
+					return;
+				if (prefix_compare(&req->prefix, &ctl.prefix,
+				    ctl.prefixlen))
+					return;
+			} else {
+				if (req->prefixlen != ctl.prefixlen)
+					return;
+				if (prefix_compare(&req->prefix, &ctl.prefix,
+				    req->prefixlen))
+					return;
+			}
 		}
 		/* filter by AS */
 		if (req->as.type != AS_UNDEF &&
 		    !match_aspath(mre->aspath, mre->aspath_len, &req->as))
 			continue;
 
+		show_rib(&ctl, mre->aspath, mre->aspath_len, &res);
 		if (req->flags & F_CTL_DETAIL) {
-			show_rib_detail(&ctl, mre->aspath, 1, 0);
 			for (j = 0; j < mre->nattrs; j++)
 				show_attr(mre->attrs[j].attr,
 				    mre->attrs[j].attr_len,
 				    req->flags);
-		} else
-			show_rib_brief(&ctl, mre->aspath);
+		}
 	}
 }
 
@@ -2163,7 +1515,6 @@ network_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 		ctl.origin = mre->origin;
 		ctl.local_pref = mre->local_pref;
 		ctl.med = mre->med;
-		ctl.aspath_len = mre->aspath_len;
 
 		if (mre->peer_idx < mp->npeers) {
 			ctl.remote_addr = mp->peers[mre->peer_idx].addr;

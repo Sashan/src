@@ -1,4 +1,4 @@
-/*	$OpenBSD: switchofp.c,v 1.73 2019/05/10 15:13:38 akoshibe Exp $	*/
+/*	$OpenBSD: switchofp.c,v 1.76 2019/11/27 17:37:32 akoshibe Exp $	*/
 
 /*
  * Copyright (c) 2016 Kazuya GODA <goda@openbsd.org>
@@ -449,7 +449,6 @@ int	swofp_mp_recv_port_stats(struct switch_softc *, struct mbuf *);
 int	swofp_mp_recv_port_desc(struct switch_softc *, struct mbuf *);
 int	swofp_mp_recv_group_desc(struct switch_softc *, struct mbuf *);
 
-#define OFP_ALIGNMENT 8
 /*
  * OXM (OpenFlow Extensible Match) structures appear in ofp_match structure
  * and ofp_instruction_{apply|write}_action structure.
@@ -586,7 +585,7 @@ struct ofp_mpmsg_class ofp_mpmsg_table[] = {
 
 struct ofp_oxm_class {
 	uint8_t	 oxm_field;
-	uint8_t	 oxm_len; /* This length defined by speficication */
+	uint8_t	 oxm_len; /* This length defined by specification */
 	uint8_t	 oxm_flags;
 	int	(*oxm_match)(struct switch_flow_classify *,
 		    struct ofp_ox_match *);
@@ -2175,7 +2174,8 @@ swofp_validate_action(struct switch_softc *sc, struct ofp_action_header *ah,
 		}
 		break;
 	case OFP_ACTION_SET_FIELD:
-		if (ahlen < sizeof(struct ofp_action_set_field)) {
+		if (ahlen < sizeof(struct ofp_action_set_field) ||
+		    ahlen != OFP_ALIGN(ahlen)) {
 			*err = OFP_ERRACTION_LEN;
 			return (-1);
 		}
@@ -2190,22 +2190,37 @@ swofp_validate_action(struct switch_softc *sc, struct ofp_action_header *ah,
 		dptr = (uint8_t *)ah;
 		dptr += sizeof(struct ofp_action_set_field) -
 		    offsetof(struct ofp_action_set_field, asf_field);
-		while (oxmlen > 0) {
-			oxm = (struct ofp_ox_match *)dptr;
-			if (swofp_validate_oxm(oxm, err)) {
-				if (*err == OFP_ERRMATCH_BAD_LEN)
-					*err = OFP_ERRACTION_SET_LEN;
-				else
-					*err = OFP_ERRACTION_SET_TYPE;
+		oxm = (struct ofp_ox_match *)dptr;
+		oxmlen -= sizeof(struct ofp_ox_match);
+		if (oxmlen < oxm->oxm_length) {
+			*err = OFP_ERRACTION_SET_LEN;
+			return (-1);
+		}
+		/* Remainder is padding. */
+		oxmlen -= oxm->oxm_length;
+		if (oxmlen >= OFP_ALIGNMENT) {
+			*err = OFP_ERRACTION_SET_LEN;
+			return (-1);
+		}
 
+		if (swofp_validate_oxm(oxm, err)) {
+			if (*err == OFP_ERRMATCH_BAD_LEN)
+				*err = OFP_ERRACTION_SET_LEN;
+			else
+				*err = OFP_ERRACTION_SET_TYPE;
+			return (-1);
+		}
+
+	 	dptr += sizeof(struct ofp_ox_match) + oxm->oxm_length;
+		while (oxmlen > 0) {
+			if (*dptr != 0) {
+				*err = OFP_ERRACTION_SET_ARGUMENT;
 				return (-1);
 			}
-
-			dptr += sizeof(*oxm) + oxm->oxm_length;
-			oxmlen -= sizeof(*oxm) + oxm->oxm_length;
+			oxmlen--;
+			dptr++;
 		}
 		break;
-
 	default:
 		/* Unknown/unsupported action. */
 		*err = OFP_ERRACTION_TYPE;

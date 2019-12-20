@@ -1,4 +1,4 @@
-# $OpenBSD: RAMDISK,v 1.90 2019/08/11 14:46:18 kettenis Exp $
+# $OpenBSD: RAMDISK,v 1.109 2019/12/03 09:12:46 patrick Exp $
 #
 # GENERIC machine description file
 #
@@ -21,8 +21,6 @@
 machine		arm64
 maxusers	4
 
-option		TIMEZONE=0	# time zone to adjust RTC time by
-option		DST=0		# daylight saving time used by RTC
 option		PCIVERBOSE
 option		USBVERBOSE
 option		SMALL_KERNEL
@@ -98,6 +96,7 @@ plrtc*		at fdt?
 pluart*		at fdt?
 psci*		at fdt? early 1
 syscon*		at fdt? early 1
+pwmfan*		at fdt?
 
 virtio*		at fdt?
 virtio*		at pci?
@@ -114,6 +113,7 @@ wsdisplay*	at simplefb?
 imxccm*		at fdt? early 1
 imxiomuxc*	at fdt? early 1
 imxanatop*	at fdt? early 1
+imxsrc*		at fdt? early 1
 imxgpc*		at fdt?
 imxgpio*	at fdt?
 fec*		at fdt?
@@ -122,7 +122,6 @@ imxiic*		at fdt?
 iic*		at imxiic?
 imxesdhc*	at fdt?
 sdmmc*		at imxesdhc?
-imxsrc*		at fdt?
 
 # Raspberry Pi 3
 bcmaux*		at fdt?
@@ -131,6 +130,20 @@ bcmdog*		at fdt?
 bcmrng*		at fdt?
 dwctwo*		at fdt?
 usb*		at dwctwo?
+
+# Amlogic SoCs
+amlclock*	at fdt? early 1
+amldwusb*	at fdt?
+amliic*		at fdt?
+iic*		at amliic?
+amlmmc*		at fdt?
+sdmmc*		at amlmmc?
+amlpciephy*	at fdt?
+amlpinctrl*	at fdt? early 1
+amlreset*	at fdt? early 1
+amlrng*		at fdt?
+amluart*	at fdt?
+amlusbphy*	at fdt?
 
 # HiSilicon SoCs
 hiclock*	at fdt? early 1
@@ -142,22 +155,28 @@ mvclock*	at fdt? early 1
 mvgicp*		at fdt? early 1
 mvicu*		at fdt? early 1
 mvpinctrl*	at fdt? early 1
+mvdog*		at fdt?
 mvgpio*		at fdt?
+mviic*		at fdt?
+iic*		at mviic?
 mvmdio*		at fdt?
 mvneta*		at fdt?
 mvrng*		at fdt?
 mvrtc*		at fdt?
 mvuart*		at fdt?
+sfp*		at fdt?
 
 # Rockchip SoCs
 rkclock*	at fdt? early 1
 rkgrf*		at fdt? early 1
 rkpinctrl*	at fdt? early 1
+rkemmcphy*	at fdt?
 rkgpio*		at fdt?
 rkiic*		at fdt?
 iic*		at rkiic?
 rkpcie*		at fdt?
 pci*		at rkpcie?
+rkpwm*		at fdt?
 rkdwusb*	at fdt?
 dwmmc*		at fdt?
 sdmmc*		at dwmmc?
@@ -166,10 +185,12 @@ sdmmc*		at dwmmc?
 sxipio*		at fdt? early 1	# GPIO pins for leds & PHYs
 gpio*		at sxipio?
 sxiccmu*	at fdt? early 1	# Clock Control Module/Unit
+sxidog*		at fdt?
 sxirsb*		at fdt? early 1	# Reduced Serial Bus
 sxirtc*		at fdt? early 1	# Real Time Clock
 sximmc*		at fdt?		# SD/MMC card controller
 sdmmc*		at sximmc?	# SD/MMC bus
+sxisid*		at fdt? early 1
 sxisyscon*	at fdt? early 1	# System controller
 sxitwi*		at fdt?		# I2C controller
 iic*		at sxitwi?	# I2C bus
@@ -258,9 +279,11 @@ uk*		at scsibus?
 
 # I2C devices
 abcrtc*		at iic?			# Abracon x80x RTC
-islrtc*		at iic?			# ISL1208 RTC
-rkpmic*		at iic?			# RK808 PMIC
 fusbtc*		at iic?			# USB Type-C controller
+islrtc*		at iic?			# ISL1208 RTC
+mcprtc*		at iic?			# MCP794XX RTC
+pcxrtc*		at iic?			# PCF8563 RTC
+rkpmic*		at iic?			# RK808 PMIC
 
 pseudo-device	loop 1
 pseudo-device	vlan

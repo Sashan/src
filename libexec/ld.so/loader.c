@@ -1,4 +1,4 @@
-/*	$OpenBSD: loader.c,v 1.185 2019/08/06 04:01:41 guenther Exp $ */
+/*	$OpenBSD: loader.c,v 1.190 2019/12/17 03:16:07 guenther Exp $ */
 
 /*
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
@@ -127,7 +127,6 @@ void
 _dl_run_all_dtors(void)
 {
 	elf_object_t *node;
-	struct dep_node *dnode;
 	int fini_complete;
 	int skip_initfirst;
 	int initfirst_skipped;
@@ -160,10 +159,13 @@ _dl_run_all_dtors(void)
 			    (node->status & STAT_INIT_DONE) &&
 			    ((node->status & STAT_FINI_DONE) == 0) &&
 			    (!skip_initfirst ||
-			    (node->obj_flags & DF_1_INITFIRST) == 0))
-				TAILQ_FOREACH(dnode, &node->child_list,
-				    next_sib)
-					dnode->data->status &= ~STAT_FINI_READY;
+			    (node->obj_flags & DF_1_INITFIRST) == 0)) {
+				struct object_vector vec = node->child_vec;
+				int i;
+
+				for (i = 0; i < vec.len; i++)
+					vec.vec[i]->status &= ~STAT_FINI_READY;
+			}
 		}
 
 
@@ -227,11 +229,20 @@ _dl_dopreload(char *paths)
 {
 	char		*cp, *dp;
 	elf_object_t	*shlib;
+	int		count;
 
 	dp = paths = _dl_strdup(paths);
 	if (dp == NULL)
 		_dl_oom();
 
+	/* preallocate child_vec for the LD_PRELOAD objects */
+	count = 1;
+	while (*dp++ != '\0')
+		if (*dp == ':')
+			count++;
+	object_vec_grow(&_dl_objects->child_vec, count);
+
+	dp = paths;
 	while ((cp = _dl_strsep(&dp, ":")) != NULL) {
 		shlib = _dl_load_shlib(cp, _dl_objects, OBJTYPE_LIB,
 		    _dl_objects->obj_flags);
@@ -254,41 +265,32 @@ _dl_setup_env(const char *argv0, char **envp)
 	static char progname_storage[NAME_MAX+1] = "";
 
 	/*
-	 * Get paths to various things we are going to use.
-	 */
-	_dl_debug = _dl_getenv("LD_DEBUG", envp) != NULL;
-	_dl_libpath = _dl_split_path(_dl_getenv("LD_LIBRARY_PATH", envp));
-	_dl_preload = _dl_getenv("LD_PRELOAD", envp);
-	_dl_bindnow = _dl_getenv("LD_BIND_NOW", envp) != NULL;
-	_dl_traceld = _dl_getenv("LD_TRACE_LOADED_OBJECTS", envp) != NULL;
-	_dl_tracefmt1 = _dl_getenv("LD_TRACE_LOADED_OBJECTS_FMT1", envp);
-	_dl_tracefmt2 = _dl_getenv("LD_TRACE_LOADED_OBJECTS_FMT2", envp);
-	_dl_traceprog = _dl_getenv("LD_TRACE_LOADED_OBJECTS_PROGNAME", envp);
-
-	/*
 	 * Don't allow someone to change the search paths if he runs
 	 * a suid program without credentials high enough.
 	 */
 	_dl_trust = !_dl_issetugid();
 	if (!_dl_trust) {	/* Zap paths if s[ug]id... */
-		if (_dl_libpath) {
-			_dl_free_path(_dl_libpath);
-			_dl_libpath = NULL;
-			_dl_unsetenv("LD_LIBRARY_PATH", envp);
-		}
-		if (_dl_preload) {
-			_dl_preload = NULL;
-			_dl_unsetenv("LD_PRELOAD", envp);
-		}
-		if (_dl_bindnow) {
-			_dl_bindnow = 0;
-			_dl_unsetenv("LD_BIND_NOW", envp);
-		}
-		if (_dl_debug) {
-			_dl_debug = 0;
-			_dl_unsetenv("LD_DEBUG", envp);
-		}
+		_dl_unsetenv("LD_DEBUG", envp);
+		_dl_unsetenv("LD_LIBRARY_PATH", envp);
+		_dl_unsetenv("LD_PRELOAD", envp);
+		_dl_unsetenv("LD_BIND_NOW", envp);
+	} else {
+		/*
+		 * Get paths to various things we are going to use.
+		 */
+		_dl_debug = _dl_getenv("LD_DEBUG", envp) != NULL;
+		_dl_libpath = _dl_split_path(_dl_getenv("LD_LIBRARY_PATH",
+		    envp));
+		_dl_preload = _dl_getenv("LD_PRELOAD", envp);
+		_dl_bindnow = _dl_getenv("LD_BIND_NOW", envp) != NULL;
 	}
+
+	/* these are usable even in setugid processes */
+	_dl_traceld = _dl_getenv("LD_TRACE_LOADED_OBJECTS", envp) != NULL;
+	_dl_tracefmt1 = _dl_getenv("LD_TRACE_LOADED_OBJECTS_FMT1", envp);
+	_dl_tracefmt2 = _dl_getenv("LD_TRACE_LOADED_OBJECTS_FMT2", envp);
+	_dl_traceprog = _dl_getenv("LD_TRACE_LOADED_OBJECTS_PROGNAME", envp);
+
 	environ = envp;
 
 	_dl_trace_setup(envp);
@@ -387,6 +389,7 @@ _dl_load_dep_libs(elf_object_t *object, int flags, int booting)
 				liblist[randomlist[loop]].depobj = depobj;
 			}
 
+			object_vec_grow(&dynobj->child_vec, libcount);
 			for (loop = 0; loop < libcount; loop++) {
 				_dl_add_object(liblist[loop].depobj);
 				_dl_link_child(liblist[loop].depobj, dynobj);
@@ -397,8 +400,6 @@ _dl_load_dep_libs(elf_object_t *object, int flags, int booting)
 		dynobj = dynobj->next;
 	}
 
-	/* add first object manually */
-	_dl_link_grpsym(object, 1);
 	_dl_cache_grpsym_list_setup(object);
 
 	return(0);
@@ -575,7 +576,7 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 	/*
 	 * Now add the dynamic loader itself last in the object list
 	 * so we can use the _dl_ code when serving dl.... calls.
-	 * Intentionally left off the exe child_list.
+	 * Intentionally left off the exe child_vec.
 	 */
 	dynp = (Elf_Dyn *)((void *)_DYNAMIC);
 	ehdr = (Elf_Ehdr *)dl_data[AUX_base];
@@ -585,7 +586,7 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 	_dl_add_object(dyn_obj);
 
 	dyn_obj->refcount++;
-	_dl_link_grpsym(dyn_obj, 1);
+	_dl_link_grpsym(dyn_obj);
 
 	dyn_obj->status |= STAT_RELOC_DONE;
 	_dl_set_sod(dyn_obj->load_name, &dyn_obj->sod);
@@ -708,8 +709,18 @@ _dl_rtld(elf_object_t *object)
 	fails =_dl_md_reloc(object, DT_REL, DT_RELSZ);
 	fails += _dl_md_reloc(object, DT_RELA, DT_RELASZ);
 	reprotect_if_textrel(object);
-	fails += _dl_md_reloc_got(object, !(_dl_bindnow ||
-	    object->obj_flags & DF_1_NOW));
+
+	/*
+	 * We do lazy resolution by default, doing eager resolution if
+	 *  - the object requests it with -znow, OR
+	 *  - LD_BIND_NOW is set and this object isn't being ltraced
+	 *
+	 * Note that -znow disables ltrace for the object: on at least
+	 * amd64 'ld' doesn't generate the trampoline for lazy relocation
+	 * when -znow is used.
+	 */
+	fails += _dl_md_reloc_got(object, !(object->obj_flags & DF_1_NOW) &&
+	    !(_dl_bindnow && !object->traced));
 
 	/*
 	 * Look for W&X segments and make them read-only.
@@ -767,15 +778,16 @@ _dl_relro(elf_object_t *object)
 void
 _dl_call_init_recurse(elf_object_t *object, int initfirst)
 {
-	struct dep_node *n;
+	struct object_vector vec;
 	int visited_flag = initfirst ? STAT_VISIT_INITFIRST : STAT_VISIT_INIT;
+	int i;
 
 	object->status |= visited_flag;
 
-	TAILQ_FOREACH(n, &object->child_list, next_sib) {
-		if (n->data->status & visited_flag)
+	for (vec = object->child_vec, i = 0; i < vec.len; i++) {
+		if (vec.vec[i]->status & visited_flag)
 			continue;
-		_dl_call_init_recurse(n->data, initfirst);
+		_dl_call_init_recurse(vec.vec[i], initfirst);
 	}
 
 	if (object->status & STAT_INIT_DONE)

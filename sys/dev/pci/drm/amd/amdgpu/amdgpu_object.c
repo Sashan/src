@@ -420,18 +420,6 @@ fail:
 	return false;
 }
 
-#ifdef __amd64__
-#define CONFIG_X86	1
-#define CONFIG_X86_64	1
-#define CONFIG_X86_PAT	1
-#endif
-
-#ifdef __i386__
-#define CONFIG_X86	1
-#define CONFIG_X86_32	1
-#define CONFIG_X86_PAT	1
-#endif
-
 static int amdgpu_bo_do_create(struct amdgpu_device *adev,
 			       struct amdgpu_bo_param *bp,
 			       struct amdgpu_bo **bo_ptr)
@@ -440,7 +428,8 @@ static int amdgpu_bo_do_create(struct amdgpu_device *adev,
 		.interruptible = (bp->type != ttm_bo_type_kernel),
 		.no_wait_gpu = false,
 		.resv = bp->resv,
-		.flags = TTM_OPT_FLAG_ALLOW_RES_EVICT
+		.flags = bp->type != ttm_bo_type_kernel ?
+			TTM_OPT_FLAG_ALLOW_RES_EVICT : 0
 	};
 	struct amdgpu_bo *bo;
 	unsigned long page_align, size = bp->size;

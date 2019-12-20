@@ -1,4 +1,4 @@
-/*	$OpenBSD: library.c,v 1.82 2017/12/08 05:25:20 deraadt Exp $ */
+/*	$OpenBSD: library.c,v 1.85 2019/12/09 22:15:15 deraadt Exp $ */
 
 /*
  * Copyright (c) 2002 Dale Rahn
@@ -64,7 +64,7 @@ _dl_unload_shlib(elf_object_t *object)
 	 * If our load object has become unreferenced then we lost the
 	 * last group reference to it, so the entire group should be taken
 	 * down.  The current object is somewhere below load_object in
-	 * the child_list tree, so it'll get cleaned up by the recursion.
+	 * the child_vec tree, so it'll get cleaned up by the recursion.
 	 * That means we can just switch here to the load object.
 	 */
 	if (load_object != object && OBJECT_REF_CNT(load_object) == 0 &&
@@ -78,10 +78,12 @@ _dl_unload_shlib(elf_object_t *object)
 	DL_DEB(("unload_shlib called on %s\n", object->load_name));
 	if (OBJECT_REF_CNT(object) == 0 &&
 	    (object->status & STAT_UNLOADED) == 0) {
+		struct object_vector vec;
+		int i;
 unload:
 		object->status |= STAT_UNLOADED;
-		TAILQ_FOREACH(n, &object->child_list, next_sib)
-			_dl_unload_shlib(n->data);
+		for (vec = object->child_vec, i = 0; i < vec.len; i++)
+			_dl_unload_shlib(vec.vec[i]);
 		TAILQ_FOREACH(n, &object->grpref_list, next_sib)
 			_dl_unload_shlib(n->data);
 		DL_DEB(("unload_shlib unloading on %s\n", object->load_name));
@@ -100,7 +102,8 @@ _dl_tryload_shlib(const char *libname, int type, int flags)
 	Elf_Addr libaddr, loff, align = _dl_pagesz - 1;
 	Elf_Addr relro_addr = 0, relro_size = 0;
 	elf_object_t *object;
-	char	hbuf[4096];
+	char	hbuf[4096], *exec_start = 0;
+	size_t exec_size = 0;
 	Elf_Dyn *dynp = NULL;
 	Elf_Ehdr *ehdr;
 	Elf_Phdr *phdp;
@@ -251,6 +254,11 @@ _dl_tryload_shlib(const char *libname, int type, int flags)
 				_dl_load_list_free(load_list);
 				return(0);
 			}
+			if ((flags & PROT_EXEC) && exec_start == 0) {
+				exec_start = start;
+				exec_size = ROUND_PG(size);
+			}
+
 			if (phdp->p_flags & PF_W) {
 				/* Zero out everything past the EOF */
 				if ((size & align) != 0)
@@ -299,6 +307,8 @@ _dl_tryload_shlib(const char *libname, int type, int flags)
 	    (Elf_Phdr *)((char *)libaddr + ehdr->e_phoff), ehdr->e_phnum,type,
 	    libaddr, loff);
 	if (object) {
+		char *soname = (char *)object->Dyn.info[DT_SONAME];
+
 		object->load_size = maxva - minva;	/*XXX*/
 		object->load_list = load_list;
 		/* set inode, dev from stat info */
@@ -310,6 +320,14 @@ _dl_tryload_shlib(const char *libname, int type, int flags)
 		_dl_set_sod(object->load_name, &object->sod);
 		if (ptls != NULL && ptls->p_memsz)
 			_dl_set_tls(object, ptls, libaddr, libname);
+
+		/* Request permission for system calls in libc.so's text segment */
+		if (soname != NULL &&
+		    _dl_strncmp(soname, "libc.so.", 8) == 0) {
+			if (_dl_msyscall(exec_start, exec_size) == -1)
+				_dl_printf("msyscall %lx %lx error\n",
+				    exec_start, exec_size);
+		}
 	} else {
 		_dl_munmap((void *)libaddr, maxva - minva);
 		_dl_load_list_free(load_list);

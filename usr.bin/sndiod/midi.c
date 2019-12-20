@@ -1,4 +1,4 @@
-/*	$OpenBSD: midi.c,v 1.19 2019/05/10 04:45:47 ratchov Exp $	*/
+/*	$OpenBSD: midi.c,v 1.22 2019/09/21 04:42:46 ratchov Exp $	*/
 /*
  * Copyright (c) 2008-2012 Alexandre Ratchov <alex@caoua.org>
  *
@@ -32,6 +32,7 @@ void port_imsg(void *, unsigned char *, int);
 void port_omsg(void *, unsigned char *, int);
 void port_fill(void *, int);
 void port_exit(void *);
+void port_exitall(struct port *);
 
 struct midiops port_midiops = {
 	port_imsg,
@@ -437,7 +438,8 @@ port_new(char *path, unsigned int mode, int hold)
 	struct port *c;
 
 	c = xmalloc(sizeof(struct port));
-	c->path = xstrdup(path);
+	c->path_list = NULL;
+	namelist_add(&c->path_list, path);
 	c->state = PORT_CFG;
 	c->hold = hold;
 	c->midi = midi_new(&port_midiops, c, mode);
@@ -467,7 +469,7 @@ port_del(struct port *c)
 #endif
 	}
 	*p = c->next;
-	xfree(c->path);
+	namelist_clear(&c->path_list);
 	xfree(c);
 }
 
@@ -520,7 +522,7 @@ port_open(struct port *c)
 {
 	if (!port_mio_open(c)) {
 		if (log_level >= 1) {
-			log_puts(c->path);
+			port_log(c);
 			log_puts(": failed to open midi port\n");
 		}
 		return 0;
@@ -529,11 +531,23 @@ port_open(struct port *c)
 	return 1;
 }
 
-int
-port_close(struct port *c)
+void
+port_exitall(struct port *c)
 {
 	int i;
 	struct midi *ep;
+
+	for (i = 0; i < MIDI_NEP; i++) {
+		ep = midi_ep + i;
+		if ((ep->txmask & c->midi->self) ||
+		    (c->midi->txmask & ep->self))
+			ep->ops->exit(ep->arg);
+	}
+}
+
+int
+port_close(struct port *c)
+{
 #ifdef DEBUG
 	if (c->state == PORT_CFG) {
 		port_log(c);
@@ -544,12 +558,7 @@ port_close(struct port *c)
 	c->state = PORT_CFG;
 	port_mio_close(c);
 
-	for (i = 0; i < MIDI_NEP; i++) {
-		ep = midi_ep + i;
-		if ((ep->txmask & c->midi->self) ||
-		    (c->midi->txmask & ep->self))
-			ep->ops->exit(ep->arg);
-	}
+	port_exitall(c);
 	return 1;
 }
 
@@ -584,4 +593,16 @@ port_done(struct port *c)
 {
 	if (c->state == PORT_INIT)
 		port_drain(c);
+}
+
+int
+port_reopen(struct port *p)
+{
+	if (p->state == PORT_CFG)
+		return 1;
+
+	if (!port_mio_reopen(p))
+		return 0;
+
+	return 1;
 }

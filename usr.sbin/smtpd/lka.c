@@ -1,4 +1,4 @@
-/*	$OpenBSD: lka.c,v 1.239 2019/07/26 06:30:13 gilles Exp $	*/
+/*	$OpenBSD: lka.c,v 1.242 2019/12/18 07:57:51 gilles Exp $	*/
 
 /*
  * Copyright (c) 2008 Pierre-Yves Ritschard <pyr@openbsd.org>
@@ -84,6 +84,7 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 	const char		*response;
 	const char		*ciphers;
 	const char		*address;
+	const char		*domain;
 	const char		*helomethod;
 	const char		*heloname;
 	const char		*filter_name;
@@ -93,6 +94,7 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 	int                      filter_phase;
 	const char              *filter_param;
 	uint32_t		 msgid;
+	uint32_t		 subsystems;
 	uint64_t		 evpid;
 	size_t			 msgsz;
 	int			 ok;
@@ -273,6 +275,7 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 	case IMSG_MTA_LOOKUP_SMARTHOST:
 		m_msg(&m, imsg);
 		m_get_id(&m, &reqid);
+		m_get_string(&m, &domain);
 		m_get_string(&m, &tablename);
 		m_end(&m);
 
@@ -286,7 +289,11 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 			m_add_int(p, LKA_TEMPFAIL);
 		}
 		else {
-			ret = table_fetch(table, K_RELAYHOST, &lk);
+			if (domain == NULL)
+				ret = table_fetch(table, K_RELAYHOST, &lk);
+			else
+				ret = table_lookup(table, K_RELAYHOST, domain, &lk);
+
 			if (ret == -1)
 				m_add_int(p, LKA_TEMPFAIL);
 			else if (ret == 0)
@@ -361,13 +368,14 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 	case IMSG_LKA_PROCESSOR_FORK:
 		m_msg(&m, imsg);
 		m_get_string(&m, &procname);
+		m_get_u32(&m, &subsystems);
 		m_end(&m);
 
 		m_create(p, IMSG_LKA_PROCESSOR_ERRFD, 0, 0, -1);
 		m_add_string(p, procname);
 		m_close(p);
 
-		lka_proc_forked(procname, imsg->fd);
+		lka_proc_forked(procname, subsystems, imsg->fd);
 		return;
 
 	case IMSG_LKA_PROCESSOR_ERRFD:
@@ -391,6 +399,17 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 		m_end(&m);
 
 		lka_report_smtp_link_connect(direction, &tv, reqid, rdns, fcrdns, &ss_src, &ss_dest);
+		return;
+
+	case IMSG_REPORT_SMTP_LINK_GREETING:
+		m_msg(&m, imsg);
+		m_get_string(&m, &direction);
+		m_get_timeval(&m, &tv);
+		m_get_id(&m, &reqid);
+		m_get_string(&m, &domain);
+		m_end(&m);
+
+		lka_report_smtp_link_greeting(direction, reqid, &tv, domain);
 		return;
 
 	case IMSG_REPORT_SMTP_LINK_DISCONNECT:
