@@ -1,4 +1,4 @@
-/*	$OpenBSD: acpipci.c,v 1.1 2018/10/26 20:26:19 kettenis Exp $	*/
+/*	$OpenBSD: acpipci.c,v 1.3 2019/09/07 13:46:19 kettenis Exp $	*/
 /*
  * Copyright (c) 2018 Mark Kettenis
  *

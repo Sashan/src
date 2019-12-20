@@ -1,4 +1,4 @@
-/*	$OpenBSD: sysctl.h,v 1.194 2019/07/12 00:04:59 cheloha Exp $	*/
+/*	$OpenBSD: sysctl.h,v 1.198 2019/12/11 07:30:09 guenther Exp $	*/
 /*	$NetBSD: sysctl.h,v 1.16 1996/04/09 20:55:36 cgd Exp $	*/
 
 /*
@@ -188,7 +188,8 @@ struct ctlname {
 #define	KERN_CPUSTATS		85	/* struct: cpu statistics */
 #define	KERN_PFSTATUS		86	/* struct: pf status and stats */
 #define	KERN_TIMEOUT_STATS	87	/* struct: timeout status and stats */
-#define	KERN_MAXID		88	/* number of valid kern ids */
+#define	KERN_UTC_OFFSET		88	/* int: adjust RTC time to UTC */
+#define	KERN_MAXID		89	/* number of valid kern ids */
 
 #define	CTL_KERN_NAMES { \
 	{ 0, 0 }, \
@@ -279,6 +280,7 @@ struct ctlname {
 	{ "cpustats", CTLTYPE_STRUCT }, \
 	{ "pfstatus", CTLTYPE_STRUCT }, \
 	{ "timeout_stats", CTLTYPE_STRUCT }, \
+	{ "utc_offset", CTLTYPE_INT }, \
 }
 
 /*
@@ -495,24 +497,33 @@ struct kinfo_vmentry {
 	u_int8_t kve_flags;		/* u_int8_t */
 };
 
+/* keep in sync with UVM_ET_* */
 #define KVE_ET_OBJ		0x00000001
 #define KVE_ET_SUBMAP		0x00000002
 #define KVE_ET_COPYONWRITE 	0x00000004
 #define KVE_ET_NEEDSCOPY	0x00000008
 #define KVE_ET_HOLE		0x00000010
 #define KVE_ET_NOFAULT		0x00000020
-#define KVE_ET_FREEMAPPED	0x00000080
+#define KVE_ET_STACK		0x00000040
+#define KVE_ET_WC		0x00000080
+#define KVE_ET_CONCEAL		0x00000100
+#define KVE_ET_SYSCALL		0x00000200
+#define KVE_ET_FREEMAPPED	0x00000800
+
 #define KVE_PROT_NONE		0x00000000
 #define KVE_PROT_READ		0x00000001
 #define KVE_PROT_WRITE		0x00000002
 #define KVE_PROT_EXEC		0x00000004
+
 #define KVE_ADV_NORMAL		0x00000000
 #define KVE_ADV_RANDOM		0x00000001
 #define KVE_ADV_SEQUENTIAL	0x00000002
+
 #define KVE_INH_SHARE		0x00000000
 #define KVE_INH_COPY		0x00000010
 #define KVE_INH_NONE		0x00000020
 #define KVE_INH_ZERO		0x00000030
+
 #define KVE_F_STATIC		0x01
 #define KVE_F_KMEM		0x02
 
@@ -617,7 +628,7 @@ do {									\
 	(kp)->p_stat = (p)->p_stat;					\
 	(kp)->p_nice = (pr)->ps_nice;					\
 									\
-	(kp)->p_xstat = (p)->p_xstat;					\
+	(kp)->p_xstat = W_EXITCODE((pr)->ps_xexit, (pr)->ps_xsig);	\
 	(kp)->p_acflag = (pr)->ps_acflag;				\
 	(kp)->p_pledge = (pr)->ps_pledge;				\
 									\
@@ -667,9 +678,6 @@ do {									\
 		struct timeval tv;					\
 									\
 		(kp)->p_uvalid = 1;					\
-									\
-		(kp)->p_ustart_sec = (pr)->ps_start.tv_sec;		\
-		(kp)->p_ustart_usec = (pr)->ps_start.tv_nsec/1000;	\
 									\
 		(kp)->p_uru_maxrss = (p)->p_ru.ru_maxrss;		\
 		(kp)->p_uru_ixrss = (p)->p_ru.ru_ixrss;			\

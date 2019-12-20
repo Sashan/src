@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_dwxe.c,v 1.11 2019/01/03 00:59:58 dlg Exp $	*/
+/*	$OpenBSD: if_dwxe.c,v 1.15 2019/10/07 00:40:04 jmatthew Exp $	*/
 /*
  * Copyright (c) 2008 Mark Kettenis
  * Copyright (c) 2017 Patrick Wildt <patrick@blueri.se>
@@ -372,7 +372,8 @@ dwxe_attach(struct device *parent, struct device *self, void *aux)
 	struct dwxe_softc *sc = (void *)self;
 	struct fdt_attach_args *faa = aux;
 	struct ifnet *ifp;
-	int phy, phy_supply, node;
+	uint32_t phy, phy_supply;
+	int node;
 
 	sc->sc_node = faa->fa_node;
 	sc->sc_iot = faa->fa_iot;
@@ -772,12 +773,10 @@ dwxe_mii_statchg(struct device *self)
 	case IFM_1000_LX:
 	case IFM_1000_CX:
 	case IFM_1000_T:
-		basicctrl &= ~DWXE_BASIC_CTL0_SPEED_MASK;
 		basicctrl |= DWXE_BASIC_CTL0_SPEED_1000;
 		sc->sc_link = 1;
 		break;
 	case IFM_100_TX:
-		basicctrl &= ~DWXE_BASIC_CTL0_SPEED_MASK;
 		basicctrl |= DWXE_BASIC_CTL0_SPEED_100;
 		sc->sc_link = 1;
 		break;
@@ -871,12 +870,13 @@ dwxe_tx_proc(struct dwxe_softc *sc)
 	struct ifnet *ifp = &sc->sc_ac.ac_if;
 	struct dwxe_desc *txd;
 	struct dwxe_buf *txb;
-	int idx;
+	int idx, txfree;
 
 	bus_dmamap_sync(sc->sc_dmat, DWXE_DMA_MAP(sc->sc_txring), 0,
 	    DWXE_DMA_LEN(sc->sc_txring),
 	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
+	txfree = 0;
 	while (sc->sc_tx_cnt > 0) {
 		idx = sc->sc_tx_cons;
 		KASSERT(idx < DWXE_NTXDESC);
@@ -895,8 +895,7 @@ dwxe_tx_proc(struct dwxe_softc *sc)
 			txb->tb_m = NULL;
 		}
 
-		ifq_clr_oactive(&ifp->if_snd);
-
+		txfree++;
 		sc->sc_tx_cnt--;
 
 		if (sc->sc_tx_cons == (DWXE_NTXDESC - 1))
@@ -909,6 +908,11 @@ dwxe_tx_proc(struct dwxe_softc *sc)
 
 	if (sc->sc_tx_cnt == 0)
 		ifp->if_timer = 0;
+
+	if (txfree) {
+		if (ifq_is_oactive(&ifp->if_snd))
+			ifq_restart(&ifp->if_snd);
+	}
 }
 
 void
@@ -1152,12 +1156,12 @@ dwxe_iff(struct dwxe_softc *sc)
 	reg = 0;
 
 	ifp->if_flags &= ~IFF_ALLMULTI;
+	bzero(hash, sizeof(hash));
 	if (ifp->if_flags & IFF_PROMISC || ac->ac_multirangecnt > 0) {
 		ifp->if_flags |= IFF_ALLMULTI;
 		reg |= DWXE_RX_FRM_FLT_RX_ALL_MULTICAST;
 		if (ifp->if_flags & IFF_PROMISC)
 			reg |= DWXE_RX_FRM_FLT_DIS_ADDR_FILTER;
-		bzero(hash, sizeof(hash));
 	} else {
 		reg |= DWXE_RX_FRM_FLT_HASH_MULTICAST;
 		ETHER_FIRST_MULTI(step, ac, enm);
@@ -1263,7 +1267,7 @@ dwxe_reset(struct dwxe_softc *sc)
 	for (n = 0; n < 1000; n++) {
 		if ((dwxe_read(sc, DWXE_BASIC_CTL1) &
 		    DWXE_BASIC_CTL1_SOFT_RST) == 0)
-			return
+			return;
 		delay(10);
 	}
 

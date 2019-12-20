@@ -1,4 +1,4 @@
-#	$OpenBSD: files,v 1.673 2019/08/01 03:06:35 dlg Exp $
+#	$OpenBSD: files,v 1.678 2019/12/05 15:19:33 mpi Exp $
 #	$NetBSD: files,v 1.87 1996/05/19 17:17:50 jonathan Exp $
 
 #	@(#)files.newconf	7.5 (Berkeley) 5/10/93
@@ -313,11 +313,6 @@ file	dev/ic/i82596.c			ie & (ie_pci | ie_eisa | ie_gsc)
 device	gem: ether, ifnet, ifmedia, mii
 file	dev/ic/gem.c			gem
 
-# Synopsis Designware GMAC core, as found on Allwinner A20
-# and other SoCs
-device	dwge: ether, ifnet, ifmedia, mii
-file	dev/ic/dwc_gmac.c		dwge
-
 device	ti: ether, ifnet, ifmedia, mii, firmload
 file	dev/ic/ti.c			ti
 
@@ -560,7 +555,6 @@ pseudo-device carp: ifnet, ether
 pseudo-device sppp: ifnet
 pseudo-device gif: ifnet
 pseudo-device gre: ifnet
-pseudo-device mobileip: ifnet
 pseudo-device crypto: ifnet
 pseudo-device trunk: ifnet, ether, ifmedia
 pseudo-device aggr: ifnet, ether, ifmedia
@@ -819,7 +813,6 @@ file net/rtsock.c
 file net/slcompress.c			ppp
 file net/if_enc.c			enc			needs-count
 file net/if_gre.c			gre			needs-count
-file net/if_mobileip.c			mobileip		needs-count
 file net/if_trunk.c			trunk			needs-count
 file net/trunklacp.c			trunk
 file net/if_aggr.c			aggr
@@ -875,7 +868,6 @@ file netinet/ip_gre.c
 file netinet/ip_ipsp.c			ipsec | tcp_signature
 file netinet/ip_spd.c			ipsec | tcp_signature
 file netinet/ip_ipip.c
-file netinet/ip_ether.c			gif
 file netinet/ipsec_input.c		ipsec
 file netinet/ipsec_output.c		ipsec
 file netinet/ip_esp.c			ipsec
@@ -976,11 +968,9 @@ file uvm/uvm_page.c
 file uvm/uvm_pager.c
 file uvm/uvm_pdaemon.c
 file uvm/uvm_pmemrange.c
-file uvm/uvm_stat.c
 file uvm/uvm_swap.c
 file uvm/uvm_swap_encrypt.c		uvm_swap_encrypt
 file uvm/uvm_unix.c
-file uvm/uvm_user.c
 file uvm/uvm_vnode.c
 
 # IPv6

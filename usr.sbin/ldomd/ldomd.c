@@ -1,4 +1,4 @@
-/*	$OpenBSD: ldomd.c,v 1.7 2016/08/28 00:51:48 guenther Exp $	*/
+/*	$OpenBSD: ldomd.c,v 1.10 2019/11/28 18:40:42 kn Exp $	*/
 
 /*
  * Copyright (c) 2012 Mark Kettenis
@@ -25,6 +25,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <limits.h>
 #include <string.h>
 #include <syslog.h>
 #include <time.h>
@@ -33,7 +34,7 @@
 #include "ds.h"
 #include "hvctl.h"
 #include "mdesc.h"
-#include "util.h"
+#include "ldom_util.h"
 #include "ldomd.h"
 
 TAILQ_HEAD(guest_head, guest) guests;
@@ -192,7 +193,7 @@ main(int argc, char **argv)
 
 	TAILQ_FOREACH(guest, &guests, link) {
 		struct ds_conn *dc;
-		char path[64];
+		char path[PATH_MAX];
 
 		if (strcmp(guest->name, "primary") == 0)
 			continue;
@@ -212,7 +213,7 @@ main(int argc, char **argv)
 	 * to keep track of the file descriptors.
 	 */
 	for (i = 0; i < 256; i++) {
-		char path[64];
+		char path[PATH_MAX];
 
 		snprintf(path, sizeof(path), "/dev/vdsp%d", i);
 		if (open(path, O_RDWR, 0) == -1)

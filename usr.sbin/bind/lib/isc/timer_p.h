@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 2000, 2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: timer_p.h,v 1.6.18.2 2005/04/29 00:16:51 marka Exp $ */
+/* $Id: timer_p.h,v 1.3 2019/12/17 01:46:34 sthen Exp $ */
 
 #ifndef ISC_TIMER_P_H
 #define ISC_TIMER_P_H
@@ -23,9 +22,9 @@
 /*! \file */
 
 isc_result_t
-isc__timermgr_nextevent(isc_time_t *when);
+isc__timermgr_nextevent(isc_timermgr_t *timermgr, isc_time_t *when);
 
 void
-isc__timermgr_dispatch(void);
+isc__timermgr_dispatch(isc_timermgr_t *timermgr);
 
 #endif /* ISC_TIMER_P_H */

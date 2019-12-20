@@ -1,4 +1,4 @@
-/* $OpenBSD: input-keys.c,v 1.64 2019/07/09 14:03:12 nicm Exp $ */
+/* $OpenBSD: input-keys.c,v 1.66 2019/11/18 09:42:09 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -43,9 +43,6 @@ struct input_key_ent {
 };
 
 static const struct input_key_ent input_keys[] = {
-	/* Backspace key. */
-	{ KEYC_BSPACE,		"\177",		0 },
-
 	/* Paste keys. */
 	{ KEYC_PASTE_START,	"\033[200~",	0 },
 	{ KEYC_PASTE_END,	"\033[201~",	0 },
@@ -160,7 +157,7 @@ input_key(struct window_pane *wp, key_code key, struct mouse_event *m)
 	u_int				 i;
 	size_t				 dlen;
 	char				*out;
-	key_code			 justkey;
+	key_code			 justkey, newkey;
 	struct utf8_data		 ud;
 
 	log_debug("writing key 0x%llx (%s) to %%%u", key,
@@ -178,6 +175,14 @@ input_key(struct window_pane *wp, key_code key, struct mouse_event *m)
 		ud.data[0] = (u_char)key;
 		bufferevent_write(wp->event, &ud.data[0], 1);
 		return;
+	}
+
+	/* Is this backspace? */
+	if ((key & KEYC_MASK_KEY) == KEYC_BSPACE) {
+		newkey = options_get_number(global_options, "backspace");
+		if (newkey >= 0x7f)
+			newkey = '\177';
+		key = newkey|(key & KEYC_MASK_MOD);
 	}
 
 	/*

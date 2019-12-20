@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_umb.c,v 1.23 2019/06/26 09:36:06 claudio Exp $ */
+/*	$OpenBSD: if_umb.c,v 1.31 2019/11/26 23:04:28 claudio Exp $ */
 
 /*
  * Copyright (c) 2016 genua mbH
@@ -37,6 +37,7 @@
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_types.h>
+#include <net/route.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -130,6 +131,7 @@ int		 umb_output(struct ifnet *, struct mbuf *, struct sockaddr *,
 		    struct rtentry *);
 int		 umb_input(struct ifnet *, struct mbuf *, void *);
 void		 umb_start(struct ifnet *);
+void		 umb_rtrequest(struct ifnet *, int, struct rtentry *);
 void		 umb_watchdog(struct ifnet *);
 void		 umb_statechg_timeout(void *);
 
@@ -153,6 +155,10 @@ int		 umb_decode_pin(struct umb_softc *, void *, int);
 int		 umb_decode_packet_service(struct umb_softc *, void *, int);
 int		 umb_decode_signal_state(struct umb_softc *, void *, int);
 int		 umb_decode_connect_info(struct umb_softc *, void *, int);
+void		 umb_clear_addr(struct umb_softc *);
+int		 umb_add_inet_config(struct umb_softc *, struct in_addr, u_int,
+		    struct in_addr);
+void		 umb_send_inet_proposal(struct umb_softc *);
 int		 umb_decode_ip_configuration(struct umb_softc *, void *, int);
 void		 umb_rx(struct umb_softc *);
 void		 umb_rxeof(struct usbd_xfer *, void *, usbd_status);
@@ -186,8 +192,6 @@ void		 umb_decode_cid(struct umb_softc *, uint32_t, void *, int);
 void		 umb_decode_qmi(struct umb_softc *, uint8_t *, int);
 
 void		 umb_intr(struct usbd_xfer *, void *, usbd_status);
-
-char		*umb_ntop(struct sockaddr *);
 
 int		 umb_xfer_tout = USBD_DEFAULT_TIMEOUT;
 
@@ -495,7 +499,7 @@ umb_attach(struct device *parent, struct device *self, void *aux)
 	ifp->if_flags = IFF_SIMPLEX | IFF_MULTICAST | IFF_POINTOPOINT;
 	ifp->if_ioctl = umb_ioctl;
 	ifp->if_start = umb_start;
-	ifp->if_rtrequest = p2p_rtrequest;
+	ifp->if_rtrequest = umb_rtrequest;
 
 	ifp->if_watchdog = umb_watchdog;
 	strlcpy(ifp->if_xname, DEVNAM(sc), IFNAMSIZ);
@@ -514,7 +518,7 @@ umb_attach(struct device *parent, struct device *self, void *aux)
 	if_alloc_sadl(ifp);
 	ifp->if_softc = sc;
 #if NBPFILTER > 0
-	bpfattach(&ifp->if_bpf, ifp, DLT_RAW, 0);
+	bpfattach(&ifp->if_bpf, ifp, DLT_LOOP, sizeof(uint32_t));
 #endif
 	/*
 	 * Open the device now so that we are able to query device information.
@@ -757,19 +761,20 @@ umb_output(struct ifnet *ifp, struct mbuf *m, struct sockaddr *dst,
 		m_freem(m);
 		return ENETDOWN;
 	}
+	m->m_pkthdr.ph_family = dst->sa_family;
 	return if_enqueue(ifp, m);
 }
 
 int
 umb_input(struct ifnet *ifp, struct mbuf *m, void *cookie)
 {
-	uint8_t ipv;
+	uint32_t af;
 
 	if ((ifp->if_flags & IFF_UP) == 0) {
 		m_freem(m);
 		return 1;
 	}
-	if (m->m_pkthdr.len < sizeof (struct ip)) {
+	if (m->m_pkthdr.len < sizeof (struct ip) + sizeof(af)) {
 		ifp->if_ierrors++;
 		DPRINTFN(4, "%s: dropping short packet (len %d)\n", __func__,
 		    m->m_pkthdr.len);
@@ -777,16 +782,19 @@ umb_input(struct ifnet *ifp, struct mbuf *m, void *cookie)
 		return 1;
 	}
 	m->m_pkthdr.ph_rtableid = ifp->if_rdomain;
-	m_copydata(m, 0, sizeof (ipv), &ipv);
-	ipv >>= 4;
+
+	/* pop of DLT_LOOP header, no longer needed */
+	af = *mtod(m, uint32_t *);
+	m_adj(m, sizeof (af));
+	af = ntohl(af);
 
 	ifp->if_ibytes += m->m_pkthdr.len;
-	switch (ipv) {
-	case 4:
+	switch (af) {
+	case AF_INET:
 		ipv4_input(ifp, m);
 		return 1;
 #ifdef INET6
-	case 6:
+	case AF_INET6:
 		ipv6_input(ifp, m);
 		return 1;
 #endif /* INET6 */
@@ -876,7 +884,8 @@ umb_start(struct ifnet *ifp)
 
 #if NBPFILTER > 0
 		if (ifp->if_bpf)
-			bpf_mtap(ifp->if_bpf, m, BPF_DIRECTION_OUT);
+			bpf_mtap_af(ifp->if_bpf, m->m_pkthdr.ph_family, m,
+			    BPF_DIRECTION_OUT);
 #endif
 	}
 	if (ml_empty(&sc->sc_tx_ml))
@@ -886,6 +895,20 @@ umb_start(struct ifnet *ifp)
 		ifp->if_timer = (2 * umb_xfer_tout) / 1000;
 	}
 }
+
+void
+umb_rtrequest(struct ifnet *ifp, int req, struct rtentry *rt)
+{
+	struct umb_softc *sc = ifp->if_softc;
+
+	if (req == RTM_PROPOSAL) {
+		umb_send_inet_proposal(sc);
+		return;
+	}
+
+	p2p_rtrequest(ifp, req, rt);
+}
+
 
 void
 umb_watchdog(struct ifnet *ifp)
@@ -905,9 +928,12 @@ void
 umb_statechg_timeout(void *arg)
 {
 	struct umb_softc *sc = arg;
+	struct ifnet *ifp = GET_IFP(sc);
 
 	if (sc->sc_info.regstate != MBIM_REGSTATE_ROAMING || sc->sc_roaming)
-		printf("%s: state change timeout\n",DEVNAM(sc));
+		if (ifp->if_flags & IFF_DEBUG)
+			log(LOG_DEBUG, "%s: state change timeout\n",
+			    DEVNAM(sc));
 	usb_add_task(sc->sc_udev, &sc->sc_umb_task);
 }
 
@@ -934,8 +960,6 @@ umb_state_task(void *arg)
 {
 	struct umb_softc *sc = arg;
 	struct ifnet *ifp = GET_IFP(sc);
-	struct ifreq ifr;
-	struct in_aliasreq ifra;
 	int	 s;
 	int	 state;
 
@@ -963,21 +987,6 @@ umb_state_task(void *arg)
 			    ? "up" : "down",
 			    LINK_STATE_IS_UP(state) ? "up" : "down");
 		ifp->if_link_state = state;
-		if (!LINK_STATE_IS_UP(state)) {
-			/*
-			 * Purge any existing addresses
-			 */
-			memset(sc->sc_info.ipv4dns, 0,
-			    sizeof (sc->sc_info.ipv4dns));
-			if (in_ioctl(SIOCGIFADDR, (caddr_t)&ifr, ifp, 1) == 0 &&
-			    satosin(&ifr.ifr_addr)->sin_addr.s_addr !=
-			    INADDR_ANY) {
-				memset(&ifra, 0, sizeof (ifra));
-				memcpy(&ifra.ifra_addr, &ifr.ifr_addr,
-				    sizeof (ifra.ifra_addr));
-				in_ioctl(SIOCDIFADDR, (caddr_t)&ifra, ifp, 1);
-			}
-		}
 		if_link_state_change(ifp);
 	}
 	splx(s);
@@ -1062,6 +1071,8 @@ umb_down(struct umb_softc *sc, int force)
 
 	switch (sc->sc_state) {
 	case UMB_S_UP:
+		umb_clear_addr(sc);
+		/*FALLTHROUGH*/
 	case UMB_S_CONNECTED:
 		DPRINTF("%s: stop: disconnecting ...\n", DEVNAM(sc));
 		umb_disconnect(sc);
@@ -1604,6 +1615,117 @@ umb_decode_connect_info(struct umb_softc *sc, void *data, int len)
 	return 1;
 }
 
+void
+umb_clear_addr(struct umb_softc *sc)
+{
+	struct ifnet *ifp = GET_IFP(sc);
+
+	memset(sc->sc_info.ipv4dns, 0, sizeof (sc->sc_info.ipv4dns));
+	umb_send_inet_proposal(sc);
+	NET_LOCK();
+	in_ifdetach(ifp);
+	NET_UNLOCK();
+}
+
+int
+umb_add_inet_config(struct umb_softc *sc, struct in_addr ip, u_int prefixlen,
+    struct in_addr gw)
+{
+	struct ifnet *ifp = GET_IFP(sc);
+	struct in_aliasreq ifra;
+	struct sockaddr_in *sin, default_sin;
+	struct rt_addrinfo info;
+	struct rtentry *rt;
+	int	 rv;
+
+	memset(&ifra, 0, sizeof (ifra));
+	sin = &ifra.ifra_addr;
+	sin->sin_family = AF_INET;
+	sin->sin_len = sizeof (*sin);
+	sin->sin_addr = ip;
+
+	sin = &ifra.ifra_dstaddr;
+	sin->sin_family = AF_INET;
+	sin->sin_len = sizeof (*sin);
+	sin->sin_addr = gw;
+
+	sin = &ifra.ifra_mask;
+	sin->sin_family = AF_INET;
+	sin->sin_len = sizeof (*sin);
+	in_len2mask(&sin->sin_addr, prefixlen);
+
+	rv = in_ioctl(SIOCAIFADDR, (caddr_t)&ifra, ifp, 1);
+	if (rv != 0) {
+		printf("%s: unable to set IPv4 address, error %d\n",
+		    DEVNAM(ifp->if_softc), rv);
+		return rv;
+	}
+
+	memset(&default_sin, 0, sizeof(default_sin));
+	default_sin.sin_family = AF_INET;
+	default_sin.sin_len = sizeof (default_sin);
+
+	memset(&info, 0, sizeof(info));
+	info.rti_flags = RTF_GATEWAY /* maybe | RTF_STATIC */;
+	info.rti_ifa = ifa_ifwithaddr(sintosa(&ifra.ifra_addr),
+	    ifp->if_rdomain);
+	info.rti_info[RTAX_DST] = sintosa(&default_sin);
+	info.rti_info[RTAX_NETMASK] = sintosa(&default_sin);
+	info.rti_info[RTAX_GATEWAY] = sintosa(&ifra.ifra_dstaddr);
+
+	NET_LOCK();
+	rv = rtrequest(RTM_ADD, &info, 0, &rt, ifp->if_rdomain);
+	NET_UNLOCK();
+	if (rv) {
+		printf("%s: unable to set IPv4 default route, "
+		    "error %d\n", DEVNAM(ifp->if_softc), rv);
+		rtm_miss(RTM_MISS, &info, 0, RTP_NONE, 0, rv,
+		    ifp->if_rdomain);
+	} else {
+		/* Inform listeners of the new route */
+		rtm_send(rt, RTM_ADD, rv, ifp->if_rdomain);
+		rtfree(rt);
+	}
+
+	if (ifp->if_flags & IFF_DEBUG) {
+		char str[3][INET_ADDRSTRLEN];
+		log(LOG_INFO, "%s: IPv4 addr %s, mask %s, gateway %s\n",
+		    DEVNAM(ifp->if_softc),
+		    sockaddr_ntop(sintosa(&ifra.ifra_addr), str[0],
+		    sizeof(str[0])),
+		    sockaddr_ntop(sintosa(&ifra.ifra_mask), str[1],
+		    sizeof(str[1])),
+		    sockaddr_ntop(sintosa(&ifra.ifra_dstaddr), str[2],
+		    sizeof(str[2])));
+	}
+	return rv;
+}
+
+void
+umb_send_inet_proposal(struct umb_softc *sc)
+{
+	struct ifnet *ifp = GET_IFP(sc);
+	struct sockaddr_rtdns rtdns;
+	struct rt_addrinfo info;
+	int i, flag = 0;
+
+	memset(&rtdns, 0, sizeof(rtdns));
+	memset(&info, 0, sizeof(info));
+
+	for (i = 0; i < UMB_MAX_DNSSRV; i++) {
+		if (sc->sc_info.ipv4dns[i].s_addr == INADDR_ANY)
+			break;
+		memcpy(rtdns.sr_dns + i * sizeof(struct in_addr),
+		    &sc->sc_info.ipv4dns[i], sizeof(struct in_addr));
+		flag = RTF_UP;
+	}
+	rtdns.sr_family = AF_INET;
+	rtdns.sr_len = 2 + i * sizeof(struct in_addr);
+	info.rti_info[RTAX_DNS] = srtdnstosa(&rtdns);
+
+	rtm_proposal(ifp, &info, flag, RTP_PROPOSAL_UMB);
+}
+
 int
 umb_decode_ip_configuration(struct umb_softc *sc, void *data, int len)
 {
@@ -1615,8 +1737,7 @@ umb_decode_ip_configuration(struct umb_softc *sc, void *data, int len)
 	int	 n, i;
 	int	 off;
 	struct mbim_cid_ipv4_element ipv4elem;
-	struct in_aliasreq ifra;
-	struct sockaddr_in *sin;
+	struct in_addr addr, gw;
 	int	 state = -1;
 	int	 rv;
 
@@ -1633,48 +1754,29 @@ umb_decode_ip_configuration(struct umb_softc *sc, void *data, int len)
 	 * IPv4 configuation
 	 */
 	avail = letoh32(ic->ipv4_available);
-	if (avail & MBIM_IPCONF_HAS_ADDRINFO) {
+	if ((avail & (MBIM_IPCONF_HAS_ADDRINFO | MBIM_IPCONF_HAS_GWINFO)) ==
+	    (MBIM_IPCONF_HAS_ADDRINFO | MBIM_IPCONF_HAS_GWINFO)) {
 		n = letoh32(ic->ipv4_naddr);
 		off = letoh32(ic->ipv4_addroffs);
 
 		if (n == 0 || off + sizeof (ipv4elem) > len)
 			goto done;
+		if (n != 1 && ifp->if_flags & IFF_DEBUG)
+			log(LOG_INFO, "%s: more than one IPv4 addr: %d\n",
+			    DEVNAM(ifp->if_softc), n);
 
 		/* Only pick the first one */
 		memcpy(&ipv4elem, data + off, sizeof (ipv4elem));
 		ipv4elem.prefixlen = letoh32(ipv4elem.prefixlen);
+		addr.s_addr = ipv4elem.addr;
 
-		memset(&ifra, 0, sizeof (ifra));
-		sin = (struct sockaddr_in *)&ifra.ifra_addr;
-		sin->sin_family = AF_INET;
-		sin->sin_len = sizeof (ifra.ifra_addr);
-		sin->sin_addr.s_addr = ipv4elem.addr;
+		off = letoh32(ic->ipv4_gwoffs);
+		memcpy(&gw, data + off, sizeof(gw));
 
-		sin = (struct sockaddr_in *)&ifra.ifra_dstaddr;
-		sin->sin_family = AF_INET;
-		sin->sin_len = sizeof (ifra.ifra_dstaddr);
-		if (avail & MBIM_IPCONF_HAS_GWINFO) {
-			off = letoh32(ic->ipv4_gwoffs);
-			sin->sin_addr.s_addr = *((uint32_t *)(data + off));
-		}
-
-		sin = (struct sockaddr_in *)&ifra.ifra_mask;
-		sin->sin_family = AF_INET;
-		sin->sin_len = sizeof (ifra.ifra_mask);
-		in_len2mask(&sin->sin_addr, ipv4elem.prefixlen);
-
-		rv = in_ioctl(SIOCAIFADDR, (caddr_t)&ifra, ifp, 1);
-		if (rv == 0) {
-			if (ifp->if_flags & IFF_DEBUG)
-				log(LOG_INFO, "%s: IPv4 addr %s, mask %s, "
-				    "gateway %s\n", DEVNAM(ifp->if_softc),
-				    umb_ntop(sintosa(&ifra.ifra_addr)),
-				    umb_ntop(sintosa(&ifra.ifra_mask)),
-				    umb_ntop(sintosa(&ifra.ifra_dstaddr)));
+		rv = umb_add_inet_config(sc, addr, ipv4elem.prefixlen, gw);
+		if (rv == 0) 
 			state = UMB_S_UP;
-		} else
-			printf("%s: unable to set IPv4 address, error %d\n",
-			    DEVNAM(ifp->if_softc), rv);
+
 	}
 
 	memset(sc->sc_info.ipv4dns, 0, sizeof (sc->sc_info.ipv4dns));
@@ -1685,11 +1787,18 @@ umb_decode_ip_configuration(struct umb_softc *sc, void *data, int len)
 		while (n-- > 0) {
 			if (off + sizeof (uint32_t) > len)
 				break;
-			val = *((uint32_t *)(data + off));
+			memcpy(&addr, data + off, sizeof(addr));
 			if (i < UMB_MAX_DNSSRV)
-				sc->sc_info.ipv4dns[i++] = val;
-			off += sizeof (uint32_t);
+				sc->sc_info.ipv4dns[i++] = addr;
+			off += sizeof(addr);
+			if (ifp->if_flags & IFF_DEBUG) {
+				char str[INET_ADDRSTRLEN];
+				log(LOG_INFO, "%s: IPv4 nameserver %s\n",
+				    DEVNAM(ifp->if_softc), inet_ntop(AF_INET,
+				    &addr, str, sizeof(str)));
+			}
 		}
+		umb_send_inet_proposal(sc);
 	}
 
 	if ((avail & MBIM_IPCONF_HAS_MTUINFO)) {
@@ -1858,7 +1967,7 @@ umb_decap(struct umb_softc *sc, struct usbd_xfer *xfer)
 	struct ifnet *ifp = GET_IFP(sc);
 	int	 s;
 	void	*buf;
-	uint32_t len;
+	uint32_t len, af = 0;
 	char	*dp;
 	struct ncm_header16 *hdr16;
 	struct ncm_header32 *hdr32;
@@ -1975,12 +2084,25 @@ umb_decap(struct umb_softc *sc, struct usbd_xfer *xfer)
 
 		dp = buf + doff;
 		DPRINTFN(3, "%s: decap %d bytes\n", DEVNAM(sc), dlen);
-		m = m_devget(dp, dlen, 0);
+		m = m_devget(dp, dlen, sizeof(uint32_t));
 		if (m == NULL) {
 			ifp->if_iqdrops++;
 			continue;
 		}
-
+		m = m_prepend(m, sizeof(uint32_t), M_DONTWAIT);
+		if (m == NULL) {
+			ifp->if_iqdrops++;
+			continue;
+		}
+		switch (*dp & 0xf0) {
+		case 4 << 4:
+			af = htonl(AF_INET);
+			break;
+		case 6 << 4:
+			af = htonl(AF_INET6);
+			break;
+		}
+		*mtod(m, uint32_t *) = af;
 		ml_enqueue(&ml, m);
 	}
 done:
@@ -2514,11 +2636,11 @@ umb_decode_qmi(struct umb_softc *sc, uint8_t *data, int len)
 				break;
 			case 0x555f:	/* Send FCC Authentication */
 				if (val == 0)
-					log(LOG_INFO, "%s: send FCC "
+					DPRINTF("%s: send FCC "
 					    "Authentication succeeded\n",
 					    DEVNAM(sc));
 				else if (val == 0x001a0001)
-					log(LOG_INFO, "%s: FCC Authentication "
+					DPRINTF("%s: FCC Authentication "
 					    "not required\n", DEVNAM(sc));
 				else
 					log(LOG_INFO, "%s: send FCC "
@@ -2601,31 +2723,6 @@ umb_intr(struct usbd_xfer *xfer, void *priv, usbd_status status)
 /*
  * Diagnostic routines
  */
-char *
-umb_ntop(struct sockaddr *sa)
-{
-#define NUMBUFS		4
-	static char astr[NUMBUFS][INET_ADDRSTRLEN];
-	static unsigned nbuf = 0;
-	char	*s;
-
-	s = astr[nbuf++];
-	if (nbuf >= NUMBUFS)
-		nbuf = 0;
-
-	switch (sa->sa_family) {
-	case AF_INET:
-	default:
-		inet_ntop(AF_INET, &satosin(sa)->sin_addr, s, sizeof (astr[0]));
-		break;
-	case AF_INET6:
-		inet_ntop(AF_INET6, &satosin6(sa)->sin6_addr, s,
-		    sizeof (astr[0]));
-		break;
-	}
-	return s;
-}
-
 #ifdef UMB_DEBUG
 char *
 umb_uuid2str(uint8_t uuid[MBIM_UUID_LEN])

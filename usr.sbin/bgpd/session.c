@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.c,v 1.390 2019/08/13 12:13:26 claudio Exp $ */
+/*	$OpenBSD: session.c,v 1.395 2019/10/02 08:57:00 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004, 2005 Henning Brauer <henning@openbsd.org>
@@ -152,8 +152,8 @@ setup_listeners(u_int *la_cnt)
 			continue;
 		}
 
-		if (tcp_md5_listen(la->fd, &conf->peers) == -1)
-			fatal("tcp_md5_listen");
+		if (tcp_md5_prep_listener(la, &conf->peers) == -1)
+			fatal("tcp_md5_prep_listener");
 
 		/* set ttl to 255 so that ttl-security works */
 		if (la->sa.ss_family == AF_INET && setsockopt(la->fd,
@@ -273,10 +273,10 @@ session_main(int debug, int verbose)
 						session_demote(p, -1);
 					p->conf.demote_group[0] = 0;
 					session_stop(p, ERR_CEASE_PEER_UNCONF);
+					timer_remove_all(p);
+					tcp_md5_del_listener(conf, p);
 					log_peer_warnx(&p->conf, "removed");
 					RB_REMOVE(peer_head, &conf->peers, p);
-					timer_remove_all(p);
-					pfkey_remove(p);
 					free(p);
 					peer_cnt--;
 					continue;
@@ -3170,7 +3170,7 @@ merge_peers(struct bgpd_config *c, struct bgpd_config *nc)
 {
 	struct peer *p, *np, *next;
 
-	RB_FOREACH(p, peer_head, &conf->peers) {
+	RB_FOREACH(p, peer_head, &c->peers) {
 		/* templates are handled specially */
 		if (p->template != NULL)
 			continue;
@@ -3179,6 +3179,13 @@ merge_peers(struct bgpd_config *c, struct bgpd_config *nc)
 			p->reconf_action = RECONF_DELETE;
 			continue;
 		}
+
+		/* peer no longer uses TCP MD5SIG so deconfigure */
+		if (p->conf.auth.method == AUTH_MD5SIG &&
+		    np->conf.auth.method != AUTH_MD5SIG)
+			tcp_md5_del_listener(c, p);
+		else if (np->conf.auth.method == AUTH_MD5SIG)
+			tcp_md5_add_listener(c, np);
 
 		memcpy(&p->conf, &np->conf, sizeof(p->conf));
 		RB_REMOVE(peer_head, &nc->peers, np);
@@ -3203,7 +3210,7 @@ merge_peers(struct bgpd_config *c, struct bgpd_config *nc)
 		/* apply the config to all clones of a template */
 		if (p->conf.template) {
 			struct peer *xp;
-			RB_FOREACH(xp, peer_head, &conf->peers) {
+			RB_FOREACH(xp, peer_head, &c->peers) {
 				if (xp->template != p)
 					continue;
 				session_template_clone(xp, NULL, xp->conf.id,
@@ -3218,7 +3225,9 @@ merge_peers(struct bgpd_config *c, struct bgpd_config *nc)
 	/* pfkeys of new peers already loaded by the parent process */
 	RB_FOREACH_SAFE(np, peer_head, &nc->peers, next) {
 		RB_REMOVE(peer_head, &nc->peers, np);
-		if (RB_INSERT(peer_head, &conf->peers, np) != NULL)
+		if (RB_INSERT(peer_head, &c->peers, np) != NULL)
 			fatalx("%s: peer tree is corrupt", __func__);
+		if (np->conf.auth.method == AUTH_MD5SIG)
+			tcp_md5_add_listener(c, np);
 	}
 }

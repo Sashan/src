@@ -1,4 +1,4 @@
-#	$OpenBSD: GENERIC,v 1.264 2019/08/01 03:06:59 dlg Exp $
+#	$OpenBSD: GENERIC,v 1.266 2019/10/12 17:06:02 naddy Exp $
 #
 #	Machine-independent option; used by all architectures for their
 #	GENERIC kernel

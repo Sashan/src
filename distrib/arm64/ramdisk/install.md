@@ -1,4 +1,4 @@
-#	$OpenBSD: install.md,v 1.12 2019/06/23 14:34:09 kettenis Exp $
+#	$OpenBSD: install.md,v 1.14 2019/11/17 06:03:39 jsg Exp $
 #
 #
 # Copyright (c) 1996 The NetBSD Foundation, Inc.
@@ -60,10 +60,12 @@ md_installboot() {
 	rpi)
 		cp $_mdec/{bootcode.bin,start.elf,fixup.dat,*.dtb} /mnt/mnt/
 		cp $_mdec/u-boot.bin /mnt/mnt/
+		mkdir -p /mnt/mnt/overlays
+		cp $_mdec/disable-bt.dtbo /mnt/mnt/overlays
 		cat > /mnt/mnt/config.txt<<-__EOT
 			arm_64bit=1
 			enable_uart=1
-			device_tree_address=0x02600000
+			dtoverlay=disable-bt
 			kernel=u-boot.bin
 		__EOT
 		;;

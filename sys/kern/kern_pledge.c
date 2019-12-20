@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_pledge.c,v 1.254 2019/06/26 17:04:55 robert Exp $	*/
+/*	$OpenBSD: kern_pledge.c,v 1.256 2019/12/08 23:08:59 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2015 Nicholas Marriott <nicm@openbsd.org>
@@ -111,6 +111,7 @@ const uint64_t pledge_syscalls[SYS_MAXSYSCALL] = {
 	 */
 	[SYS_exit] = PLEDGE_ALWAYS,
 	[SYS_kbind] = PLEDGE_ALWAYS,
+	[SYS_msyscall] = PLEDGE_ALWAYS,
 	[SYS___get_tcb] = PLEDGE_ALWAYS,
 	[SYS___set_tcb] = PLEDGE_ALWAYS,
 	[SYS_pledge] = PLEDGE_ALWAYS,
@@ -1299,6 +1300,7 @@ pledge_ioctl(struct proc *p, long com, struct file *fp)
 	if ((p->p_p->ps_pledge & PLEDGE_WROUTE)) {
 		switch (com) {
 		case SIOCAIFADDR_IN6:
+		case SIOCDIFADDR_IN6:
 			if (fp->f_type == DTYPE_SOCKET)
 				return (0);
 			break;

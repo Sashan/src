@@ -1,4 +1,4 @@
-/*	$OpenBSD: cn30xxgmx.c,v 1.40 2017/11/20 15:13:08 visa Exp $	*/
+/*	$OpenBSD: cn30xxgmx.c,v 1.43 2019/09/28 22:20:25 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2007 Internet Initiative Japan, Inc.
@@ -149,10 +149,10 @@ struct cn30xxgmx_port_ops *cn30xxgmx_port_ops[] = {
 	[GMX_SPI42_PORT] = &cn30xxgmx_port_ops_spi42
 };
 
-struct cfattach cn30xxgmx_ca = {sizeof(struct cn30xxgmx_softc),
+struct cfattach octgmx_ca = {sizeof(struct cn30xxgmx_softc),
     cn30xxgmx_match, cn30xxgmx_attach, NULL, NULL};
 
-struct cfdriver cn30xxgmx_cd = {NULL, "cn30xxgmx", DV_DULL};
+struct cfdriver octgmx_cd = {NULL, "octgmx", DV_DULL};
 
 int
 cn30xxgmx_match(struct device *parent, void *match, void *aux)
@@ -162,13 +162,11 @@ cn30xxgmx_match(struct device *parent, void *match, void *aux)
 
 	if (strcmp(cf->cf_driver->cd_name, aa->aa_name) != 0)
 		return 0;
-	if (cf->cf_unit != aa->aa_unitno)
-		return 0;
 	return 1;
 }
 
 int
-cn30xxgmx_get_phy_phandle(int port)
+cn30xxgmx_get_phy_phandle(int interface, int port)
 {
 	char name[64];
 	int node;
@@ -176,7 +174,7 @@ cn30xxgmx_get_phy_phandle(int port)
 
 	snprintf(name, sizeof(name),
 	    "/soc/pip@11800a0000000/interface@%x/ethernet@%x",
-	    port / 16, port % 16);
+	    interface, port);
 	node = OF_finddevice(name);
 	if (node != - 1)
 		phandle = OF_getpropint(node, "phy-handle", 0);
@@ -217,8 +215,8 @@ cn30xxgmx_attach(struct device *parent, struct device *self, void *aux)
 
 	for (i = 0; i < sc->sc_nports; i++) {
 		port = GMX_PORT_NUM(sc->sc_unitno, i);
-		if (cn30xxsmi_get_phy(cn30xxgmx_get_phy_phandle(port), port,
-		    &smi, &phy_addr))
+		if (cn30xxsmi_get_phy(cn30xxgmx_get_phy_phandle(sc->sc_unitno,
+		    i), port, &smi, &phy_addr))
 			continue;
 
 		port_sc = &sc->sc_ports[i];

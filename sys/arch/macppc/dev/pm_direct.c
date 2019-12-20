@@ -1,4 +1,4 @@
-/*	$OpenBSD: pm_direct.c,v 1.28 2016/12/26 17:38:14 jca Exp $	*/
+/*	$OpenBSD: pm_direct.c,v 1.30 2019/09/03 17:51:52 deraadt Exp $	*/
 /*	$NetBSD: pm_direct.c,v 1.9 2000/06/08 22:10:46 tsubai Exp $	*/
 
 /*
@@ -287,8 +287,7 @@ pm_receive(u_char *data)
  * Send data to PM for the PB Duo series and the PB 5XX series
  */
 int
-pm_send(data)
-	u_char data;
+pm_send(u_char data)
 {
 	int rval;
 
@@ -419,7 +418,7 @@ pmgrop(PMData *pmdata)
  * My PM interrupt routine for the PB Duo series and the PB 5XX series
  */
 void
-pm_intr()
+pm_intr(void)
 {
 	int s;
 	int rval;
@@ -642,9 +641,9 @@ pm_adb_get_TALK_result(PMData *pmdata)
 	adb_polling = 0;
 
 	adbWaiting = 0;
-	adbBuffer = (long)0;
-	adbCompRout = (long)0;
-	adbCompData = (long)0;
+	adbBuffer = NULL;
+	adbCompRout = NULL;
+	adbCompData = NULL;
 }
 
 
@@ -665,7 +664,7 @@ pm_adb_get_ADB_data(PMData *pmdata)
 }
 
 void
-pm_adb_restart()
+pm_adb_restart(void)
 {
 	PMData p;
 
@@ -677,7 +676,7 @@ pm_adb_restart()
 }
 
 void
-pm_adb_poweroff()
+pm_adb_poweroff(void)
 {
 	PMData p;
 

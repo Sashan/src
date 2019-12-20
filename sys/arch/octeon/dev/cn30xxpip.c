@@ -1,4 +1,4 @@
-/*	$OpenBSD: cn30xxpip.c,v 1.7 2017/11/05 04:57:28 visa Exp $	*/
+/*	$OpenBSD: cn30xxpip.c,v 1.9 2019/09/22 05:16:05 visa Exp $	*/
 
 /*
  * Copyright (c) 2007 Internet Initiative Japan, Inc.
@@ -40,64 +40,6 @@
 #include <octeon/dev/cn30xxgmxreg.h>
 #include <octeon/dev/cn30xxpipreg.h>
 #include <octeon/dev/cn30xxpipvar.h>
-
-/*
- * register definitions
- */
-#define	_ENTRY(x)	{ #x, x##_OFFSET }
-#define	_ENTRY_0_3(x) \
-	_ENTRY(x## 0), _ENTRY(x## 1), _ENTRY(x## 2), _ENTRY(x## 3)
-#define	_ENTRY_0_7(x) \
-	_ENTRY(x## 0), _ENTRY(x## 1), _ENTRY(x## 2), _ENTRY(x## 3), \
-	_ENTRY(x## 4), _ENTRY(x## 5), _ENTRY(x## 6), _ENTRY(x## 7)
-#define	_ENTRY_0_1_2_32(x) \
-	_ENTRY(x## 0), _ENTRY(x## 1), _ENTRY(x## 2), _ENTRY(x##32)
-
-struct cn30xxpip_dump_reg_ {
-	const char *name;
-	size_t	offset;
-};
-
-const struct cn30xxpip_dump_reg_ cn30xxpip_dump_stats_[] = {
-/* PIP_QOS_DIFF[0-63] */
-	_ENTRY_0_1_2_32	(PIP_STAT0_PRT),
-	_ENTRY_0_1_2_32	(PIP_STAT1_PRT),
-	_ENTRY_0_1_2_32	(PIP_STAT2_PRT),
-	_ENTRY_0_1_2_32	(PIP_STAT3_PRT),
-	_ENTRY_0_1_2_32	(PIP_STAT4_PRT),
-	_ENTRY_0_1_2_32	(PIP_STAT5_PRT),
-	_ENTRY_0_1_2_32	(PIP_STAT6_PRT),
-	_ENTRY_0_1_2_32	(PIP_STAT7_PRT),
-	_ENTRY_0_1_2_32	(PIP_STAT8_PRT),
-	_ENTRY_0_1_2_32	(PIP_STAT9_PRT),
-/* PIP_TAG_INC[0-63] */
-	_ENTRY_0_1_2_32	(PIP_STAT_INB_PKTS),
-	_ENTRY_0_1_2_32	(PIP_STAT_INB_OCTS),
-	_ENTRY_0_1_2_32	(PIP_STAT_INB_ERRS),
-};
-
-const struct cn30xxpip_dump_reg_ cn30xxpip_dump_regs_[] = {
-	_ENTRY		(PIP_BIST_STATUS),
-	_ENTRY		(PIP_INT_REG),
-	_ENTRY		(PIP_INT_EN),
-	_ENTRY		(PIP_STAT_CTL),
-	_ENTRY		(PIP_GBL_CTL),
-	_ENTRY		(PIP_GBL_CFG),
-	_ENTRY		(PIP_SOFT_RST),
-	_ENTRY		(PIP_IP_OFFSET),
-	_ENTRY		(PIP_TAG_SECRET),
-	_ENTRY		(PIP_TAG_MASK),
-	_ENTRY_0_3	(PIP_DEC_IPSEC),
-	_ENTRY		(PIP_RAW_WORD),
-	_ENTRY_0_7	(PIP_QOS_VLAN),
-	_ENTRY_0_3	(PIP_QOS_WATCH),
-	_ENTRY_0_1_2_32	(PIP_PRT_CFG),
-	_ENTRY_0_1_2_32	(PIP_PRT_TAG),
-};
-#undef	_ENTRY
-#undef	_ENTRY_0_3
-#undef	_ENTRY_0_7
-#undef	_ENTRY_0_1_2_32
 
 /* XXX */
 void
@@ -201,8 +143,7 @@ cn30xxpip_prt_cfg_enable(struct cn30xxpip_softc *sc, uint64_t prt_cfg,
 void
 cn30xxpip_stats(struct cn30xxpip_softc *sc, struct ifnet *ifp, int gmx_port)
 {
-	const struct cn30xxpip_dump_reg_ *reg;
-	uint64_t tmp, pkts, octs;
+	uint64_t tmp, pkts;
 	uint64_t pip_stat_ctl;
 
 	if (sc == NULL || ifp == NULL)
@@ -216,9 +157,7 @@ cn30xxpip_stats(struct cn30xxpip_softc *sc, struct ifnet *ifp, int gmx_port)
 
 	pip_stat_ctl = _PIP_RD8(sc, PIP_STAT_CTL_OFFSET);
 	_PIP_WR8(sc, PIP_STAT_CTL_OFFSET, pip_stat_ctl | PIP_STAT_CTL_RDCLR);
-	reg = &cn30xxpip_dump_stats_[gmx_port];
-	tmp = _PIP_RD8(sc, reg->offset);
-	octs = (tmp & 0x00000000ffffffffULL); /* XXX: no counter in ifp?? */
+	tmp = _PIP_RD8(sc, PIP_STAT0_PRT_OFFSET(gmx_port));
 	pkts = (tmp & 0xffffffff00000000ULL) >> 32;
 	ifp->if_iqdrops += pkts;
 

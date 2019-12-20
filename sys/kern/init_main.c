@@ -1,4 +1,4 @@
-/*	$OpenBSD: init_main.c,v 1.290 2019/06/21 09:39:48 visa Exp $	*/
+/*	$OpenBSD: init_main.c,v 1.293 2019/11/29 06:34:45 deraadt Exp $	*/
 /*	$NetBSD: init_main.c,v 1.84.4.1 1996/06/02 09:08:06 mrg Exp $	*/
 
 /*
@@ -98,7 +98,6 @@
 
 #if defined(KUBSAN)
 extern void kubsan_init(void);
-extern void kubsan_start(void);
 #endif
 
 #if defined(NFSSERVER) || defined(NFSCLIENT)
@@ -353,11 +352,6 @@ main(void *framep)
 	/* Initialize task queues */
 	taskq_init();
 
-#ifdef KUBSAN
-	/* Start reporting kubsan findings. */
-	kubsan_start();
-#endif
-
 	/* Initialize the interface/address trees */
 	ifinit();
 
@@ -517,7 +511,7 @@ main(void *framep)
 	 * munched in mi_switch() after the time got set.
 	 */
 	LIST_FOREACH(pr, &allprocess, ps_list) {
-		getnanotime(&pr->ps_start);
+		nanouptime(&pr->ps_start);
 		TAILQ_FOREACH(p, &pr->ps_threads, p_thr_link) {
 			nanouptime(&p->p_cpu->ci_schedstate.spc_runtime);
 			timespecclear(&p->p_rtime);
@@ -657,7 +651,8 @@ start_init(void *arg)
 	if (uvm_map(&p->p_vmspace->vm_map, &addr, PAGE_SIZE, 
 	    NULL, UVM_UNKNOWN_OFFSET, 0,
 	    UVM_MAPFLAG(PROT_READ | PROT_WRITE, PROT_MASK, MAP_INHERIT_COPY,
-	    MADV_NORMAL, UVM_FLAG_FIXED|UVM_FLAG_OVERLAY|UVM_FLAG_COPYONW|UVM_FLAG_STACK)))
+	    MADV_NORMAL,
+	    UVM_FLAG_FIXED|UVM_FLAG_OVERLAY|UVM_FLAG_COPYONW|UVM_FLAG_STACK|UVM_FLAG_SYSCALL)))
 		panic("init: couldn't allocate argument space");
 
 	for (pathp = &initpaths[0]; (path = *pathp) != NULL; pathp++) {

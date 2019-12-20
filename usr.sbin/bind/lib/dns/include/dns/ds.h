@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004-2006  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 2002  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: ds.h,v 1.3.20.5 2006/02/22 23:50:09 marka Exp $ */
+/* $Id: ds.h,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
 
 #ifndef DNS_DS_H
 #define DNS_DS_H 1
@@ -26,11 +25,13 @@
 
 #define DNS_DSDIGEST_SHA1 (1)
 #define DNS_DSDIGEST_SHA256 (2)
+#define DNS_DSDIGEST_GOST (3)
+#define DNS_DSDIGEST_SHA384 (4)
 
 /*
- * Assuming SHA-256 digest type.
+ * Assuming SHA-384 digest type.
  */
-#define DNS_DS_BUFFERSIZE (36)
+#define DNS_DS_BUFFERSIZE (52)
 
 ISC_LANG_BEGINDECLS
 
@@ -50,12 +51,6 @@ dns_ds_buildrdata(dns_name_t *owner, dns_rdata_t *key,
  * Ensures:
  *  \li    *rdata	Contains a valid DS rdata.  The 'data' member refers
  *		to 'buffer'.
- */
-
-isc_boolean_t
-dns_ds_digest_supported(unsigned int digest_type);
-/*%<
- * Is this digest algorithm supported by dns_ds_buildrdata()?
  */
 
 ISC_LANG_ENDDECLS
