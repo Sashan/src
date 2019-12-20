@@ -1,4 +1,4 @@
-/*	$OpenBSD: ar5008.c,v 1.51 2019/07/24 07:53:57 stsp Exp $	*/
+/*	$OpenBSD: ar5008.c,v 1.53 2019/12/20 10:16:23 stsp Exp $	*/
 
 /*-
  * Copyright (c) 2009 Damien Bergamini <damien.bergamini@free.fr>
@@ -789,7 +789,7 @@ ar5008_rx_radiotap(struct athn_softc *sc, struct mbuf *m,
 #endif
 
 static __inline int
-ar5008_rx_process(struct athn_softc *sc)
+ar5008_rx_process(struct athn_softc *sc, struct mbuf_list *ml)
 {
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ifnet *ifp = &ic->ic_if;
@@ -931,7 +931,7 @@ ar5008_rx_process(struct athn_softc *sc)
 	rxi.rxi_rssi = MS(ds->ds_status4, AR_RXS4_RSSI_COMBINED);
 	rxi.rxi_rssi += AR_DEFAULT_NOISE_FLOOR;
 	rxi.rxi_tstamp = ds->ds_status2;
-	ieee80211_input(ifp, m, ni, &rxi);
+	ieee80211_inputm(ifp, m, ni, &rxi, ml);
 
 	/* Node is no longer needed. */
 	ieee80211_release_node(ic, ni);
@@ -960,7 +960,13 @@ ar5008_rx_process(struct athn_softc *sc)
 void
 ar5008_rx_intr(struct athn_softc *sc)
 {
-	while (ar5008_rx_process(sc) == 0);
+	struct mbuf_list ml = MBUF_LIST_INITIALIZER();
+	struct ieee80211com *ic = &sc->sc_ic;
+	struct ifnet *ifp = &ic->ic_if;
+
+	while (ar5008_rx_process(sc, &ml) == 0);
+
+	if_input(ifp, &ml);
 }
 
 int
@@ -1369,6 +1375,11 @@ ar5008_tx(struct athn_softc *sc, struct mbuf *m, struct ieee80211_node *ni,
 		/* Use same fixed rate for all tries. */
 		ridx[0] = ridx[1] = ridx[2] = ridx[3] =
 		    sc->fixed_ridx;
+	} else if ((ni->ni_flags & IEEE80211_NODE_HT) &&
+	    ieee80211_mira_is_probing(&an->mn)) {
+		/* Use same fixed rate for all tries. */
+		ridx[0] = ridx[1] = ridx[2] = ridx[3] =
+		    ATHN_RIDX_MCS0 + ni->ni_txmcs;
 	} else {
 		/* Use fallback table of the node. */
 		int txrate;

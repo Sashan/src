@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2004, 2005, 2007  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 2000, 2001, 2003  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: lookup.c,v 1.14.18.7 2007/08/28 07:20:04 tbox Exp $ */
+/* $Id: lookup.c,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
 
 /*! \file */
 
@@ -356,7 +355,7 @@ static void
 levent_destroy(isc_event_t *event) {
 	dns_lookupevent_t *levent;
 	isc_mem_t *mctx;
- 
+
 	REQUIRE(event->ev_type == DNS_EVENT_LOOKUPDONE);
 	mctx = event->ev_destroy_arg;
 	levent = (dns_lookupevent_t *)event;
@@ -393,7 +392,8 @@ dns_lookup_create(isc_mem_t *mctx, dns_name_t *name, dns_rdatatype_t type,
 	lookup = isc_mem_get(mctx, sizeof(*lookup));
 	if (lookup == NULL)
 		return (ISC_R_NOMEMORY);
-	lookup->mctx = mctx;
+	lookup->mctx = NULL;
+	isc_mem_attach(mctx, &lookup->mctx);
 	lookup->options = options;
 
 	ievent = isc_event_allocate(mctx, lookup, DNS_EVENT_LOOKUPDONE,
@@ -452,7 +452,7 @@ dns_lookup_create(isc_mem_t *mctx, dns_name_t *name, dns_rdatatype_t type,
 	isc_task_detach(&lookup->task);
 
  cleanup_lookup:
-	isc_mem_put(mctx, lookup, sizeof(*lookup));
+	isc_mem_putanddetach(&mctx, lookup, sizeof(*lookup));
 
 	return (result);
 }
@@ -491,7 +491,7 @@ dns_lookup_destroy(dns_lookup_t **lookupp) {
 
 	DESTROYLOCK(&lookup->lock);
 	lookup->magic = 0;
-	isc_mem_put(lookup->mctx, lookup, sizeof(*lookup));
+	isc_mem_putanddetach(&lookup->mctx, lookup, sizeof(*lookup));
 
 	*lookupp = NULL;
 }

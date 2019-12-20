@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_syscalls.c,v 1.334 2019/08/07 20:30:30 bluhm Exp $	*/
+/*	$OpenBSD: vfs_syscalls.c,v 1.338 2019/11/29 20:58:17 guenther Exp $	*/
 /*	$NetBSD: vfs_syscalls.c,v 1.71 1996/04/23 10:29:02 mycroft Exp $	*/
 
 /*
@@ -928,13 +928,8 @@ sys___realpath(struct proc *p, void *v, register_t *retval)
 		if (*c != '/')
 			break;
 	}
-	if (*c == '\0')
-		/* root directory */
-		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | SAVENAME | REALPATH,
-		    UIO_SYSSPACE, pathname, p);
-	else
-		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | LOCKPARENT | SAVENAME |
-		    REALPATH, UIO_SYSSPACE, pathname, p);
+	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | SAVENAME | REALPATH,
+	    UIO_SYSSPACE, pathname, p);
 
 	nd.ni_cnd.cn_rpbuf = rpbuf;
 	nd.ni_cnd.cn_rpi = strlen(rpbuf);
@@ -949,11 +944,6 @@ sys___realpath(struct proc *p, void *v, register_t *retval)
 		VOP_UNLOCK(nd.ni_vp);
 		vrele(nd.ni_vp);
 	}
-	if (nd.ni_dvp && nd.ni_dvp != nd.ni_vp)
-		VOP_UNLOCK(nd.ni_dvp);
-	if (nd.ni_dvp)
-		vrele(nd.ni_dvp);
-
 	error = copyoutstr(nd.ni_cnd.cn_rpbuf, SCARG(uap, resolved),
 	    MAXPATHLEN, NULL);
 
@@ -975,6 +965,7 @@ sys_unveil(struct proc *p, void *v, register_t *retval)
 		syscallarg(const char *) path;
 		syscallarg(const char *) permissions;
 	} */ *uap = v;
+	struct process *pr = p->p_p;
 	char *pathname, *c;
 	struct nameidata nd;
 	size_t pathlen;
@@ -982,11 +973,11 @@ sys_unveil(struct proc *p, void *v, register_t *retval)
 	int error, allow;
 
 	if (SCARG(uap, path) == NULL && SCARG(uap, permissions) == NULL) {
-		p->p_p->ps_uvdone = 1;
+		pr->ps_uvdone = 1;
 		return (0);
 	}
 
-	if (p->p_p->ps_uvdone != 0)
+	if (pr->ps_uvdone != 0)
 		return EPERM;
 
 	error = copyinstr(SCARG(uap, permissions), permissions,
@@ -1045,11 +1036,11 @@ sys_unveil(struct proc *p, void *v, register_t *retval)
 
 	if (allow) {
 		error = unveil_add(p, &nd, permissions);
-		p->p_p->ps_uvpcwd = unveil_lookup(p->p_fd->fd_cdir, p, NULL);
-		if (p->p_p->ps_uvpcwd == NULL) {
+		pr->ps_uvpcwd = unveil_lookup(p->p_fd->fd_cdir, pr, NULL);
+		if (pr->ps_uvpcwd == NULL) {
 			ssize_t i = unveil_find_cover(p->p_fd->fd_cdir, p);
 			if (i >= 0)
-				p->p_p->ps_uvpcwd = &p->p_p->ps_uvpaths[i];
+				pr->ps_uvpcwd = &pr->ps_uvpaths[i];
 		}
 	}
 	else
@@ -1146,7 +1137,7 @@ doopenat(struct proc *p, int fd, const char *path, int oflags, mode_t mode,
 	cmode = ((mode &~ fdp->fd_cmask) & ALLPERMS) &~ S_ISTXT;
 	if ((p->p_p->ps_flags & PS_PLEDGE))
 		cmode &= ACCESSPERMS;
-	NDINITAT(&nd, LOOKUP, FOLLOW, UIO_USERSPACE, fd, path, p);
+	NDINITAT(&nd, 0, 0, UIO_USERSPACE, fd, path, p);
 	nd.ni_pledge = ni_pledge;
 	nd.ni_unveil = ni_unveil;
 	p->p_dupfd = -1;			/* XXX check for fdopen */
@@ -2099,7 +2090,7 @@ doreadlinkat(struct proc *p, int fd, const char *path, char *buf,
 
 	NDINITAT(&nd, LOOKUP, NOFOLLOW | LOCKLEAF, UIO_USERSPACE, fd, path, p);
 	nd.ni_pledge = PLEDGE_RPATH;
-	nd.ni_unveil = UNVEIL_INSPECT;
+	nd.ni_unveil = UNVEIL_READ;
 	if ((error = namei(&nd)) != 0)
 		return (error);
 	vp = nd.ni_vp;

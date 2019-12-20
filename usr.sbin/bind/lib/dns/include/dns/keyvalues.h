@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1999-2001, 2003  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,12 +14,12 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: keyvalues.h,v 1.15.18.2 2005/04/29 00:16:14 marka Exp $ */
+/* $Id: keyvalues.h,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
 
 #ifndef DNS_KEYVALUES_H
 #define DNS_KEYVALUES_H 1
 
-/*! \file */
+/*! \file dns/keyvalues.h */
 
 /*
  * Flags field of the KEY RR rdata
@@ -42,7 +41,7 @@
 #define DNS_KEYOWNER_ENTITY	0x0200	/*%< key is assoc. with entity eg host */
 #define DNS_KEYOWNER_ZONE	0x0100	/*%< key is zone key */
 #define DNS_KEYOWNER_RESERVED	0x0300	/*%< reserved meaning */
-#define DNS_KEYFLAG_RESERVED8	0x0080	/*%< reserved - must be zero */
+#define DNS_KEYFLAG_REVOKE	0x0080	/*%< key revoked (per rfc5011) */
 #define DNS_KEYFLAG_RESERVED9	0x0040	/*%< reserved - must be zero */
 #define DNS_KEYFLAG_RESERVED10	0x0020	/*%< reserved - must be zero */
 #define DNS_KEYFLAG_RESERVED11	0x0010	/*%< reserved - must be zero */
@@ -51,7 +50,6 @@
 #define DNS_KEYFLAG_RESERVEDMASK (DNS_KEYFLAG_RESERVED2 | \
 				  DNS_KEYFLAG_RESERVED4 | \
 				  DNS_KEYFLAG_RESERVED5 | \
-				  DNS_KEYFLAG_RESERVED8 | \
 				  DNS_KEYFLAG_RESERVED9 | \
 				  DNS_KEYFLAG_RESERVED10 | \
 				  DNS_KEYFLAG_RESERVED11 )
@@ -64,9 +62,18 @@
 #define DNS_KEYALG_RSA		DNS_KEYALG_RSAMD5
 #define DNS_KEYALG_DH		2       /*%< Diffie Hellman KEY */
 #define DNS_KEYALG_DSA		3       /*%< DSA KEY */
-#define DNS_KEYALG_DSS		NS_ALG_DSA
+#define DNS_KEYALG_NSEC3DSA	6
+#define DNS_KEYALG_DSS		DNS_ALG_DSA
 #define DNS_KEYALG_ECC		4
 #define DNS_KEYALG_RSASHA1	5
+#define DNS_KEYALG_NSEC3RSASHA1	7
+#define DNS_KEYALG_RSASHA256	8
+#define DNS_KEYALG_RSASHA512	10
+#define DNS_KEYALG_ECCGOST	12
+#define DNS_KEYALG_ECDSA256	13
+#define DNS_KEYALG_ECDSA384	14
+#define DNS_KEYALG_ED25519	15
+#define DNS_KEYALG_ED448	16
 #define DNS_KEYALG_INDIRECT	252
 #define DNS_KEYALG_PRIVATEDNS	253
 #define DNS_KEYALG_PRIVATEOID	254     /*%< Key begins with OID giving alg */
@@ -94,5 +101,19 @@
 #define DNS_SIG_DSAMAXBITS	1024
 #define DNS_SIG_DSAMINBYTES	213
 #define DNS_SIG_DSAMAXBYTES	405
+
+#define DNS_SIG_GOSTSIGSIZE	64
+
+#define DNS_SIG_ECDSA256SIZE	64
+#define DNS_SIG_ECDSA384SIZE	96
+
+#define DNS_KEY_ECDSA256SIZE	64
+#define DNS_KEY_ECDSA384SIZE	96
+
+#define DNS_SIG_ED25519SIZE	64
+#define DNS_SIG_ED448SIZE	114
+
+#define DNS_KEY_ED25519SIZE	32
+#define DNS_KEY_ED448SIZE	57
 
 #endif /* DNS_KEYVALUES_H */

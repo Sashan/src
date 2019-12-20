@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_acct.c,v 1.40 2019/08/15 07:29:21 anton Exp $	*/
+/*	$OpenBSD: kern_acct.c,v 1.42 2019/10/22 21:19:22 cheloha Exp $	*/
 /*	$NetBSD: kern_acct.c,v 1.42 1996/02/04 02:15:12 christos Exp $	*/
 
 /*-
@@ -118,7 +118,7 @@ sys_acct(struct proc *p, void *v, register_t *retval)
 	 * writing and make sure it's 'normal'.
 	 */
 	if (SCARG(uap, path) != NULL) {
-		NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_USERSPACE, SCARG(uap, path),
+		NDINIT(&nd, 0, 0, UIO_USERSPACE, SCARG(uap, path),
 		    p);
 		if ((error = vn_open(&nd, FWRITE|O_APPEND, 0)) != 0)
 			return (error);
@@ -171,7 +171,7 @@ acct_process(struct proc *p)
 	struct acct acct;
 	struct process *pr = p->p_p;
 	struct rusage *r;
-	struct timespec ut, st, tmp;
+	struct timespec booted, elapsed, realstart, st, tmp, uptime, ut;
 	int t;
 	struct vnode *vp;
 	int error = 0;
@@ -203,10 +203,12 @@ acct_process(struct proc *p)
 	acct.ac_stime = encode_comp_t(st.tv_sec, st.tv_nsec);
 
 	/* (3) The elapsed time the command ran (and its starting time) */
-	acct.ac_btime = pr->ps_start.tv_sec;
-	getnanotime(&tmp);
-	timespecsub(&tmp, &pr->ps_start, &tmp);
-	acct.ac_etime = encode_comp_t(tmp.tv_sec, tmp.tv_nsec);
+	nanouptime(&uptime);
+	nanoboottime(&booted);
+	timespecadd(&booted, &pr->ps_start, &realstart);
+	acct.ac_btime = realstart.tv_sec;
+	timespecsub(&uptime, &pr->ps_start, &elapsed);
+	acct.ac_etime = encode_comp_t(elapsed.tv_sec, elapsed.tv_nsec);
 
 	/* (4) The average amount of memory used */
 	r = &p->p_ru;

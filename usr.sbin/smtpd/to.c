@@ -1,4 +1,4 @@
-/*	$OpenBSD: to.c,v 1.41 2019/08/14 21:11:25 gilles Exp $	*/
+/*	$OpenBSD: to.c,v 1.44 2019/11/12 20:21:46 gilles Exp $	*/
 
 /*
  * Copyright (c) 2009 Jacek Masiulaniec <jacekm@dobremiasto.net>
@@ -169,10 +169,9 @@ sa_to_text(const struct sockaddr *sa)
 		const struct in6_addr	*in6_addr;
 
 		in6 = (const struct sockaddr_in6 *)sa;
-		(void)strlcpy(buf, "IPv6:", sizeof(buf));
-		p = buf + 5;
+		p = buf;
 		in6_addr = &in6->sin6_addr;
-		(void)bsnprintf(p, NI_MAXHOST, "%s", in6addr_to_text(in6_addr));
+		(void)bsnprintf(p, NI_MAXHOST, "[%s]", in6addr_to_text(in6_addr));
 	}
 
 	return (buf);
@@ -270,6 +269,8 @@ text_to_netaddr(struct netaddr *netaddr, const char *s)
 	struct sockaddr_in	ssin;
 	struct sockaddr_in6	ssin6;
 	int			bits;
+	char			buf[NI_MAXHOST];
+	size_t			len;
 
 	memset(&ssin, 0, sizeof(struct sockaddr_in));
 	memset(&ssin6, 0, sizeof(struct sockaddr_in6));
@@ -284,7 +285,21 @@ text_to_netaddr(struct netaddr *netaddr, const char *s)
 		memcpy(&ss, &ssin, sizeof(ssin));
 		ss.ss_len = sizeof(struct sockaddr_in);
 	} else {
-		bits = inet_net_pton(AF_INET6, s, &ssin6.sin6_addr,
+		if (s[0] != '[') {
+			if ((len = strlcpy(buf, s, sizeof buf)) >= sizeof buf)
+				return 0;
+		}
+		else {
+			s++;
+			if (strncasecmp("IPv6:", s, 5) == 0)
+				s += 5;
+			if ((len = strlcpy(buf, s, sizeof buf)) >= sizeof buf)
+				return 0;
+			if (buf[len-1] != ']')
+				return 0;
+			buf[len-1] = 0;
+		}
+		bits = inet_net_pton(AF_INET6, buf, &ssin6.sin6_addr,
 		    sizeof(struct in6_addr));
 		if (bits == -1)
 			return 0;
@@ -446,93 +461,86 @@ rule_to_text(struct rule *r)
 	static char buf[4096];
 
 	memset(buf, 0, sizeof buf);
-	(void)strlcpy(buf, "match ", sizeof buf);
+	(void)strlcpy(buf, "match", sizeof buf);
 	if (r->flag_tag) {
 		if (r->flag_tag < 0)
-			(void)strlcat(buf, "!", sizeof buf);
-		(void)strlcat(buf, "tag ", sizeof buf);
+			(void)strlcat(buf, " !", sizeof buf);
+		(void)strlcat(buf, " tag ", sizeof buf);
 		(void)strlcat(buf, r->table_tag, sizeof buf);
-		(void)strlcat(buf, " ", sizeof buf);
 	}
 
 	if (r->flag_from) {
 		if (r->flag_from < 0)
-			(void)strlcat(buf, "!", sizeof buf);
+			(void)strlcat(buf, " !", sizeof buf);
 		if (r->flag_from_socket)
-			(void)strlcat(buf, "from socket ", sizeof buf);
-		if (r->flag_from_rdns) {
-			(void)strlcat(buf, "from rdns ", sizeof buf);
+			(void)strlcat(buf, " from socket", sizeof buf);
+		else if (r->flag_from_rdns) {
+			(void)strlcat(buf, " from rdns", sizeof buf);
 			if (r->table_from) {
-				(void)strlcat(buf, r->table_from, sizeof buf);
 				(void)strlcat(buf, " ", sizeof buf);
+				(void)strlcat(buf, r->table_from, sizeof buf);
 			}
 		}
 		else if (strcmp(r->table_from, "<anyhost>") == 0)
-			(void)strlcat(buf, "from any ", sizeof buf);
+			(void)strlcat(buf, " from any", sizeof buf);
 		else if (strcmp(r->table_from, "<localhost>") == 0)
-			(void)strlcat(buf, "from local", sizeof buf);
+			(void)strlcat(buf, " from local", sizeof buf);
 		else {
-			(void)strlcat(buf, "from src ", sizeof buf);
+			(void)strlcat(buf, " from src ", sizeof buf);
 			(void)strlcat(buf, r->table_from, sizeof buf);
-			(void)strlcat(buf, " ", sizeof buf);
 		}
 	}
 
 	if (r->flag_for) {
 		if (r->flag_for < 0)
-			(void)strlcat(buf, "!", sizeof buf);
+			(void)strlcat(buf, " !", sizeof buf);
 		if (strcmp(r->table_for, "<anydestination>") == 0)
-			(void)strlcat(buf, "for any ", sizeof buf);
+			(void)strlcat(buf, " for any", sizeof buf);
 		else if (strcmp(r->table_for, "<localnames>") == 0)
-			(void)strlcat(buf, "for local ", sizeof buf);
+			(void)strlcat(buf, " for local", sizeof buf);
 		else {
-			(void)strlcat(buf, "for domain ", sizeof buf);
+			(void)strlcat(buf, " for domain ", sizeof buf);
 			(void)strlcat(buf, r->table_for, sizeof buf);
-			(void)strlcat(buf, " ", sizeof buf);
 		}
 	}
 
 	if (r->flag_smtp_helo) {
 		if (r->flag_smtp_helo < 0)
-			(void)strlcat(buf, "!", sizeof buf);
-		(void)strlcat(buf, "helo ", sizeof buf);
+			(void)strlcat(buf, " !", sizeof buf);
+		(void)strlcat(buf, " helo ", sizeof buf);
 		(void)strlcat(buf, r->table_smtp_helo, sizeof buf);
-		(void)strlcat(buf, " ", sizeof buf);
 	}
 
 	if (r->flag_smtp_auth) {
 		if (r->flag_smtp_auth < 0)
-			(void)strlcat(buf, "!", sizeof buf);
-		(void)strlcat(buf, "auth ", sizeof buf);
+			(void)strlcat(buf, " !", sizeof buf);
+		(void)strlcat(buf, " auth", sizeof buf);
 		if (r->table_smtp_auth) {
-			(void)strlcat(buf, r->table_smtp_auth, sizeof buf);
 			(void)strlcat(buf, " ", sizeof buf);
+			(void)strlcat(buf, r->table_smtp_auth, sizeof buf);
 		}
 	}
 
 	if (r->flag_smtp_starttls) {
 		if (r->flag_smtp_starttls < 0)
-			(void)strlcat(buf, "!", sizeof buf);
-		(void)strlcat(buf, "tls ", sizeof buf);
-		(void)strlcat(buf, " ", sizeof buf);
+			(void)strlcat(buf, " !", sizeof buf);
+		(void)strlcat(buf, " tls", sizeof buf);
 	}
 
 	if (r->flag_smtp_mail_from) {
 		if (r->flag_smtp_mail_from < 0)
-			(void)strlcat(buf, "!", sizeof buf);
-		(void)strlcat(buf, "mail-from ", sizeof buf);
+			(void)strlcat(buf, " !", sizeof buf);
+		(void)strlcat(buf, " mail-from ", sizeof buf);
 		(void)strlcat(buf, r->table_smtp_mail_from, sizeof buf);
-		(void)strlcat(buf, " ", sizeof buf);
 	}
 
 	if (r->flag_smtp_rcpt_to) {
 		if (r->flag_smtp_rcpt_to < 0)
-			(void)strlcat(buf, "!", sizeof buf);
-		(void)strlcat(buf, "rcpt-to ", sizeof buf);
+			(void)strlcat(buf, " !", sizeof buf);
+		(void)strlcat(buf, " rcpt-to ", sizeof buf);
 		(void)strlcat(buf, r->table_smtp_rcpt_to, sizeof buf);
-		(void)strlcat(buf, " ", sizeof buf);
 	}
-	(void)strlcat(buf, "=> ", sizeof buf);
+	(void)strlcat(buf, " action ", sizeof buf);
 	if (r->reject)
 		(void)strlcat(buf, "reject", sizeof buf);
 	else

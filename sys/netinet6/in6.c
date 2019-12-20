@@ -1,4 +1,4 @@
-/*	$OpenBSD: in6.c,v 1.230 2019/02/13 23:47:43 dlg Exp $	*/
+/*	$OpenBSD: in6.c,v 1.234 2019/11/18 22:08:59 bluhm Exp $	*/
 /*	$KAME: in6.c,v 1.372 2004/06/14 08:14:21 itojun Exp $	*/
 
 /*
@@ -182,6 +182,18 @@ in6_nam2sin6(const struct mbuf *nam, struct sockaddr_in6 **sin6)
 }
 
 int
+in6_sa2sin6(struct sockaddr *sa, struct sockaddr_in6 **sin6)
+{
+	if (sa->sa_family != AF_INET6)
+		return EAFNOSUPPORT;
+	if (sa->sa_len != sizeof(struct sockaddr_in6))
+		return EINVAL;
+	*sin6 = satosin6(sa);
+
+	return 0;
+}
+
+int
 in6_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp)
 {
 	int privileged;
@@ -243,10 +255,10 @@ in6_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, int privileged)
 int
 in6_ioctl_change_ifaddr(u_long cmd, caddr_t data, struct ifnet *ifp)
 {
-	struct	in6_ifreq *ifr = (struct in6_ifreq *)data;
 	struct	in6_ifaddr *ia6 = NULL;
 	struct	in6_aliasreq *ifra = (struct in6_aliasreq *)data;
-	struct sockaddr_in6 *sa6;
+	struct	sockaddr *sa;
+	struct	sockaddr_in6 *sa6 = NULL;
 	int	error = 0, newifaddr = 0, plen;
 
 	/*
@@ -260,21 +272,29 @@ in6_ioctl_change_ifaddr(u_long cmd, caddr_t data, struct ifnet *ifp)
 	 * on a single interface, we almost always look and check the
 	 * presence of ifra_addr, and reject invalid ones here.
 	 * It also decreases duplicated code among SIOC*_IN6 operations.
+	 *
+	 * We always require users to specify a valid IPv6 address for
+	 * the corresponding operation.
 	 */
 	switch (cmd) {
 	case SIOCAIFADDR_IN6:
-		sa6 = &ifra->ifra_addr;
+		sa = sin6tosa(&ifra->ifra_addr);
 		break;
 	case SIOCDIFADDR_IN6:
-		sa6 = &ifr->ifr_addr;
+		sa = sin6tosa(&((struct in6_ifreq *)data)->ifr_addr);
 		break;
 	default:
-		panic("unknown ioctl %lu", cmd);
+		panic("%s: invalid ioctl %lu", __func__, cmd);
+	}
+	if (sa->sa_family == AF_INET6) {
+		error = in6_sa2sin6(sa, &sa6);
+		if (error)
+			return (error);
 	}
 
 	NET_LOCK();
 
-	if (sa6 && sa6->sin6_family == AF_INET6) {
+	if (sa6 != NULL) {
 		error = in6_check_embed_scope(sa6, ifp->if_index);
 		if (error)
 			goto err;
@@ -297,30 +317,11 @@ in6_ioctl_change_ifaddr(u_long cmd, caddr_t data, struct ifnet *ifp)
 			error = EADDRNOTAVAIL;
 			break;
 		}
-		/*
-		 * We always require users to specify a valid IPv6 address for
-		 * the corresponding operation.
-		 */
-		if (ifra->ifra_addr.sin6_family != AF_INET6 ||
-		    ifra->ifra_addr.sin6_len != sizeof(struct sockaddr_in6)) {
-			error = EAFNOSUPPORT;
-			break;
-		}
 		in6_purgeaddr(&ia6->ia_ifa);
-		dohooks(ifp->if_addrhooks, 0);
+		if_addrhooks_run(ifp);
 		break;
 
 	case SIOCAIFADDR_IN6:
-		/*
-		 * We always require users to specify a valid IPv6 address for
-		 * the corresponding operation.
-		 */
-		if (ifra->ifra_addr.sin6_family != AF_INET6 ||
-		    ifra->ifra_addr.sin6_len != sizeof(struct sockaddr_in6)) {
-			error = EAFNOSUPPORT;
-			break;
-		}
-
 		/* reject read-only flags */
 		if ((ifra->ifra_flags & IN6_IFF_DUPLICATED) != 0 ||
 		    (ifra->ifra_flags & IN6_IFF_DETACHED) != 0 ||
@@ -346,13 +347,15 @@ in6_ioctl_change_ifaddr(u_long cmd, caddr_t data, struct ifnet *ifp)
 		 * is no link-local yet.
 		 */
 		error = in6_ifattach(ifp);
-		if (error != 0)
+		if (error)
 			break;
 		error = in6_update_ifa(ifp, ifra, ia6);
-		if (error != 0)
+		if (error)
 			break;
 
-		ia6 = in6ifa_ifpwithaddr(ifp, &ifra->ifra_addr.sin6_addr);
+		ia6 = NULL;
+		if (sa6 != NULL)
+			ia6 = in6ifa_ifpwithaddr(ifp, &sa6->sin6_addr);
 		if (ia6 == NULL) {
 			/*
 			 * this can happen when the user specify the 0 valid
@@ -366,13 +369,13 @@ in6_ioctl_change_ifaddr(u_long cmd, caddr_t data, struct ifnet *ifp)
 			nd6_dad_start(&ia6->ia_ifa);
 
 		if (!newifaddr) {
-			dohooks(ifp->if_addrhooks, 0);
+			if_addrhooks_run(ifp);
 			break;
 		}
 
 		plen = in6_mask2len(&ia6->ia_prefixmask.sin6_addr, NULL);
 		if ((ifp->if_flags & IFF_LOOPBACK) || plen == 128) {
-			dohooks(ifp->if_addrhooks, 0);
+			if_addrhooks_run(ifp);
 			break;	/* No need to install a connected route. */
 		}
 
@@ -383,7 +386,7 @@ in6_ioctl_change_ifaddr(u_long cmd, caddr_t data, struct ifnet *ifp)
 			in6_purgeaddr(&ia6->ia_ifa);
 			break;
 		}
-		dohooks(ifp->if_addrhooks, 0);
+		if_addrhooks_run(ifp);
 		break;
 	}
 
@@ -397,14 +400,21 @@ in6_ioctl_get(u_long cmd, caddr_t data, struct ifnet *ifp)
 {
 	struct	in6_ifreq *ifr = (struct in6_ifreq *)data;
 	struct	in6_ifaddr *ia6 = NULL;
-	struct sockaddr_in6 *sa6;
+	struct	sockaddr *sa;
+	struct	sockaddr_in6 *sa6 = NULL;
 	int	error = 0;
 
-	sa6 = &ifr->ifr_addr;
+	sa = sin6tosa(&ifr->ifr_addr);
+	if (sa->sa_family == AF_INET6) {
+		sa->sa_len = sizeof(struct sockaddr_in6);
+		error = in6_sa2sin6(sa, &sa6);
+		if (error)
+			return (error);
+	}
 
 	NET_RLOCK();
 
-	if (sa6 && sa6->sin6_family == AF_INET6) {
+	if (sa6 != NULL) {
 		error = in6_check_embed_scope(sa6, ifp->if_index);
 		if (error)
 			goto err;
@@ -492,7 +502,7 @@ in6_ioctl_get(u_long cmd, caddr_t data, struct ifnet *ifp)
 		break;
 
 	default:
-		panic("invalid ioctl %lu", cmd);
+		panic("%s: invalid ioctl %lu", __func__, cmd);
 	}
 
 err:
@@ -616,10 +626,9 @@ in6_update_ifa(struct ifnet *ifp, struct in6_aliasreq *ifra,
 		 * the following log might be noisy, but this is a typical
 		 * configuration mistake or a tool's bug.
 		 */
-		nd6log((LOG_INFO,
-		    "in6_update_ifa: valid lifetime is 0 for %s\n",
+		nd6log((LOG_INFO, "%s: valid lifetime is 0 for %s\n", __func__,
 		    inet_ntop(AF_INET6, &ifra->ifra_addr.sin6_addr,
-		        addr, sizeof(addr))));
+		    addr, sizeof(addr))));
 
 		if (ia6 == NULL)
 			return (0); /* there's nothing to do */
@@ -682,10 +691,10 @@ in6_update_ifa(struct ifnet *ifp, struct in6_aliasreq *ifra,
 		if ((ia6->ia_flags & IFA_ROUTE) != 0 &&
 		    rt_ifa_del(ifa, RTF_HOST, ifa->ifa_dstaddr,
 		     ifp->if_rdomain) != 0) {
-			nd6log((LOG_ERR, "in6_update_ifa: failed to remove "
-			    "a route to the old destination: %s\n",
+			nd6log((LOG_ERR, "%s: failed to remove a route "
+			    "to the old destination: %s\n", __func__,
 			    inet_ntop(AF_INET6, &ia6->ia_addr.sin6_addr,
-				addr, sizeof(addr))));
+			    addr, sizeof(addr))));
 			/* proceed anyway... */
 		} else
 			ia6->ia_flags &= ~IFA_ROUTE;
@@ -1322,7 +1331,7 @@ in6_ifawithscope(struct ifnet *oifp, struct in6_addr *dst, u_int rdomain)
 	struct in6_ifaddr *ia6_best = NULL;
 
 	if (oifp == NULL) {
-		printf("in6_ifawithscope: output interface is not specified\n");
+		printf("%s: output interface is not specified\n", __func__);
 		return (NULL);
 	}
 
@@ -1366,19 +1375,19 @@ in6_ifawithscope(struct ifnet *oifp, struct in6_addr *dst, u_int rdomain)
 
 
 			dscopecmp = IN6_ARE_SCOPE_CMP(src_scope, dst_scope);
-			printf("in6_ifawithscope: dst=%s bestaddr=%s, "
-			       "newaddr=%s, scope=%x, dcmp=%d, bcmp=%d, "
-			       "matchlen=%d, flgs=%x\n",
-			       inet_ntop(AF_INET6, dst, adst, sizeof(adst)),
-			       (ia6_best == NULL) ? "none" :
-			       inet_ntop(AF_INET6, &ia6_best->ia_addr.sin6_addr,
-			           bestaddr, sizeof(bestaddr)),
-			       inet_ntop(AF_INET6, IFA_IN6(ifa),
-			           asrc, sizeof(asrc)),
-			       src_scope, dscopecmp,
-			       ia6_best ? IN6_ARE_SCOPE_CMP(src_scope, best_scope) : -1,
-			       in6_matchlen(IFA_IN6(ifa), dst),
-			       ifatoia6(ifa)->ia6_flags);
+			printf("%s: dst=%s bestaddr=%s, "
+			    "newaddr=%s, scope=%x, dcmp=%d, bcmp=%d, "
+			    "matchlen=%d, flgs=%x\n", __func__,
+			    inet_ntop(AF_INET6, dst, adst, sizeof(adst)),
+			    (ia6_best == NULL) ? "none" :
+			    inet_ntop(AF_INET6, &ia6_best->ia_addr.sin6_addr,
+			    bestaddr, sizeof(bestaddr)),
+			    inet_ntop(AF_INET6, IFA_IN6(ifa),
+			    asrc, sizeof(asrc)),
+			    src_scope, dscopecmp, ia6_best ?
+			    IN6_ARE_SCOPE_CMP(src_scope, best_scope) : -1,
+			    in6_matchlen(IFA_IN6(ifa), dst),
+			    ifatoia6(ifa)->ia6_flags);
 		}
 #endif
 
@@ -1545,14 +1554,14 @@ in6_ifawithscope(struct ifnet *oifp, struct in6_addr *dst, u_int rdomain)
 				/* Do not replace temporary autoconf addresses
 				 * with non-temporary addresses. */
 				if ((ia6_best->ia6_flags & IN6_IFF_PRIVACY) &&
-			            !(ifatoia6(ifa)->ia6_flags &
+				    !(ifatoia6(ifa)->ia6_flags &
 				    IN6_IFF_PRIVACY))
 					continue;
 
 				/* Replace non-temporary autoconf addresses
 				 * with temporary addresses. */
 				if (!(ia6_best->ia6_flags & IN6_IFF_PRIVACY) &&
-			            (ifatoia6(ifa)->ia6_flags &
+				    (ifatoia6(ifa)->ia6_flags &
 				    IN6_IFF_PRIVACY))
 					goto replace;
 			}
@@ -1560,7 +1569,7 @@ in6_ifawithscope(struct ifnet *oifp, struct in6_addr *dst, u_int rdomain)
 			matchcmp = tlen - blen;
 			if (matchcmp > 0) { /* (8) */
 #if NCARP > 0
-				/* 
+				/*
 				 * Don't let carp interfaces win a tie against
 				 * the output interface based on matchlen.
 				 * We should only use a carp address if no
@@ -1587,8 +1596,9 @@ in6_ifawithscope(struct ifnet *oifp, struct in6_addr *dst, u_int rdomain)
 		  replace:
 			ia6_best = ifatoia6(ifa);
 			blen = tlen >= 0 ? tlen :
-				in6_matchlen(IFA_IN6(ifa), dst);
-			best_scope = in6_addrscope(&ia6_best->ia_addr.sin6_addr);
+			    in6_matchlen(IFA_IN6(ifa), dst);
+			best_scope =
+			    in6_addrscope(&ia6_best->ia_addr.sin6_addr);
 		}
 	}
 

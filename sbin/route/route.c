@@ -1,4 +1,4 @@
-/*	$OpenBSD: route.c,v 1.230 2019/03/31 11:30:35 kn Exp $	*/
+/*	$OpenBSD: route.c,v 1.246 2019/11/22 15:28:05 florian Exp $	*/
 /*	$NetBSD: route.c,v 1.16 1996/04/15 18:27:05 cgd Exp $	*/
 
 /*
@@ -68,7 +68,7 @@
 const struct if_status_description
 			if_status_descriptions[] = LINK_STATE_DESCRIPTIONS;
 
-union sockunion so_dst, so_gate, so_mask, so_ifa, so_ifp, so_label, so_src;
+union sockunion so_dst, so_gate, so_mask, so_ifa, so_ifp, so_src, so_label;
 
 typedef union sockunion *sup;
 pid_t	pid;
@@ -192,7 +192,7 @@ main(int argc, char **argv)
 	kw = keyword(*argv);
 	if (Tflag && Terr != 0 && kw != K_ADD) {
 		errno = Terr;
-		err(1, "routing table %d", tableid);
+		err(1, "routing table %u", tableid);
 	}
 	if (kw == K_EXEC)
 		exit(rdomain(argc - 1, argv + 1));
@@ -484,7 +484,7 @@ newroute(int argc, char **argv)
 				break;
 			case K_SA:
 				af = PF_ROUTE;
-				aflen = sizeof(union sockunion);
+				aflen = sizeof(struct sockaddr_storage) - 1;
 				break;
 			case K_MPLS:
 				af = AF_MPLS;
@@ -579,7 +579,7 @@ newroute(int argc, char **argv)
 			case K_IFP:
 				if (!--argc)
 					usage(1+*argv);
-				getaddr(RTA_IFP, af, *++argv, NULL);
+				getaddr(RTA_IFP, AF_LINK, *++argv, NULL);
 				break;
 			case K_GATEWAY:
 				if (!--argc)
@@ -798,7 +798,7 @@ getaddr(int which, int af, char *s, struct hostent **hpp)
 {
 	sup su = NULL;
 	struct hostent *hp;
-	int afamily, bits;
+	int aflength, afamily, bits;
 
 	if (af == AF_UNSPEC) {
 		if (strchr(s, ':') != NULL) {
@@ -809,7 +809,9 @@ getaddr(int which, int af, char *s, struct hostent **hpp)
 			aflen = sizeof(struct sockaddr_in);
 		}
 	}
-	afamily = af;	/* local copy of af so we can change it */
+	/* local copy of len and af so we can change it */
+	aflength = aflen;
+	afamily = af;
 
 	rtm_addrs |= which;
 	switch (which) {
@@ -824,6 +826,7 @@ getaddr(int which, int af, char *s, struct hostent **hpp)
 		break;
 	case RTA_IFP:
 		su = &so_ifp;
+		aflength = sizeof(struct sockaddr_dl);
 		afamily = AF_LINK;
 		break;
 	case RTA_IFA:
@@ -833,7 +836,7 @@ getaddr(int which, int af, char *s, struct hostent **hpp)
 		errx(1, "internal error");
 		/* NOTREACHED */
 	}
-	su->sa.sa_len = aflen;
+	su->sa.sa_len = aflength;
 	su->sa.sa_family = afamily;
 
 	if (strcmp(s, "default") == 0) {
@@ -905,7 +908,7 @@ getaddr(int which, int af, char *s, struct hostent **hpp)
 	case AF_MPLS:
 		errx(1, "mpls labels require -in or -out switch");
 	case PF_ROUTE:
-		su->sa.sa_len = sizeof(*su);
+		su->sa.sa_len = sizeof(struct sockaddr_storage) - 1;
 		sockaddr(s, &su->sa);
 		return (1);
 
@@ -1084,13 +1087,14 @@ rtmsg(int cmd, int flags, int fmask, uint8_t prio)
 
 	if (rtm_addrs & RTA_NETMASK)
 		mask_addr(&so_dst, &so_mask, RTA_DST);
+	/* store addresses in ascending order of RTA values */
 	NEXTADDR(RTA_DST, so_dst);
 	NEXTADDR(RTA_GATEWAY, so_gate);
 	NEXTADDR(RTA_NETMASK, so_mask);
 	NEXTADDR(RTA_IFP, so_ifp);
 	NEXTADDR(RTA_IFA, so_ifa);
-	NEXTADDR(RTA_LABEL, so_label);
 	NEXTADDR(RTA_SRC, so_src);
+	NEXTADDR(RTA_LABEL, so_label);
 	rtm.rtm_msglen = l = cp - (char *)&m_rtmsg;
 	if (verbose)
 		print_rtmsg(&rtm, l);
@@ -1176,7 +1180,7 @@ char routeflags[] =
 char ifnetflags[] =
 "\1UP\2BROADCAST\3DEBUG\4LOOPBACK\5PTP\6STATICARP\7RUNNING\010NOARP\011PPROMISC"
 "\012ALLMULTI\013OACTIVE\014SIMPLEX\015LINK0\016LINK1\017LINK2\020MULTICAST"
-"\23INET6_NOPRIVACY\24MPLS\25WOL\26AUTOCONF6\27INET6_NOSOII";
+"\23INET6_NOPRIVACY\24MPLS\25WOL\26AUTOCONF6\27INET6_NOSOII\30AUTOCONF4";
 char addrnames[] =
 "\1DST\2GATEWAY\3NETMASK\4GENMASK\5IFP\6IFA\7AUTHOR\010BRD\011SRC\012SRCMASK\013LABEL\014BFD\015DNS\016STATIC\017SEARCH";
 
@@ -1206,7 +1210,7 @@ print_rtmsg(struct rt_msghdr *rtm, int msglen)
 	if (verbose == 0)
 		return;
 	if (rtm->rtm_version != RTM_VERSION) {
-		warnx("routing message version %d not understood",
+		warnx("routing message version %u not understood",
 		    rtm->rtm_version);
 		return;
 	}
@@ -1214,18 +1218,18 @@ print_rtmsg(struct rt_msghdr *rtm, int msglen)
 	    rtm->rtm_type < sizeof(msgtypes)/sizeof(msgtypes[0]))
 		printf("%s", msgtypes[rtm->rtm_type]);
 	else
-		printf("[rtm_type %d out of range]", rtm->rtm_type);
+		printf("[rtm_type %u out of range]", rtm->rtm_type);
 
-	printf(": len %d", rtm->rtm_msglen);
+	printf(": len %u", rtm->rtm_msglen);
 	switch (rtm->rtm_type) {
 	case RTM_DESYNC:
 		printf("\n");
 		break;
 	case RTM_IFINFO:
 		ifm = (struct if_msghdr *)rtm;
-		(void) printf(", if# %d, ", ifm->ifm_index);
+		printf(", if# %u, ", ifm->ifm_index);
 		if (if_indextoname(ifm->ifm_index, ifname) != NULL)
-			printf("name: %s, ", ifname);
+			printf("name %s, ", ifname);
 		printf("link: %s, mtu: %u, flags:",
 		    get_linkstate(ifm->ifm_data.ifi_type,
 		        ifm->ifm_data.ifi_link_state),
@@ -1235,22 +1239,25 @@ print_rtmsg(struct rt_msghdr *rtm, int msglen)
 		pmsg_addrs((char *)ifm + ifm->ifm_hdrlen, ifm->ifm_addrs);
 		break;
 	case RTM_80211INFO:
-		printf(", if# %d, ", rtm->rtm_index);
+		printf(", if# %u, ", rtm->rtm_index);
 		if (if_indextoname(rtm->rtm_index, ifname) != NULL)
-			printf("name: %s, ", ifname);
+			printf("name %s, ", ifname);
 		print_80211info((struct if_ieee80211_msghdr *)rtm);
 		break;
 	case RTM_NEWADDR:
 	case RTM_DELADDR:
 	case RTM_CHGADDRATTR:
 		ifam = (struct ifa_msghdr *)rtm;
-		printf(", metric %d, flags:", ifam->ifam_metric);
+		printf(", if# %u, ", ifam->ifam_index);
+		if (if_indextoname(ifam->ifam_index, ifname) != NULL)
+			printf("name %s, ", ifname);
+		printf("metric %d, flags:", ifam->ifam_metric);
 		bprintf(stdout, ifam->ifam_flags, routeflags);
 		pmsg_addrs((char *)ifam + ifam->ifam_hdrlen, ifam->ifam_addrs);
 		break;
 	case RTM_IFANNOUNCE:
 		ifan = (struct if_announcemsghdr *)rtm;
-		printf(", if# %d, name %s, what: ",
+		printf(", if# %u, name %s, what: ",
 		    ifan->ifan_index, ifan->ifan_name);
 		switch (ifan->ifan_what) {
 		case IFAN_ARRIVAL:
@@ -1260,7 +1267,7 @@ print_rtmsg(struct rt_msghdr *rtm, int msglen)
 			printf("departure");
 			break;
 		default:
-			printf("#%d", ifan->ifan_what);
+			printf("#%u", ifan->ifan_what);
 			break;
 		}
 		printf("\n");
@@ -1282,12 +1289,20 @@ print_rtmsg(struct rt_msghdr *rtm, int msglen)
 		case RTP_PROPOSAL_SLAAC:
 			printf("slaac");
 			break;
+		case RTP_PROPOSAL_UMB:
+			printf("umb");
+			break;
+		case RTP_PROPOSAL_SOLICIT:
+			printf("solicit");
+			break;
 		default:
 			printf("unknown");
 			break;
 		}
-		printf(" table %u, ifidx %u, ",
+		printf(", table %u, if# %u, ",
 		    rtm->rtm_tableid, rtm->rtm_index);
+		if (if_indextoname(rtm->rtm_index, ifname) != NULL)
+			printf("name %s, ", ifname);
 		printf("pid: %ld, seq %d, errno %d\nflags:",
 		    (long)rtm->rtm_pid, rtm->rtm_seq, rtm->rtm_errno);
 		bprintf(stdout, rtm->rtm_flags, routeflags);
@@ -1308,8 +1323,16 @@ print_rtmsg(struct rt_msghdr *rtm, int msglen)
 		printf(" inits: ");
 		bprintf(stdout, rtm->rtm_inits, metricnames);
 		pmsg_addrs(((char *)rtm + rtm->rtm_hdrlen),
-		   rtm->rtm_addrs & ~(RTA_STATIC | RTA_SEARCH | RTA_DNS));
-		printf("Static Routes:\n");
+		    rtm->rtm_addrs & ~(RTA_STATIC | RTA_SEARCH | RTA_DNS));
+
+		if(!(rtm->rtm_addrs & (RTA_STATIC | RTA_SEARCH | RTA_DNS)))
+			break;
+
+		printf("proposals: ");
+		bprintf(stdout, rtm->rtm_addrs & (RTA_STATIC | RTA_SEARCH |
+		    RTA_DNS), addrnames);
+		putchar('\n');
+
 		if (rtm->rtm_addrs & RTA_STATIC) {
 			char *next = (char *)rtm + rtm->rtm_hdrlen;
 			struct sockaddr	*sa, *rti_info[RTAX_MAX];
@@ -1318,12 +1341,10 @@ print_rtmsg(struct rt_msghdr *rtm, int msglen)
 			get_rtaddrs(rtm->rtm_addrs, sa, rti_info);
 			rtstatic = (struct sockaddr_rtstatic *)
 			    rti_info[RTAX_STATIC];
-			if (rtstatic != NULL) {
-				printf(" ");
+			if (rtstatic != NULL)
 				print_rtstatic(rtstatic);
-			}
 		}
-		printf("Domain search:\n");
+
 		if (rtm->rtm_addrs & RTA_SEARCH) {
 			char *next = (char *)rtm + rtm->rtm_hdrlen;
 			struct sockaddr	*sa, *rti_info[RTAX_MAX];
@@ -1332,12 +1353,10 @@ print_rtmsg(struct rt_msghdr *rtm, int msglen)
 			get_rtaddrs(rtm->rtm_addrs, sa, rti_info);
 			rtsearch = (struct sockaddr_rtsearch *)
 			    rti_info[RTAX_SEARCH];
-			if (rtsearch != NULL) {
-				printf(" ");
+			if (rtsearch != NULL)
 				print_rtsearch(rtsearch);
-			}
 		}
-		printf("Domain Name Servers:\n");
+
 		if (rtm->rtm_addrs & RTA_DNS) {
 			char *next = (char *)rtm + rtm->rtm_hdrlen;
 			struct sockaddr	*sa, *rti_info[RTAX_MAX];
@@ -1345,15 +1364,16 @@ print_rtmsg(struct rt_msghdr *rtm, int msglen)
 			sa = (struct sockaddr *)next;
 			get_rtaddrs(rtm->rtm_addrs, sa, rti_info);
 			rtdns = (struct sockaddr_rtdns *)rti_info[RTAX_DNS];
-			if (rtdns != NULL) {
-				printf(" ");
+			if (rtdns != NULL)
 				print_rtdns(rtdns);
-			}
 		}
+		putchar('\n');
 		break;
 	default:
-		printf(", priority %d, table %u, ifidx %u, ",
+		printf(", priority %u, table %u, if# %u, ",
 		    rtm->rtm_priority, rtm->rtm_tableid, rtm->rtm_index);
+		if (if_indextoname(rtm->rtm_index, ifname) != NULL)
+			printf("name %s, ", ifname);
 		printf("pid: %ld, seq %d, errno %d\nflags:",
 		    (long)rtm->rtm_pid, rtm->rtm_seq, rtm->rtm_errno);
 		bprintf(stdout, rtm->rtm_flags, routeflags);
@@ -1451,12 +1471,12 @@ print_getmsg(struct rt_msghdr *rtm, int msglen)
 
 	printf("   route to: %s\n", routename(&so_dst.sa));
 	if (rtm->rtm_version != RTM_VERSION) {
-		warnx("routing message version %d not understood",
+		warnx("routing message version %u not understood",
 		    rtm->rtm_version);
 		return;
 	}
 	if (rtm->rtm_msglen > msglen)
-		warnx("message length mismatch, in packet %d, returned %d",
+		warnx("message length mismatch, in packet %u, returned %d",
 		    rtm->rtm_msglen, msglen);
 	if (rtm->rtm_errno) {
 		warnx("RTM_GET: %s (errno %d)",
@@ -1672,7 +1692,7 @@ print_sabfd(struct sockaddr_bfd *sa_bfd, int fmask)
 	printf(" remote %s", bfd_state(sa_bfd->bs_remotestate));
 	printf(" laststate %s", bfd_state(sa_bfd->bs_laststate));
 
-	printf(" error %d", sa_bfd->bs_error);
+	printf(" error %u", sa_bfd->bs_error);
 	printf("\n            ");
 	printf(" diag %s", bfd_diag(sa_bfd->bs_localdiag));
 	printf(" remote %s", bfd_diag(sa_bfd->bs_remotediag));
@@ -1930,8 +1950,8 @@ print_rtdns(struct sockaddr_rtdns *rtdns)
 	char		 ntopbuf[INET6_ADDRSTRLEN];
 
 	offset = offsetof(struct sockaddr_rtdns, sr_dns);
-	if (rtdns->sr_len <= offset) {
-		printf("<invalid sr_len (%d <= %zu)>\n", rtdns->sr_len,
+	if (rtdns->sr_len < offset) {
+		printf("<invalid sr_len (%u <= %zu)>\n", rtdns->sr_len,
 		    offset);
 		return;
 	}
@@ -1941,7 +1961,7 @@ print_rtdns(struct sockaddr_rtdns *rtdns)
 		    sizeof(rtdns->sr_dns));
 		return;
 	}
-
+	printf(" [");
 	switch (rtdns->sr_family) {
 	case AF_INET:
 		/* An array of IPv4 addresses. */
@@ -1952,7 +1972,8 @@ print_rtdns(struct sockaddr_rtdns *rtdns)
 		}
 		for (i = 0; i < servercnt; i++) {
 			memcpy(&server.s_addr, src, sizeof(server.s_addr));
-			printf("%s ", inet_ntoa(server));
+			printf("%s%s", inet_ntoa(server), i == servercnt - 1 ?
+			    "": ", ");
 			src += sizeof(struct in_addr);
 		}
 		break;
@@ -1965,14 +1986,14 @@ print_rtdns(struct sockaddr_rtdns *rtdns)
 		for (i = 0; i < servercnt; i++) {
 			memcpy(&in6, src, sizeof(in6));
 			src += sizeof(in6);
-			printf("%s ", inet_ntop(AF_INET6, &in6, ntopbuf,
-			    INET6_ADDRSTRLEN));
+			printf("%s%s", inet_ntop(AF_INET6, &in6, ntopbuf,
+			    INET6_ADDRSTRLEN), i == servercnt - 1 ? "": ", ");
 		}
 		break;
 	default:
 		break;
 	}
-	printf("\n");
+	printf("]");
 }
 
 /*
@@ -1985,7 +2006,7 @@ print_rtstatic(struct sockaddr_rtstatic *rtstatic)
 	struct in6_addr		 prefix;
 	struct in_addr		 dest, gateway;
 	size_t			 srclen, offset;
-	int			 bits, bytes, error;
+	int			 bits, bytes, error, first = 1;
 	uint8_t			 prefixlen;
 	unsigned char		*src = rtstatic->sr_static;
 	char			 ntoabuf[INET_ADDRSTRLEN];
@@ -1994,7 +2015,7 @@ print_rtstatic(struct sockaddr_rtstatic *rtstatic)
 
 	offset = offsetof(struct sockaddr_rtstatic, sr_static);
 	if (rtstatic->sr_len <= offset) {
-		printf("<invalid sr_len (%d <= %zu)>\n", rtstatic->sr_len,
+		printf("<invalid sr_len (%u <= %zu)>\n", rtstatic->sr_len,
 		    offset);
 		return;
 	}
@@ -2004,7 +2025,7 @@ print_rtstatic(struct sockaddr_rtstatic *rtstatic)
 		    sizeof(rtstatic->sr_static));
 		return;
 	}
-
+	printf(" [");
 	switch (rtstatic->sr_family) {
 	case AF_INET:
 		/* AF_INET -> RFC 3442 encoded static routes. */
@@ -2025,7 +2046,9 @@ print_rtstatic(struct sockaddr_rtstatic *rtstatic)
 			memcpy(&gateway.s_addr, src, sizeof(gateway.s_addr));
 			src += sizeof(gateway.s_addr);
 			srclen -= sizeof(gateway.s_addr);
-			printf("%s/%u %s ", ntoabuf, bits, inet_ntoa(gateway));
+			printf("%s%s/%u %s ", first ? "" : ", ", ntoabuf, bits,
+			    inet_ntoa(gateway));
+			first = 0;
 		}
 		break;
 	case AF_INET6:
@@ -2050,15 +2073,17 @@ print_rtstatic(struct sockaddr_rtstatic *rtstatic)
 				    gai_strerror(error));
 				return;
 			}
-			printf("%s/%u %s ", inet_ntop(AF_INET6, &prefix,
-			    ntopbuf, INET6_ADDRSTRLEN), prefixlen, hbuf);
+			printf("%s%s/%u %s ", first ? "" : ", ",
+			    inet_ntop(AF_INET6, &prefix, ntopbuf,
+			    INET6_ADDRSTRLEN), prefixlen, hbuf);
+			first = 0;
 		}
 		break;
 	default:
-		printf("<unknown address family %d>", rtstatic->sr_family);
+		printf("<unknown address family %u>", rtstatic->sr_family);
 		break;
 	}
-	printf("\n");
+	printf("]");
 }
 
 /*
@@ -2072,7 +2097,7 @@ print_rtsearch(struct sockaddr_rtsearch *rtsearch)
 
 	offset = offsetof(struct sockaddr_rtsearch, sr_search);
 	if (rtsearch->sr_len <= offset) {
-		printf("<invalid sr_len (%d <= %zu)>\n", rtsearch->sr_len,
+		printf("<invalid sr_len (%u <= %zu)>\n", rtsearch->sr_len,
 		    offset);
 		return;
 	}
@@ -2083,7 +2108,7 @@ print_rtsearch(struct sockaddr_rtsearch *rtsearch)
 		return;
 	}
 
-	printf("%.*s\n", (int)srclen, src);
+	printf(" [%.*s]", (int)srclen, src);
 }
 
 /*

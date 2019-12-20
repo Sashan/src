@@ -1,4 +1,4 @@
-/*	$OpenBSD: switchctl.c,v 1.15 2019/05/12 16:38:02 sashan Exp $	*/
+/*	$OpenBSD: switchctl.c,v 1.17 2019/12/19 12:04:38 reyk Exp $	*/
 
 /*
  * Copyright (c) 2016 Kazuya GODA <goda@openbsd.org>
@@ -148,7 +148,8 @@ switchread(dev_t dev, struct uio *uio, int ioflag)
 			goto failed;
 		}
 		sc->sc_swdev->swdev_waiting = 1;
-		error = tsleep(sc, (PZERO + 1)|PCATCH, "switchread", 0);
+		error = tsleep_nsec(sc, (PZERO + 1)|PCATCH, "switchread",
+		    INFSLP);
 		if (error != 0)
 			goto failed;
 		/* sc might be deleted while sleeping */
@@ -360,7 +361,7 @@ switchpoll(dev_t dev, int events, struct proc *p)
 	struct switch_softc	*sc = switch_dev2sc(dev);
 
 	if (sc == NULL)
-		return (ENXIO);
+		return (POLLERR);
 
 	if (events & (POLLIN | POLLRDNORM)) {
 		if (!mq_empty(&sc->sc_swdev->swdev_outq) ||

@@ -1,4 +1,4 @@
-.\" $OpenBSD: bgpd.conf.5,v 1.194 2019/08/08 20:37:08 fcambus Exp $
+.\" $OpenBSD: bgpd.conf.5,v 1.197 2019/10/31 09:09:04 benno Exp $
 .\"
 .\" Copyright (c) 2004 Claudio Jeker <claudio@openbsd.org>
 .\" Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -16,7 +16,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: August 8 2019 $
+.Dd $Mdocdate: October 31 2019 $
 .Dt BGPD.CONF 5
 .Os
 .Sh NAME
@@ -32,27 +32,27 @@ The
 .Nm
 config file is divided into the following main sections:
 .Bl -tag -width xxxx
-.It Sy Macros
+.It Sx MACROS
 User-defined variables may be defined and used later, simplifying the
 configuration file.
-.It Sy Global Configuration
+.It Sx GLOBAL CONFIGURATION
 Global settings for
 .Xr bgpd 8 .
-.It Sy Set Configuration
+.It Sx SET CONFIGURATION
 Various lookup tables are defined in this section.
-.It Sy Network Announcements
+.It Sx NETWORK ANNOUNCEMENTS
 Networks which should be announced by
 .Xr bgpd 8
 are set in this section.
-.It Sy MPLS VPN Configuration
+.It Sx MPLS VPN CONFIGURATION
 The definition and properties for BGP MPLS VPNs are set in this section.
-.It Sy Neighbors and Groups
+.It Sx NEIGHBORS AND GROUPS
 .Xr bgpd 8
 establishes sessions with
 .Em neighbors .
 The neighbor definition and properties are set in this section, as well as
 grouping neighbors for the ease of configuration.
-.It Sy Filter
+.It Sx FILTER
 Filter rules for incoming and outgoing
 .Em UPDATES .
 .El
@@ -98,9 +98,9 @@ neighbor $peer1 {
 }
 .Ed
 .Sh GLOBAL CONFIGURATION
-There are quite a few settings that affect the operation of the
+These settings affect the operation of the
 .Xr bgpd 8
-daemon globally.
+daemon as a whole.
 .Pp
 .Bl -tag -width Ds -compact
 .It Ic AS Ar as-number Op Ar as-number
@@ -108,10 +108,9 @@ Set the local
 .Em autonomous system
 number to
 .Ar as-number .
-If the first AS number is a 4-byte AS it is possible to specify a secondary
-2-byte AS number which is used for neighbors which do not support 4-byte AS
-numbers.
-The default for the secondary AS is 23456.
+A fallback 2-byte AS number may follow a 4-byte AS number for neighbors that
+do not support 4-byte AS numbers.
+The standard and default fallback AS number is 23456.
 .Pp
 The AS numbers are assigned by local RIRs, such as:
 .Pp
@@ -128,30 +127,21 @@ for Latin America and the Caribbean
 for Europe, the Middle East, and parts of Asia
 .El
 .Pp
-For example:
-.Bd -literal -offset indent
-AS 65001
-.Ed
-.Pp
-sets the local AS to 65001.
-.Pp
 The AS numbers 64512 \(en 65534 are designated for private use.
-The AS number 23456 is a specially designated Autonomous System Number and
-should not be used.
-4-byte AS numbers are specified as two numbers separated by a dot
-(ASDOT format),
-for example:
-.Bd -literal -offset indent
-AS 3.10
-.Ed
-.Pp
-or as a large number (ASPLAIN format), for example:
+The AS number 23456 is reserved and should not be used.
+4-byte AS numbers may be specified in either the ASPLAIN format:
 .Bd -literal -offset indent
 AS 196618
 .Ed
 .Pp
+or in the older ASDOT format:
+.Bd -literal -offset indent
+AS 3.10
+.Ed
+.Pp
 .It Ic connect-retry Ar seconds
-Set the number of seconds before retrying to open a connection.
+Set the number of seconds to wait before attempting to re-open
+a connection.
 This timer should be sufficiently large in EBGP configurations.
 The default is 120 seconds.
 .Pp
@@ -159,57 +149,57 @@ The default is 120 seconds.
 .Ic dump
 .Op Ic rib Ar name
 .Pq Ic table Ns | Ns Ic table-mp Ns | Ns Ic table-v2
-.Ar file Op Ar timeout
+.Ar file Op Ar interval
 .Xc
 .It Xo
 .Ic dump
 .Pq Ic all Ns | Ns Ic updates
 .Pq Ic in Ns | Ns Ic out
-.Ar file Op Ar timeout
+.Ar file Op Ar interval
 .Xc
 Dump the RIB, a.k.a. the
 .Em routing information base ,
-and all BGP messages in Multi-threaded Routing Toolkit (MRT) format.
-It is possible to dump alternate RIB with the use of
-.Ar name .
+or dump ongoing BGP activity, in Multi-threaded Routing Toolkit (MRT) format.
+The
+.Ar file
+is subject to
+.Xr strftime 3 Ns -expansion.
 .Pp
-For example, the following will dump the entire table to the
-.Xr strftime 3 Ns -expanded
-filename.
-Only the
+The
 .Ic table-v2
-format is able to dump a multi-protocol RIB correctly.
-Both
-.Ic table
 and
 .Ic table-mp
-formats are more or less limited when handling multi-protocol entries and
-are only left around to support 3rd party tools not handling the new format.
-The timeout is optional:
+RIB formats store multi-protocol RIBs correctly, but the
+.Ic table
+format does not.
+The latter two are provided only to support third-party tools lacking
+support for the recommended
+.Ic table-v2
+format.
+Dump an alternative RIB by specifying
+.Ar name .
+Specify an
+.Ar interval
+in seconds for periodic RIB dumps.
+.Pp
+The following will dump the entire RIB table, at startup and every
+5 minutes thereafter, to a new file:
 .Bd -literal -offset indent
-dump table "/tmp/rib-dump-%H%M" 300
+dump table-v2 "/tmp/rib-dump-%H%M" 300
 .Ed
 .Pp
-Similar to the table dump, but this time all
-BGP messages and
-.Em state transitions
-will be dumped to the specified file:
+Dumps of ongoing BGP activity include all BGP state transitions, and
+all BGP messages in the specified direction.
+Use
+.Ic updates
+to dump only BGP
+.Em UPDATE
+messages, without state transitions.
+Specify an
+.Ar interval
+in seconds to restart periodically with a new file:
 .Bd -literal -offset indent
 dump all in "/tmp/all-in-%H%M" 300
-.Ed
-.Pp
-As before, but only the
-.Em UPDATE
-messages will be dumped to the file:
-.Bd -literal -offset indent
-dump updates in "/tmp/updates-in-%H%M" 300
-.Ed
-.Pp
-It is also possible to dump outgoing messages:
-.Bd -literal -offset indent
-dump all out "/tmp/all-out-%H%M" 300
-# or
-dump updates out "/tmp/updates-out-%H%M" 300
 .Ed
 .Pp
 .It Ic fib-priority Ar prio
@@ -229,35 +219,33 @@ The default is
 .Ic yes .
 .Pp
 .It Ic holdtime Ar seconds
-Set the holdtime in seconds.
-The holdtime is reset to its initial value every time either a
+Set the announced holdtime in seconds.
+This is exchanged with a neighbor upon connection
+establishment, in the
+.Em OPEN
+message, and the shortest holdtime governs the session.
+.Pp
+The neighbor session is dropped if the session holdtime passes
+without receipt of a
 .Em KEEPALIVE
 or an
 .Em UPDATE
-message is received from the neighbor.
-If the holdtime expires the session is dropped.
+message from the neighbor.
 The default is 90 seconds.
-Neighboring systems negotiate the holdtime used when the connection is
-established in the
-.Em OPEN
-messages.
-Each neighbor announces its configured holdtime; the smaller one is
-then agreed upon.
 .Pp
 .It Ic holdtime min Ar seconds
-The minimal accepted holdtime in seconds.
-This value must be greater than or equal to 3.
+The minimum acceptable holdtime in seconds.
+This value must be at least 3.
 .Pp
 .It Ic listen on Ar address
-Specify the local IP address
+Specify the local IP address for
 .Xr bgpd 8
-should listen on.
-.Bd -literal -offset indent
-listen on 127.0.0.1
-.Ed
+to listen on.
+The default is to listen on all local addresses on the current default
+routing domain.
 .Pp
 .It Ic log updates
-Log received and sent updates.
+Log sent and received BGP update messages.
 .Pp
 .It Xo
 .Ic nexthop
@@ -268,12 +256,15 @@ Log received and sent updates.
 If set to
 .Ic bgp ,
 .Xr bgpd 8
-may use BGP routes to verify nexthops.
+may verify nexthops using BGP routes.
 If set to
 .Ic default ,
-bgpd may use the default route to verify nexthops.
-By default bgpd will only use static routes or routes added by other routing
-daemons like
+.Xr bgpd 8
+may verify nexthops using the default route.
+By default
+.Xr bgpd 8
+uses only static routes or routes added by other routing
+daemons, such as
 .Xr ospfd 8 .
 .Pp
 .It Xo
@@ -303,23 +294,27 @@ where the metric is only compared between peers belonging to the same AS.
 .Xc
 Create an additional RIB named
 .Ar name .
-It may be excluded from the decision process that selects usable routes
+The degree to which its routes may be utilized is configurable.
+They may be excluded from the decision process that selects usable routes
 with the
 .Ic no Ic evaluate
-flag.
-If a
+flag, and this precludes their export to any kernel routing table.
+By default its routes will be evaluated, but not exported to the kernel.
+They may be both evaluated and exported if associated with a given
 .Ic rtable
-is specified, routes will be exported to the given kernel routing table.
-Currently the routing table must belong to the routing domain
+.Ar number ,
+which must belong to the routing domain that
 .Xr bgpd 8
 was started in.
-Nexthop verification happens in the table
+This table will not be consulted during nexthop verification
+unless it is the one that
 .Xr bgpd 8
-was started in - routes in the specified table will not be considered.
+was started in.
+It is unnecessary to create
 .Ic Adj-RIB-In
 and
-.Ic Loc-RIB
-are created automatically and used as default.
+.Ic Loc-RIB ,
+which are created automatically and used by default.
 .Pp
 .It Xo
 .Ic rde
@@ -328,22 +323,21 @@ are created automatically and used as default.
 .Xc
 If set to
 .Ic evaluate ,
-the best path selection will not only be based on the path attributes but
-also on the age of the route, giving preference to the older, typically
-more stable, route.
-In this case the decision process is no longer deterministic.
+the route decision process will also consider the age of the route in
+addition to its path attributes, giving preference to the older,
+typically more stable, route.
+This renders the decision process nondeterministic.
 The default is
 .Ic ignore .
 .Pp
-.It Ic router-id Ar address
-Set the router ID to the given IP address, which must be local to the
-machine.
+.It Ic router-id Ar dotted-quad
+Set the BGP router ID, which must be non-zero and should be unique
+within the AS.
+By default, the router ID is the highest IPv4 address assigned
+to the local machine.
 .Bd -literal -offset indent
 router-id 10.0.0.1
 .Ed
-.Pp
-If not given, the BGP ID is determined as the biggest IP address assigned
-to the local machine.
 .Pp
 .It Ic rtable Ar number
 Work with the given kernel routing table
@@ -368,7 +362,9 @@ By default
 .Pa /var/run/bgpd.sock.<rdomain>
 is used where
 .Ar <rdomain>
-is the routing domain in which bgpd has been started.
+is the routing domain in which
+.Xr bgpd 8
+has been started.
 By default, no restricted socket is created.
 .Pp
 .It Xo
@@ -384,21 +380,29 @@ The default is
 .El
 .Sh SET CONFIGURATION
 .Xr bgpd 8
-supports sets for looking up collections in an efficient way.
+supports the efficient lookup of data within named
+.Em sets .
+An
 .Ic as-set ,
+a
 .Ic prefix-set ,
-and
+and an
 .Ic origin-set
-are used to look up AS numbers, prefixes and prefixes/source-as pairs
+store AS numbers, prefixes, and prefixes/source-as pairs,
 respectively.
-See also the
+Such sets may be referenced by filter rules; see the
 .Sx FILTER
-section on how these sets are used in filters.
+section for details.
+It is more efficient to evaluate a set than a long series of
+rules for filtering each of its members.
+.Pp
 One single
 .Ic roa-set
-can be defined which will be used to validate the origin of each prefix
-against.
-The set collections can span multiple lines and an optional comma is allowed
+may be defined, against which
+.Xr bgpd 8
+will validate the origin of each prefix.
+.Pp
+A set definition can span multiple lines, and an optional comma is allowed
 between elements.
 .Pp
 .Bl -tag -width Ds -compact
@@ -408,12 +412,9 @@ between elements.
 .Xc
 An
 .Ic as-set
-holds a collection of AS numbers and can be used with the AS specific
-parameter in
+stores AS numbers, and can be used with the AS specific parameter in
 .Sx FILTER
 rules.
-Lookups against as-sets are more efficient than a large number of rules
-which differ only in the AS number.
 .Pp
 .It Xo
 .Ic origin-set Ar name
@@ -421,11 +422,15 @@ which differ only in the AS number.
 .Xc
 An
 .Ic origin-set
-holds a collection of prefix/source-as pairs and can be used in place
-where a rules filter for source-as and prefix at the same time.
+stores prefix/source-as pairs, and can be used to filter on the combination
+by using the
+.Ic origin-set
+parameter in
+.Sx FILTER
+rules.
 .Bd -literal -offset indent
 origin-set private { 10.0.0.0/8 maxlen 24 source-as 64511
-	203.0.113.0/24 source-as 64496 }
+                     203.0.113.0/24 source-as 64496 }
 .Ed
 .Pp
 .It Xo
@@ -434,58 +439,59 @@ origin-set private { 10.0.0.0/8 maxlen 24 source-as 64511
 .Xc
 A
 .Ic prefix-set
-holds a collection of prefixes and can be used in place
+stores network prefixes and can be used in place
 of the
 .Ic prefix
 parameter in
 .Sx FILTER
-rules and
+rules, and in
 .Ic network
 statements.
-Lookups against prefix-sets are more efficient than a large number of rules
-which differ only in prefix.
-.Pp
 A prefix can be followed by the prefixlen operators listed for the
 .Ic prefix
 parameter in the
 .Sx PARAMETERS
 section.
 .Pp
-The first example creates a set of prefixes called
+The first example below creates a set of prefixes called
 .Dq private ,
 to hold a number of RFC 1918 private network blocks.
 The second example shows the use of prefixlen operators.
 .Bd -literal -offset indent
 prefix-set private { 10.0.0.0/8, 172.16.0.0/12,
-			192.168.0.0/16, fc00::/7 }
+                     192.168.0.0/16, fc00::/7 }
 prefix-set as64496set { 192.0.2.0/24 prefixlen >= 26,
-			2001:db8::/32 or-longer }
+                        2001:db8::/32 or-longer }
 .Ed
 .Pp
 .It Xo
 .Ic roa-set
 .Ic { Ar address Ns Li / Ns Ar len Ic maxlen Ar mlen Ic source-as Ar asn ... Ic }
 .Xc
-An
+The
 .Ic roa-set
-holds a collection of Validated ROA Payloads (VRP).
+holds a collection of Validated
+.Em Route Origin Authorization
+Payloads (VRP).
 Each received prefix is checked against the
-.Ic roa-set
+.Ic roa-set ,
 and the Origin Validation State (OVS) is set.
 .Bd -literal -offset indent
 roa-set { 192.0.2.0/24 maxlen 24 source-as 64511
-	203.0.113.0/24 source-as 64496 }
+          203.0.113.0/24 source-as 64496 }
 .Ed
 .El
 .Sh NETWORK ANNOUNCEMENTS
-To announce a specific network as belonging to our AS, a
 .Ic network
-statement is used.
+statements specify the networks that
+.Xr bgpd 8
+will announce as its own.
+An announcement must also be permitted by the
+.Sx FILTER
+rules.
 By default
 .Xr bgpd 8
-will not announce anything.
-Filter rules need to be in place to allow announcement of the right prefixes
-to each neighbor.
+announces no networks.
 .Pp
 .Bl -tag -width Ds -compact
 .It Xo
@@ -507,16 +513,15 @@ Announce routes to directly attached networks.
 .Ar name
 .Op Ic set ...\&
 .Xc
-All networks in the prefix-set
-.Ar name
-will be announced.
+Announce all networks in the prefix-set
+.Ar name .
 .Pp
 .It Xo
 .Ic network
 .Pq Ic inet Ns | Ns Ic inet6
 .Ic priority Ar number Op Ic set ...\&
 .Xc
-Announce routes with the specified
+Announce routes having the specified
 .Ar priority .
 .Pp
 .It Xo
@@ -524,7 +529,7 @@ Announce routes with the specified
 .Pq Ic inet Ns | Ns Ic inet6
 .Ic rtlabel Ar label Op Ic set ...\&
 .Xc
-Announce routes with the specified
+Announce routes having the specified
 .Ar label .
 .Pp
 .It Xo
@@ -535,11 +540,10 @@ Announce routes with the specified
 Announce all static routes.
 .El
 .Pp
-It is possible to set default
-.Em AS path attributes
-per
+Each
 .Ic network
-statement:
+statement may set default
+.Em AS path attributes :
 .Bd -literal -offset indent
 network 192.168.7.0/24 set localpref 220
 .Ed
@@ -548,16 +552,12 @@ See also the
 .Sx ATTRIBUTE SET
 section.
 .Sh MPLS VPN CONFIGURATION
-.Xr bgpd 8
-supports the setup and distribution of MPLS Virtual Private Networks.
-A router can be configured to participate in a VPN by specifying a
+A
 .Ic vpn
-section with a description for the VPN and an
+section configures a router to participate in an MPLS Virtual Private Network.
+It specifies an
 .Xr mpe 4
-interface.
-.Pp
-The vpn configuration section allows properties to be set specifically
-for that VPN:
+interface to use, a description, and various properties of the VPN:
 .Bd -literal -offset indent
 vpn "description" on mpe1 {
 	rd 65002:1
@@ -567,6 +567,10 @@ vpn "description" on mpe1 {
 }
 .Ed
 .Pp
+.Xr bgpd 8
+will not exchange VPN routes with a neighbor by default, see the
+.Sx NEIGHBORS AND GROUPS
+section.
 The description is used when logging but has no further meaning to
 .Xr bgpd 8 .
 .Pp
@@ -596,23 +600,26 @@ inet 192.198.0.1 255.255.255.255
 up
 .Ed
 .Pp
-There are several VPN properties:
+The VPN properties are as follows:
 .Pp
 .Bl -tag -width Ds -compact
 .It Ic export-target Ar subtype Ar as-number : Ns Ar local
 .It Ic export-target Ar subtype Ar IP : Ns Ar local
-Specify an extended community which will be attached to announced networks.
+Classify announced networks by tagging them with an
+.Em extended community
+of the given arguments.
+The community
+.Ar subtype
+should be a
+.Em route target ,
+.Ic rt ,
+to ensure interoperability.
+The arguments are further detailed in the
+.Sx ATTRIBUTE SET
+section.
 More than one
 .Ic export-target
 can be specified.
-See also the
-.Sx ATTRIBUTE SET
-section for further information about the encoding.
-The
-.Ar subtype
-should be set to
-.Ar rt
-for best compatibility with other implementations.
 .Pp
 .It Xo
 .Ic fib-update
@@ -627,46 +634,47 @@ The default is
 .Pp
 .It Ic import-target Ar subtype Ar as-number : Ns Ar local
 .It Ic import-target Ar subtype Ar IP : Ns Ar local
-Only prefixes matching one of the specified
-.Ic import-targets
-will be imported into the rdomain.
+The rdomain imports only those prefixes tagged with an
+.Em extended community
+matching an
+.Ic import-target .
+The community
+.Ar subtype
+should be a
+.Em route target ,
+.Ic rt ,
+to ensure interoperability.
+The arguments are further detailed in the
+.Sx ATTRIBUTE SET
+section.
 More than one
 .Ic import-target
 can be specified.
-See also the
-.Sx ATTRIBUTE SET
-section for further information about the encoding of extended communities.
-The
-.Ar subtype
-should be set to
-.Ar rt
-for best compatibility with other implementations.
 .Pp
 .It Ic network Ar arguments ...
-Define which networks should be exported into this VPN.
-See also the
-.Ic nexthop
-section in
-.Sx GLOBAL CONFIGURATION
-for further information about the arguments.
+Announce the given networks within this VPN;
+see the
+.Sx NETWORK ANNOUNCEMENTS
+section.
 .Pp
 .It Ic rd Ar as-number : Ns Ar local
 .It Ic rd Ar IP : Ns Ar local
-The sole purpose of the Route Distinguisher
+The Route Distinguisher
 .Ic rd
-is to ensure that possible common prefixes are distinct between VPNs.
-The
+supplies BGP with namespaces to disambiguate VPN prefixes, as these needn't be
+globally unique.
+Unlike route targets, the
 .Ic rd
-is neither used to identify the origin of the prefix nor to control into
-which VPNs the prefix is distributed to.
+neither identifies the origin of the prefix nor controls into
+which VPNs the prefix is distributed.
 The
 .Ar as-number
 or
 .Ar IP
 of a
 .Ic rd
-should be set to a number or IP that was assigned by an appropriate authority.
-Whereas
+should be set to a number or IP that was assigned by an appropriate authority,
+whereas
 .Ar local
 can be chosen by the local operator.
 .El
@@ -674,9 +682,9 @@ can be chosen by the local operator.
 .Xr bgpd 8
 establishes TCP connections to other BGP speakers called
 .Em neighbors .
-Each neighbor is specified by a
+A neighbor and its properties are specified by a
 .Ic neighbor
-section, which allows properties to be set specifically for that neighbor:
+section:
 .Bd -literal -offset indent
 neighbor 10.0.0.2 {
 	remote-as 65002
@@ -684,14 +692,9 @@ neighbor 10.0.0.2 {
 }
 .Ed
 .Pp
-Multiple neighbors can be grouped together by a
+Neighbors placed within a
 .Ic group
-section.
-Each
-.Ic neighbor
-section within the
-.Ic group
-section inherits all properties from its group:
+section inherit the properties common to that group:
 .Bd -literal -offset indent
 group "peering AS65002" {
 	remote-as 65002
@@ -704,26 +707,24 @@ group "peering AS65002" {
 }
 .Ed
 .Pp
-Instead of the neighbor's IP address, an address/netmask pair may be given:
+An entire network of neighbors may be accommodated by specifying an
+address/netmask pair:
 .Bd -literal -offset indent
 neighbor 10.0.0.0/8
 .Ed
 .Pp
-In this case, the neighbor specification becomes a
-.Em template ,
-and if a neighbor connects from an IP address within the given network,
-the template is
-.Em cloned ,
-inheriting everything from the template but the remote address, which is
-replaced by the connecting neighbor's address.
-With a template specification it is valid to omit
+This is a
+.Em template
+that recognises as a neighbor any connection from within the given network.
+Such neighbors inherit their template's properties, except for their IP address.
+A template may omit
 .Ic remote-as ;
 .Xr bgpd 8
-will then accept any AS the neighbor presents in the
+then accepts any AS presented by the neighbor in the
 .Em OPEN
 message.
 .Pp
-There are several neighbor properties:
+The neighbor properties are as follows:
 .Pp
 .Bl -tag -width Ds -compact
 .It Xo
@@ -731,17 +732,18 @@ There are several neighbor properties:
 .Pq Ic IPv4 Ns | Ns Ic IPv6
 .Pq Ic none Ns | Ns Ic unicast Ns | Ns Ic vpn
 .Xc
-For the given address family, control which subsequent address families
+For the given address family, control which
+.Em subsequent address families
 are announced during the capabilities negotiation.
 Only routes for that address family and subsequent address families will be
 announced and processed.
 .Pp
 At the moment, only
-.Em none ,
+.Ic none ,
 which disables the announcement of that address family,
-.Em unicast ,
+.Ic unicast ,
 and
-.Em vpn ,
+.Ic vpn ,
 which allows the distribution of BGP MPLS VPNs, are supported.
 .Pp
 The default is
@@ -856,7 +858,9 @@ reports, for specifying neighbors, etc., but has no further meaning to
 .Xr bgpd 8 .
 .Pp
 .It Ic down Op Ar reason
-Do not start the session when bgpd comes up but stay in
+Do not start the session when
+.Xr bgpd 8
+comes up but stay in
 .Em IDLE .
 If the session is cleared at runtime, after a
 .Ic down
@@ -866,22 +870,18 @@ was configured at runtime, the
 is sent as Administrative Shutdown Communication.
 The
 .Ar reason
-cannot exceed 128 octets.
+cannot exceed 255 octets.
 .Pp
 .It Xo
 .Ic dump
 .Pq Ic all Ns | Ns Ic updates
 .Pq Ic in Ns | Ns Ic out
-.Ar file Op Ar timeout
+.Ar file Op Ar interval
 .Xc
-Do a peer specific MRT dump.
-Peer specific dumps are limited to
-.Ic all
-and
-.Ic updates .
+Dump ongoing BGP activity for a particular neighbor.
 See also the
 .Ic dump
-section in
+setting in
 .Sx GLOBAL CONFIGURATION .
 .Pp
 .It Xo
@@ -1144,18 +1144,15 @@ The default is
 .El
 .Sh FILTER
 .Xr bgpd 8
-has the ability to
-.Ic allow
-and
-.Ic deny
-.Em UPDATES
-based on
+filters all BGP
+.Em UPDATE
+messages, including its own announcements, and blocks them by default.
+Filter rules may match on neighbor, direction,
 .Em prefix
 or
 .Em AS path attributes .
-In addition,
-.Em UPDATES
-may also be modified by filter rules.
+Filter rules may also modify
+.Em AS path attributes .
 .Pp
 For each
 .Em UPDATE
@@ -1865,7 +1862,9 @@ will be adjusted by adding or subtracting
 otherwise it will be set to
 .Ar number .
 .Em Weight
-is a local non-transitive attribute and a bgpd-specific extension.
+is a local non-transitive attribute, and is a
+.Xr bgpd 8 Ns -specific
+extension.
 For prefixes with equally long paths, the prefix with the larger weight
 is selected.
 .El
@@ -1879,6 +1878,7 @@ configuration file
 .Xr strftime 3 ,
 .Xr ipsec 4 ,
 .Xr pf 4 ,
+.Xr rdomain 4 ,
 .Xr tcp 4 ,
 .Xr bgpctl 8 ,
 .Xr bgpd 8 ,

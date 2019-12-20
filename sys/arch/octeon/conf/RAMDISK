@@ -1,10 +1,8 @@
-#	$OpenBSD: RAMDISK,v 1.39 2019/01/12 16:59:38 visa Exp $
+#	$OpenBSD: RAMDISK,v 1.46 2019/11/04 14:58:40 visa Exp $
 
 machine		octeon mips64
 maxusers	4
 
-option		TIMEZONE=0
-option		DST=0
 option		SMALL_KERNEL
 option		NO_PROPOLICE
 option		BOOT_CONFIG
@@ -43,22 +41,28 @@ simplebus*	at iobus?
 
 octrtc0		at mainbus0
 
+octpcie*	at iobus0
+pci*		at octpcie?
 pcibus*		at iobus0
 pci*		at pcibus?
 ppb*		at pci?
 pci*		at ppb?
 
-cn30xxsmi*	at fdt?		# MDIO controller
+octsmi*		at fdt?		# MDIO controller
 com*		at fdt_octeon?
 octcib*		at fdt?		# Interrupt controller
 octcit*		at fdt?		# Interrupt controller v3
 octciu*		at fdt?		# Interrupt controller v1
 octgpio*	at fdt?		# GPIO controller
 octmmc*		at fdt?		# MMC host controller
+octpip*		at fdt?		# Packet input processing unit
 sdmmc*		at octmmc?	# SD/MMC bus
 
-cn30xxgmx*	at iobus? irq 48
-cnmac*		at cn30xxgmx?
+octgmx*		at octpip?
+cnmac*		at octgmx?
+
+ogxnexus*	at fdt?
+ogx*		at ogxnexus?
 
 pciide*		at pci? flags 0x0000
 wd*		at pciide? flags 0x0000
@@ -66,6 +70,9 @@ wd*		at pciide? flags 0x0000
 # AHCI controllers
 octsctl*	at fdt?
 ahci*		at octsctl?
+
+# NVMe controllers
+nvme*		at pci?
 
 dwctwo0		at iobus0 irq 56
 octuctl*	at fdt?
@@ -115,6 +122,7 @@ sd*		at scsibus?
 rgephy*		at mii?
 ukphy*		at mii?
 atphy*		at mii?
+eephy*		at mii?
 brswphy*	at mii?
 brgphy*		at mii?
 

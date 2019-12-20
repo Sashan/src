@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.c,v 1.587 2019/08/06 22:57:54 bluhm Exp $	*/
+/*	$OpenBSD: if.c,v 1.599 2019/11/14 01:02:02 dlg Exp $	*/
 /*	$NetBSD: if.c,v 1.35 1996/05/07 05:26:04 thorpej Exp $	*/
 
 /*
@@ -227,6 +227,10 @@ TAILQ_HEAD(, ifg_group) ifg_head = TAILQ_HEAD_INITIALIZER(ifg_head);
 
 LIST_HEAD(, if_clone) if_cloners = LIST_HEAD_INITIALIZER(if_cloners);
 int if_cloners_count;
+
+/* hooks should only be added, deleted, and run from a process context */
+struct mutex if_hooks_mtx = MUTEX_INITIALIZER(IPL_NONE);
+void	if_hooks_run(struct task_list *);
 
 struct timeout net_tick_to;
 void	net_tick(void *);
@@ -681,7 +685,7 @@ if_qstart_compat(struct ifqueue *ifq)
 	 * this provides compatability between the stack and the older
 	 * drivers by translating from the only queue they have
 	 * (ifp->if_snd) back to the interface and calling if_start.
- 	 */
+	 */
 
 	KERNEL_LOCK();
 	s = splnet();
@@ -1047,17 +1051,63 @@ if_netisr(void *unused)
 }
 
 void
+if_hooks_run(struct task_list *hooks)
+{
+	struct task *t, *nt;
+	struct task cursor = { .t_func = NULL };
+	void (*func)(void *);
+	void *arg;
+
+	mtx_enter(&if_hooks_mtx);
+	for (t = TAILQ_FIRST(hooks); t != NULL; t = nt) {
+		while (t->t_func == NULL) { /* skip cursors */
+			t = TAILQ_NEXT(t, t_entry);
+			if (t == NULL)
+				break;
+		}
+		func = t->t_func;
+		arg = t->t_arg;
+
+		TAILQ_INSERT_AFTER(hooks, t, &cursor, t_entry);
+		mtx_leave(&if_hooks_mtx);
+
+		(*func)(arg);
+
+		mtx_enter(&if_hooks_mtx);
+		nt = TAILQ_NEXT(&cursor, t_entry); /* avoid _Q_INVALIDATE */
+		TAILQ_REMOVE(hooks, &cursor, t_entry);
+	}
+	mtx_leave(&if_hooks_mtx);
+}
+
+void
 if_deactivate(struct ifnet *ifp)
 {
-	NET_LOCK();
 	/*
 	 * Call detach hooks from head to tail.  To make sure detach
 	 * hooks are executed in the reverse order they were added, all
 	 * the hooks have to be added to the head!
 	 */
-	dohooks(ifp->if_detachhooks, HOOK_REMOVE | HOOK_FREE);
 
+	NET_LOCK();
+	if_hooks_run(&ifp->if_detachhooks);
 	NET_UNLOCK();
+}
+
+void
+if_detachhook_add(struct ifnet *ifp, struct task *t)
+{
+	mtx_enter(&if_hooks_mtx);
+	TAILQ_INSERT_HEAD(&ifp->if_detachhooks, t, t_entry);
+	mtx_leave(&if_hooks_mtx);
+}
+
+void
+if_detachhook_del(struct ifnet *ifp, struct task *t)
+{
+	mtx_enter(&if_hooks_mtx);
+	TAILQ_REMOVE(&ifp->if_detachhooks, t, t_entry);
+	mtx_leave(&if_hooks_mtx);
 }
 
 /*
@@ -1133,9 +1183,9 @@ if_detach(struct ifnet *ifp)
 		}
 	}
 
-	free(ifp->if_addrhooks, M_TEMP, sizeof(*ifp->if_addrhooks));
-	free(ifp->if_linkstatehooks, M_TEMP, sizeof(*ifp->if_linkstatehooks));
-	free(ifp->if_detachhooks, M_TEMP, sizeof(*ifp->if_detachhooks));
+	KASSERT(TAILQ_EMPTY(&ifp->if_addrhooks));
+	KASSERT(TAILQ_EMPTY(&ifp->if_linkstatehooks));
+	KASSERT(TAILQ_EMPTY(&ifp->if_detachhooks));
 
 	for (i = 0; (dp = domains[i]) != NULL; i++) {
 		if (dp->dom_ifdetach && ifp->if_afdata[dp->dom_family])
@@ -1325,7 +1375,7 @@ if_clone_attach(struct if_clone *ifc)
 	 * we are called at kernel boot by main(), when pseudo devices are
 	 * being attached. The main() is the only guy which may alter the
 	 * if_cloners. While system is running and main() is done with
-	 * initialization, the if_cloners becomes immutable. 
+	 * initialization, the if_cloners becomes immutable.
 	 */
 	KASSERT(pdevinit_done == 0);
 	LIST_INSERT_HEAD(&if_cloners, ifc, ifc_list);
@@ -1637,7 +1687,24 @@ if_linkstate(struct ifnet *ifp)
 
 	rtm_ifchg(ifp);
 	rt_if_track(ifp);
-	dohooks(ifp->if_linkstatehooks, 0);
+
+	if_hooks_run(&ifp->if_linkstatehooks);
+}
+
+void
+if_linkstatehook_add(struct ifnet *ifp, struct task *t)
+{
+	mtx_enter(&if_hooks_mtx);
+	TAILQ_INSERT_HEAD(&ifp->if_linkstatehooks, t, t_entry);
+	mtx_leave(&if_hooks_mtx);
+}
+
+void
+if_linkstatehook_del(struct ifnet *ifp, struct task *t)
+{
+	mtx_enter(&if_hooks_mtx);
+	TAILQ_REMOVE(&ifp->if_linkstatehooks, t, t_entry);
+	mtx_leave(&if_hooks_mtx);
 }
 
 /*
@@ -1975,16 +2042,12 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		}
 
 		if (ISSET(ifr->ifr_flags, IFXF_INET6_NOSOII) &&
-		    !ISSET(ifp->if_xflags, IFXF_INET6_NOSOII)) {
+		    !ISSET(ifp->if_xflags, IFXF_INET6_NOSOII))
 			ifp->if_xflags |= IFXF_INET6_NOSOII;
-			in6_soiiupdate(ifp);
-		}
 
 		if (!ISSET(ifr->ifr_flags, IFXF_INET6_NOSOII) &&
-		    ISSET(ifp->if_xflags, IFXF_INET6_NOSOII)) {
+		    ISSET(ifp->if_xflags, IFXF_INET6_NOSOII))
 			ifp->if_xflags &= ~IFXF_INET6_NOSOII;
-			in6_soiiupdate(ifp);
-		}
 
 #endif	/* INET6 */
 
@@ -2189,6 +2252,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCDELMULTI:
 	case SIOCSIFMEDIA:
 	case SIOCSVNETID:
+	case SIOCDVNETID:
 	case SIOCSVNETFLOWID:
 	case SIOCSTXHPRIO:
 	case SIOCSRXHPRIO:
@@ -2202,6 +2266,33 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCSPWE3FAT:
 	case SIOCSPWE3NEIGHBOR:
 	case SIOCDPWE3NEIGHBOR:
+#if NBRIDGE > 0
+	case SIOCBRDGADD:
+	case SIOCBRDGDEL:
+	case SIOCBRDGSIFFLGS:
+	case SIOCBRDGSCACHE:
+	case SIOCBRDGADDS:
+	case SIOCBRDGDELS:
+	case SIOCBRDGSADDR:
+	case SIOCBRDGSTO:
+	case SIOCBRDGDADDR:
+	case SIOCBRDGFLUSH:
+	case SIOCBRDGADDL:
+	case SIOCBRDGSIFPROT:
+	case SIOCBRDGARL:
+	case SIOCBRDGFRL:
+	case SIOCBRDGSPRI:
+	case SIOCBRDGSHT:
+	case SIOCBRDGSFD:
+	case SIOCBRDGSMA:
+	case SIOCBRDGSIFPRIO:
+	case SIOCBRDGSIFCOST:
+	case SIOCBRDGSTXHC:
+	case SIOCBRDGSPROTO:
+	case SIOCSWGDPID:
+	case SIOCSWSPORTNO:
+	case SIOCSWGMAXFLOW:
+#endif
 		if ((error = suser(p)) != 0)
 			break;
 		/* FALLTHROUGH */
@@ -2209,11 +2300,30 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		error = ((*so->so_proto->pr_usrreq)(so, PRU_CONTROL,
 			(struct mbuf *) cmd, (struct mbuf *) data,
 			(struct mbuf *) ifp, p));
-		if (error == EOPNOTSUPP) {
-			NET_LOCK();
-			error = ((*ifp->if_ioctl)(ifp, cmd, data));
-			NET_UNLOCK();
+		if (error != EOPNOTSUPP)
+			break;
+		switch (cmd) {
+		case SIOCAIFADDR:
+		case SIOCDIFADDR:
+		case SIOCSIFADDR:
+		case SIOCSIFNETMASK:
+		case SIOCSIFDSTADDR:
+		case SIOCSIFBRDADDR:
+#ifdef INET6
+		case SIOCAIFADDR_IN6:
+		case SIOCDIFADDR_IN6:
+#endif
+			error = suser(p);
+			break;
+		default:
+			error = 0;
+			break;
 		}
+		if (error)
+			break;
+		NET_LOCK();
+		error = ((*ifp->if_ioctl)(ifp, cmd, data));
+		NET_UNLOCK();
 		break;
 	}
 
@@ -2673,6 +2783,10 @@ if_delgroup(struct ifnet *ifp, const char *groupname)
 		free(ifgm, M_TEMP, sizeof(*ifgm));
 	}
 
+#if NPF > 0
+	pfi_group_change(groupname);
+#endif
+
 	if (--ifgl->ifgl_group->ifg_refcnt == 0) {
 		TAILQ_REMOVE(&ifg_head, ifgl->ifgl_group, ifg_next);
 #if NPF > 0
@@ -2682,10 +2796,6 @@ if_delgroup(struct ifnet *ifp, const char *groupname)
 	}
 
 	free(ifgl, M_TEMP, sizeof(*ifgl));
-
-#if NPF > 0
-	pfi_group_change(groupname);
-#endif
 
 	return (0);
 }
@@ -2836,9 +2946,9 @@ if_getgrouplist(caddr_t data)
 			return (EINVAL);
 		bzero(&ifgrq, sizeof ifgrq);
 		strlcpy(ifgrq.ifgrq_group, ifg->ifg_group,
-                    sizeof(ifgrq.ifgrq_group));
+		    sizeof(ifgrq.ifgrq_group));
 		if ((error = copyout((caddr_t)&ifgrq, (caddr_t)ifgp,
-                    sizeof(struct ifg_req))))
+		    sizeof(struct ifg_req))))
 			return (error);
 		len -= sizeof(ifgrq);
 		ifgp++;
@@ -3043,7 +3153,7 @@ ifnewlladdr(struct ifnet *ifp)
 		ifa = &in6ifa_ifpforlinklocal(ifp, 0)->ia_ifa;
 		if (ifa) {
 			in6_purgeaddr(ifa);
-			dohooks(ifp->if_addrhooks, 0);
+			if_hooks_run(&ifp->if_addrhooks);
 			in6_ifattach(ifp);
 		}
 	}
@@ -3055,6 +3165,28 @@ ifnewlladdr(struct ifnet *ifp)
 		(*ifp->if_ioctl)(ifp, SIOCSIFFLAGS, (caddr_t)&ifrq);
 	}
 	splx(s);
+}
+
+void
+if_addrhook_add(struct ifnet *ifp, struct task *t)
+{
+	mtx_enter(&if_hooks_mtx);
+	TAILQ_INSERT_TAIL(&ifp->if_addrhooks, t, t_entry);
+	mtx_leave(&if_hooks_mtx);
+}
+
+void
+if_addrhook_del(struct ifnet *ifp, struct task *t)
+{
+	mtx_enter(&if_hooks_mtx);
+	TAILQ_REMOVE(&ifp->if_addrhooks, t, t_entry);
+	mtx_leave(&if_hooks_mtx);
+}
+
+void
+if_addrhooks_run(struct ifnet *ifp)
+{
+	if_hooks_run(&ifp->if_addrhooks);
 }
 
 int net_ticks;

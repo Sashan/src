@@ -1,4 +1,4 @@
-/*	$OpenBSD: namei.h,v 1.42 2019/08/02 08:12:35 bluhm Exp $	*/
+/*	$OpenBSD: namei.h,v 1.44 2019/11/29 20:58:17 guenther Exp $	*/
 /*	$NetBSD: namei.h,v 1.11 1996/02/09 18:25:20 christos Exp $	*/
 
 /*
@@ -208,8 +208,8 @@ int unveil_add(struct proc *, struct nameidata *, const char *);
 void unveil_removevnode(struct vnode *);
 void unveil_free_traversed_vnodes(struct nameidata *);
 ssize_t unveil_find_cover(struct vnode *, struct proc *);
-struct unveil *unveil_lookup(struct vnode *, struct proc *, ssize_t *);
-void unveil_start_relative(struct proc *, struct nameidata *);
+struct unveil *unveil_lookup(struct vnode *, struct process *, ssize_t *);
+void unveil_start_relative(struct proc *, struct nameidata *, struct vnode *);
 void unveil_check_component(struct proc *, struct nameidata *, struct vnode *);
 int unveil_check_final(struct proc *, struct nameidata *);
 

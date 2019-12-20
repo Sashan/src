@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_urtwn.c,v 1.83 2019/03/11 06:19:33 kevlo Exp $	*/
+/*	$OpenBSD: if_urtwn.c,v 1.85 2019/11/16 14:08:31 kevlo Exp $	*/
 
 /*-
  * Copyright (c) 2010 Damien Bergamini <damien.bergamini@free.fr>
@@ -380,7 +380,8 @@ void		urtwn_set_key_cb(struct urtwn_softc *, void *);
 void		urtwn_delete_key(struct ieee80211com *,
 		    struct ieee80211_node *, struct ieee80211_key *);
 void		urtwn_delete_key_cb(struct urtwn_softc *, void *);
-void		urtwn_rx_frame(struct urtwn_softc *, uint8_t *, int);
+void		urtwn_rx_frame(struct urtwn_softc *, uint8_t *, int,
+		    struct mbuf_list *);
 void		urtwn_rxeof(struct usbd_xfer *, void *,
 		    usbd_status);
 void		urtwn_txeof(struct usbd_xfer *, void *,
@@ -1083,7 +1084,8 @@ urtwn_delete_key_cb(struct urtwn_softc *sc, void *arg)
 }
 
 void
-urtwn_rx_frame(struct urtwn_softc *sc, uint8_t *buf, int pktlen)
+urtwn_rx_frame(struct urtwn_softc *sc, uint8_t *buf, int pktlen,
+    struct mbuf_list *ml)
 {
 	struct ieee80211com *ic = &sc->sc_sc.sc_ic;
 	struct ifnet *ifp = &ic->ic_if;
@@ -1194,7 +1196,7 @@ urtwn_rx_frame(struct urtwn_softc *sc, uint8_t *buf, int pktlen)
 	rxi.rxi_flags = 0;
 	rxi.rxi_rssi = rssi;
 	rxi.rxi_tstamp = 0;	/* Unused. */
-	ieee80211_input(ifp, m, ni, &rxi);
+	ieee80211_inputm(ifp, m, ni, &rxi, ml);
 	/* Node is no longer needed. */
 	ieee80211_release_node(ic, ni);
 	splx(s);
@@ -1204,8 +1206,10 @@ void
 urtwn_rxeof(struct usbd_xfer *xfer, void *priv,
     usbd_status status)
 {
+	struct mbuf_list ml = MBUF_LIST_INITIALIZER();
 	struct urtwn_rx_data *data = priv;
 	struct urtwn_softc *sc = data->sc;
+	struct ieee80211com *ic = &sc->sc_sc.sc_ic;
 	struct r92c_rx_desc_usb *rxd;
 	uint32_t rxdw0;
 	uint8_t *buf;
@@ -1298,13 +1302,14 @@ urtwn_rxeof(struct usbd_xfer *xfer, void *priv,
 			break;
 
 		/* Process 802.11 frame. */
-		urtwn_rx_frame(sc, buf, pktlen);
+		urtwn_rx_frame(sc, buf, pktlen, &ml);
 
 		/* Handle chunk alignment. */
 		totlen = (totlen + align) & ~align;
 		buf += totlen;
 		len -= totlen;
 	}
+	if_input(&ic->ic_if, &ml);
 
  resubmit:
 	/* Setup a new transfer. */
@@ -1698,21 +1703,6 @@ urtwn_r92c_power_on(struct urtwn_softc *sc)
 	/* Release RF digital isolation. */
 	urtwn_write_2(sc, R92C_SYS_ISO_CTRL,
 	    urtwn_read_2(sc, R92C_SYS_ISO_CTRL) & ~R92C_SYS_ISO_CTRL_DIOR);
-
-	/* Initialize MAC. */
-	urtwn_write_1(sc, R92C_APSD_CTRL,
-	    urtwn_read_1(sc, R92C_APSD_CTRL) & ~R92C_APSD_CTRL_OFF);
-	for (ntries = 0; ntries < 200; ntries++) {
-		if (!(urtwn_read_1(sc, R92C_APSD_CTRL) &
-		    R92C_APSD_CTRL_OFF_STATUS))
-			break;
-		DELAY(5);
-	}
-	if (ntries == 200) {
-		printf("%s: timeout waiting for MAC initialization\n",
-		    sc->sc_dev.dv_xname);
-		return (ETIMEDOUT);
-	}
 
 	/* Enable MAC DMA/WMAC/SCHEDULE/SEC blocks. */
 	reg = urtwn_read_2(sc, R92C_CR);

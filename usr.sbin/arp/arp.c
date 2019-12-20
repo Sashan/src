@@ -1,4 +1,4 @@
-/*	$OpenBSD: arp.c,v 1.83 2019/06/28 13:32:46 deraadt Exp $ */
+/*	$OpenBSD: arp.c,v 1.88 2019/09/16 20:49:28 kn Exp $ */
 /*	$NetBSD: arp.c,v 1.12 1995/04/24 13:25:18 cgd Exp $ */
 
 /*
@@ -73,8 +73,8 @@ static char *ether_str(struct sockaddr_dl *);
 int wake(const char *ether_addr, const char *iface);
 int file(char *);
 int get(const char *);
-int getinetaddr(const char *, struct in_addr *);
 void getsocket(void);
+int parse_host(const char *, struct in_addr *);
 int rtget(struct sockaddr_inarp **, struct sockaddr_dl **);
 int rtmsg(int);
 int set(int, char **);
@@ -88,18 +88,10 @@ static int aflag;	/* do it for all entries */
 static int rtsock = -1;
 static int rdomain;
 
-extern int h_errno;
-
 /* ROUNDUP() is nasty, but it is identical to what's in the kernel. */
-#define ROUNDUP(a)					\
+#define ROUNDUP(a) \
 	((a) > 0 ? (1 + (((a) - 1) | (sizeof(long) - 1))) : sizeof(long))
-
-/* which function we're supposed to do */
-#define F_GET		1
-#define F_SET		2
-#define F_FILESET	3
-#define F_DELETE	4
-#define F_WAKE		5
+#define ADVANCE(x, n) (x += ROUNDUP((n)->sa_len))
 
 int
 main(int argc, char *argv[])
@@ -119,22 +111,15 @@ main(int argc, char *argv[])
 			nflag = 1;
 			break;
 		case 'd':
-			if (func)
-				usage();
-			func = F_DELETE;
-			break;
 		case 's':
+		case 'f':
+		case 'W':
 			if (func)
 				usage();
-			func = F_SET;
+			func = ch;
 			break;
 		case 'F':
 			replace = 1;
-			break;
-		case 'f':
-			if (func)
-				usage();
-			func = F_FILESET;
 			break;
 		case 'V':
 			rdomain = strtonum(optarg, 0, RT_TABLEID_MAX, &errstr);
@@ -142,11 +127,6 @@ main(int argc, char *argv[])
 				warn("bad rdomain: %s", errstr);
 				usage();
 			}
-			break;
-		case 'W':
-			if (func)
-				usage();
-			func = F_WAKE;
 			break;
 		default:
 			usage();
@@ -156,11 +136,8 @@ main(int argc, char *argv[])
 	argc -= optind;
 	argv += optind;
 
-	if (!func)
-		func = F_GET;
-
 	switch (func) {
-	case F_GET:
+	case 0:
 		if (aflag && argc == 0)
 			dump();
 		else if (!aflag && argc == 1)
@@ -168,14 +145,14 @@ main(int argc, char *argv[])
 		else
 			usage();
 		break;
-	case F_SET:
+	case 's':
 		if (argc < 2 || argc > 5)
 			usage();
 		if (replace)
 			delete(argv[0]);
 		error = set(argc, argv) ? 1 : 0;
 		break;
-	case F_DELETE:
+	case 'd':
 		if (aflag && argc == 0)
 			search(0, nuke_entry);
 		else if (!aflag && argc == 1)
@@ -183,12 +160,12 @@ main(int argc, char *argv[])
 		else
 			usage();
 		break;
-	case F_FILESET:
+	case 'f':
 		if (argc != 1)
 			usage();
 		error = file(argv[0]);
 		break;
-	case F_WAKE:
+	case 'W':
 		if (aflag || nflag || replace || rdomain > 0)
 			usage();
 		if (argc == 1)
@@ -254,10 +231,35 @@ getsocket(void)
 		err(1, "pledge");
 }
 
+int
+parse_host(const char *host, struct in_addr *in)
+{
+	struct addrinfo hints, *res;
+	struct sockaddr_in *sin;
+	int gai_error;
+
+	bzero(&hints, sizeof(hints));
+	hints.ai_family = AF_INET;
+	if (nflag)
+		hints.ai_flags = AI_NUMERICHOST;
+
+	gai_error = getaddrinfo(host, NULL, &hints, &res);
+	if (gai_error) {
+		warnx("%s: %s", host, gai_strerror(gai_error));
+		return 1;
+	}
+
+	sin = (struct sockaddr_in *)res->ai_addr;
+	*in = sin->sin_addr;
+
+	freeaddrinfo(res);
+	return 0;
+}
+
 struct sockaddr_in	so_mask = { 8, 0, 0, { 0xffffffff } };
 struct sockaddr_inarp	blank_sin = { sizeof(blank_sin), AF_INET }, sin_m;
 struct sockaddr_dl	blank_sdl = { sizeof(blank_sdl), AF_LINK }, sdl_m;
-struct sockaddr_dl	ifp_m = { sizeof(&ifp_m), AF_LINK };
+struct sockaddr_dl	ifp_m = { sizeof(ifp_m), AF_LINK };
 time_t			expire_time;
 int			flags, export_only, doing_proxy, found_entry;
 struct	{
@@ -274,7 +276,7 @@ set(int argc, char *argv[])
 	struct sockaddr_inarp *sin;
 	struct sockaddr_dl *sdl;
 	struct rt_msghdr *rtm;
-	char *eaddr = argv[1], *host = argv[0];
+	const char *host = argv[0], *eaddr = argv[1];
 	struct ether_addr *ea;
 
 	sin = &sin_m;
@@ -285,7 +287,7 @@ set(int argc, char *argv[])
 	argv += 2;
 	sdl_m = blank_sdl;		/* struct copy */
 	sin_m = blank_sin;		/* struct copy */
-	if (getinetaddr(host, &sin->sin_addr) == -1)
+	if (parse_host(host, &sin->sin_addr))
 		return (1);
 	ea = ether_aton(eaddr);
 	if (ea == NULL)
@@ -374,8 +376,8 @@ get(const char *host)
 
 	sin = &sin_m;
 	sin_m = blank_sin;		/* struct copy */
-	if (getinetaddr(host, &sin->sin_addr) == -1)
-		exit(1);
+	if (parse_host(host, &sin->sin_addr))
+		return (1);
 
 	printf("%-*.*s %-*.*s %*.*s %-9.9s %5s\n",
 	    W_ADDR, W_ADDR, "Host", W_LL, W_LL, "Ethernet Address",
@@ -405,7 +407,7 @@ delete(const char *host)
 
 	getsocket();
 	sin_m = blank_sin;		/* struct copy */
-	if (getinetaddr(host, &sin->sin_addr) == -1)
+	if (parse_host(host, &sin->sin_addr))
 		return (1);
 tryagain:
 	if (rtget(&sin, &sdl)) {
@@ -628,7 +630,6 @@ rtmsg(int cmd)
 	switch (cmd) {
 	default:
 		errx(1, "internal wrong cmd");
-		/*NOTREACHED*/
 	case RTM_ADD:
 		rtm->rtm_addrs |= RTA_GATEWAY;
 		rtm->rtm_rmx.rmx_expire = expire_time;
@@ -648,10 +649,10 @@ rtmsg(int cmd)
 		rtm->rtm_addrs |= (RTA_DST | RTA_IFP);
 	}
 
-#define NEXTADDR(w, s)					\
-	if (rtm->rtm_addrs & (w)) {			\
-		memcpy(cp, &s, sizeof(s));		\
-		cp += ROUNDUP(sizeof(s));		\
+#define NEXTADDR(w, s)							\
+	if (rtm->rtm_addrs & (w)) {					\
+		memcpy(cp, &(s), sizeof(s));				\
+		ADVANCE(cp, (struct sockaddr *)&(s));			\
 	}
 
 	NEXTADDR(RTA_DST, sin_m);
@@ -708,7 +709,7 @@ rtget(struct sockaddr_inarp **sinp, struct sockaddr_dl **sdlp)
 				default:
 					break;
 				}
-				cp += ROUNDUP(sa->sa_len);
+				ADVANCE(cp, sa);
 			}
 		}
 	}
@@ -719,21 +720,6 @@ rtget(struct sockaddr_inarp **sinp, struct sockaddr_dl **sdlp)
 	*sinp = sin;
 	*sdlp = sdl;
 
-	return (0);
-}
-
-int
-getinetaddr(const char *host, struct in_addr *inap)
-{
-	struct hostent *hp;
-
-	if (inet_aton(host, inap) == 1)
-		return (0);
-	if ((hp = gethostbyname(host)) == NULL) {
-		warnx("%s: %s", host, hstrerror(h_errno));
-		return (-1);
-	}
-	memcpy(inap, hp->h_addr, sizeof(*inap));
 	return (0);
 }
 

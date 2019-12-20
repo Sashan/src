@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1999-2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,12 +14,12 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: lfsr.h,v 1.11.18.2 2005/04/29 00:16:56 marka Exp $ */
+/* $Id: lfsr.h,v 1.3 2019/12/17 01:46:35 sthen Exp $ */
 
 #ifndef ISC_LFSR_H
 #define ISC_LFSR_H 1
 
-/*! \file */
+/*! \file isc/lfsr.h */
 
 #include <isc/lang.h>
 #include <isc/types.h>
@@ -54,7 +53,7 @@ struct isc_lfsr {
 ISC_LANG_BEGINDECLS
 
 
-void 
+void
 isc_lfsr_init(isc_lfsr_t *lfsr, isc_uint32_t state, unsigned int bits,
 		   isc_uint32_t tap, unsigned int count,
 		   isc_lfsrreseed_t reseed, void *arg);
@@ -75,7 +74,7 @@ isc_lfsr_init(isc_lfsr_t *lfsr, isc_uint32_t state, unsigned int bits,
  *\li	tap != 0
  */
 
-void 
+void
 isc_lfsr_generate(isc_lfsr_t *lfsr, void *data, unsigned int count);
 /*%<
  * Returns "count" bytes of data from the LFSR.
@@ -89,7 +88,7 @@ isc_lfsr_generate(isc_lfsr_t *lfsr, void *data, unsigned int count);
  *\li	count > 0.
  */
 
-void 
+void
 isc_lfsr_skip(isc_lfsr_t *lfsr, unsigned int skip);
 /*%<
  * Skip "skip" states.
@@ -99,7 +98,7 @@ isc_lfsr_skip(isc_lfsr_t *lfsr, unsigned int skip);
  *\li	lfsr be valid.
  */
 
-isc_uint32_t 
+isc_uint32_t
 isc_lfsr_generate32(isc_lfsr_t *lfsr1, isc_lfsr_t *lfsr2);
 /*%<
  * Given two LFSRs, use the current state from each to skip entries in the

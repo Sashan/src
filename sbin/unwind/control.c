@@ -1,4 +1,4 @@
-/*	$OpenBSD: control.c,v 1.10 2019/03/01 08:02:25 florian Exp $	*/
+/*	$OpenBSD: control.c,v 1.15 2019/12/18 09:18:27 florian Exp $	*/
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -21,6 +21,8 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/un.h>
+
+#include <net/route.h>
 
 #include <errno.h>
 #include <event.h>
@@ -257,10 +259,6 @@ control_dispatch_imsg(int fd, short event, void *bula)
 		case IMSG_CTL_RELOAD:
 			frontend_imsg_compose_main(imsg.hdr.type, 0, NULL, 0);
 			break;
-		case IMSG_CTL_RECHECK_CAPTIVEPORTAL:
-			frontend_imsg_compose_resolver(imsg.hdr.type,
-			    imsg.hdr.pid, NULL, 0);
-			break;
 		case IMSG_CTL_LOG_VERBOSE:
 			if (IMSG_DATA_SIZE(imsg) != sizeof(verbose))
 				break;
@@ -270,18 +268,17 @@ control_dispatch_imsg(int fd, short event, void *bula)
 			    imsg.data, IMSG_DATA_SIZE(imsg));
 			frontend_imsg_compose_resolver(imsg.hdr.type,
 			    imsg.hdr.pid, imsg.data, IMSG_DATA_SIZE(imsg));
-			frontend_imsg_compose_captiveportal(imsg.hdr.type,
-			    imsg.hdr.pid, imsg.data,  IMSG_DATA_SIZE(imsg));
 
 			memcpy(&verbose, imsg.data, sizeof(verbose));
 			log_setverbose(verbose);
 			break;
 		case IMSG_CTL_STATUS:
-			if (IMSG_DATA_SIZE(imsg) !=
-			    sizeof(enum uw_resolver_type))
+		case IMSG_CTL_AUTOCONF:
+		case IMSG_CTL_MEM:
+			if (IMSG_DATA_SIZE(imsg) != 0)
 				break;
-			frontend_imsg_compose_resolver(imsg.hdr.type, 0,
-			    imsg.data, IMSG_DATA_SIZE(imsg));
+			frontend_imsg_compose_resolver(imsg.hdr.type, 0, NULL,
+			    0);
 			break;
 		default:
 			log_debug("%s: error handling imsg %d", __func__,

@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: PackingElement.pm,v 1.271 2019/07/05 06:21:14 espie Exp $
+# $OpenBSD: PackingElement.pm,v 1.274 2019/11/10 16:43:11 espie Exp $
 #
 # Copyright (c) 2003-2014 Marc Espie <espie@openbsd.org>
 #
@@ -660,8 +660,11 @@ sub format
 	return 1;
 }
 
-package OpenBSD::PackingElement::Lib;
+package OpenBSD::PackingElement::FileWithDebugInfo;
 our @ISA=qw(OpenBSD::PackingElement::FileBase);
+
+package OpenBSD::PackingElement::Lib;
+our @ISA=qw(OpenBSD::PackingElement::FileWithDebugInfo);
 
 our $todo = 0;
 
@@ -686,6 +689,24 @@ sub parse
 
 sub is_a_library() { 1 }
 
+package OpenBSD::PackingElement::Binary;
+our @ISA=qw(OpenBSD::PackingElement::FileWithDebugInfo);
+
+sub keyword() { "bin" }
+__PACKAGE__->register_with_factory;
+
+package OpenBSD::PackingElement::StaticLib;
+our @ISA=qw(OpenBSD::PackingElement::FileWithDebugInfo);
+
+sub keyword() { "static-lib" }
+__PACKAGE__->register_with_factory;
+
+package OpenBSD::PackingElement::SharedObject;
+our @ISA=qw(OpenBSD::PackingElement::FileWithDebugInfo);
+
+sub keyword() { "so" }
+__PACKAGE__->register_with_factory;
+
 package OpenBSD::PackingElement::PkgConfig;
 our @ISA=qw(OpenBSD::PackingElement::FileBase);
 
@@ -696,12 +717,6 @@ package OpenBSD::PackingElement::LibtoolLib;
 our @ISA=qw(OpenBSD::PackingElement::FileBase);
 
 sub keyword() { "ltlib" }
-__PACKAGE__->register_with_factory;
-
-package OpenBSD::PackingElement::Binary;
-our @ISA=qw(OpenBSD::PackingElement::FileBase);
-
-sub keyword() { "bin" }
 __PACKAGE__->register_with_factory;
 
 # Comment is very special
@@ -1045,7 +1060,7 @@ OpenBSD::Auto::cache(spec,
 	return OpenBSD::LibSpec->from_string($self->name);
     });
 
-package OpeNBSD::PackingElement::Libset;
+package OpenBSD::PackingElement::Libset;
 our @ISA=qw(OpenBSD::PackingElement::Meta);
 
 sub category() { "libset" }
@@ -1662,24 +1677,33 @@ sub reload
 
 sub update_fontalias
 {
-	my $dirname = shift;
-	my @aliases;
+	my ($state, $dirname) = @_;
 
-	if (-d "$dirname") {
-		for my $alias (glob "$dirname/fonts.alias-*") {
-			open my $f ,'<', $alias or next;
-			push(@aliases, <$f>);
-			close $f;
+	my $alias_name = "$dirname/fonts.alias";
+	if ($state->verbose > 1) {
+		$state->say("Assembling #1 from #2", 
+		    $alias_name, "$alias_name-*");
+	}
+
+	if (open my $out, '>', $alias_name) {
+		for my $alias (glob "$alias_name-*") {
+			if (open my $f ,'<', $alias) {
+				print {$out} <$f>;
+				close $f;
+			} else {
+				$state->errsay("Couldn't read #1: #2", 
+				    $alias, $!);
+			}
 		}
-		open my $f, '>', "$dirname/fonts.alias";
-		print $f @aliases;
-		close $f;
+		close $out;
+	} else {
+		$state->errsay("Couldn't write #1: #2", $alias_name, $!);
 	}
 }
 
 sub restore_fontdir
 {
-	my ($dirname, $state) = @_;
+	my ($state, $dirname) = @_;
 	if (-f "$dirname/fonts.dir.dist") {
 
 		unlink("$dirname/fonts.dir");
@@ -1702,18 +1726,18 @@ sub run_if_exists
 sub finish
 {
 	my ($class, $state) = @_;
+	return if $state->{not};
+
 	my @l = keys %{$state->{recorder}->{fonts_todo}};
+	@l = grep {-d $_} @l;
 
 	if (@l != 0) {
 		require OpenBSD::Error;
 
-		return if $state->{not};
-		map { update_fontalias($_) } @l;
-		if (-d "@l") {
-			run_if_exists($state, OpenBSD::Paths->mkfontscale, '--', @l);
-			run_if_exists($state, OpenBSD::Paths->mkfontdir, '--', @l);
-			map { restore_fontdir($_, $state) } @l;
-		}
+		map { update_fontalias($state, $_) } @l;
+		run_if_exists($state, OpenBSD::Paths->mkfontscale, '--', @l);
+		run_if_exists($state, OpenBSD::Paths->mkfontdir, '--', @l);
+		map { restore_fontdir($state, $_) } @l;
 
 		run_if_exists($state, OpenBSD::Paths->fc_cache, '--', @l);
 	}

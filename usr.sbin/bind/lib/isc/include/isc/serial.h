@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1999-2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: serial.h,v 1.10.18.2 2005/04/29 00:17:02 marka Exp $ */
+/* $Id: serial.h,v 1.3 2019/12/17 01:46:35 sthen Exp $ */
 
 #ifndef ISC_SERIAL_H
 #define ISC_SERIAL_H 1
@@ -23,8 +22,8 @@
 #include <isc/lang.h>
 #include <isc/types.h>
 
-/*! \file
- *	\brief Implement 32 bit serial space arithmetic comparision functions.
+/*! \file isc/serial.h
+ *	\brief Implement 32 bit serial space arithmetic comparison functions.
  *	Note: Undefined results are returned as ISC_FALSE.
  */
 

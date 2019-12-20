@@ -1,4 +1,4 @@
-/*	$OpenBSD: nd6_nbr.c,v 1.127 2018/12/20 10:28:58 claudio Exp $	*/
+/*	$OpenBSD: nd6_nbr.c,v 1.129 2019/11/29 16:41:02 nayden Exp $	*/
 /*	$KAME: nd6_nbr.c,v 1.61 2001/02/10 16:06:14 jinmei Exp $	*/
 
 /*
@@ -377,9 +377,9 @@ nd6_ns_output(struct ifnet *ifp, struct in6_addr *daddr6,
 	maxlen += (sizeof(struct nd_opt_hdr) + ifp->if_addrlen + 7) & ~7;
 #ifdef DIAGNOSTIC
 	if (max_linkhdr + maxlen >= MCLBYTES) {
-		printf("nd6_ns_output: max_linkhdr + maxlen >= MCLBYTES "
-		    "(%d + %d > %d)\n", max_linkhdr, maxlen, MCLBYTES);
-		panic("nd6_ns_output: insufficient MCLBYTES");
+		printf("%s: max_linkhdr + maxlen >= MCLBYTES "
+		    "(%d + %d > %d)\n", __func__, max_linkhdr, maxlen, MCLBYTES);
+		panic("%s: insufficient MCLBYTES", __func__);
 		/* NOTREACHED */
 	}
 #endif
@@ -559,7 +559,6 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 	struct ifnet *ifp;
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
 	struct nd_neighbor_advert *nd_na;
-	struct in6_addr saddr6 = ip6->ip6_src;
 	struct in6_addr daddr6 = ip6->ip6_dst;
 	struct in6_addr taddr6;
 	int flags;
@@ -675,14 +674,6 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 		    "nd6_na_input: duplicate IP6 address %s\n",
 		    inet_ntop(AF_INET6, &taddr6, addr, sizeof(addr)));
 		goto freeit;
-	}
-	/*
-	 * Make sure the source address is from a neighbor's address.
-	 */
-	if (!nd6_isneighbor(ifp, &saddr6)) {
-		nd6log((LOG_INFO, "nd6_na_input: "
-		    "ND packet from non-neighbor\n"));
-		goto bad;
 	}
 
 	if (lladdr && ((ifp->if_addrlen + 2 + 7) & ~7) != lladdrlen) {
@@ -902,9 +893,9 @@ nd6_na_output(struct ifnet *ifp, struct in6_addr *daddr6,
 	maxlen += (sizeof(struct nd_opt_hdr) + ifp->if_addrlen + 7) & ~7;
 #ifdef DIAGNOSTIC
 	if (max_linkhdr + maxlen >= MCLBYTES) {
-		printf("nd6_na_output: max_linkhdr + maxlen >= MCLBYTES "
-		    "(%d + %d > %d)\n", max_linkhdr, maxlen, MCLBYTES);
-		panic("nd6_na_output: insufficient MCLBYTES");
+		printf("%s: max_linkhdr + maxlen >= MCLBYTES "
+		    "(%d + %d > %d)\n", __func__, max_linkhdr, maxlen, MCLBYTES);
+		panic("%s: insufficient MCLBYTES", __func__);
 		/* NOTREACHED */
 	}
 #endif
@@ -1332,7 +1323,7 @@ nd6_dad_ns_input(struct ifaddr *ifa)
 	int duplicate;
 
 	if (!ifa)
-		panic("ifa == NULL in nd6_dad_ns_input");
+		panic("%s: ifa == NULL", __func__);
 
 	duplicate = 0;
 	dp = nd6_dad_find(ifa);

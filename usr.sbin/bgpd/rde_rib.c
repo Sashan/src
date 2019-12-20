@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde_rib.c,v 1.206 2019/08/14 11:57:21 claudio Exp $ */
+/*	$OpenBSD: rde_rib.c,v 1.210 2019/10/30 05:27:50 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Claudio Jeker <claudio@openbsd.org>
@@ -256,7 +256,7 @@ rib_free(struct rib *rib)
 				struct bgpd_addr addr;
 
 				pt_getaddr(p->pt, &addr);
-				/* Commit is done in peer_down() */
+				/* Commit is done in rde_reload_done() */
 				rde_send_pftable(asp->pftableid, &addr,
 				    p->pt->prefixlen, 1);
 			}
@@ -971,10 +971,8 @@ prefix_update(struct rib *rib, struct rde_peer *peer, struct filterstate *state,
 	struct rde_community	*comm, *ncomm = &state->communities;
 	struct prefix		*p;
 
-	if (nasp->pftableid) {
+	if (nasp->pftableid)
 		rde_send_pftable(nasp->pftableid, prefix, prefixlen, 0);
-		rde_send_pftable_commit();
-	}
 
 	/*
 	 * First try to find a prefix in the specified RIB.
@@ -1113,11 +1111,9 @@ prefix_withdraw(struct rib *rib, struct rde_peer *peer,
 		return (0);
 
 	asp = prefix_aspath(p);
-	if (asp && asp->pftableid) {
+	if (asp && asp->pftableid)
 		/* only prefixes in the local RIB were pushed into pf */
 		rde_send_pftable(asp->pftableid, prefix, prefixlen, 1);
-		rde_send_pftable_commit();
-	}
 
 	prefix_destroy(p);
 
@@ -1173,6 +1169,7 @@ prefix_adjout_update(struct rde_peer *peer, struct filterstate *state,
 				/* nothing changed */
 				p->validation_state = vstate;
 				p->lastchange = time(NULL);
+				p->flags &= ~PREFIX_FLAG_STALE;
 				return 0;
 			}
 
@@ -1195,7 +1192,7 @@ prefix_adjout_update(struct rde_peer *peer, struct filterstate *state,
 
 		p->pt = pt_get(prefix, prefixlen);
 		if (p->pt == NULL)
-			fatalx("%s: update for non existing prefix", __func__);
+			p->pt = pt_add(prefix, prefixlen);
 		pt_ref(p->pt);
 		p->peer = peer;
 
@@ -1239,11 +1236,23 @@ int
 prefix_adjout_withdraw(struct rde_peer *peer, struct bgpd_addr *prefix,
     int prefixlen)
 {
-	struct prefix		*p;
+	struct prefix *p;
 
 	p = prefix_lookup(peer, prefix, prefixlen);
 	if (p == NULL)		/* Got a dummy withdrawn request. */
 		return (0);
+
+	/* already a withdraw, shortcut */
+	if (p->flags & PREFIX_FLAG_WITHDRAW) {
+		p->lastchange = time(NULL);
+		p->flags &= ~PREFIX_FLAG_STALE;
+		return (0);
+	}
+	/* pending update just got withdrawn */
+	if (p->flags & PREFIX_FLAG_UPDATE)
+		RB_REMOVE(prefix_tree, &peer->updates[p->pt->aid], p);
+	/* nothing needs to be done for PREFIX_FLAG_DEAD and STALE */
+	p->flags &= ~PREFIX_FLAG_MASK;
 
 	/* remove nexthop ref ... */
 	nexthop_unref(p->nexthop);
@@ -1264,15 +1273,6 @@ prefix_adjout_withdraw(struct rde_peer *peer, struct bgpd_addr *prefix,
 
 	p->lastchange = time(NULL);
 
-	if (p->flags & PREFIX_FLAG_MASK) {
-		struct prefix_tree *prefix_head;
-		/* p is a pending update or withdraw, remove first */
-		prefix_head = p->flags & PREFIX_FLAG_UPDATE ?
-		    &peer->updates[prefix->aid] :
-		    &peer->withdraws[prefix->aid];
-		RB_REMOVE(prefix_tree, prefix_head, p);
-		p->flags &= ~PREFIX_FLAG_MASK;
-	}
 	p->flags |= PREFIX_FLAG_WITHDRAW;
 	if (RB_INSERT(prefix_tree, &peer->withdraws[prefix->aid], p) != NULL)
 		fatalx("%s: RB tree invariant violated", __func__);
@@ -1312,7 +1312,7 @@ prefix_adjout_destroy(struct prefix *p)
 		RB_REMOVE(prefix_tree, &peer->withdraws[p->pt->aid], p);
 	else if (p->flags & PREFIX_FLAG_UPDATE)
 		RB_REMOVE(prefix_tree, &peer->updates[p->pt->aid], p);
-	/* nothing needs to be done for PREFIX_FLAG_DEAD */
+	/* nothing needs to be done for PREFIX_FLAG_DEAD and STALE */
 	p->flags &= ~PREFIX_FLAG_MASK;
 
 
@@ -1781,13 +1781,15 @@ nexthop_update(struct kroute_nexthop *msg)
 		if (nexthop_unref(nh))
 			return;		/* nh lost last ref, no work left */
 
-	if (nh->next_prefix)
+	if (nh->next_prefix) {
 		/*
 		 * If nexthop_runner() is not finished with this nexthop
 		 * then ensure that all prefixes are updated by setting
 		 * the oldstate to NEXTHOP_FLAPPED.
 		 */
 		nh->oldstate = NEXTHOP_FLAPPED;
+		TAILQ_REMOVE(&nexthop_runners, nh, runner_l);
+	}
 
 	if (msg->connected) {
 		nh->flags |= NEXTHOP_CONNECTED;
@@ -1859,8 +1861,12 @@ nexthop_unlink(struct prefix *p)
 	if (p->nexthop == NULL || (p->flags & PREFIX_NEXTHOP_LINKED) == 0)
 		return;
 
-	if (p == p->nexthop->next_prefix)
+	if (p == p->nexthop->next_prefix) {
 		p->nexthop->next_prefix = LIST_NEXT(p, entry.list.nexthop);
+		/* remove nexthop from list if no prefixes left to update */
+		if (p->nexthop->next_prefix == NULL)
+			TAILQ_REMOVE(&nexthop_runners, p->nexthop, runner_l);
+	}
 
 	p->flags &= ~PREFIX_NEXTHOP_LINKED;
 	LIST_REMOVE(p, entry.list.nexthop);

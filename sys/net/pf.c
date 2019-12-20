@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf.c,v 1.1087 2019/07/18 20:45:10 sashan Exp $ */
+/*	$OpenBSD: pf.c,v 1.1091 2019/11/17 08:25:05 otto Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -948,19 +948,24 @@ pf_state_insert(struct pfi_kif *kif, struct pf_state_key **skw,
 	PF_ASSERT_LOCKED();
 
 	s->kif = kif;
+	PF_STATE_ENTER_WRITE();
 	if (*skw == *sks) {
-		if (pf_state_key_attach(*skw, s, PF_SK_WIRE))
+		if (pf_state_key_attach(*skw, s, PF_SK_WIRE)) {
+			PF_STATE_EXIT_WRITE();
 			return (-1);
+		}
 		*skw = *sks = s->key[PF_SK_WIRE];
 		s->key[PF_SK_STACK] = s->key[PF_SK_WIRE];
 	} else {
 		if (pf_state_key_attach(*skw, s, PF_SK_WIRE)) {
 			pool_put(&pf_state_key_pl, *sks);
+			PF_STATE_EXIT_WRITE();
 			return (-1);
 		}
 		*skw = s->key[PF_SK_WIRE];
 		if (pf_state_key_attach(*sks, s, PF_SK_STACK)) {
 			pf_state_key_detach(s, PF_SK_WIRE);
+			PF_STATE_EXIT_WRITE();
 			return (-1);
 		}
 		*sks = s->key[PF_SK_STACK];
@@ -978,12 +983,14 @@ pf_state_insert(struct pfi_kif *kif, struct pf_state_key **skw,
 			addlog("\n");
 		}
 		pf_detach_state(s);
+		PF_STATE_EXIT_WRITE();
 		return (-1);
 	}
 	TAILQ_INSERT_TAIL(&state_list, s, entry_list);
 	pf_status.fcounters[FCNT_STATE_INSERT]++;
 	pf_status.states++;
 	pfi_kif_ref(kif, PFI_KIF_REF_STATE);
+	PF_STATE_EXIT_WRITE();
 #if NPFSYNC > 0
 	pfsync_insert_state(s);
 #endif	/* NPFSYNC > 0 */
@@ -1476,6 +1483,9 @@ pf_purge_expired_states(u_int32_t maxcheck)
 			pf_state_unref(cur);
 
 		cur = pf_state_ref(next);
+
+		if (cur == NULL)
+			break;
 	}
 	PF_STATE_EXIT_READ();
 
@@ -1485,7 +1495,7 @@ pf_purge_expired_states(u_int32_t maxcheck)
 		SLIST_REMOVE_HEAD(&gcl, gc_list);
 		if (next->timeout == PFTM_UNLINKED)
 			pf_free_state(next);
-		else if (pf_state_expires(next) <= time_uptime) {
+		else {
 			pf_remove_state(next);
 			pf_free_state(next);
 		}
@@ -3045,7 +3055,7 @@ pf_match_port(u_int8_t op, u_int16_t a1, u_int16_t a2, u_int16_t p)
 int
 pf_match_uid(u_int8_t op, uid_t a1, uid_t a2, uid_t u)
 {
-	if (u == UID_MAX && op != PF_OP_EQ && op != PF_OP_NE)
+	if (u == -1 && op != PF_OP_EQ && op != PF_OP_NE)
 		return (0);
 	return (pf_match(op, a1, a2, u));
 }
@@ -3053,7 +3063,7 @@ pf_match_uid(u_int8_t op, uid_t a1, uid_t a2, uid_t u)
 int
 pf_match_gid(u_int8_t op, gid_t a1, gid_t a2, gid_t g)
 {
-	if (g == GID_MAX && op != PF_OP_EQ && op != PF_OP_NE)
+	if (g == -1 && op != PF_OP_EQ && op != PF_OP_NE)
 		return (0);
 	return (pf_match(op, a1, a2, g));
 }
@@ -3215,8 +3225,8 @@ pf_socket_lookup(struct pf_pdesc *pd)
 	struct inpcbtable	*tb;
 	struct inpcb		*inp;
 
-	pd->lookup.uid = UID_MAX;
-	pd->lookup.gid = GID_MAX;
+	pd->lookup.uid = -1;
+	pd->lookup.gid = -1;
 	pd->lookup.pid = NO_PID;
 	switch (pd->virtual_proto) {
 	case IPPROTO_TCP:
@@ -6935,8 +6945,8 @@ pf_test(sa_family_t af, int fwdir, struct ifnet *ifp, struct mbuf **m0)
 	 */
 	if (fwdir == PF_FWD) {
 		pd.lookup.done = -1;
-		pd.lookup.uid = UID_MAX;
-		pd.lookup.gid = GID_MAX;
+		pd.lookup.uid = -1;
+		pd.lookup.gid = -1;
 		pd.lookup.pid = NO_PID;
 	}
 
@@ -7567,8 +7577,8 @@ pf_delay_pkt(struct mbuf *m, u_int ifidx)
 	}
 	pdy->ifidx = ifidx;
 	pdy->m = m;
-	timeout_set(pdy->to, pf_pktenqueue_delayed, pdy);
-	timeout_add_msec(pdy->to, m->m_pkthdr.pf.delay);
+	timeout_set(&pdy->to, pf_pktenqueue_delayed, pdy);
+	timeout_add_msec(&pdy->to, m->m_pkthdr.pf.delay);
 	m->m_pkthdr.pf.delay = 0;
 	return (0);
 }

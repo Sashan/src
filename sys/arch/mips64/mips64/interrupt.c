@@ -1,4 +1,4 @@
-/*	$OpenBSD: interrupt.c,v 1.71 2019/03/17 05:06:36 visa Exp $ */
+/*	$OpenBSD: interrupt.c,v 1.73 2019/09/05 05:31:38 visa Exp $ */
 
 /*
  * Copyright (c) 2001-2004 Opsycon AB  (www.opsycon.se / www.opsycon.com)
@@ -139,7 +139,7 @@ interrupt(struct trapframe *trapframe)
 	 * Dispatch soft interrupts if current ipl allows them.
 	 */
 	if (ci->ci_ipl < IPL_SOFTINT && ci->ci_softpending != 0) {
-		s = splsoft();
+		s = splraise(IPL_SOFTHIGH);
 		dosoftint();
 		ci->ci_ipl = s;	/* no-overhead splx */
 	}
@@ -247,3 +247,17 @@ spllower(int newipl)
 	splx(newipl);
 	return oldipl;
 }
+
+#ifdef DIAGNOSTIC
+void
+splassert_check(int wantipl, const char *func)
+{
+	struct cpu_info *ci = curcpu();
+
+	if (ci->ci_ipl < wantipl)
+		splassert_fail(wantipl, ci->ci_ipl, func);
+
+	if (wantipl == IPL_NONE && ci->ci_intrdepth != 0)
+		splassert_fail(-1, ci->ci_intrdepth, func);
+}
+#endif

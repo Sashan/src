@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.33 2019/03/17 17:42:37 tb Exp $
+# $OpenBSD: Makefile,v 1.37 2019/11/02 13:38:04 jsing Exp $
 
 LIB=	crypto
 LIBREBUILD=y
@@ -34,6 +34,7 @@ CFLAGS+= -I${LCRYPTO_SRC}/modes
 # XXX FIXME ecdsa and ec should be merged
 CFLAGS+= -I${LCRYPTO_SRC}/ecdsa
 CFLAGS+= -I${LCRYPTO_SRC}/ec
+CFLAGS+= -I${LCRYPTO_SRC}/ecdh
 
 VERSION_SCRIPT=	Symbols.map
 SYMBOL_LIST=	${.CURDIR}/Symbols.list
@@ -96,6 +97,11 @@ SRCS+= chacha.c
 # cmac/
 SRCS+= cmac.c cm_ameth.c cm_pmeth.c
 
+# cms/
+SRCS+= cms_asn1.c cms_att.c cms_cd.c cms_dd.c cms_enc.c cms_env.c cms_err.c
+SRCS+= cms_ess.c cms_io.c cms_kari.c cms_lcl.h cms_lib.c cms_pwri.c cms_sd.c
+SRCS+= cms_smime.c
+
 # comp/
 SRCS+= comp_lib.c comp_err.c c_rle.c c_zlib.c
 
@@ -134,7 +140,7 @@ SRCS+= ecp_nistp224.c ecp_nistp256.c ecp_nistp521.c ecp_nistputil.c
 SRCS+= ecp_oct.c ec2_oct.c ec_oct.c
 
 # ecdh/
-SRCS+= ech_lib.c ech_key.c ech_err.c
+SRCS+= ech_lib.c ech_key.c ech_err.c ecdh_kdf.c
 
 # ecdsa/
 SRCS+= ecs_lib.c ecs_asn1.c ecs_ossl.c ecs_sign.c ecs_vrf.c ecs_err.c
@@ -288,6 +294,7 @@ SRCS+= pcy_cache.c pcy_node.c pcy_data.c pcy_map.c pcy_tree.c pcy_lib.c
 	${LCRYPTO_SRC}/cast \
 	${LCRYPTO_SRC}/chacha \
 	${LCRYPTO_SRC}/cmac \
+	${LCRYPTO_SRC}/cms \
 	${LCRYPTO_SRC}/comp \
 	${LCRYPTO_SRC}/conf \
 	${LCRYPTO_SRC}/curve25519 \
@@ -345,6 +352,7 @@ HDRS=\
 	${LCRYPTO_SRC}/cast/cast.h \
 	${LCRYPTO_SRC}/chacha/chacha.h \
 	${LCRYPTO_SRC}/cmac/cmac.h \
+	${LCRYPTO_SRC}/cms/cms.h \
 	${LCRYPTO_SRC}/comp/comp.h \
 	${LCRYPTO_SRC}/conf/conf.h \
 	${LCRYPTO_SRC}/conf/conf_api.h \
