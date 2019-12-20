@@ -1,4 +1,4 @@
-/*	$OpenBSD: pci.h,v 1.2 2019/07/15 03:35:23 jsg Exp $	*/
+/*	$OpenBSD: pci.h,v 1.4 2019/08/28 10:17:59 kettenis Exp $	*/
 /*
  * Copyright (c) 2015 Mark Kettenis
  *
@@ -39,6 +39,10 @@ struct pci_bus {
 	struct pci_dev	*self;
 };
 
+struct pci_acpi {
+	struct aml_node	*node;
+};
+
 struct pci_dev {
 	struct pci_bus	_bus;
 	struct pci_bus	*bus;
@@ -57,6 +61,8 @@ struct pci_dev {
 	int		irq;
 	int		msi_enabled;
 	uint8_t		no_64bit_msi;
+
+	struct pci_acpi dev;
 };
 #define PCI_ANY_ID (uint16_t) (~0U)
 
@@ -273,7 +279,18 @@ pci_set_power_state(struct pci_dev *dev, int state)
 	return 0;
 }
 
-#if defined(__amd64__) || defined(__i386__)
+static inline struct pci_dev *
+pci_get_class(pcireg_t class, struct pci_dev *pdev)
+{
+	return NULL;
+}
+
+#define PCI_CLASS_DISPLAY_VGA \
+    (PCI_CLASS_DISPLAY | PCI_SUBCLASS_DISPLAY_VGA)
+#define PCI_CLASS_DISPLAY_OTHER \
+    (PCI_CLASS_DISPLAY | PCI_SUBCLASS_DISPLAY_MISC)
+
+#if defined(__amd64__) || defined(__arm64__) || defined(__i386__)
 
 #define PCI_DMA_BIDIRECTIONAL	0
 
@@ -297,6 +314,6 @@ pci_dma_mapping_error(struct pci_dev *pdev, dma_addr_t dma_addr)
 #define pci_set_dma_mask(x, y)			0
 #define pci_set_consistent_dma_mask(x, y)	0
 
-#endif /* defined(__amd64__) || defined(__i386__) */
+#endif /* defined(__amd64__) || defined(__arm64__) || defined(__i386__) */
 
 #endif

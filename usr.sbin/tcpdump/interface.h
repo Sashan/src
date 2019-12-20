@@ -1,4 +1,4 @@
-/*	$OpenBSD: interface.h,v 1.81 2019/05/26 22:42:42 dlg Exp $	*/
+/*	$OpenBSD: interface.h,v 1.83 2019/12/03 01:43:33 dlg Exp $	*/
 
 /*
  * Copyright (c) 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997
@@ -20,7 +20,7 @@
  * WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTIES OF
  * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  *
- * @(#) $Id: interface.h,v 1.81 2019/05/26 22:42:42 dlg Exp $ (LBL)
+ * @(#) $Id: interface.h,v 1.83 2019/12/03 01:43:33 dlg Exp $ (LBL)
  */
 
 #ifndef tcpdump_interface_h
@@ -216,6 +216,7 @@ extern void ppp_ether_if_print(u_char *, const struct pcap_pkthdr *,
 	const u_char *);
 extern void gre_print(const u_char *, u_int);
 extern void vxlan_print(const u_char *, u_int);
+extern void nsh_print(const u_char *, u_int);
 extern void icmp_print(const u_char *, u_int, const u_char *);
 extern void ieee802_11_if_print(u_char *, const struct pcap_pkthdr *,
     const u_char *);
@@ -296,7 +297,7 @@ extern void icmp6_print(const u_char *, u_int, const u_char *);
 extern void ripng_print(const u_char *, int);
 extern int rt6_print(const u_char *, const u_char *);
 extern void ospf6_print(const u_char *, u_int);
-extern void dhcp6_print(const u_char *, u_int, u_short, u_short);
+extern void dhcp6_print(const u_char *, u_int);
 
 extern uint32_t in_cksum_add(const void *, size_t, uint32_t);
 extern uint16_t in_cksum_fini(uint32_t);

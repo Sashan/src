@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 2002  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,12 +14,12 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: order.h,v 1.3.18.2 2005/04/29 00:16:17 marka Exp $ */
+/* $Id: order.h,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
 
 #ifndef DNS_ORDER_H
 #define DNS_ORDER_H 1
 
-/*! \file */
+/*! \file dns/order.h */
 
 #include <isc/lang.h>
 #include <isc/types.h>
@@ -53,8 +52,8 @@ dns_order_add(dns_order_t *order, dns_name_t *name,
  * Requires:
  * \li	'order' to be valid.
  *\li	'name' to be valid.
- *\li	'mode' to be one of #DNS_RDATASERATTR_RANDOMIZE,
- *		#DNS_RDATASERATTR_RANDOMIZE or zero (#DNS_RDATASERATTR_CYCLIC).
+ *\li	'mode' to be one of #DNS_RDATASETATTR_RANDOMIZE,
+ *		#DNS_RDATASETATTR_FIXEDORDER or zero (#DNS_RDATASETATTR_CYCLIC).
  *
  * Returns:
  *\li	#ISC_R_SUCCESS

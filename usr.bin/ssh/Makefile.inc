@@ -1,9 +1,11 @@
-#	$OpenBSD: Makefile.inc,v 1.68 2019/08/16 06:35:27 djm Exp $
+#	$OpenBSD: Makefile.inc,v 1.80 2019/12/13 19:09:10 djm Exp $
 
 .include <bsd.own.mk>
 
 CFLAGS+=	-I${.CURDIR}/..
+.if ${MACHINE} != "hppa"
 CFLAGS+=	-fstack-protector-all
+.endif
 
 CDIAGFLAGS=	-Wall
 CDIAGFLAGS+=	-Wextra
@@ -15,12 +17,17 @@ CDIAGFLAGS+=	-Wshadow
 CDIAGFLAGS+=	-Wstrict-prototypes
 CDIAGFLAGS+=	-Wunused
 CDIAGFLAGS+=	-Wno-unused-parameter # Lots of these in protocol handlers.
+.if ${COMPILER_VERSION:L} == "clang"
+CDIAGFLAGS+=	-Wimplicit-fallthrough
+CDIAGFLAGS+=	-Widiomatic-parentheses -Wparentheses
+.endif
 .if ${COMPILER_VERSION:L} != "gcc3"
 CDIAGFLAGS+=	-Wstrict-aliasing=2
 CDIAGFLAGS+=	-Wold-style-definition
 .endif
 
 #CDIAGFLAGS+=	-Werror
+#CDIAGFLAGS+=	-fno-common
 #DEBUG=-g
 #INSTALL_STRIP=
 
@@ -67,6 +74,7 @@ SRCS_KEY+=	poly1305.c
 .if (${OPENSSL:L} == "yes")
 SRCS_KEY+=	ssh-dss.c
 SRCS_KEY+=	ssh-ecdsa.c
+SRCS_KEY+=	ssh-ecdsa-sk.c
 SRCS_KEY+=	ssh-rsa.c
 SRCS_KEY+=	sshbuf-getput-crypto.c
 SRCS_KEY+=	digest-openssl.c
@@ -76,6 +84,7 @@ SRCS_KEY+=	rijndael.c
 SRCS_KEY+=	digest-libc.c
 .endif
 SRCS_KEY+=	ssh-ed25519.c
+SRCS_KEY+=	ssh-ed25519-sk.c
 # ed25519, from supercop
 SRCS_KEY+=	sc25519.c
 SRCS_KEY+=	ge25519.c
@@ -107,10 +116,19 @@ SRCS_UTL+=	addrmatch.c
 SRCS_UTL+=	match.c
 
 .if (${OPENSSL:L} == "yes")
-SRCS_PKCS11+=	ssh-pkcs11.c
+SRCS_PKCS11+=		ssh-pkcs11.c
+SRCS_PKCS11_CLIENT+=	ssh-pkcs11-client.c
+SRCS_MODULI+=		moduli.c
 .else
 SRCS_PKCS11+=
+SRCS_PKCS11_CLIENT+=
+SRCS_MODULI+=
 .endif
+
+SRCS_SK=		ssh-sk.c
+SRCS_SK+=		sk-usbhid.c
+SRCS_SK_CLIENT=		ssh-sk-client.c
+SRCS_SK_CLIENT+=	msg.c
 
 WITH_XMSS?=	no
 .if (${WITH_XMSS:L} == "yes")

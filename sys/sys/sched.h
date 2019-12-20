@@ -1,4 +1,4 @@
-/*	$OpenBSD: sched.h,v 1.54 2019/07/15 20:44:48 mpi Exp $	*/
+/*	$OpenBSD: sched.h,v 1.56 2019/10/21 10:24:01 mpi Exp $	*/
 /* $NetBSD: sched.h,v 1.2 1999/02/28 18:14:58 ross Exp $ */
 
 /*-
@@ -179,13 +179,8 @@ void sched_stop_secondary_cpus(void);
 int	cpu_is_online(struct cpu_info *);
 
 void sched_init_runqueues(void);
-void setrunqueue(struct proc *);
+void setrunqueue(struct cpu_info *, struct proc *, uint8_t);
 void remrunqueue(struct proc *);
-
-/* Inherit the parent's scheduler history */
-#define scheduler_fork_hook(parent, child) do {				\
-	(child)->p_estcpu = (parent)->p_estcpu;				\
-} while (0)
 
 /* Chargeback parents for the sins of their children.  */
 #define scheduler_wait_hook(parent, child) do {				\

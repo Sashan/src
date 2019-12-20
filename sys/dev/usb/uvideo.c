@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvideo.c,v 1.203 2019/08/07 11:16:02 patrick Exp $ */
+/*	$OpenBSD: uvideo.c,v 1.205 2019/10/14 09:20:48 mpi Exp $ */
 
 /*
  * Copyright (c) 2008 Robert Nagy <robert@openbsd.org>
@@ -2885,7 +2885,7 @@ uvideo_debug_file_open(struct uvideo_softc *sc)
 	char name[] = "/tmp/uvideo.mjpeg";
 	int error;
 
-	NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_SYSSPACE, name, p);
+	NDINIT(&nd, 0, 0, UIO_SYSSPACE, name, p);
 	error = vn_open(&nd, O_CREAT | FWRITE | O_NOFOLLOW, S_IRUSR | S_IWUSR);
 	if (error) {
 		DPRINTF(1, "%s: %s: can't create debug file %s!\n",
@@ -3386,7 +3386,7 @@ uvideo_dqbuf(void *v, struct v4l2_buffer *dqb)
 
 	if (SIMPLEQ_EMPTY(&sc->sc_mmap_q)) {
 		/* mmap queue is empty, block until first frame is queued */
-		error = tsleep(sc, 0, "vid_mmap", 10 * hz);
+		error = tsleep_nsec(sc, 0, "vid_mmap", SEC_TO_NSEC(10));
 		if (error)
 			return (EINVAL);
 	}

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwn.c,v 1.212 2019/07/29 10:50:08 stsp Exp $	*/
+/*	$OpenBSD: if_iwn.c,v 1.221 2019/11/06 14:52:35 stsp Exp $	*/
 
 /*-
  * Copyright (c) 2007-2010 Damien Bergamini <damien.bergamini@free.fr>
@@ -156,7 +156,7 @@ int		iwn_ccmp_decap(struct iwn_softc *, struct mbuf *,
 void		iwn_rx_phy(struct iwn_softc *, struct iwn_rx_desc *,
 		    struct iwn_rx_data *);
 void		iwn_rx_done(struct iwn_softc *, struct iwn_rx_desc *,
-		    struct iwn_rx_data *);
+		    struct iwn_rx_data *, struct mbuf_list *);
 void		iwn_rx_compressed_ba(struct iwn_softc *, struct iwn_rx_desc *,
 		    struct iwn_rx_data *);
 void		iwn5000_rx_calib_results(struct iwn_softc *,
@@ -1825,7 +1825,7 @@ iwn_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 			    ieee80211_state_name[nstate]);
 		if ((sc->sc_flags & IWN_FLAG_BGSCAN) == 0) {
 			ieee80211_set_link_state(ic, LINK_STATE_DOWN);
-			ieee80211_free_allnodes(ic, 1);
+			ieee80211_node_cleanup(ic, ic->ic_bss);
 		}
 		ic->ic_state = nstate;
 		return 0;
@@ -1937,7 +1937,7 @@ iwn_ccmp_decap(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 			 * Such frames may be received out of order due to
 			 * legitimate retransmissions of failed subframes
 			 * in previous A-MPDUs. Duplicates will be handled
-			 * in ieee80211_input() as part of A-MPDU reordering.
+			 * in ieee80211_inputm() as part of A-MPDU reordering.
 			 */
 		} else if (ieee80211_has_seq(wh)) {
 			/*
@@ -2007,7 +2007,7 @@ iwn_rx_phy(struct iwn_softc *sc, struct iwn_rx_desc *desc,
  */
 void
 iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
-    struct iwn_rx_data *data)
+    struct iwn_rx_data *data, struct mbuf_list *ml)
 {
 	struct iwn_ops *ops = &sc->ops;
 	struct ieee80211com *ic = &sc->sc_ic;
@@ -2017,6 +2017,7 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 	struct ieee80211_rxinfo rxi;
 	struct ieee80211_node *ni;
 	struct ieee80211_channel *bss_chan = NULL;
+	uint8_t saved_bssid[IEEE80211_ADDR_LEN] = { 0 };
 	struct mbuf *m, *m1;
 	struct iwn_rx_stat *stat;
 	caddr_t head;
@@ -2183,13 +2184,18 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 		chan = IEEE80211_CHAN_MAX;
 
 	/* Fix current channel. */
-	if (ni == ic->ic_bss)
+	if (ni == ic->ic_bss) {
+		/*
+		 * We may switch ic_bss's channel during scans.
+		 * Record the current channel so we can restore it later.
+		 */
 		bss_chan = ni->ni_chan;
+		IEEE80211_ADDR_COPY(&saved_bssid, ni->ni_macaddr);
+	}
 	ni->ni_chan = &ic->ic_channels[chan];
 
 #if NBPFILTER > 0
 	if (sc->sc_drvbpf != NULL) {
-		struct mbuf mb;
 		struct iwn_rx_radiotap_header *tap = &sc->sc_rxtap;
 		uint16_t chan_flags;
 
@@ -2227,23 +2233,21 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 			}
 		}
 
-		mb.m_data = (caddr_t)tap;
-		mb.m_len = sc->sc_rxtap_len;
-		mb.m_next = m;
-		mb.m_nextpkt = NULL;
-		mb.m_type = 0;
-		mb.m_flags = 0;
-		bpf_mtap(sc->sc_drvbpf, &mb, BPF_DIRECTION_IN);
+		bpf_mtap_hdr(sc->sc_drvbpf, tap, sc->sc_rxtap_len,
+		    m, BPF_DIRECTION_IN);
 	}
 #endif
 
 	/* Send the frame to the 802.11 layer. */
 	rxi.rxi_rssi = rssi;
 	rxi.rxi_tstamp = 0;	/* unused */
-	ieee80211_input(ifp, m, ni, &rxi);
+	ieee80211_inputm(ifp, m, ni, &rxi, ml);
 
-	/* Restore BSS channel. */
-	if (ni == ic->ic_bss)
+	/*
+	 * ieee80211_inputm() might have changed our BSS.
+	 * Restore ic_bss's channel if we are still in the same BSS.
+	 */
+	if (ni == ic->ic_bss && IEEE80211_ADDR_EQ(saved_bssid, ni->ni_macaddr))
 		ni->ni_chan = bss_chan;
 
 	/* Node is no longer needed. */
@@ -2674,6 +2678,9 @@ iwn_tx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 	struct iwn_tx_data *data = &ring->data[desc->idx];
 	struct iwn_node *wn = (void *)data->ni;
 
+	if (data->ni == NULL)
+		return;
+
 	/* Update rate control statistics. */
 	if (data->ni->ni_flags & IEEE80211_NODE_HT) {
 		wn->mn.frames++;
@@ -2737,6 +2744,7 @@ iwn_cmd_done(struct iwn_softc *sc, struct iwn_rx_desc *desc)
 void
 iwn_notif_intr(struct iwn_softc *sc)
 {
+	struct mbuf_list ml = MBUF_LIST_INITIALIZER();
 	struct iwn_ops *ops = &sc->ops;
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ifnet *ifp = &ic->ic_if;
@@ -2768,7 +2776,7 @@ iwn_notif_intr(struct iwn_softc *sc)
 		case IWN_RX_DONE:		/* 4965AGN only. */
 		case IWN_MPDU_RX_DONE:
 			/* An 802.11 frame has been received. */
-			iwn_rx_done(sc, desc, data);
+			iwn_rx_done(sc, desc, data, &ml);
 			break;
 		case IWN_RX_COMPRESSED_BA:
 			/* A Compressed BlockAck has been received. */
@@ -2811,9 +2819,16 @@ iwn_notif_intr(struct iwn_softc *sc)
 			 * state machine will drop us into scanning after timing
 			 * out waiting for a probe response.
 			 */
-			if (missed > ic->ic_bmissthres && !ic->ic_mgt_timer)
+			if (missed > ic->ic_bmissthres && !ic->ic_mgt_timer) {
+				if (ic->ic_if.if_flags & IFF_DEBUG)
+					printf("%s: receiving no beacons from "
+					    "%s; checking if this AP is still "
+					    "responding to probe requests\n",
+					    sc->sc_dev.dv_xname, ether_sprintf(
+					    ic->ic_bss->ni_macaddr));
 				IEEE80211_SEND_MGMT(ic, ic->ic_bss,
 				    IEEE80211_FC0_SUBTYPE_PROBE_REQ, 0);
+			}
 			break;
 		}
 		case IWN_UC_READY:
@@ -2913,6 +2928,7 @@ iwn_notif_intr(struct iwn_softc *sc)
 
 		sc->rxq.cur = (sc->rxq.cur + 1) % IWN_RX_RING_COUNT;
 	}
+	if_input(&sc->sc_ic.ic_if, &ml);
 
 	/* Tell the firmware what we have processed. */
 	hw = (hw == 0) ? IWN_RX_RING_COUNT - 1 : hw - 1;
@@ -3257,7 +3273,6 @@ iwn_tx(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	rinfo = &iwn_rates[ridx];
 #if NBPFILTER > 0
 	if (sc->sc_drvbpf != NULL) {
-		struct mbuf mb;
 		struct iwn_tx_radiotap_header *tap = &sc->sc_txtap;
 		uint16_t chan_flags;
 
@@ -3278,13 +3293,8 @@ iwn_tx(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 		    (wh->i_fc[1] & IEEE80211_FC1_PROTECTED))
 			tap->wt_flags |= IEEE80211_RADIOTAP_F_WEP;
 
-		mb.m_data = (caddr_t)tap;
-		mb.m_len = sc->sc_txtap_len;
-		mb.m_next = m;
-		mb.m_nextpkt = NULL;
-		mb.m_type = 0;
-		mb.m_flags = 0;
-		bpf_mtap(sc->sc_drvbpf, &mb, BPF_DIRECTION_OUT);
+		bpf_mtap_hdr(sc->sc_drvbpf, tap, sc->sc_txtap_len,
+		    m, BPF_DIRECTION_OUT);
 	}
 #endif
 
@@ -5199,6 +5209,13 @@ iwn_scan(struct iwn_softc *sc, uint16_t flags, int bgscan)
 	DPRINTF(("sending scan command nchan=%d\n", hdr->nchan));
 	error = iwn_cmd(sc, IWN_CMD_SCAN, buf, buflen, 1);
 	if (error == 0) {
+		/*
+		 * The current mode might have been fixed during association.
+		 * Ensure all channels get scanned.
+		 */
+		if (IFM_MODE(ic->ic_media.ifm_cur->ifm_media) == IFM_AUTO)
+			ieee80211_setmode(ic, IEEE80211_MODE_AUTO);
+
 		sc->sc_flags |= IWN_FLAG_SCANNING;
 		if (bgscan)
 			sc->sc_flags |= IWN_FLAG_BGSCAN;
@@ -5671,6 +5688,10 @@ iwn_ampdu_tx_stop(struct ieee80211com *ic, struct ieee80211_node *ni,
 	int qid = sc->first_agg_txq + tid;
 	struct iwn_node *wn = (void *)ni;
 	struct iwn_node_info node;
+
+	/* Discard all frames in the current window. */
+	iwn_ampdu_txq_advance(sc, &sc->txq[qid], qid,
+	    IWN_AGG_SSN_TO_TXQ_IDX(ba->ba_winend));
 
 	if (iwn_nic_lock(sc) != 0)
 		return;

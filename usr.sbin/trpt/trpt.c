@@ -1,4 +1,4 @@
-/*	$OpenBSD: trpt.c,v 1.37 2018/05/10 13:30:25 bluhm Exp $	*/
+/*	$OpenBSD: trpt.c,v 1.39 2019/12/02 21:47:54 cheloha Exp $	*/
 
 /*-
  * Copyright (c) 1997 The NetBSD Foundation, Inc.

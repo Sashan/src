@@ -1,4 +1,4 @@
-/* $OpenBSD: armreg.h,v 1.8 2019/05/13 03:13:29 patrick Exp $ */
+/* $OpenBSD: armreg.h,v 1.10 2019/10/17 15:38:56 drahn Exp $ */
 /*-
  * Copyright (c) 2013, 2014 Andrew Turner
  * Copyright (c) 2015 The FreeBSD Foundation
@@ -120,10 +120,10 @@
 #define	 ISS_DATA_SF		(0x01 << 15)
 #define	 ISS_DATA_AR		(0x01 << 14)
 #define	 ISS_DATA_FnV		(0x01 << 10)
-#define	 ISS_DATa_EA		(0x01 << 9)
-#define	 ISS_DATa_CM		(0x01 << 8)
+#define	 ISS_DATA_EA		(0x01 << 9)
+#define	 ISS_DATA_CM		(0x01 << 8)
 #define	 ISS_INSN_S1PTW		(0x01 << 7)
-#define	 ISS_DATa_WnR		(0x01 << 6)
+#define	 ISS_DATA_WnR		(0x01 << 6)
 #define	 ISS_DATA_DFSC_MASK	(0x3f << 0)
 #define	 ISS_DATA_DFSC_ASF_L0	(0x00 << 0)
 #define	 ISS_DATA_DFSC_ASF_L1	(0x01 << 0)
@@ -392,6 +392,12 @@
 #define	ID_AA64PFR0_GIC(x)		((x) & ID_AA64PFR0_GIC_MASK)
 #define	 ID_AA64PFR0_GIC_CPUIF_NONE	(0x0 << ID_AA64PFR0_GIC_SHIFT)
 #define	 ID_AA64PFR0_GIC_CPUIF_EN	(0x1 << ID_AA64PFR0_GIC_SHIFT)
+#define	ID_AA64PFR0_CSV2_SHIFT		56
+#define	ID_AA64PFR0_CSV2_MASK		(0xfULL << ID_AA64PFR0_CSV2_SHIFT)
+#define	ID_AA64PFR0_CSV2(x)		((x) & ID_AA64PFR0_CSV2_MASK)
+#define	 ID_AA64PFR0_CSV2_UNKNOWN	(0x0ULL << ID_AA64PFR0_CSV2_SHIFT)
+#define	 ID_AA64PFR0_CSV2_IMPL		(0x1ULL << ID_AA64PFR0_CSV2_SHIFT)
+#define	 ID_AA64PFR0_CSV2_SCXT		(0x2ULL << ID_AA64PFR0_CSV2_SHIFT)
 
 /* MAIR_EL1 - Memory Attribute Indirection Register */
 #define	MAIR_ATTR_MASK(idx)	(0xff << ((n)* 8))

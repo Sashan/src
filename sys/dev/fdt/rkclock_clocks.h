@@ -7,6 +7,7 @@
 #define RK3288_PLL_APLL			1
 #define RK3288_PLL_CPLL			3
 #define RK3288_PLL_GPLL			4
+#define RK3288_PLL_NPLL			5
 #define RK3288_ARMCLK			6
 
 #define RK3288_CLK_SDMMC		68
@@ -35,6 +36,8 @@
 
 #define RK3288_HCLK_HOST0		450
 #define RK3288_HCLK_SDMMC		456
+
+#define RK3288_XIN24M			1023
 
 /*
  * RK3328 clocks.
@@ -66,6 +69,9 @@
 #define RK3328_CLK_VENC_DSP		67
 #define RK3328_CLK_VENC_CORE		68
 #define RK3328_CLK_TSP			92
+#define RK3328_CLK_MAC2IO_SRC		99
+#define RK3328_CLK_MAC2IO		100
+#define RK3328_CLK_MAC2IO_EXT		102
 
 #define RK3328_DCLK_LCDC		120
 #define RK3328_HDMIPHY			122
@@ -89,6 +95,7 @@
 
 #define RK3328_XIN24M			1023
 #define RK3328_CLK_24M			1022
+#define RK3328_GMAC_CLKIN		1021
 
 /*
  * RK3399 clocks.
@@ -173,6 +180,7 @@
 #define RK3399_PCLK_I2C0		27
 #define RK3399_PCLK_I2C4		28
 #define RK3399_PCLK_I2C8		29
+#define RK3399_PCLK_RKPWM		30
 
 #define RK3399_XIN24M			1023
 #define RK3399_CLK_32K			1022

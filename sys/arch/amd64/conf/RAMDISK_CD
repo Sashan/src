@@ -1,10 +1,8 @@
-#	$OpenBSD: RAMDISK_CD,v 1.181 2019/06/24 21:33:27 kettenis Exp $
+#	$OpenBSD: RAMDISK_CD,v 1.186 2019/11/19 02:01:58 kevlo Exp $
 
 machine		amd64
 maxusers	4
 
-option		TIMEZONE=0
-option		DST=0
 option		SMALL_KERNEL
 option		NO_PROPOLICE
 option		BOOT_CONFIG
@@ -230,6 +228,7 @@ bge*		at pci?			# Broadcom BCM57xx (aka Tigon3)
 bnx*		at pci?			# Broadcom BCM5706/5708 GigE
 re*		at pci?			# Realtek 8169/8169S/8110S
 re*		at cardbus?		# Realtek 8169/8169S/8110S
+rge*		at pci?			# Realtek 8125
 stge*		at pci?			# Sundance TC9021 GigE
 hme*		at pci?			# Sun Happy Meal
 vge*		at pci?			# VIA VT612x
@@ -248,6 +247,7 @@ bnxt*		at pci?			# Broadcom BCM573xx, BCM574xx
 bwfm*		at pci?			# Broadcom FullMAC
 ixl*		at pci?			# Intel Ethernet 700 Series
 mcx*		at pci?			# Mellanox ConnectX-4
+iavf*		at pci?			# Intel Ethernet Adaptive VF
 
 acx*		at pci?			# TI ACX100/ACX111 (802.11b/g)
 acx*		at cardbus?		# TI ACX100/ACX111 (802.11b/g)

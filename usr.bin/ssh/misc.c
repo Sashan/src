@@ -1,4 +1,4 @@
-/* $OpenBSD: misc.c,v 1.140 2019/08/16 06:13:15 djm Exp $ */
+/* $OpenBSD: misc.c,v 1.143 2019/11/22 06:50:30 dtucker Exp $ */
 /*
  * Copyright (c) 2000 Markus Friedl.  All rights reserved.
  * Copyright (c) 2005,2006 Damien Miller.  All rights reserved.
@@ -211,12 +211,12 @@ set_rdomain(int fd, const char *name)
 }
 
 /*
- * Wait up to *timeoutp milliseconds for fd to be readable. Updates
+ * Wait up to *timeoutp milliseconds for events on fd. Updates
  * *timeoutp with time remaining.
  * Returns 0 if fd ready or -1 on timeout or error (see errno).
  */
-int
-waitrfd(int fd, int *timeoutp)
+static int
+waitfd(int fd, int *timeoutp, short events)
 {
 	struct pollfd pfd;
 	struct timeval t_start;
@@ -224,7 +224,7 @@ waitrfd(int fd, int *timeoutp)
 
 	monotime_tv(&t_start);
 	pfd.fd = fd;
-	pfd.events = POLLIN;
+	pfd.events = events;
 	for (; *timeoutp >= 0;) {
 		r = poll(&pfd, 1, *timeoutp);
 		oerrno = errno;
@@ -240,6 +240,16 @@ waitrfd(int fd, int *timeoutp)
 	/* timeout */
 	errno = ETIMEDOUT;
 	return -1;
+}
+
+/*
+ * Wait up to *timeoutp milliseconds for fd to be readable. Updates
+ * *timeoutp with time remaining.
+ * Returns 0 if fd ready or -1 on timeout or error (see errno).
+ */
+int
+waitrfd(int fd, int *timeoutp) {
+	return waitfd(fd, timeoutp, POLLIN);
 }
 
 /*
@@ -268,7 +278,7 @@ timeout_connect(int sockfd, const struct sockaddr *serv_addr,
 	} else if (errno != EINPROGRESS)
 		return -1;
 
-	if (waitrfd(sockfd, timeoutp) == -1)
+	if (waitfd(sockfd, timeoutp, POLLIN | POLLOUT) == -1)
 		return -1;
 
 	/* Completed or failed */
@@ -2041,3 +2051,85 @@ path_absolute(const char *path)
 {
 	return (*path == '/') ? 1 : 0;
 }
+
+void
+skip_space(char **cpp)
+{
+	char *cp;
+
+	for (cp = *cpp; *cp == ' ' || *cp == '\t'; cp++)
+		;
+	*cpp = cp;
+}
+
+/* authorized_key-style options parsing helpers */
+
+/*
+ * Match flag 'opt' in *optsp, and if allow_negate is set then also match
+ * 'no-opt'. Returns -1 if option not matched, 1 if option matches or 0
+ * if negated option matches.
+ * If the option or negated option matches, then *optsp is updated to
+ * point to the first character after the option.
+ */
+int
+opt_flag(const char *opt, int allow_negate, const char **optsp)
+{
+	size_t opt_len = strlen(opt);
+	const char *opts = *optsp;
+	int negate = 0;
+
+	if (allow_negate && strncasecmp(opts, "no-", 3) == 0) {
+		opts += 3;
+		negate = 1;
+	}
+	if (strncasecmp(opts, opt, opt_len) == 0) {
+		*optsp = opts + opt_len;
+		return negate ? 0 : 1;
+	}
+	return -1;
+}
+
+char *
+opt_dequote(const char **sp, const char **errstrp)
+{
+	const char *s = *sp;
+	char *ret;
+	size_t i;
+
+	*errstrp = NULL;
+	if (*s != '"') {
+		*errstrp = "missing start quote";
+		return NULL;
+	}
+	s++;
+	if ((ret = malloc(strlen((s)) + 1)) == NULL) {
+		*errstrp = "memory allocation failed";
+		return NULL;
+	}
+	for (i = 0; *s != '\0' && *s != '"';) {
+		if (s[0] == '\\' && s[1] == '"')
+			s++;
+		ret[i++] = *s++;
+	}
+	if (*s == '\0') {
+		*errstrp = "missing end quote";
+		free(ret);
+		return NULL;
+	}
+	ret[i] = '\0';
+	s++;
+	*sp = s;
+	return ret;
+}
+
+int
+opt_match(const char **opts, const char *term)
+{
+	if (strncasecmp((*opts), term, strlen(term)) == 0 &&
+	    (*opts)[strlen(term)] == '=') {
+		*opts += strlen(term) + 1;
+		return 1;
+	}
+	return 0;
+}
+

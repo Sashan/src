@@ -2,8 +2,6 @@
 ./usr/bin/as
 ./usr/bin/gdb
 ./usr/bin/readelf
-./usr/include/cpuid.h
-./usr/include/emmintrin.h
 ./usr/include/i386
 ./usr/include/i386/_float.h
 ./usr/include/i386/_types.h
@@ -44,7 +42,6 @@
 ./usr/include/i386/ioctl_fd.h
 ./usr/include/i386/joystick.h
 ./usr/include/i386/kcore.h
-./usr/include/i386/kvm86.h
 ./usr/include/i386/limits.h
 ./usr/include/i386/loadfile_machdep.h
 ./usr/include/i386/lock.h
@@ -84,11 +81,6 @@
 ./usr/include/i386/vmmvar.h
 ./usr/include/i386/vmparam.h
 ./usr/include/ieeefp.h
-./usr/include/mm_malloc.h
-./usr/include/mmintrin.h
-./usr/include/pmmintrin.h
-./usr/include/unwind.h
-./usr/include/xmmintrin.h
 ./usr/lib/libi386.a
 ./usr/lib/libi386_p.a
 ./usr/libdata/ldscripts

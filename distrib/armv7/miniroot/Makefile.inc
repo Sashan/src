@@ -1,13 +1,13 @@
-#	$OpenBSD: Makefile.inc,v 1.23 2019/05/03 20:03:58 deraadt Exp $
+#	$OpenBSD: Makefile.inc,v 1.25 2019/10/31 00:37:25 jsg Exp $
 
 FS=		miniroot-${BOARD}-${OSrev}.fs
-FSSIZE=		36864	# ffs+msdos, actually
+FSSIZE=		67584	# ffs+msdos, actually
 MOUNT_POINT=	/mnt
 
 MKUBOOT?=	mkuboot
 
 DISKTYPE=	miniroot
-MSDOSSTART=	2048
+MSDOSSTART=	32768
 MSDOSSIZE=	4096
 FFSSTART!=	expr ${MSDOSSTART} + ${MSDOSSIZE}
 
@@ -37,11 +37,12 @@ ${FS}: bsd.rd
 .endif
 .if ${BOARD} == "cubox" || ${BOARD} == "wandboard"
 	dd if=${PUBOOT}/${UBOOT}/SPL of=/dev/r`cat vnd`c bs=1024 seek=1
-	dd if=${PUBOOT}/${UBOOT}/u-boot.img of=/dev/r`cat vnd`c bs=1024 seek=69
+	dd if=${PUBOOT}/${UBOOT}/u-boot.img of=/dev/r`cat vnd`c \
+	    bs=1024 seek=69 conv=sync
 .endif
 .if ${PLATFORM} == "SUNXI"
 	dd if=${PUBOOT}/${UBOOT}/u-boot-sunxi-with-spl.bin \
-	    of=/dev/r`cat vnd`c bs=1024 seek=8
+	    of=/dev/r`cat vnd`c bs=1024 seek=8 conv=sync
 .endif
 
 	mkdir -p ${MOUNT_POINT}/efi/boot

@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh-add.c,v 1.140 2019/06/28 13:35:04 deraadt Exp $ */
+/* $OpenBSD: ssh-add.c,v 1.147 2019/11/25 00:51:37 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -38,7 +38,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+#ifdef WITH_OPENSSL
 #include <openssl/evp.h>
+#endif
 
 #include <errno.h>
 #include <fcntl.h>
@@ -46,6 +48,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <limits.h>
 
@@ -69,7 +72,9 @@ static char *default_files[] = {
 	_PATH_SSH_CLIENT_ID_RSA,
 	_PATH_SSH_CLIENT_ID_DSA,
 	_PATH_SSH_CLIENT_ID_ECDSA,
+	_PATH_SSH_CLIENT_ID_ECDSA_SK,
 	_PATH_SSH_CLIENT_ID_ED25519,
+	_PATH_SSH_CLIENT_ID_ED25519_SK,
 	_PATH_SSH_CLIENT_ID_XMSS,
 	NULL
 };
@@ -181,7 +186,8 @@ delete_all(int agent_fd, int qflag)
 }
 
 static int
-add_file(int agent_fd, const char *filename, int key_only, int qflag)
+add_file(int agent_fd, const char *filename, int key_only, int qflag,
+    const char *skprovider)
 {
 	struct sshkey *private, *cert;
 	char *comment = NULL;
@@ -300,8 +306,16 @@ add_file(int agent_fd, const char *filename, int key_only, int qflag)
 		ssh_free_identitylist(idlist);
 	}
 
+	if (!sshkey_is_sk(private))
+		skprovider = NULL; /* Don't send constraint for other keys */
+	else if (skprovider == NULL) {
+		fprintf(stderr, "Cannot load security key %s without "
+		    "provider\n", filename);
+		goto out;
+	}
+
 	if ((r = ssh_add_identity_constrained(agent_fd, private, comment,
-	    lifetime, confirm, maxsign)) == 0) {
+	    lifetime, confirm, maxsign, skprovider)) == 0) {
 		ret = 0;
 		if (!qflag) {
 			fprintf(stderr, "Identity added: %s (%s)\n",
@@ -354,7 +368,7 @@ add_file(int agent_fd, const char *filename, int key_only, int qflag)
 	sshkey_free(cert);
 
 	if ((r = ssh_add_identity_constrained(agent_fd, private, comment,
-	    lifetime, confirm, maxsign)) != 0) {
+	    lifetime, confirm, maxsign, skprovider)) != 0) {
 		error("Certificate %s (%s) add failed: %s", certpath,
 		    private->cert->key_id, ssh_err(r));
 		goto out;
@@ -430,7 +444,7 @@ test_key(int agent_fd, const char *filename)
 		goto done;
 	}
 	if ((r = sshkey_verify(key, sig, slen, data, sizeof(data),
-	    NULL, 0)) != 0) {
+	    NULL, 0, NULL)) != 0) {
 		error("Signature verification failed for %s: %s",
 		    filename, ssh_err(r));
 		goto done;
@@ -519,13 +533,14 @@ lock_agent(int agent_fd, int lock)
 }
 
 static int
-do_file(int agent_fd, int deleting, int key_only, char *file, int qflag)
+do_file(int agent_fd, int deleting, int key_only, char *file, int qflag,
+    const char *skprovider)
 {
 	if (deleting) {
 		if (delete_file(agent_fd, file, key_only, qflag) == -1)
 			return -1;
 	} else {
-		if (add_file(agent_fd, file, key_only, qflag) == -1)
+		if (add_file(agent_fd, file, key_only, qflag, skprovider) == -1)
 			return -1;
 	}
 	return 0;
@@ -551,6 +566,7 @@ usage(void)
 	fprintf(stderr, "  -s pkcs11   Add keys from PKCS#11 provider.\n");
 	fprintf(stderr, "  -e pkcs11   Remove keys provided by PKCS#11 provider.\n");
 	fprintf(stderr, "  -T pubkey   Test if ssh-agent can access matching private key.\n");
+	fprintf(stderr, "  -S provider Specify security key provider.\n");
 	fprintf(stderr, "  -q          Be quiet after a successful operation.\n");
 	fprintf(stderr, "  -v          Be more verbose.\n");
 }
@@ -561,7 +577,7 @@ main(int argc, char **argv)
 	extern char *optarg;
 	extern int optind;
 	int agent_fd;
-	char *pkcs11provider = NULL;
+	char *pkcs11provider = NULL, *skprovider = NULL;
 	int r, i, ch, deleting = 0, ret = 0, key_only = 0;
 	int xflag = 0, lflag = 0, Dflag = 0, qflag = 0, Tflag = 0;
 	SyslogFacility log_facility = SYSLOG_FACILITY_AUTH;
@@ -570,8 +586,9 @@ main(int argc, char **argv)
 	/* Ensure that fds 0, 1 and 2 are open or directed to /dev/null */
 	sanitise_stdfd();
 
+#ifdef WITH_OPENSSL
 	OpenSSL_add_all_algorithms();
-
+#endif
 	log_init(__progname, log_level, log_facility, 1);
 
 	setvbuf(stdout, NULL, _IOLBF, 0);
@@ -589,7 +606,9 @@ main(int argc, char **argv)
 		exit(2);
 	}
 
-	while ((ch = getopt(argc, argv, "vklLcdDTxXE:e:M:m:qs:t:")) != -1) {
+	skprovider = getenv("SSH_SK_PROVIDER");
+
+	while ((ch = getopt(argc, argv, "vklLcdDTxXE:e:M:m:qs:S:t:")) != -1) {
 		switch (ch) {
 		case 'v':
 			if (log_level == SYSLOG_LEVEL_INFO)
@@ -645,6 +664,9 @@ main(int argc, char **argv)
 		case 's':
 			pkcs11provider = optarg;
 			break;
+		case 'S':
+			skprovider = optarg;
+			break;
 		case 'e':
 			deleting = 1;
 			pkcs11provider = optarg;
@@ -686,6 +708,9 @@ main(int argc, char **argv)
 		goto done;
 	}
 
+	if (skprovider == NULL)
+		skprovider = "internal";
+
 	argc -= optind;
 	argv += optind;
 	if (Tflag) {
@@ -721,7 +746,7 @@ main(int argc, char **argv)
 			if (stat(buf, &st) == -1)
 				continue;
 			if (do_file(agent_fd, deleting, key_only, buf,
-			    qflag) == -1)
+			    qflag, skprovider) == -1)
 				ret = 1;
 			else
 				count++;
@@ -731,7 +756,7 @@ main(int argc, char **argv)
 	} else {
 		for (i = 0; i < argc; i++) {
 			if (do_file(agent_fd, deleting, key_only,
-			    argv[i], qflag) == -1)
+			    argv[i], qflag, skprovider) == -1)
 				ret = 1;
 		}
 	}

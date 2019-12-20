@@ -1,4 +1,4 @@
-.\" $OpenBSD: ntpd.conf.5,v 1.37 2017/08/10 22:59:42 job Exp $
+.\" $OpenBSD: ntpd.conf.5,v 1.43 2019/11/12 07:19:18 jmc Exp $
 .\"
 .\" Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
 .\"
@@ -14,7 +14,7 @@
 .\" AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
 .\" OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: August 10 2017 $
+.Dd $Mdocdate: November 12 2019 $
 .Dt NTPD.CONF 5
 .Os
 .Sh NAME
@@ -79,9 +79,10 @@ query from 2001:db8::1
 .Ed
 .It Xo Ic sensor Ar device
 .Op Ic correction Ar microseconds
-.Op Ic weight Ar weight-value
-.Op Ic refid Ar string
+.Op Ic refid Ar ID-string
 .Op Ic stratum Ar stratum-value
+.Op Ic trusted
+.Op Ic weight Ar weight-value
 .Xc
 Specify a timedelta sensor device
 .Xr ntpd 8
@@ -103,7 +104,9 @@ sensor *
 sensor nmea0
 .Ed
 .Pp
-An optional correction in microseconds can be given to compensate
+A
+.Ic correction
+in microseconds can be given to compensate
 for the sensor's offset.
 The maximum correction is 127 seconds.
 For example, if a DCF77 receiver is lagging 70ms behind
@@ -112,7 +115,38 @@ actual time:
 sensor udcf0 correction 70000
 .Ed
 .Pp
-The optional
+A
+.Ic refid
+.Ar ID-string
+of up up to 4 ASCII characters can be
+given to publish the sensor type to clients.
+RFC 2030 suggests some common reference identifiers, but new identifiers
+"can be contrived as appropriate."
+If an
+.Ar ID-string
+is not given,
+.Xr ntpd 8
+will use a generic reference ID.
+For example:
+.Bd -literal -offset indent
+sensor nmea0 refid GPS
+.Ed
+.Pp
+The
+.Ic stratum
+keyword can be used to change the stratum value from the default of 1.
+.Pp
+The
+.Ic trusted
+keyword indicates the time learned is secure, trustworthy,
+and not vulnerable to man-in-the-middle attacks, so
+.Ic constraints
+validation is skipped.
+This is useful for boot-time correction in environments where
+.Ic constraints
+cannot be used.
+.Pp
+The
 .Ic weight
 keyword permits finer control over the relative importance
 of time sources (servers or sensor devices).
@@ -122,23 +156,8 @@ the default is 1.
 A server with a weight of 5, for example,
 will have five times more influence on time offset calculation
 than a server with a weight of 1.
-.Pp
-An optional reference ID string - up to 4 ASCII characters - can be
-given to publish the sensor type to clients.
-RFC 2030 suggests some common reference identifiers, but new identifiers
-"can be contrived as appropriate."
-If an ID string is not given,
-.Xr ntpd 8
-will use a generic reference ID.
-For example:
-.Bd -literal -offset indent
-sensor nmea0 refid GPS
-.Ed
-.Pp
-A stratum value other than the default of 1 can be assigned using the
-.Ic stratum
-keyword.
 .It Xo Ic server Ar address
+.Op Ic trusted
 .Op Ic weight Ar weight-value
 .Xc
 Specify the IP address or the hostname of an NTP
@@ -163,6 +182,7 @@ To provide redundancy, it is good practice to configure multiple servers.
 In general, best accuracy is obtained by using servers that have a low
 network latency.
 .It Xo Ic servers Ar address
+.Op Ic trusted
 .Op Ic weight Ar weight-value
 .Xc
 As with
@@ -193,9 +213,13 @@ Received NTP packets with time information falling outside of a range
 near the constraint will be discarded and such NTP servers
 will be marked as invalid.
 .Bl -tag -width Ds
-.It Ic constraint from Ar url
+.It Ic constraint from Ar url [ip...]
 Specify the URL, IP address or the hostname of an HTTPS server to
 provide a constraint.
+If the url is followed by one or more addresses the url and addresses will be
+tried until a working one is found.
+The url path and expected certificate name is always taken from the
+url specified.
 If
 .Ic constraint from
 is used more than once,
@@ -204,6 +228,7 @@ will calculate a median constraint from all the servers specified.
 .Bd -literal -offset indent
 server ntp.example.org
 constraint from www.example.com
+constraint from "https://9.9.9.9" "2620:fe::9"
 .Ed
 .It Ic constraints from Ar url
 As with

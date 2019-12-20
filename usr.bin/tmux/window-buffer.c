@@ -1,4 +1,4 @@
-/* $OpenBSD: window-buffer.c,v 1.22 2019/08/16 11:49:12 nicm Exp $ */
+/* $OpenBSD: window-buffer.c,v 1.24 2019/12/13 09:15:13 nicm Exp $ */
 
 /*
  * Copyright (c) 2017 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -208,9 +208,9 @@ window_buffer_draw(__unused void *modedata, void *itemdata,
 {
 	struct window_buffer_itemdata	*item = itemdata;
 	struct paste_buffer		*pb;
-	char				 line[1024];
-	const char			*pdata, *end, *cp;
-	size_t				 psize, at;
+	const char			*pdata, *start, *end;
+	char				*buf = NULL;
+	size_t				 psize, len;
 	u_int				 i, cx = ctx->s->cx, cy = ctx->s->cy;
 
 	pb = paste_get_name(item->name);
@@ -219,27 +219,22 @@ window_buffer_draw(__unused void *modedata, void *itemdata,
 
 	pdata = end = paste_buffer_data(pb, &psize);
 	for (i = 0; i < sy; i++) {
-		at = 0;
-		while (end != pdata + psize && *end != '\n') {
-			if ((sizeof line) - at > 5) {
-				cp = vis(line + at, *end, VIS_OCTAL|VIS_TAB, 0);
-				at = cp - line;
-			}
+		start = end;
+		while (end != pdata + psize && *end != '\n')
 			end++;
-		}
-		if (at > sx)
-			at = sx;
-		line[at] = '\0';
-
-		if (*line != '\0') {
+		buf = xreallocarray(buf, 4, end - start + 1);
+		len = utf8_strvis(buf, start, end - start, VIS_OCTAL|VIS_TAB);
+		if (*buf != '\0') {
 			screen_write_cursormove(ctx, cx, cy + i, 0);
-			screen_write_puts(ctx, &grid_default_cell, "%s", line);
+			screen_write_nputs(ctx, sx, &grid_default_cell, "%s",
+			    buf);
 		}
 
 		if (end == pdata + psize)
 			break;
 		end++;
 	}
+	free(buf);
 }
 
 static int
@@ -334,7 +329,7 @@ window_buffer_resize(struct window_mode_entry *wme, u_int sx, u_int sy)
 }
 
 static void
-window_buffer_do_delete(void* modedata, void *itemdata,
+window_buffer_do_delete(void *modedata, void *itemdata,
     __unused struct client *c, __unused key_code key)
 {
 	struct window_buffer_modedata	*data = modedata;
@@ -348,7 +343,7 @@ window_buffer_do_delete(void* modedata, void *itemdata,
 }
 
 static void
-window_buffer_do_paste(void* modedata, void *itemdata, struct client *c,
+window_buffer_do_paste(void *modedata, void *itemdata, struct client *c,
     __unused key_code key)
 {
 	struct window_buffer_modedata	*data = modedata;

@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1999-2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: dbtable.h,v 1.17.18.2 2005/04/29 00:16:11 marka Exp $ */
+/* $Id: dbtable.h,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
 
 #ifndef DNS_DBTABLE_H
 #define DNS_DBTABLE_H 1
@@ -24,7 +23,7 @@
  ***** Module Info
  *****/
 
-/*! \file
+/*! \file dns/dbtable.h
  * \brief
  * DNS DB Tables
  *
@@ -155,7 +154,7 @@ dns_dbtable_find(dns_dbtable_t *dbtable, dns_name_t *name,
  *\li	If the DNS_DBTABLEFIND_NOEXACT option is set, the best partial
  *	match (if any) to 'name' will be returned.
  *
- * Returns:  
+ * Returns:
  * \li #ISC_R_SUCCESS		on success
  *\li	     something else:		no default and match
  */
