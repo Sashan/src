@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_athn_usb.c,v 1.52 2018/12/06 07:50:38 stsp Exp $	*/
+/*	$OpenBSD: if_athn_usb.c,v 1.55 2019/11/25 11:32:17 mpi Exp $	*/
 
 /*-
  * Copyright (c) 2011 Damien Bergamini <damien.bergamini@free.fr>
@@ -176,7 +176,8 @@ void		athn_usb_intr(struct usbd_xfer *, void *,
 		    usbd_status);
 void		athn_usb_rx_radiotap(struct athn_softc *, struct mbuf *,
 		    struct ar_rx_status *);
-void		athn_usb_rx_frame(struct athn_usb_softc *, struct mbuf *);
+void		athn_usb_rx_frame(struct athn_usb_softc *, struct mbuf *,
+		    struct mbuf_list *);
 void		athn_usb_rxeof(struct usbd_xfer *, void *,
 		    usbd_status);
 void		athn_usb_txeof(struct usbd_xfer *, void *,
@@ -693,7 +694,8 @@ athn_usb_load_firmware(struct athn_usb_softc *usc)
 	error = usbd_do_request(usc->sc_udev, &req, NULL);
 	/* Wait at most 1 second for firmware to boot. */
 	if (error == 0 && usc->wait_msg_id != 0)
-		error = tsleep(&usc->wait_msg_id, 0, "athnfw", hz);
+		error = tsleep_nsec(&usc->wait_msg_id, 0, "athnfw",
+		    SEC_TO_NSEC(1));
 	usc->wait_msg_id = 0;
 	splx(s);
 	return (error);
@@ -778,7 +780,8 @@ athn_usb_htc_setup(struct athn_usb_softc *usc)
 	usc->wait_msg_id = AR_HTC_MSG_CONF_PIPE_RSP;
 	error = athn_usb_htc_msg(usc, AR_HTC_MSG_CONF_PIPE, &cfg, sizeof(cfg));
 	if (error == 0 && usc->wait_msg_id != 0)
-		error = tsleep(&usc->wait_msg_id, 0, "athnhtc", hz);
+		error = tsleep_nsec(&usc->wait_msg_id, 0, "athnhtc",
+		    SEC_TO_NSEC(1));
 	usc->wait_msg_id = 0;
 	splx(s);
 	if (error != 0) {
@@ -814,7 +817,8 @@ athn_usb_htc_connect_svc(struct athn_usb_softc *usc, uint16_t svc_id,
 	error = athn_usb_htc_msg(usc, AR_HTC_MSG_CONN_SVC, &msg, sizeof(msg));
 	/* Wait at most 1 second for response. */
 	if (error == 0 && usc->wait_msg_id != 0)
-		error = tsleep(&usc->wait_msg_id, 0, "athnhtc", hz);
+		error = tsleep_nsec(&usc->wait_msg_id, 0, "athnhtc",
+		    SEC_TO_NSEC(1));
 	usc->wait_msg_id = 0;
 	splx(s);
 	if (error != 0) {
@@ -849,12 +853,13 @@ athn_usb_wmi_xcmd(struct athn_usb_softc *usc, uint16_t cmd_id, void *ibuf,
 
 	s = splusb();
 	while (usc->wait_cmd_id) {
-		/* 
+		/*
 		 * The previous USB transfer is not done yet. We can't use
 		 * data->xfer until it is done or we'll cause major confusion
 		 * in the USB stack.
 		 */
-		tsleep(&usc->wait_cmd_id, 0, "athnwmx", ATHN_USB_CMD_TIMEOUT);
+		tsleep_nsec(&usc->wait_cmd_id, 0, "athnwmx",
+		    MSEC_TO_NSEC(ATHN_USB_CMD_TIMEOUT));
 		if (usbd_is_dying(usc->sc_udev)) {
 			splx(s);
 			return ENXIO;
@@ -890,7 +895,8 @@ athn_usb_wmi_xcmd(struct athn_usb_softc *usc, uint16_t cmd_id, void *ibuf,
 	 * Wait for WMI command complete interrupt. In case it does not fire
 	 * wait until the USB transfer times out to avoid racing the transfer.
 	 */
-	error = tsleep(&usc->wait_cmd_id, 0, "athnwmi", ATHN_USB_CMD_TIMEOUT);
+	error = tsleep_nsec(&usc->wait_cmd_id, 0, "athnwmi",
+	    MSEC_TO_NSEC(ATHN_USB_CMD_TIMEOUT));
 	if (error) {
 		if (error == EWOULDBLOCK) {
 			printf("%s: firmware command 0x%x timed out\n",
@@ -1994,7 +2000,8 @@ athn_usb_rx_radiotap(struct athn_softc *sc, struct mbuf *m,
 #endif
 
 void
-athn_usb_rx_frame(struct athn_usb_softc *usc, struct mbuf *m)
+athn_usb_rx_frame(struct athn_usb_softc *usc, struct mbuf *m,
+    struct mbuf_list *ml)
 {
 	struct athn_softc *sc = &usc->sc_sc;
 	struct ieee80211com *ic = &sc->sc_ic;
@@ -2060,7 +2067,7 @@ athn_usb_rx_frame(struct athn_usb_softc *usc, struct mbuf *m)
 	rxi.rxi_flags = 0;
 	rxi.rxi_rssi = rs->rs_rssi + AR_USB_DEFAULT_NF;
 	rxi.rxi_tstamp = betoh64(rs->rs_tstamp);
-	ieee80211_input(ifp, m, ni, &rxi);
+	ieee80211_inputm(ifp, m, ni, &rxi, ml);
 
 	/* Node is no longer needed. */
 	ieee80211_release_node(ic, ni);
@@ -2074,6 +2081,7 @@ void
 athn_usb_rxeof(struct usbd_xfer *xfer, void *priv,
     usbd_status status)
 {
+	struct mbuf_list ml = MBUF_LIST_INITIALIZER();
 	struct athn_usb_rx_data *data = priv;
 	struct athn_usb_softc *usc = data->sc;
 	struct athn_softc *sc = &usc->sc_sc;
@@ -2101,7 +2109,7 @@ athn_usb_rxeof(struct usbd_xfer *xfer, void *priv,
 			if (__predict_true(stream->m != NULL)) {
 				memcpy(mtod(stream->m, uint8_t *) +
 				    stream->moff, buf, stream->left);
-				athn_usb_rx_frame(usc, stream->m);
+				athn_usb_rx_frame(usc, stream->m, &ml);
 				stream->m = NULL;
 			}
 			/* Next header is 32-bit aligned. */
@@ -2167,7 +2175,7 @@ athn_usb_rxeof(struct usbd_xfer *xfer, void *priv,
 		if (__predict_true(m != NULL)) {
 			/* We have all the pktlen bytes in this xfer. */
 			memcpy(mtod(m, uint8_t *), buf, pktlen);
-			athn_usb_rx_frame(usc, m);
+			athn_usb_rx_frame(usc, m, &ml);
 		}
 
 		/* Next header is 32-bit aligned. */
@@ -2175,6 +2183,7 @@ athn_usb_rxeof(struct usbd_xfer *xfer, void *priv,
 		buf += off;
 		len -= off;
 	}
+	if_input(ifp, &ml);
 
  resubmit:
 	/* Setup a new transfer. */

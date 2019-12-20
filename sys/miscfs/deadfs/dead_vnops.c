@@ -1,4 +1,4 @@
-/*	$OpenBSD: dead_vnops.c,v 1.29 2015/03/14 03:38:51 jsg Exp $	*/
+/*	$OpenBSD: dead_vnops.c,v 1.31 2019/12/05 10:41:08 mpi Exp $	*/
 /*	$NetBSD: dead_vnops.c,v 1.16 1996/02/13 13:12:48 mycroft Exp $	*/
 
 /*
@@ -52,6 +52,7 @@ int	dead_read(void *);
 int	dead_write(void *);
 int	dead_ioctl(void *);
 int	dead_poll(void *);
+int	dead_inactive(void *);
 int	dead_lock(void *);
 int	dead_bmap(void *);
 int	dead_strategy(void *);
@@ -82,7 +83,7 @@ struct vops dead_vops = {
 	.vop_readdir	= dead_ebadf,
 	.vop_readlink	= dead_ebadf,
 	.vop_abortop	= dead_badop,
-	.vop_inactive	= nullop,
+	.vop_inactive	= dead_inactive,
 	.vop_reclaim	= nullop,
 	.vop_lock	= dead_lock,
 	.vop_unlock	= vop_generic_unlock,
@@ -185,6 +186,15 @@ dead_strategy(void *v)
 	return (VOP_STRATEGY(ap->a_bp));
 }
 
+int
+dead_inactive(void *v)
+{
+	struct vop_inactive_args *ap = v;
+
+	VOP_UNLOCK(ap->a_vp);
+	return (0);
+}
+
 /*
  * Wait until the vnode has finished changing state.
  */
@@ -256,7 +266,7 @@ chkvnlock(struct vnode *vp)
 
 	while (vp->v_flag & VXLOCK) {
 		vp->v_flag |= VXWANT;
-		tsleep(vp, PINOD, "chkvnlock", 0);
+		tsleep_nsec(vp, PINOD, "chkvnlock", INFSLP);
 		locked = 1;
 	}
 	return (locked);

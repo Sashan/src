@@ -1,4 +1,4 @@
-/* $OpenBSD: moduli.c,v 1.35 2019/07/03 03:24:02 deraadt Exp $ */
+/* $OpenBSD: moduli.c,v 1.37 2019/11/15 06:00:20 djm Exp $ */
 /*
  * Copyright 1994 Phil Karn <karn@qualcomm.com>
  * Copyright 1996-1998, 2003 William Allen Simpson <wsimpson@greendragon.com>
@@ -153,6 +153,8 @@ qfileout(FILE * ofile, u_int32_t otype, u_int32_t otests, u_int32_t otries,
 
 	time(&time_now);
 	gtm = gmtime(&time_now);
+	if (gtm == NULL)
+		return -1;
 
 	res = fprintf(ofile, "%04d%02d%02d%02d%02d%02d %u %u %u %u %x ",
 	    gtm->tm_year + 1900, gtm->tm_mon + 1, gtm->tm_mday,
@@ -570,7 +572,6 @@ prime_test(FILE *in, FILE *out, u_int32_t trials, u_int32_t generator_wanted,
     char *checkpoint_file, unsigned long start_lineno, unsigned long num_lines)
 {
 	BIGNUM *q, *p, *a;
-	BN_CTX *ctx;
 	char *cp, *lp;
 	u_int32_t count_in = 0, count_out = 0, count_possible = 0;
 	u_int32_t generator_known, in_tests, in_tries, in_type, in_size;
@@ -594,8 +595,6 @@ prime_test(FILE *in, FILE *out, u_int32_t trials, u_int32_t generator_wanted,
 		fatal("BN_new failed");
 	if ((q = BN_new()) == NULL)
 		fatal("BN_new failed");
-	if ((ctx = BN_CTX_new()) == NULL)
-		fatal("BN_CTX_new failed");
 
 	debug2("%.24s Final %u Miller-Rabin trials (%x generator)",
 	    ctime(&time_start), trials, generator_wanted);
@@ -745,7 +744,7 @@ prime_test(FILE *in, FILE *out, u_int32_t trials, u_int32_t generator_wanted,
 		 * that p is also prime. A single pass will weed out the
 		 * vast majority of composite q's.
 		 */
-		is_prime = BN_is_prime_ex(q, 1, ctx, NULL);
+		is_prime = BN_is_prime_ex(q, 1, NULL, NULL);
 		if (is_prime < 0)
 			fatal("BN_is_prime_ex failed");
 		if (is_prime == 0) {
@@ -761,7 +760,7 @@ prime_test(FILE *in, FILE *out, u_int32_t trials, u_int32_t generator_wanted,
 		 * will show up on the first Rabin-Miller iteration so it
 		 * doesn't hurt to specify a high iteration count.
 		 */
-		is_prime = BN_is_prime_ex(p, trials, ctx, NULL);
+		is_prime = BN_is_prime_ex(p, trials, NULL, NULL);
 		if (is_prime < 0)
 			fatal("BN_is_prime_ex failed");
 		if (is_prime == 0) {
@@ -771,7 +770,7 @@ prime_test(FILE *in, FILE *out, u_int32_t trials, u_int32_t generator_wanted,
 		debug("%10u: p is almost certainly prime", count_in);
 
 		/* recheck q more rigorously */
-		is_prime = BN_is_prime_ex(q, trials - 1, ctx, NULL);
+		is_prime = BN_is_prime_ex(q, trials - 1, NULL, NULL);
 		if (is_prime < 0)
 			fatal("BN_is_prime_ex failed");
 		if (is_prime == 0) {
@@ -794,7 +793,6 @@ prime_test(FILE *in, FILE *out, u_int32_t trials, u_int32_t generator_wanted,
 	free(lp);
 	BN_free(p);
 	BN_free(q);
-	BN_CTX_free(ctx);
 
 	if (checkpoint_file != NULL)
 		unlink(checkpoint_file);

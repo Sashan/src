@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_subr.c,v 1.292 2019/07/25 01:43:21 cheloha Exp $	*/
+/*	$OpenBSD: vfs_subr.c,v 1.294 2019/12/08 12:29:42 mpi Exp $	*/
 /*	$NetBSD: vfs_subr.c,v 1.53 1996/04/22 01:39:13 christos Exp $	*/
 
 /*
@@ -652,7 +652,7 @@ vget(struct vnode *vp, int flags)
 		}
 
 		vp->v_flag |= VXWANT;
-		tsleep(vp, PINOD, "vget", 0);
+		tsleep_nsec(vp, PINOD, "vget", INFSLP);
 		return (ENOENT);
 	}
 
@@ -704,6 +704,9 @@ vputonfreelist(struct vnode *vp)
 #ifdef DIAGNOSTIC
 	if (vp->v_usecount != 0)
 		panic("Use count is not zero!");
+
+	if (vp->v_lockcount != 0)
+		panic("%s: lock count is not zero", __func__);
 
 	if (vp->v_bioflag & VBIOONFREELIST) {
 		vprint("vnode already on free list: ", vp);
@@ -1101,7 +1104,7 @@ vgonel(struct vnode *vp, struct proc *p)
 	 */
 	if (vp->v_flag & VXLOCK) {
 		vp->v_flag |= VXWANT;
-		tsleep(vp, PINOD, "vgone", 0);
+		tsleep_nsec(vp, PINOD, "vgone", INFSLP);
 		return;
 	}
 

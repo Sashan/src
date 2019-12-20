@@ -1,4 +1,4 @@
-/*	$OpenBSD: pci_machdep.c,v 1.71 2019/06/25 16:46:32 kettenis Exp $	*/
+/*	$OpenBSD: pci_machdep.c,v 1.73 2019/09/07 13:46:19 kettenis Exp $	*/
 /*	$NetBSD: pci_machdep.c,v 1.3 2003/05/07 21:33:58 fvdl Exp $	*/
 
 /*-

@@ -1,4 +1,4 @@
-/* $OpenBSD: trap.c,v 1.24 2019/07/09 23:48:07 deraadt Exp $ */
+/* $OpenBSD: trap.c,v 1.26 2019/10/17 15:38:56 drahn Exp $ */
 /*-
  * Copyright (c) 2014 Andrew Turner
  * All rights reserved.
@@ -111,7 +111,8 @@ data_abort(struct trapframe *frame, uint64_t esr, uint64_t far,
 	if (exe)
 		access_type = PROT_EXEC;
 	else
-		access_type = ((esr >> 6) & 1) ? PROT_WRITE : PROT_READ;
+		access_type = (!(esr & ISS_DATA_CM) && (esr & ISS_DATA_WnR)) ?
+		    PROT_WRITE : PROT_READ;
 
 	ftype = VM_FAULT_INVALID; // should check for failed permissions.
 
@@ -245,9 +246,9 @@ do_el0_sync(struct trapframe *frame)
 	if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
 	    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
 	    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-		return;
+		goto out;
 
-	switch(exception) {
+	switch (exception) {
 	case EXCP_UNKNOWN:
 		vfp_save();
 		curcpu()->ci_flush_bp();
@@ -316,7 +317,7 @@ do_el0_sync(struct trapframe *frame)
 		sigexit(p, SIGILL);
 		KERNEL_UNLOCK();
 	}
-
+out:
 	userret(p);
 }
 

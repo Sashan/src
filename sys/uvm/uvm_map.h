@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_map.h,v 1.62 2019/06/14 05:52:43 deraadt Exp $	*/
+/*	$OpenBSD: uvm_map.h,v 1.67 2019/12/18 13:33:29 visa Exp $	*/
 /*	$NetBSD: uvm_map.h,v 1.24 2001/02/18 21:19:08 chs Exp $	*/
 
 /*
@@ -86,16 +86,6 @@
 #ifdef _KERNEL
 
 /*
- * Internal functions.
- *
- * Required by clipping macros.
- */
-void			 uvm_map_clip_end(struct vm_map*, struct vm_map_entry*,
-			    vaddr_t);
-void			 uvm_map_clip_start(struct vm_map*,
-			    struct vm_map_entry*, vaddr_t);
-
-/*
  * UVM_MAP_CLIP_START: ensure that the entry begins at or after
  * the starting address, if it doesn't we split the entry.
  * 
@@ -133,26 +123,6 @@ void			 uvm_map_clip_start(struct vm_map*,
 #include <uvm/uvm_anon.h>
 
 /*
- * types defined:
- *
- *	vm_map_t		the high-level address map data structure.
- *	vm_map_entry_t		an entry in an address map.
- *	vm_map_version_t	a timestamp of a map, for use with vm_map_lookup
- */
-
-/*
- * Objects which live in maps may be either VM objects, or another map
- * (called a "sharing map") which denotes read-write sharing with other maps.
- *
- * XXXCDC: private pager data goes here now
- */
-
-union vm_map_object {
-	struct uvm_object	*uvm_obj;	/* UVM OBJECT */
-	struct vm_map		*sub_map;	/* belongs to another map */
-};
-
-/*
  * Address map entries consist of start and end addresses,
  * a VM object (or sharing map) and offset into that object,
  * and user-exported inheritance and protection information.
@@ -177,23 +147,23 @@ struct vm_map_entry {
 	vsize_t			guard;		/* bytes in guard */
 	vsize_t			fspace;		/* free space */
 
-	union vm_map_object	object;		/* object I point to */
+	union {
+		struct uvm_object *uvm_obj;	/* uvm object */
+		struct vm_map	*sub_map;	/* belongs to another map */
+	} object;				/* object I point to */
 	voff_t			offset;		/* offset into object */
 	struct vm_aref		aref;		/* anonymous overlay */
-
 	int			etype;		/* entry type */
-
 	vm_prot_t		protection;	/* protection code */
 	vm_prot_t		max_protection;	/* maximum protection */
 	vm_inherit_t		inheritance;	/* inheritance */
-
 	int			wired_count;	/* can be paged if == 0 */
 	int			advice;		/* madvise advice */
 #define uvm_map_entry_stop_copy flags
 	u_int8_t		flags;		/* flags */
 
-#define UVM_MAP_STATIC		0x01		/* static map entry */
-#define UVM_MAP_KMEM		0x02		/* from kmem entry pool */
+#define	UVM_MAP_STATIC		0x01		/* static map entry */
+#define	UVM_MAP_KMEM		0x02		/* from kmem entry pool */
 
 	vsize_t			fspace_augment;	/* max(fspace) in subtree */
 };
@@ -278,7 +248,7 @@ RBT_PROTOTYPE(uvm_map_addr, vm_map_entry, daddrs.addr_entry,
  * If that allocation fails:
  * - vmspace maps will spill over into vm_map.bfree,
  * - all other maps will call uvm_map_kmem_grow() to increase the arena.
- * 
+ *
  * vmspace maps have their data, brk() and stack arenas automatically
  * updated when uvm_map() is invoked without MAP_FIXED.
  * The spill over arena (vm_map.bfree) will contain the space in the brk()
@@ -287,15 +257,19 @@ RBT_PROTOTYPE(uvm_map_addr, vm_map_entry, daddrs.addr_entry,
  *
  *
  * read_locks and write_locks are used in lock debugging code.
+ *
+ *  Locks used to protect struct members in this file:
+ *	I	immutable after creation or exec(2)
+ *	v	`vm_map_lock' (this map `lock' or `mtx')
  */
 struct vm_map {
-	struct pmap *		pmap;		/* Physical map */
-	struct rwlock		lock;		/* Lock for map data */
-	struct mutex		mtx;
-	u_long			sserial;	/* counts stack changes */
-	u_long			wserial;	/* counts PROT_WRITE increases */
+	struct pmap		*pmap;		/* [I] Physical map */
+	struct rwlock		lock;		/* Non-intrsafe lock */
+	struct mutex		mtx;		/* Intrsafe lock */
+	u_long			sserial;	/* [v] # stack changes */
+	u_long			wserial;	/* [v] # PROT_WRITE increases */
 
-	struct uvm_map_addr	addr;		/* Entry tree, by addr */
+	struct uvm_map_addr	addr;		/* [v] Entry tree, by addr */
 
 	vsize_t			size;		/* virtual size */
 	int			ref_count;	/* Reference count */
@@ -303,16 +277,16 @@ struct vm_map {
 	struct mutex		flags_lock;	/* flags lock */
 	unsigned int		timestamp;	/* Version number */
 
-	vaddr_t			min_offset;	/* First address in map. */
-	vaddr_t			max_offset;	/* Last address in map. */
+	vaddr_t			min_offset;	/* [I] First address in map. */
+	vaddr_t			max_offset;	/* [I] Last address in map. */
 
 	/*
 	 * Allocation overflow regions.
 	 */
-	vaddr_t			b_start;	/* Start for brk() alloc. */
-	vaddr_t			b_end;		/* End for brk() alloc. */
-	vaddr_t			s_start;	/* Start for stack alloc. */
-	vaddr_t			s_end;		/* End for stack alloc. */
+	vaddr_t			b_start;	/* [v] Start for brk() alloc. */
+	vaddr_t			b_end;		/* [v] End for brk() alloc. */
+	vaddr_t			s_start;	/* [v] Start for stack alloc. */
+	vaddr_t			s_end;		/* [v] End for stack alloc. */
 
 	/*
 	 * Special address selectors.
@@ -344,38 +318,17 @@ struct vm_map {
 #define	VM_MAP_WIREFUTURE	0x04		/* rw: wire future mappings */
 #define	VM_MAP_BUSY		0x08		/* rw: map is busy */
 #define	VM_MAP_WANTLOCK		0x10		/* rw: want to write-lock */
-#define VM_MAP_GUARDPAGES	0x20		/* rw: add guard pgs to map */
-#define VM_MAP_ISVMSPACE	0x40		/* ro: map is a vmspace */
+#define	VM_MAP_GUARDPAGES	0x20		/* rw: add guard pgs to map */
+#define	VM_MAP_ISVMSPACE	0x40		/* ro: map is a vmspace */
+#define	VM_MAP_SYSCALL_ONCE	0x80		/* rw: libc syscall registered */
 
-/* XXX: number of kernel maps and entries to statically allocate */
-
-#if !defined(MAX_KMAPENT)
+/* Number of kernel maps and entries to statically allocate */
 #define	MAX_KMAPENT	1024	/* Sufficient to make it to the scheduler. */
-#endif	/* !defined MAX_KMAPENT */
 
 #ifdef _KERNEL
-#define	vm_map_modflags(map, set, clear)				\
-do {									\
-	mtx_enter(&(map)->flags_lock);					\
-	(map)->flags = ((map)->flags | (set)) & ~(clear);		\
-	mtx_leave(&(map)->flags_lock);					\
-} while (0)
-#endif /* _KERNEL */
-
-/*
- *	Interrupt-safe maps must also be kept on a special list,
- *	to assist uvm_fault() in avoiding locking problems.
- */
-struct vm_map_intrsafe {
-	struct vm_map	vmi_map;
-	LIST_ENTRY(vm_map_intrsafe) vmi_list;
-};
-
 /*
  * globals:
  */
-
-#ifdef _KERNEL
 
 extern vaddr_t	uvm_maxkaddr;
 
@@ -383,43 +336,45 @@ extern vaddr_t	uvm_maxkaddr;
  * protos: the following prototypes define the interface to vm_map
  */
 
-void		uvm_map_deallocate(vm_map_t);
+void		uvm_map_deallocate(struct vm_map *);
 
-int		uvm_map_clean(vm_map_t, vaddr_t, vaddr_t, int);
-vm_map_t	uvm_map_create(pmap_t, vaddr_t, vaddr_t, int);
-int		uvm_map_extract(struct vm_map*, vaddr_t, vsize_t, vaddr_t*,
-		    int);
+int		uvm_map_clean(struct vm_map *, vaddr_t, vaddr_t, int);
+void		uvm_map_clip_start(struct vm_map *, struct vm_map_entry *,
+		    vaddr_t);
+void		uvm_map_clip_end(struct vm_map *, struct vm_map_entry *,
+		    vaddr_t);
+int		uvm_map_extract(struct vm_map *, vaddr_t, vsize_t,
+		    vaddr_t *, int);
+struct vm_map *	uvm_map_create(pmap_t, vaddr_t, vaddr_t, int);
 vaddr_t		uvm_map_pie(vaddr_t);
 vaddr_t		uvm_map_hint(struct vmspace *, vm_prot_t, vaddr_t, vaddr_t);
-int		uvm_map_inherit(vm_map_t, vaddr_t, vaddr_t, vm_inherit_t);
-int		uvm_map_advice(vm_map_t, vaddr_t, vaddr_t, int);
+int		uvm_map_syscall(struct vm_map *, vaddr_t, vaddr_t);
+int		uvm_map_inherit(struct vm_map *, vaddr_t, vaddr_t, vm_inherit_t);
+int		uvm_map_advice(struct vm_map *, vaddr_t, vaddr_t, int);
 void		uvm_map_init(void);
-boolean_t	uvm_map_lookup_entry(vm_map_t, vaddr_t, vm_map_entry_t *);
-boolean_t	uvm_map_is_stack_remappable(vm_map_t, vaddr_t, vsize_t);
+boolean_t	uvm_map_lookup_entry(struct vm_map *, vaddr_t, vm_map_entry_t *);
+boolean_t	uvm_map_is_stack_remappable(struct vm_map *, vaddr_t, vsize_t);
 int		uvm_map_remap_as_stack(struct proc *, vaddr_t, vsize_t);
-int		uvm_map_replace(vm_map_t, vaddr_t, vaddr_t,
+int		uvm_map_replace(struct vm_map *, vaddr_t, vaddr_t,
 		    vm_map_entry_t, int);
-int		uvm_map_reserve(vm_map_t, vsize_t, vaddr_t, vsize_t,
+int		uvm_map_reserve(struct vm_map *, vsize_t, vaddr_t, vsize_t,
 		    vaddr_t *);
-void		uvm_map_setup(vm_map_t, vaddr_t, vaddr_t, int);
-int		uvm_map_submap(vm_map_t, vaddr_t, vaddr_t, vm_map_t);
-void		uvm_unmap(vm_map_t, vaddr_t, vaddr_t);
+void		uvm_map_setup(struct vm_map *, pmap_t, vaddr_t, vaddr_t, int);
+int		uvm_map_submap(struct vm_map *, vaddr_t, vaddr_t,
+		    struct vm_map *);
+void		uvm_unmap(struct vm_map *, vaddr_t, vaddr_t);
+void		uvm_unmap_detach(struct uvm_map_deadq *, int);
+void		uvm_unmap_remove(struct vm_map*, vaddr_t, vaddr_t,
+		    struct uvm_map_deadq *, boolean_t, boolean_t);
 void		uvm_map_set_uaddr(struct vm_map*, struct uvm_addr_state**,
 		    struct uvm_addr_state*);
 int		uvm_map_mquery(struct vm_map*, vaddr_t*, vsize_t, voff_t, int);
 
-void		uvm_unmap_detach(struct uvm_map_deadq*, int);
-void		uvm_unmap_remove(struct vm_map*, vaddr_t, vaddr_t,
-		    struct uvm_map_deadq*, boolean_t, boolean_t);
 
 struct p_inentry;
 
-int		uvm_map_inentry_recheck(u_long serial, vaddr_t,
-		    struct p_inentry *);
 int		uvm_map_inentry_sp(vm_map_entry_t);
 int		uvm_map_inentry_pc(vm_map_entry_t);
-boolean_t	uvm_map_inentry_fix(struct proc *, struct p_inentry *,
-		    vaddr_t addr, int (*fn)(vm_map_entry_t), u_long serial);
 boolean_t	uvm_map_inentry(struct proc *, struct p_inentry *, vaddr_t addr,
 		    const char *fmt, int (*fn)(vm_map_entry_t), u_long serial);
 
@@ -427,8 +382,6 @@ struct kinfo_vmentry;
 
 int		uvm_map_fill_vmmap(struct vm_map *, struct kinfo_vmentry *,
 		    size_t *);
-
-#endif /* _KERNEL */
 
 /*
  * VM map locking operations:
@@ -456,7 +409,6 @@ int		uvm_map_fill_vmmap(struct vm_map *, struct kinfo_vmentry *,
  *
  */
 
-#ifdef _KERNEL
 /*
  * XXX: clean up later
  * Half the kernel seems to depend on them being included here.

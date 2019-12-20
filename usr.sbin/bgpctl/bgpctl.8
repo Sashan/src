@@ -1,4 +1,4 @@
-.\" $OpenBSD: bgpctl.8,v 1.89 2019/06/28 12:12:06 claudio Exp $
+.\" $OpenBSD: bgpctl.8,v 1.93 2019/10/19 11:40:26 claudio Exp $
 .\"
 .\" Copyright (c) 2003 Henning Brauer <henning@openbsd.org>
 .\"
@@ -14,7 +14,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: June 28 2019 $
+.Dd $Mdocdate: October 19 2019 $
 .Dt BGPCTL 8
 .Os
 .Sh NAME
@@ -87,9 +87,6 @@ If a
 is provided, the
 .Ar reason
 is sent as Administrative Shutdown Communication to the neighbor.
-The
-.Ar reason
-cannot exceed 128 octets.
 .Ar peer
 may be the neighbor's address, description or the word
 .Cm group
@@ -108,9 +105,6 @@ If a
 is provided, the
 .Ar reason
 is sent as Administrative Shutdown Communication to the neighbor.
-The
-.Ar reason
-cannot exceed 128 octets.
 .Ar peer
 may be the neighbor's address, description or the word
 .Cm group
@@ -223,7 +217,7 @@ Show routes from an MRT table dump file.
 .Ar filter
 can be an IP address, a CIDR prefix, an AS filter, a combination or nothing:
 .Pp
-.Bl -tag -width "address/len all" -compact
+.Bl -tag -width "address/len or-shorter" -compact
 .It Ar address
 Show best matching route for address.
 .It Ar address Ns Li / Ns Ar len
@@ -234,6 +228,11 @@ Show RIB entry for this CIDR prefix.
 .Xc
 Show all entries in the specified range.
 .\".It Ar address/len Cm longer-prefixes
+.It Xo
+.Ar address Ns Li / Ns Ar len
+.Cm or-shorter
+.Xc
+Show all entries covering and including the specified prefix.
 .It Cm as Ar as
 Show all entries with
 .Ar as
@@ -289,7 +288,9 @@ Show statistics in an easily parseable terse format.
 The printed numbers are the sent and received open, sent and received
 notifications, sent and received updates, sent and received keepalives, and
 sent and received route refresh messages plus the current and maximum
-prefix count, the number of sent and received updates, and withdraws.
+prefix count, the number of sent and received updates, sent and
+received withdraws, the neighbor's address (or subnet, for a template),
+AS number, and finally description.
 .It Cm timers
 Show the BGP timers.
 .El
@@ -310,7 +311,7 @@ Routing Information Base.
 .Ar filter
 can be an IP address, a CIDR prefix, an AS filter or nothing:
 .Pp
-.Bl -tag -width "address/len all" -compact
+.Bl -tag -width "address/len or-shorter" -compact
 .It Ar address
 Show best matching route for address.
 .It Ar address Ns Li / Ns Ar len
@@ -321,6 +322,11 @@ Show RIB entry for this CIDR prefix.
 .Xc
 Show all entries in the specified range.
 .\".It Ar address/len Cm longer-prefixes
+.It Xo
+.Ar address Ns Li / Ns Ar len
+.Cm or-shorter
+.Xc
+Show all entries covering and including the specified prefix.
 .It Cm as Ar as
 Show all entries with
 .Ar as

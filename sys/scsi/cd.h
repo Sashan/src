@@ -1,4 +1,4 @@
-/*	$OpenBSD: cd.h,v 1.25 2009/12/16 10:51:28 dlg Exp $	*/
+/*	$OpenBSD: cd.h,v 1.28 2019/11/29 14:06:21 krw Exp $	*/
 /*	$NetBSD: scsi_cd.h,v 1.6 1996/03/19 03:06:39 mycroft Exp $	*/
 
 /*
@@ -18,7 +18,7 @@
  * Ported to run under 386BSD by Julian Elischer (julian@tfs.com) Sept 1992
  */
 #ifndef	_SCSI_CD_H
-#define _SCSI_CD_H 1
+#define _SCSI_CD_H
 
 /*
  *	Define two bits always in the same place in byte 2 (flag byte)
@@ -209,12 +209,12 @@ struct scsi_set_cd_speed {
 
 #define ERR_RECOVERY_PAGE	0x01
 #define WRITE_PARAM_PAGE	0x05
+#define AUDIO_PAGE		0x0e
 #define CDVD_CAPABILITIES_PAGE	0x2a
 
 struct cd_audio_page {
 	u_int8_t page_code;
 #define	CD_PAGE_CODE	0x3F
-#define	AUDIO_PAGE	0x0e
 #define	CD_PAGE_PS	0x80
 	u_int8_t param_len;
 	u_int8_t flags;
@@ -270,4 +270,4 @@ struct scsi_read_dvd_structure_data {
 	u_int8_t	data[2048];
 };
 
-#endif
+#endif /* _SCSI_CD_H */

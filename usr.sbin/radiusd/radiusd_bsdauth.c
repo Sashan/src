@@ -1,4 +1,4 @@
-/*	$OpenBSD: radiusd_bsdauth.c,v 1.12 2019/04/01 11:05:41 yasuoka Exp $	*/
+/*	$OpenBSD: radiusd_bsdauth.c,v 1.14 2019/12/14 15:56:20 millert Exp $	*/
 
 /*
  * Copyright (c) 2015 YASUOKA Masahiko <yasuoka@yasuoka.net>
@@ -189,23 +189,26 @@ main(int argc, char *argv[])
 				group = user + args->userlen;
 				group[args->grouplen - 1] = '\0';
 
+				user[strcspn(user, ":")] = '\0';
 				pw = getpwnam(user);
+				if (pw == NULL)
+					goto invalid;
 				if (getgrnam_r(group, &gr0, g_buf,
 				    sizeof(g_buf), &gr) == -1 || gr == NULL)
-					goto group_done;
+					goto invalid;
 
 				if (gr->gr_gid == pw->pw_gid) {
 					group_ok = true;
-					goto group_done;
+					goto invalid;
 				}
 				for (i = 0; gr->gr_mem[i] != NULL; i++) {
 					if (strcmp(gr->gr_mem[i], pw->pw_name)
 					    == 0) {
 						group_ok = true;
-						goto group_done;
+						goto invalid;
 					}
 				}
-group_done:
+invalid:
 				endgrent();
 
 				imsg_compose(&ibuf, (group_ok)

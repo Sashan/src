@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1999-2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,13 +14,13 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: resultclass.h,v 1.12.18.2 2005/04/29 00:17:02 marka Exp $ */
+/* $Id: resultclass.h,v 1.3 2019/12/17 01:46:35 sthen Exp $ */
 
 #ifndef ISC_RESULTCLASS_H
 #define ISC_RESULTCLASS_H 1
 
 
-/*! \file
+/*! \file isc/resultclass.h
  * \brief Registry of Predefined Result Type Classes
  *
  * A result class number is an unsigned 16 bit number.  Each class may
@@ -45,6 +44,7 @@
 #define	ISC_RESULTCLASS_DNSRCODE	ISC_RESULTCLASS_FROMNUM(3)
 #define	ISC_RESULTCLASS_OMAPI		ISC_RESULTCLASS_FROMNUM(4)
 #define	ISC_RESULTCLASS_ISCCC		ISC_RESULTCLASS_FROMNUM(5)
-
+#define	ISC_RESULTCLASS_DHCP		ISC_RESULTCLASS_FROMNUM(6)
+#define	ISC_RESULTCLASS_PK11		ISC_RESULTCLASS_FROMNUM(7)
 
 #endif /* ISC_RESULTCLASS_H */

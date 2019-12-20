@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ether.c,v 1.240 2019/07/17 16:46:18 mpi Exp $	*/
+/*	$OpenBSD: if_ether.c,v 1.242 2019/11/07 11:23:23 krw Exp $	*/
 /*	$NetBSD: if_ether.c,v 1.31 1996/05/11 12:59:58 mycroft Exp $	*/
 
 /*
@@ -207,6 +207,8 @@ arp_rtrequest(struct ifnet *ifp, int req, struct rtentry *rt)
 		break;
 
 	case RTM_INVALIDATE:
+		if (la == NULL)
+			break;
 		if (!ISSET(rt->rt_flags, RTF_LOCAL))
 			arpinvalidate(rt);
 		break;
@@ -914,7 +916,8 @@ revarpwhoarewe(struct ifnet *ifp, struct in_addr *serv_in,
 	revarp_ifidx = ifp->if_index;
 	while (count--) {
 		revarprequest(ifp);
-		result = tsleep((caddr_t)&revarp_myip, PSOCK, "revarp", hz/2);
+		result = tsleep_nsec(&revarp_myip, PSOCK, "revarp",
+		    MSEC_TO_NSEC(500));
 		if (result != EWOULDBLOCK)
 			break;
 	}

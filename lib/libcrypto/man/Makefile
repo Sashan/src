@@ -1,9 +1,10 @@
-# $OpenBSD: Makefile,v 1.149 2019/08/16 16:15:50 schwarze Exp $
+# $OpenBSD: Makefile,v 1.160 2019/11/02 15:12:31 schwarze Exp $
 
 .include <bsd.own.mk>
 
 MAN=	\
 	ACCESS_DESCRIPTION_new.3 \
+	AES_encrypt.3 \
 	ASN1_INTEGER_get.3 \
 	ASN1_OBJECT_new.3 \
 	ASN1_STRING_length.3 \
@@ -15,6 +16,7 @@ MAN=	\
 	ASN1_generate_nconf.3 \
 	ASN1_item_d2i.3 \
 	ASN1_item_new.3 \
+	ASN1_put_object.3 \
 	ASN1_time_parse.3 \
 	AUTHORITY_KEYID_new.3 \
 	BASIC_CONSTRAINTS_new.3 \
@@ -30,6 +32,7 @@ MAN=	\
 	BIO_get_ex_new_index.3 \
 	BIO_meth_new.3 \
 	BIO_new.3 \
+	BIO_new_CMS.3 \
 	BIO_printf.3 \
 	BIO_push.3 \
 	BIO_read.3 \
@@ -65,10 +68,28 @@ MAN=	\
 	BN_swap.3 \
 	BN_zero.3 \
 	BUF_MEM_new.3 \
+	CMS_ContentInfo_new.3 \
+	CMS_add0_cert.3 \
+	CMS_add1_recipient_cert.3 \
+	CMS_add1_signer.3 \
+	CMS_compress.3 \
+	CMS_decrypt.3 \
+	CMS_encrypt.3 \
+	CMS_final.3 \
+	CMS_get0_RecipientInfos.3 \
+	CMS_get0_SignerInfos.3 \
+	CMS_get0_type.3 \
+	CMS_get1_ReceiptRequest.3 \
+	CMS_sign.3 \
+	CMS_sign_receipt.3 \
+	CMS_uncompress.3 \
+	CMS_verify.3 \
+	CMS_verify_receipt.3 \
 	CONF_modules_free.3 \
 	CONF_modules_load_file.3 \
 	CRYPTO_get_mem_functions.3 \
 	CRYPTO_lock.3 \
+	CRYPTO_memcmp.3 \
 	CRYPTO_set_ex_data.3 \
 	DES_set_key.3 \
 	DH_generate_key.3 \
@@ -91,6 +112,7 @@ MAN=	\
 	DSA_set_method.3 \
 	DSA_sign.3 \
 	DSA_size.3 \
+	ECDH_compute_key.3 \
 	ECDSA_SIG_new.3 \
 	EC_GFp_simple_method.3 \
 	EC_GROUP_copy.3 \
@@ -156,7 +178,9 @@ MAN=	\
 	EVP_camellia_128_cbc.3 \
 	EVP_des_cbc.3 \
 	EVP_rc4.3 \
+	EVP_sm3.3 \
 	EVP_sm4_cbc.3 \
+	EVP_whirlpool.3 \
 	EXTENDED_KEY_USAGE_new.3 \
 	GENERAL_NAME_new.3 \
 	HMAC.3 \
@@ -182,6 +206,7 @@ MAN=	\
 	PEM_bytes_read_bio.3 \
 	PEM_read.3 \
 	PEM_read_bio_PrivateKey.3 \
+	PEM_write_bio_CMS_stream.3 \
 	PEM_write_bio_PKCS7_stream.3 \
 	PKCS12_create.3 \
 	PKCS12_new.3 \
@@ -214,6 +239,7 @@ MAN=	\
 	RSA_meth_new.3 \
 	RSA_new.3 \
 	RSA_padding_add_PKCS1_type_1.3 \
+	RSA_pkey_ctx_ctrl.3 \
 	RSA_print.3 \
 	RSA_private_encrypt.3 \
 	RSA_public_encrypt.3 \
@@ -222,7 +248,9 @@ MAN=	\
 	RSA_sign_ASN1_OCTET_STRING.3 \
 	RSA_size.3 \
 	SHA1.3 \
+	SMIME_read_CMS.3 \
 	SMIME_read_PKCS7.3 \
+	SMIME_write_CMS.3 \
 	SMIME_write_PKCS7.3 \
 	STACK_OF.3 \
 	SXNET_new.3 \
@@ -239,6 +267,7 @@ MAN=	\
 	X509_CRL_get0_by_serial.3 \
 	X509_CRL_new.3 \
 	X509_EXTENSION_set_object.3 \
+	X509_INFO_new.3 \
 	X509_LOOKUP_hash_dir.3 \
 	X509_NAME_ENTRY_get_object.3 \
 	X509_NAME_add_entry_by_txt.3 \
@@ -263,6 +292,8 @@ MAN=	\
 	X509_check_host.3 \
 	X509_check_issued.3 \
 	X509_check_private_key.3 \
+	X509_check_purpose.3 \
+	X509_cmp.3 \
 	X509_cmp_time.3 \
 	X509_digest.3 \
 	X509_get_pubkey.3 \
@@ -271,6 +302,7 @@ MAN=	\
 	X509_get_version.3 \
 	X509_get0_notBefore.3 \
 	X509_get0_signature.3 \
+	X509_get1_email.3 \
 	X509_new.3 \
 	X509_sign.3 \
 	X509_verify_cert.3 \
@@ -282,6 +314,7 @@ MAN=	\
 	d2i_ASN1_SEQUENCE_ANY.3 \
 	d2i_AUTHORITY_KEYID.3 \
 	d2i_BASIC_CONSTRAINTS.3 \
+	d2i_CMS_ContentInfo.3 \
 	d2i_DHparams.3 \
 	d2i_DIST_POINT.3 \
 	d2i_DSAPublicKey.3 \
@@ -311,6 +344,7 @@ MAN=	\
 	des_read_pw.3 \
 	evp.3 \
 	get_rfc3526_prime_8192.3 \
+	i2d_CMS_bio_stream.3 \
 	i2d_PKCS7_bio_stream.3 \
 	lh_new.3 \
 	lh_stats.3 \

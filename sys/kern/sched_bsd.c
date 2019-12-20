@@ -1,4 +1,4 @@
-/*	$OpenBSD: sched_bsd.c,v 1.55 2019/07/15 20:44:48 mpi Exp $	*/
+/*	$OpenBSD: sched_bsd.c,v 1.60 2019/12/11 07:30:09 guenther Exp $	*/
 /*	$NetBSD: kern_synch.c,v 1.37 1996/04/22 01:38:37 christos Exp $	*/
 
 /*-
@@ -63,7 +63,6 @@ struct __mp_lock sched_lock;
 
 void			schedcpu(void *);
 uint32_t		decay_aftersleep(uint32_t, uint32_t);
-static inline void	resched_proc(struct proc *, u_char);
 
 void
 scheduler_start(void)
@@ -254,15 +253,13 @@ schedcpu(void *arg)
 		p->p_cpticks = 0;
 		newcpu = (u_int) decay_cpu(loadfac, p->p_estcpu);
 		setpriority(p, newcpu, p->p_p->ps_nice);
-		resched_proc(p, p->p_usrpri);
 
 		if (p->p_priority >= PUSER) {
 			if (p->p_stat == SRUN &&
 			    (p->p_priority / SCHED_PPQ) !=
 			    (p->p_usrpri / SCHED_PPQ)) {
 				remrunqueue(p);
-				p->p_priority = p->p_usrpri;
-				setrunqueue(p);
+				setrunqueue(p->p_cpu, p, p->p_usrpri);
 			} else
 				p->p_priority = p->p_usrpri;
 		}
@@ -310,9 +307,7 @@ yield(void)
 	NET_ASSERT_UNLOCKED();
 
 	SCHED_LOCK(s);
-	p->p_priority = p->p_usrpri;
-	p->p_stat = SRUN;
-	setrunqueue(p);
+	setrunqueue(p->p_cpu, p, p->p_usrpri);
 	p->p_ru.ru_nvcsw++;
 	mi_switch();
 	SCHED_UNLOCK(s);
@@ -331,9 +326,7 @@ preempt(void)
 	int s;
 
 	SCHED_LOCK(s);
-	p->p_priority = p->p_usrpri;
-	p->p_stat = SRUN;
-	setrunqueue(p);
+	setrunqueue(p->p_cpu, p, p->p_usrpri);
 	p->p_ru.ru_nivcsw++;
 	mi_switch();
 	SCHED_UNLOCK(s);
@@ -443,37 +436,15 @@ mi_switch(void)
 #endif
 }
 
-static inline void
-resched_proc(struct proc *p, u_char pri)
-{
-	struct cpu_info *ci;
-
-	/*
-	 * XXXSMP
-	 * This does not handle the case where its last
-	 * CPU is running a higher-priority process, but every
-	 * other CPU is running a lower-priority process.  There
-	 * are ways to handle this situation, but they're not
-	 * currently very pretty, and we also need to weigh the
-	 * cost of moving a process from one CPU to another.
-	 *
-	 * XXXSMP
-	 * There is also the issue of locking the other CPU's
-	 * sched state, which we currently do not do.
-	 */
-	ci = (p->p_cpu != NULL) ? p->p_cpu : curcpu();
-	if (pri < ci->ci_schedstate.spc_curpriority)
-		need_resched(ci);
-}
-
 /*
  * Change process state to be runnable,
- * placing it on the run queue if it is in memory,
- * and awakening the swapper if it isn't in memory.
+ * placing it on the run queue.
  */
 void
 setrunnable(struct proc *p)
 {
+	struct process *pr = p->p_p;
+
 	SCHED_ASSERT_LOCKED();
 
 	switch (p->p_stat) {
@@ -489,23 +460,20 @@ setrunnable(struct proc *p)
 		 * If we're being traced (possibly because someone attached us
 		 * while we were stopped), check for a signal from the debugger.
 		 */
-		if ((p->p_p->ps_flags & PS_TRACED) != 0 && p->p_xstat != 0)
-			atomic_setbits_int(&p->p_siglist, sigmask(p->p_xstat));
+		if ((pr->ps_flags & PS_TRACED) != 0 && pr->ps_xsig != 0)
+			atomic_setbits_int(&p->p_siglist, sigmask(pr->ps_xsig));
 	case SSLEEP:
 		unsleep(p);		/* e.g. when sending signals */
 		break;
 	}
-	p->p_stat = SRUN;
-	p->p_cpu = sched_choosecpu(p);
-	setrunqueue(p);
+	setrunqueue(NULL, p, p->p_priority);
 	if (p->p_slptime > 1) {
 		uint32_t newcpu;
 
 		newcpu = decay_aftersleep(p->p_estcpu, p->p_slptime);
-		setpriority(p, newcpu, p->p_p->ps_nice);
+		setpriority(p, newcpu, pr->ps_nice);
 	}
 	p->p_slptime = 0;
-	resched_proc(p, MIN(p->p_priority, p->p_usrpri));
 }
 
 /*

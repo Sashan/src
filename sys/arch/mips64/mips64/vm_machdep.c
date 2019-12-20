@@ -1,4 +1,4 @@
-/*	$OpenBSD: vm_machdep.c,v 1.37 2017/09/02 15:56:29 visa Exp $	*/
+/*	$OpenBSD: vm_machdep.c,v 1.39 2019/12/20 13:34:41 visa Exp $	*/
 /*
  * Copyright (c) 1988 University of Utah.
  * Copyright (c) 1992, 1993
@@ -135,7 +135,7 @@ cpu_fork(struct proc *p1, struct proc *p2, void *stack, void *tcb,
 	}
 	pcb->pcb_context.val[10] = (register_t)proc_trampoline;
 	pcb->pcb_context.val[8] = (register_t)pcb +
-	    USPACE - sizeof(struct trapframe);
+	    ((USPACE - sizeof(struct trapframe)) & ~_STACKALIGNBYTES);
 	pcb->pcb_context.val[1] = (register_t)arg;
 	pcb->pcb_context.val[0] = (register_t)func;
 }
@@ -187,7 +187,7 @@ vmapbuf(struct buf *bp, vsize_t len)
 	bp->b_data = (caddr_t) (kva + off);
 
 	while (sz > 0) {
-		if (pmap_extract(pmap, uva, &pa) == FALSE)
+		if (pmap_extract(pmap, uva, &pa) == 0)
 			panic("vmapbuf: pmap_extract(%p, %lx) failed!",
 			    pmap, uva);
 

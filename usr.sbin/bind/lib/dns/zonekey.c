@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 2001, 2003  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: zonekey.c,v 1.5.18.2 2005/04/29 00:16:08 marka Exp $ */
+/* $Id: zonekey.c,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
 
 /*! \file */
 
@@ -50,6 +49,6 @@ dns_zonekey_iszonekey(dns_rdata_t *keyrdata) {
 	if (key.protocol != DNS_KEYPROTO_DNSSEC &&
 	key.protocol != DNS_KEYPROTO_ANY)
 		iszonekey = ISC_FALSE;
-	
+
 	return (iszonekey);
 }

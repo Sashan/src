@@ -1,4 +1,4 @@
-/*	$OpenBSD: library_subr.c,v 1.48 2017/08/28 14:06:22 deraadt Exp $ */
+/*	$OpenBSD: library_subr.c,v 1.50 2019/10/04 17:42:16 guenther Exp $ */
 
 /*
  * Copyright (c) 2002 Dale Rahn
@@ -448,22 +448,25 @@ _dl_link_dlopen(elf_object_t *dep)
 static void
 _dl_child_refcnt_decrement(elf_object_t *object)
 {
-	struct dep_node *n;
+	struct object_vector vec;
+	int i;
 
 	object->refcount--;
 	if (OBJECT_REF_CNT(object) == 0)
-		TAILQ_FOREACH(n, &object->child_list, next_sib)
-			_dl_child_refcnt_decrement(n->data);
+		for (vec = object->child_vec, i = 0; i < vec.len; i++)
+			_dl_child_refcnt_decrement(vec.vec[i]);
 }
 
 void
 _dl_notify_unload_shlib(elf_object_t *object)
 {
+	struct object_vector vec;
 	struct dep_node *n;
+	int i;
 
 	if (OBJECT_REF_CNT(object) == 0)
-		TAILQ_FOREACH(n, &object->child_list, next_sib)
-			_dl_child_refcnt_decrement(n->data);
+		for (vec = object->child_vec, i = 0; i < vec.len; i++)
+			_dl_child_refcnt_decrement(vec.vec[i]);
 
 	if (OBJECT_DLREF_CNT(object) == 0) {
 		while ((n = TAILQ_FIRST(&object->grpref_list)) != NULL) {
@@ -509,13 +512,13 @@ _dl_link_grpref(elf_object_t *load_group, elf_object_t *load_object)
 void
 _dl_link_child(elf_object_t *dep, elf_object_t *p)
 {
-	struct dep_node *n;
+	int i;
 
-	n = _dl_malloc(sizeof *n);
-	if (n == NULL)
-		_dl_oom();
-	n->data = dep;
-	TAILQ_INSERT_TAIL(&p->child_list, n, next_sib);
+	i = p->child_vec.len++;
+	if (i == p->child_vec.alloc)
+		_dl_die("child appeared  %d > %d", p->child_vec.len,
+		    p->child_vec.alloc);
+	p->child_vec.vec[i] = dep;
 
 	dep->refcount++;
 
@@ -523,35 +526,42 @@ _dl_link_child(elf_object_t *dep, elf_object_t *p)
 	    p->load_name));
 }
 
+void
+object_vec_grow(struct object_vector *vec, int more)
+{
+	vec->alloc += more;
+	vec->vec = _dl_reallocarray(vec->vec, vec->alloc, sizeof(*vec->vec));
+	if (vec->vec == NULL)
+		_dl_oom();
+}
+
 /* Generation number of the current grpsym insertion/caching */
 static unsigned int _dl_grpsym_gen = 0;
 
 void
-_dl_link_grpsym(elf_object_t *object, int checklist)
+_dl_link_grpsym(elf_object_t *object)
 {
-	struct dep_node *n;
+	struct object_vector *vec;
+	int len;
 
-	if (checklist) {
-		TAILQ_FOREACH(n, &_dl_loading_object->grpsym_list, next_sib)
-			if (n->data == object)
-				return; /* found, dont bother adding */
-	} else {
-		if (object->grpsym_gen == _dl_grpsym_gen) {
-			return; /* found, dont bother adding */
-		}
-	}
+	if (object->grpsym_gen == _dl_grpsym_gen)
+		return;
 	object->grpsym_gen = _dl_grpsym_gen;
 
-	n = _dl_malloc(sizeof *n);
-	if (n == NULL)
-		_dl_oom();
-	n->data = object;
-	TAILQ_INSERT_TAIL(&_dl_loading_object->grpsym_list, n, next_sib);
+	vec = &_dl_loading_object->grpsym_vec;
+	len = vec->len++;
+	if (len >= vec->alloc)
+		_dl_die("more grpsym than objects?!  %d > %d", vec->len,
+		    vec->alloc);
+	vec->vec[len] = object;
 }
 
 void
 _dl_cache_grpsym_list_setup(elf_object_t *object)
 {
+	struct object_vector *vec;
+	int next;
+
 	_dl_grpsym_gen += 1;
 
 	if (_dl_grpsym_gen == 0) {
@@ -567,22 +577,26 @@ _dl_cache_grpsym_list_setup(elf_object_t *object)
 		}
 		_dl_grpsym_gen = 1;
 	}
-	_dl_cache_grpsym_list(object);
-}
-void
-_dl_cache_grpsym_list(elf_object_t *object)
-{
-	struct dep_node *n;
 
 	/*
-	 * grpsym_list is an ordered list of all child libs of the
+	 * grpsym_vec is a vector of all child libs of the
 	 * _dl_loading_object with no dups. The order is equivalent
 	 * to a breadth-first traversal of the child list without dups.
 	 */
 
-	TAILQ_FOREACH(n, &object->child_list, next_sib)
-		_dl_link_grpsym(n->data, 0);
+	vec = &object->grpsym_vec;
+	object_vec_grow(vec, object_count);
+	next = 0;
 
-	TAILQ_FOREACH(n, &object->child_list, next_sib)
-		_dl_cache_grpsym_list(n->data);
+	/* add first object manually */
+	_dl_link_grpsym(object);
+
+	while (next < vec->len) {
+		struct object_vector child_vec;
+		int i;
+
+		child_vec = vec->vec[next++]->child_vec;
+		for (i = 0; i < child_vec.len; i++)
+			_dl_link_grpsym(child_vec.vec[i]);
+	}
 }

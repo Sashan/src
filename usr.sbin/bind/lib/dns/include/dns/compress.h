@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004-2006  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1999-2002  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: compress.h,v 1.32.18.6 2006/03/02 00:37:21 marka Exp $ */
+/* $Id: compress.h,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
 
 #ifndef DNS_COMPRESS_H
 #define DNS_COMPRESS_H 1
@@ -32,7 +31,7 @@ ISC_LANG_BEGINDECLS
 #define DNS_COMPRESS_ALL		0x01	/*%< all compression. */
 #define DNS_COMPRESS_CASESENSITIVE	0x02	/*%< case sensitive compression. */
 
-/*! \file
+/*! \file dns/compress.h
  *	Direct manipulation of the structures is strongly discouraged.
  */
 
@@ -77,7 +76,7 @@ struct dns_decompress {
 isc_result_t
 dns_compress_init(dns_compress_t *cctx, int edns, isc_mem_t *mctx);
 /*%<
- *	Inialise the compression context structure pointed to by 'cctx'.
+ *	Initialise the compression context structure pointed to by 'cctx'.
  *
  *	Requires:
  *	\li	'cctx' is a valid dns_compress_t structure.
@@ -87,7 +86,6 @@ dns_compress_init(dns_compress_t *cctx, int edns, isc_mem_t *mctx);
  *
  *	Returns:
  *	\li	#ISC_R_SUCCESS
- *	\li	failures from dns_rbt_create()
  */
 
 void
@@ -136,7 +134,7 @@ dns_compress_setsensitive(dns_compress_t *cctx, isc_boolean_t sensitive);
 isc_boolean_t
 dns_compress_getsensitive(dns_compress_t *cctx);
 /*
- *	Return whether case is to be preservered when compressing
+ *	Return whether case is to be preserved when compressing
  *	domain names.
  *
  *	Requires:
