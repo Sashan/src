@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2_msg.c,v 1.56 2019/08/12 07:40:45 tobhe Exp $	*/
+/*	$OpenBSD: ikev2_msg.c,v 1.60 2019/11/28 12:16:28 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -94,6 +94,7 @@ ikev2_msg_cb(int fd, short event, void *arg)
 		return;
 
 	TAILQ_INIT(&msg.msg_proposals);
+	SLIST_INIT(&msg.msg_certreqs);
 	msg.msg_fd = fd;
 
 	if (hdr.ike_version == IKEV1_VERSION)
@@ -181,6 +182,8 @@ ikev2_msg_copy(struct iked *env, struct iked_message *msg)
 void
 ikev2_msg_cleanup(struct iked *env, struct iked_message *msg)
 {
+	struct iked_certreq	*cr;
+
 	if (msg == msg->msg_parent) {
 		ibuf_release(msg->msg_nonce);
 		ibuf_release(msg->msg_ke);
@@ -199,6 +202,11 @@ ikev2_msg_cleanup(struct iked *env, struct iked_message *msg)
 		msg->msg_cookie2 = NULL;
 
 		config_free_proposals(&msg->msg_proposals, 0);
+		while ((cr = SLIST_FIRST(&msg->msg_certreqs))) {
+			ibuf_release(cr->cr_data);
+			SLIST_REMOVE_HEAD(&msg->msg_certreqs, cr_entry);
+			free(cr);
+		}
 	}
 
 	if (msg->msg_data != NULL) {
@@ -315,7 +323,7 @@ ikev2_msg_send(struct iked *env, struct iked_message *msg)
 	    msg->msg_offset, sizeof(*hdr))) == NULL)
 		return (-1);
 
-	isnatt = (msg->msg_natt || (msg->msg_sa && msg->msg_sa->sa_natt));
+	isnatt = (msg->msg_natt || (sa && sa->sa_natt));
 
 	exchange = hdr->ike_exchange;
 	flags = hdr->ike_flags;
@@ -338,19 +346,20 @@ ikev2_msg_send(struct iked *env, struct iked_message *msg)
 	if (sendtofrom(msg->msg_fd, ibuf_data(buf), ibuf_size(buf), 0,
 	    (struct sockaddr *)&msg->msg_peer, msg->msg_peerlen,
 	    (struct sockaddr *)&msg->msg_local, msg->msg_locallen) == -1) {
-		if (errno == EADDRNOTAVAIL) {
-			sa_state(env, msg->msg_sa, IKEV2_STATE_CLOSING);
-			timer_del(env, &msg->msg_sa->sa_timer);
-			timer_set(env, &msg->msg_sa->sa_timer,
-			    ikev2_ike_sa_timeout, msg->msg_sa);
-			timer_add(env, &msg->msg_sa->sa_timer,
+		log_warn("%s: sendtofrom", __func__);
+		if (sa != NULL && errno == EADDRNOTAVAIL) {
+			sa_state(env, sa, IKEV2_STATE_CLOSING);
+			timer_del(env, &sa->sa_timer);
+			timer_set(env, &sa->sa_timer,
+			    ikev2_ike_sa_timeout, sa);
+			timer_add(env, &sa->sa_timer,
 			    IKED_IKE_SA_DELETE_TIMEOUT);
 		}
-		log_warn("%s: sendtofrom", __func__);
-		return (-1);
+		if (sa != NULL)
+			return (-1);
 	}
 
-	if (!sa)
+	if (sa == NULL)
 		return (0);
 
 	if ((m = ikev2_msg_copy(env, msg)) == NULL) {
@@ -1141,6 +1150,41 @@ ikev2_msg_lookup(struct iked *env, struct iked_msgqueue *queue,
 	return (m);
 }
 
+void
+ikev2_msg_lookup_dispose_all(struct iked *env, struct iked_msgqueue *queue,
+    struct iked_message *msg, struct ike_header *hdr)
+{
+	struct iked_message	*m = NULL, *tmp = NULL;
+
+	TAILQ_FOREACH_SAFE(m, queue, msg_entry, tmp) {
+		if (m->msg_msgid == msg->msg_msgid &&
+		    m->msg_exchange == hdr->ike_exchange) {
+			TAILQ_REMOVE(queue, m, msg_entry);
+			timer_del(env, &m->msg_timer);
+			ikev2_msg_cleanup(env, m);
+			free(m);
+		}
+	}
+}
+
+int
+ikev2_msg_lookup_retransmit_all(struct iked *env, struct iked_msgqueue *queue,
+    struct iked_message *msg, struct ike_header *hdr, struct iked_sa *sa)
+{
+	struct iked_message	*m = NULL, *tmp = NULL;
+	int count = 0;
+
+	TAILQ_FOREACH_SAFE(m, queue, msg_entry, tmp) {
+		if (m->msg_msgid == msg->msg_msgid &&
+		    m->msg_exchange == hdr->ike_exchange) {
+			if (ikev2_msg_retransmit_response(env, sa, m))
+				return -1;
+			count++;
+		}
+	}
+	return count;
+}
+
 int
 ikev2_msg_retransmit_response(struct iked *env, struct iked_sa *sa,
     struct iked_message *msg)
@@ -1179,6 +1223,7 @@ ikev2_msg_retransmit_timeout(struct iked *env, void *arg)
 		    (struct sockaddr *)&msg->msg_local,
 		    msg->msg_locallen) == -1) {
 			log_warn("%s: sendtofrom", __func__);
+			ikev2_ike_sa_setreason(sa, "retransmit failed");
 			sa_free(env, sa);
 			return;
 		}
@@ -1188,6 +1233,7 @@ ikev2_msg_retransmit_timeout(struct iked *env, void *arg)
 	} else {
 		log_debug("%s: retransmit limit reached for msgid %u",
 		    __func__, msg->msg_msgid);
+		ikev2_ike_sa_setreason(sa, "retransmit limit reached");
 		sa_free(env, sa);
 	}
 }

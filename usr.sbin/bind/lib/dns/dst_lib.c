@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1999-2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -17,7 +16,7 @@
 
 /*
  * Principal Author: Brian Wellington
- * $ISC: dst_lib.c,v 1.1.6.3 2005/04/29 00:15:51 marka Exp $
+ * $Id: dst_lib.c,v 1.3 2019/12/17 01:46:31 sthen Exp $
  */
 
 /*! \file */

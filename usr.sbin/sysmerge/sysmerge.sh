@@ -1,6 +1,6 @@
 #!/bin/ksh -
 #
-# $OpenBSD: sysmerge.sh,v 1.233 2017/10/28 07:22:56 ajacoutot Exp $
+# $OpenBSD: sysmerge.sh,v 1.235 2019/09/28 17:30:07 ajacoutot Exp $
 #
 # Copyright (c) 2008-2014 Antoine Jacoutot <ajacoutot@openbsd.org>
 # Copyright (c) 1998-2003 Douglas Barton <DougB@FreeBSD.org>
@@ -19,6 +19,7 @@
 #
 
 umask 0022
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
 usage() {
 	echo "usage: ${0##*/} [-bdp]" >&2 && exit 1
@@ -311,7 +312,7 @@ sm_install() {
 		cp -p ${TARGET} ${_BKPDIR}/${_instdir} || return
 	fi
 
-	if ! install -m ${_fmode} -o ${_fown} -g ${_fgrp} ${COMPFILE} ${_instdir}; then
+	if ! install -Fm ${_fmode} -o ${_fown} -g ${_fgrp} ${COMPFILE} ${_instdir}; then
 		rm ${_BKPDIR}/${COMPFILE} && return 1
 	fi
 	rm ${COMPFILE}

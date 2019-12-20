@@ -1,4 +1,4 @@
-/* $OpenBSD: doas.c,v 1.80 2019/07/03 03:24:02 deraadt Exp $ */
+/* $OpenBSD: doas.c,v 1.82 2019/10/18 17:15:45 tedu Exp $ */
 /*
  * Copyright (c) 2015 Ted Unangst <tedu@openbsd.org>
  *
@@ -52,9 +52,11 @@ parseuid(const char *s, uid_t *uid)
 
 	if ((pw = getpwnam(s)) != NULL) {
 		*uid = pw->pw_uid;
+		if (*uid == UID_MAX)
+			return -1;
 		return 0;
 	}
-	*uid = strtonum(s, 0, UID_MAX, &errstr);
+	*uid = strtonum(s, 0, UID_MAX - 1, &errstr);
 	if (errstr)
 		return -1;
 	return 0;
@@ -80,9 +82,11 @@ parsegid(const char *s, gid_t *gid)
 
 	if ((gr = getgrnam(s)) != NULL) {
 		*gid = gr->gr_gid;
+		if (*gid == GID_MAX)
+			return -1;
 		return 0;
 	}
-	*gid = strtonum(s, 0, GID_MAX, &errstr);
+	*gid = strtonum(s, 0, GID_MAX - 1, &errstr);
 	if (errstr)
 		return -1;
 	return 0;
@@ -408,7 +412,8 @@ main(int argc, char **argv)
 	if (formerpath == NULL)
 		formerpath = "";
 
-	if (unveil(_PATH_LOGIN_CONF, "r") == -1)
+	if (unveil(_PATH_LOGIN_CONF, "r") == -1 ||
+	    unveil(_PATH_LOGIN_CONF ".db", "r") == -1)
 		err(1, "unveil");
 	if (rule->cmd) {
 		if (setenv("PATH", safepath, 1) == -1)

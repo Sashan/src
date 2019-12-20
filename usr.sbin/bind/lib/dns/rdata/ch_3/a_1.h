@@ -1,7 +1,7 @@
 /*
- * Copyright (C) 2005  Internet Systems Consortium, Inc. ("ISC")
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: a_1.h,v 1.2.2.2 2005/06/05 00:02:22 marka Exp $ */
+/* $Id: a_1.h,v 1.3 2019/12/17 01:46:33 sthen Exp $ */
 
 /* by Bjorn.Victor@it.uu.se, 2005-05-07 */
 /* Based on generic/mx_15.h */
@@ -27,7 +27,7 @@ typedef isc_uint16_t ch_addr_t;
 typedef struct dns_rdata_ch_a {
 	dns_rdatacommon_t	common;
 	isc_mem_t		*mctx;
-  	dns_name_t		ch_addr_dom; /* ch-addr domain for back mapping */
+	dns_name_t		ch_addr_dom; /* ch-addr domain for back mapping */
 	ch_addr_t		ch_addr; /* chaos address (16 bit) network order */
 } dns_rdata_ch_a_t;
 

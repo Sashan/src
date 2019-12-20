@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 2000, 2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: ipv6.h,v 1.10.18.2 2005/04/29 00:17:21 marka Exp $ */
+/* $Id: ipv6.h,v 1.3 2019/12/17 01:46:38 sthen Exp $ */
 
 #ifndef LWRES_IPV6_H
 #define LWRES_IPV6_H 1
@@ -24,7 +23,7 @@
  ***** Module Info
  *****/
 
-/*! \file ipv6.h
+/*! \file lwres/ipv6.h
  * IPv6 definitions for systems which do not support IPv6.
  */
 
@@ -41,11 +40,11 @@
 
 /*% in6_addr structure */
 struct in6_addr {
-        union {
+	union {
 		lwres_uint8_t	_S6_u8[16];
 		lwres_uint16_t	_S6_u16[8];
 		lwres_uint32_t	_S6_u32[4];
-        } _S6_un;
+	} _S6_un;
 };
 /*@{*/
 /*% IP v6 types */
@@ -89,36 +88,36 @@ struct in6_pktinfo {
  * Unspecified IPv6 address
  */
 #define IN6_IS_ADDR_UNSPECIFIED(a)      \
-        (((a)->s6_addr32[0] == 0) &&    \
-         ((a)->s6_addr32[1] == 0) &&    \
-         ((a)->s6_addr32[2] == 0) &&    \
-         ((a)->s6_addr32[3] == 0))
+	(((a)->s6_addr32[0] == 0) &&    \
+	 ((a)->s6_addr32[1] == 0) &&    \
+	 ((a)->s6_addr32[2] == 0) &&    \
+	 ((a)->s6_addr32[3] == 0))
 
 /*
  * Loopback
  */
 #define IN6_IS_ADDR_LOOPBACK(a)         \
-        (((a)->s6_addr32[0] == 0) &&    \
-         ((a)->s6_addr32[1] == 0) &&    \
-         ((a)->s6_addr32[2] == 0) &&    \
-         ((a)->s6_addr32[3] == htonl(1)))
+	(((a)->s6_addr32[0] == 0) &&    \
+	 ((a)->s6_addr32[1] == 0) &&    \
+	 ((a)->s6_addr32[2] == 0) &&    \
+	 ((a)->s6_addr32[3] == htonl(1)))
 
 /*
  * IPv4 compatible
  */
 #define IN6_IS_ADDR_V4COMPAT(a)         \
-        (((a)->s6_addr32[0] == 0) &&    \
-         ((a)->s6_addr32[1] == 0) &&    \
-         ((a)->s6_addr32[2] == 0) &&    \
-         ((a)->s6_addr32[3] != 0) &&    \
-         ((a)->s6_addr32[3] != htonl(1)))
+	(((a)->s6_addr32[0] == 0) &&    \
+	 ((a)->s6_addr32[1] == 0) &&    \
+	 ((a)->s6_addr32[2] == 0) &&    \
+	 ((a)->s6_addr32[3] != 0) &&    \
+	 ((a)->s6_addr32[3] != htonl(1)))
 
 /*
  * Mapped
  */
 #define IN6_IS_ADDR_V4MAPPED(a)               \
-        (((a)->s6_addr32[0] == 0) &&          \
-         ((a)->s6_addr32[1] == 0) &&          \
-         ((a)->s6_addr32[2] == htonl(0x0000ffff)))
+	(((a)->s6_addr32[0] == 0) &&          \
+	 ((a)->s6_addr32[1] == 0) &&          \
+	 ((a)->s6_addr32[2] == htonl(0x0000ffff)))
 
 #endif /* LWRES_IPV6_H */

@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1998-2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: event.c,v 1.17.18.2 2005/04/29 00:16:45 marka Exp $ */
+/* $Id: event.c,v 1.3 2019/12/17 01:46:34 sthen Exp $ */
 
 /*!
  * \file
@@ -41,7 +40,26 @@ destroy(isc_event_t *event) {
 
 isc_event_t *
 isc_event_allocate(isc_mem_t *mctx, void *sender, isc_eventtype_t type,
-		   isc_taskaction_t action, const void *arg, size_t size)
+		   isc_taskaction_t action, void *arg, size_t size)
+{
+	isc_event_t *event;
+
+	REQUIRE(size >= sizeof(struct isc_event));
+	REQUIRE(action != NULL);
+
+	event = isc_mem_get(mctx, size);
+	if (event == NULL)
+		return (NULL);
+
+	ISC_EVENT_INIT(event, size, 0, NULL, type, action, arg,
+		       sender, destroy, mctx);
+
+	return (event);
+}
+
+isc_event_t *
+isc_event_constallocate(isc_mem_t *mctx, void *sender, isc_eventtype_t type,
+			isc_taskaction_t action, const void *arg, size_t size)
 {
 	isc_event_t *event;
 	void *deconst_arg;
@@ -80,6 +98,9 @@ isc_event_free(isc_event_t **eventp) {
 	REQUIRE(eventp != NULL);
 	event = *eventp;
 	REQUIRE(event != NULL);
+
+	REQUIRE(!ISC_LINK_LINKED(event, ev_link));
+	REQUIRE(!ISC_LINK_LINKED(event, ev_ratelink));
 
 	if (event->ev_destroy != NULL)
 		(event->ev_destroy)(event);

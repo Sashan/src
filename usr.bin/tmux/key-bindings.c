@@ -1,4 +1,4 @@
-/* $OpenBSD: key-bindings.c,v 1.98 2019/05/28 10:27:11 nicm Exp $ */
+/* $OpenBSD: key-bindings.c,v 1.105 2019/12/19 09:22:33 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -24,12 +24,6 @@
 
 #include "tmux.h"
 
-#define DEFAULT_CLIENT_MENU \
-	" 'Detach' 'd' {detach-client}" \
-	" 'Detach & Kill' 'X' {detach-client -P}" \
-	" 'Detach Others' 'o' {detach-client -a}" \
-	" ''" \
-	" 'Lock' 'l' {lock-client}"
 #define DEFAULT_SESSION_MENU \
 	" 'Next' 'n' {switch-client -n}" \
 	" 'Previous' 'p' {switch-client -p}" \
@@ -68,7 +62,6 @@
 	" 'Respawn' 'R' {respawn-pane -k}" \
 	" '#{?pane_marked,Unmark,Mark}' 'm' {select-pane -m}" \
 	" '#{?window_zoomed_flag,Unzoom,Zoom}' 'z' {resize-pane -Z}"
-
 
 static int key_bindings_cmp(struct key_binding *, struct key_binding *);
 RB_GENERATE_STATIC(key_bindings, key_binding, entry, key_bindings_cmp);
@@ -326,13 +319,12 @@ key_bindings_init(void)
 		"bind -n MouseDrag1Pane if -Ft= '#{mouse_any_flag}' 'if -Ft= \"#{pane_in_mode}\" \"copy-mode -M\" \"send-keys -M\"' 'copy-mode -M'",
 		"bind -n WheelUpPane if -Ft= '#{mouse_any_flag}' 'send-keys -M' 'if -Ft= \"#{pane_in_mode}\" \"send-keys -M\" \"copy-mode -et=\"'",
 
-		"bind -n MouseDown3StatusRight display-menu -t= -xM -yS -T \"#[align=centre]#{client_name}\" " DEFAULT_CLIENT_MENU,
 		"bind -n MouseDown3StatusLeft display-menu -t= -xM -yS -T \"#[align=centre]#{session_name}\" " DEFAULT_SESSION_MENU,
 		"bind -n MouseDown3Status display-menu -t= -xW -yS -T \"#[align=centre]#{window_index}:#{window_name}\" " DEFAULT_WINDOW_MENU,
-		"bind C-m display-menu -xW -yS -T \"#[align=centre]#{window_index}:#{window_name}\" " DEFAULT_WINDOW_MENU,
+		"bind < display-menu -xW -yS -T \"#[align=centre]#{window_index}:#{window_name}\" " DEFAULT_WINDOW_MENU,
 		"bind -n MouseDown3Pane if -Ft= '#{||:#{mouse_any_flag},#{pane_in_mode}}' 'select-pane -t=; send-keys -M' {display-menu -t= -xM -yM -T \"#[align=centre]#{pane_index} (#{pane_id})\" " DEFAULT_PANE_MENU "}",
 		"bind -n M-MouseDown3Pane display-menu -t= -xM -yM -T \"#[align=centre]#{pane_index} (#{pane_id})\" " DEFAULT_PANE_MENU,
-		"bind M-m display-menu -xP -yP -T \"#[align=centre]#{pane_index} (#{pane_id})\" " DEFAULT_PANE_MENU,
+		"bind > display-menu -xP -yP -T \"#[align=centre]#{pane_index} (#{pane_id})\" " DEFAULT_PANE_MENU,
 
 		"bind -Tcopy-mode C-Space send -X begin-selection",
 		"bind -Tcopy-mode C-a send -X start-of-line",
@@ -403,6 +395,8 @@ key_bindings_init(void)
 		"bind -Tcopy-mode C-Up send -X scroll-up",
 		"bind -Tcopy-mode C-Down send -X scroll-down",
 
+		"bind -Tcopy-mode-vi '#' send -FX search-backward '#{copy_cursor_word}'",
+		"bind -Tcopy-mode-vi * send -FX search-forward '#{copy_cursor_word}'",
 		"bind -Tcopy-mode-vi C-c send -X cancel",
 		"bind -Tcopy-mode-vi C-d send -X halfpage-down",
 		"bind -Tcopy-mode-vi C-e send -X scroll-down",
@@ -509,12 +503,16 @@ key_bindings_dispatch(struct key_binding *bd, struct cmdq_item *item,
 	struct cmdq_item	*new_item;
 	int			 readonly;
 
-	readonly = 1;
-	TAILQ_FOREACH(cmd, &bd->cmdlist->list, qentry) {
-		if (!(cmd->entry->flags & CMD_READONLY))
-			readonly = 0;
+	if (c == NULL || (~c->flags & CLIENT_READONLY))
+		readonly = 1;
+	else {
+		readonly = 1;
+		TAILQ_FOREACH(cmd, &bd->cmdlist->list, qentry) {
+			if (~cmd->entry->flags & CMD_READONLY)
+				readonly = 0;
+		}
 	}
-	if (!readonly && (c->flags & CLIENT_READONLY))
+	if (!readonly)
 		new_item = cmdq_get_callback(key_bindings_read_only, NULL);
 	else {
 		new_item = cmdq_get_command(bd->cmdlist, fs, m, 0);
@@ -522,8 +520,8 @@ key_bindings_dispatch(struct key_binding *bd, struct cmdq_item *item,
 			new_item->shared->flags |= CMDQ_SHARED_REPEAT;
 	}
 	if (item != NULL)
-		cmdq_insert_after(item, new_item);
+		new_item = cmdq_insert_after(item, new_item);
 	else
-		cmdq_append(c, new_item);
+		new_item = cmdq_append(c, new_item);
 	return (new_item);
 }

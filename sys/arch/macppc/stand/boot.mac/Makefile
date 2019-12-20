@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.16 2019/08/03 15:22:21 deraadt Exp $
+#	$OpenBSD: Makefile,v 1.18 2019/11/28 00:17:12 bluhm Exp $
 #       $NetBSD: Makefile,v 1.1 1996/09/30 16:35:05 ws Exp $
 
 S=      ${.CURDIR}/../../../..
@@ -10,7 +10,7 @@ NOMAN=
 PROG=           boot.mac
 CFLAGS+=	-D_STANDALONE
 SRCS=           Locore.c main.c ofdev.c net.c netif_of.c netudp.c
-SRCS+=		alloc.c cache.c hfs.c fchmod.c
+SRCS+=		alloc.c cache.c hfs.c fchmod.c arc4.c
 SRCS+=          boot.c conf.c cmd.c vars.c ctime.c strtol.c
 
 INSTALL_STRIP=
@@ -22,7 +22,7 @@ LDFLAGS+=	-T ${.CURDIR}/elf32_powerpc_merge.x -Bstatic
 
 .PATH:          ${S}/stand/boot
 .PATH:          ${S}/lib/libsa
-SRCS+=		getchar.c
+SRCS+=		getchar.c hexdump.c strtoll.c
 
 .PATH:		${S}/lib/libkern/arch/powerpc ${S}/lib/libkern
 SRCS+=		strlcpy.c memcpy.c memmove.c strlen.c strrchr.c strlcat.c ashrdi3.c

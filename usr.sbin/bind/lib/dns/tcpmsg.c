@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004-2006  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1999-2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,13 +14,14 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: tcpmsg.c,v 1.25.18.4 2006/08/10 23:59:29 marka Exp $ */
+/* $Id: tcpmsg.c,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
 
 /*! \file */
 
 #include <config.h>
 
 #include <isc/mem.h>
+#include <isc/print.h>
 #include <isc/task.h>
 #include <isc/util.h>
 
@@ -121,7 +121,7 @@ recv_message(isc_task_t *task, isc_event_t *ev_in) {
 	tcpmsg->result = ISC_R_SUCCESS;
 	isc_buffer_add(&tcpmsg->buffer, ev->n);
 
-	XDEBUG(("Received %d bytes (of %d)\n", ev->n, tcpmsg->size));
+	XDEBUG(("Received %u bytes (of %d)\n", ev->n, tcpmsg->size));
 
  send_and_free:
 	isc_task_send(tcpmsg->task, &dev);

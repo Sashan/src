@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_tc.c,v 1.48 2019/06/03 01:27:30 cheloha Exp $ */
+/*	$OpenBSD: kern_tc.c,v 1.55 2019/12/12 19:30:21 cheloha Exp $ */
 
 /*
  * Copyright (c) 2000 Poul-Henning Kamp <phk@FreeBSD.org>
@@ -167,6 +167,15 @@ microboottime(struct timeval *tvp)
 }
 
 void
+nanoboottime(struct timespec *tsp)
+{
+	struct bintime bt;
+	
+	binboottime(&bt);
+	BINTIME_TO_TIMESPEC(&bt, tsp);
+}
+
+void
 binuptime(struct bintime *bt)
 {
 	struct timehands *th;
@@ -301,6 +310,7 @@ getmicrotime(struct timeval *tvp)
 void
 tc_init(struct timecounter *tc)
 {
+	u_int64_t tmp;
 	u_int u;
 
 	u = tc->tc_frequency / tc->tc_counter_mask;
@@ -315,6 +325,11 @@ tc_init(struct timecounter *tc)
 			printf(" -- Insufficient hz, needs at least %u\n", u);
 		}
 	}
+
+	/* Determine the counter's precision. */
+	for (tmp = 1; (tmp & tc->tc_counter_mask) == 0; tmp <<= 1)
+		continue;
+	tc->tc_precision = tmp;
 
 	SLIST_INSERT_HEAD(&tc_list, tc, tc_next);
 
@@ -340,8 +355,14 @@ tc_init(struct timecounter *tc)
 u_int64_t
 tc_getfrequency(void)
 {
-
 	return (timehands->th_counter->tc_frequency);
+}
+
+/* Report the precision of the current timecounter. */
+u_int64_t
+tc_getprecision(void)
+{
+	return (timehands->th_counter->tc_precision);
 }
 
 /*
@@ -573,7 +594,8 @@ tc_windup(struct bintime *new_boottime, struct bintime *new_offset,
 	 *
 	 */
 	scale = (u_int64_t)1 << 63;
-	scale += (th->th_adjustment / 1024) * 2199;
+	scale += \
+	    ((th->th_adjustment + th->th_counter->tc_freq_adj) / 1024) * 2199;
 	scale /= th->th_counter->tc_frequency;
 	th->th_scale = scale * 2;
 
@@ -730,7 +752,7 @@ sysctl_tc(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 }
 
 /*
- * Skew the timehands according to any adjfreq(2)/adjtime(2) adjustments.
+ * Skew the timehands according to any adjtime(2) adjustment.
  */
 void
 ntp_update_second(struct timehands *th)
@@ -745,7 +767,6 @@ ntp_update_second(struct timehands *th)
 		adj = MAX(-5000, th->th_adjtimedelta);
 	th->th_adjtimedelta -= adj;
 	th->th_adjustment = (adj * 1000) << 32;
-	th->th_adjustment += th->th_counter->tc_freq_adj;
 }
 
 void

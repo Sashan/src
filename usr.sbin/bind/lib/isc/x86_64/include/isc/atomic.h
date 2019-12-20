@@ -1,7 +1,7 @@
 /*
- * Copyright (C) 2005  Internet Systems Consortium, Inc. ("ISC")
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: atomic.h,v 1.2.20.1 2005/09/02 13:27:12 marka Exp $ */
+/* $Id: atomic.h,v 1.3 2019/12/17 01:46:37 sthen Exp $ */
 
 #ifndef ISC_ATOMIC_H
 #define ISC_ATOMIC_H 1
@@ -35,12 +35,11 @@
  * registers for arguments, which would not actually correspond to the
  * intended address or value in the embedded mnemonic.
  */
-#include <isc/util.h>		/* for 'UNUSED' macro */
 
 static isc_int32_t
 isc_atomic_xadd(isc_int32_t *p, isc_int32_t val) {
-	UNUSED(p);
-	UNUSED(val);
+	(void)(p);
+	(void)(val);
 
 	__asm (
 		"movq %rdi, %rdx\n"
@@ -49,19 +48,36 @@ isc_atomic_xadd(isc_int32_t *p, isc_int32_t val) {
 		"lock;"
 #endif
 		"xadd %eax, (%rdx)\n"
-
 		/*
-		 * set the return value directly in the register so that we
-		 * can avoid guessing the correct position in the stack for a
-		 * local variable.
+		 * XXX: assume %eax will be used as the return value.
 		 */
 		);
 }
 
+#ifdef ISC_PLATFORM_HAVEXADDQ
+static isc_int64_t
+isc_atomic_xaddq(isc_int64_t *p, isc_int64_t val) {
+	(void)(p);
+	(void)(val);
+
+	__asm (
+		"movq %rdi, %rdx\n"
+		"movq %rsi, %rax\n"
+#ifdef ISC_PLATFORM_USETHREADS
+		"lock;"
+#endif
+		"xaddq %rax, (%rdx)\n"
+		/*
+		 * XXX: assume %rax will be used as the return value.
+		 */
+		);
+}
+#endif
+
 static void
 isc_atomic_store(isc_int32_t *p, isc_int32_t val) {
-	UNUSED(p);
-	UNUSED(val);
+	(void)(p);
+	(void)(val);
 
 	__asm (
 		"movq %rdi, %rax\n"
@@ -73,13 +89,33 @@ isc_atomic_store(isc_int32_t *p, isc_int32_t val) {
 		);
 }
 
-static isc_int32_t
-isc_atomic_cmpxchg(isc_int32_t *p, isc_int32_t cmpval, isc_int32_t val) {
-	UNUSED(p);
-	UNUSED(cmpval);
-	UNUSED(val);
+#ifdef ISC_PLATFORM_HAVEATOMICSTOREQ
+static void
+isc_atomic_storeq(isc_int64_t *p, isc_int64_t val) {
+	(void)(p);
+	(void)(val);
 
 	__asm (
+		"movq %rdi, %rax\n"
+		"movq %rsi, %rdx\n"
+#ifdef ISC_PLATFORM_USETHREADS
+		"lock;"
+#endif
+		"xchgq (%rax), %rdx\n"
+		);
+}
+#endif
+
+static isc_int32_t
+isc_atomic_cmpxchg(isc_int32_t *p, isc_int32_t cmpval, isc_int32_t val) {
+	(void)(p);
+	(void)(cmpval);
+	(void)(val);
+
+	__asm (
+		/*
+		 * p is %rdi, cmpval is %esi, val is %edx.
+		 */
 		"movl %edx, %ecx\n"
 		"movl %esi, %eax\n"
 		"movq %rdi, %rdx\n"
@@ -88,8 +124,12 @@ isc_atomic_cmpxchg(isc_int32_t *p, isc_int32_t cmpval, isc_int32_t val) {
 		"lock;"
 #endif
 		/*
-		 * If (%rdi) == %eax then (%rdi) := %edx.
-		 % %eax is set to old (%ecx), which will be the return value.
+		 * If [%rdi] == %eax then [%rdi] := %ecx (equal to %edx
+		 * from above), and %eax is untouched (equal to %esi)
+		 * from above.
+		 *
+		 * Else if [%rdi] != %eax then [%rdi] := [%rdi]
+		 * (rewritten in write cycle) and %eax := [%rdi].
 		 */
 		"cmpxchgl %ecx, (%rdx)"
 		);

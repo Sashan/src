@@ -1,7 +1,7 @@
 /*
- * Copyright (C) 2005  Internet Systems Consortium, Inc. ("ISC")
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: atomic.h,v 1.2.2.1 2005/06/04 06:23:44 jinmei Exp $ */
+/* $Id: atomic.h,v 1.3 2019/12/17 01:46:36 sthen Exp $ */
 
 #ifndef ISC_ATOMIC_H
 #define ISC_ATOMIC_H 1

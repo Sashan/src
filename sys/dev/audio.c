@@ -1,4 +1,4 @@
-/*	$OpenBSD: audio.c,v 1.180 2019/08/17 05:04:56 ratchov Exp $	*/
+/*	$OpenBSD: audio.c,v 1.184 2019/12/18 00:27:47 cheloha Exp $	*/
 /*
  * Copyright (c) 2015 Alexandre Ratchov <alex@caoua.org>
  *
@@ -191,6 +191,31 @@ audio_gcd(unsigned int a, unsigned int b)
 		b = r;
 	}
 	return a;
+}
+
+/*
+ * Calculate the least block size (in frames) such that both the
+ * corresponding play and/or record block sizes (in bytes) are multiple
+ * of the given number of bytes.
+ */
+int
+audio_blksz_bytes(int mode,
+	struct audio_params *p, struct audio_params *r, int bytes)
+{
+	unsigned int np, nr;
+
+	if (mode & AUMODE_PLAY) {
+		np = bytes / audio_gcd(p->bps * p->channels, bytes);
+		if (!(mode & AUMODE_RECORD))
+			nr = np;
+	}
+	if (mode & AUMODE_RECORD) {
+		nr = bytes / audio_gcd(r->bps * r->channels, bytes);
+		if (!(mode & AUMODE_PLAY))
+			np = nr;
+	}
+
+	return nr * np / audio_gcd(nr, np);
 }
 
 int
@@ -625,10 +650,33 @@ audio_canstart(struct audio_softc *sc)
 }
 
 int
-audio_setpar_blksz(struct audio_softc *sc)
+audio_setpar_blksz(struct audio_softc *sc,
+    struct audio_params *p, struct audio_params *r)
 {
 	unsigned int nr, np, max, min, mult;
 	unsigned int blk_mult, blk_max;
+
+	if (sc->ops->set_blksz) {
+		/*
+		 * Don't allow block size of exceed half the buffer size
+		 */
+		if (sc->mode & AUMODE_PLAY) {
+			max = sc->play.datalen / 2 / (sc->pchan * sc->bps);
+			if (sc->round > max)
+				sc->round = max;
+		}
+		if (sc->mode & AUMODE_RECORD) {
+			max = sc->rec.datalen / 2 / (sc->rchan * sc->bps);
+			if (sc->round > max)
+				sc->round = max;
+		}
+
+		sc->round = sc->ops->set_blksz(sc->arg, sc->mode,
+		    p, r, sc->round);
+
+		DPRINTF("%s: block size set to: %u\n", DEVNAME(sc), sc->round);
+		return 0;
+	}
 
 	/*
 	 * get least multiplier of the number of frames per block
@@ -706,7 +754,8 @@ audio_setpar_blksz(struct audio_softc *sc)
 }
 
 int
-audio_setpar_nblks(struct audio_softc *sc)
+audio_setpar_nblks(struct audio_softc *sc,
+    struct audio_params *p, struct audio_params *r)
 {
 	unsigned int max;
 
@@ -719,6 +768,12 @@ audio_setpar_nblks(struct audio_softc *sc)
 			sc->play.nblks = max;
 		else if (sc->play.nblks < 2)
 			sc->play.nblks = 2;
+		if (sc->ops->set_nblks) {
+			sc->play.nblks = sc->ops->set_nblks(sc->arg, sc->mode,
+			    p, sc->round, sc->play.nblks);
+			DPRINTF("%s: play nblks -> %u\n", DEVNAME(sc),
+			    sc->play.nblks);
+		}
 	}
 	if (sc->mode & AUMODE_RECORD) {
 		/*
@@ -727,6 +782,11 @@ audio_setpar_nblks(struct audio_softc *sc)
 		 * size of maximum reliability during xruns
 		 */
 		max = sc->rec.datalen / (sc->round * sc->rchan * sc->bps);
+		if (sc->ops->set_nblks) {
+			max = sc->ops->set_nblks(sc->arg, sc->mode,
+			    r, sc->round, max);
+			DPRINTF("%s: rec nblks -> %u\n", DEVNAME(sc), max);
+		}
 		sc->rec.nblks = max;
 	}
 	return 0;
@@ -874,11 +934,11 @@ audio_setpar(struct audio_softc *sc)
 	}
 	audio_calc_sil(sc);
 
-	error = audio_setpar_blksz(sc);
+	error = audio_setpar_blksz(sc, &p, &r);
 	if (error)
 		return error;
 
-	error = audio_setpar_nblks(sc);
+	error = audio_setpar_nblks(sc, &p, &r);
 	if (error)
 		return error;
 
@@ -1432,8 +1492,8 @@ audio_drain(struct audio_softc *sc)
 		 * work, useful only for debugging drivers
 		 */
 		sc->play.blocking = 1;
-		error = msleep(&sc->play.blocking, &audio_lock,
-		    PWAIT | PCATCH, "au_dr", 5 * hz);
+		error = msleep_nsec(&sc->play.blocking, &audio_lock,
+		    PWAIT | PCATCH, "au_dr", SEC_TO_NSEC(5));
 		if (!(sc->dev.dv_flags & DVF_ACTIVE))
 			error = EIO;
 		if (error) {
@@ -1468,7 +1528,7 @@ audio_read(struct audio_softc *sc, struct uio *uio, int ioflag)
 
 	/* block if quiesced */
 	while (sc->quiesce)
-		tsleep(&sc->quiesce, 0, "au_qrd", 0);
+		tsleep_nsec(&sc->quiesce, 0, "au_qrd", INFSLP);
 
 	/* start automatically if audio_ioc_start() was never called */
 	if (audio_canstart(sc)) {
@@ -1487,8 +1547,8 @@ audio_read(struct audio_softc *sc, struct uio *uio, int ioflag)
 		}
 		DPRINTFN(1, "%s: read sleep\n", DEVNAME(sc));
 		sc->rec.blocking = 1;
-		error = msleep(&sc->rec.blocking,
-		    &audio_lock, PWAIT | PCATCH, "au_rd", 0);
+		error = msleep_nsec(&sc->rec.blocking,
+		    &audio_lock, PWAIT | PCATCH, "au_rd", INFSLP);
 		if (!(sc->dev.dv_flags & DVF_ACTIVE))
 			error = EIO;
 		if (error) {
@@ -1530,7 +1590,7 @@ audio_write(struct audio_softc *sc, struct uio *uio, int ioflag)
 
 	/* block if quiesced */
 	while (sc->quiesce)
-		tsleep(&sc->quiesce, 0, "au_qwr", 0);
+		tsleep_nsec(&sc->quiesce, 0, "au_qwr", INFSLP);
 
 	/*
 	 * if IO_NDELAY flag is set then check if there is enough room
@@ -1560,8 +1620,8 @@ audio_write(struct audio_softc *sc, struct uio *uio, int ioflag)
 			}
 			DPRINTFN(1, "%s: write sleep\n", DEVNAME(sc));
 			sc->play.blocking = 1;
-			error = msleep(&sc->play.blocking,
-			    &audio_lock, PWAIT | PCATCH, "au_wr", 0);
+			error = msleep_nsec(&sc->play.blocking,
+			    &audio_lock, PWAIT | PCATCH, "au_wr", INFSLP);
 			if (!(sc->dev.dv_flags & DVF_ACTIVE))
 				error = EIO;
 			if (error) {
@@ -1619,7 +1679,7 @@ audio_ioctl(struct audio_softc *sc, unsigned long cmd, void *addr)
 
 	/* block if quiesced */
 	while (sc->quiesce)
-		tsleep(&sc->quiesce, 0, "au_qio", 0);
+		tsleep_nsec(&sc->quiesce, 0, "au_qio", INFSLP);
 
 	switch (cmd) {
 	case FIONBIO:
@@ -1755,7 +1815,7 @@ audio_ioctl_mixer(struct audio_softc *sc, unsigned long cmd, void *addr,
 {
 	/* block if quiesced */
 	while (sc->quiesce)
-		tsleep(&sc->quiesce, 0, "mix_qio", 0);
+		tsleep_nsec(&sc->quiesce, 0, "mix_qio", INFSLP);
 
 	switch (cmd) {
 	case FIONBIO:

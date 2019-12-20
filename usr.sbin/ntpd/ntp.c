@@ -1,4 +1,4 @@
-/*	$OpenBSD: ntp.c,v 1.159 2019/07/16 14:15:40 otto Exp $ */
+/*	$OpenBSD: ntp.c,v 1.162 2019/11/11 06:32:52 otto Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -246,7 +246,8 @@ ntp_main(struct ntpd_conf *nconf, struct passwd *pw, int argc, char **argv)
 		idx_peers = i;
 		sent_cnt = trial_cnt = 0;
 		TAILQ_FOREACH(p, &conf->ntp_peers, entry) {
-			if (constraint_cnt && conf->constraint_median == 0)
+			if (!p->trusted && constraint_cnt &&
+			    conf->constraint_median == 0)
 				continue;
 
 			if (p->next > 0 && p->next <= getmonotime()) {
@@ -298,7 +299,9 @@ ntp_main(struct ntpd_conf *nconf, struct passwd *pw, int argc, char **argv)
 		}
 		idx_clients = i;
 
-		if (!TAILQ_EMPTY(&conf->ntp_conf_sensors)) {
+		if (!TAILQ_EMPTY(&conf->ntp_conf_sensors) &&
+		    (conf->trusted_sensors || constraint_cnt == 0 ||
+		    conf->constraint_median != 0)) {
 			if (last_sensor_scan == 0 ||
 			    last_sensor_scan + SENSOR_SCAN_INTERVAL <= getmonotime()) {
 				sensors_cnt = sensor_scan();
@@ -346,7 +349,7 @@ ntp_main(struct ntpd_conf *nconf, struct passwd *pw, int argc, char **argv)
 		if (timeout < 0)
 			timeout = 0;
 
-		if ((nfds = poll(pfd, i, timeout * 1000)) == -1)
+		if ((nfds = poll(pfd, i, timeout ? timeout * 1000 : 1)) == -1)
 			if (errno != EINTR) {
 				log_warn("poll error");
 				ntp_quit = 1;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: locore.S,v 1.17 2018/08/06 18:39:13 kettenis Exp $	*/
+/*	$OpenBSD: locore.S,v 1.19 2019/10/27 10:26:12 kettenis Exp $	*/
 /*	$NetBSD: locore.S,v 1.14 2003/04/20 16:21:40 thorpej Exp $	*/
 
 /*
@@ -41,9 +41,12 @@
 #include <machine/frame.h>
 #include <arm/armreg.h>
 #include <arm/sysreg.h>
+#include <arm/pte.h>
 
 /* What size should this really be ? It is only used by init_arm() */
 #define INIT_ARM_STACK_SIZE	2048
+
+.arch_extension virt
 
 /*
  * This is for kvm_mkdb, and should be the address of the beginning
@@ -101,6 +104,102 @@ ASENTRY_NP(start)
 .Lmainreturned:
 	.asciz	"main() returned"
 	.align	2
+
+	.globl drop_to_pl1
+drop_to_pl1:
+	/* Drop to PL1 */
+	mrs	r0, cpsr
+	and	r0, r0, #(PSR_MODE)
+	teq	r0, #(PSR_HYP32_MODE)
+	beq	1f			/* If we are not in HYP, we're done */
+	mov	pc, lr
+1:
+	mrs	r0, cpsr
+	bic	r0, r0, #(PSR_MODE)
+	orr	r0, r0, #(PSR_SVC32_MODE)
+	orr	r0, r0, #(PSR_I | PSR_F | PSR_A)
+	msr	spsr_fsxc, r0
+	msr	ELR_hyp, lr
+	eret				/* Use the HYP LR to get into SVC */
+
+	.globl start_mmu
+start_mmu:
+	/* Set ASID to zero */
+	mov	r1, #0
+	mcr	CP15_CONTEXTIDR(r1)
+	isb
+
+	mcr	CP15_TTBR0(r0)		/* Set TTB */
+	mcr	CP15_TLBIALL(r0)	/* Flush TLB */
+
+	/* Set the Domain Access register.  Very important! */
+	mov     r0, #DOMAIN_CLIENT	/* We only use domain 0 */
+	mcr	CP15_DACR(r0)
+	isb
+
+	/* Enable MMU */
+	mrc	CP15_SCTLR(r0)
+	orr	r0, r0, #CPU_CONTROL_MMU_ENABLE
+	mcr	CP15_SCTLR(r0)
+	isb
+
+	mov	pc, lr
+
+#ifdef MULTIPROCESSOR
+
+	.globl cpu_hatch
+cpu_hatch:
+	/* Drop to PL1 */
+	bl	drop_to_pl1
+
+	/* Convert virt -> phys */
+	mov r9, pc
+	and r9, r9, #0xf0000000
+
+	/* Set up CPU info */
+	adr	r0, .Lcpu_hatch_ci
+	ldr	r0, [r0]
+	bic	r0, r0, #0xf0000000
+	orr	r0, r0, r9
+	ldr	r0, [r0]
+	ldr	r1, [r0, #CI_SELF]
+	mcr	CP15_TPIDRPRW(r1)
+	ldr	r8, [r0, #CI_TTBR0]
+
+	/* Enable the mmu */
+	orr	r0, r9, #0x00200000
+	bl	start_mmu
+
+	adr	r1, .Lcpu_hatch_virt
+	ldr	pc, [r1]
+
+cpu_hatch_virt:
+	mcr	CP15_TTBR0(r8)		/* Set TTB */
+	mcr	CP15_TLBIALL(r8)	/* Flush TLB */
+	
+	mrc	CP15_TPIDRPRW(r0)
+	ldr	r1, [r0, #CI_PL1_STKEND]
+	mov	sp, r1
+
+	adr	r1, .Lcpu_start_secondary
+	ldr	pc, [r1]
+
+	b	.
+
+.Lcpu_hatch_virt:
+	.word	cpu_hatch_virt
+.Lcpu_start_secondary:
+	.word	cpu_start_secondary
+.Lcpu_hatch_ci:
+	.word	cpu_hatch_ci
+
+	.data
+	.align	2
+	.global cpu_hatch_ci
+cpu_hatch_ci:
+	.word	0
+
+#endif
 
 	.bss
 	.align	3
