@@ -1,4 +1,4 @@
-/* $OpenBSD: options-table.c,v 1.111 2019/09/19 09:02:30 nicm Exp $ */
+/* $OpenBSD: options-table.c,v 1.115 2019/11/28 10:55:45 nicm Exp $ */
 
 /*
  * Copyright (c) 2011 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -70,7 +70,10 @@ static const char *options_table_window_size_list[] = {
 /* Status line format. */
 #define OPTIONS_TABLE_STATUS_FORMAT1 \
 	"#[align=left range=left #{status-left-style}]" \
-	"#{T;=/#{status-left-length}:status-left}#[norange default]" \
+	"#[push-default]" \
+	"#{T;=/#{status-left-length}:status-left}" \
+	"#[pop-default]" \
+	"#[norange default]" \
 	"#[list=on align=#{status-justify}]" \
 	"#[list=left-marker]<#[list=right-marker]>#[list=on]" \
 	"#{W:" \
@@ -126,7 +129,10 @@ static const char *options_table_window_size_list[] = {
 		"#{?window_end_flag,,#{window-status-separator}}" \
 	"}" \
 	"#[nolist align=right range=right #{status-right-style}]" \
-	"#{T;=/#{status-right-length}:status-right}#[norange default]"
+	"#[push-default]" \
+	"#{T;=/#{status-right-length}:status-right}" \
+	"#[pop-default]" \
+	"#[norange default]"
 #define OPTIONS_TABLE_STATUS_FORMAT2 \
 	"#[align=centre]#{P:#{?pane_active,#[reverse],}" \
 	"#{pane_index}[#{pane_width}x#{pane_height}]#[default] }"
@@ -147,6 +153,12 @@ static const char *options_table_status_format_default[] = {
 /* Top-level options. */
 const struct options_table_entry options_table[] = {
 	/* Server options. */
+	{ .name = "backspace",
+	  .type = OPTIONS_TABLE_KEY,
+	  .scope = OPTIONS_TABLE_SERVER,
+	  .default_num = '\177',
+	},
+
 	{ .name = "buffer-limit",
 	  .type = OPTIONS_TABLE_NUMBER,
 	  .scope = OPTIONS_TABLE_SERVER,
@@ -724,7 +736,7 @@ const struct options_table_entry options_table[] = {
 	  .type = OPTIONS_TABLE_CHOICE,
 	  .scope = OPTIONS_TABLE_WINDOW,
 	  .choices = options_table_window_size_list,
-	  .default_num = WINDOW_SIZE_SMALLEST
+	  .default_num = WINDOW_SIZE_LATEST
 	},
 
 	{ .name = "window-style",
@@ -799,6 +811,7 @@ const struct options_table_entry options_table[] = {
 	OPTIONS_TABLE_HOOK("after-copy-mode", ""),
 	OPTIONS_TABLE_HOOK("after-display-message", ""),
 	OPTIONS_TABLE_HOOK("after-display-panes", ""),
+	OPTIONS_TABLE_HOOK("after-kill-pane", ""),
 	OPTIONS_TABLE_HOOK("after-list-buffers", ""),
 	OPTIONS_TABLE_HOOK("after-list-clients", ""),
 	OPTIONS_TABLE_HOOK("after-list-keys", ""),

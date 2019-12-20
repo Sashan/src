@@ -1,4 +1,4 @@
-/*	$OpenBSD: bpfdesc.h,v 1.38 2019/05/18 12:59:32 sashan Exp $	*/
+/*	$OpenBSD: bpfdesc.h,v 1.39 2019/10/21 23:02:05 sashan Exp $	*/
 /*	$NetBSD: bpfdesc.h,v 1.11 1995/09/27 18:30:42 thorpej Exp $	*/
 
 /*

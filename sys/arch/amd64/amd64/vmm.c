@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmm.c,v 1.254 2019/09/22 08:47:54 mlarkin Exp $	*/
+/*	$OpenBSD: vmm.c,v 1.257 2019/12/13 03:38:15 mlarkin Exp $	*/
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -28,7 +28,6 @@
 #include <sys/rwlock.h>
 #include <sys/pledge.h>
 #include <sys/memrange.h>
-#include <sys/timetc.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -66,6 +65,7 @@ void *l1tf_flush_region;
     (VMX_EXIT_INFO_HAVE_RIP | VMX_EXIT_INFO_HAVE_REASON)
 
 struct vm {
+	struct vmspace		 *vm_vmspace;
 	vm_map_t		 vm_map;
 	uint32_t		 vm_id;
 	pid_t			 vm_creator_pid;
@@ -1232,36 +1232,22 @@ vm_impl_init_vmx(struct vm *vm, struct proc *p)
 {
 	int i, ret;
 	vaddr_t mingpa, maxgpa;
-	struct pmap *pmap;
 	struct vm_mem_range *vmr;
 
 	/* If not EPT, nothing to do here */
 	if (vmm_softc->mode != VMM_MODE_EPT)
 		return (0);
 
-	/* Create a new pmap for this VM */
-	pmap = pmap_create();
-	if (!pmap) {
-		printf("%s: pmap_create failed\n", __func__);
-		return (ENOMEM);
-	}
-
-	/*
-	 * Create a new UVM map for this VM, and assign it the pmap just
-	 * created.
-	 */
 	vmr = &vm->vm_memranges[0];
 	mingpa = vmr->vmr_gpa;
 	vmr = &vm->vm_memranges[vm->vm_nmemranges - 1];
 	maxgpa = vmr->vmr_gpa + vmr->vmr_size;
-	vm->vm_map = uvm_map_create(pmap, mingpa, maxgpa,
-	    VM_MAP_ISVMSPACE | VM_MAP_PAGEABLE);
 
-	if (!vm->vm_map) {
-		printf("%s: uvm_map_create failed\n", __func__);
-		pmap_destroy(pmap);
-		return (ENOMEM);
-	}
+	/*
+	 * uvmspace_alloc (currently) always returns a valid vmspace
+	 */
+	vm->vm_vmspace = uvmspace_alloc(mingpa, maxgpa, TRUE, FALSE);
+	vm->vm_map = &vm->vm_vmspace->vm_map;
 
 	/* Map the new map with an anon */
 	DPRINTF("%s: created vm_map @ %p\n", __func__, vm->vm_map);
@@ -1272,19 +1258,19 @@ vm_impl_init_vmx(struct vm *vm, struct proc *p)
 		    &p->p_vmspace->vm_map, vmr->vmr_va, vmr->vmr_size);
 		if (ret) {
 			printf("%s: uvm_share failed (%d)\n", __func__, ret);
-			/* uvm_map_deallocate calls pmap_destroy for us */
-			uvm_map_deallocate(vm->vm_map);
-			vm->vm_map = NULL;
+			/* uvmspace_free calls pmap_destroy for us */
+			uvmspace_free(vm->vm_vmspace);
+			vm->vm_vmspace = NULL;
 			return (ENOMEM);
 		}
 	}
 
-	ret = pmap_convert(pmap, PMAP_TYPE_EPT);
+	ret = pmap_convert(vm->vm_map->pmap, PMAP_TYPE_EPT);
 	if (ret) {
 		printf("%s: pmap_convert failed\n", __func__);
-		/* uvm_map_deallocate calls pmap_destroy for us */
-		uvm_map_deallocate(vm->vm_map);
-		vm->vm_map = NULL;
+		/* uvmspace_free calls pmap_destroy for us */
+		uvmspace_free(vm->vm_vmspace);
+		vm->vm_vmspace = NULL;
 		return (ENOMEM);
 	}
 
@@ -1309,38 +1295,22 @@ vm_impl_init_svm(struct vm *vm, struct proc *p)
 {
 	int i, ret;
 	vaddr_t mingpa, maxgpa;
-	struct pmap *pmap;
 	struct vm_mem_range *vmr;
 
 	/* If not RVI, nothing to do here */
 	if (vmm_softc->mode != VMM_MODE_RVI)
 		return (0);
 
-	/* Create a new pmap for this VM */
-	pmap = pmap_create();
-	if (!pmap) {
-		printf("%s: pmap_create failed\n", __func__);
-		return (ENOMEM);
-	}
-
-	DPRINTF("%s: RVI pmap allocated @ %p\n", __func__, pmap);
-
-	/*
-	 * Create a new UVM map for this VM, and assign it the pmap just
-	 * created.
-	 */
 	vmr = &vm->vm_memranges[0];
 	mingpa = vmr->vmr_gpa;
 	vmr = &vm->vm_memranges[vm->vm_nmemranges - 1];
 	maxgpa = vmr->vmr_gpa + vmr->vmr_size;
-	vm->vm_map = uvm_map_create(pmap, mingpa, maxgpa,
-	    VM_MAP_ISVMSPACE | VM_MAP_PAGEABLE);
 
-	if (!vm->vm_map) {
-		printf("%s: uvm_map_create failed\n", __func__);
-		pmap_destroy(pmap);
-		return (ENOMEM);
-	}
+	/*
+	 * uvmspace_alloc (currently) always returns a valid vmspace
+	 */
+	vm->vm_vmspace = uvmspace_alloc(mingpa, maxgpa, TRUE, FALSE);
+	vm->vm_map = &vm->vm_vmspace->vm_map;
 
 	/* Map the new map with an anon */
 	DPRINTF("%s: created vm_map @ %p\n", __func__, vm->vm_map);
@@ -1351,15 +1321,15 @@ vm_impl_init_svm(struct vm *vm, struct proc *p)
 		    &p->p_vmspace->vm_map, vmr->vmr_va, vmr->vmr_size);
 		if (ret) {
 			printf("%s: uvm_share failed (%d)\n", __func__, ret);
-			/* uvm_map_deallocate calls pmap_destroy for us */
-			uvm_map_deallocate(vm->vm_map);
-			vm->vm_map = NULL;
+			/* uvmspace_free calls pmap_destroy for us */
+			uvmspace_free(vm->vm_vmspace);
+			vm->vm_vmspace = NULL;
 			return (ENOMEM);
 		}
 	}
 
 	/* Convert pmap to RVI */
-	ret = pmap_convert(pmap, PMAP_TYPE_RVI);
+	ret = pmap_convert(vm->vm_map->pmap, PMAP_TYPE_RVI);
 
 	return (ret);
 }
@@ -2926,6 +2896,7 @@ vcpu_reset_regs_vmx(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 	/* xcr0 power on default sets bit 0 (x87 state) */
 	vcpu->vc_gueststate.vg_xcr0 = XCR0_X87 & xsave_mask;
 
+exit:
 	/* Flush the VMCS */
 	if (vmclear(&vcpu->vc_control_pa)) {
 		DPRINTF("%s: vmclear failed\n", __func__);
@@ -2933,7 +2904,6 @@ vcpu_reset_regs_vmx(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 		goto exit;
 	}
 
-exit:
 	return (ret);
 }
 
@@ -3431,9 +3401,9 @@ vm_teardown(struct vm *vm)
 	vm_impl_deinit(vm);
 
 	/* teardown guest vmspace */
-	if (vm->vm_map != NULL) {
-		uvm_map_deallocate(vm->vm_map);
-		vm->vm_map = NULL;
+	if (vm->vm_vmspace != NULL) {
+		uvmspace_free(vm->vm_vmspace);
+		vm->vm_vmspace = NULL;
 	}
 
 	if (vm->vm_id > 0) {
@@ -4254,6 +4224,12 @@ vcpu_run_vmx(struct vcpu *vcpu, struct vm_run_params *vrp)
 			DPRINTF("%s: vm %d vcpu %d triple fault\n",
 			    __func__, vcpu->vc_parent->vm_id,
 			    vcpu->vc_id);
+			/*
+			 * Ensure we have the proper VMCS loaded before
+			 * dumping register and VMCS state
+			 */
+			if (vcpu_reload_vmcs_vmx(&vcpu->vc_control_pa))
+				break;
 			vmx_vcpu_dump_regs(vcpu);
 			dump_vcpu(vcpu);
 			vmx_dump_vmcs(vcpu);
@@ -4263,6 +4239,12 @@ vcpu_run_vmx(struct vcpu *vcpu, struct vm_run_params *vrp)
 			    "due to invalid guest state\n",
 			    __func__, vcpu->vc_parent->vm_id,
 			    vcpu->vc_id);
+			/*
+			 * Ensure we have the proper VMCS loaded before
+			 * dumping register and VMCS state
+			 */
+			if (vcpu_reload_vmcs_vmx(&vcpu->vc_control_pa))
+				break;
 			vmx_vcpu_dump_regs(vcpu);
 			dump_vcpu(vcpu);
 			return EINVAL;
@@ -4272,6 +4254,12 @@ vcpu_run_vmx(struct vcpu *vcpu, struct vm_run_params *vrp)
 			    vcpu->vc_gueststate.vg_exit_reason,
 			    vmx_exit_reason_decode(
 				vcpu->vc_gueststate.vg_exit_reason));
+			/*
+			 * Ensure we have the proper VMCS loaded before
+			 * dumping register and VMCS state
+			 */
+			if (vcpu_reload_vmcs_vmx(&vcpu->vc_control_pa))
+				break;
 			vmx_vcpu_dump_regs(vcpu);
 			dump_vcpu(vcpu);
 			break;
@@ -6879,8 +6867,11 @@ void
 vmm_init_pvclock(struct vcpu *vcpu, paddr_t gpa)
 {
 	vcpu->vc_pvclock_system_gpa = gpa;
-	vcpu->vc_pvclock_system_tsc_mul =
-	    (int) ((1000000000L << 20) / tc_getfrequency());
+	if (tsc_frequency > 0)
+		vcpu->vc_pvclock_system_tsc_mul =
+		    (int) ((1000000000L << 20) / tsc_frequency);
+	else
+		vcpu->vc_pvclock_system_tsc_mul = 0;
 	vmm_update_pvclock(vcpu);
 }
 
@@ -6906,7 +6897,7 @@ vmm_update_pvclock(struct vcpu *vcpu)
 		nanotime(&tv);
 		pvclock_ti->ti_system_time =
 		    tv.tv_sec * 1000000000L + tv.tv_nsec;
-		pvclock_ti->ti_tsc_shift = -20;
+		pvclock_ti->ti_tsc_shift = 12;
 		pvclock_ti->ti_tsc_to_system_mul =
 		    vcpu->vc_pvclock_system_tsc_mul;
 		pvclock_ti->ti_flags = PVCLOCK_FLAG_TSC_STABLE;

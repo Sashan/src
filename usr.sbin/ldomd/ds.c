@@ -1,4 +1,4 @@
-/*	$OpenBSD: ds.c,v 1.8 2018/07/13 08:46:07 kettenis Exp $	*/
+/*	$OpenBSD: ds.c,v 1.10 2019/11/28 18:40:42 kn Exp $	*/
 
 /*
  * Copyright (c) 2012 Mark Kettenis
@@ -27,7 +27,7 @@
 #include <unistd.h>
 
 #include "ds.h"
-#include "util.h"
+#include "ldom_util.h"
 
 void	ldc_rx_ctrl_vers(struct ldc_conn *, struct ldc_pkt *);
 void	ldc_rx_ctrl_rtr(struct ldc_conn *, struct ldc_pkt *);
@@ -79,7 +79,7 @@ ldc_rx_ctrl_vers(struct ldc_conn *lc, struct ldc_pkt *lp)
 			    lc->lc_state));
 			return;
 		}
-		DPRINTF(("CTRL/INFO/VERS\n"));
+		DPRINTF(("CTRL/INFO/VERS %d.%d\n", lvp->major, lvp->minor));
 		if (lvp->major == LDC_VERSION_MAJOR &&
 		    lvp->minor == LDC_VERSION_MINOR)
 			ldc_send_ack(lc);

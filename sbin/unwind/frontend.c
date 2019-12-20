@@ -1,4 +1,4 @@
-/*	$OpenBSD: frontend.c,v 1.31 2019/10/12 14:59:13 florian Exp $	*/
+/*	$OpenBSD: frontend.c,v 1.49 2019/12/18 09:18:27 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -111,18 +111,17 @@ void			 get_rtaddrs(int, struct sockaddr *,
 			     struct sockaddr **);
 void			 rtmget_default(void);
 struct pending_query	*find_pending_query(uint64_t);
-void			 parse_dhcp_lease(int);
 void			 parse_trust_anchor(struct trust_anchor_head *, int);
 void			 send_trust_anchors(struct trust_anchor_head *);
 void			 write_trust_anchors(struct trust_anchor_head *, int);
 void			 parse_blocklist(int);
 int			 bl_cmp(struct bl_node *, struct bl_node *);
 void			 free_bl(void);
+int			 pending_query_cnt(void);
 
 struct uw_conf		*frontend_conf;
 struct imsgev		*iev_main;
 struct imsgev		*iev_resolver;
-struct imsgev		*iev_captiveportal;
 struct event		 ev_route;
 int			 udp4sock = -1, udp6sock = -1, routesock = -1;
 int			 ta_fd = -1;
@@ -155,9 +154,6 @@ frontend(int debug, int verbose)
 {
 	struct event	 ev_sigint, ev_sigterm;
 	struct passwd	*pw;
-	size_t		 rcvcmsglen, sndcmsgbuflen;
-	uint8_t		*rcvcmsgbuf;
-	uint8_t		*sndcmsgbuf = NULL;
 
 	frontend_conf = config_new_empty();
 	control_state.fd = -1;
@@ -196,6 +192,8 @@ frontend(int debug, int verbose)
 	signal(SIGHUP, SIG_IGN);
 
 	/* Setup pipe and event handler to the parent process. */
+	if (iev_main != NULL)
+		fatal("iev_main");
 	if ((iev_main = malloc(sizeof(struct imsgev))) == NULL)
 		fatal(NULL);
 	imsg_init(&iev_main->ibuf, 3);
@@ -204,11 +202,6 @@ frontend(int debug, int verbose)
 	event_set(&iev_main->ev, iev_main->ibuf.fd, iev_main->events,
 	    iev_main->handler, iev_main);
 	event_add(&iev_main->ev, NULL);
-
-	rcvcmsglen = CMSG_SPACE(sizeof(struct in6_pktinfo)) +
-	    CMSG_SPACE(sizeof(int));
-	if((rcvcmsgbuf = malloc(rcvcmsglen)) == NULL)
-		fatal("malloc");
 
 	udp4ev.rcviov[0].iov_base = (caddr_t)udp4ev.query;
 	udp4ev.rcviov[0].iov_len = sizeof(udp4ev.query);
@@ -223,11 +216,6 @@ frontend(int debug, int verbose)
 	udp6ev.rcvmhdr.msg_namelen = sizeof(udp6ev.from);
 	udp6ev.rcvmhdr.msg_iov = udp6ev.rcviov;
 	udp6ev.rcvmhdr.msg_iovlen = 1;
-
-	sndcmsgbuflen = CMSG_SPACE(sizeof(struct in6_pktinfo)) +
-	    CMSG_SPACE(sizeof(int));
-	if ((sndcmsgbuf = malloc(sndcmsgbuflen)) == NULL)
-		fatal("%s", __func__);
 
 	TAILQ_INIT(&pending_queries);
 
@@ -248,9 +236,6 @@ frontend_shutdown(void)
 	msgbuf_write(&iev_resolver->ibuf.w);
 	msgbuf_clear(&iev_resolver->ibuf.w);
 	close(iev_resolver->ibuf.fd);
-	msgbuf_write(&iev_captiveportal->ibuf.w);
-	msgbuf_clear(&iev_captiveportal->ibuf.w);
-	close(iev_captiveportal->ibuf.fd);
 	msgbuf_write(&iev_main->ibuf.w);
 	msgbuf_clear(&iev_main->ibuf.w);
 	close(iev_main->ibuf.fd);
@@ -258,7 +243,6 @@ frontend_shutdown(void)
 	config_clear(frontend_conf);
 
 	free(iev_resolver);
-	free(iev_captiveportal);
 	free(iev_main);
 
 	log_info("frontend exiting");
@@ -276,14 +260,6 @@ frontend_imsg_compose_resolver(int type, pid_t pid, void *data,
     uint16_t datalen)
 {
 	return (imsg_compose_event(iev_resolver, type, 0, pid, -1, data,
-	    datalen));
-}
-
-int
-frontend_imsg_compose_captiveportal(int type, pid_t pid, void *data,
-    uint16_t datalen)
-{
-	return (imsg_compose_event(iev_captiveportal, type, 0, pid, -1, data,
 	    datalen));
 }
 
@@ -333,6 +309,8 @@ frontend_dispatch_main(int fd, short event, void *bula)
 				break;
 			}
 
+			if (iev_resolver != NULL)
+				fatal("iev_resolver");
 			iev_resolver = malloc(sizeof(struct imsgev));
 			if (iev_resolver == NULL)
 				fatal(NULL);
@@ -346,45 +324,11 @@ frontend_dispatch_main(int fd, short event, void *bula)
 			    iev_resolver);
 			event_add(&iev_resolver->ev, NULL);
 			break;
-		case IMSG_SOCKET_IPC_CAPTIVEPORTAL:
-			/*
-			 * Setup pipe and event handler to the captiveportal
-			 * process.
-			 */
-			if (iev_captiveportal) {
-				fatalx("%s: received unexpected imsg fd "
-				    "to frontend", __func__);
-				break;
-			}
-			if ((fd = imsg.fd) == -1) {
-				fatalx("%s: expected to receive imsg fd to "
-				   "frontend but didn't receive any",
-				   __func__);
-				break;
-			}
-
-			iev_captiveportal = malloc(sizeof(struct imsgev));
-			if (iev_captiveportal == NULL)
-				fatal(NULL);
-
-			imsg_init(&iev_captiveportal->ibuf, fd);
-			iev_captiveportal->handler =
-			    frontend_dispatch_captiveportal;
-			iev_captiveportal->events = EV_READ;
-
-			event_set(&iev_captiveportal->ev,
-			    iev_captiveportal->ibuf.fd,
-			    iev_captiveportal->events,
-			    iev_captiveportal->handler, iev_captiveportal);
-			event_add(&iev_captiveportal->ev, NULL);
-			break;
 		case IMSG_RECONF_CONF:
-		case IMSG_RECONF_CAPTIVE_PORTAL_HOST:
-		case IMSG_RECONF_CAPTIVE_PORTAL_PATH:
-		case IMSG_RECONF_CAPTIVE_PORTAL_EXPECTED_RESPONSE:
 		case IMSG_RECONF_BLOCKLIST_FILE:
 		case IMSG_RECONF_FORWARDER:
 		case IMSG_RECONF_DOT_FORWARDER:
+		case IMSG_RECONF_FORCE:
 			imsg_receive_config(&imsg, &nconf);
 			break;
 		case IMSG_RECONF_END:
@@ -445,12 +389,6 @@ frontend_dispatch_main(int fd, short event, void *bula)
 			TAILQ_INIT(&ctl_conns);
 			control_listen();
 			break;
-		case IMSG_LEASEFD:
-			if ((fd = imsg.fd) == -1)
-				fatalx("%s: expected to receive imsg dhcp "
-				   "lease fd but didn't receive any", __func__);
-			parse_dhcp_lease(fd);
-			break;
 		case IMSG_TAFD:
 			if ((ta_fd = imsg.fd) != -1)
 				parse_trust_anchor(&trust_anchors, ta_fd);
@@ -510,6 +448,8 @@ frontend_dispatch_resolver(int fd, short event, void *bula)
 
 		switch (imsg.hdr.type) {
 		case IMSG_ANSWER_HEADER:
+			if (pq != NULL)
+				fatalx("expected IMSG_ANSWER but got HEADER");
 			if (IMSG_DATA_SIZE(imsg) != sizeof(*query_imsg))
 				fatalx("%s: IMSG_ANSWER_HEADER wrong length: "
 				    "%lu", __func__, IMSG_DATA_SIZE(imsg));
@@ -531,6 +471,8 @@ frontend_dispatch_resolver(int fd, short event, void *bula)
 			if (pq == NULL)
 				fatalx("IMSG_ANSWER without HEADER");
 
+			if (pq->answer)
+				fatal("pq->answer");
 			if ((pq->answer = malloc(IMSG_DATA_SIZE(imsg))) !=
 			    NULL) {
 				pq->answer_len = IMSG_DATA_SIZE(imsg);
@@ -538,28 +480,11 @@ frontend_dispatch_resolver(int fd, short event, void *bula)
 			} else
 				pq->rcode_override = LDNS_RCODE_SERVFAIL;
 			send_answer(pq);
-			break;
-		case IMSG_RESOLVER_DOWN:
-			log_debug("%s: IMSG_RESOLVER_DOWN", __func__);
-			if (udp4sock != -1) {
-				event_del(&udp4ev.ev);
-				close(udp4sock);
-				udp4sock = -1;
-			}
-			if (udp6sock != -1) {
-				event_del(&udp6ev.ev);
-				close(udp6sock);
-				udp6sock = -1;
-			}
-			break;
-		case IMSG_RESOLVER_UP:
-			log_debug("%s: IMSG_RESOLVER_UP", __func__);
-			frontend_imsg_compose_main(IMSG_OPEN_PORTS, 0, NULL, 0);
+			pq = NULL;
 			break;
 		case IMSG_CTL_RESOLVER_INFO:
-		case IMSG_CTL_CAPTIVEPORTAL_INFO:
-		case IMSG_CTL_RESOLVER_WHY_BOGUS:
-		case IMSG_CTL_RESOLVER_HISTOGRAM:
+		case IMSG_CTL_AUTOCONF_RESOLVER_INFO:
+		case IMSG_CTL_MEM_INFO:
 		case IMSG_CTL_END:
 			control_imsg_relay(&imsg);
 			break;
@@ -569,16 +494,13 @@ frontend_dispatch_resolver(int fd, short event, void *bula)
 			add_new_ta(&new_trust_anchors, imsg.data);
 			break;
 		case IMSG_NEW_TAS_ABORT:
-			log_debug("%s: IMSG_NEW_TAS_ABORT", __func__);
 			free_tas(&new_trust_anchors);
 			break;
 		case IMSG_NEW_TAS_DONE:
 			chg = merge_tas(&new_trust_anchors, &trust_anchors);
-			log_debug("%s: IMSG_NEW_TAS_DONE: change: %d",
-			    __func__, chg);
-			if (chg) {
+			if (chg)
 				send_trust_anchors(&trust_anchors);
-			}
+
 			/*
 			 * always write trust anchors, the modify date on
 			 * the file is an indication when we made progress
@@ -586,50 +508,6 @@ frontend_dispatch_resolver(int fd, short event, void *bula)
 			if (ta_fd != -1)
 				write_trust_anchors(&trust_anchors, ta_fd);
 			break;
-		default:
-			log_debug("%s: error handling imsg %d", __func__,
-			    imsg.hdr.type);
-			break;
-		}
-		imsg_free(&imsg);
-	}
-	if (!shut)
-		imsg_event_add(iev);
-	else {
-		/* This pipe is dead. Remove its event handler. */
-		event_del(&iev->ev);
-		event_loopexit(NULL);
-	}
-}
-
-void
-frontend_dispatch_captiveportal(int fd, short event, void *bula)
-{
-	struct imsgev	*iev = bula;
-	struct imsgbuf	*ibuf = &iev->ibuf;
-	struct imsg	 imsg;
-	int		 n, shut = 0;
-
-	if (event & EV_READ) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			fatal("imsg_read error");
-		if (n == 0)	/* Connection closed. */
-			shut = 1;
-	}
-	if (event & EV_WRITE) {
-		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
-			fatal("msgbuf_write");
-		if (n == 0)	/* Connection closed. */
-			shut = 1;
-	}
-
-	for (;;) {
-		if ((n = imsg_get(ibuf, &imsg)) == -1)
-			fatal("%s: imsg_get error", __func__);
-		if (n == 0)	/* No more messages. */
-			break;
-
-		switch (imsg.hdr.type) {
 		default:
 			log_debug("%s: error handling imsg %d", __func__,
 			    imsg.hdr.type);
@@ -656,7 +534,6 @@ frontend_startup(void)
 	event_add(&ev_route, NULL);
 
 	frontend_imsg_compose_main(IMSG_STARTUP_DONE, 0, NULL, 0);
-	rtmget_default();
 }
 
 void
@@ -664,13 +541,15 @@ udp_receive(int fd, short events, void *arg)
 {
 	struct udp_ev		*udpev = (struct udp_ev *)arg;
 	struct pending_query	*pq;
-	struct query_imsg	*query_imsg = NULL;
+	struct query_imsg	 query_imsg;
 	struct query_info	 qinfo;
 	struct bl_node		 find;
 	ssize_t			 len, dname_len;
 	int			 ret;
-	char			*str_from, *str;
+	char			*str;
 	char			 dname[LDNS_MAX_DOMAINLEN + 1];
+	char			 qclass_buf[16];
+	char			 qtype_buf[16];
 
 	memset(&qinfo, 0, sizeof(qinfo));
 
@@ -695,16 +574,16 @@ udp_receive(int fd, short events, void *arg)
 
 	if ((pq->qbuf = sldns_buffer_new(len)) == NULL) {
 		log_warnx("sldns_buffer_new");
-		return;
+		goto drop;
 	}
 	sldns_buffer_clear(pq->qbuf);
 	sldns_buffer_write(pq->qbuf, udpev->query, len);
 	sldns_buffer_flip(pq->qbuf);
 
-	str_from = ip_port((struct sockaddr *)&udpev->from);
-	log_debug("query from %s", str_from);
-	if ((str = sldns_wire2str_pkt(udpev->query, len)) != NULL) {
-		log_debug("%s", str);
+	if (log_getverbose() & OPT_VERBOSE2 && (str =
+	    sldns_wire2str_pkt(udpev->query, len)) != NULL) {
+		log_debug("from: %s\n%s", ip_port((struct sockaddr *)
+		    &udpev->from), str);
 		free(str);
 	}
 
@@ -713,7 +592,7 @@ udp_receive(int fd, short events, void *arg)
 			goto drop;
 		else
 			pq->rcode_override = ret;
-			goto send_answer;
+		goto send_answer;
 	}
 
 	if (!query_info_parse(&qinfo, pq->qbuf)) {
@@ -727,11 +606,15 @@ udp_receive(int fd, short events, void *arg)
 	}
 	dname_str(qinfo.qname, dname);
 
-	log_debug("%s: query_info_parse, qname_len: %ld dname[%ld]: %s",
-	    __func__, qinfo.qname_len, dname_len, dname);
+	sldns_wire2str_class_buf(qinfo.qclass, qclass_buf, sizeof(qclass_buf));
+	sldns_wire2str_type_buf(qinfo.qtype, qtype_buf, sizeof(qtype_buf));
+	log_debug("%s: %s %s %s ?", ip_port((struct sockaddr *)&udpev->from),
+	    dname, qclass_buf, qtype_buf);
 
 	find.domain = dname;
 	if (RB_FIND(bl_tree, &bl_head, &find) != NULL) {
+		if (frontend_conf->blocklist_log)
+			log_info("blocking %s", dname);
 		pq->rcode_override = LDNS_RCODE_REFUSED;
 		goto send_answer;
 	}
@@ -761,29 +644,22 @@ udp_receive(int fd, short events, void *arg)
 		goto send_answer;
 	}
 
-	if ((query_imsg = calloc(1, sizeof(*query_imsg))) == NULL) {
-		log_warn(NULL);
-		pq->rcode_override = LDNS_RCODE_SERVFAIL;
-		goto send_answer;
-	}
-
-	if (strlcpy(query_imsg->qname, dname, sizeof(query_imsg->qname)) >=
-	    sizeof(query_imsg->qname)) {
+	if (strlcpy(query_imsg.qname, dname, sizeof(query_imsg.qname)) >=
+	    sizeof(query_imsg.qname)) {
 		log_warnx("qname too long");
 		pq->rcode_override = LDNS_RCODE_FORMERR;
 		goto send_answer;
 	}
-	query_imsg->id = pq->imsg_id;
-	query_imsg->t = qinfo.qtype;
-	query_imsg->c = qinfo.qclass;
+	query_imsg.id = pq->imsg_id;
+	query_imsg.t = qinfo.qtype;
+	query_imsg.c = qinfo.qclass;
 
-	if (frontend_imsg_compose_resolver(IMSG_QUERY, 0, query_imsg,
-	    sizeof(*query_imsg)) != -1)
+	if (frontend_imsg_compose_resolver(IMSG_QUERY, 0, &query_imsg,
+	    sizeof(query_imsg)) != -1)
 		TAILQ_INSERT_TAIL(&pending_queries, pq, entry);
 	else {
 		pq->rcode_override = LDNS_RCODE_SERVFAIL;
 		goto send_answer;
-		free(query_imsg);
 	}
 	return;
 
@@ -795,7 +671,6 @@ udp_receive(int fd, short events, void *arg)
 	if (pq != NULL)
 		sldns_buffer_free(pq->qbuf);
 	free(pq);
-	free(query_imsg);
 }
 
 void
@@ -803,11 +678,13 @@ chaos_answer(struct pending_query *pq)
 {
 	struct sldns_buffer	 buf, *pkt = &buf;
 	size_t			 size, len;
-	char			*name = "unwind", *str;
+	char			*name = "unwind";
 
 	len = strlen(name);
 	size = sldns_buffer_capacity(pq->qbuf) + COMPRESSED_RR_SIZE + 1 + len;
 
+	if (pq->answer != 0)
+		fatal("chaos_answer");
 	if ((pq->answer = calloc(1, size)) == NULL)
 		return;
 	pq->answer_len = size;
@@ -841,11 +718,6 @@ chaos_answer(struct pending_query *pq)
 	sldns_buffer_write_u16(pkt, 1 + len);		/* RDLENGTH */
 	sldns_buffer_write_u8(pkt, len);		/* length octed */
 	sldns_buffer_write(pkt, name, len);
-
-	if ((str = sldns_wire2str_pkt(pq->answer, pq->answer_len)) != NULL) {
-		log_debug("%s: %s", __func__, str);
-		free(str);
-	}
 }
 
 int
@@ -893,9 +765,8 @@ void
 send_answer(struct pending_query *pq)
 {
 	ssize_t	 len;
+	char	*str;
 	uint8_t	*answer;
-
-	log_debug("result for %s", ip_port((struct sockaddr*)&pq->from));
 
 	answer = pq->answer;
 	len = pq->answer_len;
@@ -928,6 +799,14 @@ send_answer(struct pending_query *pq)
 			LDNS_ID_SET(answer, LDNS_ID_WIRE(sldns_buffer_begin(
 			    pq->qbuf)));
 		}
+	}
+
+	if (log_getverbose() & OPT_VERBOSE2 && (str =
+	    sldns_wire2str_pkt(answer, len)) != NULL) {
+		log_debug("to: %s\n%s",
+		    ip_port((struct sockaddr *)&pq->from),str);
+		free(str);
+		log_debug("pending query count: %d", pending_query_cnt());
 	}
 
 	if(sendto(pq->fd, answer, len, 0, (struct sockaddr *)&pq->from,
@@ -1032,177 +911,46 @@ get_rtaddrs(int addrs, struct sockaddr *sa, struct sockaddr **rti_info)
 void
 handle_route_message(struct rt_msghdr *rtm, struct sockaddr **rti_info)
 {
-	char	buf[IF_NAMESIZE], *bufp;
+	struct imsg_rdns_proposal	 rdns_proposal;
+	struct sockaddr_rtdns		*rtdns;
 
 	switch (rtm->rtm_type) {
-	case RTM_GET:
-		if (rtm->rtm_errno != 0)
-			break;
-		if (!(rtm->rtm_flags & RTF_UP))
-			break;
-		if (!(rtm->rtm_addrs & RTA_DST))
-			break;
-		if (rti_info[RTAX_DST]->sa_family != AF_INET)
-			break;
-		if (((struct sockaddr_in *)rti_info[RTAX_DST])->sin_addr.
-		    s_addr != INADDR_ANY)
-			break;
-		if (!(rtm->rtm_addrs & RTA_NETMASK))
-			break;
-		if (rti_info[RTAX_NETMASK]->sa_family != AF_INET)
-			break;
-		if (((struct sockaddr_in *)rti_info[RTAX_NETMASK])->sin_addr.
-		    s_addr != INADDR_ANY)
-			break;
-
-		frontend_imsg_compose_main(IMSG_OPEN_DHCP_LEASE, 0,
-		    &rtm->rtm_index, sizeof(rtm->rtm_index));
-
-		bufp = if_indextoname(rtm->rtm_index, buf);
-		if (bufp)
-			log_debug("default route is on %s", buf);
-
-		break;
 	case RTM_IFINFO:
-		frontend_imsg_compose_resolver(IMSG_RECHECK_RESOLVERS, 0, NULL,
+		frontend_imsg_compose_resolver(IMSG_NETWORK_CHANGED, 0, NULL,
 		    0);
+		break;
+	case RTM_PROPOSAL:
+		if (!(rtm->rtm_addrs & RTA_DNS))
+			break;
+
+		rtdns = (struct sockaddr_rtdns*)rti_info[RTAX_DNS];
+		switch (rtdns->sr_family) {
+		case AF_INET:
+			if ((rtdns->sr_len - 2) % sizeof(struct in_addr) != 0) {
+				log_warnx("ignoring invalid RTM_PROPOSAL");
+				return;
+			}
+			break;
+		case AF_INET6:
+			if ((rtdns->sr_len - 2) % sizeof(struct in6_addr) != 0) {
+				log_warnx("ignoring invalid RTM_PROPOSAL");
+				return;
+			}
+			break;
+		default:
+			log_warnx("ignoring invalid RTM_PROPOSAL");
+			return;
+		}
+		rdns_proposal.if_index = rtm->rtm_index;
+		rdns_proposal.src = rtm->rtm_priority;
+		memcpy(&rdns_proposal.rtdns, rtdns, sizeof(rdns_proposal.rtdns));
+		frontend_imsg_compose_resolver(IMSG_REPLACE_DNS, 0,
+		    &rdns_proposal, sizeof(rdns_proposal));
 		break;
 	default:
 		break;
 	}
 }
-
-void
-rtmget_default(void)
-{
-	static int		 rtm_seq;
-	struct rt_msghdr	 rtm;
-	struct sockaddr_in	 sin;
-	struct iovec		 iov[5];
-	long			 pad = 0;
-	int			 iovcnt = 0, padlen;
-
-	memset(&sin, 0, sizeof(sin));
-	sin.sin_family = AF_INET;
-	sin.sin_len = sizeof(sin);
-
-	memset(&rtm, 0, sizeof(rtm));
-
-	rtm.rtm_version = RTM_VERSION;
-	rtm.rtm_type = RTM_GET;
-	rtm.rtm_msglen = sizeof(rtm);
-	rtm.rtm_tableid = 0; /* XXX imsg->rdomain; */
-	rtm.rtm_seq = ++rtm_seq;
-	rtm.rtm_addrs = RTA_DST | RTA_NETMASK;
-
-	iov[iovcnt].iov_base = &rtm;
-	iov[iovcnt++].iov_len = sizeof(rtm);
-
-	/* dst */
-	iov[iovcnt].iov_base = &sin;
-	iov[iovcnt++].iov_len = sizeof(sin);
-	rtm.rtm_msglen += sizeof(sin);
-	padlen = ROUNDUP(sizeof(sin)) - sizeof(sin);
-	if (padlen > 0) {
-		iov[iovcnt].iov_base = &pad;
-		iov[iovcnt++].iov_len = padlen;
-		rtm.rtm_msglen += padlen;
-	}
-
-	/* mask */
-	iov[iovcnt].iov_base = &sin;
-	iov[iovcnt++].iov_len = sizeof(sin);
-	rtm.rtm_msglen += sizeof(sin);
-	padlen = ROUNDUP(sizeof(sin)) - sizeof(sin);
-	if (padlen > 0) {
-		iov[iovcnt].iov_base = &pad;
-		iov[iovcnt++].iov_len = padlen;
-		rtm.rtm_msglen += padlen;
-	}
-
-	if (writev(routesock, iov, iovcnt) == -1)
-		log_warn("failed to send route message");
-}
-
-void
-parse_dhcp_lease(int fd)
-{
-	FILE	 *f;
-	char	 *line = NULL, *cur_ns = NULL, *ns = NULL;
-	size_t	  linesize = 0;
-	ssize_t	  linelen;
-	time_t	  epoch = 0, lease_time = 0, now;
-	char	**tok, *toks[4], *p;
-
-	if((f = fdopen(fd, "r")) == NULL) {
-		log_warn("cannot read dhcp lease");
-		close(fd);
-		return;
-	}
-
-	now = time(NULL);
-
-	while ((linelen = getline(&line, &linesize, f)) != -1) {
-		for (tok = toks; tok < &toks[3] && (*tok = strsep(&line, " \t"))
-		    != NULL;) {
-			if (**tok != '\0')
-				tok++;
-		}
-		if (toks[0] == NULL)
-			continue;
-		*tok = NULL;
-		if (strcmp(toks[0], "option") == 0) {
-			if (toks[1] == NULL || toks[2] == NULL)
-				continue;
-			if (strcmp(toks[1], "domain-name-servers") == 0) {
-				if((p = strchr(toks[2], ';')) != NULL) {
-					*p='\0';
-					free(cur_ns);
-					cur_ns = strdup(toks[2]);
-				}
-			}
-			if (strcmp(toks[1], "dhcp-lease-time") == 0) {
-				if((p = strchr(toks[2], ';')) != NULL) {
-					*p='\0';
-					lease_time = strtonum(toks[2], 0,
-					    INT64_MAX, NULL);
-				}
-			}
-		} else if (strcmp(toks[0], "epoch") == 0) {
-			if (toks[1] == NULL)
-				continue;
-			if((p = strchr(toks[1], ';')) != NULL) {
-				*p='\0';
-				epoch = strtonum(toks[1], 0,
-				    INT64_MAX, NULL);
-			}
-		}
-		else if (*toks[0] == '}') {
-			if (epoch + lease_time > now ) {
-				free(ns);
-				ns = cur_ns;
-				cur_ns = NULL;
-			} else {
-				/* expired lease */
-				free(cur_ns);
-				cur_ns = NULL;
-			}
-		}
-	}
-	free(line);
-	free(cur_ns);
-
-	if (ferror(f))
-		log_warn("getline");
-	fclose(f);
-
-	if (ns != NULL) {
-		log_debug("%s: ns: %s", __func__, ns);
-		frontend_imsg_compose_resolver(IMSG_FORWARDER, 0, ns,
-		    strlen(ns) + 1);
-	}
-}
-
 
 void
 add_new_ta(struct trust_anchor_head *tah, char *val)
@@ -1344,8 +1092,6 @@ write_trust_anchors(struct trust_anchor_head *tah, int fd)
 	ssize_t			 n;
 	char			*str;
 
-	log_debug("%s", __func__);
-
 	if (lseek(fd, 0, SEEK_SET) == -1) {
 		log_warn("%s", __func__);
 		goto out;
@@ -1424,4 +1170,15 @@ free_bl(void)
 		RB_REMOVE(bl_tree, &bl_head, n);
 		free(n);
 	}
+}
+
+int
+pending_query_cnt(void)
+{
+	struct pending_query	*e;
+	int			 cnt = 0;
+
+	TAILQ_FOREACH(e, &pending_queries, entry)
+		cnt++;
+	return cnt;
 }

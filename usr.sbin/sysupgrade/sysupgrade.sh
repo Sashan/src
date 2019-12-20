@@ -1,6 +1,6 @@
 #!/bin/ksh
 #
-# $OpenBSD: sysupgrade.sh,v 1.26 2019/10/14 06:58:53 ajacoutot Exp $
+# $OpenBSD: sysupgrade.sh,v 1.36 2019/12/01 10:30:37 ajacoutot Exp $
 #
 # Copyright (c) 1997-2015 Todd Miller, Theo de Raadt, Ken Westerback
 # Copyright (c) 2015 Robert Peichaer <rpe@openbsd.org>
@@ -51,7 +51,7 @@ unpriv()
 	fi
 	(($# >= 1))
 
-	# propagate error code to the caller instead of failing hard
+	# XXX ksh(1) bug; send error code to the caller instead of failing hard
 	set +e
 	eval su -s /bin/sh ${_user} -c "'$@'" || _rc=$?
 	set -e
@@ -97,7 +97,7 @@ if $RELEASE && $SNAP; then
 fi
 
 set -A _KERNV -- $(sysctl -n kern.version |
-	sed 's/^OpenBSD \([0-9]\)\.\([0-9]\)\([^ ]*\).*/\1.\2 \3/;q')
+	sed 's/^OpenBSD \([1-9][0-9]*\.[0-9]\)\([^ ]*\).*/\1 \2/;q')
 
 shift $(( OPTIND -1 ))
 
@@ -114,7 +114,11 @@ if ! $RELEASE && [[ ${#_KERNV[*]} == 2 ]]; then
 	SNAP=true
 fi
 
-NEXT_VERSION=$(echo ${_KERNV[0]} + 0.1 | bc)
+if $RELEASE && [[ ${_KERNV[1]} == '-beta' ]]; then
+	NEXT_VERSION=${_KERNV[0]}
+else
+	NEXT_VERSION=$(echo ${_KERNV[0]} + 0.1 | bc)
+fi
 
 if $SNAP; then
 	URL=${MIRROR}/snapshots/${ARCH}/
@@ -122,21 +126,11 @@ else
 	URL=${MIRROR}/${NEXT_VERSION}/${ARCH}/
 fi
 
-if [[ -e ${SETSDIR} ]]; then
-	eval $(stat -s ${SETSDIR})
-	[[ $st_uid -eq 0 ]] ||
-		 ug_err "${SETSDIR} needs to be owned by root:wheel"
-	[[ $st_gid -eq 0 ]] ||
-		 ug_err "${SETSDIR} needs to be owned by root:wheel"
-	[[ $st_mode -eq 040755 ]] || 
-		ug_err "${SETSDIR} is not a directory with permissions 0755"
-else
-	mkdir -p ${SETSDIR}
-fi
-
+install -d -o 0 -g 0 -m 0755 ${SETSDIR}
 cd ${SETSDIR}
 
-unpriv -f SHA256.sig ftp -Vmo SHA256.sig ${URL}SHA256.sig
+echo "Fetching from ${URL}"
+unpriv -f SHA256.sig ftp -N sysupgrade -Vmo SHA256.sig ${URL}SHA256.sig
 
 _KEY=openbsd-${_KERNV[0]%.*}${_KERNV[0]#*.}-base.pub
 _NEXTKEY=openbsd-${NEXT_VERSION%.*}${NEXT_VERSION#*.}-base.pub
@@ -176,7 +170,7 @@ done
 
 [[ -n ${OLD_FILES} ]] && rm ${OLD_FILES}
 for f in ${DL}; do
-	unpriv -f $f ftp -Vmo ${f} ${URL}${f}
+	unpriv -f $f ftp -N sysupgrade -Vmo ${f} ${URL}${f}
 done
 
 if [[ -n ${DL} ]]; then
@@ -199,6 +193,9 @@ if ! ${KEEP}; then
 rm -f /home/_sysupgrade/{${CLEAN}}
 __EOT
 fi
+
+echo Fetching updated firmware.
+fw_update || echo "Warning: firmware not updated."
 
 install -F -m 700 bsd.rd /bsd.upgrade
 sync

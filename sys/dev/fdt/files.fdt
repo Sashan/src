@@ -1,4 +1,4 @@
-#	$OpenBSD: files.fdt,v 1.99 2019/10/13 17:21:25 kettenis Exp $
+#	$OpenBSD: files.fdt,v 1.106 2019/12/03 09:12:45 patrick Exp $
 #
 # Config file and device description for machine-independent FDT code.
 # Included by ports that need it.
@@ -15,6 +15,10 @@ device	sxiccmu
 attach	sxiccmu at fdt
 file	dev/fdt/sxiccmu.c		sxiccmu
 
+device	sxidog
+attach	sxidog at fdt
+file	dev/fdt/sxidog.c		sxidog
+
 device	sxipio {}: gpiobus
 attach	sxipio at fdt
 file	dev/fdt/sxipio.c		sxipio
@@ -24,6 +28,10 @@ device	sxirsb: rsb
 attach	sxirsb at fdt
 file	dev/fdt/sxirsb.c		sxirsb
 
+device	sxipwm
+attach	sxipwm at fdt
+file	dev/fdt/sxipwm.c		sxipwm
+
 device	sxirtc
 attach	sxirtc at fdt
 file	dev/fdt/sxirtc.c		sxirtc
@@ -31,6 +39,10 @@ file	dev/fdt/sxirtc.c		sxirtc
 device	sximmc: sdmmcbus
 attach	sximmc at fdt
 file	dev/fdt/sximmc.c		sximmc
+
+device	sxisid
+attach	sxisid at fdt
+file	dev/fdt/sxisid.c		sxisid
 
 device	sxisyscon: fdt
 attach	sxisyscon at fdt
@@ -128,6 +140,14 @@ device	syscon: fdt
 attach	syscon at fdt
 file	dev/fdt/syscon.c		syscon
 
+device	pwmbl
+attach	pwmbl at fdt
+file	dev/fdt/pwmbl.c			pwmbl
+
+device	pwmfan
+attach	pwmfan at fdt
+file	dev/fdt/pwmfan.c		pwmfan
+
 device	pwmreg
 attach	pwmreg at fdt
 file	dev/fdt/pwmreg.c		pwmreg
@@ -200,7 +220,11 @@ device	rkdwusb: fdt
 attach	rkdwusb at fdt
 file	dev/fdt/rkdwusb.c		rkdwusb
 
-device	rkgrf
+device	rkemmcphy
+attach	rkemmcphy at fdt
+file	dev/fdt/rkemmcphy.c		rkemmcphy
+
+device	rkgrf: fdt
 attach	rkgrf at fdt
 file	dev/fdt/rkgrf.c			rkgrf
 
@@ -223,6 +247,10 @@ file	dev/fdt/rkpinctrl.c		rkpinctrl
 device	rkpcie: pcibus
 attach	rkpcie at fdt
 file	dev/fdt/rkpcie.c		rkpcie
+
+device	rkpwm
+attach	rkpwm at fdt
+file	dev/fdt/rkpwm.c			rkpwm
 
 device	rktemp
 attach	rktemp at fdt

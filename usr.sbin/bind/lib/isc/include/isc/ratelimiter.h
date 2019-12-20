@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1999-2002  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: ratelimiter.h,v 1.15.18.2 2005/04/29 00:17:01 marka Exp $ */
+/* $Id: ratelimiter.h,v 1.3 2019/12/17 01:46:35 sthen Exp $ */
 
 #ifndef ISC_RATELIMITER_H
 #define ISC_RATELIMITER_H 1
@@ -24,7 +23,7 @@
  ***** Module Info
  *****/
 
-/*! \file
+/*! \file isc/ratelimiter.h
  * \brief A rate limiter is a mechanism for dispatching events at a limited
  * rate.  This is intended to be used when sending zone maintenance
  * SOA queries, NOTIFY messages, etc.
@@ -53,7 +52,7 @@ isc_ratelimiter_create(isc_mem_t *mctx, isc_timermgr_t *timermgr,
 isc_result_t
 isc_ratelimiter_setinterval(isc_ratelimiter_t *rl, isc_interval_t *interval);
 /*!<
- * Set the mininum interval between event executions.
+ * Set the minimum interval between event executions.
  * The interval value is copied, so the caller need not preserve it.
  *
  * Requires:
@@ -71,7 +70,7 @@ isc_result_t
 isc_ratelimiter_enqueue(isc_ratelimiter_t *rl, isc_task_t *task,
 			isc_event_t **eventp);
 /*%<
- * Queue an event for rate-limited execution.  
+ * Queue an event for rate-limited execution.
  *
  * This is similar
  * to doing an isc_task_send() to the 'task', except that the
@@ -89,6 +88,16 @@ isc_ratelimiter_enqueue(isc_ratelimiter_t *rl, isc_task_t *task,
  *\li	'(*eventp)->ev_sender' to be NULL.
  */
 
+isc_result_t
+isc_ratelimiter_dequeue(isc_ratelimiter_t *rl, isc_event_t *event);
+/*
+ * Dequeue a event off the ratelimiter queue.
+ *
+ * Returns:
+ * \li	ISC_R_NOTFOUND if the event is no longer linked to the rate limiter.
+ * \li	ISC_R_SUCCESS
+ */
+
 void
 isc_ratelimiter_shutdown(isc_ratelimiter_t *ratelimiter);
 /*%<
@@ -102,7 +111,7 @@ isc_ratelimiter_shutdown(isc_ratelimiter_t *ratelimiter);
  *\li	Further attempts to enqueue events will fail with
  * 	#ISC_R_SHUTTINGDOWN.
  *
- *\li	The reatelimiter is no longer attached to its task.
+ *\li	The rate limiter is no longer attached to its task.
  */
 
 void

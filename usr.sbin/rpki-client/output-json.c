@@ -1,4 +1,4 @@
-/*	$OpenBSD: output-json.c,v 1.1 2019/10/08 10:04:36 claudio Exp $ */
+/*	$OpenBSD: output-json.c,v 1.6 2019/12/04 23:03:05 benno Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  *
@@ -15,37 +15,38 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include <assert.h>
-#include <err.h>
-#include <inttypes.h>
-#include <stdarg.h>
 #include <stdlib.h>
-
 #include <openssl/ssl.h>
 
 #include "extern.h"
 
-void
+int
 output_json(FILE *out, struct vrp_tree *vrps)
 {
 	char		 buf[64];
 	struct vrp	*v;
 	int		 first = 1;
 
-	fprintf(out, "{\n\t\"roas\": [\n");
+	if (fprintf(out, "{\n\t\"roas\": [\n") < 0)
+		return -1;
 
 	RB_FOREACH(v, vrp_tree, vrps) {
 		if (first)
 			first = 0;
-		else
-			fprintf(out, ",\n");
+		else {
+			if (fprintf(out, ",\n") < 0)
+				return -1;
+		}
 
 		ip_addr_print(&v->addr, v->afi, buf, sizeof(buf));
 
-		fprintf(out, "\t\t{ \"asn\": \"AS%u\", \"prefix\": \"%s\", "
+		if (fprintf(out, "\t\t{ \"asn\": \"AS%u\", \"prefix\": \"%s\", "
 		    "\"maxLength\": %u, \"ta\": \"%s\" }",
-		    v->asid, buf, v->maxlength, v->tal);
+		    v->asid, buf, v->maxlength, v->tal) < 0)
+			return -1;
 	}
 
-	fprintf(out, "\n\t]\n}\n");
+	if (fprintf(out, "\n\t]\n}\n") < 0)
+		return -1;
+	return 0;
 }

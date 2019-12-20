@@ -1,6 +1,6 @@
 #!/bin/ksh
 #
-# $OpenBSD: syspatch.sh,v 1.151 2019/10/14 06:56:54 ajacoutot Exp $
+# $OpenBSD: syspatch.sh,v 1.159 2019/12/10 17:11:06 ajacoutot Exp $
 #
 # Copyright (c) 2016, 2017 Antoine Jacoutot <ajacoutot@openbsd.org>
 #
@@ -81,7 +81,7 @@ missing patches" 2)
 #   (instead of computing before installing each file)
 checkfs()
 {
-	local _d _dev _df _files="${@}" _rc _sz
+	local _d _dev _df _files="${@}" _sz
 	[[ -n ${_files} ]]
 
 	set +e # ignore errors due to:
@@ -90,11 +90,11 @@ checkfs()
 	eval $(cd / &&
 		stat -qf "_dev=\"\${_dev} %Sd\";
 			local %Sd=\"\${%Sd:+\${%Sd}\+}%Uz\"" ${_files}) \
-			2>/dev/null || _rc=$?
+			2>/dev/null
 	set -e
-	[[ ${_rc} == 127 ]] && sp_err "Remote filesystem, aborting" 
 
 	for _d in $(printf '%s\n' ${_dev} | sort -u); do
+		[[ ${_d} != "??" ]] || sp_err "Unsupported filesystem, aborting"
 		mount | grep -v read-only | grep -q "^/dev/${_d} " ||
 			sp_err "Read-only filesystem, aborting"
 		_df=$(df -Pk | grep "^/dev/${_d} " | tr -s ' ' | cut -d ' ' -f4)
@@ -130,8 +130,8 @@ fetch_and_verify()
 	[[ -n ${_tgz} ]]
 
 	[[ -t 0 ]] || echo "${_title} ${_tgz}"
-	unpriv -f "${_TMP}/${_tgz}" ftp -VD "${_title}" -o "${_TMP}/${_tgz}" \
-		"${_MIRROR}/${_tgz}"
+	unpriv -f "${_TMP}/${_tgz}" ftp -N syspatch -VD "${_title}" -o \
+		"${_TMP}/${_tgz}" "${_MIRROR}/${_tgz}"
 
 	(cd ${_TMP} && sha256 -qC ${_TMP}/SHA256 ${_tgz})
 }
@@ -161,12 +161,11 @@ ls_installed()
 
 ls_missing()
 {
-	local _c _d _f _cmd _l="$(ls_installed)" _p _r _sha=${_TMP}/SHA256
+	local _c _f _cmd _l="$(ls_installed)" _p _sha=${_TMP}/SHA256
 
 	# don't output anything on stdout to prevent corrupting the patch list
-	unpriv -f "${_sha}.sig" ftp -MVo "${_sha}.sig" "${_MIRROR}/SHA256.sig" \
-		>/dev/null 2>&1 ||
-		sp_err "failed to fetch ${_MIRROR}/SHA256.sig"
+	unpriv -f "${_sha}.sig" ftp -N syspatch -MVo "${_sha}.sig" \
+		"${_MIRROR}/SHA256.sig" >/dev/null
 	unpriv -f "${_sha}" signify -Veq -x ${_sha}.sig -m ${_sha} -p \
 		/etc/signify/openbsd-${_OSrev}-syspatch.pub >/dev/null
 
@@ -176,7 +175,8 @@ ls_missing()
 		while read _c; do _c=${_c##syspatch${_OSrev}-} &&
 		[[ -n ${_l} ]] && echo ${_c} | grep -qw -- "${_l}" || echo ${_c}
 	done | while read _p; do
-		_cmd="ftp -MVo - ${_MIRROR}/syspatch${_OSrev}-${_p}.tgz"
+		_cmd="ftp -N syspatch -MVo - \
+			${_MIRROR}/syspatch${_OSrev}-${_p}.tgz"
 		{ unpriv ${_cmd} | tar tzf -; } 2>/dev/null | while read _f; do
 			[[ -f /${_f} ]] || continue && echo ${_p} && pkill -u \
 				_syspatch -xf "${_cmd}" || true && break
@@ -255,7 +255,7 @@ unpriv()
 	fi
 	(($# >= 1))
 
-	# propagate error code to the caller instead of failing hard
+	# XXX ksh(1) bug; send error code to the caller instead of failing hard
 	set +e
 	eval su -s /bin/sh ${_user} -c "'$@'" || _rc=$?
 	set -e
@@ -267,7 +267,7 @@ unpriv()
 
 # only run on release (not -current nor -stable)
 set -A _KERNV -- $(sysctl -n kern.version |
-	sed 's/^OpenBSD \([0-9]\.[0-9]\)\([^ ]*\).*/\1 \2/;q')
+	sed 's/^OpenBSD \([1-9][0-9]*\.[0-9]\)\([^ ]*\).*/\1 \2/;q')
 ((${#_KERNV[*]} > 1)) && sp_err "Unsupported release: ${_KERNV[0]}${_KERNV[1]}"
 
 [[ $@ == @(|-[[:alpha:]]) ]] || usage; [[ $@ == @(|-(c|R|r)) ]] &&

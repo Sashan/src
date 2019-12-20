@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtpd.h,v 1.641 2019/09/30 08:31:41 martijn Exp $	*/
+/*	$OpenBSD: smtpd.h,v 1.647 2019/12/18 10:00:39 gilles Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -51,7 +51,7 @@
 #define SMTPD_QUEUE_EXPIRY	 (4 * 24 * 60 * 60)
 #define SMTPD_SOCKET		 "/var/run/smtpd.sock"
 #define	SMTPD_NAME		 "OpenSMTPD"
-#define	SMTPD_VERSION		 "6.6.0"
+#define	SMTPD_VERSION		 "6.6.1"
 #define SMTPD_SESSION_TIMEOUT	 300
 #define SMTPD_BACKLOG		 5
 
@@ -489,6 +489,7 @@ struct envelope {
 	char				smtpname[HOST_NAME_MAX+1];
 	char				helo[HOST_NAME_MAX+1];
 	char				hostname[HOST_NAME_MAX+1];
+	char				username[SMTPD_MAXMAILADDRSIZE];
 	char				errorline[LINE_MAX];
 	struct sockaddr_storage		ss;
 
@@ -584,7 +585,7 @@ struct smtpd {
 	size_t				sc_scheduler_max_msg_batch_size;
 	size_t				sc_scheduler_max_schedule;
 
-	struct dict		       *sc_processors_dict;
+	struct dict		       *sc_filter_processes_dict;
 
 	int				sc_ttl;
 #define MAX_BOUNCE_WARN			4
@@ -1031,22 +1032,28 @@ enum lka_resp_status {
 	LKA_PERMFAIL
 };
 
-struct processor {
-	const char		       *command;
-	const char		       *user;
-	const char		       *group;
-	const char		       *chroot;
-	int				errfd;
-};
-
 enum filter_type {
 	FILTER_TYPE_BUILTIN,
 	FILTER_TYPE_PROC,
 	FILTER_TYPE_CHAIN,
 };
 
+enum filter_subsystem {
+	FILTER_SUBSYSTEM_SMTP_IN	= 1
+};
+
+struct filter_proc {
+	const char		       *command;
+	const char		       *user;
+	const char		       *group;
+	const char		       *chroot;
+	int				errfd;
+	enum filter_subsystem		filter_subsystem;
+};
+
 struct filter_config {
 	char			       *name;
+	enum filter_subsystem		filter_subsystem;
 	enum filter_type		filter_type;
 	enum filter_phase               phase;
 	char                           *reject;
@@ -1054,6 +1061,7 @@ struct filter_config {
 	char                           *rewrite;
 	char                           *report;
 	uint8_t				junk;
+  	uint8_t				bypass;
 	char                           *proc;
 
 	const char		      **chain;
@@ -1161,6 +1169,8 @@ struct dispatcher_remote {
 	char	*mail_from;
 
 	char	*smarthost;
+	int	 smarthost_domain;
+
 	char	*auth;
 	int	 tls_required;
 	int	 tls_noverify;
@@ -1333,7 +1343,7 @@ int lka(void);
 
 /* lka_proc.c */
 int lka_proc_ready(void);
-void lka_proc_forked(const char *, int);
+void lka_proc_forked(const char *, uint32_t, int);
 void lka_proc_errfd(const char *, int);
 struct io *lka_proc_get_io(const char *);
 

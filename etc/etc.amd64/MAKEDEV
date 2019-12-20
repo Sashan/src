@@ -3,8 +3,8 @@
 # THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
 # generated from:
 #
-#	OpenBSD: etc.amd64/MAKEDEV.md,v 1.70 2018/08/19 11:42:33 anton Exp 
-#	OpenBSD: MAKEDEV.common,v 1.103 2019/06/11 14:48:56 jcs Exp 
+#	OpenBSD: etc.amd64/MAKEDEV.md,v 1.72 2019/12/17 13:08:54 reyk Exp 
+#	OpenBSD: MAKEDEV.common,v 1.106 2019/12/17 13:08:54 reyk Exp 
 #	OpenBSD: MAKEDEV.mi,v 1.83 2016/09/11 03:06:31 deraadt Exp 
 #	OpenBSD: MAKEDEV.sub,v 1.14 2005/02/07 06:14:18 david Exp 
 #
@@ -62,6 +62,7 @@
 #	uall	All USB devices
 #	ugen*	Generic USB devices
 #	uhid*	Generic HID devices
+#	fido	fido/* nodes
 #	ulpt*	Printer devices
 #	usb*	Bus control devices used by usbd for attach/detach
 # Special purpose devices:
@@ -75,7 +76,6 @@
 #	fd	fd/* nodes
 #	fuse	Userland Filesystem
 #	gpio*	General Purpose Input/Output
-#	gpr*	GPR400 smartcard reader
 #	hotplug	devices hot plugging
 #	ipmi*	IPMI BMC access
 #	nvram	NVRAM access
@@ -337,10 +337,6 @@ hotplug)
 	M hotplug c 82 $U 400
 	;;
 
-gpr*)
-	M gpr$U c 80 $U
-	;;
-
 gpio*)
 	M gpio$U c 88 $U 600
 	;;
@@ -392,29 +388,35 @@ apm*)
 
 usb*)
 	[ "$i" = "usb" ] && u= || u=$U
-	M usb$u c 61 $U 660
+	M usb$u c 61 $U 640
 	;;
 
 ulpt*)
-	M ulpt$U c 64 $U 660
+	M ulpt$U c 64 $U 600
+	;;
+
+fido)
+	RMlist[${#RMlist[*]}]=";mkdir -p fido;rm -f" n=0
+	while [ $n -lt 4 ];do M fido/$n c 98 $n 666;n=$(($n+1));done
+	MKlist[${#MKlist[*]}]=";chmod 555 fido"
 	;;
 
 uhid*)
-	M uhid$U c 62 $U 660
+	M uhid$U c 62 $U 600
 	;;
 
 ugen*)
 	n=$(($U*16))
 	for j in 0{0,1,2,3,4,5,6,7,8,9} 1{0,1,2,3,4,5}
 	do
-		M ugen$U.$j c 63 $(($n+10#$j)) 660
+		M ugen$U.$j c 63 $(($n+10#$j)) 600
 	done
 	;;
 
 uall)
 	R ttyU0 ttyU1 ttyU2 ttyU3 ugen0 ugen1 ugen2 ugen3 ugen4 ugen5
-	R ugen6 ugen7 ulpt0 ulpt1 uhid0 uhid1 uhid2 uhid3 uhid4 uhid5
-	R uhid6 uhid7 usb0 usb1 usb2 usb3 usb4 usb5 usb6 usb7
+	R ugen6 ugen7 ulpt0 ulpt1 fido uhid0 uhid1 uhid2 uhid3 uhid4
+	R uhid5 uhid6 uhid7 usb0 usb1 usb2 usb3 usb4 usb5 usb6 usb7
 	;;
 
 ttyU[0-9a-zA-Z])
@@ -575,7 +577,7 @@ all)
 	R tun1 tun2 tun3 bio pty0 fd1 fd1B fd1C fd1D fd1E fd1F fd1G
 	R fd1H fd0 fd0B fd0C fd0D fd0E fd0F fd0G fd0H diskmap vscsi0
 	R ch0 audio0 audio1 audio2 kcov bpf pvbus0 pvbus1 vmm fuse
-	R pppx hotplug ptm gpr0 local wscons pci0 pci1 pci2 pci3 uall
+	R pppx hotplug ptm local wscons pci0 pci1 pci2 pci3 uall
 	R rmidi0 rmidi1 rmidi2 rmidi3 rmidi4 rmidi5 rmidi6 rmidi7
 	R tuner0 radio0 speaker video0 video1 uk0 random lpa0 lpa1
 	R lpa2 lpt0 lpt1 lpt2 tty00 tty01 tty02 tty03 tty04 tty05

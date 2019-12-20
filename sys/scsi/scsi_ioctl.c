@@ -1,4 +1,4 @@
-/*	$OpenBSD: scsi_ioctl.c,v 1.57 2019/09/29 17:57:36 krw Exp $	*/
+/*	$OpenBSD: scsi_ioctl.c,v 1.63 2019/12/07 15:16:24 krw Exp $	*/
 /*	$NetBSD: scsi_ioctl.c,v 1.23 1996/10/12 23:23:17 christos Exp $	*/
 
 /*
@@ -97,17 +97,17 @@ const unsigned char scsi_readsafe_cmd[256] = {
 int
 scsi_ioc_cmd(struct scsi_link *link, scsireq_t *screq)
 {
-	struct scsi_xfer *xs;
-	int err = 0;
+	struct scsi_xfer		*xs;
+	int				 err = 0;
 
 	if (screq->cmdlen > sizeof(struct scsi_generic))
-		return (EFAULT);
+		return EFAULT;
 	if (screq->datalen > MAXPHYS)
-		return (EINVAL);
+		return EINVAL;
 
 	xs = scsi_xs_get(link, 0);
 	if (xs == NULL)
-		return (ENOMEM);
+		return ENOMEM;
 
 	memcpy(xs->cmd, screq->cmd, screq->cmdlen);
 	xs->cmdlen = screq->cmdlen;
@@ -121,19 +121,19 @@ scsi_ioc_cmd(struct scsi_link *link, scsireq_t *screq)
 		xs->datalen = screq->datalen;
 	}
 
-	if (screq->flags & SCCMD_READ)
-		xs->flags |= SCSI_DATA_IN;
-	if (screq->flags & SCCMD_WRITE) {
+	if (ISSET(screq->flags, SCCMD_READ))
+		SET(xs->flags, SCSI_DATA_IN);
+	if (ISSET(screq->flags, SCCMD_WRITE)) {
 		if (screq->datalen > 0) {
 			err = copyin(screq->databuf, xs->data, screq->datalen);
 			if (err != 0)
 				goto err;
 		}
 
-		xs->flags |= SCSI_DATA_OUT;
+		SET(xs->flags, SCSI_DATA_OUT);
 	}
 
-	xs->flags |= SCSI_SILENT;	/* User is responsible for errors. */
+	SET(xs->flags, SCSI_SILENT);	/* User is responsible for errors. */
 	xs->timeout = screq->timeout;
 	xs->retries = 0; /* user must do the retries *//* ignored */
 
@@ -176,7 +176,7 @@ scsi_ioc_cmd(struct scsi_link *link, scsireq_t *screq)
 		break;
 	}
 
-	if (screq->datalen > 0 && screq->flags & SCCMD_READ) {
+	if (screq->datalen > 0 && ISSET(screq->flags, SCCMD_READ)) {
 		err = copyout(xs->data, screq->databuf, screq->datalen);
 		if (err != 0)
 			goto err;
@@ -187,35 +187,35 @@ err:
 		dma_free(xs->data, screq->datalen);
 	scsi_xs_put(xs);
 
-	return (err);
+	return err;
 }
 
 int
 scsi_ioc_ata_cmd(struct scsi_link *link, atareq_t *atareq)
 {
-	struct scsi_xfer *xs;
-	struct scsi_ata_passthru_12 *cdb;
-	int err = 0;
+	struct scsi_xfer		*xs;
+	struct scsi_ata_passthru_12	*cdb;
+	int				 err = 0;
 
 	if (atareq->datalen > MAXPHYS)
-		return (EINVAL);
+		return EINVAL;
 
 	xs = scsi_xs_get(link, 0);
 	if (xs == NULL)
-		return (ENOMEM);
+		return ENOMEM;
 
 	cdb = (struct scsi_ata_passthru_12 *)xs->cmd;
 	cdb->opcode = ATA_PASSTHRU_12;
 
 	if (atareq->datalen > 0) {
-		if (atareq->flags & ATACMD_READ) {
+		if (ISSET(atareq->flags, ATACMD_READ)) {
 			cdb->count_proto = ATA_PASSTHRU_PROTO_PIO_DATAIN;
 			cdb->flags = ATA_PASSTHRU_T_DIR_READ;
 		} else {
 			cdb->count_proto = ATA_PASSTHRU_PROTO_PIO_DATAOUT;
 			cdb->flags = ATA_PASSTHRU_T_DIR_WRITE;
 		}
-		cdb->flags |= ATA_PASSTHRU_T_LEN_SECTOR_COUNT;
+		SET(cdb->flags, ATA_PASSTHRU_T_LEN_SECTOR_COUNT);
 	} else {
 		cdb->count_proto = ATA_PASSTHRU_PROTO_NON_DATA;
 		cdb->flags = ATA_PASSTHRU_T_LEN_NONE;
@@ -239,9 +239,9 @@ scsi_ioc_ata_cmd(struct scsi_link *link, atareq_t *atareq)
 		xs->datalen = atareq->datalen;
 	}
 
-	if (atareq->flags & ATACMD_READ)
-		xs->flags |= SCSI_DATA_IN;
-	if (atareq->flags & ATACMD_WRITE) {
+	if (ISSET(atareq->flags, ATACMD_READ))
+		SET(xs->flags, SCSI_DATA_IN);
+	if (ISSET(atareq->flags, ATACMD_WRITE)) {
 		if (atareq->datalen > 0) {
 			err = copyin(atareq->databuf, xs->data,
 			    atareq->datalen);
@@ -249,10 +249,10 @@ scsi_ioc_ata_cmd(struct scsi_link *link, atareq_t *atareq)
 				goto err;
 		}
 
-		xs->flags |= SCSI_DATA_OUT;
+		SET(xs->flags, SCSI_DATA_OUT);
 	}
 
-	xs->flags |= SCSI_SILENT;	/* User is responsible for errors. */
+	SET(xs->flags, SCSI_SILENT);	/* User is responsible for errors. */
 	xs->retries = 0; /* user must do the retries *//* ignored */
 
 	scsi_xs_sync(xs);
@@ -271,7 +271,7 @@ scsi_ioc_ata_cmd(struct scsi_link *link, atareq_t *atareq)
 		break;
 	}
 
-	if (atareq->datalen > 0 && atareq->flags & ATACMD_READ) {
+	if (atareq->datalen > 0 && ISSET(atareq->flags, ATACMD_READ)) {
 		err = copyout(xs->data, atareq->databuf, atareq->datalen);
 		if (err != 0)
 			goto err;
@@ -282,7 +282,7 @@ err:
 		dma_free(xs->data, atareq->datalen);
 	scsi_xs_put(xs);
 
-	return (err);
+	return err;
 }
 
 /*
@@ -308,7 +308,7 @@ scsi_do_ioctl(struct scsi_link *link, u_long cmd, caddr_t addr, int flag)
 		sca->scbus = link->bus->sc_dev.dv_unit;
 		sca->target = link->target;
 		sca->lun = link->lun;
-		return (0);
+		return 0;
 	}
 	case SCIOCCOMMAND:
 		if (scsi_readsafe_cmd[((scsireq_t *)addr)->cmd[0]])
@@ -316,41 +316,40 @@ scsi_do_ioctl(struct scsi_link *link, u_long cmd, caddr_t addr, int flag)
 		/* FALLTHROUGH */
 	case ATAIOCCOMMAND:
 	case SCIOCDEBUG:
-		if ((flag & FWRITE) == 0)
-			return (EPERM);
+		if (!ISSET(flag, FWRITE))
+			return EPERM;
 		break;
 	default:
 		if (link->adapter->ioctl)
-			return ((link->adapter->ioctl)(link, cmd, addr,
-			    flag));
+			return (link->adapter->ioctl)(link, cmd, addr, flag);
 		else
-			return (ENOTTY);
+			return ENOTTY;
 	}
 
 	switch(cmd) {
 	case SCIOCCOMMAND:
-		return (scsi_ioc_cmd(link, (scsireq_t *)addr));
+		return scsi_ioc_cmd(link, (scsireq_t *)addr);
 	case ATAIOCCOMMAND:
-		return (scsi_ioc_ata_cmd(link, (atareq_t *)addr));
+		return scsi_ioc_ata_cmd(link, (atareq_t *)addr);
 	case SCIOCDEBUG: {
 		int level = *((int *)addr);
 
 		SC_DEBUG(link, SDEV_DB3, ("debug set to %d\n", level));
-		link->flags &= ~SDEV_DBX; /* clear debug bits */
+		CLR(link->flags, SDEV_DBX); /* clear debug bits */
 		if (level & 1)
-			link->flags |= SDEV_DB1;
+			SET(link->flags, SDEV_DB1);
 		if (level & 2)
-			link->flags |= SDEV_DB2;
+			SET(link->flags, SDEV_DB2);
 		if (level & 4)
-			link->flags |= SDEV_DB3;
+			SET(link->flags, SDEV_DB3);
 		if (level & 8)
-			link->flags |= SDEV_DB4;
-		return (0);
+			SET(link->flags, SDEV_DB4);
+		return 0;
 	}
 	default:
 #ifdef DIAGNOSTIC
 		panic("scsi_do_ioctl: impossible cmd (%#lx)", cmd);
 #endif /* DIAGNOSTIC */
-		return (0);
+		return 0;
 	}
 }

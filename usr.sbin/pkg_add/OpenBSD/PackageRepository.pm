@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: PackageRepository.pm,v 1.169 2019/10/13 16:21:46 espie Exp $
+# $OpenBSD: PackageRepository.pm,v 1.171 2019/11/08 14:50:58 espie Exp $
 #
 # Copyright (c) 2003-2010 Marc Espie <espie@openbsd.org>
 #
@@ -341,12 +341,11 @@ sub parse_problems
 			next;
 		}
 		# http error
-		if (m/^ftp: Error retrieving file: 404/o) {
+		if (m/^ftp: Error retrieving .*: 404/o) {
+			$self->{lasterror} = 404;
 			if (!defined $object) {
 				$self->{no_such_dir} = 1;
 				next;
-			} else {
-				$self->{lasterror} = 404;
 			}
 			# ignore errors for stable packages
 			next if $self->can_be_empty;

@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1999-2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,12 +14,12 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: secalg.h,v 1.13.18.2 2005/04/29 00:16:21 marka Exp $ */
+/* $Id: secalg.h,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
 
 #ifndef DNS_SECALG_H
 #define DNS_SECALG_H 1
 
-/*! \file */
+/*! \file dns/secalg.h */
 
 #include <isc/lang.h>
 
@@ -64,6 +63,13 @@ dns_secalg_totext(dns_secalg_t secalg, isc_buffer_t *target);
  * Returns:
  *\li	ISC_R_SUCCESS			on success
  *\li	ISC_R_NOSPACE			target buffer is too small
+ */
+
+#define DNS_SECALG_FORMATSIZE 20
+void
+dns_secalg_format(dns_secalg_t alg, char *cp, unsigned int size);
+/*%<
+ * Wrapper for dns_secalg_totext(), writing text into 'cp'
  */
 
 ISC_LANG_ENDDECLS

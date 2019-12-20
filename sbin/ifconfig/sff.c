@@ -1,4 +1,4 @@
-/*	$OpenBSD: sff.c,v 1.21 2019/08/30 03:52:21 deraadt Exp $ */
+/*	$OpenBSD: sff.c,v 1.23 2019/10/24 18:54:10 bluhm Exp $ */
 
 /*
  * Copyright (c) 2019 David Gwynne <dlg@openbsd.org>
@@ -33,6 +33,8 @@
 #include <unistd.h>
 #include <limits.h>
 #include <vis.h>
+
+#include "ifconfig.h"
 
 #ifndef nitems
 #define nitems(_a)	(sizeof((_a)) / sizeof((_a)[0]))
@@ -344,9 +346,9 @@ static const struct sff_media_map upper_media_map = {
 };
 
 static void	hexdump(const void *, size_t);
-static int	if_sff8472(int, const char *, int, const struct if_sffpage *);
-static int	if_sff8636(int, const char *, int, const struct if_sffpage *);
-static int	if_inf8077(int, const char *, int, const struct if_sffpage *);
+static int	if_sff8472(int, const struct if_sffpage *);
+static int	if_sff8636(int, const struct if_sffpage *);
+static int	if_inf8077(int, const struct if_sffpage *);
 
 static const char *
 sff_id_name(uint8_t id)
@@ -383,8 +385,7 @@ sff_con_name(uint8_t id)
 }
 
 static void
-if_sffpage_init(struct if_sffpage *sff, const char *ifname,
-    uint8_t addr, uint8_t page)
+if_sffpage_init(struct if_sffpage *sff, uint8_t addr, uint8_t page)
 {
 	memset(sff, 0, sizeof(*sff));
 
@@ -397,7 +398,7 @@ if_sffpage_init(struct if_sffpage *sff, const char *ifname,
 }
 
 static void
-if_sffpage_dump(const char *ifname, const struct if_sffpage *sff)
+if_sffpage_dump(const struct if_sffpage *sff)
 {
 	printf("%s: addr %02x", ifname, sff->sff_addr);
 	if (sff->sff_addr == IFSFF_ADDR_EEPROM)
@@ -407,25 +408,25 @@ if_sffpage_dump(const char *ifname, const struct if_sffpage *sff)
 }
 
 int
-if_sff_info(int s, const char *ifname, int dump)
+if_sff_info(int dump)
 {
 	struct if_sffpage pg0;
 	int error = 0;
 	uint8_t id, ext_id;
 
-	if_sffpage_init(&pg0, ifname, IFSFF_ADDR_EEPROM, 0);
-	if (ioctl(s, SIOCGIFSFFPAGE, (caddr_t)&pg0) == -1) {
+	if_sffpage_init(&pg0, IFSFF_ADDR_EEPROM, 0);
+	if (ioctl(sock, SIOCGIFSFFPAGE, (caddr_t)&pg0) == -1) {
 		if (errno == ENXIO) {
 			/* try 1 for XFP cos myx which can't switch pages... */
-			if_sffpage_init(&pg0, ifname, IFSFF_ADDR_EEPROM, 1);
-			if (ioctl(s, SIOCGIFSFFPAGE, (caddr_t)&pg0) == -1)
+			if_sffpage_init(&pg0, IFSFF_ADDR_EEPROM, 1);
+			if (ioctl(sock, SIOCGIFSFFPAGE, (caddr_t)&pg0) == -1)
 				return (-1);
 		} else
 			return (-1);
 	}
 
 	if (dump)
-		if_sffpage_dump(ifname, &pg0);
+		if_sffpage_dump(&pg0);
 
 	id = pg0.sff_data[0]; /* SFF8472_ID */
 
@@ -439,22 +440,22 @@ if_sff_info(int s, const char *ifname, int dump)
 		}
 		/* FALLTHROUGH */
 	case SFF8024_ID_GBIC:
-		error = if_sff8472(s, ifname, dump, &pg0);
+		error = if_sff8472(dump, &pg0);
 		break;
 	case SFF8024_ID_XFP:
 		if (pg0.sff_page != 1) {
-			if_sffpage_init(&pg0, ifname, IFSFF_ADDR_EEPROM, 1);
-			if (ioctl(s, SIOCGIFSFFPAGE, (caddr_t)&pg0) == -1)
+			if_sffpage_init(&pg0, IFSFF_ADDR_EEPROM, 1);
+			if (ioctl(sock, SIOCGIFSFFPAGE, (caddr_t)&pg0) == -1)
 				return (-1);
 			if (dump)
-				if_sffpage_dump(ifname, &pg0);
+				if_sffpage_dump(&pg0);
 		}
-		error = if_inf8077(s, ifname, dump, &pg0);
+		error = if_inf8077(dump, &pg0);
 		break;
 	case SFF8024_ID_QSFP:
 	case SFF8024_ID_QSFP_PLUS:
 	case SFF8024_ID_QSFP28:
-		error = if_sff8636(s, ifname, dump, &pg0);
+		error = if_sff8636(dump, &pg0);
 		break;
 	default:
 		printf("\n");
@@ -484,7 +485,7 @@ if_sff_ascii_print(const struct if_sffpage *sff, const char *name,
 	printf("%s", name);
 
 	for (;;) {
-		int ch = d[end];
+		ch = d[end];
 		if (!isspace(ch) && ch != '\0')
 			break;
 
@@ -578,7 +579,7 @@ if_sff_printdist(const char *type, int value, int scale)
 static void
 if_sff_printmedia(const struct if_sffpage *pg, const struct sff_media_map *m)
 {
-	uint8_t con, dist;
+	uint8_t con;
 	unsigned int wavelength;
 
 	con = pg->sff_data[m->connector_type];
@@ -611,7 +612,7 @@ if_sff_printmedia(const struct if_sffpage *pg, const struct sff_media_map *m)
 }
 
 static int
-if_sff8472(int s, const char *ifname, int dump, const struct if_sffpage *pg0)
+if_sff8472(int dump, const struct if_sffpage *pg0)
 {
 	struct if_sffpage ddm;
 	uint8_t ddm_types;
@@ -635,12 +636,12 @@ if_sff8472(int s, const char *ifname, int dump, const struct if_sffpage *pg0)
 	    !ISSET(ddm_types, SFF8472_DDM_TYPE_IMPL))
 		return (0);
 
-	if_sffpage_init(&ddm, ifname, IFSFF_ADDR_DDM, 0);
-	if (ioctl(s, SIOCGIFSFFPAGE, (caddr_t)&ddm) == -1)
+	if_sffpage_init(&ddm, IFSFF_ADDR_DDM, 0);
+	if (ioctl(sock, SIOCGIFSFFPAGE, (caddr_t)&ddm) == -1)
 		return (-1);
 
 	if (dump)
-		if_sffpage_dump(ifname, &ddm);
+		if_sffpage_dump(&ddm);
 
 	if (ISSET(ddm_types, SFF8472_DDM_TYPE_CAL_EXT)) {
 		printf("\tcalibration: external "
@@ -714,7 +715,7 @@ if_upper_strings(const struct if_sffpage *pg)
 }
 
 static int
-if_inf8077(int s, const char *ifname, int dump, const struct if_sffpage *pg1)
+if_inf8077(int dump, const struct if_sffpage *pg1)
 {
 	if_upper_strings(pg1);
 
@@ -722,22 +723,21 @@ if_inf8077(int s, const char *ifname, int dump, const struct if_sffpage *pg1)
 }
 
 static int
-if_sff8636_thresh(int s, const char *ifname, int dump,
-    const struct if_sffpage *pg0)
+if_sff8636_thresh(int dump, const struct if_sffpage *pg0)
 {
 	struct if_sffpage pg3;
 	unsigned int i;
 	struct sff_thresholds temp, vcc, tx, rx, bias;
 
-	if_sffpage_init(&pg3, ifname, IFSFF_ADDR_EEPROM, 3);
-	if (ioctl(s, SIOCGIFSFFPAGE, (caddr_t)&pg3) == -1) {
+	if_sffpage_init(&pg3, IFSFF_ADDR_EEPROM, 3);
+	if (ioctl(sock, SIOCGIFSFFPAGE, (caddr_t)&pg3) == -1) {
 		if (dump)
 			warn("%s SIOCGIFSFFPAGE page 3", ifname);
 		return (-1);
 	}
 
 	if (dump)
-		if_sffpage_dump(ifname, &pg3);
+		if_sffpage_dump(&pg3);
 
 	if (pg3.sff_data[0x7f] != 3) { /* just in case... */
 		if (dump) {
@@ -817,7 +817,7 @@ if_sff8636_thresh(int s, const char *ifname, int dump,
 }
 
 static int
-if_sff8636(int s, const char *ifname, int dump, const struct if_sffpage *pg0)
+if_sff8636(int dump, const struct if_sffpage *pg0)
 {
 	int16_t temp;
 	uint8_t maxcasetemp;
@@ -844,7 +844,7 @@ if_sff8636(int s, const char *ifname, int dump, const struct if_sffpage *pg0)
 	}
 
 	flat = pg0->sff_data[SFF8436_STATUS2] & SFF8436_STATUS2_FLAT_MEM;
-	if (!flat && if_sff8636_thresh(s, ifname, dump, pg0) == 0) {
+	if (!flat && if_sff8636_thresh(dump, pg0) == 0) {
 		if (!dump)
 			return (0);
 	}

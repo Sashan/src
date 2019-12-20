@@ -1,4 +1,4 @@
-/*	$OpenBSD: db_trace.c,v 1.15 2019/10/15 10:13:03 mpi Exp $	*/
+/*	$OpenBSD: db_trace.c,v 1.19 2019/11/07 14:44:53 mpi Exp $	*/
 /*	$NetBSD: db_trace.c,v 1.23 2001/07/10 06:06:16 eeh Exp $ */
 
 /*
@@ -60,15 +60,15 @@ db_stack_trace_print(db_expr_t addr, int have_addr, db_expr_t count,
     char *modif, int (*pr)(const char *, ...))
 {
 	vaddr_t		frame;
-	boolean_t	kernel_only = TRUE;
-	boolean_t	trace_thread = FALSE;
+	int		kernel_only = 1;
+	int		trace_thread = 0;
 	char		c, *cp = modif;
 
 	while ((c = *cp++) != 0) {
 		if (c == 't')
-			trace_thread = TRUE;
+			trace_thread = 1;
 		if (c == 'u')
-			kernel_only = FALSE;
+			kernel_only = 0;
 	}
 
 	if (!have_addr)
@@ -87,6 +87,8 @@ db_stack_trace_print(db_expr_t addr, int have_addr, db_expr_t count,
 			frame = (vaddr_t)u->u_pcb.pcb_sp;
 			(*pr)("at %p\n", frame);
 		} else {
+			write_all_windows();
+
 			frame = (vaddr_t)addr - BIAS;
 		}
 	}
@@ -100,7 +102,7 @@ db_stack_trace_print(db_expr_t addr, int have_addr, db_expr_t count,
 		int		i;
 		db_expr_t	offset;
 		char		*name;
-		db_addr_t	pc;
+		vaddr_t		pc;
 		struct frame64	*f64;
 
 		/*
@@ -108,7 +110,7 @@ db_stack_trace_print(db_expr_t addr, int have_addr, db_expr_t count,
 		 */
 
 		f64 = (struct frame64 *)(frame + BIAS);
-		pc = (db_addr_t)KLOAD(f64->fr_pc);
+		pc = (vaddr_t)KLOAD(f64->fr_pc);
 
 		frame = KLOAD(f64->fr_fp);
 
@@ -155,8 +157,10 @@ void
 db_save_stack_trace(struct db_stack_trace *st)
 {
 	struct frame64	*f64;
-	db_addr_t	pc;
+	vaddr_t		pc;
 	vaddr_t		frame;
+
+	write_all_windows();
 
 	frame = (vaddr_t)__builtin_frame_address(0) - BIAS;
 	if ((frame & 1) == 0)
@@ -165,9 +169,8 @@ db_save_stack_trace(struct db_stack_trace *st)
 	st->st_count = 0;
 	while (st->st_count < DB_STACK_TRACE_MAX) {
 		f64 = (struct frame64 *)(frame + BIAS);
-		pc = (db_addr_t)KLOAD(f64->fr_pc);
+		pc = (vaddr_t)KLOAD(f64->fr_pc);
 
-		st->st_pc[st->st_count++] = pc;
 		frame = KLOAD(f64->fr_fp);
 
 		if (pc < KERNBASE || pc >= KERNEND)
@@ -176,6 +179,8 @@ db_save_stack_trace(struct db_stack_trace *st)
 			break;
 		if ((frame & 1) == 0)
 			break;
+
+		st->st_pc[st->st_count++] = pc;
 	}
 }
 
@@ -270,12 +275,12 @@ db_dump_stack(db_expr_t addr, int have_addr, db_expr_t count, char *modif)
 {
 	int		i;
 	u_int64_t	frame, oldframe;
-	boolean_t	kernel_only = TRUE;
+	int		kernel_only = 1;
 	char		c, *cp = modif;
 
 	while ((c = *cp++) != 0)
 		if (c == 'u')
-			kernel_only = FALSE;
+			kernel_only = 0;
 
 	if (count == -1)
 		count = 65535;

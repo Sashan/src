@@ -1,4 +1,4 @@
-#	$OpenBSD: RAMDISK,v 1.110 2019/09/04 14:29:41 cheloha Exp $
+#	$OpenBSD: RAMDISK,v 1.112 2019/10/27 08:07:01 kettenis Exp $
 
 machine		armv7 arm
 
@@ -105,6 +105,7 @@ ehci*		at fdt?			# EHCI (shim)
 usb*		at ehci?	#flags 0x1
 ohci*		at fdt?
 usb*		at ohci?
+sxisid*		at fdt? early 1
 sxisyscon*	at fdt?	early 1		# System controller
 sxitwi*		at fdt?			# Two-Wire Serial Interface
 iic*		at sxitwi?		# I2C bus
@@ -123,6 +124,9 @@ sdmmc*		at sdhc?
 
 psci*		at fdt? early 1
 syscon*		at fdt? early 1
+
+simplefb*	at fdt?
+wsdisplay*	at simplefb?
 
 # Exynos
 #exdisplay*	at exynos?

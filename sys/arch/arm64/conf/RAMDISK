@@ -1,4 +1,4 @@
-# $OpenBSD: RAMDISK,v 1.104 2019/10/07 18:55:20 kettenis Exp $
+# $OpenBSD: RAMDISK,v 1.109 2019/12/03 09:12:46 patrick Exp $
 #
 # GENERIC machine description file
 #
@@ -96,6 +96,7 @@ plrtc*		at fdt?
 pluart*		at fdt?
 psci*		at fdt? early 1
 syscon*		at fdt? early 1
+pwmfan*		at fdt?
 
 virtio*		at fdt?
 virtio*		at pci?
@@ -169,11 +170,13 @@ sfp*		at fdt?
 rkclock*	at fdt? early 1
 rkgrf*		at fdt? early 1
 rkpinctrl*	at fdt? early 1
+rkemmcphy*	at fdt?
 rkgpio*		at fdt?
 rkiic*		at fdt?
 iic*		at rkiic?
 rkpcie*		at fdt?
 pci*		at rkpcie?
+rkpwm*		at fdt?
 rkdwusb*	at fdt?
 dwmmc*		at fdt?
 sdmmc*		at dwmmc?
@@ -182,10 +185,12 @@ sdmmc*		at dwmmc?
 sxipio*		at fdt? early 1	# GPIO pins for leds & PHYs
 gpio*		at sxipio?
 sxiccmu*	at fdt? early 1	# Clock Control Module/Unit
+sxidog*		at fdt?
 sxirsb*		at fdt? early 1	# Reduced Serial Bus
 sxirtc*		at fdt? early 1	# Real Time Clock
 sximmc*		at fdt?		# SD/MMC card controller
 sdmmc*		at sximmc?	# SD/MMC bus
+sxisid*		at fdt? early 1
 sxisyscon*	at fdt? early 1	# System controller
 sxitwi*		at fdt?		# I2C controller
 iic*		at sxitwi?	# I2C bus

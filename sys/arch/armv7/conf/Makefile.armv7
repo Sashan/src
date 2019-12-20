@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile.armv7,v 1.46 2019/09/03 15:12:32 naddy Exp $
+#	$OpenBSD: Makefile.armv7,v 1.48 2019/11/09 19:59:53 guenther Exp $
 
 # For instructions on building kernels consult the config(8) and options(4)
 # manual pages.
@@ -52,7 +52,7 @@ HOSTED_C=	${HOSTCC} ${HOSTED_CFLAGS} ${HOSTED_CPPFLAGS} -c $<
 
 NORMAL_C_NOP=	${CC} ${CFLAGS} ${CPPFLAGS} -c $<
 NORMAL_C=	${CC} ${CFLAGS} ${CPPFLAGS} ${PROF} -c $<
-NORMAL_S=	${CC} ${AFLAGS} ${CPPFLAGS} -c $<
+NORMAL_S=	${CC} ${AFLAGS} ${CPPFLAGS} ${PROF} -c $<
 
 %OBJS
 
@@ -107,7 +107,7 @@ param.o: param.c Makefile
 	${NORMAL_C}
 
 mcount.o: $S/lib/libkern/mcount.c Makefile
-	${NORMAL_C_NOP}
+	${NORMAL_C_NOP} -Wno-inline-asm
 
 ioconf.o: ioconf.c
 	${NORMAL_C}

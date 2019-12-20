@@ -1,4 +1,4 @@
-/* $OpenBSD: bwfm.c,v 1.65 2019/10/09 10:07:50 tobhe Exp $ */
+/* $OpenBSD: bwfm.c,v 1.67 2019/11/09 20:53:55 patrick Exp $ */
 /*
  * Copyright (c) 2010-2016 Broadcom Corporation
  * Copyright (c) 2016,2017 Patrick Wildt <patrick@blueri.se>
@@ -116,6 +116,7 @@ void	 bwfm_connect(struct bwfm_softc *);
 void	 bwfm_hostap(struct bwfm_softc *);
 #endif
 void	 bwfm_scan(struct bwfm_softc *);
+void	 bwfm_scan_abort(struct bwfm_softc *);
 
 void	 bwfm_task(void *);
 void	 bwfm_do_async(struct bwfm_softc *,
@@ -430,7 +431,6 @@ bwfm_init(struct ifnet *ifp)
 		BWFM_EVENT(BWFM_E_ASSOC);
 		BWFM_EVENT(BWFM_E_DEAUTH);
 		BWFM_EVENT(BWFM_E_DISASSOC);
-		BWFM_EVENT(BWFM_E_SET_SSID);
 		BWFM_EVENT(BWFM_E_ESCAN_RESULT);
 		break;
 #ifndef IEEE80211_STA_ONLY
@@ -440,7 +440,6 @@ bwfm_init(struct ifnet *ifp)
 		BWFM_EVENT(BWFM_E_REASSOC_IND);
 		BWFM_EVENT(BWFM_E_DEAUTH_IND);
 		BWFM_EVENT(BWFM_E_DISASSOC_IND);
-		BWFM_EVENT(BWFM_E_SET_SSID);
 		BWFM_EVENT(BWFM_E_ESCAN_RESULT);
 		break;
 #endif
@@ -1958,15 +1957,24 @@ bwfm_hostap(struct bwfm_softc *sc)
 void
 bwfm_scan(struct bwfm_softc *sc)
 {
+	struct ieee80211com *ic = &sc->sc_ic;
 	struct bwfm_escan_params *params;
-	uint32_t nssid = 0, nchannel = 0;
-	size_t params_size;
+	uint32_t nssid = 0, nchan = 0;
+	size_t params_size, chan_size, ssid_size;
+	struct bwfm_ssid *ssid;
 
-	params_size = sizeof(*params);
-	params_size += sizeof(uint32_t) * ((nchannel + 1) / 2);
-	params_size += sizeof(struct bwfm_ssid) * nssid;
+	if (ic->ic_flags & IEEE80211_F_ASCAN &&
+	    ic->ic_des_esslen && ic->ic_des_esslen < BWFM_MAX_SSID_LEN)
+		nssid = 1;
+
+	chan_size = roundup(nchan * sizeof(uint16_t), sizeof(uint32_t));
+	ssid_size = sizeof(struct bwfm_ssid) * nssid;
+	params_size = sizeof(*params) + chan_size + ssid_size;
 
 	params = malloc(params_size, M_TEMP, M_WAITOK | M_ZERO);
+	ssid = (struct bwfm_ssid *)
+	    (((uint8_t *)params) + sizeof(*params) + chan_size);
+
 	memset(params->scan_params.bssid, 0xff,
 	    sizeof(params->scan_params.bssid));
 	params->scan_params.bss_type = 2;
@@ -1979,6 +1987,17 @@ bwfm_scan(struct bwfm_softc *sc)
 	params->action = htole16(WL_ESCAN_ACTION_START);
 	params->sync_id = htole16(0x1234);
 
+	if (ic->ic_flags & IEEE80211_F_ASCAN &&
+	    ic->ic_des_esslen && ic->ic_des_esslen < BWFM_MAX_SSID_LEN) {
+		params->scan_params.scan_type = BWFM_SCANTYPE_ACTIVE;
+		ssid->len = htole32(ic->ic_des_esslen);
+		memcpy(ssid->ssid, ic->ic_des_essid, ic->ic_des_esslen);
+	}
+
+	params->scan_params.channel_num = htole32(
+	    nssid << BWFM_CHANNUM_NSSID_SHIFT |
+	    nchan << BWFM_CHANNUM_NCHAN_SHIFT);
+
 #if 0
 	/* Scan a specific channel */
 	params->scan_params.channel_list[0] = htole16(
@@ -1987,11 +2006,33 @@ bwfm_scan(struct bwfm_softc *sc)
 	    (2 & 0x3) << 10 |
 	    (2 & 0x3) << 12
 	    );
-	params->scan_params.channel_num = htole32(
-	    (1 & 0xffff) << 0
-	    );
 #endif
 
+	bwfm_fwvar_var_set_data(sc, "escan", params, params_size);
+	free(params, M_TEMP, params_size);
+}
+
+void
+bwfm_scan_abort(struct bwfm_softc *sc)
+{
+	struct bwfm_escan_params *params;
+	size_t params_size;
+
+	params_size = sizeof(*params) + sizeof(uint16_t);
+	params = malloc(params_size, M_TEMP, M_WAITOK | M_ZERO);
+	memset(params->scan_params.bssid, 0xff,
+	    sizeof(params->scan_params.bssid));
+	params->scan_params.bss_type = 2;
+	params->scan_params.scan_type = BWFM_SCANTYPE_PASSIVE;
+	params->scan_params.nprobes = htole32(-1);
+	params->scan_params.active_time = htole32(-1);
+	params->scan_params.passive_time = htole32(-1);
+	params->scan_params.home_time = htole32(-1);
+	params->version = htole32(BWFM_ESCAN_REQ_VERSION);
+	params->action = htole16(WL_ESCAN_ACTION_START);
+	params->sync_id = htole16(0x1234);
+	params->scan_params.channel_num = htole32(1);
+	params->scan_params.channel_list[0] = htole16(-1);
 	bwfm_fwvar_var_set_data(sc, "escan", params, params_size);
 	free(params, M_TEMP, params_size);
 }
@@ -2263,8 +2304,22 @@ bwfm_rx_event_cb(struct bwfm_softc *sc, struct mbuf *m)
 		struct bwfm_bss_info *bss;
 		size_t reslen;
 		int i;
-		if (ntohl(e->msg.status) != BWFM_E_STATUS_PARTIAL &&
-		    ic->ic_state == IEEE80211_S_SCAN) {
+		/* Abort event triggered by SCAN -> INIT */
+		if (ic->ic_state == IEEE80211_S_INIT &&
+		    ntohl(e->msg.status) == BWFM_E_STATUS_ABORT)
+			break;
+		if (ic->ic_state != IEEE80211_S_SCAN) {
+			DPRINTF(("%s: scan result (%u) while not in SCAN\n",
+			    DEVNAME(sc), ntohl(e->msg.status)));
+			break;
+		}
+		if (ntohl(e->msg.status) != BWFM_E_STATUS_SUCCESS &&
+		    ntohl(e->msg.status) != BWFM_E_STATUS_PARTIAL) {
+			DPRINTF(("%s: unexpected scan result (%u)\n",
+			    DEVNAME(sc), ntohl(e->msg.status)));
+			break;
+		}
+		if (ntohl(e->msg.status) == BWFM_E_STATUS_SUCCESS) {
 			ieee80211_end_scan(ifp);
 			break;
 		}
@@ -2301,23 +2356,19 @@ bwfm_rx_event_cb(struct bwfm_softc *sc, struct mbuf *m)
 		free(res, M_TEMP, reslen);
 		break;
 		}
-	case BWFM_E_SET_SSID:
-		if (ntohl(e->msg.status) != BWFM_E_STATUS_SUCCESS)
-			ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
-		break;
 	case BWFM_E_AUTH:
 		if (ntohl(e->msg.status) == BWFM_E_STATUS_SUCCESS &&
 		    ic->ic_state == IEEE80211_S_AUTH)
 			ieee80211_new_state(ic, IEEE80211_S_ASSOC, -1);
 		else
-			ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
+			ieee80211_begin_scan(ifp);
 		break;
 	case BWFM_E_ASSOC:
 		if (ntohl(e->msg.status) == BWFM_E_STATUS_SUCCESS &&
 		    ic->ic_state == IEEE80211_S_ASSOC)
 			ieee80211_new_state(ic, IEEE80211_S_RUN, -1);
 		else
-			ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
+			ieee80211_begin_scan(ifp);
 		break;
 	case BWFM_E_DEAUTH:
 	case BWFM_E_DISASSOC:
@@ -2595,6 +2646,10 @@ bwfm_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 	s = splnet();
 
 	switch (nstate) {
+	case IEEE80211_S_INIT:
+		if (ic->ic_state == IEEE80211_S_SCAN)
+			bwfm_scan_abort(sc);
+		break;
 	case IEEE80211_S_SCAN:
 #ifndef IEEE80211_STA_ONLY
 		/* Don't start a scan if we already have a channel. */
@@ -2604,6 +2659,10 @@ bwfm_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 			break;
 		}
 #endif
+		/* If we tried to connect, abort. */
+		if (ic->ic_state > IEEE80211_S_SCAN)
+			bwfm_fwvar_cmd_set_data(sc, BWFM_C_DISASSOC, NULL, 0);
+		/* Initiate scan. */
 		bwfm_scan(sc);
 		if (ifp->if_flags & IFF_DEBUG)
 			printf("%s: %s -> %s\n", DEVNAME(sc),

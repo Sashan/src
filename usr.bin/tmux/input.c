@@ -1,4 +1,4 @@
-/* $OpenBSD: input.c,v 1.162 2019/10/14 09:19:40 nicm Exp $ */
+/* $OpenBSD: input.c,v 1.167 2019/11/28 09:50:09 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -740,7 +740,7 @@ input_timer_callback(__unused int fd, __unused short events, void *arg)
 static void
 input_start_timer(struct input_ctx *ictx)
 {
-	struct timeval	tv = { .tv_usec = 100000 };
+	struct timeval	tv = { .tv_sec = 5, .tv_usec = 0 };
 
 	event_del(&ictx->timer);
 	event_add(&ictx->timer, &tv);
@@ -876,7 +876,7 @@ input_set_state(struct window_pane *wp, const struct input_transition *itr)
 void
 input_parse(struct window_pane *wp)
 {
-	struct evbuffer		*evb = wp->event->input;
+	struct evbuffer	*evb = wp->event->input;
 
 	input_parse_buffer(wp, EVBUFFER_DATA(evb), EVBUFFER_LENGTH(evb));
 	evbuffer_drain(evb, EVBUFFER_LENGTH(evb));
@@ -2211,6 +2211,12 @@ input_exit_osc(struct input_ctx *ictx)
 	case 4:
 		input_osc_4(ictx, p);
 		break;
+	case 7:
+		if (utf8_isvalid(p)) {
+			screen_set_path(sctx->s, p);
+			server_status_window(ictx->wp->window);
+		}
+		break;
 	case 10:
 		input_osc_10(ictx, p);
 		break;
@@ -2338,6 +2344,54 @@ input_top_bit_set(struct input_ctx *ictx)
 	return (0);
 }
 
+/* Parse colour from OSC. */
+static int
+input_osc_parse_colour(const char *p, u_int *r, u_int *g, u_int *b)
+{
+	u_int		 rsize, gsize, bsize;
+	const char	*cp, *s = p;
+
+	if (sscanf(p, "rgb:%x/%x/%x", r, g, b) != 3)
+		return (0);
+	p += 4;
+
+	cp = strchr(p, '/');
+	rsize = cp - p;
+	if (rsize == 1)
+		(*r) = (*r) | ((*r) << 4);
+	else if (rsize == 3)
+		(*r) >>= 4;
+	else if (rsize == 4)
+		(*r) >>= 8;
+	else if (rsize != 2)
+		return (0);
+
+	p = cp + 1;
+	cp = strchr(p, '/');
+	gsize = cp - p;
+	if (gsize == 1)
+		(*g) = (*g) | ((*g) << 4);
+	else if (gsize == 3)
+		(*g) >>= 4;
+	else if (gsize == 4)
+		(*g) >>= 8;
+	else if (gsize != 2)
+		return (0);
+
+	bsize = strlen(cp + 1);
+	if (bsize == 1)
+		(*b) = (*b) | ((*b) << 4);
+	else if (bsize == 3)
+		(*b) >>= 4;
+	else if (bsize == 4)
+		(*b) >>= 8;
+	else if (bsize != 2)
+		return (0);
+
+	log_debug("%s: %s = %02x%02x%02x", __func__, s, *r, *g, *b);
+	return (1);
+}
+
 /* Handle the OSC 4 sequence for setting (multiple) palette entries. */
 static void
 input_osc_4(struct input_ctx *ictx, const char *p)
@@ -2356,7 +2410,7 @@ input_osc_4(struct input_ctx *ictx, const char *p)
 			goto bad;
 
 		s = strsep(&next, ";");
-		if (sscanf(s, "rgb:%2x/%2x/%2x", &r, &g, &b) != 3) {
+		if (!input_osc_parse_colour(s, &r, &g, &b)) {
 			s = next;
 			continue;
 		}
@@ -2381,8 +2435,11 @@ input_osc_10(struct input_ctx *ictx, const char *p)
 	u_int			 r, g, b;
 	char			 tmp[16];
 
-	if (sscanf(p, "rgb:%2x/%2x/%2x", &r, &g, &b) != 3)
-	    goto bad;
+	if (strcmp(p, "?") == 0)
+		return;
+
+	if (!input_osc_parse_colour(p, &r, &g, &b))
+		goto bad;
 	xsnprintf(tmp, sizeof tmp, "fg=#%02x%02x%02x", r, g, b);
 	options_set_style(wp->options, "window-style", 1, tmp);
 	options_set_style(wp->options, "window-active-style", 1, tmp);
@@ -2402,7 +2459,10 @@ input_osc_11(struct input_ctx *ictx, const char *p)
 	u_int			 r, g, b;
 	char			 tmp[16];
 
-	if (sscanf(p, "rgb:%2x/%2x/%2x", &r, &g, &b) != 3)
+	if (strcmp(p, "?") == 0)
+		return;
+
+	if (!input_osc_parse_colour(p, &r, &g, &b))
 	    goto bad;
 	xsnprintf(tmp, sizeof tmp, "bg=#%02x%02x%02x", r, g, b);
 	options_set_style(wp->options, "window-style", 1, tmp);

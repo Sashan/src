@@ -1,4 +1,4 @@
-/*	$OpenBSD: st.c,v 1.169 2019/09/29 17:57:36 krw Exp $	*/
+/*	$OpenBSD: st.c,v 1.172 2019/12/05 18:42:14 krw Exp $	*/
 /*	$NetBSD: st.c,v 1.71 1997/02/21 23:03:49 thorpej Exp $	*/
 
 /*
@@ -1345,10 +1345,15 @@ st_mode_sense(struct st_softc *st, int flags)
 	/*
 	 * Ask for page 0 (vendor specific) mode sense data.
 	 */
-	error = scsi_do_mode_sense(link, 0, data, (void **)&page0,
-	    &density, &block_count, &block_size, 1, flags | SCSI_SILENT, &big);
+	density = 0;
+	block_count = 0;
+	block_size = 0;
+	error = scsi_do_mode_sense(link, 0, data, (void **)&page0, 1,
+	    flags | SCSI_SILENT, &big);
 	if (error != 0)
 		goto done;
+	scsi_parse_blkdesc(link, data, big, &density, &block_count,
+	    &block_size);
 
 	/* It is valid for no page0 to be available. */
 
@@ -1357,7 +1362,7 @@ st_mode_sense(struct st_softc *st, int flags)
 	else
 		dev_spec = data->hdr.dev_spec;
 
-	if (dev_spec & SMH_DSP_WRITE_PROT)
+	if (ISSET(dev_spec, SMH_DSP_WRITE_PROT))
 		SET(link->flags, SDEV_READONLY);
 	else
 		CLR(link->flags, SDEV_READONLY);
@@ -1429,9 +1434,11 @@ st_mode_select(struct st_softc *st, int flags)
 
 	/*
 	 * Ask for page 0 (vendor specific) mode sense data.
+	 *
+	 * page0 == NULL is a valid situation.
 	 */
-	error = scsi_do_mode_sense(link, 0, inbuf, (void **)&page0, NULL,
-	    NULL, NULL, 1, flags | SCSI_SILENT, &big);
+	error = scsi_do_mode_sense(link, 0, inbuf, (void **)&page0, 1,
+	    flags | SCSI_SILENT, &big);
 	if (error != 0)
 		goto done;
 
@@ -1913,7 +1920,7 @@ st_interpret_sense(struct scsi_xfer *xs)
 	 * to store datalen in the same units as resid and to adjust
 	 * xs->resid to be in bytes.
 	 */
-	if (sense->error_code & SSD_ERRCODE_VALID) {
+	if (ISSET(sense->error_code, SSD_ERRCODE_VALID)) {
 		if (ISSET(st->flags, ST_FIXEDBLOCKS))
 			resid = info * st->blksize; /* XXXX overflow? */
 		else

@@ -1,4 +1,4 @@
-.\"	$OpenBSD: sysctl.2,v 1.31 2019/08/21 20:44:09 cheloha Exp $
+.\"	$OpenBSD: sysctl.2,v 1.36 2019/12/08 14:10:15 jmc Exp $
 .\"
 .\" Copyright (c) 1993
 .\"	The Regents of the University of California.  All rights reserved.
@@ -27,7 +27,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd $Mdocdate: August 21 2019 $
+.Dd $Mdocdate: December 8 2019 $
 .Dt SYSCTL 2
 .Os
 .Sh NAME
@@ -1293,7 +1293,6 @@ The currently defined protocols and names are:
 .It ip Ta ttl Ta integer Ta yes
 .It ipcomp Ta enable Ta integer Ta yes
 .It ipip Ta allow Ta integer Ta yes
-.It mobileip Ta allow Ta integer Ta yes
 .It tcp Ta ackonpush Ta integer Ta yes
 .It tcp Ta always_keepalive Ta integer Ta yes
 .It tcp Ta baddynamic Ta array Ta yes
@@ -1460,10 +1459,16 @@ If the kernel has been compiled with the
 option,
 then debugging information will also be reported when this variable is set.
 .It Li ip.forwarding Pq Va net.inet.ip.forwarding
-If set to 1, then IP forwarding is enabled for the host,
+If set to 0, IP forwarding is disabled.
+The IP stack also requires the destination IP address of incoming packets
+to match the IP address of the network interface the packet is bound to.
+If set to 1, IP forwarding is enabled for the host,
 indicating the host is acting as a router.
-If set to 2, then IP forwarding is restricted to traffic that has been
+If set to 2, IP forwarding is restricted to traffic that has been
 IPsec encapsulated or decapsulated by the host.
+Enabling packet forwarding (values either 1 or 2) relaxes the requirements
+on incoming packets, so that its destination address must match just any IP address
+bound to the host.
 The default value is 0.
 .It Li ip.ipsec-allocs Pq Va net.inet.ip.ipsec-allocs
 The number of IPsec flows that can use a security association before
@@ -1643,10 +1648,6 @@ If set to any other value, processing will occur; furthermore, if set
 to 2, no checks for spoofing of loopback addresses will be done.
 This is useful only for debugging purposes, and should never be used
 in production systems.
-.It Li mobileip.allow Pq Va net.inet.mobileip.allow
-If set to 0, incoming Mobile IP encapsulated packets (RFC 2004) will not be
-processed.
-If set to any other value, processing will occur.
 .It Li tcp.ackonpush Pq Va net.inet.tcp.ackonpush
 Returns 1 if TCP segments with the
 .Dv TH_PUSH
@@ -1784,7 +1785,7 @@ The currently defined protocols and names are:
 .It ip6 Ta multipath Ta integer Ta yes
 .It ip6 Ta neighborgcthresh Ta integer Ta yes
 .It ip6 Ta redirect Ta integer Ta yes
-.It ip6 Ta soiikey Ta uint8_t[] Ta yes
+.It ip6 Ta soiikey Ta uint8_t[IP6_SOIIKEY_LEN] Ta yes
 .It ip6 Ta use_deprecated Ta integer Ta yes
 .El
 .Pp
@@ -1890,6 +1891,10 @@ and
 cases quite differently, and changing this variable during operation
 may cause serious trouble.
 Hence, this variable should only be set at bootstrap time.
+As with IPv4, if forwarding is disabled then the destination address of
+incoming packets must match the IP address bound to the interface.
+If forwarding is enabled, the check is relaxed so that the destination IP address of
+incoming packets must match just any address bound to the host.
 .Pp
 .It Li ip6.hdrnestlimit Pq Va net.inet6.ip6.hdrnestlimit
 The number of IPv6 extension headers permitted on incoming IPv6 packets.
@@ -1960,6 +1965,9 @@ and should normally be enabled on all systems.
 This variable configures the secret key for the RFC 7217 algorithm to
 calculate a persistent Semantically Opaque Interface Identifier (SOII)
 for IPv6 Stateless Address Autoconfiguration (SLAAC) addresses.
+It must be
+.Dv IP6_SOIIKEY_LEN
+bytes long.
 .Pp
 .It Li ip6.use_deprecated Pq Va net.inet6.ip6.use_deprecated
 This variable controls the use of deprecated addresses, specified in
@@ -1987,12 +1995,11 @@ IPsec flow database (SPD).
 .El
 .It Dv PF_MPLS
 Get or set global information about MPLS (Multiprotocol Label Switching).
-.Bl -column "MPLSCTL_MAXINKLOOP " "integer" "not applicable" -offset indent
+.Bl -column "MPLSCTL_MAPTTL_IP6 " "integer" "not applicable" -offset indent
 .It Sy "Third level name" Ta Sy "Type" Ta Sy "Changeable"
 .It Dv MPLSCTL_DEFTTL Ta integer Ta yes
 .It Dv MPLSCTL_MAPTTL_IP Ta integer Ta yes
 .It Dv MPLSCTL_MAPTTL_IP6 Ta integer Ta yes
-.It Dv MPLSCTL_MAXINKLOOP Ta integer Ta yes
 .El
 .Bl -tag -width "123456"
 .It Dv MPLSCTL_DEFTTL Pq Va net.mpls.ttl
@@ -2012,10 +2019,6 @@ If set to 0 the IPv6 header TTL is not modified while passing through MPLS
 and the MPLS label stack is initialized with the
 .Dv MPLSCTL_DEFTTL .
 The default is 0.
-.It Dv MPLSCTL_MAXINKLOOP Pq Va net.mpls.maxloop_inkernel
-Set or get the maxinum number of label stack operations (push, swap, pop)
-that can be made on a packet.
-The default is 16.
 .El
 .It Dv PF_PIPEX Pq Va net.pipex
 Get or set global information about PIPEX.

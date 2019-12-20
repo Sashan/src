@@ -1,4 +1,4 @@
-/*	$OpenBSD: ieee80211_node.c,v 1.173 2019/09/02 12:54:21 stsp Exp $	*/
+/*	$OpenBSD: ieee80211_node.c,v 1.177 2019/11/10 09:09:02 stsp Exp $	*/
 /*	$NetBSD: ieee80211_node.c,v 1.14 2004/05/09 09:18:47 dyoung Exp $	*/
 
 /*-
@@ -476,6 +476,10 @@ ieee80211_ess_calculate_score(struct ieee80211com *ic,
 	    ni->ni_rssi > min_5ghz_rssi)
 		score += 2;
 
+	/* Boost this AP if it had no auth/assoc failures in the past. */
+	if (ni->ni_fails == 0)
+		score += 21;
+
 	return score;
 }
 
@@ -669,6 +673,15 @@ ieee80211_set_ess(struct ieee80211com *ic, struct ieee80211_ess *ess,
 		ic->ic_def_txkey = ess->def_txkey;
 		ic->ic_flags |= IEEE80211_F_WEPON;
 	}
+}
+
+void
+ieee80211_deselect_ess(struct ieee80211com *ic)
+{
+	memset(ic->ic_des_essid, 0, IEEE80211_NWID_LEN);
+	ic->ic_des_esslen = 0;
+	ieee80211_disable_wep(ic);
+	ieee80211_disable_rsn(ic);
 }
 
 void
@@ -1038,8 +1051,7 @@ ieee80211_match_bss(struct ieee80211com *ic, struct ieee80211_node *ni,
 	rate = ieee80211_fix_rate(ic, ni, IEEE80211_F_DONEGO);
 	if (rate & IEEE80211_RATE_BASIC)
 		fail |= IEEE80211_NODE_ASSOCFAIL_BASIC_RATE;
-	if (ISSET(ic->ic_flags, IEEE80211_F_AUTO_JOIN) &&
-	    ic->ic_des_esslen == 0)
+	if (ic->ic_des_esslen == 0)
 		fail |= IEEE80211_NODE_ASSOCFAIL_ESSID;
 	if (ic->ic_des_esslen != 0 &&
 	    (ni->ni_esslen != ic->ic_des_esslen ||
@@ -1421,8 +1433,12 @@ ieee80211_end_scan(struct ifnet *ifp)
 		 * and make background scans less frequent.
 		 */
 		if (selbs == curbs) {
-			if (ic->ic_bgscan_fail < IEEE80211_BGSCAN_FAIL_MAX)
-				ic->ic_bgscan_fail++;
+			if (ic->ic_bgscan_fail < IEEE80211_BGSCAN_FAIL_MAX) {
+				if (ic->ic_bgscan_fail <= 0)
+					ic->ic_bgscan_fail = 1;
+				else
+					ic->ic_bgscan_fail *= 2;
+			}
 			ic->ic_flags &= ~IEEE80211_F_BGSCAN;
 			return;
 		}
@@ -1559,6 +1575,7 @@ ieee80211_node_cleanup(struct ieee80211com *ic, struct ieee80211_node *ni)
 		ni->ni_rsnie = NULL;
 	}
 	ieee80211_ba_del(ni);
+	ni->ni_unref_cb = NULL;
 	free(ni->ni_unref_arg, M_DEVBUF, ni->ni_unref_arg_size);
 	ni->ni_unref_arg = NULL;
 	ni->ni_unref_arg_size = 0;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.84 2019/09/26 07:33:36 tobhe Exp $	*/
+/*	$OpenBSD: parse.y,v 1.88 2019/12/03 12:38:34 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -127,6 +127,8 @@ struct ipsec_transforms {
 	unsigned int		  nencxf;
 	const struct ipsec_xf	**groupxf;
 	unsigned int		  ngroupxf;
+	const struct ipsec_xf	**esnxf;
+	unsigned int		  nesnxf;
 };
 
 struct ipsec_mode {
@@ -259,6 +261,12 @@ const struct ipsec_xf groupxfs[] = {
 	{ NULL }
 };
 
+const struct ipsec_xf esnxfs[] = {
+	{ "esn",		IKEV2_XFORMESN_ESN },
+	{ "noesn",		IKEV2_XFORMESN_NONE },
+	{ NULL }
+};
+
 const struct ipsec_xf methodxfs[] = {
 	{ "none",		IKEV2_AUTH_NONE },
 	{ "rsa",		IKEV2_AUTH_RSA_SIG },
@@ -323,9 +331,10 @@ struct ipsec_filters {
 	unsigned int		 tap;
 };
 
+void			 copy_sockaddrtoipa(struct ipsec_addr_wrap *,
+			    struct sockaddr *);
 struct ipsec_addr_wrap	*host(const char *);
-struct ipsec_addr_wrap	*host_v6(const char *, int);
-struct ipsec_addr_wrap	*host_v4(const char *, int);
+struct ipsec_addr_wrap	*host_ip(const char *, int);
 struct ipsec_addr_wrap	*host_dns(const char *, int);
 struct ipsec_addr_wrap	*host_if(const char *, int);
 struct ipsec_addr_wrap	*host_any(void);
@@ -333,7 +342,7 @@ void			 ifa_load(void);
 int			 ifa_exists(const char *);
 struct ipsec_addr_wrap	*ifa_lookup(const char *ifa_name);
 struct ipsec_addr_wrap	*ifa_grouplookup(const char *);
-void			 set_ipmask(struct ipsec_addr_wrap *, uint8_t);
+void			 set_ipmask(struct ipsec_addr_wrap *, int);
 const struct ipsec_xf	*parse_xf(const char *, unsigned int,
 			    const struct ipsec_xf *);
 const char		*print_xf(unsigned int, unsigned int,
@@ -395,7 +404,7 @@ typedef struct {
 %}
 
 %token	FROM ESP AH IN PEER ON OUT TO SRCID DSTID PSK PORT
-%token	FILENAME AUTHXF PRFXF ENCXF ERROR IKEV2 IKESA CHILDSA
+%token	FILENAME AUTHXF PRFXF ENCXF ERROR IKEV2 IKESA CHILDSA ESN NOESN
 %token	PASSIVE ACTIVE ANY TAG TAP PROTO LOCAL GROUP NAME CONFIG EAP USER
 %token	IKEV1 FLOW SA TCPMD5 TUNNEL TRANSPORT COUPLE DECOUPLE SET
 %token	INCLUDE LIFETIME BYTES INET INET6 QUICK SKIP DEFAULT
@@ -425,6 +434,7 @@ typedef struct {
 %type	<v.number>		byte_spec time_spec ikelifetime
 %type	<v.string>		name
 %type	<v.cfg>			cfg ikecfg ikecfgvals
+%type	<v.string>		transform_esn
 %%
 
 grammar		: /* empty */
@@ -802,6 +812,24 @@ transform	: AUTHXF STRING			{
 			ipsec_transforms->groupxf = xfs;
 			ipsec_transforms->ngroupxf++;
 		}
+		| transform_esn				{
+			const struct ipsec_xf **xfs = ipsec_transforms->esnxf;
+			size_t nxfs = ipsec_transforms->nesnxf;
+			xfs = recallocarray(xfs, nxfs, nxfs + 1,
+			    sizeof(struct ipsec_xf *));
+			if (xfs == NULL)
+				err(1, "transform: recallocarray");
+			if ((xfs[nxfs] = parse_xf($1, 0, esnxfs)) == NULL) {
+				yyerror("%s not a valid transform", $1);
+				YYERROR;
+			}
+			ipsec_transforms->esnxf = xfs;
+			ipsec_transforms->nesnxf++;
+		}
+		;
+
+transform_esn	: ESN		{ $$ = "esn"; }
+		| NOESN		{ $$ = "noesn"; }
 		;
 
 ike_sas		:					{
@@ -1142,6 +1170,17 @@ struct keywords {
 	int		 k_val;
 };
 
+void
+copy_sockaddrtoipa(struct ipsec_addr_wrap *ipa, struct sockaddr *sa)
+{
+	if (sa->sa_family == AF_INET6)
+		memcpy(&ipa->address, sa, sizeof(struct sockaddr_in6));
+	else if (sa->sa_family == AF_INET)
+		memcpy(&ipa->address, sa, sizeof(struct sockaddr_in));
+	else
+		warnx("unhandled af %d", sa->sa_family);
+}
+
 int
 yyerror(const char *fmt, ...)
 {
@@ -1180,6 +1219,7 @@ lookup(char *s)
 		{ "dstid",		DSTID },
 		{ "eap",		EAP },
 		{ "enc",		ENCXF },
+		{ "esn",		ESN },
 		{ "esp",		ESP },
 		{ "file",		FILENAME },
 		{ "flow",		FLOW },
@@ -1198,6 +1238,7 @@ lookup(char *s)
 		{ "local",		LOCAL },
 		{ "mobike",		MOBIKE },
 		{ "name",		NAME },
+		{ "noesn",		NOESN },
 		{ "nofragmentation",	NOFRAGMENTATION },
 		{ "nomobike",		NOMOBIKE },
 		{ "ocsp",		OCSP },
@@ -1971,82 +2012,65 @@ struct ipsec_addr_wrap *
 host(const char *s)
 {
 	struct ipsec_addr_wrap	*ipa = NULL;
-	int			 mask, cont = 1;
-	char			*p, *q, *ps;
+	int			 mask = -1;
+	char			*p, *ps;
+	const char		*errstr;
 
-	if ((p = strrchr(s, '/')) != NULL) {
-		errno = 0;
-		mask = strtol(p + 1, &q, 0);
-		if (errno == ERANGE || !q || *q || mask > 128 || q == (p + 1))
-			errx(1, "host: invalid netmask '%s'", p);
-		if ((ps = malloc(strlen(s) - strlen(p) + 1)) == NULL)
-			err(1, "%s", __func__);
-		strlcpy(ps, s, strlen(s) - strlen(p) + 1);
-	} else {
-		if ((ps = strdup(s)) == NULL)
-			err(1, "%s", __func__);
-		mask = -1;
+	if ((ps = strdup(s)) == NULL)
+		err(1, "%s: strdup", __func__);
+
+	if ((p = strchr(ps, '/')) != NULL) {
+		mask = strtonum(p+1, 0, 128, &errstr);
+		if (errstr) {
+			fprintf(stderr, "netmask is %s: %s\n", errstr, p);
+			goto error;
+		}
+		p[0] = '\0';
 	}
 
-	/* Does interface with this name exist? */
-	if (cont && (ipa = host_if(ps, mask)) != NULL)
-		cont = 0;
-
-	/* IPv4 address? */
-	if (cont && (ipa = host_v4(s, mask == -1 ? 32 : mask)) != NULL)
-		cont = 0;
-
-	/* IPv6 address? */
-	if (cont && (ipa = host_v6(ps, mask == -1 ? 128 : mask)) != NULL)
-		cont = 0;
-
-	/* dns lookup */
-	if (cont && mask == -1 && (ipa = host_dns(s, mask)) != NULL)
-		cont = 0;
-	free(ps);
-
-	if (ipa == NULL || cont == 1) {
+	if ((ipa = host_if(ps, mask)) == NULL &&
+	    (ipa = host_ip(ps, mask)) == NULL &&
+	    (ipa = host_dns(ps, mask)) == NULL)
 		fprintf(stderr, "no IP address found for %s\n", s);
-		return (NULL);
-	}
+
+error:
+	free(ps);
 	return (ipa);
 }
 
 struct ipsec_addr_wrap *
-host_v6(const char *s, int prefixlen)
+host_ip(const char *s, int mask)
 {
 	struct ipsec_addr_wrap	*ipa = NULL;
 	struct addrinfo		 hints, *res;
 	char			 hbuf[NI_MAXHOST];
 
 	bzero(&hints, sizeof(struct addrinfo));
-	hints.ai_family = AF_INET6;
-	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_DGRAM; /*dummy*/
 	hints.ai_flags = AI_NUMERICHOST;
 	if (getaddrinfo(s, NULL, &hints, &res))
 		return (NULL);
 	if (res->ai_next)
-		err(1, "host_v6: numeric hostname expanded to multiple item");
+		err(1, "%s: %s expanded to multiple item", __func__, s);
 
 	ipa = calloc(1, sizeof(struct ipsec_addr_wrap));
 	if (ipa == NULL)
 		err(1, "%s", __func__);
 	ipa->af = res->ai_family;
-	memcpy(&ipa->address, res->ai_addr, sizeof(struct sockaddr_in6));
-	if (prefixlen > 128)
-		prefixlen = 128;
+	copy_sockaddrtoipa(ipa, res->ai_addr);
 	ipa->next = NULL;
 	ipa->tail = ipa;
 
-	set_ipmask(ipa, prefixlen);
+	set_ipmask(ipa, mask);
 	if (getnameinfo(res->ai_addr, res->ai_addrlen,
 	    hbuf, sizeof(hbuf), NULL, 0, NI_NUMERICHOST)) {
 		errx(1, "could not get a numeric hostname");
 	}
 
-	if (prefixlen != 128) {
+	if (mask > -1) {
 		ipa->netaddress = 1;
-		if (asprintf(&ipa->name, "%s/%d", hbuf, prefixlen) == -1)
+		if (asprintf(&ipa->name, "%s/%d", hbuf, mask) == -1)
 			err(1, "%s", __func__);
 	} else {
 		if ((ipa->name = strdup(hbuf)) == NULL)
@@ -2054,45 +2078,6 @@ host_v6(const char *s, int prefixlen)
 	}
 
 	freeaddrinfo(res);
-
-	return (ipa);
-}
-
-struct ipsec_addr_wrap *
-host_v4(const char *s, int mask)
-{
-	struct ipsec_addr_wrap	*ipa = NULL;
-	struct sockaddr_in	 ina;
-	int			 bits = 32;
-
-	bzero(&ina, sizeof(ina));
-	if (strrchr(s, '/') != NULL) {
-		if ((bits = inet_net_pton(AF_INET, s, &ina.sin_addr,
-		    sizeof(ina.sin_addr))) == -1)
-			return (NULL);
-	} else {
-		if (inet_pton(AF_INET, s, &ina.sin_addr) != 1)
-			return (NULL);
-	}
-
-	ipa = calloc(1, sizeof(struct ipsec_addr_wrap));
-	if (ipa == NULL)
-		err(1, "%s", __func__);
-
-	ina.sin_family = AF_INET;
-	ina.sin_len = sizeof(ina);
-	memcpy(&ipa->address, &ina, sizeof(ina));
-
-	ipa->name = strdup(s);
-	if (ipa->name == NULL)
-		err(1, "%s", __func__);
-	ipa->af = AF_INET;
-	ipa->next = NULL;
-	ipa->tail = ipa;
-
-	set_ipmask(ipa, bits);
-	if (strrchr(s, '/') != NULL)
-		ipa->netaddress = 1;
 
 	return (ipa);
 }
@@ -2120,16 +2105,7 @@ host_dns(const char *s, int mask)
 		ipa = calloc(1, sizeof(struct ipsec_addr_wrap));
 		if (ipa == NULL)
 			err(1, "%s", __func__);
-		switch (res->ai_family) {
-		case AF_INET:
-			memcpy(&ipa->address, res->ai_addr,
-			    sizeof(struct sockaddr_in));
-			break;
-		case AF_INET6:
-			memcpy(&ipa->address, res->ai_addr,
-			    sizeof(struct sockaddr_in6));
-			break;
-		}
+		copy_sockaddrtoipa(ipa, res->ai_addr);
 		error = getnameinfo(res->ai_addr, res->ai_addrlen, hbuf,
 		    sizeof(hbuf), NULL, 0, NI_NUMERICHOST);
 		if (error)
@@ -2378,9 +2354,12 @@ ifa_lookup(const char *ifa_name)
 }
 
 void
-set_ipmask(struct ipsec_addr_wrap *address, uint8_t b)
+set_ipmask(struct ipsec_addr_wrap *address, int b)
 {
-	address->mask = b;
+	if (b == -1)
+		address->mask = address->af == AF_INET ? 32 : 128;
+	else
+		address->mask = b;
 }
 
 const struct ipsec_xf *
@@ -2578,6 +2557,10 @@ print_policy(struct iked_policy *pol)
 						print_verbose(" group ");
 						xfs = groupxfs;
 						break;
+					case IKEV2_XFORMTYPE_ESN:
+						print_verbose(" ");
+						xfs = esnxfs;
+						break;
 					default:
 						continue;
 					}
@@ -2692,13 +2675,12 @@ create_ike(char *name, int af, uint8_t ipproto, struct ipsec_hosts *hosts,
 	struct iked_transform	*xf;
 	unsigned int		 i, j, xfi, noauth;
 	unsigned int		 ikepropid = 1, ipsecpropid = 1;
-	struct iked_flow	 flows[64];
+	struct iked_flow	*flow, *ftmp;
 	static unsigned int	 policy_id = 0;
 	struct iked_cfg		*cfg;
 	int			 ret = -1;
 
 	bzero(&pol, sizeof(pol));
-	bzero(&flows, sizeof(flows));
 	bzero(idstr, sizeof(idstr));
 
 	pol.pol_id = ++policy_id;
@@ -2830,6 +2812,11 @@ create_ike(char *name, int af, uint8_t ipproto, struct ipsec_hosts *hosts,
 		pol.pol_nproposals++;
 	} else {
 		for (i = 0; i < ike_sa->nxfs; i++) {
+			if (ike_sa->xfs[i]->nesnxf) {
+				yyerror("cannot use ESN with ikesa.");
+				goto done;
+			}
+
 			if ((p = calloc(1, sizeof(*p))) == NULL)
 				err(1, "%s", __func__);
 
@@ -2914,7 +2901,8 @@ create_ike(char *name, int af, uint8_t ipproto, struct ipsec_hosts *hosts,
 			    ikev2_default_esp_transforms,
 			    ikev2_default_nesp_transforms);
 			copy_transforms(IKEV2_XFORMTYPE_ESN,
-			    NULL, 0, &xf, &xfi,
+			    ipsec_sa->xfs[i]->esnxf,
+			    ipsec_sa->xfs[i]->nesnxf, &xf, &xfi,
 			    ikev2_default_esp_transforms,
 			    ikev2_default_nesp_transforms);
 
@@ -2930,38 +2918,39 @@ create_ike(char *name, int af, uint8_t ipproto, struct ipsec_hosts *hosts,
 	if (hosts == NULL || hosts->src == NULL || hosts->dst == NULL)
 		fatalx("create_ike: no traffic selectors/flows");
 
-	for (j = 0, ipa = hosts->src, ipb = hosts->dst; ipa && ipb;
-	    ipa = ipa->next, ipb = ipb->next, j++) {
-		if (j >= nitems(flows))
-			fatalx("create_ike: too many flows");
-		memcpy(&flows[j].flow_src.addr, &ipa->address,
-		    sizeof(ipa->address));
-		flows[j].flow_src.addr_af = ipa->af;
-		flows[j].flow_src.addr_mask = ipa->mask;
-		flows[j].flow_src.addr_net = ipa->netaddress;
-		flows[j].flow_src.addr_port = hosts->sport;
+	for (ipa = hosts->src, ipb = hosts->dst; ipa && ipb;
+	    ipa = ipa->next, ipb = ipb->next) {
+		if ((flow = calloc(1, sizeof(struct iked_flow))) == NULL)
+			fatalx("%s: falied to alloc flow.", __func__);
 
-		memcpy(&flows[j].flow_dst.addr, &ipb->address,
+		memcpy(&flow->flow_src.addr, &ipa->address,
+		    sizeof(ipa->address));
+		flow->flow_src.addr_af = ipa->af;
+		flow->flow_src.addr_mask = ipa->mask;
+		flow->flow_src.addr_net = ipa->netaddress;
+		flow->flow_src.addr_port = hosts->sport;
+
+		memcpy(&flow->flow_dst.addr, &ipb->address,
 		    sizeof(ipb->address));
-		flows[j].flow_dst.addr_af = ipb->af;
-		flows[j].flow_dst.addr_mask = ipb->mask;
-		flows[j].flow_dst.addr_net = ipb->netaddress;
-		flows[j].flow_dst.addr_port = hosts->dport;
+		flow->flow_dst.addr_af = ipb->af;
+		flow->flow_dst.addr_mask = ipb->mask;
+		flow->flow_dst.addr_net = ipb->netaddress;
+		flow->flow_dst.addr_port = hosts->dport;
 
 		ippn = ipa->srcnat;
 		if (ippn) {
-			memcpy(&flows[j].flow_prenat.addr, &ippn->address,
+			memcpy(&flow->flow_prenat.addr, &ippn->address,
 			    sizeof(ippn->address));
-			flows[j].flow_prenat.addr_af = ippn->af;
-			flows[j].flow_prenat.addr_mask = ippn->mask;
-			flows[j].flow_prenat.addr_net = ippn->netaddress;
+			flow->flow_prenat.addr_af = ippn->af;
+			flow->flow_prenat.addr_mask = ippn->mask;
+			flow->flow_prenat.addr_net = ippn->netaddress;
 		} else {
-			flows[j].flow_prenat.addr_af = 0;
+			flow->flow_prenat.addr_af = 0;
 		}
 
-		flows[j].flow_ipproto = ipproto;
+		flow->flow_ipproto = ipproto;
 
-		if (RB_INSERT(iked_flows, &pol.pol_flows, &flows[j]) == NULL)
+		if (RB_INSERT(iked_flows, &pol.pol_flows, flow) == NULL)
 			pol.pol_nflows++;
 		else
 			warnx("create_ike: duplicate flow");
@@ -3053,6 +3042,10 @@ done:
 		free(hosts);
 	}
 	iaw_free(ikecfg);
+	RB_FOREACH_SAFE(flow, iked_flows, &pol.pol_flows, ftmp) {
+		RB_REMOVE(iked_flows, &pol.pol_flows, flow);
+		free(flow);
+	}
 	return (ret);
 }
 

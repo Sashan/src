@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# $OpenBSD: appstest.sh,v 1.23 2019/07/17 12:06:53 inoguchi Exp $
+# $OpenBSD: appstest.sh,v 1.31 2019/11/25 12:45:45 inoguchi Exp $
 #
 # Copyright (c) 2016 Kinichiro Inoguchi <inoguchi@openbsd.org>
 #
@@ -71,7 +71,7 @@ function test_usage_lists_others {
 	$openssl_bin -help 2>> $user1_dir/usages.out
 	for c in $cmds ; do
 		$openssl_bin $c -help 2>> $user1_dir/usages.out
-	done 
+	done
 	
 	start_message "check all list-* commands."
 	
@@ -371,6 +371,14 @@ function test_key {
 		-pkeyopt rsa_keygen_bits:2048 -pkeyopt rsa_keygen_pubexp:3
 	check_exit_status $?
 	
+	genpkey_rsa_pss=$key_dir/genpkey_rsa_pss.pem
+	$openssl_bin genpkey -algorithm RSA-PSS -out $genpkey_rsa_pss \
+		-pkeyopt rsa_keygen_bits:2048 \
+		-pkeyopt rsa_pss_keygen_mgf1_md:sha256 \
+		-pkeyopt rsa_pss_keygen_md:sha256 \
+		-pkeyopt rsa_pss_keygen_saltlen:32
+	check_exit_status $?
+	
 	# EC by GENPKEY
 	
 	genpkey_ec_param=$key_dir/genpkey_ec_param.pem
@@ -453,6 +461,26 @@ function test_key {
 	diff $pkeyutldat $pkeyutldec
 	check_exit_status $?
 
+	pkeyutl_rsa_oaep_enc=$key_dir/pkeyutl_rsa_oaep.enc
+	pkeyutl_rsa_oaep_dec=$key_dir/pkeyutl_rsa_oaep.dec
+
+	$openssl_bin pkeyutl -encrypt -in $pkeyutldat \
+		-inkey $genpkey_rsa \
+		-pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
+		-pkeyopt rsa_oaep_label:0011223344556677 \
+		-out $pkeyutl_rsa_oaep_enc
+	check_exit_status $?
+
+	$openssl_bin pkeyutl -decrypt -in $pkeyutl_rsa_oaep_enc \
+		-inkey $genpkey_rsa \
+		-pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
+		-pkeyopt rsa_oaep_label:0011223344556677 \
+		-out $pkeyutl_rsa_oaep_dec
+	check_exit_status $?
+
+	diff $pkeyutldat $pkeyutl_rsa_oaep_dec
+	check_exit_status $?
+
 	pkeyutlsc1=$key_dir/pkeyutl.sc1
 	pkeyutlsc2=$key_dir/pkeyutl.sc2
 
@@ -501,7 +529,7 @@ organizationalUnitName  = optional
 commonName              = supplied
 emailAddress            = optional
 [ req ]
-distinguished_name      = req_distinguished_name 
+distinguished_name      = req_distinguished_name
 [ req_distinguished_name ]
 countryName                     = Country Name
 countryName_default             = JP
@@ -513,7 +541,7 @@ organizationName                = Organization Name
 organizationName_default        = TEST_DUMMY_COMPANY
 commonName                      = Common Name
 [ tsa ]
-default_tsa   = tsa_config1 
+default_tsa   = tsa_config1
 [ tsa_config1 ]
 dir           = ./$tsa_dir
 serial        = \$dir/serial
@@ -547,32 +575,32 @@ __EOF__
 	mkdir -p $ca_dir/newcerts
 	chmod 700 $ca_dir/private
 	echo "01" > $ca_dir/serial
-	touch $ca_dir/index.txt 
+	touch $ca_dir/index.txt
 	touch $ca_dir/crlnumber
 	echo "01" > $ca_dir/crlnumber
 	
-	# 
-	# setup test TSA 
+	#
+	# setup test TSA
 	#
 	mkdir -p $tsa_dir/private
 	chmod 700 $tsa_dir/private
 	echo "01" > $tsa_dir/serial
-	touch $tsa_dir/index.txt 
+	touch $tsa_dir/index.txt
 	
-	# 
-	# setup test OCSP 
+	#
+	# setup test OCSP
 	#
 	mkdir -p $ocsp_dir/private
 	chmod 700 $ocsp_dir/private
 	
 	#---------#---------#---------#---------#---------#---------#---------
 	
-	# --- CA initiate (generate CA key and cert) --- 
+	# --- CA initiate (generate CA key and cert) ---
 	
 	start_message "req ... generate CA key and self signed cert"
 	
-	ca_cert=$ca_dir/ca_cert.pem 
-	ca_key=$ca_dir/private/ca_key.pem ca_pass=test-ca-pass 
+	ca_cert=$ca_dir/ca_cert.pem
+	ca_key=$ca_dir/private/ca_key.pem ca_pass=test-ca-pass
 	
 	if [ $mingw = 0 ] ; then
 		subj='/C=JP/ST=Tokyo/O=TEST_DUMMY_COMPANY/CN=testCA.test_dummy.com/'
@@ -629,7 +657,7 @@ __EOF__
 	
 	start_message "req ... generate OCSP key and cert"
 	
-	# generate CSR for OCSP 
+	# generate CSR for OCSP
 	
 	ocsp_csr=$ocsp_dir/ocsp_csr.pem
 	ocsp_key=$ocsp_dir/private/ocsp_key.pem
@@ -651,7 +679,7 @@ __EOF__
 	$openssl_bin ca -batch -cert $ca_cert -keyfile $ca_key -keyform pem \
 		-key $ca_pass -out $ocsp_cert -extensions ocsp_ext \
 		-startdate `date -u '+%y%m%d%H%M%SZ'` -enddate 491223235959Z \
-		-subj $subj -infiles $ocsp_csr 
+		-subj $subj -infiles $ocsp_csr
 	check_exit_status $?
 	
 	#---------#---------#---------#---------#---------#---------#---------
@@ -678,6 +706,7 @@ __EOF__
 
 	$openssl_bin req -new -subj $subj -sha256 \
 		-key $server_key -keyform pem -passin pass:$server_pass \
+		-addext 'subjectAltName = DNS:localhost.test_dummy.com' \
 		-out $server_csr -outform pem
 	check_exit_status $?
 	
@@ -915,6 +944,161 @@ __EOF__
 	
 	$openssl_bin ts -verify -queryfile $tsa_tsq -in $tsa_tsr \
 		-CAfile $ca_cert -untrusted $tsa_cert
+	check_exit_status $?
+}
+
+function test_cms {
+	# --- CMS operations ---
+	section_message "CMS operations"
+	
+	cms_txt=$user1_dir/cms.txt
+	cms_sig=$user1_dir/cms.sig
+	cms_enc=$user1_dir/cms.enc
+	cms_dec=$user1_dir/cms.dec
+	cms_sgr=$user1_dir/cms.sgr
+	cms_ver=$user1_dir/cms.ver
+	cms_out=$user1_dir/cms.out
+	cms_dct=$user1_dir/cms.dct
+	cms_dot=$user1_dir/cms.dot
+	cms_dgc=$user1_dir/cms.dgc
+	cms_dgv=$user1_dir/cms.dgv
+	cms_ede=$user1_dir/cms.ede
+	cms_edd=$user1_dir/cms.edd
+	cms_srp=$user1_dir/cms.srp
+	cms_pwe=$user1_dir/cms.pwe
+	cms_pwd=$user1_dir/cms.pwd
+	
+	cat << __EOF__ > $cms_txt
+Hello Bob,
+Sincerely yours
+Alice
+__EOF__
+	
+	# sign
+	start_message "cms ... sign to message"
+	
+	$openssl_bin cms -sign -in $cms_txt -text \
+		-out $cms_sig -outform smime \
+		-signer $user1_cert -inkey $user1_key -keyform pem \
+		-keyopt rsa_padding_mode:pss \
+		-passin pass:$user1_pass -md sha256 \
+		-from user1@test_dummy.com -to server@test_dummy.com \
+		-subject "test openssl cms" \
+		-receipt_request_from server@test_dummy.com \
+		-receipt_request_to user1@test_dummy.com
+	check_exit_status $?
+	
+	# encrypt
+	start_message "cms ... encrypt message"
+
+	$openssl_bin cms -encrypt -aes256 -binary -in $cms_sig -inform smime \
+		-recip $server_cert -keyopt rsa_padding_mode:oaep \
+		-out $cms_enc
+	check_exit_status $?
+
+	# decrypt
+	start_message "cms ... decrypt message"
+
+	$openssl_bin cms -decrypt -in $cms_enc -out $cms_dec \
+		-recip $server_cert -inkey $server_key -passin pass:$server_pass
+	check_exit_status $?
+
+	# verify
+	start_message "cms ... verify message"
+	
+	$openssl_bin cms -verify -in $cms_dec \
+		-CAfile $ca_cert -certfile $user1_cert -nointern \
+		-check_ss_sig -issuer_checks -policy_check -x509_strict \
+		-signer $cms_sgr -text -out $cms_ver -receipt_request_print
+	check_exit_status $?
+
+	diff -b $cms_ver $cms_txt
+	check_exit_status $?
+
+	# cmsout
+	start_message "cms ... cmsout"
+	
+	$openssl_bin cms -cmsout -in $cms_enc -print -out $cms_out
+	check_exit_status $?
+
+	# data_create
+	start_message "cms ... data_create"
+	
+	$openssl_bin cms -data_create -in $cms_enc -out $cms_dct
+	check_exit_status $?
+
+	# data_out
+	start_message "cms ... data_out"
+	
+	$openssl_bin cms -data_out -in $cms_dct -out $cms_dot
+	check_exit_status $?
+
+	# digest_create
+	start_message "cms ... digest_create"
+	
+	$openssl_bin cms -digest_create -in $cms_txt -md sha256 -out $cms_dgc
+	check_exit_status $?
+
+	# digest_verify
+	start_message "cms ... digest_verify"
+	
+	$openssl_bin cms -digest_verify -in $cms_dgc -md sha256 -out $cms_dgv
+	check_exit_status $?
+
+	diff -b $cms_dgv $cms_txt
+	check_exit_status $?
+
+	# compress
+
+	# uncompress
+
+	# EncryptedData_encrypt
+	start_message "cms ... EncryptedData_encrypt"
+	
+	$openssl_bin cms -EncryptedData_encrypt -in $cms_sig -out $cms_ede \
+		-aes128 -secretkey 00112233445566778899aabbccddeeff
+	check_exit_status $?
+
+	# EncryptedData_decrypt
+	start_message "cms ... EncryptedData_decrypt"
+	
+	$openssl_bin cms -EncryptedData_decrypt -in $cms_ede -out $cms_edd \
+		-aes128 -secretkey 00112233445566778899aabbccddeeff
+	check_exit_status $?
+
+	diff -b $cms_edd $cms_sig
+	check_exit_status $?
+
+	# sign_receipt
+	start_message "cms ... sign to receipt"
+	
+	$openssl_bin cms -sign_receipt -in $cms_sig -out $cms_srp \
+		-signer $server_cert -inkey $server_key \
+		-passin pass:$server_pass -md sha256
+	check_exit_status $?
+
+	# verify_receipt
+	start_message "cms ... verify receipt"
+	
+	$openssl_bin cms -verify_receipt $cms_srp -rctform smime -in $cms_sig \
+		-CAfile $ca_cert -certfile $server_cert
+	check_exit_status $?
+	
+	# encrypt with pwri
+	start_message "cms ... encrypt with pwri"
+
+	$openssl_bin cms -encrypt -camellia256 -in $cms_txt -out $cms_pwe \
+		-pwri_password abcdefg
+	check_exit_status $?
+
+	# decrypt with pwri
+	start_message "cms ... decrypt with pwri"
+
+	$openssl_bin cms -decrypt -camellia256 -in $cms_pwe -out $cms_pwd \
+		-pwri_password abcdefg
+	check_exit_status $?
+
+	diff -b $cms_pwd $cms_txt
 	check_exit_status $?
 }
 
@@ -1383,6 +1567,7 @@ test_encoding_cipher
 test_key
 test_pki
 test_tsa
+test_cms
 test_smime
 test_ocsp
 test_pkcs

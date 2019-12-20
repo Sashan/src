@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_athn_usb.c,v 1.53 2019/09/12 12:55:07 stsp Exp $	*/
+/*	$OpenBSD: if_athn_usb.c,v 1.55 2019/11/25 11:32:17 mpi Exp $	*/
 
 /*-
  * Copyright (c) 2011 Damien Bergamini <damien.bergamini@free.fr>
@@ -694,7 +694,8 @@ athn_usb_load_firmware(struct athn_usb_softc *usc)
 	error = usbd_do_request(usc->sc_udev, &req, NULL);
 	/* Wait at most 1 second for firmware to boot. */
 	if (error == 0 && usc->wait_msg_id != 0)
-		error = tsleep(&usc->wait_msg_id, 0, "athnfw", hz);
+		error = tsleep_nsec(&usc->wait_msg_id, 0, "athnfw",
+		    SEC_TO_NSEC(1));
 	usc->wait_msg_id = 0;
 	splx(s);
 	return (error);
@@ -779,7 +780,8 @@ athn_usb_htc_setup(struct athn_usb_softc *usc)
 	usc->wait_msg_id = AR_HTC_MSG_CONF_PIPE_RSP;
 	error = athn_usb_htc_msg(usc, AR_HTC_MSG_CONF_PIPE, &cfg, sizeof(cfg));
 	if (error == 0 && usc->wait_msg_id != 0)
-		error = tsleep(&usc->wait_msg_id, 0, "athnhtc", hz);
+		error = tsleep_nsec(&usc->wait_msg_id, 0, "athnhtc",
+		    SEC_TO_NSEC(1));
 	usc->wait_msg_id = 0;
 	splx(s);
 	if (error != 0) {
@@ -815,7 +817,8 @@ athn_usb_htc_connect_svc(struct athn_usb_softc *usc, uint16_t svc_id,
 	error = athn_usb_htc_msg(usc, AR_HTC_MSG_CONN_SVC, &msg, sizeof(msg));
 	/* Wait at most 1 second for response. */
 	if (error == 0 && usc->wait_msg_id != 0)
-		error = tsleep(&usc->wait_msg_id, 0, "athnhtc", hz);
+		error = tsleep_nsec(&usc->wait_msg_id, 0, "athnhtc",
+		    SEC_TO_NSEC(1));
 	usc->wait_msg_id = 0;
 	splx(s);
 	if (error != 0) {
@@ -850,12 +853,13 @@ athn_usb_wmi_xcmd(struct athn_usb_softc *usc, uint16_t cmd_id, void *ibuf,
 
 	s = splusb();
 	while (usc->wait_cmd_id) {
-		/* 
+		/*
 		 * The previous USB transfer is not done yet. We can't use
 		 * data->xfer until it is done or we'll cause major confusion
 		 * in the USB stack.
 		 */
-		tsleep(&usc->wait_cmd_id, 0, "athnwmx", ATHN_USB_CMD_TIMEOUT);
+		tsleep_nsec(&usc->wait_cmd_id, 0, "athnwmx",
+		    MSEC_TO_NSEC(ATHN_USB_CMD_TIMEOUT));
 		if (usbd_is_dying(usc->sc_udev)) {
 			splx(s);
 			return ENXIO;
@@ -891,7 +895,8 @@ athn_usb_wmi_xcmd(struct athn_usb_softc *usc, uint16_t cmd_id, void *ibuf,
 	 * Wait for WMI command complete interrupt. In case it does not fire
 	 * wait until the USB transfer times out to avoid racing the transfer.
 	 */
-	error = tsleep(&usc->wait_cmd_id, 0, "athnwmi", ATHN_USB_CMD_TIMEOUT);
+	error = tsleep_nsec(&usc->wait_cmd_id, 0, "athnwmi",
+	    MSEC_TO_NSEC(ATHN_USB_CMD_TIMEOUT));
 	if (error) {
 		if (error == EWOULDBLOCK) {
 			printf("%s: firmware command 0x%x timed out\n",
