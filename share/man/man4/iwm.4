@@ -1,4 +1,4 @@
-.\" $OpenBSD: iwm.4,v 1.27 2019/08/08 13:59:16 stsp Exp $
+.\" $OpenBSD: iwm.4,v 1.32 2019/11/27 16:41:44 stsp Exp $
 .\"
 .\" Copyright (c) 2007,2008
 .\"	Damien Bergamini <damien.bergamini@free.fr>. All rights reserved.
@@ -15,20 +15,20 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: August 8 2019 $
+.Dd $Mdocdate: November 27 2019 $
 .Dt IWM 4
 .Os
 .Sh NAME
 .Nm iwm
-.Nd Intel 7000/8000 IEEE 802.11a/ac/b/g/n wireless network devices
+.Nd Intel 7000/8000/9000 IEEE 802.11a/ac/b/g/n wireless network devices
 .Sh SYNOPSIS
 .Cd "iwm* at pci?"
 .Sh DESCRIPTION
 The
 .Nm
 driver provides support for Intel Wireless
-7260, 7265, 3160, 3165, 3168, 8260, and 8265
-PCIe Mini Card network adapters.
+7260, 7265, 3160, 3165, 3168, 8260, 8265, 9260, and 9560
+PCIe Mini Card and M.2 network adapters.
 .Pp
 These are the modes the
 .Nm
@@ -52,16 +52,22 @@ The
 .Nm
 driver can be configured to use
 Wired Equivalent Privacy (WEP) or
-Wi-Fi Protected Access (WPA-PSK and WPA2-PSK).
-WPA is the current encryption standard for wireless networks.
-It is strongly recommended that WEP
-not be used as the sole mechanism
-to secure wireless communication,
-due to serious weaknesses in it.
-The
-.Nm
-driver offloads both encryption and decryption of unicast data frames to the
-hardware for the CCMP cipher.
+Wi-Fi Protected Access (WPA1 and WPA2).
+WPA2 is the current encryption standard for wireless networks.
+It is strongly recommended that neither WEP nor WPA1
+are used as the sole mechanism to secure wireless communication,
+due to serious weaknesses.
+WPA1 is disabled by default and may be enabled using the option
+.Qq Cm wpaprotos Ar wpa1,wpa2 .
+For standard WPA networks which use pre-shared keys (PSK),
+keys are configured using the
+.Qq Cm wpakey
+option.
+WPA-Enterprise networks require use of the wpa_supplicant package.
+.\"The
+.\".Nm
+.\"driver offloads both encryption and decryption of unicast data frames to the
+.\"hardware for the CCMP cipher.
 .Pp
 The
 .Nm
@@ -74,13 +80,14 @@ The driver needs one of the following firmware files,
 which are loaded when an interface is brought up:
 .Pp
 .Bl -tag -width Ds -offset indent -compact
-.It Pa /etc/firmware/iwm-3160-16
-.It Pa /etc/firmware/iwm-3168-22
-.It Pa /etc/firmware/iwm-7260-16
-.It Pa /etc/firmware/iwm-7265-16
-.It Pa /etc/firmware/iwm-7265D-16
-.It Pa /etc/firmware/iwm-8000C-16
-.It Pa /etc/firmware/iwm-8265-22
+.It Pa /etc/firmware/iwm-3160-17
+.It Pa /etc/firmware/iwm-3168-29
+.It Pa /etc/firmware/iwm-7260-17
+.It Pa /etc/firmware/iwm-7265-17
+.It Pa /etc/firmware/iwm-8000C-34
+.It Pa /etc/firmware/iwm-8265-34
+.It Pa /etc/firmware/iwm-9000-34
+.It Pa /etc/firmware/iwm-9260-34
 .El
 .Pp
 These firmware files are not free because Intel refuses to grant

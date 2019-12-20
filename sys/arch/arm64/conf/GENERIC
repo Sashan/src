@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.132 2019/10/23 20:34:04 kettenis Exp $
+# $OpenBSD: GENERIC,v 1.136 2019/12/17 13:08:54 reyk Exp $
 #
 # GENERIC machine description file
 #
@@ -90,6 +90,7 @@ pluart*		at fdt?
 psci*		at fdt? early 1
 pwmreg*		at fdt? early 1
 syscon*		at fdt? early 1
+pwmfan*		at fdt?
 
 virtio*		at fdt?
 virtio*		at pci?
@@ -186,11 +187,13 @@ sfp*		at fdt?
 rkclock*	at fdt? early 1
 rkgrf*		at fdt? early 1
 rkpinctrl*	at fdt? early 1
+rkemmcphy*	at fdt?
 rkgpio*		at fdt?
 rkiic*		at fdt?
 iic*		at rkiic?
 rkpcie*		at fdt?
 pci*		at rkpcie?
+rkpwm*		at fdt?
 rktemp*		at fdt?
 rkdwusb*	at fdt?
 dwmmc*		at fdt?
@@ -305,6 +308,7 @@ ucom*		at ucycom?
 uslhcom*	at uhidev?		# Silicon Labs CP2110 USB HID UART
 ucom*		at uslhcom?
 uhid*		at uhidev?		# USB generic HID support
+fido*		at uhidev?		# FIDO/U2F security key support
 upd*		at uhidev?		# USB Power Devices sensors
 aue*		at uhub?		# ADMtek AN986 Pegasus Ethernet
 atu*		at uhub?		# Atmel AT76c50x based 802.11b

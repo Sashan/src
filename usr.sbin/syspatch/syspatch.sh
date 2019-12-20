@@ -1,6 +1,6 @@
 #!/bin/ksh
 #
-# $OpenBSD: syspatch.sh,v 1.157 2019/10/26 08:37:24 ajacoutot Exp $
+# $OpenBSD: syspatch.sh,v 1.159 2019/12/10 17:11:06 ajacoutot Exp $
 #
 # Copyright (c) 2016, 2017 Antoine Jacoutot <ajacoutot@openbsd.org>
 #
@@ -81,7 +81,7 @@ missing patches" 2)
 #   (instead of computing before installing each file)
 checkfs()
 {
-	local _d _dev _df _files="${@}" _rc _sz
+	local _d _dev _df _files="${@}" _sz
 	[[ -n ${_files} ]]
 
 	set +e # ignore errors due to:
@@ -90,11 +90,11 @@ checkfs()
 	eval $(cd / &&
 		stat -qf "_dev=\"\${_dev} %Sd\";
 			local %Sd=\"\${%Sd:+\${%Sd}\+}%Uz\"" ${_files}) \
-			2>/dev/null || _rc=$?
+			2>/dev/null
 	set -e
-	[[ ${_rc} == 127 ]] && sp_err "Remote filesystem, aborting" 
 
 	for _d in $(printf '%s\n' ${_dev} | sort -u); do
+		[[ ${_d} != "??" ]] || sp_err "Unsupported filesystem, aborting"
 		mount | grep -v read-only | grep -q "^/dev/${_d} " ||
 			sp_err "Read-only filesystem, aborting"
 		_df=$(df -Pk | grep "^/dev/${_d} " | tr -s ' ' | cut -d ' ' -f4)
@@ -161,7 +161,7 @@ ls_installed()
 
 ls_missing()
 {
-	local _c _d _f _cmd _l="$(ls_installed)" _p _r _sha=${_TMP}/SHA256
+	local _c _f _cmd _l="$(ls_installed)" _p _sha=${_TMP}/SHA256
 
 	# don't output anything on stdout to prevent corrupting the patch list
 	unpriv -f "${_sha}.sig" ftp -N syspatch -MVo "${_sha}.sig" \

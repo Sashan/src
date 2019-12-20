@@ -1,4 +1,4 @@
-/*	$Id: test-tal.c,v 1.3 2019/08/22 21:31:48 bluhm Exp $ */
+/*	$Id: test-tal.c,v 1.5 2019/11/06 07:19:45 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -46,13 +46,14 @@ int
 main(int argc, char *argv[])
 {
 	int		 c, i, verb = 0;
+	char		*buf;
 	struct tal	*tal;
 
 	ERR_load_crypto_strings();
 	OpenSSL_add_all_ciphers();
 	OpenSSL_add_all_digests();
 
-	while (-1 != (c = getopt(argc, argv, "v")))
+	while ((c = getopt(argc, argv, "v")) != -1)
 		switch (c) {
 		case 'v':
 			verb++;
@@ -68,7 +69,10 @@ main(int argc, char *argv[])
 		errx(1, "argument missing");
 
 	for (i = 0; i < argc; i++) {
-		if ((tal = tal_parse(argv[i])) == NULL)
+		buf = tal_read_file(argv[i]);
+		tal = tal_parse(argv[i], buf);
+		free(buf);
+		if (tal == NULL)
 			break;
 		if (verb)
 			tal_print(tal);

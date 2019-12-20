@@ -1,4 +1,4 @@
-/* $OpenBSD: readconf.c,v 1.309 2019/09/06 14:45:34 naddy Exp $ */
+/* $OpenBSD: readconf.c,v 1.318 2019/12/20 02:42:42 dtucker Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -31,6 +31,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <limits.h>
 #include <util.h>
@@ -106,8 +107,6 @@
      ForwardAgent no
      ForwardX11 no
      PasswordAuthentication yes
-     RSAAuthentication yes
-     RhostsRSAAuthentication yes
      StrictHostKeyChecking yes
      TcpKeepAlive no
      IdentityFile ~/.ssh/identity
@@ -131,15 +130,15 @@ typedef enum {
 	oHost, oMatch, oInclude,
 	oForwardAgent, oForwardX11, oForwardX11Trusted, oForwardX11Timeout,
 	oGatewayPorts, oExitOnForwardFailure,
-	oPasswordAuthentication, oRSAAuthentication,
+	oPasswordAuthentication,
 	oChallengeResponseAuthentication, oXAuthLocation,
-	oIdentityFile, oHostname, oPort, oCipher, oRemoteForward, oLocalForward,
+	oIdentityFile, oHostname, oPort, oRemoteForward, oLocalForward,
 	oCertificateFile, oAddKeysToAgent, oIdentityAgent,
-	oUser, oEscapeChar, oRhostsRSAAuthentication, oProxyCommand,
+	oUser, oEscapeChar, oProxyCommand,
 	oGlobalKnownHostsFile, oUserKnownHostsFile, oConnectionAttempts,
 	oBatchMode, oCheckHostIP, oStrictHostKeyChecking, oCompression,
-	oCompressionLevel, oTCPKeepAlive, oNumberOfPasswordPrompts,
-	oUsePrivilegedPort, oLogFacility, oLogLevel, oCiphers, oMacs,
+	oTCPKeepAlive, oNumberOfPasswordPrompts,
+	oLogFacility, oLogLevel, oCiphers, oMacs,
 	oPubkeyAuthentication,
 	oKbdInteractiveAuthentication, oKbdInteractiveDevices, oHostKeyAlias,
 	oDynamicForward, oPreferredAuthentications, oHostbasedAuthentication,
@@ -159,6 +158,7 @@ typedef enum {
 	oStreamLocalBindMask, oStreamLocalBindUnlink, oRevokedHostKeys,
 	oFingerprintHash, oUpdateHostkeys, oHostbasedKeyTypes,
 	oPubkeyAcceptedKeyTypes, oCASignatureAlgorithms, oProxyJump,
+	oSecurityKeyProvider,
 	oIgnore, oIgnoredUnknownOption, oDeprecated, oUnsupported
 } OpCodes;
 
@@ -183,6 +183,9 @@ static struct {
 	{ "afstokenpassing", oUnsupported },
 	{ "kerberosauthentication", oUnsupported },
 	{ "kerberostgtpassing", oUnsupported },
+	{ "rsaauthentication", oUnsupported },
+	{ "rhostsrsaauthentication", oUnsupported },
+	{ "compressionlevel", oUnsupported },
 
 	/* Sometimes-unsupported options */
 #if defined(GSSAPI)
@@ -199,9 +202,6 @@ static struct {
 	{ "smartcarddevice", oUnsupported },
 	{ "pkcs11provider", oUnsupported },
 #endif
-	{ "rsaauthentication", oUnsupported },
-	{ "rhostsrsaauthentication", oUnsupported },
-	{ "compressionlevel", oUnsupported },
 
 	{ "forwardagent", oForwardAgent },
 	{ "forwardx11", oForwardX11 },
@@ -295,6 +295,7 @@ static struct {
 	{ "pubkeyacceptedkeytypes", oPubkeyAcceptedKeyTypes },
 	{ "ignoreunknown", oIgnoreUnknown },
 	{ "proxyjump", oProxyJump },
+	{ "securitykeyprovider", oSecurityKeyProvider },
 
 	{ NULL, oBadOption }
 };
@@ -1131,6 +1132,10 @@ parse_char_array:
 		charptr = &options->pkcs11_provider;
 		goto parse_string;
 
+	case oSecurityKeyProvider:
+		charptr = &options->sk_provider;
+		goto parse_string;
+
 	case oProxyCommand:
 		charptr = &options->proxy_command;
 		/* Ignore ProxyCommand if ProxyJump already specified */
@@ -1538,12 +1543,12 @@ parse_keytypes:
 				    "files",filename, linenum, arg2);
 				free(arg2);
 				continue;
-			} else if (r != 0 || gl.gl_pathc < 0)
+			} else if (r != 0)
 				fatal("%.200s line %d: glob failed for %s.",
 				    filename, linenum, arg2);
 			free(arg2);
 			oactive = *activep;
-			for (i = 0; i < (u_int)gl.gl_pathc; i++) {
+			for (i = 0; i < gl.gl_pathc; i++) {
 				debug3("%.200s line %d: Including file %s "
 				    "depth %d%s", filename, linenum,
 				    gl.gl_pathv[i], depth,
@@ -1891,6 +1896,7 @@ initialize_options(Options * options)
 	options->bind_address = NULL;
 	options->bind_interface = NULL;
 	options->pkcs11_provider = NULL;
+	options->sk_provider = NULL;
 	options->enable_ssh_keysign = - 1;
 	options->no_host_authentication_for_localhost = - 1;
 	options->identities_only = - 1;
@@ -2028,7 +2034,11 @@ fill_default_options(Options * options)
 		add_identity_file(options, "~/", _PATH_SSH_CLIENT_ID_DSA, 0);
 		add_identity_file(options, "~/", _PATH_SSH_CLIENT_ID_ECDSA, 0);
 		add_identity_file(options, "~/",
+		    _PATH_SSH_CLIENT_ID_ECDSA_SK, 0);
+		add_identity_file(options, "~/",
 		    _PATH_SSH_CLIENT_ID_ED25519, 0);
+		add_identity_file(options, "~/",
+		    _PATH_SSH_CLIENT_ID_ED25519_SK, 0);
 		add_identity_file(options, "~/", _PATH_SSH_CLIENT_ID_XMSS, 0);
 	}
 	if (options->escape_char == -1)
@@ -2101,6 +2111,8 @@ fill_default_options(Options * options)
 		options->fingerprint_hash = SSH_FP_HASH_DEFAULT;
 	if (options->update_hostkeys == -1)
 		options->update_hostkeys = 0;
+	if (options->sk_provider == NULL)
+		options->sk_provider = xstrdup("internal");
 
 	/* Expand KEX name lists */
 	all_cipher = cipher_alg_list(',', 0);
@@ -2140,6 +2152,7 @@ fill_default_options(Options * options)
 	CLEAR_ON_NONE(options->control_path);
 	CLEAR_ON_NONE(options->revoked_host_keys);
 	CLEAR_ON_NONE(options->pkcs11_provider);
+	CLEAR_ON_NONE(options->sk_provider);
 	if (options->jump_host != NULL &&
 	    strcmp(options->jump_host, "none") == 0 &&
 	    options->jump_port == 0 && options->jump_user == NULL) {
@@ -2656,6 +2669,7 @@ dump_client_config(Options *o, const char *host)
 #ifdef ENABLE_PKCS11
 	dump_cfg_string(oPKCS11Provider, o->pkcs11_provider);
 #endif
+	dump_cfg_string(oSecurityKeyProvider, o->sk_provider);
 	dump_cfg_string(oPreferredAuthentications, o->preferred_authentications);
 	dump_cfg_string(oPubkeyAcceptedKeyTypes, o->pubkey_key_types);
 	dump_cfg_string(oRevokedHostKeys, o->revoked_host_keys);

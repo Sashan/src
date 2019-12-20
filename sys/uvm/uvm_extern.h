@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_extern.h,v 1.148 2019/07/01 21:13:03 mpi Exp $	*/
+/*	$OpenBSD: uvm_extern.h,v 1.152 2019/12/12 11:12:36 mpi Exp $	*/
 /*	$NetBSD: uvm_extern.h,v 1.57 2001/03/09 01:02:12 chs Exp $	*/
 
 /*
@@ -65,9 +65,6 @@ typedef int vm_fault_t;
 typedef int vm_inherit_t;	/* XXX: inheritance codes */
 typedef off_t voff_t;		/* XXX: offset within a uvm_object */
 
-union vm_map_object;
-typedef union vm_map_object vm_map_object_t;
-
 struct vm_map_entry;
 typedef struct vm_map_entry *vm_map_entry_t;
 
@@ -114,6 +111,7 @@ typedef int		vm_prot_t;
 #define UVM_FLAG_STACK   0x2000000 /* page may contain a stack */
 #define UVM_FLAG_WC      0x4000000 /* write combining */
 #define UVM_FLAG_CONCEAL 0x8000000 /* omit from dumps */
+#define UVM_FLAG_SYSCALL 0x10000000 /* system calls allowed */
 
 /* macros to extract info */
 #define UVM_PROTECTION(X)	((X) & PROT_MASK)
@@ -424,8 +422,6 @@ int			uvm_sysctl(int *, u_int, void *, size_t *,
 			    void *, size_t, struct proc *);
 struct vm_page		*uvm_pagealloc(struct uvm_object *,
 			    voff_t, struct vm_anon *, int);
-vaddr_t			uvm_pagealloc_contig(vaddr_t, vaddr_t,
-			    vaddr_t, vaddr_t);
 int			uvm_pagealloc_multi(struct uvm_object *, voff_t,
     			    vsize_t, int);
 void			uvm_pagerealloc(struct vm_page *, 
@@ -455,7 +451,6 @@ int			uvm_coredump_walkmap(struct proc *_p,
 			    uvm_coredump_setup_cb *_setup,
 			    uvm_coredump_walk_cb *_walk, void *_cookie);
 void			uvm_grow(struct proc *, vaddr_t);
-void			uvm_deallocate(vm_map_t, vaddr_t, vsize_t);
 struct uvm_object	*uvn_attach(struct vnode *, vm_prot_t);
 void			uvm_pagezero_thread(void *);
 void			kmeminit_nkmempages(void);

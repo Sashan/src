@@ -1,4 +1,4 @@
-/*	$OpenBSD: db_trace.c,v 1.44 2019/10/26 05:44:59 guenther Exp $	*/
+/*	$OpenBSD: db_trace.c,v 1.47 2019/11/10 10:03:33 mpi Exp $	*/
 /*	$NetBSD: db_trace.c,v 1.1 2003/04/26 18:39:27 fvdl Exp $	*/
 
 /*
@@ -84,15 +84,15 @@ const unsigned long *db_reg_args[6] = {
 };
 
 void
-db_stack_trace_print(db_expr_t addr, boolean_t have_addr, db_expr_t count,
+db_stack_trace_print(db_expr_t addr, int have_addr, db_expr_t count,
     char *modif, int (*pr)(const char *, ...))
 {
 	struct callframe *frame, *lastframe;
 	unsigned long	*argp, *arg0;
-	db_addr_t	callpc;
+	vaddr_t		callpc;
 	unsigned int	cr4save = CR4_SMEP|CR4_SMAP;
-	boolean_t	kernel_only = TRUE;
-	boolean_t	trace_proc = FALSE;
+	int		kernel_only = 1;
+	int		trace_proc = 0;
 	struct proc	*p;
 
 	{
@@ -101,9 +101,9 @@ db_stack_trace_print(db_expr_t addr, boolean_t have_addr, db_expr_t count,
 
 		while ((c = *cp++) != 0) {
 			if (c == 'p')
-				trace_proc = TRUE;
+				trace_proc = 1;
 			if (c == 'u')
-				kernel_only = FALSE;
+				kernel_only = 0;
 		}
 	}
 
@@ -121,16 +121,16 @@ db_stack_trace_print(db_expr_t addr, boolean_t have_addr, db_expr_t count,
 
 	if (!have_addr) {
 		frame = (struct callframe *)ddb_regs.tf_rbp;
-		callpc = (db_addr_t)ddb_regs.tf_rip;
+		callpc = (vaddr_t)ddb_regs.tf_rip;
 	} else if (trace_proc) {
 		frame = (struct callframe *)p->p_addr->u_pcb.pcb_rbp;
-		callpc = (db_addr_t)
-		    db_get_value((db_addr_t)&frame->f_retaddr, 8, FALSE);
+		callpc = (vaddr_t)
+		    db_get_value((vaddr_t)&frame->f_retaddr, 8, 0);
 		frame = (struct callframe *)frame->f_frame;
 	} else {
 		frame = (struct callframe *)addr;
-		callpc = (db_addr_t)
-		    db_get_value((db_addr_t)&frame->f_retaddr, 8, FALSE);
+		callpc = (vaddr_t)
+		    db_get_value((vaddr_t)&frame->f_retaddr, 8, 0);
 		frame = (struct callframe *)frame->f_frame;
 	}
 
@@ -152,7 +152,7 @@ db_stack_trace_print(db_expr_t addr, boolean_t have_addr, db_expr_t count,
 
 		if (lastframe == 0 && sym == NULL) {
 			/* Symbol not found, peek at code */
-			unsigned long instr = db_get_value(callpc, 8, FALSE);
+			unsigned long instr = db_get_value(callpc, 8, 0);
 
 			offset = 1;
 			if (instr == 0xe5894855 ||
@@ -187,8 +187,8 @@ db_stack_trace_print(db_expr_t addr, boolean_t have_addr, db_expr_t count,
 			argp = (unsigned long *)frame;
 			for (i = narg; i > 0; i--) {
 				argp--;
-				(*pr)("%lx", db_get_value((db_addr_t)argp,
-				    sizeof(*argp), FALSE));
+				(*pr)("%lx", db_get_value((vaddr_t)argp,
+				    sizeof(*argp), 0));
 				if (--narg != 0)
 					(*pr)(",");
 			}
@@ -197,8 +197,8 @@ db_stack_trace_print(db_expr_t addr, boolean_t have_addr, db_expr_t count,
 		}
 
 		for (argp = arg0; narg > 0; ) {
-			(*pr)("%lx", db_get_value((db_addr_t)argp,
-			    sizeof(*argp), FALSE));
+			(*pr)("%lx", db_get_value((vaddr_t)argp,
+			    sizeof(*argp), 0));
 			argp++;
 			if (--narg != 0)
 				(*pr)(",");
@@ -210,17 +210,17 @@ db_stack_trace_print(db_expr_t addr, boolean_t have_addr, db_expr_t count,
 		if (lastframe == 0 && offset == 0 && !have_addr) {
 			/* Frame really belongs to next callpc */
 			lastframe = (struct callframe *)(ddb_regs.tf_rsp-8);
-			callpc = (db_addr_t)
-				 db_get_value((db_addr_t)&lastframe->f_retaddr,
-				    8, FALSE);
+			callpc = (vaddr_t)
+				 db_get_value((vaddr_t)&lastframe->f_retaddr,
+				    8, 0);
 			continue;
 		}
 
 		lastframe = frame;
-		callpc = (db_addr_t)db_get_value(
-		    (db_addr_t)&frame->f_retaddr, 8, FALSE);
+		callpc = (vaddr_t)db_get_value(
+		    (vaddr_t)&frame->f_retaddr, 8, 0);
 		frame = (struct callframe *)db_get_value(
-		    (db_addr_t)&frame->f_frame, 8, FALSE);
+		    (vaddr_t)&frame->f_frame, 8, 0);
 
 		if (frame == 0) {
 			/* end of chain */
@@ -281,7 +281,7 @@ db_get_pc(struct trapframe *tf)
 {
 	struct callframe *cf = (struct callframe *)(tf->tf_rsp - sizeof(long));
 
-	return db_get_value((db_addr_t)&cf->f_retaddr, sizeof(long), 0);
+	return db_get_value((vaddr_t)&cf->f_retaddr, sizeof(long), 0);
 }
 
 vaddr_t

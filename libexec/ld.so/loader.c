@@ -1,4 +1,4 @@
-/*	$OpenBSD: loader.c,v 1.187 2019/10/04 17:42:16 guenther Exp $ */
+/*	$OpenBSD: loader.c,v 1.190 2019/12/17 03:16:07 guenther Exp $ */
 
 /*
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
@@ -265,41 +265,32 @@ _dl_setup_env(const char *argv0, char **envp)
 	static char progname_storage[NAME_MAX+1] = "";
 
 	/*
-	 * Get paths to various things we are going to use.
-	 */
-	_dl_debug = _dl_getenv("LD_DEBUG", envp) != NULL;
-	_dl_libpath = _dl_split_path(_dl_getenv("LD_LIBRARY_PATH", envp));
-	_dl_preload = _dl_getenv("LD_PRELOAD", envp);
-	_dl_bindnow = _dl_getenv("LD_BIND_NOW", envp) != NULL;
-	_dl_traceld = _dl_getenv("LD_TRACE_LOADED_OBJECTS", envp) != NULL;
-	_dl_tracefmt1 = _dl_getenv("LD_TRACE_LOADED_OBJECTS_FMT1", envp);
-	_dl_tracefmt2 = _dl_getenv("LD_TRACE_LOADED_OBJECTS_FMT2", envp);
-	_dl_traceprog = _dl_getenv("LD_TRACE_LOADED_OBJECTS_PROGNAME", envp);
-
-	/*
 	 * Don't allow someone to change the search paths if he runs
 	 * a suid program without credentials high enough.
 	 */
 	_dl_trust = !_dl_issetugid();
 	if (!_dl_trust) {	/* Zap paths if s[ug]id... */
-		if (_dl_libpath) {
-			_dl_free_path(_dl_libpath);
-			_dl_libpath = NULL;
-			_dl_unsetenv("LD_LIBRARY_PATH", envp);
-		}
-		if (_dl_preload) {
-			_dl_preload = NULL;
-			_dl_unsetenv("LD_PRELOAD", envp);
-		}
-		if (_dl_bindnow) {
-			_dl_bindnow = 0;
-			_dl_unsetenv("LD_BIND_NOW", envp);
-		}
-		if (_dl_debug) {
-			_dl_debug = 0;
-			_dl_unsetenv("LD_DEBUG", envp);
-		}
+		_dl_unsetenv("LD_DEBUG", envp);
+		_dl_unsetenv("LD_LIBRARY_PATH", envp);
+		_dl_unsetenv("LD_PRELOAD", envp);
+		_dl_unsetenv("LD_BIND_NOW", envp);
+	} else {
+		/*
+		 * Get paths to various things we are going to use.
+		 */
+		_dl_debug = _dl_getenv("LD_DEBUG", envp) != NULL;
+		_dl_libpath = _dl_split_path(_dl_getenv("LD_LIBRARY_PATH",
+		    envp));
+		_dl_preload = _dl_getenv("LD_PRELOAD", envp);
+		_dl_bindnow = _dl_getenv("LD_BIND_NOW", envp) != NULL;
 	}
+
+	/* these are usable even in setugid processes */
+	_dl_traceld = _dl_getenv("LD_TRACE_LOADED_OBJECTS", envp) != NULL;
+	_dl_tracefmt1 = _dl_getenv("LD_TRACE_LOADED_OBJECTS_FMT1", envp);
+	_dl_tracefmt2 = _dl_getenv("LD_TRACE_LOADED_OBJECTS_FMT2", envp);
+	_dl_traceprog = _dl_getenv("LD_TRACE_LOADED_OBJECTS_PROGNAME", envp);
+
 	environ = envp;
 
 	_dl_trace_setup(envp);
@@ -718,8 +709,18 @@ _dl_rtld(elf_object_t *object)
 	fails =_dl_md_reloc(object, DT_REL, DT_RELSZ);
 	fails += _dl_md_reloc(object, DT_RELA, DT_RELASZ);
 	reprotect_if_textrel(object);
-	fails += _dl_md_reloc_got(object, !(_dl_bindnow ||
-	    object->obj_flags & DF_1_NOW));
+
+	/*
+	 * We do lazy resolution by default, doing eager resolution if
+	 *  - the object requests it with -znow, OR
+	 *  - LD_BIND_NOW is set and this object isn't being ltraced
+	 *
+	 * Note that -znow disables ltrace for the object: on at least
+	 * amd64 'ld' doesn't generate the trampoline for lazy relocation
+	 * when -znow is used.
+	 */
+	fails += _dl_md_reloc_got(object, !(object->obj_flags & DF_1_NOW) &&
+	    !(_dl_bindnow && !object->traced));
 
 	/*
 	 * Look for W&X segments and make them read-only.

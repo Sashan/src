@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile.inc,v 1.16 2019/10/25 00:40:56 mortimer Exp $
+# $OpenBSD: Makefile.inc,v 1.18 2019/11/26 10:58:23 sthen Exp $
 
 LLVM_SRCS?=	${.CURDIR}/../../../llvm
 

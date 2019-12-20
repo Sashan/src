@@ -1,4 +1,4 @@
-/* $OpenBSD: mc146818.c,v 1.19 2019/05/27 19:21:43 jasper Exp $ */
+/* $OpenBSD: mc146818.c,v 1.21 2019/11/30 00:51:29 mlarkin Exp $ */
 /*
  * Copyright (c) 2016 Mike Larkin <mlarkin@openbsd.org>
  *

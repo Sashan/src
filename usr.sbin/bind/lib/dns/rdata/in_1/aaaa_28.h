@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1999-2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -18,9 +17,9 @@
 #ifndef IN_1_AAAA_28_H
 #define IN_1_AAAA_28_H 1
 
-/* $ISC: aaaa_28.h,v 1.17.18.2 2005/04/29 00:16:42 marka Exp $ */
+/* $Id: aaaa_28.h,v 1.3 2019/12/17 01:46:34 sthen Exp $ */
 
-/*! 
+/*!
  *  \brief Per RFC1886 */
 
 typedef struct dns_rdata_in_aaaa {

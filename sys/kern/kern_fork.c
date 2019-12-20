@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_fork.c,v 1.216 2019/10/22 21:19:22 cheloha Exp $	*/
+/*	$OpenBSD: kern_fork.c,v 1.219 2019/12/19 17:40:11 mpi Exp $	*/
 /*	$NetBSD: kern_fork.c,v 1.29 1996/02/09 18:59:34 christos Exp $	*/
 
 /*
@@ -64,8 +64,6 @@
 
 #include <uvm/uvm.h>
 #include <machine/tcb.h>
-
-#include "kcov.h"
 
 int	nprocesses = 1;		/* process 0 */
 int	nthreads = 1;		/* proc 0 */
@@ -151,7 +149,6 @@ thread_new(struct proc *parent, vaddr_t uaddr)
 	p = pool_get(&proc_pool, PR_WAITOK);
 	p->p_stat = SIDL;			/* protect against others */
 	p->p_flag = 0;
-	p->p_limit = NULL;
 
 	/*
 	 * Make a proc table entry for the new process.
@@ -169,14 +166,6 @@ thread_new(struct proc *parent, vaddr_t uaddr)
 	 * Initialize the timeouts.
 	 */
 	timeout_set(&p->p_sleep_to, endtsleep, p);
-
-#ifdef WITNESS
-	p->p_sleeplocks = NULL;
-#endif
-
-#if NKCOV > 0
-	p->p_kd = NULL;
-#endif
 
 	return p;
 }
@@ -502,7 +491,7 @@ fork1(struct proc *curp, int flags, void (*func)(void *), void *arg,
 	 */
 	if (flags & FORK_PPWAIT)
 		while (curpr->ps_flags & PS_ISPWAIT)
-			tsleep(curpr, PWAIT, "ppwait", 0);
+			tsleep_nsec(curpr, PWAIT, "ppwait", INFSLP);
 
 	/*
 	 * If we're tracing the child, alert the parent too.

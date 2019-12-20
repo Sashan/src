@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2005, 2007  Internet Systems Consortium, Inc. ("ISC")
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: atomic.h,v 1.1.6.6 2007/08/28 07:20:06 tbox Exp $ */
+/* $Id: atomic.h,v 1.4 2019/12/18 20:33:49 sthen Exp $ */
 
 #ifndef ISC_ATOMIC_H
 #define ISC_ATOMIC_H 1
@@ -42,32 +42,7 @@
  * case.
  */
 
-#if defined(_AIX)
-
-#include <sys/atomic_op.h>
-
-#define isc_atomic_xadd(p, v) fetch_and_add(p, v)
-#define isc_atomic_store(p, v) _clear_lock(p, v)
-
-#ifdef __GNUC__
-static inline int
-#else
-static int
-#endif
-isc_atomic_cmpxchg(atomic_p p, int old, int new) {
-        int orig = old;
-
-#ifdef __GNUC__
-        asm("ics");
-#else
-         __isync();
-#endif
-        if (compare_and_swap(p, &orig, new))
-		return (old);
-        return (orig);
-}
-
-#elif defined(ISC_PLATFORM_USEGCCASM) || defined(ISC_PLATFORM_USEMACASM)
+#if   defined(ISC_PLATFORM_USEGCCASM) || defined(ISC_PLATFORM_USEMACASM)
 static inline isc_int32_t
 isc_atomic_xadd(isc_int32_t *p, isc_int32_t val) {
 	isc_int32_t orig;
@@ -76,17 +51,19 @@ isc_atomic_xadd(isc_int32_t *p, isc_int32_t val) {
 #ifdef ISC_PLATFORM_USEMACASM
 		"1:"
 		"lwarx r6, 0, %1\n"
-	    	"mr %0, r6\n"
+		"mr %0, r6\n"
 		"add r6, r6, %2\n"
 		"stwcx. r6, 0, %1\n"
-		"bne- 1b"
+		"bne- 1b\n"
+		"sync"
 #else
 		"1:"
 		"lwarx 6, 0, %1\n"
-	    	"mr %0, 6\n"
+		"mr %0, 6\n"
 		"add 6, 6, %2\n"
 		"stwcx. 6, 0, %1\n"
-		"bne- 1b"
+		"bne- 1b\n"
+		"sync"
 #endif
 		: "=&r"(orig)
 		: "r"(p), "r"(val)
@@ -104,13 +81,15 @@ isc_atomic_store(void *p, isc_int32_t val) {
 		"lwarx r6, 0, %0\n"
 		"lwz r6, %1\n"
 		"stwcx. r6, 0, %0\n"
-		"bne- 1b"
+		"bne- 1b\n"
+		"sync"
 #else
 		"1:"
 		"lwarx 6, 0, %0\n"
 		"lwz 6, %1\n"
 		"stwcx. 6, 0, %0\n"
-		"bne- 1b"
+		"bne- 1b\n"
+		"sync"
 #endif
 		:
 		: "r"(p), "m"(val)
@@ -132,7 +111,8 @@ isc_atomic_cmpxchg(isc_int32_t *p, isc_int32_t cmpval, isc_int32_t val) {
 		"mr r6, %3\n"
 		"stwcx. r6, 0, %1\n"
 		"bne- 1b\n"
-		"2:"
+		"2:\n"
+		"sync"
 #else
 		"1:"
 		"lwarx 6, 0, %1\n"
@@ -142,7 +122,8 @@ isc_atomic_cmpxchg(isc_int32_t *p, isc_int32_t cmpval, isc_int32_t val) {
 		"mr 6, %3\n"
 		"stwcx. 6, 0, %1\n"
 		"bne- 1b\n"
-		"2:"
+		"2:\n"
+		"sync"
 #endif
 		: "=&r" (orig)
 		: "r"(p), "r"(cmpval), "r"(val)

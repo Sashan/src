@@ -1,4 +1,4 @@
-/*	$OpenBSD: ieee80211_ioctl.c,v 1.75 2019/09/02 12:54:21 stsp Exp $	*/
+/*	$OpenBSD: ieee80211_ioctl.c,v 1.77 2019/11/11 18:07:21 stsp Exp $	*/
 /*	$NetBSD: ieee80211_ioctl.c,v 1.15 2004/05/06 02:58:16 dyoung Exp $	*/
 
 /*-
@@ -74,7 +74,8 @@ ieee80211_node2req(struct ieee80211com *ic, const struct ieee80211_node *ni,
 
 	/* Channel and rates */
 	nr->nr_channel = ieee80211_chan2ieee(ic, ni->ni_chan);
-	nr->nr_chan_flags = ni->ni_chan->ic_flags;
+	if (ni->ni_chan != IEEE80211_CHAN_ANYC)
+		nr->nr_chan_flags = ni->ni_chan->ic_flags;
 	if (ic->ic_curmode != IEEE80211_MODE_11N)
 		nr->nr_chan_flags &= ~IEEE80211_CHAN_HT;
 	nr->nr_nrates = ni->ni_rates.rs_nrates;
@@ -906,6 +907,8 @@ ieee80211_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			na->na_nodes++;
 			ni = RBT_NEXT(ieee80211_tree, ni);
 		}
+		if (suser(curproc) == 0)
+			ieee80211_begin_bgscan(ifp);
 		break;
 	case SIOCG80211FLAGS:
 		flags = ic->ic_userflags;

@@ -1,7 +1,7 @@
 /*
- * Copyright (C) 2004-2006  Internet Systems Consortium, Inc. ("ISC")
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: acache.c,v 1.3.2.16 2006/07/19 00:34:56 marka Exp $ */
+/* $Id: acache.c,v 1.3 2019/12/17 01:46:31 sthen Exp $ */
 
 #include <config.h>
 
@@ -24,12 +24,15 @@
 #include <isc/magic.h>
 #include <isc/mem.h>
 #include <isc/mutex.h>
+#include <isc/platform.h>
 #include <isc/random.h>
 #include <isc/refcount.h>
 #include <isc/rwlock.h>
+#include <isc/serial.h>
 #include <isc/task.h>
 #include <isc/time.h>
 #include <isc/timer.h>
+#include <isc/util.h>
 
 #include <dns/acache.h>
 #include <dns/db.h>
@@ -40,6 +43,10 @@
 #include <dns/rdataset.h>
 #include <dns/result.h>
 #include <dns/zone.h>
+
+#if defined(ISC_PLATFORM_HAVESTDATOMIC)
+#include <stdatomic.h>
+#endif
 
 #define ACACHE_MAGIC			ISC_MAGIC('A', 'C', 'H', 'E')
 #define DNS_ACACHE_VALID(acache)	ISC_MAGIC_VALID(acache, ACACHE_MAGIC)
@@ -72,13 +79,18 @@
  * (XXX simply derived from definitions in cache.c  There may be better
  *  constants here.)
  */
-#define DNS_ACACHE_MINSIZE 		2097152	/* Bytes.  2097152 = 2 MB */
-#define DNS_ACACHE_CLEANERINCREMENT	1000	/* Number of entries. */
+#define DNS_ACACHE_MINSIZE 		2097152U /* Bytes.  2097152 = 2 MB */
+#define DNS_ACACHE_CLEANERINCREMENT	1000	 /* Number of entries. */
 
-#define DEFAULT_ACACHE_ENTRY_LOCK_COUNT	1009	/*%< Should be prime. */
+#define DEFAULT_ACACHE_ENTRY_LOCK_COUNT	1009	 /*%< Should be prime. */
 
-#if defined(ISC_RWLOCK_USEATOMIC) && defined(ISC_PLATFORM_HAVEATOMICSTORE)
+#if defined(ISC_RWLOCK_USEATOMIC) &&					\
+	((defined(ISC_PLATFORM_HAVESTDATOMIC) && defined(ATOMIC_LONG_LOCK_FREE)) || \
+	 defined(ISC_PLATFORM_HAVEATOMICSTORE))
 #define ACACHE_USE_RWLOCK 1
+#if (defined(ISC_PLATFORM_HAVESTDATOMIC) && defined(ATOMIC_LONG_LOCK_FREE))
+#define ACACHE_HAVESTDATOMIC 1
+#endif
 #endif
 
 #ifdef ACACHE_USE_RWLOCK
@@ -87,8 +99,15 @@
 #define ACACHE_LOCK(l, t)	RWLOCK((l), (t))
 #define ACACHE_UNLOCK(l, t)	RWUNLOCK((l), (t))
 
+#ifdef ACACHE_HAVESTDATOMIC
+#define acache_storetime(entry, t) \
+	atomic_store_explicit(&(entry)->lastused, (t), \
+			      memory_order_relaxed);
+#else
 #define acache_storetime(entry, t) \
 	(isc_atomic_store((isc_int32_t *)&(entry)->lastused, (t)))
+#endif
+
 #else
 #define ACACHE_INITLOCK(l)	isc_mutex_init(l)
 #define ACACHE_DESTROYLOCK(l)	DESTROYLOCK(l)
@@ -137,7 +156,7 @@ struct acache_cleaner {
 						      in seconds. */
 
 	isc_stdtime_t		last_cleanup_time; /* The time when the last
-      						      cleanup task completed */
+						      cleanup task completed */
 
 	isc_timer_t 		*cleaning_timer;
 	isc_event_t		*resched_event;	/* Sent by cleaner task to
@@ -234,7 +253,11 @@ struct dns_acacheentry {
 	void 			*cbarg;
 
 	/* Timestamp of the last time this entry is referred to */
+#ifdef ACACHE_HAVESTDATOMIC
+	atomic_uint_fast32_t	lastused;
+#else
 	isc_stdtime32_t		lastused;
+#endif
 };
 
 /*
@@ -347,11 +370,11 @@ shutdown_buckets(dns_acache_t *acache) {
 			INSIST(ISC_LIST_EMPTY(dbent->originlist) &&
 			       ISC_LIST_EMPTY(dbent->referlist));
 			ISC_LIST_UNLINK(acache->dbbucket[i], dbent, link);
-						
+
 			dns_db_detach(&dbent->db);
 
 			isc_mem_put(acache->mctx, dbent, sizeof(*dbent));
-				    
+
 			acache->dbentries--;
 		}
 	}
@@ -471,8 +494,7 @@ finddbent(dns_acache_t *acache, dns_db_t *db, dbentry_t **dbentryp) {
 	 * The caller must be holding the acache lock.
 	 */
 
-	bucket = isc_hash_calc((const unsigned char *)&db,
-			       sizeof(db), ISC_TRUE) % DBBUCKETS;
+	bucket = isc_hash_function(&db, sizeof(db), ISC_TRUE, NULL) % DBBUCKETS;
 
 	for (dbentry = ISC_LIST_HEAD(acache->dbbucket[bucket]);
 	     dbentry != NULL;
@@ -513,7 +535,7 @@ clear_entry(dns_acache_t *acache, dns_acacheentry_t *entry) {
 		if (dns_name_dynamic(entry->foundname))
 			dns_name_free(entry->foundname, acache->mctx);
 		isc_mem_put(acache->mctx, entry->foundname,
-			    sizeof(*entry->foundname)); 
+			    sizeof(*entry->foundname));
 		entry->foundname = NULL;
 	}
 
@@ -558,7 +580,7 @@ acache_cleaner_init(dns_acache_t *acache, isc_timermgr_t *timermgr,
 
 	if (timermgr != NULL) {
 		cleaner->acache->live_cleaners++;
-		
+
 		result = isc_task_onshutdown(acache->task,
 					     acache_cleaner_shutdown_action,
 					     acache);
@@ -677,7 +699,7 @@ end_cleaning(acache_cleaner_t *cleaner, isc_event_t *event) {
 	 */
 	if (isc_refcount_current(&cleaner->current_entry->references) == 1) {
 		INSIST(cleaner->current_entry->callback == NULL);
-		
+
 		if (ISC_LINK_LINKED(cleaner->current_entry, link)) {
 			ISC_LIST_UNLINK(acache->entries,
 					cleaner->current_entry, link);
@@ -701,7 +723,7 @@ end_cleaning(acache_cleaner_t *cleaner, isc_event_t *event) {
 		      acache->stats.queries,
 		      acache->stats.adds, acache->stats.deleted,
 		      acache->stats.cleaned, acache->stats.cleaner_runs,
-		      acache->stats.overmem, acache->stats.overmem_nocreates, 
+		      acache->stats.overmem, acache->stats.overmem_nocreates,
 		      acache->stats.nomem);
 	reset_stats(acache);
 
@@ -776,9 +798,13 @@ entry_stale(acache_cleaner_t *cleaner, dns_acacheentry_t *entry,
 	 * use and the cleaning interval.
 	 */
 	if (cleaner->overmem) {
-		unsigned int passed =
-			now32 - entry->lastused; /* <= interval */
+		unsigned int passed;
 		isc_uint32_t val;
+
+		if (isc_serial_ge(now32, entry->lastused))
+			passed = now32 - entry->lastused; /* <= interval */
+		else
+			passed = 0;
 
 		if (passed > interval / 2)
 			return (ISC_TRUE);
@@ -825,8 +851,10 @@ acache_incremental_cleaning_action(isc_task_t *task, isc_event_t *event) {
 
 	entry = cleaner->current_entry;
 	isc_stdtime_convert32(cleaner->last_cleanup_time, &last32);
-	INSIST(now32 > last32);
-	interval = now32 - last32;
+	if (isc_serial_ge(now32, last32))
+		interval = now32 - last32;
+	else
+		interval = 0;
 
 	while (n_entries-- > 0) {
 		isc_boolean_t is_stale = ISC_FALSE;
@@ -861,7 +889,11 @@ acache_incremental_cleaning_action(isc_task_t *task, isc_event_t *event) {
 				if (entry != NULL) {
 					/*
 					 * If we are still in the overmem
-					 * state, keep cleaning.
+					 * state, keep cleaning.  In case we
+					 * exit from the loop immediately after
+					 * this, reset next to the head entry
+					 * as we'll expect it will be never
+					 * NULL.
 					 */
 					isc_log_write(dns_lctx,
 						      DNS_LOGCATEGORY_DATABASE,
@@ -870,6 +902,7 @@ acache_incremental_cleaning_action(isc_task_t *task, isc_event_t *event) {
 						      "acache cleaner: "
 						      "still overmem, "
 						      "reset and try again");
+					next = entry;
 					continue;
 				}
 			}
@@ -888,7 +921,7 @@ acache_incremental_cleaning_action(isc_task_t *task, isc_event_t *event) {
 	 * be the starting point in the next clean-up, and reschedule another
 	 * batch.  If it fails, just try to continue anyway.
 	 */
-	INSIST(next != NULL && next != cleaner->current_entry);
+	INSIST(next != NULL);
 	dns_acache_detachentry(&cleaner->current_entry);
 	dns_acache_attachentry(next, &cleaner->current_entry);
 
@@ -913,7 +946,7 @@ static void
 acache_overmem_cleaning_action(isc_task_t *task, isc_event_t *event) {
 	acache_cleaner_t *cleaner = event->ev_arg;
 	isc_boolean_t want_cleaning = ISC_FALSE;
-	
+
 	UNUSED(task);
 
 	INSIST(event->ev_type == DNS_EVENT_ACACHEOVERMEM);
@@ -965,10 +998,14 @@ water(void *arg, int mark) {
 
 	LOCK(&acache->cleaner.lock);
 
-	acache->cleaner.overmem = overmem;
+	if (acache->cleaner.overmem != overmem) {
+		acache->cleaner.overmem = overmem;
 
-	if (acache->cleaner.overmem_event != NULL)
-		isc_task_send(acache->task, &acache->cleaner.overmem_event);
+		if (acache->cleaner.overmem_event != NULL)
+			isc_task_send(acache->task,
+				      &acache->cleaner.overmem_event);
+		isc_mem_waterack(acache->mctx, mark);
+	}
 
 	UNLOCK(&acache->cleaner.lock);
 }
@@ -1102,7 +1139,7 @@ dns_acache_create(dns_acache_t **acachep, isc_mem_t *mctx,
 	}
 
 	acache->live_cleaners = 0;
-	result = acache_cleaner_init(acache, timermgr, &acache->cleaner); 
+	result = acache_cleaner_init(acache, timermgr, &acache->cleaner);
 	if (result != ISC_R_SUCCESS)
 		goto cleanup;
 
@@ -1177,7 +1214,7 @@ dns_acache_detach(dns_acache_t **acachep) {
 		isc_task_shutdown(acache->task);
 		should_free = ISC_FALSE;
 	}
-	
+
 	if (should_free)
 		destroy(acache);
 }
@@ -1248,8 +1285,7 @@ dns_acache_setdb(dns_acache_t *acache, dns_db_t *db) {
 	dbentry->db = NULL;
 	dns_db_attach(db, &dbentry->db);
 
-	bucket = isc_hash_calc((const unsigned char *)&db,
-			       sizeof(db), ISC_TRUE) % DBBUCKETS;
+	bucket = isc_hash_function(&db, sizeof(db), ISC_TRUE, NULL) % DBBUCKETS;
 
 	ISC_LIST_APPEND(acache->dbbucket[bucket], dbentry, link);
 
@@ -1337,8 +1373,8 @@ dns_acache_putdb(dns_acache_t *acache, dns_db_t *db) {
 	INSIST(ISC_LIST_EMPTY(dbentry->originlist) &&
 	       ISC_LIST_EMPTY(dbentry->referlist));
 
-	bucket = isc_hash_calc((const unsigned char *)&db,
-			       sizeof(db), ISC_TRUE) % DBBUCKETS;
+	bucket = isc_hash_function(&db, sizeof(db), ISC_TRUE, NULL) % DBBUCKETS;
+
 	ISC_LIST_UNLINK(acache->dbbucket[bucket], dbentry, link);
 	dns_db_detach(&dbentry->db);
 
@@ -1361,19 +1397,20 @@ dns_acache_createentry(dns_acache_t *acache, dns_db_t *origdb,
 	dns_acacheentry_t *newentry;
 	isc_result_t result;
 	isc_uint32_t r;
+	isc_stdtime_t tmptime;
 
 	REQUIRE(DNS_ACACHE_VALID(acache));
 	REQUIRE(entryp != NULL && *entryp == NULL);
 	REQUIRE(origdb != NULL);
 
-	/* 
-	 * Should we exceed our memory limit for some reason (for 
-	 * example, if the cleaner does not run aggressively enough), 
+	/*
+	 * Should we exceed our memory limit for some reason (for
+	 * example, if the cleaner does not run aggressively enough),
 	 * then we will not create additional entries.
 	 *
 	 * XXXSK: It might be better to lock the acache->cleaner->lock,
-	 * but locking may be an expensive bottleneck. If we misread 
-	 * the value, we will occasionally refuse to create a few 
+	 * but locking may be an expensive bottleneck. If we misread
+	 * the value, we will occasionally refuse to create a few
 	 * cache entries, or create a few that we should not. I do not
 	 * expect this to happen often, and it will not have very bad
 	 * effects when it does. So no lock for now.
@@ -1391,7 +1428,7 @@ dns_acache_createentry(dns_acache_t *acache, dns_db_t *origdb,
 
 	isc_random_get(&r);
 	newentry->locknum = r % DEFAULT_ACACHE_ENTRY_LOCK_COUNT;
-	
+
 	result = isc_refcount_init(&newentry->references, 1);
 	if (result != ISC_R_SUCCESS) {
 		isc_mem_put(acache->mctx, newentry, sizeof(*newentry));
@@ -1416,7 +1453,8 @@ dns_acache_createentry(dns_acache_t *acache, dns_db_t *origdb,
 	newentry->origdb = NULL;
 	dns_db_attach(origdb, &newentry->origdb);
 
-	isc_stdtime_get(&newentry->lastused);
+	isc_stdtime_get(&tmptime);
+	acache_storetime(newentry, tmptime);
 
 	newentry->magic = ACACHEENTRY_MAGIC;
 
@@ -1489,7 +1527,6 @@ dns_acache_getentry(dns_acacheentry_t *entry, dns_zone_t **zonep,
 			 * trick to get the latest counter from the original
 			 * header.
 			 */
-			dns_rdataset_init(ardataset);
 			dns_rdataset_clone(erdataset, ardataset);
 			ISC_LIST_APPEND(fname->list, ardataset, link);
 		}
@@ -1645,15 +1682,21 @@ dns_acache_setentry(dns_acache_t *acache, dns_acacheentry_t *entry,
 	return (result);
 }
 
-void
+isc_boolean_t
 dns_acache_cancelentry(dns_acacheentry_t *entry) {
-	dns_acache_t *acache = entry->acache;
+	dns_acache_t *acache;
+	isc_boolean_t callback_active;
 
 	REQUIRE(DNS_ACACHEENTRY_VALID(entry));
-	INSIST(DNS_ACACHE_VALID(acache));
+
+	acache = entry->acache;
+
+	INSIST(DNS_ACACHE_VALID(entry->acache));
 
 	LOCK(&acache->lock);
 	ACACHE_LOCK(&acache->entrylocks[entry->locknum], isc_rwlocktype_write);
+
+	callback_active = ISC_TF(entry->cbarg != NULL);
 
 	/*
 	 * Release dependencies stored in this entry as much as possible.
@@ -1670,6 +1713,8 @@ dns_acache_cancelentry(dns_acacheentry_t *entry) {
 	ACACHE_UNLOCK(&acache->entrylocks[entry->locknum],
 		      isc_rwlocktype_write);
 	UNLOCK(&acache->lock);
+
+	return (callback_active);
 }
 
 void
@@ -1738,7 +1783,7 @@ dns_acache_setcleaninginterval(dns_acache_t *acache, unsigned int t) {
 					 isc_timertype_ticker,
 					 NULL, &interval, ISC_FALSE);
 	}
-	if (result != ISC_R_SUCCESS)	
+	if (result != ISC_R_SUCCESS)
 		isc_log_write(dns_lctx, DNS_LOGCATEGORY_DATABASE,
 			      DNS_LOGMODULE_ACACHE, ISC_LOG_WARNING,
 			      "could not set acache cleaning interval: %s",
@@ -1758,19 +1803,18 @@ dns_acache_setcleaninginterval(dns_acache_t *acache, unsigned int t) {
  * function for more details about the logic.
  */
 void
-dns_acache_setcachesize(dns_acache_t *acache, isc_uint32_t size) {
-	isc_uint32_t lowater;
-	isc_uint32_t hiwater;
+dns_acache_setcachesize(dns_acache_t *acache, size_t size) {
+	size_t hiwater, lowater;
 
 	REQUIRE(DNS_ACACHE_VALID(acache));
 
-	if (size != 0 && size < DNS_ACACHE_MINSIZE)
+	if (size != 0U && size < DNS_ACACHE_MINSIZE)
 		size = DNS_ACACHE_MINSIZE;
 
 	hiwater = size - (size >> 3);
 	lowater = size - (size >> 2);
 
-	if (size == 0 || hiwater == 0 || lowater == 0)
+	if (size == 0U || hiwater == 0U || lowater == 0U)
 		isc_mem_setwater(acache->mctx, water, acache, 0, 0);
 	else
 		isc_mem_setwater(acache->mctx, water, acache,

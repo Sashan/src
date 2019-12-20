@@ -1,8 +1,7 @@
 /*
- * Copyright (C) 2004, 2005  Internet Systems Consortium, Inc. ("ISC")
- * Copyright (C) 1998-2001  Internet Software Consortium.
+ * Copyright (C) Internet Systems Consortium, Inc. ("ISC")
  *
- * Permission to use, copy, modify, and distribute this software for any
+ * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
@@ -15,12 +14,12 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $ISC: util.h,v 1.24.18.2 2005/04/29 00:17:04 marka Exp $ */
+/* $Id: util.h,v 1.3 2019/12/17 01:46:35 sthen Exp $ */
 
 #ifndef ISC_UTIL_H
 #define ISC_UTIL_H 1
 
-/*! \file util.h
+/*! \file isc/util.h
  * NOTE:
  *
  * This file is not to be included from any <isc/???.h> (or other) library
@@ -48,8 +47,15 @@
  */
 #define UNUSED(x)      (void)(x)
 
+/*%
+ * The opposite: silent warnings about stored values which are never read.
+ */
+#define POST(x)        (void)(x)
+
 #define ISC_MAX(a, b)  ((a) > (b) ? (a) : (b))
 #define ISC_MIN(a, b)  ((a) < (b) ? (a) : (b))
+
+#define ISC_CLAMP(v, x, y) ((v) < (x) ? (x) : ((v) > (y) ? (y) : (v)))
 
 /*%
  * Use this to remove the const qualifier of a variable to assign it to
@@ -198,6 +204,11 @@
 #define INSERTBEFORE(li, b, e, ln)	ISC_LIST_INSERTBEFORE(li, b, e, ln)
 #define INSERTAFTER(li, a, e, ln)	ISC_LIST_INSERTAFTER(li, a, e, ln)
 #define APPENDLIST(list1, list2, link)	ISC_LIST_APPENDLIST(list1, list2, link)
+
+/*%
+ * Performance
+ */
+#include <isc/likely.h>
 
 /*
  * Assertions

@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmctl.c,v 1.71 2019/09/07 09:11:14 tobhe Exp $	*/
+/*	$OpenBSD: vmctl.c,v 1.73 2019/12/15 14:36:59 kn Exp $	*/
 
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
@@ -716,6 +716,8 @@ vm_state(unsigned int mask)
 {
 	if (mask & VM_STATE_PAUSED)
 		return "paused";
+	else if (mask & VM_STATE_WAITING)
+		return "waiting";
 	else if (mask & VM_STATE_RUNNING)
 		return "running";
 	else if (mask & VM_STATE_SHUTDOWN)
@@ -766,8 +768,6 @@ print_vm_info(struct vmop_info_result *list, size_t ct)
 				(void)strlcpy(user, name, sizeof(user));
 			/* get group name */
 			if (vmi->vir_gid != -1) {
-				if (vmi->vir_uid == 0)
-					*user = '\0';
 				name = group_from_gid(vmi->vir_gid, 1);
 				if (name == NULL)
 					(void)snprintf(group, sizeof(group),

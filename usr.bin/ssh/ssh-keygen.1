@@ -1,4 +1,4 @@
-.\"	$OpenBSD: ssh-keygen.1,v 1.172 2019/10/22 08:50:35 jmc Exp $
+.\"	$OpenBSD: ssh-keygen.1,v 1.179 2019/11/30 07:07:59 jmc Exp $
 .\"
 .\" Author: Tatu Ylonen <ylo@cs.hut.fi>
 .\" Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -35,12 +35,12 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.Dd $Mdocdate: October 22 2019 $
+.Dd $Mdocdate: November 30 2019 $
 .Dt SSH-KEYGEN 1
 .Os
 .Sh NAME
 .Nm ssh-keygen
-.Nd authentication key generation, management and conversion
+.Nd OpenSSH authentication key utility
 .Sh SYNOPSIS
 .Nm ssh-keygen
 .Op Fl q
@@ -48,8 +48,10 @@
 .Op Fl C Ar comment
 .Op Fl f Ar output_keyfile
 .Op Fl m Ar format
+.Op Fl t Cm dsa | ecdsa | ecdsa-sk | ed25519 | ed25519-sk | rsa
 .Op Fl N Ar new_passphrase
-.Op Fl t Cm dsa | ecdsa | ed25519 | rsa
+.Op Fl w Ar provider
+.Op Fl x Ar flags
 .Nm ssh-keygen
 .Fl p
 .Op Fl f Ar keyfile
@@ -188,7 +190,9 @@ with public key authentication runs this once to create the authentication
 key in
 .Pa ~/.ssh/id_dsa ,
 .Pa ~/.ssh/id_ecdsa ,
-.Pa ~/.ssh/id_ed25519
+.Pa ~/.ssh/id_ecdsa_sk ,
+.Pa ~/.ssh/id_ed25519 ,
+.Pa ~/.ssh/id_ed25519_sk
 or
 .Pa ~/.ssh/id_rsa .
 Additionally, the system administrator may use this to generate host keys,
@@ -282,7 +286,7 @@ flag determines the key length by selecting from one of three elliptic
 curve sizes: 256, 384 or 521 bits.
 Attempting to use bit lengths other than these three values for ECDSA keys
 will fail.
-Ed25519 keys have a fixed length and the
+ECDSA-SK, Ed25519 and Ed25519-SK keys have a fixed length and the
 .Fl b
 flag will be ignored.
 .It Fl C Ar comment
@@ -530,6 +534,14 @@ by
 .It Ic permit-X11-forwarding
 Allows X11 forwarding.
 .Pp
+.It Ic no-touch-required
+Do not require signatures made using this key require demonstration
+of user presence (e.g. by having the user touch the key).
+This option only makes sense for the Security Key algorithms
+.Cm ecdsa-sk
+and
+.Cm ed25519-sk .
+.Pp
 .It Ic source-address Ns = Ns Ar address_list
 Restrict the source addresses from which the certificate is considered valid.
 The
@@ -583,12 +595,14 @@ section for details.
 Test DH group exchange candidate primes (generated using the
 .Fl G
 option) for safety.
-.It Fl t Cm dsa | ecdsa | ed25519 | rsa
+.It Fl t Cm dsa | ecdsa | ecdsa-sk | ed25519 | ed25519-sk | rsa
 Specifies the type of key to create.
 The possible values are
 .Dq dsa ,
 .Dq ecdsa ,
+.Dq ecdsa-sk ,
 .Dq ed25519 ,
+.Dq ed25519-sk ,
 or
 .Dq rsa .
 .Pp
@@ -658,6 +672,22 @@ options increase the verbosity.
 The maximum is 3.
 .It Fl W Ar generator
 Specify desired generator when testing candidate moduli for DH-GEX.
+.It Fl w Ar provider
+Specifies a path to a security key provider library that will be used when
+creating any security key-hosted keys, overriding the default of the
+internal support for USB HID keys.
+.It Fl x Ar flags
+Specifies the security key flags to use when enrolling a security key-hosted
+key.
+Flags may be specified by name or directly as a hexadecimal value.
+Only one named flag is supported at present:
+.Cm no-touch-required ,
+which indicates that the generated private key should not require touch
+events (user presence) when making signatures.
+Note that
+.Xr sshd 8
+will refuse such signatures by default, unless overridden via
+an authorized_keys option.
 .It Fl y
 This option will read a private
 OpenSSH format file and print an OpenSSH public key to stdout.
@@ -1020,14 +1050,22 @@ user1@example.com,user2@example.com ssh-rsa AAAAX1...
 # A key that is accepted only for file signing.
 user2@example.com namespaces="file" ssh-ed25519 AAA41...
 .Ed
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev SSH_SK_PROVIDER
+Specifies the path to a security key provider library used to interact with
+hardware security keys.
+.El
 .Sh FILES
 .Bl -tag -width Ds -compact
 .It Pa ~/.ssh/id_dsa
 .It Pa ~/.ssh/id_ecdsa
+.It Pa ~/.ssh/id_ecdsa_sk
 .It Pa ~/.ssh/id_ed25519
+.It Pa ~/.ssh/id_ed25519_sk
 .It Pa ~/.ssh/id_rsa
-Contains the DSA, ECDSA, Ed25519 or RSA
-authentication identity of the user.
+Contains the DSA, ECDSA, security key-hosted ECDSA, Ed25519,
+security key-hosted Ed25519 or RSA authentication identity of the user.
 This file should not be readable by anyone but the user.
 It is possible to
 specify a passphrase when generating the key; that passphrase will be
@@ -1040,10 +1078,12 @@ will read this file when a login attempt is made.
 .Pp
 .It Pa ~/.ssh/id_dsa.pub
 .It Pa ~/.ssh/id_ecdsa.pub
+.It Pa ~/.ssh/id_ecdsa_sk.pub
 .It Pa ~/.ssh/id_ed25519.pub
+.It Pa ~/.ssh/id_ed25519_sk.pub
 .It Pa ~/.ssh/id_rsa.pub
-Contains the DSA, ECDSA, Ed25519 or RSA
-public key for authentication.
+Contains the DSA, ECDSA, security key-hosted ECDSA, Ed25519,
+security key-hosted Ed25519 or RSA public key for authentication.
 The contents of this file should be added to
 .Pa ~/.ssh/authorized_keys
 on all machines

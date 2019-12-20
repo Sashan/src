@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwmreg.h,v 1.37 2019/10/28 18:11:10 stsp Exp $	*/
+/*	$OpenBSD: if_iwmreg.h,v 1.45 2019/11/26 07:37:50 patrick Exp $	*/
 
 /******************************************************************************
  *
@@ -183,7 +183,7 @@
 
 /* interrupt flags in INTA, set by uCode or hardware (e.g. dma),
  * acknowledged (reset) by host writing "1" to flagged bits. */
-#define IWM_CSR_INT_BIT_FH_RX	(1 << 31) /* Rx DMA, cmd responses, FH_INT[17:16] */
+#define IWM_CSR_INT_BIT_FH_RX	(1U << 31) /* Rx DMA, cmd responses, FH_INT[17:16] */
 #define IWM_CSR_INT_BIT_HW_ERR	(1 << 29) /* DMA hardware error FH_INT[31] */
 #define IWM_CSR_INT_BIT_RX_PERIODIC	(1 << 28) /* Rx periodic */
 #define IWM_CSR_INT_BIT_FH_TX	(1 << 27) /* Tx DMA FH_INT[1:0] */
@@ -206,7 +206,7 @@
 				 IWM_CSR_INT_BIT_RX_PERIODIC)
 
 /* interrupt flags in FH (flow handler) (PCI busmaster DMA) */
-#define IWM_CSR_FH_INT_BIT_ERR       (1 << 31) /* Error */
+#define IWM_CSR_FH_INT_BIT_ERR       (1U << 31) /* Error */
 #define IWM_CSR_FH_INT_BIT_HI_PRIOR  (1 << 30) /* High priority Rx, bypass coalescing */
 #define IWM_CSR_FH_INT_BIT_RX_CHNL1  (1 << 17) /* Rx channel 1 */
 #define IWM_CSR_FH_INT_BIT_RX_CHNL0  (1 << 16) /* Rx channel 0 */
@@ -279,7 +279,7 @@
 #define IWM_CSR_GP_CNTRL_REG_VAL_MAC_ACCESS_EN           (0x00000001)
 
 #define IWM_CSR_GP_CNTRL_REG_MSK_POWER_SAVE_TYPE         (0x07000000)
-#define IWM_CSR_GP_CNTRL_REG_FLAG_MAC_POWER_SAVE         (0x04000000)
+#define IWM_CSR_GP_CNTRL_REG_FLAG_RFKILL_WAKE_L1A_EN     (0x04000000)
 #define IWM_CSR_GP_CNTRL_REG_FLAG_HW_RF_KILL_SW          (0x08000000)
 
 
@@ -397,7 +397,7 @@
 #define IWM_CSR_DBG_HPET_MEM_REG_VAL	(0xFFFF0000)
 
 /* DRAM INT TABLE */
-#define IWM_CSR_DRAM_INT_TBL_ENABLE		(1 << 31)
+#define IWM_CSR_DRAM_INT_TBL_ENABLE		(1U << 31)
 #define IWM_CSR_DRAM_INIT_TBL_WRITE_POINTER	(1 << 28)
 #define IWM_CSR_DRAM_INIT_TBL_WRAP_CHECK	(1 << 27)
 
@@ -416,6 +416,111 @@
 #define IWM_FH_UCODE_LOAD_STATUS	0x1af0
 
 #define IWM_FH_MEM_TB_MAX_LENGTH	0x20000
+
+/* 9000 rx series registers */
+
+#define IWM_RFH_Q0_FRBDCB_BA_LSB 0xA08000 /* 64 bit address */
+#define IWM_RFH_Q_FRBDCB_BA_LSB(q) (IWM_RFH_Q0_FRBDCB_BA_LSB + (q) * 8)
+/* Write index table */
+#define IWM_RFH_Q0_FRBDCB_WIDX 0xA08080
+#define IWM_RFH_Q_FRBDCB_WIDX(q) (IWM_RFH_Q0_FRBDCB_WIDX + (q) * 4)
+/* Write index table - shadow registers */
+#define IWM_RFH_Q0_FRBDCB_WIDX_TRG 0x1C80
+#define IWM_RFH_Q_FRBDCB_WIDX_TRG(q) (IWM_RFH_Q0_FRBDCB_WIDX_TRG + (q) * 4)
+/* Read index table */
+#define IWM_RFH_Q0_FRBDCB_RIDX 0xA080C0
+#define IWM_RFH_Q_FRBDCB_RIDX(q) (IWM_RFH_Q0_FRBDCB_RIDX + (q) * 4)
+/* Used list table */
+#define IWM_RFH_Q0_URBDCB_BA_LSB 0xA08100 /* 64 bit address */
+#define IWM_RFH_Q_URBDCB_BA_LSB(q) (IWM_RFH_Q0_URBDCB_BA_LSB + (q) * 8)
+/* Write index table */
+#define IWM_RFH_Q0_URBDCB_WIDX 0xA08180
+#define IWM_RFH_Q_URBDCB_WIDX(q) (IWM_RFH_Q0_URBDCB_WIDX + (q) * 4)
+#define IWM_RFH_Q0_URBDCB_VAID 0xA081C0
+#define IWM_RFH_Q_URBDCB_VAID(q) (IWM_RFH_Q0_URBDCB_VAID + (q) * 4)
+/* stts */
+#define IWM_RFH_Q0_URBD_STTS_WPTR_LSB 0xA08200 /*64 bits address */
+#define IWM_RFH_Q_URBD_STTS_WPTR_LSB(q) (IWM_RFH_Q0_URBD_STTS_WPTR_LSB + (q) * 8)
+
+#define IWM_RFH_Q0_ORB_WPTR_LSB 0xA08280
+#define IWM_RFH_Q_ORB_WPTR_LSB(q) (IWM_RFH_Q0_ORB_WPTR_LSB + (q) * 8)
+#define IWM_RFH_RBDBUF_RBD0_LSB 0xA08300
+#define IWM_RFH_RBDBUF_RBD_LSB(q) (IWM_RFH_RBDBUF_RBD0_LSB + (q) * 8)
+
+/**
+ * RFH Status Register
+ *
+ * Bit fields:
+ *
+ * Bit 29: RBD_FETCH_IDLE
+ * This status flag is set by the RFH when there is no active RBD fetch from
+ * DRAM.
+ * Once the RFH RBD controller starts fetching (or when there is a pending
+ * RBD read response from DRAM), this flag is immediately turned off.
+ *
+ * Bit 30: SRAM_DMA_IDLE
+ * This status flag is set by the RFH when there is no active transaction from
+ * SRAM to DRAM.
+ * Once the SRAM to DRAM DMA is active, this flag is immediately turned off.
+ *
+ * Bit 31: RXF_DMA_IDLE
+ * This status flag is set by the RFH when there is no active transaction from
+ * RXF to DRAM.
+ * Once the RXF-to-DRAM DMA is active, this flag is immediately turned off.
+ */
+#define IWM_RFH_GEN_STATUS          0xA09808
+#define IWM_RFH_GEN_STATUS_GEN3     0xA07824
+#define IWM_RBD_FETCH_IDLE  (1 << 29)
+#define IWM_SRAM_DMA_IDLE   (1 << 30)
+#define IWM_RXF_DMA_IDLE    (1U << 31)
+
+/* DMA configuration */
+#define IWM_RFH_RXF_DMA_CFG         0xA09820
+#define IWM_RFH_RXF_DMA_CFG_GEN3    0xA07880
+/* RB size */
+#define IWM_RFH_RXF_DMA_RB_SIZE_MASK (0x000F0000) /* bits 16-19 */
+#define IWM_RFH_RXF_DMA_RB_SIZE_POS 16
+#define IWM_RFH_RXF_DMA_RB_SIZE_1K  (0x1 << IWM_RFH_RXF_DMA_RB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RB_SIZE_2K  (0x2 << IWM_RFH_RXF_DMA_RB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RB_SIZE_4K  (0x4 << IWM_RFH_RXF_DMA_RB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RB_SIZE_8K  (0x8 << IWM_RFH_RXF_DMA_RB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RB_SIZE_12K (0x9 << IWM_RFH_RXF_DMA_RB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RB_SIZE_16K (0xA << IWM_RFH_RXF_DMA_RB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RB_SIZE_20K (0xB << IWM_RFH_RXF_DMA_RB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RB_SIZE_24K (0xC << IWM_RFH_RXF_DMA_RB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RB_SIZE_28K (0xD << IWM_RFH_RXF_DMA_RB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RB_SIZE_32K (0xE << IWM_RFH_RXF_DMA_RB_SIZE_POS)
+/* RB Circular Buffer size:defines the table sizes in RBD units */
+#define IWM_RFH_RXF_DMA_RBDCB_SIZE_MASK (0x00F00000) /* bits 20-23 */
+#define IWM_RFH_RXF_DMA_RBDCB_SIZE_POS 20
+#define IWM_RFH_RXF_DMA_RBDCB_SIZE_8        (0x3 << IWM_RFH_RXF_DMA_RBDCB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RBDCB_SIZE_16       (0x4 << IWM_RFH_RXF_DMA_RBDCB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RBDCB_SIZE_32       (0x5 << IWM_RFH_RXF_DMA_RBDCB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RBDCB_SIZE_64       (0x7 << IWM_RFH_RXF_DMA_RBDCB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RBDCB_SIZE_128      (0x7 << IWM_RFH_RXF_DMA_RBDCB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RBDCB_SIZE_256      (0x8 << IWM_RFH_RXF_DMA_RBDCB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RBDCB_SIZE_512      (0x9 << IWM_RFH_RXF_DMA_RBDCB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RBDCB_SIZE_1024     (0xA << IWM_RFH_RXF_DMA_RBDCB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_RBDCB_SIZE_2048     (0xB << IWM_RFH_RXF_DMA_RBDCB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_MIN_RB_SIZE_MASK    (0x03000000) /* bit 24-25 */
+#define IWM_RFH_RXF_DMA_MIN_RB_SIZE_POS     24
+#define IWM_RFH_RXF_DMA_MIN_RB_4_8          (3 << IWM_RFH_RXF_DMA_MIN_RB_SIZE_POS)
+#define IWM_RFH_RXF_DMA_DROP_TOO_LARGE_MASK (0x04000000) /* bit 26 */
+#define IWM_RFH_RXF_DMA_SINGLE_FRAME_MASK   (0x20000000) /* bit 29 */
+#define IWM_RFH_DMA_EN_MASK                 (0xC0000000) /* bits 30-31*/
+#define IWM_RFH_DMA_EN_ENABLE_VAL           (1U << 31)
+
+#define IWM_RFH_RXF_RXQ_ACTIVE 0xA0980C
+
+#define IWM_RFH_GEN_CFG     0xA09800
+#define IWM_RFH_GEN_CFG_SERVICE_DMA_SNOOP   (1 << 0)
+#define IWM_RFH_GEN_CFG_RFH_DMA_SNOOP       (1 << 1)
+#define IWM_RFH_GEN_CFG_RB_CHUNK_SIZE_128   0x00000010
+#define IWM_RFH_GEN_CFG_RB_CHUNK_SIZE_64    0x00000000
+/* the driver assumes everywhere that the default RXQ is 0 */
+#define IWM_RFH_GEN_CFG_DEFAULT_RXQ_NUM     0xF00
+
+/* end of 9000 rx series registers */
 
 #define IWM_LMPM_SECURE_UCODE_LOAD_CPU1_HDR_ADDR	0x1e78
 #define IWM_LMPM_SECURE_UCODE_LOAD_CPU2_HDR_ADDR	0x1e7c
@@ -502,12 +607,22 @@
 #define IWM_AUX_MISC_MASTER1_SMPHR_STATUS	0xa20800
 #define IWM_RSA_ENABLE				0xa24b08
 #define IWM_PREG_AUX_BUS_WPROT_0		0xa04cc0
+#define IWM_PREG_PRPH_WPROT_9000		0xa04ce0
+#define IWM_PREG_PRPH_WPROT_22000		0xa04d00
 #define IWM_SB_CFG_OVERRIDE_ADDR		0xa26c78
 #define IWM_SB_CFG_OVERRIDE_ENABLE		0x8000
 #define IWM_SB_CFG_BASE_OVERRIDE		0xa20000
 #define IWM_SB_MODIFY_CFG_FLAG			0xa03088
 #define IWM_SB_CPU_1_STATUS			0xa01e30
 #define IWM_SB_CPU_2_STATUS			0Xa01e34
+
+#define IWM_UREG_CHICK				0xa05c00
+#define IWM_UREG_CHICK_MSI_ENABLE		(1 << 24)
+#define IWM_UREG_CHICK_MSIX_ENABLE		(1 << 25)
+
+#define IWM_HPM_DEBUG				0xa03440
+#define IWM_HPM_PERSISTENCE_BIT			(1 << 12)
+#define IWM_PREG_WFPM_ACCESS			(1 << 12)
 
 /* Used to enable DBGM */
 #define IWM_HBUS_TARG_TEST_REG	(IWM_HBUS_BASE+0x05c)
@@ -534,7 +649,7 @@
 #define IWM_HOST_INT_TIMEOUT_MAX	(0xFF)
 #define IWM_HOST_INT_TIMEOUT_DEF	(0x40)
 #define IWM_HOST_INT_TIMEOUT_MIN	(0x0)
-#define IWM_HOST_INT_OPER_MODE		(1 << 31)
+#define IWM_HOST_INT_OPER_MODE		(1U << 31)
 
 /*****************************************************************************
  *                        7000/3000 series SHR DTS addresses                 *
@@ -552,6 +667,77 @@
 #define IWM_DTS_DIODE_REG_FLAGS_VREFS_ID	0x00000003 /* bits [1:0] */
 #define IWM_DTS_DIODE_REG_FLAGS_PASS_ONCE_POS	7
 #define IWM_DTS_DIODE_REG_FLAGS_PASS_ONCE	0x00000080 /* bits [7:7] */
+
+/*****************************************************************************
+ *                        MSIX related registers                             *
+ *****************************************************************************/
+
+#define IWM_CSR_MSIX_BASE			(0x2000)
+#define IWM_CSR_MSIX_FH_INT_CAUSES_AD		(IWM_CSR_MSIX_BASE + 0x800)
+#define IWM_CSR_MSIX_FH_INT_MASK_AD		(IWM_CSR_MSIX_BASE + 0x804)
+#define IWM_CSR_MSIX_HW_INT_CAUSES_AD		(IWM_CSR_MSIX_BASE + 0x808)
+#define IWM_CSR_MSIX_HW_INT_MASK_AD		(IWM_CSR_MSIX_BASE + 0x80C)
+#define IWM_CSR_MSIX_AUTOMASK_ST_AD		(IWM_CSR_MSIX_BASE + 0x810)
+#define IWM_CSR_MSIX_RX_IVAR_AD_REG		(IWM_CSR_MSIX_BASE + 0x880)
+#define IWM_CSR_MSIX_IVAR_AD_REG		(IWM_CSR_MSIX_BASE + 0x890)
+#define IWM_CSR_MSIX_PENDING_PBA_AD		(IWM_CSR_MSIX_BASE + 0x1000)
+#define IWM_CSR_MSIX_RX_IVAR(cause)		(IWM_CSR_MSIX_RX_IVAR_AD_REG + (cause))
+#define IWM_CSR_MSIX_IVAR(cause)		(IWM_CSR_MSIX_IVAR_AD_REG + (cause))
+
+/*
+ * Causes for the FH register interrupts
+ */
+enum msix_fh_int_causes {
+	IWM_MSIX_FH_INT_CAUSES_Q0		= (1 << 0),
+	IWM_MSIX_FH_INT_CAUSES_Q1		= (1 << 1),
+	IWM_MSIX_FH_INT_CAUSES_D2S_CH0_NUM	= (1 << 16),
+	IWM_MSIX_FH_INT_CAUSES_D2S_CH1_NUM	= (1 << 17),
+	IWM_MSIX_FH_INT_CAUSES_S2D		= (1 << 19),
+	IWM_MSIX_FH_INT_CAUSES_FH_ERR		= (1 << 21),
+};
+
+/*
+ * Causes for the HW register interrupts
+ */
+enum msix_hw_int_causes {
+	IWM_MSIX_HW_INT_CAUSES_REG_ALIVE	= (1 << 0),
+	IWM_MSIX_HW_INT_CAUSES_REG_WAKEUP	= (1 << 1),
+	IWM_MSIX_HW_INT_CAUSES_REG_IPC		= (1 << 1),
+	IWM_MSIX_HW_INT_CAUSES_REG_IML		= (1 << 2),
+	IWM_MSIX_HW_INT_CAUSES_REG_SW_ERR_V2	= (1 << 5),
+	IWM_MSIX_HW_INT_CAUSES_REG_CT_KILL	= (1 << 6),
+	IWM_MSIX_HW_INT_CAUSES_REG_RF_KILL	= (1 << 7),
+	IWM_MSIX_HW_INT_CAUSES_REG_PERIODIC	= (1 << 8),
+	IWM_MSIX_HW_INT_CAUSES_REG_SW_ERR	= (1 << 25),
+	IWM_MSIX_HW_INT_CAUSES_REG_SCD		= (1 << 26),
+	IWM_MSIX_HW_INT_CAUSES_REG_FH_TX	= (1 << 27),
+	IWM_MSIX_HW_INT_CAUSES_REG_HW_ERR	= (1 << 29),
+	IWM_MSIX_HW_INT_CAUSES_REG_HAP		= (1 << 30),
+};
+
+/*
+ * Registers to map causes to vectors
+ */
+enum msix_ivar_for_cause {
+	IWM_MSIX_IVAR_CAUSE_D2S_CH0_NUM		= 0x0,
+	IWM_MSIX_IVAR_CAUSE_D2S_CH1_NUM		= 0x1,
+	IWM_MSIX_IVAR_CAUSE_S2D			= 0x3,
+	IWM_MSIX_IVAR_CAUSE_FH_ERR		= 0x5,
+	IWM_MSIX_IVAR_CAUSE_REG_ALIVE		= 0x10,
+	IWM_MSIX_IVAR_CAUSE_REG_WAKEUP		= 0x11,
+	IWM_MSIX_IVAR_CAUSE_REG_IML		= 0x12,
+	IWM_MSIX_IVAR_CAUSE_REG_CT_KILL		= 0x16,
+	IWM_MSIX_IVAR_CAUSE_REG_RF_KILL		= 0x17,
+	IWM_MSIX_IVAR_CAUSE_REG_PERIODIC	= 0x18,
+	IWM_MSIX_IVAR_CAUSE_REG_SW_ERR		= 0x29,
+	IWM_MSIX_IVAR_CAUSE_REG_SCD		= 0x2a,
+	IWM_MSIX_IVAR_CAUSE_REG_FH_TX		= 0x2b,
+	IWM_MSIX_IVAR_CAUSE_REG_HW_ERR		= 0x2d,
+	IWM_MSIX_IVAR_CAUSE_REG_HAP		= 0x2e,
+};
+
+#define IWM_MSIX_AUTO_CLEAR_CAUSE		(0 << 7)
+#define IWM_MSIX_NON_AUTO_CLEAR_CAUSE		(1 << 7)
 
 /**
  * uCode API flags
@@ -598,7 +784,7 @@
 #define IWM_UCODE_TLV_FLAGS_P2P_PS_UAPSD	(1 << 26)
 #define IWM_UCODE_TLV_FLAGS_BCAST_FILTERING	(1 << 29)
 #define IWM_UCODE_TLV_FLAGS_GO_UAPSD		(1 << 30)
-#define IWM_UCODE_TLV_FLAGS_LTE_COEX		(1 << 31)
+#define IWM_UCODE_TLV_FLAGS_LTE_COEX		(1U << 31)
 
 #define IWM_UCODE_TLV_FLAG_BITS \
 	"\020\1PAN\2NEWSCAN\3MFP\4P2P\5DW_BC_TABLE\6NEWBT_COEX\7PM_CMD\10SHORT_BL\11RX_ENERGY\12TIME_EVENT_V2\13D3_6_IPV6\14BF_UPDATED\15NO_BASIC_SSID\17D3_CONTINUITY\20NEW_NSOFFL_S\21NEW_NSOFFL_L\22SCHED_SCAN\24STA_KEY_CMD\25DEVICE_PS_CMD\26P2P_PS\27P2P_PS_DCM\30P2P_PS_SCM\31UAPSD_SUPPORT\32EBS\33P2P_PS_UAPSD\36BCAST_FILTERING\37GO_UAPSD\40LTE_COEX"
@@ -610,21 +796,38 @@
  * @IWM_UCODE_TLV_API_WIFI_MCC_UPDATE: ucode supports MCC updates with source.
  * @IWM_UCODE_TLV_API_WIDE_CMD_HDR: ucode supports wide command header
  * @IWM_UCODE_TLV_API_LQ_SS_PARAMS: Configure STBC/BFER via LQ CMD ss_params
- * @IWM_UCODE_TLV_API_EXT_SCAN_PRIORITY: scan APIs use 8-level priority
- *	instead of 3.
+ * @IWM_UCODE_TLV_API_NEW_VERSION: new versioning format
  * @IWM_UCODE_TLV_API_TX_POWER_CHAIN: TX power API has larger command size
  *	(command version 3) that supports per-chain limits
+ * @IWM_UCODE_TLV_API_SCAN_TSF_REPORT: Scan start time reported in scan
+ *	iteration complete notification, and the timestamp reported for RX
+ *	received during scan, are reported in TSF of the mac specified in the
+ *	scan request.
+ * @IWM_UCODE_TLV_API_TKIP_MIC_KEYS: This ucode supports version 2 of
+ *	ADD_MODIFY_STA_KEY_API_S_VER_2.
+ * @IWM_UCODE_TLV_API_STA_TYPE: This ucode supports station type assignement.
+ * @IWM_UCODE_TLV_API_EXT_SCAN_PRIORITY: scan APIs use 8-level priority
+ *	instead of 3.
+ * @IWM_UCODE_TLV_API_NEW_RX_STATS: should new RX STATISTICS API be used
  *
  * @IWM_NUM_UCODE_TLV_API: number of bits used
  */
-#define IWM_UCODE_TLV_API_FRAGMENTED_SCAN	(1 << 8)
-#define IWM_UCODE_TLV_API_WIFI_MCC_UPDATE	(1 << 9)
-#define IWM_UCODE_TLV_API_WIDE_CMD_HDR		(1 << 14)
-#define IWM_UCODE_TLV_API_LQ_SS_PARAMS		(1 << 18)
-#define IWM_UCODE_TLV_API_EXT_SCAN_PRIORITY	(1 << 24)
-#define IWM_UCODE_TLV_API_TX_POWER_CHAIN	(1 << 27)
-#define IWM_UCODE_TLV_API_TKIP_MIC_KEYS         (1 << 29)
-#define IWM_NUM_UCODE_TLV_API = 32
+#define IWM_UCODE_TLV_API_FRAGMENTED_SCAN	8
+#define IWM_UCODE_TLV_API_WIFI_MCC_UPDATE	9
+#define IWM_UCODE_TLV_API_WIDE_CMD_HDR		14
+#define IWM_UCODE_TLV_API_LQ_SS_PARAMS		18
+#define IWM_UCODE_TLV_API_NEW_VERSION		20
+#define IWM_UCODE_TLV_API_EXT_SCAN_PRIORITY	24
+#define IWM_UCODE_TLV_API_TX_POWER_CHAIN	27
+#define IWM_UCODE_TLV_API_SCAN_TSF_REPORT	28
+#define IWM_UCODE_TLV_API_TKIP_MIC_KEYS         29
+#define IWM_UCODE_TLV_API_STA_TYPE		30
+#define IWM_UCODE_TLV_API_NAN2_VER2		31
+#define IWM_UCODE_TLV_API_ADAPTIVE_DWELL	32
+#define IWM_UCODE_TLV_API_NEW_RX_STATS		35
+#define IWM_UCODE_TLV_API_ADAPTIVE_DWELL_V2	42
+#define IWM_UCODE_TLV_API_SCAN_EXT_CHAN_VER	58
+#define IWM_NUM_UCODE_TLV_API			128
 
 #define IWM_UCODE_TLV_API_BITS \
 	"\020\10FRAGMENTED_SCAN\11WIFI_MCC_UPDATE\16WIDE_CMD_HDR\22LQ_SS_PARAMS\30EXT_SCAN_PRIO\33TX_POWER_CHAIN\35TKIP_MIC_KEYS"
@@ -1145,14 +1348,14 @@ static inline unsigned int IWM_SCD_QUEUE_RDPTR(unsigned int chnl)
 {
 	if (chnl < 20)
 		return IWM_SCD_BASE + 0x68 + chnl * 4;
-	return IWM_SCD_BASE + 0x2B4 + (chnl - 20) * 4;
+	return IWM_SCD_BASE + 0x2B4 + chnl * 4;
 }
 
 static inline unsigned int IWM_SCD_QUEUE_STATUS_BITS(unsigned int chnl)
 {
 	if (chnl < 20)
 		return IWM_SCD_BASE + 0x10c + chnl * 4;
-	return IWM_SCD_BASE + 0x384 + (chnl - 20) * 4;
+	return IWM_SCD_BASE + 0x334 + chnl * 4;
 }
 
 /*********************** END TX SCHEDULER *************************************/
@@ -1737,6 +1940,9 @@ struct iwm_agn_scd_bc_tbl {
 #define IWM_CALIBRATION_COMPLETE_NOTIFICATION	0x67
 #define IWM_RADIO_VERSION_NOTIFICATION		0x68
 
+/* paging block to FW cpu2 */
+#define IWM_FW_PAGING_BLOCK_CMD	0x4f
+
 /* Scan offload */
 #define IWM_SCAN_OFFLOAD_REQUEST_CMD		0x51
 #define IWM_SCAN_OFFLOAD_ABORT_CMD		0x52
@@ -2076,11 +2282,25 @@ struct iwm_calib_res_notif_phy_db {
 #define IWM_NVM_SECTION_TYPE_CALIBRATION	4
 #define IWM_NVM_SECTION_TYPE_PRODUCTION		5
 #define IWM_NVM_SECTION_TYPE_POST_FCS_CALIB	6
-/* 7, 8, 9 unknown */
+/* 7 unknown */
+#define IWM_NVM_SECTION_TYPE_REGULATORY_SDP	8
+/* 9 unknown */
 #define IWM_NVM_SECTION_TYPE_HW_8000		10
 #define IWM_NVM_SECTION_TYPE_MAC_OVERRIDE	11
 #define IWM_NVM_SECTION_TYPE_PHY_SKU		12
 #define IWM_NVM_NUM_OF_SECTIONS			13
+
+/**
+ * enum iwm_nvm_type - nvm formats
+ * @IWM_NVM: the regular format
+ * @IWM_NVM_EXT: extended NVM format
+ * @IWM_NVM_SDP: NVM format used by 3168 series
+ */
+enum iwm_nvm_type {
+	IWM_NVM,
+	IWM_NVM_EXT,
+	IWM_NVM_SDP,
+};
 
 /**
  * struct iwm_nvm_access_cmd_ver2 - Request the device to send an NVM section
@@ -2099,6 +2319,57 @@ struct iwm_nvm_access_cmd {
 	uint16_t length;
 	uint8_t data[];
 } __packed; /* IWM_NVM_ACCESS_CMD_API_S_VER_2 */
+
+/*
+ * Block paging calculations
+ */
+#define IWM_PAGE_2_EXP_SIZE 12 /* 4K == 2^12 */
+#define IWM_FW_PAGING_SIZE (1 << IWM_PAGE_2_EXP_SIZE) /* page size is 4KB */
+#define IWM_PAGE_PER_GROUP_2_EXP_SIZE 3
+/* 8 pages per group */
+#define IWM_NUM_OF_PAGE_PER_GROUP (1 << IWM_PAGE_PER_GROUP_2_EXP_SIZE)
+/* don't change, support only 32KB size */
+#define IWM_PAGING_BLOCK_SIZE (IWM_NUM_OF_PAGE_PER_GROUP * IWM_FW_PAGING_SIZE)
+/* 32K == 2^15 */
+#define IWM_BLOCK_2_EXP_SIZE (IWM_PAGE_2_EXP_SIZE + IWM_PAGE_PER_GROUP_2_EXP_SIZE)
+
+/*
+ * Image paging calculations
+ */
+#define IWM_BLOCK_PER_IMAGE_2_EXP_SIZE 5
+/* 2^5 == 32 blocks per image */
+#define IWM_NUM_OF_BLOCK_PER_IMAGE (1 << IWM_BLOCK_PER_IMAGE_2_EXP_SIZE)
+/* maximum image size 1024KB */
+#define IWM_MAX_PAGING_IMAGE_SIZE (IWM_NUM_OF_BLOCK_PER_IMAGE * IWM_PAGING_BLOCK_SIZE)
+
+/* Virtual address signature */
+#define IWM_PAGING_ADDR_SIG 0xAA000000
+
+#define IWM_PAGING_CMD_IS_SECURED (1 << 9)
+#define IWM_PAGING_CMD_IS_ENABLED (1 << 8)
+#define IWM_PAGING_CMD_NUM_OF_PAGES_IN_LAST_GRP_POS 0
+#define IWM_PAGING_TLV_SECURE_MASK 1
+
+#define IWM_NUM_OF_FW_PAGING_BLOCKS	33 /* 32 for data and 1 block for CSS */
+
+/*
+ * struct iwm_fw_paging_cmd - paging layout
+ *
+ * (IWM_FW_PAGING_BLOCK_CMD = 0x4f)
+ *
+ * Send to FW the paging layout in the driver.
+ *
+ * @flags: various flags for the command
+ * @block_size: the block size in powers of 2
+ * @block_num: number of blocks specified in the command.
+ * @device_phy_addr: virtual addresses from device side
+*/
+struct iwm_fw_paging_cmd {
+	uint32_t flags;
+	uint32_t block_size;
+	uint32_t block_num;
+	uint32_t device_phy_addr[IWM_NUM_OF_FW_PAGING_BLOCKS];
+} __packed; /* IWM_FW_PAGING_BLOCK_CMD_API_S_VER_1 */
 
 /**
  * struct iwm_nvm_access_resp_ver2 - response to IWM_NVM_ACCESS_CMD
@@ -2858,6 +3129,63 @@ struct iwm_rx_mpdu_res_start {
 #define IWM_RX_MPDU_RES_STATUS_FILTERING_MSK		(0xc00000)
 #define IWM_RX_MPDU_RES_STATUS2_FILTERING_MSK		(0xc0000000)
 
+#define IWM_RX_MPDU_MFLG1_ADDRTYPE_MASK		0x03
+#define IWM_RX_MPDU_MFLG1_MIC_CRC_LEN_MASK	0xf0
+#define IWM_RX_MPDU_MFLG1_MIC_CRC_LEN_SHIFT	3
+
+#define IWM_RX_MPDU_MFLG2_HDR_LEN_MASK		0x1f
+#define	IWM_RX_MPDU_MFLG2_PAD			0x20
+#define IWM_RX_MPDU_MFLG2_AMSDU			0x40
+
+#define IWM_RX_MPDU_PHY_AMPDU			(1 << 5)
+#define IWM_RX_MPDU_PHY_AMPDU_TOGGLE		(1 << 6)
+#define IWM_RX_MPDU_PHY_SHORT_PREAMBLE		(1 << 7)
+#define IWM_RX_MPDU_PHY_NCCK_ADDTL_NTFY		(1 << 7)
+#define IWM_RX_MPDU_PHY_TSF_OVERLOAD		(1 << 8)
+
+struct iwm_rx_mpdu_desc_v1 {
+	union {
+		uint32_t rss_hash;
+		uint32_t phy_data2;
+	};
+	union {
+		uint32_t filter_match;
+		uint32_t phy_data3;
+	};
+	uint32_t rate_n_flags;
+	uint8_t energy_a;
+	uint8_t energy_b;
+	uint8_t channel;
+	uint8_t mac_context;
+	uint32_t gp2_on_air_rise;
+	union {
+		uint64_t tsf_on_air_rise;
+		struct {
+			uint32_t phy_data0;
+			uint32_t phy_data1;
+		};
+	};
+} __packed;
+
+struct iwm_rx_mpdu_desc {
+	uint16_t mpdu_len;
+	uint8_t mac_flags1;
+	uint8_t mac_flags2;
+	uint8_t amsdu_info;
+	uint16_t phy_info;
+	uint8_t mac_phy_idx;
+	uint16_t raw_csum;
+	union {
+		uint16_t l3l4_flags;
+		uint16_t phy_data4;
+	};
+	uint16_t status;
+	uint8_t hash_filter;
+	uint8_t sta_id_flags;
+	uint32_t reorder_data;
+	struct iwm_rx_mpdu_desc_v1 v1;
+} __packed;
+
 /**
  * struct iwm_radio_version_notif - information on the radio version
  * ( IWM_RADIO_VERSION_NOTIFICATION = 0x68 )
@@ -3319,6 +3647,7 @@ struct iwm_sf_cfg_cmd {
  * @dtim_interval: dtim transmit time in TU
  * @dtim_reciprocal: 2^32 / dtim_interval
  * @mcast_qid: queue ID for multicast traffic
+ *	NOTE: obsolete from VER2 and on
  * @beacon_template: beacon template ID
  */
 struct iwm_mac_data_ap {
@@ -3330,7 +3659,7 @@ struct iwm_mac_data_ap {
 	uint32_t dtim_reciprocal;
 	uint32_t mcast_qid;
 	uint32_t beacon_template;
-} __packed; /* AP_MAC_DATA_API_S_VER_1 */
+} __packed; /* AP_MAC_DATA_API_S_VER_2 */
 
 /**
  * struct iwm_mac_data_ibss - configuration data for IBSS MAC context
@@ -4249,7 +4578,7 @@ struct iwm_lq_cmd {
 #define IWM_TX_CMD_FLG_FW_DROP		(1 << 26)
 #define IWM_TX_CMD_FLG_EXEC_PAPD	(1 << 27)
 #define IWM_TX_CMD_FLG_PAPD_TYPE	(1 << 28)
-#define IWM_TX_CMD_FLG_HCCA_CHUNK	(1 << 31)
+#define IWM_TX_CMD_FLG_HCCA_CHUNK	(1U << 31)
 /* IWM_TX_FLAGS_BITS_API_S_VER_1 */
 
 /*
@@ -4793,12 +5122,26 @@ struct iwm_scan_probe_segment {
  * @common_data: last (and common) part of the probe
  * @buf: raw data block
  */
-struct iwm_scan_probe_req {
+struct iwm_scan_probe_req_v1 {
 	struct iwm_scan_probe_segment mac_header;
 	struct iwm_scan_probe_segment band_data[2];
 	struct iwm_scan_probe_segment common_data;
 	uint8_t buf[IWM_SCAN_OFFLOAD_PROBE_REQ_SIZE];
 } __packed;
+
+/* iwl_scan_probe_req - PROBE_REQUEST_FRAME_API_S_VER_v2
+ * @mac_header: first (and common) part of the probe
+ * @band_data: band specific data
+ * @common_data: last (and common) part of the probe
+ * @buf: raw data block
+ */
+struct iwm_scan_probe_req {
+	struct iwm_scan_probe_segment mac_header;
+	struct iwm_scan_probe_segment band_data[3];
+	struct iwm_scan_probe_segment common_data;
+	uint8_t buf[IWM_SCAN_OFFLOAD_PROBE_REQ_SIZE];
+} __packed;
+
 
 #define IWM_SCAN_CHANNEL_FLAG_EBS		(1 << 0)
 #define IWM_SCAN_CHANNEL_FLAG_EBS_ACCURATE	(1 << 1)
@@ -5135,6 +5478,14 @@ struct iwm_scan_config {
 #define IWM_UMAC_SCAN_GEN_FLAGS_RRM_ENABLED	(1 << 8)
 #define IWM_UMAC_SCAN_GEN_FLAGS_MATCH		(1 << 9)
 #define IWM_UMAC_SCAN_GEN_FLAGS_EXTENDED_DWELL	(1 << 10)
+/* Extended dwell is obselete when adaptive dwell is used, making this
+ * bit reusable. Hence, probe request defer is used only when adaptive
+ * dwell is supported. */
+#define IWM_UMAC_SCAN_GEN_FLAGS_PROB_REQ_DEFER_SUPP	(1 << 10)
+#define IWM_UMAC_SCAN_GEN_FLAGS_LMAC2_FRAGMENTED	(1 << 11)
+#define IWM_UMAC_SCAN_GEN_FLAGS_ADAPTIVE_DWELL		(1 << 13)
+#define IWM_UMAC_SCAN_GEN_FLAGS_MAX_CHNL_TIME		(1 << 14)
+#define IWM_UMAC_SCAN_GEN_FLAGS_PROB_REQ_HIGH_TX_RATE	(1 << 15)
 
 /**
  * struct iwm_scan_channel_cfg_umac
@@ -5171,32 +5522,77 @@ struct iwm_scan_umac_schedule {
  * @preq: probe request with IEs blocks
  * @direct_scan: list of SSIDs for directed active scan
  */
-struct iwm_scan_req_umac_tail {
+struct iwm_scan_req_umac_tail_v1 {
 	/* SCAN_PERIODIC_PARAMS_API_S_VER_1 */
 	struct iwm_scan_umac_schedule schedule[IWM_MAX_SCHED_SCAN_PLANS];
 	uint16_t delay;
 	uint16_t reserved;
 	/* SCAN_PROBE_PARAMS_API_S_VER_1 */
+	struct iwm_scan_probe_req_v1 preq;
+	struct iwm_ssid_ie direct_scan[IWM_PROBE_OPTION_MAX];
+} __packed;
+
+/**
+ * struct iwm_scan_req_umac_tail - the rest of the UMAC scan request command
+ *      parameters following channels configuration array.
+ * @schedule: two scheduling plans.
+ * @delay: delay in TUs before starting the first scan iteration
+ * @reserved: for future use and alignment
+ * @preq: probe request with IEs blocks
+ * @direct_scan: list of SSIDs for directed active scan
+ */
+struct iwm_scan_req_umac_tail_v2 {
+	/* SCAN_PERIODIC_PARAMS_API_S_VER_1 */
+	struct iwm_scan_umac_schedule schedule[IWM_MAX_SCHED_SCAN_PLANS];
+	uint16_t delay;
+	uint16_t reserved;
+	/* SCAN_PROBE_PARAMS_API_S_VER_2 */
 	struct iwm_scan_probe_req preq;
 	struct iwm_ssid_ie direct_scan[IWM_PROBE_OPTION_MAX];
 } __packed;
 
 /**
- * struct iwm_scan_req_umac
- * @flags: &enum iwm_umac_scan_flags
- * @uid: scan id, &enum iwm_umac_scan_uid_offsets
- * @ooc_priority: out of channel priority - &enum iwm_scan_priority
- * @general_flags: &enum iwm_umac_scan_general_flags
- * @extended_dwell: dwell time for channels 1, 6 and 11
- * @active_dwell: dwell time for active scan
- * @passive_dwell: dwell time for passive scan
- * @fragmented_dwell: dwell time for fragmented passive scan
- * @max_out_time: max out of serving channel time
- * @suspend_time: max suspend time
- * @scan_priority: scan internal prioritization &enum iwm_scan_priority
- * @channel_flags: &enum iwm_scan_channel_flags
- * @n_channels: num of channels in scan request
+ * struct iwm_scan_umac_chan_param
+ * @flags: channel flags &enum iwl_scan_channel_flags
+ * @count: num of channels in scan request
  * @reserved: for future use and alignment
+ */
+struct iwm_scan_umac_chan_param {
+	uint8_t flags;
+	uint8_t count;
+	uint16_t reserved;
+} __packed; /* SCAN_CHANNEL_PARAMS_API_S_VER_1 */
+
+#define IWM_SCAN_LB_LMAC_IDX 0
+#define IWM_SCAN_HB_LMAC_IDX 1
+
+/**
+ * struct iwm_scan_req_umac
+ * @flags: &enum iwl_umac_scan_flags
+ * @uid: scan id, &enum iwl_umac_scan_uid_offsets
+ * @ooc_priority: out of channel priority - &enum iwl_scan_priority
+ * @general_flags: &enum iwl_umac_scan_general_flags
+ * @scan_start_mac_id: report the scan start TSF time according to this mac TSF
+ * @extended_dwell: dwell time for channels 1, 6 and 11
+ * @active_dwell: dwell time for active scan per LMAC
+ * @passive_dwell: dwell time for passive scan per LMAC
+ * @fragmented_dwell: dwell time for fragmented passive scan
+ * @adwell_default_n_aps: for adaptive dwell the default number of APs
+ *	per channel
+ * @adwell_default_n_aps_social: for adaptive dwell the default
+ *	number of APs per social (1,6,11) channel
+ * @general_flags2: &enum iwl_umac_scan_general_flags2
+ * @adwell_max_budget: for adaptive dwell the maximal budget of TU to be added
+ *	to total scan time
+ * @max_out_time: max out of serving channel time, per LMAC - for CDB there
+ *	are 2 LMACs (high band and low band)
+ * @suspend_time: max suspend time, per LMAC - for CDB there are 2 LMACs
+ * @scan_priority: scan internal prioritization &enum iwl_scan_priority
+ * @num_of_fragments: Number of fragments needed for full coverage per band.
+ *	Relevant only for fragmented scan.
+ * @channel: &struct iwm_scan_umac_chan_param
+ * @reserved: for future use and alignment
+ * @reserved3: for future use and alignment
  * @data: &struct iwm_scan_channel_cfg_umac and
  *	&struct iwm_scan_req_umac_tail
  */
@@ -5205,20 +5601,83 @@ struct iwm_scan_req_umac {
 	uint32_t uid;
 	uint32_t ooc_priority;
 	/* SCAN_GENERAL_PARAMS_API_S_VER_1 */
-	uint32_t general_flags;
-	uint8_t extended_dwell;
-	uint8_t active_dwell;
-	uint8_t passive_dwell;
-	uint8_t fragmented_dwell;
-	uint32_t max_out_time;
-	uint32_t suspend_time;
-	uint32_t scan_priority;
-	/* SCAN_CHANNEL_PARAMS_API_S_VER_1 */
-	uint8_t channel_flags;
-	uint8_t n_channels;
-	uint16_t reserved;
-	uint8_t data[];
-} __packed; /* SCAN_REQUEST_CMD_UMAC_API_S_VER_1 */
+	uint16_t general_flags;
+	uint8_t reserved;
+	uint8_t scan_start_mac_id;
+	union {
+		struct {
+			uint8_t extended_dwell;
+			uint8_t active_dwell;
+			uint8_t passive_dwell;
+			uint8_t fragmented_dwell;
+			uint32_t max_out_time;
+			uint32_t suspend_time;
+			uint32_t scan_priority;
+			struct iwm_scan_umac_chan_param channel;
+			uint8_t data[];
+		} v1; /* SCAN_REQUEST_CMD_UMAC_API_S_VER_1 */
+		struct {
+			uint8_t extended_dwell;
+			uint8_t active_dwell;
+			uint8_t passive_dwell;
+			uint8_t fragmented_dwell;
+			uint32_t max_out_time[2];
+			uint32_t suspend_time[2];
+			uint32_t scan_priority;
+			struct iwm_scan_umac_chan_param channel;
+			uint8_t data[];
+		} v6; /* SCAN_REQUEST_CMD_UMAC_API_S_VER_6 */
+		struct {
+			uint8_t active_dwell;
+			uint8_t passive_dwell;
+			uint8_t fragmented_dwell;
+			uint8_t adwell_default_n_aps;
+			uint8_t adwell_default_n_aps_social;
+			uint8_t reserved3;
+			uint16_t adwell_max_budget;
+			uint32_t max_out_time[2];
+			uint32_t suspend_time[2];
+			uint32_t scan_priority;
+			struct iwm_scan_umac_chan_param channel;
+			uint8_t data[];
+		} v7; /* SCAN_REQUEST_CMD_UMAC_API_S_VER_7 */
+		struct {
+			uint8_t active_dwell[2];
+			uint8_t reserved2;
+			uint8_t adwell_default_n_aps;
+			uint8_t adwell_default_n_aps_social;
+			uint8_t general_flags2;
+			uint16_t adwell_max_budget;
+			uint32_t max_out_time[2];
+			uint32_t suspend_time[2];
+			uint32_t scan_priority;
+			uint8_t passive_dwell[2];
+			uint8_t num_of_fragments[2];
+			struct iwm_scan_umac_chan_param channel;
+			uint8_t data[];
+		} v8; /* SCAN_REQUEST_CMD_UMAC_API_S_VER_8 */
+		struct {
+			uint8_t active_dwell[2];
+			uint8_t adwell_default_hb_n_aps;
+			uint8_t adwell_default_lb_n_aps;
+			uint8_t adwell_default_n_aps_social;
+			uint8_t general_flags2;
+			uint16_t adwell_max_budget;
+			uint32_t max_out_time[2];
+			uint32_t suspend_time[2];
+			uint32_t scan_priority;
+			uint8_t passive_dwell[2];
+			uint8_t num_of_fragments[2];
+			struct iwm_scan_umac_chan_param channel;
+			uint8_t data[];
+		} v9; /* SCAN_REQUEST_CMD_UMAC_API_S_VER_9 */
+	};
+} __packed;
+
+#define IWM_SCAN_REQ_UMAC_SIZE_V8 sizeof(struct iwm_scan_req_umac)
+#define IWM_SCAN_REQ_UMAC_SIZE_V7 48
+#define IWM_SCAN_REQ_UMAC_SIZE_V6 44
+#define IWM_SCAN_REQ_UMAC_SIZE_V1 36
 
 /**
  * struct iwm_umac_scan_abort
@@ -5571,6 +6030,95 @@ struct iwm_add_sta_cmd_v7 {
 	uint16_t beamform_flags;
 	uint32_t tfd_queue_msk;
 } __packed; /* ADD_STA_CMD_API_S_VER_7 */
+
+/**
+ * struct iwm_add_sta_cmd - Add/modify a station in the fw's sta table.
+ * ( REPLY_ADD_STA = 0x18 )
+ * @add_modify: see &enum iwl_sta_mode
+ * @awake_acs: ACs to transmit data on while station is sleeping (for U-APSD)
+ * @tid_disable_tx: is tid BIT(tid) enabled for Tx. Clear BIT(x) to enable
+ *	AMPDU for tid x. Set %STA_MODIFY_TID_DISABLE_TX to change this field.
+ * @mac_id_n_color: the Mac context this station belongs to,
+ *	see &enum iwl_ctxt_id_and_color
+ * @addr: station's MAC address
+ * @reserved2: reserved
+ * @sta_id: index of station in uCode's station table
+ * @modify_mask: STA_MODIFY_*, selects which parameters to modify vs. leave
+ *	alone. 1 - modify, 0 - don't change.
+ * @reserved3: reserved
+ * @station_flags: look at &enum iwl_sta_flags
+ * @station_flags_msk: what of %station_flags have changed,
+ *	also &enum iwl_sta_flags
+ * @add_immediate_ba_tid: tid for which to add block-ack support (Rx)
+ *	Set %STA_MODIFY_ADD_BA_TID to use this field, and also set
+ *	add_immediate_ba_ssn.
+ * @remove_immediate_ba_tid: tid for which to remove block-ack support (Rx)
+ *	Set %STA_MODIFY_REMOVE_BA_TID to use this field
+ * @add_immediate_ba_ssn: ssn for the Rx block-ack session. Used together with
+ *	add_immediate_ba_tid.
+ * @sleep_tx_count: number of packets to transmit to station even though it is
+ *	asleep. Used to synchronise PS-poll and u-APSD responses while ucode
+ *	keeps track of STA sleep state.
+ * @station_type: type of this station. See &enum iwl_sta_type.
+ * @sleep_state_flags: Look at &enum iwl_sta_sleep_flag.
+ * @assoc_id: assoc_id to be sent in VHT PLCP (9-bit), for grp use 0, for AP
+ *	mac-addr.
+ * @beamform_flags: beam forming controls
+ * @tfd_queue_msk: tfd queues used by this station.
+ *	Obselete for new TX API (9 and above).
+ * @rx_ba_window: aggregation window size
+ * @sp_length: the size of the SP in actual number of frames
+ * @uapsd_acs:  4 LS bits are trigger enabled ACs, 4 MS bits are the deliver
+ *	enabled ACs.
+ *
+ * The device contains an internal table of per-station information, with info
+ * on security keys, aggregation parameters, and Tx rates for initial Tx
+ * attempt and any retries (set by REPLY_TX_LINK_QUALITY_CMD).
+ *
+ * ADD_STA sets up the table entry for one station, either creating a new
+ * entry, or modifying a pre-existing one.
+ */
+struct iwm_add_sta_cmd {
+	uint8_t add_modify;
+	uint8_t awake_acs;
+	uint16_t tid_disable_tx;
+	uint32_t mac_id_n_color;
+	uint8_t addr[ETHER_ADDR_LEN];	/* _STA_ID_MODIFY_INFO_API_S_VER_1 */
+	uint16_t reserved2;
+	uint8_t sta_id;
+	uint8_t modify_mask;
+	uint16_t reserved3;
+	uint32_t station_flags;
+	uint32_t station_flags_msk;
+	uint8_t add_immediate_ba_tid;
+	uint8_t remove_immediate_ba_tid;
+	uint16_t add_immediate_ba_ssn;
+	uint16_t sleep_tx_count;
+	uint8_t sleep_state_flags;
+	uint8_t station_type;
+	uint16_t assoc_id;
+	uint16_t beamform_flags;
+	uint32_t tfd_queue_msk;
+	uint16_t rx_ba_window;
+	uint8_t sp_length;
+	uint8_t uapsd_acs;
+} __packed; /* ADD_STA_CMD_API_S_VER_10 */
+
+/**
+ * FW station types
+ * ( REPLY_ADD_STA = 0x18 )
+ * @IWM_STA_LINK: Link station - normal RX and TX traffic.
+ * @IWM_STA_GENERAL_PURPOSE: General purpose. In AP mode used for beacons
+ *	and probe responses.
+ * @IWM_STA_MULTICAST: multicast traffic,
+ * @IWM_STA_TDLS_LINK: TDLS link station
+ * @IWM_STA_AUX_ACTIVITY: auxilary station (scan, ROC and so on).
+ */
+#define IWM_STA_LINK		0
+#define IWM_STA_GENERAL_PURPOSE	1
+#define IWM_STA_MULTICAST	2
+#define IWM_STA_TDLS_LINK	3
+#define IWM_STA_AUX_ACTIVITY	4
 
 /**
  * struct iwm_add_sta_key_cmd - add/modify sta key

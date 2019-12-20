@@ -1,4 +1,4 @@
-/*	$OpenBSD: library_mquery.c,v 1.60 2019/10/04 17:42:16 guenther Exp $ */
+/*	$OpenBSD: library_mquery.c,v 1.64 2019/12/09 23:15:03 bluhm Exp $ */
 
 /*
  * Copyright (c) 2002 Dale Rahn
@@ -112,7 +112,8 @@ _dl_tryload_shlib(const char *libname, int type, int flags)
 	Elf_Phdr *ptls = NULL;
 	Elf_Addr relro_addr = 0, relro_size = 0;
 	struct stat sb;
-	char hbuf[4096];
+	char hbuf[4096], *exec_start;
+	size_t exec_size;
 
 #define ROUND_PG(x) (((x) + align) & ~(align))
 #define TRUNC_PG(x) ((x) & ~(align))
@@ -231,6 +232,8 @@ _dl_tryload_shlib(const char *libname, int type, int flags)
 #define LOFF ((Elf_Addr)lowld->start - lowld->moff)
 
 retry:
+	exec_start = NULL;
+	exec_size = 0;
 	for (ld = lowld; ld != NULL; ld = ld->next) {
 		off_t foff;
 		int fd, flags;
@@ -263,7 +266,6 @@ retry:
 
 		res = _dl_mmap((void *)(LOFF + ld->moff), ROUND_PG(ld->size),
 		    ld->prot, flags | MAP_FIXED | __MAP_NOREPLACE, fd, foff);
-
 		if (_dl_mmap_error(res)) {
 			struct load_list *ll;
 
@@ -275,6 +277,11 @@ retry:
 
 			lowld->start += ROUND_PG(ld->size);
 			goto retry;
+		}
+
+		if ((ld->prot & PROT_EXEC) && exec_start == NULL) {
+			exec_start = (void *)(LOFF + ld->moff);
+			exec_size = ROUND_PG(ld->size);
 		}
 
 		ld->start = res;
@@ -306,6 +313,8 @@ retry:
 	    (Elf_Phdr *)((char *)lowld->start + ehdr->e_phoff), ehdr->e_phnum,
 	    type, (Elf_Addr)lowld->start, LOFF);
 	if (object) {
+		char *soname = (char *)object->Dyn.info[DT_SONAME];
+
 		object->load_size = (Elf_Addr)load_end - (Elf_Addr)lowld->start;
 		object->load_list = lowld;
 		/* set inode, dev from stat info */
@@ -318,6 +327,14 @@ retry:
 		if (ptls != NULL && ptls->p_memsz)
 			_dl_set_tls(object, ptls, (Elf_Addr)lowld->start,
 			    libname);
+
+		/* Request permission for system calls in libc.so's text segment */
+		if (soname != NULL &&
+		    _dl_strncmp(soname, "libc.so.", 8) == 0) {
+			if (_dl_msyscall(exec_start, exec_size) == -1)
+				_dl_printf("msyscall %lx %lx error\n",
+				    exec_start, exec_size);
+		}
 	} else {
 		_dl_load_list_free(lowld);
 	}

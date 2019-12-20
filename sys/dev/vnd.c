@@ -1,4 +1,4 @@
-/*	$OpenBSD: vnd.c,v 1.169 2019/10/06 16:24:14 beck Exp $	*/
+/*	$OpenBSD: vnd.c,v 1.171 2019/11/27 16:12:13 beck Exp $	*/
 /*	$NetBSD: vnd.c,v 1.26 1996/03/30 23:06:11 christos Exp $	*/
 
 /*
@@ -334,10 +334,13 @@ vndstrategy(struct buf *bp)
 	/*
 	 * Use IO_NOLIMIT because upper layer has already checked I/O
 	 * for limits, so there is no need to do it again.
+	 *
+	 * We use IO_NOCACHE because this data should be cached at the
+	 * upper layer, so there is no need to cache it again.
 	 */
 	bp->b_error = vn_rdwr((bp->b_flags & B_READ) ? UIO_READ : UIO_WRITE,
-	    sc->sc_vp, bp->b_data, bp->b_bcount, off, UIO_SYSSPACE, IO_NOLIMIT,
-	    sc->sc_cred, &bp->b_resid, curproc);
+	    sc->sc_vp, bp->b_data, bp->b_bcount, off, UIO_SYSSPACE,
+	    IO_NOCACHE | IO_SYNC | IO_NOLIMIT, sc->sc_cred, &bp->b_resid, curproc);
 	if (bp->b_error)
 		bp->b_flags |= B_ERROR;
 
@@ -448,6 +451,7 @@ vndioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		sc->sc_flags &= ~VNF_READONLY;
 		error = vn_open(&nd, FREAD|FWRITE, 0);
 		if (error == EROFS) {
+			NDINIT(&nd, 0, 0, UIO_USERSPACE, vio->vnd_file, p);
 			sc->sc_flags |= VNF_READONLY;
 			error = vn_open(&nd, FREAD, 0);
 		}

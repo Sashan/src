@@ -1,4 +1,4 @@
-/*	$OpenBSD: su.c,v 1.77 2019/09/14 17:47:01 semarie Exp $	*/
+/*	$OpenBSD: su.c,v 1.79 2019/12/07 19:23:21 millert Exp $	*/
 
 /*
  * Copyright (c) 1988 The Regents of the University of California.
@@ -149,11 +149,11 @@ main(int argc, char **argv)
 	if (pwd == NULL)
 		auth_errx(as, 1, "who are you?");
 	if ((username = strdup(pwd->pw_name)) == NULL)
-		auth_errx(as, 1, "can't allocate memory");
+		auth_err(as, 1, NULL);
 	if (asme && !altshell) {
 		if (pwd->pw_shell && *pwd->pw_shell) {
 			if ((shell = strdup(pwd->pw_shell)) == NULL)
-				auth_errx(as, 1, "can't allocate memory");
+				auth_err(as, 1, NULL);
 		} else {
 			shell = _PATH_BSHELL;
 			iscsh = NO;
@@ -172,6 +172,8 @@ main(int argc, char **argv)
 		err(1, "unveil");
 
 	for (;;) {
+		char *pw_class = class;
+
 		/* get target user, default to root unless in -L mode */
 		if (*argv) {
 			user = *argv;
@@ -196,7 +198,7 @@ main(int argc, char **argv)
 		auth_clean(as);
 		if (auth_setitem(as, AUTHV_INTERACTIVE, "True") != 0 ||
 		    auth_setitem(as, AUTHV_NAME, user) != 0)
-			auth_errx(as, 1, "can't allocate memory");
+			auth_err(as, 1, NULL);
 		if ((user = auth_getitem(as, AUTHV_NAME)) == NULL)
 			auth_errx(as, 1, "internal error");
 		if (auth_setpwd(as, NULL) || (pwd = auth_getpwd(as)) == NULL) {
@@ -207,11 +209,11 @@ main(int argc, char **argv)
 		}
 
 		/* If the user specified a login class, use it */
-		if (!class && pwd && pwd->pw_class && pwd->pw_class[0] != '\0')
-			class = strdup(pwd->pw_class);
-		if ((lc = login_getclass(class)) == NULL)
+		if (pw_class == NULL && pwd != NULL)
+			pw_class = pwd->pw_class;
+		if ((lc = login_getclass(pw_class)) == NULL)
 			auth_errx(as, 1, "no such login class: %s",
-			    class ? class : LOGIN_DEFCLASS);
+			    pw_class ? pw_class : LOGIN_DEFCLASS);
 
 		if ((ruid == 0 && !emlogin) ||
 		    verify_user(username, pwd, style, lc, as) == 0)
@@ -225,6 +227,8 @@ main(int argc, char **argv)
 		}
 		fprintf(stderr, "Login incorrect\n");
 	}
+	if (pwd == NULL)
+		auth_errx(as, 1, "internal error");
 
 	if (pledge("stdio unveil rpath getpw exec id", NULL) == -1)
 		err(1, "pledge");
@@ -236,7 +240,7 @@ main(int argc, char **argv)
 				auth_errx(as, 1, "permission denied (shell).");
 		} else if (pwd->pw_shell && *pwd->pw_shell) {
 			if ((shell = strdup(pwd->pw_shell)) == NULL)
-				auth_errx(as, 1, "can't allocate memory");
+				auth_err(as, 1, NULL);
 			iscsh = UNSET;
 		} else {
 			shell = _PATH_BSHELL;

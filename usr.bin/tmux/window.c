@@ -1,4 +1,4 @@
-/* $OpenBSD: window.c,v 1.244 2019/10/28 09:07:59 nicm Exp $ */
+/* $OpenBSD: window.c,v 1.246 2019/12/12 11:39:56 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -308,9 +308,14 @@ window_update_activity(struct window *w)
 }
 
 struct window *
-window_create(u_int sx, u_int sy)
+window_create(u_int sx, u_int sy, u_int xpixel, u_int ypixel)
 {
 	struct window	*w;
+
+	if (xpixel == 0)
+		xpixel = DEFAULT_XPIXEL;
+	if (ypixel == 0)
+		ypixel = DEFAULT_YPIXEL;
 
 	w = xcalloc(1, sizeof *w);
 	w->name = xstrdup("");
@@ -324,6 +329,8 @@ window_create(u_int sx, u_int sy)
 
 	w->sx = sx;
 	w->sy = sy;
+	w->xpixel = xpixel;
+	w->ypixel = ypixel;
 
 	w->options = options_create(global_w_options);
 
@@ -410,11 +417,40 @@ window_set_name(struct window *w, const char *new_name)
 }
 
 void
-window_resize(struct window *w, u_int sx, u_int sy)
+window_resize(struct window *w, u_int sx, u_int sy, int xpixel, int ypixel)
 {
-	log_debug("%s: @%u resize %ux%u", __func__, w->id, sx, sy);
+	if (xpixel == 0)
+		xpixel = DEFAULT_XPIXEL;
+	if (ypixel == 0)
+		ypixel = DEFAULT_YPIXEL;
+
+	log_debug("%s: @%u resize %ux%u (%ux%u)", __func__, w->id, sx, sy,
+	    xpixel == -1 ? w->xpixel : xpixel,
+	    ypixel == -1 ? w->ypixel : ypixel);
 	w->sx = sx;
 	w->sy = sy;
+	if (xpixel != -1)
+		w->xpixel = xpixel;
+	if (ypixel != -1)
+		w->ypixel = ypixel;
+}
+
+void
+window_pane_send_resize(struct window_pane *wp, int yadjust)
+{
+	struct window	*w = wp->window;
+	struct winsize	 ws;
+
+	if (wp->fd == -1)
+		return;
+
+	memset(&ws, 0, sizeof ws);
+	ws.ws_col = wp->sx;
+	ws.ws_row = wp->sy + yadjust;
+	ws.ws_xpixel = w->xpixel * ws.ws_col;
+	ws.ws_ypixel = w->ypixel * ws.ws_row;
+	if (ioctl(wp->fd, TIOCSWINSZ, &ws) == -1)
+		fatal("ioctl failed");
 }
 
 int
@@ -1562,31 +1598,28 @@ winlink_shuffle_up(struct session *s, struct winlink *wl)
 }
 
 static void
-window_pane_input_callback(struct client *c, int closed, void *data)
+window_pane_input_callback(struct client *c, __unused const char *path,
+    int error, int closed, struct evbuffer *buffer, void *data)
 {
 	struct window_pane_input_data	*cdata = data;
 	struct window_pane		*wp;
-	struct evbuffer			*evb = c->stdin_data;
-	u_char				*buf = EVBUFFER_DATA(evb);
-	size_t				 len = EVBUFFER_LENGTH(evb);
+	u_char				*buf = EVBUFFER_DATA(buffer);
+	size_t				 len = EVBUFFER_LENGTH(buffer);
 
 	wp = window_pane_find_by_id(cdata->wp);
-	if (wp == NULL || closed || c->flags & CLIENT_DEAD) {
+	if (wp == NULL || closed || error != 0 || c->flags & CLIENT_DEAD) {
 		if (wp == NULL)
 			c->flags |= CLIENT_EXIT;
-		evbuffer_drain(evb, len);
 
-		c->stdin_callback = NULL;
-		server_client_unref(c);
-
+		evbuffer_drain(buffer, len);
 		cmdq_continue(cdata->item);
-		free(cdata);
 
+		server_client_unref(c);
+		free(cdata);
 		return;
 	}
-
 	input_parse_buffer(wp, buf, len);
-	evbuffer_drain(evb, len);
+	evbuffer_drain(buffer, len);
 }
 
 int
@@ -1605,6 +1638,8 @@ window_pane_start_input(struct window_pane *wp, struct cmdq_item *item,
 	cdata->item = item;
 	cdata->wp = wp->id;
 
-	return (server_set_stdin_callback(c, window_pane_input_callback, cdata,
-	    cause));
+	c->references++;
+	file_read(c, "-", window_pane_input_callback, cdata);
+
+	return (0);
 }

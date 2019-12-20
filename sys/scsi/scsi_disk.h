@@ -1,4 +1,4 @@
-/*	$OpenBSD: scsi_disk.h,v 1.38 2019/09/27 23:07:42 krw Exp $	*/
+/*	$OpenBSD: scsi_disk.h,v 1.40 2019/12/03 15:58:28 krw Exp $	*/
 /*	$NetBSD: scsi_disk.h,v 1.10 1996/07/05 16:19:05 christos Exp $	*/
 
 /*
@@ -304,35 +304,6 @@ struct scsi_synchronize_cache {
 #define UNMAP			0x42
 
 
-struct scsi_read_cap_data {
-	u_int8_t addr[4];
-	u_int8_t length[4];
-};
-
-struct scsi_read_cap_data_16 {
-	u_int8_t addr[8];
-	u_int8_t length[4];
-	u_int8_t p_type_prot;
-#define RC16_PROT_EN		0x01	/* Protection type is 0 when 0 */
-#define RC16_PROT_P_TYPE	0x0e
-#define		RC16_P_TYPE_1		0x00	/* Protection type 1 */
-#define		RC16_P_TYPE_2		0x02	/* Protection type 2 */
-#define		RC16_P_TYPE_3		0x04	/* Protection type 3 */
-#define RC16_BASIS		0x30	/* Meaning of addr */
-#define		RC16_BASIS_HIGH		0x00	/* highest LBA of zone */
-#define		RC16_BASIS_LAST		0x10	/* last LBA on unit */
-	u_int8_t logical_per_phys;	/* Logical Blks Per Physical Blk Exp */
-#define RC16_LBPPB_EXPONENT	0x0f	/* 2**N LB per PB, 0 means unknown */
-#define RC16_PIIPLB_EXPONENT	0xf0	/* 2**N Prot info intervals per LB */
-	u_int8_t lowest_aligned[2];
-#define RC16_LALBA		0x3fff	/* lowest aligned LBA */
-#define RC16_LBPRZ		0x4000	/* unmapped LBA returns all zeros */
-#define READ_CAP_16_TPRZ	0x4000	/* XXX old name used in driver(s) */
-#define RC16_LBPME		0x8000	/* LB provisioning management enabled */
-#define READ_CAP_16_TPE		0x8000	/* XXX old name used in driver(s) */
-	u_int8_t reserved[16];
-};
-
 struct scsi_reassign_blocks_data {
 	u_int8_t reserved[2];
 	u_int8_t length[2];
@@ -342,7 +313,6 @@ struct scsi_reassign_blocks_data {
 };
 
 /* Only the lower 6 bits of the pg_code field are used for page #. */
-#define	DISK_PGCODE(pg, n)	((pg) != NULL) && (((pg)->pg_code & 0x3f) == n)
 #define PAGE_DISK_FORMAT	3
 #define PAGE_RIGID_GEOMETRY	4
 #define PAGE_FLEX_GEOMETRY	5

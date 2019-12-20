@@ -1,4 +1,4 @@
-/*	$OpenBSD: boot_md.c,v 1.1 2019/10/20 03:44:49 guenther Exp $ */
+/*	$OpenBSD: boot_md.c,v 1.3 2019/11/10 22:21:54 guenther Exp $ */
 
 /*
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
@@ -34,13 +34,7 @@
 
 #define	_DYN_LOADER
 
-#include <sys/types.h>
-#include <sys/mman.h>
-#include <sys/exec.h>
-#include <sys/sysctl.h>
-#include <nlist.h>
-#include <link.h>
-#include <dlfcn.h>
+#include <sys/exec_elf.h>
 
 #include "syscall.h"
 #include "archdep.h"
@@ -61,11 +55,7 @@ struct boot_dyn {
 	RELOC_TYPE	*dt_reloc;	/* DT_RELA   or DT_REL */
 	Elf_Addr	dt_relocsz;	/* DT_RELASZ or DT_RELSZ */
 	Elf_Addr	*dt_pltgot;
-	Elf_Addr	dt_pltrelsz;
 	const Elf_Sym	*dt_symtab;
-#ifdef HAVE_JMPREL
-	RELOC_TYPE	*dt_jmprel;
-#endif
 #if DT_PROCNUM > 0
 	u_long		dt_proc[DT_PROCNUM];
 #endif
@@ -85,8 +75,7 @@ _dl_boot_bind(const long sp, long *dl_data, Elf_Dyn *dynp)
 	int		n, argc;
 	char		**argv, **envp;
 	long		loff;
-	Elf_Addr	i;
-	RELOC_TYPE	*rp;
+	RELOC_TYPE	*rp, *rend;
 
 	/*
 	 * Scan argument and environment vectors. Find dynamic
@@ -134,14 +123,8 @@ _dl_boot_bind(const long sp, long *dl_data, Elf_Dyn *dynp)
 			dynld.dt_symtab = (void *)(dynp->d_un.d_ptr + loff);
 		else if (dynp->d_tag == RELOC_TAG)	/* DT_{RELA,REL} */
 			dynld.dt_reloc = (void *)(dynp->d_un.d_ptr + loff);
-#ifdef HAVE_JMPREL
-		else if (dynp->d_tag == DT_JMPREL)
-			dynld.dt_jmprel = (void *)(dynp->d_un.d_ptr + loff);
-#endif
 
 		/* Now for the tags that are just sizes or counts */
-		else if (dynp->d_tag == DT_PLTRELSZ)
-			dynld.dt_pltrelsz = dynp->d_un.d_val;
 		else if (dynp->d_tag == RELOC_TAG+1)	/* DT_{RELA,REL}SZ */
 			dynld.dt_relocsz = dynp->d_un.d_val;
 #if DT_PROCNUM > 0
@@ -153,34 +136,14 @@ _dl_boot_bind(const long sp, long *dl_data, Elf_Dyn *dynp)
 		dynp++;
 	}
 
-#ifdef HAVE_JMPREL
-	rp = dynld.dt_jmprel;
-	for (i = 0; i < dynld.dt_pltrelsz; i += sizeof *rp) {
-		Elf_Addr *ra;
-		const Elf_Sym *sp;
-
-		sp = dynld.dt_symtab + ELF_R_SYM(rp->r_info);
-		if (ELF_R_SYM(rp->r_info) && sp->st_value == 0)
-			_dl_exit(5);
-
-		ra = (Elf_Addr *)(rp->r_offset + loff);
-		RELOC_JMPREL(rp, sp, ra, loff, dynld.dt_pltgot);
-		rp++;
-	}
-#endif /* HAVE_JMPREL */
-
 	rp = dynld.dt_reloc;
-	for (i = 0; i < dynld.dt_relocsz; i += sizeof *rp) {
-		Elf_Addr *ra;
-		const Elf_Sym *sp;
+	rend = (RELOC_TYPE *)((char *)rp + dynld.dt_relocsz);
+	for (; rp < rend; rp++) {
+		if (ELF_R_TYPE(rp->r_info) != R_MIPS_NONE) {
+			Elf_Addr *ra = (Elf_Addr *)(rp->r_offset + loff);
 
-		sp = dynld.dt_symtab + ELF_R_SYM(rp->r_info);
-		if (ELF_R_SYM(rp->r_info) && sp->st_value == 0)
-			_dl_exit(6);
-
-		ra = (Elf_Addr *)(rp->r_offset + loff);
-		RELOC_DYN(rp, sp, ra, loff);
-		rp++;
+			*ra += loff;
+		}
 	}
 
 	RELOC_GOT(&dynld, loff);

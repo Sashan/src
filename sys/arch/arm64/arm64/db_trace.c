@@ -1,4 +1,4 @@
-/*	$OpenBSD: db_trace.c,v 1.6 2018/05/04 15:43:34 visa Exp $	*/
+/*	$OpenBSD: db_trace.c,v 1.8 2019/11/07 14:44:52 mpi Exp $	*/
 /*	$NetBSD: db_trace.c,v 1.8 2003/01/17 22:28:48 thorpej Exp $	*/
 
 /*
@@ -68,15 +68,14 @@ db_stack_trace_print(db_expr_t addr, int have_addr, db_expr_t count,
 	db_expr_t	offset;
 	Elf_Sym *	sym;
 	char		*name;
-	boolean_t	kernel_only = TRUE;
-	boolean_t	trace_thread = FALSE;
-	//db_addr_t	scp = 0;
+	int		kernel_only = 1;
+	int		trace_thread = 0;
 
 	while ((c = *cp++) != 0) {
 		if (c == 'u')
-			kernel_only = FALSE;
+			kernel_only = 0;
 		if (c == 't')
-			trace_thread = TRUE;
+			trace_thread = 1;
 	}
 
 	if (!have_addr) {
@@ -97,9 +96,9 @@ db_stack_trace_print(db_expr_t addr, int have_addr, db_expr_t count,
 			lastlr =  p->p_addr->u_pcb.pcb_tf->tf_elr;
 		} else {
 			sp = addr;
-			db_read_bytes(sp+16, sizeof(db_addr_t),
+			db_read_bytes(sp+16, sizeof(vaddr_t),
 			    (char *)&frame);
-			db_read_bytes(sp + 8, sizeof(db_addr_t),
+			db_read_bytes(sp + 8, sizeof(vaddr_t),
 			    (char *)&lr);
 			lastlr = 0;
 		}
@@ -120,11 +119,11 @@ db_stack_trace_print(db_expr_t addr, int have_addr, db_expr_t count,
 		(*pr)("\n");
 
 		// can we detect traps ?
-		db_read_bytes(frame, sizeof(db_addr_t), (char *)&frame);
+		db_read_bytes(frame, sizeof(vaddr_t), (char *)&frame);
 		if (frame == 0)
 			break;
 		lastlr = lr;
-		db_read_bytes(frame + 8, sizeof(db_addr_t), (char *)&lr);
+		db_read_bytes(frame + 8, sizeof(vaddr_t), (char *)&lr);
 
 		if (name != NULL) {
 			if ((strcmp (name, "handle_el0_irq") == 0) ||
