@@ -1,4 +1,4 @@
-/*	$OpenBSD: lka_filter.c,v 1.54 2019/12/14 16:24:52 gilles Exp $	*/
+/*	$OpenBSD: lka_filter.c,v 1.57 2019/12/21 11:47:34 gilles Exp $	*/
 
 /*
  * Copyright (c) 2018 Gilles Chehade <gilles@poolp.org>
@@ -205,6 +205,8 @@ lka_proc_config(struct processor_instance *pi)
 	io_printf(pi->io, "config|smtp-session-timeout|%d\n", SMTPD_SESSION_TIMEOUT);
 	if (pi->subsystems & FILTER_SUBSYSTEM_SMTP_IN)
 		io_printf(pi->io, "config|subsystem|smtp-in\n");
+	if (pi->subsystems & FILTER_SUBSYSTEM_SMTP_OUT)
+		io_printf(pi->io, "config|subsystem|smtp-out\n");
 	io_printf(pi->io, "config|ready\n");
 }
 
@@ -485,7 +487,7 @@ lka_filter_proc_in_session(uint64_t reqid, const char *proc)
 		return 0;
 
 	filter = dict_get(&filters, fs->filter_name);
-	if (filter->proc == NULL && filter->chain == NULL)
+	if (filter == NULL || (filter->proc == NULL && filter->chain == NULL))
 		return 0;
 
 	if (filter->proc)
@@ -500,12 +502,7 @@ lka_filter_proc_in_session(uint64_t reqid, const char *proc)
 }
 
 void
-lka_filter_begin(uint64_t reqid,
-    const char *filter_name,
-    const struct sockaddr_storage *ss_src,
-    const struct sockaddr_storage *ss_dest,
-    const char *rdns,
-    int fcrdns)
+lka_filter_begin(uint64_t reqid, const char *filter_name)
 {
 	struct filter_session	*fs;
 
@@ -517,10 +514,6 @@ lka_filter_begin(uint64_t reqid,
 	fs = xcalloc(1, sizeof (struct filter_session));
 	fs->id = reqid;
 	fs->filter_name = xstrdup(filter_name);
-	fs->ss_src = *ss_src;
-	fs->ss_dest = *ss_dest;
-	fs->rdns = xstrdup(rdns);
-	fs->fcrdns = fcrdns;
 	tree_xset(&sessions, fs->id, fs);
 
 	log_trace(TRACE_FILTERS, "%016"PRIx64" filters session-begin", reqid);
@@ -1283,13 +1276,10 @@ lka_report_register_hook(const char *name, const char *hook)
 		subsystem = &report_smtp_in;
 		hook += 8;
 	}
-#if 0
-	/* No smtp-out event has been implemented yet */
 	else if (strncmp(hook, "smtp-out|", 9) == 0) {
 		subsystem = &report_smtp_out;
 		hook += 9;
 	}
-#endif
 	else
 		fatalx("Invalid message direction: %s", hook);
 
@@ -1355,6 +1345,7 @@ lka_report_smtp_link_connect(const char *direction, struct timeval *tv, uint64_t
     const struct sockaddr_storage *ss_src,
     const struct sockaddr_storage *ss_dest)
 {
+	struct filter_session *fs;
 	char	src[NI_MAXHOST + 5];
 	char	dest[NI_MAXHOST + 5];
 	uint16_t	src_port = 0;
@@ -1390,7 +1381,13 @@ lka_report_smtp_link_connect(const char *direction, struct timeval *tv, uint64_t
 		fcrdns_str = "error";
 		break;
 	}
-	
+
+	fs = tree_xget(&sessions, reqid);
+	fs->rdns = xstrdup(rdns);
+	fs->fcrdns = fcrdns;
+	fs->ss_src = *ss_src;
+	fs->ss_dest = *ss_dest;
+
 	report_smtp_broadcast(reqid, direction, tv, "link-connect",
 	    "%s|%s|%s|%s\n", rdns, fcrdns_str, src, dest);
 }

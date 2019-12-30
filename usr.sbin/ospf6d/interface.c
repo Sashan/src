@@ -1,4 +1,4 @@
-/*	$OpenBSD: interface.c,v 1.25 2019/06/28 13:32:49 deraadt Exp $ */
+/*	$OpenBSD: interface.c,v 1.27 2019/12/23 07:33:49 denis Exp $ */
 
 /*
  * Copyright (c) 2005 Claudio Jeker <claudio@openbsd.org>
@@ -143,6 +143,7 @@ if_fsm(struct iface *iface, enum iface_event event)
 		iface->state = new_state;
 
 	if (iface->state != old_state) {
+		area_track(iface->area);
 		orig_rtr_lsa(iface);
 		orig_link_lsa(iface);
 
@@ -649,7 +650,7 @@ if_to_ctl(struct iface *iface)
 	memcpy(ictl.name, iface->name, sizeof(ictl.name));
 	memcpy(&ictl.addr, &iface->addr, sizeof(ictl.addr));
 	ictl.rtr_id.s_addr = ospfe_router_id();
-	memcpy(&ictl.area, &iface->area_id, sizeof(ictl.area));
+	memcpy(&ictl.area, &iface->area->id, sizeof(ictl.area));
 	if (iface->dr) {
 		memcpy(&ictl.dr_id, &iface->dr->id, sizeof(ictl.dr_id));
 		memcpy(&ictl.dr_addr, &iface->dr->addr, sizeof(ictl.dr_addr));
@@ -708,7 +709,7 @@ if_to_ctl(struct iface *iface)
 
 /* misc */
 void
-if_set_recvbuf(int fd)
+if_set_sockbuf(int fd)
 {
 	int	bsize;
 
@@ -718,7 +719,15 @@ if_set_recvbuf(int fd)
 		bsize /= 2;
 
 	if (bsize != 256 * 1024)
-		log_warnx("if_set_recvbuf: recvbuf size only %d", bsize);
+		log_warnx("if_set_sockbuf: recvbuf size only %d", bsize);
+
+	bsize = 64 * 1024;
+	while (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &bsize,
+	    sizeof(bsize)) == -1)
+		bsize /= 2;
+
+	if (bsize != 64 * 1024)
+		log_warnx("if_set_sockbuf: sendbuf size only %d", bsize);
 }
 
 int

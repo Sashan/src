@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.46 2019/12/16 08:28:33 denis Exp $ */
+/*	$OpenBSD: parse.y,v 1.48 2019/12/26 10:24:18 remi Exp $ */
 
 /*
  * Copyright (c) 2004, 2005 Esben Norby <norby@openbsd.org>
@@ -126,7 +126,7 @@ typedef struct {
 
 %token	AREA INTERFACE ROUTERID FIBPRIORITY FIBUPDATE REDISTRIBUTE RTLABEL
 %token	RDOMAIN STUB ROUTER SPFDELAY SPFHOLDTIME EXTTAG
-%token	METRIC PASSIVE
+%token	METRIC P2P PASSIVE
 %token	HELLOINTERVAL TRANSMITDELAY
 %token	RETRANSMITINTERVAL ROUTERDEADTIME ROUTERPRIORITY
 %token	SET TYPE
@@ -537,7 +537,7 @@ interface	: INTERFACE STRING	{
 				YYERROR;
 			}
 			free($2);
-			iface->area_id.s_addr = area->id.s_addr;
+			iface->area = area;
 			LIST_INSERT_HEAD(&area->iface_list, iface, entry);
 
 			memcpy(&ifacedefs, defs, sizeof(ifacedefs));
@@ -566,6 +566,10 @@ interfaceopts_l	: interfaceopts_l interfaceoptsl nl
 		;
 
 interfaceoptsl	: PASSIVE		{ iface->cflags |= F_IFACE_PASSIVE; }
+		| TYPE P2P		{
+			iface->p2p = 1;
+			iface->type = IF_TYPE_POINTOPOINT;
+		}
 		| DEMOTE STRING		{
 			if (strlcpy(iface->demote_group, $2,
 			    sizeof(iface->demote_group)) >=
@@ -645,6 +649,7 @@ lookup(char *s)
 		{"metric",		METRIC},
 		{"no",			NO},
 		{"on",			ON},
+		{"p2p",			P2P},
 		{"passive",		PASSIVE},
 		{"rdomain",		RDOMAIN},
 		{"redistribute",	REDISTRIBUTE},
