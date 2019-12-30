@@ -1,6 +1,6 @@
 #ifndef GNODE_H
 #define GNODE_H
-/*	$OpenBSD: gnode.h,v 1.29 2017/06/22 17:08:20 espie Exp $ */
+/*	$OpenBSD: gnode.h,v 1.34 2019/12/22 16:53:40 espie Exp $ */
 
 /*
  * Copyright (c) 2001 Marc Espie.
@@ -40,47 +40,32 @@
 #include <assert.h>
 
 /*-
- * The structure for an individual graph node. Each node has several
- * pieces of data associated with it.
- *	1) the name of the target it describes
- *	2) the location of the target file in the file system.
- *	3) the type of operator used to define its sources (qv. parse.c)
- *	4) whether it is involved in this invocation of make
- *	5) whether the target has been remade
- *	6) whether any of its children has been remade
- *	7) the number of its children that are, as yet, unmade
- *	8) its modification time
- *	9) the modification time of its youngest child (qv. make.c)
- *	10) a list of nodes for which this is a source
- *	11) a list of nodes on which this depends
- *	12) a list of nodes that depend on this, as gleaned from the
- *	    transformation rules.
- *	13) a list of nodes of the same name created by the :: operator
- *	14) a list of nodes that must be made (if they're made) before
- *	    this node can be, but that do no enter into the datedness of
- *	    this node.
- *	15) a list of nodes that must be made (if they're made) after
- *	    this node is, but that do not depend on this node, in the
- *	    normal sense.
- *	16) a Lst of ``local'' variables that are specific to this target
- *	   and this target only (qv. var.c [$@ $< $?, etc.])
- *	17) a Lst of strings that are commands to be given to a shell
+ * The structure for an individual graph node. Each node has a lot of
+ * of data associated with it.
+ *	1) the *name*of the target it describes (at end because ohash)
+ *	2) the *path* to the target file
+ *	3) the *type* of operator used to define its sources 
+ *		(cf parse.c, mostly : :: !  but...)
+ *	4) *must_make*: whether it is involved in this invocation of make
+ *	5) *built_status*: has the target been rebuilt/is up-to-date...
+ *	6) *child_rebuild*: at least one of its children has been rebuilt
+ *	7) *children_left*: number of children still to consider
+ *	8) *mtime*: node's modification time
+ *	9) *youngest*: youngest child (cf make.c)
+ *	10) *parents*: list of nodes for which this is a dependency
+ *	11) *children*: list of nodes on which this depends
+ *	12) *cohorts*: list of nodes of the same name created by the :: operator
+ *	13) *predecessors*: list of nodes, result of .ORDER:
+ *	    if considered for building, they should be built before this node.
+ *	14) *successors*: list of nodes, result of .ORDER:
+ *	    if considered for building, they should be built after this node.
+ *	15) *localvars*: ``local'' variables specific to this target
+ *	   and this target only (cf var.c [$@ $< $?, etc.])
+ *	16) *commands*: the actual LIST of strings to pass to the shell
  *	   to create this target.
  */
 
-#define UNKNOWN		0
-#define BEINGMADE	1
-#define MADE		2
-#define UPTODATE	3
-#define ERROR		4
-#define ABORTED		5
-#define CYCLE		6
-#define ENDCYCLE	7
-#define NOSUCHNODE	8
-#define BUILDING	9
-#define HELDBACK	10
-
-#define SPECIAL_NONE	0U
+#define SPECIAL_NONE		0U
 #define SPECIAL_PATH		21U
 #define SPECIAL_MASK		63U
 #define SPECIAL_TARGET		64U
@@ -113,51 +98,57 @@
 #define SPECIAL_EXPENSIVE	33U
 
 struct GNode_ {
-    unsigned int special_op;	/* special op to apply */
-    unsigned char special;/* type of special node */
-    char must_make;	/* true if this target needs to be remade */
-    char childMade;	/* true if one of this target's children was
-			 * made */
-    char built_status;	/* Set to reflect the state of processing
-			 * on this node:
-			 *  UNKNOWN - Not examined yet
-			 *  BEINGMADE - Target is currently being made.
-			 *  BUILDING - There is a job running
-			 *  MADE - Was out-of-date and has been made
-			 *  UPTODATE - Was already up-to-date
-			 *  ERROR - An error occurred while it was being
-			 *	made (used only in compat mode)
-			 *  ABORTED - The target was aborted due to
-			 *	an error making an inferior.
-			 */
-    char *path;		/* The full pathname of the file */
-    unsigned int type;	/* Its type (see the OP flags, below) */
-    int order;		/* Its wait weight */
+    unsigned int type;		/* node type (see the OP flags, below) */
+    unsigned int special_op;	/* special op to apply (only used in parse.c) */
+    unsigned char special;	/* type of special node or SPECIAL_NONE */
+    bool must_make;		/* true if this target needs building */
+    bool child_rebuilt;		/* true if at least one child was rebuilt,
+    			 	 * thus triggering timestamps changes */
 
-    int unmade;		/* The number of unmade children */
-    int in_cycle;	/* cycle detection */
+    char built_status;	
+#define UNKNOWN		0	/* Not examined yet */
+#define BUILDING	1	/* In the process of building */
+#define REBUILT		2	/* Was out of date and got rebuilt */
+#define UPTODATE	3	/* Was already up-to-date */
+#define ERROR		4	/* Error occurred while building
+				 * (used only in compat mode) */
+#define ABORTED		5	/* Was aborted due to an error 
+				 * making an inferior */
+#define NOSUCHNODE	6	/* error from run_gnode */
+#define HELDBACK	7	/* Another target in the same group is
+				 * currently building, avoid race conditions
+				 * Only used in the parallel engine make.c */
 
-    struct timespec mtime;	/* Its modification time */
-    GNode *youngest;		/* Its youngest child */
+    char *path;		/* full pathname of the file */
+    int order;		/* wait weight (see .ORDER/predecessors/successors) */
 
-    GNode *impliedsrc;
+    int children_left;	/* number of children left to build */
+
+    struct timespec mtime;	/* Node's modification time */
+    GNode *youngest;		/* Node's youngest child */
+
+    GNode *impliedsrc;	/* found by suff, to help with localvars */
     LIST cohorts;	/* Other nodes for the :: operator */
     LIST parents;	/* Nodes that depend on this one */
     LIST children;	/* Nodes on which this one depends */
-    LIST successors; 	/* Nodes that must be made after this one */
-    LIST preds;		/* Nodes that must be made before this one */
+    LIST predecessors;
+    LIST successors; 	
 
-    SymTable context;	/* The local variables */
+    SymTable localvars;
     LIST commands;	/* Creation commands */
     Suff *suffix;	/* Suffix for the node (determined by
 			 * Suff_FindDeps and opaque to everyone
 			 * but the Suff module) */
-    GNode *sibling;	/* equivalent targets */
-    GNode *groupling;	/* target lists */
-    GNode *watched;	/* the node currently building */
-    /* stuff for target name equivalence */
+    GNode *groupling;	/* target lists, for HELDBACK: do not build two
+    			 * at the same time */
+    GNode *watched;	/* the node currently building for HELDBACK */
+
+			/* stuff for target name equivalence: */
+    GNode *sibling;	/* equivalent targets (not complete yet) */
     char *basename;	/* pointer to name stripped of path */
     GNode *next;
+
+    bool in_cycle;	/* cycle detection */
     char name[1];	/* The target's name */
 };
 
@@ -168,7 +159,7 @@ struct command
 };
 
 #define has_been_built(gn) \
-	((gn)->built_status == MADE || (gn)->built_status == UPTODATE)
+	((gn)->built_status == REBUILT || (gn)->built_status == UPTODATE)
 #define should_have_file(gn) \
 	((gn)->special == SPECIAL_NONE && \
 	((gn)->type & (OP_PHONY | OP_DUMMY)) == 0)
@@ -181,12 +172,13 @@ struct command
  * the lefthand side of an operator, though it may have been on the
  * righthand side...
  */
+#define OP_ZERO		0x00000000  /* No dependency operator seen so far */
 #define OP_DEPENDS	0x00000001  /* Execution of commands depends on
 				     * kids (:) */
 #define OP_FORCE	0x00000002  /* Always execute commands (!) */
 #define OP_DOUBLEDEP	0x00000004  /* Execution of commands depends on kids
 				     * per line (::) */
-#define OP_ERROR	0x00000000
+#define OP_ERROR	0x00000007
 #define OP_OPMASK	(OP_DEPENDS|OP_FORCE|OP_DOUBLEDEP)
 
 #define OP_OPTIONAL	0x00000008  /* Don't care if the target doesn't
@@ -236,7 +228,7 @@ struct command
  * OP_NOP will return true if the node with the given type was not the
  * object of a dependency operator
  */
-#define OP_NOP(t)	(((t) & OP_OPMASK) == 0x00000000)
+#define OP_NOP(t)	(((t) & OP_OPMASK) == OP_ZERO)
 
 #define OP_NOTARGET (OP_NOTMAIN|OP_USE|OP_EXEC|OP_TRANSFORM)
 

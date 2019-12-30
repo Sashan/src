@@ -1,4 +1,4 @@
-/*	$OpenBSD: targ.c,v 1.78 2017/06/22 17:08:20 espie Exp $ */
+/*	$OpenBSD: targ.c,v 1.82 2019/12/22 16:53:40 espie Exp $ */
 /*	$NetBSD: targ.c,v 1.11 1997/02/20 16:51:50 christos Exp $	*/
 
 /*
@@ -150,22 +150,23 @@ Targ_NewGNi(const char *name, const char *ename)
 
 	gn = ohash_create_entry(&gnode_info, name, &ename);
 	gn->path = NULL;
-	gn->type = 0;
+	gn->type = OP_ZERO;
 	gn->special = SPECIAL_NONE;
-	gn->unmade = 0;
+	gn->special_op = 0;
+	gn->children_left = 0;
 	gn->must_make = false;
 	gn->built_status = UNKNOWN;
 	gn->in_cycle = false;
-	gn->childMade =	false;
+	gn->child_rebuilt = false;
 	gn->order = 0;
 	ts_set_out_of_date(gn->mtime);
 	gn->youngest = gn;
 	Lst_Init(&gn->cohorts);
 	Lst_Init(&gn->parents);
 	Lst_Init(&gn->children);
+	Lst_Init(&gn->predecessors);
 	Lst_Init(&gn->successors);
-	Lst_Init(&gn->preds);
-	SymTable_Init(&gn->context);
+	SymTable_Init(&gn->localvars);
 	gn->impliedsrc = NULL;
 	Lst_Init(&gn->commands);
 	gn->suffix = NULL;
@@ -302,7 +303,7 @@ status_to_string(GNode *gn)
 	switch (gn->built_status) {
 	case UNKNOWN:
 		return "unknown";
-	case MADE:
+	case REBUILT:
 		return "made";
 	case UPTODATE:
 		return "up-to-date";

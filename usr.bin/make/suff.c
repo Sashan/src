@@ -1,4 +1,4 @@
-/*	$OpenBSD: suff.c,v 1.95 2018/11/13 14:51:35 espie Exp $ */
+/*	$OpenBSD: suff.c,v 1.98 2019/12/21 15:31:54 espie Exp $ */
 /*	$NetBSD: suff.c,v 1.13 1996/11/06 17:59:25 christos Exp $	*/
 
 /*
@@ -917,10 +917,10 @@ SuffLinkParent(GNode *cgn, GNode *pgn)
 {
 	Lst_AtEnd(&cgn->parents, pgn);
 	if (!has_been_built(cgn))
-		pgn->unmade++;
+		pgn->children_left++;
 	else if ( ! (cgn->type & (OP_EXEC|OP_USE))) {
-		if (cgn->built_status == MADE)
-			pgn->childMade = true;
+		if (cgn->built_status == REBUILT)
+			pgn->child_rebuilt = true;
 		(void)Make_TimeStamp(pgn, cgn);
 	}
 }
@@ -936,7 +936,7 @@ SuffExpandVarChildren(LstNode after, GNode *cgn, GNode *pgn)
 	if (DEBUG(SUFF))
 		printf("Expanding \"%s\"...", cgn->name);
 
-	cp = Var_Subst(cgn->name, &pgn->context, true);
+	cp = Var_Subst(cgn->name, &pgn->localvars, true);
 	if (cp == NULL) {
 		printf("Problem substituting in %s", cgn->name);
 		printf("\n");
@@ -953,7 +953,7 @@ SuffExpandVarChildren(LstNode after, GNode *cgn, GNode *pgn)
 		 */
 		const char *sacrifice = (const char *)cp;
 
-		(void)Arch_ParseArchive(&sacrifice, &members, &pgn->context);
+		(void)Arch_ParseArchive(&sacrifice, &members, &pgn->localvars);
 	} else {
 		/* Break the result into a vector of strings whose nodes
 		 * we can find, then add those nodes to the members list.
@@ -980,7 +980,7 @@ SuffExpandVarChildren(LstNode after, GNode *cgn, GNode *pgn)
 				/* Start of a variable spec -- contact variable
 				 * module to find the end so we can skip over
 				 * it.  */
-				Var_ParseSkip(&cp2, &pgn->context);
+				Var_ParseSkip(&cp2, &pgn->localvars);
 			else if (*cp2 == '\\' && cp2[1] != '\0')
 				/* Escaped something -- skip over it.  */
 				cp2+=2;
@@ -1050,7 +1050,7 @@ SuffExpandWildChildren(LstNode after, GNode *cgn, GNode *pgn)
 		gn = Targ_FindNode(cp, TARG_CREATE);
 
 		/* If gn isn't already a child of the parent, make it so and
-		 * up the parent's count of unmade children.  */
+		 * up the parent's count of children to build.  */
 		if (Lst_Member(&pgn->children, gn) == NULL) {
 			Lst_Append(&pgn->children, after, gn);
 			after = Lst_Adv(after);
@@ -1070,8 +1070,8 @@ SuffExpandWildChildren(LstNode after, GNode *cgn, GNode *pgn)
  *
  * Side Effects:
  *	The expanded node is removed from the parent's list of children,
- *	and the parent's unmade counter is decremented, but other nodes
- *	may be added.
+ *	and the parent's children to build counter is decremented, 
+ *      but other nodes may be added.
  *-----------------------------------------------------------------------
  */
 static void
@@ -1094,7 +1094,7 @@ SuffExpandChildren(LstNode ln, /* LstNode of child, so we can replace it */
 
 	/* Since the source was expanded, remove it from the list of children to
 	 * keep it from being processed.  */
-	pgn->unmade--;
+	pgn->children_left--;
 	Lst_Remove(&pgn->children, ln);
 }
 
@@ -1559,8 +1559,8 @@ sfnd_abort:
 	 * each target are set from the commands of the transformation rule
 	 * used to get from the src suffix to the targ suffix. Note that this
 	 * causes the commands list of the original node, gn, to be replaced by
-	 * the commands of the final transformation rule. Also, the unmade
-	 * field of gn is incremented.  Etc.  */
+	 * the commands of the final transformation rule. Also, the children
+	 * to build field of gn is incremented.  Etc.  */
 	if (bottom->node == NULL) {
 		bottom->node = Targ_FindNode(bottom->file, TARG_CREATE);
 	}

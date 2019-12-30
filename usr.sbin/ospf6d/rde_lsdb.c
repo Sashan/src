@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde_lsdb.c,v 1.38 2013/10/18 11:16:52 sthen Exp $ */
+/*	$OpenBSD: rde_lsdb.c,v 1.40 2019/12/23 07:33:49 denis Exp $ */
 
 /*
  * Copyright (c) 2004, 2005 Claudio Jeker <claudio@openbsd.org>
@@ -99,9 +99,39 @@ void
 vertex_free(struct vertex *v)
 {
 	RB_REMOVE(lsa_tree, v->lsa_tree, v);
+
 	(void)evtimer_del(&v->ev);
+	vertex_nexthop_clear(v);
 	free(v->lsa);
 	free(v);
+}
+
+void
+vertex_nexthop_clear(struct vertex *v)
+{
+	struct v_nexthop	*vn;
+
+	while ((vn = TAILQ_FIRST(&v->nexthop))) {
+		TAILQ_REMOVE(&v->nexthop, vn, entry);
+		free(vn);
+	}
+}
+
+void
+vertex_nexthop_add(struct vertex *dst, struct vertex *parent,
+    const struct in6_addr *nexthop, u_int32_t ifindex)
+{
+	struct v_nexthop	*vn;
+
+	if ((vn = calloc(1, sizeof(*vn))) == NULL)
+		fatal("vertex_nexthop_add");
+
+	vn->prev = parent;
+	if (nexthop)
+		vn->nexthop = *nexthop;
+	vn->ifindex = ifindex;
+
+	TAILQ_INSERT_TAIL(&dst->nexthop, vn, entry);
 }
 
 /* returns -1 if a is older, 1 if newer and 0 if equal to b */
@@ -544,11 +574,9 @@ lsa_find(struct iface *iface, u_int16_t type, u_int32_t ls_id,
 	if (LSA_IS_SCOPE_AS(ntohs(type)))
 		tree = &asext_tree;
 	else if (LSA_IS_SCOPE_AREA(ntohs(type))) {
-		struct area	*area;
-
-		if ((area = area_find(rdeconf, iface->area_id)) == NULL)
+		if (iface->area == NULL)
 			fatalx("interface lost area");
-		tree = &area->lsa_tree;
+		tree = &iface->area->lsa_tree;
 	} else if (LSA_IS_SCOPE_LLOCAL(ntohs(type)))
 		tree = &iface->lsa_tree;
 	else

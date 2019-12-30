@@ -1,4 +1,4 @@
-/*	$OpenBSD: engine.c,v 1.56 2019/05/21 17:10:49 espie Exp $ */
+/*	$OpenBSD: engine.c,v 1.60 2019/12/24 13:57:42 espie Exp $ */
 /*
  * Copyright (c) 2012 Marc Espie.
  *
@@ -289,7 +289,6 @@ Make_HandleUse(GNode	*cgn,	/* The .USE node */
 	GNode	*gn;	/* A child of the .USE node */
 	LstNode	ln;	/* An element in the children list */
 
-
 	assert(cgn->type & (OP_USE|OP_TRANSFORM));
 
 	if (pgn == NULL)
@@ -308,7 +307,7 @@ Make_HandleUse(GNode	*cgn,	/* The .USE node */
 
 		if (Lst_AddNew(&pgn->children, gn)) {
 			Lst_AtEnd(&gn->parents, pgn);
-			pgn->unmade++;
+			pgn->children_left++;
 		}
 	}
 
@@ -320,14 +319,14 @@ Make_HandleUse(GNode	*cgn,	/* The .USE node */
 	pgn->type |= cgn->type & ~(OP_OPMASK|OP_USE|OP_TRANSFORM|OP_DOUBLE);
 
 	/*
-	 * This child node is now "made", so we decrement the count of
-	 * unmade children in the parent... We also remove the child
+	 * This child node is now built, so we decrement the count of
+	 * not yet built children in the parent... We also remove the child
 	 * from the parent's list to accurately reflect the number of
-	 * decent children the parent has. This is used by Make_Run to
+	 * remaining children the parent has. This is used by Make_Run to
 	 * decide whether to queue the parent or examine its children...
 	 */
 	if (cgn->type & OP_USE)
-		pgn->unmade--;
+		pgn->children_left--;
 }
 
 void
@@ -373,11 +372,11 @@ Make_DoAllVar(GNode *gn)
 		 */
 		do_oodate = false;
 		if (gn->type & OP_JOIN) {
-			if (child->built_status == MADE)
+			if (child->built_status == REBUILT)
 				do_oodate = true;
 		} else if (is_strictly_before(gn->mtime, child->mtime) ||
 		   (!is_strictly_before(child->mtime, starttime) &&
-		   child->built_status == MADE))
+		   child->built_status == REBUILT))
 		   	do_oodate = true;
 		if (do_oodate) {
 			oodate_count++;
@@ -447,7 +446,7 @@ Make_OODate(GNode *gn)
 	}
 
 	/*
-	 * A target is remade in one of the following circumstances:
+	 * A target is rebuilt in one of the following circumstances:
 	 * - its modification time is smaller than that of its youngest child
 	 *   and it would actually be run (has commands or type OP_NOP)
 	 * - it's the object of a force operator
@@ -470,7 +469,7 @@ Make_OODate(GNode *gn)
 		 */
 		if (DEBUG(MAKE))
 			printf(".JOIN node...");
-		oodate = gn->childMade;
+		oodate = gn->child_rebuilt;
 	} else if (gn->type & (OP_FORCE|OP_EXEC|OP_PHONY)) {
 		/*
 		 * A node which is the object of the force (!) operator or which
@@ -703,8 +702,6 @@ run_gnode(GNode *gn)
 	if (!gn || (gn->type & OP_DUMMY))
 		return NOSUCHNODE;
 
-	gn->built_status = MADE;
-
 	job_attach_node(&myjob, gn);
 	while (myjob.exit_type == JOB_EXIT_OKAY) {
 		bool finished = job_run_next(&myjob);
@@ -826,7 +823,7 @@ job_run_next(Job *job)
 		handle_all_signals();
 		job->location = &command->location;
 		Parse_SetLocation(job->location);
-		job->cmd = Var_Subst(command->string, &gn->context, false);
+		job->cmd = Var_Subst(command->string, &gn->localvars, false);
 		job->next_cmd = Lst_Adv(job->next_cmd);
 		if (fatal_errors)
 			Punt(NULL);
