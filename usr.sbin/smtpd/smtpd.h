@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtpd.h,v 1.647 2019/12/18 10:00:39 gilles Exp $	*/
+/*	$OpenBSD: smtpd.h,v 1.649 2019/12/21 10:40:20 gilles Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -1039,7 +1039,8 @@ enum filter_type {
 };
 
 enum filter_subsystem {
-	FILTER_SUBSYSTEM_SMTP_IN	= 1
+	FILTER_SUBSYSTEM_SMTP_IN	= 1<<0,
+	FILTER_SUBSYSTEM_SMTP_OUT	= 1<<1,
 };
 
 struct filter_proc {
@@ -1177,6 +1178,8 @@ struct dispatcher_remote {
 
 	int	 backup;
 	char	*backupmx;
+
+	char	*filtername;
 
 	int	 srs;
 };
@@ -1382,7 +1385,7 @@ void lka_filter_init(void);
 void lka_filter_register_hook(const char *, const char *);
 void lka_filter_ready(void);
 int lka_filter_proc_in_session(uint64_t, const char *);
-void lka_filter_begin(uint64_t, const char *, const struct sockaddr_storage *, const struct sockaddr_storage *, const char *, int);
+void lka_filter_begin(uint64_t, const char *);
 void lka_filter_end(uint64_t);
 void lka_filter_protocol(uint64_t, enum filter_phase, const char *);
 void lka_filter_data_begin(uint64_t);
