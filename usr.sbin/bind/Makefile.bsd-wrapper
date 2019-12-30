@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile.bsd-wrapper,v 1.17 2019/12/16 17:16:12 sthen Exp $
+#	$OpenBSD: Makefile.bsd-wrapper,v 1.20 2019/12/27 19:47:39 sthen Exp $
 
 .include <bsd.own.mk>
 
@@ -7,12 +7,17 @@ CONFIGURE_OPTS=	--prefix=/usr \
 		--localstatedir=/var \
 		--sysconfdir=/etc \
 		--disable-backtrace \
+		--disable-isc-spnego \
 		--without-readline \
+		--with-python=no \
 		--disable-idn \
+		--with-gssapi=no \
+		--with-docbook-xsl=no \
 		--with-libjson=no \
 		--disable-shared \
 		--disable-threads \
-		--disable-openssl-version-check
+		--disable-openssl-version-check \
+		--enable-sit
 
 PROG=	bin/dig/dig \
 	bin/dig/host \
@@ -60,9 +65,6 @@ BEFOREMAN= config.status
 clean cleandir:
 	-@if [ -e Makefile ]; then ${MAKE} distclean; fi
 	rm -f ${CLEANFILES}
-
-depend:
-	# Nothing here so far...
 
 tags:
 	# Nothing here so far...

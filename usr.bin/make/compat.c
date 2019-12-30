@@ -1,4 +1,4 @@
-/*	$OpenBSD: compat.c,v 1.86 2016/10/21 16:12:38 espie Exp $	*/
+/*	$OpenBSD: compat.c,v 1.88 2019/12/21 15:29:25 espie Exp $	*/
 /*	$NetBSD: compat.c,v 1.14 1996/11/06 17:59:01 christos Exp $	*/
 
 /*
@@ -112,7 +112,7 @@ CompatMake(void *gnp,	/* The node to make */
 
 	switch(gn->built_status) {
 	case UNKNOWN: 
-		/* First mark ourselves to be made, then apply whatever
+		/* First mark ourselves to be built, then apply whatever
 		 * transformations the suffix module thinks are necessary.
 		 * Once that's done, we can descend and make all our children.
 		 * If any of them has an error but the -k flag was given,
@@ -120,7 +120,7 @@ CompatMake(void *gnp,	/* The node to make */
 		 * signal to not attempt to do anything but abort our
 		 * parent as well.  */
 		gn->must_make = true;
-		gn->built_status = BEINGMADE;
+		gn->built_status = BUILDING;
 		/* note that, in case we have siblings, we only check all
 		 * children for all siblings, but we don't try to apply
 		 * any other rule.
@@ -139,7 +139,7 @@ CompatMake(void *gnp,	/* The node to make */
 			return;
 		}
 
-		/* All the children were made ok. Now youngest points to
+		/* All the children built ok. Now youngest points to
 		 * the newest child, we need to find out
 		 * if we exist and when we were modified last. The criteria
 		 * for datedness are defined by the Make_OODate function.  */
@@ -163,7 +163,7 @@ CompatMake(void *gnp,	/* The node to make */
 		 */
 		sib = gn;
 		do {
-			/* We need to be re-made. We also have to make sure
+			/* We need to be rebuilt. We also have to make sure
 			 * we've got a $?  variable. To be nice, we also define
 			 * the $> variable using Make_DoAllVar().
 			 */
@@ -194,13 +194,13 @@ CompatMake(void *gnp,	/* The node to make */
 		gn->built_status = sib->built_status;
 
 		if (gn->built_status != ERROR) {
-			/* If the node was made successfully, mark it so,
+			/* If the node was built successfully, mark it so,
 			 * update its modification time and timestamp all
 			 * its parents.
 			 * This is to keep its state from affecting that of
 			 * its parent.  */
-			gn->built_status = MADE;
-			sib->built_status = MADE;
+			gn->built_status = REBUILT;
+			sib->built_status = REBUILT;
 			/* This is what Make does and it's actually a good
 			 * thing, as it allows rules like
 			 *
@@ -231,7 +231,7 @@ CompatMake(void *gnp,	/* The node to make */
 				printf("update time: %s\n",
 				    time_to_string(&gn->mtime));
 			if (!(gn->type & OP_EXEC)) {
-				pgn->childMade = true;
+				pgn->child_rebuilt = true;
 				Make_TimeStamp(pgn, gn);
 			}
 		} else if (keepgoing)
@@ -246,14 +246,14 @@ CompatMake(void *gnp,	/* The node to make */
 		 * parent to abort.  */
 		pgn->must_make = false;
 		break;
-	case BEINGMADE:
+	case BUILDING:
 		Error("Graph cycles through %s", gn->name);
 		gn->built_status = ERROR;
 		pgn->must_make = false;
 		break;
-	case MADE:
+	case REBUILT:
 		if ((gn->type & OP_EXEC) == 0) {
-			pgn->childMade = true;
+			pgn->child_rebuilt = true;
 			Make_TimeStamp(pgn, gn);
 		}
 		break;
@@ -270,18 +270,18 @@ void
 Compat_Run(Lst targs)		/* List of target nodes to re-create */
 {
 	GNode	  *gn = NULL;	/* Current root target */
-	int 	  errors;   	/* Number of targets not remade due to errors */
+	int 	  errors;   	/* Number of targets not built due to errors */
 
 	/* For each entry in the list of targets to create, call CompatMake on
 	 * it to create the thing. CompatMake will leave the 'built_status'
 	 * field of gn in one of several states:
 	 *	    UPTODATE	    gn was already up-to-date
-	 *	    MADE	    gn was recreated successfully
+	 *	    REBUILT	    gn was recreated successfully
 	 *	    ERROR	    An error occurred while gn was being
 	 *                          created
-	 *	    ABORTED	    gn was not remade because one of its
-	 *                          inferiors could not be made due to errors.
-	 */
+	 *	    ABORTED	    gn was not built because one of its
+	 *                          dependencies could not be built due 
+	 *		      	    to errors.  */
 	errors = 0;
 	while ((gn = Lst_DeQueue(targs)) != NULL) {
 		CompatMake(gn, NULL);
