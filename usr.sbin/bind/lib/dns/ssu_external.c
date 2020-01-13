@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: ssu_external.c,v 1.2 2019/12/17 01:46:32 sthen Exp $ */
+/* $Id: ssu_external.c,v 1.5 2020/01/09 18:17:15 florian Exp $ */
 
 /*
  * This implements external update-policy rules.  This allows permission
@@ -26,15 +26,13 @@
 #include <errno.h>
 #include <unistd.h>
 
-#ifdef ISC_PLATFORM_HAVESYSUNH
 #include <sys/socket.h>
 #include <sys/un.h>
-#endif
 
 #include <isc/magic.h>
 #include <isc/mem.h>
 #include <isc/netaddr.h>
-#include <isc/print.h>
+
 #include <isc/result.h>
 #include <isc/string.h>
 #include <isc/util.h>
@@ -66,7 +64,6 @@ ssu_e_log(int level, const char *fmt, ...) {
 static int
 ux_socket_connect(const char *path) {
 	int fd = -1;
-#ifdef ISC_PLATFORM_HAVESYSUNH
 	struct sockaddr_un addr;
 
 	REQUIRE(path != NULL);
@@ -100,7 +97,6 @@ ux_socket_connect(const char *path) {
 		close(fd);
 		return (-1);
 	}
-#endif
 	return (fd);
 }
 
@@ -136,8 +132,8 @@ dns_ssu_external_match(dns_name_t *identity,
 	isc_region_t token_region;
 	unsigned char *data;
 	isc_buffer_t buf;
-	isc_uint32_t token_len = 0;
-	isc_uint32_t reply;
+	uint32_t token_len = 0;
+	uint32_t reply;
 	ssize_t ret;
 
 	/* The identity contains local:/path/to/socket */
@@ -182,14 +178,14 @@ dns_ssu_external_match(dns_name_t *identity,
 	dns_rdatatype_format(type, b_type, sizeof(b_type));
 
 	/* Work out how big the request will be */
-	req_len = sizeof(isc_uint32_t)     + /* Format version */
-		  sizeof(isc_uint32_t)     + /* Length */
+	req_len = sizeof(uint32_t)     + /* Format version */
+		  sizeof(uint32_t)     + /* Length */
 		  strlen(b_signer) + 1 + /* Signer */
 		  strlen(b_name) + 1   + /* Name */
 		  strlen(b_addr) + 1   + /* Address */
 		  strlen(b_type) + 1   + /* Type */
 		  strlen(b_key) + 1    + /* Key */
-		  sizeof(isc_uint32_t)     + /* tkey_token length */
+		  sizeof(uint32_t)     + /* tkey_token length */
 		  token_len;             /* tkey_token */
 
 
@@ -235,8 +231,8 @@ dns_ssu_external_match(dns_name_t *identity,
 	}
 
 	/* Receive the reply */
-	ret = read(fd, &reply, sizeof(isc_uint32_t));
-	if (ret != (ssize_t) sizeof(isc_uint32_t)) {
+	ret = read(fd, &reply, sizeof(uint32_t));
+	if (ret != (ssize_t) sizeof(uint32_t)) {
 		char strbuf[ISC_STRERRORSIZE];
 		isc__strerror(errno, strbuf, sizeof(strbuf));
 		ssu_e_log(3, "ssu_external: unable to receive reply - %s",

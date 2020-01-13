@@ -1,4 +1,4 @@
-/*	$OpenBSD: subr_log.c,v 1.60 2019/12/24 12:56:07 bluhm Exp $	*/
+/*	$OpenBSD: subr_log.c,v 1.64 2020/01/11 14:30:24 mpi Exp $	*/
 /*	$NetBSD: subr_log.c,v 1.11 1996/03/30 22:24:44 christos Exp $	*/
 
 /*
@@ -72,9 +72,7 @@
 struct logsoftc {
 	int	sc_state;		/* see above for possibilities */
 	struct	selinfo sc_selp;	/* process waiting on select call */
-	int	sc_pgid;		/* process/group for async I/O */
-	uid_t	sc_siguid;		/* uid for process that set sc_pgid */
-	uid_t	sc_sigeuid;		/* euid for process that set sc_pgid */
+	struct	sigio_ref sc_sigio;	/* async I/O registration */
 	int	sc_need_wakeup;		/* if set, wake up waiters */
 	struct timeout sc_tick;		/* wakeup poll timeout */
 } logsoftc;
@@ -88,8 +86,12 @@ struct	file *syslogf;
 void filt_logrdetach(struct knote *kn);
 int filt_logread(struct knote *kn, long hint);
 
-struct filterops logread_filtops =
-	{ 1, NULL, filt_logrdetach, filt_logread};
+const struct filterops logread_filtops = {
+	.f_isfd		= 1,
+	.f_attach	= NULL,
+	.f_detach	= filt_logrdetach,
+	.f_event	= filt_logread,
+};
 
 int dosendsyslog(struct proc *, const char *, size_t, int, enum uio_seg);
 void logtick(void *);
@@ -167,6 +169,7 @@ logopen(dev_t dev, int flags, int mode, struct proc *p)
 	if (log_open)
 		return (EBUSY);
 	log_open = 1;
+	sigio_init(&logsoftc.sc_sigio);
 	timeout_set(&logsoftc.sc_tick, logtick, NULL);
 	timeout_add_msec(&logsoftc.sc_tick, LOG_TICK);
 	return (0);
@@ -184,6 +187,7 @@ logclose(dev_t dev, int flag, int mode, struct proc *p)
 	log_open = 0;
 	timeout_del(&logsoftc.sc_tick);
 	logsoftc.sc_state = 0;
+	sigio_free(&logsoftc.sc_sigio);
 	return (0);
 }
 
@@ -201,8 +205,7 @@ logread(dev_t dev, struct uio *uio, int flag)
 			goto out;
 		}
 		logsoftc.sc_state |= LOG_RDWAIT;
-		error = tsleep(mbp, LOG_RDPRI | PCATCH,
-			       "klog", 0);
+		error = tsleep_nsec(mbp, LOG_RDPRI | PCATCH, "klog", INFSLP);
 		if (error)
 			goto out;
 	}
@@ -341,8 +344,7 @@ logtick(void *arg)
 
 	selwakeup(&logsoftc.sc_selp);
 	if (logsoftc.sc_state & LOG_ASYNC)
-		csignal(logsoftc.sc_pgid, SIGIO,
-		    logsoftc.sc_siguid, logsoftc.sc_sigeuid);
+		pgsigio(&logsoftc.sc_sigio, SIGIO, 0);
 	if (logsoftc.sc_state & LOG_RDWAIT) {
 		wakeup(msgbufp);
 		logsoftc.sc_state &= ~LOG_RDWAIT;
@@ -380,14 +382,13 @@ logioctl(dev_t dev, u_long com, caddr_t data, int flag, struct proc *p)
 			logsoftc.sc_state &= ~LOG_ASYNC;
 		break;
 
+	case FIOSETOWN:
 	case TIOCSPGRP:
-		logsoftc.sc_pgid = *(int *)data;
-		logsoftc.sc_siguid = p->p_ucred->cr_ruid;
-		logsoftc.sc_sigeuid = p->p_ucred->cr_uid;
-		break;
+		return (sigio_setown(&logsoftc.sc_sigio, com, data));
 
+	case FIOGETOWN:
 	case TIOCGPGRP:
-		*(int *)data = logsoftc.sc_pgid;
+		sigio_getown(&logsoftc.sc_sigio, com, data);
 		break;
 
 	case LIOCSFD:

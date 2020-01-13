@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpctl.c,v 1.254 2019/12/20 09:16:05 claudio Exp $ */
+/*	$OpenBSD: bgpctl.c,v 1.256 2020/01/09 11:57:04 claudio Exp $ */
 
 /*
  * Copyright (c) 2003 Henning Brauer <henning@openbsd.org>
@@ -46,7 +46,6 @@
 
 int		 main(int, char *[]);
 int		 show(struct imsg *, struct parse_result *);
-void		 print_timer(const char *, time_t);
 void		 show_attr(void *, u_int16_t, int);
 void		 show_communities(u_char *, size_t, int);
 void		 show_community(u_char *, u_int16_t);
@@ -405,7 +404,7 @@ show(struct imsg *imsg, struct parse_result *res)
 	case IMSG_CTL_SHOW_TIMER:
 		t = imsg->data;
 		if (t->type > 0 && t->type < Timer_Max)
-			print_timer(timernames[t->type], t->val);
+			show_timer(t);
 		break;
 	case IMSG_CTL_SHOW_INTERFACE:
 		iface = imsg->data;
@@ -596,8 +595,8 @@ print_neighbor_msgstats(struct peer *p)
 #define TF_BUFS	8
 #define TF_LEN	9
 
-static const char *
-fmt_timeframe_core(time_t t)
+const char *
+fmt_timeframe(time_t t)
 {
 	char		*buf;
 	static char	 tfbuf[TF_BUFS][TF_LEN];	/* ring buffer */
@@ -631,28 +630,18 @@ fmt_timeframe_core(time_t t)
 }
 
 const char *
-fmt_timeframe(time_t t)
+fmt_monotime(time_t t)
 {
-	time_t now;
+	struct timespec ts;
 
 	if (t == 0)
 		return ("Never");
 
-	now = time(NULL);
-	if (t > now)	/* time in the future is not possible */
-		t = now;
-	return (fmt_timeframe_core(now - t));
-}
-
-void
-print_timer(const char *name, time_t d)
-{
-	printf("  %-20s ", name);
-
-	if (d <= 0)
-		printf("%-20s\n", "due");
-	else
-		printf("due in %-13s\n", fmt_timeframe_core(d));
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+		err(1, "clock_gettime");
+	if (t > ts.tv_sec)	/* time in the future is not possible */
+		t = ts.tv_sec;
+	return (fmt_timeframe(ts.tv_sec - t));
 }
 
 void
@@ -1426,17 +1415,20 @@ show_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 	struct parse_result		 res;
 	struct ctl_show_rib_request	*req = arg;
 	struct mrt_rib_entry		*mre;
+	time_t				 now;
 	u_int16_t			 i, j;
 
 	memset(&res, 0, sizeof(res));
 	res.flags = req->flags;
+	now = time(NULL);
 
 	for (i = 0; i < mr->nentries; i++) {
 		mre = &mr->entries[i];
 		bzero(&ctl, sizeof(ctl));
 		ctl.prefix = mr->prefix;
 		ctl.prefixlen = mr->prefixlen;
-		ctl.lastchange = mre->originated;
+		if (mre->originated <= now)
+			ctl.age = now - mre->originated;
 		ctl.true_nexthop = mre->nexthop;
 		ctl.exit_nexthop = mre->nexthop;
 		ctl.origin = mre->origin;
@@ -1502,14 +1494,17 @@ network_mrt_dump(struct mrt_rib *mr, struct mrt_peer *mp, void *arg)
 	struct ctl_show_rib_request	*req = arg;
 	struct mrt_rib_entry		*mre;
 	struct ibuf			*msg;
+	time_t				 now;
 	u_int16_t			 i, j;
 
+	now = time(NULL);
 	for (i = 0; i < mr->nentries; i++) {
 		mre = &mr->entries[i];
 		bzero(&ctl, sizeof(ctl));
 		ctl.prefix = mr->prefix;
 		ctl.prefixlen = mr->prefixlen;
-		ctl.lastchange = mre->originated;
+		if (mre->originated <= now)
+			ctl.age = now - mre->originated;
 		ctl.true_nexthop = mre->nexthop;
 		ctl.exit_nexthop = mre->nexthop;
 		ctl.origin = mre->origin;

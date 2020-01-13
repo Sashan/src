@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: aclconf.h,v 1.3 2019/12/17 01:46:38 sthen Exp $ */
+/* $Id: aclconf.h,v 1.5 2020/01/09 18:17:20 florian Exp $ */
 
 #ifndef ISCCFG_ACLCONF_H
 #define ISCCFG_ACLCONF_H 1
@@ -23,17 +23,11 @@
 
 #include <isccfg/cfg.h>
 
-#ifdef HAVE_GEOIP
-#include <dns/geoip.h>
-#endif
 #include <dns/types.h>
 
 typedef struct cfg_aclconfctx {
 	ISC_LIST(dns_acl_t) named_acl_cache;
 	isc_mem_t *mctx;
-#ifdef HAVE_GEOIP
-	dns_geoip_databases_t *geoip;
-#endif
 	isc_refcount_t references;
 } cfg_aclconfctx_t;
 
@@ -72,7 +66,7 @@ isc_result_t
 cfg_acl_fromconfig2(const cfg_obj_t *caml, const cfg_obj_t *cctx,
 		   isc_log_t *lctx, cfg_aclconfctx_t *ctx,
 		   isc_mem_t *mctx, unsigned int nest_level,
-		   isc_uint16_t family, dns_acl_t **target);
+		   uint16_t family, dns_acl_t **target);
 /*
  * Construct a new dns_acl_t from configuration data in 'caml' and
  * 'cctx'.  Memory is allocated through 'mctx'.

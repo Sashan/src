@@ -43,7 +43,7 @@
  * SUCH DAMAGE.
  */
 
-/* $Id: file.c,v 1.7 2019/12/17 01:46:37 sthen Exp $ */
+/* $Id: file.c,v 1.10 2020/01/09 18:17:19 florian Exp $ */
 
 /*! \file */
 
@@ -68,7 +68,7 @@
 #include <isc/file.h>
 #include <isc/log.h>
 #include <isc/mem.h>
-#include <isc/random.h>
+
 #include <isc/string.h>
 #include <isc/time.h>
 #include <isc/util.h>
@@ -148,11 +148,7 @@ isc_file_getmodtime(const char *file, isc_time_t *modtime) {
 	result = file_stats(file, &stats);
 
 	if (result == ISC_R_SUCCESS)
-#ifdef ISC_PLATFORM_HAVESTATNSEC
 		isc_time_set(modtime, stats.st_mtime, stats.st_mtim.tv_nsec);
-#else
-		isc_time_set(modtime, stats.st_mtime, 0);
-#endif
 
 	return (result);
 }
@@ -205,7 +201,7 @@ isc_file_settime(const char *file, isc_time_t *when) {
 	 * we can at least cast to signed so the IRIX compiler shuts up.
 	 */
 	times[0].tv_usec = times[1].tv_usec =
-		(isc_int32_t)(isc_time_nanoseconds(when) / 1000);
+		(int32_t)(isc_time_nanoseconds(when) / 1000);
 
 	if (utimes(file, times) < 0)
 		return (isc__errno2result(errno));
@@ -262,7 +258,6 @@ isc_result_t
 isc_file_renameunique(const char *file, char *templet) {
 	char *x;
 	char *cp;
-	isc_uint32_t which;
 
 	REQUIRE(file != NULL);
 	REQUIRE(templet != NULL);
@@ -275,8 +270,7 @@ isc_file_renameunique(const char *file, char *templet) {
 
 	x = cp--;
 	while (cp >= templet && *cp == 'X') {
-		isc_random_get(&which);
-		*cp = alphnum[which % (sizeof(alphnum) - 1)];
+		*cp = alphnum[arc4random_uniform(sizeof(alphnum) - 1)];
 		x = cp--;
 	}
 	while (link(file, templet) == -1) {
@@ -320,7 +314,6 @@ isc_file_openuniquemode(char *templet, int mode, FILE **fp) {
 	isc_result_t result = ISC_R_SUCCESS;
 	char *x;
 	char *cp;
-	isc_uint32_t which;
 
 	REQUIRE(templet != NULL);
 	REQUIRE(fp != NULL && *fp == NULL);
@@ -333,8 +326,7 @@ isc_file_openuniquemode(char *templet, int mode, FILE **fp) {
 
 	x = cp--;
 	while (cp >= templet && *cp == 'X') {
-		isc_random_get(&which);
-		*cp = alphnum[which % (sizeof(alphnum) - 1)];
+		*cp = alphnum[arc4random_uniform(sizeof(alphnum) - 1)];
 		x = cp--;
 	}
 

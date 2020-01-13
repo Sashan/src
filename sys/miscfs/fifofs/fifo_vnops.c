@@ -1,4 +1,4 @@
-/*	$OpenBSD: fifo_vnops.c,v 1.69 2019/12/12 16:33:02 visa Exp $	*/
+/*	$OpenBSD: fifo_vnops.c,v 1.71 2020/01/08 15:03:10 mpi Exp $	*/
 /*	$NetBSD: fifo_vnops.c,v 1.18 1996/03/16 23:52:42 christos Exp $	*/
 
 /*
@@ -107,10 +107,19 @@ int	filt_fiforead(struct knote *kn, long hint);
 void	filt_fifowdetach(struct knote *kn);
 int	filt_fifowrite(struct knote *kn, long hint);
 
-struct filterops fiforead_filtops =
-	{ 1, NULL, filt_fifordetach, filt_fiforead };
-struct filterops fifowrite_filtops =
-	{ 1, NULL, filt_fifowdetach, filt_fifowrite };
+const struct filterops fiforead_filtops = {
+	.f_isfd		= 1,
+	.f_attach	= NULL,
+	.f_detach	= filt_fifordetach,
+	.f_event	= filt_fiforead,
+};
+
+const struct filterops fifowrite_filtops = {
+	.f_isfd		= 1,
+	.f_attach	= NULL,
+	.f_detach	= filt_fifowdetach,
+	.f_event	= filt_fifowrite,
+};
 
 /*
  * Open called to set up a new instance of a fifo or
@@ -183,16 +192,16 @@ fifo_open(void *v)
 	if ((ap->a_mode & O_NONBLOCK) == 0) {
 		if ((ap->a_mode & FREAD) && fip->fi_writers == 0) {
 			VOP_UNLOCK(vp);
-			error = tsleep(&fip->fi_readers,
-			    PCATCH | PSOCK, "fifor", 0);
+			error = tsleep_nsec(&fip->fi_readers,
+			    PCATCH | PSOCK, "fifor", INFSLP);
 			vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 			if (error)
 				goto bad;
 		}
 		if ((ap->a_mode & FWRITE) && fip->fi_readers == 0) {
 			VOP_UNLOCK(vp);
-			error = tsleep(&fip->fi_writers,
-			    PCATCH | PSOCK, "fifow", 0);
+			error = tsleep_nsec(&fip->fi_writers,
+			    PCATCH | PSOCK, "fifow", INFSLP);
 			vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 			if (error)
 				goto bad;

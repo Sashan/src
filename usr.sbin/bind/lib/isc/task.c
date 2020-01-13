@@ -34,16 +34,12 @@
 #include <isc/msgs.h>
 #include <isc/once.h>
 #include <isc/platform.h>
-#include <isc/print.h>
+
 #include <isc/string.h>
 #include <isc/task.h>
 #include <isc/thread.h>
 #include <isc/util.h>
 #include <isc/xml.h>
-
-#ifdef OPENSSL_LEAKS
-#include <openssl/err.h>
-#endif
 
 /*%
  * For BIND9 internal applications:
@@ -57,11 +53,7 @@
  * is expected to have a separate manager; no "worker threads" are shared by
  * the application threads.
  */
-#ifdef ISC_PLATFORM_USETHREADS
-#define USE_WORKER_THREADS
-#else
 #define USE_SHARED_MANAGER
-#endif	/* ISC_PLATFORM_USETHREADS */
 
 #include "task_p.h"
 
@@ -137,21 +129,12 @@ struct isc__taskmgr {
 	isc_taskmgr_t			common;
 	isc_mem_t *			mctx;
 	isc_mutex_t			lock;
-#ifdef ISC_PLATFORM_USETHREADS
-	unsigned int			workers;
-	isc_thread_t *			threads;
-#endif /* ISC_PLATFORM_USETHREADS */
 	/* Locked by task manager lock. */
 	unsigned int			default_quantum;
 	LIST(isc__task_t)		tasks;
 	isc__tasklist_t			ready_tasks;
 	isc__tasklist_t			ready_priority_tasks;
 	isc_taskmgrmode_t		mode;
-#ifdef ISC_PLATFORM_USETHREADS
-	isc_condition_t			work_available;
-	isc_condition_t			exclusive_granted;
-	isc_condition_t			paused;
-#endif /* ISC_PLATFORM_USETHREADS */
 	unsigned int			tasks_running;
 	unsigned int			tasks_ready;
 	isc_boolean_t			pause_requested;
@@ -167,7 +150,7 @@ struct isc__taskmgr {
 	isc__task_t			*excl;
 #ifdef USE_SHARED_MANAGER
 	unsigned int			refs;
-#endif /* ISC_PLATFORM_USETHREADS */
+#endif /* USE_SHARED_MANAGER */
 };
 
 #define DEFAULT_TASKMGR_QUANTUM		10
@@ -1288,9 +1271,6 @@ dispatch(isc__taskmgr_t *manager) {
 
 #ifdef USE_WORKER_THREADS
 static isc_threadresult_t
-#ifdef _WIN32
-WINAPI
-#endif
 run(void *uap) {
 	isc__taskmgr_t *manager = uap;
 
@@ -1301,10 +1281,6 @@ run(void *uap) {
 
 	XTHREADTRACE(isc_msgcat_get(isc_msgcat, ISC_MSGSET_GENERAL,
 				    ISC_MSG_EXITING, "exiting"));
-
-#ifdef OPENSSL_LEAKS
-	ERR_remove_state(0);
-#endif
 
 	return ((isc_threadresult_t)0);
 }
@@ -1809,15 +1785,6 @@ isc_taskmgr_renderxml(isc_taskmgr_t *mgr0, xmlTextWriterPtr writer) {
 	 * on which type is enabled.
 	 */
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "thread-model"));
-#ifdef ISC_PLATFORM_USETHREADS
-	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "type"));
-	TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "threaded"));
-	TRY0(xmlTextWriterEndElement(writer)); /* type */
-
-	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "worker-threads"));
-	TRY0(xmlTextWriterWriteFormatString(writer, "%d", mgr->workers));
-	TRY0(xmlTextWriterEndElement(writer)); /* worker-threads */
-#else /* ISC_PLATFORM_USETHREADS */
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "type"));
 	TRY0(xmlTextWriterWriteString(writer, ISC_XMLCHAR "non-threaded"));
 	TRY0(xmlTextWriterEndElement(writer)); /* type */
@@ -1825,7 +1792,6 @@ isc_taskmgr_renderxml(isc_taskmgr_t *mgr0, xmlTextWriterPtr writer) {
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "references"));
 	TRY0(xmlTextWriterWriteFormatString(writer, "%d", mgr->refs));
 	TRY0(xmlTextWriterEndElement(writer)); /* references */
-#endif /* ISC_PLATFORM_USETHREADS */
 
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "default-quantum"));
 	TRY0(xmlTextWriterWriteFormatString(writer, "%d",
@@ -1918,15 +1884,6 @@ isc_taskmgr_renderjson(isc_taskmgr_t *mgr0, json_object *tasks) {
 	 * Write out the thread-model, and some details about each depending
 	 * on which type is enabled.
 	 */
-#ifdef ISC_PLATFORM_USETHREADS
-	obj = json_object_new_string("threaded");
-	CHECKMEM(obj);
-	json_object_object_add(tasks, "thread-model", obj);
-
-	obj = json_object_new_int(mgr->workers);
-	CHECKMEM(obj);
-	json_object_object_add(tasks, "worker-threads", obj);
-#else /* ISC_PLATFORM_USETHREADS */
 	obj = json_object_new_string("non-threaded");
 	CHECKMEM(obj);
 	json_object_object_add(tasks, "thread-model", obj);
@@ -1934,7 +1891,6 @@ isc_taskmgr_renderjson(isc_taskmgr_t *mgr0, json_object *tasks) {
 	obj = json_object_new_int(mgr->refs);
 	CHECKMEM(obj);
 	json_object_object_add(tasks, "references", obj);
-#endif /* ISC_PLATFORM_USETHREADS */
 
 	obj = json_object_new_int(mgr->default_quantum);
 	CHECKMEM(obj);

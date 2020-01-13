@@ -15,7 +15,7 @@
  */
 
 /*
- * $Id: dnssec.c,v 1.7 2019/12/17 01:46:31 sthen Exp $
+ * $Id: dnssec.c,v 1.11 2020/01/09 18:17:14 florian Exp $
  */
 
 /*! \file */
@@ -31,7 +31,7 @@
 #include <isc/string.h>
 #include <isc/util.h>
 
-#include <pk11/site.h>
+
 
 #include <dns/db.h>
 #include <dns/diff.h>
@@ -45,12 +45,10 @@
 #include <dns/rdataset.h>
 #include <dns/rdatastruct.h>
 #include <dns/result.h>
-#include <dns/stats.h>
+
 #include <dns/tsig.h>		/* for DNS_TSIG_FUDGE */
 
 #include <dst/result.h>
-
-LIBDNS_EXTERNAL_DATA isc_stats_t *dns_dnssec_stats;
 
 #define is_response(msg) (msg->flags & DNS_MESSAGEFLAG_QR)
 
@@ -79,12 +77,6 @@ digest_callback(void *arg, isc_region_t *data) {
 	dst_context_t *ctx = arg;
 
 	return (dst_context_adddata(ctx, data));
-}
-
-static inline void
-inc_stat(isc_statscounter_t counter) {
-	if (dns_dnssec_stats != NULL)
-		isc_stats_increment(dns_dnssec_stats, counter);
 }
 
 /*
@@ -205,7 +197,7 @@ dns_dnssec_sign(dns_name_t *name, dns_rdataset_t *set, dst_key_t *key,
 	isc_result_t ret;
 	isc_buffer_t *databuf = NULL;
 	char data[256 + 8];
-	isc_uint32_t flags;
+	uint32_t flags;
 	unsigned int sigsize;
 	dns_fixedname_t fnewname;
 	dns_fixedname_t fsigner;
@@ -309,7 +301,7 @@ dns_dnssec_sign(dns_name_t *name, dns_rdataset_t *set, dst_key_t *key,
 	isc_buffer_usedregion(&envbuf, &r);
 
 	for (i = 0; i < nrdatas; i++) {
-		isc_uint16_t len;
+		uint16_t len;
 		isc_buffer_t lenbuf;
 		isc_region_t lenr;
 
@@ -331,7 +323,7 @@ dns_dnssec_sign(dns_name_t *name, dns_rdataset_t *set, dst_key_t *key,
 		 */
 		isc_buffer_init(&lenbuf, &len, sizeof(len));
 		INSIST(rdatas[i].length < 65536);
-		isc_buffer_putuint16(&lenbuf, (isc_uint16_t)rdatas[i].length);
+		isc_buffer_putuint16(&lenbuf, (uint16_t)rdatas[i].length);
 		isc_buffer_usedregion(&lenbuf, &lenr);
 		ret = dst_context_adddata(ctx, &lenr);
 		if (ret != ISC_R_SUCCESS)
@@ -395,7 +387,7 @@ dns_dnssec_verify3(dns_name_t *name, dns_rdataset_t *set, dst_key_t *key,
 	unsigned char data[300];
 	dst_context_t *ctx = NULL;
 	int labels = 0;
-	isc_uint32_t flags;
+	uint32_t flags;
 	isc_boolean_t downcase = ISC_FALSE;
 
 	REQUIRE(name != NULL);
@@ -412,7 +404,6 @@ dns_dnssec_verify3(dns_name_t *name, dns_rdataset_t *set, dst_key_t *key,
 		return (DNS_R_SIGINVALID);
 
 	if (isc_serial_lt(sig.timeexpire, sig.timesigned)) {
-		inc_stat(dns_dnssecstats_fail);
 		return (DNS_R_SIGINVALID);
 	}
 
@@ -422,11 +413,9 @@ dns_dnssec_verify3(dns_name_t *name, dns_rdataset_t *set, dst_key_t *key,
 		/*
 		 * Is SIG temporally valid?
 		 */
-		if (isc_serial_lt((isc_uint32_t)now, sig.timesigned)) {
-			inc_stat(dns_dnssecstats_fail);
+		if (isc_serial_lt((uint32_t)now, sig.timesigned)) {
 			return (DNS_R_SIGFUTURE);
-		} else if (isc_serial_lt(sig.timeexpire, (isc_uint32_t)now)) {
-			inc_stat(dns_dnssecstats_fail);
+		} else if (isc_serial_lt(sig.timeexpire, (uint32_t)now)) {
 			return (DNS_R_SIGEXPIRED);
 		}
 	}
@@ -440,19 +429,16 @@ dns_dnssec_verify3(dns_name_t *name, dns_rdataset_t *set, dst_key_t *key,
 	case dns_rdatatype_soa:
 	case dns_rdatatype_dnskey:
 		if (!dns_name_equal(name, &sig.signer)) {
-			inc_stat(dns_dnssecstats_fail);
 			return (DNS_R_SIGINVALID);
 		}
 		break;
 	case dns_rdatatype_ds:
 		if (dns_name_equal(name, &sig.signer)) {
-			inc_stat(dns_dnssecstats_fail);
 			return (DNS_R_SIGINVALID);
 		}
 		/* FALLTHROUGH */
 	default:
 		if (!dns_name_issubdomain(name, &sig.signer)) {
-			inc_stat(dns_dnssecstats_fail);
 			return (DNS_R_SIGINVALID);
 		}
 		break;
@@ -463,11 +449,9 @@ dns_dnssec_verify3(dns_name_t *name, dns_rdataset_t *set, dst_key_t *key,
 	 */
 	flags = dst_key_flags(key);
 	if (flags & DNS_KEYTYPE_NOAUTH) {
-		inc_stat(dns_dnssecstats_fail);
 		return (DNS_R_KEYUNAUTHORIZED);
 	}
 	if ((flags & DNS_KEYFLAG_OWNERMASK) != DNS_KEYOWNER_ZONE) {
-		inc_stat(dns_dnssecstats_fail);
 		return (DNS_R_KEYUNAUTHORIZED);
 	}
 
@@ -520,7 +504,7 @@ dns_dnssec_verify3(dns_name_t *name, dns_rdataset_t *set, dst_key_t *key,
 	isc_buffer_usedregion(&envbuf, &r);
 
 	for (i = 0; i < nrdatas; i++) {
-		isc_uint16_t len;
+		uint16_t len;
 		isc_buffer_t lenbuf;
 		isc_region_t lenr;
 
@@ -542,7 +526,7 @@ dns_dnssec_verify3(dns_name_t *name, dns_rdataset_t *set, dst_key_t *key,
 		 */
 		isc_buffer_init(&lenbuf, &len, sizeof(len));
 		INSIST(rdatas[i].length < 65536);
-		isc_buffer_putuint16(&lenbuf, (isc_uint16_t)rdatas[i].length);
+		isc_buffer_putuint16(&lenbuf, (uint16_t)rdatas[i].length);
 		isc_buffer_usedregion(&lenbuf, &lenr);
 
 		/*
@@ -566,9 +550,7 @@ dns_dnssec_verify3(dns_name_t *name, dns_rdataset_t *set, dst_key_t *key,
 			      DNS_LOGMODULE_DNSSEC, ISC_LOG_DEBUG(1),
 			      "successfully validated after lower casing "
 			      "signer '%s'", namebuf);
-		inc_stat(dns_dnssecstats_downcase);
-	} else if (ret == ISC_R_SUCCESS)
-		inc_stat(dns_dnssecstats_asis);
+	}
 
 cleanup_array:
 	isc_mem_put(mctx, rdatas, nrdatas * sizeof(dns_rdata_t));
@@ -584,15 +566,11 @@ cleanup_struct:
 	if (ret == DST_R_VERIFYFAILURE)
 		ret = DNS_R_SIGINVALID;
 
-	if (ret != ISC_R_SUCCESS)
-		inc_stat(dns_dnssecstats_fail);
-
 	if (ret == ISC_R_SUCCESS && labels - sig.labels > 0) {
 		if (wild != NULL)
 			RUNTIME_CHECK(dns_name_concatenate(dns_wildcardname,
 						 dns_fixedname_name(&fnewname),
 						 wild, NULL) == ISC_R_SUCCESS);
-		inc_stat(dns_dnssecstats_wildcard);
 		ret = DNS_R_FROMWILDCARD;
 	}
 	return (ret);
@@ -718,7 +696,7 @@ dns_dnssec_findzonekeys2(dns_db_t *db, dns_dbversion_t *ver,
 		 * by named.  Try loading the unrevoked version.
 		 */
 		if (result == ISC_R_FILENOTFOUND) {
-			isc_uint32_t flags;
+			uint32_t flags;
 			flags = dst_key_flags(pubkey);
 			if ((flags & DNS_KEYFLAG_REVOKE) != 0) {
 				dst_key_setflags(pubkey,
@@ -969,7 +947,7 @@ dns_dnssec_verifymessage(isc_buffer_t *source, dns_message_t *msg,
 	dst_context_t *ctx = NULL;
 	isc_mem_t *mctx;
 	isc_result_t result;
-	isc_uint16_t addcount, addcount_n;
+	uint16_t addcount, addcount_n;
 	isc_boolean_t signeedsfree = ISC_FALSE;
 
 	REQUIRE(source != NULL);
@@ -1007,12 +985,12 @@ dns_dnssec_verifymessage(isc_buffer_t *source, dns_message_t *msg,
 	}
 
 	isc_stdtime_get(&now);
-	if (isc_serial_lt((isc_uint32_t)now, sig.timesigned)) {
+	if (isc_serial_lt((uint32_t)now, sig.timesigned)) {
 		result = DNS_R_SIGFUTURE;
 		msg->sig0status = dns_tsigerror_badtime;
 		goto failure;
 	}
-	else if (isc_serial_lt(sig.timeexpire, (isc_uint32_t)now)) {
+	else if (isc_serial_lt(sig.timeexpire, (uint32_t)now)) {
 		result = DNS_R_SIGEXPIRED;
 		msg->sig0status = dns_tsigerror_badtime;
 		goto failure;
@@ -1050,7 +1028,7 @@ dns_dnssec_verifymessage(isc_buffer_t *source, dns_message_t *msg,
 	 */
 	memmove(&addcount, &header[DNS_MESSAGE_HEADERLEN - 2], 2);
 	addcount_n = ntohs(addcount);
-	addcount = htons((isc_uint16_t)(addcount_n - 1));
+	addcount = htons((uint16_t)(addcount_n - 1));
 	memmove(&header[DNS_MESSAGE_HEADERLEN - 2], &addcount, 2);
 
 	/*
@@ -1289,7 +1267,7 @@ get_hints(dns_dnsseckey_t *key, isc_stdtime_t now) {
 	 * If it hasn't already been done, we should also revoke it now.
 	 */
 	if (key->hint_publish && (revset && revoke <= now)) {
-		isc_uint32_t flags;
+		uint32_t flags;
 		key->hint_sign = ISC_TRUE;
 		flags = dst_key_flags(key->key);
 		if ((flags & DNS_KEYFLAG_REVOKE) == 0) {
@@ -1387,9 +1365,6 @@ dns_dnssec_findmatchingkeys(dns_name_t *origin, const char *directory,
 					       mctx, &dstkey);
 
 		switch (alg) {
-#ifndef PK11_MD5_DISABLE
-		case DST_ALG_HMACMD5:
-#endif
 		case DST_ALG_HMACSHA1:
 		case DST_ALG_HMACSHA224:
 		case DST_ALG_HMACSHA256:
@@ -1519,7 +1494,7 @@ mark_active_keys(dns_dnsseckeylist_t *keylist, dns_rdataset_t *rrsigs) {
 	for (key = ISC_LIST_HEAD(*keylist);
 	     key != NULL;
 	     key = ISC_LIST_NEXT(key, link)) {
-		isc_uint16_t keyid, sigid;
+		uint16_t keyid, sigid;
 		dns_secalg_t keyalg, sigalg;
 		keyid = dst_key_id(key->key);
 		keyalg = dst_key_alg(key->key);
@@ -1604,7 +1579,7 @@ dns_dnssec_keylistfromrdataset(dns_name_t *origin,
 		 * by named.  Try loading the unrevoked version.
 		 */
 		if (result == ISC_R_FILENOTFOUND) {
-			isc_uint32_t flags;
+			uint32_t flags;
 			flags = dst_key_flags(pubkey);
 			if ((flags & DNS_KEYFLAG_REVOKE) != 0) {
 				dst_key_setflags(pubkey,

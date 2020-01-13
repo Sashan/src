@@ -1,4 +1,4 @@
-/*	$OpenBSD: pgt.c,v 1.95 2019/09/12 12:55:07 stsp Exp $  */
+/*	$OpenBSD: pgt.c,v 1.97 2020/01/09 14:35:19 mpi Exp $  */
 
 /*
  * Copyright (c) 2006 Claudio Jeker <claudio@openbsd.org>
@@ -521,7 +521,7 @@ trying_again:
 		sc->sc_flags |= SC_NEEDS_FIRMWARE;
 		error = pgt_reset(sc);
 		if (error == 0) {
-			tsleep(&sc->sc_flags, 0, "pgtres", hz);
+			tsleep_nsec(&sc->sc_flags, 0, "pgtres", SEC_TO_NSEC(1));
 			if (sc->sc_flags & SC_UNINITIALIZED) {
 				printf("%s: not responding\n",
 				    sc->sc_dev.dv_xname);
@@ -589,7 +589,7 @@ pgt_attach(struct device *self)
 	if (error)
 		return;
 
-	tsleep(&sc->sc_flags, 0, "pgtres", hz);
+	tsleep_nsec(&sc->sc_flags, 0, "pgtres", SEC_TO_NSEC(1));
 	if (sc->sc_flags & SC_UNINITIALIZED) {
 		printf("%s: not responding\n", sc->sc_dev.dv_xname);
 		sc->sc_flags |= SC_NEEDS_FIRMWARE;
@@ -1128,7 +1128,7 @@ pgt_per_device_kthread(void *argp)
 	while (!sck->sck_exit) {
 		if (!sck->sck_update && !sck->sck_reset &&
 		    TAILQ_EMPTY(&sck->sck_traps))
-			tsleep(&sc->sc_kthread, 0, "pgtkth", 0);
+			tsleep_nsec(&sc->sc_kthread, 0, "pgtkth", INFSLP);
 		if (sck->sck_reset) {
 			DPRINTF(("%s: [thread] async reset\n",
 			    sc->sc_dev.dv_xname));

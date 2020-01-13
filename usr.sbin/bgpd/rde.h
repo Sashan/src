@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.h,v 1.227 2019/10/30 05:27:50 claudio Exp $ */
+/*	$OpenBSD: rde.h,v 1.232 2020/01/09 15:50:34 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Claudio Jeker <claudio@openbsd.org> and
@@ -76,10 +76,12 @@ LIST_HEAD(attr_list, attr);
 LIST_HEAD(aspath_head, rde_aspath);
 RB_HEAD(prefix_tree, prefix);
 RB_HEAD(prefix_index, prefix);
+struct iq;
 
 struct rde_peer {
 	LIST_ENTRY(rde_peer)		 hash_l; /* hash list over all peers */
 	LIST_ENTRY(rde_peer)		 peer_l; /* list of all peers */
+	SIMPLEQ_HEAD(, iq)		 imsg_queue;
 	struct peer_config		 conf;
 	struct bgpd_addr		 remote_addr;
 	struct bgpd_addr		 local_v4_addr;
@@ -213,14 +215,16 @@ struct rde_aspath {
 	struct attr			**others;
 	struct aspath			*aspath;
 	u_int64_t			 hash;
+	int				 refcnt;
 	u_int32_t			 flags;		/* internally used */
+#define	aspath_hashstart	med
 	u_int32_t			 med;		/* multi exit disc */
 	u_int32_t			 lpref;		/* local pref */
 	u_int32_t			 weight;	/* low prio lpref */
-	int				 refcnt;
 	u_int16_t			 rtlabelid;	/* route label id */
 	u_int16_t			 pftableid;	/* pf table id */
 	u_int8_t			 origin;
+#define	aspath_hashend		others_len
 	u_int8_t			 others_len;
 };
 
@@ -355,6 +359,9 @@ int		mrt_dump_v2_hdr(struct mrt *, struct bgpd_config *,
 void		mrt_dump_upcall(struct rib_entry *, void *);
 
 /* rde.c */
+void		 rde_update_log(const char *, u_int16_t,
+		     const struct rde_peer *, const struct bgpd_addr *,
+		     const struct bgpd_addr *, u_int8_t);
 void		rde_send_kroute_flush(struct rib *);
 void		rde_send_kroute(struct rib *, struct prefix *, struct prefix *);
 void		rde_send_nexthop(struct bgpd_addr *, int);
@@ -367,7 +374,26 @@ void		rde_generate_updates(struct rib *, struct prefix *,
 u_int32_t	rde_local_as(void);
 int		rde_decisionflags(void);
 int		rde_as4byte(struct rde_peer *);
+int		rde_match_peer(struct rde_peer *, struct ctl_neighbor *);
+
+/* rde_peer.c */
+void		 peer_init(u_int32_t);
+void		 peer_shutdown(void);
+void		 peer_foreach(void (*)(struct rde_peer *, void *), void *);
 struct rde_peer	*peer_get(u_int32_t);
+struct rde_peer *peer_match(struct ctl_neighbor *, u_int32_t);
+struct rde_peer	*peer_add(u_int32_t, struct peer_config *);
+
+int		 peer_up(struct rde_peer *, struct session_up *);
+void		 peer_down(struct rde_peer *, void *);
+void		 peer_flush(struct rde_peer *, u_int8_t, time_t);
+void		 peer_stale(struct rde_peer *, u_int8_t);
+void		 peer_dump(struct rde_peer *, u_int8_t);
+
+void		 peer_imsg_push(struct rde_peer *, struct imsg *);
+int		 peer_imsg_pop(struct rde_peer *, struct imsg *);
+int		 peer_imsg_pending(void);
+void		 peer_imsg_flush(struct rde_peer *);
 
 /* rde_attr.c */
 int		 attr_write(void *, u_int16_t, u_int8_t, u_int8_t, void *,
@@ -558,7 +584,7 @@ void		 prefix_adjout_dump(struct rde_peer *, void *,
 		    void (*)(struct prefix *, void *));
 int		 prefix_dump_new(struct rde_peer *, u_int8_t, unsigned int,
 		    void *, void (*)(struct prefix *, void *),
-    		    void (*)(void *, u_int8_t), int (*)(void *));
+		    void (*)(void *, u_int8_t), int (*)(void *));
 int		 prefix_write(u_char *, int, struct bgpd_addr *, u_int8_t, int);
 int		 prefix_writebuf(struct ibuf *, struct bgpd_addr *, u_int8_t);
 struct prefix	*prefix_bypeer(struct rib_entry *, struct rde_peer *);

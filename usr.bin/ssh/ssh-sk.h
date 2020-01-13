@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh-sk.h,v 1.6 2019/12/13 19:09:10 djm Exp $ */
+/* $OpenBSD: ssh-sk.h,v 1.10 2020/01/10 23:43:26 djm Exp $ */
 /*
  * Copyright (c) 2019 Google LLC
  *
@@ -20,6 +20,16 @@
 
 struct sshbuf;
 struct sshkey;
+struct sk_option;
+
+/* Version of protocol expected from ssh-sk-helper */
+#define SSH_SK_HELPER_VERSION		5
+
+/* ssh-sk-helper messages */
+#define SSH_SK_HELPER_ERROR		0	/* Only valid H->C */
+#define SSH_SK_HELPER_SIGN		1
+#define SSH_SK_HELPER_ENROLL		2
+#define SSH_SK_HELPER_LOAD_RESIDENT	3
 
 /*
  * Enroll (generate) a new security-key hosted private key of given type
@@ -31,9 +41,10 @@ struct sshkey;
  * If successful and the attest_data buffer is not NULL then attestation
  * information is placed there.
  */
-int sshsk_enroll(int type, const char *provider_path, const char *application,
-    uint8_t flags, struct sshbuf *challenge_buf, struct sshkey **keyp,
-    struct sshbuf *attest);
+int sshsk_enroll(int type, const char *provider_path, const char *device,
+    const char *application, const char *userid, uint8_t flags,
+    const char *pin, struct sshbuf *challenge_buf,
+    struct sshkey **keyp, struct sshbuf *attest);
 
 /*
  * Calculate an ECDSA_SK or ED25519_SK signature using the specified key
@@ -43,7 +54,16 @@ int sshsk_enroll(int type, const char *provider_path, const char *application,
  */
 int sshsk_sign(const char *provider_path, struct sshkey *key,
     u_char **sigp, size_t *lenp, const u_char *data, size_t datalen,
-    u_int compat);
+    u_int compat, const char *pin);
+
+/*
+ * Enumerates and loads all SSH-compatible resident keys from a security
+ * key.
+ *
+ * Returns 0 on success or a ssherr.h error code on failure.
+ */
+int sshsk_load_resident(const char *provider_path, const char *device,
+    const char *pin, struct sshkey ***keysp, size_t *nkeysp);
 
 #endif /* _SSH_SK_H */
 

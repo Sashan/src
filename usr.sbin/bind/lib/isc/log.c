@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: log.c,v 1.11 2019/12/17 01:46:34 sthen Exp $ */
+/* $Id: log.c,v 1.15 2020/01/09 18:17:19 florian Exp $ */
 
 /*! \file
  * \author  Principal Authors: DCL */
@@ -34,7 +34,7 @@
 #include <isc/magic.h>
 #include <isc/mem.h>
 #include <isc/msgs.h>
-#include <isc/print.h>
+
 #include <isc/stat.h>
 #include <isc/stdio.h>
 #include <isc/string.h>
@@ -189,7 +189,7 @@ static const int syslog_map[] = {
  * be overridden.  Since the default is always looked up as the first
  * channellist in the log context, it must come first in isc_categories[].
  */
-LIBISC_EXTERNAL_DATA isc_logcategory_t isc_categories[] = {
+isc_logcategory_t isc_categories[] = {
 	{ "default", 0 },	/* "default" must come first. */
 	{ "general", 0 },
 	{ NULL, 0 }
@@ -198,7 +198,7 @@ LIBISC_EXTERNAL_DATA isc_logcategory_t isc_categories[] = {
 /*!
  * See above comment for categories on LIBISC_EXTERNAL_DATA, and apply it to modules.
  */
-LIBISC_EXTERNAL_DATA isc_logmodule_t isc_modules[] = {
+isc_logmodule_t isc_modules[] = {
 	{ "socket", 0 },
 	{ "time", 0 },
 	{ "interface", 0 },
@@ -218,7 +218,7 @@ static isc_logchannellist_t default_channel;
 /*!
  * libisc logs to this context.
  */
-LIBISC_EXTERNAL_DATA isc_log_t *isc_lctx = NULL;
+isc_log_t *isc_lctx = NULL;
 
 /*!
  * Forward declarations.
@@ -1150,9 +1150,6 @@ greatest_version(isc_logchannel_t *channel, int versions, int *greatestp) {
 	isc_dir_t dir;
 	isc_result_t result;
 	char sep = '/';
-#ifdef _WIN32
-	char *bname2;
-#endif
 
 	REQUIRE(channel->type == ISC_LOG_TOFILE);
 
@@ -1161,14 +1158,6 @@ greatest_version(isc_logchannel_t *channel, int versions, int *greatestp) {
 	 * with isc_mem_strdup in isc_log_createchannel.
 	 */
 	bname = strrchr(FILE_NAME(channel), sep);
-#ifdef _WIN32
-	bname2 = strrchr(FILE_NAME(channel), '\\');
-	if ((bname != NULL && bname2 != NULL && bname2 > bname) ||
-	    (bname == NULL && bname2 != NULL)) {
-		bname = bname2;
-		sep = '\\';
-	}
-#endif
 	if (bname != NULL) {
 		*bname++ = '\0';
 		dirname = FILE_NAME(channel);
@@ -1546,10 +1535,10 @@ isc_log_doit(isc_log_t *lctx, isc_logcategory_t *category,
 			if (write_once) {
 				isc_logmessage_t *message, *next;
 				isc_time_t oldest;
-				isc_interval_t interval;
+				interval_t interval;
 				size_t size;
 
-				isc_interval_set(&interval,
+				interval_set(&interval,
 						 lcfg->duplicate_interval, 0);
 
 				/*

@@ -17,7 +17,6 @@
 /*
  * Principal Author: Brian Wellington
  */
-#ifdef OPENSSL
 #include <config.h>
 
 #ifndef USE_EVP
@@ -29,7 +28,7 @@
 #endif
 
 
-#include <isc/entropy.h>
+
 #include <isc/md5.h>
 #include <isc/mem.h>
 #include <isc/safe.h>
@@ -38,7 +37,7 @@
 #include <isc/string.h>
 #include <isc/util.h>
 
-#include <pk11/site.h>
+
 
 #include <dst/result.h>
 
@@ -52,9 +51,6 @@
 #if OPENSSL_VERSION_NUMBER > 0x00908000L
 #include <openssl/bn.h>
 #endif
-#ifdef USE_ENGINE
-#include <openssl/engine.h>
-#endif
 
 /*
  * Limit the size of public exponents.
@@ -67,15 +63,6 @@
  * We don't use configure for windows so enforce the OpenSSL version
  * here.  Unlike with configure we don't support overriding this test.
  */
-#ifdef WIN32
-#if !((OPENSSL_VERSION_NUMBER >= 0x009070cfL && \
-       OPENSSL_VERSION_NUMBER < 0x00908000L) || \
-      (OPENSSL_VERSION_NUMBER >= 0x0090804fL && \
-       OPENSSL_VERSION_NUMBER < 0x10002000L) || \
-      OPENSSL_VERSION_NUMBER >= 0x1000205fL)
-#error Please upgrade OpenSSL to 0.9.8d/0.9.7l or greater.
-#endif
-#endif
 
 
 	/*
@@ -255,18 +242,10 @@ opensslrsa_createctx(dst_key_t *key, dst_context_t *dctx) {
 #endif
 
 	UNUSED(key);
-#ifndef PK11_MD5_DISABLE
-	REQUIRE(dctx->key->key_alg == DST_ALG_RSAMD5 ||
-		dctx->key->key_alg == DST_ALG_RSASHA1 ||
-		dctx->key->key_alg == DST_ALG_NSEC3RSASHA1 ||
-		dctx->key->key_alg == DST_ALG_RSASHA256 ||
-		dctx->key->key_alg == DST_ALG_RSASHA512);
-#else
 	REQUIRE(dctx->key->key_alg == DST_ALG_RSASHA1 ||
 		dctx->key->key_alg == DST_ALG_NSEC3RSASHA1 ||
 		dctx->key->key_alg == DST_ALG_RSASHA256 ||
 		dctx->key->key_alg == DST_ALG_RSASHA512);
-#endif
 
 	/*
 	 * Reject incorrect RSA key lengths.
@@ -301,11 +280,6 @@ opensslrsa_createctx(dst_key_t *key, dst_context_t *dctx) {
 		return (ISC_R_NOMEMORY);
 
 	switch (dctx->key->key_alg) {
-#ifndef PK11_MD5_DISABLE
-	case DST_ALG_RSAMD5:
-		type = EVP_md5();	/* MD5 + RSA */
-		break;
-#endif
 	case DST_ALG_RSASHA1:
 	case DST_ALG_NSEC3RSASHA1:
 		type = EVP_sha1();	/* SHA1 + RSA */
@@ -333,19 +307,6 @@ opensslrsa_createctx(dst_key_t *key, dst_context_t *dctx) {
 	dctx->ctxdata.evp_md_ctx = evp_md_ctx;
 #else
 	switch (dctx->key->key_alg) {
-#ifndef PK11_MD5_DISABLE
-	case DST_ALG_RSAMD5:
-		{
-			isc_md5_t *md5ctx;
-
-			md5ctx = isc_mem_get(dctx->mctx, sizeof(isc_md5_t));
-			if (md5ctx == NULL)
-				return (ISC_R_NOMEMORY);
-			isc_md5_init(md5ctx);
-			dctx->ctxdata.md5ctx = md5ctx;
-		}
-		break;
-#endif
 	case DST_ALG_RSASHA1:
 	case DST_ALG_NSEC3RSASHA1:
 		{
@@ -396,18 +357,10 @@ opensslrsa_destroyctx(dst_context_t *dctx) {
 	EVP_MD_CTX *evp_md_ctx = dctx->ctxdata.evp_md_ctx;
 #endif
 
-#ifndef PK11_MD5_DISABLE
-	REQUIRE(dctx->key->key_alg == DST_ALG_RSAMD5 ||
-		dctx->key->key_alg == DST_ALG_RSASHA1 ||
-		dctx->key->key_alg == DST_ALG_NSEC3RSASHA1 ||
-		dctx->key->key_alg == DST_ALG_RSASHA256 ||
-		dctx->key->key_alg == DST_ALG_RSASHA512);
-#else
 	REQUIRE(dctx->key->key_alg == DST_ALG_RSASHA1 ||
 		dctx->key->key_alg == DST_ALG_NSEC3RSASHA1 ||
 		dctx->key->key_alg == DST_ALG_RSASHA256 ||
 		dctx->key->key_alg == DST_ALG_RSASHA512);
-#endif
 
 #if USE_EVP
 	if (evp_md_ctx != NULL) {
@@ -416,20 +369,6 @@ opensslrsa_destroyctx(dst_context_t *dctx) {
 	}
 #else
 	switch (dctx->key->key_alg) {
-#ifndef PK11_MD5_DISABLE
-	case DST_ALG_RSAMD5:
-		{
-			isc_md5_t *md5ctx = dctx->ctxdata.md5ctx;
-
-			if (md5ctx != NULL) {
-				isc_md5_invalidate(md5ctx);
-				isc_mem_put(dctx->mctx, md5ctx,
-					    sizeof(isc_md5_t));
-				dctx->ctxdata.md5ctx = NULL;
-			}
-		}
-		break;
-#endif
 	case DST_ALG_RSASHA1:
 	case DST_ALG_NSEC3RSASHA1:
 		{
@@ -479,18 +418,10 @@ opensslrsa_adddata(dst_context_t *dctx, const isc_region_t *data) {
 	EVP_MD_CTX *evp_md_ctx = dctx->ctxdata.evp_md_ctx;
 #endif
 
-#ifndef PK11_MD5_DISABLE
-	REQUIRE(dctx->key->key_alg == DST_ALG_RSAMD5 ||
-		dctx->key->key_alg == DST_ALG_RSASHA1 ||
-		dctx->key->key_alg == DST_ALG_NSEC3RSASHA1 ||
-		dctx->key->key_alg == DST_ALG_RSASHA256 ||
-		dctx->key->key_alg == DST_ALG_RSASHA512);
-#else
 	REQUIRE(dctx->key->key_alg == DST_ALG_RSASHA1 ||
 		dctx->key->key_alg == DST_ALG_NSEC3RSASHA1 ||
 		dctx->key->key_alg == DST_ALG_RSASHA256 ||
 		dctx->key->key_alg == DST_ALG_RSASHA512);
-#endif
 
 #if USE_EVP
 	if (!EVP_DigestUpdate(evp_md_ctx, data->base, data->length)) {
@@ -500,15 +431,6 @@ opensslrsa_adddata(dst_context_t *dctx, const isc_region_t *data) {
 	}
 #else
 	switch (dctx->key->key_alg) {
-#ifndef PK11_MD5_DISABLE
-	case DST_ALG_RSAMD5:
-		{
-			isc_md5_t *md5ctx = dctx->ctxdata.md5ctx;
-
-			isc_md5_update(md5ctx, data->base, data->length);
-		}
-		break;
-#endif
 	case DST_ALG_RSASHA1:
 	case DST_ALG_NSEC3RSASHA1:
 		{
@@ -574,18 +496,10 @@ opensslrsa_sign(dst_context_t *dctx, isc_buffer_t *sig) {
 #endif
 #endif
 
-#ifndef PK11_MD5_DISABLE
-	REQUIRE(dctx->key->key_alg == DST_ALG_RSAMD5 ||
-		dctx->key->key_alg == DST_ALG_RSASHA1 ||
-		dctx->key->key_alg == DST_ALG_NSEC3RSASHA1 ||
-		dctx->key->key_alg == DST_ALG_RSASHA256 ||
-		dctx->key->key_alg == DST_ALG_RSASHA512);
-#else
 	REQUIRE(dctx->key->key_alg == DST_ALG_RSASHA1 ||
 		dctx->key->key_alg == DST_ALG_NSEC3RSASHA1 ||
 		dctx->key->key_alg == DST_ALG_RSASHA256 ||
 		dctx->key->key_alg == DST_ALG_RSASHA512);
-#endif
 
 	isc_buffer_availableregion(sig, &r);
 
@@ -603,17 +517,6 @@ opensslrsa_sign(dst_context_t *dctx, isc_buffer_t *sig) {
 		return (ISC_R_NOSPACE);
 
 	switch (dctx->key->key_alg) {
-#ifndef PK11_MD5_DISABLE
-	case DST_ALG_RSAMD5:
-		{
-			isc_md5_t *md5ctx = dctx->ctxdata.md5ctx;
-
-			isc_md5_final(md5ctx, digest);
-			type = NID_md5;
-			digestlen = ISC_MD5_DIGESTLENGTH;
-		}
-		break;
-#endif
 	case DST_ALG_RSASHA1:
 	case DST_ALG_NSEC3RSASHA1:
 		{
@@ -658,9 +561,6 @@ opensslrsa_sign(dst_context_t *dctx, isc_buffer_t *sig) {
 
 #if OPENSSL_VERSION_NUMBER < 0x00908000L
 	switch (dctx->key->key_alg) {
-#ifndef PK11_MD5_DISABLE
-	case DST_ALG_RSAMD5:
-#endif
 	case DST_ALG_RSASHA1:
 	case DST_ALG_NSEC3RSASHA1:
 		INSIST(type != 0);
@@ -725,18 +625,10 @@ opensslrsa_verify2(dst_context_t *dctx, int maxbits, const isc_region_t *sig) {
 #endif
 #endif
 
-#ifndef PK11_MD5_DISABLE
-	REQUIRE(dctx->key->key_alg == DST_ALG_RSAMD5 ||
-		dctx->key->key_alg == DST_ALG_RSASHA1 ||
-		dctx->key->key_alg == DST_ALG_NSEC3RSASHA1 ||
-		dctx->key->key_alg == DST_ALG_RSASHA256 ||
-		dctx->key->key_alg == DST_ALG_RSASHA512);
-#else
 	REQUIRE(dctx->key->key_alg == DST_ALG_RSASHA1 ||
 		dctx->key->key_alg == DST_ALG_NSEC3RSASHA1 ||
 		dctx->key->key_alg == DST_ALG_RSASHA256 ||
 		dctx->key->key_alg == DST_ALG_RSASHA512);
-#endif
 
 #if USE_EVP
 	rsa = EVP_PKEY_get1_RSA(pkey);
@@ -765,17 +657,6 @@ opensslrsa_verify2(dst_context_t *dctx, int maxbits, const isc_region_t *sig) {
 		return (DST_R_VERIFYFAILURE);
 
 	switch (dctx->key->key_alg) {
-#ifndef PK11_MD5_DISABLE
-	case DST_ALG_RSAMD5:
-		{
-			isc_md5_t *md5ctx = dctx->ctxdata.md5ctx;
-
-			isc_md5_final(md5ctx, digest);
-			type = NID_md5;
-			digestlen = ISC_MD5_DIGESTLENGTH;
-		}
-		break;
-#endif
 	case DST_ALG_RSASHA1:
 	case DST_ALG_NSEC3RSASHA1:
 		{
@@ -823,9 +704,6 @@ opensslrsa_verify2(dst_context_t *dctx, int maxbits, const isc_region_t *sig) {
 
 #if OPENSSL_VERSION_NUMBER < 0x00908000L
 	switch (dctx->key->key_alg) {
-#ifndef PK11_MD5_DISABLE
-	case DST_ALG_RSAMD5:
-#endif
 	case DST_ALG_RSASHA1:
 	case DST_ALG_NSEC3RSASHA1:
 		INSIST(type != 0);
@@ -1191,13 +1069,13 @@ opensslrsa_todns(const dst_key_t *key, isc_buffer_t *data) {
 	if (e_bytes < 256) {	/*%< key exponent is <= 2040 bits */
 		if (r.length < 1)
 			DST_RET(ISC_R_NOSPACE);
-		isc_buffer_putuint8(data, (isc_uint8_t) e_bytes);
+		isc_buffer_putuint8(data, (uint8_t) e_bytes);
 		isc_region_consume(&r, 1);
 	} else {
 		if (r.length < 3)
 			DST_RET(ISC_R_NOSPACE);
 		isc_buffer_putuint8(data, 0);
-		isc_buffer_putuint16(data, (isc_uint16_t) e_bytes);
+		isc_buffer_putuint16(data, (uint16_t) e_bytes);
 		isc_region_consume(&r, 3);
 	}
 
@@ -1473,10 +1351,6 @@ opensslrsa_parse(dst_key_t *key, isc_lex_t *lexer, dst_key_t *pub) {
 	isc_result_t ret;
 	int i;
 	RSA *rsa = NULL, *pubrsa = NULL;
-#ifdef USE_ENGINE
-	ENGINE *ep = NULL;
-	const BIGNUM *ex = NULL;
-#endif
 	isc_mem_t *mctx = key->mctx;
 	const char *engine = NULL, *label = NULL;
 #if defined(USE_ENGINE) || USE_EVP
@@ -1532,47 +1406,7 @@ opensslrsa_parse(dst_key_t *key, isc_lex_t *lexer, dst_key_t *pub) {
 	 * See if we can fetch it.
 	 */
 	if (label != NULL) {
-#ifdef USE_ENGINE
-		if (engine == NULL)
-			DST_RET(DST_R_NOENGINE);
-		ep = dst__openssl_getengine(engine);
-		if (ep == NULL)
-			DST_RET(DST_R_NOENGINE);
-		pkey = ENGINE_load_private_key(ep, label, NULL, NULL);
-		if (pkey == NULL)
-			DST_RET(dst__openssl_toresult2(
-					"ENGINE_load_private_key",
-					ISC_R_NOTFOUND));
-		key->engine = isc_mem_strdup(key->mctx, engine);
-		if (key->engine == NULL)
-			DST_RET(ISC_R_NOMEMORY);
-		key->label = isc_mem_strdup(key->mctx, label);
-		if (key->label == NULL)
-			DST_RET(ISC_R_NOMEMORY);
-		rsa = EVP_PKEY_get1_RSA(pkey);
-		if (rsa == NULL)
-			DST_RET(dst__openssl_toresult(DST_R_OPENSSLFAILURE));
-		if (rsa_check(rsa, pubrsa) != ISC_R_SUCCESS)
-			DST_RET(DST_R_INVALIDPRIVATEKEY);
-		RSA_get0_key(rsa, NULL, &ex, NULL);
-		if (BN_num_bits(ex) > RSA_MAX_PUBEXP_BITS)
-			DST_RET(ISC_R_RANGE);
-		if (pubrsa != NULL)
-			RSA_free(pubrsa);
-		key->key_size = EVP_PKEY_bits(pkey);
-#if USE_EVP
-		key->keydata.pkey = pkey;
-		RSA_free(rsa);
-#else
-		key->keydata.rsa = rsa;
-		EVP_PKEY_free(pkey);
-#endif
-		dst__privstruct_free(&priv, mctx);
-		isc_safe_memwipe(&priv, sizeof(priv));
-		return (ISC_R_SUCCESS);
-#else
 		DST_RET(DST_R_NOENGINE);
-#endif
 	}
 
 	rsa = RSA_new();
@@ -1681,88 +1515,11 @@ static isc_result_t
 opensslrsa_fromlabel(dst_key_t *key, const char *engine, const char *label,
 		     const char *pin)
 {
-#ifdef USE_ENGINE
-	ENGINE *e = NULL;
-	isc_result_t ret;
-	EVP_PKEY *pkey = NULL;
-	RSA *rsa = NULL, *pubrsa = NULL;
-	char *colon, *tmpengine = NULL;
-	const BIGNUM *ex = NULL;
-
-	UNUSED(pin);
-
-	if (engine == NULL) {
-		if (strchr(label, ':') == NULL)
-			DST_RET(DST_R_NOENGINE);
-		tmpengine = isc_mem_strdup(key->mctx, label);
-		if (tmpengine == NULL)
-			DST_RET(ISC_R_NOMEMORY);
-		colon = strchr(tmpengine, ':');
-		INSIST(colon != NULL);
-		*colon = '\0';
-	}
-	e = dst__openssl_getengine(engine);
-	if (e == NULL)
-		DST_RET(DST_R_NOENGINE);
-	pkey = ENGINE_load_public_key(e, label, NULL, NULL);
-	if (pkey != NULL) {
-		pubrsa = EVP_PKEY_get1_RSA(pkey);
-		EVP_PKEY_free(pkey);
-		if (pubrsa == NULL)
-			DST_RET(dst__openssl_toresult(DST_R_OPENSSLFAILURE));
-	}
-	pkey = ENGINE_load_private_key(e, label, NULL, NULL);
-	if (pkey == NULL)
-		DST_RET(dst__openssl_toresult2("ENGINE_load_private_key",
-					       ISC_R_NOTFOUND));
-	if (tmpengine != NULL) {
-		key->engine = tmpengine;
-		tmpengine = NULL;
-	} else {
-		key->engine = isc_mem_strdup(key->mctx, engine);
-		if (key->engine == NULL)
-			DST_RET(ISC_R_NOMEMORY);
-	}
-	key->label = isc_mem_strdup(key->mctx, label);
-	if (key->label == NULL)
-		DST_RET(ISC_R_NOMEMORY);
-	rsa = EVP_PKEY_get1_RSA(pkey);
-	if (rsa == NULL)
-		DST_RET(dst__openssl_toresult(DST_R_OPENSSLFAILURE));
-	if (rsa_check(rsa, pubrsa) != ISC_R_SUCCESS)
-		DST_RET(DST_R_INVALIDPRIVATEKEY);
-	RSA_get0_key(rsa, NULL, &ex, NULL);
-	if (BN_num_bits(ex) > RSA_MAX_PUBEXP_BITS)
-		DST_RET(ISC_R_RANGE);
-	if (pubrsa != NULL)
-		RSA_free(pubrsa);
-	key->key_size = EVP_PKEY_bits(pkey);
-#if USE_EVP
-	key->keydata.pkey = pkey;
-	RSA_free(rsa);
-#else
-	key->keydata.rsa = rsa;
-	EVP_PKEY_free(pkey);
-#endif
-	return (ISC_R_SUCCESS);
-
- err:
-	if (tmpengine != NULL)
-		isc_mem_free(key->mctx, tmpengine);
-	if (rsa != NULL)
-		RSA_free(rsa);
-	if (pubrsa != NULL)
-		RSA_free(pubrsa);
-	if (pkey != NULL)
-		EVP_PKEY_free(pkey);
-	return (ret);
-#else
 	UNUSED(key);
 	UNUSED(engine);
 	UNUSED(label);
 	UNUSED(pin);
 	return(DST_R_NOENGINE);
-#endif
 }
 
 static dst_func_t opensslrsa_functions = {
@@ -1813,11 +1570,4 @@ dst__opensslrsa_init(dst_func_t **funcp, unsigned char algorithm) {
 	return (ISC_R_SUCCESS);
 }
 
-#else /* OPENSSL */
-
-#include <isc/util.h>
-
-EMPTY_TRANSLATION_UNIT
-
-#endif /* OPENSSL */
 /*! \file */

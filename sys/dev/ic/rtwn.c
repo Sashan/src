@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtwn.c,v 1.47 2019/11/16 14:08:31 kevlo Exp $	*/
+/*	$OpenBSD: rtwn.c,v 1.49 2020/01/09 14:35:19 mpi Exp $	*/
 
 /*-
  * Copyright (c) 2010 Damien Bergamini <damien.bergamini@free.fr>
@@ -1560,7 +1560,7 @@ rtwn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	 * process is tsleep'ing in it.
 	 */
 	while ((sc->sc_flags & RTWN_FLAG_BUSY) && error == 0)
-		error = tsleep(&sc->sc_flags, PCATCH, "rtwnioc", 0);
+		error = tsleep_nsec(&sc->sc_flags, PCATCH, "rtwnioc", INFSLP);
 	if (error != 0) {
 		splx(s);
 		return error;
@@ -1642,7 +1642,7 @@ sleep:
 		 * We must sleep for one second to let the firmware settle.
 		 * Accessing registers too early will hang the whole system.
 		 */
-		tsleep(&reg, 0, "rtwnrst", hz);
+		tsleep_nsec(&reg, 0, "rtwnrst", SEC_TO_NSEC(1));
 	}
 }
 
@@ -3231,7 +3231,7 @@ rtwn_init_task(void *arg1)
 
 	s = splnet();
 	while (sc->sc_flags & RTWN_FLAG_BUSY)
-		tsleep(&sc->sc_flags, 0, "rtwnpwr", 0);
+		tsleep_nsec(&sc->sc_flags, 0, "rtwnpwr", INFSLP);
 	sc->sc_flags |= RTWN_FLAG_BUSY;
 
 	rtwn_stop(ifp);

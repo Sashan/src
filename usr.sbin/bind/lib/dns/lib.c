@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: lib.c,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
+/* $Id: lib.c,v 1.5 2020/01/09 14:24:07 florian Exp $ */
 
 /*! \file */
 
@@ -41,8 +41,8 @@
  *** Globals
  ***/
 
-LIBDNS_EXTERNAL_DATA unsigned int			dns_pps = 0U;
-LIBDNS_EXTERNAL_DATA isc_msgcat_t *			dns_msgcat = NULL;
+unsigned int			dns_pps = 0U;
+isc_msgcat_t *			dns_msgcat = NULL;
 
 
 /***
@@ -92,11 +92,11 @@ initialize(void) {
 	result = dns_ecdb_register(dns_g_mctx, &dbimp);
 	if (result != ISC_R_SUCCESS)
 		goto cleanup_mctx;
-	result = isc_hash_create(dns_g_mctx, NULL, DNS_NAME_MAXWIRE);
+	result = isc_hash_create(dns_g_mctx, DNS_NAME_MAXWIRE);
 	if (result != ISC_R_SUCCESS)
 		goto cleanup_db;
 
-	result = dst_lib_init(dns_g_mctx, NULL, 0);
+	result = dst_lib_init(dns_g_mctx);
 	if (result != ISC_R_SUCCESS)
 		goto cleanup_hash;
 

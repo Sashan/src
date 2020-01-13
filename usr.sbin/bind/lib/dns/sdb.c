@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: sdb.c,v 1.6 2019/12/17 01:46:32 sthen Exp $ */
+/* $Id: sdb.c,v 1.8 2020/01/09 18:17:15 florian Exp $ */
 
 /*! \file */
 
@@ -28,7 +28,7 @@
 #include <isc/magic.h>
 #include <isc/mem.h>
 #include <isc/once.h>
-#include <isc/print.h>
+
 #include <isc/region.h>
 #include <isc/util.h>
 
@@ -512,7 +512,7 @@ dns_sdb_putnamedrdata(dns_sdballnodes_t *allnodes, const char *name,
 
 isc_result_t
 dns_sdb_putsoa(dns_sdblookup_t *lookup, const char *mname, const char *rname,
-	       isc_uint32_t serial)
+	       uint32_t serial)
 {
 	char str[2 * DNS_NAME_MAXTEXT + 5 * (sizeof("2147483647")) + 7];
 	int n;

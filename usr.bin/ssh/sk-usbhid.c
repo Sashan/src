@@ -30,6 +30,7 @@
 #endif /* WITH_OPENSSL */
 
 #include <fido.h>
+#include <fido/credman.h>
 
 #ifndef SK_STANDALONE
 #include "log.h"
@@ -49,14 +50,21 @@
 	} while (0)
 #endif
 
-#define SK_VERSION_MAJOR	0x00020000 /* current API version */
+#define SK_VERSION_MAJOR	0x00040000 /* current API version */
 
 /* Flags */
-#define SK_USER_PRESENCE_REQD	0x01
+#define SK_USER_PRESENCE_REQD		0x01
+#define SK_USER_VERIFICATION_REQD	0x04
+#define SK_RESIDENT_KEY			0x20
 
 /* Algs */
 #define	SK_ECDSA		0x00
 #define	SK_ED25519		0x01
+
+/* Error codes */
+#define SSH_SK_ERR_GENERAL		-1
+#define SSH_SK_ERR_UNSUPPORTED		-2
+#define SSH_SK_ERR_PIN_REQUIRED		-3
 
 struct sk_enroll_response {
 	uint8_t *public_key;
@@ -78,25 +86,44 @@ struct sk_sign_response {
 	size_t sig_s_len;
 };
 
+struct sk_resident_key {
+	uint32_t alg;
+	size_t slot;
+	char *application;
+	struct sk_enroll_response key;
+};
+
+struct sk_option {
+	char *name;
+	char *value;
+	uint8_t required;
+};
+
 /* If building as part of OpenSSH, then rename exported functions */
 #if !defined(SK_STANDALONE)
-#define sk_api_version	ssh_sk_api_version
-#define sk_enroll	ssh_sk_enroll
-#define sk_sign		ssh_sk_sign
+#define sk_api_version		ssh_sk_api_version
+#define sk_enroll		ssh_sk_enroll
+#define sk_sign			ssh_sk_sign
+#define sk_load_resident_keys	ssh_sk_load_resident_keys
 #endif
 
 /* Return the version of the middleware API */
 uint32_t sk_api_version(void);
 
 /* Enroll a U2F key (private key generation) */
-int sk_enroll(int alg, const uint8_t *challenge, size_t challenge_len,
-    const char *application, uint8_t flags,
-    struct sk_enroll_response **enroll_response);
+int sk_enroll(uint32_t alg, const uint8_t *challenge, size_t challenge_len,
+    const char *application, uint8_t flags, const char *pin,
+    struct sk_option **options, struct sk_enroll_response **enroll_response);
 
 /* Sign a challenge */
-int sk_sign(int alg, const uint8_t *message, size_t message_len,
+int sk_sign(uint32_t alg, const uint8_t *message, size_t message_len,
     const char *application, const uint8_t *key_handle, size_t key_handle_len,
-    uint8_t flags, struct sk_sign_response **sign_response);
+    uint8_t flags, const char *pin, struct sk_option **options,
+    struct sk_sign_response **sign_response);
+
+/* Load resident keys */
+int sk_load_resident_keys(const char *pin, struct sk_option **options,
+    struct sk_resident_key ***rks, size_t *nrks);
 
 static void skdebug(const char *func, const char *fmt, ...)
     __attribute__((__format__ (printf, 2, 3)));
@@ -211,14 +238,26 @@ try_device(fido_dev_t *dev, const uint8_t *message, size_t message_len,
 
 /* Iterate over configured devices looking for a specific key handle */
 static fido_dev_t *
-find_device(const uint8_t *message, size_t message_len, const char *application,
-    const uint8_t *key_handle, size_t key_handle_len)
+find_device(const char *path, const uint8_t *message, size_t message_len,
+    const char *application, const uint8_t *key_handle, size_t key_handle_len)
 {
 	fido_dev_info_t *devlist = NULL;
 	fido_dev_t *dev = NULL;
 	size_t devlist_len = 0, i;
-	const char *path;
 	int r;
+
+	if (path != NULL) {
+		if ((dev = fido_dev_new()) == NULL) {
+			skdebug(__func__, "fido_dev_new failed");
+			return NULL;
+		}
+		if ((r = fido_dev_open(dev, path)) != FIDO_OK) {
+			skdebug(__func__, "fido_dev_open failed");
+			fido_dev_free(&dev);
+			return NULL;
+		}
+		return dev;
+	}
 
 	if ((devlist = fido_dev_info_new(MAX_FIDO_DEVICES)) == NULL) {
 		skdebug(__func__, "fido_dev_info_new failed");
@@ -275,7 +314,8 @@ find_device(const uint8_t *message, size_t message_len, const char *application,
  * but the API expects a SEC1 octet string.
  */
 static int
-pack_public_key_ecdsa(fido_cred_t *cred, struct sk_enroll_response *response)
+pack_public_key_ecdsa(const fido_cred_t *cred,
+    struct sk_enroll_response *response)
 {
 	const uint8_t *ptr;
 	BIGNUM *x = NULL, *y = NULL;
@@ -345,7 +385,8 @@ pack_public_key_ecdsa(fido_cred_t *cred, struct sk_enroll_response *response)
 #endif /* WITH_OPENSSL */
 
 static int
-pack_public_key_ed25519(fido_cred_t *cred, struct sk_enroll_response *response)
+pack_public_key_ed25519(const fido_cred_t *cred,
+    struct sk_enroll_response *response)
 {
 	const uint8_t *ptr;
 	size_t len;
@@ -376,7 +417,8 @@ pack_public_key_ed25519(fido_cred_t *cred, struct sk_enroll_response *response)
 }
 
 static int
-pack_public_key(int alg, fido_cred_t *cred, struct sk_enroll_response *response)
+pack_public_key(uint32_t alg, const fido_cred_t *cred,
+    struct sk_enroll_response *response)
 {
 	switch(alg) {
 #ifdef WITH_OPENSSL
@@ -390,10 +432,59 @@ pack_public_key(int alg, fido_cred_t *cred, struct sk_enroll_response *response)
 	}
 }
 
+static int
+fidoerr_to_skerr(int fidoerr)
+{
+	switch (fidoerr) {
+	case FIDO_ERR_UNSUPPORTED_OPTION:
+		return SSH_SK_ERR_UNSUPPORTED;
+	case FIDO_ERR_PIN_REQUIRED:
+	case FIDO_ERR_PIN_INVALID:
+		return SSH_SK_ERR_PIN_REQUIRED;
+	default:
+		return -1;
+	}
+}
+
+static int
+check_enroll_options(struct sk_option **options, char **devicep,
+    uint8_t *user_id, size_t user_id_len)
+{
+	size_t i;
+
+	if (options == NULL)
+		return 0;
+	for (i = 0; options[i] != NULL; i++) {
+		if (strcmp(options[i]->name, "device") == 0) {
+			if ((*devicep = strdup(options[i]->value)) == NULL) {
+				skdebug(__func__, "strdup device failed");
+				return -1;
+			}
+			skdebug(__func__, "requested device %s", *devicep);
+		} else if (strcmp(options[i]->name, "user") == 0) {
+			if (strlcpy(user_id, options[i]->value, user_id_len) >=
+			    user_id_len) {
+				skdebug(__func__, "user too long");
+				return -1;
+			}
+			skdebug(__func__, "requested user %s",
+			    (char *)user_id);
+		} else {
+			skdebug(__func__, "requested unsupported option %s",
+			    options[i]->name);
+			if (options[i]->required) {
+				skdebug(__func__, "unknown required option");
+				return -1;
+			}
+		}
+	}
+	return 0;
+}
+
 int
-sk_enroll(int alg, const uint8_t *challenge, size_t challenge_len,
-    const char *application, uint8_t flags,
-    struct sk_enroll_response **enroll_response)
+sk_enroll(uint32_t alg, const uint8_t *challenge, size_t challenge_len,
+    const char *application, uint8_t flags, const char *pin,
+    struct sk_option **options, struct sk_enroll_response **enroll_response)
 {
 	fido_cred_t *cred = NULL;
 	fido_dev_t *dev = NULL;
@@ -402,11 +493,10 @@ sk_enroll(int alg, const uint8_t *challenge, size_t challenge_len,
 	struct sk_enroll_response *response = NULL;
 	size_t len;
 	int cose_alg;
-	int ret = -1;
+	int ret = SSH_SK_ERR_GENERAL;
 	int r;
 	char *device = NULL;
 
-	(void)flags; /* XXX; unused */
 #ifdef SK_DEBUG
 	fido_init(FIDO_DEBUG);
 #endif
@@ -414,6 +504,11 @@ sk_enroll(int alg, const uint8_t *challenge, size_t challenge_len,
 		skdebug(__func__, "enroll_response == NULL");
 		goto out;
 	}
+	memset(user_id, 0, sizeof(user_id));
+	if (check_enroll_options(options, &device,
+	    user_id, sizeof(user_id)) != 0)
+		goto out; /* error already logged */
+
 	*enroll_response = NULL;
 	switch(alg) {
 #ifdef WITH_OPENSSL
@@ -428,7 +523,7 @@ sk_enroll(int alg, const uint8_t *challenge, size_t challenge_len,
 		skdebug(__func__, "unsupported key type %d", alg);
 		goto out;
 	}
-	if ((device = pick_first_device()) == NULL) {
+	if (device == NULL && (device = pick_first_device()) == NULL) {
 		skdebug(__func__, "pick_first_device failed");
 		goto out;
 	}
@@ -437,7 +532,6 @@ sk_enroll(int alg, const uint8_t *challenge, size_t challenge_len,
 		skdebug(__func__, "fido_cred_new failed");
 		goto out;
 	}
-	memset(user_id, 0, sizeof(user_id));
 	if ((r = fido_cred_set_type(cred, cose_alg)) != FIDO_OK) {
 		skdebug(__func__, "fido_cred_set_type: %s", fido_strerr(r));
 		goto out;
@@ -446,6 +540,11 @@ sk_enroll(int alg, const uint8_t *challenge, size_t challenge_len,
 	    challenge_len)) != FIDO_OK) {
 		skdebug(__func__, "fido_cred_set_clientdata_hash: %s",
 		    fido_strerr(r));
+		goto out;
+	}
+	if ((r = fido_cred_set_rk(cred, (flags & SK_RESIDENT_KEY) != 0 ?
+	    FIDO_OPT_TRUE : FIDO_OPT_OMIT)) != FIDO_OK) {
+		skdebug(__func__, "fido_cred_set_rk: %s", fido_strerr(r));
 		goto out;
 	}
 	if ((r = fido_cred_set_user(cred, user_id, sizeof(user_id),
@@ -465,8 +564,9 @@ sk_enroll(int alg, const uint8_t *challenge, size_t challenge_len,
 		skdebug(__func__, "fido_dev_open: %s", fido_strerr(r));
 		goto out;
 	}
-	if ((r = fido_dev_make_cred(dev, cred, NULL)) != FIDO_OK) {
+	if ((r = fido_dev_make_cred(dev, cred, pin)) != FIDO_OK) {
 		skdebug(__func__, "fido_dev_make_cred: %s", fido_strerr(r));
+		ret = fidoerr_to_skerr(r);
 		goto out;
 	}
 	if (fido_cred_x5c_ptr(cred) != NULL) {
@@ -608,7 +708,8 @@ pack_sig_ed25519(fido_assert_t *assert, struct sk_sign_response *response)
 }
 
 static int
-pack_sig(int alg, fido_assert_t *assert, struct sk_sign_response *response)
+pack_sig(uint32_t  alg, fido_assert_t *assert,
+    struct sk_sign_response *response)
 {
 	switch(alg) {
 #ifdef WITH_OPENSSL
@@ -622,16 +723,45 @@ pack_sig(int alg, fido_assert_t *assert, struct sk_sign_response *response)
 	}
 }
 
+/* Checks sk_options for sk_sign() and sk_load_resident_keys() */
+static int
+check_sign_load_resident_options(struct sk_option **options, char **devicep)
+{
+	size_t i;
+
+	if (options == NULL)
+		return 0;
+	for (i = 0; options[i] != NULL; i++) {
+		if (strcmp(options[i]->name, "device") == 0) {
+			if ((*devicep = strdup(options[i]->value)) == NULL) {
+				skdebug(__func__, "strdup device failed");
+				return -1;
+			}
+			skdebug(__func__, "requested device %s", *devicep);
+		} else {
+			skdebug(__func__, "requested unsupported option %s",
+			    options[i]->name);
+			if (options[i]->required) {
+				skdebug(__func__, "unknown required option");
+				return -1;
+			}
+		}
+	}
+	return 0;
+}
+
 int
-sk_sign(int alg, const uint8_t *message, size_t message_len,
+sk_sign(uint32_t alg, const uint8_t *message, size_t message_len,
     const char *application,
     const uint8_t *key_handle, size_t key_handle_len,
-    uint8_t flags, struct sk_sign_response **sign_response)
+    uint8_t flags, const char *pin, struct sk_option **options,
+    struct sk_sign_response **sign_response)
 {
 	fido_assert_t *assert = NULL;
+	char *device = NULL;
 	fido_dev_t *dev = NULL;
 	struct sk_sign_response *response = NULL;
-	int ret = -1;
+	int ret = SSH_SK_ERR_GENERAL;
 	int r;
 
 #ifdef SK_DEBUG
@@ -643,8 +773,10 @@ sk_sign(int alg, const uint8_t *message, size_t message_len,
 		goto out;
 	}
 	*sign_response = NULL;
-	if ((dev = find_device(message, message_len, application, key_handle,
-	    key_handle_len)) == NULL) {
+	if (check_sign_load_resident_options(options, &device) != 0)
+		goto out; /* error already logged */
+	if ((dev = find_device(device, message, message_len,
+	    application, key_handle, key_handle_len)) == NULL) {
 		skdebug(__func__, "couldn't find device for key handle");
 		goto out;
 	}
@@ -691,6 +823,7 @@ sk_sign(int alg, const uint8_t *message, size_t message_len,
 	response = NULL;
 	ret = 0;
  out:
+	free(device);
 	if (response != NULL) {
 		free(response->sig_r);
 		free(response->sig_s);
@@ -705,3 +838,226 @@ sk_sign(int alg, const uint8_t *message, size_t message_len,
 	}
 	return ret;
 }
+
+static int
+read_rks(const char *devpath, const char *pin,
+    struct sk_resident_key ***rksp, size_t *nrksp)
+{
+	int ret = SSH_SK_ERR_GENERAL, r = -1;
+	fido_dev_t *dev = NULL;
+	fido_credman_metadata_t *metadata = NULL;
+	fido_credman_rp_t *rp = NULL;
+	fido_credman_rk_t *rk = NULL;
+	size_t i, j, nrp, nrk;
+	const fido_cred_t *cred;
+	struct sk_resident_key *srk = NULL, **tmp;
+
+	if ((dev = fido_dev_new()) == NULL) {
+		skdebug(__func__, "fido_dev_new failed");
+		return ret;
+	}
+	if ((r = fido_dev_open(dev, devpath)) != FIDO_OK) {
+		skdebug(__func__, "fido_dev_open %s failed: %s",
+		    devpath, fido_strerr(r));
+		fido_dev_free(&dev);
+		return ret;
+	}
+	if ((metadata = fido_credman_metadata_new()) == NULL) {
+		skdebug(__func__, "alloc failed");
+		goto out;
+	}
+
+	if ((r = fido_credman_get_dev_metadata(dev, metadata, pin)) != 0) {
+		if (r == FIDO_ERR_INVALID_COMMAND) {
+			skdebug(__func__, "device %s does not support "
+			    "resident keys", devpath);
+			ret = 0;
+			goto out;
+		}
+		skdebug(__func__, "get metadata for %s failed: %s",
+		    devpath, fido_strerr(r));
+		ret = fidoerr_to_skerr(r);
+		goto out;
+	}
+	skdebug(__func__, "existing %llu, remaining %llu",
+	    (unsigned long long)fido_credman_rk_existing(metadata),
+	    (unsigned long long)fido_credman_rk_remaining(metadata));
+	if ((rp = fido_credman_rp_new()) == NULL) {
+		skdebug(__func__, "alloc rp failed");
+		goto out;
+	}
+	if ((r = fido_credman_get_dev_rp(dev, rp, pin)) != 0) {
+		skdebug(__func__, "get RPs for %s failed: %s",
+		    devpath, fido_strerr(r));
+		goto out;
+	}
+	nrp = fido_credman_rp_count(rp);
+	skdebug(__func__, "Device %s has resident keys for %zu RPs",
+	    devpath, nrp);
+
+	/* Iterate over RP IDs that have resident keys */
+	for (i = 0; i < nrp; i++) {
+		skdebug(__func__, "rp %zu: name=\"%s\" id=\"%s\" hashlen=%zu",
+		    i, fido_credman_rp_name(rp, i), fido_credman_rp_id(rp, i),
+		    fido_credman_rp_id_hash_len(rp, i));
+
+		/* Skip non-SSH RP IDs */
+		if (strncasecmp(fido_credman_rp_id(rp, i), "ssh:", 4) != 0)
+			continue;
+
+		fido_credman_rk_free(&rk);
+		if ((rk = fido_credman_rk_new()) == NULL) {
+			skdebug(__func__, "alloc rk failed");
+			goto out;
+		}
+		if ((r = fido_credman_get_dev_rk(dev, fido_credman_rp_id(rp, i),
+		    rk, pin)) != 0) {
+			skdebug(__func__, "get RKs for %s slot %zu failed: %s",
+			    devpath, i, fido_strerr(r));
+			goto out;
+		}
+		nrk = fido_credman_rk_count(rk);
+		skdebug(__func__, "RP \"%s\" has %zu resident keys",
+		    fido_credman_rp_id(rp, i), nrk);
+
+		/* Iterate over resident keys for this RP ID */
+		for (j = 0; j < nrk; j++) {
+			if ((cred = fido_credman_rk(rk, j)) == NULL) {
+				skdebug(__func__, "no RK in slot %zu", j);
+				continue;
+			}
+			skdebug(__func__, "Device %s RP \"%s\" slot %zu: "
+			    "type %d", devpath, fido_credman_rp_id(rp, i), j,
+			    fido_cred_type(cred));
+
+			/* build response entry */
+			if ((srk = calloc(1, sizeof(*srk))) == NULL ||
+			    (srk->key.key_handle = calloc(1,
+			    fido_cred_id_len(cred))) == NULL ||
+			    (srk->application = strdup(fido_credman_rp_id(rp,
+			    i))) == NULL) {
+				skdebug(__func__, "alloc sk_resident_key");
+				goto out;
+			}
+
+			srk->key.key_handle_len = fido_cred_id_len(cred);
+			memcpy(srk->key.key_handle,
+			    fido_cred_id_ptr(cred),
+			    srk->key.key_handle_len);
+
+			switch (fido_cred_type(cred)) {
+			case COSE_ES256:
+				srk->alg = SK_ECDSA;
+				break;
+			case COSE_EDDSA:
+				srk->alg = SK_ED25519;
+				break;
+			default:
+				skdebug(__func__, "unsupported key type %d",
+				    fido_cred_type(cred));
+				goto out;
+			}
+
+			if ((r = pack_public_key(srk->alg, cred,
+			    &srk->key)) != 0) {
+				skdebug(__func__, "pack public key failed");
+				goto out;
+			}
+			/* append */
+			if ((tmp = recallocarray(*rksp, *nrksp, (*nrksp) + 1,
+			    sizeof(**rksp))) == NULL) {
+				skdebug(__func__, "alloc rksp");
+				goto out;
+			}
+			*rksp = tmp;
+			(*rksp)[(*nrksp)++] = srk;
+			srk = NULL;
+		}
+	}
+	/* Success */
+	ret = 0;
+ out:
+	if (srk != NULL) {
+		free(srk->application);
+		freezero(srk->key.public_key, srk->key.public_key_len);
+		freezero(srk->key.key_handle, srk->key.key_handle_len);
+		freezero(srk, sizeof(*srk));
+	}
+	fido_credman_rp_free(&rp);
+	fido_credman_rk_free(&rk);
+	fido_dev_close(dev);
+	fido_dev_free(&dev);
+	fido_credman_metadata_free(&metadata);
+	return ret;
+}
+
+int
+sk_load_resident_keys(const char *pin, struct sk_option **options,
+    struct sk_resident_key ***rksp, size_t *nrksp)
+{
+	int ret = SSH_SK_ERR_GENERAL, r = -1;
+	fido_dev_info_t *devlist = NULL;
+	size_t i, ndev = 0, nrks = 0;
+	const fido_dev_info_t *di;
+	struct sk_resident_key **rks = NULL;
+	char *device = NULL;
+	*rksp = NULL;
+	*nrksp = 0;
+
+	if (check_sign_load_resident_options(options, &device) != 0)
+		goto out; /* error already logged */
+	if (device != NULL) {
+		skdebug(__func__, "trying %s", device);
+		if ((r = read_rks(device, pin, &rks, &nrks)) != 0) {
+			skdebug(__func__, "read_rks failed for %s", device);
+			ret = r;
+			goto out;
+		}
+	} else {
+		/* Try all devices */
+		if ((devlist = fido_dev_info_new(MAX_FIDO_DEVICES)) == NULL) {
+			skdebug(__func__, "fido_dev_info_new failed");
+			goto out;
+		}
+		if ((r = fido_dev_info_manifest(devlist,
+		    MAX_FIDO_DEVICES, &ndev)) != FIDO_OK) {
+			skdebug(__func__, "fido_dev_info_manifest failed: %s",
+			    fido_strerr(r));
+			goto out;
+		}
+		for (i = 0; i < ndev; i++) {
+			if ((di = fido_dev_info_ptr(devlist, i)) == NULL) {
+				skdebug(__func__, "no dev info at %zu", i);
+				continue;
+			}
+			skdebug(__func__, "trying %s", fido_dev_info_path(di));
+			if ((r = read_rks(fido_dev_info_path(di), pin,
+			    &rks, &nrks)) != 0) {
+				skdebug(__func__, "read_rks failed for %s",
+				    fido_dev_info_path(di));
+				/* remember last error */
+				ret = r;
+				continue;
+			}
+		}
+	}
+	/* success, unless we have no keys but a specific error */
+	if (nrks > 0 || ret == SSH_SK_ERR_GENERAL)
+		ret = 0;
+	*rksp = rks;
+	*nrksp = nrks;
+	rks = NULL;
+	nrks = 0;
+ out:
+	free(device);
+	for (i = 0; i < nrks; i++) {
+		free(rks[i]->application);
+		freezero(rks[i]->key.public_key, rks[i]->key.public_key_len);
+		freezero(rks[i]->key.key_handle, rks[i]->key.key_handle_len);
+		freezero(rks[i], sizeof(*rks[i]));
+	}
+	free(rks);
+	fido_dev_info_free(&devlist, MAX_FIDO_DEVICES);
+	return ret;
+}
+

@@ -1,4 +1,4 @@
-/*	$OpenBSD: sigio.h,v 1.1 2018/11/12 15:09:17 visa Exp $	*/
+/*	$OpenBSD: sigio.h,v 1.4 2020/01/08 16:27:42 visa Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993
@@ -42,10 +42,10 @@ LIST_HEAD(sigiolst, sigio);
  * sigio registration
  *
  * Locking:
- *	s	sigio_lock
+ *	S	sigio_lock
  */
 struct sigio_ref {
-	struct sigio	*sir_sigio;	/* [s] associated sigio struct */
+	struct sigio	*sir_sigio;	/* [S] associated sigio struct */
 };
 
 #ifdef _KERNEL
@@ -59,7 +59,7 @@ struct sigio_ref {
  *
  * Locking:
  *	I	immutable after creation
- *	s	sigio_lock
+ *	S	sigio_lock
  */
 struct sigio {
 	union {
@@ -68,7 +68,7 @@ struct sigio {
 					 *     SIGIO/SIGURG */
 		struct	pgrp *siu_pgrp; /* [I] process group to receive ... */
 	} sio_u;
-	LIST_ENTRY(sigio) sio_pgsigio;	/* [s] sigio's for process or group */
+	LIST_ENTRY(sigio) sio_pgsigio;	/* [S] sigio's for process or group */
 	struct	sigio_ref *sio_myref;	/* [I] location of the pointer that
 					 *     holds the reference to
 					 *     this structure */
@@ -87,8 +87,8 @@ sigio_init(struct sigio_ref *sir)
 void	sigio_copy(struct sigio_ref *, struct sigio_ref *);
 void	sigio_free(struct sigio_ref *);
 void	sigio_freelist(struct sigiolst *);
-pid_t	sigio_getown(struct sigio_ref *);
-int	sigio_setown(struct sigio_ref *, pid_t);
+void	sigio_getown(struct sigio_ref *, u_long, caddr_t);
+int	sigio_setown(struct sigio_ref *, u_long, caddr_t);
 
 #endif /* _KERNEL */
 

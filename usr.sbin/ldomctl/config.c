@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.29 2019/11/28 18:40:42 kn Exp $	*/
+/*	$OpenBSD: config.c,v 1.31 2020/01/05 19:54:05 kn Exp $	*/
 
 /*
  * Copyright (c) 2012, 2018 Mark Kettenis
@@ -2759,7 +2759,7 @@ primary_init(void)
 }
 
 void
-build_config(const char *filename)
+build_config(const char *filename, int noaction)
 {
 	struct guest *primary;
 	struct guest *guest;
@@ -2774,13 +2774,15 @@ build_config(const char *filename)
 	struct vnet *vnet;
 	struct var *var;
 	struct iodev *iodev;
-	uint64_t num_cpus, primary_num_cpus;
+	uint64_t num_cpus = 0, primary_num_cpus = 0;
 	uint64_t primary_stride = 1;
-	uint64_t memory, primary_memory;
+	uint64_t memory = 0, primary_memory = 0;
 
 	SIMPLEQ_INIT(&conf.domain_list);
 	if (parse_config(filename, &conf) < 0)
 		exit(1);
+	if (noaction)
+		exit(0);
 
 	pri = md_read("pri");
 	if (pri == NULL)
@@ -2792,8 +2794,6 @@ build_config(const char *filename)
 	pri_init(pri);
 	pri_alloc_memory(hv_membase, hv_memsize);
 
-	num_cpus = primary_num_cpus = 0;
-	memory = primary_memory = 0;
 	SIMPLEQ_FOREACH(domain, &conf.domain_list, entry) {
 		if (strcmp(domain->name, "primary") == 0) {
 			primary_num_cpus = domain->vcpu;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: job.c,v 1.142 2019/12/25 20:42:04 espie Exp $	*/
+/*	$OpenBSD: job.c,v 1.147 2020/01/13 14:14:24 espie Exp $	*/
 /*	$NetBSD: job.c,v 1.16 1996/11/06 17:59:08 christos Exp $	*/
 
 /*
@@ -148,6 +148,7 @@ static void may_continue_job(Job *);
 static void continue_job(Job *);
 static Job *reap_finished_job(pid_t);
 static bool reap_jobs(void);
+static void may_continue_heldback_jobs();
 
 static void loop_handle_running_jobs(void);
 static bool expensive_job(Job *);
@@ -322,14 +323,18 @@ internal_print_errors()
 	dying = check_dying_signal();
 	if (dying)
 		quick_summary(dying);
+	/* Print errors grouped by file name. */
 	while (errorJobs != NULL) {
+		/* Select the first job. */
 		k = errorJobs;
 		errorJobs = NULL;
 		for (j = k; j != NULL; j = jnext) {
 			jnext = j->next;
 			if (j->location->fname == k->location->fname)
+				/* Print errors with the same filename. */
 				print_error(j);
 			else {
+				/* Keep others for the next iteration. */
 				j->next = errorJobs;
 				errorJobs = j;
 			}
@@ -539,10 +544,10 @@ postprocess_job(Job *job)
 		job->node->built_status = REBUILT;
 		Make_Update(job->node);
 		free(job);
-	}
+	} else if (job->exit_type != JOB_EXIT_OKAY && keepgoing)
+		free(job);
 
-	if (errorJobs != NULL && !keepgoing &&
-	    aborting != ABORT_INTERRUPT)
+	if (errorJobs != NULL && aborting != ABORT_INTERRUPT)
 		aborting = ABORT_ERROR;
 
 	if (aborting == ABORT_ERROR && DEBUG(QUICKDEATH))
@@ -564,10 +569,10 @@ postprocess_job(Job *job)
  * is set, so jobs that would fork new processes are accumulated in the
  * heldJobs list instead.
  *
- * This heuristics is also used on error exit: we display silent commands
- * that failed, unless those ARE expensive commands: expensive commands
- * are likely to not be failing by themselves, but to be the result of
- * a cascade of failures in descendant makes.
+ * XXX This heuristics is also used on error exit: we display silent commands
+ * that failed, unless those ARE expensive commands: expensive commands are
+ * likely to not be failing by themselves, but to be the result of a cascade of
+ * failures in descendant makes.
  */
 void
 determine_expensive_job(Job *job)
@@ -742,9 +747,14 @@ remove_job(Job *job)
 {
 	nJobs--;
 	postprocess_job(job);
+}
+
+static void
+may_continue_heldback_jobs()
+{
 	while (!no_new_jobs) {
 		if (heldJobs != NULL) {
-			job = heldJobs;
+			Job *job = heldJobs;
 			heldJobs = heldJobs->next;
 			if (DEBUG(EXPENSIVE))
 				fprintf(stderr, "[%ld] cheap -> release %s\n",
@@ -799,6 +809,7 @@ reap_jobs(void)
 			job_handle_status(job, status);
 			determine_job_next_step(job);
 		}
+		may_continue_heldback_jobs();
 	}
 	/* sanity check, should not happen */
 	if (pid == -1 && errno == ECHILD && runningJobs != NULL)

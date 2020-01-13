@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: ipv6.h,v 1.3 2019/12/17 01:46:35 sthen Exp $ */
+/* $Id: ipv6.h,v 1.6 2020/01/09 18:17:19 florian Exp $ */
 
 #ifndef ISC_IPV6_H
 #define ISC_IPV6_H 1
@@ -52,7 +52,7 @@
  *** Imports.
  ***/
 
-#include <isc/int.h>
+
 #include <isc/platform.h>
 
 /***
@@ -61,9 +61,9 @@
 
 struct in6_addr {
 	union {
-		isc_uint8_t	_S6_u8[16];
-		isc_uint16_t	_S6_u16[8];
-		isc_uint32_t	_S6_u32[4];
+		uint8_t	_S6_u8[16];
+		uint16_t	_S6_u16[8];
+		uint32_t	_S6_u32[4];
 	} _S6_un;
 };
 #define s6_addr		_S6_un._S6_u8
@@ -74,25 +74,19 @@ struct in6_addr {
 #define IN6ADDR_ANY_INIT 	{{{ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 }}}
 #define IN6ADDR_LOOPBACK_INIT 	{{{ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 }}}
 
-LIBISC_EXTERNAL_DATA extern const struct in6_addr in6addr_any;
-LIBISC_EXTERNAL_DATA extern const struct in6_addr in6addr_loopback;
+extern const struct in6_addr in6addr_any;
+extern const struct in6_addr in6addr_loopback;
 
 struct sockaddr_in6 {
-#ifdef ISC_PLATFORM_HAVESALEN
-	isc_uint8_t		sin6_len;
-	isc_uint8_t		sin6_family;
-#else
-	isc_uint16_t		sin6_family;
-#endif
-	isc_uint16_t		sin6_port;
-	isc_uint32_t		sin6_flowinfo;
+	uint8_t		sin6_len;
+	uint8_t		sin6_family;
+	uint16_t		sin6_port;
+	uint32_t		sin6_flowinfo;
 	struct in6_addr		sin6_addr;
-	isc_uint32_t		sin6_scope_id;
+	uint32_t		sin6_scope_id;
 };
 
-#ifdef ISC_PLATFORM_HAVESALEN
 #define SIN6_LEN 1
-#endif
 
 /*%
  * Unspecified

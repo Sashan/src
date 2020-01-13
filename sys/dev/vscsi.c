@@ -1,4 +1,4 @@
-/*	$OpenBSD: vscsi.c,v 1.42 2019/12/19 12:04:38 reyk Exp $ */
+/*	$OpenBSD: vscsi.c,v 1.45 2019/12/31 22:57:07 jsg Exp $ */
 
 /*
  * Copyright (c) 2008 David Gwynne <dlg@openbsd.org>
@@ -116,11 +116,11 @@ void		vscsi_ccb_put(void *, void *);
 void		filt_vscsidetach(struct knote *);
 int		filt_vscsiread(struct knote *, long);
   
-struct filterops vscsi_filtops = {
-	1,
-	NULL,
-	filt_vscsidetach,
-	filt_vscsiread
+const struct filterops vscsi_filtops = {
+	.f_isfd		= 1,
+	.f_attach	= NULL,
+	.f_detach	= filt_vscsidetach,
+	.f_event	= filt_vscsiread,
 };
 
 
@@ -199,7 +199,8 @@ vscsi_cmd(struct scsi_xfer *xs)
 	if (polled) {
 		mtx_enter(&sc->sc_poll_mtx);
 		while (ccb->ccb_xs != NULL)
-			msleep(ccb, &sc->sc_poll_mtx, PRIBIO, "vscsipoll", 0);
+			msleep_nsec(ccb, &sc->sc_poll_mtx, PRIBIO, "vscsipoll",
+			    INFSLP);
 		mtx_leave(&sc->sc_poll_mtx);
 		scsi_done(xs);
 	}
@@ -645,8 +646,8 @@ vscsiclose(dev_t dev, int flags, int mode, struct proc *p)
 
 	mtx_enter(&sc->sc_state_mtx);
 	while (sc->sc_ref_count > 0) {
-		msleep(&sc->sc_ref_count, &sc->sc_state_mtx,
-		    PRIBIO, "vscsiref", 0);
+		msleep_nsec(&sc->sc_ref_count, &sc->sc_state_mtx,
+		    PRIBIO, "vscsiref", INFSLP);
 	}
 	mtx_leave(&sc->sc_state_mtx);
 

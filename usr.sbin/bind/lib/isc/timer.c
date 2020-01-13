@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: timer.c,v 1.4 2019/12/17 01:46:34 sthen Exp $ */
+/* $Id: timer.c,v 1.9 2020/01/09 18:17:19 florian Exp $ */
 
 /*! \file */
 
@@ -29,23 +29,15 @@
 #include <isc/msgs.h>
 #include <isc/once.h>
 #include <isc/platform.h>
-#include <isc/print.h>
+
 #include <isc/task.h>
 #include <isc/thread.h>
 #include <isc/time.h>
 #include <isc/timer.h>
 #include <isc/util.h>
 
-#ifdef OPENSSL_LEAKS
-#include <openssl/err.h>
-#endif
-
 /* See task.c about the following definition: */
-#ifdef ISC_PLATFORM_USETHREADS
-#define USE_TIMER_THREAD
-#else
 #define USE_SHARED_MANAGER
-#endif	/* ISC_PLATFORM_USETHREADS */
 
 #ifndef USE_TIMER_THREAD
 #include "timer_p.h"
@@ -85,7 +77,7 @@ struct isc__timer {
 	/*! Locked by manager lock. */
 	isc_timertype_t			type;
 	isc_time_t			expires;
-	isc_interval_t			interval;
+	interval_t			interval;
 	isc_task_t *			task;
 	isc_taskaction_t		action;
 	void *				arg;
@@ -125,12 +117,12 @@ struct isc__timermgr {
 
 isc_result_t
 isc__timer_create(isc_timermgr_t *manager, isc_timertype_t type,
-		  const isc_time_t *expires, const isc_interval_t *interval,
+		  const isc_time_t *expires, const interval_t *interval,
 		  isc_task_t *task, isc_taskaction_t action, void *arg,
 		  isc_timer_t **timerp);
 isc_result_t
 isc__timer_reset(isc_timer_t *timer, isc_timertype_t type,
-		 const isc_time_t *expires, const isc_interval_t *interval,
+		 const isc_time_t *expires, const interval_t *interval,
 		 isc_boolean_t purge);
 isc_timertype_t
 isc_timer_gettype(isc_timer_t *timer);
@@ -285,10 +277,10 @@ schedule(isc__timer_t *timer, isc_time_t *now, isc_boolean_t signal_ok) {
 	 * watchdog, so perhaps we should just leave it in here.
 	 */
 	if (signal_ok && timedwait) {
-		isc_interval_t fifteen;
+		interval_t fifteen;
 		isc_time_t then;
 
-		isc_interval_set(&fifteen, 15, 0);
+		interval_set(&fifteen, 15, 0);
 		result = isc_time_add(&manager->due, &fifteen, &then);
 
 		if (result == ISC_R_SUCCESS &&
@@ -377,7 +369,7 @@ destroy(isc__timer_t *timer) {
 
 isc_result_t
 isc__timer_create(isc_timermgr_t *manager0, isc_timertype_t type,
-		  const isc_time_t *expires, const isc_interval_t *interval,
+		  const isc_time_t *expires, const interval_t *interval,
 		  isc_task_t *task, isc_taskaction_t action, void *arg,
 		  isc_timer_t **timerp)
 {
@@ -400,12 +392,12 @@ isc__timer_create(isc_timermgr_t *manager0, isc_timertype_t type,
 	if (expires == NULL)
 		expires = isc_time_epoch;
 	if (interval == NULL)
-		interval = isc_interval_zero;
+		interval = interval_zero;
 	REQUIRE(type == isc_timertype_inactive ||
-		!(isc_time_isepoch(expires) && isc_interval_iszero(interval)));
+		!(isc_time_isepoch(expires) && interval_iszero(interval)));
 	REQUIRE(timerp != NULL && *timerp == NULL);
 	REQUIRE(type != isc_timertype_limited ||
-		!(isc_time_isepoch(expires) || isc_interval_iszero(interval)));
+		!(isc_time_isepoch(expires) || interval_iszero(interval)));
 
 	/*
 	 * Get current time.
@@ -429,7 +421,7 @@ isc__timer_create(isc_timermgr_t *manager0, isc_timertype_t type,
 	timer->manager = manager;
 	timer->references = 1;
 
-	if (type == isc_timertype_once && !isc_interval_iszero(interval)) {
+	if (type == isc_timertype_once && !interval_iszero(interval)) {
 		result = isc_time_add(&now, interval, &timer->idle);
 		if (result != ISC_R_SUCCESS) {
 			isc_mem_put(manager->mctx, timer, sizeof(*timer));
@@ -499,7 +491,7 @@ isc__timer_create(isc_timermgr_t *manager0, isc_timertype_t type,
 
 isc_result_t
 isc__timer_reset(isc_timer_t *timer0, isc_timertype_t type,
-		 const isc_time_t *expires, const isc_interval_t *interval,
+		 const isc_time_t *expires, const interval_t *interval,
 		 isc_boolean_t purge)
 {
 	isc__timer_t *timer = (isc__timer_t *)timer0;
@@ -520,11 +512,11 @@ isc__timer_reset(isc_timer_t *timer0, isc_timertype_t type,
 	if (expires == NULL)
 		expires = isc_time_epoch;
 	if (interval == NULL)
-		interval = isc_interval_zero;
+		interval = interval_zero;
 	REQUIRE(type == isc_timertype_inactive ||
-		!(isc_time_isepoch(expires) && isc_interval_iszero(interval)));
+		!(isc_time_isepoch(expires) && interval_iszero(interval)));
 	REQUIRE(type != isc_timertype_limited ||
-		!(isc_time_isepoch(expires) || isc_interval_iszero(interval)));
+		!(isc_time_isepoch(expires) || interval_iszero(interval)));
 
 	/*
 	 * Get current time.
@@ -552,7 +544,7 @@ isc__timer_reset(isc_timer_t *timer0, isc_timertype_t type,
 	timer->type = type;
 	timer->expires = *expires;
 	timer->interval = *interval;
-	if (type == isc_timertype_once && !isc_interval_iszero(interval)) {
+	if (type == isc_timertype_once && !interval_iszero(interval)) {
 		result = isc_time_add(&now, interval, &timer->idle);
 	} else {
 		isc_time_settoepoch(&timer->idle);
@@ -783,9 +775,6 @@ dispatch(isc__timermgr_t *manager, isc_time_t *now) {
 
 #ifdef USE_TIMER_THREAD
 static isc_threadresult_t
-#ifdef _WIN32			/* XXXDCL */
-WINAPI
-#endif
 run(void *uap) {
 	isc__timermgr_t *manager = uap;
 	isc_time_t now;
@@ -819,10 +808,6 @@ run(void *uap) {
 				      ISC_MSG_WAKEUP, "wakeup"));
 	}
 	UNLOCK(&manager->lock);
-
-#ifdef OPENSSL_LEAKS
-	ERR_remove_state(0);
-#endif
 
 	return ((isc_threadresult_t)0);
 }
@@ -1130,7 +1115,7 @@ isc_timermgr_destroy(isc_timermgr_t **managerp) {
 
 isc_result_t
 isc_timer_create(isc_timermgr_t *manager, isc_timertype_t type,
-		 const isc_time_t *expires, const isc_interval_t *interval,
+		 const isc_time_t *expires, const interval_t *interval,
 		 isc_task_t *task, isc_taskaction_t action, void *arg,
 		 isc_timer_t **timerp)
 {
@@ -1172,7 +1157,7 @@ isc_timer_detach(isc_timer_t **timerp) {
 
 isc_result_t
 isc_timer_reset(isc_timer_t *timer, isc_timertype_t type,
-		const isc_time_t *expires, const isc_interval_t *interval,
+		const isc_time_t *expires, const interval_t *interval,
 		isc_boolean_t purge)
 {
 	REQUIRE(ISCAPI_TIMER_VALID(timer));
