@@ -1,4 +1,4 @@
-/*	$OpenBSD: mrt.c,v 1.100 2019/08/08 20:06:29 claudio Exp $ */
+/*	$OpenBSD: mrt.c,v 1.103 2020/01/09 11:55:25 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Claudio Jeker <claudio@openbsd.org>
@@ -233,7 +233,7 @@ mrt_attr_dump(struct ibuf *buf, struct rde_aspath *a, struct rde_community *c,
 			DUMP_NLONG(nhbuf, 0);	/* set RD to 0 */
 			DUMP_NLONG(nhbuf, 0);
 			if (ibuf_add(nhbuf, &nexthop->v6,
-			    sizeof(struct in6_addr)) == -1) 
+			    sizeof(struct in6_addr)) == -1)
 				goto fail;
 			break;
 		}
@@ -323,7 +323,8 @@ mrt_dump_entry_mp(struct mrt *mrt, struct prefix *p, u_int16_t snum,
 
 	DUMP_SHORT(h2buf, 0);		/* view */
 	DUMP_SHORT(h2buf, 1);		/* status */
-	DUMP_LONG(h2buf, p->lastchange);	/* originated */
+	/* originated timestamp */
+	DUMP_LONG(h2buf, time(NULL) - (getmonotime() - p->lastchange));
 
 	pt_getaddr(p->pt, &addr);
 
@@ -459,7 +460,8 @@ mrt_dump_entry(struct mrt *mrt, struct prefix *p, u_int16_t snum,
 	DUMP_BYTE(hbuf, p->pt->prefixlen);
 
 	DUMP_BYTE(hbuf, 1);		/* state */
-	DUMP_LONG(hbuf, p->lastchange);	/* originated */
+	/* originated timestamp */
+	DUMP_LONG(hbuf, time(NULL) - (getmonotime() - p->lastchange));
 	switch (p->pt->aid) {
 	case AID_INET:
 		DUMP_NLONG(hbuf, peer->remote_addr.v4.s_addr);
@@ -547,7 +549,8 @@ mrt_dump_entry_v2(struct mrt *mrt, struct rib_entry *re, u_int32_t snum)
 			nh = &nexthop->exit_nexthop;
 
 		DUMP_SHORT(buf, prefix_peer(p)->mrt_idx);
-		DUMP_LONG(buf, p->lastchange); /* originated */
+		/* originated timestamp */
+		DUMP_LONG(buf, time(NULL) - (getmonotime() - p->lastchange));
 
 		if ((tbuf = ibuf_dynamic(0, MAX_PKTSIZE)) == NULL) {
 			log_warn("%s: ibuf_dynamic", __func__);
@@ -819,7 +822,7 @@ int
 mrt_dump_hdr_rde(struct ibuf **bp, u_int16_t type, u_int16_t subtype,
     u_int32_t len)
 {
-	time_t		 now;
+	struct timespec	time;
 
 	if ((*bp = ibuf_dynamic(MRT_HEADER_SIZE, MRT_HEADER_SIZE +
 	    MRT_BGP4MP_AS4_IPv6_HEADER_SIZE + MRT_BGP4MP_IPv6_ENTRY_SIZE)) ==
@@ -828,8 +831,9 @@ mrt_dump_hdr_rde(struct ibuf **bp, u_int16_t type, u_int16_t subtype,
 		return (-1);
 	}
 
-	now = time(NULL);
-	DUMP_LONG(*bp, now);
+	clock_gettime(CLOCK_REALTIME, &time);
+
+	DUMP_LONG(*bp, time.tv_sec);
 	DUMP_SHORT(*bp, type);
 	DUMP_SHORT(*bp, subtype);
 

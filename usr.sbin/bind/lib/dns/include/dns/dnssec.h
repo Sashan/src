@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: dnssec.h,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
+/* $Id: dnssec.h,v 1.5 2020/01/09 18:14:48 florian Exp $ */
 
 #ifndef DNS_DNSSEC_H
 #define DNS_DNSSEC_H 1
@@ -23,7 +23,7 @@
 
 #include <isc/lang.h>
 #include <isc/stdtime.h>
-#include <isc/stats.h>
+
 
 #include <dns/diff.h>
 #include <dns/types.h>
@@ -32,7 +32,7 @@
 
 ISC_LANG_BEGINDECLS
 
-LIBDNS_EXTERNAL_DATA extern isc_stats_t *dns_dnssec_stats;
+extern isc_stats_t *dns_dnssec_stats;
 
 /*%< Maximum number of keys supported in a zone. */
 #define DNS_MAXZONEKEYS 32

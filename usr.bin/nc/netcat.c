@@ -1,4 +1,4 @@
-/* $OpenBSD: netcat.c,v 1.212 2019/11/17 17:38:33 deraadt Exp $ */
+/* $OpenBSD: netcat.c,v 1.215 2020/01/07 17:36:04 bluhm Exp $ */
 /*
  * Copyright (c) 2001 Eric Jackson <ericj@monkey.org>
  * Copyright (c) 2015 Bob Beck.  All rights reserved.
@@ -371,13 +371,24 @@ main(int argc, char *argv[])
 			err(1, "unveil");
 		if (oflag && unveil(oflag, "r") == -1)
 			err(1, "unveil");
+	} else if (family == AF_UNIX && uflag && lflag && !kflag) {
+		/*
+		 * After recvfrom(2) from client, the server connects
+		 * to the client socket.  As the client path is determined
+		 * during runtime, we cannot unveil(2).
+		 */
 	} else {
 		if (family == AF_UNIX) {
 			if (unveil(host, "rwc") == -1)
 				err(1, "unveil");
-			if (uflag && !lflag) {
-				if (unveil(sflag ? sflag : "/tmp", "rwc") == -1)
-					err(1, "unveil");
+			if (uflag && !kflag) {
+				if (sflag) {
+					if (unveil(sflag, "rwc") == -1)
+						err(1, "unveil");
+				} else {
+					if (unveil("/tmp", "rwc") == -1)
+						err(1, "unveil");
+				}
 			}
 		} else {
 			/* no filesystem visibility */
@@ -569,6 +580,10 @@ main(int argc, char *argv[])
 			if (s == -1)
 				err(1, NULL);
 			if (uflag && kflag) {
+				if (family == AF_UNIX) {
+					if (pledge("stdio unix", NULL) == -1)
+						err(1, "pledge");
+				}
 				/*
 				 * For UDP and -k, don't connect the socket,
 				 * let it receive datagrams from multiple
@@ -595,9 +610,14 @@ main(int argc, char *argv[])
 				if (rv == -1)
 					err(1, "connect");
 
+				if (family == AF_UNIX) {
+					if (pledge("stdio unix", NULL) == -1)
+						err(1, "pledge");
+				}
 				if (vflag)
 					report_sock("Connection received",
-					    (struct sockaddr *)&z, len, NULL);
+					    (struct sockaddr *)&z, len,
+					    family == AF_UNIX ? host : NULL);
 
 				readwrite(s, NULL);
 			} else {
@@ -815,8 +835,8 @@ tls_setup_client(struct tls *tls_ctx, int s, char *host)
 	}
 	if (vflag)
 		report_tls(tls_ctx, host);
-	if (tls_expecthash && tls_peer_cert_hash(tls_ctx) &&
-	    strcmp(tls_expecthash, tls_peer_cert_hash(tls_ctx)) != 0)
+	if (tls_expecthash && (tls_peer_cert_hash(tls_ctx) == NULL ||
+	    strcmp(tls_expecthash, tls_peer_cert_hash(tls_ctx)) != 0))
 		errx(1, "peer certificate is not %s", tls_expecthash);
 	if (Zflag) {
 		save_peer_cert(tls_ctx, Zflag);
@@ -844,8 +864,9 @@ tls_setup_server(struct tls *tls_ctx, int connfd, char *host)
 			report_tls(tls_cctx, host);
 		if ((TLSopt & TLS_CCERT) && !gotcert)
 			warnx("No client certificate provided");
-		else if (gotcert && tls_peer_cert_hash(tls_ctx) && tls_expecthash &&
-		    strcmp(tls_expecthash, tls_peer_cert_hash(tls_ctx)) != 0)
+		else if (gotcert && tls_expecthash &&
+		    (tls_peer_cert_hash(tls_cctx) == NULL ||
+		    strcmp(tls_expecthash, tls_peer_cert_hash(tls_cctx)) != 0))
 			warnx("peer certificate is not %s", tls_expecthash);
 		else if (gotcert && tls_expectname &&
 		    (!tls_peer_cert_contains_name(tls_cctx, tls_expectname)))
@@ -1784,11 +1805,14 @@ report_sock(const char *msg, const struct sockaddr *sa, socklen_t salen,
 	if (nflag)
 		flags |= NI_NUMERICHOST;
 
-	if ((herr = getnameinfo(sa, salen, host, sizeof(host),
-	    port, sizeof(port), flags)) != 0) {
-		if (herr == EAI_SYSTEM)
+	herr = getnameinfo(sa, salen, host, sizeof(host), port, sizeof(port),
+	    flags);
+	switch (herr) {
+		case 0:
+			break;
+		case EAI_SYSTEM:
 			err(1, "getnameinfo");
-		else
+		default:
 			errx(1, "getnameinfo: %s", gai_strerror(herr));
 	}
 

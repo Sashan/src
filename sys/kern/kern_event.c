@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_event.c,v 1.111 2019/12/29 07:14:06 visa Exp $	*/
+/*	$OpenBSD: kern_event.c,v 1.120 2020/01/13 13:57:19 visa Exp $	*/
 
 /*-
  * Copyright (c) 1999,2000,2001 Jonathan Lemon <jlemon@FreeBSD.org>
@@ -30,6 +30,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/atomic.h>
 #include <sys/kernel.h>
 #include <sys/proc.h>
 #include <sys/pledge.h>
@@ -69,7 +70,10 @@ int	kqueue_stat(struct file *fp, struct stat *st, struct proc *p);
 int	kqueue_close(struct file *fp, struct proc *p);
 void	kqueue_wakeup(struct kqueue *kq);
 
-struct fileops kqueueops = {
+static void	kqueue_expand_hash(struct kqueue *kq);
+static void	kqueue_expand_list(struct kqueue *kq, int fd);
+
+const struct fileops kqueueops = {
 	.fo_read	= kqueue_read,
 	.fo_write	= kqueue_write,
 	.fo_ioctl	= kqueue_ioctl,
@@ -98,14 +102,33 @@ void	filt_timerdetach(struct knote *kn);
 int	filt_timer(struct knote *kn, long hint);
 void	filt_seltruedetach(struct knote *kn);
 
-struct filterops kqread_filtops =
-	{ 1, NULL, filt_kqdetach, filt_kqueue };
-struct filterops proc_filtops =
-	{ 0, filt_procattach, filt_procdetach, filt_proc };
-struct filterops file_filtops =
-	{ 1, filt_fileattach, NULL, NULL };
-struct filterops timer_filtops =
-        { 0, filt_timerattach, filt_timerdetach, filt_timer };
+const struct filterops kqread_filtops = {
+	.f_isfd		= 1,
+	.f_attach	= NULL,
+	.f_detach	= filt_kqdetach,
+	.f_event	= filt_kqueue,
+};
+
+const struct filterops proc_filtops = {
+	.f_isfd		= 0,
+	.f_attach	= filt_procattach,
+	.f_detach	= filt_procdetach,
+	.f_event	= filt_proc,
+};
+
+const struct filterops file_filtops = {
+	.f_isfd		= 1,
+	.f_attach	= filt_fileattach,
+	.f_detach	= NULL,
+	.f_event	= NULL,
+};
+
+const struct filterops timer_filtops = {
+	.f_isfd		= 0,
+	.f_attach	= filt_timerattach,
+	.f_detach	= filt_timerdetach,
+	.f_event	= filt_timer,
+};
 
 struct	pool knote_pool;
 struct	pool kqueue_pool;
@@ -114,15 +137,10 @@ int kq_timeoutmax = (4 * 1024);
 
 #define KN_HASH(val, mask)	(((val) ^ (val >> 8)) & (mask))
 
-extern struct filterops sig_filtops;
-#ifdef notyet
-extern struct filterops aio_filtops;
-#endif
-
 /*
  * Table for for all system-defined filters.
  */
-struct filterops *sysfilt_ops[] = {
+const struct filterops *const sysfilt_ops[] = {
 	&file_filtops,			/* EVFILT_READ */
 	&file_filtops,			/* EVFILT_WRITE */
 	NULL, /*&aio_filtops,*/		/* EVFILT_AIO */
@@ -139,18 +157,28 @@ void KQRELE(struct kqueue *);
 void
 KQREF(struct kqueue *kq)
 {
-	++kq->kq_refs;
+	atomic_inc_int(&kq->kq_refs);
 }
 
 void
 KQRELE(struct kqueue *kq)
 {
-	if (--kq->kq_refs > 0)
+	struct filedesc *fdp;
+
+	if (atomic_dec_int_nv(&kq->kq_refs) > 0)
 		return;
 
-	LIST_REMOVE(kq, kq_next);
-	free(kq->kq_knlist, M_TEMP, kq->kq_knlistsize * sizeof(struct klist));
-	hashfree(kq->kq_knhash, KN_HASHSIZE, M_TEMP);
+	fdp = kq->kq_fdp;
+	if (rw_status(&fdp->fd_lock) == RW_WRITE) {
+		LIST_REMOVE(kq, kq_next);
+	} else {
+		fdplock(fdp);
+		LIST_REMOVE(kq, kq_next);
+		fdpunlock(fdp);
+	}
+
+	free(kq->kq_knlist, M_KEVENT, kq->kq_knlistsize * sizeof(struct klist));
+	hashfree(kq->kq_knhash, KN_HASHSIZE, M_KEVENT);
 	pool_put(&kqueue_pool, kq);
 }
 
@@ -159,11 +187,10 @@ void kqueue_init(void);
 void
 kqueue_init(void)
 {
-
-	pool_init(&kqueue_pool, sizeof(struct kqueue), 0, IPL_NONE, PR_WAITOK,
-	    "kqueuepl", NULL);
-	pool_init(&knote_pool, sizeof(struct knote), 0, IPL_NONE, PR_WAITOK,
-	    "knotepl", NULL);
+	pool_init(&kqueue_pool, sizeof(struct kqueue), 0, IPL_MPFLOOR,
+	    PR_WAITOK, "kqueuepl", NULL);
+	pool_init(&knote_pool, sizeof(struct knote), 0, IPL_MPFLOOR,
+	    PR_WAITOK, "knotepl", NULL);
 }
 
 int
@@ -415,8 +442,12 @@ filt_seltruedetach(struct knote *kn)
 	/* Nothing to do */
 }
 
-const struct filterops seltrue_filtops =
-	{ 1, NULL, filt_seltruedetach, filt_seltrue };
+const struct filterops seltrue_filtops = {
+	.f_isfd		= 1,
+	.f_attach	= NULL,
+	.f_detach	= filt_seltruedetach,
+	.f_event	= filt_seltrue,
+};
 
 int
 seltrue_kqfilter(dev_t dev, struct knote *kn)
@@ -442,6 +473,11 @@ sys_kqueue(struct proc *p, void *v, register_t *retval)
 	struct file *fp;
 	int fd, error;
 
+	kq = pool_get(&kqueue_pool, PR_WAITOK | PR_ZERO);
+	kq->kq_refs = 1;
+	kq->kq_fdp = fdp;
+	TAILQ_INIT(&kq->kq_head);
+
 	fdplock(fdp);
 	error = falloc(p, &fp, &fd);
 	if (error)
@@ -449,17 +485,16 @@ sys_kqueue(struct proc *p, void *v, register_t *retval)
 	fp->f_flag = FREAD | FWRITE;
 	fp->f_type = DTYPE_KQUEUE;
 	fp->f_ops = &kqueueops;
-	kq = pool_get(&kqueue_pool, PR_WAITOK|PR_ZERO);
-	TAILQ_INIT(&kq->kq_head);
 	fp->f_data = kq;
-	KQREF(kq);
 	*retval = fd;
-	kq->kq_fdp = fdp;
-	LIST_INSERT_HEAD(&p->p_p->ps_kqlist, kq, kq_next);
+	LIST_INSERT_HEAD(&fdp->fd_kqlist, kq, kq_next);
+	kq = NULL;
 	fdinsert(fdp, fd, 0, fp);
 	FRELE(fp, p);
 out:
 	fdpunlock(fdp);
+	if (kq != NULL)
+		pool_put(&kqueue_pool, kq);
 	return (error);
 }
 
@@ -602,9 +637,10 @@ int
 kqueue_register(struct kqueue *kq, struct kevent *kev, struct proc *p)
 {
 	struct filedesc *fdp = kq->kq_fdp;
-	struct filterops *fops = NULL;
+	const struct filterops *fops = NULL;
 	struct file *fp = NULL;
-	struct knote *kn = NULL;
+	struct knote *kn = NULL, *newkn = NULL;
+	struct klist *list = NULL;
 	int s, error = 0;
 
 	if (kev->filter < 0) {
@@ -626,28 +662,45 @@ kqueue_register(struct kqueue *kq, struct kevent *kev, struct proc *p)
 		/* validate descriptor */
 		if (kev->ident > INT_MAX)
 			return (EBADF);
-		if ((fp = fd_getfile(fdp, kev->ident)) == NULL)
-			return (EBADF);
+	}
 
-		if (kev->ident < kq->kq_knlistsize) {
-			SLIST_FOREACH(kn, &kq->kq_knlist[kev->ident], kn_link) {
-				if (kev->filter == kn->kn_filter)
-					break;
-			}
+	if (kev->flags & EV_ADD)
+		newkn = pool_get(&knote_pool, PR_WAITOK);
+
+again:
+	if (fops->f_isfd) {
+		if ((fp = fd_getfile(fdp, kev->ident)) == NULL) {
+			error = EBADF;
+			goto done;
 		}
+		if (kev->flags & EV_ADD)
+			kqueue_expand_list(kq, kev->ident);
+		if (kev->ident < kq->kq_knlistsize)
+			list = &kq->kq_knlist[kev->ident];
 	} else {
+		if (kev->flags & EV_ADD)
+			kqueue_expand_hash(kq);
 		if (kq->kq_knhashmask != 0) {
-			struct klist *list;
-
 			list = &kq->kq_knhash[
 			    KN_HASH((u_long)kev->ident, kq->kq_knhashmask)];
-			SLIST_FOREACH(kn, list, kn_link) {
-				if (kev->ident == kn->kn_id &&
-				    kev->filter == kn->kn_filter)
-					break;
+		}
+	}
+	if (list != NULL) {
+		SLIST_FOREACH(kn, list, kn_link) {
+			if (kev->filter == kn->kn_filter &&
+			    kev->ident == kn->kn_id) {
+				if (knote_acquire(kn) == 0) {
+					if (fp != NULL) {
+						FRELE(fp, p);
+						fp = NULL;
+					}
+					goto again;
+				}
+				break;
 			}
 		}
 	}
+	KASSERT(kn == NULL || (kn->kn_status & KN_PROCESSING) != 0);
 
 	if (kn == NULL && ((kev->flags & EV_ADD) == 0)) {
 		error = ENOENT;
@@ -655,11 +708,15 @@ kqueue_register(struct kqueue *kq, struct kevent *kev, struct proc *p)
 	}
 
 	/*
-	 * kn now contains the matching knote, or NULL if no match
+	 * kn now contains the matching knote, or NULL if no match.
+	 * If adding a new knote, sleeping is not allowed until the knote
+	 * has been inserted.
 	 */
 	if (kev->flags & EV_ADD) {
 		if (kn == NULL) {
-			kn = pool_get(&knote_pool, PR_WAITOK);
+			kn = newkn;
+			newkn = NULL;
+			kn->kn_status = KN_PROCESSING;
 			kn->kn_fp = fp;
 			kn->kn_kq = kq;
 			kn->kn_fop = fops;
@@ -678,6 +735,25 @@ kqueue_register(struct kqueue *kq, struct kevent *kev, struct proc *p)
 
 			knote_attach(kn);
 			if ((error = fops->f_attach(kn)) != 0) {
+				knote_drop(kn, p);
+				goto done;
+			}
+
+			/*
+			 * If this is a file descriptor filter, check if
+			 * fd was closed while the knote was being added.
+			 * knote_fdclose() has missed kn if the function
+			 * ran before kn appeared in kq_knlist.
+			 */
+			if (fops->f_isfd &&
+			    fd_checkclosed(fdp, kev->ident, kn->kn_fp)) {
+				/*
+				 * Drop the knote silently without error
+				 * because another thread might already have
+				 * seen it. This corresponds to the insert
+				 * happening in full before the close.
+				 */
+				kn->kn_fop->f_detach(kn);
 				knote_drop(kn, p);
 				goto done;
 			}
@@ -721,9 +797,12 @@ kqueue_register(struct kqueue *kq, struct kevent *kev, struct proc *p)
 		splx(s);
 	}
 
+	knote_release(kn);
 done:
 	if (fp != NULL)
 		FRELE(fp, p);
+	if (newkn != NULL)
+		pool_put(&knote_pool, newkn);
 	return (error);
 }
 
@@ -983,6 +1062,51 @@ kqueue_wakeup(struct kqueue *kq)
 		KNOTE(&kq->kq_sel.si_note, 0);
 }
 
+static void
+kqueue_expand_hash(struct kqueue *kq)
+{
+	struct klist *hash;
+	u_long hashmask;
+
+	if (kq->kq_knhashmask == 0) {
+		hash = hashinit(KN_HASHSIZE, M_KEVENT, M_WAITOK, &hashmask);
+		if (kq->kq_knhashmask == 0) {
+			kq->kq_knhash = hash;
+			kq->kq_knhashmask = hashmask;
+		} else {
+			/* Another thread has allocated the hash. */
+			hashfree(hash, KN_HASHSIZE, M_KEVENT);
+		}
+	}
+}
+
+static void
+kqueue_expand_list(struct kqueue *kq, int fd)
+{
+	struct klist *list;
+	int size;
+
+	if (kq->kq_knlistsize <= fd) {
+		size = kq->kq_knlistsize;
+		while (size <= fd)
+			size += KQEXTENT;
+		list = mallocarray(size, sizeof(*list), M_KEVENT, M_WAITOK);
+		if (kq->kq_knlistsize <= fd) {
+			memcpy(list, kq->kq_knlist,
+			    kq->kq_knlistsize * sizeof(*list));
+			memset(&list[kq->kq_knlistsize], 0,
+			    (size - kq->kq_knlistsize) * sizeof(*list));
+			free(kq->kq_knlist, M_KEVENT,
+			    kq->kq_knlistsize * sizeof(*list));
+			kq->kq_knlist = list;
+			kq->kq_knlistsize = size;
+		} else {
+			/* Another thread has expanded the list. */
+			free(list, M_KEVENT, size * sizeof(*list));
+		}
+	}
+}
+
 /*
  * Acquire a knote, return non-zero on success, 0 on failure.
  *
@@ -1068,12 +1192,20 @@ knote_remove(struct proc *p, struct klist *list)
 void
 knote_fdclose(struct proc *p, int fd)
 {
+	struct filedesc *fdp = p->p_p->ps_fd;
 	struct kqueue *kq;
 	struct klist *list;
 
 	KERNEL_ASSERT_LOCKED();
 
-	LIST_FOREACH(kq, &p->p_p->ps_kqlist, kq_next) {
+	/*
+	 * fdplock can be ignored if the file descriptor table is being freed
+	 * because no other thread can access the fdp.
+	 */
+	if (fdp->fd_refcnt != 0)
+		fdpassertlocked(fdp);
+
+	LIST_FOREACH(kq, &fdp->fd_kqlist, kq_next) {
 		if (fd >= kq->kq_knlistsize)
 			continue;
 
@@ -1102,35 +1234,15 @@ knote_attach(struct knote *kn)
 {
 	struct kqueue *kq = kn->kn_kq;
 	struct klist *list;
-	int size;
 
-	if (!kn->kn_fop->f_isfd) {
-		if (kq->kq_knhashmask == 0)
-			kq->kq_knhash = hashinit(KN_HASHSIZE, M_TEMP,
-			    M_WAITOK, &kq->kq_knhashmask);
+	if (kn->kn_fop->f_isfd) {
+		KASSERT(kq->kq_knlistsize > kn->kn_id);
+		list = &kq->kq_knlist[kn->kn_id];
+	} else {
+		KASSERT(kq->kq_knhashmask != 0);
 		list = &kq->kq_knhash[KN_HASH(kn->kn_id, kq->kq_knhashmask)];
-		goto done;
 	}
-
-	if (kq->kq_knlistsize <= kn->kn_id) {
-		size = kq->kq_knlistsize;
-		while (size <= kn->kn_id)
-			size += KQEXTENT;
-		list = mallocarray(size, sizeof(struct klist), M_TEMP,
-		    M_WAITOK);
-		memcpy(list, kq->kq_knlist,
-		    kq->kq_knlistsize * sizeof(struct klist));
-		memset(&list[kq->kq_knlistsize], 0,
-		    (size - kq->kq_knlistsize) * sizeof(struct klist));
-		free(kq->kq_knlist, M_TEMP,
-		    kq->kq_knlistsize * sizeof(struct klist));
-		kq->kq_knlistsize = size;
-		kq->kq_knlist = list;
-	}
-	list = &kq->kq_knlist[kn->kn_id];
-done:
 	SLIST_INSERT_HEAD(list, kn, kn_link);
-	kn->kn_status = 0;
 }
 
 /*

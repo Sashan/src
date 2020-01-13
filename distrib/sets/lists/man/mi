@@ -816,6 +816,7 @@
 ./usr/share/man/man3p/OpenBSD::Ustar.3p
 ./usr/share/man/man3p/OpenBSD::Vstat.3p
 ./usr/share/man/man3p/OpenBSD::md5.3p
+./usr/share/man/man3p/OpenBSD::style.3p
 ./usr/share/man/man3p/POSIX.3p
 ./usr/share/man/man3p/Params::Check.3p
 ./usr/share/man/man3p/Parse::CPAN::Meta.3p
@@ -1319,7 +1320,6 @@
 ./usr/share/man/man4/de.4
 ./usr/share/man/man4/diskmap.4
 ./usr/share/man/man4/divert.4
-./usr/share/man/man4/dpt.4
 ./usr/share/man/man4/drm.4
 ./usr/share/man/man4/dwctwo.4
 ./usr/share/man/man4/dwdog.4
@@ -1809,7 +1809,6 @@
 ./usr/share/man/man4/siop.4
 ./usr/share/man/man4/sis.4
 ./usr/share/man/man4/sk.4
-./usr/share/man/man4/sli.4
 ./usr/share/man/man4/sm.4
 ./usr/share/man/man4/smsc.4
 ./usr/share/man/man4/softraid.4

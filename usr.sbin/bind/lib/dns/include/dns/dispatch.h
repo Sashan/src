@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: dispatch.h,v 1.9 2019/12/17 01:46:32 sthen Exp $ */
+/* $Id: dispatch.h,v 1.11 2020/01/09 18:17:16 florian Exp $ */
 
 #ifndef DNS_DISPATCH_H
 #define DNS_DISPATCH_H 1
@@ -81,11 +81,11 @@ ISC_LANG_BEGINDECLS
 struct dns_dispatchevent {
 	ISC_EVENT_COMMON(dns_dispatchevent_t);	/*%< standard event common */
 	isc_result_t		result;		/*%< result code */
-	isc_int32_t		id;		/*%< message id */
+	int32_t		id;		/*%< message id */
 	isc_sockaddr_t		addr;		/*%< address recv'd from */
 	struct in6_pktinfo	pktinfo;	/*%< reply info for v6 */
 	isc_buffer_t	        buffer;		/*%< data buffer */
-	isc_uint32_t		attributes;	/*%< mirrored from socket.h */
+	uint32_t		attributes;	/*%< mirrored from socket.h */
 };
 
 /*%
@@ -151,8 +151,7 @@ struct dns_dispatchset {
 #define DNS_DISPATCHOPT_FIXEDID		0x00000001U
 
 isc_result_t
-dns_dispatchmgr_create(isc_mem_t *mctx, isc_entropy_t *entropy,
-		       dns_dispatchmgr_t **mgrp);
+dns_dispatchmgr_create(isc_mem_t *mctx, dns_dispatchmgr_t **mgrp);
 /*%<
  * Creates a new dispatchmgr object.
  *
@@ -160,10 +159,6 @@ dns_dispatchmgr_create(isc_mem_t *mctx, isc_entropy_t *entropy,
  *\li	"mctx" be a valid memory context.
  *
  *\li	mgrp != NULL && *mgrp == NULL
- *
- *\li	"entropy" may be NULL, in which case an insecure random generator
- *	will be used.  If it is non-NULL, it must be a valid entropy
- *	source.
  *
  * Returns:
  *\li	ISC_R_SUCCESS	-- all ok
@@ -376,19 +371,19 @@ isc_result_t
 dns_dispatch_addresponse3(dns_dispatch_t *disp, unsigned int options,
 			  isc_sockaddr_t *dest, isc_task_t *task,
 			  isc_taskaction_t action, void *arg,
-			  isc_uint16_t *idp, dns_dispentry_t **resp,
+			  uint16_t *idp, dns_dispentry_t **resp,
 			  isc_socketmgr_t *sockmgr);
 
 isc_result_t
 dns_dispatch_addresponse2(dns_dispatch_t *disp, isc_sockaddr_t *dest,
 			  isc_task_t *task, isc_taskaction_t action, void *arg,
-			  isc_uint16_t *idp, dns_dispentry_t **resp,
+			  uint16_t *idp, dns_dispentry_t **resp,
 			  isc_socketmgr_t *sockmgr);
 
 isc_result_t
 dns_dispatch_addresponse(dns_dispatch_t *disp, isc_sockaddr_t *dest,
 			 isc_task_t *task, isc_taskaction_t action, void *arg,
-			 isc_uint16_t *idp, dns_dispentry_t **resp);
+			 uint16_t *idp, dns_dispentry_t **resp);
 /*%<
  * Add a response entry for this dispatch.
  *

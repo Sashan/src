@@ -18,6 +18,7 @@
 
 #include <config.h>
 
+#include <stdint.h>
 #include <string.h>
 
 #include <isc/lex.h>
@@ -82,17 +83,6 @@ doc_keyvalue(cfg_printer_t *pctx, const cfg_type_t *type);
 
 static void
 doc_optional_keyvalue(cfg_printer_t *pctx, const cfg_type_t *type);
-
-#ifdef HAVE_GEOIP
-static isc_result_t
-parse_geoip(cfg_parser_t *pctx, const cfg_type_t *type, cfg_obj_t **ret);
-
-static void
-print_geoip(cfg_printer_t *pctx, const cfg_obj_t *obj);
-
-static void
-doc_geoip(cfg_printer_t *pctx, const cfg_type_t *type);
-#endif /* HAVE_GEOIP */
 
 static cfg_type_t cfg_type_acl;
 static cfg_type_t cfg_type_addrmatchelt;
@@ -1015,12 +1005,8 @@ options_clauses[] = {
 	{ "fake-iquery", &cfg_type_boolean, CFG_CLAUSEFLAG_OBSOLETE },
 	{ "files", &cfg_type_size, 0 },
 	{ "flush-zones-on-shutdown", &cfg_type_boolean, 0 },
-#ifdef HAVE_GEOIP
-	{ "geoip-directory", &cfg_type_qstringornone, 0 },
-#else
 	{ "geoip-directory", &cfg_type_qstringornone,
 	  CFG_CLAUSEFLAG_NOTCONFIGURED },
-#endif /* HAVE_GEOIP */
 	{ "has-old-clients", &cfg_type_boolean, CFG_CLAUSEFLAG_OBSOLETE },
 	{ "heartbeat-interval", &cfg_type_uint32, 0 },
 	{ "host-statistics", &cfg_type_boolean, CFG_CLAUSEFLAG_NOTIMP },
@@ -1050,12 +1036,7 @@ options_clauses[] = {
 	{ "session-keyalg", &cfg_type_astring, 0 },
 	{ "session-keyfile", &cfg_type_qstringornone, 0 },
 	{ "session-keyname", &cfg_type_astring, 0 },
-#ifdef ISC_PLATFORM_USESIT
 	{ "sit-secret", &cfg_type_sstring, CFG_CLAUSEFLAG_EXPERIMENTAL },
-#else
-	{ "sit-secret", &cfg_type_sstring,
-	  CFG_CLAUSEFLAG_EXPERIMENTAL | CFG_CLAUSEFLAG_NOTCONFIGURED },
-#endif
 	{ "stacksize", &cfg_type_size, 0 },
 	{ "statistics-file", &cfg_type_qstring, 0 },
 	{ "statistics-interval", &cfg_type_uint32, CFG_CLAUSEFLAG_NYI },
@@ -1063,8 +1044,6 @@ options_clauses[] = {
 	{ "tcp-listen-queue", &cfg_type_uint32, 0 },
 	{ "tkey-dhkey", &cfg_type_tkey_dhkey, 0 },
 	{ "tkey-domain", &cfg_type_qstring, 0 },
-	{ "tkey-gssapi-credential", &cfg_type_qstring, 0 },
-	{ "tkey-gssapi-keytab", &cfg_type_qstring, 0 },
 	{ "transfers-in", &cfg_type_uint32, 0 },
 	{ "transfers-out", &cfg_type_uint32, 0 },
 	{ "transfers-per-ns", &cfg_type_uint32, 0 },
@@ -1608,12 +1587,7 @@ view_clauses[] = {
 	{ "min-roots", &cfg_type_uint32, CFG_CLAUSEFLAG_NOTIMP },
 	{ "minimal-responses", &cfg_type_boolean, 0 },
 	{ "no-case-compress", &cfg_type_bracketed_aml, 0 },
-#ifdef ISC_PLATFORM_USESIT
 	{ "nosit-udp-size", &cfg_type_uint32, CFG_CLAUSEFLAG_EXPERIMENTAL },
-#else
-	{ "nosit-udp-size", &cfg_type_uint32,
-	  CFG_CLAUSEFLAG_EXPERIMENTAL | CFG_CLAUSEFLAG_NOTCONFIGURED },
-#endif
 	{ "preferred-glue", &cfg_type_astring, 0 },
 	{ "prefetch", &cfg_type_prefetch, 0 },
 	{ "provide-ixfr", &cfg_type_boolean, 0 },
@@ -1629,12 +1603,7 @@ view_clauses[] = {
 	{ "rate-limit", &cfg_type_rrl, 0 },
 	{ "recursion", &cfg_type_boolean, 0 },
 	{ "request-nsid", &cfg_type_boolean, 0 },
-#ifdef ISC_PLATFORM_USESIT
 	{ "request-sit", &cfg_type_boolean, CFG_CLAUSEFLAG_EXPERIMENTAL },
-#else
-	{ "request-sit", &cfg_type_boolean,
-	  CFG_CLAUSEFLAG_EXPERIMENTAL | CFG_CLAUSEFLAG_NOTCONFIGURED },
-#endif
 	{ "resolver-query-timeout", &cfg_type_uint32, 0 },
 	{ "response-policy", &cfg_type_rpz, 0 },
 	{ "rfc2308-type1", &cfg_type_boolean, CFG_CLAUSEFLAG_NYI },
@@ -1787,7 +1756,7 @@ namedconf_clausesets[] = {
 	namedconf_or_view_clauses,
 	NULL
 };
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_namedconf = {
+cfg_type_t cfg_type_namedconf = {
 	"namedconf", cfg_parse_mapbody, cfg_print_mapbody, cfg_doc_mapbody,
 	&cfg_rep_map, namedconf_clausesets
 };
@@ -1798,7 +1767,7 @@ bindkeys_clausesets[] = {
 	bindkeys_clauses,
 	NULL
 };
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_bindkeys = {
+cfg_type_t cfg_type_bindkeys = {
 	"bindkeys", cfg_parse_mapbody, cfg_print_mapbody, cfg_doc_mapbody,
 	&cfg_rep_map, bindkeys_clausesets
 };
@@ -1898,12 +1867,7 @@ server_clauses[] = {
 	{ "query-source-v6", &cfg_type_querysource6, 0 },
 	{ "request-ixfr", &cfg_type_boolean, 0 },
 	{ "request-nsid", &cfg_type_boolean, 0 },
-#ifdef ISC_PLATFORM_USESIT
 	{ "request-sit", &cfg_type_boolean, CFG_CLAUSEFLAG_EXPERIMENTAL },
-#else
-	{ "request-sit", &cfg_type_boolean,
-	  CFG_CLAUSEFLAG_EXPERIMENTAL | CFG_CLAUSEFLAG_NOTCONFIGURED },
-#endif
 	{ "support-ixfr", &cfg_type_boolean, CFG_CLAUSEFLAG_OBSOLETE },
 	{ "tcp-only", &cfg_type_boolean, 0 },
 	{ "transfer-format", &cfg_type_transferformat, 0 },
@@ -2005,7 +1969,7 @@ addzoneconf_clausesets[] = {
 	NULL
 };
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_addzoneconf = {
+cfg_type_t cfg_type_addzoneconf = {
 	"addzoneconf", cfg_parse_mapbody, cfg_print_mapbody, cfg_doc_mapbody,
 	&cfg_rep_map, addzoneconf_clausesets
 };
@@ -2023,17 +1987,17 @@ newzones_clausesets[] = {
 	NULL
 };
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_newzones = {
+cfg_type_t cfg_type_newzones = {
 	"newzones", cfg_parse_mapbody, cfg_print_mapbody, cfg_doc_mapbody,
 	&cfg_rep_map, newzones_clausesets
 };
 
 static isc_result_t
-parse_unitstring(char *str, isc_resourcevalue_t *valuep) {
+parse_unitstring(char *str, uint64_t *valuep) {
 	char *endp;
 	unsigned int len;
-	isc_uint64_t value;
-	isc_uint64_t unit;
+	uint64_t value;
+	uint64_t unit;
 
 	value = isc_string_touint64(str, &endp, 10);
 	if (*endp == 0) {
@@ -2061,7 +2025,7 @@ parse_unitstring(char *str, isc_resourcevalue_t *valuep) {
 	default:
 		return (ISC_R_FAILURE);
 	}
-	if (value > ISC_UINT64_MAX / unit)
+	if (value > UINT64_MAX / unit)
 		return (ISC_R_FAILURE);
 	*valuep = value * unit;
 	return (ISC_R_SUCCESS);
@@ -2071,7 +2035,7 @@ static isc_result_t
 parse_sizeval(cfg_parser_t *pctx, const cfg_type_t *type, cfg_obj_t **ret) {
 	isc_result_t result;
 	cfg_obj_t *obj = NULL;
-	isc_uint64_t val;
+	uint64_t val;
 
 	UNUSED(type);
 
@@ -2314,7 +2278,7 @@ static cfg_type_t cfg_type_filter_aaaa = {
 
 static keyword_type_t key_kw = { "key", &cfg_type_astring };
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_keyref = {
+cfg_type_t cfg_type_keyref = {
 	"keyref", parse_keyvalue, print_keyvalue, doc_keyvalue,
 	&cfg_rep_string, &key_kw
 };
@@ -2323,102 +2287,6 @@ static cfg_type_t cfg_type_optional_keyref = {
 	"optional_keyref", parse_optional_keyvalue, print_keyvalue,
 	doc_optional_keyvalue, &cfg_rep_string, &key_kw
 };
-
-#ifdef HAVE_GEOIP
-/*
- * "geoip" ACL element:
- * geoip [ db <database> ] search-type <string>
- */
-static const char *geoiptype_enums[] = {
-	"area", "areacode", "asnum", "city", "continent", "country",
-	"country3", "countryname", "domain", "isp", "metro", "metrocode",
-	"netspeed", "org", "postal", "postalcode", "region", "regionname",
-	"timezone", "tz", NULL
-};
-static cfg_type_t cfg_type_geoiptype = {
-	"geoiptype", cfg_parse_enum, cfg_print_ustring,
-	cfg_doc_enum, &cfg_rep_string, &geoiptype_enums
-};
-
-static const char *geoipdb_enums[] = {
-	"asnum", "city", "country", "domain", "isp", "netspeed",
-	"org", "region", NULL
-};
-static cfg_type_t cfg_type_geoipdb = {
-	"geoipdb", cfg_parse_enum, cfg_print_ustring,
-	cfg_doc_enum, &cfg_rep_string, &geoipdb_enums
-};
-
-static cfg_tuplefielddef_t geoip_fields[] = {
-	{ "negated", &cfg_type_void, 0 },
-	{ "db", &cfg_type_geoipdb, 0 },
-	{ "subtype", &cfg_type_geoiptype, 0 },
-	{ "search", &cfg_type_astring, 0 },
-	{ NULL, NULL, 0 }
-};
-
-static cfg_type_t cfg_type_geoip = {
-	"geoip", parse_geoip, print_geoip, doc_geoip,
-	&cfg_rep_tuple, geoip_fields
-};
-
-static isc_result_t
-parse_geoip(cfg_parser_t *pctx, const cfg_type_t *type, cfg_obj_t **ret) {
-	isc_result_t result;
-	cfg_obj_t *obj = NULL;
-	const cfg_tuplefielddef_t *fields = type->of;
-
-	CHECK(cfg_create_tuple(pctx, type, &obj));
-	CHECK(cfg_parse_void(pctx, NULL, &obj->value.tuple[0]));
-
-	/* Parse the optional "db" field. */
-	CHECK(cfg_peektoken(pctx, 0));
-	if (pctx->token.type == isc_tokentype_string) {
-		CHECK(cfg_gettoken(pctx, 0));
-		if (strcasecmp(TOKEN_STRING(pctx), "db") == 0 &&
-		    obj->value.tuple[1] == NULL) {
-			CHECK(cfg_parse_obj(pctx, fields[1].type,
-				    &obj->value.tuple[1]));
-		} else {
-			CHECK(cfg_parse_void(pctx, NULL,
-					     &obj->value.tuple[1]));
-			cfg_ungettoken(pctx);
-		}
-	}
-
-	CHECK(cfg_parse_obj(pctx, fields[2].type, &obj->value.tuple[2]));
-	CHECK(cfg_parse_obj(pctx, fields[3].type, &obj->value.tuple[3]));
-
-	*ret = obj;
-	return (ISC_R_SUCCESS);
-
- cleanup:
-	CLEANUP_OBJ(obj);
-	return (result);
-}
-
-static void
-print_geoip(cfg_printer_t *pctx, const cfg_obj_t *obj) {
-	if (obj->value.tuple[1]->type->print != cfg_print_void) {
-		cfg_print_cstr(pctx, " db ");
-		cfg_print_obj(pctx, obj->value.tuple[1]);
-	}
-	cfg_print_obj(pctx, obj->value.tuple[2]);
-	cfg_print_obj(pctx, obj->value.tuple[3]);
-}
-
-static void
-doc_geoip(cfg_printer_t *pctx, const cfg_type_t *type) {
-	UNUSED(type);
-	cfg_print_cstr(pctx, "[ db ");
-	cfg_doc_enum(pctx, &cfg_type_geoipdb);
-	cfg_print_cstr(pctx, " ]");
-	cfg_print_chars(pctx, " ", 1);
-	cfg_doc_enum(pctx, &cfg_type_geoiptype);
-	cfg_print_chars(pctx, " ", 1);
-	cfg_print_cstr(pctx, "<quoted_string>");
-}
-#endif /* HAVE_GEOIP */
 
 /*%
  * A "controls" statement is represented as a map with the multivalued
@@ -2749,14 +2617,9 @@ parse_addrmatchelt(cfg_parser_t *pctx, const cfg_type_t *type,
 			CHECK(cfg_parse_obj(pctx, &cfg_type_keyref, ret));
 		} else if (pctx->token.type == isc_tokentype_string &&
 			   (strcasecmp(TOKEN_STRING(pctx), "geoip") == 0)) {
-#ifdef HAVE_GEOIP
-			CHECK(cfg_gettoken(pctx, 0));
-			CHECK(cfg_parse_obj(pctx, &cfg_type_geoip, ret));
-#else
 			cfg_parser_error(pctx, CFG_LOG_NEAR, "'geoip' "
 					 "not supported in this build");
 			return (ISC_R_UNEXPECTEDTOKEN);
-#endif
 		} else {
 			if (cfg_lookingat_netaddr(pctx, CFG_ADDR_V4OK |
 						  CFG_ADDR_V4PREFIXOK |
@@ -3175,7 +3038,7 @@ rndcconf_clausesets[] = {
 	NULL
 };
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_rndcconf = {
+cfg_type_t cfg_type_rndcconf = {
 	"rndcconf", cfg_parse_mapbody, cfg_print_mapbody, cfg_doc_mapbody,
 	&cfg_rep_map, rndcconf_clausesets
 };
@@ -3192,7 +3055,7 @@ rndckey_clausesets[] = {
 	NULL
 };
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_rndckey = {
+cfg_type_t cfg_type_rndckey = {
 	"rndckey", cfg_parse_mapbody, cfg_print_mapbody, cfg_doc_mapbody,
 	&cfg_rep_map, rndckey_clausesets
 };
@@ -3201,7 +3064,7 @@ LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_rndckey = {
  * session.key has exactly the same syntax as rndc.key, but it's defined
  * separately for clarity (and so we can extend it someday, if needed).
  */
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_sessionkey = {
+cfg_type_t cfg_type_sessionkey = {
 	"sessionkey", cfg_parse_mapbody, cfg_print_mapbody, cfg_doc_mapbody,
 	&cfg_rep_map, rndckey_clausesets
 };
@@ -3362,7 +3225,7 @@ static isc_result_t
 parse_ttlval(cfg_parser_t *pctx, const cfg_type_t *type, cfg_obj_t **ret) {
 	isc_result_t result;
 	cfg_obj_t *obj = NULL;
-	isc_uint32_t ttl;
+	uint32_t ttl;
 
 	UNUSED(type);
 

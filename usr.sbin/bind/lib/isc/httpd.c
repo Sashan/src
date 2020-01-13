@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: httpd.c,v 1.2 2019/12/17 01:46:34 sthen Exp $ */
+/* $Id: httpd.c,v 1.4 2020/01/09 18:17:19 florian Exp $ */
 
 /*! \file */
 
@@ -23,7 +23,7 @@
 #include <isc/buffer.h>
 #include <isc/httpd.h>
 #include <isc/mem.h>
-#include <isc/print.h>
+
 #include <isc/socket.h>
 #include <isc/string.h>
 #include <isc/task.h>
@@ -75,7 +75,7 @@ struct isc_httpd {
 	 * Received data state.
 	 */
 	char			recvbuf[HTTP_RECVLEN]; /*%< receive buffer */
-	isc_uint32_t		recvlen;	/*%< length recv'd */
+	uint32_t		recvlen;	/*%< length recv'd */
 	char		       *headers;	/*%< set in process_request() */
 	unsigned int		method;
 	char		       *url;

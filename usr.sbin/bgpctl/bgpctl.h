@@ -17,6 +17,7 @@
 struct parse_result;
 void	show_head(struct parse_result *);
 void	show_neighbor(struct peer *, struct parse_result *);
+void	show_timer(struct ctl_timer *);
 void	show_fib(struct kroute_full *);
 void	show_fib_table(struct ktable *);
 void	show_nexthop(struct ctl_show_nexthop *);
@@ -43,6 +44,7 @@ const char	*print_auth_method(enum auth_method);
 const char	*fmt_mem(long long);
 
 const char	*fmt_timeframe(time_t);
+const char	*fmt_monotime(time_t);
 char		*fmt_peer(const char *, const struct bgpd_addr *, int);
 const char	*get_errstr(u_int8_t, u_int8_t);
 

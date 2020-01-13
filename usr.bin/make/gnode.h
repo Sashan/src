@@ -1,6 +1,6 @@
 #ifndef GNODE_H
 #define GNODE_H
-/*	$OpenBSD: gnode.h,v 1.34 2019/12/22 16:53:40 espie Exp $ */
+/*	$OpenBSD: gnode.h,v 1.37 2020/01/13 14:07:35 espie Exp $ */
 
 /*
  * Copyright (c) 2001 Marc Espie.
@@ -65,32 +65,34 @@
  *	   to create this target.
  */
 
+/* constants for specials
+ * Most of these values are only handled by parse.c.
+ * In many cases, there is a corresponding OP_* flag
+ */
 #define SPECIAL_NONE		0U
-#define SPECIAL_PATH		21U
-#define SPECIAL_MASK		63U
-#define SPECIAL_TARGET		64U
-#define SPECIAL_SOURCE		128U
-#define SPECIAL_TARGETSOURCE	(SPECIAL_TARGET|SPECIAL_SOURCE)
+#define SPECIAL_PATH		62U	/* handled by parse.c and suff.c */
 
-#define	SPECIAL_EXEC		4U
+#define SPECIAL_EXEC		4U
 #define SPECIAL_IGNORE		5U
-#define SPECIAL_NOTHING 	6U
-#define	SPECIAL_INVISIBLE	8U
+#define SPECIAL_NOTHING 	6U	/* this is used for things we
+					 * recognize for compatibility but
+					 * don't do anything with... */
+#define SPECIAL_INVISIBLE	8U
 #define SPECIAL_JOIN		9U
 #define SPECIAL_MADE		11U
 #define SPECIAL_MAIN		12U
 #define SPECIAL_MAKE		13U
 #define SPECIAL_MFLAGS		14U
-#define	SPECIAL_NOTMAIN		15U
-#define	SPECIAL_NOTPARALLEL	16U
-#define	SPECIAL_OPTIONAL	18U
+#define SPECIAL_NOTMAIN		15U
+#define SPECIAL_NOTPARALLEL	16U
+#define SPECIAL_OPTIONAL	18U
 #define SPECIAL_ORDER		19U
 #define SPECIAL_PARALLEL	20U
 #define SPECIAL_PHONY		22U
 #define SPECIAL_PRECIOUS	23U
 #define SPECIAL_SILENT		25U
 #define SPECIAL_SUFFIXES	27U
-#define	SPECIAL_USE		28U
+#define SPECIAL_USE		28U
 #define SPECIAL_WAIT		29U
 #define SPECIAL_NOPATH		30U
 #define SPECIAL_ERROR		31U

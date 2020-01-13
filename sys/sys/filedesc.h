@@ -1,4 +1,4 @@
-/*	$OpenBSD: filedesc.h,v 1.41 2018/07/02 14:36:33 visa Exp $	*/
+/*	$OpenBSD: filedesc.h,v 1.43 2020/01/06 10:25:10 visa Exp $	*/
 /*	$NetBSD: filedesc.h,v 1.14 1996/04/09 20:55:28 cgd Exp $	*/
 
 /*
@@ -57,6 +57,12 @@
 #define NDHISLOTS(x)	(NDREDUCE(NDREDUCE(x)))
 #define NDLOSLOTS(x)	(NDHISLOTS(x) << NDENTRYSHIFT)
 
+struct kqueue;
+
+/*
+ * Locking:
+ *	f	fd_lock
+ */
 struct filedesc {
 	struct	file **fd_ofiles;	/* file structures for open files */
 	char	*fd_ofileflags;		/* per-process open file flags */
@@ -75,6 +81,8 @@ struct filedesc {
 					/* fd_ofileflags, or fd_{hi,lo}map */
 	struct mutex fd_fplock;		/* lock for reading fd_ofiles without
 					 * fd_lock */
+	LIST_HEAD(, kqueue) fd_kqlist;	/* [f] kqueues attached to this
+					 *     filedesc */
 
 	int fd_flags;			/* flags on the file descriptor table */
 };
@@ -136,6 +144,7 @@ void	fdcloseexec(struct proc *);
 struct file *fd_iterfile(struct file *, struct proc *);
 struct file *fd_getfile(struct filedesc *, int);
 struct file *fd_getfile_mode(struct filedesc *, int, int);
+int	fd_checkclosed(struct filedesc *, int, struct file *);
 
 int	closef(struct file *, struct proc *);
 int	getsock(struct proc *, int, struct file **);

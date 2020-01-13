@@ -14,23 +14,25 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: rcode.c,v 1.6 2019/12/17 01:46:32 sthen Exp $ */
+/* $Id: rcode.c,v 1.9 2020/01/09 18:17:15 florian Exp $ */
 
 #include <config.h>
 #include <ctype.h>
+#include <limits.h>
+#include <stdlib.h>
 
 #include <isc/buffer.h>
 #include <isc/parseint.h>
-#include <isc/print.h>
+
 #include <isc/region.h>
 #include <isc/result.h>
 #include <isc/stdio.h>
-#include <isc/stdlib.h>
+
 #include <isc/string.h>
 #include <isc/types.h>
 #include <isc/util.h>
 
-#include <pk11/site.h>
+
 
 #include <dns/cert.h>
 #include <dns/ds.h>
@@ -107,26 +109,9 @@
 
 /* RFC2535 section 7, RFC3110 */
 
-#ifndef PK11_MD5_DISABLE
-#define MD5_SECALGNAMES \
-	{ DNS_KEYALG_RSAMD5, "RSAMD5", 0 }, \
-	{ DNS_KEYALG_RSAMD5, "RSA", 0 },
-#else
 #define MD5_SECALGNAMES
-#endif
-#ifndef PK11_DH_DISABLE
-#define DH_SECALGNAMES \
-	{ DNS_KEYALG_DH, "DH", 0 },
-#else
 #define DH_SECALGNAMES
-#endif
-#ifndef PK11_DSA_DISABLE
-#define DSA_SECALGNAMES \
-	{ DNS_KEYALG_DSA, "DSA", 0 }, \
-	{ DNS_KEYALG_NSEC3DSA, "NSEC3DSA", 0 },
-#else
 #define DSA_SECALGNAMES
-#endif
 
 #define SECALGNAMES \
 	MD5_SECALGNAMES \
@@ -246,7 +231,7 @@ maybe_numeric(unsigned int *valuep, isc_textregion_t *source,
 	      unsigned int max, isc_boolean_t hex_allowed)
 {
 	isc_result_t result;
-	isc_uint32_t n;
+	uint32_t n;
 	char buffer[NUMBERSIZE];
 
 	if (! isdigit(source->base[0] & 0xff) ||

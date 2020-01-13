@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: hash.h,v 1.5 2019/12/17 01:46:35 sthen Exp $ */
+/* $Id: hash.h,v 1.7 2020/01/09 18:17:19 florian Exp $ */
 
 #ifndef ISC_HASH_H
 #define ISC_HASH_H 1
@@ -83,10 +83,9 @@
 ISC_LANG_BEGINDECLS
 
 isc_result_t
-isc_hash_ctxcreate(isc_mem_t *mctx, isc_entropy_t *entropy, size_t limit,
-		   isc_hash_t **hctx);
+isc_hash_ctxcreate(isc_mem_t *mctx, size_t limit, isc_hash_t **hctx);
 isc_result_t
-isc_hash_create(isc_mem_t *mctx, isc_entropy_t *entropy, size_t limit);
+isc_hash_create(isc_mem_t *mctx, size_t limit);
 /*!<
  * \brief Create a new hash object.
  *
@@ -94,10 +93,6 @@ isc_hash_create(isc_mem_t *mctx, isc_entropy_t *entropy, size_t limit);
  *
  * isc_hash_create() creates a module-internal object to support the
  * single-context mode.  It should be called only once.
- *
- * 'entropy' must be NULL or a valid entropy object.  If 'entropy' is NULL,
- * pseudo random values will be used to build the random vector, which may
- * weaken security.
  *
  * 'limit' specifies the maximum number of hash keys.  If it is too large,
  * these functions may fail.
@@ -182,7 +177,7 @@ isc_hash_calc(const unsigned char *key, unsigned int keylen,
 /*@}*/
 
 void
-isc__hash_setvec(const isc_uint16_t *vec);
+isc__hash_setvec(const uint16_t *vec);
 
 /*!<
  * \brief Set the contents of the random vector used in hashing.
@@ -197,14 +192,14 @@ isc__hash_setvec(const isc_uint16_t *vec);
  * doing before using this function.
  */
 
-isc_uint32_t
+uint32_t
 isc_hash_function(const void *data, size_t length,
 		  isc_boolean_t case_sensitive,
-		  const isc_uint32_t *previous_hashp);
-isc_uint32_t
+		  const uint32_t *previous_hashp);
+uint32_t
 isc_hash_function_reverse(const void *data, size_t length,
 			  isc_boolean_t case_sensitive,
-			  const isc_uint32_t *previous_hashp);
+			  const uint32_t *previous_hashp);
 /*!<
  * \brief Calculate a hash over data.
  *

@@ -32,9 +32,9 @@ VERSION=@BIND9_VERSION@
 USE_ISC_SPNEGO = @USE_ISC_SPNEGO@
 
 CINCLUDES =	-I. -I${top_srcdir}/lib/dns -Iinclude ${DNS_INCLUDES} \
-		${ISC_INCLUDES} @DST_OPENSSL_INC@ @DST_GSSAPI_INC@
+		${ISC_INCLUDES} @DST_OPENSSL_INC@
 
-CDEFINES =	-DUSE_MD5 @CRYPTO@ @USE_GSSAPI@ ${USE_ISC_SPNEGO}
+CDEFINES =	-DUSE_MD5 @CRYPTO@ ${USE_ISC_SPNEGO}
 
 CWARNINGS =
 
@@ -53,15 +53,9 @@ OPENSSLLINKOBJS = openssl_link.@O@ openssldh_link.@O@ openssldsa_link.@O@ \
 		  @OPENSSLECDSALINKOBJS@ @OPENSSLEDDSALINKOBJS@ \
 		  @OPENSSLGOSTLINKOBJS@ opensslrsa_link.@O@
 
-PKCS11LINKOBJS	= pkcs11dh_link.@O@ pkcs11dsa_link.@O@ pkcs11rsa_link.@O@ \
-		pkcs11ecdsa_link.@O@ pkcs11eddsa_link.@O@ \
-		pkcs11gost_link.@O@ pkcs11.@O@
-
-DSTOBJS =	@DST_EXTRA_OBJS@ @OPENSSLLINKOBJS@ @PKCS11LINKOBJS@ \
+DSTOBJS =	@DST_EXTRA_OBJS@ @OPENSSLLINKOBJS@  \
 		dst_api.@O@ dst_lib.@O@ dst_parse.@O@ dst_result.@O@ \
-		gssapi_link.@O@ gssapictx.@O@ hmac_link.@O@ key.@O@
-
-GEOIPLINKOBJS = geoip.@O@
+		hmac_link.@O@ key.@O@
 
 # Alphabetically
 DNSOBJS =	acache.@O@ acl.@O@ adb.@O@ byaddr.@O@ \
@@ -78,13 +72,12 @@ DNSOBJS =	acache.@O@ acl.@O@ adb.@O@ byaddr.@O@ \
 		request.@O@ resolver.@O@ result.@O@ rootns.@O@ \
 		rpz.@O@ rrl.@O@ rriterator.@O@ sdb.@O@ \
 		sdlz.@O@ soa.@O@ ssu.@O@ ssu_external.@O@ \
-		stats.@O@ tcpmsg.@O@ time.@O@ timer.@O@ tkey.@O@ \
+		tcpmsg.@O@ time.@O@ timer.@O@ tkey.@O@ \
 		tsec.@O@ tsig.@O@ ttl.@O@ update.@O@ validator.@O@ \
 		version.@O@ view.@O@ xfrin.@O@ zone.@O@ zonekey.@O@ zt.@O@
 PORTDNSOBJS =	client.@O@ ecdb.@O@
 
-OBJS=		${DNSOBJS} ${OTHEROBJS} ${DSTOBJS} ${PORTDNSOBJS} \
-		@GEOIPLINKOBJS@
+OBJS=		${DNSOBJS} ${OTHEROBJS} ${DSTOBJS} ${PORTDNSOBJS}
 
 
 # Alphabetically
@@ -95,16 +88,10 @@ OPENSSLLINKSRCS = openssl_link.c openssldh_link.c openssldsa_link.c \
 		  @OPENSSLECDSALINKSRCS@ @OPENSSLEDDSALINKSRCS@ \
 		  @OPENSSLGOSTLINKSRCS@ opensslrsa_link.c
 
-PKCS11LINKSRCS	= pkcs11dh_link.c pkcs11dsa_link.c pkcs11rsa_link.c \
-		pkcs11ecdsa_link.c pkcs11eddsa_link.c \
-		pkcs11gost_link.c pkcs11.c
-
-DSTSRCS =	@DST_EXTRA_SRCS@ @OPENSSLLINKSRCS@ @PKCS11LINKSRCS@ \
+DSTSRCS =	@DST_EXTRA_SRCS@ @OPENSSLLINKSRCS@ \
 		dst_api.c dst_lib.c dst_parse.c \
-		dst_result.c gssapi_link.c gssapictx.c \
+		dst_result.c \
 		hmac_link.c key.c
-
-GEOIOLINKSRCS = geoip.c
 
 DNSSRCS =	acache.c acl.c adb.c byaddr.c \
 		cache.c callbacks.c clientinfo.c compress.c \
@@ -117,12 +104,12 @@ DNSSRCS =	acache.c acl.c adb.c byaddr.c \
 		rdataset.c rdatasetiter.c rdataslab.c request.c \
 		resolver.c result.c rootns.c rpz.c rrl.c rriterator.c \
 		sdb.c sdlz.c soa.c ssu.c ssu_external.c \
-		stats.c tcpmsg.c time.c timer.c tkey.c \
+		tcpmsg.c time.c timer.c tkey.c \
 		tsec.c tsig.c ttl.c update.c validator.c \
 		version.c view.c xfrin.c zone.c zonekey.c zt.c ${OTHERSRCS}
 PORTDNSSRCS =	client.c ecdb.c
 
-SRCS = ${DSTSRCS} ${DNSSRCS} ${PORTDNSSRCS} @GEOIPLINKSRCS@
+SRCS = ${DSTSRCS} ${DNSSRCS} ${PORTDNSSRCS}
 
 SUBDIRS =	include
 TARGETS =	timestamp

@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: dst.h,v 1.3 2019/12/17 01:46:33 sthen Exp $ */
+/* $Id: dst.h,v 1.6 2020/01/09 18:17:16 florian Exp $ */
 
 #ifndef DST_DST_H
 #define DST_DST_H 1
@@ -30,8 +30,6 @@
 #include <dns/secalg.h>
 #include <dns/ds.h>
 #include <dns/dsdigest.h>
-
-#include <dst/gssapi.h>
 
 ISC_LANG_BEGINDECLS
 
@@ -66,7 +64,6 @@ typedef struct dst_context 	dst_context_t;
 #define DST_ALG_ED25519		15
 #define DST_ALG_ED448		16
 #define DST_ALG_HMACMD5		157
-#define DST_ALG_GSSAPI		160
 #define DST_ALG_HMACSHA1	161	/* XXXMPA */
 #define DST_ALG_HMACSHA224	162	/* XXXMPA */
 #define DST_ALG_HMACSHA256	163	/* XXXMPA */
@@ -135,17 +132,15 @@ typedef struct dst_context 	dst_context_t;
  ***/
 
 isc_result_t
-dst_lib_init(isc_mem_t *mctx, isc_entropy_t *ectx, unsigned int eflags);
+dst_lib_init(isc_mem_t *mctx);
 
 isc_result_t
-dst_lib_init2(isc_mem_t *mctx, isc_entropy_t *ectx,
-	      const char *engine, unsigned int eflags);
+dst_lib_init2(isc_mem_t *mctx, const char *engine);
 /*%<
  * Initializes the DST subsystem.
  *
  * Requires:
  * \li 	"mctx" is a valid memory context
- * \li	"ectx" is a valid entropy context
  *
  * Returns:
  * \li	ISC_R_SUCCESS
@@ -494,40 +489,6 @@ dst_key_privatefrombuffer(dst_key_t *key, isc_buffer_t *buffer);
  *\li	If successful, key will contain a valid private key.
  */
 
-gss_ctx_id_t
-dst_key_getgssctx(const dst_key_t *key);
-/*%<
- * Returns the opaque key data.
- * Be cautions when using this value unless you know what you are doing.
- *
- * Requires:
- *\li	"key" is not NULL.
- *
- * Returns:
- *\li	gssctx key data, possibly NULL.
- */
-
-isc_result_t
-dst_key_fromgssapi(dns_name_t *name, gss_ctx_id_t gssctx, isc_mem_t *mctx,
-		   dst_key_t **keyp, isc_region_t *intoken);
-/*%<
- * Converts a GSSAPI opaque context id into a DST key.
- *
- * Requires:
- *\li	"name" is a valid absolute dns name.
- *\li	"gssctx" is a GSSAPI context id.
- *\li	"mctx" is a valid memory context.
- *\li	"keyp" is not NULL and "*keyp" is NULL.
- *
- * Returns:
- *\li 	ISC_R_SUCCESS
- * \li	any other result indicates failure
- *
- * Ensures:
- *\li	If successful, *keyp will contain a valid key and be responsible for
- *	the context id.
- */
-
 #ifdef DST_KEY_INTERNAL
 isc_result_t
 dst_key_buildinternal(dns_name_t *name, unsigned int alg,
@@ -682,7 +643,7 @@ dst_key_proto(const dst_key_t *key);
 unsigned int
 dst_key_alg(const dst_key_t *key);
 
-isc_uint32_t
+uint32_t
 dst_key_flags(const dst_key_t *key);
 
 dns_keytag_t
@@ -754,9 +715,9 @@ dst_key_secretsize(const dst_key_t *key, unsigned int *n);
  *\li	"n" stores the size of a generated shared secret
  */
 
-isc_uint16_t
+uint16_t
 dst_region_computeid(const isc_region_t *source, unsigned int alg);
-isc_uint16_t
+uint16_t
 dst_region_computerid(const isc_region_t *source, unsigned int alg);
 /*%<
  * Computes the (revoked) key id of the key stored in the provided
@@ -769,7 +730,7 @@ dst_region_computerid(const isc_region_t *source, unsigned int alg);
  *\li 	the key id
  */
 
-isc_uint16_t
+uint16_t
 dst_key_getbits(const dst_key_t *key);
 /*%<
  * Get the number of digest bits required (0 == MAX).
@@ -779,7 +740,7 @@ dst_key_getbits(const dst_key_t *key);
  */
 
 void
-dst_key_setbits(dst_key_t *key, isc_uint16_t bits);
+dst_key_setbits(dst_key_t *key, uint16_t bits);
 /*%<
  * Set the number of digest bits required (0 == MAX).
  *
@@ -808,7 +769,7 @@ dst_key_getttl(const dst_key_t *key);
  */
 
 isc_result_t
-dst_key_setflags(dst_key_t *key, isc_uint32_t flags);
+dst_key_setflags(dst_key_t *key, uint32_t flags);
 /*
  * Set the key flags, and recompute the key ID.
  *
@@ -817,7 +778,7 @@ dst_key_setflags(dst_key_t *key, isc_uint32_t flags);
  */
 
 isc_result_t
-dst_key_getnum(const dst_key_t *key, int type, isc_uint32_t *valuep);
+dst_key_getnum(const dst_key_t *key, int type, uint32_t *valuep);
 /*%<
  * Get a member of the numeric metadata array and place it in '*valuep'.
  *
@@ -828,7 +789,7 @@ dst_key_getnum(const dst_key_t *key, int type, isc_uint32_t *valuep);
  */
 
 void
-dst_key_setnum(dst_key_t *key, int type, isc_uint32_t value);
+dst_key_setnum(dst_key_t *key, int type, uint32_t value);
 /*%<
  * Set a member of the numeric metadata array.
  *
