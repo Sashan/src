@@ -975,9 +975,7 @@ pfsync_in_upd(caddr_t buf, int len, int count, int flags)
 		if (st == NULL) {
 			/* insert the update */
 			PF_LOCK();
-			PF_STATE_ENTER_WRITE();
 			error = pfsync_state_import(sp, flags);
-			PF_STATE_EXIT_WRITE();
 			if (error)
 				pfsyncstat_inc(pfsyncs_badstate);
 			PF_UNLOCK();
