@@ -851,7 +851,6 @@ pfsync_in_ins(caddr_t buf, int len, int count, int flags)
 	int i;
 
 	PF_LOCK();
-	PF_STATE_ENTER_WRITE();
 	for (i = 0; i < count; i++) {
 		sp = (struct pfsync_state *)(buf + len * i);
 		af1 = sp->key[0].af;
@@ -877,7 +876,6 @@ pfsync_in_ins(caddr_t buf, int len, int count, int flags)
 			break;
 		}
 	}
-	PF_STATE_EXIT_WRITE();
 	PF_UNLOCK();
 
 	return (0);
