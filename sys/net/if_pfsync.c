@@ -1619,14 +1619,14 @@ pfsync_is_snapshot_empty(struct pfsync_snapshot *sn)
 	int	q;
 
 	for (q = 0; q < PFSYNC_S_COUNT; q++)
-		if (TAILQ_EMPTY(&sn->sn_qs[q]))
-			return (1);
+		if (!TAILQ_EMPTY(&sn->sn_qs[q]))
+			return (0);
 
-	if (TAILQ_EMPTY(&sn->sn_upd_req_list))
-		return (1);
+	if (!TAILQ_EMPTY(&sn->sn_upd_req_list))
+		return (0);
 
-	if (TAILQ_EMPTY(&sn->sn_tdb_q))
-		return (1);
+	if (!TAILQ_EMPTY(&sn->sn_tdb_q))
+		return (0);
 
 	return (sn->sn_plus == NULL);
 }
@@ -2363,7 +2363,6 @@ pfsync_q_ins(struct pf_state *st, int q)
 
 		pf_state_ref(st);
 
-		nlen = pfsync_qs[q].len;
 		TAILQ_INSERT_TAIL(&sc->sc_qs[q], st, sync_list);
 		st->sync_state = q;
 		mtx_leave(&sc->sc_mtx[q]);
@@ -2379,7 +2378,7 @@ pfsync_q_del(struct pf_state *st)
 	KASSERT(st->sync_state != PFSYNC_S_NONE);
 
 	mtx_enter(&sc->sc_mtx[q]);
-	sc->sc_len -= pfsync_qs[q].len;
+	atomic_sub_long(&sc->sc_len, pfsync_qs[q].len);
 	TAILQ_REMOVE(&sc->sc_qs[q], st, sync_list);
 	if (TAILQ_EMPTY(&sc->sc_qs[q]))
 		atomic_sub_long(&sc->sc_len, sizeof (struct pfsync_subheader));
