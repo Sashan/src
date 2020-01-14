@@ -838,6 +838,7 @@ pfsync_in_clr(caddr_t buf, int len, int count, int flags)
 		}
 		PF_STATE_EXIT_WRITE();
 	}
+	PF_UNLOCK();
 
 	return (0);
 }
@@ -981,6 +982,7 @@ pfsync_in_upd(caddr_t buf, int len, int count, int flags)
 			PF_STATE_EXIT_WRITE();
 			if (error)
 				pfsyncstat_inc(pfsyncs_badstate);
+			PF_UNLOCK();
 			continue;
 		}
 
