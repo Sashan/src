@@ -2334,7 +2334,7 @@ pfsync_q_ins(struct pf_state *st, int q)
 
 #if defined(PFSYNC_DEBUG)
 	if (sc->sc_len < PFSYNC_MINPKT)
-		panic("pfsync pkt len is too low %d", sc->sc_len);
+		panic("pfsync pkt len is too low %zu", sc->sc_len);
 #endif
 	do {
 		mtx_enter(&sc->sc_mtx[q]);
@@ -2343,7 +2343,7 @@ pfsync_q_ins(struct pf_state *st, int q)
 		 * If two threads are competing to insert the same state, then
 		 * there must be just single winner.
 		 */
-		if (st->sync_state == PFSYNC_S_NONE) {
+		if (st->sync_state != PFSYNC_S_NONE) {
 			mtx_leave(&sc->sc_mtx[q]);
 			break;
 		}
