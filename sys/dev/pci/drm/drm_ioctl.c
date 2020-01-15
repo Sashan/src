@@ -29,7 +29,6 @@
  */
 
 #include <sys/filio.h>
-#include <sys/ttycom.h> /* for TIOCSGRP */
 
 #include <drm/drm_ioctl.h>
 #include <drm/drmP.h>
@@ -700,14 +699,6 @@ drm_do_ioctl(struct drm_device *dev, int minor, u_long cmd, caddr_t data)
 	case FIONBIO:
 	case FIOASYNC:
 		return 0;
-
-	case TIOCSPGRP:
-		dev->buf_pgid = *(int *)data;
-		return 0;
-
-	case TIOCGPGRP:
-		*(int *)data = dev->buf_pgid;
-		return 0;
 	}
 
 	if ((nr >= DRM_CORE_IOCTL_COUNT) &&
@@ -781,7 +772,8 @@ drmioctl(dev_t kdev, u_long cmd, caddr_t data, int flags, struct proc *p)
 
 	mtx_enter(&dev->quiesce_mtx);
 	while (dev->quiesce)
-		msleep(&dev->quiesce, &dev->quiesce_mtx, PZERO, "drmioc", 0);
+		msleep_nsec(&dev->quiesce, &dev->quiesce_mtx, PZERO, "drmioc",
+		    INFSLP);
 	dev->quiesce_count++;
 	mtx_leave(&dev->quiesce_mtx);
 

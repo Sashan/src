@@ -30,7 +30,7 @@
 #include <isc/lang.h>
 #include <isc/list.h>
 #include <isc/mem.h>
-#include <isc/print.h>
+
 #include <isc/sockaddr.h>
 #include <isc/socket.h>
 
@@ -129,9 +129,7 @@ struct dig_lookup {
 		besteffort,
 		dnssec,
 		expire,
-#ifdef ISC_PLATFORM_USESIT
 		sit,
-#endif
 		nsid,   /*% Name Server ID (RFC 5001) */
 		ednsneg,
 		mapped,
@@ -167,7 +165,7 @@ isc_boolean_t	sigchase;
 	isc_buffer_t renderbuf;
 	char *sendspace;
 	dns_name_t *name;
-	isc_interval_t interval;
+	interval_t interval;
 	dns_message_t *sendmsg;
 	dns_name_t *oname;
 	ISC_LINK(dig_lookup_t) link;
@@ -177,21 +175,19 @@ isc_boolean_t	sigchase;
 	dig_serverlist_t my_server_list;
 	dig_searchlist_t *origin;
 	dig_query_t *xfr_q;
-	isc_uint32_t retries;
+	uint32_t retries;
 	int nsfound;
-	isc_uint16_t udpsize;
-	isc_int16_t edns;
-	isc_uint32_t ixfr_serial;
+	uint16_t udpsize;
+	int16_t edns;
+	uint32_t ixfr_serial;
 	isc_buffer_t rdatabuf;
 	char rdatastore[MXNAME];
 	dst_context_t *tsigctx;
 	isc_buffer_t *querysig;
-	isc_uint32_t msgcounter;
+	uint32_t msgcounter;
 	dns_fixedname_t fdomain;
 	isc_sockaddr_t *ecs_addr;
-#ifdef ISC_PLATFORM_USESIT
 	char *sitvalue;
-#endif
 	dns_ednsopt_t *ednsopts;
 	unsigned int ednsoptscnt;
 	unsigned int ednsflags;
@@ -212,10 +208,10 @@ struct dig_query {
 		recv_made,
 		warn_id,
 		timedout;
-	isc_uint32_t first_rr_serial;
-	isc_uint32_t second_rr_serial;
-	isc_uint32_t msg_count;
-	isc_uint32_t rr_count;
+	uint32_t first_rr_serial;
+	uint32_t second_rr_serial;
+	uint32_t msg_count;
+	uint32_t rr_count;
 	isc_boolean_t ixfr_axfr;
 	char *servname;
 	char *userarg;
@@ -234,7 +230,7 @@ struct dig_query {
 	isc_sockaddr_t sockaddr;
 	isc_time_t time_sent;
 	isc_time_t time_recv;
-	isc_uint64_t byte_count;
+	uint64_t byte_count;
 	isc_buffer_t sendbuf;
 	isc_timer_t *timer;
 };
@@ -297,9 +293,6 @@ extern isc_boolean_t keep_open;
 extern char *progname;
 extern int tries;
 extern int fatalexit;
-#ifdef WITH_IDN
-extern int idnoptions;
-#endif
 
 /*
  * Routines in dighost.c.
@@ -314,9 +307,9 @@ isc_result_t
 get_reverse(char *reverse, size_t len, char *value, isc_boolean_t ip6_int,
 	    isc_boolean_t strict);
 
-ISC_PLATFORM_NORETURN_PRE void
+__dead void
 fatal(const char *format, ...)
-ISC_FORMAT_PRINTF(1, 2) ISC_PLATFORM_NORETURN_POST;
+ISC_FORMAT_PRINTF(1, 2);
 
 void
 debug(const char *format, ...) ISC_FORMAT_PRINTF(1, 2);
@@ -349,11 +342,11 @@ void
 setup_system(isc_boolean_t ipv4only, isc_boolean_t ipv6only);
 
 isc_result_t
-parse_uint(isc_uint32_t *uip, const char *value, isc_uint32_t max,
+parse_uint(uint32_t *uip, const char *value, uint32_t max,
 	   const char *desc);
 
 isc_result_t
-parse_xint(isc_uint32_t *uip, const char *value, isc_uint32_t max,
+parse_xint(uint32_t *uip, const char *value, uint32_t max,
 	   const char *desc);
 
 isc_result_t

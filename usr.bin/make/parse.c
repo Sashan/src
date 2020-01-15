@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.c,v 1.123 2019/12/22 16:53:40 espie Exp $	*/
+/*	$OpenBSD: parse.c,v 1.130 2020/01/13 14:51:50 espie Exp $	*/
 /*	$NetBSD: parse.c,v 1.29 1997/03/10 21:20:04 christos Exp $	*/
 
 /*
@@ -181,40 +181,40 @@ static struct {
 	const char *keyword;
 	size_t sz;
 	uint32_t hv;
-	unsigned int type;
+	unsigned int special;
 	unsigned int special_op;
 } specials[] = {
-    { P(NODE_EXEC),	SPECIAL_EXEC | SPECIAL_TARGETSOURCE,	OP_EXEC, },
-    { P(NODE_IGNORE),	SPECIAL_IGNORE | SPECIAL_TARGETSOURCE, 	OP_IGNORE, },
-    { P(NODE_INCLUDES),	SPECIAL_NOTHING | SPECIAL_TARGET,	0, },
-    { P(NODE_INVISIBLE),SPECIAL_INVISIBLE | SPECIAL_TARGETSOURCE,OP_INVISIBLE, },
-    { P(NODE_JOIN),	SPECIAL_JOIN | SPECIAL_TARGETSOURCE,	OP_JOIN, },
-    { P(NODE_LIBS),	SPECIAL_NOTHING | SPECIAL_TARGET,	0, },
-    { P(NODE_MADE),	SPECIAL_MADE | SPECIAL_TARGETSOURCE,	OP_MADE, },
-    { P(NODE_MAIN),	SPECIAL_MAIN | SPECIAL_TARGET,		0, },
-    { P(NODE_MAKE),	SPECIAL_MAKE | SPECIAL_TARGETSOURCE,	OP_MAKE, },
-    { P(NODE_MAKEFLAGS),	SPECIAL_MFLAGS | SPECIAL_TARGET,	0, },
-    { P(NODE_MFLAGS),	SPECIAL_MFLAGS | SPECIAL_TARGET,	0, },
-    { P(NODE_NOTMAIN),	SPECIAL_NOTMAIN | SPECIAL_TARGETSOURCE,	OP_NOTMAIN, },
-    { P(NODE_NOTPARALLEL),SPECIAL_NOTPARALLEL | SPECIAL_TARGET,	0, },
-    { P(NODE_NO_PARALLEL),SPECIAL_NOTPARALLEL | SPECIAL_TARGET,	0, },
-    { P(NODE_NULL),	SPECIAL_NOTHING | SPECIAL_TARGET,	0, },
-    { P(NODE_OPTIONAL),	SPECIAL_OPTIONAL | SPECIAL_TARGETSOURCE,OP_OPTIONAL, },
-    { P(NODE_ORDER),	SPECIAL_ORDER | SPECIAL_TARGET,		0, },
-    { P(NODE_PARALLEL),	SPECIAL_PARALLEL | SPECIAL_TARGET,	0, },
-    { P(NODE_PATH),	SPECIAL_PATH | SPECIAL_TARGET,		0, },
-    { P(NODE_PHONY),	SPECIAL_PHONY | SPECIAL_TARGETSOURCE,	OP_PHONY, },
-    { P(NODE_PRECIOUS),	SPECIAL_PRECIOUS | SPECIAL_TARGETSOURCE,OP_PRECIOUS, },
-    { P(NODE_RECURSIVE),SPECIAL_MAKE | SPECIAL_TARGETSOURCE,	OP_MAKE, },
-    { P(NODE_SILENT),	SPECIAL_SILENT | SPECIAL_TARGETSOURCE,	OP_SILENT, },
-    { P(NODE_SINGLESHELL),SPECIAL_NOTHING | SPECIAL_TARGET,	0, },
-    { P(NODE_SUFFIXES),	SPECIAL_SUFFIXES | SPECIAL_TARGET,	0, },
-    { P(NODE_USE),	SPECIAL_USE | SPECIAL_TARGETSOURCE,	OP_USE, },
-    { P(NODE_WAIT),	SPECIAL_WAIT | SPECIAL_TARGETSOURCE,	0 },
-    { P(NODE_CHEAP),	SPECIAL_CHEAP | SPECIAL_TARGETSOURCE,	OP_CHEAP, },
-    { P(NODE_EXPENSIVE),SPECIAL_EXPENSIVE | SPECIAL_TARGETSOURCE,OP_EXPENSIVE, },
-    { P(NODE_POSIX), SPECIAL_NOTHING | SPECIAL_TARGET, 0 },
-    { P(NODE_SCCS_GET), SPECIAL_NOTHING | SPECIAL_TARGET, 0 },
+    { P(NODE_EXEC),		SPECIAL_EXEC,		OP_EXEC },
+    { P(NODE_IGNORE),		SPECIAL_IGNORE, 	OP_IGNORE },
+    { P(NODE_INCLUDES),		SPECIAL_NOTHING,	0 },
+    { P(NODE_INVISIBLE),	SPECIAL_INVISIBLE,	OP_INVISIBLE },
+    { P(NODE_JOIN),		SPECIAL_JOIN,		OP_JOIN },
+    { P(NODE_LIBS),		SPECIAL_NOTHING,	0 },
+    { P(NODE_MADE),		SPECIAL_MADE,		OP_MADE },
+    { P(NODE_MAIN),		SPECIAL_MAIN,		0 },
+    { P(NODE_MAKE),		SPECIAL_MAKE,		OP_MAKE },
+    { P(NODE_MAKEFLAGS),	SPECIAL_MFLAGS,		0 },
+    { P(NODE_MFLAGS),		SPECIAL_MFLAGS,		0 },
+    { P(NODE_NOTMAIN),		SPECIAL_NOTMAIN,	OP_NOTMAIN },
+    { P(NODE_NOTPARALLEL),	SPECIAL_NOTPARALLEL,	0 },
+    { P(NODE_NO_PARALLEL),	SPECIAL_NOTPARALLEL,	0 },
+    { P(NODE_NULL),		SPECIAL_NOTHING,	0 },
+    { P(NODE_OPTIONAL),		SPECIAL_OPTIONAL,	OP_OPTIONAL },
+    { P(NODE_ORDER),		SPECIAL_ORDER,		0 },
+    { P(NODE_PARALLEL),		SPECIAL_PARALLEL,	0 },
+    { P(NODE_PATH),		SPECIAL_PATH,		0 },
+    { P(NODE_PHONY),		SPECIAL_PHONY,		OP_PHONY },
+    { P(NODE_PRECIOUS),		SPECIAL_PRECIOUS,	OP_PRECIOUS },
+    { P(NODE_RECURSIVE),	SPECIAL_MAKE,		OP_MAKE },
+    { P(NODE_SILENT),		SPECIAL_SILENT,		OP_SILENT },
+    { P(NODE_SINGLESHELL),	SPECIAL_NOTHING,	0 },
+    { P(NODE_SUFFIXES),		SPECIAL_SUFFIXES,	0 },
+    { P(NODE_USE),		SPECIAL_USE,		OP_USE },
+    { P(NODE_WAIT),		SPECIAL_WAIT,		0 },
+    { P(NODE_CHEAP),		SPECIAL_CHEAP,		OP_CHEAP },
+    { P(NODE_EXPENSIVE),	SPECIAL_EXPENSIVE,	OP_EXPENSIVE },
+    { P(NODE_POSIX), 		SPECIAL_NOTHING, 	0 },
+    { P(NODE_SCCS_GET), 	SPECIAL_NOTHING, 	0 },
 };
 
 #undef P
@@ -225,10 +225,9 @@ create_special_nodes()
 	unsigned int i;
 
 	for (i = 0; i < sizeof(specials)/sizeof(specials[0]); i++) {
-		GNode *gn = Targ_FindNodeh(specials[i].keyword,
-		    specials[i].sz, specials[i].hv, TARG_CREATE);
-		gn->special = specials[i].type;
-		gn->special_op = specials[i].special_op;
+		(void)Targ_mk_special_node(specials[i].keyword,
+		    specials[i].sz, specials[i].hv,
+		    OP_ZERO, specials[i].special, specials[i].special_op);
 	}
 }
 
@@ -419,15 +418,13 @@ ParseDoSrc(
     const char *esrc)
 {
 	GNode *gn = Targ_FindNodei(src, esrc, TARG_CREATE);
-	if ((gn->special & SPECIAL_SOURCE) != 0) {
-		if (gn->special_op) {
-			Array_ForEach(targets, ParseDoSpecial, gn->special_op);
-			return;
-		} else {
-			assert((gn->special & SPECIAL_MASK) == SPECIAL_WAIT);
-			waiting++;
-			return;
-		}
+	if (gn->special_op) {
+		Array_ForEach(targets, ParseDoSpecial, gn->special_op);
+		return;
+	}
+	if (gn->special == SPECIAL_WAIT) {
+		waiting++;
+		return;
 	}
 
 	switch (specType) {
@@ -705,10 +702,10 @@ handle_special_targets(Lst paths)
 
 	for (i = 0; i < gtargets.n; i++) {
 		type = gtargets.a[i]->special;
-		if ((type & SPECIAL_MASK) == SPECIAL_PATH) {
+		if (type == SPECIAL_PATH) {
 			seen_path++;
 			Lst_AtEnd(paths, find_suffix_path(gtargets.a[i]));
-		} else if ((type & SPECIAL_TARGET) != 0)
+		} else if (type != 0)
 			seen_special++;
 		else
 			seen_normal++;
@@ -734,7 +731,7 @@ handle_special_targets(Lst paths)
 		dump_targets();
 		return 0;
 	} else if (seen_special == 1) {
-		specType = gtargets.a[0]->special & SPECIAL_MASK;
+		specType = gtargets.a[0]->special;
 		switch (specType) {
 		case SPECIAL_MAIN:
 			if (!Lst_IsEmpty(create)) {
@@ -742,13 +739,8 @@ handle_special_targets(Lst paths)
 			}
 			break;
 		case SPECIAL_NOTPARALLEL:
-		{
-			extern int  maxJobs;
-
-			maxJobs = 1;
-			compatMake = 1;
+			set_notparallel();
 			break;
-		}
 		case SPECIAL_ORDER:
 			predecessor = NULL;
 			break;
@@ -838,6 +830,7 @@ ParseDoDependency(const char *line)	/* the line to parse */
 	Array_Reset(&gsources);
 
 	cp = parse_do_targets(&paths, &tOp, line);
+	assert(specType == SPECIAL_PATH || Lst_IsEmpty(&paths));
 	if (cp == NULL || specType == SPECIAL_ERROR) {
 		/* invalidate targets for further processing */
 		Array_Reset(&gtargets); 
@@ -856,19 +849,15 @@ ParseDoDependency(const char *line)	/* the line to parse */
 
 	line = cp;
 
-	/*
-	 * Several special targets take different actions if present with no
-	 * sources:
-	 *	a .SUFFIXES line with no sources clears out all old suffixes
-	 *	a .PRECIOUS line makes all targets precious
-	 *	a .IGNORE line ignores errors for all targets
-	 *	a .SILENT line creates silence when making all targets
-	 *	a .PATH removes all directories from the search path(s).
-	 */
+	/* Several special targets have specific semantics with no source:
+	 *	.SUFFIXES 	clears out all old suffixes
+	 *	.PRECIOUS/.IGNORE/.SILENT
+	 * 			apply to all target
+	 *	.PATH 		clears out all search paths.  */
 	if (!*line) {
 		switch (specType) {
 		case SPECIAL_SUFFIXES:
-			Suff_ClearSuffixes();
+			Suff_DisableAllSuffixes();
 			break;
 		case SPECIAL_PRECIOUS:
 			allPrecious = true;
@@ -886,42 +875,26 @@ ParseDoDependency(const char *line)	/* the line to parse */
 			break;
 		}
 	} else if (specType == SPECIAL_MFLAGS) {
-		/* Call on functions in main.c to deal with these arguments */
 		Main_ParseArgLine(line);
 		return;
 	} else if (specType == SPECIAL_NOTPARALLEL) {
 		return;
 	}
 
-	/*
-	 * NOW GO FOR THE SOURCES
-	 */
+	/* NOW GO FOR THE SOURCES */
 	if (specType == SPECIAL_SUFFIXES || specType == SPECIAL_PATH ||
 	    specType == SPECIAL_NOTHING) {
 		while (*line) {
-		    /*
-		     * If the target was one that doesn't take files as its
-		     * sources but takes something like suffixes, we take each
-		     * space-separated word on the line as a something and deal
-		     * with it accordingly.
+		    /* Some special targets take a list of space-separated
+		     * words.  For each word,
 		     *
-		     * If the target was .SUFFIXES, we take each source as a
-		     * suffix and add it to the list of suffixes maintained by
-		     * the Suff module.
+		     * if .SUFFIXES, add it to the list of suffixes maintained
+		     * by suff.c.
 		     *
-		     * If the target was a .PATH, we add the source as a
-		     * directory to search on the search path.
+		     * if .PATHS, add it as a directory on the main search path.
 		     *
-		     * If it was .INCLUDES, the source is taken to be the
-		     * suffix of files which will be #included and whose search
-		     * path should be present in the .INCLUDES variable.
-		     *
-		     * If it was .LIBS, the source is taken to be the suffix of
-		     * files which are considered libraries and whose search
-		     * path should be present in the .LIBS variable.
-		     *
-		     * If it was .NULL, the source is the suffix to use when a
-		     * file has no valid suffix.
+		     * if .LIBS/.INCLUDE/.NULL... this has been deprecated,
+		     * ignore
 		     */
 		    while (*cp && !ISSPACE(*cp))
 			    cp++;
@@ -937,6 +910,7 @@ ParseDoDependency(const char *line)	/* the line to parse */
 			    	ln = Lst_Adv(ln))
 				    Dir_AddDiri(Lst_Datum(ln), line, cp);
 			    break;
+			    Lst_Destroy(&paths, NOFREE);
 			    }
 		    default:
 			    break;
@@ -947,7 +921,6 @@ ParseDoDependency(const char *line)	/* the line to parse */
 			cp++;
 		    line = cp;
 		}
-		Lst_Destroy(&paths, NOFREE);
 	} else {
 		while (*line) {
 			/*
@@ -1642,12 +1615,12 @@ Parse_File(const char *filename, FILE *stream)
 	bool expectingCommands = false;
 	bool commands_seen = false;
 
-	/* somewhat permanent spaces to shave time */
-	BUFFER buf;
-	BUFFER copy;
+	/* permanent spaces to shave time */
+	static BUFFER buf;
+	static BUFFER copy;
 
-	Buf_Init(&buf, MAKE_BSIZE);
-	Buf_Init(&copy, MAKE_BSIZE);
+	Buf_Reinit(&buf, MAKE_BSIZE);
+	Buf_Reinit(&copy, MAKE_BSIZE);
 
 	Parse_FromFile(filename, stream);
 	do {
@@ -1687,8 +1660,6 @@ Parse_File(const char *filename, FILE *stream)
 	Cond_End();
 
 	Parse_ReportErrors();
-	Buf_Destroy(&buf);
-	Buf_Destroy(&copy);
 }
 
 void

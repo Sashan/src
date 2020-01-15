@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: netaddr.c,v 1.4 2019/12/17 01:46:34 sthen Exp $ */
+/* $Id: netaddr.c,v 1.8 2020/01/09 18:17:19 florian Exp $ */
 
 /*! \file */
 
@@ -26,7 +26,7 @@
 #include <isc/msgs.h>
 #include <isc/net.h>
 #include <isc/netaddr.h>
-#include <isc/print.h>
+
 #include <isc/sockaddr.h>
 #include <isc/string.h>
 #include <isc/util.h>
@@ -52,12 +52,10 @@ isc_netaddr_equal(const isc_netaddr_t *a, const isc_netaddr_t *b) {
 		    a->zone != b->zone)
 			return (ISC_FALSE);
 		break;
-#ifdef ISC_PLATFORM_HAVESYSUNH
 	case AF_UNIX:
 		if (strcmp(a->type.un, b->type.un) != 0)
 			return (ISC_FALSE);
 		break;
-#endif
 	default:
 		return (ISC_FALSE);
 	}
@@ -140,7 +138,6 @@ isc_netaddr_totext(const isc_netaddr_t *netaddr, isc_buffer_t *target) {
 	case AF_INET6:
 		type = &netaddr->type.in6;
 		break;
-#ifdef ISC_PLATFORM_HAVESYSUNH
 	case AF_UNIX:
 		alen = strlen(netaddr->type.un);
 		if (alen > isc_buffer_availablelength(target))
@@ -149,7 +146,6 @@ isc_netaddr_totext(const isc_netaddr_t *netaddr, isc_buffer_t *target) {
 				  (const unsigned char *)(netaddr->type.un),
 				  alen);
 		return (ISC_R_SUCCESS);
-#endif
 	default:
 		return (ISC_R_FAILURE);
 	}
@@ -299,7 +295,6 @@ isc_netaddr_fromin6(isc_netaddr_t *netaddr, const struct in6_addr *ina6) {
 
 isc_result_t
 isc_netaddr_frompath(isc_netaddr_t *netaddr, const char *path) {
-#ifdef ISC_PLATFORM_HAVESYSUNH
 	if (strlen(path) > sizeof(netaddr->type.un) - 1)
 		return (ISC_R_NOSPACE);
 
@@ -308,23 +303,18 @@ isc_netaddr_frompath(isc_netaddr_t *netaddr, const char *path) {
 	strlcpy(netaddr->type.un, path, sizeof(netaddr->type.un));
 	netaddr->zone = 0;
 	return (ISC_R_SUCCESS);
-#else
-	UNUSED(netaddr);
-	UNUSED(path);
-	return (ISC_R_NOTIMPLEMENTED);
-#endif
 }
 
 
 void
-isc_netaddr_setzone(isc_netaddr_t *netaddr, isc_uint32_t zone) {
+isc_netaddr_setzone(isc_netaddr_t *netaddr, uint32_t zone) {
 	/* we currently only support AF_INET6. */
 	REQUIRE(netaddr->family == AF_INET6);
 
 	netaddr->zone = zone;
 }
 
-isc_uint32_t
+uint32_t
 isc_netaddr_getzone(const isc_netaddr_t *netaddr) {
 	return (netaddr->zone);
 }
@@ -340,18 +330,12 @@ isc_netaddr_fromsockaddr(isc_netaddr_t *t, const isc_sockaddr_t *s) {
 		break;
 	case AF_INET6:
 		memmove(&t->type.in6, &s->type.sin6.sin6_addr, 16);
-#ifdef ISC_PLATFORM_HAVESCOPEID
 		t->zone = s->type.sin6.sin6_scope_id;
-#else
-		t->zone = 0;
-#endif
 		break;
-#ifdef ISC_PLATFORM_HAVESYSUNH
 	case AF_UNIX:
 		memmove(t->type.un, s->type.sunix.sun_path, sizeof(t->type.un));
 		t->zone = 0;
 		break;
-#endif
 	default:
 		INSIST(0);
 	}
@@ -418,7 +402,7 @@ isc_netaddr_issitelocal(isc_netaddr_t *na) {
 }
 
 #define ISC_IPADDR_ISNETZERO(i) \
-	       (((isc_uint32_t)(i) & ISC__IPADDR(0xff000000)) \
+	       (((uint32_t)(i) & ISC__IPADDR(0xff000000)) \
 		== ISC__IPADDR(0x00000000))
 
 isc_boolean_t

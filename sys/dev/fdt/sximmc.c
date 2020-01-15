@@ -1,4 +1,4 @@
-/* $OpenBSD: sximmc.c,v 1.9 2019/02/10 11:56:26 kettenis Exp $ */
+/* $OpenBSD: sximmc.c,v 1.11 2020/01/11 01:18:29 cheloha Exp $ */
 /* $NetBSD: awin_mmc.c,v 1.23 2015/11/14 10:32:40 bouyer Exp $ */
 
 /*-
@@ -551,7 +551,8 @@ sximmc_wait_rint(struct sximmc_softc *sc, uint32_t mask, int timeout)
 
 	while (retry > 0) {
 		if (sc->sc_use_dma) {
-			error = tsleep(&sc->sc_intr_rint, PWAIT, "rint", hz);
+			error = tsleep_nsec(&sc->sc_intr_rint, PWAIT, "rint",
+			    SEC_TO_NSEC(1));
 			if (error && error != EWOULDBLOCK)
 				return error;
 			if (sc->sc_intr_rint & mask)
@@ -977,8 +978,8 @@ sximmc_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 			cmd->c_error = sximmc_dma_prepare(sc, cmd);
 			MMC_WRITE(sc, SXIMMC_CMD, cmdval | cmd->c_opcode);
 			if (cmd->c_error == 0) {
-				cmd->c_error = tsleep(&sc->sc_idma_idst,
-				    PWAIT, "idma", hz*10);
+				cmd->c_error = tsleep_nsec(&sc->sc_idma_idst,
+				    PWAIT, "idma", SEC_TO_NSEC(10));
 			}
 			sximmc_dma_complete(sc);
 			if (sc->sc_idma_idst & SXIMMC_IDST_ERROR) {

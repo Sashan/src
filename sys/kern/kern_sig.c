@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sig.c,v 1.237 2019/12/19 17:40:11 mpi Exp $	*/
+/*	$OpenBSD: kern_sig.c,v 1.241 2020/01/14 08:52:18 mpi Exp $	*/
 /*	$NetBSD: kern_sig.c,v 1.54 1996/04/22 01:38:32 christos Exp $	*/
 
 /*
@@ -62,6 +62,7 @@
 #include <sys/sched.h>
 #include <sys/user.h>
 #include <sys/syslog.h>
+#include <sys/ttycom.h>
 #include <sys/pledge.h>
 #include <sys/witness.h>
 
@@ -75,8 +76,12 @@ int	filt_sigattach(struct knote *kn);
 void	filt_sigdetach(struct knote *kn);
 int	filt_signal(struct knote *kn, long hint);
 
-struct filterops sig_filtops =
-	{ 0, filt_sigattach, filt_sigdetach, filt_signal };
+const struct filterops sig_filtops = {
+	.f_isfd		= 0,
+	.f_attach	= filt_sigattach,
+	.f_detach	= filt_sigdetach,
+	.f_event	= filt_signal,
+};
 
 void proc_stop(struct proc *p, int);
 void proc_stop_sweep(void *);
@@ -706,33 +711,6 @@ killpg1(struct proc *cp, int signum, int pgid, int all)
 
 #define CANSIGIO(cr, pr) \
 	CANDELIVER((cr)->cr_ruid, (cr)->cr_uid, (pr))
-
-/*
- * Deliver signum to pgid, but first check uid/euid against each
- * process and see if it is permitted.
- */
-void
-csignal(pid_t pgid, int signum, uid_t uid, uid_t euid)
-{
-	struct pgrp *pgrp;
-	struct process *pr;
-
-	if (pgid == 0)
-		return;
-	if (pgid < 0) {
-		pgid = -pgid;
-		if ((pgrp = pgfind(pgid)) == NULL)
-			return;
-		LIST_FOREACH(pr, &pgrp->pg_members, ps_pglist)
-			if (CANDELIVER(uid, euid, pr))
-				prsignal(pr, signum);
-	} else {
-		if ((pr = prfind(pgid)) == NULL)
-			return;
-		if (CANDELIVER(uid, euid, pr))
-			prsignal(pr, signum);
-	}
-}
 
 /*
  * Send a signal to a process group.  If checktty is 1,
@@ -1721,7 +1699,7 @@ sys___thrsigdivert(struct proc *p, void *v, register_t *retval)
 	sigset_t *m;
 	sigset_t mask = SCARG(uap, sigmask) &~ sigcantmask;
 	siginfo_t si;
-	uint64_t to_ticks = 0;
+	uint64_t nsecs = INFSLP;
 	int timeinvalid = 0;
 	int error = 0;
 
@@ -1737,14 +1715,8 @@ sys___thrsigdivert(struct proc *p, void *v, register_t *retval)
 #endif
 		if (!timespecisvalid(&ts))
 			timeinvalid = 1;
-		else {
-			to_ticks = (uint64_t)hz * ts.tv_sec +
-			    ts.tv_nsec / (tick * 1000);
-			if (to_ticks > INT_MAX)
-				to_ticks = INT_MAX;
-			if (to_ticks == 0 && ts.tv_nsec)
-				to_ticks = 1;
-		}
+		else
+			nsecs = TIMESPEC_TO_NSEC(&ts);
 	}
 
 	dosigsuspend(p, p->p_sigmask &~ mask);
@@ -1771,14 +1743,14 @@ sys___thrsigdivert(struct proc *p, void *v, register_t *retval)
 		if (timeinvalid)
 			error = EINVAL;
 
-		if (SCARG(uap, timeout) != NULL && to_ticks == 0)
+		if (SCARG(uap, timeout) != NULL && nsecs == INFSLP)
 			error = EAGAIN;
 
 		if (error != 0)
 			break;
 
-		error = tsleep(&sigwaitsleep, PPAUSE|PCATCH, "sigwait",
-		    (int)to_ticks);
+		error = tsleep_nsec(&sigwaitsleep, PPAUSE|PCATCH, "sigwait",
+		    nsecs);
 	}
 
 	if (error == 0) {
@@ -2163,7 +2135,7 @@ sigio_freelist(struct sigiolst *sigiolst)
 }
 
 int
-sigio_setown(struct sigio_ref *sir, pid_t pgid)
+sigio_setown(struct sigio_ref *sir, u_long cmd, caddr_t data)
 {
 	struct sigiolst rmlist;
 	struct proc *p = curproc;
@@ -2171,10 +2143,17 @@ sigio_setown(struct sigio_ref *sir, pid_t pgid)
 	struct process *pr = NULL;
 	struct sigio *sigio;
 	int error;
+	pid_t pgid = *(int *)data;
 
 	if (pgid == 0) {
 		sigio_free(sir);
 		return (0);
+	}
+
+	if (cmd == TIOCSPGRP) {
+		if (pgid < 0)
+			return (EINVAL);
+		pgid = -pgid;
 	}
 
 	sigio = malloc(sizeof(*sigio), M_SIGIO, M_WAITOK);
@@ -2265,8 +2244,8 @@ fail:
 	return (error);
 }
 
-pid_t
-sigio_getown(struct sigio_ref *sir)
+void
+sigio_getown(struct sigio_ref *sir, u_long cmd, caddr_t data)
 {
 	struct sigio *sigio;
 	pid_t pgid = 0;
@@ -2277,7 +2256,10 @@ sigio_getown(struct sigio_ref *sir)
 		pgid = sigio->sio_pgid;
 	mtx_leave(&sigio_lock);
 
-	return (pgid);
+	if (cmd == TIOCGPGRP)
+		pgid = -pgid;
+
+	*(int *)data = pgid;
 }
 
 void

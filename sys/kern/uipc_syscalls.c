@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_syscalls.c,v 1.182 2019/07/16 21:41:37 bluhm Exp $	*/
+/*	$OpenBSD: uipc_syscalls.c,v 1.184 2020/01/15 13:17:35 mpi Exp $	*/
 /*	$NetBSD: uipc_syscalls.c,v 1.19 1996/02/09 19:00:48 christos Exp $	*/
 
 /*
@@ -59,11 +59,6 @@
 #include <sys/domain.h>
 #include <netinet/in.h>
 #include <net/route.h>
-
-/*
- * System call interface to the socket abstraction.
- */
-extern	struct fileops socketops;
 
 int	copyaddrout(struct proc *, struct mbuf *, struct sockaddr *, socklen_t,
 	    socklen_t *);
@@ -290,8 +285,8 @@ doaccept(struct proc *p, int sock, struct sockaddr *name, socklen_t *anamelen,
 			head->so_error = ECONNABORTED;
 			break;
 		}
-		error = sosleep(head, &head->so_timeo, PSOCK | PCATCH, "netcon",
-		    0);
+		error = sosleep_nsec(head, &head->so_timeo, PSOCK | PCATCH,
+		    "netcon", INFSLP);
 		if (error)
 			goto out;
 	}
@@ -393,8 +388,8 @@ sys_connect(struct proc *p, void *v, register_t *retval)
 		goto out;
 	}
 	while ((so->so_state & SS_ISCONNECTING) && so->so_error == 0) {
-		error = sosleep(so, &so->so_timeo, PSOCK | PCATCH,
-		    "netcon2", 0);
+		error = sosleep_nsec(so, &so->so_timeo, PSOCK | PCATCH,
+		    "netcon2", INFSLP);
 		if (error) {
 			if (error == EINTR || error == ERESTART)
 				interrupted = 1;

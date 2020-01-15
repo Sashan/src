@@ -1,4 +1,4 @@
-/*	$OpenBSD: ugen.c,v 1.99 2018/11/14 17:00:33 mpi Exp $ */
+/*	$OpenBSD: ugen.c,v 1.101 2020/01/04 11:37:33 mpi Exp $ */
 /*	$NetBSD: ugen.c,v 1.63 2002/11/26 18:49:48 christos Exp $	*/
 /*	$FreeBSD: src/sys/dev/usb/ugen.c,v 1.26 1999/11/17 22:33:41 n_hibma Exp $	*/
 
@@ -510,8 +510,8 @@ ugen_do_read(struct ugen_softc *sc, int endpt, struct uio *uio, int flag)
 			}
 			sce->state |= UGEN_ASLP;
 			DPRINTFN(5, ("ugenread: sleep on %p\n", sce));
-			error = tsleep(sce, PZERO | PCATCH, "ugenri",
-			    (sce->timeout * hz) / 1000);
+			error = tsleep_nsec(sce, PZERO | PCATCH, "ugenrintr",
+			    MSEC_TO_NSEC(sce->timeout));
 			sce->state &= ~UGEN_ASLP;
 			DPRINTFN(5, ("ugenread: woke, error=%d\n", error));
 			if (usbd_is_dying(sc->sc_udev))
@@ -582,8 +582,8 @@ ugen_do_read(struct ugen_softc *sc, int endpt, struct uio *uio, int flag)
 			}
 			sce->state |= UGEN_ASLP;
 			DPRINTFN(5, ("ugenread: sleep on %p\n", sce));
-			error = tsleep(sce, PZERO | PCATCH, "ugenri",
-			    (sce->timeout * hz) / 1000);
+			error = tsleep_nsec(sce, PZERO | PCATCH, "ugenriso",
+			    MSEC_TO_NSEC(sce->timeout));
 			sce->state &= ~UGEN_ASLP;
 			DPRINTFN(5, ("ugenread: woke, error=%d\n", error));
 			if (usbd_is_dying(sc->sc_udev))
@@ -1328,14 +1328,26 @@ filt_ugenread_isoc(struct knote *kn, long hint)
 	return (1);
 }
 
-struct filterops ugenread_intr_filtops =
-	{ 1, NULL, filt_ugenrdetach, filt_ugenread_intr };
+const struct filterops ugenread_intr_filtops = {
+	.f_isfd		= 1,
+	.f_attach	= NULL,
+	.f_detach	= filt_ugenrdetach,
+	.f_event	= filt_ugenread_intr,
+};
 
-struct filterops ugenread_isoc_filtops =
-	{ 1, NULL, filt_ugenrdetach, filt_ugenread_isoc };
+const struct filterops ugenread_isoc_filtops = {
+	.f_isfd		= 1,
+	.f_attach	= NULL,
+	.f_detach	= filt_ugenrdetach,
+	.f_event	= filt_ugenread_isoc,
+};
 
-struct filterops ugen_seltrue_filtops =
-	{ 1, NULL, filt_ugenrdetach, filt_seltrue };
+const struct filterops ugen_seltrue_filtops = {
+	.f_isfd		= 1,
+	.f_attach	= NULL,
+	.f_detach	= filt_ugenrdetach,
+	.f_event	= filt_seltrue,
+};
 
 int
 ugenkqfilter(dev_t dev, struct knote *kn)

@@ -1,4 +1,4 @@
-.\" $OpenBSD: dig.1,v 1.20 2019/12/27 08:23:15 jmc Exp $
+.\" $OpenBSD: dig.1,v 1.33 2020/01/10 16:13:08 schwarze Exp $
 .\"
 .\" Copyright (C) 2000-2011, 2013-2018 Internet Systems Consortium, Inc. ("ISC")
 .\"
@@ -14,7 +14,7 @@
 .\" OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 .\" PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: December 27 2019 $
+.Dd $Mdocdate: January 10 2020 $
 .Dt DIG 1
 .Os
 .Sh NAME
@@ -77,12 +77,13 @@ The name of the resource record that is to be looked up.
 .It Ar type
 The type of query, as documented for
 .Fl t .
-The default is to perform a lookup for an A record.
+The default is
+.Cm A .
 .It Ar class
 The query class, as documented for
 .Fl c .
 The default is
-.Dq IN .
+.Cm IN .
 .It Pf + Ar queryopt
 One or more query options,
 as documented in
@@ -105,9 +106,13 @@ must be a valid address on one of the host's network interfaces, or
 "#<port>".
 .It Fl c Ar class
 Set the query class.
-The default
-.Ar class
-is IN; other classes are HS for Hesiod records or CH for Chaosnet records.
+The default is
+.Cm IN ;
+other classes are
+.Cm HS
+for Hesiod records and
+.Cm CH
+for Chaosnet records.
 .It Fl f Ar file
 Batch mode:
 .Nm
@@ -118,7 +123,7 @@ presented as queries to
 .Nm
 using the command-line interface.
 .It Fl h
-A brief summary of its command-line arguments and options is printed.
+Display a brief summary of command line arguments and options.
 .It Fl i
 Do reverse IPv6 lookups using the obsolete RFC 1886 IP6.INT domain, which is no
 longer in use.
@@ -151,21 +156,30 @@ from other arguments.
 The resource record type to query.
 It can be any valid query type.
 If it is a resource record type supported in BIND 9, it can be given by the
-type mnemonic (such as "NS" or "AAAA").
-The default query type is "A", unless the
+type mnemonic (such as
+.Cm NS
+or
+.Cm AAAA ) .
+The default query type is
+.Cm A ,
+unless the
 .Fl x
 option is supplied to indicate a reverse lookup.
-A zone transfer can be requested by specifying a type of AXFR.
-When an incremental zone transfer (IXFR) is required, set the
+A zone transfer can be requested by specifying a type of
+.Cm AXFR .
+When an incremental zone transfer is required, set the
 .Ar type
 to
-.Ar ixfr=N .
+.Cm IXFR Ns = Ns Ar N .
 The incremental zone transfer will contain the changes made to the zone since
 the serial number in the zone's SOA record was
 .Ar N .
 .Pp
-All resource record types can be expressed as "TYPEnn", where
-"nn" is the number of the type.
+All resource record types can be expressed as
+.Cm TYPE Ns Ar nn ,
+where
+.Ar nn
+is the number of the type.
 If the resource record type is not supported in BIND 9, the result will be
 displayed as described in RFC 3597.
 .It Fl u
@@ -189,7 +203,11 @@ arguments.
 .Nm
 automatically performs a lookup for a name like
 .Ql 94.2.0.192.in-addr.arpa
-and sets the query type and class to PTR and IN respectively.
+and sets the query type and class to
+.Cm PTR
+and
+.Cm IN
+respectively.
 IPv6 addresses are looked up using nibble format under the IP6.ARPA domain
 (but see also the
 .Fl i
@@ -235,7 +253,11 @@ This may be visible in the output from
 or in a history file maintained by the user's shell.
 .El
 .Pp
-The IN and CH class names overlap with the IN and CH top level domain names.
+The
+.Cm IN
+and
+.Cm CH
+class names overlap with the IN and CH top level domain names.
 Either use the
 .Fl t
 and
@@ -261,7 +283,7 @@ These may be preceded by the string
 to negate the meaning of that keyword.
 Other keywords assign values to options like the timeout interval.
 They have the form
-.Cm +keyword= Ns Ar value .
+.Cm + Ns Ar keyword Ns = Ns Ar value .
 Keywords may be abbreviated, provided the abbreviation is unambiguous; for
 example,
 .Cm +cd
@@ -279,34 +301,32 @@ A synonym for
 .Xo
 .Cm + Ns
 .Op Cm no Ns
-.Cm aaonly
+.Cm aaonly .
 .Xc
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm aaonly
 .Xc
-Sets the "aa" flag in the query.
+Set the "aa" flag in the query (off by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm additional
 .Xc
-Display [do not display] the additional section of a reply.
-The default is to display it.
+Display the additional section of a reply (on by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm adflag
 .Xc
-Set [do not set] the AD (authentic data) bit in the query.
+Set the AD (authentic data) bit in the query (on by default).
 This requests the server to return whether all of the answer and authority
 sections have all been validated as secure according to the security policy of
 the server.
 AD=1 indicates that all records have been validated as secure and the answer is
-not from a OPT-OUT range.
-AD=0 indicate that some part of the answer was insecure or not validated.
-This bit is set by default.
+not from an OPT-OUT range.
+AD=0 indicates that some part of the answer was insecure or not validated.
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
@@ -318,72 +338,65 @@ Set or clear all display flags.
 .Op Cm no Ns
 .Cm answer
 .Xc
-Display [do not display] the answer section of a reply.
-The default is to display it.
+Display the answer section of a reply (on by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm authority
 .Xc
-Display [do not display] the authority section of a
-reply.
-The default is to display it.
+Display the authority section of a reply (on by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm besteffort
 .Xc
-Attempt to display the contents of messages which are malformed.
-The default is to not display malformed answers.
-.It Cm +bufsize= Ns Ar B
+Attempt to display the contents of messages which are malformed (on by
+default).
+.It Cm +bufsize Ns = Ns Ar #
 Set the UDP message buffer size advertised using EDNS0 to
-.Ar B
+.Ar #
 bytes.
 The maximum and minimum sizes of this buffer are 65535 and 0 respectively.
 Values outside this range are rounded up or down appropriately.
-Values other than zero will cause a EDNS query to be sent.
+Values other than zero will cause an EDNS query to be sent.
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm cdflag
 .Xc
-Set [do not set] the CD (checking disabled) bit in the query.
+Set the CD (checking disabled) bit in the query (off by default).
 This requests the server to not perform DNSSEC validation of responses.
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm class
 .Xc
-Display [do not display] the CLASS when printing the record.
+Display the CLASS when printing the record (on by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm cmd
 .Xc
-Toggles the printing of the initial comment in the output identifying the
-version of
+Print an initial comment identifying the version of
 .Nm
-and the query options that have been applied.
-This comment is printed by default.
+and the query options that have been applied (on by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm comments
 .Xc
-Toggle the display of comment lines in the output.
-The default is to print comments.
+Display comment lines in the output (on by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
-.Cm cookie= Ns
-.Ar value
+.Cm cookie Ns
+.Op = Ns Ar value
 .Xc
-Send an COOKIE EDNS option, containing an optional
-.Ar value .
+Send a COOKIE EDNS option, containing an optional
+.Ar value
+(off by default).
 Replaying a COOKIE from a previous response will allow the server to
 identify a previous client.
-The default is
-.Cm +nocookie .
 .Pp
 .Cm +cookie
 is automatically set when
@@ -396,7 +409,8 @@ This option was formerly called
 .Op Cm no Ns
 .Cm sit
 .Xc
-(Server Identity Token). In BIND 9.10.0 through BIND 9.10.2,
+(Server Identity Token).
+In BIND 9.10.0 through BIND 9.10.2,
 it sent the experimental option code 65001.
 This was changed to option code 10 in BIND 9.10.3 when the DNS
 COOKIE option was allocated.
@@ -407,7 +421,7 @@ The
 .Op Cm no Ns
 .Cm sit
 .Xc
-is now deprecated, but has been retained as a synonym for
+option is now deprecated, but has been retained as a synonym for
 .Xo
 .Cm + Ns
 .Op Cm no Ns
@@ -419,10 +433,9 @@ for backward compatibility within the BIND 9.10 branch.
 .Op Cm no Ns
 .Cm crypto
 .Xc
-Toggle the display of cryptographic fields in DNSSEC records.
+Display cryptographic fields in DNSSEC records (on by default).
 The contents of these field are unnecessary to debug most DNSSEC validation
 failures and removing them makes it easier to see the common failures.
-The default is to display the fields.
 When omitted they are replaced by the string "[omitted]" or in the DNSKEY case
 the key id is displayed as the replacement, e.g. "[ key id = value ]".
 .It Xo
@@ -441,48 +454,39 @@ Deprecated, treated as a synonym for
 .Op Cm no Ns
 .Cm dnssec
 .Xc
-Requests DNSSEC records be sent by setting the DNSSEC OK bit (DO) in the OPT
-record in the additional section of the query.
-.It Cm +domain= Ns Ar somename
+Request DNSSEC records be sent by setting the DNSSEC OK bit (DO) in the OPT
+record in the additional section of the query (off by default).
+.It Cm +domain Ns = Ns Ar name
 Set the search list to contain the single domain
-.Ar somename ,
+.Ar name ,
 as if specified in a
 .Ic domain
 directive in
-.Pa /etc/resolv.conf ,
+.Xr resolv.conf 5 ,
 and enable search list processing as if the
 .Cm +search
-option were given.
+option were given (off by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm edns Ns
-.Op Cm = Ns Ar #
+.Op = Ns Ar #
 .Xc
-Specify the EDNS version to query with.
-Valid values are 0 to 255.
-Setting the EDNS version will cause a EDNS query to be sent.
+Use EDNS in the query (on by default).
+A version may also be specified, from 0 (the default) to 255.
 .Cm +noedns
-clears the remembered EDNS version.
-EDNS is set to 0 by default.
-.It Xo
-.Cm + Ns
-.Op Cm no Ns
-.Cm ednsflags Ns
-.Op Cm = Ns Ar #
-.Xc
-Set the must-be-zero EDNS flags bits (Z bits) to the specified value.
+disables EDNS and clears the remembered version.
+.It Cm +ednsflags Ns Op = Ns Ar #
+Set the must-be-zero EDNS flags bits (Z bits)
+to the specified value (0 by default).
 Decimal, hex and octal encodings are accepted.
 Setting a named flag (e.g. DO) will silently be ignored.
-By default, no Z bits are set.
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm ednsnegotiation
 .Xc
-Enable / disable EDNS version negotiation.
-By default
-EDNS version negotiation is enabled.
+Enable EDNS version negotiation (off by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
@@ -508,32 +512,30 @@ clears the EDNS options to be sent.
 .Op Cm no Ns
 .Cm expire
 .Xc
-Send an EDNS Expire option.
+Send an EDNS Expire option (off by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm fail
 .Xc
 Do not try the next server if you receive a SERVFAIL.
-The default is to not try the next server which is the reverse of normal stub
-resolver behavior.
+This option is on by default,
+which is the reverse of normal stub resolver behavior.
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm identify
 .Xc
-Show [or do not show] the IP address and port number that supplied the answer
-when the
+Show the IP address and port number that supplied the answer (off by default).
+This option has no effect unless the
 .Cm +short
 option is enabled.
-If short form answers are requested, the default is not to show the source
-address and port number of the server that provided the answer.
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm idnout
 .Xc
-Convert [do not convert] puny code on output.
+Convert puny code on output.
 This version of
 .Nm
 does not support IDN.
@@ -542,17 +544,17 @@ does not support IDN.
 .Op Cm no Ns
 .Cm ignore
 .Xc
-Ignore truncation in UDP responses instead of retrying with TCP.
-By default, TCP retries are performed.
+Ignore truncation in UDP responses.
+This option is off by default, which means truncated responses
+cause retrying with TCP.
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm keepopen
 .Xc
-Keep the TCP socket open between queries and reuse it rather than creating a new
-TCP socket for each lookup.
-The default is
-.Cm +nokeepopen .
+Keep the TCP socket open between queries and reuse it.
+This option is off by default, which means that a new TCP socket
+is created for each lookup.
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
@@ -560,18 +562,18 @@ The default is
 .Xc
 Print records like the SOA records in a verbose multi-line format with
 human-readable comments.
-The default is to print each record on a single line, to facilitate machine
-parsing of the
+This option is off by default, which means that each record is
+printed on a single line to facilitate machine parsing of the
 .Nm
 output.
-.It Cm +ndots= Ns Ar D
+.It Cm +ndots Ns = Ns Ar #
 Set the number of dots that have to appear in
 .Ar name
 to
-.Ar D
+.Ar #
 for it to be considered absolute.
 The default value is that defined using the ndots statement in
-.Pa /etc/resolv.conf ,
+.Xr resolv.conf 5 ,
 or 1 if no ndots statement is present.
 Names with fewer dots are interpreted as relative names and will be searched
 for in the domains listed in the
@@ -579,7 +581,7 @@ for in the domains listed in the
 or
 .Cm domain
 directive in
-.Pa /etc/resolv.conf
+.Xr resolv.conf 5
 if
 .Cm +search
 is set.
@@ -588,47 +590,51 @@ is set.
 .Op Cm no Ns
 .Cm nsid
 .Xc
-Include an EDNS name server ID request when sending a query.
+Include an EDNS name server ID request when sending a query (off by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm nssearch
 .Xc
-When this option is set,
-.Nm
-attempts to find the authoritative name servers for the zone containing the name
-being looked up and display the SOA record that each name server has for the
-zone.
+Attempt to find the authoritative name servers for the zone
+containing the name being looked up and display the SOA record
+that each name server has for the zone (off by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm onesoa
 .Xc
-Print only one (starting) SOA record when performing an AXFR.
-The default is to print both the starting and ending SOA records.
+Print only one (starting) SOA record when performing an
+.Cm AXFR .
+This option is off by default, which means that both the starting
+and the ending SOA records are printed.
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
-.Cm opcode= Ns
-.Ar value
+.Cm opcode Ns = Ns
+.Ar #
 .Xc
-Set [restore] the DNS message opcode to the specified value.
-The default value is QUERY (0).
+Set or restore the DNS message opcode to the specified value,
+which can be
+.Cm QUERY Pq the default ,
+.Cm IQUERY ,
+.Cm STATUS ,
+.Cm NOTIFY ,
+.Cm UPDATE ,
+or an integer number in the range from 0 to 15.
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm qr
 .Xc
-Print [do not print] the query as it is sent.
-By
-default, the query is not printed.
+Print the query as it is sent (off by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm question
 .Xc
-Print [do not print] the question section of a query when an answer is returned.
-The default is to print the question section as a comment.
+Print the question section of a query as a comment when an answer
+is returned (on by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
@@ -645,19 +651,16 @@ A synonym for
 .Op Cm no Ns
 .Cm recurse
 .Xc
-Toggle the setting of the RD (recursion desired) bit in the query.
-This bit is set by default, which means
-.Nm
-normally sends recursive queries.
+Set the RD (recursion desired) bit in the query (on by default).
 Recursion is automatically disabled when the
 .Cm +nssearch
 or
 .Cm +trace
 query options are used.
-.It Cm +retry= Ns Ar T
-Sets the number of times to retry UDP queries to server to
-.Ar T
-instead of the default, 2.
+.It Cm +retry Ns = Ns Ar #
+Set the number of times to retry UDP queries to server to
+.Ar # .
+The default is 2.
 Unlike
 .Cm +tries ,
 this does not include the initial query.
@@ -666,24 +669,27 @@ this does not include the initial query.
 .Op Cm no Ns
 .Cm rrcomments
 .Xc
-Toggle the display of per-record comments in the output (for example,
+Display per-record comments in the output (for example,
 human-readable key information about DNSKEY records).
-The default is not to print record comments unless multiline mode is active.
+The default is
+.Cm +rrcomments
+if
+.Cm +multiline
+mode is active or
+.Cm +norrcomments
+otherwise.
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm search
 .Xc
-Use [do not use] the search list defined by the searchlist or domain directive
-in
-.Pa resolv.conf
-(if any).
-The search list is not used by default.
-.Pp
+Use the search list defined by the searchlist or domain directive in
+.Xr resolv.conf 5 ,
+if any (off by default).
 \&'ndots' from
-.Pa resolv.conf
-(default 1) which may be overridden by
-.Cm +ndots
+.Xr resolv.conf 5
+(default 1), which may be overridden by
+.Cm +ndots ,
 determines if the name will be treated as relative or not and hence whether a
 search is eventually performed or not.
 .It Xo
@@ -691,79 +697,52 @@ search is eventually performed or not.
 .Op Cm no Ns
 .Cm short
 .Xc
-Provide a terse answer.
-The default is to print the answer in a verbose form.
+Provide a terse answer (off by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm showsearch
 .Xc
-Perform [do not perform] a search showing intermediate results.
+Perform a search showing intermediate results (off by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
-.Cm sigchase
+.Cm split Ns = Ns Ar #
 .Xc
-Chase DNSSEC signature chains.
-Requires dig be compiled with -DDIG_SIGCHASE.
-This feature is deprecated.
-Use
-.Nm delv
-instead.
-.It Xo
-.Cm + Ns
-.Op Cm no Ns
-.Cm sit Ns
-.Op = Ns Ar value
-.Xc
-This option is a synonym for
-.Xo
-.Cm + Ns
-.Op Cm no Ns
-.Cm cookie
-.Xc .
-.Pp
-The
-.Xo
-.Cm + Ns
-.Op Cm no Ns
-.Cm sit
-.Xc
-is deprecated.
-.It Cm +split= Ns Ar W
 Split long hex- or base64-formatted fields in resource records into chunks of
-.Ar W
+.Ar #
 characters (where
-.Ar W
+.Ar #
 is rounded up to the nearest multiple of 4).
 .Cm +nosplit
 or
-.Cm +split= Ns Ar 0
+.Cm +split Ns =0
 causes fields not to be split at all.
-The default is 56 characters, or 44 characters when multiline mode is active.
+The default is 56 characters, or 44 characters when
+.Cm +multiline
+mode is active.
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm stats
 .Xc
-This query option toggles the printing of statistics:
-when the query was made, the size of the reply and so on.
-The default behavior is to print the query statistics.
+Print statistics:
+when the query was made, the size of the reply and so on (on by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
-.Cm subnet= Ns
+.Cm subnet Ns = Ns
 .Ar addr Ns
-.Op / Ns Ar prefix-length
+.Op / Ns Ar prefix
 .Xc
-Send (don't send) an EDNS Client Subnet option with the specified IP address or
-network prefix.
+Send an EDNS Client Subnet option with the specified IP address or
+network prefix (off by default).
 .Pp
 .Nm
-.Cm +subnet= Ns 0.0.0.0/0 ,
+.Cm +subnet Ns =0.0.0.0/0,
 or simply
 .Nm
-.Cm +subnet= Ns 0
+.Cm +subnet Ns =0
 for short, sends an EDNS CLIENT-SUBNET option with an empty address and a
 source prefix-length of zero, which signals a resolver that the client's address
 information must
@@ -774,37 +753,28 @@ be used when resolving this query.
 .Op Cm no Ns
 .Cm tcp
 .Xc
-Use [do not use] TCP when querying name servers.
-The default behavior is to use UDP unless an ixfr=N query is requested, in which
-case the default is TCP.
-AXFR queries always use TCP.
-.It Cm +time= Ns Ar T
-Sets the timeout for a query to
-.Ar T
+Use TCP when querying name servers (off by default).
+.Cm IXFR Ns = Ns Ar N
+queries use TCP unless it is explicitly disabled with
+.Cm +notcp .
+.Cm AXFR
+queries always use TCP.
+.It Cm +timeout Ns = Ns Ar #
+Set the timeout for a query to
+.Ar #
 seconds.
-The default timeout is 5 seconds.
+The default is 5 seconds for UDP and 10 seconds for TCP.
 An attempt to set
-.Ar T
+.Ar #
 to less than 1 will result in a query timeout of 1 second being applied.
-.It Xo
-.Cm + Ns
-.Op Cm no Ns
-.Cm topdown
-.Xc
-When chasing DNSSEC signature chains perform a top-down validation.
-Requires dig be compiled with -DDIG_SIGCHASE.
-This feature is deprecated.
-Use
-.Nm delv
-instead.
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm trace
 .Xc
-Toggle tracing of the delegation path from the root name servers for the name
-being looked up.
-Tracing is disabled by default.
+Trace the delegation path from the root name servers for the name
+being looked up (off by default).
+.Pp
 When tracing is enabled,
 .Nm
 makes iterative queries to resolve the name being looked up.
@@ -818,43 +788,25 @@ zone name servers.
 is also set when
 .Cm +trace
 is set to better emulate the default queries from a name server.
-.It Cm +tries= Ns Ar T
-Sets the number of times to try UDP queries to server to
-.Ar T
-instead of the default, 3.
+.It Cm +tries Ns = Ns Ar #
+Set the number of times to try UDP queries to server to
+.Ar # .
+The default is 3.
 If
-.Ar T
+.Ar #
 is less than or equal to zero, the number of tries is silently rounded up to 1.
-.It Cm +trusted-key= Ns Ar file
-Specifies a file containing trusted keys to be used with
-.Cm +sigchase .
-Each DNSKEY record must be on its own line.
-.Pp
-If not specified,
-.Nm
-will look for
-.Pa /etc/trusted-key.key
-then
-.Pa trusted-key.key
-in the current directory.
-.Pp
-Requires dig be compiled with -DDIG_SIGCHASE.
-This feature is deprecated.
-Use
-.Nm delv
-instead.
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm ttlid
 .Xc
-Display [do not display] the TTL when printing the record.
+Display the TTL when printing the record (on by default).
 .It Xo
 .Cm + Ns
 .Op Cm no Ns
 .Cm vc
 .Xc
-Use [do not use] TCP when querying name servers.
+Use TCP when querying name servers.
 This alternate syntax to
 .Xo
 .Cm + Ns

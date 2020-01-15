@@ -1,4 +1,4 @@
-/*	$OpenBSD: bpf.c,v 1.182 2019/10/21 23:02:05 sashan Exp $	*/
+/*	$OpenBSD: bpf.c,v 1.185 2020/01/08 16:27:41 visa Exp $	*/
 /*	$NetBSD: bpf.c,v 1.33 1997/02/21 23:59:35 thorpej Exp $	*/
 
 /*
@@ -58,6 +58,7 @@
 #include <sys/smr.h>
 #include <sys/specdev.h>
 #include <sys/selinfo.h>
+#include <sys/sigio.h>
 #include <sys/task.h>
 
 #include <net/if.h>
@@ -376,6 +377,7 @@ bpfopen(dev_t dev, int flag, int mode, struct proc *p)
 	mtx_init(&bd->bd_mtx, IPL_NET);
 	task_set(&bd->bd_wake_task, bpf_wakeup_cb, bd);
 	smr_init(&bd->bd_smr);
+	sigio_init(&bd->bd_sigio);
 
 	if (flag & FNONBLOCK)
 		bd->bd_rtout = -1;
@@ -556,7 +558,7 @@ bpf_wakeup(struct bpf_d *d)
 	MUTEX_ASSERT_LOCKED(&d->bd_mtx);
 
 	/*
-	 * As long as csignal() and selwakeup() need to be protected
+	 * As long as pgsigio() and selwakeup() need to be protected
 	 * by the KERNEL_LOCK() we have to delay the wakeup to
 	 * another context to keep the hot path KERNEL_LOCK()-free.
 	 */
@@ -574,7 +576,7 @@ bpf_wakeup_cb(void *xd)
 
 	wakeup(d);
 	if (d->bd_async && d->bd_sig)
-		csignal(d->bd_pgid, d->bd_sig, d->bd_siguid, d->bd_sigeuid);
+		pgsigio(&d->bd_sigio, d->bd_sig, 0);
 
 	selwakeup(&d->bd_sel);
 	bpf_put(d);
@@ -969,22 +971,14 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		d->bd_async = *(int *)addr;
 		break;
 
-	/*
-	 * N.B.  ioctl (FIOSETOWN) and fcntl (F_SETOWN) both end up doing
-	 * the equivalent of a TIOCSPGRP and hence end up here.  *However*
-	 * TIOCSPGRP's arg is a process group if it's positive and a process
-	 * id if it's negative.  This is exactly the opposite of what the
-	 * other two functions want!  Therefore there is code in ioctl and
-	 * fcntl to negate the arg before calling here.
-	 */
-	case TIOCSPGRP:		/* Process or group to send signals to */
-		d->bd_pgid = *(int *)addr;
-		d->bd_siguid = p->p_ucred->cr_ruid;
-		d->bd_sigeuid = p->p_ucred->cr_uid;
+	case FIOSETOWN:		/* Process or group to send signals to */
+	case TIOCSPGRP:
+		error = sigio_setown(&d->bd_sigio, cmd, addr);
 		break;
 
+	case FIOGETOWN:
 	case TIOCGPGRP:
-		*(int *)addr = d->bd_pgid;
+		sigio_getown(&d->bd_sigio, cmd, addr);
 		break;
 
 	case BIOCSRSIG:		/* Set receive signal */
@@ -1170,8 +1164,12 @@ bpfpoll(dev_t dev, int events, struct proc *p)
 	return (revents);
 }
 
-struct filterops bpfread_filtops =
-	{ 1, NULL, filt_bpfrdetach, filt_bpfread };
+const struct filterops bpfread_filtops = {
+	.f_isfd		= 1,
+	.f_attach	= NULL,
+	.f_detach	= filt_bpfrdetach,
+	.f_event	= filt_bpfread,
+};
 
 int
 bpfkqfilter(dev_t dev, struct knote *kn)
@@ -1583,6 +1581,7 @@ bpf_d_smr(void *smr)
 {
 	struct bpf_d	*bd = smr;
 
+	sigio_free(&bd->bd_sigio);
 	free(bd->bd_sbuf, M_DEVBUF, bd->bd_bufsize);
 	free(bd->bd_hbuf, M_DEVBUF, bd->bd_bufsize);
 	free(bd->bd_fbuf, M_DEVBUF, bd->bd_bufsize);

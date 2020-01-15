@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_descrip.c,v 1.192 2019/08/05 08:35:59 anton Exp $	*/
+/*	$OpenBSD: kern_descrip.c,v 1.196 2020/01/08 16:45:28 visa Exp $	*/
 /*	$NetBSD: kern_descrip.c,v 1.42 1996/03/30 22:24:38 christos Exp $	*/
 
 /*
@@ -262,6 +262,18 @@ fd_getfile_mode(struct filedesc *fdp, int fd, int mode)
 	return (fp);
 }
 
+int
+fd_checkclosed(struct filedesc *fdp, int fd, struct file *fp)
+{
+	int closed;
+
+	mtx_enter(&fdp->fd_fplock);
+	KASSERT(fd < fdp->fd_nfiles);
+	closed = (fdp->fd_ofiles[fd] != fp);
+	mtx_leave(&fdp->fd_fplock);
+	return (closed);
+}
+
 /*
  * System calls on descriptors.
  */
@@ -396,7 +408,7 @@ sys_fcntl(struct proc *p, void *v, register_t *retval)
 	} */ *uap = v;
 	int fd = SCARG(uap, fd);
 	struct filedesc *fdp = p->p_fd;
-	struct file *fp, *fp2;
+	struct file *fp;
 	struct vnode *vp;
 	int i, tmp, newmin, flg = F_POSIX;
 	struct flock fl;
@@ -486,26 +498,14 @@ restart:
 	case F_GETOWN:
 		tmp = 0;
 		error = (*fp->f_ops->fo_ioctl)
-			(fp, TIOCGPGRP, (caddr_t)&tmp, p);
-		*retval = -tmp;
+			(fp, FIOGETOWN, (caddr_t)&tmp, p);
+		*retval = tmp;
 		break;
 
 	case F_SETOWN:
 		tmp = (long)SCARG(uap, arg);
-		if (fp->f_type == DTYPE_SOCKET || fp->f_type == DTYPE_PIPE) {
-			/* nothing */
-		} else if (tmp <= 0) {
-			tmp = -tmp;
-		} else {
-			struct process *pr1 = prfind(tmp);
-			if (pr1 == 0) {
-				error = ESRCH;
-				break;
-			}
-			tmp = pr1->ps_pgrp->pg_id;
-		}
 		error = ((*fp->f_ops->fo_ioctl)
-			(fp, TIOCSPGRP, (caddr_t)&tmp, p));
+			(fp, FIOSETOWN, (caddr_t)&tmp, p));
 		break;
 
 	case F_SETLKW:
@@ -570,8 +570,7 @@ restart:
 			goto out;
 		}
 
-		fp2 = fd_getfile(fdp, fd);
-		if (fp != fp2) {
+		if (fd_checkclosed(fdp, fd, fp)) {
 			/*
 			 * We have lost the race with close() or dup2();
 			 * unlock, pretend that we've won the race and that
@@ -583,8 +582,6 @@ restart:
 			VOP_ADVLOCK(vp, fdp, F_UNLCK, &fl, F_POSIX);
 			fl.l_type = F_UNLCK;
 		}
-		if (fp2 != NULL)
-			FRELE(fp2, p);
 		goto out;
 
 
@@ -1067,6 +1064,7 @@ fdinit(void)
 	newfdp = pool_get(&fdesc_pool, PR_WAITOK|PR_ZERO);
 	rw_init(&newfdp->fd_fd.fd_lock, "fdlock");
 	mtx_init(&newfdp->fd_fd.fd_fplock, IPL_MPFLOOR);
+	LIST_INIT(&newfdp->fd_fd.fd_kqlist);
 
 	/* Create the file descriptor table. */
 	newfdp->fd_fd.fd_refcnt = 1;

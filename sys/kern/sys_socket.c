@@ -1,4 +1,4 @@
-/*	$OpenBSD: sys_socket.c,v 1.42 2018/11/19 13:15:37 visa Exp $	*/
+/*	$OpenBSD: sys_socket.c,v 1.44 2020/01/08 16:27:41 visa Exp $	*/
 /*	$NetBSD: sys_socket.c,v 1.13 1995/08/12 23:59:09 mycroft Exp $	*/
 
 /*
@@ -48,7 +48,7 @@
 #include <net/if.h>
 #include <net/route.h>
 
-struct	fileops socketops = {
+const struct fileops socketops = {
 	.fo_read	= soo_read,
 	.fo_write	= soo_write,
 	.fo_ioctl	= soo_ioctl,
@@ -111,18 +111,16 @@ soo_ioctl(struct file *fp, u_long cmd, caddr_t data, struct proc *p)
 		*(int *)data = so->so_rcv.sb_datacc;
 		break;
 
-	case TIOCSPGRP:
-		/* FALLTHROUGH */
+	case FIOSETOWN:
 	case SIOCSPGRP:
-		error = sigio_setown(&so->so_sigio, *(int *)data);
+	case TIOCSPGRP:
+		error = sigio_setown(&so->so_sigio, cmd, data);
 		break;
 
-	case TIOCGPGRP:
-		*(int *)data = -sigio_getown(&so->so_sigio);
-		break;
-
+	case FIOGETOWN:
 	case SIOCGPGRP:
-		*(int *)data = sigio_getown(&so->so_sigio);
+	case TIOCGPGRP:
+		sigio_getown(&so->so_sigio, cmd, data);
 		break;
 
 	case SIOCATMARK:

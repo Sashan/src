@@ -14,14 +14,14 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: tcpmsg.c,v 1.3 2019/12/17 01:46:32 sthen Exp $ */
+/* $Id: tcpmsg.c,v 1.5 2020/01/09 18:17:15 florian Exp $ */
 
 /*! \file */
 
 #include <config.h>
 
 #include <isc/mem.h>
-#include <isc/print.h>
+
 #include <isc/task.h>
 #include <isc/util.h>
 
@@ -187,7 +187,7 @@ dns_tcpmsg_readmessage(dns_tcpmsg_t *tcpmsg,
 		       NULL, NULL);
 
 	region.base = (unsigned char *)&tcpmsg->size;
-	region.length = 2;  /* isc_uint16_t */
+	region.length = 2;  /* uint16_t */
 	result = isc_socket_recv(tcpmsg->sock, &region, 0,
 				 tcpmsg->task, recv_length, tcpmsg);
 

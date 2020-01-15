@@ -14,18 +14,19 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: acache.c,v 1.3 2019/12/17 01:46:31 sthen Exp $ */
+/* $Id: acache.c,v 1.6 2020/01/09 18:17:14 florian Exp $ */
 
 #include <config.h>
+#include <stdlib.h>
 
-#include <isc/atomic.h>
+
 #include <isc/event.h>
 #include <isc/hash.h>
 #include <isc/magic.h>
 #include <isc/mem.h>
 #include <isc/mutex.h>
 #include <isc/platform.h>
-#include <isc/random.h>
+
 #include <isc/refcount.h>
 #include <isc/rwlock.h>
 #include <isc/serial.h>
@@ -43,10 +44,6 @@
 #include <dns/rdataset.h>
 #include <dns/result.h>
 #include <dns/zone.h>
-
-#if defined(ISC_PLATFORM_HAVESTDATOMIC)
-#include <stdatomic.h>
-#endif
 
 #define ACACHE_MAGIC			ISC_MAGIC('A', 'C', 'H', 'E')
 #define DNS_ACACHE_VALID(acache)	ISC_MAGIC_VALID(acache, ACACHE_MAGIC)
@@ -84,38 +81,12 @@
 
 #define DEFAULT_ACACHE_ENTRY_LOCK_COUNT	1009	 /*%< Should be prime. */
 
-#if defined(ISC_RWLOCK_USEATOMIC) &&					\
-	((defined(ISC_PLATFORM_HAVESTDATOMIC) && defined(ATOMIC_LONG_LOCK_FREE)) || \
-	 defined(ISC_PLATFORM_HAVEATOMICSTORE))
-#define ACACHE_USE_RWLOCK 1
-#if (defined(ISC_PLATFORM_HAVESTDATOMIC) && defined(ATOMIC_LONG_LOCK_FREE))
-#define ACACHE_HAVESTDATOMIC 1
-#endif
-#endif
-
-#ifdef ACACHE_USE_RWLOCK
-#define ACACHE_INITLOCK(l)	isc_rwlock_init((l), 0, 0)
-#define ACACHE_DESTROYLOCK(l)	isc_rwlock_destroy(l)
-#define ACACHE_LOCK(l, t)	RWLOCK((l), (t))
-#define ACACHE_UNLOCK(l, t)	RWUNLOCK((l), (t))
-
-#ifdef ACACHE_HAVESTDATOMIC
-#define acache_storetime(entry, t) \
-	atomic_store_explicit(&(entry)->lastused, (t), \
-			      memory_order_relaxed);
-#else
-#define acache_storetime(entry, t) \
-	(isc_atomic_store((isc_int32_t *)&(entry)->lastused, (t)))
-#endif
-
-#else
 #define ACACHE_INITLOCK(l)	isc_mutex_init(l)
 #define ACACHE_DESTROYLOCK(l)	DESTROYLOCK(l)
 #define ACACHE_LOCK(l, t)	LOCK(l)
 #define ACACHE_UNLOCK(l, t)	UNLOCK(l)
 
 #define acache_storetime(entry, t) ((entry)->lastused = (t))
-#endif
 
 /* Locked by acache lock */
 typedef struct dbentry {
@@ -253,11 +224,7 @@ struct dns_acacheentry {
 	void 			*cbarg;
 
 	/* Timestamp of the last time this entry is referred to */
-#ifdef ACACHE_HAVESTDATOMIC
-	atomic_uint_fast32_t	lastused;
-#else
 	isc_stdtime32_t		lastused;
-#endif
 };
 
 /*
@@ -799,7 +766,7 @@ entry_stale(acache_cleaner_t *cleaner, dns_acacheentry_t *entry,
 	 */
 	if (cleaner->overmem) {
 		unsigned int passed;
-		isc_uint32_t val;
+		uint32_t val;
 
 		if (isc_serial_ge(now32, entry->lastused))
 			passed = now32 - entry->lastused; /* <= interval */
@@ -808,7 +775,7 @@ entry_stale(acache_cleaner_t *cleaner, dns_acacheentry_t *entry,
 
 		if (passed > interval / 2)
 			return (ISC_TRUE);
-		isc_random_get(&val);
+		val = arc4random();
 		if (passed > interval / 4)
 			return (ISC_TF(val % 4 == 0));
 		return (ISC_TF(val % 8 == 0));
@@ -1396,7 +1363,6 @@ dns_acache_createentry(dns_acache_t *acache, dns_db_t *origdb,
 {
 	dns_acacheentry_t *newentry;
 	isc_result_t result;
-	isc_uint32_t r;
 	isc_stdtime_t tmptime;
 
 	REQUIRE(DNS_ACACHE_VALID(acache));
@@ -1426,8 +1392,8 @@ dns_acache_createentry(dns_acache_t *acache, dns_db_t *origdb,
 		return (ISC_R_NOMEMORY);
 	}
 
-	isc_random_get(&r);
-	newentry->locknum = r % DEFAULT_ACACHE_ENTRY_LOCK_COUNT;
+
+	newentry->locknum = arc4random_uniform(DEFAULT_ACACHE_ENTRY_LOCK_COUNT);
 
 	result = isc_refcount_init(&newentry->references, 1);
 	if (result != ISC_R_SUCCESS) {
@@ -1754,7 +1720,7 @@ dns_acache_detachentry(dns_acacheentry_t **entryp) {
 
 void
 dns_acache_setcleaninginterval(dns_acache_t *acache, unsigned int t) {
-	isc_interval_t interval;
+	interval_t interval;
 	isc_result_t result;
 
 	REQUIRE(DNS_ACACHE_VALID(acache));
@@ -1777,7 +1743,7 @@ dns_acache_setcleaninginterval(dns_acache_t *acache, unsigned int t) {
 					 isc_timertype_inactive,
 					 NULL, NULL, ISC_TRUE);
 	} else {
-		isc_interval_set(&interval, acache->cleaner.cleaning_interval,
+		interval_set(&interval, acache->cleaner.cleaning_interval,
 				 0);
 		result = isc_timer_reset(acache->cleaner.cleaning_timer,
 					 isc_timertype_ticker,

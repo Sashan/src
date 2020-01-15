@@ -34,11 +34,10 @@
 /*
  * Principal Author: Brian Wellington
  */
-#ifdef OPENSSL
 
 #include <config.h>
+#include <stdlib.h>
 
-#include <isc/entropy.h>
 #include <isc/mem.h>
 #include <isc/mutex.h>
 #include <isc/mutexblock.h>
@@ -53,65 +52,9 @@
 #include "dst_internal.h"
 #include "dst_openssl.h"
 
-#ifdef USE_ENGINE
-#include <openssl/engine.h>
-#endif
-
-static RAND_METHOD *rm = NULL;
-
 #if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
 static isc_mutex_t *locks = NULL;
 static int nlocks;
-#endif
-
-#ifdef USE_ENGINE
-static ENGINE *e = NULL;
-#endif
-
-static int
-entropy_get(unsigned char *buf, int num) {
-	isc_result_t result;
-	if (num < 0)
-		return (-1);
-	result = dst__entropy_getdata(buf, (unsigned int) num, ISC_FALSE);
-	return (result == ISC_R_SUCCESS ? 1 : -1);
-}
-
-static int
-entropy_status(void) {
-	return (dst__entropy_status() > 32);
-}
-
-static int
-entropy_getpseudo(unsigned char *buf, int num) {
-	isc_result_t result;
-	if (num < 0)
-		return (-1);
-	result = dst__entropy_getdata(buf, (unsigned int) num, ISC_TRUE);
-	return (result == ISC_R_SUCCESS ? 1 : -1);
-}
-
-#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
-static void
-entropy_add(const void *buf, int num, double entropy) {
-	/*
-	 * Do nothing.  The only call to this provides no useful data anyway.
-	 */
-	UNUSED(buf);
-	UNUSED(num);
-	UNUSED(entropy);
-}
-#else
-static int
-entropy_add(const void *buf, int num, double entropy) {
-	/*
-	 * Do nothing.  The only call to this provides no useful data anyway.
-	 */
-	UNUSED(buf);
-	UNUSED(num);
-	UNUSED(entropy);
-	return (1);
-}
 #endif
 
 #if OPENSSL_VERSION_NUMBER >= 0x10000000L && OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
@@ -157,16 +100,8 @@ id_callback(void) {
 
 static void *
 mem_alloc(size_t size FLARG) {
-#ifdef OPENSSL_LEAKS
-	void *ptr;
-
-	INSIST(dst__memory_pool != NULL);
-	ptr = isc__mem_allocate(dst__memory_pool, size FLARG_PASS);
-	return (ptr);
-#else
 	INSIST(dst__memory_pool != NULL);
 	return (isc__mem_allocate(dst__memory_pool, size FLARG_PASS));
-#endif
 }
 
 static void
@@ -178,16 +113,8 @@ mem_free(void *ptr FLARG) {
 
 static void *
 mem_realloc(void *ptr, size_t size FLARG) {
-#ifdef OPENSSL_LEAKS
-	void *rptr;
-
-	INSIST(dst__memory_pool != NULL);
-	rptr = isc__mem_reallocate(dst__memory_pool, ptr, size FLARG_PASS);
-	return (rptr);
-#else
 	INSIST(dst__memory_pool != NULL);
 	return (isc__mem_reallocate(dst__memory_pool, ptr, size FLARG_PASS));
-#endif
 }
 
 #if OPENSSL_VERSION_NUMBER >= 0x10000000L && OPENSSL_VERSION_NUMBER < 0x10100000L
@@ -201,18 +128,9 @@ _set_thread_id(CRYPTO_THREADID *id)
 isc_result_t
 dst__openssl_init(const char *engine) {
 	isc_result_t result;
-#ifdef USE_ENGINE
-	ENGINE *re;
-#else
 
 	UNUSED(engine);
-#endif
 
-#ifdef  DNS_CRYPTO_LEAKS
-	CRYPTO_malloc_debug_init();
-	CRYPTO_set_mem_debug_options(V_CRYPTO_MDEBUG_ALL);
-	CRYPTO_mem_ctrl(CRYPTO_MEM_CHECK_ON);
-#endif
 	CRYPTO_set_mem_functions(mem_alloc, mem_realloc, mem_free);
 #if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
 	nlocks = CRYPTO_num_locks();
@@ -232,79 +150,9 @@ dst__openssl_init(const char *engine) {
 	ERR_load_crypto_strings();
 #endif
 
-	rm = mem_alloc(sizeof(RAND_METHOD) FILELINE);
-	if (rm == NULL) {
-		result = ISC_R_NOMEMORY;
-		goto cleanup_mutexinit;
-	}
-	rm->seed = NULL;
-	rm->bytes = entropy_get;
-	rm->cleanup = NULL;
-	rm->add = entropy_add;
-	rm->pseudorand = entropy_getpseudo;
-	rm->status = entropy_status;
-
-#ifdef USE_ENGINE
-#if !defined(CONF_MFLAGS_DEFAULT_SECTION)
-	OPENSSL_config(NULL);
-#else
-	/*
-	 * OPENSSL_config() can only be called a single time as of
-	 * 1.0.2e so do the steps individually.
-	 */
-	OPENSSL_load_builtin_modules();
-	ENGINE_load_builtin_engines();
-	ERR_clear_error();
-	CONF_modules_load_file(NULL, NULL,
-			       CONF_MFLAGS_DEFAULT_SECTION |
-			       CONF_MFLAGS_IGNORE_MISSING_FILE);
-#endif
-
-	if (engine != NULL && *engine == '\0')
-		engine = NULL;
-
-	if (engine != NULL) {
-		e = ENGINE_by_id(engine);
-		if (e == NULL) {
-			result = DST_R_NOENGINE;
-			goto cleanup_rm;
-		}
-		/* This will init the engine. */
-		if (!ENGINE_set_default(e, ENGINE_METHOD_ALL)) {
-			result = DST_R_NOENGINE;
-			goto cleanup_rm;
-		}
-	}
-
-	re = ENGINE_get_default_RAND();
-	if (re == NULL) {
-		re = ENGINE_new();
-		if (re == NULL) {
-			result = ISC_R_NOMEMORY;
-			goto cleanup_rm;
-		}
-		ENGINE_set_RAND(re, rm);
-		ENGINE_set_default_RAND(re);
-		ENGINE_free(re);
-	} else
-		ENGINE_finish(re);
-#else
-	RAND_set_rand_method(rm);
-#endif /* USE_ENGINE */
 	return (ISC_R_SUCCESS);
 
-#ifdef USE_ENGINE
- cleanup_rm:
-	if (e != NULL)
-		ENGINE_free(e);
-	e = NULL;
-	mem_free(rm FILELINE);
-	rm = NULL;
-#endif
- cleanup_mutexinit:
 #if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
-	CRYPTO_set_locking_callback(NULL);
-	DESTROYMUTEXBLOCK(locks, nlocks);
  cleanup_mutexalloc:
 	mem_free(locks FILELINE);
 	locks = NULL;
@@ -316,34 +164,15 @@ void
 dst__openssl_destroy(void) {
 #if !defined(LIBRESSL_VERSION_NUMBER) && (OPENSSL_VERSION_NUMBER >= 0x10100000L)
 	OPENSSL_cleanup();
-	if (rm != NULL) {
-		mem_free(rm FILELINE);
-		rm = NULL;
-	}
 #else
 	/*
 	 * Sequence taken from apps_shutdown() in <apps/apps.h>.
 	 */
-	if (rm != NULL) {
-#if OPENSSL_VERSION_NUMBER >= 0x00907000L
-		RAND_cleanup();
-#endif
-		mem_free(rm FILELINE);
-		rm = NULL;
-	}
 #if (OPENSSL_VERSION_NUMBER >= 0x00907000L)
 	CONF_modules_free();
 #endif
 	OBJ_cleanup();
 	EVP_cleanup();
-#if defined(USE_ENGINE)
-	if (e != NULL)
-		ENGINE_free(e);
-	e = NULL;
-#if defined(USE_ENGINE) && OPENSSL_VERSION_NUMBER >= 0x00907000L
-	ENGINE_cleanup();
-#endif
-#endif
 #if (OPENSSL_VERSION_NUMBER >= 0x00907000L)
 	CRYPTO_cleanup_all_ex_data();
 #endif
@@ -354,10 +183,6 @@ dst__openssl_destroy(void) {
 	ERR_remove_state(0);
 #endif
 	ERR_free_strings();
-
-#ifdef  DNS_CRYPTO_LEAKS
-	CRYPTO_mem_leaks_fp(stderr);
-#endif
 
 	if (locks != NULL) {
 		CRYPTO_set_locking_callback(NULL);
@@ -452,25 +277,4 @@ dst__openssl_toresult3(isc_logcategory_t *category,
 	return (result);
 }
 
-#if defined(USE_ENGINE)
-ENGINE *
-dst__openssl_getengine(const char *engine) {
-
-	if (engine == NULL)
-		return (NULL);
-	if (e == NULL)
-		return (NULL);
-	if (strcmp(engine, ENGINE_get_id(e)) == 0)
-		return (e);
-	return (NULL);
-}
-#endif
-
-#else /* OPENSSL */
-
-#include <isc/util.h>
-
-EMPTY_TRANSLATION_UNIT
-
-#endif /* OPENSSL */
 /*! \file */

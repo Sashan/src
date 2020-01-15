@@ -20,9 +20,9 @@
 
 #include <isc/file.h>
 #include <isc/hash.h>
-#include <isc/print.h>
+
 #include <isc/sha2.h>
-#include <isc/stats.h>
+
 #include <isc/string.h>		/* Required for HP/UX (and others?) */
 #include <isc/task.h>
 #include <isc/util.h>
@@ -51,7 +51,7 @@
 #include <dns/result.h>
 #include <dns/rpz.h>
 #include <dns/rrl.h>
-#include <dns/stats.h>
+
 #include <dns/tsig.h>
 #include <dns/zone.h>
 #include <dns/zt.h>
@@ -435,12 +435,6 @@ destroy(dns_view_t *view) {
 			    sizeof(dns_namelist_t) * DNS_VIEW_DELONLYHASH);
 		view->rootexclude = NULL;
 	}
-	if (view->adbstats != NULL)
-		isc_stats_detach(&view->adbstats);
-	if (view->resstats != NULL)
-		isc_stats_detach(&view->resstats);
-	if (view->resquerystats != NULL)
-		dns_stats_detach(&view->resquerystats);
 	if (view->secroots_priv != NULL)
 		dns_keytable_detach(&view->secroots_priv);
 	for (dns64 = ISC_LIST_HEAD(view->dns64);
@@ -1602,7 +1596,7 @@ isc_result_t
 dns_view_adddelegationonly(dns_view_t *view, dns_name_t *name) {
 	isc_result_t result;
 	dns_name_t *item;
-	isc_uint32_t hash;
+	uint32_t hash;
 
 	REQUIRE(DNS_VIEW_VALID(view));
 
@@ -1637,7 +1631,7 @@ isc_result_t
 dns_view_excludedelegationonly(dns_view_t *view, dns_name_t *name) {
 	isc_result_t result;
 	dns_name_t *item;
-	isc_uint32_t hash;
+	uint32_t hash;
 
 	REQUIRE(DNS_VIEW_VALID(view));
 
@@ -1671,7 +1665,7 @@ dns_view_excludedelegationonly(dns_view_t *view, dns_name_t *name) {
 isc_boolean_t
 dns_view_isdelegationonly(dns_view_t *view, dns_name_t *name) {
 	dns_name_t *item;
-	isc_uint32_t hash;
+	uint32_t hash;
 
 	REQUIRE(DNS_VIEW_VALID(view));
 
@@ -1719,61 +1713,6 @@ dns_view_freezezones(dns_view_t *view, isc_boolean_t value) {
 	REQUIRE(view->zonetable != NULL);
 
 	return (dns_zt_freezezones(view->zonetable, value));
-}
-
-void
-dns_view_setadbstats(dns_view_t *view, isc_stats_t *stats) {
-	REQUIRE(DNS_VIEW_VALID(view));
-	REQUIRE(!view->frozen);
-	REQUIRE(view->adbstats == NULL);
-
-	isc_stats_attach(stats, &view->adbstats);
-}
-
-void
-dns_view_getadbstats(dns_view_t *view, isc_stats_t **statsp) {
-	REQUIRE(DNS_VIEW_VALID(view));
-	REQUIRE(statsp != NULL && *statsp == NULL);
-
-	if (view->adbstats != NULL)
-		isc_stats_attach(view->adbstats, statsp);
-}
-
-void
-dns_view_setresstats(dns_view_t *view, isc_stats_t *stats) {
-
-	REQUIRE(DNS_VIEW_VALID(view));
-	REQUIRE(!view->frozen);
-	REQUIRE(view->resstats == NULL);
-
-	isc_stats_attach(stats, &view->resstats);
-}
-
-void
-dns_view_getresstats(dns_view_t *view, isc_stats_t **statsp) {
-	REQUIRE(DNS_VIEW_VALID(view));
-	REQUIRE(statsp != NULL && *statsp == NULL);
-
-	if (view->resstats != NULL)
-		isc_stats_attach(view->resstats, statsp);
-}
-
-void
-dns_view_setresquerystats(dns_view_t *view, dns_stats_t *stats) {
-	REQUIRE(DNS_VIEW_VALID(view));
-	REQUIRE(!view->frozen);
-	REQUIRE(view->resquerystats == NULL);
-
-	dns_stats_attach(stats, &view->resquerystats);
-}
-
-void
-dns_view_getresquerystats(dns_view_t *view, dns_stats_t **statsp) {
-	REQUIRE(DNS_VIEW_VALID(view));
-	REQUIRE(statsp != NULL && *statsp == NULL);
-
-	if (view->resquerystats != NULL)
-		dns_stats_attach(view->resquerystats, statsp);
 }
 
 isc_result_t

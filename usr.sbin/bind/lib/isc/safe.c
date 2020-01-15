@@ -22,20 +22,16 @@
 #include <isc/string.h>
 #include <isc/util.h>
 
-#ifdef WIN32
-#include <windows.h>
-#endif
-
 #ifdef _MSC_VER
 #pragma optimize("", off)
 #endif
 
 isc_boolean_t
 isc_safe_memequal(const void *s1, const void *s2, size_t n) {
-	isc_uint8_t acc = 0;
+	uint8_t acc = 0;
 
 	if (n != 0U) {
-		const isc_uint8_t *p1 = s1, *p2 = s2;
+		const uint8_t *p1 = s1, *p2 = s2;
 
 		do {
 			acc |= *p1++ ^ *p2++;
@@ -76,9 +72,7 @@ isc_safe_memwipe(void *ptr, size_t len) {
 	if (ISC_UNLIKELY(ptr == NULL || len == 0))
 		return;
 
-#ifdef WIN32
-	SecureZeroMemory(ptr, len);
-#elif HAVE_EXPLICIT_BZERO
+#if   HAVE_EXPLICIT_BZERO
 	explicit_bzero(ptr, len);
 #else
 	memset(ptr, 0, len);

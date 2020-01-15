@@ -33,7 +33,7 @@
 #include <isc/ondestroy.h>
 #include <isc/string.h>
 #include <isc/mutex.h>
-#include <isc/print.h>
+
 #include <isc/util.h>
 #include <isc/xml.h>
 
@@ -43,8 +43,8 @@
 #ifndef ISC_MEM_DEBUGGING
 #define ISC_MEM_DEBUGGING 0
 #endif
-LIBISC_EXTERNAL_DATA unsigned int isc_mem_debugging = ISC_MEM_DEBUGGING;
-LIBISC_EXTERNAL_DATA unsigned int isc_mem_defaultflags = ISC_MEMFLAG_DEFAULT;
+unsigned int isc_mem_debugging = ISC_MEM_DEBUGGING;
+unsigned int isc_mem_defaultflags = ISC_MEMFLAG_DEFAULT;
 
 /*
  * Constants.
@@ -123,7 +123,7 @@ static isc_mutex_t 		createlock;
  * Total size of lost memory due to a bug of external library.
  * Locked by the global lock.
  */
-static isc_uint64_t		totallost;
+static uint64_t		totallost;
 
 struct isc__mem {
 	isc_mem_t		common;
@@ -2325,10 +2325,10 @@ isc_mem_references(isc_mem_t *ctx0) {
 }
 
 typedef struct summarystat {
-	isc_uint64_t	total;
-	isc_uint64_t	inuse;
-	isc_uint64_t	blocksize;
-	isc_uint64_t	contextsize;
+	uint64_t	total;
+	uint64_t	inuse;
+	uint64_t	blocksize;
+	uint64_t	contextsize;
 } summarystat_t;
 
 #ifdef HAVE_LIBXML2
@@ -2373,21 +2373,21 @@ xml_renderctx(isc__mem_t *ctx, summarystat_t *summary,
 	summary->total += ctx->total;
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "total"));
 	TRY0(xmlTextWriterWriteFormatString(writer,
-					    "%" ISC_PRINT_QUADFORMAT "u",
-					    (isc_uint64_t)ctx->total));
+					    "%llu",
+					    (uint64_t)ctx->total));
 	TRY0(xmlTextWriterEndElement(writer)); /* total */
 
 	summary->inuse += ctx->inuse;
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "inuse"));
 	TRY0(xmlTextWriterWriteFormatString(writer,
-					    "%" ISC_PRINT_QUADFORMAT "u",
-					    (isc_uint64_t)ctx->inuse));
+					    "%llu",
+					    (uint64_t)ctx->inuse));
 	TRY0(xmlTextWriterEndElement(writer)); /* inuse */
 
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "maxinuse"));
 	TRY0(xmlTextWriterWriteFormatString(writer,
-					    "%" ISC_PRINT_QUADFORMAT "u",
-					    (isc_uint64_t)ctx->maxinuse));
+					    "%llu",
+					    (uint64_t)ctx->maxinuse));
 	TRY0(xmlTextWriterEndElement(writer)); /* maxinuse */
 
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "blocksize"));
@@ -2395,8 +2395,8 @@ xml_renderctx(isc__mem_t *ctx, summarystat_t *summary,
 		summary->blocksize += ctx->basic_table_count *
 			NUM_BASIC_BLOCKS * ctx->mem_target;
 		TRY0(xmlTextWriterWriteFormatString(writer,
-					       "%" ISC_PRINT_QUADFORMAT "u",
-					       (isc_uint64_t)
+					       "%llu",
+					       (uint64_t)
 					       ctx->basic_table_count *
 					       NUM_BASIC_BLOCKS *
 					       ctx->mem_target));
@@ -2411,14 +2411,14 @@ xml_renderctx(isc__mem_t *ctx, summarystat_t *summary,
 
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "hiwater"));
 	TRY0(xmlTextWriterWriteFormatString(writer,
-					    "%" ISC_PRINT_QUADFORMAT "u",
-					    (isc_uint64_t)ctx->hi_water));
+					    "%llu",
+					    (uint64_t)ctx->hi_water));
 	TRY0(xmlTextWriterEndElement(writer)); /* hiwater */
 
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "lowater"));
 	TRY0(xmlTextWriterWriteFormatString(writer,
-					    "%" ISC_PRINT_QUADFORMAT "u",
-					    (isc_uint64_t)ctx->lo_water));
+					    "%llu",
+					    (uint64_t)ctx->lo_water));
 	TRY0(xmlTextWriterEndElement(writer)); /* lowater */
 
 	TRY0(xmlTextWriterEndElement(writer)); /* context */
@@ -2433,7 +2433,7 @@ int
 isc_mem_renderxml(xmlTextWriterPtr writer) {
 	isc__mem_t *ctx;
 	summarystat_t summary;
-	isc_uint64_t lost;
+	uint64_t lost;
 	int xmlrc;
 
 	memset(&summary, 0, sizeof(summary));
@@ -2461,31 +2461,31 @@ isc_mem_renderxml(xmlTextWriterPtr writer) {
 
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "TotalUse"));
 	TRY0(xmlTextWriterWriteFormatString(writer,
-					    "%" ISC_PRINT_QUADFORMAT "u",
+					    "%llu",
 					    summary.total));
 	TRY0(xmlTextWriterEndElement(writer)); /* TotalUse */
 
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "InUse"));
 	TRY0(xmlTextWriterWriteFormatString(writer,
-					    "%" ISC_PRINT_QUADFORMAT "u",
+					    "%llu",
 					    summary.inuse));
 	TRY0(xmlTextWriterEndElement(writer)); /* InUse */
 
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "BlockSize"));
 	TRY0(xmlTextWriterWriteFormatString(writer,
-					    "%" ISC_PRINT_QUADFORMAT "u",
+					    "%llu",
 					    summary.blocksize));
 	TRY0(xmlTextWriterEndElement(writer)); /* BlockSize */
 
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "ContextSize"));
 	TRY0(xmlTextWriterWriteFormatString(writer,
-					    "%" ISC_PRINT_QUADFORMAT "u",
+					    "%llu",
 					    summary.contextsize));
 	TRY0(xmlTextWriterEndElement(writer)); /* ContextSize */
 
 	TRY0(xmlTextWriterStartElement(writer, ISC_XMLCHAR "Lost"));
 	TRY0(xmlTextWriterWriteFormatString(writer,
-					    "%" ISC_PRINT_QUADFORMAT "u",
+					    "%llu",
 					    lost));
 	TRY0(xmlTextWriterEndElement(writer)); /* Lost */
 
@@ -2564,7 +2564,7 @@ json_renderctx(isc__mem_t *ctx, summarystat_t *summary, json_object *array) {
 	json_object_object_add(ctxobj, "maxinuse", obj);
 
 	if ((ctx->flags & ISC_MEMFLAG_INTERNAL) != 0) {
-		isc_uint64_t blocksize;
+		uint64_t blocksize;
 		blocksize = ctx->basic_table_count * NUM_BASIC_BLOCKS *
 			ctx->mem_target;
 		obj = json_object_new_int64(blocksize);
@@ -2602,7 +2602,7 @@ isc_mem_renderjson(json_object *memobj) {
 	isc_result_t result = ISC_R_SUCCESS;
 	isc__mem_t *ctx;
 	summarystat_t summary;
-	isc_uint64_t lost;
+	uint64_t lost;
 	json_object *ctxarray, *obj;
 
 	memset(&summary, 0, sizeof(summary));

@@ -24,7 +24,7 @@
 #include <isc/commandline.h>
 #include <isc/event.h>
 #include <isc/parseint.h>
-#include <isc/print.h>
+
 #include <isc/string.h>
 #include <isc/util.h>
 #include <isc/task.h>
@@ -41,22 +41,6 @@
 #include <dns/byaddr.h>
 
 #include <dig/dig.h>
-
-#if defined(HAVE_READLINE)
-#if defined(HAVE_EDIT_READLINE_READLINE_H)
-#include <edit/readline/readline.h>
-#if defined(HAVE_EDIT_READLINE_HISTORY_H)
-#include <edit/readline/history.h>
-#endif
-#elif defined(HAVE_EDITLINE_READLINE_H)
-#include <editline/readline.h>
-#elif defined(HAVE_READLINE_READLINE_H)
-#include <readline/readline.h>
-#if defined (HAVE_READLINE_HISTORY_H)
-#include <readline/history.h>
-#endif
-#endif
-#endif
 
 static isc_boolean_t short_form = ISC_TRUE,
 	tcpmode = ISC_FALSE,
@@ -556,15 +540,15 @@ testclass(char *typetext) {
 
 static void
 set_port(const char *value) {
-	isc_uint32_t n;
+	uint32_t n;
 	isc_result_t result = parse_uint(&n, value, 65535, "port");
 	if (result == ISC_R_SUCCESS)
-		port = (isc_uint16_t) n;
+		port = (uint16_t) n;
 }
 
 static void
 set_timeout(const char *value) {
-	isc_uint32_t n;
+	uint32_t n;
 	isc_result_t result = parse_uint(&n, value, UINT_MAX, "timeout");
 	if (result == ISC_R_SUCCESS)
 		timeout = n;
@@ -572,7 +556,7 @@ set_timeout(const char *value) {
 
 static void
 set_tries(const char *value) {
-	isc_uint32_t n;
+	uint32_t n;
 	isc_result_t result = parse_uint(&n, value, INT_MAX, "tries");
 	if (result == ISC_R_SUCCESS)
 		tries = n;
@@ -580,7 +564,7 @@ set_tries(const char *value) {
 
 static void
 set_ndots(const char *value) {
-	isc_uint32_t n;
+	uint32_t n;
 	isc_result_t result = parse_uint(&n, value, 128, "ndots");
 	if (result == ISC_R_SUCCESS)
 		ndots = n;
@@ -789,15 +773,9 @@ get_next_command(void) {
 		fatal("memory allocation failure");
 	isc_app_block();
 	if (interactive) {
-#ifdef HAVE_READLINE
-		ptr = readline("> ");
-		if (ptr != NULL)
-			add_history(ptr);
-#else
 		fputs("> ", stderr);
 		fflush(stderr);
 		ptr = fgets(buf, COMMSIZE, stdin);
-#endif
 	} else
 		ptr = fgets(buf, COMMSIZE, stdin);
 	isc_app_unblock();
@@ -805,10 +783,6 @@ get_next_command(void) {
 		in_use = ISC_FALSE;
 	} else
 		do_next_command(ptr);
-#ifdef HAVE_READLINE
-	if (interactive)
-		free(ptr);
-#endif
 	isc_mem_free(mctx, buf);
 }
 

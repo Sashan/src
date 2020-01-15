@@ -15,7 +15,7 @@
  */
 
 /*
- * $Id: tsig.c,v 1.8 2019/12/17 01:46:32 sthen Exp $
+ * $Id: tsig.c,v 1.13 2020/01/09 18:17:15 florian Exp $
  */
 /*! \file */
 #include <config.h>
@@ -23,14 +23,14 @@
 
 #include <isc/buffer.h>
 #include <isc/mem.h>
-#include <isc/print.h>
+
 #include <isc/refcount.h>
 #include <isc/serial.h>
 #include <isc/string.h>		/* Required for HP/UX (and others?) */
 #include <isc/util.h>
 #include <isc/time.h>
 
-#include <pk11/site.h>
+
 
 #include <dns/keyvalues.h>
 #include <dns/log.h>
@@ -54,26 +54,12 @@
 #endif
 
 #define is_response(msg) (msg->flags & DNS_MESSAGEFLAG_QR)
-#ifndef PK11_MD5_DISABLE
-#define algname_is_allocated(algname) \
-	((algname) != dns_tsig_hmacmd5_name && \
-	 (algname) != dns_tsig_hmacsha1_name && \
-	 (algname) != dns_tsig_hmacsha224_name && \
-	 (algname) != dns_tsig_hmacsha256_name && \
-	 (algname) != dns_tsig_hmacsha384_name && \
-	 (algname) != dns_tsig_hmacsha512_name && \
-	 (algname) != dns_tsig_gssapi_name && \
-	 (algname) != dns_tsig_gssapims_name)
-#else
 #define algname_is_allocated(algname) \
 	((algname) != dns_tsig_hmacsha1_name && \
 	 (algname) != dns_tsig_hmacsha224_name && \
 	 (algname) != dns_tsig_hmacsha256_name && \
 	 (algname) != dns_tsig_hmacsha384_name && \
-	 (algname) != dns_tsig_hmacsha512_name && \
-	 (algname) != dns_tsig_gssapi_name && \
-	 (algname) != dns_tsig_gssapims_name)
-#endif
+	 (algname) != dns_tsig_hmacsha512_name)
 
 #ifndef DNS_NAME_INITABSOLUTE
 #define DNS_NAME_INITABSOLUTE(A,B) { \
@@ -87,60 +73,35 @@
 
 #define BADTIMELEN 6
 
-#ifndef PK11_MD5_DISABLE
-static unsigned char hmacmd5_ndata[] = "\010hmac-md5\007sig-alg\003reg\003int";
-static unsigned char hmacmd5_offsets[] = { 0, 9, 17, 21, 25 };
-
-static dns_name_t hmacmd5 =
-	DNS_NAME_INITABSOLUTE(hmacmd5_ndata, hmacmd5_offsets);
-LIBDNS_EXTERNAL_DATA dns_name_t *dns_tsig_hmacmd5_name = &hmacmd5;
-#endif
-
-static unsigned char gsstsig_ndata[] = "\010gss-tsig";
-static unsigned char gsstsig_offsets[] = { 0, 9 };
-static dns_name_t gsstsig =
-	DNS_NAME_INITABSOLUTE(gsstsig_ndata, gsstsig_offsets);
-LIBDNS_EXTERNAL_DATA dns_name_t *dns_tsig_gssapi_name = &gsstsig;
-
-/*
- * Since Microsoft doesn't follow its own standard, we will use this
- * alternate name as a second guess.
- */
-static unsigned char gsstsigms_ndata[] = "\003gss\011microsoft\003com";
-static unsigned char gsstsigms_offsets[] = { 0, 4, 14, 18 };
-static dns_name_t gsstsigms =
-	DNS_NAME_INITABSOLUTE(gsstsigms_ndata, gsstsigms_offsets);
-LIBDNS_EXTERNAL_DATA dns_name_t *dns_tsig_gssapims_name = &gsstsigms;
-
 static unsigned char hmacsha1_ndata[] = "\011hmac-sha1";
 static unsigned char hmacsha1_offsets[] = { 0, 10 };
 static dns_name_t hmacsha1 =
 	DNS_NAME_INITABSOLUTE(hmacsha1_ndata, hmacsha1_offsets);
-LIBDNS_EXTERNAL_DATA dns_name_t *dns_tsig_hmacsha1_name = &hmacsha1;
+dns_name_t *dns_tsig_hmacsha1_name = &hmacsha1;
 
 static unsigned char hmacsha224_ndata[] = "\013hmac-sha224";
 static unsigned char hmacsha224_offsets[] = { 0, 12 };
 static dns_name_t hmacsha224 =
 	DNS_NAME_INITABSOLUTE(hmacsha224_ndata, hmacsha224_offsets);
-LIBDNS_EXTERNAL_DATA dns_name_t *dns_tsig_hmacsha224_name = &hmacsha224;
+dns_name_t *dns_tsig_hmacsha224_name = &hmacsha224;
 
 static unsigned char hmacsha256_ndata[] = "\013hmac-sha256";
 static unsigned char hmacsha256_offsets[] = { 0, 12 };
 static dns_name_t hmacsha256 =
 	DNS_NAME_INITABSOLUTE(hmacsha256_ndata, hmacsha256_offsets);
-LIBDNS_EXTERNAL_DATA dns_name_t *dns_tsig_hmacsha256_name = &hmacsha256;
+dns_name_t *dns_tsig_hmacsha256_name = &hmacsha256;
 
 static unsigned char hmacsha384_ndata[] = "\013hmac-sha384";
 static unsigned char hmacsha384_offsets[] = { 0, 12 };
 static dns_name_t hmacsha384 =
 	DNS_NAME_INITABSOLUTE(hmacsha384_ndata, hmacsha384_offsets);
-LIBDNS_EXTERNAL_DATA dns_name_t *dns_tsig_hmacsha384_name = &hmacsha384;
+dns_name_t *dns_tsig_hmacsha384_name = &hmacsha384;
 
 static unsigned char hmacsha512_ndata[] = "\013hmac-sha512";
 static unsigned char hmacsha512_offsets[] = { 0, 12 };
 static dns_name_t hmacsha512 =
 	DNS_NAME_INITABSOLUTE(hmacsha512_ndata, hmacsha512_offsets);
-LIBDNS_EXTERNAL_DATA dns_name_t *dns_tsig_hmacsha512_name = &hmacsha512;
+dns_name_t *dns_tsig_hmacsha512_name = &hmacsha512;
 
 static isc_result_t
 tsig_verify_tcp(isc_buffer_t *source, dns_message_t *msg);
@@ -284,15 +245,6 @@ dns_tsigkey_createfromkey(dns_name_t *name, dns_name_t *algorithm,
 		goto cleanup_key;
 	(void)dns_name_downcase(&tkey->name, &tkey->name, NULL);
 
-#ifndef PK11_MD5_DISABLE
-	if (dns_name_equal(algorithm, DNS_TSIG_HMACMD5_NAME)) {
-		tkey->algorithm = DNS_TSIG_HMACMD5_NAME;
-		if (dstkey != NULL && dst_key_alg(dstkey) != DST_ALG_HMACMD5) {
-			ret = DNS_R_BADALG;
-			goto cleanup_name;
-		}
-	} else
-#endif
 	if (dns_name_equal(algorithm, DNS_TSIG_HMACSHA1_NAME)) {
 		tkey->algorithm = DNS_TSIG_HMACSHA1_NAME;
 		if (dstkey != NULL && dst_key_alg(dstkey) != DST_ALG_HMACSHA1) {
@@ -324,18 +276,6 @@ dns_tsigkey_createfromkey(dns_name_t *name, dns_name_t *algorithm,
 		tkey->algorithm = DNS_TSIG_HMACSHA512_NAME;
 		if (dstkey != NULL &&
 		    dst_key_alg(dstkey) != DST_ALG_HMACSHA512) {
-			ret = DNS_R_BADALG;
-			goto cleanup_name;
-		}
-	} else if (dns_name_equal(algorithm, DNS_TSIG_GSSAPI_NAME)) {
-		tkey->algorithm = DNS_TSIG_GSSAPI_NAME;
-		if (dstkey != NULL && dst_key_alg(dstkey) != DST_ALG_GSSAPI) {
-			ret = DNS_R_BADALG;
-			goto cleanup_name;
-		}
-	} else if (dns_name_equal(algorithm, DNS_TSIG_GSSAPIMS_NAME)) {
-		tkey->algorithm = DNS_TSIG_GSSAPIMS_NAME;
-		if (dstkey != NULL && dst_key_alg(dstkey) != DST_ALG_GSSAPI) {
 			ret = DNS_R_BADALG;
 			goto cleanup_name;
 		}
@@ -403,9 +343,7 @@ dns_tsigkey_createfromkey(dns_name_t *name, dns_name_t *algorithm,
 	/*
 	 * Ignore this if it's a GSS key, since the key size is meaningless.
 	 */
-	if (dstkey != NULL && dst_key_size(dstkey) < 64 &&
-	    !dns_name_equal(algorithm, DNS_TSIG_GSSAPI_NAME) &&
-	    !dns_name_equal(algorithm, DNS_TSIG_GSSAPIMS_NAME)) {
+	if (dstkey != NULL && dst_key_size(dstkey) < 64) {
 		char namestr[DNS_NAME_FORMATSIZE];
 		dns_name_format(name, namestr, sizeof(namestr));
 		isc_log_write(dns_lctx, DNS_LOGCATEGORY_DNSSEC,
@@ -511,11 +449,6 @@ destroyring(dns_tsig_keyring_t *ring) {
 
 static unsigned int
 dst_alg_fromname(dns_name_t *algorithm) {
-#ifndef PK11_MD5_DISABLE
-	if (dns_name_equal(algorithm, DNS_TSIG_HMACMD5_NAME)) {
-		return (DST_ALG_HMACMD5);
-	} else
-#endif
 	if (dns_name_equal(algorithm, DNS_TSIG_HMACSHA1_NAME)) {
 		return (DST_ALG_HMACSHA1);
 	} else if (dns_name_equal(algorithm, DNS_TSIG_HMACSHA224_NAME)) {
@@ -526,10 +459,6 @@ dst_alg_fromname(dns_name_t *algorithm) {
 		return (DST_ALG_HMACSHA384);
 	} else if (dns_name_equal(algorithm, DNS_TSIG_HMACSHA512_NAME)) {
 		return (DST_ALG_HMACSHA512);
-	} else if (dns_name_equal(algorithm, DNS_TSIG_GSSAPI_NAME)) {
-		return (DST_ALG_GSSAPI);
-	} else if (dns_name_equal(algorithm, DNS_TSIG_GSSAPIMS_NAME)) {
-		return (DST_ALG_GSSAPI);
 	} else
 		return (0);
 }
@@ -699,23 +628,6 @@ dns_tsigkey_create(dns_name_t *name, dns_name_t *algorithm,
 	if (length > 0)
 		REQUIRE(secret != NULL);
 
-#ifndef PK11_MD5_DISABLE
-	if (dns_name_equal(algorithm, DNS_TSIG_HMACMD5_NAME)) {
-		if (secret != NULL) {
-			isc_buffer_t b;
-
-			isc_buffer_init(&b, secret, length);
-			isc_buffer_add(&b, length);
-			result = dst_key_frombuffer(name, DST_ALG_HMACMD5,
-						    DNS_KEYOWNER_ENTITY,
-						    DNS_KEYPROTO_DNSSEC,
-						    dns_rdataclass_in,
-						    &b, mctx, &dstkey);
-				if (result != ISC_R_SUCCESS)
-					return (result);
-		}
-	} else
-#endif
 	if (dns_name_equal(algorithm, DNS_TSIG_HMACSHA1_NAME)) {
 		if (secret != NULL) {
 			isc_buffer_t b;
@@ -926,7 +838,7 @@ dns_tsig_sign(dns_message_t *msg) {
 	{
 		unsigned char header[DNS_MESSAGE_HEADERLEN];
 		isc_buffer_t headerbuf;
-		isc_uint16_t digestbits;
+		uint16_t digestbits;
 
 		/*
 		 * If it is a response, we assume that the request MAC
@@ -1179,7 +1091,7 @@ dns_tsig_verify(isc_buffer_t *source, dns_message_t *msg,
 	unsigned char header[DNS_MESSAGE_HEADERLEN];
 	dst_context_t *ctx = NULL;
 	isc_mem_t *mctx;
-	isc_uint16_t addcount, id;
+	uint16_t addcount, id;
 	unsigned int siglen;
 	unsigned int alg;
 	isc_boolean_t response;
@@ -1299,9 +1211,6 @@ dns_tsig_verify(isc_buffer_t *source, dns_message_t *msg,
 	if (ret != ISC_R_SUCCESS)
 		return (ret);
 	if (
-#ifndef PK11_MD5_DISABLE
-	    alg == DST_ALG_HMACMD5 ||
-#endif
 	    alg == DST_ALG_HMACSHA1 ||
 	    alg == DST_ALG_HMACSHA224 || alg == DST_ALG_HMACSHA256 ||
 	    alg == DST_ALG_HMACSHA384 || alg == DST_ALG_HMACSHA512)
@@ -1320,7 +1229,7 @@ dns_tsig_verify(isc_buffer_t *source, dns_message_t *msg,
 	}
 
 	if (tsig.siglen > 0) {
-		isc_uint16_t addcount_n;
+		uint16_t addcount_n;
 
 		sig_r.base = tsig.signature;
 		sig_r.length = tsig.siglen;
@@ -1359,7 +1268,7 @@ dns_tsig_verify(isc_buffer_t *source, dns_message_t *msg,
 		 */
 		memmove(&addcount, &header[DNS_MESSAGE_HEADERLEN - 2], 2);
 		addcount_n = ntohs(addcount);
-		addcount = htons((isc_uint16_t)(addcount_n - 1));
+		addcount = htons((uint16_t)(addcount_n - 1));
 		memmove(&header[DNS_MESSAGE_HEADERLEN - 2], &addcount, 2);
 
 		/*
@@ -1468,14 +1377,11 @@ dns_tsig_verify(isc_buffer_t *source, dns_message_t *msg,
 	}
 
 	if (
-#ifndef PK11_MD5_DISABLE
-	    alg == DST_ALG_HMACMD5 ||
-#endif
 	    alg == DST_ALG_HMACSHA1 ||
 	    alg == DST_ALG_HMACSHA224 || alg == DST_ALG_HMACSHA256 ||
 	    alg == DST_ALG_HMACSHA384 || alg == DST_ALG_HMACSHA512)
 	{
-		isc_uint16_t digestbits = dst_key_getbits(key);
+		uint16_t digestbits = dst_key_getbits(key);
 
 		/*
 		 * XXXRAY: Is this correct? What is the expected
@@ -1538,7 +1444,7 @@ tsig_verify_tcp(isc_buffer_t *source, dns_message_t *msg) {
 	dns_tsigkey_t *tsigkey;
 	dst_key_t *key = NULL;
 	unsigned char header[DNS_MESSAGE_HEADERLEN];
-	isc_uint16_t addcount, id;
+	uint16_t addcount, id;
 	isc_boolean_t has_tsig = ISC_FALSE;
 	isc_mem_t *mctx;
 	unsigned int siglen;
@@ -1609,9 +1515,6 @@ tsig_verify_tcp(isc_buffer_t *source, dns_message_t *msg) {
 		if (ret != ISC_R_SUCCESS)
 			goto cleanup_querystruct;
 		if (
-#ifndef PK11_MD5_DISABLE
-			alg == DST_ALG_HMACMD5 ||
-#endif
 			alg == DST_ALG_HMACSHA1 ||
 			alg == DST_ALG_HMACSHA224 ||
 			alg == DST_ALG_HMACSHA256 ||
@@ -1676,11 +1579,11 @@ tsig_verify_tcp(isc_buffer_t *source, dns_message_t *msg) {
 	 * Decrement the additional field counter if necessary.
 	 */
 	if (has_tsig) {
-		isc_uint16_t addcount_n;
+		uint16_t addcount_n;
 
 		memmove(&addcount, &header[DNS_MESSAGE_HEADERLEN - 2], 2);
 		addcount_n = ntohs(addcount);
-		addcount = htons((isc_uint16_t)(addcount_n - 1));
+		addcount = htons((uint16_t)(addcount_n - 1));
 		memmove(&header[DNS_MESSAGE_HEADERLEN - 2], &addcount, 2);
 
 		/*
@@ -1788,16 +1691,13 @@ tsig_verify_tcp(isc_buffer_t *source, dns_message_t *msg) {
 		if (ret != ISC_R_SUCCESS)
 			goto cleanup_context;
 		if (
-#ifndef PK11_MD5_DISABLE
-			alg == DST_ALG_HMACMD5 ||
-#endif
 			alg == DST_ALG_HMACSHA1 ||
 			alg == DST_ALG_HMACSHA224 ||
 			alg == DST_ALG_HMACSHA256 ||
 			alg == DST_ALG_HMACSHA384 ||
 			alg == DST_ALG_HMACSHA512)
 		{
-			isc_uint16_t digestbits = dst_key_getbits(key);
+			uint16_t digestbits = dst_key_getbits(key);
 
 			/*
 			 * XXXRAY: Is this correct? What is the

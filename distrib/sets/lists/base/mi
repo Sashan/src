@@ -218,10 +218,6 @@
 ./etc/rpki/ripe.tal
 ./etc/services
 ./etc/signify
-./etc/signify/openbsd-64-base.pub
-./etc/signify/openbsd-64-fw.pub
-./etc/signify/openbsd-64-pkg.pub
-./etc/signify/openbsd-64-syspatch.pub
 ./etc/signify/openbsd-65-base.pub
 ./etc/signify/openbsd-65-fw.pub
 ./etc/signify/openbsd-65-pkg.pub
@@ -666,7 +662,7 @@
 ./usr/lib/libtermlib.so.14.0
 ./usr/lib/libtls.so.20.1
 ./usr/lib/libusbhid.so.7.0
-./usr/lib/libutil.so.14.0
+./usr/lib/libutil.so.15.0
 ./usr/lib/libz.so.5.0
 ./usr/lib/locate
 ./usr/lib/locate/src.db

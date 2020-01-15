@@ -1,4 +1,4 @@
-/*	$OpenBSD: make.c,v 1.76 2019/12/21 15:31:54 espie Exp $	*/
+/*	$OpenBSD: make.c,v 1.81 2020/01/13 15:41:53 espie Exp $	*/
 /*	$NetBSD: make.c,v 1.10 1996/11/06 17:59:15 christos Exp $	*/
 
 /*
@@ -71,6 +71,7 @@
 #include "suff.h"
 #include "var.h"
 #include "error.h"
+#include "expandchildren.h"
 #include "make.h"
 #include "gnode.h"
 #include "extern.h"
@@ -118,7 +119,7 @@ static bool randomize_queue;
 long random_delay = 0;
 
 bool
-no_jobs_left()
+nothing_left_to_build()
 {
 	return Array_IsEmpty(&to_build);
 }
@@ -376,7 +377,13 @@ try_to_make_node(GNode *gn)
 			return true;
 		/* SIB: this is where commands should get prepared */
 		Make_DoAllVar(gn);
-		Job_Make(gn);
+		if (node_find_valid_commands(gn)) {
+			if (touchFlag)
+				Job_Touch(gn);
+			else 
+				Job_Make(gn);
+		} else
+			node_failure(gn);
 	} else {
 		if (DEBUG(MAKE))
 			printf("up-to-date\n");
@@ -504,6 +511,16 @@ add_targets_to_make(Lst todo)
 		randomize_garray(&to_build);
 }
 
+void
+Make_Init()
+{
+	/* wild guess at initial sizes */
+	Array_Init(&to_build, 500);
+	Array_Init(&examine, 150);
+	Array_Init(&heldBack, 100);
+	ohash_init(&targets, 10, &gnode_info);
+}
+
 /*-
  *-----------------------------------------------------------------------
  * Make_Run --
@@ -516,25 +533,15 @@ add_targets_to_make(Lst todo)
  *	calling on MakeStartJobs to keep the job table as full as
  *	possible.
  *
- * Results:
- *	true if work was done. false otherwise.
- *
  * Side Effects:
  *	The must_make field of all nodes involved in the creation of the given
  *	targets is set to 1. The to_build list is set to contain all the
  *	'leaves' of these subgraphs.
  *-----------------------------------------------------------------------
  */
-bool
-Make_Run(Lst targs)		/* the initial list of targets */
+void
+Make_Run(Lst targs, bool *has_errors, bool *out_of_date)
 {
-	bool problem;	/* errors occurred */
-
-	/* wild guess at initial sizes */
-	Array_Init(&to_build, 500);
-	Array_Init(&examine, 150);
-	Array_Init(&heldBack, 100);
-	ohash_init(&targets, 10, &gnode_info);
 	if (DEBUG(PARALLEL))
 		random_setup();
 
@@ -545,7 +552,8 @@ Make_Run(Lst targs)		/* the initial list of targets */
 		 * the next loop... (we won't actually start any, of course,
 		 * this is just to see if any of the targets was out of date)
 		 */
-		return MakeStartJobs();
+		if (MakeStartJobs())
+			*out_of_date = true;
 	} else {
 		/*
 		 * Initialization. At the moment, no jobs are running and until
@@ -572,7 +580,8 @@ Make_Run(Lst targs)		/* the initial list of targets */
 		(void)MakeStartJobs();
 	}
 
-	problem = Job_Finish();
+	if (errorJobs != NULL)
+		*has_errors = true;
 
 	/*
 	 * Print the final status of each target. E.g. if it wasn't made
@@ -580,13 +589,9 @@ Make_Run(Lst targs)		/* the initial list of targets */
 	 */
 	if (targets_contain_cycles()) {
 		break_and_print_cycles(targs);
-		problem = true;
+		*has_errors = true;
 	}
 	Lst_Every(targs, MakePrintStatus);
-	if (problem)
-		Fatal("Errors while building");
-
-	return true;
 }
 
 /* round-about detection: assume make is bug-free, if there are targets

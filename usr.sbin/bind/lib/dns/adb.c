@@ -26,12 +26,13 @@
 #include <config.h>
 
 #include <limits.h>
+#include <stdlib.h>
 
 #include <isc/mutexblock.h>
 #include <isc/netaddr.h>
-#include <isc/print.h>
-#include <isc/random.h>
-#include <isc/stats.h>
+
+
+
 #include <isc/string.h>         /* Required for HP/UX (and others?) */
 #include <isc/task.h>
 #include <isc/util.h>
@@ -46,7 +47,7 @@
 #include <dns/rdatatype.h>
 #include <dns/resolver.h>
 #include <dns/result.h>
-#include <dns/stats.h>
+
 
 #define DNS_ADB_MAGIC             ISC_MAGIC('D', 'a', 'd', 'b')
 #define DNS_ADB_VALID(x)          ISC_MAGIC_VALID(x, DNS_ADB_MAGIC)
@@ -111,7 +112,7 @@ struct dns_adb {
 	isc_task_t                     *task;
 	isc_task_t                     *excl;
 
-	isc_interval_t                  tick_interval;
+	interval_t                  tick_interval;
 	int                             next_cleanbucket;
 
 	unsigned int                    irefcnt;
@@ -164,8 +165,8 @@ struct dns_adb {
 	isc_boolean_t			grownames_sent;
 
 #ifdef ENABLE_FETCHLIMIT
-	isc_uint32_t			quota;
-	isc_uint32_t			atr_freq;
+	uint32_t			quota;
+	uint32_t			atr_freq;
 	double				atr_low;
 	double				atr_high;
 	double				atr_discount;
@@ -250,7 +251,7 @@ struct dns_adbentry {
 
 	unsigned int                    flags;
 	unsigned int                    srtt;
-	isc_uint16_t			udpsize;
+	uint16_t			udpsize;
 	unsigned char			plain;
 	unsigned char			plainto;
 	unsigned char			edns;
@@ -260,9 +261,9 @@ struct dns_adbentry {
 	unsigned int			completed;
 	unsigned int			timeouts;
 
-	isc_uint8_t			mode;
-	isc_uint32_t			quota;
-	isc_uint32_t			active;
+	uint8_t			mode;
+	uint32_t			quota;
+	uint32_t			active;
 	double				atr;
 #endif /* ENABLE_FETCHLIMIT */
 
@@ -275,7 +276,7 @@ struct dns_adbentry {
 	unsigned char			to512;		/* plain DNS */
 	isc_sockaddr_t                  sockaddr;
 	unsigned char *			sit;
-	isc_uint16_t			sitlen;
+	uint16_t			sitlen;
 
 	isc_stdtime_t                   expires;
 	isc_stdtime_t			lastage;
@@ -508,36 +509,6 @@ DP(int level, const char *format, ...) {
 	va_end(args);
 }
 
-/*%
- * Increment resolver-related statistics counters.
- */
-static inline void
-inc_stats(dns_adb_t *adb, isc_statscounter_t counter) {
-	if (adb->view->resstats != NULL)
-		isc_stats_increment(adb->view->resstats, counter);
-}
-
-/*%
- * Set adb-related statistics counters.
- */
-static inline void
-set_adbstat(dns_adb_t *adb, isc_uint64_t val, isc_statscounter_t counter) {
-	if (adb->view->adbstats != NULL)
-		isc_stats_set(adb->view->adbstats, val, counter);
-}
-
-static inline void
-dec_adbstats(dns_adb_t *adb, isc_statscounter_t counter) {
-	if (adb->view->adbstats != NULL)
-		isc_stats_decrement(adb->view->adbstats, counter);
-}
-
-static inline void
-inc_adbstats(dns_adb_t *adb, isc_statscounter_t counter) {
-	if (adb->view->adbstats != NULL)
-		isc_stats_increment(adb->view->adbstats, counter);
-}
-
 static inline dns_ttl_t
 ttlclamp(dns_ttl_t ttl) {
 	if (ttl < ADB_CACHE_MINIMUM)
@@ -684,8 +655,6 @@ grow_entries(isc_task_t *task, isc_event_t *ev) {
 	adb->entry_sd = newentry_sd;
 	adb->entry_refcnt = newentry_refcnt;
 	adb->nentries = n;
-
-	set_adbstat(adb, adb->nentries, dns_adbstats_nentries);
 
 	/*
 	 * Only on success do we set adb->growentries_sent to ISC_FALSE.
@@ -841,8 +810,6 @@ grow_names(isc_task_t *task, isc_event_t *ev) {
 	adb->name_sd = newname_sd;
 	adb->name_refcnt = newname_refcnt;
 	adb->nnames = n;
-
-	set_adbstat(adb, adb->nnames, dns_adbstats_nnames);
 
 	/*
 	 * Only on success do we set adb->grownames_sent to ISC_FALSE.
@@ -1711,7 +1678,6 @@ new_adbname(dns_adb_t *adb, dns_name_t *dnsname) {
 
 	LOCK(&adb->namescntlock);
 	adb->namescnt++;
-	inc_adbstats(adb, dns_adbstats_namescnt);
 	if (!adb->grownames_sent && adb->excl != NULL &&
 	    adb->namescnt > (adb->nnames * 8))
 	{
@@ -1747,7 +1713,6 @@ free_adbname(dns_adb_t *adb, dns_adbname_t **name) {
 	isc_mempool_put(adb->nmp, n);
 	LOCK(&adb->namescntlock);
 	adb->namescnt--;
-	dec_adbstats(adb, dns_adbstats_namescnt);
 	UNLOCK(&adb->namescntlock);
 }
 
@@ -1822,7 +1787,7 @@ free_adblameinfo(dns_adb_t *adb, dns_adblameinfo_t **lameinfo) {
 static inline dns_adbentry_t *
 new_adbentry(dns_adb_t *adb) {
 	dns_adbentry_t *e;
-	isc_uint32_t r;
+	uint32_t r;
 
 	e = isc_mempool_get(adb->emp);
 	if (e == NULL)
@@ -1843,7 +1808,7 @@ new_adbentry(dns_adb_t *adb) {
 	e->to512 = 0;
 	e->sit = NULL;
 	e->sitlen = 0;
-	isc_random_get(&r);
+	r = arc4random();
 	e->srtt = (r & 0x1f) + 1;
 	e->lastage = 0;
 	e->expires = 0;
@@ -1859,7 +1824,6 @@ new_adbentry(dns_adb_t *adb) {
 	ISC_LINK_INIT(e, plink);
 	LOCK(&adb->entriescntlock);
 	adb->entriescnt++;
-	inc_adbstats(adb, dns_adbstats_entriescnt);
 	if (!adb->growentries_sent && adb->excl != NULL &&
 	    adb->entriescnt > (adb->nentries * 8))
 	{
@@ -1901,7 +1865,6 @@ free_adbentry(dns_adb_t *adb, dns_adbentry_t **entry) {
 	isc_mempool_put(adb->emp, e);
 	LOCK(&adb->entriescntlock);
 	adb->entriescnt--;
-	dec_adbstats(adb, dns_adbstats_entriescnt);
 	UNLOCK(&adb->entriescntlock);
 }
 
@@ -2740,13 +2703,6 @@ dns_adb_create(isc_mem_t *mem, dns_view_t *view, isc_timermgr_t *timermgr,
 
 	isc_task_setname(adb->task, "ADB", adb);
 
-	result = isc_stats_create(adb->mctx, &view->adbstats, dns_adbstats_max);
-	if (result != ISC_R_SUCCESS)
-		goto fail3;
-
-	set_adbstat(adb, adb->nentries, dns_adbstats_nentries);
-	set_adbstat(adb, adb->nnames, dns_adbstats_nnames);
-
 	/*
 	 * Normal return.
 	 */
@@ -3571,7 +3527,6 @@ dump_entry(FILE *f, dns_adb_t *adb, dns_adbentry_t *entry,
 		entry->to512, entry->plain, entry->plainto);
 	if (entry->udpsize != 0U)
 		fprintf(f, " [udpsize %u]", entry->udpsize);
-#ifdef ISC_PLATFORM_USESIT
 	if (entry->sit != NULL) {
 		unsigned int i;
 		fprintf(f, " [sit=");
@@ -3579,7 +3534,6 @@ dump_entry(FILE *f, dns_adb_t *adb, dns_adbentry_t *entry,
 			fprintf(f, "%02x", entry->sit[i]);
 		fprintf(f, "]");
 	}
-#endif
 
 	if (entry->expires != 0)
 		fprintf(f, " [ttl %d]", (int)(entry->expires - now));
@@ -3944,7 +3898,6 @@ fetch_callback(isc_task_t *task, isc_event_t *ev) {
 				name->fetch_err = FIND_ERR_NXDOMAIN;
 			else
 				name->fetch_err = FIND_ERR_NXRRSET;
-			inc_stats(adb, dns_resstatscounter_gluefetchv4fail);
 		} else {
 			DP(NCACHE_LEVEL, "adb fetch name %p: "
 			   "caching negative entry for AAAA (ttl %u)",
@@ -3955,7 +3908,6 @@ fetch_callback(isc_task_t *task, isc_event_t *ev) {
 				name->fetch6_err = FIND_ERR_NXDOMAIN;
 			else
 				name->fetch6_err = FIND_ERR_NXRRSET;
-			inc_stats(adb, dns_resstatscounter_gluefetchv6fail);
 		}
 		goto out;
 	}
@@ -4001,11 +3953,9 @@ fetch_callback(isc_task_t *task, isc_event_t *ev) {
 		if (address_type == DNS_ADBFIND_INET) {
 			name->expire_v4 = ISC_MIN(name->expire_v4, now + 10);
 			name->fetch_err = FIND_ERR_FAILURE;
-			inc_stats(adb, dns_resstatscounter_gluefetchv4fail);
 		} else {
 			name->expire_v6 = ISC_MIN(name->expire_v6, now + 10);
 			name->fetch6_err = FIND_ERR_FAILURE;
-			inc_stats(adb, dns_resstatscounter_gluefetchv6fail);
 		}
 		goto out;
 	}
@@ -4093,10 +4043,8 @@ fetch_name(dns_adbname_t *adbname, isc_boolean_t start_at_zone,
 
 	if (type == dns_rdatatype_a) {
 		adbname->fetch_a = fetch;
-		inc_stats(adb, dns_resstatscounter_gluefetchv4);
 	} else {
 		adbname->fetch_aaaa = fetch;
-		inc_stats(adb, dns_resstatscounter_gluefetchv6);
 	}
 	fetch = NULL;  /* Keep us from cleaning this up below. */
 
@@ -4191,7 +4139,7 @@ static void
 adjustsrtt(dns_adbaddrinfo_t *addr, unsigned int rtt, unsigned int factor,
 	   isc_stdtime_t now)
 {
-	isc_uint64_t new_srtt;
+	uint64_t new_srtt;
 
 	if (factor == DNS_ADB_RTTADJAGE) {
 		if (addr->entry->lastage != now) {
@@ -4203,8 +4151,8 @@ adjustsrtt(dns_adbaddrinfo_t *addr, unsigned int rtt, unsigned int factor,
 		} else
 			new_srtt = addr->entry->srtt;
 	} else
-		new_srtt = ((isc_uint64_t)addr->entry->srtt / 10 * factor)
-			+ ((isc_uint64_t)rtt / 10 * (10 - factor));
+		new_srtt = ((uint64_t)addr->entry->srtt / 10 * factor)
+			+ ((uint64_t)rtt / 10 * (10 - factor));
 
 	addr->entry->srtt = (unsigned int) new_srtt;
 	addr->srtt = (unsigned int) new_srtt;
@@ -4573,7 +4521,7 @@ dns_adb_setsit(dns_adb_t *adb, dns_adbaddrinfo_t *addr,
 	if (addr->entry->sit == NULL && sit != NULL && len != 0U) {
 		addr->entry->sit = isc_mem_get(adb->mctx, len);
 		if (addr->entry->sit != NULL)
-			addr->entry->sitlen = (isc_uint16_t)len;
+			addr->entry->sitlen = (uint16_t)len;
 	}
 
 	if (addr->entry->sit != NULL)
@@ -4815,7 +4763,7 @@ dns_adb_setadbsize(dns_adb_t *adb, size_t size) {
 }
 
 void
-dns_adb_setquota(dns_adb_t *adb, isc_uint32_t quota, isc_uint32_t freq,
+dns_adb_setquota(dns_adb_t *adb, uint32_t quota, uint32_t freq,
 		 double low, double high, double discount)
 {
 #ifdef ENABLE_FETCHLIMIT

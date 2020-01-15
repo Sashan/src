@@ -670,12 +670,9 @@ BIND9_MAJOR
 BIND9_VERSION
 BIND9_DESCRIPTION
 BIND9_PRODUCT
-BIND9_IRS_BUILDINCLUDE
-BIND9_BIND9_BUILDINCLUDE
 BIND9_LWRES_BUILDINCLUDE
 BIND9_DNS_BUILDINCLUDE
 BIND9_ISCCFG_BUILDINCLUDE
-BIND9_ISCCC_BUILDINCLUDE
 BIND9_ISC_BUILDINCLUDE
 BIND9_TOP_BUILDDIR
 UNITTESTS
@@ -717,21 +714,16 @@ ISC_PLATFORM_HAVESTDATOMIC
 ISC_PLATFORM_HAVEIFNAMETOINDEX
 ISC_PLATFORM_HAVESTRINGSH
 ISC_PLATFORM_BRACEPTHREADONCEINIT
-IRS_PLATFORM_USEDECLSPEC
-LWRES_PLATFORM_USEDECLSPEC
 ISC_PLATFORM_USEDECLSPEC
-ISC_PLATFORM_RLIMITTYPE
+rlim_t
 ISC_PLATFORM_HAVESTATNSEC
 ISC_PLATFORM_HAVESYSUNH
-LWRES_PLATFORM_QUADFORMAT
 ISC_PLATFORM_QUADFORMAT
 DST_EXTRA_SRCS
 DST_EXTRA_OBJS
 USE_ISC_SPNEGO
 ISC_EXTRA_SRCS
 ISC_EXTRA_OBJS
-LWRES_PLATFORM_NEEDVSNPRINTF
-LWRES_PLATFORM_NEEDSPRINTF
 ISC_PLATFORM_NEEDVSNPRINTF
 ISC_PLATFORM_NEEDSPRINTF
 ISC_PLATFORM_NEEDFPRINTF
@@ -739,14 +731,11 @@ ISC_PLATFORM_NEEDPRINTF
 READLINE_LIB
 ISC_PLATFORM_NEEDSTRCASESTR
 ISC_PLATFORM_NEEDSTRLCAT
-LWRES_PLATFORM_NEEDSTRLCPY
 ISC_PLATFORM_NEEDSTRLCPY
 GENRANDOMLIB
-LWRES_PLATFORM_NEEDSTRTOUL
 ISC_PLATFORM_NEEDSTRTOUL
 ISC_PLATFORM_NEEDMEMMOVE
 ISC_PLATFORM_NEEDSTRSEP
-ISC_IRS_GETNAMEINFOSOCKLEN
 ISC_LWRES_GETNAMEINFOPROTO
 ISC_LWRES_GETADDRINFOPROTO
 ISC_LWRES_GETIPNODEPROTO
@@ -758,14 +747,10 @@ ISC_LWRES_GETNETBYADDRINADDR
 ISC_LWRES_ENDHOSTENTINT
 ISC_LWRES_SETHOSTENTINT
 ISC_LWRES_NEEDRRSETINFO
-ISC_IRS_NEEDADDRINFO
 ISC_LWRES_NEEDADDRINFO
 ISC_PLATFORM_NEEDPORTT
 ISC_PLATFORM_MSGHDRFLAVOR
-LWRES_PLATFORM_HAVESALEN
 ISC_PLATFORM_HAVESALEN
-ISC_PLATFORM_NEEDPTON
-ISC_PLATFORM_NEEDNTOP
 ISC_PLATFORM_HAVEIF_LADDRCONF
 ISC_PLATFORM_HAVEIF_LADDRREQ
 ISC_PLATFORM_HAVESCOPEID
@@ -777,17 +762,11 @@ ISC_IPV6_H
 ISC_PLATFORM_HAVESOCKADDRSTORAGE
 ISC_PLATFORM_FIXIN6ISADDR
 ISC_PLATFORM_HAVEIN6PKTINFO
-LWRES_PLATFORM_NEEDIN6ADDRLOOPBACK
 ISC_PLATFORM_NEEDIN6ADDRLOOPBACK
-LWRES_PLATFORM_NEEDIN6ADDRANY
 ISC_PLATFORM_NEEDIN6ADDRANY
-LWRES_PLATFORM_HAVEINADDR6
 ISC_PLATFORM_HAVEINADDR6
-LWRES_PLATFORM_NEEDNETINET6IN6H
 ISC_PLATFORM_NEEDNETINET6IN6H
-LWRES_PLATFORM_NEEDNETINETIN6H
 ISC_PLATFORM_NEEDNETINETIN6H
-LWRES_PLATFORM_HAVEIPV6
 ISC_PLATFORM_HAVEIPV6
 BIND9_CO_RULE
 LIBTOOL_IN_MAIN
@@ -800,9 +779,6 @@ LIBTOOL_MKDEP_SED
 SA
 A
 O
-ALWAYS_MAKE_SYMTABLE
-MKSYMTBL_PROGRAM
-ISC_PLATFORM_USEBACKTRACE
 PURIFY
 purify_path
 IRIX_DNSSEC_WARNINGS_HACK
@@ -849,10 +825,6 @@ DST_OPENSSL_INC
 HAVE_SIT
 ISC_PLATFORM_USESIT
 INSTALL_LIBRARY
-ISC_THREAD_DIR
-THREADOPTSRCS
-THREADOPTOBJS
-ISC_PLATFORM_USETHREADS
 ALWAYS_DEFINES
 CHECK_DSA
 DNS_CRYPTO_LIBS
@@ -864,9 +836,6 @@ ISC_PLATFORM_GSSAPI_KRB5_HEADER
 ISC_PLATFORM_GSSAPIHEADER
 ISC_PLATFORM_HAVEGSSAPI
 KRB5_CONFIG
-GEOIPLINKOBJS
-GEOIPLINKSRCS
-LWRES_PLATFORM_NEEDSYSSELECTH
 ISC_PLATFORM_NEEDSYSSELECTH
 ISC_PLATFORM_HAVEDEVPOLL
 ISC_PLATFORM_HAVEEPOLL
@@ -978,13 +947,10 @@ SHELL'
 ac_subst_files='BIND9_MAKE_INCLUDES
 BIND9_MAKE_RULES
 LIBISC_API
-LIBISCCC_API
 LIBISCCFG_API
 LIBDNS_API
 LIBDNS_MAPAPI
-LIBBIND9_API
 LIBLWRES_API
-LIBIRS_API
 DLZ_DRIVER_RULES'
 ac_user_opts='
 enable_option_checking
@@ -1005,11 +971,8 @@ with_python_install_dir
 enable_kqueue
 enable_epoll
 enable_devpoll
-with_geoip
 with_gssapi
 with_randomdev
-enable_threads
-with_locktype
 with_libtool
 enable_native_pkcs11
 with_openssl
@@ -1026,8 +989,6 @@ with_libjson
 enable_largefile
 with_purify
 with_gperftools_profiler
-enable_backtrace
-enable_symtable
 enable_ipv6
 with_kame
 enable_getifaddrs
@@ -1693,14 +1654,10 @@ Optional Features:
   --enable-kqueue         use BSD kqueue when available [default=yes]
   --enable-epoll          use Linux epoll when available [default=auto]
   --enable-devpoll        use /dev/poll when available [default=yes]
-  --enable-threads        enable multithreading
   --enable-native-pkcs11  use native PKCS11 for all crypto [default=no]
   --enable-openssl-hash   use OpenSSL for hash functions [default=no]
   --enable-sit            enable source identity token [default=no]
   --enable-largefile      64-bit file support
-  --enable-backtrace      log stack backtrace on abort [default=yes]
-  --enable-symtable       use internal symbol table for backtrace
-                          [all|minimal(default)|none]
   --enable-ipv6           use IPv6 [default=autodetect]
   --enable-getifaddrs     enable the use of getifaddrs() [yes|no].
   --disable-isc-spnego    use SPNEGO from GSSAPI library
@@ -1727,12 +1684,10 @@ Optional Packages:
   --with-python=PATH      specify path to python interpreter
   --with-python-install-dir=PATH
                           installation directory for Python modules
-  --with-geoip=PATH       Build with GeoIP support (yes|no|path)
   --with-gssapi=PATH|/path/krb5-config
                           Specify path for system-supplied GSSAPI
                           [default=yes]
   --with-randomdev=PATH   Specify path for random device
-  --with-locktype=ARG     Specify mutex lock type (adaptive or standard)
   --with-libtool          use GNU libtool
   --with-openssl=PATH     Build with OpenSSL [yes|no|path]. (Crypto is
                           required for DNSSEC)
@@ -11447,7 +11402,6 @@ yes)
 	test "${with_atf+set}" = set || with_atf=yes
 	test "${enable_filter_aaaa+set}" = set || enable_filter_aaaa=yes
 	test "${with_dlz_filesystem+set}" = set || with_dlz_filesystem=yes
-	test "${enable_symtable+set}" = set || enable_symtable=all
 	test "${enable_sit+set}" = set || enable_sit=yes
 	test "${enable_fetchlimit+set}" = set || enable_fetchlimit=yes
 	test "${enable_warn_error+set}" = set || enable_warn_error=yes
@@ -13545,14 +13499,12 @@ if ac_fn_c_try_compile "$LINENO"; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 	 ISC_PLATFORM_NEEDSYSSELECTH="#undef ISC_PLATFORM_NEEDSYSSELECTH"
-	 LWRES_PLATFORM_NEEDSYSSELECTH="#undef LWRES_PLATFORM_NEEDSYSSELECTH"
 else
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 	case $ac_cv_header_sys_select_h in
 	yes)
 	 ISC_PLATFORM_NEEDSYSSELECTH="#define ISC_PLATFORM_NEEDSYSSELECTH 1"
-	 LWRES_PLATFORM_NEEDSYSSELECTH="#define LWRES_PLATFORM_NEEDSYSSELECTH 1"
 		;;
 	no)
 		as_fn_error $? "need either working unistd.h or sys/select.h" "$LINENO" 5
@@ -13566,7 +13518,6 @@ no)
 	case $ac_cv_header_sys_select_h in
 	yes)
 	     ISC_PLATFORM_NEEDSYSSELECTH="#define ISC_PLATFORM_NEEDSYSSELECTH 1"
-	     LWRES_PLATFORM_NEEDSYSSELECTH="#define LWRES_PLATFORM_NEEDSYSSELECTH 1"
 		;;
 	no)
 		as_fn_error $? "need either unistd.h or sys/select.h" "$LINENO" 5
@@ -13574,7 +13525,6 @@ no)
 	esac
 	;;
 esac
-
 
 
 #
@@ -13803,267 +13753,6 @@ $as_echo "#define AC_APPLE_UNIVERSAL_BUILD 1" >>confdefs.h
      as_fn_error $? "unknown endianness
  presetting ac_cv_c_bigendian=no (or yes) will help" "$LINENO" 5 ;;
  esac
-
-
-#
-# GeoIP support?
-#
-GEOIPLINKSRCS=
-GEOIPLINKOBJS=
-
-# Check whether --with-geoip was given.
-if test "${with_geoip+set}" = set; then :
-  withval=$with_geoip; use_geoip="$withval"
-else
-  use_geoip="no"
-fi
-
-
-if test "yes" = "$use_geoip"
-then
-	for d in /usr /usr/local /opt/local
-	do
-		if test -f $d/include/GeoIP.h
-		then
-			use_geoip=$d
-			break
-		fi
-	done
-fi
-
-case "$use_geoip" in
-	no|'')
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for GeoIP support" >&5
-$as_echo_n "checking for GeoIP support... " >&6; }
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: result: disabled" >&5
-$as_echo "disabled" >&6; }
-		;;
-	*)
-		if test -d "$use_geoip" -o -L "$use_geoip"
-		then
-			CFLAGS="$CFLAGS -I$use_geoip/include"
-			CPPFLAGS="$CPPFLAGS -I$use_geoip/include"
-			LIBS="$LIBS -L$use_geoip/lib"
-			case "$host_os" in
-				netbsd*|openbsd*|solaris*)
-					LIBS="$LIBS -Wl,-rpath=$use_geoip/lib"
-					;;
-			esac
-		elif test "yes" = "$use_geoip"
-		then
-			as_fn_error $? "GeoIP path not found" "$LINENO" 5
-		else
-			as_fn_error $? "GeoIP path $use_geoip does not exist" "$LINENO" 5
-		fi
-		ac_fn_c_check_header_mongrel "$LINENO" "GeoIP.h" "ac_cv_header_GeoIP_h" "$ac_includes_default"
-if test "x$ac_cv_header_GeoIP_h" = xyes; then :
-
-else
-  as_fn_error $? "GeoIP header file not found" "$LINENO" 5
-
-fi
-
-
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for library containing GeoIP_open" >&5
-$as_echo_n "checking for library containing GeoIP_open... " >&6; }
-if ${ac_cv_search_GeoIP_open+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_func_search_save_LIBS=$LIBS
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char GeoIP_open ();
-int
-main ()
-{
-return GeoIP_open ();
-  ;
-  return 0;
-}
-_ACEOF
-for ac_lib in '' GeoIP; do
-  if test -z "$ac_lib"; then
-    ac_res="none required"
-  else
-    ac_res=-l$ac_lib
-    LIBS="-l$ac_lib  $ac_func_search_save_LIBS"
-  fi
-  if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_search_GeoIP_open=$ac_res
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext
-  if ${ac_cv_search_GeoIP_open+:} false; then :
-  break
-fi
-done
-if ${ac_cv_search_GeoIP_open+:} false; then :
-
-else
-  ac_cv_search_GeoIP_open=no
-fi
-rm conftest.$ac_ext
-LIBS=$ac_func_search_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_search_GeoIP_open" >&5
-$as_echo "$ac_cv_search_GeoIP_open" >&6; }
-ac_res=$ac_cv_search_GeoIP_open
-if test "$ac_res" != no; then :
-  test "$ac_res" = "none required" || LIBS="$ac_res $LIBS"
-
-else
-  as_fn_error $? "GeoIP library not found" "$LINENO" 5
-
-fi
-
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for library containing fabsf" >&5
-$as_echo_n "checking for library containing fabsf... " >&6; }
-if ${ac_cv_search_fabsf+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_func_search_save_LIBS=$LIBS
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char fabsf ();
-int
-main ()
-{
-return fabsf ();
-  ;
-  return 0;
-}
-_ACEOF
-for ac_lib in '' m; do
-  if test -z "$ac_lib"; then
-    ac_res="none required"
-  else
-    ac_res=-l$ac_lib
-    LIBS="-l$ac_lib  $ac_func_search_save_LIBS"
-  fi
-  if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_search_fabsf=$ac_res
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext
-  if ${ac_cv_search_fabsf+:} false; then :
-  break
-fi
-done
-if ${ac_cv_search_fabsf+:} false; then :
-
-else
-  ac_cv_search_fabsf=no
-fi
-rm conftest.$ac_ext
-LIBS=$ac_func_search_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_search_fabsf" >&5
-$as_echo "$ac_cv_search_fabsf" >&6; }
-ac_res=$ac_cv_search_fabsf
-if test "$ac_res" != no; then :
-  test "$ac_res" = "none required" || LIBS="$ac_res $LIBS"
-
-else
-  as_fn_error $? "Math library not found" "$LINENO" 5
-
-fi
-
-
-$as_echo "#define HAVE_GEOIP 1" >>confdefs.h
-
-		GEOIPLINKSRCS='${GEOIPLINKSRCS}'
-		GEOIPLINKOBJS='${GEOIPLINKOBJS}'
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for GeoIP support" >&5
-$as_echo_n "checking for GeoIP support... " >&6; }
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for GeoIP Country IPv6 support" >&5
-$as_echo_n "checking for GeoIP Country IPv6 support... " >&6; }
-		cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-				#include <GeoIP.h>
-				#include <netinet/in.h>
-
-int
-main ()
-{
-
-				struct in6_addr in6;
-				GeoIP_country_name_by_ipnum_v6(NULL, in6);
-
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_compile "$LINENO"; then :
-
-				{ $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-
-$as_echo "#define HAVE_GEOIP_V6 1" >>confdefs.h
-
-
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-
-fi
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for GeoIP City IPv6 support" >&5
-$as_echo_n "checking for GeoIP City IPv6 support... " >&6; }
-		cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-				#include <GeoIP.h>
-				#include <GeoIPCity.h>
-				#include <netinet/in.h>
-
-int
-main ()
-{
-
-				struct in6_addr in6;
-				int i = GEOIP_CITY_EDITION_REV0_V6;
-				GeoIP_record_by_ipnum_v6(NULL, in6);
-
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_compile "$LINENO"; then :
-
-				{ $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-
-$as_echo "#define HAVE_GEOIP_CITY_V6 1" >>confdefs.h
-
-
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-
-fi
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-		;;
-esac
-
 
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for GSSAPI library" >&5
@@ -14615,1051 +14304,7 @@ fi
 done
 
 
-#
-# Begin pthreads checking.
-#
-# First, decide whether to use multithreading or not.
-#
-# Enable multithreading by default on systems where it is known
-# to work well, and where debugging of multithreaded programs
-# is supported.
-#
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with thread support" >&5
-$as_echo_n "checking whether to build with thread support... " >&6; }
-
-case $host in
-*-dec-osf*)
-	use_threads=true ;;
-*-solaris2.[0-6])
-	# Thread signals are broken on Solaris 2.6; they are sometimes
-	# delivered to the wrong thread.
-	use_threads=false ;;
-*-solaris*)
-	use_threads=true ;;
-*-ibm-aix*)
-	use_threads=true ;;
-*-hp-hpux10*)
-	use_threads=false ;;
-*-hp-hpux11*)
-	use_threads=true ;;
-*-sgi-irix*)
-	use_threads=true ;;
-*-sco-sysv*uw*|*-*-sysv*UnixWare*)
-        # UnixWare
-	use_threads=false ;;
-*-*-sysv*OpenUNIX*)
-        # UnixWare
-	use_threads=true ;;
-*-netbsd[1234].*)
-	# NetBSD earlier than NetBSD 5.0 has poor pthreads.
-	#  Don't use it by default.
-	use_threads=false ;;
-*-netbsd*)
-	use_threads=true ;;
-*-openbsd*)
-	# OpenBSD users have reported that named dumps core on
-	# startup when built with threads.
-	use_threads=false ;;
-*-freebsd[1234567].*)
-	# Threads are broken at least up to FreeBSD 4.11.
-	# FreeBSD 5, 6 and 7 we have never officially supported threads
-	# on. YMMV
-	use_threads=false ;;
-*-freebsd*)
-	use_threads=true ;;
-*-bsdi[234]*)
-	# Thread signals do not work reliably on some versions of BSD/OS.
-	use_threads=false ;;
-*-bsdi5*)
-	use_threads=true ;;
-*-linux*)
-	use_threads=true ;;
-*-darwin[123456789].*)
-	use_threads=false ;;
-*-darwin*.*)
-	use_threads=true ;;
-*)
-	use_threads=true ;;
-esac
-
-# Check whether --enable-threads was given.
-if test "${enable_threads+set}" = set; then :
-  enableval=$enable_threads;
-fi
-
-case "$enable_threads" in
-	yes)
-		use_threads=true
-		;;
-	no)
-		use_threads=false
-		;;
-	'')
-		# Use system-dependent default
-		;;
-	*)
-	    	as_fn_error $? "--enable-threads takes yes or no" "$LINENO" 5
-		;;
-esac
-
-if $use_threads
-then
-	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-else
-	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-fi
-
-if $use_threads
-then
-	#
-	# Search for / configure pthreads in a system-dependent fashion.
-	#
-	case "$host" in
-		*-freebsd*)
-			# We don't want to set -lpthread as that break
-			# the ability to choose threads library at final
-			# link time and is not valid for all architectures.
-
-			PTHREAD=
-			if test "X$GCC" = "Xyes"; then
-				saved_cc="$CC"
-				CC="$CC -pthread"
-				{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for gcc -pthread support" >&5
-$as_echo_n "checking for gcc -pthread support... " >&6; };
-				cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-#include <pthread.h>
-int
-main ()
-{
-printf("%x\n", pthread_create);
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  PTHREAD="yes"
-					    { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-				CC="$saved_cc"
-			fi
-			if test "X$PTHREAD" != "Xyes"; then
-				{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for pthread_create in -lpthread" >&5
-$as_echo_n "checking for pthread_create in -lpthread... " >&6; }
-if ${ac_cv_lib_pthread_pthread_create+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lpthread  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char pthread_create ();
-int
-main ()
-{
-return pthread_create ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_pthread_pthread_create=yes
-else
-  ac_cv_lib_pthread_pthread_create=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pthread_pthread_create" >&5
-$as_echo "$ac_cv_lib_pthread_pthread_create" >&6; }
-if test "x$ac_cv_lib_pthread_pthread_create" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBPTHREAD 1
-_ACEOF
-
-  LIBS="-lpthread $LIBS"
-
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for thread_create in -lthr" >&5
-$as_echo_n "checking for thread_create in -lthr... " >&6; }
-if ${ac_cv_lib_thr_thread_create+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lthr  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char thread_create ();
-int
-main ()
-{
-return thread_create ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_thr_thread_create=yes
-else
-  ac_cv_lib_thr_thread_create=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_thr_thread_create" >&5
-$as_echo "$ac_cv_lib_thr_thread_create" >&6; }
-if test "x$ac_cv_lib_thr_thread_create" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBTHR 1
-_ACEOF
-
-  LIBS="-lthr $LIBS"
-
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pthread_create in -lc_r" >&5
-$as_echo_n "checking for pthread_create in -lc_r... " >&6; }
-if ${ac_cv_lib_c_r_pthread_create+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lc_r  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char pthread_create ();
-int
-main ()
-{
-return pthread_create ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_c_r_pthread_create=yes
-else
-  ac_cv_lib_c_r_pthread_create=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_c_r_pthread_create" >&5
-$as_echo "$ac_cv_lib_c_r_pthread_create" >&6; }
-if test "x$ac_cv_lib_c_r_pthread_create" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBC_R 1
-_ACEOF
-
-  LIBS="-lc_r $LIBS"
-
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pthread_create in -lc" >&5
-$as_echo_n "checking for pthread_create in -lc... " >&6; }
-if ${ac_cv_lib_c_pthread_create+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lc  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char pthread_create ();
-int
-main ()
-{
-return pthread_create ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_c_pthread_create=yes
-else
-  ac_cv_lib_c_pthread_create=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_c_pthread_create" >&5
-$as_echo "$ac_cv_lib_c_pthread_create" >&6; }
-if test "x$ac_cv_lib_c_pthread_create" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBC 1
-_ACEOF
-
-  LIBS="-lc $LIBS"
-
-else
-  as_fn_error $? "\"could not find thread libraries\"" "$LINENO" 5
-fi
-
-fi
-
-fi
-
-fi
-
-			fi
-			;;
-		*)
-			{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for pthread_create in -lpthread" >&5
-$as_echo_n "checking for pthread_create in -lpthread... " >&6; }
-if ${ac_cv_lib_pthread_pthread_create+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lpthread  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char pthread_create ();
-int
-main ()
-{
-return pthread_create ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_pthread_pthread_create=yes
-else
-  ac_cv_lib_pthread_pthread_create=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pthread_pthread_create" >&5
-$as_echo "$ac_cv_lib_pthread_pthread_create" >&6; }
-if test "x$ac_cv_lib_pthread_pthread_create" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBPTHREAD 1
-_ACEOF
-
-  LIBS="-lpthread $LIBS"
-
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for __pthread_create in -lpthread" >&5
-$as_echo_n "checking for __pthread_create in -lpthread... " >&6; }
-if ${ac_cv_lib_pthread___pthread_create+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lpthread  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char __pthread_create ();
-int
-main ()
-{
-return __pthread_create ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_pthread___pthread_create=yes
-else
-  ac_cv_lib_pthread___pthread_create=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pthread___pthread_create" >&5
-$as_echo "$ac_cv_lib_pthread___pthread_create" >&6; }
-if test "x$ac_cv_lib_pthread___pthread_create" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBPTHREAD 1
-_ACEOF
-
-  LIBS="-lpthread $LIBS"
-
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for __pthread_create_system in -lpthread" >&5
-$as_echo_n "checking for __pthread_create_system in -lpthread... " >&6; }
-if ${ac_cv_lib_pthread___pthread_create_system+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lpthread  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char __pthread_create_system ();
-int
-main ()
-{
-return __pthread_create_system ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_pthread___pthread_create_system=yes
-else
-  ac_cv_lib_pthread___pthread_create_system=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pthread___pthread_create_system" >&5
-$as_echo "$ac_cv_lib_pthread___pthread_create_system" >&6; }
-if test "x$ac_cv_lib_pthread___pthread_create_system" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBPTHREAD 1
-_ACEOF
-
-  LIBS="-lpthread $LIBS"
-
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pthread_create in -lc_r" >&5
-$as_echo_n "checking for pthread_create in -lc_r... " >&6; }
-if ${ac_cv_lib_c_r_pthread_create+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lc_r  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char pthread_create ();
-int
-main ()
-{
-return pthread_create ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_c_r_pthread_create=yes
-else
-  ac_cv_lib_c_r_pthread_create=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_c_r_pthread_create" >&5
-$as_echo "$ac_cv_lib_c_r_pthread_create" >&6; }
-if test "x$ac_cv_lib_c_r_pthread_create" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBC_R 1
-_ACEOF
-
-  LIBS="-lc_r $LIBS"
-
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pthread_create in -lc" >&5
-$as_echo_n "checking for pthread_create in -lc... " >&6; }
-if ${ac_cv_lib_c_pthread_create+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lc  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char pthread_create ();
-int
-main ()
-{
-return pthread_create ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_c_pthread_create=yes
-else
-  ac_cv_lib_c_pthread_create=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_c_pthread_create" >&5
-$as_echo "$ac_cv_lib_c_pthread_create" >&6; }
-if test "x$ac_cv_lib_c_pthread_create" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBC 1
-_ACEOF
-
-  LIBS="-lc $LIBS"
-
-else
-  as_fn_error $? "\"could not find thread libraries\"" "$LINENO" 5
-fi
-
-fi
-
-fi
-
-fi
-
-fi
-
-		;;
-	esac
-fi
-
-if $use_threads
-then
-	if test "X$GCC" = "Xyes"; then
-		case "$host" in
-		*-freebsd*)
-			CC="$CC -pthread"
-			CCOPT="$CCOPT -pthread"
-			CCNOOPT="$CCNOOPT -pthread"
-			STD_CDEFINES="$STD_CDEFINES -D_THREAD_SAFE"
-			;;
-		*-openbsd*)
-			CC="$CC -pthread"
-			CCOPT="$CCOPT -pthread"
-			CCNOOPT="$CCNOOPT -pthread"
-			;;
-		*-solaris*)
-			LIBS="$LIBS -lthread"
-			;;
-		*-ibm-aix*)
-			STD_CDEFINES="$STD_CDEFINES -D_THREAD_SAFE"
-			;;
-		esac
-	else
-		case $host in
-		*-dec-osf*)
-			CC="$CC -pthread"
-			CCOPT="$CCOPT -pthread"
-			CCNOOPT="$CCNOOPT -pthread"
-			;;
-		*-solaris*)
-			CC="$CC -mt"
-			CCOPT="$CCOPT -mt"
-			CCNOOPT="$CCNOOPT -mt"
-			;;
-		*-ibm-aix*)
-			STD_CDEFINES="$STD_CDEFINES -D_THREAD_SAFE"
-			;;
-		*-sco-sysv*uw*|*-*-sysv*UnixWare*)
-			CC="$CC -Kthread"
-			CCOPT="$CCOPT -Kthread"
-			CCNOOPT="$CCNOOPT -Kthread"
-			;;
-		*-*-sysv*OpenUNIX*)
-			CC="$CC -Kpthread"
-			CCOPT="$CCOPT -Kpthread"
-			CCNOOPT="$CCNOOPT -Kpthread"
-			;;
-		esac
-	fi
-	ALWAYS_DEFINES="-D_REENTRANT"
-	ISC_PLATFORM_USETHREADS="#define ISC_PLATFORM_USETHREADS 1"
-	THREADOPTOBJS='${THREADOPTOBJS}'
-	THREADOPTSRCS='${THREADOPTSRCS}'
-	thread_dir=pthreads
-	#
-	# We'd like to use sigwait() too
-	#
-	ac_fn_c_check_func "$LINENO" "sigwait" "ac_cv_func_sigwait"
-if test "x$ac_cv_func_sigwait" = xyes; then :
-  $as_echo "#define HAVE_SIGWAIT 1" >>confdefs.h
-
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for sigwait in -lc" >&5
-$as_echo_n "checking for sigwait in -lc... " >&6; }
-if ${ac_cv_lib_c_sigwait+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lc  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char sigwait ();
-int
-main ()
-{
-return sigwait ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_c_sigwait=yes
-else
-  ac_cv_lib_c_sigwait=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_c_sigwait" >&5
-$as_echo "$ac_cv_lib_c_sigwait" >&6; }
-if test "x$ac_cv_lib_c_sigwait" = xyes; then :
-  $as_echo "#define HAVE_SIGWAIT 1" >>confdefs.h
-
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for sigwait in -lpthread" >&5
-$as_echo_n "checking for sigwait in -lpthread... " >&6; }
-if ${ac_cv_lib_pthread_sigwait+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lpthread  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char sigwait ();
-int
-main ()
-{
-return sigwait ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_pthread_sigwait=yes
-else
-  ac_cv_lib_pthread_sigwait=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pthread_sigwait" >&5
-$as_echo "$ac_cv_lib_pthread_sigwait" >&6; }
-if test "x$ac_cv_lib_pthread_sigwait" = xyes; then :
-  $as_echo "#define HAVE_SIGWAIT 1" >>confdefs.h
-
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for _Psigwait in -lpthread" >&5
-$as_echo_n "checking for _Psigwait in -lpthread... " >&6; }
-if ${ac_cv_lib_pthread__Psigwait+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lpthread  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char _Psigwait ();
-int
-main ()
-{
-return _Psigwait ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_pthread__Psigwait=yes
-else
-  ac_cv_lib_pthread__Psigwait=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pthread__Psigwait" >&5
-$as_echo "$ac_cv_lib_pthread__Psigwait" >&6; }
-if test "x$ac_cv_lib_pthread__Psigwait" = xyes; then :
-  $as_echo "#define HAVE_SIGWAIT 1" >>confdefs.h
-
-fi
-
-fi
-
-fi
-
-fi
-
-
-	ac_fn_c_check_func "$LINENO" "pthread_attr_getstacksize" "ac_cv_func_pthread_attr_getstacksize"
-if test "x$ac_cv_func_pthread_attr_getstacksize" = xyes; then :
-  $as_echo "#define HAVE_PTHREAD_ATTR_GETSTACKSIZE 1" >>confdefs.h
-
-fi
-
-
-	ac_fn_c_check_func "$LINENO" "pthread_attr_setstacksize" "ac_cv_func_pthread_attr_setstacksize"
-if test "x$ac_cv_func_pthread_attr_setstacksize" = xyes; then :
-  $as_echo "#define HAVE_PTHREAD_ATTR_SETSTACKSIZE 1" >>confdefs.h
-
-fi
-
-
-
-# Check whether --with-locktype was given.
-if test "${with_locktype+set}" = set; then :
-  withval=$with_locktype; locktype="$withval"
-else
-  locktype="adaptive"
-fi
-
-
-	case "$locktype" in
-		adaptive)
-			{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for PTHREAD_MUTEX_ADAPTIVE_NP" >&5
-$as_echo_n "checking for PTHREAD_MUTEX_ADAPTIVE_NP... " >&6; }
-
-			cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-			  #ifndef _GNU_SOURCE
-			  #define _GNU_SOURCE
-			  #endif
-			  #include <pthread.h>
-
-int
-main ()
-{
-
-			  return (PTHREAD_MUTEX_ADAPTIVE_NP);
-
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_compile "$LINENO"; then :
-   { $as_echo "$as_me:${as_lineno-$LINENO}: result: using adaptive lock type" >&5
-$as_echo "using adaptive lock type" >&6; }
-
-$as_echo "#define HAVE_PTHREAD_MUTEX_ADAPTIVE_NP 1" >>confdefs.h
-
-else
-   { $as_echo "$as_me:${as_lineno-$LINENO}: result: using standard lock type" >&5
-$as_echo "using standard lock type" >&6; }
-fi
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-			;;
-		standard)
-			{ $as_echo "$as_me:${as_lineno-$LINENO}: result: using standard lock type" >&5
-$as_echo "using standard lock type" >&6; }
-			;;
-		*)
-			as_fn_error $? "You must specify \"adaptive\" or \"standard\" for --with-locktype." "$LINENO" 5
-			;;
-	esac
-
-	for ac_header in sched.h
-do :
-  ac_fn_c_check_header_mongrel "$LINENO" "sched.h" "ac_cv_header_sched_h" "$ac_includes_default"
-if test "x$ac_cv_header_sched_h" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_SCHED_H 1
-_ACEOF
-
-fi
-
-done
-
-
-	case "$host" in
-	*solaris-*)
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for sched_yield in -lrt" >&5
-$as_echo_n "checking for sched_yield in -lrt... " >&6; }
-if ${ac_cv_lib_rt_sched_yield+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lrt  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char sched_yield ();
-int
-main ()
-{
-return sched_yield ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_rt_sched_yield=yes
-else
-  ac_cv_lib_rt_sched_yield=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_rt_sched_yield" >&5
-$as_echo "$ac_cv_lib_rt_sched_yield" >&6; }
-if test "x$ac_cv_lib_rt_sched_yield" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBRT 1
-_ACEOF
-
-  LIBS="-lrt $LIBS"
-
-fi
-
-		;;
-	esac
-
-	for ac_func in sched_yield pthread_yield pthread_yield_np
-do :
-  as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
-ac_fn_c_check_func "$LINENO" "$ac_func" "$as_ac_var"
-if eval test \"x\$"$as_ac_var"\" = x"yes"; then :
-  cat >>confdefs.h <<_ACEOF
-#define `$as_echo "HAVE_$ac_func" | $as_tr_cpp` 1
-_ACEOF
-
-fi
-done
-
-
-	#
-	# Additional OS-specific issues related to pthreads and sigwait.
-	#
-	case "$host" in
-		#
-		# One more place to look for sigwait.
-		#
-		*-freebsd*)
-			{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for sigwait in -lc_r" >&5
-$as_echo_n "checking for sigwait in -lc_r... " >&6; }
-if ${ac_cv_lib_c_r_sigwait+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lc_r  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char sigwait ();
-int
-main ()
-{
-return sigwait ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_c_r_sigwait=yes
-else
-  ac_cv_lib_c_r_sigwait=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_c_r_sigwait" >&5
-$as_echo "$ac_cv_lib_c_r_sigwait" >&6; }
-if test "x$ac_cv_lib_c_r_sigwait" = xyes; then :
-  $as_echo "#define HAVE_SIGWAIT 1" >>confdefs.h
-
-fi
-
-			case $host in
-			*-freebsd5.[012]|*-freebsd5.[012].*);;
-			*-freebsd5.[3456789]|*-freebsd5.[3456789].*)
-				$as_echo "#define NEED_PTHREAD_SCOPE_SYSTEM 1" >>confdefs.h
-
-				;;
-			*-freebsd6.*)
-				$as_echo "#define NEED_PTHREAD_SCOPE_SYSTEM 1" >>confdefs.h
-
-				;;
-			esac
-			;;
-		#
-		# BSDI 3.0 through 4.0.1 needs pthread_init() to be
-		# called before certain pthreads calls.	 This is deprecated
-		# in BSD/OS 4.1.
-		#
-		*-bsdi3.*|*-bsdi4.0*)
-			$as_echo "#define NEED_PTHREAD_INIT 1" >>confdefs.h
-
-			;;
-		#
-		# LinuxThreads requires some changes to the way we
-		# deal with signals.
-		#
-		*-linux*)
-			$as_echo "#define HAVE_LINUXTHREADS 1" >>confdefs.h
-
-			;;
-		#
-		# Ensure the right sigwait() semantics on Solaris and make
-		# sure we call pthread_setconcurrency.
-		#
-		*-solaris*)
-			$as_echo "#define _POSIX_PTHREAD_SEMANTICS 1" >>confdefs.h
-
-			ac_fn_c_check_func "$LINENO" "pthread_setconcurrency" "ac_cv_func_pthread_setconcurrency"
-if test "x$ac_cv_func_pthread_setconcurrency" = xyes; then :
-  $as_echo "#define CALL_PTHREAD_SETCONCURRENCY 1" >>confdefs.h
-
-fi
-
-			;;
-		#
-		# UnixWare does things its own way.
-		#
-		*-sco-sysv*uw*|*-*-sysv*UnixWare*|*-*-sysv*OpenUNIX*)
-			$as_echo "#define HAVE_UNIXWARE_SIGWAIT 1" >>confdefs.h
-
-			;;
-	esac
-
-	# Look for functions relating to thread naming
-	for ac_func in pthread_setname_np pthread_set_name_np
-do :
-  as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
-ac_fn_c_check_func "$LINENO" "$ac_func" "$as_ac_var"
-if eval test \"x\$"$as_ac_var"\" = x"yes"; then :
-  cat >>confdefs.h <<_ACEOF
-#define `$as_echo "HAVE_$ac_func" | $as_tr_cpp` 1
-_ACEOF
-
-fi
-done
-
-	for ac_header in pthread_np.h
-do :
-  ac_fn_c_check_header_compile "$LINENO" "pthread_np.h" "ac_cv_header_pthread_np_h" "#include <pthread.h>
-"
-if test "x$ac_cv_header_pthread_np_h" = xyes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_PTHREAD_NP_H 1
-_ACEOF
-
-fi
-
-done
-
-
-	#
-	# Look for sysconf to allow detection of the number of processors.
-	#
-	ac_fn_c_check_func "$LINENO" "sysconf" "ac_cv_func_sysconf"
-if test "x$ac_cv_func_sysconf" = xyes; then :
-  $as_echo "#define HAVE_SYSCONF 1" >>confdefs.h
-
-fi
-
-
-else
-	ISC_PLATFORM_USETHREADS="#undef ISC_PLATFORM_USETHREADS"
-	thread_dir=nothreads
-	THREADOPTOBJS=""
-	THREADOPTSRCS=""
-	ALWAYS_DEFINES=""
-fi
-
-
-
-
-
-ISC_THREAD_DIR=$thread_dir
+ALWAYS_DEFINES=""
 
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for libtool" >&5
@@ -16262,15 +14907,6 @@ $as_echo "#define HAVE_OPENSSL_ECDSA 1" >>confdefs.h
 	{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for OpenSSL GOST support" >&5
 $as_echo_n "checking for OpenSSL GOST support... " >&6; }
 	have_gost=""
-	case "$use_pkcs11" in
-		auto|no)
-			;;
-		*)
-			if $use_threads; then
-				CC="$CC -pthread"
-			fi
-			;;
-	esac
 	if test "$cross_compiling" = yes; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: using --with-gost" >&5
 $as_echo "using --with-gost" >&6; }
@@ -16708,9 +15344,7 @@ $as_echo "no" >&6; }
 	yes|*)
 		{ $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
-		if ! $use_threads; then
-			as_fn_error $? "PKCS11 requires thread support" "$LINENO" 5
-		fi
+		as_fn_error $? "PKCS11 requires thread support" "$LINENO" 5
 		if test "X$CRYPTO" = "X-DOPENSSL"
 		then
 			{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for OpenSSL with PKCS11 support" >&5
@@ -17315,19 +15949,6 @@ fi
 
 
 #
-# Indicate what the final decision was regarding threads.
-#
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with threads" >&5
-$as_echo_n "checking whether to build with threads... " >&6; }
-if $use_threads; then
-	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-else
-	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-fi
-
-#
 # End of pthreads stuff.
 #
 
@@ -17737,89 +16358,6 @@ $as_echo "no" >&6; }
 esac
 
 #
-# enable/disable dumping stack backtrace.  Also check if the system supports
-# glibc-compatible backtrace() function.
-#
-# Check whether --enable-backtrace was given.
-if test "${enable_backtrace+set}" = set; then :
-  enableval=$enable_backtrace; want_backtrace="$enableval"
-else
-  want_backtrace="yes"
-fi
-
-case $want_backtrace in
-yes)
-	ISC_PLATFORM_USEBACKTRACE="#define ISC_PLATFORM_USEBACKTRACE 1"
-	cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-#include <execinfo.h>
-int
-main ()
-{
-return (backtrace((void **)0, 0));
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-
-$as_echo "#define HAVE_LIBCTRACE /**/" >>confdefs.h
-
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-	;;
-*)
-	ISC_PLATFORM_USEBACKTRACE="#undef ISC_PLATFORM_USEBACKTRACE"
-	;;
-esac
-
-
-# Check whether --enable-symtable was given.
-if test "${enable_symtable+set}" = set; then :
-  enableval=$enable_symtable; want_symtable="$enableval"
-else
-  want_symtable="minimal"
-fi
-
-case $want_symtable in
-yes|all|minimal)     # "yes" is a hidden value equivalent to "minimal"
-	if test "" = "$PERL"
-	then
-		as_fn_error $? "Internal symbol table requires perl but no perl is found.
-Install perl or explicitly disable the feature by --disable-symtable." "$LINENO" 5
-	fi
-	if test "yes" = "$use_libtool"; then
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Internal symbol table does not work with libtool.  Disabling symbol table." >&5
-$as_echo "$as_me: WARNING: Internal symbol table does not work with libtool.  Disabling symbol table." >&2;}
-	else
-		# we generate the internal symbol table only for those systems
-		# known to work to avoid unexpected build failure.  Also, warn
-		# about unsupported systems when the feature is enabled
-		#  manually.
-		case $host_os in
-		freebsd*|netbsd*|openbsd*|linux*|solaris*|darwin*)
-			MKSYMTBL_PROGRAM="$PERL"
-			if test "all" = "$want_symtable"; then
-				ALWAYS_MAKE_SYMTABLE="yes"
-			fi
-			;;
-		*)
-			if test "yes" = "$want_symtable" -o "all" = "$want_symtable"
-			then
-				{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: this system is not known to generate internal symbol table safely; disabling it" >&5
-$as_echo "$as_me: WARNING: this system is not known to generate internal symbol table safely; disabling it" >&2;}
-			fi
-		esac
-	fi
-	;;
-*)
-	;;
-esac
-
-
-
-#
 # File name extension for static archive files, for those few places
 # where they are treated differently from dynamic ones.
 #
@@ -17952,12 +16490,10 @@ esac
 case "$host" in
 *-bsdi4.[01]*)
 	ISC_PLATFORM_NEEDNETINET6IN6H="#define ISC_PLATFORM_NEEDNETINET6IN6H 1"
-	LWRES_PLATFORM_NEEDNETINET6IN6H="#define LWRES_PLATFORM_NEEDNETINET6IN6H 1"
 	isc_netinet6in6_hack="#include <netinet6/in6.h>"
 	;;
 *)
 	ISC_PLATFORM_NEEDNETINET6IN6H="#undef ISC_PLATFORM_NEEDNETINET6IN6H"
-	LWRES_PLATFORM_NEEDNETINET6IN6H="#undef LWRES_PLATFORM_NEEDNETINET6IN6H"
 	isc_netinet6in6_hack=""
 	;;
 esac
@@ -17970,13 +16506,11 @@ case "$host" in
 *-sco-sysv*uw*|*-*-sysv*UnixWare*|*-*-sysv*OpenUNIX*)
 	# UnixWare
 	ISC_PLATFORM_NEEDNETINETIN6H="#define ISC_PLATFORM_NEEDNETINETIN6H 1"
-	LWRES_PLATFORM_NEEDNETINETIN6H="#define LWRES_PLATFORM_NEEDNETINETIN6H 1"
 	ISC_PLATFORM_FIXIN6ISADDR="#define ISC_PLATFORM_FIXIN6ISADDR 1"
 	isc_netinetin6_hack="#include <netinet/in6.h>"
 	;;
 *)
 	ISC_PLATFORM_NEEDNETINETIN6H="#undef ISC_PLATFORM_NEEDNETINETIN6H"
-	LWRES_PLATFORM_NEEDNETINETIN6H="#undef LWRES_PLATFORM_NEEDNETINETIN6H"
 	ISC_PLATFORM_FIXIN6ISADDR="#undef ISC_PLATFORM_FIXIN6ISADDR"
 	isc_netinetin6_hack=""
 	;;
@@ -17988,7 +16522,6 @@ esac
 case "$found_ipv6" in
 	yes)
 		ISC_PLATFORM_HAVEIPV6="#define ISC_PLATFORM_HAVEIPV6 1"
-		LWRES_PLATFORM_HAVEIPV6="#define LWRES_PLATFORM_HAVEIPV6 1"
 
 		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for in6_addr" >&5
 $as_echo_n "checking for in6_addr... " >&6; }
@@ -18013,13 +16546,11 @@ if ac_fn_c_try_compile "$LINENO"; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 		 ISC_PLATFORM_HAVEINADDR6="#undef ISC_PLATFORM_HAVEINADDR6"
-		 LWRES_PLATFORM_HAVEINADDR6="#undef LWRES_PLATFORM_HAVEINADDR6"
 		 isc_in_addr6_hack=""
 else
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 		 ISC_PLATFORM_HAVEINADDR6="#define ISC_PLATFORM_HAVEINADDR6 1"
-		 LWRES_PLATFORM_HAVEINADDR6="#define LWRES_PLATFORM_HAVEINADDR6 1"
 		 isc_in_addr6_hack="#define in6_addr in_addr6"
 fi
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
@@ -18048,12 +16579,10 @@ if ac_fn_c_try_link "$LINENO"; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 			 ISC_PLATFORM_NEEDIN6ADDRANY="#undef ISC_PLATFORM_NEEDIN6ADDRANY"
-			 LWRES_PLATFORM_NEEDIN6ADDRANY="#undef LWRES_PLATFORM_NEEDIN6ADDRANY"
 else
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 			 ISC_PLATFORM_NEEDIN6ADDRANY="#define ISC_PLATFORM_NEEDIN6ADDRANY 1"
-			 LWRES_PLATFORM_NEEDIN6ADDRANY="#define LWRES_PLATFORM_NEEDIN6ADDRANY 1"
 fi
 rm -f core conftest.err conftest.$ac_objext \
     conftest$ac_exeext conftest.$ac_ext
@@ -18082,12 +16611,10 @@ if ac_fn_c_try_link "$LINENO"; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 			 ISC_PLATFORM_NEEDIN6ADDRLOOPBACK="#undef ISC_PLATFORM_NEEDIN6ADDRLOOPBACK"
-			 LWRES_PLATFORM_NEEDIN6ADDRLOOPBACK="#undef LWRES_PLATFORM_NEEDIN6ADDRLOOPBACK"
 else
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 			 ISC_PLATFORM_NEEDIN6ADDRLOOPBACK="#define ISC_PLATFORM_NEEDIN6ADDRLOOPBACK 1"
-			 LWRES_PLATFORM_NEEDIN6ADDRLOOPBACK="#define LWRES_PLATFORM_NEEDIN6ADDRLOOPBACK 1"
 fi
 rm -f core conftest.err conftest.$ac_objext \
     conftest$ac_exeext conftest.$ac_ext
@@ -18157,9 +16684,7 @@ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 		;;
 	no)
 		ISC_PLATFORM_HAVEIPV6="#undef ISC_PLATFORM_HAVEIPV6"
-		LWRES_PLATFORM_HAVEIPV6="#undef LWRES_PLATFORM_HAVEIPV6"
 		ISC_PLATFORM_NEEDIN6ADDRANY="#undef ISC_PLATFORM_NEEDIN6ADDRANY"
-		LWRES_PLATFORM_NEEDIN6ADDRANY="#undef LWRES_PLATFORM_NEEDIN6ADDRANY"
 		ISC_PLATFORM_HAVEIN6PKTINFO="#undef ISC_PLATFORM_HAVEIN6PKTINFO"
 		LWRES_HAVE_SIN6_SCOPE_ID="#define LWRES_HAVE_SIN6_SCOPE_ID 1"
 		ISC_PLATFORM_HAVESCOPEID="#define ISC_PLATFORM_HAVESCOPEID 1"
@@ -18198,12 +16723,6 @@ $as_echo "no" >&6; }
 ISC_PLATFORM_HAVESOCKADDRSTORAGE="#undef ISC_PLATFORM_HAVESOCKADDRSTORAGE"
 fi
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-
-
-
-
-
-
 
 
 
@@ -18320,49 +16839,6 @@ fi
 
 
 
-# On NetBSD 1.4.2 and maybe others, inet_pton() incorrectly accepts
-# addresses with less than four octets, like "1.2.3".  Also leading
-# zeros should also be rejected.
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for working inet_pton with IPv6 support" >&5
-$as_echo_n "checking for working inet_pton with IPv6 support... " >&6; }
-if test "$cross_compiling" = yes; then :
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: assuming inet_pton needed" >&5
-$as_echo "assuming inet_pton needed" >&6; }
-	ISC_EXTRA_OBJS="$ISC_EXTRA_OBJS inet_pton.$O"
-	ISC_EXTRA_SRCS="$ISC_EXTRA_SRCS inet_pton.c"
-	ISC_PLATFORM_NEEDPTON="#define ISC_PLATFORM_NEEDPTON 1"
-else
-  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-main() { char a[16]; return (inet_pton(AF_INET, "1.2.3", a) == 1 ? 1 :
-			     inet_pton(AF_INET, "1.2.3.04", a) == 1 ? 1 :
-			     (inet_pton(AF_INET6, "::1.2.3.4", a) != 1)); }
-_ACEOF
-if ac_fn_c_try_run "$LINENO"; then :
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-	ISC_PLATFORM_NEEDPTON="#undef ISC_PLATFORM_NEEDPTON"
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-	ISC_EXTRA_OBJS="$ISC_EXTRA_OBJS inet_pton.$O"
-	ISC_EXTRA_SRCS="$ISC_EXTRA_SRCS inet_pton.c"
-	ISC_PLATFORM_NEEDPTON="#define ISC_PLATFORM_NEEDPTON 1"
-fi
-rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext \
-  conftest.$ac_objext conftest.beam conftest.$ac_ext
-fi
-
-
-
-
-
 #
 # Look for a 4.4BSD-style sa_len member in struct sockaddr.
 #
@@ -18393,15 +16869,12 @@ if ac_fn_c_try_compile "$LINENO"; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 	ISC_PLATFORM_HAVESALEN="#define ISC_PLATFORM_HAVESALEN 1"
-	LWRES_PLATFORM_HAVESALEN="#define LWRES_PLATFORM_HAVESALEN 1"
 else
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 	ISC_PLATFORM_HAVESALEN="#undef ISC_PLATFORM_HAVESALEN"
-	LWRES_PLATFORM_HAVESALEN="#undef LWRES_PLATFORM_HAVESALEN"
 fi
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-
 
 
 #
@@ -18485,17 +16958,14 @@ if ac_fn_c_try_compile "$LINENO"; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 	ISC_LWRES_NEEDADDRINFO="#undef ISC_LWRES_NEEDADDRINFO"
-	ISC_IRS_NEEDADDRINFO="#undef ISC_IRS_NEEDADDRINFO"
 	$as_echo "#define HAVE_ADDRINFO 1" >>confdefs.h
 
 else
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 	ISC_LWRES_NEEDADDRINFO="#define ISC_LWRES_NEEDADDRINFO 1"
-	ISC_IRS_NEEDADDRINFO="#define ISC_IRS_NEEDADDRINFO 1"
 fi
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-
 
 
 #
@@ -18711,142 +17181,6 @@ fi
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 
 
-#
-# Sadly, the definitions of system-supplied getnameinfo(3) vary.  Try to catch
-# known variations here:
-#
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for getnameinfo prototype definitions" >&5
-$as_echo_n "checking for getnameinfo prototype definitions... " >&6; }
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netdb.h>
-int getnameinfo(const struct sockaddr *, socklen_t, char *,
-		socklen_t, char *, socklen_t, unsigned int);
-int
-main ()
-{
- return (0);
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_compile "$LINENO"; then :
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: socklen_t for buflen; u_int for flags" >&5
-$as_echo "socklen_t for buflen; u_int for flags" >&6; }
-
-$as_echo "#define IRS_GETNAMEINFO_SOCKLEN_T socklen_t" >>confdefs.h
-
-
-$as_echo "#define IRS_GETNAMEINFO_BUFLEN_T socklen_t" >>confdefs.h
-
-
-$as_echo "#define IRS_GETNAMEINFO_FLAGS_T unsigned int" >>confdefs.h
-
-else
-  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netdb.h>
-int getnameinfo(const struct sockaddr *, socklen_t, char *,
-		size_t, char *, size_t, int);
-int
-main ()
-{
- return (0);
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_compile "$LINENO"; then :
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: size_t for buflen; int for flags" >&5
-$as_echo "size_t for buflen; int for flags" >&6; }
-	 $as_echo "#define IRS_GETNAMEINFO_SOCKLEN_T socklen_t" >>confdefs.h
-
-	 $as_echo "#define IRS_GETNAMEINFO_BUFLEN_T size_t" >>confdefs.h
-
-	 $as_echo "#define IRS_GETNAMEINFO_FLAGS_T int" >>confdefs.h
-
-else
-  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netdb.h>
-int getnameinfo(const struct sockaddr *, size_t, char *,
-		size_t, char *, size_t, int);
-int
-main ()
-{
- return (0);
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_compile "$LINENO"; then :
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: size_t for buflen; int for flags" >&5
-$as_echo "size_t for buflen; int for flags" >&6; }
-	 $as_echo "#define IRS_GETNAMEINFO_SOCKLEN_T size_t" >>confdefs.h
-
-	 $as_echo "#define IRS_GETNAMEINFO_BUFLEN_T size_t" >>confdefs.h
-
-	 $as_echo "#define IRS_GETNAMEINFO_FLAGS_T int" >>confdefs.h
-
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: not match any subspecies; assume standard definition" >&5
-$as_echo "not match any subspecies; assume standard definition" >&6; }
-$as_echo "#define IRS_GETNAMEINFO_SOCKLEN_T socklen_t" >>confdefs.h
-
-$as_echo "#define IRS_GETNAMEINFO_BUFLEN_T socklen_t" >>confdefs.h
-
-$as_echo "#define IRS_GETNAMEINFO_FLAGS_T int" >>confdefs.h
-
-fi
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-fi
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-fi
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-
-#
-# ...and same for gai_strerror().
-#
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for gai_strerror prototype definitions" >&5
-$as_echo_n "checking for gai_strerror prototype definitions... " >&6; }
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netdb.h>
-char *gai_strerror(int ecode);
-int
-main ()
-{
- return (0);
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_compile "$LINENO"; then :
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: returning char *" >&5
-$as_echo "returning char *" >&6; }
-
-$as_echo "#define IRS_GAISTRERROR_RETURN_T char *" >>confdefs.h
-
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: not match any subspecies; assume standard definition" >&5
-$as_echo "not match any subspecies; assume standard definition" >&6; }
-$as_echo "#define IRS_GAISTRERROR_RETURN_T const char *" >>confdefs.h
-
-fi
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-
 ac_fn_c_check_func "$LINENO" "getipnodebyname" "ac_cv_func_getipnodebyname"
 if test "x$ac_cv_func_getipnodebyname" = xyes; then :
   ISC_LWRES_GETIPNODEPROTO="#undef ISC_LWRES_GETIPNODEPROTO"
@@ -18875,7 +17209,6 @@ if test "x$ac_cv_func_gai_strerror" = xyes; then :
   $as_echo "#define HAVE_GAISTRERROR 1" >>confdefs.h
 
 fi
-
 
 
 
@@ -18996,14 +17329,11 @@ fi
 ac_fn_c_check_func "$LINENO" "strtoul" "ac_cv_func_strtoul"
 if test "x$ac_cv_func_strtoul" = xyes; then :
   ISC_PLATFORM_NEEDSTRTOUL="#undef ISC_PLATFORM_NEEDSTRTOUL"
-	 LWRES_PLATFORM_NEEDSTRTOUL="#undef LWRES_PLATFORM_NEEDSTRTOUL"
 	 GENRANDOMLIB=""
 else
   ISC_PLATFORM_NEEDSTRTOUL="#define ISC_PLATFORM_NEEDSTRTOUL 1"
-	 LWRES_PLATFORM_NEEDSTRTOUL="#define LWRES_PLATFORM_NEEDSTRTOUL 1"
 	 GENRANDOMLIB='${ISCLIBS}'
 fi
-
 
 
 
@@ -19011,12 +17341,9 @@ fi
 ac_fn_c_check_func "$LINENO" "strlcpy" "ac_cv_func_strlcpy"
 if test "x$ac_cv_func_strlcpy" = xyes; then :
   ISC_PLATFORM_NEEDSTRLCPY="#undef ISC_PLATFORM_NEEDSTRLCPY"
-	 LWRES_PLATFORM_NEEDSTRLCPY="#undef LWRES_PLATFORM_NEEDSTRLCPY"
 else
   ISC_PLATFORM_NEEDSTRLCPY="#define ISC_PLATFORM_NEEDSTRLCPY 1"
-	 LWRES_PLATFORM_NEEDSTRLCPY="#define LWRES_PLATFORM_NEEDSTRLCPY 1"
 fi
-
 
 
 
@@ -19186,7 +17513,6 @@ ISC_PLATFORM_NEEDPRINTF='#undef ISC_PLATFORM_NEEDPRINTF'
 ISC_PLATFORM_NEEDFPRINTF='#undef ISC_PLATFORM_NEEDFPRINTF'
 ISC_PLATFORM_NEEDSPRINTF='#undef ISC_PLATFORM_NEEDSPRINTF'
 ISC_PLATFORM_NEEDVSNPRINTF='#undef ISC_PLATFORM_NEEDVSNPRINTF'
-LWRES_PLATFORM_NEEDVSNPRINTF='#undef LWRES_PLATFORM_NEEDVSNPRINTF'
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking sprintf return type" >&5
 $as_echo_n "checking sprintf return type... " >&6; }
@@ -19209,7 +17535,6 @@ $as_echo "char *" >&6; }
 ISC_PRINT_OBJS="print.$O"
 ISC_PRINT_SRCS="print.c"
 ISC_PLATFORM_NEEDSPRINTF="#define ISC_PLATFORM_NEEDSPRINTF"
-LWRES_PLATFORM_NEEDSPRINTF="#define LWRES_PLATFORM_NEEDSPRINTF"
 
 else
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: int" >&5
@@ -19224,7 +17549,6 @@ else
   ISC_PRINT_OBJS="print.$O"
 	 ISC_PRINT_SRCS="print.c"
 	 ISC_PLATFORM_NEEDVSNPRINTF="#define ISC_PLATFORM_NEEDVSNPRINTF 1"
-	 LWRES_PLATFORM_NEEDVSNPRINTF="#define LWRES_PLATFORM_NEEDVSNPRINTF 1"
 fi
 
 
@@ -19261,13 +17585,10 @@ $as_echo "no" >&6; }
 	ISC_PLATFORM_NEEDFPRINTF='#define ISC_PLATFORM_NEEDFPRINTF 1'
 	ISC_PLATFORM_NEEDFSRINTF='#define ISC_PLATFORM_NEEDSPRINTF 1'
 	ISC_PLATFORM_NEEDVSNPRINTF="#define ISC_PLATFORM_NEEDVSNPRINTF 1"
-	LWRES_PLATFORM_NEEDVSNPRINTF="#define LWRES_PLATFORM_NEEDVSNPRINTF 1"
 fi
 rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext \
   conftest.$ac_objext conftest.beam conftest.$ac_ext
 fi
-
-
 
 
 
@@ -19318,7 +17639,7 @@ fi
 
 
 # Determine the printf format characters to use when printing
-# values of type isc_int64_t. This will normally be "ll", but where
+# values of type int64_t. This will normally be "ll", but where
 # the compiler treats "long long" as a alias for "long" and printf
 # doesn't know about "long long" use "l".  Hopefully the sprintf
 # will produce a inconsistent result in the later case.  If the compiler
@@ -19336,7 +17657,6 @@ if test "$cross_compiling" = yes; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: assuming target platform uses ll" >&5
 $as_echo "assuming target platform uses ll" >&6; }
 	ISC_PLATFORM_QUADFORMAT='#define ISC_PLATFORM_QUADFORMAT "ll"'
-	LWRES_PLATFORM_QUADFORMAT='#define LWRES_PLATFORM_QUADFORMAT "ll"'
 else
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
@@ -19356,17 +17676,14 @@ if ac_fn_c_try_run "$LINENO"; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: ll" >&5
 $as_echo "ll" >&6; }
 	ISC_PLATFORM_QUADFORMAT='#define ISC_PLATFORM_QUADFORMAT "ll"'
-	LWRES_PLATFORM_QUADFORMAT='#define LWRES_PLATFORM_QUADFORMAT "ll"'
 else
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: l" >&5
 $as_echo "l" >&6; }
 	ISC_PLATFORM_QUADFORMAT='#define ISC_PLATFORM_QUADFORMAT "l"'
-	LWRES_PLATFORM_QUADFORMAT='#define LWRES_PLATFORM_QUADFORMAT "l"'
 fi
 rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext \
   conftest.$ac_objext conftest.beam conftest.$ac_ext
 fi
-
 
 
 
@@ -19583,7 +17900,7 @@ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 $as_echo_n "checking st_mtim.tv_nsec... " >&6; }
 cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
-#include <sys/fcntl.h>
+#include <sys/stat.h>
 int
 main ()
 {
@@ -19626,7 +17943,7 @@ _ACEOF
 if ac_fn_c_try_compile "$LINENO"; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
- ISC_PLATFORM_RLIMITTYPE="#define ISC_PLATFORM_RLIMITTYPE rlim_t"
+ rlim_t="#define ISC_PLATFORM_RLIMITTYPE rlim_t"
 else
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
@@ -19643,7 +17960,7 @@ else
   rlimtype="long long int"
 fi
 
-ISC_PLATFORM_RLIMITTYPE="#define ISC_PLATFORM_RLIMITTYPE $rlimtype"
+rlim_t="#define ISC_PLATFORM_RLIMITTYPE $rlimtype"
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: cannot determine type of rlim_cur when cross compiling - assuming $rlimtype" >&5
 $as_echo "cannot determine type of rlim_cur when cross compiling - assuming $rlimtype" >&6; }
 else
@@ -19658,7 +17975,7 @@ _ACEOF
 if ac_fn_c_try_run "$LINENO"; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: int" >&5
 $as_echo "int" >&6; }
-ISC_PLATFORM_RLIMITTYPE="#define ISC_PLATFORM_RLIMITTYPE int"
+rlim_t="#define ISC_PLATFORM_RLIMITTYPE int"
 else
 
 if test "$cross_compiling" = yes; then :
@@ -19675,7 +17992,7 @@ _ACEOF
 if ac_fn_c_try_run "$LINENO"; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: long int" >&5
 $as_echo "long int" >&6; }
-ISC_PLATFORM_RLIMITTYPE="#define ISC_PLATFORM_RLIMITTYPE long int"
+rlim_t="#define ISC_PLATFORM_RLIMITTYPE long int"
 else
 
 if test "$cross_compiling" = yes; then :
@@ -19692,7 +18009,7 @@ _ACEOF
 if ac_fn_c_try_run "$LINENO"; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: long long int" >&5
 $as_echo "long long int" >&6; }
-ISC_PLATFORM_RLIMITTYPE="#define ISC_PLATFORM_RLIMITTYPE long long int"
+rlim_t="#define ISC_PLATFORM_RLIMITTYPE long long int"
 else
   as_fn_error $? "unable to determine sizeof rlim_cur" "$LINENO" 5
 
@@ -19816,10 +18133,6 @@ esac
 #
 
 ISC_PLATFORM_USEDECLSPEC="#undef ISC_PLATFORM_USEDECLSPEC"
-
-LWRES_PLATFORM_USEDECLSPEC="#undef LWRES_PLATFORM_USEDECLSPEC"
-
-IRS_PLATFORM_USEDECLSPEC="#undef IRS_PLATFORM_USEDECLSPEC"
 
 #
 # Random remaining OS-specific issues involving compiler warnings.
@@ -21556,9 +19869,7 @@ fi
 
 case "$use_tuning" in
 	large)
-		if ! $use_threads; then
-			as_fn_error $? "Large-system tuning requires threads." "$LINENO" 5
-		fi
+		as_fn_error $? "Large-system tuning requires threads." "$LINENO" 5
 
 $as_echo "#define TUNE_LARGE 1" >>confdefs.h
 
@@ -21614,25 +19925,16 @@ BIND9_TOP_BUILDDIR=`pwd`
 
 
 
-
-
-
 if test "X$srcdir" != "X"; then
 	BIND9_ISC_BUILDINCLUDE="-I${BIND9_TOP_BUILDDIR}/lib/isc/include"
-	BIND9_ISCCC_BUILDINCLUDE="-I${BIND9_TOP_BUILDDIR}/lib/isccc/include"
 	BIND9_ISCCFG_BUILDINCLUDE="-I${BIND9_TOP_BUILDDIR}/lib/isccfg/include"
 	BIND9_DNS_BUILDINCLUDE="-I${BIND9_TOP_BUILDDIR}/lib/dns/include"
 	BIND9_LWRES_BUILDINCLUDE="-I${BIND9_TOP_BUILDDIR}/lib/lwres/include"
-	BIND9_BIND9_BUILDINCLUDE="-I${BIND9_TOP_BUILDDIR}/lib/bind9/include"
-	BIND9_IRS_BUILDINCLUDE="-I${BIND9_TOP_BUILDDIR}/lib/irs/include"
 else
 	BIND9_ISC_BUILDINCLUDE=""
-	BIND9_ISCCC_BUILDINCLUDE=""
 	BIND9_ISCCFG_BUILDINCLUDE=""
 	BIND9_DNS_BUILDINCLUDE=""
 	BIND9_LWRES_BUILDINCLUDE=""
-	BIND9_BIND9_BUILDINCLUDE=""
-	BIND9_IRS_BUILDINCLUDE=""
 fi
 
 
@@ -21681,9 +19983,6 @@ BIND9_CONFIGARGS="CONFIGARGS=${BIND9_CONFIGARGS}"
 LIBISC_API="$srcdir/lib/isc/api"
 
 
-LIBISCCC_API="$srcdir/lib/isccc/api"
-
-
 LIBISCCFG_API="$srcdir/lib/isccfg/api"
 
 
@@ -21693,13 +19992,7 @@ LIBDNS_API="$srcdir/lib/dns/api"
 LIBDNS_MAPAPI="$srcdir/lib/dns/mapapi"
 
 
-LIBBIND9_API="$srcdir/lib/bind9/api"
-
-
 LIBLWRES_API="$srcdir/lib/lwres/api"
-
-
-LIBIRS_API="$srcdir/lib/irs/api"
 
 #
 # Configure any DLZ drivers.
@@ -22057,7 +20350,7 @@ DNS_CRYPTO_LIBS="$NEWFLAGS"
 # elsewhere if there's a good reason for doing so.
 #
 
-ac_config_files="$ac_config_files make/Makefile make/mkdep Makefile bin/Makefile bin/dig/Makefile lib/Makefile lib/bind9/Makefile lib/bind9/include/Makefile lib/bind9/include/bind9/Makefile lib/dns/Makefile lib/dns/include/Makefile lib/dns/include/dns/Makefile lib/dns/include/dst/Makefile lib/irs/Makefile lib/irs/include/Makefile lib/irs/include/irs/Makefile lib/irs/include/irs/netdb.h lib/irs/include/irs/platform.h lib/isc/$arch/Makefile lib/isc/$arch/include/Makefile lib/isc/$arch/include/isc/Makefile lib/isc/$thread_dir/Makefile lib/isc/$thread_dir/include/Makefile lib/isc/$thread_dir/include/isc/Makefile lib/isc/Makefile lib/isc/include/Makefile lib/isc/include/isc/Makefile lib/isc/include/isc/platform.h lib/isc/include/pk11/Makefile lib/isc/include/pkcs11/Makefile lib/isc/nls/Makefile lib/isc/unix/Makefile lib/isc/unix/include/Makefile lib/isc/unix/include/isc/Makefile lib/isc/unix/include/pkcs11/Makefile lib/isccc/Makefile lib/isccc/include/Makefile lib/isccc/include/isccc/Makefile lib/isccfg/Makefile lib/isccfg/include/Makefile lib/isccfg/include/isccfg/Makefile lib/lwres/Makefile lib/lwres/include/Makefile lib/lwres/include/lwres/Makefile lib/lwres/include/lwres/netdb.h lib/lwres/include/lwres/platform.h lib/lwres/man/Makefile lib/lwres/unix/Makefile lib/lwres/unix/include/Makefile lib/lwres/unix/include/lwres/Makefile"
+ac_config_files="$ac_config_files make/Makefile make/mkdep Makefile bin/Makefile bin/dig/Makefile lib/Makefile lib/dns/Makefile lib/dns/include/Makefile lib/dns/include/dns/Makefile lib/dns/include/dst/Makefile lib/isc/nothreads/Makefile lib/isc/nothreads/include/Makefile lib/isc/nothreads/include/isc/Makefile lib/isc/Makefile lib/isc/include/Makefile lib/isc/include/isc/Makefile lib/isc/include/isc/platform.h lib/isc/nls/Makefile lib/isc/unix/Makefile lib/isc/unix/include/Makefile lib/isc/unix/include/isc/Makefile lib/isccfg/Makefile lib/isccfg/include/Makefile lib/isccfg/include/isccfg/Makefile lib/lwres/Makefile"
 
 
 #
@@ -23055,50 +21348,25 @@ do
     "bin/Makefile") CONFIG_FILES="$CONFIG_FILES bin/Makefile" ;;
     "bin/dig/Makefile") CONFIG_FILES="$CONFIG_FILES bin/dig/Makefile" ;;
     "lib/Makefile") CONFIG_FILES="$CONFIG_FILES lib/Makefile" ;;
-    "lib/bind9/Makefile") CONFIG_FILES="$CONFIG_FILES lib/bind9/Makefile" ;;
-    "lib/bind9/include/Makefile") CONFIG_FILES="$CONFIG_FILES lib/bind9/include/Makefile" ;;
-    "lib/bind9/include/bind9/Makefile") CONFIG_FILES="$CONFIG_FILES lib/bind9/include/bind9/Makefile" ;;
     "lib/dns/Makefile") CONFIG_FILES="$CONFIG_FILES lib/dns/Makefile" ;;
     "lib/dns/include/Makefile") CONFIG_FILES="$CONFIG_FILES lib/dns/include/Makefile" ;;
     "lib/dns/include/dns/Makefile") CONFIG_FILES="$CONFIG_FILES lib/dns/include/dns/Makefile" ;;
     "lib/dns/include/dst/Makefile") CONFIG_FILES="$CONFIG_FILES lib/dns/include/dst/Makefile" ;;
-    "lib/irs/Makefile") CONFIG_FILES="$CONFIG_FILES lib/irs/Makefile" ;;
-    "lib/irs/include/Makefile") CONFIG_FILES="$CONFIG_FILES lib/irs/include/Makefile" ;;
-    "lib/irs/include/irs/Makefile") CONFIG_FILES="$CONFIG_FILES lib/irs/include/irs/Makefile" ;;
-    "lib/irs/include/irs/netdb.h") CONFIG_FILES="$CONFIG_FILES lib/irs/include/irs/netdb.h" ;;
-    "lib/irs/include/irs/platform.h") CONFIG_FILES="$CONFIG_FILES lib/irs/include/irs/platform.h" ;;
-    "lib/isc/$arch/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/$arch/Makefile" ;;
-    "lib/isc/$arch/include/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/$arch/include/Makefile" ;;
-    "lib/isc/$arch/include/isc/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/$arch/include/isc/Makefile" ;;
-    "lib/isc/$thread_dir/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/$thread_dir/Makefile" ;;
-    "lib/isc/$thread_dir/include/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/$thread_dir/include/Makefile" ;;
-    "lib/isc/$thread_dir/include/isc/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/$thread_dir/include/isc/Makefile" ;;
+    "lib/isc/nothreads/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/nothreads/Makefile" ;;
+    "lib/isc/nothreads/include/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/nothreads/include/Makefile" ;;
+    "lib/isc/nothreads/include/isc/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/nothreads/include/isc/Makefile" ;;
     "lib/isc/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/Makefile" ;;
     "lib/isc/include/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/include/Makefile" ;;
     "lib/isc/include/isc/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/include/isc/Makefile" ;;
     "lib/isc/include/isc/platform.h") CONFIG_FILES="$CONFIG_FILES lib/isc/include/isc/platform.h" ;;
-    "lib/isc/include/pk11/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/include/pk11/Makefile" ;;
-    "lib/isc/include/pkcs11/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/include/pkcs11/Makefile" ;;
     "lib/isc/nls/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/nls/Makefile" ;;
     "lib/isc/unix/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/unix/Makefile" ;;
     "lib/isc/unix/include/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/unix/include/Makefile" ;;
     "lib/isc/unix/include/isc/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/unix/include/isc/Makefile" ;;
-    "lib/isc/unix/include/pkcs11/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isc/unix/include/pkcs11/Makefile" ;;
-    "lib/isccc/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isccc/Makefile" ;;
-    "lib/isccc/include/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isccc/include/Makefile" ;;
-    "lib/isccc/include/isccc/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isccc/include/isccc/Makefile" ;;
     "lib/isccfg/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isccfg/Makefile" ;;
     "lib/isccfg/include/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isccfg/include/Makefile" ;;
     "lib/isccfg/include/isccfg/Makefile") CONFIG_FILES="$CONFIG_FILES lib/isccfg/include/isccfg/Makefile" ;;
     "lib/lwres/Makefile") CONFIG_FILES="$CONFIG_FILES lib/lwres/Makefile" ;;
-    "lib/lwres/include/Makefile") CONFIG_FILES="$CONFIG_FILES lib/lwres/include/Makefile" ;;
-    "lib/lwres/include/lwres/Makefile") CONFIG_FILES="$CONFIG_FILES lib/lwres/include/lwres/Makefile" ;;
-    "lib/lwres/include/lwres/netdb.h") CONFIG_FILES="$CONFIG_FILES lib/lwres/include/lwres/netdb.h" ;;
-    "lib/lwres/include/lwres/platform.h") CONFIG_FILES="$CONFIG_FILES lib/lwres/include/lwres/platform.h" ;;
-    "lib/lwres/man/Makefile") CONFIG_FILES="$CONFIG_FILES lib/lwres/man/Makefile" ;;
-    "lib/lwres/unix/Makefile") CONFIG_FILES="$CONFIG_FILES lib/lwres/unix/Makefile" ;;
-    "lib/lwres/unix/include/Makefile") CONFIG_FILES="$CONFIG_FILES lib/lwres/unix/include/Makefile" ;;
-    "lib/lwres/unix/include/lwres/Makefile") CONFIG_FILES="$CONFIG_FILES lib/lwres/unix/include/lwres/Makefile" ;;
 
   *) as_fn_error $? "invalid argument: \`$ac_config_target'" "$LINENO" 5;;
   esac
@@ -24407,14 +22675,7 @@ report() {
     echo "Configuration summary:"
     echo "------------------------------------------------------------------------"
     echo "Optional features enabled:"
-    if $use_threads; then
-	echo "    Multiprocessing support (--enable-threads)"
-	if test "yes" = "$enable_full_report" -o "standard" = "$locktype"; then
-	    echo "        Mutex lock type: $locktype"
-	fi
-    fi
     test "large" = "$use_tuning" && echo "    Large-system tuning (--with-tuning)"
-    test "no" = "$use_geoip" || echo "    GeoIP access control (--with-geoip)"
     test "no" = "$use_gssapi" || echo "    GSS-API (--with-gssapi)"
     test "yes" = "$enable_fetchlimit" && \
         echo "    Recursive fetch limits for DoS attack mitigation (--enable-fetchlimit)"
@@ -24459,10 +22720,6 @@ report() {
 	echo "    Use libseccomp system call filtering (--enable-seccomp)"
     test "yes" = "$want_backtrace" && \
 	echo "    Print backtrace on crash (--enable-backtrace)"
-    test "minimal" = "$want_symtable" && \
-	echo "    Use symbol table for backtrace, named only (--enable-symtable)"
-    test "yes" = "$want_symtable" -o "all" = "$want_symtable" && \
-	echo "    Use symbol table for backtrace, all binaries (--enable-symtable=all)"
     test "no" = "$use_libtool" || echo "    Use GNU libtool (--with-libtool)"
     test "yes" = "$want_querytrace" && \
 	echo "    Very verbose query trace logging (--enable-querytrace)"
@@ -24488,12 +22745,10 @@ report() {
     echo "------------------------------------------------------------------------"
 
     echo "Features disabled or unavailable on this platform:"
-    $use_threads || echo "    Multiprocessing support (--enable-threads)"
     test "no" = "$enable_ipv6" -o "no" = "$found_ipv6" && \
     	echo "    IPv6 support (--enable-ipv6)"
     test "large" = "$use_tuning" || echo "    Large-system tuning (--with-tuning)"
 
-    test "no" = "$use_geoip" && echo "    GeoIP access control (--with-geoip)"
     test "no" = "$use_gssapi" && echo "    GSS-API (--with-gssapi)"
     test "no" = "$enable_fetchlimit" && \
             echo "    Recursive fetch limits for DoS attack mitigation (--enable-fetchlimit)"

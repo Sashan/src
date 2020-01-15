@@ -1,13 +1,26 @@
-#	$OpenBSD: Makefile,v 1.28 2019/05/10 02:22:34 bluhm Exp $
+#	$OpenBSD: Makefile,v 1.30 2020/01/15 20:47:13 bluhm Exp $
+
+# Copyright (c) 2012-2020 Alexander Bluhm <bluhm@openbsd.org>
+#
+# Permission to use, copy, modify, and distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 # The following ports must be installed:
 #
-# python-2.7          interpreted object-oriented programming language
 # scapy               powerful interactive packet manipulation in python
 
-.if ! exists(/usr/local/bin/python2.7) || ! exists(/usr/local/bin/scapy)
+.if ! exists(/usr/local/bin/scapy)
 regress:
-	@echo install python and the scapy module for additional tests
+	@echo Install scapy package to run this regress.
 	@echo SKIPPED
 .endif
 
@@ -94,7 +107,7 @@ regress:
 
 .if ! empty (PF_SSH)
 .if make (regress) || make (all)
-.BEGIN: pf.conf addr.py
+.BEGIN:
 	@echo
 	${SUDO} true
 	ssh -t ${PF_SSH} ${SUDO} true
@@ -120,7 +133,7 @@ addr.py: Makefile
 # Load the pf rules into the kernel of the PF machine.
 # XXX pfctl does not replace variables after @.
 stamp-pfctl: addr.py pf.conf
-	cat addr.py ${.CURDIR}/pf.conf | pfctl -n -f -
+	cat addr.py ${.CURDIR}/pf.conf | /sbin/pfctl -n -f -
 	cat addr.py ${.CURDIR}/pf.conf | \
 	    sed 's/@$$PF_IFIN /@${PF_IFIN} /;s/@$$PF_IFOUT /@${PF_IFOUT} /' | \
 	    ssh ${PF_SSH} ${SUDO} pfctl -a regress -f -
@@ -428,6 +441,8 @@ check-setup-eco:
 .for ip in ECO_IN ECO_OUT RTT_IN RTT_OUT
 	ssh ${ECO_SSH} netstat -nav -f inet -p udp | fgrep ' ${${ip}}.7 '
 	ssh ${ECO_SSH} netstat -nav -f inet6 -p udp | fgrep ' ${${ip}6}.7 '
+	ssh ${ECO_SSH} sysctl net.inet.ip.forwarding | fgrep =1
+	ssh ${ECO_SSH} sysctl net.inet6.ip6.forwarding | fgrep =1
 .endfor
 
 .include <bsd.regress.mk>

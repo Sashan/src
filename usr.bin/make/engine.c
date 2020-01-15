@@ -1,4 +1,4 @@
-/*	$OpenBSD: engine.c,v 1.60 2019/12/24 13:57:42 espie Exp $ */
+/*	$OpenBSD: engine.c,v 1.67 2020/01/13 15:24:31 espie Exp $ */
 /*
  * Copyright (c) 2012 Marc Espie.
  *
@@ -603,8 +603,6 @@ run_command(const char *cmd, bool errCheck)
 	_exit(1);
 }
 
-static Job myjob;
-
 void
 job_attach_node(Job *job, GNode *node)
 {
@@ -617,7 +615,7 @@ job_attach_node(Job *job, GNode *node)
 }
 
 void
-job_handle_status(Job *job, int status)
+handle_job_status(Job *job, int status)
 {
 	bool silent;
 	int dying;
@@ -666,19 +664,21 @@ job_handle_status(Job *job, int status)
 			printf(" in target '%s'", job->node->name);
 		if (job->flags & JOB_ERRCHECK) {
 			job->node->built_status = ERROR;
-			/* compute expensive status if we really want it */
-			if ((job->flags & JOB_SILENT) && job == &myjob)
-				determine_expensive_job(job);
 			if (!keepgoing) {
 				if (!silent)
 					printf("\n");
-				job->next = errorJobs;
-				errorJobs = job;
+				job->flags |= JOB_KEEPERROR;
 				/* XXX don't free the command */
 				return;
 			}
 			printf(", line %lu of %s", job->location->lineno, 
 			    job->location->fname);
+			/* Parallel make already determined whether
+			 * JOB_IS_EXPENSIVE, perform the computation for
+			 * sequential make to figure out whether to display the
+			 * command or not.  */
+			if ((job->flags & JOB_SILENT) && sequential)
+				determine_expensive_job(job);
 			if ((job->flags & (JOB_SILENT | JOB_IS_EXPENSIVE)) 
 			    == JOB_SILENT)
 				printf(": %s", job->cmd);
@@ -699,17 +699,12 @@ job_handle_status(Job *job, int status)
 int
 run_gnode(GNode *gn)
 {
+	Job *j;
 	if (!gn || (gn->type & OP_DUMMY))
 		return NOSUCHNODE;
 
-	job_attach_node(&myjob, gn);
-	while (myjob.exit_type == JOB_EXIT_OKAY) {
-		bool finished = job_run_next(&myjob);
-		if (finished)
-			break;
-		handle_one_job(&myjob);
-	}
-
+	Job_Make(gn);
+	loop_handle_running_jobs();
 	return gn->built_status;
 }
 
@@ -792,7 +787,7 @@ do_run_command(Job *job, const char *pre)
 		 * and there's nothing left to do.
 		 */
 		if (random_delay)
-			if (!(runningJobs == NULL && no_jobs_left()))
+			if (!(runningJobs == NULL && nothing_left_to_build()))
 				usleep(arc4random_uniform(random_delay));
 		run_command(cmd, errCheck);
 		/*NOTREACHED*/

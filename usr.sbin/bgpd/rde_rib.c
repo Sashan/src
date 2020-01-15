@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde_rib.c,v 1.210 2019/10/30 05:27:50 claudio Exp $ */
+/*	$OpenBSD: rde_rib.c,v 1.214 2020/01/10 14:52:57 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Claudio Jeker <claudio@openbsd.org>
@@ -701,12 +701,8 @@ path_hash(struct rde_aspath *asp)
 	u_int64_t	hash;
 
 	SipHash24_Init(&ctx, &pathtablekey);
-	SipHash24_Update(&ctx, &asp->origin, sizeof(asp->origin));
-	SipHash24_Update(&ctx, &asp->med, sizeof(asp->med));
-	SipHash24_Update(&ctx, &asp->lpref, sizeof(asp->lpref));
-	SipHash24_Update(&ctx, &asp->weight, sizeof(asp->weight));
-	SipHash24_Update(&ctx, &asp->rtlabelid, sizeof(asp->rtlabelid));
-	SipHash24_Update(&ctx, &asp->pftableid, sizeof(asp->pftableid));
+	SipHash24_Update(&ctx, &asp->aspath_hashstart,
+	    (char *)&asp->aspath_hashend - (char *)&asp->aspath_hashstart);
 
 	if (asp->aspath)
 		SipHash24_Update(&ctx, asp->aspath->data, asp->aspath->len);
@@ -782,16 +778,16 @@ path_copy(struct rde_aspath *dst, const struct rde_aspath *src)
 		dst->aspath->refcnt++;
 		rdemem.aspath_refs++;
 	}
-	dst->hash = 0;
+	dst->hash = 0;		/* not linked so no hash and no refcnt */
+	dst->refcnt = 0;
+	dst->flags = src->flags & ~F_ATTR_LINKED;
+
 	dst->med = src->med;
 	dst->lpref = src->lpref;
 	dst->weight = src->weight;
-	dst->origin = src->origin;
 	dst->rtlabelid = rtlabel_ref(src->rtlabelid);
 	dst->pftableid = pftable_ref(src->pftableid);
-
-	dst->flags = src->flags & ~F_ATTR_LINKED;
-	dst->refcnt = 0;	/* not linked so no refcnt */
+	dst->origin = src->origin;
 
 	attr_copy(dst, src);
 
@@ -983,7 +979,7 @@ prefix_update(struct rib *rib, struct rde_peer *peer, struct filterstate *state,
 		    communities_equal(ncomm, prefix_communities(p)) &&
 		    path_compare(nasp, prefix_aspath(p)) == 0) {
 			/* no change, update last change */
-			p->lastchange = time(NULL);
+			p->lastchange = getmonotime();
 			p->validation_state = vstate;
 			return (0);
 		}
@@ -1058,7 +1054,7 @@ prefix_move(struct prefix *p, struct rde_peer *peer,
 	np->nhflags = nhflags;
 	np->nexthop = nexthop_ref(nexthop);
 	nexthop_link(np);
-	np->lastchange = time(NULL);
+	np->lastchange = getmonotime();
 
 	/*
 	 * no need to update the peer prefix count because we are only moving
@@ -1168,7 +1164,7 @@ prefix_adjout_update(struct rde_peer *peer, struct filterstate *state,
 			    0) {
 				/* nothing changed */
 				p->validation_state = vstate;
-				p->lastchange = time(NULL);
+				p->lastchange = getmonotime();
 				p->flags &= ~PREFIX_FLAG_STALE;
 				return 0;
 			}
@@ -1217,7 +1213,7 @@ prefix_adjout_update(struct rde_peer *peer, struct filterstate *state,
 	p->nhflags = state->nhflags;
 
 	p->validation_state = vstate;
-	p->lastchange = time(NULL);
+	p->lastchange = getmonotime();
 
 	if (p->flags & PREFIX_FLAG_MASK)
 		fatalx("%s: bad flags %x", __func__, p->flags);
@@ -1244,7 +1240,7 @@ prefix_adjout_withdraw(struct rde_peer *peer, struct bgpd_addr *prefix,
 
 	/* already a withdraw, shortcut */
 	if (p->flags & PREFIX_FLAG_WITHDRAW) {
-		p->lastchange = time(NULL);
+		p->lastchange = getmonotime();
 		p->flags &= ~PREFIX_FLAG_STALE;
 		return (0);
 	}
@@ -1271,7 +1267,7 @@ prefix_adjout_withdraw(struct rde_peer *peer, struct bgpd_addr *prefix,
 	p->aspath = NULL;
 	/* re already NULL */
 
-	p->lastchange = time(NULL);
+	p->lastchange = getmonotime();
 
 	p->flags |= PREFIX_FLAG_WITHDRAW;
 	if (RB_INSERT(prefix_tree, &peer->withdraws[prefix->aid], p) != NULL)
@@ -1335,7 +1331,7 @@ prefix_adjout_destroy(struct prefix *p)
 	}
 
 	RB_REMOVE(prefix_index, &peer->adj_rib_out, p);
-	
+
 	prefix_unlink(p);
 	prefix_free(p);
 }
@@ -1599,7 +1595,7 @@ prefix_link(struct prefix *p, struct rib_entry *re, struct rde_peer *peer,
 	p->nhflags = nhflags;
 	p->nexthop = nexthop_ref(nexthop);
 	nexthop_link(p);
-	p->lastchange = time(NULL);
+	p->lastchange = getmonotime();
 
 	/* make route decision */
 	prefix_evaluate(p, re);

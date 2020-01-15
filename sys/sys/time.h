@@ -1,4 +1,4 @@
-/*	$OpenBSD: time.h,v 1.47 2019/10/22 20:19:41 cheloha Exp $	*/
+/*	$OpenBSD: time.h,v 1.50 2020/01/15 13:17:35 mpi Exp $	*/
 /*	$NetBSD: time.h,v 1.18 1996/04/23 10:29:33 mycroft Exp $	*/
 
 /*
@@ -177,7 +177,7 @@ struct bintime {
 	    (btp)->frac cmp (ctp)->frac :				\
 	    (btp)->sec cmp (ctp)->sec)
 
-static __inline void
+static inline void
 bintimeaddfrac(const struct bintime *bt, uint64_t x, struct bintime *ct)
 {
 	ct->sec = bt->sec;
@@ -186,7 +186,7 @@ bintimeaddfrac(const struct bintime *bt, uint64_t x, struct bintime *ct)
 	ct->frac = bt->frac + x;
 }
 
-static __inline void
+static inline void
 bintimeadd(const struct bintime *bt, const struct bintime *ct,
     struct bintime *dt)
 {
@@ -196,7 +196,7 @@ bintimeadd(const struct bintime *bt, const struct bintime *ct,
 	dt->frac = bt->frac + ct->frac;
 }
 
-static __inline void
+static inline void
 bintimesub(const struct bintime *bt, const struct bintime *ct,
     struct bintime *dt)
 {
@@ -220,14 +220,14 @@ bintimesub(const struct bintime *bt, const struct bintime *ct,
  *   time_second ticks after N.999999999 not after N.4999999999
  */
 
-static __inline void
+static inline void
 BINTIME_TO_TIMESPEC(const struct bintime *bt, struct timespec *ts)
 {
 	ts->tv_sec = bt->sec;
 	ts->tv_nsec = (long)(((uint64_t)1000000000 * (uint32_t)(bt->frac >> 32)) >> 32);
 }
 
-static __inline void
+static inline void
 TIMESPEC_TO_BINTIME(const struct timespec *ts, struct bintime *bt)
 {
 	bt->sec = ts->tv_sec;
@@ -235,14 +235,14 @@ TIMESPEC_TO_BINTIME(const struct timespec *ts, struct bintime *bt)
 	bt->frac = (uint64_t)ts->tv_nsec * (uint64_t)18446744073ULL; 
 }
 
-static __inline void
+static inline void
 BINTIME_TO_TIMEVAL(const struct bintime *bt, struct timeval *tv)
 {
 	tv->tv_sec = bt->sec;
 	tv->tv_usec = (long)(((uint64_t)1000000 * (uint32_t)(bt->frac >> 32)) >> 32);
 }
 
-static __inline void
+static inline void
 TIMEVAL_TO_BINTIME(const struct timeval *tv, struct bintime *bt)
 {
 	bt->sec = (time_t)tv->tv_sec;
@@ -332,23 +332,36 @@ void clock_secs_to_ymdhms(time_t, struct clock_ymdhms *);
 /* Traditional POSIX base year */
 #define POSIX_BASE_YEAR 1970
 
-static __inline void
+#include <sys/stdint.h>
+
+static inline void
 NSEC_TO_TIMEVAL(uint64_t ns, struct timeval *tv)
 {
 	tv->tv_sec = ns / 1000000000L;
 	tv->tv_usec = (ns % 1000000000L) / 1000;
 }
 
-static __inline void
+static inline uint64_t
+TIMEVAL_TO_NSEC(const struct timeval *tv)
+{
+	uint64_t nsecs;
+
+	if (tv->tv_sec > UINT64_MAX / 1000000000ULL)
+		return UINT64_MAX;
+	nsecs = tv->tv_sec * 1000000000ULL;
+	if (tv->tv_usec * 1000ULL > UINT64_MAX - nsecs)
+		return UINT64_MAX;
+	return nsecs + tv->tv_usec * 1000ULL;
+}
+
+static inline void
 NSEC_TO_TIMESPEC(uint64_t ns, struct timespec *ts)
 {
 	ts->tv_sec = ns / 1000000000L;
 	ts->tv_nsec = ns % 1000000000L;
 }
 
-#include <sys/stdint.h>
-
-static __inline uint64_t
+static inline uint64_t
 SEC_TO_NSEC(uint64_t seconds)
 {
 	if (seconds > UINT64_MAX / 1000000000ULL)
@@ -356,7 +369,7 @@ SEC_TO_NSEC(uint64_t seconds)
 	return seconds * 1000000000ULL;
 }
 
-static __inline uint64_t
+static inline uint64_t
 MSEC_TO_NSEC(uint64_t milliseconds)
 {
 	if (milliseconds > UINT64_MAX / 1000000ULL)
@@ -364,12 +377,20 @@ MSEC_TO_NSEC(uint64_t milliseconds)
 	return milliseconds * 1000000ULL;
 }
 
-static __inline uint64_t
+static inline uint64_t
 USEC_TO_NSEC(uint64_t microseconds)
 {
 	if (microseconds > UINT64_MAX / 1000ULL)
 		return UINT64_MAX;
 	return microseconds * 1000ULL;
+}
+
+static inline uint64_t
+TIMESPEC_TO_NSEC(const struct timespec *ts)
+{
+	if (ts->tv_sec > (UINT64_MAX - ts->tv_nsec) / 1000000000ULL)
+		return UINT64_MAX;
+	return ts->tv_sec * 1000000000ULL + ts->tv_nsec;
 }
 
 #else /* !_KERNEL */

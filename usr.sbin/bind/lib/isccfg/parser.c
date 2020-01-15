@@ -29,7 +29,7 @@
 #include <isc/net.h>
 #include <isc/netaddr.h>
 #include <isc/netscope.h>
-#include <isc/print.h>
+
 #include <isc/string.h>
 #include <isc/sockaddr.h>
 #include <isc/symtab.h>
@@ -111,17 +111,17 @@ parser_complain(cfg_parser_t *pctx, isc_boolean_t is_warning,
  * not need a union member).
  */
 
-LIBISCCFG_EXTERNAL_DATA cfg_rep_t cfg_rep_uint32 = { "uint32", free_noop };
-LIBISCCFG_EXTERNAL_DATA cfg_rep_t cfg_rep_uint64 = { "uint64", free_noop };
-LIBISCCFG_EXTERNAL_DATA cfg_rep_t cfg_rep_string = { "string", free_string };
-LIBISCCFG_EXTERNAL_DATA cfg_rep_t cfg_rep_boolean = { "boolean", free_noop };
-LIBISCCFG_EXTERNAL_DATA cfg_rep_t cfg_rep_map = { "map", free_map };
-LIBISCCFG_EXTERNAL_DATA cfg_rep_t cfg_rep_list = { "list", free_list };
-LIBISCCFG_EXTERNAL_DATA cfg_rep_t cfg_rep_tuple = { "tuple", free_tuple };
-LIBISCCFG_EXTERNAL_DATA cfg_rep_t cfg_rep_sockaddr = { "sockaddr", free_noop };
-LIBISCCFG_EXTERNAL_DATA cfg_rep_t cfg_rep_netprefix = { "netprefix", free_noop };
-LIBISCCFG_EXTERNAL_DATA cfg_rep_t cfg_rep_void = { "void", free_noop };
-LIBISCCFG_EXTERNAL_DATA cfg_rep_t cfg_rep_fixedpoint = { "fixedpoint", free_noop };
+cfg_rep_t cfg_rep_uint32 = { "uint32", free_noop };
+cfg_rep_t cfg_rep_uint64 = { "uint64", free_noop };
+cfg_rep_t cfg_rep_string = { "string", free_string };
+cfg_rep_t cfg_rep_boolean = { "boolean", free_noop };
+cfg_rep_t cfg_rep_map = { "map", free_map };
+cfg_rep_t cfg_rep_list = { "list", free_list };
+cfg_rep_t cfg_rep_tuple = { "tuple", free_tuple };
+cfg_rep_t cfg_rep_sockaddr = { "sockaddr", free_noop };
+cfg_rep_t cfg_rep_netprefix = { "netprefix", free_noop };
+cfg_rep_t cfg_rep_void = { "void", free_noop };
+cfg_rep_t cfg_rep_fixedpoint = { "fixedpoint", free_noop };
 
 /*
  * Configuration type definitions.
@@ -682,7 +682,7 @@ cfg_obj_isvoid(const cfg_obj_t *obj) {
 	return (ISC_TF(obj->type->rep == &cfg_rep_void));
 }
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_void = {
+cfg_type_t cfg_type_void = {
 	"void", cfg_parse_void, cfg_print_void, cfg_doc_void, &cfg_rep_void,
 	NULL };
 
@@ -755,13 +755,13 @@ cfg_print_fixedpoint(cfg_printer_t *pctx, const cfg_obj_t *obj) {
 	cfg_print_chars(pctx, buf, strlen(buf));
 }
 
-isc_uint32_t
+uint32_t
 cfg_obj_asfixedpoint(const cfg_obj_t *obj) {
 	REQUIRE(obj != NULL && obj->type->rep == &cfg_rep_fixedpoint);
 	return (obj->value.uint32);
 }
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_fixedpoint = {
+cfg_type_t cfg_type_fixedpoint = {
 	"fixedpoint", cfg_parse_fixedpoint, cfg_print_fixedpoint,
 	cfg_doc_terminal, &cfg_rep_fixedpoint, NULL
 };
@@ -817,13 +817,13 @@ cfg_obj_isuint32(const cfg_obj_t *obj) {
 	return (ISC_TF(obj->type->rep == &cfg_rep_uint32));
 }
 
-isc_uint32_t
+uint32_t
 cfg_obj_asuint32(const cfg_obj_t *obj) {
 	REQUIRE(obj != NULL && obj->type->rep == &cfg_rep_uint32);
 	return (obj->value.uint32);
 }
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_uint32 = {
+cfg_type_t cfg_type_uint32 = {
 	"integer", cfg_parse_uint32, cfg_print_uint32, cfg_doc_terminal,
 	&cfg_rep_uint32, NULL
 };
@@ -838,7 +838,7 @@ cfg_obj_isuint64(const cfg_obj_t *obj) {
 	return (ISC_TF(obj->type->rep == &cfg_rep_uint64));
 }
 
-isc_uint64_t
+uint64_t
 cfg_obj_asuint64(const cfg_obj_t *obj) {
 	REQUIRE(obj != NULL && obj->type->rep == &cfg_rep_uint64);
 	return (obj->value.uint64);
@@ -848,12 +848,12 @@ void
 cfg_print_uint64(cfg_printer_t *pctx, const cfg_obj_t *obj) {
 	char buf[32];
 
-	snprintf(buf, sizeof(buf), "%" ISC_PRINT_QUADFORMAT "u",
+	snprintf(buf, sizeof(buf), "%llu",
 		 obj->value.uint64);
 	cfg_print_cstr(pctx, buf);
 }
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_uint64 = {
+cfg_type_t cfg_type_uint64 = {
 	"64_bit_integer", NULL, cfg_print_uint64, cfg_doc_terminal,
 	&cfg_rep_uint64, NULL
 };
@@ -1070,19 +1070,19 @@ cfg_obj_asstring(const cfg_obj_t *obj) {
 }
 
 /* Quoted string only */
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_qstring = {
+cfg_type_t cfg_type_qstring = {
 	"quoted_string", cfg_parse_qstring, print_qstring, cfg_doc_terminal,
 	&cfg_rep_string, NULL
 };
 
 /* Unquoted string only */
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_ustring = {
+cfg_type_t cfg_type_ustring = {
 	"string", parse_ustring, cfg_print_ustring, cfg_doc_terminal,
 	&cfg_rep_string, NULL
 };
 
 /* Any string (quoted or unquoted); printed with quotes */
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_astring = {
+cfg_type_t cfg_type_astring = {
 	"string", cfg_parse_astring, print_qstring, cfg_doc_terminal,
 	&cfg_rep_string, NULL
 };
@@ -1091,7 +1091,7 @@ LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_astring = {
  * Any string (quoted or unquoted); printed with quotes.
  * If CFG_PRINTER_XKEY is set when printing the string will be '?' out.
  */
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_sstring = {
+cfg_type_t cfg_type_sstring = {
 	"string", cfg_parse_sstring, print_sstring, cfg_doc_terminal,
 	&cfg_rep_string, NULL
 };
@@ -1167,7 +1167,7 @@ cfg_print_boolean(cfg_printer_t *pctx, const cfg_obj_t *obj) {
 		cfg_print_chars(pctx, "no", 2);
 }
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_boolean = {
+cfg_type_t cfg_type_boolean = {
 	"boolean", cfg_parse_boolean, cfg_print_boolean, cfg_doc_terminal,
 	&cfg_rep_boolean, NULL
 };
@@ -1969,7 +1969,7 @@ parse_token(cfg_parser_t *pctx, const cfg_type_t *type, cfg_obj_t **ret) {
 	return (result);
 }
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_token = {
+cfg_type_t cfg_type_token = {
 	"token", parse_token, cfg_print_ustring, cfg_doc_terminal,
 	&cfg_rep_string, NULL
 };
@@ -2018,7 +2018,7 @@ parse_unsupported(cfg_parser_t *pctx, const cfg_type_t *type, cfg_obj_t **ret) {
 	return (result);
 }
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_unsupported = {
+cfg_type_t cfg_type_unsupported = {
 	"unsupported", parse_unsupported, cfg_print_spacelist, cfg_doc_terminal,
 	&cfg_rep_list, NULL
 };
@@ -2075,7 +2075,7 @@ token_addr(cfg_parser_t *pctx, unsigned int flags, isc_netaddr_t *na) {
 		if ((flags & CFG_ADDR_V6OK) != 0 && strlen(s) <= 127U) {
 			char buf[128]; /* see lib/bind9/getaddresses.c */
 			char *d; /* zone delimiter */
-			isc_uint32_t zone = 0; /* scope zone ID */
+			uint32_t zone = 0; /* scope zone ID */
 
 			strlcpy(buf, s, sizeof(buf));
 			d = strchr(buf, '%');
@@ -2084,7 +2084,6 @@ token_addr(cfg_parser_t *pctx, unsigned int flags, isc_netaddr_t *na) {
 
 			if (inet_pton(AF_INET6, buf, &in6a) == 1) {
 				if (d != NULL) {
-#ifdef ISC_PLATFORM_HAVESCOPEID
 					isc_result_t result;
 
 					result = isc_netscope_pton(AF_INET6,
@@ -2093,9 +2092,6 @@ token_addr(cfg_parser_t *pctx, unsigned int flags, isc_netaddr_t *na) {
 								   &zone);
 					if (result != ISC_R_SUCCESS)
 						return (result);
-#else
-				return (ISC_R_BADADDRESSFORM);
-#endif
 				}
 
 				isc_netaddr_fromin6(na, &in6a);
@@ -2274,27 +2270,27 @@ cfg_doc_netaddr(cfg_printer_t *pctx, const cfg_type_t *type) {
 		cfg_print_chars(pctx, " )", 2);
 }
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_netaddr = {
+cfg_type_t cfg_type_netaddr = {
 	"netaddr", parse_netaddr, cfg_print_sockaddr, cfg_doc_netaddr,
 	&cfg_rep_sockaddr, &netaddr_flags
 };
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_netaddr4 = {
+cfg_type_t cfg_type_netaddr4 = {
 	"netaddr4", parse_netaddr, cfg_print_sockaddr, cfg_doc_netaddr,
 	&cfg_rep_sockaddr, &netaddr4_flags
 };
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_netaddr4wild = {
+cfg_type_t cfg_type_netaddr4wild = {
 	"netaddr4wild", parse_netaddr, cfg_print_sockaddr, cfg_doc_netaddr,
 	&cfg_rep_sockaddr, &netaddr4wild_flags
 };
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_netaddr6 = {
+cfg_type_t cfg_type_netaddr6 = {
 	"netaddr6", parse_netaddr, cfg_print_sockaddr, cfg_doc_netaddr,
 	&cfg_rep_sockaddr, &netaddr6_flags
 };
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_netaddr6wild = {
+cfg_type_t cfg_type_netaddr6wild = {
 	"netaddr6wild", parse_netaddr, cfg_print_sockaddr, cfg_doc_netaddr,
 	&cfg_rep_sockaddr, &netaddr6wild_flags
 };
@@ -2384,7 +2380,7 @@ cfg_obj_asnetprefix(const cfg_obj_t *obj, isc_netaddr_t *netaddr,
 	*prefixlen = obj->value.netprefix.prefixlen;
 }
 
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_netprefix = {
+cfg_type_t cfg_type_netprefix = {
 	"netprefix", cfg_parse_netprefix, print_netprefix, cfg_doc_terminal,
 	&cfg_rep_netprefix, NULL
 };
@@ -2442,14 +2438,14 @@ parse_sockaddrsub(cfg_parser_t *pctx, const cfg_type_t *type,
 }
 
 static unsigned int sockaddr_flags = CFG_ADDR_V4OK | CFG_ADDR_V6OK;
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_sockaddr = {
+cfg_type_t cfg_type_sockaddr = {
 	"sockaddr", cfg_parse_sockaddr, cfg_print_sockaddr, cfg_doc_sockaddr,
 	&cfg_rep_sockaddr, &sockaddr_flags
 };
 
 static unsigned int sockaddrdscp_flags = CFG_ADDR_V4OK | CFG_ADDR_V6OK |
 					 CFG_ADDR_DSCPOK;
-LIBISCCFG_EXTERNAL_DATA cfg_type_t cfg_type_sockaddrdscp = {
+cfg_type_t cfg_type_sockaddrdscp = {
 	"sockaddr", cfg_parse_sockaddr, cfg_print_sockaddr, cfg_doc_sockaddr,
 	&cfg_rep_sockaddr, &sockaddrdscp_flags
 };

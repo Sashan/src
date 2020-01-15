@@ -1,4 +1,4 @@
-/* $OpenBSD: drm_drv.c,v 1.165 2019/08/18 13:11:47 kettenis Exp $ */
+/* $OpenBSD: drm_drv.c,v 1.170 2020/01/05 08:39:46 jsg Exp $ */
 /*-
  * Copyright 2007-2009 Owain G. Ainsworth <oga@openbsd.org>
  * Copyright © 2008 Intel Corporation
@@ -42,18 +42,11 @@
 
 #include <sys/param.h>
 #include <sys/fcntl.h>
-#include <sys/filio.h>
-#include <sys/limits.h>
-#include <sys/pledge.h>
 #include <sys/poll.h>
 #include <sys/specdev.h>
 #include <sys/systm.h>
-#include <sys/ttycom.h> /* for TIOCSGRP */
 #include <sys/vnode.h>
 #include <sys/event.h>
-
-#include <uvm/uvm.h>
-#include <uvm/uvm_device.h>
 
 #include <machine/bus.h>
 
@@ -352,8 +345,8 @@ drm_quiesce(struct drm_device *dev)
 	mtx_enter(&dev->quiesce_mtx);
 	dev->quiesce = 1;
 	while (dev->quiesce_count > 0) {
-		msleep(&dev->quiesce_count, &dev->quiesce_mtx,
-		    PZERO, "drmqui", 0);
+		msleep_nsec(&dev->quiesce_count, &dev->quiesce_mtx,
+		    PZERO, "drmqui", INFSLP);
 	}
 	mtx_leave(&dev->quiesce_mtx);
 }
@@ -459,8 +452,6 @@ drm_firstopen(struct drm_device *dev)
 		dev->irq_enabled = 0;
 	dev->if_version = 0;
 
-	dev->buf_pgid = 0;
-
 	DRM_DEBUG("\n");
 
 	return 0;
@@ -504,8 +495,12 @@ filt_drmkms(struct knote *kn, long hint)
 	return (kn->kn_fflags != 0);
 }
 
-struct filterops drm_filtops =
-	{ 1, NULL, filt_drmdetach, filt_drmkms };
+const struct filterops drm_filtops = {
+	.f_isfd		= 1,
+	.f_attach	= NULL,
+	.f_detach	= filt_drmdetach,
+	.f_event	= filt_drmkms,
+};
 
 int
 drmkqfilter(dev_t kdev, struct knote *kn)
@@ -679,8 +674,6 @@ drmclose(dev_t kdev, int flags, int fmt, struct proc *p)
 	if (drm_core_check_feature(dev, DRIVER_GEM))
 		drm_gem_release(dev, file_priv);
 
-	dev->buf_pgid = 0;
-
 	if (dev->driver->postclose)
 		dev->driver->postclose(dev, file_priv);
 
@@ -732,8 +725,8 @@ drmread(dev_t kdev, struct uio *uio, int ioflag)
 			mtx_leave(&dev->event_lock);
 			return (EAGAIN);
 		}
-		error = msleep(&file_priv->event_wait, &dev->event_lock,
-		    PWAIT | PCATCH, "drmread", 0);
+		error = msleep_nsec(&file_priv->event_wait, &dev->event_lock,
+		    PWAIT | PCATCH, "drmread", INFSLP);
 	}
 	if (error) {
 		mtx_leave(&dev->event_lock);
