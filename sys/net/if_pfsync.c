@@ -1181,6 +1181,7 @@ pfsync_in_del_c(caddr_t buf, int len, int count, int flags)
 	struct pf_state *st;
 	int i;
 
+	PF_LOCK();
 	PF_STATE_ENTER_WRITE();
 	for (i = 0; i < count; i++) {
 		sp = (struct pfsync_del_c *)(buf + len * i);
@@ -1198,6 +1199,7 @@ pfsync_in_del_c(caddr_t buf, int len, int count, int flags)
 		pf_remove_state(st);
 	}
 	PF_STATE_EXIT_WRITE();
+	PF_UNLOCK();
 
 	return (0);
 }
