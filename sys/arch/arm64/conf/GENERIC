@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.136 2019/12/17 13:08:54 reyk Exp $
+# $OpenBSD: GENERIC,v 1.138 2020/01/14 20:43:20 kettenis Exp $
 #
 # GENERIC machine description file
 #
@@ -155,6 +155,8 @@ amlpinctrl*	at fdt? early 1
 amlpwm*		at fdt?
 amlreset*	at fdt? early 1
 amlrng*		at fdt?
+amlsm*		at fdt? early 1
+amltemp*	at fdt?
 amluart*	at fdt?
 amlusbphy*	at fdt?
 

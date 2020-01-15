@@ -1,4 +1,4 @@
-/*	$OpenBSD: job.c,v 1.147 2020/01/13 14:14:24 espie Exp $	*/
+/*	$OpenBSD: job.c,v 1.158 2020/01/13 16:03:44 espie Exp $	*/
 /*	$NetBSD: job.c,v 1.16 1996/11/06 17:59:08 christos Exp $	*/
 
 /*
@@ -70,18 +70,10 @@
  *
  *	Job_Init		Called to initialize this module. 
  *
- *	Job_Begin		execute commands attached to the .BEGIN target
- *				if any.
- *
  *	can_start_job		Return true if we can start job
  *
  *	Job_Empty		Return true if the job table is completely
  *				empty.
- *
- *	Job_Finish		Perform any final processing which needs doing.
- *				This includes the execution of any commands
- *				which have been/were attached to the .END
- *				target. 
  *
  *	Job_AbortAll		Abort all current jobs. It doesn't
  *				handle output or do anything for the jobs,
@@ -113,23 +105,24 @@
 #include "lst.h"
 #include "gnode.h"
 #include "memory.h"
-#include "make.h"
 #include "buf.h"
+#include "enginechoice.h"
 
 static int	aborting = 0;	    /* why is the make aborting? */
 #define ABORT_ERROR	1	    /* Because of an error */
 #define ABORT_INTERRUPT 2	    /* Because it was interrupted */
 #define ABORT_WAIT	3	    /* Waiting for jobs to finish */
 
-static int	maxJobs;	/* The most children we can run at once */
-static int	nJobs;		/* Number of jobs already allocated */
 static bool	no_new_jobs;	/* Mark recursive shit so we shouldn't start
 				 * something else at the same time
 				 */
+bool sequential;
 Job *runningJobs;		/* Jobs currently running a process */
 Job *errorJobs;			/* Jobs in error at end */
+Job *availableJobs;		/* Pool of available jobs */
 static Job *heldJobs;		/* Jobs not running yet because of expensive */
 static pid_t mypid;		/* Used for printing debugging messages */
+static Job *extra_job;		/* Needed for .INTERRUPT */
 
 static volatile sig_atomic_t got_fatal;
 
@@ -141,16 +134,12 @@ static sigset_t sigset, emptyset;
 static void handle_fatal_signal(int);
 static void handle_siginfo(void);
 static void postprocess_job(Job *);
-static Job *prepare_job(GNode *);
 static void determine_job_next_step(Job *);
-static void remove_job(Job *);
 static void may_continue_job(Job *);
-static void continue_job(Job *);
 static Job *reap_finished_job(pid_t);
 static bool reap_jobs(void);
-static void may_continue_heldback_jobs();
+static void may_continue_heldback_jobs(void);
 
-static void loop_handle_running_jobs(void);
 static bool expensive_job(Job *);
 static bool expensive_command(const char *);
 static void setup_signal(int);
@@ -542,10 +531,15 @@ postprocess_job(Job *job)
 		 * non-zero status that we shouldn't ignore, we call
 		 * Make_Update to update the parents. */
 		job->node->built_status = REBUILT;
-		Make_Update(job->node);
-		free(job);
-	} else if (job->exit_type != JOB_EXIT_OKAY && keepgoing)
-		free(job);
+		engine_node_updated(job->node);
+	}
+	if (job->flags & JOB_KEEPERROR) {
+		job->next = errorJobs;
+		errorJobs = job;
+	} else {
+		job->next = availableJobs;
+		availableJobs = job;
+	}
 
 	if (errorJobs != NULL && aborting != ABORT_INTERRUPT)
 		aborting = ABORT_ERROR;
@@ -648,35 +642,6 @@ expensive_command(const char *s)
 	return false;
 }
 
-static Job *
-prepare_job(GNode *gn)
-{
-	/* a new job is prepared unless its commands are bogus (we don't
-	 * have anything for it), or if we're in touch mode.
-	 *
-	 * Note that even in noexec mode, some commands may still run
-	 * thanks to the +cmd construct.
-	 */
-	if (node_find_valid_commands(gn)) {
-		if (touchFlag) {
-			Job_Touch(gn);
-			return NULL;
-		} else {
-			Job *job;       	
-
-			job = emalloc(sizeof(Job));
-			if (job == NULL)
-				Punt("can't create job: out of memory");
-
-			job_attach_node(job, gn);
-			return job;
-		}
-	} else {
-		node_failure(gn);
-		return NULL;
-	}
-}
-
 static void
 may_continue_job(Job *job)
 {
@@ -686,18 +651,29 @@ may_continue_job(Job *job)
 			    (long)mypid, job->node->name);
 		job->next = heldJobs;
 		heldJobs = job;
-	} else
-		continue_job(job);
+	} else {
+		bool finished = job_run_next(job);
+		if (finished)
+			postprocess_job(job);
+		else if (!sequential)
+			determine_expensive_job(job);
+	}
 }
 
 static void
-continue_job(Job *job)
+may_continue_heldback_jobs()
 {
-	bool finished = job_run_next(job);
-	if (finished)
-		remove_job(job);
-	else
-		determine_expensive_job(job);
+	while (!no_new_jobs) {
+		if (heldJobs != NULL) {
+			Job *job = heldJobs;
+			heldJobs = heldJobs->next;
+			if (DEBUG(EXPENSIVE))
+				fprintf(stderr, "[%ld] cheap -> release %s\n",
+				    (long)mypid, job->node->name);
+			may_continue_job(job);
+		} else
+			break;
+	}
 }
 
 /*-
@@ -714,19 +690,17 @@ continue_job(Job *job)
 void
 Job_Make(GNode *gn)
 {
-	Job *job;
+	Job *job = availableJobs;       	
 
-	job = prepare_job(gn);
-	if (!job)
-		return;
-	nJobs++;
+	assert(job != NULL);
+	availableJobs = availableJobs->next;
+	job_attach_node(job, gn);
 	may_continue_job(job);
 }
 
 static void
 determine_job_next_step(Job *job)
 {
-	bool okay;
 	if (job->flags & JOB_IS_EXPENSIVE) {
 		no_new_jobs = false;
 		if (DEBUG(EXPENSIVE))
@@ -737,32 +711,9 @@ determine_job_next_step(Job *job)
 	}
 
 	if (job->exit_type != JOB_EXIT_OKAY || job->next_cmd == NULL)
-		remove_job(job);
+		postprocess_job(job);
 	else
 		may_continue_job(job);
-}
-
-static void
-remove_job(Job *job)
-{
-	nJobs--;
-	postprocess_job(job);
-}
-
-static void
-may_continue_heldback_jobs()
-{
-	while (!no_new_jobs) {
-		if (heldJobs != NULL) {
-			Job *job = heldJobs;
-			heldJobs = heldJobs->next;
-			if (DEBUG(EXPENSIVE))
-				fprintf(stderr, "[%ld] cheap -> release %s\n",
-				    (long)mypid, job->node->name);
-			continue_job(job);
-		} else
-			break;
-	}
 }
 
 /*
@@ -806,7 +757,7 @@ reap_jobs(void)
 		if (job == NULL) {
 			Punt("Child (%ld) not in table?", (long)pid);
 		} else {
-			job_handle_status(job, status);
+			handle_job_status(job, status);
 			determine_job_next_step(job);
 		}
 		may_continue_heldback_jobs();
@@ -849,26 +800,6 @@ handle_running_jobs(void)
 }
 
 void
-handle_one_job(Job *job)
-{
-	int stat;
-	int status;
-	sigset_t old;
-
-	sigprocmask(SIG_BLOCK, &sigset, &old);
-	while (1) {
-		handle_all_signals();
-		stat = waitpid(job->pid, &status, WNOHANG);
-		if (stat == job->pid)
-			break;
-		sigsuspend(&emptyset);
-	}
-	runningJobs = NULL;
-	job_handle_status(job, status);
-	sigprocmask(SIG_SETMASK, &old, NULL);
-}
-
-static void
 loop_handle_running_jobs()
 {
 	while (runningJobs != NULL)
@@ -876,15 +807,26 @@ loop_handle_running_jobs()
 }
 
 void
-Job_Init(int maxproc)
+Job_Init(int maxJobs)
 {
+	Job *j;
+	int i;
+
 	runningJobs = NULL;
 	heldJobs = NULL;
 	errorJobs = NULL;
-	maxJobs = maxproc;
-	mypid = getpid();
+	availableJobs = NULL;
+	sequential = maxJobs == 1;
 
-	nJobs = 0;
+	/* we allocate n+1 jobs, since we may need an extra job for
+	 * running .INTERRUPT.  */
+	j = ereallocarray(NULL, sizeof(Job), maxJobs+1);
+	for (i = 0; i != maxJobs; i++) {
+		j[i].next = availableJobs;
+		availableJobs = &j[i];
+	}
+	extra_job = &j[maxJobs];
+	mypid = getpid();
 
 	aborting = 0;
 	setup_all_signals();
@@ -893,7 +835,7 @@ Job_Init(int maxproc)
 bool
 can_start_job(void)
 {
-	if (aborting || nJobs >= maxJobs)
+	if (aborting || availableJobs == NULL)
 		return false;
 	else
 		return true;
@@ -933,7 +875,8 @@ handle_fatal_signal(int signo)
 	if (signo == SIGINT && !touchFlag) {
 		if ((interrupt_node->type & OP_DUMMY) == 0) {
 			ignoreErrors = false;
-
+			extra_job->next = availableJobs;
+			availableJobs = extra_job;
 			Job_Make(interrupt_node);
 		}
 	}
@@ -948,40 +891,6 @@ handle_fatal_signal(int signo)
 	/*NOTREACHED*/
 	fprintf(stderr, "This should never happen\n");
 	exit(1);
-}
-
-/*
- *-----------------------------------------------------------------------
- * Job_Finish --
- *	Do final processing such as the running of the commands
- *	attached to the .END target.
- *
- *	return true if fatal errors have happened.
- *-----------------------------------------------------------------------
- */
-bool
-Job_Finish(void)
-{
-	bool problem = errorJobs != NULL;
-
-	if ((end_node->type & OP_DUMMY) == 0) {
-		if (problem) {
-			Error("Errors reported so .END ignored");
-		} else {
-			Job_Make(end_node);
-			loop_handle_running_jobs();
-		}
-	}
-	return problem;
-}
-
-void
-Job_Begin(void)
-{
-	if ((begin_node->type & OP_DUMMY) == 0) {
-		Job_Make(begin_node);
-		loop_handle_running_jobs();
-	}
 }
 
 /*-
