@@ -1,13 +1,17 @@
-#	$OpenBSD: Makefile,v 1.2 2019/12/26 15:41:50 bluhm Exp $
+#	$OpenBSD: Makefile,v 1.6 2020/01/20 00:49:55 jan Exp $
 
 .PHONY: setup-ftpd
 
 REGRESS_TARGETS =	run-ftpd-get
+REGRESS_TARGETS +=	run-ftpd-put
 REGRESS_TARGETS +=	run-ftpd-ls
+REGRESS_TARGETS +=	run-ftpd-nlist
+REGRESS_TARGETS +=	run-ftpd-delete
+REGRESS_TARGETS +=	run-ftpd-mkdir
 REGRESS_ROOT_TARGETS =	${REGRESS_TARGETS}
 REGRESS_CLEANUP =	cleanup-ftpd
 REGRESS_SETUP =		setup-ftpd
-CLEANFILES =		ftpd.regress
+CLEANFILES =		ftpd.regress ftpd.regress.local
 
 TCPSERVER =		/usr/local/bin/tcpserver
 FTPD ?=			/usr/libexec/ftpd
@@ -42,6 +46,7 @@ setup-ftpd:
 	# prepare test files
 	${SUDO} dd if=/dev/random of="${FTPDIR}/ftpd.regress" count=1 bs=1m
 	${SUDO} chown ftp:ftp "${FTPDIR}/ftpd.regress"
+	dd if=/dev/random of="ftpd.regress.local" count=1 bs=1m
 
 run-ftpd-get:
 	@echo '\n======== $@ ========'
@@ -49,9 +54,30 @@ run-ftpd-get:
 	cmp ${FTPDIR}/ftpd.regress ftpd.regress
 	rm ftpd.regress
 
+run-ftpd-put:
+	@echo '\n======== $@ ========'
+	echo put ftpd.regress.local | ftp -a 127.0.0.1
+	cmp ${FTPDIR}/ftpd.regress.local ftpd.regress.local
+	${SUDO} rm ${FTPDIR}/ftpd.regress.local
+
 run-ftpd-ls:
 	@echo '\n======== $@ ========'
 	echo ls | ftp -a 127.0.0.1 | grep -q 'ftpd.regress'
+
+run-ftpd-nlist:
+	@echo '\n======== $@ ========'
+	echo nlist | ftp -a 127.0.0.1 | grep -q 'ftpd.regress'
+
+run-ftpd-delete:
+	@echo '\n======== $@ ========'
+	echo delete ftpd.regress | ftp -a 127.0.0.1
+	test ! -f ${FTPDIR}/ftpd.regress
+
+run-ftpd-mkdir:
+	@echo '\n======== $@ ========'
+	echo mkdir ftpd.regress.dir.create | ftp -a 127.0.0.1
+	test -d ${FTPDIR}/ftpd.regress.dir.create
+	${SUDO} rm -r ${FTPDIR}/ftpd.regress.dir.create
 
 cleanup-ftpd:
 	${SUDO} pkill tcpserver || true

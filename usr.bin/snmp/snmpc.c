@@ -1,4 +1,4 @@
-/*	$OpenBSD: snmpc.c,v 1.17 2019/10/26 19:34:15 martijn Exp $	*/
+/*	$OpenBSD: snmpc.c,v 1.20 2020/01/17 10:10:32 martijn Exp $	*/
 
 /*
  * Copyright (c) 2019 Martijn van Duren <martijn@openbsd.org>
@@ -37,6 +37,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <util.h>
 
 #include "smi.h"
 #include "snmp.h"
@@ -48,6 +49,7 @@ int snmpc_get(int, char *[]);
 int snmpc_walk(int, char *[]);
 int snmpc_set(int, char *[]);
 int snmpc_trap(int, char *[]);
+int snmpc_df(int, char *[]);
 int snmpc_mibtree(int, char *[]);
 struct snmp_agent *snmpc_connect(char *, char *);
 int snmpc_parseagent(char *, char *);
@@ -69,11 +71,12 @@ struct snmp_app {
 struct snmp_app snmp_apps[] = {
 	{ "get", 1, NULL, "agent oid ...", snmpc_get },
 	{ "getnext", 1, NULL, "agent oid ...", snmpc_get },
-	{ "walk", 1, "C:", "[-C cIipt] [-C E endoid] agent [oid]", snmpc_walk },
+	{ "walk", 1, "C:", "[-C cIipt] [-C E endoid] [-C s skipoid] agent [oid]", snmpc_walk },
 	{ "bulkget", 1, "C:", "[-C n<nonrep>r<maxrep>] agent oid ...", snmpc_get },
-	{ "bulkwalk", 1, "C:", "[-C cipn<nonrep>r<maxrep>] agent [oid]", snmpc_walk },
+	{ "bulkwalk", 1, "C:", "[-C cipn<nonrep>r<maxrep>] [-C s skipoid] agent [oid]", snmpc_walk },
 	{ "set", 1, NULL, "agent oid type value [oid type value] ...", snmpc_set },
 	{ "trap", 1, NULL, "agent uptime oid [oid type value] ...", snmpc_trap },
+	{ "df", 1, "C:", "[-Ch] [-Cr<maxrep>] agent", snmpc_df },
 	{ "mibtree", 0, "O:", "[-O fnS]", snmpc_mibtree }
 };
 struct snmp_app *snmp_app = NULL;
@@ -88,6 +91,7 @@ int print_equals = 1;
 int print_varbind_only = 0;
 int print_summary = 0;
 int print_time = 0;
+int print_human = 0;
 int walk_check_increase = 1;
 int walk_fallback_oid = 1;
 int walk_include_oid = 0;
@@ -95,6 +99,8 @@ int smi_print_hint = 1;
 int non_repeaters = 0;
 int max_repetitions = 10;
 struct ber_oid walk_end = {{0}, 0};
+struct ber_oid *walk_skip = NULL;
+size_t walk_skip_len = 0;
 enum smi_oid_lookup oid_lookup = smi_oidl_short;
 enum smi_output_string output_string = smi_os_default;
 
@@ -273,6 +279,11 @@ main(int argc, char *argv[])
 						usage();
 					walk_check_increase = 0;
 					break;
+				case 'h':
+					if (strcmp(snmp_app->name, "df"))
+						usage();
+					print_human = 1;
+					break;
 				case 'i':
 					if (strcmp(snmp_app->name, "walk") &&
 					    strcmp(snmp_app->name, "bulkwalk"))
@@ -308,7 +319,8 @@ main(int argc, char *argv[])
 					break;
 				case 'r':
 					if (strcmp(snmp_app->name, "bulkget") &&
-					    strcmp(snmp_app->name, "bulkwalk"))
+					    strcmp(snmp_app->name, "bulkwalk") &&
+					    strcmp(snmp_app->name, "df"))
 						usage();
 					errno = 0;
 					max_repetitions = strtol(&optarg[i + 1],
@@ -326,6 +338,23 @@ main(int argc, char *argv[])
 					} else if (&optarg[i + 1] == strtolp)
 						errx(1, "-Cr invalid argument");
 					i = strtolp - optarg - 1;
+					break;
+				case 's':
+					if (strcmp(snmp_app->name, "walk") &&
+					    strcmp(snmp_app->name, "bulkwalk"))
+						usage();
+					if ((walk_skip = recallocarray(
+					    walk_skip, walk_skip_len,
+					    walk_skip_len + 1,
+					    sizeof(*walk_skip))) == NULL)
+						errx(1, "malloc");
+					if (smi_string2oid(argv[optind],
+					    &(walk_skip[walk_skip_len])) != 0)
+						errx(1, "%s: %s",
+						    "Unknown Object Identifier",
+						    argv[optind]);
+					walk_skip_len++;
+					optind++;
 					break;
 				case 't':
 					if (strcmp(snmp_app->name, "walk"))
@@ -535,6 +564,7 @@ snmpc_get(int argc, char *argv[])
 		if (!snmpc_print(varbind))
 			err(1, "Can't print response");
 	}
+	sleep(10);
 	ober_free_elements(pdu);
 	snmp_free_agent(agent);
 	return 0;
@@ -548,9 +578,10 @@ snmpc_walk(int argc, char *argv[])
 	struct timespec start, finish;
 	struct snmp_agent *agent;
 	const char *oids;
-	int n = 0, prev_cmp;
+	int n = 0, prev_cmp, skip_cmp;
 	int errorstatus, errorindex;
 	int class;
+	size_t i;
 	unsigned type;
 
 	if (strcmp(snmp_app->name, "bulkwalk") == 0 && version < SNMP_V2C)
@@ -592,6 +623,14 @@ snmpc_walk(int argc, char *argv[])
 		n++;
 	}
 	while (1) {
+		for (i = 0; i < walk_skip_len; i++) {
+			skip_cmp = ober_oid_cmp(&(walk_skip[i]), &noid);
+			if (skip_cmp == 0 || skip_cmp == 2) {
+				bcopy(&(walk_skip[i]), &noid, sizeof(noid));
+				noid.bo_id[noid.bo_n -1]++;
+				break;
+			}
+		}
 		bcopy(&noid, &loid, sizeof(loid));
 		if (strcmp(snmp_app->name, "bulkwalk") == 0) {
 			if ((pdu = snmp_getbulk(agent, &noid, 1,
@@ -617,6 +656,13 @@ snmpc_walk(int argc, char *argv[])
 			if (value->be_class == BER_CLASS_CONTEXT &&
 			    value->be_type == BER_TYPE_EOC)
 				break;
+			for (i = 0; i < walk_skip_len; i++) {
+				skip_cmp = ober_oid_cmp(&(walk_skip[i]), &noid);
+				if (skip_cmp == 0 || skip_cmp == 2)
+					break;
+			}
+			if (i < walk_skip_len)
+				continue;
 			prev_cmp = ober_oid_cmp(&loid, &noid);
 			if (walk_check_increase && prev_cmp == -1)
 				errx(1, "OID not increasing");
@@ -750,6 +796,235 @@ snmpc_trap(int argc, char *argv[])
 	argv += 3;
 
 	snmp_trap(agent, &ts, &trapoid, snmpc_varbindparse(argc, argv));
+
+	return 0;
+}
+
+#define INCR_NEXTTAB(x) ((x + 8) & ~7)
+#define NEXTTAB(x) (8 - (x & 7))
+int
+snmpc_df(int argc, char *argv[])
+{
+	struct snmpc_df {
+		uint32_t index;
+		/* DisplayString is 255a DISPLAY-HINT */
+		char descr[256];
+		/* Theoretical maximum for 2 32 bit values multiplied */
+		char size[21];
+		char used[21];
+		char avail[21];
+		char proc[5];
+	} *df = NULL;
+	struct ber_oid descroid = {{ 1, 3, 6, 1, 2, 1, 25, 2, 3, 1, 3 }, 11};
+	struct ber_oid unitsoid = {{ 1, 3, 6, 1, 2, 1, 25, 2, 3, 1, 4 }, 11};
+	struct ber_oid sizeoid = {{ 1, 3, 6, 1, 2, 1, 25, 2, 3, 1, 5 }, 11};
+	struct ber_oid usedoid = {{ 1, 3, 6, 1, 2, 1, 25, 2, 3, 1, 6 }, 11};
+	struct ber_oid oid, *reqoid;
+	struct ber_element *pdu, *varbind;
+	struct snmp_agent *agent;
+	int errorstatus, errorindex;
+	int class;
+	size_t i, j, rows = 0;
+	unsigned type;
+	char *string;
+	int descrlen = 0, sizelen = 0, usedlen = 0, availlen = 0, proclen = 0;
+	int len;
+	long long units, size, used;
+	int fmtret;
+
+	if (argc != 1)
+		usage();
+
+	if ((agent = snmpc_connect(argv[0], "161")) == NULL)
+		err(1, "%s", snmp_app->name);
+	agent->timeout = timeout;
+	agent->retries = retries;
+
+	if (pledge("stdio", NULL) == -1)
+		err(1, "pledge");
+
+	descrlen = sizeof("Description") - 1;
+	sizelen = sizeof("Size") - 1;
+	usedlen = sizeof("Used") - 1;
+	availlen = sizeof("Available") - 1;
+	proclen = sizeof("Used%") - 1;
+
+	bcopy(&descroid, &oid, sizeof(descroid));
+
+	i = 0;
+	while(1) {
+		if (version < SNMP_V2C) {
+			if ((pdu = snmp_getnext(agent, &oid, 1)) == NULL)
+				err(1, "df");
+		} else {
+			if ((pdu = snmp_getbulk(agent, &oid, 1, 0,
+			    max_repetitions)) == NULL)
+				err(1, "df");
+		}
+
+		(void) ober_scanf_elements(pdu, "t{Sdd{e", &class, &type,
+		    &errorstatus, &errorindex, &varbind);
+		if (errorstatus != 0)
+			snmpc_printerror((enum snmp_error) errorstatus, varbind,
+			    errorindex, NULL);
+
+		if (class == BER_CLASS_CONTEXT && type == SNMP_C_REPORT) {
+			printf("Received report:\n");
+			for (; varbind != NULL; varbind = varbind->be_next) {
+				if (!snmpc_print(varbind))
+					err(1, "Can't print response");
+			}
+			return 1;
+		}
+		for (; varbind != NULL; varbind = varbind->be_next) {
+			(void) ober_scanf_elements(varbind, "{oS", &oid);
+			if (ober_oid_cmp(&descroid, &oid) != 2)
+				break;
+			rows++;
+		} 
+		if ((df = reallocarray(df, rows, sizeof(*df))) == NULL)
+			err(1, "malloc");
+		(void) ober_scanf_elements(pdu, "{SSS{e", &varbind);
+		for (; i < rows; varbind = varbind->be_next, i++) {
+			if (ober_scanf_elements(varbind, "{os", &oid,
+			    &string) == -1) {
+				i--;
+				rows--;
+				continue;
+			}
+			df[i].index = oid.bo_id[oid.bo_n - 1];
+			len = strlcpy(df[i].descr, string,
+			    sizeof(df[i].descr));
+			if (len > (int) sizeof(df[i].descr))
+				len = (int) sizeof(df[i].descr) - 1;
+			if (len > descrlen)
+				descrlen = len;
+		} 
+		ober_free_elements(pdu);
+		if (varbind != NULL)
+			break;
+	}
+
+	if (max_repetitions < 3)
+		max_repetitions = 3;
+	if ((reqoid = reallocarray(NULL, max_repetitions, sizeof(*reqoid))) == NULL)
+		err(1, "malloc");
+	for (i = 0; i < rows;) {
+		for (j = 0; i + j < rows && j < (size_t)max_repetitions / 3;
+		    j++) {
+			bcopy(&unitsoid, &(reqoid[(j * 3) + 0]),
+			    sizeof(unitsoid));
+			reqoid[(j * 3) + 0].bo_id[
+			    reqoid[(j * 3) + 0].bo_n++] = df[i + j].index;
+			bcopy(&sizeoid, &(reqoid[(j * 3) + 1]),
+			    sizeof(sizeoid));
+			reqoid[(j * 3) + 1].bo_id[
+			    reqoid[(j * 3) + 1].bo_n++] = df[i + j].index;
+			bcopy(&usedoid, &(reqoid[(j * 3) + 2]),
+			    sizeof(usedoid));
+			reqoid[(j * 3) + 2].bo_id[
+			    reqoid[(j * 3) + 2].bo_n++] = df[i + j].index;
+		}
+		if ((pdu = snmp_get(agent, reqoid, j * 3)) == NULL)
+			err(1, "df");
+		(void) ober_scanf_elements(pdu, "t{Sdd{e", &class, &type,
+		    &errorstatus, &errorindex, &varbind);
+		if (errorstatus != 0)
+			snmpc_printerror((enum snmp_error) errorstatus, varbind,
+			    errorindex, NULL);
+		if (class == BER_CLASS_CONTEXT && type == SNMP_C_REPORT) {
+			printf("Received report:\n");
+			for (; varbind != NULL; varbind = varbind->be_next) {
+				if (!snmpc_print(varbind))
+					err(1, "Can't print response");
+			}
+		}
+		for (j = 0; varbind != NULL; i++) {
+			if (ober_scanf_elements(varbind, "{oi}{oi}{oi}",
+			    &(reqoid[0]), &units, &(reqoid[1]), &size,
+			    &(reqoid[2]), &used, &varbind) == -1) {
+				break;
+			}
+			varbind = varbind->be_next->be_next->be_next;
+
+			unitsoid.bo_id[unitsoid.bo_n++] = df[i].index;
+			if (ober_oid_cmp(&unitsoid, &(reqoid[0])) != 0) {
+				warnx("df: received invalid object");
+				break;
+			}
+			unitsoid.bo_n--;
+			sizeoid.bo_id[sizeoid.bo_n++] = df[i].index;
+			if (ober_oid_cmp(&sizeoid, &(reqoid[1])) != 0) {
+				warnx("df: received invalid object");
+				break;
+			}
+			sizeoid.bo_n--;
+			usedoid.bo_id[usedoid.bo_n++] = df[i].index;
+			if (ober_oid_cmp(&usedoid, &(reqoid[2])) != 0) {
+				warnx("df: received invalid object");
+				break;
+			}
+			usedoid.bo_n--;
+			if (print_human)
+				fmtret = fmt_scaled((units * size), df[i].size);
+			if (!print_human || fmtret == -1)
+				snprintf(df[i].size, sizeof(df[i].size), "%lld",
+				    (units * size) / 1024);
+			len = (int) strlen(df[i].size);
+			if (len > sizelen)
+				sizelen = len;
+			if (print_human)
+				fmtret = fmt_scaled(units * used, df[i].used);
+			if (!print_human || fmtret == -1)
+				snprintf(df[i].used, sizeof(df[i].used), "%lld",
+				    (units * used) / 1024);
+			len = (int) strlen(df[i].used);
+			if (len > usedlen)
+				usedlen = len;
+			if (print_human)
+				fmtret = fmt_scaled(units * (size - used),
+				    df[i].avail);
+			if (!print_human || fmtret == -1)
+				snprintf(df[i].avail, sizeof(df[i].avail),
+				    "%lld", (units * (size - used)) / 1024);
+			len = (int) strlen(df[i].avail);
+			if (len > usedlen)
+				availlen = len;
+			if (size == 0)
+				strlcpy(df[i].proc, "0%", sizeof(df[i].proc));
+			else {
+				snprintf(df[i].proc, sizeof(df[i].proc),
+				    "%lld%%", (used * 100) / size);
+			}
+			len = (int) strlen(df[i].proc);
+			if (len > proclen)
+				proclen = len;
+			j++;
+		}
+		if (j == 0) {
+			warnx("Failed to retrieve information for %s",
+			    df[i].descr);
+			memmove(df + i, df + i + 1,
+			    (rows - i - 1) * sizeof(*df));
+			rows--;
+			i--;
+		}
+	}
+
+	printf("%-*s%*s%*s%*s%*s\n",
+	    descrlen, "Description",
+	    NEXTTAB(descrlen) + sizelen, "Size",
+	    NEXTTAB(sizelen) + usedlen, "Used",
+	    NEXTTAB(usedlen) + availlen, "Available",
+	    NEXTTAB(availlen) + proclen, "Used%");
+	for (i = 0; i < rows; i++) {
+		printf("%-*s%*s%*s%*s%*s\n",
+		    descrlen, df[i].descr,
+		    NEXTTAB(descrlen) + sizelen, df[i].size,
+		    NEXTTAB(sizelen) + usedlen, df[i].used,
+		    NEXTTAB(usedlen) + availlen, df[i].avail,
+		    NEXTTAB(availlen) + proclen, df[i].proc);
+	}
 
 	return 0;
 }

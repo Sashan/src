@@ -1,4 +1,4 @@
-.\" $OpenBSD: snmp.1,v 1.8 2019/10/26 17:43:52 martijn Exp $
+.\" $OpenBSD: snmp.1,v 1.11 2020/01/17 10:10:32 martijn Exp $
 .\"
 .\" Copyright (c) 2019 Martijn van Duren <martijn@openbsd.org>
 .\"
@@ -14,7 +14,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: October 26 2019 $
+.Dd $Mdocdate: January 17 2020 $
 .Dt SNMP 1
 .Os
 .Sh NAME
@@ -42,6 +42,10 @@
 .Op Ar options
 .Ar agent uptime trapoid
 .Oo Ar varoid type value Oc ...
+.Nm
+.Cm df
+.Op Ar options
+.Ar agent
 .Nm
 .Cm mibtree
 .Op Fl O Ar fns
@@ -151,6 +155,16 @@ The
 is the identification OID used by the trap handler to determine its action.
 This command is not available for
 .Fl v Cm 1 .
+.It Xo
+.Nm
+.Cm df 
+.Op Ar options
+.Ar agent
+.Xc
+An SNMP based version of the
+.Xr df 1
+command.
+If no size suffix is shown the sizes are in kilobytes.
 .It Nm Cm mibtree Op Fl O Ar fnS
 Dump the tree of compiled-in MIB objects.
 .El
@@ -185,6 +199,7 @@ This option is only used by
 For the
 .Cm bulkget ,
 .Cm bulkwalk ,
+.Cm df ,
 and
 .Cm walk
 subcommands, set the application specific
@@ -208,6 +223,12 @@ walk the tree up to but excluding
 The blank before
 .Ar endoid
 is mandatory.
+.It Cm h
+For
+.Cm df
+print the output in
+.Dq human-readable
+format.
 .It Cm I
 For
 .Cm walk ,
@@ -247,15 +268,27 @@ or
 also show a summary of the total variables received.
 .It Cm r Ns Ar maxrep
 For
-.Cm bulkget
+.Cm bulkget ,
+.Cm bulkwalk
 and
-.Cm bulkwalk ,
+.Cm df ,
 set the max-repetitions field in the request to the positive integer
 .Ar maxrep .
 This determines the amount of MIBs to return for each specified OID.
 This value defaults to 10.
 No blank is allowed before
 .Ar maxrep .
+.It Cm s Ar skipoid
+For
+.Cm walk
+or
+.Cm bulkwalk
+don't include
+.Ar skipoid
+or its children in the walk output.
+The blank before
+.Ar skipoid
+is mandatory.
 .It Cm t
 For
 .Cm walk ,

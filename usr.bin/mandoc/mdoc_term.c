@@ -1,7 +1,7 @@
-/*	$OpenBSD: mdoc_term.c,v 1.273 2019/06/27 12:19:39 schwarze Exp $ */
+/*	$OpenBSD: mdoc_term.c,v 1.275 2020/01/20 10:29:31 schwarze Exp $ */
 /*
  * Copyright (c) 2008, 2009, 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
- * Copyright (c) 2010, 2012-2019 Ingo Schwarze <schwarze@openbsd.org>
+ * Copyright (c) 2010, 2012-2020 Ingo Schwarze <schwarze@openbsd.org>
  * Copyright (c) 2013 Franco Fichtner <franco@lastsummer.de>
  *
  * Permission to use, copy, modify, and distribute this software for any
@@ -117,6 +117,7 @@ static	int	  termp_pp_pre(DECL_ARGS);
 static	int	  termp_ss_pre(DECL_ARGS);
 static	int	  termp_sy_pre(DECL_ARGS);
 static	int	  termp_tag_pre(DECL_ARGS);
+static	int	  termp_tg_pre(DECL_ARGS);
 static	int	  termp_under_pre(DECL_ARGS);
 static	int	  termp_vt_pre(DECL_ARGS);
 static	int	  termp_xr_pre(DECL_ARGS);
@@ -243,9 +244,10 @@ static const struct mdoc_term_act mdoc_term_acts[MDOC_MAX - MDOC_Dd] = {
 	{ NULL, termp____post }, /* %Q */
 	{ NULL, termp____post }, /* %U */
 	{ NULL, NULL }, /* Ta */
+	{ termp_tg_pre, NULL }, /* Tg */
 };
 
-static	int	 fn_prio;
+static	int	 fn_prio = TAG_STRONG;
 
 
 void
@@ -1290,7 +1292,7 @@ termp_sh_pre(DECL_ARGS)
 		term_tab_set(p, ".5i");
 		switch (n->sec) {
 		case SEC_DESCRIPTION:
-			fn_prio = 0;
+			fn_prio = TAG_STRONG;
 			break;
 		case SEC_AUTHORS:
 			p->flags &= ~(TERMP_SPLIT|TERMP_NOSPLIT);
@@ -1379,7 +1381,7 @@ termp_fn_pre(DECL_ARGS)
 	term_fontpop(p);
 
 	if (n->sec == SEC_DESCRIPTION || n->sec == SEC_CUSTOM)
-		tag_put(n->string, ++fn_prio, p->line);
+		tag_put(n->string, fn_prio++, p->line);
 
 	if (pretty) {
 		term_flushln(p);
@@ -1610,7 +1612,7 @@ termp_in_post(DECL_ARGS)
 static int
 termp_pp_pre(DECL_ARGS)
 {
-	fn_prio = 0;
+	fn_prio = TAG_STRONG;
 	term_vspace(p);
 	return 0;
 }
@@ -2035,7 +2037,7 @@ termp_em_pre(DECL_ARGS)
 {
 	if (n->child != NULL &&
 	    n->child->type == ROFFT_TEXT)
-		tag_put(n->child->string, 0, p->line);
+		tag_put(n->child->string, TAG_FALLBACK, p->line);
 	term_fontpush(p, TERMFONT_UNDER);
 	return 1;
 }
@@ -2045,7 +2047,7 @@ termp_sy_pre(DECL_ARGS)
 {
 	if (n->child != NULL &&
 	    n->child->type == ROFFT_TEXT)
-		tag_put(n->child->string, 0, p->line);
+		tag_put(n->child->string, TAG_FALLBACK, p->line);
 	term_fontpush(p, TERMFONT_BOLD);
 	return 1;
 }
@@ -2058,7 +2060,7 @@ termp_er_pre(DECL_ARGS)
 	    (n->parent->tok == MDOC_It ||
 	     (n->parent->tok == MDOC_Bq &&
 	      n->parent->parent->parent->tok == MDOC_It)))
-		tag_put(n->child->string, 1, p->line);
+		tag_put(n->child->string, TAG_STRONG, p->line);
 	return 1;
 }
 
@@ -2075,8 +2077,15 @@ termp_tag_pre(DECL_ARGS)
 	     (n->parent->tok == MDOC_Xo &&
 	      n->parent->parent->prev == NULL &&
 	      n->parent->parent->parent->tok == MDOC_It)))
-		tag_put(n->child->string, 1, p->line);
+		tag_put(n->child->string, TAG_STRONG, p->line);
 	return 1;
+}
+
+static int
+termp_tg_pre(DECL_ARGS)
+{
+	tag_put(n->child->string, TAG_MANUAL, p->line);
+	return 0;
 }
 
 static int

@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.4 2020/01/15 18:34:21 tobhe Exp $
+#	$OpenBSD: Makefile,v 1.7 2020/01/17 10:01:18 tobhe Exp $
 
 # Copyright (c) 2020 Tobias Heider <tobhe@openbsd.org>
 #
@@ -98,12 +98,12 @@ SETUP_CONFIGS = \
 	echo "cd /tmp\nput $@_right.conf test.conf" | sftp -q ${RIGHT_SSH}
 
 SETUP_SYSCTL = \
-	ssh ${LEFT_SSH} "sysctl net.inet.ipcomp.enable=1"; \
-	ssh ${RIGHT_SSH} "sysctl net.inet.ipcomp.enable=1"
+	ssh ${LEFT_SSH} "sysctl $$sysctl"; \
+	ssh ${RIGHT_SSH} "sysctl $$sysctl"
 
 SETUP_START = \
-	ssh ${LEFT_SSH} "ipsecctl -F; pkill iked; iked -6 -f /tmp/test.conf"; \
-	ssh ${RIGHT_SSH} "ipsecctl -F; pkill iked; iked -6 -f /tmp/test.conf"
+	ssh ${LEFT_SSH} "ipsecctl -F; pkill iked; iked -6 $$iked_flags -f /tmp/test.conf"; \
+	ssh ${RIGHT_SSH} "ipsecctl -F; pkill iked; iked -6 $$iked_flags -f /tmp/test.conf"
 
 SETUP_CERT = \
 	echo "ALTNAME = $$name-from-$$caname" > $$name-from-$$caname.cnf; \
@@ -121,11 +121,11 @@ SETUP_CA = \
 
 cleanup:
 	-ssh ${LEFT_SSH} 'rm -f /tmp/test.conf; ipsecctl -F; pkill iked; \
-	     rm -f /etc/iked/ca/*; rm -f /etc/iked/certs/*; rm -f /etc/iked/private/*'
+	    rm -f /etc/iked/ca/*; rm -f /etc/iked/certs/*; rm -f /etc/iked/private/*; \
+	    sysctl "net.inet.esp.udpencap_port=4500"'
 	-ssh ${RIGHT_SSH} 'rm -f /tmp/test.conf; ipsecctl -F; pkill iked; \
-	     rm -f /etc/iked/ca/*; rm -f /etc/iked/certs/*; rm -f /etc/iked/private/*'
-
-REGRESS_TARGETS =	run-cert-single-ca run-cert-multi-ca run-psk run-fragmentation run-ipcomp
+	    rm -f /etc/iked/ca/*; rm -f /etc/iked/certs/*; rm -f /etc/iked/private/*; \
+	    sysctl "net.inet.esp.udpencap_port=4500"'
 
 setup_certs: ca-both.crt left-from-ca-both.crt left.key right-from-ca-both.crt \
     right.key ca-left.crt right-from-ca-left.crt ca-right.crt left-from-ca-right.crt
@@ -171,6 +171,7 @@ ca-right.crt ca-right.key:
 left-from-ca-right.crt left.key: ca-right.crt ca-right.key
 	caname=ca-right; name=left; ${SETUP_CERT}
 
+REGRESS_TARGETS = run-cert-single-ca
 run-cert-single-ca:
 	@echo '======= $@ ========'
 	flowtype=esp;
@@ -181,6 +182,7 @@ run-cert-single-ca:
 	flowtype=esp; ${TEST_FLOWS}
 	${TEST_PING}
 
+REGRESS_TARGETS += run-cert-multi-ca
 run-cert-multi-ca:
 	@echo '======= $@ ========'
 	flowtype=esp; \
@@ -191,6 +193,18 @@ run-cert-multi-ca:
 	flowtype=esp; ${TEST_FLOWS}
 	${TEST_PING}
 
+REGRESS_TARGETS += run-cert-second-altname
+run-cert-second-altname:
+	@echo '======= $@ ========'
+	flowtype=esp;
+	leftid=left-from-ca-both-alternative; \
+	rightid=right-from-ca-both@openbsd.org; \
+	    ${SETUP_CONFIGS}
+	${SETUP_START}
+	flowtype=esp; ${TEST_FLOWS}
+	${TEST_PING}
+
+REGRESS_TARGETS += run-psk
 run-psk:
 	@echo '======= $@ ========'
 	auth=psk; \
@@ -202,6 +216,7 @@ run-psk:
 	flowtype=esp; ${TEST_FLOWS}
 	${TEST_PING}
 
+REGRESS_TARGETS += run-fragmentation
 run-fragmentation:
 	@echo '======= $@ ========'
 	flowtype=esp; \
@@ -213,15 +228,33 @@ run-fragmentation:
 	flowtype=esp; ${TEST_FLOWS}
 	${TEST_PING}
 
+REGRESS_TARGETS += run-ipcomp
 run-ipcomp:
 	@echo '======= $@ ========'
 	flowtype=ipcomp; \
 	leftid=left-from-ca-both; \
 	rightid=right-from-ca-both; \
 	    ${SETUP_CONFIGS}
-	${SETUP_SYSCTL}
+	sysctl="net.inet.ipcomp.enable=1"; \
+	    ${SETUP_SYSCTL}
 	${SETUP_START}
 	flowtype=ipcomp; ${TEST_FLOWS}
 	${TEST_PING}
+
+REGRESS_TARGETS += run-udpencap-port
+run-udpencap-port:
+	@echo '======= $@ ========'
+	flowtype=esp; \
+	leftid=left-from-ca-both; \
+	rightid=right-from-ca-both; \
+	    ${SETUP_CONFIGS}; \
+	sysctl="net.inet.esp.udpencap_port=9999"; \
+	    ${SETUP_SYSCTL};
+	iked_flags=-p9999; \
+	    ${SETUP_START};
+	flowtype=esp; ${TEST_FLOWS}; \
+	    ${TEST_PING}
+	sysctl="net.inet.esp.udpencap_port=4500"; \
+	    ${SETUP_SYSCTL};
 
 .include <bsd.regress.mk>
