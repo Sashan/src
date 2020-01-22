@@ -325,6 +325,13 @@ pfsync_clone_create(struct if_clone *ifc, int unit)
 	struct pfsync_softc *sc;
 	struct ifnet *ifp;
 	int q;
+	static const char *mtx_names[] = {
+		"iack_mtx",
+		"upd_c_mtx",
+		"del_mtx",
+		"ins_mtx",
+		"upd_mtx",
+		"" };
 
 	if (unit != 0)
 		return (EINVAL);
@@ -334,15 +341,18 @@ pfsync_clone_create(struct if_clone *ifc, int unit)
 	sc = malloc(sizeof(*pfsyncif), M_DEVBUF, M_WAITOK|M_ZERO);
 	for (q = 0; q < PFSYNC_S_COUNT; q++) {
 		TAILQ_INIT(&sc->sc_qs[q]);
-		mtx_init(&sc->sc_mtx[q], IPL_SOFTNET);
+		mtx_init_flags(&sc->sc_mtx[q], IPL_SOFTNET, mtx_names[q],
+		    MTX_DUPOK);
 	}
 
 	pool_init(&sc->sc_pool, PFSYNC_PLSIZE, 0, IPL_SOFTNET, 0, "pfsync",
 	    NULL);
 	TAILQ_INIT(&sc->sc_upd_req_list);
-	mtx_init(&sc->sc_upd_req_mtx, IPL_SOFTNET);
+	mtx_init_flags(&sc->sc_upd_req_mtx, IPL_SOFTNET, "upd_req_mtx",
+	    MTX_DUPOK);
 	TAILQ_INIT(&sc->sc_deferrals);
-	mtx_init(&sc->sc_deferrals_mtx, IPL_SOFTNET);
+	mtx_init_flags(&sc->sc_deferrals_mtx, IPL_SOFTNET, "deferrals_mtx",
+	    MTX_DUPOK);
 	task_set(&sc->sc_ltask, pfsync_syncdev_state, sc);
 	task_set(&sc->sc_dtask, pfsync_ifdetach, sc);
 	sc->sc_deferred = 0;
