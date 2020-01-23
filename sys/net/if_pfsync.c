@@ -347,9 +347,9 @@ pfsync_clone_create(struct if_clone *ifc, int unit)
 	pool_init(&sc->sc_pool, PFSYNC_PLSIZE, 0, IPL_SOFTNET, 0, "pfsync",
 	    NULL);
 	TAILQ_INIT(&sc->sc_upd_req_list);
-	mtx_init_flags(&sc->sc_upd_req_mtx, IPL_SOFTNET, "upd_req_mtx", 0);
+	mtx_init(&sc->sc_upd_req_mtx, IPL_SOFTNET);
 	TAILQ_INIT(&sc->sc_deferrals);
-	mtx_init_flags(&sc->sc_deferrals_mtx, IPL_SOFTNET, "deferrals_mtx", 0);
+	mtx_init(&sc->sc_deferrals_mtx, IPL_SOFTNET);
 	task_set(&sc->sc_ltask, pfsync_syncdev_state, sc);
 	task_set(&sc->sc_dtask, pfsync_ifdetach, sc);
 	sc->sc_deferred = 0;
