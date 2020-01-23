@@ -14,12 +14,12 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include <config.h>
+
 
 #include <isc/file.h>
 
 #include <isc/regex.h>
-#include <isc/string.h>
+#include <string.h>
 
 #if VALREGEX_REPORT_REASON
 #define FAIL(x) do { reason = (x); goto error; } while(0)

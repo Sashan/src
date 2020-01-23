@@ -17,7 +17,7 @@
 /*! \file
  * \author  Principal Authors: DCL */
 
-#include <config.h>
+
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -30,7 +30,7 @@
 #include <isc/magic.h>
 #include <isc/netdb.h>
 
-#include <isc/string.h>
+#include <string.h>
 #include <isc/util.h>
 
 #include "errno2result.h"

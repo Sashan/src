@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: socket.h,v 1.9 2020/01/09 18:17:19 florian Exp $ */
+/* $Id: socket.h,v 1.12 2020/01/23 08:15:04 florian Exp $ */
 
 #ifndef ISC_SOCKET_H
 #define ISC_SOCKET_H 1
@@ -59,12 +59,12 @@
 #include <isc/event.h>
 #include <isc/eventclass.h>
 #include <isc/lang.h>
-#include <isc/json.h>
+
 #include <isc/region.h>
 #include <isc/sockaddr.h>
 #include <isc/time.h>
 #include <isc/types.h>
-#include <isc/xml.h>
+
 
 ISC_LANG_BEGINDECLS
 
@@ -237,9 +237,6 @@ struct isc_socket_connev {
 typedef enum {
 	isc_sockettype_udp = 1,
 	isc_sockettype_tcp = 2,
-	isc_sockettype_unix = 3,
-	isc_sockettype_fdwatch = 4,
-	isc_sockettype_raw = 5
 } isc_sockettype_t;
 
 /*@{*/
@@ -284,11 +281,6 @@ typedef struct isc_socketmgrmethods {
 	isc_result_t	(*socketcreate)(isc_socketmgr_t *manager, int pf,
 					isc_sockettype_t type,
 					isc_socket_t **socketp);
-	isc_result_t    (*fdwatchcreate)(isc_socketmgr_t *manager, int fd,
-					 int flags,
-					 isc_sockfdwatch_t callback,
-					 void *cbarg, isc_task_t *task,
-					 isc_socket_t **socketp);
 } isc_socketmgrmethods_t;
 
 typedef struct isc_socketmethods {
@@ -321,7 +313,6 @@ typedef struct isc_socketmethods {
 				       isc_sockaddr_t *addressp);
 	isc_sockettype_t (*gettype)(isc_socket_t *sock);
 	void		(*ipv6only)(isc_socket_t *sock, isc_boolean_t yes);
-	isc_result_t    (*fdwatchpoke)(isc_socket_t *sock, int flags);
 	isc_result_t		(*dup)(isc_socket_t *socket,
 				  isc_socket_t **socketp);
 	int 		(*getfd)(isc_socket_t *socket);
@@ -667,53 +658,6 @@ isc_socket_filter(isc_socket_t *sock, const char *filter);
  */
 
 isc_result_t
-isc_socket_listen(isc_socket_t *sock, unsigned int backlog);
-/*%<
- * Set listen mode on the socket.  After this call, the only function that
- * can be used (other than attach and detach) is isc_socket_accept().
- *
- * Notes:
- *
- * \li	'backlog' is as in the UNIX system call listen() and may be
- *	ignored by non-UNIX implementations.
- *
- * \li	If 'backlog' is zero, a reasonable system default is used, usually
- *	SOMAXCONN.
- *
- * Requires:
- *
- * \li	'socket' is a valid, bound TCP socket or a valid, bound UNIX socket.
- *
- * Returns:
- *
- * \li	ISC_R_SUCCESS
- * \li	ISC_R_UNEXPECTED
- */
-
-isc_result_t
-isc_socket_accept(isc_socket_t *sock,
-		  isc_task_t *task, isc_taskaction_t action, void *arg);
-/*%<
- * Queue accept event.  When a new connection is received, the task will
- * get an ISC_SOCKEVENT_NEWCONN event with the sender set to the listen
- * socket.  The new socket structure is sent inside the isc_socket_newconnev_t
- * event type, and is attached to the task 'task'.
- *
- * REQUIRES:
- * \li	'socket' is a valid TCP socket that isc_socket_listen() was called
- *	on.
- *
- * \li	'task' is a valid task
- *
- * \li	'action' is a valid action
- *
- * RETURNS:
- * \li	ISC_R_SUCCESS
- * \li	ISC_R_NOMEMORY
- * \li	ISC_R_UNEXPECTED
- */
-
-isc_result_t
 isc_socket_connect(isc_socket_t *sock, isc_sockaddr_t *addressp,
 		   isc_task_t *task, isc_taskaction_t action,
 		   void *arg);
@@ -968,14 +912,14 @@ isc_socket_sendto2(isc_socket_t *sock, isc_region_t *region,
 /*@}*/
 
 isc_result_t
-isc_socketmgr_createinctx(isc_mem_t *mctx, isc_appctx_t *actx,
+isc_socketmgr_createinctx(isc_appctx_t *actx,
 			  isc_socketmgr_t **managerp);
 
 isc_result_t
-isc_socketmgr_create(isc_mem_t *mctx, isc_socketmgr_t **managerp);
+isc_socketmgr_create(isc_socketmgr_t **managerp);
 
 isc_result_t
-isc_socketmgr_create2(isc_mem_t *mctx, isc_socketmgr_t **managerp,
+isc_socketmgr_create2(isc_socketmgr_t **managerp,
 		      unsigned int maxsocks);
 /*%<
  * Create a socket manager.  If "maxsocks" is non-zero, it specifies the
@@ -1102,47 +1046,11 @@ isc_socket_dscp(isc_socket_t *sock, isc_dscp_t dscp);
  */
 
 isc_socketevent_t *
-isc_socket_socketevent(isc_mem_t *mctx, void *sender,
+isc_socket_socketevent(void *sender,
 		       isc_eventtype_t eventtype, isc_taskaction_t action,
 		       void *arg);
 /*%<
  * Get a isc_socketevent_t to be used with isc_socket_sendto2(), etc.
- */
-
-void
-isc_socket_cleanunix(isc_sockaddr_t *addr, isc_boolean_t active);
-
-/*%<
- * Cleanup UNIX domain sockets in the file-system.  If 'active' is true
- * then just unlink the socket.  If 'active' is false try to determine
- * if there is a listener of the socket or not.  If no listener is found
- * then unlink socket.
- *
- * Prior to unlinking the path is tested to see if it a socket.
- *
- * Note: there are a number of race conditions which cannot be avoided
- *       both in the filesystem and any application using UNIX domain
- *	 sockets (e.g. socket is tested between bind() and listen(),
- *	 the socket is deleted and replaced in the file-system between
- *	 stat() and unlink()).
- */
-
-isc_result_t
-isc_socket_permunix(isc_sockaddr_t *sockaddr, uint32_t perm,
-		    uint32_t owner, uint32_t group);
-/*%<
- * Set ownership and file permissions on the UNIX domain socket.
- *
- * Note: On Solaris and SunOS this secures the directory containing
- *       the socket as Solaris and SunOS do not honour the filesystem
- *	 permissions on the socket.
- *
- * Requires:
- * \li	'sockaddr' to be a valid UNIX domain sockaddr.
- *
- * Returns:
- * \li	#ISC_R_SUCCESS
- * \li	#ISC_R_FAILURE
  */
 
 void isc_socket_setname(isc_socket_t *socket, const char *name, void *tag);
@@ -1179,27 +1087,11 @@ isc__socketmgr_maxudp(isc_socketmgr_t *mgr, int maxudp);
  * Test interface. Drop UDP packet > 'maxudp'.
  */
 
-#ifdef HAVE_LIBXML2
-int
-isc_socketmgr_renderxml(isc_socketmgr_t *mgr, xmlTextWriterPtr writer);
-/*%<
- * Render internal statistics and other state into the XML document.
- */
-#endif /* HAVE_LIBXML2 */
-
-#ifdef HAVE_JSON
-isc_result_t
-isc_socketmgr_renderjson(isc_socketmgr_t *mgr, json_object *stats);
-/*%<
- * Render internal statistics and other state into JSON format.
- */
-#endif /* HAVE_JSON */
-
 /*%<
  * See isc_socketmgr_create() above.
  */
 typedef isc_result_t
-(*isc_socketmgrcreatefunc_t)(isc_mem_t *mctx, isc_socketmgr_t **managerp);
+(*isc_socketmgrcreatefunc_t)(isc_socketmgr_t **managerp);
 
 isc_result_t
 isc_socket_register(isc_socketmgrcreatefunc_t createfunc);

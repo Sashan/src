@@ -14,14 +14,14 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: time.c,v 1.9 2020/01/09 18:17:15 florian Exp $ */
+/* $Id: time.c,v 1.11 2020/01/22 13:02:09 florian Exp $ */
 
 /*! \file */
 
-#include <config.h>
+
 
 #include <stdio.h>
-#include <isc/string.h>		/* Required for HP/UX (and others?) */
+#include <string.h>		/* Required for HP/UX (and others?) */
 #include <time.h>
 #include <ctype.h>
 

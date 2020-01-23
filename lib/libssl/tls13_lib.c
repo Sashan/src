@@ -1,4 +1,4 @@
-/*	$OpenBSD: tls13_lib.c,v 1.13 2019/11/26 23:46:18 beck Exp $ */
+/*	$OpenBSD: tls13_lib.c,v 1.26 2020/01/23 11:57:20 jsing Exp $ */
 /*
  * Copyright (c) 2018, 2019 Joel Sing <jsing@openbsd.org>
  * Copyright (c) 2019 Bob Beck <beck@openbsd.org>
@@ -23,6 +23,19 @@
 
 #include "ssl_locl.h"
 #include "tls13_internal.h"
+
+SSL3_ENC_METHOD TLSv1_3_enc_data = {
+	.enc = NULL,
+	.enc_flags = SSL_ENC_FLAG_TLS1_3_CIPHERS,
+};
+
+/*
+ * RFC 8446 section 4.1.3, magic values which must be set by the
+ * server in server random if it is willing to downgrade but supports
+ * tls v1.3
+ */
+uint8_t tls13_downgrade_12[8] = {0x44, 0x4f, 0x57, 0x4e, 0x47, 0x52, 0x44, 0x01};
+uint8_t tls13_downgrade_11[8] = {0x44, 0x4f, 0x57, 0x4e, 0x47, 0x52, 0x44, 0x00};
 
 const EVP_AEAD *
 tls13_cipher_aead(const SSL_CIPHER *cipher)
@@ -69,6 +82,7 @@ tls13_alert_received_cb(uint8_t alert_desc, void *arg)
 	SSL *s = ctx->ssl;
 
 	if (alert_desc == SSL_AD_CLOSE_NOTIFY) {
+		ctx->close_notify_recv = 1;
 		ctx->ssl->internal->shutdown |= SSL_RECEIVED_SHUTDOWN;
 		S3I(ctx->ssl)->warn_alert = alert_desc;
 		return;
@@ -263,7 +277,9 @@ tls13_ctx_free(struct tls13_ctx *ctx)
 	if (ctx == NULL)
 		return;
 
+	tls13_error_clear(&ctx->error);
 	tls13_record_layer_free(ctx->rl);
+	tls13_handshake_msg_free(ctx->hs_msg);
 
 	freezero(ctx, sizeof(struct tls13_ctx));
 }
@@ -340,6 +356,35 @@ tls13_legacy_wire_write_cb(const void *buf, size_t n, void *arg)
 	return tls13_legacy_wire_write(ctx->ssl, buf, n);
 }
 
+static void
+tls13_legacy_error(SSL *ssl)
+{
+	struct tls13_ctx *ctx = ssl->internal->tls13;
+	int reason = SSL_R_UNKNOWN;
+
+	/* If we received a fatal alert we already put an error on the stack. */
+	if (S3I(ssl)->fatal_alert != 0)
+		return;
+
+	switch (ctx->error.code) {
+	case TLS13_ERR_VERIFY_FAILED:
+		reason = SSL_R_CERTIFICATE_VERIFY_FAILED;
+		break;
+	case TLS13_ERR_HRR_FAILED:
+		reason = SSL_R_NO_CIPHERS_AVAILABLE;
+		break;
+	case TLS13_ERR_TRAILING_DATA:
+		reason = SSL_R_EXTRA_DATA_IN_MESSAGE;
+		break;
+	case TLS13_ERR_NO_SHARED_CIPHER:
+		reason = SSL_R_NO_SHARED_CIPHER;
+		break;
+	}
+
+	ERR_put_error(ERR_LIB_SSL, (0xfff), reason, ctx->error.file,
+	    ctx->error.line);
+}
+
 int
 tls13_legacy_return_code(SSL *ssl, ssize_t ret)
 {
@@ -359,9 +404,11 @@ tls13_legacy_return_code(SSL *ssl, ssize_t ret)
 		return 0;
 
 	case TLS13_IO_FAILURE:
-		/* XXX - we need to record/map internal errors. */
-		if (ERR_peek_error() == 0)
-			SSLerror(ssl, ERR_R_INTERNAL_ERROR);
+		tls13_legacy_error(ssl);
+		return -1;
+
+	case TLS13_IO_ALERT:
+		tls13_legacy_error(ssl);
 		return -1;
 
 	case TLS13_IO_WANT_POLLIN:
@@ -380,6 +427,22 @@ tls13_legacy_return_code(SSL *ssl, ssize_t ret)
 }
 
 int
+tls13_legacy_pending(const SSL *ssl)
+{
+	struct tls13_ctx *ctx = ssl->internal->tls13;
+	ssize_t ret;
+
+	if (ctx == NULL)
+		return 0;
+
+	ret = tls13_pending_application_data(ctx->rl);
+	if (ret < 0 || ret > INT_MAX)
+		return 0;
+
+	return ret;
+}
+
+int
 tls13_legacy_read_bytes(SSL *ssl, int type, unsigned char *buf, int len, int peek)
 {
 	struct tls13_ctx *ctx = ssl->internal->tls13;
@@ -391,12 +454,6 @@ tls13_legacy_read_bytes(SSL *ssl, int type, unsigned char *buf, int len, int pee
 		return tls13_legacy_return_code(ssl, TLS13_IO_WANT_POLLIN);
 	}
 
-	if (peek) {
-		/* XXX - support peek... */
-		SSLerror(ssl, ERR_R_INTERNAL_ERROR);
-		return -1;
-	}
-
 	if (type != SSL3_RT_APPLICATION_DATA) {
 		SSLerror(ssl, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
 		return -1;
@@ -406,7 +463,11 @@ tls13_legacy_read_bytes(SSL *ssl, int type, unsigned char *buf, int len, int pee
 		return -1;
 	}
 
-	ret = tls13_read_application_data(ctx->rl, buf, len);
+	if (peek)
+		ret = tls13_peek_application_data(ctx->rl, buf, len);
+	else
+		ret = tls13_read_application_data(ctx->rl, buf, len);
+
 	return tls13_legacy_return_code(ssl, ret);
 }
 
@@ -465,4 +526,53 @@ tls13_legacy_write_bytes(SSL *ssl, int type, const void *vbuf, int len)
 		sent += ret;
 		n -= ret;
 	}
+}
+
+int
+tls13_legacy_shutdown(SSL *ssl)
+{
+	struct tls13_ctx *ctx = ssl->internal->tls13;
+	uint8_t buf[512]; /* XXX */
+	ssize_t ret;
+
+	/*
+	 * We need to return 0 when we have sent a close-notify but have not
+	 * yet received one. We return 1 only once we have sent and received
+	 * close-notify alerts. All other cases return -1 and set internal
+	 * state appropriately.
+	 */
+	if (ctx == NULL || ssl->internal->quiet_shutdown) {
+		ssl->internal->shutdown = SSL_SENT_SHUTDOWN | SSL_RECEIVED_SHUTDOWN;
+		return 1;
+	}
+
+	/* Send close notify. */
+	if (!ctx->close_notify_sent) {
+		ctx->close_notify_sent = 1;
+		if ((ret = tls13_send_alert(ctx->rl, SSL_AD_CLOSE_NOTIFY)) < 0)
+			return tls13_legacy_return_code(ssl, ret);
+	}
+
+	/* Ensure close notify has been sent. */
+	if ((ret = tls13_record_layer_send_pending(ctx->rl)) != TLS13_IO_SUCCESS)
+		return tls13_legacy_return_code(ssl, ret);
+
+	/* Receive close notify. */
+	if (!ctx->close_notify_recv) {
+		/*
+		 * If there is still application data pending then we have no
+		 * option but to discard it here. The application should have
+		 * continued to call SSL_read() instead of SSL_shutdown().
+		 */
+		/* XXX - tls13_drain_application_data()? */
+		if ((ret = tls13_read_application_data(ctx->rl, buf, sizeof(buf))) > 0)
+			ret = TLS13_IO_WANT_POLLIN;
+		if (ret != TLS13_IO_EOF)
+			return tls13_legacy_return_code(ssl, ret);
+	}
+
+	if (ctx->close_notify_recv)
+		return 1;
+
+	return 0;
 }

@@ -14,11 +14,11 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: ds.c,v 1.4 2020/01/09 13:52:23 florian Exp $ */
+/* $Id: ds.c,v 1.7 2020/01/22 13:02:09 florian Exp $ */
 
 /*! \file */
 
-#include <config.h>
+
 
 #include <string.h>
 
@@ -37,10 +37,6 @@
 
 #include <dst/dst.h>
 
-#if defined(HAVE_OPENSSL_GOST)
-#include "dst_gost.h"
-#endif
-
 isc_result_t
 dns_ds_buildrdata(dns_name_t *owner, dns_rdata_t *key,
 		  unsigned int digest_type, unsigned char *buffer,
@@ -55,9 +51,6 @@ dns_ds_buildrdata(dns_name_t *owner, dns_rdata_t *key,
 	isc_sha1_t sha1;
 	isc_sha256_t sha256;
 	isc_sha384_t sha384;
-#if defined(HAVE_OPENSSL_GOST)
-	isc_gost_t gost;
-#endif
 
 	REQUIRE(key != NULL);
 	REQUIRE(key->type == dns_rdatatype_dnskey);
@@ -83,26 +76,6 @@ dns_ds_buildrdata(dns_name_t *owner, dns_rdata_t *key,
 		isc_sha1_final(&sha1, digest);
 		break;
 
-#if defined(HAVE_OPENSSL_GOST)
-#define RETERR(x) do {					\
-	isc_result_t ret = (x);				\
-	if (ret != ISC_R_SUCCESS) {			\
-		isc_gost_invalidate(&gost);		\
-		return (ret);				\
-	}						\
-} while (0)
-
-	case DNS_DSDIGEST_GOST:
-		RETERR(isc_gost_init(&gost));
-		dns_name_toregion(name, &r);
-		RETERR(isc_gost_update(&gost, r.base, r.length));
-		dns_rdata_toregion(key, &r);
-		INSIST(r.length >= 4);
-		RETERR(isc_gost_update(&gost, r.base, r.length));
-		RETERR(isc_gost_final(&gost, digest));
-		break;
-#endif
-
 	case DNS_DSDIGEST_SHA384:
 		isc_sha384_init(&sha384);
 		dns_name_toregion(name, &r);
@@ -125,7 +98,6 @@ dns_ds_buildrdata(dns_name_t *owner, dns_rdata_t *key,
 		break;
 	}
 
-	ds.mctx = NULL;
 	ds.common.rdclass = key->rdclass;
 	ds.common.rdtype = dns_rdatatype_ds;
 	ds.algorithm = r.base[3];
@@ -135,12 +107,6 @@ dns_ds_buildrdata(dns_name_t *owner, dns_rdata_t *key,
 	case DNS_DSDIGEST_SHA1:
 		ds.length = ISC_SHA1_DIGESTLENGTH;
 		break;
-
-#if defined(HAVE_OPENSSL_GOST)
-	case DNS_DSDIGEST_GOST:
-		ds.length = ISC_GOST_DIGESTLENGTH;
-		break;
-#endif
 
 	case DNS_DSDIGEST_SHA384:
 		ds.length = ISC_SHA384_DIGESTLENGTH;

@@ -17,7 +17,7 @@
 #ifndef ISC_SHA1_H
 #define ISC_SHA1_H 1
 
-/* $Id: sha1.h,v 1.5 2020/01/09 18:17:19 florian Exp $ */
+/* $Id: sha1.h,v 1.8 2020/01/22 13:02:10 florian Exp $ */
 
 /*	$NetBSD: sha1.h,v 1.2 1998/05/29 22:55:44 thorpej Exp $	*/
 
@@ -28,31 +28,18 @@
  */
 
 #include <isc/lang.h>
-#include <isc/platform.h>
+
 #include <isc/types.h>
 
 #define ISC_SHA1_DIGESTLENGTH 20U
 #define ISC_SHA1_BLOCK_LENGTH 64U
 
-#ifdef ISC_PLATFORM_OPENSSLHASH
 #include <openssl/opensslv.h>
 #include <openssl/evp.h>
 
 typedef struct {
 	EVP_MD_CTX *ctx;
-#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
-	EVP_MD_CTX _ctx;
-#endif
 } isc_sha1_t;
-
-#else
-
-typedef struct {
-	uint32_t state[5];
-	uint32_t count[2];
-	unsigned char buffer[ISC_SHA1_BLOCK_LENGTH];
-} isc_sha1_t;
-#endif
 
 ISC_LANG_BEGINDECLS
 

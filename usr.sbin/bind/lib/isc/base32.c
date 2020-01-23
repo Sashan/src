@@ -14,17 +14,17 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: base32.c,v 1.3 2019/12/17 01:46:34 sthen Exp $ */
+/* $Id: base32.c,v 1.5 2020/01/22 13:02:09 florian Exp $ */
 
 /*! \file */
 
-#include <config.h>
+
 
 #include <isc/base32.h>
 #include <isc/buffer.h>
 #include <isc/lex.h>
 #include <isc/region.h>
-#include <isc/string.h>
+#include <string.h>
 #include <isc/util.h>
 
 #define RETERR(x) do { \

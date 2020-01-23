@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh-keygen.c,v 1.383 2020/01/14 15:07:30 naddy Exp $ */
+/* $OpenBSD: ssh-keygen.c,v 1.387 2020/01/23 07:54:04 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1994 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -1241,8 +1241,10 @@ known_hosts_find_delete(struct hostkey_foreach_line *l, void *_ctx)
 				if (fp == NULL || ra == NULL)
 					fatal("%s: sshkey_fingerprint failed",
 					    __func__);
-				mprintf("%s %s %s %s\n", ctx->host,
-				    sshkey_type(l->key), fp, l->comment);
+				mprintf("%s %s %s%s%s\n", ctx->host,
+				    sshkey_type(l->key), fp,
+				    l->comment[0] ? " " : "",
+				    l->comment);
 				if (log_level_get() >= SYSLOG_LEVEL_VERBOSE)
 					printf("%s\n", ra);
 				free(ra);
@@ -2145,7 +2147,6 @@ do_show_cert(struct passwd *pw)
 	exit(ok ? 0 : 1);
 }
 
-#ifdef WITH_OPENSSL
 static void
 load_krl(const char *path, struct ssh_krl **krlp)
 {
@@ -2440,7 +2441,6 @@ do_check_krl(struct passwd *pw, int argc, char **argv)
 	ssh_krl_free(krl);
 	exit(ret);
 }
-#endif
 
 static struct sshkey *
 load_sign_key(const char *keypath, const struct sshkey *pubkey)
@@ -2579,7 +2579,7 @@ sign_one(struct sshkey *signkey, const char *filename, int fd,
 }
 
 static int
-sign(const char *keypath, const char *sig_namespace, int argc, char **argv)
+sig_sign(const char *keypath, const char *sig_namespace, int argc, char **argv)
 {
 	int i, fd = -1, r, ret = -1;
 	int agent_fd = -1;
@@ -2650,8 +2650,8 @@ done:
 }
 
 static int
-verify(const char *signature, const char *sig_namespace, const char *principal,
-    const char *allowed_keys, const char *revoked_keys)
+sig_verify(const char *signature, const char *sig_namespace,
+    const char *principal, const char *allowed_keys, const char *revoked_keys)
 {
 	int r, ret = -1, sigfd = -1;
 	struct sshbuf *sigbuf = NULL, *abuf = NULL;
@@ -2674,7 +2674,7 @@ verify(const char *signature, const char *sig_namespace, const char *principal,
 	}
 	if ((r = sshsig_dearmor(abuf, &sigbuf)) != 0) {
 		error("%s: sshsig_armor: %s", __func__, ssh_err(r));
-		return r;
+		goto done;
 	}
 	if ((r = sshsig_verify_fd(sigbuf, STDIN_FILENO, sig_namespace,
 	    &sign_key, &sig_details)) != 0)
@@ -2734,6 +2734,57 @@ done:
 	sshkey_free(sign_key);
 	sshkey_sig_details_free(sig_details);
 	free(fp);
+	return ret;
+}
+
+static int
+sig_find_principal(const char *signature, const char *allowed_keys) {
+	int r, ret = -1, sigfd = -1;
+	struct sshbuf *sigbuf = NULL, *abuf = NULL;
+	struct sshkey *sign_key = NULL;
+	char *principal = NULL;
+
+	if ((abuf = sshbuf_new()) == NULL)
+		fatal("%s: sshbuf_new() failed", __func__);
+
+	if ((sigfd = open(signature, O_RDONLY)) < 0) {
+		error("Couldn't open signature file %s", signature);
+		goto done;
+	}
+
+	if ((r = sshkey_load_file(sigfd, abuf)) != 0) {
+		error("Couldn't read signature file: %s", ssh_err(r));
+		goto done;
+	}
+	if ((r = sshsig_dearmor(abuf, &sigbuf)) != 0) {
+		error("%s: sshsig_armor: %s", __func__, ssh_err(r));
+		goto done;
+	}
+	if ((r = sshsig_get_pubkey(sigbuf, &sign_key)) != 0) {
+		error("%s: sshsig_get_pubkey: %s",
+		      __func__, ssh_err(r));
+		goto done;
+	}
+
+	if ((r = sshsig_find_principal(allowed_keys, sign_key,
+				      &principal)) != 0) {
+		error("%s: sshsig_get_principal: %s",
+		      __func__, ssh_err(r));
+		goto done;
+	}
+	ret = 0;
+done:
+	if (ret == 0 ) {
+		printf("Found matching principal: %s\n", principal);
+	} else {
+		printf("Could not find matching principal.\n");
+	}
+	if (sigfd != -1)
+		close(sigfd);
+	sshbuf_free(sigbuf);
+	sshbuf_free(abuf);
+	sshkey_free(sign_key);
+	free(principal);
 	return ret;
 }
 
@@ -3022,6 +3073,7 @@ usage(void)
 	    "       ssh-keygen -k -f krl_file [-u] [-s ca_public] [-z version_number]\n"
 	    "                  file ...\n"
 	    "       ssh-keygen -Q -f krl_file file ...\n"
+	    "       ssh-keygen -Y find-principal -s signature_file -f allowed_signers_file\n"
 	    "       ssh-keygen -Y check-novalidate -n namespace -s signature_file\n"
 	    "       ssh-keygen -Y sign -f key_file -n namespace file ...\n"
 	    "       ssh-keygen -Y verify -f allowed_signers_file -I signer_identity\n"
@@ -3282,6 +3334,19 @@ main(int argc, char **argv)
 	argc -= optind;
 
 	if (sign_op != NULL) {
+		if (strncmp(sign_op, "find-principal", 14) == 0) {
+			if (ca_key_path == NULL) {
+				error("Too few arguments for find-principal:"
+				      "missing signature file");
+				exit(1);
+			}
+			if (!have_identity) {
+				error("Too few arguments for find-principal:"
+				      "missing allowed keys file");
+				exit(1);
+			}
+			return sig_find_principal(ca_key_path, identity_file);
+		}
 		if (cert_principals == NULL || *cert_principals == '\0') {
 			error("Too few arguments for sign/verify: "
 			    "missing namespace");
@@ -3293,15 +3358,16 @@ main(int argc, char **argv)
 				    "missing key");
 				exit(1);
 			}
-			return sign(identity_file, cert_principals, argc, argv);
+			return sig_sign(identity_file, cert_principals,
+			    argc, argv);
 		} else if (strncmp(sign_op, "check-novalidate", 16) == 0) {
 			if (ca_key_path == NULL) {
 				error("Too few arguments for check-novalidate: "
 				      "missing signature file");
 				exit(1);
 			}
-			return verify(ca_key_path, cert_principals,
-				      NULL, NULL, NULL);
+			return sig_verify(ca_key_path, cert_principals,
+			    NULL, NULL, NULL);
 		} else if (strncmp(sign_op, "verify", 6) == 0) {
 			if (ca_key_path == NULL) {
 				error("Too few arguments for verify: "
@@ -3318,7 +3384,7 @@ main(int argc, char **argv)
 				    "missing principal ID");
 				exit(1);
 			}
-			return verify(ca_key_path, cert_principals,
+			return sig_verify(ca_key_path, cert_principals,
 			    cert_key_id, identity_file, rr_hostname);
 		}
 		usage();
@@ -3344,21 +3410,13 @@ main(int argc, char **argv)
 		usage();
 	}
 	if (gen_krl) {
-#ifdef WITH_OPENSSL
 		do_gen_krl(pw, update_krl, ca_key_path,
 		    cert_serial, identity_comment, argc, argv);
 		return (0);
-#else
-		fatal("KRL generation not supported");
-#endif
 	}
 	if (check_krl) {
-#ifdef WITH_OPENSSL
 		do_check_krl(pw, argc, argv);
 		return (0);
-#else
-		fatal("KRL checking not supported");
-#endif
 	}
 	if (ca_key_path != NULL) {
 		if (cert_key_id == NULL)
@@ -3561,7 +3619,7 @@ main(int argc, char **argv)
 	sshkey_free(private);
 
 	if (!quiet) {
-		printf("Your identification has been saved in %s.\n",
+		printf("Your identification has been saved in %s\n",
 		    identity_file);
 	}
 
@@ -3578,7 +3636,7 @@ main(int argc, char **argv)
 		    SSH_FP_RANDOMART);
 		if (fp == NULL || ra == NULL)
 			fatal("sshkey_fingerprint failed");
-		printf("Your public key has been saved in %s.\n",
+		printf("Your public key has been saved in %s\n",
 		    identity_file);
 		printf("The key fingerprint is:\n");
 		printf("%s %s\n", fp, comment);

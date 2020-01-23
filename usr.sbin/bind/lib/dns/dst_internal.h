@@ -31,7 +31,7 @@
  * IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: dst_internal.h,v 1.8 2020/01/09 18:17:14 florian Exp $ */
+/* $Id: dst_internal.h,v 1.10 2020/01/22 06:47:14 florian Exp $ */
 
 #ifndef DST_DST_INTERNAL_H
 #define DST_DST_INTERNAL_H 1
@@ -69,8 +69,6 @@ ISC_LANG_BEGINDECLS
 #define VALID_KEY(x) ISC_MAGIC_VALID(x, KEY_MAGIC)
 #define VALID_CTX(x) ISC_MAGIC_VALID(x, CTX_MAGIC)
 
-extern isc_mem_t *dst__memory_pool;
-
 /***
  *** Types
  ***/
@@ -104,14 +102,10 @@ struct dst_key {
 	uint16_t	key_bits;	/*%< hmac digest bits */
 	dns_rdataclass_t key_class;	/*%< class of the key record */
 	dns_ttl_t	key_ttl;	/*%< default/initial dnskey ttl */
-	isc_mem_t	*mctx;		/*%< memory context */
 	char		*engine;	/*%< engine name (HSM) */
 	char		*label;		/*%< engine label (HSM) */
 	union {
 		void *generic;
-#if !defined(USE_EVP) || !USE_EVP
-		RSA *rsa;
-#endif
 		EVP_PKEY *pkey;
 		dst_hmacsha1_key_t *hmacsha1;
 		dst_hmacsha224_key_t *hmacsha224;
@@ -140,7 +134,6 @@ struct dst_context {
 	unsigned int magic;
 	dst_use_t use;
 	dst_key_t *key;
-	isc_mem_t *mctx;
 	isc_logcategory_t *category;
 	union {
 		void *generic;
@@ -197,7 +190,7 @@ struct dst_func {
 
 	isc_result_t (*fromlabel)(dst_key_t *key, const char *engine,
 				  const char *label, const char *pin);
-	isc_result_t (*dump)(dst_key_t *key, isc_mem_t *mctx, char **buffer,
+	isc_result_t (*dump)(dst_key_t *key, char **buffer,
 			     int *length);
 	isc_result_t (*restore)(dst_key_t *key, const char *keystr);
 };
@@ -214,15 +207,7 @@ isc_result_t dst__hmacsha384_init(struct dst_func **funcp);
 isc_result_t dst__hmacsha512_init(struct dst_func **funcp);
 isc_result_t dst__opensslrsa_init(struct dst_func **funcp,
 				  unsigned char algorithm);
-#ifdef HAVE_OPENSSL_ECDSA
 isc_result_t dst__opensslecdsa_init(struct dst_func **funcp);
-#endif
-#if defined(HAVE_OPENSSL_ED25519) || defined(HAVE_OPENSSL_ED448)
-isc_result_t dst__openssleddsa_init(struct dst_func **funcp);
-#endif
-#ifdef HAVE_OPENSSL_GOST
-isc_result_t dst__opensslgost_init(struct dst_func **funcp);
-#endif
 
 /*%
  * Destructors

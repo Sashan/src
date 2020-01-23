@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_tlsext.c,v 1.51 2019/11/16 15:36:53 beck Exp $ */
+/* $OpenBSD: ssl_tlsext.c,v 1.54 2020/01/22 10:38:11 tb Exp $ */
 /*
  * Copyright (c) 2016, 2017, 2019 Joel Sing <jsing@openbsd.org>
  * Copyright (c) 2017 Doug Hogan <doug@openbsd.org>
@@ -781,7 +781,7 @@ tlsext_ocsp_client_build(SSL *s, CBB *cbb)
 int
 tlsext_ocsp_server_parse(SSL *s, CBS *cbs, int *alert)
 {
-	int failure = SSL_AD_DECODE_ERROR;
+	int alert_desc = SSL_AD_DECODE_ERROR;
 	CBS respid_list, respid, exts;
 	const unsigned char *p;
 	uint8_t status_type;
@@ -809,7 +809,7 @@ tlsext_ocsp_server_parse(SSL *s, CBS *cbs, int *alert)
 	if (CBS_len(&respid_list) > 0) {
 		s->internal->tlsext_ocsp_ids = sk_OCSP_RESPID_new_null();
 		if (s->internal->tlsext_ocsp_ids == NULL) {
-			failure = SSL_AD_INTERNAL_ERROR;
+			alert_desc = SSL_AD_INTERNAL_ERROR;
 			goto err;
 		}
 	}
@@ -823,7 +823,7 @@ tlsext_ocsp_server_parse(SSL *s, CBS *cbs, int *alert)
 		if ((id = d2i_OCSP_RESPID(NULL, &p, CBS_len(&respid))) == NULL)
 			goto err;
 		if (!sk_OCSP_RESPID_push(s->internal->tlsext_ocsp_ids, id)) {
-			failure = SSL_AD_INTERNAL_ERROR;
+			alert_desc = SSL_AD_INTERNAL_ERROR;
 			OCSP_RESPID_free(id);
 			goto err;
 		}
@@ -848,7 +848,7 @@ tlsext_ocsp_server_parse(SSL *s, CBS *cbs, int *alert)
 	ret = 1;
  err:
 	if (ret == 0)
-		*alert = failure;
+		*alert = alert_desc;
 	return ret;
 }
 
@@ -1936,6 +1936,7 @@ tlsext_parse(SSL *s, CBS *cbs, int *alert, int is_server, uint16_t msg_type)
 	uint16_t type;
 	size_t idx;
 	uint16_t version;
+	int alert_desc;
 
 	S3I(s)->hs.extensions_seen = 0;
 
@@ -1948,16 +1949,16 @@ tlsext_parse(SSL *s, CBS *cbs, int *alert, int is_server, uint16_t msg_type)
 	if (CBS_len(cbs) == 0)
 		return 1;
 
-	*alert = SSL_AD_DECODE_ERROR;
+	alert_desc = SSL_AD_DECODE_ERROR;
 
 	if (!CBS_get_u16_length_prefixed(cbs, &extensions))
-		return 0;
+		goto err;
 
 	while (CBS_len(&extensions) > 0) {
 		if (!CBS_get_u16(&extensions, &type))
-			return 0;
+			goto err;
 		if (!CBS_get_u16_length_prefixed(&extensions, &extension_data))
-			return 0;
+			goto err;
 
 		if (s->internal->tlsext_debug_cb != NULL)
 			s->internal->tlsext_debug_cb(s, is_server, type,
@@ -1972,24 +1973,29 @@ tlsext_parse(SSL *s, CBS *cbs, int *alert, int is_server, uint16_t msg_type)
 		/* RFC 8446 Section 4.2 */
 		if (version >= TLS1_3_VERSION &&
 		    !(tlsext->messages & msg_type)) {
-			*alert = SSL_AD_ILLEGAL_PARAMETER;
-			return 0;
+			alert_desc = SSL_AD_ILLEGAL_PARAMETER;
+			goto err;
 		}
 
 		/* Check for duplicate known extensions. */
 		if ((S3I(s)->hs.extensions_seen & (1 << idx)) != 0)
-			return 0;
+			goto err;
 		S3I(s)->hs.extensions_seen |= (1 << idx);
 
 		ext = tlsext_funcs(tlsext, is_server);
-		if (!ext->parse(s, &extension_data, alert))
-			return 0;
+		if (!ext->parse(s, &extension_data, &alert_desc))
+			goto err;
 
 		if (CBS_len(&extension_data) != 0)
-			return 0;
+			goto err;
 	}
 
 	return 1;
+
+ err:
+	*alert = alert_desc;
+
+	return 0;
 }
 
 static void

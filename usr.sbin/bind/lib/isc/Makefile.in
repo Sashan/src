@@ -16,8 +16,6 @@ srcdir =	@srcdir@
 VPATH =		@srcdir@
 top_srcdir =	@top_srcdir@
 
-VERSION=@BIND9_VERSION@
-
 @LIBISC_API@
 
 @BIND9_MAKE_INCLUDES@
@@ -37,44 +35,41 @@ UNIXOBJS =	@ISC_ISCIPV6_O@ @ISC_ISCPK11_API_O@ \
 		unix/socket.@O@ unix/stdio.@O@ \
 		unix/stdtime.@O@ unix/strerror.@O@ unix/syslog.@O@ unix/time.@O@
 
-NLSOBJS =	nls/msgcat.@O@
-
-THREADOPTOBJS = nothreads/condition.@O@ nothreads/mutex.@O@
+THREADOPTOBJS = nothreads/condition.@O@
 
 THREADOBJS =	nothreads/thread.@O@
 
 # Alphabetically
 OBJS =		@ISC_EXTRA_OBJS@ @ISC_PK11_O@ @ISC_PK11_RESULT_O@ \
 		aes.@O@ assertions.@O@ base32.@O@ base64.@O@ \
-		bind9.@O@ buffer.@O@ bufferlist.@O@ \
-		commandline.@O@ counter.@O@ crc64.@O@ error.@O@ event.@O@ \
+		buffer.@O@ bufferlist.@O@ \
+		commandline.@O@ error.@O@ event.@O@ \
 		hash.@O@ heap.@O@ hex.@O@ hmacmd5.@O@ hmacsha.@O@ \
-		httpd.@O@ inet_aton.@O@ iterated_hash.@O@ \
-		lex.@O@ lfsr.@O@ lib.@O@ log.@O@ \
-		md5.@O@ mem.@O@ mutexblock.@O@ \
-		netaddr.@O@ netscope.@O@ pool.@O@ ondestroy.@O@ \
-		parseint.@O@ portset.@O@ quota.@O@ radix.@O@ \
-		ratelimiter.@O@ refcount.@O@ region.@O@ regex.@O@ result.@O@ \
+		inet_aton.@O@ iterated_hash.@O@ \
+		lex.@O@ log.@O@ \
+		md5.@O@ \
+		netaddr.@O@ netscope.@O@ \
+		parseint.@O@ \
+		refcount.@O@ region.@O@ regex.@O@ result.@O@ \
 		rwlock.@O@ \
 		safe.@O@ serial.@O@ sha1.@O@ sha2.@O@ sockaddr.@O@ \
-		string.@O@ symtab.@O@ task.@O@ taskpool.@O@ \
-		tm.@O@ timer.@O@ version.@O@ \
-		${UNIXOBJS} ${NLSOBJS} ${THREADOBJS}
+		symtab.@O@ task.@O@ \
+		timer.@O@ \
+		${UNIXOBJS} ${THREADOBJS}
 
 # Alphabetically
 SRCS =		@ISC_EXTRA_SRCS@ @ISC_PK11_C@ @ISC_PK11_RESULT_C@ \
-		aes.c assertions.c base32.c base64.c bind9.c \
-		buffer.c bufferlist.c commandline.c counter.c crc64.c \
+		aes.c assertions.c base32.c base64.c \
+		buffer.c bufferlist.c commandline.c \
 		error.c event.c heap.c hex.c hmacmd5.c hmacsha.c \
-		httpd.c inet_aton.c iterated_hash.c \
-		lex.c lfsr.c lib.c log.c \
-		md5.c mem.c mutexblock.c \
-		netaddr.c netscope.c pool.c ondestroy.c \
-		parseint.c portset.c quota.c radix.c \
-		ratelimiter.c refcount.c region.c regex.c result.c rwlock.c \
-		safe.c serial.c sha1.c sha2.c sockaddr.c string.c \
-		symtab.c task.c taskpool.c timer.c \
-		tm.c version.c
+		inet_aton.c iterated_hash.c \
+		md5.c \
+		lex.c log.c \
+		netaddr.c netscope.c \
+		parseint.c \
+		refcount.c region.c regex.c result.c rwlock.c \
+		safe.c serial.c sha1.c sha2.c sockaddr.c \
+		symtab.c task.c timer.c
 
 LIBS =		@ISC_OPENSSL_LIBS@ @LIBS@
 
@@ -82,7 +77,7 @@ LIBS =		@ISC_OPENSSL_LIBS@ @LIBS@
 # Attempt to disable parallel processing.
 .NOTPARALLEL:
 .NO_PARALLEL:
-SUBDIRS =	include unix nls nothreads
+SUBDIRS =	include unix nothreads
 TARGETS =	timestamp
 TESTDIRS =	@UNITTESTS@
 
@@ -91,14 +86,6 @@ TESTDIRS =	@UNITTESTS@
 safe.@O@: safe.c
 	${LIBTOOL_MODE_COMPILE} ${CC} ${ALL_CFLAGS} @CCNOOPT@ \
 		-c ${srcdir}/safe.c
-
-version.@O@: version.c
-	${LIBTOOL_MODE_COMPILE} ${CC} ${ALL_CFLAGS} \
-		-DVERSION=\"${VERSION}\" \
-		-DLIBINTERFACE=${LIBINTERFACE} \
-		-DLIBREVISION=${LIBREVISION} \
-		-DLIBAGE=${LIBAGE} \
-		-c ${srcdir}/version.c
 
 libisc.@SA@: ${OBJS}
 	${AR} ${ARFLAGS} $@ ${OBJS}

@@ -43,11 +43,11 @@
  * SUCH DAMAGE.
  */
 
-/* $Id: file.c,v 1.10 2020/01/09 18:17:19 florian Exp $ */
+/* $Id: file.c,v 1.14 2020/01/22 13:02:10 florian Exp $ */
 
 /*! \file */
 
-#include <config.h>
+
 
 #include <errno.h>
 #include <fcntl.h>
@@ -60,16 +60,14 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 
-#ifdef HAVE_SYS_MMAN_H
 #include <sys/mman.h>
-#endif
 
 #include <isc/dir.h>
 #include <isc/file.h>
 #include <isc/log.h>
-#include <isc/mem.h>
 
-#include <isc/string.h>
+
+#include <string.h>
 #include <isc/time.h>
 #include <isc/util.h>
 
@@ -612,7 +610,7 @@ isc_file_safecreate(const char *filename, FILE **fp) {
 }
 
 isc_result_t
-isc_file_splitpath(isc_mem_t *mctx, const char *path, char **dirname,
+isc_file_splitpath(const char *path, char **dirname,
 		   char const **bname)
 {
 	char *dir;
@@ -625,22 +623,22 @@ isc_file_splitpath(isc_mem_t *mctx, const char *path, char **dirname,
 
 	if (slash == path) {
 		file = ++slash;
-		dir = isc_mem_strdup(mctx, "/");
+		dir = strdup("/");
 	} else if (slash != NULL) {
 		file = ++slash;
-		dir = isc_mem_allocate(mctx, slash - path);
+		dir = malloc(slash - path);
 		if (dir != NULL)
 			strlcpy(dir, path, slash - path);
 	} else {
 		file = path;
-		dir = isc_mem_strdup(mctx, ".");
+		dir = strdup(".");
 	}
 
 	if (dir == NULL)
 		return (ISC_R_NOMEMORY);
 
 	if (*file == '\0') {
-		isc_mem_free(mctx, dir);
+		free(dir);
 		return (ISC_R_INVALIDFILE);
 	}
 
@@ -654,46 +652,12 @@ void *
 isc_file_mmap(void *addr, size_t len, int prot,
 	      int flags, int fd, off_t offset)
 {
-#ifdef HAVE_MMAP
 	return (mmap(addr, len, prot, flags, fd, offset));
-#else
-	void *buf;
-	ssize_t ret;
-	off_t end;
-
-	UNUSED(addr);
-	UNUSED(prot);
-	UNUSED(flags);
-
-	end = lseek(fd, 0, SEEK_END);
-	lseek(fd, offset, SEEK_SET);
-	if (end - offset < (off_t) len)
-		len = end - offset;
-
-	buf = malloc(len);
-	if (buf == NULL)
-		return (NULL);
-
-	ret = read(fd, buf, len);
-	if (ret != (ssize_t) len) {
-		free(buf);
-		buf = NULL;
-	}
-
-	return (buf);
-#endif
 }
 
 int
 isc_file_munmap(void *addr, size_t len) {
-#ifdef HAVE_MMAP
 	return (munmap(addr, len));
-#else
-	UNUSED(len);
-
-	free(addr);
-	return (0);
-#endif
 }
 
 isc_boolean_t

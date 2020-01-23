@@ -14,14 +14,14 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: nsec.c,v 1.4 2020/01/18 16:55:00 florian Exp $ */
+/* $Id: nsec.c,v 1.7 2020/01/22 13:02:09 florian Exp $ */
 
 /*! \file */
 
-#include <config.h>
+
 
 #include <isc/log.h>
-#include <isc/string.h>
+#include <string.h>
 #include <isc/util.h>
 
 
@@ -109,7 +109,7 @@ dns_nsec_typepresent(dns_rdata_t *nsec, dns_rdatatype_t type) {
 	REQUIRE(nsec->type == dns_rdatatype_nsec);
 
 	/* This should never fail */
-	result = dns_rdata_tostruct(nsec, &nsecstruct, NULL);
+	result = dns_rdata_tostruct(nsec, &nsecstruct);
 	INSIST(result == ISC_R_SUCCESS);
 
 	present = ISC_FALSE;
@@ -235,7 +235,7 @@ dns_nsec_noexistnodata(dns_rdatatype_t type, dns_name_t *name,
 		return (ISC_R_IGNORE);
 	}
 
-	result = dns_rdata_tostruct(&rdata, &nsec, NULL);
+	result = dns_rdata_tostruct(&rdata, &nsec);
 	if (result != ISC_R_SUCCESS)
 		return (result);
 	relation = dns_name_fullcompare(&nsec.next, name, &order, &nlabels);

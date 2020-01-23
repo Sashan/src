@@ -16,15 +16,16 @@
 
 /*! \file */
 
-#include <config.h>
+
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <isc/lex.h>
-#include <isc/mem.h>
+
 #include <isc/result.h>
-#include <isc/string.h>
+#include <string.h>
 #include <isc/util.h>
 
 #include <dns/ttl.h>
@@ -32,7 +33,7 @@
 
 #include <isccfg/cfg.h>
 #include <isccfg/grammar.h>
-#include <isccfg/log.h>
+
 
 #define TOKEN_STRING(pctx) (pctx->token.value.as_textregion.base)
 
@@ -358,10 +359,9 @@ parse_updatepolicy(cfg_parser_t *pctx, const cfg_type_t *type,
 		cfg_obj_t *obj = NULL;
 		CHECK(cfg_create_obj(pctx, &cfg_type_ustring, &obj));
 		obj->value.string.length = strlen("local");
-		obj->value.string.base	= isc_mem_get(pctx->mctx,
-						obj->value.string.length + 1);
+		obj->value.string.base	= malloc(obj->value.string.length + 1);
 		if (obj->value.string.base == NULL) {
-			isc_mem_put(pctx->mctx, obj, sizeof(*obj));
+			free(obj);
 			return (ISC_R_NOMEMORY);
 		}
 		memmove(obj->value.string.base, "local", 5);
@@ -1550,30 +1550,18 @@ view_clauses[] = {
 	{ "empty-server", &cfg_type_astring, 0 },
 	{ "empty-zones-enable", &cfg_type_boolean, 0 },
 	{ "fetch-glue", &cfg_type_boolean, CFG_CLAUSEFLAG_OBSOLETE },
-#ifdef ENABLE_FETCHLIMIT
-	{ "fetch-quota-params", &cfg_type_fetchquota, 0 },
-	{ "fetches-per-server", &cfg_type_fetchesper, 0 },
-	{ "fetches-per-zone", &cfg_type_fetchesper, 0 },
-#else
 	{ "fetch-quota-params", &cfg_type_fetchquota,
 	  CFG_CLAUSEFLAG_NOTCONFIGURED },
 	{ "fetches-per-server", &cfg_type_fetchesper,
 	  CFG_CLAUSEFLAG_NOTCONFIGURED },
 	{ "fetches-per-zone", &cfg_type_fetchesper,
 	  CFG_CLAUSEFLAG_NOTCONFIGURED },
-#endif /* ENABLE_FETCHLIMIT */
-#ifdef ALLOW_FILTER_AAAA
-	{ "filter-aaaa", &cfg_type_bracketed_aml, 0 },
-	{ "filter-aaaa-on-v4", &cfg_type_filter_aaaa, 0 },
-	{ "filter-aaaa-on-v6", &cfg_type_filter_aaaa, 0 },
-#else
 	{ "filter-aaaa", &cfg_type_bracketed_aml,
 	  CFG_CLAUSEFLAG_NOTCONFIGURED },
 	{ "filter-aaaa-on-v4", &cfg_type_filter_aaaa,
 	  CFG_CLAUSEFLAG_NOTCONFIGURED },
 	{ "filter-aaaa-on-v6", &cfg_type_filter_aaaa,
 	  CFG_CLAUSEFLAG_NOTCONFIGURED },
-#endif
 	{ "ixfr-from-differences", &cfg_type_ixfrdifftype, 0 },
 	{ "lame-ttl", &cfg_type_uint32, 0 },
 	{ "max-acache-size", &cfg_type_sizenodefault, 0 },
@@ -1999,7 +1987,7 @@ parse_unitstring(char *str, uint64_t *valuep) {
 	uint64_t value;
 	uint64_t unit;
 
-	value = isc_string_touint64(str, &endp, 10);
+	value = strtoull(str, &endp, 10);
 	if (*endp == 0) {
 		*valuep = value;
 		return (ISC_R_SUCCESS);

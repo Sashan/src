@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.c,v 1.69 2019/12/17 13:08:56 reyk Exp $ */
+/*	$OpenBSD: conf.c,v 1.71 2020/01/23 02:40:21 dlg Exp $ */
 
 /*
  * Copyright (c) 1997 Per Fogelstrom
@@ -116,6 +116,7 @@ cdev_decl(pci);
 #include "video.h"
 #include "midi.h"
 
+#include "dt.h"
 #include "pf.h"
 
 #include "radio.h"
@@ -159,7 +160,7 @@ struct cdevsw cdevsw[] = {
 	cdev_notdef(),			/* 27 */
 	cdev_notdef(),			/* 28 */
 	cdev_notdef(),			/* 29 */
-	cdev_notdef(),			/* 30 */
+	cdev_dt_init(NDT,dt),		/* 30: dynamic tracer */
 	cdev_notdef(),			/* 31 */
 	cdev_notdef(),			/* 32 */
 	cdev_notdef(),			/* 33 */
@@ -228,6 +229,7 @@ struct cdevsw cdevsw[] = {
 	cdev_fuse_init(NFUSE,fuse),	/* 88: fuse */
 	cdev_switch_init(NSWITCH,switch), /* 89: switch(4) control interface */
 	cdev_fido_init(NFIDO,fido),	/* 90: FIDO/U2F security key */
+	cdev_pppx_init(NPPPX,pppac),	/* 91: PPP Access Concentrator */
 };
 int nchrdev = nitems(cdevsw);
 

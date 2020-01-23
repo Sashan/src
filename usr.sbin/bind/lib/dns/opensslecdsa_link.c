@@ -14,19 +14,13 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include <config.h>
-
-#if defined(OPENSSL) && defined(HAVE_OPENSSL_ECDSA)
-
-#if !defined(HAVE_EVP_SHA256) || !defined(HAVE_EVP_SHA384)
-#error "ECDSA without EVP for SHA2?"
-#endif
 
 
-#include <isc/mem.h>
+
+
 #include <isc/safe.h>
 #include <isc/sha2.h>
-#include <isc/string.h>
+#include <string.h>
 #include <isc/util.h>
 
 #include <dns/keyvalues.h>
@@ -49,30 +43,6 @@
 #endif
 
 #define DST_RET(a) {ret = a; goto err;}
-
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-/* From OpenSSL 1.1 */
-static void
-ECDSA_SIG_get0(const ECDSA_SIG *sig, const BIGNUM **pr, const BIGNUM **ps) {
-	if (pr != NULL)
-		*pr = sig->r;
-	if (ps != NULL)
-		*ps = sig->s;
-}
-
-static int
-ECDSA_SIG_set0(ECDSA_SIG *sig, BIGNUM *r, BIGNUM *s) {
-	if (r == NULL || s == NULL)
-		return 0;
-
-	BN_clear_free(sig->r);
-	BN_clear_free(sig->s);
-	sig->r = r;
-	sig->s = s;
-
-	return 1;
-}
-#endif
 
 static isc_result_t opensslecdsa_todns(const dst_key_t *key,
 				       isc_buffer_t *data);
@@ -493,7 +463,7 @@ opensslecdsa_tofile(const dst_key_t *key, const char *directory) {
 	if (privkey == NULL)
 		DST_RET (ISC_R_FAILURE);
 
-	buf = isc_mem_get(key->mctx, BN_num_bytes(privkey));
+	buf = malloc(BN_num_bytes(privkey));
 	if (buf == NULL)
 		DST_RET (ISC_R_NOMEMORY);
 
@@ -508,7 +478,7 @@ opensslecdsa_tofile(const dst_key_t *key, const char *directory) {
 	if (eckey != NULL)
 		EC_KEY_free(eckey);
 	if (buf != NULL)
-		isc_mem_put(key->mctx, buf, BN_num_bytes(privkey));
+		free(buf);
 	return (ret);
 }
 
@@ -550,13 +520,12 @@ opensslecdsa_parse(dst_key_t *key, isc_lex_t *lexer, dst_key_t *pub) {
 	EC_KEY *eckey = NULL;
 	BIGNUM *privkey = NULL;
 	int group_nid;
-	isc_mem_t *mctx = key->mctx;
 
 	REQUIRE(key->key_alg == DST_ALG_ECDSA256 ||
 		key->key_alg == DST_ALG_ECDSA384);
 
 	/* read private key file */
-	ret = dst__privstruct_parse(key, DST_ALG_ECDSA256, lexer, mctx, &priv);
+	ret = dst__privstruct_parse(key, DST_ALG_ECDSA256, lexer, &priv);
 	if (ret != ISC_R_SUCCESS)
 		goto err;
 
@@ -567,7 +536,7 @@ opensslecdsa_parse(dst_key_t *key, isc_lex_t *lexer, dst_key_t *pub) {
 			DST_RET(DST_R_INVALIDPRIVATEKEY);
 		key->keydata.pkey = pub->keydata.pkey;
 		pub->keydata.pkey = NULL;
-		dst__privstruct_free(&priv, mctx);
+		dst__privstruct_free(&priv);
 		isc_safe_memwipe(&priv, sizeof(priv));
 		return (ISC_R_SUCCESS);
 	}
@@ -609,7 +578,7 @@ opensslecdsa_parse(dst_key_t *key, isc_lex_t *lexer, dst_key_t *pub) {
 		BN_clear_free(privkey);
 	if (eckey != NULL)
 		EC_KEY_free(eckey);
-	dst__privstruct_free(&priv, mctx);
+	dst__privstruct_free(&priv);
 	isc_safe_memwipe(&priv, sizeof(priv));
 	return (ret);
 }
@@ -646,11 +615,4 @@ dst__opensslecdsa_init(dst_func_t **funcp) {
 	return (ISC_R_SUCCESS);
 }
 
-#else /* HAVE_OPENSSL_ECDSA */
-
-#include <isc/util.h>
-
-EMPTY_TRANSLATION_UNIT
-
-#endif /* HAVE_OPENSSL_ECDSA */
 /*! \file */

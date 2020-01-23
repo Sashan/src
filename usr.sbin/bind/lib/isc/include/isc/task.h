@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: task.h,v 1.3 2019/12/17 01:46:35 sthen Exp $ */
+/* $Id: task.h,v 1.5 2020/01/20 18:51:53 florian Exp $ */
 
 #ifndef ISC_TASK_H
 #define ISC_TASK_H 1
@@ -80,11 +80,11 @@
  ***/
 
 #include <isc/eventclass.h>
-#include <isc/json.h>
+
 #include <isc/lang.h>
 #include <isc/stdtime.h>
 #include <isc/types.h>
-#include <isc/xml.h>
+
 
 #define ISC_TASKEVENT_FIRSTEVENT	(ISC_EVENTCLASS_TASK + 0)
 #define ISC_TASKEVENT_SHUTDOWN		(ISC_EVENTCLASS_TASK + 1)
@@ -655,11 +655,11 @@ isc_task_privilege(isc_task_t *task);
  *****/
 
 isc_result_t
-isc_taskmgr_createinctx(isc_mem_t *mctx, isc_appctx_t *actx,
+isc_taskmgr_createinctx(isc_appctx_t *actx,
 			unsigned int workers, unsigned int default_quantum,
 			isc_taskmgr_t **managerp);
 isc_result_t
-isc_taskmgr_create(isc_mem_t *mctx, unsigned int workers,
+isc_taskmgr_create(unsigned int workers,
 		   unsigned int default_quantum, isc_taskmgr_t **managerp);
 /*%<
  * Create a new task manager.  isc_taskmgr_createinctx() also associates
@@ -786,21 +786,11 @@ isc_taskmgr_excltask(isc_taskmgr_t *mgr, isc_task_t **taskp);
  */
 
 
-#ifdef HAVE_LIBXML2
-int
-isc_taskmgr_renderxml(isc_taskmgr_t *mgr, xmlTextWriterPtr writer);
-#endif
-
-#ifdef HAVE_JSON
-isc_result_t
-isc_taskmgr_renderjson(isc_taskmgr_t *mgr, json_object *tasksobj);
-#endif
-
 /*%<
  * See isc_taskmgr_create() above.
  */
 typedef isc_result_t
-(*isc_taskmgrcreatefunc_t)(isc_mem_t *mctx, unsigned int workers,
+(*isc_taskmgrcreatefunc_t)(unsigned int workers,
 			   unsigned int default_quantum,
 			   isc_taskmgr_t **managerp);
 

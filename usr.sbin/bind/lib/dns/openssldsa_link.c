@@ -31,11 +31,7 @@
  * IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#ifndef USE_EVP
-#define USE_EVP 1
-#endif
 
-#include <config.h>
 
 
 

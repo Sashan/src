@@ -16,7 +16,7 @@
 
 /*! \file */
 
-#include <config.h>
+
 
 #include <sys/param.h>	/* Openserver 5.0.6A and FD_SETSIZE */
 #include <sys/types.h>
@@ -27,20 +27,16 @@
 #include <unistd.h>
 #include <signal.h>
 #include <sys/time.h>
-#ifdef HAVE_EPOLL
-#include <sys/epoll.h>
-#endif
 
 #include <isc/app.h>
 #include <isc/boolean.h>
 #include <isc/condition.h>
-#include <isc/mem.h>
+
 #include <isc/msgs.h>
-#include <isc/mutex.h>
 #include <isc/event.h>
-#include <isc/platform.h>
+
 #include <isc/strerror.h>
-#include <isc/string.h>
+#include <string.h>
 #include <isc/task.h>
 #include <isc/time.h>
 #include <isc/util.h>
@@ -62,7 +58,7 @@
  */
 isc_result_t isc__app_start(void);
 isc_result_t isc__app_ctxstart(isc_appctx_t *ctx);
-isc_result_t isc__app_onrun(isc_mem_t *mctx, isc_task_t *task,
+isc_result_t isc__app_onrun(isc_task_t *task,
 			    isc_taskaction_t action, void *arg);
 isc_result_t isc__app_ctxrun(isc_appctx_t *ctx);
 isc_result_t isc__app_run(void);
@@ -74,12 +70,12 @@ void isc__app_ctxfinish(isc_appctx_t *ctx);
 void isc__app_finish(void);
 void isc__app_block(void);
 void isc__app_unblock(void);
-isc_result_t isc__appctx_create(isc_mem_t *mctx, isc_appctx_t **ctxp);
+isc_result_t isc__appctx_create(isc_appctx_t **ctxp);
 void isc__appctx_destroy(isc_appctx_t **ctxp);
 void isc__appctx_settaskmgr(isc_appctx_t *ctx, isc_taskmgr_t *taskmgr);
 void isc__appctx_setsocketmgr(isc_appctx_t *ctx, isc_socketmgr_t *socketmgr);
 void isc__appctx_settimermgr(isc_appctx_t *ctx, isc_timermgr_t *timermgr);
-isc_result_t isc__app_ctxonrun(isc_appctx_t *ctx, isc_mem_t *mctx,
+isc_result_t isc__app_ctxonrun(isc_appctx_t *ctx,
 			       isc_task_t *task, isc_taskaction_t action,
 			       void *arg);
 
@@ -92,8 +88,6 @@ isc_result_t isc__app_ctxonrun(isc_appctx_t *ctx, isc_mem_t *mctx,
 
 typedef struct isc__appctx {
 	isc_appctx_t		common;
-	isc_mem_t		*mctx;
-	isc_mutex_t		lock;
 	isc_eventlist_t		on_run;
 	isc_boolean_t		shutdown_requested;
 	isc_boolean_t		running;
@@ -145,33 +139,11 @@ static struct {
 	(void *)isc__app_unblock
 };
 
-#ifdef HAVE_LINUXTHREADS
-/*!
- * Linux has sigwait(), but it appears to prevent signal handlers from
- * running, even if they're not in the set being waited for.  This makes
- * it impossible to get the default actions for SIGILL, SIGSEGV, etc.
- * Instead of messing with it, we just use sigsuspend() instead.
- */
-#undef HAVE_SIGWAIT
-/*!
- * We need to remember which thread is the main thread...
- */
-static pthread_t		main_thread;
-#endif
-
-#ifndef HAVE_SIGWAIT
-static void
-exit_action(int arg) {
-	UNUSED(arg);
-	isc_g_appctx.want_shutdown = ISC_TRUE;
-}
-
 static void
 reload_action(int arg) {
 	UNUSED(arg);
 	isc_g_appctx.want_reload = ISC_TRUE;
 }
-#endif
 
 static isc_result_t
 handle_signal(int sig, void (*handler)(int)) {
@@ -185,10 +157,7 @@ handle_signal(int sig, void (*handler)(int)) {
 	    sigaction(sig, &sa, NULL) < 0) {
 		isc__strerror(errno, strbuf, sizeof(strbuf));
 		UNEXPECTED_ERROR(__FILE__, __LINE__,
-				 isc_msgcat_get(isc_msgcat, ISC_MSGSET_APP,
-					       ISC_MSG_SIGNALSETUP,
-					       "handle_signal() %d setup: %s"),
-				 sig, strbuf);
+				 "handle_signal() %d setup: %s", sig, strbuf);
 		return (ISC_R_UNEXPECTED);
 	}
 
@@ -209,23 +178,6 @@ isc__app_ctxstart(isc_appctx_t *ctx0) {
 	 * Start an ISC library application.
 	 */
 
-#ifdef NEED_PTHREAD_INIT
-	/*
-	 * BSDI 3.1 seg faults in pthread_sigmask() if we don't do this.
-	 */
-	presult = pthread_init();
-	if (presult != 0) {
-		isc__strerror(presult, strbuf, sizeof(strbuf));
-		UNEXPECTED_ERROR(__FILE__, __LINE__,
-				 "isc_app_start() pthread_init: %s", strbuf);
-		return (ISC_R_UNEXPECTED);
-	}
-#endif
-
-	result = isc_mutex_init(&ctx->lock);
-	if (result != ISC_R_SUCCESS)
-		goto cleanup;
-
 	ISC_LIST_INIT(ctx->on_run);
 
 	ctx->shutdown_requested = ISC_FALSE;
@@ -233,22 +185,6 @@ isc__app_ctxstart(isc_appctx_t *ctx0) {
 	ctx->want_shutdown = ISC_FALSE;
 	ctx->want_reload = ISC_FALSE;
 	ctx->blocked = ISC_FALSE;
-
-#ifndef HAVE_SIGWAIT
-	/*
-	 * Install do-nothing handlers for SIGINT and SIGTERM.
-	 *
-	 * We install them now because BSDI 3.1 won't block
-	 * the default actions, regardless of what we do with
-	 * pthread_sigmask().
-	 */
-	result = handle_signal(SIGINT, exit_action);
-	if (result != ISC_R_SUCCESS)
-		goto cleanup;
-	result = handle_signal(SIGTERM, exit_action);
-	if (result != ISC_R_SUCCESS)
-		goto cleanup;
-#endif
 
 	/*
 	 * Always ignore SIGPIPE.
@@ -270,14 +206,12 @@ isc__app_ctxstart(isc_appctx_t *ctx0) {
 	if (result != ISC_R_SUCCESS)
 		goto cleanup;
 
-#ifdef HAVE_SIGWAIT
 	result = handle_signal(SIGTERM, SIG_DFL);
 	if (result != ISC_R_SUCCESS)
 		goto cleanup;
 	result = handle_signal(SIGINT, SIG_DFL);
 	if (result != ISC_R_SUCCESS)
 		goto cleanup;
-#endif
 
 	/*
 	 * Unblock SIGHUP, SIGINT, SIGTERM.
@@ -316,30 +250,27 @@ isc__app_start(void) {
 	isc_g_appctx.common.impmagic = APPCTX_MAGIC;
 	isc_g_appctx.common.magic = ISCAPI_APPCTX_MAGIC;
 	isc_g_appctx.common.methods = &appmethods.methods;
-	isc_g_appctx.mctx = NULL;
 	/* The remaining members will be initialized in ctxstart() */
 
 	return (isc__app_ctxstart((isc_appctx_t *)&isc_g_appctx));
 }
 
 isc_result_t
-isc__app_onrun(isc_mem_t *mctx, isc_task_t *task, isc_taskaction_t action,
+isc__app_onrun(isc_task_t *task, isc_taskaction_t action,
 	      void *arg)
 {
-	return (isc__app_ctxonrun((isc_appctx_t *)&isc_g_appctx, mctx,
+	return (isc__app_ctxonrun((isc_appctx_t *)&isc_g_appctx,
 				  task, action, arg));
 }
 
 isc_result_t
-isc__app_ctxonrun(isc_appctx_t *ctx0, isc_mem_t *mctx, isc_task_t *task,
+isc__app_ctxonrun(isc_appctx_t *ctx0, isc_task_t *task,
 		  isc_taskaction_t action, void *arg)
 {
 	isc__appctx_t *ctx = (isc__appctx_t *)ctx0;
 	isc_event_t *event;
 	isc_task_t *cloned_task = NULL;
 	isc_result_t result;
-
-	LOCK(&ctx->lock);
 
 	if (ctx->running) {
 		result = ISC_R_ALREADYRUNNING;
@@ -351,7 +282,7 @@ isc__app_ctxonrun(isc_appctx_t *ctx0, isc_mem_t *mctx, isc_task_t *task,
 	 * in the event's "sender" field.
 	 */
 	isc_task_attach(task, &cloned_task);
-	event = isc_event_allocate(mctx, cloned_task, ISC_APPEVENT_SHUTDOWN,
+	event = isc_event_allocate(cloned_task, ISC_APPEVENT_SHUTDOWN,
 				   action, arg, sizeof(*event));
 	if (event == NULL) {
 		isc_task_detach(&cloned_task);
@@ -364,8 +295,6 @@ isc__app_ctxonrun(isc_appctx_t *ctx0, isc_mem_t *mctx, isc_task_t *task,
 	result = ISC_R_SUCCESS;
 
  unlock:
-	UNLOCK(&ctx->lock);
-
 	return (result);
 }
 
@@ -470,17 +399,13 @@ static isc_boolean_t in_recursive_evloop = ISC_FALSE;
 static isc_boolean_t signalled = ISC_FALSE;
 
 isc_result_t
-isc__nothread_wait_hack(isc_condition_t *cp, isc_mutex_t *mp) {
+isc__nothread_wait_hack(isc_condition_t *cp) {
 	isc_result_t result;
 
 	UNUSED(cp);
-	UNUSED(mp);
 
 	INSIST(!in_recursive_evloop);
 	in_recursive_evloop = ISC_TRUE;
-
-	INSIST(*mp == 1); /* Mutex must be locked on entry. */
-	--*mp;
 
 	result = evloop(&isc_g_appctx);
 	if (result == ISC_R_RELOAD)
@@ -490,7 +415,6 @@ isc__nothread_wait_hack(isc_condition_t *cp, isc_mutex_t *mp) {
 		signalled = ISC_FALSE;
 	}
 
-	++*mp;
 	in_recursive_evloop = ISC_FALSE;
 	return (ISC_R_SUCCESS);
 }
@@ -516,12 +440,6 @@ isc__app_ctxrun(isc_appctx_t *ctx0) {
 
 	REQUIRE(VALID_APPCTX(ctx));
 
-#ifdef HAVE_LINUXTHREADS
-	REQUIRE(main_thread == pthread_self());
-#endif
-
-	LOCK(&ctx->lock);
-
 	if (!ctx->running) {
 		ctx->running = ISC_TRUE;
 
@@ -540,9 +458,7 @@ isc__app_ctxrun(isc_appctx_t *ctx0) {
 
 	}
 
-	UNLOCK(&ctx->lock);
-
-	if (isc_bind9 && ctx == &isc_g_appctx) {
+	if (ctx == &isc_g_appctx) {
 		result = handle_signal(SIGHUP, reload_action);
 		if (result != ISC_R_SUCCESS)
 			return (ISC_R_SUCCESS);
@@ -565,8 +481,6 @@ isc__app_ctxshutdown(isc_appctx_t *ctx0) {
 
 	REQUIRE(VALID_APPCTX(ctx));
 
-	LOCK(&ctx->lock);
-
 	REQUIRE(ctx->running);
 
 	if (ctx->shutdown_requested)
@@ -574,10 +488,8 @@ isc__app_ctxshutdown(isc_appctx_t *ctx0) {
 	else
 		ctx->shutdown_requested = ISC_TRUE;
 
-	UNLOCK(&ctx->lock);
-
 	if (want_kill) {
-		if (isc_bind9 && ctx != &isc_g_appctx)
+		if (ctx != &isc_g_appctx)
 			/* BIND9 internal, but using multiple contexts */
 			ctx->want_shutdown = ISC_TRUE;
 		else {
@@ -600,8 +512,6 @@ isc__app_ctxsuspend(isc_appctx_t *ctx0) {
 
 	REQUIRE(VALID_APPCTX(ctx));
 
-	LOCK(&ctx->lock);
-
 	REQUIRE(ctx->running);
 
 	/*
@@ -610,10 +520,8 @@ isc__app_ctxsuspend(isc_appctx_t *ctx0) {
 	if (ctx->shutdown_requested)
 		want_kill = ISC_FALSE;
 
-	UNLOCK(&ctx->lock);
-
 	if (want_kill) {
-		if (isc_bind9 && ctx != &isc_g_appctx)
+		if (ctx != &isc_g_appctx)
 			/* BIND9 internal, but using multiple contexts */
 			ctx->want_reload = ISC_TRUE;
 		else {
@@ -634,8 +542,6 @@ isc__app_ctxfinish(isc_appctx_t *ctx0) {
 	isc__appctx_t *ctx = (isc__appctx_t *)ctx0;
 
 	REQUIRE(VALID_APPCTX(ctx));
-
-	DESTROYLOCK(&ctx->lock);
 }
 
 void
@@ -662,22 +568,18 @@ isc__app_unblock(void) {
 }
 
 isc_result_t
-isc__appctx_create(isc_mem_t *mctx, isc_appctx_t **ctxp) {
+isc__appctx_create(isc_appctx_t **ctxp) {
 	isc__appctx_t *ctx;
 
-	REQUIRE(mctx != NULL);
 	REQUIRE(ctxp != NULL && *ctxp == NULL);
 
-	ctx = isc_mem_get(mctx, sizeof(*ctx));
+	ctx = malloc(sizeof(*ctx));
 	if (ctx == NULL)
 		return (ISC_R_NOMEMORY);
 
 	ctx->common.impmagic = APPCTX_MAGIC;
 	ctx->common.magic = ISCAPI_APPCTX_MAGIC;
 	ctx->common.methods = &appmethods.methods;
-
-	ctx->mctx = NULL;
-	isc_mem_attach(mctx, &ctx->mctx);
 
 	ctx->taskmgr = NULL;
 	ctx->socketmgr = NULL;
@@ -696,7 +598,7 @@ isc__appctx_destroy(isc_appctx_t **ctxp) {
 	ctx = (isc__appctx_t *)*ctxp;
 	REQUIRE(VALID_APPCTX(ctx));
 
-	isc_mem_putanddetach(&ctx->mctx, ctx, sizeof(*ctx));
+	free(ctx);
 
 	*ctxp = NULL;
 }

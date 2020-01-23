@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.57 2019/11/17 06:35:30 jsing Exp $
+# $OpenBSD: Makefile,v 1.60 2020/01/22 07:58:27 jsing Exp $
 
 .include <bsd.own.mk>
 .ifndef NOMAN
@@ -17,7 +17,8 @@ CFLAGS+= -Werror
 .endif
 CFLAGS+= -DLIBRESSL_INTERNAL
 .ifdef TLS1_3
-CFLAGS+= -DLIBRESSL_HAS_TLS1_3
+CFLAGS+= -DLIBRESSL_HAS_TLS1_3_CLIENT
+CFLAGS+= -DLIBRESSL_HAS_TLS1_3_SERVER
 .endif
 CFLAGS+= -I${.CURDIR}
 
@@ -67,6 +68,7 @@ SRCS= \
 	t1_lib.c \
 	tls13_buffer.c \
 	tls13_client.c \
+	tls13_error.c \
 	tls13_handshake.c \
 	tls13_handshake_msg.c \
 	tls13_key_schedule.c \
@@ -78,6 +80,16 @@ SRCS= \
 HDRS=	dtls1.h srtp.h ssl.h ssl2.h ssl23.h ssl3.h tls1.h
 
 .PATH:	${.CURDIR}
+
+check_includes:
+	@cd ${.CURDIR}; for i in $(HDRS); do \
+	    j="cmp -s $$i ${DESTDIR}/usr/include/openssl/`basename $$i` || \
+		(echo \"`basename $$i` differs from installed version; \" \
+	        \"did you forget 'make includes'?\" && false)"; \
+	    eval "$$j"; \
+	done;
+
+all: check_includes
 
 includes:
 	@test -d ${DESTDIR}/usr/include/openssl || \

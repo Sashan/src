@@ -14,22 +14,22 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: name.c,v 1.18 2020/01/09 18:17:15 florian Exp $ */
+/* $Id: name.c,v 1.22 2020/01/22 13:02:09 florian Exp $ */
 
 /*! \file */
 
-#include <config.h>
+
 
 #include <ctype.h>
 #include <stdlib.h>
 
 #include <isc/buffer.h>
 #include <isc/hash.h>
-#include <isc/mem.h>
+
 #include <isc/once.h>
 
 
-#include <isc/string.h>
+#include <string.h>
 #include <isc/thread.h>
 #include <isc/util.h>
 
@@ -586,7 +586,7 @@ dns_name_fullcompare(const dns_name_t *name1, const dns_name_t *name2,
 	REQUIRE((name1->attributes & DNS_NAMEATTR_ABSOLUTE) ==
 		(name2->attributes & DNS_NAMEATTR_ABSOLUTE));
 
-	if (ISC_UNLIKELY(name1 == name2)) {
+	if (name1 == name2) {
 		*orderp = 0;
 		*nlabelsp = name1->labels;
 		return (dns_namereln_equal);
@@ -609,7 +609,7 @@ dns_name_fullcompare(const dns_name_t *name1, const dns_name_t *name2,
 	offsets1 += l1;
 	offsets2 += l2;
 
-	while (ISC_LIKELY(l > 0)) {
+	while (l > 0) {
 		l--;
 		offsets1--;
 		offsets2--;
@@ -631,7 +631,7 @@ dns_name_fullcompare(const dns_name_t *name1, const dns_name_t *name2,
 			count = count2;
 
 		/* Loop unrolled for performance */
-		while (ISC_LIKELY(count > 3)) {
+		while (count > 3) {
 			chdiff = (int)maptolower[label1[0]] -
 				 (int)maptolower[label2[0]];
 			if (chdiff != 0) {
@@ -660,7 +660,7 @@ dns_name_fullcompare(const dns_name_t *name1, const dns_name_t *name2,
 			label1 += 4;
 			label2 += 4;
 		}
-		while (ISC_LIKELY(count-- > 0)) {
+		while (count-- > 0) {
 			chdiff = (int)maptolower[*label1++] -
 				 (int)maptolower[*label2++];
 			if (chdiff != 0) {
@@ -736,7 +736,7 @@ dns_name_equal(const dns_name_t *name1, const dns_name_t *name2) {
 	REQUIRE((name1->attributes & DNS_NAMEATTR_ABSOLUTE) ==
 		(name2->attributes & DNS_NAMEATTR_ABSOLUTE));
 
-	if (ISC_UNLIKELY(name1 == name2))
+	if (name1 == name2)
 		return (ISC_TRUE);
 
 	if (name1->length != name2->length)
@@ -749,7 +749,7 @@ dns_name_equal(const dns_name_t *name1, const dns_name_t *name2) {
 
 	label1 = name1->ndata;
 	label2 = name2->ndata;
-	while (ISC_LIKELY(l-- > 0)) {
+	while (l-- > 0) {
 		count = *label1++;
 		if (count != *label2++)
 			return (ISC_FALSE);
@@ -757,7 +757,7 @@ dns_name_equal(const dns_name_t *name1, const dns_name_t *name2) {
 		INSIST(count <= 63); /* no bitstring support */
 
 		/* Loop unrolled for performance */
-		while (ISC_LIKELY(count > 3)) {
+		while (count > 3) {
 			c = maptolower[label1[0]];
 			if (c != maptolower[label2[0]])
 				return (ISC_FALSE);
@@ -774,7 +774,7 @@ dns_name_equal(const dns_name_t *name1, const dns_name_t *name2) {
 			label1 += 4;
 			label2 += 4;
 		}
-		while (ISC_LIKELY(count-- > 0)) {
+		while (count-- > 0) {
 			c = maptolower[*label1++];
 			if (c != maptolower[*label2++])
 				return (ISC_FALSE);
@@ -2131,7 +2131,7 @@ dns_name_split(dns_name_t *name, unsigned int suffixlabels,
 }
 
 isc_result_t
-dns_name_dup(const dns_name_t *source, isc_mem_t *mctx,
+dns_name_dup(const dns_name_t *source,
 	     dns_name_t *target)
 {
 	/*
@@ -2148,7 +2148,7 @@ dns_name_dup(const dns_name_t *source, isc_mem_t *mctx,
 	 */
 	MAKE_EMPTY(target);
 
-	target->ndata = isc_mem_get(mctx, source->length);
+	target->ndata = malloc(source->length);
 	if (target->ndata == NULL)
 		return (ISC_R_NOMEMORY);
 
@@ -2171,7 +2171,7 @@ dns_name_dup(const dns_name_t *source, isc_mem_t *mctx,
 }
 
 isc_result_t
-dns_name_dupwithoffsets(dns_name_t *source, isc_mem_t *mctx,
+dns_name_dupwithoffsets(dns_name_t *source,
 			dns_name_t *target)
 {
 	/*
@@ -2190,7 +2190,7 @@ dns_name_dupwithoffsets(dns_name_t *source, isc_mem_t *mctx,
 	 */
 	MAKE_EMPTY(target);
 
-	target->ndata = isc_mem_get(mctx, source->length + source->labels);
+	target->ndata = malloc(source->length + source->labels);
 	if (target->ndata == NULL)
 		return (ISC_R_NOMEMORY);
 
@@ -2212,7 +2212,7 @@ dns_name_dupwithoffsets(dns_name_t *source, isc_mem_t *mctx,
 }
 
 void
-dns_name_free(dns_name_t *name, isc_mem_t *mctx) {
+dns_name_free(dns_name_t *name) {
 	size_t size;
 
 	/*
@@ -2225,7 +2225,7 @@ dns_name_free(dns_name_t *name, isc_mem_t *mctx) {
 	size = name->length;
 	if ((name->attributes & DNS_NAMEATTR_DYNOFFSETS) != 0)
 		size += name->labels;
-	isc_mem_put(mctx, name->ndata, size);
+	free(name->ndata);
 	dns_name_invalidate(name);
 }
 
@@ -2331,7 +2331,7 @@ dns_name_format(dns_name_t *name, char *cp, unsigned int size) {
  * memory.
  */
 isc_result_t
-dns_name_tostring(dns_name_t *name, char **target, isc_mem_t *mctx) {
+dns_name_tostring(dns_name_t *name, char **target) {
 	isc_result_t result;
 	isc_buffer_t buf;
 	isc_region_t reg;
@@ -2346,7 +2346,7 @@ dns_name_tostring(dns_name_t *name, char **target, isc_mem_t *mctx) {
 		return (result);
 
 	isc_buffer_usedregion(&buf, &reg);
-	p = isc_mem_allocate(mctx, reg.length + 1);
+	p = malloc(reg.length + 1);
 	if (p == NULL)
 		return (ISC_R_NOMEMORY);
 	memmove(p, (char *) reg.base, (int) reg.length);
@@ -2361,16 +2361,14 @@ dns_name_tostring(dns_name_t *name, char **target, isc_mem_t *mctx) {
  * allocating memory as needed
  */
 isc_result_t
-dns_name_fromstring(dns_name_t *target, const char *src, unsigned int options,
-		    isc_mem_t *mctx)
+dns_name_fromstring(dns_name_t *target, const char *src, unsigned int options)
 {
-	return (dns_name_fromstring2(target, src, dns_rootname, options, mctx));
+	return (dns_name_fromstring2(target, src, dns_rootname, options));
 }
 
 isc_result_t
 dns_name_fromstring2(dns_name_t *target, const char *src,
-		     const dns_name_t *origin, unsigned int options,
-		     isc_mem_t *mctx)
+		     const dns_name_t *origin, unsigned int options)
 {
 	isc_result_t result;
 	isc_buffer_t buf;
@@ -2393,7 +2391,7 @@ dns_name_fromstring2(dns_name_t *target, const char *src,
 		return (result);
 
 	if (name != target)
-		result = dns_name_dupwithoffsets(name, mctx, target);
+		result = dns_name_dupwithoffsets(name, target);
 	return (result);
 }
 

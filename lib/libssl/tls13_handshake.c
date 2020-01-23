@@ -1,4 +1,4 @@
-/*	$OpenBSD: tls13_handshake.c,v 1.36 2019/11/17 06:43:46 jsing Exp $	*/
+/*	$OpenBSD: tls13_handshake.c,v 1.41 2020/01/23 02:24:38 jsing Exp $	*/
 /*
  * Copyright (c) 2018-2019 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2019 Joel Sing <jsing@openbsd.org>
@@ -30,9 +30,9 @@ struct tls13_handshake_action {
 	uint8_t			handshake_complete;
 	uint8_t			preserve_transcript_hash;
 
-	int (*send)(struct tls13_ctx *ctx);
+	int (*send)(struct tls13_ctx *ctx, CBB *cbb);
 	int (*sent)(struct tls13_ctx *ctx);
-	int (*recv)(struct tls13_ctx *ctx);
+	int (*recv)(struct tls13_ctx *ctx, CBS *cbs);
 };
 
 enum tls13_message_type tls13_handshake_active_state(struct tls13_ctx *ctx);
@@ -53,6 +53,7 @@ struct tls13_handshake_action state_machine[] = {
 		.handshake_type = TLS13_MT_CLIENT_HELLO,
 		.sender = TLS13_HS_CLIENT,
 		.send = tls13_client_hello_send,
+		.sent = tls13_client_hello_sent,
 		.recv = tls13_client_hello_recv,
 	},
 	[CLIENT_HELLO_RETRY] = {
@@ -291,7 +292,8 @@ tls13_handshake_perform(struct tls13_ctx *ctx)
 			ctx->handshake_completed = 1;
 			tls13_record_layer_handshake_completed(ctx->rl);
 			return TLS13_IO_SUCCESS;
-		}
+		} else if (ctx->alert)
+			return tls13_send_alert(ctx->rl, ctx->alert);
 
 		if (action->sender == ctx->mode) {
 			if ((ret = tls13_handshake_send_action(ctx, action)) <= 0)
@@ -319,16 +321,23 @@ tls13_handshake_send_action(struct tls13_ctx *ctx,
     struct tls13_handshake_action *action)
 {
 	ssize_t ret;
+	CBB cbb;
 	CBS cbs;
 
 	/* If we have no handshake message, we need to build one. */
 	if (ctx->hs_msg == NULL) {
 		if ((ctx->hs_msg = tls13_handshake_msg_new()) == NULL)
 			return TLS13_IO_FAILURE;
-
-		/* XXX - provide CBB. */
-		if (!action->send(ctx))
+		if (!tls13_handshake_msg_start(ctx->hs_msg, &cbb,
+		    action->handshake_type))
 			return TLS13_IO_FAILURE;
+		if (!action->send(ctx, &cbb))
+			return TLS13_IO_FAILURE;
+		if (!tls13_handshake_msg_finish(ctx->hs_msg))
+			return TLS13_IO_FAILURE;
+
+		if (ctx->alert)
+			return tls13_send_alert(ctx->rl, ctx->alert);
 	}
 
 	if ((ret = tls13_handshake_msg_send(ctx->hs_msg, ctx->rl)) <= 0)
@@ -382,15 +391,25 @@ tls13_handshake_recv_action(struct tls13_ctx *ctx,
 	msg_type = tls13_handshake_msg_type(ctx->hs_msg);
 	if (msg_type != action->handshake_type &&
 	    (msg_type != TLS13_MT_CERTIFICATE ||
-	     action->handshake_type != TLS13_MT_CERTIFICATE_REQUEST)) {
-		/* XXX send unexpected message alert */
+	     action->handshake_type != TLS13_MT_CERTIFICATE_REQUEST))
+		return tls13_send_alert(ctx->rl, SSL_AD_UNEXPECTED_MESSAGE);
+
+	if (!tls13_handshake_msg_content(ctx->hs_msg, &cbs))
 		return TLS13_IO_FAILURE;
+
+	ret = TLS13_IO_FAILURE;
+	if (action->recv(ctx, &cbs)) {
+		if (CBS_len(&cbs) != 0) {
+			tls13_set_errorx(ctx, TLS13_ERR_TRAILING_DATA, 0,
+			    "trailing data in handshake message", NULL);
+			ctx->alert = SSL_AD_DECODE_ERROR;
+		} else {
+			ret = TLS13_IO_SUCCESS;
+		}
 	}
 
-	/* XXX provide CBS and check all consumed. */
-	ret = TLS13_IO_FAILURE;
-	if (action->recv(ctx))
-		ret = TLS13_IO_SUCCESS;
+	if (ctx->alert)
+		ret = tls13_send_alert(ctx->rl, ctx->alert);
 
 	tls13_handshake_msg_free(ctx->hs_msg);
 	ctx->hs_msg = NULL;

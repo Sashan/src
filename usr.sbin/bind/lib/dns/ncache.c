@@ -14,11 +14,11 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: ncache.c,v 1.9 2020/01/18 16:55:00 florian Exp $ */
+/* $Id: ncache.c,v 1.11 2020/01/22 13:02:09 florian Exp $ */
 
 /*! \file */
 
-#include <config.h>
+
 
 #include <isc/buffer.h>
 #include <isc/util.h>
@@ -418,7 +418,7 @@ dns_ncache_getsigrdataset(dns_rdataset_t *ncacherdataset, dns_name_t *name,
 		dns_rdata_reset(&rdata);
 		dns_rdata_fromregion(&rdata, rdataset->rdclass,
 				     dns_rdatatype_rrsig, &sigregion);
-		(void)dns_rdata_tostruct(&rdata, &rrsig, NULL);
+		(void)dns_rdata_tostruct(&rdata, &rrsig);
 		if (rrsig.covered == covers) {
 			isc_buffer_remainingregion(&source, &remaining);
 			break;
@@ -509,7 +509,7 @@ dns_ncache_current(dns_rdataset_t *ncacherdataset, dns_name_t *found,
 		dns_rdata_reset(&rdata);
 		dns_rdata_fromregion(&rdata, rdataset->rdclass,
 				     rdataset->type, &sigregion);
-		(void)dns_rdata_tostruct(&rdata, &rrsig, NULL);
+		(void)dns_rdata_tostruct(&rdata, &rrsig);
 		rdataset->covers = rrsig.covered;
 	} else
 		rdataset->covers = 0;

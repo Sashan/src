@@ -14,17 +14,17 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: syslog.c,v 1.3 2019/12/17 01:46:37 sthen Exp $ */
+/* $Id: syslog.c,v 1.5 2020/01/22 13:02:10 florian Exp $ */
 
 /*! \file */
 
-#include <config.h>
+
 
 #include <stdlib.h>
 #include <syslog.h>
 
 #include <isc/result.h>
-#include <isc/string.h>
+#include <string.h>
 #include <isc/syslog.h>
 #include <isc/util.h>
 
