@@ -405,6 +405,7 @@ struct	ifreq {
 		caddr_t			ifru_data;
 		unsigned int		ifru_index;
 	} ifr_ifru;
+	char	ifr_label[IFNAMSIZ];
 #define	ifr_addr	ifr_ifru.ifru_addr	/* address */
 #define	ifr_dstaddr	ifr_ifru.ifru_dstaddr	/* other end of p-to-p link */
 #define	ifr_broadaddr	ifr_ifru.ifru_broadaddr	/* broadcast address */
@@ -445,6 +446,7 @@ struct ifaliasreq {
 	struct	sockaddr ifra_dstaddr;
 #define	ifra_broadaddr	ifra_dstaddr
 	struct	sockaddr ifra_mask;
+	char	ifra_label[IFNAMSIZ];
 };
 
 struct ifmediareq {

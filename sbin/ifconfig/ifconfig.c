@@ -345,6 +345,8 @@ void	utf16_to_char(uint16_t *, int, char *, size_t);
 int	char_to_utf16(const char *, uint16_t *, size_t);
 void	transceiver(const char *, int);
 void	transceiverdump(const char *, int);
+void	setlabel(const char *, int);
+void	clrlabel(const char *, int);
 #else
 void	setignore(const char *, int);
 #endif
@@ -369,6 +371,8 @@ int	actions;			/* Actions performed */
 #define	A_MEDIAINST	0x0008		/* instance or inst command */
 #define	A_MEDIAMODE	0x0010		/* mode command */
 #define	A_JOIN		0x0020		/* join */
+#define	A_LABELSET	0x0040		/* label command */
+#define	A_LABELCLR	0x0080		/* -label command */
 #define A_SILENT	0x8000000	/* doing operation, do not print */
 
 #define	NEXTARG0	0xffffff
@@ -569,6 +573,8 @@ const struct	cmd {
 	{ "holdcnt",	NEXTARG,	0,		bridge_holdcnt },
 	{ "spanpriority", NEXTARG,	0,		bridge_priority },
 	{ "ipdst",	NEXTARG,	0,		setifipdst },
+	{ "label",	NEXTARG,	A_LABELSET,	setlabel },
+	{ "-label",	0,		A_LABELCLR,	clrlabel },
 #if 0
 	/* XXX `rule` special-cased below */
 	{ "rule",	0,		0,		bridge_rule },
@@ -945,7 +951,10 @@ nextarg:
 		(void) strlcpy(rafp->af_addreq, ifname, sizeof(ifr.ifr_name));
 		if (ioctl(sock, rafp->af_aifaddr, rafp->af_addreq) == -1)
 			err(1, "SIOCAIFADDR");
+
+		process_label_commands();
 	}
+
 	return (0);
 }
 
@@ -6406,5 +6415,24 @@ void
 setignore(const char *id, int param)
 {
 	/* just digest the command */
+}
+#endif
+
+#ifndef SMALL
+/* ARGSUSED */
+void
+setlabel(const char *val, int d)
+{
+	if (setaddr == 0)
+		err(1, "IP address required to assign label");
+
+	(void) strlcpy(ifr.ifr_label, val, sizeof(ifr.ifr_label));
+}
+
+void
+clrlabel(void)
+{
+	if (setaddr == 0)
+		err(1, "IP address required to remove label");
 }
 #endif
