@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh-keygen.c,v 1.396 2020/02/04 09:58:04 djm Exp $ */
+/* $OpenBSD: ssh-keygen.c,v 1.398 2020/02/07 03:27:54 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1994 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -2949,7 +2949,7 @@ do_download_sk(const char *skprovider, const char *device)
 	if (skprovider == NULL)
 		fatal("Cannot download keys without provider");
 
-	pin = read_passphrase("Enter PIN for security key: ", RP_ALLOW_STDIN);
+	pin = read_passphrase("Enter PIN for authenticator: ", RP_ALLOW_STDIN);
 	if ((r = sshsk_load_resident(skprovider, device, pin,
 	    &keys, &nkeys)) != 0) {
 		freezero(pin, strlen(pin));
@@ -3557,13 +3557,13 @@ main(int argc, char **argv)
 			}
 		}
 		if (!quiet) {
-			printf("You may need to touch your security key "
+			printf("You may need to touch your authenticator "
 			    "to authorize key generation.\n");
 		}
 		passphrase = NULL;
 		if ((attest = sshbuf_new()) == NULL)
 			fatal("sshbuf_new failed");
-		for (i = 0 ; i < 3; i++) {
+		for (i = 0 ; ; i++) {
 			fflush(stdout);
 			r = sshsk_enroll(type, sk_provider, sk_device,
 			    sk_application == NULL ? "ssh:" : sk_application,
@@ -3573,15 +3573,21 @@ main(int argc, char **argv)
 				break;
 			if (r != SSH_ERR_KEY_WRONG_PASSPHRASE)
 				fatal("Key enrollment failed: %s", ssh_err(r));
-			if (passphrase != NULL)
+			else if (i > 0)
+				error("PIN incorrect");
+			if (passphrase != NULL) {
 				freezero(passphrase, strlen(passphrase));
-			passphrase = read_passphrase("Enter PIN for security "
-			    "key: ", RP_ALLOW_STDIN);
+				passphrase = NULL;
+			}
+			if (i >= 3)
+				fatal("Too many incorrect PINs");
+			passphrase = read_passphrase("Enter PIN for "
+			    "authenticator: ", RP_ALLOW_STDIN);
 		}
-		if (passphrase != NULL)
+		if (passphrase != NULL) {
 			freezero(passphrase, strlen(passphrase));
-		if (i > 3)
-			fatal("Too many incorrect PINs");
+			passphrase = NULL;
+		}
 		break;
 	default:
 		if ((r = sshkey_generate(type, bits, &private)) != 0)

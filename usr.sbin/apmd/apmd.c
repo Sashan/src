@@ -1,4 +1,4 @@
-/*	$OpenBSD: apmd.c,v 1.91 2019/11/02 00:41:36 jca Exp $	*/
+/*	$OpenBSD: apmd.c,v 1.94 2020/02/12 12:01:29 jca Exp $	*/
 
 /*
  *  Copyright (c) 1995, 1996 John T. Kohl
@@ -380,7 +380,6 @@ main(int argc, char *argv[])
 	int noacsleep = 0;
 	struct timespec ts = {TIMO, 0}, sts = {0, 0};
 	struct apm_power_info pinfo;
-	time_t apmtimeout = 0;
 	const char *sockname = _PATH_APM_SOCKET;
 	const char *errstr;
 	int kq, nchanges;
@@ -502,13 +501,32 @@ main(int argc, char *argv[])
 
 		sts = ts;
 
-		apmtimeout += 1;
 		if ((rv = kevent(kq, NULL, 0, ev, 1, &sts)) == -1)
 			break;
 
-		if (apmtimeout >= ts.tv_sec) {
-			apmtimeout = 0;
+		if (rv == 1 && ev->ident == sock_fd) {
+			switch (handle_client(sock_fd, ctl_fd)) {
+			case NORMAL:
+				break;
+			case SUSPENDING:
+				suspend(ctl_fd);
+				break;
+			case STANDING_BY:
+				stand_by(ctl_fd);
+				break;
+			case HIBERNATING:
+				hibernate(ctl_fd);
+				break;
+			}
+			continue;
+		}
 
+		suspends = standbys = hibernates = resumes = 0;
+
+		if (rv == 0 && ctl_fd == -1) {
+			/* timeout and no way to query status */
+			continue;
+		} else if (rv == 0) {
 			/* wakeup for timeout: take status */
 			powerbak = power_status(ctl_fd, 0, &pinfo);
 			if (powerstatus != powerbak) {
@@ -519,24 +537,18 @@ main(int argc, char *argv[])
 			if (!powerstatus && autoaction &&
 			    autolimit > (int)pinfo.battery_life) {
 				logmsg(LOG_NOTICE,
-				    "estimated battery life %d%%, "
-				    "autoaction limit set to %d%% .",
+				    "estimated battery life %d%%"
+				    " below configured limit %d%%",
 				    pinfo.battery_life,
 				    autolimit
 				);
 
 				if (autoaction == AUTO_SUSPEND)
-					suspend(ctl_fd);
+					suspends++;
 				else
-					hibernate(ctl_fd);
+					hibernates++;
 			}
-		}
-
-		if (!rv)
-			continue;
-
-		if (ev->ident == ctl_fd) {
-			suspends = standbys = hibernates = resumes = 0;
+		} else if (ev->ident == ctl_fd) {
 			logmsg(LOG_DEBUG, "apmevent %04x index %d",
 			    (int)APM_EVENT_TYPE(ev->data),
 			    (int)APM_EVENT_INDEX(ev->data));
@@ -576,46 +588,45 @@ main(int argc, char *argv[])
 					powerstatus = powerbak;
 					powerchange = 1;
 				}
+
+				if (!powerstatus && autoaction &&
+				    autolimit > (int)pinfo.battery_life) {
+					logmsg(LOG_NOTICE,
+					    "estimated battery life %d%%"
+					    " below configured limit %d%%",
+					    pinfo.battery_life, autolimit);
+
+					if (autoaction == AUTO_SUSPEND)
+						suspends++;
+					else
+						hibernates++;
+				}
 				break;
 			default:
 				;
 			}
+		}
 
-			if ((standbys || suspends) && noacsleep &&
-			    power_status(ctl_fd, 0, &pinfo))
-				logmsg(LOG_DEBUG, "no! sleep! till brooklyn!");
-			else if (suspends)
-				suspend(ctl_fd);
-			else if (standbys)
-				stand_by(ctl_fd);
-			else if (hibernates)
-				hibernate(ctl_fd);
-			else if (resumes) {
-				resumed(ctl_fd);
-			}
+		if ((standbys || suspends) && noacsleep &&
+		    power_status(ctl_fd, 0, &pinfo))
+			logmsg(LOG_DEBUG, "no! sleep! till brooklyn!");
+		else if (suspends)
+			suspend(ctl_fd);
+		else if (standbys)
+			stand_by(ctl_fd);
+		else if (hibernates)
+			hibernate(ctl_fd);
+		else if (resumes) {
+			resumed(ctl_fd);
+		}
 
-			if (powerchange) {
-				if (powerstatus)
-					do_etc_file(_PATH_APM_ETC_POWERUP);
-				else
-					do_etc_file(_PATH_APM_ETC_POWERDOWN);
-				powerchange = 0;
-			}
-
-		} else if (ev->ident == sock_fd)
-			switch (handle_client(sock_fd, ctl_fd)) {
-			case NORMAL:
-				break;
-			case SUSPENDING:
-				suspend(ctl_fd);
-				break;
-			case STANDING_BY:
-				stand_by(ctl_fd);
-				break;
-			case HIBERNATING:
-				hibernate(ctl_fd);
-				break;
-			}
+		if (powerchange) {
+			if (powerstatus)
+				do_etc_file(_PATH_APM_ETC_POWERUP);
+			else
+				do_etc_file(_PATH_APM_ETC_POWERDOWN);
+			powerchange = 0;
+		}
 	}
 	error("kevent loop", NULL);
 

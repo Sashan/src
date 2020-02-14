@@ -1,7 +1,7 @@
-/*	$OpenBSD: main.c,v 1.244 2020/01/20 10:29:31 schwarze Exp $ */
+/*	$OpenBSD: main.c,v 1.246 2020/02/10 13:49:04 schwarze Exp $ */
 /*
  * Copyright (c) 2008-2012 Kristaps Dzonsons <kristaps@bsd.lv>
- * Copyright (c) 2010-2012, 2014-2019 Ingo Schwarze <schwarze@openbsd.org>
+ * Copyright (c) 2010-2012, 2014-2020 Ingo Schwarze <schwarze@openbsd.org>
  * Copyright (c) 2010 Joerg Sonnenberger <joerg@netbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
@@ -309,7 +309,8 @@ main(int argc, char *argv[])
 
 	/* Postprocess options. */
 
-	if (outmode == OUTMODE_DEF) {
+	switch (outmode) {
+	case OUTMODE_DEF:
 		switch (search.argmode) {
 		case ARG_FILE:
 			outmode = OUTMODE_ALL;
@@ -322,6 +323,16 @@ main(int argc, char *argv[])
 			outmode = OUTMODE_LST;
 			break;
 		}
+		break;
+	case OUTMODE_FLN:
+		if (search.argmode == ARG_FILE)
+			outmode = OUTMODE_ALL;
+		break;
+	case OUTMODE_ALL:
+		break;
+	case OUTMODE_LST:
+	case OUTMODE_ONE:
+		abort();
 	}
 
 	if (oarg != NULL) {
@@ -416,8 +427,20 @@ main(int argc, char *argv[])
 	/* man(1): Resolve each name individually. */
 
 	if (search.argmode == ARG_NAME) {
-		if (argc < 1)
-			usage(ARG_NAME);
+		if (argc < 1) {
+			if (outmode != OUTMODE_FLN)
+				usage(ARG_NAME);
+			if (conf.manpath.sz == 0) {
+				warnx("The manpath is empty.");
+				mandoc_msg_setrc(MANDOCLEVEL_BADARG);
+			} else {
+				for (i = 0; i + 1 < conf.manpath.sz; i++)
+					printf("%s:", conf.manpath.paths[i]);
+				printf("%s\n", conf.manpath.paths[i]);
+			}
+			manconf_free(&conf);
+			return (int)mandoc_msg_getrc();
+		}
 		for (res = NULL, ressz = 0; argc > 0; argc--, argv++) {
 			(void)mansearch(&search, &conf.manpath,
 			    1, argv, &resn, &resnsz);

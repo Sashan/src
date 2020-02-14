@@ -1,4 +1,4 @@
-/*	$OpenBSD: fetch.c,v 1.187 2020/01/21 05:02:53 beck Exp $	*/
+/*	$OpenBSD: fetch.c,v 1.189 2020/02/13 15:54:10 jca Exp $	*/
 /*	$NetBSD: fetch.c,v 1.14 1997/08/18 10:20:20 lukem Exp $	*/
 
 /*-
@@ -77,7 +77,7 @@ static char	hextochar(const char *);
 static char	*urldecode(const char *);
 static char	*recode_credentials(const char *_userinfo);
 static char	*ftp_readline(FILE *, size_t *);
-static void	ftp_close(FILE **, struct tls **, volatile int *);
+static void	ftp_close(FILE **, struct tls **, int *);
 static const char *sockerror(struct tls *);
 #ifdef SMALL
 #define 	ftp_printf(fp, ...) fprintf(fp, __VA_ARGS__)
@@ -311,13 +311,13 @@ url_get(const char *origline, const char *proxyenv, const char *outfile, int las
 	char pbuf[NI_MAXSERV], hbuf[NI_MAXHOST], *cp, *portnum, *path, ststr[4];
 	char *hosttail, *cause = "unknown", *newline, *host, *port, *buf = NULL;
 	char *epath, *redirurl, *loctail, *h, *p, gerror[200];
-	int error, i, isftpurl = 0, isredirect = 0, rval = -1;
+	int error, isftpurl = 0, isredirect = 0, rval = -1;
 	int isunavail = 0, retryafter = -1;
 	struct addrinfo hints, *res0, *res;
-	const char * volatile savefile;
-	char * volatile proxyurl = NULL;
+	const char *savefile;
+	char *proxyurl = NULL;
 	char *credentials = NULL;
-	volatile int fd = -1, out = -1;
+	int fd = -1, out = -1;
 	volatile sig_t oldintr, oldinti;
 	FILE *fin = NULL;
 	off_t hashbytes;
@@ -1017,6 +1017,10 @@ noslash:
 #endif
 	}
 
+	free(buf);
+	if ((buf = malloc(buflen)) == NULL)
+		errx(1, "Can't allocate memory for transfer buffer");
+
 	/* Trap signals */
 	oldintr = NULL;
 	oldinti = NULL;
@@ -1033,11 +1037,7 @@ noslash:
 	hashbytes = mark;
 	progressmeter(-1, path);
 
-	free(buf);
-
 	/* Finally, suck down the file. */
-	if ((buf = malloc(buflen)) == NULL)
-		errx(1, "Can't allocate memory for transfer buffer");
 	oldinti = signal(SIGINFO, psummary);
 	if (chunked) {
 		error = save_chunked(fin, tls, out, buf, buflen);
@@ -1045,18 +1045,14 @@ noslash:
 		if (error == -1)
 			goto cleanup_url_get;
 	} else {
-		i = 0;
-		len = 1;
-		while (len > 0) {
-			len = fread(buf, 1, buflen, fin);
+		while ((len = fread(buf, 1, buflen, fin)) > 0) {
 			bytes += len;
-			for (cp = buf, wlen = len; wlen > 0; wlen -= i, cp += i) {
-				if ((i = write(out, cp, wlen)) == -1) {
+			for (cp = buf; len > 0; len -= wlen, cp += wlen) {
+				if ((wlen = write(out, cp, len)) == -1) {
 					warn("Writing %s", savefile);
 					signal(SIGINFO, oldinti);
 					goto cleanup_url_get;
-				} else if (i == 0)
-					break;
+				}
 			}
 			if (hash && !progress) {
 				while (bytes >= hashbytes) {
@@ -1066,6 +1062,7 @@ noslash:
 				(void)fflush(ttyout);
 			}
 		}
+		save_errno = errno;
 		signal(SIGINFO, oldinti);
 		if (hash && !progress && bytes > 0) {
 			if (bytes < mark)
@@ -1073,7 +1070,8 @@ noslash:
 			(void)putc('\n', ttyout);
 			(void)fflush(ttyout);
 		}
-		if (len != 0) {
+		if (len == 0 && ferror(fin)) {
+			errno = save_errno;
 			warnx("Reading from socket: %s", sockerror(tls));
 			goto cleanup_url_get;
 		}
@@ -1654,7 +1652,7 @@ ftp_printf(FILE *fp, const char *fmt, ...)
 #endif /* !SMALL */
 
 static void
-ftp_close(FILE **fin, struct tls **tls, volatile int *fd)
+ftp_close(FILE **fin, struct tls **tls, int *fd)
 {
 #ifndef NOSSL
 	int	ret;
