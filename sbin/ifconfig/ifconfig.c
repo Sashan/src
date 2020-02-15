@@ -697,6 +697,8 @@ void	print_cipherset(u_int32_t);
 
 void	spppauthinfo(struct sauthreq *, int);
 
+void	process_label_commands(void);
+
 /* Known address families */
 const struct afswtch {
 	char *af_name;
@@ -951,9 +953,9 @@ nextarg:
 		(void) strlcpy(rafp->af_addreq, ifname, sizeof(ifr.ifr_name));
 		if (ioctl(sock, rafp->af_aifaddr, rafp->af_addreq) == -1)
 			err(1, "SIOCAIFADDR");
-
-		process_label_commands();
 	}
+
+	process_label_commands();
 
 	return (0);
 }
@@ -3541,6 +3543,14 @@ in_status(int force)
 		if (sin->sin_addr.s_addr != 0)
 			printf(" broadcast %s", inet_ntoa(sin->sin_addr));
 	}
+
+	memset(&ifr.ifr_label, 0, sizeof(ifr.ifr_label));
+	memcpy(&ifr.ifr_addr, &sin2, sizeof(ifr.ifr_addr));
+	if (ioctl(sock, SIOCGLABEL, (caddr_t)&ifr) == -1)
+		warn("SIOCGLABEL");
+	else if (ifr.ifr_label[0])
+		printf(" [%s]", ifr.ifr_label);
+
 	putchar('\n');
 }
 
@@ -6423,16 +6433,40 @@ setignore(const char *id, int param)
 void
 setlabel(const char *val, int d)
 {
-	if (setaddr == 0)
-		err(1, "IP address required to assign label");
+	strlcpy(in_addreq.ifra_label, val, sizeof(in_addreq.ifra_label));
+	strlcpy(in6_addreq.ifra_label, val, sizeof(in6_addreq.ifra_label));
+}
 
-	(void) strlcpy(ifr.ifr_label, val, sizeof(ifr.ifr_label));
+/* ARGSUSED */
+void
+clrlabel(const char *val, int d)
+{
+	memset(in_addreq.ifra_label, 0, sizeof(in_addreq.ifra_label));
+	memset(in6_addreq.ifra_label, 0, sizeof(in6_addreq.ifra_label));
 }
 
 void
-clrlabel(void)
+process_label_commands(void)
 {
-	if (setaddr == 0)
-		err(1, "IP address required to remove label");
+	int	cmd;
+	const char *cmd_name;
+
+	switch (actions & (A_LABELSET|A_LABELCLR)) {
+	case 0:
+		return;
+	case A_LABELSET:
+		cmd = SIOCALABEL;
+		cmd_name = "SIOCALABEL";
+		break;
+	case A_LABELCLR:
+		cmd = SIOCDLABEL;
+		cmd_name = "SIOCDLABEL";
+		break;
+	default:
+		err(1, "use either label or -label");
+	}
+
+	if (ioctl(sock, cmd, afp->af_addreq) == -1)
+		errx(1, "%s", cmd_name);
 }
 #endif

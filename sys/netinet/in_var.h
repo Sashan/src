@@ -73,6 +73,7 @@ struct	in_aliasreq {
 	struct	sockaddr_in ifra_dstaddr;
 #define	ifra_broadaddr	ifra_dstaddr
 	struct	sockaddr_in ifra_mask;
+	char ifra_label[IFNAMSIZ];	/* label assigned to address */
 };
 
 

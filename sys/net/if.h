@@ -404,8 +404,8 @@ struct	ifreq {
 		uint64_t		ifru_media;
 		caddr_t			ifru_data;
 		unsigned int		ifru_index;
+		char			ifru_label[IFNAMSIZ];
 	} ifr_ifru;
-	char	ifr_label[IFNAMSIZ];
 #define	ifr_addr	ifr_ifru.ifru_addr	/* address */
 #define	ifr_dstaddr	ifr_ifru.ifru_dstaddr	/* other end of p-to-p link */
 #define	ifr_broadaddr	ifr_ifru.ifru_broadaddr	/* broadcast address */
@@ -423,6 +423,7 @@ struct	ifreq {
 #define ifr_llprio	ifr_ifru.ifru_metric	/* link layer priority */
 #define ifr_hdrprio	ifr_ifru.ifru_metric	/* header prio field config */
 #define ifr_pwe3	ifr_ifru.ifru_metric	/* PWE3 type */
+#define ifr_label	ifr_ifru.ifru_label	/* PWE3 type */
 };
 
 #define IF_HDRPRIO_MIN		IFQ_MINPRIO

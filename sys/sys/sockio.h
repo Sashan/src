@@ -227,4 +227,8 @@
 #define	SIOCSETPFLOW	_IOW('i', 253, struct ifreq)
 #define	SIOCGETPFLOW	_IOWR('i', 254, struct ifreq)
 
+#define	SIOCALABEL	_IOW('i', 255, struct ifaliasreq)
+#define	SIOCDLABEL	_IOW('i', 256, struct ifaliasreq)
+#define	SIOCGLABEL	_IOWR('i', 257, struct ifreq)
+
 #endif /* !_SYS_SOCKIO_H_ */

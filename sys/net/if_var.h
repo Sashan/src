@@ -242,6 +242,7 @@ struct ifaddr {
 	u_int	ifa_flags;		/* interface flags, see below */
 	u_int	ifa_refcnt;		/* number of `rt_ifa` references */
 	int	ifa_metric;		/* cost of going out this interface */
+	char	ifa_label[IFNAMSIZ];	/* label assigned to address */
 };
 
 #define	IFA_ROUTE		0x01	/* Auto-magically installed route */

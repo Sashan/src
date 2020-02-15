@@ -261,6 +261,7 @@ struct	in6_aliasreq {
 	struct	sockaddr_in6 ifra_prefixmask;
 	int	ifra_flags;
 	struct in6_addrlifetime ifra_lifetime;
+	char	ifra_label[IFNAMSIZ];
 };
 
 /*
