@@ -447,6 +447,7 @@ sys_ioctl(struct proc *p, void *v, register_t *retval)
 	size = IOCPARM_LEN(com);
 	if (size > IOCPARM_MAX) {
 		error = ENOTTY;
+		printf("%s/(%lx)\n", __func__, com);
 		goto out;
 	}
 	if (size > sizeof (stkbuf)) {

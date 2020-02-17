@@ -88,6 +88,10 @@ soo_ioctl(struct file *fp, u_long cmd, caddr_t data, struct proc *p)
 	struct socket *so = (struct socket *)fp->f_data;
 	int s, error = 0;
 
+	if ((cmd == SIOCALABEL) || (cmd == SIOCDLABEL))
+		printf("%s@%d(%s)\n", __func__, __LINE__, (cmd == SIOCALABEL) ?
+		    "SIOCALABEL" : "SIOCDLABEL");
+
 	switch (cmd) {
 
 	case FIONBIO:

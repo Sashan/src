@@ -1925,6 +1925,10 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	size_t bytesdone;
 	unsigned short oif_flags;
 
+	if ((cmd == SIOCALABEL) || (cmd == SIOCDLABEL))
+		printf("%s@%d(%s)\n", __func__, __LINE__, (cmd == SIOCALABEL) ?
+		    "SIOCALABEL" : "SIOCDLABEL");
+
 	switch (cmd) {
 	case SIOCIFCREATE:
 		if ((error = suser(p)) != 0)
@@ -2287,9 +2291,17 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 			break;
 		/* FALLTHROUGH */
 	default:
+		if ((cmd == SIOCALABEL) || (cmd == SIOCDLABEL))
+			printf("%s@%d(%s)\n", __func__, __LINE__,
+			    (cmd == SIOCALABEL) ? "SIOCALABEL" : "SIOCDLABEL");
+
 		error = ((*so->so_proto->pr_usrreq)(so, PRU_CONTROL,
 			(struct mbuf *) cmd, (struct mbuf *) data,
 			(struct mbuf *) ifp, p));
+		if ((error) && ((cmd == SIOCALABEL) || (cmd == SIOCDLABEL)))
+			printf("%s@%d(%s)\n", __func__, __LINE__,
+			    (cmd == SIOCALABEL) ? "SIOCALABEL" : "SIOCDLABEL");
+
 		if (error != EOPNOTSUPP)
 			break;
 		switch (cmd) {
@@ -2311,6 +2323,13 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		}
 		if (error)
 			break;
+
+		/*
+		 * devices (ifp) don't handle address labels.
+		 */
+		if ((cmd == SIOCALABEL) || (cmd == SIOCDLABEL))
+			break;
+
 		NET_LOCK();
 		error = ((*ifp->if_ioctl)(ifp, cmd, data));
 		NET_UNLOCK();

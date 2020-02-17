@@ -1053,6 +1053,10 @@ pledge_ioctl(struct proc *p, long com, struct file *fp)
 	int error = EPERM;
 	uint64_t pl = p->p_p->ps_pledge;
 
+	if ((com == SIOCALABEL) || (com == SIOCDLABEL))
+		printf("%s@%d(%s)\n", __func__, __LINE__, (com == SIOCALABEL) ?
+		    "SIOCALABEL" : "SIOCDLABEL");
+
 	if ((p->p_p->ps_flags & PS_PLEDGE) == 0)
 		return (0);
 
@@ -1336,6 +1340,10 @@ pledge_ioctl(struct proc *p, long com, struct file *fp)
 		}
 	}
 #endif
+
+	if ((com == SIOCALABEL) || (com == SIOCDLABEL))
+		printf("%s@%d(%s)\n", __func__, __LINE__, (com == SIOCALABEL) ?
+		    "SIOCALABEL" : "SIOCDLABEL");
 
 	return pledge_fail(p, error, PLEDGE_TTY);
 }

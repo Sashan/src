@@ -6467,6 +6467,6 @@ process_label_commands(void)
 	}
 
 	if (ioctl(sock, cmd, afp->af_addreq) == -1)
-		errx(1, "%s", cmd_name);
+		errx(1, "%s (%s)", cmd_name, strerror(errno));
 }
 #endif
