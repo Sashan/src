@@ -6448,7 +6448,7 @@ clrlabel(const char *val, int d)
 void
 process_label_commands(void)
 {
-	int	cmd;
+	u_long	cmd;
 	const char *cmd_name;
 
 	switch (actions & (A_LABELSET|A_LABELCLR)) {
