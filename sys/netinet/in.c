@@ -741,6 +741,7 @@ in_ifinit(struct ifnet *ifp, struct in_ifaddr *ia, struct sockaddr_in *sin,
 		addr.s_addr = INADDR_ALLHOSTS_GROUP;
 		ia->ia_allhosts = in_addmulti(&addr, ifp);
 	}
+
 out:
 	if (error && newaddr)
 		in_purgeaddr(&ia->ia_ifa);
