@@ -293,6 +293,10 @@ struct	in6_aliasreq {
 #define SIOCGETSGCNT_IN6	_IOWR('u', 106, struct sioc_sg_req6)
 #define SIOCGETMIFCNT_IN6	_IOWR('u', 107, struct sioc_mif_req6)
 
+#define	SIOCALABEL_IN6	_IOW('i', 123, struct in6_aliasreq)
+#define	SIOCDLABEL_IN6	_IOW('i', 124, struct in6_aliasreq)
+#define	SIOCGLABEL_IN6	_IOWR('i', 125, struct in6_ifreq)
+
 #define IN6_IFF_ANYCAST		0x01	/* anycast address */
 #define IN6_IFF_TENTATIVE	0x02	/* tentative address */
 #define IN6_IFF_DUPLICATED	0x04	/* DAD detected duplicate */

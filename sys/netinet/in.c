@@ -92,7 +92,6 @@ int in_addhost(struct in_ifaddr *, struct sockaddr_in *);
 int in_scrubhost(struct in_ifaddr *, struct sockaddr_in *);
 int in_insert_prefix(struct in_ifaddr *);
 void in_remove_prefix(struct in_ifaddr *);
-int in_ioctl_change_label(u_long, caddr_t, struct ifnet *, int);
 
 /*
  * Determine whether an IP address is in a reserved set of addresses
@@ -245,10 +244,9 @@ in_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, int privileged)
 		return in_ioctl_set_ifaddr(cmd, data, ifp, privileged);
 	case SIOCAIFADDR:
 	case SIOCDIFADDR:
-		return in_ioctl_change_ifaddr(cmd, data, ifp, privileged);
 	case SIOCALABEL:
 	case SIOCDLABEL:
-		return in_ioctl_change_label(cmd, data, ifp, privileged);
+		return in_ioctl_change_ifaddr(cmd, data, ifp, privileged);
 	case SIOCSIFNETMASK:
 	case SIOCSIFDSTADDR:
 	case SIOCSIFBRDADDR:
@@ -545,6 +543,42 @@ in_ioctl_change_ifaddr(u_long cmd, caddr_t data, struct ifnet *ifp,
 		 * the scrub but before the other steps?
 		 */
 		in_purgeaddr(&ia->ia_ifa);
+		if_addrhooks_run(ifp);
+		break;
+
+	case SIOCALABEL:
+		if (!privileged) {
+			error = EPERM;
+			break;
+		}
+
+		if (ifa == NULL) {
+			error = ESRCH;
+			break;
+		}
+
+		if (ifra->ifra_label[0] == '\0') {
+			error = EINVAL;
+			break;
+		}
+
+		strlcpy(ifa->ifa_label, ifra->ifra_label,
+		    sizeof(ifa->ifa_label));
+		if_addrhooks_run(ifp);
+		break;
+
+	case SIOCDLABEL:
+		if (!privileged) {
+			error = EPERM;
+			break;
+		}
+
+		if (ifa == NULL) {
+			error = ESRCH;
+			break;
+		}
+
+		memset(ifa->ifa_label, 0, sizeof(ifa->ifa_label));
 		if_addrhooks_run(ifp);
 		break;
 
@@ -989,61 +1023,4 @@ in_prefixlen2mask(struct in_addr *maskp, int plen)
 		maskp->s_addr = 0;
 	else
 		maskp->s_addr = htonl(0xffffffff << (32 - plen));
-}
-
-int
-in_ioctl_change_label(u_long cmd, caddr_t data, struct ifnet *ifp,
-    int privileged)
-{
-	struct ifaddr *ifa;
-	struct in_aliasreq *ifra = (struct in_aliasreq *)data;
-	struct sockaddr_in *sin = NULL;
-	int error = 0;
-
-	if (!privileged)
-		return (EPERM);
-
-	if (ifra->ifra_addr.sin_family == AF_INET) {
-		error = in_sa2sin(sintosa(&ifra->ifra_addr), &sin);
-		if (error)
-			return (error);
-	} else 
-		return (EAFNOSUPPORT);
-
-	NET_LOCK();
-
-	TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_list) {
-		if (ifa->ifa_addr->sa_family != AF_INET)
-			continue;
-		/* find first address, if no exact match wanted */
-		if (sin->sin_addr.s_addr ==
-		    ifatoia(ifa)->ia_addr.sin_addr.s_addr)
-			break;
-	}
-
-	if (ifa == NULL)
-		error = ESRCH;
-	else {
-		switch (cmd) {
-		case SIOCALABEL: {
-			if (ifra->ifra_label[0] == '\0')
-				error = EINVAL;
-			else {
-				strlcpy(ifa->ifa_label, ifra->ifra_label,
-				    sizeof(ifa->ifa_label));
-				if_addrhooks_run(ifp);
-			}
-			break;
-		    }
-		case SIOCDLABEL:
-			memset(ifa->ifa_label, 0, sizeof(ifa->ifa_label));
-			if_addrhooks_run(ifp);
-			break;
-		default:
-			panic("%s: invalid ioctl %lu", __func__, cmd);
-		}
-	}
-
-	NET_UNLOCK();
-	return (error);
 }

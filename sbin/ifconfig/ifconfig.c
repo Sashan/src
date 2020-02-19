@@ -3690,6 +3690,14 @@ in6_alias(struct in6_ifreq *creq)
 		}
 	}
 
+	(void) memset(&ifr6, 0, sizeof(ifr6));
+	(void) strlcpy(ifr6.ifr_name, ifname, sizeof(ifr6.ifr_name));
+	ifr6.ifr_addr = creq->ifr_addr;
+	if (ioctl(sock, SIOCGLABEL_IN6, (caddr_t)&ifr6) == -1)
+		warnx("SIOCGLABEL_IN6: %s", strerror(errno));
+	else if (ifr6.ifr_label[0])
+		printf(" [%s]", ifr6.ifr_label);
+
 	printf("\n");
 }
 
@@ -6455,12 +6463,34 @@ process_label_commands(void)
 	case 0:
 		return;
 	case A_LABELSET:
-		cmd = SIOCALABEL;
-		cmd_name = "SIOCALABEL";
+		switch (afp->af_af) {
+		case AF_INET:
+			cmd = SIOCALABEL;
+			cmd_name = "SIOCALABEL";
+			break;
+		case AF_INET6:
+			cmd = SIOCALABEL_IN6; 
+			cmd_name = "SIOCALABEL_IN6";
+			break;
+		default:
+			warnx("%s: 'label' unknown AF\n", __func__);
+			return;
+		}
 		break;
 	case A_LABELCLR:
-		cmd = SIOCDLABEL;
-		cmd_name = "SIOCDLABEL";
+		switch (afp->af_af) {
+		case AF_INET:
+			cmd = SIOCDLABEL;
+			cmd_name = "SIOCDLABEL";
+			break;
+		case AF_INET6:
+			cmd = SIOCDLABEL_IN6; 
+			cmd_name = "SIOCALDBEL_IN6";
+			break;
+		default:
+			warnx("%s: '-label' unknown AF\n", __func__);
+			return;
+		}
 		break;
 	default:
 		err(1, "use either label or -label");

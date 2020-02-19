@@ -233,12 +233,12 @@ in6_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, int privileged)
 	case SIOCGIFNETMASK_IN6:
 	case SIOCGIFAFLAG_IN6:
 	case SIOCGIFALIFETIME_IN6:
-	case SIOCGLABEL:
+	case SIOCGLABEL_IN6:
 		return (in6_ioctl_get(cmd, data, ifp));
 	case SIOCAIFADDR_IN6:
 	case SIOCDIFADDR_IN6:
-	case SIOCALABEL:
-	case SIOCDLABEL:
+	case SIOCALABEL_IN6:
+	case SIOCDLABEL_IN6:
 		if (!privileged)
 			return (EPERM);
 		return (in6_ioctl_change_ifaddr(cmd, data, ifp));
@@ -282,8 +282,8 @@ in6_ioctl_change_ifaddr(u_long cmd, caddr_t data, struct ifnet *ifp)
 	 */
 	switch (cmd) {
 	case SIOCAIFADDR_IN6:
-	case SIOCALABEL:
-	case SIOCDLABEL:
+	case SIOCALABEL_IN6:
+	case SIOCDLABEL_IN6:
 		sa = sin6tosa(&ifra->ifra_addr);
 		break;
 	case SIOCDIFADDR_IN6:
@@ -395,7 +395,7 @@ in6_ioctl_change_ifaddr(u_long cmd, caddr_t data, struct ifnet *ifp)
 		if_addrhooks_run(ifp);
 		break;
 
-	case SIOCALABEL:
+	case SIOCALABEL_IN6:
 		if (ia6 == NULL)
 			error = ESRCH;
 		else if (ifra->ifra_label[0] == '\0')
@@ -409,7 +409,7 @@ in6_ioctl_change_ifaddr(u_long cmd, caddr_t data, struct ifnet *ifp)
 			if_addrhooks_run(ifp);
 		}
 		break;
-	case SIOCDLABEL:
+	case SIOCDLABEL_IN6:
 		if (ia6 == NULL)
 			error = ESRCH;
 		else {
@@ -533,7 +533,7 @@ in6_ioctl_get(u_long cmd, caddr_t data, struct ifnet *ifp)
 		}
 		break;
 
-	case SIOCGLABEL:
+	case SIOCGLABEL_IN6:
 		if (ia6 == NULL)
 			error = ESRCH;
 		else
