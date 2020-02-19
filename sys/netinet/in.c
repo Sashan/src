@@ -1022,26 +1022,26 @@ in_ioctl_change_label(u_long cmd, caddr_t data, struct ifnet *ifp,
 	}
 
 	if (ifa == NULL)
-		return (ESRCH);
-
-	switch (cmd) {
-	case SIOCALABEL: {
-		if (ifra->ifra_label[0] == '\0')
-			return (EINVAL);
-
-		strlcpy(ifa->ifa_label, ifra->ifra_label, sizeof(ifa->ifa_label));
-		if_addrhooks_run(ifp);
-		break;
-	    }
-	case SIOCDLABEL:
-		memset(ifa->ifa_label, 0, sizeof(ifa->ifa_label));
-		if_addrhooks_run(ifp);
-		break;
-	case SIOCGLABEL:
-		break;
-
-	default:
-		panic("%s: invalid ioctl %lu", __func__, cmd);
+		error = ESRCH;
+	else {
+		switch (cmd) {
+		case SIOCALABEL: {
+			if (ifra->ifra_label[0] == '\0')
+				error = EINVAL;
+			else {
+				strlcpy(ifa->ifa_label, ifra->ifra_label,
+				    sizeof(ifa->ifa_label));
+				if_addrhooks_run(ifp);
+			}
+			break;
+		    }
+		case SIOCDLABEL:
+			memset(ifa->ifa_label, 0, sizeof(ifa->ifa_label));
+			if_addrhooks_run(ifp);
+			break;
+		default:
+			panic("%s: invalid ioctl %lu", __func__, cmd);
+		}
 	}
 
 	NET_UNLOCK();

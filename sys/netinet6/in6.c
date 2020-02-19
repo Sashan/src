@@ -122,6 +122,7 @@ int in6_check_embed_scope(struct sockaddr_in6 *, unsigned int);
 int in6_clear_scope_id(struct sockaddr_in6 *, unsigned int);
 int in6_ifinit(struct ifnet *, struct in6_ifaddr *, int);
 void in6_unlink_ifa(struct in6_ifaddr *, struct ifnet *);
+int in6_ioctl_change_label(u_long, caddr_t, struct ifnet *, int);
 
 const struct sockaddr_in6 sa6_any = {
 	sizeof(sa6_any), AF_INET6, 0, 0, IN6ADDR_ANY_INIT, 0
@@ -232,9 +233,12 @@ in6_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, int privileged)
 	case SIOCGIFNETMASK_IN6:
 	case SIOCGIFAFLAG_IN6:
 	case SIOCGIFALIFETIME_IN6:
+	case SIOCGLABEL:
 		return (in6_ioctl_get(cmd, data, ifp));
 	case SIOCAIFADDR_IN6:
 	case SIOCDIFADDR_IN6:
+	case SIOCALABEL:
+	case SIOCDLABEL:
 		if (!privileged)
 			return (EPERM);
 		return (in6_ioctl_change_ifaddr(cmd, data, ifp));
@@ -278,6 +282,8 @@ in6_ioctl_change_ifaddr(u_long cmd, caddr_t data, struct ifnet *ifp)
 	 */
 	switch (cmd) {
 	case SIOCAIFADDR_IN6:
+	case SIOCALABEL:
+	case SIOCDLABEL:
 		sa = sin6tosa(&ifra->ifra_addr);
 		break;
 	case SIOCDIFADDR_IN6:
@@ -387,6 +393,32 @@ in6_ioctl_change_ifaddr(u_long cmd, caddr_t data, struct ifnet *ifp)
 			break;
 		}
 		if_addrhooks_run(ifp);
+		break;
+
+	case SIOCALABEL:
+		if (ia6 == NULL)
+			error = ESRCH;
+		else if (ifra->ifra_label[0] == '\0')
+			error = EINVAL;
+		else {
+			struct ifaddr *ifa;
+
+			ifa = &ia6->ia_ifa;
+			strlcpy(ifa->ifa_label, ifra->ifra_label,
+			    sizeof(ifa->ifa_label));
+			if_addrhooks_run(ifp);
+		}
+		break;
+	case SIOCDLABEL:
+		if (ia6 == NULL)
+			error = ESRCH;
+		else {
+			struct ifaddr *ifa;
+
+			ifa = &ia6->ia_ifa;
+			memset(ifa->ifa_label, 0, sizeof(ifa->ifa_label));
+			if_addrhooks_run(ifp);
+		}
 		break;
 	}
 
@@ -499,6 +531,14 @@ in6_ioctl_get(u_long cmd, caddr_t data, struct ifnet *ifp)
 			} else
 				retlt->ia6t_preferred = maxexpire;
 		}
+		break;
+
+	case SIOCGLABEL:
+		if (ia6 == NULL)
+			error = ESRCH;
+		else
+			strlcpy(ifr->ifr_label, ia6->ia_ifa.ifa_label,
+			    sizeof(ifr->ifr_label));
 		break;
 
 	default:

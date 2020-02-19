@@ -245,6 +245,7 @@ struct	in6_ifreq {
 		struct in6_addrlifetime ifru_lifetime;
 		struct in6_ifstat ifru_stat;
 		struct icmp6_ifstat ifru_icmp6stat;
+		char	ifru_label[IFNAMSIZ];
 	} ifr_ifru;
 };
 
