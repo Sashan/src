@@ -6441,16 +6441,34 @@ setignore(const char *id, int param)
 void
 setlabel(const char *val, int d)
 {
-	strlcpy(in_addreq.ifra_label, val, sizeof(in_addreq.ifra_label));
-	strlcpy(in6_addreq.ifra_label, val, sizeof(in6_addreq.ifra_label));
+	switch (afp->af_af) {
+	case AF_INET:
+		strlcpy(in_addreq.ifra_label, val,
+		    sizeof(in_addreq.ifra_label));
+		break;
+	case AF_INET6:
+		strlcpy(in6_addreq.ifra_label, val,
+		    sizeof(in6_addreq.ifra_label));
+		break;
+	default:
+		warn("%s: unknown family", __func__);
+	}
 }
 
 /* ARGSUSED */
 void
 clrlabel(const char *val, int d)
 {
-	memset(in_addreq.ifra_label, 0, sizeof(in_addreq.ifra_label));
-	memset(in6_addreq.ifra_label, 0, sizeof(in6_addreq.ifra_label));
+	switch (afp->af_af) {
+	case AF_INET:
+		memset(in_addreq.ifra_label, 0, sizeof(in_addreq.ifra_label));
+		break;
+	case AF_INET6:
+		memset(in6_addreq.ifra_label, 0, sizeof(in6_addreq.ifra_label));
+		break;
+	default:
+		warn("%s: unknown family (%d)", __func__, afp->af_af);
+	}
 }
 
 void
