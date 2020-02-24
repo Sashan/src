@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.7 2020/01/17 10:01:18 tobhe Exp $
+#	$OpenBSD: Makefile,v 1.10 2020/02/21 15:21:47 tobhe Exp $
 
 # Copyright (c) 2020 Tobias Heider <tobhe@openbsd.org>
 #
@@ -31,29 +31,40 @@ regress:
 .endif
 
 TEST_FLOWS = \
+	[ -z $$tmode ] && tmode=tunnel; \
 	success=false; \
 	count=0; \
 	while [[ $$count -le 3 ]]; do \
-		sasleft=`ssh ${LEFT_SSH} ipsecctl -sa`; \
-		flowleft=`echo "$$sasleft" \
+		ipsecctlleft=`ssh ${LEFT_SSH} ipsecctl -sa`; \
+		ipsecctlright=`ssh ${RIGHT_SSH} ipsecctl -sa`; \
+		flowleft=`echo "$$ipsecctlleft" \
 		    | sed -n "/^flow $$flowtype in from ${RIGHT_ADDR} to ${LEFT_ADDR}/p"`; \
-		sasright=`ssh ${RIGHT_SSH} ipsecctl -sa`; \
-		flowright=`echo "$$sasright" \
+		flowright=`echo "$$ipsecctlright" \
 		    | sed -n "/^flow $$flowtype in from ${LEFT_ADDR} to ${RIGHT_ADDR}/p"`; \
-		if [[ -n "$$flowleft" && -n "$$flowright" ]]; then \
+		saleft_rtol=`echo "$$ipsecctlleft" \
+		    | sed -n "/^$$flowtype $$tmode from ${RIGHT_ADDR} to ${LEFT_ADDR}/p"`; \
+		saleft_ltor=`echo "$$ipsecctlleft" \
+		    | sed -n "/^$$flowtype $$tmode from ${LEFT_ADDR} to ${RIGHT_ADDR}/p"`; \
+		saright_rtol=`echo "$$ipsecctlright" \
+		    | sed -n "/^$$flowtype $$tmode from ${RIGHT_ADDR} to ${LEFT_ADDR}/p"`; \
+		saright_ltor=`echo "$$ipsecctlright" \
+		    | sed -n "/^$$flowtype $$tmode from ${LEFT_ADDR} to ${RIGHT_ADDR}/p"`; \
+		if [[ -n "$$saleft_ltor" && -n "$$saleft_rtol" && \
+		     -n "$$saright_ltor" && -n "$$saright_rtol" && \
+		     -n "$$flowleft" && -n "$$flowright" ]]; then \
 			 success=true; \
 			 break; \
 		fi; \
 		let count=$$count+1; \
 	done; \
 	if [[ "$$success" = false ]]; then \
-		echo "error: SAs not found : $$sasleft $$sasright"; \
+		echo "error: SAs not found:\n$$ipsecctlleft\n$$ipsecctlright"; \
 		exit 1; \
 	fi
 
 TEST_PING = \
-	dump=`ssh ${LEFT_SSH} "tcpdump -c2 -i enc0 -w '/tmp/test.pcap' > /dev/null & \
-	     ping -c 5 ${RIGHT_ADDR} > /dev/null && tcpdump -r /tmp/test.pcap" && rm -f /tmp/test.pcap`; \
+	dump=`ssh ${LEFT_SSH} "tcpdump -n -c2 -i enc0 -w '/tmp/test.pcap' > /dev/null & \
+	     ping -c 5 ${RIGHT_ADDR} > /dev/null && tcpdump -n -r /tmp/test.pcap" && rm -f /tmp/test.pcap`; \
 	rtol=`echo "$$dump" \
 	    | sed -n "/(authentic,confidential): SPI 0x[0-9a-f]\{8\}: ${LEFT_ADDR} > ${RIGHT_ADDR}/p"`; \
 	ltor=`echo "$$dump" \
@@ -79,6 +90,7 @@ SETUP_CONFIGS = \
 		fragstr="set fragmentation"; \
 	fi; \
 	echo "FRAGMENTATION=\"$$fragstr\"" > $@_left.conf; \
+	echo "TMODE=\"$$tmode\"" >> $@_left.conf; \
 	echo "LOCAL_ADDR=\"${LEFT_ADDR}\"" >> $@_left.conf; \
 	echo "PEER_ADDR=\"${RIGHT_ADDR}\"" >> $@_left.conf; \
 	echo "IPCOMP=\"$$ipcomp\"" >> $@_left.conf; \
@@ -88,6 +100,7 @@ SETUP_CONFIGS = \
 	chmod 0600 $@_left.conf; \
 	echo "cd /tmp\nput $@_left.conf test.conf" | sftp -q ${LEFT_SSH}; \
 	echo "FRAGMENTATION=\"$$fragstr\"" > $@_right.conf; \
+	echo "TMODE=\"$$tmode\"" >> $@_right.conf; \
 	echo "LOCAL_ADDR=\"${RIGHT_ADDR}\"" >> $@_right.conf; \
 	echo "PEER_ADDR=\"${LEFT_ADDR}\"" >> $@_right.conf; \
 	echo "IPCOMP=\"$$ipcomp\"" >> $@_right.conf; \
@@ -140,7 +153,9 @@ setup_certs: ca-both.crt left-from-ca-both.crt left.key right-from-ca-both.crt \
 	    put right-from-ca-left.crt certs\n \
 	    put right.key private/local.key\n \
 	    put ca-right.crt ca\n \
-	    put ca-both.crt ca\n" | sftp ${RIGHT_SSH} -q
+	    put ca-both.crt ca\n" | sftp ${RIGHT_SSH} -q; \
+	ssh ${LEFT_SSH} "openssl rsa -in /etc/iked/private/local.key -pubout > /etc/iked/local.pub"; \
+	ssh ${RIGHT_SSH} "openssl rsa -in /etc/iked/private/local.key -pubout > /etc/iked/local.pub"
 
 .PHONY: setup_certs
 
@@ -226,6 +241,19 @@ run-fragmentation:
 	    ${SETUP_CONFIGS}
 	${SETUP_START}
 	flowtype=esp; ${TEST_FLOWS}
+	${TEST_PING}
+
+REGRESS_TARGETS += run-transport
+run-transport:
+	@echo '======= $@ ========'
+	flowtype=esp; \
+	tmode=transport; \
+	leftid=left-from-ca-both; \
+	rightid=right-from-ca-both; \
+	    ${SETUP_CONFIGS}
+	${SETUP_START}
+	tmode=transport; flowtype=esp; \
+	  ${TEST_FLOWS}
 	${TEST_PING}
 
 REGRESS_TARGETS += run-ipcomp

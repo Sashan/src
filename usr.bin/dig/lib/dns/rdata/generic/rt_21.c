@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: rt_21.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: rt_21.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /* reviewed: Thu Mar 16 15:02:31 PST 2000 by brister */
 
@@ -24,43 +24,6 @@
 #define RDATA_GENERIC_RT_21_C
 
 #define RRTYPE_RT_ATTRIBUTES (0)
-
-static inline isc_result_t
-fromtext_rt(ARGS_FROMTEXT) {
-	isc_token_t token;
-	dns_name_t name;
-	isc_buffer_t buffer;
-	isc_boolean_t ok;
-
-	REQUIRE(type == dns_rdatatype_rt);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(callbacks);
-
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	if (token.value.as_ulong > 0xffffU)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint16_tobuffer(token.value.as_ulong, target));
-
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-
-	dns_name_init(&name, NULL);
-	buffer_fromregion(&buffer, &token.value.as_region);
-	if (origin == NULL)
-		origin = dns_rootname;
-	RETTOK(dns_name_fromtext(&name, &buffer, origin, options, target));
-	ok = ISC_TRUE;
-	if ((options & DNS_RDATA_CHECKNAMES) != 0)
-		ok = dns_name_ishostname(&name, ISC_FALSE);
-	if (!ok && (options & DNS_RDATA_CHECKNAMESFAIL) != 0)
-		RETTOK(DNS_R_BADNAME);
-	if (!ok && callbacks != NULL)
-		warn_badname(&name, lexer, callbacks);
-	return (ISC_R_SUCCESS);
-}
 
 static inline isc_result_t
 totext_rt(ARGS_TOTEXT) {
@@ -226,49 +189,6 @@ freestruct_rt(ARGS_FREESTRUCT) {
 	dns_name_free(&rt->host);
 }
 
-static inline isc_result_t
-additionaldata_rt(ARGS_ADDLDATA) {
-	dns_name_t name;
-	dns_offsets_t offsets;
-	isc_region_t region;
-	isc_result_t result;
-
-	REQUIRE(rdata->type == dns_rdatatype_rt);
-
-	dns_name_init(&name, offsets);
-	dns_rdata_toregion(rdata, &region);
-	isc_region_consume(&region, 2);
-	dns_name_fromregion(&name, &region);
-
-	result = (add)(arg, &name, dns_rdatatype_x25);
-	if (result != ISC_R_SUCCESS)
-		return (result);
-	result = (add)(arg, &name, dns_rdatatype_isdn);
-	if (result != ISC_R_SUCCESS)
-		return (result);
-	return ((add)(arg, &name, dns_rdatatype_a));
-}
-
-static inline isc_result_t
-digest_rt(ARGS_DIGEST) {
-	isc_region_t r1, r2;
-	isc_result_t result;
-	dns_name_t name;
-
-	REQUIRE(rdata->type == dns_rdatatype_rt);
-
-	dns_rdata_toregion(rdata, &r1);
-	r2 = r1;
-	isc_region_consume(&r2, 2);
-	r1.length = 2;
-	result = (digest)(arg, &r1);
-	if (result != ISC_R_SUCCESS)
-		return (result);
-	dns_name_init(&name, NULL);
-	dns_name_fromregion(&name, &r2);
-	return (dns_name_digest(&name, digest, arg));
-}
-
 static inline isc_boolean_t
 checkowner_rt(ARGS_CHECKOWNER) {
 
@@ -279,27 +199,6 @@ checkowner_rt(ARGS_CHECKOWNER) {
 	UNUSED(rdclass);
 	UNUSED(wildcard);
 
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_rt(ARGS_CHECKNAMES) {
-	isc_region_t region;
-	dns_name_t name;
-
-	REQUIRE(rdata->type == dns_rdatatype_rt);
-
-	UNUSED(owner);
-
-	dns_rdata_toregion(rdata, &region);
-	isc_region_consume(&region, 2);
-	dns_name_init(&name, NULL);
-	dns_name_fromregion(&name, &region);
-	if (!dns_name_ishostname(&name, ISC_FALSE)) {
-		if (bad != NULL)
-			dns_name_clone(&name, bad);
-		return (ISC_FALSE);
-	}
 	return (ISC_TRUE);
 }
 

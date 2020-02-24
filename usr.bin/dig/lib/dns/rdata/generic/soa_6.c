@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: soa_6.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: soa_6.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /* Reviewed: Thu Mar 16 15:18:32 PST 2000 by explorer */
 
@@ -22,65 +22,6 @@
 #define RDATA_GENERIC_SOA_6_C
 
 #define RRTYPE_SOA_ATTRIBUTES (DNS_RDATATYPEATTR_SINGLETON)
-
-static inline isc_result_t
-fromtext_soa(ARGS_FROMTEXT) {
-	isc_token_t token;
-	dns_name_t name;
-	isc_buffer_t buffer;
-	int i;
-	uint32_t n;
-	isc_boolean_t ok;
-
-	REQUIRE(type == dns_rdatatype_soa);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(callbacks);
-
-	if (origin == NULL)
-		origin = dns_rootname;
-
-	for (i = 0; i < 2; i++) {
-		RETERR(isc_lex_getmastertoken(lexer, &token,
-					      isc_tokentype_string,
-					      ISC_FALSE));
-
-		dns_name_init(&name, NULL);
-		buffer_fromregion(&buffer, &token.value.as_region);
-		RETTOK(dns_name_fromtext(&name, &buffer, origin,
-					 options, target));
-		ok = ISC_TRUE;
-		if ((options & DNS_RDATA_CHECKNAMES) != 0)
-			switch (i) {
-			case 0:
-				ok = dns_name_ishostname(&name, ISC_FALSE);
-				break;
-			case 1:
-				ok = dns_name_ismailbox(&name);
-				break;
-
-			}
-		if (!ok && (options & DNS_RDATA_CHECKNAMESFAIL) != 0)
-			RETTOK(DNS_R_BADNAME);
-		if (!ok && callbacks != NULL)
-			warn_badname(&name, lexer, callbacks);
-	}
-
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	RETERR(uint32_tobuffer(token.value.as_ulong, target));
-
-	for (i = 0; i < 4; i++) {
-		RETERR(isc_lex_getmastertoken(lexer, &token,
-					      isc_tokentype_string,
-					      ISC_FALSE));
-		RETTOK(dns_counter_fromtext(&token.value.as_textregion, &n));
-		RETERR(uint32_tobuffer(n, target));
-	}
-
-	return (ISC_R_SUCCESS);
-}
 
 static const char *soa_fieldnames[5] = {
 	"serial", "refresh", "retry", "expire", "minimum"
@@ -362,39 +303,6 @@ freestruct_soa(ARGS_FREESTRUCT) {
 	dns_name_free(&soa->contact);
 }
 
-static inline isc_result_t
-additionaldata_soa(ARGS_ADDLDATA) {
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	REQUIRE(rdata->type == dns_rdatatype_soa);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_soa(ARGS_DIGEST) {
-	isc_region_t r;
-	dns_name_t name;
-
-	REQUIRE(rdata->type == dns_rdatatype_soa);
-
-	dns_rdata_toregion(rdata, &r);
-
-	dns_name_init(&name, NULL);
-	dns_name_fromregion(&name, &r);
-	RETERR(dns_name_digest(&name, digest, arg));
-	isc_region_consume(&r, name_length(&name));
-
-	dns_name_init(&name, NULL);
-	dns_name_fromregion(&name, &r);
-	RETERR(dns_name_digest(&name, digest, arg));
-	isc_region_consume(&r, name_length(&name));
-
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_soa(ARGS_CHECKOWNER) {
 
@@ -405,33 +313,6 @@ checkowner_soa(ARGS_CHECKOWNER) {
 	UNUSED(rdclass);
 	UNUSED(wildcard);
 
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_soa(ARGS_CHECKNAMES) {
-	isc_region_t region;
-	dns_name_t name;
-
-	REQUIRE(rdata->type == dns_rdatatype_soa);
-
-	UNUSED(owner);
-
-	dns_rdata_toregion(rdata, &region);
-	dns_name_init(&name, NULL);
-	dns_name_fromregion(&name, &region);
-	if (!dns_name_ishostname(&name, ISC_FALSE)) {
-		if (bad != NULL)
-			dns_name_clone(&name, bad);
-		return (ISC_FALSE);
-	}
-	isc_region_consume(&region, name_length(&name));
-	dns_name_fromregion(&name, &region);
-	if (!dns_name_ismailbox(&name)) {
-		if (bad != NULL)
-			dns_name_clone(&name, bad);
-		return (ISC_FALSE);
-	}
 	return (ISC_TRUE);
 }
 

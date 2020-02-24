@@ -20,21 +20,6 @@
 #define RRTYPE_AVC_ATTRIBUTES (0)
 
 static inline isc_result_t
-fromtext_avc(ARGS_FROMTEXT) {
-
-	REQUIRE(type == dns_rdatatype_avc);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(origin);
-	UNUSED(options);
-	UNUSED(callbacks);
-
-	return (generic_fromtext_txt(rdclass, type, lexer, origin, options,
-				     target, callbacks));
-}
-
-static inline isc_result_t
 totext_avc(ARGS_TOTEXT) {
 
 	UNUSED(tctx);
@@ -114,28 +99,6 @@ freestruct_avc(ARGS_FREESTRUCT) {
 	generic_freestruct_txt(source);
 }
 
-static inline isc_result_t
-additionaldata_avc(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_avc);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_avc(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_avc);
-
-	dns_rdata_toregion(rdata, &r);
-
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_avc(ARGS_CHECKOWNER) {
 
@@ -145,18 +108,6 @@ checkowner_avc(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_avc(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_avc);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

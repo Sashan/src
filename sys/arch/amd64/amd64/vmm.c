@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmm.c,v 1.259 2020/02/08 11:58:39 jasper Exp $	*/
+/*	$OpenBSD: vmm.c,v 1.262 2020/02/17 18:16:10 pd Exp $	*/
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -201,6 +201,7 @@ void vmx_setmsrbrw(struct vcpu *, uint32_t);
 void svm_set_clean(struct vcpu *, uint32_t);
 void svm_set_dirty(struct vcpu *, uint32_t);
 
+int vmm_gpa_is_valid(struct vcpu *vcpu, paddr_t gpa, size_t obj_size);
 void vmm_init_pvclock(struct vcpu *, paddr_t);
 int vmm_update_pvclock(struct vcpu *);
 
@@ -3940,7 +3941,7 @@ vcpu_must_stop(struct vcpu *vcpu)
 
 	if (vcpu->vc_state == VCPU_STATE_REQTERM)
 		return (1);
-	if (CURSIG(p) != 0)
+	if (SIGPENDING(p) != 0)
 		return (1);
 	return (0);
 }
@@ -6041,19 +6042,30 @@ svm_handle_xsetbv(struct vcpu *vcpu)
 int
 vmm_handle_xsetbv(struct vcpu *vcpu, uint64_t *rax)
 {
-	uint64_t *rdx, *rcx;
+	uint64_t *rdx, *rcx, val;
 
 	rcx = &vcpu->vc_gueststate.vg_rcx;
 	rdx = &vcpu->vc_gueststate.vg_rdx;
 
+	if (vmm_get_guest_cpu_cpl(vcpu) != 0) {
+		DPRINTF("%s: guest cpl not zero\n", __func__);
+		return (vmm_inject_gp(vcpu));
+	}
+
 	if (*rcx != 0) {
 		DPRINTF("%s: guest specified invalid xcr register number "
 		    "%lld\n", __func__, *rcx);
-		/* XXX this should #GP(0) instead of killing the guest */
-		return (EINVAL);
+		return (vmm_inject_gp(vcpu));
 	}
 
-	vcpu->vc_gueststate.vg_xcr0 = *rax + (*rdx << 32);
+	val = *rax + (*rdx << 32);
+	if (val & ~xsave_mask) {
+		DPRINTF("%s: guest specified xcr0 outside xsave_mask %lld\n",
+		    __func__, val);
+		return (vmm_inject_gp(vcpu));
+	}
+
+	vcpu->vc_gueststate.vg_xcr0 = val;
 
 	return (0);
 }
@@ -6844,9 +6856,45 @@ vmm_free_vpid(uint16_t vpid)
 	rw_exit_write(&vmm_softc->vpid_lock);
 }
 
+
+/* vmm_gpa_is_valid
+ *
+ * Check if the given gpa is within guest memory space.
+ *
+ * Parameters:
+ * 	vcpu: The virtual cpu we are running on.
+ * 	gpa: The address to check.
+ * 	obj_size: The size of the object assigned to gpa
+ *
+ * Return values:
+ * 	1: gpa is within the memory ranges allocated for the vcpu
+ * 	0: otherwise
+ */
+int
+vmm_gpa_is_valid(struct vcpu *vcpu, paddr_t gpa, size_t obj_size)
+{
+	struct vm *vm = vcpu->vc_parent;
+	struct vm_mem_range *vmr;
+	for (size_t i = 0; i < vm->vm_nmemranges; ++i) {
+		vmr = &vm->vm_memranges[i];
+		if (vmr->vmr_gpa <= gpa &&
+		    gpa < (vmr->vmr_gpa + vmr->vmr_size - obj_size)) {
+		    return 1;
+		}
+	}
+	return 0;
+}
+
 void
 vmm_init_pvclock(struct vcpu *vcpu, paddr_t gpa)
 {
+	if (!vmm_gpa_is_valid(vcpu, gpa & 0xFFFFFFFFFFFFFFF0,
+	        sizeof(struct pvclock_time_info))) {
+		/* XXX: Kill guest? */
+		vmm_inject_gp(vcpu);
+		return;
+	}
+
 	vcpu->vc_pvclock_system_gpa = gpa;
 	if (tsc_frequency > 0)
 		vcpu->vc_pvclock_system_tsc_mul =

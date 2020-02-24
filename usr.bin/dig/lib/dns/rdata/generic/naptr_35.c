@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: naptr_35.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: naptr_35.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /* Reviewed: Thu Mar 16 16:52:50 PST 2000 by bwelling */
 
@@ -116,73 +116,6 @@ txt_valid_regex(const unsigned char *txt) {
 	n = isc_regex_validate(regex);
 	if (n < 0 || nsub > (unsigned int)n)
 		return (DNS_R_SYNTAX);
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-fromtext_naptr(ARGS_FROMTEXT) {
-	isc_token_t token;
-	dns_name_t name;
-	isc_buffer_t buffer;
-	unsigned char *regex;
-
-	REQUIRE(type == dns_rdatatype_naptr);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(callbacks);
-
-	/*
-	 * Order.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	if (token.value.as_ulong > 0xffffU)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint16_tobuffer(token.value.as_ulong, target));
-
-	/*
-	 * Preference.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	if (token.value.as_ulong > 0xffffU)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint16_tobuffer(token.value.as_ulong, target));
-
-	/*
-	 * Flags.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_qstring,
-				      ISC_FALSE));
-	RETTOK(txt_fromtext(&token.value.as_textregion, target));
-
-	/*
-	 * Service.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_qstring,
-				      ISC_FALSE));
-	RETTOK(txt_fromtext(&token.value.as_textregion, target));
-
-	/*
-	 * Regexp.
-	 */
-	regex = isc_buffer_used(target);
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_qstring,
-				      ISC_FALSE));
-	RETTOK(txt_fromtext(&token.value.as_textregion, target));
-	RETTOK(txt_valid_regex(regex));
-
-	/*
-	 * Replacement.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	dns_name_init(&name, NULL);
-	buffer_fromregion(&buffer, &token.value.as_region);
-	if (origin == NULL)
-		origin = dns_rootname;
-	RETTOK(dns_name_fromtext(&name, &buffer, origin, options, target));
 	return (ISC_R_SUCCESS);
 }
 
@@ -512,121 +445,6 @@ freestruct_naptr(ARGS_FREESTRUCT) {
 	dns_name_free(&naptr->replacement);
 }
 
-static inline isc_result_t
-additionaldata_naptr(ARGS_ADDLDATA) {
-	dns_name_t name;
-	dns_offsets_t offsets;
-	isc_region_t sr;
-	dns_rdatatype_t atype;
-	unsigned int i, flagslen;
-	char *cp;
-
-	REQUIRE(rdata->type == dns_rdatatype_naptr);
-
-	/*
-	 * Order, preference.
-	 */
-	dns_rdata_toregion(rdata, &sr);
-	isc_region_consume(&sr, 4);
-
-	/*
-	 * Flags.
-	 */
-	atype = 0;
-	flagslen = sr.base[0];
-	cp = (char *)&sr.base[1];
-	for (i = 0; i < flagslen; i++, cp++) {
-		if (*cp == 'S' || *cp == 's') {
-			atype = dns_rdatatype_srv;
-			break;
-		}
-		if (*cp == 'A' || *cp == 'a') {
-			atype = dns_rdatatype_a;
-			break;
-		}
-	}
-	isc_region_consume(&sr, flagslen + 1);
-
-	/*
-	 * Service.
-	 */
-	isc_region_consume(&sr, sr.base[0] + 1);
-
-	/*
-	 * Regexp.
-	 */
-	isc_region_consume(&sr, sr.base[0] + 1);
-
-	/*
-	 * Replacement.
-	 */
-	dns_name_init(&name, offsets);
-	dns_name_fromregion(&name, &sr);
-
-	if (atype != 0)
-		return ((add)(arg, &name, atype));
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_naptr(ARGS_DIGEST) {
-	isc_region_t r1, r2;
-	unsigned int length, n;
-	isc_result_t result;
-	dns_name_t name;
-
-	REQUIRE(rdata->type == dns_rdatatype_naptr);
-
-	dns_rdata_toregion(rdata, &r1);
-	r2 = r1;
-	length = 0;
-
-	/*
-	 * Order, preference.
-	 */
-	length += 4;
-	isc_region_consume(&r2, 4);
-
-	/*
-	 * Flags.
-	 */
-	n = r2.base[0] + 1;
-	length += n;
-	isc_region_consume(&r2, n);
-
-	/*
-	 * Service.
-	 */
-	n = r2.base[0] + 1;
-	length += n;
-	isc_region_consume(&r2, n);
-
-	/*
-	 * Regexp.
-	 */
-	n = r2.base[0] + 1;
-	length += n;
-	isc_region_consume(&r2, n);
-
-	/*
-	 * Digest the RR up to the replacement name.
-	 */
-	r1.length = length;
-	result = (digest)(arg, &r1);
-	if (result != ISC_R_SUCCESS)
-		return (result);
-
-	/*
-	 * Replacement.
-	 */
-
-	dns_name_init(&name, NULL);
-	dns_name_fromregion(&name, &r2);
-
-	return (dns_name_digest(&name, digest, arg));
-}
-
 static inline isc_boolean_t
 checkowner_naptr(ARGS_CHECKOWNER) {
 
@@ -636,18 +454,6 @@ checkowner_naptr(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_naptr(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_naptr);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

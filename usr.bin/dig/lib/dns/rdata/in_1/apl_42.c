@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: apl_42.c,v 1.2 2020/02/12 13:05:04 jsg Exp $ */
+/* $Id: apl_42.c,v 1.4 2020/02/23 19:54:26 jung Exp $ */
 
 /* RFC3123 */
 
@@ -22,89 +22,6 @@
 #define RDATA_IN_1_APL_42_C
 
 #define RRTYPE_APL_ATTRIBUTES (0)
-
-static inline isc_result_t
-fromtext_in_apl(ARGS_FROMTEXT) {
-	isc_token_t token;
-	unsigned char addr[16];
-	unsigned long afi;
-	uint8_t prefix;
-	uint8_t len;
-	isc_boolean_t neg;
-	char *cp, *ap, *slash;
-	int n;
-
-	REQUIRE(type == dns_rdatatype_apl);
-	REQUIRE(rdclass == dns_rdataclass_in);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(origin);
-	UNUSED(options);
-	UNUSED(callbacks);
-
-	do {
-		RETERR(isc_lex_getmastertoken(lexer, &token,
-					      isc_tokentype_string, ISC_TRUE));
-		if (token.type != isc_tokentype_string)
-			break;
-
-		cp = DNS_AS_STR(token);
-		neg = ISC_TF(*cp == '!');
-		if (neg)
-			cp++;
-		afi = strtoul(cp, &ap, 10);
-		if (*ap++ != ':' || cp == ap)
-			RETTOK(DNS_R_SYNTAX);
-		if (afi > 0xffffU)
-			RETTOK(ISC_R_RANGE);
-		slash = strchr(ap, '/');
-		if (slash == NULL || slash == ap)
-			RETTOK(DNS_R_SYNTAX);
-		RETTOK(isc_parse_uint8(&prefix, slash + 1, 10));
-		switch (afi) {
-		case 1:
-			*slash = '\0';
-			n = inet_pton(AF_INET, ap, addr);
-			*slash = '/';
-			if (n != 1)
-				RETTOK(DNS_R_BADDOTTEDQUAD);
-			if (prefix > 32)
-				RETTOK(ISC_R_RANGE);
-			for (len = 4; len > 0; len--)
-				if (addr[len - 1] != 0)
-					break;
-			break;
-
-		case 2:
-			*slash = '\0';
-			n = inet_pton(AF_INET6, ap, addr);
-			*slash = '/';
-			if (n != 1)
-				RETTOK(DNS_R_BADAAAA);
-			if (prefix > 128)
-				RETTOK(ISC_R_RANGE);
-			for (len = 16; len > 0; len--)
-				if (addr[len - 1] != 0)
-					break;
-			break;
-
-		default:
-			RETTOK(ISC_R_NOTIMPLEMENTED);
-		}
-		RETERR(uint16_tobuffer(afi, target));
-		RETERR(uint8_tobuffer(prefix, target));
-		RETERR(uint8_tobuffer(len | ((neg) ? 0x80 : 0), target));
-		RETERR(mem_tobuffer(target, addr, len));
-	} while (1);
-
-	/*
-	 * Let upper layer handle eol/eof.
-	 */
-	isc_lex_ungettoken(lexer, &token);
-
-	return (ISC_R_SUCCESS);
-}
 
 static inline isc_result_t
 totext_in_apl(ARGS_TOTEXT) {
@@ -299,29 +216,6 @@ freestruct_in_apl(ARGS_FREESTRUCT) {
 		free(apl->apl);
 }
 
-static inline isc_result_t
-additionaldata_in_apl(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_apl);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	(void)add;
-	(void)arg;
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_in_apl(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_apl);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	dns_rdata_toregion(rdata, &r);
-
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_in_apl(ARGS_CHECKOWNER) {
 
@@ -332,20 +226,6 @@ checkowner_in_apl(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-
-static inline isc_boolean_t
-checknames_in_apl(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_apl);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

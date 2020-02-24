@@ -20,61 +20,6 @@
 #define RRTYPE_DOA_ATTRIBUTES (0)
 
 static inline isc_result_t
-fromtext_doa(ARGS_FROMTEXT) {
-	isc_token_t token;
-
-	REQUIRE(type == dns_rdatatype_doa);
-
-	UNUSED(rdclass);
-	UNUSED(origin);
-	UNUSED(options);
-	UNUSED(callbacks);
-
-	/*
-	 * DOA-ENTERPRISE
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	RETERR(uint32_tobuffer(token.value.as_ulong, target));
-
-	/*
-	 * DOA-TYPE
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	RETERR(uint32_tobuffer(token.value.as_ulong, target));
-
-	/*
-	 * DOA-LOCATION
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	if (token.value.as_ulong > 0xffU) {
-		RETTOK(ISC_R_RANGE);
-	}
-	RETERR(uint8_tobuffer(token.value.as_ulong, target));
-
-	/*
-	 * DOA-MEDIA-TYPE
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_qstring,
-				      ISC_FALSE));
-	RETTOK(txt_fromtext(&token.value.as_textregion, target));
-
-	/*
-	 * DOA-DATA
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	if (strcmp(DNS_AS_STR(token), "-") == 0) {
-		return (ISC_R_SUCCESS);
-	} else {
-		isc_lex_ungettoken(lexer, &token);
-		return (isc_base64_tobuffer(lexer, target, -1));
-	}
-}
-
-static inline isc_result_t
 totext_doa(ARGS_TOTEXT) {
 	char buf[sizeof("4294967295 ")];
 	isc_region_t region;
@@ -297,28 +242,6 @@ freestruct_doa(ARGS_FREESTRUCT) {
 	free(doa->data);
 }
 
-static inline isc_result_t
-additionaldata_doa(ARGS_ADDLDATA) {
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	REQUIRE(rdata->type == dns_rdatatype_doa);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_doa(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_doa);
-
-	dns_rdata_toregion(rdata, &r);
-
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_doa(ARGS_CHECKOWNER) {
 	UNUSED(name);
@@ -327,17 +250,6 @@ checkowner_doa(ARGS_CHECKOWNER) {
 	UNUSED(wildcard);
 
 	REQUIRE(type == dns_rdatatype_doa);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_doa(ARGS_CHECKNAMES) {
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
-
-	REQUIRE(rdata->type == dns_rdatatype_doa);
 
 	return (ISC_TRUE);
 }

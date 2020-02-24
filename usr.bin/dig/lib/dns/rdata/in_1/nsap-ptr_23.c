@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: nsap-ptr_23.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: nsap-ptr_23.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /* Reviewed: Fri Mar 17 10:16:02 PST 2000 by gson */
 
@@ -24,30 +24,6 @@
 #define RDATA_IN_1_NSAP_PTR_23_C
 
 #define RRTYPE_NSAP_PTR_ATTRIBUTES (0)
-
-static inline isc_result_t
-fromtext_in_nsap_ptr(ARGS_FROMTEXT) {
-	isc_token_t token;
-	dns_name_t name;
-	isc_buffer_t buffer;
-
-	REQUIRE(type == dns_rdatatype_nsap_ptr);
-	REQUIRE(rdclass == dns_rdataclass_in);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(callbacks);
-
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-
-	dns_name_init(&name, NULL);
-	buffer_fromregion(&buffer, &token.value.as_region);
-	if (origin == NULL)
-		origin = dns_rootname;
-	RETTOK(dns_name_fromtext(&name, &buffer, origin, options, target));
-	return (ISC_R_SUCCESS);
-}
 
 static inline isc_result_t
 totext_in_nsap_ptr(ARGS_TOTEXT) {
@@ -183,33 +159,6 @@ freestruct_in_nsap_ptr(ARGS_FREESTRUCT) {
 	dns_name_free(&nsap_ptr->owner);
 }
 
-static inline isc_result_t
-additionaldata_in_nsap_ptr(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_nsap_ptr);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_in_nsap_ptr(ARGS_DIGEST) {
-	isc_region_t r;
-	dns_name_t name;
-
-	REQUIRE(rdata->type == dns_rdatatype_nsap_ptr);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	dns_rdata_toregion(rdata, &r);
-	dns_name_init(&name, NULL);
-	dns_name_fromregion(&name, &r);
-
-	return (dns_name_digest(&name, digest, arg));
-}
-
 static inline isc_boolean_t
 checkowner_in_nsap_ptr(ARGS_CHECKOWNER) {
 
@@ -220,19 +169,6 @@ checkowner_in_nsap_ptr(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_in_nsap_ptr(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_nsap_ptr);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

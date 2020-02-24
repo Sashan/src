@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: dhcid_49.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: dhcid_49.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /* RFC 4701 */
 
@@ -22,21 +22,6 @@
 #define RDATA_IN_1_DHCID_49_C 1
 
 #define RRTYPE_DHCID_ATTRIBUTES 0
-
-static inline isc_result_t
-fromtext_in_dhcid(ARGS_FROMTEXT) {
-
-	REQUIRE(type == dns_rdatatype_dhcid);
-	REQUIRE(rdclass == dns_rdataclass_in);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(origin);
-	UNUSED(options);
-	UNUSED(callbacks);
-
-	return (isc_base64_tobuffer(lexer, target, -1));
-}
 
 static inline isc_result_t
 totext_in_dhcid(ARGS_TOTEXT) {
@@ -174,30 +159,6 @@ freestruct_in_dhcid(ARGS_FREESTRUCT) {
 		free(dhcid->dhcid);
 }
 
-static inline isc_result_t
-additionaldata_in_dhcid(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_dhcid);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_in_dhcid(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_dhcid);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	dns_rdata_toregion(rdata, &r);
-
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_in_dhcid(ARGS_CHECKOWNER) {
 
@@ -208,19 +169,6 @@ checkowner_in_dhcid(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_in_dhcid(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_dhcid);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: sshfp_44.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: sshfp_44.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /* RFC 4255 */
 
@@ -22,42 +22,6 @@
 #define RDATA_GENERIC_SSHFP_44_C
 
 #define RRTYPE_SSHFP_ATTRIBUTES (0)
-
-static inline isc_result_t
-fromtext_sshfp(ARGS_FROMTEXT) {
-	isc_token_t token;
-
-	REQUIRE(type == dns_rdatatype_sshfp);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(origin);
-	UNUSED(options);
-	UNUSED(callbacks);
-
-	/*
-	 * Algorithm.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	if (token.value.as_ulong > 0xffU)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint8_tobuffer(token.value.as_ulong, target));
-
-	/*
-	 * Digest type.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	if (token.value.as_ulong > 0xffU)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint8_tobuffer(token.value.as_ulong, target));
-
-	/*
-	 * Digest.
-	 */
-	return (isc_hex_tobuffer(lexer, target, -1));
-}
 
 static inline isc_result_t
 totext_sshfp(ARGS_TOTEXT) {
@@ -209,28 +173,6 @@ freestruct_sshfp(ARGS_FREESTRUCT) {
 		free(sshfp->digest);
 }
 
-static inline isc_result_t
-additionaldata_sshfp(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_sshfp);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_sshfp(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_sshfp);
-
-	dns_rdata_toregion(rdata, &r);
-
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_sshfp(ARGS_CHECKOWNER) {
 
@@ -240,18 +182,6 @@ checkowner_sshfp(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_sshfp(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_sshfp);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

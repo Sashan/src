@@ -27,15 +27,6 @@
 #include <dns/ds.h>
 
 static inline isc_result_t
-fromtext_cds(ARGS_FROMTEXT) {
-
-	REQUIRE(type == dns_rdatatype_cds);
-
-	return (generic_fromtext_ds(rdclass, type, lexer, origin, options,
-				    target, callbacks));
-}
-
-static inline isc_result_t
 totext_cds(ARGS_TOTEXT) {
 
 	REQUIRE(rdata->type == dns_rdatatype_cds);
@@ -117,28 +108,6 @@ freestruct_cds(ARGS_FREESTRUCT) {
 	free(ds->digest);
 }
 
-static inline isc_result_t
-additionaldata_cds(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_cds);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_cds(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_cds);
-
-	dns_rdata_toregion(rdata, &r);
-
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_cds(ARGS_CHECKOWNER) {
 
@@ -148,18 +117,6 @@ checkowner_cds(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_cds(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_cds);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

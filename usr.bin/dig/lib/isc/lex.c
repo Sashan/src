@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: lex.c,v 1.3 2020/02/12 13:05:04 jsg Exp $ */
+/* $Id: lex.c,v 1.7 2020/02/23 23:40:22 jsg Exp $ */
 
 /*! \file */
 
@@ -29,9 +29,11 @@
 
 #include <isc/parseint.h>
 
-#include <isc/stdio.h>
+#include <errno.h>
 #include <string.h>
 #include <isc/util.h>
+
+#include "unix/errno2result.h"
 
 typedef struct inputsource {
 	isc_result_t			result;
@@ -48,12 +50,8 @@ typedef struct inputsource {
 	ISC_LINK(struct inputsource)	link;
 } inputsource;
 
-#define LEX_MAGIC			ISC_MAGIC('L', 'e', 'x', '!')
-#define VALID_LEX(l)			ISC_MAGIC_VALID(l, LEX_MAGIC)
-
 struct isc_lex {
 	/* Unlocked. */
-	unsigned int			magic;
 	size_t				max_token;
 	char *				data;
 	unsigned int			comments;
@@ -111,7 +109,6 @@ isc_lex_create(size_t max_token, isc_lex_t **lexp) {
 	lex->saved_paren_count = 0;
 	memset(lex->specials, 0, 256);
 	INIT_LIST(lex->sources);
-	lex->magic = LEX_MAGIC;
 
 	*lexp = lex;
 
@@ -128,13 +125,11 @@ isc_lex_destroy(isc_lex_t **lexp) {
 
 	REQUIRE(lexp != NULL);
 	lex = *lexp;
-	REQUIRE(VALID_LEX(lex));
 
 	while (!EMPTY(lex->sources))
 		RUNTIME_CHECK(isc_lex_close(lex) == ISC_R_SUCCESS);
 	if (lex->data != NULL)
 		free(lex->data);
-	lex->magic = 0;
 	free(lex);
 
 	*lexp = NULL;
@@ -146,7 +141,6 @@ isc_lex_setcomments(isc_lex_t *lex, unsigned int comments) {
 	 * Set allowed lexer commenting styles.
 	 */
 
-	REQUIRE(VALID_LEX(lex));
 
 	lex->comments = comments;
 }
@@ -158,7 +152,6 @@ isc_lex_setspecials(isc_lex_t *lex, isc_lexspecials_t specials) {
 	 * whitespace, they delimit strings and numbers.
 	 */
 
-	REQUIRE(VALID_LEX(lex));
 
 	memmove(lex->specials, specials, 256);
 }
@@ -201,18 +194,16 @@ new_source(isc_lex_t *lex, isc_boolean_t is_file, isc_boolean_t need_close,
 
 isc_result_t
 isc_lex_openfile(isc_lex_t *lex, const char *filename) {
-	isc_result_t result;
+	isc_result_t result = ISC_R_SUCCESS;
 	FILE *stream = NULL;
 
 	/*
 	 * Open 'filename' and make it the current input source for 'lex'.
 	 */
 
-	REQUIRE(VALID_LEX(lex));
 
-	result = isc_stdio_open(filename, "r", &stream);
-	if (result != ISC_R_SUCCESS)
-		return (result);
+	if ((stream = fopen(filename, "r")) == NULL)
+		return (isc__errno2result(errno));
 
 	result = new_source(lex, ISC_TRUE, ISC_TRUE, stream, filename);
 	if (result != ISC_R_SUCCESS)
@@ -228,7 +219,6 @@ isc_lex_close(isc_lex_t *lex) {
 	 * Close the most recently opened object (i.e. file or buffer).
 	 */
 
-	REQUIRE(VALID_LEX(lex));
 
 	source = HEAD(lex->sources);
 	if (source == NULL)
@@ -317,7 +307,6 @@ isc_lex_gettoken(isc_lex_t *lex, unsigned int options, isc_token_t *tokenp) {
 	 * Get the next token.
 	 */
 
-	REQUIRE(VALID_LEX(lex));
 	source = HEAD(lex->sources);
 	REQUIRE(tokenp != NULL);
 
@@ -731,69 +720,6 @@ isc_lex_gettoken(isc_lex_t *lex, unsigned int options, isc_token_t *tokenp) {
 	return (result);
 }
 
-isc_result_t
-isc_lex_getmastertoken(isc_lex_t *lex, isc_token_t *token,
-		       isc_tokentype_t expect, isc_boolean_t eol)
-{
-	unsigned int options = ISC_LEXOPT_EOL | ISC_LEXOPT_EOF |
-			       ISC_LEXOPT_DNSMULTILINE | ISC_LEXOPT_ESCAPE;
-	isc_result_t result;
-
-	if (expect == isc_tokentype_qstring)
-		options |= ISC_LEXOPT_QSTRING;
-	else if (expect == isc_tokentype_number)
-		options |= ISC_LEXOPT_NUMBER;
-	result = isc_lex_gettoken(lex, options, token);
-	if (result == ISC_R_RANGE)
-		isc_lex_ungettoken(lex, token);
-	if (result != ISC_R_SUCCESS)
-		return (result);
-
-	if (eol && ((token->type == isc_tokentype_eol) ||
-		    (token->type == isc_tokentype_eof)))
-		return (ISC_R_SUCCESS);
-	if (token->type == isc_tokentype_string &&
-	    expect == isc_tokentype_qstring)
-		return (ISC_R_SUCCESS);
-	if (token->type != expect) {
-		isc_lex_ungettoken(lex, token);
-		if (token->type == isc_tokentype_eol ||
-		    token->type == isc_tokentype_eof)
-			return (ISC_R_UNEXPECTEDEND);
-		if (expect == isc_tokentype_number)
-			return (ISC_R_BADNUMBER);
-		return (ISC_R_UNEXPECTEDTOKEN);
-	}
-	return (ISC_R_SUCCESS);
-}
-
-isc_result_t
-isc_lex_getoctaltoken(isc_lex_t *lex, isc_token_t *token, isc_boolean_t eol)
-{
-	unsigned int options = ISC_LEXOPT_EOL | ISC_LEXOPT_EOF |
-			       ISC_LEXOPT_DNSMULTILINE | ISC_LEXOPT_ESCAPE|
-			       ISC_LEXOPT_NUMBER | ISC_LEXOPT_OCTAL;
-	isc_result_t result;
-
-	result = isc_lex_gettoken(lex, options, token);
-	if (result == ISC_R_RANGE)
-		isc_lex_ungettoken(lex, token);
-	if (result != ISC_R_SUCCESS)
-		return (result);
-
-	if (eol && ((token->type == isc_tokentype_eol) ||
-		    (token->type == isc_tokentype_eof)))
-		return (ISC_R_SUCCESS);
-	if (token->type != isc_tokentype_number) {
-		isc_lex_ungettoken(lex, token);
-		if (token->type == isc_tokentype_eol ||
-		    token->type == isc_tokentype_eof)
-			return (ISC_R_UNEXPECTEDEND);
-		return (ISC_R_BADNUMBER);
-	}
-	return (ISC_R_SUCCESS);
-}
-
 void
 isc_lex_ungettoken(isc_lex_t *lex, isc_token_t *tokenp) {
 	inputsource *source;
@@ -801,7 +727,6 @@ isc_lex_ungettoken(isc_lex_t *lex, isc_token_t *tokenp) {
 	 * Unget the current token.
 	 */
 
-	REQUIRE(VALID_LEX(lex));
 	source = HEAD(lex->sources);
 	REQUIRE(source != NULL);
 	REQUIRE(tokenp != NULL);
@@ -821,7 +746,6 @@ isc_lex_getlasttokentext(isc_lex_t *lex, isc_token_t *tokenp, isc_region_t *r)
 {
 	inputsource *source;
 
-	REQUIRE(VALID_LEX(lex));
 	source = HEAD(lex->sources);
 	REQUIRE(source != NULL);
 	REQUIRE(tokenp != NULL);
@@ -842,7 +766,6 @@ char *
 isc_lex_getsourcename(isc_lex_t *lex) {
 	inputsource *source;
 
-	REQUIRE(VALID_LEX(lex));
 	source = HEAD(lex->sources);
 
 	if (source == NULL)
@@ -855,25 +778,10 @@ unsigned long
 isc_lex_getsourceline(isc_lex_t *lex) {
 	inputsource *source;
 
-	REQUIRE(VALID_LEX(lex));
 	source = HEAD(lex->sources);
 
 	if (source == NULL)
 		return (0);
 
 	return (source->line);
-}
-
-isc_boolean_t
-isc_lex_isfile(isc_lex_t *lex) {
-	inputsource *source;
-
-	REQUIRE(VALID_LEX(lex));
-
-	source = HEAD(lex->sources);
-
-	if (source == NULL)
-		return (ISC_FALSE);
-
-	return (source->is_file);
 }

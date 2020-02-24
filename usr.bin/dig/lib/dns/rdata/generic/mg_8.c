@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: mg_8.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: mg_8.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /* reviewed: Wed Mar 15 17:49:21 PST 2000 by brister */
 
@@ -22,29 +22,6 @@
 #define RDATA_GENERIC_MG_8_C
 
 #define RRTYPE_MG_ATTRIBUTES (0)
-
-static inline isc_result_t
-fromtext_mg(ARGS_FROMTEXT) {
-	isc_token_t token;
-	dns_name_t name;
-	isc_buffer_t buffer;
-
-	REQUIRE(type == dns_rdatatype_mg);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(callbacks);
-
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-
-	dns_name_init(&name, NULL);
-	buffer_fromregion(&buffer, &token.value.as_region);
-	if (origin == NULL)
-		origin = dns_rootname;
-	RETTOK(dns_name_fromtext(&name, &buffer, origin, options, target));
-	return (ISC_R_SUCCESS);
-}
 
 static inline isc_result_t
 totext_mg(ARGS_TOTEXT) {
@@ -174,31 +151,6 @@ freestruct_mg(ARGS_FREESTRUCT) {
 	dns_name_free(&mg->mg);
 }
 
-static inline isc_result_t
-additionaldata_mg(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_mg);
-
-	UNUSED(add);
-	UNUSED(arg);
-	UNUSED(rdata);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_mg(ARGS_DIGEST) {
-	isc_region_t r;
-	dns_name_t name;
-
-	REQUIRE(rdata->type == dns_rdatatype_mg);
-
-	dns_rdata_toregion(rdata, &r);
-	dns_name_init(&name, NULL);
-	dns_name_fromregion(&name, &r);
-
-	return (dns_name_digest(&name, digest, arg));
-}
-
 static inline isc_boolean_t
 checkowner_mg(ARGS_CHECKOWNER) {
 
@@ -209,18 +161,6 @@ checkowner_mg(ARGS_CHECKOWNER) {
 	UNUSED(wildcard);
 
 	return (dns_name_ismailbox(name));
-}
-
-static inline isc_boolean_t
-checknames_mg(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_mg);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
-
-	return (ISC_TRUE);
 }
 
 static inline int

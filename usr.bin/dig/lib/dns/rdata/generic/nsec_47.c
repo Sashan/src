@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: nsec_47.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: nsec_47.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /* reviewed: Wed Mar 15 18:21:15 PST 2000 by brister */
 
@@ -28,32 +28,6 @@
  * because we must be able to handle a parent/child NSEC pair.
  */
 #define RRTYPE_NSEC_ATTRIBUTES (DNS_RDATATYPEATTR_DNSSEC)
-
-static inline isc_result_t
-fromtext_nsec(ARGS_FROMTEXT) {
-	isc_token_t token;
-	dns_name_t name;
-	isc_buffer_t buffer;
-
-	REQUIRE(type == dns_rdatatype_nsec);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(callbacks);
-
-	/*
-	 * Next domain.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	dns_name_init(&name, NULL);
-	buffer_fromregion(&buffer, &token.value.as_region);
-	if (origin == NULL)
-		origin = dns_rootname;
-	RETTOK(dns_name_fromtext(&name, &buffer, origin, options, target));
-
-	return (typemap_fromtext(lexer, target, ISC_FALSE));
-}
 
 static inline isc_result_t
 totext_nsec(ARGS_TOTEXT) {
@@ -204,27 +178,6 @@ freestruct_nsec(ARGS_FREESTRUCT) {
 		free(nsec->typebits);
 }
 
-static inline isc_result_t
-additionaldata_nsec(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_nsec);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_nsec(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_nsec);
-
-	dns_rdata_toregion(rdata, &r);
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_nsec(ARGS_CHECKOWNER) {
 
@@ -236,18 +189,6 @@ checkowner_nsec(ARGS_CHECKOWNER) {
        UNUSED(wildcard);
 
        return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_nsec(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_nsec);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
-
-	return (ISC_TRUE);
 }
 
 static inline int

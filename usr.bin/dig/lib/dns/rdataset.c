@@ -36,7 +36,6 @@ dns_rdataset_init(dns_rdataset_t *rdataset) {
 
 	REQUIRE(rdataset != NULL);
 
-	rdataset->magic = DNS_RDATASET_MAGIC;
 	rdataset->methods = NULL;
 	ISC_LINK_INIT(rdataset, link);
 	rdataset->rdclass = 0;
@@ -63,7 +62,6 @@ dns_rdataset_disassociate(dns_rdataset_t *rdataset) {
 	 * Disassociate 'rdataset' from its rdata, allowing it to be reused.
 	 */
 
-	REQUIRE(DNS_RDATASET_VALID(rdataset));
 	REQUIRE(rdataset->methods != NULL);
 
 	(rdataset->methods->disassociate)(rdataset);
@@ -90,7 +88,6 @@ dns_rdataset_isassociated(dns_rdataset_t *rdataset) {
 	 * Is 'rdataset' associated?
 	 */
 
-	REQUIRE(DNS_RDATASET_VALID(rdataset));
 
 	if (rdataset->methods != NULL)
 		return (ISC_TRUE);
@@ -166,7 +163,6 @@ dns_rdataset_makequestion(dns_rdataset_t *rdataset, dns_rdataclass_t rdclass,
 	 * question class of 'rdclass' and type 'type'.
 	 */
 
-	REQUIRE(DNS_RDATASET_VALID(rdataset));
 	REQUIRE(rdataset->methods == NULL);
 
 	rdataset->methods = &question_methods;
@@ -182,9 +178,7 @@ dns_rdataset_clone(dns_rdataset_t *source, dns_rdataset_t *target) {
 	 * Make 'target' refer to the same rdataset as 'source'.
 	 */
 
-	REQUIRE(DNS_RDATASET_VALID(source));
 	REQUIRE(source->methods != NULL);
-	REQUIRE(DNS_RDATASET_VALID(target));
 	REQUIRE(target->methods == NULL);
 
 	(source->methods->clone)(source, target);
@@ -197,7 +191,6 @@ dns_rdataset_first(dns_rdataset_t *rdataset) {
 	 * Move the rdata cursor to the first rdata in the rdataset (if any).
 	 */
 
-	REQUIRE(DNS_RDATASET_VALID(rdataset));
 	REQUIRE(rdataset->methods != NULL);
 
 	return ((rdataset->methods->first)(rdataset));
@@ -210,7 +203,6 @@ dns_rdataset_next(dns_rdataset_t *rdataset) {
 	 * Move the rdata cursor to the next rdata in the rdataset (if any).
 	 */
 
-	REQUIRE(DNS_RDATASET_VALID(rdataset));
 	REQUIRE(rdataset->methods != NULL);
 
 	return ((rdataset->methods->next)(rdataset));
@@ -223,7 +215,6 @@ dns_rdataset_current(dns_rdataset_t *rdataset, dns_rdata_t *rdata) {
 	 * Make 'rdata' refer to the current rdata.
 	 */
 
-	REQUIRE(DNS_RDATASET_VALID(rdataset));
 	REQUIRE(rdataset->methods != NULL);
 
 	(rdataset->methods->current)(rdataset, rdata);
@@ -249,8 +240,7 @@ static isc_result_t
 towiresorted(dns_rdataset_t *rdataset, const dns_name_t *owner_name,
 	     dns_compress_t *cctx, isc_buffer_t *target,
 	     dns_rdatasetorderfunc_t order, const void *order_arg,
-	     isc_boolean_t partial, unsigned int options,
-	     unsigned int *countp, void **state)
+	     isc_boolean_t partial, unsigned int *countp)
 {
 	dns_rdata_t rdata = DNS_RDATA_INIT;
 	isc_region_t r;
@@ -263,14 +253,11 @@ towiresorted(dns_rdataset_t *rdataset, const dns_name_t *owner_name,
 	dns_rdata_t *in = NULL, in_fixed[MAX_SHUFFLE];
 	struct towire_sort *out = NULL, out_fixed[MAX_SHUFFLE];
 
-	UNUSED(state);
-
 	/*
 	 * Convert 'rdataset' to wire format, compressing names as specified
 	 * in cctx, and storing the result in 'target'.
 	 */
 
-	REQUIRE(DNS_RDATASET_VALID(rdataset));
 	REQUIRE(rdataset->methods != NULL);
 	REQUIRE(countp != NULL);
 	REQUIRE((order == NULL) == (order_arg == NULL));
@@ -484,29 +471,10 @@ dns_rdataset_towiresorted(dns_rdataset_t *rdataset,
 			  isc_buffer_t *target,
 			  dns_rdatasetorderfunc_t order,
 			  const void *order_arg,
-			  unsigned int options,
 			  unsigned int *countp)
 {
 	return (towiresorted(rdataset, owner_name, cctx, target,
-			     order, order_arg, ISC_FALSE, options,
-			     countp, NULL));
-}
-
-isc_result_t
-dns_rdataset_towirepartial(dns_rdataset_t *rdataset,
-			   const dns_name_t *owner_name,
-			   dns_compress_t *cctx,
-			   isc_buffer_t *target,
-			   dns_rdatasetorderfunc_t order,
-			   const void *order_arg,
-			   unsigned int options,
-			   unsigned int *countp,
-			   void **state)
-{
-	REQUIRE(state == NULL);	/* XXX remove when implemented */
-	return (towiresorted(rdataset, owner_name, cctx, target,
-			     order, order_arg, ISC_TRUE, options,
-			     countp, state));
+			     order, order_arg, ISC_FALSE, countp));
 }
 
 isc_result_t
@@ -514,9 +482,8 @@ dns_rdataset_towire(dns_rdataset_t *rdataset,
 		    dns_name_t *owner_name,
 		    dns_compress_t *cctx,
 		    isc_buffer_t *target,
-		    unsigned int options,
 		    unsigned int *countp)
 {
 	return (towiresorted(rdataset, owner_name, cctx, target,
-			     NULL, NULL, ISC_FALSE, options, countp, NULL));
+			     NULL, NULL, ISC_FALSE, countp));
 }

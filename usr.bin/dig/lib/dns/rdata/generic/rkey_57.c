@@ -20,15 +20,6 @@
 #define RRTYPE_RKEY_ATTRIBUTES 0
 
 static inline isc_result_t
-fromtext_rkey(ARGS_FROMTEXT) {
-
-	REQUIRE(type == dns_rdatatype_rkey);
-
-	return (generic_fromtext_key(rdclass, type, lexer, origin,
-				     options, target, callbacks));
-}
-
-static inline isc_result_t
 totext_rkey(ARGS_TOTEXT) {
 
 	REQUIRE(rdata != NULL);
@@ -111,30 +102,6 @@ freestruct_rkey(ARGS_FREESTRUCT) {
 	generic_freestruct_key(source);
 }
 
-static inline isc_result_t
-additionaldata_rkey(ARGS_ADDLDATA) {
-
-	REQUIRE(rdata->type == dns_rdatatype_rkey);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_rkey(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata != NULL);
-	REQUIRE(rdata->type == dns_rdatatype_rkey);
-
-	dns_rdata_toregion(rdata, &r);
-
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_rkey(ARGS_CHECKOWNER) {
 
@@ -144,19 +111,6 @@ checkowner_rkey(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_rkey(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata != NULL);
-	REQUIRE(rdata->type == dns_rdatatype_rkey);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: lex.h,v 1.3 2020/02/13 13:53:01 jsg Exp $ */
+/* $Id: lex.h,v 1.5 2020/02/23 23:40:22 jsg Exp $ */
 
 #ifndef ISC_LEX_H
 #define ISC_LEX_H 1
@@ -248,42 +248,6 @@ isc_lex_gettoken(isc_lex_t *lex, unsigned int options, isc_token_t *tokenp);
  *\li	#ISC_R_NOMORE			No more input sources
  */
 
-isc_result_t
-isc_lex_getmastertoken(isc_lex_t *lex, isc_token_t *token,
-		       isc_tokentype_t expect, isc_boolean_t eol);
-/*%<
- * Get the next token from a DNS master file type stream.  This is a
- * convenience function that sets appropriate options and handles quoted
- * strings and end of line correctly for master files.  It also ungets
- * unexpected tokens.
- *
- * Requires:
- *\li	'lex' is a valid lexer.
- *
- *\li	'token' is a valid pointer
- *
- * Returns:
- *
- * \li	any return code from isc_lex_gettoken().
- */
-
-isc_result_t
-isc_lex_getoctaltoken(isc_lex_t *lex, isc_token_t *token, isc_boolean_t eol);
-/*%<
- * Get the next token from a DNS master file type stream.  This is a
- * convenience function that sets appropriate options and handles end
- * of line correctly for master files.  It also ungets unexpected tokens.
- *
- * Requires:
- *\li	'lex' is a valid lexer.
- *
- *\li	'token' is a valid pointer
- *
- * Returns:
- *
- * \li	any return code from isc_lex_gettoken().
- */
-
 void
 isc_lex_ungettoken(isc_lex_t *lex, isc_token_t *tokenp);
 /*%<
@@ -338,19 +302,6 @@ isc_lex_getsourceline(isc_lex_t *lex);
  *
  * Returns:
  *\li 	Current line number or 0 if no current source.
- */
-
-isc_boolean_t
-isc_lex_isfile(isc_lex_t *lex);
-/*%<
- * Return whether the current input source is a file.
- *
- * Requires:
- *\li	'lex' is a valid lexer.
- *
- * Returns:
- * \li	#ISC_TRUE if the current input is a file,
- *\li	#ISC_FALSE otherwise.
  */
 
 #endif /* ISC_LEX_H */

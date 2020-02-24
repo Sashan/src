@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: socket.h,v 1.2 2020/02/13 13:53:01 jsg Exp $ */
+/* $Id: socket.h,v 1.5 2020/02/18 18:11:27 florian Exp $ */
 
 #ifndef ISC_SOCKET_H
 #define ISC_SOCKET_H 1
@@ -93,7 +93,7 @@ struct isc_socketevent {
 	isc_region_t		region;		/*%< for single-buffer i/o */
 	isc_bufferlist_t	bufferlist;	/*%< list of buffers */
 	isc_sockaddr_t		address;	/*%< source address */
-	isc_time_t		timestamp;	/*%< timestamp of packet recv */
+	struct timespec		timestamp;	/*%< timestamp of packet recv */
 	struct in6_pktinfo	pktinfo;	/*%< ipv6 pktinfo */
 	uint32_t		attributes;	/*%< see below */
 	isc_eventdestructor_t   destroy;	/*%< original destructor */
@@ -189,64 +189,6 @@ typedef enum {
 #define ISC_SOCKFDWATCH_READ	0x00000001	/*%< watch for readable */
 #define ISC_SOCKFDWATCH_WRITE	0x00000002	/*%< watch for writable */
 /*@}*/
-
-/*% Socket and socket manager methods */
-typedef struct isc_socketmgrmethods {
-	void		(*destroy)(isc_socketmgr_t **managerp);
-	isc_result_t	(*socketcreate)(isc_socketmgr_t *manager, int pf,
-					isc_sockettype_t type,
-					isc_socket_t **socketp);
-} isc_socketmgrmethods_t;
-
-typedef struct isc_socketmethods {
-	void		(*attach)(isc_socket_t *socket,
-				  isc_socket_t **socketp);
-	void		(*detach)(isc_socket_t **socketp);
-	isc_result_t	(*bind)(isc_socket_t *sock, isc_sockaddr_t *sockaddr,
-				unsigned int options);
-	isc_result_t	(*connect)(isc_socket_t *sock, isc_sockaddr_t *addr,
-				   isc_task_t *task, isc_taskaction_t action,
-				   void *arg);
-	void		(*cancel)(isc_socket_t *sock, isc_task_t *task,
-				  unsigned int how);
-} isc_socketmethods_t;
-
-/*%
- * This structure is actually just the common prefix of a socket manager
- * object implementation's version of an isc_socketmgr_t.
- * \brief
- * Direct use of this structure by clients is forbidden.  socket implementations
- * may change the structure.  'magic' must be ISCAPI_SOCKETMGR_MAGIC for any
- * of the isc_socket_ routines to work.  socket implementations must maintain
- * all socket invariants.
- * In effect, this definition is used only for non-BIND9 version ("export")
- * of the library, and the export version does not work for win32.  So, to avoid
- * the definition conflict with win32/socket.c, we enable this definition only
- * for non-Win32 (i.e. Unix) platforms.
- */
-struct isc_socketmgr {
-	unsigned int		impmagic;
-	unsigned int		magic;
-	isc_socketmgrmethods_t	*methods;
-};
-
-#define ISCAPI_SOCKETMGR_MAGIC		ISC_MAGIC('A','s','m','g')
-#define ISCAPI_SOCKETMGR_VALID(m)	((m) != NULL && \
-					 (m)->magic == ISCAPI_SOCKETMGR_MAGIC)
-
-/*%
- * This is the common prefix of a socket object.  The same note as
- * that for the socketmgr structure applies.
- */
-struct isc_socket {
-	unsigned int		impmagic;
-	unsigned int		magic;
-	isc_socketmethods_t	*methods;
-};
-
-#define ISCAPI_SOCKET_MAGIC	ISC_MAGIC('A','s','c','t')
-#define ISCAPI_SOCKET_VALID(s)	((s) != NULL && \
-				 (s)->magic == ISCAPI_SOCKET_MAGIC)
 
 /***
  *** Socket and Socket Manager Functions

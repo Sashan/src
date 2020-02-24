@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: dig.c,v 1.7 2020/02/13 16:55:20 florian Exp $ */
+/* $Id: dig.c,v 1.11 2020/02/18 18:11:27 florian Exp $ */
 
 /*! \file */
 #include <sys/cdefs.h>
@@ -625,13 +625,6 @@ printgreeting(int argc, char **argv, dig_lookup_t *lookup) {
 		}
 	}
 }
-
-/*%
- * We're not using isc_commandline_parse() here since the command line
- * syntax of dig is quite a bit different from that which can be described
- * by that routine.
- * XXX doc options
- */
 
 static void
 plus_option(const char *option, isc_boolean_t is_batchfile,
@@ -1774,7 +1767,7 @@ parse_args(isc_boolean_t is_batchfile, isc_boolean_t config_only,
 		}
 		/* XXX Remove code dup from shutdown code */
 	next_line:
-		if (fgets(batchline, sizeof(batchline), batchfp) != 0) {
+		if (fgets(batchline, sizeof(batchline), batchfp) != NULL) {
 			bargc = 1;
 			debug("batch line %s", batchline);
 			if (batchline[0] == '\r' || batchline[0] == '\n'
@@ -1847,7 +1840,7 @@ query_finished(void) {
 		return;
 	}
 
-	if (fgets(batchline, sizeof(batchline), batchfp) != 0) {
+	if (fgets(batchline, sizeof(batchline), batchfp) != NULL) {
 		debug("batch line %s", batchline);
 		bargc = 1;
 		input = batchline;
@@ -1878,6 +1871,7 @@ void dig_setup(int argc, char **argv)
 
 	ISC_LIST_INIT(lookup_list);
 	ISC_LIST_INIT(server_list);
+	ISC_LIST_INIT(root_hints_server_list);
 	ISC_LIST_INIT(search_list);
 
 	if (pledge("stdio rpath inet dns", NULL) == -1) {
@@ -1946,7 +1940,6 @@ dig_shutdown() {
 
 	cancel_all();
 	destroy_libs();
-	isc_app_finish();
 }
 
 /*% Main processing routine for dig */

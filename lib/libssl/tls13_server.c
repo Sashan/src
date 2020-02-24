@@ -1,4 +1,4 @@
-/* $OpenBSD: tls13_server.c,v 1.24 2020/02/05 17:01:43 jsing Exp $ */
+/* $OpenBSD: tls13_server.c,v 1.26 2020/02/23 17:51:36 tb Exp $ */
 /*
  * Copyright (c) 2019, 2020 Joel Sing <jsing@openbsd.org>
  * Copyright (c) 2020 Bob Beck <beck@openbsd.org>
@@ -15,8 +15,6 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-
-#include <openssl/curve25519.h>
 
 #include "ssl_locl.h"
 #include "ssl_tlsext.h"
@@ -895,7 +893,7 @@ tls13_client_finished_recv(struct tls13_ctx *ctx, CBS *cbs)
 		goto err;
 
 	if (!CBS_mem_equal(cbs, verify_data, verify_data_len)) {
-		ctx->alert = TLS1_AD_DECRYPTION_FAILED;
+		ctx->alert = TLS1_AD_DECRYPT_ERROR;
 		goto err;
 	}
 

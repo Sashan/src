@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: a_1.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: a_1.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /* Reviewed: Thu Mar 16 16:52:50 PST 2000 by bwelling */
 
@@ -26,33 +26,6 @@
 #include <isc/net.h>
 
 #define RRTYPE_A_ATTRIBUTES (0)
-
-static inline isc_result_t
-fromtext_in_a(ARGS_FROMTEXT) {
-	isc_token_t token;
-	struct in_addr addr;
-	isc_region_t region;
-
-	REQUIRE(type == dns_rdatatype_a);
-	REQUIRE(rdclass == dns_rdataclass_in);
-
-	UNUSED(type);
-	UNUSED(origin);
-	UNUSED(options);
-	UNUSED(rdclass);
-
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-
-	if (getquad(DNS_AS_STR(token), &addr, lexer, callbacks) != 1)
-		RETTOK(DNS_R_BADDOTTEDQUAD);
-	isc_buffer_availableregion(target, &region);
-	if (region.length < 4)
-		return (ISC_R_NOSPACE);
-	memmove(region.base, &addr, 4);
-	isc_buffer_add(target, 4);
-	return (ISC_R_SUCCESS);
-}
 
 static inline isc_result_t
 totext_in_a(ARGS_TOTEXT) {
@@ -181,30 +154,6 @@ freestruct_in_a(ARGS_FREESTRUCT) {
 	UNUSED(a);
 }
 
-static inline isc_result_t
-additionaldata_in_a(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_a);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_in_a(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_a);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	dns_rdata_toregion(rdata, &r);
-
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_in_a(ARGS_CHECKOWNER) {
 	dns_name_t prefix, suffix;
@@ -229,19 +178,6 @@ checkowner_in_a(ARGS_CHECKOWNER) {
 	}
 
 	return (dns_name_ishostname(name, wildcard));
-}
-
-static inline isc_boolean_t
-checknames_in_a(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_a);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
-
-	return (ISC_TRUE);
 }
 
 static inline int

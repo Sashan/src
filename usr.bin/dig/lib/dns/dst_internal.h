@@ -31,38 +31,24 @@
  * IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: dst_internal.h,v 1.4 2020/02/13 13:53:00 jsg Exp $ */
+/* $Id: dst_internal.h,v 1.11 2020/02/23 08:54:01 florian Exp $ */
 
 #ifndef DST_DST_INTERNAL_H
 #define DST_DST_INTERNAL_H 1
 
 #include <isc/buffer.h>
-
-#include <isc/magic.h>
 #include <isc/region.h>
 #include <isc/types.h>
 #include <isc/refcount.h>
 #include <isc/sha1.h>
 #include <isc/sha2.h>
-#include <isc/stdtime.h>
 #include <isc/hmacsha.h>
 
-
-
 #include <dns/time.h>
-
 #include <dst/dst.h>
 
 #include <openssl/err.h>
-#include <openssl/evp.h>
 #include <openssl/objects.h>
-#include <openssl/rsa.h>
-
-#define KEY_MAGIC	ISC_MAGIC('D','S','T','K')
-#define CTX_MAGIC	ISC_MAGIC('D','S','T','C')
-
-#define VALID_KEY(x) ISC_MAGIC_VALID(x, KEY_MAGIC)
-#define VALID_CTX(x) ISC_MAGIC_VALID(x, CTX_MAGIC)
 
 /***
  *** Types
@@ -84,24 +70,13 @@ typedef enum { DO_SIGN, DO_VERIFY } dst_use_t;
 
 /*% DST Key Structure */
 struct dst_key {
-	unsigned int	magic;
 	isc_refcount_t	refs;
-	dns_name_t *	key_name;	/*%< name of the key */
 	unsigned int	key_size;	/*%< size of the key in bits */
 	unsigned int	key_proto;	/*%< protocols this key is used for */
 	unsigned int	key_alg;	/*%< algorithm of the key */
 	uint32_t	key_flags;	/*%< flags of the public key */
-	uint16_t	key_id;		/*%< identifier of the key */
-	uint16_t	key_rid;	/*%< identifier of the key when
-					     revoked */
 	uint16_t	key_bits;	/*%< hmac digest bits */
-	dns_rdataclass_t key_class;	/*%< class of the key record */
-	dns_ttl_t	key_ttl;	/*%< default/initial dnskey ttl */
-	char		*engine;	/*%< engine name (HSM) */
-	char		*label;		/*%< engine label (HSM) */
 	union {
-		void *generic;
-		EVP_PKEY *pkey;
 		dst_hmacsha1_key_t *hmacsha1;
 		dst_hmacsha224_key_t *hmacsha224;
 		dst_hmacsha256_key_t *hmacsha256;
@@ -110,37 +85,19 @@ struct dst_key {
 
 	} keydata;			/*%< pointer to key in crypto pkg fmt */
 
-	isc_stdtime_t	times[DST_MAX_TIMES + 1];    /*%< timing metadata */
-	isc_boolean_t	timeset[DST_MAX_TIMES + 1];  /*%< data set? */
-	isc_stdtime_t	nums[DST_MAX_NUMERIC + 1];   /*%< numeric metadata */
-	isc_boolean_t	numset[DST_MAX_NUMERIC + 1]; /*%< data set? */
-	isc_boolean_t 	inactive;      /*%< private key not present as it is
-					    inactive */
-	isc_boolean_t 	external;      /*%< external key */
-
-	int		fmt_major;     /*%< private key format, major version */
-	int		fmt_minor;     /*%< private key format, minor version */
-
 	dst_func_t *    func;	       /*%< crypto package specific functions */
-	isc_buffer_t   *key_tkeytoken; /*%< TKEY token data */
 };
 
 struct dst_context {
-	unsigned int magic;
 	dst_use_t use;
 	dst_key_t *key;
 	isc_logcategory_t *category;
 	union {
-		void *generic;
-		isc_sha1_t *sha1ctx;
-		isc_sha256_t *sha256ctx;
-		isc_sha512_t *sha512ctx;
 		isc_hmacsha1_t *hmacsha1ctx;
 		isc_hmacsha224_t *hmacsha224ctx;
 		isc_hmacsha256_t *hmacsha256ctx;
 		isc_hmacsha384_t *hmacsha384ctx;
 		isc_hmacsha512_t *hmacsha512ctx;
-		EVP_MD_CTX *evp_md_ctx;
 	} ctxdata;
 };
 
@@ -149,8 +106,6 @@ struct dst_func {
 	 * Context functions
 	 */
 	isc_result_t (*createctx)(dst_key_t *key, dst_context_t *dctx);
-	isc_result_t (*createctx2)(dst_key_t *key, int maxbits,
-				   dst_context_t *dctx);
 	void (*destroyctx)(dst_context_t *dctx);
 	isc_result_t (*adddata)(dst_context_t *dctx, const isc_region_t *data);
 
@@ -159,35 +114,11 @@ struct dst_func {
 	 */
 	isc_result_t (*sign)(dst_context_t *dctx, isc_buffer_t *sig);
 	isc_result_t (*verify)(dst_context_t *dctx, const isc_region_t *sig);
-	isc_result_t (*verify2)(dst_context_t *dctx, int maxbits,
-				const isc_region_t *sig);
-	isc_result_t (*computesecret)(const dst_key_t *pub,
-				      const dst_key_t *priv,
-				      isc_buffer_t *secret);
-	isc_boolean_t (*compare)(const dst_key_t *key1, const dst_key_t *key2);
-	isc_boolean_t (*paramcompare)(const dst_key_t *key1,
-				      const dst_key_t *key2);
-	isc_result_t (*generate)(dst_key_t *key, int parms,
-				 void (*callback)(int));
-	isc_boolean_t (*isprivate)(const dst_key_t *key);
 	void (*destroy)(dst_key_t *key);
 
 	/* conversion functions */
 	isc_result_t (*todns)(const dst_key_t *key, isc_buffer_t *data);
 	isc_result_t (*fromdns)(dst_key_t *key, isc_buffer_t *data);
-	isc_result_t (*tofile)(const dst_key_t *key, const char *directory);
-	isc_result_t (*parse)(dst_key_t *key,
-			      isc_lex_t *lexer,
-			      dst_key_t *pub);
-
-	/* cleanup */
-	void (*cleanup)(void);
-
-	isc_result_t (*fromlabel)(dst_key_t *key, const char *engine,
-				  const char *label, const char *pin);
-	isc_result_t (*dump)(dst_key_t *key, char **buffer,
-			     int *length);
-	isc_result_t (*restore)(dst_key_t *key, const char *keystr);
 };
 
 /*%

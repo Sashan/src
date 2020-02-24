@@ -1,4 +1,4 @@
-/*	$OpenBSD: oosiop.c,v 1.24 2020/01/25 21:48:42 krw Exp $	*/
+/*	$OpenBSD: oosiop.c,v 1.26 2020/02/17 02:50:23 krw Exp $	*/
 /*	$NetBSD: oosiop.c,v 1.4 2003/10/29 17:45:55 tsutsui Exp $	*/
 
 /*
@@ -76,7 +76,6 @@ void	oosiop_clear_fifo(struct oosiop_softc *);
 void	oosiop_phasemismatch(struct oosiop_softc *);
 void	oosiop_setup_syncxfer(struct oosiop_softc *);
 void	oosiop_set_syncparam(struct oosiop_softc *, int, int, int);
-void	oosiop_minphys(struct buf *, struct scsi_link *);
 void	oosiop_scsicmd(struct scsi_xfer *);
 void	oosiop_done(struct oosiop_softc *, struct oosiop_cb *);
 void	oosiop_timeout(void *);
@@ -129,8 +128,8 @@ struct cfdriver oosiop_cd = {
 	NULL, "oosiop", DV_DULL
 };
 
-struct scsi_adapter oosiop_adapter = {
-	oosiop_scsicmd, oosiop_minphys, NULL, NULL, NULL
+struct scsi_adapter oosiop_switch = {
+	oosiop_scsicmd, NULL, NULL, NULL, NULL
 };
 
 void *
@@ -260,7 +259,7 @@ oosiop_attach(struct oosiop_softc *sc)
 	/*
 	 * Fill in the sc_link.
 	 */
-	sc->sc_link.adapter = &oosiop_adapter;
+	sc->sc_link.adapter = &oosiop_switch;
 	sc->sc_link.adapter_softc = sc;
 	sc->sc_link.openings = 1;	/* XXX */
 	sc->sc_link.adapter_buswidth = OOSIOP_NTGT;
@@ -720,14 +719,6 @@ oosiop_set_syncparam(struct oosiop_softc *sc, int id, int period, int offset)
 		printf("synchronous");
 	}
 	printf(" xfers\n");
-}
-
-void
-oosiop_minphys(struct buf *bp, struct scsi_link *sl)
-{
-
-	if (bp->b_bcount > OOSIOP_MAX_XFER)
-		bp->b_bcount = OOSIOP_MAX_XFER;
 }
 
 void

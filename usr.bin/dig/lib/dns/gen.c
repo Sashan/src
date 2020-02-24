@@ -34,11 +34,6 @@
 		abort(); \
 	}
 
-#define FROMTEXTARGS "rdclass, type, lexer, origin, options, target, callbacks"
-#define FROMTEXTCLASS "rdclass"
-#define FROMTEXTTYPE "type"
-#define FROMTEXTDEF "result = DNS_R_UNKNOWN"
-
 #define TOTEXTARGS "rdata, tctx, target"
 #define TOTEXTCLASS "rdata->rdclass"
 #define TOTEXTTYPE "rdata->type"
@@ -74,25 +69,11 @@
 #define COMPARETYPE "rdata1->type"
 #define COMPAREDEF "use_default = ISC_TRUE"
 
-#define ADDITIONALDATAARGS "rdata, add, arg"
-#define ADDITIONALDATACLASS "rdata->rdclass"
-#define ADDITIONALDATATYPE "rdata->type"
-#define ADDITIONALDATADEF "use_default = ISC_TRUE"
-
-#define DIGESTARGS "rdata, digest, arg"
-#define DIGESTCLASS "rdata->rdclass"
-#define DIGESTTYPE "rdata->type"
-#define DIGESTDEF "use_default = ISC_TRUE"
 
 #define CHECKOWNERARGS "name, rdclass, type, wildcard"
 #define CHECKOWNERCLASS "rdclass"
 #define CHECKOWNERTYPE "type"
 #define CHECKOWNERDEF "result = ISC_TRUE"
-
-#define CHECKNAMESARGS "rdata, owner, bad"
-#define CHECKNAMESCLASS "rdata->rdclass"
-#define CHECKNAMESTYPE "rdata->type"
-#define CHECKNAMESDEF "result = ISC_TRUE"
 
 static const char copyright[] =
 "/*\n"
@@ -645,8 +626,6 @@ main(int argc, char **argv) {
 
 		fputs("\n\n", stdout);
 
-		doswitch("FROMTEXTSWITCH", "fromtext", FROMTEXTARGS,
-			 FROMTEXTTYPE, FROMTEXTCLASS, FROMTEXTDEF);
 		doswitch("TOTEXTSWITCH", "totext", TOTEXTARGS,
 			 TOTEXTTYPE, TOTEXTCLASS, TOTEXTDEF);
 		doswitch("FROMWIRESWITCH", "fromwire", FROMWIREARGS,
@@ -663,18 +642,9 @@ main(int argc, char **argv) {
 			  TOSTRUCTTYPE, TOSTRUCTCLASS, TOSTRUCTDEF);
 		doswitch("FREESTRUCTSWITCH", "freestruct", FREESTRUCTARGS,
 			  FREESTRUCTTYPE, FREESTRUCTCLASS, FREESTRUCTDEF);
-		doswitch("ADDITIONALDATASWITCH", "additionaldata",
-			 ADDITIONALDATAARGS, ADDITIONALDATATYPE,
-			 ADDITIONALDATACLASS, ADDITIONALDATADEF);
-		doswitch("DIGESTSWITCH", "digest",
-			 DIGESTARGS, DIGESTTYPE,
-			 DIGESTCLASS, DIGESTDEF);
 		doswitch("CHECKOWNERSWITCH", "checkowner",
 			CHECKOWNERARGS, CHECKOWNERTYPE,
 			CHECKOWNERCLASS, CHECKOWNERDEF);
-		doswitch("CHECKNAMESSWITCH", "checknames",
-			CHECKNAMESARGS, CHECKNAMESTYPE,
-			CHECKNAMESCLASS, CHECKNAMESDEF);
 
 		/*
 		 * From here down, we are processing the rdata names and

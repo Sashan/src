@@ -1,4 +1,4 @@
-/*	$OpenBSD: ldomctl.h,v 1.12 2020/01/04 15:45:46 kn Exp $	*/
+/*	$OpenBSD: ldomctl.h,v 1.14 2020/02/21 19:39:28 kn Exp $	*/
 
 /*
  * Copyright (c) 2012 Mark Kettenis
@@ -158,12 +158,14 @@ extern uint64_t hv_memsize;
 struct vdisk {
 	SIMPLEQ_ENTRY(vdisk)	entry;
 	const char		*path;
+	const char		*devalias;
 };
 
 struct vnet {
 	SIMPLEQ_ENTRY(vnet)	entry;
 	uint64_t		mac_addr;
 	uint64_t		mtu;
+	const char		*devalias;
 };
 
 struct var {

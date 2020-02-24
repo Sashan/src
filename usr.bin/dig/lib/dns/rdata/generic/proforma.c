@@ -14,25 +14,12 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: proforma.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: proforma.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 #ifndef RDATA_GENERIC_#_#_C
 #define RDATA_GENERIC_#_#_C
 
 #define RRTYPE_#_ATTRIBUTES (0)
-
-static inline isc_result_t
-fromtext_#(ARGS_FROMTEXT) {
-	isc_token_t token;
-
-	REQUIRE(type == dns_rdatatype_proforma.c#);
-	REQUIRE(rdclass == #);
-
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-
-	return (ISC_R_NOTIMPLEMENTED);
-}
 
 static inline isc_result_t
 totext_#(ARGS_TOTEXT) {
@@ -119,29 +106,6 @@ freestruct_#(ARGS_FREESTRUCT) {
 
 }
 
-static inline isc_result_t
-additionaldata_#(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_proforma.c#);
-	REQUIRE(rdata->rdclass == #);
-
-	(void)add;
-	(void)arg;
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_#(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_proforma.c#);
-	REQUIRE(rdata->rdclass == #);
-
-	dns_rdata_toregion(rdata, &r);
-
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_#(ARGS_CHECKOWNER) {
 
@@ -152,19 +116,6 @@ checkowner_#(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_#(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_proforma.c#);
-	REQUIRE(rdata->rdclass == #);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

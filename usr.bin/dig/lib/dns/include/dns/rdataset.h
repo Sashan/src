@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: rdataset.h,v 1.3 2020/02/13 13:53:01 jsg Exp $ */
+/* $Id: rdataset.h,v 1.7 2020/02/23 08:54:33 florian Exp $ */
 
 #ifndef DNS_RDATASET_H
 #define DNS_RDATASET_H 1
@@ -49,9 +49,6 @@
  * Standards:
  *\li	None.
  */
-
-#include <isc/magic.h>
-#include <isc/stdtime.h>
 
 #include <dns/types.h>
 #include "rdatastruct.h"
@@ -93,7 +90,7 @@ typedef struct dns_rdatasetmethods {
 						 dns_dbnode_t **nodep,
 						 dns_name_t *fname,
 						 dns_message_t *msg,
-						 isc_stdtime_t now);
+						 time_t now);
 	isc_result_t		(*setadditional)(dns_rdataset_t *rdataset,
 						 dns_rdatasetadditional_t type,
 						 dns_rdatatype_t qtype,
@@ -113,9 +110,6 @@ typedef struct dns_rdatasetmethods {
 	void			(*clearprefetch)(dns_rdataset_t *rdataset);
 } dns_rdatasetmethods_t;
 
-#define DNS_RDATASET_MAGIC	       ISC_MAGIC('D','N','S','R')
-#define DNS_RDATASET_VALID(set)	       ISC_MAGIC_VALID(set, DNS_RDATASET_MAGIC)
-
 /*%
  * Direct use of this structure by clients is strongly discouraged, except
  * for the 'link' field which may be used however the client wishes.  The
@@ -123,7 +117,6 @@ typedef struct dns_rdatasetmethods {
  * rdataset implementations may change any of the fields.
  */
 struct dns_rdataset {
-	unsigned int			magic;		/* XXX ? */
 	dns_rdatasetmethods_t *		methods;
 	ISC_LINK(dns_rdataset_t)	link;
 	/*
@@ -151,7 +144,7 @@ struct dns_rdataset {
 	 * This RRSIG RRset should be re-generated around this time.
 	 * Only valid if DNS_RDATASETATTR_RESIGN is set in attributes.
 	 */
-	isc_stdtime_t			resign;
+	time_t			resign;
 	/*@{*/
 	/*%
 	 * These are for use by the rdataset implementation, and MUST NOT
@@ -360,7 +353,6 @@ dns_rdataset_towire(dns_rdataset_t *rdataset,
 		    dns_name_t *owner_name,
 		    dns_compress_t *cctx,
 		    isc_buffer_t *target,
-		    unsigned int options,
 		    unsigned int *countp);
 /*%<
  * Convert 'rdataset' to wire format, compressing names as specified
@@ -401,7 +393,6 @@ dns_rdataset_towiresorted(dns_rdataset_t *rdataset,
 			  isc_buffer_t *target,
 			  dns_rdatasetorderfunc_t order,
 			  const void *order_arg,
-			  unsigned int options,
 			  unsigned int *countp);
 /*%<
  * Like dns_rdataset_towire(), but sorting the rdatasets according to
@@ -411,34 +402,6 @@ dns_rdataset_towiresorted(dns_rdataset_t *rdataset,
  * Requires:
  *\li	All the requirements of dns_rdataset_towire(), and
  *	that order_arg is NULL if and only if order is NULL.
- */
-
-isc_result_t
-dns_rdataset_towirepartial(dns_rdataset_t *rdataset,
-			   const dns_name_t *owner_name,
-			   dns_compress_t *cctx,
-			   isc_buffer_t *target,
-			   dns_rdatasetorderfunc_t order,
-			   const void *order_arg,
-			   unsigned int options,
-			   unsigned int *countp,
-			   void **state);
-/*%<
- * Like dns_rdataset_towiresorted() except that a partial rdataset
- * may be written.
- *
- * Requires:
- *\li	All the requirements of dns_rdataset_towiresorted().
- *	If 'state' is non NULL then the current position in the
- *	rdataset will be remembered if the rdataset in not
- *	completely written and should be passed on on subsequent
- *	calls (NOT CURRENTLY IMPLEMENTED).
- *
- * Returns:
- *\li	#ISC_R_SUCCESS if all of the records were written.
- *\li	#ISC_R_NOSPACE if unable to fit in all of the records. *countp
- *		      will be updated to reflect the number of records
- *		      written.
  */
 
 #endif /* DNS_RDATASET_H */

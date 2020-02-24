@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: timer_p.h,v 1.1 2020/02/07 09:58:54 florian Exp $ */
+/* $Id: timer_p.h,v 1.3 2020/02/18 18:11:27 florian Exp $ */
 
 #ifndef ISC_TIMER_P_H
 #define ISC_TIMER_P_H
@@ -22,9 +22,9 @@
 /*! \file */
 
 isc_result_t
-isc__timermgr_nextevent(isc_timermgr_t *timermgr, isc_time_t *when);
+isc_timermgr_nextevent(isc_timermgr_t *timermgr, struct timespec *when);
 
 void
-isc__timermgr_dispatch(isc_timermgr_t *timermgr);
+isc_timermgr_dispatch(isc_timermgr_t *timermgr);
 
 #endif /* ISC_TIMER_P_H */

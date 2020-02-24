@@ -15,25 +15,21 @@
  */
 
 /*
- * $Id: tsig.c,v 1.6 2020/02/13 16:57:55 florian Exp $
+ * $Id: tsig.c,v 1.9 2020/02/23 08:54:01 florian Exp $
  */
 /*! \file */
 
 #include <stdlib.h>
-
-#include <isc/buffer.h>
-
-
-#include <isc/refcount.h>
 #include <string.h>		/* Required for HP/UX (and others?) */
+#include <time.h>
+
 #include <isc/util.h>
-
-
+#include <isc/buffer.h>
+#include <isc/refcount.h>
 
 #include <dns/keyvalues.h>
 #include <dns/log.h>
 #include <dns/message.h>
-
 #include <dns/rdata.h>
 #include <dns/rdatalist.h>
 #include <dns/rdataset.h>
@@ -42,9 +38,6 @@
 #include <dns/tsig.h>
 
 #include <dst/result.h>
-
-#define TSIG_MAGIC		ISC_MAGIC('T', 'S', 'I', 'G')
-#define VALID_TSIG_KEY(x)	ISC_MAGIC_VALID(x, TSIG_MAGIC)
 
 #define is_response(msg) (msg->flags & DNS_MESSAGEFLAG_QR)
 #define algname_is_allocated(algname) \
@@ -135,8 +128,8 @@ tsig_log(dns_tsigkey_t *key, int level, const char *fmt, ...) {
 isc_result_t
 dns_tsigkey_createfromkey(dns_name_t *name, dns_name_t *algorithm,
 			  dst_key_t *dstkey, isc_boolean_t generated,
-			  dns_name_t *creator, isc_stdtime_t inception,
-			  isc_stdtime_t expire,
+			  dns_name_t *creator, time_t inception,
+			  time_t expire,
 			  dns_tsigkey_t **key)
 {
 	dns_tsigkey_t *tkey;
@@ -241,8 +234,6 @@ dns_tsigkey_createfromkey(dns_name_t *name, dns_name_t *algorithm,
 	tkey->expire = expire;
 	ISC_LINK_INIT(tkey, link);
 
-	tkey->magic = TSIG_MAGIC;
-
 	/*
 	 * Ignore this if it's a GSS key, since the key size is meaningless.
 	 */
@@ -284,8 +275,8 @@ dns_tsigkey_createfromkey(dns_name_t *name, dns_name_t *algorithm,
 isc_result_t
 dns_tsigkey_create(dns_name_t *name, dns_name_t *algorithm,
 		   unsigned char *secret, int length, isc_boolean_t generated,
-		   dns_name_t *creator, isc_stdtime_t inception,
-		   isc_stdtime_t expire,
+		   dns_name_t *creator, time_t inception,
+		   time_t expire,
 		   dns_tsigkey_t **key)
 {
 	dst_key_t *dstkey = NULL;
@@ -301,10 +292,9 @@ dns_tsigkey_create(dns_name_t *name, dns_name_t *algorithm,
 
 			isc_buffer_init(&b, secret, length);
 			isc_buffer_add(&b, length);
-			result = dst_key_frombuffer(name, DST_ALG_HMACSHA1,
+			result = dst_key_frombuffer(DST_ALG_HMACSHA1,
 						    DNS_KEYOWNER_ENTITY,
 						    DNS_KEYPROTO_DNSSEC,
-						    dns_rdataclass_in,
 						    &b, &dstkey);
 				if (result != ISC_R_SUCCESS)
 					return (result);
@@ -315,10 +305,9 @@ dns_tsigkey_create(dns_name_t *name, dns_name_t *algorithm,
 
 			isc_buffer_init(&b, secret, length);
 			isc_buffer_add(&b, length);
-			result = dst_key_frombuffer(name, DST_ALG_HMACSHA224,
+			result = dst_key_frombuffer(DST_ALG_HMACSHA224,
 						    DNS_KEYOWNER_ENTITY,
 						    DNS_KEYPROTO_DNSSEC,
-						    dns_rdataclass_in,
 						    &b, &dstkey);
 				if (result != ISC_R_SUCCESS)
 					return (result);
@@ -329,10 +318,9 @@ dns_tsigkey_create(dns_name_t *name, dns_name_t *algorithm,
 
 			isc_buffer_init(&b, secret, length);
 			isc_buffer_add(&b, length);
-			result = dst_key_frombuffer(name, DST_ALG_HMACSHA256,
+			result = dst_key_frombuffer(DST_ALG_HMACSHA256,
 						    DNS_KEYOWNER_ENTITY,
 						    DNS_KEYPROTO_DNSSEC,
-						    dns_rdataclass_in,
 						    &b, &dstkey);
 				if (result != ISC_R_SUCCESS)
 					return (result);
@@ -343,10 +331,9 @@ dns_tsigkey_create(dns_name_t *name, dns_name_t *algorithm,
 
 			isc_buffer_init(&b, secret, length);
 			isc_buffer_add(&b, length);
-			result = dst_key_frombuffer(name, DST_ALG_HMACSHA384,
+			result = dst_key_frombuffer(DST_ALG_HMACSHA384,
 						    DNS_KEYOWNER_ENTITY,
 						    DNS_KEYPROTO_DNSSEC,
-						    dns_rdataclass_in,
 						    &b, &dstkey);
 				if (result != ISC_R_SUCCESS)
 					return (result);
@@ -357,10 +344,9 @@ dns_tsigkey_create(dns_name_t *name, dns_name_t *algorithm,
 
 			isc_buffer_init(&b, secret, length);
 			isc_buffer_add(&b, length);
-			result = dst_key_frombuffer(name, DST_ALG_HMACSHA512,
+			result = dst_key_frombuffer(DST_ALG_HMACSHA512,
 						    DNS_KEYOWNER_ENTITY,
 						    DNS_KEYPROTO_DNSSEC,
-						    dns_rdataclass_in,
 						    &b, &dstkey);
 				if (result != ISC_R_SUCCESS)
 					return (result);
@@ -378,7 +364,6 @@ dns_tsigkey_create(dns_name_t *name, dns_name_t *algorithm,
 
 void
 dns_tsigkey_attach(dns_tsigkey_t *source, dns_tsigkey_t **targetp) {
-	REQUIRE(VALID_TSIG_KEY(source));
 	REQUIRE(targetp != NULL && *targetp == NULL);
 
 	isc_refcount_increment(&source->refs, NULL);
@@ -387,9 +372,6 @@ dns_tsigkey_attach(dns_tsigkey_t *source, dns_tsigkey_t **targetp) {
 
 static void
 tsigkey_free(dns_tsigkey_t *key) {
-	REQUIRE(VALID_TSIG_KEY(key));
-
-	key->magic = 0;
 	dns_name_free(&key->name);
 	if (algname_is_allocated(key->algorithm)) {
 		dns_name_free(key->algorithm);
@@ -411,7 +393,6 @@ dns_tsigkey_detach(dns_tsigkey_t **keyp) {
 	unsigned int refs;
 
 	REQUIRE(keyp != NULL);
-	REQUIRE(VALID_TSIG_KEY(*keyp));
 
 	key = *keyp;
 	isc_refcount_decrement(&key->refs, &refs);
@@ -434,7 +415,7 @@ dns_tsig_sign(dns_message_t *msg) {
 	dns_rdatalist_t *datalist;
 	dns_rdataset_t *dataset;
 	isc_region_t r;
-	isc_stdtime_t now;
+	time_t now;
 	dst_context_t *ctx = NULL;
 	isc_result_t ret;
 	unsigned char badtimedata[BADTIMELEN];
@@ -443,7 +424,6 @@ dns_tsig_sign(dns_message_t *msg) {
 
 	REQUIRE(msg != NULL);
 	key = dns_message_gettsigkey(msg);
-	REQUIRE(VALID_TSIG_KEY(key));
 
 	/*
 	 * If this is a response, there should be a query tsig.
@@ -460,7 +440,7 @@ dns_tsig_sign(dns_message_t *msg) {
 	dns_name_init(&tsig.algorithm, NULL);
 	dns_name_clone(key->algorithm, &tsig.algorithm);
 
-	isc_stdtime_get(&now);
+	time(&now);
 	tsig.timesigned = now + msg->timeadjust;
 	tsig.fudge = DNS_TSIG_FUDGE;
 
@@ -728,7 +708,7 @@ dns_tsig_verify(isc_buffer_t *source, dns_message_t *msg)
 	unsigned char data[32];
 	dns_name_t *keyname;
 	dns_rdata_t rdata = DNS_RDATA_INIT;
-	isc_stdtime_t now;
+	time_t now;
 	isc_result_t ret;
 	dns_tsigkey_t *tsigkey;
 	dst_key_t *key = NULL;
@@ -740,11 +720,8 @@ dns_tsig_verify(isc_buffer_t *source, dns_message_t *msg)
 	isc_boolean_t response;
 
 	REQUIRE(source != NULL);
-	REQUIRE(DNS_MESSAGE_VALID(msg));
 	tsigkey = dns_message_gettsigkey(msg);
 	response = is_response(msg);
-
-	REQUIRE(tsigkey == NULL || VALID_TSIG_KEY(tsigkey));
 
 	msg->verify_attempted = 1;
 	msg->verified_sig = 0;
@@ -807,7 +784,7 @@ dns_tsig_verify(isc_buffer_t *source, dns_message_t *msg)
 	/*
 	 * Get the current time.
 	 */
-	isc_stdtime_get(&now);
+	time(&now);
 
 	/*
 	 * Find dns_tsigkey_t based on keyname.
@@ -991,12 +968,13 @@ dns_tsig_verify(isc_buffer_t *source, dns_message_t *msg)
 	/*
 	 * Is the time ok?
 	 */
-	if (now + msg->timeadjust > tsig.timesigned + tsig.fudge) {
+	if (now + msg->timeadjust > (time_t)(tsig.timesigned + tsig.fudge)) {
 		msg->tsigstatus = dns_tsigerror_badtime;
 		tsig_log(msg->tsigkey, 2, "signature has expired");
 		ret = DNS_R_CLOCKSKEW;
 		goto cleanup_context;
-	} else if (now + msg->timeadjust < tsig.timesigned - tsig.fudge) {
+	} else if (now + msg->timeadjust < (time_t)(tsig.timesigned -
+	    tsig.fudge)) {
 		msg->tsigstatus = dns_tsigerror_badtime;
 		tsig_log(msg->tsigkey, 2, "signature is in the future");
 		ret = DNS_R_CLOCKSKEW;
@@ -1066,7 +1044,7 @@ tsig_verify_tcp(isc_buffer_t *source, dns_message_t *msg) {
 	unsigned char data[32];
 	dns_name_t *keyname;
 	dns_rdata_t rdata = DNS_RDATA_INIT;
-	isc_stdtime_t now;
+	time_t now;
 	isc_result_t ret;
 	dns_tsigkey_t *tsigkey;
 	dst_key_t *key = NULL;
@@ -1293,16 +1271,16 @@ tsig_verify_tcp(isc_buffer_t *source, dns_message_t *msg) {
 		/*
 		 * Is the time ok?
 		 */
-		isc_stdtime_get(&now);
+		time(&now);
 
-		if (now + msg->timeadjust > tsig.timesigned + tsig.fudge) {
+		if (now + msg->timeadjust > (time_t)(tsig.timesigned +
+		    tsig.fudge)) {
 			msg->tsigstatus = dns_tsigerror_badtime;
 			tsig_log(msg->tsigkey, 2, "signature has expired");
 			ret = DNS_R_CLOCKSKEW;
 			goto cleanup_context;
-		} else if (now + msg->timeadjust <
-			   tsig.timesigned - tsig.fudge)
-		{
+		} else if (now + msg->timeadjust < (time_t)(tsig.timesigned -
+		    tsig.fudge)) {
 			msg->tsigstatus = dns_tsigerror_badtime;
 			tsig_log(msg->tsigkey, 2,
 				 "signature is in the future");

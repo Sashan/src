@@ -1,4 +1,4 @@
-/* $OpenBSD: d1_pkt.c,v 1.66 2018/12/03 17:16:12 tb Exp $ */
+/* $OpenBSD: d1_pkt.c,v 1.69 2020/02/21 16:15:56 jsing Exp $ */
 /*
  * DTLS implementation written by Nagendra Modadugu
  * (nagendra@cs.stanford.edu) for the OpenSSL project 2005.
@@ -1178,13 +1178,15 @@ dtls1_write_bytes(SSL *s, int type, const void *buf, int len)
 int
 do_dtls1_write(SSL *s, int type, const unsigned char *buf, unsigned int len)
 {
-	unsigned char *p, *pseq;
+	unsigned char *p;
 	int i, mac_size, clear = 0;
-	int prefix_len = 0;
 	SSL3_RECORD *wr;
 	SSL3_BUFFER *wb;
 	SSL_SESSION *sess;
 	int bs;
+	CBB cbb;
+
+	memset(&cbb, 0, sizeof(cbb));
 
 	/* first check if there is a SSL3_BUFFER still being written
 	 * out.  This will happen with non blocking IO */
@@ -1222,20 +1224,22 @@ do_dtls1_write(SSL *s, int type, const unsigned char *buf, unsigned int len)
 
 	/* DTLS implements explicit IV, so no need for empty fragments. */
 
-	p = wb->buf + prefix_len;
+	p = wb->buf;
 
-	/* write the header */
+	if (!CBB_init_fixed(&cbb, p, DTLS1_RT_HEADER_LENGTH))
+		goto err;
 
-	*(p++) = type&0xff;
-	wr->type = type;
+	/* Write the header. */
+	if (!CBB_add_u8(&cbb, type))
+		goto err;
+	if (!CBB_add_u16(&cbb, s->version))
+		goto err;
+	if (!CBB_add_u16(&cbb, D1I(s)->w_epoch))
+		goto err;
+	if (!CBB_add_bytes(&cbb, &(S3I(s)->write_sequence[2]), 6))
+		goto err;
 
-	*(p++) = (s->version >> 8);
-	*(p++) = s->version&0xff;
-
-	/* field where we are to write out packet epoch, seq num and len */
-	pseq = p;
-
-	p += 10;
+	p += DTLS1_RT_HEADER_LENGTH;
 
 	/* lets setup the record stuff. */
 
@@ -1248,6 +1252,7 @@ do_dtls1_write(SSL *s, int type, const unsigned char *buf, unsigned int len)
 	else
 		bs = 0;
 
+	wr->type = type;
 	wr->data = p + bs;
 	/* make room for IV in case of CBC */
 	wr->length = (int)len;
@@ -1273,45 +1278,32 @@ do_dtls1_write(SSL *s, int type, const unsigned char *buf, unsigned int len)
 	wr->input = p;
 	wr->data = p;
 
-
-	/* ssl3_enc can only have an error on read */
-	if (bs)	/* bs != 0 in case of CBC */
-	{
+	/* bs != 0 in case of CBC */
+	if (bs) {
 		arc4random_buf(p, bs);
 		/* master IV and last CBC residue stand for
 		 * the rest of randomness */
 		wr->length += bs;
 	}
 
+	/* ssl3_enc can only have an error on read */
 	s->method->internal->ssl3_enc->enc(s, 1);
 
-	/* record length after mac and block padding */
-/*	if (type == SSL3_RT_APPLICATION_DATA ||
-	(type == SSL3_RT_ALERT && ! SSL_in_init(s))) */
-
-	/* there's only one epoch between handshake and app data */
-
-	s2n(D1I(s)->w_epoch, pseq);
-
-	/* XDTLS: ?? */
-/*	else
-	s2n(D1I(s)->handshake_epoch, pseq);
-*/
-
-	memcpy(pseq, &(S3I(s)->write_sequence[2]), 6);
-	pseq += 6;
-	s2n(wr->length, pseq);
+	if (!CBB_add_u16(&cbb, wr->length))
+		goto err;
+	if (!CBB_finish(&cbb, NULL, NULL))
+		goto err;
 
 	/* we should now have
 	 * wr->data pointing to the encrypted data, which is
 	 * wr->length long */
-	wr->type=type; /* not needed but helps for debugging */
+	wr->type = type; /* not needed but helps for debugging */
 	wr->length += DTLS1_RT_HEADER_LENGTH;
 
 	tls1_record_sequence_increment(S3I(s)->write_sequence);
 
 	/* now let's set up wb */
-	wb->left = prefix_len + wr->length;
+	wb->left = wr->length;
 	wb->offset = 0;
 
 	/* memorize arguments so that ssl3_write_pending can detect bad write retries later */
@@ -1322,7 +1314,10 @@ do_dtls1_write(SSL *s, int type, const unsigned char *buf, unsigned int len)
 
 	/* we now just need to write the buffer */
 	return ssl3_write_pending(s, type, buf, len);
-err:
+
+ err:
+	CBB_cleanup(&cbb);
+
 	return -1;
 }
 

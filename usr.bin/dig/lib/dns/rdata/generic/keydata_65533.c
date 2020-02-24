@@ -18,78 +18,28 @@
 #define GENERIC_KEYDATA_65533_C 1
 
 #include <isc/time.h>
-#include <isc/stdtime.h>
 
 #include <dst/dst.h>
 
 #define RRTYPE_KEYDATA_ATTRIBUTES (0)
 
-static inline isc_result_t
-fromtext_keydata(ARGS_FROMTEXT) {
-	isc_result_t result;
-	isc_token_t token;
-	dns_secalg_t alg;
-	dns_secproto_t proto;
-	dns_keyflags_t flags;
-	uint32_t refresh, addhd, removehd;
+/*
+ * ISC_FORMATHTTPTIMESTAMP_SIZE needs to be 30 in C locale and potentially
+ * more for other locales to handle longer national abbreviations when
+ * expanding strftime's %a and %b.
+ */
+#define ISC_FORMATHTTPTIMESTAMP_SIZE 50
 
-	REQUIRE(type == dns_rdatatype_keydata);
+static void
+isc_time_formathttptimestamp(const struct timespec *t, char *buf, size_t len) {
+	size_t flen;
+	/*
+	 * 5 spaces, 1 comma, 3 GMT, 2 %d, 4 %Y, 8 %H:%M:%S, 3+ %a, 3+ %b (29+)
+	 */
 
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(origin);
-	UNUSED(options);
-	UNUSED(callbacks);
-
-	/* refresh timer */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	RETTOK(dns_time32_fromtext(DNS_AS_STR(token), &refresh));
-	RETERR(uint32_tobuffer(refresh, target));
-
-	/* add hold-down */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	RETTOK(dns_time32_fromtext(DNS_AS_STR(token), &addhd));
-	RETERR(uint32_tobuffer(addhd, target));
-
-	/* remove hold-down */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	RETTOK(dns_time32_fromtext(DNS_AS_STR(token), &removehd));
-	RETERR(uint32_tobuffer(removehd, target));
-
-	/* flags */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	RETTOK(dns_keyflags_fromtext(&flags, &token.value.as_textregion));
-	RETERR(uint16_tobuffer(flags, target));
-
-	/* protocol */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	RETTOK(dns_secproto_fromtext(&proto, &token.value.as_textregion));
-	RETERR(mem_tobuffer(target, &proto, 1));
-
-	/* algorithm */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	RETTOK(dns_secalg_fromtext(&alg, &token.value.as_textregion));
-	RETERR(mem_tobuffer(target, &alg, 1));
-
-	/* No Key? */
-	if ((flags & 0xc000) == 0xc000)
-		return (ISC_R_SUCCESS);
-
-	result = isc_base64_tobuffer(lexer, target, -1);
-	if (result != ISC_R_SUCCESS)
-		return (result);
-
-	/* Ensure there's at least enough data to compute a key ID for MD5 */
-	if (alg == DST_ALG_RSAMD5 && isc_buffer_usedlength(target) < 19)
-		return (ISC_R_UNEXPECTEDEND);
-
-	return (ISC_R_SUCCESS);
+	flen = strftime(buf, len, "%a, %d %b %Y %H:%M:%S GMT",
+	    gmtime(&t->tv_sec));
+	INSIST(flen < len);
 }
 
 static inline isc_result_t
@@ -180,7 +130,7 @@ totext_keydata(ARGS_TOTEXT) {
 		char rbuf[ISC_FORMATHTTPTIMESTAMP_SIZE];
 		char abuf[ISC_FORMATHTTPTIMESTAMP_SIZE];
 		char dbuf[ISC_FORMATHTTPTIMESTAMP_SIZE];
-		isc_time_t t;
+		struct timespec t;
 
 		RETERR(str_totext(" ; ", target));
 		RETERR(str_totext(keyinfo, target));
@@ -197,13 +147,14 @@ totext_keydata(ARGS_TOTEXT) {
 		RETERR(str_totext(buf, target));
 
 		if ((tctx->flags & DNS_STYLEFLAG_MULTILINE) != 0) {
-			isc_stdtime_t now;
+			time_t now;
 
-			isc_stdtime_get(&now);
+			time(&now);
 
 			RETERR(str_totext(tctx->linebreak, target));
 			RETERR(str_totext("; next refresh: ", target));
-			isc_time_set(&t, refresh, 0);
+			t.tv_sec = refresh;
+			t.tv_nsec = 0;
 			isc_time_formathttptimestamp(&t, rbuf, sizeof(rbuf));
 			RETERR(str_totext(rbuf, target));
 
@@ -212,14 +163,15 @@ totext_keydata(ARGS_TOTEXT) {
 				RETERR(str_totext("; no trust", target));
 			} else {
 				RETERR(str_totext(tctx->linebreak, target));
-				if (add < now) {
+				if ((time_t)add < now) {
 					RETERR(str_totext("; trusted since: ",
 							  target));
 				} else {
 					RETERR(str_totext("; trust pending: ",
 							  target));
 				}
-				isc_time_set(&t, add, 0);
+				t.tv_sec = add;
+				t.tv_nsec = 0;
 				isc_time_formathttptimestamp(&t, abuf,
 							     sizeof(abuf));
 				RETERR(str_totext(abuf, target));
@@ -229,7 +181,8 @@ totext_keydata(ARGS_TOTEXT) {
 				RETERR(str_totext(tctx->linebreak, target));
 				RETERR(str_totext("; removal pending: ",
 						  target));
-				isc_time_set(&t, deltime, 0);
+				t.tv_sec = deltime;
+				t.tv_nsec = 0;
 				isc_time_formathttptimestamp(&t, dbuf,
 							     sizeof(dbuf));
 				RETERR(str_totext(dbuf, target));
@@ -385,28 +338,6 @@ freestruct_keydata(ARGS_FREESTRUCT) {
 	free(keydata->data);
 }
 
-static inline isc_result_t
-additionaldata_keydata(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_keydata);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_keydata(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_keydata);
-
-	dns_rdata_toregion(rdata, &r);
-
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_keydata(ARGS_CHECKOWNER) {
 
@@ -416,18 +347,6 @@ checkowner_keydata(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_keydata(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_keydata);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

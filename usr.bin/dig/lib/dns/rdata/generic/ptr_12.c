@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: ptr_12.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: ptr_12.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /* Reviewed: Thu Mar 16 14:05:12 PST 2000 by explorer */
 
@@ -22,39 +22,6 @@
 #define RDATA_GENERIC_PTR_12_C
 
 #define RRTYPE_PTR_ATTRIBUTES (0)
-
-static inline isc_result_t
-fromtext_ptr(ARGS_FROMTEXT) {
-	isc_token_t token;
-	dns_name_t name;
-	isc_buffer_t buffer;
-
-	REQUIRE(type == dns_rdatatype_ptr);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(callbacks);
-
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-
-	dns_name_init(&name, NULL);
-	buffer_fromregion(&buffer, &token.value.as_region);
-	if (origin == NULL)
-		origin = dns_rootname;
-	RETTOK(dns_name_fromtext(&name, &buffer, origin, options, target));
-	if (rdclass == dns_rdataclass_in &&
-	    (options & DNS_RDATA_CHECKNAMES) != 0 &&
-	    (options & DNS_RDATA_CHECKREVERSE) != 0) {
-		isc_boolean_t ok;
-		ok = dns_name_ishostname(&name, ISC_FALSE);
-		if (!ok && (options & DNS_RDATA_CHECKNAMESFAIL) != 0)
-			RETTOK(DNS_R_BADNAME);
-		if (!ok && callbacks != NULL)
-			warn_badname(&name, lexer, callbacks);
-	}
-	return (ISC_R_SUCCESS);
-}
 
 static inline isc_result_t
 totext_ptr(ARGS_TOTEXT) {
@@ -184,31 +151,6 @@ freestruct_ptr(ARGS_FREESTRUCT) {
 	dns_name_free(&ptr->ptr);
 }
 
-static inline isc_result_t
-additionaldata_ptr(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_ptr);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_ptr(ARGS_DIGEST) {
-	isc_region_t r;
-	dns_name_t name;
-
-	REQUIRE(rdata->type == dns_rdatatype_ptr);
-
-	dns_rdata_toregion(rdata, &r);
-	dns_name_init(&name, NULL);
-	dns_name_fromregion(&name, &r);
-
-	return (dns_name_digest(&name, digest, arg));
-}
-
 static inline isc_boolean_t
 checkowner_ptr(ARGS_CHECKOWNER) {
 
@@ -236,34 +178,6 @@ static unsigned char in_addr_arpa_data[]  = "\007IN-ADDR\004ARPA";
 static unsigned char in_addr_arpa_offsets[] = { 0, 8, 13 };
 static const dns_name_t in_addr_arpa =
 	DNS_NAME_INITABSOLUTE(in_addr_arpa_data, in_addr_arpa_offsets);
-
-static inline isc_boolean_t
-checknames_ptr(ARGS_CHECKNAMES) {
-	isc_region_t region;
-	dns_name_t name;
-
-	REQUIRE(rdata->type == dns_rdatatype_ptr);
-
-	if (rdata->rdclass != dns_rdataclass_in)
-	    return (ISC_TRUE);
-
-	if (dns_name_isdnssd(owner))
-		return (ISC_TRUE);
-
-	if (dns_name_issubdomain(owner, &in_addr_arpa) ||
-	    dns_name_issubdomain(owner, &ip6_arpa) ||
-	    dns_name_issubdomain(owner, &ip6_int)) {
-		dns_rdata_toregion(rdata, &region);
-		dns_name_init(&name, NULL);
-		dns_name_fromregion(&name, &region);
-		if (!dns_name_ishostname(&name, ISC_FALSE)) {
-			if (bad != NULL)
-				dns_name_clone(&name, bad);
-			return (ISC_FALSE);
-		}
-	}
-	return (ISC_TRUE);
-}
 
 static inline int
 casecompare_ptr(ARGS_COMPARE) {

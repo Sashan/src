@@ -22,15 +22,6 @@
 #define RRTYPE_TA_ATTRIBUTES 0
 
 static inline isc_result_t
-fromtext_ta(ARGS_FROMTEXT) {
-
-	REQUIRE(type == dns_rdatatype_ta);
-
-	return (generic_fromtext_ds(rdclass, type, lexer, origin, options,
-				    target, callbacks));
-}
-
-static inline isc_result_t
 totext_ta(ARGS_TOTEXT) {
 
 	REQUIRE(rdata->type == dns_rdatatype_ta);
@@ -111,28 +102,6 @@ freestruct_ta(ARGS_FREESTRUCT) {
 		free(ds->digest);
 }
 
-static inline isc_result_t
-additionaldata_ta(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_ta);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_ta(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_ta);
-
-	dns_rdata_toregion(rdata, &r);
-
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_ta(ARGS_CHECKOWNER) {
 
@@ -142,18 +111,6 @@ checkowner_ta(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_ta(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_ta);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

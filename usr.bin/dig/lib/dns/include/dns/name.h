@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: name.h,v 1.5 2020/02/13 16:55:20 florian Exp $ */
+/* $Id: name.h,v 1.7 2020/02/23 19:54:25 jung Exp $ */
 
 #ifndef DNS_NAME_H
 #define DNS_NAME_H 1
@@ -73,7 +73,6 @@
 #include <stdio.h>
 
 #include <isc/boolean.h>
-#include <isc/magic.h>
 #include <isc/region.h>		/* Required for storage size of dns_label_t. */
 
 #include <dns/types.h>
@@ -104,7 +103,6 @@
  * for whatever purpose the client desires.
  */
 struct dns_name {
-	unsigned int			magic;
 	unsigned char *			ndata;
 	unsigned int			length;
 	unsigned int			labels;
@@ -114,8 +112,6 @@ struct dns_name {
 	ISC_LINK(dns_name_t)		link;
 	ISC_LIST(dns_rdataset_t)	list;
 };
-
-#define DNS_NAME_MAGIC			ISC_MAGIC('D','N','S','n')
 
 #define DNS_NAMEATTR_ABSOLUTE		0x00000001
 #define DNS_NAMEATTR_READONLY		0x00000002
@@ -923,33 +919,6 @@ dns_name_free(dns_name_t *name);
  *	invalidated.
  */
 
-isc_result_t
-dns_name_digest(dns_name_t *name, dns_digestfunc_t digest, void *arg);
-/*%<
- * Send 'name' in DNSSEC canonical form to 'digest'.
- *
- * Requires:
- *
- *\li	'name' is a valid name.
- *
- *\li	'digest' is a valid dns_digestfunc_t.
- *
- * Ensures:
- *
- *\li	If successful, the DNSSEC canonical form of 'name' will have been
- *	sent to 'digest'.
- *
- *\li	If digest() returns something other than ISC_R_SUCCESS, that result
- *	will be returned as the result of dns_name_digest().
- *
- * Returns:
- *
- *\li	#ISC_R_SUCCESS
- *
- *\li	Many other results are possible if not successful.
- *
- */
-
 isc_boolean_t
 dns_name_dynamic(dns_name_t *name);
 /*%<
@@ -990,8 +959,6 @@ dns_name_format(dns_name_t *name, char *cp, unsigned int size);
  */
 
 isc_result_t
-dns_name_fromstring(dns_name_t *target, const char *src, unsigned int options);
-isc_result_t
 dns_name_fromstring2(dns_name_t *target, const char *src,
 		     const dns_name_t *origin, unsigned int options);
 /*%<
@@ -1014,22 +981,6 @@ dns_name_fromstring2(dns_name_t *target, const char *src,
  *\li	Any error that dns_name_fromtext() can return.
  *
  *\li	Any error that dns_name_dup() can return.
- */
-
-isc_result_t
-dns_name_settotextfilter(dns_name_totextfilter_t proc);
-/*%<
- * Set / clear a thread specific function 'proc' to be called at the
- * end of dns_name_totext().
- *
- * Note: Under Windows you need to call "dns_name_settotextfilter(NULL);"
- * prior to exiting the thread otherwise memory will be leaked.
- * For other platforms, which are pthreads based, this is still a good
- * idea but not required.
- *
- * Returns
- *\li	#ISC_R_SUCCESS
- *\li	#ISC_R_UNEXPECTED
  */
 
 #define DNS_NAME_FORMATSIZE (DNS_NAME_MAXTEXT + 1)
@@ -1084,26 +1035,7 @@ dns_name_ismailbox(const dns_name_t *name);
  * \li	'name' to be valid.
  */
 
-void
-dns_name_destroy(void);
-/*%<
- * Cleanup dns_name_settotextfilter() / dns_name_totext() state.
- *
- * This should be called as part of the final cleanup process.
- *
- * Note: dns_name_settotextfilter(NULL); should be called for all
- * threads which have called dns_name_settotextfilter() with a
- * non-NULL argument prior to calling dns_name_destroy();
- */
-
-isc_boolean_t
-dns_name_isdnssd(const dns_name_t *owner);
-/*%<
- * Determine if the 'owner' is a DNS-SD prefix.
- */
-
 #define DNS_NAME_INITABSOLUTE(A,B) { \
-	DNS_NAME_MAGIC, \
 	A, sizeof(A), sizeof(B), \
 	DNS_NAMEATTR_READONLY | DNS_NAMEATTR_ABSOLUTE, \
 	B, NULL, { (void *)-1, (void *)-1}, \
@@ -1111,7 +1043,6 @@ dns_name_isdnssd(const dns_name_t *owner);
 }
 
 #define DNS_NAME_INITNONABSOLUTE(A,B) { \
-	DNS_NAME_MAGIC, \
 	A, (sizeof(A) - 1), sizeof(B), \
 	DNS_NAMEATTR_READONLY, \
 	B, NULL, { (void *)-1, (void *)-1}, \

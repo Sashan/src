@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: a6_38.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: a6_38.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /* RFC2874 */
 
@@ -24,76 +24,6 @@
 #include <isc/net.h>
 
 #define RRTYPE_A6_ATTRIBUTES (0)
-
-static inline isc_result_t
-fromtext_in_a6(ARGS_FROMTEXT) {
-	isc_token_t token;
-	unsigned char addr[16];
-	unsigned char prefixlen;
-	unsigned char octets;
-	unsigned char mask;
-	dns_name_t name;
-	isc_buffer_t buffer;
-	isc_boolean_t ok;
-
-	REQUIRE(type == dns_rdatatype_a6);
-	REQUIRE(rdclass == dns_rdataclass_in);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(callbacks);
-
-	/*
-	 * Prefix length.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	if (token.value.as_ulong > 128U)
-		RETTOK(ISC_R_RANGE);
-
-	prefixlen = (unsigned char)token.value.as_ulong;
-	RETERR(mem_tobuffer(target, &prefixlen, 1));
-
-	/*
-	 * Suffix.
-	 */
-	if (prefixlen != 128) {
-		/*
-		 * Prefix 0..127.
-		 */
-		octets = prefixlen/8;
-		/*
-		 * Octets 0..15.
-		 */
-		RETERR(isc_lex_getmastertoken(lexer, &token,
-					      isc_tokentype_string,
-					      ISC_FALSE));
-		if (inet_pton(AF_INET6, DNS_AS_STR(token), addr) != 1)
-			RETTOK(DNS_R_BADAAAA);
-		mask = 0xff >> (prefixlen % 8);
-		addr[octets] &= mask;
-		RETERR(mem_tobuffer(target, &addr[octets], 16 - octets));
-	}
-
-	if (prefixlen == 0)
-		return (ISC_R_SUCCESS);
-
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	dns_name_init(&name, NULL);
-	buffer_fromregion(&buffer, &token.value.as_region);
-	if (origin == NULL)
-		origin = dns_rootname;
-	RETTOK(dns_name_fromtext(&name, &buffer, origin, options, target));
-	ok = ISC_TRUE;
-	if ((options & DNS_RDATA_CHECKNAMES) != 0)
-		ok = dns_name_ishostname(&name, ISC_FALSE);
-	if (!ok && (options & DNS_RDATA_CHECKNAMESFAIL) != 0)
-		RETTOK(DNS_R_BADNAME);
-	if (!ok && callbacks != NULL)
-		warn_badname(&name, lexer, callbacks);
-	return (ISC_R_SUCCESS);
-}
 
 static inline isc_result_t
 totext_in_a6(ARGS_TOTEXT) {
@@ -375,46 +305,6 @@ freestruct_in_a6(ARGS_FREESTRUCT) {
 		dns_name_free(&a6->prefix);
 }
 
-static inline isc_result_t
-additionaldata_in_a6(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_a6);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_in_a6(ARGS_DIGEST) {
-	isc_region_t r1, r2;
-	unsigned char prefixlen, octets;
-	isc_result_t result;
-	dns_name_t name;
-
-	REQUIRE(rdata->type == dns_rdatatype_a6);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	dns_rdata_toregion(rdata, &r1);
-	r2 = r1;
-	prefixlen = r1.base[0];
-	octets = 1 + 16 - prefixlen / 8;
-
-	r1.length = octets;
-	result = (digest)(arg, &r1);
-	if (result != ISC_R_SUCCESS)
-		return (result);
-	if (prefixlen == 0)
-		return (ISC_R_SUCCESS);
-
-	isc_region_consume(&r2, octets);
-	dns_name_init(&name, NULL);
-	dns_name_fromregion(&name, &r2);
-	return (dns_name_digest(&name, digest, arg));
-}
-
 static inline isc_boolean_t
 checkowner_in_a6(ARGS_CHECKOWNER) {
 
@@ -425,32 +315,6 @@ checkowner_in_a6(ARGS_CHECKOWNER) {
 	UNUSED(rdclass);
 
 	return (dns_name_ishostname(name, wildcard));
-}
-
-static inline isc_boolean_t
-checknames_in_a6(ARGS_CHECKNAMES) {
-	isc_region_t region;
-	dns_name_t name;
-	unsigned int prefixlen;
-
-	REQUIRE(rdata->type == dns_rdatatype_a6);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	UNUSED(owner);
-
-	dns_rdata_toregion(rdata, &region);
-	prefixlen = uint8_fromregion(&region);
-	if (prefixlen == 0)
-		return (ISC_TRUE);
-	isc_region_consume(&region, 1 + 16 - prefixlen / 8);
-	dns_name_init(&name, NULL);
-	dns_name_fromregion(&name, &region);
-	if (!dns_name_ishostname(&name, ISC_FALSE)) {
-		if (bad != NULL)
-			dns_name_clone(&name, bad);
-		return (ISC_FALSE);
-	}
-	return (ISC_TRUE);
 }
 
 static inline int

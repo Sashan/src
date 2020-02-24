@@ -24,33 +24,6 @@
 #define RRTYPE_NID_ATTRIBUTES (0)
 
 static inline isc_result_t
-fromtext_nid(ARGS_FROMTEXT) {
-	isc_token_t token;
-	unsigned char locator[NS_LOCATORSZ];
-
-	REQUIRE(type == dns_rdatatype_nid);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(origin);
-	UNUSED(options);
-	UNUSED(callbacks);
-
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	if (token.value.as_ulong > 0xffffU)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint16_tobuffer(token.value.as_ulong, target));
-
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-
-	if (locator_pton(DNS_AS_STR(token), locator) != 1)
-		RETTOK(DNS_R_SYNTAX);
-	return (mem_tobuffer(target, locator, NS_LOCATORSZ));
-}
-
-static inline isc_result_t
 totext_nid(ARGS_TOTEXT) {
 	isc_region_t region;
 	char buf[sizeof("xxxx:xxxx:xxxx:xxxx")];
@@ -167,31 +140,6 @@ freestruct_nid(ARGS_FREESTRUCT) {
 	return;
 }
 
-static inline isc_result_t
-additionaldata_nid(ARGS_ADDLDATA) {
-
-	REQUIRE(rdata->type == dns_rdatatype_nid);
-	REQUIRE(rdata->length == 10);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_nid(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_nid);
-	REQUIRE(rdata->length == 10);
-
-	dns_rdata_toregion(rdata, &r);
-
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_nid(ARGS_CHECKOWNER) {
 
@@ -201,19 +149,6 @@ checkowner_nid(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_nid(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_nid);
-	REQUIRE(rdata->length == 10);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

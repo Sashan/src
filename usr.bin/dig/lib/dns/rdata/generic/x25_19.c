@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: x25_19.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: x25_19.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /* Reviewed: Thu Mar 16 16:15:57 PST 2000 by bwelling */
 
@@ -24,30 +24,6 @@
 #define RDATA_GENERIC_X25_19_C
 
 #define RRTYPE_X25_ATTRIBUTES (0)
-
-static inline isc_result_t
-fromtext_x25(ARGS_FROMTEXT) {
-	isc_token_t token;
-	unsigned int i;
-
-	REQUIRE(type == dns_rdatatype_x25);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(origin);
-	UNUSED(options);
-	UNUSED(callbacks);
-
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_qstring,
-				      ISC_FALSE));
-	if (token.value.as_textregion.length < 4)
-		RETTOK(DNS_R_SYNTAX);
-	for (i = 0; i < token.value.as_textregion.length; i++)
-		if (!isdigit(token.value.as_textregion.base[i] & 0xff))
-			RETTOK(ISC_R_RANGE);
-	RETTOK(txt_fromtext(&token.value.as_textregion, target));
-	return (ISC_R_SUCCESS);
-}
 
 static inline isc_result_t
 totext_x25(ARGS_TOTEXT) {
@@ -163,28 +139,6 @@ freestruct_x25(ARGS_FREESTRUCT) {
 		free(x25->x25);
 }
 
-static inline isc_result_t
-additionaldata_x25(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_x25);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_x25(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_x25);
-
-	dns_rdata_toregion(rdata, &r);
-
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_x25(ARGS_CHECKOWNER) {
 
@@ -194,18 +148,6 @@ checkowner_x25(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_x25(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_x25);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

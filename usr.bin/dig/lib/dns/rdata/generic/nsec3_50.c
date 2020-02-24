@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: nsec3_50.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: nsec3_50.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /*
  * Copyright (C) 2004  Nominet, Ltd.
@@ -40,70 +40,6 @@
 #include <isc/base32.h>
 
 #define RRTYPE_NSEC3_ATTRIBUTES DNS_RDATATYPEATTR_DNSSEC
-
-static inline isc_result_t
-fromtext_nsec3(ARGS_FROMTEXT) {
-	isc_token_t token;
-	unsigned int flags;
-	unsigned char hashalg;
-	isc_buffer_t b;
-	unsigned char buf[256];
-
-	REQUIRE(type == dns_rdatatype_nsec3);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(callbacks);
-	UNUSED(origin);
-	UNUSED(options);
-
-	/* Hash. */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	RETTOK(dns_hashalg_fromtext(&hashalg, &token.value.as_textregion));
-	RETERR(uint8_tobuffer(hashalg, target));
-
-	/* Flags. */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	flags = token.value.as_ulong;
-	if (flags > 255U)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint8_tobuffer(flags, target));
-
-	/* Iterations. */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	if (token.value.as_ulong > 0xffffU)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint16_tobuffer(token.value.as_ulong, target));
-
-	/* salt */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	if (token.value.as_textregion.length > (255*2))
-		RETTOK(DNS_R_TEXTTOOLONG);
-	if (strcmp(DNS_AS_STR(token), "-") == 0) {
-		RETERR(uint8_tobuffer(0, target));
-	} else {
-		RETERR(uint8_tobuffer(strlen(DNS_AS_STR(token)) / 2, target));
-		RETERR(isc_hex_decodestring(DNS_AS_STR(token), target));
-	}
-
-	/*
-	 * Next hash a single base32hex word.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	isc_buffer_init(&b, buf, sizeof(buf));
-	RETTOK(isc_base32hexnp_decodestring(DNS_AS_STR(token), &b));
-	if (isc_buffer_usedlength(&b) > 0xffU)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint8_tobuffer(isc_buffer_usedlength(&b), target));
-	RETERR(mem_tobuffer(target, &buf, isc_buffer_usedlength(&b)));
-
-	return (typemap_fromtext(lexer, target, ISC_TRUE));
-}
 
 static inline isc_result_t
 totext_nsec3(ARGS_TOTEXT) {
@@ -338,27 +274,6 @@ freestruct_nsec3(ARGS_FREESTRUCT) {
 		free(nsec3->typebits);
 }
 
-static inline isc_result_t
-additionaldata_nsec3(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_nsec3);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_nsec3(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_nsec3);
-
-	dns_rdata_toregion(rdata, &r);
-	return ((digest)(arg, &r));
-}
-
 #define NSEC3_MAX_HASH_LENGTH 155
 static inline isc_boolean_t
 checkowner_nsec3(ARGS_CHECKOWNER) {
@@ -382,18 +297,6 @@ checkowner_nsec3(ARGS_CHECKOWNER) {
 		return (ISC_TRUE);
 
 	return (ISC_FALSE);
-}
-
-static inline isc_boolean_t
-checknames_nsec3(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_nsec3);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
-
-	return (ISC_TRUE);
 }
 
 static inline int

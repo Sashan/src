@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: tsig_250.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: tsig_250.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /* Reviewed: Thu Mar 16 13:39:43 PST 2000 by gson */
 
@@ -23,111 +23,6 @@
 
 #define RRTYPE_TSIG_ATTRIBUTES \
 	(DNS_RDATATYPEATTR_META | DNS_RDATATYPEATTR_NOTQUESTION)
-
-static inline isc_result_t
-fromtext_any_tsig(ARGS_FROMTEXT) {
-	isc_token_t token;
-	dns_name_t name;
-	uint64_t sigtime;
-	isc_buffer_t buffer;
-	dns_rcode_t rcode;
-	long i;
-	char *e;
-
-	REQUIRE(type == dns_rdatatype_tsig);
-	REQUIRE(rdclass == dns_rdataclass_any);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(callbacks);
-
-	/*
-	 * Algorithm Name.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	dns_name_init(&name, NULL);
-	buffer_fromregion(&buffer, &token.value.as_region);
-	if (origin == NULL)
-		origin = dns_rootname;
-	RETTOK(dns_name_fromtext(&name, &buffer, origin, options, target));
-
-	/*
-	 * Time Signed: 48 bits.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	sigtime = strtoull(DNS_AS_STR(token), &e, 10);
-	if (*e != 0)
-		RETTOK(DNS_R_SYNTAX);
-	if ((sigtime >> 48) != 0)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint16_tobuffer((uint16_t)(sigtime >> 32), target));
-	RETERR(uint32_tobuffer((uint32_t)(sigtime & 0xffffffffU), target));
-
-	/*
-	 * Fudge.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	if (token.value.as_ulong > 0xffffU)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint16_tobuffer(token.value.as_ulong, target));
-
-	/*
-	 * Signature Size.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	if (token.value.as_ulong > 0xffffU)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint16_tobuffer(token.value.as_ulong, target));
-
-	/*
-	 * Signature.
-	 */
-	RETERR(isc_base64_tobuffer(lexer, target, (int)token.value.as_ulong));
-
-	/*
-	 * Original ID.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	if (token.value.as_ulong > 0xffffU)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint16_tobuffer(token.value.as_ulong, target));
-
-	/*
-	 * Error.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	if (dns_tsigrcode_fromtext(&rcode, &token.value.as_textregion)
-				!= ISC_R_SUCCESS)
-	{
-		i = strtol(DNS_AS_STR(token), &e, 10);
-		if (*e != 0)
-			RETTOK(DNS_R_UNKNOWN);
-		if (i < 0 || i > 0xffff)
-			RETTOK(ISC_R_RANGE);
-		rcode = (dns_rcode_t)i;
-	}
-	RETERR(uint16_tobuffer(rcode, target));
-
-	/*
-	 * Other Len.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	if (token.value.as_ulong > 0xffffU)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint16_tobuffer(token.value.as_ulong, target));
-
-	/*
-	 * Other Data.
-	 */
-	return (isc_base64_tobuffer(lexer, target, (int)token.value.as_ulong));
-}
 
 static inline isc_result_t
 totext_any_tsig(ARGS_TOTEXT) {
@@ -534,31 +429,6 @@ freestruct_any_tsig(ARGS_FREESTRUCT) {
 	free(tsig->other);
 }
 
-static inline isc_result_t
-additionaldata_any_tsig(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_tsig);
-	REQUIRE(rdata->rdclass == dns_rdataclass_any);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_any_tsig(ARGS_DIGEST) {
-
-	REQUIRE(rdata->type == dns_rdatatype_tsig);
-	REQUIRE(rdata->rdclass == dns_rdataclass_any);
-
-	UNUSED(rdata);
-	UNUSED(digest);
-	UNUSED(arg);
-
-	return (ISC_R_NOTIMPLEMENTED);
-}
-
 static inline isc_boolean_t
 checkowner_any_tsig(ARGS_CHECKOWNER) {
 
@@ -569,19 +439,6 @@ checkowner_any_tsig(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_any_tsig(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_tsig);
-	REQUIRE(rdata->rdclass == dns_rdataclass_any);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

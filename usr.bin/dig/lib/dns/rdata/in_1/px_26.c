@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: px_26.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: px_26.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /* Reviewed: Mon Mar 20 10:44:27 PST 2000 */
 
@@ -24,51 +24,6 @@
 #define RDATA_IN_1_PX_26_C
 
 #define RRTYPE_PX_ATTRIBUTES (0)
-
-static inline isc_result_t
-fromtext_in_px(ARGS_FROMTEXT) {
-	isc_token_t token;
-	dns_name_t name;
-	isc_buffer_t buffer;
-
-	REQUIRE(type == dns_rdatatype_px);
-	REQUIRE(rdclass == dns_rdataclass_in);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(callbacks);
-
-	if (origin == NULL)
-		origin = dns_rootname;
-
-	/*
-	 * Preference.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	if (token.value.as_ulong > 0xffffU)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint16_tobuffer(token.value.as_ulong, target));
-
-	/*
-	 * MAP822.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	dns_name_init(&name, NULL);
-	buffer_fromregion(&buffer, &token.value.as_region);
-	RETTOK(dns_name_fromtext(&name, &buffer, origin, options, target));
-
-	/*
-	 * MAPX400.
-	 */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-	dns_name_init(&name, NULL);
-	buffer_fromregion(&buffer, &token.value.as_region);
-	RETTOK(dns_name_fromtext(&name, &buffer, origin, options, target));
-	return (ISC_R_SUCCESS);
-}
 
 static inline isc_result_t
 totext_in_px(ARGS_TOTEXT) {
@@ -299,46 +254,6 @@ freestruct_in_px(ARGS_FREESTRUCT) {
 	dns_name_free(&px->mapx400);
 }
 
-static inline isc_result_t
-additionaldata_in_px(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_px);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_in_px(ARGS_DIGEST) {
-	isc_region_t r1, r2;
-	dns_name_t name;
-	isc_result_t result;
-
-	REQUIRE(rdata->type == dns_rdatatype_px);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	dns_rdata_toregion(rdata, &r1);
-	r2 = r1;
-	isc_region_consume(&r2, 2);
-	r1.length = 2;
-	result = (digest)(arg, &r1);
-	if (result != ISC_R_SUCCESS)
-		return (result);
-	dns_name_init(&name, NULL);
-	dns_name_fromregion(&name, &r2);
-	result = dns_name_digest(&name, digest, arg);
-	if (result != ISC_R_SUCCESS)
-		return (result);
-	isc_region_consume(&r2, name_length(&name));
-	dns_name_init(&name, NULL);
-	dns_name_fromregion(&name, &r2);
-
-	return (dns_name_digest(&name, digest, arg));
-}
-
 static inline isc_boolean_t
 checkowner_in_px(ARGS_CHECKOWNER) {
 
@@ -349,19 +264,6 @@ checkowner_in_px(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_in_px(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_px);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

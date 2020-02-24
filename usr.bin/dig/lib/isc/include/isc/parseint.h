@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: parseint.h,v 1.2 2020/02/13 13:53:01 jsg Exp $ */
+/* $Id: parseint.h,v 1.4 2020/02/22 19:47:07 jung Exp $ */
 
 #ifndef ISC_PARSEINT_H
 #define ISC_PARSEINT_H 1
@@ -32,11 +32,6 @@
 isc_result_t
 isc_parse_uint32(uint32_t *uip, const char *string, int base);
 
-isc_result_t
-isc_parse_uint16(uint16_t *uip, const char *string, int base);
-
-isc_result_t
-isc_parse_uint8(uint8_t *uip, const char *string, int base);
 /*%<
  * Parse the null-terminated string 'string' containing a base 'base'
  * integer, storing the result in '*uip'.

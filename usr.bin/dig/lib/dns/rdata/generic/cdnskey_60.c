@@ -24,15 +24,6 @@
 #define RRTYPE_CDNSKEY_ATTRIBUTES 0
 
 static inline isc_result_t
-fromtext_cdnskey(ARGS_FROMTEXT) {
-
-	REQUIRE(type == dns_rdatatype_cdnskey);
-
-	return (generic_fromtext_key(rdclass, type, lexer, origin,
-				     options, target, callbacks));
-}
-
-static inline isc_result_t
 totext_cdnskey(ARGS_TOTEXT) {
 
 	REQUIRE(rdata != NULL);
@@ -114,29 +105,6 @@ freestruct_cdnskey(ARGS_FREESTRUCT) {
 	generic_freestruct_key(source);
 }
 
-static inline isc_result_t
-additionaldata_cdnskey(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_cdnskey);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_cdnskey(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata != NULL);
-	REQUIRE(rdata->type == dns_rdatatype_cdnskey);
-
-	dns_rdata_toregion(rdata, &r);
-
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_cdnskey(ARGS_CHECKOWNER) {
 
@@ -146,19 +114,6 @@ checkowner_cdnskey(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_cdnskey(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata != NULL);
-	REQUIRE(rdata->type == dns_rdatatype_cdnskey);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }

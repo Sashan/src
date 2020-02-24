@@ -14,21 +14,18 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: dst.h,v 1.4 2020/02/13 13:53:01 jsg Exp $ */
+/* $Id: dst.h,v 1.10 2020/02/23 23:40:21 jsg Exp $ */
 
 #ifndef DST_DST_H
 #define DST_DST_H 1
 
 /*! \file dst/dst.h */
 
-#include <isc/stdtime.h>
-
 #include <dns/types.h>
 #include <dns/log.h>
 #include <dns/name.h>
 #include <dns/secalg.h>
 #include <dns/ds.h>
-#include <dns/dsdigest.h>
 
 /***
  *** Types
@@ -144,21 +141,10 @@ dst_algorithm_supported(unsigned int alg);
  */
 
 isc_result_t
-dst_context_create(dst_key_t *key, dst_context_t **dctxp);
-
-isc_result_t
-dst_context_create2(dst_key_t *key,
-		    isc_logcategory_t *category, dst_context_t **dctxp);
-
-isc_result_t
 dst_context_create3(dst_key_t *key,
 		    isc_logcategory_t *category, isc_boolean_t useforsigning,
 		    dst_context_t **dctxp);
 
-isc_result_t
-dst_context_create4(dst_key_t *key,
-		    isc_logcategory_t *category, isc_boolean_t useforsigning,
-		    int maxbits, dst_context_t **dctxp);
 /*%<
  * Creates a context to be used for a sign or verify operation.
  *
@@ -224,94 +210,6 @@ isc_result_t
 dst_context_verify(dst_context_t *dctx, isc_region_t *sig);
 
 isc_result_t
-dst_context_verify2(dst_context_t *dctx, unsigned int maxbits,
-		    isc_region_t *sig);
-/*%<
- * Verifies the signature using the data and key stored in the context.
- *
- * 'maxbits' specifies the maximum number of bits permitted in the RSA
- * exponent.
- *
- * Requires:
- * \li	"dctx" is a valid context.
- * \li	"sig" is a valid region.
- *
- * Returns:
- * \li	ISC_R_SUCCESS
- * \li	all other errors indicate failure
- *
- * Ensures:
- * \li	"sig" will contain the signature
- */
-
-isc_result_t
-dst_key_fromnamedfile(const char *filename, const char *dirname,
-		      int type, dst_key_t **keyp);
-/*%<
- * Reads a key from permanent storage.  The key can either be a public or
- * key, and is specified by filename.  If a private key is specified, the
- * public key must also be present.
- *
- * If 'dirname' is not NULL, and 'filename' is a relative path,
- * then the file is looked up relative to the given directory.
- * If 'filename' is an absolute path, 'dirname' is ignored.
- *
- * Requires:
- * \li	"filename" is not NULL
- * \li	"type" is DST_TYPE_PUBLIC, DST_TYPE_PRIVATE, or the bitwise union
- *		  DST_TYPE_KEY look for a KEY record otherwise DNSKEY
- * \li	"keyp" is not NULL and "*keyp" is NULL.
- *
- * Returns:
- * \li	ISC_R_SUCCESS
- * \li	any other result indicates failure
- *
- * Ensures:
- * \li	If successful, *keyp will contain a valid key.
- */
-
-
-isc_result_t
-dst_key_read_public(const char *filename, int type, dst_key_t **keyp);
-/*%<
- * Reads a public key from permanent storage.  The key must be a public key.
- *
- * Requires:
- * \li	"filename" is not NULL
- * \li	"type" is DST_TYPE_KEY look for a KEY record otherwise DNSKEY
- * \li	"keyp" is not NULL and "*keyp" is NULL.
- *
- * Returns:
- * \li	ISC_R_SUCCESS
- * \li	DST_R_BADKEYTYPE if the key type is not the expected one
- * \li	ISC_R_UNEXPECTEDTOKEN if the file can not be parsed as a public key
- * \li	any other result indicates failure
- *
- * Ensures:
- * \li	If successful, *keyp will contain a valid key.
- */
-
-isc_result_t
-dst_key_fromdns(dns_name_t *name, dns_rdataclass_t rdclass,
-		isc_buffer_t *source, dst_key_t **keyp);
-/*%<
- * Converts a DNS KEY record into a DST key.
- *
- * Requires:
- * \li	"name" is a valid absolute dns name.
- * \li	"source" is a valid buffer.  There must be at least 4 bytes available.
- * \li	"keyp" is not NULL and "*keyp" is NULL.
- *
- * Returns:
- * \li	ISC_R_SUCCESS
- * \li	any other result indicates failure
- *
- * Ensures:
- * \li	If successful, *keyp will contain a valid key, and the consumed
- *	pointer in data will be advanced.
- */
-
-isc_result_t
 dst_key_todns(const dst_key_t *key, isc_buffer_t *target);
 /*%<
  * Converts a DST key into a DNS KEY record.
@@ -329,9 +227,7 @@ dst_key_todns(const dst_key_t *key, isc_buffer_t *target);
  */
 
 isc_result_t
-dst_key_frombuffer(dns_name_t *name, unsigned int alg,
-		   unsigned int flags, unsigned int protocol,
-		   dns_rdataclass_t rdclass,
+dst_key_frombuffer(unsigned int alg, unsigned int flags, unsigned int protocol,
 		   isc_buffer_t *source, dst_key_t **keyp);
 /*%<
  * Converts a buffer containing DNS KEY RDATA into a DST key.
@@ -382,9 +278,6 @@ dst_key_free(dst_key_t **keyp);
  * Require:
  *\li	"key" is a valid key.
  */
-dns_name_t *
-dst_key_name(const dst_key_t *key);
-
 unsigned int
 dst_key_size(const dst_key_t *key);
 
@@ -410,8 +303,6 @@ dst_key_sigsize(const dst_key_t *key, unsigned int *n);
 
 uint16_t
 dst_region_computeid(const isc_region_t *source, unsigned int alg);
-uint16_t
-dst_region_computerid(const isc_region_t *source, unsigned int alg);
 /*%<
  * Computes the (revoked) key id of the key stored in the provided
  * region with the given algorithm.

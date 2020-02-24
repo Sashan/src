@@ -22,34 +22,6 @@
 #define RRTYPE_CSYNC_ATTRIBUTES 0
 
 static inline isc_result_t
-fromtext_csync(ARGS_FROMTEXT) {
-	isc_token_t token;
-
-	REQUIRE(type == dns_rdatatype_csync);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(origin);
-	UNUSED(options);
-	UNUSED(callbacks);
-
-	/* Serial. */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	RETERR(uint32_tobuffer(token.value.as_ulong, target));
-
-	/* Flags. */
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_number,
-				      ISC_FALSE));
-	if (token.value.as_ulong > 0xffffU)
-		RETTOK(ISC_R_RANGE);
-	RETERR(uint16_tobuffer(token.value.as_ulong, target));
-
-	/* Type Map */
-	return (typemap_fromtext(lexer, target, ISC_TRUE));
-}
-
-static inline isc_result_t
 totext_csync(ARGS_TOTEXT) {
 	unsigned long num;
 	char buf[sizeof("0123456789")];	/* Also TYPE65535 */
@@ -204,27 +176,6 @@ freestruct_csync(ARGS_FREESTRUCT) {
 	free(csync->typebits);
 }
 
-static inline isc_result_t
-additionaldata_csync(ARGS_ADDLDATA) {
-	REQUIRE(rdata->type == dns_rdatatype_csync);
-
-	UNUSED(rdata);
-	UNUSED(add);
-	UNUSED(arg);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline isc_result_t
-digest_csync(ARGS_DIGEST) {
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_csync);
-
-	dns_rdata_toregion(rdata, &r);
-	return ((digest)(arg, &r));
-}
-
 static inline isc_boolean_t
 checkowner_csync(ARGS_CHECKOWNER) {
 
@@ -236,18 +187,6 @@ checkowner_csync(ARGS_CHECKOWNER) {
        UNUSED(wildcard);
 
        return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_csync(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_csync);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
-
-	return (ISC_TRUE);
 }
 
 static inline int

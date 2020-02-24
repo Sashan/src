@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: timer.h,v 1.3 2020/02/13 13:53:01 jsg Exp $ */
+/* $Id: timer.h,v 1.10 2020/02/18 18:11:27 florian Exp $ */
 
 #ifndef ISC_TIMER_H
 #define ISC_TIMER_H 1
@@ -81,17 +81,10 @@
  ***/
 
 /*% Timer Type */
-typedef enum {
-	isc_timertype_undefined = -1,	/*%< Undefined */
-	isc_timertype_ticker = 0, 	/*%< Ticker */
-	isc_timertype_once = 1, 	/*%< Once */
-	isc_timertype_limited = 2, 	/*%< Limited */
-	isc_timertype_inactive = 3 	/*%< Inactive */
-} isc_timertype_t;
 
 typedef struct isc_timerevent {
 	struct isc_event	common;
-	isc_time_t		due;
+	struct timespec		due;
 } isc_timerevent_t;
 
 #define ISC_TIMEREVENT_FIRSTEVENT	(ISC_EVENTCLASS_TIMER + 0)
@@ -99,62 +92,6 @@ typedef struct isc_timerevent {
 #define ISC_TIMEREVENT_IDLE		(ISC_EVENTCLASS_TIMER + 2)
 #define ISC_TIMEREVENT_LIFE		(ISC_EVENTCLASS_TIMER + 3)
 #define ISC_TIMEREVENT_LASTEVENT	(ISC_EVENTCLASS_TIMER + 65535)
-
-/*% Timer and timer manager methods */
-typedef struct {
-	void		(*destroy)(isc_timermgr_t **managerp);
-	isc_result_t	(*timercreate)(isc_timermgr_t *manager,
-				       isc_timertype_t type,
-				       const isc_time_t *expires,
-				       const interval_t *interval,
-				       isc_task_t *task,
-				       isc_taskaction_t action,
-				       void *arg,
-				       isc_timer_t **timerp);
-} isc_timermgrmethods_t;
-
-typedef struct {
-	void		(*attach)(isc_timer_t *timer, isc_timer_t **timerp);
-	void		(*detach)(isc_timer_t **timerp);
-	isc_result_t	(*reset)(isc_timer_t *timer, isc_timertype_t type,
-				 const isc_time_t *expires,
-				 const interval_t *interval,
-				 isc_boolean_t purge);
-	isc_result_t	(*touch)(isc_timer_t *timer);
-} isc_timermethods_t;
-
-/*%
- * This structure is actually just the common prefix of a timer manager
- * object implementation's version of an isc_timermgr_t.
- * \brief
- * Direct use of this structure by clients is forbidden.  timer implementations
- * may change the structure.  'magic' must be ISCAPI_TIMERMGR_MAGIC for any
- * of the isc_timer_ routines to work.  timer implementations must maintain
- * all timer invariants.
- */
-struct isc_timermgr {
-	unsigned int		impmagic;
-	unsigned int		magic;
-	isc_timermgrmethods_t	*methods;
-};
-
-#define ISCAPI_TIMERMGR_MAGIC		ISC_MAGIC('A','t','m','g')
-#define ISCAPI_TIMERMGR_VALID(m)	((m) != NULL && \
-					 (m)->magic == ISCAPI_TIMERMGR_MAGIC)
-
-/*%
- * This is the common prefix of a timer object.  The same note as
- * that for the timermgr structure applies.
- */
-struct isc_timer {
-	unsigned int		impmagic;
-	unsigned int		magic;
-	isc_timermethods_t	*methods;
-};
-
-#define ISCAPI_TIMER_MAGIC	ISC_MAGIC('A','t','m','r')
-#define ISCAPI_TIMER_VALID(s)	((s) != NULL && \
-				 (s)->magic == ISCAPI_TIMER_MAGIC)
 
 /***
  *** Timer and Timer Manager Functions
@@ -165,9 +102,7 @@ struct isc_timer {
 
 isc_result_t
 isc_timer_create(isc_timermgr_t *manager,
-		 isc_timertype_t type,
-		 const isc_time_t *expires,
-		 const interval_t *interval,
+		 const struct timespec *interval,
 		 isc_task_t *task,
 		 isc_taskaction_t action,
 		 void *arg,
@@ -229,9 +164,7 @@ isc_timer_create(isc_timermgr_t *manager,
 
 isc_result_t
 isc_timer_reset(isc_timer_t *timer,
-		isc_timertype_t type,
-		const isc_time_t *expires,
-		const interval_t *interval,
+		const struct timespec *interval,
 		isc_boolean_t purge);
 /*%<
  * Change the timer's type, expires, and interval values to the given
@@ -264,7 +197,7 @@ isc_timer_reset(isc_timer_t *timer,
  *\li	Unexpected error
  */
 
-isc_result_t
+void
 isc_timer_touch(isc_timer_t *timer);
 /*%<
  * Set the last-touched time of 'timer' to the current time.
@@ -279,10 +212,6 @@ isc_timer_touch(isc_timer_t *timer);
  *	timer's interval if 'timer' is a once timer with a non-zero
  *	interval.
  *
- * Returns:
- *
- *\li	Success
- *\li	Unexpected error
  */
 
 void
@@ -313,16 +242,6 @@ isc_timer_detach(isc_timer_t **timerp);
  *		of the timer's task, it is guaranteed that no more
  *		timer event callbacks will run after the call.
  *\endcode
- */
-
-isc_timertype_t
-isc_timer_gettype(isc_timer_t *timer);
-/*%<
- * Return the timer type.
- *
- * Requires:
- *
- *\li	'timer' to be a valid timer.
  */
 
 isc_result_t
@@ -376,13 +295,5 @@ isc_timermgr_destroy(isc_timermgr_t **managerp);
  *
  *\li	All resources used by the manager have been freed.
  */
-
-void isc_timermgr_poke(isc_timermgr_t *m);
-
-/*%<
- * See isc_timermgr_create() above.
- */
-typedef isc_result_t
-(*isc_timermgrcreatefunc_t)(isc_timermgr_t **managerp);
 
 #endif /* ISC_TIMER_H */

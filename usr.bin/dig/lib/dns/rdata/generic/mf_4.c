@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: mf_4.c,v 1.1 2020/02/07 09:58:53 florian Exp $ */
+/* $Id: mf_4.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
 
 /* reviewed: Wed Mar 15 17:47:33 PST 2000 by brister */
 
@@ -22,29 +22,6 @@
 #define RDATA_GENERIC_MF_4_C
 
 #define RRTYPE_MF_ATTRIBUTES (0)
-
-static inline isc_result_t
-fromtext_mf(ARGS_FROMTEXT) {
-	isc_token_t token;
-	dns_name_t name;
-	isc_buffer_t buffer;
-
-	REQUIRE(type == dns_rdatatype_mf);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(callbacks);
-
-	RETERR(isc_lex_getmastertoken(lexer, &token, isc_tokentype_string,
-				      ISC_FALSE));
-
-	dns_name_init(&name, NULL);
-	buffer_fromregion(&buffer, &token.value.as_region);
-	if (origin == NULL)
-		origin = dns_rootname;
-	RETTOK(dns_name_fromtext(&name, &buffer, origin, options, target));
-	return (ISC_R_SUCCESS);
-}
 
 static inline isc_result_t
 totext_mf(ARGS_TOTEXT) {
@@ -174,35 +151,6 @@ freestruct_mf(ARGS_FREESTRUCT) {
 	dns_name_free(&mf->mf);
 }
 
-static inline isc_result_t
-additionaldata_mf(ARGS_ADDLDATA) {
-	dns_name_t name;
-	dns_offsets_t offsets;
-	isc_region_t region;
-
-	REQUIRE(rdata->type == dns_rdatatype_mf);
-
-	dns_name_init(&name, offsets);
-	dns_rdata_toregion(rdata, &region);
-	dns_name_fromregion(&name, &region);
-
-	return ((add)(arg, &name, dns_rdatatype_a));
-}
-
-static inline isc_result_t
-digest_mf(ARGS_DIGEST) {
-	isc_region_t r;
-	dns_name_t name;
-
-	REQUIRE(rdata->type == dns_rdatatype_mf);
-
-	dns_rdata_toregion(rdata, &r);
-	dns_name_init(&name, NULL);
-	dns_name_fromregion(&name, &r);
-
-	return (dns_name_digest(&name, digest, arg));
-}
-
 static inline isc_boolean_t
 checkowner_mf(ARGS_CHECKOWNER) {
 
@@ -212,18 +160,6 @@ checkowner_mf(ARGS_CHECKOWNER) {
 	UNUSED(type);
 	UNUSED(rdclass);
 	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline isc_boolean_t
-checknames_mf(ARGS_CHECKNAMES) {
-
-	REQUIRE(rdata->type == dns_rdatatype_mf);
-
-	UNUSED(rdata);
-	UNUSED(owner);
-	UNUSED(bad);
 
 	return (ISC_TRUE);
 }
