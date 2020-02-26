@@ -68,9 +68,9 @@ int			  pfi_buffer_max;
 void		 pfi_kif_update(struct pfi_kif *);
 void		 pfi_dynaddr_update(struct pfi_dynaddr *dyn);
 void		 pfi_table_update(struct pfr_ktable *, struct pfi_kif *,
-		    u_int8_t, int);
+		    u_int8_t, int, const char *);
 void		 pfi_kifaddr_update(void *);
-void		 pfi_instance_add(struct ifnet *, u_int8_t, int);
+void		 pfi_instance_add(struct ifnet *, u_int8_t, int, const char *);
 void		 pfi_address_add(struct sockaddr *, sa_family_t, u_int8_t);
 int		 pfi_if_compare(struct pfi_kif *, struct pfi_kif *);
 int		 pfi_skip_if(const char *, struct pfi_kif *);
@@ -362,6 +362,18 @@ pfi_match_addr(struct pfi_dynaddr *dyn, struct pf_addr *a, sa_family_t af)
 	}
 }
 
+#define isalnum(_x_)	((((_x_) >= '0') && ((_x_) <= '9')) ||	\
+			(((_x_) >= 'A') && ((_x_) <= 'Z')) ||	\
+			(((_x_) >= 'a') && ((_x_) <= 'z')))
+int
+pfi_alabel_valid(const char *alabel)
+{
+	while (*alabel && isalnum(*alabel))
+		alabel++;
+
+	return (*alabel == '\0');
+}
+
 int
 pfi_dynaddr_setup(struct pf_addr_wrap *aw, sa_family_t af)
 {
@@ -390,14 +402,22 @@ pfi_dynaddr_setup(struct pf_addr_wrap *aw, sa_family_t af)
 	if (af == AF_INET && dyn->pfid_net == 32)
 		dyn->pfid_net = 128;
 	strlcpy(tblname, aw->v.ifname, sizeof(tblname));
+
+	if (aw->alabel[0] && !pfi_alabel_valid(aw->alabel)) {
+		rv = 1;
+		goto _bad;
+	} else if (aw->alabel[0])
+		snprintf(tblname + strlen(tblname),
+		    sizeof(tblname) - strlen(tblname), ":%s", aw->alabel);
+	else if (aw->iflags & PFI_AFLAG_MODEMASK)
+		strlcat(tblname, ":", sizeof(tblname));
+
 	if (aw->iflags & PFI_AFLAG_NETWORK)
 		strlcat(tblname, ":network", sizeof(tblname));
 	if (aw->iflags & PFI_AFLAG_BROADCAST)
 		strlcat(tblname, ":broadcast", sizeof(tblname));
 	if (aw->iflags & PFI_AFLAG_PEER)
 		strlcat(tblname, ":peer", sizeof(tblname));
-	if (aw->iflags & PFI_AFLAG_NOALIAS)
-		strlcat(tblname, ":0", sizeof(tblname));
 	if (dyn->pfid_net != 128)
 		snprintf(tblname + strlen(tblname),
 		    sizeof(tblname) - strlen(tblname), "/%d", dyn->pfid_net);
@@ -414,6 +434,7 @@ pfi_dynaddr_setup(struct pf_addr_wrap *aw, sa_family_t af)
 	dyn->pfid_kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
 	dyn->pfid_iflags = aw->iflags;
 	dyn->pfid_af = af;
+	strlcpy(dyn->pfid_alabel, aw->alabel, sizeof(dyn->pfid_alabel));
 
 	TAILQ_INSERT_TAIL(&dyn->pfid_kif->pfik_dynaddrs, dyn, entry);
 	aw->p.dyn = dyn;
@@ -462,14 +483,16 @@ pfi_dynaddr_update(struct pfi_dynaddr *dyn)
 
 	if (kt->pfrkt_larg != pfi_update) {
 		/* this table needs to be brought up-to-date */
-		pfi_table_update(kt, kif, dyn->pfid_net, dyn->pfid_iflags);
+		pfi_table_update(kt, kif, dyn->pfid_net, dyn->pfid_iflags,
+		    dyn->pfid_alabel);
 		kt->pfrkt_larg = pfi_update;
 	}
 	pfr_dynaddr_update(kt, dyn);
 }
 
 void
-pfi_table_update(struct pfr_ktable *kt, struct pfi_kif *kif, u_int8_t net, int flags)
+pfi_table_update(struct pfr_ktable *kt, struct pfi_kif *kif, u_int8_t net,
+    int flags, const char *alabel)
 {
 	int			 e, size2 = 0;
 	struct ifg_member	*ifgm;
@@ -477,10 +500,10 @@ pfi_table_update(struct pfr_ktable *kt, struct pfi_kif *kif, u_int8_t net, int f
 	pfi_buffer_cnt = 0;
 
 	if (kif->pfik_ifp != NULL)
-		pfi_instance_add(kif->pfik_ifp, net, flags);
+		pfi_instance_add(kif->pfik_ifp, net, flags, alabel);
 	else if (kif->pfik_group != NULL)
 		TAILQ_FOREACH(ifgm, &kif->pfik_group->ifg_members, ifgm_next)
-			pfi_instance_add(ifgm->ifgm_ifp, net, flags);
+			pfi_instance_add(ifgm->ifgm_ifp, net, flags, alabel);
 
 	if ((e = pfr_set_addrs(&kt->pfrkt_t, pfi_buffer, pfi_buffer_cnt, &size2,
 	    NULL, NULL, NULL, 0, PFR_TFLAG_ALLMASK)))
@@ -490,10 +513,9 @@ pfi_table_update(struct pfr_ktable *kt, struct pfi_kif *kif, u_int8_t net, int f
 }
 
 void
-pfi_instance_add(struct ifnet *ifp, u_int8_t net, int flags)
+pfi_instance_add(struct ifnet *ifp, u_int8_t net, int flags, const char *alabel)
 {
 	struct ifaddr	*ifa;
-	int		 got4 = 0, got6 = 0;
 	int		 net2, af;
 
 	if (ifp == NULL)
@@ -516,16 +538,9 @@ pfi_instance_add(struct ifnet *ifp, u_int8_t net, int flags)
 		    IN6_IS_ADDR_LINKLOCAL(
 		    &((struct sockaddr_in6 *)ifa->ifa_addr)->sin6_addr))
 			continue;
-		if (flags & PFI_AFLAG_NOALIAS) {
-			if (af == AF_INET && got4)
-				continue;
-			if (af == AF_INET6 && got6)
-				continue;
-		}
-		if (af == AF_INET)
-			got4 = 1;
-		else if (af == AF_INET6)
-			got6 = 1;
+		if (alabel[0] && !strcmp(alabel, ifa->ifa_label))
+			continue;
+
 		net2 = net;
 		if (net2 == 128 && (flags & PFI_AFLAG_NETWORK)) {
 			if (af == AF_INET)
