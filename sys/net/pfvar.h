@@ -181,7 +181,6 @@ struct pf_addr {
 #define PFI_AFLAG_BROADCAST	0x02
 #define PFI_AFLAG_PEER		0x04
 #define PFI_AFLAG_MODEMASK	0x07
-#define PFI_AFLAG_NOALIAS	0x08
 
 struct pf_addr_wrap {
 	union {
@@ -193,6 +192,7 @@ struct pf_addr_wrap {
 		char			 tblname[PF_TABLE_NAME_SIZE];
 		char			 rtlabelname[RTLABEL_LEN];
 		u_int32_t		 rtlabel;
+		char			 alabel[IFNAMSIZ];
 	}			 v;
 	union {
 		struct pfi_dynaddr	*dyn;
@@ -219,6 +219,7 @@ struct pfi_dynaddr {
 	int				 pfid_acnt6;	/* address count IPv6 */
 	sa_family_t			 pfid_af;	/* rule af */
 	u_int8_t			 pfid_iflags;	/* PFI_AFLAG_* */
+	char				 pfid_alabel[IFNAMSIZ];
 };
 #endif /* _KERNEL */
 

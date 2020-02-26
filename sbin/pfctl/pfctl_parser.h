@@ -281,6 +281,22 @@ struct pf_timeout {
 	int		 timeout;
 };
 
+struct pf_ifspec {
+	union {
+		struct {
+			char	*s_ifname;
+			char	*s_alabel;
+			char	*s_modifier;
+		} u_s;
+		char	*u_tokens[3];
+	} pfifs_u;
+	int	pfifs_flags;
+#define pfifs_ifname	pfifs_u.u_s.s_ifname
+#define pfifs_alabel	pfifs_u.u_s.s_alabel
+#define pfifs_modifier	pfifs_u.u_s.s_modifier
+#define pfifs_tokoens	pfifs_u.u_tokens
+};
+
 extern const struct pf_timeout pf_timeouts[];
 
 void			 set_ipmask(struct node_host *, int);
@@ -291,11 +307,12 @@ void			 ifa_load(void);
 unsigned int		 ifa_nametoindex(const char *);
 char			*ifa_indextoname(unsigned int, char *);
 struct node_host	*ifa_exists(const char *);
-struct node_host	*ifa_lookup(const char *, int);
+struct node_host	*ifa_lookup(struct pf_ifspec *);
 struct node_host	*host(const char *, int);
 
 int			 append_addr(struct pfr_buffer *, char *, int, int);
 int			 append_addr_host(struct pfr_buffer *,
 			    struct node_host *, int, int);
+struct pf_ifspec	*parse_ifspec(char *, struct pf_ifspec *);
 
 #endif /* _PFCTL_PARSER_H_ */

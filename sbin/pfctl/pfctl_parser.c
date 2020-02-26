@@ -40,6 +40,7 @@
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
 #include <netinet/icmp6.h>
+#include <netinet6/in6_var.h>
 #include <net/pfvar.h>
 #include <arpa/inet.h>
 
@@ -72,10 +73,12 @@ void		 print_bwspec(const char *index, struct pf_queue_bwspec *);
 void		 print_scspec(const char *, struct pf_queue_scspec *);
 int		 ifa_skip_if(const char *filter, struct node_host *p);
 
-struct node_host	*ifa_grouplookup(const char *, int);
+struct node_host	*ifa_grouplookup(struct pf_ifspec *);
 struct node_host	*host_if(const char *, int);
 struct node_host	*host_ip(const char *, int);
 struct node_host	*host_dns(const char *, int, int);
+int			 ifa_match_alabel(struct pf_ifspec *,
+			    struct node_host *);
 
 const char *tcpflags = "FSRPAUEW";
 
@@ -1474,18 +1477,89 @@ ifa_exists(const char *ifa_name)
 	return (NULL);
 }
 
+int
+ifa_match_alabel(struct pf_ifspec *pfifs, struct node_host *p)
+{
+	int	ret_val;
+
+	if (pfifs->pfifs_alabel[0])
+		return (1);
+
+	if (p->af == AF_INET) {
+		struct ifreq		ifr;
+		struct sockaddr_in	sin;
+		int	s;
+
+		memset(&sin, 0, sizeof(struct sockaddr_in));
+		sin.sin_len = sizeof(struct sockaddr_in);
+		sin.sin_family = AF_INET;
+		sin.sin_addr = p->addr.v.a.addr.v4;
+		
+		memset(&ifr, 0, sizeof(struct ifreq));
+		strlcpy(ifr.ifr_name, pfifs->pfifs_ifname,
+		    sizeof(ifr.ifr_name));
+		memcpy(&sin, &ifr.ifr_addr, sizeof(struct sockaddr_in));
+
+		s = socket(AF_INET, SOCK_DGRAM, 0);
+		if (s == -1) {
+			if (errno == EPROTONOSUPPORT)
+				return (0);
+			err(1, "%s: unable to open socket (%s)",
+			    __func__, strerror(errno));
+		}
+
+		if (ioctl(s, SIOCGLABEL, (caddr_t)&ifr) == -1)
+			err(1, "%s: SIOCGLABEL %s", __func__, strerror(errno));
+
+		close(s);
+		ret_val = strcmp(ifr.ifr_label, pfifs->pfifs_alabel);
+	} else if (p->af == AF_INET6) {
+		struct in6_ifreq	ifr6; 
+		struct sockaddr_in6	sin6;
+		int	s;
+
+		memset(&sin6, 0, sizeof(struct sockaddr_in6));
+		sin6.sin6_len = sizeof(struct sockaddr_in6);
+		sin6.sin6_family = AF_INET6;
+		sin6.sin6_addr = p->addr.v.a.addr.v6;
+		
+		memset(&ifr6, 0, sizeof(struct in6_ifreq));
+		strlcpy(ifr6.ifr_name, pfifs->pfifs_ifname,
+		    sizeof(ifr6.ifr_name));
+		memcpy(&sin6, &ifr6.ifr_addr, sizeof(struct sockaddr_in6));
+
+		s = socket(AF_INET6, SOCK_DGRAM, 0);
+		if (s == -1) {
+			if (errno == EPROTONOSUPPORT)
+				return (0);
+			err(1, "%s: unable to open socket (%s)",
+			    __func__, strerror(errno));
+		}
+
+		if (ioctl(s, SIOCGLABEL_IN6, (caddr_t)&ifr6) == -1)
+			err(1, "%s: SIOCGLABEL %s", __func__, strerror(errno));
+
+		close(s);
+		ret_val = strcmp(ifr6.ifr_label, pfifs->pfifs_alabel);
+	} else
+		return (0);
+
+	return (ret_val);
+}
+
 struct node_host *
-ifa_grouplookup(const char *ifa_name, int flags)
+ifa_grouplookup(struct pf_ifspec *pfifs)
 {
 	struct ifg_req		*ifg;
 	struct ifgroupreq	 ifgr;
 	int			 s, len;
 	struct node_host	*n, *h = NULL;
+	struct pf_ifspec	ifspec;
 
 	if ((s = socket(AF_INET, SOCK_DGRAM, 0)) == -1)
 		err(1, "socket");
 	bzero(&ifgr, sizeof(ifgr));
-	strlcpy(ifgr.ifgr_name, ifa_name, sizeof(ifgr.ifgr_name));
+	strlcpy(ifgr.ifgr_name, pfifs->pfifs_ifname, sizeof(ifgr.ifgr_name));
 	if (ioctl(s, SIOCGIFGMEMB, (caddr_t)&ifgr) == -1) {
 		close(s);
 		return (NULL);
@@ -1497,10 +1571,13 @@ ifa_grouplookup(const char *ifa_name, int flags)
 	if (ioctl(s, SIOCGIFGMEMB, (caddr_t)&ifgr) == -1)
 		err(1, "SIOCGIFGMEMB");
 
+	memset(&ifspec, 0, sizeof(struct pf_ifspec));
 	for (ifg = ifgr.ifgr_groups; ifg && len >= sizeof(struct ifg_req);
 	    ifg++) {
 		len -= sizeof(struct ifg_req);
-		if ((n = ifa_lookup(ifg->ifgrq_member, flags)) == NULL)
+		ifspec.pfifs_ifname = ifg->ifgrq_member;
+		ifspec.pfifs_flags = pfifs->pfifs_flags;
+		if ((n = ifa_lookup(&ifspec)) == NULL)
 			continue;
 		if (h == NULL)
 			h = n;
@@ -1516,17 +1593,19 @@ ifa_grouplookup(const char *ifa_name, int flags)
 }
 
 struct node_host *
-ifa_lookup(const char *ifa_name, int flags)
+ifa_lookup(struct pf_ifspec *pfifs)
 {
 	struct node_host	*p = NULL, *h = NULL, *n = NULL;
-	int			 got4 = 0, got6 = 0;
-	const char		 *last_if = NULL;
+	char *ifa_name = pfifs->pfifs_ifname;
+	struct pf_ifspec self_pfifs;
 
-	if ((h = ifa_grouplookup(ifa_name, flags)) != NULL)
+	if ((h = ifa_grouplookup(pfifs)) != NULL)
 		return (h);
 
-	if (!strncmp(ifa_name, "self", IFNAMSIZ))
+	if (!strncmp(pfifs->pfifs_ifname, "self", IFNAMSIZ)) {
+		self_pfifs = *pfifs;
 		ifa_name = NULL;
+	}
 
 	if (iftab == NULL)
 		ifa_load();
@@ -1534,43 +1613,46 @@ ifa_lookup(const char *ifa_name, int flags)
 	for (p = iftab; p; p = p->next) {
 		if (ifa_skip_if(ifa_name, p))
 			continue;
-		if ((flags & PFI_AFLAG_BROADCAST) && p->af != AF_INET)
+		if ((pfifs->pfifs_flags & PFI_AFLAG_BROADCAST) &&
+		    p->af != AF_INET)
 			continue;
-		if ((flags & PFI_AFLAG_BROADCAST) &&
+		if ((pfifs->pfifs_flags & PFI_AFLAG_BROADCAST) &&
 		    !(p->ifa_flags & IFF_BROADCAST))
 			continue;
-		if ((flags & PFI_AFLAG_BROADCAST) && p->bcast.v4.s_addr == 0)
+		if ((pfifs->pfifs_flags & PFI_AFLAG_BROADCAST) &&
+		    p->bcast.v4.s_addr == 0)
 			continue;
-		if ((flags & PFI_AFLAG_PEER) &&
+		if ((pfifs->pfifs_flags & PFI_AFLAG_PEER) &&
 		    !(p->ifa_flags & IFF_POINTOPOINT))
 			continue;
-		if ((flags & PFI_AFLAG_NETWORK) && p->ifindex > 0)
+		if ((pfifs->pfifs_flags & PFI_AFLAG_NETWORK) && p->ifindex > 0)
 			continue;
-		if (last_if == NULL || strcmp(last_if, p->ifname))
-			got4 = got6 = 0;
-		last_if = p->ifname;
-		if ((flags & PFI_AFLAG_NOALIAS) && p->af == AF_INET && got4)
+		if (ifa_name == NULL) {
+			/*
+			 * this allows admin to use address label with self
+			 * keyword. for example self:dhcp selects all
+			 * addresses with label 'dhcp'
+			 */
+			self_pfifs.pfifs_ifname = p->ifname;
+			if (ifa_match_alabel(&self_pfifs, p) == 0)
+				continue;
+		} else if (ifa_match_alabel(pfifs, p) == 0)
 			continue;
-		if ((flags & PFI_AFLAG_NOALIAS) && p->af == AF_INET6 && got6)
-			continue;
-		if (p->af == AF_INET)
-			got4 = 1;
-		else
-			got6 = 1;
+
 		n = calloc(1, sizeof(struct node_host));
 		if (n == NULL)
 			err(1, "%s: calloc", __func__);
 		n->af = p->af;
-		if (flags & PFI_AFLAG_BROADCAST)
+		if (pfifs->pfifs_flags & PFI_AFLAG_BROADCAST)
 			memcpy(&n->addr.v.a.addr, &p->bcast,
 			    sizeof(struct pf_addr));
-		else if (flags & PFI_AFLAG_PEER)
+		else if (pfifs->pfifs_flags & PFI_AFLAG_PEER)
 			memcpy(&n->addr.v.a.addr, &p->peer,
 			    sizeof(struct pf_addr));
 		else
 			memcpy(&n->addr.v.a.addr, &p->addr.v.a.addr,
 			    sizeof(struct pf_addr));
-		if (flags & PFI_AFLAG_NETWORK)
+		if (pfifs->pfifs_flags & PFI_AFLAG_NETWORK)
 			set_ipmask(n, unmask(&p->addr.v.a.mask));
 		else
 			set_ipmask(n, -1);
@@ -1659,36 +1741,40 @@ struct node_host *
 host_if(const char *s, int mask)
 {
 	struct node_host	*n, *h = NULL;
-	char			*p, *ps;
-	int			 flags = 0;
+	char			*ps;
+	struct pf_ifspec	pfifs;
 
 	if ((ps = strdup(s)) == NULL)
-		err(1, "host_if: strdup");
-	while ((p = strrchr(ps, ':')) != NULL) {
-		if (!strcmp(p+1, "network"))
-			flags |= PFI_AFLAG_NETWORK;
-		else if (!strcmp(p+1, "broadcast"))
-			flags |= PFI_AFLAG_BROADCAST;
-		else if (!strcmp(p+1, "peer"))
-			flags |= PFI_AFLAG_PEER;
-		else if (!strcmp(p+1, "0"))
-			flags |= PFI_AFLAG_NOALIAS;
-		else
-			goto error;
-		*p = '\0';
-	}
-	if (flags & (flags - 1) & PFI_AFLAG_MODEMASK) { /* Yep! */
-		fprintf(stderr, "illegal combination of interface modifiers\n");
+		err(1, "%s: strdup", __func__);
+
+	if (parse_ifspec(ps, &pfifs) == NULL) {
+		switch (pfifs.pfifs_flags) {
+		case -1:
+			warn("interface %s has bad modifier",
+			    pfifs.pfifs_ifname);
+			break;
+		case -2:
+			warn("illegal combination of interface modifiers");
+			break;
+		case -3:
+			warn("invalid address label (%s)", pfifs.pfifs_alabel);
+			break;
+		default:
+			warn("syntax error for interface %s", s);
+		}
 		goto error;
 	}
-	if ((flags & (PFI_AFLAG_NETWORK|PFI_AFLAG_BROADCAST)) && mask > -1) {
-		fprintf(stderr, "network or broadcast lookup, but "
-		    "extra netmask given\n");
+
+	if ((pfifs.pfifs_flags & (PFI_AFLAG_NETWORK|PFI_AFLAG_BROADCAST))
+	    && mask > -1) {
+		warn("%s: network or broadcast lookup, but "
+		    "extra netmask given\n", __func__);
 		goto error;
 	}
-	if (ifa_exists(ps) || !strncmp(ps, "self", IFNAMSIZ)) {
+	if (ifa_exists(pfifs.pfifs_ifname) ||
+	    !strncmp(pfifs.pfifs_ifname, "self", IFNAMSIZ)) {
 		/* interface with this name exists */
-		h = ifa_lookup(ps, flags);
+		h = ifa_lookup(&pfifs);
 		if (mask > -1)
 			for (n = h; n != NULL; n = n->next)
 				set_ipmask(n, mask);
@@ -1951,4 +2037,84 @@ pfctl_trans(int dev, struct pfr_buffer *buf, u_long cmd, int from)
 	trans.esize = sizeof(struct pfioc_trans_e);
 	trans.array = ((struct pfioc_trans_e *)buf->pfrb_caddr) + from;
 	return ioctl(dev, cmd, &trans);
+}
+
+struct pf_ifspec *
+parse_ifspec(char *ifspec_str, struct pf_ifspec* pfifs)
+{ 
+	char *nolabel, *p;
+	int i;
+
+	if (pfifs == NULL)
+		return (NULL);
+
+	memset(pfifs, 0, sizeof(struct pf_ifspec));
+	nolabel = strstr(ifspec_str, "::");
+	i = 0;
+	for (p = strtok(ifspec_str, ":"); p != NULL; p = strtok(NULL, ":")) {
+		if (i < 2)
+			pfifs->pfifs_tokoens[i++] = p;
+		else 
+			return (NULL);
+
+		/*
+		 * handles case when interface comes with modifier only:
+		 *	em0::network
+		 *
+		 * Note: form em0:: is also valid, the result will be em0
+		 */
+		if (nolabel) {
+			i++;
+			nolabel = NULL;
+		}
+	}
+
+	if (pfifs->pfifs_modifier != NULL) {
+		if (!strcmp(pfifs->pfifs_modifier, "network"))
+			pfifs->pfifs_flags |= PFI_AFLAG_NETWORK;
+		else if (!strcmp(pfifs->pfifs_modifier, "broadcast"))
+			pfifs->pfifs_flags |= PFI_AFLAG_BROADCAST;
+		else if (!strcmp(pfifs->pfifs_modifier, "peer"))
+			pfifs->pfifs_flags |= PFI_AFLAG_PEER;
+		else {
+			pfifs->pfifs_flags = -1;
+			return (NULL);
+		}
+
+		if (pfifs->pfifs_flags &
+		    (pfifs->pfifs_flags - 1) & PFI_AFLAG_MODEMASK) {
+			pfifs->pfifs_flags = -2;
+			return (NULL);
+		}
+	}
+
+	if (pfifs->pfifs_alabel != NULL) {
+		p = pfifs->pfifs_alabel;
+
+		while ((*p) && (isalnum(*p)))
+			p++;
+
+		if (*p) {
+			pfifs->pfifs_flags = -3;
+			return (NULL);
+		}
+	}
+
+	if ((pfifs->pfifs_modifier == NULL) &&
+	    (pfifs->pfifs_alabel != NULL) &&
+	    (!strcmp(pfifs->pfifs_alabel, "0")))
+		warn("%s: PFI_AFLAG_NOALIAS for interface match (%s:0) "
+		    "is no longer supported", __func__, pfifs->pfifs_ifname);
+
+	if (strstr(ifspec_str, "::") &&
+	    (!strcmp(pfifs->pfifs_alabel, "network") ||
+	    !strcmp(pfifs->pfifs_alabel, "broadcast") ||
+	    !strcmp(pfifs->pfifs_alabel, "peer")))
+		warn("%s: address modifier (%s) gets interpreted as address "
+		    "label.\nYou might actually want to change interface spec "
+		    "from %s:%s to %s::%s.", __func__, pfifs->pfifs_alabel,
+		    pfifs->pfifs_ifname, pfifs->pfifs_alabel,
+		    pfifs->pfifs_ifname, pfifs->pfifs_alabel);
+
+	return (pfifs);
 }

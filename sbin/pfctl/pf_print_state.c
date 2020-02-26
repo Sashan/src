@@ -54,14 +54,15 @@ print_addr(struct pf_addr_wrap *addr, sa_family_t af, int verbose)
 	switch (addr->type) {
 	case PF_ADDR_DYNIFTL:
 		printf("(%s", addr->v.ifname);
-		if (addr->iflags & PFI_AFLAG_NETWORK)
-			printf(":network");
-		if (addr->iflags & PFI_AFLAG_BROADCAST)
-			printf(":broadcast");
-		if (addr->iflags & PFI_AFLAG_PEER)
-			printf(":peer");
-		if (addr->iflags & PFI_AFLAG_NOALIAS)
-			printf(":0");
+		if ((addr->v.alabel[0]) || (addr->iflags)) {
+			printf(":%s", addr->v.alabel);
+			if (addr->iflags & PFI_AFLAG_NETWORK)
+				printf(":network");
+			if (addr->iflags & PFI_AFLAG_BROADCAST)
+				printf(":broadcast");
+			if (addr->iflags & PFI_AFLAG_PEER)
+				printf(":peer");
+		}
 		if (verbose) {
 			if (addr->p.dyncnt <= 0)
 				printf(":*");

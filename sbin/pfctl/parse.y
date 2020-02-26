@@ -470,7 +470,7 @@ typedef struct {
 int	parseport(char *, struct range *r, int);
 
 #define DYNIF_MULTIADDR(addr) ((addr).type == PF_ADDR_DYNIFTL && \
-	(!((addr).iflags & PFI_AFLAG_NOALIAS) ||		 \
+	(!((addr).v.alabel[0]) ||		 \
 	!isdigit((unsigned char)(addr).v.ifname[strlen((addr).v.ifname)-1])))
 
 %}
@@ -1131,8 +1131,12 @@ antispoof	: ANTISPOOF logquick antispoof_ifspc af antispoof_opts {
 					bcopy(h, hh, sizeof(*hh));
 					h->addr.iflags = PFI_AFLAG_NETWORK;
 				} else {
-					h = ifa_lookup(j->ifname,
-					    PFI_AFLAG_NETWORK);
+					struct pf_ifspec pfifs;
+
+					memset(&pfifs, 0, sizeof(struct pf_ifspec));
+					pfifs.pfifs_ifname = j->ifname;
+					pfifs.pfifs_flags = PFI_AFLAG_NETWORK;
+					h = ifa_lookup(&pfifs);
 					hh = NULL;
 				}
 
@@ -1155,8 +1159,13 @@ antispoof	: ANTISPOOF logquick antispoof_ifspc af antispoof_opts {
 					r.rtableid = $5.rtableid;
 					if (hh != NULL)
 						h = hh;
-					else
-						h = ifa_lookup(i->ifname, 0);
+					else {
+						struct pf_ifspec pfifs;
+
+						memset(&pfifs, 0, sizeof(struct pf_ifspec));
+						pfifs.pfifs_ifname = i->ifname;
+						h = ifa_lookup(&pfifs);
+					}
 					if (h != NULL)
 						expand_rule(&r, 0, NULL, NULL,
 						    NULL, NULL, NULL, NULL, h,
@@ -2817,8 +2826,8 @@ number		: NUMBER
 		;
 
 dynaddr		: '(' STRING ')'		{
-			int	 flags = 0;
-			char	*p, *op;
+			char	*op;
+			struct pf_ifspec pfifs;
 
 			op = $2;
 			if (!isalpha((unsigned char)op[0])) {
@@ -2826,42 +2835,53 @@ dynaddr		: '(' STRING ')'		{
 				free(op);
 				YYERROR;
 			}
-			while ((p = strrchr($2, ':')) != NULL) {
-				if (!strcmp(p+1, "network"))
-					flags |= PFI_AFLAG_NETWORK;
-				else if (!strcmp(p+1, "broadcast"))
-					flags |= PFI_AFLAG_BROADCAST;
-				else if (!strcmp(p+1, "peer"))
-					flags |= PFI_AFLAG_PEER;
-				else if (!strcmp(p+1, "0"))
-					flags |= PFI_AFLAG_NOALIAS;
-				else {
-					yyerror("interface %s has bad modifier",
-					    $2);
-					free(op);
-					YYERROR;
+
+			if (parse_ifspec($2, &pfifs) == NULL) {
+				switch (pfifs.pfifs_flags) {
+				case -1:
+					yyerror("interface %s has bad "
+					    "modifier", $2);
+					break;
+				case -2:
+					yyerror("illegal combination of "
+					    "interface modifiers");
+					break;
+				case -3:
+					yyerror("invalid addres label (%s)",
+					    pfifs.pfifs_alabel);
+					break;
+				default:
+					yyerror("syntax error for "
+					    "interface %s\n\texpected form "
+					    "is %s[[:label][:modifier]]",
+					    $2, $2);
 				}
-				*p = '\0';
-			}
-			if (flags & (flags - 1) & PFI_AFLAG_MODEMASK) {
 				free(op);
-				yyerror("illegal combination of "
-				    "interface modifiers");
 				YYERROR;
 			}
+			
 			$$ = calloc(1, sizeof(struct node_host));
 			if ($$ == NULL)
 				err(1, "address: calloc");
 			$$->af = 0;
 			set_ipmask($$, 128);
 			$$->addr.type = PF_ADDR_DYNIFTL;
-			$$->addr.iflags = flags;
-			if (strlcpy($$->addr.v.ifname, $2,
+			$$->addr.iflags = pfifs.pfifs_flags;
+			if (strlcpy($$->addr.v.ifname, pfifs.pfifs_ifname,
 			    sizeof($$->addr.v.ifname)) >=
 			    sizeof($$->addr.v.ifname)) {
 				free(op);
 				free($$);
 				yyerror("interface name too long");
+				YYERROR;
+			}
+
+			if (strlcpy($$->addr.v.alabel, pfifs.pfifs_alabel,
+			    sizeof($$->addr.v.alabel)) >=
+			    sizeof($$->addr.v.alabel)) {
+				free(op);
+				free($$);
+				yyerror("address label too long");
 				YYERROR;
 			}
 			free(op);
@@ -4851,7 +4871,7 @@ expand_rule(struct pf_rule *r, int keeprule, struct node_if *interfaces,
 			if (DYNIF_MULTIADDR(r->src.addr) ||
 			    DYNIF_MULTIADDR(r->nat.addr)) {
 				yyerror ("dynamic interfaces must be used with "
-				    ":0 in a binat-to rule");
+				    ":label in a binat-to rule");
 				error++;
 			}
 			if (PF_AZERO(&r->src.addr.v.a.mask, af) ||
