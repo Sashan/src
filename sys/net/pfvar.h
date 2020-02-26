@@ -192,7 +192,6 @@ struct pf_addr_wrap {
 		char			 tblname[PF_TABLE_NAME_SIZE];
 		char			 rtlabelname[RTLABEL_LEN];
 		u_int32_t		 rtlabel;
-		char			 alabel[IFNAMSIZ];
 	}			 v;
 	union {
 		struct pfi_dynaddr	*dyn;
@@ -202,6 +201,7 @@ struct pf_addr_wrap {
 	}			 p;
 	u_int8_t		 type;		/* PF_ADDR_* */
 	u_int8_t		 iflags;	/* PFI_AFLAG_* */
+	char			 alabel[IFNAMSIZ];
 };
 
 #ifdef _KERNEL

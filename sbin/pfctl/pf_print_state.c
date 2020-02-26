@@ -54,8 +54,8 @@ print_addr(struct pf_addr_wrap *addr, sa_family_t af, int verbose)
 	switch (addr->type) {
 	case PF_ADDR_DYNIFTL:
 		printf("(%s", addr->v.ifname);
-		if ((addr->v.alabel[0]) || (addr->iflags)) {
-			printf(":%s", addr->v.alabel);
+		if ((addr->alabel[0]) || (addr->iflags)) {
+			printf(":%s", addr->alabel);
 			if (addr->iflags & PFI_AFLAG_NETWORK)
 				printf(":network");
 			if (addr->iflags & PFI_AFLAG_BROADCAST)

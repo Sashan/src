@@ -470,7 +470,7 @@ typedef struct {
 int	parseport(char *, struct range *r, int);
 
 #define DYNIF_MULTIADDR(addr) ((addr).type == PF_ADDR_DYNIFTL && \
-	(!((addr).v.alabel[0]) ||		 \
+	(!((addr).alabel[0]) ||		 \
 	!isdigit((unsigned char)(addr).v.ifname[strlen((addr).v.ifname)-1])))
 
 %}
@@ -2876,9 +2876,9 @@ dynaddr		: '(' STRING ')'		{
 				YYERROR;
 			}
 
-			if (strlcpy($$->addr.v.alabel, pfifs.pfifs_alabel,
-			    sizeof($$->addr.v.alabel)) >=
-			    sizeof($$->addr.v.alabel)) {
+			if (strlcpy($$->addr.alabel, pfifs.pfifs_alabel,
+			    sizeof($$->addr.alabel)) >=
+			    sizeof($$->addr.alabel)) {
 				free(op);
 				free($$);
 				yyerror("address label too long");
