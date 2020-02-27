@@ -538,7 +538,7 @@ pfi_instance_add(struct ifnet *ifp, u_int8_t net, int flags, const char *alabel)
 		    IN6_IS_ADDR_LINKLOCAL(
 		    &((struct sockaddr_in6 *)ifa->ifa_addr)->sin6_addr))
 			continue;
-		if (alabel[0] && !strcmp(alabel, ifa->ifa_label))
+		if (alabel[0] && strcmp(alabel, ifa->ifa_label))
 			continue;
 
 		net2 = net;
