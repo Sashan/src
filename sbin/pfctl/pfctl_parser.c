@@ -1512,7 +1512,7 @@ ifa_match_alabel(struct pf_ifspec *pfifs, struct node_host *p)
 			err(1, "%s: SIOCGLABEL %s", __func__, strerror(errno));
 
 		close(s);
-		ret_val = strcmp(ifr.ifr_label, pfifs->pfifs_alabel);
+		ret_val = (strcmp(ifr.ifr_label, pfifs->pfifs_alabel) == 0);
 	} else if (p->af == AF_INET6) {
 		struct in6_ifreq	ifr6; 
 		struct sockaddr_in6	sin6;
@@ -1540,7 +1540,7 @@ ifa_match_alabel(struct pf_ifspec *pfifs, struct node_host *p)
 			err(1, "%s: SIOCGLABEL %s", __func__, strerror(errno));
 
 		close(s);
-		ret_val = strcmp(ifr6.ifr_label, pfifs->pfifs_alabel);
+		ret_val = (strcmp(ifr6.ifr_label, pfifs->pfifs_alabel) == 0);
 	} else
 		return (0);
 
