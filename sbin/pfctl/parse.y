@@ -2876,9 +2876,10 @@ dynaddr		: '(' STRING ')'		{
 				YYERROR;
 			}
 
-			if (strlcpy($$->addr.alabel, pfifs.pfifs_alabel,
+			if ((pfifs.pfifs_alabel != NULL) &&
+			    (strlcpy($$->addr.alabel, pfifs.pfifs_alabel,
 			    sizeof($$->addr.alabel)) >=
-			    sizeof($$->addr.alabel)) {
+			    sizeof($$->addr.alabel))) {
 				free(op);
 				free($$);
 				yyerror("address label too long");
