@@ -1482,7 +1482,7 @@ ifa_match_alabel(struct pf_ifspec *pfifs, struct node_host *p)
 {
 	int	ret_val;
 
-	if (pfifs->pfifs_alabel[0])
+	if ((pfifs->pfifs_alabel == NULL) || !pfifs->pfifs_alabel[0])
 		return (1);
 
 	if (p->af == AF_INET) {
@@ -1498,7 +1498,7 @@ ifa_match_alabel(struct pf_ifspec *pfifs, struct node_host *p)
 		memset(&ifr, 0, sizeof(struct ifreq));
 		strlcpy(ifr.ifr_name, pfifs->pfifs_ifname,
 		    sizeof(ifr.ifr_name));
-		memcpy(&sin, &ifr.ifr_addr, sizeof(struct sockaddr_in));
+		memcpy(&ifr.ifr_addr, &sin, sizeof(struct sockaddr_in));
 
 		s = socket(AF_INET, SOCK_DGRAM, 0);
 		if (s == -1) {
@@ -1526,7 +1526,7 @@ ifa_match_alabel(struct pf_ifspec *pfifs, struct node_host *p)
 		memset(&ifr6, 0, sizeof(struct in6_ifreq));
 		strlcpy(ifr6.ifr_name, pfifs->pfifs_ifname,
 		    sizeof(ifr6.ifr_name));
-		memcpy(&sin6, &ifr6.ifr_addr, sizeof(struct sockaddr_in6));
+		memcpy(&ifr6.ifr_addr, &sin6, sizeof(struct sockaddr_in6));
 
 		s = socket(AF_INET6, SOCK_DGRAM, 0);
 		if (s == -1) {
@@ -2052,7 +2052,7 @@ parse_ifspec(char *ifspec_str, struct pf_ifspec* pfifs)
 	nolabel = strstr(ifspec_str, "::");
 	i = 0;
 	for (p = strtok(ifspec_str, ":"); p != NULL; p = strtok(NULL, ":")) {
-		if (i < 2)
+		if (i < 3)
 			pfifs->pfifs_tokoens[i++] = p;
 		else 
 			return (NULL);
@@ -2100,13 +2100,13 @@ parse_ifspec(char *ifspec_str, struct pf_ifspec* pfifs)
 		}
 	}
 
-	if ((pfifs->pfifs_modifier == NULL) &&
-	    (pfifs->pfifs_alabel != NULL) &&
+	if ((pfifs->pfifs_modifier == NULL) && (pfifs->pfifs_alabel != NULL) &&
 	    (!strcmp(pfifs->pfifs_alabel, "0")))
 		warn("%s: PFI_AFLAG_NOALIAS for interface match (%s:0) "
 		    "is no longer supported", __func__, pfifs->pfifs_ifname);
 
-	if (strstr(ifspec_str, "::") &&
+	if ((strstr(ifspec_str, "::") == NULL) &&
+	    (pfifs->pfifs_alabel != NULL) &&
 	    (!strcmp(pfifs->pfifs_alabel, "network") ||
 	    !strcmp(pfifs->pfifs_alabel, "broadcast") ||
 	    !strcmp(pfifs->pfifs_alabel, "peer")))
