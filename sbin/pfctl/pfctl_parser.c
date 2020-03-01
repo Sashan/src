@@ -1747,27 +1747,29 @@ host_if(const char *s, int mask)
 	if ((ps = strdup(s)) == NULL)
 		err(1, "%s: strdup", __func__);
 
-	if (parse_ifspec(ps, &pfifs) == NULL) {
+	if (parse_ifspec(ps, &pfifs) == NULL)
 		switch (pfifs.pfifs_flags) {
 		case -1:
-			warn("interface %s has bad modifier",
+			fprintf(stderr, "interface %s has bad modifier\n",
 			    pfifs.pfifs_ifname);
 			break;
 		case -2:
-			warn("illegal combination of interface modifiers");
+			fprintf(stderr,
+			    "illegal combination of interface modifiers\n");
 			break;
 		case -3:
-			warn("invalid address label (%s)", pfifs.pfifs_alabel);
+			fprintf(stderr, "invalid address label (%s)\n",
+			    pfifs.pfifs_alabel);
 			break;
 		default:
-			warn("syntax error for interface %s", s);
+			fprintf(stderr, "syntax error for interface %s\n", s);
 		}
 		goto error;
 	}
 
 	if ((pfifs.pfifs_flags & (PFI_AFLAG_NETWORK|PFI_AFLAG_BROADCAST))
 	    && mask > -1) {
-		warn("%s: network or broadcast lookup, but "
+		fprintf(stderr, "%s: network or broadcast lookup, but "
 		    "extra netmask given\n", __func__);
 		goto error;
 	}
@@ -2061,7 +2063,7 @@ parse_ifspec(char *ifspec_str, struct pf_ifspec* pfifs)
 		 * handles case when interface comes with modifier only:
 		 *	em0::network
 		 *
-		 * Note: form em0:: is also valid, the result will be em0
+		 * Note form em0:: is also valid, the result will be em0
 		 */
 		if (nolabel) {
 			i++;
@@ -2102,17 +2104,18 @@ parse_ifspec(char *ifspec_str, struct pf_ifspec* pfifs)
 
 	if ((pfifs->pfifs_modifier == NULL) && (pfifs->pfifs_alabel != NULL) &&
 	    (!strcmp(pfifs->pfifs_alabel, "0")))
-		warn("%s: PFI_AFLAG_NOALIAS for interface match (%s:0) "
-		    "is no longer supported", __func__, pfifs->pfifs_ifname);
+		fprintf(stderr, "%s: PFI_AFLAG_NOALIAS for interface match "
+		    "(%s:0) is no longer supported\n", __func__,
+		    pfifs->pfifs_ifname);
 
 	if ((strstr(ifspec_str, "::") == NULL) &&
 	    (pfifs->pfifs_alabel != NULL) &&
 	    (!strcmp(pfifs->pfifs_alabel, "network") ||
 	    !strcmp(pfifs->pfifs_alabel, "broadcast") ||
 	    !strcmp(pfifs->pfifs_alabel, "peer")))
-		warn("%s: address modifier (%s) gets interpreted as address "
-		    "label.\nYou might actually want to change interface spec "
-		    "from %s:%s to %s::%s.", __func__, pfifs->pfifs_alabel,
+		fprintf(stderr, "%s: address modifier (%s) gets interpreted "
+		    "as address label.\nYou might want to change interface "
+		    "spec from %s:%s to %s::%s.", __func__, pfifs->pfifs_alabel,
 		    pfifs->pfifs_ifname, pfifs->pfifs_alabel,
 		    pfifs->pfifs_ifname, pfifs->pfifs_alabel);
 
