@@ -2098,9 +2098,10 @@ parse_ifspec(char *ifspec_str, struct pf_ifspec* pfifs)
 	    !strcmp(pfifs->pfifs_alabel, "peer")))
 		fprintf(stderr, "%s: address modifier (%s) gets interpreted "
 		    "as address label.\nYou might want to change interface "
-		    "spec from %s:%s to %s::%s.", __func__, pfifs->pfifs_alabel,
-		    pfifs->pfifs_ifname, pfifs->pfifs_alabel,
-		    pfifs->pfifs_ifname, pfifs->pfifs_alabel);
+		    "spec from %s:%s to %s::%s.\n", __func__,
+		    pfifs->pfifs_alabel, pfifs->pfifs_ifname,
+		    pfifs->pfifs_alabel, pfifs->pfifs_ifname,
+		    pfifs->pfifs_alabel);
 
 	return (pfifs);
 }
