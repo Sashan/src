@@ -2088,8 +2088,8 @@ parse_ifspec(char *ifspec_str, struct pf_ifspec* pfifs)
 	if ((pfifs->pfifs_modifier == NULL) && (pfifs->pfifs_alabel != NULL) &&
 	    (!strcmp(pfifs->pfifs_alabel, "0")))
 		fprintf(stderr, "%s: PFI_AFLAG_NOALIAS for interface match "
-		    "(%s:0) is no longer supported\n", __func__,
-		    pfifs->pfifs_ifname);
+		    "(%s:0) is no longer supported\n':0' will be interpreted "
+		    "as address label\n", __func__, pfifs->pfifs_ifname);
 
 	if ((strstr(ifspec_str, "::") == NULL) &&
 	    (pfifs->pfifs_alabel != NULL) &&
