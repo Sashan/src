@@ -1748,24 +1748,7 @@ host_if(const char *s, int mask)
 		err(1, "%s: strdup", __func__);
 
 	if (parse_ifspec(ps, &pfifs) == NULL)
-		switch (pfifs.pfifs_flags) {
-		case -1:
-			fprintf(stderr, "interface %s has bad modifier\n",
-			    pfifs.pfifs_ifname);
-			break;
-		case -2:
-			fprintf(stderr,
-			    "illegal combination of interface modifiers\n");
-			break;
-		case -3:
-			fprintf(stderr, "invalid address label (%s)\n",
-			    pfifs.pfifs_alabel);
-			break;
-		default:
-			fprintf(stderr, "syntax error for interface %s\n", s);
-		}
 		goto error;
-	}
 
 	if ((pfifs.pfifs_flags & (PFI_AFLAG_NETWORK|PFI_AFLAG_BROADCAST))
 	    && mask > -1) {
