@@ -2073,6 +2073,9 @@ parse_ifspec(char *ifspec_str, struct pf_ifspec* pfifs)
 		}
 	}
 
+	if (pfifs->pfifs_ifname == NULL)
+		return (NULL);
+
 	if (pfifs->pfifs_alabel != NULL) {
 		p = pfifs->pfifs_alabel;
 
