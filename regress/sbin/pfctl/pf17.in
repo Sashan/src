@@ -37,16 +37,16 @@ match on lo0 from (lo0:0) to <sometable> binat-to ::2
 
 match on lo0 from ::1 to (lo0) binat-to ::1
 match on lo0 from ::1 to (lo0:0) binat-to ::1
-match on lo0 from ::1 to (lo0:peer) binat-to ::1
-match on lo0 from ::1 to (lo0:peer:0) binat-to ::1
-match on lo0 from ::1 to (lo0:broadcast) binat-to ::1
-match on lo0 from ::1 to (lo0:broadcast:0) binat-to ::1
-match on lo0 from ::1 to (lo0:network) binat-to ::1
-match on lo0 from ::1 to (lo0:network:0) binat-to ::1
+match on lo0 from ::1 to (lo0::peer) binat-to ::1
+match on lo0 from ::1 to (lo0:0:peer) binat-to ::1
+match on lo0 from ::1 to (lo0::broadcast) binat-to ::1
+match on lo0 from ::1 to (lo0:0:broadcast) binat-to ::1
+match on lo0 from ::1 to (lo0::network) binat-to ::1
+match on lo0 from ::1 to (lo0:0:network) binat-to ::1
 match on lo0 from ::1 to (lo0)/100 binat-to ::2
 match on lo0 from ::1 to (lo0:0)/100 binat-to ::2
-match on lo0 from ::1 to (lo0:peer)/100 binat-to ::2
-match on lo0 from ::1 to (lo0:peer:0)/100 binat-to ::2
+match on lo0 from ::1 to (lo0::peer)/100 binat-to ::2
+match on lo0 from ::1 to (lo0:0:peer)/100 binat-to ::2
 
 match on lo from (lo0:0) to ::1 binat-to ::2
 match on tun from (lo0:0) to ::1 binat-to ::2

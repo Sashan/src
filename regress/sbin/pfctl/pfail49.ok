@@ -1,2 +1,6 @@
+parse_ifspec: PFI_AFLAG_NOALIAS for interface match (lo0:0) is no longer supported
+':0' will be interpreted as address label
+parse_ifspec: PFI_AFLAG_NOALIAS for interface match (nonexistent0:0) is no longer supported
+':0' will be interpreted as address label
 stdin:8: invalid interface name '10.1.2.3'
 stdin:9: invalid interface name '10.1.2.3:0'

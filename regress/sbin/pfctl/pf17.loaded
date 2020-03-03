@@ -246,51 +246,51 @@
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@62 match out on lo0 inet6 from ::1 to (lo0:peer:*) nat-to ::1 static-port
+@62 match out on lo0 inet6 from ::1 to (lo0::peer:*) nat-to ::1 static-port
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@63 match in on lo0 inet6 from (lo0:peer:*) to ::1 rdr-to ::1
+@63 match in on lo0 inet6 from (lo0::peer:*) to ::1 rdr-to ::1
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@64 match out on lo0 inet6 from ::1 to (lo0:peer:0:*) nat-to ::1 static-port
+@64 match out on lo0 inet6 from ::1 to (lo0:0:peer:*) nat-to ::1 static-port
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@65 match in on lo0 inet6 from (lo0:peer:0:*) to ::1 rdr-to ::1
+@65 match in on lo0 inet6 from (lo0:0:peer:*) to ::1 rdr-to ::1
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@66 match out on lo0 inet6 from ::1 to (lo0:broadcast:*) nat-to ::1 static-port
+@66 match out on lo0 inet6 from ::1 to (lo0::broadcast:*) nat-to ::1 static-port
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@67 match in on lo0 inet6 from (lo0:broadcast:*) to ::1 rdr-to ::1
+@67 match in on lo0 inet6 from (lo0::broadcast:*) to ::1 rdr-to ::1
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@68 match out on lo0 inet6 from ::1 to (lo0:broadcast:0:*) nat-to ::1 static-port
+@68 match out on lo0 inet6 from ::1 to (lo0:0:broadcast:*) nat-to ::1 static-port
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@69 match in on lo0 inet6 from (lo0:broadcast:0:*) to ::1 rdr-to ::1
+@69 match in on lo0 inet6 from (lo0:0:broadcast:*) to ::1 rdr-to ::1
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@70 match out on lo0 inet6 from ::1 to (lo0:network:1) nat-to ::1 static-port
+@70 match out on lo0 inet6 from ::1 to (lo0::network:1) nat-to ::1 static-port
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@71 match in on lo0 inet6 from (lo0:network:1) to ::1 rdr-to ::1
+@71 match in on lo0 inet6 from (lo0::network:1) to ::1 rdr-to ::1
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@72 match out on lo0 inet6 from ::1 to (lo0:network:0:1) nat-to ::1 static-port
+@72 match out on lo0 inet6 from ::1 to (lo0:0:network:1) nat-to ::1 static-port
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@73 match in on lo0 inet6 from (lo0:network:0:1) to ::1 rdr-to ::1
+@73 match in on lo0 inet6 from (lo0:0:network:1) to ::1 rdr-to ::1
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
@@ -310,19 +310,19 @@
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@78 match out on lo0 inet6 from ::1 to (lo0:peer:*)/100 nat-to ::2 static-port
+@78 match out on lo0 inet6 from ::1 to (lo0::peer:*)/100 nat-to ::2 static-port
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@79 match in on lo0 inet6 from (lo0:peer:*)/100 to ::2 rdr-to ::1
+@79 match in on lo0 inet6 from (lo0::peer:*)/100 to ::2 rdr-to ::1
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@80 match out on lo0 inet6 from ::1 to (lo0:peer:0:*)/100 nat-to ::2 static-port
+@80 match out on lo0 inet6 from ::1 to (lo0:0:peer:*)/100 nat-to ::2 static-port
   [ Skip steps: i=82 r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]
-@81 match in on lo0 inet6 from (lo0:peer:0:*)/100 to ::2 rdr-to ::1
+@81 match in on lo0 inet6 from (lo0:0:peer:*)/100 to ::2 rdr-to ::1
   [ Skip steps: r=end f=end p=end sp=end dp=end ]
   [ queue: qname= qid=0 pqname= pqid=0 ]
   [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]

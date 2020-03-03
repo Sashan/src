@@ -48,17 +48,23 @@ SHELL=/bin/sh
 	-${SUDO} ifconfig lo1000000 create
 	-${SUDO} ifconfig tun1000000 create
 	-${SUDO} ifconfig tun1000001 create
+	-${SUDO} ifconfig lo0 127.0.0.1 label 0
+	-${SUDO} ifconfig lo0 inet6 ::1/128 label 0
 
 .END:
 	-${SUDO} ifconfig lo1000000 destroy
 	-${SUDO} ifconfig tun1000000 destroy
 	-${SUDO} ifconfig tun1000001 destroy
+	-${SUDO} ifconfig lo0 127.0.0.1 -label
+	-${SUDO} ifconfig lo0 inet6 ::1/128 -label
 
 .INTERRUPT:
 	-${SUDO} ifconfig lo1000000 destroy
 	-${SUDO} ifconfig lo1000010 destroy
 	-${SUDO} ifconfig tun1000000 destroy
 	-${SUDO} ifconfig tun1000001 destroy
+	-${SUDO} ifconfig lo0 127.0.0.1 -label
+	-${SUDO} ifconfig lo0 inet6 ::1/128 -label
 .endif
 .endif
 

@@ -60,26 +60,26 @@ match out on lo0 inet6 from ::1 to (lo0) nat-to ::1 static-port
 match in on lo0 inet6 from (lo0) to ::1 rdr-to ::1
 match out on lo0 inet6 from ::1 to (lo0:0) nat-to ::1 static-port
 match in on lo0 inet6 from (lo0:0) to ::1 rdr-to ::1
-match out on lo0 inet6 from ::1 to (lo0:peer) nat-to ::1 static-port
-match in on lo0 inet6 from (lo0:peer) to ::1 rdr-to ::1
-match out on lo0 inet6 from ::1 to (lo0:peer:0) nat-to ::1 static-port
-match in on lo0 inet6 from (lo0:peer:0) to ::1 rdr-to ::1
-match out on lo0 inet6 from ::1 to (lo0:broadcast) nat-to ::1 static-port
-match in on lo0 inet6 from (lo0:broadcast) to ::1 rdr-to ::1
-match out on lo0 inet6 from ::1 to (lo0:broadcast:0) nat-to ::1 static-port
-match in on lo0 inet6 from (lo0:broadcast:0) to ::1 rdr-to ::1
-match out on lo0 inet6 from ::1 to (lo0:network) nat-to ::1 static-port
-match in on lo0 inet6 from (lo0:network) to ::1 rdr-to ::1
-match out on lo0 inet6 from ::1 to (lo0:network:0) nat-to ::1 static-port
-match in on lo0 inet6 from (lo0:network:0) to ::1 rdr-to ::1
+match out on lo0 inet6 from ::1 to (lo0::peer) nat-to ::1 static-port
+match in on lo0 inet6 from (lo0::peer) to ::1 rdr-to ::1
+match out on lo0 inet6 from ::1 to (lo0:0:peer) nat-to ::1 static-port
+match in on lo0 inet6 from (lo0:0:peer) to ::1 rdr-to ::1
+match out on lo0 inet6 from ::1 to (lo0::broadcast) nat-to ::1 static-port
+match in on lo0 inet6 from (lo0::broadcast) to ::1 rdr-to ::1
+match out on lo0 inet6 from ::1 to (lo0:0:broadcast) nat-to ::1 static-port
+match in on lo0 inet6 from (lo0:0:broadcast) to ::1 rdr-to ::1
+match out on lo0 inet6 from ::1 to (lo0::network) nat-to ::1 static-port
+match in on lo0 inet6 from (lo0::network) to ::1 rdr-to ::1
+match out on lo0 inet6 from ::1 to (lo0:0:network) nat-to ::1 static-port
+match in on lo0 inet6 from (lo0:0:network) to ::1 rdr-to ::1
 match out on lo0 inet6 from ::1 to (lo0)/100 nat-to ::2 static-port
 match in on lo0 inet6 from (lo0)/100 to ::2 rdr-to ::1
 match out on lo0 inet6 from ::1 to (lo0:0)/100 nat-to ::2 static-port
 match in on lo0 inet6 from (lo0:0)/100 to ::2 rdr-to ::1
-match out on lo0 inet6 from ::1 to (lo0:peer)/100 nat-to ::2 static-port
-match in on lo0 inet6 from (lo0:peer)/100 to ::2 rdr-to ::1
-match out on lo0 inet6 from ::1 to (lo0:peer:0)/100 nat-to ::2 static-port
-match in on lo0 inet6 from (lo0:peer:0)/100 to ::2 rdr-to ::1
+match out on lo0 inet6 from ::1 to (lo0::peer)/100 nat-to ::2 static-port
+match in on lo0 inet6 from (lo0::peer)/100 to ::2 rdr-to ::1
+match out on lo0 inet6 from ::1 to (lo0:0:peer)/100 nat-to ::2 static-port
+match in on lo0 inet6 from (lo0:0:peer)/100 to ::2 rdr-to ::1
 match out on lo inet6 from (lo0:0) to ::1 nat-to ::2 static-port
 match in on lo inet6 from ::1 to ::2 rdr-to (lo0:0)
 match out on tun inet6 from (lo0:0) to ::1 nat-to ::2 static-port

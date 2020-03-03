@@ -3,5 +3,5 @@ block from 10.0.0.0.1
 block from :80
 block from 2000:0:0:0:0:0:0:0:0:1
 block from 256.0.0.1
-block from 10.0.0.0:network
+block from 10.0.0.0::network
 
