@@ -1430,9 +1430,14 @@ somove(struct socket *so, int wait)
 	/*
 	 * By splicing sockets connected to localhost, userland might create a
 	 * loop.  Dissolve splicing with error if loop is detected by counter.
+	 *
+	 * If we deal with looped broadcast/multicast packet we bail out with
+	 * no error to suppress splice termination.
 	 */
-	if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.ph_loopcnt++ >= M_MAXLOOP) {
-		error = ELOOP;
+	if ((m->m_flags & M_PKTHDR) &&
+	    ((m->m_pkthdr.ph_loopcnt++ >= M_MAXLOOP) ||
+	    (m->m_flags & (M_LOOP|M_BCAST|M_MCAST)))) {
+		error = (m->m_flags & (M_LOOP|M_BCAST|M_MCAST)) ? 0 : ELOOP;
 		goto release;
 	}
 
