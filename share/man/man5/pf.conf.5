@@ -355,11 +355,23 @@ hence addresses 10.1.1.10, 10.1.1.11, and 10.1.1.12.
 .Pp
 Interface names, interface group names, and
 .Cm self
-can have modifiers appended:
+can specify IP address label, which selects a particular address
+to match:
+.Pp
+.Bl -tag -width :foo -compact
+.It Ar :foo
+Selects IP address with label 
+.Ar foo
+All other addresses bound to interface are ignored.
+The
+.Ar foo
+label gets assigned to IP address by
+.Xr ifconfig 8 .
+.El
+.Pp
+Label can be followed by modifier:
 .Pp
 .Bl -tag -width :broadcast -compact
-.It Cm :0
-Do not include interface aliases.
 .It Cm :broadcast
 Translates to the interface's broadcast address(es).
 .It Cm :network
@@ -367,6 +379,22 @@ Translates to the network(s) attached to the interface.
 .It Cm :peer
 Translates to the point-to-point interface's peer address(es).
 .El
+.Pp
+To select all networks with label
+.Ar lan
+attached to host use keyword
+.Cm self
+as follows:
+.Bd -literal -offset indent -compact
+self:lan:network
+.Ed
+.Pp
+To select all networks attached to host use
+.Cm self
+with label omitted:
+.Bd -literal -offset indent -compact
+self::network
+.Ed
 .Pp
 Host names may also have the
 .Cm :0

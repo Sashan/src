@@ -333,6 +333,13 @@ This is useful for devices which have multiple physical layer interfaces
 Setting the instance on such devices may not be strictly required
 by the network interface driver as the driver may take care of this
 automatically; see the driver's manual page for more information.
+.It Cm label Ar label
+Assign label to IP address. Labels allow 
+.Xr pf 4
+to match particular IP address bound to interface.
+Every IP address can have one label at most.
+.It Cm -label
+Remove label from IP address.
 .It Cm link[0-2]
 Enable special processing of the link level of the interface.
 These three options are interface specific in actual effect; however,
