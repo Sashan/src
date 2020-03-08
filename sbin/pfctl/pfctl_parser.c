@@ -1577,6 +1577,8 @@ ifa_grouplookup(struct pf_ifspec *pfifs)
 		len -= sizeof(struct ifg_req);
 		ifspec.pfifs_ifname = ifg->ifgrq_member;
 		ifspec.pfifs_flags = pfifs->pfifs_flags;
+		ifspec.pfifs_alabel = pfifs->pfifs_alabel;
+		ifspec.pfifs_modifier = pfifs->pfifs_modifier;
 		if ((n = ifa_lookup(&ifspec)) == NULL)
 			continue;
 		if (h == NULL)
