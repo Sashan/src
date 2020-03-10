@@ -1436,8 +1436,8 @@ somove(struct socket *so, int wait)
 	 */
 	if ((m->m_flags & M_PKTHDR) &&
 	    ((m->m_pkthdr.ph_loopcnt++ >= M_MAXLOOP) ||
-	    (m->m_flags & (M_LOOP|M_BCAST|M_MCAST)))) {
-		error = (m->m_flags & (M_LOOP|M_BCAST|M_MCAST)) ? 0 : ELOOP;
+	    ((m->m_flags & M_LOOP) && (m->m_flags & (M_BCAST|M_MCAST))))) {
+		error = (m->m_pkthdr.ph_loopcnt >= M_MAXLOOP) ? 0 : ELOOP;
 		goto release;
 	}
 
