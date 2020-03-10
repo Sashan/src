@@ -423,7 +423,7 @@ struct	ifreq {
 #define ifr_llprio	ifr_ifru.ifru_metric	/* link layer priority */
 #define ifr_hdrprio	ifr_ifru.ifru_metric	/* header prio field config */
 #define ifr_pwe3	ifr_ifru.ifru_metric	/* PWE3 type */
-#define ifr_label	ifr_ifru.ifru_label	/* PWE3 type */
+#define ifr_label	ifr_ifru.ifru_label	/* address label */
 };
 
 #define IF_HDRPRIO_MIN		IFQ_MINPRIO
