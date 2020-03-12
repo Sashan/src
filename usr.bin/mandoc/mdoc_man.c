@@ -1,6 +1,6 @@
-/*	$OpenBSD: mdoc_man.c,v 1.131 2020/01/19 17:59:01 schwarze Exp $ */
+/*	$OpenBSD: mdoc_man.c,v 1.133 2020/02/20 22:55:10 schwarze Exp $ */
 /*
- * Copyright (c) 2011-2019 Ingo Schwarze <schwarze@openbsd.org>
+ * Copyright (c) 2011-2020 Ingo Schwarze <schwarze@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -260,7 +260,7 @@ static const struct mdoc_man_act mdoc_man_acts[MDOC_MAX - MDOC_Dd] = {
 	{ NULL, NULL, post_percent, NULL, NULL }, /* %Q */
 	{ NULL, NULL, post_percent, NULL, NULL }, /* %U */
 	{ NULL, NULL, NULL, NULL, NULL }, /* Ta */
-	{ NULL, NULL, NULL, NULL, NULL }, /* Tg */
+	{ NULL, pre_skip, NULL, NULL, NULL }, /* Tg */
 };
 static const struct mdoc_man_act *mdoc_man_act(enum roff_tok);
 
@@ -581,9 +581,9 @@ print_width(const struct mdoc_bl *bl, const struct roff_node *child)
 
 	/* Set up the current list. */
 	if (chsz > sz && bl->type != LIST_tag)
-		print_block(".HP", 0);
+		print_block(".HP", MMAN_spc);
 	else {
-		print_block(".TP", 0);
+		print_block(".TP", MMAN_spc);
 		remain = sz + 2;
 	}
 	if (numeric) {

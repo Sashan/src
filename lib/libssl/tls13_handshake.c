@@ -1,4 +1,4 @@
-/*	$OpenBSD: tls13_handshake.c,v 1.41 2020/01/23 02:24:38 jsing Exp $	*/
+/*	$OpenBSD: tls13_handshake.c,v 1.51 2020/02/05 16:42:29 jsing Exp $	*/
 /*
  * Copyright (c) 2018-2019 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2019 Joel Sing <jsing@openbsd.org>
@@ -25,10 +25,11 @@
 /* Based on RFC 8446 and inspired by s2n's TLS 1.2 state machine. */
 
 struct tls13_handshake_action {
-	uint8_t			handshake_type;
-	uint8_t			sender;
-	uint8_t			handshake_complete;
-	uint8_t			preserve_transcript_hash;
+	uint8_t	handshake_type;
+	uint8_t	sender;
+	uint8_t	handshake_complete;
+	uint8_t	send_preserve_transcript_hash;
+	uint8_t	recv_preserve_transcript_hash;
 
 	int (*send)(struct tls13_ctx *ctx, CBB *cbb);
 	int (*sent)(struct tls13_ctx *ctx);
@@ -36,8 +37,6 @@ struct tls13_handshake_action {
 };
 
 enum tls13_message_type tls13_handshake_active_state(struct tls13_ctx *ctx);
-
-int tls13_accept(struct tls13_ctx *ctx);
 
 struct tls13_handshake_action *
     tls13_handshake_active_action(struct tls13_ctx *ctx);
@@ -71,18 +70,21 @@ struct tls13_handshake_action state_machine[] = {
 	[CLIENT_CERTIFICATE] = {
 		.handshake_type = TLS13_MT_CERTIFICATE,
 		.sender = TLS13_HS_CLIENT,
+		.send_preserve_transcript_hash = 1,
 		.send = tls13_client_certificate_send,
 		.recv = tls13_client_certificate_recv,
 	},
 	[CLIENT_CERTIFICATE_VERIFY] = {
 		.handshake_type = TLS13_MT_CERTIFICATE_VERIFY,
 		.sender = TLS13_HS_CLIENT,
+		.recv_preserve_transcript_hash = 1,
 		.send = tls13_client_certificate_verify_send,
 		.recv = tls13_client_certificate_verify_recv,
 	},
 	[CLIENT_FINISHED] = {
 		.handshake_type = TLS13_MT_FINISHED,
 		.sender = TLS13_HS_CLIENT,
+		.recv_preserve_transcript_hash = 1,
 		.send = tls13_client_finished_send,
 		.sent = tls13_client_finished_sent,
 		.recv = tls13_client_finished_recv,
@@ -97,6 +99,7 @@ struct tls13_handshake_action state_machine[] = {
 		.handshake_type = TLS13_MT_SERVER_HELLO,
 		.sender = TLS13_HS_SERVER,
 		.send = tls13_server_hello_send,
+		.sent = tls13_server_hello_sent,
 		.recv = tls13_server_hello_recv,
 	},
 	[SERVER_HELLO_RETRY] = {
@@ -114,11 +117,12 @@ struct tls13_handshake_action state_machine[] = {
 	[SERVER_CERTIFICATE] = {
 		.handshake_type = TLS13_MT_CERTIFICATE,
 		.sender = TLS13_HS_SERVER,
+		.send_preserve_transcript_hash = 1,
 		.send = tls13_server_certificate_send,
 		.recv = tls13_server_certificate_recv,
 	},
 	[SERVER_CERTIFICATE_REQUEST] = {
-		.handshake_type = TLS13_MT_CERTIFICATE,
+		.handshake_type = TLS13_MT_CERTIFICATE_REQUEST,
 		.sender = TLS13_HS_SERVER,
 		.send = tls13_server_certificate_request_send,
 		.recv = tls13_server_certificate_request_recv,
@@ -126,15 +130,17 @@ struct tls13_handshake_action state_machine[] = {
 	[SERVER_CERTIFICATE_VERIFY] = {
 		.handshake_type = TLS13_MT_CERTIFICATE_VERIFY,
 		.sender = TLS13_HS_SERVER,
-		.preserve_transcript_hash = 1,
+		.recv_preserve_transcript_hash = 1,
 		.send = tls13_server_certificate_verify_send,
 		.recv = tls13_server_certificate_verify_recv,
 	},
 	[SERVER_FINISHED] = {
 		.handshake_type = TLS13_MT_FINISHED,
 		.sender = TLS13_HS_SERVER,
-		.preserve_transcript_hash = 1,
+		.recv_preserve_transcript_hash = 1,
+		.send_preserve_transcript_hash = 1,
 		.send = tls13_server_finished_send,
+		.sent = tls13_server_finished_sent,
 		.recv = tls13_server_finished_recv,
 	},
 	[APPLICATION_DATA] = {
@@ -279,6 +285,15 @@ tls13_handshake_advance_state_machine(struct tls13_ctx *ctx)
 }
 
 int
+tls13_handshake_msg_record(struct tls13_ctx *ctx)
+{
+	CBS cbs;
+
+	tls13_handshake_msg_data(ctx->hs_msg, &cbs);
+	return tls1_transcript_record(ctx->ssl, CBS_data(&cbs), CBS_len(&cbs));
+}
+
+int
 tls13_handshake_perform(struct tls13_ctx *ctx)
 {
 	struct tls13_handshake_action *action;
@@ -292,7 +307,9 @@ tls13_handshake_perform(struct tls13_ctx *ctx)
 			ctx->handshake_completed = 1;
 			tls13_record_layer_handshake_completed(ctx->rl);
 			return TLS13_IO_SUCCESS;
-		} else if (ctx->alert)
+		}
+
+		if (ctx->alert)
 			return tls13_send_alert(ctx->rl, ctx->alert);
 
 		if (action->sender == ctx->mode) {
@@ -309,20 +326,11 @@ tls13_handshake_perform(struct tls13_ctx *ctx)
 }
 
 int
-tls13_accept(struct tls13_ctx *ctx)
-{
-	ctx->mode = TLS13_HS_SERVER;
-
-	return tls13_handshake_perform(ctx);
-}
-
-int
 tls13_handshake_send_action(struct tls13_ctx *ctx,
     struct tls13_handshake_action *action)
 {
 	ssize_t ret;
 	CBB cbb;
-	CBS cbs;
 
 	/* If we have no handshake message, we need to build one. */
 	if (ctx->hs_msg == NULL) {
@@ -343,9 +351,18 @@ tls13_handshake_send_action(struct tls13_ctx *ctx,
 	if ((ret = tls13_handshake_msg_send(ctx->hs_msg, ctx->rl)) <= 0)
 		return ret;
 
-	tls13_handshake_msg_data(ctx->hs_msg, &cbs);
-	if (!tls1_transcript_record(ctx->ssl, CBS_data(&cbs), CBS_len(&cbs)))
+	if (!tls13_handshake_msg_record(ctx))
 		return TLS13_IO_FAILURE;
+
+	if (action->send_preserve_transcript_hash) {
+		if (!tls1_transcript_hash_value(ctx->ssl,
+		    ctx->hs->transcript_hash, sizeof(ctx->hs->transcript_hash),
+		    &ctx->hs->transcript_hash_len))
+			return TLS13_IO_FAILURE;
+	}
+
+	if (ctx->handshake_message_sent_cb != NULL)
+		ctx->handshake_message_sent_cb(ctx);
 
 	tls13_handshake_msg_free(ctx->hs_msg);
 	ctx->hs_msg = NULL;
@@ -372,16 +389,18 @@ tls13_handshake_recv_action(struct tls13_ctx *ctx,
 	if ((ret = tls13_handshake_msg_recv(ctx->hs_msg, ctx->rl)) <= 0)
 		return ret;
 
-	if (action->preserve_transcript_hash) {
+	if (action->recv_preserve_transcript_hash) {
 		if (!tls1_transcript_hash_value(ctx->ssl,
 		    ctx->hs->transcript_hash, sizeof(ctx->hs->transcript_hash),
 		    &ctx->hs->transcript_hash_len))
 			return TLS13_IO_FAILURE;
 	}
 
-	tls13_handshake_msg_data(ctx->hs_msg, &cbs);
-	if (!tls1_transcript_record(ctx->ssl, CBS_data(&cbs), CBS_len(&cbs)))
+	if (!tls13_handshake_msg_record(ctx))
 		return TLS13_IO_FAILURE;
+
+	if (ctx->handshake_message_recv_cb != NULL)
+		ctx->handshake_message_recv_cb(ctx);
 
 	/*
 	 * In TLSv1.3 there is no way to know if you're going to receive a

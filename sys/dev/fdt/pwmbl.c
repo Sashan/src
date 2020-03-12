@@ -1,4 +1,4 @@
-/*	$OpenBSD: pwmbl.c,v 1.1 2019/10/21 20:52:33 kettenis Exp $	*/
+/*	$OpenBSD: pwmbl.c,v 1.4 2020/01/28 14:09:31 patrick Exp $	*/
 /*
  * Copyright (c) 2019 Krystian Lewandowski
  * Copyright (c) 2019 Mark Kettenis <kettenis@openbsd.org>
@@ -86,17 +86,13 @@ pwmbl_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_pwm_len = len;
 
 	len = OF_getproplen(faa->fa_node, "enable-gpios");
-	if (len < 0) {
-		free(sc->sc_pwm, M_DEVBUF, sc->sc_pwm_len);
-		printf(": no gpio\n");
-		return;
+	if (len > 0) {
+		gpios = malloc(len, M_TEMP, M_WAITOK);
+		OF_getpropintarray(faa->fa_node, "enable-gpios", gpios, len);
+		gpio_controller_config_pin(&gpios[0], GPIO_CONFIG_OUTPUT);
+		gpio_controller_set_pin(&gpios[0], 1);
+		free(gpios, M_TEMP, len);
 	}
-
-	gpios = malloc(len, M_TEMP, M_WAITOK);
-	OF_getpropintarray(faa->fa_node, "enable-gpios", gpios, len);
-	gpio_controller_config_pin(&gpios[0], GPIO_CONFIG_OUTPUT);
-	gpio_controller_set_pin(&gpios[0], 1);
-	free(gpios, M_TEMP, len);
 
 	len = OF_getproplen(faa->fa_node, "brightness-levels");
 	if (len < 0) {
@@ -114,7 +110,12 @@ pwmbl_attach(struct device *parent, struct device *self, void *aux)
 
 	sc->sc_max_level = sc->sc_levels[sc->sc_nlevels - 1];
 	sc->sc_def_level = OF_getpropint(faa->fa_node,
-	    "default-brightness-level", sc->sc_max_level);
+	    "default-brightness-level", sc->sc_nlevels - 1);
+	if (sc->sc_def_level >= sc->sc_nlevels)
+		sc->sc_def_level = sc->sc_nlevels - 1;
+	sc->sc_def_level = sc->sc_levels[sc->sc_def_level];
+
+	pwmbl_set_brightness(sc, sc->sc_def_level);
 
 	sc_pwmbl = sc;
 	ws_get_param = pwmbl_get_param;

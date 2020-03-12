@@ -1,4 +1,4 @@
-/*	$OpenBSD: resolver.c,v 1.120 2020/01/20 20:41:43 florian Exp $	*/
+/*	$OpenBSD: resolver.c,v 1.122 2020/01/28 21:11:06 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -1113,6 +1113,7 @@ set_unified_cache(struct uw_resolver *res)
 		return;
 
 	if (res->ctx->env->msg_cache != NULL) {
+		/* XXX we are currently not using this */
 		if (res->ctx->env->msg_cache != unified_msg_cache ||
 		    res->ctx->env->rrset_cache != unified_rrset_cache ||
 		    res->ctx->env->key_cache != unified_key_cache ||
@@ -1490,10 +1491,7 @@ check_resolver_done(struct uw_resolver *res, void *arg, int rcode,
 	}
 
 	if (sec == SECURE) {
-		if (prev_state == UNKNOWN) {
-			checked_resolver->state = VALIDATING;
-			set_unified_cache(checked_resolver);
-		} else if (prev_state != VALIDATING)
+		if (prev_state != VALIDATING)
 			new_resolver(checked_resolver->type, VALIDATING);
 		if (!(evtimer_pending(&trust_anchor_timer, NULL)))
 			evtimer_add(&trust_anchor_timer, &tv);
@@ -1507,9 +1505,7 @@ check_resolver_done(struct uw_resolver *res, void *arg, int rcode,
 			log_warnx("%s: %s", uw_resolver_type_str[
 			    checked_resolver->type], why_bogus);
 		}
-		if (prev_state == UNKNOWN)
-			checked_resolver->state = RESOLVING;
-		else if (prev_state != RESOLVING)
+		if (prev_state != RESOLVING)
 			new_resolver(checked_resolver->type, RESOLVING);
 	} else
 		checked_resolver->state = DEAD; /* we know the root exists */
@@ -1650,10 +1646,7 @@ replace_forwarders(struct uw_forwarder_head *new_list, struct
 		free(uw_forwarder);
 	}
 
-	while ((uw_forwarder = TAILQ_FIRST(new_list)) != NULL) {
-		TAILQ_REMOVE(new_list, uw_forwarder, entry);
-		TAILQ_INSERT_TAIL(old_list, uw_forwarder, entry);
-	}
+	TAILQ_CONCAT(old_list, new_list, entry);
 }
 
 int

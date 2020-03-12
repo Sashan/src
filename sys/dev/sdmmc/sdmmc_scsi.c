@@ -1,4 +1,4 @@
-/*	$OpenBSD: sdmmc_scsi.c,v 1.42 2018/03/30 07:18:39 jmatthew Exp $	*/
+/*	$OpenBSD: sdmmc_scsi.c,v 1.46 2020/02/20 16:26:01 krw Exp $	*/
 
 /*
  * Copyright (c) 2006 Uwe Stuehler <uwe@openbsd.org>
@@ -68,7 +68,6 @@ struct sdmmc_ccb {
 TAILQ_HEAD(sdmmc_ccb_list, sdmmc_ccb);
 
 struct sdmmc_scsi_softc {
-	struct scsi_adapter sc_adapter;
 	struct scsi_link sc_link;
 	struct device *sc_child;
 	struct sdmmc_scsi_target *sc_tgt;
@@ -92,7 +91,11 @@ void	sdmmc_start_xs(struct sdmmc_softc *, struct sdmmc_ccb *);
 void	sdmmc_complete_xs(void *);
 void	sdmmc_done_xs(struct sdmmc_ccb *);
 void	sdmmc_stimeout(void *);
-void	sdmmc_scsi_minphys(struct buf *, struct scsi_link *);
+void	sdmmc_minphys(struct buf *, struct scsi_link *);
+
+struct scsi_adapter sdmmc_switch = {
+	sdmmc_scsi_cmd, sdmmc_minphys, NULL, NULL, NULL
+};
 
 #ifdef SDMMC_DEBUG
 #define DPRINTF(s)	printf s
@@ -134,15 +137,12 @@ sdmmc_scsi_attach(struct sdmmc_softc *sc)
 
 	sc->sc_scsibus = scbus;
 
-	scbus->sc_adapter.scsi_cmd = sdmmc_scsi_cmd;
-	scbus->sc_adapter.scsi_minphys = sdmmc_scsi_minphys;
-
 	scbus->sc_link.adapter_target = SDMMC_SCSIID_HOST;
 	scbus->sc_link.adapter_buswidth = scbus->sc_ntargets;
 	scbus->sc_link.adapter_softc = sc;
 	scbus->sc_link.luns = 1;
 	scbus->sc_link.openings = 1;
-	scbus->sc_link.adapter = &scbus->sc_adapter;
+	scbus->sc_link.adapter = &sdmmc_switch;
 	scbus->sc_link.pool = &scbus->sc_iopool;
 
 	bzero(&saa, sizeof(saa));
@@ -545,7 +545,7 @@ sdmmc_stimeout(void *arg)
 }
 
 void
-sdmmc_scsi_minphys(struct buf *bp, struct scsi_link *sl)
+sdmmc_minphys(struct buf *bp, struct scsi_link *sl)
 {
 	struct sdmmc_softc *sc = sl->adapter_softc;
 	struct sdmmc_scsi_softc *scbus = sc->sc_scsibus;
@@ -556,8 +556,8 @@ sdmmc_scsi_minphys(struct buf *bp, struct scsi_link *sl)
 	if (sc->sc_max_xfer != 0 &&
 	    bp->b_bcount > sf->csd.sector_size * sc->sc_max_xfer)
 		bp->b_bcount = sf->csd.sector_size * sc->sc_max_xfer;
-
-	minphys(bp);
+	else
+		minphys(bp);
 }
 
 #ifdef HIBERNATE

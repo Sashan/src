@@ -1,4 +1,4 @@
-/*	$OpenBSD: cd.c,v 1.240 2019/12/06 15:13:07 krw Exp $	*/
+/*	$OpenBSD: cd.c,v 1.245 2020/02/20 16:26:01 krw Exp $	*/
 /*	$NetBSD: cd.c,v 1.100 1997/04/02 02:29:30 mycroft Exp $	*/
 
 /*
@@ -98,7 +98,7 @@ struct cd_softc {
 	struct disk		 sc_dk;
 
 	int			 sc_flags;
-#define	CDF_ANCIENT	0x10		/* disk is ancient; for minphys */
+#define	CDF_ANCIENT	0x10		/* disk is ancient; for cdminphys */
 #define	CDF_DYING	0x40		/* dying, when deactivated */
 #define CDF_WAITING	0x100
 	struct scsi_link	*sc_link;	/* contains targ, lun, etc. */
@@ -668,12 +668,14 @@ retry:
 void
 cdminphys(struct buf *bp)
 {
+	struct scsi_link	*link;
 	struct cd_softc		*sc;
 	long			 max;
 
 	sc = cdlookup(DISKUNIT(bp->b_dev));
 	if (sc == NULL)
 		return;
+	link = sc->sc_link;
 
 	/*
 	 * If the device is ancient, we want to make sure that
@@ -693,7 +695,10 @@ cdminphys(struct buf *bp)
 			bp->b_bcount = max;
 	}
 
-	(*sc->sc_link->adapter->scsi_minphys)(bp, sc->sc_link);
+	if (link->adapter->dev_minphys != NULL)
+		(*link->adapter->dev_minphys)(bp, link);
+	else
+		minphys(bp);
 
 	device_unref(&sc->sc_dev);
 }

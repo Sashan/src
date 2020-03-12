@@ -1,4 +1,4 @@
-/*	$OpenBSD: compat.c,v 1.91 2020/01/13 15:41:53 espie Exp $	*/
+/*	$OpenBSD: compat.c,v 1.93 2020/01/26 12:41:21 espie Exp $	*/
 /*	$NetBSD: compat.c,v 1.14 1996/11/06 17:59:01 christos Exp $	*/
 
 /*
@@ -101,24 +101,13 @@ CompatMake(void *gnp,	/* The node to make */
 	if (pgn == NULL)
 		pgn = gn;
 
-	if (pgn->type & OP_MADE) {
-		sib = gn;
-		do {
-			sib->mtime = gn->mtime;
-			sib->built_status = UPTODATE;
-			sib = sib->sibling;
-		} while (sib != gn);
-	}
-
 	switch(gn->built_status) {
 	case UNKNOWN: 
 		/* First mark ourselves to be built, then apply whatever
 		 * transformations the suffix module thinks are necessary.
 		 * Once that's done, we can descend and make all our children.
 		 * If any of them has an error but the -k flag was given,
-		 * our 'must_make' field will be set false again.  This is our
-		 * signal to not attempt to do anything but abort our
-		 * parent as well.  */
+		 * we will abort. */
 		gn->must_make = true;
 		gn->built_status = BUILDING;
 		/* note that, in case we have siblings, we only check all
@@ -132,10 +121,9 @@ CompatMake(void *gnp,	/* The node to make */
 			sib = sib->sibling;
 		} while (sib != gn);
 
-		if (!gn->must_make) {
+		if (gn->built_status == ABORTED) {
 			Error("Build for %s aborted", gn->name);
-			gn->built_status = ABORTED;
-			pgn->must_make = false;
+			pgn->built_status = ABORTED;
 			return;
 		}
 
@@ -228,12 +216,10 @@ CompatMake(void *gnp,	/* The node to make */
 			if (DEBUG(MAKE))
 				printf("update time: %s\n",
 				    time_to_string(&gn->mtime));
-			if (!(gn->type & OP_EXEC)) {
-				pgn->child_rebuilt = true;
-				Make_TimeStamp(pgn, gn);
-			}
+			pgn->child_rebuilt = true;
+			Make_TimeStamp(pgn, gn);
 		} else if (keepgoing)
-			pgn->must_make = false;
+			pgn->built_status = ABORTED;
 		else {
 			print_errors();
 			exit(1);
@@ -242,22 +228,19 @@ CompatMake(void *gnp,	/* The node to make */
 	case ERROR:
 		/* Already had an error when making this beastie. Tell the
 		 * parent to abort.  */
-		pgn->must_make = false;
+		pgn->built_status = ABORTED;
 		break;
 	case BUILDING:
 		Error("Graph cycles through %s", gn->name);
 		gn->built_status = ERROR;
-		pgn->must_make = false;
+		pgn->built_status = ABORTED;
 		break;
 	case REBUILT:
-		if ((gn->type & OP_EXEC) == 0) {
-			pgn->child_rebuilt = true;
-			Make_TimeStamp(pgn, gn);
-		}
+		pgn->child_rebuilt = true;
+		Make_TimeStamp(pgn, gn);
 		break;
 	case UPTODATE:
-		if ((gn->type & OP_EXEC) == 0)
-			Make_TimeStamp(pgn, gn);
+		Make_TimeStamp(pgn, gn);
 		break;
 	default:
 		break;

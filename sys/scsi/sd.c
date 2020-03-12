@@ -1,4 +1,4 @@
-/*	$OpenBSD: sd.c,v 1.306 2019/12/08 16:38:45 krw Exp $	*/
+/*	$OpenBSD: sd.c,v 1.310 2020/02/20 16:26:02 krw Exp $	*/
 /*	$NetBSD: sd.c,v 1.111 1997/04/02 02:29:41 mycroft Exp $	*/
 
 /*-
@@ -832,7 +832,10 @@ sdminphys(struct buf *bp)
 			bp->b_bcount = max;
 	}
 
-	(*link->adapter->scsi_minphys)(bp, link);
+	if (link->adapter->dev_minphys != NULL)
+		(*link->adapter->dev_minphys)(bp, link);
+	else
+		minphys(bp);
 
 	device_unref(&sc->sc_dev);
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: iked.h,v 1.132 2020/01/16 20:05:00 tobhe Exp $	*/
+/*	$OpenBSD: iked.h,v 1.134 2020/02/21 15:17:34 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -254,6 +254,7 @@ struct iked_policy {
 #define IKED_POLICY_QUICK		 0x08
 #define IKED_POLICY_SKIP		 0x10
 #define IKED_POLICY_IPCOMP		 0x20
+#define IKED_POLICY_TRANSPORT		 0x40
 
 	int				 pol_refcnt;
 
@@ -480,6 +481,9 @@ struct iked_sa {
 
 	int				 sa_mobike;	/* MOBIKE */
 	int				 sa_frag;	/* fragmentation */
+
+	int			 	 sa_use_transport_mode;	/* peer requested */
+	int			 	 sa_used_transport_mode; /* we enabled */
 
 	struct iked_timer		 sa_timer;	/* SA timeouts */
 #define IKED_IKE_SA_EXCHANGE_TIMEOUT	 300		/* 5 minutes */
@@ -1030,8 +1034,8 @@ const char *
 const char *
 	 print_map(unsigned int, struct iked_constmap *);
 void	 lc_string(char *);
-void	 print_hex(uint8_t *, off_t, size_t);
-void	 print_hexval(uint8_t *, off_t, size_t);
+void	 print_hex(const uint8_t *, off_t, size_t);
+void	 print_hexval(const uint8_t *, off_t, size_t);
 const char *
 	 print_bits(unsigned short, unsigned char *);
 int	 sockaddr_cmp(struct sockaddr *, struct sockaddr *, int);

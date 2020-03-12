@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh-add.c,v 1.150 2020/01/17 20:13:47 naddy Exp $ */
+/* $OpenBSD: ssh-add.c,v 1.153 2020/02/18 08:58:33 dtucker Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -83,7 +83,7 @@ static char *default_files[] = {
 static int fingerprint_hash = SSH_FP_HASH_DEFAULT;
 
 /* Default lifetime (0 == forever) */
-static int lifetime = 0;
+static long lifetime = 0;
 
 /* User has to confirm key use */
 static int confirm = 0;
@@ -217,9 +217,7 @@ add_file(int agent_fd, const char *filename, int key_only, int qflag,
 			return -1;
 		}
 	}
-	if ((keyblob = sshbuf_new()) == NULL)
-		fatal("%s: sshbuf_new failed", __func__);
-	if ((r = sshkey_load_file(fd, keyblob)) != 0) {
+	if ((r = sshbuf_load_fd(fd, &keyblob)) != 0) {
 		fprintf(stderr, "Error loading key \"%s\": %s\n",
 		    filename, ssh_err(r));
 		sshbuf_free(keyblob);
@@ -310,8 +308,8 @@ add_file(int agent_fd, const char *filename, int key_only, int qflag,
 	if (!sshkey_is_sk(private))
 		skprovider = NULL; /* Don't send constraint for other keys */
 	else if (skprovider == NULL) {
-		fprintf(stderr, "Cannot load security key %s without "
-		    "provider\n", filename);
+		fprintf(stderr, "Cannot load authenticator-hosted key %s "
+		    "without provider\n", filename);
 		goto out;
 	}
 
@@ -323,7 +321,7 @@ add_file(int agent_fd, const char *filename, int key_only, int qflag,
 			    filename, comment);
 			if (lifetime != 0) {
 				fprintf(stderr,
-				    "Lifetime set to %d seconds\n", lifetime);
+				    "Lifetime set to %ld seconds\n", lifetime);
 			}
 			if (confirm != 0) {
 				fprintf(stderr, "The user must confirm "
@@ -379,7 +377,7 @@ add_file(int agent_fd, const char *filename, int key_only, int qflag,
 		fprintf(stderr, "Certificate added: %s (%s)\n", certpath,
 		    private->cert->key_id);
 		if (lifetime != 0) {
-			fprintf(stderr, "Lifetime set to %d seconds\n",
+			fprintf(stderr, "Lifetime set to %ld seconds\n",
 			    lifetime);
 		}
 		if (confirm != 0) {
@@ -541,7 +539,7 @@ load_resident_keys(int agent_fd, const char *skprovider, int qflag)
 	int r, ok = 0;
 	char *fp;
 
-	pass = read_passphrase("Enter PIN for security key: ", RP_ALLOW_STDIN);
+	pass = read_passphrase("Enter PIN for authenticator: ", RP_ALLOW_STDIN);
 	if ((r = sshsk_load_resident(skprovider, NULL, pass,
 	    &keys, &nkeys)) != 0) {
 		error("Unable to load resident keys: %s", ssh_err(r));
@@ -566,7 +564,7 @@ load_resident_keys(int agent_fd, const char *skprovider, int qflag)
 			    sshkey_type(keys[i]), fp);
 			if (lifetime != 0) {
 				fprintf(stderr,
-				    "Lifetime set to %d seconds\n", lifetime);
+				    "Lifetime set to %ld seconds\n", lifetime);
 			}
 			if (confirm != 0) {
 				fprintf(stderr, "The user must confirm "
@@ -715,7 +713,8 @@ main(int argc, char **argv)
 			pkcs11provider = optarg;
 			break;
 		case 't':
-			if ((lifetime = convtime(optarg)) == -1) {
+			if ((lifetime = convtime(optarg)) == -1 ||
+			    lifetime < 0 || lifetime > UINT32_MAX) {
 				fprintf(stderr, "Invalid lifetime\n");
 				ret = 1;
 				goto done;

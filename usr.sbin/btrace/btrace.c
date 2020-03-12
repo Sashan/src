@@ -1,4 +1,4 @@
-/*	$OpenBSD: btrace.c,v 1.1 2020/01/21 16:24:55 mpi Exp $ */
+/*	$OpenBSD: btrace.c,v 1.4 2020/01/28 16:39:51 mpi Exp $ */
 
 /*
  * Copyright (c) 2019 - 2020 Martin Pieuchot <mpi@openbsd.org>
@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <dev/dt/dtvar.h>
@@ -80,9 +81,9 @@ void			 stmt_delete(struct bt_stmt *, struct dt_evt *);
 void			 stmt_insert(struct bt_stmt *, struct dt_evt *);
 void			 stmt_print(struct bt_stmt *, struct dt_evt *);
 void			 stmt_store(struct bt_stmt *, struct dt_evt *);
+void			 stmt_time(struct bt_stmt *, struct dt_evt *);
 void			 stmt_zero(struct bt_stmt *);
 struct bt_arg		*ba_read(struct bt_arg *);
-long			 ba2long(struct bt_arg *, struct dt_evt *);
 
 /* FIXME: use a real hash. */
 #define ba2hash(_b, _e)	ba2str((_b), (_e))
@@ -458,6 +459,9 @@ rules_setup(int fd)
 					dtrq->dtrq_evtflags |= DTEVT_RETVAL;
 					break;
 				case B_AT_MF_COUNT:
+				case B_AT_MF_MAX:
+				case B_AT_MF_MIN:
+				case B_AT_MF_SUM:
 				case B_AT_OP_ADD ... B_AT_OP_DIVIDE:
 					break;
 				default:
@@ -566,6 +570,9 @@ rule_eval(struct bt_rule *r, struct dt_evt *dtev)
 		case B_AC_PRINTF:
 			stmt_printf(bs, dtev);
 			break;
+		case B_AC_TIME:
+			stmt_time(bs, dtev);
+			break;
 		case B_AC_ZERO:
 			stmt_zero(bs);
 			break;
@@ -573,6 +580,19 @@ rule_eval(struct bt_rule *r, struct dt_evt *dtev)
 			xabort("no handler for action type %d", bs->bs_act);
 		}
 	}
+}
+
+time_t
+builtin_gettime(struct dt_evt *dtev)
+{
+	struct timespec ts;
+
+	if (dtev == NULL) {
+		clock_gettime(CLOCK_REALTIME, &ts);
+		return ts.tv_sec;
+	}
+
+	return dtev->dtev_tsp.tv_sec;
 }
 
 static inline uint64_t
@@ -657,14 +677,16 @@ stmt_clear(struct bt_stmt *bs)
 void
 stmt_delete(struct bt_stmt *bs, struct dt_evt *dtev)
 {
-	struct bt_arg *bkey = SLIST_FIRST(&bs->bs_args);
-	struct bt_var *bv = bs->bs_var;
+	struct bt_arg *bkey, *bmap = SLIST_FIRST(&bs->bs_args);
+	struct bt_var *bv = bmap->ba_value;
 
-	assert(SLIST_NEXT(bkey, ba_next) == NULL);
+	assert(bmap->ba_type == B_AT_MAP);
+	assert(bs->bs_var == NULL);
+
+	bkey = bmap->ba_key;
+	debug("map=%p '%s' delete key=%p\n", bv->bv_value, bv->bv_name, bkey);
 
 	map_delete(bv, ba2hash(bkey, dtev));
-
-	debug("map=%p '%s' delete key=%p\n", bv->bv_value, bv->bv_name, bkey);
 }
 
 /*
@@ -676,16 +698,18 @@ stmt_delete(struct bt_stmt *bs, struct dt_evt *dtev)
 void
 stmt_insert(struct bt_stmt *bs, struct dt_evt *dtev)
 {
-	struct bt_arg *bkey, *bval = SLIST_FIRST(&bs->bs_args);
-	struct bt_var *bv = bs->bs_var;
+	struct bt_arg *bkey, *bmap = SLIST_FIRST(&bs->bs_args);
+	struct bt_arg *bval = (struct bt_arg *)bs->bs_var;
+	struct bt_var *bv = bmap->ba_value;
 
-	bkey = SLIST_NEXT(bval, ba_next);
-	assert(SLIST_NEXT(bkey, ba_next) == NULL);
+	assert(bmap->ba_type == B_AT_MAP);
+	assert(SLIST_NEXT(bval, ba_next) == NULL);
 
-	map_insert(bv, ba2hash(bkey, dtev), bval);
-
+	bkey = bmap->ba_key;
 	debug("map=%p '%s' insert key=%p bval=%p\n", bv->bv_value, bv->bv_name,
 	    bkey, bval);
+
+	map_insert(bv, ba2hash(bkey, dtev), bval);
 }
 
 /*
@@ -750,6 +774,27 @@ stmt_store(struct bt_stmt *bs, struct dt_evt *dtev)
 	debug("bv=%p var '%s' store (%p) \n", bv, bv->bv_name, bv->bv_value);
 }
 
+/*
+ * Print time: 		{ time("%H:%M:%S"); }
+ */
+void
+stmt_time(struct bt_stmt *bs, struct dt_evt *dtev)
+{
+	struct bt_arg *ba = SLIST_FIRST(&bs->bs_args);
+	time_t time;
+	struct tm *tm;
+	char buf[64];
+
+	assert(bs->bs_var == NULL);
+	assert(ba->ba_type = B_AT_STR);
+	assert(strlen(ba2str(ba, dtev)) < (sizeof(buf) - 1));
+
+	time = builtin_gettime(dtev);
+	tm = localtime(&time);
+	strftime(buf, sizeof(buf), ba2str(ba, dtev), tm);
+	printf("%s", buf);
+}
+
 void
 stmt_zero(struct bt_stmt *bs)
 {
@@ -763,6 +808,7 @@ stmt_zero(struct bt_stmt *bs)
 
 	debug("map=%p '%s' zero\n", bv->bv_value, bv->bv_name);
 }
+
 struct bt_arg *
 ba_read(struct bt_arg *ba)
 {
@@ -897,6 +943,9 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 		snprintf(buf, sizeof(buf) - 1, "%ld", (long)dtev->dtev_sysretval);
 		str = buf;
 		break;
+	case B_AT_MAP:
+		str = ba2str(map_get(ba->ba_value, ba2str(ba->ba_key, dtev)), dtev);
+		break;
 	case B_AT_VAR:
 		str = ba2str(ba_read(ba), dtev);
 		break;
@@ -905,6 +954,9 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 		str = buf;
 		break;
 	case B_AT_MF_COUNT:
+	case B_AT_MF_MAX:
+	case B_AT_MF_MIN:
+	case B_AT_MF_SUM:
 		assert(0);
 		break;
 	default:

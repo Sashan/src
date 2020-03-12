@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_synch.c,v 1.160 2020/01/21 16:16:23 mpi Exp $	*/
+/*	$OpenBSD: kern_synch.c,v 1.162 2020/01/30 08:51:27 mpi Exp $	*/
 /*	$NetBSD: kern_synch.c,v 1.37 1996/04/22 01:38:37 christos Exp $	*/
 
 /*
@@ -164,8 +164,10 @@ tsleep_nsec(const volatile void *ident, int priority, const char *wmesg,
 		return tsleep(ident, priority, wmesg, 0);
 #ifdef DIAGNOSTIC
 	if (nsecs == 0) {
-		log(LOG_WARNING, "%s: %s: trying to sleep zero nanoseconds\n",
-		    __func__, wmesg);
+		log(LOG_WARNING,
+		    "%s: %s[%d]: %s: trying to sleep zero nanoseconds\n",
+		    __func__, curproc->p_p->ps_comm, curproc->p_p->ps_pid,
+		    wmesg);
 	}
 #endif
 	/*
@@ -288,8 +290,10 @@ msleep_nsec(const volatile void *ident, struct mutex *mtx, int priority,
 		return msleep(ident, mtx, priority, wmesg, 0);
 #ifdef DIAGNOSTIC
 	if (nsecs == 0) {
-		log(LOG_WARNING, "%s: %s: trying to sleep zero nanoseconds\n",
-		    __func__, wmesg);
+		log(LOG_WARNING,
+		    "%s: %s[%d]: %s: trying to sleep zero nanoseconds\n",
+		    __func__, curproc->p_p->ps_comm, curproc->p_p->ps_pid,
+		    wmesg);
 	}
 #endif
 	nsecs = MIN(nsecs, UINT64_MAX - tick_nsec);
@@ -338,8 +342,10 @@ rwsleep_nsec(const volatile void *ident, struct rwlock *rwl, int priority,
 		return rwsleep(ident, rwl, priority, wmesg, 0);
 #ifdef DIAGNOSTIC
 	if (nsecs == 0) {
-		log(LOG_WARNING, "%s: %s: trying to sleep zero nanoseconds\n",
-		    __func__, wmesg);
+		log(LOG_WARNING,
+		    "%s: %s[%d]: %s: trying to sleep zero nanoseconds\n",
+		    __func__, curproc->p_p->ps_comm, curproc->p_p->ps_pid,
+		    wmesg);
 	}
 #endif
 	nsecs = MIN(nsecs, UINT64_MAX - tick_nsec);
@@ -387,7 +393,7 @@ sleep_setup(struct sleep_state *sls, const volatile void *ident, int prio,
 	p->p_wchan = ident;
 	p->p_wmesg = wmesg;
 	p->p_slptime = 0;
-	p->p_priority = prio & PRIMASK;
+	p->p_slppri = prio & PRIMASK;
 	TAILQ_INSERT_TAIL(&slpque[LOOKUP(ident)], p, p_runq);
 }
 
@@ -618,7 +624,7 @@ sys_sched_yield(struct proc *p, void *v, register_t *retval)
 	 */
 	newprio = p->p_usrpri;
 	TAILQ_FOREACH(q, &p->p_p->ps_threads, p_thr_link)
-		newprio = max(newprio, q->p_priority);
+		newprio = max(newprio, q->p_runpri);
 	setrunqueue(p->p_cpu, p, newprio);
 	p->p_ru.ru_nvcsw++;
 	mi_switch();

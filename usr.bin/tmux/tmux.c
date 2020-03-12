@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.c,v 1.190 2019/10/14 08:38:07 nicm Exp $ */
+/* $OpenBSD: tmux.c,v 1.192 2020/01/28 11:31:31 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -18,6 +18,7 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 
 #include <err.h>
 #include <errno.h>
@@ -55,7 +56,7 @@ static __dead void
 usage(void)
 {
 	fprintf(stderr,
-	    "usage: %s [-2Cluv] [-c shell-command] [-f file] [-L socket-name]\n"
+	    "usage: %s [-2CluvV] [-c shell-command] [-f file] [-L socket-name]\n"
 	    "            [-S socket-path] [command [flags]]\n",
 	    getprogname());
 	exit(1);
@@ -212,6 +213,20 @@ find_home(void)
 	return (home);
 }
 
+const char *
+getversion(void)
+{
+	static char	*version;
+	struct utsname	 u;
+
+	if (version == NULL) {
+		if (uname(&u) < 0)
+			fatalx("uname failed");
+		xasprintf(&version, "openbsd-%s", u.release);
+	}
+	return version;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -238,7 +253,7 @@ main(int argc, char **argv)
 		flags = 0;
 
 	label = path = NULL;
-	while ((opt = getopt(argc, argv, "2c:Cdf:lL:qS:uUv")) != -1) {
+	while ((opt = getopt(argc, argv, "2c:Cdf:lL:qS:uUvV")) != -1) {
 		switch (opt) {
 		case '2':
 			flags |= CLIENT_256COLOURS;
@@ -255,6 +270,9 @@ main(int argc, char **argv)
 		case 'f':
 			set_cfg_file(optarg);
 			break;
+ 		case 'V':
+			printf("%s %s\n", getprogname(), getversion());
+ 			exit(0);
 		case 'l':
 			flags |= CLIENT_LOGIN;
 			break;

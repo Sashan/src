@@ -1,4 +1,4 @@
-# $OpenBSD: dot.profile,v 1.5 2018/02/02 02:29:54 yasuoka Exp $
+# $OpenBSD: dot.profile,v 1.7 2020/01/24 02:09:51 okan Exp $
 #
 # sh/ksh initialization
 

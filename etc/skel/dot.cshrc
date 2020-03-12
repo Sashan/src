@@ -1,4 +1,4 @@
-# $OpenBSD: dot.cshrc,v 1.8 2018/02/02 02:29:54 yasuoka Exp $
+# $OpenBSD: dot.cshrc,v 1.10 2020/01/24 02:09:51 okan Exp $
 #
 # csh initialization
 

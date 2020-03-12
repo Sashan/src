@@ -1501,6 +1501,7 @@
 ./usr/share/man/man4/iwi.4
 ./usr/share/man/man4/iwm.4
 ./usr/share/man/man4/iwn.4
+./usr/share/man/man4/iwx.4
 ./usr/share/man/man4/ix.4
 ./usr/share/man/man4/ixgb.4
 ./usr/share/man/man4/ixl.4
@@ -1580,7 +1581,6 @@
 ./usr/share/man/man4/macppc/mediabay.4
 ./usr/share/man/man4/macppc/mem.4
 ./usr/share/man/man4/macppc/memc.4
-./usr/share/man/man4/macppc/mesh.4
 ./usr/share/man/man4/macppc/mpcpcibr.4
 ./usr/share/man/man4/macppc/onyx.4
 ./usr/share/man/man4/macppc/openpic.4
@@ -2461,7 +2461,6 @@
 ./usr/share/man/man8/rdate.8
 ./usr/share/man/man8/rdsetroot.8
 ./usr/share/man/man8/reboot.8
-./usr/share/man/man8/rebound.8
 ./usr/share/man/man8/relayctl.8
 ./usr/share/man/man8/relayd.8
 ./usr/share/man/man8/release.8

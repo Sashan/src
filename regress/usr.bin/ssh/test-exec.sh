@@ -1,4 +1,4 @@
-#	$OpenBSD: test-exec.sh,v 1.72 2020/01/23 10:19:59 dtucker Exp $
+#	$OpenBSD: test-exec.sh,v 1.75 2020/01/31 23:25:08 djm Exp $
 #	Placed in the Public Domain.
 
 USER=`id -un`
@@ -53,6 +53,9 @@ SCP=scp
 PLINK=/usr/local/bin/plink
 PUTTYGEN=/usr/local/bin/puttygen
 CONCH=/usr/local/bin/conch
+
+# Tools used by multiple tests
+NC=nc
 
 if [ "x$TEST_SSH_SSH" != "x" ]; then
 	SSH="${TEST_SSH_SSH}"
@@ -135,6 +138,7 @@ echo "exec ${SSH} -E${TEST_SSH_LOGFILE} "'"$@"' >>$SSHLOGWRAP
 
 chmod a+rx $OBJ/ssh-log-wrapper.sh
 REAL_SSH="$SSH"
+REAL_SSHD="$SSHD"
 SSH="$SSHLOGWRAP"
 
 # Some test data.  We make a copy because some tests will overwrite it.
@@ -286,7 +290,7 @@ else
 	unsafe=""
 	dir="${OBJ}"
 	while test ${dir} != "/"; do
-		if test -d "${dir}" ; then
+		if test -d "${dir}" && ! test -h "${dir}"; then
 			perms=`ls -ld ${dir}`
 			case "${perms}" in
 			?????w????*|????????w?*) unsafe="${unsafe} ${dir}" ;;

@@ -181,7 +181,6 @@
 ./etc/rc.d/rarpd
 ./etc/rc.d/rbootd
 ./etc/rc.d/rc.subr
-./etc/rc.d/rebound
 ./etc/rc.d/relayd
 ./etc/rc.d/ripd
 ./etc/rc.d/route6d
@@ -368,6 +367,7 @@
 ./usr/bin/deroff
 ./usr/bin/diff
 ./usr/bin/diff3
+./usr/bin/dig
 ./usr/bin/dirname
 ./usr/bin/doas
 ./usr/bin/du
@@ -406,6 +406,7 @@
 ./usr/bin/head
 ./usr/bin/help
 ./usr/bin/hexdump
+./usr/bin/host
 ./usr/bin/hoststat
 ./usr/bin/htpasswd
 ./usr/bin/id
@@ -474,6 +475,7 @@
 ./usr/bin/nl
 ./usr/bin/nm
 ./usr/bin/nohup
+./usr/bin/nslookup
 ./usr/bin/od
 ./usr/bin/opencvs
 ./usr/bin/openrsync
@@ -635,7 +637,7 @@
 ./usr/lib/libelf.so.3.0
 ./usr/lib/libevent.so.4.1
 ./usr/lib/libexpat.so.12.0
-./usr/lib/libfido2.so.1.2
+./usr/lib/libfido2.so.2.0
 ./usr/lib/libform.so.6.0
 ./usr/lib/libformw.so.6.0
 ./usr/lib/libfuse.so.2.0
@@ -1026,6 +1028,7 @@
 ./usr/libdata/perl5/OpenBSD/Getopt.pm
 ./usr/libdata/perl5/OpenBSD/Handle.pm
 ./usr/libdata/perl5/OpenBSD/IdCache.pm
+./usr/libdata/perl5/OpenBSD/InstalledInfo.pm
 ./usr/libdata/perl5/OpenBSD/Interactive.pm
 ./usr/libdata/perl5/OpenBSD/LibSpec
 ./usr/libdata/perl5/OpenBSD/LibSpec.pm
@@ -2492,7 +2495,6 @@
 ./usr/sbin/dhcpd
 ./usr/sbin/dhcrelay
 ./usr/sbin/dhcrelay6
-./usr/sbin/dig
 ./usr/sbin/dvmrpctl
 ./usr/sbin/dvmrpd
 ./usr/sbin/edquota
@@ -2505,7 +2507,6 @@
 ./usr/sbin/groupdel
 ./usr/sbin/groupinfo
 ./usr/sbin/groupmod
-./usr/sbin/host
 ./usr/sbin/hostapd
 ./usr/sbin/httpd
 ./usr/sbin/identd
@@ -2550,7 +2551,6 @@
 ./usr/sbin/nsd-checkzone
 ./usr/sbin/nsd-control
 ./usr/sbin/nsd-control-setup
-./usr/sbin/nslookup
 ./usr/sbin/ntpctl
 ./usr/sbin/ntpd
 ./usr/sbin/ocspcheck
@@ -2583,7 +2583,6 @@
 ./usr/sbin/rcctl
 ./usr/sbin/rdate
 ./usr/sbin/rdsetroot
-./usr/sbin/rebound
 ./usr/sbin/relayctl
 ./usr/sbin/relayd
 ./usr/sbin/repquota

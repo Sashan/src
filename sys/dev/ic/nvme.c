@@ -1,4 +1,4 @@
-/*	$OpenBSD: nvme.c,v 1.64 2020/01/23 07:53:00 krw Exp $ */
+/*	$OpenBSD: nvme.c,v 1.66 2020/02/15 11:35:31 yasuoka Exp $ */
 
 /*
  * Copyright (c) 2014 David Gwynne <dlg@openbsd.org>
@@ -98,7 +98,7 @@ int	nvme_hibernate_io(dev_t, daddr_t, vaddr_t, size_t, int, void *);
 #endif
 
 struct scsi_adapter nvme_switch = {
-	nvme_scsi_cmd, scsi_minphys, nvme_scsi_probe, nvme_scsi_free, NULL
+	nvme_scsi_cmd, NULL, nvme_scsi_probe, nvme_scsi_free, NULL
 };
 
 void	nvme_scsi_io(struct scsi_xfer *, int);
@@ -953,8 +953,8 @@ nvme_poll_done(struct nvme_softc *sc, struct nvme_ccb *ccb,
 {
 	struct nvme_poll_state *state = ccb->ccb_cookie;
 
-	SET(cqe->flags, htole16(NVME_CQE_PHASE));
 	state->c = *cqe;
+	SET(state->c.flags, htole16(NVME_CQE_PHASE));
 }
 
 void

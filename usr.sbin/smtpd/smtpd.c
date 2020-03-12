@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtpd.c,v 1.328 2019/12/18 10:00:39 gilles Exp $	*/
+/*	$OpenBSD: smtpd.c,v 1.331 2020/02/03 15:41:22 gilles Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -1084,7 +1084,7 @@ smtpd(void) {
 	purge_task();
 
 	if (pledge("stdio rpath wpath cpath fattr tmppath "
-	    "getpw sendfd proc exec id inet unix", NULL) == -1)
+	    "getpw sendfd proc exec id inet chown unix", NULL) == -1)
 		err(1, "pledge");
 
 	event_dispatch();
@@ -1444,7 +1444,7 @@ forkmda(struct mproc *p, uint64_t id, struct deliver *deliver)
 		pw_dir = deliver->userinfo.directory;
 	}
 
-	if (pw_uid == 0 && !dsp->u.local.requires_root) {
+	if (pw_uid == 0 && !dsp->u.local.is_mbox) {
 		(void)snprintf(ebuf, sizeof ebuf, "not allowed to deliver to: %s",
 		    deliver->userinfo.username);
 		m_create(p_pony, IMSG_MDA_DONE, 0, 0, -1);
@@ -1510,6 +1510,11 @@ forkmda(struct mproc *p, uint64_t id, struct deliver *deliver)
 		m_close(p);
 		return;
 	}
+
+	/* mbox helper, create mailbox before privdrop if it doesn't exist */
+	if (dsp->u.local.is_mbox)
+		mda_mbox_init(deliver);
+
 	if (chdir(pw_dir) == -1 && chdir("/") == -1)
 		err(1, "chdir");
 	if (setgroups(1, &pw_gid) ||
@@ -1534,7 +1539,12 @@ forkmda(struct mproc *p, uint64_t id, struct deliver *deliver)
 	/* avoid hangs by setting 5m timeout */
 	alarm(300);
 
-	mda_unpriv(dsp, deliver, pw_name, pw_dir);
+	if (dsp->u.local.is_mbox &&
+	    dsp->u.local.mda_wrapper == NULL &&
+	    deliver->mda_exec[0] == '\0')
+		mda_mbox(deliver);
+	else
+		mda_unpriv(dsp, deliver, pw_name, pw_dir);
 }
 
 static void

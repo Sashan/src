@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.6 2020/01/21 22:47:39 bluhm Exp $
+#	$OpenBSD: Makefile,v 1.8 2020/01/28 19:25:45 bluhm Exp $
 
 # Copyright (c) 2020 Alexander Bluhm <bluhm@openbsd.org>
 #
@@ -840,6 +840,28 @@ run-unix-namelookup:
 	# XXX message succeeded is missing
 	! grep 'Connection to server.sock .* succeeded!' client.err
 
+REGRESS_TARGETS +=	run-unix-probe
+run-unix-probe:
+	@echo '======== $@ ========'
+	rm -f server.sock
+	${SERVER_NC} -U -n -v -l server.sock ${SERVER_BG}
+	${LISTEN_WAIT}
+	# connect and close immediately, check if socket is listening
+	${NC} -N -U -v server.sock </dev/null ${CLIENT_LOG}
+	# XXX message Bound and Listening is redundant
+	grep 'Bound on server.sock$$' server.err
+	grep 'Listening on server.sock$$' server.err
+	grep 'Connection received on server.sock$$' server.err
+	# XXX message succeeded is missing
+	! grep 'Connection to server.sock .* succeeded!' client.err
+	# server accepts one connection, second connection should be refused
+	! ${NC} -N -U -v server.sock </dev/null ${CLIENT_LOG}
+	grep 'server.sock: Connection refused' client.err
+	# connection to non existing socket file should fail
+	rm server.sock
+	! ${NC} -N -U -v server.sock </dev/null ${CLIENT_LOG}
+	grep 'server.sock: No such file or directory' client.err
+
 # UNIX keep
 
 REGRESS_TARGETS +=	run-unix-keep
@@ -1103,14 +1125,6 @@ run-tcp-client-shutdown-reverse-eof: server-tcp
 	grep '^greeting$$' client.out
 	grep 'Connection to 127.0.0.1 .* succeeded!' client.err
 
-REGRESS_EXPECTED_FAILURES = \
-	run-tcp-server-shutdown-eof \
-	run-tcp-server-shutdown-reverse-eof \
-	run-tcp-client-shutdown-eof \
-	run-tcp-client-shutdown-reverse-eof \
-	run-tcp-sleep \
-	run-tls-sleep \
-	run-udp-sleep
 
 .PHONY: ${REGRESS_SETUP} ${REGRESS_CLEANUP} ${REGRESS_TARGETS}
 

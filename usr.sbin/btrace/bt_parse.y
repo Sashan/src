@@ -1,4 +1,4 @@
-/*	$OpenBSD: bt_parse.y,v 1.1 2020/01/21 16:24:55 mpi Exp $	*/
+/*	$OpenBSD: bt_parse.y,v 1.8 2020/01/28 16:39:51 mpi Exp $	*/
 
 /*
  * Copyright (c) 2019 - 2020 Martin Pieuchot <mpi@openbsd.org>
@@ -54,17 +54,17 @@ struct bt_rule	*br_new(struct bt_probe *, struct bt_filter *, struct bt_stmt *,
 		     enum bt_rtype);
 struct bt_filter *bf_new(enum bt_operand, enum bt_filtervar, int);
 struct bt_probe	*bp_new(const char *, const char *, const char *, int32_t);
-struct bt_arg	*ba_concat(struct bt_arg *, struct bt_arg *);
+struct bt_arg	*ba_append(struct bt_arg *, struct bt_arg *);
 struct bt_stmt	*bs_new(enum bt_action, struct bt_arg *, struct bt_var *);
-struct bt_stmt	*bs_concat(struct bt_stmt *, struct bt_stmt *);
+struct bt_stmt	*bs_append(struct bt_stmt *, struct bt_stmt *);
 
 struct bt_var	*bv_find(const char *);
 struct bt_arg	*bv_get(const char *);
 struct bt_stmt	*bv_set(const char *, struct bt_arg *);
 
-struct bt_smt	*bn_set(const char *, struct bt_arg *, struct bt_arg *);
-struct bt_stmt	*bm_fn(enum bt_action, const char *, struct bt_arg *,
-		     struct bt_arg *);
+struct bt_arg	*bm_get(const char *, struct bt_arg *);
+struct bt_stmt	*bm_set(const char *, struct bt_arg *, struct bt_arg *);
+struct bt_stmt	*bm_fn(enum bt_action, struct bt_arg *, struct bt_arg *);
 
 /*
  * Lexer
@@ -100,19 +100,21 @@ static int	 yylex(void);
 %token	ARG0 ARG1 ARG2 ARG3 ARG4 ARG5 ARG6 ARG7 ARG8 ARG9
 %token	COMM HZ KSTACK USTACK NSECS PID RETVAL TID
 /* Functions */
-%token  F_CLEAR F_DELETE F_EXIT F_PRINT F_PRINTF F_ZERO
-/* Map funcitons */
-%token  M_COUNT
+%token  F_CLEAR F_DELETE F_EXIT F_PRINT F_PRINTF F_TIME F_ZERO
+/* Map functions */
+%token  M_COUNT M_MAX M_MIN M_SUM
 %token	<v.string>	STRING CSTRING
 %token	<v.number>	NUMBER
 %type	<v.string>	gvar
-%type	<v.i>		filterval oper builtin func0 func1 funcn mfunc1 mapfunc
+%type	<v.i>		filterval oper builtin fn0 fn1 fnN mfn0 mfn1 mfnN
 %type	<v.probe>	probe
 %type	<v.filter>	predicate
 %type	<v.stmt>	action stmt stmtlist
-%type	<v.arg>		arg arglist marg term
+%type	<v.arg>		arg arglist map marg term
 %type	<v.rtype>	beginend
 
+%left	'+' '-'
+%left	'/' '*'
 %%
 
 grammar		: /* empty */
@@ -166,18 +168,27 @@ builtin		: PID 				{ $$ = B_AT_BI_PID; }
 		| RETVAL			{ $$ = B_AT_BI_RETVAL; }
 		;
 
-func0		: F_EXIT			{ $$ = B_AC_EXIT; }
+fn0		: F_EXIT			{ $$ = B_AC_EXIT; }
 		;
 
-func1		: F_CLEAR			{ $$ = B_AC_CLEAR; }
+fn1		: F_CLEAR			{ $$ = B_AC_CLEAR; }
+		| F_TIME			{ $$ = B_AC_TIME; }
 		| F_ZERO			{ $$ = B_AC_ZERO; }
 		;
 
-funcn		: F_PRINTF			{ $$ = B_AC_PRINTF; }
+fnN		: F_PRINTF			{ $$ = B_AC_PRINTF; }
 		| F_PRINT			{ $$ = B_AC_PRINT; }
 		;
 
-mapfunc		: M_COUNT '(' ')'		{ $$ = B_AT_MF_COUNT; }
+mfn0		: M_COUNT 			{ $$ = B_AT_MF_COUNT; }
+		;
+
+mfn1		: F_DELETE			{ $$ = B_AC_DELETE; }
+		;
+
+mfnN		: M_MAX				{ $$ = B_AT_MF_MAX; }
+		| M_MIN				{ $$ = B_AT_MF_MIN; }
+		| M_SUM				{ $$ = B_AT_MF_SUM; }
 		;
 
 term		: '(' term ')'			{ $$ = $2; }
@@ -188,32 +199,41 @@ term		: '(' term ')'			{ $$ = $2; }
 		| NUMBER			{ $$ = ba_new($1, B_AT_LONG); }
 		| builtin			{ $$ = ba_new(NULL, $1); }
 		| gvar				{ $$ = bv_get($1); }
+		| map				{ $$ = $1; }
+		;
+
+gvar		: '@' STRING			{ $$ = $2; }
+
+map		: gvar '[' arg ']'		{ $$ = bm_get($1, $3); }
 		;
 
 marg		: arg				{ $$ = $1; }
-		| mapfunc			{ $$ = ba_new(NULL, $1); };
+		| mfn0 '(' ')'			{ $$ = ba_new(NULL, $1); }
+		| mfnN '(' arg ')'		{ $$ = ba_new($3, $1); }
 		;
 
 arg		: CSTRING			{ $$ = ba_new($1, B_AT_STR); }
 		| term
 		;
 
-gvar		: '@' STRING			{ $$ = $2; }
-
 arglist		: arg
-		| arglist ',' arg		{ $$ = ba_concat($1, $3); }
+		| arglist ',' arg		{ $$ = ba_append($1, $3); }
 		;
 
-stmt		: '\n'				{ $$ = NULL; }
-		| gvar '=' arg ';'		{ $$ = bv_set($1, $3); }
-		| gvar '[' arg ']' '=' marg ';'	{ $$ = bm_set($1, $3, $6); }
-		| funcn '(' arglist ')' ';'	{ $$ = bs_new($1, $3, NULL); }
-		| func1 '(' arg ')' ';'		{ $$ = bs_new($1, $3, NULL); }
-		| func0 '(' ')' ';'		{ $$ = bs_new($1, NULL, NULL); }
+NL		: /* empty */ | '\n'
 		;
 
-stmtlist	: stmt 
-		| stmtlist stmt			{ $$ = bs_concat($1, $2); }
+stmt		: ';' NL			{ $$ = NULL; }
+		| gvar '=' arg			{ $$ = bv_set($1, $3); }
+		| gvar '[' arg ']' '=' marg	{ $$ = bm_set($1, $3, $6); }
+		| fnN '(' arglist ')'		{ $$ = bs_new($1, $3, NULL); }
+		| fn1 '(' arg ')'		{ $$ = bs_new($1, $3, NULL); }
+		| fn0 '(' ')'			{ $$ = bs_new($1, NULL, NULL); }
+		| mfn1 '(' map ')'		{ $$ = bm_fn($1, $3, NULL); }
+		;
+
+stmtlist	: stmt
+		| stmtlist stmt			{ $$ = bs_append($1, $2); }
 		;
 
 action		: '{' stmtlist '}'		{ $$ = $2; }
@@ -306,7 +326,7 @@ ba_new0(void *val, enum bt_argtype type)
  * function calls.
  */
 struct bt_arg *
-ba_concat(struct bt_arg *da0, struct bt_arg *da1)
+ba_append(struct bt_arg *da0, struct bt_arg *da1)
 {
 	struct bt_arg *ba = da0;
 
@@ -346,7 +366,7 @@ ba_op(const char op, struct bt_arg *da0, struct bt_arg *da1)
 		assert(0);
 	}
 
-	return ba_new(ba_concat(da0, da1), type);
+	return ba_new(ba_append(da0, da1), type);
 }
 
 /* Create a new statement: function call or assignment. */
@@ -368,14 +388,15 @@ bs_new(enum bt_action act, struct bt_arg *head, struct bt_var *var)
 
 /* Link two statements together, to build an 'action'. */
 struct bt_stmt *
-bs_concat(struct bt_stmt *ds0, struct bt_stmt *ds1)
+bs_append(struct bt_stmt *ds0, struct bt_stmt *ds1)
 {
 	struct bt_stmt *bs = ds0;
 
-	assert(ds1 != NULL);
-
 	if (ds0 == NULL)
 		return ds1;
+
+	if (ds1 == NULL)
+		return ds0;
 
 	while (SLIST_NEXT(bs, bs_next) != NULL)
 		bs = SLIST_NEXT(bs, bs_next);
@@ -440,22 +461,36 @@ bv_get(const char *vname)
 }
 
 struct bt_stmt *
-bm_fn(enum bt_action mact, const char *mname, struct bt_arg *mkey,
-    struct bt_arg *mval)
+bm_fn(enum bt_action mact, struct bt_arg *ba, struct bt_arg *mval)
 {
-	struct bt_var *bv;
-
-	bv = bv_find(mname);
-	if (bv == NULL)
-		bv = bv_new(mname);
-	return bs_new(mact, ba_concat(mval, mkey), bv);
+	return bs_new(mact, ba, (struct bt_var *)mval);
 }
 
 /* Create a 'map store' statement to assign a value to a map entry. */
 struct bt_stmt *
 bm_set(const char *mname, struct bt_arg *mkey, struct bt_arg *mval)
 {
-	return bm_fn(B_AC_INSERT, mname, mkey, mval);
+	struct bt_arg *ba;
+	struct bt_var *bv;
+
+	bv = bv_find(mname);
+	if (bv == NULL)
+		bv = bv_new(mname);
+	ba = ba_new(bv, B_AT_MAP);
+	ba->ba_key = mkey;
+	return bs_new(B_AC_INSERT, ba, (struct bt_var *)mval);
+}
+
+/* Create an argument that points to a variable and attach a key to it. */
+struct bt_arg *
+bm_get(const char *mname, struct bt_arg *mkey)
+{
+	struct bt_arg *ba;
+
+	ba = bv_get(mname);
+	ba->ba_type = B_AT_MAP;
+	ba->ba_key = mkey;
+	return ba;
 }
 
 struct keyword {
@@ -494,12 +529,16 @@ lookup(char *s)
 		{ "exit",	F_EXIT },
 		{ "hz",		HZ },
 		{ "kstack",	KSTACK },
+		{ "max",	M_MAX },
+		{ "min",	M_MIN },
 		{ "nsecs",	NSECS },
 		{ "pid",	PID },
 		{ "print",	F_PRINT },
 		{ "printf",	F_PRINTF },
 		{ "retval",	RETVAL },
+		{ "sum",	M_SUM },
 		{ "tid",	TID },
+		{ "time",	F_TIME },
 		{ "ustack",	USTACK },
 		{ "zero",	F_ZERO },
 	};
@@ -586,6 +625,9 @@ again:
 	}
 
 	switch (c) {
+	case '=':
+		if (peek() == '=')
+			break;
 	case ',':
 	case '(':
 	case ')':
@@ -594,7 +636,6 @@ again:
 	case ':':
 	case ';':
 	case '/':
-	case '=':
 		return c;
 	case EOF:
 		return 0;

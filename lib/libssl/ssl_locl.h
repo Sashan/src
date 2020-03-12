@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_locl.h,v 1.256 2020/01/23 10:48:37 jsing Exp $ */
+/* $OpenBSD: ssl_locl.h,v 1.266 2020/02/21 16:18:52 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -168,23 +168,6 @@ __BEGIN_HIDDEN_DECLS
 
 #define CTASSERT(x)	extern char  _ctassert[(x) ? 1 : -1 ]   \
 			    __attribute__((__unused__))
-
-#define l2n(l,c)	(*((c)++)=(unsigned char)(((l)>>24)&0xff), \
-			 *((c)++)=(unsigned char)(((l)>>16)&0xff), \
-			 *((c)++)=(unsigned char)(((l)>> 8)&0xff), \
-			 *((c)++)=(unsigned char)(((l)    )&0xff))
-
-#define l2n8(l,c)	(*((c)++)=(unsigned char)(((l)>>56)&0xff), \
-			 *((c)++)=(unsigned char)(((l)>>48)&0xff), \
-			 *((c)++)=(unsigned char)(((l)>>40)&0xff), \
-			 *((c)++)=(unsigned char)(((l)>>32)&0xff), \
-			 *((c)++)=(unsigned char)(((l)>>24)&0xff), \
-			 *((c)++)=(unsigned char)(((l)>>16)&0xff), \
-			 *((c)++)=(unsigned char)(((l)>> 8)&0xff), \
-			 *((c)++)=(unsigned char)(((l)    )&0xff))
-
-#define s2n(s,c)	((c[0]=(unsigned char)(((s)>> 8)&0xff), \
-			  c[1]=(unsigned char)(((s)    )&0xff)),c+=2)
 
 #ifndef LIBRESSL_HAS_TLS1_3_CLIENT
 #define LIBRESSL_HAS_TLS1_3_CLIENT
@@ -455,14 +438,14 @@ typedef struct ssl_handshake_tls13_st {
 	uint16_t max_version;
 	uint16_t version;
 
+	int use_legacy;
+	int hrr;
+
 	/* Version proposed by peer server. */
 	uint16_t server_version;
 
-	/* X25519 key share. */
-	uint8_t *x25519_public;
-	uint8_t *x25519_private;
-	uint8_t *x25519_peer_public;
-
+	uint16_t server_group;
+	struct tls13_key_share *key_share;
 	struct tls13_secrets *secrets;
 
 	uint8_t *cookie;
@@ -872,6 +855,7 @@ typedef struct ssl3_state_internal_st {
 		DH *dh;
 
 		EC_KEY *ecdh; /* holds short lived ECDH key */
+		int ecdh_nid;
 
 		uint8_t *x25519;
 
@@ -1017,6 +1001,7 @@ typedef struct sess_cert_st {
 	/* Obviously we don't have the private keys of these,
 	 * so maybe we shouldn't even use the CERT_PKEY type here. */
 
+	int peer_nid;
 	DH *peer_dh_tmp;
 	EC_KEY *peer_ecdh_tmp;
 	uint8_t *peer_x25519_tmp;
@@ -1278,6 +1263,12 @@ int ssl3_get_client_certificate(SSL *s);
 int ssl3_get_client_key_exchange(SSL *s);
 int ssl3_get_cert_verify(SSL *s);
 
+int ssl_kex_generate_ecdhe_ecp(EC_KEY *ecdh, int nid);
+int ssl_kex_public_ecdhe_ecp(EC_KEY *ecdh, CBB *cbb);
+int ssl_kex_peer_public_ecdhe_ecp(EC_KEY *ecdh, int nid, CBS *cbs);
+int ssl_kex_derive_ecdhe_ecp(EC_KEY *ecdh, EC_KEY *ecdh_peer,
+    uint8_t **shared_key, size_t *shared_key_len);
+
 int tls1_new(SSL *s);
 void tls1_free(SSL *s);
 void tls1_clear(SSL *s);
@@ -1307,6 +1298,7 @@ void tls1_transcript_reset(SSL *s);
 int tls1_transcript_append(SSL *s, const unsigned char *buf, size_t len);
 int tls1_transcript_data(SSL *s, const unsigned char **data, size_t *len);
 void tls1_transcript_freeze(SSL *s);
+void tls1_transcript_unfreeze(SSL *s);
 int tls1_transcript_record(SSL *s, const unsigned char *buf, size_t len);
 
 void tls1_cleanup_key_block(SSL *s);
@@ -1353,15 +1345,6 @@ int tls1_process_ticket(SSL *s, CBS *session_id, CBS *ext_block,
 long ssl_get_algorithm2(SSL *s);
 
 int tls1_check_ec_server_key(SSL *s);
-
-int ssl_add_clienthello_use_srtp_ext(SSL *s, unsigned char *p,
-    int *len, int maxlen);
-int ssl_parse_clienthello_use_srtp_ext(SSL *s, const unsigned char *d,
-    int len, int *al);
-int ssl_add_serverhello_use_srtp_ext(SSL *s, unsigned char *p,
-    int *len, int maxlen);
-int ssl_parse_serverhello_use_srtp_ext(SSL *s, const unsigned char *d,
-    int len, int *al);
 
 /* s3_cbc.c */
 void ssl3_cbc_copy_mac(unsigned char *out, const SSL3_RECORD *rec,

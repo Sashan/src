@@ -1,4 +1,4 @@
-/* $OpenBSD: server-client.c,v 1.302 2019/12/16 16:39:03 nicm Exp $ */
+/* $OpenBSD: server-client.c,v 1.305 2020/02/19 14:25:00 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -662,8 +662,7 @@ have_event:
 			break;
 		}
 		c->tty.mouse_drag_flag = 0;
-
-		return (key);
+		goto out;
 	}
 
 	/* Convert to a key binding. */
@@ -958,6 +957,7 @@ have_event:
 	if (key == KEYC_UNKNOWN)
 		return (KEYC_UNKNOWN);
 
+out:
 	/* Apply modifiers if any. */
 	if (b & MOUSE_MASK_META)
 		key |= KEYC_ESCAPE;
@@ -966,6 +966,8 @@ have_event:
 	if (b & MOUSE_MASK_SHIFT)
 		key |= KEYC_SHIFT;
 
+	if (log_get_level() != 0)
+		log_debug("mouse key is %s", key_string_lookup_key (key));
 	return (key);
 }
 
@@ -1034,7 +1036,7 @@ server_client_key_callback(struct cmdq_item *item, void *data)
 	key_code			 key0;
 
 	/* Check the client is good to accept input. */
-	if (s == NULL || (c->flags & (CLIENT_DEAD|CLIENT_SUSPENDED)) != 0)
+	if (s == NULL || (c->flags & CLIENT_UNATTACHEDFLAGS))
 		goto out;
 	wl = s->curw;
 
@@ -1059,7 +1061,7 @@ server_client_key_callback(struct cmdq_item *item, void *data)
 		 * Mouse drag is in progress, so fire the callback (now that
 		 * the mouse event is valid).
 		 */
-		if (key == KEYC_DRAGGING) {
+		if ((key & KEYC_MASK_KEY) == KEYC_DRAGGING) {
 			c->tty.mouse_drag_update(c, m);
 			goto out;
 		}
@@ -1221,7 +1223,7 @@ server_client_handle_key(struct client *c, struct key_event *event)
 	struct cmdq_item	*item;
 
 	/* Check the client is good to accept input. */
-	if (s == NULL || (c->flags & (CLIENT_DEAD|CLIENT_SUSPENDED)) != 0)
+	if (s == NULL || (c->flags & CLIENT_UNATTACHEDFLAGS))
 		return (0);
 
 	/*
@@ -1706,7 +1708,6 @@ static void
 server_client_dispatch(struct imsg *imsg, void *arg)
 {
 	struct client	*c = arg;
-	const char	*data;
 	ssize_t		 datalen;
 	struct session	*s;
 
@@ -1718,7 +1719,6 @@ server_client_dispatch(struct imsg *imsg, void *arg)
 		return;
 	}
 
-	data = imsg->data;
 	datalen = imsg->hdr.len - IMSG_HEADER_SIZE;
 
 	switch (imsg->hdr.type) {
