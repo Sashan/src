@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwx.c,v 1.1 2020/02/15 08:47:14 stsp Exp $	*/
+/*	$OpenBSD: if_iwx.c,v 1.7 2020/02/29 09:42:15 stsp Exp $	*/
 
 /*
  * Copyright (c) 2014, 2016 genua gmbh <info@genua.de>
@@ -3404,7 +3404,7 @@ iwx_rx_frame(struct iwx_softc *sc, struct mbuf *m, int chanidx,
 		tap->wr_dbm_antsignal = (int8_t)rxi->rxi_rssi;
 		tap->wr_dbm_antnoise = (int8_t)sc->sc_noise;
 		tap->wr_tsft = device_timestamp;
-		if (rate_n_flags & IWX_RATE_HT_MCS_RATE_CODE_MSK) {
+		if (rate_n_flags & IWX_RATE_MCS_HT_MSK) {
 			uint8_t mcs = (rate_n_flags &
 			    (IWX_RATE_HT_MCS_RATE_CODE_MSK |
 			    IWX_RATE_HT_MCS_NSS_MSK));
@@ -3461,17 +3461,29 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, struct mbuf *m, void *pktdata,
 	desc = (struct iwx_rx_mpdu_desc *)pktdata;
 
 	if (!(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_CRC_OK)) ||
-	    !(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_OVERRUN_OK)))
+	    !(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_OVERRUN_OK))) {
+		m_freem(m);
 		return; /* drop */
+	}
 
 	len = le16toh(desc->mpdu_len);
-	if (len < IEEE80211_MIN_LEN) {
+	if (ic->ic_opmode == IEEE80211_M_MONITOR) {
+		/* Allow control frames in monitor mode. */
+		if (len < sizeof(struct ieee80211_frame_cts)) {
+			ic->ic_stats.is_rx_tooshort++;
+			IC2IFP(ic)->if_ierrors++;
+			m_freem(m);
+			return;
+		}
+	} else if (len < sizeof(struct ieee80211_frame)) {
 		ic->ic_stats.is_rx_tooshort++;
 		IC2IFP(ic)->if_ierrors++;
+		m_freem(m);
 		return;
 	}
 	if (len > maxlen - sizeof(*desc)) {
 		IC2IFP(ic)->if_ierrors++;
+		m_freem(m);
 		return;
 	}
 
@@ -4500,14 +4512,19 @@ iwx_add_sta_cmd(struct iwx_softc *sc, struct iwx_node *in, int update)
 
 	memset(&add_sta_cmd, 0, sizeof(add_sta_cmd));
 
-	add_sta_cmd.sta_id = IWX_STATION_ID;
-	add_sta_cmd.station_type = IWX_STA_LINK;
+	if (ic->ic_opmode == IEEE80211_M_MONITOR) {
+		add_sta_cmd.sta_id = IWX_MONITOR_STA_ID;
+		add_sta_cmd.station_type = IWX_STA_GENERAL_PURPOSE;
+	} else {
+		add_sta_cmd.sta_id = IWX_STATION_ID;
+		add_sta_cmd.station_type = IWX_STA_LINK;
+	}
 	add_sta_cmd.mac_id_n_color
 	    = htole32(IWX_FW_CMD_ID_AND_COLOR(in->in_id, in->in_color));
 	if (!update) {
 		if (ic->ic_opmode == IEEE80211_M_MONITOR)
 			IEEE80211_ADDR_COPY(&add_sta_cmd.addr,
-			    etherbroadcastaddr);
+			    etheranyaddr);
 		else
 			IEEE80211_ADDR_COPY(&add_sta_cmd.addr,
 			    in->in_ni.ni_bssid);
@@ -4584,6 +4601,7 @@ iwx_add_aux_sta(struct iwx_softc *sc)
 int
 iwx_rm_sta_cmd(struct iwx_softc *sc, struct iwx_node *in)
 {
+	struct ieee80211com *ic = &sc->sc_ic;
 	struct iwx_rm_sta_cmd rm_sta_cmd;
 	int err;
 
@@ -4591,7 +4609,10 @@ iwx_rm_sta_cmd(struct iwx_softc *sc, struct iwx_node *in)
 		panic("sta already removed");
 
 	memset(&rm_sta_cmd, 0, sizeof(rm_sta_cmd));
-	rm_sta_cmd.sta_id = IWX_STATION_ID;
+	if (ic->ic_opmode == IEEE80211_M_MONITOR)
+		rm_sta_cmd.sta_id = IWX_MONITOR_STA_ID;
+	else
+		rm_sta_cmd.sta_id = IWX_STATION_ID;
 
 	err = iwx_send_cmd_pdu(sc, IWX_REMOVE_STA, 0, sizeof(rm_sta_cmd),
 	    &rm_sta_cmd);
@@ -5286,6 +5307,7 @@ iwx_mac_ctxt_cmd(struct iwx_softc *sc, struct iwx_node *in, uint32_t action,
 	if (ic->ic_opmode == IEEE80211_M_MONITOR) {
 		cmd.filter_flags |= htole32(IWX_MAC_FILTER_IN_PROMISC |
 		    IWX_MAC_FILTER_IN_CONTROL_AND_MGMT |
+		    IWX_MAC_FILTER_ACCEPT_GRP |
 		    IWX_MAC_FILTER_IN_BEACON |
 		    IWX_MAC_FILTER_IN_PROBE_REQUEST |
 		    IWX_MAC_FILTER_IN_CRC32);
@@ -5563,8 +5585,14 @@ iwx_auth(struct iwx_softc *sc)
 	}
 	sc->sc_flags |= IWX_FLAG_STA_ACTIVE;
 
-	if (ic->ic_opmode == IEEE80211_M_MONITOR)
+	if (ic->ic_opmode == IEEE80211_M_MONITOR) {
+		err = iwx_enable_txq(sc, IWX_MONITOR_STA_ID,
+		    IWX_DQA_INJECT_MONITOR_QUEUE, IWX_MGMT_TID,
+		    IWX_TX_RING_COUNT);
+		if (err)
+			goto rm_sta;
 		return 0;
+	}
 
 	err = iwx_enable_data_tx_queues(sc);
 	if (err)
@@ -6967,6 +6995,8 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
 				m = m_copym(m0, 0, M_COPYALL, M_DONTWAIT);
 				if (m == NULL) {
 					ifp->if_ierrors++;
+					m_freem(m0);
+					m0 = NULL;
 					break;
 				}
 				m_adj(m, offset);
@@ -7145,6 +7175,9 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
 		    IWX_NVM_ACCESS_COMPLETE):
 			break;
 
+		case IWX_WIDE_ID(IWX_DATA_PATH_GROUP, IWX_RX_NO_DATA_NOTIF):
+			break; /* happens in monitor mode; ignore for now */
+
 		default:
 			handled = 0;
 			printf("%s: unhandled firmware response 0x%x/0x%x "
@@ -7204,7 +7237,6 @@ iwx_intr(void *arg)
 	struct iwx_softc *sc = arg;
 	int handled = 0;
 	int r1, r2, rv = 0;
-	int isperiodic = 0;
 
 	IWX_WRITE(sc, IWX_CSR_INT_MASK, 0);
 
@@ -7313,27 +7345,32 @@ iwx_intr(void *arg)
 		wakeup(&sc->sc_fw);
 	}
 
-	if (r1 & IWX_CSR_INT_BIT_RX_PERIODIC) {
-		handled |= IWX_CSR_INT_BIT_RX_PERIODIC;
-		IWX_WRITE(sc, IWX_CSR_INT, IWX_CSR_INT_BIT_RX_PERIODIC);
-		if ((r1 & (IWX_CSR_INT_BIT_FH_RX | IWX_CSR_INT_BIT_SW_RX)) == 0)
-			IWX_WRITE_1(sc,
-			    IWX_CSR_INT_PERIODIC_REG, IWX_CSR_INT_PERIODIC_DIS);
-		isperiodic = 1;
-	}
+	if (r1 & (IWX_CSR_INT_BIT_FH_RX | IWX_CSR_INT_BIT_SW_RX |
+	    IWX_CSR_INT_BIT_RX_PERIODIC)) {
+		if (r1 & (IWX_CSR_INT_BIT_FH_RX | IWX_CSR_INT_BIT_SW_RX)) {
+			handled |= (IWX_CSR_INT_BIT_FH_RX | IWX_CSR_INT_BIT_SW_RX);
+			IWX_WRITE(sc, IWX_CSR_FH_INT_STATUS, IWX_CSR_FH_INT_RX_MASK);
+		}
+		if (r1 & IWX_CSR_INT_BIT_RX_PERIODIC) {
+			handled |= IWX_CSR_INT_BIT_RX_PERIODIC;
+			IWX_WRITE(sc, IWX_CSR_INT, IWX_CSR_INT_BIT_RX_PERIODIC);
+		}
 
-	if ((r1 & (IWX_CSR_INT_BIT_FH_RX | IWX_CSR_INT_BIT_SW_RX)) ||
-	    isperiodic) {
-		handled |= (IWX_CSR_INT_BIT_FH_RX | IWX_CSR_INT_BIT_SW_RX);
-		IWX_WRITE(sc, IWX_CSR_FH_INT_STATUS, IWX_CSR_FH_INT_RX_MASK);
+		/* Disable periodic interrupt; we use it as just a one-shot. */
+		IWX_WRITE_1(sc, IWX_CSR_INT_PERIODIC_REG, IWX_CSR_INT_PERIODIC_DIS);
 
-		iwx_notif_intr(sc);
-
-		/* enable periodic interrupt, see above */
-		if (r1 & (IWX_CSR_INT_BIT_FH_RX | IWX_CSR_INT_BIT_SW_RX) &&
-		    !isperiodic)
+		/*
+		 * Enable periodic interrupt in 8 msec only if we received
+		 * real RX interrupt (instead of just periodic int), to catch
+		 * any dangling Rx interrupt.  If it was just the periodic
+		 * interrupt, there was no dangling Rx activity, and no need
+		 * to extend the periodic interrupt; one-shot is enough.
+		 */
+		if (r1 & (IWX_CSR_INT_BIT_FH_RX | IWX_CSR_INT_BIT_SW_RX))
 			IWX_WRITE_1(sc, IWX_CSR_INT_PERIODIC_REG,
 			    IWX_CSR_INT_PERIODIC_ENA);
+
+		iwx_notif_intr(sc);
 	}
 
 	rv = 1;

@@ -14,14 +14,12 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: mg_8.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
+/* $Id: mg_8.c,v 1.10 2020/02/26 18:38:15 florian Exp $ */
 
 /* reviewed: Wed Mar 15 17:49:21 PST 2000 by brister */
 
 #ifndef RDATA_GENERIC_MG_8_C
 #define RDATA_GENERIC_MG_8_C
-
-#define RRTYPE_MG_ATTRIBUTES (0)
 
 static inline isc_result_t
 totext_mg(ARGS_TOTEXT) {
@@ -75,97 +73,6 @@ towire_mg(ARGS_TOWIRE) {
 	dns_name_fromregion(&name, &region);
 
 	return (dns_name_towire(&name, cctx, target));
-}
-
-static inline int
-compare_mg(ARGS_COMPARE) {
-	dns_name_t name1;
-	dns_name_t name2;
-	isc_region_t region1;
-	isc_region_t region2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_mg);
-	REQUIRE(rdata1->length != 0);
-	REQUIRE(rdata2->length != 0);
-
-	dns_name_init(&name1, NULL);
-	dns_name_init(&name2, NULL);
-
-	dns_rdata_toregion(rdata1, &region1);
-	dns_rdata_toregion(rdata2, &region2);
-
-	dns_name_fromregion(&name1, &region1);
-	dns_name_fromregion(&name2, &region2);
-
-	return (dns_name_rdatacompare(&name1, &name2));
-}
-
-static inline isc_result_t
-fromstruct_mg(ARGS_FROMSTRUCT) {
-	dns_rdata_mg_t *mg = source;
-	isc_region_t region;
-
-	REQUIRE(type == dns_rdatatype_mg);
-	REQUIRE(source != NULL);
-	REQUIRE(mg->common.rdtype == type);
-	REQUIRE(mg->common.rdclass == rdclass);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	dns_name_toregion(&mg->mg, &region);
-	return (isc_buffer_copyregion(target, &region));
-}
-
-static inline isc_result_t
-tostruct_mg(ARGS_TOSTRUCT) {
-	isc_region_t region;
-	dns_rdata_mg_t *mg = target;
-	dns_name_t name;
-
-	REQUIRE(rdata->type == dns_rdatatype_mg);
-	REQUIRE(target != NULL);
-	REQUIRE(rdata->length != 0);
-
-	mg->common.rdclass = rdata->rdclass;
-	mg->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&mg->common, link);
-
-	dns_name_init(&name, NULL);
-	dns_rdata_toregion(rdata, &region);
-	dns_name_fromregion(&name, &region);
-	dns_name_init(&mg->mg, NULL);
-	RETERR(name_duporclone(&name, &mg->mg));
-	return (ISC_R_SUCCESS);
-}
-
-static inline void
-freestruct_mg(ARGS_FREESTRUCT) {
-	dns_rdata_mg_t *mg = source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(mg->common.rdtype == dns_rdatatype_mg);
-
-	dns_name_free(&mg->mg);
-}
-
-static inline isc_boolean_t
-checkowner_mg(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_mg);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (dns_name_ismailbox(name));
-}
-
-static inline int
-casecompare_mg(ARGS_COMPARE) {
-	return (compare_mg(rdata1, rdata2));
 }
 
 #endif	/* RDATA_GENERIC_MG_8_C */

@@ -23,9 +23,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
+#include <stdint.h>
 
 #include <isc/app.h>
 #include <isc/util.h>
+#include <isc/time.h>
 
 #include <dns/fixedname.h>
 #include <dns/message.h>
@@ -34,7 +37,6 @@
 #include <dns/rdataclass.h>
 #include <dns/rdataset.h>
 #include <dns/rdatatype.h>
-#include "rdatastruct.h"
 
 #include "dig.h"
 
@@ -355,10 +357,10 @@ chase_cnamechain(dns_message_t *msg, dns_name_t *qname) {
 		check_result(result, "dns_rdataset_first");
 		dns_rdata_reset(&rdata);
 		dns_rdataset_current(rdataset, &rdata);
-		result = dns_rdata_tostruct(&rdata, &cname);
-		check_result(result, "dns_rdata_tostruct");
+		result = dns_rdata_tostruct_cname(&rdata, &cname);
+		check_result(result, "dns_rdata_tostruct_cname");
 		dns_name_copy(&cname.cname, qname, NULL);
-		dns_rdata_freestruct(&cname);
+		dns_rdata_freestruct_cname(&cname);
 	}
 }
 
@@ -778,7 +780,11 @@ parse_args(int argc, char **argv) {
 	strlcpy(hostname, argv[0], sizeof(hostname));
 
 	if (argc >= 2) {
-		set_nameserver(argv[1]);
+		isc_result_t res;
+
+		if ((res = set_nameserver(argv[1])))
+			fatal("couldn't get address for '%s': %s",
+			    argv[1], isc_result_totext(res));
 		debug("server is %s", *argv + 1);
 		listed_server = ISC_TRUE;
 	} else

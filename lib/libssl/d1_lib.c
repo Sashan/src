@@ -1,4 +1,4 @@
-/* $OpenBSD: d1_lib.c,v 1.43 2020/02/21 16:12:18 jsing Exp $ */
+/* $OpenBSD: d1_lib.c,v 1.45 2020/03/12 17:01:53 jsing Exp $ */
 /*
  * DTLS implementation written by Nagendra Modadugu
  * (nagendra@cs.stanford.edu) for the OpenSSL project 2005.
@@ -73,7 +73,6 @@
 static int dtls1_listen(SSL *s, struct sockaddr *client);
 
 SSL3_ENC_METHOD DTLSv1_enc_data = {
-	.enc = dtls1_enc,
 	.enc_flags = SSL_ENC_FLAG_EXPLICIT_IV,
 };
 
@@ -137,17 +136,17 @@ dtls1_clear_queues(SSL *s)
 {
 	pitem *item = NULL;
 	hm_fragment *frag = NULL;
-	DTLS1_RECORD_DATA *rdata;
+	DTLS1_RECORD_DATA_INTERNAL *rdata;
 
 	while ((item = pqueue_pop(D1I(s)->unprocessed_rcds.q)) != NULL) {
-		rdata = (DTLS1_RECORD_DATA *) item->data;
+		rdata = (DTLS1_RECORD_DATA_INTERNAL *) item->data;
 		free(rdata->rbuf.buf);
 		free(item->data);
 		pitem_free(item);
 	}
 
 	while ((item = pqueue_pop(D1I(s)->processed_rcds.q)) != NULL) {
-		rdata = (DTLS1_RECORD_DATA *) item->data;
+		rdata = (DTLS1_RECORD_DATA_INTERNAL *) item->data;
 		free(rdata->rbuf.buf);
 		free(item->data);
 		pitem_free(item);
@@ -168,7 +167,7 @@ dtls1_clear_queues(SSL *s)
 	}
 
 	while ((item = pqueue_pop(D1I(s)->buffered_app_data.q)) != NULL) {
-		rdata = (DTLS1_RECORD_DATA *) item->data;
+		rdata = (DTLS1_RECORD_DATA_INTERNAL *) item->data;
 		free(rdata->rbuf.buf);
 		free(item->data);
 		pitem_free(item);

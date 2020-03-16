@@ -1,4 +1,4 @@
-/*	$OpenBSD: fdpass.h,v 1.2 2020/01/23 05:40:09 ratchov Exp $	*/
+/*	$OpenBSD: fdpass.h,v 1.3 2020/02/26 13:53:58 ratchov Exp $	*/
 /*
  * Copyright (c) 2015 Alexandre Ratchov <alex@caoua.org>
  *
@@ -27,5 +27,6 @@ extern struct fdpass *fdpass_peer;
 
 struct sio_hdl *fdpass_sio_open(int, int, unsigned int);
 struct mio_hdl *fdpass_mio_open(int, int, unsigned int);
+struct sioctl_hdl *fdpass_sioctl_open(int, int, unsigned int);
 
 #endif /* !defined(FDPASS_H) */

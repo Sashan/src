@@ -19,13 +19,13 @@
 
 /*! \file */
 
+#include <time.h>
+
 #include <dst/dst.h>
 
 #include <isc/boolean.h>
 #include <isc/buffer.h>
-
 #include <isc/list.h>
-#include <isc/time.h>
 #include <isc/sockaddr.h>
 #include <isc/socket.h>
 
@@ -326,7 +326,7 @@ make_server(const char *servname, const char *userarg);
 void
 flush_server_list(void);
 
-void
+isc_result_t
 set_nameserver(char *opt);
 
 void

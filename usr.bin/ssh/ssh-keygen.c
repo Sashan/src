@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh-keygen.c,v 1.398 2020/02/07 03:27:54 djm Exp $ */
+/* $OpenBSD: ssh-keygen.c,v 1.404 2020/03/13 03:17:07 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1994 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -315,8 +315,7 @@ load_identity(const char *filename, char **commentp)
 	else
 		pass = read_passphrase("Enter passphrase: ", RP_ALLOW_STDIN);
 	r = sshkey_load_private(filename, pass, &prv, commentp);
-	explicit_bzero(pass, strlen(pass));
-	free(pass);
+	freezero(pass, strlen(pass));
 	if (r != 0)
 		fatal("Load key \"%s\": %s", filename, ssh_err(r));
 	return prv;
@@ -1402,8 +1401,7 @@ do_change_passphrase(struct passwd *pw)
 			    RP_ALLOW_STDIN);
 		r = sshkey_load_private(identity_file, old_passphrase,
 		    &private, &comment);
-		explicit_bzero(old_passphrase, strlen(old_passphrase));
-		free(old_passphrase);
+		freezero(old_passphrase, strlen(old_passphrase));
 		if (r != 0)
 			goto badkey;
 	} else if (r != 0) {
@@ -1434,8 +1432,7 @@ do_change_passphrase(struct passwd *pw)
 			exit(1);
 		}
 		/* Destroy the other copy. */
-		explicit_bzero(passphrase2, strlen(passphrase2));
-		free(passphrase2);
+		freezero(passphrase2, strlen(passphrase2));
 	}
 
 	/* Save the file using the new passphrase. */
@@ -1443,15 +1440,13 @@ do_change_passphrase(struct passwd *pw)
 	    comment, private_key_format, openssh_format_cipher, rounds)) != 0) {
 		error("Saving key \"%s\" failed: %s.",
 		    identity_file, ssh_err(r));
-		explicit_bzero(passphrase1, strlen(passphrase1));
-		free(passphrase1);
+		freezero(passphrase1, strlen(passphrase1));
 		sshkey_free(private);
 		free(comment);
 		exit(1);
 	}
 	/* Destroy the passphrase and the copy of the key in memory. */
-	explicit_bzero(passphrase1, strlen(passphrase1));
-	free(passphrase1);
+	freezero(passphrase1, strlen(passphrase1));
 	sshkey_free(private);		 /* Destroys contents */
 	free(comment);
 
@@ -1521,8 +1516,7 @@ do_change_comment(struct passwd *pw, const char *identity_comment)
 		/* Try to load using the passphrase. */
 		if ((r = sshkey_load_private(identity_file, passphrase,
 		    &private, &comment)) != 0) {
-			explicit_bzero(passphrase, strlen(passphrase));
-			free(passphrase);
+			freezero(passphrase, strlen(passphrase));
 			fatal("Cannot load private key \"%s\": %s.",
 			    identity_file, ssh_err(r));
 		}
@@ -1567,14 +1561,12 @@ do_change_comment(struct passwd *pw, const char *identity_comment)
 	    rounds)) != 0) {
 		error("Saving key \"%s\" failed: %s",
 		    identity_file, ssh_err(r));
-		explicit_bzero(passphrase, strlen(passphrase));
-		free(passphrase);
+		freezero(passphrase, strlen(passphrase));
 		sshkey_free(private);
 		free(comment);
 		exit(1);
 	}
-	explicit_bzero(passphrase, strlen(passphrase));
-	free(passphrase);
+	freezero(passphrase, strlen(passphrase));
 	if ((r = sshkey_from_private(private, &public)) != 0)
 		fatal("sshkey_from_private failed: %s", ssh_err(r));
 	sshkey_free(private);
@@ -1656,7 +1648,7 @@ prepare_options_buf(struct sshbuf *c, int which)
 	if ((which & OPTIONS_EXTENSIONS) != 0 &&
 	    (certflags_flags & CERTOPT_USER_RC) != 0)
 		add_flag_option(c, "permit-user-rc");
-	if ((which & OPTIONS_CRITICAL) != 0 &&
+	if ((which & OPTIONS_EXTENSIONS) != 0 &&
 	    (certflags_flags & CERTOPT_NO_REQUIRE_USER_PRESENCE) != 0)
 		add_flag_option(c, "no-touch-required");
 	if ((which & OPTIONS_CRITICAL) != 0 &&
@@ -2308,6 +2300,9 @@ update_krl_from_file(struct passwd *pw, const char *file, int wild_ca,
 			cp = cp + strspn(cp, " \t");
 			hash_to_blob(cp, &blob, &blen, file, lnum);
 			r = ssh_krl_revoke_key_sha256(krl, blob, blen);
+			if (r != 0)
+				fatal("%s: revoke key failed: %s",
+				    __func__, ssh_err(r));
 		} else {
 			if (strncasecmp(cp, "key:", 4) == 0) {
 				cp += 4;
@@ -2459,7 +2454,7 @@ load_sign_key(const char *keypath, const struct sshkey *pubkey)
 	int r;
 
 	/*
-	 * If passed a public key filename, then try to locate the correponding
+	 * If passed a public key filename, then try to locate the corresponding
 	 * private key. This lets us specify certificates on the command-line
 	 * and have ssh-keygen find the appropriate private key.
 	 */
@@ -2943,18 +2938,25 @@ do_download_sk(const char *skprovider, const char *device)
 	struct sshkey **keys;
 	size_t nkeys, i;
 	int r, ok = -1;
-	char *fp, *pin, *pass = NULL, *path, *pubpath;
+	char *fp, *pin = NULL, *pass = NULL, *path, *pubpath;
 	const char *ext;
 
 	if (skprovider == NULL)
 		fatal("Cannot download keys without provider");
 
-	pin = read_passphrase("Enter PIN for authenticator: ", RP_ALLOW_STDIN);
-	if ((r = sshsk_load_resident(skprovider, device, pin,
-	    &keys, &nkeys)) != 0) {
-		freezero(pin, strlen(pin));
-		error("Unable to load resident keys: %s", ssh_err(r));
-		return -1;
+	for (i = 0; i < 2; i++) {
+		if (i == 1) {
+			pin = read_passphrase("Enter PIN for authenticator: ",
+			    RP_ALLOW_STDIN);
+		}
+		if ((r = sshsk_load_resident(skprovider, device, pin,
+		    &keys, &nkeys)) != 0) {
+			if (i == 0 && r == SSH_ERR_KEY_WRONG_PASSPHRASE)
+				continue;
+			freezero(pin, strlen(pin));
+			error("Unable to load resident keys: %s", ssh_err(r));
+			return -1;
+		}
 	}
 	if (nkeys == 0)
 		logit("No keys to download");
@@ -3008,9 +3010,9 @@ do_download_sk(const char *skprovider, const char *device)
 		free(path);
 		if ((r = sshkey_save_public(keys[i], pubpath,
 		    keys[i]->sk_application)) != 0) {
-			free(pubpath);
 			error("Saving public key \"%s\" failed: %s",
 			    pubpath, ssh_err(r));
+			free(pubpath);
 			break;
 		}
 		free(pubpath);

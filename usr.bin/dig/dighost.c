@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: dighost.c,v 1.16 2020/02/23 19:54:25 jung Exp $ */
+/* $Id: dighost.c,v 1.25 2020/02/25 18:10:17 florian Exp $ */
 
 /*! \file
  *  \note
@@ -33,6 +33,8 @@
 #include <resolv.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <stdint.h>
 
 #include <dns/byaddr.h>
 #include <dns/fixedname.h>
@@ -43,7 +45,6 @@
 #include <dns/rdataclass.h>
 #include <dns/rdatalist.h>
 #include <dns/rdataset.h>
-#include "rdatastruct.h"
 #include <dns/rdatatype.h>
 #include <dns/result.h>
 #include <dns/tsig.h>
@@ -51,14 +52,12 @@
 #include <dst/dst.h>
 #include <dst/result.h>
 
-#include <isc/app.h>
 #include <isc/base64.h>
 #include <isc/hex.h>
 #include <isc/log.h>
 #include <isc/netaddr.h>
 #include <isc/parseint.h>
 #include <isc/result.h>
-#include <isc/safe.h>
 #include <isc/serial.h>
 #include <isc/sockaddr.h>
 #include <isc/task.h>
@@ -548,7 +547,7 @@ get_addresses(const char *hostname, in_port_t dstport,
 		return (ISC_R_SUCCESS);
 }
 
-void
+isc_result_t
 set_nameserver(char *opt) {
 	isc_result_t result;
 	isc_sockaddr_t sockaddrs[DIG_MAX_ADDRESSES];
@@ -558,13 +557,12 @@ set_nameserver(char *opt) {
 	char tmp[ISC_NETADDR_FORMATSIZE];
 
 	if (opt == NULL)
-		return;
+		return ISC_R_NOTFOUND;
 
 	result = get_addresses(opt, 0, sockaddrs,
 				    DIG_MAX_ADDRESSES, &count);
 	if (result != ISC_R_SUCCESS)
-		fatal("couldn't get address for '%s': %s",
-		      opt, isc_result_totext(result));
+		return (result);
 
 	flush_server_list();
 
@@ -576,6 +574,7 @@ set_nameserver(char *opt) {
 			fatal("memory allocation failure");
 		ISC_LIST_APPEND(server_list, srv, link);
 	}
+	return (ISC_R_SUCCESS);
 }
 
 static isc_result_t
@@ -1718,10 +1717,10 @@ followup_lookup(dns_message_t *msg, dig_query_t *query, dns_section_t section)
 			dns_rdataset_current(rdataset, &rdata);
 
 			query->lookup->nsfound++;
-			result = dns_rdata_tostruct(&rdata, &ns);
-			check_result(result, "dns_rdata_tostruct");
+			result = dns_rdata_tostruct_ns(&rdata, &ns);
+			check_result(result, "dns_rdata_tostruct_ns");
 			dns_name_format(&ns.name, namestr, sizeof(namestr));
-			dns_rdata_freestruct(&ns);
+			dns_rdata_freestruct_ns(&ns);
 
 			/* Initialize lookup if we've not yet */
 			debug("found NS %s", namestr);
@@ -1893,10 +1892,10 @@ insert_soa(dig_lookup_t *lookup) {
 	result = dns_message_gettemprdata(lookup->sendmsg, &rdata);
 	check_result(result, "dns_message_gettemprdata");
 
-	result = dns_rdata_fromstruct(rdata, lookup->rdclass,
+	result = dns_rdata_fromstruct_soa(rdata, lookup->rdclass,
 				      dns_rdatatype_soa, &soa,
 				      &lookup->rdatabuf);
-	check_result(result, "isc_rdata_fromstruct");
+	check_result(result, "isc_rdata_fromstruct_soa");
 
 	result = dns_message_gettemprdatalist(lookup->sendmsg, &rdatalist);
 	check_result(result, "dns_message_gettemprdatalist");
@@ -2531,7 +2530,6 @@ force_timeout(dig_query_t *query) {
 		isc_timer_detach(&query->timer);
 }
 
-
 static void
 connect_done(isc_task_t *task, isc_event_t *event);
 
@@ -3101,10 +3099,10 @@ check_for_more_data(dig_query_t *query, dns_message_t *msg,
 
 				/* Now we have an SOA.  Work with it. */
 				debug("got an SOA");
-				result = dns_rdata_tostruct(&rdata, &soa);
-				check_result(result, "dns_rdata_tostruct");
+				result = dns_rdata_tostruct_soa(&rdata, &soa);
+				check_result(result, "dns_rdata_tostruct_soa");
 				serial = soa.serial;
-				dns_rdata_freestruct(&soa);
+				dns_rdata_freestruct_soa(&soa);
 				if (!query->first_soa_rcvd) {
 					query->first_soa_rcvd = ISC_TRUE;
 					query->first_rr_serial = serial;
@@ -3189,7 +3187,7 @@ process_sit(dig_lookup_t *l, dns_message_t *msg,
 
 	INSIST(msg->sitok == 0 && msg->sitbad == 0);
 	if (optlen >= len && optlen >= 8U) {
-		if (isc_safe_memequal(isc_buffer_current(optbuf), sit, 8)) {
+		if (timingsafe_bcmp(isc_buffer_current(optbuf), sit, 8) == 0) {
 			msg->sitok = 1;
 		} else {
 			printf(";; Warning: SIT client cookie mismatch\n");
@@ -3436,7 +3434,7 @@ recv_done(isc_task_t *task, isc_event_t *event) {
 	}
 
 	debug("before parse starts");
-	parseflags = DNS_MESSAGEPARSE_PRESERVEORDER;
+	parseflags = 0;
 	if (l->besteffort) {
 		parseflags |= DNS_MESSAGEPARSE_BESTEFFORT;
 		parseflags |= DNS_MESSAGEPARSE_IGNORETRUNCATION;

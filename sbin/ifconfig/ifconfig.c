@@ -1,4 +1,4 @@
-/*	$OpenBSD: ifconfig.c,v 1.418 2020/02/18 08:09:37 gerhard Exp $	*/
+/*	$OpenBSD: ifconfig.c,v 1.421 2020/02/27 08:28:35 stsp Exp $	*/
 /*	$NetBSD: ifconfig.c,v 1.40 1997/10/01 02:19:43 enami Exp $	*/
 
 /*
@@ -400,7 +400,7 @@ const struct	cmd {
 	{ "mtu",	NEXTARG,	0,		setifmtu },
 	{ "nwid",	NEXTARG,	0,		setifnwid },
 	{ "-nwid",	-1,		0,		setifnwid },
-	{ "join",	NEXTARG,	A_JOIN,		setifjoin },
+	{ "join",	NEXTARG,	0,		setifjoin },
 	{ "-join",	NEXTARG,	0,		delifjoin },
 	{ "joinlist",	NEXTARG0,	0,		showjoin },
 	{ "-joinlist",	-1,		0,		delifjoinlist },
@@ -2575,15 +2575,13 @@ join_status(void)
 		if (len > maxlen)
 			maxlen = len;
 	}
-	if (maxlen > IEEE80211_NWID_LEN)
-		maxlen = IEEE80211_NWID_LEN - 1;
 
 	for (i = 0; i < ja.ja_nodes; i++) {
 		printf("\t      ");
 		if (jn[i].i_len > IEEE80211_NWID_LEN)
 			jn[i].i_len = IEEE80211_NWID_LEN;
 		len = print_string(jn[i].i_nwid, jn[i].i_len);
-		printf("%-*s", maxlen - len, " ");
+		printf("%-*s", maxlen - len, "");
 		if (jn[i].i_flags) {
 			const char *sep;
 			printf(" ");

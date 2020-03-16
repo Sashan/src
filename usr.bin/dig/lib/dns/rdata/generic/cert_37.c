@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: cert_37.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
+/* $Id: cert_37.c,v 1.12 2020/02/26 18:47:58 florian Exp $ */
 
 /* Reviewed: Wed Mar 15 21:14:32 EST 2000 by tale */
 
@@ -22,8 +22,6 @@
 
 #ifndef RDATA_GENERIC_CERT_37_C
 #define RDATA_GENERIC_CERT_37_C
-
-#define RRTYPE_CERT_ATTRIBUTES (0)
 
 static inline isc_result_t
 totext_cert(ARGS_TOTEXT) {
@@ -44,7 +42,7 @@ totext_cert(ARGS_TOTEXT) {
 	n = uint16_fromregion(&sr);
 	isc_region_consume(&sr, 2);
 	RETERR(dns_cert_totext((dns_cert_t)n, target));
-	RETERR(str_totext(" ", target));
+	RETERR(isc_str_tobuffer(" ", target));
 
 	/*
 	 * Key tag.
@@ -52,7 +50,7 @@ totext_cert(ARGS_TOTEXT) {
 	n = uint16_fromregion(&sr);
 	isc_region_consume(&sr, 2);
 	snprintf(buf, sizeof(buf), "%u ", n);
-	RETERR(str_totext(buf, target));
+	RETERR(isc_str_tobuffer(buf, target));
 
 	/*
 	 * Algorithm.
@@ -64,15 +62,15 @@ totext_cert(ARGS_TOTEXT) {
 	 * Cert.
 	 */
 	if ((tctx->flags & DNS_STYLEFLAG_MULTILINE) != 0)
-		RETERR(str_totext(" (", target));
-	RETERR(str_totext(tctx->linebreak, target));
+		RETERR(isc_str_tobuffer(" (", target));
+	RETERR(isc_str_tobuffer(tctx->linebreak, target));
 	if (tctx->width == 0)   /* No splitting */
 		RETERR(isc_base64_totext(&sr, 60, "", target));
 	else
 		RETERR(isc_base64_totext(&sr, tctx->width - 2,
 					 tctx->linebreak, target));
 	if ((tctx->flags & DNS_STYLEFLAG_MULTILINE) != 0)
-		RETERR(str_totext(" )", target));
+		RETERR(isc_str_tobuffer(" )", target));
 	return (ISC_R_SUCCESS);
 }
 
@@ -92,7 +90,7 @@ fromwire_cert(ARGS_FROMWIRE) {
 		return (ISC_R_UNEXPECTEDEND);
 
 	isc_buffer_forward(source, sr.length);
-	return (mem_tobuffer(target, sr.base, sr.length));
+	return (isc_mem_tobuffer(target, sr.base, sr.length));
 }
 
 static inline isc_result_t
@@ -105,99 +103,7 @@ towire_cert(ARGS_TOWIRE) {
 	UNUSED(cctx);
 
 	dns_rdata_toregion(rdata, &sr);
-	return (mem_tobuffer(target, sr.base, sr.length));
+	return (isc_mem_tobuffer(target, sr.base, sr.length));
 }
 
-static inline int
-compare_cert(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_cert);
-	REQUIRE(rdata1->length != 0);
-	REQUIRE(rdata2->length != 0);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_cert(ARGS_FROMSTRUCT) {
-	dns_rdata_cert_t *cert = source;
-
-	REQUIRE(type == dns_rdatatype_cert);
-	REQUIRE(source != NULL);
-	REQUIRE(cert->common.rdtype == type);
-	REQUIRE(cert->common.rdclass == rdclass);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	RETERR(uint16_tobuffer(cert->type, target));
-	RETERR(uint16_tobuffer(cert->key_tag, target));
-	RETERR(uint8_tobuffer(cert->algorithm, target));
-
-	return (mem_tobuffer(target, cert->certificate, cert->length));
-}
-
-static inline isc_result_t
-tostruct_cert(ARGS_TOSTRUCT) {
-	dns_rdata_cert_t *cert = target;
-	isc_region_t region;
-
-	REQUIRE(rdata->type == dns_rdatatype_cert);
-	REQUIRE(target != NULL);
-	REQUIRE(rdata->length != 0);
-
-	cert->common.rdclass = rdata->rdclass;
-	cert->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&cert->common, link);
-
-	dns_rdata_toregion(rdata, &region);
-
-	cert->type = uint16_fromregion(&region);
-	isc_region_consume(&region, 2);
-	cert->key_tag = uint16_fromregion(&region);
-	isc_region_consume(&region, 2);
-	cert->algorithm = uint8_fromregion(&region);
-	isc_region_consume(&region, 1);
-	cert->length = region.length;
-
-	cert->certificate = mem_maybedup(region.base, region.length);
-	if (cert->certificate == NULL)
-		return (ISC_R_NOMEMORY);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline void
-freestruct_cert(ARGS_FREESTRUCT) {
-	dns_rdata_cert_t *cert = source;
-
-	REQUIRE(cert != NULL);
-	REQUIRE(cert->common.rdtype == dns_rdatatype_cert);
-
-	free(cert->certificate);
-}
-
-static inline isc_boolean_t
-checkowner_cert(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_cert);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_cert(ARGS_COMPARE) {
-	return (compare_cert(rdata1, rdata2));
-}
 #endif	/* RDATA_GENERIC_CERT_37_C */

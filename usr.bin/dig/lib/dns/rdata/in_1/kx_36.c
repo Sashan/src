@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: kx_36.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
+/* $Id: kx_36.c,v 1.12 2020/02/26 18:47:59 florian Exp $ */
 
 /* Reviewed: Thu Mar 16 17:24:54 PST 2000 by explorer */
 
@@ -22,8 +22,6 @@
 
 #ifndef RDATA_IN_1_KX_36_C
 #define RDATA_IN_1_KX_36_C
-
-#define RRTYPE_KX_ATTRIBUTES (0)
 
 static inline isc_result_t
 totext_in_kx(ARGS_TOTEXT) {
@@ -45,9 +43,9 @@ totext_in_kx(ARGS_TOTEXT) {
 	num = uint16_fromregion(&region);
 	isc_region_consume(&region, 2);
 	snprintf(buf, sizeof(buf), "%u", num);
-	RETERR(str_totext(buf, target));
+	RETERR(isc_str_tobuffer(buf, target));
 
-	RETERR(str_totext(" ", target));
+	RETERR(isc_str_tobuffer(" ", target));
 
 	dns_name_fromregion(&name, &region);
 	sub = name_prefix(&name, tctx->origin, &prefix);
@@ -72,7 +70,7 @@ fromwire_in_kx(ARGS_FROMWIRE) {
 	isc_buffer_activeregion(source, &sregion);
 	if (sregion.length < 2)
 		return (ISC_R_UNEXPECTEDEND);
-	RETERR(mem_tobuffer(target, sregion.base, 2));
+	RETERR(isc_mem_tobuffer(target, sregion.base, 2));
 	isc_buffer_forward(source, 2);
 	return (dns_name_fromwire(&name, source, dctx, options, target));
 }
@@ -89,123 +87,13 @@ towire_in_kx(ARGS_TOWIRE) {
 
 	dns_compress_setmethods(cctx, DNS_COMPRESS_NONE);
 	dns_rdata_toregion(rdata, &region);
-	RETERR(mem_tobuffer(target, region.base, 2));
+	RETERR(isc_mem_tobuffer(target, region.base, 2));
 	isc_region_consume(&region, 2);
 
 	dns_name_init(&name, offsets);
 	dns_name_fromregion(&name, &region);
 
 	return (dns_name_towire(&name, cctx, target));
-}
-
-static inline int
-compare_in_kx(ARGS_COMPARE) {
-	dns_name_t name1;
-	dns_name_t name2;
-	isc_region_t region1;
-	isc_region_t region2;
-	int order;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_kx);
-	REQUIRE(rdata1->rdclass == dns_rdataclass_in);
-	REQUIRE(rdata1->length != 0);
-	REQUIRE(rdata2->length != 0);
-
-	order = memcmp(rdata1->data, rdata2->data, 2);
-	if (order != 0)
-		return (order < 0 ? -1 : 1);
-
-	dns_name_init(&name1, NULL);
-	dns_name_init(&name2, NULL);
-
-	dns_rdata_toregion(rdata1, &region1);
-	dns_rdata_toregion(rdata2, &region2);
-
-	isc_region_consume(&region1, 2);
-	isc_region_consume(&region2, 2);
-
-	dns_name_fromregion(&name1, &region1);
-	dns_name_fromregion(&name2, &region2);
-
-	return (dns_name_rdatacompare(&name1, &name2));
-}
-
-static inline isc_result_t
-fromstruct_in_kx(ARGS_FROMSTRUCT) {
-	dns_rdata_in_kx_t *kx = source;
-	isc_region_t region;
-
-	REQUIRE(type == dns_rdatatype_kx);
-	REQUIRE(rdclass == dns_rdataclass_in);
-	REQUIRE(source != NULL);
-	REQUIRE(kx->common.rdtype == type);
-	REQUIRE(kx->common.rdclass == rdclass);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	RETERR(uint16_tobuffer(kx->preference, target));
-	dns_name_toregion(&kx->exchange, &region);
-	return (isc_buffer_copyregion(target, &region));
-}
-
-static inline isc_result_t
-tostruct_in_kx(ARGS_TOSTRUCT) {
-	isc_region_t region;
-	dns_rdata_in_kx_t *kx = target;
-	dns_name_t name;
-
-	REQUIRE(rdata->type == dns_rdatatype_kx);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-	REQUIRE(target != NULL);
-	REQUIRE(rdata->length != 0);
-
-	kx->common.rdclass = rdata->rdclass;
-	kx->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&kx->common, link);
-
-	dns_name_init(&name, NULL);
-	dns_rdata_toregion(rdata, &region);
-
-	kx->preference = uint16_fromregion(&region);
-	isc_region_consume(&region, 2);
-
-	dns_name_fromregion(&name, &region);
-	dns_name_init(&kx->exchange, NULL);
-	RETERR(name_duporclone(&name, &kx->exchange));
-	return (ISC_R_SUCCESS);
-}
-
-static inline void
-freestruct_in_kx(ARGS_FREESTRUCT) {
-	dns_rdata_in_kx_t *kx = source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(kx->common.rdclass == dns_rdataclass_in);
-	REQUIRE(kx->common.rdtype == dns_rdatatype_kx);
-
-	dns_name_free(&kx->exchange);
-}
-
-static inline isc_boolean_t
-checkowner_in_kx(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_kx);
-	REQUIRE(rdclass == dns_rdataclass_in);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_in_kx(ARGS_COMPARE) {
-	return (compare_in_kx(rdata1, rdata2));
 }
 
 #endif	/* RDATA_IN_1_KX_36_C */

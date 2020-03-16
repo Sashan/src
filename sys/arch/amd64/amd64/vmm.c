@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmm.c,v 1.262 2020/02/17 18:16:10 pd Exp $	*/
+/*	$OpenBSD: vmm.c,v 1.268 2020/03/16 08:21:16 jasper Exp $	*/
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -1167,7 +1167,7 @@ vm_create(struct vm_create_params *vcp, struct proc *p)
 	memcpy(vm->vm_memranges, vcp->vcp_memranges,
 	    vm->vm_nmemranges * sizeof(vm->vm_memranges[0]));
 	vm->vm_memory_size = memsize;
-	strncpy(vm->vm_name, vcp->vcp_name, VMM_MAX_NAME_LEN);
+	strlcpy(vm->vm_name, vcp->vcp_name, VMM_MAX_NAME_LEN);
 
 	rw_enter_write(&vmm_softc->vm_lock);
 
@@ -2061,6 +2061,9 @@ vcpu_reset_regs_svm(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 
 	/* EFER is R/O so we can ensure the guest always has SVME */
 	svm_setmsrbr(vcpu, MSR_EFER);
+
+	/* allow reading TSC */
+	svm_setmsrbr(vcpu, MSR_TSC);
 
 	/* Guest VCPU ASID */
 	if (vmm_alloc_vpid(&asid)) {
@@ -3715,7 +3718,7 @@ vm_get_info(struct vm_info_params *vip)
 		out[i].vir_ncpus = vm->vm_vcpu_ct;
 		out[i].vir_id = vm->vm_id;
 		out[i].vir_creator_pid = vm->vm_creator_pid;
-		strncpy(out[i].vir_name, vm->vm_name, VMM_MAX_NAME_LEN);
+		strlcpy(out[i].vir_name, vm->vm_name, VMM_MAX_NAME_LEN);
 		rw_enter_read(&vm->vm_vcpu_lock);
 		for (j = 0; j < vm->vm_vcpu_ct; j++) {
 			out[i].vir_vcpu_state[j] = VCPU_STATE_UNKNOWN;
@@ -4054,6 +4057,9 @@ vmm_translate_gva(struct vcpu *vcpu, uint64_t va, uint64_t *pa, int mode)
 	    vmm_softc->mode == VMM_MODE_SVM) {
 		if (vcpu_readregs_svm(vcpu, VM_RWREGS_ALL, &vrs))
 			return (EINVAL);
+	} else {
+		printf("%s: unknown vmm mode", __func__);
+		return (EINVAL);
 	}
 
 	DPRINTF("%s: guest %%cr0=0x%llx, %%cr3=0x%llx\n", __func__,
@@ -6181,10 +6187,10 @@ vmx_handle_wrmsr(struct vcpu *vcpu)
 int
 svm_handle_msr(struct vcpu *vcpu)
 {
-	uint64_t insn_length, msr;
+	uint64_t insn_length;
 	uint64_t *rax, *rcx, *rdx;
 	struct vmcb *vmcb = (struct vmcb *)vcpu->vc_control_va;
-	int i, ret;
+	int ret;
 
 	/* XXX: Validate RDMSR / WRMSR insn_length */
 	insn_length = 2;
@@ -6209,22 +6215,20 @@ svm_handle_msr(struct vcpu *vcpu)
 		}
 	} else {
 		switch (*rcx) {
-			case MSR_LS_CFG:
-				DPRINTF("%s: guest read LS_CFG msr, injecting "
-				    "#GP\n", __func__);
+			case MSR_DE_CFG:
+				/* LFENCE seralizing bit is set by host */
+				*rax = DE_CFG_SERIALIZE_LFENCE;
+				*rdx = 0;
+				break;
+			case MSR_INT_PEN_MSG:
+				*rax = 0;
+				*rdx = 0;
+				break;
+			default:
+				DPRINTF("%s: guest read msr 0x%llx, injecting "
+				    "#GP\n", __func__, *rcx);
 				ret = vmm_inject_gp(vcpu);
 				return (ret);
-		}
-
-		i = rdmsr_safe(*rcx, &msr);
-		if (i == 0) {
-			*rax = msr & 0xFFFFFFFFULL;
-			*rdx = msr >> 32;
-		} else {
-			DPRINTF("%s: rdmsr for unsupported MSR 0x%llx\n",
-			    __func__, *rcx);
-			*rax = 0;
-			*rdx = 0;
 		}
 	}
 
@@ -6875,9 +6879,12 @@ vmm_gpa_is_valid(struct vcpu *vcpu, paddr_t gpa, size_t obj_size)
 {
 	struct vm *vm = vcpu->vc_parent;
 	struct vm_mem_range *vmr;
-	for (size_t i = 0; i < vm->vm_nmemranges; ++i) {
+	size_t i;
+
+	for (i = 0; i < vm->vm_nmemranges; ++i) {
 		vmr = &vm->vm_memranges[i];
-		if (vmr->vmr_gpa <= gpa &&
+		if (vmr->vmr_size >= obj_size &&
+		    vmr->vmr_gpa <= gpa &&
 		    gpa < (vmr->vmr_gpa + vmr->vmr_size - obj_size)) {
 		    return 1;
 		}
@@ -6888,9 +6895,17 @@ vmm_gpa_is_valid(struct vcpu *vcpu, paddr_t gpa, size_t obj_size)
 void
 vmm_init_pvclock(struct vcpu *vcpu, paddr_t gpa)
 {
-	if (!vmm_gpa_is_valid(vcpu, gpa & 0xFFFFFFFFFFFFFFF0,
+	paddr_t pvclock_gpa = gpa & 0xFFFFFFFFFFFFFFF0;
+	if (!vmm_gpa_is_valid(vcpu, pvclock_gpa,
 	        sizeof(struct pvclock_time_info))) {
 		/* XXX: Kill guest? */
+		vmm_inject_gp(vcpu);
+		return;
+	}
+
+	/* XXX: handle case when this struct goes over page boundaries */
+	if ((pvclock_gpa & PAGE_MASK) + sizeof(struct pvclock_time_info) >
+	    PAGE_SIZE) {
 		vmm_inject_gp(vcpu);
 		return;
 	}

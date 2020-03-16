@@ -19,8 +19,6 @@
 #ifndef RDATA_GENERIC_TA_32768_C
 #define RDATA_GENERIC_TA_32768_C
 
-#define RRTYPE_TA_ATTRIBUTES 0
-
 static inline isc_result_t
 totext_ta(ARGS_TOTEXT) {
 
@@ -48,76 +46,7 @@ towire_ta(ARGS_TOWIRE) {
 	UNUSED(cctx);
 
 	dns_rdata_toregion(rdata, &sr);
-	return (mem_tobuffer(target, sr.base, sr.length));
-}
-
-static inline int
-compare_ta(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_ta);
-	REQUIRE(rdata1->length != 0);
-	REQUIRE(rdata2->length != 0);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_ta(ARGS_FROMSTRUCT) {
-
-	REQUIRE(type == dns_rdatatype_ta);
-
-	return (generic_fromstruct_ds(rdclass, type, source, target));
-}
-
-static inline isc_result_t
-tostruct_ta(ARGS_TOSTRUCT) {
-	dns_rdata_ds_t *ds = target;
-
-	REQUIRE(rdata->type == dns_rdatatype_ta);
-
-	/*
-	 * Checked by generic_tostruct_ds().
-	 */
-	ds->common.rdclass = rdata->rdclass;
-	ds->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&ds->common, link);
-
-	return (generic_tostruct_ds(rdata, target));
-}
-
-static inline void
-freestruct_ta(ARGS_FREESTRUCT) {
-	dns_rdata_ta_t *ds = source;
-
-	REQUIRE(ds != NULL);
-	REQUIRE(ds->common.rdtype == dns_rdatatype_ta);
-
-	if (ds->digest != NULL)
-		free(ds->digest);
-}
-
-static inline isc_boolean_t
-checkowner_ta(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_ta);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_ta(ARGS_COMPARE) {
-	return (compare_ta(rdata1, rdata2));
+	return (isc_mem_tobuffer(target, sr.base, sr.length));
 }
 
 #endif	/* RDATA_GENERIC_TA_32768_C */

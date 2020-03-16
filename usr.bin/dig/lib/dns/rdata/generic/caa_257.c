@@ -17,8 +17,6 @@
 #ifndef GENERIC_CAA_257_C
 #define GENERIC_CAA_257_C 1
 
-#define RRTYPE_CAA_ATTRIBUTES (0)
-
 static unsigned char const alphanumeric[256] = {
 	/* 0x00-0x0f */ 0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,
 	/* 0x10-0x1f */ 0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,
@@ -57,13 +55,13 @@ totext_caa(ARGS_TOTEXT) {
 	 */
 	flags = uint8_consume_fromregion(&region);
 	snprintf(buf, sizeof(buf), "%u ", flags);
-	RETERR(str_totext(buf, target));
+	RETERR(isc_str_tobuffer(buf, target));
 
 	/*
 	 * Tag
 	 */
 	RETERR(txt_totext(&region, ISC_FALSE, target));
-	RETERR(str_totext(" ", target));
+	RETERR(isc_str_tobuffer(" ", target));
 
 	/*
 	 * Value
@@ -94,7 +92,7 @@ fromwire_caa(ARGS_FROMWIRE) {
 	/*
 	 * Flags, tag length
 	 */
-	RETERR(mem_tobuffer(target, sr.base, 2));
+	RETERR(isc_mem_tobuffer(target, sr.base, 2));
 	len = sr.base[1];
 	isc_region_consume(&sr, 2);
 	isc_buffer_forward(source, 2);
@@ -103,17 +101,17 @@ fromwire_caa(ARGS_FROMWIRE) {
 	 * Zero length tag fields are illegal.
 	 */
 	if (sr.length < len || len == 0)
-		RETERR(DNS_R_FORMERR);
+		return (DNS_R_FORMERR);
 
 	/* Check the Tag's value */
 	for (i = 0; i < len; i++)
 		if (!alphanumeric[sr.base[i]])
-			RETERR(DNS_R_FORMERR);
+			return (DNS_R_FORMERR);
 	/*
 	 * Tag + Value
 	 */
 	isc_buffer_forward(source, sr.length);
-	return (mem_tobuffer(target, sr.base, sr.length));
+	return (isc_mem_tobuffer(target, sr.base, sr.length));
 }
 
 static inline isc_result_t
@@ -127,150 +125,7 @@ towire_caa(ARGS_TOWIRE) {
 	UNUSED(cctx);
 
 	dns_rdata_toregion(rdata, &region);
-	return (mem_tobuffer(target, region.base, region.length));
-}
-
-static inline int
-compare_caa(ARGS_COMPARE) {
-	isc_region_t r1, r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_caa);
-	REQUIRE(rdata1->length >= 3U);
-	REQUIRE(rdata2->length >= 3U);
-	REQUIRE(rdata1->data != NULL);
-	REQUIRE(rdata2->data != NULL);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_caa(ARGS_FROMSTRUCT) {
-	dns_rdata_caa_t *caa = source;
-	isc_region_t region;
-	unsigned int i;
-
-	REQUIRE(type == dns_rdatatype_caa);
-	REQUIRE(source != NULL);
-	REQUIRE(caa->common.rdtype == type);
-	REQUIRE(caa->common.rdclass == rdclass);
-	REQUIRE(caa->tag != NULL && caa->tag_len != 0);
-	REQUIRE(caa->value != NULL);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	/*
-	 * Flags
-	 */
-	RETERR(uint8_tobuffer(caa->flags, target));
-
-	/*
-	 * Tag length
-	 */
-	RETERR(uint8_tobuffer(caa->tag_len, target));
-
-	/*
-	 * Tag
-	 */
-	region.base = caa->tag;
-	region.length = caa->tag_len;
-	for (i = 0; i < region.length; i++)
-		if (!alphanumeric[region.base[i]])
-			RETERR(DNS_R_SYNTAX);
-	RETERR(isc_buffer_copyregion(target, &region));
-
-	/*
-	 * Value
-	 */
-	region.base = caa->value;
-	region.length = caa->value_len;
-	return (isc_buffer_copyregion(target, &region));
-}
-
-static inline isc_result_t
-tostruct_caa(ARGS_TOSTRUCT) {
-	dns_rdata_caa_t *caa = target;
-	isc_region_t sr;
-
-	REQUIRE(rdata->type == dns_rdatatype_caa);
-	REQUIRE(target != NULL);
-	REQUIRE(rdata->length >= 3U);
-	REQUIRE(rdata->data != NULL);
-
-	caa->common.rdclass = rdata->rdclass;
-	caa->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&caa->common, link);
-
-	dns_rdata_toregion(rdata, &sr);
-
-	/*
-	 * Flags
-	 */
-	if (sr.length < 1)
-		return (ISC_R_UNEXPECTEDEND);
-	caa->flags = uint8_fromregion(&sr);
-	isc_region_consume(&sr, 1);
-
-	/*
-	 * Tag length
-	 */
-	if (sr.length < 1)
-		return (ISC_R_UNEXPECTEDEND);
-	caa->tag_len = uint8_fromregion(&sr);
-	isc_region_consume(&sr, 1);
-
-	/*
-	 * Tag
-	 */
-	if (sr.length < caa->tag_len)
-		return (ISC_R_UNEXPECTEDEND);
-	caa->tag = mem_maybedup(sr.base, caa->tag_len);
-	if (caa->tag == NULL)
-		return (ISC_R_NOMEMORY);
-	isc_region_consume(&sr, caa->tag_len);
-
-	/*
-	 * Value
-	 */
-	caa->value_len = sr.length;
-	caa->value = mem_maybedup(sr.base, sr.length);
-	if (caa->value == NULL)
-		return (ISC_R_NOMEMORY);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline void
-freestruct_caa(ARGS_FREESTRUCT) {
-	dns_rdata_caa_t *caa = (dns_rdata_caa_t *) source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(caa->common.rdtype == dns_rdatatype_caa);
-
-	free(caa->tag);
-	free(caa->value);
-}
-
-static inline isc_boolean_t
-checkowner_caa(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_caa);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_caa(ARGS_COMPARE) {
-	return (compare_caa(rdata1, rdata2));
+	return (isc_mem_tobuffer(target, region.base, region.length));
 }
 
 #endif /* GENERIC_CAA_257_C */

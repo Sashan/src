@@ -19,8 +19,6 @@
 
 #include <dst/dst.h>
 
-#define RRTYPE_SINK_ATTRIBUTES (0)
-
 static inline isc_result_t
 totext_sink(ARGS_TOTEXT) {
 	isc_region_t sr;
@@ -40,16 +38,16 @@ totext_sink(ARGS_TOTEXT) {
 	subcoding = uint8_fromregion(&sr);
 	isc_region_consume(&sr, 1);
 	snprintf(buf, sizeof(buf), "%u %u %u", meaning, coding, subcoding);
-	RETERR(str_totext(buf, target));
+	RETERR(isc_str_tobuffer(buf, target));
 
 	if (sr.length == 0U)
 		return (ISC_R_SUCCESS);
 
 	/* data */
 	if ((tctx->flags & DNS_STYLEFLAG_MULTILINE) != 0)
-		RETERR(str_totext(" (", target));
+		RETERR(isc_str_tobuffer(" (", target));
 
-	RETERR(str_totext(tctx->linebreak, target));
+	RETERR(isc_str_tobuffer(tctx->linebreak, target));
 
 	if (tctx->width == 0)   /* No splitting */
 		RETERR(isc_base64_totext(&sr, 60, "", target));
@@ -58,7 +56,7 @@ totext_sink(ARGS_TOTEXT) {
 					 tctx->linebreak, target));
 
 	if ((tctx->flags & DNS_STYLEFLAG_MULTILINE) != 0)
-		RETERR(str_totext(" )", target));
+		RETERR(isc_str_tobuffer(" )", target));
 
 	return (ISC_R_SUCCESS);
 }
@@ -78,7 +76,7 @@ fromwire_sink(ARGS_FROMWIRE) {
 	if (sr.length < 3)
 		return (ISC_R_UNEXPECTEDEND);
 
-	RETERR(mem_tobuffer(target, sr.base, sr.length));
+	RETERR(isc_mem_tobuffer(target, sr.base, sr.length));
 	isc_buffer_forward(source, sr.length);
 	return (ISC_R_SUCCESS);
 }
@@ -91,118 +89,7 @@ towire_sink(ARGS_TOWIRE) {
 
 	UNUSED(cctx);
 
-	return (mem_tobuffer(target, rdata->data, rdata->length));
+	return (isc_mem_tobuffer(target, rdata->data, rdata->length));
 }
 
-static inline int
-compare_sink(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_sink);
-	REQUIRE(rdata1->length >= 3);
-	REQUIRE(rdata2->length >= 3);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_sink(ARGS_FROMSTRUCT) {
-	dns_rdata_sink_t *sink = source;
-
-	REQUIRE(type == dns_rdatatype_sink);
-	REQUIRE(source != NULL);
-	REQUIRE(sink->common.rdtype == type);
-	REQUIRE(sink->common.rdclass == rdclass);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	/* Meaning */
-	RETERR(uint8_tobuffer(sink->meaning, target));
-
-	/* Coding */
-	RETERR(uint8_tobuffer(sink->coding, target));
-
-	/* Subcoding */
-	RETERR(uint8_tobuffer(sink->subcoding, target));
-
-	/* Data */
-	return (mem_tobuffer(target, sink->data, sink->datalen));
-}
-
-static inline isc_result_t
-tostruct_sink(ARGS_TOSTRUCT) {
-	dns_rdata_sink_t *sink = target;
-	isc_region_t sr;
-
-	REQUIRE(rdata->type == dns_rdatatype_sink);
-	REQUIRE(target != NULL);
-	REQUIRE(rdata->length >= 3);
-
-	sink->common.rdclass = rdata->rdclass;
-	sink->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&sink->common, link);
-
-	dns_rdata_toregion(rdata, &sr);
-
-	/* Meaning */
-	if (sr.length < 1)
-		return (ISC_R_UNEXPECTEDEND);
-	sink->meaning = uint8_fromregion(&sr);
-	isc_region_consume(&sr, 1);
-
-	/* Coding */
-	if (sr.length < 1)
-		return (ISC_R_UNEXPECTEDEND);
-	sink->coding = uint8_fromregion(&sr);
-	isc_region_consume(&sr, 1);
-
-	/* Subcoding */
-	if (sr.length < 1)
-		return (ISC_R_UNEXPECTEDEND);
-	sink->subcoding = uint8_fromregion(&sr);
-	isc_region_consume(&sr, 1);
-
-	/* Data */
-	sink->datalen = sr.length;
-	sink->data = mem_maybedup(sr.base, sink->datalen);
-	if (sink->data == NULL)
-		return (ISC_R_NOMEMORY);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline void
-freestruct_sink(ARGS_FREESTRUCT) {
-	dns_rdata_sink_t *sink = (dns_rdata_sink_t *) source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(sink->common.rdtype == dns_rdatatype_sink);
-
-	if (sink->data != NULL)
-		free(sink->data);
-}
-
-static inline isc_boolean_t
-checkowner_sink(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_sink);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_sink(ARGS_COMPARE) {
-	return (compare_sink(rdata1, rdata2));
-}
 #endif	/* RDATA_GENERIC_SINK_40_C */

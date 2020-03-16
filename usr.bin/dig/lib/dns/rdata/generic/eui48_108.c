@@ -19,8 +19,6 @@
 
 #include <string.h>
 
-#define RRTYPE_EUI48_ATTRIBUTES (0)
-
 static inline isc_result_t
 totext_eui48(ARGS_TOTEXT) {
 	char buf[sizeof("xx-xx-xx-xx-xx-xx")];
@@ -33,7 +31,7 @@ totext_eui48(ARGS_TOTEXT) {
 	(void)snprintf(buf, sizeof(buf), "%02x-%02x-%02x-%02x-%02x-%02x",
 		       rdata->data[0], rdata->data[1], rdata->data[2],
 		       rdata->data[3], rdata->data[4], rdata->data[5]);
-	return (str_totext(buf, target));
+	return (isc_str_tobuffer(buf, target));
 }
 
 static inline isc_result_t
@@ -51,7 +49,7 @@ fromwire_eui48(ARGS_FROMWIRE) {
 	if (sregion.length != 6)
 		return (DNS_R_FORMERR);
 	isc_buffer_forward(source, sregion.length);
-	return (mem_tobuffer(target, sregion.base, sregion.length));
+	return (isc_mem_tobuffer(target, sregion.base, sregion.length));
 }
 
 static inline isc_result_t
@@ -62,82 +60,7 @@ towire_eui48(ARGS_TOWIRE) {
 
 	UNUSED(cctx);
 
-	return (mem_tobuffer(target, rdata->data, rdata->length));
-}
-
-static inline int
-compare_eui48(ARGS_COMPARE) {
-	isc_region_t region1;
-	isc_region_t region2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_eui48);
-	REQUIRE(rdata1->length == 6);
-	REQUIRE(rdata2->length == 6);
-
-	dns_rdata_toregion(rdata1, &region1);
-	dns_rdata_toregion(rdata2, &region2);
-	return (isc_region_compare(&region1, &region2));
-}
-
-static inline isc_result_t
-fromstruct_eui48(ARGS_FROMSTRUCT) {
-	dns_rdata_eui48_t *eui48 = source;
-
-	REQUIRE(type == dns_rdatatype_eui48);
-	REQUIRE(source != NULL);
-	REQUIRE(eui48->common.rdtype == type);
-	REQUIRE(eui48->common.rdclass == rdclass);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	return (mem_tobuffer(target, eui48->eui48, sizeof(eui48->eui48)));
-}
-
-static inline isc_result_t
-tostruct_eui48(ARGS_TOSTRUCT) {
-	dns_rdata_eui48_t *eui48 = target;
-
-	REQUIRE(rdata->type == dns_rdatatype_eui48);
-	REQUIRE(target != NULL);
-	REQUIRE(rdata->length == 6);
-
-	eui48->common.rdclass = rdata->rdclass;
-	eui48->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&eui48->common, link);
-
-	memmove(eui48->eui48, rdata->data, rdata->length);
-	return (ISC_R_SUCCESS);
-}
-
-static inline void
-freestruct_eui48(ARGS_FREESTRUCT) {
-	dns_rdata_eui48_t *eui48 = source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(eui48->common.rdtype == dns_rdatatype_eui48);
-
-	return;
-}
-
-static inline isc_boolean_t
-checkowner_eui48(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_eui48);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_eui48(ARGS_COMPARE) {
-	return (compare_eui48(rdata1, rdata2));
+	return (isc_mem_tobuffer(target, rdata->data, rdata->length));
 }
 
 #endif	/* RDATA_GENERIC_EUI48_108_C */

@@ -14,23 +14,18 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: ttl.c,v 1.3 2020/02/22 19:47:06 jung Exp $ */
+/* $Id: ttl.c,v 1.5 2020/02/25 05:00:42 jsg Exp $ */
 
 /*! \file */
 
-
-
 #include <ctype.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <isc/buffer.h>
-#include <isc/parseint.h>
-
 #include <isc/region.h>
-#include <string.h>
 #include <isc/util.h>
 
-#include <dns/result.h>
 #include <dns/ttl.h>
 
 #define RETERR(x) do { \
@@ -38,7 +33,6 @@
 	if (_r != ISC_R_SUCCESS) \
 		return (_r); \
 	} while (0)
-
 
 /*
  * Helper for dns_ttl_totext().

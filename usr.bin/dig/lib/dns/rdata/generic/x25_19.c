@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: x25_19.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
+/* $Id: x25_19.c,v 1.11 2020/02/26 18:47:25 florian Exp $ */
 
 /* Reviewed: Thu Mar 16 16:15:57 PST 2000 by bwelling */
 
@@ -22,8 +22,6 @@
 
 #ifndef RDATA_GENERIC_X25_19_C
 #define RDATA_GENERIC_X25_19_C
-
-#define RRTYPE_X25_ATTRIBUTES (0)
 
 static inline isc_result_t
 totext_x25(ARGS_TOTEXT) {
@@ -62,99 +60,7 @@ towire_x25(ARGS_TOWIRE) {
 	REQUIRE(rdata->type == dns_rdatatype_x25);
 	REQUIRE(rdata->length != 0);
 
-	return (mem_tobuffer(target, rdata->data, rdata->length));
-}
-
-static inline int
-compare_x25(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_x25);
-	REQUIRE(rdata1->length != 0);
-	REQUIRE(rdata2->length != 0);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_x25(ARGS_FROMSTRUCT) {
-	dns_rdata_x25_t *x25 = source;
-	uint8_t i;
-
-	REQUIRE(type == dns_rdatatype_x25);
-	REQUIRE(source != NULL);
-	REQUIRE(x25->common.rdtype == type);
-	REQUIRE(x25->common.rdclass == rdclass);
-	REQUIRE(x25->x25 != NULL && x25->x25_len != 0);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	if (x25->x25_len < 4)
-		return (ISC_R_RANGE);
-
-	for (i = 0; i < x25->x25_len; i++)
-		if (!isdigit(x25->x25[i] & 0xff))
-			return (ISC_R_RANGE);
-
-	RETERR(uint8_tobuffer(x25->x25_len, target));
-	return (mem_tobuffer(target, x25->x25, x25->x25_len));
-}
-
-static inline isc_result_t
-tostruct_x25(ARGS_TOSTRUCT) {
-	dns_rdata_x25_t *x25 = target;
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_x25);
-	REQUIRE(target != NULL);
-	REQUIRE(rdata->length != 0);
-
-	x25->common.rdclass = rdata->rdclass;
-	x25->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&x25->common, link);
-
-	dns_rdata_toregion(rdata, &r);
-	x25->x25_len = uint8_fromregion(&r);
-	isc_region_consume(&r, 1);
-	x25->x25 = mem_maybedup(r.base, x25->x25_len);
-	if (x25->x25 == NULL)
-		return (ISC_R_NOMEMORY);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline void
-freestruct_x25(ARGS_FREESTRUCT) {
-	dns_rdata_x25_t *x25 = source;
-	REQUIRE(source != NULL);
-	REQUIRE(x25->common.rdtype == dns_rdatatype_x25);
-
-	if (x25->x25 != NULL)
-		free(x25->x25);
-}
-
-static inline isc_boolean_t
-checkowner_x25(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_x25);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_x25(ARGS_COMPARE) {
-	return (compare_x25(rdata1, rdata2));
+	return (isc_mem_tobuffer(target, rdata->data, rdata->length));
 }
 
 #endif	/* RDATA_GENERIC_X25_19_C */

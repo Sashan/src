@@ -434,6 +434,7 @@
 ./usr/share/man/man1/skeyinit.1
 ./usr/share/man/man1/sleep.1
 ./usr/share/man/man1/smtp.1
+./usr/share/man/man1/sndioctl.1
 ./usr/share/man/man1/snmp.1
 ./usr/share/man/man1/sort.1
 ./usr/share/man/man1/sparc64/fdformat.1
@@ -1743,7 +1744,10 @@
 ./usr/share/man/man4/rge.4
 ./usr/share/man/man4/rgephy.4
 ./usr/share/man/man4/ricohrtc.4
+./usr/share/man/man4/rkanxdp.4
 ./usr/share/man/man4/rkclock.4
+./usr/share/man/man4/rkdrm.4
+./usr/share/man/man4/rkdwhdmi.4
 ./usr/share/man/man4/rkdwusb.4
 ./usr/share/man/man4/rkemmcphy.4
 ./usr/share/man/man4/rkgpio.4
@@ -1754,6 +1758,7 @@
 ./usr/share/man/man4/rkpmic.4
 ./usr/share/man/man4/rkpwm.4
 ./usr/share/man/man4/rktemp.4
+./usr/share/man/man4/rkvop.4
 ./usr/share/man/man4/rl.4
 ./usr/share/man/man4/rlphy.4
 ./usr/share/man/man4/route.4

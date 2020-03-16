@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: loc_29.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
+/* $Id: loc_29.c,v 1.12 2020/02/26 18:47:59 florian Exp $ */
 
 /* Reviewed: Wed Mar 15 18:13:09 PST 2000 by explorer */
 
@@ -22,8 +22,6 @@
 
 #ifndef RDATA_GENERIC_LOC_29_C
 #define RDATA_GENERIC_LOC_29_C
-
-#define RRTYPE_LOC_ATTRIBUTES (0)
 
 static inline isc_result_t
 totext_loc(ARGS_TOTEXT) {
@@ -139,7 +137,7 @@ totext_loc(ARGS_TOTEXT) {
 		 below ? "-" : "", altitude/100, altitude % 100,
 		 sbuf, hbuf, vbuf);
 
-	return (str_totext(buf, target));
+	return (isc_str_tobuffer(buf, target));
 }
 
 static inline isc_result_t
@@ -162,7 +160,7 @@ fromwire_loc(ARGS_FROMWIRE) {
 	if (sr.base[0] != 0) {
 		/* Treat as unknown. */
 		isc_buffer_forward(source, sr.length);
-		return (mem_tobuffer(target, sr.base, sr.length));
+		return (isc_mem_tobuffer(target, sr.base, sr.length));
 	}
 	if (sr.length < 16)
 		return (ISC_R_UNEXPECTEDEND);
@@ -216,7 +214,7 @@ fromwire_loc(ARGS_FROMWIRE) {
 
 	isc_buffer_activeregion(source, &sr);
 	isc_buffer_forward(source, 16);
-	return (mem_tobuffer(target, sr.base, 16));
+	return (isc_mem_tobuffer(target, sr.base, 16));
 }
 
 static inline isc_result_t
@@ -226,132 +224,7 @@ towire_loc(ARGS_TOWIRE) {
 	REQUIRE(rdata->type == dns_rdatatype_loc);
 	REQUIRE(rdata->length != 0);
 
-	return (mem_tobuffer(target, rdata->data, rdata->length));
-}
-
-static inline int
-compare_loc(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_loc);
-	REQUIRE(rdata1->length != 0);
-	REQUIRE(rdata2->length != 0);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_loc(ARGS_FROMSTRUCT) {
-	dns_rdata_loc_t *loc = source;
-	uint8_t c;
-
-	REQUIRE(type == dns_rdatatype_loc);
-	REQUIRE(source != NULL);
-	REQUIRE(loc->common.rdtype == type);
-	REQUIRE(loc->common.rdclass == rdclass);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	if (loc->v.v0.version != 0)
-		return (ISC_R_NOTIMPLEMENTED);
-	RETERR(uint8_tobuffer(loc->v.v0.version, target));
-
-	c = loc->v.v0.size;
-	if ((c&0xf) > 9 || ((c>>4)&0xf) > 9 || ((c>>4)&0xf) == 0)
-		return (ISC_R_RANGE);
-	RETERR(uint8_tobuffer(loc->v.v0.size, target));
-
-	c = loc->v.v0.horizontal;
-	if ((c&0xf) > 9 || ((c>>4)&0xf) > 9 || ((c>>4)&0xf) == 0)
-		return (ISC_R_RANGE);
-	RETERR(uint8_tobuffer(loc->v.v0.horizontal, target));
-
-	c = loc->v.v0.vertical;
-	if ((c&0xf) > 9 || ((c>>4)&0xf) > 9 || ((c>>4)&0xf) == 0)
-		return (ISC_R_RANGE);
-	RETERR(uint8_tobuffer(loc->v.v0.vertical, target));
-
-	if (loc->v.v0.latitude < (0x80000000UL - 90 * 3600000) ||
-	    loc->v.v0.latitude > (0x80000000UL + 90 * 3600000))
-		return (ISC_R_RANGE);
-	RETERR(uint32_tobuffer(loc->v.v0.latitude, target));
-
-	if (loc->v.v0.longitude < (0x80000000UL - 180 * 3600000) ||
-	    loc->v.v0.longitude > (0x80000000UL + 180 * 3600000))
-		return (ISC_R_RANGE);
-	RETERR(uint32_tobuffer(loc->v.v0.longitude, target));
-	return (uint32_tobuffer(loc->v.v0.altitude, target));
-}
-
-static inline isc_result_t
-tostruct_loc(ARGS_TOSTRUCT) {
-	dns_rdata_loc_t *loc = target;
-	isc_region_t r;
-	uint8_t version;
-
-	REQUIRE(rdata->type == dns_rdatatype_loc);
-	REQUIRE(target != NULL);
-	REQUIRE(rdata->length != 0);
-
-	dns_rdata_toregion(rdata, &r);
-	version = uint8_fromregion(&r);
-	if (version != 0)
-		return (ISC_R_NOTIMPLEMENTED);
-
-	loc->common.rdclass = rdata->rdclass;
-	loc->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&loc->common, link);
-
-	loc->v.v0.version = version;
-	isc_region_consume(&r, 1);
-	loc->v.v0.size = uint8_fromregion(&r);
-	isc_region_consume(&r, 1);
-	loc->v.v0.horizontal = uint8_fromregion(&r);
-	isc_region_consume(&r, 1);
-	loc->v.v0.vertical = uint8_fromregion(&r);
-	isc_region_consume(&r, 1);
-	loc->v.v0.latitude = uint32_fromregion(&r);
-	isc_region_consume(&r, 4);
-	loc->v.v0.longitude = uint32_fromregion(&r);
-	isc_region_consume(&r, 4);
-	loc->v.v0.altitude = uint32_fromregion(&r);
-	isc_region_consume(&r, 4);
-	return (ISC_R_SUCCESS);
-}
-
-static inline void
-freestruct_loc(ARGS_FREESTRUCT) {
-	dns_rdata_loc_t *loc = source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(loc->common.rdtype == dns_rdatatype_loc);
-
-	UNUSED(source);
-	UNUSED(loc);
-}
-
-static inline isc_boolean_t
-checkowner_loc(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_loc);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_loc(ARGS_COMPARE) {
-	return (compare_loc(rdata1, rdata2));
+	return (isc_mem_tobuffer(target, rdata->data, rdata->length));
 }
 
 #endif	/* RDATA_GENERIC_LOC_29_C */

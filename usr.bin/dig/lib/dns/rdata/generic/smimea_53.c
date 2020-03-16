@@ -17,8 +17,6 @@
 #ifndef RDATA_GENERIC_SMIMEA_53_C
 #define RDATA_GENERIC_SMIMEA_53_C
 
-#define RRTYPE_SMIMEA_ATTRIBUTES 0
-
 static inline isc_result_t
 totext_smimea(ARGS_TOTEXT) {
 
@@ -46,73 +44,7 @@ towire_smimea(ARGS_TOWIRE) {
 	UNUSED(cctx);
 
 	dns_rdata_toregion(rdata, &sr);
-	return (mem_tobuffer(target, sr.base, sr.length));
-}
-
-static inline int
-compare_smimea(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_smimea);
-	REQUIRE(rdata1->length != 0);
-	REQUIRE(rdata2->length != 0);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_smimea(ARGS_FROMSTRUCT) {
-
-	REQUIRE(type == dns_rdatatype_smimea);
-
-	return (generic_fromstruct_tlsa(rdclass, type, source, target));
-}
-
-static inline isc_result_t
-tostruct_smimea(ARGS_TOSTRUCT) {
-	dns_rdata_txt_t *txt = target;
-
-	REQUIRE(rdata->type == dns_rdatatype_smimea);
-	REQUIRE(target != NULL);
-
-	txt->common.rdclass = rdata->rdclass;
-	txt->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&txt->common, link);
-
-	return (generic_tostruct_tlsa(rdata, target));
-}
-
-static inline void
-freestruct_smimea(ARGS_FREESTRUCT) {
-	dns_rdata_txt_t *txt = source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(txt->common.rdtype == dns_rdatatype_smimea);
-
-	generic_freestruct_tlsa(source);
-}
-
-static inline isc_boolean_t
-checkowner_smimea(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_smimea);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_smimea(ARGS_COMPARE) {
-	return (compare_smimea(rdata1, rdata2));
+	return (isc_mem_tobuffer(target, sr.base, sr.length));
 }
 
 #endif	/* RDATA_GENERIC_SMIMEA_53_C */

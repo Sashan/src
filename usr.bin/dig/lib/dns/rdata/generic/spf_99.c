@@ -14,14 +14,12 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: spf_99.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
+/* $Id: spf_99.c,v 1.11 2020/02/26 18:47:25 florian Exp $ */
 
 /* Reviewed: Thu Mar 16 15:40:00 PST 2000 by bwelling */
 
 #ifndef RDATA_GENERIC_SPF_99_C
 #define RDATA_GENERIC_SPF_99_C
-
-#define RRTYPE_SPF_ATTRIBUTES (0)
 
 static inline isc_result_t
 totext_spf(ARGS_TOTEXT) {
@@ -54,70 +52,7 @@ towire_spf(ARGS_TOWIRE) {
 
 	UNUSED(cctx);
 
-	return (mem_tobuffer(target, rdata->data, rdata->length));
+	return (isc_mem_tobuffer(target, rdata->data, rdata->length));
 }
 
-static inline int
-compare_spf(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_spf);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_spf(ARGS_FROMSTRUCT) {
-
-	REQUIRE(type == dns_rdatatype_spf);
-
-	return (generic_fromstruct_txt(rdclass, type, source, target));
-}
-
-static inline isc_result_t
-tostruct_spf(ARGS_TOSTRUCT) {
-	dns_rdata_spf_t *spf = target;
-
-	REQUIRE(rdata->type == dns_rdatatype_spf);
-	REQUIRE(target != NULL);
-
-	spf->common.rdclass = rdata->rdclass;
-	spf->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&spf->common, link);
-
-	return (generic_tostruct_txt(rdata, target));
-}
-
-static inline void
-freestruct_spf(ARGS_FREESTRUCT) {
-	dns_rdata_spf_t *txt = source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(txt->common.rdtype == dns_rdatatype_spf);
-
-	generic_freestruct_txt(source);
-}
-
-static inline isc_boolean_t
-checkowner_spf(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_spf);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_spf(ARGS_COMPARE) {
-	return (compare_spf(rdata1, rdata2));
-}
 #endif	/* RDATA_GENERIC_SPF_99_C */

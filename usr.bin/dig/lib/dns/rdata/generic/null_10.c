@@ -14,14 +14,12 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: null_10.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
+/* $Id: null_10.c,v 1.11 2020/02/26 18:47:25 florian Exp $ */
 
 /* Reviewed: Thu Mar 16 13:57:50 PST 2000 by explorer */
 
 #ifndef RDATA_GENERIC_NULL_10_C
 #define RDATA_GENERIC_NULL_10_C
-
-#define RRTYPE_NULL_ATTRIBUTES (0)
 
 static inline isc_result_t
 totext_null(ARGS_TOTEXT) {
@@ -43,7 +41,7 @@ fromwire_null(ARGS_FROMWIRE) {
 
 	isc_buffer_activeregion(source, &sr);
 	isc_buffer_forward(source, sr.length);
-	return (mem_tobuffer(target, sr.base, sr.length));
+	return (isc_mem_tobuffer(target, sr.base, sr.length));
 }
 
 static inline isc_result_t
@@ -52,87 +50,7 @@ towire_null(ARGS_TOWIRE) {
 
 	UNUSED(cctx);
 
-	return (mem_tobuffer(target, rdata->data, rdata->length));
-}
-
-static inline int
-compare_null(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_null);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_null(ARGS_FROMSTRUCT) {
-	dns_rdata_null_t *null = source;
-
-	REQUIRE(type == dns_rdatatype_null);
-	REQUIRE(source != NULL);
-	REQUIRE(null->common.rdtype == type);
-	REQUIRE(null->common.rdclass == rdclass);
-	REQUIRE(null->data != NULL || null->length == 0);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	return (mem_tobuffer(target, null->data, null->length));
-}
-
-static inline isc_result_t
-tostruct_null(ARGS_TOSTRUCT) {
-	dns_rdata_null_t *null = target;
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_null);
-	REQUIRE(target != NULL);
-
-	null->common.rdclass = rdata->rdclass;
-	null->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&null->common, link);
-
-	dns_rdata_toregion(rdata, &r);
-	null->length = r.length;
-	null->data = mem_maybedup(r.base, r.length);
-	if (null->data == NULL)
-		return (ISC_R_NOMEMORY);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline void
-freestruct_null(ARGS_FREESTRUCT) {
-	dns_rdata_null_t *null = source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(null->common.rdtype == dns_rdatatype_null);
-
-	if (null->data != NULL)
-		free(null->data);
-}
-
-static inline isc_boolean_t
-checkowner_null(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_null);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_null(ARGS_COMPARE) {
-	return (compare_null(rdata1, rdata2));
+	return (isc_mem_tobuffer(target, rdata->data, rdata->length));
 }
 
 #endif	/* RDATA_GENERIC_NULL_10_C */

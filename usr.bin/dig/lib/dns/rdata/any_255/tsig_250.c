@@ -14,15 +14,12 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: tsig_250.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
+/* $Id: tsig_250.c,v 1.9 2020/02/26 18:47:58 florian Exp $ */
 
 /* Reviewed: Thu Mar 16 13:39:43 PST 2000 by gson */
 
 #ifndef RDATA_ANY_255_TSIG_250_C
 #define RDATA_ANY_255_TSIG_250_C
-
-#define RRTYPE_TSIG_ATTRIBUTES \
-	(DNS_RDATATYPEATTR_META | DNS_RDATATYPEATTR_NOTQUESTION)
 
 static inline isc_result_t
 totext_any_tsig(ARGS_TOTEXT) {
@@ -49,7 +46,7 @@ totext_any_tsig(ARGS_TOTEXT) {
 	dns_name_fromregion(&name, &sr);
 	sub = name_prefix(&name, tctx->origin, &prefix);
 	RETERR(dns_name_totext(&prefix, sub, target));
-	RETERR(str_totext(" ", target));
+	RETERR(isc_str_tobuffer(" ", target));
 	isc_region_consume(&sr, name_length(&name));
 
 	/*
@@ -70,7 +67,7 @@ totext_any_tsig(ARGS_TOTEXT) {
 		sigtime /= 10;
 	} while (sigtime != 0);
 	bufp++;
-	RETERR(str_totext(bufp, target));
+	RETERR(isc_str_tobuffer(bufp, target));
 
 	/*
 	 * Fudge.
@@ -78,7 +75,7 @@ totext_any_tsig(ARGS_TOTEXT) {
 	n = uint16_fromregion(&sr);
 	isc_region_consume(&sr, 2);
 	snprintf(buf, sizeof(buf), "%u ", n);
-	RETERR(str_totext(buf, target));
+	RETERR(isc_str_tobuffer(buf, target));
 
 	/*
 	 * Signature Size.
@@ -86,7 +83,7 @@ totext_any_tsig(ARGS_TOTEXT) {
 	n = uint16_fromregion(&sr);
 	isc_region_consume(&sr, 2);
 	snprintf(buf, sizeof(buf), "%u", n);
-	RETERR(str_totext(buf, target));
+	RETERR(isc_str_tobuffer(buf, target));
 
 	/*
 	 * Signature.
@@ -95,17 +92,17 @@ totext_any_tsig(ARGS_TOTEXT) {
 	sigr = sr;
 	sigr.length = n;
 	if ((tctx->flags & DNS_STYLEFLAG_MULTILINE) != 0)
-		RETERR(str_totext(" (", target));
-	RETERR(str_totext(tctx->linebreak, target));
+		RETERR(isc_str_tobuffer(" (", target));
+	RETERR(isc_str_tobuffer(tctx->linebreak, target));
 	if (tctx->width == 0)   /* No splitting */
 		RETERR(isc_base64_totext(&sigr, 60, "", target));
 	else
 		RETERR(isc_base64_totext(&sigr, tctx->width - 2,
 					 tctx->linebreak, target));
 	if ((tctx->flags & DNS_STYLEFLAG_MULTILINE) != 0)
-		RETERR(str_totext(" ) ", target));
+		RETERR(isc_str_tobuffer(" ) ", target));
 	else
-		RETERR(str_totext(" ", target));
+		RETERR(isc_str_tobuffer(" ", target));
 	isc_region_consume(&sr, n);
 
 	/*
@@ -114,7 +111,7 @@ totext_any_tsig(ARGS_TOTEXT) {
 	n = uint16_fromregion(&sr);
 	isc_region_consume(&sr, 2);
 	snprintf(buf, sizeof(buf), "%u ", n);
-	RETERR(str_totext(buf, target));
+	RETERR(isc_str_tobuffer(buf, target));
 
 	/*
 	 * Error.
@@ -129,7 +126,7 @@ totext_any_tsig(ARGS_TOTEXT) {
 	n = uint16_fromregion(&sr);
 	isc_region_consume(&sr, 2);
 	snprintf(buf, sizeof(buf), " %u ", n);
-	RETERR(str_totext(buf, target));
+	RETERR(isc_str_tobuffer(buf, target));
 
 	/*
 	 * Other.
@@ -166,7 +163,7 @@ fromwire_any_tsig(ARGS_FROMWIRE) {
 	 */
 	if (sr.length < 8)
 		return (ISC_R_UNEXPECTEDEND);
-	RETERR(mem_tobuffer(target, sr.base, 8));
+	RETERR(isc_mem_tobuffer(target, sr.base, 8));
 	isc_region_consume(&sr, 8);
 	isc_buffer_forward(source, 8);
 
@@ -178,7 +175,7 @@ fromwire_any_tsig(ARGS_FROMWIRE) {
 	n = uint16_fromregion(&sr);
 	if (sr.length < n + 2)
 		return (ISC_R_UNEXPECTEDEND);
-	RETERR(mem_tobuffer(target, sr.base, n + 2));
+	RETERR(isc_mem_tobuffer(target, sr.base, n + 2));
 	isc_region_consume(&sr, n + 2);
 	isc_buffer_forward(source, n + 2);
 
@@ -187,7 +184,7 @@ fromwire_any_tsig(ARGS_FROMWIRE) {
 	 */
 	if (sr.length < 4)
 		return (ISC_R_UNEXPECTEDEND);
-	RETERR(mem_tobuffer(target, sr.base,  4));
+	RETERR(isc_mem_tobuffer(target, sr.base,  4));
 	isc_region_consume(&sr, 4);
 	isc_buffer_forward(source, 4);
 
@@ -200,7 +197,7 @@ fromwire_any_tsig(ARGS_FROMWIRE) {
 	if (sr.length < n + 2)
 		return (ISC_R_UNEXPECTEDEND);
 	isc_buffer_forward(source, n + 2);
-	return (mem_tobuffer(target, sr.base, n + 2));
+	return (isc_mem_tobuffer(target, sr.base, n + 2));
 }
 
 static inline isc_result_t
@@ -219,36 +216,7 @@ towire_any_tsig(ARGS_TOWIRE) {
 	dns_name_fromregion(&name, &sr);
 	RETERR(dns_name_towire(&name, cctx, target));
 	isc_region_consume(&sr, name_length(&name));
-	return (mem_tobuffer(target, sr.base, sr.length));
-}
-
-static inline int
-compare_any_tsig(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-	dns_name_t name1;
-	dns_name_t name2;
-	int order;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_tsig);
-	REQUIRE(rdata1->rdclass == dns_rdataclass_any);
-	REQUIRE(rdata1->length != 0);
-	REQUIRE(rdata2->length != 0);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	dns_name_init(&name1, NULL);
-	dns_name_init(&name2, NULL);
-	dns_name_fromregion(&name1, &r1);
-	dns_name_fromregion(&name2, &r2);
-	order = dns_name_rdatacompare(&name1, &name2);
-	if (order != 0)
-		return (order);
-	isc_region_consume(&r1, name_length(&name1));
-	isc_region_consume(&r2, name_length(&name2));
-	return (isc_region_compare(&r1, &r2));
+	return (isc_mem_tobuffer(target, sr.base, sr.length));
 }
 
 static inline isc_result_t
@@ -295,7 +263,7 @@ fromstruct_any_tsig(ARGS_FROMSTRUCT) {
 	/*
 	 * Signature.
 	 */
-	RETERR(mem_tobuffer(target, tsig->signature, tsig->siglen));
+	RETERR(isc_mem_tobuffer(target, tsig->signature, tsig->siglen));
 
 	isc_buffer_availableregion(target, &tr);
 	if (tr.length < 2 + 2 + 2)
@@ -319,7 +287,7 @@ fromstruct_any_tsig(ARGS_FROMSTRUCT) {
 	/*
 	 * Other Data.
 	 */
-	return (mem_tobuffer(target, tsig->other, tsig->otherlen));
+	return (isc_mem_tobuffer(target, tsig->other, tsig->otherlen));
 }
 
 static inline isc_result_t
@@ -427,25 +395,6 @@ freestruct_any_tsig(ARGS_FREESTRUCT) {
 	dns_name_free(&tsig->algorithm);
 	free(tsig->signature);
 	free(tsig->other);
-}
-
-static inline isc_boolean_t
-checkowner_any_tsig(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_tsig);
-	REQUIRE(rdclass == dns_rdataclass_any);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_any_tsig(ARGS_COMPARE) {
-	return (compare_any_tsig(rdata1, rdata2));
 }
 
 #endif	/* RDATA_ANY_255_TSIG_250_C */

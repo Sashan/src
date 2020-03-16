@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: message.c,v 1.11 2020/02/23 08:56:03 florian Exp $ */
+/* $Id: message.c,v 1.16 2020/02/24 17:57:54 florian Exp $ */
 
 /*! \file */
 
@@ -22,14 +22,14 @@
  *** Imports
  ***/
 
+#include <sys/socket.h>
+#include <arpa/inet.h>
 
 #include <ctype.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <isc/buffer.h>
-
-
-#include <string.h>		/* Required for HP/UX (and others?) */
 #include <isc/util.h>
 
 #include <dns/log.h>
@@ -1028,63 +1028,6 @@ update(dns_section_t section, dns_rdataclass_t rdclass) {
 	return (ISC_FALSE);
 }
 
-/*
- * Check to confirm that all DNSSEC records (DS, NSEC, NSEC3) have
- * covering RRSIGs.
- */
-static isc_boolean_t
-auth_signed(dns_namelist_t *section) {
-	dns_name_t *name;
-
-	for (name = ISC_LIST_HEAD(*section);
-	     name != NULL;
-	     name = ISC_LIST_NEXT(name, link))
-	{
-		int auth_dnssec = 0, auth_rrsig = 0;
-		dns_rdataset_t *rds;
-
-		for (rds = ISC_LIST_HEAD(name->list);
-		     rds != NULL;
-		     rds = ISC_LIST_NEXT(rds, link))
-		{
-			switch (rds->type) {
-			case dns_rdatatype_ds:
-				auth_dnssec |= 0x1;
-				break;
-			case dns_rdatatype_nsec:
-				auth_dnssec |= 0x2;
-				break;
-			case dns_rdatatype_nsec3:
-				auth_dnssec |= 0x4;
-				break;
-			case dns_rdatatype_rrsig:
-				break;
-			default:
-				continue;
-			}
-
-			switch (rds->covers) {
-			case dns_rdatatype_ds:
-				auth_rrsig |= 0x1;
-				break;
-			case dns_rdatatype_nsec:
-				auth_rrsig |= 0x2;
-				break;
-			case dns_rdatatype_nsec3:
-				auth_rrsig |= 0x4;
-				break;
-			default:
-				break;
-			}
-		}
-
-		if (auth_dnssec != auth_rrsig)
-			return (ISC_FALSE);
-	}
-
-	return (ISC_TRUE);
-}
-
 static isc_result_t
 getsection(isc_buffer_t *source, dns_message_t *msg, dns_decompress_t *dctx,
 	   dns_section_t sectionid, unsigned int options)
@@ -1092,7 +1035,6 @@ getsection(isc_buffer_t *source, dns_message_t *msg, dns_decompress_t *dctx,
 	isc_region_t r;
 	unsigned int count, rdatalen;
 	dns_name_t *name = NULL;
-	dns_name_t *name2 = NULL;
 	dns_offsets_t *offsets;
 	dns_rdataset_t *rdataset;
 	dns_rdatalist_t *rdatalist;
@@ -1103,10 +1045,9 @@ getsection(isc_buffer_t *source, dns_message_t *msg, dns_decompress_t *dctx,
 	dns_ttl_t ttl;
 	dns_namelist_t *section;
 	isc_boolean_t free_name = ISC_FALSE, free_rdataset = ISC_FALSE;
-	isc_boolean_t preserve_order, best_effort, seen_problem;
+	isc_boolean_t best_effort, seen_problem;
 	isc_boolean_t issigzero;
 
-	preserve_order = ISC_TF(options & DNS_MESSAGEPARSE_PRESERVEORDER);
 	best_effort = ISC_TF(options & DNS_MESSAGEPARSE_BESTEFFORT);
 	seen_problem = ISC_FALSE;
 
@@ -1114,10 +1055,6 @@ getsection(isc_buffer_t *source, dns_message_t *msg, dns_decompress_t *dctx,
 
 	for (count = 0; count < msg->counts[sectionid]; count++) {
 		int recstart = source->current;
-		isc_boolean_t skip_name_search, skip_type_search;
-
-		skip_name_search = ISC_FALSE;
-		skip_type_search = ISC_FALSE;
 		free_rdataset = ISC_FALSE;
 
 		name = malloc(sizeof(dns_name_t));
@@ -1203,8 +1140,6 @@ getsection(isc_buffer_t *source, dns_message_t *msg, dns_decompress_t *dctx,
 			    count != msg->counts[sectionid]  - 1)
 				DO_FORMERR;
 			msg->sigstart = recstart;
-			skip_name_search = ISC_TRUE;
-			skip_type_search = ISC_TRUE;
 		} else if (rdtype == dns_rdatatype_opt) {
 			/*
 			 * The name of an OPT record must be ".", it
@@ -1215,8 +1150,6 @@ getsection(isc_buffer_t *source, dns_message_t *msg, dns_decompress_t *dctx,
 			    sectionid != DNS_SECTION_ADDITIONAL ||
 			    msg->opt != NULL)
 				DO_FORMERR;
-			skip_name_search = ISC_TRUE;
-			skip_type_search = ISC_TRUE;
 		} else if (rdtype == dns_rdatatype_tkey) {
 			/*
 			 * A TKEY must be in the additional section if this
@@ -1302,8 +1235,6 @@ getsection(isc_buffer_t *source, dns_message_t *msg, dns_decompress_t *dctx,
 				    count != msg->counts[sectionid]  - 1)
 					DO_FORMERR;
 				msg->sigstart = recstart;
-				skip_name_search = ISC_TRUE;
-				skip_type_search = ISC_TRUE;
 				issigzero = ISC_TRUE;
 			} else {
 				if (msg->rdclass != dns_rdataclass_any &&
@@ -1317,122 +1248,48 @@ getsection(isc_buffer_t *source, dns_message_t *msg, dns_decompress_t *dctx,
 		 * Check the ownername of NSEC3 records
 		 */
 		if (rdtype == dns_rdatatype_nsec3 &&
-		    !dns_rdata_checkowner(name, msg->rdclass, rdtype,
+		    !dns_rdata_checkowner_nsec3(name, msg->rdclass, rdtype,
 					  ISC_FALSE)) {
 			result = DNS_R_BADOWNERNAME;
 			goto cleanup;
 		}
 
-		/*
-		 * If we are doing a dynamic update or this is a meta-type,
-		 * don't bother searching for a name, just append this one
-		 * to the end of the message.
-		 */
-		if (preserve_order || msg->opcode == dns_opcode_update ||
-		    skip_name_search) {
-			if (rdtype != dns_rdatatype_opt &&
-			    rdtype != dns_rdatatype_tsig &&
-			    !issigzero)
-			{
-				ISC_LIST_APPEND(*section, name, link);
-				free_name = ISC_FALSE;
-			}
-		} else {
-			/*
-			 * Run through the section, looking to see if this name
-			 * is already there.  If it is found, put back the
-			 * allocated name since we no longer need it, and set
-			 * our name pointer to point to the name we found.
-			 */
-			result = findname(&name2, name, section);
-
-			/*
-			 * If it is a new name, append to the section.
-			 */
-			if (result == ISC_R_SUCCESS) {
-				free(name);
-				name = name2;
-			} else {
-				ISC_LIST_APPEND(*section, name, link);
-			}
+		if (rdtype != dns_rdatatype_opt &&
+		    rdtype != dns_rdatatype_tsig && !issigzero) {
+			ISC_LIST_APPEND(*section, name, link);
 			free_name = ISC_FALSE;
 		}
 
-		/*
-		 * Search name for the particular type and class.
-		 * Skip this stage if in update mode or this is a meta-type.
-		 */
-		if (preserve_order || msg->opcode == dns_opcode_update ||
-		    skip_type_search)
-			result = ISC_R_NOTFOUND;
-		else {
-			/*
-			 * If this is a type that can only occur in
-			 * the question section, fail.
-			 */
-			if (dns_rdatatype_questiononly(rdtype))
-				DO_FORMERR;
+		rdataset = malloc(sizeof(dns_rdataset_t));
+		if (rdataset == NULL) {
+			result = ISC_R_NOMEMORY;
+			goto cleanup;
+		}
+		free_rdataset = ISC_TRUE;
 
-			rdataset = NULL;
-			result = dns_message_find(name, rdclass, rdtype,
-						   covers, &rdataset);
+		rdatalist = newrdatalist(msg);
+		if (rdatalist == NULL) {
+			result = ISC_R_NOMEMORY;
+			goto cleanup;
 		}
 
-		/*
-		 * If we found an rdataset that matches, we need to
-		 * append this rdata to that set.  If we did not, we need
-		 * to create a new rdatalist, store the important bits there,
-		 * convert it to an rdataset, and link the latter to the name.
-		 * Yuck.  When appending, make certain that the type isn't
-		 * a singleton type, such as SOA or CNAME.
-		 *
-		 * Note that this check will be bypassed when preserving order,
-		 * the opcode is an update, or the type search is skipped.
-		 */
-		if (result == ISC_R_SUCCESS) {
-			if (dns_rdatatype_issingleton(rdtype)) {
-				dns_rdata_t *first;
-				dns_rdatalist_fromrdataset(rdataset,
-							   &rdatalist);
-				first = ISC_LIST_HEAD(rdatalist->rdata);
-				INSIST(first != NULL);
-				if (dns_rdata_compare(rdata, first) != 0)
-					DO_FORMERR;
-			}
-		}
+		rdatalist->type = rdtype;
+		rdatalist->covers = covers;
+		rdatalist->rdclass = rdclass;
+		rdatalist->ttl = ttl;
+		ISC_LIST_INIT(rdatalist->rdata);
 
-		if (result == ISC_R_NOTFOUND) {
-			rdataset = malloc(sizeof(dns_rdataset_t));
-			if (rdataset == NULL) {
-				result = ISC_R_NOMEMORY;
-				goto cleanup;
-			}
-			free_rdataset = ISC_TRUE;
-
-			rdatalist = newrdatalist(msg);
-			if (rdatalist == NULL) {
-				result = ISC_R_NOMEMORY;
-				goto cleanup;
-			}
-
-			rdatalist->type = rdtype;
-			rdatalist->covers = covers;
-			rdatalist->rdclass = rdclass;
-			rdatalist->ttl = ttl;
-			ISC_LIST_INIT(rdatalist->rdata);
-
-			dns_rdataset_init(rdataset);
-			RUNTIME_CHECK(dns_rdatalist_tordataset(rdatalist,
+		dns_rdataset_init(rdataset);
+		RUNTIME_CHECK(dns_rdatalist_tordataset(rdatalist,
 							       rdataset)
-				      == ISC_R_SUCCESS);
+			      == ISC_R_SUCCESS);
 
-			if (rdtype != dns_rdatatype_opt &&
-			    rdtype != dns_rdatatype_tsig &&
-			    !issigzero)
-			{
-				ISC_LIST_APPEND(name->list, rdataset, link);
-				free_rdataset = ISC_FALSE;
-			}
+		if (rdtype != dns_rdatatype_opt &&
+		    rdtype != dns_rdatatype_tsig &&
+		    !issigzero)
+		{
+			ISC_LIST_APPEND(name->list, rdataset, link);
+			free_rdataset = ISC_FALSE;
 		}
 
 		/*
@@ -1499,19 +1356,6 @@ getsection(isc_buffer_t *source, dns_message_t *msg, dns_decompress_t *dctx,
 		INSIST(free_name == ISC_FALSE);
 		INSIST(free_rdataset == ISC_FALSE);
 	}
-
-	/*
-	 * If any of DS, NSEC or NSEC3 appeared in the
-	 * authority section of a query response without
-	 * a covering RRSIG, FORMERR
-	 */
-	if (sectionid == DNS_SECTION_AUTHORITY &&
-	    msg->opcode == dns_opcode_query &&
-	    ((msg->flags & DNS_MESSAGEFLAG_QR) != 0) &&
-	    ((msg->flags & DNS_MESSAGEFLAG_TC) == 0) &&
-	    !preserve_order &&
-	    !auth_signed(section))
-		DO_FORMERR;
 
 	if (seen_problem)
 		return (DNS_R_RECOVERABLE);
@@ -1781,41 +1625,6 @@ dns_message_rendersection(dns_message_t *msg, dns_section_t sectionid)
 	msg->buffer->length -= msg->reserved;
 
 	total = 0;
-
-	/*
-	 * Render required glue first.  Set TC if it won't fit.
-	 */
-	name = ISC_LIST_HEAD(*section);
-	if (name != NULL) {
-		rdataset = ISC_LIST_HEAD(name->list);
-		if (rdataset != NULL &&
-		    (rdataset->attributes & DNS_RDATASETATTR_REQUIREDGLUE) != 0 &&
-		    (rdataset->attributes & DNS_RDATASETATTR_RENDERED) == 0) {
-			const void *order_arg = msg->order_arg;
-			st = *(msg->buffer);
-			count = 0;
-			result = dns_rdataset_towiresorted(rdataset,
-							   name,
-							   msg->cctx,
-							   msg->buffer,
-							   msg->order,
-							   order_arg,
-							   &count);
-			total += count;
-			if (result == ISC_R_NOSPACE)
-				msg->flags |= DNS_MESSAGEFLAG_TC;
-			if (result != ISC_R_SUCCESS) {
-				INSIST(st.used < 65536);
-				dns_compress_rollback(msg->cctx,
-						      (uint16_t)st.used);
-				*(msg->buffer) = st;  /* rollback */
-				msg->buffer->length += msg->reserved;
-				msg->counts[sectionid] += total;
-				return (result);
-			}
-			rdataset->attributes |= DNS_RDATASETATTR_RENDERED;
-		}
-	}
 
 	do {
 		name = ISC_LIST_HEAD(*section);

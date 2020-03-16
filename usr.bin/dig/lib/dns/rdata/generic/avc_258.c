@@ -17,8 +17,6 @@
 #ifndef RDATA_GENERIC_AVC_258_C
 #define RDATA_GENERIC_AVC_258_C
 
-#define RRTYPE_AVC_ATTRIBUTES (0)
-
 static inline isc_result_t
 totext_avc(ARGS_TOTEXT) {
 
@@ -50,70 +48,7 @@ towire_avc(ARGS_TOWIRE) {
 
 	UNUSED(cctx);
 
-	return (mem_tobuffer(target, rdata->data, rdata->length));
+	return (isc_mem_tobuffer(target, rdata->data, rdata->length));
 }
 
-static inline int
-compare_avc(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_avc);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_avc(ARGS_FROMSTRUCT) {
-
-	REQUIRE(type == dns_rdatatype_avc);
-
-	return (generic_fromstruct_txt(rdclass, type, source, target));
-}
-
-static inline isc_result_t
-tostruct_avc(ARGS_TOSTRUCT) {
-	dns_rdata_avc_t *avc = target;
-
-	REQUIRE(rdata->type == dns_rdatatype_avc);
-	REQUIRE(target != NULL);
-
-	avc->common.rdclass = rdata->rdclass;
-	avc->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&avc->common, link);
-
-	return (generic_tostruct_txt(rdata, target));
-}
-
-static inline void
-freestruct_avc(ARGS_FREESTRUCT) {
-	dns_rdata_avc_t *txt = source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(txt->common.rdtype == dns_rdatatype_avc);
-
-	generic_freestruct_txt(source);
-}
-
-static inline isc_boolean_t
-checkowner_avc(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_avc);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_avc(ARGS_COMPARE) {
-	return (compare_avc(rdata1, rdata2));
-}
 #endif	/* RDATA_GENERIC_AVC_258_C */

@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh-sk.c,v 1.27 2020/02/06 22:30:54 naddy Exp $ */
+/* $OpenBSD: ssh-sk.c,v 1.29 2020/03/06 18:25:48 markus Exp $ */
 /*
  * Copyright (c) 2019 Google LLC
  *
@@ -94,6 +94,10 @@ sshsk_open(const char *path)
 	struct sshsk_provider *ret = NULL;
 	uint32_t version;
 
+	if (path == NULL || *path == '\0') {
+		error("No FIDO SecurityKeyProvider specified");
+		return NULL;
+	}
 	if ((ret = calloc(1, sizeof(*ret))) == NULL) {
 		error("%s: calloc failed", __func__);
 		return NULL;
@@ -588,7 +592,7 @@ sshsk_ed25519_sig(struct sk_sign_response *resp, struct sshbuf *sig)
 #endif
 	r = 0;
  out:
-	return 0;
+	return r;
 }
 
 int

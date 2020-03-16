@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: a_1.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
+/* $Id: a_1.c,v 1.11 2020/02/26 18:47:58 florian Exp $ */
 
 /* by Bjorn.Victor@it.uu.se, 2005-05-07 */
 /* Based on generic/soa_6.c and generic/mx_15.c */
@@ -23,8 +23,6 @@
 #define RDATA_CH_3_A_1_C
 
 #include <isc/net.h>
-
-#define RRTYPE_A_ATTRIBUTES (0)
 
 static inline isc_result_t
 totext_ch_a(ARGS_TOTEXT) {
@@ -51,8 +49,8 @@ totext_ch_a(ARGS_TOTEXT) {
 	RETERR(dns_name_totext(&prefix, sub, target));
 
 	snprintf(buf, sizeof(buf), "%o", addr); /* note octal */
-	RETERR(str_totext(" ", target));
-	return (str_totext(buf, target));
+	RETERR(isc_str_tobuffer(" ", target));
+	return (isc_str_tobuffer(buf, target));
 }
 
 static inline isc_result_t
@@ -117,110 +115,4 @@ towire_ch_a(ARGS_TOWIRE) {
 	return (ISC_R_SUCCESS);
 }
 
-static inline int
-compare_ch_a(ARGS_COMPARE) {
-	dns_name_t name1;
-	dns_name_t name2;
-	isc_region_t region1;
-	isc_region_t region2;
-	int order;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_a);
-	REQUIRE(rdata1->rdclass == dns_rdataclass_ch);
-	REQUIRE(rdata1->length != 0);
-	REQUIRE(rdata2->length != 0);
-
-	dns_name_init(&name1, NULL);
-	dns_name_init(&name2, NULL);
-
-	dns_rdata_toregion(rdata1, &region1);
-	dns_rdata_toregion(rdata2, &region2);
-
-	dns_name_fromregion(&name1, &region1);
-	dns_name_fromregion(&name2, &region2);
-	isc_region_consume(&region1, name_length(&name1));
-	isc_region_consume(&region2, name_length(&name2));
-
-	order = dns_name_rdatacompare(&name1, &name2);
-	if (order != 0)
-		return (order);
-
-	order = memcmp(rdata1->data, rdata2->data, 2);
-	if (order != 0)
-		order = (order < 0) ? -1 : 1;
-	return (order);
-}
-
-static inline isc_result_t
-fromstruct_ch_a(ARGS_FROMSTRUCT) {
-	dns_rdata_ch_a_t *a = source;
-	isc_region_t region;
-
-	REQUIRE(type == dns_rdatatype_a);
-	REQUIRE(source != NULL);
-	REQUIRE(a->common.rdtype == type);
-	REQUIRE(a->common.rdclass == rdclass);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	dns_name_toregion(&a->ch_addr_dom, &region);
-	RETERR(isc_buffer_copyregion(target, &region));
-
-	return (uint16_tobuffer(ntohs(a->ch_addr), target));
-}
-
-static inline isc_result_t
-tostruct_ch_a(ARGS_TOSTRUCT) {
-	dns_rdata_ch_a_t *a = target;
-	isc_region_t region;
-	dns_name_t name;
-
-	REQUIRE(rdata->type == dns_rdatatype_a);
-	REQUIRE(rdata->rdclass == dns_rdataclass_ch);
-	REQUIRE(rdata->length != 0);
-
-	a->common.rdclass = rdata->rdclass;
-	a->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&a->common, link);
-
-	dns_rdata_toregion(rdata, &region);
-
-	dns_name_init(&name, NULL);
-	dns_name_fromregion(&name, &region);
-	isc_region_consume(&region, name_length(&name));
-
-	dns_name_init(&a->ch_addr_dom, NULL);
-	RETERR(name_duporclone(&name, &a->ch_addr_dom));
-	a->ch_addr = htons(uint16_fromregion(&region));
-	return (ISC_R_SUCCESS);
-}
-
-static inline void
-freestruct_ch_a(ARGS_FREESTRUCT) {
-	dns_rdata_ch_a_t *a = source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(a->common.rdtype == dns_rdatatype_a);
-
-	dns_name_free(&a->ch_addr_dom);
-}
-
-static inline isc_boolean_t
-checkowner_ch_a(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_a);
-	REQUIRE(rdclass == dns_rdataclass_ch);
-
-	UNUSED(type);
-
-	return (dns_name_ishostname(name, wildcard));
-}
-
-static inline int
-casecompare_ch_a(ARGS_COMPARE) {
-	return (compare_ch_a(rdata1, rdata2));
-}
 #endif	/* RDATA_CH_3_A_1_C */

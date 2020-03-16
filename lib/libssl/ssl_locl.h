@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_locl.h,v 1.266 2020/02/21 16:18:52 jsing Exp $ */
+/* $OpenBSD: ssl_locl.h,v 1.271 2020/03/16 15:25:14 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -776,6 +776,25 @@ typedef struct ssl_internal_st {
 	int empty_record_count;
 } SSL_INTERNAL;
 
+typedef struct ssl3_record_internal_st {
+	int type;               /* type of record */
+	unsigned int length;    /* How many bytes available */
+	unsigned int padding_length; /* Number of padding bytes. */
+	unsigned int off;       /* read/write offset into 'buf' */
+	unsigned char *data;    /* pointer to the record data */
+	unsigned char *input;   /* where the decode bytes are */
+	unsigned long epoch;    /* epoch number, needed by DTLS1 */
+	unsigned char seq_num[8]; /* sequence number, needed by DTLS1 */
+} SSL3_RECORD_INTERNAL;
+
+typedef struct ssl3_buffer_internal_st {
+	unsigned char *buf;	/* at least SSL3_RT_MAX_PACKET_SIZE bytes,
+	                         * see ssl3_setup_buffers() */
+	size_t len;		/* buffer size */
+	int offset;		/* where to 'copy from' */
+	int left;		/* how many bytes left */
+} SSL3_BUFFER_INTERNAL;
+
 typedef struct ssl3_state_internal_st {
 	unsigned char read_sequence[SSL3_SEQUENCE_SIZE];
 	int read_mac_secret_size;
@@ -784,8 +803,8 @@ typedef struct ssl3_state_internal_st {
 	int write_mac_secret_size;
 	unsigned char write_mac_secret[EVP_MAX_MD_SIZE];
 
-	SSL3_BUFFER rbuf;	/* read IO goes into here */
-	SSL3_BUFFER wbuf;	/* write IO goes into here */
+	SSL3_BUFFER_INTERNAL rbuf;	/* read IO goes into here */
+	SSL3_BUFFER_INTERNAL wbuf;	/* write IO goes into here */
 
 	/* we allow one fatal and one warning alert to be outstanding,
 	 * send close alert via the warning alert */
@@ -796,8 +815,8 @@ typedef struct ssl3_state_internal_st {
 	int need_empty_fragments;
 	int empty_fragment_done;
 
-	SSL3_RECORD rrec;	/* each decoded record goes in here */
-	SSL3_RECORD wrec;	/* goes out from here */
+	SSL3_RECORD_INTERNAL rrec;	/* each decoded record goes in here */
+	SSL3_RECORD_INTERNAL wrec;	/* goes out from here */
 
 	/* storage for Alert/Handshake protocol data received but not
 	 * yet processed by ssl3_read_bytes: */
@@ -896,6 +915,13 @@ typedef struct ssl3_state_internal_st {
 	size_t alpn_selected_len;
 } SSL3_STATE_INTERNAL;
 #define S3I(s) (s->s3->internal)
+
+typedef struct dtls1_record_data_internal_st {
+	unsigned char *packet;
+	unsigned int packet_length;
+	SSL3_BUFFER_INTERNAL rbuf;
+	SSL3_RECORD_INTERNAL rrec;
+} DTLS1_RECORD_DATA_INTERNAL;
 
 typedef struct dtls1_state_internal_st {
 	unsigned int send_cookie;
@@ -1013,7 +1039,6 @@ typedef struct sess_cert_st {
 /*#define RSA_DEBUG	*/
 
 typedef struct ssl3_enc_method {
-	int (*enc)(SSL *, int);
 	unsigned int enc_flags;
 } SSL3_ENC_METHOD;
 
@@ -1281,7 +1306,6 @@ long dtls1_ctrl(SSL *s, int cmd, long larg, void *parg);
 long dtls1_get_message(SSL *s, int st1, int stn, int mt, long max, int *ok);
 int dtls1_get_record(SSL *s);
 int dtls1_dispatch_alert(SSL *s);
-int dtls1_enc(SSL *s, int snd);
 
 int ssl_init_wbio_buffer(SSL *s, int push);
 void ssl_free_wbio_buffer(SSL *s);
@@ -1347,16 +1371,16 @@ long ssl_get_algorithm2(SSL *s);
 int tls1_check_ec_server_key(SSL *s);
 
 /* s3_cbc.c */
-void ssl3_cbc_copy_mac(unsigned char *out, const SSL3_RECORD *rec,
-    unsigned md_size, unsigned orig_len);
-int tls1_cbc_remove_padding(const SSL *s, SSL3_RECORD *rec,
-    unsigned block_size, unsigned mac_size);
+void ssl3_cbc_copy_mac(unsigned char *out, const SSL3_RECORD_INTERNAL *rec,
+    unsigned int md_size, unsigned int orig_len);
+int tls1_cbc_remove_padding(const SSL *s, SSL3_RECORD_INTERNAL *rec,
+    unsigned int block_size, unsigned int mac_size);
 char ssl3_cbc_record_digest_supported(const EVP_MD_CTX *ctx);
 int ssl3_cbc_digest_record(const EVP_MD_CTX *ctx, unsigned char *md_out,
     size_t *md_out_size, const unsigned char header[13],
     const unsigned char *data, size_t data_plus_mac_size,
     size_t data_plus_mac_plus_padding_size, const unsigned char *mac_secret,
-    unsigned mac_secret_length);
+    unsigned int mac_secret_length);
 int SSL_state_func_code(int _state);
 
 #define SSLerror(s, r) SSL_error_internal(s, r, __FILE__, __LINE__)
@@ -1366,8 +1390,8 @@ void SSL_error_internal(const SSL *s, int r, char *f, int l);
 #ifndef OPENSSL_NO_SRTP
 
 int srtp_find_profile_by_name(char *profile_name,
-    SRTP_PROTECTION_PROFILE **pptr, unsigned len);
-int srtp_find_profile_by_num(unsigned profile_num,
+    SRTP_PROTECTION_PROFILE **pptr, unsigned int len);
+int srtp_find_profile_by_num(unsigned int profile_num,
     SRTP_PROTECTION_PROFILE **pptr);
 
 #endif /* OPENSSL_NO_SRTP */

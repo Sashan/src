@@ -96,6 +96,46 @@
  *** Types
  ***/
 
+typedef struct dns_rdatacommon {
+	dns_rdataclass_t			rdclass;
+	dns_rdatatype_t				rdtype;
+	ISC_LINK(struct dns_rdatacommon)	link;
+} dns_rdatacommon_t;
+
+typedef struct dns_rdata_cname {
+	dns_rdatacommon_t	common;
+	dns_name_t		cname;
+} dns_rdata_cname_t;
+
+typedef struct dns_rdata_ns {
+	dns_rdatacommon_t	common;
+	dns_name_t		name;
+} dns_rdata_ns_t;
+
+typedef struct dns_rdata_soa {
+	dns_rdatacommon_t	common;
+	dns_name_t		origin;
+	dns_name_t		contact;
+	uint32_t		serial;		/*%< host order */
+	uint32_t		refresh;	/*%< host order */
+	uint32_t		retry;		/*%< host order */
+	uint32_t		expire;		/*%< host order */
+	uint32_t		minimum;	/*%< host order */
+} dns_rdata_soa_t;
+
+typedef struct dns_rdata_any_tsig {
+	dns_rdatacommon_t	common;
+	dns_name_t		algorithm;
+	uint64_t		timesigned;
+	uint16_t		fudge;
+	uint16_t		siglen;
+	unsigned char *		signature;
+	uint16_t		originalid;
+	uint16_t		error;
+	uint16_t		otherlen;
+	unsigned char *		other;
+} dns_rdata_any_tsig_t;
+
 /*%
  ***** An 'rdata' is a handle to a binary region.  The handle has an RR
  ***** class and type, and the data in the binary region is in the format
@@ -197,28 +237,6 @@ dns_rdata_clone(const dns_rdata_t *src, dns_rdata_t *target);
  * Requires:
  *\li	'src' to be initialized.
  *\li	'target' to be initialized.
- */
-
-/***
- *** Comparisons
- ***/
-
-int
-dns_rdata_compare(const dns_rdata_t *rdata1, const dns_rdata_t *rdata2);
-/*%<
- * Determine the relative ordering under the DNSSEC order relation of
- * 'rdata1' and 'rdata2'.
- *
- * Requires:
- *
- *\li	'rdata1' is a valid, non-empty rdata
- *
- *\li	'rdata2' is a valid, non-empty rdata
- *
- * Returns:
- *\li	< 0		'rdata1' is less than 'rdata2'
- *\li	0		'rdata1' is equal to 'rdata2'
- *\li	> 0		'rdata1' is greater than 'rdata2'
  */
 
 /***
@@ -379,8 +397,9 @@ dns_rdata_tofmttext(dns_rdata_t *rdata, dns_name_t *origin, unsigned int flags,
  */
 
 isc_result_t
-dns_rdata_fromstruct(dns_rdata_t *rdata, dns_rdataclass_t rdclass,
-		     dns_rdatatype_t type, void *source, isc_buffer_t *target);
+dns_rdata_fromstruct_soa(dns_rdata_t *rdata, dns_rdataclass_t rdclass,
+		          dns_rdatatype_t type, dns_rdata_soa_t *soa,
+		          isc_buffer_t *target);
 /*%<
  * Convert the C structure representation of an rdata into uncompressed wire
  * format in 'target'.
@@ -411,19 +430,100 @@ dns_rdata_fromstruct(dns_rdata_t *rdata, dns_rdataclass_t rdclass,
  */
 
 isc_result_t
-dns_rdata_tostruct(const dns_rdata_t *rdata, void *target);
+dns_rdata_fromstruct_tsig(dns_rdata_t *rdata, dns_rdataclass_t rdclass,
+		          dns_rdatatype_t type, dns_rdata_any_tsig_t *tsig,
+		          isc_buffer_t *target);
+/*%<
+ * Convert the C structure representation of an rdata into uncompressed wire
+ * format in 'target'.
+ *
+ * XXX  Should we have a 'size' parameter as a sanity check on target?
+ *
+ * Requires:
+ *
+ *\li	'rdclass' and 'type' are valid.
+ *
+ *\li	'source' points to a valid C struct for the class and type.
+ *
+ *\li	'target' is a valid buffer.
+ *
+ *\li	All structure pointers to memory blocks should be NULL if their
+ *	corresponding length values are zero.
+ *
+ * Ensures,
+ *	if result is success:
+ *	\li 	If 'rdata' is not NULL, it is attached to the target.
+ *
+ *	\li	The used space in 'target' is updated.
+ *
+ * Result:
+ *\li	Success
+ *\li	Various 'Bad Form' class failures depending on class and type
+ *\li	Resource Limit: Not enough space
+ */
+
+isc_result_t
+dns_rdata_tostruct_cname(const dns_rdata_t *rdata, dns_rdata_cname_t *cname);
 /*%<
  * Convert an rdata into its C structure representation.
  *
- * If 'mctx' is NULL then 'rdata' must persist while 'target' is being used.
- *
- * If 'mctx' is non NULL then memory will be allocated if required.
  *
  * Requires:
  *
  *\li	'rdata' is a valid, non-empty rdata.
  *
- *\li	'target' to point to a valid pointer for the type and class.
+ *\li	'cname' to point to a valid pointer for the type and class.
+ *
+ * Result:
+ *\li	Success
+ *\li	Resource Limit: Not enough memory
+ */
+
+isc_result_t
+dns_rdata_tostruct_ns(const dns_rdata_t *rdata, dns_rdata_ns_t *ns);
+/*%<
+ * Convert an rdata into its C structure representation.
+ *
+ *
+ * Requires:
+ *
+ *\li	'rdata' is a valid, non-empty rdata.
+ *
+ *\li	'ns' to point to a valid pointer for the type and class.
+ *
+ * Result:
+ *\li	Success
+ *\li	Resource Limit: Not enough memory
+ */
+
+isc_result_t
+dns_rdata_tostruct_soa(const dns_rdata_t *rdata, dns_rdata_soa_t *soa);
+/*%<
+ * Convert an rdata into its C structure representation.
+ *
+ *
+ * Requires:
+ *
+ *\li	'rdata' is a valid, non-empty rdata.
+ *
+ *\li	'soa' to point to a valid pointer for the type and class.
+ *
+ * Result:
+ *\li	Success
+ *\li	Resource Limit: Not enough memory
+ */
+
+isc_result_t
+dns_rdata_tostruct_tsig(const dns_rdata_t *rdata, dns_rdata_any_tsig_t *tsig);
+/*%<
+ * Convert an rdata into its C structure representation.
+ *
+ *
+ * Requires:
+ *
+ *\li	'rdata' is a valid, non-empty rdata.
+ *
+ *\li	'tsig' to point to a valid pointer for the type and class.
  *
  * Result:
  *\li	Success
@@ -431,46 +531,47 @@ dns_rdata_tostruct(const dns_rdata_t *rdata, void *target);
  */
 
 void
-dns_rdata_freestruct(void *source);
+dns_rdata_freestruct_cname(dns_rdata_cname_t *cname);
 /*%<
- * Free dynamic memory attached to 'source' (if any).
+ * Free dynamic memory attached to 'cname' (if any).
  *
  * Requires:
  *
- *\li	'source' to point to the structure previously filled in by
- *	dns_rdata_tostruct().
+ *\li	'cname' to point to the structure previously filled in by
+ *	dns_rdata_tostruct_cname().
  */
 
-isc_boolean_t
-dns_rdatatype_issingleton(dns_rdatatype_t type);
+void
+dns_rdata_freestruct_ns(dns_rdata_ns_t *ns);
 /*%<
- * Return true iff the rdata type 'type' is a singleton type,
- * like CNAME or SOA.
+ * Free dynamic memory attached to 'ns' (if any).
  *
  * Requires:
- * \li	'type' is a valid rdata type.
  *
+ *\li	'ns' to point to the structure previously filled in by
+ *	dns_rdata_tostruct_ns().
  */
 
-isc_boolean_t
-dns_rdatatype_isknown(dns_rdatatype_t type);
+void
+dns_rdata_freestruct_soa(dns_rdata_soa_t *soa);
 /*%<
- * Return true iff the rdata type 'type' is known.
+ * Free dynamic memory attached to 'soa' (if any).
  *
  * Requires:
- * \li	'type' is a valid rdata type.
  *
+ *\li	'soa' to point to the structure previously filled in by
+ *	dns_rdata_tostruct_soa().
  */
 
-isc_boolean_t
-dns_rdatatype_questiononly(dns_rdatatype_t type);
+void
+dns_rdata_freestruct_tsig(dns_rdata_any_tsig_t *tsig);
 /*%<
- * Return true iff rdata of type 'type' can only appear in the question
- * section of a properly formatted message.
+ * Free dynamic memory attached to 'tsig' (if any).
  *
  * Requires:
- * \li	'type' is a valid rdata type.
  *
+ *\li	'tsig' to point to the structure previously filled in by
+ *	dns_rdata_tostruct_tsig().
  */
 
 unsigned int
@@ -485,26 +586,10 @@ dns_rdatatype_attributes(dns_rdatatype_t rdtype);
  *\li	a bitmask consisting of the following flags.
  */
 
-/*% only one may exist for a name */
-#define DNS_RDATATYPEATTR_SINGLETON		0x00000001U
-/*% requires no other data be present */
-#define DNS_RDATATYPEATTR_EXCLUSIVE		0x00000002U
-/*% Is a meta type */
-#define DNS_RDATATYPEATTR_META			0x00000004U
-/*% Is a DNSSEC type, like RRSIG or NSEC */
-#define DNS_RDATATYPEATTR_DNSSEC		0x00000008U
-/*% Is a zone cut authority type */
-#define DNS_RDATATYPEATTR_ZONECUTAUTH		0x00000010U
 /*% Is reserved (unusable) */
 #define DNS_RDATATYPEATTR_RESERVED		0x00000020U
 /*% Is an unknown type */
 #define DNS_RDATATYPEATTR_UNKNOWN		0x00000040U
-/*% Is META, and can only be in a question section */
-#define DNS_RDATATYPEATTR_QUESTIONONLY		0x00000080U
-/*% is META, and can NOT be in a question section */
-#define DNS_RDATATYPEATTR_NOTQUESTION		0x00000100U
-/*% Is present at zone cuts in the parent, not the child */
-#define DNS_RDATATYPEATTR_ATPARENT		0x00000200U
 
 dns_rdatatype_t
 dns_rdata_covers(dns_rdata_t *rdata);
@@ -521,7 +606,7 @@ dns_rdata_covers(dns_rdata_t *rdata);
  */
 
 isc_boolean_t
-dns_rdata_checkowner(dns_name_t* name, dns_rdataclass_t rdclass,
+dns_rdata_checkowner_nsec3(dns_name_t* name, dns_rdataclass_t rdclass,
 		     dns_rdatatype_t type, isc_boolean_t wildcard);
 /*
  * Returns whether this is a valid ownername for this <type,class>.

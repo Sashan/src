@@ -21,10 +21,6 @@
 #ifndef RDATA_GENERIC_OPT_41_C
 #define RDATA_GENERIC_OPT_41_C
 
-#define RRTYPE_OPT_ATTRIBUTES (DNS_RDATATYPEATTR_SINGLETON | \
-			       DNS_RDATATYPEATTR_META | \
-			       DNS_RDATATYPEATTR_NOTQUESTION)
-
 static inline isc_result_t
 totext_opt(ARGS_TOTEXT) {
 	isc_region_t r;
@@ -46,12 +42,12 @@ totext_opt(ARGS_TOTEXT) {
 		length = uint16_fromregion(&r);
 		isc_region_consume(&r, 2);
 		snprintf(buf, sizeof(buf), "%u %u", option, length);
-		RETERR(str_totext(buf, target));
+		RETERR(isc_str_tobuffer(buf, target));
 		INSIST(r.length >= length);
 		if (length > 0) {
 			if ((tctx->flags & DNS_STYLEFLAG_MULTILINE) != 0)
-				RETERR(str_totext(" (", target));
-			RETERR(str_totext(tctx->linebreak, target));
+				RETERR(isc_str_tobuffer(" (", target));
+			RETERR(isc_str_tobuffer(tctx->linebreak, target));
 			or = r;
 			or.length = length;
 			if (tctx->width == 0)   /* No splitting */
@@ -62,10 +58,10 @@ totext_opt(ARGS_TOTEXT) {
 							 target));
 			isc_region_consume(&r, length);
 			if ((tctx->flags & DNS_STYLEFLAG_MULTILINE) != 0)
-				RETERR(str_totext(" )", target));
+				RETERR(isc_str_tobuffer(" )", target));
 		}
 		if (r.length > 0)
-			RETERR(str_totext(" ", target));
+			RETERR(isc_str_tobuffer(" ", target));
 	}
 
 	return (ISC_R_SUCCESS);
@@ -197,102 +193,7 @@ towire_opt(ARGS_TOWIRE) {
 
 	UNUSED(cctx);
 
-	return (mem_tobuffer(target, rdata->data, rdata->length));
-}
-
-static inline int
-compare_opt(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_opt);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_opt(ARGS_FROMSTRUCT) {
-	dns_rdata_opt_t *opt = source;
-	isc_region_t region;
-	uint16_t length;
-
-	REQUIRE(type == dns_rdatatype_opt);
-	REQUIRE(source != NULL);
-	REQUIRE(opt->common.rdtype == type);
-	REQUIRE(opt->common.rdclass == rdclass);
-	REQUIRE(opt->options != NULL || opt->length == 0);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	region.base = opt->options;
-	region.length = opt->length;
-	while (region.length >= 4) {
-		isc_region_consume(&region, 2);	/* opt */
-		length = uint16_fromregion(&region);
-		isc_region_consume(&region, 2);
-		if (region.length < length)
-			return (ISC_R_UNEXPECTEDEND);
-		isc_region_consume(&region, length);
-	}
-	if (region.length != 0)
-		return (ISC_R_UNEXPECTEDEND);
-
-	return (mem_tobuffer(target, opt->options, opt->length));
-}
-
-static inline isc_result_t
-tostruct_opt(ARGS_TOSTRUCT) {
-	dns_rdata_opt_t *opt = target;
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_opt);
-	REQUIRE(target != NULL);
-
-	opt->common.rdclass = rdata->rdclass;
-	opt->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&opt->common, link);
-
-	dns_rdata_toregion(rdata, &r);
-	opt->length = r.length;
-	opt->options = mem_maybedup(r.base, r.length);
-	if (opt->options == NULL)
-		return (ISC_R_NOMEMORY);
-
-	opt->offset = 0;
-	return (ISC_R_SUCCESS);
-}
-
-static inline void
-freestruct_opt(ARGS_FREESTRUCT) {
-	dns_rdata_opt_t *opt = source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(opt->common.rdtype == dns_rdatatype_opt);
-
-	if (opt->options != NULL)
-		free(opt->options);
-}
-
-static inline isc_boolean_t
-checkowner_opt(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_opt);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (dns_name_equal(name, dns_rootname));
-}
-
-static inline int
-casecompare_opt(ARGS_COMPARE) {
-	return (compare_opt(rdata1, rdata2));
+	return (isc_mem_tobuffer(target, rdata->data, rdata->length));
 }
 
 #endif	/* RDATA_GENERIC_OPT_41_C */

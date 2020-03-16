@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: timer.h,v 1.10 2020/02/18 18:11:27 florian Exp $ */
+/* $Id: timer.h,v 1.12 2020/02/25 05:00:43 jsg Exp $ */
 
 #ifndef ISC_TIMER_H
 #define ISC_TIMER_H 1
@@ -66,15 +66,15 @@
  *	None.
  */
 
-
 /***
  *** Imports
  ***/
 
+#include <time.h>
+
 #include <isc/types.h>
 #include <isc/event.h>
 #include <isc/eventclass.h>
-#include <isc/time.h>
 
 /***
  *** Types

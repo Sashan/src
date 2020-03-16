@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: a_1.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
+/* $Id: a_1.c,v 1.10 2020/02/26 18:38:15 florian Exp $ */
 
 /* Reviewed: Thu Mar 16 16:52:50 PST 2000 by bwelling */
 
@@ -24,8 +24,6 @@
 #include <string.h>
 
 #include <isc/net.h>
-
-#define RRTYPE_A_ATTRIBUTES (0)
 
 static inline isc_result_t
 totext_in_a(ARGS_TOTEXT) {
@@ -83,106 +81,6 @@ towire_in_a(ARGS_TOWIRE) {
 	memmove(region.base, rdata->data, rdata->length);
 	isc_buffer_add(target, 4);
 	return (ISC_R_SUCCESS);
-}
-
-static inline int
-compare_in_a(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_a);
-	REQUIRE(rdata1->rdclass == dns_rdataclass_in);
-	REQUIRE(rdata1->length == 4);
-	REQUIRE(rdata2->length == 4);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_in_a(ARGS_FROMSTRUCT) {
-	dns_rdata_in_a_t *a = source;
-	uint32_t n;
-
-	REQUIRE(type == dns_rdatatype_a);
-	REQUIRE(rdclass == dns_rdataclass_in);
-	REQUIRE(source != NULL);
-	REQUIRE(a->common.rdtype == type);
-	REQUIRE(a->common.rdclass == rdclass);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	n = ntohl(a->in_addr.s_addr);
-
-	return (uint32_tobuffer(n, target));
-}
-
-
-static inline isc_result_t
-tostruct_in_a(ARGS_TOSTRUCT) {
-	dns_rdata_in_a_t *a = target;
-	uint32_t n;
-	isc_region_t region;
-
-	REQUIRE(rdata->type == dns_rdatatype_a);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-	REQUIRE(rdata->length == 4);
-
-	a->common.rdclass = rdata->rdclass;
-	a->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&a->common, link);
-
-	dns_rdata_toregion(rdata, &region);
-	n = uint32_fromregion(&region);
-	a->in_addr.s_addr = htonl(n);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline void
-freestruct_in_a(ARGS_FREESTRUCT) {
-	dns_rdata_in_a_t *a = source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(a->common.rdtype == dns_rdatatype_a);
-	REQUIRE(a->common.rdclass == dns_rdataclass_in);
-
-	UNUSED(a);
-}
-
-static inline isc_boolean_t
-checkowner_in_a(ARGS_CHECKOWNER) {
-	dns_name_t prefix, suffix;
-
-	REQUIRE(type == dns_rdatatype_a);
-	REQUIRE(rdclass == dns_rdataclass_in);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	/*
-	 * Handle Active Diretory gc._msdcs.<forest> name.
-	 */
-	if (dns_name_countlabels(name) > 2U) {
-		dns_name_init(&prefix, NULL);
-		dns_name_init(&suffix, NULL);
-		dns_name_split(name, dns_name_countlabels(name) - 2,
-			       &prefix, &suffix);
-		if (dns_name_equal(&gc_msdcs, &prefix) &&
-		    dns_name_ishostname(&suffix, ISC_FALSE))
-			return (ISC_TRUE);
-	}
-
-	return (dns_name_ishostname(name, wildcard));
-}
-
-static inline int
-casecompare_in_a(ARGS_COMPARE) {
-	return (compare_in_a(rdata1, rdata2));
 }
 
 #endif	/* RDATA_IN_1_A_1_C */

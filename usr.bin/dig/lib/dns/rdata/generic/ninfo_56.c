@@ -17,8 +17,6 @@
 #ifndef RDATA_GENERIC_NINFO_56_C
 #define RDATA_GENERIC_NINFO_56_C
 
-#define RRTYPE_NINFO_ATTRIBUTES (0)
-
 static inline isc_result_t
 totext_ninfo(ARGS_TOTEXT) {
 
@@ -50,70 +48,7 @@ towire_ninfo(ARGS_TOWIRE) {
 
 	UNUSED(cctx);
 
-	return (mem_tobuffer(target, rdata->data, rdata->length));
-}
-
-static inline int
-compare_ninfo(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_ninfo);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_ninfo(ARGS_FROMSTRUCT) {
-
-	REQUIRE(type == dns_rdatatype_ninfo);
-
-	return (generic_fromstruct_txt(rdclass, type, source, target));
-}
-
-static inline isc_result_t
-tostruct_ninfo(ARGS_TOSTRUCT) {
-	dns_rdata_ninfo_t *txt = target;
-
-	REQUIRE(rdata->type == dns_rdatatype_ninfo);
-
-	txt->common.rdclass = rdata->rdclass;
-	txt->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&txt->common, link);
-
-	return (generic_tostruct_txt(rdata, target));
-}
-
-static inline void
-freestruct_ninfo(ARGS_FREESTRUCT) {
-	dns_rdata_ninfo_t *ninfo = source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(ninfo->common.rdtype == dns_rdatatype_ninfo);
-
-	generic_freestruct_txt(source);
-}
-
-static inline isc_boolean_t
-checkowner_ninfo(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_ninfo);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_ninfo(ARGS_COMPARE) {
-	return (compare_ninfo(rdata1, rdata2));
+	return (isc_mem_tobuffer(target, rdata->data, rdata->length));
 }
 
 #endif	/* RDATA_GENERIC_NINFO_56_C */

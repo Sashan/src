@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: isdn_20.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
+/* $Id: isdn_20.c,v 1.12 2020/02/26 18:47:59 florian Exp $ */
 
 /* Reviewed: Wed Mar 15 16:53:11 PST 2000 by bwelling */
 
@@ -22,8 +22,6 @@
 
 #ifndef RDATA_GENERIC_ISDN_20_C
 #define RDATA_GENERIC_ISDN_20_C
-
-#define RRTYPE_ISDN_ATTRIBUTES (0)
 
 static inline isc_result_t
 totext_isdn(ARGS_TOTEXT) {
@@ -38,7 +36,7 @@ totext_isdn(ARGS_TOTEXT) {
 	RETERR(txt_totext(&region, ISC_TRUE, target));
 	if (region.length == 0)
 		return (ISC_R_SUCCESS);
-	RETERR(str_totext(" ", target));
+	RETERR(isc_str_tobuffer(" ", target));
 	return (txt_totext(&region, ISC_TRUE, target));
 }
 
@@ -64,112 +62,7 @@ towire_isdn(ARGS_TOWIRE) {
 	REQUIRE(rdata->type == dns_rdatatype_isdn);
 	REQUIRE(rdata->length != 0);
 
-	return (mem_tobuffer(target, rdata->data, rdata->length));
-}
-
-static inline int
-compare_isdn(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_isdn);
-	REQUIRE(rdata1->length != 0);
-	REQUIRE(rdata2->length != 0);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_isdn(ARGS_FROMSTRUCT) {
-	dns_rdata_isdn_t *isdn = source;
-
-	REQUIRE(type == dns_rdatatype_isdn);
-	REQUIRE(source != NULL);
-	REQUIRE(isdn->common.rdtype == type);
-	REQUIRE(isdn->common.rdclass == rdclass);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	RETERR(uint8_tobuffer(isdn->isdn_len, target));
-	RETERR(mem_tobuffer(target, isdn->isdn, isdn->isdn_len));
-	if (isdn->subaddress == NULL)
-		return (ISC_R_SUCCESS);
-	RETERR(uint8_tobuffer(isdn->subaddress_len, target));
-	return (mem_tobuffer(target, isdn->subaddress, isdn->subaddress_len));
-}
-
-static inline isc_result_t
-tostruct_isdn(ARGS_TOSTRUCT) {
-	dns_rdata_isdn_t *isdn = target;
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_isdn);
-	REQUIRE(target != NULL);
-	REQUIRE(rdata->length != 0);
-
-	isdn->common.rdclass = rdata->rdclass;
-	isdn->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&isdn->common, link);
-
-	dns_rdata_toregion(rdata, &r);
-
-	isdn->isdn_len = uint8_fromregion(&r);
-	isc_region_consume(&r, 1);
-	isdn->isdn = mem_maybedup(r.base, isdn->isdn_len);
-	if (isdn->isdn == NULL)
-		return (ISC_R_NOMEMORY);
-	isc_region_consume(&r, isdn->isdn_len);
-
-	if (r.length == 0) {
-		isdn->subaddress_len = 0;
-		isdn->subaddress = NULL;
-	} else {
-		isdn->subaddress_len = uint8_fromregion(&r);
-		isc_region_consume(&r, 1);
-		isdn->subaddress = mem_maybedup(r.base,
-						isdn->subaddress_len);
-		if (isdn->subaddress == NULL)
-			goto cleanup;
-	}
-
-	return (ISC_R_SUCCESS);
-
- cleanup:
-	free(isdn->isdn);
-	return (ISC_R_NOMEMORY);
-}
-
-static inline void
-freestruct_isdn(ARGS_FREESTRUCT) {
-	dns_rdata_isdn_t *isdn = source;
-
-	REQUIRE(source != NULL);
-
-	free(isdn->isdn);
-	free(isdn->subaddress);
-}
-
-static inline isc_boolean_t
-checkowner_isdn(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_isdn);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_isdn(ARGS_COMPARE) {
-	return (compare_isdn(rdata1, rdata2));
+	return (isc_mem_tobuffer(target, rdata->data, rdata->length));
 }
 
 #endif	/* RDATA_GENERIC_ISDN_20_C */

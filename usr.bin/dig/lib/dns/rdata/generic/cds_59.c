@@ -19,8 +19,6 @@
 #ifndef RDATA_GENERIC_CDS_59_C
 #define RDATA_GENERIC_CDS_59_C
 
-#define RRTYPE_CDS_ATTRIBUTES 0
-
 #include <isc/sha1.h>
 #include <isc/sha2.h>
 
@@ -53,77 +51,7 @@ towire_cds(ARGS_TOWIRE) {
 	UNUSED(cctx);
 
 	dns_rdata_toregion(rdata, &sr);
-	return (mem_tobuffer(target, sr.base, sr.length));
-}
-
-static inline int
-compare_cds(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_cds);
-	REQUIRE(rdata1->length != 0);
-	REQUIRE(rdata2->length != 0);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_cds(ARGS_FROMSTRUCT) {
-
-	REQUIRE(type == dns_rdatatype_cds);
-
-	return (generic_fromstruct_ds(rdclass, type, source, target));
-}
-
-static inline isc_result_t
-tostruct_cds(ARGS_TOSTRUCT) {
-	dns_rdata_cds_t *cds = target;
-
-	REQUIRE(rdata->type == dns_rdatatype_cds);
-	REQUIRE(target != NULL);
-	REQUIRE(rdata->length != 0);
-
-	/*
-	 * Checked by generic_tostruct_ds().
-	 */
-	cds->common.rdclass = rdata->rdclass;
-	cds->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&cds->common, link);
-
-	return (generic_tostruct_ds(rdata, target));
-}
-
-static inline void
-freestruct_cds(ARGS_FREESTRUCT) {
-	dns_rdata_cds_t *ds = source;
-
-	REQUIRE(ds != NULL);
-	REQUIRE(ds->common.rdtype == dns_rdatatype_cds);
-
-	free(ds->digest);
-}
-
-static inline isc_boolean_t
-checkowner_cds(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_cds);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_cds(ARGS_COMPARE) {
-	return (compare_cds(rdata1, rdata2));
+	return (isc_mem_tobuffer(target, sr.base, sr.length));
 }
 
 #endif	/* RDATA_GENERIC_CDS_59_C */

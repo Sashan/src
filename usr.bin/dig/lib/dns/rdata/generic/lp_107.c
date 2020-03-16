@@ -21,8 +21,6 @@
 
 #include <isc/net.h>
 
-#define RRTYPE_LP_ATTRIBUTES (0)
-
 static inline isc_result_t
 totext_lp(ARGS_TOTEXT) {
 	isc_region_t region;
@@ -42,9 +40,9 @@ totext_lp(ARGS_TOTEXT) {
 	num = uint16_fromregion(&region);
 	isc_region_consume(&region, 2);
 	snprintf(buf, sizeof(buf), "%u", num);
-	RETERR(str_totext(buf, target));
+	RETERR(isc_str_tobuffer(buf, target));
 
-	RETERR(str_totext(" ", target));
+	RETERR(isc_str_tobuffer(" ", target));
 
 	dns_name_fromregion(&name, &region);
 	sub = name_prefix(&name, tctx->origin, &prefix);
@@ -68,7 +66,7 @@ fromwire_lp(ARGS_FROMWIRE) {
 	isc_buffer_activeregion(source, &sregion);
 	if (sregion.length < 2)
 		return (ISC_R_UNEXPECTEDEND);
-	RETERR(mem_tobuffer(target, sregion.base, 2));
+	RETERR(isc_mem_tobuffer(target, sregion.base, 2));
 	isc_buffer_forward(source, 2);
 	return (dns_name_fromwire(&name, source, dctx, options, target));
 }
@@ -81,122 +79,7 @@ towire_lp(ARGS_TOWIRE) {
 
 	UNUSED(cctx);
 
-	return (mem_tobuffer(target, rdata->data, rdata->length));
-}
-
-static inline int
-compare_lp(ARGS_COMPARE) {
-	isc_region_t region1;
-	isc_region_t region2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_lp);
-	REQUIRE(rdata1->length != 0);
-	REQUIRE(rdata2->length != 0);
-
-	dns_rdata_toregion(rdata1, &region1);
-	dns_rdata_toregion(rdata2, &region2);
-
-	return (isc_region_compare(&region1, &region2));
-}
-
-static inline isc_result_t
-fromstruct_lp(ARGS_FROMSTRUCT) {
-	dns_rdata_lp_t *lp = source;
-	isc_region_t region;
-
-	REQUIRE(type == dns_rdatatype_lp);
-	REQUIRE(source != NULL);
-	REQUIRE(lp->common.rdtype == type);
-	REQUIRE(lp->common.rdclass == rdclass);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	RETERR(uint16_tobuffer(lp->pref, target));
-	dns_name_toregion(&lp->lp, &region);
-	return (isc_buffer_copyregion(target, &region));
-}
-
-static inline isc_result_t
-tostruct_lp(ARGS_TOSTRUCT) {
-	isc_region_t region;
-	dns_rdata_lp_t *lp = target;
-	dns_name_t name;
-
-	REQUIRE(rdata->type == dns_rdatatype_lp);
-	REQUIRE(target != NULL);
-	REQUIRE(rdata->length != 0);
-
-	lp->common.rdclass = rdata->rdclass;
-	lp->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&lp->common, link);
-
-	dns_name_init(&name, NULL);
-	dns_rdata_toregion(rdata, &region);
-	lp->pref = uint16_fromregion(&region);
-	isc_region_consume(&region, 2);
-	dns_name_fromregion(&name, &region);
-	dns_name_init(&lp->lp, NULL);
-	RETERR(name_duporclone(&name, &lp->lp));
-	return (ISC_R_SUCCESS);
-}
-
-static inline void
-freestruct_lp(ARGS_FREESTRUCT) {
-	dns_rdata_lp_t *lp = source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(lp->common.rdtype == dns_rdatatype_lp);
-
-	dns_name_free(&lp->lp);
-}
-
-static inline isc_boolean_t
-checkowner_lp(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_lp);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(name);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_lp(ARGS_COMPARE) {
-	dns_name_t name1;
-	dns_name_t name2;
-	isc_region_t region1;
-	isc_region_t region2;
-	int order;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_lp);
-	REQUIRE(rdata1->length != 0);
-	REQUIRE(rdata2->length != 0);
-
-	order = memcmp(rdata1->data, rdata2->data, 2);
-	if (order != 0)
-		return (order < 0 ? -1 : 1);
-
-	dns_name_init(&name1, NULL);
-	dns_name_init(&name2, NULL);
-
-	dns_rdata_toregion(rdata1, &region1);
-	dns_rdata_toregion(rdata2, &region2);
-
-	isc_region_consume(&region1, 2);
-	isc_region_consume(&region2, 2);
-
-	dns_name_fromregion(&name1, &region1);
-	dns_name_fromregion(&name2, &region2);
-
-	return (dns_name_rdatacompare(&name1, &name2));
+	return (isc_mem_tobuffer(target, rdata->data, rdata->length));
 }
 
 #endif	/* RDATA_GENERIC_LP_107_C */

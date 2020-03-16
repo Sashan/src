@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: tkey_249.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
+/* $Id: tkey_249.c,v 1.12 2020/02/26 18:47:59 florian Exp $ */
 
 /*
  * Reviewed: Thu Mar 16 17:35:30 PST 2000 by halley.
@@ -24,8 +24,6 @@
 
 #ifndef RDATA_GENERIC_TKEY_249_C
 #define RDATA_GENERIC_TKEY_249_C
-
-#define RRTYPE_TKEY_ATTRIBUTES (DNS_RDATATYPEATTR_META)
 
 static inline isc_result_t
 totext_tkey(ARGS_TOTEXT) {
@@ -49,7 +47,7 @@ totext_tkey(ARGS_TOTEXT) {
 	dns_name_fromregion(&name, &sr);
 	sub = name_prefix(&name, tctx->origin, &prefix);
 	RETERR(dns_name_totext(&prefix, sub, target));
-	RETERR(str_totext(" ", target));
+	RETERR(isc_str_tobuffer(" ", target));
 	isc_region_consume(&sr, name_length(&name));
 
 	/*
@@ -58,7 +56,7 @@ totext_tkey(ARGS_TOTEXT) {
 	n = uint32_fromregion(&sr);
 	isc_region_consume(&sr, 4);
 	snprintf(buf, sizeof(buf), "%lu ", n);
-	RETERR(str_totext(buf, target));
+	RETERR(isc_str_tobuffer(buf, target));
 
 	/*
 	 * Expiration.
@@ -66,7 +64,7 @@ totext_tkey(ARGS_TOTEXT) {
 	n = uint32_fromregion(&sr);
 	isc_region_consume(&sr, 4);
 	snprintf(buf, sizeof(buf), "%lu ", n);
-	RETERR(str_totext(buf, target));
+	RETERR(isc_str_tobuffer(buf, target));
 
 	/*
 	 * Mode.
@@ -74,7 +72,7 @@ totext_tkey(ARGS_TOTEXT) {
 	n = uint16_fromregion(&sr);
 	isc_region_consume(&sr, 2);
 	snprintf(buf, sizeof(buf), "%lu ", n);
-	RETERR(str_totext(buf, target));
+	RETERR(isc_str_tobuffer(buf, target));
 
 	/*
 	 * Error.
@@ -82,10 +80,10 @@ totext_tkey(ARGS_TOTEXT) {
 	n = uint16_fromregion(&sr);
 	isc_region_consume(&sr, 2);
 	if (dns_tsigrcode_totext((dns_rcode_t)n, target) == ISC_R_SUCCESS)
-		RETERR(str_totext(" ", target));
+		RETERR(isc_str_tobuffer(" ", target));
 	else {
 		snprintf(buf, sizeof(buf), "%lu ", n);
-		RETERR(str_totext(buf, target));
+		RETERR(isc_str_tobuffer(buf, target));
 	}
 
 	/*
@@ -94,7 +92,7 @@ totext_tkey(ARGS_TOTEXT) {
 	n = uint16_fromregion(&sr);
 	isc_region_consume(&sr, 2);
 	snprintf(buf, sizeof(buf), "%lu", n);
-	RETERR(str_totext(buf, target));
+	RETERR(isc_str_tobuffer(buf, target));
 
 	/*
 	 * Key Data.
@@ -103,17 +101,17 @@ totext_tkey(ARGS_TOTEXT) {
 	dr = sr;
 	dr.length = n;
 	if ((tctx->flags & DNS_STYLEFLAG_MULTILINE) != 0)
-		RETERR(str_totext(" (", target));
-	RETERR(str_totext(tctx->linebreak, target));
+		RETERR(isc_str_tobuffer(" (", target));
+	RETERR(isc_str_tobuffer(tctx->linebreak, target));
 	if (tctx->width == 0)   /* No splitting */
 		RETERR(isc_base64_totext(&dr, 60, "", target));
 	else
 		RETERR(isc_base64_totext(&dr, tctx->width - 2,
 					 tctx->linebreak, target));
 	if ((tctx->flags & DNS_STYLEFLAG_MULTILINE) != 0)
-		RETERR(str_totext(" ) ", target));
+		RETERR(isc_str_tobuffer(" ) ", target));
 	else
-		RETERR(str_totext(" ", target));
+		RETERR(isc_str_tobuffer(" ", target));
 	isc_region_consume(&sr, n);
 
 	/*
@@ -122,7 +120,7 @@ totext_tkey(ARGS_TOTEXT) {
 	n = uint16_fromregion(&sr);
 	isc_region_consume(&sr, 2);
 	snprintf(buf, sizeof(buf), "%lu", n);
-	RETERR(str_totext(buf, target));
+	RETERR(isc_str_tobuffer(buf, target));
 
 	/*
 	 * Other Data.
@@ -132,15 +130,15 @@ totext_tkey(ARGS_TOTEXT) {
 	    dr = sr;
 	    dr.length = n;
 	    if ((tctx->flags & DNS_STYLEFLAG_MULTILINE) != 0)
-		    RETERR(str_totext(" (", target));
-	    RETERR(str_totext(tctx->linebreak, target));
+		    RETERR(isc_str_tobuffer(" (", target));
+	    RETERR(isc_str_tobuffer(tctx->linebreak, target));
 		if (tctx->width == 0)   /* No splitting */
 			RETERR(isc_base64_totext(&dr, 60, "", target));
 		else
 			RETERR(isc_base64_totext(&dr, tctx->width - 2,
 						 tctx->linebreak, target));
 	    if ((tctx->flags & DNS_STYLEFLAG_MULTILINE) != 0)
-		    RETERR(str_totext(" )", target));
+		    RETERR(isc_str_tobuffer(" )", target));
 	}
 	return (ISC_R_SUCCESS);
 }
@@ -173,7 +171,7 @@ fromwire_tkey(ARGS_FROMWIRE) {
 	isc_buffer_activeregion(source, &sr);
 	if (sr.length < 12)
 		return (ISC_R_UNEXPECTEDEND);
-	RETERR(mem_tobuffer(target, sr.base, 12));
+	RETERR(isc_mem_tobuffer(target, sr.base, 12));
 	isc_region_consume(&sr, 12);
 	isc_buffer_forward(source, 12);
 
@@ -185,7 +183,7 @@ fromwire_tkey(ARGS_FROMWIRE) {
 	n = uint16_fromregion(&sr);
 	if (sr.length < n + 2)
 		return (ISC_R_UNEXPECTEDEND);
-	RETERR(mem_tobuffer(target, sr.base, n + 2));
+	RETERR(isc_mem_tobuffer(target, sr.base, n + 2));
 	isc_region_consume(&sr, n + 2);
 	isc_buffer_forward(source, n + 2);
 
@@ -198,7 +196,7 @@ fromwire_tkey(ARGS_FROMWIRE) {
 	if (sr.length < n + 2)
 		return (ISC_R_UNEXPECTEDEND);
 	isc_buffer_forward(source, n + 2);
-	return (mem_tobuffer(target, sr.base, n + 2));
+	return (isc_mem_tobuffer(target, sr.base, n + 2));
 }
 
 static inline isc_result_t
@@ -220,212 +218,7 @@ towire_tkey(ARGS_TOWIRE) {
 	RETERR(dns_name_towire(&name, cctx, target));
 	isc_region_consume(&sr, name_length(&name));
 
-	return (mem_tobuffer(target, sr.base, sr.length));
+	return (isc_mem_tobuffer(target, sr.base, sr.length));
 }
 
-static inline int
-compare_tkey(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-	dns_name_t name1;
-	dns_name_t name2;
-	int order;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_tkey);
-	REQUIRE(rdata1->length != 0);
-	REQUIRE(rdata2->length != 0);
-
-	/*
-	 * Algorithm.
-	 */
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	dns_name_init(&name1, NULL);
-	dns_name_init(&name2, NULL);
-	dns_name_fromregion(&name1, &r1);
-	dns_name_fromregion(&name2, &r2);
-	if ((order = dns_name_rdatacompare(&name1, &name2)) != 0)
-		return (order);
-	isc_region_consume(&r1, name_length(&name1));
-	isc_region_consume(&r2, name_length(&name2));
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_tkey(ARGS_FROMSTRUCT) {
-	dns_rdata_tkey_t *tkey = source;
-
-	REQUIRE(type == dns_rdatatype_tkey);
-	REQUIRE(source != NULL);
-	REQUIRE(tkey->common.rdtype == type);
-	REQUIRE(tkey->common.rdclass == rdclass);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	/*
-	 * Algorithm Name.
-	 */
-	RETERR(name_tobuffer(&tkey->algorithm, target));
-
-	/*
-	 * Inception: 32 bits.
-	 */
-	RETERR(uint32_tobuffer(tkey->inception, target));
-
-	/*
-	 * Expire: 32 bits.
-	 */
-	RETERR(uint32_tobuffer(tkey->expire, target));
-
-	/*
-	 * Mode: 16 bits.
-	 */
-	RETERR(uint16_tobuffer(tkey->mode, target));
-
-	/*
-	 * Error: 16 bits.
-	 */
-	RETERR(uint16_tobuffer(tkey->error, target));
-
-	/*
-	 * Key size: 16 bits.
-	 */
-	RETERR(uint16_tobuffer(tkey->keylen, target));
-
-	/*
-	 * Key.
-	 */
-	RETERR(mem_tobuffer(target, tkey->key, tkey->keylen));
-
-	/*
-	 * Other size: 16 bits.
-	 */
-	RETERR(uint16_tobuffer(tkey->otherlen, target));
-
-	/*
-	 * Other data.
-	 */
-	return (mem_tobuffer(target, tkey->other, tkey->otherlen));
-}
-
-static inline isc_result_t
-tostruct_tkey(ARGS_TOSTRUCT) {
-	dns_rdata_tkey_t *tkey = target;
-	dns_name_t alg;
-	isc_region_t sr;
-
-	REQUIRE(rdata->type == dns_rdatatype_tkey);
-	REQUIRE(target != NULL);
-	REQUIRE(rdata->length != 0);
-
-	tkey->common.rdclass = rdata->rdclass;
-	tkey->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&tkey->common, link);
-
-	dns_rdata_toregion(rdata, &sr);
-
-	/*
-	 * Algorithm Name.
-	 */
-	dns_name_init(&alg, NULL);
-	dns_name_fromregion(&alg, &sr);
-	dns_name_init(&tkey->algorithm, NULL);
-	RETERR(name_duporclone(&alg, &tkey->algorithm));
-	isc_region_consume(&sr, name_length(&tkey->algorithm));
-
-	/*
-	 * Inception.
-	 */
-	tkey->inception = uint32_fromregion(&sr);
-	isc_region_consume(&sr, 4);
-
-	/*
-	 * Expire.
-	 */
-	tkey->expire = uint32_fromregion(&sr);
-	isc_region_consume(&sr, 4);
-
-	/*
-	 * Mode.
-	 */
-	tkey->mode = uint16_fromregion(&sr);
-	isc_region_consume(&sr, 2);
-
-	/*
-	 * Error.
-	 */
-	tkey->error = uint16_fromregion(&sr);
-	isc_region_consume(&sr, 2);
-
-	/*
-	 * Key size.
-	 */
-	tkey->keylen = uint16_fromregion(&sr);
-	isc_region_consume(&sr, 2);
-
-	/*
-	 * Key.
-	 */
-	INSIST(tkey->keylen + 2U <= sr.length);
-	tkey->key = mem_maybedup(sr.base, tkey->keylen);
-	if (tkey->key == NULL)
-		goto cleanup;
-	isc_region_consume(&sr, tkey->keylen);
-
-	/*
-	 * Other size.
-	 */
-	tkey->otherlen = uint16_fromregion(&sr);
-	isc_region_consume(&sr, 2);
-
-	/*
-	 * Other.
-	 */
-	INSIST(tkey->otherlen <= sr.length);
-	tkey->other = mem_maybedup(sr.base, tkey->otherlen);
-	if (tkey->other == NULL)
-		goto cleanup;
-
-	return (ISC_R_SUCCESS);
-
- cleanup:
-	dns_name_free(&tkey->algorithm);
-	if (tkey->key != NULL)
-		free(tkey->key);
-	return (ISC_R_NOMEMORY);
-}
-
-static inline void
-freestruct_tkey(ARGS_FREESTRUCT) {
-	dns_rdata_tkey_t *tkey = (dns_rdata_tkey_t *) source;
-
-	REQUIRE(source != NULL);
-
-	dns_name_free(&tkey->algorithm);
-	if (tkey->key != NULL)
-		free(tkey->key);
-	if (tkey->other != NULL)
-		free(tkey->other);
-}
-
-static inline isc_boolean_t
-checkowner_tkey(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_tkey);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_tkey(ARGS_COMPARE) {
-	return (compare_tkey(rdata1, rdata2));
-}
 #endif	/* RDATA_GENERIC_TKEY_249_C */

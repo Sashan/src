@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh-add.c,v 1.153 2020/02/18 08:58:33 dtucker Exp $ */
+/* $OpenBSD: ssh-add.c,v 1.155 2020/03/16 02:17:02 dtucker Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -98,8 +98,7 @@ static void
 clear_pass(void)
 {
 	if (pass) {
-		explicit_bzero(pass, strlen(pass));
-		free(pass);
+		freezero(pass, strlen(pass));
 		pass = NULL;
 	}
 }
@@ -514,8 +513,7 @@ lock_agent(int agent_fd, int lock)
 			fprintf(stderr, "Passwords do not match.\n");
 			passok = 0;
 		}
-		explicit_bzero(p2, strlen(p2));
-		free(p2);
+		freezero(p2, strlen(p2));
 	}
 	if (passok) {
 		if ((r = ssh_lock_agent(agent_fd, lock, p1)) == 0) {
@@ -526,8 +524,7 @@ lock_agent(int agent_fd, int lock)
 			    lock ? "" : "un", ssh_err(r));
 		}
 	}
-	explicit_bzero(p1, strlen(p1));
-	free(p1);
+	freezero(p1, strlen(p1));
 	return (ret);
 }
 
@@ -714,7 +711,7 @@ main(int argc, char **argv)
 			break;
 		case 't':
 			if ((lifetime = convtime(optarg)) == -1 ||
-			    lifetime < 0 || lifetime > UINT32_MAX) {
+			    lifetime < 0 || (u_long)lifetime > UINT32_MAX) {
 				fprintf(stderr, "Invalid lifetime\n");
 				ret = 1;
 				goto done;

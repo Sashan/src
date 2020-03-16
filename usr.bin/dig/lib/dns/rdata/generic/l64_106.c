@@ -21,8 +21,6 @@
 
 #include <isc/net.h>
 
-#define RRTYPE_L64_ATTRIBUTES (0)
-
 static inline isc_result_t
 totext_l64(ARGS_TOTEXT) {
 	isc_region_t region;
@@ -38,16 +36,16 @@ totext_l64(ARGS_TOTEXT) {
 	num = uint16_fromregion(&region);
 	isc_region_consume(&region, 2);
 	snprintf(buf, sizeof(buf), "%u", num);
-	RETERR(str_totext(buf, target));
+	RETERR(isc_str_tobuffer(buf, target));
 
-	RETERR(str_totext(" ", target));
+	RETERR(isc_str_tobuffer(" ", target));
 
 	snprintf(buf, sizeof(buf), "%x:%x:%x:%x",
 		 region.base[0]<<8 | region.base[1],
 		 region.base[2]<<8 | region.base[3],
 		 region.base[4]<<8 | region.base[5],
 		 region.base[6]<<8 | region.base[7]);
-	return (str_totext(buf, target));
+	return (isc_str_tobuffer(buf, target));
 }
 
 static inline isc_result_t
@@ -65,7 +63,7 @@ fromwire_l64(ARGS_FROMWIRE) {
 	if (sregion.length != 10)
 		return (DNS_R_FORMERR);
 	isc_buffer_forward(source, sregion.length);
-	return (mem_tobuffer(target, sregion.base, sregion.length));
+	return (isc_mem_tobuffer(target, sregion.base, sregion.length));
 }
 
 static inline isc_result_t
@@ -76,86 +74,7 @@ towire_l64(ARGS_TOWIRE) {
 
 	UNUSED(cctx);
 
-	return (mem_tobuffer(target, rdata->data, rdata->length));
-}
-
-static inline int
-compare_l64(ARGS_COMPARE) {
-	isc_region_t region1;
-	isc_region_t region2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_l64);
-	REQUIRE(rdata1->length == 10);
-	REQUIRE(rdata2->length == 10);
-
-	dns_rdata_toregion(rdata1, &region1);
-	dns_rdata_toregion(rdata2, &region2);
-	return (isc_region_compare(&region1, &region2));
-}
-
-static inline isc_result_t
-fromstruct_l64(ARGS_FROMSTRUCT) {
-	dns_rdata_l64_t *l64 = source;
-
-	REQUIRE(type == dns_rdatatype_l64);
-	REQUIRE(source != NULL);
-	REQUIRE(l64->common.rdtype == type);
-	REQUIRE(l64->common.rdclass == rdclass);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	RETERR(uint16_tobuffer(l64->pref, target));
-	return (mem_tobuffer(target, l64->l64, sizeof(l64->l64)));
-}
-
-static inline isc_result_t
-tostruct_l64(ARGS_TOSTRUCT) {
-	isc_region_t region;
-	dns_rdata_l64_t *l64 = target;
-
-	REQUIRE(rdata->type == dns_rdatatype_l64);
-	REQUIRE(target != NULL);
-	REQUIRE(rdata->length == 10);
-
-	l64->common.rdclass = rdata->rdclass;
-	l64->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&l64->common, link);
-
-	dns_rdata_toregion(rdata, &region);
-	l64->pref = uint16_fromregion(&region);
-	memmove(l64->l64, region.base, region.length);
-	return (ISC_R_SUCCESS);
-}
-
-static inline void
-freestruct_l64(ARGS_FREESTRUCT) {
-	dns_rdata_l64_t *l64 = source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(l64->common.rdtype == dns_rdatatype_l64);
-
-	return;
-}
-
-static inline isc_boolean_t
-checkowner_l64(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_l64);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_l64(ARGS_COMPARE) {
-	return (compare_l64(rdata1, rdata2));
+	return (isc_mem_tobuffer(target, rdata->data, rdata->length));
 }
 
 #endif	/* RDATA_GENERIC_L64_106_C */

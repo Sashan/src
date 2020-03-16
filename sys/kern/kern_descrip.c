@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_descrip.c,v 1.199 2020/02/18 03:47:18 visa Exp $	*/
+/*	$OpenBSD: kern_descrip.c,v 1.201 2020/03/13 10:07:01 anton Exp $	*/
 /*	$NetBSD: kern_descrip.c,v 1.42 1996/03/30 22:24:38 christos Exp $	*/
 
 /*
@@ -307,14 +307,11 @@ restart:
 			fdpunlock(fdp);
 			goto restart;
 		}
-		goto out;
+		fdpunlock(fdp);
+		return (error);
 	}
 	/* No need for FRELE(), finishdup() uses current ref. */
-	error = finishdup(p, fp, old, new, retval, 0);
-
-out:
-	fdpunlock(fdp);
-	return (error);
+	return (finishdup(p, fp, old, new, retval, 0));
 }
 
 /*
@@ -382,7 +379,8 @@ restart:
 				fdpunlock(fdp);
 				goto restart;
 			}
-			goto out;
+			fdpunlock(fdp);
+			return (error);
 		}
 		if (new != i)
 			panic("dup2: fdalloc");
@@ -394,11 +392,7 @@ restart:
 		dupflags |= DUPF_CLOEXEC;
 
 	/* No need for FRELE(), finishdup() uses current ref. */
-	error = finishdup(p, fp, old, new, retval, dupflags);
-
-out:
-	fdpunlock(fdp);
-	return (error);
+	return (finishdup(p, fp, old, new, retval, dupflags));
 }
 
 /*
@@ -445,6 +439,7 @@ restart:
 				fdpunlock(fdp);
 				goto restart;
 			}
+			fdpunlock(fdp);
 		} else {
 			int dupflags = 0;
 
@@ -454,8 +449,6 @@ restart:
 			/* No need for FRELE(), finishdup() uses current ref. */
 			error = finishdup(p, fp, fd, i, retval, dupflags);
 		}
-
-		fdpunlock(fdp);
 		return (error);
 
 	case F_GETFD:
@@ -657,23 +650,24 @@ finishdup(struct proc *p, struct file *fp, int old, int new,
 {
 	struct file *oldfp;
 	struct filedesc *fdp = p->p_fd;
+	int error;
 
 	fdpassertlocked(fdp);
 	KASSERT(fp->f_iflags & FIF_INSERTED);
 
 	if (fp->f_count >= FDUP_MAX_COUNT) {
-		FRELE(fp, p);
-		return (EDEADLK);
+		error = EDEADLK;
+		goto fail;
 	}
 
 	oldfp = fd_getfile(fdp, new);
 	if ((dupflags & DUPF_DUP2) && oldfp == NULL) {
 		if (fd_inuse(fdp, new)) {
- 			FRELE(fp, p);
- 			return (EBUSY);
- 		}
+			error = EBUSY;
+			goto fail;
+		}
 		fd_used(fdp, new);
- 	}
+	}
 
 	/*
 	 * Use `fd_fplock' to synchronize with fd_getfile() so that
@@ -690,10 +684,18 @@ finishdup(struct proc *p, struct file *fp, int old, int new,
 
 	if (oldfp != NULL) {
 		knote_fdclose(p, new);
+		fdpunlock(fdp);
 		closef(oldfp, p);
+	} else {
+		fdpunlock(fdp);
 	}
 
 	return (0);
+
+fail:
+	fdpunlock(fdp);
+	FRELE(fp, p);
+	return (error);
 }
 
 void
@@ -705,7 +707,7 @@ fdinsert(struct filedesc *fdp, int fd, int flags, struct file *fp)
 
 	mtx_enter(&fhdlk);
 	if ((fp->f_iflags & FIF_INSERTED) == 0) {
-		fp->f_iflags |= FIF_INSERTED;
+		atomic_setbits_int(&fp->f_iflags, FIF_INSERTED);
 		if ((fq = fdp->fd_ofiles[0]) != NULL) {
 			LIST_INSERT_AFTER(fq, fp, f_list);
 		} else {
@@ -1315,7 +1317,7 @@ sys_flock(struct proc *p, void *v, register_t *retval)
 	lf.l_len = 0;
 	if (how & LOCK_UN) {
 		lf.l_type = F_UNLCK;
-		fp->f_iflags &= ~FIF_HASLOCK;
+		atomic_clearbits_int(&fp->f_iflags, FIF_HASLOCK);
 		error = VOP_ADVLOCK(vp, (caddr_t)fp, F_UNLCK, &lf, F_FLOCK);
 		goto out;
 	}
@@ -1327,7 +1329,7 @@ sys_flock(struct proc *p, void *v, register_t *retval)
 		error = EINVAL;
 		goto out;
 	}
-	fp->f_iflags |= FIF_HASLOCK;
+	atomic_setbits_int(&fp->f_iflags, FIF_HASLOCK);
 	if (how & LOCK_NB)
 		error = VOP_ADVLOCK(vp, (caddr_t)fp, F_SETLK, &lf, F_FLOCK);
 	else

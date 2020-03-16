@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sig.c,v 1.251 2020/02/21 11:10:23 claudio Exp $	*/
+/*	$OpenBSD: kern_sig.c,v 1.253 2020/03/13 09:25:21 mpi Exp $	*/
 /*	$NetBSD: kern_sig.c,v 1.54 1996/04/22 01:38:32 christos Exp $	*/
 
 /*
@@ -38,7 +38,6 @@
  *	@(#)kern_sig.c	8.7 (Berkeley) 4/18/94
  */
 
-#define	SIGPROP		/* include signal properties table */
 #include <sys/param.h>
 #include <sys/signalvar.h>
 #include <sys/resourcevar.h>
@@ -82,6 +81,46 @@ const struct filterops sig_filtops = {
 	.f_detach	= filt_sigdetach,
 	.f_event	= filt_signal,
 };
+
+const int sigprop[NSIG + 1] = {
+	0,			/* unused */
+	SA_KILL,		/* SIGHUP */
+	SA_KILL,		/* SIGINT */
+	SA_KILL|SA_CORE,	/* SIGQUIT */
+	SA_KILL|SA_CORE,	/* SIGILL */
+	SA_KILL|SA_CORE,	/* SIGTRAP */
+	SA_KILL|SA_CORE,	/* SIGABRT */
+	SA_KILL|SA_CORE,	/* SIGEMT */
+	SA_KILL|SA_CORE,	/* SIGFPE */
+	SA_KILL,		/* SIGKILL */
+	SA_KILL|SA_CORE,	/* SIGBUS */
+	SA_KILL|SA_CORE,	/* SIGSEGV */
+	SA_KILL|SA_CORE,	/* SIGSYS */
+	SA_KILL,		/* SIGPIPE */
+	SA_KILL,		/* SIGALRM */
+	SA_KILL,		/* SIGTERM */
+	SA_IGNORE,		/* SIGURG */
+	SA_STOP,		/* SIGSTOP */
+	SA_STOP|SA_TTYSTOP,	/* SIGTSTP */
+	SA_IGNORE|SA_CONT,	/* SIGCONT */
+	SA_IGNORE,		/* SIGCHLD */
+	SA_STOP|SA_TTYSTOP,	/* SIGTTIN */
+	SA_STOP|SA_TTYSTOP,	/* SIGTTOU */
+	SA_IGNORE,		/* SIGIO */
+	SA_KILL,		/* SIGXCPU */
+	SA_KILL,		/* SIGXFSZ */
+	SA_KILL,		/* SIGVTALRM */
+	SA_KILL,		/* SIGPROF */
+	SA_IGNORE,		/* SIGWINCH  */
+	SA_IGNORE,		/* SIGINFO */
+	SA_KILL,		/* SIGUSR1 */
+	SA_KILL,		/* SIGUSR2 */
+	SA_IGNORE,		/* SIGTHR */
+};
+
+#define	contsigmask	(sigmask(SIGCONT))
+#define	stopsigmask	(sigmask(SIGSTOP) | sigmask(SIGTSTP) | \
+			    sigmask(SIGTTIN) | sigmask(SIGTTOU))
 
 void proc_stop(struct proc *p, int);
 void proc_stop_sweep(void *);
@@ -246,9 +285,9 @@ sys_sigaction(struct proc *p, void *v, register_t *retval)
 		if ((ps->ps_siginfo & bit) != 0)
 			sa->sa_flags |= SA_SIGINFO;
 		if (signum == SIGCHLD) {
-			if ((ps->ps_flags & SAS_NOCLDSTOP) != 0)
+			if ((ps->ps_sigflags & SAS_NOCLDSTOP) != 0)
 				sa->sa_flags |= SA_NOCLDSTOP;
-			if ((ps->ps_flags & SAS_NOCLDWAIT) != 0)
+			if ((ps->ps_sigflags & SAS_NOCLDWAIT) != 0)
 				sa->sa_flags |= SA_NOCLDWAIT;
 		}
 		if ((sa->sa_mask & bit) == 0)
@@ -297,9 +336,9 @@ setsigvec(struct proc *p, int signum, struct sigaction *sa)
 	ps->ps_catchmask[signum] = sa->sa_mask &~ sigcantmask;
 	if (signum == SIGCHLD) {
 		if (sa->sa_flags & SA_NOCLDSTOP)
-			atomic_setbits_int(&ps->ps_flags, SAS_NOCLDSTOP);
+			atomic_setbits_int(&ps->ps_sigflags, SAS_NOCLDSTOP);
 		else
-			atomic_clearbits_int(&ps->ps_flags, SAS_NOCLDSTOP);
+			atomic_clearbits_int(&ps->ps_sigflags, SAS_NOCLDSTOP);
 		/*
 		 * If the SA_NOCLDWAIT flag is set or the handler
 		 * is SIG_IGN we reparent the dying child to PID 1
@@ -311,9 +350,9 @@ setsigvec(struct proc *p, int signum, struct sigaction *sa)
 		if (initprocess->ps_sigacts != ps &&
 		    ((sa->sa_flags & SA_NOCLDWAIT) ||
 		    sa->sa_handler == SIG_IGN))
-			atomic_setbits_int(&ps->ps_flags, SAS_NOCLDWAIT);
+			atomic_setbits_int(&ps->ps_sigflags, SAS_NOCLDWAIT);
 		else
-			atomic_clearbits_int(&ps->ps_flags, SAS_NOCLDWAIT);
+			atomic_clearbits_int(&ps->ps_sigflags, SAS_NOCLDWAIT);
 	}
 	if ((sa->sa_flags & SA_RESETHAND) != 0)
 		ps->ps_sigreset |= bit;
@@ -367,7 +406,7 @@ siginit(struct process *pr)
 	for (i = 0; i < NSIG; i++)
 		if (sigprop[i] & SA_IGNORE && i != SIGCONT)
 			ps->ps_sigignore |= sigmask(i);
-	ps->ps_flags = SAS_NOCLDWAIT | SAS_NOCLDSTOP;
+	ps->ps_sigflags = SAS_NOCLDWAIT | SAS_NOCLDSTOP;
 }
 
 /*
@@ -403,7 +442,7 @@ execsigs(struct proc *p)
 	 * Clear set of signals caught on the signal stack.
 	 */
 	sigstkinit(&p->p_sigstk);
-	atomic_clearbits_int(&ps->ps_flags, SAS_NOCLDWAIT);
+	atomic_clearbits_int(&ps->ps_sigflags, SAS_NOCLDWAIT);
 	if (ps->ps_sigact[SIGCHLD] == SIG_IGN)
 		ps->ps_sigact[SIGCHLD] = SIG_DFL;
 }
@@ -1321,7 +1360,7 @@ proc_stop_sweep(void *v)
 			continue;
 		atomic_clearbits_int(&pr->ps_flags, PS_STOPPED);
 
-		if ((pr->ps_pptr->ps_sigacts->ps_flags & SAS_NOCLDSTOP) == 0)
+		if ((pr->ps_pptr->ps_sigacts->ps_sigflags & SAS_NOCLDSTOP) == 0)
 			prsignal(pr->ps_pptr, SIGCHLD);
 		wakeup(pr->ps_pptr);
 	}

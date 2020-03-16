@@ -229,6 +229,10 @@
 ./etc/signify/openbsd-67-fw.pub
 ./etc/signify/openbsd-67-pkg.pub
 ./etc/signify/openbsd-67-syspatch.pub
+./etc/signify/openbsd-68-base.pub
+./etc/signify/openbsd-68-fw.pub
+./etc/signify/openbsd-68-pkg.pub
+./etc/signify/openbsd-68-syspatch.pub
 ./etc/skel
 ./etc/skel/.ssh
 ./etc/ssh
@@ -542,6 +546,7 @@
 ./usr/bin/skeyinit
 ./usr/bin/skeyprune
 ./usr/bin/smtp
+./usr/bin/sndioctl
 ./usr/bin/sndiod
 ./usr/bin/snmp
 ./usr/bin/sort
@@ -658,7 +663,7 @@
 ./usr/lib/libreadline.so.4.0
 ./usr/lib/librpcsvc.so.2.0
 ./usr/lib/libskey.so.6.0
-./usr/lib/libsndio.so.7.0
+./usr/lib/libsndio.so.7.1
 ./usr/lib/libssl.so.48.1
 ./usr/lib/libtermcap.so.14.0
 ./usr/lib/libtermlib.so.14.0

@@ -33,7 +33,7 @@
 
 /*
  * Principal Author: Brian Wellington
- * $Id: hmac_link.c,v 1.6 2020/02/23 08:52:50 florian Exp $
+ * $Id: hmac_link.c,v 1.9 2020/02/25 18:10:17 florian Exp $
  */
 
 #include <string.h>
@@ -41,7 +41,6 @@
 #include <isc/buffer.h>
 #include <isc/hmacsha.h>
 #include <isc/sha1.h>
-#include <isc/safe.h>
 #include <isc/util.h>
 
 #include <dst/result.h>
@@ -117,8 +116,7 @@ static void
 hmacsha1_destroy(dst_key_t *key) {
 	dst_hmacsha1_key_t *hkey = key->keydata.hmacsha1;
 
-	isc_safe_memwipe(hkey, sizeof(*hkey));
-	free(hkey);
+	freezero(hkey, sizeof(*hkey));
 	key->keydata.hmacsha1 = NULL;
 }
 
@@ -262,8 +260,7 @@ static void
 hmacsha224_destroy(dst_key_t *key) {
 	dst_hmacsha224_key_t *hkey = key->keydata.hmacsha224;
 
-	isc_safe_memwipe(hkey, sizeof(*hkey));
-	free(hkey);
+	freezero(hkey, sizeof(*hkey));
 	key->keydata.hmacsha224 = NULL;
 }
 
@@ -407,8 +404,7 @@ static void
 hmacsha256_destroy(dst_key_t *key) {
 	dst_hmacsha256_key_t *hkey = key->keydata.hmacsha256;
 
-	isc_safe_memwipe(hkey, sizeof(*hkey));
-	free(hkey);
+	freezero(hkey, sizeof(*hkey));
 	key->keydata.hmacsha256 = NULL;
 }
 
@@ -552,8 +548,7 @@ static void
 hmacsha384_destroy(dst_key_t *key) {
 	dst_hmacsha384_key_t *hkey = key->keydata.hmacsha384;
 
-	isc_safe_memwipe(hkey, sizeof(*hkey));
-	free(hkey);
+	freezero(hkey, sizeof(*hkey));
 	key->keydata.hmacsha384 = NULL;
 }
 
@@ -697,8 +692,7 @@ static void
 hmacsha512_destroy(dst_key_t *key) {
 	dst_hmacsha512_key_t *hkey = key->keydata.hmacsha512;
 
-	isc_safe_memwipe(hkey, sizeof(*hkey));
-	free(hkey);
+	freezero(hkey, sizeof(*hkey));
 	key->keydata.hmacsha512 = NULL;
 }
 

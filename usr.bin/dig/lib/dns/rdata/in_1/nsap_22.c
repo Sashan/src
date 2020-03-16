@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: nsap_22.c,v 1.3 2020/02/23 19:54:26 jung Exp $ */
+/* $Id: nsap_22.c,v 1.12 2020/02/26 18:47:59 florian Exp $ */
 
 /* Reviewed: Fri Mar 17 10:41:07 PST 2000 by gson */
 
@@ -22,8 +22,6 @@
 
 #ifndef RDATA_IN_1_NSAP_22_C
 #define RDATA_IN_1_NSAP_22_C
-
-#define RRTYPE_NSAP_ATTRIBUTES (0)
 
 static inline isc_result_t
 totext_in_nsap(ARGS_TOTEXT) {
@@ -37,11 +35,11 @@ totext_in_nsap(ARGS_TOTEXT) {
 	UNUSED(tctx);
 
 	dns_rdata_toregion(rdata, &region);
-	RETERR(str_totext("0x", target));
+	RETERR(isc_str_tobuffer("0x", target));
 	while (region.length != 0) {
 		snprintf(buf, sizeof(buf), "%02x", region.base[0]);
 		isc_region_consume(&region, 1);
-		RETERR(str_totext(buf, target));
+		RETERR(isc_str_tobuffer(buf, target));
 	}
 	return (ISC_R_SUCCESS);
 }
@@ -62,7 +60,7 @@ fromwire_in_nsap(ARGS_FROMWIRE) {
 	if (region.length < 1)
 		return (ISC_R_UNEXPECTEDEND);
 
-	RETERR(mem_tobuffer(target, region.base, region.length));
+	RETERR(isc_mem_tobuffer(target, region.base, region.length));
 	isc_buffer_forward(source, region.length);
 	return (ISC_R_SUCCESS);
 }
@@ -75,95 +73,7 @@ towire_in_nsap(ARGS_TOWIRE) {
 
 	UNUSED(cctx);
 
-	return (mem_tobuffer(target, rdata->data, rdata->length));
-}
-
-static inline int
-compare_in_nsap(ARGS_COMPARE) {
-	isc_region_t r1;
-	isc_region_t r2;
-
-	REQUIRE(rdata1->type == rdata2->type);
-	REQUIRE(rdata1->rdclass == rdata2->rdclass);
-	REQUIRE(rdata1->type == dns_rdatatype_nsap);
-	REQUIRE(rdata1->rdclass == dns_rdataclass_in);
-	REQUIRE(rdata1->length != 0);
-	REQUIRE(rdata2->length != 0);
-
-	dns_rdata_toregion(rdata1, &r1);
-	dns_rdata_toregion(rdata2, &r2);
-	return (isc_region_compare(&r1, &r2));
-}
-
-static inline isc_result_t
-fromstruct_in_nsap(ARGS_FROMSTRUCT) {
-	dns_rdata_in_nsap_t *nsap = source;
-
-	REQUIRE(type == dns_rdatatype_nsap);
-	REQUIRE(rdclass == dns_rdataclass_in);
-	REQUIRE(source != NULL);
-	REQUIRE(nsap->common.rdtype == type);
-	REQUIRE(nsap->common.rdclass == rdclass);
-	REQUIRE(nsap->nsap != NULL || nsap->nsap_len == 0);
-
-	UNUSED(type);
-	UNUSED(rdclass);
-
-	return (mem_tobuffer(target, nsap->nsap, nsap->nsap_len));
-}
-
-static inline isc_result_t
-tostruct_in_nsap(ARGS_TOSTRUCT) {
-	dns_rdata_in_nsap_t *nsap = target;
-	isc_region_t r;
-
-	REQUIRE(rdata->type == dns_rdatatype_nsap);
-	REQUIRE(rdata->rdclass == dns_rdataclass_in);
-	REQUIRE(target != NULL);
-	REQUIRE(rdata->length != 0);
-
-	nsap->common.rdclass = rdata->rdclass;
-	nsap->common.rdtype = rdata->type;
-	ISC_LINK_INIT(&nsap->common, link);
-
-	dns_rdata_toregion(rdata, &r);
-	nsap->nsap_len = r.length;
-	nsap->nsap = mem_maybedup(r.base, r.length);
-	if (nsap->nsap == NULL)
-		return (ISC_R_NOMEMORY);
-
-	return (ISC_R_SUCCESS);
-}
-
-static inline void
-freestruct_in_nsap(ARGS_FREESTRUCT) {
-	dns_rdata_in_nsap_t *nsap = source;
-
-	REQUIRE(source != NULL);
-	REQUIRE(nsap->common.rdclass == dns_rdataclass_in);
-	REQUIRE(nsap->common.rdtype == dns_rdatatype_nsap);
-
-	if (nsap->nsap != NULL)
-		free(nsap->nsap);
-}
-
-static inline isc_boolean_t
-checkowner_in_nsap(ARGS_CHECKOWNER) {
-
-	REQUIRE(type == dns_rdatatype_nsap);
-	REQUIRE(rdclass == dns_rdataclass_in);
-
-	UNUSED(name);
-	UNUSED(type);
-	UNUSED(rdclass);
-	UNUSED(wildcard);
-
-	return (ISC_TRUE);
-}
-
-static inline int
-casecompare_in_nsap(ARGS_COMPARE) {
-	return (compare_in_nsap(rdata1, rdata2));
+	return (isc_mem_tobuffer(target, rdata->data, rdata->length));
 }
 
 #endif	/* RDATA_IN_1_NSAP_22_C */

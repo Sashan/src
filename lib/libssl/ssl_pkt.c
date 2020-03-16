@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_pkt.c,v 1.20 2020/02/23 17:59:03 tb Exp $ */
+/* $OpenBSD: ssl_pkt.c,v 1.24 2020/03/16 15:25:14 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -152,7 +152,7 @@ ssl3_read_n(SSL *s, int n, int max, int extend)
 	int i, len, left;
 	size_t align;
 	unsigned char *pkt;
-	SSL3_BUFFER *rb;
+	SSL3_BUFFER_INTERNAL *rb;
 
 	if (n <= 0)
 		return n;
@@ -329,10 +329,10 @@ ssl3_get_record(SSL *s)
 {
 	int al;
 	int enc_err, n, i, ret = -1;
-	SSL3_RECORD *rr;
+	SSL3_RECORD_INTERNAL *rr;
 	SSL_SESSION *sess;
 	unsigned char md[EVP_MAX_MD_SIZE];
-	unsigned mac_size, orig_len;
+	unsigned int mac_size, orig_len;
 
 	rr = &(S3I(s)->rrec);
 	sess = s->session;
@@ -360,7 +360,7 @@ ssl3_get_record(SSL *s)
 
 		CBS_init(&header, s->internal->packet, SSL3_RT_HEADER_LENGTH);
 
-		/* Pull apart the header into the SSL3_RECORD */
+		/* Pull apart the header into the SSL3_RECORD_INTERNAL */
 		if (!CBS_get_u8(&header, &type) ||
 		    !CBS_get_u16(&header, &ssl_version) ||
 		    !CBS_get_u16(&header, &len)) {
@@ -431,17 +431,15 @@ ssl3_get_record(SSL *s)
 	/* decrypt in place in 'rr->input' */
 	rr->data = rr->input;
 
-	enc_err = s->method->internal->ssl3_enc->enc(s, 0);
 	/* enc_err is:
 	 *    0: (in non-constant time) if the record is publically invalid.
 	 *    1: if the padding is valid
 	 *    -1: if the padding is invalid */
-	if (enc_err == 0) {
+	if ((enc_err = tls1_enc(s, 0)) == 0) {
 		al = SSL_AD_BAD_RECORD_MAC;
 		SSLerror(s, SSL_R_BLOCK_CIPHER_PAD_IS_WRONG);
 		goto f_err;
 	}
-
 
 	/* r->length is now the compressed data plus mac */
 	if ((sess != NULL) && (s->enc_read_ctx != NULL) &&
@@ -453,8 +451,7 @@ ssl3_get_record(SSL *s)
 		mac_size = EVP_MD_CTX_size(s->read_hash);
 		OPENSSL_assert(mac_size <= EVP_MAX_MD_SIZE);
 
-		/* kludge: *_cbc_remove_padding passes padding length in rr->type */
-		orig_len = rr->length + ((unsigned int)rr->type >> 8);
+		orig_len = rr->length + rr->padding_length;
 
 		/* orig_len is the length of the record before any padding was
 		 * removed. This is public information, as is the MAC in use,
@@ -623,7 +620,7 @@ static int
 ssl3_create_record(SSL *s, unsigned char *p, int type, const unsigned char *buf,
     unsigned int len)
 {
-	SSL3_RECORD *wr = &(S3I(s)->wrec);
+	SSL3_RECORD_INTERNAL *wr = &(S3I(s)->wrec);
 	SSL_SESSION *sess = s->session;
 	int eivlen, mac_size;
 	uint16_t version;
@@ -705,8 +702,8 @@ ssl3_create_record(SSL *s, unsigned char *p, int type, const unsigned char *buf,
 		wr->length += eivlen;
 	}
 
-	/* ssl3_enc can only have an error on read */
-	s->method->internal->ssl3_enc->enc(s, 1);
+	/* tls1_enc can only have an error on read */
+	tls1_enc(s, 1);
 
 	/* record length after mac and block padding */
 	if (!CBB_add_u16(&cbb, wr->length))
@@ -731,8 +728,8 @@ ssl3_create_record(SSL *s, unsigned char *p, int type, const unsigned char *buf,
 static int
 do_ssl3_write(SSL *s, int type, const unsigned char *buf, unsigned int len)
 {
-	SSL3_RECORD *wr = &(S3I(s)->wrec);
-	SSL3_BUFFER *wb = &(S3I(s)->wbuf);
+	SSL3_RECORD_INTERNAL *wr = &(S3I(s)->wrec);
+	SSL3_BUFFER_INTERNAL *wb = &(S3I(s)->wbuf);
 	SSL_SESSION *sess = s->session;
 	unsigned char *p;
 	int i, clear = 0;
@@ -743,7 +740,7 @@ do_ssl3_write(SSL *s, int type, const unsigned char *buf, unsigned int len)
 		if (!ssl3_setup_write_buffer(s))
 			return -1;
 
-	/* first check if there is a SSL3_BUFFER still being written
+	/* first check if there is a SSL3_BUFFER_INTERNAL still being written
 	 * out.  This will happen with non blocking IO */
 	if (wb->left != 0)
 		return (ssl3_write_pending(s, type, buf, len));
@@ -832,7 +829,7 @@ int
 ssl3_write_pending(SSL *s, int type, const unsigned char *buf, unsigned int len)
 {
 	int i;
-	SSL3_BUFFER *wb = &(S3I(s)->wbuf);
+	SSL3_BUFFER_INTERNAL *wb = &(S3I(s)->wbuf);
 
 	/* XXXX */
 	if ((S3I(s)->wpend_tot > (int)len) || ((S3I(s)->wpend_buf != buf) &&
@@ -908,7 +905,7 @@ ssl3_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
 	void (*cb)(const SSL *ssl, int type2, int val) = NULL;
 	int al, i, j, ret, rrcount = 0;
 	unsigned int n;
-	SSL3_RECORD *rr;
+	SSL3_RECORD_INTERNAL *rr;
 
 	if (S3I(s)->rbuf.buf == NULL) /* Not initialized yet */
 		if (!ssl3_setup_read_buffer(s))

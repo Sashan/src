@@ -1,4 +1,4 @@
-/*	$OpenBSD: roff.h,v 1.52 2020/01/19 17:59:01 schwarze Exp $	*/
+/*	$OpenBSD: roff.h,v 1.54 2020/02/27 21:38:27 schwarze Exp $	*/
 /*
  * Copyright (c) 2008, 2009, 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
  * Copyright (c) 2013-2015, 2017-2020 Ingo Schwarze <schwarze@openbsd.org>
@@ -522,6 +522,8 @@ struct	roff_node {
 #define	NODE_NOFILL	 (1 << 8)  /* Fill mode switched off. */
 #define	NODE_NOSRC	 (1 << 9)  /* Generated node, not in input file. */
 #define	NODE_NOPRT	 (1 << 10) /* Shall not print anything. */
+#define	NODE_ID		 (1 << 11) /* Target for deep linking. */
+#define	NODE_HREF	 (1 << 12) /* Link to another place in this page. */
 	int		  prev_font; /* Before entering this node. */
 	int		  aux;     /* Decoded node data, type-dependent. */
 	enum roff_tok	  tok;     /* Request or macro ID. */
@@ -549,5 +551,9 @@ struct	roff_meta {
 extern	const char *const *roff_name;
 
 
-int		 arch_valid(const char *, enum mandoc_os);
-void		 deroff(char **, const struct roff_node *);
+int		  arch_valid(const char *, enum mandoc_os);
+void		  deroff(char **, const struct roff_node *);
+struct roff_node *roff_node_child(struct roff_node *);
+struct roff_node *roff_node_next(struct roff_node *);
+struct roff_node *roff_node_prev(struct roff_node *);
+int		  roff_node_transparent(struct roff_node *);
