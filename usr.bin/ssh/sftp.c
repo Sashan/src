@@ -1,4 +1,4 @@
-/* $OpenBSD: sftp.c,v 1.196 2019/11/01 03:54:33 djm Exp $ */
+/* $OpenBSD: sftp.c,v 1.198 2020/02/26 11:46:51 dtucker Exp $ */
 /*
  * Copyright (c) 2001-2004 Damien Miller <djm@openbsd.org>
  *
@@ -2214,7 +2214,7 @@ interactive_loop(struct sftp_conn *conn, char *file1, char *file2)
 		const char *line;
 		int count = 0;
 
-		signal(SIGINT, SIG_IGN);
+		ssh_signal(SIGINT, SIG_IGN);
 
 		if (el == NULL) {
 			if (interactive)
@@ -2241,14 +2241,14 @@ interactive_loop(struct sftp_conn *conn, char *file1, char *file2)
 
 		/* Handle user interrupts gracefully during commands */
 		interrupted = 0;
-		signal(SIGINT, cmd_interrupt);
+		ssh_signal(SIGINT, cmd_interrupt);
 
 		err = parse_dispatch_command(conn, cmd, &remote_path,
 		    startdir, batchmode, !interactive && el == NULL);
 		if (err != 0)
 			break;
 	}
-	signal(SIGCHLD, SIG_DFL);
+	ssh_signal(SIGCHLD, SIG_DFL);
 	free(remote_path);
 	free(startdir);
 	free(conn);
@@ -2292,20 +2292,20 @@ connect_to_server(char *path, char **args, int *in, int *out)
 		 * kill it too.  Contrawise, since sftp sends SIGTERMs to the
 		 * underlying ssh, it must *not* ignore that signal.
 		 */
-		signal(SIGINT, SIG_IGN);
-		signal(SIGTERM, SIG_DFL);
+		ssh_signal(SIGINT, SIG_IGN);
+		ssh_signal(SIGTERM, SIG_DFL);
 		execvp(path, args);
 		fprintf(stderr, "exec: %s: %s\n", path, strerror(errno));
 		_exit(1);
 	}
 
-	signal(SIGTERM, killchild);
-	signal(SIGINT, killchild);
-	signal(SIGHUP, killchild);
-	signal(SIGTSTP, suspchild);
-	signal(SIGTTIN, suspchild);
-	signal(SIGTTOU, suspchild);
-	signal(SIGCHLD, sigchld_handler);
+	ssh_signal(SIGTERM, killchild);
+	ssh_signal(SIGINT, killchild);
+	ssh_signal(SIGHUP, killchild);
+	ssh_signal(SIGTSTP, suspchild);
+	ssh_signal(SIGTTIN, suspchild);
+	ssh_signal(SIGTTOU, suspchild);
+	ssh_signal(SIGCHLD, sigchld_handler);
 	close(c_in);
 	close(c_out);
 }
@@ -2330,7 +2330,7 @@ main(int argc, char **argv)
 {
 	int in, out, ch, err, tmp, port = -1;
 	char *host = NULL, *user, *cp, *file2 = NULL;
-	int debug_level = 0, sshver = 2;
+	int debug_level = 0;
 	char *file1 = NULL, *sftp_server = NULL;
 	char *ssh_program = _PATH_SSH_PROGRAM, *sftp_direct = NULL;
 	const char *errstr;
@@ -2395,12 +2395,10 @@ main(int argc, char **argv)
 			debug_level++;
 			break;
 		case '1':
-			sshver = 1;
-			if (sftp_server == NULL)
-				sftp_server = _PATH_SFTP_SERVER;
+			fatal("SSH protocol v.1 is no longer supported");
 			break;
 		case '2':
-			sshver = 2;
+			/* accept silently */
 			break;
 		case 'a':
 			global_aflag = 1;
@@ -2505,7 +2503,6 @@ main(int argc, char **argv)
 			addargs(&args, "-l");
 			addargs(&args, "%s", user);
 		}
-		addargs(&args, "-oProtocol %d", sshver);
 
 		/* no subsystem if the server-spec contains a '/' */
 		if (sftp_server == NULL || strchr(sftp_server, '/') == NULL)

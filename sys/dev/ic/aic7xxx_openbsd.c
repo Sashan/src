@@ -1,4 +1,4 @@
-/*	$OpenBSD: aic7xxx_openbsd.c,v 1.56 2017/12/12 12:33:36 krw Exp $	*/
+/*	$OpenBSD: aic7xxx_openbsd.c,v 1.60 2020/02/15 18:02:00 krw Exp $	*/
 /*	$NetBSD: aic7xxx_osm.c,v 1.14 2003/11/02 11:07:44 wiz Exp $	*/
 
 /*
@@ -53,7 +53,6 @@ void	ahc_execute_scb(void *, bus_dma_segment_t *, int);
 int	ahc_poll(struct ahc_softc *, int);
 void	ahc_setup_data(struct ahc_softc *, struct scsi_xfer *, struct scb *);
 
-void	ahc_minphys(struct buf *, struct scsi_link *);
 void	ahc_adapter_req_set_xfer_mode(struct ahc_softc *, struct scb *);
 
 
@@ -61,12 +60,8 @@ struct cfdriver ahc_cd = {
 	NULL, "ahc", DV_DULL
 };
 
-static struct scsi_adapter ahc_switch =
-{
-	ahc_action,
-	ahc_minphys,
-	0,
-	0,
+static struct scsi_adapter ahc_switch = {
+	ahc_action, NULL, NULL, NULL, NULL
 };
 
 /*
@@ -255,22 +250,6 @@ ahc_done(struct ahc_softc *ahc, struct scb *scb)
 	}
 
 	scsi_done(xs);
-}
-
-void
-ahc_minphys(struct buf *bp, struct scsi_link *sl)
-{
-	/*
-	 * Even though the card can transfer up to 16megs per command
-	 * we are limited by the number of segments in the dma segment
-	 * list that we can hold.  The worst case is that all pages are
-	 * discontinuous physically, hence the "page per segment" limit
-	 * enforced here.
-	 */
-	if (bp->b_bcount > ((AHC_NSEG - 1) * PAGE_SIZE)) {
-		bp->b_bcount = ((AHC_NSEG - 1) * PAGE_SIZE);
-	}
-	minphys(bp);
 }
 
 void

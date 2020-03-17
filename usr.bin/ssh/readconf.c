@@ -1,4 +1,4 @@
-/* $OpenBSD: readconf.c,v 1.319 2019/12/21 02:19:13 djm Exp $ */
+/* $OpenBSD: readconf.c,v 1.326 2020/02/06 22:46:31 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -300,6 +300,16 @@ static struct {
 	{ NULL, oBadOption }
 };
 
+static char *kex_default_pk_alg_filtered;
+
+const char *
+kex_default_pk_alg(void)
+{
+	if (kex_default_pk_alg_filtered == NULL)
+		fatal("kex_default_pk_alg not initialized.");
+	return kex_default_pk_alg_filtered;
+}
+
 /*
  * Adds a local TCP/IP port forward to options.  Never returns if there is an
  * error.
@@ -504,7 +514,7 @@ execute_in_shell(const char *cmd)
 		execv(argv[0], argv);
 		error("Unable to execute '%.100s': %s", cmd, strerror(errno));
 		/* Die with signal to make this error apparent to parent. */
-		signal(SIGTERM, SIG_DFL);
+		ssh_signal(SIGTERM, SIG_DFL);
 		kill(getpid(), SIGTERM);
 		_exit(1);
 	}
@@ -813,6 +823,13 @@ static const struct multistate multistate_canonicalizehostname[] = {
 	{ "always",			SSH_CANONICALISE_ALWAYS },
 	{ NULL, -1 }
 };
+static const struct multistate multistate_compression[] = {
+#ifdef WITH_ZLIB
+	{ "yes",			COMP_ZLIB },
+#endif
+	{ "no",				COMP_NONE },
+	{ NULL, -1 }
+};
 
 /*
  * Processes a single option line as used in the configuration files. This
@@ -1022,7 +1039,8 @@ parse_time:
 
 	case oCompression:
 		intptr = &options->compression;
-		goto parse_flag;
+		multistate_ptr = multistate_compression;
+		goto parse_multistate;
 
 	case oTCPKeepAlive:
 		intptr = &options->tcp_keep_alive;
@@ -1989,6 +2007,7 @@ void
 fill_default_options(Options * options)
 {
 	char *all_cipher, *all_mac, *all_kex, *all_key, *all_sig;
+	char *def_cipher, *def_mac, *def_kex, *def_key, *def_sig;
 	int r;
 
 	if (options->forward_agent == -1)
@@ -2075,6 +2094,8 @@ fill_default_options(Options * options)
 		options->system_hostfiles[options->num_system_hostfiles++] =
 		    xstrdup(_PATH_SSH_SYSTEM_HOSTFILE2);
 	}
+	if (options->update_hostkeys == -1)
+			options->update_hostkeys = SSH_UPDATE_HOSTKEYS_NO;
 	if (options->num_user_hostfiles == 0) {
 		options->user_hostfiles[options->num_user_hostfiles++] =
 		    xstrdup(_PATH_SSH_USER_HOSTFILE);
@@ -2135,8 +2156,6 @@ fill_default_options(Options * options)
 		options->canonicalize_hostname = SSH_CANONICALISE_NO;
 	if (options->fingerprint_hash == -1)
 		options->fingerprint_hash = SSH_FP_HASH_DEFAULT;
-	if (options->update_hostkeys == -1)
-		options->update_hostkeys = 0;
 	if (options->sk_provider == NULL)
 		options->sk_provider = xstrdup("internal");
 
@@ -2146,24 +2165,35 @@ fill_default_options(Options * options)
 	all_kex = kex_alg_list(',');
 	all_key = sshkey_alg_list(0, 0, 1, ',');
 	all_sig = sshkey_alg_list(0, 1, 1, ',');
+	/* remove unsupported algos from default lists */
+	def_cipher = match_filter_whitelist(KEX_CLIENT_ENCRYPT, all_cipher);
+	def_mac = match_filter_whitelist(KEX_CLIENT_MAC, all_mac);
+	def_kex = match_filter_whitelist(KEX_CLIENT_KEX, all_kex);
+	def_key = match_filter_whitelist(KEX_DEFAULT_PK_ALG, all_key);
+	def_sig = match_filter_whitelist(SSH_ALLOWED_CA_SIGALGS, all_sig);
 #define ASSEMBLE(what, defaults, all) \
 	do { \
 		if ((r = kex_assemble_names(&options->what, \
 		    defaults, all)) != 0) \
 			fatal("%s: %s: %s", __func__, #what, ssh_err(r)); \
 	} while (0)
-	ASSEMBLE(ciphers, KEX_CLIENT_ENCRYPT, all_cipher);
-	ASSEMBLE(macs, KEX_CLIENT_MAC, all_mac);
-	ASSEMBLE(kex_algorithms, KEX_CLIENT_KEX, all_kex);
-	ASSEMBLE(hostbased_key_types, KEX_DEFAULT_PK_ALG, all_key);
-	ASSEMBLE(pubkey_key_types, KEX_DEFAULT_PK_ALG, all_key);
-	ASSEMBLE(ca_sign_algorithms, SSH_ALLOWED_CA_SIGALGS, all_sig);
+	ASSEMBLE(ciphers, def_cipher, all_cipher);
+	ASSEMBLE(macs, def_mac, all_mac);
+	ASSEMBLE(kex_algorithms, def_kex, all_kex);
+	ASSEMBLE(hostbased_key_types, def_key, all_key);
+	ASSEMBLE(pubkey_key_types, def_key, all_key);
+	ASSEMBLE(ca_sign_algorithms, def_sig, all_sig);
 #undef ASSEMBLE
 	free(all_cipher);
 	free(all_mac);
 	free(all_kex);
 	free(all_key);
 	free(all_sig);
+	free(def_cipher);
+	free(def_mac);
+	free(def_kex);
+	kex_default_pk_alg_filtered = def_key; /* save for later use */
+	free(def_sig);
 
 #define CLEAR_ON_NONE(v) \
 	do { \
@@ -2612,14 +2642,19 @@ dump_cfg_forwards(OpCodes code, u_int count, const struct Forward *fwds)
 void
 dump_client_config(Options *o, const char *host)
 {
-	int i;
+	int i, r;
 	char buf[8], *all_key;
 
-	/* This is normally prepared in ssh_kex2 */
+	/*
+	 * Expand HostKeyAlgorithms name lists. This isn't handled in
+	 * fill_default_options() like the other algorithm lists because
+	 * the host key algorithms are by default dynamically chosen based
+	 * on the host's keys found in known_hosts.
+	 */
 	all_key = sshkey_alg_list(0, 0, 1, ',');
-	if (kex_assemble_names( &o->hostkeyalgorithms,
-	    KEX_DEFAULT_PK_ALG, all_key) != 0)
-		fatal("%s: kex_assemble_names failed", __func__);
+	if ((r = kex_assemble_names(&o->hostkeyalgorithms, kex_default_pk_alg(),
+	    all_key)) != 0)
+		fatal("%s: expand HostKeyAlgorithms: %s", __func__, ssh_err(r));
 	free(all_key);
 
 	/* Most interesting options first: user, host, port */
@@ -2677,7 +2712,7 @@ dump_client_config(Options *o, const char *host)
 	/* String options */
 	dump_cfg_string(oBindAddress, o->bind_address);
 	dump_cfg_string(oBindInterface, o->bind_interface);
-	dump_cfg_string(oCiphers, o->ciphers ? o->ciphers : KEX_CLIENT_ENCRYPT);
+	dump_cfg_string(oCiphers, o->ciphers);
 	dump_cfg_string(oControlPath, o->control_path);
 	dump_cfg_string(oHostKeyAlgorithms, o->hostkeyalgorithms);
 	dump_cfg_string(oHostKeyAlias, o->host_key_alias);
@@ -2685,12 +2720,12 @@ dump_client_config(Options *o, const char *host)
 	dump_cfg_string(oIdentityAgent, o->identity_agent);
 	dump_cfg_string(oIgnoreUnknown, o->ignored_unknown);
 	dump_cfg_string(oKbdInteractiveDevices, o->kbd_interactive_devices);
-	dump_cfg_string(oKexAlgorithms, o->kex_algorithms ? o->kex_algorithms : KEX_CLIENT_KEX);
-	dump_cfg_string(oCASignatureAlgorithms, o->ca_sign_algorithms ? o->ca_sign_algorithms : SSH_ALLOWED_CA_SIGALGS);
+	dump_cfg_string(oKexAlgorithms, o->kex_algorithms);
+	dump_cfg_string(oCASignatureAlgorithms, o->ca_sign_algorithms);
 	dump_cfg_string(oLocalCommand, o->local_command);
 	dump_cfg_string(oRemoteCommand, o->remote_command);
 	dump_cfg_string(oLogLevel, log_level_name(o->log_level));
-	dump_cfg_string(oMacs, o->macs ? o->macs : KEX_CLIENT_MAC);
+	dump_cfg_string(oMacs, o->macs);
 #ifdef ENABLE_PKCS11
 	dump_cfg_string(oPKCS11Provider, o->pkcs11_provider);
 #endif

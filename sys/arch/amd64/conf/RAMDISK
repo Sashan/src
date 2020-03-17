@@ -1,4 +1,4 @@
-#	$OpenBSD: RAMDISK,v 1.74 2019/09/07 13:46:19 kettenis Exp $
+#	$OpenBSD: RAMDISK,v 1.77 2020/03/05 16:36:30 otto Exp $
 
 machine		amd64
 maxusers	4
@@ -14,6 +14,7 @@ option		PCIVERBOSE
 option		SCSITERSE
 
 option		FFS
+option		FFS2
 
 config		bsd root on rd0a swap on rd0b and wd0b and sd0b
 
@@ -79,13 +80,13 @@ mfi*		at pci?			# LSI MegaRAID SAS controllers
 
 scsibus*	at scsi?
 sd*		at scsibus?		# SCSI disk drives
-cd*		at scsibus?		# SCSI CD-ROM drives
+#cd*		at scsibus?		# SCSI CD-ROM drives
 
 pciide*		at pci? flags 0x0000
 wd*		at pciide? flags 0x0000
 atapiscsi*	at pciide?
 
-fxp*		at pci?			# EtherExpress 10/100B ethernet
+#fxp*		at pci?			# EtherExpress 10/100B ethernet
 rl*		at pci?			# Realtek 81[23]9 ethernet
 re*		at pci?			# Realtek 8169/8169S/8110S
 em*		at pci?			# Intel Pro/1000 ethernet

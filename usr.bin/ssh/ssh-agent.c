@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh-agent.c,v 1.251 2019/12/13 19:09:10 djm Exp $ */
+/* $OpenBSD: ssh-agent.c,v 1.257 2020/03/06 18:28:27 markus Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -414,8 +414,9 @@ process_add_identity(SocketEntry *e)
 {
 	Identity *id;
 	int success = 0, confirm = 0;
-	u_int seconds, maxsign;
+	u_int seconds = 0, maxsign;
 	char *fp, *comment = NULL, *ext_name = NULL, *sk_provider = NULL;
+	char canonical_provider[PATH_MAX];
 	time_t death = 0;
 	struct sshkey *k = NULL;
 	u_char ctype;
@@ -495,19 +496,30 @@ process_add_identity(SocketEntry *e)
 	}
 	if (sk_provider != NULL) {
 		if (!sshkey_is_sk(k)) {
-			error("Cannot add provider: %s is not a security key",
-			    sshkey_type(k));
+			error("Cannot add provider: %s is not an "
+			    "authenticator-hosted key", sshkey_type(k));
 			free(sk_provider);
 			goto send;
 		}
-		if (strcasecmp(sk_provider, "internal") == 0)
+		if (strcasecmp(sk_provider, "internal") == 0) {
 			debug("%s: internal provider", __func__);
-		else if (match_pattern_list(sk_provider,
-		    provider_whitelist, 0) != 1) {
-			error("Refusing add key: provider %s not whitelisted",
-			    sk_provider);
+		} else {
+			if (realpath(sk_provider, canonical_provider) == NULL) {
+				verbose("failed provider \"%.100s\": "
+				    "realpath: %s", sk_provider,
+				    strerror(errno));
+				free(sk_provider);
+				goto send;
+			}
 			free(sk_provider);
-			goto send;
+			sk_provider = xstrdup(canonical_provider);
+			if (match_pattern_list(sk_provider,
+			    provider_whitelist, 0) != 1) {
+				error("Refusing add key: "
+				    "provider %s not whitelisted", sk_provider);
+				free(sk_provider);
+				goto send;
+			}
 		}
 	}
 	if ((r = sshkey_shield_private(k)) != 0) {
@@ -594,8 +606,7 @@ process_lock_agent(SocketEntry *e, int lock)
 			fatal("bcrypt_pbkdf");
 		success = 1;
 	}
-	explicit_bzero(passwd, pwlen);
-	free(passwd);
+	freezero(passwd, pwlen);
 	send_status(e, success);
 }
 
@@ -619,6 +630,7 @@ static void
 process_add_smartcard_key(SocketEntry *e)
 {
 	char *provider = NULL, *pin = NULL, canonical_provider[PATH_MAX];
+	char **comments = NULL;
 	int r, i, count = 0, success = 0, confirm = 0;
 	u_int seconds;
 	time_t death = 0;
@@ -668,28 +680,34 @@ process_add_smartcard_key(SocketEntry *e)
 	if (lifetime && !death)
 		death = monotime() + lifetime;
 
-	count = pkcs11_add_provider(canonical_provider, pin, &keys);
+	count = pkcs11_add_provider(canonical_provider, pin, &keys, &comments);
 	for (i = 0; i < count; i++) {
 		k = keys[i];
 		if (lookup_identity(k) == NULL) {
 			id = xcalloc(1, sizeof(Identity));
 			id->key = k;
+			keys[i] = NULL; /* transferred */
 			id->provider = xstrdup(canonical_provider);
-			id->comment = xstrdup(canonical_provider); /* XXX */
+			if (*comments[i] != '\0') {
+				id->comment = comments[i];
+				comments[i] = NULL; /* transferred */
+			} else {
+				id->comment = xstrdup(canonical_provider);
+			}
 			id->death = death;
 			id->confirm = confirm;
 			TAILQ_INSERT_TAIL(&idtab->idlist, id, next);
 			idtab->nentries++;
 			success = 1;
-		} else {
-			sshkey_free(k);
 		}
-		keys[i] = NULL;
+		sshkey_free(keys[i]);
+		free(comments[i]);
 	}
 send:
 	free(pin);
 	free(provider);
 	free(keys);
+	free(comments);
 	send_status(e, success);
 }
 
@@ -1383,10 +1401,10 @@ skip:
 	if (ac > 0)
 		parent_alive_interval = 10;
 	idtab_init();
-	signal(SIGPIPE, SIG_IGN);
-	signal(SIGINT, (d_flag | D_flag) ? cleanup_handler : SIG_IGN);
-	signal(SIGHUP, cleanup_handler);
-	signal(SIGTERM, cleanup_handler);
+	ssh_signal(SIGPIPE, SIG_IGN);
+	ssh_signal(SIGINT, (d_flag | D_flag) ? cleanup_handler : SIG_IGN);
+	ssh_signal(SIGHUP, cleanup_handler);
+	ssh_signal(SIGTERM, cleanup_handler);
 
 	if (pledge("stdio rpath cpath unix id proc exec", NULL) == -1)
 		fatal("%s: pledge: %s", __progname, strerror(errno));

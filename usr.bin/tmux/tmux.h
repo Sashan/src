@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.948 2020/01/13 11:59:21 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.958 2020/03/16 06:12:43 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -166,6 +166,7 @@ enum {
 	/* Mouse keys. */
 	KEYC_MOUSE, /* unclassified mouse event */
 	KEYC_DRAGGING, /* dragging in progress */
+	KEYC_DOUBLECLICK, /* double click complete */
 	KEYC_MOUSE_KEY(MOUSEMOVE),
 	KEYC_MOUSE_KEY(MOUSEDOWN1),
 	KEYC_MOUSE_KEY(MOUSEDOWN2),
@@ -560,6 +561,7 @@ struct msg_write_close {
 
 #define ALL_MODES 0xffffff
 #define ALL_MOUSE_MODES (MODE_MOUSE_STANDARD|MODE_MOUSE_BUTTON|MODE_MOUSE_ALL)
+#define MOTION_MOUSE_MODES (MODE_MOUSE_BUTTON|MODE_MOUSE_ALL)
 
 /*
  * A single UTF-8 character. UTF8_SIZE must be big enough to hold
@@ -1116,6 +1118,7 @@ RB_HEAD(sessions, session);
 /* Mouse input. */
 struct mouse_event {
 	int		valid;
+	int		ignore;
 
 	key_code	key;
 
@@ -1171,6 +1174,7 @@ struct tty_term {
 #define TERM_NOXENL 0x2
 #define TERM_DECSLRM 0x4
 #define TERM_DECFRA 0x8
+#define TERM_RGBCOLOURS 0x10
 	int		 flags;
 
 	LIST_ENTRY(tty_term) entry;
@@ -1546,6 +1550,7 @@ struct client {
 
 	struct event	 click_timer;
 	u_int		 click_button;
+	struct mouse_event click_event;
 
 	struct status_line status;
 
@@ -1576,17 +1581,22 @@ struct client {
 #define CLIENT_REDRAWSTATUSALWAYS 0x1000000
 #define CLIENT_REDRAWOVERLAY 0x2000000
 #define CLIENT_CONTROL_NOOUTPUT 0x4000000
+#define CLIENT_DEFAULTSOCKET 0x8000000
+#define CLIENT_STARTSERVER 0x10000000
 #define CLIENT_ALLREDRAWFLAGS		\
 	(CLIENT_REDRAWWINDOW|		\
 	 CLIENT_REDRAWSTATUS|		\
 	 CLIENT_REDRAWSTATUSALWAYS|	\
 	 CLIENT_REDRAWBORDERS|		\
 	 CLIENT_REDRAWOVERLAY)
+#define CLIENT_UNATTACHEDFLAGS	\
+	(CLIENT_DEAD|		\
+	 CLIENT_SUSPENDED|	\
+	 CLIENT_DETACHING)
 #define CLIENT_NOSIZEFLAGS	\
 	(CLIENT_DEAD|		\
 	 CLIENT_SUSPENDED|	\
-	 CLIENT_DETACHING|	\
-	 CLIENT_READONLY)
+	 CLIENT_DETACHING)
 	int		 flags;
 	struct key_table *keytable;
 
@@ -1609,6 +1619,7 @@ struct client {
 #define PROMPT_NUMERIC 0x2
 #define PROMPT_INCREMENTAL 0x4
 #define PROMPT_NOFORMAT 0x8
+#define PROMPT_KEY 0x10
 	int		 prompt_flags;
 
 	struct session	*session;
@@ -1636,6 +1647,7 @@ TAILQ_HEAD(clients, client);
 struct key_binding {
 	key_code		 key;
 	struct cmd_list		*cmdlist;
+	const char		*note;
 
 	int			 flags;
 #define KEY_BINDING_REPEAT 0x1
@@ -1763,6 +1775,7 @@ int		 areshell(const char *);
 void		 setblocking(int, int);
 const char	*find_cwd(void);
 const char	*find_home(void);
+const char	*getversion(void);
 
 /* proc.c */
 struct imsg;
@@ -1815,6 +1828,7 @@ char		*paste_make_sample(struct paste_buffer *);
 #define FORMAT_PANE 0x80000000U
 #define FORMAT_WINDOW 0x40000000U
 struct format_tree;
+struct format_modifier;
 const char	*format_skip(const char *, const char *);
 int		 format_true(const char *);
 struct format_tree *format_create(struct client *, struct cmdq_item *, int,
@@ -2147,7 +2161,8 @@ void	 key_bindings_unref_table(struct key_table *);
 struct key_binding *key_bindings_get(struct key_table *, key_code);
 struct key_binding *key_bindings_first(struct key_table *);
 struct key_binding *key_bindings_next(struct key_table *, struct key_binding *);
-void	 key_bindings_add(const char *, key_code, int, struct cmd_list *);
+void	 key_bindings_add(const char *, key_code, const char *, int,
+	     struct cmd_list *);
 void	 key_bindings_remove(const char *, key_code);
 void	 key_bindings_remove_table(const char *);
 void	 key_bindings_init(void);
@@ -2191,7 +2206,7 @@ void	 server_clear_marked(void);
 int	 server_is_marked(struct session *, struct winlink *,
 	     struct window_pane *);
 int	 server_check_marked(void);
-int	 server_start(struct tmuxproc *, struct event_base *, int, char *);
+int	 server_start(struct tmuxproc *, int, struct event_base *, int, char *);
 void	 server_update_socket(void);
 void	 server_add_accept(int);
 
@@ -2416,7 +2431,7 @@ void	 screen_free(struct screen *);
 void	 screen_reset_tabs(struct screen *);
 void	 screen_set_cursor_style(struct screen *, u_int);
 void	 screen_set_cursor_colour(struct screen *, const char *);
-void	 screen_set_title(struct screen *, const char *);
+int	 screen_set_title(struct screen *, const char *);
 void	 screen_set_path(struct screen *, const char *);
 void	 screen_push_title(struct screen *);
 void	 screen_pop_title(struct screen *);

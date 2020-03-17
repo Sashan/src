@@ -1,4 +1,4 @@
-/* $OpenBSD: syscall.c,v 1.3 2018/04/09 22:21:05 kettenis Exp $ */
+/* $OpenBSD: syscall.c,v 1.6 2020/03/13 05:20:07 deraadt Exp $ */
 /*
  * Copyright (c) 2015 Dale Rahn <drahn@dalerahn.com>
  *
@@ -50,6 +50,9 @@ svc_handler(trapframe_t *frame)
 	if (__predict_true((frame->tf_spsr & I_bit) == 0))
 		enable_interrupts();
 
+	/* Skip over speculation-blocking barrier. */
+	frame->tf_elr += 8;
+
 	code = frame->tf_x[8];
 
 	ap = &frame->tf_x[0];
@@ -98,9 +101,9 @@ svc_handler(trapframe_t *frame)
 
 	case ERESTART:
 		/*
-		 * Reconstruct the pc to point at the swi.
+		 * Reconstruct the pc to point at the svc.
 		 */
-		frame->tf_elr -= 4;
+		frame->tf_elr -= 12;
 		break;
 
 	case EJUSTRETURN:

@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.751 2020/01/14 20:53:02 kettenis Exp $
+#	$OpenBSD: Makefile,v 1.758 2020/03/04 21:41:36 kettenis Exp $
 
 MAN=	aac.4 abcrtc.4 ac97.4 acphy.4 acrtc.4 \
 	acpi.4 acpiac.4 acpials.4 acpiasus.4 acpibat.4 \
@@ -23,7 +23,7 @@ MAN=	aac.4 abcrtc.4 ac97.4 acphy.4 acrtc.4 \
 	cac.4 cas.4 cardbus.4 carp.4 ccp.4 ccpmic.4 cd.4 cdce.4 cfxga.4 \
 	ch.4 chvgpio.4 ciphy.4 ciss.4 clcs.4 clct.4 cmpci.4 \
 	com.4 cue.4 cy.4 cz.4 \
-	dc.4 dcphy.4 ddb.4 de.4 diskmap.4 divert.4 drm.4 dwctwo.4 \
+	dc.4 dcphy.4 ddb.4 de.4 diskmap.4 divert.4 drm.4 dt.4 dwctwo.4 \
 	dwdog.4 dwge.4 dwiic.4 dwmmc.4 dwpcie.4 dwxe.4 \
 	eap.4 ec.4 eephy.4 ef.4 eg.4 ehci.4 eisa.4 el.4 em.4 emc.4 gcu.4 \
 	emu.4 enc.4 endrun.4 envy.4 eoip.4 ep.4 epic.4 esa.4 \
@@ -40,7 +40,7 @@ MAN=	aac.4 abcrtc.4 ac97.4 acphy.4 acrtc.4 \
 	imxtmu.4 imxuart.4 inet.4 inet6.4 inphy.4 iophy.4 \
 	ip.4 ip6.4 ipcomp.4 ipgphy.4 ipmi.4 ips.4 ipsec.4 ipw.4 \
 	isa.4 isagpio.4 isapnp.4 islrtc.4 it.4 itherm.4 iwi.4 iwn.4 iwm.4 \
-	ix.4 ixgb.4 ixl.4 jmb.4 jme.4 jmphy.4 \
+	iwx.4 ix.4 ixgb.4 ixl.4 jmb.4 jme.4 jmphy.4 \
 	kate.4 kcov.4 km.4 ksmn.4 ksyms.4 kubsan.4 kue.4 lc.4 lge.4 lii.4 \
 	lisa.4 lm.4 lmenv.4 lmn.4 lmtemp.4 lo.4 lpt.4 lxtphy.4 luphy.4 \
 	maestro.4 mainbus.4 malo.4 maxds.4 maxrtc.4 maxtmp.4 mbg.4 \
@@ -61,11 +61,11 @@ MAN=	aac.4 abcrtc.4 ac97.4 acphy.4 acrtc.4 \
 	pvclock.4 pwdog.4 pwmbl.4 pwmfan.4 pwmreg.4 \
 	qla.4 qle.4 qlw.4 qsphy.4 \
 	radio.4 ral.4 random.4 rdomain.4 rd.4 rdac.4 re.4 rdcphy.4 rgephy.4 \
-	rge.4 ricohrtc.4 rkclock.4 rkdwusb.4 rkemmcphy.4 rkgpio.4 rkgrf.4 \
-	rkiic.4 rkpcie.4 rkpinctrl.4 rkpmic.4 rkpwm.4 rktemp.4 \
-	rl.4 rlphy.4 route.4 rsu.4 rtsx.4 rum.4 run.4 \
-	rtfps.4 rtw.4 rtwn.4 safe.4 safte.4 sbus.4 schsio.4 \
-	scsi.4 sd.4 \
+	rge.4 ricohrtc.4 rkanxdp.4 rkclock.4 rkdrm.4 rkdwhdmi.4 rkdwusb.4 \
+	rkemmcphy.4 rkgpio.4 rkgrf.4 rkiic.4 rkpcie.4 rkpinctrl.4 rkpmic.4 \
+	rkpwm.4 rktemp.4 rkvop.4 rl.4 rlphy.4 route.4 rsu.4 rtsx.4 rum.4 \
+	run.4 rtw.4 rtwn.4 \
+	safe.4 safte.4 sbus.4 schsio.4 scsi.4 sd.4 \
 	sdmmc.4 sdhc.4 se.4 ses.4 \
 	sf.4 sili.4 simplefb.4 siop.4 sis.4 sk.4 \
 	sm.4 smsc.4 softraid.4 spdmem.4 sdtemp.4 speaker.4 sppp.4 sqphy.4 \

@@ -31,7 +31,7 @@
 
 *******************************************************************************/
 
-/* $OpenBSD: if_em_hw.c,v 1.104 2019/09/05 20:47:49 kettenis Exp $ */
+/* $OpenBSD: if_em_hw.c,v 1.107 2020/03/08 11:43:43 mpi Exp $ */
 /*
  * if_em_hw.c Shared functions for accessing and configuring the MAC
  */
@@ -56,6 +56,7 @@
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
 
+#include <dev/pci/if_em.h>
 #include <dev/pci/if_em_hw.h>
 #include <dev/pci/if_em_soc.h>
 
@@ -92,7 +93,7 @@ static int32_t	em_init_lcd_from_nvm_config_region(struct em_hw *,  uint32_t,
 static int32_t	em_init_lcd_from_nvm(struct em_hw *);
 static int32_t	em_phy_no_cable_workaround(struct em_hw *);
 static void	em_init_rx_addrs(struct em_hw *);
-static void	em_initialize_hardware_bits(struct em_hw *);
+static void	em_initialize_hardware_bits(struct em_softc *);
 static void	em_toggle_lanphypc_pch_lpt(struct em_hw *);
 static int	em_disable_ulp_lpt_lp(struct em_hw *hw, bool force);
 static boolean_t em_is_onboard_nvm_eeprom(struct em_hw *);
@@ -511,6 +512,9 @@ em_set_mac_type(struct em_hw *hw)
 	case E1000_DEV_ID_82575EB_PF:
 	case E1000_DEV_ID_82575GB_QP:
 	case E1000_DEV_ID_82575GB_QP_PM:
+		hw->mac_type = em_82575;
+		hw->initialize_hw_bits_disable = 1;
+		break;
 	case E1000_DEV_ID_82576:
 	case E1000_DEV_ID_82576_FIBER:
 	case E1000_DEV_ID_82576_SERDES:
@@ -519,7 +523,7 @@ em_set_mac_type(struct em_hw *hw)
 	case E1000_DEV_ID_82576_NS:
 	case E1000_DEV_ID_82576_NS_SERDES:
 	case E1000_DEV_ID_82576_SERDES_QUAD:
-		hw->mac_type = em_82575;
+		hw->mac_type = em_82576;
 		hw->initialize_hw_bits_disable = 1;
 		break;
 	case E1000_DEV_ID_82580_COPPER:
@@ -625,6 +629,8 @@ em_set_mac_type(struct em_hw *hw)
 	case E1000_DEV_ID_PCH_SPT_I219_V4:
 	case E1000_DEV_ID_PCH_SPT_I219_LM5:
 	case E1000_DEV_ID_PCH_SPT_I219_V5:
+	case E1000_DEV_ID_PCH_CMP_I219_LM12:
+	case E1000_DEV_ID_PCH_CMP_I219_V12:
 		hw->mac_type = em_pch_spt;
 		break;
 	case E1000_DEV_ID_PCH_CNP_I219_LM6:
@@ -635,6 +641,15 @@ em_set_mac_type(struct em_hw *hw)
 	case E1000_DEV_ID_PCH_ICP_I219_V8:
 	case E1000_DEV_ID_PCH_ICP_I219_LM9:
 	case E1000_DEV_ID_PCH_ICP_I219_V9:
+	case E1000_DEV_ID_PCH_CMP_I219_LM10:
+	case E1000_DEV_ID_PCH_CMP_I219_V10:
+	case E1000_DEV_ID_PCH_CMP_I219_LM11:
+	case E1000_DEV_ID_PCH_CMP_I219_V11:
+	case E1000_DEV_ID_PCH_TGP_I219_LM13:
+	case E1000_DEV_ID_PCH_TGP_I219_V13:
+	case E1000_DEV_ID_PCH_TGP_I219_LM14:
+	case E1000_DEV_ID_PCH_TGP_I219_V14:
+	case E1000_DEV_ID_PCH_TGP_I219_LM15:
 		hw->mac_type = em_pch_cnp;
 		break;
 	case E1000_DEV_ID_EP80579_LAN_1:
@@ -674,6 +689,7 @@ em_set_mac_type(struct em_hw *hw)
 		break;
 	case em_80003es2lan:
 	case em_82575:
+	case em_82576:
 	case em_82580:
 	case em_i210:
 	case em_i350:
@@ -697,6 +713,7 @@ em_set_mac_type(struct em_hw *hw)
 
 	return E1000_SUCCESS;
 }
+
 /*****************************************************************************
  * Set media type and TBI compatibility.
  *
@@ -714,6 +731,7 @@ em_set_media_type(struct em_hw *hw)
 	}
 
 	if (hw->mac_type == em_82575 || hw->mac_type == em_82580 ||
+	    hw->mac_type == em_82576 ||
 	    hw->mac_type == em_i210 || hw->mac_type == em_i350) {
 		hw->media_type = em_media_type_copper;
 	
@@ -824,6 +842,7 @@ em_reset_hw(struct em_hw *hw)
 
         /* Set the completion timeout for 82575 chips */
         if (hw->mac_type == em_82575 || hw->mac_type == em_82580 ||
+	    hw->mac_type == em_82576 ||
 	    hw->mac_type == em_i210 || hw->mac_type == em_i350) {
                 ret_val = em_set_pciex_completion_timeout(hw);
                 if (ret_val) {              
@@ -1098,8 +1117,11 @@ em_reset_hw(struct em_hw *hw)
  *
  *****************************************************************************/
 STATIC void
-em_initialize_hardware_bits(struct em_hw *hw)
+em_initialize_hardware_bits(struct em_softc *sc)
 {
+	struct em_hw *hw = &sc->hw;
+	struct em_queue *que = sc->queues; /* Use only first queue. */
+
 	DEBUGFUNC("em_initialize_hardware_bits");
 
 	if ((hw->mac_type >= em_82571) && (!hw->initialize_hw_bits_disable)) {
@@ -1107,18 +1129,24 @@ em_initialize_hardware_bits(struct em_hw *hw)
 		uint32_t reg_ctrl, reg_ctrl_ext;
 		uint32_t reg_tarc0, reg_tarc1;
 		uint32_t reg_tctl;
-		uint32_t reg_txdctl, reg_txdctl1;
+		uint32_t reg_txdctl;
 		reg_tarc0 = E1000_READ_REG(hw, TARC0);
 		reg_tarc0 &= ~0x78000000;	/* Clear bits 30, 29, 28, and
 						 * 27 */
 
-		reg_txdctl = E1000_READ_REG(hw, TXDCTL);
+		reg_txdctl = E1000_READ_REG(hw, TXDCTL(que->me));
 		reg_txdctl |= E1000_TXDCTL_COUNT_DESC;	/* Set bit 22 */
-		E1000_WRITE_REG(hw, TXDCTL, reg_txdctl);
+		E1000_WRITE_REG(hw, TXDCTL(que->me), reg_txdctl);
 
-		reg_txdctl1 = E1000_READ_REG(hw, TXDCTL1);
-		reg_txdctl1 |= E1000_TXDCTL_COUNT_DESC;	/* Set bit 22 */
-		E1000_WRITE_REG(hw, TXDCTL1, reg_txdctl1);
+		/*
+		 * Old code always initialized queue 1,
+		 * even when unused, keep behaviour
+		 */
+		if (sc->num_queues == 1) {
+			reg_txdctl = E1000_READ_REG(hw, TXDCTL(1));
+			reg_txdctl |= E1000_TXDCTL_COUNT_DESC;
+			E1000_WRITE_REG(hw, TXDCTL(1), reg_txdctl);
+		}
 
 		switch (hw->mac_type) {
 		case em_82571:
@@ -1413,8 +1441,10 @@ out:
  * the transmit and receive units disabled and uninitialized.
  *****************************************************************************/
 int32_t
-em_init_hw(struct em_hw *hw)
+em_init_hw(struct em_softc *sc)
 {
+	struct em_hw *hw = &sc->hw;
+	struct em_queue *que = sc->queues; /* Use only first queue. */
 	uint32_t ctrl;
 	uint32_t i;
 	int32_t  ret_val;
@@ -1496,7 +1526,7 @@ em_init_hw(struct em_hw *hw)
 	/* Magic delay that improves problems with i219LM on HP Elitebook */
 	msec_delay(1);
 	/* Must be called after em_set_media_type because media_type is used */
-	em_initialize_hardware_bits(hw);
+	em_initialize_hardware_bits(sc);
 
 	/* Disabling VLAN filtering. */
 	DEBUGOUT("Initializing the IEEE VLAN\n");
@@ -1609,10 +1639,10 @@ em_init_hw(struct em_hw *hw)
 
 	/* Set the transmit descriptor write-back policy */
 	if (hw->mac_type > em_82544) {
-		ctrl = E1000_READ_REG(hw, TXDCTL);
+		ctrl = E1000_READ_REG(hw, TXDCTL(que->me));
 		ctrl = (ctrl & ~E1000_TXDCTL_WTHRESH) | 
 		    E1000_TXDCTL_FULL_TX_DESC_WB;
-		E1000_WRITE_REG(hw, TXDCTL, ctrl);
+		E1000_WRITE_REG(hw, TXDCTL(que->me), ctrl);
 	}
 	if ((hw->mac_type == em_82573) || (hw->mac_type == em_82574)) {
 		em_enable_tx_pkt_filtering(hw);
@@ -1645,6 +1675,7 @@ em_init_hw(struct em_hw *hw)
 	case em_82571:
 	case em_82572:
 	case em_82575:
+	case em_82576:
 	case em_82580:
 	case em_i210:
 	case em_i350:
@@ -1656,10 +1687,16 @@ em_init_hw(struct em_hw *hw)
 	case em_pch_lpt:
 	case em_pch_spt:
 	case em_pch_cnp:
-		ctrl = E1000_READ_REG(hw, TXDCTL1);
-		ctrl = (ctrl & ~E1000_TXDCTL_WTHRESH) | 
-		    E1000_TXDCTL_FULL_TX_DESC_WB;
-		E1000_WRITE_REG(hw, TXDCTL1, ctrl);
+		/*
+		 * Old code always initialized queue 1,
+		 * even when unused, keep behaviour
+		 */
+		if (sc->num_queues == 1) {
+			ctrl = E1000_READ_REG(hw, TXDCTL(1));
+			ctrl = (ctrl & ~E1000_TXDCTL_WTHRESH) | 
+			    E1000_TXDCTL_FULL_TX_DESC_WB;
+			E1000_WRITE_REG(hw, TXDCTL(1), ctrl);
+		}
 		break;
 	}
 
@@ -4947,7 +4984,8 @@ em_read_phy_reg(struct em_hw *hw, uint32_t reg_addr, uint16_t *phy_data)
 		hw->mac_type == em_pch_cnp)
 		return (em_access_phy_reg_hv(hw, reg_addr, phy_data, TRUE));
 
-	if (((hw->mac_type == em_80003es2lan) || (hw->mac_type == em_82575)) &&
+	if (((hw->mac_type == em_80003es2lan) || (hw->mac_type == em_82575) ||
+	    (hw->mac_type == em_82576)) &&
 	    (E1000_READ_REG(hw, STATUS) & E1000_STATUS_FUNC_1)) {
 		swfw = E1000_SWFW_PHY1_SM;
 	} else {
@@ -5647,6 +5685,7 @@ em_match_gig_phy(struct em_hw *hw)
 			match = TRUE;
 		break;
 	case em_82575:
+	case em_82576:
 		if (hw->phy_id == M88E1000_E_PHY_ID)
 			match = TRUE;
 		if (hw->phy_id == IGP01E1000_I_PHY_ID)
@@ -5948,6 +5987,7 @@ em_init_eeprom_params(struct em_hw *hw)
 	case em_82573:
 	case em_82574:
 	case em_82575:
+	case em_82576:
 	case em_82580:
 	case em_i210:
 	case em_i350:
@@ -7296,6 +7336,7 @@ em_read_mac_addr(struct em_hw *hw)
 	case em_82546_rev_3:
 	case em_82571:
 	case em_82575:
+	case em_82576:
 	case em_80003es2lan:
 		if (E1000_READ_REG(hw, STATUS) & E1000_STATUS_FUNC_1)
 			hw->perm_mac_addr[5] ^= 0x01;
@@ -8094,6 +8135,7 @@ em_get_bus_info(struct em_hw *hw)
 	case em_82573:
 	case em_82574:
 	case em_82575:
+	case em_82576:
 	case em_82580:
 	case em_80003es2lan:
 	case em_i210:
@@ -9298,6 +9340,7 @@ em_get_auto_rd_done(struct em_hw *hw)
 	case em_82573:
 	case em_82574:
 	case em_82575:
+	case em_82576:
 	case em_82580:
 	case em_80003es2lan:
 	case em_i210:
@@ -9358,6 +9401,7 @@ em_get_phy_cfg_done(struct em_hw *hw)
 		break;
 	case em_80003es2lan:
 	case em_82575:
+	case em_82576:
 	case em_82580:
 	case em_i350:
 		switch (hw->bus_func) {
@@ -11573,3 +11617,91 @@ out:
 	return ret_val;
 }
 
+uint32_t
+em_translate_82542_register(uint32_t reg)
+{
+	/*
+	 * Some of the 82542 registers are located at different
+	 * offsets than they are in newer adapters.
+	 * Despite the difference in location, the registers
+	 * function in the same manner.
+	 */
+	switch (reg) {
+	case E1000_RA:
+		reg = 0x00040;
+		break;
+	case E1000_RDTR:
+		reg = 0x00108;
+		break;
+	case E1000_RDBAL(0):
+		reg = 0x00110;
+		break;
+	case E1000_RDBAH(0):
+		reg = 0x00114;
+		break;
+	case E1000_RDLEN(0):
+		reg = 0x00118;
+		break;
+	case E1000_RDH(0):
+		reg = 0x00120;
+		break;
+	case E1000_RDT(0):
+		reg = 0x00128;
+		break;
+	case E1000_RDBAL(1):
+		reg = 0x00138;
+		break;
+	case E1000_RDBAH(1):
+		reg = 0x0013C;
+		break;
+	case E1000_RDLEN(1):
+		reg = 0x00140;
+		break;
+	case E1000_RDH(1):
+		reg = 0x00148;
+		break;
+	case E1000_RDT(1):
+		reg = 0x00150;
+		break;
+	case E1000_FCRTH:
+		reg = 0x00160;
+		break;
+	case E1000_FCRTL:
+		reg = 0x00168;
+		break;
+	case E1000_MTA:
+		reg = 0x00200;
+		break;
+	case E1000_TDBAL(0):
+		reg = 0x00420;
+		break;
+	case E1000_TDBAH(0):
+		reg = 0x00424;
+		break;
+	case E1000_TDLEN(0):
+		reg = 0x00428;
+		break;
+	case E1000_TDH(0):
+		reg = 0x00430;
+		break;
+	case E1000_TDT(0):
+		reg = 0x00438;
+		break;
+	case E1000_TIDV:
+		reg = 0x00440;
+		break;
+	case E1000_VFTA:
+		reg = 0x00600;
+		break;
+	case E1000_TDFH:
+		reg = 0x08010;
+		break;
+	case E1000_TDFT:
+		reg = 0x08018;
+		break;
+	default:
+		break;
+	}
+
+	return (reg);
+}

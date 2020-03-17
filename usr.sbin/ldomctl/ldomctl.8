@@ -1,4 +1,4 @@
-.\"     $OpenBSD: ldomctl.8,v 1.24 2020/01/09 21:30:18 kn Exp $
+.\"     $OpenBSD: ldomctl.8,v 1.27 2020/01/17 22:49:54 kn Exp $
 .\"
 .\" Copyright (c) 2012 Mark Kettenis <kettenis@openbsd.org>
 .\"
@@ -14,7 +14,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: January 9 2020 $
+.Dd $Mdocdate: January 17 2020 $
 .Dt LDOMCTL 8 sparc64
 .Os
 .Sh NAME
@@ -72,7 +72,7 @@ configuration
 .Ar file
 as described in
 .Xr ldom.conf 5 .
-.Bl -tag -width Fl
+.Bl -tag -width 3n
 .It Fl n
 Configtest mode.
 Only check the configuration file for validity.
@@ -84,18 +84,26 @@ and the configuration which will be used next
 (after resetting the machine) if it differs from the currently running one.
 .It Cm list-io
 List available PCIe devices.
-.It Cm panic Ar domain
+.It Cm panic Oo Fl c Oc Ar domain
 Panic a guest domain.
 The exact behaviour of this command depends on the OS running in the domain.
 For
 .Ox
 the default behaviour is to enter
 .Xr ddb 4 .
+.Bl -tag -width 3n
+.It Fl c
+Automatically connect to the guest console.
+.El
 .It Cm select Ar configuration
 Select the next logical domain configuration to use
 (after resetting the machine).
-.It Cm start Ar domain
+.It Cm start Oo Fl c Oc Ar domain
 Start a guest domain.
+.Bl -tag -width 3n
+.It Fl c
+Automatically connect to the guest console.
+.El
 .It Cm status Op Ar domain
 Display status information for
 .Ar domain ,

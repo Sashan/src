@@ -1,4 +1,4 @@
-/* $OpenBSD: auth.c,v 1.144 2019/12/16 13:58:53 tobhe Exp $ */
+/* $OpenBSD: auth.c,v 1.146 2020/01/31 22:42:45 djm Exp $ */
 /*
  * Copyright (c) 2000 Markus Friedl.  All rights reserved.
  *
@@ -67,6 +67,7 @@
 
 /* import */
 extern ServerOptions options;
+extern struct include_list includes;
 extern int use_privsep;
 extern struct sshauthopt *auth_opts;
 
@@ -477,7 +478,7 @@ getpwnamallow(struct ssh *ssh, const char *user)
 
 	ci = get_connection_info(ssh, 1, options.use_dns);
 	ci->user = user;
-	parse_server_match_config(&options, ci);
+	parse_server_match_config(&options, &includes, ci);
 	log_change_level(options.log_level);
 	process_permitopen(ssh, &options);
 
@@ -800,7 +801,7 @@ subprocess(const char *tag, struct passwd *pw, const char *command,
 			child_set_env(&child_env, &envsize, "LANG", cp);
 
 		for (i = 0; i < NSIG; i++)
-			signal(i, SIG_DFL);
+			ssh_signal(i, SIG_DFL);
 
 		if ((devnull = open(_PATH_DEVNULL, O_RDWR)) == -1) {
 			error("%s: open %s: %s", tag, _PATH_DEVNULL,

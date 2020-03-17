@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile.inc,v 1.80 2019/12/13 19:09:10 djm Exp $
+#	$OpenBSD: Makefile.inc,v 1.82 2020/01/25 23:02:13 djm Exp $
 
 .include <bsd.own.mk>
 
@@ -34,9 +34,14 @@ CDIAGFLAGS+=	-Wold-style-definition
 WARNINGS=yes
 
 OPENSSL?=	yes
+ZLIB?=		yes
 
 .if (${OPENSSL:L} == "yes")
 CFLAGS+=	-DWITH_OPENSSL
+.endif
+
+.if (${ZLIB:L} == "yes")
+CFLAGS+=	-DWITH_ZLIB
 .endif
 
 CFLAGS+=	-DENABLE_PKCS11
@@ -94,6 +99,8 @@ SRCS_KEY+=	verify.c
 SRCS_KEY+=	hash.c
 
 SRCS_KEYP+=	authfile.c
+SRCS_KEYP+=	sshbuf-io.c
+SRCS_KEYP+=	atomicio.c
 
 SRCS_KRL+=	bitmap.c
 SRCS_KRL+=	krl.c

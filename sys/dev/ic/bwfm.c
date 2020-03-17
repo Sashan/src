@@ -1,4 +1,4 @@
-/* $OpenBSD: bwfm.c,v 1.68 2020/01/09 14:35:19 mpi Exp $ */
+/* $OpenBSD: bwfm.c,v 1.70 2020/03/06 08:41:57 patrick Exp $ */
 /*
  * Copyright (c) 2010-2016 Broadcom Corporation
  * Copyright (c) 2016,2017 Patrick Wildt <patrick@blueri.se>
@@ -91,7 +91,8 @@ int	 bwfm_proto_bcdc_query_dcmd(struct bwfm_softc *, int,
 	     int, char *, size_t *);
 int	 bwfm_proto_bcdc_set_dcmd(struct bwfm_softc *, int,
 	     int, char *, size_t);
-void	 bwfm_proto_bcdc_rx(struct bwfm_softc *, struct mbuf *);
+void	 bwfm_proto_bcdc_rx(struct bwfm_softc *, struct mbuf *,
+	     struct mbuf_list *);
 int	 bwfm_proto_bcdc_txctl(struct bwfm_softc *, int, char *, size_t *);
 void	 bwfm_proto_bcdc_rxctl(struct bwfm_softc *, char *, size_t);
 
@@ -135,7 +136,6 @@ void	 bwfm_delete_key_cb(struct bwfm_softc *, void *);
 void	 bwfm_rx_event_cb(struct bwfm_softc *, struct mbuf *);
 
 struct mbuf *bwfm_newbuf(void);
-void	 bwfm_rx(struct bwfm_softc *, struct mbuf *);
 #ifndef IEEE80211_STA_ONLY
 void	 bwfm_rx_auth_ind(struct bwfm_softc *, struct bwfm_event *, size_t);
 void	 bwfm_rx_assoc_ind(struct bwfm_softc *, struct bwfm_event *, size_t, int);
@@ -1585,7 +1585,7 @@ bwfm_proto_bcdc_rxctl(struct bwfm_softc *sc, char *buf, size_t len)
 }
 
 void
-bwfm_proto_bcdc_rx(struct bwfm_softc *sc, struct mbuf *m)
+bwfm_proto_bcdc_rx(struct bwfm_softc *sc, struct mbuf *m, struct mbuf_list *ml)
 {
 	struct bwfm_proto_bcdc_hdr *hdr;
 
@@ -1600,7 +1600,7 @@ bwfm_proto_bcdc_rx(struct bwfm_softc *sc, struct mbuf *m)
 	}
 	m_adj(m, sizeof(*hdr) + (hdr->data_offset << 2));
 
-	bwfm_rx(sc, m);
+	bwfm_rx(sc, m, ml);
 }
 
 /* FW Variable code */
@@ -2058,11 +2058,10 @@ bwfm_newbuf(void)
 }
 
 void
-bwfm_rx(struct bwfm_softc *sc, struct mbuf *m)
+bwfm_rx(struct bwfm_softc *sc, struct mbuf *m, struct mbuf_list *ml)
 {
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ifnet *ifp = &ic->ic_if;
-	struct mbuf_list ml = MBUF_LIST_INITIALIZER();
 	struct ieee80211_node *ni;
 	struct bwfm_event *e;
 
@@ -2115,10 +2114,8 @@ bwfm_rx(struct bwfm_softc *sc, struct mbuf *m)
 #endif
 			ni = ic->ic_bss;
 		ieee80211_eapol_key_input(ic, m, ni);
-	} else {
-		ml_enqueue(&ml, m);
-		if_input(ifp, &ml);
-	}
+	} else
+		ml_enqueue(ml, m);
 }
 
 #ifndef IEEE80211_STA_ONLY
@@ -2701,5 +2698,54 @@ bwfm_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
 	}
 	sc->sc_newstate(ic, nstate, arg);
 	splx(s);
+	return 0;
+}
+
+int
+bwfm_nvram_convert(u_char *buf, size_t len, size_t *newlenp)
+{
+	u_char *src, *dst, *end = buf + len;
+	size_t count = 0, pad;
+	uint32_t token;
+	int skip = 0;
+
+	for (src = buf, dst = buf; src != end; ++src) {
+		if (*src == '\n') {
+			if (count > 0)
+				*dst++ = '\0';
+			count = 0;
+			skip = 0;
+			continue;
+		}
+		if (skip)
+			continue;
+		if (*src == '#' && count == 0) {
+			skip = 1;
+			continue;
+		}
+		if (*src == '\r')
+			continue;
+		*dst++ = *src;
+		++count;
+	}
+
+	count = dst - buf;
+	pad = roundup(count + 1, 4) - count;
+
+	if (count + pad + sizeof(token) > len)
+		return 1;
+
+	memset(dst, 0, pad);
+	count += pad;
+	dst += pad;
+
+	token = (count / 4) & 0xffff;
+	token |= ~token << 16;
+	token = htole32(token);
+
+	memcpy(dst, &token, sizeof(token));
+	count += sizeof(token);
+
+	*newlenp = count;
 	return 0;
 }

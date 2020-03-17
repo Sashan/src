@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2_pld.c,v 1.76 2019/11/28 12:16:28 tobhe Exp $	*/
+/*	$OpenBSD: ikev2_pld.c,v 1.79 2020/03/16 09:13:01 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -866,6 +866,7 @@ ikev2_pld_certreq(struct iked *env, struct ikev2_payload *pld,
 	}
 	if ((cr->cr_data = ibuf_new(buf, len)) == NULL) {
 		log_info("%s: failed to allocate buffer.", __func__);
+		free(cr);
 		return (-1);
 	}
 	cr->cr_type = cert.cert_type;
@@ -1171,6 +1172,24 @@ ikev2_pld_notify(struct iked *env, struct ikev2_payload *pld,
 			return (0);
 		}
 		msg->msg_parent->msg_flags |= IKED_MSG_FLAGS_MOBIKE;
+		break;
+	case IKEV2_N_USE_TRANSPORT_MODE:
+		if (!msg->msg_e) {
+			log_debug("%s: N_USE_TRANSPORT_MODE not encrypted",
+			    __func__);
+			return (-1);
+		}
+		if (len != 0) {
+			log_debug("%s: ignoring malformed transport mode"
+			    " notification: %zu", __func__, len);
+			return (0);
+		}
+		if (!(msg->msg_policy->pol_flags & IKED_POLICY_TRANSPORT)) {
+			log_debug("%s: ignoring transport mode"
+			    " notification (policy)", __func__);
+			return (0);
+		}
+		msg->msg_sa->sa_use_transport_mode = 1;
 		break;
 	case IKEV2_N_UPDATE_SA_ADDRESSES:
 		if (!msg->msg_e) {
@@ -1626,6 +1645,10 @@ ikev2_pld_ef(struct iked *env, struct ikev2_payload *pld,
 	if (sa_frag->frag_arr == NULL) {
 		sa_frag->frag_arr = recallocarray(NULL, 0, frag_total,
 		    sizeof(struct iked_frag_entry*));
+		if (sa_frag->frag_arr == NULL) {
+			log_info("%s: recallocarray sa_frag->frag_arr.", __func__);
+			goto done;
+		}
 		sa_frag->frag_total = frag_total;
 		sa_frag->frag_nextpayload = pld->pld_nextpayload;
 	}
@@ -1653,7 +1676,7 @@ ikev2_pld_ef(struct iked *env, struct ikev2_payload *pld,
 	/* Insert new list element */
 	el = calloc(1, sizeof(struct iked_frag_entry));
 	if (el == NULL) {
-		log_debug("%s: Failed allocating new fragment: %zu of %zu",
+		log_info("%s: Failed allocating new fragment: %zu of %zu",
 		    __func__, frag_num, frag_total);
 		goto done;
 	}

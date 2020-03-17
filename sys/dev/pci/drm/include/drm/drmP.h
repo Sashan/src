@@ -1,4 +1,4 @@
-/* $OpenBSD: drmP.h,v 1.5 2019/08/18 13:11:47 kettenis Exp $ */
+/* $OpenBSD: drmP.h,v 1.8 2020/03/04 21:19:15 kettenis Exp $ */
 /* drmP.h -- Private header for Direct Rendering Manager -*- linux-c -*-
  * Created: Mon Jan  4 10:05:05 1999 by faith@precisioninsight.com
  */
@@ -45,7 +45,6 @@
 #include <sys/pool.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
 #include <sys/conf.h>
 #include <sys/mutex.h>
 #include <sys/tree.h>
@@ -225,15 +224,7 @@ struct drm_attach_args {
 	bus_space_tag_t			 bst;
 	size_t				 busid_len;
 	int				 is_agp;
-	u_int16_t			 pci_vendor;
-	u_int16_t			 pci_device;
-	u_int16_t			 pci_subvendor;
-	u_int16_t			 pci_subdevice;
-	u_int8_t			 pci_revision;
 	struct pci_attach_args		*pa;
-	pci_chipset_tag_t		 pc;
-	pcitag_t			 tag;
-	pcitag_t			*bridgetag;
 	int				 primary;
 };
 
@@ -248,6 +239,8 @@ int	drm_linux_acpi_notify(struct aml_node *, int, void *);
 int	drm_pciprobe(struct pci_attach_args *, const struct drm_pcidev * );
 struct drm_device *drm_attach_pci(struct drm_driver *, 
 		     struct pci_attach_args *, int, int, struct device *, struct drm_device *);
+int	 drmprint(void *, const char *);
+int	 drmsubmatch(struct device *, void *, void *);
 dev_type_ioctl(drmioctl);
 dev_type_read(drmread);
 dev_type_poll(drmpoll);

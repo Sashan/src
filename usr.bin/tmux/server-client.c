@@ -1,4 +1,4 @@
-/* $OpenBSD: server-client.c,v 1.302 2019/12/16 16:39:03 nicm Exp $ */
+/* $OpenBSD: server-client.c,v 1.307 2020/03/16 06:12:42 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -419,7 +419,7 @@ server_client_check_mouse(struct client *c, struct key_event *event)
 	struct winlink		*wl;
 	struct window_pane	*wp;
 	u_int			 x, y, b, sx, sy, px, py;
-	int			 flag;
+	int			 ignore = 0;
 	key_code		 key;
 	struct timeval		 tv;
 	struct style_range	*sr;
@@ -443,7 +443,12 @@ server_client_check_mouse(struct client *c, struct key_event *event)
 	    m->x, m->y, m->lx, m->ly, c->tty.mouse_drag_flag);
 
 	/* What type of event is this? */
-	if ((m->sgr_type != ' ' &&
+	if (event->key == KEYC_DOUBLECLICK) {
+		type = DOUBLE;
+		x = m->x, y = m->y, b = m->b;
+		ignore = 1;
+		log_debug("double-click at %u,%u", x, y);
+	} else if ((m->sgr_type != ' ' &&
 	    MOUSE_DRAG(m->sgr_b) &&
 	    MOUSE_BUTTONS(m->sgr_b) == 3) ||
 	    (m->sgr_type == ' ' &&
@@ -477,10 +482,8 @@ server_client_check_mouse(struct client *c, struct key_event *event)
 			evtimer_del(&c->click_timer);
 			c->flags &= ~CLIENT_DOUBLECLICK;
 			if (m->b == c->click_button) {
-				type = DOUBLE;
-				x = m->x, y = m->y, b = m->b;
-				log_debug("double-click at %u,%u", x, y);
-				flag = CLIENT_TRIPLECLICK;
+				type = NOTYPE;
+				c->flags |= CLIENT_TRIPLECLICK;
 				goto add_timer;
 			}
 		} else if (c->flags & CLIENT_TRIPLECLICK) {
@@ -490,18 +493,19 @@ server_client_check_mouse(struct client *c, struct key_event *event)
 				type = TRIPLE;
 				x = m->x, y = m->y, b = m->b;
 				log_debug("triple-click at %u,%u", x, y);
+				ignore = 1;
 				goto have_event;
 			}
-		}
+		} else
+			c->flags |= CLIENT_DOUBLECLICK;
 
+	add_timer:
 		type = DOWN;
 		x = m->x, y = m->y, b = m->b;
 		log_debug("down at %u,%u", x, y);
-		flag = CLIENT_DOUBLECLICK;
 
-	add_timer:
 		if (KEYC_CLICK_TIMEOUT != 0) {
-			c->flags |= flag;
+			memcpy(&c->click_event, m, sizeof c->click_event);
 			c->click_button = m->b;
 
 			tv.tv_sec = KEYC_CLICK_TIMEOUT / 1000;
@@ -518,6 +522,7 @@ have_event:
 	/* Save the session. */
 	m->s = s->id;
 	m->w = -1;
+	m->ignore = ignore;
 
 	/* Is this on the status line? */
 	m->statusat = status_at_line(c);
@@ -662,8 +667,7 @@ have_event:
 			break;
 		}
 		c->tty.mouse_drag_flag = 0;
-
-		return (key);
+		goto out;
 	}
 
 	/* Convert to a key binding. */
@@ -958,6 +962,7 @@ have_event:
 	if (key == KEYC_UNKNOWN)
 		return (KEYC_UNKNOWN);
 
+out:
 	/* Apply modifiers if any. */
 	if (b & MOUSE_MASK_META)
 		key |= KEYC_ESCAPE;
@@ -966,6 +971,8 @@ have_event:
 	if (b & MOUSE_MASK_SHIFT)
 		key |= KEYC_SHIFT;
 
+	if (log_get_level() != 0)
+		log_debug("mouse key is %s", key_string_lookup_key (key));
 	return (key);
 }
 
@@ -1034,7 +1041,7 @@ server_client_key_callback(struct cmdq_item *item, void *data)
 	key_code			 key0;
 
 	/* Check the client is good to accept input. */
-	if (s == NULL || (c->flags & (CLIENT_DEAD|CLIENT_SUSPENDED)) != 0)
+	if (s == NULL || (c->flags & CLIENT_UNATTACHEDFLAGS))
 		goto out;
 	wl = s->curw;
 
@@ -1045,7 +1052,7 @@ server_client_key_callback(struct cmdq_item *item, void *data)
 
 	/* Check for mouse keys. */
 	m->valid = 0;
-	if (key == KEYC_MOUSE) {
+	if (key == KEYC_MOUSE || key == KEYC_DOUBLECLICK) {
 		if (c->flags & CLIENT_READONLY)
 			goto out;
 		key = server_client_check_mouse(c, event);
@@ -1059,7 +1066,7 @@ server_client_key_callback(struct cmdq_item *item, void *data)
 		 * Mouse drag is in progress, so fire the callback (now that
 		 * the mouse event is valid).
 		 */
-		if (key == KEYC_DRAGGING) {
+		if ((key & KEYC_MASK_KEY) == KEYC_DRAGGING) {
 			c->tty.mouse_drag_update(c, m);
 			goto out;
 		}
@@ -1221,7 +1228,7 @@ server_client_handle_key(struct client *c, struct key_event *event)
 	struct cmdq_item	*item;
 
 	/* Check the client is good to accept input. */
-	if (s == NULL || (c->flags & (CLIENT_DEAD|CLIENT_SUSPENDED)) != 0)
+	if (s == NULL || (c->flags & CLIENT_UNATTACHEDFLAGS))
 		return (0);
 
 	/*
@@ -1547,8 +1554,22 @@ server_client_repeat_timer(__unused int fd, __unused short events, void *data)
 static void
 server_client_click_timer(__unused int fd, __unused short events, void *data)
 {
-	struct client	*c = data;
+	struct client		*c = data;
+	struct key_event	*event;
 
+	log_debug("click timer expired");
+
+	if (c->flags & CLIENT_TRIPLECLICK) {
+		/*
+		 * Waiting for a third click that hasn't happened, so this must
+		 * have been a double click.
+		 */
+		event = xmalloc(sizeof *event);
+		event->key = KEYC_DOUBLECLICK;
+		memcpy(&event->m, &c->click_event, sizeof event->m);
+		if (!server_client_handle_key(c, event))
+			free(event);
+	}
 	c->flags &= ~(CLIENT_DOUBLECLICK|CLIENT_TRIPLECLICK);
 }
 
@@ -1706,7 +1727,6 @@ static void
 server_client_dispatch(struct imsg *imsg, void *arg)
 {
 	struct client	*c = arg;
-	const char	*data;
 	ssize_t		 datalen;
 	struct session	*s;
 
@@ -1718,7 +1738,6 @@ server_client_dispatch(struct imsg *imsg, void *arg)
 		return;
 	}
 
-	data = imsg->data;
 	datalen = imsg->hdr.len - IMSG_HEADER_SIZE;
 
 	switch (imsg->hdr.type) {

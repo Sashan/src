@@ -1,4 +1,4 @@
-/* $OpenBSD: auth2-pubkey.c,v 1.97 2019/11/25 00:54:23 djm Exp $ */
+/* $OpenBSD: auth2-pubkey.c,v 1.99 2020/02/06 22:30:54 naddy Exp $ */
 /*
  * Copyright (c) 2000 Markus Friedl.  All rights reserved.
  *
@@ -228,7 +228,8 @@ userauth_pubkey(struct ssh *ssh)
 			    SSH_SK_USER_PRESENCE_REQD) == 0) {
 				error("public key %s signature for %s%s from "
 				    "%.128s port %d rejected: user presence "
-				    "(key touch) requirement not met ", key_s,
+				    "(authenticator touch) requirement "
+				    "not met ", key_s,
 				    authctxt->valid ? "" : "invalid user ",
 				    authctxt->user, ssh_remote_ipaddr(ssh),
 				    ssh_remote_port(ssh));
@@ -457,7 +458,7 @@ match_principals_command(struct ssh *ssh, struct passwd *user_pw,
 	 * NB. all returns later this function should go via "out" to
 	 * ensure the original SIGCHLD handler is restored properly.
 	 */
-	osigchld = signal(SIGCHLD, SIG_DFL);
+	osigchld = ssh_signal(SIGCHLD, SIG_DFL);
 
 	/* Prepare and verify the user for the command */
 	username = percent_expand(options.authorized_principals_command_user,
@@ -545,7 +546,7 @@ match_principals_command(struct ssh *ssh, struct passwd *user_pw,
  out:
 	if (f != NULL)
 		fclose(f);
-	signal(SIGCHLD, osigchld);
+	ssh_signal(SIGCHLD, osigchld);
 	for (i = 0; i < ac; i++)
 		free(av[i]);
 	free(av);
@@ -895,7 +896,7 @@ user_key_command_allowed2(struct ssh *ssh, struct passwd *user_pw,
 	 * NB. all returns later this function should go via "out" to
 	 * ensure the original SIGCHLD handler is restored properly.
 	 */
-	osigchld = signal(SIGCHLD, SIG_DFL);
+	osigchld = ssh_signal(SIGCHLD, SIG_DFL);
 
 	/* Prepare and verify the user for the command */
 	username = percent_expand(options.authorized_keys_command_user,
@@ -984,7 +985,7 @@ user_key_command_allowed2(struct ssh *ssh, struct passwd *user_pw,
  out:
 	if (f != NULL)
 		fclose(f);
-	signal(SIGCHLD, osigchld);
+	ssh_signal(SIGCHLD, osigchld);
 	for (i = 0; i < ac; i++)
 		free(av[i]);
 	free(av);

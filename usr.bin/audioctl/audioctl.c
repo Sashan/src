@@ -1,4 +1,4 @@
-/*	$OpenBSD: audioctl.c,v 1.37 2019/06/28 13:35:00 deraadt Exp $	*/
+/*	$OpenBSD: audioctl.c,v 1.42 2020/02/02 05:25:41 ratchov Exp $	*/
 /*
  * Copyright (c) 2016 Alexandre Ratchov <alex@caoua.org>
  *
@@ -66,6 +66,8 @@ const char usagestr[] =
 	"usage: audioctl [-f file]\n"
 	"       audioctl [-n] [-f file] name ...\n"
 	"       audioctl [-nq] [-f file] name=value ...\n";
+
+int fd, show_names = 1, quiet = 0;
 
 /*
  * parse encoding string (examples: s8, u8, s16, s16le, s24be ...)
@@ -136,7 +138,7 @@ strtoenc(struct audio_swpar *ap, char *p)
 }
 
 void
-print_val(struct field *p, void *addr)
+print_field(struct field *p, void *addr)
 {
 	int mode;
 	struct audio_swpar *ap;
@@ -173,7 +175,7 @@ print_val(struct field *p, void *addr)
 }
 
 void
-parse_val(struct field *f, void *addr, char *p)
+parse_field(struct field *f, void *addr, char *p)
 {
 	const char *strerr;
 
@@ -189,42 +191,13 @@ parse_val(struct field *f, void *addr, char *p)
 	}
 }
 
-int
-main(int argc, char **argv)
+void
+audio_main(int argc, char **argv)
 {
 	struct field *f;
-	char *lhs, *rhs, *path = "/dev/audioctl0";
-	int fd, c, set = 0, print_names = 1, quiet = 0;
+	char *lhs, *rhs;
+	int set = 0;
 
-	while ((c = getopt(argc, argv, "anf:q")) != -1) {
-		switch (c) {
-		case 'a':	/* ignored, compat */
-			break;
-		case 'n':
-			print_names = 0;
-			break;
-		case 'f':
-			path = optarg;
-			break;
-		case 'q':
-			quiet = 1;
-			break;
-		default:
-			fputs(usagestr, stderr);
-			return 1;
-		}
-	}
-	argc -= optind;
-	argv += optind;
-
-	if (unveil(path, "rw") == -1)
-		err(1, "unveil");
-	if (unveil(NULL, NULL) == -1)
-		err(1, "unveil");
-
-	fd = open(path, O_RDWR);
-	if (fd == -1)
-		err(1, "%s", path);
 	if (ioctl(fd, AUDIO_GETSTATUS, &rstatus) == -1)
 		err(1, "AUDIO_GETSTATUS");
 	if (ioctl(fd, AUDIO_GETDEV, &rname) == -1)
@@ -236,7 +209,7 @@ main(int argc, char **argv)
 	if (argc == 0) {
 		for (f = fields; f->name != NULL; f++) {
 			printf("%s=", f->name);
-			print_val(f, f->raddr);
+			print_field(f, f->raddr);
 			printf("\n");
 		}
 	}
@@ -255,20 +228,18 @@ main(int argc, char **argv)
 		if (rhs) {
 			if (f->waddr == NULL)
 				errx(1, "%s: is read only", f->name);
-			parse_val(f, f->waddr, rhs);
+			parse_field(f, f->waddr, rhs);
 			f->set = 1;
 			set = 1;
 		} else {
-			if (print_names)
+			if (show_names)
 				printf("%s=", f->name);
-			print_val(f, f->raddr);
+			print_field(f, f->raddr);
 			printf("\n");
 		}
 	}
-	if (!set) {
-		close(fd);
-		return 0;
-	}
+	if (!set)
+		return;
 	if (ioctl(fd, AUDIO_SETPAR, &wpar) == -1)
 		err(1, "AUDIO_SETPAR");
 	if (ioctl(fd, AUDIO_GETPAR, &wpar) == -1)
@@ -276,14 +247,54 @@ main(int argc, char **argv)
 	for (f = fields; f->name != NULL; f++) {
 		if (!f->set || quiet)
 			continue;
-		if (print_names) {
+		if (show_names) {
 			printf("%s: ", f->name);
-			print_val(f, f->raddr);
+			print_field(f, f->raddr);
 			printf(" -> ");
 		}
-		print_val(f, f->waddr);
+		print_field(f, f->waddr);
 		printf("\n");
 	}
+}
+
+int
+main(int argc, char **argv)
+{
+	char *path = "/dev/audioctl0";
+	int c;
+
+	while ((c = getopt(argc, argv, "anf:q")) != -1) {
+		switch (c) {
+		case 'a':	/* ignored, compat */
+			break;
+		case 'n':
+			show_names = 0;
+			break;
+		case 'f':
+			path = optarg;
+			break;
+		case 'q':
+			quiet = 1;
+			break;
+		default:
+			fputs(usagestr, stderr);
+			return 1;
+		}
+	}
+	argc -= optind;
+	argv += optind;
+
+	if (unveil(path, "w") == -1)
+		err(1, "unveil");
+	if (unveil(NULL, NULL) == -1)
+		err(1, "unveil");
+
+	fd = open(path, O_WRONLY);
+	if (fd == -1)
+		err(1, "%s", path);
+
+	audio_main(argc, argv);
+
 	close(fd);
 	return 0;	
 }

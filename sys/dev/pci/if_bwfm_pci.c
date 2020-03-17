@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_bwfm_pci.c,v 1.31 2020/01/15 20:17:08 patrick Exp $	*/
+/*	$OpenBSD: if_bwfm_pci.c,v 1.36 2020/03/07 09:56:46 patrick Exp $	*/
 /*
  * Copyright (c) 2010-2016 Broadcom Corporation
  * Copyright (c) 2017 Patrick Wildt <patrick@blueri.se>
@@ -248,8 +248,9 @@ void		 bwfm_pci_ring_write_cancel(struct bwfm_pci_softc *,
 		    struct bwfm_pci_msgring *, int);
 
 void		 bwfm_pci_ring_rx(struct bwfm_pci_softc *,
-		    struct bwfm_pci_msgring *);
-void		 bwfm_pci_msg_rx(struct bwfm_pci_softc *, void *);
+		    struct bwfm_pci_msgring *, struct mbuf_list *);
+void		 bwfm_pci_msg_rx(struct bwfm_pci_softc *, void *,
+		    struct mbuf_list *);
 
 uint32_t	 bwfm_pci_buscore_read(struct bwfm_softc *, uint32_t);
 void		 bwfm_pci_buscore_write(struct bwfm_softc *, uint32_t,
@@ -388,9 +389,10 @@ bwfm_pci_preinit(struct bwfm_softc *bwfm)
 {
 	struct bwfm_pci_softc *sc = (void *)bwfm;
 	struct bwfm_pci_ringinfo ringinfo;
-	const char *name, *nvname;
+	const char *chip = NULL;
+	char name[128];
 	u_char *ucode, *nvram = NULL;
-	size_t size, nvlen = 0;
+	size_t size, nvsize, nvlen = 0;
 	uint32_t d2h_w_idx_ptr, d2h_r_idx_ptr;
 	uint32_t h2d_w_idx_ptr, h2d_r_idx_ptr;
 	uint32_t idx_offset, reg;
@@ -416,25 +418,19 @@ bwfm_pci_preinit(struct bwfm_softc *bwfm)
 	switch (bwfm->sc_chip.ch_chip)
 	{
 	case BRCM_CC_4350_CHIP_ID:
-		if (bwfm->sc_chip.ch_chiprev > 7) {
-			name = "brcmfmac4350-pcie.bin";
-			nvname = "brcmfmac4350-pcie.nvram";
-		} else {
-			name = "brcmfmac4350c2-pcie.bin";
-			nvname = "brcmfmac4350c2-pcie.nvram";
-		}
+		if (bwfm->sc_chip.ch_chiprev > 7)
+			chip = "4350";
+		else
+			chip = "4350c2";
 		break;
 	case BRCM_CC_4356_CHIP_ID:
-		name = "brcmfmac4356-pcie.bin";
-		nvname = "brcmfmac4356-pcie.nvram";
+		chip = "4356";
 		break;
 	case BRCM_CC_43602_CHIP_ID:
-		name = "brcmfmac43602-pcie.bin";
-		nvname = "brcmfmac43602-pcie.nvram";
+		chip = "43602";
 		break;
 	case BRCM_CC_4371_CHIP_ID:
-		name = "brcmfmac4371-pcie.bin";
-		nvname = "brcmfmac4371-pcie.nvram";
+		chip = "4371";
 		break;
 	default:
 		printf("%s: unknown firmware for chip %s\n",
@@ -442,14 +438,31 @@ bwfm_pci_preinit(struct bwfm_softc *bwfm)
 		return 1;
 	}
 
+	snprintf(name, sizeof(name), "brcmfmac%s-pcie.bin", chip);
 	if (loadfirmware(name, &ucode, &size) != 0) {
 		printf("%s: failed loadfirmware of file %s\n",
 		    DEVNAME(sc), name);
 		return 1;
 	}
 
-	/* NVRAM is optional. */
-	loadfirmware(nvname, &nvram, &nvlen);
+	/* .txt needs to be processed first */
+	snprintf(name, sizeof(name), "brcmfmac%s-pcie.txt", chip);
+	if (loadfirmware(name, &nvram, &nvsize) == 0) {
+		if (bwfm_nvram_convert(nvram, nvsize, &nvlen) != 0) {
+			printf("%s: failed to process file %s\n",
+			    DEVNAME(sc), name);
+			free(ucode, M_DEVBUF, size);
+			free(nvram, M_DEVBUF, nvsize);
+			return 1;
+		}
+	}
+
+	/* .nvram is the pre-processed version */
+	if (nvlen == 0) {
+		snprintf(name, sizeof(name), "brcmfmac%s-pcie.nvram", chip);
+		if (loadfirmware(name, &nvram, &nvsize) == 0)
+			nvlen = nvsize;
+	}
 
 	/* Retrieve RAM size from firmware. */
 	if (size >= BWFM_RAMSIZE + 8) {
@@ -462,11 +475,11 @@ bwfm_pci_preinit(struct bwfm_softc *bwfm)
 		printf("%s: could not load microcode\n",
 		    DEVNAME(sc));
 		free(ucode, M_DEVBUF, size);
-		free(nvram, M_DEVBUF, nvlen);
+		free(nvram, M_DEVBUF, nvsize);
 		return 1;
 	}
 	free(ucode, M_DEVBUF, size);
-	free(nvram, M_DEVBUF, nvlen);
+	free(nvram, M_DEVBUF, nvsize);
 
 	sc->sc_shared_flags = bus_space_read_4(sc->sc_tcm_iot, sc->sc_tcm_ioh,
 	    sc->sc_shared_address + BWFM_SHARED_INFO);
@@ -1257,7 +1270,8 @@ bwfm_pci_ring_write_cancel(struct bwfm_pci_softc *sc,
  * a message handler and let the firmware know we handled it.
  */
 void
-bwfm_pci_ring_rx(struct bwfm_pci_softc *sc, struct bwfm_pci_msgring *ring)
+bwfm_pci_ring_rx(struct bwfm_pci_softc *sc, struct bwfm_pci_msgring *ring,
+    struct mbuf_list *ml)
 {
 	void *buf;
 	int avail, processed;
@@ -1269,7 +1283,7 @@ again:
 
 	processed = 0;
 	while (avail) {
-		bwfm_pci_msg_rx(sc, buf + sc->sc_rx_dataoffset);
+		bwfm_pci_msg_rx(sc, buf + sc->sc_rx_dataoffset, ml);
 		buf += ring->itemsz;
 		processed++;
 		if (processed == 48) {
@@ -1285,7 +1299,7 @@ again:
 }
 
 void
-bwfm_pci_msg_rx(struct bwfm_pci_softc *sc, void *buf)
+bwfm_pci_msg_rx(struct bwfm_pci_softc *sc, void *buf, struct mbuf_list *ml)
 {
 	struct ifnet *ifp = &sc->sc_sc.sc_ic.ic_if;
 	struct msgbuf_ioctl_resp_hdr *resp;
@@ -1373,14 +1387,14 @@ bwfm_pci_msg_rx(struct bwfm_pci_softc *sc, void *buf)
 			break;
 		m_adj(m, sc->sc_rx_dataoffset);
 		m->m_len = m->m_pkthdr.len = letoh16(event->event_data_len);
-		bwfm_rx(&sc->sc_sc, m);
+		bwfm_rx(&sc->sc_sc, m, ml);
 		if_rxr_put(&sc->sc_event_ring, 1);
 		bwfm_pci_fill_rx_rings(sc);
 		break;
 	case MSGBUF_TYPE_TX_STATUS:
 		tx = (struct msgbuf_tx_status *)buf;
 		m = bwfm_pci_pktid_free(sc, &sc->sc_tx_pkts,
-		    letoh32(tx->msg.request_id));
+		    letoh32(tx->msg.request_id) - 1);
 		if (m == NULL)
 			break;
 		m_freem(m);
@@ -1400,7 +1414,7 @@ bwfm_pci_msg_rx(struct bwfm_pci_softc *sc, void *buf)
 		else if (sc->sc_rx_dataoffset)
 			m_adj(m, sc->sc_rx_dataoffset);
 		m->m_len = m->m_pkthdr.len = letoh16(rx->data_len);
-		bwfm_rx(&sc->sc_sc, m);
+		bwfm_rx(&sc->sc_sc, m, ml);
 		if_rxr_put(&sc->sc_rxbuf_ring, 1);
 		bwfm_pci_fill_rx_rings(sc);
 		break;
@@ -1666,6 +1680,7 @@ bwfm_pci_flowring_create_cb(struct bwfm_softc *bwfm, void *arg)
 	struct msgbuf_tx_flowring_create_req *req;
 	struct bwfm_pci_msgring *ring;
 	uint8_t *da, *sa;
+	int s;
 
 	da = mtod(cmd->m, char *) + 0 * ETHER_ADDR_LEN;
 	sa = mtod(cmd->m, char *) + 1 * ETHER_ADDR_LEN;
@@ -1681,9 +1696,11 @@ bwfm_pci_flowring_create_cb(struct bwfm_softc *bwfm, void *arg)
 		return;
 	}
 
+	s = splnet();
 	req = bwfm_pci_ring_write_reserve(sc, &sc->sc_ctrl_submit);
 	if (req == NULL) {
 		printf("%s: cannot reserve for flowring\n", DEVNAME(sc));
+		splx(s);
 		return;
 	}
 
@@ -1711,6 +1728,7 @@ bwfm_pci_flowring_create_cb(struct bwfm_softc *bwfm, void *arg)
 	req->len_item = letoh16(48);
 
 	bwfm_pci_ring_write_commit(sc, &sc->sc_ctrl_submit);
+	splx(s);
 }
 
 void
@@ -1718,6 +1736,7 @@ bwfm_pci_flowring_delete(struct bwfm_pci_softc *sc, int flowid)
 {
 	struct msgbuf_tx_flowring_delete_req *req;
 	struct bwfm_pci_msgring *ring;
+	int s;
 
 	ring = &sc->sc_flowrings[flowid];
 	if (ring->status != RING_OPEN) {
@@ -1725,9 +1744,11 @@ bwfm_pci_flowring_delete(struct bwfm_pci_softc *sc, int flowid)
 		return;
 	}
 
+	s = splnet();
 	req = bwfm_pci_ring_write_reserve(sc, &sc->sc_ctrl_submit);
 	if (req == NULL) {
 		printf("%s: cannot reserve for flowring\n", DEVNAME(sc));
+		splx(s);
 		return;
 	}
 
@@ -1740,6 +1761,7 @@ bwfm_pci_flowring_delete(struct bwfm_pci_softc *sc, int flowid)
 	req->reason = 0;
 
 	bwfm_pci_ring_write_commit(sc, &sc->sc_ctrl_submit);
+	splx(s);
 }
 
 void
@@ -1837,7 +1859,7 @@ bwfm_pci_txdata(struct bwfm_softc *bwfm, struct mbuf *m)
 	}
 	paddr += ETHER_HDR_LEN;
 
-	tx->msg.request_id = htole32(pktid);
+	tx->msg.request_id = htole32(pktid + 1);
 	tx->data_len = htole16(m->m_len - ETHER_HDR_LEN);
 	tx->data_buf_addr.high_addr = htole32((uint64_t)paddr >> 32);
 	tx->data_buf_addr.low_addr = htole32(paddr & 0xffffffff);
@@ -1872,6 +1894,8 @@ int
 bwfm_pci_intr(void *v)
 {
 	struct bwfm_pci_softc *sc = (void *)v;
+	struct ifnet *ifp = &sc->sc_sc.sc_ic.ic_if;
+	struct mbuf_list ml = MBUF_LIST_INITIALIZER();
 	uint32_t status;
 
 	if ((status = bus_space_read_4(sc->sc_reg_iot, sc->sc_reg_ioh,
@@ -1887,9 +1911,10 @@ bwfm_pci_intr(void *v)
 		printf("%s: handle MB data\n", __func__);
 
 	if (status & BWFM_PCI_PCIE2REG_MAILBOXMASK_INT_D2H_DB) {
-		bwfm_pci_ring_rx(sc, &sc->sc_rx_complete);
-		bwfm_pci_ring_rx(sc, &sc->sc_tx_complete);
-		bwfm_pci_ring_rx(sc, &sc->sc_ctrl_complete);
+		bwfm_pci_ring_rx(sc, &sc->sc_rx_complete, &ml);
+		bwfm_pci_ring_rx(sc, &sc->sc_tx_complete, &ml);
+		bwfm_pci_ring_rx(sc, &sc->sc_ctrl_complete, &ml);
+		if_input(ifp, &ml);
 	}
 
 #ifdef BWFM_DEBUG
@@ -1929,6 +1954,7 @@ bwfm_pci_msgbuf_query_dcmd(struct bwfm_softc *bwfm, int ifidx,
 	uint32_t pktid;
 	paddr_t paddr;
 	size_t buflen;
+	int s;
 
 	buflen = min(*len, BWFM_DMA_H2D_IOCTL_BUF_LEN);
 	m = MCLGETI(NULL, M_DONTWAIT, NULL, buflen);
@@ -1941,14 +1967,17 @@ bwfm_pci_msgbuf_query_dcmd(struct bwfm_softc *bwfm, int ifidx,
 	else
 		memset(mtod(m, char *), 0, buflen);
 
+	s = splnet();
 	req = bwfm_pci_ring_write_reserve(sc, &sc->sc_ctrl_submit);
 	if (req == NULL) {
+		splx(s);
 		m_freem(m);
 		return 1;
 	}
 
 	if (bwfm_pci_pktid_new(sc, &sc->sc_ioctl_pkts, m, &pktid, &paddr)) {
 		bwfm_pci_ring_write_cancel(sc, &sc->sc_ctrl_submit, 1);
+		splx(s);
 		m_freem(m);
 		return 1;
 	}
@@ -1970,6 +1999,7 @@ bwfm_pci_msgbuf_query_dcmd(struct bwfm_softc *bwfm, int ifidx,
 	req->req_buf_addr.low_addr = htole32(paddr & 0xffffffff);
 
 	bwfm_pci_ring_write_commit(sc, &sc->sc_ctrl_submit);
+	splx(s);
 
 	tsleep_nsec(ctl, PWAIT, "bwfm", SEC_TO_NSEC(1));
 	TAILQ_REMOVE(&sc->sc_ioctlq, ctl, next);

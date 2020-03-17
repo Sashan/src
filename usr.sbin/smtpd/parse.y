@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.273 2020/01/08 01:41:11 gilles Exp $	*/
+/*	$OpenBSD: parse.y,v 1.277 2020/02/24 23:54:27 millert Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -529,7 +529,7 @@ SMTP LIMIT limits_smtp
 		free($3);
 		YYERROR;
 	}
-	if (isspace((int)*$3) ||  !isprint((int)*$3) || *$3== '@') {
+	if (isspace((unsigned char)*$3) || !isprint((unsigned char)*$3) || *$3 == '@') {
 		yyerror("sub-addr-delim uses invalid character");
 		free($3);
 		YYERROR;
@@ -566,7 +566,7 @@ SRS KEY STRING {
 
 dispatcher_local_option:
 USER STRING {
-	if (dispatcher->u.local.requires_root) {
+	if (dispatcher->u.local.is_mbox) {
 		yyerror("user may not be specified for this dispatcher");
 		YYERROR;
 	}
@@ -662,9 +662,8 @@ dispatcher_local_option dispatcher_local_options
 
 dispatcher_local:
 MBOX {
-	dispatcher->u.local.requires_root = 1;
-	dispatcher->u.local.user = xstrdup("root");
-	asprintf(&dispatcher->u.local.command, "/usr/libexec/mail.local -f %%{mbox.from} %%{user.username}");
+	dispatcher->u.local.is_mbox = 1;
+	asprintf(&dispatcher->u.local.command, "/usr/libexec/mail.local -f %%{mbox.from} -- %%{user.username}");
 } dispatcher_local_options
 | MAILDIR {
 	asprintf(&dispatcher->u.local.command, "/usr/libexec/mail.maildir");
@@ -690,11 +689,11 @@ MBOX {
 } dispatcher_local_options
 | LMTP STRING {
 	asprintf(&dispatcher->u.local.command,
-	    "/usr/libexec/mail.lmtp -f \"%%{sender}\" -d %s %%{user.username}", $2);
+	    "/usr/libexec/mail.lmtp -d %s -u", $2);
 } dispatcher_local_options
 | LMTP STRING RCPT_TO {
 	asprintf(&dispatcher->u.local.command,
-	    "/usr/libexec/mail.lmtp -f \"%%{sender}\" -d %s %%{dest}", $2);
+	    "/usr/libexec/mail.lmtp -d %s -r", $2);
 } dispatcher_local_options
 | MDA STRING {
 	asprintf(&dispatcher->u.local.command,

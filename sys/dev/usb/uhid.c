@@ -1,4 +1,4 @@
-/*	$OpenBSD: uhid.c,v 1.75 2019/12/31 13:48:31 visa Exp $ */
+/*	$OpenBSD: uhid.c,v 1.77 2020/02/20 16:56:52 visa Exp $ */
 /*	$NetBSD: uhid.c,v 1.57 2003/03/11 16:44:00 augustss Exp $	*/
 
 /*
@@ -167,6 +167,10 @@ uhid_detach(struct device *self, int flags)
 	/* Nuke the vnodes for any open instances (calls close). */
 	mn = self->dv_unit;
 	vdevgone(maj, mn, mn, VCHR);
+
+	s = splusb();
+	klist_invalidate(&sc->sc_rsel.si_note);
+	splx(s);
 
 	return (0);
 }
@@ -457,14 +461,14 @@ filt_uhidread(struct knote *kn, long hint)
 }
 
 const struct filterops uhidread_filtops = {
-	.f_isfd		= 1,
+	.f_flags	= FILTEROP_ISFD,
 	.f_attach	= NULL,
 	.f_detach	= filt_uhidrdetach,
 	.f_event	= filt_uhidread,
 };
 
 const struct filterops uhid_seltrue_filtops = {
-	.f_isfd		= 1,
+	.f_flags	= FILTEROP_ISFD,
 	.f_attach	= NULL,
 	.f_detach	= filt_uhidrdetach,
 	.f_event	= filt_seltrue,

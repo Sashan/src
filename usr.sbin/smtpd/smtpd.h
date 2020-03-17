@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtpd.h,v 1.650 2020/01/08 01:41:11 gilles Exp $	*/
+/*	$OpenBSD: smtpd.h,v 1.655 2020/02/24 17:49:23 millert Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -51,7 +51,7 @@
 #define SMTPD_QUEUE_EXPIRY	 (4 * 24 * 60 * 60)
 #define SMTPD_SOCKET		 "/var/run/smtpd.sock"
 #define	SMTPD_NAME		 "OpenSMTPD"
-#define	SMTPD_VERSION		 "6.6.1"
+#define	SMTPD_VERSION		 "6.6.4"
 #define SMTPD_SESSION_TIMEOUT	 300
 #define SMTPD_BACKLOG		 5
 
@@ -98,8 +98,9 @@
 #define MTA_EXT_DSN		0x400
 
 
-#define P_NEWALIASES	0
-#define P_MAKEMAP	1
+#define P_SENDMAIL	0
+#define P_NEWALIASES	1
+#define P_MAKEMAP	2
 
 #define	CERT_ERROR	-1
 #define	CERT_OK		 0
@@ -1152,7 +1153,7 @@ enum dispatcher_type {
 };
 
 struct dispatcher_local {
-	uint8_t requires_root;	/* only for MBOX */
+	uint8_t is_mbox;	/* only for MBOX */
 
 	uint8_t	expand_only;
 	uint8_t	forward_only;
@@ -1416,6 +1417,11 @@ void logit(int, const char *, ...) __attribute__((format (printf, 2, 3)));
 void mda_postfork(void);
 void mda_postprivdrop(void);
 void mda_imsg(struct mproc *, struct imsg *);
+
+
+/* mda_mbox.c */
+void mda_mbox_init(struct deliver *);
+void mda_mbox(struct deliver *);
 
 
 /* mda_unpriv.c */

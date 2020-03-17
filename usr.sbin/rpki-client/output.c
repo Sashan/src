@@ -1,4 +1,4 @@
-/*	$OpenBSD: output.c,v 1.5 2019/12/19 16:32:44 claudio Exp $ */
+/*	$OpenBSD: output.c,v 1.9 2020/03/10 14:22:26 jca Exp $ */
 /*
  * Copyright (c) 2019 Theo de Raadt <deraadt@openbsd.org>
  *
@@ -29,25 +29,30 @@
 #include "extern.h"
 
 char		*outputdir;
-char		 output_tmpname[PATH_MAX];
-char		 output_name[PATH_MAX];
-
 int		 outformats;
 
-struct outputs {
+static char	 output_tmpname[PATH_MAX];
+static char	 output_name[PATH_MAX];
+
+static const struct outputs {
 	int	 format;
 	char	*name;
 	int	(*fn)(FILE *, struct vrp_tree *);
 } outputs[] = {
 	{ FORMAT_OPENBGPD, "openbgpd", output_bgpd },
-	{ FORMAT_BIRD, "bird", output_bird },
+	{ FORMAT_BIRD, "bird1v4", output_bird1v4 },
+	{ FORMAT_BIRD, "bird1v6", output_bird1v6 },
+	{ FORMAT_BIRD, "bird", output_bird2 },
 	{ FORMAT_CSV, "csv", output_csv },
 	{ FORMAT_JSON, "json", output_json },
 	{ 0, NULL }
 };
 
-void		 sig_handler(int);
-void		 set_signal_handler(void);
+static FILE	*output_createtmp(char *);
+static void	 output_cleantmp(void);
+static int	 output_finish(FILE *);
+static void	 sig_handler(int);
+static void	 set_signal_handler(void);
 
 int
 outputfiles(struct vrp_tree *v)
@@ -65,24 +70,29 @@ outputfiles(struct vrp_tree *v)
 
 		fout = output_createtmp(outputs[i].name);
 		if (fout == NULL) {
-			logx("cannot create %s", outputs[i].name);
+			warn("cannot create %s", outputs[i].name);
 			rc = 1;
 			continue;
 		}
 		if ((*outputs[i].fn)(fout, v) != 0) {
-			logx("output for %s format failed", outputs[i].name);
+			warn("output for %s format failed", outputs[i].name);
 			fclose(fout);
 			output_cleantmp();
 			rc = 1;
 			continue;
 		}
-		output_finish(fout);
+		if (output_finish(fout) != 0) {
+			warn("finish for %s format failed", outputs[i].name);
+			output_cleantmp();
+			rc = 1;
+			continue;
+		}
 	}
 
 	return rc;
 }
 
-FILE *
+static FILE *
 output_createtmp(char *name)
 {
 	FILE *f;
@@ -106,17 +116,18 @@ output_createtmp(char *name)
 	return f;
 }
 
-void
+static int
 output_finish(FILE *out)
 {
-	fclose(out);
-	out = NULL;
-
-	rename(output_tmpname, output_name);
+	if (fclose(out) != 0)
+		return -1;
+	if (rename(output_tmpname, output_name) == -1)
+		return -1;
 	output_tmpname[0] = '\0';
+	return 0;
 }
 
-void
+static void
 output_cleantmp(void)
 {
 	if (*output_tmpname)
@@ -127,7 +138,7 @@ output_cleantmp(void)
 /*
  * Signal handler that clears the temporary files.
  */
-void
+static void
 sig_handler(int sig __unused)
 {
 	output_cleantmp();
@@ -137,7 +148,7 @@ sig_handler(int sig __unused)
 /*
  * Set signal handler on panic signals.
  */
-void
+static void
 set_signal_handler(void)
 {
 	struct sigaction sa;

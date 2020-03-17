@@ -1,4 +1,4 @@
-/*	$OpenBSD: aac.c,v 1.72 2020/01/15 16:50:29 cheloha Exp $	*/
+/*	$OpenBSD: aac.c,v 1.76 2020/02/18 16:05:56 krw Exp $	*/
 
 /*-
  * Copyright (c) 2000 Michael Smith
@@ -53,6 +53,7 @@
 #include <sys/kthread.h>
 #include <sys/malloc.h>
 #include <sys/rwlock.h>
+#include <sys/selinfo.h>
 #include <sys/time.h>
 
 #include <machine/bus.h>
@@ -130,11 +131,7 @@ struct cfdriver aac_cd = {
 };
 
 struct scsi_adapter aac_switch = {
-	aac_scsi_cmd,
-	scsi_minphys,
-	NULL,		/* probe */
-	NULL,		/* free */
-	NULL		/* ioctl */
+	aac_scsi_cmd, NULL, NULL, NULL, NULL
 };
 
 /* Falcon/PPC interface */
@@ -972,8 +969,8 @@ aac_alloc_commands(struct aac_softc *sc)
 			(i * sizeof(struct aac_fib));
 		cm->cm_index = sc->total_fibs;
 
-		if (bus_dmamap_create(sc->aac_dmat, MAXBSIZE, AAC_MAXSGENTRIES,
-		    MAXBSIZE, 0, BUS_DMA_NOWAIT, &cm->cm_datamap)) {
+		if (bus_dmamap_create(sc->aac_dmat, MAXPHYS, AAC_MAXSGENTRIES,
+		    MAXPHYS, 0, BUS_DMA_NOWAIT, &cm->cm_datamap)) {
 			break;
 		}
 		aac_release_command(sc, cm);

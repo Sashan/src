@@ -25,7 +25,6 @@ _unwind:*:48:
 _switchd:*:49:
 _traceroute:*:50:
 _ping:*:51:
-_rebound:*:52:
 _unbound:*:53:
 _dpb:*:54:
 _pbuild:*:55:
@@ -39,8 +38,8 @@ _shadow:*:65:
 crontab:*:66:
 www:*:67:
 _isakmpd:*:68:
-_rpki-client:*:70:
 network:*:69:
+_rpki-client:*:70:
 authpf:*:72:
 _syslogd:*:73:
 _pflogd:*:74:

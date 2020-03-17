@@ -1,6 +1,9 @@
-# $OpenBSD: Makefile,v 1.12 2017/06/10 01:48:31 schwarze Exp $
+# $OpenBSD: Makefile,v 1.14 2020/03/13 00:31:06 schwarze Exp $
 
-REGRESS_TARGETS = noarg multiarg parsed punct font
+REGRESS_TARGETS = font multiarg noarg parsed punct spacing tag
+TAG_TARGETS	= tag
 LINT_TARGETS	= punct
+HTML_TARGETS	= tag
+SKIP_TMAN	= tag
 
 .include <bsd.regress.mk>

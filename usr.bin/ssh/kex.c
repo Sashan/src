@@ -1,4 +1,4 @@
-/* $OpenBSD: kex.c,v 1.155 2019/10/08 22:40:39 dtucker Exp $ */
+/* $OpenBSD: kex.c,v 1.158 2020/03/13 04:01:56 djm Exp $ */
 /*
  * Copyright (c) 2000, 2001 Markus Friedl.  All rights reserved.
  *
@@ -657,8 +657,7 @@ kex_free_newkeys(struct newkeys *newkeys)
 	}
 	free(newkeys->mac.name);
 	explicit_bzero(&newkeys->mac, sizeof(newkeys->mac));
-	explicit_bzero(newkeys, sizeof(*newkeys));
-	free(newkeys);
+	freezero(newkeys, sizeof(*newkeys));
 }
 
 void
@@ -783,11 +782,14 @@ choose_comp(struct sshcomp *comp, char *client, char *server)
 
 	if (name == NULL)
 		return SSH_ERR_NO_COMPRESS_ALG_MATCH;
+#ifdef WITH_ZLIB
 	if (strcmp(name, "zlib@openssh.com") == 0) {
 		comp->type = COMP_DELAYED;
 	} else if (strcmp(name, "zlib") == 0) {
 		comp->type = COMP_ZLIB;
-	} else if (strcmp(name, "none") == 0) {
+	} else
+#endif	/* WITH_ZLIB */
+	if (strcmp(name, "none") == 0) {
 		comp->type = COMP_NONE;
 	} else {
 		error("%s: unsupported compression scheme %s", __func__, name);
@@ -1150,7 +1152,7 @@ int
 kex_exchange_identification(struct ssh *ssh, int timeout_ms,
     const char *version_addendum)
 {
-	int remote_major, remote_minor, mismatch;
+	int remote_major, remote_minor, mismatch, oerrno = 0;
 	size_t len, i, n;
 	int r, expect_nl;
 	u_char c;
@@ -1169,6 +1171,7 @@ kex_exchange_identification(struct ssh *ssh, int timeout_ms,
 	   PROTOCOL_MAJOR_2, PROTOCOL_MINOR_2, SSH_VERSION,
 	    version_addendum == NULL ? "" : " ",
 	    version_addendum == NULL ? "" : version_addendum)) != 0) {
+		oerrno = errno;
 		error("%s: sshbuf_putf: %s", __func__, ssh_err(r));
 		goto out;
 	}
@@ -1176,11 +1179,13 @@ kex_exchange_identification(struct ssh *ssh, int timeout_ms,
 	if (atomicio(vwrite, ssh_packet_get_connection_out(ssh),
 	    sshbuf_mutable_ptr(our_version),
 	    sshbuf_len(our_version)) != sshbuf_len(our_version)) {
-		error("%s: write: %.100s", __func__, strerror(errno));
+		oerrno = errno;
+		debug("%s: write: %.100s", __func__, strerror(errno));
 		r = SSH_ERR_SYSTEM_ERROR;
 		goto out;
 	}
 	if ((r = sshbuf_consume_end(our_version, 2)) != 0) { /* trim \r\n */
+		oerrno = errno;
 		error("%s: sshbuf_consume_end: %s", __func__, ssh_err(r));
 		goto out;
 	}
@@ -1216,6 +1221,7 @@ kex_exchange_identification(struct ssh *ssh, int timeout_ms,
 					r = SSH_ERR_CONN_TIMEOUT;
 					goto out;
 				} else if (r == -1) {
+					oerrno = errno;
 					error("%s: %s",
 					    __func__, strerror(errno));
 					r = SSH_ERR_SYSTEM_ERROR;
@@ -1231,6 +1237,7 @@ kex_exchange_identification(struct ssh *ssh, int timeout_ms,
 				r = SSH_ERR_CONN_CLOSED;
 				goto out;
 			} else if (len != 1) {
+				oerrno = errno;
 				error("%s: read: %.100s",
 				    __func__, strerror(errno));
 				r = SSH_ERR_SYSTEM_ERROR;
@@ -1248,6 +1255,7 @@ kex_exchange_identification(struct ssh *ssh, int timeout_ms,
 				goto invalid;
 			}
 			if ((r = sshbuf_put_u8(peer_version, c)) != 0) {
+				oerrno = errno;
 				error("%s: sshbuf_put: %s",
 				    __func__, ssh_err(r));
 				goto out;
@@ -1348,6 +1356,8 @@ kex_exchange_identification(struct ssh *ssh, int timeout_ms,
 	free(our_version_string);
 	free(peer_version_string);
 	free(remote_version);
+	if (r == SSH_ERR_SYSTEM_ERROR)
+		errno = oerrno;
 	return r;
 }
 

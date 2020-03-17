@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.h,v 1.142 2020/01/09 11:51:18 claudio Exp $ */
+/*	$OpenBSD: session.h,v 1.145 2020/02/12 10:33:56 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -169,8 +169,11 @@ struct peer_stats {
 	time_t			 last_read;
 	time_t			 last_write;
 	u_int32_t		 prefix_cnt;
+	u_int32_t		 prefix_out_cnt;
 	u_int8_t		 last_sent_errcode;
 	u_int8_t		 last_sent_suberr;
+	u_int8_t		 last_rcvd_errcode;
+	u_int8_t		 last_rcvd_suberr;
 	char			 last_shutcomm[SHUT_COMM_LEN];
 };
 
@@ -211,6 +214,7 @@ struct peer {
 		u_int8_t		established;
 	}			 auth;
 	struct bgpd_addr	 local;
+	struct bgpd_addr	 local_alt;
 	struct bgpd_addr	 remote;
 	struct peer_timer_head	 timers;
 	struct msgbuf		 wbuf;

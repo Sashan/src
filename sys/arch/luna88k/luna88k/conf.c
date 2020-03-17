@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.c,v 1.31 2016/12/17 05:22:34 aoyama Exp $	*/
+/*	$OpenBSD: conf.c,v 1.33 2020/01/23 02:40:21 dlg Exp $	*/
 
 /*-
  * Copyright (c) 1991 The Regents of the University of California.
@@ -67,6 +67,7 @@
 #include "wsmouse.h"
 #include "wsmux.h"
 
+#include "dt.h"
 #include "pf.h"
 #include "vscsi.h"
 #include "pppx.h"
@@ -131,7 +132,7 @@ struct cdevsw	cdevsw[] =
 	cdev_tty_init(NCOM, com),	/* 27: serial port (on PCMCIA) */
 	cdev_disk_init(NWD,wd),		/* 28: IDE disk (on PCMCIA) */
 	cdev_notdef(),			/* 29 */
-	cdev_notdef(),			/* 30 */
+	cdev_dt_init(NDT,dt),		/* 30: dynamic tracer */
 	cdev_notdef(),			/* 31 */
 	cdev_notdef(),			/* 32 */
 	cdev_notdef(),			/* 33 */
@@ -159,6 +160,7 @@ struct cdevsw	cdevsw[] =
 	cdev_pppx_init(NPPPX,pppx),	/* 55: pppx */
 	cdev_tun_init(NTUN,tap),	/* 56: Ethernet network tunnel */
 	cdev_switch_init(NSWITCH,switch), /* 57: switch(4) control interface */
+	cdev_pppx_init(NPPPX,pppac),	/* 58: PPP Access Concentrator */
 };
 int	nchrdev = nitems(cdevsw);
 

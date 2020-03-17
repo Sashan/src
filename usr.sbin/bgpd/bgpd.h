@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.397 2020/01/09 11:55:25 claudio Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.401 2020/02/14 13:54:31 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -379,10 +379,12 @@ struct peer_config {
 	u_int32_t		 remote_as;
 	u_int32_t		 local_as;
 	u_int32_t		 max_prefix;
+	u_int32_t		 max_out_prefix;
 	enum export_type	 export_type;
 	enum enforce_as		 enforce_as;
 	enum enforce_as		 enforce_local_as;
 	u_int16_t		 max_prefix_restart;
+	u_int16_t		 max_out_prefix_restart;
 	u_int16_t		 holdtime;
 	u_int16_t		 min_holdtime;
 	u_int16_t		 local_short_as;
@@ -574,7 +576,9 @@ enum suberr_cease {
 	ERR_CEASE_CONN_REJECT,
 	ERR_CEASE_OTHER_CHANGE,
 	ERR_CEASE_COLLISION,
-	ERR_CEASE_RSRC_EXHAUST
+	ERR_CEASE_RSRC_EXHAUST,
+	ERR_CEASE_HARD_RESET,
+	ERR_CEASE_MAX_SENT_PREFIX
 };
 
 struct kroute_node;
@@ -656,7 +660,8 @@ struct kif {
 };
 
 struct session_up {
-	struct bgpd_addr	local_addr;
+	struct bgpd_addr	local_v4_addr;
+	struct bgpd_addr	local_v6_addr;
 	struct bgpd_addr	remote_addr;
 	struct capabilities	capa;
 	u_int32_t		remote_bgpid;
@@ -1177,8 +1182,6 @@ void		free_prefixtree(struct prefixset_tree *);
 void		filterlist_free(struct filter_head *);
 int		host(const char *, struct bgpd_addr *, u_int8_t *);
 u_int32_t	get_bgpid(void);
-void		copy_filterset(struct filter_set_head *,
-		    struct filter_set_head *);
 void		expand_networks(struct bgpd_config *);
 int		prefixset_cmp(struct prefixset_item *, struct prefixset_item *);
 RB_PROTOTYPE(prefixset_tree, prefixset_item, entry, prefixset_cmp);
@@ -1256,10 +1259,10 @@ int	pftable_addr_remove(struct pftable_msg *);
 int	pftable_commit(void);
 
 /* rde_filter.c */
-void		 filterset_free(struct filter_set_head *);
-int		 filterset_cmp(struct filter_set *, struct filter_set *);
-void		 filterset_move(struct filter_set_head *,
-		    struct filter_set_head *);
+void	filterset_free(struct filter_set_head *);
+int	filterset_cmp(struct filter_set *, struct filter_set *);
+void	filterset_move(struct filter_set_head *, struct filter_set_head *);
+void	filterset_copy(struct filter_set_head *, struct filter_set_head *);
 const char	*filterset_name(enum action_types);
 
 /* rde_sets.c */
@@ -1432,14 +1435,16 @@ static const char * const suberr_update_names[] = {
 
 static const char * const suberr_cease_names[] = {
 	"none",
-	"max-prefix exceeded",
+	"received max-prefix exceeded",
 	"administratively down",
 	"peer unconfigured",
 	"administrative reset",
 	"connection rejected",
 	"other config change",
 	"collision",
-	"resource exhaustion"
+	"resource exhaustion",
+	"hard reset",
+	"sent max-prefix exceeded"
 };
 
 static const char * const ctl_res_strerror[] = {

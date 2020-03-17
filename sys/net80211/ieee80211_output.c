@@ -1,4 +1,4 @@
-/*	$OpenBSD: ieee80211_output.c,v 1.126 2019/07/29 10:50:09 stsp Exp $	*/
+/*	$OpenBSD: ieee80211_output.c,v 1.129 2020/03/06 11:54:49 stsp Exp $	*/
 /*	$NetBSD: ieee80211_output.c,v 1.13 2004/05/31 11:02:55 dyoung Exp $	*/
 
 /*-
@@ -73,8 +73,7 @@ struct	mbuf *ieee80211_getmgmt(int, int, u_int);
 struct	mbuf *ieee80211_get_probe_req(struct ieee80211com *,
 	    struct ieee80211_node *);
 #ifndef IEEE80211_STA_ONLY
-struct	mbuf *ieee80211_get_probe_resp(struct ieee80211com *,
-	    struct ieee80211_node *);
+struct	mbuf *ieee80211_get_probe_resp(struct ieee80211com *);
 #endif
 struct	mbuf *ieee80211_get_auth(struct ieee80211com *,
 	    struct ieee80211_node *, u_int16_t, u_int16_t);
@@ -191,7 +190,7 @@ ieee80211_mgmt_output(struct ifnet *ifp, struct ieee80211_node *ni,
 	*(u_int16_t *)&wh->i_dur[0] = 0;
 	*(u_int16_t *)&wh->i_seq[0] =
 	    htole16(ni->ni_txseq << IEEE80211_SEQ_SEQ_SHIFT);
-	ni->ni_txseq++;
+	ni->ni_txseq = (ni->ni_txseq + 1) & 0xfff;
 	IEEE80211_ADDR_COPY(wh->i_addr1, ni->ni_macaddr);
 	IEEE80211_ADDR_COPY(wh->i_addr2, ic->ic_myaddr);
 	IEEE80211_ADDR_COPY(wh->i_addr3, ni->ni_bssid);
@@ -579,13 +578,12 @@ ieee80211_encap(struct ifnet *ifp, struct mbuf *m, struct ieee80211_node **pni)
 		struct ieee80211_tx_ba *ba;
 		tid = ieee80211_classify(ic, m);
 		ba = &ni->ni_tx_ba[tid];
-		/*
-		 * Don't use TID's sequence number space while an ADDBA
-		 * request is in progress.
-		 */
-		if (ba->ba_state == IEEE80211_BA_REQUESTED) {
+		/* We use QoS data frames for aggregation only. */
+		if (ba->ba_state != IEEE80211_BA_AGREED) {
 			hdrlen = sizeof(struct ieee80211_frame);
 			addqos = 0;
+			if (ieee80211_can_use_ampdu(ic, ni))
+				ieee80211_node_trigger_addba_req(ni, tid);
 		} else {
 			hdrlen = sizeof(struct ieee80211_qosframe);
 			addqos = 1;
@@ -614,24 +612,22 @@ ieee80211_encap(struct ifnet *ifp, struct mbuf *m, struct ieee80211_node **pni)
 		struct ieee80211_qosframe *qwh =
 		    (struct ieee80211_qosframe *)wh;
 		u_int16_t qos = tid;
-		struct ieee80211_tx_ba *ba = &ni->ni_tx_ba[tid];
 
 		if (ic->ic_tid_noack & (1 << tid))
 			qos |= IEEE80211_QOS_ACK_POLICY_NOACK;
-		else if (ba->ba_state == IEEE80211_BA_AGREED) {
+		else {
 			/* Use HT immediate block-ack. */
 			qos |= IEEE80211_QOS_ACK_POLICY_NORMAL;
-		} else if (ieee80211_can_use_ampdu(ic, ni))
-			ieee80211_node_trigger_addba_req(ni, tid);
+		}
 		qwh->i_fc[0] |= IEEE80211_FC0_SUBTYPE_QOS;
 		*(u_int16_t *)qwh->i_qos = htole16(qos);
 		*(u_int16_t *)qwh->i_seq =
 		    htole16(ni->ni_qos_txseqs[tid] << IEEE80211_SEQ_SEQ_SHIFT);
-		ni->ni_qos_txseqs[tid]++;
+		ni->ni_qos_txseqs[tid] = (ni->ni_qos_txseqs[tid] + 1) & 0xfff;
 	} else {
 		*(u_int16_t *)&wh->i_seq[0] =
 		    htole16(ni->ni_txseq << IEEE80211_SEQ_SEQ_SHIFT);
-		ni->ni_txseq++;
+		ni->ni_txseq = (ni->ni_txseq + 1) & 0xfff;
 	}
 	switch (ic->ic_opmode) {
 	case IEEE80211_M_STA:
@@ -1239,7 +1235,7 @@ ieee80211_get_probe_req(struct ieee80211com *ic, struct ieee80211_node *ni)
  * [tlv] HT Operation (802.11n)
  */
 struct mbuf *
-ieee80211_get_probe_resp(struct ieee80211com *ic, struct ieee80211_node *ni)
+ieee80211_get_probe_resp(struct ieee80211com *ic)
 {
 	const struct ieee80211_rateset *rs = &ic->ic_bss->ni_rates;
 	struct mbuf *m;
@@ -1247,7 +1243,7 @@ ieee80211_get_probe_resp(struct ieee80211com *ic, struct ieee80211_node *ni)
 
 	m = ieee80211_getmgmt(M_DONTWAIT, MT_DATA,
 	    8 + 2 + 2 +
-	    2 + ni->ni_esslen +
+	    2 + ic->ic_bss->ni_esslen +
 	    2 + min(rs->rs_nrates, IEEE80211_RATE_SIZE) +
 	    2 + 1 +
 	    ((ic->ic_opmode == IEEE80211_M_IBSS) ? 2 + 2 : 0) +
@@ -1268,13 +1264,13 @@ ieee80211_get_probe_resp(struct ieee80211com *ic, struct ieee80211_node *ni)
 	frm = mtod(m, u_int8_t *);
 	memset(frm, 0, 8); frm += 8;	/* timestamp is set by hardware */
 	LE_WRITE_2(frm, ic->ic_bss->ni_intval); frm += 2;
-	frm = ieee80211_add_capinfo(frm, ic, ni);
+	frm = ieee80211_add_capinfo(frm, ic, ic->ic_bss);
 	frm = ieee80211_add_ssid(frm, ic->ic_bss->ni_essid,
 	    ic->ic_bss->ni_esslen);
 	frm = ieee80211_add_rates(frm, rs);
-	frm = ieee80211_add_ds_params(frm, ic, ni);
+	frm = ieee80211_add_ds_params(frm, ic, ic->ic_bss);
 	if (ic->ic_opmode == IEEE80211_M_IBSS)
-		frm = ieee80211_add_ibss_params(frm, ni);
+		frm = ieee80211_add_ibss_params(frm, ic->ic_bss);
 	if (ic->ic_curmode == IEEE80211_MODE_11G)
 		frm = ieee80211_add_erp(frm, ic);
 	if (rs->rs_nrates > IEEE80211_RATE_SIZE)
@@ -1777,7 +1773,7 @@ ieee80211_send_mgmt(struct ieee80211com *ic, struct ieee80211_node *ni,
 		break;
 #ifndef IEEE80211_STA_ONLY
 	case IEEE80211_FC0_SUBTYPE_PROBE_RESP:
-		if ((m = ieee80211_get_probe_resp(ic, ni)) == NULL)
+		if ((m = ieee80211_get_probe_resp(ic)) == NULL)
 			senderr(ENOMEM, is_tx_nombuf);
 		break;
 #endif

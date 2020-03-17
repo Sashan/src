@@ -1,4 +1,4 @@
-/*	$OpenBSD: ipmi.c,v 1.108 2020/01/11 18:51:54 kettenis Exp $ */
+/*	$OpenBSD: ipmi.c,v 1.110 2020/03/09 04:51:24 yasuoka Exp $ */
 
 /*
  * Copyright (c) 2015 Masao Uebayashi
@@ -55,7 +55,7 @@ struct ipmi_sensor {
 
 int	ipmi_enabled = 0;
 
-#define SENSOR_REFRESH_RATE (5 * hz)
+#define SENSOR_REFRESH_RATE 5	/* seconds */
 
 #define DEVNAME(s)  ((s)->sc_dev.dv_xname)
 
@@ -1288,6 +1288,11 @@ read_sensor(struct ipmi_softc *sc, struct ipmi_sensor *psensor)
 	c.c_data = data;
 	ipmi_cmd(&c);
 
+	if (c.c_ccode != 0) {
+		dbg_printf(1, "sensor reading command for %s failed: %.2x\n",
+			psensor->i_sensor.desc, c.c_ccode);
+		return (rv);
+	}
 	dbg_printf(10, "values=%.2x %.2x %.2x %.2x %s\n",
 	    data[0],data[1],data[2],data[3], psensor->i_sensor.desc);
 	psensor->i_sensor.flags &= ~SENSOR_FINVALID;
@@ -1498,7 +1503,8 @@ ipmi_poll_thread(void *arg)
 
 	while (thread->running) {
 		ipmi_refresh_sensors(sc);
-		tsleep(thread, PWAIT, "ipmi_poll", SENSOR_REFRESH_RATE);
+		tsleep_nsec(thread, PWAIT, "ipmi_poll",
+		    SEC_TO_NSEC(SENSOR_REFRESH_RATE));
 	}
 
 done:

@@ -1,9 +1,9 @@
-#	$OpenBSD: Makefile,v 1.18 2019/12/13 19:09:10 djm Exp $
+#	$OpenBSD: Makefile,v 1.20 2020/01/25 23:02:14 djm Exp $
 
 .PATH:		${.CURDIR}/..
 
 SRCS=	ssh-keysign.c readconf.c compat.c
-SRCS+=	atomicio.c cleanup.c fatal.c
+SRCS+=	cleanup.c fatal.c
 SRCS+=	uidswap.c
 SRCS+=	${SRCS_BASE} ${SRCS_KEY} ${SRCS_KEYP} ${SRCS_KRL} ${SRCS_PKT} \
 	${SRCS_UTL} ${SRCS_SK_CLIENT}
@@ -16,5 +16,10 @@ MAN=	ssh-keysign.8
 
 .include <bsd.prog.mk>
 
-LDADD+=	-lcrypto -lutil -lz
-DPADD+=	${LIBCRYPTO} ${LIBUTIL} ${LIBZ}
+LDADD+=	-lcrypto -lutil
+DPADD+=	${LIBCRYPTO} ${LIBUTIL}
+
+.if (${ZLIB:L} == "yes")
+LDADD+=	-lz
+DPADD+=	${LIBZ}
+.endif

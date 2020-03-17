@@ -1,4 +1,4 @@
-/*	$OpenBSD: ncr53c9x.c,v 1.65 2019/05/07 14:22:06 cheloha Exp $	*/
+/*	$OpenBSD: ncr53c9x.c,v 1.68 2020/02/14 18:37:03 krw Exp $	*/
 /*     $NetBSD: ncr53c9x.c,v 1.56 2000/11/30 14:41:46 thorpej Exp $    */
 
 /*
@@ -149,12 +149,9 @@ void	ncr53c9x_scsi_cmd(struct scsi_xfer *);
 int	ncr53c9x_scsi_probe(struct scsi_link *);
 void	ncr53c9x_scsi_free(struct scsi_link *);
 
-struct scsi_adapter ncr53c9x_adapter = {
-	ncr53c9x_scsi_cmd,	/* cmd */
-	scsi_minphys,		/* minphys */
-	ncr53c9x_scsi_probe,	/* lun probe */
-	ncr53c9x_scsi_free,	/* lun free */
-	NULL			/* ioctl */
+struct scsi_adapter ncr53c9x_switch = {
+	ncr53c9x_scsi_cmd, NULL, ncr53c9x_scsi_probe,
+	ncr53c9x_scsi_free, NULL
 };
 
 /*
@@ -269,7 +266,7 @@ ncr53c9x_attach(sc)
 	 */
 	sc->sc_link.adapter_softc = sc;
 	sc->sc_link.adapter_target = sc->sc_id;
-	sc->sc_link.adapter = &ncr53c9x_adapter;
+	sc->sc_link.adapter = &ncr53c9x_switch;
 	sc->sc_link.openings = 2;
 	sc->sc_link.adapter_buswidth = sc->sc_ntarg;
 	sc->sc_link.pool = &ecb_iopool;

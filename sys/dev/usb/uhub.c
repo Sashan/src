@@ -1,4 +1,4 @@
-/*	$OpenBSD: uhub.c,v 1.92 2019/01/07 14:24:22 mpi Exp $ */
+/*	$OpenBSD: uhub.c,v 1.94 2020/03/16 13:17:17 mpi Exp $ */
 /*	$NetBSD: uhub.c,v 1.64 2003/02/08 03:32:51 ichiro Exp $	*/
 /*	$FreeBSD: src/sys/dev/usb/uhub.c,v 1.18 1999/11/17 22:33:43 n_hibma Exp $	*/
 
@@ -72,7 +72,7 @@ struct uhub_softc {
 
 int uhub_explore(struct usbd_device *hub);
 void uhub_intr(struct usbd_xfer *, void *, usbd_status);
-int uhub_port_connect(struct uhub_softc *, int, int, int);
+int uhub_port_connect(struct uhub_softc *, int, int);
 
 /*
  * We need two attachment points:
@@ -238,7 +238,7 @@ uhub_attach(struct device *parent, struct device *self, void *aux)
 		printf("%s: no endpoint descriptor\n", sc->sc_dev.dv_xname);
 		goto bad;
 	}
-	if ((ed->bmAttributes & UE_XFERTYPE) != UE_INTERRUPT) {
+	if (UE_GET_XFERTYPE(ed->bmAttributes) != UE_INTERRUPT) {
 		printf("%s: bad interrupt endpoint\n", sc->sc_dev.dv_xname);
 		goto bad;
 	}
@@ -421,7 +421,7 @@ uhub_explore(struct usbd_device *dev)
 		}
 
 		if (change & UPS_C_CONNECT_STATUS) {
-			if (uhub_port_connect(sc, port, status, change))
+			if (uhub_port_connect(sc, port, status))
 				continue;
 
 			/* The port set up succeeded, reset error count. */
@@ -506,10 +506,10 @@ uhub_intr(struct usbd_xfer *xfer, void *addr, usbd_status status)
 }
 
 int
-uhub_port_connect(struct uhub_softc *sc, int port, int status, int change)
+uhub_port_connect(struct uhub_softc *sc, int port, int status)
 {
 	struct usbd_port *up = &sc->sc_hub->hub->ports[port-1];
-	int speed;
+	int speed, change;
 
 	/* We have a connect status change, handle it. */
 	usbd_clear_port_feature(sc->sc_hub, port, UHF_C_PORT_CONNECTION);

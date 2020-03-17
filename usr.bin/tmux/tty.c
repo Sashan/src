@@ -1,4 +1,4 @@
-/* $OpenBSD: tty.c,v 1.340 2020/01/13 11:59:21 nicm Exp $ */
+/* $OpenBSD: tty.c,v 1.344 2020/03/16 10:49:06 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -330,16 +330,20 @@ tty_start_tty(struct tty *tty)
 		log_debug("%s: using UTF-8 for ACS", c->name);
 
 	tty_putcode(tty, TTYC_CNORM);
-	if (tty_term_has(tty->term, TTYC_KMOUS))
-		tty_puts(tty, "\033[?1000l\033[?1002l\033[?1006l\033[?1005l");
+	if (tty_term_has(tty->term, TTYC_KMOUS)) {
+		tty_puts(tty, "\033[?1000l\033[?1002l\033[?1003l");
+		tty_puts(tty, "\033[?1006l\033[?1005l");
+	}
 
 	if (tty_term_flag(tty->term, TTYC_XT)) {
 		if (options_get_number(global_options, "focus-events")) {
 			tty->flags |= TTY_FOCUS;
 			tty_puts(tty, "\033[?1004h");
 		}
-		tty_puts(tty, "\033[c\033[1337n"); /* DA and DSR */
-
+		if (~tty->flags & TTY_HAVEDA)
+			tty_puts(tty, "\033[c");
+		if (~tty->flags & TTY_HAVEDSR)
+			tty_puts(tty, "\033[1337n");
 	} else
 		tty->flags |= (TTY_HAVEDA|TTY_HAVEDSR);
 
@@ -402,8 +406,10 @@ tty_stop_tty(struct tty *tty)
 		tty_raw(tty, tty_term_string(tty->term, TTYC_CR));
 
 	tty_raw(tty, tty_term_string(tty->term, TTYC_CNORM));
-	if (tty_term_has(tty->term, TTYC_KMOUS))
-		tty_raw(tty, "\033[?1000l\033[?1002l\033[?1006l\033[?1005l");
+	if (tty_term_has(tty->term, TTYC_KMOUS)) {
+		tty_raw(tty, "\033[?1000l\033[?1002l\033[?1003l");
+		tty_raw(tty, "\033[?1006l\033[?1005l");
+	}
 
 	if (tty_term_flag(tty->term, TTYC_XT)) {
 		if (tty->flags & TTY_FOCUS) {
@@ -652,7 +658,8 @@ tty_force_cursor_colour(struct tty *tty, const char *ccolour)
 void
 tty_update_mode(struct tty *tty, int mode, struct screen *s)
 {
-	int	changed;
+	struct client	*c = tty->client;
+	int		 changed;
 
 	if (s != NULL && strcmp(s->ccolour, tty->ccolour) != 0)
 		tty_force_cursor_colour(tty, s->ccolour);
@@ -661,6 +668,10 @@ tty_update_mode(struct tty *tty, int mode, struct screen *s)
 		mode &= ~MODE_CURSOR;
 
 	changed = mode ^ tty->mode;
+	if (changed == 0)
+		return;
+	log_debug("%s: update mode %x to %x", c->name, tty->mode, mode);
+
 	if (changed & MODE_BLINKING) {
 		if (tty_term_has(tty->term, TTYC_CVVIS))
 			tty_putcode(tty, TTYC_CVVIS);
@@ -684,28 +695,31 @@ tty_update_mode(struct tty *tty, int mode, struct screen *s)
 		}
 		tty->cstyle = s->cstyle;
 	}
-	if (changed & ALL_MOUSE_MODES) {
-		if (mode & ALL_MOUSE_MODES) {
-			/*
-			 * Enable the SGR (1006) extension unconditionally, as
-			 * it is safe from misinterpretation.
-			 */
-			tty_puts(tty, "\033[?1006h");
-			if (mode & MODE_MOUSE_ALL)
-				tty_puts(tty, "\033[?1003h");
-			else if (mode & MODE_MOUSE_BUTTON)
-				tty_puts(tty, "\033[?1002h");
-			else if (mode & MODE_MOUSE_STANDARD)
-				tty_puts(tty, "\033[?1000h");
-		} else {
-			if (tty->mode & MODE_MOUSE_ALL)
-				tty_puts(tty, "\033[?1003l");
-			else if (tty->mode & MODE_MOUSE_BUTTON)
-				tty_puts(tty, "\033[?1002l");
-			else if (tty->mode & MODE_MOUSE_STANDARD)
-				tty_puts(tty, "\033[?1000l");
+	if ((changed & ALL_MOUSE_MODES) &&
+	    tty_term_has(tty->term, TTYC_KMOUS)) {
+		if ((mode & ALL_MOUSE_MODES) == 0)
 			tty_puts(tty, "\033[?1006l");
-		}
+		if ((changed & MODE_MOUSE_STANDARD) &&
+		    (~mode & MODE_MOUSE_STANDARD))
+			tty_puts(tty, "\033[?1000l");
+		if ((changed & MODE_MOUSE_BUTTON) &&
+		    (~mode & MODE_MOUSE_BUTTON))
+			tty_puts(tty, "\033[?1002l");
+		if ((changed & MODE_MOUSE_ALL) &&
+		    (~mode & MODE_MOUSE_ALL))
+			tty_puts(tty, "\033[?1003l");
+
+		if (mode & ALL_MOUSE_MODES)
+			tty_puts(tty, "\033[?1006h");
+		if ((changed & MODE_MOUSE_STANDARD) &&
+		    (mode & MODE_MOUSE_STANDARD))
+			tty_puts(tty, "\033[?1000h");
+		if ((changed & MODE_MOUSE_BUTTON) &&
+		    (mode & MODE_MOUSE_BUTTON))
+			tty_puts(tty, "\033[?1002h");
+		if ((changed & MODE_MOUSE_ALL) &&
+		    (mode & MODE_MOUSE_ALL))
+			tty_puts(tty, "\033[?1003h");
 	}
 	if (changed & MODE_BRACKETPASTE) {
 		if (mode & MODE_BRACKETPASTE)
@@ -2386,11 +2400,10 @@ tty_check_fg(struct tty *tty, struct window_pane *wp, struct grid_cell *gc)
 	/* Is this a 24-bit colour? */
 	if (gc->fg & COLOUR_FLAG_RGB) {
 		/* Not a 24-bit terminal? Translate to 256-colour palette. */
-		if (!tty_term_has(tty->term, TTYC_SETRGBF)) {
-			colour_split_rgb(gc->fg, &r, &g, &b);
-			gc->fg = colour_find_rgb(r, g, b);
-		} else
+		if ((tty->term->flags|tty->term_flags) & TERM_RGBCOLOURS)
 			return;
+		colour_split_rgb(gc->fg, &r, &g, &b);
+		gc->fg = colour_find_rgb(r, g, b);
 	}
 
 	/* How many colours does this terminal have? */
@@ -2436,11 +2449,10 @@ tty_check_bg(struct tty *tty, struct window_pane *wp, struct grid_cell *gc)
 	/* Is this a 24-bit colour? */
 	if (gc->bg & COLOUR_FLAG_RGB) {
 		/* Not a 24-bit terminal? Translate to 256-colour palette. */
-		if (!tty_term_has(tty->term, TTYC_SETRGBB)) {
-			colour_split_rgb(gc->bg, &r, &g, &b);
-			gc->bg = colour_find_rgb(r, g, b);
-		} else
+		if ((tty->term->flags|tty->term_flags) & TERM_RGBCOLOURS)
 			return;
+		colour_split_rgb(gc->bg, &r, &g, &b);
+		gc->bg = colour_find_rgb(r, g, b);
 	}
 
 	/* How many colours does this terminal have? */
@@ -2617,15 +2629,14 @@ tty_try_colour(struct tty *tty, int colour, const char *type)
 	}
 
 	if (colour & COLOUR_FLAG_RGB) {
+		colour_split_rgb(colour & 0xffffff, &r, &g, &b);
 		if (*type == '3') {
 			if (!tty_term_has(tty->term, TTYC_SETRGBF))
-				return (-1);
-			colour_split_rgb(colour & 0xffffff, &r, &g, &b);
+				goto fallback_rgb;
 			tty_putcode3(tty, TTYC_SETRGBF, r, g, b);
 		} else {
 			if (!tty_term_has(tty->term, TTYC_SETRGBB))
-				return (-1);
-			colour_split_rgb(colour & 0xffffff, &r, &g, &b);
+				goto fallback_rgb;
 			tty_putcode3(tty, TTYC_SETRGBB, r, g, b);
 		}
 		return (0);
@@ -2636,6 +2647,12 @@ tty_try_colour(struct tty *tty, int colour, const char *type)
 fallback_256:
 	xsnprintf(s, sizeof s, "\033[%s;5;%dm", type, colour & 0xff);
 	log_debug("%s: 256 colour fallback: %s", tty->client->name, s);
+	tty_puts(tty, s);
+	return (0);
+
+fallback_rgb:
+	xsnprintf(s, sizeof s, "\033[%s;2;%d;%d;%dm", type, r, g, b);
+	log_debug("%s: RGB colour fallback: %s", tty->client->name, s);
 	tty_puts(tty, s);
 	return (0);
 }

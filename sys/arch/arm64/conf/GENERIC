@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.138 2020/01/14 20:43:20 kettenis Exp $
+# $OpenBSD: GENERIC,v 1.145 2020/03/04 22:23:03 patrick Exp $
 #
 # GENERIC machine description file
 #
@@ -106,7 +106,8 @@ option	WSDISPLAY_DEFAULTSCREENS=6	# initial number of text consoles
 
 simplefb*	at fdt?
 wsdisplay*	at simplefb?
-pwmbl*			at fdt?		# PWM backlight
+simplepanel*	at fdt?
+pwmbl*		at fdt?			# PWM backlight
 
 radeondrm*	at pci?
 drm*		at radeondrm?
@@ -189,6 +190,11 @@ sfp*		at fdt?
 rkclock*	at fdt? early 1
 rkgrf*		at fdt? early 1
 rkpinctrl*	at fdt? early 1
+rkanxdp*	at fdt?
+rkdrm*		at fdt?
+drm*		at rkdrm?
+wsdisplay*	at rkdrm?
+rkdwhdmi*	at fdt?
 rkemmcphy*	at fdt?
 rkgpio*		at fdt?
 rkiic*		at fdt?
@@ -197,6 +203,7 @@ rkpcie*		at fdt?
 pci*		at rkpcie?
 rkpwm*		at fdt?
 rktemp*		at fdt?
+rkvop*		at fdt?
 rkdwusb*	at fdt?
 dwmmc*		at fdt?
 sdmmc*		at dwmmc?
@@ -231,11 +238,16 @@ mcx*		at pci?			# Mellanox ConnectX-4/5 Ethernet
 mskc*		at pci?			# Marvell Yukon-2
 msk*		at mskc?		#  each port of above
 re*		at pci?			# Realtek 8169/8169S/8110S
+rge*		at pci?			# Realtek 8125
 
 # PCI SCSI
 ahci*		at pci? flags 0x0000	# AHCI SATA controllers
 					# flags 0x0001 to force SATA 1 (1.5Gb/s)
 nvme*		at pci?			# NVMe controllers
+mpi*		at pci?			# LSI Logic Fusion MPT Message Passing Interface
+mpii*		at pci?			# LSI Fusion MPT Message Passing Interface II
+mfi*		at pci?			# LSI MegaRAID SAS controllers
+mfii*		at pci?			# LSI MegaRAID SAS Fusion controller
 
 # USB Controllers
 ohci*		at pci?			# Open Host Controller
@@ -299,6 +311,8 @@ umass*		at uhub?		# USB Mass Storage devices
 uhidev*		at uhub?		# Human Interface Devices
 ums*		at uhidev?		# USB mouse
 wsmouse*	at ums? mux 0
+umt*		at uhidev?		# USB multitouch touchpad
+wsmouse*	at umt? mux 0
 uts*		at uhub?		# USB touchscreen
 wsmouse*	at uts? mux 0
 uwacom*		at uhidev?		# USB Wacom tablet
