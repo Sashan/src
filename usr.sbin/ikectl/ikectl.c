@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikectl.c,v 1.23 2015/12/05 13:11:18 claudio Exp $	*/
+/*	$OpenBSD: ikectl.c,v 1.25 2020/03/22 15:59:05 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2007-2013 Reyk Floeter <reyk@openbsd.org>
@@ -48,6 +48,8 @@ struct imsgname *monitor_lookup(uint8_t);
 void		 monitor_id(struct imsg *);
 int		 monitor(struct imsg *);
 
+int		 show_string(struct imsg *);
+
 int		 ca_opt(struct parse_result *);
 
 struct imsgname imsgs[] = {
@@ -56,6 +58,7 @@ struct imsgname imsgs[] = {
 	{ IMSG_CTL_VERBOSE,		"verbose",		NULL },
 	{ IMSG_CTL_RELOAD,		"reload",		NULL },
 	{ IMSG_CTL_RESET,		"reset",		NULL },
+	{ IMSG_CTL_SHOW_SA,		"show sa",		NULL },
 	{ 0,				NULL,			NULL }
 
 };
@@ -291,6 +294,14 @@ main(int argc, char *argv[])
 		imsg_compose(ibuf, IMSG_CTL_RELOAD, 0, 0, -1,
 		    res->path, strlen(res->path));
 		break;
+	case RESET_ID:
+		imsg_compose(ibuf, IMSG_CTL_RESET_ID, 0, 0, -1,
+		    res->id, strlen(res->id));
+		break;
+	case SHOW_SA:
+		imsg_compose(ibuf, IMSG_CTL_SHOW_SA, 0, 0, -1, NULL, 0);
+		done = 0;
+		break;
 	case RELOAD:
 		imsg_compose(ibuf, IMSG_CTL_RELOAD, 0, 0, -1, NULL, 0);
 		break;
@@ -338,6 +349,9 @@ main(int argc, char *argv[])
 			case MONITOR:
 				done = monitor(&imsg);
 				break;
+			case SHOW_SA:
+				done = show_string(&imsg);
+				break;
 			default:
 				break;
 			}
@@ -378,6 +392,22 @@ monitor(struct imsg *imsg)
 		done = 1;
 	if (imn->func != NULL)
 		(*imn->func)(imsg);
+
+	return (done);
+}
+
+int
+show_string(struct imsg *imsg)
+{
+	int	done = 0;
+
+	if (imsg->hdr.type != IMSG_CTL_SHOW_SA)
+		return (done);
+
+	if (IMSG_DATA_SIZE(imsg) > 0)
+		printf("%s", imsg->data);
+	else
+		done = 1;
 
 	return (done);
 }

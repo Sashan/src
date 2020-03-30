@@ -1,4 +1,4 @@
-/* $OpenBSD: menu.c,v 1.12 2019/09/16 13:27:14 nicm Exp $ */
+/* $OpenBSD: menu.c,v 1.15 2020/03/24 08:09:44 nicm Exp $ */
 
 /*
  * Copyright (c) 2019 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -130,6 +130,16 @@ menu_free(struct menu *menu)
 	free(menu);
 }
 
+static int
+menu_mode_cb(struct client *c, __unused u_int *cx, __unused u_int *cy)
+{
+	struct menu_data	*md = c->overlay_data;
+
+	if (~md->flags & MENU_NOMOUSE)
+		return (MODE_MOUSE_ALL);
+	return (0);
+}
+
 static void
 menu_draw_cb(struct client *c, __unused struct screen_redraw_ctx *ctx0)
 {
@@ -138,21 +148,15 @@ menu_draw_cb(struct client *c, __unused struct screen_redraw_ctx *ctx0)
 	struct screen		*s = &md->s;
 	struct menu		*menu = md->menu;
 	struct screen_write_ctx	 ctx;
-	u_int			 i, px, py;
+	u_int			 i, px = md->px, py = md->py;
 
 	screen_write_start(&ctx, NULL, s);
 	screen_write_clearscreen(&ctx, 8);
 	screen_write_menu(&ctx, menu, md->choice);
 	screen_write_stop(&ctx);
 
-	px = md->px;
-	py = md->py;
-
 	for (i = 0; i < screen_size_y(&md->s); i++)
 		tty_draw_line(tty, NULL, s, 0, i, menu->width + 4, px, py + i);
-
-	if (~md->flags & MENU_NOMOUSE)
-		tty_update_mode(tty, MODE_MOUSE_ALL, NULL);
 }
 
 static void
@@ -270,7 +274,6 @@ chosen:
 	pr = cmd_parse_from_string(item->command, NULL);
 	switch (pr->status) {
 	case CMD_PARSE_EMPTY:
-		new_item = NULL;
 		break;
 	case CMD_PARSE_ERROR:
 		new_item = cmdq_get_error(pr->error);
@@ -299,6 +302,10 @@ menu_display(struct menu *menu, int flags, struct cmdq_item *item, u_int px,
 
 	if (c->tty.sx < menu->width + 4 || c->tty.sy < menu->count + 2)
 		return (-1);
+	if (px + menu->width + 4 > c->tty.sx)
+		px = c->tty.sx - menu->width - 4;
+	if (py + menu->count + 2 > c->tty.sy)
+		py = c->tty.sy - menu->count - 2;
 
 	md = xcalloc(1, sizeof *md);
 	md->item = item;
@@ -317,7 +324,7 @@ menu_display(struct menu *menu, int flags, struct cmdq_item *item, u_int px,
 	md->cb = cb;
 	md->data = data;
 
-	server_client_set_overlay(c, 0, menu_draw_cb, menu_key_cb, menu_free_cb,
-	    md);
+	server_client_set_overlay(c, 0, NULL, menu_mode_cb, menu_draw_cb,
+	    menu_key_cb, menu_free_cb, md);
 	return (0);
 }
