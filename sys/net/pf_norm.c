@@ -218,7 +218,7 @@ pf_purge_expired_fragments(void)
 	struct pf_fragment	*frag;
 	int32_t			 expire;
 
-	PF_ASSERT_NOTOWNER();
+	PF_ASSERT_UNLOCKED();
 
 	expire = time_uptime - pf_default_rule.timeout[PFTM_FRAG];
 

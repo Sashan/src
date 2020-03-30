@@ -118,25 +118,16 @@ extern struct rwlock	pf_state_lock;
 		rw_exit_write(&pf_lock);		\
 	} while (0)
 
-#ifdef DIAGNOSTIC
 #define PF_ASSERT_LOCKED()	do {			\
-		if (RWLOCK_OWNER(&pf_lock) != curproc)	\
-			panic("%s pf_lock: not owner\n",\
-			    __func__);			\
+		if (rw_status(&pf_lock) != RW_WRITE)	\
+			splassert_fail(RW_WRITE,	\
+			    rw_status(&pf_lock),__func__);\
 	} while (0)
-#else
-#define PF_ASSERT_LOCKED()	(void)(0)
-#endif
 
-#ifdef DIAGNOSTIC
-#define PF_ASSERT_NOTOWNER()	do {			\
-		if (RWLOCK_OWNER(&pf_lock) == curproc)	\
-			panic("%s pf_lock: already held\n",\
-			    __func__);			\
+#define PF_ASSERT_UNLOCKED()	do {			\
+		if (rw_status(&pf_lock) == RW_WRITE)	\
+			splassert_fail(0, rw_status(&pf_lock), __func__);\
 	} while (0)
-#else
-#define PF_ASSERT_NOTOWNER()	(void)(0)
-#endif
 
 #define PF_STATE_ENTER_READ()	do {			\
 		rw_enter_read(&pf_state_lock);		\
@@ -155,21 +146,17 @@ extern struct rwlock	pf_state_lock;
 		rw_exit_write(&pf_state_lock);		\
 	} while (0)
 
-#ifdef DIAGNOSTIC
 #define PF_ASSERT_STATE_LOCKED()	do {		\
-		if (RWLOCK_OWNER(&pf_state_lock) != curproc)\
-			panic("%s: state_lock: not owner\n",\
-			    __func__);			\
+		if (rw_status(&pf_state_lock) != RW_WRITE)\
+			splassert_fail(RW_WRITE,	\
+			    rw_status(&pf_state_lock), __func__);\
 	} while (0)
-#else
-#define PF_ASSERT_STATE_LOCKED()	(void)(0)
-#endif
 
 #else /* !WITH_PF_LOCK */
 #define PF_LOCK()		(void)(0)
 #define PF_UNLOCK()		(void)(0)
 #define PF_ASSERT_LOCKED()	(void)(0)
-#define PF_ASSERT_NOTOWNER()	(void)(0)
+#define PF_ASSERT_UNLOCKED()	(void)(0)
 
 #define PF_STATE_ENTER_READ()	(void)(0)
 #define PF_STATE_EXIT_READ()	(void)(0)

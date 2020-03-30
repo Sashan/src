@@ -1461,7 +1461,7 @@ pf_purge_expired_states(u_int32_t maxcheck)
 	struct pf_state		*next;
 	SLIST_HEAD(pf_state_gcl, pf_state) gcl;
 
-	PF_ASSERT_NOTOWNER();
+	PF_ASSERT_UNLOCKED();
 	SLIST_INIT(&gcl);
 
 	PF_STATE_ENTER_READ();
