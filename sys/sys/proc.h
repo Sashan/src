@@ -1,4 +1,4 @@
-/*	$OpenBSD: proc.h,v 1.290 2020/03/16 11:58:46 mpi Exp $	*/
+/*	$OpenBSD: proc.h,v 1.293 2020/03/20 08:14:07 claudio Exp $	*/
 /*	$NetBSD: proc.h,v 1.44 1996/04/22 01:23:21 christos Exp $	*/
 
 /*-
@@ -50,7 +50,6 @@
 #include <sys/resource.h>		/* For struct rusage */
 #include <sys/rwlock.h>			/* For struct rwlock */
 #include <sys/sigio.h>			/* For struct sigio */
-#include <sys/tree.h>
 
 #ifdef _KERNEL
 #include <sys/atomic.h>
@@ -129,15 +128,6 @@ struct tusage {
 	uint64_t	tu_iticks;	/* Statclock hits processing intr. */
 };
 
-struct unvname {
-	char 			*un_name;
-	size_t 			un_namesize;
-	u_char			un_flags;
-	RBT_ENTRY(unvnmae)	un_rbt;
-};
-
-RBT_HEAD(unvname_rbt, unvname);
-
 /*
  * Description of a process.
  *
@@ -210,7 +200,7 @@ struct process {
 	int	ps_siglist;		/* Signals pending for the process. */
 
 	struct	proc *ps_single;	/* Single threading to this thread. */
-	int	ps_singlecount;		/* Not yet suspended threads. */
+	u_int	ps_singlecount;		/* [a] Not yet suspended threads. */
 
 	int	ps_traceflag;		/* Kernel trace points. */
 	struct	vnode *ps_tracevp;	/* Trace to vnode. */
@@ -464,14 +454,6 @@ struct proc {
 
 #ifdef _KERNEL
 
-struct unveil {
-	struct vnode		*uv_vp;
-	ssize_t			uv_cover;
-	struct unvname_rbt	uv_names;
-	struct rwlock		uv_lock;
-	u_char			uv_flags;
-};
-
 struct uidinfo {
 	LIST_ENTRY(uidinfo) ui_hash;
 	uid_t   ui_uid;
@@ -614,7 +596,7 @@ enum single_thread_mode {
 	SINGLE_EXIT		/* other threads to unwind and then exit */
 };
 int	single_thread_set(struct proc *, enum single_thread_mode, int);
-void	single_thread_wait(struct process *);
+int	single_thread_wait(struct process *, int);
 void	single_thread_clear(struct proc *, int);
 int	single_thread_check(struct proc *, int);
 

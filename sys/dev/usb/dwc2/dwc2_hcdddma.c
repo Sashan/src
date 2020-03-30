@@ -1,4 +1,4 @@
-/*	$OpenBSD: dwc2_hcdddma.c,v 1.14 2017/09/08 05:36:53 deraadt Exp $	*/
+/*	$OpenBSD: dwc2_hcdddma.c,v 1.16 2020/03/21 12:08:31 patrick Exp $	*/
 /*	$NetBSD: dwc2_hcdddma.c,v 1.6 2014/04/03 06:34:58 skrll Exp $	*/
 
 /*
@@ -104,7 +104,7 @@ STATIC int dwc2_desc_list_alloc(struct dwc2_hsotg *hsotg, struct dwc2_qh *qh,
 	qh->desc_list = NULL;
 	err = usb_allocmem(&hsotg->hsotg_sc->sc_bus,
 	    sizeof(struct dwc2_hcd_dma_desc) * dwc2_max_desc_num(qh), 0,
-	    &qh->desc_list_usbdma);
+	    USB_DMA_COHERENT, &qh->desc_list_usbdma);
 
 	if (!err) {
 		qh->desc_list = KERNADDR(&qh->desc_list_usbdma, 0);
@@ -144,7 +144,7 @@ STATIC int dwc2_frame_list_alloc(struct dwc2_hsotg *hsotg, gfp_t mem_flags)
 	/* XXXNH - struct pool */
 	hsotg->frame_list = NULL;
 	err = usb_allocmem(&hsotg->hsotg_sc->sc_bus, 4 * FRLISTEN_64_SIZE,
-	    0, &hsotg->frame_list_usbdma);
+	    0, USB_DMA_COHERENT, &hsotg->frame_list_usbdma);
 
 	if (!err) {
 		hsotg->frame_list = KERNADDR(&hsotg->frame_list_usbdma, 0);

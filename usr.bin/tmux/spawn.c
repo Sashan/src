@@ -1,4 +1,4 @@
-/* $OpenBSD: spawn.c,v 1.15 2020/03/02 08:30:30 nicm Exp $ */
+/* $OpenBSD: spawn.c,v 1.17 2020/03/19 14:03:49 nicm Exp $ */
 
 /*
  * Copyright (c) 2019 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -255,7 +255,8 @@ spawn_pane(struct spawn_context *sc, char **cause)
 		}
 		window_pane_reset_mode_all(sc->wp0);
 		screen_reinit(&sc->wp0->base);
-		input_init(sc->wp0);
+		input_free(sc->wp0->ictx);
+		sc->wp0->ictx = input_init(sc->wp0);
 		new_wp = sc->wp0;
 		new_wp->flags &= ~(PANE_STATUSREADY|PANE_STATUSDRAWN);
 	} else if (sc->lc == NULL) {
@@ -320,7 +321,7 @@ spawn_pane(struct spawn_context *sc, char **cause)
 	/* Then the shell. If respawning, use the old one. */
 	if (~sc->flags & SPAWN_RESPAWN) {
 		tmp = options_get_string(s->options, "default-shell");
-		if (*tmp == '\0' || areshell(tmp))
+		if (!checkshell(tmp))
 			tmp = _PATH_BSHELL;
 		free(new_wp->shell);
 		new_wp->shell = xstrdup(tmp);

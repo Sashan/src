@@ -1,4 +1,4 @@
-/*	$OpenBSD: ofw_misc.c,v 1.15 2020/03/16 21:51:26 kettenis Exp $	*/
+/*	$OpenBSD: ofw_misc.c,v 1.18 2020/03/22 14:56:24 kettenis Exp $	*/
 /*
  * Copyright (c) 2017 Mark Kettenis
  *
@@ -301,9 +301,9 @@ pwm_init_state(uint32_t *cells, struct pwm_state *ps)
 			memset(ps, 0, sizeof(struct pwm_state));
 			pd->pd_get_state(pd->pd_cookie, &cells[1], ps);
 			ps->ps_pulse_width = 0;
-			if (pd->pd_cells > 2)
+			if (pd->pd_cells >= 2)
 				ps->ps_period = cells[2];
-			if (pd->pd_cells > 3)
+			if (pd->pd_cells >= 3)
 				ps->ps_flags = cells[3];
 			return 0;
 		}
@@ -565,12 +565,12 @@ endpoint_get_cookie(struct endpoint *ep)
 	return ports->dp_ep_get_cookie(ports->dp_cookie, ep);
 }
 
-void
+int
 device_port_activate(uint32_t phandle, void *arg)
 {
-	struct device_ports *ports;
-	struct device_port *dp;
+	struct device_port *dp = NULL;
 	struct endpoint *ep, *rep;
+	int count;
 	int error;
 
 	LIST_FOREACH(ep, &endpoints, ep_list) {
@@ -580,9 +580,9 @@ device_port_activate(uint32_t phandle, void *arg)
 		}
 	}
 	if (dp == NULL)
-		return;
+		return ENXIO;
 
-	ports = dp->dp_ports;
+	count = 0;
 	LIST_FOREACH(ep, &dp->dp_endpoints, ep_plist) {
 		rep = endpoint_remote(ep);
 		if (rep == NULL)
@@ -594,5 +594,8 @@ device_port_activate(uint32_t phandle, void *arg)
 		error = endpoint_activate(rep, arg);
 		if (error)
 			continue;
+		count++;
 	}
+
+	return count ? 0 : ENXIO;
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_synch.c,v 1.164 2020/03/13 16:35:09 claudio Exp $	*/
+/*	$OpenBSD: kern_synch.c,v 1.168 2020/03/26 08:03:50 claudio Exp $	*/
 /*	$NetBSD: kern_synch.c,v 1.37 1996/04/22 01:38:37 christos Exp $	*/
 
 /*
@@ -375,7 +375,7 @@ sleep_setup(struct sleep_state *sls, const volatile void *ident, int prio,
 	sls->sls_catch = prio & PCATCH;
 	sls->sls_do_sleep = 1;
 	sls->sls_locked = 0;
-	sls->sls_sig = 0;
+	sls->sls_sig = 1;
 	sls->sls_timeout = 0;
 
 	/*
@@ -480,7 +480,7 @@ sleep_setup_signal(struct sleep_state *sls)
 	 * stopped, p->p_wchan will be 0 upon return from CURSIG.
 	 */
 	atomic_setbits_int(&p->p_flag, P_SINTR);
-	if (p->p_p->ps_single != NULL || (sls->sls_sig = CURSIG(p)) != 0) {
+	if ((p->p_flag & P_SUSPSINGLE) || (sls->sls_sig = CURSIG(p)) != 0) {
 		unsleep(p);
 		p->p_stat = SONPROC;
 		sls->sls_do_sleep = 0;
@@ -688,7 +688,7 @@ thrsleep(struct proc *p, struct sys___thrsleep_args *v)
 			ktrabstimespec(p, tsp);
 #endif
 
-		if (timespeccmp(tsp, &now, <)) {
+		if (timespeccmp(tsp, &now, <=)) {
 			/* already passed: still do the unlock */
 			if ((error = thrsleep_unlock(lock)))
 				return (error);
@@ -696,7 +696,7 @@ thrsleep(struct proc *p, struct sys___thrsleep_args *v)
 		}
 
 		timespecsub(tsp, &now, tsp);
-		nsecs = TIMESPEC_TO_NSEC(tsp);
+		nsecs = MIN(TIMESPEC_TO_NSEC(tsp), MAXTSLP);
 	}
 
 	if (ident == -1) {

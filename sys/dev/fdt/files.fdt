@@ -1,4 +1,4 @@
-#	$OpenBSD: files.fdt,v 1.113 2020/03/02 10:37:22 kettenis Exp $
+#	$OpenBSD: files.fdt,v 1.116 2020/03/29 09:31:11 kettenis Exp $
 #
 # Config file and device description for machine-independent FDT code.
 # Included by ports that need it.
@@ -395,6 +395,10 @@ device	imxiomuxc
 attach	imxiomuxc at fdt
 file	dev/fdt/imxiomuxc.c		imxiomuxc
 
+device	imxpwm
+attach	imxpwm at fdt
+file	dev/fdt/imxpwm.c		imxpwm
+
 device	imxrtc
 attach	imxrtc at fdt
 file	dev/fdt/imxrtc.c		imxrtc
@@ -425,6 +429,9 @@ file	dev/fdt/ccp_fdt.c		ccp_fdt
 attach	com at fdt with com_fdt
 file	dev/fdt/com_fdt.c		com_fdt
 
+attach	ipmi at fdt with ipmi_fdt
+file	dev/fdt/ipmi_fdt.c		ipmi_fdt
+
 device	ssdfb: wsemuldisplaydev, rasops1
 attach	ssdfb at spi with ssdfb_spi
 attach	ssdfb at i2c with ssdfb_i2c
@@ -437,3 +444,8 @@ file	dev/fdt/fusbtc.c		fusbtc
 device	sfp
 attach	sfp at fdt
 file	dev/fdt/sfp.c			sfp
+
+# ROHM BD718x7 Regulator
+device	bdpmic
+attach	bdpmic at i2c
+file	dev/fdt/bd718x7.c		bdpmic
