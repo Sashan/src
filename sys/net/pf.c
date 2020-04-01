@@ -6979,11 +6979,6 @@ pf_test(sa_family_t af, int fwdir, struct ifnet *ifp, struct mbuf **m0)
 		s = pf_state_ref(s);
 		PF_STATE_EXIT_READ();
 		if (action == PF_PASS || action == PF_AFRT) {
-#if NPFSYNC > 0
-#ifndef	WITH_PF_LOCK
-			PF_LOCK();
-			have_pf_lock = 1;
-#endif
 			pfsync_update_state(s);
 #endif /* NPFSYNC > 0 */
 			r = s->rule.ptr;
@@ -7016,10 +7011,6 @@ pf_test(sa_family_t af, int fwdir, struct ifnet *ifp, struct mbuf **m0)
 		PF_STATE_EXIT_READ();
 		if (action == PF_PASS || action == PF_AFRT) {
 #if NPFSYNC > 0
-#ifndef	WITH_PF_LOCK
-			PF_LOCK();
-			have_pf_lock = 1;
-#endif
 			pfsync_update_state(s);
 #endif /* NPFSYNC > 0 */
 			r = s->rule.ptr;
@@ -7096,10 +7087,6 @@ pf_test(sa_family_t af, int fwdir, struct ifnet *ifp, struct mbuf **m0)
 
 		if (action == PF_PASS || action == PF_AFRT) {
 #if NPFSYNC > 0
-#ifndef	WITH_PF_LOCK
-			PF_LOCK();
-			have_pf_lock = 1;
-#endif
 			pfsync_update_state(s);
 #endif /* NPFSYNC > 0 */
 			r = s->rule.ptr;
