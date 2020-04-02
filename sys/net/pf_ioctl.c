@@ -1682,9 +1682,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			break;
 		}
 		PF_LOCK();
-		PF_STATE_ENTER_WRITE();
 		error = pfsync_state_import(sp, PFSYNC_SI_IOCTL);
-		PF_STATE_EXIT_WRITE();
 		PF_UNLOCK();
 		break;
 	}
