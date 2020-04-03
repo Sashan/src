@@ -2,7 +2,7 @@
  * THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
  *
  * generated from:
- *	OpenBSD: pcidevs,v 1.1912 2020/01/09 00:58:28 jsg Exp 
+ *	OpenBSD: pcidevs,v 1.1919 2020/02/05 14:50:57 patrick Exp 
  */
 
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
@@ -10812,6 +10812,30 @@ static const struct pci_known_product pci_known_products[] = {
 	    "HD Graphics",
 	},
 	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_LM11,
+	    "I219-LM",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V11,
+	    "I219-V",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_LM10,
+	    "I219-LM",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V10,
+	    "I219-V",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_LM12,
+	    "I219-LM",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V12,
+	    "I219-V",
+	},
+	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_E5V2_HB,
 	    "E5 v2 Host",
 	},
@@ -12410,6 +12434,26 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_X550EM_A_1G_T_L,
 	    "X553 SGMII",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_LM15,
+	    "I219-LM",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_LM14,
+	    "I219-LM",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V14,
+	    "I219-V",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_LM13,
+	    "I219-LM",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V13,
+	    "I219-V",
 	},
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CORE5G_H_PCIE_X16,
@@ -15764,6 +15808,82 @@ static const struct pci_known_product pci_known_products[] = {
 	    "UHD Graphics 600",
 	},
 	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_DPTF,
+	    "Gemini Lake DPTF",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_GNA,
+	    "Gemini Lake GNA",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_PMC,
+	    "Gemini Lake PMC",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_HDA,
+	    "Gemini Lake HD Audio",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_XHCI,
+	    "Gemini Lake xHCI",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_I2C_1,
+	    "Gemini Lake I2C",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_I2C_2,
+	    "Gemini Lake I2C",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_I2C_3,
+	    "Gemini Lake I2C",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_I2C_4,
+	    "Gemini Lake I2C",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_I2C_5,
+	    "Gemini Lake I2C",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_I2C_6,
+	    "Gemini Lake I2C",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_I2C_7,
+	    "Gemini Lake I2C",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_I2C_8,
+	    "Gemini Lake I2C",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_UART_1,
+	    "Gemini Lake HSUART",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_UART_2,
+	    "Gemini Lake HSUART",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_UART_3,
+	    "Gemini Lake HSUART",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_SPI_1,
+	    "Gemini Lake SPI",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_SPI_2,
+	    "Gemini Lake SPI",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_SPI_3,
+	    "Gemini Lake SPI",
+	},
+	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_SDMMC,
 	    "Gemini Lake SD/MMC",
 	},
@@ -15774,6 +15894,54 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_SDIO,
 	    "Gemini Lake SDIO",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_SMB,
+	    "Gemini Lake SMBus",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_PCIE_1,
+	    "Gemini Lake PCIE",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_PCIE_2,
+	    "Gemini Lake PCIE",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_PCIE_3,
+	    "Gemini Lake PCIE",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_PCIE_4,
+	    "Gemini Lake PCIE",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_PCIE_5,
+	    "Gemini Lake PCIE",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_PCIE_6,
+	    "Gemini Lake PCIE",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_WL,
+	    "Gemini Lake CNVi",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_AHCI,
+	    "Gemini Lake AHCI",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_LPC,
+	    "Gemini Lake LPC",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_UART_4,
+	    "Gemini Lake HSUART",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GLK_HB,
+	    "Gemini Lake Host",
 	},
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_31244,
@@ -16836,28 +17004,72 @@ static const struct pci_known_product pci_known_products[] = {
 	    "Core 8G PCIE",
 	},
 	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CORE8G_S_GMM,
-	    "Core 8G GMM",
-	},
-	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CORE8G_S_GT2_1,
-	    "UHD Graphics 630",
-	},
-	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CORE8G_H_GT2,
-	    "UHD Graphics 630",
-	},
-	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CORE8G_U_GT2_1,
-	    "UHD Graphics 620",
-	},
-	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CORE8G_U_GT1,
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CFL_S_GT1_1,
 	    "UHD Graphics 610",
 	},
 	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CORE8G_U_GT3_1,
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CFL_S_GT2_1,
+	    "UHD Graphics 630",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CFL_S_GT2_2,
+	    "UHD Graphics 630",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CFL_S_GT1_2,
+	    "UHD Graphics 610",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CFL_H_GT2_2,
+	    "UHD Graphics P630",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CFL_S_GT2_3,
+	    "UHD Graphics P630",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CFL_S_GT2_4,
+	    "UHD Graphics 630",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CFL_S_GT1_3,
+	    "UHD Graphics 610",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CFL_S_GT2_5,
+	    "UHD Graphics P630",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CFL_H_GT2_1,
+	    "UHD Graphics 630",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CFL_H_GT1,
+	    "UHD Graphics 610",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_WHL_U_GT2_1,
+	    "UHD Graphics 620",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_WHL_U_GT1_1,
+	    "UHD Graphics 610",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CFL_U_GT3_1,
 	    "Iris Plus Graphics 655",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CFL_U_GT3_2,
+	    "Iris Plus Graphics 645",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CFL_U_GT3_4,
+	    "Iris Plus Graphics 655",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CFL_U_GT2_2,
+	    "UHD Graphics 620",
 	},
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CORE8G_S_D_HB_6C,
@@ -17232,7 +17444,7 @@ static const struct pci_known_product pci_known_products[] = {
 	    "Core GMM",
 	},
 	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CORE7G_S_GT2,
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_KBL_S_GT2,
 	    "HD Graphics 630",
 	},
 	{
@@ -17248,7 +17460,7 @@ static const struct pci_known_product pci_known_products[] = {
 	    "HD Graphics 620",
 	},
 	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CORE8G_U_GT2,
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_KBL_U_GT2,
 	    "UHD Graphics 620",
 	},
 	{
@@ -17264,7 +17476,7 @@ static const struct pci_known_product pci_known_products[] = {
 	    "HD Graphics 630",
 	},
 	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CORE8G_Y_GT2,
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_AML_KBL_Y_GT2,
 	    "UHD Graphics 615",
 	},
 	{
@@ -17308,6 +17520,10 @@ static const struct pci_known_product pci_known_products[] = {
 	    "Apollo Lake xHCI",
 	},
 	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_XDCI,
+	    "Apollo Lake xDCI",
+	},
+	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_I2C_1,
 	    "Apollo Lake I2C",
 	},
@@ -17344,6 +17560,14 @@ static const struct pci_known_product pci_known_products[] = {
 	    "Apollo Lake HSUART",
 	},
 	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_UART_2,
+	    "Apollo Lake HSUART",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_UART_3,
+	    "Apollo Lake HSUART",
+	},
+	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_SPI_1,
 	    "Apollo Lake SPI",
 	},
@@ -17354,6 +17578,10 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_SPI_3,
 	    "Apollo Lake SPI",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_PWM,
+	    "Apollo Lake PWM",
 	},
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_SDMMC,
@@ -17392,12 +17620,20 @@ static const struct pci_known_product pci_known_products[] = {
 	    "Apollo Lake PCIE",
 	},
 	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_PCIE_6,
+	    "Apollo Lake PCIE",
+	},
+	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_AHCI,
 	    "Apollo Lake AHCI",
 	},
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_LPC,
 	    "Apollo Lake LPC",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_UART_4,
+	    "Apollo Lake HSUART",
 	},
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_APOLLOLAKE_HB,
@@ -18052,7 +18288,7 @@ static const struct pci_known_product pci_known_products[] = {
 	    "82454NX PXB",
 	},
 	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CORE8G_Y_GT2_2,
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_AML_KBL_Y_GT2_2,
 	    "UHD Graphics 617",
 	},
 	{
@@ -18574,6 +18810,34 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_RCU31L,
 	    "RCU31L I2O RAID",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CML_GT1_6,
+	    "UHD Graphics 610",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CML_GT1_7,
+	    "UHD Graphics 610",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CML_GT2_6,
+	    "UHD Graphics 630",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CML_GT2_7,
+	    "UHD Graphics 630",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CML_GT2_10,
+	    "UHD Graphics P630",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CML_GT2_11,
+	    "UHD Graphics P630",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CML_GT2_12,
+	    "UHD Graphics P630",
 	},
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_8SERIES_LP_SATA_1,
@@ -19906,6 +20170,14 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CORE_MISC,
 	    "Core Misc",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_NVME_2,
+	    "NVMe",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_NVME_3,
+	    "NVMe",
 	},
 	{
 	    PCI_VENDOR_INTERGRAPH, PCI_PRODUCT_INTERGRAPH_4D50T,
@@ -24066,6 +24338,10 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_PERICOM, PCI_PRODUCT_PERICOM_PI7C21P100,
 	    "PI7C21P100 PCIX-PCIX",
+	},
+	{
+	    PCI_VENDOR_PERICOM, PCI_PRODUCT_PERICOM_PI7C9X2G404EL,
+	    "PI7C9X2G404EL PCIE",
 	},
 	{
 	    PCI_VENDOR_PERICOM, PCI_PRODUCT_PERICOM_PI7C9X2G608GP,

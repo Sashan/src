@@ -1,4 +1,4 @@
-/*	$OpenBSD: ofw_misc.c,v 1.10 2019/09/30 20:40:54 kettenis Exp $	*/
+/*	$OpenBSD: ofw_misc.c,v 1.18 2020/03/22 14:56:24 kettenis Exp $	*/
 /*
  * Copyright (c) 2017 Mark Kettenis
  *
@@ -301,9 +301,9 @@ pwm_init_state(uint32_t *cells, struct pwm_state *ps)
 			memset(ps, 0, sizeof(struct pwm_state));
 			pd->pd_get_state(pd->pd_cookie, &cells[1], ps);
 			ps->ps_pulse_width = 0;
-			if (pd->pd_cells > 2)
+			if (pd->pd_cells >= 2)
 				ps->ps_period = cells[2];
-			if (pd->pd_cells > 3)
+			if (pd->pd_cells >= 3)
 				ps->ps_flags = cells[3];
 			return 0;
 		}
@@ -336,4 +336,266 @@ pwm_set_state(uint32_t *cells, struct pwm_state *ps)
 	}
 
 	return ENXIO;
+}
+
+/*
+ * Non-volatile memory support.
+ */
+
+LIST_HEAD(, nvmem_device) nvmem_devices =
+	LIST_HEAD_INITIALIZER(nvmem_devices);
+
+struct nvmem_cell {
+	uint32_t	nc_phandle;
+	struct nvmem_device *nc_nd;
+	bus_addr_t	nc_addr;
+	bus_size_t	nc_size;
+
+	LIST_ENTRY(nvmem_cell) nc_list;
+};
+
+LIST_HEAD(, nvmem_cell) nvmem_cells =
+	LIST_HEAD_INITIALIZER(nvmem_cells);
+
+void
+nvmem_register_child(int node, struct nvmem_device *nd)
+{
+	struct nvmem_cell *nc;
+	uint32_t phandle;
+	uint32_t reg[2];
+
+	phandle = OF_getpropint(node, "phandle", 0);
+	if (phandle == 0)
+		return;
+
+	if (OF_getpropintarray(node, "reg", reg, sizeof(reg)) != sizeof(reg))
+		return;
+
+	nc = malloc(sizeof(struct nvmem_cell), M_DEVBUF, M_WAITOK);
+	nc->nc_phandle = phandle;
+	nc->nc_nd = nd;
+	nc->nc_addr = reg[0];
+	nc->nc_size = reg[1];
+	LIST_INSERT_HEAD(&nvmem_cells, nc, nc_list);
+}
+
+void
+nvmem_register(struct nvmem_device *nd)
+{
+	int node;
+
+	nd->nd_phandle = OF_getpropint(nd->nd_node, "phandle", 0);
+	if (nd->nd_phandle)
+		LIST_INSERT_HEAD(&nvmem_devices, nd, nd_list);
+
+	for (node = OF_child(nd->nd_node); node; node = OF_peer(node))
+		nvmem_register_child(node, nd);
+}
+
+int
+nvmem_read(uint32_t phandle, bus_addr_t addr, void *data, bus_size_t size)
+{
+	struct nvmem_device *nd;
+
+	LIST_FOREACH(nd, &nvmem_devices, nd_list) {
+		if (nd->nd_phandle == phandle)
+			return nd->nd_read(nd->nd_cookie, addr, data, size);
+	}
+
+	return ENXIO;
+}
+
+int
+nvmem_read_cell(int node, const char *name, void *data, bus_size_t size)
+{
+	struct nvmem_device *nd;
+	struct nvmem_cell *nc;
+	uint32_t phandle, *phandles;
+	int id, len;
+
+	id = OF_getindex(node, name, "nvmem-cell-names");
+	if (id < 0)
+		return ENXIO;
+
+	len = OF_getproplen(node, "nvmem-cells");
+	if (len <= 0)
+		return ENXIO;
+
+	phandles = malloc(len, M_TEMP, M_WAITOK);
+	OF_getpropintarray(node, "nvmem-cells", phandles, len);
+	phandle = phandles[id];
+	free(phandles, M_TEMP, len);
+
+	LIST_FOREACH(nc, &nvmem_cells, nc_list) {
+		if (nc->nc_phandle == phandle)
+			break;
+	}
+	if (nc == NULL)
+		return ENXIO;
+
+	if (size > nc->nc_size)
+		return EINVAL;
+
+	nd = nc->nc_nd;
+	return nd->nd_read(nd->nd_cookie, nc->nc_addr, data, size);
+}
+
+/* Port/endpoint interface support */
+
+LIST_HEAD(, endpoint) endpoints =
+	LIST_HEAD_INITIALIZER(endpoints);
+
+void
+endpoint_register(int node, struct device_port *dp, enum endpoint_type type)
+{
+	struct endpoint *ep;
+
+	ep = malloc(sizeof(*ep), M_DEVBUF, M_WAITOK);
+	ep->ep_node = node;
+	ep->ep_phandle = OF_getpropint(node, "phandle", 0);
+	ep->ep_reg = OF_getpropint(node, "reg", -1);
+	ep->ep_port = dp;
+	ep->ep_type = type;
+
+	LIST_INSERT_HEAD(&endpoints, ep, ep_list);
+	LIST_INSERT_HEAD(&dp->dp_endpoints, ep, ep_plist);
+}
+
+void
+device_port_register(int node, struct device_ports *ports,
+    enum endpoint_type type)
+{
+	struct device_port *dp;
+
+	dp = malloc(sizeof(*dp), M_DEVBUF, M_WAITOK);
+	dp->dp_node = node;
+	dp->dp_phandle = OF_getpropint(node, "phandle", 0);
+	dp->dp_reg = OF_getpropint(node, "reg", -1);
+	dp->dp_ports = ports;
+	LIST_INIT(&dp->dp_endpoints);
+	for (node = OF_child(node); node; node = OF_peer(node))
+		endpoint_register(node, dp, type);
+
+	LIST_INSERT_HEAD(&ports->dp_ports, dp, dp_list);
+}
+
+void
+device_ports_register(struct device_ports *ports,
+    enum endpoint_type type)
+{
+	int node;
+
+	LIST_INIT(&ports->dp_ports);
+
+	node = OF_getnodebyname(ports->dp_node, "ports");
+	if (node == 0) {
+		node = OF_getnodebyname(ports->dp_node, "port");
+		if (node == 0)
+			return;
+		
+		device_port_register(node, ports, type);
+		return;
+	}
+
+	for (node = OF_child(node); node; node = OF_peer(node))
+		device_port_register(node, ports, type);
+}
+
+struct endpoint *
+endpoint_byphandle(uint32_t phandle)
+{
+	struct endpoint *ep;
+
+	LIST_FOREACH(ep, &endpoints, ep_list) {
+		if (ep->ep_phandle == phandle)
+			return ep;
+	}
+
+	return NULL;
+}
+
+struct endpoint *
+endpoint_byreg(struct device_ports *ports, uint32_t dp_reg, uint32_t ep_reg)
+{
+	struct device_port *dp;
+	struct endpoint *ep;
+
+	LIST_FOREACH(dp, &ports->dp_ports, dp_list) {
+		if (dp->dp_reg != dp_reg)
+			continue;
+		LIST_FOREACH(ep, &dp->dp_endpoints, ep_list) {
+			if (ep->ep_reg != ep_reg)
+				continue;
+			return ep;
+		}
+	}
+
+	return NULL;
+}
+
+struct endpoint *
+endpoint_remote(struct endpoint *ep)
+{
+	struct endpoint *rep;
+	int phandle;
+
+	phandle = OF_getpropint(ep->ep_node, "remote-endpoint", 0);
+	if (phandle == 0)
+		return NULL;
+
+	LIST_FOREACH(rep, &endpoints, ep_list) {
+		if (rep->ep_phandle == phandle)
+			return rep;
+	}
+
+	return NULL;
+}
+
+int
+endpoint_activate(struct endpoint *ep, void *arg)
+{
+	struct device_ports *ports = ep->ep_port->dp_ports;
+	return ports->dp_ep_activate(ports->dp_cookie, ep, arg);
+}
+
+void *
+endpoint_get_cookie(struct endpoint *ep)
+{
+	struct device_ports *ports = ep->ep_port->dp_ports;
+	return ports->dp_ep_get_cookie(ports->dp_cookie, ep);
+}
+
+int
+device_port_activate(uint32_t phandle, void *arg)
+{
+	struct device_port *dp = NULL;
+	struct endpoint *ep, *rep;
+	int count;
+	int error;
+
+	LIST_FOREACH(ep, &endpoints, ep_list) {
+		if (ep->ep_port->dp_phandle == phandle) {
+			dp = ep->ep_port;
+			break;
+		}
+	}
+	if (dp == NULL)
+		return ENXIO;
+
+	count = 0;
+	LIST_FOREACH(ep, &dp->dp_endpoints, ep_plist) {
+		rep = endpoint_remote(ep);
+		if (rep == NULL)
+			continue;
+
+		error = endpoint_activate(ep, arg);
+		if (error)
+			continue;
+		error = endpoint_activate(rep, arg);
+		if (error)
+			continue;
+		count++;
+	}
+
+	return count ? 0 : ENXIO;
 }

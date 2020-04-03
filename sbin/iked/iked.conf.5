@@ -1,4 +1,4 @@
-.\" $OpenBSD: iked.conf.5,v 1.60 2019/12/01 12:11:56 tobhe Exp $
+.\" $OpenBSD: iked.conf.5,v 1.63 2020/02/21 15:17:34 tobhe Exp $
 .\"
 .\" Copyright (c) 2010 - 2014 Reyk Floeter <reyk@openbsd.org>
 .\" Copyright (c) 2004 Mathieu Sauve-Frankel  All rights reserved.
@@ -15,7 +15,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: December 1 2019 $
+.Dd $Mdocdate: February 21 2020 $
 .Dt IKED.CONF 5
 .Os
 .Sh NAME
@@ -64,7 +64,7 @@ for more information about manual keying and ISAKMP support.
 is divided into three main sections:
 .Bl -tag -width xxxx
 .It Sy Macros
-User-defined variables may be defined and used later, simplifying the
+User-defined macros may be defined and used later, simplifying the
 configuration file.
 .It Sy Global Configuration
 Global settings for
@@ -271,6 +271,15 @@ The optional compression is applied before packets are encapsulated.
 IPcomp must be enabled in the kernel:
 .Pp
 .Dl # sysctl net.inet.ipcomp.enable=1
+.It Op Ar tmode
+.Ar tmode
+describes the encapsulation mode to be used.
+Possible modes are
+.Ar tunnel
+and
+.Ar transport ;
+the default is
+.Ar tunnel .
 .It Op Ar encap
 .Ar encap
 specifies the encapsulation protocol to be used.
@@ -280,15 +289,6 @@ and
 .Ar ah ;
 the default is
 .Ar esp .
-.\" .It Op Ar tmode
-.\" .Ar tmode
-.\" describes the encapsulation mode to be used.
-.\" Possible modes are
-.\" .Ar tunnel
-.\" and
-.\" .Ar transport ;
-.\" the default is
-.\" .Ar tunnel .
 .It Op Ar af
 This policy only applies to endpoints of the specified address family
 which can be either
@@ -643,7 +643,8 @@ expands to
 .Dq ipsec-example.com .
 The variable expansion for the
 .Ar tag
-directive occurs only at runtime, not during configuration file parse time.
+directive occurs only at runtime (not when the file is parsed)
+and must be quoted, or it will be interpreted as a macro.
 .It Ic tap Ar interface
 Send the decapsulated IPsec traffic to the specified
 .Xr enc 4
@@ -766,7 +767,7 @@ configuration and also sets an alternative
 device:
 .Bd -literal -offset indent
 ikev2 esp from 10.1.1.0/24 to 10.1.2.0/24 peer 192.168.3.2 \e
-	tag ipsec-$domain tap "enc1"
+	tag "ipsec-$domain" tap "enc1"
 .Ed
 .Sh OUTGOING NETWORK ADDRESS TRANSLATION
 In some network topologies it is desirable to perform NAT on traffic leaving
@@ -923,6 +924,11 @@ ECP (elliptic curve groups modulo a prime),
 or Curve25519.
 Please note that the EC2N groups are considered as insecure and only
 provided for backwards compatibility.
+.Sh FILES
+.Bl -tag -width /etc/examples/iked.conf -compact
+.It Pa /etc/iked.conf
+.It Pa /etc/examples/iked.conf
+.El
 .Sh EXAMPLES
 The first example is intended for a server with clients connecting to
 .Xr iked 8

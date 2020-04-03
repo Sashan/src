@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_fork.c,v 1.220 2020/01/06 10:25:10 visa Exp $	*/
+/*	$OpenBSD: kern_fork.c,v 1.225 2020/03/20 08:14:07 claudio Exp $	*/
 /*	$NetBSD: kern_fork.c,v 1.29 1996/02/09 18:59:34 christos Exp $	*/
 
 /*
@@ -148,6 +148,7 @@ thread_new(struct proc *parent, vaddr_t uaddr)
 
 	p = pool_get(&proc_pool, PR_WAITOK);
 	p->p_stat = SIDL;			/* protect against others */
+	p->p_runpri = 0;
 	p->p_flag = 0;
 
 	/*
@@ -189,9 +190,12 @@ process_initialize(struct process *pr, struct proc *p)
 	KASSERT(p->p_ucred->cr_ref >= 2);	/* new thread and new process */
 
 	LIST_INIT(&pr->ps_children);
+	LIST_INIT(&pr->ps_orphans);
 	LIST_INIT(&pr->ps_ftlist);
 	LIST_INIT(&pr->ps_sigiolst);
+	TAILQ_INIT(&pr->ps_tslpqueue);
 
+	rw_init(&pr->ps_lock, "pslock");
 	mtx_init(&pr->ps_mtx, IPL_MPFLOOR);
 
 	timeout_set(&pr->ps_realit_to, realitexpire, pr);
@@ -247,10 +251,7 @@ process_new(struct proc *p, struct process *parent, int flags)
 		pr->ps_fd = fdshare(parent);
 	else
 		pr->ps_fd = fdcopy(parent);
-	if (flags & FORK_SIGHAND)
-		pr->ps_sigacts = sigactsshare(parent);
-	else
-		pr->ps_sigacts = sigactsinit(parent);
+	pr->ps_sigacts = sigactsinit(parent);
 	if (flags & FORK_SHAREVM)
 		pr->ps_vmspace = uvmspace_share(parent);
 	else
@@ -312,7 +313,7 @@ fork_thread_start(struct proc *p, struct proc *parent, int flags)
 
 	SCHED_LOCK(s);
 	ci = sched_choosecpu_fork(parent, flags);
-	setrunqueue(ci, p, p->p_priority);
+	setrunqueue(ci, p, p->p_usrpri);
 	SCHED_UNLOCK(s);
 }
 
@@ -332,8 +333,7 @@ fork1(struct proc *curp, int flags, void (*func)(void *), void *arg,
 
 	KASSERT((flags & ~(FORK_FORK | FORK_VFORK | FORK_PPWAIT | FORK_PTRACE
 	    | FORK_IDLE | FORK_SHAREVM | FORK_SHAREFILES | FORK_NOZOMBIE
-	    | FORK_SYSTEM | FORK_SIGHAND)) == 0);
-	KASSERT((flags & FORK_SIGHAND) == 0 || (flags & FORK_SHAREVM));
+	    | FORK_SYSTEM)) == 0);
 	KASSERT(func != NULL);
 
 	if ((error = fork_check_maxthread(uid)))
@@ -431,8 +431,7 @@ fork1(struct proc *curp, int flags, void (*func)(void *), void *arg,
 
 	if (pr->ps_flags & PS_TRACED) {
 		pr->ps_oppid = curpr->ps_pid;
-		if (pr->ps_pptr != curpr->ps_pptr)
-			proc_reparent(pr, curpr->ps_pptr);
+		process_reparent(pr, curpr->ps_pptr);
 
 		/*
 		 * Set ptrace status.
@@ -564,7 +563,7 @@ thread_fork(struct proc *curp, void *stack, void *tcb, pid_t *tidptr,
 	 * count ourselves in.
 	 */
 	if (pr->ps_single) {
-		pr->ps_singlecount++;
+		atomic_inc_int(&pr->ps_singlecount);
 		atomic_setbits_int(&p->p_flag, P_SUSPSINGLE);
 	}
 

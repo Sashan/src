@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.c,v 1.26 2019/12/20 13:25:02 visa Exp $ */
+/*	$OpenBSD: conf.c,v 1.28 2020/01/23 02:40:21 dlg Exp $ */
 
 /*
  * Copyright (c) 1992, 1993
@@ -116,6 +116,7 @@ cdev_decl(wd);
 #include "pci.h"
 cdev_decl(pci);
 
+#include "dt.h"
 #include "pf.h"
 
 #include "usb.h"
@@ -166,7 +167,7 @@ struct cdevsw	cdevsw[] =
 #else
 	cdev_notdef(),			/* 29 */
 #endif
-	cdev_notdef(),			/* 30: */
+	cdev_dt_init(NDT,dt),		/* 30: dynamic tracer */
 	cdev_pf_init(NPF,pf),		/* 31: packet filter */
 	cdev_uk_init(NUK,uk),		/* 32: unknown SCSI */
 	cdev_random_init(1,random),	/* 33: random data source */
@@ -225,6 +226,7 @@ struct cdevsw	cdevsw[] =
 	cdev_notdef(),			/* 86 */
 	cdev_drm_init(NDRM,drm),	/* 87: drm */
 	cdev_fido_init(NFIDO,fido),	/* 88: FIDO/U2F security key */
+	cdev_pppx_init(NPPPX,pppac),	/* 89: PPP Access Concentrator */
 };
 
 int	nchrdev = nitems(cdevsw);

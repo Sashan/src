@@ -1,4 +1,4 @@
-/*	$OpenBSD: nfs_kq.c,v 1.27 2019/12/31 13:48:32 visa Exp $ */
+/*	$OpenBSD: nfs_kq.c,v 1.29 2020/02/20 16:56:52 visa Exp $ */
 /*	$NetBSD: nfs_kq.c,v 1.7 2003/10/30 01:43:10 simonb Exp $	*/
 
 /*-
@@ -173,8 +173,8 @@ next:
 		rw_exit_write(&nfskevq_lock);
 
 		/* wait a while before checking for changes again */
-		tsleep(pnfskq, PSOCK, "nfskqpw", NFS_MINATTRTIMO * hz / 2);
-
+		tsleep_nsec(pnfskq, PSOCK, "nfskqpw",
+		    SEC_TO_NSEC(NFS_MINATTRTIMO) / 2);
 	}
 }
 
@@ -250,14 +250,14 @@ filt_nfsvnode(struct knote *kn, long hint)
 }
 
 static const struct filterops nfsread_filtops = {
-	.f_isfd		= 1,
+	.f_flags	= FILTEROP_ISFD,
 	.f_attach	= NULL,
 	.f_detach	= filt_nfsdetach,
 	.f_event	= filt_nfsread,
 };
 
 static const struct filterops nfsvnode_filtops = {
-	.f_isfd		= 1,
+	.f_flags	= FILTEROP_ISFD,
 	.f_attach	= NULL,
 	.f_detach	= filt_nfsdetach,
 	.f_event	= filt_nfsvnode,

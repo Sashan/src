@@ -1,4 +1,4 @@
-/*	$OpenBSD: mta_session.c,v 1.129 2020/01/08 00:05:38 gilles Exp $	*/
+/*	$OpenBSD: mta_session.c,v 1.133 2020/02/24 23:54:27 millert Exp $	*/
 
 /*
  * Copyright (c) 2008 Pierre-Yves Ritschard <pyr@openbsd.org>
@@ -824,7 +824,7 @@ again:
 			    e->dest,
 			    e->dsn_notify ? " NOTIFY=" : "",
 			    e->dsn_notify ? dsn_strnotify(e->dsn_notify) : "",
-			    e->dsn_orcpt ? " ORCPT=" : "",
+			    e->dsn_orcpt ? " ORCPT=rfc822;" : "",
 			    e->dsn_orcpt ? e->dsn_orcpt : "");
 		} else
 			mta_send(s, "RCPT TO:<%s>", e->dest);
@@ -1294,14 +1294,13 @@ mta_io(struct io *io, int evt, void *arg)
 		if (cont) {
 			if (s->replybuf[0] == '\0')
 				(void)strlcat(s->replybuf, line, sizeof s->replybuf);
-			else {
-				line = line + 4;
-				if (isdigit((int)*line) && *(line + 1) == '.' &&
-				    isdigit((int)*line+2) && *(line + 3) == '.' &&
-				    isdigit((int)*line+4) && isspace((int)*(line + 5)))
-					(void)strlcat(s->replybuf, line+5, sizeof s->replybuf);
-				else
-					(void)strlcat(s->replybuf, line, sizeof s->replybuf);
+			else if (len > 4) {
+				p = line + 4;
+				if (isdigit((unsigned char)p[0]) && p[1] == '.' &&
+				    isdigit((unsigned char)p[2]) && p[3] == '.' &&
+				    isdigit((unsigned char)p[4]) && isspace((unsigned char)p[5]))
+					p += 5;
+				(void)strlcat(s->replybuf, p, sizeof s->replybuf);
 			}
 			goto nextline;
 		}
@@ -1309,17 +1308,17 @@ mta_io(struct io *io, int evt, void *arg)
 		/* last line of a reply, check if we're on a continuation to parse out status and ESC.
 		 * if we overflow reply buffer or are not on continuation, log entire last line.
 		 */
-		if (s->replybuf[0] != '\0') {
+		if (s->replybuf[0] == '\0')
+			(void)strlcat(s->replybuf, line, sizeof s->replybuf);
+		else if (len > 4) {
 			p = line + 4;
-			if (isdigit((int)*p) && *(p + 1) == '.' &&
-			    isdigit((int)*p+2) && *(p + 3) == '.' &&
-			    isdigit((int)*p+4) && isspace((int)*(p + 5)))
+			if (isdigit((unsigned char)p[0]) && p[1] == '.' &&
+			    isdigit((unsigned char)p[2]) && p[3] == '.' &&
+			    isdigit((unsigned char)p[4]) && isspace((unsigned char)p[5]))
 				p += 5;
 			if (strlcat(s->replybuf, p, sizeof s->replybuf) >= sizeof s->replybuf)
 				(void)strlcpy(s->replybuf, line, sizeof s->replybuf);
 		}
-		else
-			(void)strlcpy(s->replybuf, line, sizeof s->replybuf);
 
 		if (s->state == MTA_QUIT) {
 			log_info("%016"PRIx64" mta disconnected reason=quit messages=%zu",
@@ -1373,40 +1372,20 @@ mta_io(struct io *io, int evt, void *arg)
 		break;
 
 	case IO_ERROR:
-		log_debug("debug: mta: %p: IO error: %s", s, io_error(io));
-		if (!s->ready) {
-			mta_error(s, "IO Error: %s", io_error(io));
-			mta_connect(s);
-			break;
-		}
-		else if (!(s->flags & (MTA_FORCE_TLS|MTA_FORCE_SMTPS|MTA_FORCE_ANYSSL))) {
-			/* error in non-strict SSL negotiation, downgrade to plain */
-			if (s->flags & MTA_TLS) {
-				log_info("smtp-out: Error on session %016"PRIx64
-				    ": opportunistic TLS failed, "
-				    "downgrading to plain", s->id);
-				s->flags &= ~MTA_TLS;
-				s->flags |= MTA_DOWNGRADE_PLAIN;
-				mta_connect(s);
-				break;
-			}
-		}
-		mta_error(s, "IO Error: %s", io_error(io));
-		mta_free(s);
-		break;
-
 	case IO_TLSERROR:
-		log_debug("debug: mta: %p: TLS IO error: %s", s, io_error(io));
-		if (!(s->flags & (MTA_FORCE_TLS|MTA_FORCE_SMTPS|MTA_FORCE_ANYSSL))) {
+		log_debug("debug: mta: %p: IO error: %s", s, io_error(io));
+
+		if (s->state == MTA_STARTTLS && s->use_smtp_tls) {
 			/* error in non-strict SSL negotiation, downgrade to plain */
-			log_info("smtp-out: TLS Error on session %016"PRIx64
-			    ": TLS failed, "
+			log_info("smtp-out: Error on session %016"PRIx64
+			    ": opportunistic TLS failed, "
 			    "downgrading to plain", s->id);
 			s->flags &= ~MTA_TLS;
 			s->flags |= MTA_DOWNGRADE_PLAIN;
 			mta_connect(s);
 			break;
 		}
+
 		mta_error(s, "IO Error: %s", io_error(io));
 		mta_free(s);
 		break;

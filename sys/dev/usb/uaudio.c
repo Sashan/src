@@ -1,4 +1,4 @@
-/*	$OpenBSD: uaudio.c,v 1.146 2019/09/05 05:38:40 ratchov Exp $	*/
+/*	$OpenBSD: uaudio.c,v 1.151 2020/03/23 17:10:02 bluhm Exp $	*/
 /*
  * Copyright (c) 2018 Alexandre Ratchov <alex@caoua.org>
  *
@@ -1057,7 +1057,13 @@ uaudio_clock_id(struct uaudio_softc *sc)
 int
 uaudio_getrates(struct uaudio_softc *sc, struct uaudio_params *p)
 {
-	return uaudio_alt_getrates(sc, p->palt ? p->palt : p->ralt);
+	switch (sc->version) {
+	case UAUDIO_V1:
+		return p->v1_rates;
+	case UAUDIO_V2:
+		return uaudio_alt_getrates(sc, p->palt ? p->palt : p->ralt);
+	}
+	return 0;
 }
 
 /*
@@ -1413,6 +1419,7 @@ uaudio_process_unit(struct uaudio_softc *sc,
 		}
 		DPRINTF("%02d: feature id = %d, nch = %d, size = %d\n",
 		    u->id, id, u->nch, size);
+
 		if (!uaudio_getnum(&p, size, &ctl))
 			return 0;
 		ctl = uaudio_feature_fixup(sc, ctl);
@@ -1421,6 +1428,13 @@ uaudio_process_unit(struct uaudio_softc *sc,
 				uaudio_feature_addent(sc, u, i, -1);
 			ctl >>= 2;
 		}
+
+		/*
+		 * certain devices provide no per-channel control descriptors
+		 */
+		if (p.wptr - p.rptr == 1)
+			break;
+
 		for (j = 0; j < u->nch; j++) {
 			if (!uaudio_getnum(&p, size, &ctl))
 				return 0;
@@ -2037,7 +2051,7 @@ uaudio_process_ac(struct uaudio_softc *sc, struct uaudio_blob *p, int ifnum)
 	 * descriptor. This avoids relying on the wTotalLength field.
 	 */
 	savepos = p->rptr;
-	units.rptr = p->rptr;
+	units.rptr = units.wptr = p->rptr;
 	while (p->rptr != p->wptr) {
 		if (!uaudio_getdesc(p, &pu))
 			return 0;
@@ -2845,6 +2859,10 @@ uaudio_stream_open(struct uaudio_softc *sc, int dir,
 
 	/* max spf can't exceed the device usb packet size */
 	spf_max = (a->maxpkt / bpa) * UAUDIO_SPF_DIV;
+	if (s->spf > spf_max) {
+		printf("%s: samples per frame too large\n", DEVNAME(sc));
+		return EIO;
+	}
 	if (s->spf_max > spf_max)
 		s->spf_max = spf_max;
 
@@ -2862,7 +2880,7 @@ uaudio_stream_open(struct uaudio_softc *sc, int dir,
 	 *
 	 *		UAUDIO_NXFERS * (blksz - min_blksz)
 	 */
-	min_blksz = (((uint64_t)blksz << 32) / s->spf_max * s->spf_max) >> 32;
+	min_blksz = (((uint64_t)blksz << 32) / s->spf_max * s->spf_min) >> 32;
 
 	/* round to sample size */
 	min_blksz -= min_blksz % bpa;

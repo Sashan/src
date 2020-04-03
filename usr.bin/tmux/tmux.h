@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.948 2020/01/13 11:59:21 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.967 2020/03/30 16:16:48 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -102,24 +102,24 @@ struct winlink;
 #define VISUAL_BOTH 2
 
 /* Special key codes. */
-#define KEYC_NONE 0xffff00000000ULL
-#define KEYC_UNKNOWN 0xfffe00000000ULL
-#define KEYC_BASE 0x000010000000ULL
-#define KEYC_USER 0x000020000000ULL
+#define KEYC_NONE    0x00ff000000000ULL
+#define KEYC_UNKNOWN 0x00fe000000000ULL
+#define KEYC_BASE    0x0001000000000ULL
+#define KEYC_USER    0x0002000000000ULL
+
+/* Key modifier bits. */
+#define KEYC_ESCAPE  0x0100000000000ULL
+#define KEYC_CTRL    0x0200000000000ULL
+#define KEYC_SHIFT   0x0400000000000ULL
+#define KEYC_XTERM   0x0800000000000ULL
+#define KEYC_LITERAL 0x1000000000000ULL
 
 /* Available user keys. */
 #define KEYC_NUSER 1000
 
-/* Key modifier bits. */
-#define KEYC_ESCAPE 0x200000000000ULL
-#define KEYC_CTRL 0x400000000000ULL
-#define KEYC_SHIFT 0x800000000000ULL
-#define KEYC_XTERM 0x1000000000000ULL
-#define KEYC_LITERAL 0x2000000000000ULL
-
 /* Mask to obtain key w/o modifiers. */
-#define KEYC_MASK_MOD (KEYC_ESCAPE|KEYC_CTRL|KEYC_SHIFT|KEYC_XTERM|KEYC_LITERAL)
-#define KEYC_MASK_KEY (~KEYC_MASK_MOD)
+#define KEYC_MASK_MOD 0xff00000000000ULL
+#define KEYC_MASK_KEY 0x00fffffffffffULL
 
 /* Is this a mouse key? */
 #define KEYC_IS_MOUSE(key) (((key) & KEYC_MASK_KEY) >= KEYC_MOUSE &&	\
@@ -166,6 +166,7 @@ enum {
 	/* Mouse keys. */
 	KEYC_MOUSE, /* unclassified mouse event */
 	KEYC_DRAGGING, /* dragging in progress */
+	KEYC_DOUBLECLICK, /* double click complete */
 	KEYC_MOUSE_KEY(MOUSEMOVE),
 	KEYC_MOUSE_KEY(MOUSEDOWN1),
 	KEYC_MOUSE_KEY(MOUSEDOWN2),
@@ -560,6 +561,7 @@ struct msg_write_close {
 
 #define ALL_MODES 0xffffff
 #define ALL_MOUSE_MODES (MODE_MOUSE_STANDARD|MODE_MOUSE_BUTTON|MODE_MOUSE_ALL)
+#define MOTION_MOUSE_MODES (MODE_MOUSE_BUTTON|MODE_MOUSE_ALL)
 
 /*
  * A single UTF-8 character. UTF8_SIZE must be big enough to hold
@@ -808,7 +810,6 @@ struct menu {
 	u_int			 width;
 };
 typedef void (*menu_choice_cb)(struct menu *, u_int, key_code, void *);
-#define MENU_NOMOUSE 0x1
 
 /*
  * Window mode. Windows can be in several modes and this is used to call the
@@ -1116,6 +1117,7 @@ RB_HEAD(sessions, session);
 /* Mouse input. */
 struct mouse_event {
 	int		valid;
+	int		ignore;
 
 	key_code	key;
 
@@ -1171,6 +1173,7 @@ struct tty_term {
 #define TERM_NOXENL 0x2
 #define TERM_DECSLRM 0x4
 #define TERM_DECFRA 0x8
+#define TERM_RGBCOLOURS 0x10
 	int		 flags;
 
 	LIST_ENTRY(tty_term) entry;
@@ -1512,6 +1515,8 @@ RB_HEAD(client_files, client_file);
 /* Client connection. */
 typedef int (*prompt_input_cb)(struct client *, void *, const char *, int);
 typedef void (*prompt_free_cb)(void *);
+typedef int (*overlay_check_cb)(struct client *, u_int, u_int);
+typedef int (*overlay_mode_cb)(struct client *, u_int *, u_int *);
 typedef void (*overlay_draw_cb)(struct client *, struct screen_redraw_ctx *);
 typedef int (*overlay_key_cb)(struct client *, struct key_event *);
 typedef void (*overlay_free_cb)(struct client *);
@@ -1546,6 +1551,7 @@ struct client {
 
 	struct event	 click_timer;
 	u_int		 click_button;
+	struct mouse_event click_event;
 
 	struct status_line status;
 
@@ -1576,17 +1582,22 @@ struct client {
 #define CLIENT_REDRAWSTATUSALWAYS 0x1000000
 #define CLIENT_REDRAWOVERLAY 0x2000000
 #define CLIENT_CONTROL_NOOUTPUT 0x4000000
+#define CLIENT_DEFAULTSOCKET 0x8000000
+#define CLIENT_STARTSERVER 0x10000000
 #define CLIENT_ALLREDRAWFLAGS		\
 	(CLIENT_REDRAWWINDOW|		\
 	 CLIENT_REDRAWSTATUS|		\
 	 CLIENT_REDRAWSTATUSALWAYS|	\
 	 CLIENT_REDRAWBORDERS|		\
 	 CLIENT_REDRAWOVERLAY)
+#define CLIENT_UNATTACHEDFLAGS	\
+	(CLIENT_DEAD|		\
+	 CLIENT_SUSPENDED|	\
+	 CLIENT_DETACHING)
 #define CLIENT_NOSIZEFLAGS	\
 	(CLIENT_DEAD|		\
 	 CLIENT_SUSPENDED|	\
-	 CLIENT_DETACHING|	\
-	 CLIENT_READONLY)
+	 CLIENT_DETACHING)
 	int		 flags;
 	struct key_table *keytable;
 
@@ -1609,6 +1620,7 @@ struct client {
 #define PROMPT_NUMERIC 0x2
 #define PROMPT_INCREMENTAL 0x4
 #define PROMPT_NOFORMAT 0x8
+#define PROMPT_KEY 0x10
 	int		 prompt_flags;
 
 	struct session	*session;
@@ -1620,6 +1632,8 @@ struct client {
 	u_int		 pan_ox;
 	u_int		 pan_oy;
 
+	overlay_check_cb overlay_check;
+	overlay_mode_cb	 overlay_mode;
 	overlay_draw_cb	 overlay_draw;
 	overlay_key_cb	 overlay_key;
 	overlay_free_cb	 overlay_free;
@@ -1636,6 +1650,7 @@ TAILQ_HEAD(clients, client);
 struct key_binding {
 	key_code		 key;
 	struct cmd_list		*cmdlist;
+	const char		*note;
 
 	int			 flags;
 #define KEY_BINDING_REPEAT 0x1
@@ -1759,10 +1774,11 @@ extern const char	*socket_path;
 extern const char	*shell_command;
 extern int		 ptm_fd;
 extern const char	*shell_command;
-int		 areshell(const char *);
+int		 checkshell(const char *);
 void		 setblocking(int, int);
 const char	*find_cwd(void);
 const char	*find_home(void);
+const char	*getversion(void);
 
 /* proc.c */
 struct imsg;
@@ -1815,6 +1831,7 @@ char		*paste_make_sample(struct paste_buffer *);
 #define FORMAT_PANE 0x80000000U
 #define FORMAT_WINDOW 0x40000000U
 struct format_tree;
+struct format_modifier;
 const char	*format_skip(const char *, const char *);
 int		 format_true(const char *);
 struct format_tree *format_create(struct client *, struct cmdq_item *, int,
@@ -1915,9 +1932,13 @@ typedef void (*job_update_cb) (struct job *);
 typedef void (*job_complete_cb) (struct job *);
 typedef void (*job_free_cb) (void *);
 #define JOB_NOWAIT 0x1
+#define JOB_KEEPWRITE 0x2
+#define JOB_PTY 0x4
 struct job	*job_run(const char *, struct session *, const char *,
-		     job_update_cb, job_complete_cb, job_free_cb, void *, int);
+		     job_update_cb, job_complete_cb, job_free_cb, void *, int,
+		     int, int);
 void		 job_free(struct job *);
+void		 job_resize(struct job *, u_int, u_int);
 void		 job_check_died(pid_t, int);
 int		 job_get_status(struct job *);
 void		*job_get_data(struct job *);
@@ -2044,6 +2065,8 @@ const char	*args_first_value(struct args *, u_char, struct args_value **);
 const char	*args_next_value(struct args_value **);
 long long	 args_strtonum(struct args *, u_char, long long, long long,
 		     char **);
+long long	 args_percentage(struct args *, u_char, long long,
+		     long long, long long, char **);
 
 /* cmd-find.c */
 int		 cmd_find_target(struct cmd_find_state *, struct cmdq_item *,
@@ -2147,7 +2170,8 @@ void	 key_bindings_unref_table(struct key_table *);
 struct key_binding *key_bindings_get(struct key_table *, key_code);
 struct key_binding *key_bindings_first(struct key_table *);
 struct key_binding *key_bindings_next(struct key_table *, struct key_binding *);
-void	 key_bindings_add(const char *, key_code, int, struct cmd_list *);
+void	 key_bindings_add(const char *, key_code, const char *, int,
+	     struct cmd_list *);
 void	 key_bindings_remove(const char *, key_code);
 void	 key_bindings_remove_table(const char *);
 void	 key_bindings_init(void);
@@ -2191,14 +2215,16 @@ void	 server_clear_marked(void);
 int	 server_is_marked(struct session *, struct winlink *,
 	     struct window_pane *);
 int	 server_check_marked(void);
-int	 server_start(struct tmuxproc *, struct event_base *, int, char *);
+int	 server_start(struct tmuxproc *, int, struct event_base *, int, char *);
 void	 server_update_socket(void);
 void	 server_add_accept(int);
 
 /* server-client.c */
 u_int	 server_client_how_many(void);
-void	 server_client_set_overlay(struct client *, u_int, overlay_draw_cb,
-    overlay_key_cb, overlay_free_cb, void *);
+void	 server_client_set_overlay(struct client *, u_int, overlay_check_cb,
+	     overlay_mode_cb, overlay_draw_cb, overlay_key_cb,
+	     overlay_free_cb, void *);
+void	 server_client_clear_overlay(struct client *);
 void	 server_client_set_key_table(struct client *, const char *);
 const char *server_client_get_key_table(struct client *);
 int	 server_client_check_nested(struct client *);
@@ -2270,15 +2296,19 @@ void	 recalculate_size(struct window *);
 void	 recalculate_sizes(void);
 
 /* input.c */
-void	 input_init(struct window_pane *);
-void	 input_free(struct window_pane *);
-void	 input_reset(struct window_pane *, int);
-struct evbuffer *input_pending(struct window_pane *);
-void	 input_parse(struct window_pane *);
+struct input_ctx *input_init(struct window_pane *);
+void	 input_free(struct input_ctx *);
+void	 input_reset(struct input_ctx *, int);
+struct evbuffer *input_pending(struct input_ctx *);
+void	 input_parse_pane(struct window_pane *);
 void	 input_parse_buffer(struct window_pane *, u_char *, size_t);
+void	 input_parse_screen(struct input_ctx *, struct screen *, u_char *,
+	     size_t);
 
 /* input-key.c */
-int	 input_key(struct window_pane *, key_code, struct mouse_event *);
+int	 input_key_pane(struct window_pane *, key_code, struct mouse_event *);
+int	 input_key(struct window_pane *, struct screen *, struct bufferevent *,
+	     key_code);
 
 /* xterm-keys.c */
 char	*xterm_keys_lookup(key_code);
@@ -2416,7 +2446,7 @@ void	 screen_free(struct screen *);
 void	 screen_reset_tabs(struct screen *);
 void	 screen_set_cursor_style(struct screen *, u_int);
 void	 screen_set_cursor_colour(struct screen *, const char *);
-void	 screen_set_title(struct screen *, const char *);
+int	 screen_set_title(struct screen *, const char *);
 void	 screen_set_path(struct screen *, const char *);
 void	 screen_push_title(struct screen *);
 void	 screen_pop_title(struct screen *);
@@ -2615,6 +2645,8 @@ void printflike(2, 3) window_copy_add(struct window_pane *, const char *, ...);
 void		 window_copy_vadd(struct window_pane *, const char *, va_list);
 void		 window_copy_pageup(struct window_pane *, int);
 void		 window_copy_start_drag(struct client *, struct mouse_event *);
+char		*window_copy_get_word(struct window_pane *, u_int, u_int);
+char		*window_copy_get_line(struct window_pane *, u_int);
 
 /* names.c */
 void	 check_window_name(struct window *);
@@ -2713,6 +2745,7 @@ __dead void printflike(1, 2) fatal(const char *, ...);
 __dead void printflike(1, 2) fatalx(const char *, ...);
 
 /* menu.c */
+#define MENU_NOMOUSE 0x1
 struct menu	*menu_create(const char *);
 void		 menu_add_items(struct menu *, const struct menu_item *,
 		    struct cmdq_item *, struct client *,
@@ -2720,11 +2753,21 @@ void		 menu_add_items(struct menu *, const struct menu_item *,
 void 		 menu_add_item(struct menu *, const struct menu_item *,
 		    struct cmdq_item *, struct client *,
 		    struct cmd_find_state *);
-
 void		 menu_free(struct menu *);
 int		 menu_display(struct menu *, int, struct cmdq_item *, u_int,
 		    u_int, struct client *, struct cmd_find_state *,
 		    menu_choice_cb, void *);
+
+/* popup.c */
+#define POPUP_WRITEKEYS 0x1
+#define POPUP_CLOSEEXIT 0x2
+#define POPUP_CLOSEEXITZERO 0x4
+u_int		 popup_width(struct cmdq_item *, u_int, const char **,
+		    struct client *, struct cmd_find_state *);
+u_int		 popup_height(u_int, const char **);
+int		 popup_display(int, struct cmdq_item *, u_int, u_int, u_int,
+		    u_int, u_int, const char **, const char *, const char *,
+		    const char *, struct client *, struct cmd_find_state *);
 
 /* style.c */
 int		 style_parse(struct style *,const struct grid_cell *,

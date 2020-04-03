@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.c,v 1.599 2019/11/14 01:02:02 dlg Exp $	*/
+/*	$OpenBSD: if.c,v 1.601 2020/03/10 09:11:55 tobhe Exp $	*/
 /*	$NetBSD: if.c,v 1.35 1996/05/07 05:26:04 thorpej Exp $	*/
 
 /*
@@ -70,7 +70,6 @@
 #include "ppp.h"
 #include "pppoe.h"
 #include "switch.h"
-#include "trunk.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -1051,10 +1050,9 @@ if_hooks_run(struct task_list *hooks)
 
 	mtx_enter(&if_hooks_mtx);
 	for (t = TAILQ_FIRST(hooks); t != NULL; t = nt) {
-		while (t->t_func == NULL) { /* skip cursors */
-			t = TAILQ_NEXT(t, t_entry);
-			if (t == NULL)
-				break;
+		if (t->t_func == NULL) { /* skip cursors */
+			nt = TAILQ_NEXT(t, t_entry);
+			continue;
 		}
 		func = t->t_func;
 		arg = t->t_arg;

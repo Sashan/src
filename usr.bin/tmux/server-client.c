@@ -1,4 +1,4 @@
-/* $OpenBSD: server-client.c,v 1.302 2019/12/16 16:39:03 nicm Exp $ */
+/* $OpenBSD: server-client.c,v 1.309 2020/03/24 08:09:44 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -43,7 +43,6 @@ static void	server_client_check_redraw(struct client *);
 static void	server_client_set_title(struct client *);
 static void	server_client_reset_state(struct client *);
 static int	server_client_assume_paste(struct session *);
-static void	server_client_clear_overlay(struct client *);
 static void	server_client_resize_event(int, short, void *);
 
 static void	server_client_dispatch(struct imsg *, void *);
@@ -81,8 +80,10 @@ server_client_overlay_timer(__unused int fd, __unused short events, void *data)
 
 /* Set an overlay on client. */
 void
-server_client_set_overlay(struct client *c, u_int delay, overlay_draw_cb drawcb,
-    overlay_key_cb keycb, overlay_free_cb freecb, void *data)
+server_client_set_overlay(struct client *c, u_int delay,
+    overlay_check_cb checkcb, overlay_mode_cb modecb,
+    overlay_draw_cb drawcb, overlay_key_cb keycb, overlay_free_cb freecb,
+    void *data)
 {
 	struct timeval	tv;
 
@@ -98,17 +99,21 @@ server_client_set_overlay(struct client *c, u_int delay, overlay_draw_cb drawcb,
 	if (delay != 0)
 		evtimer_add(&c->overlay_timer, &tv);
 
+	c->overlay_check = checkcb;
+	c->overlay_mode = modecb;
 	c->overlay_draw = drawcb;
 	c->overlay_key = keycb;
 	c->overlay_free = freecb;
 	c->overlay_data = data;
 
-	c->tty.flags |= (TTY_FREEZE|TTY_NOCURSOR);
+	c->tty.flags |= TTY_FREEZE;
+	if (c->overlay_mode == NULL)
+		c->tty.flags |= TTY_NOCURSOR;
 	server_redraw_client(c);
 }
 
 /* Clear overlay mode on client. */
-static void
+void
 server_client_clear_overlay(struct client *c)
 {
 	if (c->overlay_draw == NULL)
@@ -120,8 +125,12 @@ server_client_clear_overlay(struct client *c)
 	if (c->overlay_free != NULL)
 		c->overlay_free(c);
 
+	c->overlay_check = NULL;
+	c->overlay_mode = NULL;
 	c->overlay_draw = NULL;
 	c->overlay_key = NULL;
+	c->overlay_free = NULL;
+	c->overlay_data = NULL;
 
 	c->tty.flags &= ~(TTY_FREEZE|TTY_NOCURSOR);
 	server_redraw_client(c);
@@ -400,6 +409,8 @@ server_client_exec(struct client *c, const char *cmd)
 		shell = options_get_string(s->options, "default-shell");
 	else
 		shell = options_get_string(global_s_options, "default-shell");
+	if (!checkshell(shell))
+		shell = _PATH_BSHELL;
 	shellsize = strlen(shell) + 1;
 
 	msg = xmalloc(cmdsize + shellsize);
@@ -419,7 +430,7 @@ server_client_check_mouse(struct client *c, struct key_event *event)
 	struct winlink		*wl;
 	struct window_pane	*wp;
 	u_int			 x, y, b, sx, sy, px, py;
-	int			 flag;
+	int			 ignore = 0;
 	key_code		 key;
 	struct timeval		 tv;
 	struct style_range	*sr;
@@ -443,7 +454,12 @@ server_client_check_mouse(struct client *c, struct key_event *event)
 	    m->x, m->y, m->lx, m->ly, c->tty.mouse_drag_flag);
 
 	/* What type of event is this? */
-	if ((m->sgr_type != ' ' &&
+	if (event->key == KEYC_DOUBLECLICK) {
+		type = DOUBLE;
+		x = m->x, y = m->y, b = m->b;
+		ignore = 1;
+		log_debug("double-click at %u,%u", x, y);
+	} else if ((m->sgr_type != ' ' &&
 	    MOUSE_DRAG(m->sgr_b) &&
 	    MOUSE_BUTTONS(m->sgr_b) == 3) ||
 	    (m->sgr_type == ' ' &&
@@ -477,10 +493,8 @@ server_client_check_mouse(struct client *c, struct key_event *event)
 			evtimer_del(&c->click_timer);
 			c->flags &= ~CLIENT_DOUBLECLICK;
 			if (m->b == c->click_button) {
-				type = DOUBLE;
-				x = m->x, y = m->y, b = m->b;
-				log_debug("double-click at %u,%u", x, y);
-				flag = CLIENT_TRIPLECLICK;
+				type = NOTYPE;
+				c->flags |= CLIENT_TRIPLECLICK;
 				goto add_timer;
 			}
 		} else if (c->flags & CLIENT_TRIPLECLICK) {
@@ -490,18 +504,19 @@ server_client_check_mouse(struct client *c, struct key_event *event)
 				type = TRIPLE;
 				x = m->x, y = m->y, b = m->b;
 				log_debug("triple-click at %u,%u", x, y);
+				ignore = 1;
 				goto have_event;
 			}
-		}
+		} else
+			c->flags |= CLIENT_DOUBLECLICK;
 
+	add_timer:
 		type = DOWN;
 		x = m->x, y = m->y, b = m->b;
 		log_debug("down at %u,%u", x, y);
-		flag = CLIENT_DOUBLECLICK;
 
-	add_timer:
 		if (KEYC_CLICK_TIMEOUT != 0) {
-			c->flags |= flag;
+			memcpy(&c->click_event, m, sizeof c->click_event);
 			c->click_button = m->b;
 
 			tv.tv_sec = KEYC_CLICK_TIMEOUT / 1000;
@@ -518,6 +533,7 @@ have_event:
 	/* Save the session. */
 	m->s = s->id;
 	m->w = -1;
+	m->ignore = ignore;
 
 	/* Is this on the status line? */
 	m->statusat = status_at_line(c);
@@ -662,8 +678,7 @@ have_event:
 			break;
 		}
 		c->tty.mouse_drag_flag = 0;
-
-		return (key);
+		goto out;
 	}
 
 	/* Convert to a key binding. */
@@ -958,6 +973,7 @@ have_event:
 	if (key == KEYC_UNKNOWN)
 		return (KEYC_UNKNOWN);
 
+out:
 	/* Apply modifiers if any. */
 	if (b & MOUSE_MASK_META)
 		key |= KEYC_ESCAPE;
@@ -966,6 +982,8 @@ have_event:
 	if (b & MOUSE_MASK_SHIFT)
 		key |= KEYC_SHIFT;
 
+	if (log_get_level() != 0)
+		log_debug("mouse key is %s", key_string_lookup_key (key));
 	return (key);
 }
 
@@ -1034,7 +1052,7 @@ server_client_key_callback(struct cmdq_item *item, void *data)
 	key_code			 key0;
 
 	/* Check the client is good to accept input. */
-	if (s == NULL || (c->flags & (CLIENT_DEAD|CLIENT_SUSPENDED)) != 0)
+	if (s == NULL || (c->flags & CLIENT_UNATTACHEDFLAGS))
 		goto out;
 	wl = s->curw;
 
@@ -1045,7 +1063,7 @@ server_client_key_callback(struct cmdq_item *item, void *data)
 
 	/* Check for mouse keys. */
 	m->valid = 0;
-	if (key == KEYC_MOUSE) {
+	if (key == KEYC_MOUSE || key == KEYC_DOUBLECLICK) {
 		if (c->flags & CLIENT_READONLY)
 			goto out;
 		key = server_client_check_mouse(c, event);
@@ -1059,7 +1077,7 @@ server_client_key_callback(struct cmdq_item *item, void *data)
 		 * Mouse drag is in progress, so fire the callback (now that
 		 * the mouse event is valid).
 		 */
-		if (key == KEYC_DRAGGING) {
+		if ((key & KEYC_MASK_KEY) == KEYC_DRAGGING) {
 			c->tty.mouse_drag_update(c, m);
 			goto out;
 		}
@@ -1221,7 +1239,7 @@ server_client_handle_key(struct client *c, struct key_event *event)
 	struct cmdq_item	*item;
 
 	/* Check the client is good to accept input. */
-	if (s == NULL || (c->flags & (CLIENT_DEAD|CLIENT_SUSPENDED)) != 0)
+	if (s == NULL || (c->flags & CLIENT_UNATTACHEDFLAGS))
 		return (0);
 
 	/*
@@ -1476,35 +1494,48 @@ server_client_reset_state(struct client *c)
 {
 	struct window		*w = c->session->curw->window;
 	struct window_pane	*wp = w->active, *loop;
-	struct screen		*s = wp->screen;
+	struct screen		*s;
 	struct options		*oo = c->session->options;
 	int			 mode, cursor = 0;
 	u_int			 cx = 0, cy = 0, ox, oy, sx, sy;
 
 	if (c->flags & (CLIENT_CONTROL|CLIENT_SUSPENDED))
 		return;
-	if (c->overlay_draw != NULL)
-		return;
-	mode = s->mode;
 
+	/* Get mode from overlay if any, else from screen. */
+	if (c->overlay_draw != NULL) {
+		s = NULL;
+		if (c->overlay_mode == NULL)
+			mode = 0;
+		else
+			mode = c->overlay_mode(c, &cx, &cy);
+	} else {
+		s = wp->screen;
+		mode = s->mode;
+	}
+	log_debug("%s: client %s mode %x", __func__, c->name, mode);
+
+	/* Reset region and margin. */
 	tty_region_off(&c->tty);
 	tty_margin_off(&c->tty);
 
 	/* Move cursor to pane cursor and offset. */
-	cursor = 0;
-	tty_window_offset(&c->tty, &ox, &oy, &sx, &sy);
-	if (wp->xoff + s->cx >= ox && wp->xoff + s->cx <= ox + sx &&
-	    wp->yoff + s->cy >= oy && wp->yoff + s->cy <= oy + sy) {
-		cursor = 1;
+	if (c->overlay_draw == NULL) {
+		cursor = 0;
+		tty_window_offset(&c->tty, &ox, &oy, &sx, &sy);
+		if (wp->xoff + s->cx >= ox && wp->xoff + s->cx <= ox + sx &&
+		    wp->yoff + s->cy >= oy && wp->yoff + s->cy <= oy + sy) {
+			cursor = 1;
 
-		cx = wp->xoff + s->cx - ox;
-		cy = wp->yoff + s->cy - oy;
+			cx = wp->xoff + s->cx - ox;
+			cy = wp->yoff + s->cy - oy;
 
-		if (status_at_line(c) == 0)
-			cy += status_line_size(c);
+			if (status_at_line(c) == 0)
+				cy += status_line_size(c);
+		}
+		if (!cursor)
+			mode &= ~MODE_CURSOR;
 	}
-	if (!cursor)
-		mode &= ~MODE_CURSOR;
 	tty_cursor(&c->tty, cx, cy);
 
 	/*
@@ -1513,16 +1544,18 @@ server_client_reset_state(struct client *c)
 	 */
 	if (options_get_number(oo, "mouse")) {
 		mode &= ~ALL_MOUSE_MODES;
-		TAILQ_FOREACH(loop, &w->panes, entry) {
-			if (loop->screen->mode & MODE_MOUSE_ALL)
-				mode |= MODE_MOUSE_ALL;
+		if (c->overlay_draw == NULL) {
+			TAILQ_FOREACH(loop, &w->panes, entry) {
+				if (loop->screen->mode & MODE_MOUSE_ALL)
+					mode |= MODE_MOUSE_ALL;
+			}
 		}
 		if (~mode & MODE_MOUSE_ALL)
 			mode |= MODE_MOUSE_BUTTON;
 	}
 
 	/* Clear bracketed paste mode if at the prompt. */
-	if (c->prompt_string != NULL)
+	if (c->overlay_draw == NULL && c->prompt_string != NULL)
 		mode &= ~MODE_BRACKETPASTE;
 
 	/* Set the terminal mode and reset attributes. */
@@ -1547,8 +1580,22 @@ server_client_repeat_timer(__unused int fd, __unused short events, void *data)
 static void
 server_client_click_timer(__unused int fd, __unused short events, void *data)
 {
-	struct client	*c = data;
+	struct client		*c = data;
+	struct key_event	*event;
 
+	log_debug("click timer expired");
+
+	if (c->flags & CLIENT_TRIPLECLICK) {
+		/*
+		 * Waiting for a third click that hasn't happened, so this must
+		 * have been a double click.
+		 */
+		event = xmalloc(sizeof *event);
+		event->key = KEYC_DOUBLECLICK;
+		memcpy(&event->m, &c->click_event, sizeof event->m);
+		if (!server_client_handle_key(c, event))
+			free(event);
+	}
 	c->flags &= ~(CLIENT_DOUBLECLICK|CLIENT_TRIPLECLICK);
 }
 
@@ -1706,7 +1753,6 @@ static void
 server_client_dispatch(struct imsg *imsg, void *arg)
 {
 	struct client	*c = arg;
-	const char	*data;
 	ssize_t		 datalen;
 	struct session	*s;
 
@@ -1718,7 +1764,6 @@ server_client_dispatch(struct imsg *imsg, void *arg)
 		return;
 	}
 
-	data = imsg->data;
 	datalen = imsg->hdr.len - IMSG_HEADER_SIZE;
 
 	switch (imsg->hdr.type) {
@@ -1990,7 +2035,7 @@ server_client_dispatch_shell(struct client *c)
 	const char	*shell;
 
 	shell = options_get_string(global_s_options, "default-shell");
-	if (*shell == '\0' || areshell(shell))
+	if (!checkshell(shell))
 		shell = _PATH_BSHELL;
 	proc_send(c->peer, MSG_SHELL, -1, shell, strlen(shell) + 1);
 

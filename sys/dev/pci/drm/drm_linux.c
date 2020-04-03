@@ -1,4 +1,4 @@
-/*	$OpenBSD: drm_linux.c,v 1.55 2020/01/05 13:46:02 visa Exp $	*/
+/*	$OpenBSD: drm_linux.c,v 1.58 2020/03/15 10:14:49 claudio Exp $	*/
 /*
  * Copyright (c) 2013 Jonathan Gray <jsg@openbsd.org>
  * Copyright (c) 2015, 2016 Mark Kettenis <kettenis@openbsd.org>
@@ -91,13 +91,14 @@ schedule_timeout(long timeout)
 	sleep_setup(&sls, sch_ident, sch_priority, "schto");
 	if (timeout != MAX_SCHEDULE_TIMEOUT)
 		sleep_setup_timeout(&sls, timeout);
-	sleep_setup_signal(&sls);
 
 	wait = (sch_proc == curproc && timeout > 0);
 
 	spl = MUTEX_OLDIPL(&sch_mtx);
 	MUTEX_OLDIPL(&sch_mtx) = splsched();
 	mtx_leave(&sch_mtx);
+
+	sleep_setup_signal(&sls);
 
 	if (timeout != MAX_SCHEDULE_TIMEOUT)
 		deadline = ticks + timeout;
@@ -115,20 +116,8 @@ schedule_timeout(long timeout)
 int
 wake_up_process(struct proc *p)
 {
-	int s, r = 0;
-
-	SCHED_LOCK(s);
 	atomic_cas_ptr(&sch_proc, p, NULL);
-	if (p->p_wchan) {
-		if (p->p_stat == SSLEEP) {
-			setrunnable(p);
-			r = 1;
-		} else
-			unsleep(p);
-	}
-	SCHED_UNLOCK(s);
-
-	return r;
+	return wakeup_proc(p, NULL);
 }
 
 void
@@ -240,7 +229,7 @@ kthread_parkme(void)
 	while (thread->flags & KTHREAD_SHOULDPARK) {
 		thread->flags |= KTHREAD_PARKED;
 		wakeup(thread);
-		tsleep_nsec(thread, PPAUSE | PCATCH, "parkme", INFSLP);
+		tsleep_nsec(thread, PPAUSE, "parkme", INFSLP);
 		thread->flags &= ~KTHREAD_PARKED;
 	}
 }
@@ -253,7 +242,7 @@ kthread_park(struct proc *p)
 	while ((thread->flags & KTHREAD_PARKED) == 0) {
 		thread->flags |= KTHREAD_SHOULDPARK;
 		wake_up_process(thread->proc);
-		tsleep_nsec(thread, PPAUSE | PCATCH, "park", INFSLP);
+		tsleep_nsec(thread, PPAUSE, "park", INFSLP);
 	}
 }
 
@@ -281,7 +270,7 @@ kthread_stop(struct proc *p)
 	while ((thread->flags & KTHREAD_STOPPED) == 0) {
 		thread->flags |= KTHREAD_SHOULDSTOP;
 		wake_up_process(thread->proc);
-		tsleep_nsec(thread, PPAUSE | PCATCH, "stop", INFSLP);
+		tsleep_nsec(thread, PPAUSE, "stop", INFSLP);
 	}
 	LIST_REMOVE(thread, next);
 	free(thread, M_DRM, sizeof(*thread));

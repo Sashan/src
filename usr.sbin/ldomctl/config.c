@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.31 2020/01/05 19:54:05 kn Exp $	*/
+/*	$OpenBSD: config.c,v 1.36 2020/03/17 21:24:22 kn Exp $	*/
 
 /*
  * Copyright (c) 2012, 2018 Mark Kettenis
@@ -48,6 +48,7 @@ TAILQ_HEAD(, core) cores;
 
 struct component {
 	const char *path;
+	const char *nac;
 	int assigned;
 
 	struct md_node *hv_node;
@@ -216,6 +217,7 @@ pri_init_components(struct md *md)
 	struct component *component;
 	struct md_node *node;
 	const char *path;
+	const char *nac;
 	const char *type;
 
 	TAILQ_INIT(&components);
@@ -228,6 +230,10 @@ pri_init_components(struct md *md)
 		if (md_get_prop_str(md, node, "assignable-path", &path)) {
 			component = xzalloc(sizeof(*component));
 			component->path = path;
+			if (md_get_prop_str(md, node, "nac", &nac))
+				component->nac = nac;
+			else
+				component->nac = "-";
 			TAILQ_INSERT_TAIL(&components, component, link);
 		}
 
@@ -388,7 +394,7 @@ pri_alloc_memory(uint64_t base, uint64_t size)
 			new_mblock->membase = base;
 			new_mblock->memsize = size;
 			new_mblock->resource_id = -1;
-			return new_mblock;;
+			return new_mblock;
 		}
 	}
 
@@ -1073,7 +1079,7 @@ void
 hvmd_finalize_pcie_device(struct md *md, struct device *device)
 {
 	struct rootcomplex *rootcomplex;
-	struct md_node *node, *child, *parent;;
+	struct md_node *node, *child, *parent;
 	struct component *component;
 	struct subdevice *subdevice;
 	uint64_t resource_id = 0;
@@ -2557,7 +2563,8 @@ guest_add_memory(struct guest *guest, uint64_t base, uint64_t size)
 }
 
 void
-guest_add_vdisk(struct guest *guest, uint64_t id, const char *path)
+guest_add_vdisk(struct guest *guest, uint64_t id, const char *path,
+    const char *user_devalias)
 {
 	struct guest *primary;
 	struct ldc_channel *lc;
@@ -2577,13 +2584,15 @@ guest_add_vdisk(struct guest *guest, uint64_t id, const char *path)
 	if (id == 0)
 		guest_add_devalias(guest, "disk", devpath);
 	guest_add_devalias(guest, devalias, devpath);
+	if (user_devalias != NULL)
+		guest_add_devalias(guest, user_devalias, devpath);
 	free(devalias);
 	free(devpath);
 }
 
 void
 guest_add_vnetwork(struct guest *guest, uint64_t id, uint64_t mac_addr,
-    uint64_t mtu)
+    uint64_t mtu, const char *user_devalias)
 {
 	struct guest *primary;
 	struct ldc_channel *lc;
@@ -2607,6 +2616,8 @@ guest_add_vnetwork(struct guest *guest, uint64_t id, uint64_t mac_addr,
 	if (id == 0)
 		guest_add_devalias(guest, "net", devpath);
 	guest_add_devalias(guest, devalias, devpath);
+	if (user_devalias != NULL)
+		guest_add_devalias(guest, user_devalias, devpath);
 	free(devalias);
 	free(devpath);
 }
@@ -2849,11 +2860,12 @@ build_config(const char *filename, int noaction)
 		guest_add_memory(guest, -1, domain->memory);
 		i = 0;
 		SIMPLEQ_FOREACH(vdisk, &domain->vdisk_list, entry)
-			guest_add_vdisk(guest, i++, vdisk->path);
+			guest_add_vdisk(guest, i++, vdisk->path,
+			    vdisk->devalias);
 		i = 0;
 		SIMPLEQ_FOREACH(vnet, &domain->vnet_list, entry)
 			guest_add_vnetwork(guest, i++, vnet->mac_addr,
-			    vnet->mtu);
+			    vnet->mtu, vnet->devalias);
 		SIMPLEQ_FOREACH(var, &domain->var_list, entry)
 			guest_add_variable(guest, var->name, var->str);
 		SIMPLEQ_FOREACH(iodev, &domain->iodev_list, entry)
@@ -2881,9 +2893,10 @@ list_components(void)
 	if (pri == NULL)
 		err(1, "unable to get PRI");
 
-	pri_init(pri);
+	pri_init_components(pri);
 
+	printf("%-16s %s\n", "PATH", "NAME");
 	TAILQ_FOREACH(component, &components, link) {
-		printf("%s\n", component->path);
+		printf("%-16s %s\n", component->path, component->nac);
 	}
 }

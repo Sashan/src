@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.101 2019/12/12 11:39:56 nicm Exp $
+# $OpenBSD: Makefile,v 1.103 2020/03/24 08:09:43 nicm Exp $
 
 PROG=	tmux
 SRCS=	alerts.c \
@@ -94,6 +94,7 @@ SRCS=	alerts.c \
 	options-table.c \
 	options.c \
 	paste.c \
+	popup.c \
 	proc.c \
 	procname.c \
 	regsub.c \
@@ -130,7 +131,7 @@ CDIAGFLAGS+= -Wundef -Wbad-function-cast -Winline -Wcast-align
 
 CFLAGS += -I${.CURDIR}
 
-LDADD=  -lutil -lcurses -levent
-DPADD=  ${LIBUTIL} ${LIBCURSES} ${LIBEVENT}
+LDADD=  -lutil -lcurses -levent -lm
+DPADD=  ${LIBUTIL} ${LIBCURSES} ${LIBEVENT} ${LIBM}
 
 .include <bsd.prog.mk>

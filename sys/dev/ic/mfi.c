@@ -1,4 +1,4 @@
-/* $OpenBSD: mfi.c,v 1.171 2019/12/31 10:05:32 mpi Exp $ */
+/* $OpenBSD: mfi.c,v 1.176 2020/03/21 20:42:23 krw Exp $ */
 /*
  * Copyright (c) 2006 Marco Peereboom <marco@peereboom.us>
  *
@@ -58,21 +58,16 @@ struct cfdriver mfi_cd = {
 void	mfi_scsi_cmd(struct scsi_xfer *);
 int	mfi_scsi_ioctl(struct scsi_link *, u_long, caddr_t, int);
 int	mfi_ioctl_cache(struct scsi_link *, u_long,  struct dk_cache *);
-void	mfiminphys(struct buf *bp, struct scsi_link *sl);
 
 void	mfi_pd_scsi_cmd(struct scsi_xfer *);
 int	mfi_pd_scsi_probe(struct scsi_link *);
 
 struct scsi_adapter mfi_switch = {
-	mfi_scsi_cmd, mfiminphys, 0, 0, mfi_scsi_ioctl
+	mfi_scsi_cmd, NULL, NULL, NULL, mfi_scsi_ioctl
 };
 
 struct scsi_adapter mfi_pd_switch = {
-	mfi_pd_scsi_cmd,
-	mfiminphys,
-	mfi_pd_scsi_probe,
-	0,
-	mfi_scsi_ioctl
+	mfi_pd_scsi_cmd, NULL, mfi_pd_scsi_probe, NULL, mfi_scsi_ioctl
 };
 
 void *		mfi_get_ccb(void *);
@@ -661,17 +656,6 @@ mfi_get_info(struct mfi_softc *sc)
 #endif /* MFI_DEBUG */
 
 	return (0);
-}
-
-void
-mfiminphys(struct buf *bp, struct scsi_link *sl)
-{
-	DNPRINTF(MFI_D_MISC, "mfiminphys: %d\n", bp->b_bcount);
-
-	/* XXX currently using MFI_MAXFER = MAXPHYS */
-	if (bp->b_bcount > MFI_MAXFER)
-		bp->b_bcount = MFI_MAXFER;
-	minphys(bp);
 }
 
 int
@@ -1515,9 +1499,9 @@ mfi_ioctl_cache(struct scsi_link *link, u_long cmd,  struct dk_cache *dc)
 			ldp.mlp_diskcache_policy = MR_LD_DISK_CACHE_DISABLE;
 	}
 
-	if ((rv = mfi_mgmt(sc, MR_DCMD_LD_SET_PROPERTIES, MFI_DATA_OUT,
-	    sizeof(ldp), &ldp, &mbox)) != 0)
-		goto done;
+	rv = mfi_mgmt(sc, MR_DCMD_LD_SET_PROPERTIES, MFI_DATA_OUT, sizeof(ldp),
+	    &ldp, &mbox);
+
 done:
 	return (rv);
 }
@@ -2006,10 +1990,8 @@ mfi_ioctl_blink(struct mfi_softc *sc, struct bioc_blink *bb)
 	}
 
 
-	if (mfi_mgmt(sc, cmd, MFI_DATA_NONE, 0, NULL, &mbox))
-		goto done;
+	rv = mfi_mgmt(sc, cmd, MFI_DATA_NONE, 0, NULL, &mbox);
 
-	rv = 0;
 done:
 	free(pd, M_DEVBUF, sizeof *pd);
 	return (rv);
@@ -2076,12 +2058,8 @@ mfi_ioctl_setstate(struct mfi_softc *sc, struct bioc_setstate *bs)
 		goto done;
 	}
 
+	rv = mfi_mgmt(sc, MR_DCMD_PD_SET_STATE, MFI_DATA_NONE, 0, NULL, &mbox);
 
-	if ((rv = mfi_mgmt(sc, MR_DCMD_PD_SET_STATE, MFI_DATA_NONE, 0, NULL,
-	    &mbox)))
-		goto done;
-
-	rv = 0;
 done:
 	free(pd, M_DEVBUF, sizeof *pd);
 	free(info, M_DEVBUF, sizeof *info);

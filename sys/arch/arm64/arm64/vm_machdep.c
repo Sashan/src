@@ -1,4 +1,4 @@
-/*	$OpenBSD: vm_machdep.c,v 1.4 2017/08/12 18:07:35 kettenis Exp $	*/
+/*	$OpenBSD: vm_machdep.c,v 1.6 2020/03/19 16:35:39 visa Exp $	*/
 /*	$NetBSD: vm_machdep.c,v 1.1 2003/04/26 18:39:33 fvdl Exp $	*/
 
 /*-
@@ -69,7 +69,7 @@ void
 cpu_fork(struct proc *p1, struct proc *p2, void *stack, void *tcb,
     void (*func)(void *), void *arg)
 {
-	struct pcb *pcb = (struct pcb *)&p2->p_addr->u_pcb;
+	struct pcb *pcb = &p2->p_addr->u_pcb;
 	struct trapframe *tf;
 	struct switchframe *sf;
 
@@ -97,7 +97,7 @@ cpu_fork(struct proc *p1, struct proc *p2, void *stack, void *tcb,
 
 	sf = (struct switchframe *)tf - 1;
 	sf->sf_x19 = (uint64_t)func;
-	sf->sf_x20= (uint64_t)arg;
+	sf->sf_x20 = (uint64_t)arg;
 	sf->sf_lr = (u_int64_t)&proc_trampoline;
 	pcb->pcb_sp = (uint64_t)sf;
 }

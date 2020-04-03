@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_lib.c,v 1.207 2019/11/17 19:07:07 jsing Exp $ */
+/* $OpenBSD: ssl_lib.c,v 1.212 2020/03/16 15:25:14 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -192,6 +192,9 @@ SSL_clear(SSL *s)
 	s->client_version = s->version;
 	s->internal->rwstate = SSL_NOTHING;
 	s->internal->rstate = SSL_ST_READ_HEADER;
+
+	tls13_ctx_free(s->internal->tls13);
+	s->internal->tls13 = NULL;
 
 	BUF_MEM_free(s->internal->init_buf);
 	s->internal->init_buf = NULL;
@@ -524,6 +527,8 @@ SSL_free(SSL *s)
 		BIO_free_all(s->rbio);
 	BIO_free_all(s->wbio);
 
+	tls13_ctx_free(s->internal->tls13);
+
 	BUF_MEM_free(s->internal->init_buf);
 
 	/* add extra stuff */
@@ -797,15 +802,7 @@ SSL_get_read_ahead(const SSL *s)
 int
 SSL_pending(const SSL *s)
 {
-	/*
-	 * SSL_pending cannot work properly if read-ahead is enabled
-	 * (SSL_[CTX_]ctrl(..., SSL_CTRL_SET_READ_AHEAD, 1, NULL)),
-	 * and it is impossible to fix since SSL_pending cannot report
-	 * errors that may be observed while scanning the new data.
-	 * (Note that SSL_pending() is often used as a boolean value,
-	 * so we'd better not return -1.)
-	 */
-	return (ssl3_pending(s));
+	return (s->method->internal->ssl_pending(s));
 }
 
 X509 *
@@ -1533,7 +1530,7 @@ found:
 /* SSL_get0_next_proto_negotiated is deprecated. */
 void
 SSL_get0_next_proto_negotiated(const SSL *s, const unsigned char **data,
-    unsigned *len)
+    unsigned int *len)
 {
 	*data = NULL;
 	*len = 0;
@@ -1640,7 +1637,7 @@ SSL_CTX_set_alpn_select_cb(SSL_CTX* ctx,
  */
 void
 SSL_get0_alpn_selected(const SSL *ssl, const unsigned char **data,
-    unsigned *len)
+    unsigned int *len)
 {
 	*data = NULL;
 	*len = 0;
@@ -2009,6 +2006,9 @@ ssl_set_cert_masks(CERT *c, const SSL_CIPHER *cipher)
 		mask_a |= SSL_aRSA;
 
 	mask_a |= SSL_aNULL;
+	mask_a |= SSL_aTLS1_3;
+
+	mask_k |= SSL_kTLS1_3;
 
 	/*
 	 * An ECC certificate may be usable for ECDH and/or
@@ -2239,6 +2239,15 @@ SSL_set_ssl_method(SSL *s, const SSL_METHOD *meth)
 			s->method = meth;
 			ret = s->method->internal->ssl_new(s);
 		}
+
+		/*
+		 * XXX - reset the client max version to that of the incoming
+		 * method, otherwise a caller that uses a TLS_method() and then
+		 * sets with TLS_client_method() cannot do TLSv1.3.
+		 */
+		if (meth->internal->max_version == TLS1_3_VERSION &&
+		    meth->internal->ssl_connect != NULL)
+			s->internal->max_version = meth->internal->max_version;
 
 		if (conn == 1)
 			s->internal->handshake_func = meth->internal->ssl_connect;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: cac.c,v 1.55 2015/09/01 05:46:00 deraadt Exp $	*/
+/*	$OpenBSD: cac.c,v 1.59 2020/02/15 18:02:00 krw Exp $	*/
 /*	$NetBSD: cac.c,v 1.15 2000/11/08 19:20:35 ad Exp $	*/
 
 /*
@@ -96,10 +96,9 @@ struct cfdriver cac_cd = {
 };
 
 void    cac_scsi_cmd(struct scsi_xfer *);
-void	cacminphys(struct buf *bp, struct scsi_link *sl);
 
 struct scsi_adapter cac_switch = {
-	cac_scsi_cmd, cacminphys, 0, 0,
+	cac_scsi_cmd, NULL, NULL, NULL, NULL
 };
 
 void	*cac_ccb_alloc(void *);
@@ -559,14 +558,6 @@ cac_get_dinfo(sc, target)
 	}
 
 	return (0);
-}
-
-void
-cacminphys(struct buf *bp, struct scsi_link *sl)
-{
-	if (bp->b_bcount > CAC_MAX_XFER)
-		bp->b_bcount = CAC_MAX_XFER;
-	minphys(bp);
 }
 
 void

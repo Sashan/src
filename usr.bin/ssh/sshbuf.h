@@ -1,4 +1,4 @@
-/*	$OpenBSD: sshbuf.h,v 1.18 2019/09/06 05:23:55 djm Exp $	*/
+/*	$OpenBSD: sshbuf.h,v 1.20 2020/03/13 03:17:07 djm Exp $	*/
 /*
  * Copyright (c) 2011 Damien Miller
  *
@@ -192,7 +192,7 @@ int	sshbuf_peek_u8(const struct sshbuf *buf, size_t offset,
     u_char *valp);
 
 /*
- * Functions to poke values into an exisiting buffer (e.g. a length header
+ * Functions to poke values into an existing buffer (e.g. a length header
  * to a packet). The destination bytes must already exist in the buffer.
  */
 int sshbuf_poke_u64(struct sshbuf *buf, size_t offset, u_int64_t val);
@@ -291,6 +291,22 @@ sshbuf_find(const struct sshbuf *b, size_t start_offset,
  * nul character.
  */
 char *sshbuf_dup_string(struct sshbuf *buf);
+
+/*
+ * Fill a buffer from a file descriptor or filename. Both allocate the
+ * buffer for the caller.
+ */
+int sshbuf_load_fd(int, struct sshbuf **)
+    __attribute__((__nonnull__ (2)));
+int sshbuf_load_file(const char *, struct sshbuf **)
+    __attribute__((__nonnull__ (2)));
+
+/*
+ * Write a buffer to a path, creating/truncating as needed (mode 0644,
+ * subject to umask). The buffer contents are not modified.
+ */
+int sshbuf_write_file(const char *path, struct sshbuf *buf)
+    __attribute__((__nonnull__ (2)));
 
 /* Macros for decoding/encoding integers */
 #define PEEK_U64(p) \

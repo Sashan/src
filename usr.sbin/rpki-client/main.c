@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.57 2019/12/16 10:40:56 claudio Exp $ */
+/*	$OpenBSD: main.c,v 1.59 2020/03/06 17:42:45 job Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -156,7 +156,7 @@ static void	build_chain(const struct auth *, STACK_OF(X509) **);
 static void	build_crls(const struct auth *, struct crl_tree *,
 		    STACK_OF(X509_CRL) **);
 
-const char	*bird_tablename = "roa";
+const char	*bird_tablename = "ROAS";
 
 int	 verbose;
 
@@ -1685,7 +1685,7 @@ main(int argc, char *argv[])
 
 usage:
 	fprintf(stderr,
-	    "usage: rpki-client [-Bcfjnov] [-b bind_addr] [-d cachedir]"
+	    "usage: rpki-client [-Bcfjnov] [-b sourceaddr] [-d cachedir]"
 	    " [-e rsync_prog]\n"
 	    "            [-T table] [-t tal] [outputdir]\n");
 	return 1;

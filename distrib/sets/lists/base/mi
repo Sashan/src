@@ -181,7 +181,6 @@
 ./etc/rc.d/rarpd
 ./etc/rc.d/rbootd
 ./etc/rc.d/rc.subr
-./etc/rc.d/rebound
 ./etc/rc.d/relayd
 ./etc/rc.d/ripd
 ./etc/rc.d/route6d
@@ -230,6 +229,10 @@
 ./etc/signify/openbsd-67-fw.pub
 ./etc/signify/openbsd-67-pkg.pub
 ./etc/signify/openbsd-67-syspatch.pub
+./etc/signify/openbsd-68-base.pub
+./etc/signify/openbsd-68-fw.pub
+./etc/signify/openbsd-68-pkg.pub
+./etc/signify/openbsd-68-syspatch.pub
 ./etc/skel
 ./etc/skel/.ssh
 ./etc/ssh
@@ -368,6 +371,7 @@
 ./usr/bin/deroff
 ./usr/bin/diff
 ./usr/bin/diff3
+./usr/bin/dig
 ./usr/bin/dirname
 ./usr/bin/doas
 ./usr/bin/du
@@ -406,6 +410,7 @@
 ./usr/bin/head
 ./usr/bin/help
 ./usr/bin/hexdump
+./usr/bin/host
 ./usr/bin/hoststat
 ./usr/bin/htpasswd
 ./usr/bin/id
@@ -474,6 +479,7 @@
 ./usr/bin/nl
 ./usr/bin/nm
 ./usr/bin/nohup
+./usr/bin/nslookup
 ./usr/bin/od
 ./usr/bin/opencvs
 ./usr/bin/openrsync
@@ -540,6 +546,7 @@
 ./usr/bin/skeyinit
 ./usr/bin/skeyprune
 ./usr/bin/smtp
+./usr/bin/sndioctl
 ./usr/bin/sndiod
 ./usr/bin/snmp
 ./usr/bin/sort
@@ -635,7 +642,7 @@
 ./usr/lib/libelf.so.3.0
 ./usr/lib/libevent.so.4.1
 ./usr/lib/libexpat.so.12.0
-./usr/lib/libfido2.so.1.2
+./usr/lib/libfido2.so.2.0
 ./usr/lib/libform.so.6.0
 ./usr/lib/libformw.so.6.0
 ./usr/lib/libfuse.so.2.0
@@ -656,7 +663,7 @@
 ./usr/lib/libreadline.so.4.0
 ./usr/lib/librpcsvc.so.2.0
 ./usr/lib/libskey.so.6.0
-./usr/lib/libsndio.so.7.0
+./usr/lib/libsndio.so.7.1
 ./usr/lib/libssl.so.48.1
 ./usr/lib/libtermcap.so.14.0
 ./usr/lib/libtermlib.so.14.0
@@ -1026,6 +1033,7 @@
 ./usr/libdata/perl5/OpenBSD/Getopt.pm
 ./usr/libdata/perl5/OpenBSD/Handle.pm
 ./usr/libdata/perl5/OpenBSD/IdCache.pm
+./usr/libdata/perl5/OpenBSD/InstalledInfo.pm
 ./usr/libdata/perl5/OpenBSD/Interactive.pm
 ./usr/libdata/perl5/OpenBSD/LibSpec
 ./usr/libdata/perl5/OpenBSD/LibSpec.pm
@@ -2492,7 +2500,6 @@
 ./usr/sbin/dhcpd
 ./usr/sbin/dhcrelay
 ./usr/sbin/dhcrelay6
-./usr/sbin/dig
 ./usr/sbin/dvmrpctl
 ./usr/sbin/dvmrpd
 ./usr/sbin/edquota
@@ -2505,7 +2512,6 @@
 ./usr/sbin/groupdel
 ./usr/sbin/groupinfo
 ./usr/sbin/groupmod
-./usr/sbin/host
 ./usr/sbin/hostapd
 ./usr/sbin/httpd
 ./usr/sbin/identd
@@ -2550,7 +2556,6 @@
 ./usr/sbin/nsd-checkzone
 ./usr/sbin/nsd-control
 ./usr/sbin/nsd-control-setup
-./usr/sbin/nslookup
 ./usr/sbin/ntpctl
 ./usr/sbin/ntpd
 ./usr/sbin/ocspcheck
@@ -2583,7 +2588,6 @@
 ./usr/sbin/rcctl
 ./usr/sbin/rdate
 ./usr/sbin/rdsetroot
-./usr/sbin/rebound
 ./usr/sbin/relayctl
 ./usr/sbin/relayd
 ./usr/sbin/repquota

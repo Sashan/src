@@ -1,7 +1,7 @@
-/*	$OpenBSD: man_html.c,v 1.127 2019/04/30 15:52:42 schwarze Exp $ */
+/* $OpenBSD: man_html.c,v 1.130 2020/03/13 00:31:05 schwarze Exp $ */
 /*
+ * Copyright (c) 2013-2015, 2017-2020 Ingo Schwarze <schwarze@openbsd.org>
  * Copyright (c) 2008-2012, 2014 Kristaps Dzonsons <kristaps@bsd.lv>
- * Copyright (c) 2013-2015, 2017-2019 Ingo Schwarze <schwarze@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -14,6 +14,8 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ *
+ * HTML formatter for man(7) used by mandoc(1).
  */
 #include <sys/types.h>
 
@@ -32,7 +34,7 @@
 #include "main.h"
 
 #define	MAN_ARGS	  const struct roff_meta *man, \
-			  const struct roff_node *n, \
+			  struct roff_node *n, \
 			  struct html *h
 
 struct	man_html_act {
@@ -176,7 +178,7 @@ print_man_node(MAN_ARGS)
 		}
 		if (*n->string == ' ' && n->flags & NODE_LINE &&
 		    (h->flags & HTML_NONEWLINE) == 0)
-			print_endline(h);
+			print_otag(h, TAG_BR, "");
 		else if (n->flags & NODE_DELIMC)
 			h->flags |= HTML_NOSPACE;
 		t = h->tag;
@@ -242,7 +244,7 @@ print_man_node(MAN_ARGS)
 		 * Close the list if no further item of the same type
 		 * follows; otherwise, close the item only.
 		 */
-		if (list_continues(n, n->next) == '\0') {
+		if (list_continues(n, roff_node_next(n)) == '\0') {
 			print_tagq(h, t);
 			t = NULL;
 		}
@@ -308,7 +310,6 @@ static int
 man_SH_pre(MAN_ARGS)
 {
 	const char	*class;
-	char		*id;
 	enum htmltag	 tag;
 
 	if (n->tok == MAN_SH) {
@@ -324,10 +325,8 @@ man_SH_pre(MAN_ARGS)
 		print_otag(h, TAG_SECTION, "c", class);
 		break;
 	case ROFFT_HEAD:
-		id = html_make_id(n, 1);
-		print_otag(h, tag, "ci", class, id);
-		if (id != NULL)
-			print_otag(h, TAG_A, "chR", "permalink", id);
+		n->flags |= NODE_ID;
+		print_otag_id(h, tag, class, n);
 		break;
 	case ROFFT_BODY:
 		break;
@@ -443,15 +442,17 @@ list_continues(const struct roff_node *n1, const struct roff_node *n2)
 static int
 man_IP_pre(MAN_ARGS)
 {
-	const struct roff_node	*nn;
+	struct roff_node	*nn;
 	const char		*list_class;
 	enum htmltag		 list_elem, body_elem;
 	char			 list_type;
 
 	nn = n->type == ROFFT_BLOCK ? n : n->parent;
-	if ((list_type = list_continues(nn->prev, nn)) == '\0') {
+	list_type = list_continues(roff_node_prev(nn), nn);
+	if (list_type == '\0') {
 		/* Start a new list. */
-		if ((list_type = list_continues(nn, nn->next)) == '\0')
+		list_type = list_continues(nn, roff_node_next(nn));
+		if (list_type == '\0')
 			list_type = ' ';
 		switch (list_type) {
 		case ' ':
@@ -485,7 +486,7 @@ man_IP_pre(MAN_ARGS)
 	case ROFFT_HEAD:
 		if (body_elem == TAG_LI)
 			return 0;
-		print_otag(h, TAG_DT, "");
+		print_otag_id(h, TAG_DT, NULL, n);
 		break;
 	case ROFFT_BODY:
 		print_otag(h, body_elem, "");
@@ -493,7 +494,6 @@ man_IP_pre(MAN_ARGS)
 	default:
 		abort();
 	}
-
 	switch(n->tok) {
 	case MAN_IP:  /* Only print the first header element. */
 		if (n->child != NULL)

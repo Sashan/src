@@ -1,4 +1,4 @@
-/*	$OpenBSD: msdosfs_vnops.c,v 1.127 2019/12/31 13:48:32 visa Exp $	*/
+/*	$OpenBSD: msdosfs_vnops.c,v 1.131 2020/03/24 14:03:30 krw Exp $	*/
 /*	$NetBSD: msdosfs_vnops.c,v 1.63 1997/10/17 11:24:19 ws Exp $	*/
 
 /*-
@@ -185,15 +185,6 @@ msdosfs_mknod(void *v)
 int
 msdosfs_open(void *v)
 {
-#if 0
-	struct vop_open_args /* {
-		struct vnode *a_vp;
-		int a_mode;
-		struct ucred *a_cred;
-		struct proc *a_p;
-	} */ *ap;
-#endif
-
 	return (0);
 }
 
@@ -220,14 +211,11 @@ msdosfs_access(void *v)
 	struct msdosfsmount *pmp = dep->de_pmp;
 	mode_t dosmode;
 
-	dosmode = (S_IRUSR|S_IRGRP|S_IROTH);
+	dosmode = (S_IRUSR | S_IRGRP | S_IROTH);
 	if ((dep->de_Attributes & ATTR_READONLY) == 0)
-		dosmode |= (S_IWUSR|S_IWGRP|S_IWOTH);
-	if (dep->de_Attributes & ATTR_DIRECTORY) {
-		dosmode |= (dosmode & S_IRUSR) ? S_IXUSR : 0;
-		dosmode |= (dosmode & S_IRGRP) ? S_IXGRP : 0;
-		dosmode |= (dosmode & S_IROTH) ? S_IXOTH : 0;
-	}
+		dosmode |= (S_IWUSR | S_IWGRP | S_IWOTH);
+	if (dep->de_Attributes & ATTR_DIRECTORY)
+		dosmode |= (S_IXUSR | S_IXGRP | S_IXOTH);
 	dosmode &= pmp->pm_mask;
 
 	return (vaccess(ap->a_vp->v_type, dosmode, pmp->pm_uid, pmp->pm_gid,
@@ -778,17 +766,6 @@ out:
 int
 msdosfs_ioctl(void *v)
 {
-#if 0
-	struct vop_ioctl_args /* {
-		struct vnode *a_vp;
-		uint32_t a_command;
-		caddr_t a_data;
-		int a_fflag;
-		struct ucred *a_cred;
-		struct proc *a_p;
-	} */ *ap;
-#endif
-
 	return (ENOTTY);
 }
 
@@ -1921,7 +1898,7 @@ fileidhash(uint64_t fileid)
 }
 
 /* Global vfs data structures for msdosfs */
-struct vops msdosfs_vops = {
+const struct vops msdosfs_vops = {
 	.vop_lookup	= msdosfs_lookup,
 	.vop_create	= msdosfs_create,
 	.vop_mknod	= msdosfs_mknod,
@@ -1960,21 +1937,21 @@ struct vops msdosfs_vops = {
 };
 
 const struct filterops msdosfsread_filtops = {
-	.f_isfd		= 1,
+	.f_flags	= FILTEROP_ISFD,
 	.f_attach	= NULL,
 	.f_detach	= filt_msdosfsdetach,
 	.f_event	= filt_msdosfsread,
 };
 
 const struct filterops msdosfswrite_filtops = {
-	.f_isfd		= 1,
+	.f_flags	= FILTEROP_ISFD,
 	.f_attach	= NULL,
 	.f_detach	= filt_msdosfsdetach,
 	.f_event	= filt_msdosfswrite,
 };
 
 const struct filterops msdosfsvnode_filtops = {
-	.f_isfd		= 1,
+	.f_flags	= FILTEROP_ISFD,
 	.f_attach	= NULL,
 	.f_detach	= filt_msdosfsdetach,
 	.f_event	= filt_msdosfsvnode,

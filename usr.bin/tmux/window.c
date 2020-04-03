@@ -1,4 +1,4 @@
-/* $OpenBSD: window.c,v 1.247 2020/01/13 07:51:55 nicm Exp $ */
+/* $OpenBSD: window.c,v 1.250 2020/03/19 14:03:49 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -425,8 +425,8 @@ window_resize(struct window *w, u_int sx, u_int sy, int xpixel, int ypixel)
 		ypixel = DEFAULT_YPIXEL;
 
 	log_debug("%s: @%u resize %ux%u (%ux%u)", __func__, w->id, sx, sy,
-	    xpixel == -1 ? w->xpixel : xpixel,
-	    ypixel == -1 ? w->ypixel : ypixel);
+	    xpixel == -1 ? w->xpixel : (u_int)xpixel,
+	    ypixel == -1 ? w->ypixel : (u_int)ypixel);
 	w->sx = sx;
 	w->sy = sy;
 	if (xpixel != -1)
@@ -541,31 +541,38 @@ window_get_active_at(struct window *w, u_int x, u_int y)
 struct window_pane *
 window_find_string(struct window *w, const char *s)
 {
-	u_int	x, y;
+	u_int	x, y, top = 0, bottom = w->sy - 1;
+	int	status;
 
 	x = w->sx / 2;
 	y = w->sy / 2;
 
+	status = options_get_number(w->options, "pane-border-status");
+	if (status == PANE_STATUS_TOP)
+		top++;
+	else if (status == PANE_STATUS_BOTTOM)
+		bottom--;
+
 	if (strcasecmp(s, "top") == 0)
-		y = 0;
+		y = top;
 	else if (strcasecmp(s, "bottom") == 0)
-		y = w->sy - 1;
+		y = bottom;
 	else if (strcasecmp(s, "left") == 0)
 		x = 0;
 	else if (strcasecmp(s, "right") == 0)
 		x = w->sx - 1;
 	else if (strcasecmp(s, "top-left") == 0) {
 		x = 0;
-		y = 0;
+		y = top;
 	} else if (strcasecmp(s, "top-right") == 0) {
 		x = w->sx - 1;
-		y = 0;
+		y = top;
 	} else if (strcasecmp(s, "bottom-left") == 0) {
 		x = 0;
-		y = w->sy - 1;
+		y = bottom;
 	} else if (strcasecmp(s, "bottom-right") == 0) {
 		x = w->sx - 1;
-		y = w->sy - 1;
+		y = bottom;
 	} else
 		return (NULL);
 
@@ -884,7 +891,7 @@ window_pane_create(struct window *w, u_int sx, u_int sy, u_int hlimit)
 	if (gethostname(host, sizeof host) == 0)
 		screen_set_title(&wp->base, host);
 
-	input_init(wp);
+	wp->ictx = input_init(wp);
 
 	return (wp);
 }
@@ -900,7 +907,7 @@ window_pane_destroy(struct window_pane *wp)
 		close(wp->fd);
 	}
 
-	input_free(wp);
+	input_free(wp->ictx);
 
 	screen_free(&wp->status_screen);
 
@@ -942,7 +949,7 @@ window_pane_read_callback(__unused struct bufferevent *bufev, void *data)
 	}
 
 	log_debug("%%%u has %zu bytes", wp->id, size);
-	input_parse(wp);
+	input_parse_pane(wp);
 
 	wp->pipe_off = EVBUFFER_LENGTH(evb);
 }
@@ -1250,7 +1257,7 @@ window_pane_key(struct window_pane *wp, struct client *c, struct session *s,
 	if (wp->fd == -1 || wp->flags & PANE_INPUTOFF)
 		return (0);
 
-	if (input_key(wp, key, m) != 0)
+	if (input_key_pane(wp, key, m) != 0)
 		return (-1);
 
 	if (KEYC_IS_MOUSE(key))
@@ -1262,7 +1269,7 @@ window_pane_key(struct window_pane *wp, struct client *c, struct session *s,
 			    wp2->fd != -1 &&
 			    (~wp2->flags & PANE_INPUTOFF) &&
 			    window_pane_visible(wp2))
-				input_key(wp2, key, NULL);
+				input_key_pane(wp2, key, NULL);
 		}
 	}
 	return (0);

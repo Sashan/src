@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.52 2020/01/07 15:08:28 tobhe Exp $	*/
+/*	$OpenBSD: config.c,v 1.55 2020/03/24 13:32:36 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -258,11 +258,9 @@ config_add_proposal(struct iked_proposals *head, unsigned int id,
 void
 config_free_proposals(struct iked_proposals *head, unsigned int proto)
 {
-	struct iked_proposal	*prop, *next;
+	struct iked_proposal	*prop, *proptmp;
 
-	for (prop = TAILQ_FIRST(head); prop != NULL; prop = next) {
-		next = TAILQ_NEXT(prop, prop_entry);
-
+	TAILQ_FOREACH_SAFE(prop, head, prop_entry, proptmp) {
 		/* Free any proposal or only selected SA proto */
 		if (proto != 0 && prop->prop_protoid != proto)
 			continue;
@@ -293,14 +291,12 @@ void
 config_free_childsas(struct iked *env, struct iked_childsas *head,
     struct iked_spi *peerspi, struct iked_spi *localspi)
 {
-	struct iked_childsa	*csa, *nextcsa, *ipcomp;
+	struct iked_childsa	*csa, *csatmp, *ipcomp;
 
 	if (localspi != NULL)
 		bzero(localspi, sizeof(*localspi));
 
-	for (csa = TAILQ_FIRST(head); csa != NULL; csa = nextcsa) {
-		nextcsa = TAILQ_NEXT(csa, csa_entry);
-
+	TAILQ_FOREACH_SAFE(csa, head, csa_entry, csatmp) {
 		if (peerspi != NULL) {
 			/* Only delete matching peer SPIs */
 			if (peerspi->spi != csa->csa_peerspi)
@@ -438,7 +434,7 @@ config_new_user(struct iked *env, struct iked_user *new)
 
 	if ((old = RB_INSERT(iked_users, &env->sc_users, usr)) != NULL) {
 		/* Update the password of an existing user*/
-		memcpy(old, new, sizeof(*old));
+		memcpy(old->usr_pass, new->usr_pass, IKED_PASSWORD_SIZE);
 
 		log_debug("%s: updating user %s", __func__, usr->usr_name);
 		free(usr);
@@ -511,7 +507,7 @@ config_setreset(struct iked *env, unsigned int mode, enum privsep_procid id)
 int
 config_getreset(struct iked *env, struct imsg *imsg)
 {
-	struct iked_policy	*pol, *nextpol;
+	struct iked_policy	*pol, *poltmp;
 	struct iked_sa		*sa, *nextsa;
 	struct iked_user	*usr, *nextusr;
 	unsigned int		 mode;
@@ -521,9 +517,7 @@ config_getreset(struct iked *env, struct imsg *imsg)
 
 	if (mode == RESET_ALL || mode == RESET_POLICY) {
 		log_debug("%s: flushing policies", __func__);
-		for (pol = TAILQ_FIRST(&env->sc_policies);
-		    pol != NULL; pol = nextpol) {
-			nextpol = TAILQ_NEXT(pol, pol_entry);
+		TAILQ_FOREACH_SAFE(pol, &env->sc_policies, pol_entry, poltmp) {
 			config_free_policy(env, pol);
 		}
 	}
@@ -985,6 +979,29 @@ config_setkeys(struct iked *env)
 	EVP_PKEY_free(key);
 
 	return (ret);
+}
+
+int
+config_setnattport(struct iked *env)
+{
+	in_port_t nattport;
+
+	nattport = env->sc_nattport;
+	proc_compose(&env->sc_ps, PROC_IKEV2, IMSG_CTL_NATTPORT,
+	    &nattport, sizeof(nattport));
+	return (0);
+}
+
+int
+config_getnattport(struct iked *env, struct imsg *imsg)
+{
+	in_port_t nattport;
+
+	IMSG_SIZE_CHECK(imsg, &nattport);
+	memcpy(&nattport, imsg->data, sizeof(nattport));
+	env->sc_nattport = nattport;
+	log_debug("%s: nattport %u", __func__, env->sc_nattport);
+	return (0);
 }
 
 int

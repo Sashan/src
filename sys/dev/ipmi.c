@@ -1,4 +1,4 @@
-/*	$OpenBSD: ipmi.c,v 1.108 2020/01/11 18:51:54 kettenis Exp $ */
+/*	$OpenBSD: ipmi.c,v 1.112 2020/03/29 09:31:10 kettenis Exp $ */
 
 /*
  * Copyright (c) 2015 Masao Uebayashi
@@ -55,7 +55,7 @@ struct ipmi_sensor {
 
 int	ipmi_enabled = 0;
 
-#define SENSOR_REFRESH_RATE (5 * hz)
+#define SENSOR_REFRESH_RATE 5	/* seconds */
 
 #define DEVNAME(s)  ((s)->sc_dev.dv_xname)
 
@@ -240,15 +240,23 @@ ipmi_get_if(int iftype)
 u_int8_t
 bmc_read(struct ipmi_softc *sc, int offset)
 {
-	return (bus_space_read_1(sc->sc_iot, sc->sc_ioh,
-	    offset * sc->sc_if_iospacing));
+	if (sc->sc_if_iosize == 4)
+		return (bus_space_read_4(sc->sc_iot, sc->sc_ioh,
+		    offset * sc->sc_if_iospacing));
+	else	
+		return (bus_space_read_1(sc->sc_iot, sc->sc_ioh,
+		    offset * sc->sc_if_iospacing));
 }
 
 void
 bmc_write(struct ipmi_softc *sc, int offset, u_int8_t val)
 {
-	bus_space_write_1(sc->sc_iot, sc->sc_ioh,
-	    offset * sc->sc_if_iospacing, val);
+	if (sc->sc_if_iosize == 4)
+		bus_space_write_4(sc->sc_iot, sc->sc_ioh,
+		    offset * sc->sc_if_iospacing, val);
+	else
+		bus_space_write_1(sc->sc_iot, sc->sc_ioh,
+		    offset * sc->sc_if_iospacing, val);
 }
 
 int
@@ -1288,6 +1296,11 @@ read_sensor(struct ipmi_softc *sc, struct ipmi_sensor *psensor)
 	c.c_data = data;
 	ipmi_cmd(&c);
 
+	if (c.c_ccode != 0) {
+		dbg_printf(1, "sensor reading command for %s failed: %.2x\n",
+			psensor->i_sensor.desc, c.c_ccode);
+		return (rv);
+	}
 	dbg_printf(10, "values=%.2x %.2x %.2x %.2x %s\n",
 	    data[0],data[1],data[2],data[3], psensor->i_sensor.desc);
 	psensor->i_sensor.flags &= ~SENSOR_FINVALID;
@@ -1406,7 +1419,8 @@ add_child_sensors(struct ipmi_softc *sc, u_int8_t *psdr, int count,
 			dbg_printf(5, "	 reading: %lld [%s]\n",
 			    psensor->i_sensor.value,
 			    psensor->i_sensor.desc);
-		}
+		} else
+			free(psensor, M_DEVBUF, sizeof(*psensor));
 	}
 
 	return (1);
@@ -1446,6 +1460,7 @@ ipmi_map_regs(struct ipmi_softc *sc, struct ipmi_attach_args *ia)
 		sc->sc_iot = ia->iaa_memt;
 
 	sc->sc_if_rev = ia->iaa_if_rev;
+	sc->sc_if_iosize = ia->iaa_if_iosize;
 	sc->sc_if_iospacing = ia->iaa_if_iospacing;
 	if (bus_space_map(sc->sc_iot, ia->iaa_if_iobase,
 	    sc->sc_if->nregs * sc->sc_if_iospacing,
@@ -1498,7 +1513,8 @@ ipmi_poll_thread(void *arg)
 
 	while (thread->running) {
 		ipmi_refresh_sensors(sc);
-		tsleep(thread, PWAIT, "ipmi_poll", SENSOR_REFRESH_RATE);
+		tsleep_nsec(thread, PWAIT, "ipmi_poll",
+		    SEC_TO_NSEC(SENSOR_REFRESH_RATE));
 	}
 
 done:
@@ -1931,6 +1947,7 @@ ipmi_smbios_probe(struct smbios_ipmi *pipmi, struct ipmi_attach_args *ia)
 	    pipmi->smipmi_irq : -1;
 	ia->iaa_if_irqlvl = (pipmi->smipmi_base_flags & SMIPMI_FLAG_IRQLVL) ?
 	    IST_LEVEL : IST_EDGE;
+	ia->iaa_if_iosize = 1;
 
 	switch (SMIPMI_FLAG_IFSPACING(pipmi->smipmi_base_flags)) {
 	case IPMI_IOSPACING_BYTE:

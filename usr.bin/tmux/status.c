@@ -1,4 +1,4 @@
-/* $OpenBSD: status.c,v 1.200 2019/05/28 18:53:36 nicm Exp $ */
+/* $OpenBSD: status.c,v 1.202 2020/03/12 09:49:43 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -733,6 +733,7 @@ status_prompt_translate_key(struct client *c, key_code key, key_code *new_key)
 	if (c->prompt_mode == PROMPT_ENTRY) {
 		switch (key) {
 		case '\003': /* C-c */
+		case '\007': /* C-g */
 		case '\010': /* C-h */
 		case '\011': /* Tab */
 		case '\025': /* C-u */
@@ -812,6 +813,9 @@ status_prompt_translate_key(struct client *c, key_code key, key_code *new_key)
 		return (1);
 	case 'p':
 		*new_key = '\031'; /* C-y */
+		return (1);
+	case 'q':
+		*new_key = '\003'; /* C-c */
 		return (1);
 	case 's':
 	case KEYC_DC:
@@ -915,11 +919,17 @@ status_prompt_key(struct client *c, key_code key)
 {
 	struct options		*oo = c->session->options;
 	char			*s, *cp, word[64], prefix = '=';
-	const char		*histstr, *ws = NULL;
+	const char		*histstr, *ws = NULL, *keystring;
 	size_t			 size, n, off, idx, used;
 	struct utf8_data	 tmp, *first, *last, *ud;
 	int			 keys;
 
+	if (c->prompt_flags & PROMPT_KEY) {
+		keystring = key_string_lookup_key(key);
+		c->prompt_inputcb(c, c->prompt_data, keystring, 1);
+		status_prompt_clear(c);
+		return (0);
+	}
 	size = utf8_strlen(c->prompt_buffer);
 
 	if (c->prompt_flags & PROMPT_NUMERIC) {

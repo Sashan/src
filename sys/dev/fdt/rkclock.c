@@ -1,4 +1,4 @@
-/*	$OpenBSD: rkclock.c,v 1.48 2019/12/03 09:08:04 patrick Exp $	*/
+/*	$OpenBSD: rkclock.c,v 1.51 2020/03/01 17:57:33 kettenis Exp $	*/
 /*
  * Copyright (c) 2017, 2018 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -400,7 +400,7 @@ rkclock_set_frequency(struct rkclock_softc *sc, uint32_t idx, uint32_t freq)
 	int sel_shift, div_shift, i;
 
 	clk = rkclock_lookup(sc, idx);
-	if (clk == NULL || clk->div_mask == 0) {
+	if (clk == NULL) {
 		printf("%s: 0x%08x\n", __func__, idx);
 		return -1;
 	}
@@ -420,6 +420,13 @@ rkclock_set_frequency(struct rkclock_softc *sc, uint32_t idx, uint32_t freq)
 	if (clk->flags & SET_PARENT) {
 		idx = clk->parents[mux];
 		sc->sc_cd.cd_set_frequency(sc, &idx, freq);
+		if (clk->div_mask == 0)
+			return 0;
+	}
+
+	if (clk->div_mask == 0) {
+		printf("%s: 0x%08x\n", __func__, idx);
+		return -1;
 	}
 
 	/*
@@ -678,7 +685,7 @@ rk3288_get_frequency(void *cookie, uint32_t *cells)
 	case RK3288_CLK_MAC:
 		reg = HREAD4(sc, RK3288_CRU_CLKSEL_CON(21));
 		if (reg & 0x10)
-			return 125000000;;
+			return 125000000;
 		mux = (reg >> 0) & 0x3;
 		div_con = (reg >> 8) & 0x1f;
 		switch (mux) {
@@ -1585,6 +1592,28 @@ struct rkclock rk3399_clocks[] = {
 		{ RK3399_PLL_CPLL, RK3399_PLL_GPLL, RK3399_PLL_NPLL }
 	},
 	{
+		RK3399_DCLK_VOP0, RK3399_CRU_CLKSEL_CON(49),
+		SEL(11, 11), 0,
+		{ RK3399_DCLK_VOP0_DIV, RK3399_DCLK_VOP0_FRAC },
+		SET_PARENT
+	},
+	{
+		RK3399_DCLK_VOP1, RK3399_CRU_CLKSEL_CON(50),
+		SEL(11, 11), 0,
+		{ RK3399_DCLK_VOP1_DIV, RK3399_DCLK_VOP1_FRAC },
+		SET_PARENT
+	},
+	{
+		RK3399_DCLK_VOP0_DIV, RK3399_CRU_CLKSEL_CON(49),
+		SEL(9, 8), DIV(7, 0),
+		{ RK3399_PLL_VPLL, RK3399_PLL_CPLL, RK3399_PLL_GPLL }
+	},
+	{
+		RK3399_DCLK_VOP1_DIV, RK3399_CRU_CLKSEL_CON(50),
+		SEL(9, 8), DIV(7, 0),
+		{ RK3399_PLL_VPLL, RK3399_PLL_CPLL, RK3399_PLL_GPLL }
+	},
+	{
 		RK3399_ACLK_PERIPH, RK3399_CRU_CLKSEL_CON(14),
 		SEL(7, 7), DIV(4, 0),
 		{ RK3399_PLL_CPLL, RK3399_PLL_GPLL }
@@ -1604,6 +1633,18 @@ struct rkclock rk3399_clocks[] = {
 		SEL(7, 6), DIV(4, 0),
 		{ RK3399_PLL_CPLL, RK3399_PLL_GPLL, RK3399_PLL_NPLL,
 		  RK3399_PLL_VPLL }
+	},
+	{
+		RK3399_ACLK_VOP0, RK3399_CRU_CLKSEL_CON(47),
+		SEL(7, 6), DIV(4, 0),
+		{ RK3399_PLL_VPLL, RK3399_PLL_CPLL, RK3399_PLL_GPLL,
+		  RK3399_PLL_NPLL }
+	},
+	{
+		RK3399_ACLK_VOP1, RK3399_CRU_CLKSEL_CON(48),
+		SEL(7, 6), DIV(4, 0),
+		{ RK3399_PLL_VPLL, RK3399_PLL_CPLL, RK3399_PLL_GPLL,
+		  RK3399_PLL_NPLL }
 	},
 	{
 		RK3399_ACLK_HDCP, RK3399_CRU_CLKSEL_CON(42),
@@ -1654,6 +1695,16 @@ struct rkclock rk3399_clocks[] = {
 		RK3399_HCLK_SDMMC, RK3399_CRU_CLKSEL_CON(13),
 		SEL(15, 15), DIV(12, 8),
 		{ RK3399_PLL_CPLL, RK3399_PLL_GPLL }
+	},
+	{
+		RK3399_HCLK_VOP0, RK3399_CRU_CLKSEL_CON(47),
+		0, DIV(12, 8),
+		{ RK3399_ACLK_VOP0 }
+	},
+	{
+		RK3399_HCLK_VOP1, RK3399_CRU_CLKSEL_CON(48),
+		0, DIV(12, 8),
+		{ RK3399_ACLK_VOP1 }
 	},
 	{
 		/* Sentinel */
@@ -1767,11 +1818,21 @@ rk3399_set_pll(struct rkclock_softc *sc, bus_size_t base, uint32_t freq)
 	case 408000000U:
 		postdiv1 = postdiv2 = 2; refdiv = 1;
 		break;
+	case 297000000U:
 	case 216000000U:
 		postdiv1 = 4; postdiv2 = 2; refdiv = 1;
 		break;
+	case 148500000U:
 	case 96000000U:
 		postdiv1 = postdiv2 = 4; refdiv = 1;
+		break;
+	case 74250000U:
+		postdiv1 = postdiv2 = 4; refdiv = 2;
+		break;
+	case 65000000U:
+	case 54000000U:
+	case 27000000U:
+		postdiv1 = 6; postdiv2 = 4; refdiv = 1;
 		break;
 	default:
 		printf("%s: %d Hz\n", __func__, freq);
@@ -1953,6 +2014,8 @@ rk3399_set_frequency(void *cookie, uint32_t *cells, uint32_t freq)
 		return rk3399_set_pll(sc, RK3399_CRU_GPLL_CON(0), freq);
 	case RK3399_PLL_NPLL:
 		return rk3399_set_pll(sc, RK3399_CRU_NPLL_CON(0), freq);
+	case RK3399_PLL_VPLL:
+		return rk3399_set_pll(sc, RK3399_CRU_VPLL_CON(0), freq);
 	case RK3399_ARMCLKL:
 		return rk3399_set_armclk(sc, RK3399_CRU_CLKSEL_CON(0), freq);
 	case RK3399_ARMCLKB:

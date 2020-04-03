@@ -1,4 +1,4 @@
-/*	$OpenBSD: umass.c,v 1.74 2017/01/09 14:44:28 mpi Exp $ */
+/*	$OpenBSD: umass.c,v 1.76 2020/02/22 14:01:34 jasper Exp $ */
 /*	$NetBSD: umass.c,v 1.116 2004/06/30 05:53:46 mycroft Exp $	*/
 
 /*
@@ -441,14 +441,14 @@ umass_attach(struct device *parent, struct device *self, void *aux)
 			return;
 		}
 		if (UE_GET_DIR(ed->bEndpointAddress) == UE_DIR_IN
-		    && (ed->bmAttributes & UE_XFERTYPE) == UE_BULK) {
+		    && UE_GET_XFERTYPE(ed->bmAttributes) == UE_BULK) {
 			sc->sc_epaddr[UMASS_BULKIN] = ed->bEndpointAddress;
 		} else if (UE_GET_DIR(ed->bEndpointAddress) == UE_DIR_OUT
-		    && (ed->bmAttributes & UE_XFERTYPE) == UE_BULK) {
+		    && UE_GET_XFERTYPE(ed->bmAttributes) == UE_BULK) {
 			sc->sc_epaddr[UMASS_BULKOUT] = ed->bEndpointAddress;
 		} else if (sc->sc_wire == UMASS_WPROTO_CBI_I
 		    && UE_GET_DIR(ed->bEndpointAddress) == UE_DIR_IN
-		    && (ed->bmAttributes & UE_XFERTYPE) == UE_INTERRUPT) {
+		    && UE_GET_XFERTYPE(ed->bmAttributes) == UE_INTERRUPT) {
 			sc->sc_epaddr[UMASS_INTRIN] = ed->bEndpointAddress;
 #ifdef UMASS_DEBUG
 			if (UGETW(ed->wMaxPacketSize) > 2) {
@@ -1152,13 +1152,9 @@ umass_bbb_state(struct usbd_xfer *xfer, void *priv, usbd_status err)
 
 		/* FALLTHROUGH, err == 0 (no data phase or successful) */
 	case TSTATE_BBB_DCLEAR: /* stall clear after data phase */
-		if (sc->transfer_dir == DIR_IN)
-			memcpy(sc->transfer_data, sc->data_buffer,
-			       sc->transfer_actlen);
-
 		DIF(UDMASS_BBB, if (sc->transfer_dir == DIR_IN)
-					umass_dump_buffer(sc, sc->transfer_data,
-						sc->transfer_datalen, 48));
+					umass_dump_buffer(sc, sc->data_buffer,
+					    sc->transfer_datalen, 48));
 
 		/* FALLTHROUGH, err == 0 (no data phase or successful) */
 	case TSTATE_BBB_SCLEAR: /* stall clear after status phase */
@@ -1304,6 +1300,12 @@ umass_bbb_state(struct usbd_xfer *xfer, void *priv, usbd_status err)
 
 		} else {	/* success */
 			sc->transfer_state = TSTATE_IDLE;
+			if (sc->transfer_dir == DIR_IN) {
+				sc->transfer_actlen = sc->transfer_datalen -
+				    UGETDW(sc->csw.dCSWDataResidue);
+				memcpy(sc->transfer_data, sc->data_buffer,
+				    sc->transfer_actlen);
+			}
 			sc->transfer_cb(sc, sc->transfer_priv,
 					UGETDW(sc->csw.dCSWDataResidue),
 					STATUS_CMD_OK);

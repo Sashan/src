@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_vops.c,v 1.23 2019/12/08 12:29:42 mpi Exp $	*/
+/*	$OpenBSD: vfs_vops.c,v 1.26 2020/03/30 09:08:10 mpi Exp $	*/
 /*
  * Copyright (c) 2010 Thordur I. Bjornsson <thib@openbsd.org> 
  *
@@ -46,7 +46,6 @@
 #include <sys/vnode.h>
 #include <sys/unistd.h>
 #include <sys/systm.h>
-#include <sys/lock.h>	/* LK_DRAIN */
 
 #ifdef VFSLCKDEBUG
 #include <sys/systm.h>		/* for panic() */
@@ -146,6 +145,8 @@ VOP_OPEN(struct vnode *vp, int mode, struct ucred *cred, struct proc *p)
 	a.a_cred = cred;
 	a.a_p = p;
 
+	KASSERT(p == curproc);
+
 	if (vp->v_op->vop_open == NULL)
 		return (EOPNOTSUPP);
 
@@ -165,6 +166,7 @@ VOP_CLOSE(struct vnode *vp, int fflag, struct ucred *cred, struct proc *p)
 	a.a_cred = cred;
 	a.a_p = p;
 
+	KASSERT(p == curproc);
 	ASSERT_VP_ISLOCKED(vp);
 
 	if (vp->v_op->vop_close == NULL)
@@ -185,6 +187,7 @@ VOP_ACCESS(struct vnode *vp, int mode, struct ucred *cred, struct proc *p)
 	a.a_cred = cred;
 	a.a_p = p;
 
+	KASSERT(p == curproc);
 	ASSERT_VP_ISLOCKED(vp);
 
 	if (vp->v_op->vop_access == NULL)
@@ -203,6 +206,7 @@ VOP_GETATTR(struct vnode *vp, struct vattr *vap, struct ucred *cred,
 	a.a_cred = cred;
 	a.a_p = p;
 
+	KASSERT(p == curproc);
 	if (vp->v_op->vop_getattr == NULL)
 		return (EOPNOTSUPP);
 
@@ -220,6 +224,7 @@ VOP_SETATTR(struct vnode *vp, struct vattr *vap, struct ucred *cred,
 	a.a_cred = cred;
 	a.a_p = p;
 
+	KASSERT(p == curproc);
 	ASSERT_VP_ISLOCKED(vp);
 
 	if (vp->v_op->vop_setattr == NULL)
@@ -283,6 +288,7 @@ VOP_IOCTL(struct vnode *vp, u_long command, void *data, int fflag,
 	a.a_cred = cred;
 	a.a_p = p;
 
+	KASSERT(p == curproc);
 	if (vp->v_op->vop_ioctl == NULL)
 		return (EOPNOTSUPP);
 
@@ -301,6 +307,7 @@ VOP_POLL(struct vnode *vp, int fflag, int events, struct proc *p)
 	a.a_events = events;
 	a.a_p = p;
 
+	KASSERT(p == curproc);
 	if (vp->v_op->vop_poll == NULL)
 		return (EOPNOTSUPP);
 
@@ -344,6 +351,7 @@ VOP_FSYNC(struct vnode *vp, struct ucred *cred, int waitfor,
 	a.a_waitfor = waitfor;
 	a.a_p = p;
 
+	KASSERT(p == curproc);
 	ASSERT_VP_ISLOCKED(vp);
 
 	if (vp->v_op->vop_fsync == NULL)
@@ -565,6 +573,7 @@ VOP_INACTIVE(struct vnode *vp, struct proc *p)
 	a.a_vp = vp;
 	a.a_p = p;
 
+	KASSERT(p == curproc);
 	ASSERT_VP_ISLOCKED(vp);
 
 	if (vp->v_op->vop_inactive == NULL)
@@ -581,6 +590,7 @@ VOP_RECLAIM(struct vnode *vp, struct proc *p)
 	a.a_vp = vp;
 	a.a_p = p;
 
+	KASSERT(p == curproc);
 	if (vp->v_op->vop_reclaim == NULL)
 		return (EOPNOTSUPP);
 
@@ -600,34 +610,19 @@ VOP_LOCK(struct vnode *vp, int flags)
 	if (vp->v_op->vop_lock == NULL)
 		return (EOPNOTSUPP);
 
-	if ((flags & LK_DRAIN) && vp->v_lockcount > 0) {
-		/*
-		 * Ensure that any thread currently waiting on the same lock has
-		 * observed that the vnode is about to be exclusively locked
-		 * before continuing.
-		 */
-		KASSERT(vp->v_flag & VXLOCK);
-		tsleep_nsec(&vp->v_lockcount, PINOD, "vop_lock", INFSLP);
-		KASSERT(vp->v_lockcount == 0);
-	}
-
 	return ((vp->v_op->vop_lock)(&a));
 }
 
 int
 VOP_UNLOCK(struct vnode *vp)
 {
-	int r;
 	struct vop_unlock_args a;
 	a.a_vp = vp;
 
 	if (vp->v_op->vop_unlock == NULL)
 		return (EOPNOTSUPP);
 
-	vp->v_inflight++;
-	r = (vp->v_op->vop_unlock)(&a);
-	vp->v_inflight--;
-	return r;
+	return ((vp->v_op->vop_unlock)(&a));
 }
 
 int

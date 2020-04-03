@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtpd.c,v 1.328 2019/12/18 10:00:39 gilles Exp $	*/
+/*	$OpenBSD: smtpd.c,v 1.332 2020/02/24 16:16:08 millert Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -81,9 +81,9 @@ static struct mproc *setup_peer(enum smtp_proc_type, pid_t, int);
 static int imsg_wait(struct imsgbuf *, struct imsg *, int);
 
 static void	offline_scan(int, short, void *);
-static int	offline_add(char *);
+static int	offline_add(char *, uid_t, gid_t);
 static void	offline_done(void);
-static int	offline_enqueue(char *);
+static int	offline_enqueue(char *, uid_t, gid_t);
 
 static void	purge_task(void);
 static int	parent_auth_user(const char *, const char *);
@@ -112,6 +112,8 @@ struct child {
 
 struct offline {
 	TAILQ_ENTRY(offline)	 entry;
+	uid_t			 uid;
+	gid_t			 gid;
 	char			*path;
 };
 
@@ -1084,7 +1086,7 @@ smtpd(void) {
 	purge_task();
 
 	if (pledge("stdio rpath wpath cpath fattr tmppath "
-	    "getpw sendfd proc exec id inet unix", NULL) == -1)
+	    "getpw sendfd proc exec id inet chown unix", NULL) == -1)
 		err(1, "pledge");
 
 	event_dispatch();
@@ -1444,7 +1446,7 @@ forkmda(struct mproc *p, uint64_t id, struct deliver *deliver)
 		pw_dir = deliver->userinfo.directory;
 	}
 
-	if (pw_uid == 0 && !dsp->u.local.requires_root) {
+	if (pw_uid == 0 && !dsp->u.local.is_mbox) {
 		(void)snprintf(ebuf, sizeof ebuf, "not allowed to deliver to: %s",
 		    deliver->userinfo.username);
 		m_create(p_pony, IMSG_MDA_DONE, 0, 0, -1);
@@ -1510,6 +1512,11 @@ forkmda(struct mproc *p, uint64_t id, struct deliver *deliver)
 		m_close(p);
 		return;
 	}
+
+	/* mbox helper, create mailbox before privdrop if it doesn't exist */
+	if (dsp->u.local.is_mbox)
+		mda_mbox_init(deliver);
+
 	if (chdir(pw_dir) == -1 && chdir("/") == -1)
 		err(1, "chdir");
 	if (setgroups(1, &pw_gid) ||
@@ -1534,7 +1541,12 @@ forkmda(struct mproc *p, uint64_t id, struct deliver *deliver)
 	/* avoid hangs by setting 5m timeout */
 	alarm(300);
 
-	mda_unpriv(dsp, deliver, pw_name, pw_dir);
+	if (dsp->u.local.is_mbox &&
+	    dsp->u.local.mda_wrapper == NULL &&
+	    deliver->mda_exec[0] == '\0')
+		mda_mbox(deliver);
+	else
+		mda_unpriv(dsp, deliver, pw_name, pw_dir);
 }
 
 static void
@@ -1575,7 +1587,8 @@ offline_scan(int fd, short ev, void *arg)
 			continue;
 		}
 
-		if (offline_add(e->fts_name)) {
+		if (offline_add(e->fts_name, e->fts_statp->st_uid,
+		    e->fts_statp->st_gid)) {
 			log_warnx("warn: smtpd: "
 			    "could not add offline message %s", e->fts_name);
 			continue;
@@ -1595,7 +1608,7 @@ offline_scan(int fd, short ev, void *arg)
 }
 
 static int
-offline_enqueue(char *name)
+offline_enqueue(char *name, uid_t uid, gid_t gid)
 {
 	char		*path;
 	struct stat	 sb;
@@ -1658,6 +1671,18 @@ offline_enqueue(char *name)
 			_exit(1);
 		}
 
+		if (sb.st_uid != uid) {
+			log_warnx("warn: smtpd: file %s has bad uid %d",
+			    path, sb.st_uid);
+			_exit(1);
+		}
+
+		if (sb.st_gid != gid) {
+			log_warnx("warn: smtpd: file %s has bad gid %d",
+			    path, sb.st_gid);
+			_exit(1);
+		}
+
 		pw = getpwuid(sb.st_uid);
 		if (pw == NULL) {
 			log_warnx("warn: smtpd: getpwuid for uid %d failed",
@@ -1714,17 +1739,19 @@ offline_enqueue(char *name)
 }
 
 static int
-offline_add(char *path)
+offline_add(char *path, uid_t uid, gid_t gid)
 {
 	struct offline	*q;
 
 	if (offline_running < OFFLINE_QUEUEMAX)
 		/* skip queue */
-		return offline_enqueue(path);
+		return offline_enqueue(path, uid, gid);
 
 	q = malloc(sizeof(*q) + strlen(path) + 1);
 	if (q == NULL)
 		return (-1);
+	q->uid = uid;
+	q->gid = gid;
 	q->path = (char *)q + sizeof(*q);
 	memmove(q->path, path, strlen(path) + 1);
 	TAILQ_INSERT_TAIL(&offline_q, q, entry);
@@ -1743,7 +1770,7 @@ offline_done(void)
 		if ((q = TAILQ_FIRST(&offline_q)) == NULL)
 			break; /* all done */
 		TAILQ_REMOVE(&offline_q, q, entry);
-		offline_enqueue(q->path);
+		offline_enqueue(q->path, q->uid, q->gid);
 		free(q);
 	}
 }

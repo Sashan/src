@@ -1,4 +1,4 @@
-/*	$OpenBSD: bpf.c,v 1.185 2020/01/08 16:27:41 visa Exp $	*/
+/*	$OpenBSD: bpf.c,v 1.188 2020/02/20 16:56:52 visa Exp $	*/
 /*	$NetBSD: bpf.c,v 1.33 1997/02/21 23:59:35 thorpej Exp $	*/
 
 /*
@@ -571,8 +571,6 @@ void
 bpf_wakeup_cb(void *xd)
 {
 	struct bpf_d *d = xd;
-
-	KERNEL_ASSERT_LOCKED();
 
 	wakeup(d);
 	if (d->bd_async && d->bd_sig)
@@ -1165,7 +1163,7 @@ bpfpoll(dev_t dev, int events, struct proc *p)
 }
 
 const struct filterops bpfread_filtops = {
-	.f_isfd		= 1,
+	.f_flags	= FILTEROP_ISFD,
 	.f_attach	= NULL,
 	.f_detach	= filt_bpfrdetach,
 	.f_event	= filt_bpfread,
@@ -1655,18 +1653,14 @@ bpfattach(caddr_t *driverp, struct ifnet *ifp, u_int dlt, u_int hdrlen)
 void
 bpfdetach(struct ifnet *ifp)
 {
-	struct bpf_if *bp, *nbp, **pbp = &bpf_iflist;
+	struct bpf_if *bp, *nbp;
 
 	KERNEL_ASSERT_LOCKED();
 
 	for (bp = bpf_iflist; bp; bp = nbp) {
 		nbp = bp->bif_next;
-		if (bp->bif_ifp == ifp) {
-			*pbp = nbp;
-
+		if (bp->bif_ifp == ifp)
 			bpfsdetach(bp);
-		} else
-			pbp = &bp->bif_next;
 	}
 	ifp->if_bpf = NULL;
 }
@@ -1674,9 +1668,11 @@ bpfdetach(struct ifnet *ifp)
 void
 bpfsdetach(void *p)
 {
-	struct bpf_if *bp = p;
+	struct bpf_if *bp = p, *tbp;
 	struct bpf_d *bd;
 	int maj;
+
+	KERNEL_ASSERT_LOCKED();
 
 	/* Locate the major number. */
 	for (maj = 0; maj < nchrdev; maj++)
@@ -1685,6 +1681,16 @@ bpfsdetach(void *p)
 
 	while ((bd = SMR_SLIST_FIRST_LOCKED(&bp->bif_dlist)))
 		vdevgone(maj, bd->bd_unit, bd->bd_unit, VCHR);
+
+	for (tbp = bpf_iflist; tbp; tbp = tbp->bif_next) {
+		if (tbp->bif_next == bp) {
+			tbp->bif_next = bp->bif_next;
+			break;
+		}
+	}
+
+	if (bpf_iflist == bp)
+		bpf_iflist = bp->bif_next;
 
 	free(bp, M_DEVBUF, sizeof(*bp));
 }

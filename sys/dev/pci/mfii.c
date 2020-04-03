@@ -1,4 +1,4 @@
-/* $OpenBSD: mfii.c,v 1.64 2019/12/31 10:05:32 mpi Exp $ */
+/* $OpenBSD: mfii.c,v 1.68 2020/03/21 20:42:23 krw Exp $ */
 
 /*
  * Copyright (c) 2012 David Gwynne <dlg@openbsd.org>
@@ -29,6 +29,7 @@
 #include <sys/sensors.h>
 #include <sys/rwlock.h>
 #include <sys/syslog.h>
+#include <sys/smr.h>
 
 #include <dev/biovar.h>
 #include <dev/pci/pcidevs.h>
@@ -234,10 +235,15 @@ struct mfii_ccb {
 };
 SIMPLEQ_HEAD(mfii_ccb_list, mfii_ccb);
 
+struct mfii_pd_dev_handles {
+	struct smr_entry	pd_smr;
+	uint16_t		pd_handles[MFI_MAX_PD];
+};
+
 struct mfii_pd_softc {
 	struct scsi_link	pd_link;
 	struct scsibus_softc	*pd_scsibus;
-	struct srp		pd_dev_handles;
+	struct mfii_pd_dev_handles *pd_dev_handles;
 	uint8_t			pd_timeout;
 };
 
@@ -379,20 +385,14 @@ int		mfii_scsi_ioctl(struct scsi_link *, u_long, caddr_t, int);
 int		mfii_ioctl_cache(struct scsi_link *, u_long, struct dk_cache *);
 
 struct scsi_adapter mfii_switch = {
-	mfii_scsi_cmd,
-	scsi_minphys,
-	NULL, /* probe */
-	NULL, /* unprobe */
-	mfii_scsi_ioctl
+	mfii_scsi_cmd, NULL, NULL, NULL, mfii_scsi_ioctl
 };
 
 void		mfii_pd_scsi_cmd(struct scsi_xfer *);
 int		mfii_pd_scsi_probe(struct scsi_link *);
 
 struct scsi_adapter mfii_pd_switch = {
-	mfii_pd_scsi_cmd,
-	scsi_minphys,
-	mfii_pd_scsi_probe
+	mfii_pd_scsi_cmd, NULL, mfii_pd_scsi_probe, NULL, NULL,
 };
 
 #define DEVNAME(_sc)		((_sc)->sc_dev.dv_xname)
@@ -447,7 +447,7 @@ int			mfii_pd_scsi_cmd_cdb(struct mfii_softc *,
 void			mfii_scsi_cmd_tmo(void *);
 
 int			mfii_dev_handles_update(struct mfii_softc *sc);
-void			mfii_dev_handles_dtor(void *, void *);
+void			mfii_dev_handles_smr(void *pd_arg);
 
 void			mfii_abort_task(void *);
 void			mfii_abort(struct mfii_softc *, struct mfii_ccb *,
@@ -845,27 +845,33 @@ pci_unmap:
 	bus_space_unmap(sc->sc_iot, sc->sc_ioh, sc->sc_ios);
 }
 
-struct srp_gc mfii_dev_handles_gc =
-    SRP_GC_INITIALIZER(mfii_dev_handles_dtor, NULL);
-
 static inline uint16_t
 mfii_dev_handle(struct mfii_softc *sc, uint16_t target)
 {
-	struct srp_ref sr;
-	uint16_t *map, handle;
+	struct mfii_pd_dev_handles *handles;
+	uint16_t handle;
 
-	map = srp_enter(&sr, &sc->sc_pd->pd_dev_handles);
-	handle = map[target];
-	srp_leave(&sr);
+	smr_read_enter();
+	handles = SMR_PTR_GET(&sc->sc_pd->pd_dev_handles);
+	handle = handles->pd_handles[target];
+	smr_read_leave();
 
 	return (handle);
+}
+
+void
+mfii_dev_handles_smr(void *pd_arg)
+{
+	struct mfii_pd_dev_handles *handles = pd_arg;
+
+	free(handles, M_DEVBUF, sizeof(*handles));
 }
 
 int
 mfii_dev_handles_update(struct mfii_softc *sc)
 {
 	struct mfii_ld_map *lm;
-	uint16_t *dev_handles = NULL;
+	struct mfii_pd_dev_handles *handles, *old_handles;
 	int i;
 	int rv = 0;
 
@@ -879,29 +885,23 @@ mfii_dev_handles_update(struct mfii_softc *sc)
 		goto free_lm;
 	}
 
-	dev_handles = mallocarray(MFI_MAX_PD, sizeof(*dev_handles),
-	    M_DEVBUF, M_WAITOK);
-
+	handles = malloc(sizeof(*handles), M_DEVBUF, M_WAITOK);
+	smr_init(&handles->pd_smr);
 	for (i = 0; i < MFI_MAX_PD; i++)
-		dev_handles[i] = lm->mlm_dev_handle[i].mdh_cur_handle;
+		handles->pd_handles[i] = lm->mlm_dev_handle[i].mdh_cur_handle;
 
 	/* commit the updated info */
 	sc->sc_pd->pd_timeout = lm->mlm_pd_timeout;
-	srp_update_locked(&mfii_dev_handles_gc,
-	    &sc->sc_pd->pd_dev_handles, dev_handles);
+	old_handles = SMR_PTR_GET_LOCKED(&sc->sc_pd->pd_dev_handles);
+	SMR_PTR_SET_LOCKED(&sc->sc_pd->pd_dev_handles, handles);
+
+	if (old_handles != NULL)
+		smr_call(&old_handles->pd_smr, mfii_dev_handles_smr, old_handles);
 
 free_lm:
 	free(lm, M_TEMP, sizeof(*lm));
 
 	return (rv);
-}
-
-void
-mfii_dev_handles_dtor(void *null, void *v)
-{
-	uint16_t *dev_handles = v;
-
-	free(dev_handles, M_DEVBUF, sizeof(*dev_handles) * MFI_MAX_PD);
 }
 
 int
@@ -914,7 +914,6 @@ mfii_syspd(struct mfii_softc *sc)
 	if (sc->sc_pd == NULL)
 		return (1);
 
-	srp_init(&sc->sc_pd->pd_dev_handles);
 	if (mfii_dev_handles_update(sc) != 0)
 		goto free_pdsc;
 
@@ -3290,10 +3289,9 @@ mfii_ioctl_blink(struct mfii_softc *sc, struct bioc_blink *bb)
 	}
 
 
-	if (mfii_mgmt(sc, cmd, &mbox, NULL, 0, 0))
-		goto done;
+	if (mfii_mgmt(sc, cmd, &mbox, NULL, 0, 0) == 0)
+		rv = 0;
 
-	rv = 0;
 done:
 	free(pd, M_DEVBUF, sizeof *pd);
 	return (rv);

@@ -1,4 +1,4 @@
-.\" $OpenBSD: tmux.1,v 1.704 2020/01/12 21:07:07 nicm Exp $
+.\" $OpenBSD: tmux.1,v 1.723 2020/03/28 09:51:12 nicm Exp $
 .\"
 .\" Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
 .\"
@@ -14,7 +14,7 @@
 .\" IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING
 .\" OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: January 12 2020 $
+.Dd $Mdocdate: March 28 2020 $
 .Dt TMUX 1
 .Os
 .Sh NAME
@@ -23,7 +23,7 @@
 .Sh SYNOPSIS
 .Nm tmux
 .Bk -words
-.Op Fl 2Cluv
+.Op Fl 2CluvV
 .Op Fl c Ar shell-command
 .Op Fl f Ar file
 .Op Fl L Ar socket-name
@@ -210,6 +210,10 @@ signal may be sent to the
 server process to toggle logging between on (as if
 .Fl v
 was given) and off.
+.It Fl V
+Report the
+.Nm
+version.
 .It Ar command Op Ar flags
 This specifies one of a set of commands used to control
 .Nm ,
@@ -551,7 +555,7 @@ Braces may be enclosed inside braces, for example:
 .Bd -literal -offset indent
 bind x if-shell "true" {
     if-shell "true" {
-         display "true!"
+        display "true!"
     }
 }
 .Ed
@@ -1287,6 +1291,17 @@ shows the parsed commands and line numbers if possible.
 Start the
 .Nm
 server, if not already running, without creating any sessions.
+.Pp
+Note that as by default the
+.Nm
+server will exit with no sessions, this is only useful if a session is created in
+.Pa ~/.tmux.conf ,
+.Ic exit-empty
+is turned off, or another command is run as part of the same command sequence.
+For example:
+.Bd -literal -offset indent
+$ tmux start \\; show -g
+.Ed
 .It Xo Ic suspend-client
 .Op Fl t Ar target-client
 .Xc
@@ -1335,7 +1350,8 @@ is used,
 option will not be applied.
 .Pp
 .Fl T
-sets the client's key table; the next key from the client will be interpreted from
+sets the client's key table; the next key from the client will be interpreted
+from
 .Ar key-table .
 This may be used to configure multiple prefix keys, or to bind commands to
 sequences of keys.
@@ -1549,7 +1565,7 @@ The synopsis for the
 command is:
 .Bl -tag -width Ds
 .It Xo Ic copy-mode
-.Op Fl Meu
+.Op Fl eHMqu
 .Op Fl t Ar target-pane
 .Xc
 Enter copy mode.
@@ -1559,6 +1575,11 @@ option scrolls one page up.
 .Fl M
 begins a mouse drag (only valid if bound to a mouse key binding, see
 .Sx MOUSE SUPPORT ) .
+.Fl H
+hides the position indicator in the top right.
+.Fl q
+cancels copy mode and any other modes.
+.Pp
 .Fl e
 specifies that scrolling to the bottom of the history (to the visible screen)
 should exit copy mode.
@@ -2533,10 +2554,11 @@ This is similar to
 except the source and destination windows are swapped.
 It is an error if no window exists at
 .Ar src-window .
+If
+.Fl d
+is given, the new window does not become the current window.
 .Pp
-Like
-.Ic swap-pane ,
-if
+If
 .Fl s
 is omitted and a marked pane is present (see
 .Ic select-pane
@@ -2612,6 +2634,7 @@ Commands related to key bindings are as follows:
 .Bl -tag -width Ds
 .It Xo Ic bind-key
 .Op Fl nr
+.Op Fl N Ar note
 .Op Fl T Ar key-table
 .Ar key Ar command Op Ar arguments
 .Xc
@@ -2659,22 +2682,49 @@ The
 flag indicates this key may repeat, see the
 .Ic repeat-time
 option.
+.Fl N
+attaches a note to the key (shown with
+.Ic list-keys
+.Fl N ) .
 .Pp
 To view the default bindings and possible commands, see the
 .Ic list-keys
 command.
 .It Xo Ic list-keys
-.Op Fl T Ar key-table
+.Op Fl 1aN
+.Op Fl P Ar prefix-string Fl T Ar key-table
+.Op key
 .Xc
 .D1 (alias: Ic lsk )
-List all key bindings.
-Without
+List key bindings.
+There are two forms: the default lists keys as
+.Ic bind-key
+commands;
+.Fl N
+lists only keys with attached notes and shows only the key and note for each
+key.
+.Pp
+With the default form, all key tables are listed by default.
 .Fl T
-all key tables are printed.
-With
-.Fl T
-only
+lists only keys in
 .Ar key-table .
+.Pp
+With the
+.Fl N
+form, only keys in the
+.Em root
+and
+.Em prefix
+key tables are listed by default;
+.Fl T
+also lists only keys in
+.Ar key-table .
+.Fl P
+specifies a prefix to print before each key and
+.Fl 1
+lists only the first matching key.
+.Fl a
+lists the command for keys that do have a note rather than skipping them.
 .It Xo Ic send-keys
 .Op Fl FHlMRX
 .Op Fl N Ar repeat-count
@@ -4062,7 +4112,7 @@ specifies an
 .Xr fnmatch 3
 or regular expression comparison.
 The first argument is the pattern and the second the string to compare.
-An optional third argument specifies flags:
+An optional argument specifies flags:
 .Ql r
 means the pattern is a regular expression instead of the default
 .Xr fnmatch 3
@@ -4088,6 +4138,38 @@ flag means search for a regular expression and
 ignores case.
 For example:
 .Ql #{C/r:^Start}
+.Pp
+Numeric operators may be performed by prefixing two comma-separated alternatives with an
+.Ql e
+and an operator.
+An optional
+.Ql f
+flag may be given after the operator to use floating point numbers, otherwise integers are used.
+This may be followed by a number giving the number of decimal places to use for the result.
+The available operators are:
+addition
+.Ql + ,
+subtraction
+.Ql - ,
+multiplication
+.Ql * ,
+division
+.Ql / ,
+and modulus
+.Ql m
+or
+.Ql %
+(note that
+.Ql %
+must be escaped as
+.Ql %%
+in formats which are also expanded by
+.Xr strftime 3 ) .
+For example,
+.Ql #{e|*|f|4:5.5,3}
+multiplies 5.5 by 3 for a result with four decimal places and
+.Ql #{e|%%:7,3}
+returns the modulus of 7 and 3.
 .Pp
 A limit may be placed on the length of the resultant string by prefixing it
 by an
@@ -4300,11 +4382,15 @@ The following variables are available, where appropriate:
 .It Li "pane_top" Ta "" Ta "Top of pane"
 .It Li "pane_tty" Ta "" Ta "Pseudo terminal of pane"
 .It Li "pane_width" Ta "" Ta "Width of pane"
-.It Li "pid" Ta ""  Ta "Server PID"
+.It Li "pid" Ta "" Ta "Server PID"
+.It Li "popup_key" Ta "" Ta "Key pressed in popup"
+.It Li "popup_mouse_x" Ta "" Ta "Mouse X position in popup"
+.It Li "popup_mouse_y" Ta "" Ta "Mouse Y position in popup"
 .It Li "rectangle_toggle" Ta "" Ta "1 if rectangle selection is activated"
 .It Li "scroll_position" Ta "" Ta "Scroll position in copy mode"
 .It Li "scroll_region_lower" Ta "" Ta "Bottom of scroll region in pane"
 .It Li "scroll_region_upper" Ta "" Ta "Top of scroll region in pane"
+.It Li "selection_active" Ta "" Ta "1 if selection started and changes with the cursor in copy mode"
 .It Li "selection_end_x" Ta "" Ta "X position of the end of the selection"
 .It Li "selection_end_y" Ta "" Ta "Y position of the end of the selection"
 .It Li "selection_present" Ta "" Ta "1 if selection started in copy mode"
@@ -4331,6 +4417,7 @@ The following variables are available, where appropriate:
 .It Li "session_windows" Ta "" Ta "Number of windows in session"
 .It Li "socket_path" Ta "" Ta "Server socket path"
 .It Li "start_time" Ta "" Ta "Server start time"
+.It Li "version" Ta "" Ta "Server version"
 .It Li "window_active" Ta "" Ta "1 if window active"
 .It Li "window_active_clients" Ta "" Ta "Number of clients viewing this window"
 .It Li "window_active_clients_list" Ta "" Ta "List of clients viewing this window"
@@ -4692,7 +4779,7 @@ session option.
 Commands related to the status line are as follows:
 .Bl -tag -width Ds
 .It Xo Ic command-prompt
-.Op Fl 1Ni
+.Op Fl 1ikN
 .Op Fl I Ar inputs
 .Op Fl p Ar prompts
 .Op Fl t Ar target-client
@@ -4742,6 +4829,10 @@ but any quotation marks are escaped.
 .Fl 1
 makes the prompt only accept one key press, in this case the resulting input
 is a single character.
+.Fl k
+is like
+.Fl 1
+but the key press is translated to a key name.
 .Fl N
 makes the prompt only accept numeric key presses.
 .Fl i
@@ -4754,7 +4845,7 @@ on the value of the
 option:
 .Bl -column "FunctionXXXXXXXXXXXXXXXXXXXXXXXXX" "viXXXX" "emacsX" -offset indent
 .It Sy "Function" Ta Sy "vi" Ta Sy "emacs"
-.It Li "Cancel command prompt" Ta "Escape" Ta "Escape"
+.It Li "Cancel command prompt" Ta "q" Ta "Escape"
 .It Li "Delete from cursor to start of word" Ta "" Ta "C-w"
 .It Li "Delete entire command" Ta "d" Ta "C-u"
 .It Li "Delete from cursor to end" Ta "D" Ta "C-k"
@@ -4832,6 +4923,7 @@ give the position of the menu.
 Both may be a row or column number, or one of the following special values:
 .Bl -column "XXXXX" "XXXX" -offset indent
 .It Sy "Value" Ta Sy "Flag" Ta Sy "Meaning"
+.It Li "C" Ta "Both" Ta "The centre of the terminal"
 .It Li "R" Ta Fl x Ta "The right side of the terminal"
 .It Li "P" Ta "Both" Ta "The bottom left of the pane"
 .It Li "M" Ta "Both" Ta "The mouse position"
@@ -4883,6 +4975,97 @@ lists the format variables and their values.
 .Fl I
 forwards any input read from stdin to the empty pane given by
 .Ar target-pane .
+.It Xo Ic display-popup
+.Op Fl CEK
+.Op Fl c Ar target-client
+.Op Fl d Ar start-directory
+.Op Fl h Ar height
+.Op Fl R Ar shell-command
+.Op Fl t Ar target-pane
+.Op Fl w Ar width
+.Op Fl x Ar position
+.Op Fl y Ar position
+.Op Ar command Ar line Ar ...
+.Xc
+.D1 (alias: Ic popup )
+Display a popup on
+.Ar target-client .
+A popup is a rectangular box drawn over the top of any panes.
+Panes are not updated while a popup is present.
+The popup content may be given in two ways:
+.Bl -enum -offset Ds
+.It
+A set of lines as arguments.
+Each line is a format which is expanded using
+.Ar target-pane
+as the target.
+If a line contains newlines it is split into multiple lines.
+Lines may use styles, see the
+.Sx STYLES
+section.
+.It
+A shell command given by
+.Fl R
+which is run and any output shown in the pane.
+.El
+.Pp
+The first argument,
+.Ar command ,
+is a
+.Nm
+command which is run when a key is pressed.
+The key is available in the
+.Ql popup_key
+format.
+After
+.Ar command
+is run, the popup is closed.
+It may be empty to discard any key presses.
+If
+.Fl K
+is given together with
+.Fl R ,
+key presses are instead passed to the
+.Fl R
+shell command.
+.Fl E
+closes the popup automatically when
+.Ar shell-command
+exits.
+Two
+.Fl E
+closes the popup only if
+.Ar shell-command
+exited with success.
+With
+.Fl K ,
+.Ql Escape
+and
+.Ql C-c
+close the popup unless
+.Fl E
+is also given.
+.Pp
+.Fl x
+and
+.Fl y
+give the position of the popup, they have the same meaning as for the
+.Ic display-menu
+command.
+.Fl w
+and
+.Fl h
+give the width and height - both may be a percentage (followed by
+.Ql % ) .
+If omitted, without
+.Fl R
+they are calculated from the given lines and with
+.Fl R
+they use half the terminal size.
+.Pp
+The
+.Fl C
+flag closes any popup on the client.
 .El
 .Sh BUFFERS
 .Nm
@@ -4905,7 +5088,7 @@ When the
 option is reached, the oldest automatically named buffer is deleted.
 Explicitly named buffers are not subject to
 .Ic buffer-limit
-and may be deleted with
+and may be deleted with the
 .Ic delete-buffer
 command.
 .Pp
@@ -5116,8 +5299,9 @@ Lock each client individually by running the command specified by the
 option.
 .It Xo Ic run-shell
 .Op Fl b
+.Op Fl d Ar delay
 .Op Fl t Ar target-pane
-.Ar shell-command
+.Op Ar shell-command
 .Xc
 .D1 (alias: Ic run )
 Execute
@@ -5130,8 +5314,12 @@ section.
 With
 .Fl b ,
 the command is run in the background.
-After it finishes, any output to stdout is displayed in copy mode (in the pane
-specified by
+.Fl d
+waits for
+.Ar delay
+seconds before starting the command.
+After the command finishes, any output to stdout is displayed in view mode (in
+the pane specified by
 .Fl t
 or the current pane if omitted).
 If the command doesn't return success, the exit status is also displayed.

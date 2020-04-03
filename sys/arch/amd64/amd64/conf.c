@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.c,v 1.65 2019/12/17 13:08:54 reyk Exp $	*/
+/*	$OpenBSD: conf.c,v 1.68 2020/01/24 05:14:51 jsg Exp $	*/
 
 /*
  * Copyright (c) 1994, 1995 Charles M. Hannum.  All rights reserved.
@@ -41,7 +41,6 @@
 
 #include "wd.h"
 bdev_decl(wd);
-#include "fdc.h"
 #include "fd.h"
 bdev_decl(fd);
 #include "sd.h"
@@ -176,6 +175,7 @@ cdev_decl(viocon);
 cdev_decl(pci);
 #endif
 
+#include "dt.h"
 #include "pf.h"
 #include "hotplug.h"
 #include "gpio.h"
@@ -223,7 +223,7 @@ struct cdevsw	cdevsw[] =
 	cdev_spkr_init(NSPKR,spkr),	/* 27: PC speaker */
 	cdev_notdef(),			/* 28 was LKM */
 	cdev_notdef(),			/* 29 */
-	cdev_notdef(),			/* 30 */
+	cdev_dt_init(NDT,dt),		/* 30: dynamic tracer */
 	cdev_notdef(),			/* 31 */
 	cdev_notdef(),			/* 32 */
 	cdev_notdef(),			/* 33 */
@@ -299,6 +299,7 @@ struct cdevsw	cdevsw[] =
 	cdev_ipmi_init(NIPMI,ipmi),	/* 96: ipmi */
 	cdev_switch_init(NSWITCH,switch), /* 97: switch(4) control interface */
 	cdev_fido_init(NFIDO,fido),	/* 98: FIDO/U2F security keys */
+	cdev_pppx_init(NPPPX,pppac),	/* 99: PPP Access Concentrator */
 };
 int	nchrdev = nitems(cdevsw);
 

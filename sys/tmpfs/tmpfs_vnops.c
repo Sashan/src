@@ -1,4 +1,4 @@
-/*	$OpenBSD: tmpfs_vnops.c,v 1.37 2019/12/31 13:48:32 visa Exp $	*/
+/*	$OpenBSD: tmpfs_vnops.c,v 1.39 2020/02/20 16:56:52 visa Exp $	*/
 /*	$NetBSD: tmpfs_vnops.c,v 1.100 2012/11/05 17:27:39 dholland Exp $	*/
 
 /*
@@ -57,7 +57,7 @@ int tmpfs_kqfilter(void *v);
 /*
  * vnode operations vector used for files stored in a tmpfs file system.
  */
-struct vops tmpfs_vops = {
+const struct vops tmpfs_vops = {
 	.vop_lookup	= tmpfs_lookup,
 	.vop_create	= tmpfs_create,
 	.vop_mknod	= tmpfs_mknod,
@@ -2588,21 +2588,21 @@ int filt_tmpfswrite(struct knote *kn, long hint);
 int filt_tmpfsvnode(struct knote *kn, long hint);
 
 const struct filterops tmpfsread_filtops = {
-	.f_isfd		= 1,
+	.f_flags	= FILTEROP_ISFD,
 	.f_attach	= NULL,
 	.f_detach	= filt_tmpfsdetach,
 	.f_event	= filt_tmpfsread,
 };
 
 const struct filterops tmpfswrite_filtops = {
-	.f_isfd		= 1,
+	.f_flags	= FILTEROP_ISFD,
 	.f_attach	= NULL,
 	.f_detach	= filt_tmpfsdetach,
 	.f_event	= filt_tmpfswrite,
 };
 
 const struct filterops tmpfsvnode_filtops = {
-	.f_isfd		= 1,
+	.f_flags	= FILTEROP_ISFD,
 	.f_attach	= NULL,
 	.f_detach	= filt_tmpfsdetach,
 	.f_event	= filt_tmpfsvnode,

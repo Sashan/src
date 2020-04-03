@@ -1,4 +1,4 @@
-/* $OpenBSD: monitor.c,v 1.206 2019/12/15 18:57:30 djm Exp $ */
+/* $OpenBSD: monitor.c,v 1.210 2020/03/13 03:17:07 djm Exp $ */
 /*
  * Copyright 2002 Niels Provos <provos@citi.umich.edu>
  * Copyright 2002 Markus Friedl <markus@openbsd.org>
@@ -330,9 +330,9 @@ monitor_child_postauth(struct ssh *ssh, struct monitor *pmonitor)
 	pmonitor->m_recvfd = -1;
 
 	monitor_set_child_handler(pmonitor->m_pid);
-	signal(SIGHUP, &monitor_child_handler);
-	signal(SIGTERM, &monitor_child_handler);
-	signal(SIGINT, &monitor_child_handler);
+	ssh_signal(SIGHUP, &monitor_child_handler);
+	ssh_signal(SIGTERM, &monitor_child_handler);
+	ssh_signal(SIGINT, &monitor_child_handler);
 
 	mon_dispatch = mon_dispatch_postauth20;
 
@@ -789,8 +789,7 @@ mm_answer_authpassword(struct ssh *ssh, int sock, struct sshbuf *m)
 	/* Only authenticate if the context is valid */
 	authenticated = options.password_authentication &&
 	    auth_password(ssh, passwd);
-	explicit_bzero(passwd, plen);
-	free(passwd);
+	freezero(passwd, plen);
 
 	sshbuf_reset(m);
 	if ((r = sshbuf_put_u32(m, authenticated)) != 0)
@@ -1201,8 +1200,9 @@ mm_answer_keyverify(struct ssh *ssh, int sock, struct sshbuf *m)
 		if (req_presence &&
 		    (sig_details->sk_flags & SSH_SK_USER_PRESENCE_REQD) == 0) {
 			error("public key %s %s signature for %s%s from %.128s "
-			    "port %d rejected: user presence (key touch) "
-			    "requirement not met ", sshkey_type(key), fp,
+			    "port %d rejected: user presence "
+			    "(authenticator touch) requirement not met ",
+			    sshkey_type(key), fp,
 			    authctxt->valid ? "" : "invalid user ",
 			    authctxt->user, ssh_remote_ipaddr(ssh),
 			    ssh_remote_port(ssh));
@@ -1424,7 +1424,7 @@ monitor_apply_keystate(struct ssh *ssh, struct monitor *pmonitor)
 	}
 }
 
-/* This function requries careful sanity checking */
+/* This function requires careful sanity checking */
 
 void
 mm_get_keystate(struct ssh *ssh, struct monitor *pmonitor)

@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.402 2019/09/27 10:26:32 claudio Exp $ */
+/*	$OpenBSD: parse.y,v 1.405 2020/03/16 14:47:30 claudio Exp $ */
 
 /*
  * Copyright (c) 2002, 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -1390,6 +1390,14 @@ peeropts	: REMOTEAS as4number	{
 			}
 			curpeer->conf.max_prefix = $2;
 			curpeer->conf.max_prefix_restart = $3;
+		}
+		| MAXPREFIX NUMBER OUT restart {
+			if ($2 < 0 || $2 > UINT_MAX) {
+				yyerror("bad maximum number of prefixes");
+				YYERROR;
+			}
+			curpeer->conf.max_out_prefix = $2;
+			curpeer->conf.max_out_prefix_restart = $4;
 		}
 		| TCP MD5SIG PASSWORD string {
 			if (curpeer->conf.auth.method) {
@@ -4068,8 +4076,7 @@ expand_rule(struct filter_rule *rule, struct filter_rib_l *rib,
 					memcpy(r, rule, sizeof(struct filter_rule));
 					memcpy(&r->match, match,
 					    sizeof(struct filter_match));
-					TAILQ_INIT(&r->set);
-					copy_filterset(set, &r->set);
+					filterset_copy(set, &r->set);
 
 					if (rb != NULL)
 						strlcpy(r->rib, rb->name,
@@ -4473,7 +4480,7 @@ static void
 add_roa_set(struct prefixset_item *npsi, u_int32_t as, u_int8_t max)
 {
 	struct prefixset_item	*psi;
-	struct roa_set rs;
+	struct roa_set rs, *rsp;
 
 	/* no prefixlen option in this tree */
 	npsi->p.op = OP_NONE;
@@ -4485,8 +4492,17 @@ add_roa_set(struct prefixset_item *npsi, u_int32_t as, u_int8_t max)
 	if (psi->set == NULL)
 		if ((psi->set = set_new(1, sizeof(rs))) == NULL)
 			fatal("set_new");
-	rs.as = as;
-	rs.maxlen = max;
-	if (set_add(psi->set, &rs, 1) != 0)
-		fatal("as_set_new");
+
+	/* merge sets with same key, longer maxlen wins */
+	if ((rsp = set_match(psi->set, as)) != NULL) {
+		if (rsp->maxlen < max)
+			rsp->maxlen = max;
+	} else  {
+		rs.as = as;
+		rs.maxlen = max;
+		if (set_add(psi->set, &rs, 1) != 0)
+			fatal("as_set_new");
+		/* prep data so that set_match works */
+		set_prep(psi->set);
+	}
 }

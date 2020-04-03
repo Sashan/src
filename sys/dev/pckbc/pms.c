@@ -1,4 +1,4 @@
-/* $OpenBSD: pms.c,v 1.90 2019/09/20 21:21:47 bru Exp $ */
+/* $OpenBSD: pms.c,v 1.92 2020/03/18 22:38:10 bru Exp $ */
 /* $NetBSD: psm.c,v 1.11 2000/06/05 22:20:57 sommerfeld Exp $ */
 
 /*-
@@ -922,6 +922,7 @@ pms_sec_ioctl(void *v, u_long cmd, caddr_t data, int flag, struct proc *p)
 	return (0);
 }
 
+#ifdef DIAGNOSTIC
 static inline void
 pms_print_packet(struct pms_softc *sc)
 {
@@ -932,6 +933,7 @@ pms_print_packet(struct pms_softc *sc)
 	for (i = 0; i < size; i++)
 		printf(i == state ? " %02x |" : " %02x", sc->packet[i]);
 }
+#endif
 
 void
 pmsinput(void *vsc, int data)
@@ -1184,25 +1186,32 @@ pms_enable_synaptics(struct pms_softc *sc)
 		    nitems(synaptics_params)))
 			goto err;
 
-		printf("%s: Synaptics %s, firmware %d.%d, 0x%x 0x%x\n",
+		printf("%s: Synaptics %s, firmware %d.%d, "
+		    "0x%x 0x%x 0x%x 0x%x 0x%x\n",
 		    DEVNAME(sc),
 		    (syn->ext_capabilities & SYNAPTICS_EXT_CAP_CLICKPAD ?
 			"clickpad" : "touchpad"),
 		    SYNAPTICS_ID_MAJOR(syn->identify),
 		    SYNAPTICS_ID_MINOR(syn->identify),
-		    syn->model, syn->ext_model);
+		    syn->model, syn->ext_model, syn->modes,
+		    syn->capabilities, syn->ext_capabilities);
 	}
 
+	/*
+	 * Enable absolute mode, plain W-mode and "advanced gesture mode"
+	 * (AGM), if possible.  AGM, which seems to be a prerequisite for the
+	 * extended W-mode, might not always be necessary here, but at least
+	 * some older Synaptics models do not report finger counts without it.
+	 */
 	mode = SYNAPTICS_ABSOLUTE_MODE | SYNAPTICS_HIGH_RATE;
-	if (SYNAPTICS_ID_MAJOR(syn->identify) >= 4)
-		mode |= SYNAPTICS_DISABLE_GESTURE;
 	if (syn->capabilities & SYNAPTICS_CAP_EXTENDED)
 		mode |= SYNAPTICS_W_MODE;
+	else if (SYNAPTICS_ID_MAJOR(syn->identify) >= 4)
+		mode |= SYNAPTICS_DISABLE_GESTURE;
 	if (synaptics_set_mode(sc, mode))
 		goto err;
 
-	/* enable advanced gesture mode if supported */
-	if ((syn->ext_capabilities & SYNAPTICS_EXT_CAP_ADV_GESTURE) &&
+	if (SYNAPTICS_SUPPORTS_AGM(syn->ext_capabilities) &&
 	    (pms_spec_cmd(sc, SYNAPTICS_QUE_MODEL) ||
 	     pms_set_rate(sc, SYNAPTICS_CMD_SET_ADV_GESTURE_MODE)))
 		goto err;
@@ -1292,17 +1301,17 @@ pms_proc_synaptics(struct pms_softc *sc)
 	}
 
 
-	if ((syn->capabilities & SYNAPTICS_CAP_PASSTHROUGH) && w == 3) {
-		synaptics_sec_proc(sc);
+	if (w == 3) {
+		if (syn->capabilities & SYNAPTICS_CAP_PASSTHROUGH)
+			synaptics_sec_proc(sc);
 		return;
 	}
 
 	if ((sc->sc_dev_enable & PMS_DEV_PRIMARY) == 0)
 		return;
 
-	/* XXX ignore advanced gesture packet, not yet supported */
-	if ((syn->ext_capabilities & SYNAPTICS_EXT_CAP_ADV_GESTURE) && w == 2)
-		return;
+	if (w == 2)
+		return;	/* EW-mode packets are not expected here. */
 
 	x = ((sc->packet[3] & 0x10) << 8) | ((sc->packet[1] & 0x0f) << 8) |
 	    sc->packet[4];

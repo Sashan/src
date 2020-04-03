@@ -1,4 +1,4 @@
-/*	$OpenBSD: ehci.c,v 1.205 2019/10/08 11:07:16 mpi Exp $ */
+/*	$OpenBSD: ehci.c,v 1.208 2020/03/21 12:08:31 patrick Exp $ */
 /*	$NetBSD: ehci.c,v 1.66 2004/06/30 03:11:56 mycroft Exp $	*/
 
 /*
@@ -356,7 +356,7 @@ ehci_init(struct ehci_softc *sc)
 		return (USBD_IOERROR);
 	}
 	err = usb_allocmem(&sc->sc_bus, sc->sc_flsize * sizeof(ehci_link_t),
-	    EHCI_FLALIGN_ALIGN, &sc->sc_fldma);
+	    EHCI_FLALIGN_ALIGN, USB_DMA_COHERENT, &sc->sc_fldma);
 	if (err)
 		return (err);
 	DPRINTF(("%s: flsize=%d\n", sc->sc_bus.bdev.dv_xname,sc->sc_flsize));
@@ -1354,7 +1354,7 @@ ehci_open(struct usbd_pipe *pipe)
 	struct ehci_softc *sc = (struct ehci_softc *)dev->bus;
 	usb_endpoint_descriptor_t *ed = pipe->endpoint->edesc;
 	u_int8_t addr = dev->address;
-	u_int8_t xfertype = ed->bmAttributes & UE_XFERTYPE;
+	u_int8_t xfertype = UE_GET_XFERTYPE(ed->bmAttributes);
 	struct ehci_pipe *epipe = (struct ehci_pipe *)pipe;
 	struct ehci_soft_qh *sqh;
 	usbd_status err;
@@ -1470,7 +1470,7 @@ ehci_open(struct usbd_pipe *pipe)
 	switch (xfertype) {
 	case UE_CONTROL:
 		err = usb_allocmem(&sc->sc_bus, sizeof(usb_device_request_t),
-		    0, &epipe->u.ctl.reqdma);
+		    0, USB_DMA_COHERENT, &epipe->u.ctl.reqdma);
 		if (err) {
 			ehci_free_sqh(sc, sqh);
 			return (err);
@@ -2258,7 +2258,7 @@ ehci_alloc_sqh(struct ehci_softc *sc)
 	if (sc->sc_freeqhs == NULL) {
 		DPRINTFN(2, ("ehci_alloc_sqh: allocating chunk\n"));
 		err = usb_allocmem(&sc->sc_bus, EHCI_SQH_SIZE * EHCI_SQH_CHUNK,
-		    EHCI_PAGE_SIZE, &dma);
+		    EHCI_PAGE_SIZE, USB_DMA_COHERENT, &dma);
 		if (err)
 			goto out;
 		for (i = 0; i < EHCI_SQH_CHUNK; i++) {
@@ -2306,7 +2306,7 @@ ehci_alloc_sqtd(struct ehci_softc *sc)
 	if (sc->sc_freeqtds == NULL) {
 		DPRINTFN(2, ("ehci_alloc_sqtd: allocating chunk\n"));
 		err = usb_allocmem(&sc->sc_bus, EHCI_SQTD_SIZE*EHCI_SQTD_CHUNK,
-		    EHCI_PAGE_SIZE, &dma);
+		    EHCI_PAGE_SIZE, USB_DMA_COHERENT, &dma);
 		if (err)
 			goto out;
 		for(i = 0; i < EHCI_SQTD_CHUNK; i++) {
@@ -2356,7 +2356,7 @@ ehci_alloc_sqtd_chain(struct ehci_softc *sc, u_int alen, struct usbd_xfer *xfer,
 	DPRINTFN(alen<4*4096,("ehci_alloc_sqtd_chain: start len=%d\n", alen));
 
 	len = alen;
-	iscontrol = (xfer->pipe->endpoint->edesc->bmAttributes & UE_XFERTYPE) ==
+	iscontrol = UE_GET_XFERTYPE(xfer->pipe->endpoint->edesc->bmAttributes) ==
 	    UE_CONTROL;
 
 	dataphys = DMAADDR(dma, 0);
@@ -2534,7 +2534,7 @@ ehci_alloc_itd(struct ehci_softc *sc)
 
 	if (freeitd == NULL) {
 		err = usb_allocmem(&sc->sc_bus, EHCI_ITD_SIZE * EHCI_ITD_CHUNK,
-		    EHCI_PAGE_SIZE, &dma);
+		    EHCI_PAGE_SIZE, USB_DMA_COHERENT, &dma);
 		if (err) {
 			splx(s);
 			return (NULL);

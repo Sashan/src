@@ -1,4 +1,4 @@
-/* $OpenBSD: format.c,v 1.223 2020/01/12 21:07:07 nicm Exp $ */
+/* $OpenBSD: format.c,v 1.230 2020/03/28 09:39:27 nicm Exp $ */
 
 /*
  * Copyright (c) 2011 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -23,6 +23,7 @@
 #include <errno.h>
 #include <fnmatch.h>
 #include <libgen.h>
+#include <math.h>
 #include <regex.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -49,7 +50,6 @@ static void	 format_add_tv(struct format_tree *, const char *,
 		     struct timeval *);
 static int	 format_replace(struct format_tree *, const char *, size_t,
 		     char **, size_t *, size_t *);
-
 static void	 format_defaults_session(struct format_tree *,
 		     struct session *);
 static void	 format_defaults_client(struct format_tree *, struct client *);
@@ -354,7 +354,7 @@ format_job_get(struct format_tree *ft, const char *cmd)
 	if (force || (fj->job == NULL && fj->last != t)) {
 		fj->job = job_run(expanded, NULL,
 		    server_client_get_cwd(ft->client, NULL), format_job_update,
-		    format_job_complete, NULL, fj, JOB_NOWAIT);
+		    format_job_complete, NULL, fj, JOB_NOWAIT, -1, -1);
 		if (fj->job == NULL) {
 			free(fj->out);
 			xasprintf(&fj->out, "<'%s' didn't start>", fj->cmd);
@@ -880,6 +880,44 @@ format_cb_pane_in_mode(struct format_tree *ft, struct format_entry *fe)
 	xasprintf(&fe->value, "%u", n);
 }
 
+/* Callback for pane_at_top. */
+static void
+format_cb_pane_at_top(struct format_tree *ft, struct format_entry *fe)
+{
+	struct window_pane	*wp = ft->wp;
+	struct window		*w = wp->window;
+	int			 status, flag;
+
+	if (wp == NULL)
+		return;
+
+	status = options_get_number(w->options, "pane-border-status");
+	if (status == PANE_STATUS_TOP)
+		flag = (wp->yoff == 1);
+	else
+		flag = (wp->yoff == 0);
+	xasprintf(&fe->value, "%d", flag);
+}
+
+/* Callback for pane_at_bottom. */
+static void
+format_cb_pane_at_bottom(struct format_tree *ft, struct format_entry *fe)
+{
+	struct window_pane	*wp = ft->wp;
+	struct window		*w = wp->window;
+	int			 status, flag;
+
+	if (wp == NULL)
+		return;
+
+	status = options_get_number(w->options, "pane-border-status");
+	if (status == PANE_STATUS_BOTTOM)
+		flag = (wp->yoff + wp->sy == w->sy - 1);
+	else
+		flag = (wp->yoff + wp->sy == w->sy);
+	xasprintf(&fe->value, "%d", flag);
+}
+
 /* Callback for cursor_character. */
 static void
 format_cb_cursor_character(struct format_tree *ft, struct format_entry *fe)
@@ -910,7 +948,6 @@ format_grid_word(struct grid *gd, u_int x, u_int y)
 
 	ws = options_get_string(global_s_options, "word-separators");
 
-	y = gd->hsize + y;
 	for (;;) {
 		grid_get_cell(gd, x, y, &gc);
 		if (gc.flags & GRID_FLAG_PADDING)
@@ -971,6 +1008,7 @@ static void
 format_cb_mouse_word(struct format_tree *ft, struct format_entry *fe)
 {
 	struct window_pane	*wp;
+	struct grid		*gd;
 	u_int			 x, y;
 	char			*s;
 
@@ -979,12 +1017,19 @@ format_cb_mouse_word(struct format_tree *ft, struct format_entry *fe)
 	wp = cmd_mouse_pane(&ft->m, NULL, NULL);
 	if (wp == NULL)
 		return;
-	if (!TAILQ_EMPTY (&wp->modes))
-		return;
 	if (cmd_mouse_at(wp, &ft->m, &x, &y, 0) != 0)
 		return;
 
-	s = format_grid_word(wp->base.grid, x, y);
+	if (!TAILQ_EMPTY(&wp->modes)) {
+		if (TAILQ_FIRST(&wp->modes)->mode == &window_copy_mode ||
+		    TAILQ_FIRST(&wp->modes)->mode == &window_view_mode)
+			s = window_copy_get_word(wp, x, y);
+		else
+			s = NULL;
+	} else {
+		gd = wp->base.grid;
+		s = format_grid_word(gd, x, gd->hsize + y);
+	}
 	if (s != NULL)
 		fe->value = s;
 }
@@ -999,7 +1044,6 @@ format_grid_line(struct grid *gd, u_int y)
 	size_t			 size = 0;
 	char			*s = NULL;
 
-	y = gd->hsize + y;
 	for (x = 0; x < grid_line_length(gd, y); x++) {
 		grid_get_cell(gd, x, y, &gc);
 		if (gc.flags & GRID_FLAG_PADDING)
@@ -1021,6 +1065,7 @@ static void
 format_cb_mouse_line(struct format_tree *ft, struct format_entry *fe)
 {
 	struct window_pane	*wp;
+	struct grid		*gd;
 	u_int			 x, y;
 	char			*s;
 
@@ -1029,12 +1074,19 @@ format_cb_mouse_line(struct format_tree *ft, struct format_entry *fe)
 	wp = cmd_mouse_pane(&ft->m, NULL, NULL);
 	if (wp == NULL)
 		return;
-	if (!TAILQ_EMPTY (&wp->modes))
-		return;
 	if (cmd_mouse_at(wp, &ft->m, &x, &y, 0) != 0)
 		return;
 
-	s = format_grid_line(wp->base.grid, y);
+	if (!TAILQ_EMPTY(&wp->modes)) {
+		if (TAILQ_FIRST(&wp->modes)->mode == &window_copy_mode ||
+		    TAILQ_FIRST(&wp->modes)->mode == &window_view_mode)
+			s = window_copy_get_line(wp, y);
+		else
+			s = NULL;
+	} else {
+		gd = wp->base.grid;
+		s = format_grid_line(gd, gd->hsize + y);
+	}
 	if (s != NULL)
 		fe->value = s;
 }
@@ -1106,6 +1158,7 @@ format_create(struct client *c, struct cmdq_item *item, int tag, int flags)
 	ft->flags = flags;
 	ft->time = time(NULL);
 
+	format_add(ft, "version", "%s", getversion());
 	format_add_cb(ft, "host", format_cb_host);
 	format_add_cb(ft, "host_short", format_cb_host_short);
 	format_add_cb(ft, "pid", format_cb_pid);
@@ -1489,7 +1542,7 @@ format_build_modifiers(struct format_tree *ft, const char **s, u_int *count)
 		}
 
 		/* Now try single character with arguments. */
-		if (strchr("mCs=p", cp[0]) == NULL)
+		if (strchr("mCs=pe", cp[0]) == NULL)
 			break;
 		c = cp[0];
 
@@ -1745,6 +1798,108 @@ format_loop_panes(struct format_tree *ft, const char *fmt)
 	return (value);
 }
 
+static char *
+format_replace_expression(struct format_modifier *mexp, struct format_tree *ft,
+    const char *copy)
+{
+	int		 argc = mexp->argc;
+	const char	*errstr;
+	char		*endch, *value, *left = NULL, *right = NULL;
+	int		 use_fp = 0;
+	u_int		 prec = 0;
+	double		 mleft, mright, result;
+	enum { ADD, SUBTRACT, MULTIPLY, DIVIDE, MODULUS } operator;
+
+	if (strcmp(mexp->argv[0], "+") == 0)
+		operator = ADD;
+	else if (strcmp(mexp->argv[0], "-") == 0)
+		operator = SUBTRACT;
+	else if (strcmp(mexp->argv[0], "*") == 0)
+		operator = MULTIPLY;
+	else if (strcmp(mexp->argv[0], "/") == 0)
+		operator = DIVIDE;
+	else if (strcmp(mexp->argv[0], "%") == 0 ||
+	    strcmp(mexp->argv[0], "m") == 0)
+		operator = MODULUS;
+	else {
+		format_log(ft, "expression has no valid operator: '%s'",
+		    mexp->argv[0]);
+		goto fail;
+	}
+
+	/* The second argument may be flags. */
+	if (argc >= 2 && strchr(mexp->argv[1], 'f') != NULL) {
+		use_fp = 1;
+		prec = 2;
+	}
+
+	/* The third argument may be precision. */
+	if (argc >= 3) {
+		prec = strtonum(mexp->argv[2], INT_MIN, INT_MAX, &errstr);
+		if (errstr != NULL) {
+			format_log (ft, "expression precision %s: %s", errstr,
+			    mexp->argv[2]);
+			goto fail;
+		}
+	}
+
+	if (format_choose(ft, copy, &left, &right, 1) != 0) {
+		format_log(ft, "expression syntax error");
+		goto fail;
+	}
+
+	mleft = strtod(left, &endch);
+	if (*endch != '\0') {
+		format_log(ft, "expression left side is invalid: %s", left);
+		goto fail;
+	}
+
+	mright = strtod(right, &endch);
+	if (*endch != '\0') {
+		format_log(ft, "expression right side is invalid: %s", right);
+		goto fail;
+	}
+
+	if (!use_fp) {
+		mleft = (long long)mleft;
+		mright = (long long)mright;
+	}
+	format_log(ft, "expression left side is: %.*f", prec, mleft);
+	format_log(ft, "expression right side is:  %.*f", prec, mright);
+
+	switch (operator) {
+	case ADD:
+		result = mleft + mright;
+		break;
+	case SUBTRACT:
+		result = mleft - mright;
+		break;
+	case MULTIPLY:
+		result = mleft * mright;
+		break;
+	case DIVIDE:
+		result = mleft / mright;
+		break;
+	case MODULUS:
+		result = fmod(mleft, mright);
+		break;
+	}
+	if (use_fp)
+		xasprintf(&value, "%.*f", prec, result);
+	else
+		xasprintf(&value, "%.*f", prec, (double)(long long)result);
+	format_log(ft, "expression result is %s", value);
+
+	free(right);
+	free(left);
+	return value;
+
+fail:
+	free(right);
+	free(left);
+	return (NULL);
+}
+
 /* Replace a key. */
 static int
 format_replace(struct format_tree *ft, const char *key, size_t keylen,
@@ -1757,7 +1912,7 @@ format_replace(struct format_tree *ft, const char *key, size_t keylen,
 	size_t			  valuelen;
 	int			  modifiers = 0, limit = 0, width = 0, j;
 	struct format_modifier   *list, *fm, *cmp = NULL, *search = NULL;
-	struct format_modifier	**sub = NULL;
+	struct format_modifier	**sub = NULL, *mexp = NULL;
 	u_int			  i, count, nsub = 0;
 
 	/* Make a copy of the key. */
@@ -1808,6 +1963,11 @@ format_replace(struct format_tree *ft, const char *key, size_t keylen,
 				    &errptr);
 				if (errptr != NULL)
 					width = 0;
+				break;
+			case 'e':
+				if (fm->argc < 1 || fm->argc > 3)
+					break;
+			    mexp = fm;
 				break;
 			case 'l':
 				modifiers |= FORMAT_LITERAL;
@@ -1985,6 +2145,10 @@ format_replace(struct format_tree *ft, const char *key, size_t keylen,
 
 		free(condition);
 		free(found);
+	} else if (mexp != NULL) {
+		value = format_replace_expression(mexp, ft, copy);
+		if (value == NULL)
+			value = xstrdup("");
 	} else {
 		/* Neither: look up directly. */
 		value = format_find(ft, copy, modifiers);
@@ -2257,6 +2421,8 @@ void
 format_defaults(struct format_tree *ft, struct client *c, struct session *s,
     struct winlink *wl, struct window_pane *wp)
 {
+	struct paste_buffer	*pb;
+
 	if (c != NULL && c->name != NULL)
 		log_debug("%s: c=%s", __func__, c->name);
 	else
@@ -2296,6 +2462,10 @@ format_defaults(struct format_tree *ft, struct client *c, struct session *s,
 		format_defaults_winlink(ft, wl);
 	if (wp != NULL)
 		format_defaults_pane(ft, wp);
+
+	pb = paste_get_top (NULL);
+	if (pb != NULL)
+		format_defaults_paste_buffer(ft, pb);
 }
 
 /* Set default format keys for a session. */
@@ -2530,9 +2700,9 @@ format_defaults_pane(struct format_tree *ft, struct window_pane *wp)
 	format_add(ft, "pane_right", "%u", wp->xoff + wp->sx - 1);
 	format_add(ft, "pane_bottom", "%u", wp->yoff + wp->sy - 1);
 	format_add(ft, "pane_at_left", "%d", wp->xoff == 0);
-	format_add(ft, "pane_at_top", "%d", wp->yoff == 0);
+	format_add_cb(ft, "pane_at_top", format_cb_pane_at_top);
 	format_add(ft, "pane_at_right", "%d", wp->xoff + wp->sx == w->sx);
-	format_add(ft, "pane_at_bottom", "%d", wp->yoff + wp->sy == w->sy);
+	format_add_cb(ft, "pane_at_bottom", format_cb_pane_at_bottom);
 
 	wme = TAILQ_FIRST(&wp->modes);
 	if (wme != NULL) {

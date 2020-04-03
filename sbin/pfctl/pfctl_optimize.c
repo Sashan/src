@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfctl_optimize.c,v 1.43 2019/12/12 21:00:51 kn Exp $ */
+/*	$OpenBSD: pfctl_optimize.c,v 1.46 2020/01/28 15:40:35 bket Exp $ */
 
 /*
  * Copyright (c) 2004 Mike Frantzen <frantzen@openbsd.org>
@@ -687,11 +687,7 @@ reorder_rules(struct pfctl *pf, struct superblock *block, int depth)
 	 * it based on a more optimal skipstep order.
 	 */
 	TAILQ_INIT(&head);
-	while ((por = TAILQ_FIRST(&block->sb_rules))) {
-		TAILQ_REMOVE(&block->sb_rules, por, por_entry);
-		TAILQ_INSERT_TAIL(&head, por, por_entry);
-	}
-
+	TAILQ_CONCAT(&head, &block->sb_rules, por_entry);
 
 	while (!TAILQ_EMPTY(&head)) {
 		largest = 1;
@@ -712,11 +708,7 @@ reorder_rules(struct pfctl *pf, struct superblock *block, int depth)
 			 * Nothing useful left.  Leave remaining rules in order.
 			 */
 			DEBUG("(%d) no more commonality for skip steps", depth);
-			while ((por = TAILQ_FIRST(&head))) {
-				TAILQ_REMOVE(&head, por, por_entry);
-				TAILQ_INSERT_TAIL(&block->sb_rules, por,
-				    por_entry);
-			}
+			TAILQ_CONCAT(&block->sb_rules, &head, por_entry);
 		} else {
 			/*
 			 * There is commonality.  Extract those common rules
@@ -830,10 +822,7 @@ block_feedback(struct pfctl *pf, struct superblock *block)
 	 */
 
 	TAILQ_INIT(&queue);
-	while ((por1 = TAILQ_FIRST(&block->sb_rules)) != NULL) {
-		TAILQ_REMOVE(&block->sb_rules, por1, por_entry);
-		TAILQ_INSERT_TAIL(&queue, por1, por_entry);
-	}
+	TAILQ_CONCAT(&queue, &block->sb_rules, por_entry);
 
 	while ((por1 = TAILQ_FIRST(&queue)) != NULL) {
 		TAILQ_REMOVE(&queue, por1, por_entry);
@@ -873,7 +862,7 @@ load_feedback_profile(struct pfctl *pf, struct superblocks *superblocks)
 	memset(&pr, 0, sizeof(pr));
 	pr.rule.action = PF_PASS;
 	if (ioctl(pf->dev, DIOCGETRULES, &pr) == -1) {
-		warn("DIOCGETRULES");
+		warnx("%s", pf_strerror(errno));
 		return (1);
 	}
 	mnr = pr.nr;
@@ -887,7 +876,7 @@ load_feedback_profile(struct pfctl *pf, struct superblocks *superblocks)
 		}
 		pr.nr = nr;
 		if (ioctl(pf->dev, DIOCGETRULE, &pr) == -1) {
-			warn("DIOCGETRULES");
+			warnx("%s", pf_strerror(errno));
 			free(por);
 			return (1);
 		}

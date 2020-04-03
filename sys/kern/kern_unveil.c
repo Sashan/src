@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_unveil.c,v 1.35 2019/11/29 20:58:17 guenther Exp $	*/
+/*	$OpenBSD: kern_unveil.c,v 1.39 2020/03/22 20:23:36 anton Exp $	*/
 
 /*
  * Copyright (c) 2017-2019 Bob Beck <beck@openbsd.org>
@@ -37,6 +37,23 @@
 #include <sys/systm.h>
 
 #include <sys/pledge.h>
+
+struct unvname {
+	char 			*un_name;
+	size_t 			un_namesize;
+	u_char			un_flags;
+	RBT_ENTRY(unvnmae)	un_rbt;
+};
+
+RBT_HEAD(unvname_rbt, unvname);
+
+struct unveil {
+	struct vnode		*uv_vp;
+	ssize_t			uv_cover;
+	struct unvname_rbt	uv_names;
+	struct rwlock		uv_lock;
+	u_char			uv_flags;
+};
 
 /* #define DEBUG_UNVEIL */
 
@@ -95,7 +112,7 @@ unveil_save_traversed_vnode(struct nameidata *ndp, struct vnode *vp)
 void
 unvname_delete(struct unvname *name)
 {
-	free(name->un_name, M_PROC, name->un_namesize);;
+	free(name->un_name, M_PROC, name->un_namesize);
 	free(name, M_PROC, sizeof(struct unvname));
 }
 
@@ -498,8 +515,6 @@ unveil_add_vnode(struct proc *p, struct vnode *vp)
 void
 unveil_add_traversed_vnodes(struct proc *p, struct nameidata *ndp)
 {
-	struct unveil *uv;
-
 	if (ndp->ni_tvpsize) {
 		size_t i;
 
@@ -508,7 +523,7 @@ unveil_add_traversed_vnodes(struct proc *p, struct nameidata *ndp)
 			if (unveil_lookup(vp, p->p_p, NULL) == NULL) {
 				vref(vp);
 				vp->v_uvcount++;
-				uv = unveil_add_vnode(p, vp);
+				unveil_add_vnode(p, vp);
 			}
 		}
 	}
@@ -639,6 +654,16 @@ unveil_add(struct proc *p, struct nameidata *ndp, const char *permissions)
  done:
 	if (ret == 0)
 		unveil_add_traversed_vnodes(p, ndp);
+
+	pr->ps_uvpcwd = unveil_lookup(p->p_fd->fd_cdir, pr, NULL);
+	if (pr->ps_uvpcwd == NULL) {
+		ssize_t i;
+
+		i = unveil_find_cover(p->p_fd->fd_cdir, p);
+		if (i >= 0)
+			pr->ps_uvpcwd = &pr->ps_uvpaths[i];
+	}
+
 	return ret;
 }
 

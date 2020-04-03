@@ -1,5 +1,5 @@
 #!/bin/ksh
-#	$OpenBSD: install.sub,v 1.1145 2019/10/19 13:14:23 tb Exp $
+#	$OpenBSD: install.sub,v 1.1149 2020/03/06 21:14:20 gkoehler Exp $
 #
 # Copyright (c) 1997-2015 Todd Miller, Theo de Raadt, Ken Westerback
 # Copyright (c) 2015, Robert Peichaer <rpe@openbsd.org>
@@ -507,7 +507,7 @@ configure_disk() {
 
 			# Use machine-dependent newfs options for the root
 			# partition if defined.
-			_opt=
+			_opt=$MDFSOPT
 			[[ $_mp == / ]] && _opt=$MDROOTFSOPT
 
 			newfs -q $_opt ${_pp##/dev/}
@@ -892,12 +892,7 @@ dhcp_request() {
 	ifconfig $_if group dhcp >/dev/null 2>&1
 
 	if [[ -x /sbin/dhclient ]]; then
-		/sbin/dhclient -c /dev/stdin $_if <<__EOT
-initial-interval 1;
-backoff-cutoff 2;
-reboot 5;
-timeout 10;
-__EOT
+		/sbin/dhclient $_if
 	else
 		echo "DHCP leases not available during install - no /sbin/dhclient."
 	fi
@@ -1655,7 +1650,7 @@ install_files() {
 	if [[ $MODE == upgrade ]]; then
 		if isin base$VERSION.tgz $_get_sets; then
 			rm -f /mnt/usr/share/relink/usr/lib/*
-			rm -rf /mnt/usr/lib/libLLVM.so.0.0
+			rm -rf /mnt/usr/lib/libLLVM.so.[01].0
 			rm -rf /mnt/usr/libdata/perl5
 		fi
 		if isin comp$VERSION.tgz $_get_sets; then
@@ -3333,6 +3328,7 @@ umount -af >/dev/null 2>&1
 #
 # The following variables can be provided if required:
 #	MDEFI       - set to 'y' on archs that support GPT partitioning
+#	MDFSOPT     - newfs options for non-root partitions
 #	MDROOTFSOPT - newfs options for the root partition
 #	MDSETS	    - list of files to add to DEFAULT and ALLSETS
 #	MDSANESETS  - list of files to add to SANESETS

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ofw_misc.h,v 1.7 2019/09/30 20:40:54 kettenis Exp $	*/
+/*	$OpenBSD: ofw_misc.h,v 1.12 2020/03/22 14:56:24 kettenis Exp $	*/
 /*
  * Copyright (c) 2017 Mark Kettenis
  *
@@ -113,5 +113,68 @@ void	pwm_register(struct pwm_device *);
 int	pwm_init_state(uint32_t *cells, struct pwm_state *ps);
 int	pwm_get_state(uint32_t *cells, struct pwm_state *ps);
 int	pwm_set_state(uint32_t *cells, struct pwm_state *ps);
+
+/* Non-volatile memory support */
+
+struct nvmem_device {
+	int	nd_node;
+	void	*nd_cookie;
+	int	(*nd_read)(void *, bus_addr_t, void *, bus_size_t);
+
+	LIST_ENTRY(nvmem_device) nd_list;
+	uint32_t nd_phandle;
+};
+
+void	nvmem_register(struct nvmem_device *);
+int	nvmem_read(uint32_t, bus_addr_t, void *, bus_size_t);
+int	nvmem_read_cell(int, const char *name, void *, bus_size_t);
+
+/* Port/endpoint interface support */
+
+struct endpoint;
+
+struct device_ports {
+	int	dp_node;
+	void	*dp_cookie;
+
+	int	(*dp_ep_activate)(void *, struct endpoint *, void *);
+	void	*(*dp_ep_get_cookie)(void *, struct endpoint *);
+
+	LIST_HEAD(, device_port) dp_ports;
+};
+
+struct device_port {
+	int	dp_node;
+	uint32_t dp_phandle;
+	uint32_t dp_reg;
+	struct device_ports *dp_ports;
+	LIST_ENTRY(device_port) dp_list;
+	LIST_HEAD(, endpoint) dp_endpoints;
+};
+
+enum endpoint_type {
+	EP_DRM_BRIDGE = 1,	/* struct drm_bridge */
+	EP_DRM_CONNECTOR,	/* struct drm_connector */
+	EP_DRM_CRTC,		/* struct drm_crtc */
+	EP_DRM_ENCODER,		/* struct drm_encoder */
+	EP_DRM_PANEL,		/* struct drm_panel */
+};
+
+struct endpoint {
+	int ep_node;
+	uint32_t ep_phandle;
+	uint32_t ep_reg;
+	enum endpoint_type ep_type;
+	struct device_port *ep_port;
+	LIST_ENTRY(endpoint) ep_list;
+	LIST_ENTRY(endpoint) ep_plist;
+};
+
+void	device_ports_register(struct device_ports *, enum endpoint_type);
+int	device_port_activate(uint32_t, void *);
+struct endpoint *endpoint_byreg(struct device_ports *, uint32_t, uint32_t);
+struct endpoint *endpoint_remote(struct endpoint *);
+int	endpoint_activate(struct endpoint *, void *);
+void	*endpoint_get_cookie(struct endpoint *);
 
 #endif /* _DEV_OFW_MISC_H_ */

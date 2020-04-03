@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.h,v 1.14 2015/11/02 10:27:44 jsg Exp $	*/
+/*	$OpenBSD: parser.h,v 1.16 2020/03/22 15:59:05 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2007-2013 Reyk Floeter <reyk@openbsd.org>
@@ -54,7 +54,9 @@ enum actions {
 	CA_KEY_INSTALL,
 	CA_KEY_IMPORT,
 	SHOW_CA,
-	SHOW_CA_CERTIFICATES
+	SHOW_CA_CERTIFICATES,
+	SHOW_SA,
+	RESET_ID
 };
 
 struct parse_result {
@@ -65,6 +67,7 @@ struct parse_result {
 	char		*pass;
 	char		*host;
 	char		*peer;
+	char		*id;
 	int		 htype;
 	int		 quiet;
 };

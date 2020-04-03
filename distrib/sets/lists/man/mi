@@ -434,6 +434,7 @@
 ./usr/share/man/man1/skeyinit.1
 ./usr/share/man/man1/sleep.1
 ./usr/share/man/man1/smtp.1
+./usr/share/man/man1/sndioctl.1
 ./usr/share/man/man1/snmp.1
 ./usr/share/man/man1/sort.1
 ./usr/share/man/man1/sparc64/fdformat.1
@@ -1279,6 +1280,7 @@
 ./usr/share/man/man4/bcmdog.4
 ./usr/share/man/man4/bcmrng.4
 ./usr/share/man/man4/bcmtemp.4
+./usr/share/man/man4/bdpmic.4
 ./usr/share/man/man4/berkwdt.4
 ./usr/share/man/man4/bge.4
 ./usr/share/man/man4/bgw.4
@@ -1323,6 +1325,7 @@
 ./usr/share/man/man4/diskmap.4
 ./usr/share/man/man4/divert.4
 ./usr/share/man/man4/drm.4
+./usr/share/man/man4/dt.4
 ./usr/share/man/man4/dwctwo.4
 ./usr/share/man/man4/dwdog.4
 ./usr/share/man/man4/dwge.4
@@ -1474,6 +1477,7 @@
 ./usr/share/man/man4/imxgpc.4
 ./usr/share/man/man4/imxgpio.4
 ./usr/share/man/man4/imxiic.4
+./usr/share/man/man4/imxpwm.4
 ./usr/share/man/man4/imxrtc.4
 ./usr/share/man/man4/imxspi.4
 ./usr/share/man/man4/imxsrc.4
@@ -1500,6 +1504,7 @@
 ./usr/share/man/man4/iwi.4
 ./usr/share/man/man4/iwm.4
 ./usr/share/man/man4/iwn.4
+./usr/share/man/man4/iwx.4
 ./usr/share/man/man4/ix.4
 ./usr/share/man/man4/ixgb.4
 ./usr/share/man/man4/ixl.4
@@ -1567,7 +1572,6 @@
 ./usr/share/man/man4/macppc/bm.4
 ./usr/share/man/man4/macppc/daca.4
 ./usr/share/man/man4/macppc/dfs.4
-./usr/share/man/man4/macppc/esp.4
 ./usr/share/man/man4/macppc/fcu.4
 ./usr/share/man/man4/macppc/hpb.4
 ./usr/share/man/man4/macppc/ht.4
@@ -1580,7 +1584,6 @@
 ./usr/share/man/man4/macppc/mediabay.4
 ./usr/share/man/man4/macppc/mem.4
 ./usr/share/man/man4/macppc/memc.4
-./usr/share/man/man4/macppc/mesh.4
 ./usr/share/man/man4/macppc/mpcpcibr.4
 ./usr/share/man/man4/macppc/onyx.4
 ./usr/share/man/man4/macppc/openpic.4
@@ -1743,7 +1746,10 @@
 ./usr/share/man/man4/rge.4
 ./usr/share/man/man4/rgephy.4
 ./usr/share/man/man4/ricohrtc.4
+./usr/share/man/man4/rkanxdp.4
 ./usr/share/man/man4/rkclock.4
+./usr/share/man/man4/rkdrm.4
+./usr/share/man/man4/rkdwhdmi.4
 ./usr/share/man/man4/rkdwusb.4
 ./usr/share/man/man4/rkemmcphy.4
 ./usr/share/man/man4/rkgpio.4
@@ -1754,11 +1760,11 @@
 ./usr/share/man/man4/rkpmic.4
 ./usr/share/man/man4/rkpwm.4
 ./usr/share/man/man4/rktemp.4
+./usr/share/man/man4/rkvop.4
 ./usr/share/man/man4/rl.4
 ./usr/share/man/man4/rlphy.4
 ./usr/share/man/man4/route.4
 ./usr/share/man/man4/rsu.4
-./usr/share/man/man4/rtfps.4
 ./usr/share/man/man4/rtsx.4
 ./usr/share/man/man4/rtw.4
 ./usr/share/man/man4/rtwn.4
@@ -2462,7 +2468,6 @@
 ./usr/share/man/man8/rdate.8
 ./usr/share/man/man8/rdsetroot.8
 ./usr/share/man/man8/reboot.8
-./usr/share/man/man8/rebound.8
 ./usr/share/man/man8/relayctl.8
 ./usr/share/man/man8/relayd.8
 ./usr/share/man/man8/release.8

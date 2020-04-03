@@ -1,4 +1,4 @@
-/*	$OpenBSD: qle.c,v 1.49 2020/01/15 00:17:21 cheloha Exp $ */
+/*	$OpenBSD: qle.c,v 1.52 2020/03/25 05:30:18 jmatthew Exp $ */
 
 /*
  * Copyright (c) 2013, 2014 Jonathan Matthew <jmatthew@openbsd.org>
@@ -255,11 +255,7 @@ int		qle_scsi_probe(struct scsi_link *);
 
 
 struct scsi_adapter qle_switch = {
-	qle_scsi_cmd,
-	scsi_minphys,
-	qle_scsi_probe,
-	NULL,	/* scsi_free */
-	NULL	/* ioctl */
+	qle_scsi_cmd, NULL, qle_scsi_probe, NULL, NULL
 };
 
 u_int32_t	qle_read(struct qle_softc *, int);
@@ -1101,6 +1097,7 @@ qle_handle_resp(struct qle_softc *sc, u_int32_t id)
 		switch (completion) {
 		case QLE_IOCB_STATUS_DATA_UNDERRUN:
 			xs->resid = lemtoh32(&status->resid);
+			/* FALLTHROUGH */
 		case QLE_IOCB_STATUS_DATA_OVERRUN:
 		case QLE_IOCB_STATUS_COMPLETE:
 			if (lemtoh16(&status->scsi_status) &

@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.c,v 1.190 2019/10/14 08:38:07 nicm Exp $ */
+/* $OpenBSD: tmux.c,v 1.194 2020/03/17 11:10:12 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -18,6 +18,7 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 
 #include <err.h>
 #include <errno.h>
@@ -48,14 +49,14 @@ const char	*shell_command;
 static __dead void	 usage(void);
 static char		*make_label(const char *, char **);
 
+static int		 areshell(const char *);
 static const char	*getshell(void);
-static int		 checkshell(const char *);
 
 static __dead void
 usage(void)
 {
 	fprintf(stderr,
-	    "usage: %s [-2Cluv] [-c shell-command] [-f file] [-L socket-name]\n"
+	    "usage: %s [-2CluvV] [-c shell-command] [-f file] [-L socket-name]\n"
 	    "            [-S socket-path] [command [flags]]\n",
 	    getprogname());
 	exit(1);
@@ -78,7 +79,7 @@ getshell(void)
 	return (_PATH_BSHELL);
 }
 
-static int
+int
 checkshell(const char *shell)
 {
 	if (shell == NULL || *shell != '/')
@@ -90,7 +91,7 @@ checkshell(const char *shell)
 	return (1);
 }
 
-int
+static int
 areshell(const char *shell)
 {
 	const char	*progname, *ptr;
@@ -212,6 +213,20 @@ find_home(void)
 	return (home);
 }
 
+const char *
+getversion(void)
+{
+	static char	*version;
+	struct utsname	 u;
+
+	if (version == NULL) {
+		if (uname(&u) < 0)
+			fatalx("uname failed");
+		xasprintf(&version, "openbsd-%s", u.release);
+	}
+	return version;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -238,7 +253,7 @@ main(int argc, char **argv)
 		flags = 0;
 
 	label = path = NULL;
-	while ((opt = getopt(argc, argv, "2c:Cdf:lL:qS:uUv")) != -1) {
+	while ((opt = getopt(argc, argv, "2c:Cdf:lL:qS:uUvV")) != -1) {
 		switch (opt) {
 		case '2':
 			flags |= CLIENT_256COLOURS;
@@ -255,6 +270,9 @@ main(int argc, char **argv)
 		case 'f':
 			set_cfg_file(optarg);
 			break;
+ 		case 'V':
+			printf("%s %s\n", getprogname(), getversion());
+ 			exit(0);
 		case 'l':
 			flags |= CLIENT_LOGIN;
 			break;
@@ -361,12 +379,15 @@ main(int argc, char **argv)
 			path[strcspn(path, ",")] = '\0';
 		}
 	}
-	if (path == NULL && (path = make_label(label, &cause)) == NULL) {
-		if (cause != NULL) {
-			fprintf(stderr, "%s\n", cause);
-			free(cause);
+	if (path == NULL) {
+		if ((path = make_label(label, &cause)) == NULL) {
+			if (cause != NULL) {
+				fprintf(stderr, "%s\n", cause);
+				free(cause);
+			}
+			exit(1);
 		}
-		exit(1);
+		flags |= CLIENT_DEFAULTSOCKET;
 	}
 	socket_path = path;
 	free(label);

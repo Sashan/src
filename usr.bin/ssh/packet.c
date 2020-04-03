@@ -1,4 +1,4 @@
-/* $OpenBSD: packet.c,v 1.287 2019/12/16 13:58:53 tobhe Exp $ */
+/* $OpenBSD: packet.c,v 1.291 2020/03/06 18:20:44 markus Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -56,7 +56,9 @@
 #include <signal.h>
 #include <time.h>
 
+#ifdef WITH_ZLIB
 #include <zlib.h>
+#endif
 
 #include "xmalloc.h"
 #include "compat.h"
@@ -130,9 +132,11 @@ struct session_state {
 	/* Scratch buffer for packet compression/decompression. */
 	struct sshbuf *compression_buffer;
 
+#ifdef WITH_ZLIB
 	/* Incoming/outgoing compression dictionaries */
 	z_stream compression_in_stream;
 	z_stream compression_out_stream;
+#endif
 	int compression_in_started;
 	int compression_out_started;
 	int compression_in_failures;
@@ -584,7 +588,8 @@ ssh_packet_close_internal(struct ssh *ssh, int do_close)
 		state->newkeys[mode] = NULL;
 		ssh_clear_newkeys(ssh, mode);		/* next keys */
 	}
-	/* comression state is in shared mem, so we can only release it once */
+#ifdef WITH_ZLIB
+	/* compression state is in shared mem, so we can only release it once */
 	if (do_close && state->compression_buffer) {
 		sshbuf_free(state->compression_buffer);
 		if (state->compression_out_started) {
@@ -610,6 +615,7 @@ ssh_packet_close_internal(struct ssh *ssh, int do_close)
 				inflateEnd(stream);
 		}
 	}
+#endif	/* WITH_ZLIB */
 	cipher_free(state->send_context);
 	cipher_free(state->receive_context);
 	state->send_context = state->receive_context = NULL;
@@ -665,6 +671,7 @@ ssh_packet_init_compression(struct ssh *ssh)
 	return 0;
 }
 
+#ifdef WITH_ZLIB
 static int
 start_compression_out(struct ssh *ssh, int level)
 {
@@ -795,6 +802,33 @@ uncompress_buffer(struct ssh *ssh, struct sshbuf *in, struct sshbuf *out)
 	}
 	/* NOTREACHED */
 }
+
+#else	/* WITH_ZLIB */
+
+static int
+start_compression_out(struct ssh *ssh, int level)
+{
+	return SSH_ERR_INTERNAL_ERROR;
+}
+
+static int
+start_compression_in(struct ssh *ssh)
+{
+	return SSH_ERR_INTERNAL_ERROR;
+}
+
+static int
+compress_buffer(struct ssh *ssh, struct sshbuf *in, struct sshbuf *out)
+{
+	return SSH_ERR_INTERNAL_ERROR;
+}
+
+static int
+uncompress_buffer(struct ssh *ssh, struct sshbuf *in, struct sshbuf *out)
+{
+	return SSH_ERR_INTERNAL_ERROR;
+}
+#endif	/* WITH_ZLIB */
 
 void
 ssh_clear_newkeys(struct ssh *ssh, int mode)
@@ -1306,7 +1340,7 @@ ssh_packet_read_seqnr(struct ssh *ssh, u_char *typep, u_int32_t *seqnr_p)
 		}
 		/* Wait for some data to arrive. */
 		for (;;) {
-			if (state->packet_timeout_ms != -1) {
+			if (state->packet_timeout_ms > 0) {
 				ms_to_timeval(&timeout, ms_remain);
 				monotime_tv(&start);
 			}
@@ -1317,7 +1351,7 @@ ssh_packet_read_seqnr(struct ssh *ssh, u_char *typep, u_int32_t *seqnr_p)
 				r = SSH_ERR_SYSTEM_ERROR;
 				goto out;
 			}
-			if (state->packet_timeout_ms == -1)
+			if (state->packet_timeout_ms <= 0)
 				continue;
 			ms_subtract_diff(&start, &ms_remain);
 			if (ms_remain <= 0) {
@@ -1790,6 +1824,7 @@ static void
 sshpkt_vfatal(struct ssh *ssh, int r, const char *fmt, va_list ap)
 {
 	char *tag = NULL, remote_id[512];
+	int oerrno = errno;
 
 	sshpkt_fmt_connection_id(ssh, remote_id, sizeof(remote_id));
 
@@ -1817,6 +1852,7 @@ sshpkt_vfatal(struct ssh *ssh, int r, const char *fmt, va_list ap)
 	case SSH_ERR_NO_HOSTKEY_ALG_MATCH:
 		if (ssh && ssh->kex && ssh->kex->failed_choice) {
 			ssh_packet_clear_keys(ssh);
+			errno = oerrno;
 			logdie("Unable to negotiate with %s: %s. "
 			    "Their offer: %s", remote_id, ssh_err(r),
 			    ssh->kex->failed_choice);
@@ -1829,6 +1865,7 @@ sshpkt_vfatal(struct ssh *ssh, int r, const char *fmt, va_list ap)
 			    __func__);
 		}
 		ssh_packet_clear_keys(ssh);
+		errno = oerrno;
 		logdie("%s%sConnection %s %s: %s",
 		    tag != NULL ? tag : "", tag != NULL ? ": " : "",
 		    ssh->state->server_side ? "from" : "to",
@@ -1950,7 +1987,7 @@ ssh_packet_write_wait(struct ssh *ssh)
 			timeoutp = &timeout;
 		}
 		for (;;) {
-			if (state->packet_timeout_ms != -1) {
+			if (state->packet_timeout_ms > 0) {
 				ms_to_timeval(&timeout, ms_remain);
 				monotime_tv(&start);
 			}
@@ -1959,7 +1996,7 @@ ssh_packet_write_wait(struct ssh *ssh)
 				break;
 			if (errno != EAGAIN && errno != EINTR)
 				break;
-			if (state->packet_timeout_ms == -1)
+			if (state->packet_timeout_ms <= 0)
 				continue;
 			ms_subtract_diff(&start, &ms_remain);
 			if (ms_remain <= 0) {
