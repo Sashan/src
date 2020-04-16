@@ -2782,6 +2782,7 @@ pf_pool_copyin(struct pf_pool *from, struct pf_pool *to)
 {
 	memmove(to, from, sizeof(*to));
 	to->kif = NULL;
+	to->addr.p.tbl = NULL;
 }
 
 int
@@ -2791,7 +2792,9 @@ pf_rule_copyin(struct pf_rule *from, struct pf_rule *to,
 	int i;
 
 	to->src = from->src;
+	to->src.addr.p.tabl = NULL;
 	to->dst = from->dst;
+	to->dst.addr.p.tabl = NULL;
 
 	/* XXX union skip[] */
 
