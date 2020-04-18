@@ -2792,9 +2792,9 @@ pf_rule_copyin(struct pf_rule *from, struct pf_rule *to,
 	int i;
 
 	to->src = from->src;
-	to->src.addr.p.tabl = NULL;
+	to->src.addr.p.tbl = NULL;
 	to->dst = from->dst;
-	to->dst.addr.p.tabl = NULL;
+	to->dst.addr.p.tbl = NULL;
 
 	/* XXX union skip[] */
 
