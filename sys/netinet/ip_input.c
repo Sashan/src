@@ -337,6 +337,7 @@ ip_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 
 	if (ip->ip_dst.s_addr == INADDR_BROADCAST ||
 	    ip->ip_dst.s_addr == INADDR_ANY) {
+		m->m_flags |= M_BCAST;
 		nxt = ip_ours(mp, offp, nxt, af);
 		goto out;
 	}
@@ -748,6 +749,7 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 
 			if (IN_CLASSFULBROADCAST(ip->ip_dst.s_addr,
 			    ifatoia(ifa)->ia_addr.sin_addr.s_addr)) {
+				m->m_flags |= M_BCAST;
 				match = 1;
 				break;
 			}
