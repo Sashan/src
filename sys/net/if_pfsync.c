@@ -563,7 +563,6 @@ pfsync_state_import(struct pfsync_state *sp, int flags)
 	if (!(skw->af = sp->key[PF_SK_WIRE].af))
 		skw->af = sp->af;
 	if (sks != skw) {
-
 		sks->addr[0] = sp->key[PF_SK_STACK].addr[0];
 		sks->addr[1] = sp->key[PF_SK_STACK].addr[1];
 		sks->port[0] = sp->key[PF_SK_STACK].port[0];
