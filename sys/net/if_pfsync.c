@@ -489,7 +489,7 @@ pfsync_state_import(struct pfsync_state *sp, int flags)
 	struct pf_rule *r = NULL;
 	struct pfi_kif	*kif;
 	int pool_flags;
-	int error;
+	int error = ENOMEM;
 
 	if (sp->creatorid == 0) {
 		DPFPRINTF(LOG_NOTICE, "pfsync_state_import: "
@@ -505,7 +505,7 @@ pfsync_state_import(struct pfsync_state *sp, int flags)
 		return (0);	/* skip this state */
 	}
 
-	if ((sp->af != AF_INET) && (sp->af != AF_INET6))
+	if (sp->af == 0)
 		return (0);	/* skip this state */
 
 	/*
@@ -563,6 +563,7 @@ pfsync_state_import(struct pfsync_state *sp, int flags)
 	if (!(skw->af = sp->key[PF_SK_WIRE].af))
 		skw->af = sp->af;
 	if (sks != skw) {
+
 		sks->addr[0] = sp->key[PF_SK_STACK].addr[0];
 		sks->addr[1] = sp->key[PF_SK_STACK].addr[1];
 		sks->port[0] = sp->key[PF_SK_STACK].port[0];
@@ -584,7 +585,18 @@ pfsync_state_import(struct pfsync_state *sp, int flags)
 			}
 		} else
 			sks->proto = sp->proto;
+
+		if ((sks->af != AF_INET) && (sks->af != AF_INET6) &&
+		    (skw->af != AF_INET) && (skw->af != AF_INET6)) {
+			error = EINVAL;
+			goto cleanup;
+		}
+
+	} else if ((sks->af != AF_INET) && (sks->af != AF_INET6)) {
+		error = EINVAL;
+		goto cleanup;
 	}
+
 	st->rtableid[PF_SK_WIRE] = ntohl(sp->rtableid[PF_SK_WIRE]);
 	st->rtableid[PF_SK_STACK] = ntohl(sp->rtableid[PF_SK_STACK]);
 
@@ -657,7 +669,6 @@ pfsync_state_import(struct pfsync_state *sp, int flags)
 	return (0);
 
  cleanup:
-	error = ENOMEM;
 	if (skw == sks)
 		sks = NULL;
 	if (skw != NULL)
