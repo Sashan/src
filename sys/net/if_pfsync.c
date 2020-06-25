@@ -505,7 +505,7 @@ pfsync_state_import(struct pfsync_state *sp, int flags)
 		return (0);	/* skip this state */
 	}
 
-	if (sp->af == 0)
+	if ((sp->af != AF_INET) && (sp->af != AF_INET6))
 		return (0);	/* skip this state */
 
 	/*
