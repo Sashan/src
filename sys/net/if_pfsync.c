@@ -585,8 +585,8 @@ pfsync_state_import(struct pfsync_state *sp, int flags)
 		} else
 			sks->proto = sp->proto;
 
-		if ((sks->af != AF_INET) && (sks->af != AF_INET6) &&
-		    (skw->af != AF_INET) && (skw->af != AF_INET6)) {
+		if (((sks->af != AF_INET) && (sks->af != AF_INET6)) ||
+		    ((skw->af != AF_INET) && (skw->af != AF_INET6))) {
 			error = EINVAL;
 			goto cleanup;
 		}
