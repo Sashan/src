@@ -1194,28 +1194,31 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pf_ruleset	*ruleset;
 		struct pf_rule		*rule, *tail;
 
+		rule = pool_get(&pf_rule_pl, PR_WAITOK|PR_LIMITFAIL|PR_ZERO);
+		if (rule == NULL) {
+			error = ENOMEM;
+			break;
+		}
+
 		PF_LOCK();
 		pr->anchor[sizeof(pr->anchor) - 1] = '\0';
 		ruleset = pf_find_ruleset(pr->anchor);
 		if (ruleset == NULL) {
 			error = EINVAL;
 			PF_UNLOCK();
+			pool_put(&pf_rule_pl, rule);
 			break;
 		}
 		if (pr->rule.return_icmp >> 8 > ICMP_MAXTYPE) {
 			error = EINVAL;
 			PF_UNLOCK();
+			pool_put(&pf_rule_pl, rule);
 			break;
 		}
 		if (pr->ticket != ruleset->rules.inactive.ticket) {
 			error = EBUSY;
 			PF_UNLOCK();
-			break;
-		}
-		rule = pool_get(&pf_rule_pl, PR_WAITOK|PR_LIMITFAIL|PR_ZERO);
-		if (rule == NULL) {
-			error = ENOMEM;
-			PF_UNLOCK();
+			pool_put(&pf_rule_pl, rule);
 			break;
 		}
 		if ((error = pf_rule_copyin(&pr->rule, rule, ruleset))) {
