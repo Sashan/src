@@ -1,4 +1,4 @@
-/* $OpenBSD: softraid.c,v 1.403 2020/06/24 18:59:30 krw Exp $ */
+/* $OpenBSD: softraid.c,v 1.405 2020/06/27 17:28:58 krw Exp $ */
 /*
  * Copyright (c) 2007, 2008, 2009 Marco Peereboom <marco@peereboom.us>
  * Copyright (c) 2008 Chris Kuethe <ckuethe@openbsd.org>
@@ -1808,7 +1808,6 @@ sr_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_link.adapter_buswidth = SR_MAX_LD;
 	sc->sc_link.luns = 1;
 
-	bzero(&saa, sizeof(saa));
 	saa.saa_sc_link = &sc->sc_link;
 
 	sc->sc_scsibus = (struct scsibus_softc *)config_found(&sc->sc_dev,
@@ -3418,7 +3417,7 @@ sr_ioctl_createraid(struct sr_softc *sc, struct bioc_createraid *bc,
 			    "chunk count");
 			goto unwind;
 		}
-			
+
 		/* Ensure metadata level matches requested assembly level. */
 		if (sd->sd_meta->ssdi.ssd_level != bc->bc_level) {
 			sr_error(sc, "volume level does not match metadata "

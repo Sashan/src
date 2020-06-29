@@ -1,4 +1,4 @@
-/*	$OpenBSD: iha_pci.c,v 1.12 2007/10/18 21:10:58 otto Exp $ */
+/*	$OpenBSD: iha_pci.c,v 1.14 2020/06/27 17:28:58 krw Exp $ */
 /*-------------------------------------------------------------------------
  *
  * Device driver for the INI-9XXXU/UW or INIC-940/950  PCI SCSI Controller.
@@ -90,7 +90,7 @@ iha_pci_attach(parent, self, aux)
 	bus_space_tag_t iot;
 	const char *intrstr;
 	int ioh_valid;
-				
+
 	/*
 	 * XXX - Tried memory mapping (using code from adw and ahc)
 	 *	 rather that IO mapping, but it didn't work at all..
@@ -106,7 +106,7 @@ iha_pci_attach(parent, self, aux)
 	sc->sc_iot  = iot;
 	sc->sc_ioh  = ioh;
 	sc->sc_dmat = pa->pa_dmat;
-	
+
 	if (pci_intr_map(pa, &ih)) {
 		printf("%s: couldn't map interrupt\n", sc->sc_dev.dv_xname);
 		return;
@@ -126,7 +126,6 @@ iha_pci_attach(parent, self, aux)
 			printf(": %s\n", intrstr);
 
 		if (iha_init_tulip(sc) == 0) {
-			bzero(&saa, sizeof(saa));
 			saa.saa_sc_link = &sc->sc_link;
 			config_found(&sc->sc_dev, &saa, scsiprint);
 		}

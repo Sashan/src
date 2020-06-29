@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.13 2020/06/22 18:15:50 kettenis Exp $	*/
+/*	$OpenBSD: trap.c,v 1.17 2020/06/28 00:07:22 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -18,6 +18,7 @@
 
 #include <sys/param.h>
 #include <sys/proc.h>
+#include <sys/signalvar.h>
 #include <sys/user.h>
 #include <sys/syscall.h>
 #include <sys/syscall_mi.h>
@@ -25,10 +26,12 @@
 
 #include <uvm/uvm_extern.h>
 
+#include <machine/fpu.h>
+#include <machine/trap.h>
+
 #ifdef DDB
 #include <machine/db_machdep.h>
 #endif
-#include <machine/trap.h>
 
 void	decr_intr(struct trapframe *); /* clock.c */
 void	hvi_intr(struct trapframe *);  /* intr.c */
@@ -40,12 +43,16 @@ trap(struct trapframe *frame)
 	struct cpu_info *ci = curcpu();
 	struct proc *p = curproc;
 	int type = frame->exc;
+	union sigval sv;
 	struct vm_map *map;
 	struct slb_desc *slbd;
 	pmap_t pm;
 	vaddr_t va;
 	int ftype;
-	int error;
+	int error, sig, code;
+
+	/* Disable access to floating-point and vector registers. */
+	mtmsr(mfmsr() & ~(PSL_FP|PSL_VEC|PSL_VSX));
 
 	switch (type) {
 	case EXC_DECR:
@@ -85,9 +92,8 @@ trap(struct trapframe *frame)
 	case EXC_DSI:
 		map = kernel_map;
 		va = frame->dar;
-		if (curpcb->pcb_onfault && va < VM_MAXUSER_ADDRESS) {
+		if (curpcb->pcb_onfault && va < VM_MAXUSER_ADDRESS)
 			map = &p->p_vmspace->vm_map;
-		}
 		if (frame->dsisr & DSISR_STORE)
 			ftype = PROT_READ | PROT_WRITE;
 		else
@@ -99,15 +105,19 @@ trap(struct trapframe *frame)
 		}
 		KERNEL_UNLOCK();
 
-		if (curpcb->pcb_onfault)
-			printf("DSI onfault\n");
+		if (curpcb->pcb_onfault) {
+			frame->srr0 = curpcb->pcb_onfault;
+			return;
+		}
 
 		printf("dar 0x%lx dsisr 0x%lx\n", frame->dar, frame->dsisr);
 		goto fatal;
 
 	case EXC_DSE:
-		if (curpcb->pcb_onfault)
-			printf("DSE onfault\n");
+		if (curpcb->pcb_onfault) {
+			frame->srr0 = curpcb->pcb_onfault;
+			return;
+		}
 
 		printf("dar 0x%lx dsisr 0x%lx\n", frame->dar, frame->dsisr);
 		goto fatal;
@@ -131,8 +141,34 @@ trap(struct trapframe *frame)
 		KERNEL_LOCK();
 		error = uvm_fault(map, trunc_page(va), 0, ftype);
 		KERNEL_UNLOCK();
-		if (error)
-			goto fatal;
+		if (error) {
+			printf("type %x dar 0x%lx dsisr 0x%lx\n",
+			    type, frame->dar, frame->dsisr);
+			for (int i = 0; i < 32; i++)
+				printf("r%d 0x%lx\n", i, frame->fixreg[i]);
+			printf("ctr 0x%lx\n", frame->ctr);
+			printf("xer 0x%lx\n", frame->xer);
+			printf("cr 0x%lx\n", frame->cr);
+			printf("lr 0x%lx\n", frame->lr);
+
+			if (error == ENOMEM) {
+				sig = SIGKILL;
+				code = 0;
+			} else if (error == EIO) {
+				sig = SIGBUS;
+				code = BUS_OBJERR;
+			} else if (error == EACCES) {
+				sig = SIGSEGV;
+				code = SEGV_ACCERR;
+			} else {
+				sig = SIGSEGV;
+				code = SEGV_MAPERR;
+			}
+			sv.sival_ptr = (void *)va;
+			KERNEL_LOCK();
+			trapsignal(p, sig, 0, code, sv);
+			KERNEL_UNLOCK();
+		}
 		break;
 
 	case EXC_ISE|EXC_USER:
@@ -151,8 +187,33 @@ trap(struct trapframe *frame)
 		KERNEL_LOCK();
 		error = uvm_fault(map, trunc_page(va), 0, ftype);
 		KERNEL_UNLOCK();
-		if (error)
-			goto fatal;
+		if (error) {
+			printf("type %x srr0 0x%lx\n", type, frame->srr0);
+			for (int i = 0; i < 32; i++)
+				printf("r%d 0x%lx\n", i, frame->fixreg[i]);
+			printf("ctr 0x%lx\n", frame->ctr);
+			printf("xer 0x%lx\n", frame->xer);
+			printf("cr 0x%lx\n", frame->cr);
+			printf("lr 0x%lx\n", frame->lr);
+
+			if (error == ENOMEM) {
+				sig = SIGKILL;
+				code = 0;
+			} else if (error == EIO) {
+				sig = SIGBUS;
+				code = BUS_OBJERR;
+			} else if (error == EACCES) {
+				sig = SIGSEGV;
+				code = SEGV_ACCERR;
+			} else {
+				sig = SIGSEGV;
+				code = SEGV_MAPERR;
+			}
+			sv.sival_ptr = (void *)va;
+			KERNEL_LOCK();
+			trapsignal(p, sig, 0, code, sv);
+			KERNEL_UNLOCK();
+		}
 		break;
 
 	case EXC_SC|EXC_USER:
@@ -165,10 +226,44 @@ trap(struct trapframe *frame)
 		mi_ast(p, ci->ci_want_resched);
 		break;
 
+	case EXC_ALI|EXC_USER:
+		sv.sival_ptr = (void *)frame->dar;
+		KERNEL_LOCK();
+		trapsignal(p, SIGBUS, 0, BUS_ADRALN, sv);
+		KERNEL_UNLOCK();
+		break;
+
+	case EXC_PGM|EXC_USER:
+		printf("type %x srr0 0x%lx\n", type, frame->srr0);
+		for (int i = 0; i < 32; i++)
+			printf("r%d 0x%lx\n", i, frame->fixreg[i]);
+		printf("ctr 0x%lx\n", frame->ctr);
+		printf("xer 0x%lx\n", frame->xer);
+		printf("cr 0x%lx\n", frame->cr);
+		printf("lr 0x%lx\n", frame->lr);
+
+		sv.sival_ptr = (void *)frame->srr0;
+		KERNEL_LOCK();
+		trapsignal(p, SIGTRAP, 0, TRAP_BRKPT, sv);
+		KERNEL_UNLOCK();
+		break;
+
+	case EXC_FPU|EXC_USER:
+		restore_vsx(p);
+		curpcb->pcb_flags |= PCB_FP;
+		frame->srr1 |= PSL_FP;
+		break;
+
+	case EXC_VEC|EXC_USER:
+		restore_vsx(p);
+		curpcb->pcb_flags |= PCB_VEC;
+		frame->srr1 |= PSL_VEC;
+		break;
+
 	default:
 	fatal:
-		panic("trap type %lx srr1 %lx at %lx lr %lx",
-		    frame->exc, frame->srr1, frame->srr0, frame->lr);
+		panic("trap type %x srr1 %lx at %lx lr %lx",
+		    type, frame->srr1, frame->srr0, frame->lr);
 	}
 
 	userret(p);

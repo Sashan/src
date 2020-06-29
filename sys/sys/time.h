@@ -1,4 +1,4 @@
-/*	$OpenBSD: time.h,v 1.52 2020/06/22 21:16:07 cheloha Exp $	*/
+/*	$OpenBSD: time.h,v 1.54 2020/06/26 18:48:31 cheloha Exp $	*/
 /*	$NetBSD: time.h,v 1.18 1996/04/23 10:29:33 mycroft Exp $	*/
 
 /*
@@ -250,9 +250,6 @@ TIMEVAL_TO_BINTIME(const struct timeval *tv, struct bintime *bt)
 	bt->frac = (uint64_t)tv->tv_usec * (uint64_t)18446744073709ULL;
 }
 
-extern volatile time_t time_second;	/* Seconds since epoch, wall time. */
-extern volatile time_t time_uptime;	/* Seconds since reboot. */
-
 /*
  * Functions for looking at our clocks: [get]{bin,nano,micro}[boot|up]time()
  *
@@ -339,6 +336,13 @@ void clock_secs_to_ymdhms(time_t, struct clock_ymdhms *);
 #define POSIX_BASE_YEAR 1970
 
 #include <sys/stdint.h>
+
+static inline void
+USEC_TO_TIMEVAL(uint64_t us, struct timeval *tv)
+{
+	tv->tv_sec = us / 1000000;
+	tv->tv_usec = us % 1000000;
+}
 
 static inline void
 NSEC_TO_TIMEVAL(uint64_t ns, struct timeval *tv)

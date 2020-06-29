@@ -1542,7 +1542,6 @@
 ./usr/lib/libpanelw_p.a
 ./usr/lib/libpcap.a
 ./usr/lib/libpcap_p.a
-./usr/lib/libperl.a
 ./usr/lib/libpthread.a
 ./usr/lib/libpthread_p.a
 ./usr/lib/libradius.a
@@ -3100,7 +3099,6 @@
 ./usr/share/man/man9/tc_init.9
 ./usr/share/man/man9/tfind.9
 ./usr/share/man/man9/thread_fork.9
-./usr/share/man/man9/time_second.9
 ./usr/share/man/man9/timeout.9
 ./usr/share/man/man9/tsleep.9
 ./usr/share/man/man9/tvtohz.9

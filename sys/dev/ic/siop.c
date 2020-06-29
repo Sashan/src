@@ -1,4 +1,4 @@
-/*	$OpenBSD: siop.c,v 1.75 2020/06/19 14:51:44 krw Exp $ */
+/*	$OpenBSD: siop.c,v 1.77 2020/06/27 17:28:58 krw Exp $ */
 /*	$NetBSD: siop.c,v 1.79 2005/11/18 23:10:32 bouyer Exp $	*/
 
 /*
@@ -213,7 +213,6 @@ siop_attach(sc)
 	siop_dump_script(sc);
 #endif
 
-	bzero(&saa, sizeof(saa));
 	saa.saa_sc_link = &sc->sc_c.sc_link;
 
 	config_found((struct device*)sc, &saa, scsiprint);
@@ -1029,7 +1028,7 @@ scintr:
 			 * case, siop_cmd->saved_offset will have the proper
 			 * value if it got updated by the controller
 			 */
-			if (offset == 0 && 
+			if (offset == 0 &&
 			    siop_cmd->saved_offset != SIOP_NOOFFSET)
 				offset = siop_cmd->saved_offset;
 			siop_update_resid(&siop_cmd->cmd_c, offset);

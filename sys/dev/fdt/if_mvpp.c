@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_mvpp.c,v 1.2 2020/06/25 12:39:19 patrick Exp $	*/
+/*	$OpenBSD: if_mvpp.c,v 1.7 2020/06/26 21:02:36 patrick Exp $	*/
 /*
  * Copyright (c) 2008, 2019 Mark Kettenis <kettenis@openbsd.org>
  * Copyright (c) 2017, 2020 Patrick Wildt <patrick@blueri.se>
@@ -104,13 +104,15 @@ struct mvpp2_buf {
 struct mvpp2_bm_pool {
 	struct mvpp2_dmamem	*bm_mem;
 	struct mvpp2_buf	*rxbuf;
+	uint32_t		*freelist;
+	int			free_prod;
+	int			free_cons;
 };
 
 #define MVPP2_BM_SIZE		64
 #define MVPP2_BM_POOL_PTR_ALIGN	128
 #define MVPP2_BM_POOLS_NUM	8
 #define MVPP2_BM_ALIGN		32
-#define MVPP2_MAX_PORT		3
 
 struct mvpp2_tx_queue {
 	uint8_t			id;
@@ -161,7 +163,8 @@ struct mvpp2_softc {
 
 	uint32_t		sc_tclk;
 
-	struct mvpp2_bm_pool	sc_bm_pools[MVPP2_MAX_PORT];
+	struct mvpp2_bm_pool	*sc_bm_pools;
+	int			sc_npools;
 
 	struct mvpp2_prs_shadow	*sc_prs_shadow;
 	uint8_t			*sc_prs_double_vlans;
@@ -280,8 +283,10 @@ void	mvpp2_rxtick(void *);
 int	mvpp2_link_intr(void *);
 int	mvpp2_intr(void *);
 void	mvpp2_tx_proc(struct mvpp2_port *, uint8_t);
+void	mvpp2_txq_proc(struct mvpp2_port *, struct mvpp2_tx_queue *);
 void	mvpp2_rx_proc(struct mvpp2_port *, uint8_t);
 void	mvpp2_rxq_proc(struct mvpp2_port *, struct mvpp2_rx_queue *);
+void	mvpp2_rx_refill(struct mvpp2_port *);
 
 void	mvpp2_up(struct mvpp2_port *);
 void	mvpp2_down(struct mvpp2_port *);
@@ -543,7 +548,13 @@ mvpp2_bm_pool_init(struct mvpp2_softc *sc)
 		mvpp2_write(sc, MVPP2_BM_INTR_CAUSE_REG(i), 0);
 	}
 
-	for (i = 0; i < MVPP2_MAX_PORT; i++) {
+	sc->sc_npools = ncpus;
+	sc->sc_npools = min(sc->sc_npools, MVPP2_BM_POOLS_NUM);
+
+	sc->sc_bm_pools = mallocarray(sc->sc_npools, sizeof(*sc->sc_bm_pools),
+	    M_DEVBUF, M_WAITOK | M_ZERO);
+
+	for (i = 0; i < sc->sc_npools; i++) {
 		bm = &sc->sc_bm_pools[i];
 		bm->bm_mem = mvpp2_dmamem_alloc(sc,
 		    MVPP2_BM_SIZE * sizeof(uint64_t) * 2,
@@ -570,19 +581,31 @@ mvpp2_bm_pool_init(struct mvpp2_softc *sc)
 
 		bm->rxbuf = mallocarray(MVPP2_BM_SIZE, sizeof(struct mvpp2_buf),
 		    M_DEVBUF, M_WAITOK);
+		bm->freelist = mallocarray(MVPP2_BM_SIZE, sizeof(*bm->freelist),
+		    M_DEVBUF, M_WAITOK | M_ZERO);
 
 		for (j = 0; j < MVPP2_BM_SIZE; j++) {
 			rxb = &bm->rxbuf[j];
 			bus_dmamap_create(sc->sc_dmat, MCLBYTES, 1,
 			    MCLBYTES, 0, BUS_DMA_WAITOK, &rxb->mb_map);
+			rxb->mb_m = NULL;
 		}
+
+		/* Use pool-id and rxbuf index as cookie. */
+		for (j = 0; j < MVPP2_BM_SIZE; j++)
+			bm->freelist[j] = (i << 16) | (j << 0);
 
 		for (j = 0; j < MVPP2_BM_SIZE; j++) {
 			rxb = &bm->rxbuf[j];
 			rxb->mb_m = mvpp2_alloc_mbuf(sc, rxb->mb_map);
 			if (rxb->mb_m == NULL)
 				break;
-			virt = (i << 16) | (j << 0); /* XXX use cookie? */
+
+			KASSERT(bm->freelist[bm->free_cons] != -1);
+			virt = bm->freelist[bm->free_cons];
+			bm->freelist[bm->free_cons] = -1;
+			bm->free_cons = (bm->free_cons + 1) % MVPP2_BM_SIZE;
+
 			phys = rxb->mb_map->dm_segs[0].ds_addr;
 			mvpp2_write(sc, MVPP22_BM_PHY_VIRT_HIGH_RLS_REG,
 			    (((virt >> 32) & MVPP22_ADDR_HIGH_MASK)
@@ -1371,9 +1394,14 @@ mvpp2_port_attach(struct device *parent, struct device *self, void *aux)
 	mvpp2_cls_oversize_rxq_set(sc);
 	mvpp2_cls_port_config(sc);
 
+	/*
+	 * We have one pool per core, so all RX queues on a specific
+	 * core share that pool.  Also long and short uses the same
+	 * pool.
+	 */
 	for (i = 0; i < sc->sc_nrxq; i++) {
-		mvpp2_rxq_long_pool_set(sc, i, sc->sc_id);
-		mvpp2_rxq_short_pool_set(sc, i, sc->sc_id);
+		mvpp2_rxq_long_pool_set(sc, i, i);
+		mvpp2_rxq_short_pool_set(sc, i, i);
 	}
 
 	/* Reset Mac */
@@ -1578,7 +1606,7 @@ mvpp2_start(struct ifnet *ifp)
 		return;
 
 	idx = txq->prod;
-	while (txq->cnt < MVPP2_NTXDESC) {
+	while (txq->cnt < MVPP2_AGGR_TXQ_SIZE) {
 		m = ifq_dequeue(&ifp->if_snd);
 		if (m == NULL)
 			break;
@@ -1624,7 +1652,7 @@ mvpp2_encap(struct mvpp2_port *sc, struct mbuf *m, int *idx)
 	if (bus_dmamap_load_mbuf(sc->sc_dmat, map, m, BUS_DMA_NOWAIT))
 		return ENOBUFS;
 
-	if (map->dm_nsegs > (MVPP2_NTXDESC - txq->cnt - 2)) {
+	if (map->dm_nsegs > (MVPP2_AGGR_TXQ_SIZE - txq->cnt - 2)) {
 		bus_dmamap_unload(sc->sc_dmat, map);
 		return ENOBUFS;
 	}
@@ -1655,7 +1683,7 @@ mvpp2_encap(struct mvpp2_port *sc, struct mbuf *m, int *idx)
 		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
 		last = current;
-		current = (current + 1) % MVPP2_NTXDESC;
+		current = (current + 1) % MVPP2_AGGR_TXQ_SIZE;
 		KASSERT(current != txq->cons);
 	}
 
@@ -1967,22 +1995,52 @@ mvpp2_intr(void *arg)
 void
 mvpp2_tx_proc(struct mvpp2_port *sc, uint8_t queues)
 {
-//	struct ifnet *ifp = &sc->sc_ac.ac_if;
 	struct mvpp2_tx_queue *txq;
-	uint32_t reg;
 	int i;
 
 	for (i = 0; i < sc->sc_ntxq; i++) {
 		txq = &sc->sc_txqs[i];
 		if ((queues & (1 << i)) == 0)
 			continue;
-		reg = mvpp2_read(sc->sc, MVPP2_TXQ_SENT_REG(txq->id));
-		printf("%s: txq %u sent reg %u\n", sc->sc_dev.dv_xname,
-		    i, (reg & MVPP2_TRANSMITTED_COUNT_MASK) >>
-		    MVPP2_TRANSMITTED_COUNT_OFFSET);
+		mvpp2_txq_proc(sc, txq);
+	}
+}
+
+void
+mvpp2_txq_proc(struct mvpp2_port *sc, struct mvpp2_tx_queue *txq)
+{
+	struct ifnet *ifp = &sc->sc_ac.ac_if;
+	struct mvpp2_tx_queue *aggr_txq = &sc->sc->sc_aggr_txqs[0];
+	struct mvpp2_buf *txb;
+	int i, idx, nsent;
+
+	nsent = (mvpp2_read(sc->sc, MVPP2_TXQ_SENT_REG(txq->id)) &
+	    MVPP2_TRANSMITTED_COUNT_MASK) >>
+	    MVPP2_TRANSMITTED_COUNT_OFFSET;
+
+	for (i = 0; i < nsent; i++) {
+		idx = aggr_txq->cons;
+		KASSERT(idx < MVPP2_AGGR_TXQ_SIZE);
+
+		txb = &aggr_txq->buf[idx];
+		if (txb->mb_m) {
+			bus_dmamap_sync(sc->sc_dmat, txb->mb_map, 0,
+			    txb->mb_map->dm_mapsize, BUS_DMASYNC_POSTWRITE);
+			bus_dmamap_unload(sc->sc_dmat, txb->mb_map);
+
+			m_freem(txb->mb_m);
+			txb->mb_m = NULL;
+		}
+
+		aggr_txq->cnt--;
+		aggr_txq->cons = (aggr_txq->cons + 1) % MVPP2_AGGR_TXQ_SIZE;
 	}
 
-	/* FIXME: tx done processing */
+	if (aggr_txq->cnt == 0)
+		ifp->if_timer = 0;
+
+	if (ifq_is_oactive(&ifp->if_snd))
+		ifq_restart(&ifp->if_snd);
 }
 
 void
@@ -1997,6 +2055,8 @@ mvpp2_rx_proc(struct mvpp2_port *sc, uint8_t queues)
 			continue;
 		mvpp2_rxq_proc(sc, rxq);
 	}
+
+	mvpp2_rx_refill(sc);
 }
 
 void
@@ -2009,14 +2069,15 @@ mvpp2_rxq_proc(struct mvpp2_port *sc, struct mvpp2_rx_queue *rxq)
 	struct mvpp2_buf *rxb;
 	struct mbuf *m;
 	uint64_t virt;
-	uint32_t i, nrecv;
+	uint32_t i, nrecv, pool;
 
 	nrecv = mvpp2_rxq_received(sc, rxq->id);
 	if (!nrecv)
 		return;
 
-	printf("%s: rxq %u recv %u\n", sc->sc_dev.dv_xname,
-	    rxq->id, nrecv);
+	pool = curcpu()->ci_cpuid;
+	KASSERT(pool < sc->sc->sc_npools);
+	bm = &sc->sc->sc_bm_pools[pool];
 
 	bus_dmamap_sync(sc->sc_dmat, MVPP2_DMA_MAP(rxq->ring), 0,
 	    MVPP2_DMA_LEN(rxq->ring),
@@ -2025,10 +2086,10 @@ mvpp2_rxq_proc(struct mvpp2_port *sc, struct mvpp2_rx_queue *rxq)
 	for (i = 0; i < nrecv; i++) {
 		rxd = &rxq->descs[rxq->cons];
 		virt = rxd->buf_cookie_bm_qset_cls_info;
-		bm = &sc->sc->sc_bm_pools[(virt >> 16) & 0xffff];
+		KASSERT(((virt >> 16) & 0xffff) == pool);
+		KASSERT((virt & 0xffff) < MVPP2_BM_SIZE);
 		rxb = &bm->rxbuf[virt & 0xffff];
-		KASSERT(rxb);
-		KASSERT(rxb->mb_m);
+		KASSERT(rxb->mb_m != NULL);
 
 		bus_dmamap_sync(sc->sc_dmat, rxb->mb_map, 0,
 		    rxd->data_size, BUS_DMASYNC_POSTREAD);
@@ -2041,10 +2102,12 @@ mvpp2_rxq_proc(struct mvpp2_port *sc, struct mvpp2_rx_queue *rxq)
 		m_adj(m, MVPP2_MH_SIZE);
 		ml_enqueue(&ml, m);
 
+		KASSERT(bm->freelist[bm->free_prod] == -1);
+		bm->freelist[bm->free_prod] = virt & 0xffffffff;
+		bm->free_prod = (bm->free_prod + 1) % MVPP2_BM_SIZE;
+
 		rxq->cons = (rxq->cons + 1) % MVPP2_NRXDESC;
 	}
-
-	/*mvpp2_fill_rx_ring(sc);*/
 
 	bus_dmamap_sync(sc->sc_dmat, MVPP2_DMA_MAP(rxq->ring), 0,
 	    MVPP2_DMA_LEN(rxq->ring),
@@ -2053,6 +2116,51 @@ mvpp2_rxq_proc(struct mvpp2_port *sc, struct mvpp2_rx_queue *rxq)
 	mvpp2_rxq_status_update(sc, rxq->id, nrecv, nrecv);
 
 	if_input(ifp, &ml);
+}
+
+/*
+ * We have a pool per core, and since we should not assume that
+ * RX buffers are always used in order, keep a list of rxbuf[]
+ * indices that should be filled with an mbuf, if possible.
+ */
+void
+mvpp2_rx_refill(struct mvpp2_port *sc)
+{
+	struct mvpp2_bm_pool *bm;
+	struct mvpp2_buf *rxb;
+	uint64_t phys, virt;
+	int pool;
+
+	pool = curcpu()->ci_cpuid;
+	KASSERT(pool < sc->sc->sc_npools);
+	bm = &sc->sc->sc_bm_pools[pool];
+
+	while (bm->free_cons != bm->free_prod) {
+		KASSERT(bm->freelist[bm->free_cons] != -1);
+		virt = bm->freelist[bm->free_cons];
+		KASSERT(((virt >> 16) & 0xffff) == pool);
+		KASSERT((virt & 0xffff) < MVPP2_BM_SIZE);
+		rxb = &bm->rxbuf[virt & 0xffff];
+		KASSERT(rxb->mb_m == NULL);
+
+		rxb->mb_m = mvpp2_alloc_mbuf(sc->sc, rxb->mb_map);
+		if (rxb->mb_m == NULL)
+			break;
+
+		bm->freelist[bm->free_cons] = -1;
+		bm->free_cons = (bm->free_cons + 1) % MVPP2_BM_SIZE;
+
+		phys = rxb->mb_map->dm_segs[0].ds_addr;
+		mvpp2_write(sc->sc, MVPP22_BM_PHY_VIRT_HIGH_RLS_REG,
+		    (((virt >> 32) & MVPP22_ADDR_HIGH_MASK)
+		    << MVPP22_BM_VIRT_HIGH_RLS_OFFST) |
+		    (((phys >> 32) & MVPP22_ADDR_HIGH_MASK)
+		    << MVPP22_BM_PHY_HIGH_RLS_OFFSET));
+		mvpp2_write(sc->sc, MVPP2_BM_VIRT_RLS_REG,
+		    virt & 0xffffffff);
+		mvpp2_write(sc->sc, MVPP2_BM_PHY_RLS_REG(pool),
+		    phys & 0xffffffff);
+	}
 }
 
 void
@@ -2477,7 +2585,7 @@ mvpp2_txq_hw_deinit(struct mvpp2_port *sc, struct mvpp2_tx_queue *txq)
 	reg &= ~MVPP2_TXQ_DRAIN_EN_MASK;
 	mvpp2_write(sc->sc, MVPP2_TXQ_PREF_BUF_REG, reg);
 
-	mvpp2_write(sc->sc, MVPP2_TXQ_SCHED_TOKEN_CNTR_REG(txq->id), 0);
+	mvpp2_write(sc->sc, MVPP2_TXQ_SCHED_TOKEN_CNTR_REG(txq->log_id), 0);
 	mvpp2_write(sc->sc, MVPP2_TXQ_NUM_REG, txq->id);
 	mvpp2_write(sc->sc, MVPP2_TXQ_DESC_ADDR_REG, 0);
 	mvpp2_write(sc->sc, MVPP2_TXQ_DESC_SIZE_REG, 0);
@@ -2658,16 +2766,14 @@ mvpp2_txq_phys(int port, int txq)
 void
 mvpp2_defaults_set(struct mvpp2_port *port)
 {
-	int val, queue, p_txq;
+	int val, queue;
 
 	mvpp2_write(port->sc, MVPP2_TXP_SCHED_PORT_INDEX_REG,
 	    mvpp2_egress_port(port));
 	mvpp2_write(port->sc, MVPP2_TXP_SCHED_CMD_1_REG, 0);
 
-	for (queue = 0; queue < MVPP2_MAX_TXQ; queue++) {
-		p_txq = mvpp2_txq_phys(port->sc_id, queue);
-		mvpp2_write(port->sc, MVPP2_TXQ_SCHED_TOKEN_CNTR_REG(p_txq), 0);
-	}
+	for (queue = 0; queue < MVPP2_MAX_TXQ; queue++)
+		mvpp2_write(port->sc, MVPP2_TXQ_SCHED_TOKEN_CNTR_REG(queue), 0);
 
 	mvpp2_write(port->sc, MVPP2_TXP_SCHED_PERIOD_REG, port->sc->sc_tclk /
 	    (1000 * 1000));
@@ -3285,7 +3391,7 @@ mvpp2_prs_tcam_first_free(struct mvpp2_softc *sc, uint8_t start, uint8_t end)
 			return tid;
 	}
 
-	return EINVAL;
+	return -1;
 }
 
 void
@@ -3571,7 +3677,7 @@ mvpp2_prs_double_vlan_ai_free_get(struct mvpp2_softc *sc)
 		if (!sc->sc_prs_double_vlans[i])
 			return i;
 
-	return EINVAL;
+	return -1;
 }
 
 struct mvpp2_prs_entry *

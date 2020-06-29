@@ -2002,7 +2002,6 @@ amdgpu_attachhook(struct device *self)
 		pm_runtime_put_autosuspend(dev->dev);
 	}
 {
-	struct drm_fb_helper *fb_helper = (void *)adev->mode_info.rfbdev;
 	struct wsemuldisplaydev_attach_args aa;
 	struct rasops_info *ri = &adev->ro;
 
@@ -2010,8 +2009,6 @@ amdgpu_attachhook(struct device *self)
 
 	if (ri->ri_bits == NULL)
 		return;
-
-	drm_fb_helper_restore_fbdev_mode_unlocked(fb_helper);
 
 	ri->ri_flg = RI_CENTER | RI_VCONS | RI_WRONLY;
 	rasops_init(ri, 160, 160);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: locore.S,v 1.19 2020/06/24 20:49:11 kettenis Exp $	*/
+/*	$OpenBSD: locore.S,v 1.25 2020/06/28 00:07:22 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -18,6 +18,7 @@
 
 #include "assym.h"
 
+#include <sys/errno.h>
 #include <sys/syscall.h>
 
 #include <machine/opal.h>
@@ -30,12 +31,15 @@
 	.globl sigcode
 	.globl sigcoderet
 sigcode:
+	addi	%r1, %r1, -32
 	mtctr	%r12
 	bctrl
+	addi	%r3, %r1, 32+SF_SC
 	li	%r0, SYS_sigreturn
 	sc
 sigcoderet:
-	blr
+	li	%r0, SYS_exit
+	sc
 	.globl esigcode
 esigcode:
 
@@ -61,8 +65,11 @@ cpu_idle_cycle:
 cpu_idle_leave:
 	blr
 
-	.globl cpu_switchto
-cpu_switchto:
+	.globl cpu_switchto_asm
+cpu_switchto_asm:
+	cmpdi	%r3, 0
+	beq	1f
+
 	mflr	%r0
 	std	%r0, 16(%r1)
 	mfcr	%r10
@@ -90,6 +97,7 @@ cpu_switchto:
 	ld	%r31, P_ADDR(%r3)
 	std	%r1, PCB_SP(%r31)
 
+1:
 	li	%r31, SONPROC
 	stb	%r31, P_STAT(%r4)
 	std	%r4, CI_CURPROC(%r13)
@@ -124,6 +132,68 @@ cpu_switchto:
 	mtcr	%r10
 	ld	%r0, 16(%r1)
 	mtlr	%r0
+	blr
+
+	.globl kcopy
+kcopy:
+	ld	%r6, CI_CURPCB(%r13)
+	ld	%r7, PCB_ONFAULT(%r6)
+	addis	%r8, %r2, .Lkcopyfault@toc@ha
+	addi	%r8, %r8, .Lkcopyfault@toc@l
+	std	%r8, PCB_ONFAULT(%r6)
+
+	addi	%r3, %r3, -1
+	addi	%r4, %r4, -1
+	mtctr	%r5
+1:
+	lbzu	%r5, 1(%r3)
+	stbu	%r5, 1(%r4)
+	bdnz	1b
+	std	%r7, PCB_ONFAULT(%r6)
+	li	%r3, 0
+	blr
+
+.Lkcopyfault:
+	std	%r7, PCB_ONFAULT(%r6)
+	li	%r3, EFAULT
+	blr
+
+	.globl copystr
+copystr:
+	ld	%r7, CI_CURPCB(%r13)
+	ld	%r8, PCB_ONFAULT(%r7)
+	addis	%r9, %r2, .Lcopystrfault@toc@ha
+	addi	%r9, %r9, .Lcopystrfault@toc@l
+	std	%r9, PCB_ONFAULT(%r7)
+
+	addi	%r3, %r3, -1
+	addi	%r4, %r4, -1
+	mtctr	%r5
+	li	%r9, 0
+1:
+	addi	%r9, %r9, 1
+	lbzu	%r5, 1(%r3)
+	stbu	%r5, 1(%r4)
+	cmplwi	%r5, 0
+	beq	.Lcopystrsuccess
+	bdnz	1b
+
+	li	%r3, ENAMETOOLONG
+	b	.Lcopystrcleanup
+
+.Lcopystrfault:
+	li	%r3, EFAULT
+	b	.Lcopystrcleanup
+
+.Lcopystrsuccess:
+	li	%r3, 0
+
+.Lcopystrcleanup:
+	cmpldi	%r6, 0
+	beq	2f
+	std	%r9, 0(%r6)
+2:
+	std	%r8, PCB_ONFAULT(%r7)
 	blr
 
 	.globl proc_trampoline
@@ -167,6 +237,7 @@ OPAL_CALL(OPAL_RTC_READ, opal_rtc_read)
 OPAL_CALL(OPAL_RTC_WRITE, opal_rtc_write)
 OPAL_CALL(OPAL_CEC_POWER_DOWN, opal_cec_power_down)
 OPAL_CALL(OPAL_CEC_REBOOT, opal_cec_reboot)
+OPAL_CALL(OPAL_HANDLE_INTERRUPT, opal_handle_interrupt)
 OPAL_CALL(OPAL_POLL_EVENTS, opal_poll_events)
 OPAL_CALL(OPAL_PCI_CONFIG_READ_WORD, opal_pci_config_read_word)
 OPAL_CALL(OPAL_PCI_CONFIG_WRITE_WORD, opal_pci_config_write_word)
