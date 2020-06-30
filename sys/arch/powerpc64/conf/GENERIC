@@ -1,4 +1,4 @@
-#	$OpenBSD: GENERIC,v 1.8 2020/06/22 21:13:40 kettenis Exp $
+#	$OpenBSD: GENERIC,v 1.10 2020/06/29 21:17:21 kettenis Exp $
 #
 # For further information on compiling OpenBSD kernels, see the config(8)
 # man page.
@@ -14,6 +14,7 @@ include		"../../../conf/GENERIC"
 maxusers	80
 
 option		PCIVERBOSE
+option		USER_PCICONF
 
 config		bsd	swap generic
 
@@ -40,3 +41,6 @@ uhub*		at usb?			# USB Hubs
 uhub*		at uhub?		# USB Hubs
 
 brgphy*		at mii?			# Broadcom Gigabit PHYs
+
+# Pseudo-Devices
+pseudo-device	openprom
