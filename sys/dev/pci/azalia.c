@@ -1,4 +1,4 @@
-/*	$OpenBSD: azalia.c,v 1.254 2020/01/04 01:34:24 jsg Exp $	*/
+/*	$OpenBSD: azalia.c,v 1.257 2020/06/09 03:36:05 jsg Exp $	*/
 /*	$NetBSD: azalia.c,v 1.20 2006/05/07 08:31:44 kent Exp $	*/
 
 /*-
@@ -474,6 +474,11 @@ azalia_configure_pci(azalia_t *az)
 	}
 }
 
+const struct pci_matchid azalia_pci_devices[] = {
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_200SERIES_U_HDA },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_300SERIES_U_HDA }
+};
+
 int
 azalia_pci_match(struct device *parent, void *match, void *aux)
 {
@@ -483,7 +488,8 @@ azalia_pci_match(struct device *parent, void *match, void *aux)
 	if (PCI_CLASS(pa->pa_class) == PCI_CLASS_MULTIMEDIA
 	    && PCI_SUBCLASS(pa->pa_class) == PCI_SUBCLASS_MULTIMEDIA_HDAUDIO)
 		return 1;
-	return 0;
+	return pci_matchbyid((struct pci_attach_args *)aux, azalia_pci_devices,
+	    nitems(azalia_pci_devices));
 }
 
 void
@@ -530,6 +536,7 @@ azalia_pci_attach(struct device *parent, struct device *self, void *aux)
 		switch (PCI_PRODUCT(sc->pciid)) {
 		case PCI_PRODUCT_AMD_17_HDA:
 		case PCI_PRODUCT_AMD_17_1X_HDA:
+		case PCI_PRODUCT_AMD_HUDSON2_HDA:
 			pa->pa_flags &= ~PCI_FLAGS_MSI_ENABLED;
 		}
 	}

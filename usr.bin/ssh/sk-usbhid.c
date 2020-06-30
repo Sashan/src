@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stddef.h>
 #include <stdarg.h>
+#include <sha2.h>
 
 #ifdef WITH_OPENSSL
 #include <openssl/opensslv.h>
@@ -27,6 +28,7 @@
 #include <openssl/bn.h>
 #include <openssl/ec.h>
 #include <openssl/ecdsa.h>
+#include <openssl/evp.h>
 #endif /* WITH_OPENSSL */
 
 #include <fido.h>
@@ -48,6 +50,12 @@
 #include "sk-api.h"
 
 /* #define SK_DEBUG 1 */
+
+#ifdef SK_DEBUG
+#define SSH_FIDO_INIT_ARG	FIDO_DEBUG
+#else
+#define SSH_FIDO_INIT_ARG	0
+#endif
 
 #define MAX_FIDO_DEVICES	256
 
@@ -435,6 +443,43 @@ check_enroll_options(struct sk_option **options, char **devicep,
 	return 0;
 }
 
+static int
+check_sk_extensions(fido_dev_t *dev, const char *ext, int *ret)
+{
+	fido_cbor_info_t *info;
+	char * const *ptr;
+	size_t len, i;
+	int r;
+
+	*ret = 0;
+
+	if (!fido_dev_is_fido2(dev)) {
+		skdebug(__func__, "device is not fido2");
+		return 0;
+	}
+	if ((info = fido_cbor_info_new()) == NULL) {
+		skdebug(__func__, "fido_cbor_info_new failed");
+		return -1;
+	}
+	if ((r = fido_dev_get_cbor_info(dev, info)) != FIDO_OK) {
+		skdebug(__func__, "fido_dev_get_cbor_info: %s", fido_strerr(r));
+		fido_cbor_info_free(&info);
+		return -1;
+	}
+	ptr = fido_cbor_info_extensions_ptr(info);
+	len = fido_cbor_info_extensions_len(info);
+	for (i = 0; i < len; i++) {
+		if (!strcmp(ptr[i], ext)) {
+			*ret = 1;
+			break;
+		}
+	}
+	fido_cbor_info_free(&info);
+	skdebug(__func__, "extension %s %s", ext, *ret ? "present" : "absent");
+
+	return 0;
+}
+
 int
 sk_enroll(uint32_t alg, const uint8_t *challenge, size_t challenge_len,
     const char *application, uint8_t flags, const char *pin,
@@ -446,14 +491,14 @@ sk_enroll(uint32_t alg, const uint8_t *challenge, size_t challenge_len,
 	uint8_t user_id[32];
 	struct sk_enroll_response *response = NULL;
 	size_t len;
+	int credprot;
 	int cose_alg;
 	int ret = SSH_SK_ERR_GENERAL;
 	int r;
 	char *device = NULL;
 
-#ifdef SK_DEBUG
-	fido_init(FIDO_DEBUG);
-#endif
+	fido_init(SSH_FIDO_INIT_ARG);
+
 	if (enroll_response == NULL) {
 		skdebug(__func__, "enroll_response == NULL");
 		goto out;
@@ -518,6 +563,25 @@ sk_enroll(uint32_t alg, const uint8_t *challenge, size_t challenge_len,
 	if ((r = fido_dev_open(dev, device)) != FIDO_OK) {
 		skdebug(__func__, "fido_dev_open: %s", fido_strerr(r));
 		goto out;
+	}
+	if ((flags & SSH_SK_RESIDENT_KEY) != 0) {
+		if (check_sk_extensions(dev, "credProtect", &credprot) < 0) {
+			skdebug(__func__, "check_sk_extensions failed");
+			goto out;
+		}
+		if (credprot == 0) {
+			skdebug(__func__, "refusing to create unprotected "
+			    "resident key");
+			ret = SSH_SK_ERR_UNSUPPORTED;
+			goto out;
+		}
+		if ((r = fido_cred_set_prot(cred,
+		    FIDO_CRED_PROT_UV_OPTIONAL_WITH_ID)) != FIDO_OK) {
+			skdebug(__func__, "fido_cred_set_prot: %s",
+			    fido_strerr(r));
+			ret = fidoerr_to_skerr(r);
+			goto out;
+		}
 	}
 	if ((r = fido_dev_make_cred(dev, cred, pin)) != FIDO_OK) {
 		skdebug(__func__, "fido_dev_make_cred: %s", fido_strerr(r));
@@ -706,8 +770,28 @@ check_sign_load_resident_options(struct sk_option **options, char **devicep)
 	return 0;
 }
 
+/* Calculate SHA256(m) */
+static int
+sha256_mem(const void *m, size_t mlen, u_char *d, size_t dlen)
+{
+#ifdef WITH_OPENSSL
+	u_int mdlen;
+#endif
+
+	if (dlen != 32)
+		return -1;
+#ifdef WITH_OPENSSL
+	mdlen = dlen;
+	if (!EVP_Digest(m, mlen, d, &mdlen, EVP_sha256(), NULL))
+		return -1;
+#else
+	SHA256Data(m, mlen, d);
+#endif
+	return 0;
+}
+
 int
-sk_sign(uint32_t alg, const uint8_t *message, size_t message_len,
+sk_sign(uint32_t alg, const uint8_t *data, size_t datalen,
     const char *application,
     const uint8_t *key_handle, size_t key_handle_len,
     uint8_t flags, const char *pin, struct sk_option **options,
@@ -717,12 +801,11 @@ sk_sign(uint32_t alg, const uint8_t *message, size_t message_len,
 	char *device = NULL;
 	fido_dev_t *dev = NULL;
 	struct sk_sign_response *response = NULL;
+	uint8_t message[32];
 	int ret = SSH_SK_ERR_GENERAL;
 	int r;
 
-#ifdef SK_DEBUG
-	fido_init(FIDO_DEBUG);
-#endif
+	fido_init(SSH_FIDO_INIT_ARG);
 
 	if (sign_response == NULL) {
 		skdebug(__func__, "sign_response == NULL");
@@ -731,7 +814,12 @@ sk_sign(uint32_t alg, const uint8_t *message, size_t message_len,
 	*sign_response = NULL;
 	if (check_sign_load_resident_options(options, &device) != 0)
 		goto out; /* error already logged */
-	if ((dev = find_device(device, message, message_len,
+	/* hash data to be signed before it goes to the security key */
+	if ((r = sha256_mem(data, datalen, message, sizeof(message))) != 0) {
+		skdebug(__func__, "hash message failed");
+		goto out;
+	}
+	if ((dev = find_device(device, message, sizeof(message),
 	    application, key_handle, key_handle_len)) == NULL) {
 		skdebug(__func__, "couldn't find device for key handle");
 		goto out;
@@ -741,7 +829,7 @@ sk_sign(uint32_t alg, const uint8_t *message, size_t message_len,
 		goto out;
 	}
 	if ((r = fido_assert_set_clientdata_hash(assert, message,
-	    message_len)) != FIDO_OK) {
+	    sizeof(message))) != FIDO_OK) {
 		skdebug(__func__, "fido_assert_set_clientdata_hash: %s",
 		    fido_strerr(r));
 		goto out;
@@ -779,6 +867,7 @@ sk_sign(uint32_t alg, const uint8_t *message, size_t message_len,
 	response = NULL;
 	ret = 0;
  out:
+	explicit_bzero(message, sizeof(message));
 	free(device);
 	if (response != NULL) {
 		free(response->sig_r);
@@ -959,6 +1048,8 @@ sk_load_resident_keys(const char *pin, struct sk_option **options,
 	char *device = NULL;
 	*rksp = NULL;
 	*nrksp = 0;
+
+	fido_init(SSH_FIDO_INIT_ARG);
 
 	if (check_sign_load_resident_options(options, &device) != 0)
 		goto out; /* error already logged */

@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.133 2019/12/20 07:49:31 jsg Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.137 2020/06/03 06:54:04 dlg Exp $	*/
 /*	$NetBSD: cpu.h,v 1.1 2003/04/26 18:39:39 fvdl Exp $	*/
 
 /*-
@@ -304,6 +304,16 @@ void cpu_unidle(struct cpu_info *);
 #include <machine/cpufunc.h>
 #include <machine/psl.h>
 
+static inline unsigned int
+cpu_rnd_messybits(void)
+{
+	unsigned int hi, lo;
+
+	__asm volatile("rdtsc" : "=d" (hi), "=a" (lo));
+
+	return (hi ^ lo);
+}
+
 #endif /* _KERNEL */
 
 #ifdef MULTIPROCESSOR
@@ -375,7 +385,6 @@ int	cpu_amd64speed(int *);
 void	dumpconf(void);
 void	cpu_reset(void);
 void	x86_64_proc0_tss_ldt_init(void);
-void	x86_64_bufinit(void);
 void	cpu_proc_fork(struct proc *, struct proc *);
 int	amd64_pa_used(paddr_t);
 extern void (*cpu_idle_cycle_fcn)(void);
@@ -391,6 +400,7 @@ void	proc_trampoline(void);
 /* clock.c */
 extern void (*initclock_func)(void);
 void	startclocks(void);
+void	rtcinit(void);
 void	rtcstart(void);
 void	rtcstop(void);
 void	i8254_delay(int);

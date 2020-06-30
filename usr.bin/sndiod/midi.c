@@ -1,4 +1,4 @@
-/*	$OpenBSD: midi.c,v 1.23 2020/01/23 05:27:17 ratchov Exp $	*/
+/*	$OpenBSD: midi.c,v 1.25 2020/06/12 15:40:18 ratchov Exp $	*/
 /*
  * Copyright (c) 2008-2012 Alexandre Ratchov <alex@caoua.org>
  *
@@ -187,6 +187,25 @@ midi_tag(struct midi *ep, unsigned int tag)
 		t->rxmask |= ep->self;
 	if (ep->mode & MODE_MIDIIN)
 		t->txmask |= ep->self;
+}
+
+/*
+ * return the list of tags
+ */
+unsigned int
+midi_tags(struct midi *ep)
+{
+	int i;
+	struct midithru *t;
+	unsigned int tags;
+
+	tags = 0;
+	for (i = 0; i < MIDITHRU_NMAX; i++) {
+		t = midithru + i;
+		if ((t->txmask | t->rxmask) & ep->self)
+			tags |= 1 << i;
+	}
+	return tags;
 }
 
 /*
@@ -544,7 +563,7 @@ port_open(struct port *c)
 }
 
 void
-port_exitall(struct port *c)
+port_abort(struct port *c)
 {
 	int i;
 	struct midi *ep;
@@ -555,6 +574,9 @@ port_exitall(struct port *c)
 		    (c->midi->txmask & ep->self))
 			ep->ops->exit(ep->arg);
 	}
+
+	if (c->state != PORT_CFG)
+		port_close(c);
 }
 
 int
@@ -569,8 +591,6 @@ port_close(struct port *c)
 #endif
 	c->state = PORT_CFG;
 	port_mio_close(c);
-
-	port_exitall(c);
 	return 1;
 }
 

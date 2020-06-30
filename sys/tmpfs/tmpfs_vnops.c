@@ -1,4 +1,4 @@
-/*	$OpenBSD: tmpfs_vnops.c,v 1.39 2020/02/20 16:56:52 visa Exp $	*/
+/*	$OpenBSD: tmpfs_vnops.c,v 1.42 2020/06/11 09:18:43 mpi Exp $	*/
 /*	$NetBSD: tmpfs_vnops.c,v 1.100 2012/11/05 17:27:39 dholland Exp $	*/
 
 /*
@@ -2631,7 +2631,7 @@ tmpfs_kqfilter(void *v)
 
 	kn->kn_hook = (caddr_t)vp;
 
-	SLIST_INSERT_HEAD(&vp->v_selectinfo.si_note, kn, kn_selnext);
+	klist_insert(&vp->v_selectinfo.si_note, kn);
 
 	return (0);
 }
@@ -2641,7 +2641,7 @@ filt_tmpfsdetach(struct knote *kn)
 {
 	struct vnode *vp = (struct vnode *)kn->kn_hook;
 
-	SLIST_REMOVE(&vp->v_selectinfo.si_note, kn, knote, kn_selnext);
+	klist_remove(&vp->v_selectinfo.si_note, kn);
 }
 
 int
@@ -2664,6 +2664,9 @@ filt_tmpfsread(struct knote *kn, long hint)
 		kn->kn_fflags |= NOTE_EOF;
 		return (1);
 	}
+
+	if (kn->kn_flags & __EV_POLL)
+		return (1);
 
 	return (kn->kn_data != 0);
 }

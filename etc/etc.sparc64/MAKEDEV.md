@@ -1,6 +1,6 @@
 define(MACHINE,sparc64)dnl
 vers(__file__,
-	{-$OpenBSD: MAKEDEV.md,v 1.91 2020/01/23 02:47:29 dlg Exp $-},
+	{-$OpenBSD: MAKEDEV.md,v 1.93 2020/05/25 20:27:44 kmos Exp $-},
 etc.MACHINE)dnl
 dnl
 dnl Copyright (c) 2001-2006 Todd T. Fries <todd@OpenBSD.org>
@@ -157,7 +157,7 @@ twrget(wscons, wscons, ttyG, cfg, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, a, b)dnl
 twrget(wscons, wscons, ttyH, cfg, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, a, b)dnl
 twrget(wscons, wscons, ttyI, cfg, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, a, b)dnl
 twrget(wscons, wscons, ttyJ, cfg, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, a, b)dnl
-twrget(all, au, audio, 0, 1, 2)dnl
+twrget(all, au, audio, 0, 1, 2, 3)dnl
 target(all, ch, 0)dnl
 target(all, vscsi, 0)dnl
 target(all, diskmap)dnl
@@ -177,8 +177,8 @@ target(all, drm, 0, 1, 2, 3)dnl
 target(all, switch, 0, 1, 2, 3)dnl
 twrget(all, s64_tzs, tty, a, b, c, d)dnl
 twrget(all, s64_czs, cua, a, b, c, d)dnl
-twrget(all, vcc, ttyV, 0, 1, 2, 3, 4, 5, 6, 7)dnl
+twrget(all, vcc, ttyV, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, a, b, c, d, e, f)dnl
 twrget(all, vldc_hvctl, hvctl)dnl
 twrget(all, vldc_spds, spds)dnl
-twrget(all, vldc_ldom, ldom, 0, 1, 2, 3, 4, 5, 6, 7)dnl
+twrget(all, vldc_ldom, ldom, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)dnl
 target(all, vdsp, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)dnl

@@ -1,4 +1,4 @@
-/*	$OpenBSD: btrace.c,v 1.12 2020/03/27 16:22:26 cheloha Exp $ */
+/*	$OpenBSD: btrace.c,v 1.19 2020/06/18 10:26:53 mpi Exp $ */
 
 /*
  * Copyright (c) 2019 - 2020 Martin Pieuchot <mpi@openbsd.org>
@@ -85,10 +85,8 @@ void			 stmt_store(struct bt_stmt *, struct dt_evt *);
 void			 stmt_time(struct bt_stmt *, struct dt_evt *);
 void			 stmt_zero(struct bt_stmt *);
 struct bt_arg		*ba_read(struct bt_arg *);
-int			 ba2dtflag(struct bt_arg *);
-
-/* FIXME: use a real hash. */
-#define ba2hash(_b, _e)	ba2str((_b), (_e))
+const char		*ba2hash(struct bt_arg *, struct dt_evt *);
+int			 ba2dtflags(struct bt_arg *);
 
 /*
  * Debug routines.
@@ -340,15 +338,8 @@ rules_do(int fd)
 		if ((rlen % sizeof(struct dt_evt)) != 0)
 			err(1, "incorrect read");
 
-
-		for (i = 0; i < nitems(devtbuf); i++) {
-			struct dt_evt *dtev = &devtbuf[i];
-
-			if (dtev->dtev_tid == 0)
-				break;
-
-			rules_apply(dtev);
-		}
+		for (i = 0; i < rlen / sizeof(struct dt_evt); i++)
+			rules_apply(&devtbuf[i]);
 	}
 
 	rules_teardown(fd);
@@ -413,8 +404,10 @@ rules_setup(int fd)
 		bp = r->br_probe;
 		dtpi_cache(fd);
 		dtpi = dtpi_get_by_value(bp->bp_prov, bp->bp_func, bp->bp_name);
-		if (dtpi == NULL)
-			errx(1, "probe not found");
+		if (dtpi == NULL) {
+			errx(1, "probe '%s:%s:%s' not found", bp->bp_prov,
+			    bp->bp_func, bp->bp_name);
+		}
 
 		dtrq = calloc(1, sizeof(*dtrq));
 		if (dtrq == NULL)
@@ -435,7 +428,7 @@ rules_setup(int fd)
 			struct bt_arg *ba;
 
 			SLIST_FOREACH(ba, &bs->bs_args, ba_next)
-				dtrq->dtrq_evtflags |= ba2dtflag(ba);
+				dtrq->dtrq_evtflags |= ba2dtflags(ba);
 		}
 
 		if (dtrq->dtrq_evtflags & DTEVT_KSTACK)
@@ -564,11 +557,18 @@ rule_printmaps(struct bt_rule *r)
 		struct bt_arg *ba;
 
 		SLIST_FOREACH(ba, &bs->bs_args, ba_next) {
+			struct bt_var *bv = ba->ba_value;
+
 			if (ba->ba_type != B_AT_MAP)
 				continue;
 
-			map_print(ba->ba_value, SIZE_T_MAX);
-			map_clear(ba->ba_value);
+			if (bv->bv_value != NULL) {
+				struct map *map = (struct map *)bv->bv_value;
+
+				map_print(map, SIZE_T_MAX, bv_name(bv));
+				map_clear(map);
+				bv->bv_value = NULL;
+			}
 		}
 	}
 }
@@ -605,10 +605,6 @@ builtin_nsecs(struct dt_evt *dtev)
 	return TIMESPEC_TO_NSEC(&dtev->dtev_tsp);
 }
 
-#include <machine/vmparam.h>
-#include <machine/param.h>
-#define	INKERNEL(va)	((va) >= VM_MIN_KERNEL_ADDRESS)
-
 const char *
 builtin_stack(struct dt_evt *dtev, int kernel)
 {
@@ -617,19 +613,12 @@ builtin_stack(struct dt_evt *dtev, int kernel)
 	size_t i;
 	int n = 0;
 
-	if (st->st_count == 0)
+	if (!kernel || st->st_count == 0)
 		return "";
 
 	for (i = 0; i < st->st_count; i++) {
-		if (INKERNEL(st->st_pc[i])) {
-			if (!kernel)
-				continue;
-			n += kelf_snprintsym(buf + n, sizeof(buf) - 1 - n,
-			    st->st_pc[i]);
-		} else if (!kernel) {
-			n += snprintf(buf + n, sizeof(buf) - 1 - n, "0x%lx\n",
-			    st->st_pc[1]);
-		}
+		n += kelf_snprintsym(buf + n, sizeof(buf) - 1 - n,
+		    st->st_pc[i]);
 	}
 
 	return buf;
@@ -657,7 +646,8 @@ stmt_clear(struct bt_stmt *bs)
 	assert(bs->bs_var == NULL);
 	assert(ba->ba_type == B_AT_VAR);
 
-	map_clear(bv);
+	map_clear((struct map *)bv->bv_value);
+	bv->bv_value = NULL;
 
 	debug("map=%p '%s' clear\n", bv->bv_value, bv_name(bv));
 }
@@ -672,15 +662,17 @@ stmt_delete(struct bt_stmt *bs, struct dt_evt *dtev)
 {
 	struct bt_arg *bkey, *bmap = SLIST_FIRST(&bs->bs_args);
 	struct bt_var *bv = bmap->ba_value;
+	const char *hash;
 
 	assert(bmap->ba_type == B_AT_MAP);
 	assert(bs->bs_var == NULL);
 
 	bkey = bmap->ba_key;
+	hash = ba2hash(bkey, dtev);
 	debug("map=%p '%s' delete key=%p '%s'\n", bv->bv_value, bv_name(bv),
-	    bkey, ba2hash(bkey, dtev));
+	    bkey, hash);
 
-	map_delete(bv, ba2hash(bkey, dtev));
+	map_delete((struct map *)bv->bv_value, hash);
 }
 
 /*
@@ -695,15 +687,18 @@ stmt_insert(struct bt_stmt *bs, struct dt_evt *dtev)
 	struct bt_arg *bkey, *bmap = SLIST_FIRST(&bs->bs_args);
 	struct bt_arg *bval = (struct bt_arg *)bs->bs_var;
 	struct bt_var *bv = bmap->ba_value;
+	const char *hash;
 
 	assert(bmap->ba_type == B_AT_MAP);
 	assert(SLIST_NEXT(bval, ba_next) == NULL);
 
 	bkey = bmap->ba_key;
+	hash = ba2hash(bkey, dtev);
 	debug("map=%p '%s' insert key=%p '%s' bval=%p\n", bv->bv_value,
-	    bv_name(bv), bkey, ba2hash(bkey, dtev), bval);
+	    bv_name(bv), bkey, hash, bval);
 
-	map_insert(bv, ba2hash(bkey, dtev), bval);
+	bv->bv_value = (struct bt_arg *)map_insert((struct map *)bv->bv_value,
+	    hash, bval);
 }
 
 /*
@@ -728,10 +723,9 @@ stmt_print(struct bt_stmt *bs, struct dt_evt *dtev)
 		assert(SLIST_NEXT(btop, ba_next) == NULL);
 		top = ba2long(btop, dtev);
 	}
-
-	map_print(bv, top);
-
 	debug("map=%p '%s' print (top=%d)\n", bv->bv_value, bv_name(bv), top);
+
+	map_print((struct map *)bv->bv_value, top, bv_name(bv));
 }
 
 /*
@@ -801,7 +795,7 @@ stmt_zero(struct bt_stmt *bs)
 	assert(bs->bs_var == NULL);
 	assert(ba->ba_type == B_AT_VAR);
 
-	map_zero(bv);
+	map_zero((struct map *)bv->bv_value);
 
 	debug("map=%p '%s' zero\n", bv->bv_value, bv_name(bv));
 }
@@ -816,6 +810,34 @@ ba_read(struct bt_arg *ba)
 	debug("bv=%p read '%s' (%p)\n", bv, bv_name(bv), bv->bv_value);
 
 	return bv->bv_value;
+}
+
+const char *
+ba2hash(struct bt_arg *ba, struct dt_evt *dtev)
+{
+	static char buf[256];
+	char *hash;
+	int l, len;
+
+	l = snprintf(buf, sizeof(buf), "%s", ba2str(ba, dtev));
+	if (l < 0 || (size_t)l > sizeof(buf)) {
+		warn("string too long %d > %lu", l, sizeof(buf));
+		return buf;
+	}
+
+	len = 0;
+	while ((ba = SLIST_NEXT(ba, ba_next)) != NULL) {
+		len += l;
+		hash = buf + len;
+
+		l = snprintf(hash, sizeof(buf) - len, ", %s", ba2str(ba, dtev));
+		if (l < 0 || (size_t)l > (sizeof(buf) - len)) {
+			warn("hash too long %d > %lu", l + len, sizeof(buf));
+			break;
+		}
+	}
+
+	return buf;
 }
 
 /*
@@ -890,8 +912,6 @@ ba2long(struct bt_arg *ba, struct dt_evt *dtev)
 		xabort("no long conversion for type %d", ba->ba_type);
 	}
 
-	debug("ba=%p long='%ld'\n", ba, val);
-
 	return  val;
 }
 
@@ -902,6 +922,7 @@ const char *
 ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 {
 	static char buf[sizeof("18446744073709551615")]; /* UINT64_MAX */
+	struct bt_var *bv;
 	const char *str;
 
 	switch (ba->ba_type) {
@@ -920,6 +941,10 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 		break;
 	case B_AT_BI_COMM:
 		str = dtev->dtev_comm;
+		break;
+	case B_AT_BI_CPU:
+		snprintf(buf, sizeof(buf) - 1, "%u", dtev->dtev_cpu);
+		str = buf;
 		break;
 	case B_AT_BI_PID:
 		snprintf(buf, sizeof(buf) - 1, "%d", dtev->dtev_pid);
@@ -941,7 +966,9 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 		str = buf;
 		break;
 	case B_AT_MAP:
-		str = ba2str(map_get(ba->ba_value, ba2str(ba->ba_key, dtev)), dtev);
+		bv = ba->ba_value;
+		str = ba2str(map_get((struct map *)bv->bv_value,
+		    ba2str(ba->ba_key, dtev)), dtev);
 		break;
 	case B_AT_VAR:
 		str = ba2str(ba_read(ba), dtev);
@@ -960,58 +987,59 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 		xabort("no string conversion for type %d", ba->ba_type);
 	}
 
-	debug("ba=%p str='%s'\n", ba, str);
-
 	return str;
 }
 
 /*
- * Return dt(4) flag indicating which data should be recorded by the
+ * Return dt(4) flags indicating which data should be recorded by the
  * kernel, if any, for a given `ba'.
  */
 int
-ba2dtflag(struct bt_arg *ba)
+ba2dtflags(struct bt_arg *ba)
 {
-	int flag = 0;
+	int flags = 0;
 
 	if (ba->ba_type == B_AT_MAP)
 		ba = ba->ba_key;
 
-	switch (ba->ba_type) {
-	case B_AT_STR:
-	case B_AT_LONG:
-	case B_AT_VAR:
-		break;
-	case B_AT_BI_KSTACK:
-		flag = DTEVT_KSTACK;
-		break;
-	case B_AT_BI_USTACK:
-		flag = DTEVT_USTACK;
-		break;
-	case B_AT_BI_COMM:
-		flag = DTEVT_EXECNAME;
-		break;
-	case B_AT_BI_PID:
-	case B_AT_BI_TID:
-	case B_AT_BI_NSECS:
-		break;
-	case B_AT_BI_ARG0 ... B_AT_BI_ARG9:
-		flag = DTEVT_FUNCARGS;
-		break;
-	case B_AT_BI_RETVAL:
-		flag = DTEVT_RETVAL;
-		break;
-	case B_AT_MF_COUNT:
-	case B_AT_MF_MAX:
-	case B_AT_MF_MIN:
-	case B_AT_MF_SUM:
-	case B_AT_OP_ADD ... B_AT_OP_DIVIDE:
-		break;
-	default:
-		xabort("invalid argument type %d", ba->ba_type);
-	}
+	do {
+		switch (ba->ba_type) {
+		case B_AT_STR:
+		case B_AT_LONG:
+		case B_AT_VAR:
+			break;
+		case B_AT_BI_KSTACK:
+			flags |= DTEVT_KSTACK;
+			break;
+		case B_AT_BI_USTACK:
+			flags |= DTEVT_USTACK;
+			break;
+		case B_AT_BI_COMM:
+			flags |= DTEVT_EXECNAME;
+			break;
+		case B_AT_BI_CPU:
+		case B_AT_BI_PID:
+		case B_AT_BI_TID:
+		case B_AT_BI_NSECS:
+			break;
+		case B_AT_BI_ARG0 ... B_AT_BI_ARG9:
+			flags |= DTEVT_FUNCARGS;
+			break;
+		case B_AT_BI_RETVAL:
+			flags |= DTEVT_RETVAL;
+			break;
+		case B_AT_MF_COUNT:
+		case B_AT_MF_MAX:
+		case B_AT_MF_MIN:
+		case B_AT_MF_SUM:
+		case B_AT_OP_ADD ... B_AT_OP_DIVIDE:
+			break;
+		default:
+			xabort("invalid argument type %d", ba->ba_type);
+		}
+	} while ((ba = SLIST_NEXT(ba, ba_next)) != NULL);
 
-	return flag;
+	return flags;
 }
 
 long

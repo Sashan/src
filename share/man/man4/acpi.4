@@ -1,4 +1,4 @@
-.\"	$OpenBSD: acpi.4,v 1.60 2019/12/23 08:05:42 kettenis Exp $
+.\"	$OpenBSD: acpi.4,v 1.62 2020/06/02 16:24:24 jcs Exp $
 .\"
 .\" Copyright (c) 2006 Alexander Yurchenko <grange@openbsd.org>
 .\"
@@ -14,7 +14,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: December 23 2019 $
+.Dd $Mdocdate: June 2 2020 $
 .Dt ACPI 4
 .Os
 .Sh NAME
@@ -56,6 +56,8 @@ ACPI processor power and performance state
 ACPI docking station
 .It Xr acpiec 4
 ACPI embedded controller
+.It Xr acpihid 4
+ACPI HID event and 5-button array
 .It Xr acpihpet 4
 ACPI high precision event timer
 .It Xr acpihve 4
@@ -94,6 +96,8 @@ ASUSTeK AI Booster ACPI ATK0110 temperature, voltage, and fan sensor
 AMD GPIO controller
 .It Xr aplgpio 4
 Intel Apollo Lake GPIO controller
+.It Xr bse 4
+Broadcom GENET 10/100/Gigabit Ethernet device
 .It Xr bytgpio 4
 Intel Bay Trail GPIO controller
 .It Xr ccp 4

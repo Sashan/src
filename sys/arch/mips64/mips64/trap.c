@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.143 2020/01/20 15:58:23 visa Exp $	*/
+/*	$OpenBSD: trap.c,v 1.145 2020/05/23 07:18:50 visa Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -763,6 +763,14 @@ fault_common_no_miss:
 		    (instr & 0x001fffc0) == ((ZERO << 16) | (7 << 6))) {
 			signal = SIGFPE;
 			sicode = FPE_INTDIV;
+		} else if ((instr & 0xfc00003f) == 0x00000036 /* tne */ &&
+		    (instr & 0x0000ffc0) == (0x52 << 6)) {
+			KERNEL_LOCK();
+			log(LOG_ERR, "%s[%d]: retguard trap\n",
+			    p->p_p->ps_comm, p->p_p->ps_pid);
+			/* Send uncatchable SIGABRT for coredump */
+			sigexit(p, SIGABRT);
+			/* NOTREACHED */
 		} else {
 			signal = SIGEMT; /* Stuff it with something for now */
 			sicode = 0;
@@ -1477,7 +1485,7 @@ end:
 
 #ifdef DDB
 void
-stacktrace_save(struct stacktrace *st)
+stacktrace_save_at(struct stacktrace *st, unsigned int skip)
 {
 	extern char k_general[];
 	extern char u_general[];
@@ -1503,8 +1511,12 @@ stacktrace_save(struct stacktrace *st)
 		if (!VALID_ADDRESS(pc) || !VALID_ADDRESS(sp))
 			break;
 
-		if (!first)
-			st->st_pc[st->st_count++] = pc;
+		if (!first) {
+			if (skip == 0)
+				st->st_pc[st->st_count++] = pc;
+			else
+				skip--;
+		}
 		first = 0;
 
 		/* Determine the start address of the current subroutine. */

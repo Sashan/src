@@ -1,4 +1,4 @@
-/* $OpenBSD: window-tree.c,v 1.45 2020/03/20 17:26:14 nicm Exp $ */
+/* $OpenBSD: window-tree.c,v 1.50 2020/05/16 16:16:07 nicm Exp $ */
 
 /*
  * Copyright (c) 2017 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -37,12 +37,14 @@ static void		 window_tree_key(struct window_mode_entry *,
 
 #define WINDOW_TREE_DEFAULT_FORMAT \
 	"#{?pane_format," \
-		"#{pane_current_command} \"#{pane_title}\"" \
+		"#{?pane_marked,#[reverse],}" \
+		"#{pane_current_command}#{?pane_active,*,}#{?pane_marked,M,}" \
+		"#{?#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}},: \"#{pane_title}\",}" \
 	"," \
 		"#{?window_format," \
-			"#{window_name}#{window_flags} " \
-			"(#{window_panes} panes)" \
-			"#{?#{==:#{window_panes},1}, \"#{pane_title}\",}" \
+			"#{?window_marked_flag,#[reverse],}" \
+			"#{window_name}#{window_flags}" \
+			"#{?#{&&:#{==:#{window_panes},1},#{&&:#{pane_title},#{!=:#{pane_title},#{host_short}}}},: \"#{pane_title}\",}" \
 		"," \
 			"#{session_windows} windows" \
 			"#{?session_grouped, " \
@@ -56,6 +58,7 @@ static void		 window_tree_key(struct window_mode_entry *,
 static const struct menu_item window_tree_menu_items[] = {
 	{ "Select", '\r', NULL },
 	{ "Expand", KEYC_RIGHT, NULL },
+	{ "Mark", 'm', NULL },
 	{ "", KEYC_NONE, NULL },
 	{ "Tag", 't', NULL },
 	{ "Tag All", '\024', NULL },
@@ -833,7 +836,7 @@ window_tree_search(__unused void *modedata, void *itemdata, const char *ss)
 			return (0);
 		retval = (strstr(cmd, ss) != NULL);
 		free(cmd);
-		return retval;
+		return (retval);
 	}
 	return (0);
 }
@@ -882,7 +885,7 @@ window_tree_init(struct window_mode_entry *wme, struct cmd_find_state *fs,
 	data->squash_groups = !args_has(args, 'G');
 
 	data->data = mode_tree_start(wp, args, window_tree_build,
-	    window_tree_draw, window_tree_search, window_tree_menu, data,
+	    window_tree_draw, window_tree_search, window_tree_menu, NULL, data,
 	    window_tree_menu_items, window_tree_sort_list,
 	    nitems(window_tree_sort_list), &s);
 	mode_tree_zoom(data->data, args);
@@ -1170,7 +1173,7 @@ window_tree_key(struct window_mode_entry *wme, struct client *c,
 	struct window_tree_modedata	*data = wme->data;
 	struct window_tree_itemdata	*item, *new_item;
 	char				*name, *prompt = NULL;
-	struct cmd_find_state		 fs;
+	struct cmd_find_state		 fs, *fsp = &data->fs;
 	int				 finished;
 	u_int				 tagged, x, y, idx;
 	struct session			*ns;
@@ -1191,6 +1194,21 @@ window_tree_key(struct window_mode_entry *wme, struct client *c,
 		break;
 	case '>':
 		data->offset++;
+		break;
+	case 'H':
+		mode_tree_expand(data->data, (uint64_t)fsp->s);
+		mode_tree_expand(data->data, (uint64_t)fsp->wl);
+		if (!mode_tree_set_current(data->data, (uint64_t)wme->wp))
+			mode_tree_set_current(data->data, (uint64_t)fsp->wl);
+		break;
+	case 'm':
+		window_tree_pull_item(item, &ns, &nwl, &nwp);
+		server_set_marked(ns, nwl, nwp);
+		mode_tree_build(data->data);
+		break;
+	case 'M':
+		server_clear_marked();
+		mode_tree_build(data->data);
 		break;
 	case 'x':
 		window_tree_pull_item(item, &ns, &nwl, &nwp);
@@ -1216,7 +1234,7 @@ window_tree_key(struct window_mode_entry *wme, struct client *c,
 		if (prompt == NULL)
 			break;
 		data->references++;
-		status_prompt_set(c, prompt, "",
+		status_prompt_set(c, NULL, prompt, "",
 		    window_tree_kill_current_callback, window_tree_command_free,
 		    data, PROMPT_SINGLE|PROMPT_NOFORMAT);
 		free(prompt);
@@ -1227,7 +1245,7 @@ window_tree_key(struct window_mode_entry *wme, struct client *c,
 			break;
 		xasprintf(&prompt, "Kill %u tagged? ", tagged);
 		data->references++;
-		status_prompt_set(c, prompt, "",
+		status_prompt_set(c, NULL, prompt, "",
 		    window_tree_kill_tagged_callback, window_tree_command_free,
 		    data, PROMPT_SINGLE|PROMPT_NOFORMAT);
 		free(prompt);
@@ -1239,8 +1257,9 @@ window_tree_key(struct window_mode_entry *wme, struct client *c,
 		else
 			xasprintf(&prompt, "(current) ");
 		data->references++;
-		status_prompt_set(c, prompt, "", window_tree_command_callback,
-		    window_tree_command_free, data, PROMPT_NOFORMAT);
+		status_prompt_set(c, NULL, prompt, "",
+		    window_tree_command_callback, window_tree_command_free,
+		    data, PROMPT_NOFORMAT);
 		free(prompt);
 		break;
 	case '\r':

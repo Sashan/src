@@ -1,4 +1,4 @@
-/*	$OpenBSD: ofw_misc.c,v 1.18 2020/03/22 14:56:24 kettenis Exp $	*/
+/*	$OpenBSD: ofw_misc.c,v 1.22 2020/06/25 12:35:21 patrick Exp $	*/
 /*
  * Copyright (c) 2017 Mark Kettenis
  *
@@ -22,7 +22,9 @@
 #include <machine/bus.h>
 
 #include <dev/ofw/openfirm.h>
+#include <dev/ofw/ofw_gpio.h>
 #include <dev/ofw/ofw_misc.h>
+#include <dev/ofw/ofw_regulator.h>
 
 /*
  * Register maps.
@@ -86,6 +88,9 @@ regmap_byphandle(uint32_t phandle)
 {
 	struct regmap *rm;
 
+	if (phandle == 0)
+		return NULL;
+
 	LIST_FOREACH(rm, &regmaps, rm_list) {
 		if (rm->rm_phandle == phandle)
 			return rm;
@@ -128,10 +133,40 @@ phy_register(struct phy_device *pd)
 }
 
 int
+phy_usb_nop_enable(int node)
+{
+	uint32_t vcc_supply;
+	uint32_t *gpio;
+	int len;
+
+	vcc_supply = OF_getpropint(node, "vcc-supply", 0);
+	if (vcc_supply)
+		regulator_enable(vcc_supply);
+
+	len = OF_getproplen(node, "reset-gpios");
+	if (len <= 0)
+		return 0;
+
+	/* There should only be a single GPIO pin. */
+	gpio = malloc(len, M_TEMP, M_WAITOK);
+	OF_getpropintarray(node, "reset-gpios", gpio, len);
+
+	gpio_controller_config_pin(gpio, GPIO_CONFIG_OUTPUT);
+	gpio_controller_set_pin(gpio, 1);
+	delay(10000);
+	gpio_controller_set_pin(gpio, 0);
+
+	free(gpio, M_TEMP, len);
+
+	return 0;
+}
+
+int
 phy_enable_cells(uint32_t *cells)
 {
 	struct phy_device *pd;
 	uint32_t phandle = cells[0];
+	int node;
 
 	LIST_FOREACH(pd, &phy_devices, pd_list) {
 		if (pd->pd_phandle == phandle)
@@ -141,7 +176,14 @@ phy_enable_cells(uint32_t *cells)
 	if (pd && pd->pd_enable)
 		return pd->pd_enable(pd->pd_cookie, &cells[1]);
 
-	return -1;
+	node = OF_getnodebyphandle(phandle);
+	if (node == 0)
+		return ENXIO;
+
+	if (OF_is_compatible(node, "usb-nop-xceiv"))
+		return phy_usb_nop_enable(node);
+
+	return ENXIO;
 }
 
 uint32_t *
@@ -234,6 +276,9 @@ i2c_byphandle(uint32_t phandle)
 {
 	struct i2c_bus *ib;
 
+	if (phandle == 0)
+		return NULL;
+
 	LIST_FOREACH(ib, &i2c_busses, ib_list) {
 		if (ib->ib_phandle == phandle)
 			return ib->ib_ic;
@@ -263,6 +308,9 @@ int
 sfp_get_sffpage(uint32_t phandle, struct if_sffpage *sff)
 {
 	struct sfp_device *sd;
+
+	if (phandle == 0)
+		return ENXIO;
 
 	LIST_FOREACH(sd, &sfp_devices, sd_list) {
 		if (sd->sd_phandle == phandle)
@@ -397,6 +445,9 @@ nvmem_read(uint32_t phandle, bus_addr_t addr, void *data, bus_size_t size)
 {
 	struct nvmem_device *nd;
 
+	if (phandle == 0)
+		return ENXIO;
+
 	LIST_FOREACH(nd, &nvmem_devices, nd_list) {
 		if (nd->nd_phandle == phandle)
 			return nd->nd_read(nd->nd_cookie, addr, data, size);
@@ -506,6 +557,9 @@ endpoint_byphandle(uint32_t phandle)
 {
 	struct endpoint *ep;
 
+	if (phandle == 0)
+		return NULL;
+
 	LIST_FOREACH(ep, &endpoints, ep_list) {
 		if (ep->ep_phandle == phandle)
 			return ep;
@@ -573,6 +627,9 @@ device_port_activate(uint32_t phandle, void *arg)
 	int count;
 	int error;
 
+	if (phandle == 0)
+		return ENXIO;
+
 	LIST_FOREACH(ep, &endpoints, ep_list) {
 		if (ep->ep_port->dp_phandle == phandle) {
 			dp = ep->ep_port;
@@ -598,4 +655,71 @@ device_port_activate(uint32_t phandle, void *arg)
 	}
 
 	return count ? 0 : ENXIO;
+}
+
+/* Digital audio interface support */
+
+LIST_HEAD(, dai_device) dai_devices =
+	LIST_HEAD_INITIALIZER(dai_devices);
+
+void
+dai_register(struct dai_device *dd)
+{
+	dd->dd_phandle = OF_getpropint(dd->dd_node, "phandle", 0);
+	if (dd->dd_phandle == 0)
+		return;
+
+	LIST_INSERT_HEAD(&dai_devices, dd, dd_list);
+}
+
+struct dai_device *
+dai_byphandle(uint32_t phandle)
+{
+	struct dai_device *dd;
+
+	if (phandle == 0)
+		return NULL;
+
+	LIST_FOREACH(dd, &dai_devices, dd_list) {
+		if (dd->dd_phandle == phandle)
+			return dd;
+	}
+
+	return NULL;
+}
+
+/* MII support */
+
+LIST_HEAD(, mii_bus) mii_busses =
+	LIST_HEAD_INITIALIZER(mii_busses);
+
+void
+mii_register(struct mii_bus *md)
+{
+	LIST_INSERT_HEAD(&mii_busses, md, md_list);
+}
+
+struct mii_bus *
+mii_byphandle(uint32_t phandle)
+{
+	struct mii_bus *md;
+	int node;
+
+	if (phandle == 0)
+		return NULL;
+
+	node = OF_getnodebyphandle(phandle);
+	if (node == 0)
+		return NULL;
+
+	node = OF_parent(node);
+	if (node == 0)
+		return NULL;
+
+	LIST_FOREACH(md, &mii_busses, md_list) {
+		if (md->md_node == node)
+			return md;
+	}
+
+	return NULL;
 }

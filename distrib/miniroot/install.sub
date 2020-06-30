@@ -1,5 +1,5 @@
 #!/bin/ksh
-#	$OpenBSD: install.sub,v 1.1149 2020/03/06 21:14:20 gkoehler Exp $
+#	$OpenBSD: install.sub,v 1.1154 2020/05/26 16:21:00 florian Exp $
 #
 # Copyright (c) 1997-2015 Todd Miller, Theo de Raadt, Ken Westerback
 # Copyright (c) 2015, Robert Peichaer <rpe@openbsd.org>
@@ -195,8 +195,7 @@ show_cols() {
 	rm -rf -- $_cdir
 }
 
-# Echo file $1 to stdout. Skip comment lines and delete everything
-# after the first '#' from other lines. Strip leading and trailing
+# Echo file $1 to stdout. Skip comment lines. Strip leading and trailing
 # whitespace if IFS is set.
 stripcom() {
 	local _file=$1 _line
@@ -505,11 +504,12 @@ configure_disk() {
 		while read _pp _mp _fstype _rest; do
 			[[ $_fstype == ffs ]] || continue
 
-			# Use machine-dependent newfs options for the root
-			# partition if defined.
-			_opt=$MDFSOPT
-			[[ $_mp == / ]] && _opt=$MDROOTFSOPT
-
+			# Default to FFS2 unless otherwise directed.
+			if [[ $_mp == / ]]; then
+				_opt=${MDROOTFSOPT:--O2}
+			else
+				_opt=${MDFSOPT:--O2}
+			fi
 			newfs -q $_opt ${_pp##/dev/}
 
 			# N.B.: '!' is lexically < '/'.
@@ -2881,13 +2881,6 @@ do_autoinstall() {
 	# Email autoinstall protocol to root on next boot.
 	prep_root_mail /tmp/ai/ai.log "$(hostname) $AI_MODE log"
 
-	# SYSUP-COMPAT
-	if $UU; then
-		cat <<__EOT >>/mnt/etc/rc.firsttime
-[[ ! -e /home/_sysupgrade/keep ]] && rm -f /home/_sysupgrade/*
-__EOT
-	fi
-
 	exec reboot
 }
 
@@ -3226,26 +3219,9 @@ check_unattendedupgrade() {
 		if [[ -n $_d ]]; then
 			make_dev $_d
 			if mount -t ffs -r /dev/${_d}a /mnt; then
-				### NOTYET (uncomment once SYSUP-COMPAT is gone)
-				#[[ -f /mnt/bsd.upgrade && -f /mnt/auto_upgrade.conf ]]
-				#_rc=$?
-				#((_rc == 0)) && cp /mnt/auto_upgrade.conf /
-				### BEGIN SYSUP-COMPAT
-				ls /mnt/bsd.upgrade 
+				[[ -f /mnt/bsd.upgrade && -f /mnt/auto_upgrade.conf ]]
 				_rc=$?
-				if ((_rc == 0)); then
-					if [[ -f /mnt/auto_upgrade.conf ]]; then
-						cp /mnt/auto_upgrade.conf /
-					else
-						cat <<__EOT >/auto_upgrade.conf
-Location of sets = disk
-Pathname to the sets = /home/_sysupgrade/
-Set name(s) = done
-Directory does not contain SHA256.sig. Continue without verification = yes
-__EOT
-					fi
-				fi
-				### END SYSUP-COMPAT 
+				((_rc == 0)) && cp /mnt/auto_upgrade.conf /
 				umount -f /mnt
 			fi
 			rm -f /dev/{r,}$_d?
@@ -3328,8 +3304,8 @@ umount -af >/dev/null 2>&1
 #
 # The following variables can be provided if required:
 #	MDEFI       - set to 'y' on archs that support GPT partitioning
-#	MDFSOPT     - newfs options for non-root partitions
-#	MDROOTFSOPT - newfs options for the root partition
+#	MDFSOPT     - newfs options for non-root partitions, '-O2' assumed if not provided
+#	MDROOTFSOPT - newfs options for the root partition, '-O2' assumed if not provided
 #	MDSETS	    - list of files to add to DEFAULT and ALLSETS
 #	MDSANESETS  - list of files to add to SANESETS
 #	MDTERM      - 'vt220' assumed if not provided

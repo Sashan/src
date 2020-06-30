@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.26 2020/03/10 14:22:26 jca Exp $ */
+/*	$OpenBSD: extern.h,v 1.30 2020/06/24 14:39:21 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -18,6 +18,7 @@
 #define EXTERN_H
 
 #include <sys/tree.h>
+#include <sys/time.h>
 
 enum cert_as_type {
 	CERT_AS_ID, /* single identifier */
@@ -244,6 +245,31 @@ enum rtype {
 	RTYPE_CRL
 };
 
+/*
+ * Statistics collected during run-time.
+ */
+struct	stats {
+	size_t	 tals; /* total number of locators */
+	size_t	 mfts; /* total number of manifests */
+	size_t	 mfts_fail; /* failing syntactic parse */
+	size_t	 mfts_stale; /* stale manifests */
+	size_t	 certs; /* certificates */
+	size_t	 certs_fail; /* failing syntactic parse */
+	size_t	 certs_invalid; /* invalid resources */
+	size_t	 roas; /* route origin authorizations */
+	size_t	 roas_fail; /* failing syntactic parse */
+	size_t	 roas_invalid; /* invalid resources */
+	size_t	 repos; /* repositories */
+	size_t	 crls; /* revocation lists */
+	size_t	 vrps; /* total number of vrps */
+	size_t	 uniqs; /* number of unique vrps */
+	size_t	 del_files; /* number of files removed in cleanup */
+	char	*talnames;
+	struct timeval	elapsed_time;
+	struct timeval	user_time;
+	struct timeval	system_time;
+};
+
 /* global variables */
 extern int verbose;
 
@@ -264,6 +290,7 @@ struct cert	*cert_read(int);
 void		 mft_buffer(char **, size_t *, size_t *, const struct mft *);
 void		 mft_free(struct mft *);
 struct mft	*mft_parse(X509 **, const char *, int);
+int		 mft_check(const char *, struct mft *);
 struct mft	*mft_read(int);
 
 void		 roa_buffer(char **, size_t *, size_t *, const struct roa *);
@@ -369,13 +396,14 @@ extern int	 outformats;
 #define FORMAT_JSON	0x08
 extern char*	 outputdir;
 
-int		 outputfiles(struct vrp_tree *v);
-int		 output_bgpd(FILE *, struct vrp_tree *);
-int		 output_bird1v4(FILE *, struct vrp_tree *);
-int		 output_bird1v6(FILE *, struct vrp_tree *);
-int		 output_bird2(FILE *, struct vrp_tree *);
-int		 output_csv(FILE *, struct vrp_tree *);
-int		 output_json(FILE *, struct vrp_tree *);
+int		 outputfiles(struct vrp_tree *v, struct stats *);
+int		 outputheader(FILE *, struct stats *);
+int		 output_bgpd(FILE *, struct vrp_tree *, struct stats *);
+int		 output_bird1v4(FILE *, struct vrp_tree *, struct stats *);
+int		 output_bird1v6(FILE *, struct vrp_tree *, struct stats *);
+int		 output_bird2(FILE *, struct vrp_tree *, struct stats *);
+int		 output_csv(FILE *, struct vrp_tree *, struct stats *);
+int		 output_json(FILE *, struct vrp_tree *, struct stats *);
 
 void	logx(const char *fmt, ...)
 		    __attribute__((format(printf, 1, 2)));

@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_socket.c,v 1.242 2020/03/11 22:21:28 sashan Exp $	*/
+/*	$OpenBSD: uipc_socket.c,v 1.247 2020/06/22 13:14:32 mpi Exp $	*/
 /*	$NetBSD: uipc_socket.c,v 1.21 1996/02/04 02:17:52 christos Exp $	*/
 
 /*
@@ -93,6 +93,12 @@ const struct filterops sowrite_filtops = {
 	.f_event	= filt_sowrite,
 };
 
+const struct filterops soexcept_filtops = {
+	.f_flags	= FILTEROP_ISFD,
+	.f_attach	= NULL,
+	.f_detach	= filt_sordetach,
+	.f_event	= filt_soread,
+};
 
 #ifndef SOMINCONN
 #define SOMINCONN 80
@@ -1200,6 +1206,10 @@ sosplice(struct socket *so, int fd, off_t max, struct timeval *tv)
 	if ((error = getsock(curproc, fd, &fp)) != 0)
 		return (error);
 	sosp = fp->f_data;
+	if (sosp->so_proto->pr_usrreq != so->so_proto->pr_usrreq) {
+		error = EPROTONOSUPPORT;
+		goto frele;
+	}
 	if (sosp->so_sp == NULL) {
 		sp = pool_get(&sosplice_pool, PR_WAITOK | PR_ZERO);
 		if (sosp->so_sp == NULL)
@@ -1219,10 +1229,6 @@ sosplice(struct socket *so, int fd, off_t max, struct timeval *tv)
 
 	if (so->so_sp->ssp_socket || sosp->so_sp->ssp_soback) {
 		error = EBUSY;
-		goto release;
-	}
-	if (sosp->so_proto->pr_usrreq != so->so_proto->pr_usrreq) {
-		error = EPROTONOSUPPORT;
 		goto release;
 	}
 	if (sosp->so_options & SO_ACCEPTCONN) {
@@ -1259,7 +1265,15 @@ sosplice(struct socket *so, int fd, off_t max, struct timeval *tv)
 	sbunlock(sosp, &sosp->so_snd);
 	sbunlock(so, &so->so_rcv);
  frele:
+	/*
+	 * FRELE() must not be called with the socket lock held. It is safe to
+	 * release the lock here as long as no other operation happen on the
+	 * socket when sosplice() returns. The dance could be avoided by
+	 * grabbing the socket lock inside this function.
+	 */
+	sounlock(so, SL_LOCKED);
 	FRELE(fp, curproc);
+	solock(so);
 	return (error);
 }
 
@@ -2018,11 +2032,15 @@ soo_kqfilter(struct file *fp, struct knote *kn)
 		kn->kn_fop = &sowrite_filtops;
 		sb = &so->so_snd;
 		break;
+	case EVFILT_EXCEPT:
+		kn->kn_fop = &soexcept_filtops;
+		sb = &so->so_rcv;
+		break;
 	default:
 		return (EINVAL);
 	}
 
-	SLIST_INSERT_HEAD(&sb->sb_sel.si_note, kn, kn_selnext);
+	klist_insert(&sb->sb_sel.si_note, kn);
 	sb->sb_flagsintr |= SB_KNOTE;
 
 	return (0);
@@ -2035,8 +2053,8 @@ filt_sordetach(struct knote *kn)
 
 	KERNEL_ASSERT_LOCKED();
 
-	SLIST_REMOVE(&so->so_rcv.sb_sel.si_note, kn, knote, kn_selnext);
-	if (SLIST_EMPTY(&so->so_rcv.sb_sel.si_note))
+	klist_remove(&so->so_rcv.sb_sel.si_note, kn);
+	if (klist_empty(&so->so_rcv.sb_sel.si_note))
 		so->so_rcv.sb_flagsintr &= ~SB_KNOTE;
 }
 
@@ -2044,7 +2062,7 @@ int
 filt_soread(struct knote *kn, long hint)
 {
 	struct socket *so = kn->kn_fp->f_data;
-	int s, rv;
+	int s, rv = 0;
 
 	if ((hint & NOTE_SUBMIT) == 0)
 		s = solock(so);
@@ -2054,8 +2072,18 @@ filt_soread(struct knote *kn, long hint)
 		rv = 0;
 	} else
 #endif /* SOCKET_SPLICE */
-	if (so->so_state & SS_CANTRCVMORE) {
+	if (kn->kn_sfflags & NOTE_OOB) {
+		if (so->so_oobmark || (so->so_state & SS_RCVATMARK)) {
+			kn->kn_fflags |= NOTE_OOB;
+			kn->kn_data -= so->so_oobmark;
+			rv = 1;
+		}
+	} else if (so->so_state & SS_CANTRCVMORE) {
 		kn->kn_flags |= EV_EOF;
+		if (kn->kn_flags & __EV_POLL) {
+			if (so->so_state & SS_ISDISCONNECTED)
+				kn->kn_flags |= __EV_HUP;
+		}
 		kn->kn_fflags = so->so_error;
 		rv = 1;
 	} else if (so->so_error) {	/* temporary udp error */
@@ -2078,8 +2106,8 @@ filt_sowdetach(struct knote *kn)
 
 	KERNEL_ASSERT_LOCKED();
 
-	SLIST_REMOVE(&so->so_snd.sb_sel.si_note, kn, knote, kn_selnext);
-	if (SLIST_EMPTY(&so->so_snd.sb_sel.si_note))
+	klist_remove(&so->so_snd.sb_sel.si_note, kn);
+	if (klist_empty(&so->so_snd.sb_sel.si_note))
 		so->so_snd.sb_flagsintr &= ~SB_KNOTE;
 }
 
@@ -2094,6 +2122,10 @@ filt_sowrite(struct knote *kn, long hint)
 	kn->kn_data = sbspace(so, &so->so_snd);
 	if (so->so_state & SS_CANTSENDMORE) {
 		kn->kn_flags |= EV_EOF;
+		if (kn->kn_flags & __EV_POLL) {
+			if (so->so_state & SS_ISDISCONNECTED)
+				kn->kn_flags |= __EV_HUP;
+		}
 		kn->kn_fflags = so->so_error;
 		rv = 1;
 	} else if (so->so_error) {	/* temporary udp error */

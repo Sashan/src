@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2_pld.c,v 1.79 2020/03/16 09:13:01 tobhe Exp $	*/
+/*	$OpenBSD: ikev2_pld.c,v 1.87 2020/06/09 21:53:26 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -719,6 +719,7 @@ ikev2_pld_id(struct iked *env, struct ikev2_payload *pld,
 		return (-1);
 
 	if (ikev2_print_id(&idb, idstr, sizeof(idstr)) == -1) {
+		ibuf_release(idb.id_buf);
 		log_debug("%s: malformed id", __func__);
 		return (-1);
 	}
@@ -732,12 +733,14 @@ ikev2_pld_id(struct iked *env, struct ikev2_payload *pld,
 
 	if (!((sa->sa_hdr.sh_initiator && payload == IKEV2_PAYLOAD_IDr) ||
 	    (!sa->sa_hdr.sh_initiator && payload == IKEV2_PAYLOAD_IDi))) {
+		ibuf_release(idb.id_buf);
 		log_debug("%s: unexpected id payload", __func__);
 		return (0);
 	}
 
 	idp = &msg->msg_parent->msg_id;
 	if (idp->id_type) {
+		ibuf_release(idb.id_buf);
 		log_debug("%s: duplicate id payload", __func__);
 		return (-1);
 	}
@@ -899,7 +902,6 @@ ikev2_pld_auth(struct iked *env, struct ikev2_payload *pld,
 	struct iked_id			*idp;
 	uint8_t				*buf;
 	size_t				 len;
-	struct iked_sa			*sa = msg->msg_sa;
 	uint8_t				*msgbuf = ibuf_data(msg->msg_data);
 
 	if (ikev2_validate_auth(msg, offset, left, &auth))
@@ -916,10 +918,6 @@ ikev2_pld_auth(struct iked *env, struct ikev2_payload *pld,
 
 	if (!ikev2_msg_frompeer(msg))
 		return (0);
-
-	/* The AUTH payload indicates if the responder wants EAP or not */
-	if (!sa_stateok(sa, IKEV2_STATE_EAP))
-		sa_state(env, sa, IKEV2_STATE_AUTH_REQUEST);
 
 	idp = &msg->msg_parent->msg_auth;
 	if (idp->id_type) {
@@ -1184,12 +1182,14 @@ ikev2_pld_notify(struct iked *env, struct ikev2_payload *pld,
 			    " notification: %zu", __func__, len);
 			return (0);
 		}
-		if (!(msg->msg_policy->pol_flags & IKED_POLICY_TRANSPORT)) {
-			log_debug("%s: ignoring transport mode"
-			    " notification (policy)", __func__);
-			return (0);
+		if (msg->msg_parent->msg_response) {
+			if (!(msg->msg_policy->pol_flags & IKED_POLICY_TRANSPORT)) {
+				log_debug("%s: ignoring transport mode"
+				    " notification (policy)", __func__);
+				return (0);
+			}
 		}
-		msg->msg_sa->sa_use_transport_mode = 1;
+		msg->msg_parent->msg_flags |= IKED_MSG_FLAGS_USE_TRANSPORT;
 		break;
 	case IKEV2_N_UPDATE_SA_ADDRESSES:
 		if (!msg->msg_e) {
@@ -1326,6 +1326,7 @@ ikev2_pld_delete(struct iked *env, struct ikev2_payload *pld,
 	struct iked_sa		*sa = msg->msg_sa;
 	struct ikev2_delete	 del, *localdel;
 	struct ibuf		*resp = NULL;
+	struct ibuf		*spibuf = NULL;
 	uint64_t		*localspi = NULL;
 	uint64_t		 spi64, spi = 0;
 	uint32_t		 spi32;
@@ -1414,15 +1415,22 @@ ikev2_pld_delete(struct iked *env, struct ikev2_payload *pld,
 		if ((peersas[i] = childsa_lookup(sa, spi,
 		    del.del_protoid)) == NULL) {
 			log_warnx("%s: CHILD SA doesn't exist for spi %s",
-			    __func__, print_spi(spi, del.del_spisize));
+			    SPI_SA(sa, __func__),
+			    print_spi(spi, del.del_spisize));
 			continue;
 		}
 
 		if (ikev2_childsa_delete(env, sa, del.del_protoid, spi,
 		    &localspi[i], 0) == -1)
 			failed++;
-		else
+		else {
 			found++;
+
+			/* append SPI to log buffer */
+			if (ibuf_strlen(spibuf))
+				ibuf_strcat(&spibuf, ", ");
+			ibuf_strcat(&spibuf, print_spi(spi, sz));
+		}
 
 		/*
 		 * Flows are left in the require mode so that it would be
@@ -1468,8 +1476,11 @@ ikev2_pld_delete(struct iked *env, struct ikev2_payload *pld,
 				break;
 			}
 		}
-
-		log_warnx("%s: deleted %zu spis", SPI_SA(sa, __func__), found);
+		log_info("%sdeleted %zu SPI%s: %.*s",
+		    SPI_SA(sa, NULL), found,
+		    found == 1 ? "" : "s",
+		    spibuf ? ibuf_strlen(spibuf) : 0,
+		    spibuf ? (char *)ibuf_data(spibuf) : "");
 	}
 
 	if (found) {
@@ -1484,6 +1495,7 @@ ikev2_pld_delete(struct iked *env, struct ikev2_payload *pld,
  done:
 	free(localspi);
 	free(peersas);
+	ibuf_release(spibuf);
 	ibuf_release(resp);
 	return (ret);
 }
@@ -1919,7 +1931,7 @@ ikev2_pld_eap(struct iked *env, struct ikev2_payload *pld,
 	len = betoh16(hdr.eap_length);
 
 	if (len < sizeof(*eap)) {
-		log_info("%s: %s id %d length %d", __func__,
+		log_info("%s: %s id %d length %d", SPI_SA(sa, __func__),
 		    print_map(hdr.eap_code, eap_code_map),
 		    hdr.eap_id, betoh16(hdr.eap_length));
 	} else {
@@ -1929,7 +1941,7 @@ ikev2_pld_eap(struct iked *env, struct ikev2_payload *pld,
 			return (-1);
 		}
 
-		log_info("%s: %s id %d length %d EAP-%s", __func__,
+		log_info("%s: %s id %d length %d EAP-%s", SPI_SA(sa, __func__),
 		    print_map(eap->eap_code, eap_code_map),
 		    eap->eap_id, betoh16(eap->eap_length),
 		    print_map(eap->eap_type, eap_type_map));

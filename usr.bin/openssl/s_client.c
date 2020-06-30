@@ -1,4 +1,4 @@
-/* $OpenBSD: s_client.c,v 1.42 2020/02/16 16:39:01 jsing Exp $ */
+/* $OpenBSD: s_client.c,v 1.46 2020/05/23 12:52:54 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -245,7 +245,7 @@ sc_usage(void)
 	BIO_printf(bio_err, " -status           - request certificate status from server\n");
 	BIO_printf(bio_err, " -no_ticket        - disable use of RFC4507bis session tickets\n");
 	BIO_printf(bio_err, " -alpn arg         - enable ALPN extension, considering named protocols supported (comma-separated list)\n");
-	BIO_printf(bio_err, " -groups arg       - specify EC curve groups (colon-separated list)\n");
+	BIO_printf(bio_err, " -groups arg       - specify EC groups (colon-separated list)\n");
 #ifndef OPENSSL_NO_SRTP
 	BIO_printf(bio_err, " -use_srtp profiles - Offer SRTP key management with a colon-separated profile list\n");
 #endif
@@ -293,7 +293,7 @@ s_client_main(int argc, char **argv)
 {
 	unsigned int off = 0, clr = 0;
 	SSL *con = NULL;
-	int s, k, p, pending, state = 0, af = AF_UNSPEC;
+	int s, k, p = 0, pending = 0, state = 0, af = AF_UNSPEC;
 	char *cbuf = NULL, *sbuf = NULL, *mbuf = NULL, *pbuf = NULL;
 	int cbuf_len, cbuf_off;
 	int sbuf_len, sbuf_off;
@@ -331,7 +331,7 @@ s_client_main(int argc, char **argv)
 	const char *groups_in = NULL;
 	char *sess_in = NULL;
 	char *sess_out = NULL;
-	struct sockaddr peer;
+	struct sockaddr_storage peer;
 	int peerlen = sizeof(peer);
 	int enable_timeouts = 0;
 	long socket_mtu = 0;
@@ -653,6 +653,9 @@ s_client_main(int argc, char **argv)
 		ERR_print_errors(bio_err);
 		goto end;
 	}
+
+	SSL_CTX_clear_mode(ctx, SSL_MODE_AUTO_RETRY);
+
 	if (vpm)
 		SSL_CTX_set1_param(ctx, vpm);
 
@@ -776,7 +779,8 @@ re_start:
 	if (SSL_version(con) == DTLS1_VERSION) {
 
 		sbio = BIO_new_dgram(s, BIO_NOCLOSE);
-		if (getsockname(s, &peer, (void *) &peerlen) == -1) {
+		if (getsockname(s, (struct sockaddr *)&peer,
+		    (void *)&peerlen) == -1) {
 			BIO_printf(bio_err, "getsockname:errno=%d\n",
 			    errno);
 			shutdown(s, SHUT_RD);

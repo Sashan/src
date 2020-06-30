@@ -1,10 +1,10 @@
-/*	$OpenBSD: tsc.c,v 1.15 2019/10/12 14:05:50 kettenis Exp $	*/
+/*	$OpenBSD: tsc.c,v 1.17 2020/06/22 12:27:54 pirofti Exp $	*/
 /*
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
  * Copyright (c) 2016,2017 Reyk Floeter <reyk@openbsd.org>
  * Copyright (c) 2017 Adam Steen <adam@adamsteen.com.au>
  * Copyright (c) 2017 Mike Belopuhov <mike@openbsd.org>
- * Copyright (c) 2019 Paul Irofti <pirofti@openbsd.org>
+ * Copyright (c) 2019 Paul Irofti <paul@irofti.net>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -42,7 +42,7 @@ int64_t	tsc_drift_observed;
 volatile int64_t	tsc_sync_val;
 volatile struct cpu_info	*tsc_sync_cpu;
 
-uint		tsc_get_timecount(struct timecounter *tc);
+u_int		tsc_get_timecount(struct timecounter *tc);
 
 #include "lapic.h"
 #if NLAPIC > 0
@@ -207,7 +207,7 @@ cpu_recalibrate_tsc(struct timecounter *tc)
 	calibrate_tsc_freq();
 }
 
-uint
+u_int
 tsc_get_timecount(struct timecounter *tc)
 {
 	return rdtsc() + curcpu()->ci_tsc_skew;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_vmxreg.h,v 1.6 2019/10/27 22:24:40 dlg Exp $	*/
+/*	$OpenBSD: if_vmxreg.h,v 1.8 2020/06/17 07:08:39 dlg Exp $	*/
 
 /*
  * Copyright (c) 2013 Tsubai Masanari
@@ -73,6 +73,7 @@ struct UPT1_RxStats {
 #define VMXNET3_CMD_SET_RXMODE	0xcafe0003	/* set interface flags */
 #define VMXNET3_CMD_SET_FILTER	0xcafe0004	/* set address filter */
 #define VMXNET3_CMD_GET_STATUS	0xf00d0000	/* get queue errors */
+#define VMXNET3_CMD_GET_STATS	0xf00d0001
 #define VMXNET3_CMD_GET_LINK	0xf00d0002	/* get link status */
 #define VMXNET3_CMD_GET_MACL	0xf00d0003
 #define VMXNET3_CMD_GET_MACH	0xf00d0004
@@ -177,6 +178,7 @@ struct vmxnet3_rxcompdesc {
 #define VMXNET3_RXC_QID_S	16
 #define VMXNET3_RXC_RSSTYPE_M	0x0000000f
 #define VMXNET3_RXC_RSSTYPE_S	26
+#define VMXNET3_RXC_RSSTYPE_NONE 0
 #define VMXNET3_RXC_NOCSUM	0x40000000	/* no checksum calculated */
 #define VMXNET3_RXC_RES1	0x80000000
 
@@ -335,3 +337,21 @@ struct vmxnet3_rxq_shared {
 
 	u_int8_t pad4[88];
 } __packed;
+
+#define UPT1_RSS_MAX_KEY_SIZE		40
+#define UPT1_RSS_MAX_IND_TABLE_SIZE	128
+
+struct vmxnet3_upt1_rss_conf {
+	u_int16_t hash_type;
+#define UPT1_RSS_HASH_TYPE_NONE		0
+#define UPT1_RSS_HASH_TYPE_IPV4		1
+#define UPT1_RSS_HASH_TYPE_TCP_IPV4	2
+#define UPT1_RSS_HASH_TYPE_IPV6		4
+#define UPT1_RSS_HASH_TYPE_TCP_IPV6	8
+	u_int16_t hash_func;
+#define UPT1_RSS_HASH_FUNC_TOEPLITZ	1
+	u_int16_t hash_key_size;
+	u_int16_t ind_table_size;
+	u_int8_t hash_key[UPT1_RSS_MAX_KEY_SIZE];
+	u_int8_t ind_table[UPT1_RSS_MAX_IND_TABLE_SIZE];
+ } __packed;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: rkclock.c,v 1.51 2020/03/01 17:57:33 kettenis Exp $	*/
+/*	$OpenBSD: rkclock.c,v 1.53 2020/06/11 00:07:34 patrick Exp $	*/
 /*
  * Copyright (c) 2017, 2018 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -883,6 +883,11 @@ struct rkclock rk3328_clocks[] = {
 		{ RK3328_PLL_CPLL, RK3328_PLL_GPLL }
 	},
 	{
+		RK3328_CLK_CRYPTO, RK3328_CRU_CLKSEL_CON(20),
+		SEL(7, 7), DIV(4, 0),
+		{ RK3328_PLL_CPLL, RK3328_PLL_GPLL }
+	},
+	{
 		RK3328_CLK_PDM, RK3328_CRU_CLKSEL_CON(20),
 		SEL(15, 14), DIV(12, 8),
 		{ RK3328_PLL_CPLL, RK3328_PLL_GPLL, RK3328_PLL_APLL },
@@ -1422,6 +1427,9 @@ rk3328_set_frequency(void *cookie, uint32_t *cells, uint32_t freq)
 		    RK3328_CRU_VOP_DCLK_SRC_SEL_SHIFT;
 		idx = (mux == 0) ? RK3328_HDMIPHY : RK3328_DCLK_LCDC_SRC;
 		return rk3328_set_frequency(sc, &idx, freq);
+	case RK3328_HCLK_CRYPTO_SLV:
+		idx = RK3328_HCLK_BUS_PRE;
+		return rk3328_set_frequency(sc, &idx, freq);
 	default:
 		break;
 	}
@@ -1587,6 +1595,30 @@ struct rkclock rk3399_clocks[] = {
 		{ 0, 0, RK3399_XIN24M }
 	},
 	{
+		RK3399_CLK_I2S0_8CH, RK3399_CRU_CLKSEL_CON(28),
+		SEL(9, 8), 0,
+		{ RK3399_CLK_I2S0_DIV, 0, 0, RK3399_XIN12M },
+		SET_PARENT
+	},
+	{
+		RK3399_CLK_I2S1_8CH, RK3399_CRU_CLKSEL_CON(29),
+		SEL(9, 8), 0,
+		{ RK3399_CLK_I2S1_DIV, 0, 0, RK3399_XIN12M },
+		SET_PARENT
+	},
+	{
+		RK3399_CLK_I2S2_8CH, RK3399_CRU_CLKSEL_CON(30),
+		SEL(9, 8), 0,
+		{ RK3399_CLK_I2S2_DIV, 0, 0, RK3399_XIN12M },
+		SET_PARENT
+	},
+	{
+		RK3399_CLK_I2S_8CH_OUT, RK3399_CRU_CLKSEL_CON(31),
+		SEL(2, 2), 0,
+		{ RK3399_CLK_I2SOUT_SRC, RK3399_XIN12M },
+		SET_PARENT
+	},
+	{
 		RK3399_CLK_MAC, RK3399_CRU_CLKSEL_CON(20),
 		SEL(15, 14), DIV(12, 8),
 		{ RK3399_PLL_CPLL, RK3399_PLL_GPLL, RK3399_PLL_NPLL }
@@ -1705,6 +1737,28 @@ struct rkclock rk3399_clocks[] = {
 		RK3399_HCLK_VOP1, RK3399_CRU_CLKSEL_CON(48),
 		0, DIV(12, 8),
 		{ RK3399_ACLK_VOP1 }
+	},
+	{
+		RK3399_CLK_I2S0_DIV, RK3399_CRU_CLKSEL_CON(28),
+		SEL(7, 7), DIV(6, 0),
+		{ RK3399_PLL_CPLL, RK3399_PLL_GPLL }
+	},
+	{
+		RK3399_CLK_I2S1_DIV, RK3399_CRU_CLKSEL_CON(29),
+		SEL(7, 7), DIV(6, 0),
+		{ RK3399_PLL_CPLL, RK3399_PLL_GPLL }
+	},
+	{
+		RK3399_CLK_I2S2_DIV, RK3399_CRU_CLKSEL_CON(30),
+		SEL(7, 7), DIV(6, 0),
+		{ RK3399_PLL_CPLL, RK3399_PLL_GPLL }
+	},
+	{
+		RK3399_CLK_I2SOUT_SRC, RK3399_CRU_CLKSEL_CON(31),
+		SEL(1, 0), 0,
+		{ RK3399_CLK_I2S0_8CH, RK3399_CLK_I2S1_8CH,
+		  RK3399_CLK_I2S2_8CH },
+		SET_PARENT
 	},
 	{
 		/* Sentinel */
@@ -1990,6 +2044,8 @@ rk3399_get_frequency(void *cookie, uint32_t *cells)
 		return 24000000;
 	case RK3399_CLK_32K:
 		return 32768;
+	case RK3399_XIN12M:
+		return 12000000;
 	default:
 		break;
 	}
@@ -2020,6 +2076,10 @@ rk3399_set_frequency(void *cookie, uint32_t *cells, uint32_t freq)
 		return rk3399_set_armclk(sc, RK3399_CRU_CLKSEL_CON(0), freq);
 	case RK3399_ARMCLKB:
 		return rk3399_set_armclk(sc, RK3399_CRU_CLKSEL_CON(2), freq);
+	case RK3399_XIN12M:
+		if (freq / (1000 * 1000) != 12)
+			return -1;
+		return 0;
 	default:
 		break;
 	}

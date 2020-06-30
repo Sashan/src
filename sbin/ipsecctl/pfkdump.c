@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfkdump.c,v 1.49 2019/07/03 03:24:02 deraadt Exp $	*/
+/*	$OpenBSD: pfkdump.c,v 1.51 2020/06/01 21:00:51 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2003 Markus Friedl.  All rights reserved.
@@ -56,6 +56,7 @@ static void	print_life(struct sadb_ext *, struct sadb_msg *, int);
 static void	print_ident(struct sadb_ext *, struct sadb_msg *, int);
 static void	print_udpenc(struct sadb_ext *, struct sadb_msg *, int);
 static void	print_tag(struct sadb_ext *, struct sadb_msg *, int);
+static void	print_rdomain(struct sadb_ext *, struct sadb_msg *, int);
 static void	print_tap(struct sadb_ext *, struct sadb_msg *, int);
 static void	print_satype(struct sadb_ext *, struct sadb_msg *, int);
 static void	print_counter(struct sadb_ext *, struct sadb_msg *, int);
@@ -106,6 +107,7 @@ struct idname ext_types[] = {
 	{ SADB_X_EXT_UDPENCAP,		"udpencap",		print_udpenc },
 	{ SADB_X_EXT_LIFETIME_LASTUSE,	"lifetime_lastuse",	print_life },
 	{ SADB_X_EXT_TAG,		"tag",			print_tag },
+	{ SADB_X_EXT_RDOMAIN,		"rdomain",		print_rdomain },
 	{ SADB_X_EXT_TAP,		"tap",			print_tap },
 	{ SADB_X_EXT_SATYPE2,		"satype2",		print_satype },
 	{ SADB_X_EXT_COUNTER,		"counter",		print_counter },
@@ -265,7 +267,7 @@ print_flags(uint32_t flags)
 	int i, comma = 0, n;
 
 	len = snprintf(fstr, sizeof(fstr), "%#x<", flags);
-	if (len < 0 || len >= sizeof(fstr))
+	if (len < 0 || (size_t)len >= sizeof(fstr))
 		return (NULL);
 	for (i = 0; i < 32; i++) {
 		if ((flags & (1 << i)) == 0 ||
@@ -273,7 +275,7 @@ print_flags(uint32_t flags)
 			continue;
 		n = snprintf(fstr + len, sizeof(fstr) - len - 1,
 		    comma ? ",%s" : "%s", entry->name);
-		if (n < 0 || n >= sizeof(fstr) - len - 1)
+		if (n < 0 || (size_t)n >= sizeof(fstr) - len - 1)
 			return (NULL);
 		len += n;
 		comma = 1;
@@ -580,6 +582,16 @@ print_udpenc(struct sadb_ext *ext, struct sadb_msg *msg, int opts)
 	struct sadb_x_udpencap *x_udpencap = (struct sadb_x_udpencap *)ext;
 
 	printf("udpencap port %u", ntohs(x_udpencap->sadb_x_udpencap_port));
+}
+
+/* ARGSUSED1 */
+static void
+print_rdomain(struct sadb_ext *ext, struct sadb_msg *msg, int opts)
+{
+	struct sadb_x_rdomain *srdomain = (struct sadb_x_rdomain *)ext;
+
+	printf("%d/%d", srdomain->sadb_x_rdomain_dom1,
+	    srdomain->sadb_x_rdomain_dom2);
 }
 
 static void

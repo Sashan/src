@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.261 2020/01/24 05:27:31 kettenis Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.267 2020/06/03 06:54:04 dlg Exp $	*/
 /*	$NetBSD: machdep.c,v 1.3 2003/05/07 22:58:18 fvdl Exp $	*/
 
 /*-
@@ -277,6 +277,7 @@ cpu_startup(void)
 
 	printf("%s", version);
 	startclocks();
+	rtcinit();
 
 	printf("real mem = %lu (%luMB)\n", ptoa((psize_t)physmem),
 	    ptoa((psize_t)physmem)/1024/1024);
@@ -1394,11 +1395,6 @@ init_x86_64(paddr_t first_avail)
 	i8254_startclock();
 
 	/*
-	 * Attach the glass console early in case we need to display a panic.
-	 */
-	cninit();
-
-	/*
 	 * Initialize PAGE_SIZE-dependent variables.
 	 */
 	uvm_setpagesize();
@@ -1419,6 +1415,8 @@ init_x86_64(paddr_t first_avail)
 		getbootinfo(bootinfo, bootinfo_size);
 	} else
 		panic("invalid /boot");
+
+	cninit();
 
 /*
  * Memory on the AMD64 port is described by three different things.
@@ -1926,8 +1924,6 @@ getbootinfo(char *bootinfo, int bootinfo_size)
 	bios_ddb_t *bios_ddb;
 	bios_bootduid_t *bios_bootduid;
 	bios_bootsr_t *bios_bootsr;
-	int docninit = 0;
-
 #undef BOOTINFO_DEBUG
 #ifdef BOOTINFO_DEBUG
 	printf("bootargv:");
@@ -1982,9 +1978,6 @@ getbootinfo(char *bootinfo, int bootinfo_size)
 					comconsaddr = consaddr;
 					comconsrate = cdp->conspeed;
 					comconsiot = X86_BUS_SPACE_IO;
-
-					/* Probe the serial port this time. */
-					docninit++;
 				}
 #endif
 #ifdef BOOTINFO_DEBUG
@@ -2022,8 +2015,6 @@ getbootinfo(char *bootinfo, int bootinfo_size)
 
 		case BOOTARG_EFIINFO:
 			bios_efiinfo = (bios_efiinfo_t *)q->ba_arg;
-			if (bios_efiinfo->fb_addr != 0)
-				docninit++;
 			break;
 
 		case BOOTARG_UCODE:
@@ -2038,8 +2029,6 @@ getbootinfo(char *bootinfo, int bootinfo_size)
 			break;
 		}
 	}
-	if (docninit > 0)
-		cninit();
 #ifdef BOOTINFO_DEBUG
 	printf("\n");
 #endif

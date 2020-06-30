@@ -1,4 +1,4 @@
-/* $OpenBSD: cmd-display-panes.c,v 1.30 2020/03/24 08:09:43 nicm Exp $ */
+/* $OpenBSD: cmd-display-panes.c,v 1.35 2020/05/16 15:34:08 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -37,7 +37,7 @@ const struct cmd_entry cmd_display_panes_entry = {
 	.args = { "bd:t:", 0, 1 },
 	.usage = "[-b] [-d duration] " CMD_TARGET_CLIENT_USAGE " [template]",
 
-	.flags = CMD_AFTERHOOK,
+	.flags = CMD_AFTERHOOK|CMD_CLIENT_TFLAG,
 	.exec = cmd_display_panes_exec
 };
 
@@ -131,9 +131,7 @@ cmd_display_panes_draw_pane(struct screen_redraw_ctx *ctx,
 		gc.bg = active_colour;
 	else
 		gc.bg = colour;
-	gc.flags |= GRID_FLAG_NOPALETTE;
-
-	tty_attributes(tty, &gc, wp);
+	tty_attributes(tty, &gc, &grid_default_cell, NULL);
 	for (ptr = buf; *ptr != '\0'; ptr++) {
 		if (*ptr < '0' || *ptr > '9')
 			continue;
@@ -160,9 +158,7 @@ draw_text:
 		gc.fg = active_colour;
 	else
 		gc.fg = colour;
-	gc.flags |= GRID_FLAG_NOPALETTE;
-
-	tty_attributes(tty, &gc, wp);
+	tty_attributes(tty, &gc, &grid_default_cell, NULL);
 	tty_puts(tty, buf);
 
 	tty_cursor(tty, 0, 0);
@@ -197,11 +193,10 @@ static int
 cmd_display_panes_key(struct client *c, struct key_event *event)
 {
 	struct cmd_display_panes_data	*cdata = c->overlay_data;
-	struct cmdq_item		*new_item;
-	char				*cmd, *expanded;
+	char				*cmd, *expanded, *error;
 	struct window			*w = c->session->curw->window;
 	struct window_pane		*wp;
-	struct cmd_parse_result		*pr;
+	enum cmd_parse_status		 status;
 
 	if (event->key < '0' || event->key > '9')
 		return (-1);
@@ -214,21 +209,10 @@ cmd_display_panes_key(struct client *c, struct key_event *event)
 	xasprintf(&expanded, "%%%u", wp->id);
 	cmd = cmd_template_replace(cdata->command, expanded, 1);
 
-	pr = cmd_parse_from_string(cmd, NULL);
-	switch (pr->status) {
-	case CMD_PARSE_EMPTY:
-		new_item = NULL;
-		break;
-	case CMD_PARSE_ERROR:
-		new_item = cmdq_get_error(pr->error);
-		free(pr->error);
-		cmdq_append(c, new_item);
-		break;
-	case CMD_PARSE_SUCCESS:
-		new_item = cmdq_get_command(pr->cmdlist, NULL, NULL, 0);
-		cmd_list_free(pr->cmdlist);
-		cmdq_append(c, new_item);
-		break;
+	status = cmd_parse_and_append(cmd, NULL, c, NULL, &error);
+	if (status == CMD_PARSE_ERROR) {
+		cmdq_append(c, cmdq_get_error(error));
+		free(error);
 	}
 
 	free(cmd);
@@ -239,18 +223,14 @@ cmd_display_panes_key(struct client *c, struct key_event *event)
 static enum cmd_retval
 cmd_display_panes_exec(struct cmd *self, struct cmdq_item *item)
 {
-	struct args			*args = self->args;
-	struct client			*c;
-	struct session			*s;
+	struct args			*args = cmd_get_args(self);
+	struct client			*tc = cmdq_get_target_client(item);
+	struct session			*s = tc->session;
 	u_int		 		 delay;
 	char				*cause;
 	struct cmd_display_panes_data	*cdata;
 
-	if ((c = cmd_find_client(item, args_get(args, 't'), 0)) == NULL)
-		return (CMD_RETURN_ERROR);
-	s = c->session;
-
-	if (c->overlay_draw != NULL)
+	if (tc->overlay_draw != NULL)
 		return (CMD_RETURN_NORMAL);
 
 	if (args_has(args, 'd')) {
@@ -273,7 +253,7 @@ cmd_display_panes_exec(struct cmd *self, struct cmdq_item *item)
 	else
 		cdata->item = item;
 
-	server_client_set_overlay(c, delay, NULL, NULL, cmd_display_panes_draw,
+	server_client_set_overlay(tc, delay, NULL, NULL, cmd_display_panes_draw,
 	    cmd_display_panes_key, cmd_display_panes_free, cdata);
 
 	if (args_has(args, 'b'))

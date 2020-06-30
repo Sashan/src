@@ -1,4 +1,4 @@
-/* $OpenBSD: rkdrm.c,v 1.5 2020/03/22 15:53:30 bmercer Exp $ */
+/* $OpenBSD: rkdrm.c,v 1.10 2020/06/08 04:47:58 jsg Exp $ */
 /* $NetBSD: rk_drm.c,v 1.3 2019/12/15 01:00:58 mrg Exp $ */
 /*-
  * Copyright (c) 2019 Jared D. McNeill <jmcneill@invisible.ca>
@@ -44,7 +44,10 @@
 #include <uvm/uvm_object.h>
 #include <uvm/uvm_device.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_atomic.h>
+#include <drm/drm_atomic_helper.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_vblank.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_gem.h>
@@ -65,10 +68,6 @@ void	rkdrm_attachhook(struct device *);
 vmem_t	*rkdrm_alloc_cma_pool(struct drm_device *, size_t);
 #endif
 
-uint32_t	rkdrm_get_vblank_counter(struct drm_device *, unsigned int);
-int	rkdrm_enable_vblank(struct drm_device *, unsigned int);
-void	rkdrm_disable_vblank(struct drm_device *, unsigned int);
-
 int	rkdrm_load(struct drm_device *, unsigned long);
 int	rkdrm_unload(struct drm_device *);
 
@@ -76,14 +75,10 @@ int	rkdrm_gem_fault(struct drm_gem_object *, struct uvm_faultinfo *,
 	    off_t, vaddr_t, vm_page_t *, int, int, vm_prot_t, int);
 
 struct drm_driver rkdrm_driver = {
-	.driver_features = DRIVER_MODESET | DRIVER_GEM,
-
-	.get_vblank_counter = rkdrm_get_vblank_counter,
-	.enable_vblank = rkdrm_enable_vblank,
-	.disable_vblank = rkdrm_disable_vblank,
+	.driver_features = DRIVER_ATOMIC | DRIVER_MODESET | DRIVER_GEM,
 
 	.dumb_create = drm_gem_cma_dumb_create,
-	.dumb_map_offset = drm_gem_cma_dumb_map_offset,
+	.dumb_map_offset = drm_gem_dumb_map_offset,
 
 	.gem_free_object_unlocked = drm_gem_cma_free_object,
 	.gem_fault = drm_gem_cma_fault,
@@ -117,7 +112,6 @@ rkdrm_attach(struct device *parent, struct device *self, void *aux)
 {
 	struct rkdrm_softc *sc = (struct rkdrm_softc *)self;
 	struct fdt_attach_args *faa = aux;
-	struct drm_attach_args arg;
 
 	sc->sc_dmat = faa->fa_dmat;
 	sc->sc_iot = faa->fa_iot;
@@ -125,15 +119,15 @@ rkdrm_attach(struct device *parent, struct device *self, void *aux)
 
 	printf("\n");
 
-	memset(&arg, 0, sizeof(arg));
-	arg.driver = &rkdrm_driver;
-	arg.drm = &sc->sc_ddev;
-	arg.dmat = faa->fa_dmat;
-	arg.bst = faa->fa_iot;
-	arg.busid = sc->sc_dev.dv_xname;
-	arg.busid_len = strlen(sc->sc_dev.dv_xname) + 1;
-	config_found_sm(self, &arg, drmprint, drmsubmatch);
+	/*
+	 * Update our understanding of the console output node if
+	 * we're using the framebuffer console.
+	 */
+	if (OF_is_compatible(stdout_node, "simple-framebuffer"))
+		stdout_node = sc->sc_node;
 
+	drm_attach_platform(&rkdrm_driver, faa->fa_iot, faa->fa_dmat, self,
+	    &sc->sc_ddev);
 	config_mountroot(self, rkdrm_attachhook);
 }
 
@@ -152,7 +146,7 @@ rkdrm_fb_destroy(struct drm_framebuffer *fb)
 	struct rkdrm_framebuffer *sfb = to_rkdrm_framebuffer(fb);
 
 	drm_framebuffer_cleanup(fb);
-	drm_gem_object_unreference_unlocked(&sfb->obj->base);
+	drm_gem_object_put_unlocked(&sfb->obj->base);
 	free(sfb, M_DRM, sizeof(*sfb));
 }
 
@@ -190,13 +184,20 @@ rkdrm_fb_create(struct drm_device *ddev, struct drm_file *file,
 dealloc:
 	drm_framebuffer_cleanup(&fb->base);
 	free(fb, M_DRM, sizeof(*fb));
-	drm_gem_object_unreference_unlocked(gem_obj);
+	drm_gem_object_put_unlocked(gem_obj);
 
 	return NULL;
 }
 
+struct drm_mode_config_helper_funcs rkdrm_mode_config_helper_funcs =
+{
+	.atomic_commit_tail = drm_atomic_helper_commit_tail_rpm,
+};
+
 struct drm_mode_config_funcs rkdrm_mode_config_funcs = {
 	.fb_create = rkdrm_fb_create,
+	.atomic_check = drm_atomic_helper_check,
+	.atomic_commit = drm_atomic_helper_commit,
 };
 
 int rkdrm_fb_probe(struct drm_fb_helper *, struct drm_fb_helper_surface_size *);
@@ -204,50 +205,6 @@ int rkdrm_fb_probe(struct drm_fb_helper *, struct drm_fb_helper_surface_size *);
 struct drm_fb_helper_funcs rkdrm_fb_helper_funcs = {
 	.fb_probe = rkdrm_fb_probe,
 };
-
-uint32_t
-rkdrm_get_vblank_counter(struct drm_device *ddev, unsigned int crtc)
-{
-	struct rkdrm_softc *sc = rkdrm_private(ddev);
-
-	if (crtc >= nitems(sc->sc_vbl))
-		return 0;
-
-	if (sc->sc_vbl[crtc].get_vblank_counter == NULL)
-		return 0;
-
-	return sc->sc_vbl[crtc].get_vblank_counter(sc->sc_vbl[crtc].priv);
-}
-
-int
-rkdrm_enable_vblank(struct drm_device *ddev, unsigned int crtc)
-{
-	struct rkdrm_softc *sc = rkdrm_private(ddev);
-
-	if (crtc >= nitems(sc->sc_vbl))
-		return 0;
-
-	if (sc->sc_vbl[crtc].enable_vblank == NULL)
-		return 0;
-
-	sc->sc_vbl[crtc].enable_vblank(sc->sc_vbl[crtc].priv);
-
-	return 0;
-}
-
-void
-rkdrm_disable_vblank(struct drm_device *ddev, unsigned int crtc)
-{
-	struct rkdrm_softc *sc = rkdrm_private(ddev);
-
-	if (crtc >= nitems(sc->sc_vbl))
-		return;
-
-	if (sc->sc_vbl[crtc].disable_vblank == NULL)
-		return;
-
-	sc->sc_vbl[crtc].disable_vblank(sc->sc_vbl[crtc].priv);
-}
 
 int
 rkdrm_unload(struct drm_device *ddev)
@@ -261,7 +218,7 @@ void rkdrm_burner(void *, u_int, u_int);
 int rkdrm_wsioctl(void *, u_long, caddr_t, int, struct proc *);
 paddr_t rkdrm_wsmmap(void *, off_t, int);
 int rkdrm_alloc_screen(void *, const struct wsscreen_descr *,
-    void **, int *, int *, long *);
+    void **, int *, int *, uint32_t *);
 void rkdrm_free_screen(void *, void *);
 int rkdrm_show_screen(void *, void *, int,
     void (*)(void *, int, int), void *);
@@ -356,7 +313,7 @@ rkdrm_wsmmap(void *v, off_t off, int prot)
 
 int
 rkdrm_alloc_screen(void *v, const struct wsscreen_descr *type,
-    void **cookiep, int *curxp, int *curyp, long *attrp)
+    void **cookiep, int *curxp, int *curyp, uint32_t *attrp)
 {
 	return rasops_alloc_screen(v, cookiep, curxp, curyp, attrp);
 }
@@ -430,7 +387,12 @@ rkdrm_attachhook(struct device *dev)
 	struct drm_device *ddev;
 	uint32_t *ports;
 	int i, portslen, nports;
+	int console = 0;
+	uint32_t defattr;
 	int error;
+
+	if (sc->sc_node == stdout_node)
+		console = 1;
 
 	portslen = OF_getproplen(sc->sc_node, "ports");
 	if (portslen < 0) {
@@ -445,6 +407,8 @@ rkdrm_attachhook(struct device *dev)
 	sc->sc_ddev.mode_config.max_width = RK_DRM_MAX_WIDTH;
 	sc->sc_ddev.mode_config.max_height = RK_DRM_MAX_HEIGHT;
 	sc->sc_ddev.mode_config.funcs = &rkdrm_mode_config_funcs;
+	sc->sc_ddev.mode_config.helper_private =
+	    &rkdrm_mode_config_helper_funcs;
 
 	nports = 0;
 	ports = malloc(portslen, M_TEMP, M_WAITOK);
@@ -463,8 +427,10 @@ rkdrm_attachhook(struct device *dev)
 		return;
 	}
 
+	drm_mode_config_reset(&sc->sc_ddev);
+
 	drm_fb_helper_prepare(&sc->sc_ddev, &sc->helper, &rkdrm_fb_helper_funcs);
-	if (drm_fb_helper_init(&sc->sc_ddev, &sc->helper, 1)) {
+	if (drm_fb_helper_init(&sc->sc_ddev, &sc->helper)) {
 		printf("%s: can't initialize framebuffer helper\n",
 		    sc->sc_dev.dv_xname);
 		drm_mode_config_cleanup(&sc->sc_ddev);
@@ -474,13 +440,7 @@ rkdrm_attachhook(struct device *dev)
 	sc->helper.fb = malloc(sizeof(struct rkdrm_framebuffer),
 	    M_DRM, M_WAITOK | M_ZERO);
 
-	drm_fb_helper_single_add_all_connectors(&sc->helper);
-	drm_helper_disable_unused_functions(&sc->sc_ddev);
 	drm_fb_helper_initial_config(&sc->helper, 32);
-
-	/* XXX */
-	sc->sc_ddev.irq_enabled = true;
-	drm_vblank_init(&sc->sc_ddev, 1);
 
 	task_set(&sc->switchtask, rkdrm_doswitch, ri);
 
@@ -493,7 +453,13 @@ rkdrm_attachhook(struct device *dev)
 	ri->ri_width = helper->fb->width;
 	ri->ri_height = helper->fb->height;
 	ri->ri_stride = ri->ri_width * ri->ri_depth / 8;
-	rasops_init(ri, helper->fb->height, helper->fb->width);
+	ri->ri_rnum = 8;	/* ARGB8888 */
+	ri->ri_rpos = 16;
+	ri->ri_gnum = 8;
+	ri->ri_gpos = 8;
+	ri->ri_bnum = 8;
+	ri->ri_bpos = 0;
+	rasops_init(ri, 160, 160);
 	ri->ri_hw = sc;
 
 	rkdrm_stdscreen.capabilities = ri->ri_caps;
@@ -503,10 +469,17 @@ rkdrm_attachhook(struct device *dev)
 	rkdrm_stdscreen.fontwidth = ri->ri_font->fontwidth;
 	rkdrm_stdscreen.fontheight = ri->ri_font->fontheight;
 
+	if (console) {
+		ri->ri_ops.pack_attr(ri->ri_active, 0, 0, 0, &defattr);
+		wsdisplay_cnattach(&rkdrm_stdscreen, ri->ri_active,
+		    ri->ri_ccol, ri->ri_crow, defattr);
+	}
+
 	memset(&aa, 0, sizeof(aa));
 	aa.scrdata = &rkdrm_screenlist;
 	aa.accessops = &rkdrm_accessops;
 	aa.accesscookie = ri;
+	aa.console = console;
 
 	printf("%s: %dx%d, %dbpp\n", sc->sc_dev.dv_xname,
 	    ri->ri_width, ri->ri_height, ri->ri_depth);

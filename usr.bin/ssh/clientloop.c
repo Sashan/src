@@ -1,4 +1,4 @@
-/* $OpenBSD: clientloop.c,v 1.342 2020/02/26 13:40:09 jsg Exp $ */
+/* $OpenBSD: clientloop.c,v 1.344 2020/04/24 02:19:40 dtucker Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -142,9 +142,6 @@ extern char *forward_agent_sock_path;
 static volatile sig_atomic_t received_window_change_signal = 0;
 static volatile sig_atomic_t received_signal = 0;
 
-/* Flag indicating whether the user's terminal is in non-blocking mode. */
-static int in_non_blocking_mode = 0;
-
 /* Time when backgrounded control master using ControlPersist should exit */
 static time_t control_persist_exit_time = 0;
 
@@ -188,17 +185,6 @@ static struct global_confirms global_confirms =
     TAILQ_HEAD_INITIALIZER(global_confirms);
 
 void ssh_process_session2_setup(int, int, int, struct sshbuf *);
-
-/* Restores stdin to blocking mode. */
-
-static void
-leave_non_blocking(void)
-{
-	if (in_non_blocking_mode) {
-		unset_nonblock(fileno(stdin));
-		in_non_blocking_mode = 0;
-	}
-}
 
 /*
  * Signal handler for the window change signal (SIGWINCH).  This just sets a
@@ -1637,7 +1623,7 @@ client_request_agent(struct ssh *ssh, const char *request_type, int rchan)
 
 char *
 client_request_tun_fwd(struct ssh *ssh, int tun_mode,
-    int local_tun, int remote_tun)
+    int local_tun, int remote_tun, channel_open_fn *cb, void *cbctx)
 {
 	Channel *c;
 	int r, fd;
@@ -1658,6 +1644,9 @@ client_request_tun_fwd(struct ssh *ssh, int tun_mode,
 	c = channel_new(ssh, "tun", SSH_CHANNEL_OPENING, fd, fd, -1,
 	    CHAN_TCP_WINDOW_DEFAULT, CHAN_TCP_PACKET_DEFAULT, 0, "tun", 1);
 	c->datagram = 1;
+
+	if (cb != NULL)
+		channel_register_open_confirm(ssh, c->self, cb, cbctx);
 
 	if ((r = sshpkt_start(ssh, SSH2_MSG_CHANNEL_OPEN)) != 0 ||
 	    (r = sshpkt_put_cstring(ssh, "tun@openssh.com")) != 0 ||
@@ -2441,7 +2430,6 @@ void
 cleanup_exit(int i)
 {
 	leave_raw_mode(options.request_tty == REQUEST_TTY_FORCE);
-	leave_non_blocking();
 	if (options.control_path != NULL && muxserver_sock != -1)
 		unlink(options.control_path);
 	ssh_kill_proxy_command();

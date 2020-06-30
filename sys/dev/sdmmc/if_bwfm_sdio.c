@@ -1,4 +1,4 @@
-/* $OpenBSD: if_bwfm_sdio.c,v 1.35 2020/03/14 01:30:34 jsg Exp $ */
+/* $OpenBSD: if_bwfm_sdio.c,v 1.38 2020/06/19 20:56:23 kettenis Exp $ */
 /*
  * Copyright (c) 2010-2016 Broadcom Corporation
  * Copyright (c) 2016,2017 Patrick Wildt <patrick@blueri.se>
@@ -222,12 +222,13 @@ bwfm_sdio_match(struct device *parent, void *match, void *aux)
 	case 0x4345:
 	case 0x4354:
 	case 0x4356:
-	case 0xa887:
-	case 0xa94c:
-	case 0xa94d:
-	case 0xa962:
-	case 0xa9a6:
-	case 0xa9bf:
+	case 0x4359:
+	case 0xa887:	/* BCM43143 */
+	case 0xa94c:	/* BCM43340 */
+	case 0xa94d:	/* BCM43341 */
+	case 0xa962:	/* BCM43362 */
+	case 0xa9a6:	/* BCM43430 */
+	case 0xa9bf:	/* BCM43364 */
 		break;
 	default:
 		return 0;
@@ -421,6 +422,9 @@ bwfm_sdio_preinit(struct bwfm_softc *bwfm)
 	case BRCM_CC_4356_CHIP_ID:
 		chip = "4356";
 		break;
+	case BRCM_CC_4359_CHIP_ID:
+		chip = "4359";
+		break;
 	default:
 		printf("%s: unknown firmware for chip %s\n",
 		    DEVNAME(sc), bwfm->sc_chip.ch_name);
@@ -487,6 +491,17 @@ bwfm_sdio_preinit(struct bwfm_softc *bwfm)
 		    DEVNAME(sc), name);
 		free(ucode, M_DEVBUF, size);
 		goto err;
+	}
+
+	if (sysname != NULL) {
+		r = snprintf(name, sizeof(name), "brcmfmac%s-sdio.%s.clm_blob",
+		    chip, sysname);
+		if (r > 0 && r < sizeof(name))
+			loadfirmware(name, &bwfm->sc_clm, &bwfm->sc_clmsize);
+	}
+	if (bwfm->sc_clmsize == 0) {
+		snprintf(name, sizeof(name), "brcmfmac%s-sdio.clm_blob", chip);
+		loadfirmware(name, &bwfm->sc_clm, &bwfm->sc_clmsize);
 	}
 
 	sc->sc_alp_only = 1;

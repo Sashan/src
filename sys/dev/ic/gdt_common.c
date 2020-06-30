@@ -1,4 +1,4 @@
-/*	$OpenBSD: gdt_common.c,v 1.68 2020/02/15 01:58:01 krw Exp $	*/
+/*	$OpenBSD: gdt_common.c,v 1.71 2020/06/27 17:28:58 krw Exp $	*/
 
 /*
  * Copyright (c) 1999, 2000, 2003 Niklas Hallqvist.  All rights reserved.
@@ -156,7 +156,7 @@ gdt_attach(struct gdt_softc *sc)
 	/* openings will be filled in later. */
 	sc->sc_link.adapter_buswidth =
 	    (sc->sc_class & GDT_FC) ? GDT_MAXID : GDT_MAX_HDRIVES;
-	sc->sc_link.adapter_target = sc->sc_link.adapter_buswidth;
+	sc->sc_link.adapter_target = SDEV_NO_ADAPTER_TARGET;
 	sc->sc_link.pool = &sc->sc_iopool;
 
 	if (!gdt_internal_cmd(sc, GDT_SCREENSERVICE, GDT_INIT, 0, 0, 0)) {
@@ -476,7 +476,6 @@ gdt_attach(struct gdt_softc *sc)
 #endif
 	gdt_cnt++;
 
-	bzero(&saa, sizeof(saa));
 	saa.saa_sc_link = &sc->sc_link;
 
 	config_found(&sc->sc_dev, &saa, scsiprint);
@@ -583,7 +582,7 @@ gdt_scsi_cmd(struct scsi_xfer *xs)
 		link = xs->sc_link;
 		target = link->target;
 		polled = ISSET(xs->flags, SCSI_POLL);
- 
+
 		if (!gdt_polling && !(xs->flags & SCSI_POLL) &&
 		    sc->sc_test_busy(sc)) {
 			/*

@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhclient.c,v 1.659 2020/01/26 10:31:03 krw Exp $	*/
+/*	$OpenBSD: dhclient.c,v 1.677 2020/05/28 16:02:56 krw Exp $	*/
 
 /*
  * Copyright 2004 Henning Brauer <henning@openbsd.org>
@@ -814,6 +814,7 @@ state_selecting(struct interface_info *ifi)
 	}
 
 	ifi->destination.s_addr = INADDR_BROADCAST;
+	time(&ifi->first_sending);
 	ifi->interval = 0;
 
 	/*
@@ -937,6 +938,11 @@ dhcpack(struct interface_info *ifi, struct option_data *options,
 void
 dhcpnak(struct interface_info *ifi, const char *src)
 {
+	struct client_lease		*ll, *pl;
+	time_t				 cur_time;
+
+	time(&cur_time);
+
 	if (ifi->state != S_REBOOTING &&
 	    ifi->state != S_REQUESTING &&
 	    ifi->state != S_RENEWING) {
@@ -945,24 +951,28 @@ dhcpnak(struct interface_info *ifi, const char *src)
 		return;
 	}
 
-	if (ifi->active == NULL) {
-		log_debug("%s: unexpected DHCPNAK from %s - no active lease",
-		    log_procname, src);
-		return;
-	}
-
 	log_debug("%s: DHCPNAK from %s", log_procname, src);
-	revoke_proposal(ifi->configured);
 
-	/* XXX Do we really want to remove a NAK'd lease from the database? */
-	TAILQ_REMOVE(&ifi->lease_db, ifi->active, next);
-	free_client_lease(ifi->active);
-
-	ifi->active = NULL;
-	free(ifi->configured);
-	ifi->configured = NULL;
-	free(ifi->unwind_info);
-	ifi->unwind_info = NULL;
+	/* Remove expired leases and the NAK'd address from the database. */
+	TAILQ_FOREACH_SAFE(ll, &ifi->lease_db, next, pl) {
+		if (lease_expiry(ll) < cur_time || (
+		    ifi->ssid_len == ll->ssid_len &&
+		    memcmp(ifi->ssid, ll->ssid, ll->ssid_len) == 0 &&
+		    ll->address.s_addr == ifi->requested_address.s_addr)) {
+			if (ll == ifi->active) {
+				tell_unwind(NULL, ifi->flags);
+				free(ifi->unwind_info);
+				ifi->unwind_info = NULL;
+				revoke_proposal(ifi->configured);
+				free(ifi->configured);
+				ifi->configured = NULL;
+				ifi->active = NULL;
+			}
+			TAILQ_REMOVE(&ifi->lease_db, ll, next);
+			free_client_lease(ll);
+			write_lease_db(&ifi->lease_db);
+		}
+	}
 
 	/* Stop sending DHCPREQUEST packets. */
 	cancel_timeout(ifi);
@@ -1211,7 +1221,7 @@ packet_to_lease(struct interface_info *ifi, struct option_data *options)
 			options[i].data = strdup(pretty);
 			if (options[i].data == NULL)
 				fatal("RFC1035 string");
-			options[i].len = strlen(options[i].data) + 1;
+			options[i].len = strlen(options[i].data);
 		} else
 			pretty = pretty_print_option(i, &options[i], 0);
 		if (strlen(pretty) == 0)
@@ -1451,32 +1461,26 @@ send_request(struct interface_info *ifi)
 	/* Figure out how long it's been since we started transmitting. */
 	interval = cur_time - ifi->first_sending;
 
-	/*
-	 * If we're in the INIT-REBOOT state and we've been trying longer
-	 * than reboot_timeout, go to INIT state and DISCOVER an address.
-	 *
-	 * In the INIT-REBOOT state, if we don't get an ACK, it
-	 * means either that we're on a network with no DHCP server,
-	 * or that our server is down.  In the latter case, assuming
-	 * that there is a backup DHCP server, DHCPDISCOVER will get
-	 * us a new address, but we could also have successfully
-	 * reused our old address.  In the former case, we're hosed
-	 * anyway.  This is not a win-prone situation.
-	 */
-	if (ifi->state == S_REBOOTING && interval >
-	    config->reboot_timeout) {
+	switch (ifi->state) {
+	case S_REBOOTING:
+		if (interval > config->reboot_timeout)
+			ifi->state = S_INIT;
+		break;
+	case S_RENEWING:
+		if (cur_time > ifi->expiry)
+			ifi->state = S_INIT;
+		break;
+	case S_REQUESTING:
+		if (interval > config->timeout)
+			ifi->state = S_INIT;
+		break;
+	default:
+		/* Something has gone wrong. Start over. */
 		ifi->state = S_INIT;
-		cancel_timeout(ifi);
-		state_init(ifi);
-		return;
+		break;
 	}
-
-	/*
-	 * If the lease has expired go back to the INIT state.
-	 */
-	if (ifi->state != S_REQUESTING && cur_time > ifi->expiry) {
-		ifi->active = NULL;
-		ifi->state = S_INIT;
+	if (ifi->state == S_INIT) {
+		cancel_timeout(ifi);
 		state_init(ifi);
 		return;
 	}
@@ -1567,7 +1571,7 @@ send_release(struct interface_info *ifi)
 {
 	ssize_t		rslt;
 
-	rslt = send_packet(ifi, ifi->configured->ifa, ifi->destination,
+	rslt = send_packet(ifi, ifi->configured->address, ifi->destination,
 	    "DHCPRELEASE");
 	if (rslt != -1)
 		log_debug("%s: DHCPRELEASE", log_procname);
@@ -1642,7 +1646,7 @@ make_discover(struct interface_info *ifi, struct client_lease *lease)
 }
 
 void
-make_request(struct interface_info *ifi, struct client_lease * lease)
+make_request(struct interface_info *ifi, struct client_lease *lease)
 {
 	struct option_data	 options[DHO_COUNT];
 	struct dhcp_packet	*packet = &ifi->sent_packet;
@@ -1674,7 +1678,6 @@ make_request(struct interface_info *ifi, struct client_lease * lease)
 	}
 	if (ifi->state == S_REQUESTING ||
 	    ifi->state == S_REBOOTING) {
-		ifi->requested_address = lease->address;
 		i = DHO_DHCP_REQUESTED_ADDRESS;
 		options[i].data = (char *)&lease->address.s_addr;
 		options[i].len = sizeof(lease->address.s_addr);
@@ -1713,6 +1716,7 @@ make_request(struct interface_info *ifi, struct client_lease * lease)
 	 * If we own the address we're requesting, put it in ciaddr. Otherwise
 	 * set ciaddr to zero.
 	 */
+	ifi->requested_address = lease->address;
 	if (ifi->state == S_BOUND ||
 	    ifi->state == S_RENEWING)
 		packet->ciaddr.s_addr = lease->address.s_addr;
@@ -1973,92 +1977,79 @@ lease_as_unwind_info(struct client_lease *lease)
 struct proposal *
 lease_as_proposal(struct client_lease *lease)
 {
-	struct proposal		*proposal;
+	uint8_t			 defroute[5];	/* 1 + sizeof(in_addr_t) */
+	struct option_data	 fake;
 	struct option_data	*opt;
+	struct proposal		*proposal;
+	uint8_t			*ns, *p, *routes, *domains;
+	unsigned int		 routes_len = 0, domains_len = 0, ns_len = 0;
+	uint16_t		 mtu;
 
-	proposal = calloc(1, sizeof(*proposal));
-	if (proposal == NULL)
-		fatal("proposal");
-
-	proposal->ifa = lease->address;
-	proposal->addrs |= RTA_IFA;
-
-	opt = &lease->options[DHO_INTERFACE_MTU];
-	if (opt->len == sizeof(uint16_t)) {
-		memcpy(&proposal->mtu, opt->data, sizeof(proposal->mtu));
-		proposal->mtu = ntohs(proposal->mtu);
-		proposal->inits |= RTV_MTU;
-	}
-
-	opt = &lease->options[DHO_SUBNET_MASK];
-	if (opt->len == sizeof(proposal->netmask)) {
-		proposal->addrs |= RTA_NETMASK;
-		proposal->netmask.s_addr =
-		    ((struct in_addr *)opt->data)->s_addr;
-	}
-
+	/* Determine sizes of variable length data. */
+	opt = NULL;
 	if (lease->options[DHO_CLASSLESS_STATIC_ROUTES].len != 0) {
 		opt = &lease->options[DHO_CLASSLESS_STATIC_ROUTES];
-		if (opt->len < sizeof(proposal->rtstatic)) {
-			proposal->rtstatic_len = opt->len;
-			memcpy(&proposal->rtstatic, opt->data, opt->len);
-			proposal->addrs |= RTA_STATIC;
-		} else
-			log_warnx("%s: CLASSLESS_STATIC_ROUTES too long",
-			    log_procname);
 	} else if (lease->options[DHO_CLASSLESS_MS_STATIC_ROUTES].len != 0) {
 		opt = &lease->options[DHO_CLASSLESS_MS_STATIC_ROUTES];
-		if (opt->len < sizeof(proposal->rtstatic)) {
-			proposal->rtstatic_len = opt->len;
-			memcpy(&proposal->rtstatic[1], opt->data, opt->len);
-			proposal->addrs |= RTA_STATIC;
-		} else
-			log_warnx("%s: MS_CLASSLESS_STATIC_ROUTES too long",
-			    log_procname);
 	} else if (lease->options[DHO_ROUTERS].len != 0) {
+		/* Fake a classless static default route. */
 		opt = &lease->options[DHO_ROUTERS];
-		if (opt->len >= sizeof(in_addr_t) &&
-		    (1 + sizeof(in_addr_t)) < sizeof(proposal->rtstatic)) {
-			proposal->rtstatic_len = 1 + sizeof(in_addr_t);
-			proposal->rtstatic[0] = 0;
-			memcpy(&proposal->rtstatic[1], opt->data,
-			    sizeof(in_addr_t));
-			proposal->addrs |= RTA_STATIC;
-		} else
-			log_warnx("%s: DHO_ROUTERS invalid", log_procname);
+		fake.len = sizeof(defroute);
+		fake.data = defroute;
+		fake.data[0] = 0;
+		memcpy(&fake.data[1], opt->data, sizeof(defroute) - 1);
+		opt = &fake;
+	}
+	if (opt != NULL) {
+		routes_len = opt->len;
+		routes = opt->data;
 	}
 
-	if (lease->options[DHO_DOMAIN_SEARCH].len != 0) {
+	opt = NULL;
+	if (lease->options[DHO_DOMAIN_SEARCH].len != 0)
 		opt = &lease->options[DHO_DOMAIN_SEARCH];
-		if (opt->len < sizeof(proposal->rtsearch)) {
-			proposal->rtsearch_len = strlen(opt->data);
-			memcpy(proposal->rtsearch, opt->data,
-			    proposal->rtsearch_len);
-			proposal->addrs |= RTA_SEARCH;
-		} else
-			log_warnx("%s: DOMAIN_SEARCH too long", log_procname);
-	} else if (lease->options[DHO_DOMAIN_NAME].len != 0) {
+	else if (lease->options[DHO_DOMAIN_NAME].len != 0)
 		opt = &lease->options[DHO_DOMAIN_NAME];
-		if (opt->len < sizeof(proposal->rtsearch)) {
-			proposal->rtsearch_len = opt->len;
-			memcpy(proposal->rtsearch, opt->data, opt->len);
-			proposal->addrs |= RTA_SEARCH;
-		} else
-			log_warnx("%s: DOMAIN_NAME too long", log_procname);
+	if (opt != NULL) {
+		domains_len = opt->len;
+		domains = opt->data;
 	}
 
 	if (lease->options[DHO_DOMAIN_NAME_SERVERS].len != 0) {
-		int servers;
 		opt = &lease->options[DHO_DOMAIN_NAME_SERVERS];
-		servers = opt->len / sizeof(in_addr_t);
-		if (servers > MAXNS)
-			servers = MAXNS;
-		if (servers > 0) {
-			proposal->addrs |= RTA_DNS;
-			proposal->rtdns_len = servers * sizeof(in_addr_t);
-			memcpy(proposal->rtdns, opt->data, proposal->rtdns_len);
-		}
+		ns_len = opt->len;
+		ns = opt->data;
 	}
+
+	/* Allocate proposal. */
+	proposal = calloc(1, sizeof(*proposal) + routes_len + domains_len +
+	    ns_len);
+	if (proposal == NULL)
+		fatal("proposal");
+
+	/* Fill in proposal. */
+	proposal->address = lease->address;
+
+	opt = &lease->options[DHO_INTERFACE_MTU];
+	if (opt->len == sizeof(mtu)) {
+		memcpy(&mtu, opt->data, sizeof(mtu));
+		proposal->mtu = ntohs(mtu);
+	}
+
+	opt = &lease->options[DHO_SUBNET_MASK];
+	if (opt->len == sizeof(proposal->netmask))
+		memcpy(&proposal->netmask, opt->data, opt->len);
+
+	/* Append variable length uint8_t data. */
+	p = (uint8_t *)proposal + sizeof(struct proposal);
+	memcpy(p, routes, routes_len);
+	p += routes_len;
+	proposal->routes_len = routes_len;
+	memcpy(p, domains, domains_len);
+	p += domains_len;
+	proposal->domains_len = domains_len;
+	memcpy(p, ns, ns_len);
+	proposal->ns_len = ns_len;
 
 	return proposal;
 }
@@ -2242,12 +2233,16 @@ res_hnok_list(const char *names)
 }
 
 /*
- * Decode a byte string encoding a list of domain names as specified in RFC 1035
+ * Decode a byte string encoding a list of domain names as specified in RFC1035
  * section 4.1.4.
  *
  * The result is a string consisting of a blank separated list of domain names.
  *
- e.g. 3:65:6e:67:5:61:70:70:6c:65:3:63:6f:6d:0:9:6d:61:72:6b:65:74:69:6e:67:c0:04
+ * e.g.
+ *
+ * 3:65:6e:67:5:61:70:70:6c:65:3:63:6f:6d:0:9:6d:61:72:6b:65:74:69:6e:67:c0:04
+ *
+ * which represents
  *
  *    3 |'e'|'n'|'g'| 5 |'a'|'p'|'p'|'l'|
  *   'e'| 3 |'c'|'o'|'m'| 0 | 9 |'m'|'a'|
@@ -2315,8 +2310,7 @@ fork_privchld(struct interface_info *ifi, int fd, int fd2)
 
 	go_daemon();
 
-	if (log_procname != NULL)
-		free(log_procname);
+	free(log_procname);
 	rslt = asprintf(&log_procname, "%s [priv]", ifi->name);
 	if (rslt == -1)
 		fatal("log_procname");
@@ -2411,6 +2405,7 @@ apply_defaults(struct client_lease *lease)
 {
 	struct option_data	 emptyopt = {0, NULL};
 	struct client_lease	*newlease;
+	char			*fmt;
 	int			 i;
 
 	newlease = clone_lease(lease);
@@ -2431,31 +2426,31 @@ apply_defaults(struct client_lease *lease)
 		newlease->next_server.s_addr = config->next_server.s_addr;
 
 	for (i = 0; i < DHO_COUNT; i++) {
+		fmt = code_to_format(i);
 		switch (config->default_actions[i]) {
 		case ACTION_IGNORE:
-			free(newlease->options[i].data);
-			newlease->options[i].data = NULL;
-			newlease->options[i].len = 0;
+			merge_option_data(fmt, &emptyopt, &emptyopt,
+			    &newlease->options[i]);
 			break;
 
 		case ACTION_SUPERSEDE:
-			merge_option_data(&config->defaults[i], &emptyopt,
+			merge_option_data(fmt, &config->defaults[i], &emptyopt,
 			    &newlease->options[i]);
 			break;
 
 		case ACTION_PREPEND:
-			merge_option_data(&config->defaults[i],
+			merge_option_data(fmt, &config->defaults[i],
 			    &lease->options[i], &newlease->options[i]);
 			break;
 
 		case ACTION_APPEND:
-			merge_option_data(&lease->options[i],
+			merge_option_data(fmt, &lease->options[i],
 			    &config->defaults[i], &newlease->options[i]);
 			break;
 
 		case ACTION_DEFAULT:
 			if (newlease->options[i].len == 0)
-				merge_option_data(&config->defaults[i],
+				merge_option_data(fmt, &config->defaults[i],
 				    &emptyopt, &newlease->options[i]);
 			break;
 
@@ -2768,20 +2763,18 @@ tick_msg(const char *preamble, int success, time_t start)
 void
 release_lease(struct interface_info *ifi)
 {
-	char			 destbuf[INET_ADDRSTRLEN];
-	char			 ifabuf[INET_ADDRSTRLEN];
+	char			 buf[INET_ADDRSTRLEN];
 	struct option_data	*opt;
 
 	if (ifi->configured == NULL || ifi->active == NULL)
 		return;	/* Nothing to release. */
-	strlcpy(ifabuf, inet_ntoa(ifi->configured->ifa), sizeof(ifabuf));
+	strlcpy(buf, inet_ntoa(ifi->configured->address), sizeof(buf));
 
 	opt = &ifi->active->options[DHO_DHCP_SERVER_IDENTIFIER];
 	if (opt->len == sizeof(in_addr_t))
 		ifi->destination.s_addr = *(in_addr_t *)opt->data;
 	else
-		ifi->destination.s_addr = INADDR_ANY;
-	strlcpy(destbuf, inet_ntoa(ifi->destination), sizeof(destbuf));
+		ifi->destination.s_addr = INADDR_BROADCAST;
 
 	ifi->xid = arc4random();
 	make_release(ifi, ifi->active);
@@ -2808,7 +2801,8 @@ release_lease(struct interface_info *ifi)
 	free(ifi->unwind_info);
 	ifi->unwind_info = NULL;
 
-	log_warnx("%s: %s RELEASED to %s", log_procname, ifabuf, destbuf);
+	log_warnx("%s: %s RELEASED to %s", log_procname, buf,
+	    inet_ntoa(ifi->destination));
 }
 
 void

@@ -1,4 +1,4 @@
-/*	$OpenBSD: kdump.c,v 1.141 2020/01/18 23:56:31 cheloha Exp $	*/
+/*	$OpenBSD: kdump.c,v 1.143 2020/04/05 08:32:14 mpi Exp $	*/
 
 /*-
  * Copyright (c) 1988, 1993
@@ -1128,7 +1128,6 @@ doerr:
 			/* syscalls that return errno values */
 			case SYS_getlogin_r:
 			case SYS___thrsleep:
-			case SYS_futex:
 				if ((error = ret) != 0)
 					goto doerr;
 				/* FALLTHROUGH */
@@ -1375,7 +1374,7 @@ ktrexec(const char *ptr, size_t len)
 static void
 ktrpledge(struct ktr_pledge *pledge, size_t len)
 {
-	char *name = "";
+	const char *name = "";
 	int i;
 
 	if (len < sizeof(struct ktr_pledge))

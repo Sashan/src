@@ -1,4 +1,4 @@
-/*	$OpenBSD: vscsi.c,v 1.48 2020/02/20 16:56:52 visa Exp $ */
+/*	$OpenBSD: vscsi.c,v 1.52 2020/06/27 17:28:58 krw Exp $ */
 
 /*
  * Copyright (c) 2008 David Gwynne <dlg@openbsd.org>
@@ -18,7 +18,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/kernel.h>  
+#include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/device.h>
 #include <sys/conf.h>
@@ -112,7 +112,7 @@ void		vscsi_ccb_put(void *, void *);
 
 void		filt_vscsidetach(struct knote *);
 int		filt_vscsiread(struct knote *, long);
-  
+
 const struct filterops vscsi_filtops = {
 	.f_flags	= FILTEROP_ISFD,
 	.f_attach	= NULL,
@@ -147,12 +147,11 @@ vscsi_attach(struct device *parent, struct device *self, void *aux)
 
 	sc->sc_link.adapter = &vscsi_switch;
 	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.adapter_target = 256;
+	sc->sc_link.adapter_target = SDEV_NO_ADAPTER_TARGET;
 	sc->sc_link.adapter_buswidth = 256;
 	sc->sc_link.openings = 16;
 	sc->sc_link.pool = &sc->sc_iopool;
 
-	memset(&saa, 0, sizeof(saa));
 	saa.saa_sc_link = &sc->sc_link;
 
 	sc->sc_scsibus = (struct scsibus_softc *)config_found(&sc->sc_dev,
@@ -576,7 +575,7 @@ vscsikqfilter(dev_t dev, struct knote *kn)
 	kn->kn_hook = sc;
 
 	mtx_enter(&sc->sc_sel_mtx);
-	SLIST_INSERT_HEAD(klist, kn, kn_selnext);
+	klist_insert(klist, kn);
 	mtx_leave(&sc->sc_sel_mtx);
 
 	/* device ref is given to the knote in the klist */
@@ -589,9 +588,9 @@ filt_vscsidetach(struct knote *kn)
 {
 	struct vscsi_softc *sc = kn->kn_hook;
 	struct klist *klist = &sc->sc_sel.si_note;
- 
+
 	mtx_enter(&sc->sc_sel_mtx);
-	SLIST_REMOVE(klist, kn, knote, kn_selnext);
+	klist_remove(klist, kn);
 	mtx_leave(&sc->sc_sel_mtx);
 
 	device_unref(&sc->sc_dev);

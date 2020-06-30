@@ -1,6 +1,6 @@
-/* $OpenBSD: read.c,v 1.187 2020/03/13 16:14:14 schwarze Exp $ */
+/* $OpenBSD: read.c,v 1.190 2020/04/24 11:58:02 schwarze Exp $ */
 /*
- * Copyright (c) 2010-2019 Ingo Schwarze <schwarze@openbsd.org>
+ * Copyright (c) 2010-2020 Ingo Schwarze <schwarze@openbsd.org>
  * Copyright (c) 2008, 2009, 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
  * Copyright (c) 2010, 2012 Joerg Sonnenberger <joerg@netbsd.org>
  *
@@ -40,12 +40,12 @@
 #include "mandoc_aux.h"
 #include "mandoc.h"
 #include "roff.h"
-#include "tag.h"
 #include "mdoc.h"
 #include "man.h"
 #include "mandoc_parse.h"
 #include "libmandoc.h"
 #include "roff_int.h"
+#include "tag.h"
 
 #define	REPARSE_LIMIT	1000
 
@@ -552,7 +552,7 @@ mparse_readfd(struct mparse *curp, int fd, const char *filename)
 
 	struct buf	 blk;
 	struct buf	*save_primary;
-	const char	*save_filename;
+	const char	*save_filename, *cp;
 	size_t		 offset;
 	int		 save_filenc, save_lineno;
 	int		 with_mmap;
@@ -560,7 +560,13 @@ mparse_readfd(struct mparse *curp, int fd, const char *filename)
 	if (recursion_depth > 64) {
 		mandoc_msg(MANDOCERR_ROFFLOOP, curp->line, 0, NULL);
 		return;
-	}
+	} else if (recursion_depth == 0 &&
+	    (cp = strrchr(filename, '.')) != NULL &&
+            cp[1] >= '1' && cp[1] <= '9')
+                curp->man->filesec = cp[1];
+        else
+                curp->man->filesec = '\0';
+
 	if (read_whole_file(curp, fd, &blk, &with_mmap) == -1)
 		return;
 
@@ -706,6 +712,7 @@ mparse_result(struct mparse *curp)
 			mdoc_validate(curp->man);
 		else
 			man_validate(curp->man);
+		tag_postprocess(curp->man, curp->man->meta.first);
 	}
 	return &curp->man->meta;
 }

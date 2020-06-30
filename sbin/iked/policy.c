@@ -1,4 +1,4 @@
-/*	$OpenBSD: policy.c,v 1.57 2020/03/10 18:54:52 tobhe Exp $	*/
+/*	$OpenBSD: policy.c,v 1.64 2020/06/03 17:56:42 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2010-2013 Reyk Floeter <reyk@openbsd.org>
@@ -81,13 +81,15 @@ policy_lookup(struct iked *env, struct iked_message *msg,
 	if (msg->msg_sa != NULL && msg->msg_sa->sa_policy != NULL) {
 		/* Existing SA with policy */
 		msg->msg_policy = msg->msg_sa->sa_policy;
-		goto found;
+		return (0);
 	}
 
 	bzero(&pol, sizeof(pol));
 	if (proposals != NULL)
 		pol.pol_proposals = *proposals;
 	pol.pol_af = msg->msg_peer.ss_family;
+	if (msg->msg_flags & IKED_MSG_FLAGS_USE_TRANSPORT)
+		pol.pol_flags |= IKED_POLICY_TRANSPORT;
 	memcpy(&pol.pol_peer.addr, &msg->msg_peer, sizeof(msg->msg_peer));
 	memcpy(&pol.pol_local.addr, &msg->msg_local, sizeof(msg->msg_local));
 	if (msg->msg_id.id_type &&
@@ -101,18 +103,18 @@ policy_lookup(struct iked *env, struct iked_message *msg,
 	}
 
 	/* Try to find a matching policy for this message */
-	if ((msg->msg_policy = policy_test(env, &pol)) != NULL)
-		goto found;
+	if ((msg->msg_policy = policy_test(env, &pol)) != NULL) {
+		log_debug("%s: setting policy '%s'", __func__,
+		    msg->msg_policy->pol_name);
+		return (0);
+	}
 
 	/* No matching policy found, try the default */
 	if ((msg->msg_policy = env->sc_defaultcon) != NULL)
-		goto found;
+		return (0);
 
 	/* No policy found */
 	return (-1);
-
- found:
-	return (0);
 }
 
 /*
@@ -164,6 +166,7 @@ policy_test(struct iked *env, struct iked_policy *key)
 			}
 			/* make sure the peer ID matches */
 			if (key->pol_peerid.id_type &&
+			    p->pol_peerid.id_type &&
 			    (key->pol_peerid.id_type != p->pol_peerid.id_type ||
 			    memcmp(key->pol_peerid.id_data,
 			    p->pol_peerid.id_data,
@@ -172,10 +175,17 @@ policy_test(struct iked *env, struct iked_policy *key)
 				continue;
 			}
 
+			/* check transport mode */
+			if ((key->pol_flags & IKED_POLICY_TRANSPORT) &&
+			    !(p->pol_flags & IKED_POLICY_TRANSPORT)) {
+				p = TAILQ_NEXT(p, pol_entry);
+				continue;
+			}
+
 			/* Make sure the proposals are compatible */
 			if (TAILQ_FIRST(&key->pol_proposals) &&
-			    proposals_negotiate(NULL, &key->pol_proposals,
-			    &p->pol_proposals, 0) == -1) {
+			    proposals_negotiate(NULL, &p->pol_proposals,
+			    &key->pol_proposals, 0) == -1) {
 				p = TAILQ_NEXT(p, pol_entry);
 				continue;
 			}
@@ -531,13 +541,12 @@ sa_free_flows(struct iked *env, struct iked_saflows *head)
 
 
 int
-sa_address(struct iked_sa *sa, struct iked_addr *addr,
-    struct sockaddr_storage *peer)
+sa_address(struct iked_sa *sa, struct iked_addr *addr, struct sockaddr *peer)
 {
 	bzero(addr, sizeof(*addr));
-	addr->addr_af = peer->ss_family;
-	addr->addr_port = htons(socket_getport((struct sockaddr *)peer));
-	memcpy(&addr->addr, peer, sizeof(*peer));
+	addr->addr_af = peer->sa_family;
+	addr->addr_port = htons(socket_getport(peer));
+	memcpy(&addr->addr, peer, peer->sa_len);
 	if (socket_af((struct sockaddr *)&addr->addr, addr->addr_port) == -1) {
 		log_debug("%s: invalid address", __func__);
 		return (-1);
@@ -764,7 +773,7 @@ proposals_match(struct iked_proposal *local, struct iked_proposal *peer,
     struct iked_transform **xforms, int rekey)
 {
 	struct iked_transform	*tpeer, *tlocal;
-	unsigned int		 i, j, type, score, requiredh = 0;
+	unsigned int		 i, j, type, score, requiredh = 0, noauth = 0;
 	uint8_t			 protoid = peer->prop_protoid;
 	uint8_t			 peerxfs[IKEV2_XFORMTYPE_MAX];
 
@@ -772,8 +781,18 @@ proposals_match(struct iked_proposal *local, struct iked_proposal *peer,
 
 	for (i = 0; i < peer->prop_nxforms; i++) {
 		tpeer = peer->prop_xforms + i;
+		/* If any of the ENC transforms is an AEAD, ignore auth */
+		if (tpeer->xform_type == IKEV2_XFORMTYPE_ENCR &&
+		    encxf_noauth(tpeer->xform_id))
+			noauth = 1;
+	}
+
+	for (i = 0; i < peer->prop_nxforms; i++) {
+		tpeer = peer->prop_xforms + i;
 		if (tpeer->xform_type > IKEV2_XFORMTYPE_MAX)
 			continue;
+		if (noauth && tpeer->xform_type == IKEV2_XFORMTYPE_INTEGR)
+			return (0);
 
 		/*
 		 * Record all transform types from the peer's proposal,
@@ -822,7 +841,8 @@ proposals_match(struct iked_proposal *local, struct iked_proposal *peer,
 	for (i = score = 0; i < IKEV2_XFORMTYPE_MAX; i++) {
 		if (protoid == IKEV2_SAPROTO_IKE && xforms[i] == NULL &&
 		    (i == IKEV2_XFORMTYPE_ENCR || i == IKEV2_XFORMTYPE_PRF ||
-		     i == IKEV2_XFORMTYPE_INTEGR || i == IKEV2_XFORMTYPE_DH)) {
+		    (!noauth && i == IKEV2_XFORMTYPE_INTEGR) ||
+		    i == IKEV2_XFORMTYPE_DH)) {
 			score = 0;
 			break;
 		} else if (protoid == IKEV2_SAPROTO_AH && xforms[i] == NULL &&
@@ -876,6 +896,8 @@ flow_cmp(struct iked_flow *a, struct iked_flow *b)
 {
 	int		diff = 0;
 
+	if (!diff)
+		diff = a->flow_rdomain - b->flow_rdomain;
 	if (!diff)
 		diff = (int)a->flow_ipproto - (int)b->flow_ipproto;
 	if (!diff)

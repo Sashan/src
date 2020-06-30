@@ -1,4 +1,4 @@
-/*	$OpenBSD: rkgpio.c,v 1.2 2019/05/11 14:56:12 patrick Exp $	*/
+/*	$OpenBSD: rkgpio.c,v 1.4 2020/04/25 10:41:20 kettenis Exp $	*/
 /*
  * Copyright (c) 2017 Mark Kettenis <kettenis@openbsd.org>
  * Copyright (c) 2019 Patrick Wildt <patrick@blueri.se>
@@ -159,7 +159,7 @@ rkgpio_config_pin(void *cookie, uint32_t *cells, int config)
 	struct rkgpio_softc *sc = cookie;
 	uint32_t pin = cells[0];
 
-	if (pin > 32)
+	if (pin >= GPIO_NUM_PINS)
 		return;
 
 	if (config & GPIO_CONFIG_OUTPUT)
@@ -177,11 +177,10 @@ rkgpio_get_pin(void *cookie, uint32_t *cells)
 	uint32_t reg;
 	int val;
 
-	if (pin > 32)
+	if (pin >= GPIO_NUM_PINS)
 		return 0;
 
 	reg = HREAD4(sc, GPIO_EXT_PORTA);
-	reg &= (1 << pin);
 	val = (reg >> pin) & 1;
 	if (flags & GPIO_ACTIVE_LOW)
 		val = !val;
@@ -195,7 +194,7 @@ rkgpio_set_pin(void *cookie, uint32_t *cells, int val)
 	uint32_t pin = cells[0];
 	uint32_t flags = cells[1];
 
-	if (pin > 32)
+	if (pin >= GPIO_NUM_PINS)
 		return;
 
 	if (flags & GPIO_ACTIVE_LOW)

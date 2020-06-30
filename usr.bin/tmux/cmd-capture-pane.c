@@ -1,4 +1,4 @@
-/* $OpenBSD: cmd-capture-pane.c,v 1.50 2020/03/19 14:03:48 nicm Exp $ */
+/* $OpenBSD: cmd-capture-pane.c,v 1.54 2020/06/01 09:43:00 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Jonathan Alvarado <radobobo@users.sourceforge.net>
@@ -118,7 +118,7 @@ cmd_capture_pane_history(struct args *args, struct cmdq_item *item,
 
 	sx = screen_size_x(&wp->base);
 	if (args_has(args, 'a')) {
-		gd = wp->saved_grid;
+		gd = wp->base.saved_grid;
 		if (gd == NULL) {
 			if (!args_has(args, 'q')) {
 				cmdq_error(item, "no alternate screen");
@@ -192,14 +192,14 @@ cmd_capture_pane_history(struct args *args, struct cmdq_item *item,
 static enum cmd_retval
 cmd_capture_pane_exec(struct cmd *self, struct cmdq_item *item)
 {
-	struct args		*args = self->args;
-	struct client		*c = item->client;
-	struct window_pane	*wp = item->target.wp;
+	struct args		*args = cmd_get_args(self);
+	struct client		*c = cmdq_get_client(item);
+	struct window_pane	*wp = cmdq_get_target(item)->wp;
 	char			*buf, *cause;
 	const char		*bufname;
 	size_t			 len;
 
-	if (self->entry == &cmd_clear_history_entry) {
+	if (cmd_get_entry(self) == &cmd_clear_history_entry) {
 		window_pane_reset_mode_all(wp);
 		grid_clear_history(wp->base.grid);
 		return (CMD_RETURN_NORMAL);
@@ -214,15 +214,20 @@ cmd_capture_pane_exec(struct cmd *self, struct cmdq_item *item)
 		return (CMD_RETURN_ERROR);
 
 	if (args_has(args, 'p')) {
-		if (!file_can_print(c)) {
-			cmdq_error(item, "can't write output to client");
-			free(buf);
-			return (CMD_RETURN_ERROR);
-		}
-		file_print_buffer(c, buf, len);
-		if (args_has(args, 'P') && len > 0)
+		if (len > 0 && buf[len - 1] == '\n')
+			len--;
+		if (c->flags & CLIENT_CONTROL)
+			control_write(c, "%.*s", (int)len, buf);
+		else {
+			if (!file_can_print(c)) {
+				cmdq_error(item, "can't write to client");
+				free(buf);
+				return (CMD_RETURN_ERROR);
+			}
+			file_print_buffer(c, buf, len);
 			file_print(c, "\n");
-		free(buf);
+			free(buf);
+		}
 	} else {
 		bufname = NULL;
 		if (args_has(args, 'b'))

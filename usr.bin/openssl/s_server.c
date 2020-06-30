@@ -1,4 +1,4 @@
-/* $OpenBSD: s_server.c,v 1.32 2019/10/04 09:47:34 bcook Exp $ */
+/* $OpenBSD: s_server.c,v 1.38 2020/05/23 13:00:30 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -288,9 +288,6 @@ sv_usage(void)
 	BIO_printf(bio_err, " -dpass arg    - second private key file pass phrase source\n");
 	BIO_printf(bio_err, " -dhparam arg  - DH parameter file to use, in cert file if not specified\n");
 	BIO_printf(bio_err, "                 or a default set of parameters is used\n");
-	BIO_printf(bio_err, " -named_curve arg  - Elliptic curve name to use for ephemeral ECDH keys.\n" \
-	    "                 Use \"openssl ecparam -list_curves\" for all names\n" \
-	    "                 (default is nistp256).\n");
 	BIO_printf(bio_err, " -nbio         - Run with non-blocking IO\n");
 	BIO_printf(bio_err, " -nbio_test    - test with the non-blocking test bio\n");
 	BIO_printf(bio_err, " -crlf         - convert LF from terminal into CRLF\n");
@@ -303,6 +300,7 @@ sv_usage(void)
 	BIO_printf(bio_err, " -cipher arg   - play with 'openssl ciphers' to see what goes here\n");
 	BIO_printf(bio_err, " -serverpref   - Use server's cipher preferences\n");
 	BIO_printf(bio_err, " -quiet        - Inhibit printing of session and certificate information\n");
+	BIO_printf(bio_err, " -tls1_3       - Just talk TLSv1.3\n");
 	BIO_printf(bio_err, " -tls1_2       - Just talk TLSv1.2\n");
 	BIO_printf(bio_err, " -tls1_1       - Just talk TLSv1.1\n");
 	BIO_printf(bio_err, " -tls1         - Just talk TLSv1\n");
@@ -315,6 +313,7 @@ sv_usage(void)
 	BIO_printf(bio_err, " -no_tls1      - Just disable TLSv1\n");
 	BIO_printf(bio_err, " -no_tls1_1    - Just disable TLSv1.1\n");
 	BIO_printf(bio_err, " -no_tls1_2    - Just disable TLSv1.2\n");
+	BIO_printf(bio_err, " -no_tls1_3    - Just disable TLSv1.3\n");
 #ifndef OPENSSL_NO_DH
 	BIO_printf(bio_err, " -no_dhe       - Disable ephemeral DH\n");
 #endif
@@ -333,7 +332,8 @@ sv_usage(void)
 	BIO_printf(bio_err, "                 not specified (default is %s)\n", TEST_CERT2);
 	BIO_printf(bio_err, " -tlsextdebug  - hex dump of all TLS extensions received\n");
 	BIO_printf(bio_err, " -no_ticket    - disable use of RFC4507bis session tickets\n");
-	BIO_printf(bio_err," -alpn arg  - set the advertised protocols for the ALPN extension (comma-separated list)\n");
+	BIO_printf(bio_err, " -alpn arg     - set the advertised protocols for the ALPN extension (comma-separated list)\n");
+	BIO_printf(bio_err, " -groups arg   - specify EC groups (colon-separated list)\n");
 #ifndef OPENSSL_NO_SRTP
 	BIO_printf(bio_err, " -use_srtp profiles - Offer SRTP key management with a colon-separated profile list\n");
 #endif
@@ -581,7 +581,9 @@ s_server_main(int argc, char *argv[])
 	X509 *s_cert2 = NULL;
 	tlsextctx tlsextcbp = {NULL, NULL, SSL_TLSEXT_ERR_ALERT_WARNING};
 	const char *alpn_in = NULL;
+	const char *groups_in = NULL;
 	tlsextalpnctx alpn_ctx = { NULL, 0 };
+	uint16_t min_version = 0, max_version = 0;
 
 	if (single_execution) {
 		if (pledge("stdio rpath inet dns tty", NULL) == -1) {
@@ -590,7 +592,7 @@ s_server_main(int argc, char *argv[])
 		}
 	}
 
-	meth = SSLv23_server_method();
+	meth = TLS_server_method();
 
 	local_argc = argc;
 	local_argv = argv;
@@ -656,13 +658,11 @@ s_server_main(int argc, char *argv[])
 			if (--argc < 1)
 				goto bad;
 			dhfile = *(++argv);
-		}
-		else if (strcmp(*argv, "-named_curve") == 0) {
+		} else if (strcmp(*argv, "-named_curve") == 0) {
 			if (--argc < 1)
 				goto bad;
 			named_curve = *(++argv);
-		}
-		else if (strcmp(*argv, "-dcertform") == 0) {
+		} else if (strcmp(*argv, "-dcertform") == 0) {
 			if (--argc < 1)
 				goto bad;
 			s_dcert_format = str2fmt(*(++argv));
@@ -777,20 +777,28 @@ s_server_main(int argc, char *argv[])
 			off |= SSL_OP_NO_TLSv1_1;
 		} else if (strcmp(*argv, "-no_tls1_2") == 0) {
 			off |= SSL_OP_NO_TLSv1_2;
+		} else if (strcmp(*argv, "-no_tls1_3") == 0) {
+			off |= SSL_OP_NO_TLSv1_3;
 		} else if (strcmp(*argv, "-no_comp") == 0) {
 			off |= SSL_OP_NO_COMPRESSION;
 		} else if (strcmp(*argv, "-no_ticket") == 0) {
 			off |= SSL_OP_NO_TICKET;
 		} else if (strcmp(*argv, "-tls1") == 0) {
-			meth = TLSv1_server_method();
+			min_version = TLS1_VERSION;
+			max_version = TLS1_VERSION;
 		} else if (strcmp(*argv, "-tls1_1") == 0) {
-			meth = TLSv1_1_server_method();
+			min_version = TLS1_1_VERSION;
+			max_version = TLS1_1_VERSION;
 		} else if (strcmp(*argv, "-tls1_2") == 0) {
-			meth = TLSv1_2_server_method();
+			min_version = TLS1_2_VERSION;
+			max_version = TLS1_2_VERSION;
+		} else if (strcmp(*argv, "-tls1_3") == 0) {
+			min_version = TLS1_3_VERSION;
+			max_version = TLS1_3_VERSION;
 		}
 #ifndef OPENSSL_NO_DTLS1
 		else if (strcmp(*argv, "-dtls1") == 0) {
-			meth = DTLSv1_server_method();
+			meth = DTLS_server_method();
 			socket_type = SOCK_DGRAM;
 		} else if (strcmp(*argv, "-timeout") == 0)
 			enable_timeouts = 1;
@@ -831,6 +839,10 @@ s_server_main(int argc, char *argv[])
 			if (--argc < 1)
 				goto bad;
 			alpn_in = *(++argv);
+		} else if (strcmp(*argv, "-groups") == 0) {
+			if (--argc < 1)
+				goto bad;
+			groups_in = *(++argv);
 		}
 #ifndef OPENSSL_NO_SRTP
 		else if (strcmp(*argv, "-use_srtp") == 0) {
@@ -955,6 +967,14 @@ s_server_main(int argc, char *argv[])
 		ERR_print_errors(bio_err);
 		goto end;
 	}
+
+	SSL_CTX_clear_mode(ctx, SSL_MODE_AUTO_RETRY);
+
+	if (!SSL_CTX_set_min_proto_version(ctx, min_version))
+		goto end;
+	if (!SSL_CTX_set_max_proto_version(ctx, max_version))
+		goto end;
+
 	if (session_id_prefix) {
 		if (strlen(session_id_prefix) >= 32)
 			BIO_printf(bio_err,
@@ -1008,6 +1028,12 @@ s_server_main(int argc, char *argv[])
 			ERR_print_errors(bio_err);
 			goto end;
 		}
+
+		if (!SSL_CTX_set_min_proto_version(ctx2, min_version))
+			goto end;
+		if (!SSL_CTX_set_max_proto_version(ctx2, max_version))
+			goto end;
+		SSL_CTX_clear_mode(ctx2, SSL_MODE_AUTO_RETRY);
 	}
 	if (ctx2) {
 		BIO_printf(bio_s_out, "Setting secondary ctx parameters\n");
@@ -1054,6 +1080,14 @@ s_server_main(int argc, char *argv[])
 	}
 	if (alpn_ctx.data)
 		SSL_CTX_set_alpn_select_cb(ctx, alpn_cb, &alpn_ctx);
+
+	if (groups_in != NULL) {
+		if (SSL_CTX_set1_groups_list(ctx, groups_in) != 1) {
+			BIO_printf(bio_err, "Failed to set groups '%s'\n",
+			    groups_in);
+			goto end;
+		}
+	}
 
 #ifndef OPENSSL_NO_DH
 	if (!no_dhe) {
@@ -1108,34 +1142,21 @@ s_server_main(int argc, char *argv[])
 	}
 #endif
 
-	if (!no_ecdhe) {
+	if (!no_ecdhe && named_curve != NULL) {
 		EC_KEY *ecdh = NULL;
+		int nid;
 
-		if (named_curve) {
-			int nid = OBJ_sn2nid(named_curve);
-
-			if (nid == 0) {
-				BIO_printf(bio_err, "unknown curve name (%s)\n",
-				    named_curve);
-				goto end;
-			}
-			ecdh = EC_KEY_new_by_curve_name(nid);
-			if (ecdh == NULL) {
-				BIO_printf(bio_err, "unable to create curve (%s)\n",
-				    named_curve);
-				goto end;
-			}
+		if ((nid = OBJ_sn2nid(named_curve)) == 0) {
+			BIO_printf(bio_err, "unknown curve name (%s)\n",
+			    named_curve);
+			goto end;
 		}
-		if (ecdh != NULL) {
-			BIO_printf(bio_s_out, "Setting temp ECDH parameters\n");
-		} else {
-			BIO_printf(bio_s_out, "Using default temp ECDH parameters\n");
-			ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
-			if (ecdh == NULL) {
-				BIO_printf(bio_err, "unable to create curve (nistp256)\n");
-				goto end;
-			}
+		if ((ecdh = EC_KEY_new_by_curve_name(nid)) == NULL) {
+			BIO_printf(bio_err, "unable to create curve (%s)\n",
+			    named_curve);
+			goto end;
 		}
+		BIO_printf(bio_s_out, "Setting temp ECDH parameters\n");
 		(void) BIO_flush(bio_s_out);
 
 		SSL_CTX_set_tmp_ecdh(ctx, ecdh);
@@ -1484,6 +1505,8 @@ sv_body(char *hostname, int s, unsigned char *context)
 					ret = 1;
 					goto err;
 				}
+				if (k <= 0)
+					continue;
 				l += k;
 				i -= k;
 				if (i <= 0)
@@ -1731,8 +1754,10 @@ www_body(char *hostname, int s, unsigned char *context)
 					ERR_print_errors(bio_err);
 				goto err;
 			} else {
-				BIO_printf(bio_s_out, "read R BLOCK\n");
-				sleep(1);
+				if (s_debug)  {
+					BIO_printf(bio_s_out, "read R BLOCK\n");
+					sleep(1);
+				}
 				continue;
 			}
 		} else if (i == 0) {	/* end of input */

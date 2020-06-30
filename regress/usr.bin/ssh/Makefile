@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.106 2020/01/31 23:25:08 djm Exp $
+#	$OpenBSD: Makefile,v 1.109 2020/06/19 05:07:09 dtucker Exp $
 
 .ifndef SKIP_UNIT
 SUBDIR=		unittests
@@ -32,6 +32,7 @@ LTESTS= 	connect \
 		agent-getpeereid \
 		agent-timeout \
 		agent-ptrace \
+		agent-subprocess \
 		keyscan \
 		keygen-change \
 		keygen-convert \
@@ -57,6 +58,7 @@ LTESTS= 	connect \
 		cfgparse \
 		cfgmatch \
 		cfgmatchlisten \
+		percent \
 		addrmatch \
 		localcommand \
 		forcecommand \
@@ -81,7 +83,8 @@ LTESTS= 	connect \
 		servcfginclude \
 		allow-deny-users \
 		authinfo \
-		sshsig
+		sshsig \
+		keygen-comment
 
 INTEROP_TESTS=	putty-transfer putty-ciphers putty-kex conch-ciphers
 #INTEROP_TESTS+=ssh-com ssh-com-client ssh-com-keygen ssh-com-sftp

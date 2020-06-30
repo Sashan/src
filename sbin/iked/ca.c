@@ -1,4 +1,4 @@
-/*	$OpenBSD: ca.c,v 1.53 2020/03/27 12:53:31 tobhe Exp $	*/
+/*	$OpenBSD: ca.c,v 1.63 2020/06/25 19:14:26 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2010-2013 Reyk Floeter <reyk@openbsd.org>
@@ -27,6 +27,7 @@
 #include <dirent.h>
 #include <string.h>
 #include <signal.h>
+#include <syslog.h>
 #include <errno.h>
 #include <err.h>
 #include <pwd.h>
@@ -47,6 +48,7 @@
 #include "ikev2.h"
 
 void	 ca_run(struct privsep *, struct privsep_proc *, void *);
+void	 ca_shutdown(struct privsep_proc *);
 void	 ca_reset(struct privsep *);
 int	 ca_reload(struct iked *);
 
@@ -56,6 +58,7 @@ int	 ca_getauth(struct iked *, struct imsg *);
 X509	*ca_by_subjectpubkey(X509_STORE *, uint8_t *, size_t);
 X509	*ca_by_issuer(X509_STORE *, X509_NAME *, struct iked_static_id *);
 X509	*ca_by_subjectaltname(X509_STORE *, struct iked_static_id *);
+void	 ca_store_certs_info(const char *, X509_STORE *);
 int	 ca_subjectpubkey_digest(X509 *, uint8_t *, unsigned int *);
 int	 ca_x509_subject_cmp(X509 *, struct iked_static_id *);
 int	 ca_validate_pubkey(struct iked *, struct iked_static_id *,
@@ -116,6 +119,23 @@ ca_run(struct privsep *ps, struct privsep_proc *p, void *arg)
 		fatal("%s: failed to allocate cert store", __func__);
 
 	env->sc_priv = store;
+	p->p_shutdown = ca_shutdown;
+}
+
+void
+ca_shutdown(struct privsep_proc *p)
+{
+	struct iked             *env = p->p_env;
+	struct ca_store		*store;
+
+	if (env == NULL)
+		return;
+	ibuf_release(env->sc_certreq);
+	if ((store = env->sc_priv) == NULL)
+		return;
+	ibuf_release(store->ca_pubkey.id_buf);
+	ibuf_release(store->ca_privkey.id_buf);
+	free(store);
 }
 
 void
@@ -280,10 +300,10 @@ ca_setcert(struct iked *env, struct iked_sahdr *sh, struct iked_id *id,
 
 int
 ca_setreq(struct iked *env, struct iked_sa *sa,
-    struct iked_static_id *localid, uint8_t type, uint8_t *data,
+    struct iked_static_id *localid, uint8_t type, uint8_t more, uint8_t *data,
     size_t len, enum privsep_procid procid)
 {
-	struct iovec		iov[4];
+	struct iovec		iov[5];
 	int			iovcnt = 0;
 	struct iked_static_id	idb;
 	struct iked_id		id;
@@ -310,6 +330,9 @@ ca_setreq(struct iked *env, struct iked_sa *sa,
 	iov[iovcnt].iov_base = &type;
 	iov[iovcnt].iov_len = sizeof(type);
 	iovcnt++;
+	iov[iovcnt].iov_base = &more;
+	iov[iovcnt].iov_len = sizeof(more);
+	iovcnt++;
 	iov[iovcnt].iov_base = data;
 	iov[iovcnt].iov_len = len;
 	iovcnt++;
@@ -325,6 +348,20 @@ ca_setreq(struct iked *env, struct iked_sa *sa,
 	return (ret);
 }
 
+static int
+auth_sig_compatible(uint8_t type)
+{
+	switch (type) {
+	case IKEV2_AUTH_RSA_SIG:
+	case IKEV2_AUTH_ECDSA_256:
+	case IKEV2_AUTH_ECDSA_384:
+	case IKEV2_AUTH_ECDSA_521:
+	case IKEV2_AUTH_SIG_ANY:
+		return (1);
+	}
+	return (0);
+}
+
 int
 ca_setauth(struct iked *env, struct iked_sa *sa,
     struct ibuf *authmsg, enum privsep_procid id)
@@ -336,8 +373,9 @@ ca_setauth(struct iked *env, struct iked_sa *sa,
 
 	if (id == PROC_CERT) {
 		/* switch encoding to IKEV2_AUTH_SIG if SHA2 is supported */
-		if (sa->sa_sigsha2 && type == IKEV2_AUTH_RSA_SIG) {
-			log_debug("%s: switching RSA_SIG to SIG", __func__);
+		if (sa->sa_sigsha2 && auth_sig_compatible(type)) {
+			log_debug("%s: switching %s to SIG", __func__,
+			    print_map(type, ikev2_auth_map));
 			type = IKEV2_AUTH_SIG;
 		} else if (!sa->sa_sigsha2 && type == IKEV2_AUTH_SIG_ANY) {
 			log_debug("%s: switching SIG to RSA_SIG(*)", __func__);
@@ -437,10 +475,10 @@ ca_getreq(struct iked *env, struct imsg *imsg)
 {
 	struct ca_store		*store = env->sc_priv;
 	struct iked_sahdr	 sh;
-	uint8_t			 type;
+	uint8_t			 type, more;
 	uint8_t			*ptr;
 	size_t			 len;
-	unsigned int		 i, n;
+	unsigned int		 i;
 	X509			*ca = NULL, *cert = NULL;
 	struct ibuf		*buf;
 	struct iked_static_id	 id;
@@ -448,15 +486,19 @@ ca_getreq(struct iked *env, struct imsg *imsg)
 
 	ptr = (uint8_t *)imsg->data;
 	len = IMSG_DATA_SIZE(imsg);
-	i = sizeof(id) + sizeof(uint8_t) + sizeof(sh);
-	if (len < i || ((len - i) % SHA_DIGEST_LENGTH) != 0)
+	i = sizeof(id) + sizeof(type) + sizeof(sh) + sizeof(more);
+	if (len < i)
 		return (-1);
 
 	memcpy(&id, ptr, sizeof(id));
 	if (id.id_type == IKEV2_ID_NONE)
 		return (-1);
 	memcpy(&sh, ptr + sizeof(id), sizeof(sh));
-	memcpy(&type, ptr + sizeof(id) + sizeof(sh), sizeof(uint8_t));
+	memcpy(&type, ptr + sizeof(id) + sizeof(sh), sizeof(type));
+	memcpy(&more, ptr + sizeof(id) + sizeof(sh) + sizeof(type), sizeof(more));
+
+	ptr += i;
+	len -= i;
 
 	switch (type) {
 	case IKEV2_CERT_RSA_KEY:
@@ -474,11 +516,17 @@ ca_getreq(struct iked *env, struct imsg *imsg)
 		    print_map(type, ikev2_cert_map));
 		break;
 	case IKEV2_CERT_X509_CERT:
+		if (len == 0 || len % SHA_DIGEST_LENGTH) {
+			log_info("%s: invalid CERTREQ data.",
+			    SPI_SH(&sh, __func__));
+			return (-1);
+		}
+
 		/*
 		 * Find a local certificate signed by any of the CAs
 		 * received in the CERTREQ payload
 		 */
-		for (n = 1; i < len; n++, i += SHA_DIGEST_LENGTH) {
+		for (i = 0; i < len; i += SHA_DIGEST_LENGTH) {
 			if ((ca = ca_by_subjectpubkey(store->ca_cas, ptr + i,
 			    SHA_DIGEST_LENGTH)) == NULL)
 				continue;
@@ -496,9 +544,13 @@ ca_getreq(struct iked *env, struct imsg *imsg)
 
  fallback:
 		/*
-		 * If no certificate matching one of the CAs was found, try to
-		 * find one with subjectAltName matching the ID
+		 * If no certificate or key matching any of the trust-anchors
+		 * was found and this was the last CERTREQ, try to find one with
+		 * subjectAltName matching the ID
 		 */
+		if (more)
+			return (0);
+
 		if (cert == NULL)
 			cert = ca_by_subjectaltname(store->ca_certs, &id);
 
@@ -506,14 +558,17 @@ ca_getreq(struct iked *env, struct imsg *imsg)
 		if (cert == NULL) {
 			if (ikev2_print_static_id(&id, idstr, sizeof(idstr)) == -1)
 				return (-1);
-			log_debug("%s: no valid local certificate found for %s",
+			log_info("%s: no valid local certificate found for %s",
 			    SPI_SH(&sh, __func__), idstr);
+			ca_store_certs_info(SPI_SH(&sh, __func__),
+			    store->ca_certs);
 			if (store->ca_pubkey.id_buf == NULL)
 				return (-1);
 			buf = ibuf_dup(store->ca_pubkey.id_buf);
 			type = store->ca_pubkey.id_type;
-			log_debug("%s: using local public key of type %s",
-			    __func__, print_map(type, ikev2_cert_map));
+			log_info("%s: using local public key of type %s",
+			    SPI_SH(&sh, __func__),
+			    print_map(type, ikev2_cert_map));
 			break;
 		}
 
@@ -591,6 +646,7 @@ ca_getauth(struct iked *env, struct imsg *imsg)
 	ret = ca_setauth(env, &sa, sa.sa_localauth.id_buf, PROC_IKEV2);
 
 	ibuf_release(sa.sa_localauth.id_buf);
+	sa.sa_localauth.id_buf = NULL;
 	ibuf_release(authmsg);
 
 	return (ret);
@@ -857,6 +913,50 @@ ca_by_subjectaltname(X509_STORE *ctx, struct iked_static_id *id)
 	return (NULL);
 }
 
+void
+ca_store_certs_info(const char *msg, X509_STORE *ctx)
+{
+	STACK_OF(X509_OBJECT)	*h;
+	X509_OBJECT		*xo;
+	X509			*cert;
+	int			 i;
+
+	h = ctx->objs;
+	for (i = 0; i < sk_X509_OBJECT_num(h); i++) {
+		xo = sk_X509_OBJECT_value(h, i);
+		if (xo->type != X509_LU_X509)
+			continue;
+		cert = xo->data.x509;
+		ca_cert_info(msg, cert);
+	}
+}
+
+void
+ca_cert_info(const char *msg, X509 *cert)
+{
+	ASN1_INTEGER	*asn1_serial;
+	BUF_MEM		*memptr;
+	BIO		*rawserial = NULL;
+	char		 buf[BUFSIZ];
+
+	if ((asn1_serial = X509_get_serialNumber(cert)) == NULL ||
+	    (rawserial = BIO_new(BIO_s_mem())) == NULL ||
+	    i2a_ASN1_INTEGER(rawserial, asn1_serial) <= 0)
+		goto out;
+	if (X509_NAME_oneline(X509_get_issuer_name(cert), buf, sizeof(buf)))
+		log_info("%s: issuer: %s", msg, buf);
+	BIO_get_mem_ptr(rawserial, &memptr);
+	if (memptr->data != NULL && memptr->length < INT32_MAX)
+		log_info("%s: serial: %.*s", msg, (int)memptr->length,
+		    memptr->data);
+	if (X509_NAME_oneline(X509_get_subject_name(cert), buf, sizeof(buf)))
+		log_info("%s: subject: %s", msg, buf);
+	ca_x509_subjectaltname_log(cert, msg);
+out:
+	if (rawserial)
+		BIO_free(rawserial);
+}
+
 int
 ca_subjectpubkey_digest(X509 *x509, uint8_t *md, unsigned int *size)
 {
@@ -1108,23 +1208,10 @@ ca_asn1_name(uint8_t *asn1, size_t len)
 	p = asn1;
 	if ((name = d2i_X509_NAME(NULL, &p, len)) == NULL)
 		return (NULL);
-	str = ca_x509_name(name);
+	str = X509_NAME_oneline(name, NULL, 0);
 	X509_NAME_free(name);
 
 	return (str);
-}
-
-char *
-ca_x509_name(void *ptr)
-{
-	char		 buf[BUFSIZ];
-	X509_NAME	*name = ptr;
-
-	bzero(buf, sizeof(buf));
-	if (!X509_NAME_oneline(name, buf, sizeof(buf) - 1))
-		return (NULL);
-
-	return (strdup(buf));
 }
 
 /*
@@ -1285,7 +1372,7 @@ ca_validate_pubkey(struct iked *env, struct iked_static_id *id,
 		}
 	}
 
-	lc_string(idstr);
+	lc_idtype(idstr);
 	if (strlcpy(file, IKED_PUBKEY_DIR, sizeof(file)) >= sizeof(file) ||
 	    strlcat(file, idstr, sizeof(file)) >= sizeof(file)) {
 		log_debug("%s: public key id too long %s", __func__, idstr);
@@ -1293,7 +1380,9 @@ ca_validate_pubkey(struct iked *env, struct iked_static_id *id,
 	}
 
 	if ((fp = fopen(file, "r")) == NULL) {
-		log_debug("%s: could not open public key %s", __func__, file);
+		/* Log to debug when called from ca_validate_cert */
+		logit(len == 0 ? LOG_DEBUG : LOG_INFO,
+		    "%s: could not open public key %s", __func__, file);
 		goto done;
 	}
 	localkey = PEM_read_PUBKEY(fp, NULL, NULL, NULL);
@@ -1327,8 +1416,6 @@ ca_validate_pubkey(struct iked *env, struct iked_static_id *id,
 		ca_sslerror(__func__);
  done:
 	ibuf_release(idp.id_buf);
-	if (peerkey != NULL)
-		EVP_PKEY_free(peerkey);
 	if (localkey != NULL)
 		EVP_PKEY_free(localkey);
 	if (peerrsa != NULL)
@@ -1337,8 +1424,11 @@ ca_validate_pubkey(struct iked *env, struct iked_static_id *id,
 		EC_KEY_free(peerec);
 	if (localrsa != NULL)
 		RSA_free(localrsa);
-	if (rawcert != NULL)
+	if (rawcert != NULL) {
 		BIO_free(rawcert);
+		if (peerkey != NULL)
+			EVP_PKEY_free(peerkey);
+	}
 
 	return (ret);
 }
@@ -1351,6 +1441,7 @@ ca_validate_cert(struct iked *env, struct iked_static_id *id,
 	X509_STORE_CTX	 csc;
 	BIO		*rawcert = NULL;
 	X509		*cert = NULL;
+	EVP_PKEY	*pkey;
 	int		 ret = -1, result, error;
 	X509_NAME	*subject;
 	const char	*errstr = "failed";
@@ -1373,8 +1464,13 @@ ca_validate_cert(struct iked *env, struct iked_static_id *id,
 	}
 
 	if (id != NULL) {
-		if ((ret = ca_validate_pubkey(env, id, X509_get_pubkey(cert),
-		    0)) == 0) {
+		if ((pkey = X509_get_pubkey(cert)) == NULL) {
+			errstr = "no public key in cert";
+			goto done;
+		}
+		ret = ca_validate_pubkey(env, id, pkey, 0);
+		EVP_PKEY_free(pkey);
+		if (ret == 0) {
 			errstr = "in public key file, ok";
 			goto done;
 		}

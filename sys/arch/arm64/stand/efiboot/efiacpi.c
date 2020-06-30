@@ -1,4 +1,4 @@
-/*	$OpenBSD: efiacpi.c,v 1.6 2019/12/26 13:13:18 kettenis Exp $	*/
+/*	$OpenBSD: efiacpi.c,v 1.8 2020/05/11 16:12:46 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2018 Mark Kettenis <kettenis@openbsd.org>
@@ -588,6 +588,8 @@ efi_acpi_madt(struct acpi_table_header *hdr)
 	fdt_node_set_string_property(node, "status", "okay");
 }
 
+static int serial = 0;
+
 void
 efi_acpi_spcr(struct acpi_table_header *hdr)
 {
@@ -654,11 +656,13 @@ efi_acpi_spcr(struct acpi_table_header *hdr)
 		return;
 	}
 	fdt_node_set_property(node, "reg", reg, sizeof(reg));
+	serial = 1;
 }
 
 void *
 efi_acpi(void)
 {
+	extern uint64_t dma_constraint[2];
 	extern u_char dt_blob_start[];
 	void *fdt = dt_blob_start;
 	struct acpi_table_header *hdr;
@@ -713,6 +717,15 @@ efi_acpi(void)
 	/* Update "acpi" node. */
 	node = fdt_find_node("/acpi");
 	fdt_node_set_property(node, "reg", reg, sizeof(reg));
+
+	/* Use framebuffer if SPCR is absent or unusable. */
+	if (!serial)
+		cnset(ttydev("fb0"));
+
+	/* Raspberry Pi 4 is "special". */
+	if (memcmp(xsdt->hdr_oemid, "RPIFDN", 6) == 0 &&
+	    memcmp(xsdt->hdr_oemtableid, "RPI4", 4) == 0)
+		dma_constraint[1] = htobe64(0x3bffffff);
 
 	fdt_finalize();
 

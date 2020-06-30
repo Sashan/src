@@ -1,4 +1,4 @@
-#	$OpenBSD: files.omap,v 1.23 2018/08/27 10:17:35 jsg Exp $
+#	$OpenBSD: files.omap,v 1.26 2020/04/10 22:02:45 kettenis Exp $
 
 define omap {}
 device omap: omap
@@ -8,6 +8,14 @@ file	arch/armv7/omap/omap.c			omap
 file	arch/armv7/omap/omap3.c
 file	arch/armv7/omap/omap4.c
 file	arch/armv7/omap/am335x.c
+
+device omcm: fdt
+attach omcm at fdt
+file	arch/armv7/omap/omcm.c			omcm
+
+device omclock
+attach omclock at fdt
+file	arch/armv7/omap/omclock.c		omclock
 
 device ommmc: sdmmcbus
 attach ommmc at fdt
@@ -20,11 +28,6 @@ file	arch/armv7/omap/if_cpsw.c		cpsw
 device prcm
 attach prcm at omap
 file	arch/armv7/omap/prcm.c			prcm
-
-device sitaracm
-attach sitaracm at omap
-file	arch/armv7/omap/am335x_cm_padconf.c	sitaracm
-file	arch/armv7/omap/sitara_cm.c		sitaracm
 
 device omgpio: gpiobus
 attach omgpio at fdt
@@ -62,12 +65,20 @@ device omdog
 attach omdog at fdt
 file	arch/armv7/omap/omdog.c			omdog
 
+device omrng
+attach omrng at fdt
+file	arch/armv7/omap/omrng.c			omrng
+
 attach ohci at omap with omohci
 file	arch/armv7/omap/omohci.c		omohci
 
 device omehci: usbus
 attach omehci at fdt
 file	arch/armv7/omap/omehci.c		omehci
+
+device omsysc: fdt
+attach omsysc at fdt
+file	arch/armv7/omap/omsysc.c		omsysc
 
 device omusbtll
 attach omusbtll at omap

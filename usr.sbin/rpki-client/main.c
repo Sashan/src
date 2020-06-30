@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.59 2020/03/06 17:42:45 job Exp $ */
+/*	$OpenBSD: main.c,v 1.71 2020/06/24 14:39:21 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -44,6 +44,7 @@
 
 #include <sys/queue.h>
 #include <sys/socket.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/tree.h>
 #include <sys/types.h>
@@ -75,26 +76,6 @@
  * Maximum number of TAL files we'll load.
  */
 #define	TALSZ_MAX	8
-
-/*
- * Statistics collected during run-time.
- */
-struct	stats {
-	size_t	 tals; /* total number of locators */
-	size_t	 mfts; /* total number of manifests */
-	size_t	 mfts_fail; /* failing syntactic parse */
-	size_t	 mfts_stale; /* stale manifests */
-	size_t	 certs; /* certificates */
-	size_t	 certs_fail; /* failing syntactic parse */
-	size_t	 certs_invalid; /* invalid resources */
-	size_t	 roas; /* route origin authorizations */
-	size_t	 roas_fail; /* failing syntactic parse */
-	size_t	 roas_invalid; /* invalid resources */
-	size_t	 repos; /* repositories */
-	size_t	 crls; /* revocation lists */
-	size_t	 vrps; /* total number of vrps */
-	size_t	 uniqs; /* number of unique vrps */
-};
 
 /*
  * An rsync repository.
@@ -147,6 +128,24 @@ struct	entity {
 TAILQ_HEAD(entityq, entity);
 
 /*
+ * Database of all file path accessed during a run.
+ */
+struct filepath {
+	RB_ENTRY(filepath)	entry;
+	char			*file;
+};
+
+static inline int
+filepathcmp(struct filepath *a, struct filepath *b)
+{
+	return strcasecmp(a->file, b->file);
+}
+
+RB_HEAD(filepath_tree, filepath);
+RB_PROTOTYPE(filepath_tree, filepath, entry, filepathcmp);
+struct filepath_tree  fpt = RB_INITIALIZER(&fpt);
+
+/*
  * Mark that our subprocesses will never return.
  */
 static void	proc_parser(int, int) __attribute__((noreturn));
@@ -159,6 +158,8 @@ static void	build_crls(const struct auth *, struct crl_tree *,
 const char	*bird_tablename = "ROAS";
 
 int	 verbose;
+
+struct stats	 stats;
 
 /*
  * Log a message to stderr if and only if "verbose" is non-zero.
@@ -175,6 +176,37 @@ logx(const char *fmt, ...)
 		va_end(ap);
 	}
 }
+
+/*
+ * Functions to lookup which files have been accessed during computation.
+ */
+static void
+filepath_add(char *file)
+{
+	struct filepath *fp;
+
+	if ((fp = malloc(sizeof(*fp))) == NULL)
+		err(1, NULL);
+	if ((fp->file = strdup(file)) == NULL)
+		err(1, NULL);
+
+	if (RB_INSERT(filepath_tree, &fpt, fp) != NULL) {
+		/* already in the tree */
+		free(fp->file);
+		free(fp);
+	}
+}
+
+static int
+filepath_exists(char *file)
+{
+	struct filepath needle;
+
+	needle.file = file;
+	return RB_FIND(filepath_tree, &fpt, &needle) != NULL;
+}
+
+RB_GENERATE(filepath_tree, filepath, entry, filepathcmp);
 
 /*
  * Resolve the media type of a resource by looking at its suffice.
@@ -268,7 +300,7 @@ repo_lookup(int fd, struct repotab *rt, const char *uri)
 
 	i = rt->reposz - 1;
 
-	logx("%s/%s: loading", rp->host, rp->module);
+	logx("%s/%s: pulling from network", rp->host, rp->module);
 	io_simple_write(fd, &i, sizeof(size_t));
 	io_str_write(fd, rp->host);
 	io_str_write(fd, rp->module);
@@ -391,6 +423,7 @@ entityq_add(int fd, struct entityq *q, char *file, enum rtype type,
 		if ((p->descr = strdup(descr)) == NULL)
 			err(1, "strdup");
 
+	filepath_add(file);
 	TAILQ_INSERT_TAIL(q, p, entries);
 
 	/*
@@ -490,6 +523,16 @@ queue_add_tal(int fd, struct entityq *q, const char *file, size_t *eid)
 	if ((nfile = strdup(file)) == NULL)
 		err(1, "strdup");
 	buf = tal_read_file(file);
+
+	/* Record tal for later reporting */
+	if (stats.talnames == NULL)
+		stats.talnames = strdup(file);
+	else {
+		char *tmp;
+		asprintf(&tmp, "%s %s", stats.talnames, file);
+		free(stats.talnames);
+		stats.talnames = tmp;
+	}
 
 	/* Not in a repository, so directly add to queue. */
 	entityq_add(fd, q, nfile, RTYPE_TAL, NULL, NULL, NULL, 0, buf, eid);
@@ -656,27 +699,28 @@ proc_rsync(char *prog, char *bind_addr, int fd, int noop)
 			 * Then we respond to the parent.
 			 */
 
-			if ((pid = waitpid(WAIT_ANY, &st, 0)) == -1)
-				err(1, "waitpid");
+			while ((pid = waitpid(WAIT_ANY, &st, WNOHANG)) > 0) {
+				for (i = 0; i < idsz; i++)
+					if (ids[i].pid == pid)
+						break;
+				assert(i < idsz);
 
-			for (i = 0; i < idsz; i++)
-				if (ids[i].pid == pid)
-					break;
-			assert(i < idsz);
+				if (!WIFEXITED(st)) {
+					warnx("rsync %s terminated abnormally",
+					    ids[i].uri);
+					rc = 1;
+				} else if (WEXITSTATUS(st) != 0) {
+					warnx("rsync %s failed", ids[i].uri);
+				}
 
-			if (!WIFEXITED(st)) {
-				warnx("rsync %s terminated abnormally",
-				    ids[i].uri);
-				rc = 1;
-			} else if (WEXITSTATUS(st) != 0) {
-				warnx("rsync %s failed", ids[i].uri);
+				io_simple_write(fd, &ids[i].id, sizeof(size_t));
+				free(ids[i].uri);
+				ids[i].uri = NULL;
+				ids[i].pid = 0;
+				ids[i].id = 0;
 			}
-
-			io_simple_write(fd, &ids[i].id, sizeof(size_t));
-			free(ids[i].uri);
-			ids[i].uri = NULL;
-			ids[i].pid = 0;
-			ids[i].id = 0;
+			if (pid == -1 && errno != ECHILD)
+				err(1, "waitpid");
 			continue;
 		}
 
@@ -729,8 +773,7 @@ proc_rsync(char *prog, char *bind_addr, int fd, int noop)
 				err(1, "pledge");
 			i = 0;
 			args[i++] = (char *)prog;
-			args[i++] = "-rlt";
-			args[i++] = "--delete";
+			args[i++] = "-rt";
 			if (bind_addr != NULL) {
 				args[i++] = "--address";
 				args[i++] = (char *)bind_addr;
@@ -884,6 +927,12 @@ proc_parser_mft(struct entity *entp, int force, X509_STORE *store,
 	X509_STORE_CTX_cleanup(ctx);
 	sk_X509_free(chain);
 	X509_free(x509);
+
+	if (!mft_check(entp->uri, mft)) {
+		mft_free(mft);
+		return NULL;
+	}
+
 	return mft;
 }
 
@@ -1025,7 +1074,7 @@ proc_parser_crl(struct entity *entp, X509_STORE *store,
 		crl->x509_crl = x509_crl;
 
 		if (RB_INSERT(crl_tree, crlt, crl) != NULL) {
-			warnx("%s: dup aki %s", __func__, crl->aki);
+			warnx("%s: duplicate AKI %s", entp->uri, crl->aki);
 			free_crl(crl);
 		}
 	}
@@ -1242,11 +1291,6 @@ out:
 
 	free(b);
 
-	EVP_cleanup();
-	CRYPTO_cleanup_all_ex_data();
-	ERR_remove_state(0);
-	ERR_free_strings();
-
 	exit(rc);
 }
 
@@ -1370,6 +1414,88 @@ tal_load_default(const char *tals[], size_t max)
 	return (s);
 }
 
+static char **
+add_to_del(char **del, size_t *dsz, char *file)
+{
+	size_t i = *dsz;
+
+	del = reallocarray(del, i + 1, sizeof(*del));
+	if (del == NULL)
+		err(1, "reallocarray");
+	del[i] = strdup(file);
+	if (del[i] == NULL)
+		err(1, "strdup");
+	*dsz = i + 1;
+	return del;
+}
+
+static size_t
+repo_cleanup(const char *cachedir, struct repotab *rt)
+{
+	size_t i, delsz = 0;
+	char *argv[2], **del = NULL;
+	FTS *fts;
+	FTSENT *e;
+
+	/* change working directory to the cache directory */
+	if (chdir(cachedir) == -1)
+		err(1, "%s: chdir", cachedir);
+
+	for (i = 0; i < rt->reposz; i++) {
+		if (asprintf(&argv[0], "%s/%s", rt->repos[i].host,
+		    rt->repos[i].module) == -1)
+			err(1, NULL);
+		argv[1] = NULL;
+		if ((fts = fts_open(argv, FTS_PHYSICAL | FTS_NOSTAT,
+		    NULL)) == NULL)
+			err(1, "fts_open");
+		errno = 0;
+		while ((e = fts_read(fts)) != NULL) {
+			switch (e->fts_info) {
+			case FTS_NSOK:
+				if (!filepath_exists(e->fts_path))
+					del = add_to_del(del, &delsz,
+					    e->fts_path);
+				break;
+			case FTS_D:
+			case FTS_DP:
+				/* TODO empty directory pruning */
+				break;
+			case FTS_SL:
+			case FTS_SLNONE:
+				warnx("symlink %s", e->fts_path);
+				del = add_to_del(del, &delsz, e->fts_path);
+				break;
+			case FTS_NS:
+			case FTS_ERR:
+				warnc(e->fts_errno, "fts_read %s", e->fts_path);
+				break;
+			default:
+				warnx("unhandled[%x] %s", e->fts_info,
+				    e->fts_path);
+				break;
+			}
+
+			errno = 0;
+		}
+		if (errno)
+			err(1, "fts_read");
+		if (fts_close(fts) == -1)
+			err(1, "fts_close");
+	}
+
+	for (i = 0; i < delsz; i++) {
+		if (unlink(del[i]) == -1)
+			warn("unlink %s", del[i]);
+		if (verbose > 1)
+			logx("deleted %s", del[i]);
+		free(del[i]);
+	}
+	free(del);
+
+	return delsz;
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1383,13 +1509,16 @@ main(int argc, char *argv[])
 	struct entity	*ent;
 	struct pollfd	 pfd[2];
 	struct repotab	 rt;
-	struct stats	 stats;
 	struct roa	**out = NULL;
 	char		*rsync_prog = "openrsync";
 	char		*bind_addr = NULL;
 	const char	*cachedir = NULL;
 	const char	*tals[TALSZ_MAX];
 	struct vrp_tree	 v = RB_INITIALIZER(&v);
+	struct rusage	ru;
+	struct timeval	start_time, now_time;
+
+	gettimeofday(&start_time, NULL);
 
 	/* If started as root, priv-drop to _rpki-client */
 	if (getuid() == 0) {
@@ -1403,9 +1532,9 @@ main(int argc, char *argv[])
 		    setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid) == -1)
 			err(1, "unable to revoke privs");
 
-		cachedir = RPKI_PATH_BASE_DIR;
-		outputdir = RPKI_PATH_OUT_DIR;
 	}
+	cachedir = RPKI_PATH_BASE_DIR;
+	outputdir = RPKI_PATH_OUT_DIR;
 
 	if (pledge("stdio rpath wpath cpath fattr proc exec unveil", NULL) == -1)
 		err(1, "pledge");
@@ -1480,7 +1609,6 @@ main(int argc, char *argv[])
 		err(1, "no TAL files found in %s", "/etc/rpki");
 
 	memset(&rt, 0, sizeof(struct repotab));
-	memset(&stats, 0, sizeof(struct stats));
 	TAILQ_INIT(&q);
 
 	/*
@@ -1608,7 +1736,7 @@ main(int argc, char *argv[])
 			assert(i < rt.reposz);
 			assert(!rt.repos[i].loaded);
 			rt.repos[i].loaded = 1;
-			logx("%s/%s: loaded", rt.repos[i].host,
+			logx("%s/%s: loaded from cache", rt.repos[i].host,
 			    rt.repos[i].module);
 			stats.repos++;
 			entityq_flush(proc, &q, &rt.repos[i]);
@@ -1623,7 +1751,7 @@ main(int argc, char *argv[])
 			ent = entityq_next(proc, &q);
 			entity_process(proc, rsync, &stats,
 			    &q, ent, &rt, &eid, &v);
-			if (verbose > 1)
+			if (verbose > 2)
 				fprintf(stderr, "%s\n", ent->uri);
 			entity_free(ent);
 		}
@@ -1655,8 +1783,21 @@ main(int argc, char *argv[])
 		rc = 1;
 	}
 
-	if (outputfiles(&v))
+	gettimeofday(&now_time, NULL);
+	timersub(&now_time, &start_time, &stats.elapsed_time);
+	if (getrusage(RUSAGE_SELF, &ru) == 0) {
+		stats.user_time = ru.ru_utime;
+		stats.system_time = ru.ru_stime;
+	}
+	if (getrusage(RUSAGE_CHILDREN, &ru) == 0) {
+		timeradd(&stats.user_time, &ru.ru_utime, &stats.user_time);
+		timeradd(&stats.system_time, &ru.ru_stime, &stats.system_time);
+	}
+
+	if (outputfiles(&v, &stats))
 		rc = 1;
+
+	stats.del_files = repo_cleanup(cachedir, &rt);
 
 	logx("Route Origin Authorizations: %zu (%zu failed parse, %zu invalid)",
 	    stats.roas, stats.roas_fail, stats.roas_invalid);
@@ -1667,10 +1808,10 @@ main(int argc, char *argv[])
 	    stats.mfts, stats.mfts_fail, stats.mfts_stale);
 	logx("Certificate revocation lists: %zu", stats.crls);
 	logx("Repositories: %zu", stats.repos);
+	logx("Files removed: %zu", stats.del_files);
 	logx("VRP Entries: %zu (%zu unique)", stats.vrps, stats.uniqs);
 
 	/* Memory cleanup. */
-
 	for (i = 0; i < rt.reposz; i++) {
 		free(rt.repos[i].host);
 		free(rt.repos[i].module);
@@ -1687,6 +1828,6 @@ usage:
 	fprintf(stderr,
 	    "usage: rpki-client [-Bcfjnov] [-b sourceaddr] [-d cachedir]"
 	    " [-e rsync_prog]\n"
-	    "            [-T table] [-t tal] [outputdir]\n");
+	    "                   [-T table] [-t tal] [outputdir]\n");
 	return 1;
 }

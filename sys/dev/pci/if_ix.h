@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ix.h,v 1.39 2020/03/25 17:20:46 mpi Exp $	*/
+/*	$OpenBSD: if_ix.h,v 1.41 2020/06/07 23:52:05 dlg Exp $	*/
 
 /******************************************************************************
 
@@ -120,6 +120,7 @@
  * Interrupt Moderation parameters
  */
 #define IXGBE_INTS_PER_SEC		8000
+#define IXGBE_LINK_ITR			1000
 
 struct ixgbe_tx_buf {
 	uint32_t		eop_index;
@@ -154,6 +155,8 @@ struct ix_queue {
 	uint32_t		msix;           /* This queue's MSIX vector */
 	uint32_t		eims;           /* This queue's EIMS bit */
 	uint32_t		eitr_setting;
+	char			name[8];
+	pci_intr_handle_t	ih;
 	void			*tag;
 	struct tx_ring		*txr;
 	struct rx_ring		*rxr;
@@ -164,6 +167,7 @@ struct ix_queue {
  */
 struct tx_ring {
 	struct ix_softc		*sc;
+	struct ifqueue		*ifq;
 	uint32_t		me;
 	uint32_t		watchdog_timer;
 	union ixgbe_adv_tx_desc	*tx_base;
@@ -190,6 +194,7 @@ struct tx_ring {
  */
 struct rx_ring {
 	struct ix_softc		*sc;
+	struct ifiqueue		*ifiq;
 	uint32_t		me;
 	union ixgbe_adv_rx_desc	*rx_base;
 	struct ixgbe_dma_alloc	rxdma;
@@ -202,6 +207,7 @@ struct rx_ring {
 	uint			next_to_refresh;
 	uint			next_to_check;
 	uint			last_desc_filled;
+	struct timeout		rx_refill;
 	struct if_rxring	rx_ring;
 	struct ixgbe_rx_buf	*rx_buffers;
 
@@ -228,7 +234,6 @@ struct ix_softc {
 
 	struct ifmedia		media;
 	struct timeout		timer;
-	struct timeout		rx_refill;
 	int			msix;
 	int			if_flags;
 

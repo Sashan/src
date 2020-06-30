@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.191 2019/04/01 07:00:52 tedu Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.198 2020/06/23 01:21:29 jmatthew Exp $	*/
 /*	$NetBSD: machdep.c,v 1.108 2001/07/24 19:30:14 eeh Exp $ */
 
 /*-
@@ -95,7 +95,6 @@
 
 #include <sys/sysctl.h>
 #include <sys/exec_elf.h>
-#include <dev/rndvar.h>
 
 #define _SPARC_BUS_DMA_PRIVATE
 #include <machine/autoconf.h>
@@ -608,18 +607,10 @@ boot(int howto)
 	fb_unblank();
 	boothowto = howto;
 	if ((howto & RB_NOSYNC) == 0 && waittime < 0) {
-		extern int sparc_clock_time_is_ok;
-
 		waittime = 0;
 		vfs_shutdown(curproc);
 
-		/*
-		 * XXX
-		 * Do this only if the TOD clock has already been read out
-		 * successfully by inittodr() or set by an explicit call
-		 * to resettodr() (e.g. from settimeofday()).
-		 */
-		if ((howto & RB_TIMEBAD) == 0 && sparc_clock_time_is_ok) {
+		if ((howto & RB_TIMEBAD) == 0) {
 			resettodr();
 		} else {
 			printf("WARNING: not updating battery clock\n");
@@ -1831,21 +1822,22 @@ sparc_bus_free(bus_space_tag_t t, bus_space_tag_t t0, bus_space_handle_t h,
 }
 
 static const struct sparc_bus_space_tag _mainbus_space_tag = {
-	NULL,				/* cookie */
-	NULL,				/* parent bus tag */
-	UPA_BUS_SPACE,			/* type */
-	ASI_PRIMARY,
-	ASI_PRIMARY,
-	"mainbus",
-	sparc_bus_alloc,
-	sparc_bus_free,
-	sparc_bus_map,			/* bus_space_map */
-	sparc_bus_protect,		/* bus_space_protect */
-	sparc_bus_unmap,		/* bus_space_unmap */
-	sparc_bus_subregion,		/* bus_space_subregion */
-	sparc_bus_mmap,			/* bus_space_mmap */
-	sparc_mainbus_intr_establish,	/* bus_intr_establish */
-	sparc_bus_addr			/* bus_space_addr */
+	.cookie =			NULL,
+	.parent =			NULL,
+	.default_type =			UPA_BUS_SPACE,
+	.asi =				ASI_PRIMARY,
+	.sasi =				ASI_PRIMARY,
+	.name =				"mainbus",
+	.sparc_bus_alloc =		sparc_bus_alloc,
+	.sparc_bus_free =		sparc_bus_free,
+	.sparc_bus_map =		sparc_bus_map,
+	.sparc_bus_protect =		sparc_bus_protect,
+	.sparc_bus_unmap =		sparc_bus_unmap,
+	.sparc_bus_subregion =		sparc_bus_subregion,
+	.sparc_bus_mmap =		sparc_bus_mmap,	
+	.sparc_intr_establish =		sparc_mainbus_intr_establish,
+	/*.sparc_intr_establish_cpu*/
+	.sparc_bus_addr =		sparc_bus_addr
 };
 const bus_space_tag_t mainbus_space_tag = &_mainbus_space_tag;
 
@@ -2005,6 +1997,23 @@ bus_intr_establish(bus_space_tag_t t, int p, int l, int f, int (*h)(void *),
 
 	_BS_PRECALL(t, sparc_intr_establish);
 	ret = _BS_CALL(t, sparc_intr_establish)(t, t0, p, l, f, h, a, w);
+	_BS_POSTCALL;
+	return (ret);
+}
+
+void *
+bus_intr_establish_cpu(bus_space_tag_t t, int p, int l, int f,
+    struct cpu_info *ci, int (*h)(void *), void *a, const char *w)
+{
+	const bus_space_tag_t t0 = t;
+	void *ret;
+
+	if (t->sparc_intr_establish_cpu == NULL)
+		return (bus_intr_establish(t, p, l, f, h, a, w));
+
+	_BS_PRECALL(t, sparc_intr_establish_cpu);
+	ret = _BS_CALL(t, sparc_intr_establish_cpu)(t, t0, p, l, f, ci,
+	    h, a, w);
 	_BS_POSTCALL;
 	return (ret);
 }

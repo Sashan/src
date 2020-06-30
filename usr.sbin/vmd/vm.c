@@ -1,4 +1,4 @@
-/*	$OpenBSD: vm.c,v 1.54 2019/12/11 06:45:16 pd Exp $	*/
+/*	$OpenBSD: vm.c,v 1.58 2020/06/28 16:52:45 pd Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -81,6 +81,7 @@ void init_emulated_hw(struct vmop_create_params *, int,
 void restore_emulated_hw(struct vm_create_params *, int, int *,
     int[][VM_MAX_BASE_PER_DISK],int);
 void vcpu_exit_inout(struct vm_run_params *);
+int vcpu_exit_eptviolation(struct vm_run_params *);
 uint8_t vcpu_exit_pci(struct vm_run_params *);
 int vcpu_pic_intr(uint32_t, uint32_t, uint8_t);
 int loadfile_bios(FILE *, struct vcpu_reg_state *);
@@ -111,8 +112,7 @@ pthread_cond_t threadcond;
 
 pthread_cond_t vcpu_run_cond[VMM_MAX_VCPUS_PER_VM];
 pthread_mutex_t vcpu_run_mtx[VMM_MAX_VCPUS_PER_VM];
-pthread_cond_t vcpu_pause_cond[VMM_MAX_VCPUS_PER_VM];
-pthread_mutex_t vcpu_pause_mtx[VMM_MAX_VCPUS_PER_VM];
+pthread_barrier_t vm_pause_barrier;
 pthread_cond_t vcpu_unpause_cond[VMM_MAX_VCPUS_PER_VM];
 pthread_mutex_t vcpu_unpause_mtx[VMM_MAX_VCPUS_PER_VM];
 uint8_t vcpu_hlt[VMM_MAX_VCPUS_PER_VM];
@@ -469,6 +469,10 @@ vm_dispatch_vmm(int fd, short event, void *arg)
 			    IMSG_VMDOP_SEND_VM_RESPONSE,
 			    imsg.hdr.peerid, imsg.hdr.pid, -1, &vmr,
 			    sizeof(vmr));
+			if (!vmr.vmr_result) {
+				imsg_flush(&current_vm->vm_iev.ibuf);
+				_exit(0);
+			}
 			break;
 		default:
 			fatalx("%s: got invalid imsg %d from %s",
@@ -743,33 +747,33 @@ pause_vm(struct vm_create_params *vcp)
 
 	current_vm->vm_state |= VM_STATE_PAUSED;
 
-	for (n = 0; n < vcp->vcp_ncpus; n++) {
-		ret = pthread_mutex_lock(&vcpu_pause_mtx[n]);
-		if (ret) {
-			log_warnx("%s: can't lock vcpu pause mtx (%d)",
-			    __func__, (int)ret);
-			return;
-		}
+	ret = pthread_barrier_init(&vm_pause_barrier, NULL, vcp->vcp_ncpus + 1);
+	if (ret) {
+		log_warnx("%s: cannot initialize pause barrier (%d)",
+		    __progname, ret);
+		return;
+	}
 
+	for (n = 0; n < vcp->vcp_ncpus; n++) {
 		ret = pthread_cond_broadcast(&vcpu_run_cond[n]);
 		if (ret) {
 			log_warnx("%s: can't broadcast vcpu run cond (%d)",
 			    __func__, (int)ret);
 			return;
 		}
+	}
+	ret = pthread_barrier_wait(&vm_pause_barrier);
+	if (ret != 0 && ret != PTHREAD_BARRIER_SERIAL_THREAD) {
+		log_warnx("%s: could not wait on pause barrier (%d)",
+		    __func__, (int)ret);
+		return;
+	}
 
-		ret = pthread_cond_wait(&vcpu_pause_cond[n], &vcpu_pause_mtx[n]);
-		if (ret) {
-			log_warnx("%s: can't wait on vcpu pause cond (%d)",
-			    __func__, (int)ret);
-			return;
-		}
-		ret = pthread_mutex_unlock(&vcpu_pause_mtx[n]);
-		if (ret) {
-			log_warnx("%s: can't unlock vcpu mtx (%d)",
-			    __func__, (int)ret);
-			return;
-		}
+	ret = pthread_barrier_destroy(&vm_pause_barrier);
+	if (ret) {
+		log_warnx("%s: could not destroy pause barrier (%d)",
+		    __progname, ret);
+		return;
 	}
 
 	i8253_stop();
@@ -1260,19 +1264,7 @@ run_vm(int child_cdrom, int child_disks[][VM_MAX_BASE_PER_DISK],
 			    __progname, ret);
 			return (ret);
 		}
-		ret = pthread_cond_init(&vcpu_pause_cond[i], NULL);
-		if (ret) {
-			log_warnx("%s: cannot initialize pause cond var (%d)",
-			    __progname, ret);
-			return (ret);
-		}
 
-		ret = pthread_mutex_init(&vcpu_pause_mtx[i], NULL);
-		if (ret) {
-			log_warnx("%s: cannot initialize pause mtx (%d)",
-			    __progname, ret);
-			return (ret);
-		}
 		ret = pthread_cond_init(&vcpu_unpause_cond[i], NULL);
 		if (ret) {
 			log_warnx("%s: cannot initialize unpause var (%d)",
@@ -1410,10 +1402,10 @@ vcpu_run_loop(void *arg)
 
 		/* If we are halted and need to pause, pause */
 		if (vcpu_hlt[n] && (current_vm->vm_state & VM_STATE_PAUSED)) {
-			ret = pthread_cond_broadcast(&vcpu_pause_cond[n]);
-			if (ret) {
-				log_warnx("%s: can't broadcast vcpu pause mtx"
-				    "(%d)", __func__, (int)ret);
+			ret = pthread_barrier_wait(&vm_pause_barrier);
+			if (ret != 0 && ret != PTHREAD_BARRIER_SERIAL_THREAD) {
+				log_warnx("%s: could not wait on pause barrier (%d)",
+				    __func__, (int)ret);
 				return ((void *)ret);
 			}
 
@@ -1600,6 +1592,38 @@ vcpu_exit_inout(struct vm_run_params *vrp)
 }
 
 /*
+ * vcpu_exit_eptviolation
+ *
+ * handle an EPT Violation
+ *
+ *
+ * Parameters:
+ *  vrp: vcpu run parameters containing guest state for this exit
+ *
+ * Return values:
+ *  0: no action required
+ *  EAGAIN: a protection fault occured, kill the vm.
+ */
+int
+vcpu_exit_eptviolation(struct vm_run_params *vrp)
+{
+	struct vm_exit *ve = vrp->vrp_exit;
+	/*
+	 * vmd may be exiting to vmd to handle a pending interrupt
+	 * but last exit type may have bee VMX_EXIT_EPT_VIOLATION,
+	 * check the fault_type to ensure we really are processing
+	 * a VMX_EXIT_EPT_VIOLATION.
+	 */
+	if (ve->vee.vee_fault_type == VEE_FAULT_PROTECT) {
+		log_debug("%s: EPT Violation: rip=0x%llx",
+		    __progname, vrp->vrp_exit->vrs.vrs_gprs[VCPU_REGS_RIP]);
+		return (EAGAIN);
+	}
+
+	return (0);
+}
+
+/*
  * vcpu_exit
  *
  * Handle a vcpu exit. This function is called when it is determined that
@@ -1629,7 +1653,6 @@ vcpu_exit(struct vm_run_params *vrp)
 	case VMX_EXIT_CPUID:
 	case VMX_EXIT_EXTINT:
 	case SVM_VMEXIT_INTR:
-	case VMX_EXIT_EPT_VIOLATION:
 	case SVM_VMEXIT_NPF:
 	case SVM_VMEXIT_MSR:
 	case SVM_VMEXIT_CPUID:
@@ -1640,6 +1663,12 @@ vcpu_exit(struct vm_run_params *vrp)
 		 * here (and falling through to the default case below results
 		 * in more vmd log spam).
 		 */
+		break;
+	case VMX_EXIT_EPT_VIOLATION:
+		ret = vcpu_exit_eptviolation(vrp);
+		if (ret)
+			return (ret);
+
 		break;
 	case VMX_EXIT_IO:
 	case SVM_VMEXIT_IOIO:
@@ -2213,4 +2242,74 @@ translate_gva(struct vm_exit* exit, uint64_t va, uint64_t* pa, int mode)
 	log_debug("%s: final GPA for GVA 0x%llx = 0x%llx\n", __func__, va, *pa);
 
 	return (0);
+}
+
+/*
+ * vm_pipe_init
+ *
+ * Initialize a vm_dev_pipe, setting up its file descriptors and its
+ * event structure with the given callback.
+ *
+ * Parameters:
+ *  p: pointer to vm_dev_pipe struct to initizlize
+ *  cb: callback to use for READ events on the read end of the pipe
+ */
+void
+vm_pipe_init(struct vm_dev_pipe *p, void (*cb)(int, short, void *))
+{
+	int ret;
+	int fds[2];
+
+	memset(p, 0, sizeof(struct vm_dev_pipe));
+
+	ret = pipe(fds);
+	if (ret)
+		fatal("failed to create vm_dev_pipe pipe");
+
+	p->read = fds[0];
+	p->write = fds[1];
+
+	event_set(&p->read_ev, p->read, EV_READ | EV_PERSIST, cb, NULL);
+}
+
+/*
+ * vm_pipe_send
+ *
+ * Send a message to an emulated device vie the provided vm_dev_pipe.
+ *
+ * Parameters:
+ *  p: pointer to initialized vm_dev_pipe
+ *  msg: message to send in the channel
+ */
+void
+vm_pipe_send(struct vm_dev_pipe *p, enum pipe_msg_type msg)
+{
+	size_t n;
+	n = write(p->write, &msg, sizeof(msg));
+	if (n != sizeof(msg))
+		fatal("failed to write to device pipe");
+}
+
+/*
+ * vm_pipe_recv
+ *
+ * Receive a message for an emulated device via the provided vm_dev_pipe.
+ * Returns the message value, otherwise will exit on failure.
+ *
+ * Parameters:
+ *  p: pointer to initialized vm_dev_pipe
+ *
+ * Return values:
+ *  a value of enum pipe_msg_type or fatal exit on read(2) error
+ */
+enum pipe_msg_type
+vm_pipe_recv(struct vm_dev_pipe *p)
+{
+	size_t n;
+	enum pipe_msg_type msg;
+	n = read(p->read, &msg, sizeof(msg));
+	if (n != sizeof(msg))
+		fatal("failed to read from device pipe");
+
+	return msg;
 }

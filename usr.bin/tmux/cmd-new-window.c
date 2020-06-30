@@ -1,4 +1,4 @@
-/* $OpenBSD: cmd-new-window.c,v 1.80 2019/09/19 09:02:30 nicm Exp $ */
+/* $OpenBSD: cmd-new-window.c,v 1.89 2020/06/25 08:56:02 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -38,8 +38,8 @@ const struct cmd_entry cmd_new_window_entry = {
 	.name = "new-window",
 	.alias = "neww",
 
-	.args = { "ac:de:F:kn:Pt:", 0, -1 },
-	.usage = "[-adkP] [-c start-directory] [-e environment] [-F format] "
+	.args = { "abc:de:F:kn:Pt:", 0, -1 },
+	.usage = "[-abdkP] [-c start-directory] [-e environment] [-F format] "
 		 "[-n window-name] " CMD_TARGET_WINDOW_USAGE " [command]",
 
 	.target = { 't', CMD_FIND_WINDOW, CMD_FIND_WINDOW_INDEX },
@@ -51,28 +51,31 @@ const struct cmd_entry cmd_new_window_entry = {
 static enum cmd_retval
 cmd_new_window_exec(struct cmd *self, struct cmdq_item *item)
 {
-	struct args		*args = self->args;
-	struct cmd_find_state	*current = &item->shared->current;
+	struct args		*args = cmd_get_args(self);
+	struct cmd_find_state	*current = cmdq_get_current(item);
+	struct cmd_find_state	*target = cmdq_get_target(item);
 	struct spawn_context	 sc;
-	struct client		*c = cmd_find_client(item, NULL, 1);
-	struct session		*s = item->target.s;
-	struct winlink		*wl = item->target.wl;
-	int			 idx = item->target.idx;
+	struct client		*tc = cmdq_get_target_client(item);
+	struct session		*s = target->s;
+	struct winlink		*wl = target->wl;
+	int			 idx = target->idx, before;
 	struct winlink		*new_wl;
 	char			*cause = NULL, *cp;
 	const char		*template, *add;
 	struct cmd_find_state	 fs;
 	struct args_value	*value;
 
-	if (args_has(args, 'a') && (idx = winlink_shuffle_up(s, wl)) == -1) {
-		cmdq_error(item, "couldn't get a window index");
-		return (CMD_RETURN_ERROR);
+	before = args_has(args, 'b');
+	if (args_has(args, 'a') || before) {
+		idx = winlink_shuffle_up(s, wl, before);
+		if (idx == -1)
+			idx = target->idx;
 	}
 
 	memset(&sc, 0, sizeof sc);
 	sc.item = item;
 	sc.s = s;
-	sc.c = c;
+	sc.tc = tc;
 
 	sc.name = args_get(args, 'n');
 	sc.argc = args->argc;
@@ -81,7 +84,7 @@ cmd_new_window_exec(struct cmd *self, struct cmdq_item *item)
 
 	add = args_first_value(args, 'e', &value);
 	while (add != NULL) {
-		environ_put(sc.environ, add);
+		environ_put(sc.environ, add, 0);
 		add = args_next_value(&value);
 	}
 
@@ -108,7 +111,8 @@ cmd_new_window_exec(struct cmd *self, struct cmdq_item *item)
 	if (args_has(args, 'P')) {
 		if ((template = args_get(args, 'F')) == NULL)
 			template = NEW_WINDOW_TEMPLATE;
-		cp = format_single(item, template, c, s, new_wl, NULL);
+		cp = format_single(item, template, tc, s, new_wl,
+			new_wl->window->active);
 		cmdq_print(item, "%s", cp);
 		free(cp);
 	}

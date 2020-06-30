@@ -1,4 +1,4 @@
-/*	$OpenBSD: mft.c,v 1.12 2020/03/30 12:12:51 claudio Exp $ */
+/*	$OpenBSD: mft.c,v 1.14 2020/04/11 15:53:44 deraadt Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -19,12 +19,13 @@
 #include <err.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sha2.h>
 
 #include <openssl/ssl.h>
+#include <openssl/sha.h>
 
 #include "extern.h"
 
@@ -90,52 +91,30 @@ check_validity(const ASN1_GENERALIZEDTIME *from,
 	return 1;
 }
 
-static int
-hex_pton(u_char const *src, size_t srclen, char *target, size_t targlen)
-{
-	static const char hex[] = "0123456789abcdef";
-	size_t i, t = 0;
-
-	for (i = 0; i < srclen; i++) {
-		if (t + 1 >= targlen)
-			return -1;
-		target[t++] = hex[src[i] >> 4];
-		target[t++] = hex[src[i] & 0x0f];
-	}
-	if (t >= targlen)
-		return -1;
-	target[t] = '\0';
-
-	return t;
-}
-
-
 /*
  * Parse an individual "FileAndHash", RFC 6486, sec. 4.2.
  * Return zero on failure, non-zero on success.
  */
 static int
-mft_parse_filehash(struct parse *p, const ASN1_OCTET_STRING *os, int just_check)
+mft_parse_filehash(struct parse *p, const ASN1_OCTET_STRING *os)
 {
-	char	 		 file_hash[SHA256_DIGEST_STRING_LENGTH];
-	char 			 cert_hash[SHA256_DIGEST_STRING_LENGTH];
 	ASN1_SEQUENCE_ANY	*seq;
 	const ASN1_TYPE		*file, *hash;
 	char			*fn = NULL;
 	const unsigned char	*d = os->data;
 	size_t			 dsz = os->length, sz;
+	int			 rc = 0;
 	struct mftfile		*fent;
-	char			*cp, *path = NULL;
 
 	if ((seq = d2i_ASN1_SEQUENCE_ANY(NULL, &d, dsz)) == NULL) {
 		cryptowarnx("%s: RFC 6486 section 4.2.1: FileAndHash: "
 		    "failed ASN.1 sequence parse", p->fn);
-		goto fail;
+		goto out;
 	} else if (sk_ASN1_TYPE_num(seq) != 2) {
 		warnx("%s: RFC 6486 section 4.2.1: FileAndHash: "
 		    "want 2 elements, have %d", p->fn,
 		    sk_ASN1_TYPE_num(seq));
-		goto fail;
+		goto out;
 	}
 
 	/* First is the filename itself. */
@@ -145,7 +124,7 @@ mft_parse_filehash(struct parse *p, const ASN1_OCTET_STRING *os, int just_check)
 		warnx("%s: RFC 6486 section 4.2.1: FileAndHash: "
 		    "want ASN.1 IA5 string, have %s (NID %d)",
 		    p->fn, ASN1_tag2str(file->type), file->type);
-		goto fail;
+		goto out;
 	}
 	fn = strndup((const char *)file->value.ia5string->data,
 	    file->value.ia5string->length);
@@ -162,11 +141,11 @@ mft_parse_filehash(struct parse *p, const ASN1_OCTET_STRING *os, int just_check)
 	if (strchr(fn, '/') != NULL) {
 		warnx("%s: path components disallowed in filename: %s",
 		    p->fn, fn);
-		goto fail;
+		goto out;
 	} else if ((sz = strlen(fn)) <= 4) {
 		warnx("%s: filename must be large enough for suffix part: %s",
 		    p->fn, fn);
-		goto fail;
+		goto out;
 	}
 
 	if (strcasecmp(fn + sz - 4, ".roa") &&
@@ -174,50 +153,27 @@ mft_parse_filehash(struct parse *p, const ASN1_OCTET_STRING *os, int just_check)
 	    strcasecmp(fn + sz - 4, ".cer")) {
 		/* ignore unknown files */
 		free(fn);
-		sk_ASN1_TYPE_pop_free(seq, ASN1_TYPE_free);
-		return 1;
+		fn = NULL;
+		rc = 1;
+		goto out;
 	}
 
 	/* Now hash value. */
+
 	hash = sk_ASN1_TYPE_value(seq, 1);
 	if (hash->type != V_ASN1_BIT_STRING) {
 		warnx("%s: RFC 6486 section 4.2.1: FileAndHash: "
 		    "want ASN.1 bit string, have %s (NID %d)",
 		    p->fn, ASN1_tag2str(hash->type), hash->type);
-		goto fail;
+		goto out;
 	}
 
 	if (hash->value.bit_string->length != SHA256_DIGEST_LENGTH) {
 		warnx("%s: RFC 6486 section 4.2.1: hash: "
 		    "invalid SHA256 length, have %d",
 		    p->fn, hash->value.bit_string->length);
-		goto fail;
+		goto out;
 	}
-
-	if (hex_pton(hash->value.bit_string->data, SHA256_DIGEST_LENGTH,
-	    cert_hash, sizeof(cert_hash)) == -1)
-		errx(1, "hexnum conversion failed");
-
-	/* Check hash of file now, but first build path for it */
-	cp = strrchr(p->fn, '/');
-	assert(cp != NULL);
-	if (asprintf(&path, "%.*s/%s", (int)(cp - p->fn), p->fn, fn) == -1)
-		err(1, "asprintf");
-
-	if (SHA256File(path, file_hash) == NULL) {
-		warn("%s: referenced file %s", p->fn, fn);
-		goto fail;
-	}
-	free(path);
-	path = NULL;
-
-	if (strcmp(file_hash, cert_hash) != 0) {
-		warnx("%s: bad message digest for %s", p->fn, fn);
-                goto fail;
-	}
-
-	if (just_check)
-		goto fail;
 
 	/* Insert the filename and hash value. */
 
@@ -230,16 +186,14 @@ mft_parse_filehash(struct parse *p, const ASN1_OCTET_STRING *os, int just_check)
 	memset(fent, 0, sizeof(struct mftfile));
 
 	fent->file = fn;
+	fn = NULL;
 	memcpy(fent->hash, hash->value.bit_string->data, SHA256_DIGEST_LENGTH);
 
-	sk_ASN1_TYPE_pop_free(seq, ASN1_TYPE_free);
-	return 1;
-
-fail:
-	free(path);
+	rc = 1;
+out:
 	free(fn);
 	sk_ASN1_TYPE_pop_free(seq, ASN1_TYPE_free);
-	return 0;
+	return rc;
 }
 
 /*
@@ -253,7 +207,7 @@ mft_parse_flist(struct parse *p, const ASN1_OCTET_STRING *os)
 	const ASN1_TYPE		*t;
 	const unsigned char	*d = os->data;
 	size_t			 dsz = os->length;
-	int			 i, rc = 0, failed = 0;
+	int			 i, rc = 0;
 
 	if ((seq = d2i_ASN1_SEQUENCE_ANY(NULL, &d, dsz)) == NULL) {
 		cryptowarnx("%s: RFC 6486 section 4.2: fileList: "
@@ -268,12 +222,9 @@ mft_parse_flist(struct parse *p, const ASN1_OCTET_STRING *os)
 			    "want ASN.1 sequence, have %s (NID %d)",
 			    p->fn, ASN1_tag2str(t->type), t->type);
 			goto out;
-		} else if (!mft_parse_filehash(p, t->value.octet_string,
-		    failed))
-			failed = 1;
+		} else if (!mft_parse_filehash(p, t->value.octet_string))
+			goto out;
 	}
-	if (failed)
-		goto out;
 
 	rc = 1;
 out:
@@ -291,7 +242,7 @@ mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p, int forc
 	ASN1_SEQUENCE_ANY	*seq;
 	const ASN1_TYPE		*t;
 	const ASN1_GENERALIZEDTIME *from, *until;
-	int			 i, rc = -1;
+	int			 i, rc = -1, validity;
 
 	if ((seq = d2i_ASN1_SEQUENCE_ANY(NULL, &d, dsz)) == NULL) {
 		cryptowarnx("%s: RFC 6486 section 4.2: Manifest: "
@@ -360,8 +311,8 @@ mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p, int forc
 	}
 	until = t->value.generalizedtime;
 
-	rc = check_validity(from, until, p->fn, force);
-	if (rc != 1)
+	validity = check_validity(from, until, p->fn, force);
+	if (validity != 1)
 		goto out;
 
 	/* File list algorithm. */
@@ -391,7 +342,7 @@ mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p, int forc
 	} else if (!mft_parse_flist(p, t->value.octet_string))
 		goto out;
 
-	rc = 1;
+	rc = validity;
 out:
 	sk_ASN1_TYPE_pop_free(seq, ASN1_TYPE_free);
 	return rc;
@@ -461,6 +412,65 @@ out:
 	}
 	free(cms);
 	return p.res;
+}
+
+/*
+ * Check the hash value of a file.
+ * Return zero on failure, non-zero on success.
+ */
+static int
+mft_validfilehash(const char *fn, const struct mftfile *m)
+{
+	char	filehash[SHA256_DIGEST_LENGTH];
+	char	buffer[8192];
+	char	*cp, *path = NULL;
+	SHA256_CTX ctx;
+	ssize_t	nr;
+	int	fd;
+
+	/* Check hash of file now, but first build path for it */
+	cp = strrchr(fn, '/');
+	assert(cp != NULL);
+	if (asprintf(&path, "%.*s/%s", (int)(cp - fn), fn, m->file) == -1)
+		err(1, "asprintf");
+
+	if ((fd = open(path, O_RDONLY)) == -1) {
+		warn("%s: referenced file %s", fn, m->file);
+		free(path);
+		return 0;
+	}
+	free(path);
+
+	SHA256_Init(&ctx);
+	while ((nr = read(fd, buffer, sizeof(buffer))) > 0) {
+		SHA256_Update(&ctx, buffer, nr);
+	}
+	close(fd);
+
+	SHA256_Final(filehash, &ctx);
+	if (memcmp(m->hash, filehash, SHA256_DIGEST_LENGTH) != 0) {
+		warnx("%s: bad message digest for %s", fn, m->file);
+		return 0;
+	}
+
+	return 1;
+}
+
+/*
+ * Check all files and their hashes in a MFT structure.
+ * Return zero on failure, non-zero on success.
+ */
+int
+mft_check(const char *fn, struct mft *p)
+{
+	size_t	i;
+	int	rc = 1;
+
+	for (i = 0; i < p->filesz; i++)
+		if (!mft_validfilehash(fn, &p->files[i]))
+			rc = 0;
+
+	return rc;
 }
 
 /*

@@ -1,4 +1,4 @@
-#	$OpenBSD: files,v 1.685 2020/03/02 10:37:22 kettenis Exp $
+#	$OpenBSD: files,v 1.689 2020/06/21 12:14:48 dlg Exp $
 #	$NetBSD: files,v 1.87 1996/05/19 17:17:50 jonathan Exp $
 
 #	@(#)files.newconf	7.5 (Berkeley) 5/10/93
@@ -20,6 +20,7 @@ define	i2cbus {}
 define	gpiobus {}
 define	onewirebus {}
 define	video {}
+define	intrmap {}
 
 # filesystem firmware loading attribute
 define firmload
@@ -62,6 +63,7 @@ define	ether
 define	mpls
 define	sppp
 define	wlan
+define	stoeplitz
 
 # "Chipset" attributes.  These are the machine-independent portions
 # of device drivers.
@@ -305,6 +307,10 @@ file	dev/ic/gem.c			gem
 
 device	ti: ether, ifnet, ifmedia, mii, firmload
 file	dev/ic/ti.c			ti
+
+# Broadcom BCM7XXX Ethernet controller
+device	bse: ether, ifnet, ifmedia, mii
+file	dev/ic/bcmgenet.c		bse
 
 # 8250/16[45]50-based "com" ports
 device	com: tty
@@ -562,6 +568,7 @@ pseudo-device vether: ifnet, ether
 pseudo-device pppx: ifnet
 pseudo-device vxlan: ifnet, ether, ifmedia
 pseudo-device switch: ifnet, ether
+pseudo-device wg: ifnet
 
 pseudo-device ksyms
 file	dev/ksyms.c			ksyms needs-flag
@@ -687,6 +694,7 @@ file kern/kern_resource.c
 file kern/kern_pledge.c
 file kern/kern_unveil.c
 file kern/kern_sched.c
+file kern/kern_intrmap.c		intrmap
 file kern/kern_sensors.c
 file kern/kern_sig.c
 file kern/kern_smr.c
@@ -821,7 +829,11 @@ file net/if_vether.c			vether
 file net/if_pair.c			pair
 file net/if_pppx.c			pppx			needs-count
 file net/if_vxlan.c			vxlan			needs-count
+file net/if_wg.c			wg
+file net/wg_noise.c			wg
+file net/wg_cookie.c			wg
 file net/bfd.c				bfd
+file net/toeplitz.c			stoeplitz		needs-flag
 file net80211/ieee80211.c		wlan
 file net80211/ieee80211_amrr.c		wlan
 file net80211/ieee80211_crypto.c	wlan
@@ -896,6 +908,8 @@ file crypto/idgen.c			inet6 | nfsclient | nfsserver
 file crypto/chachapoly.c		ipsec | crypto
 file crypto/poly1305.c			ipsec | crypto
 file crypto/siphash.c
+file crypto/blake2s.c			wg
+file crypto/curve25519.c		wg
 file netmpls/mpls_input.c		mpls
 file netmpls/mpls_output.c		mpls
 file netmpls/mpls_proto.c		mpls

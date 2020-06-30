@@ -1,4 +1,4 @@
-.\"	$OpenBSD: rpki-client.8,v 1.22 2020/03/06 22:22:31 job Exp $
+.\"	$OpenBSD: rpki-client.8,v 1.27 2020/05/14 07:12:16 claudio Exp $
 .\"
 .\" Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
 .\"
@@ -14,12 +14,12 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: March 6 2020 $
+.Dd $Mdocdate: May 14 2020 $
 .Dt RPKI-CLIENT 8
 .Os
 .Sh NAME
 .Nm rpki-client
-.Nd RPKI validator to support BGP Origin Validation in bgpd
+.Nd RPKI validator to support BGP Origin Validation
 .Sh SYNOPSIS
 .Nm
 .Op Fl Bcfjnov
@@ -68,7 +68,7 @@ The directory where
 .Nm
 will store the cached repository data.
 Defaults to
-.Pa /var/db/rpki-client/ .
+.Pa /var/cache/rpki-client .
 .It Fl e Ar rsync_prog
 Use
 .Ar rsync_prog
@@ -76,7 +76,7 @@ instead of
 .Xr openrsync 1
 to fetch repositories.
 It must accept the
-.Fl rlt ,
+.Fl rt ,
 .Fl -address
 and
 .Fl -delete
@@ -137,6 +137,13 @@ produces a list of unique
 statements in
 .Fl o
 (OpenBGPD compatible) output.
+.Pp
+.Nm
+should be run hourly by
+.Xr cron 8 :
+use
+.Xr crontab 1
+to uncomment the entry in root's crontab.
 .\" .Sh ENVIRONMENT
 .\" For sections 1, 6, 7, and 8 only.
 .Sh FILES
