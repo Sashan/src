@@ -372,10 +372,12 @@ pf_osfp_add(struct pf_osfp_ioctl *fpioc)
 		return (ENOMEM);
 	}
 
+	NET_LOCK();
 	PF_LOCK();
 	if ((fp = pf_osfp_find_exact(&pf_osfp_list, &fpadd))) {
 		 SLIST_FOREACH(entry, &fp->fp_oses, fp_entry) {
 			if (PF_OSFP_ENTRY_EQ(entry, &fpioc->fp_os)) {
+				NET_UNLOCK();
 				PF_UNLOCK();
 				pool_put(&pf_osfp_entry_pl, entry);
 				pool_put(&pf_osfp_pl, fp);
@@ -405,6 +407,7 @@ pf_osfp_add(struct pf_osfp_ioctl *fpioc)
 
 	SLIST_INSERT_HEAD(&fp->fp_oses, entry, fp_entry);
 	PF_UNLOCK();
+	NET_UNLOCK();
 
 #ifdef PFDEBUG
 	if ((fp = pf_osfp_validate()))
@@ -541,6 +544,7 @@ pf_osfp_get(struct pf_osfp_ioctl *fpioc)
 
 
 	memset(fpioc, 0, sizeof(*fpioc));
+	NET_LOCK();
 	PF_LOCK();
 	SLIST_FOREACH(fp, &pf_osfp_list, fp_next) {
 		SLIST_FOREACH(entry, &fp->fp_oses, fp_entry) {
@@ -555,11 +559,13 @@ pf_osfp_get(struct pf_osfp_ioctl *fpioc)
 				memcpy(&fpioc->fp_os, entry,
 				    sizeof(fpioc->fp_os));
 				PF_UNLOCK();
+				NET_UNLOCK();
 				return (0);
 			}
 		}
 	}
 	PF_UNLOCK();
+	NET_UNLOCK();
 
 	return (EBUSY);
 }
