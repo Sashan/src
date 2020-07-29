@@ -1,4 +1,4 @@
-/*	$OpenBSD: clock.c,v 1.61 2020/05/17 08:48:15 visa Exp $	*/
+/*	$OpenBSD: clock.c,v 1.65 2020/07/24 16:22:33 kettenis Exp $	*/
 /*	$NetBSD: clock.c,v 1.41 2001/07/24 19:29:25 eeh Exp $ */
 
 /*
@@ -109,13 +109,13 @@ struct cfdriver clock_cd = {
 u_int tick_get_timecount(struct timecounter *);
 
 struct timecounter tick_timecounter = {
-	tick_get_timecount, NULL, ~0u, 0, "tick", 0, NULL
+	tick_get_timecount, NULL, ~0u, 0, "tick", 0
 };
 
 u_int sys_tick_get_timecount(struct timecounter *);
 
 struct timecounter sys_tick_timecounter = {
-	sys_tick_get_timecount, NULL, ~0u, 0, "sys_tick", 1000, NULL
+	sys_tick_get_timecount, NULL, ~0u, 0, "sys_tick", 1000
 };
 
 /*
@@ -580,6 +580,9 @@ cpu_initclocks(void)
 		/* Default to 200MHz clock XXXXX */
 		cpu_clockrate = 200000000;
 
+	if ((sparc_rdpr_tick() & TICK_NPT) == 0)
+		tick_timecounter.tc_user = TC_TICK;
+
 	tick_timecounter.tc_frequency = cpu_clockrate;
 	tc_init(&tick_timecounter);
 
@@ -593,6 +596,9 @@ cpu_initclocks(void)
 
 	sys_tick_rate = getpropint(findroot(), "stick-frequency", 0);
 	if (sys_tick_rate > 0 && impl != IMPL_HUMMINGBIRD) {
+		if ((sparc_rd_sys_tick() & TICK_NPT) == 0)
+			sys_tick_timecounter.tc_user = TC_SYS_TICK;
+
 		sys_tick_timecounter.tc_frequency = sys_tick_rate;
 		tc_init(&sys_tick_timecounter);
 	}
@@ -940,7 +946,7 @@ tick_get_timecount(struct timecounter *tc)
 {
 	u_int64_t tick;
 
-	__asm volatile("rd %%tick, %0" : "=r" (tick) :);
+	__asm volatile("rd %%tick, %0" : "=r" (tick));
 
 	return (tick & ~0u);
 }
@@ -950,7 +956,7 @@ sys_tick_get_timecount(struct timecounter *tc)
 {
 	u_int64_t tick;
 
-	__asm volatile("rd %%sys_tick, %0" : "=r" (tick) :);
+	__asm volatile("rd %%sys_tick, %0" : "=r" (tick));
 
 	return (tick & ~0u);
 }

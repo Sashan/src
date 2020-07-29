@@ -1,4 +1,4 @@
-/*	$OpenBSD: phb.c,v 1.9 2020/06/26 12:34:53 jsg Exp $	*/
+/*	$OpenBSD: phb.c,v 1.12 2020/07/14 20:40:48 kettenis Exp $	*/
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -103,6 +103,8 @@ int	phb_bs_memmap(bus_space_tag_t, bus_addr_t, bus_size_t, int,
 	    bus_space_handle_t *);
 int	phb_dmamap_load_buffer(bus_dma_tag_t, bus_dmamap_t, void *,
 	    bus_size_t, struct proc *, int, paddr_t *, int *, int);
+int	phb_dmamap_load_raw(bus_dma_tag_t, bus_dmamap_t,
+	    bus_dma_segment_t *, int, bus_size_t, int);
 
 int
 phb_match(struct device *parent, void *match, void *aux)
@@ -336,6 +338,7 @@ phb_attach(struct device *parent, struct device *self, void *aux)
 	memcpy(&sc->sc_bus_dmat, sc->sc_dmat, sizeof(sc->sc_bus_dmat));
 	sc->sc_bus_dmat._cookie = sc;
 	sc->sc_bus_dmat._dmamap_load_buffer = phb_dmamap_load_buffer;
+	sc->sc_bus_dmat._dmamap_load_raw = phb_dmamap_load_raw;
 
 	sc->sc_pc.pc_conf_v = sc;
 	sc->sc_pc.pc_attach_hook = phb_attach_hook;
@@ -522,11 +525,29 @@ phb_intr_establish(void *v, pci_intr_handle_t ih, int level,
 
 		if (ih.ih_type == PCI_MSIX) {
 			pci_msix_enable(ih.ih_pc, ih.ih_tag,
-			    sc->sc_iot, ih.ih_intrpin, addr, data);
+			    &sc->sc_bus_memt, ih.ih_intrpin, addr, data);
 		} else
 			pci_msi_enable(ih.ih_pc, ih.ih_tag, addr, data);
+	} else {
+		int bus, dev, fn;
+		uint32_t reg[4];
+		int node;
+
+		phb_decompose_tag(sc, ih.ih_tag, &bus, &dev, &fn);
+
+		reg[0] = bus << 16 | dev << 11 | fn << 8;
+		reg[1] = reg[2] = 0;
+		reg[3] = ih.ih_intrpin;
+
+		/* Host bridge child node holds the interrupt map. */
+		node = OF_child(sc->sc_node);
+		if (node == 0)
+			return NULL;
+
+		cookie = fdt_intr_establish_imap(node, reg, sizeof(reg),
+		    level, func, arg, name);
 	}
-	
+
 	return cookie;
 }
 
@@ -595,6 +616,25 @@ phb_dmamap_load_buffer(bus_dma_tag_t t, bus_dmamap_t map, void *buf,
 
 	/* For each segment. */
 	for (seg = firstseg; seg <= *segp; seg++)
+		map->dm_segs[seg].ds_addr |= IODA_TVE_SELECT;
+
+	return 0;
+}
+
+int
+phb_dmamap_load_raw(bus_dma_tag_t t, bus_dmamap_t map,
+    bus_dma_segment_t *segs, int nsegs, bus_size_t size, int flags)
+{
+	struct phb_softc *sc = t->_cookie;
+	int seg, error;
+
+	error = sc->sc_dmat->_dmamap_load_raw(sc->sc_dmat, map,
+	     segs, nsegs, size, flags);
+	if (error)
+		return error;
+
+	/* For each segment. */
+	for (seg = 0; seg < nsegs; seg++)
 		map->dm_segs[seg].ds_addr |= IODA_TVE_SELECT;
 
 	return 0;

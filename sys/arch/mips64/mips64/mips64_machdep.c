@@ -1,4 +1,4 @@
-/*	$OpenBSD: mips64_machdep.c,v 1.30 2020/05/16 14:44:45 kettenis Exp $ */
+/*	$OpenBSD: mips64_machdep.c,v 1.33 2020/07/11 15:18:08 visa Exp $ */
 
 /*
  * Copyright (c) 2009, 2010, 2012 Miodrag Vallat.
@@ -57,7 +57,6 @@
 
 #include <uvm/uvm_extern.h>
 
-#include <mips64/dev/clockvar.h>
 #include <dev/clock_subr.h>
 
 /*
@@ -238,62 +237,9 @@ tlb_asid_wrap(struct cpu_info *ci)
  *	Mips machine independent clock routines.
  */
 
-struct tod_desc sys_tod;
 void (*md_startclock)(struct cpu_info *);
 
 extern todr_chip_handle_t todr_handle;
-struct todr_chip_handle rtc_todr;
-
-int
-rtc_gettime(struct todr_chip_handle *handle, struct timeval *tv)
-{
-	struct tod_desc *cd = &sys_tod;
-	struct clock_ymdhms dt;
-	struct tod_time c;
-
-	KASSERT(cd->tod_get);
-
-	/*
-	 * Read RTC chip registers NOTE: Read routines are responsible
-	 * for sanity checking clock. Dates after 19991231 should be
-	 * returned as year >= 100.
-	 */
-	(*cd->tod_get)(cd->tod_cookie, tv->tv_sec, &c);
-
-	dt.dt_sec = c.sec;
-	dt.dt_min = c.min;
-	dt.dt_hour = c.hour;
-	dt.dt_day = c.day;
-	dt.dt_mon = c.mon;
-	dt.dt_year = c.year + 1900;
-
-	tv->tv_sec = clock_ymdhms_to_secs(&dt);
-	tv->tv_usec = 0;
-	return 0;
-}
-
-int
-rtc_settime(struct todr_chip_handle *handle, struct timeval *tv)
-{
-	struct tod_desc *cd = &sys_tod;
-	struct clock_ymdhms dt;
-	struct tod_time c;
-	
-	KASSERT(cd->tod_set);
-
-	clock_secs_to_ymdhms(tv->tv_sec, &dt);
-	
-	c.sec = dt.dt_sec;
-	c.min = dt.dt_min;
-	c.hour = dt.dt_hour;
-	c.day = dt.dt_day;
-	c.mon = dt.dt_mon;
-	c.year = dt.dt_year - 1900;
-	c.dow = dt.dt_wday + 1;
-
-	(*cd->tod_set)(cd->tod_cookie, &c);
-	return 0;
-}
 
 /*
  * Wait "n" microseconds.
@@ -318,7 +264,6 @@ delay(int n)
 	}
 }
 
-#ifndef MULTIPROCESSOR
 u_int cp0_get_timecount(struct timecounter *);
 
 struct timecounter cp0_timecounter = {
@@ -327,7 +272,9 @@ struct timecounter cp0_timecounter = {
 	0xffffffff,		/* counter_mask */
 	0,			/* frequency */
 	"CP0",			/* name */
-	0			/* quality */
+	0,			/* quality */
+	NULL,			/* private bits */
+	0,			/* expose to user */
 };
 
 u_int
@@ -335,7 +282,6 @@ cp0_get_timecount(struct timecounter *tc)
 {
 	return (cp0_get_count());
 }
-#endif
 
 /*
  * Calibrate cpu internal counter against the TOD clock if available.
@@ -380,13 +326,6 @@ void
 cpu_initclocks()
 {
 	struct cpu_info *ci = curcpu();
-	struct tod_desc *cd = &sys_tod;
-
-	if (todr_handle == NULL && cd->tod_get) {
-		rtc_todr.todr_gettime = rtc_gettime;
-		rtc_todr.todr_settime = rtc_settime;
-		todr_handle = &rtc_todr;
-	}
 
 	profhz = hz;
 
@@ -396,12 +335,13 @@ cpu_initclocks()
 	cp0_calibrate(ci);
 
 #ifndef MULTIPROCESSOR
-	if (cpu_setperf == NULL) {
+	cpu_has_synced_cp0_count = 1;
+#endif
+	if (cpu_setperf == NULL && cpu_has_synced_cp0_count) {
 		cp0_timecounter.tc_frequency =
 		    (uint64_t)ci->ci_hw.clock / CP0_CYCLE_DIVIDER;
 		tc_init(&cp0_timecounter);
 	}
-#endif
 
 #ifdef DIAGNOSTIC
 	if (md_startclock == NULL)

@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.1071 2020/06/18 08:34:22 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.1075 2020/07/27 08:03:10 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -1722,6 +1722,15 @@ struct client {
 };
 TAILQ_HEAD(clients, client);
 
+/* Control mode subscription type. */
+enum control_sub_type {
+	CONTROL_SUB_SESSION,
+	CONTROL_SUB_PANE,
+	CONTROL_SUB_ALL_PANES,
+	CONTROL_SUB_WINDOW,
+	CONTROL_SUB_ALL_WINDOWS
+};
+
 /* Key binding and key table. */
 struct key_binding {
 	key_code		 key;
@@ -2420,7 +2429,9 @@ void	 server_lock(void);
 void	 server_lock_session(struct session *);
 void	 server_lock_client(struct client *);
 void	 server_kill_pane(struct window_pane *);
-void	 server_kill_window(struct window *);
+void	 server_kill_window(struct window *, int);
+void	 server_renumber_session(struct session *);
+void	 server_renumber_all(void);
 int	 server_link_window(struct session *,
 	     struct winlink *, struct session *, int, int, int, char **);
 void	 server_unlink_window(struct session *, struct winlink *);
@@ -2439,8 +2450,7 @@ struct style_range *status_get_range(struct client *, u_int, u_int);
 void	 status_init(struct client *);
 void	 status_free(struct client *);
 int	 status_redraw(struct client *);
-void printflike(3, 4) status_message_set(struct client *, int, const char *,
-	     ...);
+void status_message_set(struct client *, int, int, const char *, ...);
 void	 status_message_clear(struct client *);
 int	 status_message_redraw(struct client *);
 void	 status_prompt_set(struct client *, struct cmd_find_state *,
@@ -2860,6 +2870,9 @@ void	control_reset_offsets(struct client *);
 void printflike(2, 3) control_write(struct client *, const char *, ...);
 void	control_write_output(struct client *, struct window_pane *);
 int	control_all_done(struct client *);
+void	control_add_sub(struct client *, const char *, enum control_sub_type,
+    	   int, const char *);
+void	control_remove_sub(struct client *, const char *);
 
 /* control-notify.c */
 void	control_notify_input(struct client *, struct window_pane *,
@@ -2926,6 +2939,7 @@ enum utf8_state	 utf8_append(struct utf8_data *, u_char);
 int		 utf8_isvalid(const char *);
 int		 utf8_strvis(char *, const char *, size_t, int);
 int		 utf8_stravis(char **, const char *, int);
+int		 utf8_stravisx(char **, const char *, size_t, int);
 char		*utf8_sanitize(const char *);
 size_t		 utf8_strlen(const struct utf8_data *);
 u_int		 utf8_strwidth(const struct utf8_data *, ssize_t);

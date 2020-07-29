@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_wg.c,v 1.7 2020/06/23 10:03:49 tobhe Exp $ */
+/*	$OpenBSD: if_wg.c,v 1.11 2020/07/13 08:29:34 tb Exp $ */
 
 /*
  * Copyright (C) 2015-2020 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
@@ -18,6 +18,7 @@
  */
 
 #include "bpfilter.h"
+#include "pf.h"
 
 #include <sys/types.h>
 #include <sys/systm.h>
@@ -1660,19 +1661,15 @@ wg_decap(struct wg_softc *sc, struct mbuf *m)
 		goto error;
 	}
 
-	/*
-	 * We can mark incoming packet csum OK. We mark all flags OK
-	 * irrespective to the packet type.
-	 */
-	m->m_pkthdr.csum_flags |= (M_IPV4_CSUM_IN_OK | M_TCP_CSUM_IN_OK |
-	    M_UDP_CSUM_IN_OK | M_ICMP_CSUM_IN_OK);
-	m->m_pkthdr.csum_flags &= ~(M_IPV4_CSUM_IN_BAD | M_TCP_CSUM_IN_BAD |
-	    M_UDP_CSUM_IN_BAD | M_ICMP_CSUM_IN_BAD);
+	/* tunneled packet was not offloaded */
+	m->m_pkthdr.csum_flags = 0;
 
 	m->m_pkthdr.ph_ifidx = sc->sc_if.if_index;
 	m->m_pkthdr.ph_rtableid = sc->sc_if.if_rdomain;
 	m->m_flags &= ~(M_MCAST | M_BCAST);
+#if NPF > 0
 	pf_pkt_addr_changed(m);
+#endif /* NPF > 0 */
 
 done:
 	t->t_mbuf = m;
@@ -2658,7 +2655,7 @@ wg_clone_create(struct if_clone *ifc, int unit)
 	ifp->if_output = wg_output;
 
 	ifp->if_type = IFT_WIREGUARD;
-	IFQ_SET_MAXLEN(&ifp->if_snd, IFQ_MAXLEN);
+	ifq_set_maxlen(&ifp->if_snd, IFQ_MAXLEN);
 
 	if_attach(ifp);
 	if_alloc_sadl(ifp);

@@ -1,4 +1,4 @@
-.\" $OpenBSD: tmux.1,v 1.786 2020/06/18 08:34:22 nicm Exp $
+.\" $OpenBSD: tmux.1,v 1.790 2020/07/27 08:03:10 nicm Exp $
 .\"
 .\" Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
 .\"
@@ -14,7 +14,7 @@
 .\" IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING
 .\" OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: June 18 2020 $
+.Dd $Mdocdate: July 27 2020 $
 .Dt TMUX 1
 .Os
 .Sh NAME
@@ -169,8 +169,17 @@ independent
 servers to be run.
 Unlike
 .Fl S
-a full path is not necessary: the sockets are all created in the same
-directory.
+a full path is not necessary: the sockets are all created in a directory
+.Pa tmux-UID
+under the directory given by
+.Ev TMUX_TMPDIR
+or in
+.Pa /tmp .
+The
+.Pa tmux-UID
+directory is created by
+.Nm
+and must not be world readable, writable or executable.
 .Pp
 If the socket is accidentally removed, the
 .Dv SIGUSR1
@@ -1255,6 +1264,7 @@ specified multiple times.
 .It Xo Ic refresh-client
 .Op Fl cDlLRSU
 .Op Fl A Ar pane:state
+.Op Fl B Ar name:what:format
 .Op Fl C Ar XxY
 .Op Fl f Ar flags
 .Op Fl t Ar target-client
@@ -1327,6 +1337,31 @@ If
 will pause the pane.
 .Fl A
 may be given multiple times for different panes.
+.Pp
+.Fl B
+sets a subscription to a format for a control mode client.
+The argument is split into three items by colons:
+.Ar name
+is a name for the subscription;
+.Ar what
+is a type of item to subscribe to;
+.Ar format
+is the format.
+After a subscription is added, changes to the format are reported with the
+.Ic %subscription-changed
+notification, at most once a second.
+If only the name is given, the subscription is removed.
+.Ar what
+may be empty to check the format only for the attached session, or one of:
+a pane ID such as
+.Ql %0 ;
+.Ql %*
+for all panes in the attached session;
+an window ID such as
+.Ql @0 ;
+or
+.Ql @*
+for all windows in the attached session.
 .Pp
 .Fl f
 sets a comma-separated list of client flags, see
@@ -2947,7 +2982,7 @@ specifies a prefix to print before each key and
 .Fl 1
 lists only the first matching key.
 .Fl a
-lists the command for keys that do have a note rather than skipping them.
+lists the command for keys that do not have a note rather than skipping them.
 .It Xo Ic send-keys
 .Op Fl FHlMRX
 .Op Fl N Ar repeat-count
@@ -5343,6 +5378,7 @@ The following keys are also available:
 .It Xo Ic display-message
 .Op Fl aIpv
 .Op Fl c Ar target-client
+.Op Fl d Ar delay
 .Op Fl t Ar target-pane
 .Op Ar message
 .Xc
@@ -5352,7 +5388,14 @@ If
 .Fl p
 is given, the output is printed to stdout, otherwise it is displayed in the
 .Ar target-client
-status line.
+status line for up to
+.Ar delay
+milliseconds.
+If
+.Ar delay
+is not given, the
+.Ic message-time
+option is used; a delay of zero waits for a key press.
 The format of
 .Ar message
 is described in the
@@ -5932,7 +5975,7 @@ or an error occurred.
 If present,
 .Ar reason
 describes why the client exited.
-.It Ic %extended-output Ar pane-id Ar age Ar ... : Ar value
+.It Ic %extended-output Ar pane-id Ar age Ar ... \&  : Ar value
 New form of
 .Ic %output
 sent when the
@@ -5980,6 +6023,26 @@ changed its active window to the window with ID
 .Ar window-id .
 .It Ic %sessions-changed
 A session was created or destroyed.
+.It Xo Ic %subscription-changed
+.Ar name
+.Ar session-id
+.Ar window-id
+.Ar window-index
+.Ar pane-id ... \&  :
+.Ar value
+.Xc
+The value of the format associated with subscription
+.Ar name
+has changed to
+.Ar value .
+See
+.Ic refresh-client
+.Fl B .
+Any arguments after
+.Ar pane-id
+up until a single
+.Ql \&:
+are for future use and should be ignored.
 .It Ic %unlinked-window-add Ar window-id
 The window with ID
 .Ar window-id

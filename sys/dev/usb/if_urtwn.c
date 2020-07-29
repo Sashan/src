@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_urtwn.c,v 1.90 2020/06/11 00:56:12 jmatthew Exp $	*/
+/*	$OpenBSD: if_urtwn.c,v 1.92 2020/07/06 10:38:54 jsg Exp $	*/
 
 /*-
  * Copyright (c) 2010 Damien Bergamini <damien.bergamini@free.fr>
@@ -322,6 +322,7 @@ static const struct urtwn_type {
 	URTWN_DEV_8192CU(ZYXEL,		RTL8192CU),
 	/* URTWN_RTL8188E */
 	URTWN_DEV_8188EU(ABOCOM,	RTL8188EU),
+	URTWN_DEV_8188EU(DLINK,		DWA121B1),
 	URTWN_DEV_8188EU(DLINK,		DWA123D1),
 	URTWN_DEV_8188EU(DLINK,		DWA125D1),
 	URTWN_DEV_8188EU(ELECOM,	WDC150SU2M),
@@ -1697,6 +1698,7 @@ urtwn_tx(void *cookie, struct mbuf *m, struct ieee80211_node *ni)
 		txdp += IEEE80211_CCMP_HDRLEN;
 
 		m_copydata(m, headerlen, m->m_pkthdr.len - headerlen, txdp);
+		m_freem(m);
 	} else {
 		xferlen = (txdp - data->buf) + m->m_pkthdr.len;
 		m_copydata(m, 0, m->m_pkthdr.len, txdp);

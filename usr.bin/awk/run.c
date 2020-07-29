@@ -1,4 +1,4 @@
-/*	$OpenBSD: run.c,v 1.60 2020/06/26 15:57:39 millert Exp $	*/
+/*	$OpenBSD: run.c,v 1.65 2020/07/20 18:57:19 millert Exp $	*/
 /****************************************************************
 Copyright (C) Lucent Technologies 1997
 All Rights Reserved
@@ -26,9 +26,9 @@ THIS SOFTWARE.
 #define DEBUG
 #include <stdio.h>
 #include <ctype.h>
+#include <errno.h>
 #include <wchar.h>
 #include <wctype.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <setjmp.h>
 #include <limits.h>
@@ -136,6 +136,7 @@ int adjbuf(char **pbuf, int *psiz, int minlen, int quantum, char **pbptr,
 
 void run(Node *a)	/* execution of parse tree starts here */
 {
+
 	stdinit();
 	execute(a);
 	closeall();
@@ -472,7 +473,7 @@ makearraystring(Node *p, const char *func)
 {
 	char *buf;
 	int bufsz = recsize;
-	size_t blen, seplen;
+	size_t blen;
 
 	if ((buf = malloc(bufsz)) == NULL) {
 		FATAL("%s: out of memory", func);
@@ -480,11 +481,11 @@ makearraystring(Node *p, const char *func)
 
 	blen = 0;
 	buf[blen] = '\0';
-	seplen = strlen(getsval(subseploc));
 
 	for (; p; p = p->nnext) {
 		Cell *x = execute(p);	/* expr */
 		char *s = getsval(x);
+		size_t seplen = strlen(getsval(subseploc));
 		size_t nsub = p->nnext ? seplen : 0;
 		size_t slen = strlen(s);
 		size_t tlen = blen + slen + nsub;
@@ -925,8 +926,7 @@ int format(char **pbuf, int *pbufsize, const char *s, Node *a)	/* printf-like co
 			n = fmtwd;
 		adjbuf(&buf, &bufsize, 1+n+p-buf, recsize, &p, "format5");
 		switch (flag) {
-		case '?':	/* unknown, so dump it too */
-			snprintf(p, BUFSZ(p), "%s", fmt);
+		case '?':	snprintf(p, BUFSZ(p), "%s", fmt);	/* unknown, so dump it too */
 			t = getsval(x);
 			n = strlen(t);
 			if (fmtwd > n)
@@ -1074,10 +1074,10 @@ Cell *arith(Node **a, int n)	/* a[0] + a[1], etc.  also -a[0] */
 	case POWER:
 		if (j >= 0 && modf(j, &v) == 0.0)	/* pos integer exponent */
 			i = ipow(i, (int) j);
-		else {
+               else {
 			errno = 0;
 			i = errcheck(pow(i, j), "pow");
-		}
+               }
 		break;
 	default:	/* can't happen */
 		FATAL("illegal arithmetic operator %d", n);
@@ -1170,10 +1170,10 @@ Cell *assign(Node **a, int n)	/* a[0] = a[1], a[0] += a[1], etc. */
 	case POWEQ:
 		if (yf >= 0 && modf(yf, &v) == 0.0)	/* pos integer exponent */
 			xf = ipow(xf, (int) yf);
-		else {
+               else {
 			errno = 0;
 			xf = errcheck(pow(xf, yf), "pow");
-		}
+               }
 		break;
 	default:
 		FATAL("illegal assignment operator %d", n);
@@ -1193,12 +1193,12 @@ Cell *cat(Node **a, int q)	/* a[0] cat a[1] */
 
 	x = execute(a[0]);
 	n1 = strlen(getsval(x));
+	adjbuf(&s, &ssz, n1, recsize, 0, "cat1");
+	memcpy(s, x->sval, n1);
 
 	y = execute(a[1]);
 	n2 = strlen(getsval(y));
-
-	adjbuf(&s, &ssz, n1 + n2 + 1, recsize, 0, "cat");
-	memcpy(s, x->sval, n1);
+	adjbuf(&s, &ssz, n1 + n2 + 1, recsize, 0, "cat2");
 	memcpy(s + n1, y->sval, n2);
 	s[n1 + n2] = '\0';
 
@@ -1602,15 +1602,18 @@ Cell *bltin(Node **a, int n)	/* builtin functions. a[0] is type, a[1] is arg lis
 		break;
 	case FLOG:
 		errno = 0;
-		u = errcheck(log(getfval(x)), "log"); break;
+		u = errcheck(log(getfval(x)), "log");
+		break;
 	case FINT:
 		modf(getfval(x), &u); break;
 	case FEXP:
 		errno = 0;
-		u = errcheck(exp(getfval(x)), "exp"); break;
+		u = errcheck(exp(getfval(x)), "exp");
+		break;
 	case FSQRT:
 		errno = 0;
-		u = errcheck(sqrt(getfval(x)), "sqrt"); break;
+		u = errcheck(sqrt(getfval(x)), "sqrt");
+		break;
 	case FSIN:
 		u = sin(getfval(x)); break;
 	case FCOS:
@@ -1947,7 +1950,10 @@ const char *filename(FILE *fp)
 			continue;
 		if (ferror(files[i].fp))
 			FATAL("i/o error occurred on %s", files[i].fname);
-		if (files[i].mode == '|' || files[i].mode == LE)
+		if (files[i].fp == stdin || files[i].fp == stdout ||
+		    files[i].fp == stderr)
+			stat = freopen("/dev/null", "r+", files[i].fp) == NULL;
+		else if (files[i].mode == '|' || files[i].mode == LE)
 			stat = pclose(files[i].fp) == -1;
 		else
 			stat = fclose(files[i].fp) == EOF;
@@ -1957,6 +1963,7 @@ const char *filename(FILE *fp)
 			xfree(files[i].fname);
 		files[i].fname = NULL;	/* watch out for ref thru this */
 		files[i].fp = NULL;
+		break;
  	}
  	tempfree(x);
  	x = gettemp();
@@ -1974,8 +1981,12 @@ void closeall(void)
 			continue;
 		if (ferror(files[i].fp))
 			FATAL( "i/o error occurred on %s", files[i].fname );
+		if (files[i].fp == stdin)
+			continue;
 		if (files[i].mode == '|' || files[i].mode == LE)
 			stat = pclose(files[i].fp) == -1;
+		else if (files[i].fp == stdout || files[i].fp == stderr)
+			stat = fflush(files[i].fp) == EOF;
 		else
 			stat = fclose(files[i].fp) == EOF;
 		if (stat)
