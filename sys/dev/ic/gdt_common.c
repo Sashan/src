@@ -1,4 +1,4 @@
-/*	$OpenBSD: gdt_common.c,v 1.77 2020/07/24 12:43:31 krw Exp $	*/
+/*	$OpenBSD: gdt_common.c,v 1.80 2020/09/03 12:41:29 krw Exp $	*/
 
 /*
  * Copyright (c) 1999, 2000, 2003 Niklas Hallqvist.  All rights reserved.
@@ -546,7 +546,7 @@ gdt_scsi_cmd(struct scsi_xfer *xs)
 	struct gdt_ccb *ccb;
 	u_int32_t blockno, blockcnt;
 	struct scsi_rw *rw;
-	struct scsi_rw_big *rwb;
+	struct scsi_rw_10 *rw10;
 	bus_dmamap_t xfer;
 	int error;
 	int s;
@@ -621,9 +621,9 @@ gdt_scsi_cmd(struct scsi_xfer *xs)
 			goto ready;
 
 		case READ_COMMAND:
-		case READ_BIG:
+		case READ_10:
 		case WRITE_COMMAND:
-		case WRITE_BIG:
+		case WRITE_10:
 		case SYNCHRONIZE_CACHE:
 			/*
 			 * A new command chain, start from the beginning.
@@ -641,9 +641,9 @@ gdt_scsi_cmd(struct scsi_xfer *xs)
 					blockcnt =
 					    rw->length ? rw->length : 0x100;
 				} else {
-					rwb = (struct scsi_rw_big *)xs->cmd;
-					blockno = _4btol(rwb->addr);
-					blockcnt = _2btol(rwb->length);
+					rw10 = (struct scsi_rw_10 *)xs->cmd;
+					blockno = _4btol(rw10->addr);
+					blockcnt = _2btol(rw10->length);
 				}
 				if (blockno >= sc->sc_hdr[target].hd_size ||
 				    blockno + blockcnt >
@@ -778,13 +778,13 @@ gdt_exec_ccb(struct gdt_ccb *ccb)
 		break;
 
 	case WRITE_COMMAND:
-	case WRITE_BIG:
+	case WRITE_10:
 		/* XXX WRITE_THR could be supported too */
 		sc->sc_cmd[GDT_CMD_OPCODE] = GDT_WRITE;
 		break;
 
 	case READ_COMMAND:
-	case READ_BIG:
+	case READ_10:
 		sc->sc_cmd[GDT_CMD_OPCODE] = GDT_READ;
 		break;
 	}
@@ -912,8 +912,8 @@ gdt_internal_cache_cmd(struct scsi_xfer *xs)
 		    (sc->sc_hdr[target].hd_devtype & 4) ? T_CDROM : T_DIRECT;
 		inq.dev_qual2 =
 		    (sc->sc_hdr[target].hd_devtype & 1) ? SID_REMOVABLE : 0;
-		inq.version = 2;
-		inq.response_format = 2;
+		inq.version = SCSI_REV_2;
+		inq.response_format = SID_SCSI2_RESPONSE;
 		inq.additional_length = 32;
 		inq.flags |= SID_CmdQue;
 		strlcpy(inq.vendor, "ICP	   ", sizeof inq.vendor);

@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.1075 2020/07/27 08:03:10 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.1077 2020/09/02 13:46:35 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -1788,6 +1788,7 @@ enum options_table_type {
 
 struct options_table_entry {
 	const char		 *name;
+	const char		 *alternative_name;
 	enum options_table_type	  type;
 	int			  scope;
 	int			  flags;
@@ -1805,6 +1806,11 @@ struct options_table_entry {
 
 	const char		 *text;
 	const char		 *unit;
+};
+
+struct options_name_map {
+	const char		*from;
+	const char		*to;
 };
 
 /* Common command usages. */
@@ -2039,7 +2045,8 @@ int		 options_remove_or_default(struct options_entry *, int,
 		     char **);
 
 /* options-table.c */
-extern const struct options_table_entry options_table[];
+extern const struct options_table_entry	options_table[];
+extern const struct options_name_map	options_other_names[];
 
 /* job.c */
 typedef void (*job_update_cb) (struct job *);
@@ -2119,6 +2126,7 @@ int	tty_open(struct tty *, char **);
 void	tty_close(struct tty *);
 void	tty_free(struct tty *);
 void	tty_update_features(struct tty *);
+void	tty_set_selection(struct tty *, const char *, size_t);
 void	tty_write(void (*)(struct tty *, const struct tty_ctx *),
 	    struct tty_ctx *);
 void	tty_cmd_alignmenttest(struct tty *, const struct tty_ctx *);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: nvme.c,v 1.83 2020/07/20 14:41:13 krw Exp $ */
+/*	$OpenBSD: nvme.c,v 1.86 2020/09/03 12:41:29 krw Exp $ */
 
 /*
  * Copyright (c) 2014 David Gwynne <dlg@openbsd.org>
@@ -538,13 +538,13 @@ nvme_scsi_cmd(struct scsi_xfer *xs)
 {
 	switch (xs->cmd->opcode) {
 	case READ_COMMAND:
-	case READ_BIG:
+	case READ_10:
 	case READ_12:
 	case READ_16:
 		nvme_scsi_io(xs, SCSI_DATA_IN);
 		return;
 	case WRITE_COMMAND:
-	case WRITE_BIG:
+	case WRITE_10:
 	case WRITE_12:
 	case WRITE_16:
 		nvme_scsi_io(xs, SCSI_DATA_OUT);
@@ -779,8 +779,8 @@ nvme_scsi_inquiry(struct scsi_xfer *xs)
 	memset(&inq, 0, sizeof(inq));
 
 	inq.device = T_DIRECT;
-	inq.version = 0x06; /* SPC-4 */
-	inq.response_format = 2;
+	inq.version = SCSI_REV_SPC4;
+	inq.response_format = SID_SCSI2_RESPONSE;
 	inq.additional_length = 32;
 	inq.flags |= SID_CmdQue;
 	memcpy(inq.vendor, "NVMe    ", sizeof(inq.vendor));

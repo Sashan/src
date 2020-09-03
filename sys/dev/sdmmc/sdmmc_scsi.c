@@ -1,4 +1,4 @@
-/*	$OpenBSD: sdmmc_scsi.c,v 1.53 2020/07/25 16:34:30 krw Exp $	*/
+/*	$OpenBSD: sdmmc_scsi.c,v 1.56 2020/09/03 12:41:29 krw Exp $	*/
 
 /*
  * Copyright (c) 2006 Uwe Stuehler <uwe@openbsd.org>
@@ -287,16 +287,16 @@ sdmmc_scsi_decode_rw(struct scsi_xfer *xs, u_int32_t *blocknop,
     u_int32_t *blockcntp)
 {
 	struct scsi_rw *rw;
-	struct scsi_rw_big *rwb;
-	
+	struct scsi_rw_10 *rw10;
+
 	if (xs->cmdlen == 6) {
 		rw = (struct scsi_rw *)xs->cmd;
 		*blocknop = _3btol(rw->addr) & (SRW_TOPADDR << 16 | 0xffff);
 		*blockcntp = rw->length ? rw->length : 0x100;
 	} else {
-		rwb = (struct scsi_rw_big *)xs->cmd;
-		*blocknop = _4btol(rwb->addr);
-		*blockcntp = _2btol(rwb->length);
+		rw10 = (struct scsi_rw_10 *)xs->cmd;
+		*blocknop = _4btol(rw10->addr);
+		*blockcntp = _2btol(rw10->length);
 	}
 }
 
@@ -330,9 +330,9 @@ sdmmc_scsi_cmd(struct scsi_xfer *xs)
 
 	switch (xs->cmd->opcode) {
 	case READ_COMMAND:
-	case READ_BIG:
+	case READ_10:
 	case WRITE_COMMAND:
-	case WRITE_BIG:
+	case WRITE_10:
 		/* Deal with I/O outside the switch. */
 		break;
 
@@ -436,8 +436,8 @@ sdmmc_inquiry(struct scsi_xfer *xs)
 	memset(&inq, 0, sizeof inq);
 	inq.device = T_DIRECT;
 	inq.dev_qual2 = SID_REMOVABLE;
-	inq.version = 2;
-	inq.response_format = 2;
+	inq.version = SCSI_REV_2;
+	inq.response_format = SID_SCSI2_RESPONSE;
 	inq.additional_length = 32;
 	memcpy(inq.vendor, vendor, sizeof(inq.vendor));
 	memcpy(inq.product, product, sizeof(inq.product));

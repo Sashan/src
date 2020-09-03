@@ -1,4 +1,4 @@
-/*	$OpenBSD: igmp.c,v 1.74 2018/10/18 15:46:28 cheloha Exp $	*/
+/*	$OpenBSD: igmp.c,v 1.76 2020/08/17 16:25:34 gnezdo Exp $	*/
 /*	$NetBSD: igmp.c,v 1.15 1996/02/13 23:41:25 christos Exp $	*/
 
 /*
@@ -95,8 +95,6 @@
 #include <sys/stdarg.h>
 
 #define IP_MULTICASTOPTS	0
-
-int *igmpctl_vars[IGMPCTL_MAXID] = IGMPCTL_VARS;
 
 int		igmp_timers_are_running;
 static LIST_HEAD(, router_info) rti_head;
@@ -683,8 +681,6 @@ int
 igmp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
     void *newp, size_t newlen)
 {
-	int error;
-
 	/* All sysctl names at this level are terminal. */
 	if (namelen != 1)
 		return (ENOTDIR);
@@ -695,14 +691,7 @@ igmp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 			return (EPERM);
 		return (igmp_sysctl_igmpstat(oldp, oldlenp, newp));
 	default:
-		if (name[0] < IGMPCTL_MAXID) {
-			NET_LOCK();
-			error = sysctl_int_arr(igmpctl_vars, name, namelen,
-			    oldp, oldlenp, newp, newlen);
-			NET_UNLOCK();
-			return (error);
-		}
-		return (ENOPROTOOPT);
+		return (EOPNOTSUPP);
 	}
 	/* NOTREACHED */
 }

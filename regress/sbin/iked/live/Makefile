@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.13 2020/07/21 13:45:13 tobhe Exp $
+#	$OpenBSD: Makefile,v 1.15 2020/08/30 18:31:49 tobhe Exp $
 
 # Copyright (c) 2020 Tobias Heider <tobhe@openbsd.org>
 #
@@ -76,6 +76,13 @@ TEST_PING = \
 	fi; \
 	echo "$$dump"
 
+TEST_SINGLEIKESA = \
+	count=`ssh ${LEFT_SSH} "ikectl show sa | grep -c iked_sas"`; \
+	if [[ "$$count" != "1" ]]; then \
+		echo "error: too many IKE SAs."; \
+		exit 1; \
+	fi
+
 SETUP_CONFIGS = \
 	authstr=""; \
 	if [[ "$$auth" = "psk" ]]; then \
@@ -86,27 +93,30 @@ SETUP_CONFIGS = \
 	if [[ "$$flowtype" = "ipcomp" ]]; then \
 		ipcomp="ipcomp"; \
 	fi; \
-	fragstr=""; \
+	global=""; \
 	if [ "$$fragmentation" = true ]; then \
-		fragstr="set fragmentation"; \
+		global="$${global}set fragmentation\n"; \
 	fi; \
-	echo "FRAGMENTATION=\"$$fragstr\"" > $@_left.conf; \
-	echo "TMODE=\"$$tmode\"" >> $@_left.conf; \
+	if [ "$$singleikesa" = true ]; then \
+		global="$${global}set enforcesingleikesa\n"; \
+	fi; \
+	echo "TMODE=\"$$tmode\"" > $@_left.conf; \
 	echo "LOCAL_ADDR=\"${LEFT_ADDR}\"" >> $@_left.conf; \
 	echo "PEER_ADDR=\"${RIGHT_ADDR}\"" >> $@_left.conf; \
 	echo "IPCOMP=\"$$ipcomp\"" >> $@_left.conf; \
 	echo "SRCID=\"$$leftid\"" >> $@_left.conf; \
 	echo "AUTH=\"$$authstr\"" >> $@_left.conf; \
+	echo "$$global" >> $@_left.conf; \
 	cat ${.CURDIR}/iked.in >> $@_left.conf; \
 	chmod 0600 $@_left.conf; \
 	echo "cd /tmp\nput $@_left.conf test.conf" | sftp -q ${LEFT_SSH}; \
-	echo "FRAGMENTATION=\"$$fragstr\"" > $@_right.conf; \
-	echo "TMODE=\"$$tmode\"" >> $@_right.conf; \
+	echo "TMODE=\"$$tmode\"" > $@_right.conf; \
 	echo "LOCAL_ADDR=\"${RIGHT_ADDR}\"" >> $@_right.conf; \
 	echo "PEER_ADDR=\"${LEFT_ADDR}\"" >> $@_right.conf; \
 	echo "IPCOMP=\"$$ipcomp\"" >> $@_right.conf; \
 	echo "SRCID=\"$$rightid\"" >> $@_right.conf; \
 	echo "AUTH=\"$$authstr\"" >> $@_right.conf; \
+	echo "$$global" >> $@_right.conf; \
 	cat ${.CURDIR}/iked.in >> $@_right.conf; \
 	chmod 0600 $@_right.conf; \
 	echo "cd /tmp\nput $@_right.conf test.conf" | sftp -q ${RIGHT_SSH}
@@ -118,6 +128,9 @@ SETUP_SYSCTL = \
 SETUP_START = \
 	ssh ${LEFT_SSH} "ipsecctl -F; pkill iked; iked $$iked_flags -f /tmp/test.conf"; \
 	ssh ${RIGHT_SSH} "ipsecctl -F; pkill iked; iked $$iked_flags -f /tmp/test.conf"
+
+SETUP_RELOAD_RIGHT = \
+	ssh ${RIGHT_SSH} "ikectl reload"
 
 SETUP_CERT = \
 	echo "ALTNAME = $$name-from-$$caname" > $$name-from-$$caname.cnf; \
@@ -266,6 +279,18 @@ run-transport:
 	tmode=transport; flowtype=esp; \
 	  ${TEST_FLOWS}
 	${TEST_PING}
+
+REGRESS_TARGETS += run-singleikesa
+run-singleikesa:
+	@echo '======= $@ ========'
+	flowtype=esp; \
+	singleikesa=true; \
+	leftid=left-from-ca-both; \
+	rightid=right-from-ca-both; \
+	    ${SETUP_CONFIGS}
+	${SETUP_START}
+	sleep 1; ${SETUP_RELOAD_RIGHT}; \
+	sleep 3; ${TEST_SINGLEIKESA}
 
 REGRESS_TARGETS += run-ipcomp
 run-ipcomp:

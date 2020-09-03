@@ -2,7 +2,7 @@
  * THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
  *
  * generated from:
- *	OpenBSD: pcidevs,v 1.1930 2020/07/22 10:43:14 jsg Exp 
+ *	OpenBSD: pcidevs,v 1.1932 2020/08/23 19:24:22 kettenis Exp 
  */
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
 
@@ -3107,6 +3107,7 @@
 #define	PCI_PRODUCT_IBM_4810_BSP	0x0295		/* 4810 BSP */
 #define	PCI_PRODUCT_IBM_4810_SCC	0x0297		/* 4810 SCC */
 #define	PCI_PRODUCT_IBM_CALGARY_IOMMU	0x02a1		/* Calgary IOMMU */
+#define	PCI_PRODUCT_IBM_POWER8_HB	0x03dc		/* POWER8 Host */
 #define	PCI_PRODUCT_IBM_POWER9_HB	0x04c1		/* POWER9 Host */
 
 /* IC Ensemble */
@@ -3211,6 +3212,7 @@
 #define	PCI_PRODUCT_INTEL_CORE3G_D_GT2	0x0162		/* HD Graphics 4000 */
 #define	PCI_PRODUCT_INTEL_CORE3G_M_GT2	0x0166		/* HD Graphics 4000 */
 #define	PCI_PRODUCT_INTEL_CORE3G_S_GT2	0x016a		/* HD Graphics P4000 */
+#define	PCI_PRODUCT_INTEL_WL_22500_2	0x02f0		/* Wi-Fi 6 AX201 */
 #define	PCI_PRODUCT_INTEL_80303	0x0309		/* 80303 IOP */
 #define	PCI_PRODUCT_INTEL_80312	0x030d		/* 80312 I/O Companion */
 #define	PCI_PRODUCT_INTEL_IOXAPIC_A	0x0326		/* IOxAPIC */

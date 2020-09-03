@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfkey.c,v 1.68 2020/07/21 08:03:39 tobhe Exp $	*/
+/*	$OpenBSD: pfkey.c,v 1.70 2020/08/28 13:37:52 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2010-2013 Reyk Floeter <reyk@openbsd.org>
@@ -1895,6 +1895,18 @@ pfkey_process(struct iked *env, struct pfkey_message *pm)
 			return (0);
 		}
 
+		switch (hdr->sadb_msg_satype) {
+		case SADB_SATYPE_AH:
+			flow.flow_saproto = IKEV2_SAPROTO_AH;
+			break;
+		case SADB_SATYPE_ESP:
+			flow.flow_saproto = IKEV2_SAPROTO_ESP;
+			break;
+		case SADB_X_SATYPE_IPCOMP:
+			flow.flow_saproto = IKEV2_SAPROTO_IPCOMP;
+			break;
+		}
+
 		if ((sa_proto = pfkey_find_ext(reply, rlen,
 		    SADB_X_EXT_FLOW_TYPE)) == NULL) {
 			errmsg = "flow protocol";
@@ -1909,7 +1921,7 @@ pfkey_process(struct iked *env, struct pfkey_message *pm)
 		    print_host(sdst, NULL, 0), print_host(dmask, NULL, 0),
 		    print_host(speer, NULL, 0));
 
-		ret = ikev2_acquire_sa(env, &flow);
+		ret = ikev2_child_sa_acquire(env, &flow);
 
 out:
 		if (errmsg)
@@ -1956,9 +1968,9 @@ out:
 		    "rekeying" : "deletion");
 
 		if (sa_ltime->sadb_lifetime_exttype == SADB_EXT_LIFETIME_SOFT)
-			ret = ikev2_rekey_sa(env, &spi);
+			ret = ikev2_child_sa_rekey(env, &spi);
 		else
-			ret = ikev2_drop_sa(env, &spi);
+			ret = ikev2_child_sa_drop(env, &spi);
 		break;
 	}
 	return (ret);

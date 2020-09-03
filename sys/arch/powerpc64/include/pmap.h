@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.h,v 1.13 2020/07/23 15:09:09 kettenis Exp $	*/
+/*	$OpenBSD: pmap.h,v 1.15 2020/08/25 17:49:58 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -36,7 +36,6 @@ struct pmap {
 	int			pm_refs;
 	struct pmap_statistics	pm_stats;
 	struct mutex		pm_mtx;
-	struct slb		pm_slb[32];
 };
 
 typedef struct pmap *pmap_t;
@@ -70,6 +69,7 @@ void	pmap_bootstrap_cpu(void);
 
 int	pmap_slbd_fault(pmap_t, vaddr_t);
 int	pmap_set_user_slb(pmap_t, vaddr_t, vaddr_t *, vsize_t *);
+void	pmap_clear_user_slb(void);
 void	pmap_unset_user_slb(void);
 
 #ifdef DDB

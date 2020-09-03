@@ -1,4 +1,4 @@
-# $OpenBSD: RAMDISK,v 1.4 2020/07/14 20:39:40 kettenis Exp $
+# $OpenBSD: RAMDISK,v 1.9 2020/08/24 13:20:34 kettenis Exp $
 
 machine		powerpc64
 maxusers	4
@@ -15,10 +15,11 @@ option		USBVERBOSE
 
 option		FFS
 option		FFS2
-option		MSDOSFS
-option		INET6
 option		EXT2FS
 option		NFSCLIENT
+option		CD9660
+option		MSDOSFS
+option		INET6
 option		CRYPTO
 
 config		bsd	root on rd0a swap on rd0b
@@ -30,6 +31,7 @@ opalcons*	at fdt?
 phb*		at fdt?
 pci*		at phb?
 xics*		at fdt?
+xicp*		at fdt?
 xive*		at fdt?
 
 ppb*		at pci?
@@ -42,10 +44,22 @@ usb*		at xhci?
 
 scsibus*	at scsi?
 sd*		at scsibus?
+st*		at scsibus?             # SCSI tape drives
+cd*		at scsibus?             # SCSI CD-ROM drives
+ch*		at scsibus?             # SCSI autochangers
+safte*		at scsibus?             # SCSI accessed fault-tolerant enclosures
+ses*		at scsibus?             # SCSI enclosure services
+uk*		at scsibus?             # unknown SCSI
 
 # USB devices
 uhub*		at usb?			# USB Hubs
 uhub*		at uhub?		# USB Hubs
+uhidev*		at uhub?		# Human Interface Devices
+uhid*		at uhidev?		# USB generic HID support
+ukbd*		at uhidev?		# USB keyboard
+wskbd*		at ukbd? mux 1
+ums*		at uhidev?		# USB mouse
+wsmouse* 	at ums? mux 0
 umass*		at uhub?		# USB Mass Storage devices
 
 brgphy*		at mii?
@@ -56,3 +70,4 @@ pseudo-device	trunk
 pseudo-device	bpfilter 1
 pseudo-device	rd 1
 pseudo-device	bio 1
+pseudo-device	wsmux 2

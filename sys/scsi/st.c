@@ -1,4 +1,4 @@
-/*	$OpenBSD: st.c,v 1.179 2020/07/16 14:44:55 krw Exp $	*/
+/*	$OpenBSD: st.c,v 1.184 2020/08/22 15:07:11 krw Exp $	*/
 /*	$NetBSD: st.c,v 1.71 1997/02/21 23:03:49 thorpej Exp $	*/
 
 /*
@@ -69,6 +69,7 @@
 #include <sys/vnode.h>
 
 #include <scsi/scsi_all.h>
+#include <scsi/scsi_debug.h>
 #include <scsi/scsi_tape.h>
 #include <scsi/scsiconf.h>
 
@@ -170,7 +171,6 @@ struct st_softc {
 #define	ST_2FM_AT_EOD		0x00000400
 #define	ST_MOUNTED		0x00000800
 #define	ST_DONTBUFFER		0x00001000
-#define	ST_WAITING		0x00002000
 #define	ST_DYING		0x00004000
 #define	ST_BOD_DETECTED		0x00008000
 #define	ST_MODE_DENSITY		0x00010000
@@ -195,7 +195,6 @@ struct st_softc {
 
 	struct mode mode;
 	struct bufq sc_bufq;
-	struct timeout sc_timeout;
 	struct scsi_xshandler sc_xsh;
 };
 
@@ -295,8 +294,6 @@ stattach(struct device *parent, struct device *self, void *aux)
 	printf("\n");
 
 	scsi_xsh_set(&st->sc_xsh, link, ststart);
-	timeout_set(&st->sc_timeout, (void (*)(void *))scsi_xsh_set,
-	    &st->sc_xsh);
 
 	/* Set up the buf queue for this device. */
 	bufq_init(&st->sc_bufq, BUFQ_FIFO);
@@ -467,7 +464,6 @@ stclose(dev_t dev, int flags, int mode, struct proc *p)
 		break;
 	}
 	CLR(link->flags, SDEV_OPEN);
-	timeout_del(&st->sc_timeout);
 	scsi_xsh_del(&st->sc_xsh);
 
 done:
@@ -936,9 +932,7 @@ ststart(struct scsi_xfer *xs)
 	/*
 	 * should we try do more work now?
 	 */
-	if (ISSET(st->flags, ST_WAITING))
-		CLR(st->flags, ST_WAITING);
-	else if (bufq_peek(&st->sc_bufq))
+	if (bufq_peek(&st->sc_bufq))
 		scsi_xsh_add(&st->sc_xsh);
 }
 

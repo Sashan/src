@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2_msg.c,v 1.69 2020/07/08 21:35:35 tobhe Exp $	*/
+/*	$OpenBSD: ikev2_msg.c,v 1.71 2020/08/15 11:31:17 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -97,7 +97,7 @@ ikev2_msg_cb(int fd, short event, void *arg)
 		return;
 
 	TAILQ_INIT(&msg.msg_proposals);
-	SLIST_INIT(&msg.msg_certreqs);
+	SIMPLEQ_INIT(&msg.msg_certreqs);
 	msg.msg_fd = fd;
 
 	if (hdr.ike_version == IKEV1_VERSION)
@@ -205,9 +205,9 @@ ikev2_msg_cleanup(struct iked *env, struct iked_message *msg)
 		msg->msg_cookie2 = NULL;
 
 		config_free_proposals(&msg->msg_proposals, 0);
-		while ((cr = SLIST_FIRST(&msg->msg_certreqs))) {
+		while ((cr = SIMPLEQ_FIRST(&msg->msg_certreqs))) {
 			ibuf_release(cr->cr_data);
-			SLIST_REMOVE_HEAD(&msg->msg_certreqs, cr_entry);
+			SIMPLEQ_REMOVE_HEAD(&msg->msg_certreqs, cr_entry);
 			free(cr);
 		}
 	}
@@ -370,7 +370,7 @@ struct ibuf *
 ikev2_msg_encrypt(struct iked *env, struct iked_sa *sa, struct ibuf *src,
     struct ibuf *aad)
 {
-	size_t			 len, ivlen, encrlen, integrlen, blocklen,
+	size_t			 len, encrlen, integrlen, blocklen,
 				    outlen;
 	uint8_t			*buf, pad = 0, *ptr;
 	struct ibuf		*encr, *dst = NULL, *out = NULL;
@@ -394,7 +394,6 @@ ikev2_msg_encrypt(struct iked *env, struct iked_sa *sa, struct ibuf *src,
 		encr = sa->sa_key_rencr;
 
 	blocklen = cipher_length(sa->sa_encr);
-	ivlen = cipher_ivlength(sa->sa_encr);
 	integrlen = hash_length(sa->sa_integr);
 	encrlen = roundup(len + sizeof(pad), blocklen);
 	pad = encrlen - (len + sizeof(pad));

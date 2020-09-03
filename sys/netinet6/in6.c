@@ -1,4 +1,4 @@
-/*	$OpenBSD: in6.c,v 1.240 2020/07/28 17:54:15 florian Exp $	*/
+/*	$OpenBSD: in6.c,v 1.242 2020/08/07 18:09:16 florian Exp $	*/
 /*	$KAME: in6.c,v 1.372 2004/06/14 08:14:21 itojun Exp $	*/
 
 /*
@@ -322,6 +322,12 @@ in6_ioctl_change_ifaddr(u_long cmd, caddr_t data, struct ifnet *ifp)
 		break;
 
 	case SIOCAIFADDR_IN6:
+		if (ifra->ifra_addr.sin6_family != AF_INET6 ||
+		    ifra->ifra_addr.sin6_len != sizeof(struct sockaddr_in6)) {
+			error = EAFNOSUPPORT;
+			break;
+		}
+
 		/* reject read-only flags */
 		if ((ifra->ifra_flags & IN6_IFF_DUPLICATED) != 0 ||
 		    (ifra->ifra_flags & IN6_IFF_DETACHED) != 0 ||
@@ -1492,7 +1498,38 @@ in6_ifawithscope(struct ifnet *oifp, struct in6_addr *dst, u_int rdomain)
 					continue;
 #endif
 				goto replace;
-			}
+			} else if (tlen < blen)
+				continue;
+
+			/*
+			 * If the eight rules fail to choose a single address,
+			 * the tiebreaker is implementation-specific.
+			 */
+
+			 /* Prefer address with highest pltime. */
+			if (ia6_best->ia6_updatetime +
+			    ia6_best->ia6_lifetime.ia6t_pltime <
+			    ifatoia6(ifa)->ia6_updatetime +
+			    ifatoia6(ifa)->ia6_lifetime.ia6t_pltime)
+				goto replace;
+			else if (ia6_best->ia6_updatetime +
+			    ia6_best->ia6_lifetime.ia6t_pltime >
+			    ifatoia6(ifa)->ia6_updatetime +
+			    ifatoia6(ifa)->ia6_lifetime.ia6t_pltime)
+				continue;
+
+			/* Prefer address with highest vltime. */
+			if (ia6_best->ia6_updatetime +
+			    ia6_best->ia6_lifetime.ia6t_vltime <
+			    ifatoia6(ifa)->ia6_updatetime +
+			    ifatoia6(ifa)->ia6_lifetime.ia6t_vltime)
+				goto replace;
+			else if (ia6_best->ia6_updatetime +
+			    ia6_best->ia6_lifetime.ia6t_vltime >
+			    ifatoia6(ifa)->ia6_updatetime +
+			    ifatoia6(ifa)->ia6_lifetime.ia6t_vltime)
+				continue;
+
 			continue;
 		  replace:
 			ia6_best = ifatoia6(ifa);

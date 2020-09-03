@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.58 2020/07/23 22:01:08 tobhe Exp $	*/
+/*	$OpenBSD: config.c,v 1.65 2020/08/26 14:49:48 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -739,7 +739,7 @@ config_getpolicy(struct iked *env, struct imsg *imsg)
 {
 	struct iked_policy	*pol;
 	struct iked_proposal	 pp, *prop;
-	struct iked_transform	 xf, *xform;
+	struct iked_transform	 xf;
 	off_t			 offset = 0;
 	unsigned int		 i, j;
 	uint8_t			*buf = (uint8_t *)imsg->data;
@@ -771,9 +771,9 @@ config_getpolicy(struct iked *env, struct imsg *imsg)
 			memcpy(&xf, buf + offset, sizeof(xf));
 			offset += sizeof(xf);
 
-			if ((xform = config_add_transform(prop, xf.xform_type,
+			if (config_add_transform(prop, xf.xform_type,
 			    xf.xform_id, xf.xform_length,
-			    xf.xform_keylength)) == NULL)
+			    xf.xform_keylength) == NULL)
 				fatal("config_getpolicy: add transform");
 		}
 	}
@@ -843,7 +843,7 @@ config_setcompile(struct iked *env, enum privsep_procid id)
 }
 
 int
-config_getcompile(struct iked *env, struct imsg *imsg)
+config_getcompile(struct iked *env)
 {
 	/*
 	 * Do any necessary steps after configuration, for now we
@@ -856,73 +856,87 @@ config_getcompile(struct iked *env, struct imsg *imsg)
 }
 
 int
-config_setmobike(struct iked *env)
+config_setstatic(struct iked *env)
 {
-	unsigned int boolval;
-
-	boolval = env->sc_mobike;
-	proc_compose(&env->sc_ps, PROC_IKEV2, IMSG_CTL_MOBIKE,
-	    &boolval, sizeof(boolval));
+	proc_compose(&env->sc_ps, PROC_IKEV2, IMSG_CTL_STATIC,
+	    &env->sc_static, sizeof(env->sc_static));
 	return (0);
 }
 
 int
-config_getmobike(struct iked *env, struct imsg *imsg)
+config_getstatic(struct iked *env, struct imsg *imsg)
 {
-	unsigned int boolval;
+	IMSG_SIZE_CHECK(imsg, &env->sc_static);
+	memcpy(&env->sc_static, imsg->data, sizeof(env->sc_static));
 
-	IMSG_SIZE_CHECK(imsg, &boolval);
-	memcpy(&boolval, imsg->data, sizeof(boolval));
-	env->sc_mobike = boolval;
-	log_debug("%s: %smobike", __func__, env->sc_mobike ? "" : "no ");
-	return (0);
-}
-
-int
-config_setfragmentation(struct iked *env)
-{
-	unsigned int boolval;
-
-	boolval = env->sc_frag;
-	proc_compose(&env->sc_ps, PROC_IKEV2, IMSG_CTL_FRAGMENTATION,
-	    &boolval, sizeof(boolval));
-	return (0);
-}
-
-int
-config_getfragmentation(struct iked *env, struct imsg *imsg)
-{
-	unsigned int boolval;
-
-	IMSG_SIZE_CHECK(imsg, &boolval);
-	memcpy(&boolval, imsg->data, sizeof(boolval));
-	env->sc_frag = boolval;
+	log_debug("%s: dpd_check_interval %llu", __func__, env->sc_alive_timeout);
+	log_debug("%s: %senforcesingleikesa", __func__,
+	    env->sc_enforcesingleikesa ? "" : "no ");
 	log_debug("%s: %sfragmentation", __func__, env->sc_frag ? "" : "no ");
+	log_debug("%s: %smobike", __func__, env->sc_mobike ? "" : "no ");
+	log_debug("%s: nattport %u", __func__, env->sc_nattport);
+
 	return (0);
 }
 
 int
 config_setocsp(struct iked *env)
 {
+	struct iovec		 iov[3];
+	int			 iovcnt = 0;
+
 	if (env->sc_opts & IKED_OPT_NOACTION)
 		return (0);
-	proc_compose(&env->sc_ps, PROC_CERT,
-	    IMSG_OCSP_URL, env->sc_ocsp_url,
-	    env->sc_ocsp_url ? strlen(env->sc_ocsp_url) : 0);
 
-	return (0);
+	iov[0].iov_base = &env->sc_ocsp_tolerate;
+	iov[0].iov_len = sizeof(env->sc_ocsp_tolerate);
+	iovcnt++;
+	iov[1].iov_base = &env->sc_ocsp_maxage;
+	iov[1].iov_len = sizeof(env->sc_ocsp_maxage);
+	iovcnt++;
+	if (env->sc_ocsp_url) {
+		iov[2].iov_base = env->sc_ocsp_url;
+		iov[2].iov_len = strlen(env->sc_ocsp_url);
+		iovcnt++;
+	}
+	return (proc_composev(&env->sc_ps, PROC_CERT, IMSG_OCSP_CFG,
+	    iov, iovcnt));
 }
 
 int
 config_getocsp(struct iked *env, struct imsg *imsg)
 {
+	size_t			 have, need;
+	u_int8_t		*ptr;
+
 	free(env->sc_ocsp_url);
-	if (IMSG_DATA_SIZE(imsg) > 0)
-		env->sc_ocsp_url = get_string(imsg->data, IMSG_DATA_SIZE(imsg));
+	ptr = (u_int8_t *)imsg->data;
+	have = IMSG_DATA_SIZE(imsg);
+
+	/* get tolerate */
+	need = sizeof(env->sc_ocsp_tolerate);
+	if (have < need)
+		fatalx("bad 'tolerate' length imsg received");
+	memcpy(&env->sc_ocsp_tolerate, ptr, need);
+	ptr += need;
+	have -= need;
+
+	/* get maxage */
+	need = sizeof(env->sc_ocsp_maxage);
+	if (have < need)
+		fatalx("bad 'maxage' length imsg received");
+	memcpy(&env->sc_ocsp_maxage, ptr, need);
+	ptr += need;
+	have -= need;
+
+	/* get url */
+	if (have > 0)
+		env->sc_ocsp_url = get_string(ptr, have);
 	else
 		env->sc_ocsp_url = NULL;
-	log_debug("%s: ocsp_url %s", __func__,
-	    env->sc_ocsp_url ? env->sc_ocsp_url : "none");
+	log_debug("%s: ocsp_url %s tolerate %ld maxage %ld", __func__,
+	    env->sc_ocsp_url ? env->sc_ocsp_url : "none",
+	    env->sc_ocsp_tolerate, env->sc_ocsp_maxage);
 	return (0);
 }
 
@@ -992,29 +1006,6 @@ config_setkeys(struct iked *env)
 }
 
 int
-config_setnattport(struct iked *env)
-{
-	in_port_t nattport;
-
-	nattport = env->sc_nattport;
-	proc_compose(&env->sc_ps, PROC_IKEV2, IMSG_CTL_NATTPORT,
-	    &nattport, sizeof(nattport));
-	return (0);
-}
-
-int
-config_getnattport(struct iked *env, struct imsg *imsg)
-{
-	in_port_t nattport;
-
-	IMSG_SIZE_CHECK(imsg, &nattport);
-	memcpy(&nattport, imsg->data, sizeof(nattport));
-	env->sc_nattport = nattport;
-	log_debug("%s: nattport %u", __func__, env->sc_nattport);
-	return (0);
-}
-
-int
 config_getkey(struct iked *env, struct imsg *imsg)
 {
 	size_t		 len;
@@ -1031,6 +1022,8 @@ config_getkey(struct iked *env, struct imsg *imsg)
 
 	explicit_bzero(imsg->data, len);
 	ca_getkey(&env->sc_ps, &id, imsg->hdr.type);
+
+	ikev2_reset_alive_timer(env);
 
 	return (0);
 }

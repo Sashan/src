@@ -1,4 +1,4 @@
-/*	$OpenBSD: disk.c,v 1.1 2020/07/16 19:48:58 kettenis Exp $	*/
+/*	$OpenBSD: disk.c,v 1.3 2020/08/29 11:46:54 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2019 Visa Hankala
@@ -41,10 +41,13 @@ int	disk_proberoot(const char *);
 int mounted = 0;
 int rdroot = -1;		/* fd that points to the root of the ramdisk */
 
+const u_char zeroduid[8];
+
 void
 disk_init(void)
 {
 	char rootdevs[1024];
+	char bootduid[17];
 	char *devname, *disknames, *ptr;
 	size_t size;
 	int mib[2];
@@ -76,6 +79,11 @@ disk_init(void)
 		return;
 	}
 
+	snprintf(bootduid, sizeof(bootduid),
+	    "%02x%02x%02x%02x%02x%02x%02x%02x", cmd.bootduid[0],
+	    cmd.bootduid[1], cmd.bootduid[2], cmd.bootduid[3], cmd.bootduid[4],
+	    cmd.bootduid[5], cmd.bootduid[6], cmd.bootduid[7]);
+
 	printf("probing disks\n");
 	rootdevs[0] = '\0';
 	ptr = disknames;
@@ -91,8 +99,15 @@ disk_init(void)
 		if (strlen(duid) == 0)
 			continue;
 
+		/* If we have a bootduid match, nail it down! */
+		if (strcmp(duid, bootduid) == 0) {
+			snprintf(cmd.bootdev, sizeof(cmd.bootdev),
+			    "%sa", devname);
+		}
+
+		/* Otherwise pick the first potential root disk. */
 		if (disk_proberoot(devname)) {
-			if (strlen(cmd.bootdev) == 0) {
+			if (memcmp(cmd.bootduid, zeroduid, 8) == 0) {
 				snprintf(cmd.bootdev, sizeof(cmd.bootdev),
 				    "%sa", devname);
 			}

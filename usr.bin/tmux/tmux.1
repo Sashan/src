@@ -1,4 +1,4 @@
-.\" $OpenBSD: tmux.1,v 1.790 2020/07/27 08:03:10 nicm Exp $
+.\" $OpenBSD: tmux.1,v 1.794 2020/09/02 13:46:35 nicm Exp $
 .\"
 .\" Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
 .\"
@@ -14,7 +14,7 @@
 .\" IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING
 .\" OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: July 27 2020 $
+.Dd $Mdocdate: September 2 2020 $
 .Dt TMUX 1
 .Os
 .Sh NAME
@@ -1407,7 +1407,7 @@ and
 .Fl T
 show debugging information about jobs and terminals.
 .It Xo Ic source-file
-.Op Fl nqv
+.Op Fl Fnqv
 .Ar path
 .Ar ...
 .Xc
@@ -1417,6 +1417,11 @@ Execute commands from one or more files specified by
 (which may be
 .Xr glob 7
 patterns).
+If
+.Fl F
+is present, then
+.Ar path
+is expanded as a format.
 If
 .Fl q
 is given, no error will be returned if
@@ -4574,6 +4579,9 @@ pads the string to a given width, for example
 .Ql #{p10:pane_title}
 will result in a width of at least 10 characters.
 A positive width pads on the left, a negative on the right.
+.Ql n
+expands to the length of the variable, for example
+.Ql #{n:window_name} .
 .Pp
 Prefixing a time variable with
 .Ql t:\&
@@ -4770,6 +4778,7 @@ The following variables are available, where appropriate:
 .It Li "pane_in_mode" Ta "" Ta "1 if pane is in a mode"
 .It Li "pane_index" Ta "#P" Ta "Index of pane"
 .It Li "pane_input_off" Ta "" Ta "1 if input to pane is disabled"
+.It Li "pane_last" Ta "" Ta "1 if last pane"
 .It Li "pane_left" Ta "" Ta "Left of pane"
 .It Li "pane_marked" Ta "" Ta "1 if this is the marked pane"
 .It Li "pane_marked_set" Ta "" Ta "1 if a marked pane is set"
@@ -5098,7 +5107,7 @@ section).
 Commands to alter and view the environment are:
 .Bl -tag -width Ds
 .It Xo Ic set-environment
-.Op Fl hgru
+.Op Fl Fhgru
 .Op Fl t Ar target-session
 .Ar name Op Ar value
 .Xc
@@ -5109,6 +5118,11 @@ If
 is used, the change is made in the global environment; otherwise, it is applied
 to the session environment for
 .Ar target-session .
+If
+.Fl F
+is present, then
+.Ar value
+is expanded as a format.
 The
 .Fl u
 flag unsets a variable.
@@ -5637,12 +5651,21 @@ See the
 .Sx FORMATS
 section.
 .It Xo Ic load-buffer
+.Op Fl w
 .Op Fl b Ar buffer-name
+.Op Fl t Ar target-client
 .Ar path
 .Xc
 .D1 (alias: Ic loadb )
 Load the contents of the specified paste buffer from
 .Ar path .
+If
+.Fl w
+is given, the buffer is also sent to the clipboard for
+.Ar target-client
+using the
+.Xr xterm 1
+escape sequence, if possible.
 .It Xo Ic paste-buffer
 .Op Fl dpr
 .Op Fl b Ar buffer-name
@@ -5679,14 +5702,22 @@ The
 .Fl a
 option appends to rather than overwriting the file.
 .It Xo Ic set-buffer
-.Op Fl a
+.Op Fl aw
 .Op Fl b Ar buffer-name
+.Op Fl t Ar target-client
 .Op Fl n Ar new-buffer-name
 .Ar data
 .Xc
 .D1 (alias: Ic setb )
 Set the contents of the specified buffer to
 .Ar data .
+If
+.Fl w
+is given, the buffer is also sent to the clipboard for
+.Ar target-client
+using the
+.Xr xterm 1
+escape sequence, if possible.
 The
 .Fl a
 option appends to rather than overwriting the buffer.

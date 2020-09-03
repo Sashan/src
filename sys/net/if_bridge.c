@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_bridge.c,v 1.343 2020/07/22 20:37:35 mvs Exp $	*/
+/*	$OpenBSD: if_bridge.c,v 1.345 2020/08/06 19:47:44 bluhm Exp $	*/
 
 /*
  * Copyright (c) 1999, 2000 Jason L. Wright (jason@thought.net)
@@ -169,7 +169,7 @@ bridge_clone_create(struct if_clone *ifc, int unit)
 	int i;
 
 	sc = malloc(sizeof(*sc), M_DEVBUF, M_WAITOK|M_ZERO);
-	sc->sc_stp = bstp_create(&sc->sc_if);
+	sc->sc_stp = bstp_create();
 	if (!sc->sc_stp) {
 		free(sc, M_DEVBUF, sizeof *sc);
 		return (ENOMEM);
@@ -738,7 +738,7 @@ bridge_init(struct bridge_softc *sc)
 	if (ISSET(ifp->if_flags, IFF_RUNNING))
 		return;
 
-	bstp_initialization(sc->sc_stp);
+	bstp_enable(sc->sc_stp, ifp->if_index);
 
 	if (sc->sc_brttimeout != 0)
 		timeout_add_sec(&sc->sc_brtimeout, sc->sc_brttimeout);
@@ -758,6 +758,8 @@ bridge_stop(struct bridge_softc *sc)
 		return;
 
 	CLR(ifp->if_flags, IFF_RUNNING);
+
+	bstp_disable(sc->sc_stp);
 
 	timeout_del_barrier(&sc->sc_brtimeout);
 
@@ -1742,6 +1744,17 @@ bridge_ip(struct ifnet *brifp, int dir, struct ifnet *ifp,
 			ip->ip_sum = in_cksum(m, hlen);
 		}
 
+#if NPF > 0
+		if (dir == BRIDGE_IN &&
+		    m->m_pkthdr.pf.flags & PF_TAG_DIVERTED) {
+			m_resethdr(m);
+			m->m_pkthdr.ph_ifidx = ifp->if_index;
+			m->m_pkthdr.ph_rtableid = ifp->if_rdomain;
+			ipv4_input(ifp, m);
+			return (NULL);
+		}
+#endif /* NPF > 0 */
+
 		break;
 
 #ifdef INET6
@@ -1779,6 +1792,17 @@ bridge_ip(struct ifnet *brifp, int dir, struct ifnet *ifp,
 			return (NULL);
 #endif /* NPF > 0 */
 		in6_proto_cksum_out(m, ifp);
+
+#if NPF > 0
+		if (dir == BRIDGE_IN &&
+		    m->m_pkthdr.pf.flags & PF_TAG_DIVERTED) {
+			m_resethdr(m);
+			m->m_pkthdr.ph_ifidx = ifp->if_index;
+			m->m_pkthdr.ph_rtableid = ifp->if_rdomain;
+			ipv6_input(ifp, m);
+			return (NULL);
+		}
+#endif /* NPF > 0 */
 
 		break;
 	}

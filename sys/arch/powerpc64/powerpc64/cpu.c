@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.14 2020/07/22 20:41:26 kettenis Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.17 2020/08/23 10:07:51 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -20,6 +20,7 @@
 #include <sys/atomic.h>
 #include <sys/device.h>
 #include <sys/systm.h>
+#include <sys/timeout.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -55,10 +56,16 @@ struct cpu_version cpu_version[] = {
 };
 
 char cpu_model[64];
+uint32_t cpu_features;
+uint32_t cpu_features2;
+
 uint64_t tb_freq = 512000000;	/* POWER8, POWER9 */
 
 struct cpu_info cpu_info[MAXCPUS];
 struct cpu_info *cpu_info_primary = &cpu_info[0];
+
+struct timeout cpu_darn_to;
+void	cpu_darn(void *);
 
 int	cpu_match(struct device *, void *, void *);
 void	cpu_attach(struct device *, struct device *, void *);
@@ -171,6 +178,11 @@ cpu_attach(struct device *parent, struct device *dev, void *aux)
 		level++;
 	}
 
+	if (CPU_IS_PRIMARY(ci) && (cpu_features2 & PPC_FEATURE2_DARN)) {
+		timeout_set(&cpu_darn_to, cpu_darn, NULL);
+		cpu_darn(NULL);
+	}
+
 #ifdef MULTIPROCESSOR
 	if (dev->dv_unit != 0) {
 		int timeout = 10000;
@@ -202,6 +214,45 @@ cpu_attach(struct device *parent, struct device *dev, void *aux)
 	tb_freq = OF_getpropint(faa->fa_node, "timebase-frequency", tb_freq);
 }
 
+void
+cpu_init_features(void)
+{
+	uint32_t pvr = mfpvr();
+
+	switch (CPU_VERSION(pvr)) {
+	case CPU_IBMPOWER9:
+		cpu_features2 |= PPC_FEATURE2_ARCH_3_00;
+		cpu_features2 |= PPC_FEATURE2_DARN;
+		break;
+	}
+}
+
+void
+cpu_init(void)
+{
+	uint64_t lpcr = LPCR_LPES;
+
+	if (cpu_features2 & PPC_FEATURE2_ARCH_3_00)
+		lpcr |= LPCR_HVICE;
+
+	mtlpcr(lpcr);
+	isync();
+}
+
+void
+cpu_darn(void *arg)
+{
+	uint64_t value;
+
+	__asm volatile ("darn %0, 1" : "=r"(value));
+	if (value != UINT64_MAX) {
+		enqueue_randomness(value);
+		enqueue_randomness(value >> 32);
+	}
+
+	timeout_add_msec(&cpu_darn_to, 10);
+}
+
 #ifdef MULTIPROCESSOR
 
 void
@@ -225,11 +276,7 @@ cpu_bootstrap(void)
 	msr = mfmsr();
 	mtmsr(msr | (PSL_ME|PSL_RI));
 
-#define LPCR_LPES	0x0000000000000008UL
-#define LPCR_HVICE	0x0000000000000002UL
-
-	mtlpcr(LPCR_LPES | LPCR_HVICE);
-	isync();
+	cpu_init();
 
 	pmap_bootstrap_cpu();
 
@@ -302,7 +349,7 @@ cpu_boot_secondary_processors(void)
 int
 cpu_intr(void *arg)
 {
-	struct cpu_info *ci;
+	struct cpu_info *ci = curcpu();
 
 	if (ci->ci_ipi_reason == IPI_DDB) {
 		ci->ci_ipi_reason = IPI_NOP;

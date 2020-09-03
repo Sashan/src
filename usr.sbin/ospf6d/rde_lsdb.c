@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde_lsdb.c,v 1.43 2020/02/17 08:12:22 denis Exp $ */
+/*	$OpenBSD: rde_lsdb.c,v 1.45 2020/08/21 10:17:35 jan Exp $ */
 
 /*
  * Copyright (c) 2004, 2005 Claudio Jeker <claudio@openbsd.org>
@@ -763,9 +763,7 @@ lsa_dump(struct lsa_tree *tree, int imsg_type, pid_t pid)
 		lsa_age(v);
 		switch (imsg_type) {
 		case IMSG_CTL_SHOW_DATABASE:
-			rde_imsg_compose_ospfe(IMSG_CTL_SHOW_DATABASE, 0, pid,
-			    &v->lsa->hdr, ntohs(v->lsa->hdr.len));
-			continue;
+			break;
 		case IMSG_CTL_SHOW_DB_SELF:
 			if (v->lsa->hdr.adv_rtr == rde_router_id())
 				break;
@@ -789,6 +787,7 @@ lsa_dump(struct lsa_tree *tree, int imsg_type, pid_t pid)
 		case IMSG_CTL_SHOW_DB_INTRA:
 			if (v->type == LSA_TYPE_INTRA_A_PREFIX)
 				break;
+			continue;
 		case IMSG_CTL_SHOW_DB_SUM:
 			if (v->type == LSA_TYPE_INTER_A_PREFIX)
 				break;

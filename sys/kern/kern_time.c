@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_time.c,v 1.133 2020/07/15 21:20:08 cheloha Exp $	*/
+/*	$OpenBSD: kern_time.c,v 1.140 2020/08/12 15:31:27 cheloha Exp $	*/
 /*	$NetBSD: kern_time.c,v 1.20 1996/02/18 11:57:06 fvdl Exp $	*/
 
 /*
@@ -453,18 +453,14 @@ sys_adjtime(struct proc *p, void *v, register_t *retval)
 		if (!timerisvalid(&atv))
 			return (EINVAL);
 
-		if (atv.tv_sec >= 0) {
-			if (atv.tv_sec > INT64_MAX / 1000000)
-				return EINVAL;
-			adjustment = atv.tv_sec * 1000000;
-			if (atv.tv_usec > INT64_MAX - adjustment)
-				return EINVAL;
-			adjustment += atv.tv_usec;
-		} else {
-			if (atv.tv_sec < INT64_MIN / 1000000)
-				return EINVAL;
-			adjustment = atv.tv_sec * 1000000 + atv.tv_usec;
-		}
+		if (atv.tv_sec > INT64_MAX / 1000000)
+			return EINVAL;
+		if (atv.tv_sec < INT64_MIN / 1000000)
+			return EINVAL;
+		adjustment = atv.tv_sec * 1000000;
+		if (adjustment > INT64_MAX - atv.tv_usec)
+			return EINVAL;
+		adjustment += atv.tv_usec;
 
 		rw_enter_write(&tc_lock);
 	}
@@ -520,6 +516,7 @@ sys_getitimer(struct proc *p, void *v, register_t *retval)
 		syscallarg(int) which;
 		syscallarg(struct itimerval *) itv;
 	} */ *uap = v;
+	struct itimerspec its;
 	struct itimerval aitv;
 	struct itimerspec *itimer;
 	int which;
@@ -530,29 +527,33 @@ sys_getitimer(struct proc *p, void *v, register_t *retval)
 		return (EINVAL);
 	itimer = &p->p_p->ps_timer[which];
 	memset(&aitv, 0, sizeof(aitv));
-	mtx_enter(&itimer_mtx);
-	TIMESPEC_TO_TIMEVAL(&aitv.it_interval, &itimer->it_interval);
-	TIMESPEC_TO_TIMEVAL(&aitv.it_value, &itimer->it_value);
-	mtx_leave(&itimer_mtx);
+
+	if (which != ITIMER_REAL)
+		mtx_enter(&itimer_mtx);
+	its = *itimer;
+	if (which != ITIMER_REAL)
+		mtx_leave(&itimer_mtx);
 
 	if (which == ITIMER_REAL) {
-		struct timeval now;
+		struct timespec now;
 
-		getmicrouptime(&now);
+		getnanouptime(&now);
 		/*
 		 * Convert from absolute to relative time in .it_value
 		 * part of real time timer.  If time for real time timer
 		 * has passed return 0, else return difference between
 		 * current time and time for the timer to go off.
 		 */
-		if (timerisset(&aitv.it_value)) {
-			if (timercmp(&aitv.it_value, &now, <))
-				timerclear(&aitv.it_value);
+		if (timespecisset(&its.it_value)) {
+			if (timespeccmp(&its.it_value, &now, <))
+				timespecclear(&its.it_value);
 			else
-				timersub(&aitv.it_value, &now,
-				    &aitv.it_value);
+				timespecsub(&its.it_value, &now,
+				    &its.it_value);
 		}
 	}
+	TIMESPEC_TO_TIMEVAL(&aitv.it_value, &its.it_value);
+	TIMESPEC_TO_TIMEVAL(&aitv.it_interval, &its.it_interval);
 
 	return (copyout(&aitv, SCARG(uap, itv), sizeof (struct itimerval)));
 }
@@ -581,9 +582,15 @@ sys_setitimer(struct proc *p, void *v, register_t *retval)
 	if (which < ITIMER_REAL || which > ITIMER_PROF)
 		return (EINVAL);
 	itvp = SCARG(uap, itv);
-	if (itvp && (error = copyin((void *)itvp, (void *)&aitv,
-	    sizeof(struct itimerval))))
-		return (error);
+	if (itvp) {
+		error = copyin(itvp, &aitv, sizeof(struct itimerval));
+		if (error)
+			return (error);
+		if (itimerfix(&aitv.it_value) || itimerfix(&aitv.it_interval))
+			return (EINVAL);
+		TIMEVAL_TO_TIMESPEC(&aitv.it_value, &aits.it_value);
+		TIMEVAL_TO_TIMESPEC(&aitv.it_interval, &aits.it_interval);
+	}
 	if (oitv != NULL) {
 		SCARG(&getargs, which) = which;
 		SCARG(&getargs, itv) = oitv;
@@ -592,26 +599,25 @@ sys_setitimer(struct proc *p, void *v, register_t *retval)
 	}
 	if (itvp == 0)
 		return (0);
-	if (itimerfix(&aitv.it_value) || itimerfix(&aitv.it_interval))
-		return (EINVAL);
-	TIMEVAL_TO_TIMESPEC(&aitv.it_value, &aits.it_value);
-	TIMEVAL_TO_TIMESPEC(&aitv.it_interval, &aits.it_interval);
+
+	if (which != ITIMER_REAL)
+		mtx_enter(&itimer_mtx);
+
 	if (which == ITIMER_REAL) {
 		struct timespec cts;
 
-		timeout_del(&pr->ps_realit_to);
 		getnanouptime(&cts);
 		if (timespecisset(&aits.it_value)) {
 			timo = tstohz(&aits.it_value);
 			timeout_add(&pr->ps_realit_to, timo);
 			timespecadd(&aits.it_value, &cts, &aits.it_value);
-		}
-		pr->ps_timer[ITIMER_REAL] = aits;
-	} else {
-		mtx_enter(&itimer_mtx);
-		pr->ps_timer[which] = aits;
-		mtx_leave(&itimer_mtx);
+		} else
+			timeout_del(&pr->ps_realit_to);
 	}
+	pr->ps_timer[which] = aits;
+
+	if (which != ITIMER_REAL)
+		mtx_leave(&itimer_mtx);
 
 	return (0);
 }
@@ -686,6 +692,20 @@ itimerdecr(struct itimerspec *itp, long nsec)
 	NSEC_TO_TIMESPEC(nsec, &decrement);
 
 	mtx_enter(&itimer_mtx);
+
+	/*
+	 * Double-check that the timer is enabled.  A different thread
+	 * in setitimer(2) may have disabled it while we were entering
+	 * the mutex.
+	 */
+	if (!timespecisset(&itp->it_value)) {
+		mtx_leave(&itimer_mtx);
+		return (1);
+	}
+
+	/*
+	 * The timer is enabled.  Update and reload it as needed.
+	 */
 	timespecsub(&itp->it_value, &decrement, &itp->it_value);
 	if (itp->it_value.tv_sec >= 0 && timespecisset(&itp->it_value)) {
 		mtx_leave(&itimer_mtx);

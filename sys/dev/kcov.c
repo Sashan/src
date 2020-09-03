@@ -1,4 +1,4 @@
-/*	$OpenBSD: kcov.c,v 1.20 2020/06/07 19:23:33 anton Exp $	*/
+/*	$OpenBSD: kcov.c,v 1.28 2020/08/30 13:19:44 anton Exp $	*/
 
 /*
  * Copyright (c) 2018 Anton Lindqvist <anton@openbsd.org>
@@ -21,6 +21,8 @@
 #include <sys/proc.h>
 #include <sys/kcov.h>
 #include <sys/malloc.h>
+#include <sys/mutex.h>
+#include <sys/pool.h>
 #include <sys/stdint.h>
 #include <sys/queue.h>
 
@@ -36,15 +38,42 @@
 #define KCOV_STATE_TRACE	2
 #define KCOV_STATE_DYING	3
 
+/*
+ * Coverage structure.
+ *
+ * Locking:
+ * 	I	immutable after creation
+ *	M	kcov_mtx
+ *	a	atomic operations
+ */
 struct kcov_dev {
-	int		 kd_state;
-	int		 kd_mode;
-	int		 kd_unit;	/* device minor */
-	uintptr_t	*kd_buf;	/* traced coverage */
-	size_t		 kd_nmemb;
-	size_t		 kd_size;
+	int		 kd_state;	/* [M] */
+	int		 kd_mode;	/* [M] */
+	int		 kd_unit;	/* [I] device minor */
+	uintptr_t	*kd_buf;	/* [a] traced coverage */
+	size_t		 kd_nmemb;	/* [I] */
+	size_t		 kd_size;	/* [I] */
 
-	TAILQ_ENTRY(kcov_dev)	kd_entry;
+	struct kcov_remote *kd_kr;	/* [M] */
+
+	TAILQ_ENTRY(kcov_dev)	kd_entry;	/* [M] */
+};
+
+/*
+ * Remote coverage structure.
+ *
+ * Locking:
+ * 	I	immutable after creation
+ *	M	kcov_mtx
+ */
+struct kcov_remote {
+	struct kcov_dev *kr_kd;	/* [M] */
+	void *kr_id;		/* [I] */
+	int kr_subsystem;	/* [I] */
+	int kr_nsections;	/* [M] # threads in remote section */
+	int kr_state;		/* [M] */
+
+	TAILQ_ENTRY(kcov_remote) kr_entry;	/* [M] */
 };
 
 void kcovattach(int);
@@ -53,11 +82,24 @@ int kd_init(struct kcov_dev *, unsigned long);
 void kd_free(struct kcov_dev *);
 struct kcov_dev *kd_lookup(int);
 
+struct kcov_remote *kcov_remote_register_locked(int, void *);
+int kcov_remote_attach(struct kcov_dev *, struct kio_remote_attach *);
+void kcov_remote_detach(struct kcov_dev *, struct kcov_remote *);
+void kr_free(struct kcov_remote *);
+void kr_barrier(struct kcov_remote *);
+struct kcov_remote *kr_lookup(int, void *);
+
 static struct kcov_dev *kd_curproc(int);
+static uint64_t kd_claim(struct kcov_dev *, int);
+static inline int inintr(void);
 
 TAILQ_HEAD(, kcov_dev) kd_list = TAILQ_HEAD_INITIALIZER(kd_list);
+TAILQ_HEAD(, kcov_remote) kr_list = TAILQ_HEAD_INITIALIZER(kr_list);
 
 int kcov_cold = 1;
+int kr_cold = 1;
+struct mutex kcov_mtx = MUTEX_INITIALIZER(IPL_MPFLOOR);
+struct pool kr_pool;
 
 /*
  * Compiling the kernel with the `-fsanitize-coverage=trace-pc' option will
@@ -80,11 +122,8 @@ __sanitizer_cov_trace_pc(void)
 	if (kd == NULL)
 		return;
 
-	idx = kd->kd_buf[0];
-	if (idx + 1 <= kd->kd_nmemb) {
-		kd->kd_buf[idx + 1] = (uintptr_t)__builtin_return_address(0);
-		kd->kd_buf[0] = idx + 1;
-	}
+	if ((idx = kd_claim(kd, 1)))
+		kd->kd_buf[idx] = (uintptr_t)__builtin_return_address(0);
 }
 
 /*
@@ -105,13 +144,11 @@ trace_cmp(uint64_t type, uint64_t arg1, uint64_t arg2, uintptr_t pc)
 	if (kd == NULL)
 		return;
 
-	idx = kd->kd_buf[0];
-	if (idx * 4 + 4 <= kd->kd_nmemb) {
-		kd->kd_buf[idx * 4 + 1] = type;
-		kd->kd_buf[idx * 4 + 2] = arg1;
-		kd->kd_buf[idx * 4 + 3] = arg2;
-		kd->kd_buf[idx * 4 + 4] = pc;
-		kd->kd_buf[0] = idx + 1;
+	if ((idx = kd_claim(kd, 4))) {
+		kd->kd_buf[idx] = type;
+		kd->kd_buf[idx + 1] = arg1;
+		kd->kd_buf[idx + 2] = arg2;
+		kd->kd_buf[idx + 3] = pc;
 	}
 }
 
@@ -206,6 +243,9 @@ __sanitizer_cov_trace_switch(uint64_t val, uint64_t *cases)
 void
 kcovattach(int count)
 {
+	pool_init(&kr_pool, sizeof(struct kcov_remote), 0, IPL_MPFLOOR, PR_WAITOK,
+	    "kcovpl", NULL);
+	kr_cold = 0;
 }
 
 int
@@ -213,15 +253,22 @@ kcovopen(dev_t dev, int flag, int mode, struct proc *p)
 {
 	struct kcov_dev *kd;
 
-	if (kd_lookup(minor(dev)) != NULL)
+	mtx_enter(&kcov_mtx);
+
+	if (kd_lookup(minor(dev)) != NULL) {
+		mtx_leave(&kcov_mtx);
 		return (EBUSY);
+	}
 
 	if (kcov_cold)
 		kcov_cold = 0;
 
+	mtx_leave(&kcov_mtx);
 	kd = malloc(sizeof(*kd), M_SUBPROC, M_WAITOK | M_ZERO);
 	kd->kd_unit = minor(dev);
+	mtx_enter(&kcov_mtx);
 	TAILQ_INSERT_TAIL(&kd_list, kd, kd_entry);
+	mtx_leave(&kcov_mtx);
 	return (0);
 }
 
@@ -230,11 +277,15 @@ kcovclose(dev_t dev, int flag, int mode, struct proc *p)
 {
 	struct kcov_dev *kd;
 
-	kd = kd_lookup(minor(dev));
-	if (kd == NULL)
-		return (EINVAL);
+	mtx_enter(&kcov_mtx);
 
-	if (kd->kd_state == KCOV_STATE_TRACE) {
+	kd = kd_lookup(minor(dev));
+	if (kd == NULL) {
+		mtx_leave(&kcov_mtx);
+		return (EINVAL);
+	}
+
+	if (kd->kd_state == KCOV_STATE_TRACE && kd->kd_kr == NULL) {
 		/*
 		 * Another thread is currently using the kcov descriptor,
 		 * postpone freeing to kcov_exit().
@@ -245,6 +296,7 @@ kcovclose(dev_t dev, int flag, int mode, struct proc *p)
 		kd_free(kd);
 	}
 
+	mtx_leave(&kcov_mtx);
 	return (0);
 }
 
@@ -255,9 +307,13 @@ kcovioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 	int mode;
 	int error = 0;
 
+	mtx_enter(&kcov_mtx);
+
 	kd = kd_lookup(minor(dev));
-	if (kd == NULL)
+	if (kd == NULL) {
+		mtx_leave(&kcov_mtx);
 		return (ENXIO);
+	}
 
 	switch (cmd) {
 	case KIOSETBUFSIZE:
@@ -276,21 +332,31 @@ kcovioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 		}
 		kd->kd_state = KCOV_STATE_TRACE;
 		kd->kd_mode = mode;
-		p->p_kd = kd;
+		/* Remote coverage is mutually exclusive. */
+		if (kd->kd_kr == NULL)
+			p->p_kd = kd;
 		break;
 	case KIODISABLE:
 		/* Only the enabled thread may disable itself. */
-		if (p->p_kd != kd || kd->kd_state != KCOV_STATE_TRACE) {
+		if ((p->p_kd != kd && kd->kd_kr == NULL) ||
+		    kd->kd_state != KCOV_STATE_TRACE) {
 			error = EBUSY;
 			break;
 		}
 		kd->kd_state = KCOV_STATE_READY;
 		kd->kd_mode = KCOV_MODE_NONE;
+		if (kd->kd_kr != NULL)
+			kr_barrier(kd->kd_kr);
 		p->p_kd = NULL;
+		break;
+	case KIOREMOTEATTACH:
+		error = kcov_remote_attach(kd,
+		    (struct kio_remote_attach *)data);
 		break;
 	default:
 		error = ENOTTY;
 	}
+	mtx_leave(&kcov_mtx);
 
 	return (error);
 }
@@ -299,19 +365,24 @@ paddr_t
 kcovmmap(dev_t dev, off_t offset, int prot)
 {
 	struct kcov_dev *kd;
-	paddr_t pa;
+	paddr_t pa = -1;
 	vaddr_t va;
+
+	mtx_enter(&kcov_mtx);
 
 	kd = kd_lookup(minor(dev));
 	if (kd == NULL)
-		return (paddr_t)(-1);
+		goto out;
 
 	if (offset < 0 || offset >= kd->kd_nmemb * KCOV_BUF_MEMB_SIZE)
-		return (paddr_t)(-1);
+		goto out;
 
 	va = (vaddr_t)kd->kd_buf + offset;
 	if (pmap_extract(pmap_kernel(), va, &pa) == FALSE)
-		return (paddr_t)(-1);
+		pa = -1;
+
+out:
+	mtx_leave(&kcov_mtx);
 	return (pa);
 }
 
@@ -320,23 +391,33 @@ kcov_exit(struct proc *p)
 {
 	struct kcov_dev *kd;
 
+	mtx_enter(&kcov_mtx);
+
 	kd = p->p_kd;
-	if (kd == NULL)
+	if (kd == NULL) {
+		mtx_leave(&kcov_mtx);
 		return;
+	}
 
 	if (kd->kd_state == KCOV_STATE_DYING) {
 		kd_free(kd);
 	} else {
 		kd->kd_state = KCOV_STATE_READY;
 		kd->kd_mode = KCOV_MODE_NONE;
+		if (kd->kd_kr != NULL)
+			kr_barrier(kd->kd_kr);
 	}
 	p->p_kd = NULL;
+
+	mtx_leave(&kcov_mtx);
 }
 
 struct kcov_dev *
 kd_lookup(int unit)
 {
 	struct kcov_dev *kd;
+
+	MUTEX_ASSERT_LOCKED(&kcov_mtx);
 
 	TAILQ_FOREACH(kd, &kd_list, kd_entry) {
 		if (kd->kd_unit == unit)
@@ -350,6 +431,7 @@ kd_init(struct kcov_dev *kd, unsigned long nmemb)
 {
 	void *buf;
 	size_t size;
+	int error;
 
 	KASSERT(kd->kd_buf == NULL);
 
@@ -360,28 +442,50 @@ kd_init(struct kcov_dev *kd, unsigned long nmemb)
 		return (EINVAL);
 
 	size = roundup(nmemb * KCOV_BUF_MEMB_SIZE, PAGE_SIZE);
+	mtx_leave(&kcov_mtx);
 	buf = km_alloc(size, &kv_any, &kp_zero, &kd_waitok);
-	if (buf == NULL)
-		return (ENOMEM);
+	if (buf == NULL) {
+		error = ENOMEM;
+		goto err;
+	}
 	/* km_malloc() can sleep, ensure the race was won. */
 	if (kd->kd_state != KCOV_STATE_NONE) {
-		km_free(buf, size, &kv_any, &kp_zero);
-		return (EBUSY);
+		error = EBUSY;
+		goto err;
 	}
+	mtx_enter(&kcov_mtx);
 	kd->kd_buf = buf;
 	/* The first element is reserved to hold the number of used elements. */
 	kd->kd_nmemb = nmemb - 1;
 	kd->kd_size = size;
 	kd->kd_state = KCOV_STATE_READY;
 	return (0);
+
+err:
+	if (buf != NULL)
+		km_free(buf, size, &kv_any, &kp_zero);
+	mtx_enter(&kcov_mtx);
+	return (error);
 }
 
 void
 kd_free(struct kcov_dev *kd)
 {
+	struct kcov_remote *kr;
+
+	MUTEX_ASSERT_LOCKED(&kcov_mtx);
+
 	TAILQ_REMOVE(&kd_list, kd, kd_entry);
-	if (kd->kd_buf != NULL)
+
+	kr = kd->kd_kr;
+	if (kr != NULL)
+		kcov_remote_detach(kd, kr);
+
+	if (kd->kd_buf != NULL) {
+		mtx_leave(&kcov_mtx);
 		km_free(kd->kd_buf, kd->kd_size, &kv_any, &kp_zero);
+		mtx_enter(&kcov_mtx);
+	}
 	free(kd, M_SUBPROC, sizeof(*kd));
 }
 
@@ -406,15 +510,237 @@ kd_curproc(int mode)
 		return (NULL);
 
 	/* Do not trace in interrupts to prevent noisy coverage. */
-#if defined(__amd64__) || defined(__arm__) || defined(__arm64__) || \
-    defined(__i386__)
-	if (curcpu()->ci_idepth > 0)
+	if (inintr())
 		return (NULL);
-#endif
 
 	kd = curproc->p_kd;
 	if (__predict_true(kd == NULL) || kd->kd_mode != mode)
 		return (NULL);
 	return (kd);
 
+}
+
+/*
+ * Claim stride number of elements in the coverage buffer. Returns the index of
+ * the first claimed element. If the claim cannot be fulfilled, zero is
+ * returned.
+ */
+static uint64_t
+kd_claim(struct kcov_dev *kd, int stride)
+{
+	uint64_t idx, was;
+
+	idx = kd->kd_buf[0];
+	for (;;) {
+		if (idx * stride + stride > kd->kd_nmemb)
+			return (0);
+
+		was = atomic_cas_ulong(&kd->kd_buf[0], idx, idx + 1);
+		if (was == idx)
+			return (idx * stride + 1);
+		idx = was;
+	}
+}
+
+static inline int
+inintr(void)
+{
+#if defined(__amd64__) || defined(__arm__) || defined(__arm64__) || \
+    defined(__i386__)
+	return (curcpu()->ci_idepth > 0);
+#else
+	return (0);
+#endif
+}
+
+void
+kcov_remote_enter(int subsystem, void *id)
+{
+	struct kcov_dev *kd;
+	struct kcov_remote *kr;
+
+	/*
+	 * We could end up here while executing a timeout triggered from a
+	 * softclock interrupt context. At this point, the current thread might
+	 * have kcov enabled and this is therefore not a remote section in the
+	 * sense that we're not executing in the context of another thread.
+	 */
+	if (inintr())
+		return;
+
+	mtx_enter(&kcov_mtx);
+	kr = kr_lookup(subsystem, id);
+	if (kr == NULL || kr->kr_state != KCOV_STATE_READY)
+		goto out;
+	kd = kr->kr_kd;
+	if (kd != NULL && kd->kd_state == KCOV_STATE_TRACE) {
+		kr->kr_nsections++;
+		KASSERT(curproc->p_kd == NULL);
+		curproc->p_kd = kd;
+	}
+out:
+	mtx_leave(&kcov_mtx);
+}
+
+void
+kcov_remote_leave(int subsystem, void *id)
+{
+	struct kcov_remote *kr;
+
+	/* See kcov_remote_enter(). */
+	if (inintr())
+		return;
+
+	mtx_enter(&kcov_mtx);
+	kr = kr_lookup(subsystem, id);
+	/*
+	 * The remote could have been absent when the same thread called
+	 * kcov_remote_enter() earlier, allowing the remote to be registered
+	 * while thread was inside the remote section. Therefore ensure we don't
+	 * give back a reference we didn't acquire.
+	 */
+	if (kr == NULL || curproc->p_kd == NULL || curproc->p_kd != kr->kr_kd)
+		goto out;
+	curproc->p_kd = NULL;
+	if (--kr->kr_nsections == 0)
+		wakeup(kr);
+out:
+	mtx_leave(&kcov_mtx);
+}
+
+void
+kcov_remote_register(int subsystem, void *id)
+{
+	mtx_enter(&kcov_mtx);
+	kcov_remote_register_locked(subsystem, id);
+	mtx_leave(&kcov_mtx);
+}
+
+void
+kcov_remote_unregister(int subsystem, void *id)
+{
+	struct kcov_remote *kr;
+
+	mtx_enter(&kcov_mtx);
+	kr = kr_lookup(subsystem, id);
+	if (kr != NULL)
+		kr_free(kr);
+	mtx_leave(&kcov_mtx);
+}
+
+struct kcov_remote *
+kcov_remote_register_locked(int subsystem, void *id)
+{
+	struct kcov_remote *kr, *tmp;
+
+	/* Do not allow registrations before the pool is initialized. */
+	KASSERT(kr_cold == 0);
+
+	/*
+	 * Temporarily release the mutex since the allocation could end up
+	 * sleeping.
+	 */
+	mtx_leave(&kcov_mtx);
+	kr = pool_get(&kr_pool, PR_WAITOK | PR_ZERO);
+	kr->kr_subsystem = subsystem;
+	kr->kr_id = id;
+	kr->kr_state = KCOV_STATE_NONE;
+	mtx_enter(&kcov_mtx);
+
+	for (;;) {
+		tmp = kr_lookup(subsystem, id);
+		if (tmp == NULL)
+			break;
+		if (tmp->kr_state != KCOV_STATE_DYING) {
+			pool_put(&kr_pool, kr);
+			return (NULL);
+		}
+		/*
+		 * The remote could already be deregistered while another
+		 * thread is currently inside a kcov remote section.
+		 */
+		KASSERT(tmp->kr_state == KCOV_STATE_DYING);
+		msleep_nsec(tmp, &kcov_mtx, PWAIT, "kcov", INFSLP);
+	}
+	TAILQ_INSERT_TAIL(&kr_list, kr, kr_entry);
+	return (kr);
+}
+
+int
+kcov_remote_attach(struct kcov_dev *kd, struct kio_remote_attach *arg)
+{
+	struct kcov_remote *kr = NULL;
+
+	MUTEX_ASSERT_LOCKED(&kcov_mtx);
+
+	if (kd->kd_state != KCOV_STATE_READY)
+		return (EBUSY);
+
+	if (arg->subsystem == KCOV_REMOTE_COMMON)
+		kr = kcov_remote_register_locked(KCOV_REMOTE_COMMON,
+		    curproc->p_p);
+	if (kr == NULL)
+		return (EINVAL);
+	if (kr->kr_state != KCOV_STATE_NONE)
+		return (EBUSY);
+
+	kr->kr_state = KCOV_STATE_READY;
+	kr->kr_kd = kd;
+	kd->kd_kr = kr;
+	return (0);
+}
+
+void
+kcov_remote_detach(struct kcov_dev *kd, struct kcov_remote *kr)
+{
+	MUTEX_ASSERT_LOCKED(&kcov_mtx);
+
+	KASSERT(kd == kr->kr_kd);
+	if (kr->kr_subsystem == KCOV_REMOTE_COMMON) {
+		kr_free(kr);
+	} else {
+		kr->kr_state = KCOV_STATE_NONE;
+		kr_barrier(kr);
+		kd->kd_kr = NULL;
+		kr->kr_kd = NULL;
+	}
+}
+
+void
+kr_free(struct kcov_remote *kr)
+{
+	MUTEX_ASSERT_LOCKED(&kcov_mtx);
+
+	kr->kr_state = KCOV_STATE_DYING;
+	kr_barrier(kr);
+	if (kr->kr_kd != NULL)
+		kr->kr_kd->kd_kr = NULL;
+	kr->kr_kd = NULL;
+	TAILQ_REMOVE(&kr_list, kr, kr_entry);
+	/* Notify thread(s) wating in kcov_remote_register(). */
+	wakeup(kr);
+	pool_put(&kr_pool, kr);
+}
+
+void
+kr_barrier(struct kcov_remote *kr)
+{
+	MUTEX_ASSERT_LOCKED(&kcov_mtx);
+
+	while (kr->kr_nsections > 0)
+		msleep_nsec(kr, &kcov_mtx, PWAIT, "kcovbar", INFSLP);
+}
+
+struct kcov_remote *
+kr_lookup(int subsystem, void *id)
+{
+	struct kcov_remote *kr;
+
+	MUTEX_ASSERT_LOCKED(&kcov_mtx);
+
+	TAILQ_FOREACH(kr, &kr_list, kr_entry) {
+		if (kr->kr_subsystem == subsystem && kr->kr_id == id)
+			return (kr);
+	}
+	return (NULL);
 }

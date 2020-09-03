@@ -1,4 +1,4 @@
-/* $OpenBSD: machine.c,v 1.107 2020/07/06 16:27:59 kn Exp $	 */
+/* $OpenBSD: machine.c,v 1.110 2020/08/26 16:21:28 kn Exp $	 */
 
 /*-
  * Copyright (c) 1994 Thorsten Lockert <tholo@sigmasoft.com>
@@ -75,8 +75,9 @@ struct handle {
 static char header[] =
 	"  PID X        PRI NICE  SIZE   RES STATE     WAIT      TIME    CPU COMMAND";
 
-/* 0123456   -- field to fill in starts at header+6 */
+/* offsets in the header line to start alternative columns */
 #define UNAME_START 6
+#define RTABLE_START 46
 
 #define Proc_format \
 	"%5d %-8.8s %3d %4d %5s %5s %-9s %-7.7s %6s %5.2f%% %s"
@@ -226,16 +227,16 @@ machine_init(struct statics *statics)
 }
 
 char *
-format_header(char *second_field)
+format_header(char *second_field, char *eighth_field)
 {
-	char *field_name, *thread_field = "     TID";
-	char *ptr;
-
-	field_name = second_field ? second_field : thread_field;
+	char *second_fieldp = second_field, *eighth_fieldp = eighth_field, *ptr;
 
 	ptr = header + UNAME_START;
-	while (*field_name != '\0')
-		*ptr++ = *field_name++;
+	while (*second_fieldp != '\0')
+		*ptr++ = *second_fieldp++;
+	ptr = header + RTABLE_START;
+	while (*eighth_fieldp != '\0')
+		*ptr++ = *eighth_fieldp++;
 	return (header);
 }
 
@@ -414,7 +415,7 @@ get_process_info(struct system_info *si, struct process_select *sel,
     int (*compare) (const void *, const void *))
 {
 	int show_idle, show_system, show_threads, show_uid, show_pid, show_cmd;
-	int hide_uid;
+	int show_rtableid, hide_rtableid, hide_uid;
 	int total_procs, active_procs;
 	struct kinfo_proc **prefp, *pp;
 	int what = KERN_PROC_ALL;
@@ -446,6 +447,8 @@ get_process_info(struct system_info *si, struct process_select *sel,
 	show_uid = sel->uid != (uid_t)-1;
 	hide_uid = sel->huid != (uid_t)-1;
 	show_pid = sel->pid != (pid_t)-1;
+	show_rtableid = sel->rtableid != -1;
+	hide_rtableid = sel->hrtableid != -1;
 	show_cmd = sel->command != NULL;
 
 	/* count up process states and get pointers to interesting procs */
@@ -474,6 +477,8 @@ get_process_info(struct system_info *si, struct process_select *sel,
 			    (!hide_uid || pp->p_ruid != sel->huid) &&
 			    (!show_uid || pp->p_ruid == sel->uid) &&
 			    (!show_pid || pp->p_pid == sel->pid) &&
+			    (!hide_rtableid || pp->p_rtableid != sel->hrtableid) &&
+			    (!show_rtableid || pp->p_rtableid == sel->rtableid) &&
 			    (!show_cmd || cmd_matches(pp, sel->command))) {
 				*prefp++ = pp;
 				active_procs++;
@@ -540,13 +545,12 @@ skip_processes(struct handle *hndl, int n)
 
 char *
 format_next_process(struct handle *hndl, const char *(*get_userid)(uid_t, int),
-    pid_t *pid)
+    int rtable, pid_t *pid)
 {
-	char *p_wait;
 	struct kinfo_proc *pp;
 	int cputime;
 	double pct;
-	char buf[16];
+	char second_buf[16], eighth_buf[8];
 
 	/* find and remember the next proc structure */
 	pp = *(hndl->next_proc++);
@@ -556,24 +560,26 @@ format_next_process(struct handle *hndl, const char *(*get_userid)(uid_t, int),
 	/* calculate the base for cpu percentages */
 	pct = (double)pp->p_pctcpu / fscale;
 
-	if (pp->p_wmesg[0])
-		p_wait = pp->p_wmesg;
-	else
-		p_wait = "-";
-
 	if (get_userid == NULL)
-		snprintf(buf, sizeof(buf), "%8d", pp->p_tid);
+		snprintf(second_buf, sizeof(second_buf), "%8d", pp->p_tid);
 	else
-		snprintf(buf, sizeof(buf), "%s", (*get_userid)(pp->p_ruid, 0));
+		strlcpy(second_buf, (*get_userid)(pp->p_ruid, 0),
+		    sizeof(second_buf));
+
+	if (rtable)
+		snprintf(eighth_buf, sizeof(eighth_buf), "%7d", pp->p_rtableid);
+	else
+		strlcpy(eighth_buf, pp->p_wmesg[0] ? pp->p_wmesg : "-",
+		    sizeof(eighth_buf));
 
 	/* format this entry */
-	snprintf(fmt, sizeof(fmt), Proc_format, pp->p_pid, buf,
+	snprintf(fmt, sizeof(fmt), Proc_format, pp->p_pid, second_buf,
 	    pp->p_priority - PZERO, pp->p_nice - NZERO,
 	    format_k(pagetok(PROCSIZE(pp))),
 	    format_k(pagetok(pp->p_vm_rssize)),
 	    (pp->p_stat == SSLEEP && pp->p_slptime > maxslp) ?
 	    "idle" : state_abbr(pp),
-	    p_wait, format_time(cputime), 100.0 * pct,
+	    eighth_buf, format_time(cputime), 100.0 * pct,
 	    printable(format_comm(pp)));
 
 	*pid = pp->p_pid;

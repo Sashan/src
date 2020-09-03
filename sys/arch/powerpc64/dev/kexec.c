@@ -1,4 +1,4 @@
-/*	$OpenBSD: kexec.c,v 1.3 2020/07/18 20:02:34 kettenis Exp $	*/
+/*	$OpenBSD: kexec.c,v 1.5 2020/09/02 16:07:31 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2019-2020 Visa Hankala
@@ -22,6 +22,7 @@
 #include <sys/exec_elf.h>
 #include <sys/malloc.h>
 #include <sys/proc.h>
+#include <sys/mount.h>
 #include <sys/reboot.h>
 
 #include <uvm/uvm_extern.h>
@@ -89,7 +90,7 @@ kexec_kexec(struct kexec_args *kargs, struct proc *p)
 	};
 	Elf_Ehdr eh;
 	Elf_Phdr *ph = NULL;
-	Elf_Shdr *sh = NULL;
+	Elf_Shdr *sh = NULL, *shp;
 	vaddr_t start = VM_MAX_ADDRESS;
 	vaddr_t end = 0;
 	paddr_t start_pa, initrd_pa;
@@ -97,6 +98,7 @@ kexec_kexec(struct kexec_args *kargs, struct proc *p)
 	caddr_t addr = NULL;
 	caddr_t symaddr = NULL;
 	size_t phsize, shsize, size, symsize;
+	char *shstr;
 	void *node;
 	int error, random, i;
 
@@ -188,6 +190,19 @@ kexec_kexec(struct kexec_args *kargs, struct proc *p)
 	error = kexec_read(kargs, symaddr, kargs->klen, 0);
 	if (error != 0)
 		goto fail;
+
+	vfs_shutdown(p);
+
+	shp = (Elf64_Shdr *)(symaddr + eh.e_shoff);
+	shstr = symaddr + shp[eh.e_shstrndx].sh_offset;
+	for (i = 0; i < eh.e_shnum; i++) {
+		if (shp[i].sh_type == SHT_SYMTAB ||
+		    shp[i].sh_type == SHT_STRTAB ||
+		    strcmp(shstr + shp[i].sh_name, ".debug_line") == 0 ||
+		    strcmp(shstr + shp[i].sh_name, ELF_CTF) == 0)
+			if (shp[i].sh_offset + shp[i].sh_size <= symsize)
+				shp[i].sh_flags |= SHF_ALLOC;
+	}
 
 	pmap_extract(pmap_kernel(), (vaddr_t)symaddr, &initrd_pa);
 

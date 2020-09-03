@@ -1,4 +1,4 @@
-/*	$OpenBSD: atascsi.c,v 1.143 2020/07/22 13:16:04 krw Exp $ */
+/*	$OpenBSD: atascsi.c,v 1.147 2020/09/03 12:41:29 krw Exp $ */
 
 /*
  * Copyright (c) 2007 David Gwynne <dlg@openbsd.org>
@@ -258,7 +258,6 @@ atascsi_probe(struct scsi_link *link)
 		break;
 	case ATA_PORT_T_ATAPI:
 		link->flags |= SDEV_ATAPI;
-		link->quirks |= SDEV_ONLYBIG;
 		break;
 	case ATA_PORT_T_PM:
 		if (link->lun != 0) {
@@ -515,13 +514,13 @@ atascsi_disk_cmd(struct scsi_xfer *xs)
 
 	switch (xs->cmd->opcode) {
 	case READ_COMMAND:
-	case READ_BIG:
+	case READ_10:
 	case READ_12:
 	case READ_16:
 		flags = ATA_F_READ;
 		break;
 	case WRITE_COMMAND:
-	case WRITE_BIG:
+	case WRITE_10:
 	case WRITE_12:
 	case WRITE_16:
 		flags = ATA_F_WRITE;
@@ -709,8 +708,8 @@ atascsi_disk_inquiry(struct scsi_xfer *xs)
 	bzero(&inq, sizeof(inq));
 
 	inq.device = T_DIRECT;
-	inq.version = 0x05; /* SPC-3 */
-	inq.response_format = 2;
+	inq.version = SCSI_REV_SPC3;
+	inq.response_format = SID_SCSI2_RESPONSE;
 	inq.additional_length = 32;
 	inq.flags |= SID_CmdQue;
 	bcopy("ATA     ", inq.vendor, sizeof(inq.vendor));
@@ -1734,8 +1733,8 @@ atascsi_pmp_inq(struct scsi_xfer *xs)
 
 	bzero(&inq, sizeof(inq));
 	inq.device = 0x1E;	/* "well known logical unit" seems reasonable */
-	inq.version = 0x05;	/* SPC-3? */
-	inq.response_format = 2;
+	inq.version = SCSI_REV_SPC3;
+	inq.response_format = SID_SCSI2_RESPONSE;
 	inq.additional_length = 32;
 	inq.flags |= SID_CmdQue;
 	bcopy("ATA     ", inq.vendor, sizeof(inq.vendor));

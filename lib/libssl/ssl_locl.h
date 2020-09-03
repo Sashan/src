@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_locl.h,v 1.282 2020/07/07 19:31:11 jsing Exp $ */
+/* $OpenBSD: ssl_locl.h,v 1.288 2020/09/01 12:40:53 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -475,6 +475,34 @@ typedef struct ssl_handshake_tls13_st {
 
 } SSL_HANDSHAKE_TLS13;
 
+struct tls12_record_layer;
+
+struct tls12_record_layer *tls12_record_layer_new(void);
+void tls12_record_layer_free(struct tls12_record_layer *rl);
+void tls12_record_layer_set_version(struct tls12_record_layer *rl,
+    uint16_t version);
+void tls12_record_layer_set_read_epoch(struct tls12_record_layer *rl,
+    uint16_t epoch);
+void tls12_record_layer_set_write_epoch(struct tls12_record_layer *rl,
+    uint16_t epoch);
+void tls12_record_layer_clear_read_state(struct tls12_record_layer *rl);
+void tls12_record_layer_clear_write_state(struct tls12_record_layer *rl);
+void tls12_record_layer_set_read_seq_num(struct tls12_record_layer *rl,
+    uint8_t *seq_num);
+void tls12_record_layer_set_write_seq_num(struct tls12_record_layer *rl,
+    uint8_t *seq_num);
+int tls12_record_layer_set_read_aead(struct tls12_record_layer *rl,
+    SSL_AEAD_CTX *aead_ctx);
+int tls12_record_layer_set_write_aead(struct tls12_record_layer *rl,
+    SSL_AEAD_CTX *aead_ctx);
+int tls12_record_layer_set_read_cipher_hash(struct tls12_record_layer *rl,
+    EVP_CIPHER_CTX *cipher_ctx, EVP_MD_CTX *hash_ctx, int stream_mac);
+int tls12_record_layer_set_write_cipher_hash(struct tls12_record_layer *rl,
+    EVP_CIPHER_CTX *cipher_ctx, EVP_MD_CTX *hash_ctx, int stream_mac);
+int tls12_record_layer_seal_record(struct tls12_record_layer *rl,
+    uint8_t content_type, const uint8_t *content, size_t content_len,
+    CBB *out);
+
 typedef struct ssl_ctx_internal_st {
 	uint16_t min_version;
 	uint16_t max_version;
@@ -736,6 +764,8 @@ typedef struct ssl_internal_st {
 	EVP_CIPHER_CTX *enc_write_ctx;		/* cryptographic state */
 	EVP_MD_CTX *write_hash;			/* used for mac generation */
 
+	struct tls12_record_layer *rl;
+
 	/* session info */
 
 	/* extra application data */
@@ -826,7 +856,6 @@ typedef struct ssl3_state_internal_st {
 	int empty_fragment_done;
 
 	SSL3_RECORD_INTERNAL rrec;	/* each decoded record goes in here */
-	SSL3_RECORD_INTERNAL wrec;	/* goes out from here */
 
 	/* storage for Alert/Handshake protocol data received but not
 	 * yet processed by ssl3_read_bytes: */
@@ -960,7 +989,7 @@ typedef struct dtls1_state_internal_st {
 	unsigned short handshake_read_seq;
 
 	/* save last sequence number for retransmissions */
-	unsigned char last_write_sequence[8];
+	unsigned char last_write_sequence[SSL3_SEQUENCE_SIZE];
 
 	/* Received handshake records (processed and unprocessed) */
 	record_pqueue unprocessed_rcds;
@@ -1132,7 +1161,8 @@ int ssl_cert_add1_chain_cert(CERT *c, X509 *cert);
 SESS_CERT *ssl_sess_cert_new(void);
 void ssl_sess_cert_free(SESS_CERT *sc);
 int ssl_get_new_session(SSL *s, int session);
-int ssl_get_prev_session(SSL *s, CBS *session_id, CBS *ext_block);
+int ssl_get_prev_session(SSL *s, CBS *session_id, CBS *ext_block,
+    int *alert);
 int ssl_cipher_id_cmp(const SSL_CIPHER *a, const SSL_CIPHER *b);
 SSL_CIPHER *OBJ_bsearch_ssl_cipher_id(SSL_CIPHER *key, SSL_CIPHER const *base,
     int num);
@@ -1367,8 +1397,13 @@ int ssl_check_clienthello_tlsext_early(SSL *s);
 int ssl_check_clienthello_tlsext_late(SSL *s);
 int ssl_check_serverhello_tlsext(SSL *s);
 
-int tls1_process_ticket(SSL *s, CBS *session_id, CBS *ext_block,
-    SSL_SESSION **ret);
+#define TLS1_TICKET_FATAL_ERROR		-1
+#define TLS1_TICKET_NONE		 0
+#define TLS1_TICKET_EMPTY		 1
+#define TLS1_TICKET_NOT_DECRYPTED	 2
+#define TLS1_TICKET_DECRYPTED		 3
+
+int tls1_process_ticket(SSL *s, CBS *ext_block, int *alert, SSL_SESSION **ret);
 
 long ssl_get_algorithm2(SSL *s);
 

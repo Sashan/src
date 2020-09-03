@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.104 2020/07/20 21:24:46 tobhe Exp $	*/
+/*	$OpenBSD: parse.y,v 1.109 2020/08/25 16:26:54 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -98,8 +98,12 @@ static int		 rules = 0;
 static int		 passive = 0;
 static int		 decouple = 0;
 static int		 mobike = 1;
+static int		 enforcesingleikesa = 0;
 static int		 fragmentation = 0;
+static int		 dpd_interval = IKED_IKE_SA_ALIVE_TIMEOUT;
 static char		*ocsp_url = NULL;
+static long		 ocsp_tolerate = 0;
+static long		 ocsp_maxage = -1;
 
 struct ipsec_xf {
 	const char	*name;
@@ -440,7 +444,9 @@ typedef struct {
 %token	IKEV1 FLOW SA TCPMD5 TUNNEL TRANSPORT COUPLE DECOUPLE SET
 %token	INCLUDE LIFETIME BYTES INET INET6 QUICK SKIP DEFAULT
 %token	IPCOMP OCSP IKELIFETIME MOBIKE NOMOBIKE RDOMAIN
-%token	FRAGMENTATION NOFRAGMENTATION
+%token	FRAGMENTATION NOFRAGMENTATION DPD_CHECK_INTERVAL
+%token	ENFORCESINGLEIKESA NOENFORCESINGLEIKESA
+%token	TOLERATE MAXAGE
 %token	<v.string>		STRING
 %token	<v.number>		NUMBER
 %type	<v.string>		string
@@ -506,11 +512,35 @@ set		: SET ACTIVE	{ passive = 0; }
 		| SET NOFRAGMENTATION	{ fragmentation = 0; }
 		| SET MOBIKE	{ mobike = 1; }
 		| SET NOMOBIKE	{ mobike = 0; }
+		| SET ENFORCESINGLEIKESA	{ enforcesingleikesa = 1; }
+		| SET NOENFORCESINGLEIKESA	{ enforcesingleikesa = 0; }
 		| SET OCSP STRING		{
 			if ((ocsp_url = strdup($3)) == NULL) {
 				yyerror("cannot set ocsp_url");
 				YYERROR;
 			}
+		}
+		| SET OCSP STRING TOLERATE time_spec {
+			if ((ocsp_url = strdup($3)) == NULL) {
+				yyerror("cannot set ocsp_url");
+				YYERROR;
+			}
+			ocsp_tolerate = $5;
+		}
+		| SET OCSP STRING TOLERATE time_spec MAXAGE time_spec {
+			if ((ocsp_url = strdup($3)) == NULL) {
+				yyerror("cannot set ocsp_url");
+				YYERROR;
+			}
+			ocsp_tolerate = $5;
+			ocsp_maxage = $7;
+		}
+		| SET DPD_CHECK_INTERVAL NUMBER {
+			if ($3 < 0) {
+				yyerror("timeout outside range");
+				YYERROR;
+			}
+			dpd_interval = $3;
 		}
 		;
 
@@ -1271,9 +1301,11 @@ lookup(char *s)
 		{ "couple",		COUPLE },
 		{ "decouple",		DECOUPLE },
 		{ "default",		DEFAULT },
+		{ "dpd_check_interval",	DPD_CHECK_INTERVAL },
 		{ "dstid",		DSTID },
 		{ "eap",		EAP },
 		{ "enc",		ENCXF },
+		{ "enforcesingleikesa",	ENFORCESINGLEIKESA },
 		{ "esn",		ESN },
 		{ "esp",		ESP },
 		{ "file",		FILENAME },
@@ -1291,8 +1323,10 @@ lookup(char *s)
 		{ "ipcomp",		IPCOMP },
 		{ "lifetime",		LIFETIME },
 		{ "local",		LOCAL },
+		{ "maxage",		MAXAGE },
 		{ "mobike",		MOBIKE },
 		{ "name",		NAME },
+		{ "noenforcesingleikesa",	NOENFORCESINGLEIKESA },
 		{ "noesn",		NOESN },
 		{ "nofragmentation",	NOFRAGMENTATION },
 		{ "nomobike",		NOMOBIKE },
@@ -1313,6 +1347,7 @@ lookup(char *s)
 		{ "tap",		TAP },
 		{ "tcpmd5",		TCPMD5 },
 		{ "to",			TO },
+		{ "tolerate",		TOLERATE },
 		{ "transport",		TRANSPORT },
 		{ "tunnel",		TUNNEL },
 		{ "user",		USER }
@@ -1695,7 +1730,12 @@ parse_config(const char *filename, struct iked *x_env)
 	free(ocsp_url);
 
 	mobike = 1;
+	enforcesingleikesa = 0;
+	ocsp_tolerate = 0;
+	ocsp_url = NULL;
+	ocsp_maxage = -1;
 	fragmentation = 0;
+	dpd_interval = IKED_IKE_SA_ALIVE_TIMEOUT;
 	decouple = passive = 0;
 	ocsp_url = NULL;
 
@@ -1709,8 +1749,12 @@ parse_config(const char *filename, struct iked *x_env)
 	env->sc_passive = passive ? 1 : 0;
 	env->sc_decoupled = decouple ? 1 : 0;
 	env->sc_mobike = mobike;
+	env->sc_enforcesingleikesa = enforcesingleikesa;
 	env->sc_frag = fragmentation;
+	env->sc_alive_timeout = dpd_interval;
 	env->sc_ocsp_url = ocsp_url;
+	env->sc_ocsp_tolerate = ocsp_tolerate;
+	env->sc_ocsp_maxage = ocsp_maxage;
 
 	if (!rules)
 		log_warnx("%s: no valid configuration rules found",
@@ -2567,7 +2611,6 @@ create_ike(char *name, int af, uint8_t ipproto,
     struct ipsec_addr_wrap *ikecfg)
 {
 	char			 idstr[IKED_ID_SIZE];
-	unsigned int		 idtype = IKEV2_ID_NONE;
 	struct ipsec_addr_wrap	*ipa, *ipb, *ippn;
 	struct iked_auth	*ikeauth;
 	struct iked_policy	 pol;
@@ -2979,24 +3022,11 @@ create_ike(char *name, int af, uint8_t ipproto,
 		cfg->cfg.address.addr_af = ipa->af;
 	}
 
-	if (dstid) {
+	if (dstid)
 		strlcpy(idstr, dstid, sizeof(idstr));
-		idtype = pol.pol_peerid.id_type;
-	} else if (!pol.pol_peer.addr_net) {
+	else if (!pol.pol_peer.addr_net)
 		print_host((struct sockaddr *)&pol.pol_peer.addr, idstr,
 		    sizeof(idstr));
-		switch (pol.pol_peer.addr.ss_family) {
-		case AF_INET:
-			idtype = IKEV2_ID_IPV4;
-			break;
-		case AF_INET6:
-			idtype = IKEV2_ID_IPV6;
-			break;
-		default:
-			log_warnx("%s: unknown address family", __func__);
-			break;
-		}
-	}
 
 	ikeauth = &pol.pol_auth;
 	switch (ikeauth->auth_method) {

@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_timeout.c,v 1.76 2020/07/25 00:48:04 cheloha Exp $	*/
+/*	$OpenBSD: kern_timeout.c,v 1.79 2020/08/07 00:45:25 cheloha Exp $	*/
 /*
  * Copyright (c) 2001 Thomas Nordin <nordin@openbsd.org>
  * Copyright (c) 2000-2001 Artur Grabowski <art@openbsd.org>
@@ -41,6 +41,11 @@
 #include <ddb/db_interface.h>
 #include <ddb/db_sym.h>
 #include <ddb/db_output.h>
+#endif
+
+#include "kcov.h"
+#if NKCOV > 0
+#include <sys/kcov.h>
 #endif
 
 /*
@@ -235,6 +240,7 @@ timeout_set_flags(struct timeout *to, void (*fn)(void *), void *arg, int flags)
 {
 	to->to_func = fn;
 	to->to_arg = arg;
+	to->to_process = NULL;
 	to->to_flags = flags | TIMEOUT_INITIALIZED;
 }
 
@@ -276,6 +282,9 @@ timeout_add(struct timeout *new, int to_ticks)
 		SET(new->to_flags, TIMEOUT_ONQUEUE);
 		CIRCQ_INSERT_TAIL(&timeout_new, &new->to_list);
 	}
+#if NKCOV > 0
+	new->to_process = curproc->p_p;
+#endif
 	tostat.tos_added++;
 	mtx_leave(&timeout_mutex);
 
@@ -291,35 +300,6 @@ timeout_add_tv(struct timeout *to, const struct timeval *tv)
 	if (to_ticks > INT_MAX)
 		to_ticks = INT_MAX;
 	if (to_ticks == 0 && tv->tv_usec > 0)
-		to_ticks = 1;
-
-	return timeout_add(to, (int)to_ticks);
-}
-
-int
-timeout_add_ts(struct timeout *to, const struct timespec *ts)
-{
-	uint64_t to_ticks;
-
-	to_ticks = (uint64_t)hz * ts->tv_sec + ts->tv_nsec / (tick * 1000);
-	if (to_ticks > INT_MAX)
-		to_ticks = INT_MAX;
-	if (to_ticks == 0 && ts->tv_nsec > 0)
-		to_ticks = 1;
-
-	return timeout_add(to, (int)to_ticks);
-}
-
-int
-timeout_add_bt(struct timeout *to, const struct bintime *bt)
-{
-	uint64_t to_ticks;
-
-	to_ticks = (uint64_t)hz * bt->sec + (long)(((uint64_t)1000000 *
-	    (uint32_t)(bt->frac >> 32)) >> 32) / tick;
-	if (to_ticks > INT_MAX)
-		to_ticks = INT_MAX;
-	if (to_ticks == 0 && bt->frac > 0)
 		to_ticks = 1;
 
 	return timeout_add(to, (int)to_ticks);
@@ -424,6 +404,7 @@ timeout_barrier(struct timeout *to)
 		struct timeout barrier;
 
 		timeout_set_proc(&barrier, timeout_proc_barrier, &c);
+		barrier.to_process = curproc->p_p;
 
 		mtx_enter(&timeout_mutex);
 		SET(barrier.to_flags, TIMEOUT_ONQUEUE);
@@ -492,7 +473,14 @@ timeout_run(struct timeout *to)
 
 	mtx_leave(&timeout_mutex);
 	timeout_sync_enter(needsproc);
+#if NKCOV > 0
+	struct process *kcov_process = to->to_process;
+	kcov_remote_enter(KCOV_REMOTE_COMMON, kcov_process);
+#endif
 	fn(arg);
+#if NKCOV > 0
+	kcov_remote_leave(KCOV_REMOTE_COMMON, kcov_process);
+#endif
 	timeout_sync_leave(needsproc);
 	mtx_enter(&timeout_mutex);
 }

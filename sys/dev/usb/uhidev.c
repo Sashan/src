@@ -1,4 +1,4 @@
-/*	$OpenBSD: uhidev.c,v 1.79 2020/02/22 14:01:34 jasper Exp $	*/
+/*	$OpenBSD: uhidev.c,v 1.83 2020/08/31 12:26:49 patrick Exp $	*/
 /*	$NetBSD: uhidev.c,v 1.14 2003/03/11 16:44:00 augustss Exp $	*/
 
 /*
@@ -150,8 +150,6 @@ uhidev_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_iface = uaa->iface;
 	sc->sc_ifaceno = uaa->ifaceno;
 	id = usbd_get_interface_descriptor(sc->sc_iface);
-
-	usbd_set_idle(sc->sc_udev, sc->sc_ifaceno, 0, 0);
 
 	sc->sc_iep_addr = sc->sc_oep_addr = -1;
 	for (i = 0; i < id->bNumEndpoints; i++) {
@@ -394,13 +392,11 @@ uhidev_detach(struct device *self, int flags)
 	DPRINTF(("uhidev_detach: sc=%p flags=%d\n", sc, flags));
 
 	if (sc->sc_opipe != NULL) {
-		usbd_abort_pipe(sc->sc_opipe);
 		usbd_close_pipe(sc->sc_opipe);
 		sc->sc_opipe = NULL;
 	}
 
 	if (sc->sc_ipipe != NULL) {
-		usbd_abort_pipe(sc->sc_ipipe);
 		usbd_close_pipe(sc->sc_ipipe);
 		sc->sc_ipipe = NULL;
 	}
@@ -540,13 +536,13 @@ uhidev_open(struct uhidev *scd)
 
 		err = usbd_open_pipe(sc->sc_iface, sc->sc_oep_addr,
 		    0, &sc->sc_opipe);
-
 		if (err != USBD_NORMAL_COMPLETION) {
 			DPRINTF(("uhidev_open: usbd_open_pipe failed, "
 			    "error=%d\n", err));
 			error = EIO;
 			goto out2;
 		}
+
 		DPRINTF(("uhidev_open: sc->sc_opipe=%p\n", sc->sc_opipe));
 
 		sc->sc_oxfer = usbd_alloc_xfer(sc->sc_udev);
@@ -608,13 +604,11 @@ uhidev_close(struct uhidev *scd)
 
 	/* Disable interrupts. */
 	if (sc->sc_opipe != NULL) {
-		usbd_abort_pipe(sc->sc_opipe);
 		usbd_close_pipe(sc->sc_opipe);
 		sc->sc_opipe = NULL;
 	}
 
 	if (sc->sc_ipipe != NULL) {
-		usbd_abort_pipe(sc->sc_ipipe);
 		usbd_close_pipe(sc->sc_ipipe);
 		sc->sc_ipipe = NULL;
 	}

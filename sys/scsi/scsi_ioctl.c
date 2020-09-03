@@ -1,4 +1,4 @@
-/*	$OpenBSD: scsi_ioctl.c,v 1.64 2020/07/16 14:44:55 krw Exp $	*/
+/*	$OpenBSD: scsi_ioctl.c,v 1.66 2020/08/19 22:46:19 krw Exp $	*/
 /*	$NetBSD: scsi_ioctl.c,v 1.23 1996/10/12 23:23:17 christos Exp $	*/
 
 /*
@@ -45,6 +45,7 @@
 #include <sys/fcntl.h>
 
 #include <scsi/scsi_all.h>
+#include <scsi/scsi_debug.h>
 #include <scsi/scsiconf.h>
 
 #include <sys/scsiio.h>
@@ -299,7 +300,7 @@ scsi_do_ioctl(struct scsi_link *link, u_long cmd, caddr_t addr, int flag)
 	case SCIOCIDENTIFY: {
 		struct scsi_addr *sca = (struct scsi_addr *)addr;
 
-		if ((link->flags & (SDEV_ATAPI | SDEV_UMASS)) == 0)
+		if (!ISSET(link->flags, (SDEV_ATAPI | SDEV_UMASS)))
 			/* A 'real' SCSI target. */
 			sca->type = TYPE_SCSI;
 		else

@@ -1,4 +1,4 @@
-/*	$OpenBSD: phb.c,v 1.12 2020/07/14 20:40:48 kettenis Exp $	*/
+/*	$OpenBSD: phb.c,v 1.15 2020/09/01 19:12:11 kettenis Exp $	*/
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -101,6 +101,7 @@ int	phb_bs_iomap(bus_space_tag_t, bus_addr_t, bus_size_t, int,
 	    bus_space_handle_t *);
 int	phb_bs_memmap(bus_space_tag_t, bus_addr_t, bus_size_t, int,
 	    bus_space_handle_t *);
+paddr_t phb_bs_mmap(bus_space_tag_t, bus_addr_t, off_t, int, int);
 int	phb_dmamap_load_buffer(bus_dma_tag_t, bus_dmamap_t, void *,
 	    bus_size_t, struct proc *, int, paddr_t *, int *, int);
 int	phb_dmamap_load_raw(bus_dma_tag_t, bus_dmamap_t,
@@ -111,7 +112,8 @@ phb_match(struct device *parent, void *match, void *aux)
 {
 	struct fdt_attach_args *faa = aux;
 
-	return OF_is_compatible(faa->fa_node, "ibm,ioda3-phb");
+	return (OF_is_compatible(faa->fa_node, "ibm,ioda2-phb") ||
+	    OF_is_compatible(faa->fa_node, "ibm,ioda3-phb"));
 }
 
 void
@@ -251,7 +253,7 @@ phb_attach(struct device *parent, struct device *self, void *aux)
 	/*
 	 * Enable all the 64-bit mmio windows we found.
 	 */
-	m64ranges[0] = 1; m64ranges[1] = 0;
+	m64ranges[0] = 0; m64ranges[1] = 16;
 	OF_getpropintarray(sc->sc_node, "ibm,opal-available-m64-ranges",
 	    m64ranges, sizeof(m64ranges));
 	window = m64ranges[0];
@@ -328,6 +330,7 @@ phb_attach(struct device *parent, struct device *self, void *aux)
 	memcpy(&sc->sc_bus_memt, sc->sc_iot, sizeof(sc->sc_bus_memt));
 	sc->sc_bus_memt.bus_private = sc;
 	sc->sc_bus_memt._space_map = phb_bs_memmap;
+	sc->sc_bus_memt._space_mmap = phb_bs_mmap;
 	sc->sc_bus_memt._space_read_2 = little_space_read_2;
 	sc->sc_bus_memt._space_read_4 = little_space_read_4;
 	sc->sc_bus_memt._space_read_8 = little_space_read_8;
@@ -389,11 +392,40 @@ phb_bus_maxdevs(void *v, int bus)
 	return 32;
 }
 
+int
+phb_find_node(int node, int bus, int device, int function)
+{
+	uint32_t reg[5];
+	uint32_t phys_hi;
+	int child;
+
+	phys_hi = ((bus << 16) | (device << 11) | (function << 8));
+
+	for (child = OF_child(node); child; child = OF_peer(child)) {
+		if (OF_getpropintarray(child, "reg",
+		    reg, sizeof(reg)) != sizeof(reg))
+			continue;
+
+		if (reg[0] == phys_hi)
+			return child;
+
+		node = phb_find_node(child, bus, device, function);
+		if (node)
+			return node;
+	}
+
+	return 0;
+}
+
 pcitag_t
 phb_make_tag(void *v, int bus, int device, int function)
 {
-	/* Return OPAL bus_dev_func. */
-	return ((bus << 8) | (device << 3) | (function << 0));
+	struct phb_softc *sc = v;
+	int node;
+
+	node = phb_find_node(sc->sc_node, bus, device, function);
+	return (((pcitag_t)node << 32) |
+	    (bus << 8) | (device << 3) | (function << 0));
 }
 
 void
@@ -422,6 +454,7 @@ phb_conf_read(void *v, pcitag_t tag, int reg)
 	uint16_t pci_error_state;
 	uint8_t freeze_state;
 
+	tag = PCITAG_OFFSET(tag);
 	error = opal_pci_config_read_word(sc->sc_phb_id,
 	    tag, reg, opal_phys(&data));
 	if (error == OPAL_SUCCESS && data != 0xffffffff)
@@ -445,6 +478,7 @@ phb_conf_write(void *v, pcitag_t tag, int reg, pcireg_t data)
 {
 	struct phb_softc *sc = v;
 
+	tag = PCITAG_OFFSET(tag);
 	opal_pci_config_write_word(sc->sc_phb_id, tag, reg, data);
 }
 
@@ -598,6 +632,28 @@ phb_bs_memmap(bus_space_tag_t t, bus_addr_t addr, bus_size_t size,
 	}
 
 	return ENXIO;
+}
+
+paddr_t
+phb_bs_mmap(bus_space_tag_t t, bus_addr_t addr, off_t off,
+    int prot, int flags)
+{
+	struct phb_softc *sc = t->bus_private;
+	int i;
+
+	for (i = 0; i < sc->sc_nranges; i++) {
+		uint64_t pci_start = sc->sc_ranges[i].pci_base;
+		uint64_t pci_end = pci_start + sc->sc_ranges[i].size;
+		uint64_t phys_start = sc->sc_ranges[i].phys_base;
+
+		if ((sc->sc_ranges[i].flags & 0x02000000) == 0x02000000 &&
+		    addr >= pci_start && addr + PAGE_SIZE <= pci_end) {
+			return bus_space_mmap(sc->sc_iot,
+			    addr - pci_start + phys_start, off, prot, flags);
+		}
+	}
+
+	return -1;
 }
 
 int

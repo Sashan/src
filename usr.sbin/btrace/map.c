@@ -1,4 +1,4 @@
-/*	$OpenBSD: map.c,v 1.8 2020/07/11 14:52:14 mpi Exp $ */
+/*	$OpenBSD: map.c,v 1.10 2020/08/13 11:31:47 mpi Exp $ */
 
 /*
  * Copyright (c) 2020 Martin Pieuchot <mpi@openbsd.org>
@@ -42,8 +42,6 @@
 #endif
 
 RB_HEAD(map, mentry);
-
-#define	KLEN 256
 
 struct mentry {
 	RB_ENTRY(mentry)	 mlink;
@@ -291,7 +289,7 @@ hist_print_bucket(char *buf, size_t buflen, long upb, long hstep)
 		/* Power-of-two histogram */
 		if (upb < 0) {
 			l = snprintf(buf, buflen, "(..., 0)");
-		} else if (upb < 2) {
+		} else if (upb == 0) {
 			l = snprintf(buf, buflen, "[%lu]", upb);
 		} else {
 			long lob = upb / 2;

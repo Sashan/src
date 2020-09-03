@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.38 2020/07/25 10:11:38 kettenis Exp $ */
+/*	$OpenBSD: pmap.c,v 1.45 2020/08/30 18:55:04 kettenis Exp $ */
 
 /*
  * Copyright (c) 2015 Martin Pieuchot
@@ -50,6 +50,8 @@
 #include <sys/param.h>
 #include <sys/atomic.h>
 #include <sys/pool.h>
+#include <sys/proc.h>
+#include <sys/user.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -333,23 +335,24 @@ pmap_slbd_lookup(pmap_t pm, vaddr_t va)
 void
 pmap_slbd_cache(pmap_t pm, struct slb_desc *slbd)
 {
+	struct pcb *pcb = &curproc->p_addr->u_pcb;
 	uint64_t slbe, slbv;
 	int idx;
 
-	PMAP_VP_ASSERT_LOCKED(pm);
+	KASSERT(curproc->p_vmspace->vm_map.pmap == pm);
 
-	for (idx = 0; idx < nitems(pm->pm_slb); idx++) {
-		if (pm->pm_slb[idx].slb_slbe == 0)
+	for (idx = 0; idx < nitems(pcb->pcb_slb); idx++) {
+		if (pcb->pcb_slb[idx].slb_slbe == 0)
 			break;
 	}
-	if (idx == nitems(pm->pm_slb))
-		idx = arc4random_uniform(nitems(pm->pm_slb));
+	if (idx == nitems(pcb->pcb_slb))
+		idx = arc4random_uniform(nitems(pcb->pcb_slb));
 
 	slbe = (slbd->slbd_esid << SLBE_ESID_SHIFT) | SLBE_VALID | idx;
 	slbv = slbd->slbd_vsid << SLBV_VSID_SHIFT;
 
-	pm->pm_slb[idx].slb_slbe = slbe;
-	pm->pm_slb[idx].slb_slbv = slbv;
+	pcb->pcb_slb[idx].slb_slbe = slbe;
+	pcb->pcb_slb[idx].slb_slbv = slbv;
 }
 
 int
@@ -369,7 +372,7 @@ pmap_slbd_fault(pmap_t pm, vaddr_t va)
 	return EFAULT;
 }
 
-u_int pmap_vsid;
+u_long pmap_vsid;
 
 struct slb_desc *
 pmap_slbd_alloc(pmap_t pm, vaddr_t va)
@@ -385,7 +388,7 @@ pmap_slbd_alloc(pmap_t pm, vaddr_t va)
 		return NULL;
 
 	slbd->slbd_esid = esid;
-	slbd->slbd_vsid = atomic_inc_int_nv(&pmap_vsid);
+	slbd->slbd_vsid = atomic_inc_long_nv(&pmap_vsid);
 	KASSERT((slbd->slbd_vsid & KERNEL_VSID_BIT) == 0);
 	LIST_INSERT_HEAD(&pm->pm_slbd, slbd, slbd_list);
 
@@ -449,18 +452,25 @@ pmap_set_user_slb(pmap_t pm, vaddr_t va, vaddr_t *kva, vsize_t *len)
 }
 
 void
-pmap_unset_user_slb(void)
+pmap_clear_user_slb(void)
 {
 	struct cpu_info *ci = curcpu();
 
-	curpcb->pcb_userva = 0;
+	if (ci->ci_kernel_slb[31].slb_slbe != 0) {
+		isync();
+		slbie(ci->ci_kernel_slb[31].slb_slbe);
+		isync();
+	}
 
-	isync();
-	slbie(ci->ci_kernel_slb[31].slb_slbe);
-	isync();
-	
 	ci->ci_kernel_slb[31].slb_slbe = 0;
 	ci->ci_kernel_slb[31].slb_slbv = 0;
+}
+
+void
+pmap_unset_user_slb(void)
+{
+	curpcb->pcb_userva = 0;
+	pmap_clear_user_slb();
 }
 
 /*
@@ -651,6 +661,9 @@ pmap_fill_pte(pmap_t pm, vaddr_t va, paddr_t pa, struct pte_desc *pted,
 
 	pte->pte_hi = (pmap_pted2avpn(pted) & PTE_AVPN) | PTE_VALID;
 	pte->pte_lo = (pa & PTE_RPGN);
+
+	if (pm == pmap_kernel())
+		pte->pte_hi |= PTE_WIRED;
 
 	if (prot & PROT_WRITE)
 		pte->pte_lo |= PTE_RW;
@@ -858,6 +871,7 @@ pmap_create(void)
 
 	pm = pool_get(&pmap_pmap_pool, PR_WAITOK | PR_ZERO);
 	pm->pm_refs = 1;
+	PMAP_VP_LOCK_INIT(pm);
 	LIST_INIT(&pm->pm_slbd);
 	return pm;
 }
@@ -1445,8 +1459,13 @@ pmap_bootstrap_cpu(void)
 	/* Clear TLB. */
 	tlbia();
 
-	/* Set partition table. */
-	mtptcr((paddr_t)pmap_pat | PATSIZE);
+	if (cpu_features2 & PPC_FEATURE2_ARCH_3_00) {
+		/* Set partition table. */
+		mtptcr((paddr_t)pmap_pat | PATSIZE);
+	} else {
+		/* Set page table. */
+		mtsdr1((paddr_t)pmap_ptable | HTABSIZE);
+	}
 
 	/* Load SLB. */
 	for (idx = 0; idx < 31; idx++) {

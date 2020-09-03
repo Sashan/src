@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_spppsubr.c,v 1.184 2020/07/10 13:26:42 patrick Exp $	*/
+/*	$OpenBSD: if_spppsubr.c,v 1.186 2020/08/22 16:12:12 kn Exp $	*/
 /*
  * Synchronous PPP link level subroutines.
  *
@@ -68,7 +68,6 @@
 # define UNTIMEOUT(fun, arg, handle)	\
 	timeout_del(&(handle))
 
-#define LOOPALIVECNT			3	/* loopback detection tries */
 #define MAXALIVECNT			3	/* max. missed alive packets */
 #define	NORECV_TIME			15	/* before we get worried */
 
@@ -1738,7 +1737,7 @@ sppp_lcp_RCR(struct sppp *sp, struct lcp_header *h, int len)
 
 	len -= 4;
 	origlen = len;
-	buf = r = malloc (len, M_TEMP, M_NOWAIT);
+	buf = r = malloc (origlen, M_TEMP, M_NOWAIT);
 	if (! buf)
 		return (0);
 
@@ -1750,7 +1749,7 @@ sppp_lcp_RCR(struct sppp *sp, struct lcp_header *h, int len)
 	p = (void*) (h+1);
 	for (rlen = 0; len > 1; len -= p[1], p += p[1]) {
 		if (p[1] < 2 || p[1] > len) {
-			free(buf, M_TEMP, 0);
+			free(buf, M_TEMP, origlen);
 			return (-1);
 		}
 		if (debug)
@@ -1927,7 +1926,7 @@ sppp_lcp_RCR(struct sppp *sp, struct lcp_header *h, int len)
 	}
 
  end:
-	free(buf, M_TEMP, 0);
+	free(buf, M_TEMP, origlen);
 	return (rlen == 0);
 }
 
@@ -2313,7 +2312,7 @@ sppp_ipcp_RCR(struct sppp *sp, struct lcp_header *h, int len)
 {
 	u_char *buf, *r, *p;
 	struct ifnet *ifp = &sp->pp_if;
-	int rlen, origlen, debug = ifp->if_flags & IFF_DEBUG;
+	int rlen, origlen, buflen, debug = ifp->if_flags & IFF_DEBUG;
 	u_int32_t hisaddr, desiredaddr;
 
 	len -= 4;
@@ -2322,7 +2321,8 @@ sppp_ipcp_RCR(struct sppp *sp, struct lcp_header *h, int len)
 	 * Make sure to allocate a buf that can at least hold a
 	 * conf-nak with an `address' option.  We might need it below.
 	 */
-	buf = r = malloc ((len < 6? 6: len), M_TEMP, M_NOWAIT);
+	buflen = len < 6? 6: len;
+	buf = r = malloc (buflen, M_TEMP, M_NOWAIT);
 	if (! buf)
 		return (0);
 
@@ -2333,7 +2333,7 @@ sppp_ipcp_RCR(struct sppp *sp, struct lcp_header *h, int len)
 	p = (void*) (h+1);
 	for (rlen = 0; len > 1; len -= p[1], p += p[1]) {
 		if (p[1] < 2 || p[1] > len) {
-			free(buf, M_TEMP, 0);
+			free(buf, M_TEMP, buflen);
 			return (-1);
 		}
 		if (debug)
@@ -2477,7 +2477,7 @@ sppp_ipcp_RCR(struct sppp *sp, struct lcp_header *h, int len)
 	}
 
  end:
-	free(buf, M_TEMP, 0);
+	free(buf, M_TEMP, buflen);
 	return (rlen == 0);
 }
 
@@ -2774,7 +2774,7 @@ sppp_ipv6cp_RCR(struct sppp *sp, struct lcp_header *h, int len)
 {
 	u_char *buf, *r, *p;
 	struct ifnet *ifp = &sp->pp_if;
-	int rlen, origlen, debug = ifp->if_flags & IFF_DEBUG;
+	int rlen, origlen, buflen, debug = ifp->if_flags & IFF_DEBUG;
 	struct in6_addr myaddr, desiredaddr, suggestaddr;
 	int ifidcount;
 	int type;
@@ -2787,7 +2787,8 @@ sppp_ipv6cp_RCR(struct sppp *sp, struct lcp_header *h, int len)
 	 * Make sure to allocate a buf that can at least hold a
 	 * conf-nak with an `address' option.  We might need it below.
 	 */
-	buf = r = malloc ((len < 6? 6: len), M_TEMP, M_NOWAIT);
+	buflen = len < 6? 6: len;
+	buf = r = malloc (buflen, M_TEMP, M_NOWAIT);
 	if (! buf)
 		return (0);
 
@@ -2800,7 +2801,7 @@ sppp_ipv6cp_RCR(struct sppp *sp, struct lcp_header *h, int len)
 	for (rlen=0; len>1 && p[1]; len-=p[1], p+=p[1]) {
 		/* Sanity check option length */
 		if (p[1] < 2 || p[1] > len) {
-			free(buf, M_TEMP, 0);
+			free(buf, M_TEMP, buflen);
 			return (-1);
 		}
 		if (debug)
@@ -2934,7 +2935,7 @@ sppp_ipv6cp_RCR(struct sppp *sp, struct lcp_header *h, int len)
 	}
 
 end:
-	free(buf, M_TEMP, 0);
+	free(buf, M_TEMP, buflen);
 	return (rlen == 0);
 }
 
@@ -4476,10 +4477,10 @@ sppp_get_params(struct sppp *sp, struct ifreq *ifr)
 		spr->phase = sp->pp_phase;
 
 		if (copyout(spr, (caddr_t)ifr->ifr_data, sizeof(*spr)) != 0) {
-			free(spr, M_DEVBUF, 0);
+			free(spr, M_DEVBUF, sizeof(*spr));
 			return EFAULT;
 		}
-		free(spr, M_DEVBUF, 0);
+		free(spr, M_DEVBUF, sizeof(*spr));
 		break;
 	}
 	case SPPPIOGMAUTH:
@@ -4499,10 +4500,10 @@ sppp_get_params(struct sppp *sp, struct ifreq *ifr)
 			strlcpy(spa->name, auth->name, sizeof(spa->name));
 
 		if (copyout(spa, (caddr_t)ifr->ifr_data, sizeof(*spa)) != 0) {
-			free(spa, M_DEVBUF, 0);
+			free(spa, M_DEVBUF, sizeof(*spa));
 			return EFAULT;
 		}
-		free(spa, M_DEVBUF, 0);
+		free(spa, M_DEVBUF, sizeof(*spa));
 		break;
 	}
 	default:
@@ -4529,7 +4530,7 @@ sppp_set_params(struct sppp *sp, struct ifreq *ifr)
 		spr = malloc(sizeof(*spr), M_DEVBUF, M_WAITOK);
 
 		if (copyin((caddr_t)ifr->ifr_data, spr, sizeof(*spr)) != 0) {
-			free(spr, M_DEVBUF, 0);
+			free(spr, M_DEVBUF, sizeof(*spr));
 			return EFAULT;
 		}
 		/*
@@ -4538,7 +4539,7 @@ sppp_set_params(struct sppp *sp, struct ifreq *ifr)
 		 *
 		 * XXX Should allow to set or clear pp_flags.
 		 */
-		free(spr, M_DEVBUF, 0);
+		free(spr, M_DEVBUF, sizeof(*spr));
 		break;
 	}
 	case SPPPIOSMAUTH:
@@ -4565,13 +4566,13 @@ sppp_set_params(struct sppp *sp, struct ifreq *ifr)
 		auth = (cmd == SPPPIOSMAUTH) ? &sp->myauth : &sp->hisauth;
 
 		if (copyin((caddr_t)ifr->ifr_data, spa, sizeof(*spa)) != 0) {
-			free(spa, M_DEVBUF, 0);
+			free(spa, M_DEVBUF, sizeof(*spa));
 			return EFAULT;
 		}
 
 		if (spa->proto != 0 && spa->proto != PPP_PAP &&
 		    spa->proto != PPP_CHAP) {
-			free(spa, M_DEVBUF, 0);
+			free(spa, M_DEVBUF, sizeof(*spa));
 			return EINVAL;
 		}
 
@@ -4610,7 +4611,7 @@ sppp_set_params(struct sppp *sp, struct ifreq *ifr)
 				auth->secret = p;
 			}
 		}
-		free(spa, M_DEVBUF, 0);
+		free(spa, M_DEVBUF, sizeof(*spa));
 		break;
 	}
 	default:

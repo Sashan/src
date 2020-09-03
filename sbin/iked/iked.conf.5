@@ -1,4 +1,4 @@
-.\" $OpenBSD: iked.conf.5,v 1.72 2020/07/21 12:33:02 kn Exp $
+.\" $OpenBSD: iked.conf.5,v 1.77 2020/08/26 14:49:48 tobhe Exp $
 .\"
 .\" Copyright (c) 2010 - 2014 Reyk Floeter <reyk@openbsd.org>
 .\" Copyright (c) 2004 Mathieu Sauve-Frankel  All rights reserved.
@@ -15,7 +15,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: July 21 2020 $
+.Dd $Mdocdate: August 26 2020 $
 .Dt IKED.CONF 5
 .Os
 .Sh NAME
@@ -148,6 +148,22 @@ This is the default.
 .It Ic set decouple
 Don't load the negotiated SAs and flows from the kernel.
 This mode is only useful for testing and debugging.
+.It Ic set dpd_check_interval Ar time
+Specify the liveness check interval, in seconds.
+Setting
+.Ar time
+to 0 disables DPD.
+The default value is 60 seconds.
+.It Ic set enforcesingleikesa
+Allow only a single active IKE SA for each
+.Ic dstid .
+When a new SA with the same
+.Ic dstid
+is established, it replaces the old SA.
+.It Ic set noenforcesingleikesa
+Don't limit the number of IKE SAs per
+.Ic dstid .
+This is the default.
 .It Ic set fragmentation
 Enable IKEv2 Message Fragmentation (RFC 7383) support.
 This allows IKEv2 to operate in environments that might block IP fragments.
@@ -163,13 +179,31 @@ Currently
 only supports MOBIKE when acting as a responder.
 .It Ic set nomobike
 Disables MOBIKE support.
-.It Ic set ocsp Ar URL
-Enable OCSP and set the URL of the OCSP responder.
-Please note that the matching responder and issuer certificates
+.It Ic set ocsp Ar URL Op Ic tolerate Ar time Op Ic maxage Ar time
+Enable OCSP and set the fallback URL of the OCSP responder.
+This fallback will be used if the trusted CA from
+.Pa /etc/iked/ca/
+does not have an OCSP-URL extension.
+Please note that the matching responder certificates
 have to be placed in
-.Pa /etc/iked/ocsp/responder.crt
-and
-.Pa /etc/iked/ocsp/issuer.crt .
+.Pa /etc/iked/ocsp/responder.crt .
+.Pp
+The optional
+.Ic tolerate
+parameter specifies how much the OCSP reponse attribute
+.Sq thisUpdate
+may be in the future and how much
+.Sq nextUpdate
+may be in the past, with respect to the local time.
+The optional
+.Ic maxage
+parameter specifies how much
+.Sq thisUpdate
+may be in the past.
+If
+.Ic tolerate
+is set to 0 then the times are not verified at all.
+This is the default setting.
 .It Ic user Ar name password
 .Xr iked 8
 supports user-based authentication by tunneling the Extensible
