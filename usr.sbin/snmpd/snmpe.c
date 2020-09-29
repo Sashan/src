@@ -1,4 +1,4 @@
-/*	$OpenBSD: snmpe.c,v 1.65 2020/08/23 07:39:57 martijn Exp $	*/
+/*	$OpenBSD: snmpe.c,v 1.67 2020/09/06 17:29:35 martijn Exp $	*/
 
 /*
  * Copyright (c) 2007, 2008, 2012 Reyk Floeter <reyk@openbsd.org>
@@ -46,7 +46,6 @@ void	 snmpe_tryparse(int, struct snmp_message *);
 int	 snmpe_parsevarbinds(struct snmp_message *);
 void	 snmpe_response(struct snmp_message *);
 void	 snmpe_sig_handler(int sig, short, void *);
-int	 snmpe_dispatch_parent(int, struct privsep_proc *, struct imsg *);
 int	 snmpe_bind(struct address *);
 void	 snmpe_recvmsg(int fd, short, void *);
 void	 snmpe_readcb(int fd, short, void *);
@@ -60,7 +59,7 @@ struct imsgev	*iev_parent;
 static const struct timeval	snmpe_tcp_timeout = { 10, 0 }; /* 10s */
 
 static struct privsep_proc procs[] = {
-	{ "parent",	PROC_PARENT,	snmpe_dispatch_parent }
+	{ "parent",	PROC_PARENT }
 };
 
 void
@@ -102,7 +101,7 @@ snmpe_init(struct privsep *ps, struct privsep_proc *p, void *arg)
 
 	/* listen for incoming SNMP UDP/TCP messages */
 	TAILQ_FOREACH(h, &env->sc_addresses, entry) {
-		if (h->ipproto == IPPROTO_TCP) {
+		if (h->type == SOCK_STREAM) {
 			if (listen(h->fd, 5) < 0)
 				fatalx("snmpe: failed to listen on socket");
 			event_set(&h->ev, h->fd, EV_READ, snmpe_acceptcb, h);
@@ -128,22 +127,11 @@ snmpe_shutdown(void)
 
 	TAILQ_FOREACH(h, &snmpd_env->sc_addresses, entry) {
 		event_del(&h->ev);
-		if (h->ipproto == IPPROTO_TCP)
+		if (h->type == SOCK_STREAM)
 			event_del(&h->evt);
 		close(h->fd);
 	}
 	kr_shutdown();
-}
-
-int
-snmpe_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
-{
-	switch (imsg->hdr.type) {
-	default:
-		break;
-	}
-
-	return (-1);
 }
 
 int
@@ -152,8 +140,7 @@ snmpe_bind(struct address *addr)
 	char	 buf[512];
 	int	 val, s;
 
-	if ((s = snmpd_socket_af(&addr->ss, htons(addr->port),
-	    addr->ipproto)) == -1)
+	if ((s = snmpd_socket_af(&addr->ss, addr->type)) == -1)
 		return (-1);
 
 	/*
@@ -162,7 +149,7 @@ snmpe_bind(struct address *addr)
 	if (fcntl(s, F_SETFL, O_NONBLOCK) == -1)
 		goto bad;
 
-	if (addr->ipproto == IPPROTO_TCP) {
+	if (addr->type == SOCK_STREAM) {
 		val = 1;
 		if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR,
 		    &val, sizeof(val)) == -1)
@@ -196,7 +183,7 @@ snmpe_bind(struct address *addr)
 		goto bad;
 
 	log_info("snmpe: listening on %s %s:%d",
-	    (addr->ipproto == IPPROTO_TCP) ? "tcp" : "udp", buf, addr->port);
+	    (addr->type == SOCK_STREAM) ? "tcp" : "udp", buf, addr->port);
 
 	return (s);
 

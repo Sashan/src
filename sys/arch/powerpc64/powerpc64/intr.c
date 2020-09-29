@@ -1,4 +1,4 @@
-/*	$OpenBSD: intr.c,v 1.6 2020/08/23 13:50:34 kettenis Exp $	*/
+/*	$OpenBSD: intr.c,v 1.9 2020/09/26 17:56:54 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -21,6 +21,7 @@
 #include <sys/malloc.h>
 #include <sys/systm.h>
 
+#include <machine/atomic.h>
 #include <machine/intr.h>
 
 #include <dev/ofw/openfirm.h>
@@ -28,7 +29,7 @@
 /* Dummy implementations. */
 void	dummy_exi(struct trapframe *);
 void	dummy_hvi(struct trapframe *);
-void	*dummy_intr_establish(uint32_t, int, int,
+void	*dummy_intr_establish(uint32_t, int, int, struct cpu_info *,
 	    int (*)(void *), void *, const char *);
 void	dummy_intr_send_ipi(void *);
 void	dummy_setipl(int);
@@ -39,7 +40,7 @@ void	dummy_setipl(int);
  */
 void	(*_exi)(struct trapframe *) = dummy_exi;
 void	(*_hvi)(struct trapframe *) = dummy_hvi;
-void	*(*_intr_establish)(uint32_t, int, int,
+void	*(*_intr_establish)(uint32_t, int, int, struct cpu_info *,
 	    int (*)(void *), void *, const char *) = dummy_intr_establish;
 void	(*_intr_send_ipi)(void *) = dummy_intr_send_ipi;
 void	(*_setipl)(int) = dummy_setipl;
@@ -57,10 +58,10 @@ hvi_intr(struct trapframe *frame)
 }
 
 void *
-intr_establish(uint32_t girq, int type, int level,
+intr_establish(uint32_t girq, int type, int level, struct cpu_info *ci,
     int (*func)(void *), void *arg, const char *name)
 {
-	return (*_intr_establish)(girq, type, level, func, arg, name);
+	return (*_intr_establish)(girq, type, level, ci, func, arg, name);
 }
 
 #define SI_TO_IRQBIT(x) (1 << (x))
@@ -179,7 +180,7 @@ dummy_hvi(struct trapframe *frame)
 }
 
 void *
-dummy_intr_establish(uint32_t girq, int type, int level,
+dummy_intr_establish(uint32_t girq, int type, int level, struct cpu_info *ci,
 	    int (*func)(void *), void *arg, const char *name)
 {
 	return NULL;
@@ -397,9 +398,8 @@ intr_send_ipi(struct cpu_info *ci, int reason)
 	if (ci == curcpu() && reason == IPI_NOP)
 		return;
 
-	/* Never overwrite IPI_DDB with IPI_NOP. */
-	if (reason == IPI_DDB)
-		ci->ci_ipi_reason = reason;
+	if (reason != IPI_NOP)
+		atomic_setbits_int(&ci->ci_ipi_reason, reason);
 
 	if (ih && ih->ih_ic)
 		ih->ih_ic->ic_send_ipi(ih->ih_ih);

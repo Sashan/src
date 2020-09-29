@@ -1,4 +1,4 @@
-/*	$OpenBSD: fault.c,v 1.40 2020/08/19 10:10:58 mpi Exp $	*/
+/*	$OpenBSD: fault.c,v 1.42 2020/09/25 14:31:48 phessler Exp $	*/
 /*	$NetBSD: fault.c,v 1.46 2004/01/21 15:39:21 skrll Exp $	*/
 
 /*
@@ -208,10 +208,6 @@ data_abort_handler(trapframe_t *tf)
 	if (user) {
 		pcb->pcb_tf = tf;
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto out;
 	}
 
 	/* Invoke the appropriate handler, if necessary */
@@ -230,6 +226,13 @@ data_abort_handler(trapframe_t *tf)
 	 */
 	if (va < VM_MIN_ADDRESS || va >= VM_MAX_ADDRESS)
 		curcpu()->ci_flush_bp();
+
+	if (user) {
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+	}
 
 	/*
 	 * At this point, we're dealing with one of the following data aborts:
@@ -328,6 +331,8 @@ data_abort_handler(trapframe_t *tf)
 	pcb->pcb_onfault = NULL;
 	KERNEL_LOCK();
 	error = uvm_fault(map, va, 0, ftype);
+	if (error == 0 && map != kernel_map)
+		uvm_grow(p, va);
 	KERNEL_UNLOCK();
 	pcb->pcb_onfault = onfault;
 
@@ -585,6 +590,8 @@ prefetch_abort_handler(trapframe_t *tf)
 
 	KERNEL_LOCK();
 	error = uvm_fault(map, va, 0, PROT_READ | PROT_EXEC);
+	if (error == 0)
+		uvm_grow(p, va);
 	KERNEL_UNLOCK();
 	if (__predict_true(error == 0))
 		goto out;

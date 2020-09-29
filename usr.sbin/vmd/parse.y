@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.54 2019/12/12 19:52:10 kn Exp $	*/
+/*	$OpenBSD: parse.y,v 1.56 2020/09/23 19:18:18 martijn Exp $	*/
 
 /*
  * Copyright (c) 2007-2016 Reyk Floeter <reyk@openbsd.org>

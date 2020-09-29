@@ -1,4 +1,4 @@
-/*	$OpenBSD: pca9548.c,v 1.1 2020/06/18 18:05:00 kettenis Exp $	*/
+/*	$OpenBSD: pca9548.c,v 1.3 2020/09/29 13:59:22 patrick Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis
@@ -28,10 +28,13 @@
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_misc.h>
 
+#define PCA9546_NUM_CHANNELS	4
 #define PCA9548_NUM_CHANNELS	8
+#define PCAMUX_MAX_CHANNELS	8
 
 struct pcamux_bus {
 	struct pcamux_softc	*pb_sc;
+	int			pb_node;
 	int			pb_channel;
 	struct i2c_controller	pb_ic;
 	struct i2c_bus		pb_ib;
@@ -44,7 +47,8 @@ struct pcamux_softc {
 	
 	int			sc_node;
 	int			sc_channel;
-	struct pcamux_bus	sc_bus[PCA9548_NUM_CHANNELS];
+	int			sc_nchannel;
+	struct pcamux_bus	sc_bus[PCAMUX_MAX_CHANNELS];
 	struct rwlock		sc_lock;
 };
 
@@ -70,7 +74,8 @@ pcamux_match(struct device *parent, void *match, void *aux)
 {
 	struct i2c_attach_args *ia = aux;
 
-	if (strcmp(ia->ia_name, "nxp,pca9548") == 0)
+	if (strcmp(ia->ia_name, "nxp,pca9546") == 0 ||
+	    strcmp(ia->ia_name, "nxp,pca9548") == 0)
 		return (1);
 	return (0);
 }
@@ -89,6 +94,11 @@ pcamux_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_channel = -1;	/* unknown */
 	rw_init(&sc->sc_lock, sc->sc_dev.dv_xname);
 
+	if (strcmp(ia->ia_name, "nxp,pca9546") == 0)
+		sc->sc_nchannel = 4;
+	else if (strcmp(ia->ia_name, "nxp,pca9548") == 0)
+		sc->sc_nchannel = 8;
+
 	printf("\n");
 
 	for (node = OF_child(node); node; node = OF_peer(node)) {
@@ -97,11 +107,12 @@ pcamux_attach(struct device *parent, struct device *self, void *aux)
 		uint32_t channel;
 
 		channel = OF_getpropint(node, "reg", -1);
-		if (channel >= PCA9548_NUM_CHANNELS)
+		if (channel >= sc->sc_nchannel)
 			continue;
 
 		pb = &sc->sc_bus[channel];
 		pb->pb_sc = sc;
+		pb->pb_node = node;
 		pb->pb_channel = channel;
 		pb->pb_ic.ic_cookie = pb;
 		pb->pb_ic.ic_acquire_bus = pcamux_acquire_bus;
@@ -113,7 +124,7 @@ pcamux_attach(struct device *parent, struct device *self, void *aux)
 		iba.iba_name = "iic";
 		iba.iba_tag = &pb->pb_ic;
 		iba.iba_bus_scan = pcamux_bus_scan;
-		iba.iba_bus_scan_arg = &sc->sc_node;
+		iba.iba_bus_scan_arg = &pb->pb_node;
 
 		config_found(&sc->sc_dev, &iba, iicbus_print);
 
@@ -129,7 +140,7 @@ pcamux_set_channel(struct pcamux_softc *sc, int channel, int flags)
 	uint8_t data;
 	int error;
 
-	if (channel < -1 || channel >= PCA9548_NUM_CHANNELS)
+	if (channel < -1 || channel >= sc->sc_nchannel)
 		return ENXIO;
 
 	if (sc->sc_channel == channel)

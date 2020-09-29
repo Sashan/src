@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.74 2020/07/31 09:57:38 claudio Exp $ */
+/*	$OpenBSD: main.c,v 1.79 2020/09/15 12:06:02 deraadt Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -59,11 +59,12 @@
 #include <inttypes.h>
 #include <poll.h>
 #include <pwd.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <string.h>
 #include <limits.h>
+#include <syslog.h>
 #include <unistd.h>
 
 #include <openssl/err.h>
@@ -87,16 +88,8 @@ struct	repo {
 	size_t	 id; /* identifier (array index) */
 };
 
-/*
- * A running rsync process.
- * We can have multiple of these simultaneously and need to keep track
- * of which process maps to which request.
- */
-struct	rsyncproc {
-	char	*uri; /* uri of this rsync proc */
-	size_t	 id; /* identity of request */
-	pid_t	 pid; /* pid of process or 0 if unassociated */
-};
+int	timeout = 60*60;
+void	suicide(int sig);
 
 /*
  * Table of all known repositories.
@@ -148,16 +141,16 @@ struct filepath_tree  fpt = RB_INITIALIZER(&fpt);
 /*
  * Mark that our subprocesses will never return.
  */
+static void	entityq_flush(int, struct entityq *, const struct repo *);
 static void	proc_parser(int) __attribute__((noreturn));
-static void	proc_rsync(char *, char *, int, int)
-		    __attribute__((noreturn));
 static void	build_chain(const struct auth *, STACK_OF(X509) **);
 static void	build_crls(const struct auth *, struct crl_tree *,
 		    STACK_OF(X509_CRL) **);
 
 const char	*bird_tablename = "ROAS";
 
-int	 verbose;
+int	verbose;
+int	noop;
 
 struct stats	 stats;
 
@@ -258,86 +251,6 @@ entity_read_req(int fd, struct entity *ent)
 }
 
 /*
- * Look up a repository, queueing it for discovery if not found.
- */
-static const struct repo *
-repo_lookup(int fd, struct repotab *rt, const char *uri)
-{
-	const char	*host, *mod;
-	size_t		 hostsz, modsz, i;
-	struct repo	*rp;
-
-	if (!rsync_uri_parse(&host, &hostsz,
-	    &mod, &modsz, NULL, NULL, NULL, uri))
-		errx(1, "%s: malformed", uri);
-
-	/* Look up in repository table. */
-
-	for (i = 0; i < rt->reposz; i++) {
-		if (strlen(rt->repos[i].host) != hostsz)
-			continue;
-		if (strlen(rt->repos[i].module) != modsz)
-			continue;
-		if (strncasecmp(rt->repos[i].host, host, hostsz))
-			continue;
-		if (strncasecmp(rt->repos[i].module, mod, modsz))
-			continue;
-		return &rt->repos[i];
-	}
-
-	rt->repos = reallocarray(rt->repos,
-		rt->reposz + 1, sizeof(struct repo));
-	if (rt->repos == NULL)
-		err(1, "reallocarray");
-
-	rp = &rt->repos[rt->reposz++];
-	memset(rp, 0, sizeof(struct repo));
-	rp->id = rt->reposz - 1;
-
-	if ((rp->host = strndup(host, hostsz)) == NULL ||
-	    (rp->module = strndup(mod, modsz)) == NULL)
-		err(1, "strndup");
-
-	i = rt->reposz - 1;
-
-	logx("%s/%s: pulling from network", rp->host, rp->module);
-	io_simple_write(fd, &i, sizeof(size_t));
-	io_str_write(fd, rp->host);
-	io_str_write(fd, rp->module);
-	return rp;
-}
-
-/*
- * Read the next entity from the parser process, removing it from the
- * queue of pending requests in the process.
- * This always returns a valid entity.
- */
-static struct entity *
-entityq_next(int fd, struct entityq *q)
-{
-	size_t		 id;
-	struct entity	*entp;
-
-	io_simple_read(fd, &id, sizeof(size_t));
-
-	TAILQ_FOREACH(entp, q, entries)
-		if (entp->id == id)
-			break;
-
-	assert(entp != NULL);
-	TAILQ_REMOVE(q, entp, entries);
-	return entp;
-}
-
-static void
-entity_buffer_resp(char **b, size_t *bsz, size_t *bmax,
-    const struct entity *ent)
-{
-
-	io_simple_buffer(b, bsz, bmax, &ent->id, sizeof(size_t));
-}
-
-/*
  * Like entity_write_req() but into a buffer.
  * Matched by entity_read_req().
  */
@@ -389,6 +302,93 @@ entityq_flush(int fd, struct entityq *q, const struct repo *repo)
 			continue;
 		entity_write_req(fd, p);
 	}
+}
+
+/*
+ * Look up a repository, queueing it for discovery if not found.
+ */
+static const struct repo *
+repo_lookup(int fd, struct repotab *rt, const char *uri)
+{
+	const char	*host, *mod;
+	size_t		 hostsz, modsz, i;
+	struct repo	*rp;
+
+	if (!rsync_uri_parse(&host, &hostsz,
+	    &mod, &modsz, NULL, NULL, NULL, uri))
+		errx(1, "%s: malformed", uri);
+
+	/* Look up in repository table. */
+
+	for (i = 0; i < rt->reposz; i++) {
+		if (strlen(rt->repos[i].host) != hostsz)
+			continue;
+		if (strlen(rt->repos[i].module) != modsz)
+			continue;
+		if (strncasecmp(rt->repos[i].host, host, hostsz))
+			continue;
+		if (strncasecmp(rt->repos[i].module, mod, modsz))
+			continue;
+		return &rt->repos[i];
+	}
+
+	rt->repos = reallocarray(rt->repos,
+		rt->reposz + 1, sizeof(struct repo));
+	if (rt->repos == NULL)
+		err(1, "reallocarray");
+
+	rp = &rt->repos[rt->reposz++];
+	memset(rp, 0, sizeof(struct repo));
+	rp->id = rt->reposz - 1;
+
+	if ((rp->host = strndup(host, hostsz)) == NULL ||
+	    (rp->module = strndup(mod, modsz)) == NULL)
+		err(1, "strndup");
+
+	i = rt->reposz - 1;
+
+	if (!noop) {
+		logx("%s/%s: pulling from network", rp->host, rp->module);
+		io_simple_write(fd, &i, sizeof(size_t));
+		io_str_write(fd, rp->host);
+		io_str_write(fd, rp->module);
+	} else {
+		rp->loaded = 1;
+		logx("%s/%s: using cache", rp->host, rp->module);
+		stats.repos++;
+		/* there is nothing in the queue so no need to flush */
+	}
+	return rp;
+}
+
+/*
+ * Read the next entity from the parser process, removing it from the
+ * queue of pending requests in the process.
+ * This always returns a valid entity.
+ */
+static struct entity *
+entityq_next(int fd, struct entityq *q)
+{
+	size_t		 id;
+	struct entity	*entp;
+
+	io_simple_read(fd, &id, sizeof(size_t));
+
+	TAILQ_FOREACH(entp, q, entries)
+		if (entp->id == id)
+			break;
+
+	assert(entp != NULL);
+	TAILQ_REMOVE(q, entp, entries);
+	return entp;
+}
+
+static void
+entity_buffer_resp(char **b, size_t *bsz, size_t *bmax,
+    const struct entity *ent)
+{
+
+	io_simple_buffer(b, bsz, bmax, &ent->id, sizeof(size_t));
 }
 
 /*
@@ -529,7 +529,8 @@ queue_add_tal(int fd, struct entityq *q, const char *file, size_t *eid)
 		stats.talnames = strdup(file);
 	else {
 		char *tmp;
-		asprintf(&tmp, "%s %s", stats.talnames, file);
+		if (asprintf(&tmp, "%s %s", stats.talnames, file) == -1)
+			err(1, "asprintf");
 		free(stats.talnames);
 		stats.talnames = tmp;
 	}
@@ -581,12 +582,8 @@ queue_add_from_cert(int proc, int rsync, struct entityq *q,
 
 	if ((type = rtype_resolve(uri)) == RTYPE_EOF)
 		errx(1, "%s: unknown file type", uri);
-	if (type != RTYPE_MFT && type != RTYPE_CRL)
+	if (type != RTYPE_MFT)
 		errx(1, "%s: invalid file type", uri);
-
-	/* ignore the CRL since it is already loaded via the MFT */
-	if (type == RTYPE_CRL)
-		return;
 
 	/* Look up the repository. */
 
@@ -597,227 +594,6 @@ queue_add_from_cert(int proc, int rsync, struct entityq *q,
 		err(1, "asprintf");
 
 	entityq_add(proc, q, nfile, type, repo, NULL, NULL, 0, NULL, eid);
-}
-
-static void
-proc_child(int signal)
-{
-
-	/* Nothing: just discard. */
-}
-
-/*
- * Process used for synchronising repositories.
- * This simply waits to be told which repository to synchronise, then
- * does so.
- * It then responds with the identifier of the repo that it updated.
- * It only exits cleanly when fd is closed.
- * FIXME: this should use buffered output to prevent deadlocks, but it's
- * very unlikely that we're going to fill our buffer, so whatever.
- * FIXME: limit the number of simultaneous process.
- * Currently, an attacker can trivially specify thousands of different
- * repositories and saturate our system.
- */
-static void
-proc_rsync(char *prog, char *bind_addr, int fd, int noop)
-{
-	size_t			 id, i, idsz = 0;
-	ssize_t			 ssz;
-	char			*host = NULL, *mod = NULL, *uri = NULL,
-				*dst = NULL, *path, *save, *cmd;
-	const char		*pp;
-	pid_t			 pid;
-	char			*args[32];
-	int			 st, rc = 0;
-	struct stat		 stt;
-	struct pollfd		 pfd;
-	sigset_t		 mask, oldmask;
-	struct rsyncproc	*ids = NULL;
-
-	pfd.fd = fd;
-	pfd.events = POLLIN;
-
-	/*
-	 * Unveil the command we want to run.
-	 * If this has a pathname component in it, interpret as a file
-	 * and unveil the file directly.
-	 * Otherwise, look up the command in our PATH.
-	 */
-
-	if (!noop) {
-		if (strchr(prog, '/') == NULL) {
-			if (getenv("PATH") == NULL)
-				errx(1, "PATH is unset");
-			if ((path = strdup(getenv("PATH"))) == NULL)
-				err(1, "strdup");
-			save = path;
-			while ((pp = strsep(&path, ":")) != NULL) {
-				if (*pp == '\0')
-					continue;
-				if (asprintf(&cmd, "%s/%s", pp, prog) == -1)
-					err(1, "asprintf");
-				if (lstat(cmd, &stt) == -1) {
-					free(cmd);
-					continue;
-				} else if (unveil(cmd, "x") == -1)
-					err(1, "%s: unveil", cmd);
-				free(cmd);
-				break;
-			}
-			free(save);
-		} else if (unveil(prog, "x") == -1)
-			err(1, "%s: unveil", prog);
-
-		/* Unveil the repository directory and terminate unveiling. */
-
-		if (unveil(".", "c") == -1)
-			err(1, "unveil");
-		if (unveil(NULL, NULL) == -1)
-			err(1, "unveil");
-	}
-
-	/* Initialise retriever for children exiting. */
-
-	if (sigemptyset(&mask) == -1)
-		err(1, NULL);
-	if (signal(SIGCHLD, proc_child) == SIG_ERR)
-		err(1, NULL);
-	if (sigaddset(&mask, SIGCHLD) == -1)
-		err(1, NULL);
-	if (sigprocmask(SIG_BLOCK, &mask, &oldmask) == -1)
-		err(1, NULL);
-
-	for (;;) {
-		if (ppoll(&pfd, 1, NULL, &oldmask) == -1) {
-			if (errno != EINTR)
-				err(1, "ppoll");
-
-			/*
-			 * If we've received an EINTR, it means that one
-			 * of our children has exited and we can reap it
-			 * and look up its identifier.
-			 * Then we respond to the parent.
-			 */
-
-			while ((pid = waitpid(WAIT_ANY, &st, WNOHANG)) > 0) {
-				for (i = 0; i < idsz; i++)
-					if (ids[i].pid == pid)
-						break;
-				assert(i < idsz);
-
-				if (!WIFEXITED(st)) {
-					warnx("rsync %s terminated abnormally",
-					    ids[i].uri);
-					rc = 1;
-				} else if (WEXITSTATUS(st) != 0) {
-					warnx("rsync %s failed", ids[i].uri);
-				}
-
-				io_simple_write(fd, &ids[i].id, sizeof(size_t));
-				free(ids[i].uri);
-				ids[i].uri = NULL;
-				ids[i].pid = 0;
-				ids[i].id = 0;
-			}
-			if (pid == -1 && errno != ECHILD)
-				err(1, "waitpid");
-			continue;
-		}
-
-		/*
-		 * Read til the parent exits.
-		 * That will mean that we can safely exit.
-		 */
-
-		if ((ssz = read(fd, &id, sizeof(size_t))) == -1)
-			err(1, "read");
-		if (ssz == 0)
-			break;
-
-		/* Read host and module. */
-
-		io_str_read(fd, &host);
-		io_str_read(fd, &mod);
-
-		if (noop) {
-			io_simple_write(fd, &id, sizeof(size_t));
-			free(host);
-			free(mod);
-			continue;
-		}
-
-		/*
-		 * Create source and destination locations.
-		 * Build up the tree to this point because GPL rsync(1)
-		 * will not build the destination for us.
-		 */
-
-		if (mkdir(host, 0700) == -1 && EEXIST != errno)
-			err(1, "%s", host);
-
-		if (asprintf(&dst, "%s/%s", host, mod) == -1)
-			err(1, NULL);
-		if (mkdir(dst, 0700) == -1 && EEXIST != errno)
-			err(1, "%s", dst);
-
-		if (asprintf(&uri, "rsync://%s/%s", host, mod) == -1)
-			err(1, NULL);
-
-		/* Run process itself, wait for exit, check error. */
-
-		if ((pid = fork()) == -1)
-			err(1, "fork");
-
-		if (pid == 0) {
-			if (pledge("stdio exec", NULL) == -1)
-				err(1, "pledge");
-			i = 0;
-			args[i++] = (char *)prog;
-			args[i++] = "-rt";
-			if (bind_addr != NULL) {
-				args[i++] = "--address";
-				args[i++] = (char *)bind_addr;
-			}
-			args[i++] = uri;
-			args[i++] = dst;
-			args[i] = NULL;
-			execvp(args[0], args);
-			err(1, "%s: execvp", prog);
-		}
-
-		/* Augment the list of running processes. */
-
-		for (i = 0; i < idsz; i++)
-			if (ids[i].pid == 0)
-				break;
-		if (i == idsz) {
-			ids = reallocarray(ids, idsz + 1, sizeof(*ids));
-			if (ids == NULL)
-				err(1, NULL);
-			idsz++;
-		}
-
-		ids[i].id = id;
-		ids[i].pid = pid;
-		ids[i].uri = uri;
-
-		/* Clean up temporary values. */
-
-		free(mod);
-		free(dst);
-		free(host);
-	}
-
-	/* No need for these to be hanging around. */
-	for (i = 0; i < idsz; i++)
-		if (ids[i].pid > 0) {
-			kill(ids[i].pid, SIGTERM);
-			free(ids[i].uri);
-		}
-
-	free(ids);
-	exit(rc);
-	/* NOTREACHED */
 }
 
 /*
@@ -1142,13 +918,10 @@ proc_parser_crl(struct entity *entp, X509_STORE *store,
 	X509_CRL		*x509_crl;
 	struct crl		*crl;
 	const unsigned char	*dgst;
-	char			*t;
 
 	dgst = entp->has_dgst ? entp->dgst : NULL;
 	if ((x509_crl = crl_parse(entp->uri, dgst)) != NULL) {
 		if ((crl = malloc(sizeof(*crl))) == NULL)
-			err(1, NULL);
-		if ((t = strdup(entp->uri)) == NULL)
 			err(1, NULL);
 		if ((crl->aki = x509_crl_get_aki(x509_crl)) == NULL)
 			errx(1, "x509_crl_get_aki failed");
@@ -1581,11 +1354,25 @@ repo_cleanup(const char *cachedir, struct repotab *rt)
 	return delsz;
 }
 
+void
+suicide(int sig __attribute__((unused)))
+{
+	struct syslog_data sdata = SYSLOG_DATA_INIT;
+	
+
+	dprintf(STDERR_FILENO,
+	    "%s: excessive runtime (%d seconds), giving up\n",
+	    getprogname(), timeout);
+	syslog_r(LOG_CRIT|LOG_DAEMON, &sdata,
+	    "excessive runtime (%d seconds), giving up", timeout);
+	_exit(1);
+}
+
 int
 main(int argc, char *argv[])
 {
 	int		 rc = 1, c, proc, st, rsync,
-			 fl = SOCK_STREAM | SOCK_CLOEXEC, noop = 0;
+			 fl = SOCK_STREAM | SOCK_CLOEXEC;
 	size_t		 i, j, eid = 1, outsz = 0, talsz = 0;
 	pid_t		 procpid, rsyncpid;
 	int		 fd[2];
@@ -1596,7 +1383,7 @@ main(int argc, char *argv[])
 	struct roa	**out = NULL;
 	char		*rsync_prog = "openrsync";
 	char		*bind_addr = NULL;
-	const char	*cachedir = NULL;
+	const char	*cachedir = NULL, *errs;
 	const char	*tals[TALSZ_MAX];
 	struct vrp_tree	 v = RB_INITIALIZER(&v);
 	struct rusage	ru;
@@ -1623,7 +1410,7 @@ main(int argc, char *argv[])
 	if (pledge("stdio rpath wpath cpath fattr proc exec unveil", NULL) == -1)
 		err(1, "pledge");
 
-	while ((c = getopt(argc, argv, "b:Bcd:e:jnot:T:v")) != -1)
+	while ((c = getopt(argc, argv, "b:Bcd:e:jnos:t:T:v")) != -1)
 		switch (c) {
 		case 'b':
 			bind_addr = optarg;
@@ -1649,6 +1436,11 @@ main(int argc, char *argv[])
 		case 'o':
 			outformats |= FORMAT_OPENBGPD;
 			break;
+		case 's':
+			timeout = strtonum(optarg, 0, 24*60*60, &errs);
+			if (errs)
+				err(1, "-t: %s\n", errs);
+			break;
 		case 't':
 			if (talsz >= TALSZ_MAX)
 				err(1,
@@ -1671,6 +1463,12 @@ main(int argc, char *argv[])
 		outputdir = argv[0];
 	else if (argc > 1)
 		goto usage;
+
+	if (timeout) {
+		signal(SIGALRM, suicide);
+		/* Commit suicide eventually - cron will normally start a new one */
+		alarm(timeout);
+	}
 
 	if (cachedir == NULL) {
 		warnx("cache directory required");
@@ -1729,32 +1527,32 @@ main(int argc, char *argv[])
 	 * TAL) exists and has been downloaded.
 	 */
 
-	if (socketpair(AF_UNIX, fl, 0, fd) == -1)
-		err(1, "socketpair");
-	if ((rsyncpid = fork()) == -1)
-		err(1, "fork");
+	if (!noop) {
+		if (socketpair(AF_UNIX, fl, 0, fd) == -1)
+			err(1, "socketpair");
+		if ((rsyncpid = fork()) == -1)
+			err(1, "fork");
 
-	if (rsyncpid == 0) {
-		close(proc);
-		close(fd[1]);
+		if (rsyncpid == 0) {
+			close(proc);
+			close(fd[1]);
 
-		/* change working directory to the cache directory */
-		if (chdir(cachedir) == -1)
-			err(1, "%s: chdir", cachedir);
+			/* change working directory to the cache directory */
+			if (chdir(cachedir) == -1)
+				err(1, "%s: chdir", cachedir);
 
-		if (pledge("stdio rpath cpath proc exec unveil", NULL) == -1)
-			err(1, "pledge");
+			if (pledge("stdio rpath cpath proc exec unveil", NULL)
+			    == -1)
+				err(1, "pledge");
 
-		/* If -n, we don't exec or mkdir. */
+			proc_rsync(rsync_prog, bind_addr, fd[0]);
+			/* NOTREACHED */
+		}
 
-		if (noop && pledge("stdio", NULL) == -1)
-			err(1, "pledge");
-		proc_rsync(rsync_prog, bind_addr, fd[0], noop);
-		/* NOTREACHED */
-	}
-
-	close(fd[0]);
-	rsync = fd[1];
+		close(fd[0]);
+		rsync = fd[1];
+	} else
+		rsync = -1;
 
 	assert(rsync != proc);
 
@@ -1813,12 +1611,19 @@ main(int argc, char *argv[])
 		 */
 
 		if ((pfd[0].revents & POLLIN)) {
+			int ok;
 			io_simple_read(rsync, &i, sizeof(size_t));
+			io_simple_read(rsync, &ok, sizeof(ok));
 			assert(i < rt.reposz);
 			assert(!rt.repos[i].loaded);
 			rt.repos[i].loaded = 1;
-			logx("%s/%s: loaded from cache", rt.repos[i].host,
-			    rt.repos[i].module);
+			if (ok)
+				logx("%s/%s: loaded from network",
+				    rt.repos[i].host, rt.repos[i].module);
+			else
+				logx("%s/%s: load from network failed, "
+				    "fallback to cache",
+				    rt.repos[i].host, rt.repos[i].module);
 			stats.repos++;
 			entityq_flush(proc, &q, &rt.repos[i]);
 		}
@@ -1857,13 +1662,14 @@ main(int argc, char *argv[])
 		warnx("parser process exited abnormally");
 		rc = 1;
 	}
-	if (waitpid(rsyncpid, &st, 0) == -1)
-		err(1, "waitpid");
-	if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) {
-		warnx("rsync process exited abnormally");
-		rc = 1;
+	if (!noop) {
+		if (waitpid(rsyncpid, &st, 0) == -1)
+			err(1, "waitpid");
+		if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) {
+			warnx("rsync process exited abnormally");
+			rc = 1;
+		}
 	}
-
 	gettimeofday(&now_time, NULL);
 	timersub(&now_time, &start_time, &stats.elapsed_time);
 	if (getrusage(RUSAGE_SELF, &ru) == 0) {
@@ -1909,6 +1715,6 @@ usage:
 	fprintf(stderr,
 	    "usage: rpki-client [-Bcjnov] [-b sourceaddr] [-d cachedir]"
 	    " [-e rsync_prog]\n"
-	    "                   [-T table] [-t tal] [outputdir]\n");
+	    "                   [-s timeout] [-T table] [-t tal] [outputdir]\n");
 	return 1;
 }

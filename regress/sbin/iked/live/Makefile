@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.15 2020/08/30 18:31:49 tobhe Exp $
+#	$OpenBSD: Makefile,v 1.22 2020/09/15 11:26:48 tobhe Exp $
 
 # Copyright (c) 2020 Tobias Heider <tobhe@openbsd.org>
 #
@@ -32,7 +32,7 @@ regress:
 
 TEST_FLOWS = \
 	[ -z $$tmode ] && tmode=tunnel; \
-	success=false; \
+	_ret=1; \
 	count=0; \
 	while [[ $$count -le 3 ]]; do \
 		ipsecctlleft=`ssh ${LEFT_SSH} ipsecctl -sa`; \
@@ -52,27 +52,30 @@ TEST_FLOWS = \
 		if [[ -n "$$saleft_ltor" && -n "$$saleft_rtol" && \
 		     -n "$$saright_ltor" && -n "$$saright_rtol" && \
 		     -n "$$flowleft" && -n "$$flowright" ]]; then \
-			 success=true; \
+			 _ret=0; \
 			 break; \
 		fi; \
 		let count=$$count+1; \
 	done; \
-	if [[ "$$success" = false ]]; then \
-		echo "error: SAs not found:\n$$ipsecctlleft\n$$ipsecctlright"; \
-		exit 1; \
+	if [[ "$${_ret}" -ne 0 ]]; then \
+		echo "SAs not found:\n$$ipsecctlleft\n$$ipsecctlright"; \
 	fi
 
 TEST_PING = \
+	_ret=1; \
 	if [[ "${IPV}" == "6" ]]; then ping="ping6"; else ping="ping"; fi; \
-	dump=`ssh ${LEFT_SSH} "tcpdump -n -c2 -i enc0 -w '/tmp/test.pcap' > /dev/null & \
-	     $$ping -c 5 ${RIGHT_ADDR} > /dev/null && tcpdump -n -r /tmp/test.pcap" && rm -f /tmp/test.pcap`; \
+	dump=`ssh ${LEFT_SSH} "tcpdump -n -c2 -i enc0 -w /tmp/test.pcap > /dev/null & \
+	    $$ping -w 1 -n -c 5 ${RIGHT_ADDR} > /dev/null && \
+	    tcpdump -n -r /tmp/test.pcap && rm -f /tmp/test.pcap; \
+	    kill -9 \\$$! > /dev/null 2>&1 || true"`; \
 	rtol=`echo "$$dump" \
 	    | sed -n "/(authentic,confidential): SPI 0x[0-9a-f]\{8\}: ${LEFT_ADDR} > ${RIGHT_ADDR}/p"`; \
 	ltor=`echo "$$dump" \
 	    | sed -n "/(authentic,confidential): SPI 0x[0-9a-f]\{8\}: ${RIGHT_ADDR} > ${LEFT_ADDR}/p"`; \
 	if [[ -z "$$rtol" || -z "$$ltor" ]]; then \
-		echo "error: no esp traffic."; \
-		exit 1; \
+		_ret=1; \
+	else \
+		_ret=0; \
 	fi; \
 	echo "$$dump"
 
@@ -83,10 +86,10 @@ TEST_SINGLEIKESA = \
 		exit 1; \
 	fi
 
-SETUP_CONFIGS = \
+SETUP_CONFIG = \
+	if [[ -z "$$mode" ]]; then mode="active"; fi; \
 	authstr=""; \
 	if [[ "$$auth" = "psk" ]]; then \
-		psk=`openssl rand -hex 20`; \
 		authstr="psk $$psk"; \
 	fi; \
 	ipcomp=""; \
@@ -100,26 +103,39 @@ SETUP_CONFIGS = \
 	if [ "$$singleikesa" = true ]; then \
 		global="$${global}set enforcesingleikesa\n"; \
 	fi; \
-	echo "TMODE=\"$$tmode\"" > $@_left.conf; \
-	echo "LOCAL_ADDR=\"${LEFT_ADDR}\"" >> $@_left.conf; \
-	echo "PEER_ADDR=\"${RIGHT_ADDR}\"" >> $@_left.conf; \
-	echo "IPCOMP=\"$$ipcomp\"" >> $@_left.conf; \
-	echo "SRCID=\"$$leftid\"" >> $@_left.conf; \
-	echo "AUTH=\"$$authstr\"" >> $@_left.conf; \
-	echo "$$global" >> $@_left.conf; \
-	cat ${.CURDIR}/iked.in >> $@_left.conf; \
+	echo "MODE=\"$$mode\"" >> $@_$$side.conf; \
+	echo "TMODE=\"$$tmode\"" >> $@_$$side.conf; \
+	echo "LOCAL_ADDR=\"$$local\"" >> $@_$$side.conf; \
+	echo "PEER_ADDR=\"$$peer\"" >> $@_$$side.conf; \
+	echo "IPCOMP=\"$$ipcomp\"" >> $@_$$side.conf; \
+	echo "SRCID=\"$$srcid\"" >> $@_$$side.conf; \
+	echo "DSTID=\"$$dstid\"" >> $@_$$side.conf; \
+	echo "AUTH=\"$$authstr\"" >> $@_$$side.conf; \
+	echo "$$global" >> $@_$$side.conf; \
+	cat ${.CURDIR}/iked.in >> $@_$$side.conf
+
+DEPLOY_CONFIGS = \
 	chmod 0600 $@_left.conf; \
 	echo "cd /tmp\nput $@_left.conf test.conf" | sftp -q ${LEFT_SSH}; \
-	echo "TMODE=\"$$tmode\"" > $@_right.conf; \
-	echo "LOCAL_ADDR=\"${RIGHT_ADDR}\"" >> $@_right.conf; \
-	echo "PEER_ADDR=\"${LEFT_ADDR}\"" >> $@_right.conf; \
-	echo "IPCOMP=\"$$ipcomp\"" >> $@_right.conf; \
-	echo "SRCID=\"$$rightid\"" >> $@_right.conf; \
-	echo "AUTH=\"$$authstr\"" >> $@_right.conf; \
-	echo "$$global" >> $@_right.conf; \
-	cat ${.CURDIR}/iked.in >> $@_right.conf; \
 	chmod 0600 $@_right.conf; \
-	echo "cd /tmp\nput $@_right.conf test.conf" | sftp -q ${RIGHT_SSH}
+	echo "cd /tmp\nput $@_right.conf test.conf" | sftp -q ${RIGHT_SSH}; \
+	rm -f $@_left.conf $@_right.conf
+
+SETUP_CONFIGS = \
+	if [[ "$$auth" = "psk" ]]; then \
+		psk=`openssl rand -hex 20`; \
+	fi; \
+	side=left; \
+	srcid=$$leftid; \
+	local=${LEFT_ADDR}; \
+	peer=${RIGHT_ADDR}; \
+	    ${SETUP_CONFIG}; \
+	side=right; \
+	srcid=$$rightid; \
+	local=${RIGHT_ADDR}; \
+	peer=${LEFT_ADDR}; \
+	    ${SETUP_CONFIG}; \
+	${DEPLOY_CONFIGS}
 
 SETUP_SYSCTL = \
 	ssh ${LEFT_SSH} "sysctl $$sysctl"; \
@@ -210,16 +226,87 @@ ca-right.crt ca-right.key:
 left-from-ca-right.crt left.key: ca-right.crt ca-right.key
 	caname=ca-right; name=left; ${SETUP_CERT}
 
-REGRESS_TARGETS = run-cert-single-ca
+REGRESS_TARGETS = run-ping-fail
+run-ping-fail:
+	@echo '======= $@ ========'
+	ssh ${LEFT_SSH} "ipsecctl -F; pkill iked || true"
+	ssh ${RIGHT_SSH} "ipsecctl -F; pkill iked || true"
+	${TEST_PING}; \
+	if [[ $$_ret -ne 1 ]]; then exit 1; fi
+
+REGRESS_TARGETS += run-cert-single-ca
 run-cert-single-ca:
 	@echo '======= $@ ========'
-	flowtype=esp;
 	leftid=left-from-ca-both; \
 	rightid=right-from-ca-both; \
 	    ${SETUP_CONFIGS}
 	${SETUP_START}
-	flowtype=esp; ${TEST_FLOWS}
-	${TEST_PING}
+	flowtype=esp; ${TEST_FLOWS}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
+	${TEST_PING}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
+
+REGRESS_TARGETS += run-dstid-fail
+run-dstid-fail:
+	@echo '======= $@ ========'
+	leftid=left-from-ca-both; \
+	rightid=right-from-ca-both; \
+	    side=left; \
+	    srcid=$$leftid; \
+	    local=${LEFT_ADDR}; \
+	    peer=${RIGHT_ADDR}; \
+	    ${SETUP_CONFIG}; \
+	    side=right; \
+	    mode=passive; \
+	    srcid=$$rightid; \
+	    local=${RIGHT_ADDR}; \
+	    peer=${LEFT_ADDR}; \
+	    dstid="dstid invalid"; \
+	    ${SETUP_CONFIG}; \
+	    ${DEPLOY_CONFIGS}
+	${SETUP_START}
+	flowtype=esp; ${TEST_FLOWS}; if [[ $$_ret -ne 1 ]]; then exit 1; fi
+	${TEST_PING}; if [[ $$_ret -ne 1 ]]; then exit 1; fi
+
+REGRESS_TARGETS += run-dstid
+run-dstid:
+	@echo '======= $@ ========'
+	flowtype=esp; \
+	leftid=left-from-ca-both; \
+	rightid=right-from-ca-both; \
+	    side=left; \
+	    srcid=$$leftid; \
+	    local=${LEFT_ADDR}; \
+	    peer=${RIGHT_ADDR}; \
+	    dstid="dstid $$rightid"; \
+	    ${SETUP_CONFIG}; \
+	    side=right; \
+	    srcid=$$rightid; \
+	    local=${RIGHT_ADDR}; \
+	    peer=${LEFT_ADDR}; \
+	    dstid="dstid $$leftid"; \
+	    ${SETUP_CONFIG}; \
+	    ${DEPLOY_CONFIGS}
+	${SETUP_START}
+	flowtype=esp; ${TEST_FLOWS}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
+	${TEST_PING}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
+
+REGRESS_TARGETS += run-dstid-multi
+run-dstid-multi:
+	@echo '======= $@ ========'
+	flowtype=esp; \
+	leftid=left-from-ca-both; \
+	rightid=right-from-ca-both; \
+	    side=left; srcid=$$leftid; local=${LEFT_ADDR}; peer=${RIGHT_ADDR}; \
+	    dstid="dstid $$rightid"; \
+	    ${SETUP_CONFIG}; \
+	    side=right; mode=passive; srcid=$$rightid; local=${RIGHT_ADDR}; \
+	    peer=${LEFT_ADDR}; dstid="dstid $$leftid"; \
+	    ${SETUP_CONFIG}; \
+	    dstid="dstid roflol"; \
+	    ${SETUP_CONFIG}; \
+	    ${DEPLOY_CONFIGS}
+	${SETUP_START}
+	flowtype=esp; ${TEST_FLOWS}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
+	${TEST_PING}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
 
 REGRESS_TARGETS += run-cert-multi-ca
 run-cert-multi-ca:
@@ -229,19 +316,35 @@ run-cert-multi-ca:
 	rightid=right-from-ca-left; \
 	    ${SETUP_CONFIGS}
 	${SETUP_START}
-	flowtype=esp; ${TEST_FLOWS}
-	${TEST_PING}
+	flowtype=esp; ${TEST_FLOWS}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
+	${TEST_PING}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
 
 REGRESS_TARGETS += run-cert-second-altname
 run-cert-second-altname:
 	@echo '======= $@ ========'
-	flowtype=esp;
+	flowtype=esp; \
 	leftid=left-from-ca-both-alternative; \
 	rightid=right-from-ca-both@openbsd.org; \
 	    ${SETUP_CONFIGS}
 	${SETUP_START}
-	flowtype=esp; ${TEST_FLOWS}
-	${TEST_PING}
+	flowtype=esp; ${TEST_FLOWS}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
+	${TEST_PING}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
+
+REGRESS_TARGETS += run-psk-fail
+run-psk-fail:
+	@echo '======= $@ ========'
+	auth=psk; \
+	leftid=left-from-ca-both; \
+	rightid=right-from-ca-both; \
+	flowtype=esp; \
+	    side=left; psk=`openssl rand -hex 20`; \
+	    ${SETUP_CONFIG}; \
+	    side=right; psk=`openssl rand -hex 20`; \
+	    ${SETUP_CONFIG}; \
+	    ${DEPLOY_CONFIGS}
+	${SETUP_START}
+	flowtype=esp; ${TEST_FLOWS}; if [[ $$_ret -ne 1 ]]; then exit 1; fi
+	${TEST_PING}; if [[ $$_ret -ne 1 ]]; then exit 1; fi
 
 REGRESS_TARGETS += run-psk
 run-psk:
@@ -252,8 +355,10 @@ run-psk:
 	flowtype=esp; \
 	    ${SETUP_CONFIGS}
 	${SETUP_START}
-	flowtype=esp; ${TEST_FLOWS}
-	${TEST_PING}
+	flowtype=esp; ${TEST_FLOWS}; \
+	if [[ $$_ret -ne 0 ]]; then exit 1; fi
+	${TEST_PING}; \
+	if [[ $$_ret -ne 0 ]]; then exit 1; fi
 
 REGRESS_TARGETS += run-fragmentation
 run-fragmentation:
@@ -264,8 +369,10 @@ run-fragmentation:
 	rightid=right-from-ca-both; \
 	    ${SETUP_CONFIGS}
 	${SETUP_START}
-	flowtype=esp; ${TEST_FLOWS}
-	${TEST_PING}
+	flowtype=esp; ${TEST_FLOWS}; \
+	if [[ $$_ret -ne 0 ]]; then exit 1; fi
+	${TEST_PING}; \
+	if [[ $$_ret -ne 0 ]]; then exit 1; fi
 
 REGRESS_TARGETS += run-transport
 run-transport:
@@ -277,8 +384,8 @@ run-transport:
 	    ${SETUP_CONFIGS}
 	${SETUP_START}
 	tmode=transport; flowtype=esp; \
-	  ${TEST_FLOWS}
-	${TEST_PING}
+	    ${TEST_FLOWS}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
+	${TEST_PING}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
 
 REGRESS_TARGETS += run-singleikesa
 run-singleikesa:
@@ -302,8 +409,8 @@ run-ipcomp:
 	sysctl="net.inet.ipcomp.enable=1"; \
 	    ${SETUP_SYSCTL}
 	${SETUP_START}
-	flowtype=ipcomp; ${TEST_FLOWS}
-	${TEST_PING}
+	flowtype=ipcomp; ${TEST_FLOWS}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
+	${TEST_PING}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
 
 REGRESS_TARGETS += run-udpencap-port
 run-udpencap-port:
@@ -316,8 +423,8 @@ run-udpencap-port:
 	    ${SETUP_SYSCTL};
 	iked_flags=-p9999; \
 	    ${SETUP_START};
-	flowtype=esp; ${TEST_FLOWS}; \
-	    ${TEST_PING}
+	flowtype=esp; ${TEST_FLOWS}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
+	${TEST_PING}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
 	sysctl="net.inet.esp.udpencap_port=4500"; \
 	    ${SETUP_SYSCTL};
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.147 2020/08/19 10:10:58 mpi Exp $	*/
+/*	$OpenBSD: trap.c,v 1.149 2020/09/24 17:54:29 deraadt Exp $	*/
 
 /*
  * Copyright (c) 1998-2004 Michael Shalayeff
@@ -213,13 +213,8 @@ trap(int type, struct trapframe *frame)
 		mtctl(frame->tf_eiem, CR_EIEM);
 	}
 
-	if (type & T_USER) {
+	if (type & T_USER)
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto out;
-	}
 
 	switch (type) {
 	case T_NONEXIST:
@@ -369,9 +364,9 @@ trap(int type, struct trapframe *frame)
 			register_t cr;
 
 			if (((opcode >> 21) & 0x1f) == 27)
-				mfctl(CR_TR3, cr);	/* cr27 */
+				cr = frame->tf_cr27;	/* cr27 */
 			else
-				mfctl(CR_TR2, cr);	/* cr26 */
+				cr = 0;			/* cr26 */
 			frame_regmap(frame, opcode & 0x1f) = cr;
 			frame->tf_ipsw |= PSL_N;
 		} else {
@@ -462,6 +457,13 @@ datacc:
 	case T_ITLBMISS | T_USER:
 	case T_DTLBMISS:
 	case T_DTLBMISS | T_USER:
+		if (type & T_USER) {
+			if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+			    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+			    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+				goto out;
+		}
+
 		/*
 		 * it could be a kernel map for exec_map faults
 		 */

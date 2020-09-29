@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.22 2019/01/18 01:24:07 pd Exp $
+#	$OpenBSD: Makefile,v 1.24 2020/09/23 19:18:18 martijn Exp $
 
 .if ${MACHINE} == "amd64"
 

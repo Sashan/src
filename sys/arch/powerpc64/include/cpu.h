@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.25 2020/09/01 20:06:49 gkoehler Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.28 2020/09/23 03:03:12 gkoehler Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -64,6 +64,8 @@ struct cpu_info {
 
 	struct slb	ci_kernel_slb[32];
 	paddr_t		ci_user_slb_pa;
+	register_t	ci_slbsave[18];
+	char		ci_slbstack[1024];
 
 #define CPUSAVE_LEN	9
 	register_t	ci_tempsave[CPUSAVE_LEN];
@@ -112,8 +114,13 @@ struct cpu_info {
 extern struct cpu_info cpu_info[];
 extern struct cpu_info *cpu_info_primary;
 
-register struct cpu_info *__curcpu asm("r13");
-#define curcpu()	__curcpu
+static __inline struct cpu_info *
+curcpu(void)
+{
+	struct cpu_info *ci;
+	__asm volatile ("mfsprg0 %0" : "=r"(ci));
+	return ci;
+}
 
 #define CPU_INFO_ITERATOR	int
 
@@ -142,6 +149,9 @@ register struct cpu_info *__curcpu asm("r13");
 void	cpu_kick(struct cpu_info *);
 void	cpu_boot_secondary_processors(void);
 void	cpu_startclock(void);
+
+extern void (*ul_setperf)(int);
+void	mp_setperf(int);
 
 #endif
 

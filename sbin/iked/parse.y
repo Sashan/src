@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.109 2020/08/25 16:26:54 tobhe Exp $	*/
+/*	$OpenBSD: parse.y,v 1.114 2020/09/23 14:25:55 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -30,6 +30,7 @@
 #include <sys/stat.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#include <netinet/ip_ipsp.h>
 #include <arpa/inet.h>
 
 #include <ctype.h>
@@ -104,6 +105,7 @@ static int		 dpd_interval = IKED_IKE_SA_ALIVE_TIMEOUT;
 static char		*ocsp_url = NULL;
 static long		 ocsp_tolerate = 0;
 static long		 ocsp_maxage = -1;
+static int		 cert_partial_chain = 0;
 
 struct ipsec_xf {
 	const char	*name;
@@ -138,8 +140,12 @@ struct iked_transform ikev2_default_ike_transforms[] = {
 	{ IKEV2_XFORMTYPE_ENCR, IKEV2_XFORMENCR_AES_CBC, 128 },
 	{ IKEV2_XFORMTYPE_ENCR, IKEV2_XFORMENCR_3DES },
 	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_256 },
+	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_384 },
+	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_512 },
 	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA1 },
 	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA2_256_128 },
+	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA2_384_192 },
+	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA2_512_256 },
 	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA1_96 },
 	{ IKEV2_XFORMTYPE_DH,	IKEV2_XFORMDH_CURVE25519 },
 	{ IKEV2_XFORMTYPE_DH,	IKEV2_XFORMDH_ECP_521 },
@@ -158,9 +164,9 @@ size_t ikev2_default_nike_transforms = ((sizeof(ikev2_default_ike_transforms) /
 struct iked_transform ikev2_default_ike_transforms_noauth[] = {
 	{ IKEV2_XFORMTYPE_ENCR,	IKEV2_XFORMENCR_AES_GCM_16, 128 },
 	{ IKEV2_XFORMTYPE_ENCR,	IKEV2_XFORMENCR_AES_GCM_16, 256 },
-	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_512 },
-	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_384 },
 	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_256 },
+	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_384 },
+	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_512 },
 	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA1 },
 	{ IKEV2_XFORMTYPE_DH,	IKEV2_XFORMDH_CURVE25519 },
 	{ IKEV2_XFORMTYPE_DH,	IKEV2_XFORMDH_ECP_521 },
@@ -182,6 +188,8 @@ struct iked_transform ikev2_default_esp_transforms[] = {
 	{ IKEV2_XFORMTYPE_ENCR, IKEV2_XFORMENCR_AES_CBC, 192 },
 	{ IKEV2_XFORMTYPE_ENCR, IKEV2_XFORMENCR_AES_CBC, 128 },
 	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA2_256_128 },
+	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA2_384_192 },
+	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA2_512_256 },
 	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA1_96 },
 	{ IKEV2_XFORMTYPE_ESN,	IKEV2_XFORMESN_ESN },
 	{ IKEV2_XFORMTYPE_ESN,	IKEV2_XFORMESN_NONE },
@@ -447,6 +455,7 @@ typedef struct {
 %token	FRAGMENTATION NOFRAGMENTATION DPD_CHECK_INTERVAL
 %token	ENFORCESINGLEIKESA NOENFORCESINGLEIKESA
 %token	TOLERATE MAXAGE
+%token	CERTPARTIALCHAIN
 %token	<v.string>		STRING
 %token	<v.number>		NUMBER
 %type	<v.string>		string
@@ -534,6 +543,9 @@ set		: SET ACTIVE	{ passive = 0; }
 			}
 			ocsp_tolerate = $5;
 			ocsp_maxage = $7;
+		}
+		| SET CERTPARTIALCHAIN		{
+			cert_partial_chain = 1;
 		}
 		| SET DPD_CHECK_INTERVAL NUMBER {
 			if ($3 < 0) {
@@ -1015,7 +1027,7 @@ ikeauth		: /* empty */			{
 			}
 			free($2);
 
-			$$.auth_method = IKEV2_AUTH_RSA_SIG;
+			$$.auth_method = IKEV2_AUTH_SIG_ANY;
 			$$.auth_eap = EAP_TYPE_MSCHAP_V2;
 			$$.auth_length = 0;
 		}
@@ -1296,6 +1308,7 @@ lookup(char *s)
 		{ "any",		ANY },
 		{ "auth",		AUTHXF },
 		{ "bytes",		BYTES },
+		{ "cert_partial_chain",	CERTPARTIALCHAIN },
 		{ "childsa",		CHILDSA },
 		{ "config",		CONFIG },
 		{ "couple",		COUPLE },
@@ -1731,6 +1744,7 @@ parse_config(const char *filename, struct iked *x_env)
 
 	mobike = 1;
 	enforcesingleikesa = 0;
+	cert_partial_chain = decouple = passive = 0;
 	ocsp_tolerate = 0;
 	ocsp_url = NULL;
 	ocsp_maxage = -1;
@@ -1755,6 +1769,7 @@ parse_config(const char *filename, struct iked *x_env)
 	env->sc_ocsp_url = ocsp_url;
 	env->sc_ocsp_tolerate = ocsp_tolerate;
 	env->sc_ocsp_maxage = ocsp_maxage;
+	env->sc_cert_partial_chain = cert_partial_chain;
 
 	if (!rules)
 		log_warnx("%s: no valid configuration rules found",
@@ -2246,6 +2261,7 @@ ifa_lookup(const char *ifa_name)
 				/* for now we can not handle link local,
 				 * therefore bail for now
 				 */
+				free(n->name);
 				free(n);
 				continue;
 
@@ -2998,6 +3014,8 @@ create_ike(char *name, int af, uint8_t ipproto,
 			flow->flow_prenat.addr_af = 0;
 		}
 
+		flow->flow_dir = IPSP_DIRECTION_OUT;
+		flow->flow_saproto = saproto;
 		flow->flow_ipproto = ipproto;
 		flow->flow_rdomain = rdomain;
 

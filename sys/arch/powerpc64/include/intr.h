@@ -1,4 +1,4 @@
-/*	$OpenBSD: intr.h,v 1.10 2020/08/23 13:50:34 kettenis Exp $	*/
+/*	$OpenBSD: intr.h,v 1.12 2020/09/23 03:03:12 gkoehler Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -87,17 +87,18 @@ void	intr_init(void);
 #define IST_EDGE	0
 #define IST_LEVEL	1
 
-void	*intr_establish(uint32_t, int, int,
+void	*intr_establish(uint32_t, int, int, struct cpu_info *,
 	    int (*)(void *), void *, const char *);
 
 #define IPI_NOP		0
-#define IPI_DDB		1
+#define IPI_DDB		(1 << 0)
+#define IPI_SETPERF	(1 << 1)
 
 void	intr_send_ipi(struct cpu_info *, int);
 
 extern void (*_exi)(struct trapframe *);
 extern void (*_hvi)(struct trapframe *);
-extern void *(*_intr_establish)(uint32_t, int, int,
+extern void *(*_intr_establish)(uint32_t, int, int, struct cpu_info *,
 	    int (*)(void *), void *, const char *);
 extern void (*_intr_send_ipi)(void *);
 extern void (*_setipl)(int);

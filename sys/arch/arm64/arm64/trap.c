@@ -1,4 +1,4 @@
-/* $OpenBSD: trap.c,v 1.29 2020/08/19 10:10:58 mpi Exp $ */
+/* $OpenBSD: trap.c,v 1.31 2020/09/25 07:52:25 kettenis Exp $ */
 /*-
  * Copyright (c) 2014 Andrew Turner
  * All rights reserved.
@@ -94,6 +94,13 @@ data_abort(struct trapframe *frame, uint64_t esr, uint64_t far,
 		curcpu()->ci_flush_bp();
 
 	if (lower) {
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			return;
+	}
+
+	if (lower) {
 		switch (esr & ISS_DATA_DFSC_MASK) {
 		case ISS_DATA_DFSC_ALIGN:
 			sv.sival_ptr = (void *)far;
@@ -137,6 +144,8 @@ data_abort(struct trapframe *frame, uint64_t esr, uint64_t far,
 		if (!pmap_fault_fixup(map->pmap, va, access_type, 1)) {
 			KERNEL_LOCK();
 			error = uvm_fault(map, va, ftype, access_type);
+			if (error == 0)
+				uvm_grow(p, va);
 			KERNEL_UNLOCK();
 		}
 	} else {
@@ -258,10 +267,6 @@ do_el0_sync(struct trapframe *frame)
 
 	p->p_addr->u_pcb.pcb_tf = frame;
 	refreshcreds(p);
-	if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-	    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-	    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-		goto out;
 
 	switch (exception) {
 	case EXCP_UNKNOWN:
@@ -322,7 +327,7 @@ do_el0_sync(struct trapframe *frame)
 		sigexit(p, SIGILL);
 		KERNEL_UNLOCK();
 	}
-out:
+
 	userret(p);
 }
 

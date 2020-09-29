@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.65 2020/08/26 14:49:48 tobhe Exp $	*/
+/*	$OpenBSD: config.c,v 1.67 2020/09/25 10:38:05 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -278,10 +278,9 @@ config_free_proposals(struct iked_proposals *head, unsigned int proto)
 void
 config_free_flows(struct iked *env, struct iked_flows *head)
 {
-	struct iked_flow	*flow, *next;
+	struct iked_flow	*flow;
 
-	for (flow = RB_MIN(iked_flows, head); flow != NULL; flow = next) {
-		next = RB_NEXT(iked_flows, head, flow);
+	while ((flow = RB_MIN(iked_flows, head))) {
 		log_debug("%s: free %p", __func__, flow);
 		RB_REMOVE(iked_flows, head, flow);
 		flow_free(flow);
@@ -509,8 +508,8 @@ int
 config_getreset(struct iked *env, struct imsg *imsg)
 {
 	struct iked_policy	*pol, *poltmp;
-	struct iked_sa		*sa, *nextsa;
-	struct iked_user	*usr, *nextusr;
+	struct iked_sa		*sa;
+	struct iked_user	*usr;
 	unsigned int		 mode;
 
 	IMSG_SIZE_CHECK(imsg, &mode);
@@ -525,9 +524,7 @@ config_getreset(struct iked *env, struct imsg *imsg)
 
 	if (mode == RESET_ALL || mode == RESET_SA) {
 		log_debug("%s: flushing SAs", __func__);
-		for (sa = RB_MIN(iked_sas, &env->sc_sas);
-		    sa != NULL; sa = nextsa) {
-			nextsa = RB_NEXT(iked_sas, &env->sc_sas, sa);
+		while ((sa = RB_MIN(iked_sas, &env->sc_sas))) {
 			/* for RESET_SA we try send a DELETE */
 			if (mode == RESET_ALL ||
 			    ikev2_ike_sa_delete(env, sa) != 0) {
@@ -539,9 +536,7 @@ config_getreset(struct iked *env, struct imsg *imsg)
 
 	if (mode == RESET_ALL || mode == RESET_USER) {
 		log_debug("%s: flushing users", __func__);
-		for (usr = RB_MIN(iked_users, &env->sc_users);
-		    usr != NULL; usr = nextusr) {
-			nextusr = RB_NEXT(iked_users, &env->sc_users, usr);
+		while ((usr = RB_MIN(iked_users, &env->sc_users))) {
 			RB_REMOVE(iked_users, &env->sc_users, usr);
 			free(usr);
 		}
@@ -937,6 +932,28 @@ config_getocsp(struct iked *env, struct imsg *imsg)
 	log_debug("%s: ocsp_url %s tolerate %ld maxage %ld", __func__,
 	    env->sc_ocsp_url ? env->sc_ocsp_url : "none",
 	    env->sc_ocsp_tolerate, env->sc_ocsp_maxage);
+	return (0);
+}
+
+int
+config_setcertpartialchain(struct iked *env)
+{
+	unsigned int boolval;
+
+	boolval = env->sc_cert_partial_chain;
+	proc_compose(&env->sc_ps, PROC_CERT, IMSG_CERT_PARTIAL_CHAIN,
+	    &boolval, sizeof(boolval));
+	return (0);
+}
+
+int
+config_getcertpartialchain(struct iked *env, struct imsg *imsg)
+{
+	unsigned int boolval;
+
+	IMSG_SIZE_CHECK(imsg, &boolval);
+	memcpy(&boolval, imsg->data, sizeof(boolval));
+	env->sc_cert_partial_chain = boolval;
 	return (0);
 }
 

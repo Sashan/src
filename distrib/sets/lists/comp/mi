@@ -1167,6 +1167,7 @@
 ./usr/include/openssl/ui_compat.h
 ./usr/include/openssl/whrlpool.h
 ./usr/include/openssl/x509.h
+./usr/include/openssl/x509_verify.h
 ./usr/include/openssl/x509_vfy.h
 ./usr/include/openssl/x509v3.h
 ./usr/include/panel.h
@@ -1492,6 +1493,8 @@
 ./usr/lib/crt0.o
 ./usr/lib/debug
 ./usr/lib/gcrt0.o
+./usr/lib/libagentx.a
+./usr/lib/libagentx_p.a
 ./usr/lib/libc.a
 ./usr/lib/libc_p.a
 ./usr/lib/libcbor.a
@@ -2108,7 +2111,9 @@
 ./usr/share/man/man3/SSL_renegotiate.3
 ./usr/share/man/man3/SSL_rstate_string.3
 ./usr/share/man/man3/SSL_session_reused.3
+./usr/share/man/man3/SSL_set1_host.3
 ./usr/share/man/man3/SSL_set1_param.3
+./usr/share/man/man3/SSL_set_SSL_CTX.3
 ./usr/share/man/man3/SSL_set_bio.3
 ./usr/share/man/man3/SSL_set_connect_state.3
 ./usr/share/man/man3/SSL_set_fd.3
@@ -2870,6 +2875,7 @@
 ./usr/share/man/man3/strtonum.3
 ./usr/share/man/man3/strtoul.3
 ./usr/share/man/man3/strxfrm.3
+./usr/share/man/man3/subagentx.3
 ./usr/share/man/man3/swab.3
 ./usr/share/man/man3/sysconf.3
 ./usr/share/man/man3/sysexits.3

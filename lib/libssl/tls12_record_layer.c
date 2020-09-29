@@ -1,4 +1,4 @@
-/* $OpenBSD: tls12_record_layer.c,v 1.1 2020/08/30 15:40:20 jsing Exp $ */
+/* $OpenBSD: tls12_record_layer.c,v 1.4 2020/09/16 17:15:01 jsing Exp $ */
 /*
  * Copyright (c) 2020 Joel Sing <jsing@openbsd.org>
  *
@@ -227,9 +227,10 @@ tls12_record_layer_pseudo_header(struct tls12_record_layer *rl,
 }
 
 static int
-tls12_record_layer_write_mac(struct tls12_record_layer *rl, CBB *cbb,
-    uint8_t content_type, const uint8_t *content, size_t content_len,
-    size_t *out_len)
+tls12_record_layer_mac(struct tls12_record_layer *rl, CBB *cbb,
+    EVP_MD_CTX *hash_ctx, int stream_mac, uint16_t epoch, uint8_t *seq_num,
+    size_t seq_num_len, uint8_t content_type, const uint8_t *content,
+    size_t content_len, size_t *out_len)
 {
 	EVP_MD_CTX *mac_ctx = NULL;
 	uint8_t *header = NULL;
@@ -240,12 +241,11 @@ tls12_record_layer_write_mac(struct tls12_record_layer *rl, CBB *cbb,
 
 	if ((mac_ctx = EVP_MD_CTX_new()) == NULL)
 		goto err;
-	if (!EVP_MD_CTX_copy(mac_ctx, rl->write_hash_ctx))
+	if (!EVP_MD_CTX_copy(mac_ctx, hash_ctx))
 		goto err;
 
 	if (!tls12_record_layer_pseudo_header(rl, content_type, content_len,
-	    rl->write_epoch, rl->write_seq_num, SSL3_SEQUENCE_SIZE,
-	    &header, &header_len))
+	    epoch, seq_num, seq_num_len, &header, &header_len))
 		goto err;
 
 	if (EVP_DigestSignUpdate(mac_ctx, header, header_len) <= 0)
@@ -259,13 +259,12 @@ tls12_record_layer_write_mac(struct tls12_record_layer *rl, CBB *cbb,
 	if (EVP_DigestSignFinal(mac_ctx, mac, &mac_len) <= 0)
 		goto err;
 
-	if (rl->write_stream_mac) {
-		if (!EVP_MD_CTX_copy(rl->write_hash_ctx, mac_ctx))
+	if (stream_mac) {
+		if (!EVP_MD_CTX_copy(hash_ctx, mac_ctx))
 			goto err;
 	}
 
 	*out_len = mac_len;
-
 	ret = 1;
 
  err:
@@ -276,13 +275,13 @@ tls12_record_layer_write_mac(struct tls12_record_layer *rl, CBB *cbb,
 }
 
 static int
-tls12_record_layer_seal_record_plaintext(struct tls12_record_layer *rl,
-    uint8_t content_type, const uint8_t *content, size_t content_len, CBB *out)
+tls12_record_layer_write_mac(struct tls12_record_layer *rl, CBB *cbb,
+    uint8_t content_type, const uint8_t *content, size_t content_len,
+    size_t *out_len)
 {
-	if (rl->write_aead_ctx != NULL || rl->write_cipher_ctx != NULL)
-		return 0;
-
-	return CBB_add_bytes(out, content, content_len);
+	return tls12_record_layer_mac(rl, cbb, rl->write_hash_ctx,
+	    rl->write_stream_mac, rl->write_epoch, rl->write_seq_num,
+	    SSL3_SEQUENCE_SIZE, content_type, content, content_len, out_len);
 }
 
 static int
@@ -355,6 +354,16 @@ tls12_record_layer_aead_xored_nonce(struct tls12_record_layer *rl,
 	freezero(nonce, nonce_len);
 
 	return 0;
+}
+
+static int
+tls12_record_layer_seal_record_plaintext(struct tls12_record_layer *rl,
+    uint8_t content_type, const uint8_t *content, size_t content_len, CBB *out)
+{
+	if (rl->write_aead_ctx != NULL || rl->write_cipher_ctx != NULL)
+		return 0;
+
+	return CBB_add_bytes(out, content, content_len);
 }
 
 static int
@@ -457,7 +466,7 @@ tls12_record_layer_seal_record_protected_cipher(struct tls12_record_layer *rl,
 	/* Add padding to block size, if necessary. */
 	block_size = EVP_CIPHER_CTX_block_size(enc);
 	if (block_size < 0 || block_size > EVP_MAX_BLOCK_LENGTH)
-		return 0;
+		goto err;
 	if (block_size > 1) {
 		pad_len = block_size - (plain_len % block_size);
 		pad_val = pad_len - 1;

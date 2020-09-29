@@ -1,4 +1,4 @@
-/*	$OpenBSD: ca.c,v 1.69 2020/08/21 14:30:17 tobhe Exp $	*/
+/*	$OpenBSD: ca.c,v 1.71 2020/09/23 14:25:54 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2010-2013 Reyk Floeter <reyk@openbsd.org>
@@ -226,6 +226,9 @@ ca_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 	case IMSG_PRIVKEY:
 	case IMSG_PUBKEY:
 		config_getkey(env, imsg);
+		break;
+	case IMSG_CERT_PARTIAL_CHAIN:
+		config_getcertpartialchain(env, imsg);
 		break;
 	default:
 		return (-1);
@@ -575,11 +578,15 @@ ca_getreq(struct iked *env, struct imsg *imsg)
 		 * was found and this was the last CERTREQ, try to find one with
 		 * subjectAltName matching the ID
 		 */
-		if (more)
+		if (cert == NULL && more)
 			return (0);
 
 		if (cert == NULL)
 			cert = ca_by_subjectaltname(store->ca_certs, &id);
+
+		/* Set type if coming from fallback */
+		if (cert != NULL)
+			type = IKEV2_CERT_X509_CERT;
 
 		/* If there is no matching certificate use local raw pubkey */
 		if (cert == NULL) {
@@ -1526,6 +1533,8 @@ ca_validate_cert(struct iked *env, struct iked_static_id *id,
 		X509_STORE_CTX_set_flags(&csc, X509_V_FLAG_CRL_CHECK);
 		X509_STORE_CTX_set_flags(&csc, X509_V_FLAG_CRL_CHECK_ALL);
 	}
+	if (env->sc_cert_partial_chain)
+		X509_STORE_CTX_set_flags(&csc, X509_V_FLAG_PARTIAL_CHAIN);
 
 	result = X509_verify_cert(&csc);
 	error = csc.error;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: xive.c,v 1.11 2020/08/30 19:07:00 kettenis Exp $	*/
+/*	$OpenBSD: xive.c,v 1.14 2020/09/26 17:56:54 kettenis Exp $	*/
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -150,7 +150,7 @@ struct cfdriver xive_cd = {
 };
 
 void	xive_hvi(struct trapframe *);
-void 	*xive_intr_establish(uint32_t, int, int,
+void 	*xive_intr_establish(uint32_t, int, int, struct cpu_info *,
 	    int (*)(void *), void *, const char *);
 void	xive_intr_send_ipi(void *);
 void	xive_setipl(int);
@@ -232,6 +232,7 @@ xive_attach(struct device *parent, struct device *self, void *aux)
 
 	/* Synchronize hardware state to software state. */
 	xive_write_1(sc, XIVE_TM_CPPR_HV, xive_prio(curcpu()->ci_cpl));
+	eieio();
 }
 
 int
@@ -247,7 +248,7 @@ xive_activate(struct device *self, int act)
 }
 
 void *
-xive_intr_establish(uint32_t girq, int type, int level,
+xive_intr_establish(uint32_t girq, int type, int level, struct cpu_info *ci,
     int (*func)(void *), void *arg, const char *name)
 {
 	struct xive_softc *sc = xive_sc;
@@ -257,6 +258,9 @@ xive_intr_establish(uint32_t girq, int type, int level,
 	uint64_t flags, eoi_page, trig_page;
 	uint32_t esb_shift, lirq;
 	int64_t error;
+
+	if (ci == NULL)
+		ci = cpu_info_primary;
 
 	/* Allocate a logical IRQ. */
 	if (sc->sc_lirq >= XIVE_NUM_IRQS)
@@ -284,7 +288,7 @@ xive_intr_establish(uint32_t girq, int type, int level,
 		return NULL;
 	}
 
-	error = opal_xive_set_irq_config(girq, mfpir(),
+	error = opal_xive_set_irq_config(girq, ci->ci_pir,
 	    xive_prio(level & IPL_IRQMASK), lirq);
 	if (error != OPAL_SUCCESS) {
 		if (trig != eoi && trig != 0)
@@ -355,8 +359,10 @@ xive_setipl(int new)
 
 	msr = intr_disable();
 	ci->ci_cpl = new;
-	if (newprio != oldprio)
+	if (newprio != oldprio) {
 		xive_write_1(sc, XIVE_TM_CPPR_HV, newprio);
+		eieio();
+	}
 	intr_restore(msr);
 }
 
@@ -431,7 +437,6 @@ xive_hvi(struct trapframe *frame)
 
 		ci->ci_cpl = old;
 		xive_write_1(sc, XIVE_TM_CPPR_HV, xive_prio(old));
-
 		eieio();
 	}
 }

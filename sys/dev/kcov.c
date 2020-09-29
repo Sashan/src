@@ -1,4 +1,4 @@
-/*	$OpenBSD: kcov.c,v 1.28 2020/08/30 13:19:44 anton Exp $	*/
+/*	$OpenBSD: kcov.c,v 1.33 2020/09/26 12:06:37 anton Exp $	*/
 
 /*
  * Copyright (c) 2018 Anton Lindqvist <anton@openbsd.org>
@@ -29,6 +29,7 @@
 #include <uvm/uvm_extern.h>
 
 #define KCOV_BUF_MEMB_SIZE	sizeof(uintptr_t)
+#define KCOV_BUF_MAX_NMEMB	(256 << 10)
 
 #define KCOV_CMP_CONST		0x1
 #define KCOV_CMP_SIZE(x)	((x) << 1)
@@ -37,6 +38,9 @@
 #define KCOV_STATE_READY	1
 #define KCOV_STATE_TRACE	2
 #define KCOV_STATE_DYING	3
+
+#define KCOV_STRIDE_TRACE_PC	1
+#define KCOV_STRIDE_TRACE_CMP	4
 
 /*
  * Coverage structure.
@@ -90,7 +94,7 @@ void kr_barrier(struct kcov_remote *);
 struct kcov_remote *kr_lookup(int, void *);
 
 static struct kcov_dev *kd_curproc(int);
-static uint64_t kd_claim(struct kcov_dev *, int);
+static uint64_t kd_claim(struct kcov_dev *, int, int);
 static inline int inintr(void);
 
 TAILQ_HEAD(, kcov_dev) kd_list = TAILQ_HEAD_INITIALIZER(kd_list);
@@ -122,7 +126,7 @@ __sanitizer_cov_trace_pc(void)
 	if (kd == NULL)
 		return;
 
-	if ((idx = kd_claim(kd, 1)))
+	if ((idx = kd_claim(kd, KCOV_STRIDE_TRACE_PC, 1)))
 		kd->kd_buf[idx] = (uintptr_t)__builtin_return_address(0);
 }
 
@@ -144,7 +148,7 @@ trace_cmp(uint64_t type, uint64_t arg1, uint64_t arg2, uintptr_t pc)
 	if (kd == NULL)
 		return;
 
-	if ((idx = kd_claim(kd, 4))) {
+	if ((idx = kd_claim(kd, KCOV_STRIDE_TRACE_CMP, 1))) {
 		kd->kd_buf[idx] = type;
 		kd->kd_buf[idx + 1] = arg1;
 		kd->kd_buf[idx + 2] = arg2;
@@ -521,21 +525,21 @@ kd_curproc(int mode)
 }
 
 /*
- * Claim stride number of elements in the coverage buffer. Returns the index of
- * the first claimed element. If the claim cannot be fulfilled, zero is
- * returned.
+ * Claim stride times nmemb number of elements in the coverage buffer. Returns
+ * the index of the first claimed element. If the claim cannot be fulfilled,
+ * zero is returned.
  */
 static uint64_t
-kd_claim(struct kcov_dev *kd, int stride)
+kd_claim(struct kcov_dev *kd, int stride, int nmemb)
 {
 	uint64_t idx, was;
 
 	idx = kd->kd_buf[0];
 	for (;;) {
-		if (idx * stride + stride > kd->kd_nmemb)
+		if (stride * (idx + nmemb) > kd->kd_nmemb)
 			return (0);
 
-		was = atomic_cas_ulong(&kd->kd_buf[0], idx, idx + 1);
+		was = atomic_cas_ulong(&kd->kd_buf[0], idx, idx + nmemb);
 		if (was == idx)
 			return (idx * stride + 1);
 		idx = was;
@@ -558,6 +562,7 @@ kcov_remote_enter(int subsystem, void *id)
 {
 	struct kcov_dev *kd;
 	struct kcov_remote *kr;
+	struct proc *p;
 
 	/*
 	 * We could end up here while executing a timeout triggered from a
@@ -572,11 +577,12 @@ kcov_remote_enter(int subsystem, void *id)
 	kr = kr_lookup(subsystem, id);
 	if (kr == NULL || kr->kr_state != KCOV_STATE_READY)
 		goto out;
+	p = curproc;
 	kd = kr->kr_kd;
 	if (kd != NULL && kd->kd_state == KCOV_STATE_TRACE) {
 		kr->kr_nsections++;
-		KASSERT(curproc->p_kd == NULL);
-		curproc->p_kd = kd;
+		KASSERT(p->p_kd == NULL);
+		p->p_kd = kd;
 	}
 out:
 	mtx_leave(&kcov_mtx);
@@ -586,22 +592,21 @@ void
 kcov_remote_leave(int subsystem, void *id)
 {
 	struct kcov_remote *kr;
+	struct proc *p;
 
 	/* See kcov_remote_enter(). */
 	if (inintr())
 		return;
 
 	mtx_enter(&kcov_mtx);
-	kr = kr_lookup(subsystem, id);
-	/*
-	 * The remote could have been absent when the same thread called
-	 * kcov_remote_enter() earlier, allowing the remote to be registered
-	 * while thread was inside the remote section. Therefore ensure we don't
-	 * give back a reference we didn't acquire.
-	 */
-	if (kr == NULL || curproc->p_kd == NULL || curproc->p_kd != kr->kr_kd)
+	p = curproc;
+	if (p->p_kd == NULL)
 		goto out;
-	curproc->p_kd = NULL;
+	kr = kr_lookup(subsystem, id);
+	if (kr == NULL)
+		goto out;
+	KASSERT(p->p_kd == kr->kr_kd);
+	p->p_kd = NULL;
 	if (--kr->kr_nsections == 0)
 		wakeup(kr);
 out:
@@ -717,7 +722,7 @@ kr_free(struct kcov_remote *kr)
 		kr->kr_kd->kd_kr = NULL;
 	kr->kr_kd = NULL;
 	TAILQ_REMOVE(&kr_list, kr, kr_entry);
-	/* Notify thread(s) wating in kcov_remote_register(). */
+	/* Notify thread(s) waiting in kcov_remote_register(). */
 	wakeup(kr);
 	pool_put(&kr_pool, kr);
 }

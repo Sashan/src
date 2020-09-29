@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.32 2020/07/28 07:35:04 claudio Exp $ */
+/*	$OpenBSD: extern.h,v 1.34 2020/09/12 15:46:48 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -19,6 +19,8 @@
 
 #include <sys/tree.h>
 #include <sys/time.h>
+
+#include <openssl/x509.h>
 
 enum cert_as_type {
 	CERT_AS_ID, /* single identifier */
@@ -355,6 +357,7 @@ int		 as_check_covered(uint32_t, uint32_t,
 int		 rsync_uri_parse(const char **, size_t *,
 			const char **, size_t *, const char **, size_t *,
 			enum rtype *, const char *);
+void		 proc_rsync(char *, char *, int) __attribute__((noreturn));
 
 /* Logging (though really used for OpenSSL errors). */
 

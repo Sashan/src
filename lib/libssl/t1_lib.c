@@ -1,4 +1,4 @@
-/* $OpenBSD: t1_lib.c,v 1.174 2020/09/01 12:40:53 tb Exp $ */
+/* $OpenBSD: t1_lib.c,v 1.176 2020/09/12 17:25:11 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -506,43 +506,38 @@ tls1_set_ec_id(uint16_t *curve_id, uint8_t *comp_id, EC_KEY *ec)
 {
 	const EC_GROUP *grp;
 	const EC_METHOD *meth;
-	int is_prime = 0;
-	int nid, id;
+	int prime_field;
+	int nid;
 
 	if (ec == NULL)
 		return (0);
 
-	/* Determine if it is a prime field. */
+	/* Determine whether the curve is defined over a prime field. */
 	if ((grp = EC_KEY_get0_group(ec)) == NULL)
 		return (0);
 	if ((meth = EC_GROUP_method_of(grp)) == NULL)
 		return (0);
-	if (EC_METHOD_get_field_type(meth) == NID_X9_62_prime_field)
-		is_prime = 1;
+	prime_field = (EC_METHOD_get_field_type(meth) == NID_X9_62_prime_field);
 
-	/* Determine curve ID. */
+	/* Determine curve ID - NID_undef results in a curve ID of zero. */
 	nid = EC_GROUP_get_curve_name(grp);
-	id = tls1_ec_nid2curve_id(nid);
-
 	/* If we have an ID set it, otherwise set arbitrary explicit curve. */
-	if (id != 0)
-		*curve_id = id;
-	else
-		*curve_id = is_prime ? 0xff01 : 0xff02;
+	if ((*curve_id = tls1_ec_nid2curve_id(nid)) == 0)
+		*curve_id = prime_field ? 0xff01 : 0xff02;
+
+	if (comp_id == NULL)
+		return (1);
 
 	/* Specify the compression identifier. */
-	if (comp_id != NULL) {
-		if (EC_KEY_get0_public_key(ec) == NULL)
-			return (0);
-
-		if (EC_KEY_get_conv_form(ec) == POINT_CONVERSION_COMPRESSED) {
-			*comp_id = is_prime ?
-			    TLSEXT_ECPOINTFORMAT_ansiX962_compressed_prime :
-			    TLSEXT_ECPOINTFORMAT_ansiX962_compressed_char2;
-		} else {
-			*comp_id = TLSEXT_ECPOINTFORMAT_uncompressed;
-		}
+	if (EC_KEY_get0_public_key(ec) == NULL)
+		return (0);
+	*comp_id = TLSEXT_ECPOINTFORMAT_uncompressed;
+	if (EC_KEY_get_conv_form(ec) == POINT_CONVERSION_COMPRESSED) {
+		*comp_id = TLSEXT_ECPOINTFORMAT_ansiX962_compressed_char2;
+		if (prime_field)
+			*comp_id = TLSEXT_ECPOINTFORMAT_ansiX962_compressed_prime;
 	}
+
 	return (1);
 }
 
@@ -870,7 +865,6 @@ tls_decrypt_ticket(SSL *s, CBS *ticket, int *alert, SSL_SESSION **psess)
 	SSL_CTX *tctx = s->initial_ctx;
 	int slen, hlen;
 	int alert_desc = SSL_AD_INTERNAL_ERROR;
-	int renew_ticket = 0;
 	int ret = TLS1_TICKET_FATAL_ERROR;
 
 	*psess = NULL;
@@ -904,8 +898,10 @@ tls_decrypt_ticket(SSL *s, CBS *ticket, int *alert, SSL_SESSION **psess)
 			goto err;
 		if (rv == 0)
 			goto derr;
-		if (rv == 2)
-			renew_ticket = 1;
+		if (rv == 2) {
+			/* Renew ticket. */
+			s->internal->tlsext_ticket_expected = 1;
+		}
 
 		/*
 		 * Now that the cipher context is initialised, we can extract
@@ -988,11 +984,7 @@ tls_decrypt_ticket(SSL *s, CBS *ticket, int *alert, SSL_SESSION **psess)
 	*psess = sess;
 	sess = NULL;
 
-	if (renew_ticket)
-		s->internal->tlsext_ticket_expected = 1;
-
 	ret = TLS1_TICKET_DECRYPTED;
-
 	goto done;
 
  derr:

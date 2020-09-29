@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.17 2020/08/23 10:07:51 kettenis Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.20 2020/09/26 12:42:52 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -37,6 +37,7 @@
 #define CPU_IBMPOWER8NVL	0x004c
 #define CPU_IBMPOWER8		0x004d
 #define CPU_IBMPOWER9		0x004e
+#define CPU_IBMPOWER9P		0x004f
 
 #define CPU_VERSION(pvr)	((pvr) >> 16)
 #define CPU_REV_MAJ(pvr)	(((pvr) >> 8) & 0xf)
@@ -52,6 +53,7 @@ struct cpu_version cpu_version[] = {
 	{ CPU_IBMPOWER8E, "IBM POWER8E" },
 	{ CPU_IBMPOWER8NVL, "IBM POWER8NVL" },
 	{ CPU_IBMPOWER9, "IBM POWER9" },
+	{ CPU_IBMPOWER9P, "IBM POWER9P" },
 	{ 0, NULL }
 };
 
@@ -221,6 +223,7 @@ cpu_init_features(void)
 
 	switch (CPU_VERSION(pvr)) {
 	case CPU_IBMPOWER9:
+	case CPU_IBMPOWER9P:
 		cpu_features2 |= PPC_FEATURE2_ARCH_3_00;
 		cpu_features2 |= PPC_FEATURE2_DARN;
 		break;
@@ -255,6 +258,9 @@ cpu_darn(void *arg)
 
 #ifdef MULTIPROCESSOR
 
+volatile int mp_perflevel;
+void (*ul_setperf)(int);
+
 void
 cpu_bootstrap(void)
 {
@@ -270,7 +276,6 @@ cpu_bootstrap(void)
 
 	/* Store pointer to our struct cpu_info. */
 	__asm volatile ("mtsprg0 %0" :: "r"(ci));
-	__asm volatile ("mr %%r13, %0" :: "r"(ci));
 
 	/* We're now ready to take traps. */
 	msr = mfmsr();
@@ -350,11 +355,15 @@ int
 cpu_intr(void *arg)
 {
 	struct cpu_info *ci = curcpu();
+	int pending;
 
-	if (ci->ci_ipi_reason == IPI_DDB) {
-		ci->ci_ipi_reason = IPI_NOP;
+	pending = atomic_swap_uint(&ci->ci_ipi_reason, IPI_NOP);
+
+	if (pending & IPI_DDB)
 		db_enter();
-	}
+
+	if (pending & IPI_SETPERF)
+		ul_setperf(mp_perflevel);
 
 	return 1;
 }
@@ -364,6 +373,21 @@ cpu_kick(struct cpu_info *ci)
 {
 	if (ci != curcpu())
 		intr_send_ipi(ci, IPI_NOP);
+}
+
+/*
+ * Run ul_setperf(level) on every core.
+ */
+void
+mp_setperf(int level) {
+	int i;
+
+	mp_perflevel = level;
+	ul_setperf(level);
+	for (i = 0; i < ncpus; i++) {
+		if (i != cpu_number())
+			intr_send_ipi(&cpu_info[i], IPI_SETPERF);
+	}
 }
 
 #endif

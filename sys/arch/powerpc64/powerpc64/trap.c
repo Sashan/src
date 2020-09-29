@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.36 2020/08/23 13:50:34 kettenis Exp $	*/
+/*	$OpenBSD: trap.c,v 1.40 2020/09/25 07:50:26 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -92,10 +92,6 @@ trap(struct trapframe *frame)
 		type |= EXC_USER;
 		p->p_md.md_regs = frame;
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto out;
 	}
 
 	switch (type) {
@@ -129,16 +125,6 @@ trap(struct trapframe *frame)
 			ftype = PROT_READ;
 		KERNEL_LOCK();
 		error = uvm_fault(map, trunc_page(va), 0, ftype);
-#ifdef MULTIPROCESSOR
-		/*
-		 * The uvm_fault() call above might sleep and
-		 * therefore witch from one CPU to another.  We must
-		 * update the CPU pointer in the trap frame such that
-		 * we don't restore the wrong CPU pointer when
-		 * returning from the trap.
-		 */
-		frame->fixreg[13] = (vaddr_t)curcpu();
-#endif
 		KERNEL_UNLOCK();
 		if (error == 0)
 			return;
@@ -182,6 +168,11 @@ trap(struct trapframe *frame)
 		/* FALLTHROUGH */
 
 	case EXC_DSI|EXC_USER:
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+
 		map = &p->p_vmspace->vm_map;
 		va = frame->dar;
 		if (frame->dsisr & DSISR_STORE)
@@ -190,6 +181,8 @@ trap(struct trapframe *frame)
 			ftype = PROT_READ;
 		KERNEL_LOCK();
 		error = uvm_fault(map, trunc_page(va), 0, ftype);
+		if (error == 0)
+			uvm_grow(p, trunc_page(va));
 		KERNEL_UNLOCK();
 		if (error) {
 #ifdef TRAP_DEBUG
@@ -224,11 +217,18 @@ trap(struct trapframe *frame)
 		/* FALLTHROUGH */
 
 	case EXC_ISI|EXC_USER:
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+
 		map = &p->p_vmspace->vm_map;
 		va = frame->srr0;
 		ftype = PROT_READ | PROT_EXEC;
 		KERNEL_LOCK();
 		error = uvm_fault(map, trunc_page(va), 0, ftype);
+		if (error == 0)
+			uvm_grow(p, trunc_page(va));
 		KERNEL_UNLOCK();
 		if (error) {
 #ifdef TRAP_DEBUG
@@ -262,7 +262,7 @@ trap(struct trapframe *frame)
 	case EXC_AST|EXC_USER:
 		p->p_md.md_astpending = 0;
 		uvmexp.softs++;
-		mi_ast(p, ci->ci_want_resched);
+		mi_ast(p, curcpu()->ci_want_resched);
 		break;
 
 	case EXC_ALI|EXC_USER:

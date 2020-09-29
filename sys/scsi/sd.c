@@ -1,4 +1,4 @@
-/*	$OpenBSD: sd.c,v 1.326 2020/09/01 12:17:53 krw Exp $	*/
+/*	$OpenBSD: sd.c,v 1.329 2020/09/22 19:32:53 krw Exp $	*/
 /*	$NetBSD: sd.c,v 1.111 1997/04/02 02:29:41 mycroft Exp $	*/
 
 /*-
@@ -315,6 +315,10 @@ sdopen(dev_t dev, int flag, int fmt, struct proc *p)
 	unit = DISKUNIT(dev);
 	part = DISKPART(dev);
 
+	SC_DEBUG(link, SDEV_DB1,
+	    ("sdopen: dev=0x%x (unit %d (of %d), partition %d)\n", dev, unit,
+	    sd_cd.cd_ndevs, part));
+
 	rawopen = (part == RAW_PART) && (fmt == S_IFCHR);
 
 	sc = sdlookup(unit);
@@ -330,14 +334,13 @@ sdopen(dev_t dev, int flag, int fmt, struct proc *p)
 		device_unref(&sc->sc_dev);
 		return EACCES;
 	}
-
-	SC_DEBUG(link, SDEV_DB1,
-	    ("sdopen: dev=0x%x (unit %d (of %d), partition %d)\n", dev, unit,
-	    sd_cd.cd_ndevs, part));
-
 	if ((error = disk_lock(&sc->sc_dk)) != 0) {
 		device_unref(&sc->sc_dev);
 		return error;
+	}
+	if (ISSET(sc->flags, SDF_DYING)) {
+		error = ENXIO;
+		goto die;
 	}
 
 	if (sc->sc_dk.dk_openmask != 0) {
@@ -345,10 +348,6 @@ sdopen(dev_t dev, int flag, int fmt, struct proc *p)
 		 * If any partition is open, but the disk has been invalidated,
 		 * disallow further opens of non-raw partition.
 		 */
-		if (ISSET(sc->flags, SDF_DYING)) {
-			error = ENXIO;
-			goto die;
-		}
 		if (!ISSET(link->flags, SDEV_MEDIA_LOADED)) {
 			if (rawopen)
 				goto out;
@@ -357,10 +356,6 @@ sdopen(dev_t dev, int flag, int fmt, struct proc *p)
 		}
 	} else {
 		/* Spin up non-UMASS devices ready or not. */
-		if (ISSET(sc->flags, SDF_DYING)) {
-			error = ENXIO;
-			goto die;
-		}
 		if (!ISSET(link->flags, SDEV_UMASS))
 			scsi_start(link, SSS_START, (rawopen ? SCSI_SILENT :
 			    0) | SCSI_IGNORE_ILLEGAL_REQUEST |
@@ -694,15 +689,16 @@ sdstart(struct scsi_xfer *xs)
 	    (SID_ANSII_REV(&link->inqdata) < SCSI_REV_2) &&
 	    ((secno & 0x1fffff) == secno) &&
 	    ((nsecs & 0xff) == nsecs))
-		xs->cmdlen = sd_cmd_rw6(xs->cmd, read, secno, nsecs);
-	else if (((secno & 0xffffffff) == secno) &&
-	    ((nsecs & 0xffff) == nsecs))
-		xs->cmdlen = sd_cmd_rw10(xs->cmd, read, secno, nsecs);
-	else if (((secno & 0xffffffff) == secno) &&
-	    ((nsecs & 0xffffffff) == nsecs))
-		xs->cmdlen = sd_cmd_rw12(xs->cmd, read, secno, nsecs);
+		xs->cmdlen = sd_cmd_rw6(&xs->cmd, read, secno, nsecs);
+
+	else if (sc->params.disksize > UINT32_MAX)
+		xs->cmdlen = sd_cmd_rw16(&xs->cmd, read, secno, nsecs);
+
+	else if (nsecs <= UINT16_MAX)
+		xs->cmdlen = sd_cmd_rw10(&xs->cmd, read, secno, nsecs);
+
 	else
-		xs->cmdlen = sd_cmd_rw16(xs->cmd, read, secno, nsecs);
+		xs->cmdlen = sd_cmd_rw12(&xs->cmd, read, secno, nsecs);
 
 	disk_busy(&sc->sc_dk);
 	if (!read)
@@ -1344,7 +1340,7 @@ sddump(dev_t dev, daddr_t blkno, caddr_t va, size_t size)
 		xs->data = va;
 		xs->datalen = nwrt * sectorsize;
 
-		xs->cmdlen = sd_cmd_rw10(xs->cmd, 0, blkno, nwrt); /* XXX */
+		xs->cmdlen = sd_cmd_rw10(&xs->cmd, 0, blkno, nwrt); /* XXX */
 
 		rv = scsi_xs_sync(xs);
 		scsi_xs_put(xs);
@@ -1873,7 +1869,7 @@ sd_flush(struct sd_softc *sc, int flags)
 		return EIO;
 	}
 
-	cmd = (struct scsi_synchronize_cache *)xs->cmd;
+	cmd = (struct scsi_synchronize_cache *)&xs->cmd;
 	cmd->opcode = SYNCHRONIZE_CACHE;
 
 	xs->cmdlen = sizeof(*cmd);

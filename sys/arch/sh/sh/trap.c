@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.40 2019/09/06 12:22:01 deraadt Exp $	*/
+/*	$OpenBSD: trap.c,v 1.44 2020/09/25 14:42:25 deraadt Exp $	*/
 /*	$NetBSD: exception.c,v 1.32 2006/09/04 23:57:52 uwe Exp $	*/
 /*	$NetBSD: syscall.c,v 1.6 2006/03/07 07:21:50 thorpej Exp $	*/
 
@@ -155,7 +155,7 @@ void
 general_exception(struct proc *p, struct trapframe *tf, uint32_t va)
 {
 	int expevt = tf->tf_expevt;
-	int tra;
+	int tra = _reg_read_4(SH_(TRA));
 	int usermode = !KERNELMODE(tf->tf_ssr);
 	union sigval sv;
 
@@ -173,10 +173,6 @@ general_exception(struct proc *p, struct trapframe *tf, uint32_t va)
 		KDASSERT(p->p_md.md_regs == tf); /* check exception depth */
 		expevt |= EXP_USER;
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto out;
 	}
 
 	switch (expevt) {
@@ -191,7 +187,6 @@ general_exception(struct proc *p, struct trapframe *tf, uint32_t va)
 	case EXPEVT_TRAPA:
 #ifdef DDB
 		/* Check for ddb request */
-		tra = _reg_read_4(SH_(TRA));
 		if (tra == (_SH_TRA_BREAK << 2) &&
 		    db_ktrap(expevt, tra, tf))
 			return;
@@ -201,7 +196,6 @@ general_exception(struct proc *p, struct trapframe *tf, uint32_t va)
 		break;
 	case EXPEVT_TRAPA | EXP_USER:
 		/* Check for debugger break */
-		tra = _reg_read_4(SH_(TRA));
 		switch (tra) {
 		case _SH_TRA_BREAK << 2:
 			tf->tf_spc -= 2; /* back to the breakpoint address */
@@ -370,7 +364,7 @@ tlb_exception(struct proc *p, struct trapframe *tf, uint32_t va)
 		if (usermode) {
 			sv.sival_ptr = (void *)va;
 			trapsignal(p, SIGSEGV, tf->tf_expevt, SEGV_ACCERR, sv);
-			goto user_fault;
+			goto out;
 		} else {
 			TLB_ASSERT(p->p_md.md_pcb->pcb_onfault != NULL,
 			    "no copyin/out fault handler (load protection)");
@@ -389,6 +383,11 @@ tlb_exception(struct proc *p, struct trapframe *tf, uint32_t va)
 
 	/* Select address space */
 	if (usermode) {
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+
 		TLB_ASSERT(p != NULL, "no curproc");
 		map = &p->p_vmspace->vm_map;
 		pmap = map->pmap;
@@ -446,7 +445,7 @@ tlb_exception(struct proc *p, struct trapframe *tf, uint32_t va)
 			trapsignal(p, SIGKILL, tf->tf_expevt, SEGV_MAPERR, sv);
 		} else
 			trapsignal(p, SIGSEGV, tf->tf_expevt, SEGV_MAPERR, sv);
-		goto user_fault;
+		goto out;
 	} else {
 		TLB_ASSERT(p->p_md.md_pcb->pcb_onfault,
 		    "no copyin/out fault handler (page not found)");
@@ -454,7 +453,7 @@ tlb_exception(struct proc *p, struct trapframe *tf, uint32_t va)
 	}
 	return;
 
-user_fault:
+out:
 	userret(p);
 	ast(p, tf);
 	return;
@@ -487,7 +486,7 @@ ast(struct proc *p, struct trapframe *tf)
 		p->p_md.md_astpending = 0;
 		refreshcreds(p);
 		uvmexp.softs++;
-		mi_ast(p, want_resched);
+		mi_ast(p, curcpu()->ci_want_resched);
 		userret(p);
 	}
 }

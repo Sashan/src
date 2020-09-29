@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_amap.c,v 1.82 2020/01/04 16:17:29 beck Exp $	*/
+/*	$OpenBSD: uvm_amap.c,v 1.84 2020/09/25 08:04:48 mpi Exp $	*/
 /*	$NetBSD: uvm_amap.c,v 1.27 2000/11/25 06:27:59 chs Exp $	*/
 
 /*
@@ -63,20 +63,20 @@ static char amap_small_pool_names[UVM_AMAP_CHUNK][9];
  */
 
 static struct vm_amap *amap_alloc1(int, int, int);
-static __inline void amap_list_insert(struct vm_amap *);
-static __inline void amap_list_remove(struct vm_amap *);   
+static inline void amap_list_insert(struct vm_amap *);
+static inline void amap_list_remove(struct vm_amap *);   
 
 struct vm_amap_chunk *amap_chunk_get(struct vm_amap *, int, int, int);
 void amap_chunk_free(struct vm_amap *, struct vm_amap_chunk *);
 void amap_wiperange_chunk(struct vm_amap *, struct vm_amap_chunk *, int, int);
 
-static __inline void
+static inline void
 amap_list_insert(struct vm_amap *amap)
 {
 	LIST_INSERT_HEAD(&amap_list, amap, am_list);
 }
 
-static __inline void
+static inline void
 amap_list_remove(struct vm_amap *amap)
 { 
 	LIST_REMOVE(amap, am_list);
@@ -190,13 +190,10 @@ amap_chunk_free(struct vm_amap *amap, struct vm_amap_chunk *chunk)
  * here are some in-line functions to help us.
  */
 
-static __inline void pp_getreflen(int *, int, int *, int *);
-static __inline void pp_setreflen(int *, int, int, int);
-
 /*
  * pp_getreflen: get the reference and length for a specific offset
  */
-static __inline void
+static inline void
 pp_getreflen(int *ppref, int offset, int *refp, int *lenp)
 {
 
@@ -212,7 +209,7 @@ pp_getreflen(int *ppref, int offset, int *refp, int *lenp)
 /*
  * pp_setreflen: set the reference and length for a specific offset
  */
-static __inline void
+static inline void
 pp_setreflen(int *ppref, int offset, int ref, int len)
 {
 	if (len == 1) {
@@ -1022,9 +1019,7 @@ amap_lookup(struct vm_aref *aref, vaddr_t offset)
 
 	AMAP_B2SLOT(slot, offset);
 	slot += aref->ar_pageoff;
-
-	if (slot >= amap->am_nslot)
-		panic("amap_lookup: offset out of range");
+	KASSERT(slot < amap->am_nslot);
 
 	chunk = amap_chunk_get(amap, slot, 0, PR_NOWAIT);
 	if (chunk == NULL)
@@ -1049,8 +1044,7 @@ amap_lookups(struct vm_aref *aref, vaddr_t offset,
 	AMAP_B2SLOT(slot, offset);
 	slot += aref->ar_pageoff;
 
-	if ((slot + (npages - 1)) >= amap->am_nslot)
-		panic("amap_lookups: offset out of range");
+	KASSERT((slot + (npages - 1)) < amap->am_nslot);
 
 	for (i = 0, lcv = slot; lcv < slot + npages; i += n, lcv += n) {
 		n = UVM_AMAP_CHUNK - UVM_AMAP_SLOTIDX(lcv);
@@ -1081,9 +1075,7 @@ amap_populate(struct vm_aref *aref, vaddr_t offset)
 
 	AMAP_B2SLOT(slot, offset);
 	slot += aref->ar_pageoff;
-
-	if (slot >= amap->am_nslot)
-		panic("amap_populate: offset out of range");
+	KASSERT(slot < amap->am_nslot);
 
 	chunk = amap_chunk_get(amap, slot, 1, PR_WAITOK);
 	KASSERT(chunk != NULL);
@@ -1104,9 +1096,8 @@ amap_add(struct vm_aref *aref, vaddr_t offset, struct vm_anon *anon,
 
 	AMAP_B2SLOT(slot, offset);
 	slot += aref->ar_pageoff;
+	KASSERT(slot < amap->am_nslot);
 
-	if (slot >= amap->am_nslot)
-		panic("amap_add: offset out of range");
 	chunk = amap_chunk_get(amap, slot, 1, PR_NOWAIT);
 	if (chunk == NULL)
 		return 1;
@@ -1147,9 +1138,7 @@ amap_unadd(struct vm_aref *aref, vaddr_t offset)
 
 	AMAP_B2SLOT(slot, offset);
 	slot += aref->ar_pageoff;
-
-	if (slot >= amap->am_nslot)
-		panic("amap_unadd: offset out of range");
+	KASSERT(slot < amap->am_nslot);
 	chunk = amap_chunk_get(amap, slot, 0, PR_NOWAIT);
 	if (chunk == NULL)
 		panic("amap_unadd: chunk for slot %d not present", slot);

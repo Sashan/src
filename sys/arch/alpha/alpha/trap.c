@@ -1,4 +1,4 @@
-/* $OpenBSD: trap.c,v 1.89 2020/08/19 10:10:57 mpi Exp $ */
+/* $OpenBSD: trap.c,v 1.91 2020/09/24 20:33:10 deraadt Exp $ */
 /* $NetBSD: trap.c,v 1.52 2000/05/24 16:48:33 thorpej Exp $ */
 
 /*-
@@ -244,10 +244,6 @@ trap(a0, a1, a2, entry, framep)
 	if (user) {
 		p->p_md.md_tf = framep;
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		   "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto out;
 	}
 
 	switch (entry) {
@@ -370,6 +366,12 @@ trap(a0, a1, a2, entry, framep)
 		break;
 
 	case ALPHA_KENTRY_MM:
+		if (user &&
+		    !uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		   "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+
 		switch (a1) {
 		case ALPHA_MMCSR_FOR:
 		case ALPHA_MMCSR_FOE:
@@ -705,8 +707,7 @@ void
 ast(framep)
 	struct trapframe *framep;
 {
-	struct cpu_info *ci = curcpu();
-	struct proc *p = ci->ci_curproc;
+	struct proc *p = curproc;
 
 	p->p_md.md_tf = framep;
 	p->p_md.md_astpending = 0;
@@ -716,8 +717,9 @@ ast(framep)
 		panic("ast and not user");
 #endif
 
+	refreshcreds(p);
 	atomic_add_int(&uvmexp.softs, 1);
-	mi_ast(p, ci->ci_want_resched);
+	mi_ast(p, curcpu()->ci_want_resched);
 
 	/* Do any deferred user pmap operations. */
 	PMAP_USERRET(vm_map_pmap(&p->p_vmspace->vm_map));
