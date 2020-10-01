@@ -2421,7 +2421,6 @@ pfsync_q_del(struct pf_state *st)
 
 	st->sync_state = PFSYNC_S_NONE;
 	pf_state_unref(st);
-
 }
 
 void
@@ -2551,7 +2550,7 @@ void
 pfsync_bulk_update(void *arg)
 {
 	struct pfsync_softc *sc;
-	struct pf_state *st;
+	struct pf_state *st, *st_next;
 	int i = 0;
 
 	NET_LOCK();
@@ -2566,7 +2565,6 @@ pfsync_bulk_update(void *arg)
 		    st->timeout < PFTM_MAX &&
 		    st->pfsync_time <= sc->sc_ureq_received) {
 			pfsync_update_state_req(st);
-			pf_state_unref(st);
 			i++;
 		}
 
@@ -2576,13 +2574,15 @@ pfsync_bulk_update(void *arg)
 		 * through the whole list.
 		 */
 		PF_STATE_ENTER_READ();
-		st = TAILQ_NEXT(st, entry_list);
+		st_next = TAILQ_NEXT(st, entry_list);
+		pf_state_unref(st);
+		st = st_next;
 		if (st == NULL)
 			st = TAILQ_FIRST(&state_list);
 		pf_state_ref(st);
 		PF_STATE_EXIT_READ();
 
-		if (st == sc->sc_bulk_last) {
+		if ((st == NULL) || (st == sc->sc_bulk_last)) {
 			/* we're done */
 			pf_state_unref(sc->sc_bulk_last);
 			sc->sc_bulk_last = NULL;
