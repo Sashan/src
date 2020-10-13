@@ -2,6 +2,7 @@
 
 include "arch/amd64/conf/GENERIC"
 
+option	WITH_PF_LOCK
 option	MULTIPROCESSOR
 #option	MP_LOCKDEBUG
 #option	WITNESS
