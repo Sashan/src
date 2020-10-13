@@ -1264,14 +1264,12 @@ pf_purge(void *xnloops)
 	NET_LOCK();
 
 	/*
-	 * process a fraction of the state table every second
 	 * Note:
 	 * 	we no longer need PF_LOCK() here, because
 	 * 	pf_purge_expired_states() uses pf_state_lock to maintain
 	 * 	consistency.
 	 */
-	pf_purge_expired_states(1 + (pf_status.states
-	    / pf_default_rule.timeout[PFTM_INTERVAL]));
+	pf_purge_expired_states();
 
 	PF_LOCK();
 	/* purge other expired types every PFTM_INTERVAL seconds */
@@ -1455,17 +1453,26 @@ pf_free_state(struct pf_state *cur)
 }
 
 void
-pf_purge_expired_states(u_int32_t maxcheck)
+pf_purge_expired_states(void)
 {
 	static struct pf_state	*cur = NULL;
 	struct pf_state		*next;
 	SLIST_HEAD(pf_state_gcl, pf_state) gcl;
+	extern int ticks;
+	extern int hz;
+	int start, delta;
 
 	PF_ASSERT_UNLOCKED();
 	SLIST_INIT(&gcl);
 
+	delta = pf_default_rule.timeout[PFTM_INTERVAL] * hz * 7;
+	delta = delta / 10;
+
 	PF_STATE_ENTER_READ();
-	while (maxcheck--) {
+	start = ticks;
+	/* calculate number of ticks as 70% of purge timer interval */
+
+	while ((ticks - start) < delta) {
 		/* wrap to start of list when we hit the end */
 		if (cur == NULL) {
 			cur = pf_state_ref(TAILQ_FIRST(&state_list));
