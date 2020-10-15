@@ -1,4 +1,4 @@
-/* $OpenBSD: mainbus.c,v 1.3 2020/06/08 18:44:32 kettenis Exp $ */
+/* $OpenBSD: mainbus.c,v 1.5 2020/08/26 03:29:06 visa Exp $ */
 /*
  * Copyright (c) 2016 Patrick Wildt <patrick@blueri.se>
  * Copyright (c) 2017 Mark Kettenis <kettenis@openbsd.org>
@@ -110,9 +110,6 @@ mainbus_match(struct device *parent, void *cfdata, void *aux)
 	return (1);
 }
 
-extern char *hw_prod;
-extern char *hw_serial;
-
 void
 mainbus_attach(struct device *parent, struct device *self, void *aux)
 {
@@ -145,6 +142,9 @@ mainbus_attach(struct device *parent, struct device *self, void *aux)
 	/* Attach primary CPU first. */
 	mainbus_attach_cpus(self, mainbus_match_primary);
 
+	/* Attach secondary CPUs. */
+	mainbus_attach_cpus(self, mainbus_match_secondary);
+
 	sc->sc_rangeslen = OF_getproplen(OF_peer(0), "ranges");
 	if (sc->sc_rangeslen > 0 && !(sc->sc_rangeslen % sizeof(uint32_t))) {
 		sc->sc_ranges = malloc(sc->sc_rangeslen, M_TEMP, M_WAITOK);
@@ -160,9 +160,6 @@ mainbus_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_early = 0;
 	for (node = OF_child(sc->sc_node); node != 0; node = OF_peer(node))
 		mainbus_attach_node(self, node, NULL);
-	
-	/* Attach secondary CPUs. */
-	mainbus_attach_cpus(self, mainbus_match_secondary);
 }
 
 int

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_run.c,v 1.128 2020/01/05 08:58:25 jsg Exp $	*/
+/*	$OpenBSD: if_run.c,v 1.131 2020/10/11 07:05:29 mpi Exp $	*/
 
 /*-
  * Copyright (c) 2008-2010 Damien Bergamini <damien.bergamini@free.fr>
@@ -750,7 +750,6 @@ run_free_rx_ring(struct run_softc *sc)
 	int i;
 
 	if (rxq->pipeh != NULL) {
-		usbd_abort_pipe(rxq->pipeh);
 		usbd_close_pipe(rxq->pipeh);
 		rxq->pipeh = NULL;
 	}
@@ -809,7 +808,6 @@ run_free_tx_ring(struct run_softc *sc, int qid)
 	int i;
 
 	if (txq->pipeh != NULL) {
-		usbd_abort_pipe(txq->pipeh);
 		usbd_close_pipe(txq->pipeh);
 		txq->pipeh = NULL;
 	}
@@ -2487,7 +2485,6 @@ run_tx(struct run_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 		tap->wt_rate = rt2860_rates[ridx].rate;
 		tap->wt_chan_freq = htole16(ic->ic_bss->ni_chan->ic_freq);
 		tap->wt_chan_flags = htole16(ic->ic_bss->ni_chan->ic_flags);
-		tap->wt_hwqueue = qid;
 		if (mcs & RT2860_PHY_SHPRE)
 			tap->wt_flags |= IEEE80211_RADIOTAP_F_SHORTPRE;
 
@@ -2547,7 +2544,7 @@ run_start(struct ifnet *ifp)
 			break;
 
 		/* encapsulate and send data frames */
-		IFQ_DEQUEUE(&ifp->if_snd, m);
+		m = ifq_dequeue(&ifp->if_snd);
 		if (m == NULL)
 			break;
 #if NBPFILTER > 0

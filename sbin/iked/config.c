@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.57 2020/04/13 19:10:32 tobhe Exp $	*/
+/*	$OpenBSD: config.c,v 1.70 2020/10/09 08:59:15 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -18,7 +18,6 @@
  */
 
 #include <sys/queue.h>
-#include <sys/wait.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 
@@ -29,7 +28,6 @@
 #include <signal.h>
 #include <errno.h>
 #include <err.h>
-#include <pwd.h>
 #include <event.h>
 
 #include <openssl/evp.h>
@@ -168,6 +166,8 @@ config_free_sa(struct iked *env, struct iked_sa *sa)
 	ibuf_release(sa->sa_rid.id_buf);
 	ibuf_release(sa->sa_icert.id_buf);
 	ibuf_release(sa->sa_rcert.id_buf);
+	ibuf_release(sa->sa_localauth.id_buf);
+	ibuf_release(sa->sa_peerauth.id_buf);
 
 	ibuf_release(sa->sa_eap.id_buf);
 	free(sa->sa_eapid);
@@ -277,10 +277,9 @@ config_free_proposals(struct iked_proposals *head, unsigned int proto)
 void
 config_free_flows(struct iked *env, struct iked_flows *head)
 {
-	struct iked_flow	*flow, *next;
+	struct iked_flow	*flow;
 
-	for (flow = RB_MIN(iked_flows, head); flow != NULL; flow = next) {
-		next = RB_NEXT(iked_flows, head, flow);
+	while ((flow = RB_MIN(iked_flows, head))) {
 		log_debug("%s: free %p", __func__, flow);
 		RB_REMOVE(iked_flows, head, flow);
 		flow_free(flow);
@@ -508,8 +507,8 @@ int
 config_getreset(struct iked *env, struct imsg *imsg)
 {
 	struct iked_policy	*pol, *poltmp;
-	struct iked_sa		*sa, *nextsa;
-	struct iked_user	*usr, *nextusr;
+	struct iked_sa		*sa;
+	struct iked_user	*usr;
 	unsigned int		 mode;
 
 	IMSG_SIZE_CHECK(imsg, &mode);
@@ -524,9 +523,7 @@ config_getreset(struct iked *env, struct imsg *imsg)
 
 	if (mode == RESET_ALL || mode == RESET_SA) {
 		log_debug("%s: flushing SAs", __func__);
-		for (sa = RB_MIN(iked_sas, &env->sc_sas);
-		    sa != NULL; sa = nextsa) {
-			nextsa = RB_NEXT(iked_sas, &env->sc_sas, sa);
+		while ((sa = RB_MIN(iked_sas, &env->sc_sas))) {
 			/* for RESET_SA we try send a DELETE */
 			if (mode == RESET_ALL ||
 			    ikev2_ike_sa_delete(env, sa) != 0) {
@@ -538,9 +535,7 @@ config_getreset(struct iked *env, struct imsg *imsg)
 
 	if (mode == RESET_ALL || mode == RESET_USER) {
 		log_debug("%s: flushing users", __func__);
-		for (usr = RB_MIN(iked_users, &env->sc_users);
-		    usr != NULL; usr = nextusr) {
-			nextusr = RB_NEXT(iked_users, &env->sc_users, usr);
+		while ((usr = RB_MIN(iked_users, &env->sc_users))) {
 			RB_REMOVE(iked_users, &env->sc_users, usr);
 			free(usr);
 		}
@@ -738,7 +733,7 @@ config_getpolicy(struct iked *env, struct imsg *imsg)
 {
 	struct iked_policy	*pol;
 	struct iked_proposal	 pp, *prop;
-	struct iked_transform	 xf, *xform;
+	struct iked_transform	 xf;
 	off_t			 offset = 0;
 	unsigned int		 i, j;
 	uint8_t			*buf = (uint8_t *)imsg->data;
@@ -770,9 +765,9 @@ config_getpolicy(struct iked *env, struct imsg *imsg)
 			memcpy(&xf, buf + offset, sizeof(xf));
 			offset += sizeof(xf);
 
-			if ((xform = config_add_transform(prop, xf.xform_type,
+			if (config_add_transform(prop, xf.xform_type,
 			    xf.xform_id, xf.xform_length,
-			    xf.xform_keylength)) == NULL)
+			    xf.xform_keylength) == NULL)
 				fatal("config_getpolicy: add transform");
 		}
 	}
@@ -842,7 +837,7 @@ config_setcompile(struct iked *env, enum privsep_procid id)
 }
 
 int
-config_getcompile(struct iked *env, struct imsg *imsg)
+config_getcompile(struct iked *env)
 {
 	/*
 	 * Do any necessary steps after configuration, for now we
@@ -855,73 +850,109 @@ config_getcompile(struct iked *env, struct imsg *imsg)
 }
 
 int
-config_setmobike(struct iked *env)
+config_setstatic(struct iked *env)
 {
-	unsigned int boolval;
-
-	boolval = env->sc_mobike;
-	proc_compose(&env->sc_ps, PROC_IKEV2, IMSG_CTL_MOBIKE,
-	    &boolval, sizeof(boolval));
+	proc_compose(&env->sc_ps, PROC_IKEV2, IMSG_CTL_STATIC,
+	    &env->sc_static, sizeof(env->sc_static));
 	return (0);
 }
 
 int
-config_getmobike(struct iked *env, struct imsg *imsg)
+config_getstatic(struct iked *env, struct imsg *imsg)
 {
-	unsigned int boolval;
+	IMSG_SIZE_CHECK(imsg, &env->sc_static);
+	memcpy(&env->sc_static, imsg->data, sizeof(env->sc_static));
 
-	IMSG_SIZE_CHECK(imsg, &boolval);
-	memcpy(&boolval, imsg->data, sizeof(boolval));
-	env->sc_mobike = boolval;
-	log_debug("%s: %smobike", __func__, env->sc_mobike ? "" : "no ");
-	return (0);
-}
-
-int
-config_setfragmentation(struct iked *env)
-{
-	unsigned int boolval;
-
-	boolval = env->sc_frag;
-	proc_compose(&env->sc_ps, PROC_IKEV2, IMSG_CTL_FRAGMENTATION,
-	    &boolval, sizeof(boolval));
-	return (0);
-}
-
-int
-config_getfragmentation(struct iked *env, struct imsg *imsg)
-{
-	unsigned int boolval;
-
-	IMSG_SIZE_CHECK(imsg, &boolval);
-	memcpy(&boolval, imsg->data, sizeof(boolval));
-	env->sc_frag = boolval;
+	log_debug("%s: dpd_check_interval %llu", __func__, env->sc_alive_timeout);
+	log_debug("%s: %senforcesingleikesa", __func__,
+	    env->sc_enforcesingleikesa ? "" : "no ");
 	log_debug("%s: %sfragmentation", __func__, env->sc_frag ? "" : "no ");
+	log_debug("%s: %smobike", __func__, env->sc_mobike ? "" : "no ");
+	log_debug("%s: nattport %u", __func__, env->sc_nattport);
+
 	return (0);
 }
 
 int
 config_setocsp(struct iked *env)
 {
+	struct iovec		 iov[3];
+	int			 iovcnt = 0;
+
 	if (env->sc_opts & IKED_OPT_NOACTION)
 		return (0);
-	proc_compose(&env->sc_ps, PROC_CERT,
-	    IMSG_OCSP_URL, env->sc_ocsp_url,
-	    env->sc_ocsp_url ? strlen(env->sc_ocsp_url) : 0);
 
-	return (0);
+	iov[0].iov_base = &env->sc_ocsp_tolerate;
+	iov[0].iov_len = sizeof(env->sc_ocsp_tolerate);
+	iovcnt++;
+	iov[1].iov_base = &env->sc_ocsp_maxage;
+	iov[1].iov_len = sizeof(env->sc_ocsp_maxage);
+	iovcnt++;
+	if (env->sc_ocsp_url) {
+		iov[2].iov_base = env->sc_ocsp_url;
+		iov[2].iov_len = strlen(env->sc_ocsp_url);
+		iovcnt++;
+	}
+	return (proc_composev(&env->sc_ps, PROC_CERT, IMSG_OCSP_CFG,
+	    iov, iovcnt));
 }
 
 int
 config_getocsp(struct iked *env, struct imsg *imsg)
 {
+	size_t			 have, need;
+	u_int8_t		*ptr;
+
 	free(env->sc_ocsp_url);
-	if (IMSG_DATA_SIZE(imsg) > 0)
-		env->sc_ocsp_url = get_string(imsg->data, IMSG_DATA_SIZE(imsg));
+	ptr = (u_int8_t *)imsg->data;
+	have = IMSG_DATA_SIZE(imsg);
+
+	/* get tolerate */
+	need = sizeof(env->sc_ocsp_tolerate);
+	if (have < need)
+		fatalx("bad 'tolerate' length imsg received");
+	memcpy(&env->sc_ocsp_tolerate, ptr, need);
+	ptr += need;
+	have -= need;
+
+	/* get maxage */
+	need = sizeof(env->sc_ocsp_maxage);
+	if (have < need)
+		fatalx("bad 'maxage' length imsg received");
+	memcpy(&env->sc_ocsp_maxage, ptr, need);
+	ptr += need;
+	have -= need;
+
+	/* get url */
+	if (have > 0)
+		env->sc_ocsp_url = get_string(ptr, have);
 	else
 		env->sc_ocsp_url = NULL;
-	log_debug("%s: ocsp_url %s", __func__,
-	    env->sc_ocsp_url ? env->sc_ocsp_url : "none");
+	log_debug("%s: ocsp_url %s tolerate %ld maxage %ld", __func__,
+	    env->sc_ocsp_url ? env->sc_ocsp_url : "none",
+	    env->sc_ocsp_tolerate, env->sc_ocsp_maxage);
+	return (0);
+}
+
+int
+config_setcertpartialchain(struct iked *env)
+{
+	unsigned int boolval;
+
+	boolval = env->sc_cert_partial_chain;
+	proc_compose(&env->sc_ps, PROC_CERT, IMSG_CERT_PARTIAL_CHAIN,
+	    &boolval, sizeof(boolval));
+	return (0);
+}
+
+int
+config_getcertpartialchain(struct iked *env, struct imsg *imsg)
+{
+	unsigned int boolval;
+
+	IMSG_SIZE_CHECK(imsg, &boolval);
+	memcpy(&boolval, imsg->data, sizeof(boolval));
+	env->sc_cert_partial_chain = boolval;
 	return (0);
 }
 
@@ -991,29 +1022,6 @@ config_setkeys(struct iked *env)
 }
 
 int
-config_setnattport(struct iked *env)
-{
-	in_port_t nattport;
-
-	nattport = env->sc_nattport;
-	proc_compose(&env->sc_ps, PROC_IKEV2, IMSG_CTL_NATTPORT,
-	    &nattport, sizeof(nattport));
-	return (0);
-}
-
-int
-config_getnattport(struct iked *env, struct imsg *imsg)
-{
-	in_port_t nattport;
-
-	IMSG_SIZE_CHECK(imsg, &nattport);
-	memcpy(&nattport, imsg->data, sizeof(nattport));
-	env->sc_nattport = nattport;
-	log_debug("%s: nattport %u", __func__, env->sc_nattport);
-	return (0);
-}
-
-int
 config_getkey(struct iked *env, struct imsg *imsg)
 {
 	size_t		 len;
@@ -1030,6 +1038,8 @@ config_getkey(struct iked *env, struct imsg *imsg)
 
 	explicit_bzero(imsg->data, len);
 	ca_getkey(&env->sc_ps, &id, imsg->hdr.type);
+
+	ikev2_reset_alive_timer(env);
 
 	return (0);
 }

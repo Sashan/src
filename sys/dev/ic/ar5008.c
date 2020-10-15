@@ -1,4 +1,4 @@
-/*	$OpenBSD: ar5008.c,v 1.59 2020/05/23 08:42:50 stsp Exp $	*/
+/*	$OpenBSD: ar5008.c,v 1.62 2020/10/11 07:05:28 mpi Exp $	*/
 
 /*-
  * Copyright (c) 2009 Damien Bergamini <damien.bergamini@free.fr>
@@ -811,12 +811,20 @@ ar5008_ccmp_decap(struct athn_softc *sc, struct mbuf *m, struct ieee80211_node *
 	/* Sanity checks to ensure this is really a key we installed. */
 	entry = (uintptr_t)k->k_priv;
 	if (k->k_flags & IEEE80211_KEY_GROUP) {
-		if (k->k_id > IEEE80211_WEP_NKID ||
+		if (k->k_id >= IEEE80211_WEP_NKID ||
 		    entry != k->k_id)
 			return 1;
-	} else if (entry != IEEE80211_WEP_NKID +
-	    IEEE80211_AID(ni->ni_associd))
-		return 1;
+	} else {
+#ifndef IEEE80211_STA_ONLY
+		if (ic->ic_opmode == IEEE80211_M_HOSTAP) {
+			if (entry != IEEE80211_WEP_NKID +
+			    IEEE80211_AID(ni->ni_associd))
+				return 1;
+		} else
+#endif
+			if (entry != IEEE80211_WEP_NKID)
+				return 1;
+	}
 
 	/* Check that ExtIV bit is set. */
 	if (!(ivp[3] & IEEE80211_WEP_EXTIV))
@@ -997,7 +1005,7 @@ ar5008_rx_process(struct athn_softc *sc, struct mbuf_list *ml)
 	    (ni->ni_flags & IEEE80211_NODE_RXPROT) &&
 	    (ni->ni_rsncipher == IEEE80211_CIPHER_CCMP ||
 	    (IEEE80211_IS_MULTICAST(wh->i_addr1) &&
-	    ic->ic_rsngroupcipher == IEEE80211_CIPHER_CCMP))) {
+	    ni->ni_rsngroupcipher == IEEE80211_CIPHER_CCMP))) {
 		if (ar5008_ccmp_decap(sc, m, ni) != 0) {
 			ifp->if_ierrors++;
 			ieee80211_release_node(ic, ni);
@@ -1514,7 +1522,6 @@ ar5008_tx(struct athn_softc *sc, struct mbuf *m, struct ieee80211_node *ni,
 			tap->wt_rate = athn_rates[ridx[0]].rate;
 		tap->wt_chan_freq = htole16(ic->ic_bss->ni_chan->ic_freq);
 		tap->wt_chan_flags = htole16(ic->ic_bss->ni_chan->ic_flags);
-		tap->wt_hwqueue = qid;
 		if (athn_rates[ridx[0]].phy == IEEE80211_T_DS &&
 		    ridx[0] != ATHN_RIDX_CCK1 &&
 		    (ic->ic_flags & IEEE80211_F_SHPREAMBLE))

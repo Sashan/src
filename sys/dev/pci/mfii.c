@@ -1,4 +1,4 @@
-/* $OpenBSD: mfii.c,v 1.73 2020/06/27 17:28:58 krw Exp $ */
+/* $OpenBSD: mfii.c,v 1.82 2020/09/22 19:32:53 krw Exp $ */
 
 /*
  * Copyright (c) 2012 David Gwynne <dlg@openbsd.org>
@@ -241,7 +241,6 @@ struct mfii_pd_dev_handles {
 };
 
 struct mfii_pd_softc {
-	struct scsi_link	pd_link;
 	struct scsibus_softc	*pd_scsibus;
 	struct mfii_pd_dev_handles *pd_dev_handles;
 	uint8_t			pd_timeout;
@@ -300,7 +299,6 @@ struct mfii_softc {
 	struct mfii_ccb_list	sc_abort_list;
 	struct task		sc_abort_task;
 
-	struct scsi_link	sc_link;
 	struct scsibus_softc	*sc_scsibus;
 	struct mfii_pd_softc	*sc_pd;
 	struct scsi_iopool	sc_iopool;
@@ -781,17 +779,18 @@ mfii_attach(struct device *parent, struct device *self, void *aux)
 	if (sc->sc_ih == NULL)
 		goto free_sgl;
 
-	sc->sc_link.openings = sc->sc_max_cmds;
-	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.adapter = &mfii_switch;
-	sc->sc_link.adapter_target = SDEV_NO_ADAPTER_TARGET;
-	sc->sc_link.adapter_buswidth = sc->sc_info.mci_max_lds;
-	sc->sc_link.pool = &sc->sc_iopool;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter = &mfii_switch;
+	saa.saa_adapter_target = SDEV_NO_ADAPTER_TARGET;
+	saa.saa_adapter_buswidth = sc->sc_info.mci_max_lds;
+	saa.saa_luns = 8;
+	saa.saa_openings = sc->sc_max_cmds;
+	saa.saa_pool = &sc->sc_iopool;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
-	saa.saa_sc_link = &sc->sc_link;
-
-	sc->sc_scsibus = (struct scsibus_softc *)
-	    config_found(&sc->sc_dev, &saa, scsiprint);
+	sc->sc_scsibus = (struct scsibus_softc *)config_found(&sc->sc_dev, &saa,
+	    scsiprint);
 
 	mfii_syspd(sc);
 
@@ -907,7 +906,6 @@ int
 mfii_syspd(struct mfii_softc *sc)
 {
 	struct scsibus_attach_args saa;
-	struct scsi_link *link;
 
 	sc->sc_pd = malloc(sizeof(*sc->sc_pd), M_DEVBUF, M_WAITOK|M_ZERO);
 	if (sc->sc_pd == NULL)
@@ -916,15 +914,15 @@ mfii_syspd(struct mfii_softc *sc)
 	if (mfii_dev_handles_update(sc) != 0)
 		goto free_pdsc;
 
-	link = &sc->sc_pd->pd_link;
-	link->adapter = &mfii_pd_switch;
-	link->adapter_softc = sc;
-	link->adapter_buswidth = MFI_MAX_PD;
-	link->adapter_target = SDEV_NO_ADAPTER_TARGET;
-	link->openings = sc->sc_max_cmds - 1;
-	link->pool = &sc->sc_iopool;
-
-	saa.saa_sc_link = link;
+	saa.saa_adapter =  &mfii_pd_switch;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter_buswidth = MFI_MAX_PD;
+	saa.saa_adapter_target = SDEV_NO_ADAPTER_TARGET;
+	saa.saa_luns = 8;
+	saa.saa_openings = sc->sc_max_cmds - 1;
+	saa.saa_pool = &sc->sc_iopool;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
 	sc->sc_pd->pd_scsibus = (struct scsibus_softc *)
 	    config_found(&sc->sc_dev, &saa, scsiprint);
@@ -2079,7 +2077,7 @@ void
 mfii_scsi_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link *link = xs->sc_link;
-	struct mfii_softc *sc = link->adapter_softc;
+	struct mfii_softc *sc = link->bus->sb_adapter_softc;
 	struct mfii_ccb *ccb = xs->io;
 
 	mfii_scrub_ccb(ccb);
@@ -2090,13 +2088,13 @@ mfii_scsi_cmd(struct scsi_xfer *xs)
 
 	timeout_set(&xs->stimeout, mfii_scsi_cmd_tmo, xs);
 
-	switch (xs->cmd->opcode) {
+	switch (xs->cmd.opcode) {
 	case READ_COMMAND:
-	case READ_BIG:
+	case READ_10:
 	case READ_12:
 	case READ_16:
 	case WRITE_COMMAND:
-	case WRITE_BIG:
+	case WRITE_10:
 	case WRITE_12:
 	case WRITE_16:
 		if (mfii_scsi_cmd_io(sc, xs) != 0)
@@ -2168,7 +2166,7 @@ mfii_scsi_cmd_done(struct mfii_softc *sc, struct mfii_ccb *ccb)
 int
 mfii_scsi_ioctl(struct scsi_link *link, u_long cmd, caddr_t addr, int flag)
 {
-	struct mfii_softc	*sc = (struct mfii_softc *)link->adapter_softc;
+	struct mfii_softc	*sc = link->bus->sb_adapter_softc;
 
 	DNPRINTF(MFII_D_IOCTL, "%s: mfii_scsi_ioctl\n", DEVNAME(sc));
 
@@ -2180,7 +2178,7 @@ mfii_scsi_ioctl(struct scsi_link *link, u_long cmd, caddr_t addr, int flag)
 
 	default:
 		if (sc->sc_ioctl)
-			return (sc->sc_ioctl(link->adapter_softc, cmd, addr));
+			return (sc->sc_ioctl(&sc->sc_dev, cmd, addr));
 		break;
 	}
 
@@ -2190,7 +2188,7 @@ mfii_scsi_ioctl(struct scsi_link *link, u_long cmd, caddr_t addr, int flag)
 int
 mfii_ioctl_cache(struct scsi_link *link, u_long cmd,  struct dk_cache *dc)
 {
-	struct mfii_softc	*sc = (struct mfii_softc *)link->adapter_softc;
+	struct mfii_softc	*sc = link->bus->sb_adapter_softc;
 	int			 rv, wrenable, rdenable;
 	struct mfi_ld_prop	 ldp;
 	union mfi_mbox		 mbox;
@@ -2299,7 +2297,7 @@ mfii_scsi_cmd_io(struct mfii_softc *sc, struct scsi_xfer *xs)
 		io->direction = MPII_SCSIIO_DIR_NONE;
 		break;
 	}
-	memcpy(io->cdb, xs->cmd, xs->cmdlen);
+	memcpy(io->cdb, &xs->cmd, xs->cmdlen);
 
 	ctx->type_nseg = sc->sc_iop->ldio_ctx_type_nseg;
 	ctx->timeout_value = htole16(0x14); /* XXX */
@@ -2358,7 +2356,7 @@ mfii_scsi_cmd_cdb(struct mfii_softc *sc, struct scsi_xfer *xs)
 		io->direction = MPII_SCSIIO_DIR_NONE;
 		break;
 	}
-	memcpy(io->cdb, xs->cmd, xs->cmdlen);
+	memcpy(io->cdb, &xs->cmd, xs->cmdlen);
 
 	ctx->virtual_disk_target_id = htole16(link->target);
 
@@ -2378,7 +2376,7 @@ void
 mfii_pd_scsi_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link *link = xs->sc_link;
-	struct mfii_softc *sc = link->adapter_softc;
+	struct mfii_softc *sc = link->bus->sb_adapter_softc;
 	struct mfii_ccb *ccb = xs->io;
 
 	mfii_scrub_ccb(ccb);
@@ -2416,7 +2414,7 @@ done:
 int
 mfii_pd_scsi_probe(struct scsi_link *link)
 {
-	struct mfii_softc *sc = link->adapter_softc;
+	struct mfii_softc *sc = link->bus->sb_adapter_softc;
 	struct mfi_pd_details mpd;
 	union mfi_mbox mbox;
 	int rv;
@@ -2474,7 +2472,7 @@ mfii_pd_scsi_cmd_cdb(struct mfii_softc *sc, struct scsi_xfer *xs)
 		io->direction = MPII_SCSIIO_DIR_NONE;
 		break;
 	}
-	memcpy(io->cdb, xs->cmd, xs->cmdlen);
+	memcpy(io->cdb, &xs->cmd, xs->cmdlen);
 
 	ctx->virtual_disk_target_id = htole16(link->target);
 	ctx->raid_flags = MFII_RAID_CTX_IO_TYPE_SYSPD;
@@ -2565,7 +2563,7 @@ mfii_scsi_cmd_tmo(void *xsp)
 {
 	struct scsi_xfer *xs = xsp;
 	struct scsi_link *link = xs->sc_link;
-	struct mfii_softc *sc = link->adapter_softc;
+	struct mfii_softc *sc = link->bus->sb_adapter_softc;
 	struct mfii_ccb *ccb = xs->io;
 
 	mtx_enter(&sc->sc_abort_mtx);

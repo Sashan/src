@@ -1,4 +1,4 @@
-/* $OpenBSD: window-customize.c,v 1.4 2020/06/16 08:18:34 nicm Exp $ */
+/* $OpenBSD: window-customize.c,v 1.7 2020/09/18 11:20:59 nicm Exp $ */
 
 /*
  * Copyright (c) 2020 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -380,7 +380,7 @@ window_customize_build_options(struct window_customize_modedata *data,
     struct format_tree *ft, const char *filter, struct cmd_find_state *fs)
 {
 	struct mode_tree_item		 *top;
-	struct options_entry		 *o, *loop;
+	struct options_entry		 *o = NULL, *loop;
 	const char			**list = NULL, *name;
 	u_int				  size = 0, i;
 	enum window_customize_scope	  scope;
@@ -403,9 +403,9 @@ window_customize_build_options(struct window_customize_modedata *data,
 	for (i = 0; i < size; i++) {
 		if (oo2 != NULL)
 			o = options_get(oo0, list[i]);
-		else if (oo1 != NULL)
+		if (o == NULL && oo1 != NULL)
 			o = options_get(oo1, list[i]);
-		else
+		if (o == NULL)
 			o = options_get(oo2, list[i]);
 		if (options_owner(o) == oo2)
 			scope = scope2;
@@ -1003,7 +1003,7 @@ window_customize_set_option_callback(struct client *c, void *itemdata,
 
 fail:
 	*cause = toupper((u_char)*cause);
-	status_message_set(c, 1, "%s", cause);
+	status_message_set(c, -1, 1, "%s", cause);
 	free(cause);
 	return (0);
 }
@@ -1018,7 +1018,7 @@ window_customize_set_option(struct client *c,
 	struct options				*oo;
 	struct window_customize_itemdata	*new_item;
 	int					 flag, idx = item->idx;
-	enum window_customize_scope		 scope;
+	enum window_customize_scope		 scope = WINDOW_CUSTOMIZE_NONE;
 	u_int					 choice;
 	const char				*name = item->name, *space = "";
 	char					*prompt, *value, *text;
@@ -1031,7 +1031,7 @@ window_customize_set_option(struct client *c,
 		return;
 
 	oe = options_table_entry(o);
-	if (~oe->scope & OPTIONS_TABLE_PANE)
+	if (oe != NULL && ~oe->scope & OPTIONS_TABLE_PANE)
 		pane = 0;
 	if (oe != NULL && (oe->flags & OPTIONS_TABLE_IS_ARRAY)) {
 		scope = item->scope;
@@ -1209,7 +1209,7 @@ window_customize_set_command_callback(struct client *c, void *itemdata,
 
 fail:
 	*error = toupper((u_char)*error);
-	status_message_set(c, 1, "%s", error);
+	status_message_set(c, -1, 1, "%s", error);
 	free(error);
 	return (0);
 }

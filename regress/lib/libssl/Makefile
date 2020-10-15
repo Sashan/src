@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.39 2020/05/21 10:46:29 tb Exp $
+#	$OpenBSD: Makefile,v 1.41 2020/10/07 09:35:03 jsing Exp $
 
 SUBDIR += asn1
 SUBDIR += buffer
@@ -12,12 +12,13 @@ SUBDIR += record_layer
 SUBDIR += server
 SUBDIR += ssl
 SUBDIR += tlsext
+SUBDIR += tlslegacy
 SUBDIR += key_schedule
 SUBDIR += unit
 
 # Things that take a long time should go below here. 
-SUBDIR += interop
 SUBDIR += tlsfuzzer
+SUBDIR += interop
 
 install:
 

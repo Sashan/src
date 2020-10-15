@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfkey.c,v 1.66 2020/06/26 18:56:52 bket Exp $	*/
+/*	$OpenBSD: pfkey.c,v 1.71 2020/09/09 21:25:42 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2010-2013 Reyk Floeter <reyk@openbsd.org>
@@ -110,6 +110,8 @@ int	pfkey_write(int, struct sadb_msg *, struct iovec *, int,
 	    uint8_t **, ssize_t *);
 int	pfkey_reply(int, uint8_t **, ssize_t *);
 void	pfkey_dispatch(int, short, void *);
+int	pfkey_sa_lookup(int, struct iked_childsa *, uint64_t *);
+int	pfkey_sa_check_exists(int, struct iked_childsa *);
 
 struct sadb_ident *
 	pfkey_id2ident(struct iked_id *, unsigned int);
@@ -350,17 +352,6 @@ pfkey_flow(int sd, uint8_t satype, uint8_t action, struct iked_flow *flow)
 	iov_cnt++;
 
 	if (action != SADB_X_DELFLOW && flow->flow_local != NULL) {
-#if 0
-		/* local ip */
-		iov[iov_cnt].iov_base = &sa_local;
-		iov[iov_cnt].iov_len = sizeof(sa_local);
-		iov_cnt++;
-		iov[iov_cnt].iov_base = &slocal;
-		iov[iov_cnt].iov_len = ROUNDUP(slocal.ss_len);
-		smsg.sadb_msg_len += sa_local.sadb_address_len;
-		iov_cnt++;
-#endif
-
 		/* remote peer */
 		iov[iov_cnt].iov_base = &sa_peer;
 		iov[iov_cnt].iov_len = sizeof(sa_peer);
@@ -818,7 +809,7 @@ pfkey_sa(int sd, uint8_t satype, uint8_t action, struct iked_childsa *sa)
 }
 
 int
-pfkey_sa_last_used(int sd, struct iked_childsa *sa, uint64_t *last_used)
+pfkey_sa_lookup(int sd, struct iked_childsa *sa, uint64_t *last_used)
 {
 	struct iked_policy	*pol = sa->csa_ikesa->sa_policy;
 	struct sadb_msg		*msg, smsg;
@@ -833,7 +824,8 @@ pfkey_sa_last_used(int sd, struct iked_childsa *sa, uint64_t *last_used)
 	int			 iov_cnt, ret = -1, rdomain;
 	uint8_t			 satype;
 
-	*last_used = 0;
+	if (last_used)
+		*last_used = 0;
 
 	if (pfkey_map(pfkey_satype, sa->csa_saproto, &satype) == -1)
 		return (-1);
@@ -932,18 +924,32 @@ pfkey_sa_last_used(int sd, struct iked_childsa *sa, uint64_t *last_used)
 		log_warn("%s: message", __func__);
 		goto done;
 	}
-	if ((sa_life = pfkey_find_ext(data, n, SADB_X_EXT_LIFETIME_LASTUSE))
-	    == NULL) {
-		/* has never been used */
-		ret = -1;
-		goto done;
+	if (last_used) {
+		if ((sa_life = pfkey_find_ext(data, n,
+		    SADB_X_EXT_LIFETIME_LASTUSE)) == NULL) {
+			/* has never been used */
+			ret = -1;
+			goto done;
+		}
+		*last_used = sa_life->sadb_lifetime_usetime;
+		log_debug("%s: last_used %llu", __func__, *last_used);
 	}
-	*last_used = sa_life->sadb_lifetime_usetime;
-	log_debug("%s: last_used %llu", __func__, *last_used);
 
 done:
 	freezero(data, n);
 	return (ret);
+}
+
+int
+pfkey_sa_last_used(int sd, struct iked_childsa *sa, uint64_t *last_used)
+{
+	return pfkey_sa_lookup(sd, sa, last_used);
+}
+
+int
+pfkey_sa_check_exists(int sd, struct iked_childsa *sa)
+{
+	return pfkey_sa_lookup(sd, sa, NULL);
 }
 
 int
@@ -1231,6 +1237,7 @@ pfkey_write(int sd, struct sadb_msg *smsg, struct iovec *iov, int iov_cnt,
 	return (pfkey_reply(sd, datap, lenp));
 }
 
+/* wait for pfkey response and returns 0 for ok, -1 for error, -2 for timeout */
 int
 pfkey_reply(int sd, uint8_t **datap, ssize_t *lenp)
 {
@@ -1259,7 +1266,7 @@ pfkey_reply(int sd, uint8_t **datap, ssize_t *lenp)
 		}
 		if (n == 0) {
 			log_warnx("%s: no reply from PF_KEY", __func__);
-			return (-1);
+			return (-2);	/* retry */
 		}
 
 		if (recv(sd, &hdr, sizeof(hdr), MSG_PEEK) != sizeof(hdr)) {
@@ -1385,6 +1392,7 @@ pfkey_sa_add(int fd, struct iked_childsa *sa, struct iked_childsa *last)
 {
 	uint8_t		 satype;
 	unsigned int	 cmd;
+	int		 rval;
 
 	if (pfkey_map(pfkey_satype, sa->csa_saproto, &satype) == -1)
 		return (-1);
@@ -1397,8 +1405,17 @@ pfkey_sa_add(int fd, struct iked_childsa *sa, struct iked_childsa *last)
 	log_debug("%s: %s spi %s", __func__, cmd == SADB_ADD ? "add": "update",
 	    print_spi(sa->csa_spi.spi, 4));
 
-	if (pfkey_sa(fd, satype, cmd, sa) == -1) {
+	rval = pfkey_sa(fd, satype, cmd, sa);
+	if (rval != 0) {
 		if (cmd == SADB_ADD) {
+			if (rval == -2) {
+				/* timeout: check for existence */
+				if (pfkey_sa_check_exists(fd, sa) == 0) {
+					log_debug("%s: SA exists after timeout",
+					    __func__);
+					goto loaded;
+				}
+			}
 			(void)pfkey_sa_delete(fd, sa);
 			return (-1);
 		}
@@ -1413,6 +1430,7 @@ pfkey_sa_add(int fd, struct iked_childsa *sa, struct iked_childsa *last)
 		}
 	}
 
+ loaded:
 	if (last != NULL) {
 		if (pfkey_sagroup(fd, satype,
 		    SADB_X_GRPSPIS, sa, last) == -1) {
@@ -1454,7 +1472,8 @@ pfkey_sa_delete(int fd, struct iked_childsa *sa)
 	if (pfkey_map(pfkey_satype, sa->csa_saproto, &satype) == -1)
 		return (-1);
 
-	if (pfkey_sa(fd, satype, SADB_DELETE, sa) == -1)
+	if (pfkey_sa(fd, satype, SADB_DELETE, sa) == -1 &&
+	    pfkey_sa_check_exists(fd, sa) == 0)
 		return (-1);
 
 	sa->csa_loaded = 0;
@@ -1865,6 +1884,18 @@ pfkey_process(struct iked *env, struct pfkey_message *pm)
 			return (0);
 		}
 
+		switch (hdr->sadb_msg_satype) {
+		case SADB_SATYPE_AH:
+			flow.flow_saproto = IKEV2_SAPROTO_AH;
+			break;
+		case SADB_SATYPE_ESP:
+			flow.flow_saproto = IKEV2_SAPROTO_ESP;
+			break;
+		case SADB_X_SATYPE_IPCOMP:
+			flow.flow_saproto = IKEV2_SAPROTO_IPCOMP;
+			break;
+		}
+
 		if ((sa_proto = pfkey_find_ext(reply, rlen,
 		    SADB_X_EXT_FLOW_TYPE)) == NULL) {
 			errmsg = "flow protocol";
@@ -1879,7 +1910,7 @@ pfkey_process(struct iked *env, struct pfkey_message *pm)
 		    print_host(sdst, NULL, 0), print_host(dmask, NULL, 0),
 		    print_host(speer, NULL, 0));
 
-		ret = ikev2_acquire_sa(env, &flow);
+		ret = ikev2_child_sa_acquire(env, &flow);
 
 out:
 		if (errmsg)
@@ -1926,9 +1957,9 @@ out:
 		    "rekeying" : "deletion");
 
 		if (sa_ltime->sadb_lifetime_exttype == SADB_EXT_LIFETIME_SOFT)
-			ret = ikev2_rekey_sa(env, &spi);
+			ret = ikev2_child_sa_rekey(env, &spi);
 		else
-			ret = ikev2_drop_sa(env, &spi);
+			ret = ikev2_child_sa_drop(env, &spi);
 		break;
 	}
 	return (ret);

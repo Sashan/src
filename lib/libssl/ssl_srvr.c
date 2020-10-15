@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_srvr.c,v 1.79 2020/06/05 17:53:26 jsing Exp $ */
+/* $OpenBSD: ssl_srvr.c,v 1.87 2020/10/11 02:22:27 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -361,7 +361,7 @@ ssl3_accept(SSL *s)
 
 		case DTLS1_ST_SW_HELLO_VERIFY_REQUEST_A:
 		case DTLS1_ST_SW_HELLO_VERIFY_REQUEST_B:
-			ret = dtls1_send_hello_verify_request(s);
+			ret = ssl3_send_dtls_hello_verify_request(s);
 			if (ret <= 0)
 				goto end;
 			S3I(s)->hs.state = SSL3_ST_SW_FLUSH;
@@ -691,10 +691,8 @@ ssl3_accept(SSL *s)
 				goto end;
 			}
 
-			if (!SSL_IS_DTLS(s)) {
-				BUF_MEM_free(s->internal->init_buf);
-				s->internal->init_buf = NULL;
-			}
+			if (!SSL_IS_DTLS(s))
+				ssl3_release_init_buffer(s);
 
 			/* remove buffering on output */
 			ssl_free_wbio_buffer(s);
@@ -870,9 +868,7 @@ ssl3_get_client_hello(SSL *s)
 	s->client_version = client_version;
 	s->version = shared_version;
 
-	if ((method = tls1_get_server_method(shared_version)) == NULL)
-		method = dtls1_get_server_method(shared_version);
-	if (method == NULL) {
+	if ((method = ssl_get_method(shared_version)) == NULL) {
 		SSLerror(s, ERR_R_INTERNAL_ERROR);
 		goto err;
 	}
@@ -920,11 +916,11 @@ ssl3_get_client_hello(SSL *s)
 
 		CBS_dup(&cbs, &ext_block);
 
-		i = ssl_get_prev_session(s, &session_id, &ext_block);
+		i = ssl_get_prev_session(s, &session_id, &ext_block, &al);
 		if (i == 1) { /* previous session */
 			s->internal->hit = 1;
 		} else if (i == -1)
-			goto err;
+			goto f_err;
 		else {
 			/* i == 0 */
 			if (!ssl_get_new_session(s, 1))
@@ -1025,7 +1021,7 @@ ssl3_get_client_hello(SSL *s)
 		goto f_err;
 	}
 
-	if (!tlsext_server_parse(s, &cbs, &al, SSL_TLSEXT_MSG_CH)) {
+	if (!tlsext_server_parse(s, SSL_TLSEXT_MSG_CH, &cbs, &al)) {
 		SSLerror(s, SSL_R_PARSE_TLSEXT);
 		goto f_err;
 	}
@@ -1096,11 +1092,7 @@ ssl3_get_client_hello(SSL *s)
 			s->session->cipher = pref_cipher;
 
 			sk_SSL_CIPHER_free(s->cipher_list);
-			sk_SSL_CIPHER_free(s->internal->cipher_list_by_id);
-
 			s->cipher_list = sk_SSL_CIPHER_dup(s->session->ciphers);
-			s->internal->cipher_list_by_id =
-			    sk_SSL_CIPHER_dup(s->session->ciphers);
 		}
 	}
 
@@ -1173,6 +1165,45 @@ err:
 }
 
 int
+ssl3_send_dtls_hello_verify_request(SSL *s)
+{
+	CBB cbb, verify, cookie;
+
+	memset(&cbb, 0, sizeof(cbb));
+
+	if (S3I(s)->hs.state == DTLS1_ST_SW_HELLO_VERIFY_REQUEST_A) {
+		if (s->ctx->internal->app_gen_cookie_cb == NULL ||
+		    s->ctx->internal->app_gen_cookie_cb(s, D1I(s)->cookie,
+			&(D1I(s)->cookie_len)) == 0) {
+			SSLerror(s, ERR_R_INTERNAL_ERROR);
+			return 0;
+		}
+
+		if (!ssl3_handshake_msg_start(s, &cbb, &verify,
+		    DTLS1_MT_HELLO_VERIFY_REQUEST))
+			goto err;
+		if (!CBB_add_u16(&verify, s->version))
+			goto err;
+		if (!CBB_add_u8_length_prefixed(&verify, &cookie))
+			goto err;
+		if (!CBB_add_bytes(&cookie, D1I(s)->cookie, D1I(s)->cookie_len))
+			goto err;
+		if (!ssl3_handshake_msg_finish(s, &cbb))
+			goto err;
+
+		S3I(s)->hs.state = DTLS1_ST_SW_HELLO_VERIFY_REQUEST_B;
+	}
+
+	/* S3I(s)->hs.state = DTLS1_ST_SW_HELLO_VERIFY_REQUEST_B */
+	return (ssl3_handshake_write(s));
+
+ err:
+	CBB_cleanup(&cbb);
+
+	return (-1);
+}
+
+int
 ssl3_send_server_hello(SSL *s)
 {
 	CBB cbb, server_hello, session_id;
@@ -1233,7 +1264,7 @@ ssl3_send_server_hello(SSL *s)
 			goto err;
 
 		/* TLS extensions */
-		if (!tlsext_server_build(s, &server_hello, SSL_TLSEXT_MSG_SH)) {
+		if (!tlsext_server_build(s, SSL_TLSEXT_MSG_SH, &server_hello)) {
 			SSLerror(s, ERR_R_INTERNAL_ERROR);
 			goto err;
 		}
@@ -1356,7 +1387,7 @@ ssl3_send_server_kex_dhe(SSL *s, CBB *cbb)
 static int
 ssl3_send_server_kex_ecdhe_ecp(SSL *s, int nid, CBB *cbb)
 {
-	int curve_id = 0;
+	uint16_t curve_id;
 	EC_KEY *ecdh;
 	CBB ecpoint;
 	int al;
@@ -1418,7 +1449,7 @@ static int
 ssl3_send_server_kex_ecdhe_ecx(SSL *s, int nid, CBB *cbb)
 {
 	uint8_t *public_key = NULL, *private_key = NULL;
-	int curve_id;
+	uint16_t curve_id;
 	CBB ecpoint;
 	int ret = -1;
 

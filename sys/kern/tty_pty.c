@@ -1,4 +1,4 @@
-/*	$OpenBSD: tty_pty.c,v 1.101 2020/06/22 13:14:32 mpi Exp $	*/
+/*	$OpenBSD: tty_pty.c,v 1.104 2020/09/09 16:29:14 mpi Exp $	*/
 /*	$NetBSD: tty_pty.c,v 1.33.4.1 1996/06/02 09:08:11 mrg Exp $	*/
 
 /*
@@ -289,8 +289,7 @@ ptsread(dev_t dev, struct uio *uio, int flag)
 again:
 	if (pti->pt_flags & PF_REMOTE) {
 		while (isbackground(pr, tp)) {
-			if ((pr->ps_sigacts->ps_sigignore & sigmask(SIGTTIN)) ||
-			    (p->p_sigmask & sigmask(SIGTTIN)) ||
+			if (sigismasked(p, SIGTTIN) ||
 			    pr->ps_pgrp->pg_jobc == 0 ||
 			    pr->ps_flags & PS_PPWAIT)
 				return (EIO);
@@ -564,7 +563,9 @@ again:
 				wakeup(&tp->t_rawq);
 				goto block;
 			}
-			(*linesw[tp->t_line].l_rint)(*cp++, tp);
+			if ((*linesw[tp->t_line].l_rint)(*cp++, tp) == 1 &&
+			    tsleep(tp, TTIPRI | PCATCH, "ttyretype", 1) == EINTR)
+				goto interrupt;
 			cnt++;
 			cc--;
 		}
@@ -591,6 +592,7 @@ block:
 	if (error == 0)
 		goto again;
 
+interrupt:
 	/* adjust for data copied in but not written */
 	uio->uio_resid += cc;
 done:

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2_msg.c,v 1.68 2020/05/26 20:24:31 tobhe Exp $	*/
+/*	$OpenBSD: ikev2_msg.c,v 1.76 2020/10/09 08:59:16 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -20,7 +20,6 @@
 #include <sys/param.h>	/* roundup */
 #include <sys/queue.h>
 #include <sys/socket.h>
-#include <sys/wait.h>
 #include <sys/uio.h>
 
 #include <netinet/in.h>
@@ -34,7 +33,6 @@
 #include <signal.h>
 #include <errno.h>
 #include <err.h>
-#include <pwd.h>
 #include <event.h>
 
 #include <openssl/sha.h>
@@ -97,7 +95,7 @@ ikev2_msg_cb(int fd, short event, void *arg)
 		return;
 
 	TAILQ_INIT(&msg.msg_proposals);
-	SLIST_INIT(&msg.msg_certreqs);
+	SIMPLEQ_INIT(&msg.msg_certreqs);
 	msg.msg_fd = fd;
 
 	if (hdr.ike_version == IKEV1_VERSION)
@@ -195,6 +193,8 @@ ikev2_msg_cleanup(struct iked *env, struct iked_message *msg)
 		ibuf_release(msg->msg_cert.id_buf);
 		ibuf_release(msg->msg_cookie);
 		ibuf_release(msg->msg_cookie2);
+		ibuf_release(msg->msg_del_buf);
+		free(msg->msg_eap.eam_user);
 
 		msg->msg_nonce = NULL;
 		msg->msg_ke = NULL;
@@ -203,11 +203,13 @@ ikev2_msg_cleanup(struct iked *env, struct iked_message *msg)
 		msg->msg_cert.id_buf = NULL;
 		msg->msg_cookie = NULL;
 		msg->msg_cookie2 = NULL;
+		msg->msg_del_buf = NULL;
+		msg->msg_eap.eam_user = NULL;
 
 		config_free_proposals(&msg->msg_proposals, 0);
-		while ((cr = SLIST_FIRST(&msg->msg_certreqs))) {
+		while ((cr = SIMPLEQ_FIRST(&msg->msg_certreqs))) {
 			ibuf_release(cr->cr_data);
-			SLIST_REMOVE_HEAD(&msg->msg_certreqs, cr_entry);
+			SIMPLEQ_REMOVE_HEAD(&msg->msg_certreqs, cr_entry);
 			free(cr);
 		}
 	}
@@ -293,8 +295,6 @@ ikev2_msg_send(struct iked *env, struct iked_message *msg)
 			timer_add(env, &sa->sa_timer,
 			    IKED_IKE_SA_DELETE_TIMEOUT);
 		}
-		if (sa != NULL)
-			return (-1);
 	}
 
 	if (sa == NULL)
@@ -372,7 +372,7 @@ struct ibuf *
 ikev2_msg_encrypt(struct iked *env, struct iked_sa *sa, struct ibuf *src,
     struct ibuf *aad)
 {
-	size_t			 len, ivlen, encrlen, integrlen, blocklen,
+	size_t			 len, encrlen, integrlen, blocklen,
 				    outlen;
 	uint8_t			*buf, pad = 0, *ptr;
 	struct ibuf		*encr, *dst = NULL, *out = NULL;
@@ -396,7 +396,6 @@ ikev2_msg_encrypt(struct iked *env, struct iked_sa *sa, struct ibuf *src,
 		encr = sa->sa_key_rencr;
 
 	blocklen = cipher_length(sa->sa_encr);
-	ivlen = cipher_ivlength(sa->sa_encr);
 	integrlen = hash_length(sa->sa_integr);
 	encrlen = roundup(len + sizeof(pad), blocklen);
 	pad = encrlen - (len + sizeof(pad));
@@ -583,7 +582,7 @@ ikev2_msg_decrypt(struct iked *env, struct iked_sa *sa,
 	 * Validate packet checksum
 	 */
 	if (!sa->sa_integr->hash_isaead) {
-		if ((tmp = ibuf_new(NULL, ibuf_length(integr))) == NULL)
+		if ((tmp = ibuf_new(NULL, hash_keylength(sa->sa_integr))) == NULL)
 			goto done;
 
 		hash_setkey(sa->sa_integr, integr->buf, ibuf_length(integr));
@@ -931,8 +930,11 @@ ikev2_msg_auth(struct iked *env, struct iked_sa *sa, int response)
 	    ibuf_size(prfkey))) == NULL)
 		goto fail;
 
-	if ((ptr = ibuf_advance(authmsg,
-	    hash_length(sa->sa_prf))) == NULL)
+	/* require non-truncating hash */
+	if (hash_keylength(sa->sa_prf) != hash_length(sa->sa_prf))
+		goto fail;
+
+	if ((ptr = ibuf_advance(authmsg, hash_keylength(sa->sa_prf))) == NULL)
 		goto fail;
 
 	hash_init(sa->sa_prf);

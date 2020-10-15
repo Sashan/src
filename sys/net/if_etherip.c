@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_etherip.c,v 1.45 2019/04/23 10:53:45 dlg Exp $	*/
+/*	$OpenBSD: if_etherip.c,v 1.47 2020/08/21 22:59:27 kn Exp $	*/
 /*
  * Copyright (c) 2015 Kazuya GODA <goda@openbsd.org>
  *
@@ -150,7 +150,6 @@ etherip_clone_create(struct if_clone *ifc, int unit)
 	ifp->if_start = etherip_start;
 	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	ifp->if_xflags = IFXF_CLONED;
-	IFQ_SET_MAXLEN(&ifp->if_snd, IFQ_MAXLEN);
 	ifp->if_capabilities = IFCAP_VLAN_MTU;
 	ether_fakeaddr(ifp);
 

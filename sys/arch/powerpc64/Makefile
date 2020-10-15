@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.1 2020/06/25 04:47:06 drahn Exp $
+#	$OpenBSD: Makefile,v 1.3 2020/07/18 14:19:13 deraadt Exp $
 
 .include <bsd.own.mk>    # for KEEPKERNELS
 

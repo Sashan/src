@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmd.c,v 1.117 2019/12/12 03:53:38 pd Exp $	*/
+/*	$OpenBSD: vmd.c,v 1.119 2020/09/23 19:18:18 martijn Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>

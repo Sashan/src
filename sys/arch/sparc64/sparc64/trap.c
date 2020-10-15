@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.102 2019/09/06 12:22:01 deraadt Exp $	*/
+/*	$OpenBSD: trap.c,v 1.105 2020/09/24 23:49:59 deraadt Exp $	*/
 /*	$NetBSD: trap.c,v 1.73 2001/08/09 01:03:01 eeh Exp $ */
 
 /*
@@ -426,10 +426,6 @@ trap(struct trapframe64 *tf, unsigned type, vaddr_t pc, long tstate)
 	pcb = &p->p_addr->u_pcb;
 	p->p_md.md_tf = tf;	/* for ptrace/signals */
 	refreshcreds(p);
-	if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-	    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-	    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-		goto out;
 
 	switch (type) {
 
@@ -441,9 +437,7 @@ dopanic:
 			    pc, (long)tf->tf_npc, pstate, PSTATE_BITS);
 			/* NOTREACHED */
 		}
-		KERNEL_LOCK();
 		trapsignal(p, SIGILL, type, ILL_ILLOPC, sv);
-		KERNEL_UNLOCK();
 		break;
 
 	case T_AST:
@@ -463,9 +457,7 @@ dopanic:
 		 */
 		write_user_windows();
 		if (rwindow_save(p) == -1) {
-			KERNEL_LOCK();
 			trapsignal(p, SIGILL, 0, ILL_BADSTK, sv);
-			KERNEL_UNLOCK();
 		}
 		break;
 
@@ -475,9 +467,7 @@ dopanic:
 
 		if (copyin((caddr_t)pc, &ins, sizeof(ins)) != 0) {
 			/* XXX Can this happen? */
-			KERNEL_LOCK();
 			trapsignal(p, SIGILL, 0, ILL_ILLOPC, sv);
-			KERNEL_UNLOCK();
 			break;
 		}
 		if (ins.i_any.i_op == IOP_mem &&
@@ -496,9 +486,7 @@ dopanic:
 				ADVANCE;
 			break;
 		}
-		KERNEL_LOCK();
 		trapsignal(p, SIGILL, 0, ILL_ILLOPC, sv);	/* XXX code? */
-		KERNEL_UNLOCK();
 		break;
 	}
 
@@ -506,9 +494,7 @@ dopanic:
 	case T_TEXTFAULT:
 	case T_PRIVINST:
 	case T_PRIVACT:
-		KERNEL_LOCK();
 		trapsignal(p, SIGILL, 0, ILL_ILLOPC, sv);	/* XXX code? */
-		KERNEL_UNLOCK();
 		break;
 
 	case T_FPDISABLED: {
@@ -559,9 +545,7 @@ dopanic:
 
 		if (copyin((caddr_t)pc, &ins, sizeof(ins)) != 0) {
 			/* XXX Can this happen? */
-			KERNEL_LOCK();
 			trapsignal(p, SIGILL, 0, ILL_ILLOPC, sv);
-			KERNEL_UNLOCK();
 			break;
 		}
 		if (ins.i_any.i_op == IOP_mem &&
@@ -572,9 +556,7 @@ dopanic:
 			if (emul_qf(ins.i_int, p, sv, tf))
 				ADVANCE;
 		} else {
-			KERNEL_LOCK();
 			trapsignal(p, SIGILL, 0, ILL_ILLOPC, sv);
-			KERNEL_UNLOCK();
 		}
 		break;
 	}
@@ -617,9 +599,7 @@ dopanic:
 		}
 
 		/* XXX sv.sival_ptr should be the fault address! */
-		KERNEL_LOCK();
 		trapsignal(p, SIGBUS, 0, BUS_ADRALN, sv);	/* XXX code? */
-		KERNEL_UNLOCK();
 		break;
 
 	case T_FP_IEEE_754:
@@ -654,22 +634,16 @@ dopanic:
 		break;
 
 	case T_TAGOF:
-		KERNEL_LOCK();
 		trapsignal(p, SIGEMT, 0, EMT_TAGOVF, sv);	/* XXX code? */
-		KERNEL_UNLOCK();
 		break;
 
 	case T_BREAKPOINT:
-		KERNEL_LOCK();
 		trapsignal(p, SIGTRAP, 0, TRAP_BRKPT, sv);
-		KERNEL_UNLOCK();
 		break;
 
 	case T_DIV0:
 		ADVANCE;
-		KERNEL_LOCK();
 		trapsignal(p, SIGFPE, 0, FPE_INTDIV, sv);
-		KERNEL_UNLOCK();
 		break;
 
 	case T_CLEANWIN:
@@ -685,28 +659,22 @@ dopanic:
 
 	case T_RANGECHECK:
 		ADVANCE;
-		KERNEL_LOCK();
 		trapsignal(p, SIGILL, 0, ILL_ILLOPN, sv);	/* XXX code? */
-		KERNEL_UNLOCK();
 		break;
 
 	case T_FIXALIGN:
 		uprintf("T_FIXALIGN\n");
 		ADVANCE;
-		KERNEL_LOCK();
 		trapsignal(p, SIGILL, 0, ILL_ILLOPN, sv);	/* XXX code? */
-		KERNEL_UNLOCK();
 		break;
 
 	case T_INTOF:
 		uprintf("T_INTOF\n");		/* XXX */
 		ADVANCE;
-		KERNEL_LOCK();
 		trapsignal(p, SIGFPE, FPE_INTOVF_TRAP, FPE_INTOVF, sv);
-		KERNEL_UNLOCK();
 		break;
 	}
-out:
+
 	userret(p);
 	share_fpu(p, tf);
 #undef ADVANCE
@@ -819,8 +787,14 @@ data_access_fault(struct trapframe64 *tf, unsigned type, vaddr_t pc,
 			goto kfault;
 		}
 	} else {
-		KERNEL_LOCK();
 		p->p_md.md_tf = tf;
+		refreshcreds(p);
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+
+		KERNEL_LOCK();
 	}
 
 	vm = p->p_vmspace;
@@ -885,12 +859,12 @@ kfault:
 		trapsignal(p, signal, access_type, sicode, sv);
 	}
 
+	KERNEL_UNLOCK();
+
+out:
 	if ((tstate & TSTATE_PRIV) == 0) {
-		KERNEL_UNLOCK();
 		userret(p);
 		share_fpu(p, tf);
-	} else {
-		KERNEL_UNLOCK();
 	}
 }
 
@@ -961,11 +935,9 @@ data_access_error(struct trapframe64 *tf, unsigned type, vaddr_t afva,
 		return;
 	}
 
-	KERNEL_LOCK();
 	trapsignal(p, SIGSEGV, PROT_READ | PROT_WRITE, SEGV_MAPERR, sv);
-	KERNEL_UNLOCK();
-out:
 
+out:
 	if ((tstate & TSTATE_PRIV) == 0) {
 		userret(p);
 		share_fpu(p, tf);
@@ -1005,8 +977,14 @@ text_access_fault(struct trapframe64 *tf, unsigned type, vaddr_t pc,
 		(void) splhigh();
 		panic("kernel text_access_fault: pc=%lx va=%lx", pc, va);
 		/* NOTREACHED */
-	} else
+	} else {
 		p->p_md.md_tf = tf;
+		refreshcreds(p);
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+	}
 
 	KERNEL_LOCK();
 
@@ -1050,6 +1028,7 @@ text_access_fault(struct trapframe64 *tf, unsigned type, vaddr_t pc,
 
 	KERNEL_UNLOCK();
 
+out:
 	if ((tstate & TSTATE_PRIV) == 0) {
 		userret(p);
 		share_fpu(p, tf);
@@ -1092,9 +1071,7 @@ text_access_error(struct trapframe64 *tf, unsigned type, vaddr_t pc,
 			panic("text_access_error: kernel memory error");
 
 		/* User fault -- Berr */
-		KERNEL_LOCK();
 		trapsignal(p, SIGBUS, 0, BUS_ADRALN, sv);
-		KERNEL_UNLOCK();
 	}
 
 	if ((sfsr & SFSR_FV) == 0 || (sfsr & SFSR_FT) == 0)
@@ -1109,8 +1086,14 @@ text_access_error(struct trapframe64 *tf, unsigned type, vaddr_t pc,
 		panic("kernel text error: pc=%lx sfsr=%lb", pc,
 		    sfsr, SFSR_BITS);
 		/* NOTREACHED */
-	} else
+	} else {
 		p->p_md.md_tf = tf;
+		refreshcreds(p);
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+	}
 
 	KERNEL_LOCK();
 

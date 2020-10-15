@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.37 2019/11/02 15:39:44 jsing Exp $
+#	$OpenBSD: Makefile,v 1.40 2020/09/18 10:19:31 tb Exp $
 
 SUBDIR += aead
 SUBDIR += aeswrap
@@ -8,6 +8,7 @@ SUBDIR += bf
 SUBDIR += bio
 SUBDIR += bn
 SUBDIR += cast
+SUBDIR += certs
 SUBDIR += chacha
 SUBDIR += cms
 SUBDIR += cts128
@@ -32,6 +33,7 @@ SUBDIR += init
 SUBDIR += md4
 SUBDIR += md5
 SUBDIR += pbkdf2
+SUBDIR += pem
 SUBDIR += pkcs7
 SUBDIR += poly1305
 SUBDIR += rand
@@ -45,6 +47,7 @@ SUBDIR += sha256
 SUBDIR += sha512
 SUBDIR += sm3
 SUBDIR += sm4
+SUBDIR += symbols
 SUBDIR += utf8
 SUBDIR += wycheproof
 SUBDIR += x509

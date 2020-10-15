@@ -1,4 +1,4 @@
-/*	$OpenBSD: iked.c,v 1.43 2020/04/09 19:55:19 tobhe Exp $	*/
+/*	$OpenBSD: iked.c,v 1.48 2020/09/23 14:25:55 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -133,7 +133,7 @@ main(int argc, char *argv[])
 		fatal("calloc: env");
 
 	env->sc_opts = opts;
-	env->natt_mode = natt_mode;
+	env->sc_nattmode = natt_mode;
 	env->sc_nattport = port;
 
 	ps = &env->sc_ps;
@@ -232,17 +232,17 @@ parent_configure(struct iked *env)
 	ss.ss_family = AF_INET;
 
 	/* see comment on config_setsocket() */
-	if (env->natt_mode != NATT_FORCE)
+	if (env->sc_nattmode != NATT_FORCE)
 		config_setsocket(env, &ss, htons(IKED_IKE_PORT), PROC_IKEV2);
-	if (env->natt_mode != NATT_DISABLE)
+	if (env->sc_nattmode != NATT_DISABLE)
 		config_setsocket(env, &ss, htons(env->sc_nattport), PROC_IKEV2);
 
 	bzero(&ss, sizeof(ss));
 	ss.ss_family = AF_INET6;
 
-	if (env->natt_mode != NATT_FORCE)
+	if (env->sc_nattmode != NATT_FORCE)
 		config_setsocket(env, &ss, htons(IKED_IKE_PORT), PROC_IKEV2);
-	if (env->natt_mode != NATT_DISABLE)
+	if (env->sc_nattmode != NATT_DISABLE)
 		config_setsocket(env, &ss, htons(env->sc_nattport), PROC_IKEV2);
 
 	/*
@@ -263,11 +263,10 @@ parent_configure(struct iked *env)
 	if (pledge("stdio rpath proc dns inet route sendfd", NULL) == -1)
 		fatal("pledge");
 
-	config_setmobike(env);
-	config_setfragmentation(env);
-	config_setnattport(env);
+	config_setstatic(env);
 	config_setcoupled(env, env->sc_decoupled ? 0 : 1);
 	config_setocsp(env);
+	config_setcertpartialchain(env);
 	/* Must be last */
 	config_setmode(env, env->sc_passive ? 1 : 0);
 
@@ -297,11 +296,10 @@ parent_reload(struct iked *env, int reset, const char *filename)
 		/* Re-compile policies and skip steps */
 		config_setcompile(env, PROC_IKEV2);
 
-		config_setmobike(env);
-		config_setfragmentation(env);
-		config_setnattport(env);
+		config_setstatic(env);
 		config_setcoupled(env, env->sc_decoupled ? 0 : 1);
 		config_setocsp(env);
+		config_setcertpartialchain(env);
  		/* Must be last */
 		config_setmode(env, env->sc_passive ? 1 : 0);
 	} else {
@@ -392,7 +390,7 @@ parent_dispatch_ca(int fd, struct privsep_proc *p, struct imsg *imsg)
 
 	switch (imsg->hdr.type) {
 	case IMSG_OCSP_FD:
-		ocsp_connect(env);
+		ocsp_connect(env, imsg);
 		break;
 	default:
 		return (-1);

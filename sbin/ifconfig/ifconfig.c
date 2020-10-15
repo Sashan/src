@@ -1,4 +1,4 @@
-/*	$OpenBSD: ifconfig.c,v 1.423 2020/06/22 02:08:43 dlg Exp $	*/
+/*	$OpenBSD: ifconfig.c,v 1.429 2020/10/07 14:38:54 denis Exp $	*/
 /*	$NetBSD: ifconfig.c,v 1.40 1997/10/01 02:19:43 enami Exp $	*/
 
 /*
@@ -3219,7 +3219,7 @@ print_tunnel(const struct if_laddrreq *req)
 		    0, 0, niflag) != 0)
 			strlcpy(pdstaddr, "<error>", sizeof(pdstaddr));
 
-		printf(" -> %s", pdstaddr);
+		printf(" --> %s", pdstaddr);
 
 		switch (req->dstaddr.ss_family) {
 		case AF_INET:
@@ -3507,7 +3507,6 @@ status(int link, struct sockaddr_dl *sdl, int ls)
 	phys_status(0);
 #ifndef SMALL
 	bridge_status();
-	switch_status();
 #endif
 }
 
@@ -3636,7 +3635,7 @@ in6_alias(struct in6_ifreq *creq)
 		if (getnameinfo((struct sockaddr *)sin6, sin6->sin6_len,
 		    hbuf, sizeof(hbuf), NULL, 0, niflag) != 0)
 			strlcpy(hbuf, "", sizeof hbuf);
-		printf(" -> %s", hbuf);
+		printf(" --> %s", hbuf);
 	}
 
 	(void) memset(&ifr6, 0, sizeof(ifr6));
@@ -3670,7 +3669,7 @@ in6_alias(struct in6_ifreq *creq)
 			printf(" deprecated");
 		if (ifr6.ifr_ifru.ifru_flags6 & IN6_IFF_AUTOCONF)
 			printf(" autoconf");
-		if (ifr6.ifr_ifru.ifru_flags6 & IN6_IFF_PRIVACY)
+		if (ifr6.ifr_ifru.ifru_flags6 & IN6_IFF_TEMPORARY)
 			printf(" autoconfprivacy");
 	}
 
@@ -6061,7 +6060,7 @@ umb_status(void)
 			snprintf(s[0], sizeof (s[0]), "%llu", mi.uplink_speed);
 		if (fmt_scaled(mi.downlink_speed, s[1]) != 0)
 			snprintf(s[1], sizeof (s[1]), "%llu", mi.downlink_speed);
-		printf(" speed %sps up %sps down", s[0], s[1]);
+		printf(" speed %sbps up %sbps down", s[0], s[1]);
 	}
 	printf("\n");
 

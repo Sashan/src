@@ -1,4 +1,4 @@
-/*	$OpenBSD: ca.c,v 1.63 2020/06/25 19:14:26 tobhe Exp $	*/
+/*	$OpenBSD: ca.c,v 1.73 2020/10/09 08:59:15 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2010-2013 Reyk Floeter <reyk@openbsd.org>
@@ -18,7 +18,6 @@
 
 #include <sys/queue.h>
 #include <sys/socket.h>
-#include <sys/wait.h>
 #include <sys/uio.h>
 
 #include <stdlib.h>
@@ -30,7 +29,6 @@
 #include <syslog.h>
 #include <errno.h>
 #include <err.h>
-#include <pwd.h>
 #include <event.h>
 
 #include <openssl/bio.h>
@@ -62,9 +60,9 @@ void	 ca_store_certs_info(const char *, X509_STORE *);
 int	 ca_subjectpubkey_digest(X509 *, uint8_t *, unsigned int *);
 int	 ca_x509_subject_cmp(X509 *, struct iked_static_id *);
 int	 ca_validate_pubkey(struct iked *, struct iked_static_id *,
-	    void *, size_t);
+	    void *, size_t, struct iked_id *);
 int	 ca_validate_cert(struct iked *, struct iked_static_id *,
-	    void *, size_t);
+	    void *, size_t, X509 **);
 int	 ca_privkey_to_method(struct iked_id *);
 struct ibuf *
 	 ca_x509_serialize(X509 *);
@@ -220,12 +218,15 @@ ca_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 	case IMSG_OCSP_FD:
 		ocsp_receive_fd(env, imsg);
 		break;
-	case IMSG_OCSP_URL:
+	case IMSG_OCSP_CFG:
 		config_getocsp(env, imsg);
 		break;
 	case IMSG_PRIVKEY:
 	case IMSG_PUBKEY:
 		config_getkey(env, imsg);
+		break;
+	case IMSG_CERT_PARTIAL_CHAIN:
+		config_getcertpartialchain(env, imsg);
 		break;
 	default:
 		return (-1);
@@ -289,9 +290,11 @@ ca_setcert(struct iked *env, struct iked_sahdr *sh, struct iked_id *id,
 	iov[iovcnt].iov_base = &type;
 	iov[iovcnt].iov_len = sizeof(type);
 	iovcnt++;
-	iov[iovcnt].iov_base = data;
-	iov[iovcnt].iov_len = len;
-	iovcnt++;
+	if (data != NULL) {
+		iov[iovcnt].iov_base = data;
+		iov[iovcnt].iov_len = len;
+		iovcnt++;
+	}
 
 	if (proc_composev(&env->sc_ps, procid, IMSG_CERT, iov, iovcnt) == -1)
 		return (-1);
@@ -333,9 +336,11 @@ ca_setreq(struct iked *env, struct iked_sa *sa,
 	iov[iovcnt].iov_base = &more;
 	iov[iovcnt].iov_len = sizeof(more);
 	iovcnt++;
-	iov[iovcnt].iov_base = data;
-	iov[iovcnt].iov_len = len;
-	iovcnt++;
+	if (data != NULL) {
+		iov[iovcnt].iov_base = data;
+		iov[iovcnt].iov_len = len;
+		iovcnt++;
+	}
 
 	if (proc_composev(&env->sc_ps, procid, IMSG_CERTREQ, iov, iovcnt) == -1)
 		goto done;
@@ -412,19 +417,21 @@ ca_setauth(struct iked *env, struct iked_sa *sa,
 int
 ca_getcert(struct iked *env, struct imsg *imsg)
 {
+	X509			*issuer = NULL;
 	struct iked_sahdr	 sh;
 	uint8_t			 type;
 	uint8_t			*ptr;
 	size_t			 len;
 	struct iked_static_id	 id;
 	unsigned int		 i;
-	struct iovec		 iov[2];
-	int			 iovcnt = 2, cmd, ret = 0;
+	struct iovec		 iov[3];
+	int			 iovcnt = 3, cmd, ret = 0;
+	struct iked_id		 key;
 
 	ptr = (uint8_t *)imsg->data;
 	len = IMSG_DATA_SIZE(imsg);
 	i = sizeof(id) + sizeof(sh) + sizeof(type);
-	if (len <= i)
+	if (len < i)
 		return (-1);
 
 	memcpy(&id, ptr, sizeof(id));
@@ -436,18 +443,36 @@ ca_getcert(struct iked *env, struct imsg *imsg)
 	ptr += i;
 	len -= i;
 
+	bzero(&key, sizeof(key));
+
 	switch (type) {
 	case IKEV2_CERT_X509_CERT:
-		ret = ca_validate_cert(env, &id, ptr, len);
-		if (ret == 0 && env->sc_ocsp_url) {
-			ret = ocsp_validate_cert(env, &id, ptr, len, sh, type);
-			if (ret == 0)
-				return (0);
+		if (env->sc_ocsp_url == NULL)
+			ret = ca_validate_cert(env, &id, ptr, len, NULL);
+		else {
+			ret = ca_validate_cert(env, &id, ptr, len, &issuer);
+			if (ret == 0) {
+				ret = ocsp_validate_cert(env, ptr, len, sh,
+				    type, issuer);
+				X509_free(issuer);
+				if (ret == 0)
+					return (0);
+			} else
+				X509_free(issuer);
 		}
 		break;
 	case IKEV2_CERT_RSA_KEY:
 	case IKEV2_CERT_ECDSA:
-		ret = ca_validate_pubkey(env, &id, ptr, len);
+		ret = ca_validate_pubkey(env, &id, ptr, len, NULL);
+		break;
+	case IKEV2_CERT_NONE:
+		/* Fallback to public key */
+		ret = ca_validate_pubkey(env, &id, NULL, 0, &key);
+		if (ret == 0) {
+			ptr = ibuf_data(key.id_buf);
+			len = ibuf_length(key.id_buf);
+			type = key.id_type;
+		}
 		break;
 	default:
 		log_debug("%s: unsupported cert type %d", __func__, type);
@@ -464,6 +489,8 @@ ca_getcert(struct iked *env, struct imsg *imsg)
 	iov[0].iov_len = sizeof(sh);
 	iov[1].iov_base = &type;
 	iov[1].iov_len = sizeof(type);
+	iov[2].iov_base = ptr;
+	iov[2].iov_len = len;
 
 	if (proc_composev(&env->sc_ps, PROC_IKEV2, cmd, iov, iovcnt) == -1)
 		return (-1);
@@ -541,18 +568,23 @@ ca_getreq(struct iked *env, struct imsg *imsg)
 				break;
 			}
 		}
-
+		/* Fallthrough */
+	case IKEV2_CERT_NONE:
  fallback:
 		/*
 		 * If no certificate or key matching any of the trust-anchors
 		 * was found and this was the last CERTREQ, try to find one with
 		 * subjectAltName matching the ID
 		 */
-		if (more)
+		if (cert == NULL && more)
 			return (0);
 
 		if (cert == NULL)
 			cert = ca_by_subjectaltname(store->ca_certs, &id);
+
+		/* Set type if coming from fallback */
+		if (cert != NULL)
+			type = IKEV2_CERT_X509_CERT;
 
 		/* If there is no matching certificate use local raw pubkey */
 		if (cert == NULL) {
@@ -799,7 +831,7 @@ ca_reload(struct iked *env)
 
 		x509 = xo->data.x509;
 
-		(void)ca_validate_cert(env, NULL, x509, 0);
+		(void)ca_validate_cert(env, NULL, x509, 0, NULL);
 	}
 
 	if (!env->sc_certreqtype)
@@ -1311,7 +1343,7 @@ err:
 
 int
 ca_validate_pubkey(struct iked *env, struct iked_static_id *id,
-    void *data, size_t len)
+    void *data, size_t len, struct iked_id *out)
 {
 	BIO		*rawcert = NULL;
 	RSA		*peerrsa = NULL, *localrsa = NULL;
@@ -1322,9 +1354,6 @@ ca_validate_pubkey(struct iked *env, struct iked_static_id *id,
 	char		 idstr[IKED_ID_SIZE];
 	char		 file[PATH_MAX];
 	struct iked_id	 idp;
-
-	if (len == 0 && data == NULL)
-		return (-1);
 
 	switch (id->id_type) {
 	case IKEV2_ID_IPV4:
@@ -1348,10 +1377,11 @@ ca_validate_pubkey(struct iked *env, struct iked_static_id *id,
 	if (ikev2_print_id(&idp, idstr, sizeof(idstr)) == -1)
 		goto done;
 
-	if (len == 0) {
+	if (len == 0 && data) {
 		/* Data is already an public key */
 		peerkey = (EVP_PKEY *)data;
-	} else {
+	}
+	if (len > 0) {
 		if ((rawcert = BIO_new_mem_buf(data, len)) == NULL)
 			goto done;
 
@@ -1403,12 +1433,15 @@ ca_validate_pubkey(struct iked *env, struct iked_static_id *id,
 	if (localkey == NULL)
 		goto sslerr;
 
-	if (!EVP_PKEY_cmp(peerkey, localkey)) {
+	if (peerkey && EVP_PKEY_cmp(peerkey, localkey) != 1) {
 		log_debug("%s: public key does not match %s", __func__, file);
 		goto done;
 	}
 
 	log_debug("%s: valid public key in file %s", __func__, file);
+
+	if (out && ca_pubkey_serialize(localkey, out))
+		goto done;
 
 	ret = 0;
  sslerr:
@@ -1435,7 +1468,7 @@ ca_validate_pubkey(struct iked *env, struct iked_static_id *id,
 
 int
 ca_validate_cert(struct iked *env, struct iked_static_id *id,
-    void *data, size_t len)
+    void *data, size_t len, X509 **issuerp)
 {
 	struct ca_store	*store = env->sc_priv;
 	X509_STORE_CTX	 csc;
@@ -1443,9 +1476,10 @@ ca_validate_cert(struct iked *env, struct iked_static_id *id,
 	X509		*cert = NULL;
 	EVP_PKEY	*pkey;
 	int		 ret = -1, result, error;
-	X509_NAME	*subject;
 	const char	*errstr = "failed";
 
+	if (issuerp)
+		*issuerp = NULL;
 	if (len == 0) {
 		/* Data is already an X509 certificate */
 		cert = (X509 *)data;
@@ -1458,7 +1492,7 @@ ca_validate_cert(struct iked *env, struct iked_static_id *id,
 	}
 
 	/* Certificate needs a valid subjectName */
-	if ((subject = X509_get_subject_name(cert)) == NULL) {
+	if (X509_get_subject_name(cert) == NULL) {
 		errstr = "invalid subject";
 		goto done;
 	}
@@ -1468,7 +1502,7 @@ ca_validate_cert(struct iked *env, struct iked_static_id *id,
 			errstr = "no public key in cert";
 			goto done;
 		}
-		ret = ca_validate_pubkey(env, id, pkey, 0);
+		ret = ca_validate_pubkey(env, id, pkey, 0, NULL);
 		EVP_PKEY_free(pkey);
 		if (ret == 0) {
 			errstr = "in public key file, ok";
@@ -1497,9 +1531,17 @@ ca_validate_cert(struct iked *env, struct iked_static_id *id,
 		X509_STORE_CTX_set_flags(&csc, X509_V_FLAG_CRL_CHECK);
 		X509_STORE_CTX_set_flags(&csc, X509_V_FLAG_CRL_CHECK_ALL);
 	}
+	if (env->sc_cert_partial_chain)
+		X509_STORE_CTX_set_flags(&csc, X509_V_FLAG_PARTIAL_CHAIN);
 
 	result = X509_verify_cert(&csc);
 	error = csc.error;
+	if (error == 0 && issuerp) {
+		if (X509_STORE_CTX_get1_issuer(issuerp, &csc, cert) != 1) {
+			log_debug("%s: cannot get issuer", __func__);
+			*issuerp = NULL;
+		}
+	}
 	X509_STORE_CTX_cleanup(&csc);
 	if (error != 0) {
 		errstr = X509_verify_cert_error_string(error);

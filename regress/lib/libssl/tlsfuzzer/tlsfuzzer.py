@@ -1,4 +1,4 @@
-#   $OpenBSD: tlsfuzzer.py,v 1.11 2020/06/24 07:29:21 tb Exp $
+#   $OpenBSD: tlsfuzzer.py,v 1.21 2020/10/07 13:31:00 tb Exp $
 #
 # Copyright (c) 2020 Theo Buehler <tb@openbsd.org>
 #
@@ -65,15 +65,106 @@ class TestGroup:
 tls13_unsupported_ciphers = [
     "-e", "TLS 1.3 with ffdhe2048",
     "-e", "TLS 1.3 with ffdhe3072",
-    "-e", "TLS 1.3 with secp521r1",   # XXX: why is this curve problematic?
     "-e", "TLS 1.3 with x448",
 ]
+
+# test-tls13-finished.py has 70 failing tests that expect a "decode_error"
+# instead of the "decrypt_error" sent by tls13_server_finished_recv().
+# Both alerts appear to be reasonable in this context, so work around this
+# in the test instead of the library.
+def generate_test_tls13_finished_args():
+    assertion = "Expected alert description \"decode_error\" does not match received \"decrypt_error\""
+    paddings = [
+        ("TLS_AES_128_GCM_SHA256", 0, 1),
+        ("TLS_AES_128_GCM_SHA256", 0, 2),
+        ("TLS_AES_128_GCM_SHA256", 0, 4),
+        ("TLS_AES_128_GCM_SHA256", 0, 8),
+        ("TLS_AES_128_GCM_SHA256", 0, 16),
+        ("TLS_AES_128_GCM_SHA256", 0, 32),
+        ("TLS_AES_128_GCM_SHA256", 0, 48),
+        ("TLS_AES_128_GCM_SHA256", 0, 2**14-4-32),
+        ("TLS_AES_128_GCM_SHA256", 0, 0x20000),
+        ("TLS_AES_128_GCM_SHA256", 0, 0x30000),
+        ("TLS_AES_128_GCM_SHA256", 1, 0),
+        ("TLS_AES_128_GCM_SHA256", 2, 0),
+        ("TLS_AES_128_GCM_SHA256", 4, 0),
+        ("TLS_AES_128_GCM_SHA256", 8, 0),
+        ("TLS_AES_128_GCM_SHA256", 16, 0),
+        ("TLS_AES_128_GCM_SHA256", 32, 0),
+        ("TLS_AES_128_GCM_SHA256", 48, 0),
+        ("TLS_AES_128_GCM_SHA256", 2**14-4-32, 0),
+        ("TLS_AES_128_GCM_SHA256", 12, 0),
+        ("TLS_AES_128_GCM_SHA256", 1, 1),
+        ("TLS_AES_128_GCM_SHA256", 8, 8),
+        ("TLS_AES_256_GCM_SHA384", 0, 1),
+        ("TLS_AES_256_GCM_SHA384", 0, 2),
+        ("TLS_AES_256_GCM_SHA384", 0, 4),
+        ("TLS_AES_256_GCM_SHA384", 0, 8),
+        ("TLS_AES_256_GCM_SHA384", 0, 16),
+        ("TLS_AES_256_GCM_SHA384", 0, 32),
+        ("TLS_AES_256_GCM_SHA384", 0, 48),
+        ("TLS_AES_256_GCM_SHA384", 0, 2**14-4-48),
+        ("TLS_AES_256_GCM_SHA384", 0, 0x20000),
+        ("TLS_AES_256_GCM_SHA384", 0, 0x30000),
+        ("TLS_AES_256_GCM_SHA384", 0, 12),
+        ("TLS_AES_256_GCM_SHA384", 1, 0),
+        ("TLS_AES_256_GCM_SHA384", 2, 0),
+        ("TLS_AES_256_GCM_SHA384", 4, 0),
+        ("TLS_AES_256_GCM_SHA384", 8, 0),
+        ("TLS_AES_256_GCM_SHA384", 16, 0),
+        ("TLS_AES_256_GCM_SHA384", 32, 0),
+        ("TLS_AES_256_GCM_SHA384", 48, 0),
+        ("TLS_AES_256_GCM_SHA384", 2**14-4-48, 0),
+        ("TLS_AES_256_GCM_SHA384", 1, 1),
+        ("TLS_AES_256_GCM_SHA384", 8, 8),
+    ]
+    truncations = [
+        ("TLS_AES_128_GCM_SHA256", 0,  -1),
+        ("TLS_AES_128_GCM_SHA256", 0,  -2),
+        ("TLS_AES_128_GCM_SHA256", 0,  -4),
+        ("TLS_AES_128_GCM_SHA256", 0,  -8),
+        ("TLS_AES_128_GCM_SHA256", 0,  -16),
+        ("TLS_AES_128_GCM_SHA256", 0,  -32),
+        ("TLS_AES_128_GCM_SHA256", 0,  12),
+        ("TLS_AES_128_GCM_SHA256", 1,  None),
+        ("TLS_AES_128_GCM_SHA256", 2,  None),
+        ("TLS_AES_128_GCM_SHA256", 4,  None),
+        ("TLS_AES_128_GCM_SHA256", 8,  None),
+        ("TLS_AES_128_GCM_SHA256", 16, None),
+        ("TLS_AES_128_GCM_SHA256", 32, None),
+        ("TLS_AES_256_GCM_SHA384", 0,  -1),
+        ("TLS_AES_256_GCM_SHA384", 0,  -2),
+        ("TLS_AES_256_GCM_SHA384", 0,  -4),
+        ("TLS_AES_256_GCM_SHA384", 0,  -8),
+        ("TLS_AES_256_GCM_SHA384", 0,  -16),
+        ("TLS_AES_256_GCM_SHA384", 0,  -32),
+        ("TLS_AES_256_GCM_SHA384", 0,  12),
+        ("TLS_AES_256_GCM_SHA384", 1,  None),
+        ("TLS_AES_256_GCM_SHA384", 2,  None),
+        ("TLS_AES_256_GCM_SHA384", 4,  None),
+        ("TLS_AES_256_GCM_SHA384", 8,  None),
+        ("TLS_AES_256_GCM_SHA384", 16, None),
+        ("TLS_AES_256_GCM_SHA384", 32, None),
+    ]
+
+    args = [
+            "-x", "empty - cipher TLS_AES_128_GCM_SHA256", "-X", assertion,
+            "-x", "empty - cipher TLS_AES_256_GCM_SHA384", "-X", assertion,
+    ]
+    padding_fmt = "padding - cipher %s, pad_byte 0, pad_left %d, pad_right %d"
+    for padding in paddings:
+        args += ["-x", padding_fmt % padding, "-X", assertion]
+    truncation_fmt = "truncation - cipher %s, start %d, end %s"
+    for truncation in truncations:
+        args += ["-x", truncation_fmt % truncation, "-X", assertion]
+    return args
 
 tls13_tests = TestGroup("TLSv1.3 tests", [
     Test("test-tls13-ccs.py"),
     Test("test-tls13-conversation.py"),
     Test("test-tls13-count-tickets.py"),
     Test("test-tls13-empty-alert.py"),
+    Test("test-tls13-finished.py", generate_test_tls13_finished_args()),
     Test("test-tls13-finished-plaintext.py"),
     Test("test-tls13-hrr.py"),
     Test("test-tls13-keyshare-omitted.py"),
@@ -81,6 +172,7 @@ tls13_tests = TestGroup("TLSv1.3 tests", [
     Test("test-tls13-nociphers.py"),
     Test("test-tls13-record-padding.py"),
     Test("test-tls13-shuffled-extentions.py"),
+    Test("test-tls13-zero-content-type.py"),
 
     # The skipped tests fail due to a bug in BIO_gets() which masks the retry
     # signalled from an SSL_read() failure. Testing with httpd(8) shows we're
@@ -107,6 +199,12 @@ tls13_slow_tests = TestGroup("slow TLSv1.3 tests", [
         "-x", "max size payload (2**14) of Finished msg, with 16348 bytes of left padding, cipher TLS_AES_128_GCM_SHA256",
         "-x", "max size payload (2**14) of Finished msg, with 16348 bytes of left padding, cipher TLS_CHACHA20_POLY1305_SHA256",
     ]),
+    # We don't accept an empty ECPF extension since it must advertise the
+    # uncompressed point format. Exclude this extension type from the test.
+    Test(
+        "test-tls13-large-number-of-extensions.py",
+        tls13_args = ["--exc", "11"],
+    ),
 ])
 
 tls13_extra_cert_tests = TestGroup("TLSv1.3 certificate tests", [
@@ -126,8 +224,23 @@ tls13_failing_tests = TestGroup("failing TLSv1.3 tests", [
     # With X25519, we accept weak peer public keys and fail when we actually
     # compute the keyshare.  Other tests seem to indicate that we could be
     # stricter about what keyshares we accept.
-    Test("test-tls13-crfg-curves.py"),
-    Test("test-tls13-ecdhe-curves.py"),
+    Test("test-tls13-crfg-curves.py", [
+        '-e', 'all zero x448 key share',
+        '-e', 'empty x448 key share',
+        '-e', 'sanity x448 with compression ansiX962_compressed_char2',
+        '-e', 'sanity x448 with compression ansiX962_compressed_prime',
+        '-e', 'sanity x448 with compression uncompressed',
+        '-e', 'too big x448 key share',
+        '-e', 'too small x448 key share',
+        '-e', 'x448 key share of "1"',
+    ]),
+    Test("test-tls13-ecdhe-curves.py", [
+        '-e', 'sanity - x448',
+        '-e', 'x448 - key share from other curve',
+        '-e', 'x448 - point at infinity',
+        '-e', 'x448 - right 0-padded key_share',
+        '-e', 'x448 - right-truncated key_share',
+    ]),
 
     # https://github.com/openssl/openssl/issues/8369
     Test("test-tls13-obsolete-curves.py"),
@@ -155,24 +268,11 @@ tls13_slow_failing_tests = TestGroup("slow, failing TLSv1.3 tests", [
 
     Test("test-tls13-symetric-ciphers.py"),       # unexpected message from peer
 
-    # 70 fail and 644 pass. For some reason the tests expect a decode_error
-    # but we send a decrypt_error after the CBS_mem_equal() fails in
-    # tls13_server_finished_recv() (which is correct).
-    Test("test-tls13-finished.py"),               # decrypt_error -> decode_error?
-
-    # The following two tests fail Test (skip empty extensions for the first one):
-    # 'empty unassigned extensions, ids in range from 2 to 4118'
-    # 'unassigned extensions with random payload, ids in range from 2 to 1046'
-    Test("test-tls13-large-number-of-extensions.py"), # 2 fail: empty/random payload
-
     # 6 tests fail: 'rsa_pkcs1_{md5,sha{1,224,256,384,512}} signature'
     # We send server hello, but the test expects handshake_failure
     Test("test-tls13-pkcs-signature.py"),
     # 8 tests fail: 'tls13 signature rsa_pss_{pss,rsae}_sha{256,384,512}
     Test("test-tls13-rsapss-signatures.py"),
-
-    # ExpectNewSessionTicket
-    Test("test-tls13-session-resumption.py"),
 ])
 
 tls13_unsupported_tests = TestGroup("TLSv1.3 tests for unsupported features", [
@@ -193,6 +293,9 @@ tls13_unsupported_tests = TestGroup("TLSv1.3 tests for unsupported features", [
     # UnboundLocalError: local variable 'cert' referenced before assignment
     Test("test-tls13-post-handshake-auth.py"),
 
+    # ExpectNewSessionTicket
+    Test("test-tls13-session-resumption.py"),
+
     # Server must be configured to support only rsa_pss_rsae_sha512
     Test("test-tls13-signature-algorithms.py"),
 ])
@@ -205,11 +308,8 @@ tls12_exclude_legacy_protocols = [
     "-e", "Protocol (3, 1) in SSLv2 compatible ClientHello",
     "-e", "Protocol (3, 2) in SSLv2 compatible ClientHello",
     "-e", "Protocol (3, 3) in SSLv2 compatible ClientHello",
-    "-e", "Protocol (3, 1) with secp521r1 group",   # XXX
     "-e", "Protocol (3, 1) with x448 group",
-    "-e", "Protocol (3, 2) with secp521r1 group",   # XXX
     "-e", "Protocol (3, 2) with x448 group",
-    "-e", "Protocol (3, 3) with secp521r1 group",   # XXX
     "-e", "Protocol (3, 3) with x448 group",
 ]
 
@@ -490,6 +590,7 @@ class TestRunner:
 
         self.stats = []
         self.failed = []
+        self.missing = []
 
         self.timing = timing
         self.verbose = verbose
@@ -517,8 +618,13 @@ class TestRunner:
         else:
             print(f"{script[:68]:<72}", end=" ", flush=True)
         start = timer()
+        scriptpath = os.path.join(self.scriptdir, script)
+        if not os.path.exists(scriptpath):
+            self.missing.append(script)
+            print("MISSING")
+            return
         test = subprocess.run(
-            ["python3", os.path.join(self.scriptdir, script)] + args,
+            ["python3", scriptpath] + args,
             capture_output=not self.verbose,
             text=True,
         )
@@ -557,6 +663,10 @@ class TestRunner:
             print("Failed tests:")
             print('\n'.join(self.failed))
 
+        if self.missing:
+            print("Missing tests (outdated package?):")
+            print('\n'.join(self.missing))
+
 class TlsServer:
     """ Spawns an s_server listening on localhost:port if necessary. """
 
@@ -575,6 +685,8 @@ class TlsServer:
                     "s_server",
                     "-accept",
                     str(port),
+                    "-groups",
+                    "X25519:P-256:P-521:P-384",
                     "-key",
                     "localhost.key",
                     "-cert",

@@ -14,14 +14,12 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: ipseckey_45.c,v 1.12 2020/02/26 18:47:59 florian Exp $ */
+/* $Id: ipseckey_45.c,v 1.14 2020/09/14 08:40:43 florian Exp $ */
 
 #ifndef RDATA_GENERIC_IPSECKEY_45_C
 #define RDATA_GENERIC_IPSECKEY_45_C
 
 #include <string.h>
-
-#include <isc/net.h>
 
 static inline isc_result_t
 totext_ipseckey(ARGS_TOTEXT) {
@@ -87,7 +85,7 @@ totext_ipseckey(ARGS_TOTEXT) {
 
 	case 3:
 		dns_name_fromregion(&name, &region);
-		RETERR(dns_name_totext(&name, ISC_FALSE, target));
+		RETERR(dns_name_totext(&name, 0, target));
 		isc_region_consume(&region, name_length(&name));
 		break;
 	}

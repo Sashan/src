@@ -1,4 +1,4 @@
-/* $OpenBSD: acpi.c,v 1.388 2020/06/24 22:03:41 cheloha Exp $ */
+/* $OpenBSD: acpi.c,v 1.391 2020/08/27 01:08:55 jmatthew Exp $ */
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  * Copyright (c) 2005 Jordan Hargrave <jordan@openbsd.org>
@@ -1124,7 +1124,7 @@ acpi_attach_common(struct acpi_softc *sc, paddr_t base)
 #endif /* SMALL_KERNEL */
 
 	/* Initialize GPE handlers */
-	s = spltty();
+	s = splbio();
 	acpi_init_gpes(sc);
 	splx(s);
 
@@ -1213,8 +1213,6 @@ acpi_attach_common(struct acpi_softc *sc, paddr_t base)
 	/* check if we're running on a sony */
 	aml_find_node(&aml_root, "GBRT", acpi_foundsony, sc);
 
-	aml_walknodes(&aml_root, AML_WALK_PRE, acpi_add_device, sc);
-
 #ifndef SMALL_KERNEL
 	/* try to find smart battery first */
 	aml_find_node(&aml_root, "_HID", acpi_foundsbs, sc);
@@ -1222,6 +1220,8 @@ acpi_attach_common(struct acpi_softc *sc, paddr_t base)
 
 	/* attach battery, power supply and button devices */
 	aml_find_node(&aml_root, "_HID", acpi_foundhid, sc);
+
+	aml_walknodes(&aml_root, AML_WALK_PRE, acpi_add_device, sc);
 
 #ifndef SMALL_KERNEL
 #if NWD > 0
@@ -1796,7 +1796,7 @@ acpi_addtask(struct acpi_softc *sc, void (*handler)(void *, int),
 	wq->arg0 = arg0;
 	wq->arg1 = arg1;
 	
-	s = spltty();
+	s = splbio();
 	SIMPLEQ_INSERT_TAIL(&acpi_taskq, wq, next);
 	splx(s);
 }
@@ -1807,7 +1807,7 @@ acpi_dotask(struct acpi_softc *sc)
 	struct acpi_taskq *wq;
 	int s;
 
-	s = spltty();
+	s = splbio();
 	if (SIMPLEQ_EMPTY(&acpi_taskq)) {
 		splx(s);
 
@@ -2011,7 +2011,7 @@ acpi_pbtn_task(void *arg0, int dummy)
 	dnprintf(1,"power button pressed\n");
 
 	/* Reset the latch and re-enable the GPE */
-	s = spltty();
+	s = splbio();
 	en = acpi_read_pmreg(sc, ACPIREG_PM1_EN, 0);
 	acpi_write_pmreg(sc, ACPIREG_PM1_EN,  0,
 	    en | ACPI_PM1_PWRBTN_EN);
@@ -2042,7 +2042,7 @@ acpi_sbtn_task(void *arg0, int dummy)
 	aml_notify_dev(ACPI_DEV_SBD, 0x80);
 
 	/* Reset the latch and re-enable the GPE */
-	s = spltty();
+	s = splbio();
 	en = acpi_read_pmreg(sc, ACPIREG_PM1_EN, 0);
 	acpi_write_pmreg(sc, ACPIREG_PM1_EN,  0,
 	    en | ACPI_PM1_SLPBTN_EN);
@@ -2176,6 +2176,8 @@ acpi_add_device(struct aml_node *node, void *arg)
 
 	switch (node->value->type) {
 	case AML_OBJTYPE_PROCESSOR:
+		if (sc->sc_skip_processor != 0)
+			return 0;
 		if (nacpicpus >= ncpus)
 			return 0;
 		if (aml_evalnode(sc, aaa.aaa_node, 0, NULL, &res) == 0) {
@@ -2360,18 +2362,14 @@ acpi_init_gpes(struct acpi_softc *sc)
 {
 	struct aml_node *gpe;
 	char name[12];
-	int  idx, ngpe;
+	int  idx;
 
 	sc->sc_lastgpe = sc->sc_fadt->gpe0_blk_len << 2;
-	if (sc->sc_fadt->gpe1_blk_len) {
-	}
 	dnprintf(50, "Last GPE: %.2x\n", sc->sc_lastgpe);
 
 	/* Allocate GPE table */
 	sc->gpe_table = mallocarray(sc->sc_lastgpe, sizeof(struct gpe_block),
 	    M_DEVBUF, M_WAITOK | M_ZERO);
-
-	ngpe = 0;
 
 	/* Clear GPE status */
 	acpi_disable_allgpes(sc);
@@ -2391,7 +2389,6 @@ acpi_init_gpes(struct acpi_softc *sc)
 		}
 	}
 	aml_find_node(&aml_root, "_PRW", acpi_foundprw, sc);
-	sc->sc_maxgpe = ngpe;
 }
 
 void
@@ -2843,7 +2840,7 @@ acpi_thread(void *arg)
 		sc->sc_threadwaiting = 1;
 
 		/* Enable Sleep/Power buttons if they exist */
-		s = spltty();
+		s = splbio();
 		en = acpi_read_pmreg(sc, ACPIREG_PM1_EN, 0);
 		if (!(sc->sc_fadt->flags & FADT_PWR_BUTTON))
 			en |= ACPI_PM1_PWRBTN_EN;
@@ -2857,7 +2854,7 @@ acpi_thread(void *arg)
 	}
 
 	while (thread->running) {
-		s = spltty();
+		s = splbio();
 		while (sc->sc_threadwaiting) {
 			dnprintf(10, "acpi thread going to sleep...\n");
 			rw_exit_write(&sc->sc_lck);
@@ -3431,7 +3428,7 @@ acpiopen(dev_t dev, int flag, int mode, struct proc *p)
 	    !(sc = acpi_cd.cd_devs[APMUNIT(dev)]))
 		return (ENXIO);
 
-	s = spltty();
+	s = splbio();
 	switch (APMDEV(dev)) {
 	case APMDEV_CTL:
 		if (!(flag & FWRITE)) {
@@ -3470,7 +3467,7 @@ acpiclose(dev_t dev, int flag, int mode, struct proc *p)
 	    !(sc = acpi_cd.cd_devs[APMUNIT(dev)]))
 		return (ENXIO);
 
-	s = spltty();
+	s = splbio();
 	switch (APMDEV(dev)) {
 	case APMDEV_CTL:
 		sc->sc_flags &= ~SCFLAG_OWRITE;
@@ -3503,7 +3500,7 @@ acpiioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 	    !(sc = acpi_cd.cd_devs[APMUNIT(dev)]))
 		return (ENXIO);
 
-	s = spltty();
+	s = splbio();
 	/* fake APM */
 	switch (cmd) {
 	case APM_IOC_SUSPEND:
@@ -3651,7 +3648,7 @@ acpi_filtdetach(struct knote *kn)
 	struct acpi_softc *sc = kn->kn_hook;
 	int s;
 
-	s = spltty();
+	s = splbio();
 	klist_remove(sc->sc_note, kn);
 	splx(s);
 }
@@ -3685,7 +3682,7 @@ acpikqfilter(dev_t dev, struct knote *kn)
 
 	kn->kn_hook = sc;
 
-	s = spltty();
+	s = splbio();
 	klist_insert(sc->sc_note, kn);
 	splx(s);
 

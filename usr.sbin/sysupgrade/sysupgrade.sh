@@ -1,6 +1,6 @@
 #!/bin/ksh
 #
-# $OpenBSD: sysupgrade.sh,v 1.38 2020/06/17 16:29:02 florian Exp $
+# $OpenBSD: sysupgrade.sh,v 1.42 2020/10/08 14:35:20 kn Exp $
 #
 # Copyright (c) 1997-2015 Todd Miller, Theo de Raadt, Ken Westerback
 # Copyright (c) 2015 Robert Peichaer <rpe@openbsd.org>
@@ -27,14 +27,16 @@ export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 ARCH=$(uname -m)
 SETSDIR=/home/_sysupgrade
 
-ug_err()
+err()
 {
-	echo "${1}" 1>&2 && return ${2:-1}
+	echo "${0##*/}: ${1}" 1>&2
+	return ${2:-1}
 }
 
 usage()
 {
-	ug_err "usage: ${0##*/} [-fkn] [-r | -s] [installurl]"
+	echo "usage: ${0##*/} [-fkn] [-r | -s] [installurl]" 1>&2
+	return 1
 }
 
 unpriv()
@@ -51,10 +53,7 @@ unpriv()
 	fi
 	(($# >= 1))
 
-	# XXX ksh(1) bug; send error code to the caller instead of failing hard
-	set +e
 	eval su -s /bin/sh ${_user} -c "'$@'" || _rc=$?
-	set -e
 
 	[[ -n ${_file} ]] && chown root "${_file}"
 
@@ -90,7 +89,7 @@ while getopts fknrs arg; do
 	esac
 done
 
-(($(id -u) != 0)) && ug_err "${0##*/}: need root privileges"
+(($(id -u) != 0)) && err "need root privileges"
 
 if $RELEASE && $SNAP; then
 	usage
@@ -109,6 +108,8 @@ case $# in
 	;;
 *)	usage
 esac
+[[ $MIRROR == @(file|ftp|http|https)://* ]] ||
+	ug_err "invalid installurl: $MIRROR"
 
 if ! $RELEASE && [[ ${#_KERNV[*]} == 2 ]]; then
 	SNAP=true
@@ -139,10 +140,10 @@ read _LINE <SHA256.sig
 case ${_LINE} in
 *\ ${_KEY})	SIGNIFY_KEY=/etc/signify/${_KEY} ;;
 *\ ${_NEXTKEY})	SIGNIFY_KEY=/etc/signify/${_NEXTKEY} ;;
-*)		ug_err "invalid signing key" ;;
+*)		err "invalid signing key" ;;
 esac
 
-[[ -f ${SIGNIFY_KEY} ]] || ug_err "cannot find ${SIGNIFY_KEY}"
+[[ -f ${SIGNIFY_KEY} ]] || err "cannot find ${SIGNIFY_KEY}"
 
 unpriv -f SHA256 signify -Ve -p "${SIGNIFY_KEY}" -x SHA256.sig -m SHA256
 rm SHA256.sig
@@ -180,7 +181,7 @@ fi
 
 cat <<__EOT >/auto_upgrade.conf
 Location of sets = disk
-Pathname to the sets = /home/_sysupgrade/
+Pathname to the sets = ${SETSDIR}/
 Set name(s) = done
 Directory does not contain SHA256.sig. Continue without verification = yes
 __EOT
@@ -188,7 +189,7 @@ __EOT
 if ! ${KEEP}; then
 	CLEAN=$(echo SHA256 ${SETS} | sed -e 's/ /,/g')
 	cat <<__EOT > /etc/rc.firsttime
-rm -f /home/_sysupgrade/{${CLEAN}}
+rm -f ${SETSDIR}/{${CLEAN}}
 __EOT
 fi
 

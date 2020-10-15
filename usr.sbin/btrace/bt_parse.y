@@ -1,4 +1,4 @@
-/*	$OpenBSD: bt_parse.y,v 1.14 2020/06/22 13:14:47 kn Exp $	*/
+/*	$OpenBSD: bt_parse.y,v 1.17 2020/09/14 18:45:19 jasper Exp $	*/
 
 /*
  * Copyright (c) 2019 - 2020 Martin Pieuchot <mpi@openbsd.org>
@@ -69,6 +69,8 @@ struct bt_arg	*bm_get(const char *, struct bt_arg *);
 struct bt_stmt	*bm_set(const char *, struct bt_arg *, struct bt_arg *);
 struct bt_stmt	*bm_op(enum bt_action, struct bt_arg *, struct bt_arg *);
 
+struct bt_stmt	*bh_inc(const char *, struct bt_arg *, struct bt_arg *);
+
 /*
  * Lexer
  */
@@ -102,19 +104,21 @@ static int	 yylex(void);
 /* Builtins */
 %token	BUILTIN PID TID
 /* Functions and Map operators */
-%token  F_DELETE FUNC0 FUNC1 FUNCN MOP0 MOP1
+%token  F_DELETE FUNC0 FUNC1 FUNCN OP1 OP4 MOP0 MOP1
 %token	<v.string>	STRING CSTRING
 %token	<v.number>	NUMBER
 
 %type	<v.string>	gvar
 %type	<v.i>		filterval oper builtin
-%type	<v.i>		BUILTIN F_DELETE FUNC0 FUNC1 FUNCN MOP0 MOP1
+%type	<v.i>		BUILTIN F_DELETE FUNC0 FUNC1 FUNCN OP1 OP4 MOP0 MOP1
 %type	<v.probe>	probe
 %type	<v.filter>	predicate
 %type	<v.stmt>	action stmt stmtlist
 %type	<v.arg>		expr vargs map mexpr term
 %type	<v.rtype>	beginend
 
+%left	'|'
+%left	'&'
 %left	'+' '-'
 %left	'/' '*'
 %%
@@ -170,6 +174,8 @@ term		: '(' term ')'			{ $$ = $2; }
 		| term '-' term			{ $$ = ba_op('-', $1, $3); }
 		| term '/' term			{ $$ = ba_op('/', $1, $3); }
 		| term '*' term			{ $$ = ba_op('*', $1, $3); }
+		| term '&' term			{ $$ = ba_op('&', $1, $3); }
+		| term '|' term			{ $$ = ba_op('|', $1, $3); }
 		| NUMBER			{ $$ = ba_new($1, B_AT_LONG); }
 		| builtin			{ $$ = ba_new(NULL, $1); }
 		| gvar				{ $$ = bv_get($1); }
@@ -196,6 +202,8 @@ stmt		: ';' NL			{ $$ = NULL; }
 		| FUNC1 '(' expr ')'		{ $$ = bs_new($1, $3, NULL); }
 		| FUNC0 '(' ')'			{ $$ = bs_new($1, NULL, NULL); }
 		| F_DELETE '(' map ')'		{ $$ = bm_op($1, $3, NULL); }
+		| gvar '=' OP1 '(' expr ')'	{ $$ = bh_inc($1, $5, NULL); }
+		| gvar '=' OP4 '(' expr ',' vargs ')' {$$ = bh_inc($1, $5, $7);}
 		;
 
 stmtlist	: stmt
@@ -327,6 +335,12 @@ ba_op(const char op, struct bt_arg *da0, struct bt_arg *da1)
 		break;
 	case '/':
 		type = B_AT_OP_DIVIDE;
+		break;
+	case '&':
+		type = B_AT_OP_AND;
+		break;
+	case '|':
+		type = B_AT_OP_OR;
 		break;
 	default:
 		assert(0);
@@ -467,6 +481,60 @@ bm_get(const char *mname, struct bt_arg *mkey)
 	return ba;
 }
 
+/*
+ * Histograms implemented using associative arrays (maps).  In the case
+ * of linear histograms `ba_key' points to a list of (min, max, step)
+ * necessary to "bucketize" any value.
+ */
+struct bt_stmt *
+bh_inc(const char *hname, struct bt_arg *hval, struct bt_arg *hrange)
+{
+	struct bt_arg *ba;
+	struct bt_var *bv;
+
+	if (hrange == NULL) {
+		/* Power-of-2 histogram */
+	} else {
+		long min, max;
+		int count = 0;
+
+		/* Linear histogram */
+		for (ba = hrange; ba != NULL; ba = SLIST_NEXT(ba, ba_next)) {
+			if (++count > 3)
+				yyerror("too many arguments");
+			if (ba->ba_type != B_AT_LONG)
+				yyerror("type invalid");
+
+			switch (count) {
+			case 1:
+				min = (long)ba->ba_value;
+				if (min >= 0)
+					break;
+				yyerror("negative minium");
+			case 2:
+				max = (long)ba->ba_value;
+				if (max > min)
+					break;
+				yyerror("maximum smaller than minium (%d < %d)",
+				    max,  min);
+			case 3:
+				break;
+			default:
+				assert(0);
+			}
+		}
+		if (count < 3)
+			yyerror("%d missing arguments", 3 - count);
+	}
+
+	bv = bv_find(hname);
+	if (bv == NULL)
+		bv = bv_new(hname);
+	ba = ba_new(bv, B_AT_HIST);
+	ba->ba_key = hrange;
+	return bs_new(B_AC_BUCKETIZE, ba, (struct bt_var *)hval);
+}
+
 struct keyword {
 	const char	*word;
 	int		 token;
@@ -503,13 +571,15 @@ lookup(char *s)
 		{ "cpu",	BUILTIN,	B_AT_BI_CPU },
 		{ "delete",	F_DELETE,	B_AC_DELETE },
 		{ "exit",	FUNC0,		B_AC_EXIT },
+		{ "hist",	OP1,		0 },
 		{ "hz",		HZ,		0 },
 		{ "kstack",	BUILTIN,	B_AT_BI_KSTACK },
+		{ "lhist",	OP4,		0 },
 		{ "max",	MOP1,		B_AT_MF_MAX },
 		{ "min",	MOP1,		B_AT_MF_MIN },
 		{ "nsecs",	BUILTIN,	B_AT_BI_NSECS },
 		{ "pid",	PID,		0 /*B_AT_BI_PID*/ },
-		{ "print",	FUNCN,	B_AC_PRINT },
+		{ "print",	FUNCN,		B_AC_PRINT },
 		{ "printf",	FUNCN,		B_AC_PRINTF },
 		{ "retval",	BUILTIN,	B_AT_BI_RETVAL },
 		{ "sum",	MOP1,		B_AT_MF_SUM },
@@ -592,6 +662,8 @@ again:
 		for (pc = 0, c = lgetc(); c != EOF; c = lgetc()) {
 			if (pc == '*' && c == '/')
 				goto again;
+			else if (c == '\n')
+				yylval.lineno++;
 			pc = c;
 		}
 	}

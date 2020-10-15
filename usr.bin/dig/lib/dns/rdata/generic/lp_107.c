@@ -19,14 +19,12 @@
 
 #include <string.h>
 
-#include <isc/net.h>
-
 static inline isc_result_t
 totext_lp(ARGS_TOTEXT) {
 	isc_region_t region;
 	dns_name_t name;
 	dns_name_t prefix;
-	isc_boolean_t sub;
+	int sub;
 	char buf[sizeof("64000")];
 	unsigned short num;
 

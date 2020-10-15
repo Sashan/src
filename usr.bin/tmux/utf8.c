@@ -1,4 +1,4 @@
-/* $OpenBSD: utf8.c,v 1.55 2020/06/09 10:37:00 nicm Exp $ */
+/* $OpenBSD: utf8.c,v 1.57 2020/09/16 18:37:55 nicm Exp $ */
 
 /*
  * Copyright (c) 2008 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -101,9 +101,9 @@ utf8_put_item(const char *data, size_t size, u_int *index)
 
 	ui = utf8_item_by_data(data, size);
 	if (ui != NULL) {
+		*index = ui->index;
 		log_debug("%s: found %.*s = %u", __func__, (int)size, data,
 		    *index);
-		*index = ui->index;
 		return (0);
 	}
 
@@ -118,8 +118,8 @@ utf8_put_item(const char *data, size_t size, u_int *index)
 	ui->size = size;
 	RB_INSERT(utf8_data_tree, &utf8_data_tree, ui);
 
-	log_debug("%s: added %.*s = %u", __func__, (int)size, data, *index);
 	*index = ui->index;
+	log_debug("%s: added %.*s = %u", __func__, (int)size, data, *index);
 	return (0);
 }
 
@@ -336,6 +336,20 @@ utf8_stravis(char **dst, const char *src, int flag)
 
 	buf = xreallocarray(NULL, 4, strlen(src) + 1);
 	len = utf8_strvis(buf, src, strlen(src), flag);
+
+	*dst = xrealloc(buf, len + 1);
+	return (len);
+}
+
+/* Same as utf8_strvis but allocate the buffer. */
+int
+utf8_stravisx(char **dst, const char *src, size_t srclen, int flag)
+{
+	char	*buf;
+	int	 len;
+
+	buf = xreallocarray(NULL, 4, srclen + 1);
+	len = utf8_strvis(buf, src, srclen, flag);
 
 	*dst = xrealloc(buf, len + 1);
 	return (len);

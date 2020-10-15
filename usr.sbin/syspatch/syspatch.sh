@@ -1,6 +1,6 @@
 #!/bin/ksh
 #
-# $OpenBSD: syspatch.sh,v 1.161 2020/05/24 16:47:43 tb Exp $
+# $OpenBSD: syspatch.sh,v 1.165 2020/10/08 14:26:34 kn Exp $
 #
 # Copyright (c) 2016, 2017 Antoine Jacoutot <ajacoutot@openbsd.org>
 #
@@ -20,14 +20,16 @@ set -e
 umask 0022
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
-sp_err()
+err()
 {
-	echo "${0##*/}: ${1}" 1>&2 && return ${2:-1}
+	echo "${0##*/}: ${1}" 1>&2
+	return ${2:-1}
 }
 
 usage()
 {
-	echo "usage: ${0##*/} [-c | -l | -R | -r]"; return 1
+	echo "usage: ${0##*/} [-c | -l | -R | -r]" 1>&2
+	return 1
 }
 
 apply_patch()
@@ -59,7 +61,7 @@ apply_patch()
 	done
 
 	if ((_rc != 0)); then
-		sp_err "Failed to apply patch ${_patch##${_OSrev}-}" 0
+		err "Failed to apply patch ${_patch##${_OSrev}-}" 0
 		rollback_patch; return ${_rc}
 	fi
 	# don't fill up /tmp when installing multiple patches at once; non-fatal
@@ -70,7 +72,7 @@ apply_patch()
 		'(^|[[:blank:]]+)usr/share/relink/kernel/GENERI(C|C.MP)/[[:print:]]+([[:blank:]]+|$)' ||
 		_KARL=true
 
-	(! ${_upself} || sp_err "updated itself, run it again to install \
+	(! ${_upself} || err "updated itself, run it again to install \
 missing patches" 2)
 }
 
@@ -95,12 +97,12 @@ checkfs()
 	set -e
 
 	for _d in $(printf '%s\n' ${_dev} | sort -u); do
-		[[ ${_d} != "??" ]] || sp_err "Unsupported filesystem, aborting"
+		[[ ${_d} != "??" ]] || err "Unsupported filesystem, aborting"
 		mount | grep -v read-only | grep -q "^/dev/${_d} " ||
-			sp_err "Read-only filesystem, aborting"
+			err "Read-only filesystem, aborting"
 		_df=$(df -Pk | grep "^/dev/${_d} " | tr -s ' ' | cut -d ' ' -f4)
 		_sz=$(($((_d))/1024))
-		((_df > _sz)) || sp_err "No space left on ${_d}, aborting"
+		((_df > _sz)) || err "No space left on ${_d}, aborting"
 	done
 }
 
@@ -120,7 +122,7 @@ create_rollback()
 	tar -C / -czf ${_PDIR}/${_patch}/rollback.tgz ${_rbfiles} || _rc=$?
 
 	if ((_rc != 0)); then
-		sp_err "Failed to create rollback patch ${_patch##${_OSrev}-}" 0
+		err "Failed to create rollback patch ${_patch##${_OSrev}-}" 0
 		rm -r ${_PDIR}/${_patch}; return ${_rc}
 	fi
 }
@@ -157,7 +159,7 @@ ls_installed()
 	local _p
 	for _p in ${_PDIR}/${_OSrev}-+([[:digit:]])_+([[:alnum:]_-]); do
 		[[ -f ${_p}/rollback.tgz ]] && echo ${_p##*/${_OSrev}-}
-	done | sort -V
+	done
 }
 
 ls_missing()
@@ -170,19 +172,24 @@ ls_missing()
 	unpriv -f "${_sha}" signify -Veq -x ${_sha}.sig -m ${_sha} -p \
 		/etc/signify/openbsd-${_OSrev}-syspatch.pub >/dev/null
 
-	# if no earlier version of all files contained in the syspatch exists
-	# on the system, it means a missing set so skip it
+	# sig file less than 3 lines long doesn't list any patch (new release)
+	(($(grep -c ".*" ${_sha}) < 3)) && return
+
+	set -o pipefail
 	grep -Eo "syspatch${_OSrev}-[[:digit:]]{3}_[[:alnum:]_-]+" ${_sha} |
 		while read _c; do _c=${_c##syspatch${_OSrev}-} &&
 		[[ -n ${_l} ]] && echo ${_c} | grep -qw -- "${_l}" || echo ${_c}
 	done | while read _p; do
 		_cmd="ftp -N syspatch -MVo - \
 			${_MIRROR}/syspatch${_OSrev}-${_p}.tgz"
-		{ unpriv ${_cmd} | tar tzf -; } 2>/dev/null | while read _f; do
+		unpriv "${_cmd}" | tar tzf - | while read _f; do
+			# no earlier version of _all_ files contained in the tgz
+			# exists on the system, it means a missing set: skip it
 			[[ -f /${_f} ]] || continue && echo ${_p} && pkill -u \
 				_syspatch -xf "${_cmd}" || true && break
 		done
-	done | sort -V
+	done | sort -V # only used as a buffer to display all patches at once
+	set +o pipefail
 }
 
 rollback_patch()
@@ -209,7 +216,7 @@ rollback_patch()
 
 	((_rc != 0)) || rm -r ${_PDIR}/${_patch} || _rc=$?
 	((_rc == 0)) ||
-		sp_err "Failed to revert patch ${_patch##${_OSrev}-}" ${_rc}
+		err "Failed to revert patch ${_patch##${_OSrev}-}" ${_rc}
 	rm -rf ${_edir} # don't fill up /tmp when using `-R'; non-fatal
 	trap exit INT
 
@@ -256,10 +263,7 @@ unpriv()
 	fi
 	(($# >= 1))
 
-	# XXX ksh(1) bug; send error code to the caller instead of failing hard
-	set +e
 	eval su -s /bin/sh ${_user} -c "'$@'" || _rc=$?
-	set -e
 
 	[[ -n ${_file} ]] && chown root "${_file}"
 
@@ -269,12 +273,12 @@ unpriv()
 # only run on release (not -current nor -stable)
 set -A _KERNV -- $(sysctl -n kern.version |
 	sed 's/^OpenBSD \([1-9][0-9]*\.[0-9]\)\([^ ]*\).*/\1 \2/;q')
-((${#_KERNV[*]} > 1)) && sp_err "Unsupported release: ${_KERNV[0]}${_KERNV[1]}"
+((${#_KERNV[*]} > 1)) && err "Unsupported release: ${_KERNV[0]}${_KERNV[1]}"
 
 [[ $@ == @(|-[[:alpha:]]) ]] || usage; [[ $@ == @(|-(c|R|r)) ]] &&
-	(($(id -u) != 0)) && sp_err "need root privileges"
+	(($(id -u) != 0)) && err "need root privileges"
 [[ $@ == @(|-(R|r)) ]] && pgrep -qxf '/bin/ksh .*reorder_kernel' &&
-	sp_err "cannot apply patches while reorder_kernel is running"
+	err "cannot apply patches while reorder_kernel is running"
 
 _OSrev=${_KERNV[0]%.*}${_KERNV[0]#*.}
 [[ -n ${_OSrev} ]]
@@ -315,7 +319,7 @@ if ((OPTIND == 1)); then
 		[[ ${_D##*/} == ${_OSrev}-+([[:digit:]])_+([[:alnum:]_-]) ]] &&
 			[[ -f ${_D}/rollback.tgz ]] || rm -r ${_D}
 	done
-	_PATCHES=$(ls_missing)
+	_PATCHES=$(ls_missing) # can't use errexit in a for loop
 	for _PATCH in ${_PATCHES}; do
 		apply_patch ${_OSrev}-${_PATCH}
 		_PATCH_APPLIED=true

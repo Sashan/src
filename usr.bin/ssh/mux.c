@@ -1,4 +1,4 @@
-/* $OpenBSD: mux.c,v 1.82 2020/04/30 17:12:20 markus Exp $ */
+/* $OpenBSD: mux.c,v 1.84 2020/10/03 09:22:26 djm Exp $ */
 /*
  * Copyright (c) 2002-2008 Damien Miller <djm@openbsd.org>
  *
@@ -174,7 +174,7 @@ static const struct {
 	{ 0, NULL }
 };
 
-/* Cleanup callback fired on closure of mux slave _session_ channel */
+/* Cleanup callback fired on closure of mux client _session_ channel */
 /* ARGSUSED */
 static void
 mux_master_session_cleanup_cb(struct ssh *ssh, int cid, void *unused)
@@ -196,7 +196,7 @@ mux_master_session_cleanup_cb(struct ssh *ssh, int cid, void *unused)
 	channel_cancel_cleanup(ssh, c->self);
 }
 
-/* Cleanup callback fired on closure of mux slave _control_ channel */
+/* Cleanup callback fired on closure of mux client _control_ channel */
 /* ARGSUSED */
 static void
 mux_master_control_cleanup_cb(struct ssh *ssh, int cid, void *unused)
@@ -274,7 +274,7 @@ mux_master_process_hello(struct ssh *ssh, u_int rid,
 		    "(expected %u)", __func__, ver, SSHMUX_VER);
 		return -1;
 	}
-	debug2("%s: channel %d slave version %u", __func__, c->self, ver);
+	debug2("%s: channel %d client version %u", __func__, c->self, ver);
 
 	/* No extensions are presently defined */
 	while (sshbuf_len(m) > 0) {
@@ -388,7 +388,7 @@ mux_master_process_new_session(struct ssh *ssh, u_int rid,
 	/* Gather fds from client */
 	for(i = 0; i < 3; i++) {
 		if ((new_fd[i] = mm_receive_fd(c->sock)) == -1) {
-			error("%s: failed to receive fd %d from slave",
+			error("%s: failed to receive fd %d from client",
 			    __func__, i);
 			for (j = 0; j < i; j++)
 				close(new_fd[j]);
@@ -981,7 +981,7 @@ mux_master_process_stdio_fwd(struct ssh *ssh, u_int rid,
 	/* Gather fds from client */
 	for(i = 0; i < 2; i++) {
 		if ((new_fd[i] = mm_receive_fd(c->sock)) == -1) {
-			error("%s: failed to receive fd %d from slave",
+			error("%s: failed to receive fd %d from client",
 			    __func__, i);
 			for (j = 0; j < i; j++)
 				close(new_fd[j]);
@@ -1141,7 +1141,7 @@ mux_master_process_proxy(struct ssh *ssh, u_int rid,
 	return 0;
 }
 
-/* Channel callbacks fired on read/write from mux slave fd */
+/* Channel callbacks fired on read/write from mux client fd */
 static int
 mux_master_read_cb(struct ssh *ssh, Channel *c)
 {
@@ -1883,7 +1883,7 @@ mux_client_request_session(int fd)
 	const char *term;
 	u_int echar, rid, sid, esid, exitval, type, exitval_seen;
 	extern char **environ;
-	int r, i, devnull, rawmode;
+	int r, i, rawmode;
 
 	debug3("%s: entering", __func__);
 
@@ -1894,14 +1894,8 @@ mux_client_request_session(int fd)
 
 	ssh_signal(SIGPIPE, SIG_IGN);
 
-	if (stdin_null_flag) {
-		if ((devnull = open(_PATH_DEVNULL, O_RDONLY)) == -1)
-			fatal("open(/dev/null): %s", strerror(errno));
-		if (dup2(devnull, STDIN_FILENO) == -1)
-			fatal("dup2: %s", strerror(errno));
-		if (devnull > STDERR_FILENO)
-			close(devnull);
-	}
+	if (stdin_null_flag && stdfd_devnull(1, 0, 0) == -1)
+		fatal("%s: stdfd_devnull failed", __func__);
 
 	if ((term = getenv("TERM")) == NULL)
 		term = "";
@@ -2117,7 +2111,7 @@ mux_client_request_stdio_fwd(int fd)
 	struct sshbuf *m;
 	char *e;
 	u_int type, rid, sid;
-	int r, devnull;
+	int r;
 
 	debug3("%s: entering", __func__);
 
@@ -2128,14 +2122,8 @@ mux_client_request_stdio_fwd(int fd)
 
 	ssh_signal(SIGPIPE, SIG_IGN);
 
-	if (stdin_null_flag) {
-		if ((devnull = open(_PATH_DEVNULL, O_RDONLY)) == -1)
-			fatal("open(/dev/null): %s", strerror(errno));
-		if (dup2(devnull, STDIN_FILENO) == -1)
-			fatal("dup2: %s", strerror(errno));
-		if (devnull > STDERR_FILENO)
-			close(devnull);
-	}
+	if (stdin_null_flag && stdfd_devnull(1, 0, 0) == -1)
+		fatal("%s: stdfd_devnull failed", __func__);
 
 	if ((m = sshbuf_new()) == NULL)
 		fatal("%s: sshbuf_new", __func__);

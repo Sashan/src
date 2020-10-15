@@ -1,4 +1,4 @@
-/* $OpenBSD: softraid.c,v 1.405 2020/06/27 17:28:58 krw Exp $ */
+/* $OpenBSD: softraid.c,v 1.415 2020/09/22 19:32:52 krw Exp $ */
 /*
  * Copyright (c) 2007, 2008, 2009 Marco Peereboom <marco@peereboom.us>
  * Copyright (c) 2008 Chris Kuethe <ckuethe@openbsd.org>
@@ -1802,16 +1802,18 @@ sr_attach(struct device *parent, struct device *self, void *aux)
 
 	printf("\n");
 
-	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.adapter = &sr_switch;
-	sc->sc_link.adapter_target = SDEV_NO_ADAPTER_TARGET;
-	sc->sc_link.adapter_buswidth = SR_MAX_LD;
-	sc->sc_link.luns = 1;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter = &sr_switch;
+	saa.saa_adapter_target = SDEV_NO_ADAPTER_TARGET;
+	saa.saa_adapter_buswidth = SR_MAX_LD;
+	saa.saa_luns = 1;
+	saa.saa_openings = 0;
+	saa.saa_pool = NULL;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
-	saa.saa_sc_link = &sc->sc_link;
-
-	sc->sc_scsibus = (struct scsibus_softc *)config_found(&sc->sc_dev,
-	    &saa, scsiprint);
+	sc->sc_scsibus = (struct scsibus_softc *)config_found(&sc->sc_dev, &saa,
+	    scsiprint);
 
 	softraid_disk_attach = sr_disk_attach;
 
@@ -2326,7 +2328,7 @@ void
 sr_scsi_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link	*link = xs->sc_link;
-	struct sr_softc		*sc = link->adapter_softc;
+	struct sr_softc		*sc = link->bus->sb_adapter_softc;
 	struct sr_workunit	*wu = xs->io;
 	struct sr_discipline	*sd;
 
@@ -2349,15 +2351,15 @@ sr_scsi_cmd(struct scsi_xfer *xs)
 	wu->swu_state = SR_WU_INPROGRESS;
 	wu->swu_xs = xs;
 
-	switch (xs->cmd->opcode) {
+	switch (xs->cmd.opcode) {
 	case READ_COMMAND:
-	case READ_BIG:
+	case READ_10:
 	case READ_16:
 	case WRITE_COMMAND:
-	case WRITE_BIG:
+	case WRITE_10:
 	case WRITE_16:
 		DNPRINTF(SR_D_CMD, "%s: sr_scsi_cmd: READ/WRITE %02x\n",
-		    DEVNAME(sc), xs->cmd->opcode);
+		    DEVNAME(sc), xs->cmd.opcode);
 		if (sd->sd_scsi_rw(wu))
 			goto stuffup;
 		break;
@@ -2393,7 +2395,7 @@ sr_scsi_cmd(struct scsi_xfer *xs)
 	case READ_CAPACITY:
 	case READ_CAPACITY_16:
 		DNPRINTF(SR_D_CMD, "%s: sr_scsi_cmd READ CAPACITY 0x%02x\n",
-		    DEVNAME(sc), xs->cmd->opcode);
+		    DEVNAME(sc), xs->cmd.opcode);
 		if (sd->sd_scsi_read_cap(wu))
 			goto stuffup;
 		goto complete;
@@ -2407,7 +2409,7 @@ sr_scsi_cmd(struct scsi_xfer *xs)
 
 	default:
 		DNPRINTF(SR_D_CMD, "%s: unsupported scsi command %x\n",
-		    DEVNAME(sc), xs->cmd->opcode);
+		    DEVNAME(sc), xs->cmd.opcode);
 		/* XXX might need to add generic function to handle others */
 		goto stuffup;
 	}
@@ -2428,7 +2430,7 @@ complete:
 int
 sr_scsi_probe(struct scsi_link *link)
 {
-	struct sr_softc		*sc = link->adapter_softc;
+	struct sr_softc		*sc = link->bus->sb_adapter_softc;
 	struct sr_discipline	*sd;
 
 	KASSERT(link->target < SR_MAX_LD && link->lun == 0);
@@ -2449,7 +2451,7 @@ sr_scsi_probe(struct scsi_link *link)
 int
 sr_scsi_ioctl(struct scsi_link *link, u_long cmd, caddr_t addr, int flag)
 {
-	struct sr_softc		*sc = link->adapter_softc;
+	struct sr_softc		*sc = link->bus->sb_adapter_softc;
 	struct sr_discipline	*sd;
 
 	sd = sc->sc_targets[link->target];
@@ -3736,7 +3738,7 @@ sr_ioctl_installboot(struct sr_softc *sc, struct sr_discipline *sd,
 	if (omi == NULL) {
 		omi = malloc(sizeof(struct sr_meta_opt_item), M_DEVBUF,
 		    M_WAITOK | M_ZERO);
-		omi->omi_som = malloc(sizeof(struct sr_meta_crypto), M_DEVBUF,
+		omi->omi_som = malloc(sizeof(struct sr_meta_boot), M_DEVBUF,
 		    M_WAITOK | M_ZERO);
 		omi->omi_som->som_type = SR_OPT_BOOT;
 		omi->omi_som->som_length = sizeof(struct sr_meta_boot);
@@ -4009,7 +4011,7 @@ sr_raid_inquiry(struct sr_workunit *wu)
 {
 	struct sr_discipline	*sd = wu->swu_dis;
 	struct scsi_xfer	*xs = wu->swu_xs;
-	struct scsi_inquiry	*cdb = (struct scsi_inquiry *)xs->cmd;
+	struct scsi_inquiry	*cdb = (struct scsi_inquiry *)&xs->cmd;
 	struct scsi_inquiry_data inq;
 
 	DNPRINTF(SR_D_DIS, "%s: sr_raid_inquiry\n", DEVNAME(sd->sd_sc));
@@ -4023,9 +4025,9 @@ sr_raid_inquiry(struct sr_workunit *wu)
 	bzero(&inq, sizeof(inq));
 	inq.device = T_DIRECT;
 	inq.dev_qual2 = 0;
-	inq.version = 2;
-	inq.response_format = 2;
-	inq.additional_length = 32;
+	inq.version = SCSI_REV_2;
+	inq.response_format = SID_SCSI2_RESPONSE;
+	inq.additional_length = SID_SCSI2_ALEN;
 	inq.flags |= SID_CmdQue;
 	strlcpy(inq.vendor, sd->sd_meta->ssdi.ssd_vendor,
 	    sizeof(inq.vendor));
@@ -4054,7 +4056,7 @@ sr_raid_read_cap(struct sr_workunit *wu)
 	secsize = sd->sd_meta->ssdi.ssd_secsize;
 
 	addr = ((sd->sd_meta->ssdi.ssd_size * DEV_BSIZE) / secsize) - 1;
-	if (xs->cmd->opcode == READ_CAPACITY) {
+	if (xs->cmd.opcode == READ_CAPACITY) {
 		bzero(&rcd, sizeof(rcd));
 		if (addr > 0xffffffffllu)
 			_lto4b(0xffffffff, rcd.addr);
@@ -4063,7 +4065,7 @@ sr_raid_read_cap(struct sr_workunit *wu)
 		_lto4b(secsize, rcd.length);
 		sr_copy_internal_data(xs, &rcd, sizeof(rcd));
 		rv = 0;
-	} else if (xs->cmd->opcode == READ_CAPACITY_16) {
+	} else if (xs->cmd.opcode == READ_CAPACITY_16) {
 		bzero(&rcd16, sizeof(rcd16));
 		_lto8b(addr, rcd16.addr);
 		_lto4b(secsize, rcd16.length);
@@ -4122,7 +4124,7 @@ int
 sr_raid_start_stop(struct sr_workunit *wu)
 {
 	struct scsi_xfer	*xs = wu->swu_xs;
-	struct scsi_start_stop	*ss = (struct scsi_start_stop *)xs->cmd;
+	struct scsi_start_stop	*ss = (struct scsi_start_stop *)&xs->cmd;
 
 	DNPRINTF(SR_D_DIS, "%s: sr_raid_start_stop\n",
 	    DEVNAME(wu->swu_dis->sd_sc));
@@ -4577,7 +4579,7 @@ sr_validate_io(struct sr_workunit *wu, daddr_t *blkno, char *func)
 	int			rv = 1;
 
 	DNPRINTF(SR_D_DIS, "%s: %s 0x%02x\n", DEVNAME(sd->sd_sc), func,
-	    xs->cmd->opcode);
+	    xs->cmd.opcode);
 
 	if (sd->sd_meta->ssd_data_blkno == 0)
 		panic("invalid data blkno");
@@ -4595,11 +4597,11 @@ sr_validate_io(struct sr_workunit *wu, daddr_t *blkno, char *func)
 	}
 
 	if (xs->cmdlen == 10)
-		*blkno = _4btol(((struct scsi_rw_big *)xs->cmd)->addr);
+		*blkno = _4btol(((struct scsi_rw_10 *)&xs->cmd)->addr);
 	else if (xs->cmdlen == 16)
-		*blkno = _8btol(((struct scsi_rw_16 *)xs->cmd)->addr);
+		*blkno = _8btol(((struct scsi_rw_16 *)&xs->cmd)->addr);
 	else if (xs->cmdlen == 6)
-		*blkno = _3btol(((struct scsi_rw *)xs->cmd)->addr);
+		*blkno = _3btol(((struct scsi_rw *)&xs->cmd)->addr);
 	else {
 		printf("%s: %s: illegal cmdlen for %s\n",
 		    DEVNAME(sd->sd_sc), func, sd->sd_meta->ssd_devname);
@@ -4722,8 +4724,7 @@ sr_rebuild(struct sr_discipline *sd)
 		xs_r.datalen = sz << DEV_BSHIFT;
 		xs_r.data = buf;
 		xs_r.cmdlen = sizeof(*cr);
-		xs_r.cmd = &xs_r.cmdstore;
-		cr = (struct scsi_rw_16 *)xs_r.cmd;
+		cr = (struct scsi_rw_16 *)&xs_r.cmd;
 		cr->opcode = READ_16;
 		_lto4b(sz, cr->length);
 		_lto8b(lba, cr->addr);
@@ -4743,8 +4744,7 @@ sr_rebuild(struct sr_discipline *sd)
 		xs_w.datalen = sz << DEV_BSHIFT;
 		xs_w.data = buf;
 		xs_w.cmdlen = sizeof(*cw);
-		xs_w.cmd = &xs_w.cmdstore;
-		cw = (struct scsi_rw_16 *)xs_w.cmd;
+		cw = (struct scsi_rw_16 *)&xs_w.cmd;
 		cw->opcode = WRITE_16;
 		_lto4b(sz, cw->length);
 		_lto8b(lba, cw->addr);

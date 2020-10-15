@@ -1,4 +1,4 @@
-/*	$OpenBSD: usb_subr.c,v 1.150 2019/10/06 17:11:51 mpi Exp $ */
+/*	$OpenBSD: usb_subr.c,v 1.152 2020/08/27 19:34:37 mglocker Exp $ */
 /*	$NetBSD: usb_subr.c,v 1.103 2003/01/10 11:19:13 augustss Exp $	*/
 /*	$FreeBSD: src/sys/dev/usb/usb_subr.c,v 1.18 1999/11/17 22:33:47 n_hibma Exp $	*/
 
@@ -1381,7 +1381,7 @@ usbd_get_cdesc(struct usbd_device *dev, int index, u_int *lenp)
 		err = usbd_get_desc(dev, UDESC_CONFIG, index,
 		    USB_CONFIG_DESCRIPTOR_SIZE, &cdescr);
 		if (err || cdescr.bDescriptorType != UDESC_CONFIG)
-			return (0);
+			return (NULL);
 		len = UGETW(cdescr.wTotalLength);
 		DPRINTFN(5,("%s: index=%d, len=%u\n", __func__, index, len));
 		if (lenp)
@@ -1390,7 +1390,7 @@ usbd_get_cdesc(struct usbd_device *dev, int index, u_int *lenp)
 		err = usbd_get_desc(dev, UDESC_CONFIG, index, len, cdesc);
 		if (err) {
 			free(cdesc, M_TEMP, len);
-			return (0);
+			return (NULL);
 		}
 	}
 	return (cdesc);
@@ -1403,10 +1403,8 @@ usb_free_device(struct usbd_device *dev)
 
 	DPRINTF(("%s: %p\n", __func__, dev));
 
-	if (dev->default_pipe != NULL) {
-		usbd_abort_pipe(dev->default_pipe);
+	if (dev->default_pipe != NULL)
 		usbd_close_pipe(dev->default_pipe);
-	}
 	if (dev->ifaces != NULL) {
 		nifc = dev->cdesc->bNumInterface;
 		for (ifcidx = 0; ifcidx < nifc; ifcidx++)

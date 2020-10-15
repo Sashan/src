@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmd.h,v 1.99 2020/06/28 16:52:45 pd Exp $	*/
+/*	$OpenBSD: vmd.h,v 1.101 2020/09/23 19:18:18 martijn Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>

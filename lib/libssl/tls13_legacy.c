@@ -1,4 +1,4 @@
-/*	$OpenBSD: tls13_legacy.c,v 1.9 2020/06/24 18:04:33 jsing Exp $ */
+/*	$OpenBSD: tls13_legacy.c,v 1.18 2020/10/11 12:45:52 guenther Exp $ */
 /*
  * Copyright (c) 2018, 2019 Joel Sing <jsing@openbsd.org>
  *
@@ -20,10 +20,6 @@
 #include "ssl_locl.h"
 #include "tls13_internal.h"
 
-SSL3_ENC_METHOD TLSv1_3_enc_data = {
-	.enc_flags = SSL_ENC_FLAG_SIGALGS|SSL_ENC_FLAG_TLS1_3_CIPHERS,
-};
-
 static ssize_t
 tls13_legacy_wire_read(SSL *ssl, uint8_t *buf, size_t len)
 {
@@ -35,6 +31,7 @@ tls13_legacy_wire_read(SSL *ssl, uint8_t *buf, size_t len)
 	}
 
 	ssl->internal->rwstate = SSL_READING;
+	errno = 0;
 
 	if ((n = BIO_read(ssl->rbio, buf, len)) <= 0) {
 		if (BIO_should_read(ssl->rbio))
@@ -43,6 +40,9 @@ tls13_legacy_wire_read(SSL *ssl, uint8_t *buf, size_t len)
 			return TLS13_IO_WANT_POLLOUT;
 		if (n == 0)
 			return TLS13_IO_EOF;
+
+		if (ERR_peek_error() == 0 && errno != 0)
+			SYSerror(errno);
 
 		return TLS13_IO_FAILURE;
 	}
@@ -72,12 +72,16 @@ tls13_legacy_wire_write(SSL *ssl, const uint8_t *buf, size_t len)
 	}
 
 	ssl->internal->rwstate = SSL_WRITING;
+	errno = 0;
 
 	if ((n = BIO_write(ssl->wbio, buf, len)) <= 0) {
 		if (BIO_should_read(ssl->wbio))
 			return TLS13_IO_WANT_POLLIN;
 		if (BIO_should_write(ssl->wbio))
 			return TLS13_IO_WANT_POLLOUT;
+
+		if (ERR_peek_error() == 0 && errno != 0)
+			SYSerror(errno);
 
 		return TLS13_IO_FAILURE;
 	}
@@ -208,6 +212,9 @@ tls13_legacy_read_bytes(SSL *ssl, int type, unsigned char *buf, int len, int pee
 		return tls13_legacy_return_code(ssl, TLS13_IO_WANT_POLLIN);
 	}
 
+	tls13_record_layer_set_retry_after_phh(ctx->rl,
+	    (ctx->ssl->internal->mode & SSL_MODE_AUTO_RETRY) != 0);
+
 	if (type != SSL3_RT_APPLICATION_DATA) {
 		SSLerror(ssl, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
 		return -1;
@@ -282,32 +289,39 @@ tls13_legacy_write_bytes(SSL *ssl, int type, const void *vbuf, int len)
 	}
 }
 
-int
-tls13_use_legacy_client(struct tls13_ctx *ctx)
+static int
+tls13_use_legacy_stack(struct tls13_ctx *ctx)
 {
 	SSL *s = ctx->ssl;
+	CBB cbb, fragment;
 	CBS cbs;
 
-	s->method = tls_legacy_client_method();
-	s->internal->handshake_func = s->method->internal->ssl_connect;
-	s->client_version = s->version = s->method->internal->max_version;
+	memset(&cbb, 0, sizeof(cbb));
+
+	s->method = tls_legacy_method();
 
 	if (!ssl3_setup_init_buffer(s))
 		goto err;
 	if (!ssl3_setup_buffers(s))
 		goto err;
-	if (!ssl_init_wbio_buffer(s, 0))
+	if (!ssl_init_wbio_buffer(s, 1))
 		goto err;
-
-	if (s->bbio != s->wbio)
-		s->wbio = BIO_push(s->bbio, s->wbio);
 
 	/* Stash any unprocessed data from the last record. */
 	tls13_record_layer_rbuf(ctx->rl, &cbs);
 	if (CBS_len(&cbs) > 0) {
-		if (!CBS_write_bytes(&cbs,
-		    S3I(s)->rbuf.buf + SSL3_RT_HEADER_LENGTH,
-		    S3I(s)->rbuf.len - SSL3_RT_HEADER_LENGTH, NULL))
+		if (!CBB_init_fixed(&cbb, S3I(s)->rbuf.buf,
+		    S3I(s)->rbuf.len))
+			goto err;
+		if (!CBB_add_u8(&cbb, SSL3_RT_HANDSHAKE))
+			goto err;
+		if (!CBB_add_u16(&cbb, TLS1_2_VERSION))
+			goto err;
+		if (!CBB_add_u16_length_prefixed(&cbb, &fragment))
+			goto err;
+		if (!CBB_add_bytes(&fragment, CBS_data(&cbs), CBS_len(&cbs)))
+			goto err;
+		if (!CBB_finish(&cbb, NULL, NULL))
 			goto err;
 
 		S3I(s)->rbuf.offset = SSL3_RT_HEADER_LENGTH;
@@ -322,6 +336,8 @@ tls13_use_legacy_client(struct tls13_ctx *ctx)
 
 	/* Stash the current handshake message. */
 	tls13_handshake_msg_data(ctx->hs_msg, &cbs);
+	if (!BUF_MEM_grow_clean(s->internal->init_buf, CBS_len(&cbs)))
+		goto err;
 	if (!CBS_write_bytes(&cbs, s->internal->init_buf->data,
 	    s->internal->init_buf->length, NULL))
 		goto err;
@@ -330,69 +346,45 @@ tls13_use_legacy_client(struct tls13_ctx *ctx)
 	S3I(s)->tmp.message_type = tls13_handshake_msg_type(ctx->hs_msg);
 	S3I(s)->tmp.message_size = CBS_len(&cbs);
 
-	S3I(s)->hs.state = SSL3_ST_CR_SRVR_HELLO_A;
-
 	return 1;
 
  err:
+	CBB_cleanup(&cbb);
+
 	return 0;
+}
+
+int
+tls13_use_legacy_client(struct tls13_ctx *ctx)
+{
+	SSL *s = ctx->ssl;
+
+	if (!tls13_use_legacy_stack(ctx))
+		return 0;
+
+	s->internal->handshake_func = s->method->internal->ssl_connect;
+	s->client_version = s->version = s->method->internal->max_version;
+
+	S3I(s)->hs.state = SSL3_ST_CR_SRVR_HELLO_A;
+
+	return 1;
 }
 
 int
 tls13_use_legacy_server(struct tls13_ctx *ctx)
 {
 	SSL *s = ctx->ssl;
-	CBS cbs;
 
-	s->method = tls_legacy_server_method();
+	if (!tls13_use_legacy_stack(ctx))
+		return 0;
+
 	s->internal->handshake_func = s->method->internal->ssl_accept;
 	s->client_version = s->version = s->method->internal->max_version;
 	s->server = 1;
 
-	if (!ssl3_setup_init_buffer(s))
-		goto err;
-	if (!ssl3_setup_buffers(s))
-		goto err;
-	if (!ssl_init_wbio_buffer(s, 0))
-		goto err;
-
-	if (s->bbio != s->wbio)
-		s->wbio = BIO_push(s->bbio, s->wbio);
-
-	/* Stash any unprocessed data from the last record. */
-	tls13_record_layer_rbuf(ctx->rl, &cbs);
-	if (CBS_len(&cbs) > 0) {
-		if (!CBS_write_bytes(&cbs,
-		    S3I(s)->rbuf.buf + SSL3_RT_HEADER_LENGTH,
-		    S3I(s)->rbuf.len - SSL3_RT_HEADER_LENGTH, NULL))
-			goto err;
-
-		S3I(s)->rbuf.offset = SSL3_RT_HEADER_LENGTH;
-		S3I(s)->rbuf.left = CBS_len(&cbs);
-		S3I(s)->rrec.type = SSL3_RT_HANDSHAKE;
-		S3I(s)->rrec.length = CBS_len(&cbs);
-		s->internal->rstate = SSL_ST_READ_BODY;
-		s->internal->packet = S3I(s)->rbuf.buf;
-		s->internal->packet_length = SSL3_RT_HEADER_LENGTH;
-		s->internal->mac_packet = 1;
-	}
-
-	/* Stash the current handshake message. */
-	tls13_handshake_msg_data(ctx->hs_msg, &cbs);
-	if (!CBS_write_bytes(&cbs, s->internal->init_buf->data,
-	    s->internal->init_buf->length, NULL))
-		goto err;
-
-	S3I(s)->tmp.reuse_message = 1;
-	S3I(s)->tmp.message_type = tls13_handshake_msg_type(ctx->hs_msg);
-	S3I(s)->tmp.message_size = CBS_len(&cbs);
-
 	S3I(s)->hs.state = SSL3_ST_SR_CLNT_HELLO_A;
 
 	return 1;
-
- err:
-	return 0;
 }
 
 int

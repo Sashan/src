@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.79 2020/01/21 03:06:39 mlarkin Exp $	*/
+/*	$OpenBSD: trap.c,v 1.83 2020/10/08 19:41:04 deraadt Exp $	*/
 /*	$NetBSD: trap.c,v 1.2 2003/05/04 23:51:56 fvdl Exp $	*/
 
 /*-
@@ -92,7 +92,7 @@
 
 #include "isa.h"
 
-int	pageflttrap(struct trapframe *, int _usermode);
+int	pageflttrap(struct trapframe *, uint64_t, int _usermode);
 void	kerntrap(struct trapframe *);
 void	usertrap(struct trapframe *);
 void	ast(struct trapframe *);
@@ -157,22 +157,20 @@ fault(const char *format, ...)
  * if something was so broken that we should panic.
  */
 int
-pageflttrap(struct trapframe *frame, int usermode)
+pageflttrap(struct trapframe *frame, uint64_t cr2, int usermode)
 {
 	struct proc *p = curproc;
 	struct pcb *pcb;
 	int error;
-	uint64_t cr2;
 	vaddr_t va;
 	struct vm_map *map;
-	vm_prot_t ftype;
+	vm_prot_t access_type;
 
 	if (p == NULL || p->p_addr == NULL || p->p_vmspace == NULL)
 		return 0;
 
 	map = &p->p_vmspace->vm_map;
 	pcb = &p->p_addr->u_pcb;
-	cr2 = rcr2();
 	va = trunc_page((vaddr_t)cr2);
 
 	KERNEL_LOCK();
@@ -207,19 +205,18 @@ pageflttrap(struct trapframe *frame, int usermode)
 	}
 
 	if (frame->tf_err & PGEX_W)
-		ftype = PROT_WRITE;
+		access_type = PROT_WRITE;
 	else if (frame->tf_err & PGEX_I)
-		ftype = PROT_EXEC;
+		access_type = PROT_EXEC;
 	else
-		ftype = PROT_READ;
+		access_type = PROT_READ;
 
 	if (curcpu()->ci_inatomic == 0 || map == kernel_map) {
 		/* Fault the original page in. */
 		caddr_t onfault = pcb->pcb_onfault;
 
 		pcb->pcb_onfault = NULL;
-		error = uvm_fault(map, va, frame->tf_err & PGEX_P ?
-		    VM_FAULT_PROTECT : VM_FAULT_INVALID, ftype);
+		error = uvm_fault(map, va, 0, access_type);
 		pcb->pcb_onfault = onfault;
 	} else
 		error = EFAULT;
@@ -235,7 +232,7 @@ pageflttrap(struct trapframe *frame, int usermode)
 		} else {
 			/* bad memory access in the kernel */
 			fault("uvm_fault(%p, 0x%llx, 0, %d) -> %x",
-			    map, cr2, ftype, error);
+			    map, cr2, access_type, error);
 			/* retain kernel lock */
 			return 0;
 		}
@@ -280,6 +277,7 @@ void
 kerntrap(struct trapframe *frame)
 {
 	int type = (int)frame->tf_trapno;
+	uint64_t cr2 = rcr2();
 
 	verify_smap(__func__);
 	uvmexp.traps++;
@@ -299,7 +297,7 @@ kerntrap(struct trapframe *frame)
 		/*NOTREACHED*/
 
 	case T_PAGEFLT:			/* allow page faults in kernel mode */
-		if (pageflttrap(frame, 0))
+		if (pageflttrap(frame, cr2, 0))
 			return;
 		goto we_re_toast;
 
@@ -333,6 +331,7 @@ usertrap(struct trapframe *frame)
 {
 	struct proc *p = curproc;
 	int type = (int)frame->tf_trapno;
+	uint64_t cr2 = rcr2();
 	union sigval sv;
 	int sig, code;
 
@@ -342,11 +341,6 @@ usertrap(struct trapframe *frame)
 
 	p->p_md.md_regs = frame;
 	refreshcreds(p);
-
-	if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-	    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-	    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-		goto out;
 
 	switch (type) {
 	case T_PROTFLT:			/* protection fault */
@@ -381,7 +375,11 @@ usertrap(struct trapframe *frame)
 		break;
 
 	case T_PAGEFLT:			/* page fault */
-		if (pageflttrap(frame, 1))
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+		if (pageflttrap(frame, cr2, 1))
 			goto out;
 		/* FALLTHROUGH */
 
@@ -391,9 +389,7 @@ usertrap(struct trapframe *frame)
 	}
 
 	sv.sival_ptr = (void *)frame->tf_rip;
-	KERNEL_LOCK();
 	trapsignal(p, sig, type, code, sv);
-	KERNEL_UNLOCK();
 
 out:
 	userret(p);

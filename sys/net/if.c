@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.c,v 1.610 2020/06/22 09:45:13 claudio Exp $	*/
+/*	$OpenBSD: if.c,v 1.620 2020/10/03 00:23:55 mvs Exp $	*/
 /*	$NetBSD: if.c,v 1.35 1996/05/07 05:26:04 thorpej Exp $	*/
 
 /*
@@ -87,6 +87,7 @@
 #include <sys/percpu.h>
 #include <sys/proc.h>
 #include <sys/stdint.h>	/* uintptr_t */
+#include <sys/rwlock.h>
 
 #include <net/if.h>
 #include <net/if_dl.h>
@@ -226,6 +227,8 @@ TAILQ_HEAD(, ifg_group) ifg_head = TAILQ_HEAD_INITIALIZER(ifg_head);
 
 LIST_HEAD(, if_clone) if_cloners = LIST_HEAD_INITIALIZER(if_cloners);
 int if_cloners_count;
+
+struct rwlock if_cloners_lock = RWLOCK_INITIALIZER("clonerlock");
 
 /* hooks should only be added, deleted, and run from a process context */
 struct mutex if_hooks_mtx = MUTEX_INITIALIZER(IPL_NONE);
@@ -631,8 +634,6 @@ if_attach_common(struct ifnet *ifp)
 	if (ifp->if_enqueue == NULL)
 		ifp->if_enqueue = if_enqueue_ifq;
 	ifp->if_llprio = IFQ_DEFPRIO;
-
-	SRPL_INIT(&ifp->if_inputs);
 }
 
 void
@@ -805,109 +806,6 @@ if_output_local(struct ifnet *ifp, struct mbuf *m, sa_family_t af)
 	return (ifiq_enqueue(ifiq, m) == 0 ? 0 : ENOBUFS);
 }
 
-struct ifih {
-	SRPL_ENTRY(ifih)	  ifih_next;
-	int			(*ifih_input)(struct ifnet *, struct mbuf *,
-				      void *);
-	void			 *ifih_cookie;
-	int			  ifih_refcnt;
-	struct refcnt		  ifih_srpcnt;
-};
-
-void	if_ih_ref(void *, void *);
-void	if_ih_unref(void *, void *);
-
-struct srpl_rc ifih_rc = SRPL_RC_INITIALIZER(if_ih_ref, if_ih_unref, NULL);
-
-void
-if_ih_insert(struct ifnet *ifp, int (*input)(struct ifnet *, struct mbuf *,
-    void *), void *cookie)
-{
-	struct ifih *ifih;
-
-	/* the kernel lock guarantees serialised modifications to if_inputs */
-	KERNEL_ASSERT_LOCKED();
-
-	SRPL_FOREACH_LOCKED(ifih, &ifp->if_inputs, ifih_next) {
-		if (ifih->ifih_input == input && ifih->ifih_cookie == cookie) {
-			ifih->ifih_refcnt++;
-			break;
-		}
-	}
-
-	if (ifih == NULL) {
-		ifih = malloc(sizeof(*ifih), M_DEVBUF, M_WAITOK);
-
-		ifih->ifih_input = input;
-		ifih->ifih_cookie = cookie;
-		ifih->ifih_refcnt = 1;
-		refcnt_init(&ifih->ifih_srpcnt);
-		SRPL_INSERT_HEAD_LOCKED(&ifih_rc, &ifp->if_inputs,
-		    ifih, ifih_next);
-	}
-}
-
-void
-if_ih_ref(void *null, void *i)
-{
-	struct ifih *ifih = i;
-
-	refcnt_take(&ifih->ifih_srpcnt);
-}
-
-void
-if_ih_unref(void *null, void *i)
-{
-	struct ifih *ifih = i;
-
-	refcnt_rele_wake(&ifih->ifih_srpcnt);
-}
-
-void
-if_ih_remove(struct ifnet *ifp, int (*input)(struct ifnet *, struct mbuf *,
-    void *), void *cookie)
-{
-	struct ifih *ifih;
-
-	/* the kernel lock guarantees serialised modifications to if_inputs */
-	KERNEL_ASSERT_LOCKED();
-
-	SRPL_FOREACH_LOCKED(ifih, &ifp->if_inputs, ifih_next) {
-		if (ifih->ifih_input == input && ifih->ifih_cookie == cookie)
-			break;
-	}
-
-	KASSERT(ifih != NULL);
-
-	if (--ifih->ifih_refcnt == 0) {
-		SRPL_REMOVE_LOCKED(&ifih_rc, &ifp->if_inputs, ifih,
-		    ifih, ifih_next);
-
-		refcnt_finalize(&ifih->ifih_srpcnt, "ifihrm");
-		free(ifih, M_DEVBUF, sizeof(*ifih));
-	}
-}
-
-static void
-if_ih_input(struct ifnet *ifp, struct mbuf *m)
-{
-	struct ifih *ifih;
-	struct srp_ref sr;
-
-	/*
-	 * Pass this mbuf to all input handlers of its
-	 * interface until it is consumed.
-	 */
-	SRPL_FOREACH(ifih, &sr, &ifp->if_inputs, ifih_next) {
-		if ((*ifih->ifih_input)(ifp, m, ifih->ifih_cookie))
-			break;
-	}
-	SRPL_LEAVE(&sr);
-
-	if (ifih == NULL)
-		m_freem(m);
-}
-
 void
 if_input_process(struct ifnet *ifp, struct mbuf_list *ml)
 {
@@ -933,7 +831,7 @@ if_input_process(struct ifnet *ifp, struct mbuf_list *ml)
 	 */
 	NET_LOCK();
 	while ((m = ml_dequeue(ml)) != NULL)
-		if_ih_input(ifp, m);
+		(*ifp->if_input)(ifp, m);
 	NET_UNLOCK();
 }
 
@@ -960,7 +858,7 @@ if_vinput(struct ifnet *ifp, struct mbuf *m)
 	}
 #endif
 
-	if_ih_input(ifp, m);
+	(*ifp->if_input)(ifp, m);
 }
 
 void
@@ -1009,13 +907,6 @@ if_netisr(void *unused)
 		if (n & (1 << NETISR_PPPOE)) {
 			KERNEL_LOCK();
 			pppoeintr();
-			KERNEL_UNLOCK();
-		}
-#endif
-#ifdef PIPEX
-		if (n & (1 << NETISR_PIPEX)) {
-			KERNEL_LOCK();
-			pipexintr();
 			KERNEL_UNLOCK();
 		}
 #endif
@@ -1227,8 +1118,9 @@ if_isconnected(const struct ifnet *ifp0, unsigned int ifidx)
 		connected = 1;
 #endif
 #if NCARP > 0
-	if ((ifp0->if_type == IFT_CARP && ifp0->if_carpdev == ifp) ||
-	    (ifp->if_type == IFT_CARP && ifp->if_carpdev == ifp0))
+	if ((ifp0->if_type == IFT_CARP &&
+	    ifp0->if_carpdevidx == ifp->if_index) ||
+	    (ifp->if_type == IFT_CARP && ifp->if_carpdevidx == ifp0->if_index))
 		connected = 1;
 #endif
 
@@ -1250,19 +1142,25 @@ if_clone_create(const char *name, int rdomain)
 	if (ifc == NULL)
 		return (EINVAL);
 
-	if (ifunit(name) != NULL)
-		return (EEXIST);
+	rw_enter_write(&if_cloners_lock);
+
+	if (ifunit(name) != NULL) {
+		ret = EEXIST;
+		goto unlock;
+	}
 
 	ret = (*ifc->ifc_create)(ifc, unit);
 
 	if (ret != 0 || (ifp = ifunit(name)) == NULL)
-		return (ret);
+		goto unlock;
 
 	NET_LOCK();
 	if_addgroup(ifp, ifc->ifc_name);
 	if (rdomain != 0)
 		if_setrdomain(ifp, rdomain);
 	NET_UNLOCK();
+unlock:
+	rw_exit_write(&if_cloners_lock);
 
 	return (ret);
 }
@@ -1281,12 +1179,16 @@ if_clone_destroy(const char *name)
 	if (ifc == NULL)
 		return (EINVAL);
 
-	ifp = ifunit(name);
-	if (ifp == NULL)
-		return (ENXIO);
-
 	if (ifc->ifc_destroy == NULL)
 		return (EOPNOTSUPP);
+
+	rw_enter_write(&if_cloners_lock);
+
+	ifp = ifunit(name);
+	if (ifp == NULL) {
+		rw_exit_write(&if_cloners_lock);
+		return (ENXIO);
+	}
 
 	NET_LOCK();
 	if (ifp->if_flags & IFF_UP) {
@@ -1297,6 +1199,8 @@ if_clone_destroy(const char *name)
 	}
 	NET_UNLOCK();
 	ret = (*ifc->ifc_destroy)(ifp);
+
+	rw_exit_write(&if_cloners_lock);
 
 	return (ret);
 }
@@ -1614,7 +1518,7 @@ if_down(struct ifnet *ifp)
 
 	ifp->if_flags &= ~IFF_UP;
 	getmicrotime(&ifp->if_lastchange);
-	IFQ_PURGE(&ifp->if_snd);
+	ifq_purge(&ifp->if_snd);
 
 	if_linkstate(ifp);
 }
@@ -2271,9 +2175,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCBRDGSIFCOST:
 	case SIOCBRDGSTXHC:
 	case SIOCBRDGSPROTO:
-	case SIOCSWGDPID:
 	case SIOCSWSPORTNO:
-	case SIOCSWGMAXFLOW:
 #endif
 		if ((error = suser(p)) != 0)
 			break;
@@ -2774,7 +2676,7 @@ if_delgroup(struct ifnet *ifp, const char *groupname)
 #if NPF > 0
 		pfi_detach_ifgroup(ifgl->ifgl_group);
 #endif
-		free(ifgl->ifgl_group, M_TEMP, 0);
+		free(ifgl->ifgl_group, M_TEMP, sizeof(*ifgl->ifgl_group));
 	}
 
 	free(ifgl, M_TEMP, sizeof(*ifgl));

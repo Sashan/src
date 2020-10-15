@@ -1,4 +1,4 @@
-/*	$OpenBSD: sdmmc_scsi.c,v 1.46 2020/02/20 16:26:01 krw Exp $	*/
+/*	$OpenBSD: sdmmc_scsi.c,v 1.58 2020/09/22 19:32:53 krw Exp $	*/
 
 /*
  * Copyright (c) 2006 Uwe Stuehler <uwe@openbsd.org>
@@ -68,7 +68,6 @@ struct sdmmc_ccb {
 TAILQ_HEAD(sdmmc_ccb_list, sdmmc_ccb);
 
 struct sdmmc_scsi_softc {
-	struct scsi_link sc_link;
 	struct device *sc_child;
 	struct sdmmc_scsi_target *sc_tgt;
 	int sc_ntargets;
@@ -137,16 +136,16 @@ sdmmc_scsi_attach(struct sdmmc_softc *sc)
 
 	sc->sc_scsibus = scbus;
 
-	scbus->sc_link.adapter_target = SDMMC_SCSIID_HOST;
-	scbus->sc_link.adapter_buswidth = scbus->sc_ntargets;
-	scbus->sc_link.adapter_softc = sc;
-	scbus->sc_link.luns = 1;
-	scbus->sc_link.openings = 1;
-	scbus->sc_link.adapter = &sdmmc_switch;
-	scbus->sc_link.pool = &scbus->sc_iopool;
-
-	bzero(&saa, sizeof(saa));
-	saa.scsi_link = &scbus->sc_link;
+	saa.sf = NULL;
+	saa.saa.saa_adapter_target = SDMMC_SCSIID_HOST;
+	saa.saa.saa_adapter_buswidth = scbus->sc_ntargets;
+	saa.saa.saa_adapter_softc = sc;
+	saa.saa.saa_luns = 1;
+	saa.saa.saa_adapter = &sdmmc_switch;
+	saa.saa.saa_openings = 1;
+	saa.saa.saa_pool = &scbus->sc_iopool;
+	saa.saa.saa_quirks = saa.saa.saa_flags = 0;
+	saa.saa.saa_wwpn = saa.saa.saa_wwnn = 0;
 
 	scbus->sc_child = config_found(&sc->sc_dev, &saa, scsiprint);
 	if (scbus->sc_child == NULL) {
@@ -288,16 +287,16 @@ sdmmc_scsi_decode_rw(struct scsi_xfer *xs, u_int32_t *blocknop,
     u_int32_t *blockcntp)
 {
 	struct scsi_rw *rw;
-	struct scsi_rw_big *rwb;
-	
+	struct scsi_rw_10 *rw10;
+
 	if (xs->cmdlen == 6) {
-		rw = (struct scsi_rw *)xs->cmd;
+		rw = (struct scsi_rw *)&xs->cmd;
 		*blocknop = _3btol(rw->addr) & (SRW_TOPADDR << 16 | 0xffff);
 		*blockcntp = rw->length ? rw->length : 0x100;
 	} else {
-		rwb = (struct scsi_rw_big *)xs->cmd;
-		*blocknop = _4btol(rwb->addr);
-		*blockcntp = _2btol(rwb->length);
+		rw10 = (struct scsi_rw_10 *)&xs->cmd;
+		*blocknop = _4btol(rw10->addr);
+		*blockcntp = _2btol(rw10->length);
 	}
 }
 
@@ -305,7 +304,7 @@ void
 sdmmc_scsi_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link *link = xs->sc_link;
-	struct sdmmc_softc *sc = link->adapter_softc;
+	struct sdmmc_softc *sc = link->bus->sb_adapter_softc;
 	struct sdmmc_scsi_softc *scbus = sc->sc_scsibus;
 	struct sdmmc_scsi_target *tgt = &scbus->sc_tgt[link->target];
 	struct scsi_read_cap_data rcd;
@@ -324,16 +323,16 @@ sdmmc_scsi_cmd(struct scsi_xfer *xs)
 	}
 
 	DPRINTF(("%s: scsi cmd target=%d opcode=%#x proc=\"%s\" (poll=%#x)\n",
-	    DEVNAME(sc), link->target, xs->cmd->opcode, curproc ?
+	    DEVNAME(sc), link->target, xs->cmd.pcode, curproc ?
 	    curproc->p_p->ps_comm : "", xs->flags & SCSI_POLL));
 
 	xs->error = XS_NOERROR;
 
-	switch (xs->cmd->opcode) {
+	switch (xs->cmd.opcode) {
 	case READ_COMMAND:
-	case READ_BIG:
+	case READ_10:
 	case WRITE_COMMAND:
-	case WRITE_BIG:
+	case WRITE_10:
 		/* Deal with I/O outside the switch. */
 		break;
 
@@ -357,7 +356,7 @@ sdmmc_scsi_cmd(struct scsi_xfer *xs)
 
 	default:
 		DPRINTF(("%s: unsupported scsi command %#x\n",
-		    DEVNAME(sc), xs->cmd->opcode));
+		    DEVNAME(sc), xs->cmd.opcode));
 		xs->error = XS_DRIVER_STUFFUP;
 		scsi_done(xs);
 		return;
@@ -388,11 +387,11 @@ void
 sdmmc_inquiry(struct scsi_xfer *xs)
 {
 	struct scsi_link *link = xs->sc_link;
-	struct sdmmc_softc *sc = link->adapter_softc;
+	struct sdmmc_softc *sc = link->bus->sb_adapter_softc;
 	struct sdmmc_scsi_softc *scbus = sc->sc_scsibus;
 	struct sdmmc_scsi_target *tgt = &scbus->sc_tgt[link->target];
 	struct scsi_inquiry_data inq;
-	struct scsi_inquiry *cdb = (struct scsi_inquiry *)xs->cmd;
+	struct scsi_inquiry *cdb = (struct scsi_inquiry *)&xs->cmd;
 	char vendor[sizeof(inq.vendor) + 1];
 	char product[sizeof(inq.product) + 1];
 	char revision[sizeof(inq.revision) + 1];
@@ -437,9 +436,9 @@ sdmmc_inquiry(struct scsi_xfer *xs)
 	memset(&inq, 0, sizeof inq);
 	inq.device = T_DIRECT;
 	inq.dev_qual2 = SID_REMOVABLE;
-	inq.version = 2;
-	inq.response_format = 2;
-	inq.additional_length = 32;
+	inq.version = SCSI_REV_2;
+	inq.response_format = SID_SCSI2_RESPONSE;
+	inq.additional_length = SID_SCSI2_ALEN;
 	memcpy(inq.vendor, vendor, sizeof(inq.vendor));
 	memcpy(inq.product, product, sizeof(inq.product));
 	memcpy(inq.revision, revision, sizeof(inq.revision));
@@ -480,14 +479,14 @@ sdmmc_complete_xs(void *arg)
 	struct sdmmc_ccb *ccb = arg;
 	struct scsi_xfer *xs = ccb->ccb_xs;
 	struct scsi_link *link = xs->sc_link;
-	struct sdmmc_softc *sc = link->adapter_softc;
+	struct sdmmc_softc *sc = link->bus->sb_adapter_softc;
 	struct sdmmc_scsi_softc *scbus = sc->sc_scsibus;
 	struct sdmmc_scsi_target *tgt = &scbus->sc_tgt[link->target];
 	int error;
 	int s;
 
 	DPRINTF(("%s: scsi cmd target=%d opcode=%#x proc=\"%s\" (poll=%#x)"
-	    " complete\n", DEVNAME(sc), link->target, xs->cmd->opcode,
+	    " complete\n", DEVNAME(sc), link->target, xs->cmd.opcode,
 	    curproc ? curproc->p_p->ps_comm : "", xs->flags & SCSI_POLL));
 
 	s = splbio();
@@ -512,13 +511,13 @@ sdmmc_done_xs(struct sdmmc_ccb *ccb)
 	struct scsi_xfer *xs = ccb->ccb_xs;
 #ifdef SDMMC_DEBUG
 	struct scsi_link *link = xs->sc_link;
-	struct sdmmc_softc *sc = link->adapter_softc;
+	struct sdmmc_softc *sc = link->bus->sb_adapter_softc;
 #endif
 
 	timeout_del(&xs->stimeout);
 
 	DPRINTF(("%s: scsi cmd target=%d opcode=%#x proc=\"%s\" (error=%#x)"
-	    " done\n", DEVNAME(sc), link->target, xs->cmd->opcode,
+	    " done\n", DEVNAME(sc), link->target, xs->cmd.opcode,
 	    curproc ? curproc->p_p->ps_comm : "", xs->error));
 
 	xs->resid = 0;
@@ -547,7 +546,7 @@ sdmmc_stimeout(void *arg)
 void
 sdmmc_minphys(struct buf *bp, struct scsi_link *sl)
 {
-	struct sdmmc_softc *sc = sl->adapter_softc;
+	struct sdmmc_softc *sc = sl->bus->sb_adapter_softc;
 	struct sdmmc_scsi_softc *scbus = sc->sc_scsibus;
 	struct sdmmc_scsi_target *tgt = &scbus->sc_tgt[sl->target];
 	struct sdmmc_function *sf = tgt->card;
@@ -598,7 +597,7 @@ sdmmc_scsi_hibernate_io(dev_t dev, daddr_t blkno, vaddr_t addr, size_t size,
 		sc = NULL;
 		SLIST_FOREACH(link, &bus_sc->sc_link_list, bus_list) {
 			if (link->device_softc == disk) {
-				sc = (struct sdmmc_softc *)link->adapter_softc;
+				sc = link->bus->sb_adapter_softc;
 				scsi_sc = sc->sc_scsibus;
 				sf = scsi_sc->sc_tgt[link->target].card;
 			}

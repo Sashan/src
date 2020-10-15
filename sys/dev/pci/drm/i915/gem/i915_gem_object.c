@@ -71,14 +71,14 @@ void i915_gem_object_init(struct drm_i915_gem_object *obj,
 	rw_init(&obj->mm.lock, "objmm");
 #endif
 
-	mtx_init(&obj->vma.lock, IPL_TTY);
+	mtx_init(&obj->vma.lock, IPL_NONE);
 	INIT_LIST_HEAD(&obj->vma.list);
 
 	INIT_LIST_HEAD(&obj->mm.link);
 
 	INIT_LIST_HEAD(&obj->lut_list);
 
-	mtx_init(&obj->mmo.lock, IPL_TTY);
+	mtx_init(&obj->mmo.lock, IPL_NONE);
 	obj->mmo.offsets = RB_ROOT;
 
 	init_rcu_head(&obj->rcu);
@@ -410,7 +410,7 @@ int __init i915_global_objects_init(void)
 		return -ENOMEM;
 #else
 	pool_init(&global.slab_objects, sizeof(struct drm_i915_gem_object),
-	    0, IPL_NONE, 0, "drmobj", NULL);
+	    CACHELINESIZE, IPL_NONE, 0, "drmobj", NULL);
 #endif
 
 	i915_global_register(&global.base);

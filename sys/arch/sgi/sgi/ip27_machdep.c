@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip27_machdep.c,v 1.80 2019/12/20 13:29:23 visa Exp $	*/
+/*	$OpenBSD: ip27_machdep.c,v 1.82 2020/08/26 03:29:06 visa Exp $	*/
 
 /*
  * Copyright (c) 2008, 2009 Miodrag Vallat.
@@ -56,8 +56,6 @@
 
 #include <dev/cons.h>
 
-extern char *hw_prod;
-
 extern void (*md_halt)(int);
 
 paddr_t	ip27_widget_short(int16_t, u_int);
@@ -111,7 +109,9 @@ struct timecounter ip27_hub_timecounter = {
 	.tc_counter_mask = 0xffffffff,	/* truncated to 32 bits. */
 	.tc_frequency = 1250000,
 	.tc_name = "hubrt",
-	.tc_quality = 100
+	.tc_quality = 100,
+	.tc_priv = 0,
+	.tc_user = 0,
 };
 
 volatile uint64_t	ip27_spinup_a0;

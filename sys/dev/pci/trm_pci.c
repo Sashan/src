@@ -1,4 +1,4 @@
-/*	$OpenBSD: trm_pci.c,v 1.6 2020/06/27 17:28:58 krw Exp $
+/*	$OpenBSD: trm_pci.c,v 1.10 2020/07/20 14:41:14 krw Exp $
  * ------------------------------------------------------------
  *       O.S     : OpenBSD
  *    FILE NAME  : trm_pci.c
@@ -63,6 +63,14 @@ struct  cfattach trm_pci_ca = {
 	trm_pci_attach,
 	NULL,			/* Detach */
 	NULL,			/* Activate */
+};
+
+struct  cfdriver trm_cd = {
+        NULL, "trm", DV_DULL
+};
+
+struct scsi_adapter trm_switch = {
+	trm_scsi_cmd, NULL, NULL, NULL, NULL
 };
 
 
@@ -153,9 +161,16 @@ trm_pci_attach(struct device *parent, struct device *self, void *aux)
 		if (intrstr != NULL)
 			printf(": %s\n", intrstr);
 
-		saa.saa_sc_link = &sc->sc_link;
+		saa.saa_adapter_softc    = sc;
+		saa.saa_adapter_target   = sc->sc_AdaptSCSIID;
+		saa.saa_adapter          = &trm_switch;
+		saa.saa_adapter_buswidth = ((sc->sc_config & HCC_WIDE_CARD) == 0) ? 8:16;
+		saa.saa_luns		 = 8;
+		saa.saa_openings         = 30; /* So TagMask (32 bit integer) always has space */
+		saa.saa_pool		 = &sc->sc_iopool;
+		saa.saa_quirks = saa.saa_flags = 0;
+		saa.saa_wwpn = saa.saa_wwnn = 0;
 
-		/* Tell SCSI layer about our SCSI bus */
 		config_found(&sc->sc_device, &saa, scsiprint);
 	}
 }

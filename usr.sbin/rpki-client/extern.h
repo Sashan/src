@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.30 2020/06/24 14:39:21 claudio Exp $ */
+/*	$OpenBSD: extern.h,v 1.34 2020/09/12 15:46:48 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -19,6 +19,8 @@
 
 #include <sys/tree.h>
 #include <sys/time.h>
+
+#include <openssl/x509.h>
 
 enum cert_as_type {
 	CERT_AS_ID, /* single identifier */
@@ -110,6 +112,7 @@ struct cert {
 	struct cert_as	*as; /* list of AS numbers and ranges */
 	size_t		 asz; /* length of "asz" */
 	char		*mft; /* manifest (rsync:// uri) */
+	char		*notify; /* RRDP notify (https:// uri) */
 	char		*crl; /* CRL location (rsync:// or NULL) */
 	char		*aki; /* AKI (or NULL, for trust anchor) */
 	char		*ski; /* SKI */
@@ -289,7 +292,7 @@ struct cert	*cert_read(int);
 
 void		 mft_buffer(char **, size_t *, size_t *, const struct mft *);
 void		 mft_free(struct mft *);
-struct mft	*mft_parse(X509 **, const char *, int);
+struct mft	*mft_parse(X509 **, const char *);
 int		 mft_check(const char *, struct mft *);
 struct mft	*mft_read(int);
 
@@ -354,6 +357,7 @@ int		 as_check_covered(uint32_t, uint32_t,
 int		 rsync_uri_parse(const char **, size_t *,
 			const char **, size_t *, const char **, size_t *,
 			enum rtype *, const char *);
+void		 proc_rsync(char *, char *, int) __attribute__((noreturn));
 
 /* Logging (though really used for OpenSSL errors). */
 

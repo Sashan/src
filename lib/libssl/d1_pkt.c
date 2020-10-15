@@ -1,4 +1,4 @@
-/* $OpenBSD: d1_pkt.c,v 1.73 2020/03/13 16:40:42 jsing Exp $ */
+/* $OpenBSD: d1_pkt.c,v 1.85 2020/10/03 17:35:16 jsing Exp $ */
 /*
  * DTLS implementation written by Nagendra Modadugu
  * (nagendra@cs.stanford.edu) for the OpenSSL project 2005.
@@ -194,13 +194,9 @@ static int dtls1_process_record(SSL *s);
 
 /* copy buffered record into SSL structure */
 static int
-dtls1_copy_record(SSL *s, pitem *item)
+dtls1_copy_record(SSL *s, DTLS1_RECORD_DATA_INTERNAL *rdata)
 {
-	DTLS1_RECORD_DATA_INTERNAL *rdata;
-
-	rdata = (DTLS1_RECORD_DATA_INTERNAL *)item->data;
-
-	free(S3I(s)->rbuf.buf);
+	ssl3_release_buffer(&S3I(s)->rbuf);
 
 	s->internal->packet = rdata->packet;
 	s->internal->packet_length = rdata->packet_length;
@@ -212,7 +208,6 @@ dtls1_copy_record(SSL *s, pitem *item)
 
 	return (1);
 }
-
 
 static int
 dtls1_buffer_record(SSL *s, record_pqueue *queue, unsigned char *priority)
@@ -251,7 +246,7 @@ dtls1_buffer_record(SSL *s, record_pqueue *queue, unsigned char *priority)
 	return (1);
 
 err:
-	free(rdata->rbuf.buf);
+	ssl3_release_buffer(&rdata->rbuf);
 
 init_err:
 	SSLerror(s, ERR_R_INTERNAL_ERROR);
@@ -268,7 +263,7 @@ dtls1_retrieve_buffered_record(SSL *s, record_pqueue *queue)
 
 	item = pqueue_pop(queue->q);
 	if (item) {
-		dtls1_copy_record(s, item);
+		dtls1_copy_record(s, item->data);
 
 		free(item->data);
 		pitem_free(item);
@@ -278,18 +273,6 @@ dtls1_retrieve_buffered_record(SSL *s, record_pqueue *queue)
 
 	return (0);
 }
-
-
-/* retrieve a buffered record that belongs to the new epoch, i.e., not processed
- * yet */
-#define dtls1_get_unprocessed_record(s) \
-                   dtls1_retrieve_buffered_record((s), \
-		       &((D1I(s))->unprocessed_rcds))
-
-/* retrieve a buffered record that belongs to the current epoch, ie, processed */
-#define dtls1_get_processed_record(s) \
-                   dtls1_retrieve_buffered_record((s), \
-		       &((D1I(s))->processed_rcds))
 
 static int
 dtls1_process_buffered_records(SSL *s)
@@ -305,8 +288,10 @@ dtls1_process_buffered_records(SSL *s)
 
 		/* Process all the records. */
 		while (pqueue_peek(D1I(s)->unprocessed_rcds.q)) {
-			dtls1_get_unprocessed_record(s);
-			if (! dtls1_process_record(s))
+			if (!dtls1_retrieve_buffered_record((s),
+			    &((D1I(s))->unprocessed_rcds)))
+				return (0);
+			if (!dtls1_process_record(s))
 				return (0);
 			if (dtls1_buffer_record(s, &(D1I(s)->processed_rcds),
 			    S3I(s)->rrec.seq_num) < 0)
@@ -325,130 +310,40 @@ dtls1_process_buffered_records(SSL *s)
 static int
 dtls1_process_record(SSL *s)
 {
-	int i, al;
-	int enc_err;
-	SSL_SESSION *sess;
-	SSL3_RECORD_INTERNAL *rr;
-	unsigned int mac_size, orig_len;
-	unsigned char md[EVP_MAX_MD_SIZE];
+	SSL3_RECORD_INTERNAL *rr = &(S3I(s)->rrec);
+	uint8_t alert_desc;
+	uint8_t *out;
+	size_t out_len;
 
-	rr = &(S3I(s)->rrec);
-	sess = s->session;
+	tls12_record_layer_set_version(s->internal->rl, s->version);
+	tls12_record_layer_set_read_epoch(s->internal->rl, rr->epoch);
 
-	/* At this point, s->internal->packet_length == SSL3_RT_HEADER_LNGTH + rr->length,
-	 * and we have that many bytes in s->internal->packet
-	 */
-	rr->input = &(s->internal->packet[DTLS1_RT_HEADER_LENGTH]);
+	if (!tls12_record_layer_open_record(s->internal->rl, s->internal->packet,
+	    s->internal->packet_length, &out, &out_len)) {
+		tls12_record_layer_alert(s->internal->rl, &alert_desc);
 
-	/* ok, we can now read from 's->internal->packet' data into 'rr'
-	 * rr->input points at rr->length bytes, which
-	 * need to be copied into rr->data by either
-	 * the decryption or by the decompression
-	 * When the data is 'copied' into the rr->data buffer,
-	 * rr->input will be pointed at the new buffer */
+		if (alert_desc == 0)
+			goto err;
 
-	/* We now have - encrypted [ MAC [ compressed [ plain ] ] ]
-	 * rr->length bytes of encrypted compressed stuff. */
+		if (alert_desc == SSL_AD_RECORD_OVERFLOW)
+			SSLerror(s, SSL_R_ENCRYPTED_LENGTH_TOO_LONG);
+		else if (alert_desc == SSL_AD_BAD_RECORD_MAC)
+			SSLerror(s, SSL_R_DECRYPTION_FAILED_OR_BAD_RECORD_MAC);
 
-	/* check is not needed I believe */
-	if (rr->length > SSL3_RT_MAX_ENCRYPTED_LENGTH) {
-		al = SSL_AD_RECORD_OVERFLOW;
-		SSLerror(s, SSL_R_ENCRYPTED_LENGTH_TOO_LONG);
 		goto f_err;
 	}
 
-	/* decrypt in place in 'rr->input' */
-	rr->data = rr->input;
-
-	/* enc_err is:
-	 *    0: (in non-constant time) if the record is publically invalid.
-	 *    1: if the padding is valid
-	 *    -1: if the padding is invalid */
-	if ((enc_err = tls1_enc(s, 0)) == 0) {
-		/* For DTLS we simply ignore bad packets. */
-		rr->length = 0;
-		s->internal->packet_length = 0;
-		goto err;
-	}
-
-	/* r->length is now the compressed data plus mac */
-	if ((sess != NULL) && (s->enc_read_ctx != NULL) &&
-	    (EVP_MD_CTX_md(s->read_hash) != NULL)) {
-		/* s->read_hash != NULL => mac_size != -1 */
-		unsigned char *mac = NULL;
-		unsigned char mac_tmp[EVP_MAX_MD_SIZE];
-		mac_size = EVP_MD_CTX_size(s->read_hash);
-		OPENSSL_assert(mac_size <= EVP_MAX_MD_SIZE);
-
-		orig_len = rr->length + rr->padding_length;
-
-		/* orig_len is the length of the record before any padding was
-		 * removed. This is public information, as is the MAC in use,
-		 * therefore we can safely process the record in a different
-		 * amount of time if it's too short to possibly contain a MAC.
-		 */
-		if (orig_len < mac_size ||
-			/* CBC records must have a padding length byte too. */
-		    (EVP_CIPHER_CTX_mode(s->enc_read_ctx) == EVP_CIPH_CBC_MODE &&
-		    orig_len < mac_size + 1)) {
-			al = SSL_AD_DECODE_ERROR;
-			SSLerror(s, SSL_R_LENGTH_TOO_SHORT);
-			goto f_err;
-		}
-
-		if (EVP_CIPHER_CTX_mode(s->enc_read_ctx) == EVP_CIPH_CBC_MODE) {
-			/* We update the length so that the TLS header bytes
-			 * can be constructed correctly but we need to extract
-			 * the MAC in constant time from within the record,
-			 * without leaking the contents of the padding bytes.
-			 * */
-			mac = mac_tmp;
-			ssl3_cbc_copy_mac(mac_tmp, rr, mac_size, orig_len);
-			rr->length -= mac_size;
-		} else {
-			/* In this case there's no padding, so |orig_len|
-			 * equals |rec->length| and we checked that there's
-			 * enough bytes for |mac_size| above. */
-			rr->length -= mac_size;
-			mac = &rr->data[rr->length];
-		}
-
-		i = tls1_mac(s, md, 0 /* not send */);
-		if (i < 0 || mac == NULL || timingsafe_memcmp(md, mac, (size_t)mac_size) != 0)
-			enc_err = -1;
-		if (rr->length > SSL3_RT_MAX_COMPRESSED_LENGTH + mac_size)
-			enc_err = -1;
-	}
-
-	if (enc_err < 0) {
-		/* decryption failed, silently discard message */
-		rr->length = 0;
-		s->internal->packet_length = 0;
-		goto err;
-	}
-
-	if (rr->length > SSL3_RT_MAX_PLAIN_LENGTH) {
-		al = SSL_AD_RECORD_OVERFLOW;
-		SSLerror(s, SSL_R_DATA_LENGTH_TOO_LONG);
-		goto f_err;
-	}
-
+	rr->data = out;
+	rr->length = out_len;
 	rr->off = 0;
-	/* So at this point the following is true
-	 * ssl->s3->internal->rrec.type 	is the type of record
-	 * ssl->s3->internal->rrec.length	== number of bytes in record
-	 * ssl->s3->internal->rrec.off	== offset to first valid byte
-	 * ssl->s3->internal->rrec.data	== where to take bytes from, increment
-	 *			   after use :-).
-	 */
 
-	/* we have pulled in a full packet so zero things */
 	s->internal->packet_length = 0;
+
 	return (1);
 
-f_err:
-	ssl3_send_alert(s, SSL3_AL_FATAL, al);
-err:
+ f_err:
+	ssl3_send_alert(s, SSL3_AL_FATAL, alert_desc);
+ err:
 	return (0);
 }
 
@@ -479,7 +374,7 @@ dtls1_get_record(SSL *s)
 		return (-1);
 
 	/* if we're renegotiating, then there may be buffered records */
-	if (dtls1_get_processed_record(s))
+	if (dtls1_retrieve_buffered_record((s), &((D1I(s))->processed_rcds)))
 		return 1;
 
 	/* get something from the wire */
@@ -685,8 +580,7 @@ dtls1_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
 		pitem *item;
 		item = pqueue_pop(D1I(s)->buffered_app_data.q);
 		if (item) {
-
-			dtls1_copy_record(s, item);
+			dtls1_copy_record(s, item->data);
 
 			free(item->data);
 			pitem_free(item);
@@ -1174,141 +1068,58 @@ dtls1_write_bytes(SSL *s, int type, const void *buf, int len)
 int
 do_dtls1_write(SSL *s, int type, const unsigned char *buf, unsigned int len)
 {
-	unsigned char *p;
-	int i, mac_size, clear = 0;
-	SSL3_RECORD_INTERNAL *wr;
-	SSL3_BUFFER_INTERNAL *wb;
-	SSL_SESSION *sess;
-	int bs;
+	SSL3_BUFFER_INTERNAL *wb = &(S3I(s)->wbuf);
+	size_t out_len;
 	CBB cbb;
+	int ret;
 
 	memset(&cbb, 0, sizeof(cbb));
 
-	/* first check if there is a SSL3_BUFFER_INTERNAL still being written
-	 * out.  This will happen with non blocking IO */
-	if (S3I(s)->wbuf.left != 0) {
+	/*
+	 * First check if there is a SSL3_BUFFER_INTERNAL still being written
+	 * out.  This will happen with non blocking IO.
+	 */
+	if (wb->left != 0) {
 		OPENSSL_assert(0); /* XDTLS:  want to see if we ever get here */
 		return (ssl3_write_pending(s, type, buf, len));
 	}
 
-	/* If we have an alert to send, lets send it */
+	/* If we have an alert to send, let's send it */
 	if (S3I(s)->alert_dispatch) {
-		i = s->method->ssl_dispatch_alert(s);
-		if (i <= 0)
-			return (i);
-		/* if it went, fall through and send more stuff */
+		if ((ret = s->method->ssl_dispatch_alert(s)) <= 0)
+			return (ret);
+		/* If it went, fall through and send more stuff. */
 	}
 
 	if (len == 0)
 		return 0;
 
-	wr = &(S3I(s)->wrec);
-	wb = &(S3I(s)->wbuf);
-	sess = s->session;
-
-	if ((sess == NULL) || (s->internal->enc_write_ctx == NULL) ||
-	    (EVP_MD_CTX_md(s->internal->write_hash) == NULL))
-		clear = 1;
-
-	if (clear)
-		mac_size = 0;
-	else {
-		mac_size = EVP_MD_CTX_size(s->internal->write_hash);
-		if (mac_size < 0)
-			goto err;
-	}
-
-	/* DTLS implements explicit IV, so no need for empty fragments. */
-
-	p = wb->buf;
-
-	if (!CBB_init_fixed(&cbb, p, DTLS1_RT_HEADER_LENGTH))
-		goto err;
-
-	/* Write the header. */
-	if (!CBB_add_u8(&cbb, type))
-		goto err;
-	if (!CBB_add_u16(&cbb, s->version))
-		goto err;
-	if (!CBB_add_u16(&cbb, D1I(s)->w_epoch))
-		goto err;
-	if (!CBB_add_bytes(&cbb, &(S3I(s)->write_sequence[2]), 6))
-		goto err;
-
-	p += DTLS1_RT_HEADER_LENGTH;
-
-	/* lets setup the record stuff. */
-
-	/* Make space for the explicit IV in case of CBC.
-	 * (this is a bit of a boundary violation, but what the heck).
-	 */
-	if (s->internal->enc_write_ctx &&
-	    (EVP_CIPHER_mode(s->internal->enc_write_ctx->cipher) & EVP_CIPH_CBC_MODE))
-		bs = EVP_CIPHER_block_size(s->internal->enc_write_ctx->cipher);
-	else
-		bs = 0;
-
-	wr->type = type;
-	wr->data = p + bs;
-	/* make room for IV in case of CBC */
-	wr->length = (int)len;
-	wr->input = (unsigned char *)buf;
-
-	/* we now 'read' from wr->input, wr->length bytes into
-	 * wr->data */
-
-	memcpy(wr->data, wr->input, wr->length);
-	wr->input = wr->data;
-
-	/* we should still have the output to wr->data and the input
-	 * from wr->input.  Length should be wr->length.
-	 * wr->data still points in the wb->buf */
-
-	if (mac_size != 0) {
-		if (tls1_mac(s, &(p[wr->length + bs]), 1) < 0)
-			goto err;
-		wr->length += mac_size;
-	}
-
-	/* this is true regardless of mac size */
-	wr->input = p;
-	wr->data = p;
-
-	/* bs != 0 in case of CBC */
-	if (bs) {
-		arc4random_buf(p, bs);
-		/* master IV and last CBC residue stand for
-		 * the rest of randomness */
-		wr->length += bs;
-	}
-
-	/* tls1_enc can only have an error on read */
-	tls1_enc(s, 1);
-
-	if (!CBB_add_u16(&cbb, wr->length))
-		goto err;
-	if (!CBB_finish(&cbb, NULL, NULL))
-		goto err;
-
-	/* we should now have
-	 * wr->data pointing to the encrypted data, which is
-	 * wr->length long */
-	wr->type = type; /* not needed but helps for debugging */
-	wr->length += DTLS1_RT_HEADER_LENGTH;
-
-	tls1_record_sequence_increment(S3I(s)->write_sequence);
-
-	/* now let's set up wb */
-	wb->left = wr->length;
 	wb->offset = 0;
 
-	/* memorize arguments so that ssl3_write_pending can detect bad write retries later */
+	if (!CBB_init_fixed(&cbb, wb->buf, wb->len))
+		goto err;
+
+	tls12_record_layer_set_version(s->internal->rl, s->version);
+	tls12_record_layer_set_write_epoch(s->internal->rl, D1I(s)->w_epoch);
+
+	if (!tls12_record_layer_seal_record(s->internal->rl, type, buf, len, &cbb))
+		goto err;
+
+	if (!CBB_finish(&cbb, NULL, &out_len))
+		goto err;
+
+	wb->left = out_len;
+
+	/*
+	 * Memorize arguments so that ssl3_write_pending can detect
+	 * bad write retries later.
+	 */
 	S3I(s)->wpend_tot = len;
 	S3I(s)->wpend_buf = buf;
 	S3I(s)->wpend_type = type;
 	S3I(s)->wpend_ret = len;
 
-	/* we now just need to write the buffer */
+	/* We now just need to write the buffer. */
 	return ssl3_write_pending(s, type, buf, len);
 
  err:
@@ -1316,8 +1127,6 @@ do_dtls1_write(SSL *s, int type, const unsigned char *buf, unsigned int len)
 
 	return -1;
 }
-
-
 
 static int
 dtls1_record_replay_check(SSL *s, DTLS1_BITMAP *bitmap)
@@ -1375,7 +1184,7 @@ dtls1_dispatch_alert(SSL *s)
 
 	S3I(s)->alert_dispatch = 0;
 
-	memset(buf, 0x00, sizeof(buf));
+	memset(buf, 0, sizeof(buf));
 	*ptr++ = S3I(s)->send_alert[0];
 	*ptr++ = S3I(s)->send_alert[1];
 
@@ -1432,15 +1241,15 @@ dtls1_reset_seq_numbers(SSL *s, int rw)
 	unsigned int seq_bytes = sizeof(S3I(s)->read_sequence);
 
 	if (rw & SSL3_CC_READ) {
-		seq = S3I(s)->read_sequence;
 		D1I(s)->r_epoch++;
+		seq = S3I(s)->read_sequence;
 		memcpy(&(D1I(s)->bitmap), &(D1I(s)->next_bitmap), sizeof(DTLS1_BITMAP));
-		memset(&(D1I(s)->next_bitmap), 0x00, sizeof(DTLS1_BITMAP));
+		memset(&(D1I(s)->next_bitmap), 0, sizeof(DTLS1_BITMAP));
 	} else {
+		D1I(s)->w_epoch++;
 		seq = S3I(s)->write_sequence;
 		memcpy(D1I(s)->last_write_sequence, seq, sizeof(S3I(s)->write_sequence));
-		D1I(s)->w_epoch++;
 	}
 
-	memset(seq, 0x00, seq_bytes);
+	memset(seq, 0, seq_bytes);
 }

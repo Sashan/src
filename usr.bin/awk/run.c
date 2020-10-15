@@ -1,4 +1,4 @@
-/*	$OpenBSD: run.c,v 1.60 2020/06/26 15:57:39 millert Exp $	*/
+/*	$OpenBSD: run.c,v 1.68 2020/08/28 16:29:16 millert Exp $	*/
 /****************************************************************
 Copyright (C) Lucent Technologies 1997
 All Rights Reserved
@@ -26,9 +26,9 @@ THIS SOFTWARE.
 #define DEBUG
 #include <stdio.h>
 #include <ctype.h>
+#include <errno.h>
 #include <wchar.h>
 #include <wctype.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <setjmp.h>
 #include <limits.h>
@@ -39,7 +39,7 @@ THIS SOFTWARE.
 #include <sys/types.h>
 #include <sys/wait.h>
 #include "awk.h"
-#include "ytab.h"
+#include "awkgram.tab.h"
 
 static void stdinit(void);
 static void flush_all(void);
@@ -120,7 +120,7 @@ int adjbuf(char **pbuf, int *psiz, int minlen, int quantum, char **pbptr,
 		if (rminlen)
 			minlen += quantum - rminlen;
 		tbuf = realloc(*pbuf, minlen);
-		DPRINTF("adjbuf %s: %d %d (pbuf=%p, tbuf=%p)\n", whatrtn, *psiz, minlen, *pbuf, tbuf);
+		DPRINTF("adjbuf %s: %d %d (pbuf=%p, tbuf=%p)\n", whatrtn, *psiz, minlen, (void*)*pbuf, (void*)tbuf);
 		if (tbuf == NULL) {
 			if (whatrtn)
 				FATAL("out of memory in %s", whatrtn);
@@ -136,6 +136,7 @@ int adjbuf(char **pbuf, int *psiz, int minlen, int quantum, char **pbptr,
 
 void run(Node *a)	/* execution of parse tree starts here */
 {
+
 	stdinit();
 	execute(a);
 	closeall();
@@ -472,7 +473,7 @@ makearraystring(Node *p, const char *func)
 {
 	char *buf;
 	int bufsz = recsize;
-	size_t blen, seplen;
+	size_t blen;
 
 	if ((buf = malloc(bufsz)) == NULL) {
 		FATAL("%s: out of memory", func);
@@ -480,11 +481,11 @@ makearraystring(Node *p, const char *func)
 
 	blen = 0;
 	buf[blen] = '\0';
-	seplen = strlen(getsval(subseploc));
 
 	for (; p; p = p->nnext) {
 		Cell *x = execute(p);	/* expr */
 		char *s = getsval(x);
+		size_t seplen = strlen(getsval(subseploc));
 		size_t nsub = p->nnext ? seplen : 0;
 		size_t slen = strlen(s);
 		size_t tlen = blen + slen + nsub;
@@ -925,8 +926,7 @@ int format(char **pbuf, int *pbufsize, const char *s, Node *a)	/* printf-like co
 			n = fmtwd;
 		adjbuf(&buf, &bufsize, 1+n+p-buf, recsize, &p, "format5");
 		switch (flag) {
-		case '?':	/* unknown, so dump it too */
-			snprintf(p, BUFSZ(p), "%s", fmt);
+		case '?':	snprintf(p, BUFSZ(p), "%s", fmt);	/* unknown, so dump it too */
 			t = getsval(x);
 			n = strlen(t);
 			if (fmtwd > n)
@@ -1074,10 +1074,10 @@ Cell *arith(Node **a, int n)	/* a[0] + a[1], etc.  also -a[0] */
 	case POWER:
 		if (j >= 0 && modf(j, &v) == 0.0)	/* pos integer exponent */
 			i = ipow(i, (int) j);
-		else {
+               else {
 			errno = 0;
 			i = errcheck(pow(i, j), "pow");
-		}
+               }
 		break;
 	default:	/* can't happen */
 		FATAL("illegal arithmetic operator %d", n);
@@ -1170,10 +1170,10 @@ Cell *assign(Node **a, int n)	/* a[0] = a[1], a[0] += a[1], etc. */
 	case POWEQ:
 		if (yf >= 0 && modf(yf, &v) == 0.0)	/* pos integer exponent */
 			xf = ipow(xf, (int) yf);
-		else {
+               else {
 			errno = 0;
 			xf = errcheck(pow(xf, yf), "pow");
-		}
+               }
 		break;
 	default:
 		FATAL("illegal assignment operator %d", n);
@@ -1193,12 +1193,12 @@ Cell *cat(Node **a, int q)	/* a[0] cat a[1] */
 
 	x = execute(a[0]);
 	n1 = strlen(getsval(x));
+	adjbuf(&s, &ssz, n1, recsize, 0, "cat1");
+	memcpy(s, x->sval, n1);
 
 	y = execute(a[1]);
 	n2 = strlen(getsval(y));
-
-	adjbuf(&s, &ssz, n1 + n2 + 1, recsize, 0, "cat");
-	memcpy(s, x->sval, n1);
+	adjbuf(&s, &ssz, n1 + n2 + 1, recsize, 0, "cat2");
 	memcpy(s + n1, y->sval, n2);
 	s[n1 + n2] = '\0';
 
@@ -1526,7 +1526,6 @@ static char *nawk_convert(const char *s, int (*fun_c)(int),
 	char *pbuf     = NULL;
 	const char *ps = NULL;
 	size_t n       = 0;
-	mbstate_t mbs, mbs2;
 	wchar_t wc;
 	size_t sz = MB_CUR_MAX;
 
@@ -1541,17 +1540,24 @@ static char *nawk_convert(const char *s, int (*fun_c)(int),
 		/* upper/lower character may be shorter/longer */
 		buf = tostringN(s, strlen(s) * sz + 1);
 
-		memset(&mbs,  0, sizeof(mbs));
-		memset(&mbs2, 0, sizeof(mbs2));
+		(void) mbtowc(NULL, NULL, 0);	/* reset internal state */
+		/*
+		 * Reset internal state here too.
+		 * Assign result to avoid a compiler warning. (Casting to void
+		 * doesn't work.)
+		 * Increment said variable to avoid a different warning.
+		 */
+		int unused = wctomb(NULL, L'\0');
+		unused++;
 
 		ps   = s;
 		pbuf = buf;
-		while (n = mbrtowc(&wc, ps, sz, &mbs),
+		while (n = mbtowc(&wc, ps, sz),
 		       n > 0 && n != (size_t)-1 && n != (size_t)-2)
 		{
 			ps += n;
 
-			n = wcrtomb(pbuf, fun_wc(wc), &mbs2);
+			n = wctomb(pbuf, fun_wc(wc));
 			if (n == (size_t)-1)
 				FATAL("illegal wide character %s", s);
 
@@ -1588,7 +1594,7 @@ Cell *bltin(Node **a, int n)	/* builtin functions. a[0] is type, a[1] is arg lis
 	FILE *fp;
 	int status = 0;
 	time_t tv;
-	struct tm *tm;
+	struct tm *tm, tmbuf;
 
 	t = ptoi(a[0]);
 	x = execute(a[1]);
@@ -1602,15 +1608,18 @@ Cell *bltin(Node **a, int n)	/* builtin functions. a[0] is type, a[1] is arg lis
 		break;
 	case FLOG:
 		errno = 0;
-		u = errcheck(log(getfval(x)), "log"); break;
+		u = errcheck(log(getfval(x)), "log");
+		break;
 	case FINT:
 		modf(getfval(x), &u); break;
 	case FEXP:
 		errno = 0;
-		u = errcheck(exp(getfval(x)), "exp"); break;
+		u = errcheck(exp(getfval(x)), "exp");
+		break;
 	case FSQRT:
 		errno = 0;
-		u = errcheck(sqrt(getfval(x)), "sqrt"); break;
+		u = errcheck(sqrt(getfval(x)), "sqrt");
+		break;
 	case FSIN:
 		u = sin(getfval(x)); break;
 	case FCOS:
@@ -1739,6 +1748,26 @@ Cell *bltin(Node **a, int n)	/* builtin functions. a[0] is type, a[1] is arg lis
 			u = EOF;
 		else
 			u = fflush(fp);
+		break;
+	case FMKTIME:
+		memset(&tmbuf, 0, sizeof(tmbuf));
+		tm = &tmbuf;
+		t = sscanf(getsval(x), "%d %d %d %d %d %d %d",
+		    &tm->tm_year, &tm->tm_mon, &tm->tm_mday, &tm->tm_hour,
+		    &tm->tm_min, &tm->tm_sec, &tm->tm_isdst);
+		switch (t) {
+		case 6:
+			tm->tm_isdst = -1;	/* let mktime figure it out */
+			/* FALLTHROUGH */
+		case 7:
+			tm->tm_year -= 1900;
+			tm->tm_mon--;
+			u = mktime(tm);
+			break;
+		default:
+			u = -1;
+			break;
+		}
 		break;
 	case FSYSTIME:
 		u = time((time_t *) 0);
@@ -1938,7 +1967,7 @@ const char *filename(FILE *fp)
  	Cell *x;
 	size_t i;
 	bool stat;
- 
+
  	x = execute(a[0]);
  	getsval(x);
 	stat = true;
@@ -1947,7 +1976,10 @@ const char *filename(FILE *fp)
 			continue;
 		if (ferror(files[i].fp))
 			FATAL("i/o error occurred on %s", files[i].fname);
-		if (files[i].mode == '|' || files[i].mode == LE)
+		if (files[i].fp == stdin || files[i].fp == stdout ||
+		    files[i].fp == stderr)
+			stat = freopen("/dev/null", "r+", files[i].fp) == NULL;
+		else if (files[i].mode == '|' || files[i].mode == LE)
 			stat = pclose(files[i].fp) == -1;
 		else
 			stat = fclose(files[i].fp) == EOF;
@@ -1957,6 +1989,7 @@ const char *filename(FILE *fp)
 			xfree(files[i].fname);
 		files[i].fname = NULL;	/* watch out for ref thru this */
 		files[i].fp = NULL;
+		break;
  	}
  	tempfree(x);
  	x = gettemp();
@@ -1974,8 +2007,12 @@ void closeall(void)
 			continue;
 		if (ferror(files[i].fp))
 			FATAL( "i/o error occurred on %s", files[i].fname );
+		if (files[i].fp == stdin)
+			continue;
 		if (files[i].mode == '|' || files[i].mode == LE)
 			stat = pclose(files[i].fp) == -1;
+		else if (files[i].fp == stdout || files[i].fp == stderr)
+			stat = fflush(files[i].fp) == EOF;
 		else
 			stat = fclose(files[i].fp) == EOF;
 		if (stat)

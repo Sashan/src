@@ -1,4 +1,4 @@
-/*	$OpenBSD: tls13_lib.c,v 1.51 2020/06/06 01:40:09 beck Exp $ */
+/*	$OpenBSD: tls13_lib.c,v 1.54 2020/09/11 15:03:36 jsing Exp $ */
 /*
  * Copyright (c) 2018, 2019 Joel Sing <jsing@openbsd.org>
  * Copyright (c) 2019 Bob Beck <beck@openbsd.org>
@@ -137,12 +137,12 @@ tls13_alert_sent_cb(uint8_t alert_desc, void *arg)
 {
 	struct tls13_ctx *ctx = arg;
 
-	if (alert_desc == SSL_AD_CLOSE_NOTIFY) {
+	if (alert_desc == TLS13_ALERT_CLOSE_NOTIFY) {
 		ctx->close_notify_sent = 1;
 		return;
 	}
 
-	if (alert_desc == SSL_AD_USER_CANCELLED) {
+	if (alert_desc == TLS13_ALERT_USER_CANCELED) {
 		return;
 	}
 
@@ -178,6 +178,19 @@ tls13_legacy_handshake_message_sent_cb(void *arg)
 	tls13_handshake_msg_data(ctx->hs_msg, &cbs);
 	s->internal->msg_callback(1, TLS1_3_VERSION, SSL3_RT_HANDSHAKE,
 	    CBS_data(&cbs), CBS_len(&cbs), s, s->internal->msg_callback_arg);
+}
+
+static void
+tls13_legacy_info_cb(void *arg, int state, int ret)
+{
+	struct tls13_ctx *ctx = arg;
+	SSL *s = ctx->ssl;
+	void (*cb)(const SSL *, int, int);
+
+	if ((cb = s->internal->info_callback) == NULL)
+		cb = s->ctx->internal->info_callback;
+	if (cb != NULL)
+		cb(s, state, ret);
 }
 
 static int
@@ -388,6 +401,7 @@ tls13_ctx_new(int mode)
 
 	ctx->handshake_message_sent_cb = tls13_legacy_handshake_message_sent_cb;
 	ctx->handshake_message_recv_cb = tls13_legacy_handshake_message_recv_cb;
+	ctx->info_cb = tls13_legacy_info_cb;
 	ctx->ocsp_status_recv_cb = tls13_legacy_ocsp_status_recv_cb;
 
 	ctx->middlebox_compat = 1;
@@ -415,7 +429,7 @@ tls13_ctx_free(struct tls13_ctx *ctx)
 
 int
 tls13_cert_add(struct tls13_ctx *ctx, CBB *cbb, X509 *cert,
-    int(*build_extensions)(SSL *s, CBB *cbb, uint16_t msg_type))
+    int(*build_extensions)(SSL *s, uint16_t msg_type, CBB *cbb))
 {
 	CBB cert_data;
 	uint8_t *data;
@@ -431,7 +445,7 @@ tls13_cert_add(struct tls13_ctx *ctx, CBB *cbb, X509 *cert,
 	if (i2d_X509(cert, &data) != cert_len)
 		return 0;
 	if (build_extensions != NULL) {
-		if (!build_extensions(ctx->ssl, cbb, SSL_TLSEXT_MSG_CT))
+		if (!build_extensions(ctx->ssl, SSL_TLSEXT_MSG_CT, cbb))
 			return 0;
 	} else {
 		CBB cert_exts;

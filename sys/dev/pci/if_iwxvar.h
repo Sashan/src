@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwxvar.h,v 1.10 2020/06/22 16:27:37 stsp Exp $	*/
+/*	$OpenBSD: if_iwxvar.h,v 1.13 2020/10/11 07:05:28 mpi Exp $	*/
 
 /*
  * Copyright (c) 2014 genua mbh <info@genua.de>
@@ -116,14 +116,12 @@ struct iwx_tx_radiotap_header {
 	uint8_t		wt_rate;
 	uint16_t	wt_chan_freq;
 	uint16_t	wt_chan_flags;
-	uint8_t		wt_hwqueue;
 } __packed;
 
 #define IWX_TX_RADIOTAP_PRESENT						\
 	((1 << IEEE80211_RADIOTAP_FLAGS) |				\
 	 (1 << IEEE80211_RADIOTAP_RATE) |				\
-	 (1 << IEEE80211_RADIOTAP_CHANNEL) |				\
-	 (1 << IEEE80211_RADIOTAP_HWQUEUE))
+	 (1 << IEEE80211_RADIOTAP_CHANNEL))
 
 #define IWX_UCODE_SECT_MAX 42
 #define IWX_FWDMASEGSZ (192*1024)
@@ -476,6 +474,7 @@ struct iwx_softc {
 	struct iwx_notif_statistics sc_stats;
 	int sc_noise;
 
+	int sc_pm_support;
 	int sc_ltr_enabled;
 
 	int sc_integrated;

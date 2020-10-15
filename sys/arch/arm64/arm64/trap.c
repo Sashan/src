@@ -1,4 +1,4 @@
-/* $OpenBSD: trap.c,v 1.27 2020/01/06 12:37:30 kettenis Exp $ */
+/* $OpenBSD: trap.c,v 1.32 2020/10/08 19:41:04 deraadt Exp $ */
 /*-
  * Copyright (c) 2014 Andrew Turner
  * All rights reserved.
@@ -65,6 +65,14 @@ void do_el0_error(struct trapframe *);
 
 void dumpregs(struct trapframe*);
 
+/* Check whether we're executing an unprivileged load/store instruction. */
+static inline int
+is_unpriv_ldst(uint64_t elr)
+{
+	uint32_t insn = *(uint32_t *)elr;
+	return ((insn & 0x3f200c00) == 0x38000800);
+}
+
 static void
 data_abort(struct trapframe *frame, uint64_t esr, uint64_t far,
     int lower, int exe)
@@ -72,7 +80,6 @@ data_abort(struct trapframe *frame, uint64_t esr, uint64_t far,
 	struct vm_map *map;
 	struct proc *p;
 	struct pcb *pcb;
-	vm_fault_t ftype;
 	vm_prot_t access_type;
 	vaddr_t va;
 	union sigval sv;
@@ -86,12 +93,17 @@ data_abort(struct trapframe *frame, uint64_t esr, uint64_t far,
 		curcpu()->ci_flush_bp();
 
 	if (lower) {
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			return;
+	}
+
+	if (lower) {
 		switch (esr & ISS_DATA_DFSC_MASK) {
 		case ISS_DATA_DFSC_ALIGN:
 			sv.sival_ptr = (void *)far;
-			KERNEL_LOCK();
 			trapsignal(p, SIGBUS, 0, BUS_ADRALN, sv);
-			KERNEL_UNLOCK();
 			return;
 		default:
 			break;
@@ -104,8 +116,18 @@ data_abort(struct trapframe *frame, uint64_t esr, uint64_t far,
 		/* The top bit tells us which range to use */
 		if ((far >> 63) == 1)
 			map = kernel_map;
-		else
+		else {
+			/*
+			 * Only allow user-space access using
+			 * unprivileged load/store instructions.
+			 */
+			if (!is_unpriv_ldst(frame->tf_elr)) {
+				panic("attempt to access user address"
+				      " 0x%llx from EL1", far);
+			}
+
 			map = &p->p_vmspace->vm_map;
+		}
 	}
 
 	if (exe)
@@ -114,13 +136,13 @@ data_abort(struct trapframe *frame, uint64_t esr, uint64_t far,
 		access_type = (!(esr & ISS_DATA_CM) && (esr & ISS_DATA_WnR)) ?
 		    PROT_WRITE : PROT_READ;
 
-	ftype = VM_FAULT_INVALID; // should check for failed permissions.
-
 	if (map != kernel_map) {
 		/* Fault in the user page: */
 		if (!pmap_fault_fixup(map->pmap, va, access_type, 1)) {
 			KERNEL_LOCK();
-			error = uvm_fault(map, va, ftype, access_type);
+			error = uvm_fault(map, va, 0, access_type);
+			if (error == 0)
+				uvm_grow(p, va);
 			KERNEL_UNLOCK();
 		}
 	} else {
@@ -130,7 +152,7 @@ data_abort(struct trapframe *frame, uint64_t esr, uint64_t far,
 		 */
 		if (!pmap_fault_fixup(map->pmap, va, access_type, 0)) {
 			KERNEL_LOCK();
-			error = uvm_fault(map, va, ftype, access_type);
+			error = uvm_fault(map, va, 0, access_type);
 			KERNEL_UNLOCK();
 		}
 	}
@@ -152,9 +174,7 @@ data_abort(struct trapframe *frame, uint64_t esr, uint64_t far,
 			}
 			sv.sival_ptr = (void *)far;
 
-			KERNEL_LOCK();
 			trapsignal(p, sig, 0, code, sv);
-			KERNEL_UNLOCK();
 		} else {
 			if (curcpu()->ci_idepth == 0 &&
 			    pcb->pcb_onfault != 0) {
@@ -244,19 +264,13 @@ do_el0_sync(struct trapframe *frame)
 
 	p->p_addr->u_pcb.pcb_tf = frame;
 	refreshcreds(p);
-	if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-	    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-	    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-		goto out;
 
 	switch (exception) {
 	case EXCP_UNKNOWN:
 		vfp_save();
 		curcpu()->ci_flush_bp();
 		sv.sival_ptr = (void *)frame->tf_elr;
-		KERNEL_LOCK();
 		trapsignal(p, SIGILL, 0, ILL_ILLOPC, sv);
-		KERNEL_UNLOCK();
 		break;
 	case EXCP_FP_SIMD:
 	case EXCP_TRAP_FP:
@@ -274,17 +288,13 @@ do_el0_sync(struct trapframe *frame)
 		vfp_save();
 		curcpu()->ci_flush_bp();
 		sv.sival_ptr = (void *)frame->tf_elr;
-		KERNEL_LOCK();
 		trapsignal(p, SIGBUS, 0, BUS_ADRALN, sv);
-		KERNEL_UNLOCK();
 		break;
 	case EXCP_SP_ALIGN:
 		vfp_save();
 		curcpu()->ci_flush_bp();
 		sv.sival_ptr = (void *)frame->tf_sp;
-		KERNEL_LOCK();
 		trapsignal(p, SIGBUS, 0, BUS_ADRALN, sv);
-		KERNEL_UNLOCK();
 		break;
 	case EXCP_DATA_ABORT_L:
 		vfp_save();
@@ -293,16 +303,12 @@ do_el0_sync(struct trapframe *frame)
 	case EXCP_BRK:
 		vfp_save();
 		sv.sival_ptr = (void *)frame->tf_elr;
-		KERNEL_LOCK();
 		trapsignal(p, SIGTRAP, 0, TRAP_BRKPT, sv);
-		KERNEL_UNLOCK();
 		break;
 	case EXCP_SOFTSTP_EL0:
 		vfp_save();
 		sv.sival_ptr = (void *)frame->tf_elr;
-		KERNEL_LOCK();
 		trapsignal(p, SIGTRAP, 0, TRAP_TRACE, sv);
-		KERNEL_UNLOCK();
 		break;
 	default:
 		// panic("Unknown userland exception %x esr_el1 %lx\n", exception,
@@ -318,7 +324,7 @@ do_el0_sync(struct trapframe *frame)
 		sigexit(p, SIGILL);
 		KERNEL_UNLOCK();
 	}
-out:
+
 	userret(p);
 }
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: pte.h,v 1.3 2020/06/18 21:52:57 kettenis Exp $	*/
+/*	$OpenBSD: pte.h,v 1.7 2020/09/07 18:51:47 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -32,7 +32,7 @@ struct pte {
 /* High doubleword: */
 #define PTE_VALID		0x0000000000000001ULL
 #define PTE_HID			0x0000000000000002ULL
-#define PTE_WIRED		0x0000000000000004ULL /* SW */
+#define PTE_WIRED		0x0000000000000008ULL /* SW */
 #define PTE_AVPN		0x3fffffffffffff80ULL
 #define PTE_VSID_SHIFT		12
 
@@ -68,5 +68,12 @@ struct slb {
 	uint64_t slb_slbe;
 	uint64_t slb_slbv;
 };
+
+#define VSID_VRMA	0x1ffffff
+
+#define USER_ADDR	0xcfffffff00000000ULL
+#define USER_ESID	(USER_ADDR >> ADDR_ESID_SHIFT)
+#define SEGMENT_SIZE	(256 * 1024 * 1024ULL)
+#define SEGMENT_MASK 	(SEGMENT_SIZE - 1)
 
 #endif /* _MACHINE_PTE_H_ */

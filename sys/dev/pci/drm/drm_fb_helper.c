@@ -229,6 +229,46 @@ int drm_fb_helper_debug_leave(struct fb_info *info)
 }
 EXPORT_SYMBOL(drm_fb_helper_debug_leave);
 
+static int
+__drm_fb_helper_restore_fbdev_mode_unlocked(struct drm_fb_helper *fb_helper,
+					    bool force)
+{
+	bool do_delayed;
+	int ret;
+
+	if (!drm_fbdev_emulation || !fb_helper)
+		return -ENODEV;
+
+	if (READ_ONCE(fb_helper->deferred_setup))
+		return 0;
+
+#ifdef __OpenBSD__
+	force = true;
+#endif
+
+	mutex_lock(&fb_helper->lock);
+	if (force) {
+		/*
+		 * Yes this is the _locked version which expects the master lock
+		 * to be held. But for forced restores we're intentionally
+		 * racing here, see drm_fb_helper_set_par().
+		 */
+		ret = drm_client_modeset_commit_locked(&fb_helper->client);
+	} else {
+		ret = drm_client_modeset_commit(&fb_helper->client);
+	}
+
+	do_delayed = fb_helper->delayed_hotplug;
+	if (do_delayed)
+		fb_helper->delayed_hotplug = false;
+	mutex_unlock(&fb_helper->lock);
+
+	if (do_delayed)
+		drm_fb_helper_hotplug_event(fb_helper);
+
+	return ret;
+}
+
 /**
  * drm_fb_helper_restore_fbdev_mode_unlocked - restore fbdev configuration
  * @fb_helper: driver-allocated fbdev helper, can be NULL
@@ -242,31 +282,7 @@ EXPORT_SYMBOL(drm_fb_helper_debug_leave);
  */
 int drm_fb_helper_restore_fbdev_mode_unlocked(struct drm_fb_helper *fb_helper)
 {
-	bool do_delayed;
-	int ret;
-
-	if (!drm_fbdev_emulation || !fb_helper)
-		return -ENODEV;
-
-	if (READ_ONCE(fb_helper->deferred_setup))
-		return 0;
-
-	mutex_lock(&fb_helper->lock);
-#ifdef __linux__
-	ret = drm_client_modeset_commit(&fb_helper->client);
-#else
-	ret = drm_client_modeset_commit_locked(&fb_helper->client);
-#endif
-
-	do_delayed = fb_helper->delayed_hotplug;
-	if (do_delayed)
-		fb_helper->delayed_hotplug = false;
-	mutex_unlock(&fb_helper->lock);
-
-	if (do_delayed)
-		drm_fb_helper_hotplug_event(fb_helper);
-
-	return ret;
+	return __drm_fb_helper_restore_fbdev_mode_unlocked(fb_helper, false);
 }
 EXPORT_SYMBOL(drm_fb_helper_restore_fbdev_mode_unlocked);
 
@@ -389,7 +405,11 @@ static void drm_fb_helper_dirty_blit_real(struct drm_fb_helper *fb_helper,
 	unsigned int y;
 
 	for (y = clip->y1; y < clip->y2; y++) {
-		memcpy(dst, src, len);
+		if (!fb_helper->dev->mode_config.fbdev_use_iomem)
+			memcpy(dst, src, len);
+		else
+			memcpy_toio((void __iomem *)dst, src, len);
+
 		src += fb->pitches[0];
 		dst += fb->pitches[0];
 	}
@@ -843,8 +863,7 @@ EXPORT_SYMBOL(drm_fb_helper_set_suspend);
 void drm_fb_helper_set_suspend_unlocked(struct drm_fb_helper *fb_helper,
 					bool suspend)
 {
-	STUB();
-#ifdef notyet
+#ifdef __linux__
 	if (!fb_helper || !fb_helper->fbdev)
 		return;
 
@@ -1335,6 +1354,7 @@ int drm_fb_helper_set_par(struct fb_info *info)
 {
 	struct drm_fb_helper *fb_helper = info->par;
 	struct fb_var_screeninfo *var = &info->var;
+	bool force;
 
 	if (oops_in_progress)
 		return -EBUSY;
@@ -1344,7 +1364,29 @@ int drm_fb_helper_set_par(struct fb_info *info)
 		return -EINVAL;
 	}
 
-	drm_fb_helper_restore_fbdev_mode_unlocked(fb_helper);
+	/*
+	 * Normally we want to make sure that a kms master takes precedence over
+	 * fbdev, to avoid fbdev flickering and occasionally stealing the
+	 * display status. But Xorg first sets the vt back to text mode using
+	 * the KDSET IOCTL with KD_TEXT, and only after that drops the master
+	 * status when exiting.
+	 *
+	 * In the past this was caught by drm_fb_helper_lastclose(), but on
+	 * modern systems where logind always keeps a drm fd open to orchestrate
+	 * the vt switching, this doesn't work.
+	 *
+	 * To not break the userspace ABI we have this special case here, which
+	 * is only used for the above case. Everything else uses the normal
+	 * commit function, which ensures that we never steal the display from
+	 * an active drm master.
+	 */
+#ifdef __linux__
+	force = var->activate & FB_ACTIVATE_KD_TEXT;
+#else
+	force = true;
+#endif
+
+	__drm_fb_helper_restore_fbdev_mode_unlocked(fb_helper, force);
 
 	return 0;
 }
@@ -1920,7 +1962,7 @@ EXPORT_SYMBOL(drm_fb_helper_initial_config);
  */
 int drm_fb_helper_hotplug_event(struct drm_fb_helper *fb_helper)
 {
-	struct fb_info *fbi = fb_helper->fbdev;
+	struct fb_info *fbi;
 	int err = 0;
 
 	if (!drm_fbdev_emulation || !fb_helper)
@@ -1947,6 +1989,7 @@ int drm_fb_helper_hotplug_event(struct drm_fb_helper *fb_helper)
 	drm_setup_crtcs_fb(fb_helper);
 	mutex_unlock(&fb_helper->lock);
 
+	fbi = fb_helper->fbdev;
 	if (fbi->fbops && fbi->fbops->fb_set_par)
 		fbi->fbops->fb_set_par(fbi);
 	else

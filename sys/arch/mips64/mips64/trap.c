@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.145 2020/05/23 07:18:50 visa Exp $	*/
+/*	$OpenBSD: trap.c,v 1.149 2020/10/08 19:41:05 deraadt Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -147,8 +147,7 @@ int	process_sstep(struct proc *, int);
 void
 ast(void)
 {
-	struct cpu_info *ci = curcpu();
-	struct proc *p = ci->ci_curproc;
+	struct proc *p = curproc;
 
 	p->p_md.md_astpending = 0;
 
@@ -161,7 +160,7 @@ ast(void)
 
 	refreshcreds(p);
 	atomic_inc_int(&uvmexp.softs);
-	mi_ast(p, ci->ci_want_resched);
+	mi_ast(p, curcpu()->ci_want_resched);
 	userret(p);
 }
 
@@ -261,16 +260,11 @@ trap(struct trapframe *trapframe)
 	}
 #endif
 
-	if (type & T_USER) {
+	if (type & T_USER)
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto out;
-	}
 
 	itsa(trapframe, ci, p, type);
-out:
+
 	if (type & T_USER)
 		userret(p);
 }
@@ -283,7 +277,7 @@ itsa(struct trapframe *trapframe, struct cpu_info *ci, struct proc *p,
     int type)
 {
 	unsigned ucode = 0;
-	vm_prot_t ftype;
+	vm_prot_t access_type;
 	extern vaddr_t onfault_table[];
 	int onfault;
 	int signal, sicode;
@@ -297,7 +291,7 @@ itsa(struct trapframe *trapframe, struct cpu_info *ci, struct proc *p,
 			if (pmap_emulate_modify(pmap_kernel(),
 			    trapframe->badvaddr)) {
 				/* write to read only page in the kernel */
-				ftype = PROT_WRITE;
+				access_type = PROT_WRITE;
 				pcb = &p->p_addr->u_pcb;
 				goto kernel_fault;
 			}
@@ -309,7 +303,7 @@ itsa(struct trapframe *trapframe, struct cpu_info *ci, struct proc *p,
 		if (pmap_emulate_modify(p->p_vmspace->vm_map.pmap,
 		    trapframe->badvaddr)) {
 			/* write to read only page */
-			ftype = PROT_WRITE;
+			access_type = PROT_WRITE;
 			pcb = &p->p_addr->u_pcb;
 			goto fault_common_no_miss;
 		}
@@ -329,12 +323,12 @@ itsa(struct trapframe *trapframe, struct cpu_info *ci, struct proc *p,
 			if (trapframe->cause & CR_BR_DELAY)
 				pc += 4;
 			if (pc == trapframe->badvaddr)
-				ftype = PROT_EXEC;
+				access_type = PROT_EXEC;
 			else
 #endif
-			ftype = PROT_READ;
+			access_type = PROT_READ;
 		} else
-			ftype = PROT_WRITE;
+			access_type = PROT_WRITE;
 
 		pcb = &p->p_addr->u_pcb;
 		/* check for kernel address */
@@ -347,7 +341,7 @@ itsa(struct trapframe *trapframe, struct cpu_info *ci, struct proc *p,
 			onfault = pcb->pcb_onfault;
 			pcb->pcb_onfault = 0;
 			KERNEL_LOCK();
-			rv = uvm_fault(kernel_map, va, 0, ftype);
+			rv = uvm_fault(kernel_map, va, 0, access_type);
 			KERNEL_UNLOCK();
 			pcb->pcb_onfault = onfault;
 			if (rv == 0)
@@ -382,18 +376,23 @@ itsa(struct trapframe *trapframe, struct cpu_info *ci, struct proc *p,
 		if (trapframe->cause & CR_BR_DELAY)
 			pc += 4;
 		if (pc == trapframe->badvaddr)
-			ftype = PROT_EXEC;
+			access_type = PROT_EXEC;
 		else
 #endif
-		ftype = PROT_READ;
+		access_type = PROT_READ;
 		pcb = &p->p_addr->u_pcb;
 		goto fault_common;
 	}
 
 	case T_TLB_ST_MISS+T_USER:
-		ftype = PROT_WRITE;
+		access_type = PROT_WRITE;
 		pcb = &p->p_addr->u_pcb;
 fault_common:
+		if ((type & T_USER) &&
+		    !uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			return;
 
 #ifdef CPU_R4000
 		if (r4000_errata != 0) {
@@ -424,7 +423,7 @@ fault_common_no_miss:
 		pcb->pcb_onfault = 0;
 		KERNEL_LOCK();
 
-		rv = uvm_fault(map, va, 0, ftype);
+		rv = uvm_fault(map, va, 0, access_type);
 		pcb->pcb_onfault = onfault;
 
 		/*
@@ -449,7 +448,7 @@ fault_common_no_miss:
 			goto err;
 		}
 
-		ucode = ftype;
+		ucode = access_type;
 		signal = SIGSEGV;
 		sicode = SEGV_MAPERR;
 		if (rv == EACCES)
@@ -926,9 +925,7 @@ fault_common_no_miss:
 	p->p_md.md_regs->cause = trapframe->cause;
 	p->p_md.md_regs->badvaddr = trapframe->badvaddr;
 	sv.sival_ptr = (void *)trapframe->badvaddr;
-	KERNEL_LOCK();
 	trapsignal(p, signal, ucode, sicode, sv);
-	KERNEL_UNLOCK();
 }
 
 void

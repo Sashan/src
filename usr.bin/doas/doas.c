@@ -1,4 +1,4 @@
-/* $OpenBSD: doas.c,v 1.82 2019/10/18 17:15:45 tedu Exp $ */
+/* $OpenBSD: doas.c,v 1.84 2020/10/09 07:43:38 kn Exp $ */
 /*
  * Copyright (c) 2015 Ted Unangst <tedu@openbsd.org>
  *
@@ -396,7 +396,7 @@ main(int argc, char **argv)
 	if (!permit(uid, groups, ngroups, &rule, target, cmd,
 	    (const char **)argv + 1)) {
 		syslog(LOG_AUTHPRIV | LOG_NOTICE,
-		    "failed command for %s: %s", mypw->pw_name, cmdline);
+		    "command not permitted for %s: %s", mypw->pw_name, cmdline);
 		errc(1, EPERM, NULL);
 	}
 
@@ -448,8 +448,11 @@ main(int argc, char **argv)
 	if (pledge("stdio exec", NULL) == -1)
 		err(1, "pledge");
 
-	syslog(LOG_AUTHPRIV | LOG_INFO, "%s ran command %s as %s from %s",
-	    mypw->pw_name, cmdline, targpw->pw_name, cwd);
+	if (!(rule->options & NOLOG)) {
+		syslog(LOG_AUTHPRIV | LOG_INFO,
+		    "%s ran command %s as %s from %s",
+		    mypw->pw_name, cmdline, targpw->pw_name, cwd);
+	}
 
 	envp = prepenv(rule, mypw, targpw);
 

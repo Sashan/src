@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.111 2019/12/11 07:21:40 guenther Exp $	*/
+/*	$OpenBSD: trap.c,v 1.117 2020/10/08 19:41:05 deraadt Exp $	*/
 /*
  * Copyright (c) 2004, Miodrag Vallat.
  * Copyright (c) 1998 Steve Murphree, Jr.
@@ -218,7 +218,7 @@ m88100_trap(u_int type, struct trapframe *frame)
 	struct proc *p;
 	struct vm_map *map;
 	vaddr_t va, pcb_onfault;
-	vm_prot_t ftype;
+	vm_prot_t access_type;
 	int fault_type, pbus_type;
 	u_long fault_code;
 	vaddr_t fault_addr;
@@ -236,13 +236,9 @@ m88100_trap(u_int type, struct trapframe *frame)
 		p = &proc0;
 
 	if (USERMODE(frame->tf_epsr)) {
-		type += T_USER;
+		type |= T_USER;
 		p->p_md.md_tf = frame;	/* for ptrace/signals */
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto userexit;
 	}
 	fault_type = SI_NOINFO;
 	fault_code = 0;
@@ -291,17 +287,15 @@ lose:
 		/* kernel mode data fault */
 
 		/* data fault on the user address? */
-		if ((frame->tf_dmt0 & DMT_DAS) == 0) {
-			KERNEL_LOCK();
+		if ((frame->tf_dmt0 & DMT_DAS) == 0)
 			goto user_fault;
-		}
 
 		fault_addr = frame->tf_dma0;
 		if (frame->tf_dmt0 & (DMT_WRITE|DMT_LOCKBAR)) {
-			ftype = PROT_READ | PROT_WRITE;
+			access_type = PROT_READ | PROT_WRITE;
 			fault_code = PROT_WRITE;
 		} else {
-			ftype = PROT_READ;
+			access_type = PROT_READ;
 			fault_code = PROT_READ;
 		}
 
@@ -336,7 +330,7 @@ lose:
 		case CMMU_PFSR_SFAULT:
 		case CMMU_PFSR_PFAULT:
 			p->p_addr->u_pcb.pcb_onfault = 0;
-			result = uvm_fault(map, va, VM_FAULT_INVALID, ftype);
+			result = uvm_fault(map, va, 0, access_type);
 			p->p_addr->u_pcb.pcb_onfault = pcb_onfault;
 			if (result == 0) {
 				/*
@@ -382,8 +376,12 @@ lose:
 		/* User mode instruction access fault */
 		/* FALLTHROUGH */
 	case T_DATAFLT+T_USER:
-		KERNEL_LOCK();
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto userexit;
 user_fault:
+		KERNEL_LOCK();
 		if (type == T_INSTFLT + T_USER) {
 			pbus_type = CMMU_PFSR_FAULT(frame->tf_ipfsr);
 #ifdef TRAPDEBUG
@@ -402,10 +400,10 @@ user_fault:
 		}
 
 		if (frame->tf_dmt0 & (DMT_WRITE | DMT_LOCKBAR)) {
-			ftype = PROT_READ | PROT_WRITE;
+			access_type = PROT_READ | PROT_WRITE;
 			fault_code = PROT_WRITE;
 		} else {
-			ftype = PROT_READ;
+			access_type = PROT_READ;
 			fault_code = PROT_READ;
 		}
 
@@ -425,7 +423,7 @@ user_fault:
 			result = EACCES;
 			break;
 		default:
-			result = uvm_fault(map, va, VM_FAULT_INVALID, ftype);
+			result = uvm_fault(map, va, 0, access_type);
 			if (result == EACCES)
 				result = EFAULT;
 			break;
@@ -587,9 +585,7 @@ user_fault:
 
 	if (sig) {
 		sv.sival_ptr = (void *)fault_addr;
-		KERNEL_LOCK();
 		trapsignal(p, sig, fault_code, fault_type, sv);
-		KERNEL_UNLOCK();
 		/*
 		 * don't want multiple faults - we are going to
 		 * deliver signal.
@@ -610,7 +606,7 @@ m88110_trap(u_int type, struct trapframe *frame)
 	struct proc *p;
 	struct vm_map *map;
 	vaddr_t va, pcb_onfault;
-	vm_prot_t ftype;
+	vm_prot_t access_type;
 	int fault_type;
 	u_long fault_code;
 	vaddr_t fault_addr;
@@ -680,13 +676,9 @@ m88110_trap(u_int type, struct trapframe *frame)
 	}
 
 	if (USERMODE(frame->tf_epsr)) {
-		type += T_USER;
+		type |= T_USER;
 		p->p_md.md_tf = frame;	/* for ptrace/signals */
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto userexit;
 	}
 
 	if (sig != 0)
@@ -808,10 +800,8 @@ lose:
 		/* kernel mode data fault */
 
 		/* data fault on the user address? */
-		if ((frame->tf_dsr & CMMU_DSR_SU) == 0) {
-			KERNEL_LOCK();
+		if ((frame->tf_dsr & CMMU_DSR_SU) == 0)
 			goto m88110_user_fault;
-		}
 
 #ifdef TRAPDEBUG
 		printf("Kernel Data access fault exip %x dsr %x dlar %x\n",
@@ -820,10 +810,10 @@ lose:
 
 		fault_addr = frame->tf_dlar;
 		if (frame->tf_dsr & CMMU_DSR_RW) {
-			ftype = PROT_READ;
+			access_type = PROT_READ;
 			fault_code = PROT_READ;
 		} else {
-			ftype = PROT_READ | PROT_WRITE;
+			access_type = PROT_READ | PROT_WRITE;
 			fault_code = PROT_WRITE;
 		}
 
@@ -840,7 +830,7 @@ lose:
 			 */
 			if ((pcb_onfault = p->p_addr->u_pcb.pcb_onfault) != 0)
 				p->p_addr->u_pcb.pcb_onfault = 0;
-			result = uvm_fault(map, va, VM_FAULT_INVALID, ftype);
+			result = uvm_fault(map, va, 0, access_type);
 			p->p_addr->u_pcb.pcb_onfault = pcb_onfault;
 			/*
 			 * This could be a fault caused in copyout*()
@@ -864,10 +854,14 @@ lose:
 		/* User mode instruction access fault */
 		/* FALLTHROUGH */
 	case T_DATAFLT+T_USER:
-		KERNEL_LOCK();
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto userexit;
 m88110_user_fault:
+		KERNEL_LOCK();
 		if (type == T_INSTFLT+T_USER) {
-			ftype = PROT_READ;
+			access_type = PROT_READ;
 			fault_code = PROT_READ;
 #ifdef TRAPDEBUG
 			printf("User Instruction fault exip %x isr %x ilar %x\n",
@@ -876,10 +870,10 @@ m88110_user_fault:
 		} else {
 			fault_addr = frame->tf_dlar;
 			if (frame->tf_dsr & CMMU_DSR_RW) {
-				ftype = PROT_READ;
+				access_type = PROT_READ;
 				fault_code = PROT_READ;
 			} else {
-				ftype = PROT_READ | PROT_WRITE;
+				access_type = PROT_READ | PROT_WRITE;
 				fault_code = PROT_WRITE;
 			}
 #ifdef TRAPDEBUG
@@ -908,7 +902,7 @@ m88110_user_fault:
 			} else
 			if (frame->tf_isr & (CMMU_ISR_SI | CMMU_ISR_PI)) {
 				/* segment or page fault */
-				result = uvm_fault(map, va, VM_FAULT_INVALID, ftype);
+				result = uvm_fault(map, va, 0, access_type);
 				if (result == EACCES)
 					result = EFAULT;
 			} else {
@@ -927,7 +921,7 @@ m88110_user_fault:
 			} else
 			if (frame->tf_dsr & (CMMU_DSR_SI | CMMU_DSR_PI)) {
 				/* segment or page fault */
-				result = uvm_fault(map, va, VM_FAULT_INVALID, ftype);
+				result = uvm_fault(map, va, 0, access_type);
 				if (result == EACCES)
 					result = EFAULT;
 			} else
@@ -959,7 +953,7 @@ m88110_user_fault:
 					printf("Uncorrected userland write fault, pmap %p va %p\n",
 					    map->pmap, va);
 #endif
-					result = uvm_fault(map, va, VM_FAULT_INVALID, ftype);
+					result = uvm_fault(map, va, 0, access_type);
 					if (result == EACCES)
 						result = EFAULT;
 				}
@@ -1121,9 +1115,7 @@ m88110_user_fault:
 	if (sig) {
 deliver:
 		sv.sival_ptr = (void *)fault_addr;
-		KERNEL_LOCK();
 		trapsignal(p, sig, fault_code, fault_type, sv);
-		KERNEL_UNLOCK();
 	}
 
 userexit:

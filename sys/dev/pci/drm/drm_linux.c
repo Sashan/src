@@ -1,4 +1,4 @@
-/*	$OpenBSD: drm_linux.c,v 1.60 2020/06/14 15:20:07 jsg Exp $	*/
+/*	$OpenBSD: drm_linux.c,v 1.63 2020/08/26 03:29:06 visa Exp $	*/
 /*
  * Copyright (c) 2013 Jonathan Gray <jsg@openbsd.org>
  * Copyright (c) 2015, 2016 Mark Kettenis <kettenis@openbsd.org>
@@ -17,6 +17,7 @@
  */
 
 #include <sys/types.h>
+#include <sys/systm.h>
 #include <sys/param.h>
 #include <sys/event.h>
 #include <sys/filedesc.h>
@@ -302,71 +303,6 @@ kthread_stop(struct proc *p)
 	LIST_REMOVE(thread, next);
 	free(thread, M_DRM, sizeof(*thread));
 }
-
-struct timespec
-ns_to_timespec(const int64_t nsec)
-{
-	struct timespec ts;
-	int32_t rem;
-
-	if (nsec == 0) {
-		ts.tv_sec = 0;
-		ts.tv_nsec = 0;
-		return (ts);
-	}
-
-	ts.tv_sec = nsec / NSEC_PER_SEC;
-	rem = nsec % NSEC_PER_SEC;
-	if (rem < 0) {
-		ts.tv_sec--;
-		rem += NSEC_PER_SEC;
-	}
-	ts.tv_nsec = rem;
-	return (ts);
-}
-
-int64_t
-timeval_to_ns(const struct timeval *tv)
-{
-	return ((int64_t)tv->tv_sec * NSEC_PER_SEC) +
-		tv->tv_usec * NSEC_PER_USEC;
-}
-
-struct timeval
-ns_to_timeval(const int64_t nsec)
-{
-	struct timeval tv;
-	int32_t rem;
-
-	if (nsec == 0) {
-		tv.tv_sec = 0;
-		tv.tv_usec = 0;
-		return (tv);
-	}
-
-	tv.tv_sec = nsec / NSEC_PER_SEC;
-	rem = nsec % NSEC_PER_SEC;
-	if (rem < 0) {
-		tv.tv_sec--;
-		rem += NSEC_PER_SEC;
-	}
-	tv.tv_usec = rem / 1000;
-	return (tv);
-}
-
-int64_t
-timeval_to_ms(const struct timeval *tv)
-{
-	return ((int64_t)tv->tv_sec * 1000) + (tv->tv_usec / 1000);
-}
-
-int64_t
-timeval_to_us(const struct timeval *tv)
-{
-	return ((int64_t)tv->tv_sec * 1000000) + tv->tv_usec;
-}
-
-extern char *hw_vendor, *hw_prod, *hw_ver;
 
 #if NBIOS > 0
 extern char smbios_board_vendor[];

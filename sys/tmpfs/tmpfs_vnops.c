@@ -1,4 +1,4 @@
-/*	$OpenBSD: tmpfs_vnops.c,v 1.42 2020/06/11 09:18:43 mpi Exp $	*/
+/*	$OpenBSD: tmpfs_vnops.c,v 1.44 2020/10/12 13:08:03 visa Exp $	*/
 /*	$NetBSD: tmpfs_vnops.c,v 1.100 2012/11/05 17:27:39 dholland Exp $	*/
 
 /*
@@ -37,6 +37,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/systm.h>
 #include <sys/fcntl.h>
 #include <sys/event.h>
 #include <sys/namei.h>
@@ -1079,6 +1080,8 @@ tmpfs_reclaim(void *v)
 	/* Check if tmpfs_vnode_get() is racing with us. */
 	racing = TMPFS_NODE_RECLAIMING(node);
 	rw_exit_write(&node->tn_nlock);
+
+	cache_purge(vp);
 
 	/*
 	 * If inode is not referenced, i.e. no links, then destroy it.

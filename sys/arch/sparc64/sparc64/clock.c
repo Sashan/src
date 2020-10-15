@@ -1,4 +1,4 @@
-/*	$OpenBSD: clock.c,v 1.61 2020/05/17 08:48:15 visa Exp $	*/
+/*	$OpenBSD: clock.c,v 1.66 2020/07/31 11:19:12 kettenis Exp $	*/
 /*	$NetBSD: clock.c,v 1.41 2001/07/24 19:29:25 eeh Exp $ */
 
 /*
@@ -109,13 +109,15 @@ struct cfdriver clock_cd = {
 u_int tick_get_timecount(struct timecounter *);
 
 struct timecounter tick_timecounter = {
-	tick_get_timecount, NULL, ~0u, 0, "tick", 0, NULL
+	tick_get_timecount, NULL, ~0u, 0, "tick", 0,
+	NULL, TC_TICK
 };
 
 u_int sys_tick_get_timecount(struct timecounter *);
 
 struct timecounter sys_tick_timecounter = {
-	sys_tick_get_timecount, NULL, ~0u, 0, "sys_tick", 1000, NULL
+	sys_tick_get_timecount, NULL, ~0u, 0, "sys_tick", 1000,
+	NULL, TC_SYS_TICK
 };
 
 /*
@@ -691,7 +693,8 @@ cpu_initclocks(void)
 	     timerreg_4u.t_mapintr[1]|INTMAP_V); 
 
 	statmin = statint - (statvar >> 1);
-	
+
+	tick_enable();
 }
 
 /*
@@ -890,6 +893,8 @@ tick_start(void)
 	struct cpu_info *ci = curcpu();
 	u_int64_t s;
 
+	tick_enable();
+
 	/*
 	 * Try to make the tick interrupts as synchronously as possible on
 	 * all CPUs to avoid inaccuracies for migrating processes.
@@ -906,6 +911,11 @@ sys_tick_start(void)
 {
 	struct cpu_info *ci = curcpu();
 	u_int64_t s;
+
+	if (CPU_ISSUN4U || CPU_ISSUN4US) {
+		tick_enable();
+		sys_tick_enable();
+	}
 
 	/*
 	 * Try to make the tick interrupts as synchronously as possible on
@@ -924,6 +934,8 @@ stick_start(void)
 	struct cpu_info *ci = curcpu();
 	u_int64_t s;
 
+	tick_enable();
+
 	/*
 	 * Try to make the tick interrupts as synchronously as possible on
 	 * all CPUs to avoid inaccuracies for migrating processes.
@@ -940,7 +952,7 @@ tick_get_timecount(struct timecounter *tc)
 {
 	u_int64_t tick;
 
-	__asm volatile("rd %%tick, %0" : "=r" (tick) :);
+	__asm volatile("rd %%tick, %0" : "=r" (tick));
 
 	return (tick & ~0u);
 }
@@ -950,7 +962,7 @@ sys_tick_get_timecount(struct timecounter *tc)
 {
 	u_int64_t tick;
 
-	__asm volatile("rd %%sys_tick, %0" : "=r" (tick) :);
+	__asm volatile("rd %%sys_tick, %0" : "=r" (tick));
 
 	return (tick & ~0u);
 }

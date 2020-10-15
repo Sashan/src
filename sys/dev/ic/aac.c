@@ -1,4 +1,4 @@
-/*	$OpenBSD: aac.c,v 1.80 2020/06/27 17:28:58 krw Exp $	*/
+/*	$OpenBSD: aac.c,v 1.90 2020/09/22 19:32:52 krw Exp $	*/
 
 /*-
  * Copyright (c) 2000 Michael Smith
@@ -266,16 +266,17 @@ aac_attach(struct aac_softc *sc)
 	if (error)
 		return (error);
 
-	/* Fill in the prototype scsi_link. */
-	sc->aac_link.adapter_softc = sc;
-	sc->aac_link.adapter = &aac_switch;
-	sc->aac_link.openings = (sc->total_fibs - 8) /
-	    (sc->aac_container_count ? sc->aac_container_count : 1);
-	sc->aac_link.adapter_buswidth = AAC_MAX_CONTAINERS;
-	sc->aac_link.adapter_target = SDEV_NO_ADAPTER_TARGET;
-	sc->aac_link.pool = &sc->aac_iopool;
 
-	saa.saa_sc_link = &sc->aac_link;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter = &aac_switch;
+	saa.saa_adapter_buswidth = AAC_MAX_CONTAINERS;
+	saa.saa_adapter_target = SDEV_NO_ADAPTER_TARGET;
+	saa.saa_luns = 8;
+	saa.saa_openings = (sc->total_fibs - 8) /
+	    (sc->aac_container_count ? sc->aac_container_count : 1);
+	saa.saa_pool = &sc->aac_iopool;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
+	saa.saa_quirks = saa.saa_flags = 0;
 
 	config_found(&sc->aac_dev, &saa, scsiprint);
 
@@ -719,18 +720,18 @@ aac_bio_command(struct aac_softc *sc, struct aac_command **cmp)
 	 	AAC_FIBSTATE_ASYNC	 |
 		AAC_FIBSTATE_FAST_RESPONSE;
 
-	switch(xs->cmd->opcode) {
+	switch(xs->cmd.opcode) {
 	case READ_COMMAND:
-	case READ_BIG:
+	case READ_10:
 		opcode = READ_COMMAND;
 		break;
 	case WRITE_COMMAND:
-	case WRITE_BIG:
+	case WRITE_10:
 		opcode = WRITE_COMMAND;
 		break;
 	default:
 		panic("%s: invalid opcode %#x", sc->aac_dev.dv_xname,
-		    xs->cmd->opcode);
+		    xs->cmd.opcode);
 	}
 
 	/* build the read/write request */
@@ -2099,7 +2100,7 @@ aac_eval_mapping(size, cyls, heads, secs)
 void
 aac_copy_internal_data(struct scsi_xfer *xs, u_int8_t *data, size_t size)
 {
-	struct aac_softc *sc = xs->sc_link->adapter_softc;
+	struct aac_softc *sc = xs->sc_link->bus->sb_adapter_softc;
 	size_t copy_cnt;
 
 	AAC_DPRINTF(AAC_D_MISC, ("%s: aac_copy_internal_data\n",
@@ -2119,7 +2120,7 @@ void
 aac_internal_cache_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link *link = xs->sc_link;
-	struct aac_softc *sc = link->adapter_softc;
+	struct aac_softc *sc = link->bus->sb_adapter_softc;
 	struct scsi_inquiry_data inq;
 	struct scsi_sense_data sd;
 	struct scsi_read_cap_data rcd;
@@ -2128,13 +2129,13 @@ aac_internal_cache_cmd(struct scsi_xfer *xs)
 	AAC_DPRINTF(AAC_D_CMD, ("%s: aac_internal_cache_cmd: ",
 				sc->aac_dev.dv_xname));
 
-	switch (xs->cmd->opcode) {
+	switch (xs->cmd.opcode) {
 	case TEST_UNIT_READY:
 	case START_STOP:
 #if 0
 	case VERIFY:
 #endif
-		AAC_DPRINTF(AAC_D_CMD, ("opc %#x tgt %d ", xs->cmd->opcode,
+		AAC_DPRINTF(AAC_D_CMD, ("opc %#x tgt %d ", xs->cmd.opcode,
 		    target));
 		break;
 
@@ -2156,9 +2157,9 @@ aac_internal_cache_cmd(struct scsi_xfer *xs)
 		/* XXX How do we detect removable/CD-ROM devices?  */
 		inq.device = T_DIRECT;
 		inq.dev_qual2 = 0;
-		inq.version = 2;
-		inq.response_format = 2;
-		inq.additional_length = 32;
+		inq.version = SCSI_REV_2;
+		inq.response_format = SID_SCSI2_RESPONSE;
+		inq.additional_length = SID_SCSI2_ALEN;
 		inq.flags |= SID_CmdQue;
 		strlcpy(inq.vendor, "Adaptec", sizeof inq.vendor);
 		snprintf(inq.product, sizeof inq.product, "Container #%02d",
@@ -2178,7 +2179,7 @@ aac_internal_cache_cmd(struct scsi_xfer *xs)
 	default:
 		AAC_DPRINTF(AAC_D_CMD, ("\n"));
 		printf("aac_internal_cache_cmd got bad opcode: %#x\n",
-		    xs->cmd->opcode);
+		    xs->cmd.opcode);
 		xs->error = XS_DRIVER_STUFFUP;
 		return;
 	}
@@ -2190,12 +2191,12 @@ void
 aac_scsi_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link *link = xs->sc_link;
-	struct aac_softc *sc = link->adapter_softc;
+	struct aac_softc *sc = link->bus->sb_adapter_softc;
 	u_int8_t target = link->target;
 	struct aac_command *cm;
 	u_int32_t blockno, blockcnt;
 	struct scsi_rw *rw;
-	struct scsi_rw_big *rwb;
+	struct scsi_rw_10 *rw10;
 	int s;
 
 	s = splbio();
@@ -2221,7 +2222,7 @@ aac_scsi_cmd(struct scsi_xfer *xs)
 	link = xs->sc_link;
 	target = link->target;
 
-	switch (xs->cmd->opcode) {
+	switch (xs->cmd.opcode) {
 	case TEST_UNIT_READY:
 	case REQUEST_SENSE:
 	case INQUIRY:
@@ -2249,32 +2250,32 @@ aac_scsi_cmd(struct scsi_xfer *xs)
 		goto ready;
 
 	default:
-		AAC_DPRINTF(AAC_D_CMD, ("unknown opc %#x ", xs->cmd->opcode));
+		AAC_DPRINTF(AAC_D_CMD, ("unknown opc %#x ", xs->cmd.opcode));
 		/* XXX Not yet implemented */
 		xs->error = XS_DRIVER_STUFFUP;
 		scsi_done(xs);
 		goto ready;
 
 	case READ_COMMAND:
-	case READ_BIG:
+	case READ_10:
 	case WRITE_COMMAND:
-	case WRITE_BIG:
-		AAC_DPRINTF(AAC_D_CMD, ("rw opc %#x ", xs->cmd->opcode));
+	case WRITE_10:
+		AAC_DPRINTF(AAC_D_CMD, ("rw opc %#x ", xs->cmd.opcode));
 
 		/* A read or write operation. */
 		if (xs->cmdlen == 6) {
-			rw = (struct scsi_rw *)xs->cmd;
+			rw = (struct scsi_rw *)&xs->cmd;
 			blockno = _3btol(rw->addr) &
 				(SRW_TOPADDR << 16 | 0xffff);
 			blockcnt = rw->length ? rw->length : 0x100;
 		} else {
-			rwb = (struct scsi_rw_big *)xs->cmd;
-			blockno = _4btol(rwb->addr);
-			blockcnt = _2btol(rwb->length);
+			rw10 = (struct scsi_rw_10 *)&xs->cmd;
+			blockno = _4btol(rw10->addr);
+			blockcnt = _2btol(rw10->length);
 		}
 
 		AAC_DPRINTF(AAC_D_CMD, ("opcode=%d blkno=%d bcount=%d ",
-					xs->cmd->opcode, blockno, blockcnt));
+					xs->cmd.opcode, blockno, blockcnt));
 
 		if (blockno >= sc->aac_hdr[target].hd_size ||
 		    blockno + blockcnt > sc->aac_hdr[target].hd_size) {

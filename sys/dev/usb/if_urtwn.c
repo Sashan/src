@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_urtwn.c,v 1.90 2020/06/11 00:56:12 jmatthew Exp $	*/
+/*	$OpenBSD: if_urtwn.c,v 1.93 2020/07/31 10:49:33 mglocker Exp $	*/
 
 /*-
  * Copyright (c) 2010 Damien Bergamini <damien.bergamini@free.fr>
@@ -322,6 +322,7 @@ static const struct urtwn_type {
 	URTWN_DEV_8192CU(ZYXEL,		RTL8192CU),
 	/* URTWN_RTL8188E */
 	URTWN_DEV_8188EU(ABOCOM,	RTL8188EU),
+	URTWN_DEV_8188EU(DLINK,		DWA121B1),
 	URTWN_DEV_8188EU(DLINK,		DWA123D1),
 	URTWN_DEV_8188EU(DLINK,		DWA125D1),
 	URTWN_DEV_8188EU(ELECOM,	WDC150SU2M),
@@ -614,15 +615,12 @@ urtwn_close_pipes(struct urtwn_softc *sc)
 	int i;
 
 	/* Close Rx pipe. */
-	if (sc->rx_pipe != NULL) {
-		usbd_abort_pipe(sc->rx_pipe);
+	if (sc->rx_pipe != NULL)
 		usbd_close_pipe(sc->rx_pipe);
-	}
 	/* Close Tx pipes. */
 	for (i = 0; i < R92C_MAX_EPOUT; i++) {
 		if (sc->tx_pipe[i] == NULL)
 			continue;
-		usbd_abort_pipe(sc->tx_pipe[i]);
 		usbd_close_pipe(sc->tx_pipe[i]);
 	}
 }
@@ -1697,6 +1695,7 @@ urtwn_tx(void *cookie, struct mbuf *m, struct ieee80211_node *ni)
 		txdp += IEEE80211_CCMP_HDRLEN;
 
 		m_copydata(m, headerlen, m->m_pkthdr.len - headerlen, txdp);
+		m_freem(m);
 	} else {
 		xferlen = (txdp - data->buf) + m->m_pkthdr.len;
 		m_copydata(m, 0, m->m_pkthdr.len, txdp);

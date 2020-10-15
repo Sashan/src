@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_pledge.c,v 1.262 2020/04/05 07:31:45 visa Exp $	*/
+/*	$OpenBSD: kern_pledge.c,v 1.266 2020/09/16 13:50:42 mpi Exp $	*/
 
 /*
  * Copyright (c) 2015 Nicholas Marriott <nicm@openbsd.org>
@@ -529,7 +529,6 @@ pledge_fail(struct proc *p, int error, uint64_t code)
 {
 	const char *codes = "";
 	int i;
-	struct sigaction sa;
 
 	/* Print first matching pledge */
 	for (i = 0; code && pledgenames[i].bits != 0; i++)
@@ -550,11 +549,7 @@ pledge_fail(struct proc *p, int error, uint64_t code)
 	p->p_p->ps_acflag |= APLEDGE;
 
 	/* Send uncatchable SIGABRT for coredump */
-	memset(&sa, 0, sizeof sa);
-	sa.sa_handler = SIG_DFL;
-	setsigvec(p, SIGABRT, &sa);
-	atomic_clearbits_int(&p->p_sigmask, sigmask(SIGABRT));
-	psignal(p, SIGABRT);
+	sigabort(p);
 
 	p->p_p->ps_pledge = 0;		/* Disable all PLEDGE_ flags */
 	KERNEL_UNLOCK();
@@ -883,9 +878,6 @@ pledge_sysctl(struct proc *p, int miblen, int *mib, void *new)
 		if (miblen == 3 &&		/* kern.proc_cwd.* */
 		    mib[0] == CTL_KERN && mib[1] == KERN_PROC_CWD)
 			return (0);
-		if (miblen == 2 &&		/* hw.physmem */
-		    mib[0] == CTL_HW && mib[1] == HW_PHYSMEM64)
-			return (0);
 		if (miblen == 2 &&		/* kern.ccpu */
 		    mib[0] == CTL_KERN && mib[1] == KERN_CCPU)
 			return (0);
@@ -967,6 +959,7 @@ pledge_sysctl(struct proc *p, int miblen, int *mib, void *new)
 			switch (mib[1]) {
 			case HW_MACHINE: 	/* uname() */
 			case HW_PAGESIZE: 	/* getpagesize() */
+			case HW_PHYSMEM64:	/* hw.physmem */
 			case HW_NCPU:		/* hw.ncpu */
 			case HW_NCPUONLINE:	/* hw.ncpuonline */
 				return (0);
@@ -1355,6 +1348,16 @@ pledge_sockopt(struct proc *p, int set, int level, int optname)
 			return 0;
 		}
 		break;
+	}
+
+	if ((p->p_p->ps_pledge & PLEDGE_WROUTE)) {
+		switch (level) {
+		case SOL_SOCKET:
+			switch (optname) {
+			case SO_RTABLE:
+				return (0);
+			}
+		}
 	}
 
 	if ((p->p_p->ps_pledge & (PLEDGE_INET|PLEDGE_UNIX|PLEDGE_DNS|PLEDGE_YPACTIVE)) == 0)

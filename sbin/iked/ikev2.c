@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2.c,v 1.232 2020/06/15 18:37:37 tobhe Exp $	*/
+/*	$OpenBSD: ikev2.c,v 1.267 2020/10/09 08:59:15 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -20,7 +20,6 @@
 #include <sys/param.h>	/* roundup */
 #include <sys/queue.h>
 #include <sys/socket.h>
-#include <sys/wait.h>
 #include <sys/uio.h>
 
 #include <netinet/in.h>
@@ -35,7 +34,6 @@
 #include <signal.h>
 #include <errno.h>
 #include <err.h>
-#include <pwd.h>
 #include <event.h>
 
 #include <openssl/sha.h>
@@ -46,6 +44,7 @@
 #include "ikev2.h"
 #include "eap.h"
 #include "dh.h"
+#include "chap_ms.h"
 
 void	 ikev2_info(struct iked *, int);
 void	 ikev2_info_sa(struct iked *, int, const char *, struct iked_sa *);
@@ -70,6 +69,7 @@ int	 ikev2_ike_auth_compatible(struct iked_sa *, uint8_t, uint8_t);
 int	 ikev2_ike_auth_recv(struct iked *, struct iked_sa *,
 	    struct iked_message *);
 int	 ikev2_ike_auth(struct iked *, struct iked_sa *);
+int	 ikev2_auth_verify(struct iked *, struct iked_sa *);
 
 void	 ikev2_init_recv(struct iked *, struct iked_message *,
 	    struct ike_header *);
@@ -80,20 +80,27 @@ int	 ikev2_init_ike_auth(struct iked *, struct iked_sa *);
 int	 ikev2_init_auth(struct iked *, struct iked_message *);
 int	 ikev2_init_done(struct iked *, struct iked_sa *);
 
+int	 ikev2_record_dstid(struct iked *, struct iked_sa *);
+
 void	 ikev2_enable_timer(struct iked *, struct iked_sa *);
 void	 ikev2_disable_timer(struct iked *, struct iked_sa *);
 
 void	 ikev2_resp_recv(struct iked *, struct iked_message *,
 	    struct ike_header *);
 int	 ikev2_resp_ike_sa_init(struct iked *, struct iked_message *);
+int	 ikev2_resp_ike_eap(struct iked *, struct iked_sa *,
+	    struct iked_message *);
+int	 ikev2_resp_ike_eap_mschap(struct iked *, struct iked_sa *,
+	    struct iked_message *);
 int	 ikev2_resp_ike_auth(struct iked *, struct iked_sa *);
-int	 ikev2_resp_ike_eap(struct iked *, struct iked_sa *, struct ibuf *);
 int	 ikev2_send_auth_failed(struct iked *, struct iked_sa *);
 int	 ikev2_send_error(struct iked *, struct iked_sa *,
 	    struct iked_message *, uint8_t);
 int	 ikev2_send_init_error(struct iked *, struct iked_message *);
 
 int	 ikev2_handle_certreq(struct iked*, struct iked_message *);
+ssize_t	 ikev2_handle_delete(struct iked *, struct iked_message *,
+	    struct ibuf *, struct ikev2_payload **, uint8_t *);
 
 int	 ikev2_send_create_child_sa(struct iked *, struct iked_sa *,
 	    struct iked_spi *, uint8_t);
@@ -105,6 +112,7 @@ int	 ikev2_resp_create_child_sa(struct iked *, struct iked_message *);
 void	 ikev2_ike_sa_rekey(struct iked *, void *);
 void	 ikev2_ike_sa_rekey_timeout(struct iked *, void *);
 void	 ikev2_ike_sa_rekey_schedule(struct iked *, struct iked_sa *);
+void	 ikev2_ike_sa_rekey_schedule_fast(struct iked *, struct iked_sa *);
 void	 ikev2_ike_sa_alive(struct iked *, void *);
 void	 ikev2_ike_sa_keepalive(struct iked *, void *);
 
@@ -160,7 +168,7 @@ ssize_t	 ikev2_add_notify(struct ibuf *, struct ikev2_payload **, ssize_t,
 	    uint16_t);
 ssize_t	 ikev2_add_mobike(struct ibuf *, struct ikev2_payload **, ssize_t);
 ssize_t	 ikev2_add_fragmentation(struct ibuf *, struct ikev2_payload **,
-	    struct iked_message *, ssize_t);
+	    ssize_t);
 ssize_t	 ikev2_add_transport_mode(struct iked *, struct ibuf *,
 	    struct ikev2_payload **, ssize_t, struct iked_sa *);
 int	 ikev2_update_sa_addresses(struct iked *, struct iked_sa *);
@@ -168,7 +176,7 @@ int	 ikev2_resp_informational(struct iked *, struct iked_sa *,
 	    struct iked_message *);
 
 void	ikev2_ctl_reset_id(struct iked *, struct imsg *, unsigned int);
-void	ikev2_ctl_show_sa(struct iked *, struct imsg *);
+void	ikev2_ctl_show_sa(struct iked *);
 
 static struct privsep_proc procs[] = {
 	{ "parent",	PROC_PARENT,	ikev2_dispatch_parent },
@@ -234,12 +242,6 @@ ikev2_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 			    IKED_INITIATOR_INITIAL);
 		}
 		return (0);
-	case IMSG_CTL_MOBIKE:
-		return (config_getmobike(env, imsg));
-	case IMSG_CTL_FRAGMENTATION:
-		return (config_getfragmentation(env, imsg));
-	case IMSG_CTL_NATTPORT:
-		return (config_getnattport(env, imsg));
 	case IMSG_UDP_SOCKET:
 		return (config_getsocket(env, imsg, ikev2_msg_cb));
 	case IMSG_PFKEY_SOCKET:
@@ -251,7 +253,11 @@ ikev2_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 	case IMSG_CFG_USER:
 		return (config_getuser(env, imsg));
 	case IMSG_COMPILE:
-		return (config_getcompile(env, imsg));
+		return (config_getcompile(env));
+	case IMSG_CTL_STATIC:
+		return (config_getstatic(env, imsg));
+	case IMSG_CERT_PARTIAL_CHAIN:
+		return(config_getcertpartialchain(env, imsg));
 	default:
 		break;
 	}
@@ -297,17 +303,36 @@ ikev2_dispatch_cert(int fd, struct privsep_proc *p, struct imsg *imsg)
 		    sa->sa_state < IKEV2_STATE_EAP)
 			break;
 
-		if (imsg->hdr.type == IMSG_CERTVALID) {
-			log_debug("%s: peer certificate is valid", __func__);
-			sa_stateflags(sa, IKED_REQ_CERTVALID);
-		} else {
-			log_warnx("%s: peer certificate is invalid",
-			    SPI_SA(sa, __func__));
-			ikev2_send_auth_failed(env, sa);
+		if (sh.sh_initiator)
+			id = &sa->sa_rcert;
+		else
+			id = &sa->sa_icert;
+
+		id->id_type = type;
+		id->id_offset = 0;
+		ibuf_release(id->id_buf);
+		id->id_buf = NULL;
+
+		if (len > 0 && (id->id_buf = ibuf_new(ptr, len)) == NULL) {
+			log_debug("%s: failed to get cert payload",
+			    __func__);
 			break;
 		}
-		if (ikev2_ike_auth(env, sa) != 0)
-			log_debug("%s: failed to send ike auth", __func__);
+
+		if (imsg->hdr.type == IMSG_CERTVALID) {
+			if (sa->sa_peerauth.id_type && ikev2_auth_verify(env, sa))
+				break;
+
+			log_debug("%s: peer certificate is valid", __func__);
+			sa_stateflags(sa, IKED_REQ_CERTVALID);
+
+			if (ikev2_ike_auth(env, sa) != 0)
+				log_debug("%s: failed to send ike auth", __func__);
+		} else {
+			log_warnx("%s: peer certificate is invalid",
+				SPI_SA(sa, __func__));
+			ikev2_send_auth_failed(env, sa);
+		}
 		break;
 	case IMSG_CERT:
 		if ((sa = ikev2_getimsgdata(env, imsg,
@@ -404,7 +429,7 @@ ikev2_dispatch_control(int fd, struct privsep_proc *p, struct imsg *imsg)
 		ikev2_ctl_reset_id(env, imsg, imsg->hdr.type);
 		break;
 	case IMSG_CTL_SHOW_SA:
-		ikev2_ctl_show_sa(env, imsg);
+		ikev2_ctl_show_sa(env);
 		break;
 	default:
 		return (-1);
@@ -461,7 +486,7 @@ ikev2_ctl_reset_id(struct iked *env, struct imsg *imsg, unsigned int type)
 }
 
 void
-ikev2_ctl_show_sa(struct iked *env, struct imsg *imsg)
+ikev2_ctl_show_sa(struct iked *env)
 {
 	ikev2_info(env, 0);
 }
@@ -708,14 +733,95 @@ ikev2_ike_auth_compatible(struct iked_sa *sa, uint8_t policy, uint8_t wire)
 }
 
 int
+ikev2_auth_verify(struct iked *env, struct iked_sa *sa)
+{
+	struct iked_auth	 ikeauth;
+	struct ibuf		*authmsg;
+	int			 ret;
+
+	memcpy(&ikeauth, &sa->sa_policy->pol_auth,
+	    sizeof(ikeauth));
+
+	if (sa->sa_policy->pol_auth.auth_eap &&
+	    sa->sa_eapmsk != NULL) {
+		/*
+		 * The initiator EAP auth is a PSK derived
+		 * from the EAP-specific MSK
+		 */
+		ikeauth.auth_method = IKEV2_AUTH_SHARED_KEY_MIC;
+
+		/* Copy session key as PSK */
+		memcpy(ikeauth.auth_data,
+		    ibuf_data(sa->sa_eapmsk),
+		    ibuf_size(sa->sa_eapmsk));
+		ikeauth.auth_length = ibuf_size(sa->sa_eapmsk);
+	}
+
+	if (ikev2_ike_auth_compatible(sa,
+	    ikeauth.auth_method, sa->sa_peerauth.id_type) < 0) {
+		log_warnx("%s: unexpected auth method %s, was "
+		    "expecting %s", SPI_SA(sa, __func__),
+		    print_map(sa->sa_peerauth.id_type,
+		    ikev2_auth_map),
+		    print_map(ikeauth.auth_method,
+		    ikev2_auth_map));
+		return (-1);
+	}
+	ikeauth.auth_method = sa->sa_peerauth.id_type;
+
+	if ((authmsg = ikev2_msg_auth(env, sa,
+	    sa->sa_hdr.sh_initiator)) == NULL) {
+		log_debug("%s: failed to get auth data",
+		    __func__);
+		return (-1);
+	}
+
+	ret = ikev2_msg_authverify(env, sa, &ikeauth,
+	    ibuf_data(sa->sa_peerauth.id_buf),
+	    ibuf_length(sa->sa_peerauth.id_buf),
+	    authmsg);
+	ibuf_release(authmsg);
+	if (ret != 0) {
+		log_info("%s: ikev2_msg_authverify failed",
+		    SPI_SA(sa, __func__));
+		ikev2_send_auth_failed(env, sa);
+		return (-1);
+	}
+	if (sa->sa_eapmsk != NULL) {
+		if ((authmsg = ikev2_msg_auth(env, sa,
+		    !sa->sa_hdr.sh_initiator)) == NULL) {
+			log_debug("%s: failed to get auth data",
+			    __func__);
+			return (-1);
+		}
+
+		/* XXX 2nd AUTH for EAP messages */
+		ret = ikev2_msg_authsign(env, sa, &ikeauth, authmsg);
+		ibuf_release(authmsg);
+		if (ret != 0) {
+			ikev2_send_auth_failed(env, sa);
+			return (-1);
+		}
+
+		/* ikev2_msg_authverify verified AUTH */
+		sa_stateflags(sa, IKED_REQ_AUTHVALID);
+		sa_stateflags(sa, IKED_REQ_EAPVALID);
+		sa_state(env, sa, IKEV2_STATE_EAP_SUCCESS);
+	}
+
+	return (0);
+}
+
+int
 ikev2_ike_auth_recv(struct iked *env, struct iked_sa *sa,
     struct iked_message *msg)
 {
-	struct iked_id		*id, *certid;
+	struct iked_id		*id;
 	struct ibuf		*authmsg;
-	struct iked_auth	 ikeauth;
-	struct iked_policy	*policy = sa->sa_policy;
-	int			 ret = -1;
+	struct iked_policy	*old;
+	uint8_t			*cert = NULL;
+	size_t			 certlen = 0;
+	int			 certtype = IKEV2_CERT_NONE;
 
 	/* The AUTH payload indicates if the responder wants EAP or not */
 	if (msg->msg_auth.id_type != IKEV2_AUTH_NONE &&
@@ -727,16 +833,14 @@ ikev2_ike_auth_recv(struct iked *env, struct iked_sa *sa,
 	    sa->sa_policy->pol_auth.auth_eap)
 		sa_state(env, sa, IKEV2_STATE_EAP);
 
-	if (sa->sa_hdr.sh_initiator) {
+	if (sa->sa_hdr.sh_initiator)
 		id = &sa->sa_rid;
-		certid = &sa->sa_rcert;
-	} else {
+	else
 		id = &sa->sa_iid;
-		certid = &sa->sa_icert;
-	}
+
 	/* try to relookup the policy based on the peerid */
 	if (msg->msg_id.id_type && !sa->sa_hdr.sh_initiator) {
-		struct iked_policy	*old = sa->sa_policy;
+		old = sa->sa_policy;
 
 		sa->sa_policy = NULL;
 		if (policy_lookup(env, msg, &sa->sa_proposals) != 0 ||
@@ -744,24 +848,44 @@ ikev2_ike_auth_recv(struct iked *env, struct iked_sa *sa,
 			log_info("%s: no compatible policy found",
 			    SPI_SA(sa, __func__));
 			ikev2_send_auth_failed(env, sa);
+			TAILQ_REMOVE(&old->pol_sapeers, sa, sa_peer_entry);
+			if (old->pol_flags & IKED_POLICY_REFCNT)
+				policy_unref(env, old);
 			return (-1);
 		}
 		if (msg->msg_policy != old) {
-			/* move sa to new policy */
-			policy = sa->sa_policy = msg->msg_policy;
+			/* Clean up old policy */
 			TAILQ_REMOVE(&old->pol_sapeers, sa, sa_peer_entry);
-			TAILQ_INSERT_TAIL(&policy->pol_sapeers,
-			    sa, sa_peer_entry);
 			if (old->pol_flags & IKED_POLICY_REFCNT)
 				policy_unref(env, old);
-			if (policy->pol_flags & IKED_POLICY_REFCNT)
-				policy_ref(env, policy);
+
+			/* Update SA with new policy*/
+			if (sa_new(env, sa->sa_hdr.sh_ispi,
+			    sa->sa_hdr.sh_rspi, 0, msg->msg_policy) != sa) {
+				log_warnx("%s: failed to update SA",
+				    SPI_SA(sa, __func__));
+				ikev2_send_auth_failed(env, sa);
+				return (-1);
+			}
 		} else {
 			/* restore */
 			msg->msg_policy = sa->sa_policy = old;
 		}
 		if (ikev2_handle_certreq(env, msg) != 0)
 			return (-1);
+	}
+
+	/* AUTH payload is required for non-EAP */
+	if (!msg->msg_auth.id_type &&
+	    !sa->sa_policy->pol_auth.auth_eap) {
+		/* get dstid */
+		if (msg->msg_id.id_type) {
+			memcpy(id, &msg->msg_id, sizeof(*id));
+			bzero(&msg->msg_id, sizeof(msg->msg_id));
+		}
+		log_debug("%s: missing auth payload", SPI_SA(sa, __func__));
+		ikev2_send_auth_failed(env, sa);
+		return (-1);
 	}
 
 	if (msg->msg_id.id_type) {
@@ -781,86 +905,6 @@ ikev2_ike_auth_recv(struct iked *env, struct iked_sa *sa,
 		}
 	}
 
-	if (msg->msg_cert.id_type) {
-		memcpy(certid, &msg->msg_cert, sizeof(*certid));
-		bzero(&msg->msg_cert, sizeof(msg->msg_cert));
-
-		ca_setcert(env, &sa->sa_hdr,
-		    id, certid->id_type,
-		    ibuf_data(certid->id_buf),
-		    ibuf_length(certid->id_buf), PROC_CERT);
-	}
-
-	if (msg->msg_auth.id_type) {
-		memcpy(&ikeauth, &policy->pol_auth, sizeof(ikeauth));
-
-		if (policy->pol_auth.auth_eap && sa->sa_eapmsk != NULL) {
-			/*
-			 * The initiator EAP auth is a PSK derived
-			 * from the EAP-specific MSK
-			 */
-			ikeauth.auth_method = IKEV2_AUTH_SHARED_KEY_MIC;
-
-			/* Copy session key as PSK */
-			memcpy(ikeauth.auth_data, ibuf_data(sa->sa_eapmsk),
-			    ibuf_size(sa->sa_eapmsk));
-			ikeauth.auth_length = ibuf_size(sa->sa_eapmsk);
-		}
-
-		if (ikev2_ike_auth_compatible(sa,
-		    ikeauth.auth_method, msg->msg_auth.id_type) < 0) {
-			log_warnx("%s: unexpected auth method %s, was "
-			    "expecting %s", SPI_SA(sa, __func__),
-			    print_map(msg->msg_auth.id_type, ikev2_auth_map),
-			    print_map(ikeauth.auth_method, ikev2_auth_map));
-			return (-1);
-		}
-		ikeauth.auth_method = msg->msg_auth.id_type;
-
-		if ((authmsg = ikev2_msg_auth(env, sa,
-		    sa->sa_hdr.sh_initiator)) == NULL) {
-			log_debug("%s: failed to get auth data", __func__);
-			return (-1);
-		}
-
-		ret = ikev2_msg_authverify(env, sa, &ikeauth,
-		    ibuf_data(msg->msg_auth.id_buf),
-		    ibuf_length(msg->msg_auth.id_buf),
-		    authmsg);
-		ibuf_release(authmsg);
-
-		if (ret != 0) {
-			log_info("%s: ikev2_msg_authverify failed",
-			    SPI_SA(sa, __func__));
-			ikev2_send_auth_failed(env, sa);
-			return (-1);
-		}
-
-		if (sa->sa_eapmsk != NULL) {
-			if ((authmsg = ikev2_msg_auth(env, sa,
-			    !sa->sa_hdr.sh_initiator)) == NULL) {
-				log_debug("%s: failed to get auth data",
-				    __func__);
-				return (-1);
-			}
-
-			/* XXX 2nd AUTH for EAP messages */
-			ret = ikev2_msg_authsign(env, sa, &ikeauth, authmsg);
-			ibuf_release(authmsg);
-
-			if (ret != 0) {
-				/* XXX */
-				return (-1);
-			}
-
-			/* ikev2_msg_authverify verified AUTH */
-			sa_stateflags(sa, IKED_REQ_AUTHVALID);
-			sa_stateflags(sa, IKED_REQ_EAPVALID);
-
-			sa_state(env, sa, IKEV2_STATE_EAP_SUCCESS);
-		}
-	}
-
 	if (!TAILQ_EMPTY(&msg->msg_proposals)) {
 		if (proposals_negotiate(&sa->sa_proposals,
 		    &sa->sa_policy->pol_proposals, &msg->msg_proposals,
@@ -872,15 +916,34 @@ ikev2_ike_auth_recv(struct iked *env, struct iked_sa *sa,
 			sa_stateflags(sa, IKED_REQ_SA);
 	}
 
+	if (msg->msg_auth.id_type) {
+		memcpy(&sa->sa_peerauth, &msg->msg_auth, sizeof(sa->sa_peerauth));
+		bzero(&msg->msg_auth, sizeof(msg->msg_auth));
+	}
+
+	/* For EAP and PSK AUTH can be verified without the CA process*/
+	if ((sa->sa_policy->pol_auth.auth_eap &&
+	    sa->sa_eapmsk != NULL) ||
+	    sa->sa_policy->pol_auth.auth_method == IKEV2_AUTH_SHARED_KEY_MIC)
+		ikev2_auth_verify(env, sa);
+	/* For CERT and Pubkey AUTH the CA process must find a matching key */
+	else if (sa->sa_peerauth.id_type) {
+		if (msg->msg_cert.id_type) {
+			certtype = msg->msg_cert.id_type;
+			cert = ibuf_data(msg->msg_cert.id_buf);
+			certlen = ibuf_length(msg->msg_cert.id_buf);
+			bzero(&msg->msg_cert, sizeof(msg->msg_cert));
+		}
+		if (ca_setcert(env, &sa->sa_hdr, id, certtype, cert, certlen, PROC_CERT) == -1)
+			return (-1);
+	}
+
 	return ikev2_ike_auth(env, sa);
 }
 
 int
 ikev2_ike_auth(struct iked *env, struct iked_sa *sa)
 {
-	struct iked_policy	*pol = sa->sa_policy;
-	uint8_t			 certreqtype;
-
 	/* Attempt state transition */
 	if (sa->sa_state == IKEV2_STATE_EAP_SUCCESS)
 		sa_state(env, sa, IKEV2_STATE_EAP_VALID);
@@ -890,31 +953,12 @@ ikev2_ike_auth(struct iked *env, struct iked_sa *sa)
 	if (sa->sa_hdr.sh_initiator) {
 		if (sa_stateok(sa, IKEV2_STATE_AUTH_SUCCESS))
 			return (ikev2_init_done(env, sa));
+		/* AUTH exchange is awaiting response from CA process, ignore */
+		else if (sa_stateok(sa, IKEV2_STATE_AUTH_REQUEST))
+			return (0);
 		else
 			return (ikev2_init_ike_auth(env, sa));
 	}
-
-	/*
-	 * If we have to send a local certificate but did not receive an
-	 * optional CERTREQ, use our own certreq to find a local certificate.
-	 * We could alternatively extract the CA from the peer certificate
-	 * to find a matching local one.
-	 */
-	if (sa->sa_statevalid & IKED_REQ_CERT) {
-		if ((sa->sa_stateflags & IKED_REQ_CERTREQ) == 0) {
-			log_debug("%s: no CERTREQ, using default", __func__);
-			if (pol->pol_certreqtype)
-				certreqtype = pol->pol_certreqtype;
-			else
-				certreqtype = env->sc_certreqtype;
-			return (ca_setreq(env, sa,
-			    &pol->pol_localid, certreqtype, 0,
-			    ibuf_data(env->sc_certreq),
-			    ibuf_size(env->sc_certreq), PROC_CERT));
-		} else if ((sa->sa_stateflags & IKED_REQ_CERT) == 0)
-			return (0);	/* ignored, wait for cert */
-	}
-
 	return (ikev2_resp_ike_auth(env, sa));
 }
 
@@ -1013,6 +1057,19 @@ ikev2_init_recv(struct iked *env, struct iked_message *msg,
 		(void)ikev2_init_auth(env, msg);
 		break;
 	case IKEV2_EXCHANGE_IKE_AUTH:
+		if (msg->msg_flags & IKED_MSG_FLAGS_AUTHENTICATION_FAILED) {
+			log_debug("%s: AUTHENTICATION_FAILED, closing SA",
+			    __func__);
+			ikev2_log_cert_info(SPI_SA(sa, __func__),
+			    sa->sa_hdr.sh_initiator ? &sa->sa_rcert
+			    : &sa->sa_icert);
+			ikev2_ike_sa_setreason(sa,
+			    "authentication failed notification from peer");
+			sa_state(env, sa, IKEV2_STATE_CLOSED);
+			msg->msg_sa = NULL;
+			return;
+		}
+
 		(void)ikev2_ike_auth_recv(env, sa, msg);
 		break;
 	case IKEV2_EXCHANGE_CREATE_CHILD_SA:
@@ -1195,12 +1252,12 @@ ikev2_init_ike_sa_peer(struct iked *env, struct iked_policy *pol,
 
 	/* Fragmentation Notify */
 	if (env->sc_frag) {
-		if ((len = ikev2_add_fragmentation(buf, &pld, &req, len))
+		if ((len = ikev2_add_fragmentation(buf, &pld, len))
 		    == -1)
 			goto done;
 	}
 
-	if (env->natt_mode != NATT_DISABLE) {
+	if (env->sc_nattmode != NATT_DISABLE) {
 		if (ntohs(port) == env->sc_nattport) {
 			/* Enforce NAT-T on the initiator side */
 			log_debug("%s: enforcing NAT-T", __func__);
@@ -1400,7 +1457,8 @@ ikev2_enable_timer(struct iked *env, struct iked_sa *sa)
 {
 	sa->sa_last_recvd = gettime();
 	timer_set(env, &sa->sa_timer, ikev2_ike_sa_alive, sa);
-	timer_add(env, &sa->sa_timer, IKED_IKE_SA_ALIVE_TIMEOUT);
+	if (env->sc_alive_timeout > 0)
+		timer_add(env, &sa->sa_timer, env->sc_alive_timeout);
 	timer_set(env, &sa->sa_keepalive, ikev2_ike_sa_keepalive, sa);
 	if (sa->sa_usekeepalive)
 		timer_add(env, &sa->sa_keepalive,
@@ -1408,6 +1466,20 @@ ikev2_enable_timer(struct iked *env, struct iked_sa *sa)
 	timer_set(env, &sa->sa_rekey, ikev2_ike_sa_rekey, sa);
 	if (sa->sa_policy->pol_rekey)
 		ikev2_ike_sa_rekey_schedule(env, sa);
+}
+
+void
+ikev2_reset_alive_timer(struct iked *env)
+{
+	struct iked_sa			*sa;
+
+	RB_FOREACH(sa, iked_sas, &env->sc_sas) {
+		if (sa->sa_state != IKEV2_STATE_ESTABLISHED)
+			continue;
+		timer_del(env, &sa->sa_timer);
+		if (env->sc_alive_timeout > 0)
+			timer_add(env, &sa->sa_timer, env->sc_alive_timeout);
+	}
 }
 
 void
@@ -1436,6 +1508,7 @@ ikev2_init_done(struct iked *env, struct iked_sa *sa)
 		timer_del(env, &sa->sa_timer);
 		ikev2_enable_timer(env, sa);
 		ikev2_log_established(sa);
+		ikev2_record_dstid(env, sa);
 	}
 
 	if (ret)
@@ -1478,6 +1551,7 @@ ikev2_policy2id(struct iked_static_id *polid, struct iked_id *id, int srcid)
 	hdr.id_type = id->id_type = polid->id_type;
 	id->id_offset = sizeof(hdr);
 
+	ibuf_free(id->id_buf);
 	if ((id->id_buf = ibuf_new(&hdr, sizeof(hdr))) == NULL)
 		return (-1);
 
@@ -1610,7 +1684,6 @@ ikev2_add_ts_payload(struct ibuf *buf, unsigned int type, struct iked_sa *sa)
 
 	if ((tsp = ibuf_advance(buf, sizeof(*tsp))) == NULL)
 		return (-1);
-	tsp->tsp_count = pol->pol_nflows;
 	len = sizeof(*tsp);
 
 	if (type == IKEV2_PAYLOAD_TSi) {
@@ -1864,7 +1937,7 @@ ikev2_add_mobike(struct ibuf *e, struct ikev2_payload **pld, ssize_t len)
 
 ssize_t
 ikev2_add_fragmentation(struct ibuf *buf, struct ikev2_payload **pld,
-    struct iked_message *msg, ssize_t len)
+    ssize_t len)
 {
 	return ikev2_add_notify(buf, pld, len, IKEV2_N_FRAGMENTATION_SUPPORTED);
 }
@@ -2020,7 +2093,7 @@ ikev2_nat_detection(struct iked *env, struct iked_message *msg,
 		goto done;
 	}
 
-	if (env->natt_mode == NATT_FORCE) {
+	if (env->sc_nattmode == NATT_FORCE) {
 		/* Enforce NAT-T/UDP-encapsulation by distorting the digest */
 		rnd = arc4random();
 		EVP_DigestUpdate(&ctx, &rnd, sizeof(rnd));
@@ -2391,6 +2464,11 @@ ikev2_resp_informational(struct iked *env, struct iked_sa *sa,
 
 	if ((buf = ibuf_static()) == NULL)
 		goto done;
+
+	if ((len = ikev2_handle_delete(env, msg, buf, &pld,
+	    &firstpayload)) == -1)
+		goto done;
+
 	/*
 	 * Include NAT_DETECTION notification on UPDATE_SA_ADDRESSES or if
 	 * the peer did include them, too (RFC 455, 3.8).
@@ -2448,6 +2526,15 @@ ikev2_resp_informational(struct iked *env, struct iked_sa *sa,
 	    IKEV2_EXCHANGE_INFORMATIONAL, firstpayload, 1);
 	if (ret != -1)
 		msg->msg_responded = 1;
+	if (msg->msg_flags & IKED_MSG_FLAGS_AUTHENTICATION_FAILED) {
+		log_debug("%s: AUTHENTICATION_FAILED, closing SA",
+		    __func__);
+		ikev2_log_cert_info(SPI_SA(sa, __func__),
+		    sa->sa_hdr.sh_initiator ? &sa->sa_rcert : &sa->sa_icert);
+		ikev2_ike_sa_setreason(sa,
+		    "authentication failed notification from peer");
+		sa_state(env, sa, IKEV2_STATE_CLOSED);
+	}
  done:
 	ibuf_release(buf);
 	return (ret);
@@ -2486,9 +2573,6 @@ ikev2_resp_recv(struct iked *env, struct iked_message *msg,
 		}
 		break;
 	case IKEV2_EXCHANGE_CREATE_CHILD_SA:
-		if (ikev2_msg_valid_ike_sa(env, hdr, msg) == -1)
-			return;
-		break;
 	case IKEV2_EXCHANGE_INFORMATIONAL:
 		if (ikev2_msg_valid_ike_sa(env, hdr, msg) == -1)
 			return;
@@ -2551,6 +2635,18 @@ ikev2_resp_recv(struct iked *env, struct iked_message *msg,
 			return;
 		}
 
+		/* Handle EAP authentication */
+		if (msg->msg_eap.eam_found) {
+			if (ikev2_resp_ike_eap(env, sa, msg)) {
+				log_info("%s: failed eap response",
+				    SPI_SA(sa, __func__));
+				ikev2_ike_sa_setreason(sa, "EAP failed");
+				sa_state(env, sa, IKEV2_STATE_CLOSED);
+				return;
+			}
+			return;
+		}
+
 		if (ikev2_ike_auth_recv(env, sa, msg) != 0) {
 			log_debug("%s: failed to send auth response", __func__);
 			ikev2_send_error(env, sa, msg, hdr->ike_exchange);
@@ -2574,6 +2670,157 @@ ikev2_resp_recv(struct iked *env, struct iked_message *msg,
 	default:
 		break;
 	}
+}
+
+ssize_t
+ikev2_handle_delete(struct iked *env, struct iked_message *msg,
+    struct ibuf *resp, struct ikev2_payload **pld, uint8_t *firstpayload)
+{
+	struct iked_childsa	**peersas = NULL;
+	struct iked_sa		*sa = msg->msg_sa;
+	struct ikev2_delete	*localdel;
+	struct ibuf		*spibuf = NULL;
+	uint64_t		*localspi = NULL;
+	uint64_t		 spi64, spi = 0;
+	uint32_t		 spi32;
+	uint8_t			*buf;
+	size_t			 found = 0, failed = 0;
+	int			 ret = -1;
+	size_t			 i, sz, cnt, len;
+
+	if (!msg->msg_del_protoid)
+		return (0);
+
+	sz = msg->msg_del_spisize;
+
+	switch (sz) {
+	case 4:
+	case 8:
+		break;
+	case 0:
+		if (msg->msg_del_protoid != IKEV2_SAPROTO_IKE) {
+			log_debug("%s: invalid SPI size", __func__);
+			goto done;
+		}
+		ikev2_ikesa_recv_delete(env, sa);
+		return (0);
+	default:
+		log_info("%s: error: invalid SPI size", __func__);
+		goto done;
+	}
+
+	cnt = msg->msg_del_cnt;
+	len = ibuf_length(msg->msg_del_buf);
+
+	if ((len / sz) != cnt) {
+		log_debug("%s: invalid payload length %zu/%zu != %zu",
+		    __func__, len, sz, cnt);
+		return (-1);
+	}
+
+	if (((peersas = calloc(cnt, sizeof(struct iked_childsa *))) == NULL ||
+	     (localspi = calloc(cnt, sizeof(uint64_t))) == NULL)) {
+		log_warn("%s", __func__);
+		goto done;
+	}
+
+	buf = ibuf_data(msg->msg_del_buf);
+	for (i = 0; i < cnt; i++) {
+		switch (sz) {
+		case 4:
+			memcpy(&spi32, buf + (i * sz), sizeof(spi32));
+			spi = betoh32(spi32);
+			break;
+		case 8:
+			memcpy(&spi64, buf + (i * sz), sizeof(spi64));
+			spi = betoh64(spi64);
+			break;
+		}
+
+		log_debug("%s: spi %s", __func__, print_spi(spi, sz));
+
+		if (peersas == NULL || sa == NULL)
+			continue;
+
+		if ((peersas[i] = childsa_lookup(sa, spi,
+		    msg->msg_del_protoid)) == NULL) {
+			log_warnx("%s: CHILD SA doesn't exist for spi %s",
+			    SPI_SA(sa, __func__),
+			    print_spi(spi, sz));
+			continue;
+		}
+
+		if (ikev2_childsa_delete(env, sa, msg->msg_del_protoid, spi,
+		    &localspi[i], 0) == -1)
+			failed++;
+		else {
+			found++;
+
+			/* append SPI to log buffer */
+			if (ibuf_strlen(spibuf))
+				ibuf_strcat(&spibuf, ", ");
+			ibuf_strcat(&spibuf, print_spi(spi, sz));
+		}
+
+		/*
+		 * Flows are left in the require mode so that it would be
+		 * possible to quickly negotiate a new Child SA
+		 */
+	}
+
+	if (resp == NULL) {
+		ret = 0;
+		goto done;
+	}
+
+	/* Response to the INFORMATIONAL with Delete payload */
+	if (found) {
+		if ((*pld = ikev2_add_payload(resp)) == NULL)
+			goto done;
+		*firstpayload = IKEV2_PAYLOAD_DELETE;
+
+		if ((localdel = ibuf_advance(resp, sizeof(*localdel))) == NULL)
+			goto done;
+
+		localdel->del_protoid = msg->msg_del_protoid;
+		localdel->del_spisize = sz;
+		localdel->del_nspi = htobe16(found);
+		ret = sizeof(*localdel);
+
+		for (i = 0; i < cnt; i++) {
+			if (localspi[i] == 0)	/* happens if found < cnt */
+				continue;
+			switch (sz) {
+			case 4:
+				spi32 = htobe32(localspi[i]);
+				if (ibuf_add(resp, &spi32, sizeof(spi32)) != 0)
+					goto done;
+				ret += sizeof(spi32);
+				break;
+			case 8:
+				spi64 = htobe64(localspi[i]);
+				if (ibuf_add(resp, &spi64, sizeof(spi64)) != 0)
+					goto done;
+				ret += sizeof(spi64);
+				break;
+			}
+		}
+		log_info("%sdeleted %zu SPI%s: %.*s",
+		    SPI_SA(sa, NULL), found,
+		    found == 1 ? "" : "s",
+		    spibuf ? ibuf_strlen(spibuf) : 0,
+		    spibuf ? (char *)ibuf_data(spibuf) : "");
+	} else {
+		/* XXX should we send an INVALID_SPI notification? */
+		ret = 0;
+	}
+
+ done:
+	free(localspi);
+	free(peersas);
+	ibuf_release(spibuf);
+
+	return (ret);
 }
 
 int
@@ -2606,17 +2853,6 @@ ikev2_handle_notifies(struct iked *env, struct iked_message *msg)
 		/* This makes sense for Child SAs only atm */
 		ikev2_disable_rekeying(env, sa);
 		sa->sa_stateflags &= ~IKED_REQ_CHILDSA;
-	}
-
-	if (msg->msg_flags & IKED_MSG_FLAGS_AUTHENTICATION_FAILED) {
-		log_debug("%s: AUTHENTICATION_FAILED, closing SA", __func__);
-		ikev2_log_cert_info(SPI_SA(sa, __func__),
-		    sa->sa_hdr.sh_initiator ? &sa->sa_rcert : &sa->sa_icert);
-		ikev2_ike_sa_setreason(sa,
-		    "authentication failed notification from peer");
-		sa_state(env, sa, IKEV2_STATE_CLOSED);
-		msg->msg_sa = NULL;
-		return (-1);
 	}
 
 	if (msg->msg_flags & IKED_MSG_FLAGS_INVALID_KE) {
@@ -2678,6 +2914,9 @@ ikev2_handle_notifies(struct iked *env, struct iked_message *msg)
 	if (msg->msg_flags & IKED_MSG_FLAGS_USE_TRANSPORT)
 		sa->sa_use_transport_mode = 1;
 
+	if ((msg->msg_flags & IKED_MSG_FLAGS_TEMPORARY_FAILURE)
+	    && sa->sa_nexti != NULL)
+		sa->sa_tmpfail = 1;
 	return (0);
 }
 
@@ -2756,12 +2995,12 @@ ikev2_resp_ike_sa_init(struct iked *env, struct iked_message *msg)
 
 	/* Fragmentation Notify*/
 	if (sa->sa_frag) {
-		if ((len = ikev2_add_fragmentation(buf, &pld, &resp, len))
+		if ((len = ikev2_add_fragmentation(buf, &pld, len))
 		    == -1)
 			goto done;
 	}
 
-	if ((env->natt_mode != NATT_DISABLE) &&
+	if ((env->sc_nattmode != NATT_DISABLE) &&
 	    msg->msg_local.ss_family != AF_UNSPEC) {
 		if ((len = ikev2_add_nat_detection(env, buf, &pld, &resp, len))
 		    == -1)
@@ -2927,18 +3166,51 @@ ikev2_add_error(struct iked *env, struct ibuf *buf, struct iked_message *msg)
 }
 
 int
+ikev2_record_dstid(struct iked *env, struct iked_sa *sa)
+{
+	struct iked_sa *osa;
+
+	osa = sa_dstid_lookup(env, sa);
+	if (osa == sa)
+		return (0);
+	if (osa != NULL) {
+		sa_dstid_remove(env, osa);
+		if (env->sc_enforcesingleikesa &&
+		    osa->sa_state < IKEV2_STATE_CLOSING) {
+			log_info("%sreplaced by IKESA %s (identical DSTID)",
+			    SPI_SA(osa, NULL),
+			    print_spi(sa->sa_hdr.sh_ispi, 8));
+			if (osa->sa_state == IKEV2_STATE_ESTABLISHED)
+				ikev2_disable_timer(env, osa);
+			ikev2_ike_sa_setreason(osa, "sa replaced");
+			ikev2_ikesa_delete(env, osa, 1);
+			timer_add(env, &osa->sa_timer,
+			    3 * IKED_RETRANSMIT_TIMEOUT);
+		}
+	}
+	osa = sa_dstid_insert(env, sa);
+	if (osa != NULL) {
+		/* XXX how can this fail */
+		log_info("%s: could not replace old IKESA %s",
+		    SPI_SA(sa, __func__),
+		    print_spi(osa->sa_hdr.sh_ispi, 8));
+		return (-1);
+	}
+	return (0);
+}
+
+int
 ikev2_send_error(struct iked *env, struct iked_sa *sa,
     struct iked_message *msg, uint8_t exchange)
 {
 	struct ibuf			*buf = NULL;
-	ssize_t				 len;
 	int				 ret = -1;
 
 	if (msg->msg_error == 0)
 		return (0);
 	if ((buf = ibuf_static()) == NULL)
 		goto done;
-	if ((len = ikev2_add_error(env, buf, msg)) == 0)
+	if (ikev2_add_error(env, buf, msg) == 0)
 		goto done;
 	ret = ikev2_send_ike_e(env, sa, buf, IKEV2_PAYLOAD_NOTIFY,
 	    exchange, 1);
@@ -3009,7 +3281,8 @@ ikev2_handle_certreq(struct iked* env, struct iked_message *msg)
 {
 	struct iked_certreq	*cr;
 	struct iked_sa		*sa;
-	uint8_t more;
+	uint8_t			 crtype;
+	uint8_t	more;
 
 	if ((sa = msg->msg_sa) == NULL)
 		return (-1);
@@ -3018,30 +3291,145 @@ ikev2_handle_certreq(struct iked* env, struct iked_message *msg)
 	if (sa->sa_policy->pol_auth.auth_method == IKEV2_AUTH_SHARED_KEY_MIC)
 		return (0);
 
-	while ((cr = SLIST_FIRST(&msg->msg_certreqs))) {
-		if (sa->sa_hdr.sh_initiator)
-			sa->sa_stateinit |= IKED_REQ_CERT;
+	if (sa->sa_hdr.sh_initiator)
+		sa->sa_stateinit |= IKED_REQ_CERT;
+	else
+		sa->sa_statevalid |= IKED_REQ_CERT;
+
+	/*
+	 * If we have to send a local certificate but did not receive an
+	 * optional CERTREQ, use our own certreq to find a local certificate.
+	 * We could alternatively extract the CA from the peer certificate
+	 * to find a matching local one.
+	 */
+	if (SIMPLEQ_EMPTY(&msg->msg_certreqs)) {
+		if (sa->sa_policy->pol_certreqtype)
+			crtype = sa->sa_policy->pol_certreqtype;
 		else
-			sa->sa_statevalid |= IKED_REQ_CERT;
+			crtype = env->sc_certreqtype;
+		ca_setreq(env, sa, &sa->sa_policy->pol_localid,
+		    crtype, 0, ibuf_data(env->sc_certreq),
+		    ibuf_size(env->sc_certreq), PROC_CERT);
+	} else {
+		while ((cr = SIMPLEQ_FIRST(&msg->msg_certreqs))) {
+			if (SIMPLEQ_NEXT(cr, cr_entry) != NULL)
+				more = 1;
+			else
+				more = 0;
 
-		if (SLIST_NEXT(cr, cr_entry) != NULL)
-			more = 1;
-		else
-			more = 0;
+			ca_setreq(env, sa, &sa->sa_policy->pol_localid,
+			    cr->cr_type, more, ibuf_data(cr->cr_data),
+			    ibuf_length(cr->cr_data),
+			    PROC_CERT);
 
-		ca_setreq(env, sa, &sa->sa_policy->pol_localid, cr->cr_type,
-		    more, ibuf_data(cr->cr_data),
-		    ibuf_length(cr->cr_data),
-		    PROC_CERT);
-
-		ibuf_release(cr->cr_data);
-		SLIST_REMOVE_HEAD(&msg->msg_certreqs, cr_entry);
-		free(cr);
+			ibuf_release(cr->cr_data);
+			SIMPLEQ_REMOVE_HEAD(&msg->msg_certreqs, cr_entry);
+			free(cr);
+		}
 	}
 
 	return (0);
 }
 
+int
+ikev2_resp_ike_eap_mschap(struct iked *env, struct iked_sa *sa,
+    struct iked_message *msg)
+{
+	uint8_t			 successmsg[EAP_MSCHAP_SUCCESS_SZ];
+	uint8_t			 ntresponse[EAP_MSCHAP_NTRESPONSE_SZ];
+	struct eap_msg		*eap = &msg->msg_eap;
+	struct iked_user	*usr;
+	uint8_t			*pass;
+	char			*name = NULL;
+	size_t			 passlen;
+	int			 ret;
+
+	switch (eap->eam_state) {
+	case EAP_STATE_IDENTITY:
+		sa->sa_eapid = eap->eam_identity;
+		return (eap_challenge_request(env, sa, eap->eam_id));
+	case EAP_STATE_MSCHAPV2_CHALLENGE:
+		if (eap->eam_user) {
+			name = eap->eam_user;
+		} else if (sa->sa_eapid) {
+			name = sa->sa_eapid;
+		}
+		if (name == NULL) {
+			log_info("%s: invalid response name",
+			    SPI_SA(sa, __func__));
+			return (-1);
+		}
+		if ((usr = user_lookup(env, name)) == NULL) {
+			log_info("%s: unknown user '%s'", SPI_SA(sa, __func__),
+			    name);
+			return (-1);
+		}
+
+		if ((pass = string2unicode(usr->usr_pass, &passlen)) == NULL)
+			return (-1);
+
+		mschap_nt_response(ibuf_data(sa->sa_eap.id_buf),
+		    eap->eam_challenge, usr->usr_name, strlen(usr->usr_name),
+		    pass, passlen, ntresponse);
+
+		if (memcmp(ntresponse, eap->eam_ntresponse,
+		    sizeof(ntresponse)) != 0) {
+			log_info("%s: '%s' authentication failed",
+			   SPI_SA(sa, __func__), usr->usr_name);
+			free(pass);
+
+			/* XXX should we send an EAP failure packet? */
+			return (-1);
+		}
+
+		bzero(&successmsg, sizeof(successmsg));
+
+		mschap_auth_response(pass, passlen,
+		    ntresponse, ibuf_data(sa->sa_eap.id_buf),
+		    eap->eam_challenge, usr->usr_name, strlen(usr->usr_name),
+		    successmsg);
+		if ((sa->sa_eapmsk = ibuf_new(NULL, MSCHAP_MSK_SZ)) == NULL) {
+			log_info("%s: failed to get MSK", SPI_SA(sa, __func__));
+			free(pass);
+			return (-1);
+		}
+		mschap_msk(pass, passlen, ntresponse,
+		    ibuf_data(sa->sa_eapmsk));
+		free(pass);
+
+		log_info("%s: '%s' authenticated", __func__, usr->usr_name);
+
+		ret = eap_mschap_challenge(env, sa, eap->eam_id, eap->eam_msrid,
+		    successmsg, EAP_MSCHAP_SUCCESS_SZ);
+		if (ret == 0)
+			sa_state(env, sa, IKEV2_STATE_AUTH_SUCCESS);
+		break;
+	case EAP_STATE_MSCHAPV2_SUCCESS:
+		return (eap_mschap_success(env, sa, eap->eam_id));
+	case EAP_STATE_SUCCESS:
+		if (!sa_stateok(sa, IKEV2_STATE_AUTH_SUCCESS))
+			return (-1);
+		return (eap_success(env, sa, msg->msg_eap.eam_id));
+	default:
+		log_info("%s: eap ignored.", __func__);
+		break;
+	}
+	return 0;
+}
+
+int
+ikev2_resp_ike_eap(struct iked *env, struct iked_sa *sa,
+    struct iked_message *msg)
+{
+	if (!sa_stateok(sa, IKEV2_STATE_EAP))
+		return (-1);
+
+	switch (sa->sa_policy->pol_auth.auth_eap) {
+	case EAP_TYPE_MSCHAP_V2:
+		return ikev2_resp_ike_eap_mschap(env, sa, msg);
+	}
+	return -1;
+}
 
 int
 ikev2_resp_ike_auth(struct iked *env, struct iked_sa *sa)
@@ -3059,7 +3447,7 @@ ikev2_resp_ike_auth(struct iked *env, struct iked_sa *sa)
 		return (-1);
 
 	if (sa->sa_state == IKEV2_STATE_EAP)
-		return (ikev2_resp_ike_eap(env, sa, NULL));
+		return (eap_identity_request(env, sa));
 
 	if (!sa_stateok(sa, IKEV2_STATE_VALID))
 		return (0);	/* ignore */
@@ -3179,97 +3567,13 @@ ikev2_resp_ike_auth(struct iked *env, struct iked_sa *sa)
 		timer_del(env, &sa->sa_timer);
 		ikev2_enable_timer(env, sa);
 		ikev2_log_established(sa);
+		ikev2_record_dstid(env, sa);
 	}
 
  done:
 	if (ret)
 		ikev2_childsa_delete(env, sa, 0, 0, NULL, 1);
 	ibuf_release(e);
-	return (ret);
-}
-
-int
-ikev2_resp_ike_eap(struct iked *env, struct iked_sa *sa, struct ibuf *eapmsg)
-{
-	struct ikev2_payload		*pld;
-	struct ikev2_cert		*cert;
-	struct ikev2_auth		*auth;
-	struct iked_id			*id, *certid;
-	struct ibuf			*e = NULL;
-	uint8_t				 firstpayload;
-	int				 ret = -1;
-	ssize_t				 len = 0;
-
-	/* Responder only */
-	if (sa->sa_hdr.sh_initiator)
-		return (-1);
-
-	/* Check if "ca" has done it's job yet */
-	if (!sa->sa_localauth.id_type)
-		return (0);
-
-	/* New encrypted message buffer */
-	if ((e = ibuf_static()) == NULL)
-		goto done;
-
-	id = &sa->sa_rid;
-	certid = &sa->sa_rcert;
-
-	/* ID payload */
-	if ((pld = ikev2_add_payload(e)) == NULL)
-		goto done;
-	firstpayload = IKEV2_PAYLOAD_IDr;
-	if (ibuf_cat(e, id->id_buf) != 0)
-		goto done;
-	len = ibuf_size(id->id_buf);
-
-	if ((sa->sa_statevalid & IKED_REQ_CERT) &&
-	    (certid->id_type != IKEV2_CERT_NONE)) {
-		if (ikev2_next_payload(pld, len, IKEV2_PAYLOAD_CERT) == -1)
-			goto done;
-
-		/* CERT payload */
-		if ((pld = ikev2_add_payload(e)) == NULL)
-			goto done;
-		if ((cert = ibuf_advance(e, sizeof(*cert))) == NULL)
-			goto done;
-		cert->cert_type = certid->id_type;
-		if (ibuf_cat(e, certid->id_buf) != 0)
-			goto done;
-		len = ibuf_size(certid->id_buf) + sizeof(*cert);
-	}
-
-	if (ikev2_next_payload(pld, len, IKEV2_PAYLOAD_AUTH) == -1)
-		goto done;
-
-	/* AUTH payload */
-	if ((pld = ikev2_add_payload(e)) == NULL)
-		goto done;
-	if ((auth = ibuf_advance(e, sizeof(*auth))) == NULL)
-		goto done;
-	auth->auth_method = sa->sa_localauth.id_type;
-	if (ibuf_cat(e, sa->sa_localauth.id_buf) != 0)
-		goto done;
-	len = ibuf_size(sa->sa_localauth.id_buf) + sizeof(*auth);
-
-	if (ikev2_next_payload(pld, len, IKEV2_PAYLOAD_EAP) == -1)
-		goto done;
-
-	/* EAP payload */
-	if ((pld = ikev2_add_payload(e)) == NULL)
-		goto done;
-	if ((len = eap_identity_request(e)) == -1)
-		goto done;
-
-	if (ikev2_next_payload(pld, len, IKEV2_PAYLOAD_NONE) == -1)
-		goto done;
-
-	ret = ikev2_msg_send_encrypt(env, sa, &e,
-	    IKEV2_EXCHANGE_IKE_AUTH, firstpayload, 1);
-
- done:
-	ibuf_release(e);
-
 	return (ret);
 }
 
@@ -3358,8 +3662,8 @@ ikev2_send_create_child_sa(struct iked *env, struct iked_sa *sa,
 		log_debug("%s: creating new CHILD SAs", __func__);
 
 	/* XXX cannot initiate multiple concurrent CREATE_CHILD_SA exchanges */
-	if (sa->sa_stateflags & IKED_REQ_CHILDSA) {
-		log_debug("%s: another CREATE_CHILD_SA exchange already active",
+	if (sa->sa_stateflags & (IKED_REQ_CHILDSA|IKED_REQ_INF)) {
+		log_debug("%s: another exchange already active",
 		    __func__);
 		return (-1);
 	}
@@ -3524,13 +3828,13 @@ ikev2_ike_sa_rekey(struct iked *env, void *arg)
 		goto done;
 	}
 
-	if (sa->sa_stateflags & IKED_REQ_CHILDSA) {
+	if (sa->sa_stateflags & (IKED_REQ_CHILDSA|IKED_REQ_INF)) {
 		/*
 		 * We cannot initiate multiple concurrent CREATE_CHILD_SA
-		 * exchanges, so retry in one minute.
+		 * exchanges, so retry again fast.
 		 */
 		log_info("%s: busy, delaying rekey", SPI_SA(sa, __func__));
-		timer_add(env, &sa->sa_rekey, 60);
+		ikev2_ike_sa_rekey_schedule_fast(env, sa);
 		return;
 	}
 
@@ -3598,6 +3902,7 @@ ikev2_ike_sa_rekey(struct iked *env, void *arg)
 		sa->sa_stateflags |= IKED_REQ_CHILDSA;
 		sa->sa_nexti = nsa;
 		nsa->sa_previ = sa;
+		sa->sa_tmpfail = 0;
 		nsa = NULL;
 	}
 done:
@@ -3644,8 +3949,19 @@ ikev2_init_create_child_sa(struct iked *env, struct iked_message *msg)
 	int				 pfs = 0, ret = -1;
 
 	if (!ikev2_msg_frompeer(msg) ||
-	    (sa->sa_stateflags & IKED_REQ_CHILDSA) == 0)
+	    (sa->sa_stateflags & (IKED_REQ_CHILDSA|IKED_REQ_INF)) == 0)
 		return (0);
+
+	if (sa->sa_nexti != NULL && sa->sa_tmpfail) {
+		sa->sa_stateflags &= ~IKED_REQ_CHILDSA;
+		ikev2_ike_sa_setreason(sa->sa_nexti, "tmpfail");
+		sa_free(env, sa->sa_nexti);
+		sa->sa_nexti = NULL;
+		timer_set(env, &sa->sa_rekey, ikev2_ike_sa_rekey, sa);
+		ikev2_ike_sa_rekey_schedule_fast(env, sa);
+		log_info("%s: IKESA rekey delayed", SPI_SA(sa, __func__));
+		return (0);
+	}
 
 	if (msg->msg_prop == NULL ||
 	    TAILQ_EMPTY(&msg->msg_proposals)) {
@@ -3947,6 +4263,10 @@ ikev2_ikesa_enable(struct iked *env, struct iked_sa *sa, struct iked_sa *nsa)
 		RB_INSERT(iked_addrpool6, &env->sc_addrpool6, nsa);
 	}
 	/* Transfer other attributes */
+        if (sa->sa_dstid_entry_valid) {
+		sa_dstid_remove(env, sa);
+		sa_dstid_insert(env, nsa);
+	}
 	if (sa->sa_tag) {
 		nsa->sa_tag = sa->sa_tag;
 		sa->sa_tag = NULL;
@@ -3955,7 +4275,8 @@ ikev2_ikesa_enable(struct iked *env, struct iked_sa *sa, struct iked_sa *nsa)
 		nsa->sa_eapid = sa->sa_eapid;
 		sa->sa_eapid = NULL;
 	}
-	log_debug("%s: activating new IKE SA", __func__);
+	log_info("%srekeyed as new IKESA %s",
+	    SPI_SA(sa, NULL), print_spi(nsa->sa_hdr.sh_ispi, 8));
 	sa_state(env, nsa, IKEV2_STATE_ESTABLISHED);
 	ikev2_enable_timer(env, nsa);
 
@@ -4347,6 +4668,19 @@ ikev2_ike_sa_rekey_schedule(struct iked *env, struct iked_sa *sa)
 	    arc4random_uniform(100)) / 1000);
 }
 
+/* rekey delayed, so re-try after short delay (1% of configured) */
+void
+ikev2_ike_sa_rekey_schedule_fast(struct iked *env, struct iked_sa *sa)
+{
+	int timeout = sa->sa_policy->pol_rekey / 100; /* 1% */
+
+	if (timeout > 60)
+		timeout = 60;	/* max */
+	else if (timeout < 4)
+		timeout = 4;	/* min */
+	timer_add(env, &sa->sa_rekey, timeout);
+}
+
 void
 ikev2_ike_sa_alive(struct iked *env, void *arg)
 {
@@ -4355,6 +4689,9 @@ ikev2_ike_sa_alive(struct iked *env, void *arg)
 	uint64_t			 last_used, diff;
 	int				 foundin = 0, foundout = 0;
 	int				 ikeidle = 0;
+
+	if (env->sc_alive_timeout == 0)
+		return;
 
 	/* check for incoming traffic on any child SA */
 	TAILQ_FOREACH(csa, &sa->sa_childsas, csa_entry) {
@@ -4367,7 +4704,7 @@ ikev2_ike_sa_alive(struct iked *env, void *arg)
 		    __func__,
 		    csa->csa_dir == IPSP_DIRECTION_IN ? "incoming" : "outgoing",
 		    print_spi(csa->csa_spi.spi, csa->csa_spi.spi_size), diff);
-		if (diff < IKED_IKE_SA_ALIVE_TIMEOUT) {
+		if (diff < env->sc_alive_timeout) {
 			if (csa->csa_dir == IPSP_DIRECTION_IN) {
 				foundin = 1;
 				break;
@@ -4400,7 +4737,7 @@ ikev2_ike_sa_alive(struct iked *env, void *arg)
 	}
 
 	/* re-register */
-	timer_add(env, &sa->sa_timer, IKED_IKE_SA_ALIVE_TIMEOUT);
+	timer_add(env, &sa->sa_timer, env->sc_alive_timeout);
 }
 
 void
@@ -4463,8 +4800,8 @@ ikev2_send_informational(struct iked *env, struct iked_message *msg)
 		ikev2_log_proposal(msg->msg_sa, &msg->msg_proposals);
 		break;
 	default:
-		log_debug("%s: unsupported notification %s", __func__,
-		    print_map(msg->msg_error, ikev2_n_map));
+		log_warnx("%s: unsupported notification %s", SPI_SA(sa,
+		    __func__), print_map(msg->msg_error, ikev2_n_map));
 		goto done;
 	}
 	log_info("%s: %s", SPI_SA(sa, __func__),
@@ -4589,7 +4926,7 @@ ikev2_sa_initiator_dh(struct iked_sa *sa, struct iked_message *msg,
 		if ((sa->sa_dhiexchange = ibuf_new(NULL,
 		    dh_getlen(sa->sa_dhgroup))) == NULL) {
 			log_info("%s: failed to alloc dh exchange",
-			    SPI_SA(msg->msg_sa, __func__));
+			    SPI_SA(sa, __func__));
 			return (-1);
 		}
 		if (dh_create_exchange(sa->sa_dhgroup,
@@ -4636,7 +4973,8 @@ ikev2_sa_negotiate_common(struct iked *env, struct iked_sa *sa, struct iked_mess
 	    &msg->msg_policy->pol_proposals, &msg->msg_proposals, 0) != 0) {
 		log_info("%s: proposals_negotiate", __func__);
 		return (-1);
-	} else if (sa_stateok(sa, IKEV2_STATE_SA_INIT))
+	}
+	if (sa_stateok(sa, IKEV2_STATE_SA_INIT))
 		sa_stateflags(sa, IKED_REQ_SA);
 
 	if (sa->sa_encr == NULL) {
@@ -4972,7 +5310,7 @@ ikev2_sa_keys(struct iked *env, struct iked_sa *sa, struct ibuf *key)
 		goto done;
 	}
 
-	if ((skeyseed = ibuf_new(NULL, hash_length(prf))) == NULL) {
+	if ((skeyseed = ibuf_new(NULL, hash_keylength(prf))) == NULL) {
 		log_info("%s: failed to get SKEYSEED buffer",
 		    SPI_SA(sa, __func__));
 		goto done;
@@ -5134,7 +5472,7 @@ ikev2_prfplus(struct iked_hash *prf, struct ibuf *key, struct ibuf *seed,
 			ibuf_release(t1);
 		} else
 			t2 = ibuf_new(NULL, 0);
-		t1 = ibuf_new(NULL, hash_length(prf));
+		t1 = ibuf_new(NULL, hash_keylength(prf));
 
 		ibuf_add(t2, seed->buf, ibuf_length(seed));
 		pad = i + 1;
@@ -5880,7 +6218,7 @@ ikev2_valid_proposal(struct iked_proposal *prop,
 
 /* return 0 if processed, -1 if busy */
 int
-ikev2_acquire_sa(struct iked *env, struct iked_flow *acquire)
+ikev2_child_sa_acquire(struct iked *env, struct iked_flow *acquire)
 {
 	struct iked_flow	*flow;
 	struct iked_sa		*sa;
@@ -5911,7 +6249,7 @@ ikev2_acquire_sa(struct iked *env, struct iked_flow *acquire)
 		    p->pol_name);
 
 		if (ikev2_init_ike_sa_peer(env, p,
-		    acquire->flow_peer, NULL) != 0)
+		    &p->pol_peer, NULL) != 0)
 			log_warnx("%s: failed to initiate a "
 			    "IKE_SA_INIT exchange for policy '%s'",
 			    __func__, p->pol_name);
@@ -5922,7 +6260,7 @@ ikev2_acquire_sa(struct iked *env, struct iked_flow *acquire)
 			log_warnx("%s: flow without SA", __func__);
 			return (0);
 		}
-		if (sa->sa_stateflags & IKED_REQ_CHILDSA)
+		if (sa->sa_stateflags & (IKED_REQ_CHILDSA|IKED_REQ_INF))
 			return (-1);	/* busy, retry later */
 		if (ikev2_send_create_child_sa(env, sa, NULL,
 		    flow->flow_saproto) != 0)
@@ -5947,7 +6285,7 @@ ikev2_disable_rekeying(struct iked *env, struct iked_sa *sa)
 
 /* return 0 if processed, -1 if busy */
 int
-ikev2_rekey_sa(struct iked *env, struct iked_spi *rekey)
+ikev2_child_sa_rekey(struct iked *env, struct iked_spi *rekey)
 {
 	struct iked_childsa		*csa, key;
 	struct iked_sa			*sa;
@@ -5971,8 +6309,10 @@ ikev2_rekey_sa(struct iked *env, struct iked_spi *rekey)
 		    print_spi(rekey->spi, rekey->spi_size));
 		return (0);
 	}
-	if (sa->sa_stateflags & IKED_REQ_CHILDSA)
+	if (sa->sa_stateflags & (IKED_REQ_CHILDSA|IKED_REQ_INF))
 		return (-1);	/* busy, retry later */
+	if (sa->sa_tmpfail)
+		return (-1);	/* peer is busy, retry later */
 	if (csa->csa_allocated)	/* Peer SPI died first, get the local one */
 		rekey->spi = csa->csa_peerspi;
 	if (ikev2_send_create_child_sa(env, sa, rekey, rekey->spi_protoid))
@@ -5983,14 +6323,13 @@ ikev2_rekey_sa(struct iked *env, struct iked_spi *rekey)
 
 /* return 0 if processed, -1 if busy */
 int
-ikev2_drop_sa(struct iked *env, struct iked_spi *drop)
+ikev2_child_sa_drop(struct iked *env, struct iked_spi *drop)
 {
 	struct ibuf			*buf = NULL;
 	struct iked_childsa		*csa, key;
 	struct iked_sa			*sa;
 	struct ikev2_delete		*del;
 	uint32_t			 spi32;
-	int				 acquired;
 
 	key.csa_spi = *drop;
 	csa = RB_FIND(iked_activesas, &env->sc_activesas, &key);
@@ -5998,7 +6337,7 @@ ikev2_drop_sa(struct iked *env, struct iked_spi *drop)
 		return (0);
 
 	sa = csa->csa_ikesa;
-	if (sa && (sa->sa_stateflags & IKED_REQ_CHILDSA)) {
+	if (sa && (sa->sa_stateflags & (IKED_REQ_CHILDSA|IKED_REQ_INF))) {
 		/* XXXX might loop, should we add a counter? */
 		log_debug("%s: parent SA busy", __func__);
 		return (-1);	/* busy, retry later */
@@ -6016,7 +6355,6 @@ ikev2_drop_sa(struct iked *env, struct iked_spi *drop)
 		spi32 = htobe32(csa->csa_spi.spi);
 	else
 		spi32 = htobe32(csa->csa_peerspi);
-	acquired = csa->csa_acquired;
 
 	if (ikev2_childsa_delete(env, sa, csa->csa_saproto,
 	    csa->csa_peerspi, NULL, 0))
@@ -6040,15 +6378,6 @@ ikev2_drop_sa(struct iked *env, struct iked_spi *drop)
 		goto done;
 
 	sa->sa_stateflags |= IKED_REQ_INF;
-
-	/* Don't automatically re-initiate Child SAs that have been acquired */
-	if (acquired)
-		goto done;
-
-	/* Initiate Child SA creation */
-	if (ikev2_send_create_child_sa(env, sa, NULL, drop->spi_protoid))
-		log_warnx("%s: failed to initiate a CREATE_CHILD_SA exchange",
-		    __func__);
 
 done:
 	ibuf_release(buf);
@@ -6552,6 +6881,9 @@ ikev2_info(struct iked *env, int dolog)
 	}
 	RB_FOREACH(flow, iked_flows, &env->sc_activeflows) {
 		ikev2_info_flow(env, dolog, "iked_flows", flow);
+	}
+	RB_FOREACH(sa, iked_dstid_sas, &env->sc_dstid_sas) {
+		ikev2_info_sa(env, dolog, "iked_dstid_sas", sa);
 	}
 	if (dolog)
 		return;

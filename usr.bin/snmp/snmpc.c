@@ -1,4 +1,4 @@
-/*	$OpenBSD: snmpc.c,v 1.26 2020/05/31 21:01:59 martijn Exp $	*/
+/*	$OpenBSD: snmpc.c,v 1.30 2020/09/14 15:12:27 martijn Exp $	*/
 
 /*
  * Copyright (c) 2019 Martijn van Duren <martijn@openbsd.org>
@@ -29,6 +29,7 @@
 #include <ctype.h>
 #include <err.h>
 #include <errno.h>
+#include <locale.h>
 #include <netdb.h>
 #include <poll.h>
 #include <stdio.h>
@@ -38,6 +39,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <util.h>
+#include <wchar.h>
 
 #include "smi.h"
 #include "snmp.h"
@@ -57,6 +59,7 @@ int snmpc_print(struct ber_element *);
 __dead void snmpc_printerror(enum snmp_error, struct ber_element *, int,
     const char *);
 char *snmpc_hex2bin(char *, size_t *);
+ssize_t snmpc_mbswidth(char *);
 struct ber_element *snmpc_varbindparse(int, char *[]);
 void usage(void);
 
@@ -77,7 +80,7 @@ struct snmp_app snmp_apps[] = {
 	{ "set", 1, NULL, "agent oid type value [oid type value] ...", snmpc_set },
 	{ "trap", 1, NULL, "agent uptime oid [oid type value] ...", snmpc_trap },
 	{ "df", 1, "C:", "[-Ch] [-Cr<maxrep>] agent", snmpc_df },
-	{ "mibtree", 0, "O:", "[-O fnS]", snmpc_mibtree }
+	{ "mibtree", 0, "O:", "[-O fnS] [oid ...]", snmpc_mibtree }
 };
 struct snmp_app *snmp_app = NULL;
 
@@ -103,6 +106,7 @@ struct ber_oid *walk_skip = NULL;
 size_t walk_skip_len = 0;
 enum smi_oid_lookup oid_lookup = smi_oidl_short;
 enum smi_output_string output_string = smi_os_default;
+int utf8 = 0;
 
 int
 main(int argc, char *argv[])
@@ -128,6 +132,18 @@ main(int argc, char *argv[])
 	char *strtolp;
 	int ch;
 	size_t i;
+
+	/*
+	 * Determine if output can handle UTF-8 based on locale.
+	 */
+	setlocale(LC_CTYPE, "");
+	utf8 = MB_CUR_MAX > 1;
+	/*
+	 * SMIv2 allows for UTF-8 text at some locations.
+	 * Set it explicitly so we can handle it on the input side.
+	 */
+	if (setlocale(LC_CTYPE, "en_US.UTF-8") == NULL)
+		errx(1, "setlocale(LC_CTYPE, \"en_US.UTF-8\") failed");
 
 	if (pledge("stdio inet dns unix", NULL) == -1)
 		err(1, "pledge");
@@ -806,8 +822,8 @@ snmpc_df(int argc, char *argv[])
 {
 	struct snmpc_df {
 		uint32_t index;
-		/* DisplayString is 255a DISPLAY-HINT */
-		char descr[256];
+		char *descr;
+		int descrwidth;
 		/* Theoretical maximum for 2 32 bit values multiplied */
 		char size[21];
 		char used[21];
@@ -819,7 +835,8 @@ snmpc_df(int argc, char *argv[])
 	struct ber_oid sizeoid = {{ 1, 3, 6, 1, 2, 1, 25, 2, 3, 1, 5 }, 11};
 	struct ber_oid usedoid = {{ 1, 3, 6, 1, 2, 1, 25, 2, 3, 1, 6 }, 11};
 	struct ber_oid oid, *reqoid;
-	struct ber_element *pdu, *varbind;
+	char oids[SNMP_MAX_OID_STRLEN];
+	struct ber_element *pdu, *varbind, *elm;
 	struct snmp_agent *agent;
 	int errorstatus, errorindex;
 	int class;
@@ -876,8 +893,9 @@ snmpc_df(int argc, char *argv[])
 			return 1;
 		}
 		for (; varbind != NULL; varbind = varbind->be_next) {
-			(void) ober_scanf_elements(varbind, "{oS", &oid);
-			if (ober_oid_cmp(&descroid, &oid) != 2)
+			if (ober_scanf_elements(varbind, "{os", &oid,
+			    &string) == -1 ||
+			    ober_oid_cmp(&descroid, &oid) != 2)
 				break;
 			rows++;
 		} 
@@ -885,19 +903,29 @@ snmpc_df(int argc, char *argv[])
 			err(1, "malloc");
 		(void) ober_scanf_elements(pdu, "{SSS{e", &varbind);
 		for (; i < rows; varbind = varbind->be_next, i++) {
-			if (ober_scanf_elements(varbind, "{os", &oid,
-			    &string) == -1) {
+			if (ober_scanf_elements(varbind, "{oe", &oid,
+			    &elm) == -1) {
 				i--;
 				rows--;
 				continue;
 			}
+			if (ober_oid_cmp(&descroid, &oid) != 2)
+				break;
 			df[i].index = oid.bo_id[oid.bo_n - 1];
-			len = strlcpy(df[i].descr, string,
-			    sizeof(df[i].descr));
-			if (len > (int) sizeof(df[i].descr))
-				len = (int) sizeof(df[i].descr) - 1;
-			if (len > descrlen)
-				descrlen = len;
+			if ((df[i].descr = smi_print_element(&oid, elm, 0,
+			    smi_os_ascii, 0, utf8)) == NULL) {
+				smi_oid2string(&oid, oids, sizeof(oids),
+				    oid_lookup);
+				warn("df: can't print oid %s", oids);
+				i--;
+				rows--;
+				continue;
+			}
+			if ((df[i].descrwidth =
+			    (int) snmpc_mbswidth(df[i].descr)) == -1)
+				err(1, "df: invalid hrStorageDescr");
+			if (df[i].descrwidth > descrlen)
+				descrlen = df[i].descrwidth;
 		} 
 		ober_free_elements(pdu);
 		if (varbind != NULL)
@@ -1017,8 +1045,8 @@ snmpc_df(int argc, char *argv[])
 	    NEXTTAB(usedlen) + availlen, "Available",
 	    NEXTTAB(availlen) + proclen, "Used%");
 	for (i = 0; i < rows; i++) {
-		printf("%-*s%*s%*s%*s%*s\n",
-		    descrlen, df[i].descr,
+		printf("%s%*s%*s%*s%*s%*s\n",
+		    df[i].descr, descrlen - df[i].descrwidth, "",
 		    NEXTTAB(descrlen) + sizelen, df[i].size,
 		    NEXTTAB(sizelen) + usedlen, df[i].used,
 		    NEXTTAB(usedlen) + availlen, df[i].avail,
@@ -1032,11 +1060,25 @@ int
 snmpc_mibtree(int argc, char *argv[])
 {
 	struct oid *oid;
+	struct ber_oid soid;
 	char buf[BUFSIZ];
+	int i;
 
-	for (oid = NULL; (oid = smi_foreach(oid)) != NULL;) {
-		smi_oid2string(&oid->o_id, buf, sizeof(buf), oid_lookup);
-		printf("%s\n", buf);
+	if (argc == 0) {
+		for (oid = NULL; (oid = smi_foreach(oid)) != NULL;) {
+			smi_oid2string(&oid->o_id, buf, sizeof(buf),
+			    oid_lookup);
+			printf("%s\n", buf);
+		}
+	} else {
+		for (i = 0; i < argc; i++) {
+			if (smi_string2oid(argv[i], &soid) == -1) {
+				warnx("%s: Unknown object identifier", argv[i]);
+				continue;
+			}
+			smi_oid2string(&soid, buf, sizeof(buf), oid_lookup);
+			printf("%s\n", buf);
+		}
 	}
 	return 0;
 }
@@ -1069,7 +1111,8 @@ snmpc_print(struct ber_element *elm)
 	}
 
 	elm = elm->be_next;
-	value = smi_print_element(elm, smi_print_hint, output_string, oid_lookup);
+	value = smi_print_element(&oid, elm, smi_print_hint, output_string,
+	    oid_lookup, utf8);
 	if (value == NULL)
 		return 0;
 
@@ -1237,7 +1280,7 @@ snmpc_parseagent(char *agent, char *defaultport)
 			port = defaultport;
 		error = getaddrinfo(hostname, port, &hints, &ai0);
 		if (error) {
-			if (error != EAI_NODATA && port != defaultport)
+			if (error != EAI_NODATA || port == defaultport)
 				errx(1, "%s", gai_strerror(error));
 			*--port = ':';
 			error = getaddrinfo(hostname, defaultport, &hints,
@@ -1252,6 +1295,8 @@ snmpc_parseagent(char *agent, char *defaultport)
 			    connect(s, (struct sockaddr *)ai->ai_addr,
 			    ai->ai_addrlen) != -1)
 				break;
+			close(s);
+			s = -1;
 		}
 	} else {
 		s = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -1308,6 +1353,24 @@ fail:
 	errno = EINVAL;
 	free(decstr);
 	return NULL;
+}
+
+ssize_t
+snmpc_mbswidth(char *str)
+{
+	wchar_t wc;
+	size_t width = 0;
+	size_t i;
+	int len;
+
+	for (i = 0; (len = mbtowc(&wc, &(str[i]), MB_CUR_MAX)) != 0; i += len) {
+		if (len == -1) {
+			mbtowc(NULL, NULL, MB_CUR_MAX);
+			return -1;
+		}
+		width += wcwidth(wc);
+	}
+	return width;
 }
 
 struct ber_element *

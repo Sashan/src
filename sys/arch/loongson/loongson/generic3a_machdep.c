@@ -1,4 +1,4 @@
-/*	$OpenBSD: generic3a_machdep.c,v 1.8 2017/05/21 13:00:53 visa Exp $	*/
+/*	$OpenBSD: generic3a_machdep.c,v 1.10 2020/07/21 05:56:02 visa Exp $	*/
 
 /*
  * Copyright (c) 2009, 2010, 2012 Miodrag Vallat.
@@ -98,7 +98,9 @@ struct timecounter rs780e_timecounter = {
 	.tc_counter_mask = 0xffffffffu,	/* truncated to 32 bits */
 	.tc_frequency = HPET_FREQ,
 	.tc_name = "hpet",
-	.tc_quality = 100
+	.tc_quality = 100,
+	.tc_priv = NULL,
+	.tc_user = 0,
 };
 
 /* Firmware entry points */
@@ -351,14 +353,8 @@ generic3a_ipi_intr(uint32_t hwpend, struct trapframe *frame)
 {
 	cpuid_t cpuid = cpu_number();
 
-	/* Mask all IPIs. */
-	REGVAL32(ls3_ipi_base[cpuid] + LS3_IPI_IMR) = ~0u;
-
 	if (ls3_ipi_handler != NULL)
 		ls3_ipi_handler((void *)cpuid);
-
-	/* Enable the IPI. */
-	REGVAL32(ls3_ipi_base[cpuid] + LS3_IPI_IMR) = 1u;
 
 	return hwpend;
 }

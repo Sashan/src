@@ -23,7 +23,6 @@
 
 #include <dst/dst.h>
 
-#include <isc/boolean.h>
 #include <isc/buffer.h>
 #include <isc/list.h>
 #include <isc/sockaddr.h>
@@ -76,7 +75,7 @@ typedef struct dig_searchlist dig_searchlist_t;
 
 /*% The dig_lookup structure */
 struct dig_lookup {
-	isc_boolean_t
+	int
 		pending, /*%< Pending a successful answer */
 		waiting_connect,
 		doing_xfr,
@@ -118,8 +117,8 @@ struct dig_lookup {
 	dns_rdatatype_t rdtype;
 	dns_rdatatype_t qrdtype;
 	dns_rdataclass_t rdclass;
-	isc_boolean_t rdtypeset;
-	isc_boolean_t rdclassset;
+	int rdtypeset;
+	int rdclassset;
 	char name_space[BUFSIZE];
 	char oname_space[BUFSIZE];
 	isc_buffer_t namebuf;
@@ -148,7 +147,8 @@ struct dig_lookup {
 	isc_buffer_t *querysig;
 	uint32_t msgcounter;
 	dns_fixedname_t fdomain;
-	isc_sockaddr_t *ecs_addr;
+	struct sockaddr_storage *ecs_addr;
+	int ecs_plen;
 	char *sitvalue;
 	dns_ednsopt_t *ednsopts;
 	unsigned int ednsoptscnt;
@@ -160,7 +160,7 @@ struct dig_lookup {
 /*% The dig_query structure */
 struct dig_query {
 	dig_lookup_t *lookup;
-	isc_boolean_t waiting_connect,
+	int waiting_connect,
 		pending_free,
 		waiting_senddone,
 		first_pass,
@@ -174,7 +174,7 @@ struct dig_query {
 	uint32_t second_rr_serial;
 	uint32_t msg_count;
 	uint32_t rr_count;
-	isc_boolean_t ixfr_axfr;
+	int ixfr_axfr;
 	char *servname;
 	char *userarg;
 	isc_bufferlist_t sendlist,
@@ -189,7 +189,7 @@ struct dig_query {
 	isc_socket_t *sock;
 	ISC_LINK(dig_query_t) link;
 	ISC_LINK(dig_query_t) clink;
-	isc_sockaddr_t sockaddr;
+	struct sockaddr_storage sockaddr;
 	struct timespec time_sent;
 	struct timespec time_recv;
 	uint64_t byte_count;
@@ -221,7 +221,7 @@ extern dig_serverlist_t root_hints_server_list;
 extern dig_searchlistlist_t search_list;
 extern unsigned int extrabytes;
 
-extern isc_boolean_t check_ra, have_ipv4, have_ipv6, specified_source,
+extern int check_ra, have_ipv4, have_ipv6, specified_source,
 	usesearch, showsearch, qr;
 extern in_port_t port;
 extern unsigned int timeout;
@@ -229,19 +229,19 @@ extern int sendcount;
 extern int ndots;
 extern int lookup_counter;
 extern int exitcode;
-extern isc_sockaddr_t bind_address;
+extern struct sockaddr_storage bind_address;
 extern char keynametext[MXNAME];
 extern char keyfile[MXNAME];
 extern char keysecret[MXNAME];
 extern dns_name_t *hmacname;
 extern unsigned int digestbits;
 extern dns_tsigkey_t *tsigkey;
-extern isc_boolean_t validated;
+extern int validated;
 extern isc_taskmgr_t *taskmgr;
 extern isc_task_t *global_task;
-extern isc_boolean_t free_now;
-extern isc_boolean_t debugging, debugtiming;
-extern isc_boolean_t keep_open;
+extern int free_now;
+extern int debugging, debugtiming;
+extern int keep_open;
 
 extern char *progname;
 extern int tries;
@@ -254,14 +254,14 @@ int nslookup_main(int, char **);
  * Routines in dighost.c.
  */
 isc_result_t
-get_address(char *host, in_port_t port, isc_sockaddr_t *sockaddr);
+get_address(char *host, in_port_t port, struct sockaddr_storage *sockaddr);
 
 int
 getaddresses(dig_lookup_t *lookup, const char *host, isc_result_t *resultp);
 
 isc_result_t
-get_reverse(char *reverse, size_t len, char *value, isc_boolean_t ip6_int,
-	    isc_boolean_t strict);
+get_reverse(char *reverse, size_t len, char *value, int ip6_int,
+	    int strict);
 
 __dead void
 fatal(const char *format, ...)
@@ -273,7 +273,7 @@ debug(const char *format, ...) __attribute__((__format__(__printf__, 1, 2)));
 void
 check_result(isc_result_t result, const char *msg);
 
-isc_boolean_t
+int
 setup_lookup(dig_lookup_t *lookup);
 
 void
@@ -295,30 +295,22 @@ void
 setup_libs(void);
 
 void
-setup_system(isc_boolean_t ipv4only, isc_boolean_t ipv6only);
+setup_system(int ipv4only, int ipv6only);
 
 isc_result_t
-parse_uint(uint32_t *uip, const char *value, uint32_t max,
-	   const char *desc);
-
-isc_result_t
-parse_xint(uint32_t *uip, const char *value, uint32_t max,
-	   const char *desc);
-
-isc_result_t
-parse_netprefix(isc_sockaddr_t **sap, const char *value);
+parse_netprefix(struct sockaddr_storage **sap, int *plen, const char *value);
 
 void
 parse_hmac(const char *hmacstr);
 
 dig_lookup_t *
-requeue_lookup(dig_lookup_t *lookold, isc_boolean_t servers);
+requeue_lookup(dig_lookup_t *lookold, int servers);
 
 dig_lookup_t *
 make_empty_lookup(void);
 
 dig_lookup_t *
-clone_lookup(dig_lookup_t *lookold, isc_boolean_t servers);
+clone_lookup(dig_lookup_t *lookold, int servers);
 
 dig_server_t *
 make_server(const char *servname, const char *userarg);
@@ -345,19 +337,22 @@ set_search_domain(char *domain);
 char *
 next_token(char **stringp, const char *delim);
 
+int64_t
+uelapsed(const struct timespec *t1, const struct timespec *t2);
+
 /*
  * Routines to be defined in dig.c, host.c, and nslookup.c. and
  * then assigned to the appropriate function pointer
  */
 
 extern isc_result_t
-(*dighost_printmessage)(dig_query_t *query, dns_message_t *msg, isc_boolean_t headers);
+(*dighost_printmessage)(dig_query_t *query, dns_message_t *msg, int headers);
 /*%<
  * Print the final result of the lookup.
  */
 
 extern void
-(*dighost_received)(unsigned int bytes, isc_sockaddr_t *from, dig_query_t *query);
+(*dighost_received)(unsigned int bytes, struct sockaddr_storage *from, dig_query_t *query);
 /*%<
  * Print a message about where and when the response
  * was received from, like the final comment in the
@@ -390,7 +385,7 @@ dig_setup(int argc, char **argv);
  * Call to supply new parameters for the next lookup
  */
 void
-dig_query_setup(isc_boolean_t, isc_boolean_t, int argc, char **argv);
+dig_query_setup(int, int, int argc, char **argv);
 
 /*%<
  * set the main application event cycle running

@@ -1,4 +1,4 @@
-/*	$OpenBSD: gencode.c,v 1.52 2018/12/09 15:07:06 denis Exp $	*/
+/*	$OpenBSD: gencode.c,v 1.56 2020/09/12 09:27:22 kn Exp $	*/
 
 /*
  * Copyright (c) 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998
@@ -770,7 +770,7 @@ init_linktype(type)
 		return;
 
 	case DLT_LOOP:
-		off_linktype = -1;
+		off_linktype = 0;
 		off_nl = 4;
 		return;
 
@@ -912,16 +912,33 @@ gen_linktype(proto)
 	case DLT_LOOP:
 	case DLT_ENC:
 	case DLT_NULL:
-		/* XXX */
+	{
+		int v;
+
 		if (proto == ETHERTYPE_IP)
-			return (gen_cmp(0, BPF_W, (bpf_int32)htonl(AF_INET)));
+			v = AF_INET;
 #ifdef INET6
 		else if (proto == ETHERTYPE_IPV6)
-			return (gen_cmp(0, BPF_W, (bpf_int32)htonl(AF_INET6)));
+			v = AF_INET6;
 #endif /* INET6 */
 		else
 			return gen_false();
+
+		/*
+		 * For DLT_NULL, the link-layer header is a 32-bit word
+		 * containing an AF_ value in *host* byte order, and for
+		 * DLT_ENC, the link-layer header begins with a 32-bit
+		 * word containing an AF_ value in host byte order.
+		 *
+		 * For DLT_LOOP, the link-layer header is a 32-bit
+		 * word containing an AF_ value in *network* byte order.
+		 */
+		if (linktype != DLT_LOOP)
+			v = htonl(v);
+
+		return (gen_cmp(0, BPF_W, (bpf_int32)v));
 		break;
+	}
 	case DLT_PFLOG:
 		if (proto == ETHERTYPE_IP)
 			return (gen_cmp(offsetof(struct pfloghdr, af), BPF_B,
@@ -2870,6 +2887,22 @@ gen_loadlen()
 }
 
 struct arth *
+gen_loadrnd()
+{
+	int regno = alloc_reg();
+	struct arth *a = (struct arth *)newchunk(sizeof(*a));
+	struct slist *s;
+
+	s = new_stmt(BPF_LD|BPF_RND);
+	s->next = new_stmt(BPF_ST);
+	s->next->s.k = regno;
+	a->s = s;
+	a->regno = regno;
+
+	return a;
+}
+
+struct arth *
 gen_loadi(val)
 	int val;
 {
@@ -3435,6 +3468,27 @@ gen_vlan(vlan_num)
 		gen_and(b0, b1);
 		b0 = b1;
 	}
+
+	return (b0);
+}
+
+struct block *
+gen_sample(int rate)
+{
+	struct block *b0;
+	long long threshold = 0x100000000LL; /* 0xffffffff + 1 */
+
+	if (rate < 2) {
+		bpf_error("sample %d is too low", rate);
+		/*NOTREACHED*/
+	}
+	if (rate > (1 << 20)) {
+		bpf_error("sample %d is too high", rate);
+		/*NOTREACHED*/
+	}
+
+	threshold /= rate;
+	b0 = gen_relation(BPF_JGT, gen_loadrnd(), gen_loadi(threshold), 1);
 
 	return (b0);
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: iked.h,v 1.152 2020/06/03 17:56:42 tobhe Exp $	*/
+/*	$OpenBSD: iked.h,v 1.167 2020/10/03 20:23:08 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -455,6 +455,7 @@ struct iked_sa {
 	struct ibuf			*sa_1stmsg;	/* for initiator AUTH */
 	struct ibuf			*sa_2ndmsg;	/* for responder AUTH */
 	struct iked_id			 sa_localauth;	/* local AUTH message */
+	struct iked_id			 sa_peerauth;	/* peer AUTH message */
 	int				 sa_sigsha2;	/* use SHA2 for signatures */
 
 	struct iked_id			 sa_iid;	/* initiator id */
@@ -498,6 +499,7 @@ struct iked_sa {
 #define IKED_IKE_SA_KEEPALIVE_TIMEOUT	 20
 
 	struct iked_timer		 sa_rekey;	/* rekey timeout */
+	int				 sa_tmpfail;
 
 	struct iked_msgqueue		 sa_requests;	/* request queue */
 #define IKED_RETRANSMIT_TIMEOUT		 2		/* 2 seconds */
@@ -506,7 +508,10 @@ struct iked_sa {
 #define IKED_RESPONSE_TIMEOUT		 120		/* 2 minutes */
 
 	TAILQ_ENTRY(iked_sa)		 sa_peer_entry;
-	RB_ENTRY(iked_sa)		 sa_entry;
+	RB_ENTRY(iked_sa)		 sa_entry;	/* all SAs */
+
+	RB_ENTRY(iked_sa)		 sa_dstid_entry;	/* SAs by DSTID */
+	int				 sa_dstid_entry_valid;		/* sa_dstid_entry valid */
 
 	struct iked_addr		*sa_addrpool;	/* address from pool */
 	RB_ENTRY(iked_sa)		 sa_addrpool_entry;	/* pool entries */
@@ -517,15 +522,35 @@ struct iked_sa {
 #define IKED_IKE_SA_LAST_RECVD_TIMEOUT	 300		/* 5 minutes */
 };
 RB_HEAD(iked_sas, iked_sa);
+RB_HEAD(iked_dstid_sas, iked_sa);
 RB_HEAD(iked_addrpool, iked_sa);
 RB_HEAD(iked_addrpool6, iked_sa);
 
 struct iked_certreq {
 	struct ibuf			*cr_data;
 	uint8_t				 cr_type;
-	SLIST_ENTRY(iked_certreq)	 cr_entry;
+	SIMPLEQ_ENTRY(iked_certreq)	 cr_entry;
 };
-SLIST_HEAD(iked_certreqs, iked_certreq);
+SIMPLEQ_HEAD(iked_certreqs, iked_certreq);
+
+#define EAP_STATE_IDENTITY		(1)
+#define EAP_STATE_MSCHAPV2_CHALLENGE	(2)
+#define EAP_STATE_MSCHAPV2_SUCCESS	(3)
+#define EAP_STATE_SUCCESS		(4)
+
+struct eap_msg {
+	char		*eam_identity;
+	char		*eam_user;
+	int		 eam_type;
+	uint8_t		 eam_id;
+	uint8_t		 eam_msrid;
+	int		 eam_success;
+	int		 eam_found;
+	int		 eam_response;
+	uint8_t		 eam_challenge[16];
+	uint8_t		 eam_ntresponse[24];
+	uint32_t	 eam_state;
+};
 
 struct iked_message {
 	struct ibuf		*msg_data;
@@ -572,6 +597,11 @@ struct iked_message {
 	uint16_t		 msg_cpi;
 	uint8_t			 msg_transform;
 	uint16_t		 msg_flags;
+	struct eap_msg		 msg_eap;
+	size_t			 msg_del_spisize;
+	size_t			 msg_del_cnt;
+	struct ibuf		*msg_del_buf;
+	int			 msg_del_protoid;
 
 	/* MOBIKE */
 	int			 msg_update_sa_addresses;
@@ -601,6 +631,7 @@ struct iked_message {
 #define IKED_MSG_FLAGS_INVALID_KE			0x0040
 #define IKED_MSG_FLAGS_IPCOMP_SUPPORTED			0x0080
 #define IKED_MSG_FLAGS_USE_TRANSPORT			0x0100
+#define IKED_MSG_FLAGS_TEMPORARY_FAILURE		0x0200
 
 
 struct iked_user {
@@ -672,22 +703,35 @@ enum natt_mode {
 	NATT_FORCE,	/* send/recv with only NAT-T port */
 };
 
+struct iked_static {
+	uint64_t		 st_alive_timeout;
+	int			 st_enforcesingleikesa;
+	uint8_t			 st_frag;	/* fragmentation */
+	uint8_t			 st_mobike;	/* MOBIKE */
+	in_port_t		 st_nattport;
+};
+
 struct iked {
 	char				 sc_conffile[PATH_MAX];
 
 	uint32_t			 sc_opts;
-	enum natt_mode			 natt_mode;
+	enum natt_mode			 sc_nattmode;
 	uint8_t				 sc_passive;
 	uint8_t				 sc_decoupled;
-	in_port_t			 sc_nattport;
 
-	uint8_t				 sc_mobike;	/* MOBIKE */
-	uint8_t				 sc_frag;	/* fragmentation */
+	struct iked_static		 sc_static;
+
+#define sc_alive_timeout	sc_static.st_alive_timeout
+#define sc_enforcesingleikesa	sc_static.st_enforcesingleikesa
+#define sc_frag			sc_static.st_frag
+#define sc_mobike		sc_static.st_mobike
+#define sc_nattport		sc_static.st_nattport
 
 	struct iked_policies		 sc_policies;
 	struct iked_policy		*sc_defaultcon;
 
 	struct iked_sas			 sc_sas;
+	struct iked_dstid_sas		 sc_dstid_sas;
 	struct iked_activesas		 sc_activesas;
 	struct iked_flows		 sc_activeflows;
 	struct iked_users		 sc_users;
@@ -710,9 +754,13 @@ struct iked {
 
 	struct iked_ocsp_requests	 sc_ocsp;
 	char				*sc_ocsp_url;
+	long				 sc_ocsp_tolerate;
+	long				 sc_ocsp_maxage;
 
 	struct iked_addrpool		 sc_addrpool;
 	struct iked_addrpool6		 sc_addrpool6;
+
+	int				 sc_cert_partial_chain;
 };
 
 struct iked_socket {
@@ -776,17 +824,15 @@ int	 config_getpfkey(struct iked *, struct imsg *);
 int	 config_setuser(struct iked *, struct iked_user *, enum privsep_procid);
 int	 config_getuser(struct iked *, struct imsg *);
 int	 config_setcompile(struct iked *, enum privsep_procid);
-int	 config_getcompile(struct iked *, struct imsg *);
+int	 config_getcompile(struct iked *);
 int	 config_setocsp(struct iked *);
 int	 config_getocsp(struct iked *, struct imsg *);
 int	 config_setkeys(struct iked *);
 int	 config_getkey(struct iked *, struct imsg *);
-int	 config_setmobike(struct iked *);
-int	 config_getmobike(struct iked *, struct imsg *);
-int	 config_setfragmentation(struct iked *);
-int	 config_getfragmentation(struct iked *, struct imsg *);
-int	 config_setnattport(struct iked *);
-int	 config_getnattport(struct iked *, struct imsg *);
+int	 config_setstatic(struct iked *);
+int	 config_getstatic(struct iked *, struct imsg *);
+int	 config_setcertpartialchain(struct iked *);
+int	 config_getcertpartialchain(struct iked *, struct imsg *);
 
 /* policy.c */
 void	 policy_init(struct iked *);
@@ -816,9 +862,15 @@ struct iked_sa *
 	 sa_lookup(struct iked *, uint64_t, uint64_t, unsigned int);
 struct iked_user *
 	 user_lookup(struct iked *, const char *);
+struct iked_sa *
+	 sa_dstid_lookup(struct iked *, struct iked_sa *);
+struct iked_sa *
+	 sa_dstid_insert(struct iked *, struct iked_sa *);
+void	 sa_dstid_remove(struct iked *, struct iked_sa *);
 int	 proposals_negotiate(struct iked_proposals *, struct iked_proposals *,
 	    struct iked_proposals *, int);
 RB_PROTOTYPE(iked_sas, iked_sa, sa_entry, sa_cmp);
+RB_PROTOTYPE(iked_dstid_sas, iked_sa, sa_dstid_entry, sa_dstid_cmp);
 RB_PROTOTYPE(iked_addrpool, iked_sa, sa_addrpool_entry, sa_addrpool_cmp);
 RB_PROTOTYPE(iked_addrpool6, iked_sa, sa_addrpool6_entry, sa_addrpool6_cmp);
 RB_PROTOTYPE(iked_users, iked_user, user_entry, user_cmp);
@@ -884,6 +936,7 @@ int	 ikev2_childsa_delete(struct iked *, struct iked_sa *,
 void	 ikev2_ikesa_recv_delete(struct iked *, struct iked_sa *);
 void	 ikev2_ike_sa_timeout(struct iked *env, void *);
 void	 ikev2_ike_sa_setreason(struct iked_sa *, char *);
+void	 ikev2_reset_alive_timer(struct iked *);
 int	 ikev2_ike_sa_delete(struct iked *, struct iked_sa *);
 
 struct ibuf *
@@ -903,10 +956,10 @@ struct ikev2_payload *
 	 ikev2_add_payload(struct ibuf *);
 int	 ikev2_next_payload(struct ikev2_payload *, size_t,
 	    uint8_t);
-int	 ikev2_acquire_sa(struct iked *, struct iked_flow *);
+int	 ikev2_child_sa_acquire(struct iked *, struct iked_flow *);
+int	 ikev2_child_sa_drop(struct iked *, struct iked_spi *);
+int	 ikev2_child_sa_rekey(struct iked *, struct iked_spi *);
 void	 ikev2_disable_rekeying(struct iked *, struct iked_sa *);
-int	 ikev2_rekey_sa(struct iked *, struct iked_spi *);
-int	 ikev2_drop_sa(struct iked *, struct iked_spi *);
 int	 ikev2_print_id(struct iked_id *, char *, size_t);
 int	 ikev2_print_static_id(struct iked_static_id *, char *, size_t);
 
@@ -969,8 +1022,14 @@ int	 ikev2_pld_parse(struct iked *, struct ike_header *,
 	    struct iked_message *, size_t);
 
 /* eap.c */
-ssize_t	 eap_identity_request(struct ibuf *);
-int	 eap_parse(struct iked *, struct iked_sa *, void *, int);
+int	 eap_parse(struct iked *, struct iked_sa *, struct iked_message*,
+	    void *, int);
+int	 eap_success(struct iked *, struct iked_sa *, int);
+int	 eap_identity_request(struct iked *, struct iked_sa *);
+int	 eap_mschap_challenge(struct iked *, struct iked_sa *, int, int,
+	    uint8_t *, size_t);
+int	 eap_mschap_success(struct iked *, struct iked_sa *, int);
+int	 eap_challenge_request(struct iked *, struct iked_sa *, int);
 
 /* pfkey.c */
 int	 pfkey_couple(int, struct iked_sas *, int);
@@ -1123,10 +1182,10 @@ __dead void fatalx(const char *, ...)
 	    __attribute__((__format__ (printf, 1, 2)));
 
 /* ocsp.c */
-int	 ocsp_connect(struct iked *env);
+int	 ocsp_connect(struct iked *env, struct imsg *);
 int	 ocsp_receive_fd(struct iked *, struct imsg *);
-int	 ocsp_validate_cert(struct iked *, struct iked_static_id *,
-    void *, size_t, struct iked_sahdr, uint8_t);
+int	 ocsp_validate_cert(struct iked *, void *, size_t, struct iked_sahdr,
+    uint8_t, X509 *);
 
 /* parse.y */
 int	 parse_config(const char *, struct iked *);

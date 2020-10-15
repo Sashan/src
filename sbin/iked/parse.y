@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.102 2020/06/25 13:05:58 tobhe Exp $	*/
+/*	$OpenBSD: parse.y,v 1.114 2020/09/23 14:25:55 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -30,6 +30,7 @@
 #include <sys/stat.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#include <netinet/ip_ipsp.h>
 #include <arpa/inet.h>
 
 #include <ctype.h>
@@ -98,8 +99,13 @@ static int		 rules = 0;
 static int		 passive = 0;
 static int		 decouple = 0;
 static int		 mobike = 1;
+static int		 enforcesingleikesa = 0;
 static int		 fragmentation = 0;
+static int		 dpd_interval = IKED_IKE_SA_ALIVE_TIMEOUT;
 static char		*ocsp_url = NULL;
+static long		 ocsp_tolerate = 0;
+static long		 ocsp_maxage = -1;
+static int		 cert_partial_chain = 0;
 
 struct ipsec_xf {
 	const char	*name;
@@ -134,8 +140,12 @@ struct iked_transform ikev2_default_ike_transforms[] = {
 	{ IKEV2_XFORMTYPE_ENCR, IKEV2_XFORMENCR_AES_CBC, 128 },
 	{ IKEV2_XFORMTYPE_ENCR, IKEV2_XFORMENCR_3DES },
 	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_256 },
+	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_384 },
+	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_512 },
 	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA1 },
 	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA2_256_128 },
+	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA2_384_192 },
+	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA2_512_256 },
 	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA1_96 },
 	{ IKEV2_XFORMTYPE_DH,	IKEV2_XFORMDH_CURVE25519 },
 	{ IKEV2_XFORMTYPE_DH,	IKEV2_XFORMDH_ECP_521 },
@@ -154,9 +164,9 @@ size_t ikev2_default_nike_transforms = ((sizeof(ikev2_default_ike_transforms) /
 struct iked_transform ikev2_default_ike_transforms_noauth[] = {
 	{ IKEV2_XFORMTYPE_ENCR,	IKEV2_XFORMENCR_AES_GCM_16, 128 },
 	{ IKEV2_XFORMTYPE_ENCR,	IKEV2_XFORMENCR_AES_GCM_16, 256 },
-	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_512 },
-	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_384 },
 	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_256 },
+	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_384 },
+	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA2_512 },
 	{ IKEV2_XFORMTYPE_PRF,	IKEV2_XFORMPRF_HMAC_SHA1 },
 	{ IKEV2_XFORMTYPE_DH,	IKEV2_XFORMDH_CURVE25519 },
 	{ IKEV2_XFORMTYPE_DH,	IKEV2_XFORMDH_ECP_521 },
@@ -178,6 +188,8 @@ struct iked_transform ikev2_default_esp_transforms[] = {
 	{ IKEV2_XFORMTYPE_ENCR, IKEV2_XFORMENCR_AES_CBC, 192 },
 	{ IKEV2_XFORMTYPE_ENCR, IKEV2_XFORMENCR_AES_CBC, 128 },
 	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA2_256_128 },
+	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA2_384_192 },
+	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA2_512_256 },
 	{ IKEV2_XFORMTYPE_INTEGR, IKEV2_XFORMAUTH_HMAC_SHA1_96 },
 	{ IKEV2_XFORMTYPE_ESN,	IKEV2_XFORMESN_ESN },
 	{ IKEV2_XFORMTYPE_ESN,	IKEV2_XFORMESN_NONE },
@@ -344,6 +356,7 @@ struct ipsec_addr_wrap {
 	sa_family_t		 af;
 	unsigned int		 type;
 	unsigned int		 action;
+	uint16_t		 port;
 	char			*name;
 	struct ipsec_addr_wrap	*next;
 	struct ipsec_addr_wrap	*tail;
@@ -353,8 +366,6 @@ struct ipsec_addr_wrap {
 struct ipsec_hosts {
 	struct ipsec_addr_wrap	*src;
 	struct ipsec_addr_wrap	*dst;
-	uint16_t		 sport;
-	uint16_t		 dport;
 };
 
 struct ipsec_filters {
@@ -441,7 +452,10 @@ typedef struct {
 %token	IKEV1 FLOW SA TCPMD5 TUNNEL TRANSPORT COUPLE DECOUPLE SET
 %token	INCLUDE LIFETIME BYTES INET INET6 QUICK SKIP DEFAULT
 %token	IPCOMP OCSP IKELIFETIME MOBIKE NOMOBIKE RDOMAIN
-%token	FRAGMENTATION NOFRAGMENTATION
+%token	FRAGMENTATION NOFRAGMENTATION DPD_CHECK_INTERVAL
+%token	ENFORCESINGLEIKESA NOENFORCESINGLEIKESA
+%token	TOLERATE MAXAGE
+%token	CERTPARTIALCHAIN
 %token	<v.string>		STRING
 %token	<v.number>		NUMBER
 %type	<v.string>		string
@@ -507,11 +521,38 @@ set		: SET ACTIVE	{ passive = 0; }
 		| SET NOFRAGMENTATION	{ fragmentation = 0; }
 		| SET MOBIKE	{ mobike = 1; }
 		| SET NOMOBIKE	{ mobike = 0; }
+		| SET ENFORCESINGLEIKESA	{ enforcesingleikesa = 1; }
+		| SET NOENFORCESINGLEIKESA	{ enforcesingleikesa = 0; }
 		| SET OCSP STRING		{
 			if ((ocsp_url = strdup($3)) == NULL) {
 				yyerror("cannot set ocsp_url");
 				YYERROR;
 			}
+		}
+		| SET OCSP STRING TOLERATE time_spec {
+			if ((ocsp_url = strdup($3)) == NULL) {
+				yyerror("cannot set ocsp_url");
+				YYERROR;
+			}
+			ocsp_tolerate = $5;
+		}
+		| SET OCSP STRING TOLERATE time_spec MAXAGE time_spec {
+			if ((ocsp_url = strdup($3)) == NULL) {
+				yyerror("cannot set ocsp_url");
+				YYERROR;
+			}
+			ocsp_tolerate = $5;
+			ocsp_maxage = $7;
+		}
+		| SET CERTPARTIALCHAIN		{
+			cert_partial_chain = 1;
+		}
+		| SET DPD_CHECK_INTERVAL NUMBER {
+			if ($3 < 0) {
+				yyerror("timeout outside range");
+				YYERROR;
+			}
+			dpd_interval = $3;
 		}
 		;
 
@@ -649,9 +690,9 @@ hosts		: FROM host port TO host port		{
 				err(1, "hosts: calloc");
 
 			$$->src = $2;
-			$$->sport = $3;
+			$$->src->port = $3;
 			$$->dst = $5;
-			$$->dport = $6;
+			$$->dst->port = $6;
 		}
 		| TO host port FROM host port		{
 			struct ipsec_addr_wrap *ipa;
@@ -667,9 +708,9 @@ hosts		: FROM host port TO host port		{
 				err(1, "hosts: calloc");
 
 			$$->src = $5;
-			$$->sport = $6;
+			$$->src->port = $6;
 			$$->dst = $2;
-			$$->dport = $3;
+			$$->dst->port = $3;
 		}
 		;
 
@@ -986,7 +1027,7 @@ ikeauth		: /* empty */			{
 			}
 			free($2);
 
-			$$.auth_method = IKEV2_AUTH_RSA_SIG;
+			$$.auth_method = IKEV2_AUTH_SIG_ANY;
 			$$.auth_eap = EAP_TYPE_MSCHAP_V2;
 			$$.auth_length = 0;
 		}
@@ -1267,14 +1308,17 @@ lookup(char *s)
 		{ "any",		ANY },
 		{ "auth",		AUTHXF },
 		{ "bytes",		BYTES },
+		{ "cert_partial_chain",	CERTPARTIALCHAIN },
 		{ "childsa",		CHILDSA },
 		{ "config",		CONFIG },
 		{ "couple",		COUPLE },
 		{ "decouple",		DECOUPLE },
 		{ "default",		DEFAULT },
+		{ "dpd_check_interval",	DPD_CHECK_INTERVAL },
 		{ "dstid",		DSTID },
 		{ "eap",		EAP },
 		{ "enc",		ENCXF },
+		{ "enforcesingleikesa",	ENFORCESINGLEIKESA },
 		{ "esn",		ESN },
 		{ "esp",		ESP },
 		{ "file",		FILENAME },
@@ -1292,8 +1336,10 @@ lookup(char *s)
 		{ "ipcomp",		IPCOMP },
 		{ "lifetime",		LIFETIME },
 		{ "local",		LOCAL },
+		{ "maxage",		MAXAGE },
 		{ "mobike",		MOBIKE },
 		{ "name",		NAME },
+		{ "noenforcesingleikesa",	NOENFORCESINGLEIKESA },
 		{ "noesn",		NOESN },
 		{ "nofragmentation",	NOFRAGMENTATION },
 		{ "nomobike",		NOMOBIKE },
@@ -1314,6 +1360,7 @@ lookup(char *s)
 		{ "tap",		TAP },
 		{ "tcpmd5",		TCPMD5 },
 		{ "to",			TO },
+		{ "tolerate",		TOLERATE },
 		{ "transport",		TRANSPORT },
 		{ "tunnel",		TUNNEL },
 		{ "user",		USER }
@@ -1696,7 +1743,13 @@ parse_config(const char *filename, struct iked *x_env)
 	free(ocsp_url);
 
 	mobike = 1;
+	enforcesingleikesa = 0;
+	cert_partial_chain = decouple = passive = 0;
+	ocsp_tolerate = 0;
+	ocsp_url = NULL;
+	ocsp_maxage = -1;
 	fragmentation = 0;
+	dpd_interval = IKED_IKE_SA_ALIVE_TIMEOUT;
 	decouple = passive = 0;
 	ocsp_url = NULL;
 
@@ -1710,8 +1763,13 @@ parse_config(const char *filename, struct iked *x_env)
 	env->sc_passive = passive ? 1 : 0;
 	env->sc_decoupled = decouple ? 1 : 0;
 	env->sc_mobike = mobike;
+	env->sc_enforcesingleikesa = enforcesingleikesa;
 	env->sc_frag = fragmentation;
+	env->sc_alive_timeout = dpd_interval;
 	env->sc_ocsp_url = ocsp_url;
+	env->sc_ocsp_tolerate = ocsp_tolerate;
+	env->sc_ocsp_maxage = ocsp_maxage;
+	env->sc_cert_partial_chain = cert_partial_chain;
 
 	if (!rules)
 		log_warnx("%s: no valid configuration rules found",
@@ -2203,6 +2261,7 @@ ifa_lookup(const char *ifa_name)
 				/* for now we can not handle link local,
 				 * therefore bail for now
 				 */
+				free(n->name);
 				free(n);
 				continue;
 
@@ -2568,7 +2627,6 @@ create_ike(char *name, int af, uint8_t ipproto,
     struct ipsec_addr_wrap *ikecfg)
 {
 	char			 idstr[IKED_ID_SIZE];
-	unsigned int		 idtype = IKEV2_ID_NONE;
 	struct ipsec_addr_wrap	*ipa, *ipb, *ippn;
 	struct iked_auth	*ikeauth;
 	struct iked_policy	 pol;
@@ -2929,21 +2987,21 @@ create_ike(char *name, int af, uint8_t ipproto,
 	for (ipa = hosts->src, ipb = hosts->dst; ipa && ipb;
 	    ipa = ipa->next, ipb = ipb->next) {
 		if ((flow = calloc(1, sizeof(struct iked_flow))) == NULL)
-			fatalx("%s: falied to alloc flow.", __func__);
+			fatalx("%s: failed to alloc flow.", __func__);
 
 		memcpy(&flow->flow_src.addr, &ipa->address,
 		    sizeof(ipa->address));
 		flow->flow_src.addr_af = ipa->af;
 		flow->flow_src.addr_mask = ipa->mask;
 		flow->flow_src.addr_net = ipa->netaddress;
-		flow->flow_src.addr_port = hosts->sport;
+		flow->flow_src.addr_port = ipa->port;
 
 		memcpy(&flow->flow_dst.addr, &ipb->address,
 		    sizeof(ipb->address));
 		flow->flow_dst.addr_af = ipb->af;
 		flow->flow_dst.addr_mask = ipb->mask;
 		flow->flow_dst.addr_net = ipb->netaddress;
-		flow->flow_dst.addr_port = hosts->dport;
+		flow->flow_dst.addr_port = ipb->port;
 
 		ippn = ipa->srcnat;
 		if (ippn) {
@@ -2956,6 +3014,8 @@ create_ike(char *name, int af, uint8_t ipproto,
 			flow->flow_prenat.addr_af = 0;
 		}
 
+		flow->flow_dir = IPSP_DIRECTION_OUT;
+		flow->flow_saproto = saproto;
 		flow->flow_ipproto = ipproto;
 		flow->flow_rdomain = rdomain;
 
@@ -2980,24 +3040,11 @@ create_ike(char *name, int af, uint8_t ipproto,
 		cfg->cfg.address.addr_af = ipa->af;
 	}
 
-	if (dstid) {
+	if (dstid)
 		strlcpy(idstr, dstid, sizeof(idstr));
-		idtype = pol.pol_peerid.id_type;
-	} else if (!pol.pol_peer.addr_net) {
+	else if (!pol.pol_peer.addr_net)
 		print_host((struct sockaddr *)&pol.pol_peer.addr, idstr,
 		    sizeof(idstr));
-		switch (pol.pol_peer.addr.ss_family) {
-		case AF_INET:
-			idtype = IKEV2_ID_IPV4;
-			break;
-		case AF_INET6:
-			idtype = IKEV2_ID_IPV6;
-			break;
-		default:
-			log_warnx("%s: unknown address family", __func__);
-			break;
-		}
-	}
 
 	ikeauth = &pol.pol_auth;
 	switch (ikeauth->auth_method) {

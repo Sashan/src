@@ -1,4 +1,4 @@
-.\"	$OpenBSD: smtpd.conf.5,v 1.250 2020/04/25 09:20:38 eric Exp $
+.\"	$OpenBSD: smtpd.conf.5,v 1.255 2020/09/23 19:11:50 martijn Exp $
 .\"
 .\" Copyright (c) 2008 Janne Johansson <jj@openbsd.org>
 .\" Copyright (c) 2009 Jacek Masiulaniec <jacekm@dobremiasto.net>
@@ -17,7 +17,7 @@
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
 .\"
-.Dd $Mdocdate: April 25 2020 $
+.Dd $Mdocdate: September 23 2020 $
 .Dt SMTPD.CONF 5
 .Os
 .Sh NAME
@@ -280,6 +280,14 @@ and
 .Dq smtps
 protocols for authentication.
 Server certificates for those protocols are verified by default.
+.It Cm pki Ar pkiname
+For secure connections,
+use the certificate associated with
+.Ar pkiname
+(declared in a
+.Ic pki
+directive)
+to prove the client's identity to the remote mail server.
 .It Cm srs
 When relaying a mail resulting from a forward,
 use the Sender Rewriting Scheme to rewrite sender address.
@@ -313,6 +321,11 @@ which is useful on machines with multiple interfaces.
 If the list contains more than one address, all of them are used
 in such a way that traffic is routed as efficiently as possible.
 .El
+.It Ic admd Ar authservid
+The Administrative Management Domain this mailserver belongs to.
+The authservid will be forwarded to filters using it to identify or mark
+authentication-results headers.
+If omitted it defaults to the server name.
 .It Ic bounce Cm warn-interval Ar delay Op , Ar delay ...
 Send warning messages to the envelope sender when temporary delivery
 failures cause a message to remain on the queue for longer than
@@ -604,7 +617,7 @@ Specify that session may originate from authenticated user or user list
 no matter the source IP address.
 .It Xo
 .Op Ic \&!
-.Cm from auth
+.Cm from auth regex
 .Ar user | Pf < Ar user Ns >
 .Xc
 Specify that session may originate from authenticated regex or regex list

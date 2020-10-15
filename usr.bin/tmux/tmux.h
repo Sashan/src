@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.1071 2020/06/18 08:34:22 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.1079 2020/10/05 09:53:01 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -448,6 +448,7 @@ enum tty_code_code {
 	TTYC_KUP6,
 	TTYC_KUP7,
 	TTYC_MS,
+	TTYC_OL,
 	TTYC_OP,
 	TTYC_REV,
 	TTYC_RGB,
@@ -459,6 +460,7 @@ enum tty_code_code {
 	TTYC_SE,
 	TTYC_SETAB,
 	TTYC_SETAF,
+	TTYC_SETAL,
 	TTYC_SETRGBB,
 	TTYC_SETRGBF,
 	TTYC_SETULC,
@@ -496,6 +498,7 @@ enum msgtype {
 	MSG_IDENTIFY_CWD,
 	MSG_IDENTIFY_FEATURES,
 	MSG_IDENTIFY_STDOUT,
+	MSG_IDENTIFY_LONGFLAGS,
 
 	MSG_COMMAND = 200,
 	MSG_DETACH,
@@ -1722,6 +1725,15 @@ struct client {
 };
 TAILQ_HEAD(clients, client);
 
+/* Control mode subscription type. */
+enum control_sub_type {
+	CONTROL_SUB_SESSION,
+	CONTROL_SUB_PANE,
+	CONTROL_SUB_ALL_PANES,
+	CONTROL_SUB_WINDOW,
+	CONTROL_SUB_ALL_WINDOWS
+};
+
 /* Key binding and key table. */
 struct key_binding {
 	key_code		 key;
@@ -1779,6 +1791,7 @@ enum options_table_type {
 
 struct options_table_entry {
 	const char		 *name;
+	const char		 *alternative_name;
 	enum options_table_type	  type;
 	int			  scope;
 	int			  flags;
@@ -1796,6 +1809,11 @@ struct options_table_entry {
 
 	const char		 *text;
 	const char		 *unit;
+};
+
+struct options_name_map {
+	const char		*from;
+	const char		*to;
 };
 
 /* Common command usages. */
@@ -2030,7 +2048,8 @@ int		 options_remove_or_default(struct options_entry *, int,
 		     char **);
 
 /* options-table.c */
-extern const struct options_table_entry options_table[];
+extern const struct options_table_entry	options_table[];
+extern const struct options_name_map	options_other_names[];
 
 /* job.c */
 typedef void (*job_update_cb) (struct job *);
@@ -2110,6 +2129,7 @@ int	tty_open(struct tty *, char **);
 void	tty_close(struct tty *);
 void	tty_free(struct tty *);
 void	tty_update_features(struct tty *);
+void	tty_set_selection(struct tty *, const char *, size_t);
 void	tty_write(void (*)(struct tty *, const struct tty_ctx *),
 	    struct tty_ctx *);
 void	tty_cmd_alignmenttest(struct tty *, const struct tty_ctx *);
@@ -2314,7 +2334,7 @@ void printflike(2, 3) cmdq_error(struct cmdq_item *, const char *, ...);
 void	cmd_wait_for_flush(void);
 
 /* client.c */
-int	client_main(struct event_base *, int, char **, int, int);
+int	client_main(struct event_base *, int, char **, uint64_t, int);
 
 /* key-bindings.c */
 struct key_table *key_bindings_get_table(const char *, int);
@@ -2420,7 +2440,9 @@ void	 server_lock(void);
 void	 server_lock_session(struct session *);
 void	 server_lock_client(struct client *);
 void	 server_kill_pane(struct window_pane *);
-void	 server_kill_window(struct window *);
+void	 server_kill_window(struct window *, int);
+void	 server_renumber_session(struct session *);
+void	 server_renumber_all(void);
 int	 server_link_window(struct session *,
 	     struct winlink *, struct session *, int, int, int, char **);
 void	 server_unlink_window(struct session *, struct winlink *);
@@ -2439,8 +2461,7 @@ struct style_range *status_get_range(struct client *, u_int, u_int);
 void	 status_init(struct client *);
 void	 status_free(struct client *);
 int	 status_redraw(struct client *);
-void printflike(3, 4) status_message_set(struct client *, int, const char *,
-	     ...);
+void status_message_set(struct client *, int, int, const char *, ...);
 void	 status_message_clear(struct client *);
 int	 status_message_redraw(struct client *);
 void	 status_prompt_set(struct client *, struct cmd_find_state *,
@@ -2860,6 +2881,9 @@ void	control_reset_offsets(struct client *);
 void printflike(2, 3) control_write(struct client *, const char *, ...);
 void	control_write_output(struct client *, struct window_pane *);
 int	control_all_done(struct client *);
+void	control_add_sub(struct client *, const char *, enum control_sub_type,
+    	   int, const char *);
+void	control_remove_sub(struct client *, const char *);
 
 /* control-notify.c */
 void	control_notify_input(struct client *, struct window_pane *,
@@ -2926,6 +2950,7 @@ enum utf8_state	 utf8_append(struct utf8_data *, u_char);
 int		 utf8_isvalid(const char *);
 int		 utf8_strvis(char *, const char *, size_t, int);
 int		 utf8_stravis(char **, const char *, int);
+int		 utf8_stravisx(char **, const char *, size_t, int);
 char		*utf8_sanitize(const char *);
 size_t		 utf8_strlen(const struct utf8_data *);
 u_int		 utf8_strwidth(const struct utf8_data *, ssize_t);

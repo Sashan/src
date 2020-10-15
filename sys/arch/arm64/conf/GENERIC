@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.172 2020/06/25 12:44:09 patrick Exp $
+# $OpenBSD: GENERIC,v 1.174 2020/09/30 22:23:40 patrick Exp $
 #
 # GENERIC machine description file
 #
@@ -163,7 +163,7 @@ bcmrng*		at fdt?
 bcmsdhost*	at fdt?
 sdmmc*		at bcmsdhost?
 bcmtemp*	at fdt?
-bcmtmon*	at fdt?
+bcmtmon*	at fdt? early 1
 bse*		at fdt?
 bse*		at acpi?
 dwctwo*		at fdt?
@@ -439,6 +439,7 @@ ipmi*		at iic?			# IPMI (SIIF)
 islrtc*		at iic?			# ISL1208 RTC
 maxrtc*		at iic?			# DS1307 RTC
 mcprtc*		at iic?			# MCP794XX RTC
+mfokrtc*	at iic?			# M41T8X RTC
 pcamux*		at iic?			# PCA9548 multiplexer
 iic*		at pcamux?
 pcfrtc*		at iic?			# PCF8523 RTC

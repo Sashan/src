@@ -1,4 +1,4 @@
-/*	$OpenBSD: mft.c,v 1.14 2020/04/11 15:53:44 deraadt Exp $ */
+/*	$OpenBSD: mft.c,v 1.16 2020/09/12 15:46:48 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -24,7 +24,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <openssl/ssl.h>
 #include <openssl/sha.h>
 
 #include "extern.h"
@@ -61,7 +60,7 @@ gentime2str(const ASN1_GENERALIZEDTIME *time)
  */
 static time_t
 check_validity(const ASN1_GENERALIZEDTIME *from,
-    const ASN1_GENERALIZEDTIME *until, const char *fn, int force)
+    const ASN1_GENERALIZEDTIME *until, const char *fn)
 {
 	time_t now = time(NULL);
 
@@ -82,10 +81,8 @@ check_validity(const ASN1_GENERALIZEDTIME *from,
 	}
 	/* check that now is not after until */
 	if (X509_cmp_time(until, &now) < 0) {
-		warnx("%s: mft expired on %s%s", fn, gentime2str(until),
-		    force ? " (ignoring)" : "");
-		if (!force)
-			return 0;
+		warnx("%s: mft expired on %s", fn, gentime2str(until));
+		return 0;
 	}
 
 	return 1;
@@ -237,7 +234,7 @@ out:
  * Returns <0 on failure, 0 on stale, >0 on success.
  */
 static int
-mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p, int force)
+mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p)
 {
 	ASN1_SEQUENCE_ANY	*seq;
 	const ASN1_TYPE		*t;
@@ -311,7 +308,7 @@ mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p, int forc
 	}
 	until = t->value.generalizedtime;
 
-	validity = check_validity(from, until, p->fn, force);
+	validity = check_validity(from, until, p->fn);
 	if (validity != 1)
 		goto out;
 
@@ -356,7 +353,7 @@ out:
  * The MFT content is otherwise returned.
  */
 struct mft *
-mft_parse(X509 **x509, const char *fn, int force)
+mft_parse(X509 **x509, const char *fn)
 {
 	struct parse	 p;
 	int		 c, rc = 0;
@@ -384,7 +381,7 @@ mft_parse(X509 **x509, const char *fn, int force)
 	 * references as well as marking it as stale.
 	 */
 
-	if ((c = mft_parse_econtent(cms, cmsz, &p, force)) == 0) {
+	if ((c = mft_parse_econtent(cms, cmsz, &p)) == 0) {
 		/*
 		 * FIXME: it should suffice to just mark this as stale
 		 * and have the logic around mft_read() simply ignore

@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.114 2019/09/06 13:45:04 deraadt Exp $	*/
+/*	$OpenBSD: trap.c,v 1.117 2020/09/24 20:22:50 deraadt Exp $	*/
 /*	$NetBSD: trap.c,v 1.3 1996/10/13 03:31:37 christos Exp $	*/
 
 /*
@@ -245,18 +245,12 @@ trap(struct trapframe *frame)
 	if (frame->srr1 & PSL_PR) {
 		type |= EXC_USER;
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto out;
 	}
 
 	switch (type) {
 	case EXC_TRC|EXC_USER:		
 		sv.sival_int = frame->srr0;
-		KERNEL_LOCK();
 		trapsignal(p, SIGTRAP, type, TRAP_TRACE, sv);
-		KERNEL_UNLOCK();
 		break;
 	case EXC_MCHK:
 		if ((fb = p->p_addr->u_pcb.pcb_onfault)) {
@@ -312,6 +306,11 @@ trap(struct trapframe *frame)
 		    frame->dar, frame->dsisr, 0))
 			break;
 
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+
 		KERNEL_LOCK();
 		if (frame->dsisr & DSISR_STORE) {
 			ftype = PROT_READ | PROT_WRITE;
@@ -354,9 +353,7 @@ trap(struct trapframe *frame)
 /* XXX Likely that returning from this trap is bogus... */
 /* XXX Have to make sure that sigreturn does the right thing. */
 		sv.sival_int = frame->srr0;
-		KERNEL_LOCK();
 		trapsignal(p, SIGSEGV, PROT_EXEC, SEGV_MAPERR, sv);
-		KERNEL_UNLOCK();
 		break;
 
 	case EXC_SC|EXC_USER:
@@ -455,9 +452,7 @@ trap(struct trapframe *frame)
 			frame->srr0 += 4;
 		else {
 			sv.sival_int = frame->srr0;
-			KERNEL_LOCK();
 			trapsignal(p, SIGBUS, PROT_EXEC, BUS_ADRALN, sv);
-			KERNEL_UNLOCK();
 		}
 		break;
 
@@ -481,15 +476,11 @@ brain_damage:
 	case EXC_PGM|EXC_USER:
 		if (frame->srr1 & (1<<(31-14))) {
 			sv.sival_int = frame->srr0;
-			KERNEL_LOCK();
 			trapsignal(p, SIGTRAP, type, TRAP_BRKPT, sv);
-			KERNEL_UNLOCK();
 			break;
 		}
 		sv.sival_int = frame->srr0;
-		KERNEL_LOCK();
 		trapsignal(p, SIGILL, 0, ILL_ILLOPC, sv);
-		KERNEL_UNLOCK();
 		break;
 
 	case EXC_PGM:
@@ -519,23 +510,19 @@ brain_damage:
 		break;
 #else  /* ALTIVEC */
 		sv.sival_int = frame->srr0;
-		KERNEL_LOCK();
 		trapsignal(p, SIGILL, 0, ILL_ILLOPC, sv);
-		KERNEL_UNLOCK();
 		break;
 #endif
 
 	case EXC_VECAST|EXC_USER:
 		sv.sival_int = frame->srr0;
-		KERNEL_LOCK();
 		trapsignal(p, SIGFPE, 0, FPE_FLTRES, sv);
-		KERNEL_UNLOCK();
 		break;
 
 	case EXC_AST|EXC_USER:
 		p->p_md.md_astpending = 0;	/* we are about to do it */
 		uvmexp.softs++;
-		mi_ast(p, ci->ci_want_resched);
+		mi_ast(p, curcpu()->ci_want_resched);
 		break;
 	}
 

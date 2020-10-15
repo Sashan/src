@@ -1,4 +1,4 @@
-/* $OpenBSD: server-client.c,v 1.358 2020/06/18 08:34:22 nicm Exp $ */
+/* $OpenBSD: server-client.c,v 1.361 2020/09/22 05:23:34 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -1474,11 +1474,13 @@ server_client_check_pane_resize(struct window_pane *wp)
 		 * Otherwise resize to the force size and start the timer.
 		 */
 		if (wp->flags & PANE_RESIZENOW) {
-			log_debug("%s: resizing %%%u after forced resize", __func__, wp->id);
+			log_debug("%s: resizing %%%u after forced resize",
+			    __func__, wp->id);
 			window_pane_send_resize(wp, 0);
 			wp->flags &= ~(PANE_RESIZE|PANE_RESIZEFORCE|PANE_RESIZENOW);
 		} else if (!evtimer_pending(&wp->force_timer, NULL)) {
-			log_debug("%s: forcing resize of %%%u", __func__, wp->id);
+			log_debug("%s: forcing resize of %%%u", __func__,
+			    wp->id);
 			window_pane_send_resize(wp, 1);
 			server_client_start_force_timer(wp);
 		}
@@ -1660,8 +1662,6 @@ server_client_reset_state(struct client *c)
 		s = wp->screen;
 	if (s != NULL)
 		mode = s->mode;
-	if (c->prompt_string != NULL || c->message_string != NULL)
-		mode &= ~MODE_CURSOR;
 	log_debug("%s: client %s mode %x", __func__, c->name, mode);
 
 	/* Reset region and margin. */
@@ -1985,6 +1985,7 @@ server_client_dispatch(struct imsg *imsg, void *arg)
 	switch (imsg->hdr.type) {
 	case MSG_IDENTIFY_FEATURES:
 	case MSG_IDENTIFY_FLAGS:
+	case MSG_IDENTIFY_LONGFLAGS:
 	case MSG_IDENTIFY_TERM:
 	case MSG_IDENTIFY_TTYNAME:
 	case MSG_IDENTIFY_CWD:
@@ -2143,6 +2144,7 @@ server_client_dispatch_identify(struct client *c, struct imsg *imsg)
 	const char	*data, *home;
 	size_t		 datalen;
 	int		 flags, feat;
+	uint64_t	 longflags;
 	char		*name;
 
 	if (c->flags & CLIENT_IDENTIFIED)
@@ -2166,6 +2168,14 @@ server_client_dispatch_identify(struct client *c, struct imsg *imsg)
 		memcpy(&flags, data, sizeof flags);
 		c->flags |= flags;
 		log_debug("client %p IDENTIFY_FLAGS %#x", c, flags);
+		break;
+	case MSG_IDENTIFY_LONGFLAGS:
+		if (datalen != sizeof longflags)
+			fatalx("bad MSG_IDENTIFY_LONGFLAGS size");
+		memcpy(&longflags, data, sizeof longflags);
+		c->flags |= longflags;
+		log_debug("client %p IDENTIFY_LONGFLAGS %#llx", c,
+		    (unsigned long long)longflags);
 		break;
 	case MSG_IDENTIFY_TERM:
 		if (datalen == 0 || data[datalen - 1] != '\0')

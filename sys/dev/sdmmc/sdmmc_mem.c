@@ -1,4 +1,4 @@
-/*	$OpenBSD: sdmmc_mem.c,v 1.33 2018/06/04 13:33:10 patrick Exp $	*/
+/*	$OpenBSD: sdmmc_mem.c,v 1.35 2020/08/24 15:06:10 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2006 Uwe Stuehler <uwe@openbsd.org>
@@ -52,6 +52,7 @@ int	sdmmc_mem_decode_scr(struct sdmmc_softc *, uint32_t *,
 int	sdmmc_mem_send_cxd_data(struct sdmmc_softc *, int, void *, size_t);
 int	sdmmc_mem_set_bus_width(struct sdmmc_function *, int);
 int	sdmmc_mem_mmc_switch(struct sdmmc_function *, uint8_t, uint8_t, uint8_t);
+int	sdmmc_mem_signal_voltage(struct sdmmc_softc *, int);
 
 int	sdmmc_mem_sd_init(struct sdmmc_softc *, struct sdmmc_function *);
 int	sdmmc_mem_mmc_init(struct sdmmc_softc *, struct sdmmc_function *);
@@ -70,18 +71,50 @@ int	sdmmc_mem_write_block_subr(struct sdmmc_function *, bus_dmamap_t,
 #define DPRINTF(s)	/**/
 #endif
 
+const struct {
+	const char *name;
+	int v;
+	int freq;
+} switch_group0_functions[] = {
+	/* Default/SDR12 */
+	{ "Default/SDR12",	 0,			 25000 },
+
+	/* High-Speed/SDR25 */
+	{ "High-Speed/SDR25",	SMC_CAPS_SD_HIGHSPEED,	 50000 },
+
+	/* SDR50 */
+	{ "SDR50",		SMC_CAPS_UHS_SDR50,	100000 },
+
+	/* SDR104 */
+	{ "SDR104",		SMC_CAPS_UHS_SDR104,	208000 },
+
+	/* DDR50 */
+	{ "DDR50",		SMC_CAPS_UHS_DDR50,	 50000 },
+};
+
+const int sdmmc_mmc_timings[] = {
+	[SDMMC_TIMING_LEGACY]		= 26000,
+	[SDMMC_TIMING_HIGHSPEED]	= 52000,
+	[SDMMC_TIMING_MMC_DDR52]	= 52000,
+	[SDMMC_TIMING_MMC_HS200]	= 200000
+};
+
 /*
  * Initialize SD/MMC memory cards and memory in SDIO "combo" cards.
  */
 int
 sdmmc_mem_enable(struct sdmmc_softc *sc)
 {
-	u_int32_t host_ocr;
-	u_int32_t card_ocr;
+	uint32_t host_ocr;
+	uint32_t card_ocr;
+	uint32_t new_ocr;
+	uint32_t ocr = 0;
+	int error;
 
 	rw_assert_wrlock(&sc->sc_lock);
 
 	/* Set host mode to SD "combo" card or SD memory-only. */
+	CLR(sc->sc_flags, SMF_UHS_MODE);
 	SET(sc->sc_flags, SMF_SD_MODE|SMF_MEM_MODE);
 
 	/* Reset memory (*must* do that before CMD55 or CMD1). */
@@ -125,14 +158,86 @@ sdmmc_mem_enable(struct sdmmc_softc *sc)
 
 	host_ocr &= card_ocr; /* only allow the common voltages */
 
-	if (sdmmc_send_if_cond(sc, card_ocr) == 0)
-		host_ocr |= SD_OCR_SDHC_CAP;
+	if (ISSET(sc->sc_flags, SMF_SD_MODE)) {
+		if (sdmmc_send_if_cond(sc, card_ocr) == 0)
+			SET(ocr, MMC_OCR_HCS);
+
+		if (sdmmc_chip_host_ocr(sc->sct, sc->sch) & MMC_OCR_S18A)
+			SET(ocr, MMC_OCR_S18A);
+	}
+	host_ocr |= ocr;
 
 	/* Send the new OCR value until all cards are ready. */
-	if (sdmmc_mem_send_op_cond(sc, host_ocr, NULL) != 0) {
+	if (sdmmc_mem_send_op_cond(sc, host_ocr, &new_ocr) != 0) {
 		DPRINTF(("%s: can't send memory OCR\n", DEVNAME(sc)));
 		return 1;
 	}
+
+	if (ISSET(sc->sc_flags, SMF_SD_MODE) && ISSET(new_ocr, MMC_OCR_S18A)) {
+		/*
+		 * Card and host support low voltage mode, begin switch
+		 * sequence.
+		 */
+		struct sdmmc_command cmd;
+
+		memset(&cmd, 0, sizeof(cmd));
+		cmd.c_arg = 0;
+		cmd.c_flags = SCF_CMD_AC | SCF_RSP_R1;
+		cmd.c_opcode = SD_VOLTAGE_SWITCH;
+		DPRINTF(("%s: switching card to 1.8V\n", DEVNAME(sc)));
+		error = sdmmc_mmc_command(sc, &cmd);
+		if (error) {
+			DPRINTF(("%s: voltage switch command failed\n",
+			    SDMMCDEVNAME(sc)));
+			return error;
+		}
+
+		error = sdmmc_mem_signal_voltage(sc, SDMMC_SIGNAL_VOLTAGE_180);
+		if (error)
+			return error;
+
+		SET(sc->sc_flags, SMF_UHS_MODE);
+	}
+
+	return 0;
+}
+
+int
+sdmmc_mem_signal_voltage(struct sdmmc_softc *sc, int signal_voltage)
+{
+	int error;
+
+	/*
+	 * Stop the clock
+	 */
+	error = sdmmc_chip_bus_clock(sc->sct, sc->sch, 0, SDMMC_TIMING_LEGACY);
+	if (error)
+		return error;
+
+	delay(1000);
+
+	/*
+	 * Card switch command was successful, update host controller
+	 * signal voltage setting.
+	 */
+	DPRINTF(("%s: switching host to %s\n", SDMMCDEVNAME(sc),
+	    signal_voltage == SDMMC_SIGNAL_VOLTAGE_180 ? "1.8V" : "3.3V"));
+	error = sdmmc_chip_signal_voltage(sc->sct, sc->sch, signal_voltage);
+	if (error)
+		return error;
+
+	delay(5000);
+
+	/*
+	 * Switch to SDR12 timing
+	 */
+	error = sdmmc_chip_bus_clock(sc->sct, sc->sch, SDMMC_SDCLK_25MHZ,
+	    SDMMC_TIMING_LEGACY);
+	if (error)
+		return error;
+
+	delay(1000);
+
 	return 0;
 }
 
@@ -581,9 +686,68 @@ sdmmc_be512_to_bitfield512(sdmmc_bitfield512_t *buf) {
 }
 
 int
+sdmmc_mem_select_transfer_mode(struct sdmmc_softc *sc, int support_func)
+{
+	if (ISSET(sc->sc_flags, SMF_UHS_MODE)) {
+		if (ISSET(sc->sc_caps, SMC_CAPS_UHS_SDR104) &&
+		    ISSET(support_func, 1 << SD_ACCESS_MODE_SDR104)) {
+			return SD_ACCESS_MODE_SDR104;
+		}
+		if (ISSET(sc->sc_caps, SMC_CAPS_UHS_DDR50) &&
+		    ISSET(support_func, 1 << SD_ACCESS_MODE_DDR50)) {
+			return SD_ACCESS_MODE_DDR50;
+		}
+		if (ISSET(sc->sc_caps, SMC_CAPS_UHS_SDR50) &&
+		    ISSET(support_func, 1 << SD_ACCESS_MODE_SDR50)) {
+			return SD_ACCESS_MODE_SDR50;
+		}
+	}
+	if (ISSET(sc->sc_caps, SMC_CAPS_SD_HIGHSPEED) &&
+	    ISSET(support_func, 1 << SD_ACCESS_MODE_SDR25)) {
+		return SD_ACCESS_MODE_SDR25;
+	}
+	return SD_ACCESS_MODE_SDR12;
+}
+
+int
+sdmmc_mem_execute_tuning(struct sdmmc_softc *sc, struct sdmmc_function *sf)
+{
+	int timing = -1;
+
+	if (ISSET(sc->sc_flags, SMF_SD_MODE)) {
+		if (!ISSET(sc->sc_flags, SMF_UHS_MODE))
+			return 0;
+
+		switch (sf->csd.tran_speed) {
+		case 100000:
+			timing = SDMMC_TIMING_UHS_SDR50;
+			break;
+		case 208000:
+			timing = SDMMC_TIMING_UHS_SDR104;
+			break;
+		default:
+			return 0;
+		}
+	} else {
+		switch (sf->csd.tran_speed) {
+		case 200000:
+			timing = SDMMC_TIMING_MMC_HS200;
+			break;
+		default:
+			return 0;
+		}
+	}
+
+	DPRINTF(("%s: execute tuning for timing %d\n", SDMMCDEVNAME(sc),
+	    timing));
+
+	return sdmmc_chip_execute_tuning(sc->sct, sc->sch, timing);
+}
+
+int
 sdmmc_mem_sd_init(struct sdmmc_softc *sc, struct sdmmc_function *sf)
 {
-	int support_func, best_func, error;
+	int support_func, best_func, error, i;
 	sdmmc_bitfield512_t status; /* Switch Function Status */
 	uint32_t raw_scr[2];
 
@@ -632,8 +796,32 @@ sdmmc_mem_sd_init(struct sdmmc_softc *sc, struct sdmmc_function *sf)
 
 		support_func = SFUNC_STATUS_GROUP(&status, 1);
 
-		if (support_func & (1 << SD_ACCESS_MODE_SDR25))
-			best_func = 1;
+		if (!ISSET(sc->sc_flags, SMF_UHS_MODE) &&
+		    (ISSET(support_func, 1 << SD_ACCESS_MODE_SDR50) ||
+		     ISSET(support_func, 1 << SD_ACCESS_MODE_DDR50) ||
+		     ISSET(support_func, 1 << SD_ACCESS_MODE_SDR104))) {
+			/* XXX UHS-I card started in 1.8V mode, switch now */
+			error = sdmmc_mem_signal_voltage(sc,
+			    SDMMC_SIGNAL_VOLTAGE_180);
+			if (error) {
+				printf("%s: failed to recover UHS card\n", DEVNAME(sc));
+				return error;
+			}
+			SET(sc->sc_flags, SMF_UHS_MODE);
+		}
+
+		for (i = 0; i < nitems(switch_group0_functions); i++) {
+			if (!(support_func & (1 << i)))
+				continue;
+			DPRINTF(("%s: card supports mode %s\n",
+			    SDMMCDEVNAME(sc),
+			    switch_group0_functions[i].name));
+		}
+
+		best_func = sdmmc_mem_select_transfer_mode(sc, support_func);
+
+		DPRINTF(("%s: using mode %s\n", SDMMCDEVNAME(sc),
+		    switch_group0_functions[best_func].name));
 	}
 
 	if (best_func != 0) {
@@ -647,15 +835,24 @@ sdmmc_mem_sd_init(struct sdmmc_softc *sc, struct sdmmc_function *sf)
 			    DEVNAME(sc), best_func, support_func);
 			return error;
 		}
+		sf->csd.tran_speed =
+		    switch_group0_functions[best_func].freq;
 
 		/* Wait 400KHz x 8 clock (2.5us * 8 + slop) */
 		delay(25);
 
-		/* High Speed mode, Frequency up to 50MHz. */
+		/* change bus clock */
 		error = sdmmc_chip_bus_clock(sc->sct, sc->sch,
-		    SDMMC_SDCLK_50MHZ, SDMMC_TIMING_HIGHSPEED);
+		    sf->csd.tran_speed, SDMMC_TIMING_HIGHSPEED);
 		if (error) {
 			printf("%s: can't change bus clock\n", DEVNAME(sc));
+			return error;
+		}
+
+		/* execute tuning (UHS) */
+		error = sdmmc_mem_execute_tuning(sc, sf);
+		if (error) {
+			printf("%s: can't execute SD tuning\n", DEVNAME(sc));
 			return error;
 		}
 	}
@@ -692,7 +889,11 @@ sdmmc_mem_mmc_init(struct sdmmc_softc *sc, struct sdmmc_function *sf)
 
 		card_type = ext_csd[EXT_CSD_CARD_TYPE];
 
-		if (card_type & EXT_CSD_CARD_TYPE_F_52M_1_8V &&
+		if (card_type & EXT_CSD_CARD_TYPE_F_HS200_1_8V &&
+		    ISSET(sc->sc_caps, SMC_CAPS_MMC_HS200)) {
+			speed = 200000;
+			timing = SDMMC_TIMING_MMC_HS200;
+		} else if (card_type & EXT_CSD_CARD_TYPE_F_DDR52_1_8V &&
 		    ISSET(sc->sc_caps, SMC_CAPS_MMC_DDR52)) {
 			speed = 52000;
 			timing = SDMMC_TIMING_MMC_DDR52;
@@ -705,39 +906,6 @@ sdmmc_mem_mmc_init(struct sdmmc_softc *sc, struct sdmmc_function *sf)
 		} else {
 			printf("%s: unknown CARD_TYPE 0x%x\n", DEVNAME(sc),
 			    ext_csd[EXT_CSD_CARD_TYPE]);
-		}
-
-		if (timing != SDMMC_TIMING_LEGACY) {
-			/* switch to high speed timing */
-			error = sdmmc_mem_mmc_switch(sf, EXT_CSD_CMD_SET_NORMAL,
-			    EXT_CSD_HS_TIMING, EXT_CSD_HS_TIMING_HS);
-			if (error != 0) {
-				printf("%s: can't change high speed\n",
-				    DEVNAME(sc));
-				return error;
-			}
-
-			sdmmc_delay(10000);
-		}
-
-		error = sdmmc_chip_bus_clock(sc->sct, sc->sch, speed, SDMMC_TIMING_HIGHSPEED);
-		if (error != 0) {
-			printf("%s: can't change bus clock\n", DEVNAME(sc));
-			return error;
-		}
-
-		if (timing != SDMMC_TIMING_LEGACY) {
-			/* read EXT_CSD again */
-			error = sdmmc_mem_send_cxd_data(sc,
-			    MMC_SEND_EXT_CSD, ext_csd, sizeof(ext_csd));
-			if (error != 0) {
-				printf("%s: can't re-read EXT_CSD\n", DEVNAME(sc));
-				return error;
-			}
-			if (ext_csd[EXT_CSD_HS_TIMING] != EXT_CSD_HS_TIMING_HS) {
-				printf("%s, HS_TIMING set failed\n", DEVNAME(sc));
-				return EINVAL;
-			}
 		}
 
 		if (ISSET(sc->sc_caps, SMC_CAPS_8BIT_MODE)) {
@@ -765,6 +933,52 @@ sdmmc_mem_mmc_init(struct sdmmc_softc *sc, struct sdmmc_function *sf)
 
 			/* XXXX: need bus test? (using by CMD14 & CMD19) */
 			sdmmc_delay(10000);
+		}
+
+		if (timing != SDMMC_TIMING_LEGACY) {
+			switch (timing) {
+			case SDMMC_TIMING_MMC_HS200:
+				value = EXT_CSD_HS_TIMING_HS200;
+				break;
+			case SDMMC_TIMING_MMC_DDR52:
+			case SDMMC_TIMING_HIGHSPEED:
+				value = EXT_CSD_HS_TIMING_HS;
+				break;
+			}
+
+			/* switch to high speed timing */
+			error = sdmmc_mem_mmc_switch(sf, EXT_CSD_CMD_SET_NORMAL,
+			    EXT_CSD_HS_TIMING, value);
+			if (error != 0) {
+				printf("%s: can't change timing\n",
+				    DEVNAME(sc));
+				return error;
+			}
+
+			sdmmc_delay(10000);
+		}
+
+		KASSERT(timing < nitems(sdmmc_mmc_timings));
+		sf->csd.tran_speed = sdmmc_mmc_timings[timing];
+
+		if (timing != SDMMC_TIMING_LEGACY) {
+			/* read EXT_CSD again */
+			error = sdmmc_mem_send_cxd_data(sc,
+			    MMC_SEND_EXT_CSD, ext_csd, sizeof(ext_csd));
+			if (error != 0) {
+				printf("%s: can't re-read EXT_CSD\n", DEVNAME(sc));
+				return error;
+			}
+			if (ext_csd[EXT_CSD_HS_TIMING] != value) {
+				printf("%s, HS_TIMING set failed\n", DEVNAME(sc));
+				return EINVAL;
+			}
+		}
+
+		error = sdmmc_chip_bus_clock(sc->sct, sc->sch, speed, SDMMC_TIMING_HIGHSPEED);
+		if (error != 0) {
+			printf("%s: can't change bus clock\n", DEVNAME(sc));
+			return error;
 		}
 
 		if (timing == SDMMC_TIMING_MMC_DDR52) {
@@ -813,6 +1027,15 @@ sdmmc_mem_mmc_init(struct sdmmc_softc *sc, struct sdmmc_function *sf)
 			sf->flags |= SFF_SDHC;
 			sf->csd.capacity = sectors;
 		}
+
+		if (timing == SDMMC_TIMING_MMC_HS200) {
+			/* execute tuning (HS200) */
+			error = sdmmc_mem_execute_tuning(sc, sf);
+			if (error) {
+				printf("%s: can't execute MMC tuning\n", DEVNAME(sc));
+				return error;
+			}
+		}
 	}
 
 	return error;
@@ -846,7 +1069,7 @@ sdmmc_mem_send_op_cond(struct sdmmc_softc *sc, u_int32_t ocr,
 			error = sdmmc_app_command(sc, &cmd);
 		} else {
 			cmd.c_arg &= ~MMC_OCR_ACCESS_MODE_MASK;
-			cmd.c_arg |= MMC_OCR_SECTOR_MODE;
+			cmd.c_arg |= MMC_OCR_ACCESS_MODE_SECTOR;
 			cmd.c_opcode = MMC_SEND_OP_COND;
 			error = sdmmc_mmc_command(sc, &cmd);
 		}

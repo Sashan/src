@@ -1,4 +1,4 @@
-/* $OpenBSD: trap.c,v 1.88 2019/09/06 12:22:01 deraadt Exp $ */
+/* $OpenBSD: trap.c,v 1.92 2020/10/08 19:41:03 deraadt Exp $ */
 /* $NetBSD: trap.c,v 1.52 2000/05/24 16:48:33 thorpej Exp $ */
 
 /*-
@@ -232,7 +232,7 @@ trap(a0, a1, a2, entry, framep)
 	caddr_t v;
 	int typ;
 	union sigval sv;
-	vm_prot_t ftype;
+	vm_prot_t access_type;
 	unsigned long onfault;
 
 	atomic_add_int(&uvmexp.traps, 1);
@@ -244,10 +244,6 @@ trap(a0, a1, a2, entry, framep)
 	if (user) {
 		p->p_md.md_tf = framep;
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		   "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto out;
 	}
 
 	switch (entry) {
@@ -370,13 +366,19 @@ trap(a0, a1, a2, entry, framep)
 		break;
 
 	case ALPHA_KENTRY_MM:
+		if (user &&
+		    !uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		   "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+
 		switch (a1) {
 		case ALPHA_MMCSR_FOR:
 		case ALPHA_MMCSR_FOE:
 		case ALPHA_MMCSR_FOW:
 			KERNEL_LOCK();
 			if (pmap_emulate_reference(p, a0, user, a1)) {
-				ftype = PROT_EXEC;
+				access_type = PROT_EXEC;
 				goto do_fault;
 			}
 			KERNEL_UNLOCK();
@@ -393,13 +395,13 @@ trap(a0, a1, a2, entry, framep)
 
 			switch (a2) {
 			case -1:		/* instruction fetch fault */
-				ftype = PROT_EXEC;
+				access_type = PROT_EXEC;
 				break;
 			case 0:			/* load instruction */
-				ftype = PROT_READ;
+				access_type = PROT_READ;
 				break;
 			case 1:			/* store instruction */
-				ftype = PROT_READ | PROT_WRITE;
+				access_type = PROT_READ | PROT_WRITE;
 				break;
 			}
 	
@@ -425,7 +427,7 @@ do_fault:
 			va = trunc_page((vaddr_t)a0);
 			onfault = p->p_addr->u_pcb.pcb_onfault;
 			p->p_addr->u_pcb.pcb_onfault = 0;
-			rv = uvm_fault(map, va, 0, ftype);
+			rv = uvm_fault(map, va, 0, access_type);
 			p->p_addr->u_pcb.pcb_onfault = onfault;
 
 			/*
@@ -459,7 +461,7 @@ do_fault:
 				goto dopanic;
 			}
 			KERNEL_UNLOCK();
-			ucode = ftype;
+			ucode = access_type;
 			v = (caddr_t)a0;
 			typ = SEGV_MAPERR;
 			if (rv == ENOMEM) {
@@ -488,9 +490,7 @@ do_fault:
 	printtrap(a0, a1, a2, entry, framep, 1, user);
 #endif
 	sv.sival_ptr = v;
-	KERNEL_LOCK();
 	trapsignal(p, i, ucode, typ, sv);
-	KERNEL_UNLOCK();
 out:
 	if (user) {
 		/* Do any deferred user pmap operations. */
@@ -707,8 +707,7 @@ void
 ast(framep)
 	struct trapframe *framep;
 {
-	struct cpu_info *ci = curcpu();
-	struct proc *p = ci->ci_curproc;
+	struct proc *p = curproc;
 
 	p->p_md.md_tf = framep;
 	p->p_md.md_astpending = 0;
@@ -718,8 +717,9 @@ ast(framep)
 		panic("ast and not user");
 #endif
 
+	refreshcreds(p);
 	atomic_add_int(&uvmexp.softs, 1);
-	mi_ast(p, ci->ci_want_resched);
+	mi_ast(p, curcpu()->ci_want_resched);
 
 	/* Do any deferred user pmap operations. */
 	PMAP_USERRET(vm_map_pmap(&p->p_vmspace->vm_map));

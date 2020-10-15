@@ -1,4 +1,4 @@
-/* $OpenBSD: tls13_client.c,v 1.65 2020/06/04 18:41:42 tb Exp $ */
+/* $OpenBSD: tls13_client.c,v 1.67 2020/09/11 17:36:27 jsing Exp $ */
 /*
  * Copyright (c) 2018, 2019 Joel Sing <jsing@openbsd.org>
  *
@@ -118,7 +118,7 @@ tls13_client_hello_build(struct tls13_ctx *ctx, CBB *cbb)
 	if (!CBB_add_u8(&compression_methods, 0))
 		goto err;
 
-	if (!tlsext_client_build(s, cbb, SSL_TLSEXT_MSG_CH))
+	if (!tlsext_client_build(s, SSL_TLSEXT_MSG_CH, cbb))
 		goto err;
 
 	if (!CBB_flush(cbb))
@@ -265,7 +265,7 @@ tls13_server_hello_process(struct tls13_ctx *ctx, CBS *cbs)
 		ctx->hs->hrr = 1;
 	}
 
-	if (!tlsext_client_parse(s, cbs, &alert_desc, tlsext_msg_type)) {
+	if (!tlsext_client_parse(s, tlsext_msg_type, cbs, &alert_desc)) {
 		ctx->alert = alert_desc;
 		goto err;
 	}
@@ -304,8 +304,7 @@ tls13_server_hello_process(struct tls13_ctx *ctx, CBS *cbs)
 	 * hello and that it matches the TLS version selected.
 	 */
 	cipher = ssl3_get_cipher_by_value(cipher_suite);
-	if (cipher == NULL ||
-	    sk_SSL_CIPHER_find(ssl_get_ciphers_by_id(s), cipher) < 0) {
+	if (cipher == NULL || !ssl_cipher_in_list(SSL_get_ciphers(s), cipher)) {
 		ctx->alert = TLS13_ALERT_ILLEGAL_PARAMETER;
 		goto err;
 	}
@@ -504,7 +503,7 @@ tls13_server_encrypted_extensions_recv(struct tls13_ctx *ctx, CBS *cbs)
 {
 	int alert_desc;
 
-	if (!tlsext_client_parse(ctx->ssl, cbs, &alert_desc, SSL_TLSEXT_MSG_EE)) {
+	if (!tlsext_client_parse(ctx->ssl, SSL_TLSEXT_MSG_EE, cbs, &alert_desc)) {
 		ctx->alert = alert_desc;
 		goto err;
 	}
@@ -540,7 +539,7 @@ tls13_server_certificate_request_recv(struct tls13_ctx *ctx, CBS *cbs)
 	if (CBS_len(&cert_request_context) != 0)
 		goto err;
 
-	if (!tlsext_client_parse(ctx->ssl, cbs, &alert_desc, SSL_TLSEXT_MSG_CR)) {
+	if (!tlsext_client_parse(ctx->ssl, SSL_TLSEXT_MSG_CR, cbs, &alert_desc)) {
 		ctx->alert = alert_desc;
 		goto err;
 	}
@@ -580,8 +579,8 @@ tls13_server_certificate_recv(struct tls13_ctx *ctx, CBS *cbs)
 		if (!CBS_get_u24_length_prefixed(&cert_list, &cert_data))
 			goto err;
 
-		if (!tlsext_client_parse(ctx->ssl, &cert_list, &alert_desc,
-		    SSL_TLSEXT_MSG_CT)) {
+		if (!tlsext_client_parse(ctx->ssl, SSL_TLSEXT_MSG_CT,
+		    &cert_list, &alert_desc)) {
 			ctx->alert = alert_desc;
 			goto err;
 		}
