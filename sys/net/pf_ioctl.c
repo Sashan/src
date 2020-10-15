@@ -626,7 +626,6 @@ pf_create_queues(void)
 			qif->pfqops = pfq_fqcodel_ops;
 		}
 
-		/* uses M_WAITOK */
 		qif->disc = qif->pfqops->pfq_alloc(ifp);
 
 		qif->next = list;
@@ -642,7 +641,6 @@ pf_create_queues(void)
 		qif = pf_ifp2q(list, ifp);
 		KASSERT(qif != NULL);
 
-		/* uses M_WAITOK ! */
 		error = qif->pfqops->pfq_addqueue(qif->disc, q);
 		if (error != 0)
 			goto error;
@@ -661,7 +659,6 @@ pf_create_queues(void)
 		if (qif != NULL)
 			continue;
 
-		/* uses M_WAITOK ! */
 		ifq_attach(&ifp->if_snd, ifq_priq_ops, NULL);
 	}
 
@@ -849,8 +846,6 @@ pf_commit_rules(u_int32_t ticket, char *anchor)
 	/* queue defs only in the main ruleset */
 	if (anchor[0])
 		return (0);
-
-	/* uses M_WAITOK. ! */
 	return (pf_commit_queues());
 }
 
@@ -1026,7 +1021,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				pf_status.stateid = pf_status.stateid << 32;
 			}
 			timeout_add_sec(&pf_purge_to, 1);
-			/* uses M_WAITOK ! */
 			pf_create_queues();
 			DPFPRINTF(LOG_NOTICE, "pf: started");
 		}
@@ -1253,11 +1247,11 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			break;
 #endif /* INET6 */
 		default:
-			pf_rm_rule(NULL, rule);
 			rule = NULL;
 			error = EAFNOSUPPORT;
 			PF_UNLOCK();
 			NET_UNLOCK();
+			pf_rm_rule(NULL, rule);
 			goto fail;
 		}
 		tail = TAILQ_LAST(ruleset->rules.inactive.ptr,
@@ -1291,9 +1285,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			error = EINVAL;
 
 		if (error) {
-			pf_rm_rule(NULL, rule);
 			PF_UNLOCK();
 			NET_UNLOCK();
+			pf_rm_rule(NULL, rule);
 			break;
 		}
 		TAILQ_INSERT_TAIL(ruleset->rules.inactive.ptr,
@@ -2121,6 +2115,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		error = pfr_add_tables(io->pfrio_buffer, io->pfrio_size,
 		    &io->pfrio_nadd, io->pfrio_flags);
 		PF_UNLOCK();
+		NET_UNLOCK();
 		break;
 	}
 
@@ -2230,7 +2225,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 		NET_LOCK();
 		PF_LOCK();
-		/* Uses M_WAITOK ! */
 		error = pfr_add_addrs(&io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size, &io->pfrio_nadd, io->pfrio_flags |
 		    PFR_FLAG_USERIOCTL);
@@ -2267,7 +2261,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		PF_LOCK();
 		error = pfr_set_addrs(&io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size, &io->pfrio_size2, &io->pfrio_nadd,
-		    &io->pfrio_ndel, &io->pfrio_nchange, io->pfrio_flags, 0);
+		    &io->pfrio_ndel, &io->pfrio_nchange, io->pfrio_flags |
+		    PFR_FLAG_USERIOCTL, 0);
 		PF_UNLOCK();
 		NET_UNLOCK();
 		break;
@@ -2350,7 +2345,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		PF_LOCK();
 		error = pfr_ina_define(&io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size, &io->pfrio_nadd, &io->pfrio_naddr,
-		    io->pfrio_ticket, io->pfrio_flags);
+		    io->pfrio_ticket, io->pfrio_flags | PFR_FLAG_USERIOCTL);
 		PF_UNLOCK();
 		NET_UNLOCK();
 		break;
@@ -2407,7 +2402,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				memset(table, 0, sizeof(*table));
 				strlcpy(table->pfrt_anchor, ioe->anchor,
 				    sizeof(table->pfrt_anchor));
-				/* Uses M_WAITOK ! */
 				if ((error = pfr_ina_begin(table,
 				    &ioe->ticket, NULL, 0))) {
 					PF_UNLOCK();
@@ -2418,7 +2412,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				}
 				break;
 			case PF_TRANS_RULESET:
-				/* Uses M_WAITOK ! */
 				if ((error = pf_begin_rules(&ioe->ticket,
 				    ioe->anchor))) {
 					PF_UNLOCK();
@@ -2644,7 +2637,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				}
 				break;
 			case PF_TRANS_RULESET:
-				/* Uses M_WAITOK ! */
 				if ((error = pf_commit_rules(ioe->ticket,
 				    ioe->anchor))) {
 					PF_UNLOCK();
