@@ -1247,11 +1247,11 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			break;
 #endif /* INET6 */
 		default:
+			pf_rm_rule(NULL, rule);
+			rule = NULL;
 			error = EAFNOSUPPORT;
 			PF_UNLOCK();
 			NET_UNLOCK();
-			pf_rm_rule(NULL, rule);
-			rule = NULL;
 			goto fail;
 		}
 		tail = TAILQ_LAST(ruleset->rules.inactive.ptr,
@@ -1285,9 +1285,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			error = EINVAL;
 
 		if (error) {
+			pf_rm_rule(NULL, rule);
 			PF_UNLOCK();
 			NET_UNLOCK();
-			pf_rm_rule(NULL, rule);
 			break;
 		}
 		TAILQ_INSERT_TAIL(ruleset->rules.inactive.ptr,
