@@ -1788,6 +1788,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				if (error) {
 					free(pstore, M_TEMP, sizeof(*pstore));
 					PF_STATE_EXIT_READ();
+					NET_UNLOCK();
 					goto fail;
 				}
 				p++;
