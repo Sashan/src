@@ -25,12 +25,13 @@
 
 int	dt_prov_static_alloc(struct dt_probe *, struct dt_softc *,
 	    struct dt_pcb_list *, struct dtioc_req *);
-void	dt_prov_static_hook(struct dt_provider *, ...);
+int	dt_prov_static_hook(struct dt_provider *, ...);
 
 struct dt_provider dt_prov_static = {
 	.dtpv_name = "tracepoint",
 	.dtpv_alloc = dt_prov_static_alloc,
 	.dtpv_enter = dt_prov_static_hook,
+    .dtpv_desalloc = NULL,
 };
 
 /*
@@ -120,7 +121,7 @@ dt_prov_static_alloc(struct dt_probe *dtp, struct dt_softc *sc,
 	return 0;
 }
 
-void
+int
 dt_prov_static_hook(struct dt_provider *dtpv, ...)
 {
 	struct dt_probe *dtp;
@@ -146,13 +147,14 @@ dt_prov_static_hook(struct dt_provider *dtpv, ...)
 		if (dtev == NULL)
 			continue;
 
-		dtev->dtev_sysargs[0] = args[0];
-		dtev->dtev_sysargs[1] = args[1];
-		dtev->dtev_sysargs[2] = args[2];
-		dtev->dtev_sysargs[3] = args[3];
-		dtev->dtev_sysargs[4] = args[4];
+		dtev->dtev_args[0] = args[0];
+		dtev->dtev_args[1] = args[1];
+		dtev->dtev_args[2] = args[2];
+		dtev->dtev_args[3] = args[3];
+		dtev->dtev_args[4] = args[4];
 
 		dt_pcb_ring_consume(dp, dtev);
 	}
 	smr_read_leave();
+	return 1;
 }

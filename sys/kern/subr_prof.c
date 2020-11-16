@@ -70,10 +70,6 @@ prof_init(void)
 	char *cp;
 	int size;
 
-#if !defined(GPROF) && defined(DDBPROF)
-	db_prof_init();
-#endif
-
 	/*
 	 * Round lowpc and highpc to multiples of the density we're using
 	 * so the rest of the scaling (here and in gprof) stays in ints.

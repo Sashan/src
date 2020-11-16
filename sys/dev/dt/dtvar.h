@@ -34,9 +34,9 @@
 #define DTMAXCOMLEN	16
 
 /*
- * Maximum number of arguments passed to a syscall.
+ * Maximum number of arguments passed to a function.
  */
-#define DTMAXSYSARGS	10
+#define DTMAXFUNCARGS	10
 
 /*
  * Event state: where to store information when a probe fires.
@@ -54,15 +54,15 @@ struct dt_evt {
 	struct stacktrace 	dtev_kstack;	/* kernel stack frame */
 	char			dtev_comm[DTMAXCOMLEN+1]; /* current pr. name */
 	union {
-		register_t		E_entry[DTMAXSYSARGS];
+		register_t		E_entry[DTMAXFUNCARGS];
 		struct {
 			register_t		__retval[2];
 			int			__error;
 		} E_return;
-	} _sys;
-#define dtev_sysargs	_sys.E_entry		/* syscall args. */
-#define dtev_sysretval	_sys.E_return.__retval	/* syscall retval */
-#define dtev_syserror	_sys.E_return.__error	/* syscall error */
+	} _args;
+#define dtev_args	_args.E_entry		    /* function args. */
+#define dtev_retval	_args.E_return.__retval	/* function retval */
+#define dtev_error	_args.E_return.__error	/* function error */
 
 };
 
@@ -132,6 +132,7 @@ struct dtioc_stat {
 
 #define DTIOCRECORD	_IOW('D', 3, int)
 #define DTIOCPRBENABLE	_IOW('D', 4, struct dtioc_req)
+#define DTIOCPRBDISABLE	 _IOW('D', 5, struct dtioc_req)
 
 
 #ifdef _KERNEL
@@ -213,12 +214,16 @@ struct dt_probe {
 	const char		*dtp_func;	/* [I] probe function */
 	const char		*dtp_name;	/* [I] probe name */
 	uint32_t		 dtp_pbn;	/* [I] unique ID */
-	volatile uint32_t	 dtp_recording;	/* [D] is it recording? */
-	uint8_t			 dtp_nargs;	/* [I] # of arguments */
+	volatile uint32_t	 dtp_recording;	/* [d] is it recording? */
+
+    struct mutex     dtp_mtx;
+    unsigned         dtp_ref; /* [m] number of pcb referencing this probe*/
 
 	/* Provider specific fields. */
-	int			 dtp_sysnum;	/* [I] related # of syscall */
-	const char		*dtp_argtype[5];/* [I] type of arguments */
+	int			dtp_sysnum;	/* [I] related # of syscall */
+	const char	*dtp_argtype[5];/* [I] type of arguments */
+	int		    dtp_nargs;	/* [I] # of arguments */
+	vaddr_t     dtp_addr; /* [I] address of breakpint */
 };
 
 
@@ -231,13 +236,18 @@ struct dt_provider {
 
 	int		(*dtpv_alloc)(struct dt_probe *, struct dt_softc *,
 			    struct dt_pcb_list *, struct dtioc_req *);
-	void		(*dtpv_enter)(struct dt_provider *, ...);
+	int		(*dtpv_enter)(struct dt_provider *, ...);
 	void		(*dtpv_leave)(struct dt_provider *, ...);
+	int		(*dtpv_desalloc)(struct dt_probe *, struct dt_softc *,
+			    struct dtioc_req *);
 };
+
+extern struct dt_provider dt_prov_kprobe;
 
 int		 dt_prov_profile_init(void);
 int		 dt_prov_syscall_init(void);
 int		 dt_prov_static_init(void);
+int		 dt_prov_kprobe_init(void);
 
 struct dt_probe *dt_dev_alloc_probe(const char *, const char *,
 		    struct dt_provider *);

@@ -4,7 +4,7 @@
 #	GENERIC kernel
 
 option		DDB		# in-kernel debugger
-#option		DDBPROF		# ddb(4) based profiling
+option		DDBPROF		# ddb(4) based profiling
 #option		DDB_SAFE_CONSOLE # allow break into ddb during boot
 #makeoptions	DEBUG=""	# do not compile full symbol table
 #makeoptions	PROF="-pg"	# build profiled kernel
@@ -82,7 +82,7 @@ pseudo-device	msts	1	# MSTS line discipline
 pseudo-device	endrun	1	# EndRun line discipline
 pseudo-device	vnd	4	# vnode disk devices
 pseudo-device	ksyms	1	# kernel symbols device
-#pseudo-device	dt		# Dynamic Tracer
+pseudo-device	dt	1   # Dynamic Tracer
 
 # clonable devices
 pseudo-device	bpfilter	# packet filter

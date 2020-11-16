@@ -622,6 +622,7 @@ file	dev/dt/dt_dev.c			dt	needs-flag
 file	dev/dt/dt_prov_profile.c	dt
 file	dev/dt/dt_prov_syscall.c	dt
 file	dev/dt/dt_prov_static.c		dt
+file	dev/dt/dt_prov_kprobe.c		dt
 
 # XXX machine-independent SCSI files should live somewhere here, maybe
 

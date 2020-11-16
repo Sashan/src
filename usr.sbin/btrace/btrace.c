@@ -498,19 +498,24 @@ rules_teardown(int fd)
 	struct bt_rule *r, *rend = NULL;
 	int dokstack = 0, off = 0;
 
+
 	if (g_nprobes > 0) {
 		if (ioctl(fd, DTIOCRECORD, &off))
 			err(1, "DTIOCRECORD");
 	}
 
+
 	TAILQ_FOREACH(r, &g_rules, br_next) {
+	    dtrq = r->br_cookie;
 		if (r->br_type != B_RT_PROBE) {
 			if (r->br_type == B_RT_END)
 				rend = r;
 			continue;
-		}
+        } else {
+            if (ioctl(fd, DTIOCPRBDISABLE, dtrq))
+                err(1, "DTIOCPRBDISABLE");
+        }
 
-		dtrq = r->br_cookie;
 		if (dtrq->dtrq_evtflags & DTEVT_KSTACK)
 			dokstack = 1;
 	}
@@ -657,8 +662,7 @@ builtin_arg(struct dt_evt *dtev, enum bt_argtype dat)
 	static char buf[sizeof("18446744073709551615")]; /* UINT64_MAX */
 
 	snprintf(buf, sizeof(buf) - 1, "%lu",
-	    dtev->dtev_sysargs[dat - B_AT_BI_ARG0]);
-
+            dtev->dtev_args[dat - B_AT_BI_ARG0]);
 	return buf;
 }
 
@@ -1088,7 +1092,7 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 		str = builtin_arg(dtev, ba->ba_type);
 		break;
 	case B_AT_BI_RETVAL:
-		snprintf(buf, sizeof(buf) - 1, "%ld", (long)dtev->dtev_sysretval[0]);
+		snprintf(buf, sizeof(buf) - 1, "%ld", (long)dtev->dtev_retval[0]);
 		str = buf;
 		break;
 	case B_AT_MAP:
