@@ -1,4 +1,4 @@
-/*	$OpenBSD: cert.c,v 1.18 2020/09/12 15:46:48 claudio Exp $ */
+/*	$OpenBSD: cert.c,v 1.20 2020/12/07 13:23:01 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -19,6 +19,7 @@
 
 #include <arpa/inet.h>
 #include <assert.h>
+#include <ctype.h>
 #include <err.h>
 #include <inttypes.h>
 #include <stdarg.h>
@@ -141,6 +142,8 @@ static int
 sbgp_sia_resource_notify(struct parse *p,
 	const unsigned char *d, size_t dsz)
 {
+	size_t i;
+
 	if (p->res->notify != NULL) {
 		warnx("%s: RFC 6487 section 4.8.8: SIA: "
 		    "Notify location already specified", p->fn);
@@ -149,9 +152,18 @@ sbgp_sia_resource_notify(struct parse *p,
 
 	/* Make sure it's a https:// address. */
 	if (dsz <= 8 || strncasecmp(d, "https://", 8)) {
-		warnx("%s: RFC8182 section 3.2: not using https schema", p->fn);
+		warnx("%s: RFC 8182 section 3.2: not using https schema",
+		    p->fn);
 		return 0;
 	}
+	/* make sure only US-ASCII chars are in the URL */
+	for (i = 0; i < dsz; i++) {
+		if (isalnum(d[i]) || ispunct(d[i]))
+			continue;
+		warnx("%s: invalid URI", p->fn);
+		return 0;
+	}
+
 
 	if ((p->res->notify = strndup((const char *)d, dsz)) == NULL)
 		err(1, NULL);
@@ -167,32 +179,36 @@ static int
 sbgp_sia_resource_mft(struct parse *p,
 	const unsigned char *d, size_t dsz)
 {
-	enum rtype rt;
+	size_t i;
 
 	if (p->res->mft != NULL) {
 		warnx("%s: RFC 6487 section 4.8.8: SIA: "
 		    "MFT location already specified", p->fn);
 		return 0;
 	}
+
+	/* Make sure it's an MFT rsync address. */
+	if (dsz <= 8 || strncasecmp(d, "rsync://", 8)) {
+		warnx("%s: RFC 6487 section 4.8.8: not using rsync schema",
+		    p->fn);
+		return 0;
+	}
+	if (strcasecmp(d + dsz - 4, ".mft") != 0) {
+		warnx("%s: RFC 6487 section 4.8.8: SIA: "
+		    "invalid rsync URI suffix", p->fn);
+		return 0;
+	}
+	/* make sure only US-ASCII chars are in the URL */
+	for (i = 0; i < dsz; i++) {
+		if (isalnum(d[i]) || ispunct(d[i]))
+			continue;
+		warnx("%s: invalid URI", p->fn);
+		return 0;
+	}
+
 	if ((p->res->mft = strndup((const char *)d, dsz)) == NULL)
 		err(1, NULL);
 
-	/* Make sure it's an MFT rsync address. */
-	if (!rsync_uri_parse(NULL, NULL, NULL,
-	    NULL, NULL, NULL, &rt, p->res->mft)) {
-		warnx("%s: RFC 6487 section 4.8.8: SIA: "
-		    "failed to parse rsync URI", p->fn);
-		free(p->res->mft);
-		p->res->mft = NULL;
-		return 0;
-	}
-	if (rt != RTYPE_MFT) {
-		warnx("%s: RFC 6487 section 4.8.8: SIA: "
-		    "invalid rsync URI suffix", p->fn);
-		free(p->res->mft);
-		p->res->mft = NULL;
-		return 0;
-	}
 	return 1;
 }
 

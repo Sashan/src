@@ -14,6 +14,7 @@
 ./usr/bin/yacc
 ./usr/include/FlexLexer.h
 ./usr/include/a.out.h
+./usr/include/agentx.h
 ./usr/include/ar.h
 ./usr/include/arpa
 ./usr/include/arpa/ftp.h
@@ -96,8 +97,10 @@
 ./usr/include/dev/acpi
 ./usr/include/dev/acpi/acpidebug.h
 ./usr/include/dev/acpi/acpidev.h
+./usr/include/dev/acpi/acpidmar.h
 ./usr/include/dev/acpi/acpireg.h
 ./usr/include/dev/acpi/acpivar.h
+./usr/include/dev/acpi/amd_iommu.h
 ./usr/include/dev/acpi/amltypes.h
 ./usr/include/dev/acpi/dsdt.h
 ./usr/include/dev/acpi/efi.h
@@ -139,7 +142,6 @@
 ./usr/include/dev/fdt/if_mvppreg.h
 ./usr/include/dev/fdt/imxanatopvar.h
 ./usr/include/dev/fdt/imxccm_clocks.h
-./usr/include/dev/fdt/imxiicvar.h
 ./usr/include/dev/fdt/imxuartreg.h
 ./usr/include/dev/fdt/imxuartvar.h
 ./usr/include/dev/fdt/mvpinctrl_pins.h
@@ -304,6 +306,7 @@
 ./usr/include/dev/ic/if_wireg.h
 ./usr/include/dev/ic/if_wivar.h
 ./usr/include/dev/ic/iha.h
+./usr/include/dev/ic/imxiicvar.h
 ./usr/include/dev/ic/intersil7170.h
 ./usr/include/dev/ic/lancereg.h
 ./usr/include/dev/ic/lancevar.h
@@ -2188,6 +2191,7 @@
 ./usr/share/man/man3/abs.3
 ./usr/share/man/man3/acos.3
 ./usr/share/man/man3/acosh.3
+./usr/share/man/man3/agentx.3
 ./usr/share/man/man3/alarm.3
 ./usr/share/man/man3/alloca.3
 ./usr/share/man/man3/arc4random.3
@@ -2875,7 +2879,6 @@
 ./usr/share/man/man3/strtonum.3
 ./usr/share/man/man3/strtoul.3
 ./usr/share/man/man3/strxfrm.3
-./usr/share/man/man3/subagentx.3
 ./usr/share/man/man3/swab.3
 ./usr/share/man/man3/sysconf.3
 ./usr/share/man/man3/sysexits.3

@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sig.c,v 1.263 2020/09/16 13:50:42 mpi Exp $	*/
+/*	$OpenBSD: kern_sig.c,v 1.268 2020/12/07 16:55:28 mpi Exp $	*/
 /*	$NetBSD: kern_sig.c,v 1.54 1996/04/22 01:38:32 christos Exp $	*/
 
 /*
@@ -464,6 +464,8 @@ sys_sigprocmask(struct proc *p, void *v, register_t *retval)
 	int error = 0;
 	sigset_t mask;
 
+	KASSERT(p == curproc);
+
 	*retval = p->p_sigmask;
 	mask = SCARG(uap, mask) &~ sigcantmask;
 
@@ -824,7 +826,10 @@ trapsignal(struct proc *p, int signum, u_long trapno, int code,
 			    p->p_sigmask, code, &si);
 		}
 #endif
-		sendsig(ps->ps_sigact[signum], signum, p->p_sigmask, &si);
+		if (sendsig(ps->ps_sigact[signum], signum, p->p_sigmask, &si)) {
+			sigexit(p, SIGILL);
+			/* NOTREACHED */
+		}
 		postsig_done(p, signum, ps);
 	} else {
 		p->p_sisig = signum;
@@ -920,7 +925,7 @@ ptsignal(struct proc *p, int signum, enum signal_type type)
 			 * delayed.  Otherwise, mark it pending on the
 			 * main thread.
 			 */
-			TAILQ_FOREACH(q, &pr->ps_threads, p_thr_link) {
+			SMR_TAILQ_FOREACH_LOCKED(q, &pr->ps_threads, p_thr_link) {
 				/* ignore exiting threads */
 				if (q->p_flag & P_WEXIT)
 					continue;
@@ -1004,7 +1009,7 @@ ptsignal(struct proc *p, int signum, enum signal_type type)
 	 * XXX delay processing of SA_STOP signals unless action == SIG_DFL?
 	 */
 	if (prop & (SA_CONT | SA_STOP) && type != SPROPAGATED)
-		TAILQ_FOREACH(q, &pr->ps_threads, p_thr_link)
+		SMR_TAILQ_FOREACH_LOCKED(q, &pr->ps_threads, p_thr_link)
 			if (q != p)
 				ptsignal(q, signum, SPROPAGATED);
 
@@ -1452,7 +1457,10 @@ postsig(struct proc *p, int signum)
 			p->p_sigval.sival_ptr = NULL;
 		}
 
-		sendsig(action, signum, returnmask, &si);
+		if (sendsig(action, signum, returnmask, &si)) {
+			sigexit(p, SIGILL);
+			/* NOTREACHED */
+		}
 		postsig_done(p, signum, ps);
 		splx(s);
 	}
@@ -1933,14 +1941,14 @@ userret(struct proc *p)
 }
 
 int
-single_thread_check(struct proc *p, int deep)
+single_thread_check_locked(struct proc *p, int deep, int s)
 {
 	struct process *pr = p->p_p;
 
+	SCHED_ASSERT_LOCKED();
+
 	if (pr->ps_single != NULL && pr->ps_single != p) {
 		do {
-			int s;
-
 			/* if we're in deep, we need to unwind to the edge */
 			if (deep) {
 				if (pr->ps_flags & PS_SINGLEUNWIND)
@@ -1949,14 +1957,12 @@ single_thread_check(struct proc *p, int deep)
 					return (EINTR);
 			}
 
-			SCHED_LOCK(s);
-			if (pr->ps_single == NULL) {
-				SCHED_UNLOCK(s);
+			if (pr->ps_single == NULL)
 				continue;
-			}
 
 			if (atomic_dec_int_nv(&pr->ps_singlecount) == 0)
 				wakeup(&pr->ps_singlecount);
+
 			if (pr->ps_flags & PS_SINGLEEXIT) {
 				SCHED_UNLOCK(s);
 				KERNEL_LOCK();
@@ -1967,11 +1973,22 @@ single_thread_check(struct proc *p, int deep)
 			/* not exiting and don't need to unwind, so suspend */
 			p->p_stat = SSTOP;
 			mi_switch();
-			SCHED_UNLOCK(s);
 		} while (pr->ps_single != NULL);
 	}
 
 	return (0);
+}
+
+int
+single_thread_check(struct proc *p, int deep)
+{
+	int s, error;
+
+	SCHED_LOCK(s);
+	error = single_thread_check_locked(p, deep, s);
+	SCHED_UNLOCK(s);
+
+	return error;
 }
 
 /*
@@ -1995,8 +2012,12 @@ single_thread_set(struct proc *p, enum single_thread_mode mode, int deep)
 	KERNEL_ASSERT_LOCKED();
 	KASSERT(curproc == p);
 
-	if ((error = single_thread_check(p, deep)))
+	SCHED_LOCK(s);
+	error = single_thread_check_locked(p, deep, s);
+	if (error) {
+		SCHED_UNLOCK(s);
 		return error;
+	}
 
 	switch (mode) {
 	case SINGLE_SUSPEND:
@@ -2014,11 +2035,10 @@ single_thread_set(struct proc *p, enum single_thread_mode mode, int deep)
 		panic("single_thread_mode = %d", mode);
 #endif
 	}
-	SCHED_LOCK(s);
 	pr->ps_singlecount = 0;
 	membar_producer();
 	pr->ps_single = p;
-	TAILQ_FOREACH(q, &pr->ps_threads, p_thr_link) {
+	SMR_TAILQ_FOREACH_LOCKED(q, &pr->ps_threads, p_thr_link) {
 		if (q == p)
 			continue;
 		if (q->p_flag & P_WEXIT) {
@@ -2110,7 +2130,7 @@ single_thread_clear(struct proc *p, int flag)
 	SCHED_LOCK(s);
 	pr->ps_single = NULL;
 	atomic_clearbits_int(&pr->ps_flags, PS_SINGLEUNWIND | PS_SINGLEEXIT);
-	TAILQ_FOREACH(q, &pr->ps_threads, p_thr_link) {
+	SMR_TAILQ_FOREACH_LOCKED(q, &pr->ps_threads, p_thr_link) {
 		if (q == p || (q->p_flag & P_SUSPSINGLE) == 0)
 			continue;
 		atomic_clearbits_int(&q->p_flag, P_SUSPSINGLE);

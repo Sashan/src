@@ -1,4 +1,4 @@
-/*	$OpenBSD: unwind.c,v 1.49 2020/09/12 17:01:03 florian Exp $	*/
+/*	$OpenBSD: unwind.c,v 1.52 2020/11/09 04:22:05 tb Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -653,8 +653,7 @@ merge_config(struct uw_conf *conf, struct uw_conf *xconf)
 	}
 
 	/* Remove & discard existing force tree. */
-	for (n = RB_MIN(force_tree, &conf->force); n != NULL; n = nxt) {
-		nxt = RB_NEXT(force_tree, &conf->force, n);
+	RB_FOREACH_SAFE(n, force_tree, &conf->force, nxt) {
 		RB_REMOVE(force_tree, &conf->force, n);
 		free(n);
 	}
@@ -672,8 +671,7 @@ merge_config(struct uw_conf *conf, struct uw_conf *xconf)
 	TAILQ_CONCAT(&conf->uw_dot_forwarder_list,
 	    &xconf->uw_dot_forwarder_list, entry);
 
-	for (n = RB_MIN(force_tree, &xconf->force); n != NULL; n = nxt) {
-		nxt = RB_NEXT(force_tree, &xconf->force, n);
+	RB_FOREACH_SAFE(n, force_tree, &xconf->force, nxt) {
 		RB_REMOVE(force_tree, &xconf->force, n);
 		RB_INSERT(force_tree, &conf->force, n);
 	}
@@ -726,7 +724,7 @@ void
 open_ports(void)
 {
 	struct addrinfo	 hints, *res0;
-	int		 udp4sock = -1, udp6sock = -1, error;
+	int		 udp4sock = -1, udp6sock = -1, error, bsize = 65535;
 	int		 opt = 1;
 
 	memset(&hints, 0, sizeof(hints));
@@ -741,6 +739,9 @@ open_ports(void)
 			if (setsockopt(udp4sock, SOL_SOCKET, SO_REUSEADDR,
 			    &opt, sizeof(opt)) == -1)
 				log_warn("setting SO_REUSEADDR on socket");
+			if (setsockopt(udp4sock, SOL_SOCKET, SO_SNDBUF, &bsize,
+			    sizeof(bsize)) == -1)
+				log_warn("setting SO_SNDBUF on socket");
 			if (bind(udp4sock, res0->ai_addr, res0->ai_addrlen)
 			    == -1) {
 				close(udp4sock);
@@ -759,6 +760,9 @@ open_ports(void)
 			if (setsockopt(udp6sock, SOL_SOCKET, SO_REUSEADDR,
 			    &opt, sizeof(opt)) == -1)
 				log_warn("setting SO_REUSEADDR on socket");
+			if (setsockopt(udp6sock, SOL_SOCKET, SO_SNDBUF, &bsize,
+			    sizeof(bsize)) == -1)
+				log_warn("setting SO_SNDBUF on socket");
 			if (bind(udp6sock, res0->ai_addr, res0->ai_addrlen)
 			    == -1) {
 				close(udp6sock);
@@ -880,7 +884,11 @@ imsg_receive_config(struct imsg *imsg, struct uw_conf **xconf)
 			fatal(NULL);
 		memcpy(force_entry, imsg->data, sizeof(struct
 		    force_tree_entry));
-		RB_INSERT(force_tree, &nconf->force, force_entry);
+		if (RB_INSERT(force_tree, &nconf->force, force_entry) != NULL) {
+			free(force_entry);
+			fatalx("%s: IMSG_RECONF_FORCE duplicate entry",
+			    __func__);
+		}
 		break;
 	default:
 		log_debug("%s: error handling imsg %d", __func__,

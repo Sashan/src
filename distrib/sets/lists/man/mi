@@ -1121,6 +1121,7 @@
 ./usr/share/man/man4/acpicpu.4
 ./usr/share/man/man4/acpidock.4
 ./usr/share/man/man4/acpiec.4
+./usr/share/man/man4/acpige.4
 ./usr/share/man/man4/acpihid.4
 ./usr/share/man/man4/acpihpet.4
 ./usr/share/man/man4/acpihve.4
@@ -1347,6 +1348,7 @@
 ./usr/share/man/man4/dwctwo.4
 ./usr/share/man/man4/dwdog.4
 ./usr/share/man/man4/dwge.4
+./usr/share/man/man4/dwgpio.4
 ./usr/share/man/man4/dwiic.4
 ./usr/share/man/man4/dwmmc.4
 ./usr/share/man/man4/dwpcie.4
@@ -1563,7 +1565,6 @@
 ./usr/share/man/man4/loongson/intro.4
 ./usr/share/man/man4/loongson/leioc.4
 ./usr/share/man/man4/loongson/mem.4
-./usr/share/man/man4/loongson/mfokclock.4
 ./usr/share/man/man4/loongson/sisfb.4
 ./usr/share/man/man4/loongson/smfb.4
 ./usr/share/man/man4/loongson/stsec.4
@@ -1626,6 +1627,7 @@
 ./usr/share/man/man4/mcx.4
 ./usr/share/man/man4/mfi.4
 ./usr/share/man/man4/mfii.4
+./usr/share/man/man4/mfokrtc.4
 ./usr/share/man/man4/midi.4
 ./usr/share/man/man4/mii.4
 ./usr/share/man/man4/mlphy.4
@@ -1651,12 +1653,14 @@
 ./usr/share/man/man4/mvgpio.4
 ./usr/share/man/man4/mvicu.4
 ./usr/share/man/man4/mviic.4
+./usr/share/man/man4/mvkpcie.4
 ./usr/share/man/man4/mvneta.4
 ./usr/share/man/man4/mvpinctrl.4
 ./usr/share/man/man4/mvpp.4
 ./usr/share/man/man4/mvrng.4
 ./usr/share/man/man4/mvrtc.4
 ./usr/share/man/man4/mvspi.4
+./usr/share/man/man4/mvsw.4
 ./usr/share/man/man4/mvtemp.4
 ./usr/share/man/man4/mvuart.4
 ./usr/share/man/man4/myx.4
@@ -1678,6 +1682,7 @@
 ./usr/share/man/man4/oce.4
 ./usr/share/man/man4/octeon/amdcf.4
 ./usr/share/man/man4/octeon/cnmac.4
+./usr/share/man/man4/octeon/octboot.4
 ./usr/share/man/man4/octeon/octcf.4
 ./usr/share/man/man4/octeon/octcib.4
 ./usr/share/man/man4/octeon/octcit.4
@@ -1717,6 +1722,7 @@
 ./usr/share/man/man4/pcfiic.4
 ./usr/share/man/man4/pcfrtc.4
 ./usr/share/man/man4/pchb.4
+./usr/share/man/man4/pchgpio.4
 ./usr/share/man/man4/pchtemp.4
 ./usr/share/man/man4/pci.4
 ./usr/share/man/man4/pcib.4
@@ -1740,6 +1746,15 @@
 ./usr/share/man/man4/plrtc.4
 ./usr/share/man/man4/pluart.4
 ./usr/share/man/man4/pms.4
+./usr/share/man/man4/powerpc64/astfb.4
+./usr/share/man/man4/powerpc64/intro.4
+./usr/share/man/man4/powerpc64/opal.4
+./usr/share/man/man4/powerpc64/opalcons.4
+./usr/share/man/man4/powerpc64/opalsens.4
+./usr/share/man/man4/powerpc64/phb.4
+./usr/share/man/man4/powerpc64/xicp.4
+./usr/share/man/man4/powerpc64/xics.4
+./usr/share/man/man4/powerpc64/xive.4
 ./usr/share/man/man4/ppb.4
 ./usr/share/man/man4/ppp.4
 ./usr/share/man/man4/pppoe.4
@@ -2168,6 +2183,7 @@
 ./usr/share/man/man5/mk.conf.5
 ./usr/share/man/man5/moduli.5
 ./usr/share/man/man5/motd.5
+./usr/share/man/man5/mygate.5
 ./usr/share/man/man5/myname.5
 ./usr/share/man/man5/netgroup.5
 ./usr/share/man/man5/netid.5
@@ -2479,6 +2495,7 @@
 ./usr/share/man/man8/ping.8
 ./usr/share/man/man8/pkg_check.8
 ./usr/share/man/man8/portmap.8
+./usr/share/man/man8/powerpc64/MAKEDEV.8
 ./usr/share/man/man8/powerpc64/eeprom.8
 ./usr/share/man/man8/pppd.8
 ./usr/share/man/man8/pppstats.8

@@ -1,4 +1,4 @@
-/*	$OpenBSD: policy.c,v 1.70 2020/09/09 21:25:42 tobhe Exp $	*/
+/*	$OpenBSD: policy.c,v 1.73 2020/12/02 16:47:45 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2010-2013 Reyk Floeter <reyk@openbsd.org>
@@ -229,16 +229,16 @@ policy_calc_skip_steps(struct iked_policies *policies)
 	while (cur != NULL) {
 		if (cur->pol_flags & IKED_POLICY_SKIP)
 			IKED_SET_SKIP_STEPS(IKED_SKIP_FLAGS);
-		else if (cur->pol_af != AF_UNSPEC &&
+		if (cur->pol_af != AF_UNSPEC &&
 		    prev->pol_af != AF_UNSPEC &&
 		    cur->pol_af != prev->pol_af)
 			IKED_SET_SKIP_STEPS(IKED_SKIP_AF);
-		else if (cur->pol_ipproto && prev->pol_ipproto &&
+		if (cur->pol_ipproto && prev->pol_ipproto &&
 		    cur->pol_ipproto != prev->pol_ipproto)
 			IKED_SET_SKIP_STEPS(IKED_SKIP_PROTO);
-		else if (IKED_ADDR_NEQ(&cur->pol_peer, &prev->pol_peer))
+		if (IKED_ADDR_NEQ(&cur->pol_peer, &prev->pol_peer))
 			IKED_SET_SKIP_STEPS(IKED_SKIP_DST_ADDR);
-		else if (IKED_ADDR_NEQ(&cur->pol_local, &prev->pol_local))
+		if (IKED_ADDR_NEQ(&cur->pol_local, &prev->pol_local))
 			IKED_SET_SKIP_STEPS(IKED_SKIP_SRC_ADDR);
 
 		prev = cur;
@@ -331,7 +331,7 @@ sa_stateflags(struct iked_sa *sa, unsigned int flags)
 }
 
 int
-sa_stateok(struct iked_sa *sa, int state)
+sa_stateok(const struct iked_sa *sa, int state)
 {
 	unsigned int	 require;
 
@@ -862,7 +862,7 @@ proposals_negotiate(struct iked_proposals *result, struct iked_proposals *local,
 
 		if (config_add_transform(prop, chosen[i].xform_type,
 		    chosen[i].xform_id, chosen[i].xform_length,
-		    chosen[i].xform_keylength) == NULL)
+		    chosen[i].xform_keylength) != 0)
 			break;
 	}
 

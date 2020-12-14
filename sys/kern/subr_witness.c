@@ -1,4 +1,4 @@
-/*	$OpenBSD: subr_witness.c,v 1.37 2020/03/15 05:58:48 visa Exp $	*/
+/*	$OpenBSD: subr_witness.c,v 1.39 2020/12/07 16:55:29 mpi Exp $	*/
 
 /*-
  * Copyright (c) 2008 Isilon Systems, Inc.
@@ -390,6 +390,7 @@ static int witness_locktrace = 0;
 #endif
 
 int witness_count = WITNESS_COUNT;
+int witness_uninitialized_report = 5;
 
 static struct mutex w_mtx;
 static struct rwlock w_ctlock = RWLOCK_INITIALIZER("w_ctlock");
@@ -761,8 +762,19 @@ witness_checkorder(struct lock_object *lock, int flags,
 	struct witness *w, *w1;
 	int i, j, s;
 
-	if (witness_cold || witness_watch < 1 || panicstr != NULL ||
-	    db_active || (lock->lo_flags & LO_WITNESS) == 0)
+	if (witness_cold || witness_watch < 1 || panicstr != NULL || db_active)
+		return;
+	
+	if ((lock->lo_flags & LO_INITIALIZED) == 0) {
+		if (witness_uninitialized_report > 0) {
+			witness_uninitialized_report--;
+			printf("witness: lock_object uninitialized: %p\n", lock);
+			witness_debugger(1);
+		}
+		lock->lo_flags |= LO_INITIALIZED;
+	}
+
+	if ((lock->lo_flags & LO_WITNESS) == 0)
 		return;
 
 	w = lock->lo_witness;
@@ -1876,7 +1888,7 @@ witness_process_has_locks(struct process *pr)
 {
 	struct proc *p;
 
-	TAILQ_FOREACH(p, &pr->ps_threads, p_thr_link) {
+	SMR_TAILQ_FOREACH_LOCKED(p, &pr->ps_threads, p_thr_link) {
 		if (witness_thread_has_locks(p))
 			return (1);
 	}
@@ -2096,7 +2108,7 @@ db_witness_list_all(db_expr_t addr, int have_addr, db_expr_t count, char *modif)
 	LIST_FOREACH(pr, &allprocess, ps_list) {
 		if (!witness_process_has_locks(pr))
 			continue;
-		TAILQ_FOREACH(p, &pr->ps_threads, p_thr_link) {
+		SMR_TAILQ_FOREACH_LOCKED(p, &pr->ps_threads, p_thr_link) {
 			if (!witness_thread_has_locks(p))
 				continue;
 			db_printf("Process %d (%s) thread %p (%d)\n",

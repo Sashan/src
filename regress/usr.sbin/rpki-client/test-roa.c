@@ -1,4 +1,4 @@
-/*	$Id: test-roa.c,v 1.3 2019/08/22 21:31:48 bluhm Exp $ */
+/*	$Id: test-roa.c,v 1.7 2020/11/09 16:13:02 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -25,6 +25,7 @@
 
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/pem.h>
 #include <openssl/x509v3.h>
 
 #include "extern.h"
@@ -53,16 +54,25 @@ roa_print(const struct roa *p)
 int
 main(int argc, char *argv[])
 {
-	int		 c, i, verb = 0;
+	int		 c, i, ppem = 0, verb = 0;
+	BIO		*bio_out = NULL;
 	X509		*xp = NULL;
 	struct roa	*p;
+
 
 	ERR_load_crypto_strings();
 	OpenSSL_add_all_ciphers();
 	OpenSSL_add_all_digests();
 
-	while ((c = getopt(argc, argv, "v")) != -1)
+	while ((c = getopt(argc, argv, "pv")) != -1)
 		switch (c) {
+		case 'p':
+			if (ppem)
+				break;
+			ppem = 1;
+			if ((bio_out = BIO_new_fp(stdout, BIO_NOCLOSE)) == NULL)
+				errx(1, "BIO_new_fp");
+			break;
 		case 'v':
 			verb++;
 			break;
@@ -81,13 +91,18 @@ main(int argc, char *argv[])
 			break;
 		if (verb)
 			roa_print(p);
+		if (ppem) {
+			if (!PEM_write_bio_X509(bio_out, xp))
+				errx(1,
+				    "PEM_write_bio_X509: unable to write cert");
+		}
 		roa_free(p);
 		X509_free(xp);
 	}
 
+	BIO_free(bio_out);
 	EVP_cleanup();
 	CRYPTO_cleanup_all_ex_data();
-	ERR_remove_state(0);
 	ERR_free_strings();
 
 	if (i < argc)

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_runvar.h,v 1.10 2014/05/24 10:10:17 stsp Exp $	*/
+/*	$OpenBSD: if_runvar.h,v 1.13 2020/11/27 14:45:03 krw Exp $	*/
 
 /*-
  * Copyright (c) 2008,2009 Damien Bergamini <damien.bergamini@free.fr>
@@ -64,14 +64,12 @@ struct run_tx_radiotap_header {
 	uint8_t		wt_rate;
 	uint16_t	wt_chan_freq;
 	uint16_t	wt_chan_flags;
-	uint8_t		wt_hwqueue;
 } __packed;
 
 #define RUN_TX_RADIOTAP_PRESENT				\
 	(1 << IEEE80211_RADIOTAP_FLAGS |		\
 	 1 << IEEE80211_RADIOTAP_RATE |			\
-	 1 << IEEE80211_RADIOTAP_CHANNEL |		\
-	 1 << IEEE80211_RADIOTAP_HWQUEUE)
+	 1 << IEEE80211_RADIOTAP_CHANNEL)
 
 struct run_softc;
 
@@ -114,7 +112,7 @@ struct run_cmd_newstate {
 
 struct run_cmd_key {
 	struct ieee80211_key	key;
-	uint16_t		associd;
+	struct ieee80211_node	*ni;
 };
 
 #define RUN_HOST_CMD_RING_COUNT	32
@@ -210,4 +208,5 @@ struct run_softc {
 #define sc_txtap	sc_txtapu.th
 	int				sc_txtap_len;
 #endif
+	int				sc_key_tasks;
 };

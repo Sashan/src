@@ -1,4 +1,4 @@
-/*	$OpenBSD: bpf.c,v 1.192 2020/06/18 23:32:00 dlg Exp $	*/
+/*	$OpenBSD: bpf.c,v 1.197 2020/12/12 11:49:02 jan Exp $	*/
 /*	$NetBSD: bpf.c,v 1.33 1997/02/21 23:59:35 thorpej Exp $	*/
 
 /*
@@ -207,7 +207,7 @@ bpf_movein(struct uio *uio, struct bpf_d *d, struct mbuf **mp,
 	m->m_pkthdr.len = len - hlen;
 
 	if (len > MHLEN) {
-		MCLGETI(m, M_WAIT, NULL, len);
+		MCLGETL(m, M_WAIT, len);
 		if ((m->m_flags & M_EXT) == 0) {
 			error = ENOBUFS;
 			goto bad;
@@ -873,9 +873,11 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 				break;
 			}
 			rtout += tv->tv_usec / tick;
+			mtx_enter(&d->bd_mtx);
 			d->bd_rtout = rtout;
 			if (d->bd_rtout == 0 && tv->tv_usec != 0)
 				d->bd_rtout = 1;
+			mtx_leave(&d->bd_mtx);
 			break;
 		}
 
@@ -886,8 +888,10 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		{
 			struct timeval *tv = (struct timeval *)addr;
 
+			mtx_enter(&d->bd_mtx);
 			tv->tv_sec = d->bd_rtout / hz;
 			tv->tv_usec = (d->bd_rtout % hz) * tick;
+			mtx_leave(&d->bd_mtx);
 			break;
 		}
 
@@ -1312,7 +1316,7 @@ _bpf_mtap(caddr_t arg, const struct mbuf *mp, const struct mbuf *m,
 					    M_FLOWID))
 						SET(tbh.bh_flags, BPF_F_FLOWID);
 
-					m_microtime(m, &tv);
+					m_microtime(mp, &tv);
 				} else
 					microtime(&tv);
 
@@ -1433,13 +1437,13 @@ bpf_mtap_ether(caddr_t arg, const struct mbuf *m, u_int direction)
 {
 #if NVLAN > 0
 	struct ether_vlan_header evh;
-	struct m_hdr mh;
+	struct m_hdr mh, md;
 	uint8_t prio;
 
 	if ((m->m_flags & M_VLANTAG) == 0)
 #endif
 	{
-		return bpf_mtap(arg, m, direction);
+		return _bpf_mtap(arg, m, m, direction);
 	}
 
 #if NVLAN > 0
@@ -1456,12 +1460,16 @@ bpf_mtap_ether(caddr_t arg, const struct mbuf *m, u_int direction)
 	    (prio << EVL_PRIO_BITS));
 
 	mh.mh_flags = 0;
-	mh.mh_data = m->m_data + ETHER_HDR_LEN;
-	mh.mh_len = m->m_len - ETHER_HDR_LEN;
-	mh.mh_next = m->m_next;
+	mh.mh_data = (caddr_t)&evh;
+	mh.mh_len = sizeof(evh);
+	mh.mh_next = (struct mbuf *)&md;
 
-	return bpf_mtap_hdr(arg, &evh, sizeof(evh),
-	    (struct mbuf *)&mh, direction);
+	md.mh_flags = 0;
+	md.mh_data = m->m_data + ETHER_HDR_LEN;
+	md.mh_len = m->m_len - ETHER_HDR_LEN;
+	md.mh_next = m->m_next;
+
+	return _bpf_mtap(arg, m, (struct mbuf *)&mh, direction);
 #endif
 }
 
@@ -1720,32 +1728,16 @@ int
 bpf_sysctl_locked(int *name, u_int namelen, void *oldp, size_t *oldlenp,
     void *newp, size_t newlen)
 {
-	int newval;
-	int error;
-
 	switch (name[0]) {
 	case NET_BPF_BUFSIZE:
-		newval = bpf_bufsize;
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &newval);
-		if (error)
-			return (error);
-		if (newval < BPF_MINBUFSIZE || newval > bpf_maxbufsize)
-			return (EINVAL);
-		bpf_bufsize = newval;
-		break;
+		return sysctl_int_bounded(oldp, oldlenp, newp, newlen,
+		    &bpf_bufsize, BPF_MINBUFSIZE, bpf_maxbufsize);
 	case NET_BPF_MAXBUFSIZE:
-		newval = bpf_maxbufsize;
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &newval);
-		if (error)
-			return (error);
-		if (newval < BPF_MINBUFSIZE)
-			return (EINVAL);
-		bpf_maxbufsize = newval;
-		break;
+		return sysctl_int_bounded(oldp, oldlenp, newp, newlen,
+		    &bpf_maxbufsize, BPF_MINBUFSIZE, INT_MAX);
 	default:
 		return (EOPNOTSUPP);
 	}
-	return (0);
 }
 
 int

@@ -1,4 +1,4 @@
-.\"	$OpenBSD: rpki-client.8,v 1.30 2020/09/15 20:02:30 job Exp $
+.\"	$OpenBSD: rpki-client.8,v 1.33 2020/12/09 11:33:10 claudio Exp $
 .\"
 .\" Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
 .\"
@@ -14,7 +14,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: September 15 2020 $
+.Dd $Mdocdate: December 9 2020 $
 .Dt RPKI-CLIENT 8
 .Os
 .Sh NAME
@@ -85,8 +85,7 @@ flags and connect with rsync-protocol locations.
 Create output in the file
 .Pa json
 in the output directory as JSON object.
-This format is identical to that
-produced by the RIPE NCC RPKI Validator and NLnet Labs routinator.
+This format is similar to that produced by other RPKI validators.
 .It Fl n
 Assume that all requested repositories exist: don't update.
 .It Fl o
@@ -101,12 +100,6 @@ If the
 and
 .Fl j
 options are not specified this is the default.
-.It Fl T Ar table
-For BIRD output generated with the
-.Fl B
-option use
-.Ar table
-as roa table name instead of the default 'ROAS'.
 .It Fl s Ar timeout
 Terminate after
 .Ar timeout
@@ -114,6 +107,12 @@ seconds of runtime, because normal practice will restart from
 .Xr cron 8 .
 Disable by specifying 0.
 Defaults to 1 hour.
+.It Fl T Ar table
+For BIRD output generated with the
+.Fl B
+option use
+.Ar table
+as roa table name instead of the default 'ROAS'.
 .It Fl t Ar tal
 Specify a
 .Em Trust Anchor Location Pq TAL
@@ -204,8 +203,9 @@ Manifests for the Resource Public Key Infrastructure (RPKI).
 .It RFC 6487
 A Profile for X.509 PKIX Resource Certificates.
 .It RFC 6488
-Signed Object Template for the Resource Public Key Infrastructure
-(RPKI).
+Signed Object Template for the Resource Public Key Infrastructure (RPKI).
+.It RFC 6493
+The Resource Public Key Infrastructure (RPKI) Ghostbusters Record.
 .It RFC 7730
 Resource Public Key Infrastructure (RPKI) Trust Anchor Locator.
 .El

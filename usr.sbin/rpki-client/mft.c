@@ -1,4 +1,4 @@
-/*	$OpenBSD: mft.c,v 1.16 2020/09/12 15:46:48 claudio Exp $ */
+/*	$OpenBSD: mft.c,v 1.20 2020/12/09 11:25:08 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -54,33 +54,59 @@ gentime2str(const ASN1_GENERALIZEDTIME *time)
 }
 
 /*
+ * Convert an ASN1_GENERALIZEDTIME to a struct tm.
+ * Returns 1 on success, 0 on failure.
+ */
+static int
+generalizedtime_to_tm(const ASN1_GENERALIZEDTIME *gtime, struct tm *tm)
+{
+	const char *data;
+	size_t len;
+
+	data = ASN1_STRING_get0_data(gtime);
+	len = ASN1_STRING_length(gtime);
+
+	return ASN1_time_parse(data, len, tm, V_ASN1_GENERALIZEDTIME) ==
+	    V_ASN1_GENERALIZEDTIME;
+}
+
+/*
  * Validate and verify the time validity of the mft.
  * Returns 1 if all is good, 0 if mft is stale, any other case -1.
- * XXX should use ASN1_time_tm_cmp() once libressl is used.
  */
-static time_t
+static int
 check_validity(const ASN1_GENERALIZEDTIME *from,
     const ASN1_GENERALIZEDTIME *until, const char *fn)
 {
 	time_t now = time(NULL);
+	struct tm tm_from, tm_until, tm_now;
 
-	if (!ASN1_GENERALIZEDTIME_check(from) ||
-	    !ASN1_GENERALIZEDTIME_check(until)) {
-		warnx("%s: embedded time format invalid", fn);
+	if (gmtime_r(&now, &tm_now) == NULL) {
+		warnx("%s: could not get current time", fn);
 		return -1;
 	}
+
+	if (!generalizedtime_to_tm(from, &tm_from)) {
+		warnx("%s: embedded from time format invalid", fn);
+		return -1;
+	}
+	if (!generalizedtime_to_tm(until, &tm_until)) {
+		warnx("%s: embedded until time format invalid", fn);
+		return -1;
+	}
+
 	/* check that until is not before from */
-	if (ASN1_STRING_cmp(until, from) < 0) {
+	if (ASN1_time_tm_cmp(&tm_until, &tm_from) < 0) {
 		warnx("%s: bad update interval", fn);
 		return -1;
 	}
 	/* check that now is not before from */
-	if (X509_cmp_time(from, &now) > 0) {
+	if (ASN1_time_tm_cmp(&tm_from, &tm_now) > 0) {
 		warnx("%s: mft not yet valid %s", fn, gentime2str(from));
 		return -1;
 	}
 	/* check that now is not after until */
-	if (X509_cmp_time(until, &now) < 0) {
+	if (ASN1_time_tm_cmp(&tm_until, &tm_now) < 0) {
 		warnx("%s: mft expired on %s", fn, gentime2str(until));
 		return 0;
 	}
@@ -142,16 +168,6 @@ mft_parse_filehash(struct parse *p, const ASN1_OCTET_STRING *os)
 	} else if ((sz = strlen(fn)) <= 4) {
 		warnx("%s: filename must be large enough for suffix part: %s",
 		    p->fn, fn);
-		goto out;
-	}
-
-	if (strcasecmp(fn + sz - 4, ".roa") &&
-	    strcasecmp(fn + sz - 4, ".crl") &&
-	    strcasecmp(fn + sz - 4, ".cer")) {
-		/* ignore unknown files */
-		free(fn);
-		fn = NULL;
-		rc = 1;
 		goto out;
 	}
 
@@ -239,7 +255,7 @@ mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p)
 	ASN1_SEQUENCE_ANY	*seq;
 	const ASN1_TYPE		*t;
 	const ASN1_GENERALIZEDTIME *from, *until;
-	int			 i, rc = -1, validity;
+	int			 i, rc = -1;
 
 	if ((seq = d2i_ASN1_SEQUENCE_ANY(NULL, &d, dsz)) == NULL) {
 		cryptowarnx("%s: RFC 6486 section 4.2: Manifest: "
@@ -285,7 +301,7 @@ mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p)
 	 * Validate that the current date falls into this interval.
 	 * This is required by section 4.4, (3).
 	 * If we're after the given date, then the MFT is stale.
-	 * This is made super complicated because it usees OpenSSL's
+	 * This is made super complicated because it uses OpenSSL's
 	 * ASN1_GENERALIZEDTIME instead of ASN1_TIME, which we could
 	 * compare against the current time trivially.
 	 */
@@ -308,9 +324,12 @@ mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p)
 	}
 	until = t->value.generalizedtime;
 
-	validity = check_validity(from, until, p->fn);
-	if (validity != 1)
+	rc = check_validity(from, until, p->fn);
+	if (rc != 1)
 		goto out;
+
+	/* The mft is valid. Reset rc so later 'goto out' return failure. */
+	rc = -1;
 
 	/* File list algorithm. */
 
@@ -339,7 +358,7 @@ mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p)
 	} else if (!mft_parse_flist(p, t->value.octet_string))
 		goto out;
 
-	rc = validity;
+	rc = 1;
 out:
 	sk_ASN1_TYPE_pop_free(seq, ASN1_TYPE_free);
 	return rc;

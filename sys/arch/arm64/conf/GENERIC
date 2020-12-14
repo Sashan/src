@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.173 2020/07/31 12:47:43 kettenis Exp $
+# $OpenBSD: GENERIC,v 1.181 2020/12/06 20:39:07 kettenis Exp $
 #
 # GENERIC machine description file
 #
@@ -40,16 +40,21 @@ smbios0		at efi?
 acpi0		at mainbus?
 acpibtn*	at acpi?
 acpiec*		at acpi?
+acpige*		at acpi?
 acpimcfg*	at acpi?
 acpipci*	at acpi?
 pci*		at acpipci?
+acpipwrres*	at acpi?
+acpitz*		at acpi?
 ahci*		at acpi?
 ccp*		at acpi?		# AMD Cryptographic Co-processor
 com*		at acpi?
+dwgpio*		at acpi?
 dwiic*		at acpi?
 iic*		at dwiic?
 ipmi*		at acpi?
 pluart*		at acpi?
+sdhc*		at acpi?
 xhci*		at acpi?
 simplebus*	at fdt?
 
@@ -132,6 +137,7 @@ imxgpc*		at fdt?
 imxgpio*	at fdt?
 fec*		at fdt?
 imxuart*	at fdt?
+imxiic*		at acpi?
 imxiic*		at fdt?
 iic*		at imxiic?
 bdpmic*		at iic?
@@ -206,12 +212,13 @@ mvkpcie*	at fdt?
 pci*		at mvkpcie?
 mvmdio*		at fdt?
 mvneta*		at fdt?
-#mvppc*		at fdt?
-#mvpp*		at mvppc?
+mvppc*		at fdt?
+mvpp*		at mvppc?
 mvrng*		at fdt?
 mvrtc*		at fdt?
 mvspi*		at fdt?
 moxtet*		at spi?
+mvsw*		at fdt?
 mvtemp*		at fdt?
 mvuart*		at fdt?
 sfp*		at fdt?
@@ -439,6 +446,7 @@ ipmi*		at iic?			# IPMI (SIIF)
 islrtc*		at iic?			# ISL1208 RTC
 maxrtc*		at iic?			# DS1307 RTC
 mcprtc*		at iic?			# MCP794XX RTC
+mfokrtc*	at iic?			# M41T8X RTC
 pcamux*		at iic?			# PCA9548 multiplexer
 iic*		at pcamux?
 pcfrtc*		at iic?			# PCF8523 RTC

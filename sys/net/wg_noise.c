@@ -1,3 +1,4 @@
+/*	$OpenBSD: wg_noise.c,v 1.4 2020/12/09 05:53:33 tb Exp $ */
 /*
  * Copyright (C) 2015-2020 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  * Copyright (C) 2019-2020 Matt Dunwoodie <ncon@noconroy.net>
@@ -459,7 +460,7 @@ noise_remote_begin_session(struct noise_remote *r)
 		    NOISE_SYMMETRIC_KEY_LEN, NOISE_SYMMETRIC_KEY_LEN, 0, 0,
 		    hs->hs_ck);
 	} else {
-		rw_exit_write(&r->r_keypair_lock);
+		rw_exit_write(&r->r_handshake_lock);
 		return EINVAL;
 	}
 
@@ -467,8 +468,8 @@ noise_remote_begin_session(struct noise_remote *r)
 	kp.kp_local_index = hs->hs_local_index;
 	kp.kp_remote_index = hs->hs_remote_index;
 	getnanouptime(&kp.kp_birthdate);
-	rw_init(&kp.kp_ctr.c_lock, "noise_counter");
 	bzero(&kp.kp_ctr, sizeof(kp.kp_ctr));
+	rw_init(&kp.kp_ctr.c_lock, "noise_counter");
 
 	/* Now we need to add_new_keypair */
 	rw_enter_write(&r->r_keypair_lock);

@@ -568,29 +568,28 @@ radeondrm_attach_kms(struct device *parent, struct device *self, void *aux)
 	}
 #endif
 
-	for (i = PCI_MAPREG_START; i < PCI_MAPREG_END ; i+= 4) {
+	for (i = PCI_MAPREG_START; i < PCI_MAPREG_END; i += 4) {
 		type = pci_mapreg_type(pa->pa_pc, pa->pa_tag, i);
-		if (PCI_MAPREG_TYPE(type) != PCI_MAPREG_TYPE_IO)
-			continue;
-		if (pci_mapreg_map(pa, i, type, 0, NULL,
-		    &rdev->rio_mem, NULL, &rdev->rio_mem_size, 0)) {
-			printf(": can't map rio space\n");
-			return;
+		if (type == PCI_MAPREG_TYPE_IO) {
+			pci_mapreg_map(pa, i, type, 0, NULL,
+			    &rdev->rio_mem, NULL, &rdev->rio_mem_size, 0);
+			break;
 		}
-
-		if (type & PCI_MAPREG_MEM_TYPE_64BIT)
+		if (type == PCI_MAPREG_MEM_TYPE_64BIT)
 			i += 4;
 	}
 
 	if (rdev->family >= CHIP_BONAIRE) {
 		type = pci_mapreg_type(pa->pa_pc, pa->pa_tag, 0x18);
 		if (PCI_MAPREG_TYPE(type) != PCI_MAPREG_TYPE_MEM ||
-		    pci_mapreg_map(pa, 0x18, type, 0, NULL,
+		    pci_mapreg_map(pa, 0x18, type, BUS_SPACE_MAP_LINEAR, NULL,
 		    &rdev->doorbell.bsh, &rdev->doorbell.base,
 		    &rdev->doorbell.size, 0)) {
 			printf(": can't map doorbell space\n");
 			return;
 		}
+		rdev->doorbell.ptr = bus_space_vaddr(rdev->memt,
+		    rdev->doorbell.bsh);
 	}
 
 	if (rdev->family >= CHIP_BONAIRE)
@@ -600,11 +599,12 @@ radeondrm_attach_kms(struct device *parent, struct device *self, void *aux)
 
 	type = pci_mapreg_type(pa->pa_pc, pa->pa_tag, rmmio_bar);
 	if (PCI_MAPREG_TYPE(type) != PCI_MAPREG_TYPE_MEM ||
-	    pci_mapreg_map(pa, rmmio_bar, type, 0, NULL,
+	    pci_mapreg_map(pa, rmmio_bar, type, BUS_SPACE_MAP_LINEAR, NULL,
 	    &rdev->rmmio_bsh, &rdev->rmmio_base, &rdev->rmmio_size, 0)) {
 		printf(": can't map rmmio space\n");
 		return;
 	}
+	rdev->rmmio = bus_space_vaddr(rdev->memt, rdev->rmmio_bsh);
 
 #if !defined(__sparc64__)
 	/*

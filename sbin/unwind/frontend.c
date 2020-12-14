@@ -1,4 +1,4 @@
-/*	$OpenBSD: frontend.c,v 1.51 2020/09/12 17:01:03 florian Exp $	*/
+/*	$OpenBSD: frontend.c,v 1.57 2020/12/11 16:36:03 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -86,7 +86,8 @@ struct pending_query {
 	int				 fd;
 	int				 bogus;
 	int				 rcode_override;
-	ssize_t				 answer_len;
+	int				 answer_len;
+	int				 received;
 	uint8_t				*answer;
 };
 
@@ -420,11 +421,10 @@ frontend_dispatch_main(int fd, short event, void *bula)
 void
 frontend_dispatch_resolver(int fd, short event, void *bula)
 {
-	static struct pending_query	*pq;
+	struct pending_query		*pq;
 	struct imsgev			*iev = bula;
 	struct imsgbuf			*ibuf = &iev->ibuf;
 	struct imsg			 imsg;
-	struct query_imsg		*query_imsg;
 	int				 n, shut = 0, chg;
 
 	if (event & EV_READ) {
@@ -447,41 +447,63 @@ frontend_dispatch_resolver(int fd, short event, void *bula)
 			break;
 
 		switch (imsg.hdr.type) {
-		case IMSG_ANSWER_HEADER:
-			if (pq != NULL)
-				fatalx("expected IMSG_ANSWER but got HEADER");
-			if (IMSG_DATA_SIZE(imsg) != sizeof(*query_imsg))
-				fatalx("%s: IMSG_ANSWER_HEADER wrong length: "
-				    "%lu", __func__, IMSG_DATA_SIZE(imsg));
-			query_imsg = (struct query_imsg *)imsg.data;
-			if ((pq = find_pending_query(query_imsg->id)) ==
-			    NULL) {
-				log_warnx("cannot find pending query %llu",
-				    query_imsg->id);
-				break;
-			}
-			if (query_imsg->err) {
-				send_answer(pq);
-				pq = NULL;
-				break;
-			}
-			pq->bogus = query_imsg->bogus;
-			break;
-		case IMSG_ANSWER:
-			if (pq == NULL)
-				fatalx("IMSG_ANSWER without HEADER");
+		case IMSG_ANSWER: {
+			struct answer_header	*answer_header;
+			int			 data_len;
+			uint8_t			*data;
 
-			if (pq->answer)
-				fatal("pq->answer");
-			if ((pq->answer = malloc(IMSG_DATA_SIZE(imsg))) !=
+			if (IMSG_DATA_SIZE(imsg) < sizeof(*answer_header))
+				fatalx("%s: IMSG_ANSWER wrong length: "
+				    "%lu", __func__, IMSG_DATA_SIZE(imsg));
+			answer_header = (struct answer_header *)imsg.data;
+			data = (uint8_t *)imsg.data + sizeof(*answer_header);
+			if (answer_header->answer_len > 65535)
+				fatalx("%s: IMSG_ANSWER answer too big: %d",
+				    __func__, answer_header->answer_len);
+			data_len = IMSG_DATA_SIZE(imsg) -
+			    sizeof(*answer_header);
+
+			if ((pq = find_pending_query(answer_header->id)) ==
 			    NULL) {
-				pq->answer_len = IMSG_DATA_SIZE(imsg);
-				memcpy(pq->answer, imsg.data, pq->answer_len);
-			} else
+				log_warnx("%s: cannot find pending query %llu",
+				    __func__, answer_header->id);
+				break;
+			}
+
+			if (answer_header->srvfail) {
+				free(pq->answer);
+				pq->answer_len = 0;
+				pq->answer = NULL;
 				pq->rcode_override = LDNS_RCODE_SERVFAIL;
-			send_answer(pq);
-			pq = NULL;
+				send_answer(pq);
+				break;
+			}
+
+			if (pq->answer == NULL) {
+				pq->answer = malloc(answer_header->answer_len);
+				if (pq->answer == NULL) {
+					pq->answer_len = 0;
+					pq->rcode_override =
+					    LDNS_RCODE_SERVFAIL;
+					send_answer(pq);
+					break;
+				}
+				pq->answer_len = answer_header->answer_len;
+				pq->received = 0;
+				pq->bogus = answer_header->bogus;
+			}
+
+			if (pq->received + data_len > pq->answer_len)
+				fatalx("%s: IMSG_ANSWER answer too big: %d",
+				    __func__, data_len);
+
+			memcpy(pq->answer + pq->received, data, data_len);
+			pq->received += data_len;
+
+			if (pq->received == pq->answer_len)
+				send_answer(pq);
 			break;
+		}
 		case IMSG_CTL_RESOLVER_INFO:
 		case IMSG_CTL_AUTOCONF_RESOLVER_INFO:
 		case IMSG_CTL_MEM_INFO:
@@ -1069,7 +1091,7 @@ parse_trust_anchor(struct trust_anchor_head *tah, int fd)
 
 	len = sizeof(rr);
 
-	while ((line = strsep(&str, "\n")) != NULL) {
+	while ((line = strsep(&p, "\n")) != NULL) {
 		if (sldns_str2wire_rr_buf(line, rr, &len, &dname_len,
 		    ROOT_DNSKEY_TTL, NULL, 0, NULL, 0) != 0)
 			continue;
@@ -1157,7 +1179,11 @@ parse_blocklist(int fd)
 			fatal("%s: malloc", __func__);
 		if ((bl_node->domain = strdup(line)) == NULL)
 			fatal("%s: strdup", __func__);
-		RB_INSERT(bl_tree, &bl_head, bl_node);
+		if (RB_INSERT(bl_tree, &bl_head, bl_node) != NULL) {
+			log_warnx("duplicate blocked domain \"%s\"", line);
+			free(bl_node->domain);
+			free(bl_node);
+		}
 	}
 	free(line);
 	if (ferror(f))
@@ -1175,9 +1201,9 @@ free_bl(void)
 {
 	struct bl_node	*n, *nxt;
 
-	for (n = RB_MIN(bl_tree, &bl_head); n != NULL; n = nxt) {
-		nxt = RB_NEXT(bl_tree, &bl_head, n);
+	RB_FOREACH_SAFE(n, bl_tree, &bl_head, nxt) {
 		RB_REMOVE(bl_tree, &bl_head, n);
+		free(n->domain);
 		free(n);
 	}
 }

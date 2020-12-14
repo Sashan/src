@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_exit.c,v 1.188 2020/03/18 15:48:21 visa Exp $	*/
+/*	$OpenBSD: kern_exit.c,v 1.193 2020/12/09 18:58:19 mpi Exp $	*/
 /*	$NetBSD: kern_exit.c,v 1.39 1996/04/22 01:38:25 christos Exp $	*/
 
 /*
@@ -63,6 +63,7 @@
 #ifdef SYSVSEM
 #include <sys/sem.h>
 #endif
+#include <sys/smr.h>
 #include <sys/witness.h>
 
 #include <sys/mount.h>
@@ -140,7 +141,7 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 			single_thread_check(p, 0);
 	}
 
-	if (flags == EXIT_NORMAL) {
+	if (flags == EXIT_NORMAL && !(pr->ps_flags & PS_EXITING)) {
 		if (pr->ps_pid == 1)
 			panic("init died (signal %d, exit %d)", xsig, xexit);
 
@@ -161,7 +162,7 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 	}
 
 	/* unlink ourselves from the active threads */
-	TAILQ_REMOVE(&pr->ps_threads, p, p_thr_link);
+	SMR_TAILQ_REMOVE_LOCKED(&pr->ps_threads, p, p_thr_link);
 	if ((p->p_flag & P_THREAD) == 0) {
 		/* main thread gotta wait because it has the pid, et al */
 		while (pr->ps_refcnt > 1)
@@ -184,6 +185,8 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 	if ((p->p_flag & P_THREAD) == 0)
 		pr->ps_siglist = 0;
 
+	kqpoll_exit();
+
 #if NKCOV > 0
 	kcov_exit(p);
 #endif
@@ -194,7 +197,8 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 		/* close open files and release open-file table */
 		fdfree(p);
 
-		timeout_del(&pr->ps_realit_to);
+		cancel_all_itimers();
+
 		timeout_del(&pr->ps_rucheck_to);
 #ifdef SYSVSEM
 		semexit(pr);
@@ -723,7 +727,7 @@ process_zap(struct process *pr)
 	if (pr->ps_ptstat != NULL)
 		free(pr->ps_ptstat, M_SUBPROC, sizeof(*pr->ps_ptstat));
 	pool_put(&rusage_pool, pr->ps_ru);
-	KASSERT(TAILQ_EMPTY(&pr->ps_threads));
+	KASSERT(SMR_TAILQ_EMPTY_LOCKED(&pr->ps_threads));
 	lim_free(pr->ps_limit);
 	crfree(pr->ps_ucred);
 	pool_put(&process_pool, pr);

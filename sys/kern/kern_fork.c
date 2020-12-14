@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_fork.c,v 1.225 2020/03/20 08:14:07 claudio Exp $	*/
+/*	$OpenBSD: kern_fork.c,v 1.230 2020/12/07 16:55:28 mpi Exp $	*/
 /*	$NetBSD: kern_fork.c,v 1.29 1996/02/09 18:59:34 christos Exp $	*/
 
 /*
@@ -52,6 +52,7 @@
 #include <sys/acct.h>
 #include <sys/ktrace.h>
 #include <sys/sched.h>
+#include <sys/smr.h>
 #include <sys/sysctl.h>
 #include <sys/pool.h>
 #include <sys/mman.h>
@@ -179,8 +180,8 @@ process_initialize(struct process *pr, struct proc *p)
 {
 	/* initialize the thread links */
 	pr->ps_mainproc = p;
-	TAILQ_INIT(&pr->ps_threads);
-	TAILQ_INSERT_TAIL(&pr->ps_threads, p, p_thr_link);
+	SMR_TAILQ_INIT(&pr->ps_threads);
+	SMR_TAILQ_INSERT_TAIL_LOCKED(&pr->ps_threads, p, p_thr_link);
 	pr->ps_refcnt = 1;
 	p->p_p = pr;
 
@@ -198,7 +199,8 @@ process_initialize(struct process *pr, struct proc *p)
 	rw_init(&pr->ps_lock, "pslock");
 	mtx_init(&pr->ps_mtx, IPL_MPFLOOR);
 
-	timeout_set(&pr->ps_realit_to, realitexpire, pr);
+	timeout_set_kclock(&pr->ps_realit_to, realitexpire, pr, 0,
+	    KCLOCK_UPTIME);
 	timeout_set(&pr->ps_rucheck_to, rucheck, pr);
 }
 
@@ -515,7 +517,7 @@ thread_fork(struct proc *curp, void *stack, void *tcb, pid_t *tidptr,
 	struct proc *p;
 	pid_t tid;
 	vaddr_t uaddr;
-	int error;
+	int s, error;
 
 	if (stack == NULL)
 		return EINVAL;
@@ -556,16 +558,18 @@ thread_fork(struct proc *curp, void *stack, void *tcb, pid_t *tidptr,
 
 	LIST_INSERT_HEAD(&allproc, p, p_list);
 	LIST_INSERT_HEAD(TIDHASH(p->p_tid), p, p_hash);
-	TAILQ_INSERT_TAIL(&pr->ps_threads, p, p_thr_link);
+	SMR_TAILQ_INSERT_TAIL_LOCKED(&pr->ps_threads, p, p_thr_link);
 
 	/*
 	 * if somebody else wants to take us to single threaded mode,
 	 * count ourselves in.
 	 */
+	SCHED_LOCK(s);
 	if (pr->ps_single) {
 		atomic_inc_int(&pr->ps_singlecount);
 		atomic_setbits_int(&p->p_flag, P_SUSPSINGLE);
 	}
+	SCHED_UNLOCK(s);
 
 	/*
 	 * Return tid to parent thread and copy it out to userspace

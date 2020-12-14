@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_compat.h,v 1.9 2019/05/08 14:59:31 bluhm Exp $	*/
+/*	$OpenBSD: kern_compat.h,v 1.11 2020/11/07 09:53:21 denis Exp $	*/
 
 #ifndef _KERN_COMPAT_H_
 #define _KERN_COMPAT_H_

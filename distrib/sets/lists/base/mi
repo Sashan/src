@@ -636,7 +636,7 @@
 ./usr/games
 ./usr/include
 ./usr/lib
-./usr/lib/libagentx.so.0.0
+./usr/lib/libagentx.so.1.0
 ./usr/lib/libc.so.96.0
 ./usr/lib/libcbor.so.1.0
 ./usr/lib/libcrypto.so.46.1
@@ -6238,7 +6238,6 @@
 ./usr/share/zoneinfo/US/Michigan
 ./usr/share/zoneinfo/US/Mountain
 ./usr/share/zoneinfo/US/Pacific
-./usr/share/zoneinfo/US/Pacific-New
 ./usr/share/zoneinfo/US/Samoa
 ./usr/share/zoneinfo/UTC
 ./usr/share/zoneinfo/Universal

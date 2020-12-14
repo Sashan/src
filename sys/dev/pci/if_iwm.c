@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwm.c,v 1.314 2020/08/26 17:12:00 stsp Exp $	*/
+/*	$OpenBSD: if_iwm.c,v 1.317 2020/12/12 11:48:53 jan Exp $	*/
 
 /*
  * Copyright (c) 2014, 2016 genua gmbh <info@genua.de>
@@ -3790,7 +3790,7 @@ iwm_rx_addbuf(struct iwm_softc *sc, int size, int idx)
 	if (size <= MCLBYTES) {
 		MCLGET(m, M_DONTWAIT);
 	} else {
-		MCLGETI(m, M_DONTWAIT, NULL, IWM_RBUF_SIZE);
+		MCLGETL(m, M_DONTWAIT, IWM_RBUF_SIZE);
 	}
 	if ((m->m_flags & M_EXT) == 0) {
 		m_freem(m);
@@ -4560,7 +4560,7 @@ iwm_send_cmd(struct iwm_softc *sc, struct iwm_host_cmd *hcmd)
 			err = EINVAL;
 			goto out;
 		}
-		m = MCLGETI(NULL, M_DONTWAIT, NULL, totlen);
+		m = MCLGETL(NULL, M_DONTWAIT, totlen);
 		if (m == NULL) {
 			printf("%s: could not get fw cmd mbuf (%zd bytes)\n",
 			    DEVNAME(sc), totlen);
@@ -4959,7 +4959,6 @@ iwm_tx(struct iwm_softc *sc, struct mbuf *m, struct ieee80211_node *ni, int ac)
 			tap->wt_rate = (0x80 | rinfo->ht_plcp);
 		} else
 			tap->wt_rate = rinfo->rate;
-		tap->wt_hwqueue = ac;
 		if ((ic->ic_flags & IEEE80211_F_WEPON) &&
 		    (wh->i_fc[1] & IEEE80211_FC1_PROTECTED))
 			tap->wt_flags |= IEEE80211_RADIOTAP_F_WEP;
@@ -8495,7 +8494,6 @@ iwm_rx_pkt(struct iwm_softc *sc, struct iwm_rx_data *data, struct mbuf_list *ml)
 	uint32_t offset = 0, nextoff = 0, nmpdu = 0, len;
 	struct mbuf *m0, *m;
 	const size_t minsz = sizeof(pkt->len_n_flags) + sizeof(pkt->hdr);
-	size_t remain = IWM_RBUF_SIZE;
 	int qid, idx, code, handled = 1;
 
 	bus_dmamap_sync(sc->sc_dmat, data->map, 0, IWM_RBUF_SIZE,
@@ -8532,7 +8530,7 @@ iwm_rx_pkt(struct iwm_softc *sc, struct iwm_rx_data *data, struct mbuf_list *ml)
 			break;
 
 		case IWM_REPLY_RX_MPDU_CMD: {
-			size_t maxlen = remain - minsz;
+			size_t maxlen = IWM_RBUF_SIZE - offset - minsz;
 			nextoff = offset +
 			    roundup(len, IWM_FH_RSCSR_FRAME_ALIGN);
 			nextpkt = (struct iwm_rx_packet *)
@@ -8570,11 +8568,6 @@ iwm_rx_pkt(struct iwm_softc *sc, struct iwm_rx_data *data, struct mbuf_list *ml)
 					iwm_rx_mpdu(sc, m, pkt->data,
 					    maxlen, ml);
 			}
-
-			if (offset + minsz < remain)
-				remain -= offset;
-			else
-				remain = minsz;
  			break;
 		}
 

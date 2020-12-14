@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.269 2020/08/20 15:12:35 kn Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.271 2020/12/13 06:14:35 gnezdo Exp $	*/
 /*	$NetBSD: machdep.c,v 1.3 2003/05/07 22:58:18 fvdl Exp $	*/
 
 /*-
@@ -469,9 +469,16 @@ bios_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	/* NOTREACHED */
 }
 
+extern int tsc_is_invariant;
+extern int amd64_has_xcrypt;
+
 const struct sysctl_bounded_args cpuctl_vars[] = {
 	{ CPU_LIDACTION, &lid_action, 0, 2 },
 	{ CPU_PWRACTION, &pwr_action, 0, 2 },
+	{ CPU_CPUID, &cpu_id, 1, 0 },
+	{ CPU_CPUFEATURE, &cpu_feature, 1, 0 },
+	{ CPU_XCRYPT, &amd64_has_xcrypt, 1, 0 },
+	{ CPU_INVARIANTTSC, &tsc_is_invariant, 1, 0 },
 };
 
 /*
@@ -482,8 +489,6 @@ cpu_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
     size_t newlen, struct proc *p)
 {
 	extern uint64_t tsc_frequency;
-	extern int tsc_is_invariant;
-	extern int amd64_has_xcrypt;
 	dev_t consdev;
 	dev_t dev;
 
@@ -507,10 +512,6 @@ cpu_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		    newp, newlen, p);
 	case CPU_CPUVENDOR:
 		return (sysctl_rdstring(oldp, oldlenp, newp, cpu_vendor));
-	case CPU_CPUID:
-		return (sysctl_rdint(oldp, oldlenp, newp, cpu_id));
-	case CPU_CPUFEATURE:
-		return (sysctl_rdint(oldp, oldlenp, newp, cpu_feature));
 	case CPU_KBDRESET:
 		if (securelevel > 0)
 			return (sysctl_rdint(oldp, oldlenp, newp,
@@ -531,8 +532,6 @@ cpu_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 #else
 		return (sysctl_rdint(oldp, oldlenp, newp, 0));
 #endif
-	case CPU_XCRYPT:
-		return (sysctl_rdint(oldp, oldlenp, newp, amd64_has_xcrypt));
 #if NPCKBC > 0 && NUKBD > 0
 	case CPU_FORCEUKBD:
 		{
@@ -549,8 +548,6 @@ cpu_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 #endif
 	case CPU_TSCFREQ:
 		return (sysctl_rdquad(oldp, oldlenp, newp, tsc_frequency));
-	case CPU_INVARIANTTSC:
-		return (sysctl_rdint(oldp, oldlenp, newp, tsc_is_invariant));
 	default:
 		return (sysctl_bounded_arr(cpuctl_vars, nitems(cpuctl_vars),
 		    name, namelen, oldp, oldlenp, newp, newlen));
@@ -566,7 +563,7 @@ cpu_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
  * signal mask, the stack, and the frame pointer, it returns to the
  * user specified pc.
  */
-void
+int
 sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip)
 {
 	struct proc *p = curproc;
@@ -618,7 +615,7 @@ sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip)
 	sp -= fpu_save_len;
 	ksc.sc_fpstate = (struct fxsave64 *)sp;
 	if (copyout(sfp, (void *)sp, fpu_save_len))
-		sigexit(p, SIGILL);
+		return 1;
 
 	/* Now reset the FPU state in PCB */
 	memcpy(&p->p_addr->u_pcb.pcb_savefpu,
@@ -630,13 +627,13 @@ sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip)
 		sss += (sizeof(*ksip) + 15) & ~15;
 
 		if (copyout(ksip, (void *)sip, sizeof(*ksip)))
-			sigexit(p, SIGILL);
+			return 1;
 	}
 	scp = sp - sss;
 
 	ksc.sc_cookie = (long)scp ^ p->p_p->ps_sigcookie;
 	if (copyout(&ksc, (void *)scp, sizeof(ksc)))
-		sigexit(p, SIGILL);
+		return 1;
 
 	/*
 	 * Build context to run handler in.
@@ -654,6 +651,8 @@ sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip)
 
 	/* The reset state _is_ the userspace state for this thread now */
 	curcpu()->ci_flags |= CPUF_USERXSTATE;
+
+	return 0;
 }
 
 /*

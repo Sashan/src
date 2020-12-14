@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwn.c,v 1.241 2020/07/27 07:24:03 stsp Exp $	*/
+/*	$OpenBSD: if_iwn.c,v 1.244 2020/12/12 11:48:53 jan Exp $	*/
 
 /*-
  * Copyright (c) 2007-2010 Damien Bergamini <damien.bergamini@free.fr>
@@ -1201,7 +1201,7 @@ iwn_alloc_rx_ring(struct iwn_softc *sc, struct iwn_rx_ring *ring)
 			goto fail;
 		}
 
-		data->m = MCLGETI(NULL, M_DONTWAIT, NULL, IWN_RBUF_SIZE);
+		data->m = MCLGETL(NULL, M_DONTWAIT, IWN_RBUF_SIZE);
 		if (data->m == NULL) {
 			printf("%s: could not allocate RX mbuf\n",
 			    sc->sc_dev.dv_xname);
@@ -1910,7 +1910,6 @@ iwn_ccmp_decap(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_key *k = &ni->ni_pairwise_key;
 	struct ieee80211_frame *wh;
-	struct ieee80211_rx_ba *ba;
 	uint64_t pn, *prsc;
 	uint8_t *ivp;
 	uint8_t tid;
@@ -1927,7 +1926,6 @@ iwn_ccmp_decap(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	}
 	hasqos = ieee80211_has_qos(wh);
 	tid = hasqos ? ieee80211_get_qos(wh) & IEEE80211_QOS_TID : 0;
-	ba = hasqos ? &ni->ni_rx_ba[tid] : NULL;
 	prsc = &k->k_rsc[tid];
 
 	/* Extract the 48-bit PN from the CCMP header. */
@@ -2060,7 +2058,7 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 		return;
 	}
 
-	m1 = MCLGETI(NULL, M_DONTWAIT, NULL, IWN_RBUF_SIZE);
+	m1 = MCLGETL(NULL, M_DONTWAIT, IWN_RBUF_SIZE);
 	if (m1 == NULL) {
 		ic->ic_stats.is_rx_nombuf++;
 		ifp->if_ierrors++;
@@ -3465,7 +3463,6 @@ iwn_tx(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 			tap->wt_rate = (0x80 | ni->ni_txmcs);
 		} else
 			tap->wt_rate = rinfo->rate;
-		tap->wt_hwqueue = ac;
 		if ((ic->ic_flags & IEEE80211_F_WEPON) &&
 		    (wh->i_fc[1] & IEEE80211_FC1_PROTECTED))
 			tap->wt_flags |= IEEE80211_RADIOTAP_F_WEP;

@@ -1,9 +1,9 @@
-#	$OpenBSD: Makefile,v 1.783 2020/09/15 18:38:51 mglocker Exp $
+#	$OpenBSD: Makefile,v 1.790 2020/12/06 20:48:12 kettenis Exp $
 
 MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	acpi.4 acpiac.4 acpials.4 acpiasus.4 acpibat.4 \
 	acpibtn.4 acpicbkbd.4 acpicpu.4 acpidock.4 acpihve.4 acpiec.4 \
-	acpihid.4 \
+	acpige.4 acpihid.4 \
 	acpihpet.4 acpimadt.4 acpimcfg.4 acpipci.4 acpiprt.4 acpipwrres.4 \
 	acpisbs.4 acpisony.4 acpisurface.4 acpithinkpad.4 acpitoshiba.4 \
 	acpitimer.4 acpivideo.4 acpivout.4 acpitz.4 \
@@ -27,7 +27,7 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	ch.4 chvgpio.4 ciphy.4 ciss.4 clcs.4 clct.4 cmpci.4 \
 	com.4 cue.4 cwfg.4 cy.4 cz.4 \
 	dc.4 dcphy.4 ddb.4 de.4 diskmap.4 divert.4 drm.4 dsxrtc.4 dt.4 \
-	dwctwo.4 dwdog.4 dwge.4 dwiic.4 dwmmc.4 dwpcie.4 dwxe.4 \
+	dwctwo.4 dwdog.4 dwge.4 dwgpio.4 dwiic.4 dwmmc.4 dwpcie.4 dwxe.4 \
 	eap.4 ec.4 eephy.4 ef.4 eg.4 ehci.4 eisa.4 el.4 em.4 emc.4 gcu.4 \
 	emu.4 enc.4 endrun.4 envy.4 eoip.4 ep.4 epic.4 esa.4 escodec.4 \
 	eso.4 ess.4 et.4 etherip.4 etphy.4 ex.4 exphy.4 exrtc.4 \
@@ -47,21 +47,22 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	kate.4 kcov.4 km.4 ksmn.4 ksyms.4 kubsan.4 kue.4 lc.4 lge.4 lii.4 \
 	lisa.4 lm.4 lmenv.4 lmn.4 lmtemp.4 lo.4 lpt.4 lxtphy.4 luphy.4 \
 	maestro.4 mainbus.4 malo.4 maxds.4 maxrtc.4 maxtmp.4 mbg.4 \
-	mcprtc.4 mcx.4 midi.4 mii.4 mfi.4 \
-	mfii.4 mlphy.4 moscom.4 mos.4 mpe.4 mpath.4 mpi.4 mpii.4 \
+	mcprtc.4 mcx.4 midi.4 mii.4 mfi.4 mfii.4 mfokrtc.4 \
+	mlphy.4 moscom.4 mos.4 mpe.4 mpath.4 mpi.4 mpii.4 \
 	mpip.4 mpu.4 msk.4 mpw.4 msts.4 mtd.4 mtdphy.4 mtio.4 mue.4 \
 	multicast.4 mvclock.4 mvdog.4 mvgicp.4 mvgpio.4 mvicu.4 mviic.4 \
-	mvneta.4 mvpinctrl.4 mvpp.4 mvrng.4 mvrtc.4 mvspi.4 mvtemp.4 mvuart.4 \
-	myx.4 ne.4 neo.4 nep.4 netintro.4 nfe.4 nge.4 nmea.4 \
+	mvkpcie.4 mvneta.4 mvpinctrl.4 mvpp.4 mvrng.4 mvrtc.4 mvspi.4 \
+	mvtemp.4 mvsw.4 mvuart.4 myx.4 \
+	ne.4 neo.4 nep.4 netintro.4 nfe.4 nge.4 nmea.4 \
 	nsclpcsio.4 nsgphy.4 nsphy.4 nsphyter.4 null.4 nviic.4 nvme.4 nvt.4 \
 	oce.4 ohci.4 onewire.4 oosiop.4 openprom.4 options.4 osiop.4 otus.4 \
 	owid.4 owctr.4 owsbm.4 owtemp.4 \
 	pair.4 pcagpio.4 pcaled.4 pcamux.4 \
 	pcdisplay.4 pchb.4 pchtemp.4 pci.4 pcib.4 \
-	pcfadc.4 pcfiic.4 pcfrtc.4 pcxrtc.4 pciide.4 pckbc.4 pckbd.4 \
-	pcmcia.4 pcn.4 pcppi.4 pcscp.4 pf.4 pflog.4 pflow.4 pfsync.4 \
+	pcfadc.4 pcfiic.4 pcfrtc.4 pchgpio.4 pciide.4 pckbc.4 pckbd.4 \
+	pcmcia.4 pcn.4 pcppi.4 pcscp.4 pcxrtc.4 pf.4 pflog.4 pflow.4 pfsync.4 \
 	pgt.4 piixpm.4 pinctrl.4 pipex.4 plgpio.4 plrtc.4 pluart.4 \
-	pms.4 ppb.4 ppp.4 pppoe.4 pppx.4 psci.4  pty.4 puc.4 pvbus.4 \
+	pms.4 ppb.4 ppp.4 pppoe.4 pppx.4 psci.4 pty.4 puc.4 pvbus.4 \
 	pvclock.4 pwdog.4 pwmbl.4 pwmfan.4 pwmreg.4 \
 	qla.4 qle.4 qlw.4 qsphy.4 \
 	radio.4 ral.4 random.4 rdomain.4 rd.4 rdac.4 re.4 rdcphy.4 rgephy.4 \
@@ -103,7 +104,7 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 
 SUBDIR=	man4.alpha man4.amd64 man4.arm64 man4.armv7 \
 	man4.hppa man4.i386 man4.landisk man4.loongson man4.luna88k \
-	man4.macppc man4.octeon man4.sgi man4.sparc64
+	man4.macppc man4.octeon man4.powerpc64 man4.sgi man4.sparc64
 
 CLEANFILES+= wi.4
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ca.c,v 1.71 2020/09/23 14:25:54 tobhe Exp $	*/
+/*	$OpenBSD: ca.c,v 1.75 2020/12/05 19:10:47 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2010-2013 Reyk Floeter <reyk@openbsd.org>
@@ -18,7 +18,6 @@
 
 #include <sys/queue.h>
 #include <sys/socket.h>
-#include <sys/wait.h>
 #include <sys/uio.h>
 
 #include <stdlib.h>
@@ -30,7 +29,6 @@
 #include <syslog.h>
 #include <errno.h>
 #include <err.h>
-#include <pwd.h>
 #include <event.h>
 
 #include <openssl/bio.h>
@@ -319,12 +317,13 @@ ca_setreq(struct iked *env, struct iked_sa *sa,
 	if (ikev2_policy2id(localid, &id, 1) != 0)
 		return (-1);
 
+	if (ibuf_length(id.id_buf) > IKED_ID_SIZE)
+		return (-1);
 	bzero(&idb, sizeof(idb));
 	idb.id_type = id.id_type;
 	idb.id_offset = id.id_offset;
 	idb.id_length = ibuf_length(id.id_buf);
-	memcpy(&idb.id_data, ibuf_data(id.id_buf),
-	    ibuf_length(id.id_buf));
+	memcpy(&idb.id_data, ibuf_data(id.id_buf), ibuf_length(id.id_buf));
 	iov[iovcnt].iov_base = &idb;
 	iov[iovcnt].iov_len = sizeof(idb);
 	iovcnt++;
@@ -698,7 +697,8 @@ ca_reload(struct iked *env)
 	X509_OBJECT		*xo;
 	X509			*x509;
 	DIR			*dir;
-	int			 i, len, iovcnt = 0;
+	int			 i, iovcnt = 0;
+	unsigned int		 len;
 
 	/*
 	 * Load CAs

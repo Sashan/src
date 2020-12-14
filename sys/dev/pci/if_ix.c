@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ix.c,v 1.172 2020/07/18 07:18:22 dlg Exp $	*/
+/*	$OpenBSD: if_ix.c,v 1.177 2020/12/12 11:48:53 jan Exp $	*/
 
 /******************************************************************************
 
@@ -1061,7 +1061,6 @@ ixgbe_legacy_intr(void *arg)
 
 	rv = ixgbe_intr(sc);
 	if (rv == 0) {
-		ixgbe_enable_queues(sc);
 		return (0);
 	}
 
@@ -1082,14 +1081,27 @@ ixgbe_intr(struct ix_softc *sc)
 	struct ixgbe_hw	*hw = &sc->hw;
 	uint32_t	 reg_eicr, mod_mask, msf_mask;
 
-	reg_eicr = IXGBE_READ_REG(&sc->hw, IXGBE_EICR);
-	if (reg_eicr == 0) {
-		ixgbe_enable_intr(sc);
-		return (0);
+	if (sc->sc_intrmap) {
+		/* Pause other interrupts */
+		IXGBE_WRITE_REG(hw, IXGBE_EIMC, IXGBE_EIMC_OTHER);
+		/* First get the cause */
+		reg_eicr = IXGBE_READ_REG(hw, IXGBE_EICS);
+		/* Be sure the queue bits are not cleared */
+		reg_eicr &= ~IXGBE_EICR_RTX_QUEUE;
+		/* Clear interrupt with write */
+		IXGBE_WRITE_REG(hw, IXGBE_EICR, reg_eicr);
+	} else {
+		reg_eicr = IXGBE_READ_REG(hw, IXGBE_EICR);
+		if (reg_eicr == 0) {
+			ixgbe_enable_intr(sc);
+			ixgbe_enable_queues(sc);
+			return (0);
+		}
 	}
 
 	/* Link status change */
 	if (reg_eicr & IXGBE_EICR_LSC) {
+		IXGBE_WRITE_REG(hw, IXGBE_EIMC, IXGBE_EIMC_LSC);
 		KERNEL_LOCK();
 		ixgbe_update_link_status(sc);
 		KERNEL_UNLOCK();
@@ -1144,7 +1156,7 @@ ixgbe_intr(struct ix_softc *sc)
 	    (reg_eicr & IXGBE_EICR_GPI_SDP1)) {
 		printf("%s: CRITICAL: FAN FAILURE!! "
 		    "REPLACE IMMEDIATELY!!\n", ifp->if_xname);
-		IXGBE_WRITE_REG(&sc->hw, IXGBE_EICR, IXGBE_EICR_GPI_SDP1);
+		IXGBE_WRITE_REG(hw, IXGBE_EICR, IXGBE_EICR_GPI_SDP1);
 	}
 
 	/* External PHY interrupt */
@@ -1156,6 +1168,8 @@ ixgbe_intr(struct ix_softc *sc)
 		ixgbe_handle_phy(sc);
 		KERNEL_UNLOCK();
 	}
+
+	IXGBE_WRITE_REG(hw, IXGBE_EIMS, IXGBE_EIMS_OTHER | IXGBE_EIMS_LSC);
 
 	return (1);
 }
@@ -1597,7 +1611,8 @@ ixgbe_stop(void *arg)
 		ifq_barrier(ifq);
 		ifq_clr_oactive(ifq);
 
-		intr_barrier(sc->queues[i].tag);
+		if (sc->queues[i].tag != NULL)
+			intr_barrier(sc->queues[i].tag);
 		timeout_del(&sc->rx_rings[i].rx_refill);
 	}
 
@@ -1606,6 +1621,8 @@ ixgbe_stop(void *arg)
 	/* Should we really clear all structures on stop? */
 	ixgbe_free_transmit_structures(sc);
 	ixgbe_free_receive_structures(sc);
+
+	ixgbe_update_link_status(sc);
 }
 
 
@@ -2649,7 +2666,7 @@ ixgbe_get_buf(struct rx_ring *rxr, int i)
 	}
 
 	/* needed in any case so prealocate since this one will fail for sure */
-	mp = MCLGETI(NULL, M_DONTWAIT, NULL, sc->rx_mbuf_sz);
+	mp = MCLGETL(NULL, M_DONTWAIT, sc->rx_mbuf_sz);
 	if (!mp)
 		return (ENOBUFS);
 
@@ -3841,7 +3858,7 @@ int
 ix_txq_kstats_read(struct kstat *ks)
 {
 	struct ix_txq_kstats *stats = ks->ks_data;
-	struct rx_ring *txr = ks->ks_softc;
+	struct tx_ring *txr = ks->ks_softc;
 	struct ix_softc *sc = txr->sc;
 	struct ixgbe_hw	*hw = &sc->hw;
 	uint32_t i = txr->me;

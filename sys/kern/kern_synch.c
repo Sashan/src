@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_synch.c,v 1.170 2020/04/06 07:52:12 claudio Exp $	*/
+/*	$OpenBSD: kern_synch.c,v 1.172 2020/12/07 16:55:29 mpi Exp $	*/
 /*	$NetBSD: kern_synch.c,v 1.37 1996/04/22 01:38:37 christos Exp $	*/
 
 /*
@@ -50,6 +50,7 @@
 #include <sys/pool.h>
 #include <sys/refcnt.h>
 #include <sys/atomic.h>
+#include <sys/smr.h>
 #include <sys/witness.h>
 #include <sys/tracepoint.h>
 
@@ -434,8 +435,9 @@ sleep_setup_timeout(struct sleep_state *sls, int timo)
 {
 	struct proc *p = curproc;
 
+	KASSERT((p->p_flag & P_TIMEOUT) == 0);
+
 	if (timo) {
-		KASSERT((p->p_flag & P_TIMEOUT) == 0);
 		sls->sls_timeout = 1;
 		timeout_add(&p->p_sleep_to, timo);
 	}
@@ -632,7 +634,7 @@ sys_sched_yield(struct proc *p, void *v, register_t *retval)
 	 * can make some progress.
 	 */
 	newprio = p->p_usrpri;
-	TAILQ_FOREACH(q, &p->p_p->ps_threads, p_thr_link)
+	SMR_TAILQ_FOREACH_LOCKED(q, &p->p_p->ps_threads, p_thr_link)
 		newprio = max(newprio, q->p_runpri);
 	setrunqueue(p->p_cpu, p, newprio);
 	p->p_ru.ru_nvcsw++;

@@ -1,4 +1,4 @@
-/* $OpenBSD: d1_both.c,v 1.60 2020/09/26 14:43:17 jsing Exp $ */
+/* $OpenBSD: d1_both.c,v 1.63 2020/12/05 19:34:57 tb Exp $ */
 /*
  * DTLS implementation written by Nagendra Modadugu
  * (nagendra@cs.stanford.edu) for the OpenSSL project 2005.
@@ -148,15 +148,15 @@
 			if (is_complete) for (ii = (((msg_len) - 1) >> 3) - 1; ii >= 0 ; ii--) \
 				if (bitmask[ii] != 0xff) { is_complete = 0; break; } }
 
-static unsigned char bitmask_start_values[] = {
+static const unsigned char bitmask_start_values[] = {
 	0xff, 0xfe, 0xfc, 0xf8, 0xf0, 0xe0, 0xc0, 0x80
 };
-static unsigned char bitmask_end_values[] = {
+static const unsigned char bitmask_end_values[] = {
 	0xff, 0x01, 0x03, 0x07, 0x0f, 0x1f, 0x3f, 0x7f
 };
 
 /* XDTLS:  figure out the right values */
-static unsigned int g_probable_mtu[] = {1500 - 28, 512 - 28, 256 - 28};
+static const unsigned int g_probable_mtu[] = {1500 - 28, 512 - 28, 256 - 28};
 
 static unsigned int dtls1_guess_mtu(unsigned int curr_mtu);
 static void dtls1_fix_message_header(SSL *s, unsigned long frag_off,
@@ -973,14 +973,9 @@ dtls1_buffer_message(SSL *s, int is_ccs)
 
 	memcpy(frag->fragment, s->internal->init_buf->data, s->internal->init_num);
 
-	if (is_ccs) {
-		OPENSSL_assert(D1I(s)->w_msg_hdr.msg_len +
-		    ((s->version == DTLS1_VERSION) ?
-		    DTLS1_CCS_HEADER_LENGTH : 3) == (unsigned int)s->internal->init_num);
-	} else {
-		OPENSSL_assert(D1I(s)->w_msg_hdr.msg_len +
-		    DTLS1_HM_HEADER_LENGTH == (unsigned int)s->internal->init_num);
-	}
+	OPENSSL_assert(D1I(s)->w_msg_hdr.msg_len +
+	    (is_ccs ? DTLS1_CCS_HEADER_LENGTH : DTLS1_HM_HEADER_LENGTH) ==
+	    (unsigned int)s->internal->init_num);
 
 	frag->msg_header.msg_len = D1I(s)->w_msg_hdr.msg_len;
 	frag->msg_header.seq = D1I(s)->w_msg_hdr.seq;
@@ -1060,18 +1055,18 @@ dtls1_retransmit_message(SSL *s, unsigned short seq, unsigned long frag_off,
 	    frag->msg_header.frag_len);
 
 	/* save current state */
-	saved_state.enc_write_ctx = s->internal->enc_write_ctx;
-	saved_state.write_hash = s->internal->write_hash;
 	saved_state.session = s->session;
 	saved_state.epoch = D1I(s)->w_epoch;
 
 	D1I(s)->retransmitting = 1;
 
 	/* restore state in which the message was originally sent */
-	s->internal->enc_write_ctx = frag->msg_header.saved_retransmit_state.enc_write_ctx;
-	s->internal->write_hash = frag->msg_header.saved_retransmit_state.write_hash;
 	s->session = frag->msg_header.saved_retransmit_state.session;
 	D1I(s)->w_epoch = frag->msg_header.saved_retransmit_state.epoch;
+	if (!tls12_record_layer_set_write_cipher_hash(s->internal->rl,
+	    frag->msg_header.saved_retransmit_state.enc_write_ctx,
+	    frag->msg_header.saved_retransmit_state.write_hash, 0))
+		return 0;
 
 	if (frag->msg_header.saved_retransmit_state.epoch ==
 	    saved_state.epoch - 1) {
@@ -1085,10 +1080,11 @@ dtls1_retransmit_message(SSL *s, unsigned short seq, unsigned long frag_off,
 	    SSL3_RT_CHANGE_CIPHER_SPEC : SSL3_RT_HANDSHAKE);
 
 	/* restore current state */
-	s->internal->enc_write_ctx = saved_state.enc_write_ctx;
-	s->internal->write_hash = saved_state.write_hash;
 	s->session = saved_state.session;
 	D1I(s)->w_epoch = saved_state.epoch;
+	if (!tls12_record_layer_set_write_cipher_hash(s->internal->rl,
+	    s->internal->enc_write_ctx, s->internal->write_hash, 0))
+		return 0;
 
 	if (frag->msg_header.saved_retransmit_state.epoch ==
 	    saved_state.epoch - 1) {

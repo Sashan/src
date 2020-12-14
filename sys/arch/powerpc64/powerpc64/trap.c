@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.40 2020/09/25 07:50:26 kettenis Exp $	*/
+/*	$OpenBSD: trap.c,v 1.46 2020/10/27 12:50:49 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -17,6 +17,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/systm.h>
 #include <sys/proc.h>
 #include <sys/signalvar.h>
 #include <sys/user.h>
@@ -40,7 +41,9 @@ void	exi_intr(struct trapframe *);  /* intr.c */
 void	hvi_intr(struct trapframe *);  /* intr.c */
 void	syscall(struct trapframe *);   /* syscall.c */
 
+#ifdef TRAP_DEBUG
 void	dumpframe(struct trapframe *);
+#endif
 
 void
 trap(struct trapframe *frame)
@@ -52,7 +55,7 @@ trap(struct trapframe *frame)
 	struct vm_map *map;
 	pmap_t pm;
 	vaddr_t va;
-	int ftype;
+	int access_type;
 	int error, sig, code;
 
 	/* Disable access to floating-point and vector registers. */
@@ -120,11 +123,11 @@ trap(struct trapframe *frame)
 			va = curpcb->pcb_userva | (va & SEGMENT_MASK);
 		}
 		if (frame->dsisr & DSISR_STORE)
-			ftype = PROT_READ | PROT_WRITE;
+			access_type = PROT_READ | PROT_WRITE;
 		else
-			ftype = PROT_READ;
+			access_type = PROT_READ;
 		KERNEL_LOCK();
-		error = uvm_fault(map, trunc_page(va), 0, ftype);
+		error = uvm_fault(map, trunc_page(va), 0, access_type);
 		KERNEL_UNLOCK();
 		if (error == 0)
 			return;
@@ -159,6 +162,61 @@ trap(struct trapframe *frame)
 		printf("dar 0x%lx dsisr 0x%lx\n", frame->dar, frame->dsisr);
 		goto fatal;
 
+	case EXC_ALI:
+	{
+		/*
+		 * In general POWER allows unaligned loads and stores
+		 * and executes those instructions in an efficient
+		 * way.  As a result compilers may combine word-sized
+		 * stores into a single doubleword store instruction
+		 * even if the address is not guaranteed to be
+		 * doubleword aligned.  Such unaligned stores are not
+		 * supported in storage that is Caching Inibited.
+		 * Access to such storage should be done through
+		 * volatile pointers which inhibit the aforementioned
+		 * optimizations.  Unfortunately code in the amdgpu(4)
+		 * and radeondrm(4) drivers happens to run into such
+		 * unaligned access because pointers aren't always
+		 * marked as volatile.  For that reason we emulate
+		 * certain store instructions here.
+		 */
+		uint32_t insn = *(uint32_t *)frame->srr0;
+
+		/* std and stdu */
+		if ((insn & 0xfc000002) == 0xf8000000) {
+			uint32_t rs = (insn >> 21) & 0x1f;
+			uint32_t ra = (insn >> 16) & 0x1f;
+			uint64_t ds = insn & 0xfffc;
+			uint64_t ea;
+
+			if ((insn & 0x00000001) == 0 && ra == 0)
+				panic("invalid stdu instruction form");
+			
+			if (ds & 0x8000)
+				ds |= ~0x7fff; /* sign extend */
+			if (ra == 0)
+				ea = ds;
+			else
+				ea = frame->fixreg[ra] + ds;
+
+			/*
+			 * If the effective address isn't 32-bit
+			 * aligned, or if data access cannot be
+			 * performed because of the access violates
+			 * storage protection, this will trigger
+			 * another trap, which we can handle.
+			 */
+			*(volatile uint32_t *)ea = frame->fixreg[rs] >> 32;
+			*(volatile uint32_t *)(ea + 4) = frame->fixreg[rs];
+			if (insn & 0x00000001)
+				frame->fixreg[ra] = ea;
+			frame->srr0 += 4;
+			return;
+		}
+		printf("dar 0x%lx dsisr 0x%lx\n", frame->dar, frame->dsisr);
+		goto fatal;
+	}
+
 	case EXC_DSE|EXC_USER:
 		pm = p->p_vmspace->vm_map.pmap;
 		error = pmap_slbd_fault(pm, frame->dar);
@@ -176,14 +234,15 @@ trap(struct trapframe *frame)
 		map = &p->p_vmspace->vm_map;
 		va = frame->dar;
 		if (frame->dsisr & DSISR_STORE)
-			ftype = PROT_READ | PROT_WRITE;
+			access_type = PROT_READ | PROT_WRITE;
 		else
-			ftype = PROT_READ;
+			access_type = PROT_READ;
 		KERNEL_LOCK();
-		error = uvm_fault(map, trunc_page(va), 0, ftype);
-		if (error == 0)
-			uvm_grow(p, trunc_page(va));
+		error = uvm_fault(map, trunc_page(va), 0, access_type);
 		KERNEL_UNLOCK();
+		if (error == 0)
+			uvm_grow(p, va);
+
 		if (error) {
 #ifdef TRAP_DEBUG
 			printf("type %x dar 0x%lx dsisr 0x%lx %s\r\n",
@@ -224,12 +283,13 @@ trap(struct trapframe *frame)
 
 		map = &p->p_vmspace->vm_map;
 		va = frame->srr0;
-		ftype = PROT_READ | PROT_EXEC;
+		access_type = PROT_READ | PROT_EXEC;
 		KERNEL_LOCK();
-		error = uvm_fault(map, trunc_page(va), 0, ftype);
-		if (error == 0)
-			uvm_grow(p, trunc_page(va));
+		error = uvm_fault(map, trunc_page(va), 0, access_type);
 		KERNEL_UNLOCK();
+		if (error == 0)
+			uvm_grow(p, va);
+
 		if (error) {
 #ifdef TRAP_DEBUG
 			printf("type %x srr0 0x%lx %s\r\n",
@@ -271,9 +331,6 @@ trap(struct trapframe *frame)
 		break;
 
 	case EXC_PGM|EXC_USER:
-		printf("type %x srr0 0x%lx\r\n", type, frame->srr0);
-		dumpframe(frame);
-
 		sv.sival_ptr = (void *)frame->srr0;
 		trapsignal(p, SIGTRAP, 0, TRAP_BRKPT, sv);
 		break;
@@ -283,6 +340,11 @@ trap(struct trapframe *frame)
 			restore_vsx(p);
 		curpcb->pcb_flags |= PCB_FP;
 		frame->srr1 |= PSL_FP;
+		break;
+
+	case EXC_TRC|EXC_USER:
+		sv.sival_ptr = (void *)frame->srr0;
+		trapsignal(p, SIGTRAP, 0, TRAP_TRACE, sv);
 		break;
 
 	case EXC_VEC|EXC_USER:
@@ -306,6 +368,8 @@ out:
 	userret(p);
 }
 
+#ifdef TRAP_DEBUG
+
 #include <machine/opal.h>
 
 void
@@ -322,3 +386,5 @@ dumpframe(struct trapframe *frame)
 	opal_printf("srr0 0x%lx\r\n", frame->srr0);
 	opal_printf("srr1 0x%lx\r\n", frame->srr1);
 }
+
+#endif

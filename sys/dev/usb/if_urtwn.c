@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_urtwn.c,v 1.93 2020/07/31 10:49:33 mglocker Exp $	*/
+/*	$OpenBSD: if_urtwn.c,v 1.96 2020/11/15 00:04:05 jmatthew Exp $	*/
 
 /*-
  * Copyright (c) 2010 Damien Bergamini <damien.bergamini@free.fr>
@@ -216,6 +216,7 @@ struct urtwn_softc {
 #define sc_txtap	sc_txtapu.th
 	int				sc_txtap_len;
 #endif
+	int				sc_key_tasks;
 };
 
 #ifdef URTWN_DEBUG
@@ -325,6 +326,7 @@ static const struct urtwn_type {
 	URTWN_DEV_8188EU(DLINK,		DWA121B1),
 	URTWN_DEV_8188EU(DLINK,		DWA123D1),
 	URTWN_DEV_8188EU(DLINK,		DWA125D1),
+	URTWN_DEV_8188EU(EDIMAX,	EW7811UNV2),
 	URTWN_DEV_8188EU(ELECOM,	WDC150SU2M),
 	URTWN_DEV_8188EU(REALTEK,	RTL8188ETV),
 	URTWN_DEV_8188EU(REALTEK,	RTL8188EU),
@@ -1044,7 +1046,9 @@ urtwn_set_key(struct ieee80211com *ic, struct ieee80211_node *ni,
 	cmd.key = *k;
 	cmd.ni = ni;
 	urtwn_do_async(sc, urtwn_set_key_cb, &cmd, sizeof(cmd));
-	return (0);
+	sc->sc_key_tasks++;
+
+	return (EBUSY);
 }
 
 void
@@ -1053,7 +1057,20 @@ urtwn_set_key_cb(struct urtwn_softc *sc, void *arg)
 	struct ieee80211com *ic = &sc->sc_sc.sc_ic;
 	struct urtwn_cmd_key *cmd = arg;
 
-	rtwn_set_key(ic, cmd->ni, &cmd->key);
+	sc->sc_key_tasks--;
+
+	if (rtwn_set_key(ic, cmd->ni, &cmd->key) == 0) {
+		if (sc->sc_key_tasks == 0) {
+			DPRINTF(("marking port %s valid\n",
+			    ether_sprintf(cmd->ni->ni_macaddr)));
+			cmd->ni->ni_port_valid = 1;
+			ieee80211_set_link_state(ic, LINK_STATE_UP);
+		}
+	} else {
+		IEEE80211_SEND_MGMT(ic, cmd->ni, IEEE80211_FC0_SUBTYPE_DEAUTH,
+		    IEEE80211_REASON_AUTH_LEAVE);
+		ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
+	}
 }
 
 void
@@ -1254,7 +1271,10 @@ urtwn_rx_frame(struct urtwn_softc *sc, uint8_t *buf, int pktlen,
 	if (((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) != IEEE80211_FC0_TYPE_CTL)
 	    && (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) &&
 	    (ni->ni_flags & IEEE80211_NODE_RXPROT) &&
-	    ni->ni_pairwise_key.k_cipher == IEEE80211_CIPHER_CCMP) {
+	    ((!IEEE80211_IS_MULTICAST(wh->i_addr1) &&
+	    ni->ni_pairwise_key.k_cipher == IEEE80211_CIPHER_CCMP) ||
+	    (IEEE80211_IS_MULTICAST(wh->i_addr1) &&
+	    ni->ni_rsngroupcipher == IEEE80211_CIPHER_CCMP))) {
 		if (urtwn_ccmp_decap(sc, m, ni) != 0) {
 			ifp->if_ierrors++;
 			m_freem(m);

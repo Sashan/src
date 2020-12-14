@@ -1,4 +1,4 @@
-/* $OpenBSD: tty.c,v 1.384 2020/09/02 17:19:58 nicm Exp $ */
+/* $OpenBSD: tty.c,v 1.387 2020/12/03 07:12:12 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -694,28 +694,26 @@ tty_update_mode(struct tty *tty, int mode, struct screen *s)
 	}
 	if ((changed & ALL_MOUSE_MODES) &&
 	    tty_term_has(tty->term, TTYC_KMOUS)) {
-		if ((mode & ALL_MOUSE_MODES) == 0)
+		/*
+		 * If the mouse modes have changed, clear any that are set and
+		 * apply again. There are differences in how terminals track
+		 * the various bits.
+		 */
+		if (tty->mode & MODE_MOUSE_SGR)
 			tty_puts(tty, "\033[?1006l");
-		if ((changed & MODE_MOUSE_STANDARD) &&
-		    (~mode & MODE_MOUSE_STANDARD))
+		if (tty->mode & MODE_MOUSE_STANDARD)
 			tty_puts(tty, "\033[?1000l");
-		if ((changed & MODE_MOUSE_BUTTON) &&
-		    (~mode & MODE_MOUSE_BUTTON))
+		if (tty->mode & MODE_MOUSE_BUTTON)
 			tty_puts(tty, "\033[?1002l");
-		if ((changed & MODE_MOUSE_ALL) &&
-		    (~mode & MODE_MOUSE_ALL))
+		if (tty->mode & MODE_MOUSE_ALL)
 			tty_puts(tty, "\033[?1003l");
-
 		if (mode & ALL_MOUSE_MODES)
 			tty_puts(tty, "\033[?1006h");
-		if ((changed & MODE_MOUSE_STANDARD) &&
-		    (mode & MODE_MOUSE_STANDARD))
+		if (mode & MODE_MOUSE_STANDARD)
 			tty_puts(tty, "\033[?1000h");
-		if ((changed & MODE_MOUSE_BUTTON) &&
-		    (mode & MODE_MOUSE_BUTTON))
+		if (mode & MODE_MOUSE_BUTTON)
 			tty_puts(tty, "\033[?1002h");
-		if ((changed & MODE_MOUSE_ALL) &&
-		    (mode & MODE_MOUSE_ALL))
+		if (mode & MODE_MOUSE_ALL)
 			tty_puts(tty, "\033[?1003h");
 	}
 	if (changed & MODE_BRACKETPASTE) {
@@ -2449,7 +2447,7 @@ tty_check_fg(struct tty *tty, int *palette, struct grid_cell *gc)
 	/* Is this a 256-colour colour? */
 	if (gc->fg & COLOUR_FLAG_256) {
 		/* And not a 256 colour mode? */
-		if (colours != 256) {
+		if (colours < 256) {
 			gc->fg = colour_256to16(gc->fg);
 			if (gc->fg & 8) {
 				gc->fg &= 7;
@@ -2502,7 +2500,7 @@ tty_check_bg(struct tty *tty, int *palette, struct grid_cell *gc)
 		 * palette. Bold background doesn't exist portably, so just
 		 * discard the bold bit if set.
 		 */
-		if (colours != 256) {
+		if (colours < 256) {
 			gc->bg = colour_256to16(gc->bg);
 			if (gc->bg & 8) {
 				gc->bg &= 7;
@@ -2543,7 +2541,7 @@ tty_colours_fg(struct tty *tty, const struct grid_cell *gc)
 	/* Is this a 24-bit or 256-colour colour? */
 	if (gc->fg & COLOUR_FLAG_RGB || gc->fg & COLOUR_FLAG_256) {
 		if (tty_try_colour(tty, gc->fg, "38") == 0)
-			goto save_fg;
+			goto save;
 		/* Should not get here, already converted in tty_check_fg. */
 		return;
 	}
@@ -2555,13 +2553,13 @@ tty_colours_fg(struct tty *tty, const struct grid_cell *gc)
 			tty_puts(tty, s);
 		} else
 			tty_putcode1(tty, TTYC_SETAF, gc->fg - 90 + 8);
-		goto save_fg;
+		goto save;
 	}
 
 	/* Otherwise set the foreground colour. */
 	tty_putcode1(tty, TTYC_SETAF, gc->fg);
 
-save_fg:
+save:
 	/* Save the new values in the terminal current cell. */
 	tc->fg = gc->fg;
 }
@@ -2575,7 +2573,7 @@ tty_colours_bg(struct tty *tty, const struct grid_cell *gc)
 	/* Is this a 24-bit or 256-colour colour? */
 	if (gc->bg & COLOUR_FLAG_RGB || gc->bg & COLOUR_FLAG_256) {
 		if (tty_try_colour(tty, gc->bg, "48") == 0)
-			goto save_bg;
+			goto save;
 		/* Should not get here, already converted in tty_check_bg. */
 		return;
 	}
@@ -2587,13 +2585,13 @@ tty_colours_bg(struct tty *tty, const struct grid_cell *gc)
 			tty_puts(tty, s);
 		} else
 			tty_putcode1(tty, TTYC_SETAB, gc->bg - 90 + 8);
-		goto save_bg;
+		goto save;
 	}
 
 	/* Otherwise set the background colour. */
 	tty_putcode1(tty, TTYC_SETAB, gc->bg);
 
-save_bg:
+save:
 	/* Save the new values in the terminal current cell. */
 	tc->bg = gc->bg;
 }
@@ -2605,20 +2603,34 @@ tty_colours_us(struct tty *tty, const struct grid_cell *gc)
 	u_int			 c;
 	u_char			 r, g, b;
 
+	/* Clear underline colour. */
+	if (gc->us == 0) {
+		tty_putcode(tty, TTYC_OL);
+		goto save;
+	}
+
 	/* Must be an RGB colour - this should never happen. */
 	if (~gc->us & COLOUR_FLAG_RGB)
 		return;
 
 	/*
-	 * Setulc follows the ncurses(3) one argument "direct colour"
+	 * Setulc and setal follows the ncurses(3) one argument "direct colour"
 	 * capability format. Calculate the colour value.
 	 */
 	colour_split_rgb(gc->us, &r, &g, &b);
 	c = (65536 * r) + (256 * g) + b;
 
-	/* Write the colour. */
-	tty_putcode1(tty, TTYC_SETULC, c);
+	/*
+	 * Write the colour. Only use setal if the RGB flag is set because the
+	 * non-RGB version may be wrong.
+	 */
+	if (tty_term_has(tty->term, TTYC_SETULC))
+		tty_putcode1(tty, TTYC_SETULC, c);
+	else if (tty_term_has(tty->term, TTYC_SETAL) &&
+	    tty_term_has(tty->term, TTYC_RGB))
+		tty_putcode1(tty, TTYC_SETAL, c);
 
+save:
 	/* Save the new values in the terminal current cell. */
 	tc->us = gc->us;
 }

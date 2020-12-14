@@ -1,4 +1,4 @@
-/*	$OpenBSD: acpi_machdep.c,v 1.8 2020/07/17 08:07:33 patrick Exp $	*/
+/*	$OpenBSD: acpi_machdep.c,v 1.10 2020/12/06 21:19:55 kettenis Exp $	*/
 /*
  * Copyright (c) 2018 Mark Kettenis
  *
@@ -29,6 +29,7 @@
 #include <dev/ofw/fdt.h>
 
 #include <dev/acpi/acpivar.h>
+#include <dev/acpi/dsdt.h>
 
 int	lid_action;
 int	pwr_action = 1;
@@ -152,7 +153,17 @@ acpi_intr_establish(int irq, int flags, int level,
 
 	interrupt[0] = 0;
 	interrupt[1] = irq - 32;
-	interrupt[2] = 0x4;
+	if (flags & LR_EXTIRQ_MODE) { /* edge */
+		if (flags & LR_EXTIRQ_POLARITY)
+			interrupt[2] = 0x2; /* falling */
+		else
+			interrupt[2] = 0x1; /* rising */
+	} else { /* level */
+		if (flags & LR_EXTIRQ_POLARITY)
+			interrupt[2] = 0x8; /* low */
+		else
+			interrupt[2] = 0x4; /* high */
+	}
 
 	cookie = ic->ic_establish(ic->ic_cookie, interrupt, level, NULL,
 	    func, arg, (char *)name);
@@ -164,6 +175,15 @@ acpi_intr_establish(int irq, int flags, int level,
 	aih->ih_ih = cookie;
 
 	return aih;
+}
+
+void
+acpi_intr_disestablish(void *cookie)
+{
+	struct arm_intr_handle *aih = cookie;
+	struct interrupt_controller *ic = aih->ih_ic;
+
+	ic->ic_disestablish(aih->ih_ih);
 }
 
 void

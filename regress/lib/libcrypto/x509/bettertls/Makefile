@@ -1,13 +1,19 @@
-#	$OpenBSD: Makefile,v 1.1 2020/07/15 03:12:42 beck Exp $
+#	$OpenBSD: Makefile,v 1.5 2020/10/02 19:38:39 tb Exp $
 
-PROGS = verify 
-LDADD=	-Wl,-Bstatic -lcrypto -Wl,-Bdynamic
-DPADD=	${LIBCRYPTO}
-WARNINGS=	Yes
-CFLAGS+=	-g -DLIBRESSL_INTERNAL -Wundef -Werror -I$(BSDSRCDIR)/lib/libcrypto/x509
+PROGS =		verify
 
-REGRESS_TARGETS=  bettertls-test
-CLEANFILES+=	test.out
+.ifdef EOPENSSL11
+LDADD +=	-Wl,-rpath,/usr/local/lib/eopenssl11 -L/usr/local/lib/eopenssl11
+CFLAGS +=	-I/usr/local/include/eopenssl11/
+.endif
+
+LDADD +=	-lcrypto
+DPADD +=	${LIBCRYPTO}
+WARNINGS ?=	Yes
+CFLAGS +=	-g -DLIBRESSL_INTERNAL -Wundef -Werror
+
+REGRESS_TARGETS =  bettertls-test
+CLEANFILES +=	test.out
 
 bettertls-test: bettertls-verify
 	${.CURDIR}/check.perl ${.CURDIR}/expected ${.CURDIR}/known ${.OBJDIR}/test.out

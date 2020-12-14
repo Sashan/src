@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_object.c,v 1.16 2020/09/13 10:05:25 mpi Exp $	*/
+/*	$OpenBSD: uvm_object.c,v 1.18 2020/11/24 13:49:09 mpi Exp $	*/
 
 /*
  * Copyright (c) 2006 The NetBSD Foundation, Inc.
@@ -48,7 +48,7 @@
  * uvm_objinit: initialise a uvm object.
  */
 void
-uvm_objinit(struct uvm_object *uobj, struct uvm_pagerops *pgops, int refs)
+uvm_objinit(struct uvm_object *uobj, const struct uvm_pagerops *pgops, int refs)
 {
 	uobj->pgops = pgops;
 	RBT_INIT(uvm_objtree, &uobj->memt);
@@ -172,7 +172,9 @@ uvm_objfree(struct uvm_object *uobj)
 		 * this pg from the uobj we are throwing away
 		 */
 		atomic_clearbits_int(&pg->pg_flags, PG_TABLED);
+		uvm_lock_pageq();
 		uvm_pageclean(pg);
+		uvm_unlock_pageq();
 		TAILQ_INSERT_TAIL(&pgl, pg, pageq);
  	}
 	uvm_pmr_freepageq(&pgl);

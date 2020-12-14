@@ -1,4 +1,4 @@
-/*	$OpenBSD: ar5008.c,v 1.61 2020/07/13 08:31:32 stsp Exp $	*/
+/*	$OpenBSD: ar5008.c,v 1.64 2020/12/12 11:48:52 jan Exp $	*/
 
 /*-
  * Copyright (c) 2009 Damien Bergamini <damien.bergamini@free.fr>
@@ -625,9 +625,9 @@ ar5008_rx_alloc(struct athn_softc *sc)
 			goto fail;
 		}
 		/*
-		 * Assumes MCLGETI returns cache-line-size aligned buffers.
+		 * Assumes MCLGETL returns cache-line-size aligned buffers.
 		 */
-		bf->bf_m = MCLGETI(NULL, M_DONTWAIT, NULL, ATHN_RXBUFSZ);
+		bf->bf_m = MCLGETL(NULL, M_DONTWAIT, ATHN_RXBUFSZ);
 		if (bf->bf_m == NULL) {
 			printf("%s: could not allocate Rx mbuf\n",
 			    sc->sc_dev.dv_xname);
@@ -935,7 +935,7 @@ ar5008_rx_process(struct athn_softc *sc, struct mbuf_list *ml)
 	}
 
 	/* Allocate a new Rx buffer. */
-	m1 = MCLGETI(NULL, M_DONTWAIT, NULL, ATHN_RXBUFSZ);
+	m1 = MCLGETL(NULL, M_DONTWAIT, ATHN_RXBUFSZ);
 	if (__predict_false(m1 == NULL)) {
 		ic->ic_stats.is_rx_nombuf++;
 		ifp->if_ierrors++;
@@ -1003,7 +1003,8 @@ ar5008_rx_process(struct athn_softc *sc, struct mbuf_list *ml)
 	    (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) &&
 	    (ic->ic_flags & IEEE80211_F_RSNON) &&
 	    (ni->ni_flags & IEEE80211_NODE_RXPROT) &&
-	    (ni->ni_rsncipher == IEEE80211_CIPHER_CCMP ||
+	    ((!IEEE80211_IS_MULTICAST(wh->i_addr1) &&
+	    ni->ni_rsncipher == IEEE80211_CIPHER_CCMP) ||
 	    (IEEE80211_IS_MULTICAST(wh->i_addr1) &&
 	    ni->ni_rsngroupcipher == IEEE80211_CIPHER_CCMP))) {
 		if (ar5008_ccmp_decap(sc, m, ni) != 0) {
@@ -1522,7 +1523,6 @@ ar5008_tx(struct athn_softc *sc, struct mbuf *m, struct ieee80211_node *ni,
 			tap->wt_rate = athn_rates[ridx[0]].rate;
 		tap->wt_chan_freq = htole16(ic->ic_bss->ni_chan->ic_freq);
 		tap->wt_chan_flags = htole16(ic->ic_bss->ni_chan->ic_flags);
-		tap->wt_hwqueue = qid;
 		if (athn_rates[ridx[0]].phy == IEEE80211_T_DS &&
 		    ridx[0] != ATHN_RIDX_CCK1 &&
 		    (ic->ic_flags & IEEE80211_F_SHPREAMBLE))

@@ -1,4 +1,4 @@
-/*	$OpenBSD: wait.h,v 1.5 2020/06/08 04:48:15 jsg Exp $	*/
+/*	$OpenBSD: wait.h,v 1.7 2020/12/13 03:15:52 jsg Exp $	*/
 /*
  * Copyright (c) 2013, 2014, 2015 Mark Kettenis
  * Copyright (c) 2017 Martin Pieuchot
@@ -44,7 +44,6 @@ extern int sch_priority;
 
 struct wait_queue_head {
 	struct mutex lock;
-	unsigned int count;
 	struct list_head head;
 };
 typedef struct wait_queue_head wait_queue_head_t;
@@ -53,13 +52,11 @@ static inline void
 init_waitqueue_head(wait_queue_head_t *wqh)
 {
 	mtx_init(&wqh->lock, IPL_TTY);
-	wqh->count = 0;
 	INIT_LIST_HEAD(&wqh->head);
 }
 
 #define __init_waitqueue_head(wq, name, key)	init_waitqueue_head(wq)
 
-int default_wake_function(struct wait_queue_entry *, unsigned int, int, void *);
 int autoremove_wake_function(struct wait_queue_entry *, unsigned int, int, void *);
 
 static inline void
@@ -112,16 +109,15 @@ remove_wait_queue(wait_queue_head_t *head, wait_queue_entry_t *old)
 ({									\
 	long ret = timo;						\
 	do {								\
-		int deadline, __error;					\
+		int __error;						\
+		unsigned long deadline;					\
 									\
 		KASSERT(!cold);						\
 									\
 		mtx_enter(&sch_mtx);					\
-		atomic_inc_int(&(wq).count);				\
-		deadline = ticks + ret;					\
+		deadline = jiffies + ret;				\
 		__error = msleep(&wq, &sch_mtx, prio, "drmweti", ret);	\
-		ret = deadline - ticks;					\
-		atomic_dec_int(&(wq).count);				\
+		ret = deadline - jiffies;				\
 		if (__error == ERESTART || __error == EINTR) {		\
 			ret = -ERESTARTSYS;				\
 			mtx_leave(&sch_mtx);				\
@@ -174,7 +170,7 @@ do {						\
  * Sleep until `condition' gets true or `timo' expires.
  *
  * Returns 0 if `condition' is still false when `timo' expires or
- * the remaining (>=1) ticks otherwise.
+ * the remaining (>=1) jiffies otherwise.
  */
 #define wait_event_timeout(wq, condition, timo)	\
 ({						\
@@ -190,7 +186,7 @@ do {						\
  *
  * Returns -ERESTARTSYS if interrupted by a signal.
  * Returns 0 if `condition' is still false when `timo' expires or
- * the remaining (>=1) ticks otherwise.
+ * the remaining (>=1) jiffies otherwise.
  */
 #define wait_event_interruptible_timeout(wq, condition, timo) \
 ({						\
@@ -231,7 +227,6 @@ wake_up_all_locked(wait_queue_head_t *wqh)
 }
 
 #define wake_up_interruptible(wq)	wake_up(wq)
-#define waitqueue_active(wq)		((wq)->count > 0)
 
 #define	DEFINE_WAIT(name)				\
 	struct wait_queue_entry name = {		\
@@ -239,12 +234,6 @@ wake_up_all_locked(wait_queue_head_t *wqh)
 		.func = autoremove_wake_function,	\
 		.entry = LIST_HEAD_INIT((name).entry),	\
 	}						
-#define	DEFINE_WAIT_FUNC(name, cb)			\
-	struct wait_queue_entry name = {		\
-		.private = NULL,			\
-		.func = cb,				\
-		.entry = LIST_HEAD_INIT((name).entry),	\
-	}
 
 static inline void
 prepare_to_wait(wait_queue_head_t *wqh, wait_queue_entry_t *wqe, int state)

@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.22 2020/09/15 11:26:48 tobhe Exp $
+#	$OpenBSD: Makefile,v 1.27 2020/11/10 15:17:51 tobhe Exp $
 
 # Copyright (c) 2020 Tobias Heider <tobhe@openbsd.org>
 #
@@ -34,13 +34,21 @@ TEST_FLOWS = \
 	[ -z $$tmode ] && tmode=tunnel; \
 	_ret=1; \
 	count=0; \
+	dynamic=${RIGHT_ADDR}; \
+	if [ "$$config_address" = true ]; then \
+		dynamic="172.16.13.37"; \
+	fi; \
 	while [[ $$count -le 3 ]]; do \
 		ipsecctlleft=`ssh ${LEFT_SSH} ipsecctl -sa`; \
 		ipsecctlright=`ssh ${RIGHT_SSH} ipsecctl -sa`; \
 		flowleft=`echo "$$ipsecctlleft" \
-		    | sed -n "/^flow $$flowtype in from ${RIGHT_ADDR} to ${LEFT_ADDR}/p"`; \
+		    | sed -E -n "/^flow $$flowtype in from $$dynamic\
+		    to ${LEFT_ADDR} peer ${RIGHT_ADDR} srcid (FQDN|UFQDN|ASN1_DN)\/[^ ]*\
+		    dstid (FQDN|UFQDN|ASN1_DN)\/[^ ]*/p"`; \
 		flowright=`echo "$$ipsecctlright" \
-		    | sed -n "/^flow $$flowtype in from ${LEFT_ADDR} to ${RIGHT_ADDR}/p"`; \
+		    | sed -E -n "/^flow $$flowtype in from ${LEFT_ADDR}\
+		    to $$dynamic peer ${LEFT_ADDR} srcid (FQDN|UFQDN|ASN1_DN)\/[^ ]*\
+		    dstid (FQDN|UFQDN|ASN1_DN)\/[^ ]*/p"`; \
 		saleft_rtol=`echo "$$ipsecctlleft" \
 		    | sed -n "/^$$flowtype $$tmode from ${RIGHT_ADDR} to ${LEFT_ADDR}/p"`; \
 		saleft_ltor=`echo "$$ipsecctlleft" \
@@ -87,6 +95,8 @@ TEST_SINGLEIKESA = \
 	fi
 
 SETUP_CONFIG = \
+	from=$$local; \
+	to=$$peer; \
 	if [[ -z "$$mode" ]]; then mode="active"; fi; \
 	authstr=""; \
 	if [[ "$$auth" = "psk" ]]; then \
@@ -103,14 +113,29 @@ SETUP_CONFIG = \
 	if [ "$$singleikesa" = true ]; then \
 		global="$${global}set enforcesingleikesa\n"; \
 	fi; \
+	confstr=""; \
+	if [ "$$config_address" = true ]; then \
+		if [ "$$side" = left ]; then \
+			mode=passive; \
+			confstr="config address 172.16.13.36/31"; \
+			to="dynamic"; \
+		else \
+			mode=active; \
+			confstr="request address any"; \
+			from="dynamic"; \
+		fi; \
+	fi; \
 	echo "MODE=\"$$mode\"" >> $@_$$side.conf; \
 	echo "TMODE=\"$$tmode\"" >> $@_$$side.conf; \
+	echo "FROM=\"$$from\"" >> $@_$$side.conf; \
+	echo "TO=\"$$to\"" >> $@_$$side.conf; \
 	echo "LOCAL_ADDR=\"$$local\"" >> $@_$$side.conf; \
 	echo "PEER_ADDR=\"$$peer\"" >> $@_$$side.conf; \
 	echo "IPCOMP=\"$$ipcomp\"" >> $@_$$side.conf; \
-	echo "SRCID=\"$$srcid\"" >> $@_$$side.conf; \
+	echo "SRCID=\"\\\"$$srcid\\\"\"" >> $@_$$side.conf; \
 	echo "DSTID=\"$$dstid\"" >> $@_$$side.conf; \
 	echo "AUTH=\"$$authstr\"" >> $@_$$side.conf; \
+	echo "CONFIG=\"$$confstr\"" >> $@_$$side.conf; \
 	echo "$$global" >> $@_$$side.conf; \
 	cat ${.CURDIR}/iked.in >> $@_$$side.conf
 
@@ -243,6 +268,28 @@ run-cert-single-ca:
 	${SETUP_START}
 	flowtype=esp; ${TEST_FLOWS}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
 	${TEST_PING}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
+
+REGRESS_TARGETS += run-cert-single-ca-asn1dn
+run-cert-single-ca-asn1dn:
+	@echo '======= $@ ========'
+	leftid="/C=DE/ST=Bavaria/L=Munich/O=iked/CN=left-from-ca-both"; \
+	rightid="/C=DE/ST=Bavaria/L=Munich/O=iked/CN=right-from-ca-both"; \
+	    ${SETUP_CONFIGS}
+	${SETUP_START}
+	flowtype=esp; ${TEST_FLOWS}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
+	${TEST_PING}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
+
+REGRESS_TARGETS += run-config-address
+run-config-address:
+	@echo '======= $@ ========'
+	flowtype=esp; \
+	config_address=true; \
+	leftid=left-from-ca-both; \
+	rightid=right-from-ca-both; \
+	    ${SETUP_CONFIGS}
+	${SETUP_START}
+	config_address=true; \
+	flowtype=esp; ${TEST_FLOWS}; if [[ $$_ret -ne 0 ]]; then exit 1; fi
 
 REGRESS_TARGETS += run-dstid-fail
 run-dstid-fail:

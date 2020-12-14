@@ -371,13 +371,13 @@ static void radeon_doorbell_fini(struct radeon_device *rdev)
 {
 #ifdef __linux__
 	iounmap(rdev->doorbell.ptr);
-	rdev->doorbell.ptr = NULL;
 #else
 	if (rdev->doorbell.size > 0)
 		bus_space_unmap(rdev->memt, rdev->doorbell.bsh,
 		    rdev->doorbell.size);
 	rdev->doorbell.size = 0;
 #endif
+	rdev->doorbell.ptr = NULL;
 }
 
 /**
@@ -994,7 +994,9 @@ int radeon_atombios_init(struct radeon_device *rdev)
 		atom_card_info->ioreg_read = cail_ioreg_read;
 		atom_card_info->ioreg_write = cail_ioreg_write;
 	} else {
+#ifndef __powerpc64__
 		DRM_ERROR("Unable to find PCI I/O BAR; using MMIO for ATOM IIO\n");
+#endif
 		atom_card_info->ioreg_read = cail_reg_read;
 		atom_card_info->ioreg_write = cail_reg_write;
 	}
@@ -1321,9 +1323,10 @@ int radeon_device_init(struct radeon_device *rdev,
 	}
 	rdev->fence_context = dma_fence_context_alloc(RADEON_NUM_RINGS);
 
-	printf("initializing kernel modesetting (%s 0x%04X:0x%04X 0x%04X:0x%04X 0x%02X).\n",
+	DRM_INFO("initializing kernel modesetting (%s 0x%04X:0x%04X 0x%04X:0x%04X 0x%02X).\n",
 		 radeon_family_name[rdev->family], pdev->vendor, pdev->device,
 		 pdev->subsystem_vendor, pdev->subsystem_device, pdev->revision);
+	printf("%s: %s\n", rdev->self.dv_xname, radeon_family_name[rdev->family]);
 
 	/* mutex initialization are all done here so we
 	 * can recall function without having locking issues */
@@ -1560,7 +1563,6 @@ void radeon_device_fini(struct radeon_device *rdev)
 		pci_iounmap(rdev->pdev, rdev->rio_mem);
 	rdev->rio_mem = NULL;
 	iounmap(rdev->rmmio);
-	rdev->rmmio = NULL;
 #else
 	if (rdev->rio_mem_size > 0)
 		bus_space_unmap(rdev->iot, rdev->rio_mem, rdev->rio_mem_size);
@@ -1570,6 +1572,7 @@ void radeon_device_fini(struct radeon_device *rdev)
 		bus_space_unmap(rdev->memt, rdev->rmmio_bsh, rdev->rmmio_size);
 	rdev->rmmio_size = 0;
 #endif
+	rdev->rmmio = NULL;
 	if (rdev->family >= CHIP_BONAIRE)
 		radeon_doorbell_fini(rdev);
 }

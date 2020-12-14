@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.22 2019/12/08 09:47:50 florian Exp $	*/
+/*	$OpenBSD: parse.y,v 1.24 2020/11/09 04:22:05 tb Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -321,9 +321,7 @@ force	:	FORCE acceptbogus prefopt '{' force_list optnl '}' {
 			struct force_tree_entry *n, *nxt;
 			int error = 0;
 
-			for (n = RB_MIN(force_tree, &$5); n != NULL;
-			    n = nxt) {
-				nxt = RB_NEXT(force_tree, &conf->force, n);
+			RB_FOREACH_SAFE(n, force_tree, &$5, nxt) {
 				n->acceptbogus = $2;
 				n->type = $3;
 				RB_REMOVE(force_tree, &$5, n);
@@ -366,7 +364,10 @@ force_list:	force_list optnl STRING {
 					YYERROR;
 				}
 			}
-			RB_INSERT(force_tree, &$$, e);
+			if (RB_INSERT(force_tree, &$$, e) != NULL) {
+				log_warnx("duplicate force %s", e->domain);
+				free(e);
+			}
 		}
 	|	/* empty */ {
 			RB_INIT(&$$);

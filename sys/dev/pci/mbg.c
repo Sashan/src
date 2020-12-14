@@ -1,4 +1,4 @@
-/*	$OpenBSD: mbg.c,v 1.30 2017/09/08 05:36:52 deraadt Exp $ */
+/*	$OpenBSD: mbg.c,v 1.32 2020/12/06 19:23:11 cheloha Exp $ */
 
 /*
  * Copyright (c) 2006, 2007 Marc Balmer <mbalmer@openbsd.org>
@@ -174,7 +174,7 @@ void
 mbg_attach(struct device *parent, struct device *self, void *aux)
 {
 	struct mbg_softc *sc = (struct mbg_softc *)self;
-	struct pci_attach_args *const pa = (struct pci_attach_args *)aux;
+	struct pci_attach_args *pa = (struct pci_attach_args *)aux;
 	struct mbg_time tframe;
 	pcireg_t memtype;
 	bus_size_t iosize, iosize2;
@@ -417,12 +417,12 @@ mbg_read_amcc_s5920(struct mbg_softc *sc, int cmd, char *buf, size_t len,
 
 	/* wait for the BUSY flag to go low (approx 70 us on i386) */
 	timer = 0;
-	tmax = cold ? 50 : hz / 10;
+	tmax = cold ? 50 : 10;
 	do {
 		if (cold)
 			delay(20);
 		else
-			tsleep(tstamp, 0, "mbg", 1);
+			tsleep_nsec(tstamp, 0, "mbg", MSEC_TO_NSEC(1));
 		status = bus_space_read_1(sc->sc_iot, sc->sc_ioh,
 		    AMCC_IMB4 + 3);
 	} while ((status & MBG_BUSY) && timer++ < tmax);
@@ -473,12 +473,12 @@ mbg_read_amcc_s5933(struct mbg_softc *sc, int cmd, char *buf, size_t len,
 
 	/* wait for the BUSY flag to go low (approx 70 us on i386) */
 	timer = 0;
-	tmax = cold ? 50 : hz / 10;
+	tmax = cold ? 50 : 10;
 	do {
 		if (cold)
 			delay(20);
 		else
-			tsleep(tstamp, 0, "mbg", 1);
+			tsleep_nsec(tstamp, 0, "mbg", MSEC_TO_NSEC(1));
 		status = bus_space_read_1(sc->sc_iot, sc->sc_ioh,
 		    AMCC_IMB4 + 3);
 	} while ((status & MBG_BUSY) && timer++ < tmax);
@@ -525,12 +525,12 @@ mbg_read_asic(struct mbg_softc *sc, int cmd, char *buf, size_t len,
 
 	/* wait for the BUSY flag to go low */
 	timer = 0;
-	tmax = cold ? 50 : hz / 10;
+	tmax = cold ? 50 : 10;
 	do {
 		if (cold)
 			delay(20);
 		else
-			tsleep(tstamp, 0, "mbg", 1);
+			tsleep_nsec(tstamp, 0, "mbg", MSEC_TO_NSEC(1));
 		status = bus_space_read_1(sc->sc_iot, sc->sc_ioh, ASIC_STATUS);
 	} while ((status & MBG_BUSY) && timer++ < tmax);
 

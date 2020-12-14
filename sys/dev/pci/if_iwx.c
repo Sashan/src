@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwx.c,v 1.44 2020/08/26 17:12:00 stsp Exp $	*/
+/*	$OpenBSD: if_iwx.c,v 1.48 2020/12/12 11:48:53 jan Exp $	*/
 
 /*
  * Copyright (c) 2014, 2016 genua gmbh <info@genua.de>
@@ -3171,7 +3171,7 @@ iwx_rx_addbuf(struct iwx_softc *sc, int size, int idx)
 	if (size <= MCLBYTES) {
 		MCLGET(m, M_DONTWAIT);
 	} else {
-		MCLGETI(m, M_DONTWAIT, NULL, IWX_RBUF_SIZE);
+		MCLGETL(m, M_DONTWAIT, IWX_RBUF_SIZE);
 	}
 	if ((m->m_flags & M_EXT) == 0) {
 		m_freem(m);
@@ -3820,7 +3820,7 @@ iwx_send_cmd(struct iwx_softc *sc, struct iwx_host_cmd *hcmd)
 			err = EINVAL;
 			goto out;
 		}
-		m = MCLGETI(NULL, M_DONTWAIT, NULL, totlen);
+		m = MCLGETL(NULL, M_DONTWAIT, totlen);
 		if (m == NULL) {
 			printf("%s: could not get fw cmd mbuf (%zd bytes)\n",
 			    DEVNAME(sc), totlen);
@@ -4168,7 +4168,6 @@ iwx_tx(struct iwx_softc *sc, struct mbuf *m, struct ieee80211_node *ni, int ac)
 			tap->wt_rate = (0x80 | rinfo->ht_plcp);
 		} else
 			tap->wt_rate = rinfo->rate;
-		tap->wt_hwqueue = ac;
 		if ((ic->ic_flags & IEEE80211_F_WEPON) &&
 		    (wh->i_fc[1] & IEEE80211_FC1_PROTECTED))
 			tap->wt_flags |= IEEE80211_RADIOTAP_F_WEP;
@@ -5150,6 +5149,9 @@ iwx_mac_ctxt_cmd_common(struct iwx_softc *sc, struct iwx_node *in,
 	    in->in_color));
 	cmd->action = htole32(action);
 
+	if (action == IWX_FW_CTXT_ACTION_REMOVE)
+		return;
+
 	if (ic->ic_opmode == IEEE80211_M_MONITOR)
 		cmd->mac_type = htole32(IWX_FW_MAC_TYPE_LISTENER);
 	else if (ic->ic_opmode == IEEE80211_M_STA)
@@ -5268,6 +5270,11 @@ iwx_mac_ctxt_cmd(struct iwx_softc *sc, struct iwx_node *in, uint32_t action,
 	memset(&cmd, 0, sizeof(cmd));
 
 	iwx_mac_ctxt_cmd_common(sc, in, &cmd, action);
+
+	if (action == IWX_FW_CTXT_ACTION_REMOVE) {
+		return iwx_send_cmd_pdu(sc, IWX_MAC_CONTEXT_CMD, 0,
+		    sizeof(cmd), &cmd);
+	}
 
 	if (ic->ic_opmode == IEEE80211_M_MONITOR) {
 		cmd.filter_flags |= htole32(IWX_MAC_FILTER_IN_PROMISC |
@@ -7134,7 +7141,6 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
 	uint32_t offset = 0, nextoff = 0, nmpdu = 0, len;
 	struct mbuf *m0, *m;
 	const size_t minsz = sizeof(pkt->len_n_flags) + sizeof(pkt->hdr);
-	size_t remain = IWX_RBUF_SIZE;
 	int qid, idx, code, handled = 1;
 
 	bus_dmamap_sync(sc->sc_dmat, data->map, 0, IWX_RBUF_SIZE,
@@ -7171,7 +7177,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
 			break;
 
 		case IWX_REPLY_RX_MPDU_CMD: {
-			size_t maxlen = remain - minsz;
+			size_t maxlen = IWX_RBUF_SIZE - offset - minsz;
 			nextoff = offset +
 			    roundup(len, IWX_FH_RSCSR_FRAME_ALIGN);
 			nextpkt = (struct iwx_rx_packet *)
@@ -7199,11 +7205,6 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
 				m_adj(m, offset);
 				iwx_rx_mpdu_mq(sc, m, pkt->data, maxlen, ml);
 			}
-
-			if (offset + minsz < remain)
-				remain -= offset;
-			else
-				remain = minsz;
  			break;
 		}
 

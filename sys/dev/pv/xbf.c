@@ -1,4 +1,4 @@
-/*	$OpenBSD: xbf.c,v 1.49 2020/09/22 19:32:53 krw Exp $	*/
+/*	$OpenBSD: xbf.c,v 1.51 2020/10/15 13:22:13 krw Exp $	*/
 
 /*
  * Copyright (c) 2016, 2017 Mike Belopuhov
@@ -822,7 +822,6 @@ xbf_scsi_inquiry(struct scsi_xfer *xs)
 {
 	struct xbf_softc *sc = xs->sc_link->bus->sb_adapter_softc;
 	struct scsi_inquiry_data inq;
-	/* char buf[5]; */
 
 	bzero(&inq, sizeof(inq));
 
@@ -843,7 +842,7 @@ xbf_scsi_inquiry(struct scsi_xfer *xs)
 	bcopy(sc->sc_prod, inq.product, sizeof(inq.product));
 	bcopy("0000", inq.revision, sizeof(inq.revision));
 
-	bcopy(&inq, xs->data, MIN(sizeof(inq), xs->datalen));
+	scsi_copy_internal_data(xs, &inq, sizeof(inq));
 
 	xbf_scsi_done(xs, XS_NOERROR);
 }

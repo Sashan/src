@@ -1,4 +1,4 @@
-/*	$OpenBSD: malloc.c,v 1.263 2020/09/06 06:41:03 otto Exp $	*/
+/*	$OpenBSD: malloc.c,v 1.267 2020/11/23 15:42:11 otto Exp $	*/
 /*
  * Copyright (c) 2008, 2010, 2011, 2016 Otto Moerbeek <otto@drijf.net>
  * Copyright (c) 2012 Matthew Dempsky <matthew@openbsd.org>
@@ -193,7 +193,7 @@ struct malloc_readonly {
 	int	def_malloc_junk;	/* junk fill? */
 	int	malloc_realloc;		/* always realloc? */
 	int	malloc_xmalloc;		/* xmalloc behaviour? */
-	int	chunk_canaries;		/* use canaries after chunks? */
+	u_int	chunk_canaries;		/* use canaries after chunks? */
 	int	internal_funcs;		/* use better recallocarray/freezero? */
 	u_int	def_malloc_cache;	/* free pages we cache */
 	size_t	malloc_guard;		/* use guard pages after allocations? */
@@ -406,7 +406,8 @@ static void
 omalloc_init(void)
 {
 	char *p, *q, b[16];
-	int i, j, mib[2];
+	int i, j;
+	const int mib[2] = { CTL_VM, VM_MALLOC_CONF };
 	size_t sb;
 
 	/*
@@ -419,8 +420,6 @@ omalloc_init(void)
 	for (i = 0; i < 3; i++) {
 		switch (i) {
 		case 0:
-			mib[0] = CTL_VM;
-			mib[1] = VM_MALLOC_CONF;
 			sb = sizeof(b);
 			j = sysctl(mib, 2, b, &sb, NULL, 0);
 			if (j != 0)
@@ -468,6 +467,11 @@ omalloc_init(void)
 
 	while ((mopts.malloc_canary = arc4random()) == 0)
 		;
+	if (mopts.chunk_canaries)
+		do {
+			mopts.chunk_canaries = arc4random();
+		} while ((u_char)mopts.chunk_canaries == 0 ||
+		    (u_char)mopts.chunk_canaries == SOME_FREEJUNK); 
 }
 
 static void
@@ -728,26 +732,6 @@ unmap(struct dir_info *d, void *p, size_t sz, size_t clear, int junk)
 		wrterror(d, "malloc cache overflow");
 }
 
-static void
-zapcacheregion(struct dir_info *d, void *p, size_t len)
-{
-	u_int i;
-	struct region_info *r;
-	size_t rsz;
-
-	for (i = 0; i < d->malloc_cache; i++) {
-		r = &d->free_regions[i];
-		if (r->p >= p && r->p <= (void *)((char *)p + len)) {
-			rsz = r->size << MALLOC_PAGESHIFT;
-			if (munmap(r->p, rsz))
-				wrterror(d, "munmap %p", r->p);
-			r->p = NULL;
-			d->free_regions_size -= r->size;
-			STATS_SUB(d->malloc_used, rsz);
-		}
-	}
-}
-
 static void *
 map(struct dir_info *d, size_t sz, int zero_fill)
 {
@@ -938,7 +922,7 @@ fill_canary(char *ptr, size_t sz, size_t allocated)
 
 	if (check_sz > CHUNK_CHECK_LENGTH)
 		check_sz = CHUNK_CHECK_LENGTH;
-	memset(ptr + sz, SOME_JUNK, check_sz);
+	memset(ptr + sz, mopts.chunk_canaries, check_sz);
 }
 
 /*
@@ -1039,7 +1023,7 @@ validate_canary(struct dir_info *d, u_char *ptr, size_t sz, size_t allocated)
 	q = p + check_sz;
 
 	while (p < q) {
-		if (*p != SOME_JUNK) {
+		if (*p != (u_char)mopts.chunk_canaries && *p != SOME_JUNK) {
 			wrterror(d, "chunk canary corrupted %p %#tx@%#zx%s",
 			    ptr, p - ptr, sz,
 			    *p == SOME_FREEJUNK ? " (double free?)" : "");
@@ -1587,14 +1571,12 @@ orealloc(struct dir_info **argpool, void *p, size_t newsz, void *f)
 				size_t needed = rnewsz - roldsz;
 
 				STATS_INC(pool->cheap_realloc_tries);
-				//zapcacheregion(pool, hint, needed);
 				q = MQUERY(hint, needed, pool->mmap_flag);
 				if (q == hint)
 					q = MMAPA(hint, needed, pool->mmap_flag);
 				else
 					q = MAP_FAILED;
 				if (q == hint) {
-gotit:
 					STATS_ADD(pool->malloc_used, needed);
 					if (pool->malloc_junk == 2)
 						memset(q, SOME_JUNK, needed);
@@ -1975,6 +1957,8 @@ omemalign(struct dir_info *pool, size_t alignment, size_t sz, int zero_fill,
 		return NULL;
 	}
 
+	if (sz < MALLOC_PAGESIZE)
+		sz = MALLOC_PAGESIZE;
 	sz += mopts.malloc_guard;
 	psz = PAGEROUND(sz);
 

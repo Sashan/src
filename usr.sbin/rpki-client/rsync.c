@@ -1,4 +1,4 @@
-/*	$OpenBSD: rsync.c,v 1.9 2020/09/12 15:46:48 claudio Exp $ */
+/*	$OpenBSD: rsync.c,v 1.11 2020/12/02 15:31:15 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -171,10 +171,10 @@ proc_child(int signal)
 void
 proc_rsync(char *prog, char *bind_addr, int fd)
 {
-	size_t			 id, i, idsz = 0;
+	size_t			 id, i, idsz = 0, bsz = 0, bmax = 0;
 	ssize_t			 ssz;
 	char			*host = NULL, *mod = NULL, *uri = NULL,
-				*dst = NULL, *path, *save, *cmd;
+				*dst = NULL, *path, *save, *cmd, *b = NULL;
 	const char		*pp;
 	pid_t			 pid;
 	char			*args[32];
@@ -265,8 +265,13 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 					ok = 0;
 				}
 
-				io_simple_write(fd, &ids[i].id, sizeof(size_t));
-				io_simple_write(fd, &ok, sizeof(ok));
+				io_simple_buffer(&b, &bsz, &bmax,
+				    &ids[i].id, sizeof(size_t));
+				io_simple_buffer(&b, &bsz, &bmax,
+				    &ok, sizeof(ok));
+				io_simple_write(fd, b, bsz);
+				bsz = 0;
+
 				free(ids[i].uri);
 				ids[i].uri = NULL;
 				ids[i].pid = 0;
@@ -320,6 +325,8 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 			i = 0;
 			args[i++] = (char *)prog;
 			args[i++] = "-rt";
+			args[i++] = "--timeout";
+			args[i++] = "180";
 			if (bind_addr != NULL) {
 				args[i++] = "--address";
 				args[i++] = (char *)bind_addr;
@@ -361,6 +368,7 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 			free(ids[i].uri);
 		}
 
+	free(b);
 	free(ids);
 	exit(rc);
 	/* NOTREACHED */

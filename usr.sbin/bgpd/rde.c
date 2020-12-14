@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.c,v 1.502 2020/05/02 14:12:17 claudio Exp $ */
+/*	$OpenBSD: rde.c,v 1.507 2020/12/04 11:57:13 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -69,6 +69,7 @@ void		 rde_dump_ctx_terminate(pid_t);
 void		 rde_dump_mrt_new(struct mrt *, pid_t, int);
 
 int		 rde_l3vpn_import(struct rde_community *, struct l3vpn *);
+static void	 rde_commit_pftable(void);
 void		 rde_reload_done(void);
 static void	 rde_softreconfig_in_done(void *, u_int8_t);
 static void	 rde_softreconfig_out_done(void *, u_int8_t);
@@ -98,12 +99,13 @@ static void	 network_flush_upcall(struct rib_entry *, void *);
 void		 rde_shutdown(void);
 int		 ovs_match(struct prefix *, u_int32_t);
 
+static struct imsgbuf		*ibuf_se;
+static struct imsgbuf		*ibuf_se_ctl;
+static struct imsgbuf		*ibuf_main;
+static struct bgpd_config	*conf, *nconf;
+
 volatile sig_atomic_t	 rde_quit = 0;
-struct bgpd_config	*conf, *nconf;
 struct filter_head	*out_rules, *out_rules_tmp;
-struct imsgbuf		*ibuf_se;
-struct imsgbuf		*ibuf_se_ctl;
-struct imsgbuf		*ibuf_main;
 struct rde_memstats	 rdemem;
 int			 softreconfig;
 
@@ -157,8 +159,7 @@ rde_main(int debug, int verbose)
 	log_init(debug, LOG_DAEMON);
 	log_setverbose(verbose);
 
-	bgpd_process = PROC_RDE;
-	log_procinit(log_procnames[bgpd_process]);
+	log_procinit(log_procnames[PROC_RDE]);
 
 	if ((pw = getpwnam(BGPD_USER)) == NULL)
 		fatal("getpwnam");
@@ -296,6 +297,8 @@ rde_main(int debug, int verbose)
 			for (aid = AID_INET6; aid < AID_MAX; aid++)
 				rde_update6_queue_runner(aid);
 		}
+		/* commit pftable once per poll loop */
+		rde_commit_pftable();
 	}
 
 	/* do not clean up on shutdown on production, it takes ages. */
@@ -497,8 +500,6 @@ badnetdel:
 			    RDE_RUNNER_ROUNDS, peerself, network_flush_upcall,
 			    NULL, NULL) == -1)
 				log_warn("rde_dispatch: IMSG_NETWORK_FLUSH");
-			/* Deletions were performed in network_flush_upcall */
-			rde_send_pftable_commit();
 			break;
 		case IMSG_FILTER_SET:
 			if (imsg.hdr.len - IMSG_HEADER_SIZE !=
@@ -509,8 +510,11 @@ badnetdel:
 			if ((s = malloc(sizeof(struct filter_set))) == NULL)
 				fatal(NULL);
 			memcpy(s, imsg.data, sizeof(struct filter_set));
-			if (s->type == ACTION_SET_NEXTHOP)
-				s->action.nh = nexthop_get(&s->action.nexthop);
+			if (s->type == ACTION_SET_NEXTHOP) {
+				s->action.nh_ref =
+				    nexthop_get(&s->action.nexthop);
+				s->type = ACTION_SET_NEXTHOP_REF;
+			}
 			TAILQ_INSERT_TAIL(&session_set, s, entry);
 			break;
 		case IMSG_CTL_SHOW_NETWORK:
@@ -922,8 +926,11 @@ rde_dispatch_imsg_parent(struct imsgbuf *ibuf)
 			if ((s = malloc(sizeof(struct filter_set))) == NULL)
 				fatal(NULL);
 			memcpy(s, imsg.data, sizeof(struct filter_set));
-			if (s->type == ACTION_SET_NEXTHOP)
-				s->action.nh = nexthop_get(&s->action.nexthop);
+			if (s->type == ACTION_SET_NEXTHOP) {
+				s->action.nh_ref =
+				    nexthop_get(&s->action.nexthop);
+				s->type = ACTION_SET_NEXTHOP_REF;
+			}
 			TAILQ_INSERT_TAIL(&parent_set, s, entry);
 			break;
 		case IMSG_MRT_OPEN:
@@ -1028,7 +1035,7 @@ rde_update_dispatch(struct rde_peer *peer, struct imsg *imsg)
 	struct bgpd_addr	 prefix;
 	struct mpattr		 mpa;
 	u_char			*p, *mpp = NULL;
-	int			 error = -1, pos = 0;
+	int			 pos = 0;
 	u_int16_t		 afi, len, mplen;
 	u_int16_t		 withdrawn_len;
 	u_int16_t		 attrpath_len;
@@ -1246,10 +1253,8 @@ rde_update_dispatch(struct rde_peer *peer, struct imsg *imsg)
 			break;
 		}
 
-		if ((state.aspath.flags & ~F_ATTR_MP_UNREACH) == 0) {
-			error = 0;
+		if ((state.aspath.flags & ~F_ATTR_MP_UNREACH) == 0)
 			goto done;
-		}
 	}
 
 	/* shift to NLRI information */
@@ -1385,7 +1390,6 @@ rde_update_dispatch(struct rde_peer *peer, struct imsg *imsg)
 
 done:
 	rde_filterstate_clean(&state);
-	rde_send_pftable_commit();
 }
 
 int
@@ -2946,10 +2950,31 @@ rde_update6_queue_runner(u_int8_t aid)
 /*
  * pf table specific functions
  */
+struct rde_pftable_node {
+	RB_ENTRY(rde_pftable_node)	 entry;
+	struct pt_entry			*prefix;
+	int				 refcnt;
+	u_int16_t			 id;
+};
+RB_HEAD(rde_pftable_tree, rde_pftable_node);
+
+static inline int
+rde_pftable_cmp(struct rde_pftable_node *a, struct rde_pftable_node *b)
+{
+	if (a->prefix > b->prefix)
+		return 1;
+	if (a->prefix < b->prefix)
+		return -1;
+	return (a->id - b->id);
+}
+
+RB_GENERATE_STATIC(rde_pftable_tree, rde_pftable_node, entry, rde_pftable_cmp);
+
+struct rde_pftable_tree pftable_tree = RB_INITIALIZER(&pftable_tree);
 int need_commit;
-void
-rde_send_pftable(u_int16_t id, struct bgpd_addr *addr,
-    u_int8_t len, int del)
+
+static void
+rde_pftable_send(u_int16_t id, struct pt_entry *pt, int del)
 {
 	struct pftable_msg pfm;
 
@@ -2962,8 +2987,8 @@ rde_send_pftable(u_int16_t id, struct bgpd_addr *addr,
 
 	bzero(&pfm, sizeof(pfm));
 	strlcpy(pfm.pftable, pftable_id2name(id), sizeof(pfm.pftable));
-	memcpy(&pfm.addr, addr, sizeof(pfm.addr));
-	pfm.len = len;
+	pt_getaddr(pt, &pfm.addr);
+	pfm.len = pt->prefixlen;
 
 	if (imsg_compose(ibuf_main,
 	    del ? IMSG_PFTABLE_REMOVE : IMSG_PFTABLE_ADD,
@@ -2974,7 +2999,55 @@ rde_send_pftable(u_int16_t id, struct bgpd_addr *addr,
 }
 
 void
-rde_send_pftable_commit(void)
+rde_pftable_add(u_int16_t id, struct prefix *p)
+{
+	struct rde_pftable_node *pfn, node;
+
+	memset(&node, 0, sizeof(node));
+	node.prefix = p->pt;
+	node.id = id;
+
+	pfn = RB_FIND(rde_pftable_tree, &pftable_tree, &node);
+	if (pfn == NULL) {
+		if ((pfn = calloc(1, sizeof(*pfn))) == NULL)
+			fatal("%s", __func__);
+		pfn->prefix = pt_ref(p->pt);
+		pfn->id = id;
+
+		if (RB_INSERT(rde_pftable_tree, &pftable_tree, pfn) != NULL)
+			fatalx("%s: tree corrupt", __func__);
+
+		rde_pftable_send(id, p->pt, 0);
+	}
+	pfn->refcnt++;
+}
+
+void
+rde_pftable_del(u_int16_t id, struct prefix *p)
+{
+	struct rde_pftable_node *pfn, node;
+
+	memset(&node, 0, sizeof(node));
+	node.prefix = p->pt;
+	node.id = id;
+
+	pfn = RB_FIND(rde_pftable_tree, &pftable_tree, &node);
+	if (pfn == NULL)
+		return;
+
+	if (--pfn->refcnt <= 0) {
+		rde_pftable_send(id, p->pt, 1);
+
+		if (RB_REMOVE(rde_pftable_tree, &pftable_tree, pfn) == NULL)
+			fatalx("%s: tree corrupt", __func__);
+
+		pt_unref(pfn->prefix);
+		free(pfn);
+	}
+}
+
+void
+rde_commit_pftable(void)
 {
 	/* do not run while cleaning up */
 	if (rde_quit)
@@ -3161,9 +3234,6 @@ rde_reload_done(void)
 	free_rde_prefixsets(&originsets_old);
 	as_sets_free(&as_sets_old);
 
-	/* Deletions may have been performed in rib_free() */
-	rde_send_pftable_commit();
-
 	log_info("RDE reconfigured");
 
 	if (reload > 0) {
@@ -3192,8 +3262,6 @@ rde_softreconfig_in_done(void *arg, u_int8_t dummy)
 
 		log_info("softreconfig in done");
 	}
-	/* Changes may have been performed during softreconfig_in run */
-	rde_send_pftable_commit();
 
 	/* now do the Adj-RIB-Out sync and a possible FIB sync */
 	softreconfig = 0;
@@ -3617,7 +3685,6 @@ network_add(struct network_config *nc, struct filterstate *state)
 		    nc->prefixlen, vstate);
 	}
 	filterset_free(&nc->attrset);
-	rde_send_pftable_commit();
 }
 
 void
@@ -3684,8 +3751,6 @@ network_delete(struct network_config *nc)
 	if (prefix_withdraw(rib_byid(RIB_ADJ_IN), peerself, &nc->prefix,
 	    nc->prefixlen))
 		peerself->prefix_cnt--;
-
-	rde_send_pftable_commit();
 }
 
 static void

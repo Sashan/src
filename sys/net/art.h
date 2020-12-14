@@ -1,4 +1,4 @@
-/* $OpenBSD: art.h,v 1.18 2019/03/31 14:03:40 mpi Exp $ */
+/* $OpenBSD: art.h,v 1.20 2020/11/12 15:25:28 mpi Exp $ */
 
 /*
  * Copyright (c) 2015 Martin Pieuchot
@@ -21,20 +21,28 @@
 
 #include <sys/rwlock.h>
 #include <sys/srp.h>
+#include <netinet/in.h>
 
 #define ART_MAXLVL	32	/* We currently use 32 levels for IPv6. */
 
 /*
  * Root of the ART tables, equivalent to the radix head.
+ *
+ *  Locks used to protect struct members in this file:
+ *	I	immutable after creation
+ *	l	root's `ar_lock'
+ *	K	kernel lock
+ *  For SRP related structures that allow lock-free reads, the write lock
+ *  is indicated below.
  */
 struct art_root {
-	struct srp		 ar_root;	/* First table */
-	struct rwlock		 ar_lock;	/* Serialise modifications */
-	uint8_t			 ar_bits[ART_MAXLVL];	/* Per level stride */
-	uint8_t			 ar_nlvl;	/* Number of levels */
-	uint8_t			 ar_alen;	/* Address length in bits */
-	uint8_t			 ar_off;	/* Offset of the key in bytes */
-	unsigned int		 ar_rtableid;	/* ID of this routing table */
+	struct srp		 ar_root;	/* [l] First table */
+	struct rwlock		 ar_lock;	/* [] Serialise modifications */
+	uint8_t			 ar_bits[ART_MAXLVL]; /* [I] Per level stride */
+	uint8_t			 ar_nlvl;	/* [I] Number of levels */
+	uint8_t			 ar_alen;	/* [I] Address length in bits */
+	uint8_t			 ar_off;	/* [I] Offset of key in bytes */
+	struct sockaddr		*source;	/* [K] optional src addr to use */
 };
 
 #define ISLEAF(e)	(((unsigned long)(e) & 1) == 0)

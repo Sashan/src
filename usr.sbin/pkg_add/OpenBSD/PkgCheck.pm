@@ -1,7 +1,7 @@
 #! /usr/bin/perl
 
 # ex:ts=8 sw=4:
-# $OpenBSD: PkgCheck.pm,v 1.71 2019/08/26 06:52:51 espie Exp $
+# $OpenBSD: PkgCheck.pm,v 1.74 2020/11/09 14:07:49 espie Exp $
 #
 # Copyright (c) 2003-2014 Marc Espie <espie@openbsd.org>
 #
@@ -72,6 +72,24 @@ sub basic_check
 
 sub find_dependencies
 {
+}
+
+sub mark_indirect_depends
+{
+	my $self = shift;
+	$self->mark_available_lib(@_);
+}
+
+sub cache_depends
+{
+}
+
+package OpenBSD::PackingElement::DefineTag;
+
+sub mark_indirect_depends
+{
+	my ($self, $pkgname, $state) = @_;
+	$state->{tagdefinition}{$self->name} = $pkgname;
 }
 
 package OpenBSD::PackingElement::FileBase;
@@ -219,10 +237,17 @@ sub basic_check
 	$state->{known}{$name}{'dir'} = 1;
 }
 
+package OpenBSD::PackingElement::Depend;
+sub cache_depends
+{
+	my ($self, $copy) = @_;
+	$self->add_object($copy);
+}
+
 package OpenBSD::PackingElement::Dependency;
 sub find_dependencies
 {
-	my ($self, $state, $l, $checker) = @_;
+	my ($self, $state, $l, $checker, $pkgname) = @_;
 	# several ways to failure
 	if (!$self->spec->is_valid) {
 		$state->log("invalid \@", $self->keyword, " ",
@@ -231,8 +256,8 @@ sub find_dependencies
 	}
 	my @deps = $self->spec->filter(@$l);
 	if (@deps == 0) {
-		$state->log("dependency #1 does not match any installed package",
-		    $self->stringize);
+		$state->log("dependency #1 in #2 does not match any installed package",
+		    $self->stringize, $pkgname);
 		return;
 	}
 	my $okay = 0;
@@ -249,7 +274,7 @@ sub find_dependencies
 package OpenBSD::PackingElement::Wantlib;
 sub find_dependencies
 {
-	my ($self, $state, $l, $checker) = @_;
+	my ($self, $state, $l, $checker, $pkgname) = @_;
 	my $r = OpenBSD::SharedLibs::lookup_libspec($state->{localbase},
 	    $self->spec);
 	if (defined $r && @$r != 0) {
@@ -269,8 +294,30 @@ sub find_dependencies
 			$checker->not_found($r->[0]->origin);
 		}
 	} else {
-		$state->log("#1 not found", $self->stringize);
+		$state->log("#1 in #2 not found", $self->stringize, $pkgname);
 	}
+}
+
+package OpenBSD::PackingElement::Tag;
+sub find_dependencies
+{
+	my ($self, $state, $l, $checker, $pkgname) = @_;
+	my $location = $state->{tagdefinition}{$self->name};
+	if (defined $location) {
+		if ($location eq $pkgname) {
+			return;
+		}
+		if (!$checker->find($location)) {
+			$checker->not_found($location);
+		} 
+	} else {
+		$state->log("definition for #1 not found", $self->stringize);
+	}
+}
+
+sub cache_depends
+{
+	&OpenBSD::PackingElement::Depend::cache_depends;
 }
 
 package OpenBSD::PkgCheck::State;
@@ -381,7 +428,7 @@ sub ask_delete_deps
 	if ($state->{force}) {
 		$self->{req}->delete(@$l);
 	} elsif ($state->confirm_defaults_to_no(
-	    "Remove missing #1", $self->string(@$l))) {
+	    "Remove extra #1", $self->string(@$l))) {
 			$self->{req}->delete(@$l);
 	}
 }
@@ -781,7 +828,10 @@ sub sanity_check
 			$state->errsay("#1: pkgname does not match", $name);
 			$self->may_remove($state, $name);
 		}
-		$plist->mark_available_lib($plist->pkgname, $state);
+		$plist->mark_indirect_depends($plist->pkgname, $state);
+		my $p = OpenBSD::PackingList->new;
+		$plist->cache_depends($p);
+		$state->{plist_cache}{$plist->pkgname} = $p;
 		$state->{exists}{$plist->pkgname} = 1;
 	});
 }
@@ -793,17 +843,17 @@ sub dependencies_check
 	$self->for_all_packages($state, $l, "Direct dependencies", sub {
 		my $name = shift;
 		$state->log->set_context($name);
-		my $plist = OpenBSD::PackingList->from_installation($name,
-		    \&OpenBSD::PackingList::DependOnly);
+		my $plist = $state->{plist_cache}{$name};
 		my $checker = OpenBSD::DirectDependencyCheck->new($state,
 		    $name);
 		$state->{localbase} = $plist->localbase;
-		$plist->find_dependencies($state, $l, $checker);
+		$plist->find_dependencies($state, $l, $checker, $name);
 		$checker->adjust($state);
 		for my $dep ($checker->{req}->list) {
 			push(@{$state->{reverse}{$dep}}, $name);
 		}
 	});
+	delete $state->{plist_cache};
 }
 
 sub reverse_dependencies_check

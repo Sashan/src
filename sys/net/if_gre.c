@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_gre.c,v 1.160 2020/08/28 12:01:48 mvs Exp $ */
+/*	$OpenBSD: if_gre.c,v 1.163 2020/12/12 11:49:02 jan Exp $ */
 /*	$NetBSD: if_gre.c,v 1.9 1999/10/25 19:18:11 drochner Exp $ */
 
 /*
@@ -1109,7 +1109,7 @@ gre_input_key(struct mbuf **mp, int *offp, int type, int af, uint8_t otos,
 		if (n == NULL)
 			goto decline;
 		if (n->m_data[off] >> 4 != IPVERSION)
-			hlen += sizeof(gre_wccp);
+			hlen += 4;  /* four-octet Redirect header */
 
 		/* FALLTHROUGH */
 	}
@@ -1470,7 +1470,7 @@ nvgre_input_map(struct nvgre_softc *sc, const struct gre_tunnel *key,
 		nv->nv_age = ticks;
 
 		if (nv->nv_type != NVGRE_ENTRY_DYNAMIC ||
-		    gre_ip_cmp(key->t_af, &key->t_dst, &nv->nv_gateway))
+		    gre_ip_cmp(key->t_af, &key->t_dst, &nv->nv_gateway) == 0)
 			nv = NULL;
 		else
 			refcnt_take(&nv->nv_refs);
@@ -3198,7 +3198,7 @@ gre_keepalive_send(void *arg)
 		return;
 
 	if (len > MHLEN) {
-		MCLGETI(m, M_DONTWAIT, NULL, len);
+		MCLGETL(m, M_DONTWAIT, len);
 		if (!ISSET(m->m_flags, M_EXT)) {
 			m_freem(m);
 			return;
@@ -4099,7 +4099,7 @@ eoip_keepalive_send(void *arg)
 		return;
 
 	if (linkhdr > MHLEN) {
-		MCLGETI(m, M_DONTWAIT, NULL, linkhdr);
+		MCLGETL(m, M_DONTWAIT, linkhdr);
 		if (!ISSET(m->m_flags, M_EXT)) {
 			m_freem(m);
 			return;
@@ -4229,31 +4229,22 @@ drop:
 	return (NULL);
 }
 
+const struct sysctl_bounded_args gre_vars[] = {
+	{ GRECTL_ALLOW, &gre_allow, 0, 1 },
+	{ GRECTL_WCCP, &gre_wccp, 0, 1 },
+};
+
 int
 gre_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
     size_t newlen)
 {
 	int error;
 
-	/* All sysctl names at this level are terminal. */
-	if (namelen != 1)
-		return (ENOTDIR);
-
-	switch (name[0]) {
-	case GRECTL_ALLOW:
-		NET_LOCK();
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &gre_allow);
-		NET_UNLOCK();
-		return (error);
-	case GRECTL_WCCP:
-		NET_LOCK();
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &gre_wccp);
-		NET_UNLOCK();
-		return (error);
-	default:
-		return (ENOPROTOOPT);
-	}
-	/* NOTREACHED */
+	NET_LOCK();
+	error = sysctl_bounded_arr(gre_vars, nitems(gre_vars), name,
+	    namelen, oldp, oldlenp, newp, newlen);
+	NET_UNLOCK();
+	return error;
 }
 
 static inline int

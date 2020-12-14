@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.114 2020/09/23 14:25:55 tobhe Exp $	*/
+/*	$OpenBSD: parse.y,v 1.120 2020/12/13 19:46:17 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -100,6 +100,7 @@ static int		 passive = 0;
 static int		 decouple = 0;
 static int		 mobike = 1;
 static int		 enforcesingleikesa = 0;
+static int		 stickyaddress = 0;
 static int		 fragmentation = 0;
 static int		 dpd_interval = IKED_IKE_SA_ALIVE_TIMEOUT;
 static char		*ocsp_url = NULL;
@@ -454,8 +455,10 @@ typedef struct {
 %token	IPCOMP OCSP IKELIFETIME MOBIKE NOMOBIKE RDOMAIN
 %token	FRAGMENTATION NOFRAGMENTATION DPD_CHECK_INTERVAL
 %token	ENFORCESINGLEIKESA NOENFORCESINGLEIKESA
-%token	TOLERATE MAXAGE
+%token	STICKYADDRESS NOSTICKYADDRESS
+%token	TOLERATE MAXAGE DYNAMIC
 %token	CERTPARTIALCHAIN
+%token	REQUEST
 %token	<v.string>		STRING
 %token	<v.number>		NUMBER
 %type	<v.string>		string
@@ -523,6 +526,8 @@ set		: SET ACTIVE	{ passive = 0; }
 		| SET NOMOBIKE	{ mobike = 0; }
 		| SET ENFORCESINGLEIKESA	{ enforcesingleikesa = 1; }
 		| SET NOENFORCESINGLEIKESA	{ enforcesingleikesa = 0; }
+		| SET STICKYADDRESS	{ stickyaddress = 1; }
+		| SET NOSTICKYADDRESS	{ stickyaddress = 0; }
 		| SET OCSP STRING		{
 			if ((ocsp_url = strdup($3)) == NULL) {
 				yyerror("cannot set ocsp_url");
@@ -607,6 +612,19 @@ cfg		: CONFIG STRING host_spec	{
 			$$ = $3;
 			$$->type = xf->id;
 			$$->action = IKEV2_CP_REPLY;	/* XXX */
+		}
+		| REQUEST STRING anyhost	{
+			const struct ipsec_xf	*xf;
+
+			if ((xf = parse_xf($2, $3->af, cpxfs)) == NULL) {
+				yyerror("not a valid ikecfg option");
+				free($2);
+				free($3);
+				YYERROR;
+			}
+			$$ = $3;
+			$$->type = xf->id;
+			$$->action = IKEV2_CP_REQUEST;	/* XXX */
 		}
 		;
 
@@ -801,6 +819,12 @@ host		: host_spec			{ $$ = $1; }
 		}
 		| ANY				{
 			$$ = host_any();
+		}
+		| DYNAMIC			{
+			if (($$ = host("0.0.0.0")) == NULL) {
+				yyerror("could not parse host specification");
+				YYERROR;
+			}
 		}
 		;
 
@@ -1316,6 +1340,7 @@ lookup(char *s)
 		{ "default",		DEFAULT },
 		{ "dpd_check_interval",	DPD_CHECK_INTERVAL },
 		{ "dstid",		DSTID },
+		{ "dynamic",		DYNAMIC },
 		{ "eap",		EAP },
 		{ "enc",		ENCXF },
 		{ "enforcesingleikesa",	ENFORCESINGLEIKESA },
@@ -1343,6 +1368,7 @@ lookup(char *s)
 		{ "noesn",		NOESN },
 		{ "nofragmentation",	NOFRAGMENTATION },
 		{ "nomobike",		NOMOBIKE },
+		{ "nostickyaddress",	NOSTICKYADDRESS },
 		{ "ocsp",		OCSP },
 		{ "passive",		PASSIVE },
 		{ "peer",		PEER },
@@ -1352,10 +1378,12 @@ lookup(char *s)
 		{ "psk",		PSK },
 		{ "quick",		QUICK },
 		{ "rdomain",		RDOMAIN },
+		{ "request",		REQUEST },
 		{ "sa",			SA },
 		{ "set",		SET },
 		{ "skip",		SKIP },
 		{ "srcid",		SRCID },
+		{ "stickyaddress",	STICKYADDRESS },
 		{ "tag",		TAG },
 		{ "tap",		TAP },
 		{ "tcpmd5",		TCPMD5 },
@@ -1743,7 +1771,7 @@ parse_config(const char *filename, struct iked *x_env)
 	free(ocsp_url);
 
 	mobike = 1;
-	enforcesingleikesa = 0;
+	enforcesingleikesa = stickyaddress = 0;
 	cert_partial_chain = decouple = passive = 0;
 	ocsp_tolerate = 0;
 	ocsp_url = NULL;
@@ -1764,6 +1792,7 @@ parse_config(const char *filename, struct iked *x_env)
 	env->sc_decoupled = decouple ? 1 : 0;
 	env->sc_mobike = mobike;
 	env->sc_enforcesingleikesa = enforcesingleikesa;
+	env->sc_stickyaddress = stickyaddress;
 	env->sc_frag = fragmentation;
 	env->sc_alive_timeout = dpd_interval;
 	env->sc_ocsp_url = ocsp_url;
@@ -2491,37 +2520,33 @@ print_policy(struct iked_policy *pol)
 				    ikev2_xformtype_map[j].cm_type)
 					continue;
 
-				if (xfs != NULL) {
-					print_verbose(",");
-				} else {
-					switch (xform->xform_type) {
-					case IKEV2_XFORMTYPE_INTEGR:
-						print_verbose(" auth ");
-						xfs = authxfs;
-						break;
-					case IKEV2_XFORMTYPE_ENCR:
-						print_verbose(" enc ");
-						if (pp->prop_protoid ==
-						    IKEV2_SAPROTO_IKE)
-							xfs = ikeencxfs;
-						else
-							xfs = ipsecencxfs;
-						break;
-					case IKEV2_XFORMTYPE_PRF:
-						print_verbose(" prf ");
-						xfs = prfxfs;
-						break;
-					case IKEV2_XFORMTYPE_DH:
-						print_verbose(" group ");
-						xfs = groupxfs;
-						break;
-					case IKEV2_XFORMTYPE_ESN:
-						print_verbose(" ");
-						xfs = esnxfs;
-						break;
-					default:
-						continue;
-					}
+				switch (xform->xform_type) {
+				case IKEV2_XFORMTYPE_INTEGR:
+					print_verbose(" auth ");
+					xfs = authxfs;
+					break;
+				case IKEV2_XFORMTYPE_ENCR:
+					print_verbose(" enc ");
+					if (pp->prop_protoid ==
+					    IKEV2_SAPROTO_IKE)
+						xfs = ikeencxfs;
+					else
+						xfs = ipsecencxfs;
+					break;
+				case IKEV2_XFORMTYPE_PRF:
+					print_verbose(" prf ");
+					xfs = prfxfs;
+					break;
+				case IKEV2_XFORMTYPE_DH:
+					print_verbose(" group ");
+					xfs = groupxfs;
+					break;
+				case IKEV2_XFORMTYPE_ESN:
+					print_verbose(" ");
+					xfs = esnxfs;
+					break;
+				default:
+					continue;
 				}
 
 				print_verbose("%s", print_xf(xform->xform_id,
@@ -2986,6 +3011,11 @@ create_ike(char *name, int af, uint8_t ipproto,
 
 	for (ipa = hosts->src, ipb = hosts->dst; ipa && ipb;
 	    ipa = ipa->next, ipb = ipb->next) {
+		if (ipa->af != ipb->af) {
+			yyerror("cannot mix different address families.");
+			goto done;
+		}
+
 		if ((flow = calloc(1, sizeof(struct iked_flow))) == NULL)
 			fatalx("%s: failed to alloc flow.", __func__);
 

@@ -1,4 +1,4 @@
-#	$OpenBSD: Client.pm,v 1.12 2020/07/24 22:12:00 bluhm Exp $
+#	$OpenBSD: Client.pm,v 1.14 2020/11/06 03:26:18 bluhm Exp $
 
 # Copyright (c) 2010-2020 Alexander Bluhm <bluhm@openbsd.org>
 #
@@ -44,6 +44,11 @@ sub new {
 
 sub child {
 	my $self = shift;
+
+	# TLS 1.3 writes multiple messages without acknowledgement.
+	# If the other side closes early, we want broken pipe error.
+	$SIG{PIPE} = 'IGNORE' if defined($self->{connectdomain}) &&
+	    $self->{connectproto} eq "tls";
 
 	if (defined($self->{connectdomain}) &&
 	    $self->{connectdomain} ne "sendsyslog") {

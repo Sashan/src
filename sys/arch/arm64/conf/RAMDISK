@@ -1,4 +1,4 @@
-# $OpenBSD: RAMDISK,v 1.131 2020/06/25 12:44:09 patrick Exp $
+# $OpenBSD: RAMDISK,v 1.136 2020/11/29 22:02:37 kettenis Exp $
 #
 # GENERIC machine description file
 #
@@ -57,6 +57,7 @@ ahci*		at acpi?
 ccp*		at acpi?		# AMD Cryptographic Co-processor
 com*		at acpi?
 pluart*		at acpi?
+sdhc*		at acpi?
 xhci*		at acpi?
 simplebus*	at fdt?
 
@@ -120,6 +121,7 @@ imxgpc*		at fdt?
 imxgpio*	at fdt?
 fec*		at fdt?
 imxuart*	at fdt?
+imxiic*		at acpi?
 imxiic*		at fdt?
 iic*		at imxiic?
 bdpmic*		at iic?
@@ -181,10 +183,11 @@ mvkpcie*	at fdt?
 pci*		at mvkpcie?
 mvmdio*		at fdt?
 mvneta*		at fdt?
-#mvppc*		at fdt?
-#mvpp*		at mvppc?
+mvppc*		at fdt?
+mvpp*		at mvppc?
 mvrng*		at fdt?
 mvrtc*		at fdt?
+mvsw*		at fdt?
 mvuart*		at fdt?
 sfp*		at fdt?
 
@@ -313,6 +316,7 @@ fusbtc*		at iic?			# USB Type-C controller
 islrtc*		at iic?			# ISL1208 RTC
 maxrtc*		at iic?			# DS1307 RTC
 mcprtc*		at iic?			# MCP794XX RTC
+mfokrtc*	at iic?			# M41T8X RTC
 pcfrtc*		at iic?			# PCF8523 RTC
 pcxrtc*		at iic?			# PCF8563 RTC
 rkpmic*		at iic?			# RK808 PMIC

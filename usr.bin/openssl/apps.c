@@ -1,4 +1,4 @@
-/* $OpenBSD: apps.c,v 1.55 2020/09/09 12:47:46 inoguchi Exp $ */
+/* $OpenBSD: apps.c,v 1.57 2020/10/26 11:48:39 tb Exp $ */
 /*
  * Copyright (c) 2014 Joel Sing <jsing@openbsd.org>
  *
@@ -216,7 +216,6 @@ chopup_args(ARGS *arg, char *buf, int *argc, char **argv[])
 	*argc = 0;
 	*argv = NULL;
 
-	i = 0;
 	if (arg->count == 0) {
 		arg->count = 20;
 		arg->data = reallocarray(NULL, arg->count, sizeof(char *));
@@ -1917,6 +1916,8 @@ args_verify(char ***pargs, int *pargc, int *badarg, BIO *err,
 		flags |= X509_V_FLAG_POLICY_CHECK;
 	else if (!strcmp(arg, "-explicit_policy"))
 		flags |= X509_V_FLAG_EXPLICIT_POLICY;
+	else if (!strcmp(arg, "-legacy_verify"))
+		flags |= X509_V_FLAG_LEGACY_VERIFY;
 	else if (!strcmp(arg, "-inhibit_any"))
 		flags |= X509_V_FLAG_INHIBIT_ANY;
 	else if (!strcmp(arg, "-inhibit_map"))

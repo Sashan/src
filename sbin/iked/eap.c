@@ -1,4 +1,4 @@
-/*	$OpenBSD: eap.c,v 1.16 2020/09/16 21:37:35 tobhe Exp $	*/
+/*	$OpenBSD: eap.c,v 1.19 2020/11/18 22:24:03 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2010-2013 Reyk Floeter <reyk@openbsd.org>
@@ -18,7 +18,6 @@
 
 #include <sys/queue.h>
 #include <sys/socket.h>
-#include <sys/wait.h>
 #include <sys/uio.h>
 
 #include <netinet/in.h>
@@ -31,7 +30,6 @@
 #include <signal.h>
 #include <errno.h>
 #include <err.h>
-#include <pwd.h>
 #include <event.h>
 
 #include <openssl/sha.h>
@@ -44,8 +42,8 @@
 int	 eap_message_send(struct iked *, struct iked_sa *, int, int);
 ssize_t	 eap_add_id_request(struct ibuf *);
 char	*eap_validate_id_response(struct eap_message *);
-int	 eap_mschap(struct iked *, struct iked_sa *, struct iked_message *,
-	    struct eap_message *);
+int	 eap_mschap(struct iked *, const struct iked_sa *,
+	    struct iked_message *, struct eap_message *);
 
 ssize_t
 eap_add_id_request(struct ibuf *e)
@@ -316,7 +314,8 @@ eap_mschap_success(struct iked *env, struct iked_sa *sa, int eap_id)
 }
 
 int
-eap_mschap(struct iked *env, struct iked_sa *sa, struct iked_message *msg, struct eap_message *eap)
+eap_mschap(struct iked *env, const struct iked_sa *sa,
+    struct iked_message *msg, struct eap_message *eap)
 {
 	struct eap_mschap_response	*msr;
 	struct eap_mschap_peer		*msp;
@@ -389,8 +388,8 @@ eap_mschap(struct iked *env, struct iked_sa *sa, struct iked_message *msg, struc
 }
 
 int
-eap_parse(struct iked *env, struct iked_sa *sa, struct iked_message *msg, void *data,
-    int response)
+eap_parse(struct iked *env, const struct iked_sa *sa, struct iked_message *msg,
+    void *data, int response)
 {
 	struct eap_header		*hdr = data;
 	struct eap_message		*eap = data;

@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_constraints.c,v 1.10 2020/09/21 05:41:43 tb Exp $ */
+/* $OpenBSD: x509_constraints.c,v 1.12 2020/11/25 21:17:52 tb Exp $ */
 /*
  * Copyright (c) 2020 Bob Beck <beck@openbsd.org>
  *
@@ -69,9 +69,11 @@ x509_constraints_name_dup(struct x509_constraints_name *name)
 	new->type = name->type;
 	new->af = name->af;
 	new->der_len = name->der_len;
-	if (name->der_len > 0 && (new->der = malloc(name->der_len)) == NULL)
-		goto err;
-	memcpy(new->der, name->der, name->der_len);
+	if (name->der_len > 0) {
+		if ((new->der = malloc(name->der_len)) == NULL)
+			goto err;
+		memcpy(new->der, name->der, name->der_len);
+	}
 	if (name->name != NULL && (new->name = strdup(name->name)) == NULL)
 		goto err;
 	if (name->local != NULL && (new->local = strdup(name->local)) == NULL)
@@ -700,7 +702,7 @@ x509_constraints_extract_names(struct x509_constraints_names *names,
 				*error = X509_V_ERR_OUT_OF_MEM;
 				goto err;
 			}
-			vname->type=GEN_DNS;
+			vname->type = GEN_DNS;
 			include_cn = 0; /* don't use cn from subject */
 			break;
 		case GEN_EMAIL:

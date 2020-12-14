@@ -1,4 +1,4 @@
-/*	$Id: test-mft.c,v 1.5 2020/07/05 18:31:28 tb Exp $ */
+/*	$Id: test-mft.c,v 1.10 2020/11/09 16:13:02 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -29,9 +29,18 @@
 
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/pem.h>
 #include <openssl/x509v3.h>
 
 #include "extern.h"
+
+#ifndef ASN1error
+void
+ASN1error(int err)
+{
+	ASN1err(0, err);
+}
+#endif
 
 int verbose;
 
@@ -57,16 +66,24 @@ mft_print(const struct mft *p)
 int
 main(int argc, char *argv[])
 {
-	int		 c, i, verb = 0;
+	int		 c, i, ppem = 0, verb = 0;
 	struct mft	*p;
+	BIO		*bio_out = NULL;
 	X509		*xp = NULL;
 
 	ERR_load_crypto_strings();
 	OpenSSL_add_all_ciphers();
 	OpenSSL_add_all_digests();
 
-	while (-1 != (c = getopt(argc, argv, "v")))
+	while (-1 != (c = getopt(argc, argv, "pv")))
 		switch (c) {
+		case 'p':
+			if (ppem)
+				break;
+			ppem = 1;
+			if ((bio_out = BIO_new_fp(stdout, BIO_NOCLOSE)) == NULL)
+				errx(1, "BIO_new_fp");
+			break;
 		case 'v':
 			verb++;
 			break;
@@ -85,13 +102,18 @@ main(int argc, char *argv[])
 			break;
 		if (verb)
 			mft_print(p);
+		if (ppem) {
+			if (!PEM_write_bio_X509(bio_out, xp))
+				errx(1,
+				    "PEM_write_bio_X509: unable to write cert");
+		}
 		mft_free(p);
 		X509_free(xp);
 	}
 
+	BIO_free(bio_out);
 	EVP_cleanup();
 	CRYPTO_cleanup_all_ex_data();
-	ERR_remove_state(0);
 	ERR_free_strings();
 
 	if (i < argc)

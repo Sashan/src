@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_lib.c,v 1.234 2020/09/24 18:12:00 jsing Exp $ */
+/* $OpenBSD: ssl_lib.c,v 1.239 2020/12/01 07:46:01 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -345,7 +345,7 @@ SSL_new(SSL_CTX *ctx)
 		goto err;
 
 	s->references = 1;
-	s->server = (ctx->method->internal->ssl_accept == ssl_undefined_function) ? 0 : 1;
+	s->server = ctx->method->internal->server;
 
 	SSL_clear(s);
 
@@ -939,6 +939,12 @@ SSL_connect(SSL *s)
 }
 
 int
+SSL_is_dtls(const SSL *s)
+{
+	return s->method->internal->dtls;
+}
+
+int
 SSL_is_server(const SSL *s)
 {
 	return s->server;
@@ -1145,7 +1151,7 @@ SSL_ctrl(SSL *s, int cmd, long larg, void *parg)
 		if (larg < (long)dtls1_min_mtu())
 			return (0);
 #endif
-		if (SSL_IS_DTLS(s)) {
+		if (SSL_is_dtls(s)) {
 			D1I(s)->mtu = larg;
 			return (larg);
 		}
@@ -1160,7 +1166,7 @@ SSL_ctrl(SSL *s, int cmd, long larg, void *parg)
 			return (S3I(s)->send_connection_binding);
 		else return (0);
 	default:
-		if (SSL_IS_DTLS(s))
+		if (SSL_is_dtls(s))
 			return dtls1_ctrl(s, cmd, larg, parg);
 		return ssl3_ctrl(s, cmd, larg, parg);
 	}
@@ -1710,8 +1716,17 @@ SSL_export_keying_material(SSL *s, unsigned char *out, size_t olen,
     const char *label, size_t llen, const unsigned char *p, size_t plen,
     int use_context)
 {
-	return (tls1_export_keying_material(s, out, olen,
-	    label, llen, p, plen, use_context));
+	if (s->internal->tls13 != NULL && s->version == TLS1_3_VERSION) {
+		if (!use_context) {
+			p = NULL;
+			plen = 0;
+		}
+		return tls13_exporter(s->internal->tls13, label, llen, p, plen,
+		    out, olen);
+	}
+
+	return (tls1_export_keying_material(s, out, olen, label, llen, p, plen,
+	    use_context));
 }
 
 static unsigned long

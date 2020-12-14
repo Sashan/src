@@ -8,7 +8,16 @@
 
 use strict;
 use warnings;
+use Errno ':POSIX';
 use Socket;
+
+my @errors = (EPIPE, ECONNRESET);
+my $errors = "(". join("|", map { $! = $_ } @errors). ")";
+
+my $connecterror = qr/Client IO::Socket::SSL socket connect failed: /.
+    qr/.*,SSL connect attempt failed error:.*$errors/;
+my $shutdownerror = qr/Client error after shutdown: /.
+    qr/.*:tlsv1 alert decrypt error/;
 
 our %args = (
     client => {
@@ -17,12 +26,10 @@ our %args = (
 	sslcert => "client.crt",
 	sslkey => "client.key",
 	up => qr/IO::Socket::SSL socket connect failed/,
-	down => qr/SSL connect attempt failed/,
+	down => qr/SSL connect attempt failed|error after shutdown/,
 	exit => 255,
 	loggrep => {
-	    qr/Client IO::Socket::SSL socket connect failed: /.
-		qr/,SSL connect attempt failed /.
-		qr/because of handshake problems error:/ => 1,
+	    qr/$connecterror|$shutdownerror/ => 1,
 	},
     },
     syslogd => {

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ehci.c,v 1.211 2020/08/06 14:06:12 mglocker Exp $ */
+/*	$OpenBSD: ehci.c,v 1.213 2020/11/27 20:41:21 mglocker Exp $ */
 /*	$NetBSD: ehci.c,v 1.66 2004/06/30 03:11:56 mycroft Exp $	*/
 
 /*
@@ -2393,24 +2393,20 @@ ehci_alloc_sqtd_chain(struct ehci_softc *sc, u_int alen, struct usbd_xfer *xfer,
 			/* must use multiple TDs, fill as much as possible. */
 			curlen = EHCI_QTD_NBUFFERS * EHCI_PAGE_SIZE -
 				 EHCI_PAGE_OFFSET(dataphys);
-#ifdef DIAGNOSTIC
+
 			if (curlen > len) {
-				printf("ehci_alloc_sqtd_chain: curlen=%u "
+				DPRINTFN(1,("ehci_alloc_sqtd_chain: curlen=%u "
 				    "len=%u offs=0x%x\n", curlen, len,
-				    EHCI_PAGE_OFFSET(dataphys));
-				printf("lastpage=0x%x page=0x%x phys=0x%x\n",
-				    dataphyslastpage, dataphyspage, dataphys);
+				    EHCI_PAGE_OFFSET(dataphys)));
+				DPRINTFN(1,("lastpage=0x%x page=0x%x phys=0x%x\n",
+				    dataphyslastpage, dataphyspage, dataphys));
 				curlen = len;
 			}
-#endif
+
 			/* the length must be a multiple of the max size */
 			curlen -= curlen % mps;
 			DPRINTFN(1,("ehci_alloc_sqtd_chain: multiple QTDs, "
 			    "curlen=%u\n", curlen));
-#ifdef DIAGNOSTIC
-			if (curlen == 0)
-				panic("ehci_alloc_std: curlen == 0");
-#endif
 		}
 
 		DPRINTFN(4,("ehci_alloc_sqtd_chain: dataphys=0x%08x "

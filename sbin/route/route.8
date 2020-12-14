@@ -1,4 +1,4 @@
-.\"	$OpenBSD: route.8,v 1.91 2020/01/19 18:22:31 schwarze Exp $
+.\"	$OpenBSD: route.8,v 1.94 2020/11/07 09:51:40 denis Exp $
 .\"	$NetBSD: route.8,v 1.6 1995/03/18 15:00:13 cgd Exp $
 .\"
 .\" Copyright (c) 1983, 1991, 1993
@@ -30,7 +30,7 @@
 .\"
 .\"	@(#)route.8	8.3 (Berkeley) 3/19/94
 .\"
-.Dd $Mdocdate: January 19 2020 $
+.Dd $Mdocdate: November 7 2020 $
 .Dt ROUTE 8
 .Os
 .Sh NAME
@@ -195,6 +195,47 @@ or
 .Cm bgp .
 If the priority is negative, then routes that do not match the numeric
 priority are shown.
+.El
+.Pp
+.Bl -tag -width Fl -compact
+.It Xo
+.Ic route
+.Op Fl T Ar rtable
+.Tg
+.Cm sourceaddr
+.Op Fl inet Ns | Ns Fl inet6
+.Op Ar address
+.Xc
+.It Xo
+.Ic route
+.Op Fl T Ar rtable
+.Tg
+.Cm sourceaddr
+.Op Fl inet Ns | Ns Fl inet6
+.Fl ifp
+.Ar interface
+.Xc
+.Pp
+Set the preferred source address.
+If
+.Ar address
+is the word "default", 0.0.0.0 or ::, source address will
+be chosen by the kernel for the matching address family.
+When
+.Ar address
+is omitted, preferred source address is printed if set.
+If
+.Fl ifp
+is used, source will use IP assigned to
+.Ar interface .
+The preferred source will not be used when:
+.Pp
+.Bl -bullet -compact
+.It
+destination is on-link
+.It
+source address is assigned to a disabled interface
+.El
 .El
 .Pp
 .Tg destination

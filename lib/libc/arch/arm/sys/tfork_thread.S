@@ -1,4 +1,4 @@
-/* $OpenBSD: tfork_thread.S,v 1.4 2016/08/06 19:16:09 guenther Exp $ */
+/* $OpenBSD: tfork_thread.S,v 1.6 2020/10/19 17:57:40 naddy Exp $ */
 /*
  * Copyright (c) 2005 Dale Rahn <drahn@openbsd.org>
  *
@@ -37,4 +37,5 @@ ENTRY(__tfork_thread)
 	mov	pc, r2
 	nop
 	SYSTRAP(__threxit)
+	udf	#0
 END(__tfork_thread)

@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_glue.c,v 1.75 2019/06/21 09:39:49 visa Exp $	*/
+/*	$OpenBSD: uvm_glue.c,v 1.77 2020/12/07 16:55:29 mpi Exp $	*/
 /*	$NetBSD: uvm_glue.c,v 1.44 2001/02/06 19:54:44 eeh Exp $	*/
 
 /* 
@@ -293,8 +293,10 @@ uvm_uarea_free(struct proc *p)
 void
 uvm_exit(struct process *pr)
 {
-	uvmspace_free(pr->ps_vmspace);
+	struct vmspace *vm = pr->ps_vmspace;
+
 	pr->ps_vmspace = NULL;
+	uvmspace_free(vm);
 }
 
 /*
@@ -367,7 +369,7 @@ uvm_swapout_threads(void)
 		 * the smallest p_slptime
 		 */
 		slpp = NULL;
-		TAILQ_FOREACH(p, &pr->ps_threads, p_thr_link) {
+		SMR_TAILQ_FOREACH_LOCKED(p, &pr->ps_threads, p_thr_link) {
 			switch (p->p_stat) {
 			case SRUN:
 			case SONPROC:

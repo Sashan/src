@@ -1,4 +1,4 @@
-/* $OpenBSD: pmap.c,v 1.67 2019/12/19 17:53:27 mpi Exp $ */
+/* $OpenBSD: pmap.c,v 1.69 2020/12/09 12:11:13 kettenis Exp $ */
 /*
  * Copyright (c) 2008-2009,2014-2016 Dale Rahn <drahn@dalerahn.com>
  *
@@ -1685,8 +1685,6 @@ pmap_pte_remove(struct pte_desc *pted, int remove_pted)
 	vp3->l3[VP_IDX3(pted->pted_va)] = 0;
 	if (remove_pted)
 		vp3->vp[VP_IDX3(pted->pted_va)] = NULL;
-
-	ttlb_flush(pm, pted->pted_va);
 }
 
 /*
@@ -1695,7 +1693,7 @@ pmap_pte_remove(struct pte_desc *pted, int remove_pted)
  * for this emulation, or to tell the caller that it's a legit fault.
  */
 int
-pmap_fault_fixup(pmap_t pm, vaddr_t va, vm_prot_t ftype, int user)
+pmap_fault_fixup(pmap_t pm, vaddr_t va, vm_prot_t ftype)
 {
 	struct pte_desc *pted;
 	struct vm_page *pg;

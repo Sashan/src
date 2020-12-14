@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_wpi.c,v 1.153 2020/07/10 13:22:21 patrick Exp $	*/
+/*	$OpenBSD: if_wpi.c,v 1.155 2020/12/12 11:48:53 jan Exp $	*/
 
 /*-
  * Copyright (c) 2006-2008
@@ -674,7 +674,7 @@ wpi_alloc_rx_ring(struct wpi_softc *sc, struct wpi_rx_ring *ring)
 			goto fail;
 		}
 
-		data->m = MCLGETI(NULL, M_DONTWAIT, NULL, WPI_RBUF_SIZE);
+		data->m = MCLGETL(NULL, M_DONTWAIT, WPI_RBUF_SIZE);
 		if (data->m == NULL) {
 			printf("%s: could not allocate RX mbuf\n",
 			    sc->sc_dev.dv_xname);
@@ -1216,7 +1216,7 @@ wpi_rx_done(struct wpi_softc *sc, struct wpi_rx_desc *desc,
 		return;
 	}
 
-	m1 = MCLGETI(NULL, M_DONTWAIT, NULL, WPI_RBUF_SIZE);
+	m1 = MCLGETL(NULL, M_DONTWAIT, WPI_RBUF_SIZE);
 	if (m1 == NULL) {
 		ic->ic_stats.is_rx_nombuf++;
 		ifp->if_ierrors++;
@@ -1701,7 +1701,6 @@ wpi_tx(struct wpi_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 		tap->wt_chan_freq = htole16(ni->ni_chan->ic_freq);
 		tap->wt_chan_flags = htole16(ni->ni_chan->ic_flags);
 		tap->wt_rate = rinfo->rate;
-		tap->wt_hwqueue = ac;
 		if ((ic->ic_flags & IEEE80211_F_WEPON) &&
 		    (wh->i_fc[1] & IEEE80211_FC1_PROTECTED))
 			tap->wt_flags |= IEEE80211_RADIOTAP_F_WEP;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_amap.c,v 1.84 2020/09/25 08:04:48 mpi Exp $	*/
+/*	$OpenBSD: uvm_amap.c,v 1.86 2020/11/13 11:11:48 mpi Exp $	*/
 /*	$NetBSD: uvm_amap.c,v 1.27 2000/11/25 06:27:59 chs Exp $	*/
 
 /*
@@ -68,7 +68,23 @@ static inline void amap_list_remove(struct vm_amap *);
 
 struct vm_amap_chunk *amap_chunk_get(struct vm_amap *, int, int, int);
 void amap_chunk_free(struct vm_amap *, struct vm_amap_chunk *);
-void amap_wiperange_chunk(struct vm_amap *, struct vm_amap_chunk *, int, int);
+
+/*
+ * if we enable PPREF, then we have a couple of extra functions that
+ * we need to prototype here...
+ */
+
+#ifdef UVM_AMAP_PPREF
+
+#define PPREF_NONE ((int *) -1)	/* not using ppref */
+
+void	amap_pp_adjref(struct vm_amap *, int, vsize_t, int);
+void	amap_pp_establish(struct vm_amap *);
+void	amap_wiperange_chunk(struct vm_amap *, struct vm_amap_chunk *, int,
+	    int);
+void	amap_wiperange(struct vm_amap *, int, int);
+
+#endif	/* UVM_AMAP_PPREF */
 
 static inline void
 amap_list_insert(struct vm_amap *amap)
@@ -669,9 +685,7 @@ ReStart:
 			pg = anon->an_page;
 
 			/* page must be resident since parent is wired */
-			if (pg == NULL)
-				panic("amap_cow_now: non-resident wired page"
-				    " in anon %p", anon);
+			KASSERT(pg != NULL);
 
 			/*
 			 * if the anon ref count is one, we are safe (the child
@@ -740,6 +754,7 @@ ReStart:
 void
 amap_splitref(struct vm_aref *origref, struct vm_aref *splitref, vaddr_t offset)
 {
+	struct vm_amap *amap = origref->ar_amap;
 	int leftslots;
 
 	AMAP_B2SLOT(leftslots, offset);
@@ -747,17 +762,18 @@ amap_splitref(struct vm_aref *origref, struct vm_aref *splitref, vaddr_t offset)
 		panic("amap_splitref: split at zero offset");
 
 	/* now: we have a valid am_mapped array. */
-	if (origref->ar_amap->am_nslot - origref->ar_pageoff - leftslots <= 0)
+	if (amap->am_nslot - origref->ar_pageoff - leftslots <= 0)
 		panic("amap_splitref: map size check failed");
 
 #ifdef UVM_AMAP_PPREF
-        /* establish ppref before we add a duplicate reference to the amap */
-	if (origref->ar_amap->am_ppref == NULL)
-		amap_pp_establish(origref->ar_amap);
+        /* Establish ppref before we add a duplicate reference to the amap. */
+	if (amap->am_ppref == NULL)
+		amap_pp_establish(amap);
 #endif
 
-	splitref->ar_amap = origref->ar_amap;
-	splitref->ar_amap->am_ref++;		/* not a share reference */
+	/* Note: not a share reference. */
+	amap->am_ref++;
+	splitref->ar_amap = amap;
 	splitref->ar_pageoff = origref->ar_pageoff + leftslots;
 }
 
@@ -1104,12 +1120,11 @@ amap_add(struct vm_aref *aref, vaddr_t offset, struct vm_anon *anon,
 
 	slot = UVM_AMAP_SLOTIDX(slot);
 	if (replace) {
-		if (chunk->ac_anon[slot] == NULL)
-			panic("amap_add: replacing null anon");
-		if (chunk->ac_anon[slot]->an_page != NULL &&
-		    (amap->am_flags & AMAP_SHARED) != 0) {
-			pmap_page_protect(chunk->ac_anon[slot]->an_page,
-			    PROT_NONE);
+		struct vm_anon *oanon  = chunk->ac_anon[slot];
+
+		KASSERT(oanon != NULL);
+		if (oanon->an_page && (amap->am_flags & AMAP_SHARED) != 0) {
+			pmap_page_protect(oanon->an_page, PROT_NONE);
 			/*
 			 * XXX: suppose page is supposed to be wired somewhere?
 			 */
@@ -1140,12 +1155,10 @@ amap_unadd(struct vm_aref *aref, vaddr_t offset)
 	slot += aref->ar_pageoff;
 	KASSERT(slot < amap->am_nslot);
 	chunk = amap_chunk_get(amap, slot, 0, PR_NOWAIT);
-	if (chunk == NULL)
-		panic("amap_unadd: chunk for slot %d not present", slot);
+	KASSERT(chunk != NULL);
 
 	slot = UVM_AMAP_SLOTIDX(slot);
-	if (chunk->ac_anon[slot] == NULL)
-		panic("amap_unadd: nothing there");
+	KASSERT(chunk->ac_anon[slot] != NULL);
 
 	chunk->ac_anon[slot] = NULL;
 	chunk->ac_usedmap &= ~(1 << slot);
@@ -1153,6 +1166,32 @@ amap_unadd(struct vm_aref *aref, vaddr_t offset)
 
 	if (chunk->ac_usedmap == 0)
 		amap_chunk_free(amap, chunk);
+}
+
+/*
+ * amap_adjref_anons: adjust the reference count(s) on amap and its anons.
+ */
+static void
+amap_adjref_anons(struct vm_amap *amap, vaddr_t offset, vsize_t len,
+    int refv, boolean_t all)
+{
+#ifdef UVM_AMAP_PPREF
+	if (amap->am_ppref == NULL && !all && len != amap->am_nslot) {
+		amap_pp_establish(amap);
+	}
+#endif
+
+	amap->am_ref += refv;
+
+#ifdef UVM_AMAP_PPREF
+	if (amap->am_ppref && amap->am_ppref != PPREF_NONE) {
+		if (all) {
+			amap_pp_adjref(amap, 0, amap->am_nslot, refv);
+		} else {
+			amap_pp_adjref(amap, offset, len, refv);
+		}
+	}
+#endif
 }
 
 /*
@@ -1165,51 +1204,36 @@ void
 amap_ref(struct vm_amap *amap, vaddr_t offset, vsize_t len, int flags)
 {
 
-	amap->am_ref++;
 	if (flags & AMAP_SHARED)
 		amap->am_flags |= AMAP_SHARED;
-#ifdef UVM_AMAP_PPREF
-	if (amap->am_ppref == NULL && (flags & AMAP_REFALL) == 0 &&
-	    len != amap->am_nslot)
-		amap_pp_establish(amap);
-	if (amap->am_ppref && amap->am_ppref != PPREF_NONE) {
-		if (flags & AMAP_REFALL)
-			amap_pp_adjref(amap, 0, amap->am_nslot, 1);
-		else
-			amap_pp_adjref(amap, offset, len, 1);
-	}
-#endif
+	amap_adjref_anons(amap, offset, len, 1, (flags & AMAP_REFALL) != 0);
 }
 
 /*
  * amap_unref: remove a reference to an amap
  *
- * => caller must remove all pmap-level references to this amap before
- *	dropping the reference
- * => called from uvm_unmap_detach [only]  ... note that entry is no
- *	longer part of a map
+ * => All pmap-level references to this amap must be already removed.
+ * => Called from uvm_unmap_detach(); entry is already removed from the map.
  */
 void
 amap_unref(struct vm_amap *amap, vaddr_t offset, vsize_t len, boolean_t all)
 {
+	KASSERT(amap->am_ref > 0);
 
-	/* if we are the last reference, free the amap and return. */
-	if (amap->am_ref-- == 1) {
-		amap_wipeout(amap);	/* drops final ref and frees */
+	if (amap->am_ref == 1) {
+		/*
+		 * If the last reference - wipeout and destroy the amap.
+		 */
+		amap->am_ref--;
+		amap_wipeout(amap);
 		return;
 	}
 
-	/* otherwise just drop the reference count(s) */
-	if (amap->am_ref == 1 && (amap->am_flags & AMAP_SHARED) != 0)
-		amap->am_flags &= ~AMAP_SHARED;	/* clear shared flag */
-#ifdef UVM_AMAP_PPREF
-	if (amap->am_ppref == NULL && all == 0 && len != amap->am_nslot)
-		amap_pp_establish(amap);
-	if (amap->am_ppref && amap->am_ppref != PPREF_NONE) {
-		if (all)
-			amap_pp_adjref(amap, 0, amap->am_nslot, -1);
-		else
-			amap_pp_adjref(amap, offset, len, -1);
+	/*
+	 * Otherwise, drop the reference count(s) on anons.
+	 */
+	if (amap->am_ref == 2 && (amap->am_flags & AMAP_SHARED) != 0) {
+		amap->am_flags &= ~AMAP_SHARED;
 	}
-#endif
+	amap_adjref_anons(amap, offset, len, -1, all);
 }

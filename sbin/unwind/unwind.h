@@ -1,4 +1,4 @@
-/*	$OpenBSD: unwind.h,v 1.47 2019/12/18 09:18:27 florian Exp $	*/
+/*	$OpenBSD: unwind.h,v 1.49 2020/12/11 16:36:03 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -116,7 +116,6 @@ enum imsg_type {
 	IMSG_SOCKET_IPC_FRONTEND,
 	IMSG_SOCKET_IPC_RESOLVER,
 	IMSG_QUERY,
-	IMSG_ANSWER_HEADER,
 	IMSG_ANSWER,
 	IMSG_CTL_RESOLVER_INFO,
 	IMSG_CTL_AUTOCONF_RESOLVER_INFO,
@@ -170,9 +169,14 @@ struct query_imsg {
 	char		 qname[NI_MAXHOST];
 	int		 t;
 	int		 c;
-	int		 err;
-	int		 bogus;
 	struct timespec	 tp;
+};
+
+struct answer_header {
+	uint64_t id;
+	int	 srvfail;
+	int	 bogus;
+	int	 answer_len;
 };
 
 extern uint32_t	 cmd_opts;

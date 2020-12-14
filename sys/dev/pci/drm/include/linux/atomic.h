@@ -1,4 +1,4 @@
-/* $OpenBSD: atomic.h,v 1.10 2020/06/17 01:03:57 jsg Exp $ */
+/* $OpenBSD: atomic.h,v 1.15 2020/11/09 23:53:30 jsg Exp $ */
 /**
  * \file drm_atomic.h
  * Atomic operations used in the DRM which may or may not be provided by the OS.
@@ -120,7 +120,9 @@ atomic_dec_if_positive(volatile int *v)
 
 #define atomic_long_read(p)	READ_ONCE(*(p))
 
-#ifdef __LP64__
+/* 32 bit powerpc lacks 64 bit atomics */
+#if !defined(__powerpc__) || defined(__powerpc64__)
+
 typedef int64_t atomic64_t;
 
 #define ATOMIC64_INIT(x)	(x)
@@ -143,18 +145,20 @@ atomic64_xchg(volatile int64_t *v, int64_t n)
 
 #else
 
+extern struct mutex atomic64_mtx;
+
 typedef struct {
 	volatile int64_t val;
-	struct mutex lock;
 } atomic64_t;
 
-#define ATOMIC64_INIT(x)	{ (x), .lock = MUTEX_INITIALIZER(IPL_HIGH) }
+#define ATOMIC64_INIT(x)	{ (x) }
 
 static inline void
 atomic64_set(atomic64_t *v, int64_t i)
 {
-	mtx_init(&v->lock, IPL_HIGH);
+	mtx_enter(&atomic64_mtx);
 	v->val = i;
+	mtx_leave(&atomic64_mtx);
 }
 
 static inline int64_t
@@ -162,9 +166,9 @@ atomic64_read(atomic64_t *v)
 {
 	int64_t val;
 
-	mtx_enter(&v->lock);
+	mtx_enter(&atomic64_mtx);
 	val = v->val;
-	mtx_leave(&v->lock);
+	mtx_leave(&atomic64_mtx);
 
 	return val;
 }
@@ -174,10 +178,10 @@ atomic64_xchg(atomic64_t *v, int64_t n)
 {
 	int64_t val;
 
-	mtx_enter(&v->lock);
+	mtx_enter(&atomic64_mtx);
 	val = v->val;
 	v->val = n;
-	mtx_leave(&v->lock);
+	mtx_leave(&atomic64_mtx);
 
 	return val;
 }
@@ -185,9 +189,9 @@ atomic64_xchg(atomic64_t *v, int64_t n)
 static inline void
 atomic64_add(int i, atomic64_t *v)
 {
-	mtx_enter(&v->lock);
+	mtx_enter(&atomic64_mtx);
 	v->val += i;
-	mtx_leave(&v->lock);
+	mtx_leave(&atomic64_mtx);
 }
 
 #define atomic64_inc(p)		atomic64_add(p, 1)
@@ -197,10 +201,10 @@ atomic64_add_return(int i, atomic64_t *v)
 {
 	int64_t val;
 
-	mtx_enter(&v->lock);
+	mtx_enter(&atomic64_mtx);
 	val = v->val + i;
 	v->val = val;
-	mtx_leave(&v->lock);
+	mtx_leave(&atomic64_mtx);
 
 	return val;
 }
@@ -210,9 +214,9 @@ atomic64_add_return(int i, atomic64_t *v)
 static inline void
 atomic64_sub(int i, atomic64_t *v)
 {
-	mtx_enter(&v->lock);
+	mtx_enter(&atomic64_mtx);
 	v->val -= i;
-	mtx_leave(&v->lock);
+	mtx_leave(&atomic64_mtx);
 }
 #endif
 
@@ -388,22 +392,18 @@ find_next_bit(volatile void *p, int max, int b)
 #define wmb()	__asm __volatile("lock; addl $0,-4(%%esp)" : : : "memory", "cc")
 #define mb()	__asm __volatile("lock; addl $0,-4(%%esp)" : : : "memory", "cc")
 #define smp_mb()	__asm __volatile("lock; addl $0,-4(%%esp)" : : : "memory", "cc")
-#define smp_rmb()	__asm __volatile("" : : : "memory")
-#define smp_wmb()	__asm __volatile("" : : : "memory")
+#define smp_rmb()	__membar("")
+#define smp_wmb()	__membar("")
 #define __smp_store_mb(var, value)	do { (void)xchg(&var, value); } while (0)
 #define smp_mb__after_atomic()	do { } while (0)
 #define smp_mb__before_atomic()	do { } while (0)
-#elif defined(__alpha__)
-#define rmb()	alpha_mb();
-#define wmb()	alpha_wmb();
-#define mb()	alpha_mb();
 #elif defined(__amd64__)
-#define rmb()	__asm __volatile("lfence" : : : "memory")
-#define wmb()	__asm __volatile("sfence" : : : "memory")
-#define mb()	__asm __volatile("mfence" : : : "memory")
-#define smp_mb()	__asm __volatile("lock; addl $0,-4(%%rsp)" : : : "memory", "cc");
-#define smp_rmb()	__asm __volatile("" : : : "memory")
-#define smp_wmb()	__asm __volatile("" : : : "memory")
+#define rmb()	__membar("lfence")
+#define wmb()	__membar("sfence")
+#define mb()	__membar("mfence")
+#define smp_mb()	__asm __volatile("lock; addl $0,-4(%%rsp)" : : : "memory", "cc")
+#define smp_rmb()	__membar("")
+#define smp_wmb()	__membar("")
 #define __smp_store_mb(var, value)	do { (void)xchg(&var, value); } while (0)
 #define smp_mb__after_atomic()	do { } while (0)
 #define smp_mb__before_atomic()	do { } while (0)
@@ -415,10 +415,17 @@ find_next_bit(volatile void *p, int max, int b)
 #define rmb()	mips_sync() 
 #define wmb()	mips_sync()
 #define mb()	mips_sync()
+#elif defined(__powerpc64__)
+#define rmb()	__membar("sync")
+#define wmb()	__membar("sync")
+#define mb()	__membar("sync")
+#define smp_rmb()	__membar("lwsync")
+#define smp_wmb()	__membar("lwsync")
 #elif defined(__powerpc__)
-#define rmb()	__asm __volatile("sync" : : : "memory");
-#define wmb()	__asm __volatile("sync" : : : "memory");
-#define mb()	__asm __volatile("sync" : : : "memory");
+#define rmb()	__membar("sync")
+#define wmb()	__membar("sync")
+#define mb()	__membar("sync")
+#define smp_wmb()	__membar("eieio")
 #elif defined(__sparc64__)
 #define rmb()	membar_sync()
 #define wmb()	membar_sync()

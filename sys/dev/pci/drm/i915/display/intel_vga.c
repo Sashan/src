@@ -31,9 +31,15 @@ void intel_vga_disable(struct drm_i915_private *dev_priv)
 
 	/* WaEnableVGAAccessThroughIOPort:ctg,elk,ilk,snb,ivb,vlv,hsw */
 	vga_get_uninterruptible(pdev, VGA_RSRC_LEGACY_IO);
+#ifdef __linux__
 	outb(SR01, VGA_SR_INDEX);
 	sr1 = inb(VGA_SR_DATA);
 	outb(sr1 | 1 << 5, VGA_SR_DATA);
+#else
+	outb(VGA_SR_INDEX, SR01);
+	sr1 = inb(VGA_SR_DATA);
+	outb(VGA_SR_DATA, sr1 | 1 << 5);
+#endif
 	vga_put(pdev, VGA_RSRC_LEGACY_IO);
 	udelay(300);
 
@@ -89,7 +95,11 @@ void intel_vga_reset_io_mem(struct drm_i915_private *i915)
 	 * and error messages.
 	 */
 	vga_get_uninterruptible(pdev, VGA_RSRC_LEGACY_IO);
+#ifdef __linux__
 	outb(inb(VGA_MSR_READ), VGA_MSR_WRITE);
+#else
+	outb(VGA_MSR_WRITE, inb(VGA_MSR_READ));
+#endif
 	vga_put(pdev, VGA_RSRC_LEGACY_IO);
 }
 

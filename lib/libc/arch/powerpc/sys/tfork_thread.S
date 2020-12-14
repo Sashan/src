@@ -1,4 +1,4 @@
-/*	$OpenBSD: tfork_thread.S,v 1.7 2016/05/15 00:15:10 guenther Exp $	*/
+/*	$OpenBSD: tfork_thread.S,v 1.10 2020/11/28 19:49:30 gkoehler Exp $	*/
 
 /*
  * Copyright (c) 2005 Tim Wiess <tim@nop.cx>
@@ -19,6 +19,7 @@
 #include "SYS.h"
 
 ENTRY(__tfork_thread)
+	RETGUARD_SETUP(__tfork_thread, %r11, %r12)
 	/* call __tfork */
 	li	%r0, SYS___tfork
 	sc
@@ -27,7 +28,7 @@ ENTRY(__tfork_thread)
 	
 	/* check if we are parent or child */
 	cmpwi	%r3, 0
-	bnelr
+	bne	9f
 	
 	/* child */
 	mtlr	%r5		/* fp */
@@ -38,8 +39,12 @@ ENTRY(__tfork_thread)
 	/* child returned, call __threxit */
 	li	%r0, SYS___threxit
 	sc
+	.long	0		/* illegal */
+
 1:
 	stw	0, R2_OFFSET_ERRNO(%r2)
 	li	%r3, -1
+9:
+	RETGUARD_CHECK(__tfork_thread, %r11, %r12)
 	blr
 END(__tfork_thread)

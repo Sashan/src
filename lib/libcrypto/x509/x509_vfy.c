@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_vfy.c,v 1.81 2020/09/26 02:06:28 deraadt Exp $ */
+/* $OpenBSD: x509_vfy.c,v 1.84 2020/11/18 17:40:42 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -654,7 +654,7 @@ X509_verify_cert(X509_STORE_CTX *ctx)
 
 		CRYPTO_w_lock(CRYPTO_LOCK_X509_STORE);
 		if ((objs = X509_STORE_get0_objects(ctx->ctx)) == NULL)
-				good = 0;
+			good = 0;
 		for (i = 0; good && i < sk_X509_OBJECT_num(objs); i++) {
 			X509_OBJECT *obj;
 			X509 *root;
@@ -681,9 +681,9 @@ X509_verify_cert(X509_STORE_CTX *ctx)
 		ctx->error = X509_V_OK; /* Initialize to OK */
 		chain_count = x509_verify(vctx, NULL, NULL);
 	}
+	x509_verify_ctx_free(vctx);
 
 	sk_X509_pop_free(roots, X509_free);
-	x509_verify_ctx_free(vctx);
 
 	/* if we succeed we have a chain in ctx->chain */
 	return (chain_count > 0 && ctx->chain != NULL);
@@ -1794,6 +1794,11 @@ x509_vfy_check_policy(X509_STORE_CTX *ctx)
 
 	if (ctx->parent)
 		return 1;
+
+	/* X509_policy_check always allocates a new tree. */
+	X509_policy_tree_free(ctx->tree);
+	ctx->tree = NULL;
+
 	ret = X509_policy_check(&ctx->tree, &ctx->explicit_policy, ctx->chain,
 	    ctx->param->policies, ctx->param->flags);
 	if (ret == 0) {

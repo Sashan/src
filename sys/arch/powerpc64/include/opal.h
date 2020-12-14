@@ -1,4 +1,4 @@
-/*	$OpenBSD: opal.h,v 1.16 2020/08/23 13:46:15 kettenis Exp $	*/
+/*	$OpenBSD: opal.h,v 1.18 2020/10/19 18:54:58 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -43,6 +43,7 @@
 #define OPAL_GET_MSI_32			39
 #define OPAL_GET_MSI_64			40
 #define OPAL_START_CPU			41
+#define OPAL_PCI_MAP_PE_DMA_WINDOW	44
 #define OPAL_PCI_MAP_PE_DMA_WINDOW_REAL	45
 #define OPAL_PCI_RESET			49
 #define OPAL_REINIT_CPUS		70
@@ -79,6 +80,7 @@
 #define OPAL_ASYNC_COMPLETION		-15
 
 /* OPAL_POLL_EVENT */
+#define OPAL_EVENT_CONSOLE_OUTPUT	0x00000008
 #define OPAL_EVENT_CONSOLE_INPUT	0x00000010
 
 /* OPAL_PCI_EEH_FREEZE_CLEAR */
@@ -186,6 +188,8 @@ int64_t	opal_get_msi_32(uint64_t, uint32_t, uint32_t, uint8_t,
 int64_t	opal_get_msi_64(uint64_t, uint32_t, uint32_t, uint8_t,
 	    uint64_t *, uint32_t *);
 int64_t	opal_start_cpu(uint64_t, uint64_t);
+int64_t	opal_pci_map_pe_dma_window(uint64_t, uint64_t, uint16_t, uint16_t,
+	    uint64_t, uint64_t, uint64_t);
 int64_t	opal_pci_map_pe_dma_window_real(uint64_t, uint64_t, uint16_t,
 	    uint64_t, uint64_t);
 int64_t	opal_pci_reset(uint64_t, uint8_t, uint8_t);

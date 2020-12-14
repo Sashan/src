@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.116 2020/09/27 16:40:26 deraadt Exp $	*/
+/*	$OpenBSD: trap.c,v 1.119 2020/10/30 17:11:20 deraadt Exp $	*/
 /*
  * Copyright (c) 2004, Miodrag Vallat.
  * Copyright (c) 1998 Steve Murphree, Jr.
@@ -218,7 +218,7 @@ m88100_trap(u_int type, struct trapframe *frame)
 	struct proc *p;
 	struct vm_map *map;
 	vaddr_t va, pcb_onfault;
-	vm_prot_t ftype;
+	vm_prot_t access_type;
 	int fault_type, pbus_type;
 	u_long fault_code;
 	vaddr_t fault_addr;
@@ -292,16 +292,15 @@ lose:
 
 		fault_addr = frame->tf_dma0;
 		if (frame->tf_dmt0 & (DMT_WRITE|DMT_LOCKBAR)) {
-			ftype = PROT_READ | PROT_WRITE;
+			access_type = PROT_READ | PROT_WRITE;
 			fault_code = PROT_WRITE;
 		} else {
-			ftype = PROT_READ;
+			access_type = PROT_READ;
 			fault_code = PROT_READ;
 		}
 
 		va = trunc_page((vaddr_t)fault_addr);
 
-		KERNEL_LOCK();
 		vm = p->p_vmspace;
 		map = kernel_map;
 
@@ -321,16 +320,18 @@ lose:
 			 * so that trap won't get called again.
 			 */
 			p->p_addr->u_pcb.pcb_onfault = 0;
+			KERNEL_LOCK();
 			data_access_emulation((u_int *)frame);
+			KERNEL_UNLOCK();
 			p->p_addr->u_pcb.pcb_onfault = pcb_onfault;
 			frame->tf_dmt0 = 0;
 			frame->tf_dpfsr = 0;
-			KERNEL_UNLOCK();
 			return;
 		case CMMU_PFSR_SFAULT:
 		case CMMU_PFSR_PFAULT:
 			p->p_addr->u_pcb.pcb_onfault = 0;
-			result = uvm_fault(map, va, VM_FAULT_INVALID, ftype);
+			KERNEL_LOCK();
+			result = uvm_fault(map, va, 0, access_type);
 			p->p_addr->u_pcb.pcb_onfault = pcb_onfault;
 			if (result == 0) {
 				/*
@@ -341,12 +342,13 @@ lose:
 				 */
 				p->p_addr->u_pcb.pcb_onfault = 0;
 				data_access_emulation((u_int *)frame);
+				KERNEL_UNLOCK();
 				p->p_addr->u_pcb.pcb_onfault = pcb_onfault;
 				frame->tf_dmt0 = 0;
 				frame->tf_dpfsr = 0;
-				KERNEL_UNLOCK();
 				return;
 			} else if (pcb_onfault != 0) {
+				KERNEL_UNLOCK();
 				/*
 				 * This could be a fault caused in copyout*()
 				 * while accessing kernel space.
@@ -360,16 +362,15 @@ lose:
 				 */
 				frame->tf_dmt0 = 0;
 				frame->tf_dpfsr = 0;
-				KERNEL_UNLOCK();
 				return;
 			}
+			KERNEL_UNLOCK();
 			break;
 		}
 #ifdef TRAPDEBUG
 		printf("PBUS Fault %d (%s) va = 0x%x\n", pbus_type,
 		    pbus_exception_type[pbus_type], va);
 #endif
-		KERNEL_UNLOCK();
 		goto lose;
 		/* NOTREACHED */
 	case T_INSTFLT+T_USER:
@@ -381,7 +382,6 @@ lose:
 		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
 			goto userexit;
 user_fault:
-		KERNEL_LOCK();
 		if (type == T_INSTFLT + T_USER) {
 			pbus_type = CMMU_PFSR_FAULT(frame->tf_ipfsr);
 #ifdef TRAPDEBUG
@@ -400,10 +400,10 @@ user_fault:
 		}
 
 		if (frame->tf_dmt0 & (DMT_WRITE | DMT_LOCKBAR)) {
-			ftype = PROT_READ | PROT_WRITE;
+			access_type = PROT_READ | PROT_WRITE;
 			fault_code = PROT_WRITE;
 		} else {
-			ftype = PROT_READ;
+			access_type = PROT_READ;
 			fault_code = PROT_READ;
 		}
 
@@ -423,7 +423,9 @@ user_fault:
 			result = EACCES;
 			break;
 		default:
-			result = uvm_fault(map, va, VM_FAULT_INVALID, ftype);
+			KERNEL_LOCK();
+			result = uvm_fault(map, va, 0, access_type);
+			KERNEL_UNLOCK();
 			if (result == EACCES)
 				result = EFAULT;
 			break;
@@ -431,10 +433,9 @@ user_fault:
 
 		p->p_addr->u_pcb.pcb_onfault = pcb_onfault;
 
-		if (result == 0 && (caddr_t)va >= vm->vm_maxsaddr)
+		if (result == 0) {
 			uvm_grow(p, va);
 
-		if (result == 0) {
 			if (type == T_INSTFLT + T_USER) {
 				m88100_rewind_insn(&(frame->tf_regs));
 				/* clear the error bit */
@@ -449,7 +450,9 @@ user_fault:
 			 	 * get called again.
 			 	 */
 				p->p_addr->u_pcb.pcb_onfault = 0;
+				KERNEL_LOCK();
 				data_access_emulation((u_int *)frame);
+				KERNEL_UNLOCK();
 				p->p_addr->u_pcb.pcb_onfault = pcb_onfault;
 				frame->tf_dmt0 = 0;
 				frame->tf_dpfsr = 0;
@@ -475,7 +478,6 @@ user_fault:
 				    BUS_ADRERR : SEGV_MAPERR;
 			}
 		}
-		KERNEL_UNLOCK();
 		break;
 	case T_MISALGNFLT+T_USER:
 		/* Fix any misaligned ld.d or st.d instructions */
@@ -606,7 +608,7 @@ m88110_trap(u_int type, struct trapframe *frame)
 	struct proc *p;
 	struct vm_map *map;
 	vaddr_t va, pcb_onfault;
-	vm_prot_t ftype;
+	vm_prot_t access_type;
 	int fault_type;
 	u_long fault_code;
 	vaddr_t fault_addr;
@@ -810,16 +812,15 @@ lose:
 
 		fault_addr = frame->tf_dlar;
 		if (frame->tf_dsr & CMMU_DSR_RW) {
-			ftype = PROT_READ;
+			access_type = PROT_READ;
 			fault_code = PROT_READ;
 		} else {
-			ftype = PROT_READ | PROT_WRITE;
+			access_type = PROT_READ | PROT_WRITE;
 			fault_code = PROT_WRITE;
 		}
 
 		va = trunc_page((vaddr_t)fault_addr);
 
-		KERNEL_LOCK();
 		vm = p->p_vmspace;
 		map = kernel_map;
 
@@ -830,7 +831,9 @@ lose:
 			 */
 			if ((pcb_onfault = p->p_addr->u_pcb.pcb_onfault) != 0)
 				p->p_addr->u_pcb.pcb_onfault = 0;
-			result = uvm_fault(map, va, VM_FAULT_INVALID, ftype);
+			KERNEL_LOCK();
+			result = uvm_fault(map, va, 0, access_type);
+			KERNEL_UNLOCK();
 			p->p_addr->u_pcb.pcb_onfault = pcb_onfault;
 			/*
 			 * This could be a fault caused in copyout*()
@@ -843,12 +846,9 @@ lose:
 				 */
 				result = 0;
 			}
-			if (result == 0) {
-				KERNEL_UNLOCK();
+			if (result == 0)
 				return;
-			}
 		}
-		KERNEL_UNLOCK();
 		goto lose;
 	case T_INSTFLT+T_USER:
 		/* User mode instruction access fault */
@@ -859,9 +859,8 @@ lose:
 		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
 			goto userexit;
 m88110_user_fault:
-		KERNEL_LOCK();
 		if (type == T_INSTFLT+T_USER) {
-			ftype = PROT_READ;
+			access_type = PROT_READ;
 			fault_code = PROT_READ;
 #ifdef TRAPDEBUG
 			printf("User Instruction fault exip %x isr %x ilar %x\n",
@@ -870,10 +869,10 @@ m88110_user_fault:
 		} else {
 			fault_addr = frame->tf_dlar;
 			if (frame->tf_dsr & CMMU_DSR_RW) {
-				ftype = PROT_READ;
+				access_type = PROT_READ;
 				fault_code = PROT_READ;
 			} else {
-				ftype = PROT_READ | PROT_WRITE;
+				access_type = PROT_READ | PROT_WRITE;
 				fault_code = PROT_WRITE;
 			}
 #ifdef TRAPDEBUG
@@ -902,7 +901,9 @@ m88110_user_fault:
 			} else
 			if (frame->tf_isr & (CMMU_ISR_SI | CMMU_ISR_PI)) {
 				/* segment or page fault */
-				result = uvm_fault(map, va, VM_FAULT_INVALID, ftype);
+				KERNEL_LOCK();
+				result = uvm_fault(map, va, 0, access_type);
+				KERNEL_UNLOCK();
 				if (result == EACCES)
 					result = EFAULT;
 			} else {
@@ -910,7 +911,6 @@ m88110_user_fault:
 				printf("Unexpected Instruction fault isr %x\n",
 				    frame->tf_isr);
 #endif
-				KERNEL_UNLOCK();
 				goto lose;
 			}
 		} else {
@@ -921,7 +921,9 @@ m88110_user_fault:
 			} else
 			if (frame->tf_dsr & (CMMU_DSR_SI | CMMU_DSR_PI)) {
 				/* segment or page fault */
-				result = uvm_fault(map, va, VM_FAULT_INVALID, ftype);
+				KERNEL_LOCK();
+				result = uvm_fault(map, va, 0, access_type);
+				KERNEL_UNLOCK();
 				if (result == EACCES)
 					result = EFAULT;
 			} else
@@ -953,7 +955,7 @@ m88110_user_fault:
 					printf("Uncorrected userland write fault, pmap %p va %p\n",
 					    map->pmap, va);
 #endif
-					result = uvm_fault(map, va, VM_FAULT_INVALID, ftype);
+					result = uvm_fault(map, va, 0, access_type);
 					if (result == EACCES)
 						result = EFAULT;
 				}
@@ -962,15 +964,13 @@ m88110_user_fault:
 				printf("Unexpected Data access fault dsr %x\n",
 				    frame->tf_dsr);
 #endif
-				KERNEL_UNLOCK();
 				goto lose;
 			}
 		}
 		p->p_addr->u_pcb.pcb_onfault = pcb_onfault;
 
-		if (result == 0 && (caddr_t)va >= vm->vm_maxsaddr)
+		if (result == 0)
 			uvm_grow(p, va);
-		KERNEL_UNLOCK();
 
 		/*
 		 * This could be a fault caused in copyin*()

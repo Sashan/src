@@ -1,4 +1,4 @@
-/*	$OpenBSD: ofw_misc.c,v 1.22 2020/06/25 12:35:21 patrick Exp $	*/
+/*	$OpenBSD: ofw_misc.c,v 1.27 2020/11/30 17:57:36 kettenis Exp $	*/
 /*
  * Copyright (c) 2017 Mark Kettenis
  *
@@ -16,11 +16,17 @@
  */
 
 #include <sys/types.h>
-#include <sys/systm.h>
+#include <sys/device.h>
 #include <sys/malloc.h>
+#include <sys/systm.h>
+
+#include <net/if.h>
+#include <net/if_media.h>
 
 #include <machine/bus.h>
 
+#include <dev/mii/mii.h>
+#include <dev/mii/miivar.h>
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_gpio.h>
 #include <dev/ofw/ofw_misc.h>
@@ -305,6 +311,34 @@ sfp_register(struct sfp_device *sd)
 }
 
 int
+sfp_do_enable(uint32_t phandle, int enable)
+{
+	struct sfp_device *sd;
+
+	if (phandle == 0)
+		return ENXIO;
+
+	LIST_FOREACH(sd, &sfp_devices, sd_list) {
+		if (sd->sd_phandle == phandle)
+			return sd->sd_enable(sd->sd_cookie, enable);
+	}
+
+	return ENXIO;
+}
+
+int
+sfp_enable(uint32_t phandle)
+{
+	return sfp_do_enable(phandle, 1);
+}
+
+int
+sfp_disable(uint32_t phandle)
+{
+	return sfp_do_enable(phandle, 0);
+}
+
+int
 sfp_get_sffpage(uint32_t phandle, struct if_sffpage *sff)
 {
 	struct sfp_device *sd;
@@ -318,6 +352,81 @@ sfp_get_sffpage(uint32_t phandle, struct if_sffpage *sff)
 	}
 
 	return ENXIO;
+}
+
+#define SFF8472_TCC_XCC			3 /* 10G Ethernet Compliance Codes */
+#define SFF8472_TCC_XCC_10G_SR		(1 << 4)
+#define SFF8472_TCC_XCC_10G_LR		(1 << 5)
+#define SFF8472_TCC_XCC_10G_LRM		(1 << 6)
+#define SFF8472_TCC_XCC_10G_ER		(1 << 7)
+#define SFF8472_TCC_ECC			6 /* Ethernet Compliance Codes */
+#define SFF8472_TCC_ECC_1000_SX		(1 << 0)
+#define SFF8472_TCC_ECC_1000_LX		(1 << 1)
+#define SFF8472_TCC_ECC_1000_CX		(1 << 2)
+#define SFF8472_TCC_ECC_1000_T		(1 << 3)
+#define SFF8472_TCC_SCT			8 /* SFP+ Cable Technology */
+#define SFF8472_TCC_SCT_PASSIVE		(1 << 2)
+#define SFF8472_TCC_SCT_ACTIVE		(1 << 3)
+
+int
+sfp_add_media(uint32_t phandle, struct mii_data *mii)
+{
+	struct if_sffpage sff;
+	int error;
+
+	memset(&sff, 0, sizeof(sff));
+	sff.sff_addr = IFSFF_ADDR_EEPROM;
+	sff.sff_page = 0;
+
+	error = sfp_get_sffpage(phandle, &sff);
+	if (error)
+		return error;
+
+	/* SFP */
+	if (sff.sff_data[SFF8472_TCC_ECC] & SFF8472_TCC_ECC_1000_SX) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_1000_SX, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_1000_SX | IFM_FDX;
+	}
+	if (sff.sff_data[SFF8472_TCC_ECC] & SFF8472_TCC_ECC_1000_LX) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_1000_LX, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_1000_LX | IFM_FDX;
+	}
+	if (sff.sff_data[SFF8472_TCC_ECC] & SFF8472_TCC_ECC_1000_CX) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_1000_CX, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_1000_CX | IFM_FDX;
+	}
+	if (sff.sff_data[SFF8472_TCC_ECC] & SFF8472_TCC_ECC_1000_T) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_1000_T, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_1000_T | IFM_FDX;
+	}
+
+	/* SFP+ */
+	if (sff.sff_data[SFF8472_TCC_XCC] & SFF8472_TCC_XCC_10G_SR) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_10G_SR, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_10G_SR | IFM_FDX;
+	}
+	if (sff.sff_data[SFF8472_TCC_XCC] & SFF8472_TCC_XCC_10G_LR) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_10G_LR, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_10G_LR | IFM_FDX;
+	}
+	if (sff.sff_data[SFF8472_TCC_XCC] & SFF8472_TCC_XCC_10G_LRM) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_10G_LRM, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_10G_LRM | IFM_FDX;
+	}
+	if (sff.sff_data[SFF8472_TCC_XCC] & SFF8472_TCC_XCC_10G_ER) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_10G_ER, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_10G_ER | IFM_FDX;
+	}
+
+	/* SFP+ DAC */
+	if (sff.sff_data[SFF8472_TCC_SCT] & SFF8472_TCC_SCT_PASSIVE ||
+	    sff.sff_data[SFF8472_TCC_SCT] & SFF8472_TCC_SCT_ACTIVE) {
+		ifmedia_add(&mii->mii_media,
+		    IFM_ETHER | IFM_10G_SFP_CU, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_10G_SFP_CU | IFM_FDX;
+	}
+
+	return 0;
 }
 
 /*
@@ -700,9 +809,21 @@ mii_register(struct mii_bus *md)
 }
 
 struct mii_bus *
-mii_byphandle(uint32_t phandle)
+mii_bynode(int node)
 {
 	struct mii_bus *md;
+
+	LIST_FOREACH(md, &mii_busses, md_list) {
+		if (md->md_node == node)
+			return md;
+	}
+
+	return NULL;
+}
+
+struct mii_bus *
+mii_byphandle(uint32_t phandle)
+{
 	int node;
 
 	if (phandle == 0)
@@ -716,10 +837,5 @@ mii_byphandle(uint32_t phandle)
 	if (node == 0)
 		return NULL;
 
-	LIST_FOREACH(md, &mii_busses, md_list) {
-		if (md->md_node == node)
-			return md;
-	}
-
-	return NULL;
+	return mii_bynode(node);
 }

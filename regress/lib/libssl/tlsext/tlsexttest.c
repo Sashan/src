@@ -1,4 +1,4 @@
-/* $OpenBSD: tlsexttest.c,v 1.43 2020/08/09 16:26:57 jsing Exp $ */
+/* $OpenBSD: tlsexttest.c,v 1.45 2020/10/11 02:45:49 tb Exp $ */
 /*
  * Copyright (c) 2017 Joel Sing <jsing@openbsd.org>
  * Copyright (c) 2017 Doug Hogan <doug@openbsd.org>
@@ -2583,7 +2583,7 @@ test_tlsext_srtp_client(void)
 static int
 test_tlsext_srtp_server(void)
 {
-	SRTP_PROTECTION_PROFILE *prof;
+	const SRTP_PROTECTION_PROFILE *prof;
 	SSL_CTX *ssl_ctx = NULL;
 	SSL *ssl = NULL;
 	uint8_t *data = NULL;
@@ -2608,7 +2608,7 @@ test_tlsext_srtp_server(void)
 		goto err;
 	}
 
-	if (srtp_find_profile_by_name((char *)tlsext_srtp_aes128cmsha80, &prof,
+	if (srtp_find_profile_by_name(tlsext_srtp_aes128cmsha80, &prof,
 	    strlen(tlsext_srtp_aes128cmsha80))) {
 		FAIL("should be able to find the given profile\n");
 		goto err;

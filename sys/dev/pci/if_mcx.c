@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_mcx.c,v 1.72 2020/08/21 04:47:52 jmatthew Exp $ */
+/*	$OpenBSD: if_mcx.c,v 1.76 2020/12/12 11:48:53 jan Exp $ */
 
 /*
  * Copyright (c) 2017 David Gwynne <dlg@openbsd.org>
@@ -839,6 +839,7 @@ struct mcx_cap_device {
 #define MCX_CAP_DEVICE_PORT_MODULE_EVENT \
 					0x80
 #define MCX_CAP_DEVICE_PORT_TYPE	0x03
+#define MCX_CAP_DEVICE_PORT_TYPE_ETH	0x01
 	uint8_t			num_ports;
 
 	uint8_t			snapshot_log_max_msg;
@@ -2542,6 +2543,7 @@ static const struct pci_matchid mcx_devices[] = {
 	{ PCI_VENDOR_MELLANOX,	PCI_PRODUCT_MELLANOX_MT27800VF },
 	{ PCI_VENDOR_MELLANOX,	PCI_PRODUCT_MELLANOX_MT28800 },
 	{ PCI_VENDOR_MELLANOX,	PCI_PRODUCT_MELLANOX_MT28800VF },
+	{ PCI_VENDOR_MELLANOX,	PCI_PRODUCT_MELLANOX_MT28908 },
 	{ PCI_VENDOR_MELLANOX,	PCI_PRODUCT_MELLANOX_MT2892  },
 };
 
@@ -3068,6 +3070,8 @@ mcx_cmdq_post(struct mcx_softc *sc, struct mcx_cmdq_entry *cqe,
 	    0, MCX_DMA_LEN(&sc->sc_cmdq_mem), BUS_DMASYNC_PRERW);
 
 	mcx_wr(sc, MCX_CMDQ_DOORBELL, 1U << slot);
+	mcx_bar(sc, MCX_CMDQ_DOORBELL, sizeof(uint32_t),
+	    BUS_SPACE_BARRIER_WRITE);
 }
 
 static int
@@ -3766,6 +3770,12 @@ mcx_hca_max_caps(struct mcx_softc *sc)
 	mb = mcx_cq_mbox(&mxm, 0);
 	hca = mcx_cq_mbox_data(mb);
 
+	if ((hca->port_type & MCX_CAP_DEVICE_PORT_TYPE)
+	    != MCX_CAP_DEVICE_PORT_TYPE_ETH) {
+		printf(", not in ethernet mode\n");
+		error = -1;
+		goto free;
+	}
 	if (hca->log_pg_sz > PAGE_SHIFT) {
 		printf(", minimum system page shift %u is too large\n",
 		    hca->log_pg_sz);
@@ -6403,7 +6413,7 @@ mcx_rx_fill_slots(struct mcx_softc *sc, struct mcx_rx *rx,
 	rqe = ring;
 	for (fills = 0; fills < nslots; fills++) {
 		ms = &slots[slot];
-		m = MCLGETI(NULL, M_DONTWAIT, NULL, sc->sc_rxbufsz);
+		m = MCLGETL(NULL, M_DONTWAIT, sc->sc_rxbufsz);
 		if (m == NULL)
 			break;
 

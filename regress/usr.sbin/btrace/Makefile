@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.5 2020/09/14 18:45:19 jasper Exp $
+# $OpenBSD: Makefile,v 1.7 2020/12/06 13:32:18 bluhm Exp $
 
 BTRACE?=		 /usr/sbin/btrace
 
@@ -9,10 +9,11 @@ BT_LANG_SCRIPTS=	arithm beginend boolean comments delete exit map \
 BT_KERN_SCRIPTS=
 
 ${BT_LANG_SCRIPTS}:
-	${BTRACE} ${.CURDIR}/${.TARGET}.bt 2>/dev/null | \
+	${BTRACE} ${.CURDIR}/${.TARGET}.bt | \
 		diff -u ${.CURDIR}/${.TARGET}.ok /dev/stdin
 
 REGRESS_TARGETS=${BT_LANG_SCRIPTS}
+REGRESS_EXPECTED_FAILURES=maxoperand
 .PHONY: ${REGRESS_TARGETS}
 
 .include <bsd.regress.mk>
