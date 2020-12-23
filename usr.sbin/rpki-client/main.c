@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.86 2020/12/09 11:29:04 claudio Exp $ */
+/*	$OpenBSD: main.c,v 1.88 2020/12/21 11:35:55 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -114,7 +114,6 @@ struct	entity {
 	int		 has_pkey; /* whether pkey/sz is specified */
 	unsigned char	*pkey; /* public key (optional) */
 	size_t		 pkeysz; /* public key length (optional) */
-	int		 has_descr; /* whether descr is specified */
 	char		*descr; /* tal description */
 	TAILQ_ENTRY(entity) entries;
 };
@@ -233,9 +232,7 @@ entity_read_req(int fd, struct entity *ent)
 	io_simple_read(fd, &ent->has_pkey, sizeof(int));
 	if (ent->has_pkey)
 		io_buf_read_alloc(fd, (void **)&ent->pkey, &ent->pkeysz);
-	io_simple_read(fd, &ent->has_descr, sizeof(int));
-	if (ent->has_descr)
-		io_str_read(fd, &ent->descr);
+	io_str_read(fd, &ent->descr);
 }
 
 /*
@@ -256,9 +253,7 @@ entity_buffer_req(char **b, size_t *bsz, size_t *bmax,
 	io_simple_buffer(b, bsz, bmax, &ent->has_pkey, sizeof(int));
 	if (ent->has_pkey)
 		io_buf_buffer(b, bsz, bmax, ent->pkey, ent->pkeysz);
-	io_simple_buffer(b, bsz, bmax, &ent->has_descr, sizeof(int));
-	if (ent->has_descr)
-		io_str_buffer(b, bsz, bmax, ent->descr);
+	io_str_buffer(b, bsz, bmax, ent->descr);
 }
 
 /*
@@ -418,7 +413,6 @@ entityq_add(int fd, struct entityq *q, char *file, enum rtype type,
 	p->repo = (rp != NULL) ? (ssize_t)rp->id : -1;
 	p->has_dgst = dgst != NULL;
 	p->has_pkey = pkey != NULL;
-	p->has_descr = descr != NULL;
 	if (p->has_dgst)
 		memcpy(p->dgst, dgst, sizeof(p->dgst));
 	if (p->has_pkey) {
@@ -427,7 +421,7 @@ entityq_add(int fd, struct entityq *q, char *file, enum rtype type,
 			err(1, "malloc");
 		memcpy(p->pkey, pkey, pkeysz);
 	}
-	if (p->has_descr)
+	if (descr != NULL)
 		if ((p->descr = strdup(descr)) == NULL)
 			err(1, "strdup");
 
@@ -451,23 +445,16 @@ static void
 queue_add_from_mft(int fd, struct entityq *q, const char *mft,
     const struct mftfile *file, enum rtype type, size_t *eid)
 {
-	size_t		 sz;
 	char		*cp, *nfile;
 
 	/* Construct local path from filename. */
-
-	sz = strlen(file->file) + strlen(mft);
-	if ((nfile = calloc(sz + 1, 1)) == NULL)
-		err(1, "calloc");
-
 	/* We know this is host/module/... */
 
-	strlcpy(nfile, mft, sz + 1);
-	cp = strrchr(nfile, '/');
+	cp = strrchr(mft, '/');
 	assert(cp != NULL);
-	cp++;
-	*cp = '\0';
-	strlcat(nfile, file->file, sz + 1);
+	assert(cp - mft < INT_MAX);
+	if (asprintf(&nfile, "%.*s/%s", (int)(cp - mft), mft, file->file) == -1)
+		err(1, "asprintf");
 
 	/*
 	 * Since we're from the same directory as the MFT file, we know
