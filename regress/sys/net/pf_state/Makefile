@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.11 2020/12/17 00:51:13 bluhm Exp $
+#	$OpenBSD: Makefile,v 1.13 2020/12/30 21:40:33 kn Exp $
 
 # Copyright (c) 2016-2020 Alexander Bluhm <bluhm@openbsd.org>
 #
@@ -78,10 +78,10 @@ regress:
 
 .if make (regress) || make (all)
 .BEGIN:
-	@echo
 	${SUDO} true
 	ssh -t ${REMOTE_SSH} ${SUDO} true
 	rm -f stamp-pfctl
+	@echo
 .endif
 
 # Create python include file containing the addresses.
@@ -108,9 +108,9 @@ stamp-pfctl: addr.py pf.conf
 # Set variables so that make runs with and without obj directory.
 # Only do that if necessary to keep visible output short.
 .if ${.CURDIR} == ${.OBJDIR}
-PYTHON =	python2.7 -u ./
+PYTHON =	python3 -u ./
 .else
-PYTHON =	PYTHONPATH=${.OBJDIR} python2.7 -u ${.CURDIR}/
+PYTHON =	PYTHONPATH=${.OBJDIR} python3 -u ${.CURDIR}/
 .endif
 
 REGRESS_TARGETS +=	run-challenge-ack

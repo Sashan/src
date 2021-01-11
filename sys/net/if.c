@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.c,v 1.621 2020/12/15 03:43:34 dlg Exp $	*/
+/*	$OpenBSD: if.c,v 1.624 2021/01/09 14:55:21 bluhm Exp $	*/
 /*	$NetBSD: if.c,v 1.35 1996/05/07 05:26:04 thorpej Exp $	*/
 
 /*
@@ -68,7 +68,6 @@
 #include "pf.h"
 #include "pfsync.h"
 #include "ppp.h"
-#include "pppoe.h"
 #include "switch.h"
 #include "if_wg.h"
 
@@ -741,6 +740,8 @@ if_input(struct ifnet *ifp, struct mbuf_list *ml)
 int
 if_input_local(struct ifnet *ifp, struct mbuf *m, sa_family_t af)
 {
+	int keepflags;
+
 #if NBPFILTER > 0
 	/*
 	 * Only send packets to bpf if they are destinated to local
@@ -756,8 +757,9 @@ if_input_local(struct ifnet *ifp, struct mbuf *m, sa_family_t af)
 			bpf_mtap_af(if_bpf, af, m, BPF_DIRECTION_OUT);
 	}
 #endif
+	keepflags = m->m_flags & (M_BCAST|M_MCAST);
 	m_resethdr(m);
-	m->m_flags |= M_LOOP;
+	m->m_flags |= M_LOOP | keepflags;
 	m->m_pkthdr.ph_ifidx = ifp->if_index;
 	m->m_pkthdr.ph_rtableid = ifp->if_rdomain;
 
@@ -902,13 +904,6 @@ if_netisr(void *unused)
 		if (n & (1 << NETISR_SWITCH)) {
 			KERNEL_LOCK();
 			switchintr();
-			KERNEL_UNLOCK();
-		}
-#endif
-#if NPPPOE > 0
-		if (n & (1 << NETISR_PPPOE)) {
-			KERNEL_LOCK();
-			pppoeintr();
 			KERNEL_UNLOCK();
 		}
 #endif

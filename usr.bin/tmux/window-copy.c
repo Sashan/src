@@ -1,4 +1,4 @@
-/* $OpenBSD: window-copy.c,v 1.307 2020/12/22 09:22:14 nicm Exp $ */
+/* $OpenBSD: window-copy.c,v 1.310 2021/01/08 08:22:10 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -272,7 +272,7 @@ struct window_copy_mode_data {
 	u_char		*searchmark;
 	int		 searchcount;
 	int		 searchmore;
-	int		 searchthis;
+	int		 searchall;
 	int		 searchx;
 	int		 searchy;
 	int		 searcho;
@@ -396,6 +396,7 @@ window_copy_common_init(struct window_mode_entry *wme)
 		data->searchstr = NULL;
 	}
 	data->searchx = data->searchy = data->searcho = -1;
+	data->searchall = 1;
 
 	data->jumptype = WINDOW_COPY_OFF;
 	data->jumpchar = '\0';
@@ -2029,6 +2030,8 @@ window_copy_cmd_search_backward_incremental(struct window_copy_cmd_state *cs)
 
 	data->timeout = 0;
 
+	log_debug ("%s: %s", __func__, argument);
+
 	prefix = *argument++;
 	if (data->searchx == -1 || data->searchy == -1) {
 		data->searchx = data->cx;
@@ -2081,6 +2084,8 @@ window_copy_cmd_search_forward_incremental(struct window_copy_cmd_state *cs)
 	enum window_copy_cmd_action	 action = WINDOW_COPY_CMD_NOTHING;
 
 	data->timeout = 0;
+
+	log_debug ("%s: %s", __func__, argument);
 
 	prefix = *argument++;
 	if (data->searchx == -1 || data->searchy == -1) {
@@ -2334,9 +2339,6 @@ window_copy_command(struct window_mode_entry *wme, struct client *c,
 		if (clear != WINDOW_COPY_CMD_CLEAR_NEVER) {
 			window_copy_clear_marks(wme);
 			data->searchx = data->searchy = -1;
-		} else if (data->searchthis != -1) {
-			data->searchthis = -1;
-			action = WINDOW_COPY_CMD_REDRAW;
 		}
 		if (action == WINDOW_COPY_CMD_NOTHING)
 			action = WINDOW_COPY_CMD_REDRAW;
@@ -2929,9 +2931,11 @@ window_copy_search(struct window_mode_entry *wme, int direction, int regex,
 	if (data->timeout)
 		return (0);
 
-	if (wp->searchstr == NULL || wp->searchregex != regex)
+	if (data->searchall || wp->searchstr == NULL ||
+	    wp->searchregex != regex) {
 		visible_only = 0;
-	else
+		data->searchall = 0;
+	} else
 		visible_only = (strcmp(wp->searchstr, str) == 0);
 	free(wp->searchstr);
 	wp->searchstr = xstrdup(str);
@@ -3009,7 +3013,7 @@ window_copy_search_marks(struct window_mode_entry *wme, struct screen *ssp,
 	struct screen			*s = data->backing, ss;
 	struct screen_write_ctx		 ctx;
 	struct grid			*gd = s->grid;
-	int				 found, cis, which = -1, stopped = 0;
+	int				 found, cis, stopped = 0;
 	int				 cflags = REG_EXTENDED;
 	u_int				 px, py, i, b, nfound = 0, width;
 	u_int				 ssize = 1, start, end;
@@ -3072,11 +3076,7 @@ again:
 				if (!found)
 					break;
 			}
-
 			nfound++;
-			if (px == data->cx &&
-			    py == gd->hsize + data->cy - data->oy)
-				which = nfound;
 
 			if (window_copy_search_mark_at(data, px, py, &b) == 0) {
 				if (b + width > gd->sx * gd->sy)
@@ -3088,7 +3088,6 @@ again:
 				else
 					data->searchgen++;
 			}
-
 			px += width;
 		}
 
@@ -3116,7 +3115,6 @@ again:
 
 	if (!visible_only) {
 		if (stopped) {
-			data->searchthis = -1;
 			if (nfound > 1000)
 				data->searchcount = 1000;
 			else if (nfound > 100)
@@ -3127,10 +3125,6 @@ again:
 				data->searchcount = -1;
 			data->searchmore = 1;
 		} else {
-			if (which != -1)
-				data->searchthis = 1 + nfound - which;
-			else
-				data->searchthis = -1;
 			data->searchcount = nfound;
 			data->searchmore = 0;
 		}
@@ -3366,15 +3360,11 @@ window_copy_write_line(struct window_mode_entry *wme,
 			if (data->searchcount == -1) {
 				size = xsnprintf(hdr, sizeof hdr,
 				    "[%u/%u]", data->oy, hsize);
-			} else if (data->searchthis == -1) {
+			} else {
 				size = xsnprintf(hdr, sizeof hdr,
 				    "(%d%s results) [%u/%u]", data->searchcount,
 				    data->searchmore ? "+" : "", data->oy,
 				    hsize);
-			} else {
-				size = xsnprintf(hdr, sizeof hdr,
-				    "(%d/%d results) [%u/%u]", data->searchthis,
-				    data->searchcount, data->oy, hsize);
 			}
 		}
 		if (size > screen_size_x(s))

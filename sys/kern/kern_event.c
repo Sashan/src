@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_event.c,v 1.153 2020/12/20 12:54:05 visa Exp $	*/
+/*	$OpenBSD: kern_event.c,v 1.158 2021/01/08 12:29:16 visa Exp $	*/
 
 /*-
  * Copyright (c) 1999,2000,2001 Jonathan Lemon <jlemon@FreeBSD.org>
@@ -228,7 +228,7 @@ kqueue_kqfilter(struct file *fp, struct knote *kn)
 		return (EINVAL);
 
 	kn->kn_fop = &kqread_filtops;
-	klist_insert(&kq->kq_sel.si_note, kn);
+	klist_insert_locked(&kq->kq_sel.si_note, kn);
 	return (0);
 }
 
@@ -237,7 +237,7 @@ filt_kqdetach(struct knote *kn)
 {
 	struct kqueue *kq = kn->kn_fp->f_data;
 
-	klist_remove(&kq->kq_sel.si_note, kn);
+	klist_remove_locked(&kq->kq_sel.si_note, kn);
 }
 
 int
@@ -283,7 +283,7 @@ filt_procattach(struct knote *kn)
 	}
 
 	s = splhigh();
-	klist_insert(&pr->ps_klist, kn);
+	klist_insert_locked(&pr->ps_klist, kn);
 	splx(s);
 
 	return (0);
@@ -307,7 +307,7 @@ filt_procdetach(struct knote *kn)
 		return;
 
 	s = splhigh();
-	klist_remove(&pr->ps_klist, kn);
+	klist_remove_locked(&pr->ps_klist, kn);
 	splx(s);
 }
 
@@ -339,7 +339,7 @@ filt_proc(struct knote *kn, long hint)
 		kn->kn_status |= KN_DETACHED;
 		kn->kn_flags |= (EV_EOF | EV_ONESHOT);
 		kn->kn_data = W_EXITCODE(pr->ps_xexit, pr->ps_xsig);
-		klist_remove(&pr->ps_klist, kn);
+		klist_remove_locked(&pr->ps_klist, kn);
 		splx(s);
 		return (1);
 	}
@@ -977,6 +977,8 @@ kqueue_scan(struct kqueue_scan_state *scan, int maxevents,
 retry:
 	KASSERT(nkev == 0);
 
+	error = 0;
+
 	if (kq->kq_state & KQ_DYING) {
 		error = EBADF;
 		goto done;
@@ -1573,6 +1575,16 @@ klist_free(struct klist *klist)
 void
 klist_insert(struct klist *klist, struct knote *kn)
 {
+	int ls;
+
+	ls = klist_lock(klist);
+	SLIST_INSERT_HEAD(&klist->kl_list, kn, kn_selnext);
+	klist_unlock(klist, ls);
+}
+
+void
+klist_insert_locked(struct klist *klist, struct knote *kn)
+{
 	KLIST_ASSERT_LOCKED(klist);
 
 	SLIST_INSERT_HEAD(&klist->kl_list, kn, kn_selnext);
@@ -1580,6 +1592,16 @@ klist_insert(struct klist *klist, struct knote *kn)
 
 void
 klist_remove(struct klist *klist, struct knote *kn)
+{
+	int ls;
+
+	ls = klist_lock(klist);
+	SLIST_REMOVE(&klist->kl_list, kn, knote, kn_selnext);
+	klist_unlock(klist, ls);
+}
+
+void
+klist_remove_locked(struct klist *klist, struct knote *kn)
 {
 	KLIST_ASSERT_LOCKED(klist);
 
@@ -1592,6 +1614,13 @@ klist_empty(struct klist *klist)
 	return (SLIST_EMPTY(&klist->kl_list));
 }
 
+/*
+ * Detach all knotes from klist. The knotes are rewired to indicate EOF.
+ *
+ * The caller of this function must not hold any locks that can block
+ * filterops callbacks that run with KN_PROCESSING.
+ * Otherwise this function might deadlock.
+ */
 void
 klist_invalidate(struct klist *list)
 {
@@ -1599,10 +1628,6 @@ klist_invalidate(struct klist *list)
 	struct proc *p = curproc;
 	int ls, s;
 
-	/*
-	 * NET_LOCK() must not be held because it can block another thread
-	 * in f_event with a knote acquired.
-	 */
 	NET_ASSERT_UNLOCKED();
 
 	s = splhigh();
@@ -1618,6 +1643,7 @@ klist_invalidate(struct klist *list)
 		kn->kn_fop->f_detach(kn);
 		if (kn->kn_fop->f_flags & FILTEROP_ISFD) {
 			kn->kn_fop = &dead_filtops;
+			kn->kn_fop->f_event(kn, 0);
 			knote_activate(kn);
 			s = splhigh();
 			knote_release(kn);
@@ -1639,8 +1665,8 @@ klist_lock(struct klist *list)
 	if (list->kl_ops != NULL) {
 		ls = list->kl_ops->klo_lock(list->kl_arg);
 	} else {
-		ls = splhigh();
 		KERNEL_LOCK();
+		ls = splhigh();
 	}
 	return ls;
 }
@@ -1651,8 +1677,8 @@ klist_unlock(struct klist *list, int ls)
 	if (list->kl_ops != NULL) {
 		list->kl_ops->klo_unlock(list->kl_arg, ls);
 	} else {
-		KERNEL_UNLOCK();
 		splx(ls);
+		KERNEL_UNLOCK();
 	}
 }
 
