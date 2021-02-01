@@ -1993,17 +1993,17 @@ pfsync_undefer_notify(struct pfsync_deferral *pd)
 
 	if (st->rule.ptr->rt == PF_ROUTETO) {
 		if (pf_setup_pdesc(&pdesc, st->key[PF_SK_WIRE]->af,
-		    st->direction, st->rt_kif, pd->pd_m, NULL) != PF_PASS) {
+		    st->direction, st->kif, pd->pd_m, NULL) != PF_PASS) {
 			m_freem(pd->pd_m);
 			return;
 		}
 		switch (st->key[PF_SK_WIRE]->af) {
 		case AF_INET:
-			pf_route(&pdesc, st->rule.ptr, st);
+			pf_route(&pdesc, st);
 			break;
 #ifdef INET6
 		case AF_INET6:
-			pf_route6(&pdesc, st->rule.ptr, st);
+			pf_route6(&pdesc, st);
 			break;
 #endif /* INET6 */
 		default:
