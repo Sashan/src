@@ -1,4 +1,4 @@
-/*	$OpenBSD: bpf.c,v 1.201 2021/01/02 07:25:42 dlg Exp $	*/
+/*	$OpenBSD: bpf.c,v 1.203 2021/01/21 12:33:14 dlg Exp $	*/
 /*	$NetBSD: bpf.c,v 1.33 1997/02/21 23:59:35 thorpej Exp $	*/
 
 /*
@@ -379,7 +379,6 @@ bpfopen(dev_t dev, int flag, int mode, struct proc *p)
 	sigio_init(&bd->bd_sigio);
 
 	bd->bd_rtout = 0;	/* no timeout by default */
-	bd->bd_rnonblock = ISSET(flag, FNONBLOCK);
 
 	bpf_get(bd);
 	LIST_INSERT_HEAD(&bpf_d_list, bd, bd_list);
@@ -497,7 +496,7 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 			ROTATE_BUFFERS(d);
 			break;
 		}
-		if (d->bd_rnonblock) {
+		if (ISSET(ioflag, IO_NDELAY)) {
 			/* User requested non-blocking I/O */
 			error = EWOULDBLOCK;
 		} else if (d->bd_rtout == 0) {
@@ -982,10 +981,7 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		break;
 
 	case FIONBIO:		/* Non-blocking I/O */
-		if (*(int *)addr)
-			d->bd_rnonblock = 1;
-		else
-			d->bd_rnonblock = 0;
+		/* let vfs to keep track of this */
 		break;
 
 	case FIOASYNC:		/* Send signal on receive packets */
@@ -1444,7 +1440,6 @@ bpf_mtap_ether(caddr_t arg, const struct mbuf *m, u_int direction)
 #if NVLAN > 0
 	struct ether_vlan_header evh;
 	struct m_hdr mh, md;
-	uint8_t prio;
 
 	if ((m->m_flags & M_VLANTAG) == 0)
 #endif
@@ -1455,15 +1450,10 @@ bpf_mtap_ether(caddr_t arg, const struct mbuf *m, u_int direction)
 #if NVLAN > 0
 	KASSERT(m->m_len >= ETHER_HDR_LEN);
 
-	prio = m->m_pkthdr.pf.prio;
-	if (prio <= 1)
-		prio = !prio;
-
 	memcpy(&evh, mtod(m, char *), ETHER_HDR_LEN);
 	evh.evl_proto = evh.evl_encap_proto;
 	evh.evl_encap_proto = htons(ETHERTYPE_VLAN);
-	evh.evl_tag = htons(m->m_pkthdr.ether_vtag |
-	    (prio << EVL_PRIO_BITS));
+	evh.evl_tag = htons(m->m_pkthdr.ether_vtag);
 
 	mh.mh_flags = 0;
 	mh.mh_data = (caddr_t)&evh;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_bridge.c,v 1.347 2021/01/08 23:31:53 dlg Exp $	*/
+/*	$OpenBSD: if_bridge.c,v 1.349 2021/01/28 20:06:38 mvs Exp $	*/
 
 /*
  * Copyright (c) 1999, 2000 Jason L. Wright (jason@thought.net)
@@ -269,12 +269,13 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		if ((error = suser(curproc)) != 0)
 			break;
 
-		ifs = ifunit(req->ifbr_ifsname);
+		ifs = if_unit(req->ifbr_ifsname);
 		if (ifs == NULL) {			/* no such interface */
 			error = ENOENT;
 			break;
 		}
 		if (ifs->if_type != IFT_ETHER) {
+			if_put(ifs);
 			error = EINVAL;
 			break;
 		}
@@ -283,12 +284,15 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 				error = EEXIST;
 			else
 				error = EBUSY;
+			if_put(ifs);
 			break;
 		}
 
 		error = ether_brport_isset(ifs);
-		if (error != 0)
+		if (error != 0) {
+			if_put(ifs);
 			break;
+		}
 
 		/* If it's in the span list, it can't be a member. */
 		SMR_SLIST_FOREACH_LOCKED(bif, &sc->sc_spanlist, bif_next) {
@@ -296,12 +300,14 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 				break;
 		}
 		if (bif != NULL) {
+			if_put(ifs);
 			error = EBUSY;
 			break;
 		}
 
 		bif = malloc(sizeof(*bif), M_DEVBUF, M_NOWAIT|M_ZERO);
 		if (bif == NULL) {
+			if_put(ifs);
 			error = ENOMEM;
 			break;
 		}
@@ -310,6 +316,7 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		error = ifpromisc(ifs, 1);
 		NET_UNLOCK();
 		if (error != 0) {
+			if_put(ifs);
 			free(bif, M_DEVBUF, sizeof(*bif));
 			break;
 		}
@@ -318,8 +325,7 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		 * XXX If the NET_LOCK() or ifpromisc() calls above
 		 * had to sleep, then something else could have come
 		 * along and taken over ifs while the kernel lock was
-		 * released. Or worse, ifs could have been destroyed
-		 * cos ifunit() is... optimistic.
+		 * released.
 		 */
 
 		bif->bridge_sc = sc;
@@ -336,16 +342,9 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	case SIOCBRDGDEL:
 		if ((error = suser(curproc)) != 0)
 			break;
-		ifs = ifunit(req->ifbr_ifsname);
-		if (ifs == NULL) {
-			error = ENOENT;
+		error = bridge_findbif(sc, req->ifbr_ifsname, &bif);
+		if (error != 0)
 			break;
-		}
-		if (ifs->if_bridgeidx != ifp->if_index) {
-			error = ESRCH;
-			break;
-		}
-		bif = bridge_getbif(ifs);
 		bridge_ifremove(bif);
 		break;
 	case SIOCBRDGIFS:
@@ -354,12 +353,13 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	case SIOCBRDGADDS:
 		if ((error = suser(curproc)) != 0)
 			break;
-		ifs = ifunit(req->ifbr_ifsname);
+		ifs = if_unit(req->ifbr_ifsname);
 		if (ifs == NULL) {			/* no such interface */
 			error = ENOENT;
 			break;
 		}
 		if (ifs->if_type != IFT_ETHER) {
+			if_put(ifs);
 			error = EINVAL;
 			break;
 		}
@@ -368,6 +368,7 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 				error = EEXIST;
 			else
 				error = EBUSY;
+			if_put(ifs);
 			break;
 		}
 		SMR_SLIST_FOREACH_LOCKED(bif, &sc->sc_spanlist, bif_next) {
@@ -375,11 +376,13 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 				break;
 		}
 		if (bif != NULL) {
+			if_put(ifs);
 			error = EEXIST;
 			break;
 		}
 		bif = malloc(sizeof(*bif), M_DEVBUF, M_NOWAIT|M_ZERO);
 		if (bif == NULL) {
+			if_put(ifs);
 			error = ENOMEM;
 			break;
 		}
@@ -395,7 +398,7 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	case SIOCBRDGDELS:
 		if ((error = suser(curproc)) != 0)
 			break;
-		ifs = ifunit(req->ifbr_ifsname);
+		ifs = if_unit(req->ifbr_ifsname);
 		if (ifs == NULL) {
 			error = ENOENT;
 			break;
@@ -404,6 +407,7 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			if (bif->ifp == ifs)
 				break;
 		}
+		if_put(ifs);
 		if (bif == NULL) {
 			error = ESRCH;
 			break;
@@ -411,16 +415,9 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		bridge_spanremove(bif);
 		break;
 	case SIOCBRDGGIFFLGS:
-		ifs = ifunit(req->ifbr_ifsname);
-		if (ifs == NULL) {
-			error = ENOENT;
+		error = bridge_findbif(sc, req->ifbr_ifsname, &bif);
+		if (error != 0)
 			break;
-		}
-		if (ifs->if_bridgeidx != ifp->if_index) {
-			error = ESRCH;
-			break;
-		}
-		bif = bridge_getbif(ifs);
 		req->ifbr_ifsflags = bif->bif_flags;
 		req->ifbr_portno = bif->ifp->if_index & 0xfff;
 		req->ifbr_protected = bif->bif_protected;
@@ -428,22 +425,15 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			bridge_bifgetstp(sc, bif, req);
 		break;
 	case SIOCBRDGSIFFLGS:
-		if ((error = suser(curproc)) != 0)
-			break;
-		ifs = ifunit(req->ifbr_ifsname);
-		if (ifs == NULL) {
-			error = ENOENT;
-			break;
-		}
-		if (ifs->if_bridgeidx != ifp->if_index) {
-			error = ESRCH;
-			break;
-		}
 		if (req->ifbr_ifsflags & IFBIF_RO_MASK) {
 			error = EINVAL;
 			break;
 		}
-		bif = bridge_getbif(ifs);
+		if ((error = suser(curproc)) != 0)
+			break;
+		error = bridge_findbif(sc, req->ifbr_ifsname, &bif);
+		if (error != 0)
+			break;
 		if (req->ifbr_ifsflags & IFBIF_STP) {
 			if ((bif->bif_flags & IFBIF_STP) == 0) {
 				/* Enable STP */
@@ -489,16 +479,9 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		brop->ifbop_last_tc_time.tv_usec = bs->bs_last_tc_time.tv_usec;
 		break;
 	case SIOCBRDGSIFPROT:
-		ifs = ifunit(req->ifbr_ifsname);
-		if (ifs == NULL) {
-			error = ENOENT;
+		error = bridge_findbif(sc, req->ifbr_ifsname, &bif);
+		if (error != 0)
 			break;
-		}
-		if (ifs->if_bridgeidx != ifp->if_index) {
-			error = ESRCH;
-			break;
-		}
-		bif = bridge_getbif(ifs);
 		bif->bif_protected = req->ifbr_protected;
 		break;
 	case SIOCBRDGRTS:
@@ -568,6 +551,7 @@ bridge_ifremove(struct bridge_iflist *bif)
 	bridge_rtdelete(sc, bif->ifp, 0);
 	bridge_flushrule(bif);
 
+	if_put(bif->ifp);
 	bif->ifp = NULL;
 	free(bif, M_DEVBUF, sizeof(*bif));
 
@@ -584,6 +568,7 @@ bridge_spanremove(struct bridge_iflist *bif)
 
 	smr_barrier();
 
+	if_put(bif->ifp);
 	bif->ifp = NULL;
 	free(bif, M_DEVBUF, sizeof(*bif));
 }
@@ -700,6 +685,41 @@ bridge_bifconf(struct bridge_softc *sc, struct ifbifconf *bifc)
 done:
 	free(breqs, M_TEMP, total * sizeof(*breq));
 	bifc->ifbic_len = i * sizeof(*breq);
+	return (error);
+}
+
+int
+bridge_findbif(struct bridge_softc *sc, const char *name,
+    struct bridge_iflist **rbif)
+{
+	struct ifnet *ifp;
+	struct bridge_iflist *bif;
+	int error = 0;
+
+	KERNEL_ASSERT_LOCKED();
+
+	if ((ifp = if_unit(name)) == NULL)
+		return (ENOENT);
+
+	if (ifp->if_bridgeidx != sc->sc_if.if_index) {
+		error = ESRCH;
+		goto put;
+	}
+
+	SMR_SLIST_FOREACH_LOCKED(bif, &sc->sc_iflist, bif_next) {
+		if (bif->ifp == ifp)
+			break;
+	}
+
+	if (bif == NULL) {
+		error = ENOENT;
+		goto put;
+	}
+
+	*rbif = bif;
+put:
+	if_put(ifp);
+
 	return (error);
 }
 

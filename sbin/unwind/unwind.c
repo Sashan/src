@@ -1,4 +1,4 @@
-/*	$OpenBSD: unwind.c,v 1.52 2020/11/09 04:22:05 tb Exp $	*/
+/*	$OpenBSD: unwind.c,v 1.59 2021/01/30 10:31:52 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -49,13 +49,21 @@
 #include "control.h"
 
 #define	TRUST_ANCHOR_FILE	"/var/db/unwind.key"
+#define	WAIT_TA_FD_TIMEOUT	5
+#define	WAIT_TA_FD_MAX_RETRY	3
+
+enum uw_process {
+	PROC_MAIN,
+	PROC_RESOLVER,
+	PROC_FRONTEND,
+};
 
 __dead void	usage(void);
 __dead void	main_shutdown(void);
 
 void		main_sig_handler(int, short, void *);
 
-static pid_t	start_child(int, char *, int, int, int);
+static pid_t	start_child(enum uw_process, char *, int, int, int);
 
 void		main_dispatch_frontend(int, short, void *);
 void		main_dispatch_resolver(int, short, void *);
@@ -68,18 +76,18 @@ int		main_sendall(enum imsg_type, void *, uint16_t);
 void		open_ports(void);
 void		solicit_dns_proposals(void);
 void		send_blocklist_fd(void);
+void		open_trustanchor(void);
+void		open_trustanchor_timeout(int, short, void *);
 
-struct uw_conf	*main_conf;
-struct imsgev	*iev_frontend;
-struct imsgev	*iev_resolver;
-char		*conffile;
-
-pid_t		 frontend_pid;
-pid_t		 resolver_pid;
-
-uint32_t	 cmd_opts;
-
-int		 routesock;
+struct uw_conf		*main_conf;
+static struct imsgev	*iev_frontend;
+static struct imsgev	*iev_resolver;
+char			*conffile;
+pid_t			 frontend_pid;
+pid_t			 resolver_pid;
+uint32_t		 cmd_opts;
+int			 routesock;
+struct event		 ta_timo_ev;
 
 void
 main_sig_handler(int sig, short event, void *arg)
@@ -122,7 +130,7 @@ main(int argc, char *argv[])
 	int		 ch, debug = 0, resolver_flag = 0, frontend_flag = 0;
 	int		 frontend_routesock, rtfilter;
 	int		 pipe_main2frontend[2], pipe_main2resolver[2];
-	int		 control_fd, ta_fd;
+	int		 control_fd;
 	char		*csock, *saved_argv0;
 
 	csock = UNWIND_SOCKET;
@@ -218,8 +226,7 @@ main(int argc, char *argv[])
 	    pipe_main2frontend[1], debug, cmd_opts & (OPT_VERBOSE |
 	    OPT_VERBOSE2 | OPT_VERBOSE3));
 
-	uw_process = PROC_MAIN;
-	log_procinit(log_procnames[uw_process]);
+	log_procinit("main");
 
 	event_init();
 
@@ -262,26 +269,21 @@ main(int argc, char *argv[])
 	if ((control_fd = control_init(csock)) == -1)
 		fatalx("control socket setup failed");
 
-	if ((frontend_routesock = socket(AF_ROUTE, SOCK_RAW | SOCK_CLOEXEC,
-	    AF_INET)) == -1)
+	if ((frontend_routesock = socket(AF_ROUTE, SOCK_RAW | SOCK_CLOEXEC |
+	    SOCK_NONBLOCK, 0)) == -1)
 		fatal("route socket");
 
 	rtfilter = ROUTE_FILTER(RTM_IFINFO) | ROUTE_FILTER(RTM_PROPOSAL)
-	    | ROUTE_FILTER(RTM_IFANNOUNCE);
+	    | ROUTE_FILTER(RTM_IFANNOUNCE) | ROUTE_FILTER(RTM_NEWADDR)
+	    | ROUTE_FILTER(RTM_DELADDR);
 	if (setsockopt(frontend_routesock, AF_ROUTE, ROUTE_MSGFILTER,
 	    &rtfilter, sizeof(rtfilter)) == -1)
 		fatal("setsockopt(ROUTE_MSGFILTER)");
 
 	if ((routesock = socket(AF_ROUTE, SOCK_RAW | SOCK_CLOEXEC |
-	    SOCK_NONBLOCK, AF_INET6)) == -1)
+	    SOCK_NONBLOCK, 0)) == -1)
 		fatal("route socket");
 	shutdown(SHUT_RD, routesock);
-
-	if ((ta_fd = open(TRUST_ANCHOR_FILE, O_RDWR | O_CREAT, 0644)) == -1)
-		log_warn("%s", TRUST_ANCHOR_FILE);
-
-	/* receiver handles failed open correctly */
-	main_imsg_compose_frontend_fd(IMSG_TAFD, 0, ta_fd);
 
 	main_imsg_compose_frontend_fd(IMSG_CONTROLFD, 0, control_fd);
 	main_imsg_compose_frontend_fd(IMSG_ROUTESOCK, 0, frontend_routesock);
@@ -290,8 +292,16 @@ main(int argc, char *argv[])
 	if (main_conf->blocklist_file != NULL)
 		send_blocklist_fd();
 
-	if (pledge("stdio rpath sendfd", NULL) == -1)
+	/* this is the best we can do, when we startup /var is not mounted */
+	if (unveil("/var", "rwc") == -1)
+		fatal("unveil");
+	if (unveil("/", "r") == -1)
+		fatal("unveil");
+	if (pledge("stdio rpath wpath cpath sendfd", NULL) == -1)
 		fatal("pledge");
+
+	evtimer_set(&ta_timo_ev, open_trustanchor_timeout, NULL);
+	open_trustanchor();
 
 	main_imsg_compose_frontend(IMSG_STARTUP, 0, NULL, 0);
 	main_imsg_compose_resolver(IMSG_STARTUP, 0, NULL, 0);
@@ -336,7 +346,7 @@ main_shutdown(void)
 }
 
 static pid_t
-start_child(int p, char *argv0, int fd, int debug, int verbose)
+start_child(enum uw_process p, char *argv0, int fd, int debug, int verbose)
 {
 	char	*argv[7];
 	int	 argc = 0;
@@ -725,6 +735,7 @@ open_ports(void)
 {
 	struct addrinfo	 hints, *res0;
 	int		 udp4sock = -1, udp6sock = -1, error, bsize = 65535;
+	int		 tcp4sock = -1, tcp6sock = -1;
 	int		 opt = 1;
 
 	memset(&hints, 0, sizeof(hints));
@@ -773,13 +784,72 @@ open_ports(void)
 	if (res0)
 		freeaddrinfo(res0);
 
-	if (udp4sock == -1 && udp6sock == -1)
-		fatal("could not bind to 127.0.0.1 or ::1 on port 53");
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+
+	error = getaddrinfo("127.0.0.1", "domain", &hints, &res0);
+	if (!error && res0) {
+		if ((tcp4sock = socket(res0->ai_family,
+		    res0->ai_socktype | SOCK_NONBLOCK,
+		    res0->ai_protocol)) != -1) {
+			if (setsockopt(tcp4sock, SOL_SOCKET, SO_REUSEADDR,
+			    &opt, sizeof(opt)) == -1)
+				log_warn("setting SO_REUSEADDR on socket");
+			if (setsockopt(tcp4sock, SOL_SOCKET, SO_SNDBUF, &bsize,
+			    sizeof(bsize)) == -1)
+				log_warn("setting SO_SNDBUF on socket");
+			if (bind(tcp4sock, res0->ai_addr, res0->ai_addrlen)
+			    == -1) {
+				close(tcp4sock);
+				tcp4sock = -1;
+			}
+			if (listen(tcp4sock, 5) == -1) {
+				close(tcp4sock);
+				tcp4sock = -1;
+			}
+		}
+	}
+	if (res0)
+		freeaddrinfo(res0);
+
+	hints.ai_family = AF_INET6;
+	error = getaddrinfo("::1", "domain", &hints, &res0);
+	if (!error && res0) {
+		if ((tcp6sock = socket(res0->ai_family,
+		    res0->ai_socktype | SOCK_NONBLOCK,
+		    res0->ai_protocol)) != -1) {
+			if (setsockopt(tcp6sock, SOL_SOCKET, SO_REUSEADDR,
+			    &opt, sizeof(opt)) == -1)
+				log_warn("setting SO_REUSEADDR on socket");
+			if (setsockopt(tcp6sock, SOL_SOCKET, SO_SNDBUF, &bsize,
+			    sizeof(bsize)) == -1)
+				log_warn("setting SO_SNDBUF on socket");
+			if (bind(tcp6sock, res0->ai_addr, res0->ai_addrlen)
+			    == -1) {
+				close(tcp6sock);
+				tcp6sock = -1;
+			}
+			if (listen(tcp6sock, 5) == -1) {
+				close(tcp6sock);
+				tcp6sock = -1;
+			}
+		}
+	}
+	if (res0)
+		freeaddrinfo(res0);
+
+	if ((udp4sock == -1 || tcp4sock == -1) && (udp6sock == -1 ||
+	    tcp6sock == -1))
+		fatalx("could not bind to 127.0.0.1 or ::1 on port 53");
 
 	if (udp4sock != -1)
 		main_imsg_compose_frontend_fd(IMSG_UDP4SOCK, 0, udp4sock);
 	if (udp6sock != -1)
 		main_imsg_compose_frontend_fd(IMSG_UDP6SOCK, 0, udp6sock);
+	if (tcp4sock != -1)
+		main_imsg_compose_frontend_fd(IMSG_TCP4SOCK, 0, tcp4sock);
+	if (tcp6sock != -1)
+		main_imsg_compose_frontend_fd(IMSG_TCP6SOCK, 0, tcp6sock);
 }
 
 void
@@ -895,4 +965,32 @@ imsg_receive_config(struct imsg *imsg, struct uw_conf **xconf)
 		    imsg->hdr.type);
 		break;
 	}
+}
+
+void
+open_trustanchor(void)
+{
+	static int			 retry;
+	static const struct timeval	 timeout = { WAIT_TA_FD_TIMEOUT, 0};
+	int				 fd;
+
+	fd = open(TRUST_ANCHOR_FILE, O_RDWR | O_CREAT, 0644);
+
+	if (fd != -1)
+		main_imsg_compose_frontend_fd(IMSG_TAFD, 0, fd);
+	else if (retry++ < WAIT_TA_FD_MAX_RETRY) {
+		/* /var is not mounted yet, try a bit later */
+		evtimer_add(&ta_timo_ev, &timeout);
+		return;
+	} else
+		log_warn("giving up on %s", TRUST_ANCHOR_FILE);
+
+	if (pledge("stdio rpath sendfd", NULL) == -1)
+		fatal("pledge");
+}
+
+void
+open_trustanchor_timeout(int fd, short events, void *arg)
+{
+	open_trustanchor();
 }

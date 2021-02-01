@@ -1,4 +1,4 @@
-/*	$OpenBSD: frontend.c,v 1.43 2020/12/29 19:51:15 benno Exp $	*/
+/*	$OpenBSD: frontend.c,v 1.49 2021/01/19 16:49:56 florian Exp $	*/
 
 /*
  * Copyright (c) 2017 Florian Obser <florian@openbsd.org>
@@ -101,8 +101,8 @@ const char	*flags_to_str(int);
 #endif	/* SMALL */
 
 LIST_HEAD(, iface)		 interfaces;
-struct imsgev			*iev_main;
-struct imsgev			*iev_engine;
+static struct imsgev		*iev_main;
+static struct imsgev		*iev_engine;
 struct event			 ev_route;
 struct msghdr			 sndmhdr;
 struct iovec			 sndiov[4];
@@ -143,10 +143,6 @@ frontend(int debug, int verbose)
 	log_init(debug, LOG_DAEMON);
 	log_setverbose(verbose);
 
-#ifndef	SMALL
-	control_state.fd = -1;
-#endif	/* SMALL */
-
 	if ((pw = getpwnam(SLAACD_USER)) == NULL)
 		fatal("getpwnam");
 
@@ -155,9 +151,8 @@ frontend(int debug, int verbose)
 	if (chdir("/") == -1)
 		fatal("chdir(\"/\")");
 
-	slaacd_process = PROC_FRONTEND;
-	setproctitle("%s", log_procnames[slaacd_process]);
-	log_procinit(log_procnames[slaacd_process]);
+	setproctitle("%s", "frontend");
+	log_procinit("frontend");
 
 	if ((ioctlsock = socket(AF_INET6, SOCK_DGRAM | SOCK_CLOEXEC, 0)) == -1)
 		fatal("socket");
@@ -358,17 +353,12 @@ frontend_dispatch_main(int fd, short event, void *bula)
 			break;
 #ifndef	SMALL
 		case IMSG_CONTROLFD:
-			if (control_state.fd != -1)
-				fatalx("%s: received unexpected controlsock",
-				    __func__);
 			if ((fd = imsg.fd) == -1)
 				fatalx("%s: expected to receive imsg "
 				    "control fd but didn't receive any",
 				    __func__);
-			control_state.fd = fd;
 			/* Listen on control socket. */
-			TAILQ_INIT(&ctl_conns);
-			control_listen();
+			control_listen(fd);
 			break;
 		case IMSG_CTL_END:
 			control_imsg_relay(&imsg);
@@ -878,14 +868,17 @@ handle_route_message(struct rt_msghdr *rtm, struct sockaddr **rti_info)
 		memcpy(&del_route.gw, rti_info[RTAX_GATEWAY],
 		    sizeof(del_route.gw));
 		in6 = &del_route.gw.sin6_addr;
+#ifdef __KAME__
 		/* XXX from route(8) p_sockaddr() */
-		if (IN6_IS_ADDR_LINKLOCAL(in6) ||
+		if ((IN6_IS_ADDR_LINKLOCAL(in6) ||
 		    IN6_IS_ADDR_MC_LINKLOCAL(in6) ||
-		    IN6_IS_ADDR_MC_INTFACELOCAL(in6)) {
+		    IN6_IS_ADDR_MC_INTFACELOCAL(in6)) &&
+		    del_route.gw.sin6_scope_id == 0) {
 			del_route.gw.sin6_scope_id =
 			    (u_int32_t)ntohs(*(u_short *) &in6->s6_addr[2]);
 			*(u_short *)&in6->s6_addr[2] = 0;
 		}
+#endif
 		frontend_imsg_compose_engine(IMSG_DEL_ROUTE,
 		    0, 0, &del_route, sizeof(del_route));
 		log_debug("RTM_DELETE: %s[%u]", if_name,
@@ -954,13 +947,17 @@ get_lladdr(char *if_name, struct ether_addr *mac, struct sockaddr_in6 *ll)
 			break;
 		case AF_INET6:
 			sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
-			if (IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr)) {
+#ifdef __KAME__
+			if (IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr) &&
+			    sin6->sin6_scope_id == 0) {
 				sin6->sin6_scope_id = ntohs(*(u_int16_t *)
 				    &sin6->sin6_addr.s6_addr[2]);
 				sin6->sin6_addr.s6_addr[2] =
 				    sin6->sin6_addr.s6_addr[3] = 0;
-				memcpy(ll, sin6, sizeof(*ll));
 			}
+#endif
+			if (IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr))
+				memcpy(ll, sin6, sizeof(*ll));
 			break;
 		default:
 			break;

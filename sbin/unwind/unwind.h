@@ -1,4 +1,4 @@
-/*	$OpenBSD: unwind.h,v 1.49 2020/12/11 16:36:03 florian Exp $	*/
+/*	$OpenBSD: unwind.h,v 1.53 2021/01/27 08:30:50 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -43,18 +43,6 @@
 #define	KSK2017		".	172800	IN	DNSKEY	257 3 8 AwEAAaz/tAm8yTn4Mfeh5eyI96WSVexTBAvkMgJzkKTOiW1vkIbzxeF3+/4RgWOq7HrxRixHlFlExOLAJr5emLvN7SWXgnLh4+B5xQlNVz8Og8kvArMtNROxVQuCaSnIDdD5LKyWbRd2n9WGe2R8PzgCmr3EgVLrjyBxWezF0jLHwVN8efS3rCj/EWgvIWgb9tarpVUDK/b58Da+sqqls3eNbuv7pr+eoZG+SrDK6nWeL3c6H5Apxz7LjVc1uTIdsIXxuOLYA4/ilBmSVIzuDWfdRUfhHdY6+cn8HFRm+2hM8AnXGXws9555KrUB5qihylGa8subX2Nn6UwNR1AkUTV74bU="
 
 #define	IMSG_DATA_SIZE(imsg)	((imsg).hdr.len - IMSG_HEADER_SIZE)
-
-enum {
-	PROC_MAIN,
-	PROC_RESOLVER,
-	PROC_FRONTEND,
-} uw_process;
-
-static const char * const log_procnames[] = {
-	"main",
-	"resolver",
-	"frontend",
-};
 
 enum uw_resolver_type {
 	UW_RES_RECURSOR,
@@ -109,6 +97,8 @@ enum imsg_type {
 	IMSG_RECONF_END,
 	IMSG_UDP4SOCK,
 	IMSG_UDP6SOCK,
+	IMSG_TCP4SOCK,
+	IMSG_TCP6SOCK,
 	IMSG_ROUTESOCK,
 	IMSG_CONTROLFD,
 	IMSG_STARTUP,
@@ -129,6 +119,10 @@ enum imsg_type {
 	IMSG_NETWORK_CHANGED,
 	IMSG_BLFD,
 	IMSG_REPLACE_DNS,
+	IMSG_NEW_DNS64_PREFIXES_START,
+	IMSG_NEW_DNS64_PREFIX,
+	IMSG_NEW_DNS64_PREFIXES_DONE,
+	IMSG_CHANGE_AFS,
 };
 
 struct uw_forwarder {

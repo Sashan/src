@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.1 2021/01/11 12:02:53 bluhm Exp $
+#	$OpenBSD: Makefile,v 1.7 2021/01/20 13:50:09 bluhm Exp $
 
 # Copyright (c) 2021 Alexander Bluhm <bluhm@openbsd.org>
 #
@@ -15,7 +15,7 @@
 # OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 # Basic testing of the pflog(4) interface.  Create special routing
-# doamin, load rules into pf(4) regress anchor, tcpdump on pflog, 
+# domain, load rules into pf(4) regress anchor, tcpdump on pflog,
 # send packets over lo(4), grep for expected result in tcpdump output.
 
 # This test uses routing domain 11 and pflog interface number 11, 12, 13.
@@ -25,7 +25,7 @@ N2 =		12
 N3 =		13
 N =		${N1}
 NUMS =		${N1} ${N2} ${N3}
-IPS =		1 2 3 4 5 6
+IPS =		1 2 3 4 5 6 11 12 14
 
 UID !!=		id -u
 
@@ -57,6 +57,13 @@ regress:
 	@echo SKIPPED
 .endif
 
+SYSCTL_FORWARDING !=	sysctl net.inet.ip.forwarding
+SYSCTL_FORWARDING6 !=	sysctl net.inet6.ip6.forwarding
+.if ${SYSCTL_FORWARDING:C/.*=//} != 1 || ${SYSCTL_FORWARDING6:C/.*=//} != 1
+# Do not skip, but run tests.  Although they fail, their packets are logged.
+REGRESS_EXPECTED_FAILURES =	run-ping-14 run-ping6-14
+.endif
+
 .endif
 
 .PHONY: busy-rdomains ifconfig unconfig pfctl
@@ -75,16 +82,21 @@ ifconfig: unconfig
 .endfor
 	${SUDO} ifconfig lo$N rdomain $N
 	${SUDO} ifconfig lo$N inet 127.0.0.1/8
-.for i in ${IPS:N1}
-	${SUDO} ifconfig lo$N inet 127.0.0.$i/32 alias
+	${SUDO} ifconfig lo$N inet6 ::1/128
+.for i in ${IPS} 21 22 23 24
+	${SUDO} ifconfig lo$N inet 169.254.0.$i/32 alias
+	${SUDO} ifconfig lo$N inet6 fc00::$i/128
 .endfor
 
 REGRESS_CLEANUP +=	unconfig
 unconfig: stamp-stop
 	# Destroy interfaces.
-.for i in ${IPS}
-	-${SUDO} ifconfig lo$N inet 127.0.0.$i delete
+.for i in ${IPS} 21 22 23 24
+	-${SUDO} ifconfig lo$N inet 169.254.0.$i delete
+	-${SUDO} ifconfig lo$N inet6 fc00::$i delete
 .endfor
+	-${SUDO} ifconfig lo$N inet 127.0.0.1 delete
+	-${SUDO} ifconfig lo$N inet6 ::1 delete
 .for n in ${NUMS}
 	-${SUDO} ifconfig pflog$n destroy
 .endfor
@@ -134,16 +146,35 @@ stamp-stop:
 .for i in ${IPS}
 REGRESS_TARGETS +=	run-ping-$i
 run-ping-$i: stamp-bpf
-	ping -n -w 1 -c 1 -V $N 127.0.0.$i
+	ping -n -w 1 -c 1 -V $N 169.254.0.$i
+
+REGRESS_TARGETS +=	run-ping6-$i
+run-ping6-$i: stamp-bpf
+	ping6 -n -w 1 -c 1 -V $N fc00::$i
 
 REGRESS_TARGETS +=	run-udp-$i
 run-udp-$i: stamp-bpf
-	echo foo | nc -u -V $N 127.0.0.$i discard
+	# ignore errors, just send packet fast
+	echo foo | nc -u -w 1 -V $N 169.254.0.$i discard &
+
+REGRESS_TARGETS +=	run-udp6-$i
+run-udp6-$i: stamp-bpf
+	# ignore errors, just send packet fast
+	echo foo | nc -u -w 1 -V $N fc00::$i discard &
 .endfor
+
+REGRESS_TARGETS +=	run-ping6-0
+run-ping6-0: stamp-bpf
+	ping6 -n -w 1 -c 1 -V $N ::1
+
+REGRESS_TARGETS +=	run-udp6-0
+run-udp6-0: stamp-bpf
+	echo foo | nc -u -w 1 -V $N ::1 discard
 
 .for n in ${NUMS}
 REGRESS_TARGETS +=	run-bpf-$n
 run-bpf-$n: stamp-stop
+	# show full logs
 	cat pflog$n.tcpdump
 .endfor
 
@@ -156,48 +187,171 @@ REGRESS_TARGETS +=	run-bpf-everything
 run-bpf-everything: stamp-stop
 	# rule with pflog${N2} matches on every packet
 .for i in ${IPS}
-	grep 'regress\.1/.* > 127.0.0.$i:' pflog${N2}.tcpdump
+	grep 'regress\.1/.* > 169.254.0.$i:' pflog${N2}.tcpdump
+.endfor
+
+REGRESS_TARGETS +=	run-bpf-everything6
+run-bpf-everything6: stamp-stop
+	# rule with pflog${N2} matches on every packet
+.for i in ${IPS}
+	grep 'regress\.1/.* > fc00::$i:' pflog${N2}.tcpdump
 .endfor
 
 REGRESS_TARGETS +=	run-bpf-all
 run-bpf-all: stamp-stop
 	# reply without keep state
-	grep 'regress\.3/.* > 127.0.0.1: icmp: echo request' pflog${N1}.tcpdump
-	grep 'regress\.3/.* > 127.0.0.1: icmp: echo reply' pflog${N1}.tcpdump
+	grep 'regress\.3/.* 169.254.0.1 > 169.254.0.1:\
+	    icmp: echo request' pflog${N1}.tcpdump
+	grep 'regress\.3/.* 169.254.0.1 > 169.254.0.1:\
+	    icmp: echo reply' pflog${N1}.tcpdump
 	# no reply with keep state and without all
-	grep 'regress\.4/.* > 127.0.0.2: icmp: echo request' pflog${N1}.tcpdump
-	! grep 'regress\.4/.* > 127.0.0.2: icmp: echo reply' pflog${N1}.tcpdump
+	grep 'regress\.4/.* 169.254.0.2 > 169.254.0.2:\
+	    icmp: echo request' pflog${N1}.tcpdump
+	! grep 'regress\.4/.* 169.254.0.2 >169.254.0.2:\
+	    icmp: echo reply' pflog${N1}.tcpdump
 	# reply with keep state and with all
-	grep 'regress\.5/.* > 127.0.0.3: icmp: echo request' pflog${N1}.tcpdump
+	grep 'regress\.5/.* 169.254.0.3 > 169.254.0.3:\
+	    icmp: echo request' pflog${N1}.tcpdump
 	# XXX anchor name missing
-	grep '/.* > 127.0.0.3: icmp: echo reply' pflog${N1}.tcpdump
+	grep '/.* 169.254.0.3 > 169.254.0.3:\
+	    icmp: echo reply' pflog${N1}.tcpdump
+
+REGRESS_TARGETS +=	run-bpf-all6
+run-bpf-all6: stamp-stop
+	# reply without keep state
+	grep 'regress\.11/.* fc00::1 > fc00::1:\
+	    icmp6: echo request' pflog${N1}.tcpdump
+	grep 'regress\.11/.* fc00::1 > fc00::1:\
+	    icmp6: echo reply' pflog${N1}.tcpdump
+	# no reply with keep state and without all
+	grep 'regress\.12/.* fc00::2 > fc00::2:\
+	    icmp6: echo request' pflog${N1}.tcpdump
+	! grep 'regress\.12/.* fc00::2 > fc00::2:\
+	    icmp6: echo reply' pflog${N1}.tcpdump
+	# reply with keep state and with all
+	grep 'regress\.13/.* fc00::3 > fc00::3:\
+	    icmp6: echo request' pflog${N1}.tcpdump
+	# XXX anchor name missing
+	grep '/.* fc00::3 > fc00::3:\
+	    icmp6: echo reply' pflog${N1}.tcpdump
 
 REGRESS_TARGETS +=	run-bpf-user
 run-bpf-user: stamp-stop
 	# out rule creates log entry with uid
 	grep 'regress\.6/.* pass out on lo$N: \[uid ${UID}, pid [0-9]*\]\
-	    127.* > 127.0.0.4.9:.* udp' pflog${N1}.tcpdump
+	    169.254.0.4\.[0-9]* > 169.254.0.4\.9:\
+	    .* udp [0-9]' pflog${N1}.tcpdump
 	# in rule has no uid at log entry
 	grep 'regress\.6/.* pass in on lo$N:\
-	    127.* > 127.0.0.4.9:.* udp' pflog${N1}.tcpdump
+	    169.254.0.4\.[0-9]* > 169.254.0.4\.9:\
+	    .* udp [0-9]' pflog${N1}.tcpdump
 	# icmp has no uid at log entry
 	grep 'regress\.6/.* pass out on lo$N:\
-	    127.* > 127.0.0.4: icmp: echo request' pflog${N1}.tcpdump
-	# XXX rule without user sometimes has uid in log entry
-	#grep 'regress\.3/.* pass out on lo$N:\
-	    127.* > 127.0.0.1.9:.* udp' pflog${N1}.tcpdump
-	@echo DISABLED
+	    169.254.0.4 > 169.254.0\.4:\
+	    icmp: echo request' pflog${N1}.tcpdump
+	# rule without user has no uid in log entry
+	grep 'regress\.3/.* pass out on lo$N:\
+	    169.254.0.1\.[0-9]* > 169.254.0.1\.9:\
+	    .* udp [0-9]' pflog${N1}.tcpdump
 
-run-bpf-matches:
+REGRESS_TARGETS +=	run-bpf-user6
+run-bpf-user6: stamp-stop
+	# out rule creates log entry with uid
+	grep 'regress\.14/.* pass out on lo$N: \[uid ${UID}, pid [0-9]*\]\
+	    fc00::4\.[0-9]* > fc00::4\.9:.* udp [0-9]' pflog${N1}.tcpdump
+	# in rule has no uid at log entry
+	grep 'regress\.14/.* pass in on lo$N:\
+	    fc00::4\.[0-9]* > fc00::4\.9:.* udp [0-9]' pflog${N1}.tcpdump
+	# icmp has no uid at log entry
+	grep 'regress\.14/.* pass out on lo$N:\
+	    fc00::4 > fc00::4: icmp6: echo request' pflog${N1}.tcpdump
+	# rule without user has no uid in log entry
+	grep 'regress\.11/.* pass out on lo$N:\
+	    fc00::1\.[0-9]* > fc00::1\.9:.* udp [0-9]' pflog${N1}.tcpdump
+
+run-bpf-matches run-bpf-matches6:
 	# XXX The log matches keyword seems to be totally broken.
 	# pf_log_matches() is never called.  Investigate later.
 	@echo DISABLED
 
 REGRESS_TARGETS +=	run-bpf-matches
 run-bpf-matches: stamp-stop
-	grep 'regress\.9/.* > 127.0.0.6: icmp: echo request' pflog${N1}.tcpdump
+	grep 'regress\.9/.* .*: 169.254.0.6 > 169.254.0.6:\
+	    icmp: echo request' pflog${N1}.tcpdump
 	! grep 'regress\.8/.* icmp: echo request' pflog${N1}.tcpdump
 	! grep 'regress\.7/.* icmp: echo request' pflog${N1}.tcpdump
+
+REGRESS_TARGETS +=	run-bpf-rdr
+run-bpf-rdr: stamp-stop
+	# loopback input logs redirected packet
+	grep 'regress\.2/.* pass in .*:.* 169.254.0.11 > 169.254.0.21:\
+	    icmp: echo request' pflog${N1}.tcpdump
+	# loopback output redirects and logs original packet
+	grep 'regress\.18/.* pass out .*:.* 169.254.0.11 > 169.254.0.11:\
+	    icmp: echo request' pflog${N1}.tcpdump
+
+REGRESS_TARGETS +=	run-bpf-rdr6
+run-bpf-rdr6: stamp-stop
+	# loopback input logs redirected packet
+	grep 'regress\.10/.* pass in .*:.* fc00::11 > fc00::21:\
+	    icmp6: echo request' pflog${N1}.tcpdump
+	# loopback output redirects and logs original packet
+	grep 'regress\.20/.* pass out .*:.* fc00::11 > fc00::11:\
+	    icmp6: echo request' pflog${N1}.tcpdump
+
+REGRESS_TARGETS +=	run-bpf-nat
+run-bpf-nat: stamp-stop
+	# loopback input logs redirected packet
+	grep 'regress\.2/.* pass in .*:.* 169.254.0.22 > 169.254.0.12:\
+	    icmp: echo request' pflog${N1}.tcpdump
+	# loopback output redirects and logs original packet
+	grep 'regress\.19/.* pass out .*:.* 169.254.0.12 > 169.254.0.12:\
+	    icmp: echo request' pflog${N1}.tcpdump
+
+REGRESS_TARGETS +=	run-bpf-nat6
+run-bpf-nat6: stamp-stop
+	# loopback input logs redirected packet
+	grep 'regress\.10/.* pass in .*:.* fc00::22 > fc00::12:\
+	    icmp6: echo request' pflog${N1}.tcpdump
+	# loopback output redirects and logs original packet
+	grep 'regress\.21/.* pass out .*:.* fc00::12 > fc00::12:\
+	    icmp6: echo request' pflog${N1}.tcpdump
+
+REGRESS_TARGETS +=	run-bpf-af
+run-bpf-af: stamp-stop
+	# pf in rule logs original IPv4 packet
+	grep 'regress\.22/.* pass in .*:.* 169.254.0.14 > 169.254.0.14:\
+	     icmp: echo request' pflog${N1}.tcpdump
+
+REGRESS_TARGETS +=	run-bpf-af6
+run-bpf-af6: stamp-stop
+	# pf in rule logs original IPv6 packet
+	grep 'regress\.23/.* pass in .*:.* fc00::14 > fc00::14:\
+	     icmp6: echo request' pflog${N1}.tcpdump
+
+REGRESS_TARGETS +=	run-bpf-rewrite
+run-bpf-rewrite: stamp-stop
+	# rdr-to address has been rewritten
+	grep '\[rewritten: src 169.254.0.11:[0-9]*, dst 169.254.0.21:[0-9]*\]\
+	    169.254.0.11 > 169.254.0.11' pflog${N1}.tcpdump
+	# nat-to address has been rewritten
+	grep '\[rewritten: src 169.254.0.22:[0-9]*, dst 169.254.0.12:[0-9]*\]\
+	    169.254.0.12 > 169.254.0.12' pflog${N1}.tcpdump
+	# af-to address has been rewritten
+	grep '\[rewritten: src fc00::23:[0-9]*, dst fc00::24:[0-9]*\]\
+	    169.254.0.14 > 169.254.0.14' pflog${N1}.tcpdump
+
+REGRESS_TARGETS +=	run-bpf-rewrite6
+run-bpf-rewrite6: stamp-stop
+	# rdr-to address has been rewritten
+	grep '\[rewritten: src fc00::11:[0-9]*, dst fc00::21:[0-9]*\]\
+	    fc00::11 > fc00::11' pflog${N1}.tcpdump
+	# nat-to address has been rewritten
+	grep '\[rewritten: src fc00::22:[0-9]*, dst fc00::12:[0-9]*\]\
+	    fc00::12 > fc00::12' pflog${N1}.tcpdump
+	# af-to address has been rewritten
+	grep '\[rewritten: src 169.254.0.23:[0-9]*, dst 169.254.0.24:[0-9]*\]\
+	    fc00::14 > fc00::14' pflog${N1}.tcpdump
 
 CLEANFILES +=	addr.py *.pyc *.tcpdump *.log stamp-*
 

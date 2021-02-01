@@ -1,4 +1,4 @@
-.\" $OpenBSD: tmux.1,v 1.810 2021/01/04 08:43:16 nicm Exp $
+.\" $OpenBSD: tmux.1,v 1.815 2021/02/01 08:01:14 nicm Exp $
 .\"
 .\" Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
 .\"
@@ -14,7 +14,7 @@
 .\" IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING
 .\" OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: January 4 2021 $
+.Dd $Mdocdate: February 1 2021 $
 .Dt TMUX 1
 .Os
 .Sh NAME
@@ -191,6 +191,11 @@ directories are missing).
 Behave as a login shell.
 This flag currently has no effect and is for compatibility with other shells
 when using tmux as a login shell.
+.It Fl N
+Do not start the server even if the command would normally do so (for example
+.Ic new-session
+or
+.Ic start-server ) .
 .It Fl S Ar socket-path
 Specify a full alternative path to the server socket.
 If
@@ -1652,6 +1657,8 @@ The following commands are supported in copy mode:
 .It Li "previous-paragraph" Ta "{" Ta "M-{"
 .It Li "previous-space" Ta "B" Ta ""
 .It Li "previous-word" Ta "b" Ta "M-b"
+.It Li "rectangle-on" Ta "" Ta ""
+.It Li "rectangle-off" Ta "" Ta ""
 .It Li "rectangle-toggle" Ta "v" Ta "R"
 .It Li "refresh-from-pane" Ta "r" Ta "r"
 .It Li "scroll-down" Ta "C-e" Ta "C-Down"
@@ -3568,12 +3575,16 @@ The default is 80x24.
 If enabled and the session is no longer attached to any clients, it is
 destroyed.
 .It Xo Ic detach-on-destroy
-.Op Ic on | off
+.Op Ic off | on | no-detached
 .Xc
 If on (the default), the client is detached when the session it is attached to
 is destroyed.
 If off, the client is switched to the most recently active of the remaining
 sessions.
+If
+.Ic no-detached ,
+the client is detached only if there are no detached sessions; if detached
+sessions exist, the client is switched to the most recently active.
 .It Ic display-panes-active-colour Ar colour
 Set the colour used by the
 .Ic display-panes
@@ -4646,8 +4657,8 @@ of the variable respectively.
 .Ql q:\&
 will escape
 .Xr sh 1
-special characters or with an
-.Ql e
+special characters or with a
+.Ql h
 suffix, escape hash characters (so
 .Ql #
 becomes
@@ -4816,7 +4827,6 @@ The following variables are available, where appropriate:
 .It Li "pane_pipe" Ta "" Ta "1 if pane is being piped"
 .It Li "pane_right" Ta "" Ta "Right of pane"
 .It Li "pane_search_string" Ta "" Ta "Last search string in copy mode"
-.It Li "pane_skipped" Ta "" Ta "Bytes skipped as not visible in pane"
 .It Li "pane_start_command" Ta "" Ta "Command pane started with"
 .It Li "pane_synchronized" Ta "" Ta "1 if pane is synchronized"
 .It Li "pane_tabs" Ta "" Ta "Pane tab positions"
@@ -4824,7 +4834,6 @@ The following variables are available, where appropriate:
 .It Li "pane_top" Ta "" Ta "Top of pane"
 .It Li "pane_tty" Ta "" Ta "Pseudo terminal of pane"
 .It Li "pane_width" Ta "" Ta "Width of pane"
-.It Li "pane_written" Ta "" Ta "Bytes written by pane (aside from redrawing)"
 .It Li "pid" Ta "" Ta "Server PID"
 .It Li "popup_key" Ta "" Ta "Key pressed in popup"
 .It Li "popup_mouse_x" Ta "" Ta "Mouse X position in popup"
@@ -4877,7 +4886,8 @@ The following variables are available, where appropriate:
 .It Li "window_cell_height" Ta "" Ta "Height of each cell in pixels"
 .It Li "window_cell_width" Ta "" Ta "Width of each cell in pixels"
 .It Li "window_end_flag" Ta "" Ta "1 if window has the highest index"
-.It Li "window_flags" Ta "#F" Ta "Window flags"
+.It Li "window_flags" Ta "#F" Ta "Window flags with # escaped as ##"
+.It Li "window_raw_flags" Ta "" Ta "Window flags with nothing escaped"
 .It Li "window_format" Ta "" Ta "1 if format is for a window"
 .It Li "window_height" Ta "" Ta "Height of window"
 .It Li "window_id" Ta "" Ta "Unique window ID"

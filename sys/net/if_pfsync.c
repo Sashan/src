@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_pfsync.c,v 1.280 2021/01/04 12:48:27 bluhm Exp $	*/
+/*	$OpenBSD: if_pfsync.c,v 1.282 2021/02/01 00:31:05 dlg Exp $	*/
 
 /*
  * Copyright (c) 2002 Michael Shalayeff
@@ -652,6 +652,7 @@ pfsync_state_import(struct pfsync_state *sp, int flags)
 
 	/* copy to state */
 	st->rt_addr = sp->rt_addr;
+	st->rt = sp->rt;
 	st->creation = getuptime() - ntohl(sp->creation);
 	st->expire = getuptime();
 	if (ntohl(sp->expire)) {
@@ -682,7 +683,6 @@ pfsync_state_import(struct pfsync_state *sp, int flags)
 
 	st->rule.ptr = r;
 	st->anchor.ptr = NULL;
-	st->rt_kif = NULL;
 
 	st->pfsync_time = getuptime();
 	st->sync_state = PFSYNC_S_NONE;
@@ -1464,7 +1464,7 @@ pfsyncioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			break;
 		}
 
-		if ((sifp = ifunit(pfsyncr.pfsyncr_syncdev)) == NULL)
+		if ((sifp = if_unit(pfsyncr.pfsyncr_syncdev)) == NULL)
 			return (EINVAL);
 
 		ifp0 = if_get(sc->sc_sync_ifidx);
@@ -1491,6 +1491,7 @@ pfsyncioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 
 			if (!(sifp->if_flags & IFF_MULTICAST)) {
 				sc->sc_sync_ifidx = 0;
+				if_put(sifp);
 				return (EADDRNOTAVAIL);
 			}
 
@@ -1499,6 +1500,7 @@ pfsyncioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			if ((imo->imo_membership[0] =
 			    in_addmulti(&addr, sifp)) == NULL) {
 				sc->sc_sync_ifidx = 0;
+				if_put(sifp);
 				return (ENOBUFS);
 			}
 			imo->imo_num_memberships++;
@@ -1521,6 +1523,7 @@ pfsyncioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 
 		if_linkstatehook_add(sifp, &sc->sc_ltask);
 		if_detachhook_add(sifp, &sc->sc_dtask);
+		if_put(sifp);
 
 		pfsync_request_full_update(sc);
 

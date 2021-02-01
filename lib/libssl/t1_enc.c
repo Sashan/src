@@ -1,4 +1,4 @@
-/* $OpenBSD: t1_enc.c,v 1.128 2021/01/07 15:32:59 jsing Exp $ */
+/* $OpenBSD: t1_enc.c,v 1.131 2021/01/28 17:00:39 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -311,90 +311,6 @@ tls1_generate_key_block(SSL *s, uint8_t *key_block, size_t key_block_len)
 }
 
 /*
- * tls1_aead_ctx_init allocates aead_ctx, if needed. It returns 1 on success
- * and 0 on failure.
- */
-static int
-tls1_aead_ctx_init(SSL_AEAD_CTX **aead_ctx)
-{
-	if (*aead_ctx != NULL) {
-		EVP_AEAD_CTX_cleanup(&(*aead_ctx)->ctx);
-		return (1);
-	}
-
-	*aead_ctx = malloc(sizeof(SSL_AEAD_CTX));
-	if (*aead_ctx == NULL) {
-		SSLerrorx(ERR_R_MALLOC_FAILURE);
-		return (0);
-	}
-
-	return (1);
-}
-
-static int
-tls1_change_cipher_state_aead(SSL *s, char is_read, const unsigned char *key,
-    unsigned int key_len, const unsigned char *iv, unsigned int iv_len)
-{
-	const EVP_AEAD *aead = S3I(s)->tmp.new_aead;
-	SSL_AEAD_CTX *aead_ctx;
-
-	/* XXX - Need to avoid clearing write state for DTLS. */
-	if (SSL_is_dtls(s))
-		return 0;
-
-	if (is_read) {
-		ssl_clear_cipher_read_state(s);
-		if (!tls1_aead_ctx_init(&s->internal->aead_read_ctx))
-			return 0;
-		aead_ctx = s->internal->aead_read_ctx;
-
-		if (!tls12_record_layer_set_read_aead(s->internal->rl, aead_ctx))
-			return 0;
-	} else {
-		ssl_clear_cipher_write_state(s);
-		if (!tls1_aead_ctx_init(&s->internal->aead_write_ctx))
-			return 0;
-		aead_ctx = s->internal->aead_write_ctx;
-
-		if (!tls12_record_layer_set_write_aead(s->internal->rl, aead_ctx))
-			return 0;
-	}
-
-	if (!EVP_AEAD_CTX_init(&aead_ctx->ctx, aead, key, key_len,
-	    EVP_AEAD_DEFAULT_TAG_LENGTH, NULL))
-		return (0);
-	if (iv_len > sizeof(aead_ctx->fixed_nonce)) {
-		SSLerrorx(ERR_R_INTERNAL_ERROR);
-		return (0);
-	}
-	memcpy(aead_ctx->fixed_nonce, iv, iv_len);
-	aead_ctx->fixed_nonce_len = iv_len;
-	aead_ctx->variable_nonce_len = 8;  /* always the case, currently. */
-	aead_ctx->variable_nonce_in_record =
-	    (S3I(s)->hs.new_cipher->algorithm2 &
-	    SSL_CIPHER_ALGORITHM2_VARIABLE_NONCE_IN_RECORD) != 0;
-	aead_ctx->xor_fixed_nonce =
-	    S3I(s)->hs.new_cipher->algorithm_enc == SSL_CHACHA20POLY1305;
-	aead_ctx->tag_len = EVP_AEAD_max_overhead(aead);
-
-	if (aead_ctx->xor_fixed_nonce) {
-		if (aead_ctx->fixed_nonce_len != EVP_AEAD_nonce_length(aead) ||
-		    aead_ctx->variable_nonce_len > EVP_AEAD_nonce_length(aead)) {
-			SSLerrorx(ERR_R_INTERNAL_ERROR);
-			return (0);
-		}
-	} else {
-		if (aead_ctx->variable_nonce_len + aead_ctx->fixed_nonce_len !=
-		    EVP_AEAD_nonce_length(aead)) {
-			SSLerrorx(ERR_R_INTERNAL_ERROR);
-			return (0);
-		}
-	}
-
-	return (1);
-}
-
-/*
  * tls1_change_cipher_state_cipher performs the work needed to switch cipher
  * states when using EVP_CIPHER. The argument is_read is true iff this function
  * is being called due to reading, as opposed to writing, a ChangeCipherSpec
@@ -494,7 +410,7 @@ tls1_change_cipher_state(SSL *s, int which)
 	const unsigned char *client_write_iv, *server_write_iv;
 	const unsigned char *mac_secret, *key, *iv;
 	int mac_secret_size, key_len, iv_len;
-	unsigned char *key_block, *seq;
+	unsigned char *key_block;
 	const EVP_CIPHER *cipher;
 	const EVP_AEAD *aead;
 	char is_read, use_client_keys;
@@ -516,15 +432,6 @@ tls1_change_cipher_state(SSL *s, int which)
 	 */
 	use_client_keys = ((which == SSL3_CHANGE_CIPHER_CLIENT_WRITE) ||
 	    (which == SSL3_CHANGE_CIPHER_SERVER_READ));
-
-	/*
-	 * Reset sequence number to zero - for DTLS this is handled in
-	 * dtls1_reset_seq_numbers().
-	 */
-	if (!SSL_is_dtls(s)) {
-		seq = is_read ? S3I(s)->read_sequence : S3I(s)->write_sequence;
-		memset(seq, 0, SSL3_SEQUENCE_SIZE);
-	}
 
 	if (aead != NULL) {
 		key_len = EVP_AEAD_key_length(aead);
@@ -562,18 +469,26 @@ tls1_change_cipher_state(SSL *s, int which)
 
 	if (key_block - S3I(s)->hs.key_block != S3I(s)->hs.key_block_len) {
 		SSLerror(s, ERR_R_INTERNAL_ERROR);
-		goto err2;
+		goto err;
 	}
 
-	if (aead != NULL) {
-		return tls1_change_cipher_state_aead(s, is_read, key, key_len,
-		    iv, iv_len);
+	if (is_read) {
+		if (!tls12_record_layer_change_read_cipher_state(s->internal->rl,
+		    mac_secret, mac_secret_size, key, key_len, iv, iv_len))
+			goto err;
+	} else {
+		if (!tls12_record_layer_change_write_cipher_state(s->internal->rl,
+		    mac_secret, mac_secret_size, key, key_len, iv, iv_len))
+			goto err;
 	}
+
+	if (aead != NULL)
+		return 1;
 
 	return tls1_change_cipher_state_cipher(s, is_read,
 	    mac_secret, mac_secret_size, key, key_len, iv, iv_len);
 
-err2:
+ err:
 	return (0);
 }
 
@@ -615,6 +530,8 @@ tls1_setup_key_block(SSL *s)
 	S3I(s)->tmp.new_hash = mac;
 	S3I(s)->tmp.new_mac_pkey_type = mac_type;
 	S3I(s)->tmp.new_mac_secret_size = mac_secret_size;
+
+	tls12_record_layer_set_aead(s->internal->rl, aead);
 
 	tls1_cleanup_key_block(s);
 

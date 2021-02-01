@@ -1,4 +1,4 @@
-/*	$OpenBSD: show.c,v 1.116 2020/10/29 21:15:26 denis Exp $	*/
+/*	$OpenBSD: show.c,v 1.119 2021/01/30 22:00:06 danj Exp $	*/
 /*	$NetBSD: show.c,v 1.1 1996/11/15 18:01:41 gwr Exp $	*/
 
 /*
@@ -176,7 +176,6 @@ printsource(int af, u_int tableid)
 		}
 	}
 	free(buf);
-	printf("\n");
 
 	exit(0);
 }
@@ -386,20 +385,23 @@ p_sockaddr(struct sockaddr *sa, struct sockaddr *mask, int flags, int width)
 	case AF_INET6:
 	    {
 		struct sockaddr_in6 *sa6 = (struct sockaddr_in6 *)sa;
+#ifdef __KAME__
 		struct in6_addr *in6 = &sa6->sin6_addr;
 
 		/*
 		 * XXX: This is a special workaround for KAME kernels.
 		 * sin6_scope_id field of SA should be set in the future.
 		 */
-		if (IN6_IS_ADDR_LINKLOCAL(in6) ||
+		if ((IN6_IS_ADDR_LINKLOCAL(in6) ||
 		    IN6_IS_ADDR_MC_LINKLOCAL(in6) ||
-		    IN6_IS_ADDR_MC_INTFACELOCAL(in6)) {
+		    IN6_IS_ADDR_MC_INTFACELOCAL(in6)) &&
+		    sa6->sin6_scope_id == 0) {
 			/* XXX: override is ok? */
 			sa6->sin6_scope_id = (u_int32_t)ntohs(*(u_short *)
 			    &in6->s6_addr[2]);
 			*(u_short *)&in6->s6_addr[2] = 0;
 		}
+#endif
 		if (flags & RTF_HOST)
 			cp = routename((struct sockaddr *)sa6);
 		else
@@ -492,6 +494,7 @@ routename(struct sockaddr *sa)
 		memcpy(&sin6, sa, sa->sa_len);
 		sin6.sin6_len = sizeof(struct sockaddr_in6);
 		sin6.sin6_family = AF_INET6;
+#ifdef __KAME__
 		if (sa->sa_len == sizeof(struct sockaddr_in6) &&
 		    (IN6_IS_ADDR_LINKLOCAL(&sin6.sin6_addr) ||
 		     IN6_IS_ADDR_MC_LINKLOCAL(&sin6.sin6_addr) ||
@@ -502,6 +505,7 @@ routename(struct sockaddr *sa)
 			sin6.sin6_addr.s6_addr[2] = 0;
 			sin6.sin6_addr.s6_addr[3] = 0;
 		}
+#endif
 		return (routename6(&sin6));
 	    }
 

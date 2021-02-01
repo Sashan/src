@@ -1,4 +1,4 @@
-/* $OpenBSD: doas.c,v 1.84 2020/10/09 07:43:38 kn Exp $ */
+/* $OpenBSD: doas.c,v 1.89 2021/01/27 17:02:50 millert Exp $ */
 /*
  * Copyright (c) 2015 Ted Unangst <tedu@openbsd.org>
  *
@@ -136,7 +136,7 @@ static int
 permit(uid_t uid, gid_t *groups, int ngroups, const struct rule **lastr,
     uid_t target, const char *cmd, const char **cmdargs)
 {
-	int i;
+	size_t i;
 
 	*lastr = NULL;
 	for (i = 0; i < nrules; i++) {
@@ -183,6 +183,8 @@ checkconfig(const char *confpath, int argc, char **argv,
 	const struct rule *rule;
 
 	setresuid(uid, uid, uid);
+	if (pledge("stdio rpath getpw", NULL) == -1)
+		err(1, "pledge");
 	parseconfig(confpath, 0);
 	if (!argc)
 		exit(0);
@@ -213,7 +215,7 @@ authuser(char *myname, char *login_style, int persist)
 
 	if (!(as = auth_userchallenge(myname, login_style, "auth-doas",
 	    &challenge)))
-		errx(1, "Authorization failed");
+		errx(1, "Authentication failed");
 	if (!challenge) {
 		char host[HOST_NAME_MAX + 1];
 		if (gethostname(host, sizeof(host)))
@@ -233,7 +235,7 @@ authuser(char *myname, char *login_style, int persist)
 		explicit_bzero(rbuf, sizeof(rbuf));
 		syslog(LOG_AUTHPRIV | LOG_NOTICE,
 		    "failed auth for %s", myname);
-		errx(1, "Authorization failed");
+		errx(1, "Authentication failed");
 	}
 	explicit_bzero(rbuf, sizeof(rbuf));
 good:
@@ -373,6 +375,8 @@ main(int argc, char **argv)
 	}
 
 	if (confpath) {
+		if (pledge("stdio rpath getpw id", NULL) == -1)
+			err(1, "pledge");
 		checkconfig(confpath, argc, argv, uid, groups, ngroups,
 		    target);
 		exit(1);	/* fail safe */
@@ -402,7 +406,7 @@ main(int argc, char **argv)
 
 	if (!(rule->options & NOPASS)) {
 		if (nflag)
-			errx(1, "Authorization required");
+			errx(1, "Authentication required");
 
 		authuser(mypw->pw_name, login_style, rule->options & PERSIST);
 	}

@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.44 2020/12/04 21:18:09 kettenis Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.46 2021/01/29 08:48:19 jsg Exp $	*/
 
 /*
  * Copyright (c) 2016 Dale Rahn <drahn@dalerahn.com>
@@ -47,6 +47,7 @@
 #define CPU_IMPL_ARM		0x41
 #define CPU_IMPL_CAVIUM		0x43
 #define CPU_IMPL_AMCC		0x50
+#define CPU_IMPL_APPLE		0x61
 
 #define CPU_PART_CORTEX_A34	0xd02
 #define CPU_PART_CORTEX_A53	0xd03
@@ -68,6 +69,7 @@
 #define CPU_PART_CORTEX_X1	0xd44
 #define CPU_PART_NEOVERSE_N2	0xd49
 #define CPU_PART_NEOVERSE_E1	0xd4a
+#define CPU_PART_CORTEX_A78C	0xd4b
 
 #define CPU_PART_THUNDERX_T88	0x0a1
 #define CPU_PART_THUNDERX_T81	0x0a2
@@ -75,6 +77,8 @@
 #define CPU_PART_THUNDERX2_T99	0x0af
 
 #define CPU_PART_X_GENE		0x000
+
+#define CPU_PART_ICESTORM	0x022
 
 #define CPU_IMPL(midr)  (((midr) >> 24) & 0xff)
 #define CPU_PART(midr)  (((midr) >> 4) & 0xfff)
@@ -106,6 +110,7 @@ struct cpu_cores cpu_cores_arm[] = {
 	{ CPU_PART_CORTEX_A77, "Cortex-A77" },
 	{ CPU_PART_CORTEX_A78, "Cortex-A78" },
 	{ CPU_PART_CORTEX_A78AE, "Cortex-A78AE" },
+	{ CPU_PART_CORTEX_A78C, "Cortex-A78C" },
 	{ CPU_PART_CORTEX_X1, "Cortex-X1" },
 	{ CPU_PART_NEOVERSE_E1, "Neoverse E1" },
 	{ CPU_PART_NEOVERSE_N1, "Neoverse N1" },
@@ -127,6 +132,11 @@ struct cpu_cores cpu_cores_amcc[] = {
 	{ 0, NULL },
 };
 
+struct cpu_cores cpu_cores_apple[] = {
+	{ CPU_PART_ICESTORM, "Icestorm" },
+	{ 0, NULL },
+};
+
 /* arm cores makers */
 const struct implementers {
 	int			id;
@@ -136,6 +146,7 @@ const struct implementers {
 	{ CPU_IMPL_ARM,	"ARM", cpu_cores_arm },
 	{ CPU_IMPL_CAVIUM, "Cavium", cpu_cores_cavium },
 	{ CPU_IMPL_AMCC, "Applied Micro", cpu_cores_amcc },
+	{ CPU_IMPL_APPLE, "Apple", cpu_cores_apple },
 	{ 0, NULL },
 };
 
