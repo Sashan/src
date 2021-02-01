@@ -1190,7 +1190,6 @@ pfsync_in_del(caddr_t buf, int len, int count, int flags)
 
 		st = pf_find_state_byid(&id_key);
 		if (st == NULL) {
-			PF_STATE_EXIT_WRITE();
 			pfsyncstat_inc(pfsyncs_badstate);
 			continue;
 		}
