@@ -57,6 +57,8 @@ option		MROUTING	# Multicast router
 option		MPLS		# Multi-Protocol Label Switching
 #option		BFD		# Bi-directional Forwarding Detection
 
+#option		WITH_PF_LOCK	# make pf(4) ready to be executed in parallel
+
 #mpath0		at root		# SCSI Multipathing
 #scsibus*	at mpath?
 #emc*		at scsibus?
