@@ -1,4 +1,4 @@
-/*	$OpenBSD: siop.c,v 1.74 2020/02/17 02:50:23 krw Exp $ */
+/*	$OpenBSD: siop.c,v 1.86 2020/09/22 19:32:52 krw Exp $ */
 /*	$NetBSD: siop.c,v 1.79 2005/11/18 23:10:32 bouyer Exp $	*/
 
 /*
@@ -48,7 +48,6 @@
 #include <dev/ic/siopvar.h>
 
 #ifndef SIOP_DEBUG
-#undef SIOP_DEBUG
 #undef SIOP_DEBUG_DR
 #undef SIOP_DEBUG_INTR
 #undef SIOP_DEBUG_SCHED
@@ -190,9 +189,6 @@ siop_attach(sc)
 	TAILQ_INIT(&sc->lunsw_list);
 	scsi_iopool_init(&sc->iopool, sc, siop_cmd_get, siop_cmd_put);
 	sc->sc_currschedslot = 0;
-	sc->sc_c.sc_link.adapter = &siop_switch;
-	sc->sc_c.sc_link.openings = SIOP_NTAG;
-	sc->sc_c.sc_link.pool = &sc->iopool;
 
 	/* Start with one page worth of commands */
 	siop_morecbd(sc);
@@ -213,8 +209,15 @@ siop_attach(sc)
 	siop_dump_script(sc);
 #endif
 
-	bzero(&saa, sizeof(saa));
-	saa.saa_sc_link = &sc->sc_c.sc_link;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter = &siop_switch;
+	saa.saa_adapter_target = sc->sc_c.sc_id;
+	saa.saa_adapter_buswidth = (sc->sc_c.features & SF_BUS_WIDE) ? 16 : 8;
+	saa.saa_luns = 8;
+	saa.saa_openings = SIOP_NTAG;
+	saa.saa_pool = &sc->iopool;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
 	config_found((struct device*)sc, &saa, scsiprint);
 }
@@ -223,7 +226,7 @@ void
 siop_reset(sc)
 	struct siop_softc *sc;
 {
-	int i, j;
+	int i, j, buswidth;
 	struct siop_lunsw *lunsw;
 
 	siop_common_reset(&sc->sc_c);
@@ -299,7 +302,8 @@ siop_reset(sc)
 	}
 	TAILQ_INIT(&sc->lunsw_list);
 	/* restore reselect switch */
-	for (i = 0; i < sc->sc_c.sc_link.adapter_buswidth; i++) {
+	buswidth = (sc->sc_c.features & SF_BUS_WIDE) ? 16 : 8;
+	for (i = 0; i < buswidth; i++) {
 		struct siop_target *target;
 		if (sc->sc_c.targets[i] == NULL)
 			continue;
@@ -1029,7 +1033,7 @@ scintr:
 			 * case, siop_cmd->saved_offset will have the proper
 			 * value if it got updated by the controller
 			 */
-			if (offset == 0 && 
+			if (offset == 0 &&
 			    siop_cmd->saved_offset != SIOP_NOOFFSET)
 				offset = siop_cmd->saved_offset;
 			siop_update_resid(&siop_cmd->cmd_c, offset);
@@ -1259,7 +1263,7 @@ siop_handle_reset(sc)
 	struct cmd_list reset_list;
 	struct siop_cmd *siop_cmd, *next_siop_cmd;
 	struct siop_lun *siop_lun;
-	int target, lun, tag;
+	int target, lun, tag, buswidth;
 	/*
 	 * scsi bus reset. reset the chip and restart
 	 * the queue. Need to clean up all active commands
@@ -1271,8 +1275,8 @@ siop_handle_reset(sc)
 	/*
 	 * Process all commands: first commands being executed
 	 */
-	for (target = 0; target < sc->sc_c.sc_link.adapter_buswidth;
-	    target++) {
+	buswidth = (sc->sc_c.features & SF_BUS_WIDE) ? 16 : 8;
+	for (target = 0; target < buswidth; target++) {
 		if (sc->sc_c.targets[target] == NULL)
 			continue;
 		for (lun = 0; lun < 8; lun++) {
@@ -1337,7 +1341,7 @@ siop_handle_reset(sc)
 		printf("cmd %p (status %d) reset",
 		    siop_cmd, siop_cmd->cmd_c.status);
 		if (siop_cmd->cmd_c.status == CMDST_SENSE ||
-		    siop_cmd->cmd_c.status == CMDST_SENSE_ACTIVE) 
+		    siop_cmd->cmd_c.status == CMDST_SENSE_ACTIVE)
 			siop_cmd->cmd_c.status = CMDST_SENSE_DONE;
 		else
 			siop_cmd->cmd_c.status = CMDST_DONE;
@@ -1387,7 +1391,7 @@ siop_cmd_put(void *cookie, void *io)
 int
 siop_scsiprobe(struct scsi_link *link)
 {
-	struct siop_softc *sc = (struct siop_softc *)link->adapter_softc;
+	struct siop_softc *sc = link->bus->sb_adapter_softc;
 	struct siop_target *siop_target;
 	const int target = link->target;
 	const int lun = link->lun;
@@ -1453,7 +1457,7 @@ void
 siop_scsicmd(xs)
 	struct scsi_xfer *xs;
 {
-	struct siop_softc *sc = (struct siop_softc *)xs->sc_link->adapter_softc;
+	struct siop_softc *sc = xs->sc_link->bus->sb_adapter_softc;
 	struct siop_cmd *siop_cmd;
 	struct siop_target *siop_target;
 	int s, error, i, j;
@@ -1482,7 +1486,7 @@ siop_scsicmd(xs)
 
 	bzero(&siop_cmd->cmd_c.siop_tables->xscmd,
 	    sizeof(siop_cmd->cmd_c.siop_tables->xscmd));
-	bcopy(xs->cmd, &siop_cmd->cmd_c.siop_tables->xscmd, xs->cmdlen);
+	bcopy(&xs->cmd, &siop_cmd->cmd_c.siop_tables->xscmd, xs->cmdlen);
 	siop_cmd->cmd_c.siop_tables->cmd.count =
 	    siop_htoc32(&sc->sc_c, xs->cmdlen);
 
@@ -1532,12 +1536,12 @@ siop_scsicmd(xs)
 			delay(1000);
 			continue;
 		}
-		if (xs->cmd->opcode == INQUIRY && xs->error == XS_NOERROR) {
+		if (xs->cmd.opcode == INQUIRY && xs->error == XS_NOERROR) {
 			struct scsi_inquiry_data *inqbuf =
 			    (struct scsi_inquiry_data *)xs->data;
 		 	if ((inqbuf->device & SID_QUAL) == SID_QUAL_BAD_LU)
 				break;
-			/* 
+			/*
 			 * Allocate cbd's to hold maximum openings worth of
 			 * commands. Do this now because doing it dynamically in
 			 * siop_startcmd may cause calls to bus_dma* functions
@@ -1580,7 +1584,7 @@ siop_start(sc)
 	struct siop_xfer *siop_xfer;
 	u_int32_t dsa;
 	int target, lun, tag, slot;
-	int newcmd = 0; 
+	int newcmd = 0;
 	int doingready = 0;
 
 	/*
@@ -1621,7 +1625,7 @@ again:
 		if (siop_cmd->cmd_c.status != CMDST_READY &&
 		    siop_cmd->cmd_c.status != CMDST_SENSE)
 			panic("siop: non-ready cmd in ready list");
-#endif	
+#endif
 		target = siop_cmd->cmd_c.xs->sc_link->target;
 		lun = siop_cmd->cmd_c.xs->sc_link->lun;
 		siop_lun =
@@ -1669,7 +1673,7 @@ again:
 		} else {
 			slot = 0;
 			if (siop_script_read(sc, Ent_script_sched_slot0 / 4)
-			    != 0x80000000) 
+			    != 0x80000000)
 				goto end;
 		}
 
@@ -1775,7 +1779,7 @@ siop_timeout(v)
 
 	sc_print_addr(siop_cmd->cmd_c.xs->sc_link);
 	printf("timeout on SCSI command 0x%x\n",
-	    siop_cmd->cmd_c.xs->cmd->opcode);
+	    siop_cmd->cmd_c.xs->cmd.opcode);
 
 	s = splbio();
 	/* reset the scsi bus */
@@ -1922,8 +1926,8 @@ siop_morecbd(sc)
 		TAILQ_INSERT_TAIL(&sc->free_list, &newcbd->cmds[i], next);
 		splx(s);
 #ifdef SIOP_DEBUG
-		printf("tables[%d]: in=0x%x out=0x%x status=0x%x "
-		    "offset=0x%x\n", i,
+		printf("tables[%d]: in=0x%x out=0x%x status=0x%x\n",
+		    i,
 		    siop_ctoh32(&sc->sc_c,
 			newcbd->cmds[i].cmd_tables->t_msgin.addr),
 		    siop_ctoh32(&sc->sc_c,
@@ -2077,7 +2081,7 @@ siop_add_dev(sc, target, lun)
 	struct siop_target *siop_target =
 	    (struct siop_target *)sc->sc_c.targets[target];
 	struct siop_lun *siop_lun = siop_target->siop_lun[lun];
-	int i, ntargets;
+	int i, ntargets, buswidth;
 
 	if (siop_lun->reseloff > 0)
 		return;
@@ -2094,7 +2098,8 @@ siop_add_dev(sc, target, lun)
 		return;
 	}
 	/* count how many free targets we still have to probe */
-	ntargets =  (sc->sc_c.sc_link.adapter_buswidth - 1) - 1 - sc->sc_ntargets;
+	buswidth = (sc->sc_c.features & SF_BUS_WIDE) ? 16 : 8;
+	ntargets =  (buswidth - 1) - 1 - sc->sc_ntargets;
 
 	/*
 	 * we need 8 bytes for the lun sw additional entry, and
@@ -2168,7 +2173,7 @@ siop_add_dev(sc, target, lun)
 void
 siop_scsifree(struct scsi_link *link)
 {
-	struct siop_softc *sc = link->adapter_softc;
+	struct siop_softc *sc = link->bus->sb_adapter_softc;
 	int target = link->target;
 	int lun = link->lun;
 	int i;

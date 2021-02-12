@@ -1,4 +1,4 @@
-/*	$OpenBSD: apm.c,v 1.122 2020/02/20 16:56:51 visa Exp $	*/
+/*	$OpenBSD: apm.c,v 1.126 2020/12/25 12:59:51 visa Exp $	*/
 
 /*-
  * Copyright (c) 1998-2001 Michael Shalayeff. All rights reserved.
@@ -50,7 +50,6 @@
 #include <sys/buf.h>
 #include <sys/reboot.h>
 #include <sys/event.h>
-#include <dev/rndvar.h>
 
 #include <machine/conf.h>
 #include <machine/cpu.h>
@@ -271,7 +270,7 @@ apm_suspend(int state)
 	i8254_startclock();
 	if (initclock_func == i8254_initclocks)
 		rtcstart();		/* in i8254 mode, rtc is profclock */
-	inittodr(time_second);
+	inittodr(gettime());
 
 	config_suspend_all(DVACT_RESUME);
 	cold = 0;
@@ -1118,7 +1117,7 @@ filt_apmrdetach(struct knote *kn)
 	struct apm_softc *sc = (struct apm_softc *)kn->kn_hook;
 
 	rw_enter_write(&sc->sc_lock);
-	SLIST_REMOVE(&sc->sc_note, kn, knote, kn_selnext);
+	klist_remove_locked(&sc->sc_note, kn);
 	rw_exit_write(&sc->sc_lock);
 }
 
@@ -1152,7 +1151,7 @@ apmkqfilter(dev_t dev, struct knote *kn)
 	kn->kn_hook = (caddr_t)sc;
 
 	rw_enter_write(&sc->sc_lock);
-	SLIST_INSERT_HEAD(&sc->sc_note, kn, kn_selnext);
+	klist_insert_locked(&sc->sc_note, kn);
 	rw_exit_write(&sc->sc_lock);
 	return (0);
 }

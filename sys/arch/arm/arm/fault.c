@@ -1,4 +1,4 @@
-/*	$OpenBSD: fault.c,v 1.39 2019/09/06 12:22:01 deraadt Exp $	*/
+/*	$OpenBSD: fault.c,v 1.44 2020/10/27 19:18:47 deraadt Exp $	*/
 /*	$NetBSD: fault.c,v 1.46 2004/01/21 15:39:21 skrll Exp $	*/
 
 /*
@@ -208,10 +208,6 @@ data_abort_handler(trapframe_t *tf)
 	if (user) {
 		pcb->pcb_tf = tf;
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto out;
 	}
 
 	/* Invoke the appropriate handler, if necessary */
@@ -230,6 +226,13 @@ data_abort_handler(trapframe_t *tf)
 	 */
 	if (va < VM_MIN_ADDRESS || va >= VM_MAX_ADDRESS)
 		curcpu()->ci_flush_bp();
+
+	if (user) {
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+	}
 
 	/*
 	 * At this point, we're dealing with one of the following data aborts:
@@ -336,15 +339,15 @@ data_abort_handler(trapframe_t *tf)
 		p->p_flag &= ~L_SA_PAGEFAULT;
 #endif
 
-	if (__predict_true(error == 0)) {
-		if (user)
-			uvm_grow(p, va); /* Record any stack growth */
+	if (error == 0) {
+		if (map != kernel_map)
+			uvm_grow(p, va);
 		goto out;
 	}
 
 	if (user == 0) {
 		if (pcb->pcb_onfault) {
-			tf->tf_r0 = error;
+			tf->tf_r0 = EFAULT;
 			tf->tf_pc = (register_t) pcb->pcb_onfault;
 			return;
 		}
@@ -362,10 +365,9 @@ data_abort_handler(trapframe_t *tf)
 		    p->p_ucred ? (int)p->p_ucred->cr_uid : -1);
 		sd.signo = SIGKILL;
 		sd.code = 0;
-	}
-	if (error == EACCES) 
+	} else if (error == EACCES) 
 		sd.code = SEGV_ACCERR;
-	if (error == EIO) {
+	else if (error == EIO) {
 		sd.signo = SIGBUS;
 		sd.code = BUS_OBJERR;
 	}
@@ -373,9 +375,7 @@ data_abort_handler(trapframe_t *tf)
 	sd.trap = fsr;
 do_trapsignal:
 	sv.sival_int = sd.addr;
-	KERNEL_LOCK();
 	trapsignal(p, sd.signo, sd.trap, sd.code, sv);
-	KERNEL_UNLOCK();
 out:
 	/* If returning to user mode, make sure to invoke userret() */
 	if (user)
@@ -527,7 +527,7 @@ dab_buserr(trapframe_t *tf, u_int fsr, u_int far, struct proc *p,
 void
 prefetch_abort_handler(trapframe_t *tf)
 {
-	struct proc *p;
+	struct proc *p = curproc;
 	struct vm_map *map;
 	vaddr_t va;
 	int error;
@@ -556,8 +556,6 @@ prefetch_abort_handler(trapframe_t *tf)
 	if (__predict_true((tf->tf_spsr & PSR_I) == 0))
 		enable_interrupts(PSR_I);
 
-	p = curproc;
-
 	p->p_addr->u_pcb.pcb_tf = tf;
 
 	/* Invoke access fault handler if appropriate */
@@ -577,7 +575,6 @@ prefetch_abort_handler(trapframe_t *tf)
 	map = &p->p_vmspace->vm_map;
 	va = trunc_page(far);
 
-
 #ifdef DIAGNOSTIC
 	if (__predict_false(curcpu()->ci_idepth > 0)) {
 		printf("\nNon-emulated prefetch abort with intr_depth > 0\n");
@@ -588,21 +585,20 @@ prefetch_abort_handler(trapframe_t *tf)
 	KERNEL_LOCK();
 	error = uvm_fault(map, va, 0, PROT_READ | PROT_EXEC);
 	KERNEL_UNLOCK();
-	if (__predict_true(error == 0))
+
+	if (error == 0) {
+		uvm_grow(p, va);
 		goto out;
+	}
 
 	sv.sival_ptr = (u_int32_t *)far;
 	if (error == ENOMEM) {
 		printf("UVM: pid %d (%s), uid %d killed: "
 		    "out of swap\n", p->p_p->ps_pid, p->p_p->ps_comm,
 		    p->p_ucred ? (int)p->p_ucred->cr_uid : -1);
-		KERNEL_LOCK();
 		trapsignal(p, SIGKILL, 0, SEGV_MAPERR, sv);
-		KERNEL_UNLOCK();
 	} else {
-		KERNEL_LOCK();
 		trapsignal(p, SIGSEGV, 0, SEGV_MAPERR, sv);
-		KERNEL_UNLOCK();
 	}
 
 out:

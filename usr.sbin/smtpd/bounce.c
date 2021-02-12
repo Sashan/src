@@ -1,4 +1,4 @@
-/*	$OpenBSD: bounce.c,v 1.81 2019/11/25 12:11:26 eric Exp $	*/
+/*	$OpenBSD: bounce.c,v 1.83 2020/12/31 08:27:15 martijn Exp $	*/
 
 /*
  * Copyright (c) 2009 Gilles Chehade <gilles@poolp.org>
@@ -290,7 +290,7 @@ bounce_drain()
 		}
 
 		log_debug("debug: bounce: requesting new enqueue socket...");
-		m_compose(p_pony, IMSG_QUEUE_SMTP_SESSION, 0, 0, -1, NULL, 0);
+		m_compose(p_dispatcher, IMSG_QUEUE_SMTP_SESSION, 0, 0, -1, NULL, 0);
 
 		running += 1;
 	}
@@ -727,6 +727,10 @@ bounce_io(struct io *io, int evt, void *arg)
 
 		if (line == NULL)
 			break;
+
+		/* Strip trailing '\r' */
+		if (len && line[len - 1] == '\r')
+			line[--len] = '\0';
 
 		log_trace(TRACE_BOUNCE, "bounce: %p: <<< %s", s, line);
 

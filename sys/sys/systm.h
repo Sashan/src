@@ -1,4 +1,4 @@
-/*	$OpenBSD: systm.h,v 1.145 2020/03/20 03:37:08 cheloha Exp $	*/
+/*	$OpenBSD: systm.h,v 1.152 2021/02/08 08:18:45 mpi Exp $	*/
 /*	$NetBSD: systm.h,v 1.50 1996/06/09 04:55:09 briggs Exp $	*/
 
 /*-
@@ -81,6 +81,12 @@ extern const char osrelease[];
 extern int cold;		/* cold start flag initialized in locore */
 extern int db_active;		/* running currently inside ddb(4) */
 
+extern char *hw_vendor;		/* sysctl hw.vendor */
+extern char *hw_prod;		/* sysctl hw.product */
+extern char *hw_uuid;		/* sysctl hw.uuid */
+extern char *hw_serial;		/* sysctl hw.serialno */
+extern char *hw_ver;		/* sysctl hw.version */
+
 extern int ncpus;		/* number of CPUs used */
 extern int ncpusfound;		/* number of CPUs found */
 extern int nblkdev;		/* number of entries in bdevsw */
@@ -100,6 +106,8 @@ extern struct vnode *rootvp;	/* vnode equivalent to above */
 
 extern dev_t swapdev;		/* swapping device */
 extern struct vnode *swapdev_vp;/* vnode equivalent to above */
+
+extern int nowake;		/* dead wakeup(9) channel */
 
 struct proc;
 struct process;
@@ -143,11 +151,6 @@ int	enosys(void);
 int	enoioctl(void);
 int	enxio(void);
 int	eopnotsupp(void *);
-
-struct vnodeopv_desc;
-void vfs_opv_init_explicit(struct vnodeopv_desc *);
-void vfs_opv_init_default(struct vnodeopv_desc *);
-void vfs_op_init(void);
 
 int	seltrue(dev_t dev, int which, struct proc *);
 int	selfalse(dev_t dev, int which, struct proc *);
@@ -211,6 +214,11 @@ int	copyin(const void *, void *, size_t)
 int	copyout(const void *, void *, size_t);
 int	copyin32(const uint32_t *, uint32_t *);
 
+void	random_start(int);
+void	enqueue_randomness(unsigned int);
+void	suspend_randomness(void);
+void	resume_randomness(char *, size_t);
+
 struct arc4random_ctx;
 void	arc4random_buf(void *, size_t)
 		__attribute__ ((__bounded__(__buffer__,1,2)));
@@ -244,13 +252,8 @@ void	stop_periodic_resettodr(void);
 
 struct sleep_state;
 void	sleep_setup(struct sleep_state *, const volatile void *, int,
-	    const char *);
-void	sleep_setup_timeout(struct sleep_state *, int);
-void	sleep_setup_signal(struct sleep_state *);
-void	sleep_finish(struct sleep_state *, int);
-int	sleep_finish_timeout(struct sleep_state *);
-int	sleep_finish_signal(struct sleep_state *);
-int	sleep_finish_all(struct sleep_state *, int);
+	    const char *, int);
+int	sleep_finish(struct sleep_state *, int);
 void	sleep_queue_init(void);
 
 struct cond;
@@ -315,30 +318,41 @@ int	uiomove(void *, size_t, struct uio *);
 
 extern struct rwlock netlock;
 
-#define	NET_LOCK()		NET_WLOCK()
-#define	NET_UNLOCK()		NET_WUNLOCK()
-#define	NET_ASSERT_UNLOCKED()	NET_ASSERT_WUNLOCKED()
+/*
+ * Network stack data structures are, unless stated otherwise, protected
+ * by the NET_LOCK().  It's a single non-recursive lock for the whole
+ * subsystem.
+ */
+#define	NET_LOCK()	do { rw_enter_write(&netlock); } while (0)
+#define	NET_UNLOCK()	do { rw_exit_write(&netlock); } while (0)
 
+/*
+ * Reader version of NET_LOCK() to be used in "softnet" thread only.
 
-#define	NET_WLOCK()	do { rw_enter_write(&netlock); } while (0)
-#define	NET_WUNLOCK()	do { rw_exit_write(&netlock); } while (0)
+ * The "softnet" thread should be the only thread processing packets
+ * without holding an exclusive lock.  This is done to allow read-only
+ * ioctl(2) to not block.
+ */
+#define	NET_RLOCK_IN_SOFTNET()	do { rw_enter_read(&netlock); } while (0)
+#define	NET_RUNLOCK_IN_SOFTNET()do { rw_exit_read(&netlock); } while (0)
 
-#define	NET_ASSERT_WLOCKED()						\
-do {									\
-	int _s = rw_status(&netlock);					\
-	if ((splassert_ctl > 0) && (_s != RW_WRITE))			\
-		splassert_fail(RW_WRITE, _s, __func__);			\
-} while (0)
+/*
+ * Reader version of NET_LOCK() to be used in ioctl/sysctl path only.
+ *
+ * Can be grabbed instead of the exclusive version when no field
+ * protected by the NET_LOCK() is modified by the ioctl/sysctl.
+ */
+#define	NET_RLOCK_IN_IOCTL()	do { rw_enter_read(&netlock); } while (0)
+#define	NET_RUNLOCK_IN_IOCTL()	do { rw_exit_read(&netlock); } while (0)
 
-#define	NET_ASSERT_WUNLOCKED()						\
+#ifdef DIAGNOSTIC
+
+#define	NET_ASSERT_UNLOCKED()						\
 do {									\
 	int _s = rw_status(&netlock);					\
 	if ((splassert_ctl > 0) && (_s == RW_WRITE))			\
 		splassert_fail(0, RW_WRITE, __func__);			\
 } while (0)
-
-#define	NET_RLOCK()	do { rw_enter_read(&netlock); } while (0)
-#define	NET_RUNLOCK()	do { rw_exit_read(&netlock); } while (0)
 
 #define	NET_ASSERT_LOCKED()						\
 do {									\
@@ -346,6 +360,11 @@ do {									\
 	if ((splassert_ctl > 0) && (_s != RW_WRITE && _s != RW_READ))	\
 		splassert_fail(RW_READ, _s, __func__);			\
 } while (0)
+
+#else /* DIAGNOSTIC */
+#define	NET_ASSERT_UNLOCKED()	do {} while (0)
+#define	NET_ASSERT_LOCKED()	do {} while (0)
+#endif /* !DIAGNOSTIC */
 
 __returns_twice int	setjmp(label_t *);
 __dead void	longjmp(label_t *);

@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.10 2019/05/14 20:48:45 anton Exp $
+#	$OpenBSD: Makefile,v 1.13 2020/12/16 22:59:54 bluhm Exp $
 
 PROG=		kcov
 WARNINGS=	yes
@@ -18,22 +18,23 @@ TESTS+=	dying
 TESTS+=	exec
 TESTS+=	fork
 TESTS+=	open
+TESTS+=	remote
+TESTS+=	remote-close
+TESTS+=	remote-interrupt
 TESTS+=	state
 
-REGRESS_SETUP_ONCE=	setup
-setup: ${PROG}
+REGRESS_SETUP=		${PROG}
 
 .for m in ${MODES}
 .  for b in ${BUFSIZES}
 .    for t in ${TESTS}
-$m-$b-$t:
-	@echo "\n======== ${@} ========"
+run-$m-$b-$t:
 	if ${SUDO} ./${PROG} -p; then \
 		${SUDO} ./${PROG} ${KCOVFLAGS} -b $b -m $m $t; \
 	else \
 		echo "SKIPPED"; \
 	fi
-REGRESS_TARGETS+=	$m-$b-$t
+REGRESS_TARGETS+=	run-$m-$b-$t
 .    endfor
 .  endfor
 .endfor

@@ -1,4 +1,4 @@
-.\" $OpenBSD: gre.4,v 1.76 2019/05/29 19:37:06 fcambus Exp $
+.\" $OpenBSD: gre.4,v 1.81 2021/01/08 21:26:34 kn Exp $
 .\" $NetBSD: gre.4,v 1.10 1999/12/22 14:55:49 kleink Exp $
 .\"
 .\" Copyright 1998 (c) The NetBSD Foundation, Inc.
@@ -28,7 +28,7 @@
 .\" ARISING IN ANY WAY  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 .\" POSSIBILITY OF SUCH DAMAGE.
 .\"
-.Dd $Mdocdate: May 29 2019 $
+.Dd $Mdocdate: January 8 2021 $
 .Dt GRE 4
 .Os
 .Sh NAME
@@ -143,7 +143,7 @@ endpoints.
 The MTU is set to 1476 by default to match the value used by Cisco
 routers.
 .Ss Point-to-Point Ethernet over GRE tunnel interfaces (egre)
-A
+An
 .Nm egre
 tunnel interface carries Ethernet over GRE (EoGRE).
 Ethernet traffic is encapsulated using Transparent Ethernet (0x6558)
@@ -236,15 +236,15 @@ virtual network flow identifier is enabled.
 .Pp
 .Nm nvgre
 interfaces use the virtual network identifier in the 24-bit
-Virtual Subnet Identifer (VSID)
+Virtual Subnet Identifier (VSID)
 aka
 Tenant Network Identifier (TNI)
 field in of the GRE Key header.
 .It Dv SIOCGVNETID Fa "struct ifreq *"
-Get the virtual network identifer used in the GRE Key header.
+Get the virtual network identifier used in the GRE Key header.
 .It Dv SIOCDVNETID Fa "struct ifreq *"
 Disable the use of the virtual network identifier.
-The virtual network identifer may only be disabled while the interface
+The virtual network identifier may only be disabled while the interface
 is down.
 .Pp
 When the virtual network identifier is disabled on
@@ -273,8 +273,8 @@ and
 interfaces configured with a TTL of -1 will copy the TTL in and out
 of the encapsulated protocol headers.
 .It Dv SIOCGLIFPHYTTL Fa "struct ifreq *"
-Get the value used in the Time-To-Live field in a IPv4 encapsulation
-header or the Hop Limit field in a IPv6 encapsulation header.
+Get the value used in the Time-To-Live field in an IPv4 encapsulation
+header or the Hop Limit field in an IPv6 encapsulation header.
 .It Dv SIOCSLIFPHYDF Fa "struct ifreq *"
 Configure whether the tunnel traffic sent by the interface can be
 fragmented or not.
@@ -315,7 +315,7 @@ into a 24-bit virtual network identifier and an 8-bit flow
 identifier.
 .Pp
 The interface
-must already be configured with a virtual network identifer before
+must already be configured with a virtual network identifier before
 enabling flow identifiers in the GRE Key header.
 The configured virtual network identify must also fit into 24 bits.
 .It Dv SIOCDVNETFLOWID Fa "struct ifreq *"
@@ -455,6 +455,67 @@ In most cases the following should work:
 .Bd -literal -offset indent
 pass quick on gre proto gre no state
 .Ed
+.Ss Point-to-Multipoint Layer 3 GRE tunnel interfaces (mgre) example
+.Nm mgre
+can be used to build a point-to-multipoint tunnel network to several
+hosts using a single
+.Nm mgre
+interface.
+.Pp
+In this example the host A has an outer IP of 198.51.100.12, host
+B has 203.0.113.27, and host C has 203.0.113.254.
+.Pp
+Addressing within the tunnel is done using 192.0.2.0/24:
+.Bd -literal
+                        +--- Host B
+                       /
+                      /
+Host A --- tunnel ---+
+                      \e
+                       \e
+                        +--- Host C
+.Ed
+.Pp
+On Host A:
+.Bd -literal -offset indent
+# ifconfig mgreN create
+# ifconfig mgreN tunneladdr 198.51.100.12
+# ifconfig mgreN inet 192.0.2.1 netmask 0xffffff00 up
+.Ed
+.Pp
+On Host B:
+.Bd -literal -offset indent
+# ifconfig mgreN create
+# ifconfig mgreN tunneladdr 203.0.113.27
+# ifconfig mgreN inet 192.0.2.2 netmask 0xffffff00 up
+.Ed
+.Pp
+On Host C:
+.Bd -literal -offset indent
+# ifconfig mgreN create
+# ifconfig mgreN tunneladdr 203.0.113.254
+# ifconfig mgreN inet 192.0.2.3 netmask 0xffffff00 up
+.Ed
+.Pp
+To reach Host B over the tunnel (from Host A), there has to be a
+route on Host A specifying the next-hop:
+.Pp
+.Dl # route add -host 192.0.2.2 203.0.113.27 -iface -ifp mgreN
+.Pp
+Similarly, to reach Host A over the tunnel from Host B, a route must
+be present on B with A's outer IP as next-hop:
+.Pp
+.Dl # route add -host 192.0.2.1 198.51.100.12 -iface -ifp mgreN
+.Pp
+The same tunnel interface can then be used between host B and C by
+adding the appropriate routes, making the network any-to-any instead
+of hub-and-spoke:
+.Pp
+On Host B:
+.Dl # route add -host 192.0.2.3 203.0.113.254 -iface -ifp mgreN
+.Pp
+On Host C:
+.Dl # route add -host 192.0.2.2 203.0.113.27 -iface -ifp mgreN
 .Ss Point-to-Point Ethernet over GRE tunnel interfaces (egre) example
 .Nm egre
 can be used to carry Ethernet traffic between two endpoints over
@@ -485,7 +546,7 @@ identifiers so the routers can tell which network the encapsulated
 traffic is for.
 The
 .Nm egre
-interfaces are explicitley configured to provide the same MTU as the
+interfaces are explicitly configured to provide the same MTU as the
 .Xr vlan 4
 interfaces (1500 bytes) with fragmentation enabled so they can be
 carried over the internet, which has the same or lower MTU.

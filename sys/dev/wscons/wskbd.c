@@ -1,4 +1,4 @@
-/* $OpenBSD: wskbd.c,v 1.103 2020/03/24 08:11:59 anton Exp $ */
+/* $OpenBSD: wskbd.c,v 1.107 2020/11/02 19:45:18 tobhe Exp $ */
 /* $NetBSD: wskbd.c,v 1.80 2005/05/04 01:52:16 augustss Exp $ */
 
 /*
@@ -889,9 +889,9 @@ wskbd_mux_close(struct wsevsrc *me)
 {
 	struct wskbd_softc *sc = (struct wskbd_softc *)me;
 
-	sc->sc_base.me_evp = NULL;
-	sc->sc_translating = 1;
 	(void)wskbd_enable(sc, 0);
+	sc->sc_translating = 1;
+	sc->sc_base.me_evp = NULL;
 
 	return (0);
 }
@@ -1177,13 +1177,11 @@ getkeyrepeat:
 	case WSKBDIO_GETBACKLIGHT:
 		if (wskbd_get_backlight != NULL)
 			return (*wskbd_get_backlight)((struct wskbd_backlight *)data);
-		error = ENOTTY;
 		break;
 
 	case WSKBDIO_SETBACKLIGHT:
 		if (wskbd_set_backlight != NULL)
 			return (*wskbd_set_backlight)((struct wskbd_backlight *)data);
-		error = ENOTTY;
 		break;
 	}
 
@@ -1494,6 +1492,20 @@ internal_command(struct wskbd_softc *sc, u_int *type, keysym_t ksym,
 #endif
 #endif
 
+#if NWSDISPLAY > 0
+	switch(ksym) {
+	case KS_Cmd_BrightnessUp:
+		wsdisplay_brightness_step(sc->sc_displaydv, 1);
+		return (1);
+	case KS_Cmd_BrightnessDown:
+		wsdisplay_brightness_step(sc->sc_displaydv, -1);
+		return (1);
+	case KS_Cmd_BrightnessRotate:
+		wsdisplay_brightness_cycle(sc->sc_displaydv);
+		return (1);
+	}
+#endif
+
 	if (!MOD_ONESET(sc->id, MOD_COMMAND) &&
 	    !MOD_ALLSET(sc->id, MOD_COMMAND1 | MOD_COMMAND2))
 		return (0);
@@ -1557,13 +1569,6 @@ internal_command(struct wskbd_softc *sc, u_int *type, keysym_t ksym,
 		change_displayparam(sc, WSDISPLAYIO_PARAM_BACKLIGHT,
 		    ksym == KS_Cmd_BacklightOff ? -1 : 1,
 		    ksym == KS_Cmd_BacklightToggle ? 1 : 0);
-		return (1);
-	case KS_Cmd_BrightnessUp:
-	case KS_Cmd_BrightnessDown:
-	case KS_Cmd_BrightnessRotate:
-		change_displayparam(sc, WSDISPLAYIO_PARAM_BRIGHTNESS,
-		    ksym == KS_Cmd_BrightnessDown ? -1 : 1,
-		    ksym == KS_Cmd_BrightnessRotate ? 1 : 0);
 		return (1);
 	case KS_Cmd_ContrastUp:
 	case KS_Cmd_ContrastDown:

@@ -1,4 +1,4 @@
-/* $OpenBSD: dsdt.c,v 1.249 2019/10/16 01:43:50 mlarkin Exp $ */
+/* $OpenBSD: dsdt.c,v 1.257 2020/12/17 17:57:19 kettenis Exp $ */
 /*
  * Copyright (c) 2005 Jordan Hargrave <jordan@openbsd.org>
  *
@@ -102,13 +102,11 @@ struct aml_value	*aml_callosi(struct aml_scope *, struct aml_value *);
 const char		*aml_getname(const char *);
 int64_t			aml_hextoint(const char *);
 void			aml_dump(int, uint8_t *);
-void			_aml_die(const char *fn, int line, const char *fmt, ...);
+__dead void		_aml_die(const char *fn, int line, const char *fmt, ...);
 #define aml_die(x...)	_aml_die(__FUNCTION__, __LINE__, x)
 
 void aml_notify_task(void *, int);
 void acpi_poll_notify_task(void *, int);
-
-extern char		*hw_vendor;
 
 /*
  * @@@: Global variables
@@ -465,15 +463,14 @@ void
 acpi_sleep(int ms, char *reason)
 {
 	static int acpinowait;
-	int to = ms * hz / 1000;
+
+	/* XXX ACPI integers are supposed to be unsigned. */
+	ms = MAX(1, ms);
 
 	if (cold)
 		delay(ms * 1000);
-	else {
-		if (to <= 0)
-			to = 1;
-		tsleep(&acpinowait, PWAIT, reason, to);
-	}
+	else
+		tsleep_nsec(&acpinowait, PWAIT, reason, MSEC_TO_NSEC(ms));
 }
 
 void
@@ -528,7 +525,7 @@ acpi_poll(void *arg)
 {
 	int s;
 
-	s = spltty();
+	s = splbio();
 	acpi_addtask(acpi_softc, acpi_poll_notify_task, NULL, 0);
 	acpi_softc->sc_threadwaiting = 0;
 	wakeup(acpi_softc);
@@ -968,6 +965,7 @@ aml_copyvalue(struct aml_value *lhs, struct aml_value *rhs)
 		lhs->v_mutex = rhs->v_mutex;
 		break;
 	case AML_OBJTYPE_POWERRSRC:
+		lhs->node = rhs->node;
 		lhs->v_powerrsrc = rhs->v_powerrsrc;
 		break;
 	case AML_OBJTYPE_METHOD:
@@ -983,6 +981,7 @@ aml_copyvalue(struct aml_value *lhs, struct aml_value *rhs)
 		lhs->v_opregion = rhs->v_opregion;
 		break;
 	case AML_OBJTYPE_PROCESSOR:
+		lhs->node = rhs->node;
 		lhs->v_processor = rhs->v_processor;
 		break;
 	case AML_OBJTYPE_NAMEREF:
@@ -996,6 +995,10 @@ aml_copyvalue(struct aml_value *lhs, struct aml_value *rhs)
 	case AML_OBJTYPE_OBJREF:
 		lhs->v_objref = rhs->v_objref;
 		aml_addref(lhs->v_objref.ref, "");
+		break;
+	case AML_OBJTYPE_DEVICE:
+	case AML_OBJTYPE_THERMZONE:
+		lhs->node = rhs->node;
 		break;
 	default:
 		printf("copyvalue: %x", rhs->type);
@@ -1036,10 +1039,8 @@ aml_freevalue(struct aml_value *val)
 		acpi_os_free(val->v_buffer);
 		break;
 	case AML_OBJTYPE_PACKAGE:
-		for (idx = 0; idx < val->length; idx++) {
-			aml_freevalue(val->v_package[idx]);
-			acpi_os_free(val->v_package[idx]);
-		}
+		for (idx = 0; idx < val->length; idx++)
+			aml_delref(&val->v_package[idx], "");
 		acpi_os_free(val->v_package);
 		break;
 	case AML_OBJTYPE_OBJREF:
@@ -1472,11 +1473,11 @@ struct aml_defval {
 	{ "_OSI", AML_OBJTYPE_METHOD, 1, aml_callosi },
 
 	/* Create default scopes */
-	{ "_GPE" },
-	{ "_PR_" },
-	{ "_SB_" },
-	{ "_TZ_" },
-	{ "_SI_" },
+	{ "_GPE", AML_OBJTYPE_DEVICE },
+	{ "_PR_", AML_OBJTYPE_DEVICE },
+	{ "_SB_", AML_OBJTYPE_DEVICE },
+	{ "_TZ_", AML_OBJTYPE_DEVICE },
+	{ "_SI_", AML_OBJTYPE_DEVICE },
 
 	{ NULL }
 };
@@ -1486,31 +1487,11 @@ struct aml_defval {
  * We return True for Windows to fake out nasty bad AML
  */
 char *aml_valid_osi[] = {
-	"Windows 2000",
-	"Windows 2001",
-	"Windows 2001.1",
-	"Windows 2001.1 SP1",
-	"Windows 2001 SP0",
-	"Windows 2001 SP1",
-	"Windows 2001 SP2",
-	"Windows 2001 SP3",
-	"Windows 2001 SP4",
-	"Windows 2006",
-	"Windows 2006.1",
-	"Windows 2006 SP1",
-	"Windows 2006 SP2",
-	"Windows 2009",
-	"Windows 2012",
-	"Windows 2013",
-	"Windows 2015",
-	"Windows 2016",
-	"Windows 2017",
-	"Windows 2017.2",
-	"Windows 2018",
-	"Windows 2018.2",
-	"Windows 2019",
+	AML_VALID_OSI,
 	NULL
 };
+
+enum acpi_osi acpi_max_osi = OSI_UNKNOWN;
 
 struct aml_value *
 aml_callosi(struct aml_scope *scope, struct aml_value *val)
@@ -1537,6 +1518,11 @@ aml_callosi(struct aml_scope *scope, struct aml_value *val)
 	for (idx=0; !result && aml_valid_osi[idx] != NULL; idx++) {
 		dnprintf(10,"osi: %s,%s\n", fa->v_string, aml_valid_osi[idx]);
 		result = !strcmp(fa->v_string, aml_valid_osi[idx]);
+		if (result) {
+			if (idx > acpi_max_osi)
+				acpi_max_osi = idx;
+			break;
+		}
 	}
 	dnprintf(10,"@@ OSI found: %x\n", result);
 	return aml_allocvalue(AML_OBJTYPE_INTEGER, result, NULL);
@@ -2096,6 +2082,9 @@ aml_convert(struct aml_value *a, int ctype, int clen)
 		case AML_OBJTYPE_STRING:
 			aml_addref(a, "XConvert");
 			return a;
+		case AML_OBJTYPE_PACKAGE: /* XXX Deal with broken Lenovo X1 BIOS. */
+			c = aml_allocvalue(AML_OBJTYPE_STRING, 0, NULL);
+			break;
 		}
 		break;
 	}
@@ -3888,17 +3877,13 @@ aml_parse(struct aml_scope *scope, int ret_type, const char *stype)
 	case AMLOP_NAMECHAR:
 		/* opargs[0] = named object (node != NULL), or nameref */
 		my_ret = opargs[0];
-		if (scope->type == AMLOP_PACKAGE) {
+		if (scope->type == AMLOP_PACKAGE && my_ret->node) {
 			/* Special case for package */
-			if (my_ret->type == AML_OBJTYPE_NAMEREF)
-				my_ret = aml_allocvalue(AML_OBJTYPE_STRING, -1,
-				    aml_getname(my_ret->v_nameref));
-			else if (my_ret->node)
-				my_ret = aml_allocvalue(AML_OBJTYPE_STRING, -1,
-				    aml_nodename(my_ret->node));
-			break;
-		}
-		if (my_ret->type == AML_OBJTYPE_OBJREF) {
+			my_ret = aml_allocvalue(AML_OBJTYPE_OBJREF,
+			    AMLOP_NAMECHAR, 0);
+			my_ret->v_objref.ref = opargs[0];
+			aml_addref(my_ret, "package");
+		} else if (my_ret->type == AML_OBJTYPE_OBJREF) {
 			my_ret = my_ret->v_objref.ref;
 			aml_addref(my_ret, "de-alias");
 		}
@@ -4630,15 +4615,17 @@ acpi_getdevlist(struct acpi_devlist_head *list, struct aml_node *root,
     struct aml_value *pkg, int off)
 {
 	struct acpi_devlist *dl;
-	struct aml_node *node;
+	struct aml_value *val;
 	int idx;
 
-	for (idx=off; idx<pkg->length; idx++) {
-		node = aml_searchname(root, pkg->v_package[idx]->v_string);
-		if (node) {
+	for (idx = off; idx < pkg->length; idx++) {
+		val = pkg->v_package[idx];
+		if (val->type == AML_OBJTYPE_OBJREF)
+			val = val->v_objref.ref;
+		if (val->node) {
 			dl = acpi_os_malloc(sizeof(*dl));
 			if (dl) {
-				dl->dev_node = node;
+				dl->dev_node = val->node;
 				TAILQ_INSERT_TAIL(list, dl, dev_link);
 			}
 		}
@@ -4655,4 +4642,5 @@ acpi_freedevlist(struct acpi_devlist_head *list)
 		acpi_os_free(dl);
 	}
 }
+
 #endif /* SMALL_KERNEL */

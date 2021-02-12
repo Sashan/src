@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhclient.c,v 1.659 2020/01/26 10:31:03 krw Exp $	*/
+/*	$OpenBSD: dhclient.c,v 1.691 2021/02/02 15:46:16 cheloha Exp $	*/
 
 /*
  * Copyright 2004 Henning Brauer <henning@openbsd.org>
@@ -95,9 +95,8 @@
 #include "log.h"
 #include "privsep.h"
 
-char *path_dhclient_conf = _PATH_DHCLIENT_CONF;
+char *path_dhclient_conf;
 char *path_lease_db;
-char *path_option_db;
 char *log_procname;
 
 int nullfd = -1;
@@ -115,12 +114,18 @@ int		 res_hnok_list(const char *);
 int		 addressinuse(char *, struct in_addr, char *);
 
 void		 fork_privchld(struct interface_info *, int, int);
-void		 get_ifname(struct interface_info *, int, char *);
+void		 get_name(struct interface_info *, int, char *);
+void		 get_address(struct interface_info *);
+void		 get_ssid(struct interface_info *, int);
+void		 get_sockets(struct interface_info *);
+int		 get_routefd(int);
+void		 set_autoconf(struct interface_info *, int);
+void		 set_iff_up(struct interface_info *, int);
+void		 set_user(char *);
 int		 get_ifa_family(char *, int);
 struct ifaddrs	*get_link_ifa(const char *, struct ifaddrs *);
-void		 interface_link_forceup(char *, int);
 void		 interface_state(struct interface_info *);
-void		 get_hw_address(struct interface_info *);
+struct interface_info *initialize_interface(char *, int);
 void		 tick_msg(const char *, int, time_t);
 void		 rtm_dispatch(struct interface_info *, struct rt_msghdr *);
 
@@ -151,7 +156,6 @@ void release_lease(struct interface_info *);
 void propose_release(struct interface_info *);
 
 void write_lease_db(struct client_lease_tq *);
-void write_option_db(struct client_lease *, struct client_lease *);
 char *lease_as_string(char *, struct client_lease *);
 struct proposal *lease_as_proposal(struct client_lease *);
 struct unwind_info *lease_as_unwind_info(struct client_lease *);
@@ -172,7 +176,6 @@ struct client_lease *get_recorded_lease(struct interface_info *);
 #define	ADVANCE(x, n) (x += ROUNDUP((n)->sa_len))
 
 static FILE *leaseFile;
-static FILE *optionDB;
 
 int
 get_ifa_family(char *cp, int n)
@@ -190,28 +193,6 @@ get_ifa_family(char *cp, int n)
 	}
 
 	return AF_UNSPEC;
-}
-
-void
-interface_link_forceup(char *name, int ioctlfd)
-{
-	struct ifreq	 ifr;
-
-	memset(&ifr, 0, sizeof(ifr));
-	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
-	if (ioctl(ioctlfd, SIOCGIFFLAGS, (caddr_t)&ifr) == -1) {
-		log_warn("%s: SIOCGIFFLAGS", log_procname);
-		return;
-	}
-
-	/* Force it up if it isn't already. */
-	if ((ifr.ifr_flags & IFF_UP) == 0) {
-		ifr.ifr_flags |= IFF_UP;
-		if (ioctl(ioctlfd, SIOCSIFFLAGS, (caddr_t)&ifr) == -1) {
-			log_warn("%s: SIOCSIFFLAGS", log_procname);
-			return;
-		}
-	}
 }
 
 struct ifaddrs *
@@ -245,6 +226,7 @@ interface_state(struct interface_info *ifi)
 {
 	struct ether_addr		 hw;
 	struct ifaddrs			*ifap, *ifa;
+	struct sockaddr_dl		*sdl;
 	int				 newlinkup, oldlinkup;
 
 	oldlinkup = LINK_STATE_IS_UP(ifi->link_state);
@@ -253,8 +235,10 @@ interface_state(struct interface_info *ifi)
 		fatal("getifaddrs");
 
 	ifa = get_link_ifa(ifi->name, ifap);
-	if (ifa == NULL ||
-	    (ifa->ifa_flags & IFF_UP) == 0 ||
+	if (ifa == NULL)
+		fatalx("invalid interface");
+
+	if ((ifa->ifa_flags & IFF_UP) == 0 ||
 	    (ifa->ifa_flags & IFF_RUNNING) == 0) {
 		ifi->link_state = LINK_STATE_DOWN;
 	} else {
@@ -263,7 +247,6 @@ interface_state(struct interface_info *ifi)
 		ifi->mtu =
 		    ((struct if_data *)ifa->ifa_data)->ifi_mtu;
 	}
-	freeifaddrs(ifap);
 
 	newlinkup = LINK_STATE_IS_UP(ifi->link_state);
 	if (newlinkup != oldlinkup) {
@@ -275,17 +258,85 @@ interface_state(struct interface_info *ifi)
 
 	if (newlinkup != 0) {
 		memcpy(&hw, &ifi->hw_address, sizeof(hw));
-		get_hw_address(ifi);
+		sdl = (struct sockaddr_dl *)ifa->ifa_addr;
+		memcpy(ifi->hw_address.ether_addr_octet, LLADDR(sdl),
+		    ETHER_ADDR_LEN);
 		if (memcmp(&hw, &ifi->hw_address, sizeof(hw))) {
 			tick_msg("", 0, INT64_MAX);
 			log_debug("%s: LLADDR changed", log_procname);
 			quit = RESTART;
 		}
 	}
+
+	freeifaddrs(ifap);
+}
+
+struct interface_info *
+initialize_interface(char *name, int noaction)
+{
+	struct interface_info		*ifi;
+	int				 ioctlfd;
+
+	ifi = calloc(1, sizeof(*ifi));
+	if (ifi == NULL)
+		fatal("ifi");
+
+	ifi->rbuf_max = RT_BUF_SIZE;
+	ifi->rbuf = malloc(ifi->rbuf_max);
+	if (ifi->rbuf == NULL)
+		fatal("rbuf");
+
+	if ((ioctlfd = socket(AF_INET, SOCK_DGRAM, 0)) == -1)
+		fatal("socket(AF_INET, SOCK_DGRAM)");
+
+	get_name(ifi, ioctlfd, name);
+	ifi->index = if_nametoindex(ifi->name);
+	if (ifi->index == 0)
+		fatalx("if_nametoindex(%s) == 0", ifi->name);
+
+	get_address(ifi);
+	get_sockets(ifi);
+	get_ssid(ifi, ioctlfd);
+
+	if (noaction == 0) {
+		set_autoconf(ifi, ioctlfd);
+		set_iff_up(ifi, ioctlfd);
+	}
+
+	close(ioctlfd);
+
+	return ifi;
 }
 
 void
-get_hw_address(struct interface_info *ifi)
+get_name(struct interface_info *ifi, int ioctlfd, char *arg)
+{
+	struct ifgroupreq	 ifgr;
+	size_t			 len;
+
+	if (strcmp(arg, "egress") == 0) {
+		memset(&ifgr, 0, sizeof(ifgr));
+		strlcpy(ifgr.ifgr_name, "egress", sizeof(ifgr.ifgr_name));
+		if (ioctl(ioctlfd, SIOCGIFGMEMB, (caddr_t)&ifgr) == -1)
+			fatal("SIOCGIFGMEMB");
+		if (ifgr.ifgr_len > sizeof(struct ifg_req))
+			fatalx("too many interfaces in group egress");
+		if ((ifgr.ifgr_groups = calloc(1, ifgr.ifgr_len)) == NULL)
+			fatalx("ifgr_groups");
+		if (ioctl(ioctlfd, SIOCGIFGMEMB, (caddr_t)&ifgr) == -1)
+			fatal("SIOCGIFGMEMB");
+		len = strlcpy(ifi->name, ifgr.ifgr_groups->ifgrq_member,
+		    IFNAMSIZ);
+		free(ifgr.ifgr_groups);
+	} else
+		len = strlcpy(ifi->name, arg, IFNAMSIZ);
+
+	if (len >= IFNAMSIZ)
+		fatalx("interface name too long");
+}
+
+void
+get_address(struct interface_info *ifi)
 {
 	struct ifaddrs		*ifap, *ifa;
 	struct sockaddr_dl	*sdl;
@@ -304,6 +355,126 @@ get_hw_address(struct interface_info *ifi)
 	    ETHER_ADDR_LEN);
 
 	freeifaddrs(ifap);
+}
+
+void
+get_ssid(struct interface_info *ifi, int ioctlfd)
+{
+	struct ieee80211_nwid		nwid;
+	struct ifreq			ifr;
+
+	memset(&ifr, 0, sizeof(ifr));
+	memset(&nwid, 0, sizeof(nwid));
+
+	ifr.ifr_data = (caddr_t)&nwid;
+	strlcpy(ifr.ifr_name, ifi->name, sizeof(ifr.ifr_name));
+
+	if (ioctl(ioctlfd, SIOCG80211NWID, (caddr_t)&ifr) == 0) {
+		memset(ifi->ssid, 0, sizeof(ifi->ssid));
+		memcpy(ifi->ssid, nwid.i_nwid, nwid.i_len);
+		ifi->ssid_len = nwid.i_len;
+	}
+}
+
+void
+set_autoconf(struct interface_info *ifi, int ioctlfd)
+{
+	struct ifreq		ifr;
+
+	memset(&ifr, 0, sizeof(ifr));
+	strlcpy(ifr.ifr_name, ifi->name, sizeof(ifr.ifr_name));
+
+	if (ioctl(ioctlfd, SIOCGIFXFLAGS, (caddr_t)&ifr) < 0)
+		fatal("SIOGIFXFLAGS");
+	if ((ifr.ifr_flags & IFXF_AUTOCONF4) == 0) {
+		ifr.ifr_flags |= IFXF_AUTOCONF4;
+		if (ioctl(ioctlfd, SIOCSIFXFLAGS, (caddr_t)&ifr) == -1)
+			fatal("SIOCSIFXFLAGS");
+	}
+
+	ifi->flags |= IFI_AUTOCONF;
+}
+
+void
+set_iff_up(struct interface_info *ifi, int ioctlfd)
+{
+	struct ifreq	 ifr;
+
+	memset(&ifr, 0, sizeof(ifr));
+	strlcpy(ifr.ifr_name, ifi->name, sizeof(ifr.ifr_name));
+
+	if (ioctl(ioctlfd, SIOCGIFFLAGS, (caddr_t)&ifr) == -1)
+		fatal("%s: SIOCGIFFLAGS", log_procname);
+
+	if ((ifr.ifr_flags & IFF_UP) == 0) {
+		ifi->link_state = LINK_STATE_DOWN;
+		ifr.ifr_flags |= IFF_UP;
+		if (ioctl(ioctlfd, SIOCSIFFLAGS, (caddr_t)&ifr) == -1)
+			fatal("%s: SIOCSIFFLAGS", log_procname);
+	}
+}
+
+void
+set_user(char *user)
+{
+	struct passwd		*pw;
+
+	pw = getpwnam(user);
+	if (pw == NULL)
+		fatalx("no such user: %s", user);
+
+	if (chroot(pw->pw_dir) == -1)
+		fatal("chroot(%s)", pw->pw_dir);
+	if (chdir("/") == -1)
+		fatal("chdir(\"/\")");
+	if (setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid) == -1)
+		fatal("setresgid");
+	if (setgroups(1, &pw->pw_gid) == -1)
+		fatal("setgroups");
+	if (setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid) == -1)
+		fatal("setresuid");
+
+	endpwent();
+}
+
+void
+get_sockets(struct interface_info *ifi)
+{
+	unsigned char		*newp;
+	size_t			 newsize;
+
+	ifi->udpfd = get_udp_sock(ifi->rdomain);
+	ifi->bpffd = get_bpf_sock(ifi->name);
+
+	newsize = configure_bpf_sock(ifi->bpffd);
+	if (newsize > ifi->rbuf_max) {
+		if ((newp = realloc(ifi->rbuf, newsize)) == NULL)
+			fatal("rbuf");
+		ifi->rbuf = newp;
+		ifi->rbuf_max = newsize;
+	}
+}
+
+int
+get_routefd(int rdomain)
+{
+	int		routefd, rtfilter;
+
+	if ((routefd = socket(AF_ROUTE, SOCK_RAW, AF_INET)) == -1)
+		fatal("socket(AF_ROUTE, SOCK_RAW)");
+
+	rtfilter = ROUTE_FILTER(RTM_PROPOSAL) | ROUTE_FILTER(RTM_IFINFO) |
+	    ROUTE_FILTER(RTM_NEWADDR) | ROUTE_FILTER(RTM_DELADDR) |
+	    ROUTE_FILTER(RTM_IFANNOUNCE) | ROUTE_FILTER(RTM_80211INFO);
+
+	if (setsockopt(routefd, AF_ROUTE, ROUTE_MSGFILTER,
+	    &rtfilter, sizeof(rtfilter)) == -1)
+		fatal("setsockopt(ROUTE_MSGFILTER)");
+	if (setsockopt(routefd, AF_ROUTE, ROUTE_TABLEFILTER, &rdomain,
+	    sizeof(rdomain)) == -1)
+		fatal("setsockopt(ROUTE_TABLEFILTER)");
+
+	return routefd;
 }
 
 void
@@ -364,14 +535,13 @@ rtm_dispatch(struct interface_info *ifi, struct rt_msghdr *rtm)
 			} else if ((ifi->flags & IFI_IN_CHARGE) != 0) {
 				log_debug("%s: yielding responsibility",
 				    log_procname);
-				ifi->state = S_PREBOOT;
 				quit = TERMINATE;
 			}
 		} else if ((rtm->rtm_flags & RTF_PROTO2) != 0) {
 			release_lease(ifi); /* OK even if we sent it. */
-			ifi->state = S_PREBOOT;
 			quit = TERMINATE;
-		}
+		} else
+			return; /* Ignore tell_unwind() proposals. */
 		break;
 
 	case RTM_DESYNC:
@@ -445,24 +615,21 @@ rtm_dispatch(struct interface_info *ifi, struct rt_msghdr *rtm)
 	 */
 	if (quit == 0 && ifi->active != NULL &&
 	    (ifi->flags & IFI_AUTOCONF) != 0 &&
-	    (ifi->flags & IFI_IN_CHARGE) != 0)
+	    (ifi->flags & IFI_IN_CHARGE) != 0 &&
+	    ifi->state == S_BOUND)
 		write_resolv_conf();
 }
 
 int
 main(int argc, char *argv[])
 {
-	struct ieee80211_nwid	 nwid;
-	struct ifreq		 ifr;
+	uint8_t			 actions[DHO_END];
 	struct stat		 sb;
 	struct interface_info	*ifi;
-	struct passwd		*pw;
-	char			*ignore_list = NULL;
-	unsigned char		*newp;
-	size_t			 newsize;
+	char			*ignore_list, *p;
 	int			 fd, socket_fd[2];
-	int			 rtfilter, ioctlfd, routefd;
-	int			 ch;
+	int			 routefd;
+	int			 ch, i;
 
 	if (isatty(STDERR_FILENO) != 0)
 		log_init(1, LOG_DEBUG); /* log to stderr until daemonized */
@@ -471,28 +638,39 @@ main(int argc, char *argv[])
 
 	log_setverbose(0);	/* Don't show log_debug() messages. */
 
-	while ((ch = getopt(argc, argv, "c:di:L:nrv")) != -1)
+	if (lstat(_PATH_DHCLIENT_CONF, &sb) == 0)
+		path_dhclient_conf = _PATH_DHCLIENT_CONF;
+	memset(actions, ACTION_USELEASE, sizeof(actions));
+
+	while ((ch = getopt(argc, argv, "c:di:nrv")) != -1)
 		switch (ch) {
 		case 'c':
-			if (optarg == NULL)
-				usage();
-			cmd_opts |= OPT_CONFPATH;
-			path_dhclient_conf = optarg;
+			if (strlen(optarg) == 0)
+				path_dhclient_conf = NULL;
+			else if (lstat(optarg, &sb) == 0)
+				path_dhclient_conf = optarg;
+			else
+				fatal("lstat(%s)", optarg);
 			break;
 		case 'd':
 			cmd_opts |= OPT_FOREGROUND;
 			break;
 		case 'i':
-			if (optarg == NULL)
-				usage();
-			cmd_opts |= OPT_IGNORELIST;
+			if (strlen(optarg) == 0)
+				break;
 			ignore_list = strdup(optarg);
-			break;
-		case 'L':
-			if (optarg == NULL)
-				usage();
-			cmd_opts |= OPT_DBPATH;
-			path_option_db = optarg;
+			if (ignore_list == NULL)
+				fatal("ignore_list");
+			for (p = strsep(&ignore_list, ", "); p != NULL;
+			     p = strsep(&ignore_list, ", ")) {
+				if (*p == '\0')
+					continue;
+				i = name_to_code(p);
+				if (i == DHO_END)
+					fatalx("invalid option name: '%s'", p);
+				actions[i] = ACTION_IGNORE;
+			}
+			free(ignore_list);
 			break;
 		case 'n':
 			cmd_opts |= OPT_NOACTION;
@@ -513,72 +691,22 @@ main(int argc, char *argv[])
 	if (argc != 1)
 		usage();
 
-	if ((cmd_opts & OPT_DBPATH) != 0) {
-		if (lstat(path_option_db, &sb) == -1) {
-			/*
-			 * Non-existant file is OK. An attempt will be
-			 * made to create it.
-			 */
-			if (errno != ENOENT)
-				fatal("lstat(%s)", path_option_db);
-		} else if (S_ISREG(sb.st_mode) == 0)
-			fatalx("'%s' is not a regular file",
-			    path_option_db);
-	}
-	if ((cmd_opts & OPT_CONFPATH) != 0) {
-		if (lstat(path_dhclient_conf, &sb) == -1) {
-			/*
-			 * Non-existant file is OK. It lets you ignore
-			 * /etc/dhclient.conf for testing.
-			 */
-			if (errno != ENOENT)
-				fatal("lstat(%s)", path_dhclient_conf);
-		}
-	}
-
 	if ((cmd_opts & (OPT_FOREGROUND | OPT_NOACTION)) != 0)
 		cmd_opts |= OPT_VERBOSE;
 
 	if ((cmd_opts & OPT_VERBOSE) != 0)
 		log_setverbose(1);	/* Show log_debug() messages. */
 
-	ifi = calloc(1, sizeof(*ifi));
-	if (ifi == NULL)
-		fatal("ifi");
+	ifi = initialize_interface(argv[0], cmd_opts & OPT_NOACTION);
 
-	/* Allocate a rbuf large enough to handle routing socket messages. */
-	ifi->rbuf_max = RT_BUF_SIZE;
-	ifi->rbuf = malloc(ifi->rbuf_max);
-	if (ifi->rbuf == NULL)
-		fatal("rbuf");
-
-	if ((ioctlfd = socket(AF_INET, SOCK_DGRAM, 0)) == -1)
-		fatal("socket(AF_INET, SOCK_DGRAM)");
-	get_ifname(ifi, ioctlfd, argv[0]);
 	log_procname = strdup(ifi->name);
 	if (log_procname == NULL)
 		fatal("log_procname");
 	setproctitle("%s", log_procname);
 	log_procinit(log_procname);
-	ifi->index = if_nametoindex(ifi->name);
-	if (ifi->index == 0)
-		fatalx("no such interface");
-	get_hw_address(ifi);
 
 	tzset();
 
-	/* Get the ssid if present. */
-	memset(&ifr, 0, sizeof(ifr));
-	memset(&nwid, 0, sizeof(nwid));
-	ifr.ifr_data = (caddr_t)&nwid;
-	strlcpy(ifr.ifr_name, ifi->name, sizeof(ifr.ifr_name));
-	if (ioctl(ioctlfd, SIOCG80211NWID, (caddr_t)&ifr) == 0) {
-		memset(ifi->ssid, 0, sizeof(ifi->ssid));
-		memcpy(ifi->ssid, nwid.i_nwid, nwid.i_len);
-		ifi->ssid_len = nwid.i_len;
-	}
-
-	/* Put us into the correct rdomain */
 	if (setrtable(ifi->rdomain) == -1)
 		fatal("setrtable(%u)", ifi->rdomain);
 
@@ -604,50 +732,14 @@ main(int argc, char *argv[])
 		fatal("unpriv_ibuf");
 	imsg_init(unpriv_ibuf, socket_fd[1]);
 
-	read_conf(ifi->name, ignore_list, &ifi->hw_address);
-	free(ignore_list);
+	read_conf(ifi->name, actions, &ifi->hw_address);
 	if ((cmd_opts & OPT_NOACTION) != 0)
 		return 0;
-
-	if ((pw = getpwnam("_dhcp")) == NULL)
-		fatalx("no such user: _dhcp");
 
 	if (asprintf(&path_lease_db, "%s.%s", _PATH_LEASE_DB, ifi->name) == -1)
 		fatal("path_lease_db");
 
-	interface_state(ifi);
-	if (!LINK_STATE_IS_UP(ifi->link_state))
-		interface_link_forceup(ifi->name, ioctlfd);
-
-	/* Running dhclient(8) means this interface is AUTOCONF4. */
-	ifi->flags |= IFI_AUTOCONF;
-	memset(&ifr, 0, sizeof(ifr));
-	strlcpy(ifr.ifr_name, ifi->name, sizeof(ifr.ifr_name));
-	if (ioctl(ioctlfd, SIOCGIFXFLAGS, (caddr_t)&ifr) < 0)
-		fatal("SIOGIFXFLAGS");
-	if ((ifr.ifr_flags & IFXF_AUTOCONF4) == 0) {
-		ifr.ifr_flags |= IFXF_AUTOCONF4;
-		if (ioctl(ioctlfd, SIOCSIFXFLAGS, (caddr_t)&ifr) == -1)
-			fatal("SIOCSIFXFLAGS");
-	}
-
-	close(ioctlfd);
-	ioctlfd = -1;
-
-	if ((routefd = socket(AF_ROUTE, SOCK_RAW, AF_INET)) == -1)
-		fatal("socket(AF_ROUTE, SOCK_RAW)");
-
-	rtfilter = ROUTE_FILTER(RTM_PROPOSAL) | ROUTE_FILTER(RTM_IFINFO) |
-	    ROUTE_FILTER(RTM_NEWADDR) | ROUTE_FILTER(RTM_DELADDR) |
-	    ROUTE_FILTER(RTM_IFANNOUNCE) | ROUTE_FILTER(RTM_80211INFO);
-
-	if (setsockopt(routefd, AF_ROUTE, ROUTE_MSGFILTER,
-	    &rtfilter, sizeof(rtfilter)) == -1)
-		fatal("setsockopt(ROUTE_MSGFILTER)");
-	if (setsockopt(routefd, AF_ROUTE, ROUTE_TABLEFILTER, &ifi->rdomain,
-	    sizeof(ifi->rdomain)) == -1)
-		fatal("setsockopt(ROUTE_TABLEFILTER)");
-
+	routefd = get_routefd(ifi->rdomain);
 	fd = take_charge(ifi, routefd, path_lease_db);
 	if (fd != -1)
 		read_lease_db(&ifi->lease_db);
@@ -656,41 +748,7 @@ main(int argc, char *argv[])
 		log_warn("%s: fopen(%s)", log_procname, path_lease_db);
 	write_lease_db(&ifi->lease_db);
 
-	if (path_option_db != NULL) {
-		/*
-		 * Open 'a' so file is not truncated. The truncation
-		 * is done when new data is about to be written to the
-		 * file. This avoids false notifications to watchers that
-		 * network configuration changes have occurred.
-		 */
-		if ((optionDB = fopen(path_option_db, "a")) == NULL)
-			fatal("fopen(%s)", path_option_db);
-	}
-
-	/* Create the udp and bpf sockets, growing rbuf if needed. */
-	ifi->udpfd = get_udp_sock(ifi->rdomain);
-	ifi->bpffd = get_bpf_sock(ifi->name);
-	newsize = configure_bpf_sock(ifi->bpffd);
-	if (newsize > ifi->rbuf_max) {
-		if ((newp = realloc(ifi->rbuf, newsize)) == NULL)
-			fatal("rbuf");
-		ifi->rbuf = newp;
-		ifi->rbuf_max = newsize;
-	}
-
-	if (chroot(pw->pw_dir) == -1)
-		fatal("chroot(%s)", pw->pw_dir);
-	if (chdir("/") == -1)
-		fatal("chdir(\"/\")");
-
-	if (setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid) == -1)
-		fatal("setresgid");
-	if (setgroups(1, &pw->pw_gid) == -1)
-		fatal("setgroups");
-	if (setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid) == -1)
-		fatal("setresuid");
-
-	endpwent();
+	set_user("_dhcp");
 
 	if ((cmd_opts & OPT_FOREGROUND) == 0) {
 		if (pledge("stdio inet dns route proc", NULL) == -1)
@@ -712,7 +770,7 @@ usage(void)
 	extern char	*__progname;
 
 	fprintf(stderr,
-	    "usage: %s [-dnrv] [-c file] [-i options] [-L file] "
+	    "usage: %s [-dnrv] [-c file] [-i options] "
 	    "interface\n", __progname);
 	exit(1);
 }
@@ -748,6 +806,8 @@ state_preboot(struct interface_info *ifi)
 void
 state_reboot(struct interface_info *ifi)
 {
+	struct client_lease		*lease;
+
 	cancel_timeout(ifi);
 
 	/*
@@ -760,8 +820,10 @@ state_reboot(struct interface_info *ifi)
 		state_init(ifi);
 		return;
 	}
-	ifi->expiry = lease_expiry(ifi->active);
-	ifi->rebind = lease_rebind(ifi->active);
+	lease = apply_defaults(ifi->active);
+	ifi->expiry = lease_expiry(lease);
+	ifi->rebind = lease_rebind(lease);
+	free_client_lease(lease);
 
 	ifi->xid = arc4random();
 	make_request(ifi, ifi->active);
@@ -814,6 +876,7 @@ state_selecting(struct interface_info *ifi)
 	}
 
 	ifi->destination.s_addr = INADDR_BROADCAST;
+	time(&ifi->first_sending);
 	ifi->interval = 0;
 
 	/*
@@ -937,6 +1000,11 @@ dhcpack(struct interface_info *ifi, struct option_data *options,
 void
 dhcpnak(struct interface_info *ifi, const char *src)
 {
+	struct client_lease		*ll, *pl;
+	time_t				 cur_time;
+
+	time(&cur_time);
+
 	if (ifi->state != S_REBOOTING &&
 	    ifi->state != S_REQUESTING &&
 	    ifi->state != S_RENEWING) {
@@ -945,24 +1013,28 @@ dhcpnak(struct interface_info *ifi, const char *src)
 		return;
 	}
 
-	if (ifi->active == NULL) {
-		log_debug("%s: unexpected DHCPNAK from %s - no active lease",
-		    log_procname, src);
-		return;
-	}
-
 	log_debug("%s: DHCPNAK from %s", log_procname, src);
-	revoke_proposal(ifi->configured);
 
-	/* XXX Do we really want to remove a NAK'd lease from the database? */
-	TAILQ_REMOVE(&ifi->lease_db, ifi->active, next);
-	free_client_lease(ifi->active);
-
-	ifi->active = NULL;
-	free(ifi->configured);
-	ifi->configured = NULL;
-	free(ifi->unwind_info);
-	ifi->unwind_info = NULL;
+	/* Remove expired leases and the NAK'd address from the database. */
+	TAILQ_FOREACH_SAFE(ll, &ifi->lease_db, next, pl) {
+		if (lease_expiry(ll) < cur_time || (
+		    ifi->ssid_len == ll->ssid_len &&
+		    memcmp(ifi->ssid, ll->ssid, ll->ssid_len) == 0 &&
+		    ll->address.s_addr == ifi->requested_address.s_addr)) {
+			if (ll == ifi->active) {
+				tell_unwind(NULL, ifi->flags);
+				free(ifi->unwind_info);
+				ifi->unwind_info = NULL;
+				revoke_proposal(ifi->configured);
+				free(ifi->configured);
+				ifi->configured = NULL;
+				ifi->active = NULL;
+			}
+			TAILQ_REMOVE(&ifi->lease_db, ll, next);
+			free_client_lease(ll);
+			write_lease_db(&ifi->lease_db);
+		}
+	}
 
 	/* Stop sending DHCPREQUEST packets. */
 	cancel_timeout(ifi);
@@ -1076,8 +1148,6 @@ newlease:
 	 * place when dhclient(8) goes daemon.
 	 */
 	write_lease_db(&ifi->lease_db);
-	write_option_db(ifi->active, lease);
-	write_resolv_conf();
 
 	free_client_lease(lease);
 	free(effective_proposal);
@@ -1195,8 +1265,12 @@ packet_to_lease(struct interface_info *ifi, struct option_data *options)
 	lease = calloc(1, sizeof(*lease));
 	if (lease == NULL) {
 		log_warn("%s: lease", log_procname);
-		return NULL;
+		return NULL;	/* Can't even DECLINE. */
 	}
+
+	/*  Copy the lease addresses. */
+	lease->address.s_addr = packet->yiaddr.s_addr;
+	lease->next_server.s_addr = packet->siaddr.s_addr;
 
 	/* Copy the lease options. */
 	for (i = 0; i < DHO_COUNT; i++) {
@@ -1211,7 +1285,7 @@ packet_to_lease(struct interface_info *ifi, struct option_data *options)
 			options[i].data = strdup(pretty);
 			if (options[i].data == NULL)
 				fatal("RFC1035 string");
-			options[i].len = strlen(options[i].data) + 1;
+			options[i].len = strlen(options[i].data);
 		} else
 			pretty = pretty_print_option(i, &options[i], 0);
 		if (strlen(pretty) == 0)
@@ -1263,7 +1337,6 @@ packet_to_lease(struct interface_info *ifi, struct option_data *options)
 	 * If this lease is trying to sell us an address we are already
 	 * using, decline it.
 	 */
-	lease->address.s_addr = packet->yiaddr.s_addr;
 	memset(ifname, 0, sizeof(ifname));
 	if (addressinuse(ifi->name, lease->address, ifname) != 0 &&
 	    strncmp(ifname, ifi->name, IF_NAMESIZE) != 0) {
@@ -1271,9 +1344,6 @@ packet_to_lease(struct interface_info *ifi, struct option_data *options)
 		    inet_ntoa(lease->address), ifname);
 		goto decline;
 	}
-
-	/* Save the siaddr (a.k.a. next-server) info. */
-	lease->next_server.s_addr = packet->siaddr.s_addr;
 
 	/* If the server name was filled out, copy it. */
 	if ((lease->options[DHO_DHCP_OPTION_OVERLOAD].len == 0 ||
@@ -1451,32 +1521,26 @@ send_request(struct interface_info *ifi)
 	/* Figure out how long it's been since we started transmitting. */
 	interval = cur_time - ifi->first_sending;
 
-	/*
-	 * If we're in the INIT-REBOOT state and we've been trying longer
-	 * than reboot_timeout, go to INIT state and DISCOVER an address.
-	 *
-	 * In the INIT-REBOOT state, if we don't get an ACK, it
-	 * means either that we're on a network with no DHCP server,
-	 * or that our server is down.  In the latter case, assuming
-	 * that there is a backup DHCP server, DHCPDISCOVER will get
-	 * us a new address, but we could also have successfully
-	 * reused our old address.  In the former case, we're hosed
-	 * anyway.  This is not a win-prone situation.
-	 */
-	if (ifi->state == S_REBOOTING && interval >
-	    config->reboot_timeout) {
+	switch (ifi->state) {
+	case S_REBOOTING:
+		if (interval > config->reboot_timeout)
+			ifi->state = S_INIT;
+		break;
+	case S_RENEWING:
+		if (cur_time > ifi->expiry)
+			ifi->state = S_INIT;
+		break;
+	case S_REQUESTING:
+		if (interval > config->timeout)
+			ifi->state = S_INIT;
+		break;
+	default:
+		/* Something has gone wrong. Start over. */
 		ifi->state = S_INIT;
-		cancel_timeout(ifi);
-		state_init(ifi);
-		return;
+		break;
 	}
-
-	/*
-	 * If the lease has expired go back to the INIT state.
-	 */
-	if (ifi->state != S_REQUESTING && cur_time > ifi->expiry) {
-		ifi->active = NULL;
-		ifi->state = S_INIT;
+	if (ifi->state == S_INIT) {
+		cancel_timeout(ifi);
 		state_init(ifi);
 		return;
 	}
@@ -1567,7 +1631,7 @@ send_release(struct interface_info *ifi)
 {
 	ssize_t		rslt;
 
-	rslt = send_packet(ifi, ifi->configured->ifa, ifi->destination,
+	rslt = send_packet(ifi, ifi->configured->address, ifi->destination,
 	    "DHCPRELEASE");
 	if (rslt != -1)
 		log_debug("%s: DHCPRELEASE", log_procname);
@@ -1642,7 +1706,7 @@ make_discover(struct interface_info *ifi, struct client_lease *lease)
 }
 
 void
-make_request(struct interface_info *ifi, struct client_lease * lease)
+make_request(struct interface_info *ifi, struct client_lease *lease)
 {
 	struct option_data	 options[DHO_COUNT];
 	struct dhcp_packet	*packet = &ifi->sent_packet;
@@ -1674,7 +1738,6 @@ make_request(struct interface_info *ifi, struct client_lease * lease)
 	}
 	if (ifi->state == S_REQUESTING ||
 	    ifi->state == S_REBOOTING) {
-		ifi->requested_address = lease->address;
 		i = DHO_DHCP_REQUESTED_ADDRESS;
 		options[i].data = (char *)&lease->address.s_addr;
 		options[i].len = sizeof(lease->address.s_addr);
@@ -1713,6 +1776,7 @@ make_request(struct interface_info *ifi, struct client_lease * lease)
 	 * If we own the address we're requesting, put it in ciaddr. Otherwise
 	 * set ciaddr to zero.
 	 */
+	ifi->requested_address = lease->address;
 	if (ifi->state == S_BOUND ||
 	    ifi->state == S_RENEWING)
 		packet->ciaddr.s_addr = lease->address.s_addr;
@@ -1899,39 +1963,6 @@ write_lease_db(struct client_lease_tq *lease_db)
 }
 
 void
-write_option_db(struct client_lease *offered, struct client_lease *effective)
-{
-	char	*leasestr;
-
-	if (optionDB == NULL)
-		return;
-
-	if (ftruncate(fileno(optionDB), 0) == -1) {
-		log_warn("optionDB ftruncate()");
-		return;
-	}
-
-	leasestr = lease_as_string("offered", offered);
-	if (leasestr == NULL)
-		log_warnx("%s: cannot make offered lease into string",
-		    log_procname);
-	else if (fprintf(optionDB, "%s", leasestr) == -1)
-		log_warn("optionDB 'offered' fprintf()");
-
-	leasestr = lease_as_string("effective", effective);
-	if (leasestr == NULL)
-		log_warnx("%s: cannot make effective lease into string",
-		    log_procname);
-	else if (fprintf(optionDB, "%s", leasestr) == -1)
-		log_warn("optionDB 'effective' fprintf()");
-
-	if (fflush(optionDB) == EOF)
-		log_warn("optionDB fflush()");
-	else if (fsync(fileno(optionDB)) == -1)
-		log_warn("optionDB fsync()");
-}
-
-void
 append_statement(char *string, size_t sz, char *s1, char *s2)
 {
 	strlcat(string, s1, sz);
@@ -1973,92 +2004,79 @@ lease_as_unwind_info(struct client_lease *lease)
 struct proposal *
 lease_as_proposal(struct client_lease *lease)
 {
-	struct proposal		*proposal;
+	uint8_t			 defroute[5];	/* 1 + sizeof(in_addr_t) */
+	struct option_data	 fake;
 	struct option_data	*opt;
+	struct proposal		*proposal;
+	uint8_t			*ns, *p, *routes, *domains;
+	unsigned int		 routes_len = 0, domains_len = 0, ns_len = 0;
+	uint16_t		 mtu;
 
-	proposal = calloc(1, sizeof(*proposal));
-	if (proposal == NULL)
-		fatal("proposal");
-
-	proposal->ifa = lease->address;
-	proposal->addrs |= RTA_IFA;
-
-	opt = &lease->options[DHO_INTERFACE_MTU];
-	if (opt->len == sizeof(uint16_t)) {
-		memcpy(&proposal->mtu, opt->data, sizeof(proposal->mtu));
-		proposal->mtu = ntohs(proposal->mtu);
-		proposal->inits |= RTV_MTU;
-	}
-
-	opt = &lease->options[DHO_SUBNET_MASK];
-	if (opt->len == sizeof(proposal->netmask)) {
-		proposal->addrs |= RTA_NETMASK;
-		proposal->netmask.s_addr =
-		    ((struct in_addr *)opt->data)->s_addr;
-	}
-
+	/* Determine sizes of variable length data. */
+	opt = NULL;
 	if (lease->options[DHO_CLASSLESS_STATIC_ROUTES].len != 0) {
 		opt = &lease->options[DHO_CLASSLESS_STATIC_ROUTES];
-		if (opt->len < sizeof(proposal->rtstatic)) {
-			proposal->rtstatic_len = opt->len;
-			memcpy(&proposal->rtstatic, opt->data, opt->len);
-			proposal->addrs |= RTA_STATIC;
-		} else
-			log_warnx("%s: CLASSLESS_STATIC_ROUTES too long",
-			    log_procname);
 	} else if (lease->options[DHO_CLASSLESS_MS_STATIC_ROUTES].len != 0) {
 		opt = &lease->options[DHO_CLASSLESS_MS_STATIC_ROUTES];
-		if (opt->len < sizeof(proposal->rtstatic)) {
-			proposal->rtstatic_len = opt->len;
-			memcpy(&proposal->rtstatic[1], opt->data, opt->len);
-			proposal->addrs |= RTA_STATIC;
-		} else
-			log_warnx("%s: MS_CLASSLESS_STATIC_ROUTES too long",
-			    log_procname);
 	} else if (lease->options[DHO_ROUTERS].len != 0) {
+		/* Fake a classless static default route. */
 		opt = &lease->options[DHO_ROUTERS];
-		if (opt->len >= sizeof(in_addr_t) &&
-		    (1 + sizeof(in_addr_t)) < sizeof(proposal->rtstatic)) {
-			proposal->rtstatic_len = 1 + sizeof(in_addr_t);
-			proposal->rtstatic[0] = 0;
-			memcpy(&proposal->rtstatic[1], opt->data,
-			    sizeof(in_addr_t));
-			proposal->addrs |= RTA_STATIC;
-		} else
-			log_warnx("%s: DHO_ROUTERS invalid", log_procname);
+		fake.len = sizeof(defroute);
+		fake.data = defroute;
+		fake.data[0] = 0;
+		memcpy(&fake.data[1], opt->data, sizeof(defroute) - 1);
+		opt = &fake;
+	}
+	if (opt != NULL) {
+		routes_len = opt->len;
+		routes = opt->data;
 	}
 
-	if (lease->options[DHO_DOMAIN_SEARCH].len != 0) {
+	opt = NULL;
+	if (lease->options[DHO_DOMAIN_SEARCH].len != 0)
 		opt = &lease->options[DHO_DOMAIN_SEARCH];
-		if (opt->len < sizeof(proposal->rtsearch)) {
-			proposal->rtsearch_len = strlen(opt->data);
-			memcpy(proposal->rtsearch, opt->data,
-			    proposal->rtsearch_len);
-			proposal->addrs |= RTA_SEARCH;
-		} else
-			log_warnx("%s: DOMAIN_SEARCH too long", log_procname);
-	} else if (lease->options[DHO_DOMAIN_NAME].len != 0) {
+	else if (lease->options[DHO_DOMAIN_NAME].len != 0)
 		opt = &lease->options[DHO_DOMAIN_NAME];
-		if (opt->len < sizeof(proposal->rtsearch)) {
-			proposal->rtsearch_len = opt->len;
-			memcpy(proposal->rtsearch, opt->data, opt->len);
-			proposal->addrs |= RTA_SEARCH;
-		} else
-			log_warnx("%s: DOMAIN_NAME too long", log_procname);
+	if (opt != NULL) {
+		domains_len = opt->len;
+		domains = opt->data;
 	}
 
 	if (lease->options[DHO_DOMAIN_NAME_SERVERS].len != 0) {
-		int servers;
 		opt = &lease->options[DHO_DOMAIN_NAME_SERVERS];
-		servers = opt->len / sizeof(in_addr_t);
-		if (servers > MAXNS)
-			servers = MAXNS;
-		if (servers > 0) {
-			proposal->addrs |= RTA_DNS;
-			proposal->rtdns_len = servers * sizeof(in_addr_t);
-			memcpy(proposal->rtdns, opt->data, proposal->rtdns_len);
-		}
+		ns_len = opt->len;
+		ns = opt->data;
 	}
+
+	/* Allocate proposal. */
+	proposal = calloc(1, sizeof(*proposal) + routes_len + domains_len +
+	    ns_len);
+	if (proposal == NULL)
+		fatal("proposal");
+
+	/* Fill in proposal. */
+	proposal->address = lease->address;
+
+	opt = &lease->options[DHO_INTERFACE_MTU];
+	if (opt->len == sizeof(mtu)) {
+		memcpy(&mtu, opt->data, sizeof(mtu));
+		proposal->mtu = ntohs(mtu);
+	}
+
+	opt = &lease->options[DHO_SUBNET_MASK];
+	if (opt->len == sizeof(proposal->netmask))
+		memcpy(&proposal->netmask, opt->data, opt->len);
+
+	/* Append variable length uint8_t data. */
+	p = (uint8_t *)proposal + sizeof(struct proposal);
+	memcpy(p, routes, routes_len);
+	p += routes_len;
+	proposal->routes_len = routes_len;
+	memcpy(p, domains, domains_len);
+	p += domains_len;
+	proposal->domains_len = domains_len;
+	memcpy(p, ns, ns_len);
+	proposal->ns_len = ns_len;
 
 	return proposal;
 }
@@ -2242,12 +2260,16 @@ res_hnok_list(const char *names)
 }
 
 /*
- * Decode a byte string encoding a list of domain names as specified in RFC 1035
+ * Decode a byte string encoding a list of domain names as specified in RFC1035
  * section 4.1.4.
  *
  * The result is a string consisting of a blank separated list of domain names.
  *
- e.g. 3:65:6e:67:5:61:70:70:6c:65:3:63:6f:6d:0:9:6d:61:72:6b:65:74:69:6e:67:c0:04
+ * e.g.
+ *
+ * 3:65:6e:67:5:61:70:70:6c:65:3:63:6f:6d:0:9:6d:61:72:6b:65:74:69:6e:67:c0:04
+ *
+ * which represents
  *
  *    3 |'e'|'n'|'g'| 5 |'a'|'p'|'p'|'l'|
  *   'e'| 3 |'c'|'o'|'m'| 0 | 9 |'m'|'a'|
@@ -2315,8 +2337,7 @@ fork_privchld(struct interface_info *ifi, int fd, int fd2)
 
 	go_daemon();
 
-	if (log_procname != NULL)
-		free(log_procname);
+	free(log_procname);
 	rslt = asprintf(&log_procname, "%s [priv]", ifi->name);
 	if (rslt == -1)
 		fatal("log_procname");
@@ -2346,11 +2367,11 @@ fork_privchld(struct interface_info *ifi, int fd, int fd2)
 		pfd[0].fd = priv_ibuf->fd;
 		pfd[0].events = POLLIN;
 
-		nfds = poll(pfd, 1, INFTIM);
+		nfds = ppoll(pfd, 1, NULL, NULL);
 		if (nfds == -1) {
 			if (errno == EINTR)
 				continue;
-			log_warn("%s: poll(priv_ibuf)", log_procname);
+			log_warn("%s: ppoll(priv_ibuf)", log_procname);
 			break;
 		}
 		if ((pfd[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
@@ -2379,38 +2400,12 @@ fork_privchld(struct interface_info *ifi, int fd, int fd2)
 	exit(1);
 }
 
-void
-get_ifname(struct interface_info *ifi, int ioctlfd, char *arg)
-{
-	struct ifgroupreq	 ifgr;
-	size_t			 len;
-
-	if (strcmp(arg, "egress") == 0) {
-		memset(&ifgr, 0, sizeof(ifgr));
-		strlcpy(ifgr.ifgr_name, "egress", sizeof(ifgr.ifgr_name));
-		if (ioctl(ioctlfd, SIOCGIFGMEMB, (caddr_t)&ifgr) == -1)
-			fatal("SIOCGIFGMEMB");
-		if (ifgr.ifgr_len > sizeof(struct ifg_req))
-			fatalx("too many interfaces in group egress");
-		if ((ifgr.ifgr_groups = calloc(1, ifgr.ifgr_len)) == NULL)
-			fatalx("ifgr_groups");
-		if (ioctl(ioctlfd, SIOCGIFGMEMB, (caddr_t)&ifgr) == -1)
-			fatal("SIOCGIFGMEMB");
-		len = strlcpy(ifi->name, ifgr.ifgr_groups->ifgrq_member,
-		    IFNAMSIZ);
-		free(ifgr.ifgr_groups);
-	} else
-		len = strlcpy(ifi->name, arg, IFNAMSIZ);
-
-	if (len >= IFNAMSIZ)
-		fatalx("interface name too long");
-}
-
 struct client_lease *
 apply_defaults(struct client_lease *lease)
 {
 	struct option_data	 emptyopt = {0, NULL};
 	struct client_lease	*newlease;
+	char			*fmt;
 	int			 i;
 
 	newlease = clone_lease(lease);
@@ -2431,31 +2426,31 @@ apply_defaults(struct client_lease *lease)
 		newlease->next_server.s_addr = config->next_server.s_addr;
 
 	for (i = 0; i < DHO_COUNT; i++) {
+		fmt = code_to_format(i);
 		switch (config->default_actions[i]) {
 		case ACTION_IGNORE:
-			free(newlease->options[i].data);
-			newlease->options[i].data = NULL;
-			newlease->options[i].len = 0;
+			merge_option_data(fmt, &emptyopt, &emptyopt,
+			    &newlease->options[i]);
 			break;
 
 		case ACTION_SUPERSEDE:
-			merge_option_data(&config->defaults[i], &emptyopt,
+			merge_option_data(fmt, &config->defaults[i], &emptyopt,
 			    &newlease->options[i]);
 			break;
 
 		case ACTION_PREPEND:
-			merge_option_data(&config->defaults[i],
+			merge_option_data(fmt, &config->defaults[i],
 			    &lease->options[i], &newlease->options[i]);
 			break;
 
 		case ACTION_APPEND:
-			merge_option_data(&lease->options[i],
+			merge_option_data(fmt, &lease->options[i],
 			    &config->defaults[i], &newlease->options[i]);
 			break;
 
 		case ACTION_DEFAULT:
 			if (newlease->options[i].len == 0)
-				merge_option_data(&config->defaults[i],
+				merge_option_data(fmt, &config->defaults[i],
 				    &emptyopt, &newlease->options[i]);
 			break;
 
@@ -2536,18 +2531,17 @@ cleanup:
 int
 take_charge(struct interface_info *ifi, int routefd, char *leasespath)
 {
+	const struct timespec	 max_timeout = { 9, 0 };
+	const struct timespec	 resend_intvl = { 3, 0 };
+	const struct timespec	 leasefile_intvl = { 0, 3000000 };
+	struct timespec		 now, resend, stop, timeout;
 	struct pollfd		 fds[1];
 	struct rt_msghdr	 rtm;
-	time_t			 cur_time, sent_time, start_time;
 	int			 fd, nfds;
 
-#define	MAXSECONDS		9
-#define	SENTSECONDS		3
-#define	POLLMILLISECONDS	3
-
-	if (time(&start_time) == -1)
-		fatal("time");
-	sent_time = start_time;
+	clock_gettime(CLOCK_REALTIME, &now);
+	resend = now;
+	timespecadd(&now, &max_timeout, &stop);
 
 	/*
 	 * Send RTM_PROPOSAL with RTF_PROTO3 set.
@@ -2566,32 +2560,35 @@ take_charge(struct interface_info *ifi, int routefd, char *leasespath)
 	rtm.rtm_addrs = 0;
 	rtm.rtm_flags = RTF_UP | RTF_PROTO3;
 
-	rtm.rtm_seq = ifi->xid = arc4random();
-	if (write(routefd, &rtm, sizeof(rtm)) == -1)
-		fatal("write(routefd)");
-
 	for (fd = -1; fd == -1 && quit != TERMINATE;) {
-		if (time(&cur_time) == -1)
-			fatal("time");
-		if (cur_time - start_time >= MAXSECONDS)
+		clock_gettime(CLOCK_REALTIME, &now);
+		if (timespeccmp(&now, &stop, >=))
 			fatalx("failed to take charge");
 
 		if ((ifi->flags & IFI_IN_CHARGE) == 0) {
-			if ((cur_time - sent_time) >= SENTSECONDS) {
-				sent_time = cur_time;
+			if (timespeccmp(&now, &resend, >=)) {
+				timespecadd(&resend, &resend_intvl, &resend);
 				rtm.rtm_seq = ifi->xid = arc4random();
 				if (write(routefd, &rtm, sizeof(rtm)) == -1)
 					fatal("write(routefd)");
 			}
+			timespecsub(&resend, &now, &timeout);
+		} else {
+			/*
+			 * Keep trying to open leasefile in 3ms intervals
+			 * while continuing to process any RTM_* messages
+			 * that come in.
+			 */
+			 timeout = leasefile_intvl;
 		}
 
 		fds[0].fd = routefd;
 		fds[0].events = POLLIN;
-		nfds = poll(fds, 1, POLLMILLISECONDS);
+		nfds = ppoll(fds, 1, &timeout, NULL);
 		if (nfds == -1) {
 			if (errno == EINTR)
 				continue;
-			fatal("poll(routefd)");
+			fatal("ppoll(routefd)");
 		}
 
 		if ((fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
@@ -2599,7 +2596,7 @@ take_charge(struct interface_info *ifi, int routefd, char *leasespath)
 		if (nfds == 1 && (fds[0].revents & POLLIN) == POLLIN)
 			routefd_handler(ifi, routefd);
 
-		if ((ifi->flags & IFI_IN_CHARGE) == IFI_IN_CHARGE) {
+		if (quit != TERMINATE && (ifi->flags & IFI_IN_CHARGE) == IFI_IN_CHARGE) {
 			fd = open(leasespath, O_NONBLOCK |
 			    O_RDONLY|O_EXLOCK|O_CREAT|O_NOFOLLOW, 0640);
 			if (fd == -1 && errno != EWOULDBLOCK)
@@ -2695,7 +2692,7 @@ lease_rebind(struct client_lease *lease)
 	expiry = lease_expiry(lease) - lease->epoch;
 	renewal = lease_renewal(lease) - lease->epoch;
 
-	rebind = (expiry * 7) / 8;
+	rebind = (expiry / 8) * 7;
 	if (lease->options[DHO_DHCP_REBINDING_TIME].len == sizeof(rebind)) {
 		memcpy(&rebind, lease->options[DHO_DHCP_REBINDING_TIME].data,
 		    sizeof(rebind));
@@ -2763,25 +2760,22 @@ tick_msg(const char *preamble, int success, time_t start)
  * 1) Send DHCPRELEASE.
  * 2) Unconfigure address/routes/etc.
  * 3) Remove lease from database & write updated DB.
- * 4) Truncate optionDB if present.
  */
 void
 release_lease(struct interface_info *ifi)
 {
-	char			 destbuf[INET_ADDRSTRLEN];
-	char			 ifabuf[INET_ADDRSTRLEN];
+	char			 buf[INET_ADDRSTRLEN];
 	struct option_data	*opt;
 
 	if (ifi->configured == NULL || ifi->active == NULL)
 		return;	/* Nothing to release. */
-	strlcpy(ifabuf, inet_ntoa(ifi->configured->ifa), sizeof(ifabuf));
+	strlcpy(buf, inet_ntoa(ifi->configured->address), sizeof(buf));
 
 	opt = &ifi->active->options[DHO_DHCP_SERVER_IDENTIFIER];
 	if (opt->len == sizeof(in_addr_t))
 		ifi->destination.s_addr = *(in_addr_t *)opt->data;
 	else
-		ifi->destination.s_addr = INADDR_ANY;
-	strlcpy(destbuf, inet_ntoa(ifi->destination), sizeof(destbuf));
+		ifi->destination.s_addr = INADDR_BROADCAST;
 
 	ifi->xid = arc4random();
 	make_release(ifi, ifi->active);
@@ -2795,12 +2789,6 @@ release_lease(struct interface_info *ifi)
 	TAILQ_REMOVE(&ifi->lease_db, ifi->active, next);
 	write_lease_db(&ifi->lease_db);
 
-	if (optionDB != NULL) {
-		ftruncate(fileno(optionDB), 0);
-		fclose(optionDB);
-		optionDB = NULL;
-	}
-
 	free_client_lease(ifi->active);
 	ifi->active = NULL;
 	free(ifi->configured);
@@ -2808,19 +2796,21 @@ release_lease(struct interface_info *ifi)
 	free(ifi->unwind_info);
 	ifi->unwind_info = NULL;
 
-	log_warnx("%s: %s RELEASED to %s", log_procname, ifabuf, destbuf);
+	log_warnx("%s: %s RELEASED to %s", log_procname, buf,
+	    inet_ntoa(ifi->destination));
 }
 
 void
 propose_release(struct interface_info *ifi)
 {
+	const struct timespec	 max_timeout = { 3, 0 };
+	struct timespec		 now, stop, timeout;
 	struct pollfd		 fds[1];
 	struct rt_msghdr	 rtm;
-	time_t			 start_time, cur_time;
 	int			 nfds, routefd, rtfilter;
 
-	if (time(&start_time) == -1)
-		fatal("time");
+	clock_gettime(CLOCK_REALTIME, &now);
+	timespecadd(&now, &max_timeout, &stop);
 
 	if ((routefd = socket(AF_ROUTE, SOCK_RAW, AF_INET)) == -1)
 		fatal("socket(AF_ROUTE, SOCK_RAW)");
@@ -2851,17 +2841,17 @@ propose_release(struct interface_info *ifi)
 	log_debug("%s: sent RTM_PROPOSAL to release lease", log_procname);
 
 	while (quit == 0) {
-		if (time(&cur_time) == -1)
-			fatal("time");
-		if ((cur_time - start_time) > 3)
+		clock_gettime(CLOCK_REALTIME, &now);
+		if (timespeccmp(&now, &stop, >=))
 			break;
+		timespecsub(&stop, &now, &timeout);
 		fds[0].fd = routefd;
 		fds[0].events = POLLIN;
-		nfds = poll(fds, 1, 3);
+		nfds = ppoll(fds, 1, &timeout, NULL);
 		if (nfds == -1) {
 			if (errno == EINTR)
 				continue;
-			fatal("poll(routefd)");
+			fatal("ppoll(routefd)");
 		}
 		if ((fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
 			fatalx("routefd: ERR|HUP|NVAL");

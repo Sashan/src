@@ -1,7 +1,7 @@
 # The client writes a message to Sys::Syslog native method.
 # The syslogd writes it into a file and through a pipe.
 # The syslogd passes it via TLS to localhost loghost.
-# The server offers only the null cipher on its TLS socket.
+# The server offers only the null cipher, works only with TLS 1.2.
 # Find the message in client, file, pipe, syslogd log.
 # Check that server log contains the no shared cipher error.
 
@@ -16,7 +16,7 @@ our %args = (
 	    qr/Logging to FORWTLS \@tls:\/\/localhost:\d+/ => '>=4',
 	    qr/syslogd\[\d+\]: loghost .* connection error: /.
 		qr/handshake failed: error:.*:SSL routines:/.
-		qr/CONNECT_CR_SRVR_HELLO:sslv3 alert handshake failure/ => 1,
+		qr/.*CONNECT.*:sslv3 alert handshake failure/ => 1,
 	    get_testgrep() => 1,
 	},
 	cacrt => "ca.crt",
@@ -24,6 +24,7 @@ our %args = (
     server => {
 	listen => { domain => AF_UNSPEC, proto => "tls", addr => "localhost" },
 	sslciphers => "NULL",
+	sslversion => "TLSv1_2",
 	up => "IO::Socket::SSL socket accept failed",
 	down => "Server",
 	exit => 255,

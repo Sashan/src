@@ -1,4 +1,4 @@
-/*	$OpenBSD: sched_bsd.c,v 1.62 2020/01/30 08:51:27 mpi Exp $	*/
+/*	$OpenBSD: sched_bsd.c,v 1.65 2020/12/10 04:26:50 gnezdo Exp $	*/
 /*	$NetBSD: kern_synch.c,v 1.37 1996/04/22 01:38:37 christos Exp $	*/
 
 /*-
@@ -147,7 +147,7 @@ roundrobin(struct cpu_info *ci)
  * We now need to prove two things:
  *	1) Given factor ** (5 * loadavg) ~= .1, prove factor == b/(b+1)
  *	2) Given b/(b+1) ** power ~= .1, prove power == (5 * loadavg)
- *	
+ *
  * Facts:
  *         For x close to zero, exp(x) =~ 1 + x, since
  *              exp(x) = 0! + x**1/1! + x**2/2! + ... .
@@ -300,8 +300,6 @@ yield(void)
 {
 	struct proc *p = curproc;
 	int s;
-
-	NET_ASSERT_UNLOCKED();
 
 	SCHED_LOCK(s);
 	setrunqueue(p->p_cpu, p, p->p_usrpri);
@@ -576,6 +574,8 @@ setperf_auto(void *v)
 	j = 0;
 	speedup = 0;
 	CPU_INFO_FOREACH(cii, ci) {
+		if (!cpu_is_online(ci))
+			continue;
 		total = 0;
 		for (i = 0; i < CPUSTATES; i++) {
 			total += ci->ci_schedstate.spc_cp_time[i];
@@ -602,32 +602,26 @@ setperf_auto(void *v)
 		perflevel = 0;
 		cpu_setperf(perflevel);
 	}
-	
+
 	timeout_add_msec(&setperf_to, 100);
 }
 
 int
 sysctl_hwsetperf(void *oldp, size_t *oldlenp, void *newp, size_t newlen)
 {
-	int err, newperf;
+	int err;
 
 	if (!cpu_setperf)
 		return EOPNOTSUPP;
 
 	if (perfpolicy != PERFPOL_MANUAL)
 		return sysctl_rdint(oldp, oldlenp, newp, perflevel);
-	
-	newperf = perflevel;
-	err = sysctl_int(oldp, oldlenp, newp, newlen, &newperf);
+
+	err = sysctl_int_bounded(oldp, oldlenp, newp, newlen,
+	    &perflevel, 0, 100);
 	if (err)
 		return err;
-	if (newperf > 100)
-		newperf = 100;
-	if (newperf < 0)
-		newperf = 0;
-	perflevel = newperf;
 	cpu_setperf(perflevel);
-
 	return 0;
 }
 

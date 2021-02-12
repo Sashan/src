@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.103 2020/02/28 05:31:42 deraadt Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.106 2020/11/28 18:40:01 kettenis Exp $	*/
 /* $NetBSD: cpu.c,v 1.1.2.7 2000/06/26 02:04:05 sommerfeld Exp $ */
 
 /*-
@@ -92,7 +92,6 @@
 #include <machine/segments.h>
 #include <machine/gdt.h>
 #include <machine/pio.h>
-#include <dev/rndvar.h>
 
 #if NLAPIC > 0
 #include <machine/apicvar.h>
@@ -921,3 +920,13 @@ cpu_update_nmi_cr3(vaddr_t cr3)
 	CPU_INFO_FOREACH(cii, ci)
 		ci->ci_nmi_tss->tss_cr3 = cr3;
 }
+
+#ifdef MULTIPROCESSOR
+int
+wbinvd_on_all_cpus(void)
+{
+	i386_broadcast_ipi(I386_IPI_WBINVD);
+	wbinvd();
+	return 0;
+}
+#endif

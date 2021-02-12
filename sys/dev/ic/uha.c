@@ -1,8 +1,5 @@
-/*	$OpenBSD: uha.c,v 1.30 2020/02/15 18:02:00 krw Exp $	*/
+/*	$OpenBSD: uha.c,v 1.39 2020/09/22 19:32:53 krw Exp $	*/
 /*	$NetBSD: uha.c,v 1.3 1996/10/13 01:37:29 christos Exp $	*/
-
-#undef UHADEBUG
-
 /*
  * Copyright (c) 1994, 1996 Charles M. Hannum.  All rights reserved.
  *
@@ -120,21 +117,15 @@ uha_attach(sc)
 	mtx_init(&sc->sc_mscp_mtx, IPL_BIO);
 	scsi_iopool_init(&sc->sc_iopool, sc, uha_mscp_alloc, uha_mscp_free);
 
-	/*
-	 * fill in the prototype scsi_link.
-	 */
-	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.adapter_target = sc->sc_scsi_dev;
-	sc->sc_link.adapter = &uha_switch;
-	sc->sc_link.openings = 2;
-	sc->sc_link.pool = &sc->sc_iopool;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter_target = sc->sc_scsi_dev;
+	saa.saa_adapter = &uha_switch;
+	saa.saa_luns = saa.saa_adapter_buswidth = 8;
+	saa.saa_openings = 2;
+	saa.saa_pool = &sc->sc_iopool;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
-	bzero(&saa, sizeof(saa));
-	saa.saa_sc_link = &sc->sc_link;
-
-	/*
-	 * ask the adapter what subunits are present
-	 */
 	config_found(&sc->sc_dev, &saa, uhaprint);
 }
 
@@ -169,7 +160,7 @@ uha_mscp_free(xsc, xmscp)
  */
 void *
 uha_mscp_alloc(xsc)
-	void *xsc;	
+	void *xsc;
 {
 	struct uha_softc *sc = xsc;
 	struct uha_mscp *mscp;
@@ -216,7 +207,10 @@ uha_done(sc, mscp)
 	struct scsi_sense_data *s1, *s2;
 	struct scsi_xfer *xs = mscp->xs;
 
-	SC_DEBUG(xs->sc_link, SDEV_DB2, ("uha_done\n"));
+#ifdef UHADEBUG
+	printf("%s: uha_done\n", sc->sc_dev.dv_xname);
+#endif
+
 	/*
 	 * Otherwise, put the results of the operation
 	 * into the xfer and call whoever started it
@@ -268,7 +262,7 @@ uha_scsi_cmd(xs)
 	struct scsi_xfer *xs;
 {
 	struct scsi_link *sc_link = xs->sc_link;
-	struct uha_softc *sc = sc_link->adapter_softc;
+	struct uha_softc *sc = sc_link->bus->sb_adapter_softc;
 	struct uha_mscp *mscp;
 	struct uha_dma_seg *sg;
 	int seg;		/* scatter gather seg being worked on */
@@ -276,7 +270,9 @@ uha_scsi_cmd(xs)
 	int bytes_this_seg, bytes_this_page, datalen, flags;
 	int s;
 
-	SC_DEBUG(sc_link, SDEV_DB2, ("uha_scsi_cmd\n"));
+#ifdef UHADEBUG
+	printf("%s: uha_scsi_cmd\n", sc->sc_dev.dv_xname);
+#endif
 	/*
 	 * get a mscp (mbox-out) to use. If the transfer
 	 * is from a buf (possibly from interrupt time)
@@ -299,7 +295,7 @@ uha_scsi_cmd(xs)
 		mscp->opcode = UHA_TSP;
 		/* XXX Not for tapes. */
 		mscp->ca = 0x01;
-		bcopy(xs->cmd, &mscp->scsi_cmd, mscp->scsi_cmd_length);
+		bcopy(&xs->cmd, &mscp->scsi_cmd, mscp->scsi_cmd_length);
 	}
 	mscp->xdir = UHA_SDET;
 	mscp->dcn = 0x00;
@@ -319,8 +315,9 @@ uha_scsi_cmd(xs)
 		/*
 		 * Set up the scatter gather block
 		 */
-		SC_DEBUG(sc_link, SDEV_DB4,
-		    ("%d @0x%x:- ", xs->datalen, xs->data));
+#ifdef UHADEBUG
+		printf("%s: %d @%p- ", sc->sc_dev.dv_xname, xs->datalen, xs->data);
+#endif
 		datalen = xs->datalen;
 		thiskv = (int) xs->data;
 		thisphys = KVTOPHYS(thiskv);
@@ -331,7 +328,9 @@ uha_scsi_cmd(xs)
 			/* put in the base address */
 			sg->seg_addr = thisphys;
 
-			SC_DEBUGN(sc_link, SDEV_DB4, ("0x%x", thisphys));
+#ifdef UHADEBUG
+			printf("0x%lx", thisphys);
+#endif
 
 			/* do it at least once */
 			nextphys = thisphys;
@@ -358,14 +357,17 @@ uha_scsi_cmd(xs)
 			/*
 			 * next page isn't contiguous, finish the seg
 			 */
-			SC_DEBUGN(sc_link, SDEV_DB4,
-			    ("(0x%x)", bytes_this_seg));
+#ifdef UHADEBUG
+			printf("(0x%x)", bytes_this_seg);
+#endif
 			sg->seg_len = bytes_this_seg;
 			sg++;
 			seg++;
 		}
 
-		SC_DEBUGN(sc_link, SDEV_DB4, ("\n"));
+#ifdef UHADEBUG
+		printf("\n");
+#endif
 		if (datalen) {
 			/*
 			 * there's still data, must have run out of segs!
@@ -420,7 +422,7 @@ uha_timeout(arg)
 	struct uha_mscp *mscp = arg;
 	struct scsi_xfer *xs = mscp->xs;
 	struct scsi_link *sc_link = xs->sc_link;
-	struct uha_softc *sc = sc_link->adapter_softc;
+	struct uha_softc *sc = sc_link->bus->sb_adapter_softc;
 	int s;
 
 	sc_print_addr(sc_link);

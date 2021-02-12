@@ -1,4 +1,4 @@
-/*	$Id: test-mft.c,v 1.4 2019/12/17 11:52:41 claudio Exp $ */
+/*	$Id: test-mft.c,v 1.10 2020/11/09 16:13:02 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -29,9 +29,18 @@
 
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/pem.h>
 #include <openssl/x509v3.h>
 
 #include "extern.h"
+
+#ifndef ASN1error
+void
+ASN1error(int err)
+{
+	ASN1err(0, err);
+}
+#endif
 
 int verbose;
 
@@ -57,18 +66,23 @@ mft_print(const struct mft *p)
 int
 main(int argc, char *argv[])
 {
-	int		 c, i, verb = 0, force = 0;
+	int		 c, i, ppem = 0, verb = 0;
 	struct mft	*p;
+	BIO		*bio_out = NULL;
 	X509		*xp = NULL;
 
 	ERR_load_crypto_strings();
 	OpenSSL_add_all_ciphers();
 	OpenSSL_add_all_digests();
 
-	while (-1 != (c = getopt(argc, argv, "fv")))
+	while (-1 != (c = getopt(argc, argv, "pv")))
 		switch (c) {
-		case 'f':
-			force = 1;
+		case 'p':
+			if (ppem)
+				break;
+			ppem = 1;
+			if ((bio_out = BIO_new_fp(stdout, BIO_NOCLOSE)) == NULL)
+				errx(1, "BIO_new_fp");
 			break;
 		case 'v':
 			verb++;
@@ -84,17 +98,22 @@ main(int argc, char *argv[])
 		errx(1, "argument missing");
 
 	for (i = 0; i < argc; i++) {
-		if ((p = mft_parse(&xp, argv[i], force)) == NULL)
+		if ((p = mft_parse(&xp, argv[i])) == NULL)
 			break;
 		if (verb)
 			mft_print(p);
+		if (ppem) {
+			if (!PEM_write_bio_X509(bio_out, xp))
+				errx(1,
+				    "PEM_write_bio_X509: unable to write cert");
+		}
 		mft_free(p);
 		X509_free(xp);
 	}
 
+	BIO_free(bio_out);
 	EVP_cleanup();
 	CRYPTO_cleanup_all_ex_data();
-	ERR_remove_state(0);
 	ERR_free_strings();
 
 	if (i < argc)

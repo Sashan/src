@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_input.c,v 1.347 2019/12/23 22:33:57 sashan Exp $	*/
+/*	$OpenBSD: ip_input.c,v 1.354 2021/01/15 15:18:12 bluhm Exp $	*/
 /*	$NetBSD: ip_input.c,v 1.30 1996/03/16 23:53:58 christos Exp $	*/
 
 /*
@@ -107,7 +107,29 @@ LIST_HEAD(, ipq) ipq;
 int	ip_maxqueue = 300;
 int	ip_frags = 0;
 
-int *ipctl_vars[IPCTL_MAXID] = IPCTL_VARS;
+#ifdef MROUTING
+extern int ip_mrtproto;
+#endif
+
+const struct sysctl_bounded_args ipctl_vars[] = {
+#ifdef MROUTING
+	{ IPCTL_MRTPROTO, &ip_mrtproto, 1, 0 },
+#endif
+	{ IPCTL_FORWARDING, &ipforwarding, 0, 2 },
+	{ IPCTL_SENDREDIRECTS, &ipsendredirects, 0, 1 },
+	{ IPCTL_DEFTTL, &ip_defttl, 0, 255 },
+	{ IPCTL_DIRECTEDBCAST, &ip_directedbcast, 0, 1 },
+	{ IPCTL_IPPORT_FIRSTAUTO, &ipport_firstauto, 0, 65535 },
+	{ IPCTL_IPPORT_LASTAUTO, &ipport_lastauto, 0, 65535 },
+	{ IPCTL_IPPORT_HIFIRSTAUTO, &ipport_hifirstauto, 0, 65535 },
+	{ IPCTL_IPPORT_HILASTAUTO, &ipport_hilastauto, 0, 65535 },
+	{ IPCTL_IPPORT_MAXQUEUE, &ip_maxqueue, 0, 10000 },
+	{ IPCTL_MFORWARDING, &ipmforwarding, 0, 1 },
+	{ IPCTL_MULTIPATH, &ipmultipath, 0, 1 },
+	{ IPCTL_ARPQUEUED, &la_hold_total, 0, 1000 },
+	{ IPCTL_ARPTIMEOUT, &arpt_keep, 0, INT_MAX },
+	{ IPCTL_ARPDOWN, &arpt_down, 0, INT_MAX },
+};
 
 struct pool ipqent_pool;
 struct pool ipq_pool;
@@ -618,20 +640,6 @@ ip_deliver(struct mbuf **mp, int *offp, int nxt, int af)
 			IPSTAT_INC(tooshort);
 			goto bad;
 		}
-
-#ifdef INET6
-		/* draft-itojun-ipv6-tcp-to-anycast */
-		if (af == AF_INET6 &&
-		    ISSET((*mp)->m_flags, M_ACAST) && (nxt == IPPROTO_TCP)) {
-			if ((*mp)->m_len >= sizeof(struct ip6_hdr)) {
-				icmp6_error(*mp, ICMP6_DST_UNREACH,
-					ICMP6_DST_UNREACH_ADDR,
-					offsetof(struct ip6_hdr, ip6_dst));
-				*mp = NULL;
-			}
-			goto bad;
-		}
-#endif /* INET6 */
 
 #ifdef IPSEC
 		if (ipsec_in_use) {
@@ -1243,7 +1251,7 @@ ip_dooptions(struct mbuf *m, struct ifnet *ifp)
 		}
 	}
 	KERNEL_UNLOCK();
-	if (forward && ipforwarding) {
+	if (forward && ipforwarding > 0) {
 		ip_forward(m, ifp, NULL, 1);
 		return (1);
 	}
@@ -1410,8 +1418,8 @@ ip_forward(struct mbuf *m, struct ifnet *ifp, struct rtentry *rt, int srcrt)
 		goto freecopy;
 	}
 
+	memset(&ro, 0, sizeof(ro));
 	sin = satosin(&ro.ro_dst);
-	memset(sin, 0, sizeof(*sin));
 	sin->sin_family = AF_INET;
 	sin->sin_len = sizeof(*sin);
 	sin->sin_addr = ip->ip_dst;
@@ -1421,6 +1429,7 @@ ip_forward(struct mbuf *m, struct ifnet *ifp, struct rtentry *rt, int srcrt)
 		rt = rtalloc_mpath(sintosa(sin), &ip->ip_src.s_addr,
 		    m->m_pkthdr.ph_rtableid);
 		if (rt == NULL) {
+			ipstat_inc(ips_noroute);
 			icmp_error(m, ICMP_UNREACH, ICMP_UNREACH_HOST, dest, 0);
 			return;
 		}
@@ -1561,7 +1570,6 @@ ip_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 {
 	int error;
 #ifdef MROUTING
-	extern int ip_mrtproto;
 	extern struct mrtstat mrtstat;
 #endif
 
@@ -1635,8 +1643,6 @@ ip_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	case IPCTL_MRTSTATS:
 		return (sysctl_rdstruct(oldp, oldlenp, newp,
 		    &mrtstat, sizeof(mrtstat)));
-	case IPCTL_MRTPROTO:
-		return (sysctl_rdint(oldp, oldlenp, newp, ip_mrtproto));
 	case IPCTL_MRTMFC:
 		if (newp)
 			return (EPERM);
@@ -1659,14 +1665,11 @@ ip_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (EOPNOTSUPP);
 #endif
 	default:
-		if (name[0] < IPCTL_MAXID) {
-			NET_LOCK();
-			error = sysctl_int_arr(ipctl_vars, name, namelen,
-			    oldp, oldlenp, newp, newlen);
-			NET_UNLOCK();
-			return (error);
-		}
-		return (EOPNOTSUPP);
+		NET_LOCK();
+		error = sysctl_bounded_arr(ipctl_vars, nitems(ipctl_vars),
+		    name, namelen, oldp, oldlenp, newp, newlen);
+		NET_UNLOCK();
+		return (error);
 	}
 	/* NOTREACHED */
 }
@@ -1784,11 +1787,11 @@ ip_send_dispatch(void *xmq)
 	if (ml_empty(&ml))
 		return;
 
-	NET_RLOCK();
+	NET_LOCK();
 	while ((m = ml_dequeue(&ml)) != NULL) {
 		ip_output(m, NULL, NULL, 0, NULL, NULL, 0);
 	}
-	NET_RUNLOCK();
+	NET_UNLOCK();
 }
 
 void

@@ -1,4 +1,4 @@
-/*	$Id: test-cert.c,v 1.3 2019/08/22 21:31:48 bluhm Exp $ */
+/*	$Id: test-cert.c,v 1.8 2021/02/08 09:28:58 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -44,6 +44,9 @@ cert_print(const struct cert *p)
 	assert(p != NULL);
 
 	printf("Manifest: %s\n", p->mft);
+	printf("caRepository: %s\n", p->repo);
+	if (p->notify != NULL)
+		printf("Notify URL: %s\n", p->notify);
 	if (p->crl != NULL)
 		printf("Revocation list: %s\n", p->crl);
 	printf("Subject key identifier: %s\n", p->ski);
@@ -115,21 +118,46 @@ main(int argc, char *argv[])
 	if (argc == 0)
 		errx(1, "argument missing");
 
-	for (i = 0; i < argc; i++) {
-		p = ta ?
-			ta_parse(&xp, argv[i], NULL, 0) :
-			cert_parse(&xp, argv[i], NULL);
-		if (p == NULL)
-			break;
-		if (verb)
-			cert_print(p);
-		cert_free(p);
-		X509_free(xp);
+	if (ta) {
+		if (argc % 2)
+			errx(1, "need even number of arguments");
+
+		for (i = 0; i < argc; i += 2) {
+			const char	*cert_path = argv[i];
+			const char	*tal_path = argv[i + 1];
+			char		*buf;
+			struct tal	*tal;
+
+			buf = tal_read_file(tal_path);
+			tal = tal_parse(tal_path, buf);
+			free(buf);
+			if (tal == NULL)
+				break;
+
+			p = ta_parse(&xp, cert_path, tal->pkey, tal->pkeysz);
+			tal_free(tal);
+			if (p == NULL)
+				break;
+
+			if (verb)
+				cert_print(p);
+			cert_free(p);
+			X509_free(xp);
+		}
+	} else {
+		for (i = 0; i < argc; i++) {
+			p = cert_parse(&xp, argv[i]);
+			if (p == NULL)
+				break;
+			if (verb)
+				cert_print(p);
+			cert_free(p);
+			X509_free(xp);
+		}
 	}
 
 	EVP_cleanup();
 	CRYPTO_cleanup_all_ex_data();
-	ERR_remove_state(0);
 	ERR_free_strings();
 
 	if (i < argc)

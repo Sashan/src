@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_zyd.c,v 1.122 2020/01/07 10:12:16 mpi Exp $	*/
+/*	$OpenBSD: if_zyd.c,v 1.125 2020/07/31 10:49:33 mglocker Exp $	*/
 
 /*-
  * Copyright (c) 2006 by Damien Bergamini <damien.bergamini@free.fr>
@@ -434,13 +434,13 @@ zyd_detach(struct device *self, int flags)
 		return 0;
 	}
 
+	zyd_free_rx_list(sc);
+	zyd_free_tx_list(sc);
+
 	if (ifp->if_softc != NULL) {
 		ieee80211_ifdetach(ifp);
 		if_detach(ifp);
 	}
-
-	zyd_free_rx_list(sc);
-	zyd_free_tx_list(sc);
 
 	sc->attached = 0;
 
@@ -518,7 +518,6 @@ zyd_close_pipes(struct zyd_softc *sc)
 
 	for (i = 0; i < ZYD_ENDPT_CNT; i++) {
 		if (sc->zyd_ep[i] != NULL) {
-			usbd_abort_pipe(sc->zyd_ep[i]);
 			usbd_close_pipe(sc->zyd_ep[i]);
 			sc->zyd_ep[i] = NULL;
 		}
@@ -2216,6 +2215,7 @@ zyd_tx(struct zyd_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	    ZYD_TX_TIMEOUT, zyd_txeof);
 	error = usbd_transfer(data->xfer);
 	if (error != USBD_IN_PROGRESS && error != 0) {
+		data->ni = NULL;
 		ifp->if_oerrors++;
 		return EIO;
 	}
@@ -2250,7 +2250,7 @@ zyd_start(struct ifnet *ifp)
 			break;
 
 		/* encapsulate and send data frames */
-		IFQ_DEQUEUE(&ifp->if_snd, m);
+		m = ifq_dequeue(&ifp->if_snd);
 		if (m == NULL)
 			break;
 #if NBPFILTER > 0

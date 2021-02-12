@@ -1,10 +1,10 @@
-/*	$OpenBSD: tsc.c,v 1.15 2019/10/12 14:05:50 kettenis Exp $	*/
+/*	$OpenBSD: tsc.c,v 1.22 2020/12/24 04:20:48 jsg Exp $	*/
 /*
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
  * Copyright (c) 2016,2017 Reyk Floeter <reyk@openbsd.org>
  * Copyright (c) 2017 Adam Steen <adam@adamsteen.com.au>
  * Copyright (c) 2017 Mike Belopuhov <mike@openbsd.org>
- * Copyright (c) 2019 Paul Irofti <pirofti@openbsd.org>
+ * Copyright (c) 2019 Paul Irofti <paul@irofti.net>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -37,12 +37,14 @@ uint64_t	tsc_frequency;
 int		tsc_is_invariant;
 
 #define	TSC_DRIFT_MAX			250
+#define TSC_SKEW_MAX			100
 int64_t	tsc_drift_observed;
 
 volatile int64_t	tsc_sync_val;
 volatile struct cpu_info	*tsc_sync_cpu;
 
-uint		tsc_get_timecount(struct timecounter *tc);
+u_int		tsc_get_timecount(struct timecounter *tc);
+void		tsc_delay(int usecs);
 
 #include "lapic.h"
 #if NLAPIC > 0
@@ -50,7 +52,7 @@ extern u_int32_t lapic_per_second;
 #endif
 
 struct timecounter tsc_timecounter = {
-	tsc_get_timecount, NULL, ~0u, 0, "tsc", -1000, NULL
+	tsc_get_timecount, NULL, ~0u, 0, "tsc", -1000, NULL, TC_TSC
 };
 
 uint64_t
@@ -70,6 +72,8 @@ tsc_freq_cpuid(struct cpu_info *ci)
 			case 0x5e: /* Skylake desktop */
 			case 0x8e: /* Kabylake mobile */
 			case 0x9e: /* Kabylake desktop */
+			case 0xa5: /* CML-H CML-S62 CML-S102 */
+			case 0xa6: /* CML-U62 */
 				khz = 24000; /* 24.0 MHz */
 				break;
 			case 0x5f: /* Atom Denverton */
@@ -100,9 +104,9 @@ get_tsc_and_timecount(struct timecounter *tc, uint64_t *tsc, uint64_t *count)
 	int i;
 
 	for (i = 0; i < RECALIBRATE_MAX_RETRIES; i++) {
-		tsc1 = rdtsc();
+		tsc1 = rdtsc_lfence();
 		n = (tc->tc_get_timecount(tc) & tc->tc_counter_mask);
-		tsc2 = rdtsc();
+		tsc2 = rdtsc_lfence();
 
 		if ((tsc2 - tsc1) < RECALIBRATE_SMI_THRESHOLD) {
 			*count = n;
@@ -207,19 +211,24 @@ cpu_recalibrate_tsc(struct timecounter *tc)
 	calibrate_tsc_freq();
 }
 
-uint
+u_int
 tsc_get_timecount(struct timecounter *tc)
 {
-	return rdtsc() + curcpu()->ci_tsc_skew;
+	return rdtsc_lfence() + curcpu()->ci_tsc_skew;
 }
 
 void
 tsc_timecounter_init(struct cpu_info *ci, uint64_t cpufreq)
 {
 #ifdef TSC_DEBUG
-	printf("%s: TSC skew=%lld observed drift=%lld\n", __func__,
+	printf("%s: TSC skew=%lld observed drift=%lld\n", ci->ci_dev->dv_xname,
 	    (long long)ci->ci_tsc_skew, (long long)tsc_drift_observed);
 #endif
+	if (ci->ci_tsc_skew < -TSC_SKEW_MAX || ci->ci_tsc_skew > TSC_SKEW_MAX) {
+		printf("%s: disabling user TSC (skew=%lld)\n",
+		    ci->ci_dev->dv_xname, (long long)ci->ci_tsc_skew);
+		tsc_timecounter.tc_user = 0;
+	}
 
 	if (!(ci->ci_flags & CPUF_PRIMARY) ||
 	    !(ci->ci_flags & CPUF_CONST_TSC) ||
@@ -244,8 +253,10 @@ tsc_timecounter_init(struct cpu_info *ci, uint64_t cpufreq)
 		printf("ERROR: %lld cycle TSC drift observed\n",
 		    (long long)tsc_drift_observed);
 		tsc_timecounter.tc_quality = -1000;
+		tsc_timecounter.tc_user = 0;
 		tsc_is_invariant = 0;
-	}
+	} else
+		delay_func = tsc_delay;
 
 	tc_init(&tsc_timecounter);
 }
@@ -276,12 +287,12 @@ tsc_read_bp(struct cpu_info *ci, uint64_t *bptscp, uint64_t *aptscp)
 
 	/* Flag it and read our TSC. */
 	atomic_setbits_int(&ci->ci_flags, CPUF_SYNCTSC);
-	bptsc = (rdtsc() >> 1);
+	bptsc = (rdtsc_lfence() >> 1);
 
 	/* Wait for remote to complete, and read ours again. */
 	while ((ci->ci_flags & CPUF_SYNCTSC) != 0)
 		membar_consumer();
-	bptsc += (rdtsc() >> 1);
+	bptsc += (rdtsc_lfence() >> 1);
 
 	/* Wait for the results to come in. */
 	while (tsc_sync_cpu == ci)
@@ -317,11 +328,11 @@ tsc_post_ap(struct cpu_info *ci)
 	/* Wait for go-ahead from primary. */
 	while ((ci->ci_flags & CPUF_SYNCTSC) == 0)
 		membar_consumer();
-	tsc = (rdtsc() >> 1);
+	tsc = (rdtsc_lfence() >> 1);
 
 	/* Instruct primary to read its counter. */
 	atomic_clearbits_int(&ci->ci_flags, CPUF_SYNCTSC);
-	tsc += (rdtsc() >> 1);
+	tsc += (rdtsc_lfence() >> 1);
 
 	/* Post result.  Ensure the whole value goes out atomically. */
 	(void)atomic_swap_64(&tsc_sync_val, tsc);
@@ -335,4 +346,15 @@ tsc_sync_ap(struct cpu_info *ci)
 {
 	tsc_post_ap(ci);
 	tsc_post_ap(ci);
+}
+
+void
+tsc_delay(int usecs)
+{
+	uint64_t interval, start;
+
+	interval = (uint64_t)usecs * tsc_frequency / 1000000;
+	start = rdtsc_lfence();
+	while (rdtsc_lfence() - start < interval)
+		CPU_BUSY_CYCLE();
 }

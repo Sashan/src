@@ -1,4 +1,4 @@
-/*	$OpenBSD: switchofp.c,v 1.76 2019/11/27 17:37:32 akoshibe Exp $	*/
+/*	$OpenBSD: switchofp.c,v 1.78 2021/01/19 19:39:14 mvs Exp $	*/
 
 /*
  * Copyright (c) 2016 Kazuya GODA <goda@openbsd.org>
@@ -1158,18 +1158,23 @@ swofp_ioctl(struct ifnet *ifp, unsigned long cmd, caddr_t data)
 		if (breq->ifbr_portno >= OFP_PORT_MAX)
 			return (EINVAL);
 
-		if ((ifs = ifunit(breq->ifbr_ifsname)) == NULL)
+		if ((ifs = if_unit(breq->ifbr_ifsname)) == NULL)
 			return (ENOENT);
 
-		if (ifs->if_switchport == NULL)
+		if (ifs->if_switchport == NULL) {
+			if_put(ifs);
 			return (ENOENT);
+		}
 
 		TAILQ_FOREACH(swpo, &sc->sc_swpo_list, swpo_list_next) {
-			if (swpo->swpo_port_no == breq->ifbr_portno)
+			if (swpo->swpo_port_no == breq->ifbr_portno) {
+				if_put(ifs);
 				return (EEXIST);
+			}
 		}
 
 		swpo = (struct switch_port *)ifs->if_switchport;
+		if_put(ifs);
 		swpo->swpo_port_no = breq->ifbr_portno;
 
 		break;
@@ -4680,7 +4685,9 @@ swofp_forward_ofs(struct switch_softc *sc, struct switch_flow_classify *swfcl,
 int
 swofp_input(struct switch_softc *sc, struct mbuf *m)
 {
-	struct swofp_ofs	*swofs = sc->sc_ofs;
+#if NBPFILTER > 0
+	struct swofp_ofs        *swofs = sc->sc_ofs;
+#endif
 	struct ofp_header	*oh;
 	ofp_msg_handler		 handler;
 	uint16_t		 ohlen;
@@ -4722,7 +4729,9 @@ swofp_input(struct switch_softc *sc, struct mbuf *m)
 int
 swofp_output(struct switch_softc *sc, struct mbuf *m)
 {
+#if NBPFILTER > 0
 	struct swofp_ofs	*swofs = sc->sc_ofs;
+#endif
 
 	if (sc->sc_swdev == NULL) {
 		m_freem(m);

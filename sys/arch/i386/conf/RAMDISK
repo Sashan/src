@@ -1,4 +1,4 @@
-#	$OpenBSD: RAMDISK,v 1.197 2020/03/24 02:48:45 deraadt Exp $
+#	$OpenBSD: RAMDISK,v 1.200 2020/12/27 23:05:38 deraadt Exp $
 
 machine		i386
 maxusers	4
@@ -23,7 +23,7 @@ mainbus0	at root
 
 acpi0		at bios?
 #acpitimer*	at acpi?
-#acpihpet*	at acpi?
+acpihpet*	at acpi?
 #acpiac*	at acpi?
 #acpibat*	at acpi?
 #acpibtn*	at acpi?
@@ -101,8 +101,8 @@ wdc1		at isa? port 0x170 irq 15 flags 0x00
 #wdc*		at pcmcia?
 wd*		at wdc? flags 0x0000
 wd*		at pciide? flags 0x0000
-atapiscsi*	at wdc?
-atapiscsi*	at pciide?
+#atapiscsi*	at wdc?
+#atapiscsi*	at pciide?
 
 #ahc0		at isa?			# Adaptec 284x SCSI controllers
 #ahd*		at pci?			# Adaptec 79?? SCSI controllers
@@ -111,7 +111,7 @@ mpi*		at pci?			# LSI Logic Fusion-MPT Message Passing Interface
 #mfi*		at pci?			# LSI MegaRAID SAS controllers
 
 #de*		at pci?			# DC21X4X-based ethernet cards
-fxp*		at pci?			# EtherExpress 10/100B ethernet cards
+#fxp*		at pci?			# EtherExpress 10/100B ethernet cards
 ne*		at pci?			# NE2000-compat ethernet cards
 ne*		at pcmcia?		# PCMCIA based NE2000 cards
 rl*		at pci?			# Realtek 81[23]9 ethernet

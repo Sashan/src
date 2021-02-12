@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.401 2020/02/14 13:54:31 claudio Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.411 2021/01/25 09:15:23 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -38,7 +38,7 @@
 #define	CONFFILE			"/etc/bgpd.conf"
 #define	BGPD_USER			"_bgpd"
 #define	PEER_DESCR_LEN			32
-#define	SHUT_COMM_LEN			256	/* includes NUL terminator */
+#define	REASON_LEN			256	/* includes NUL terminator */
 #define	PFTABLE_LEN			32
 #define	TCP_MD5_KEY_LEN			80
 #define	IPSEC_ENC_KEY_LEN		32
@@ -65,6 +65,7 @@
 #define	BGPD_FLAG_DECISION_ROUTEAGE	0x0100
 #define	BGPD_FLAG_DECISION_TRANS_AS	0x0200
 #define	BGPD_FLAG_DECISION_MED_ALWAYS	0x0400
+#define	BGPD_FLAG_NO_AS_SET		0x0800
 
 #define	BGPD_LOG_UPDATES		0x0001
 
@@ -120,7 +121,7 @@ enum bgpd_process {
 	PROC_MAIN,
 	PROC_SE,
 	PROC_RDE
-} bgpd_process;
+};
 
 enum reconf_action {
 	RECONF_NONE,
@@ -176,23 +177,6 @@ extern const struct aid aid_vals[];
 	sizeof(struct pt_entry_vpn6)			\
 }
 
-struct vpn4_addr {
-	u_int64_t	rd;
-	struct in_addr	addr;
-	u_int8_t	labelstack[21];	/* max that makes sense */
-	u_int8_t	labellen;
-	u_int8_t	pad1;
-	u_int8_t	pad2;
-};
-
-struct vpn6_addr {
-	u_int64_t	rd;
-	struct in6_addr	addr;
-	u_int8_t	labelstack[21];	/* max that makes sense */
-	u_int8_t	labellen;
-	u_int8_t	pad1;
-	u_int8_t	pad2;
-};
 
 #define BGP_MPLS_BOS	0x01
 
@@ -200,22 +184,15 @@ struct bgpd_addr {
 	union {
 		struct in_addr		v4;
 		struct in6_addr		v6;
-		struct vpn4_addr	vpn4;
-		struct vpn6_addr	vpn6;
 		/* maximum size for a prefix is 256 bits */
-		u_int8_t		addr8[32];
-		u_int16_t		addr16[16];
-		u_int32_t		addr32[8];
 	} ba;		    /* 128-bit address */
+	u_int64_t	rd;		/* route distinguisher for VPN addrs */
 	u_int32_t	scope_id;	/* iface scope id for v6 */
 	u_int8_t	aid;
+	u_int8_t	labellen;	/* size of the labelstack */
+	u_int8_t	labelstack[18];	/* max that makes sense */
 #define	v4	ba.v4
 #define	v6	ba.v6
-#define	vpn4	ba.vpn4
-#define	vpn6	ba.vpn6
-#define	addr8	ba.addr8
-#define	addr16	ba.addr16
-#define	addr32	ba.addr32
 };
 
 #define	DEFAULT_LISTENER	0x01
@@ -254,15 +231,33 @@ struct trie_head {
 	struct tentry_v6	*root_v6;
 	int			 match_default_v4;
 	int			 match_default_v6;
+	size_t			 v4_cnt;
+	size_t			 v6_cnt;
 };
 
 struct rde_prefixset {
 	char				name[SET_NAME_LEN];
 	struct trie_head		th;
 	SIMPLEQ_ENTRY(rde_prefixset)	entry;
+	time_t				lastchange;
 	int				dirty;
 };
 SIMPLEQ_HEAD(rde_prefixset_head, rde_prefixset);
+
+struct roa {
+	RB_ENTRY(roa)	entry;
+	uint8_t		aid;
+	uint8_t		prefixlen;
+	uint8_t		maxlen;
+	uint8_t		pad;
+	uint32_t	asnum;
+	union {
+		struct in_addr	inet;
+		struct in6_addr	inet6;
+	}		prefix;
+};
+
+RB_HEAD(roa_tree, roa);
 
 struct set_table;
 struct as_set;
@@ -280,7 +275,7 @@ struct bgpd_config {
 	struct mrt_head				*mrt;
 	struct prefixset_head			 prefixsets;
 	struct prefixset_head			 originsets;
-	struct prefixset_tree			 roa;
+	struct roa_tree				 roa;
 	struct rde_prefixset_head		 rde_prefixsets;
 	struct rde_prefixset_head		 rde_originsets;
 	struct rde_prefixset			 rde_roa;
@@ -365,12 +360,13 @@ struct capabilities {
 
 struct peer_config {
 	struct bgpd_addr	 remote_addr;
-	struct bgpd_addr	 local_addr;
+	struct bgpd_addr	 local_addr_v4;
+	struct bgpd_addr	 local_addr_v6;
 	struct peer_auth	 auth;
 	struct capabilities	 capabilities;
 	char			 group[PEER_DESCR_LEN];
 	char			 descr[PEER_DESCR_LEN];
-	char			 shutcomm[SHUT_COMM_LEN];
+	char			 reason[REASON_LEN];
 	char			 rib[PEER_DESCR_LEN];
 	char			 if_depend[IFNAMSIZ];
 	char			 demote_group[IFNAMSIZ];
@@ -408,6 +404,7 @@ struct peer_config {
 
 #define PEERFLAG_TRANS_AS	0x01
 #define PEERFLAG_LOG_UPDATES	0x02
+#define PEERFLAG_NO_AS_SET	0x04
 
 enum network_type {
 	NETWORK_DEFAULT,	/* from network statements */
@@ -464,6 +461,7 @@ enum imsg_type {
 	IMSG_CTL_SHOW_TIMER,
 	IMSG_CTL_LOG_VERBOSE,
 	IMSG_CTL_SHOW_FIB_TABLES,
+	IMSG_CTL_SHOW_SET,
 	IMSG_CTL_TERMINATE,
 	IMSG_NETWORK_ADD,
 	IMSG_NETWORK_ASPATH,
@@ -491,7 +489,7 @@ enum imsg_type {
 	IMSG_RECONF_AS_SET_DONE,
 	IMSG_RECONF_ORIGIN_SET,
 	IMSG_RECONF_ROA_SET,
-	IMSG_RECONF_ROA_SET_ITEMS,
+	IMSG_RECONF_ROA_ITEM,
 	IMSG_RECONF_DRAIN,
 	IMSG_RECONF_DONE,
 	IMSG_UPDATE,
@@ -695,10 +693,24 @@ struct ctl_show_nexthop {
 	u_int8_t			krvalid;
 };
 
+struct ctl_show_set {
+	char			name[SET_NAME_LEN];
+	time_t			lastchange;
+	size_t			v4_cnt;
+	size_t			v6_cnt;
+	size_t			as_cnt;
+	enum {
+		ASNUM_SET,
+		PREFIX_SET,
+		ORIGIN_SET,
+		ROA_SET,
+	}			type;
+};
+
 struct ctl_neighbor {
 	struct bgpd_addr	addr;
 	char			descr[PEER_DESCR_LEN];
-	char			shutcomm[SHUT_COMM_LEN];
+	char			reason[REASON_LEN];
 	int			show_timers;
 	int			is_group;
 };
@@ -994,6 +1006,7 @@ enum action_types {
 	ACTION_SET_PREPEND_PEER,
 	ACTION_SET_AS_OVERRIDE,
 	ACTION_SET_NEXTHOP,
+	ACTION_SET_NEXTHOP_REF,
 	ACTION_SET_NEXTHOP_REJECT,
 	ACTION_SET_NEXTHOP_BLACKHOLE,
 	ACTION_SET_NEXTHOP_NOMODIFY,
@@ -1016,7 +1029,7 @@ struct filter_set {
 		u_int32_t			 metric;
 		int32_t				 relative;
 		struct bgpd_addr		 nexthop;
-		struct nexthop			*nh;
+		struct nexthop			*nh_ref;
 		struct community		 community;
 		char				 pftable[PFTABLE_LEN];
 		char				 rtlabel[RTLABEL_LEN];
@@ -1033,13 +1046,13 @@ struct roa_set {
 struct prefixset_item {
 	struct filter_prefix		p;
 	RB_ENTRY(prefixset_item)	entry;
-	struct set_table		*set;
 };
 
 struct prefixset {
 	int				 sflags;
 	char				 name[SET_NAME_LEN];
 	struct prefixset_tree		 psitems;
+	struct roa_tree			 roaitems;
 	SIMPLEQ_ENTRY(prefixset)	 entry;
 };
 
@@ -1047,6 +1060,7 @@ struct as_set {
 	char				 name[SET_NAME_LEN];
 	SIMPLEQ_ENTRY(as_set)		 entry;
 	struct set_table		*set;
+	time_t				 lastchange;
 	int				 dirty;
 };
 
@@ -1179,12 +1193,13 @@ void		free_config(struct bgpd_config *);
 void		free_prefixsets(struct prefixset_head *);
 void		free_rde_prefixsets(struct rde_prefixset_head *);
 void		free_prefixtree(struct prefixset_tree *);
+void		free_roatree(struct roa_tree *);
 void		filterlist_free(struct filter_head *);
 int		host(const char *, struct bgpd_addr *, u_int8_t *);
 u_int32_t	get_bgpid(void);
 void		expand_networks(struct bgpd_config *);
-int		prefixset_cmp(struct prefixset_item *, struct prefixset_item *);
 RB_PROTOTYPE(prefixset_tree, prefixset_item, entry, prefixset_cmp);
+RB_PROTOTYPE(roa_tree, roa, entry, roa_cmp);
 
 /* kroute.c */
 int		 kr_init(int *);
@@ -1281,12 +1296,12 @@ void			 set_prep(struct set_table *);
 void			*set_match(const struct set_table *, u_int32_t);
 int			 set_equal(const struct set_table *,
 			    const struct set_table *);
+size_t			 set_nmemb(const struct set_table *);
 
 /* rde_trie.c */
 int	trie_add(struct trie_head *, struct bgpd_addr *, u_int8_t, u_int8_t,
 	    u_int8_t);
-int	trie_roa_add(struct trie_head *, struct bgpd_addr *, u_int8_t,
-	    struct set_table *);
+int	trie_roa_add(struct trie_head *, struct roa *);
 void	trie_free(struct trie_head *);
 int	trie_match(struct trie_head *, struct bgpd_addr *, u_int8_t, int);
 int	trie_roa_check(struct trie_head *, struct bgpd_addr *, u_int8_t,
@@ -1304,12 +1319,12 @@ const char	*log_sockaddr(struct sockaddr *, socklen_t);
 const char	*log_as(u_int32_t);
 const char	*log_rd(u_int64_t);
 const char	*log_ext_subtype(short, u_int8_t);
-const char	*log_shutcomm(const char *);
+const char	*log_reason(const char *);
 int		 aspath_snprint(char *, size_t, void *, u_int16_t);
 int		 aspath_asprint(char **, void *, u_int16_t);
 size_t		 aspath_strlen(void *, u_int16_t);
 u_int32_t	 aspath_extract(const void *, int);
-int		 aspath_verify(void *, u_int16_t, int);
+int		 aspath_verify(void *, u_int16_t, int, int);
 #define		 AS_ERR_LEN	-1
 #define		 AS_ERR_TYPE	-2
 #define		 AS_ERR_BAD	-3
@@ -1334,7 +1349,7 @@ int		 aid2afi(u_int8_t, u_int16_t *, u_int8_t *);
 int		 afi2aid(u_int16_t, u_int8_t, u_int8_t *);
 sa_family_t	 aid2af(u_int8_t);
 int		 af2aid(sa_family_t, u_int8_t, u_int8_t *);
-struct sockaddr	*addr2sa(struct bgpd_addr *, u_int16_t, socklen_t *);
+struct sockaddr	*addr2sa(const struct bgpd_addr *, u_int16_t, socklen_t *);
 void		 sa2addr(struct sockaddr *, struct bgpd_addr *, u_int16_t *);
 const char *	 get_baudrate(unsigned long long, char *);
 
@@ -1375,6 +1390,7 @@ static const char * const eventnames[] = {
 	"ConnectRetryTimer expired",
 	"HoldTimer expired",
 	"KeepaliveTimer expired",
+	"SendHoldTimer expired",
 	"OPEN message received",
 	"KEEPALIVE message received",
 	"UPDATE message received",
@@ -1465,6 +1481,7 @@ static const char * const timernames[] = {
 	"ConnectRetryTimer",
 	"KeepaliveTimer",
 	"HoldTimer",
+	"SendHoldTimer",
 	"IdleHoldTimer",
 	"IdleHoldResetTimer",
 	"CarpUndemoteTimer",

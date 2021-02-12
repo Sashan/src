@@ -1,4 +1,4 @@
-/*	$OpenBSD: acpireg.h,v 1.45 2019/08/28 22:39:09 kettenis Exp $	*/
+/*	$OpenBSD: acpireg.h,v 1.52 2021/01/23 20:01:01 patrick Exp $	*/
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  * Copyright (c) 2005 Marco Peereboom <marco@openbsd.org>
@@ -623,6 +623,9 @@ struct acpi_ivmd {
 struct acpi_ivhd {
 	uint8_t		type;
 	uint8_t		flags;
+#define IVHD_PPRSUP		(1L << 7)
+#define IVHD_PREFSUP		(1L << 6)
+#define IVHD_COHERENT		(1L << 5)
 #define IVHD_IOTLB		(1L << 4)
 #define IVHD_ISOC		(1L << 3)
 #define IVHD_RESPASSPW		(1L << 2)
@@ -638,13 +641,28 @@ struct acpi_ivhd {
 #define IVHD_UNITID_MASK	0x1F
 #define IVHD_MSINUM_SHIFT	0
 #define IVHD_MSINUM_MASK	0x1F
-	uint32_t	reserved;
+	uint32_t	feature;
+} __packed;
+
+struct acpi_ivhd_ext {
+	uint8_t		type;
+	uint8_t		flags;
+	uint16_t	length;
+	uint16_t	devid;
+	uint16_t	cap;
+	uint64_t	address;
+	uint16_t	segment;
+	uint16_t	info;
+	uint32_t	attrib;
+	uint64_t	efr;
+	uint8_t		reserved[8];
 } __packed;
 
 union acpi_ivrs_entry {
 	struct {
 		uint8_t		type;
 #define IVRS_IVHD			0x10
+#define IVRS_IVHD_EXT			0x11
 #define IVRS_IVMD_ALL			0x20
 #define IVRS_IVMD_SPECIFIED		0x21
 #define IVRS_IVMD_RANGE			0x22
@@ -652,6 +670,7 @@ union acpi_ivrs_entry {
 		uint16_t	length;
 	} __packed;
 	struct acpi_ivhd	ivhd;
+	struct acpi_ivhd_ext	ivhd_ext;
 	struct acpi_ivmd	ivmd;
 } __packed;
 
@@ -667,6 +686,81 @@ struct acpi_ivrs {
 	uint8_t			reserved[8];
 } __packed;
 
+struct acpi_iort {
+	struct acpi_table_header	hdr;
+#define IORT_SIG	"IORT"
+	uint32_t	number_of_nodes;
+	uint32_t	offset;
+	uint32_t	reserved;
+} __packed;
+
+struct acpi_iort_node {
+	uint8_t		type;
+#define ACPI_IORT_ITS		0
+#define ACPI_IORT_ROOT_COMPLEX	2
+#define ACPI_IORT_SMMU		3
+#define ACPI_IORT_SMMU_V3	4
+	uint16_t	length;
+	uint8_t		revision;
+	uint32_t	reserved1;
+	uint32_t	number_of_mappings;
+	uint32_t	mapping_offset;
+} __packed;
+
+struct acpi_iort_rc_node {
+	uint64_t	memory_access_properties;
+	uint32_t	atf_attributes;
+	uint32_t	segment;
+	uint8_t		memory_address_size_limit;
+	uint8_t		reserved2[3];
+} __packed;
+
+struct acpi_iort_smmu_node {
+	uint64_t	base_address;
+	uint64_t	span;
+	uint32_t	model;
+#define ACPI_IORT_SMMU_V1		0
+#define ACPI_IORT_SMMU_V2		1
+#define ACPI_IORT_SMMU_CORELINK_MMU400	2
+#define ACPI_IORT_SMMU_CORELINK_MMU500	3
+#define ACPI_IORT_SMMU_CORELINK_MMU401	4
+#define ACPI_IORT_SMMU_CAVIUM_THUNDERX	5
+	uint32_t	flags;
+#define ACPI_IORT_SMMU_DVM		0x00000001
+#define ACPI_IORT_SMMU_COHERENT		0x00000002
+	uint32_t	global_interrupt_offset;
+	uint32_t	number_of_context_interrupts;
+	uint32_t	context_interrupt_offset;
+	uint32_t	number_of_pmu_interrupts;
+	uint32_t	pmu_interrupt_offset;
+} __packed;
+
+struct acpi_iort_smmu_global_interrupt {
+	uint32_t	nsgirpt_gsiv;
+	uint32_t	nsgirpt_flags;
+#define ACPI_IORT_SMMU_INTR_EDGE	(1 << 0)
+	uint32_t	nscfgirpt_gsiv;
+	uint32_t	nscfgirpt_flags;
+} __packed;
+
+struct acpi_iort_smmu_context_interrupt {
+	uint32_t	gsiv;
+	uint32_t	flags;
+} __packed;
+
+struct acpi_iort_smmu_pmu_interrupt {
+	uint32_t	gsiv;
+	uint32_t	flags;
+} __packed;
+
+struct acpi_iort_mapping {
+	uint32_t	input_base;
+	uint32_t	number_of_ids;
+	uint32_t	output_base;
+	uint32_t	output_reference;
+	uint32_t	flags;
+#define ACPI_IORT_MAPPING_SINGLE	0x00000001
+} __packed;
 
 #define ACPI_FREQUENCY	3579545		/* Per ACPI spec */
 

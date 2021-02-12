@@ -1,4 +1,4 @@
-# $OpenBSD: RAMDISK,v 1.111 2020/03/20 09:25:42 patrick Exp $
+# $OpenBSD: RAMDISK,v 1.138 2021/01/19 19:14:39 kettenis Exp $
 #
 # GENERIC machine description file
 #
@@ -57,6 +57,7 @@ ahci*		at acpi?
 ccp*		at acpi?		# AMD Cryptographic Co-processor
 com*		at acpi?
 pluart*		at acpi?
+sdhc*		at acpi?
 xhci*		at acpi?
 simplebus*	at fdt?
 
@@ -114,21 +115,39 @@ imxccm*		at fdt? early 1
 imxiomuxc*	at fdt? early 1
 imxanatop*	at fdt? early 1
 imxsrc*		at fdt? early 1
+imxdwusb*	at fdt?
+imxehci*	at fdt?
+usb*		at imxehci?
 imxgpc*		at fdt?
 imxgpio*	at fdt?
 fec*		at fdt?
 imxuart*	at fdt?
+imxiic*		at acpi?
 imxiic*		at fdt?
 iic*		at imxiic?
 bdpmic*		at iic?
 imxesdhc*	at fdt?
 sdmmc*		at imxesdhc?
+imxpciephy*	at fdt?
 
-# Raspberry Pi 3
-bcmaux*		at fdt?
-bcmintc*	at fdt?
+# Raspberry Pi 3/4
+bcmaux*		at fdt? early 1
+bcmbsc*		at fdt?
+iic*		at bcmbsc?
+bcmclock*	at fdt? early 1
+bcmdmac*	at fdt? early 1
 bcmdog*		at fdt?
+bcmgpio*	at fdt? early 1
+bcmintc*	at fdt? early 1
+bcmirng*	at fdt?
+bcmmbox*	at fdt? early 1
+bcmpcie*	at fdt?
+pci*		at bcmpcie?
 bcmrng*		at fdt?
+bcmsdhost*	at fdt?
+sdmmc*		at bcmsdhost?
+bse*		at fdt?
+bse*		at acpi?
 dwctwo*		at fdt?
 usb*		at dwctwo?
 
@@ -141,6 +160,7 @@ amlmmc*		at fdt?
 sdmmc*		at amlmmc?
 amlpciephy*	at fdt?
 amlpinctrl*	at fdt? early 1
+amlpwrc*	at fdt? early 1
 amlreset*	at fdt? early 1
 amlrng*		at fdt?
 amluart*	at fdt?
@@ -160,10 +180,15 @@ mvdog*		at fdt?
 mvgpio*		at fdt?
 mviic*		at fdt?
 iic*		at mviic?
+mvkpcie*	at fdt?
+pci*		at mvkpcie?
 mvmdio*		at fdt?
 mvneta*		at fdt?
+mvppc*		at fdt?
+mvpp*		at mvppc?
 mvrng*		at fdt?
 mvrtc*		at fdt?
+mvsw*		at fdt?
 mvuart*		at fdt?
 sfp*		at fdt?
 
@@ -178,6 +203,7 @@ iic*		at rkiic?
 rkpcie*		at fdt?
 pci*		at rkpcie?
 rkpwm*		at fdt?
+rkrng*		at fdt?
 rkdwusb*	at fdt?
 dwmmc*		at fdt?
 sdmmc*		at dwmmc?
@@ -210,6 +236,10 @@ mskc*		at pci?			# Marvell Yukon-2
 msk*		at mskc?		#  each port of above
 re*		at pci?			# Realtek 8169/8169S/8110S
 rge*		at pci?			# Realtek 8125
+
+# PCI WiFi
+athn*		at pci?			# Atheros AR9k (802.11a/g/n)
+bwfm*		at pci?			# Broadcom FullMAC
 
 # PCI SCSI
 ahci*		at pci? flags 0x0000	# AHCI SATA controllers
@@ -263,9 +293,11 @@ upgt*		at uhub?		# Conexant/Intersil PrismGT SoftMAC USB
 urtw*		at uhub?		# Realtek 8187
 rsu*		at uhub?		# Realtek RTL8188SU/RTL8191SU/RTL8192SU
 urtwn*		at uhub?		# Realtek RTL8188CU/RTL8192CU
+bwfm*		at uhub?		# Broadcom FullMAC
 
 amphy*		at mii?			# AMD 79C873 PHYs
 atphy*		at mii?			# Attansic F1 PHYs
+brgphy*		at mii?			# Broadcom Gigabit PHYs
 eephy*		at mii?			# Marvell 88E1000 series PHY
 rgephy*		at mii?			# Realtek 8169S/8110S PHY
 rlphy*		at mii?			# Realtek 8139 internal PHYs
@@ -281,11 +313,16 @@ uk*		at scsibus?
 
 # I2C devices
 abcrtc*		at iic?			# Abracon x80x RTC
+dsxrtc*		at iic?			# DS3231 RTC
 fusbtc*		at iic?			# USB Type-C controller
 islrtc*		at iic?			# ISL1208 RTC
+maxrtc*		at iic?			# DS1307 RTC
 mcprtc*		at iic?			# MCP794XX RTC
+mfokrtc*	at iic?			# M41T8X RTC
+pcfrtc*		at iic?			# PCF8523 RTC
 pcxrtc*		at iic?			# PCF8563 RTC
 rkpmic*		at iic?			# RK808 PMIC
+tcpci*		at iic?			# USB Type-C controller
 
 pseudo-device	loop 1
 pseudo-device	vlan

@@ -1,4 +1,4 @@
-.\"	$OpenBSD: acme-client.1,v 1.32 2019/06/15 17:06:44 florian Exp $
+.\"	$OpenBSD: acme-client.1,v 1.39 2021/01/02 19:04:21 sthen Exp $
 .\"
 .\" Copyright (c) 2016 Kristaps Dzonsons <kristaps@bsd.lv>
 .\"
@@ -14,7 +14,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: June 15 2019 $
+.Dd $Mdocdate: January 2 2021 $
 .Dt ACME-CLIENT 1
 .Os
 .Sh NAME
@@ -24,14 +24,14 @@
 .Nm acme-client
 .Op Fl Fnrv
 .Op Fl f Ar configfile
-.Ar domain
+.Ar handle
 .Sh DESCRIPTION
 .Nm
 is an
 Automatic Certificate Management Environment (ACME) client:
 it looks in its configuration for a domain section
 corresponding to the
-.Ar domain
+.Ar handle
 given as command line argument
 and uses that configuration to retrieve an X.509 certificate
 which can be used to provide domain name validation
@@ -67,7 +67,8 @@ location "/.well-known/acme-challenge/*" {
 The options are as follows:
 .Bl -tag -width Ds
 .It Fl F
-Force certificate renewal, even if it's too soon.
+Force certificate renewal, even if it has more than 30 days
+validity.
 .It Fl f Ar configfile
 Specify an alternative configuration file.
 .It Fl n
@@ -77,8 +78,9 @@ Revoke the X.509 certificate.
 .It Fl v
 Verbose operation.
 Specify twice to also trace communication and data transfers.
-.It Ar domain
-The domain name.
+.It Ar handle
+The handle of the domain section of the configuration that contains the
+details of the certificate to be created, renewed or revoked.
 .El
 .Sh FILES
 .Bl -tag -width "/etc/acme-client.conf" -compact
@@ -122,8 +124,8 @@ On renewal,
 .Xr httpd 8
 is reloaded:
 .Bd -literal -offset indent
-0	*	*	*	*	sleep $((RANDOM \e% 2048)) && \e
-	acme-client example.com && rcctl reload httpd
+~	*	*	*	*	acme-client example.com && \e
+	rcctl reload httpd
 .Ed
 .Sh SEE ALSO
 .Xr openssl 1 ,

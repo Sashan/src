@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_upl.c,v 1.75 2018/10/02 19:49:10 stsp Exp $ */
+/*	$OpenBSD: if_upl.c,v 1.78 2020/07/31 10:49:32 mglocker Exp $ */
 /*	$NetBSD: if_upl.c,v 1.19 2002/07/11 21:14:26 augustss Exp $	*/
 /*
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -510,7 +510,7 @@ upl_txeof(struct usbd_xfer *xfer, void *priv, usbd_status status)
 	m_freem(c->upl_mbuf);
 	c->upl_mbuf = NULL;
 
-	if (IFQ_IS_EMPTY(&ifp->if_snd) == 0)
+	if (ifq_empty(&ifp->if_snd) == 0)
 		upl_start(ifp);
 
 	splx(s);
@@ -546,6 +546,7 @@ upl_send(struct upl_softc *sc, struct mbuf *m, int idx)
 	if (err != USBD_IN_PROGRESS) {
 		printf("%s: upl_send error=%s\n", sc->sc_dev.dv_xname,
 		       usbd_errstr(err));
+		c->upl_mbuf = NULL;
 		upl_stop(sc);
 		return (EIO);
 	}
@@ -569,17 +570,15 @@ upl_start(struct ifnet *ifp)
 	if (ifq_is_oactive(&ifp->if_snd))
 		return;
 
-	m_head = ifq_deq_begin(&ifp->if_snd);
+	m_head = ifq_dequeue(&ifp->if_snd);
 	if (m_head == NULL)
 		return;
 
 	if (upl_send(sc, m_head, 0)) {
-		ifq_deq_rollback(&ifp->if_snd, m_head);
+		m_freem(m_head);
 		ifq_set_oactive(&ifp->if_snd);
 		return;
 	}
-
-	ifq_deq_commit(&ifp->if_snd, m_head);
 
 #if NBPFILTER > 0
 	/*
@@ -796,7 +795,7 @@ upl_watchdog(struct ifnet *ifp)
 	upl_stop(sc);
 	upl_init(sc);
 
-	if (IFQ_IS_EMPTY(&ifp->if_snd) == 0)
+	if (ifq_empty(&ifp->if_snd) == 0)
 		upl_start(ifp);
 }
 
@@ -820,7 +819,6 @@ upl_stop(struct upl_softc *sc)
 
 	/* Stop transfers. */
 	if (sc->sc_ep[UPL_ENDPT_RX] != NULL) {
-		usbd_abort_pipe(sc->sc_ep[UPL_ENDPT_RX]);
 		err = usbd_close_pipe(sc->sc_ep[UPL_ENDPT_RX]);
 		if (err) {
 			printf("%s: close rx pipe failed: %s\n",
@@ -830,7 +828,6 @@ upl_stop(struct upl_softc *sc)
 	}
 
 	if (sc->sc_ep[UPL_ENDPT_TX] != NULL) {
-		usbd_abort_pipe(sc->sc_ep[UPL_ENDPT_TX]);
 		err = usbd_close_pipe(sc->sc_ep[UPL_ENDPT_TX]);
 		if (err) {
 			printf("%s: close tx pipe failed: %s\n",
@@ -840,7 +837,6 @@ upl_stop(struct upl_softc *sc)
 	}
 
 	if (sc->sc_ep[UPL_ENDPT_INTR] != NULL) {
-		usbd_abort_pipe(sc->sc_ep[UPL_ENDPT_INTR]);
 		err = usbd_close_pipe(sc->sc_ep[UPL_ENDPT_INTR]);
 		if (err) {
 			printf("%s: close intr pipe failed: %s\n",

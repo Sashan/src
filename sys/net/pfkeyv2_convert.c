@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfkeyv2_convert.c,v 1.66 2019/03/04 08:42:12 stsp Exp $	*/
+/*	$OpenBSD: pfkeyv2_convert.c,v 1.70 2020/12/14 20:20:06 tobhe Exp $	*/
 /*
  * The author of this code is Angelos D. Keromytis (angelos@keromytis.org)
  *
@@ -422,7 +422,7 @@ export_lifetime(void **p, struct tdb *tdb, int type)
  * Import flow information to two struct sockaddr_encap's. Either
  * all or none of the address arguments are NULL.
  */
-void
+int
 import_flow(struct sockaddr_encap *flow, struct sockaddr_encap *flowmask,
     struct sadb_address *ssrc, struct sadb_address *ssrcmask,
     struct sadb_address *ddst, struct sadb_address *ddstmask,
@@ -435,7 +435,7 @@ import_flow(struct sockaddr_encap *flow, struct sockaddr_encap *flowmask,
 	union sockaddr_union *dstmask = (union sockaddr_union *)(ddstmask + 1);
 
 	if (ssrc == NULL)
-		return; /* There wasn't any information to begin with. */
+		return 0; /* There wasn't any information to begin with. */
 
 	bzero(flow, sizeof(*flow));
 	bzero(flowmask, sizeof(*flowmask));
@@ -450,7 +450,7 @@ import_flow(struct sockaddr_encap *flow, struct sockaddr_encap *flowmask,
 	if ((src->sa.sa_family != dst->sa.sa_family) ||
 	    (src->sa.sa_family != srcmask->sa.sa_family) ||
 	    (src->sa.sa_family != dstmask->sa.sa_family))
-		return;
+		return EINVAL;
 
 	/*
 	 * We set these as an indication that tdb_filter/tdb_filtermask are
@@ -513,6 +513,8 @@ import_flow(struct sockaddr_encap *flow, struct sockaddr_encap *flowmask,
 		break;
 #endif /* INET6 */
 	}
+
+	return 0;
 }
 
 /*
@@ -696,16 +698,20 @@ export_address(void **p, struct sockaddr *sa)
  * Import an identity payload into the TDB.
  */
 static void
-import_identity(struct ipsec_id **id, struct sadb_ident *sadb_ident)
+import_identity(struct ipsec_id **id, struct sadb_ident *sadb_ident,
+    size_t *id_sz)
 {
+	size_t id_len;
+
 	if (!sadb_ident) {
 		*id = NULL;
 		return;
 	}
 
-	*id = malloc(EXTLEN(sadb_ident) - sizeof(struct sadb_ident) +
-	    sizeof(struct ipsec_id), M_CREDENTIALS, M_WAITOK);
-	(*id)->len = EXTLEN(sadb_ident) - sizeof(struct sadb_ident);
+	id_len = EXTLEN(sadb_ident) - sizeof(struct sadb_ident);
+	*id_sz = sizeof(struct ipsec_id) + id_len;
+	*id = malloc(*id_sz, M_CREDENTIALS, M_WAITOK);
+	(*id)->len = id_len;
 
 	switch (sadb_ident->sadb_ident_type) {
 	case SADB_IDENTTYPE_PREFIX:
@@ -717,8 +723,11 @@ import_identity(struct ipsec_id **id, struct sadb_ident *sadb_ident)
 	case SADB_IDENTTYPE_USERFQDN:
 		(*id)->type = IPSP_IDENTITY_USERFQDN;
 		break;
+	case SADB_IDENTTYPE_ASN1_DN:
+		(*id)->type = IPSP_IDENTITY_ASN1_DN;
+		break;
 	default:
-		free(*id, M_CREDENTIALS, 0);
+		free(*id, M_CREDENTIALS, *id_sz);
 		*id = NULL;
 		return;
 	}
@@ -731,19 +740,20 @@ import_identities(struct ipsec_ids **ids, int swapped,
     struct sadb_ident *srcid, struct sadb_ident *dstid)
 {
 	struct ipsec_ids *tmp;
+	size_t id_local_sz, id_remote_sz;
 
 	*ids = NULL;
 	tmp = malloc(sizeof(struct ipsec_ids), M_CREDENTIALS, M_WAITOK);
-	import_identity(&tmp->id_local, swapped ? dstid: srcid);
-	import_identity(&tmp->id_remote, swapped ? srcid: dstid);
+	import_identity(&tmp->id_local, swapped ? dstid: srcid, &id_local_sz);
+	import_identity(&tmp->id_remote, swapped ? srcid: dstid, &id_remote_sz);
 	if (tmp->id_local != NULL && tmp->id_remote != NULL) {
 		*ids = ipsp_ids_insert(tmp);
 		if (*ids == tmp)
 			return;
 	}
-	free(tmp->id_local, M_CREDENTIALS, 0);
-	free(tmp->id_remote, M_CREDENTIALS, 0);
-	free(tmp, M_CREDENTIALS, 0);
+	free(tmp->id_local, M_CREDENTIALS, id_local_sz);
+	free(tmp->id_remote, M_CREDENTIALS, id_remote_sz);
+	free(tmp, M_CREDENTIALS, sizeof(*tmp));
 }
 
 static void
@@ -763,6 +773,9 @@ export_identity(void **p, struct ipsec_id *id)
 		break;
 	case IPSP_IDENTITY_USERFQDN:
 		sadb_ident->sadb_ident_type = SADB_IDENTTYPE_USERFQDN;
+		break;
+	case IPSP_IDENTITY_ASN1_DN:
+		sadb_ident->sadb_ident_type = SADB_IDENTTYPE_ASN1_DN;
 		break;
 	}
 	*p += sizeof(struct sadb_ident);
@@ -838,6 +851,27 @@ export_udpencap(void **p, struct tdb *tdb)
 	sadb_udpencap->sadb_x_udpencap_len =
 	    sizeof(struct sadb_x_udpencap) / sizeof(uint64_t);
 	*p += sizeof(struct sadb_x_udpencap);
+}
+
+/* Import rdomain switch for SA */
+void
+import_rdomain(struct tdb *tdb, struct sadb_x_rdomain *srdomain)
+{
+	if (srdomain)
+		tdb->tdb_rdomain_post = srdomain->sadb_x_rdomain_dom2;
+}
+
+/* Export rdomain switch for SA */
+void
+export_rdomain(void **p, struct tdb *tdb)
+{
+	struct sadb_x_rdomain *srdomain = (struct sadb_x_rdomain *)*p;
+
+	srdomain->sadb_x_rdomain_dom1 = tdb->tdb_rdomain;
+	srdomain->sadb_x_rdomain_dom2 = tdb->tdb_rdomain_post;
+	srdomain->sadb_x_rdomain_len =
+	    sizeof(struct sadb_x_rdomain) / sizeof(uint64_t);
+	*p += sizeof(struct sadb_x_rdomain);
 }
 
 #if NPF > 0

@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sysctl.c,v 1.371 2020/03/09 19:59:53 millert Exp $	*/
+/*	$OpenBSD: kern_sysctl.c,v 1.389 2021/02/08 10:51:02 mpi Exp $	*/
 /*	$NetBSD: kern_sysctl.c,v 1.17 1996/05/20 17:49:05 mrg Exp $	*/
 
 /*-
@@ -85,7 +85,6 @@
 #include <uvm/uvm_extern.h>
 
 #include <dev/cons.h>
-#include <dev/rndvar.h>
 
 #include <net/route.h>
 #include <netinet/in.h>
@@ -115,6 +114,7 @@
 #endif
 
 #include "audio.h"
+#include "video.h"
 #include "pf.h"
 
 extern struct forkstat forkstat;
@@ -123,9 +123,11 @@ extern int nselcoll, fscale;
 extern struct disklist_head disklist;
 extern fixpt_t ccpu;
 extern  long numvnodes;
-extern u_int net_livelocks;
 #if NAUDIO > 0
 extern int audio_record_enable;
+#endif
+#if NVIDEO > 0
+extern int video_record_enable;
 #endif
 
 int allowkmem;
@@ -142,6 +144,9 @@ int sysctl_sensors(int *, u_int, void *, size_t *, void *, size_t);
 int sysctl_cptime2(int *, u_int, void *, size_t *, void *, size_t);
 #if NAUDIO > 0
 int sysctl_audio(int *, u_int, void *, size_t *, void *, size_t);
+#endif
+#if NVIDEO > 0
+int sysctl_video(int *, u_int, void *, size_t *, void *, size_t);
 #endif
 int sysctl_cpustats(int *, u_int, void *, size_t *, void *, size_t);
 int sysctl_utc_offset(void *, size_t *, void *, size_t);
@@ -215,7 +220,7 @@ sys_sysctl(struct proc *p, void *v, register_t *retval)
 	case CTL_MACHDEP:
 		fn = cpu_sysctl;
 		break;
-#ifdef DEBUG
+#ifdef DEBUG_SYSCTL
 	case CTL_DEBUG:
 		fn = debug_sysctl;
 		break;
@@ -277,6 +282,165 @@ struct diskstats *diskstats = NULL;
 size_t diskstatslen;
 int securelevel;
 
+/* morally const values reported by sysctl_bounded_arr */
+static int arg_max = ARG_MAX;
+static int openbsd = OpenBSD;
+static int posix_version = _POSIX_VERSION;
+static int ngroups_max = NGROUPS_MAX;
+static int int_zero = 0;
+static int int_one = 1;
+static int maxpartitions = MAXPARTITIONS;
+static int raw_part = RAW_PART;
+
+extern int somaxconn, sominconn;
+extern int nosuidcoredump;
+extern int maxlocksperuid;
+extern int uvm_wxabort;
+extern int global_ptrace;
+
+const struct sysctl_bounded_args kern_vars[] = {
+	{KERN_OSREV, &openbsd, 1, 0},
+	{KERN_MAXVNODES, &maxvnodes, 0, INT_MAX},
+	{KERN_MAXPROC, &maxprocess, 0, INT_MAX},
+	{KERN_MAXFILES, &maxfiles, 0, INT_MAX},
+	{KERN_NFILES, &numfiles, 1, 0},
+	{KERN_TTYCOUNT, &tty_count, 1, 0},
+	{KERN_ARGMAX, &arg_max, 1, 0},
+	{KERN_NSELCOLL, &nselcoll, 1, 0},
+	{KERN_POSIX1, &posix_version, 1, 0},
+	{KERN_NGROUPS, &ngroups_max, 1, 0},
+	{KERN_JOB_CONTROL, &int_one, 1, 0},
+	{KERN_SAVED_IDS, &int_one, 1, 0},
+	{KERN_MAXPARTITIONS, &maxpartitions, 1, 0},
+	{KERN_RAWPARTITION, &raw_part, 1, 0},
+	{KERN_MAXTHREAD, &maxthread, 0, INT_MAX},
+	{KERN_NTHREADS, &nthreads, 1, 0},
+	{KERN_SOMAXCONN, &somaxconn, 0, SHRT_MAX},
+	{KERN_SOMINCONN, &sominconn, 0, SHRT_MAX},
+	{KERN_NOSUIDCOREDUMP, &nosuidcoredump, 0, 3},
+	{KERN_FSYNC, &int_one, 1, 0},
+	{KERN_SYSVMSG,
+#ifdef SYSVMSG
+	 &int_one,
+#else
+	 &int_zero,
+#endif
+	 1, 0},
+	{KERN_SYSVSEM,
+#ifdef SYSVSEM
+	 &int_one,
+#else
+	 &int_zero,
+#endif
+	 1, 0},
+	{KERN_SYSVSHM,
+#ifdef SYSVSHM
+	 &int_one,
+#else
+	 &int_zero,
+#endif
+	 1, 0},
+	{KERN_FSCALE, &fscale, 1, 0},
+	{KERN_CCPU, &ccpu, 1, 0},
+	{KERN_NPROCS, &nprocesses, 1, 0},
+	{KERN_SPLASSERT, &splassert_ctl, 0, 3},
+	{KERN_MAXLOCKSPERUID, &maxlocksperuid, 0, INT_MAX},
+	{KERN_WXABORT, &uvm_wxabort, 0, 1},
+	{KERN_NETLIVELOCKS, &int_zero, 1, 0},
+#ifdef PTRACE
+	{KERN_GLOBAL_PTRACE, &global_ptrace, 0, 1},
+#endif
+};
+
+int
+kern_sysctl_dirs(int top_name, int *name, u_int namelen,
+    void *oldp, size_t *oldlenp, void *newp, size_t newlen, struct proc *p)
+{
+	switch (top_name) {
+#ifndef SMALL_KERNEL
+	case KERN_PROC:
+		return (sysctl_doproc(name, namelen, oldp, oldlenp));
+	case KERN_PROC_ARGS:
+		return (sysctl_proc_args(name, namelen, oldp, oldlenp, p));
+	case KERN_PROC_CWD:
+		return (sysctl_proc_cwd(name, namelen, oldp, oldlenp, p));
+	case KERN_PROC_NOBROADCASTKILL:
+		return (sysctl_proc_nobroadcastkill(name, namelen,
+		     newp, newlen, oldp, oldlenp, p));
+	case KERN_PROC_VMMAP:
+		return (sysctl_proc_vmmap(name, namelen, oldp, oldlenp, p));
+	case KERN_FILE:
+		return (sysctl_file(name, namelen, oldp, oldlenp, p));
+#endif
+#if defined(GPROF) || defined(DDBPROF)
+	case KERN_PROF:
+		return (sysctl_doprof(name, namelen, oldp, oldlenp,
+		    newp, newlen));
+#endif
+	case KERN_MALLOCSTATS:
+		return (sysctl_malloc(name, namelen, oldp, oldlenp,
+		    newp, newlen, p));
+	case KERN_TTY:
+		return (sysctl_tty(name, namelen, oldp, oldlenp,
+		    newp, newlen));
+	case KERN_POOL:
+		return (sysctl_dopool(name, namelen, oldp, oldlenp));
+#if defined(SYSVMSG) || defined(SYSVSEM) || defined(SYSVSHM)
+	case KERN_SYSVIPC_INFO:
+		return (sysctl_sysvipc(name, namelen, oldp, oldlenp));
+#endif
+#ifdef SYSVSEM
+	case KERN_SEMINFO:
+		return (sysctl_sysvsem(name, namelen, oldp, oldlenp,
+		    newp, newlen));
+#endif
+#ifdef SYSVSHM
+	case KERN_SHMINFO:
+		return (sysctl_sysvshm(name, namelen, oldp, oldlenp,
+		    newp, newlen));
+#endif
+#ifndef SMALL_KERNEL
+	case KERN_INTRCNT:
+		return (sysctl_intrcnt(name, namelen, oldp, oldlenp));
+	case KERN_WATCHDOG:
+		return (sysctl_wdog(name, namelen, oldp, oldlenp,
+		    newp, newlen));
+#endif
+#ifndef SMALL_KERNEL
+	case KERN_EVCOUNT:
+		return (evcount_sysctl(name, namelen, oldp, oldlenp,
+		    newp, newlen));
+#endif
+	case KERN_TIMECOUNTER:
+		return (sysctl_tc(name, namelen, oldp, oldlenp, newp, newlen));
+	case KERN_CPTIME2:
+		return (sysctl_cptime2(name, namelen, oldp, oldlenp,
+		    newp, newlen));
+#ifdef WITNESS
+	case KERN_WITNESSWATCH:
+		return witness_sysctl_watch(oldp, oldlenp, newp, newlen);
+	case KERN_WITNESS:
+		return witness_sysctl(name, namelen, oldp, oldlenp,
+		    newp, newlen);
+#endif
+#if NAUDIO > 0
+	case KERN_AUDIO:
+		return (sysctl_audio(name, namelen, oldp, oldlenp,
+		    newp, newlen));
+#endif
+#if NVIDEO > 0
+	case KERN_VIDEO:
+		return (sysctl_video(name, namelen, oldp, oldlenp,
+		    newp, newlen));
+#endif
+	case KERN_CPUSTATS:
+		return (sysctl_cpustats(name, namelen, oldp, oldlenp,
+		    newp, newlen));
+	default:
+		return (ENOTDIR);	/* overloaded */
+	}
+}
+
 /*
  * kernel related system variables.
  */
@@ -286,40 +450,12 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 {
 	int error, level, inthostid, stackgap;
 	dev_t dev;
-	extern int somaxconn, sominconn;
-	extern int nosuidcoredump;
-	extern int maxlocksperuid;
 	extern int pool_debug;
-	extern int uvm_wxabort;
 
-	/* all sysctl names at this level are terminal except a ton of them */
+	/* dispatch the non-terminal nodes first */
 	if (namelen != 1) {
-		switch (name[0]) {
-		case KERN_PROC:
-		case KERN_PROF:
-		case KERN_MALLOCSTATS:
-		case KERN_TTY:
-		case KERN_POOL:
-		case KERN_PROC_ARGS:
-		case KERN_PROC_CWD:
-		case KERN_PROC_NOBROADCASTKILL:
-		case KERN_PROC_VMMAP:
-		case KERN_SYSVIPC_INFO:
-		case KERN_SEMINFO:
-		case KERN_SHMINFO:
-		case KERN_INTRCNT:
-		case KERN_WATCHDOG:
-		case KERN_EVCOUNT:
-		case KERN_TIMECOUNTER:
-		case KERN_CPTIME2:
-		case KERN_FILE:
-		case KERN_WITNESS:
-		case KERN_AUDIO:
-		case KERN_CPUSTATS:
-			break;
-		default:
-			return (ENOTDIR);	/* overloaded */
-		}
+		return kern_sysctl_dirs(name[0], name + 1, namelen - 1,
+		    oldp, oldlenp, newp, newlen, p);
 	}
 
 	switch (name[0]) {
@@ -327,28 +463,12 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (sysctl_rdstring(oldp, oldlenp, newp, ostype));
 	case KERN_OSRELEASE:
 		return (sysctl_rdstring(oldp, oldlenp, newp, osrelease));
-	case KERN_OSREV:
-		return (sysctl_rdint(oldp, oldlenp, newp, OpenBSD));
 	case KERN_OSVERSION:
 		return (sysctl_rdstring(oldp, oldlenp, newp, osversion));
 	case KERN_VERSION:
 		return (sysctl_rdstring(oldp, oldlenp, newp, version));
-	case KERN_MAXVNODES:
-		return(sysctl_int(oldp, oldlenp, newp, newlen, &maxvnodes));
-	case KERN_MAXPROC:
-		return (sysctl_int(oldp, oldlenp, newp, newlen, &maxprocess));
-	case KERN_MAXFILES:
-		return (sysctl_int(oldp, oldlenp, newp, newlen, &maxfiles));
-	case KERN_NFILES:
-		return (sysctl_rdint(oldp, oldlenp, newp, numfiles));
-	case KERN_TTYCOUNT:
-		return (sysctl_rdint(oldp, oldlenp, newp, tty_count));
-	case KERN_NUMVNODES:
+	case KERN_NUMVNODES:  /* XXX numvnodes is a long */
 		return (sysctl_rdint(oldp, oldlenp, newp, numvnodes));
-	case KERN_ARGMAX:
-		return (sysctl_rdint(oldp, oldlenp, newp, ARG_MAX));
-	case KERN_NSELCOLL:
-		return (sysctl_rdint(oldp, oldlenp, newp, nselcoll));
 	case KERN_SECURELVL:
 		level = securelevel;
 		if ((error = sysctl_int(oldp, oldlenp, newp, newlen, &level)) ||
@@ -392,24 +512,6 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		microboottime(&bt);
 		return (sysctl_rdstruct(oldp, oldlenp, newp, &bt, sizeof bt));
 	  }
-#ifndef SMALL_KERNEL
-	case KERN_PROC:
-		return (sysctl_doproc(name + 1, namelen - 1, oldp, oldlenp));
-	case KERN_PROC_ARGS:
-		return (sysctl_proc_args(name + 1, namelen - 1, oldp, oldlenp,
-		     p));
-	case KERN_PROC_CWD:
-		return (sysctl_proc_cwd(name + 1, namelen - 1, oldp, oldlenp,
-		     p));
-	case KERN_PROC_NOBROADCASTKILL:
-		return (sysctl_proc_nobroadcastkill(name + 1, namelen - 1,
-		     newp, newlen, oldp, oldlenp, p));
-	case KERN_PROC_VMMAP:
-		return (sysctl_proc_vmmap(name + 1, namelen - 1, oldp, oldlenp,
-		     p));
-	case KERN_FILE:
-		return (sysctl_file(name + 1, namelen - 1, oldp, oldlenp, p));
-#endif
 	case KERN_MBSTAT: {
 		extern struct cpumem *mbstat;
 		uint64_t counters[MBSTAT_COUNT];
@@ -428,69 +530,6 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (sysctl_rdstruct(oldp, oldlenp, newp,
 		    &mbs, sizeof(mbs)));
 	}
-#if defined(GPROF) || defined(DDBPROF)
-	case KERN_PROF:
-		return (sysctl_doprof(name + 1, namelen - 1, oldp, oldlenp,
-		    newp, newlen));
-#endif
-	case KERN_POSIX1:
-		return (sysctl_rdint(oldp, oldlenp, newp, _POSIX_VERSION));
-	case KERN_NGROUPS:
-		return (sysctl_rdint(oldp, oldlenp, newp, NGROUPS_MAX));
-	case KERN_JOB_CONTROL:
-		return (sysctl_rdint(oldp, oldlenp, newp, 1));
-	case KERN_SAVED_IDS:
-		return (sysctl_rdint(oldp, oldlenp, newp, 1));
-	case KERN_MAXPARTITIONS:
-		return (sysctl_rdint(oldp, oldlenp, newp, MAXPARTITIONS));
-	case KERN_RAWPARTITION:
-		return (sysctl_rdint(oldp, oldlenp, newp, RAW_PART));
-	case KERN_MAXTHREAD:
-		return (sysctl_int(oldp, oldlenp, newp, newlen, &maxthread));
-	case KERN_NTHREADS:
-		return (sysctl_rdint(oldp, oldlenp, newp, nthreads));
-	case KERN_SOMAXCONN: {
-		int val = somaxconn;
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &val);
-		if (error)
-			return error;
-		if (val < 0 || val > SHRT_MAX)
-			return EINVAL;
-		somaxconn = val;
-		return 0;
-	}
-	case KERN_SOMINCONN: {
-		int val = sominconn;
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &val);
-		if (error)
-			return error;
-		if (val < 0 || val > SHRT_MAX)
-			return EINVAL;
-		sominconn = val;
-		return 0;
-	}
-	case KERN_NOSUIDCOREDUMP:
-		return (sysctl_int(oldp, oldlenp, newp, newlen, &nosuidcoredump));
-	case KERN_FSYNC:
-		return (sysctl_rdint(oldp, oldlenp, newp, 1));
-	case KERN_SYSVMSG:
-#ifdef SYSVMSG
-		return (sysctl_rdint(oldp, oldlenp, newp, 1));
-#else
-		return (sysctl_rdint(oldp, oldlenp, newp, 0));
-#endif
-	case KERN_SYSVSEM:
-#ifdef SYSVSEM
-		return (sysctl_rdint(oldp, oldlenp, newp, 1));
-#else
-		return (sysctl_rdint(oldp, oldlenp, newp, 0));
-#endif
-	case KERN_SYSVSHM:
-#ifdef SYSVSHM
-		return (sysctl_rdint(oldp, oldlenp, newp, 1));
-#else
-		return (sysctl_rdint(oldp, oldlenp, newp, 0));
-#endif
 	case KERN_MSGBUFSIZE:
 	case KERN_CONSBUFSIZE: {
 		struct msgbuf *mp;
@@ -516,9 +555,6 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (sysctl_rdstruct(oldp, oldlenp, newp, mp,
 		    mp->msg_bufs + offsetof(struct msgbuf, msg_bufc)));
 	}
-	case KERN_MALLOCSTATS:
-		return (sysctl_malloc(name + 1, namelen - 1, oldp, oldlenp,
-		    newp, newlen, p));
 	case KERN_CPTIME:
 	{
 		CPU_INFO_ITERATOR cii;
@@ -548,17 +584,6 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	case KERN_FORKSTAT:
 		return (sysctl_rdstruct(oldp, oldlenp, newp, &forkstat,
 		    sizeof(struct forkstat)));
-	case KERN_TTY:
-		return (sysctl_tty(name + 1, namelen - 1, oldp, oldlenp,
-		    newp, newlen));
-	case KERN_FSCALE:
-		return (sysctl_rdint(oldp, oldlenp, newp, fscale));
-	case KERN_CCPU:
-		return (sysctl_rdint(oldp, oldlenp, newp, ccpu));
-	case KERN_NPROCS:
-		return (sysctl_rdint(oldp, oldlenp, newp, nprocesses));
-	case KERN_POOL:
-		return (sysctl_dopool(name + 1, namelen - 1, oldp, oldlenp));
 	case KERN_STACKGAPRANDOM:
 		stackgap = stackgap_random;
 		error = sysctl_int(oldp, oldlenp, newp, newlen, &stackgap);
@@ -572,30 +597,6 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 			return (EINVAL);
 		stackgap_random = stackgap;
 		return (0);
-#if defined(SYSVMSG) || defined(SYSVSEM) || defined(SYSVSHM)
-	case KERN_SYSVIPC_INFO:
-		return (sysctl_sysvipc(name + 1, namelen - 1, oldp, oldlenp));
-#endif
-	case KERN_SPLASSERT:
-		return (sysctl_int(oldp, oldlenp, newp, newlen,
-		    &splassert_ctl));
-#ifdef SYSVSEM
-	case KERN_SEMINFO:
-		return (sysctl_sysvsem(name + 1, namelen - 1, oldp, oldlenp,
-		    newp, newlen));
-#endif
-#ifdef SYSVSHM
-	case KERN_SHMINFO:
-		return (sysctl_sysvshm(name + 1, namelen - 1, oldp, oldlenp,
-		    newp, newlen));
-#endif
-#ifndef SMALL_KERNEL
-	case KERN_INTRCNT:
-		return (sysctl_intrcnt(name + 1, namelen - 1, oldp, oldlenp));
-	case KERN_WATCHDOG:
-		return (sysctl_wdog(name + 1, namelen - 1, oldp, oldlenp,
-		    newp, newlen));
-#endif
 	case KERN_MAXCLUSTERS: {
 		int val = nmbclust;
 		error = sysctl_int(oldp, oldlenp, newp, newlen, &val);
@@ -603,19 +604,6 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 			error = nmbclust_update(val);
 		return (error);
 	}
-#ifndef SMALL_KERNEL
-	case KERN_EVCOUNT:
-		return (evcount_sysctl(name + 1, namelen - 1, oldp, oldlenp,
-		    newp, newlen));
-#endif
-	case KERN_TIMECOUNTER:
-		return (sysctl_tc(name + 1, namelen - 1, oldp, oldlenp,
-		    newp, newlen));
-	case KERN_MAXLOCKSPERUID:
-		return (sysctl_int(oldp, oldlenp, newp, newlen, &maxlocksperuid));
-	case KERN_CPTIME2:
-		return (sysctl_cptime2(name + 1, namelen -1, oldp, oldlenp,
-		    newp, newlen));
 	case KERN_CACHEPCT: {
 		u_int64_t dmapages;
 		int opct, pgs;
@@ -636,16 +624,12 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		}
 		return(0);
 	}
-	case KERN_WXABORT:
-		return (sysctl_int(oldp, oldlenp, newp, newlen, &uvm_wxabort));
 	case KERN_CONSDEV:
 		if (cn_tab != NULL)
 			dev = cn_tab->cn_dev;
 		else
 			dev = NODEV;
 		return sysctl_rdstruct(oldp, oldlenp, newp, &dev, sizeof(dev));
-	case KERN_NETLIVELOCKS:
-		return (sysctl_rdint(oldp, oldlenp, newp, net_livelocks));
 	case KERN_POOL_DEBUG: {
 		int old_pool_debug = pool_debug;
 
@@ -655,28 +639,6 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 			pool_reclaim_all();
 		return (error);
 	}
-#ifdef PTRACE
-	case KERN_GLOBAL_PTRACE: {
-		extern int global_ptrace;
-
-		return sysctl_int(oldp, oldlenp, newp, newlen, &global_ptrace);
-	}
-#endif
-#ifdef WITNESS
-	case KERN_WITNESSWATCH:
-		return witness_sysctl_watch(oldp, oldlenp, newp, newlen);
-	case KERN_WITNESS:
-		return witness_sysctl(name + 1, namelen - 1, oldp, oldlenp,
-		    newp, newlen);
-#endif
-#if NAUDIO > 0
-	case KERN_AUDIO:
-		return (sysctl_audio(name + 1, namelen - 1, oldp, oldlenp,
-		    newp, newlen));
-#endif
-	case KERN_CPUSTATS:
-		return (sysctl_cpustats(name + 1, namelen - 1, oldp, oldlenp,
-		    newp, newlen));
 #if NPF > 0
 	case KERN_PFSTATUS:
 		return (pf_sysctl(oldp, oldlenp, newp, newlen));
@@ -686,7 +648,8 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	case KERN_UTC_OFFSET:
 		return (sysctl_utc_offset(oldp, oldlenp, newp, newlen));
 	default:
-		return (EOPNOTSUPP);
+		return (sysctl_bounded_arr(kern_vars, nitems(kern_vars), name,
+		    namelen, oldp, oldlenp, newp, newlen));
 	}
 	/* NOTREACHED */
 }
@@ -696,6 +659,18 @@ kern_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
  */
 char *hw_vendor, *hw_prod, *hw_uuid, *hw_serial, *hw_ver;
 int allowpowerdown = 1;
+
+/* morally const values reported by sysctl_bounded_arr */
+static int byte_order = BYTE_ORDER;
+static int page_size = PAGE_SIZE;
+
+const struct sysctl_bounded_args hw_vars[] = {
+	{HW_NCPU, &ncpus, 1, 0},
+	{HW_NCPUFOUND, &ncpusfound, 1, 0},
+	{HW_BYTEORDER, &byte_order, 1, 0},
+	{HW_PAGESIZE, &page_size, 1, 0},
+	{HW_DISKCOUNT, &disk_count, 1, 0},
+};
 
 int
 hw_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
@@ -713,22 +688,14 @@ hw_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (sysctl_rdstring(oldp, oldlenp, newp, machine));
 	case HW_MODEL:
 		return (sysctl_rdstring(oldp, oldlenp, newp, cpu_model));
-	case HW_NCPU:
-		return (sysctl_rdint(oldp, oldlenp, newp, ncpus));
-	case HW_NCPUFOUND:
-		return (sysctl_rdint(oldp, oldlenp, newp, ncpusfound));
 	case HW_NCPUONLINE:
 		return (sysctl_rdint(oldp, oldlenp, newp,
 		    sysctl_hwncpuonline()));
-	case HW_BYTEORDER:
-		return (sysctl_rdint(oldp, oldlenp, newp, BYTE_ORDER));
 	case HW_PHYSMEM:
 		return (sysctl_rdint(oldp, oldlenp, newp, ptoa(physmem)));
 	case HW_USERMEM:
 		return (sysctl_rdint(oldp, oldlenp, newp,
 		    ptoa(physmem - uvmexp.wired)));
-	case HW_PAGESIZE:
-		return (sysctl_rdint(oldp, oldlenp, newp, PAGE_SIZE));
 	case HW_DISKNAMES:
 		err = sysctl_diskinit(0, p);
 		if (err)
@@ -744,8 +711,6 @@ hw_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 			return err;
 		return (sysctl_rdstruct(oldp, oldlenp, newp, diskstats,
 		    disk_count * sizeof(struct diskstats)));
-	case HW_DISKCOUNT:
-		return (sysctl_rdint(oldp, oldlenp, newp, disk_count));
 	case HW_CPUSPEED:
 		if (!cpu_cpuspeed)
 			return (EOPNOTSUPP);
@@ -806,22 +771,24 @@ hw_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (sysctl_hwsmt(oldp, oldlenp, newp, newlen));
 #endif
 	default:
-		return (EOPNOTSUPP);
+		return sysctl_bounded_arr(hw_vars, nitems(hw_vars), name,
+		    namelen, oldp, oldlenp, newp, newlen);
 	}
 	/* NOTREACHED */
 }
 
-#ifdef DEBUG
+#ifdef DEBUG_SYSCTL
 /*
  * Debugging related system variables.
  */
-extern struct ctldebug debug0, debug1;
-struct ctldebug debug2, debug3, debug4;
+extern struct ctldebug debug_vfs_busyprt;
+struct ctldebug debug1, debug2, debug3, debug4;
 struct ctldebug debug5, debug6, debug7, debug8, debug9;
 struct ctldebug debug10, debug11, debug12, debug13, debug14;
 struct ctldebug debug15, debug16, debug17, debug18, debug19;
 static struct ctldebug *debugvars[CTL_DEBUG_MAXID] = {
-	&debug0, &debug1, &debug2, &debug3, &debug4,
+	&debug_vfs_busyprt,
+	&debug1, &debug2, &debug3, &debug4,
 	&debug5, &debug6, &debug7, &debug8, &debug9,
 	&debug10, &debug11, &debug12, &debug13, &debug14,
 	&debug15, &debug16, &debug17, &debug18, &debug19,
@@ -850,7 +817,7 @@ debug_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	}
 	/* NOTREACHED */
 }
-#endif /* DEBUG */
+#endif /* DEBUG_SYSCTL */
 
 /*
  * Reads, or writes that lower the value
@@ -879,6 +846,13 @@ sysctl_int_lower(void *oldp, size_t *oldlenp, void *newp, size_t newlen, int *va
 int
 sysctl_int(void *oldp, size_t *oldlenp, void *newp, size_t newlen, int *valp)
 {
+	return (sysctl_int_bounded(oldp, oldlenp, newp, newlen, valp, 0, 0));
+}
+
+int
+sysctl_int_bounded(void *oldp, size_t *oldlenp, void *newp, size_t newlen,
+    int *valp, int minimum, int maximum)
+{
 	int error = 0;
 	int val;
 
@@ -892,8 +866,12 @@ sysctl_int(void *oldp, size_t *oldlenp, void *newp, size_t newlen, int *valp)
 		error = copyout(&val, oldp, sizeof(int));
 	if (error == 0 && newp)
 		error = copyin(newp, &val, sizeof(int));
-	if (error == 0)
+	if (error)
+		return (error);
+	if (minimum == maximum || (minimum <= val && val <= maximum))
 		*valp = val;
+	else
+		error = EINVAL;
 	return (error);
 }
 
@@ -916,17 +894,29 @@ sysctl_rdint(void *oldp, size_t *oldlenp, void *newp, int val)
 }
 
 /*
- * Array of integer values.
+ * Array of bounded integer values.
  */
 int
-sysctl_int_arr(int **valpp, int *name, u_int namelen, void *oldp,
-    size_t *oldlenp, void *newp, size_t newlen)
+sysctl_bounded_arr(const struct sysctl_bounded_args *valpp, u_int valplen,
+    int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
+    size_t newlen)
 {
-	if (namelen > 1)
+	u_int i;
+	if (namelen != 1)
 		return (ENOTDIR);
-	if (name[0] < 0 || valpp[name[0]] == NULL)
-		return (EOPNOTSUPP);
-	return (sysctl_int(oldp, oldlenp, newp, newlen, valpp[name[0]]));
+	for (i = 0; i < valplen; ++i) {
+		if (valpp[i].mib == name[0]) {
+			if (valpp[i].minimum <= valpp[i].maximum) {
+				return (sysctl_int_bounded(oldp, oldlenp, newp,
+				    newlen, valpp[i].var, valpp[i].minimum,
+				    valpp[i].maximum));
+			} else {
+				return (sysctl_rdint(oldp, oldlenp, newp,
+				    *valpp[i].var));
+			}
+		}
+	}
+	return (EOPNOTSUPP);
 }
 
 /*
@@ -1657,7 +1647,7 @@ fill_kproc(struct process *pr, struct kinfo_proc *ki, struct proc *p,
 
 	/* stuff that's too painful to generalize into the macros */
 	if (pr->ps_pptr)
-		ki->p_ppid = pr->ps_pptr->ps_pid;
+		ki->p_ppid = pr->ps_ppid;
 	if (s->s_leader)
 		ki->p_sid = s->s_leader->ps_pid;
 
@@ -1767,7 +1757,7 @@ sysctl_proc_args(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 	/* Execing - danger. */
 	if ((vpr->ps_flags & PS_INEXEC))
 		return (EBUSY);
-	
+
 	/* Only owner or root can get env */
 	if ((op == KERN_PROC_NENV || op == KERN_PROC_ENV) &&
 	    (vpr->ps_ucred->cr_uid != cp->p_ucred->cr_uid &&
@@ -1776,7 +1766,7 @@ sysctl_proc_args(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 
 	ps_strings = vpr->ps_strings;
 	vm = vpr->ps_vmspace;
-	vm->vm_refcnt++;
+	uvmspace_addref(vm);
 	vpr = NULL;
 
 	buf = malloc(PAGE_SIZE, M_TEMP, M_WAITOK);
@@ -2444,6 +2434,21 @@ sysctl_audio(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 		return (ENOENT);
 
 	return (sysctl_int(oldp, oldlenp, newp, newlen, &audio_record_enable));
+}
+#endif
+
+#if NVIDEO > 0
+int
+sysctl_video(int *name, u_int namelen, void *oldp, size_t *oldlenp,
+    void *newp, size_t newlen)
+{
+	if (namelen != 1)
+		return (ENOTDIR);
+
+	if (name[0] != KERN_VIDEO_RECORD)
+		return (ENOENT);
+
+	return (sysctl_int(oldp, oldlenp, newp, newlen, &video_record_enable));
 }
 #endif
 

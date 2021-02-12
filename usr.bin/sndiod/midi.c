@@ -1,4 +1,4 @@
-/*	$OpenBSD: midi.c,v 1.23 2020/01/23 05:27:17 ratchov Exp $	*/
+/*	$OpenBSD: midi.c,v 1.27 2021/01/28 11:17:58 ratchov Exp $	*/
 /*
  * Copyright (c) 2008-2012 Alexandre Ratchov <alex@caoua.org>
  *
@@ -54,8 +54,8 @@ struct midithru {
 /*
  * length of voice and common messages (status byte included)
  */
-unsigned int voice_len[] = { 3, 3, 3, 3, 2, 2, 3 };
-unsigned int common_len[] = { 0, 2, 3, 2, 0, 0, 1, 1 };
+const unsigned int voice_len[] = { 3, 3, 3, 3, 2, 2, 3 };
+const unsigned int common_len[] = { 0, 2, 3, 2, 0, 0, 1, 1 };
 
 void
 midi_log(struct midi *ep)
@@ -187,6 +187,25 @@ midi_tag(struct midi *ep, unsigned int tag)
 		t->rxmask |= ep->self;
 	if (ep->mode & MODE_MIDIIN)
 		t->txmask |= ep->self;
+}
+
+/*
+ * return the list of tags
+ */
+unsigned int
+midi_tags(struct midi *ep)
+{
+	int i;
+	struct midithru *t;
+	unsigned int tags;
+
+	tags = 0;
+	for (i = 0; i < MIDITHRU_NMAX; i++) {
+		t = midithru + i;
+		if ((t->txmask | t->rxmask) & ep->self)
+			tags |= 1 << i;
+	}
+	return tags;
 }
 
 /*
@@ -398,6 +417,22 @@ midi_out(struct midi *oep, unsigned char *idata, int icount)
 	}
 }
 
+/*
+ * disconnect clients attached to this end-point
+ */
+void
+midi_abort(struct midi *p)
+{
+	int i;
+	struct midi *ep;
+
+	for (i = 0; i < MIDI_NEP; i++) {
+		ep = midi_ep + i;
+		if ((ep->txmask & p->self) || (p->txmask & ep->self))
+			ep->ops->exit(ep->arg);
+	}
+}
+
 void
 port_log(struct port *p)
 {
@@ -543,20 +578,6 @@ port_open(struct port *c)
 	return 1;
 }
 
-void
-port_exitall(struct port *c)
-{
-	int i;
-	struct midi *ep;
-
-	for (i = 0; i < MIDI_NEP; i++) {
-		ep = midi_ep + i;
-		if ((ep->txmask & c->midi->self) ||
-		    (c->midi->txmask & ep->self))
-			ep->ops->exit(ep->arg);
-	}
-}
-
 int
 port_close(struct port *c)
 {
@@ -569,8 +590,6 @@ port_close(struct port *c)
 #endif
 	c->state = PORT_CFG;
 	port_mio_close(c);
-
-	port_exitall(c);
 	return 1;
 }
 

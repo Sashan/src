@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.c,v 1.40 2020/03/21 14:54:06 otto Exp $	*/
+/*	$OpenBSD: conf.c,v 1.43 2020/12/09 18:10:18 krw Exp $	*/
 
 /*
  * Copyright (c) 2004 Tom Cosgrove
@@ -43,7 +43,7 @@
 #include <dev/cons.h>
 #include "debug.h"
 
-const char version[] = "3.36";
+const char version[] = "3.44";
 int	debug = 1;
 
 void (*sa_cleanup)(void) = NULL;

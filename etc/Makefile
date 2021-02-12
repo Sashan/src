@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.477 2020/01/24 06:17:37 tedu Exp $
+#	$OpenBSD: Makefile,v 1.480 2020/09/13 11:29:52 ajacoutot Exp $
 
 .include <bsd.own.mk>
 
@@ -52,9 +52,10 @@ EXAMPLES=acme-client.conf chio.conf dhclient.conf dhcpd.conf exports \
 
 # -rw-------
 EXAMPLES_600=bgpd.conf doas.conf dvmrpd.conf eigrpd.conf hostapd.conf \
-	iked.conf ipsec.conf ldapd.conf ldpd.conf ospf6d.conf ospfd.conf \
-	pf.conf radiusd.conf rc.local rc.securelevel rc.shutdown relayd.conf \
-	ripd.conf sasyncd.conf snmpd.conf vm.conf ypldap.conf
+	iked.conf ipsec.conf ldapd.conf ldpd.conf login_ldap.conf \
+	ospf6d.conf ospfd.conf pf.conf radiusd.conf rc.local \
+	rc.securelevel rc.shutdown relayd.conf ripd.conf sasyncd.conf \
+	snmpd.conf vm.conf ypldap.conf
 
 # -r-xr-xr-x
 RCDAEMONS=amd apmd bgpd bootparamd cron dhcpd dhcrelay dhcrelay6 dvmrpd \
@@ -163,6 +164,8 @@ distribution-etc-root-var: distrib-dirs
 		${INSTALL} -c -o root -g wheel -m 600 ${EXAMPLES_600} \
 		    ${DESTDIR}/etc/examples; \
 		chgrp operator ${DESTDIR}/etc/examples/chio.conf
+		chgrp auth ${DESTDIR}/etc/examples/login_ldap.conf
+		chmod 0640 ${DESTDIR}/etc/examples/login_ldap.conf
 	cd signify; \
 		${INSTALL} -c -o root -g wheel -m 644 *.pub \
 		    ${DESTDIR}/etc/signify
@@ -303,7 +306,7 @@ distrib:
 
 SUBDIR+= etc.alpha etc.amd64 etc.arm64 etc.armv7
 SUBDIR+= etc.hppa etc.i386 etc.landisk etc.loongson etc.luna88k
-SUBDIR+= etc.macppc etc.octeon
+SUBDIR+= etc.macppc etc.octeon etc.powerpc64
 SUBDIR+= etc.sgi etc.sparc64
 
 .include <bsd.subdir.mk>

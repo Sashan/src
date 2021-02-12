@@ -1,4 +1,4 @@
-/* $OpenBSD: acpi.c,v 1.378 2020/02/20 16:56:52 visa Exp $ */
+/* $OpenBSD: acpi.c,v 1.395 2020/12/27 23:06:34 deraadt Exp $ */
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  * Copyright (c) 2005 Jordan Hargrave <jordan@openbsd.org>
@@ -33,6 +33,7 @@
 #include <sys/mount.h>
 #include <sys/syscallargs.h>
 #include <sys/sensors.h>
+#include <sys/timetc.h>
 
 #ifdef HIBERNATE
 #include <sys/hibernate.h>
@@ -42,7 +43,6 @@
 #include <machine/cpufunc.h>
 #include <machine/bus.h>
 
-#include <dev/rndvar.h>
 #include <dev/pci/pcivar.h>
 #include <dev/acpi/acpireg.h>
 #include <dev/acpi/acpivar.h>
@@ -72,6 +72,7 @@ int	acpi_debug = 16;
 
 int	acpi_poll_enabled;
 int	acpi_hasprocfvs;
+int	acpi_haspci;
 
 #define ACPIEN_RETRIES 15
 
@@ -878,11 +879,20 @@ void
 acpi_gpio_event_task(void *arg0, int arg1)
 {
 	struct aml_node *node = arg0;
+	struct aml_value evt;
 	uint16_t pin = arg1;
 	char name[5];
 
-	snprintf(name, sizeof(name), "_E%.2X", pin);
-	aml_evalname(acpi_softc, node, name, 0, NULL, NULL);
+	if (pin < 256) {
+		snprintf(name, sizeof(name), "_E%.2X", pin);
+		if (aml_evalname(acpi_softc, node, name, 0, NULL, NULL) == 0)
+			return;
+	}
+
+	memset(&evt, 0, sizeof(evt));
+	evt.v_integer = pin;
+	evt.type = AML_OBJTYPE_INTEGER;
+	aml_evalname(acpi_softc, node, "_EVT", 1, &evt, NULL);
 }
 
 int
@@ -1123,7 +1133,7 @@ acpi_attach_common(struct acpi_softc *sc, paddr_t base)
 #endif /* SMALL_KERNEL */
 
 	/* Initialize GPE handlers */
-	s = spltty();
+	s = splbio();
 	acpi_init_gpes(sc);
 	splx(s);
 
@@ -1212,8 +1222,6 @@ acpi_attach_common(struct acpi_softc *sc, paddr_t base)
 	/* check if we're running on a sony */
 	aml_find_node(&aml_root, "GBRT", acpi_foundsony, sc);
 
-	aml_walknodes(&aml_root, AML_WALK_PRE, acpi_add_device, sc);
-
 #ifndef SMALL_KERNEL
 	/* try to find smart battery first */
 	aml_find_node(&aml_root, "_HID", acpi_foundsbs, sc);
@@ -1221,6 +1229,8 @@ acpi_attach_common(struct acpi_softc *sc, paddr_t base)
 
 	/* attach battery, power supply and button devices */
 	aml_find_node(&aml_root, "_HID", acpi_foundhid, sc);
+
+	aml_walknodes(&aml_root, AML_WALK_PRE, acpi_add_device, sc);
 
 #ifndef SMALL_KERNEL
 #if NWD > 0
@@ -1795,7 +1805,7 @@ acpi_addtask(struct acpi_softc *sc, void (*handler)(void *, int),
 	wq->arg0 = arg0;
 	wq->arg1 = arg1;
 	
-	s = spltty();
+	s = splbio();
 	SIMPLEQ_INSERT_TAIL(&acpi_taskq, wq, next);
 	splx(s);
 }
@@ -1806,7 +1816,7 @@ acpi_dotask(struct acpi_softc *sc)
 	struct acpi_taskq *wq;
 	int s;
 
-	s = spltty();
+	s = splbio();
 	if (SIMPLEQ_EMPTY(&acpi_taskq)) {
 		splx(s);
 
@@ -1941,20 +1951,11 @@ void
 acpi_sleep_task(void *arg0, int sleepmode)
 {
 	struct acpi_softc *sc = arg0;
-	struct acpi_ac *ac;
-	struct acpi_bat *bat;
-	struct acpi_sbs *sbs;
 
 	/* System goes to sleep here.. */
 	acpi_sleep_state(sc, sleepmode);
-
-	/* AC and battery information needs refreshing */
-	SLIST_FOREACH(ac, &sc->sc_ac, aac_link)
-		aml_notify(ac->aac_softc->sc_devnode, 0x80);
-	SLIST_FOREACH(bat, &sc->sc_bat, aba_link)
-		aml_notify(bat->aba_softc->sc_devnode, 0x80);
-	SLIST_FOREACH(sbs, &sc->sc_sbs, asbs_link)
-		aml_notify(sbs->asbs_softc->sc_devnode, 0x80);
+	/* Tell userland to recheck A/C and battery status */
+	acpi_record_event(sc, APM_POWER_CHANGE);
 }
 
 #endif /* SMALL_KERNEL */
@@ -2019,7 +2020,7 @@ acpi_pbtn_task(void *arg0, int dummy)
 	dnprintf(1,"power button pressed\n");
 
 	/* Reset the latch and re-enable the GPE */
-	s = spltty();
+	s = splbio();
 	en = acpi_read_pmreg(sc, ACPIREG_PM1_EN, 0);
 	acpi_write_pmreg(sc, ACPIREG_PM1_EN,  0,
 	    en | ACPI_PM1_PWRBTN_EN);
@@ -2050,7 +2051,7 @@ acpi_sbtn_task(void *arg0, int dummy)
 	aml_notify_dev(ACPI_DEV_SBD, 0x80);
 
 	/* Reset the latch and re-enable the GPE */
-	s = spltty();
+	s = splbio();
 	en = acpi_read_pmreg(sc, ACPIREG_PM1_EN, 0);
 	acpi_write_pmreg(sc, ACPIREG_PM1_EN,  0,
 	    en | ACPI_PM1_SLPBTN_EN);
@@ -2184,6 +2185,8 @@ acpi_add_device(struct aml_node *node, void *arg)
 
 	switch (node->value->type) {
 	case AML_OBJTYPE_PROCESSOR:
+		if (sc->sc_skip_processor != 0)
+			return 0;
 		if (nacpicpus >= ncpus)
 			return 0;
 		if (aml_evalnode(sc, aaa.aaa_node, 0, NULL, &res) == 0) {
@@ -2368,18 +2371,14 @@ acpi_init_gpes(struct acpi_softc *sc)
 {
 	struct aml_node *gpe;
 	char name[12];
-	int  idx, ngpe;
+	int  idx;
 
 	sc->sc_lastgpe = sc->sc_fadt->gpe0_blk_len << 2;
-	if (sc->sc_fadt->gpe1_blk_len) {
-	}
 	dnprintf(50, "Last GPE: %.2x\n", sc->sc_lastgpe);
 
 	/* Allocate GPE table */
 	sc->gpe_table = mallocarray(sc->sc_lastgpe, sizeof(struct gpe_block),
 	    M_DEVBUF, M_WAITOK | M_ZERO);
-
-	ngpe = 0;
 
 	/* Clear GPE status */
 	acpi_disable_allgpes(sc);
@@ -2399,7 +2398,6 @@ acpi_init_gpes(struct acpi_softc *sc)
 		}
 	}
 	aml_find_node(&aml_root, "_PRW", acpi_foundprw, sc);
-	sc->sc_maxgpe = ngpe;
 }
 
 void
@@ -2698,7 +2696,8 @@ fail_suspend:
 	splx(s);
 
 	acpibtn_disable_psw();		/* disable _LID for wakeup */
-	inittodr(time_second);
+
+	inittodr(gettime());
 
 	/* 3rd resume AML step: _TTS(runstate) */
 	aml_node_setval(sc, sc->sc_tts, sc->sc_state);
@@ -2783,6 +2782,8 @@ acpi_powerdown(void)
 		;
 }
 
+#endif /* SMALL_KERNEL */
+
 int
 acpi_map_address(struct acpi_softc *sc, struct acpi_gas *gas, bus_addr_t base,
     bus_size_t size, bus_space_handle_t *pioh, bus_space_tag_t *piot)
@@ -2809,8 +2810,6 @@ acpi_map_address(struct acpi_softc *sc, struct acpi_gas *gas, bus_addr_t base,
 
 	return 0;
 }
-
-#endif /* SMALL_KERNEL */
 
 void
 acpi_wakeup(void *arg)
@@ -2850,7 +2849,7 @@ acpi_thread(void *arg)
 		sc->sc_threadwaiting = 1;
 
 		/* Enable Sleep/Power buttons if they exist */
-		s = spltty();
+		s = splbio();
 		en = acpi_read_pmreg(sc, ACPIREG_PM1_EN, 0);
 		if (!(sc->sc_fadt->flags & FADT_PWR_BUTTON))
 			en |= ACPI_PM1_PWRBTN_EN;
@@ -2864,7 +2863,7 @@ acpi_thread(void *arg)
 	}
 
 	while (thread->running) {
-		s = spltty();
+		s = splbio();
 		while (sc->sc_threadwaiting) {
 			dnprintf(10, "acpi thread going to sleep...\n");
 			rw_exit_write(&sc->sc_lck);
@@ -2961,6 +2960,60 @@ acpi_foundsony(struct aml_node *node, void *arg)
 
 /* Support for _DSD Device Properties. */
 
+int
+acpi_getprop(struct aml_node *node, const char *prop, void *buf, int buflen)
+{
+	struct aml_value dsd;
+	int i;
+
+	/* daffd814-6eba-4d8c-8a91-bc9bbf4aa301 */
+	static uint8_t prop_guid[] = {
+		0x14, 0xd8, 0xff, 0xda, 0xba, 0x6e, 0x8c, 0x4d,
+		0x8a, 0x91, 0xbc, 0x9b, 0xbf, 0x4a, 0xa3, 0x01,
+	};
+
+	if (aml_evalname(acpi_softc, node, "_DSD", 0, NULL, &dsd))
+		return -1;
+
+	if (dsd.type != AML_OBJTYPE_PACKAGE || dsd.length != 2 ||
+	    dsd.v_package[0]->type != AML_OBJTYPE_BUFFER ||
+	    dsd.v_package[1]->type != AML_OBJTYPE_PACKAGE)
+		return -1;
+
+	/* Check UUID. */
+	if (dsd.v_package[0]->length != sizeof(prop_guid) ||
+	    memcmp(dsd.v_package[0]->v_buffer, prop_guid,
+	    sizeof(prop_guid)) != 0)
+		return -1;
+
+	/* Check properties. */
+	for (i = 0; i < dsd.v_package[1]->length; i++) {
+		struct aml_value *res = dsd.v_package[1]->v_package[i];
+		struct aml_value *val;
+		int len;
+
+		if (res->type != AML_OBJTYPE_PACKAGE || res->length != 2 ||
+		    res->v_package[0]->type != AML_OBJTYPE_STRING)
+			continue;
+
+		val = res->v_package[1];
+		if (val->type == AML_OBJTYPE_OBJREF)
+			val = val->v_objref.ref;
+
+		len = val->length;
+		switch (val->type) {
+		case AML_OBJTYPE_BUFFER:
+			memcpy(buf, val->v_buffer, min(len, buflen));
+			return len;
+		case AML_OBJTYPE_STRING:
+			memcpy(buf, val->v_string, min(len, buflen));
+			return len;
+		}
+	}
+
+	return -1;
+}
+
 uint32_t
 acpi_getpropint(struct aml_node *node, const char *prop, uint32_t defval)
 {
@@ -2990,16 +3043,24 @@ acpi_getpropint(struct aml_node *node, const char *prop, uint32_t defval)
 	/* Check properties. */
 	for (i = 0; i < dsd.v_package[1]->length; i++) {
 		struct aml_value *res = dsd.v_package[1]->v_package[i];
+		struct aml_value *val;
 
 		if (res->type != AML_OBJTYPE_PACKAGE || res->length != 2 ||
-		    res->v_package[0]->type != AML_OBJTYPE_STRING ||
-		    res->v_package[1]->type != AML_OBJTYPE_INTEGER)
+		    res->v_package[0]->type != AML_OBJTYPE_STRING)
 			continue;
 
-		if (strcmp(res->v_package[0]->v_string, prop) == 0)
-			return res->v_package[1]->v_integer;
+		val = res->v_package[1];
+		if (val->type == AML_OBJTYPE_OBJREF)
+			val = val->v_objref.ref;
+
+		if (val->type != AML_OBJTYPE_INTEGER)
+			continue;
+
+		if (strcmp(res->v_package[0]->v_string, prop) == 0 &&
+		    val->type == AML_OBJTYPE_INTEGER)
+			return val->v_integer;
 	}
-	
+
 	return defval;
 }
 
@@ -3089,7 +3150,7 @@ const char *acpi_isa_hids[] = {
 void
 acpi_attach_deps(struct acpi_softc *sc, struct aml_node *node)
 {
-	struct aml_value res;
+	struct aml_value res, *val;
 	struct aml_node *dep;
 	int i;
 
@@ -3100,9 +3161,12 @@ acpi_attach_deps(struct acpi_softc *sc, struct aml_node *node)
 		return;
 
 	for (i = 0; i < res.length; i++) {
-		if (res.v_package[i]->type != AML_OBJTYPE_STRING)
+		val = res.v_package[i];
+		if (val->type == AML_OBJTYPE_OBJREF)
+			val = val->v_objref.ref;
+		if (val->type != AML_OBJTYPE_DEVICE)
 			continue;
-		dep = aml_searchrel(node, res.v_package[i]->v_string);
+		dep = val->node;
 		if (dep == NULL || dep->attached)
 			continue;
 		dep = aml_searchname(dep, "_HID");
@@ -3114,6 +3178,135 @@ acpi_attach_deps(struct acpi_softc *sc, struct aml_node *node)
 }
 
 int
+acpi_parse_resources(int crsidx, union acpi_resource *crs, void *arg)
+{
+	struct acpi_attach_args *aaa = arg;
+	int type = AML_CRSTYPE(crs);
+	uint8_t flags;
+
+	switch (type) {
+	case SR_IOPORT:
+	case SR_FIXEDPORT:
+	case LR_MEM24:
+	case LR_MEM32:
+	case LR_MEM32FIXED:
+	case LR_WORD:
+	case LR_DWORD:
+	case LR_QWORD:
+		if (aaa->aaa_naddr >= nitems(aaa->aaa_addr))
+			return 0;
+		break;
+	case SR_IRQ:
+	case LR_EXTIRQ:
+		if (aaa->aaa_nirq >= nitems(aaa->aaa_irq))
+			return 0;
+	}
+
+	switch (type) {
+	case SR_IOPORT:
+	case SR_FIXEDPORT:
+		aaa->aaa_bst[aaa->aaa_naddr] = aaa->aaa_iot;
+		break;	
+	case LR_MEM24:
+	case LR_MEM32:
+	case LR_MEM32FIXED:
+		aaa->aaa_bst[aaa->aaa_naddr] = aaa->aaa_memt;
+		break;
+	case LR_WORD:
+	case LR_DWORD:
+	case LR_QWORD:
+		switch (crs->lr_word.type) {
+		case LR_TYPE_MEMORY:
+			aaa->aaa_bst[aaa->aaa_naddr] = aaa->aaa_memt;
+			break;
+		case LR_TYPE_IO:
+			aaa->aaa_bst[aaa->aaa_naddr] = aaa->aaa_iot;
+			break;
+		default:
+			/* Bus number range or something else; skip. */
+			return 0;
+		}
+	}
+
+	switch (type) {
+	case SR_IOPORT:
+		aaa->aaa_addr[aaa->aaa_naddr] = crs->sr_ioport._min;
+		aaa->aaa_size[aaa->aaa_naddr] = crs->sr_ioport._len;
+		aaa->aaa_naddr++;
+		break;
+	case SR_FIXEDPORT:
+		aaa->aaa_addr[aaa->aaa_naddr] = crs->sr_fioport._bas;
+		aaa->aaa_size[aaa->aaa_naddr] = crs->sr_fioport._len;
+		aaa->aaa_naddr++;
+		break;
+	case LR_MEM24:
+		aaa->aaa_addr[aaa->aaa_naddr] = crs->lr_m24._min;
+		aaa->aaa_size[aaa->aaa_naddr] = crs->lr_m24._len;
+		aaa->aaa_naddr++;
+		break;
+	case LR_MEM32:
+		aaa->aaa_addr[aaa->aaa_naddr] = crs->lr_m32._min;
+		aaa->aaa_size[aaa->aaa_naddr] = crs->lr_m32._len;
+		aaa->aaa_naddr++;
+		break;
+	case LR_MEM32FIXED:
+		aaa->aaa_addr[aaa->aaa_naddr] = crs->lr_m32fixed._bas;
+		aaa->aaa_size[aaa->aaa_naddr] = crs->lr_m32fixed._len;
+		aaa->aaa_naddr++;
+		break;
+	case LR_WORD:
+		aaa->aaa_addr[aaa->aaa_naddr] = crs->lr_word._min;
+		aaa->aaa_size[aaa->aaa_naddr] = crs->lr_word._len;
+		aaa->aaa_naddr++;
+		break;
+	case LR_DWORD:
+		aaa->aaa_addr[aaa->aaa_naddr] = crs->lr_dword._min;
+		aaa->aaa_size[aaa->aaa_naddr] = crs->lr_dword._len;
+		aaa->aaa_naddr++;
+		break;
+	case LR_QWORD:
+		aaa->aaa_addr[aaa->aaa_naddr] = crs->lr_qword._min;
+		aaa->aaa_size[aaa->aaa_naddr] = crs->lr_qword._len;
+		aaa->aaa_naddr++;
+		break;
+	case SR_IRQ:
+		aaa->aaa_irq[aaa->aaa_nirq] = ffs(crs->sr_irq.irq_mask) - 1;
+		/* Default is exclusive, active-high, edge triggered. */
+		if (AML_CRSLEN(crs) < 3)
+			flags = SR_IRQ_MODE;
+		else
+			flags = crs->sr_irq.irq_flags;
+		/* Map flags to those of the extended interrupt descriptor. */
+		if (flags & SR_IRQ_SHR)
+			aaa->aaa_irq_flags[aaa->aaa_nirq] |= LR_EXTIRQ_SHR;
+		if (flags & SR_IRQ_POLARITY)
+			aaa->aaa_irq_flags[aaa->aaa_nirq] |= LR_EXTIRQ_POLARITY;
+		if (flags & SR_IRQ_MODE)
+			aaa->aaa_irq_flags[aaa->aaa_nirq] |= LR_EXTIRQ_MODE;
+		aaa->aaa_nirq++;
+		break;
+	case LR_EXTIRQ:
+		aaa->aaa_irq[aaa->aaa_nirq] = crs->lr_extirq.irq[0];
+		aaa->aaa_irq_flags[aaa->aaa_nirq] = crs->lr_extirq.flags;
+		aaa->aaa_nirq++;
+		break;
+	}
+
+	return 0;
+}
+
+void
+acpi_parse_crs(struct acpi_softc *sc, struct acpi_attach_args *aaa)
+{
+	struct aml_value res;
+
+	if (aml_evalname(sc, aaa->aaa_node, "_CRS", 0, NULL, &res))
+		return;
+
+	aml_parse_resource(&res, acpi_parse_resources, aaa);
+}
+
+int
 acpi_foundhid(struct aml_node *node, void *arg)
 {
 	struct acpi_softc	*sc = (struct acpi_softc *)arg;
@@ -3122,6 +3315,7 @@ acpi_foundhid(struct aml_node *node, void *arg)
 	char		 	 dev[32];
 	struct acpi_attach_args	 aaa;
 	int64_t			 sta;
+	int64_t			 cca;
 #ifndef SMALL_KERNEL
 	int			 i;
 #endif
@@ -3133,15 +3327,19 @@ acpi_foundhid(struct aml_node *node, void *arg)
 	if ((sta & STA_PRESENT) == 0)
 		return (0);
 
+	if (aml_evalinteger(sc, node->parent, "_CCA", 0, NULL, &cca))
+		cca = 1;
+
 	acpi_attach_deps(sc, node->parent);
 
 	memset(&aaa, 0, sizeof(aaa));
 	aaa.aaa_iot = sc->sc_iot;
 	aaa.aaa_memt = sc->sc_memt;
-	aaa.aaa_dmat = sc->sc_dmat;
+	aaa.aaa_dmat = cca ? sc->sc_cc_dmat : sc->sc_ci_dmat;
 	aaa.aaa_node = node->parent;
 	aaa.aaa_dev = dev;
 	aaa.aaa_cdev = cdev;
+	acpi_parse_crs(sc, &aaa);
 
 #ifndef SMALL_KERNEL
 	if (!strcmp(cdev, ACPI_DEV_MOUSE)) {
@@ -3253,7 +3451,7 @@ acpiopen(dev_t dev, int flag, int mode, struct proc *p)
 	    !(sc = acpi_cd.cd_devs[APMUNIT(dev)]))
 		return (ENXIO);
 
-	s = spltty();
+	s = splbio();
 	switch (APMDEV(dev)) {
 	case APMDEV_CTL:
 		if (!(flag & FWRITE)) {
@@ -3292,7 +3490,7 @@ acpiclose(dev_t dev, int flag, int mode, struct proc *p)
 	    !(sc = acpi_cd.cd_devs[APMUNIT(dev)]))
 		return (ENXIO);
 
-	s = spltty();
+	s = splbio();
 	switch (APMDEV(dev)) {
 	case APMDEV_CTL:
 		sc->sc_flags &= ~SCFLAG_OWRITE;
@@ -3318,14 +3516,14 @@ acpiioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 	struct acpi_sbs *sbs;
 	struct apm_power_info *pi = (struct apm_power_info *)data;
 	int bats;
-	unsigned int remaining, rem, minutes, rate;
+	unsigned int capacity, remaining, minutes, rate;
 	int s;
 
 	if (!acpi_cd.cd_ndevs || APMUNIT(dev) != 0 ||
 	    !(sc = acpi_cd.cd_devs[APMUNIT(dev)]))
 		return (ENXIO);
 
-	s = spltty();
+	s = splbio();
 	/* fake APM */
 	switch (cmd) {
 	case APM_IOC_SUSPEND:
@@ -3369,7 +3567,8 @@ acpiioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 		pi->battery_life = 0;
 		pi->minutes_left = 0;
 		bats = 0;
-		remaining = rem = 0;
+		capacity = 0;
+		remaining = 0;
 		minutes = 0;
 		rate = 0;
 		SLIST_FOREACH(bat, &sc->sc_bat, aba_link) {
@@ -3380,11 +3579,9 @@ acpiioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 				continue;
 
 			bats++;
-			rem = (bat->aba_softc->sc_bst.bst_capacity * 100) /
-			    bat->aba_softc->sc_bix.bix_last_capacity;
-			if (rem > 100)
-				rem = 100;
-			remaining += rem;
+			capacity += bat->aba_softc->sc_bix.bix_last_capacity;
+			remaining += min(bat->aba_softc->sc_bst.bst_capacity,
+			    bat->aba_softc->sc_bix.bix_last_capacity);
 
 			if (bat->aba_softc->sc_bst.bst_rate == BST_UNKNOWN)
 				continue;
@@ -3402,10 +3599,9 @@ acpiioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 				continue;
 
 			bats++;
-			rem = sbs->asbs_softc->sc_battery.rel_charge;
-			if (rem > 100)
-				rem = 100;
-			remaining += rem;
+			capacity += 100;
+			remaining += min(100,
+			    sbs->asbs_softc->sc_battery.rel_charge);
 
 			if (sbs->asbs_softc->sc_battery.run_time ==
 			    ACPISBS_VALUE_UNKNOWN)
@@ -3428,7 +3624,7 @@ acpiioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 			pi->minutes_left = 60 * minutes / rate;
 
 		/* running on battery */
-		pi->battery_life = remaining / bats;
+		pi->battery_life = remaining * 100 / capacity;
 		if (pi->battery_life > 50)
 			pi->battery_state = APM_BATT_HIGH;
 		else if (pi->battery_life > 25)
@@ -3475,8 +3671,8 @@ acpi_filtdetach(struct knote *kn)
 	struct acpi_softc *sc = kn->kn_hook;
 	int s;
 
-	s = spltty();
-	SLIST_REMOVE(sc->sc_note, kn, knote, kn_selnext);
+	s = splbio();
+	klist_remove_locked(sc->sc_note, kn);
 	splx(s);
 }
 
@@ -3509,8 +3705,8 @@ acpikqfilter(dev_t dev, struct knote *kn)
 
 	kn->kn_hook = sc;
 
-	s = spltty();
-	SLIST_INSERT_HEAD(sc->sc_note, kn, kn_selnext);
+	s = splbio();
+	klist_insert_locked(sc->sc_note, kn);
 	splx(s);
 
 	return (0);
@@ -3539,7 +3735,7 @@ acpiioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 int
 acpikqfilter(dev_t dev, struct knote *kn)
 {
-	return (ENXIO);
+	return (EOPNOTSUPP);
 }
 
 #endif /* SMALL_KERNEL */

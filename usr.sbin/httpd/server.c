@@ -1,4 +1,4 @@
-/*	$OpenBSD: server.c,v 1.120 2019/10/14 11:07:08 florian Exp $	*/
+/*	$OpenBSD: server.c,v 1.124 2021/01/02 18:35:07 tb Exp $	*/
 
 /*
  * Copyright (c) 2006 - 2015 Reyk Floeter <reyk@openbsd.org>
@@ -119,13 +119,6 @@ server_privinit(struct server *srv)
 	}
 
 	/* Open listening socket in the privileged process */
-	if ((srv->srv_conf.flags & SRVFLAG_TLS) && srv->srv_conf.tls_cert ==
-	    NULL) {
-		/* soft fail if cert is not there yet */
-		srv->srv_s = -1;
-		return (0);
-	}
-
 	if ((srv->srv_s = server_socket_listen(&srv->srv_conf.ss,
 	    srv->srv_conf.port, &srv->srv_conf)) == -1)
 		return (-1);
@@ -255,10 +248,6 @@ server_tls_init(struct server *srv)
 	struct server_config *srv_conf;
 
 	if ((srv->srv_conf.flags & SRVFLAG_TLS) == 0)
-		return (0);
-
-	if (srv->srv_conf.tls_cert == NULL)
-		/* soft fail if cert is not there yet */
 		return (0);
 
 	log_debug("%s: setting up tls for %s", __func__, srv->srv_conf.name);
@@ -1160,7 +1149,7 @@ server_accept(int fd, short event, void *arg)
 	if (srv->srv_conf.flags & SRVFLAG_TLS) {
 		if (tls_accept_socket(srv->srv_tls_ctx, &clt->clt_tls_ctx,
 		    clt->clt_s) != 0) {
-			server_close(clt, "failed to setup tls context");
+			server_close(clt, "failed to accept tls socket");
 			return;
 		}
 		event_again(&clt->clt_ev, clt->clt_s, EV_TIMEOUT|EV_READ,
@@ -1262,12 +1251,14 @@ server_sendlog(struct server_config *srv_conf, int cmd, const char *emsg, ...)
 	iov[0].iov_base = &srv_conf->id;
 	iov[0].iov_len = sizeof(srv_conf->id);
 	iov[1].iov_base = msg;
-	iov[1].iov_len = strlen(msg) + 1;
+	iov[1].iov_len = ret + 1;
 
 	if (proc_composev(httpd_env->sc_ps, PROC_LOGGER, cmd, iov, 2) != 0) {
 		log_warn("%s: failed to compose imsg", __func__);
+		free(msg);
 		return;
 	}
+	free(msg);
 }
 
 void
@@ -1325,6 +1316,11 @@ server_close(struct client *clt, const char *msg)
 	/* free the HTTP descriptors incl. headers */
 	server_close_http(clt);
 
+	/* tls_close must be called before the underlying socket is closed. */
+	if (clt->clt_tls_ctx != NULL)
+		tls_close(clt->clt_tls_ctx); /* XXX - error handling */
+	tls_free(clt->clt_tls_ctx);
+
 	event_del(&clt->clt_ev);
 	if (clt->clt_bev != NULL)
 		bufferevent_disable(clt->clt_bev, EV_READ|EV_WRITE);
@@ -1342,14 +1338,11 @@ server_close(struct client *clt, const char *msg)
 
 	if (clt->clt_srvbev != NULL)
 		bufferevent_free(clt->clt_srvbev);
+
 	if (clt->clt_fd != -1)
 		close(clt->clt_fd);
 	if (clt->clt_s != -1)
 		close(clt->clt_s);
-
-	if (clt->clt_tls_ctx != NULL)
-		tls_close(clt->clt_tls_ctx);
-	tls_free(clt->clt_tls_ctx);
 
 	server_inflight_dec(clt, __func__);
 

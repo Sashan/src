@@ -1,4 +1,4 @@
-/*	$OpenBSD: relayd.c,v 1.182 2019/09/15 19:23:29 rob Exp $	*/
+/*	$OpenBSD: relayd.c,v 1.186 2021/01/27 07:21:54 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2007 - 2016 Reyk Floeter <reyk@openbsd.org>
@@ -74,6 +74,8 @@ static struct privsep_proc procs[] = {
 	{ "relay",	PROC_RELAY, parent_dispatch_relay, relay },
 	{ "ca",		PROC_CA, parent_dispatch_ca, ca }
 };
+
+enum privsep_procid privsep_process;
 
 void
 parent_sig_handler(int sig, short event, void *arg)
@@ -185,7 +187,6 @@ main(int argc, char *argv[])
 	TAILQ_INIT(&env->sc_hosts);
 	TAILQ_INIT(&env->sc_sessions);
 	env->sc_rtable = getrtable();
-	env->sc_snmp = -1;
 	/* initialize the TLS session id to a random key for all relay procs */
 	arc4random_buf(env->sc_conf.tls_sid, sizeof(env->sc_conf.tls_sid));
 
@@ -222,6 +223,11 @@ main(int argc, char *argv[])
 
 	if (ps->ps_noaction == 0)
 		log_info("startup");
+
+	if (unveil("/", "rx") == -1)
+		err(1, "unveil");
+	if (unveil(NULL, NULL) == -1)
+		err(1, "unveil");
 
 	event_init();
 
@@ -376,7 +382,6 @@ parent_shutdown(struct relayd *env)
 
 	proc_kill(env->sc_ps);
 	control_cleanup(&env->sc_ps->ps_csock);
-	(void)unlink(env->sc_ps->ps_csock.cs_name);
 	carp_demote_shutdown();
 
 	free(env->sc_ps);
@@ -425,8 +430,8 @@ parent_dispatch_pfe(int fd, struct privsep_proc *p, struct imsg *imsg)
 	case IMSG_CFG_DONE:
 		parent_configure_done(env);
 		break;
-	case IMSG_SNMPSOCK:
-		(void)snmp_setsock(env, p->p_id);
+	case IMSG_AGENTXSOCK:
+		(void)agentx_setsock(env, p->p_id);
 		break;
 	default:
 		return (-1);

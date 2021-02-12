@@ -1,4 +1,4 @@
-/*	$OpenBSD: an.c,v 1.75 2019/11/07 12:56:34 bluhm Exp $	*/
+/*	$OpenBSD: an.c,v 1.77 2020/12/08 04:37:27 cheloha Exp $	*/
 /*	$NetBSD: an.c,v 1.34 2005/06/20 02:49:18 atatat Exp $	*/
 /*
  * Copyright (c) 1997, 1998, 1999
@@ -562,7 +562,7 @@ an_intr(void *arg)
 
 		if (ifq_is_oactive(&ifp->if_snd) == 0 &&
 		    sc->sc_ic.ic_state == IEEE80211_S_RUN &&
-		    !IFQ_IS_EMPTY(&ifp->if_snd))
+		    !ifq_empty(&ifp->if_snd))
 			an_start(ifp);
 	}
 
@@ -681,10 +681,10 @@ an_wait(struct an_softc *sc)
 	int i;
 
 	CSR_WRITE_2(sc, AN_COMMAND, AN_CMD_NOOP2);
-	for (i = 0; i < 3*hz; i++) {
+	for (i = 0; i < 3000; i += 100) {
 		if (CSR_READ_2(sc, AN_EVENT_STAT) & AN_EV_CMD)
 			break;
-		(void)tsleep(sc, PWAIT, "anatch", 1);
+		tsleep_nsec(sc, PWAIT, "anatch", MSEC_TO_NSEC(100));
 	}
 	CSR_WRITE_2(sc, AN_EVENT_ACK, AN_EV_CMD);
 }

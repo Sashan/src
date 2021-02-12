@@ -1,4 +1,4 @@
-/*	$OpenBSD: lka_filter.c,v 1.60 2020/01/08 01:41:11 gilles Exp $	*/
+/*	$OpenBSD: lka_filter.c,v 1.67 2021/01/23 16:11:11 rob Exp $	*/
 
 /*
  * Copyright (c) 2018 Gilles Chehade <gilles@poolp.org>
@@ -35,7 +35,7 @@
 #include "smtpd.h"
 #include "log.h"
 
-#define	PROTOCOL_VERSION	"0.5"
+#define	PROTOCOL_VERSION	"0.6"
 
 struct filter;
 struct filter_session;
@@ -129,8 +129,6 @@ struct filter_chain {
 	TAILQ_HEAD(, filter_entry)		chain[nitems(filter_execs)];
 };
 
-static struct dict	filter_smtp_in;
-
 static struct tree	sessions;
 static int		filters_inited;
 
@@ -210,6 +208,8 @@ lka_proc_config(struct processor_instance *pi)
 		io_printf(pi->io, "config|subsystem|smtp-in\n");
 	if (pi->subsystems & FILTER_SUBSYSTEM_SMTP_OUT)
 		io_printf(pi->io, "config|subsystem|smtp-out\n");
+	io_printf(pi->io, "config|admd|%s\n",
+	    env->sc_admd != NULL ? env->sc_admd : env->sc_hostname);
 	io_printf(pi->io, "config|ready\n");
 }
 
@@ -406,14 +406,12 @@ lka_filter_init(void)
 void
 lka_filter_register_hook(const char *name, const char *hook)
 {
-	struct dict		*subsystem;
 	struct filter		*filter;
 	const char	*filter_name;
 	void		*iter;
 	size_t	i;
 
 	if (strncasecmp(hook, "smtp-in|", 8) == 0) {
-		subsystem = &filter_smtp_in;
 		hook += 8;
 	}
 	else
@@ -533,6 +531,7 @@ lka_filter_end(uint64_t reqid)
 	free(fs->mail_from);
 	free(fs->username);
 	free(fs->lastparam);
+	free(fs->filter_name);
 	free(fs);
 	log_trace(TRACE_FILTERS, "%016"PRIx64" filters session-end", reqid);
 }
@@ -556,10 +555,10 @@ lka_filter_data_begin(uint64_t reqid)
 	io_set_callback(fs->io, filter_session_io, fs);
 
 end:
-	m_create(p_pony, IMSG_FILTER_SMTP_DATA_BEGIN, 0, 0, fd);
-	m_add_id(p_pony, reqid);
-	m_add_int(p_pony, fd != -1 ? 1 : 0);
-	m_close(p_pony);
+	m_create(p_dispatcher, IMSG_FILTER_SMTP_DATA_BEGIN, 0, 0, fd);
+	m_add_id(p_dispatcher, reqid);
+	m_add_int(p_dispatcher, fd != -1 ? 1 : 0);
+	m_close(p_dispatcher);
 	log_trace(TRACE_FILTERS, "%016"PRIx64" filters data-begin fd=%d", reqid, fd);
 }
 
@@ -597,11 +596,6 @@ filter_session_io(struct io *io, int evt, void *arg)
 		filter_data(fs->id, line);
 
 		goto nextline;
-
-	case IO_DISCONNECTED:
-		io_free(fs->io);
-		fs->io = NULL;
-		break;
 	}
 }
 
@@ -851,7 +845,7 @@ filter_data_internal(struct filter_session *fs, uint64_t token, uint64_t reqid, 
 
 	/* no filter_entry, we either had none or reached end of chain */
 	if (filter_entry == NULL) {
-		io_printf(fs->io, "%s\r\n", line);
+		io_printf(fs->io, "%s\n", line);
 		return;
 	}
 
@@ -983,49 +977,49 @@ filter_data_query(struct filter *filter, uint64_t token, uint64_t reqid, const c
 static void
 filter_result_proceed(uint64_t reqid)
 {
-	m_create(p_pony, IMSG_FILTER_SMTP_PROTOCOL, 0, 0, -1);
-	m_add_id(p_pony, reqid);
-	m_add_int(p_pony, FILTER_PROCEED);
-	m_close(p_pony);
+	m_create(p_dispatcher, IMSG_FILTER_SMTP_PROTOCOL, 0, 0, -1);
+	m_add_id(p_dispatcher, reqid);
+	m_add_int(p_dispatcher, FILTER_PROCEED);
+	m_close(p_dispatcher);
 }
 
 static void
 filter_result_junk(uint64_t reqid)
 {
-	m_create(p_pony, IMSG_FILTER_SMTP_PROTOCOL, 0, 0, -1);
-	m_add_id(p_pony, reqid);
-	m_add_int(p_pony, FILTER_JUNK);
-	m_close(p_pony);
+	m_create(p_dispatcher, IMSG_FILTER_SMTP_PROTOCOL, 0, 0, -1);
+	m_add_id(p_dispatcher, reqid);
+	m_add_int(p_dispatcher, FILTER_JUNK);
+	m_close(p_dispatcher);
 }
 
 static void
 filter_result_rewrite(uint64_t reqid, const char *param)
 {
-	m_create(p_pony, IMSG_FILTER_SMTP_PROTOCOL, 0, 0, -1);
-	m_add_id(p_pony, reqid);
-	m_add_int(p_pony, FILTER_REWRITE);
-	m_add_string(p_pony, param);
-	m_close(p_pony);
+	m_create(p_dispatcher, IMSG_FILTER_SMTP_PROTOCOL, 0, 0, -1);
+	m_add_id(p_dispatcher, reqid);
+	m_add_int(p_dispatcher, FILTER_REWRITE);
+	m_add_string(p_dispatcher, param);
+	m_close(p_dispatcher);
 }
 
 static void
 filter_result_reject(uint64_t reqid, const char *message)
 {
-	m_create(p_pony, IMSG_FILTER_SMTP_PROTOCOL, 0, 0, -1);
-	m_add_id(p_pony, reqid);
-	m_add_int(p_pony, FILTER_REJECT);
-	m_add_string(p_pony, message);
-	m_close(p_pony);
+	m_create(p_dispatcher, IMSG_FILTER_SMTP_PROTOCOL, 0, 0, -1);
+	m_add_id(p_dispatcher, reqid);
+	m_add_int(p_dispatcher, FILTER_REJECT);
+	m_add_string(p_dispatcher, message);
+	m_close(p_dispatcher);
 }
 
 static void
 filter_result_disconnect(uint64_t reqid, const char *message)
 {
-	m_create(p_pony, IMSG_FILTER_SMTP_PROTOCOL, 0, 0, -1);
-	m_add_id(p_pony, reqid);
-	m_add_int(p_pony, FILTER_DISCONNECT);
-	m_add_string(p_pony, message);
-	m_close(p_pony);
+	m_create(p_dispatcher, IMSG_FILTER_SMTP_PROTOCOL, 0, 0, -1);
+	m_add_id(p_dispatcher, reqid);
+	m_add_int(p_dispatcher, FILTER_DISCONNECT);
+	m_add_string(p_dispatcher, message);
+	m_close(p_dispatcher);
 }
 
 
@@ -1526,7 +1520,7 @@ lka_report_smtp_tx_mail(const char *direction, struct timeval *tv, uint64_t reqi
 		break;
 	}
 	report_smtp_broadcast(reqid, direction, tv, "tx-mail", "%08x|%s|%s\n",
-	    msgid, address, result);
+	    msgid, result, address);
 }
 
 void
@@ -1546,7 +1540,7 @@ lka_report_smtp_tx_rcpt(const char *direction, struct timeval *tv, uint64_t reqi
 		break;
 	}
 	report_smtp_broadcast(reqid, direction, tv, "tx-rcpt", "%08x|%s|%s\n",
-	    msgid, address, result);
+	    msgid, result, address);
 }
 
 void

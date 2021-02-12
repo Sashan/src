@@ -1,4 +1,4 @@
-#	$OpenBSD: files.acpi,v 1.53 2019/12/23 08:05:42 kettenis Exp $
+#	$OpenBSD: files.acpi,v 1.62 2020/12/06 20:39:07 kettenis Exp $
 #
 # Config file and device description for machine-independent ACPI code.
 # Included by ports that need it.
@@ -50,6 +50,11 @@ device	acpiec
 attach	acpiec at acpi
 file	dev/acpi/acpiec.c		acpiec
 
+# Generic Event
+device	acpige
+attach	acpige at acpi
+file	dev/acpi/acpige.c		acpige
+
 # Thermal Zone
 device	acpitz
 attach	acpitz at acpi
@@ -70,10 +75,25 @@ device	acpiprt
 attach	acpiprt at acpi
 file	dev/acpi/acpiprt.c		acpiprt needs-flag
 
+# DMAR device
+device	acpidmar
+attach	acpidmar at acpi
+file	dev/acpi/acpidmar.c		acpidmar needs-flag
+
 # Docking station
 device	acpidock
 attach	acpidock at acpi
 file	dev/acpi/acpidock.c		acpidock
+
+# Apple Backlight
+device	abl
+attach	abl at acpi
+file	dev/acpi/abl.c			abl
+
+# Apple System Management Controller (SMC)
+device	asmc
+attach	asmc at acpi
+file	dev/acpi/asmc.c			asmc
 
 # ASUS ACPI Hotkeys
 device	acpiasus
@@ -136,6 +156,11 @@ device	glkgpio
 attach	glkgpio at acpi
 file	dev/acpi/glkgpio.c		glkgpio
 
+# Intel PCH GPIO
+device	pchgpio
+attach	pchgpio at acpi
+file	dev/acpi/pchgpio.c		pchgpio
+
 # "Intel" Dollar Cove TI PMIC
 device	tipmic
 attach	tipmic at i2c
@@ -165,6 +190,11 @@ file	dev/acpi/sdhc_acpi.c		sdhc_acpi
 # XHCI
 attach	xhci at acpi with xhci_acpi
 file	dev/acpi/xhci_acpi.c		xhci_acpi
+
+# Synopsys DesignWare GPIO controller
+device	dwgpio
+attach	dwgpio at acpi
+file	dev/acpi/dwgpio.c		dwgpio
 
 # Synopsys DesignWare I2C controller
 attach	dwiic at acpi with dwiic_acpi
@@ -212,3 +242,16 @@ file	dev/acpi/ccp_acpi.c		ccp_acpi
 device	amdgpio
 attach	amdgpio at acpi
 file	dev/acpi/amdgpio.c		amdgpio
+
+# Broadcom BC7XXX Ethernet controller
+attach	bse at acpi with bse_acpi
+file	dev/acpi/if_bse_acpi.c		bse_acpi
+
+# Intel HID event and 5-button array
+device	acpihid
+attach	acpihid at acpi
+file	dev/acpi/acpihid.c		acpihid
+
+# Freescale i.MX I2C controller
+attach	imxiic at acpi with imxiic_acpi
+file	dev/acpi/imxiic_acpi.c		imxiic_acpi

@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpufunc.h,v 1.34 2019/06/28 21:54:05 bluhm Exp $	*/
+/*	$OpenBSD: cpufunc.h,v 1.36 2020/09/13 11:53:16 jsg Exp $	*/
 /*	$NetBSD: cpufunc.h,v 1.3 2003/05/08 10:27:43 fvdl Exp $	*/
 
 /*-
@@ -270,6 +270,17 @@ wbinvd(void)
 	__asm volatile("wbinvd" : : : "memory");
 }
 
+#ifdef MULTIPROCESSOR
+int wbinvd_on_all_cpus(void);
+#else
+static inline int
+wbinvd_on_all_cpus(void)
+{
+	wbinvd();
+	return 0;
+}
+#endif
+
 static __inline void
 clflush(u_int64_t addr)
 {
@@ -288,6 +299,15 @@ rdtsc(void)
 	uint32_t hi, lo;
 
 	__asm volatile("rdtsc" : "=d" (hi), "=a" (lo));
+	return (((uint64_t)hi << 32) | (uint64_t) lo);
+}
+
+static __inline u_int64_t
+rdtsc_lfence(void)
+{
+	uint32_t hi, lo;
+
+	__asm volatile("lfence; rdtsc" : "=d" (hi), "=a" (lo));
 	return (((uint64_t)hi << 32) | (uint64_t) lo);
 }
 

@@ -1,4 +1,4 @@
-/* $OpenBSD: mainbus.c,v 1.15 2019/10/23 09:27:43 patrick Exp $ */
+/* $OpenBSD: mainbus.c,v 1.19 2020/08/26 03:29:05 visa Exp $ */
 /*
  * Copyright (c) 2016 Patrick Wildt <patrick@blueri.se>
  * Copyright (c) 2017 Mark Kettenis <kettenis@openbsd.org>
@@ -38,6 +38,7 @@ int mainbus_match_status(struct device *, void *, void *);
 void mainbus_attach_cpus(struct device *, cfmatch_t);
 int mainbus_match_primary(struct device *, void *, void *);
 int mainbus_match_secondary(struct device *, void *, void *);
+void mainbus_attach_psci(struct device *);
 void mainbus_attach_efi(struct device *);
 void mainbus_attach_apm(struct device *);
 void mainbus_attach_framebuffer(struct device *);
@@ -93,8 +94,6 @@ mainbus_match(struct device *parent, void *cfdata, void *aux)
 	return (1);
 }
 
-extern char *hw_prod;
-extern char *hw_serial;
 void agtimer_init(void);
 
 void
@@ -129,8 +128,13 @@ mainbus_attach(struct device *parent, struct device *self, void *aux)
 			strlcpy(hw_serial, prop, len);
 	}
 
+	mainbus_attach_psci(self);
+
 	/* Attach primary CPU first. */
 	mainbus_attach_cpus(self, mainbus_match_primary);
+
+	/* Attach secondary CPUs. */
+	mainbus_attach_cpus(self, mainbus_match_secondary);
 
 	mainbus_attach_efi(self);
 
@@ -154,9 +158,6 @@ mainbus_attach(struct device *parent, struct device *self, void *aux)
 	
 	mainbus_attach_framebuffer(self);
 
-	/* Attach secondary CPUs. */
-	mainbus_attach_cpus(self, mainbus_match_secondary);
-
 	thermal_init();
 }
 
@@ -178,7 +179,10 @@ mainbus_print(void *aux, const char *pnp)
 		if (strcmp(buf, "aliases") == 0 ||
 		    strcmp(buf, "chosen") == 0 ||
 		    strcmp(buf, "cpus") == 0 ||
-		    strcmp(buf, "memory") == 0)
+		    strcmp(buf, "memory") == 0 ||
+		    strcmp(buf, "reserved-memory") == 0 ||
+		    strcmp(buf, "thermal-zones") == 0 ||
+		    strncmp(buf, "__", 2) == 0)
 			return (QUIET);
 		printf("\"%s\"", buf);
 	} else
@@ -310,7 +314,7 @@ mainbus_attach_cpus(struct device *self, cfmatch_t match)
 	int acells, scells;
 	char buf[32];
 
-	if (node == 0)
+	if (node == -1)
 		return;
 
 	acells = sc->sc_acells;
@@ -358,13 +362,28 @@ mainbus_match_secondary(struct device *parent, void *match, void *aux)
 }
 
 void
+mainbus_attach_psci(struct device *self)
+{
+	struct mainbus_softc *sc = (struct mainbus_softc *)self;
+	int node = OF_finddevice("/psci");
+
+	if (node == -1)
+		return;
+
+	sc->sc_early = 1;
+	mainbus_attach_node(self, node, NULL);
+	sc->sc_early = 0;
+}
+
+void
 mainbus_attach_efi(struct device *self)
 {
 	struct mainbus_softc *sc = (struct mainbus_softc *)self;
 	struct fdt_attach_args fa;
 	int node = OF_finddevice("/chosen");
 
-	if (node == 0 || OF_getproplen(node, "openbsd,uefi-system-table") <= 0)
+	if (node == -1 ||
+	    OF_getproplen(node, "openbsd,uefi-system-table") <= 0)
 		return;
 
 	memset(&fa, 0, sizeof(fa));
@@ -390,7 +409,7 @@ mainbus_attach_framebuffer(struct device *self)
 {
 	int node = OF_finddevice("/chosen");
 
-	if (node == 0)
+	if (node == -1)
 		return;
 
 	for (node = OF_child(node); node != 0; node = OF_peer(node))

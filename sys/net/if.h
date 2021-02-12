@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.h,v 1.203 2019/07/25 15:23:39 krw Exp $	*/
+/*	$OpenBSD: if.h,v 1.206 2021/02/01 07:43:33 mvs Exp $	*/
 /*	$NetBSD: if.h,v 1.23 1996/05/07 02:40:27 thorpej Exp $	*/
 
 /*
@@ -530,7 +530,6 @@ void	if_attach(struct ifnet *);
 void	if_attach_queues(struct ifnet *, unsigned int);
 void	if_attach_iqueues(struct ifnet *, unsigned int);
 void	if_attach_ifq(struct ifnet *, const struct ifq_ops *, void *);
-void	if_attachtail(struct ifnet *);
 void	if_attachhead(struct ifnet *);
 void	if_deactivate(struct ifnet *);
 void	if_detach(struct ifnet *);
@@ -546,7 +545,7 @@ struct	ifg_group *if_creategroup(const char *);
 int	if_addgroup(struct ifnet *, const char *);
 int	if_delgroup(struct ifnet *, const char *);
 void	if_group_routechange(struct sockaddr *, struct sockaddr *);
-struct	ifnet *ifunit(const char *);
+struct	ifnet *if_unit(const char *);
 struct	ifnet *if_get(unsigned int);
 void	if_put(struct ifnet *);
 void	ifnewlladdr(struct ifnet *);

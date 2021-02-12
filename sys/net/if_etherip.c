@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_etherip.c,v 1.45 2019/04/23 10:53:45 dlg Exp $	*/
+/*	$OpenBSD: if_etherip.c,v 1.48 2021/01/09 21:00:58 gnezdo Exp $	*/
 /*
  * Copyright (c) 2015 Kazuya GODA <goda@openbsd.org>
  *
@@ -150,7 +150,6 @@ etherip_clone_create(struct if_clone *ifc, int unit)
 	ifp->if_start = etherip_start;
 	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	ifp->if_xflags = IFXF_CLONED;
-	IFQ_SET_MAXLEN(&ifp->if_snd, IFQ_MAXLEN);
 	ifp->if_capabilities = IFCAP_VLAN_MTU;
 	ether_fakeaddr(ifp);
 
@@ -768,7 +767,8 @@ etherip_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 	switch (name[0]) {
 	case ETHERIPCTL_ALLOW:
 		NET_LOCK();
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &etherip_allow);
+		error = sysctl_int_bounded(oldp, oldlenp, newp, newlen,
+		    &etherip_allow, 0, 1);
 		NET_UNLOCK();
 		return (error);
 	case ETHERIPCTL_STATS:

@@ -1,6 +1,6 @@
 define(MACHINE,arm64)dnl
 vers(__file__,
-	{-$OpenBSD: MAKEDEV.md,v 1.8 2020/03/12 16:38:58 patrick Exp $-},
+	{-$OpenBSD: MAKEDEV.md,v 1.11 2021/01/23 05:08:33 thfr Exp $-},
 etc.MACHINE)dnl
 dnl
 dnl Copyright (c) 2001-2006 Todd T. Fries <todd@OpenBSD.org>
@@ -52,6 +52,7 @@ _DEV(uall)
 _DEV(ugen, 63)
 _DEV(uhid, 62)
 _DEV(fido, 98)
+_DEV(ujoy, 100)
 _DEV(ulpt, 64)
 _DEV(usb, 61)
 _TITLE(spec)
@@ -83,6 +84,7 @@ _DEV(uk, 20)
 _DEV(vi, 44)
 _DEV(vscsi, 89)
 _DEV(switch, 97)
+_DEV(kstat, 51)
 dnl
 divert(__mddivert)dnl
 dnl
@@ -98,7 +100,7 @@ _std(1, 2, 50, 7)
 dnl
 dnl arm64 specific targets
 dnl
-twrget(all, au, audio, 0, 1, 2)dnl
+twrget(all, au, audio, 0, 1, 2, 3)dnl
 target(all, ch, 0)dnl
 target(all, vscsi, 0)dnl
 target(all, diskmap)dnl

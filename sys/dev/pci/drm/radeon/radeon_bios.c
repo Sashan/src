@@ -25,13 +25,16 @@
  *          Alex Deucher
  *          Jerome Glisse
  */
-#include <drm/drmP.h>
-#include "radeon_reg.h"
-#include "radeon.h"
-#include "atom.h"
 
-#include <linux/slab.h>
 #include <linux/acpi.h>
+#include <linux/pci.h>
+#include <linux/slab.h>
+
+#include <drm/drm_device.h>
+
+#include "atom.h"
+#include "radeon.h"
+#include "radeon_reg.h"
 
 #if defined(__amd64__) || defined(__i386__)
 #include <dev/isa/isareg.h>
@@ -199,25 +202,33 @@ fail:
 #ifdef __linux__
 static bool radeon_read_platform_bios(struct radeon_device *rdev)
 {
-	uint8_t __iomem *bios;
-	size_t size;
+	phys_addr_t rom = rdev->pdev->rom;
+	size_t romlen = rdev->pdev->romlen;
+	void __iomem *bios;
 
 	rdev->bios = NULL;
 
-	bios = pci_platform_rom(rdev->pdev, &size);
-	if (!bios) {
+	if (!rom || romlen == 0)
 		return false;
-	}
 
-	if (size == 0 || bios[0] != 0x55 || bios[1] != 0xaa) {
+	rdev->bios = kzalloc(romlen, GFP_KERNEL);
+	if (!rdev->bios)
 		return false;
-	}
-	rdev->bios = kmemdup(bios, size, GFP_KERNEL);
-	if (rdev->bios == NULL) {
-		return false;
-	}
+
+	bios = ioremap(rom, romlen);
+	if (!bios)
+		goto free_bios;
+
+	memcpy_fromio(rdev->bios, bios, romlen);
+	iounmap(bios);
+
+	if (rdev->bios[0] != 0x55 || rdev->bios[1] != 0xaa)
+		goto free_bios;
 
 	return true;
+free_bios:
+	kfree(rdev->bios);
+	return false;
 }
 #else
 static bool radeon_read_platform_bios(struct radeon_device *rdev)
@@ -512,6 +523,16 @@ static bool r600_read_disabled_bios(struct radeon_device *rdev)
 	uint32_t ctxsw_vid_lower_gpio_cntl;
 	uint32_t lower_gpio_enable;
 	bool r;
+	
+	/*
+	 * Some machines with RV610 running amd64 pass initial checks but later
+	 * fail atombios specific checks.  Return early here so the bios will be
+	 * read from 0xc0000 in radeon_read_platform_bios() instead.
+	 * RV610 0x1002:0x94C3 0x1028:0x0402 0x00
+	 * RV610 0x1002:0x94C1 0x1028:0x0D02 0x00
+	 */
+	if (rdev->family == CHIP_RV610)
+		return false;
 
 	viph_control = RREG32(RADEON_VIPH_CONTROL);
 	bus_cntl = RREG32(R600_BUS_CNTL);
@@ -801,17 +822,17 @@ bool radeon_get_bios(struct radeon_device *rdev)
 	uint16_t tmp;
 
 	r = radeon_atrm_get_bios(rdev);
-	if (r == false)
+	if (!r)
 		r = radeon_acpi_vfct_bios(rdev);
-	if (r == false)
+	if (!r)
 		r = igp_read_bios_from_vram(rdev);
-	if (r == false)
+	if (!r)
 		r = radeon_read_bios(rdev);
-	if (r == false)
+	if (!r)
 		r = radeon_read_disabled_bios(rdev);
-	if (r == false)
+	if (!r)
 		r = radeon_read_platform_bios(rdev);
-	if (r == false || rdev->bios == NULL) {
+	if (!r || rdev->bios == NULL) {
 		DRM_ERROR("Unable to locate a BIOS ROM\n");
 		rdev->bios = NULL;
 		return false;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: frontend.c,v 1.31 2019/09/07 18:57:47 florian Exp $	*/
+/*	$OpenBSD: frontend.c,v 1.39 2021/01/19 16:54:48 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -95,19 +95,22 @@ struct icmp6_ev {
 	struct msghdr		 rcvmhdr;
 	struct iovec		 rcviov[1];
 	struct sockaddr_in6	 from;
-} icmp6ev;
+	int			 refcnt;
+};
 
 struct ra_iface {
-	TAILQ_ENTRY(ra_iface)		entry;
-	struct ra_prefix_conf_head	prefixes;
-	char				name[IF_NAMESIZE];
-	char				conf_name[IF_NAMESIZE];
-	uint32_t			if_index;
-	int				removed;
-	int				link_state;
-	int				prefix_count;
-	size_t				datalen;
-	uint8_t				data[RA_MAX_SIZE];
+	TAILQ_ENTRY(ra_iface)		 entry;
+	struct icmp6_ev			*icmp6ev;
+	struct ra_prefix_conf_head	 prefixes;
+	char				 name[IF_NAMESIZE];
+	char				 conf_name[IF_NAMESIZE];
+	uint32_t			 if_index;
+	int				 rdomain;
+	int				 removed;
+	int				 link_state;
+	int				 prefix_count;
+	size_t				 datalen;
+	uint8_t				 data[RA_MAX_SIZE];
 };
 
 TAILQ_HEAD(, ra_iface)	ra_interfaces;
@@ -119,6 +122,7 @@ void			 icmp6_receive(int, short, void *);
 void			 join_all_routers_mcast_group(struct ra_iface *);
 void			 leave_all_routers_mcast_group(struct ra_iface *);
 int			 get_link_state(char *);
+int			 get_ifrdomain(char *);
 void			 merge_ra_interface(char *, char *);
 void			 merge_ra_interfaces(void);
 struct ra_iface		*find_ra_iface_by_id(uint32_t);
@@ -127,12 +131,16 @@ struct ra_iface_conf	*find_ra_iface_conf(struct ra_iface_conf_head *,
 			    char *);
 struct ra_prefix_conf	*find_ra_prefix_conf(struct ra_prefix_conf_head*,
 			    struct in6_addr *, int);
+struct icmp6_ev		*get_icmp6ev_by_rdomain(int);
+void			 unref_icmp6ev(struct ra_iface *);
+void			 set_icmp6sock(int, int);
 void			 add_new_prefix_to_ra_iface(struct ra_iface *r,
 			    struct in6_addr *, int, struct ra_prefix_conf *);
 void			 free_ra_iface(struct ra_iface *);
 int			 in6_mask2prefixlen(struct in6_addr *);
 void			 get_interface_prefixes(struct ra_iface *,
 			     struct ra_prefix_conf *);
+int			 interface_has_linklocal_address(char *);
 void			 build_packet(struct ra_iface *);
 void			 build_leaving_packet(struct ra_iface *);
 void			 ra_output(struct ra_iface *, struct sockaddr_in6 *);
@@ -143,12 +151,11 @@ void			 handle_route_message(struct rt_msghdr *,
 			     struct sockaddr **);
 
 struct rad_conf	*frontend_conf;
-struct imsgev		*iev_main;
-struct imsgev		*iev_engine;
+static struct imsgev	*iev_main;
+static struct imsgev	*iev_engine;
 struct event		 ev_route;
-int			 icmp6sock = -1, ioctlsock = -1, routesock = -1;
+int			 ioctlsock = -1, routesock = -1;
 struct ipv6_mreq	 all_routers;
-struct sockaddr_in6	 all_nodes;
 struct msghdr		 sndmhdr;
 struct iovec		 sndiov[2];
 
@@ -174,12 +181,10 @@ frontend(int debug, int verbose)
 {
 	struct event		 ev_sigint, ev_sigterm;
 	struct passwd		*pw;
-	size_t			 rcvcmsglen, sndcmsgbuflen;
-	uint8_t			*rcvcmsgbuf;
+	size_t			 sndcmsgbuflen;
 	uint8_t			*sndcmsgbuf = NULL;
 
 	frontend_conf = config_new_empty();
-	control_state.fd = -1;
 
 	log_init(debug, LOG_DAEMON);
 	log_setverbose(verbose);
@@ -192,9 +197,8 @@ frontend(int debug, int verbose)
 	if (chdir("/") == -1)
 		fatal("chdir(\"/\")");
 
-	rad_process = PROC_FRONTEND;
-	setproctitle("%s", log_procnames[rad_process]);
-	log_procinit(log_procnames[rad_process]);
+	setproctitle("%s", "frontend");
+	log_procinit("frontend");
 
 	if (setgroups(1, &pw->pw_gid) ||
 	    setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid) ||
@@ -228,27 +232,8 @@ frontend(int debug, int verbose)
 	    iev_main->handler, iev_main);
 	event_add(&iev_main->ev, NULL);
 
-	rcvcmsglen = CMSG_SPACE(sizeof(struct in6_pktinfo)) +
-	    CMSG_SPACE(sizeof(int));
-	if((rcvcmsgbuf = malloc(rcvcmsglen)) == NULL)
-		fatal("malloc");
-
-	icmp6ev.rcviov[0].iov_base = (caddr_t)icmp6ev.answer;
-	icmp6ev.rcviov[0].iov_len = sizeof(icmp6ev.answer);
-	icmp6ev.rcvmhdr.msg_name = (caddr_t)&icmp6ev.from;
-	icmp6ev.rcvmhdr.msg_namelen = sizeof(icmp6ev.from);
-	icmp6ev.rcvmhdr.msg_iov = icmp6ev.rcviov;
-	icmp6ev.rcvmhdr.msg_iovlen = 1;
-	icmp6ev.rcvmhdr.msg_control = (caddr_t) rcvcmsgbuf;
-	icmp6ev.rcvmhdr.msg_controllen = rcvcmsglen;
-
 	if (inet_pton(AF_INET6, "ff02::2",
 	    &all_routers.ipv6mr_multiaddr.s6_addr) == -1)
-		fatal("inet_pton");
-
-	all_nodes.sin6_len = sizeof(all_nodes);
-	all_nodes.sin6_family = AF_INET6;
-	if (inet_pton(AF_INET6, "ff02::1", &all_nodes.sin6_addr) != 1)
 		fatal("inet_pton");
 
 	sndcmsgbuflen = CMSG_SPACE(sizeof(struct in6_pktinfo)) +
@@ -315,7 +300,7 @@ frontend_dispatch_main(int fd, short event, void *bula)
 	struct ra_prefix_conf		*ra_prefix_conf;
 	struct ra_rdnss_conf		*ra_rdnss_conf;
 	struct ra_dnssl_conf		*ra_dnssl_conf;
-	int				 n, shut = 0;
+	int				 n, shut = 0, icmp6sock, rdomain;
 
 	if (event & EV_READ) {
 		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
@@ -413,7 +398,7 @@ frontend_dispatch_main(int fd, short event, void *bula)
 			    ra_prefix_conf))
 				fatalx("%s: IMSG_RECONF_RA_PREFIX wrong "
 				    "length: %lu", __func__,
-				    IMSG_DATA_SIZE(imsg));	
+				    IMSG_DATA_SIZE(imsg));
 			if ((ra_prefix_conf = malloc(sizeof(struct
 			    ra_prefix_conf))) == NULL)
 				fatal(NULL);
@@ -457,15 +442,15 @@ frontend_dispatch_main(int fd, short event, void *bula)
 			nconf = NULL;
 			break;
 		case IMSG_ICMP6SOCK:
-			if (icmp6sock != -1)
-				fatalx("%s: received unexpected icmp6 fd",
-				    __func__);
 			if ((icmp6sock = imsg.fd) == -1)
 				fatalx("%s: expected to receive imsg "
 				    "ICMPv6 fd but didn't receive any",
 				    __func__);
-			event_set(&icmp6ev.ev, icmp6sock, EV_READ | EV_PERSIST,
-			    icmp6_receive, NULL);
+			if (IMSG_DATA_SIZE(imsg) != sizeof(rdomain))
+				fatalx("%s: IMSG_ICMP6SOCK wrong length: "
+				    "%lu", __func__, IMSG_DATA_SIZE(imsg));
+			memcpy(&rdomain, imsg.data, sizeof(rdomain));
+			set_icmp6sock(icmp6sock, rdomain);
 			break;
 		case IMSG_ROUTESOCK:
 			if (routesock != -1)
@@ -479,22 +464,15 @@ frontend_dispatch_main(int fd, short event, void *bula)
 			    route_receive, NULL);
 			break;
 		case IMSG_STARTUP:
-			if (pledge("stdio inet unix route mcast", NULL) == -1)
-				fatal("pledge");
 			frontend_startup();
 			break;
 		case IMSG_CONTROLFD:
-			if (control_state.fd != -1)
-				fatalx("%s: received unexpected controlsock",
-				    __func__);
 			if ((fd = imsg.fd) == -1)
 				fatalx("%s: expected to receive imsg "
 				    "control fd but didn't receive any",
 				    __func__);
-			control_state.fd = fd;
 			/* Listen on control socket. */
-			TAILQ_INIT(&ctl_conns);
-			control_listen();
+			control_listen(fd);
 			break;
 		default:
 			log_debug("%s: error handling imsg %d", __func__,
@@ -587,20 +565,14 @@ frontend_startup(void)
 		    "process", __func__);
 
 	event_add(&ev_route, NULL);
-
-	if (!event_initialized(&icmp6ev.ev))
-		fatalx("%s: did not receive a icmp6 socket fd from the main "
-		    "process", __func__);
-
-	event_add(&icmp6ev.ev, NULL);
-
-	frontend_imsg_compose_main(IMSG_STARTUP_DONE, 0, NULL, 0);
 }
 
 
 void
 icmp6_receive(int fd, short events, void *arg)
 {
+	struct icmp6_ev		*icmp6ev;
+	struct icmp6_hdr	*icmp6_hdr;
 	struct imsg_ra_rs	 ra_rs;
 	struct in6_pktinfo	*pi = NULL;
 	struct cmsghdr		*cm;
@@ -608,14 +580,23 @@ icmp6_receive(int fd, short events, void *arg)
 	int			 if_index = 0, *hlimp = NULL;
 	char			 ntopbuf[INET6_ADDRSTRLEN], ifnamebuf[IFNAMSIZ];
 
-	if ((len = recvmsg(fd, &icmp6ev.rcvmhdr, 0)) == -1) {
+	icmp6ev = arg;
+	if ((len = recvmsg(fd, &icmp6ev->rcvmhdr, 0)) == -1) {
 		log_warn("recvmsg");
 		return;
 	}
 
+	if ((size_t)len < sizeof(struct icmp6_hdr))
+		return;
+
+	icmp6_hdr = (struct icmp6_hdr *)icmp6ev->answer;
+	if (icmp6_hdr->icmp6_type != ND_ROUTER_ADVERT &&
+	    icmp6_hdr->icmp6_type != ND_ROUTER_SOLICIT)
+		return;
+
 	/* extract optional information via Advanced API */
-	for (cm = (struct cmsghdr *)CMSG_FIRSTHDR(&icmp6ev.rcvmhdr); cm;
-	    cm = (struct cmsghdr *)CMSG_NXTHDR(&icmp6ev.rcvmhdr, cm)) {
+	for (cm = (struct cmsghdr *)CMSG_FIRSTHDR(&icmp6ev->rcvmhdr); cm;
+	    cm = (struct cmsghdr *)CMSG_NXTHDR(&icmp6ev->rcvmhdr, cm)) {
 		if (cm->cmsg_level == IPPROTO_IPV6 &&
 		    cm->cmsg_type == IPV6_PKTINFO &&
 		    cm->cmsg_len == CMSG_LEN(sizeof(struct in6_pktinfo))) {
@@ -640,29 +621,29 @@ icmp6_receive(int fd, short events, void *arg)
 
 	if (*hlimp != 255) {
 		log_warnx("invalid RA or RS with hop limit of %d from %s on %s",
-		    *hlimp, inet_ntop(AF_INET6, &icmp6ev.from.sin6_addr,
+		    *hlimp, inet_ntop(AF_INET6, &icmp6ev->from.sin6_addr,
 		    ntopbuf, INET6_ADDRSTRLEN), if_indextoname(if_index,
 		    ifnamebuf));
 		return;
 	}
 
 	log_debug("RA or RS with hop limit of %d from %s on %s",
-	    *hlimp, inet_ntop(AF_INET6, &icmp6ev.from.sin6_addr,
+	    *hlimp, inet_ntop(AF_INET6, &icmp6ev->from.sin6_addr,
 	    ntopbuf, INET6_ADDRSTRLEN), if_indextoname(if_index,
 	    ifnamebuf));
 
 	if ((size_t)len > sizeof(ra_rs.packet)) {
 		log_warnx("invalid RA or RS with size %ld from %s on %s",
-		    len, inet_ntop(AF_INET6, &icmp6ev.from.sin6_addr,
+		    len, inet_ntop(AF_INET6, &icmp6ev->from.sin6_addr,
 		    ntopbuf, INET6_ADDRSTRLEN), if_indextoname(if_index,
 		    ifnamebuf));
 		return;
 	}
 
 	ra_rs.if_index = if_index;
-	memcpy(&ra_rs.from,  &icmp6ev.from, sizeof(ra_rs.from));
+	memcpy(&ra_rs.from,  &icmp6ev->from, sizeof(ra_rs.from));
 	ra_rs.len = len;
-	memcpy(ra_rs.packet, icmp6ev.answer, len);
+	memcpy(ra_rs.packet, icmp6ev->answer, len);
 
 	frontend_imsg_compose_engine(IMSG_RA_RS, 0, &ra_rs, sizeof(ra_rs));
 }
@@ -670,20 +651,24 @@ icmp6_receive(int fd, short events, void *arg)
 void
 join_all_routers_mcast_group(struct ra_iface *ra_iface)
 {
+	if (!event_initialized(&ra_iface->icmp6ev->ev))
+		return;
 	log_debug("joining multicast group on %s", ra_iface->name);
 	all_routers.ipv6mr_interface = ra_iface->if_index;
-	if (setsockopt(icmp6sock, IPPROTO_IPV6, IPV6_JOIN_GROUP,
-	    &all_routers, sizeof(all_routers)) == -1)
+	if (setsockopt(EVENT_FD(&ra_iface->icmp6ev->ev), IPPROTO_IPV6,
+	    IPV6_JOIN_GROUP, &all_routers, sizeof(all_routers)) == -1)
 		fatal("IPV6_JOIN_GROUP(%s)", ra_iface->name);
 }
 
 void
 leave_all_routers_mcast_group(struct ra_iface *ra_iface)
 {
+	if (!event_initialized(&ra_iface->icmp6ev->ev))
+		return;
 	log_debug("leaving multicast group on %s", ra_iface->name);
 	all_routers.ipv6mr_interface = ra_iface->if_index;
-	setsockopt(icmp6sock, IPPROTO_IPV6, IPV6_LEAVE_GROUP,
-	    &all_routers, sizeof(all_routers));
+	setsockopt(EVENT_FD(&ra_iface->icmp6ev->ev), IPPROTO_IPV6,
+	    IPV6_LEAVE_GROUP, &all_routers, sizeof(all_routers));
 }
 
 struct ra_iface*
@@ -733,7 +718,8 @@ get_link_state(char *if_name)
 		return LINK_STATE_UNKNOWN;
 	}
 	for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
-		if (ifa->ifa_addr->sa_family != AF_LINK)
+		if (ifa->ifa_addr == NULL ||
+		    ifa->ifa_addr->sa_family != AF_LINK)
 			continue;
 		if (strcmp(if_name, ifa->ifa_name) != 0)
 			continue;
@@ -745,20 +731,49 @@ get_link_state(char *if_name)
 	return ls;
 }
 
+int
+get_ifrdomain(char *if_name)
+{
+	struct ifreq		 ifr;
+
+	strlcpy(ifr.ifr_name, if_name, sizeof(ifr.ifr_name));
+	if (ioctl(ioctlsock, SIOCGIFRDOMAIN, (caddr_t)&ifr) == -1) {
+		log_warn("SIOCGIFRDOMAIN");
+		return -1;
+	}
+	return ifr.ifr_rdomainid;
+}
+
 void
 merge_ra_interface(char *name, char *conf_name)
 {
 	struct ra_iface		*ra_iface;
 	uint32_t		 if_index;
-	int			 link_state;
+	int			 link_state, has_linklocal, ifrdomain;
 
 	link_state = get_link_state(name);
+	has_linklocal = interface_has_linklocal_address(name);
+	ifrdomain = get_ifrdomain(name);
 
 	if ((ra_iface = find_ra_iface_by_name(name)) != NULL) {
 		ra_iface->link_state = link_state;
 		if (!LINK_STATE_IS_UP(link_state)) {
-			log_debug("%s down, ignoring", name);
+			log_debug("%s down, removing", name);
 			ra_iface->removed = 1;
+		} else if (!has_linklocal) {
+			log_debug("%s has no IPv6 link-local address, "
+			    "removing", name);
+			ra_iface->removed = 1;
+		} else if (ifrdomain == -1) {
+			log_debug("can't get rdomain for %s, removing", name);
+			ra_iface->removed = 1;
+		} else if (ra_iface->rdomain != ifrdomain) {
+			leave_all_routers_mcast_group(ra_iface);
+			unref_icmp6ev(ra_iface);
+			ra_iface->rdomain = ifrdomain;
+			ra_iface->icmp6ev = get_icmp6ev_by_rdomain(ifrdomain);
+			join_all_routers_mcast_group(ra_iface);
+			ra_iface->removed = 0;
 		} else {
 			log_debug("keeping interface %s", name);
 			ra_iface->removed = 0;
@@ -768,6 +783,11 @@ merge_ra_interface(char *name, char *conf_name)
 
 	if (!LINK_STATE_IS_UP(link_state)) {
 		log_debug("%s down, ignoring", name);
+		return;
+	}
+
+	if (!has_linklocal) {
+		log_debug("%s has no IPv6 link-local address, ignoring", name);
 		return;
 	}
 
@@ -784,9 +804,13 @@ merge_ra_interface(char *name, char *conf_name)
 	    sizeof(ra_iface->conf_name));
 
 	ra_iface->if_index = if_index;
+	ra_iface->rdomain = ifrdomain;
+
 	SIMPLEQ_INIT(&ra_iface->prefixes);
-	TAILQ_INSERT_TAIL(&ra_interfaces, ra_iface, entry);
+
+	ra_iface->icmp6ev = get_icmp6ev_by_rdomain(ifrdomain);
 	join_all_routers_mcast_group(ra_iface);
+	TAILQ_INSERT_TAIL(&ra_interfaces, ra_iface, entry);
 }
 
 void
@@ -890,6 +914,7 @@ free_ra_iface(struct ra_iface *ra_iface)
 		free(prefix);
 	}
 
+	unref_icmp6ev(ra_iface);
 	free(ra_iface);
 }
 
@@ -918,6 +943,48 @@ in6_mask2prefixlen(struct in6_addr *in6)
 	return (plen);
 }
 
+int
+interface_has_linklocal_address(char *name)
+{
+	struct ifaddrs		*ifap, *ifa;
+	struct sockaddr_in6	*sin6;
+	struct in6_ifreq	 ifr6;
+	int			 ret = 0;
+
+	if (getifaddrs(&ifap) != 0)
+		fatal("getifaddrs");
+
+	for (ifa = ifap; ifa != NULL; ifa = ifa->ifa_next) {
+		if (strcmp(name, ifa->ifa_name) != 0)
+			continue;
+		if (ifa->ifa_addr == NULL ||
+		    ifa->ifa_addr->sa_family != AF_INET6)
+			continue;
+
+		sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
+
+		if (!IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr))
+			continue;
+
+		memset(&ifr6, 0, sizeof(ifr6));
+		strlcpy(ifr6.ifr_name, name, sizeof(ifr6.ifr_name));
+		memcpy(&ifr6.ifr_addr, sin6, sizeof(ifr6.ifr_addr));
+		if (ioctl(ioctlsock, SIOCGIFAFLAG_IN6, (caddr_t)&ifr6) == -1) {
+			log_warn("SIOCGIFAFLAG_IN6");
+			continue;
+		}
+
+		if (ifr6.ifr_ifru.ifru_flags6 & (IN6_IFF_TENTATIVE |
+		    IN6_IFF_DUPLICATED))
+			continue;
+
+		ret = 1;
+		break;
+	}
+	freeifaddrs(ifap);
+	return (ret);
+}
+
 void
 get_interface_prefixes(struct ra_iface *ra_iface, struct ra_prefix_conf
     *autoprefix)
@@ -935,7 +1002,8 @@ get_interface_prefixes(struct ra_iface *ra_iface, struct ra_prefix_conf
 	for (ifa = ifap; ifa != NULL; ifa = ifa->ifa_next) {
 		if (strcmp(ra_iface->name, ifa->ifa_name) != 0)
 			continue;
-		if (ifa->ifa_addr->sa_family != AF_INET6)
+		if (ifa->ifa_addr == NULL ||
+		    ifa->ifa_addr->sa_family != AF_INET6)
 			continue;
 
 		sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
@@ -944,8 +1012,7 @@ get_interface_prefixes(struct ra_iface *ra_iface, struct ra_prefix_conf
 			continue;
 
 		memset(&ifr6, 0, sizeof(ifr6));
-		(void) strlcpy(ifr6.ifr_name, ra_iface->name,
-		    sizeof(ifr6.ifr_name));
+		strlcpy(ifr6.ifr_name, ra_iface->name, sizeof(ifr6.ifr_name));
 		memcpy(&ifr6.ifr_addr, sin6, sizeof(ifr6.ifr_addr));
 
 		if (ioctl(ioctlsock, SIOCGIFNETMASK_IN6, (caddr_t)&ifr6) == -1)
@@ -1145,8 +1212,9 @@ build_packet(struct ra_iface *ra_iface)
 		memcpy(ra_iface->data, buf, len);
 		ra_iface->datalen = len;
 		/* packet changed; tell engine to send new advertisments */
-		frontend_imsg_compose_engine(IMSG_UPDATE_IF, 0,
-		    &ra_iface->if_index, sizeof(ra_iface->if_index));
+		if (event_initialized(&ra_iface->icmp6ev->ev))
+			frontend_imsg_compose_engine(IMSG_UPDATE_IF, 0,
+			    &ra_iface->if_index, sizeof(ra_iface->if_index));
 	}
 }
 
@@ -1200,7 +1268,7 @@ ra_output(struct ra_iface *ra_iface, struct sockaddr_in6 *to)
 
 	log_debug("send RA on %s", ra_iface->name);
 
-	len = sendmsg(icmp6sock, &sndmhdr, 0);
+	len = sendmsg(EVENT_FD(&ra_iface->icmp6ev->ev), &sndmhdr, 0);
 	if (len == -1)
 		log_warn("sendmsg on %s", ra_iface->name);
 
@@ -1270,6 +1338,7 @@ handle_route_message(struct rt_msghdr *rtm, struct sockaddr **rti_info)
 	case RTM_IFINFO:
 	case RTM_NEWADDR:
 	case RTM_DELADDR:
+	case RTM_CHGADDRATTR:
 		/*
 		 * do the same thing as after a config reload when interfaces
 		 * change or IPv6 addresses show up / disappear
@@ -1279,5 +1348,93 @@ handle_route_message(struct rt_msghdr *rtm, struct sockaddr **rti_info)
 	default:
 		log_debug("unexpected RTM: %d", rtm->rtm_type);
 		break;
+	}
+}
+
+struct icmp6_ev*
+get_icmp6ev_by_rdomain(int rdomain)
+{
+	struct ra_iface	*ra_iface;
+	struct icmp6_ev	*icmp6ev = NULL;
+
+	TAILQ_FOREACH (ra_iface, &ra_interfaces, entry) {
+		if (ra_iface->rdomain == rdomain) {
+			icmp6ev = ra_iface->icmp6ev;
+			break;
+		}
+	}
+
+	if (icmp6ev == NULL) {
+		if ((icmp6ev = calloc(1, sizeof(*icmp6ev))) == NULL)
+			fatal("calloc");
+
+		icmp6ev->rcviov[0].iov_base = (caddr_t)icmp6ev->answer;
+		icmp6ev->rcviov[0].iov_len = sizeof(icmp6ev->answer);
+		icmp6ev->rcvmhdr.msg_name = (caddr_t)&icmp6ev->from;
+		icmp6ev->rcvmhdr.msg_namelen = sizeof(icmp6ev->from);
+		icmp6ev->rcvmhdr.msg_iov = icmp6ev->rcviov;
+		icmp6ev->rcvmhdr.msg_iovlen = 1;
+		icmp6ev->rcvmhdr.msg_controllen =
+		    CMSG_SPACE(sizeof(struct in6_pktinfo)) +
+		    CMSG_SPACE(sizeof(int));
+		if ((icmp6ev->rcvmhdr.msg_control = malloc(icmp6ev->
+		    rcvmhdr.msg_controllen)) == NULL)
+			fatal("malloc");
+		frontend_imsg_compose_main(IMSG_OPEN_ICMP6SOCK, 0,
+		    &rdomain, sizeof(rdomain));
+	}
+
+	icmp6ev->refcnt++;
+	return (icmp6ev);
+}
+
+void
+unref_icmp6ev(struct ra_iface *ra_iface)
+{
+	struct icmp6_ev *icmp6ev = ra_iface->icmp6ev;
+
+	ra_iface->icmp6ev = NULL;
+
+	if (icmp6ev != NULL) {
+		icmp6ev->refcnt--;
+		if (icmp6ev->refcnt == 0) {
+			event_del(&icmp6ev->ev);
+			close(EVENT_FD(&icmp6ev->ev));
+			free(icmp6ev);
+		}
+	}
+}
+
+void
+set_icmp6sock(int icmp6sock, int rdomain)
+{
+	struct ra_iface	*ra_iface;
+
+	TAILQ_FOREACH (ra_iface, &ra_interfaces, entry) {
+		if (!event_initialized(&ra_iface->icmp6ev->ev) &&
+		    ra_iface->rdomain == rdomain) {
+			event_set(&ra_iface->icmp6ev->ev, icmp6sock, EV_READ |
+			    EV_PERSIST, icmp6_receive, ra_iface->icmp6ev);
+			event_add(&ra_iface->icmp6ev->ev, NULL);
+			icmp6sock = -1;
+			break;
+		}
+	}
+
+	if (icmp6sock != -1) {
+		/*
+		 * The interface disappeared or changed rdomain while we were
+		 * waiting for the parent process to open the raw socket.
+		 */
+		close(icmp6sock);
+		return;
+	}
+
+	TAILQ_FOREACH (ra_iface, &ra_interfaces, entry) {
+		if (ra_iface->rdomain == rdomain) {
+			join_all_routers_mcast_group(ra_iface);
+			frontend_imsg_compose_engine(IMSG_UPDATE_IF, 0,
+			    &ra_iface->if_index, sizeof(ra_iface->if_index));
+		}
 	}
 }

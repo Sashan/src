@@ -1,4 +1,4 @@
-/* $OpenBSD: bwfmvar.h,v 1.19 2020/03/13 15:30:58 patrick Exp $ */
+/* $OpenBSD: bwfmvar.h,v 1.22 2021/01/31 11:07:51 patrick Exp $ */
 /*
  * Copyright (c) 2010-2016 Broadcom Corporation
  * Copyright (c) 2016,2017 Patrick Wildt <patrick@blueri.se>
@@ -48,6 +48,7 @@
 #define BRCM_CC_4365_CHIP_ID		0x4365
 #define BRCM_CC_4366_CHIP_ID		0x4366
 #define BRCM_CC_4371_CHIP_ID		0x4371
+#define BRCM_CC_4378_CHIP_ID		0x4378
 #define CY_CC_4373_CHIP_ID		0x4373
 
 /* Defaults */
@@ -169,6 +170,10 @@ struct bwfm_softc {
 
 	int			 sc_bcdc_reqid;
 	TAILQ_HEAD(, bwfm_proto_bcdc_ctl) sc_bcdc_rxctlq;
+
+	u_char			*sc_clm;
+	size_t			 sc_clmsize;
+	int			 sc_key_tasks;
 };
 
 void bwfm_attach(struct bwfm_softc *);

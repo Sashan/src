@@ -1,4 +1,4 @@
-/*	$OpenBSD: siofile.c,v 1.18 2020/02/26 13:53:58 ratchov Exp $	*/
+/*	$OpenBSD: siofile.c,v 1.22 2020/06/28 05:21:39 ratchov Exp $	*/
 /*
  * Copyright (c) 2008-2012 Alexandre Ratchov <alex@caoua.org>
  *
@@ -42,6 +42,8 @@ int dev_sio_revents(void *, struct pollfd *);
 void dev_sio_run(void *);
 void dev_sio_hup(void *);
 
+extern struct fileops dev_sioctl_ops;
+
 struct fileops dev_sio_ops = {
 	"sio",
 	dev_sio_pollfd,
@@ -82,7 +84,7 @@ dev_sio_timeout(void *arg)
 
 	dev_log(d);
 	log_puts(": watchdog timeout\n");
-	dev_close(d);
+	dev_abort(d);
 }
 
 /*
@@ -91,25 +93,24 @@ dev_sio_timeout(void *arg)
 static struct sio_hdl *
 dev_sio_openlist(struct dev *d, unsigned int mode, struct sioctl_hdl **rctlhdl)
 {
-	struct name *n;
+	struct dev_alt *n;
 	struct sio_hdl *hdl;
 	struct sioctl_hdl *ctlhdl;
-	int idx;
+	struct ctl *c;
+	int val;
 
-	idx = 0;
-	n = d->path_list;
-	while (1) {
-		if (n == NULL)
-			break;
-		hdl = fdpass_sio_open(d->num, idx, mode);
+	for (n = d->alt_list; n != NULL; n = n->next) {
+		if (d->alt_num == n->idx)
+			continue;
+		hdl = fdpass_sio_open(d->num, n->idx, mode);
 		if (hdl != NULL) {
 			if (log_level >= 2) {
 				dev_log(d);
 				log_puts(": using ");
-				log_puts(n->str);
+				log_puts(n->name);
 				log_puts("\n");
 			}
-			ctlhdl = fdpass_sioctl_open(d->num, idx,
+			ctlhdl = fdpass_sioctl_open(d->num, n->idx,
 			    SIOCTL_READ | SIOCTL_WRITE);
 			if (ctlhdl == NULL) {
 				if (log_level >= 1) {
@@ -117,11 +118,21 @@ dev_sio_openlist(struct dev *d, unsigned int mode, struct sioctl_hdl **rctlhdl)
 					log_puts(": no control device\n");
 				}
 			}
+			d->alt_num = n->idx;
+			for (c = d->ctl_list; c != NULL; c = c->next) {
+				if (c->addr < CTLADDR_ALT_SEL ||
+				    c->addr >= CTLADDR_ALT_SEL + DEV_NMAX)
+					continue;
+				val = (c->addr - CTLADDR_ALT_SEL) == n->idx;
+				if (c->curval == val)
+					continue;
+				c->curval = val;
+				if (val)
+					c->val_mask = ~0U;
+			}
 			*rctlhdl = ctlhdl;
 			return hdl;
 		}
-		n = n->next;
-		idx++;
 	}
 	return NULL;
 }
@@ -256,6 +267,10 @@ dev_sio_open(struct dev *d)
 		d->mode &= ~MODE_REC;
 	sio_onmove(d->sio.hdl, dev_sio_onmove, d);
 	d->sio.file = file_new(&dev_sio_ops, d, "dev", sio_nfds(d->sio.hdl));
+	if (d->sioctl.hdl) {
+		d->sioctl.file = file_new(&dev_sioctl_ops, d, "mix",
+		    sioctl_nfds(d->sioctl.hdl));
+	}
 	timo_set(&d->sio.watchdog, dev_sio_timeout, d);
 	dev_sioctl_open(d);
 	return 1;
@@ -321,8 +336,8 @@ dev_sio_reopen(struct dev *d)
 	timo_del(&d->sio.watchdog);
 	file_del(d->sio.file);
 	sio_close(d->sio.hdl);
-	dev_sioctl_close(d);
 	if (d->sioctl.hdl) {
+		file_del(d->sioctl.file);
 		sioctl_close(d->sioctl.hdl);
 		d->sioctl.hdl = NULL;
 	}
@@ -341,6 +356,10 @@ dev_sio_reopen(struct dev *d)
 	d->sio.hdl = hdl;
 	d->sioctl.hdl = ctlhdl;
 	d->sio.file = file_new(&dev_sio_ops, d, "dev", sio_nfds(hdl));
+	if (d->sioctl.hdl) {
+		d->sioctl.file = file_new(&dev_sioctl_ops, d, "mix",
+		    sioctl_nfds(ctlhdl));
+	}
 	sio_onmove(hdl, dev_sio_onmove, d);
 	return 1;
 bad_close:
@@ -364,9 +383,11 @@ dev_sio_close(struct dev *d)
 	file_del(d->sio.file);
 	sio_close(d->sio.hdl);
 	if (d->sioctl.hdl) {
+		file_del(d->sioctl.file);
 		sioctl_close(d->sioctl.hdl);
 		d->sioctl.hdl = NULL;
 	}
+	d->alt_num = -1;
 }
 
 void
@@ -630,5 +651,5 @@ dev_sio_hup(void *arg)
 	}
 #endif
 	if (!dev_reopen(d))
-		dev_close(d);
+		dev_abort(d);
 }

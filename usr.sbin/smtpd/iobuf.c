@@ -1,4 +1,4 @@
-/*	$OpenBSD: iobuf.c,v 1.12 2019/10/03 07:03:23 gilles Exp $	*/
+/*	$OpenBSD: iobuf.c,v 1.14 2021/01/23 16:11:11 rob Exp $	*/
 /*
  * Copyright (c) 2012 Eric Faurot <eric@openbsd.org>
  *
@@ -174,10 +174,9 @@ iobuf_getline(struct iobuf *iobuf, size_t *rlen)
 			 * the next call to iobuf_normalize() or iobuf_extend().
 			 */
 			iobuf_drop(iobuf, i + 1);
-			len = (i && buf[i - 1] == '\r') ? i - 1 : i;
-			buf[len] = '\0';
+			buf[i] = '\0';
 			if (rlen)
-				*rlen = len;
+				*rlen = i;
 			return (buf);
 		}
 
@@ -404,13 +403,12 @@ ssize_t
 iobuf_write_tls(struct iobuf *io, void *tls)
 {
 	struct ioqbuf	*q;
-	int		 r;
 	ssize_t		 n;
 
 	q = io->outq;
 	n = SSL_write(tls, q->buf + q->rpos, q->wpos - q->rpos);
 	if (n <= 0) {
-		switch ((r = SSL_get_error(tls, n))) {
+		switch (SSL_get_error(tls, n)) {
 		case SSL_ERROR_WANT_READ:
 			return (IOBUF_WANT_READ);
 		case SSL_ERROR_WANT_WRITE:
@@ -434,11 +432,10 @@ ssize_t
 iobuf_read_tls(struct iobuf *io, void *tls)
 {
 	ssize_t	n;
-	int	r;
 
 	n = SSL_read(tls, io->buf + io->wpos, iobuf_left(io));
 	if (n < 0) {
-		switch ((r = SSL_get_error(tls, n))) {
+		switch (SSL_get_error(tls, n)) {
 		case SSL_ERROR_WANT_READ:
 			return (IOBUF_WANT_READ);
 		case SSL_ERROR_WANT_WRITE:

@@ -1,4 +1,4 @@
-/*	$OpenBSD: openfirm.h,v 1.15 2017/12/27 11:40:14 kettenis Exp $	*/
+/*	$OpenBSD: openfirm.h,v 1.17 2020/12/30 06:06:31 gkoehler Exp $	*/
 /*	$NetBSD: openfirm.h,v 1.1 1996/09/30 16:35:10 ws Exp $	*/
 
 /*
@@ -38,6 +38,8 @@
 #include <sys/param.h>
 #include <sys/device.h>
 
+#define OFMAXPARAM	64
+
 int openfirmware(void *);
 
 extern char OF_buf[];
@@ -51,6 +53,7 @@ int OF_getprop(int handle, char *prop, void *buf, int buflen);
 uint32_t OF_getpropint(int handle, char *, uint32_t);
 int OF_getpropintarray(int, char *, uint32_t *, int);
 uint64_t OF_getpropint64(int handle, char *, uint64_t);
+int OF_getpropint64array(int, char *, uint64_t *, int);
 int OF_setprop(int, char *, const void *, int);
 int OF_nextprop(int, char *, void *);
 int OF_finddevice(char *name);

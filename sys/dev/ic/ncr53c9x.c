@@ -1,4 +1,4 @@
-/*	$OpenBSD: ncr53c9x.c,v 1.68 2020/02/14 18:37:03 krw Exp $	*/
+/*	$OpenBSD: ncr53c9x.c,v 1.77 2020/09/22 19:32:52 krw Exp $	*/
 /*     $NetBSD: ncr53c9x.c,v 1.56 2000/11/30 14:41:46 thorpej Exp $    */
 
 /*
@@ -261,22 +261,16 @@ ncr53c9x_attach(sc)
 	sc->sc_state = 0;
 	ncr53c9x_init(sc, 1);
 
-	/*
-	 * fill in the prototype scsi_link.
-	 */
-	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.adapter_target = sc->sc_id;
-	sc->sc_link.adapter = &ncr53c9x_switch;
-	sc->sc_link.openings = 2;
-	sc->sc_link.adapter_buswidth = sc->sc_ntarg;
-	sc->sc_link.pool = &ecb_iopool;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter_target = sc->sc_id;
+	saa.saa_adapter = &ncr53c9x_switch;
+	saa.saa_adapter_buswidth = sc->sc_ntarg;
+	saa.saa_luns = 8;
+	saa.saa_openings = 2;
+	saa.saa_pool = &ecb_iopool;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
-	bzero(&saa, sizeof(saa));
-	saa.saa_sc_link = &sc->sc_link;
-
-	/*
-	 * Now try to attach all the sub-devices
-	 */
 	config_found(&sc->sc_dev, &saa, scsiprint);
 }
 
@@ -453,7 +447,7 @@ ncr53c9x_init(sc, doreset)
 #ifdef DEBUG
 		 if (ncr53c9x_notag)
 			 ti->flags &= ~T_TAG;
-#endif 
+#endif
 		ti->period = sc->sc_minsync;
 		ti->offset = 0;
 		ti->cfg3 = 0;
@@ -776,7 +770,7 @@ ncr53c9x_free_ecb(void *null, void *ecb)
 int
 ncr53c9x_scsi_probe(struct scsi_link *sc_link)
 {
-	struct ncr53c9x_softc *sc = sc_link->adapter_softc;
+	struct ncr53c9x_softc *sc = sc_link->bus->sb_adapter_softc;
 	struct ncr53c9x_tinfo *ti = &sc->sc_tinfo[sc_link->target];
 	struct ncr53c9x_linfo *li;
 	int64_t lun = sc_link->lun;
@@ -787,7 +781,7 @@ ncr53c9x_scsi_probe(struct scsi_link *sc_link)
 	if (li == NULL)
 		return (ENOMEM);
 
-	li->last_used = time_second;
+	li->last_used = getuptime();
 	li->lun = lun;
 
 	s = splbio();
@@ -803,7 +797,7 @@ ncr53c9x_scsi_probe(struct scsi_link *sc_link)
 void
 ncr53c9x_scsi_free(struct scsi_link *sc_link)
 {
-	struct ncr53c9x_softc *sc = sc_link->adapter_softc;
+	struct ncr53c9x_softc *sc = sc_link->bus->sb_adapter_softc;
 	struct ncr53c9x_tinfo *ti = &sc->sc_tinfo[sc_link->target];
 	struct ncr53c9x_linfo *li;
 	int64_t lun = sc_link->lun;
@@ -830,7 +824,7 @@ ncr53c9x_scsi_cmd(xs)
 	struct scsi_xfer *xs;
 {
 	struct scsi_link *sc_link = xs->sc_link;
-	struct ncr53c9x_softc *sc = sc_link->adapter_softc;
+	struct ncr53c9x_softc *sc = sc_link->bus->sb_adapter_softc;
 	struct ncr53c9x_ecb *ecb;
 	struct ncr53c9x_tinfo *ti;
 	struct ncr53c9x_linfo *li;
@@ -838,7 +832,7 @@ ncr53c9x_scsi_cmd(xs)
 	int s, flags;
 
 	NCR_TRACE(("[ncr53c9x_scsi_cmd] "));
-	NCR_CMDS(("[0x%x, %d]->%d ", (int)xs->cmd->opcode, xs->cmdlen,
+	NCR_CMDS(("[0x%x, %d]->%d ", (int)xs->cmd.opcode, xs->cmdlen,
 	    sc_link->target));
 
 	/*
@@ -870,7 +864,7 @@ ncr53c9x_scsi_cmd(xs)
 		ecb->clen = 0;
 		ecb->dleft = 0;
 	} else {
-		bcopy(xs->cmd, &ecb->cmd.cmd, xs->cmdlen);
+		bcopy(&xs->cmd, &ecb->cmd.cmd, xs->cmdlen);
 		ecb->clen = xs->cmdlen;
 		ecb->daddr = xs->data;
 		ecb->dleft = xs->datalen;
@@ -1000,7 +994,7 @@ ncr53c9x_sched(sc)
 			if (lun < NCR_NLUN)
 				ti->lun[lun] = li;
 		}
-		li->last_used = time_second;
+		li->last_used = getuptime();
 		if (!tag) {
 			/* Try to issue this as an un-tagged command */
 			if (!li->untagged)
@@ -1198,11 +1192,11 @@ ncr53c9x_dequeue(sc, ecb)
 	struct ncr53c9x_softc *sc;
 	struct ncr53c9x_ecb *ecb;
 {
-	struct ncr53c9x_tinfo *ti = 
+	struct ncr53c9x_tinfo *ti =
 	    &sc->sc_tinfo[ecb->xs->sc_link->target];
 	struct ncr53c9x_linfo *li;
 	int64_t lun = ecb->xs->sc_link->lun;
-       
+
 	li = TINFO_LUN(ti, lun);
 #ifdef DIAGNOSTIC
 	if ((!li) || (li->lun != lun))
@@ -1570,7 +1564,7 @@ gotit:
 				 */
 				printf("%s: tagged queuing rejected: target %d\n",
 				    sc->sc_dev.dv_xname, ecb->xs->sc_link->target);
-				
+
 				NCR_MSGS(("(rejected sent tag)"));
 				NCRCMD(sc, NCRCMD_FLUSH);
 				DELAY(1);
@@ -1835,7 +1829,7 @@ ncr53c9x_msgout(sc)
 			    sc->sc_dev.dv_xname, __LINE__);
 		}
 	}
-			
+
 	if (sc->sc_omlen == 0) {
 		/* Pick up highest priority message */
 		sc->sc_msgout = sc->sc_msgpriq & -sc->sc_msgpriq;
@@ -1938,7 +1932,7 @@ ncr53c9x_msgout(sc)
 	}
 #endif
 	if (sc->sc_rev == NCR_VARIANT_FAS366) {
-		/*      
+		/*
 		 * XXX fifo size
 		 */
 		ncr53c9x_flushfifo(sc);
@@ -1995,12 +1989,12 @@ again:
 	 * valid condition, and we let the code check is the
 	 * "NCR_BUSFREE_OK" flag was set before declaring it
 	 * and error.
-	 * 
+	 *
 	 * Also, the status register tells us about "Gross
 	 * Errors" and "Parity errors". Only the Gross Error
-	 * is really bad, and the parity errors are dealt   
+	 * is really bad, and the parity errors are dealt
 	 * with later
-	 * 
+	 *
 	 * TODO
 	 *      If there are too many parity error, go to slow
 	 *      cable mode ?
@@ -2196,7 +2190,7 @@ again:
 
 			/* it may be OK to disconnect */
 			if ((sc->sc_flags & NCR_ABORTING) == 0) {
-				/*  
+				/*
 				 * Section 5.1.1 of the SCSI 2 spec
 				 * suggests issuing a REQUEST SENSE
 				 * following an unexpected disconnect.
@@ -2204,7 +2198,7 @@ again:
 				 * allegiance condition when
 				 * disconnecting, and this is necessary
 				 * to clean up their state.
-				 */     
+				 */
 				printf("%s: unexpected disconnect; ",
 				    sc->sc_dev.dv_xname);
 				if (ecb->flags & ECB_SENSE) {
@@ -2771,7 +2765,7 @@ ncr53c9x_timeout(arg)
 	struct ncr53c9x_ecb *ecb = arg;
 	struct scsi_xfer *xs = ecb->xs;
 	struct scsi_link *sc_link = xs->sc_link;
-	struct ncr53c9x_softc *sc = sc_link->adapter_softc;
+	struct ncr53c9x_softc *sc = sc_link->bus->sb_adapter_softc;
 	struct ncr53c9x_tinfo *ti = &sc->sc_tinfo[sc_link->target];
 	int s;
 

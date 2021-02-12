@@ -1,4 +1,4 @@
-/*	$OpenBSD: tftpd.c,v 1.44 2020/01/09 22:29:27 dlg Exp $	*/
+/*	$OpenBSD: tftpd.c,v 1.46 2021/01/17 13:38:30 claudio Exp $	*/
 
 /*
  * Copyright (c) 2012 David Gwynne <dlg@uq.edu.au>
@@ -729,11 +729,9 @@ tftpd_recv(int fd, short events, void *arg)
 			ipi = (struct in6_pktinfo *)CMSG_DATA(cmsg);
 			memcpy(&((struct sockaddr_in6 *)&s_in)->sin6_addr,
 			    &ipi->ipi6_addr, sizeof(struct in6_addr));
-#ifdef __KAME__
 			if (IN6_IS_ADDR_LINKLOCAL(&ipi->ipi6_addr))
 				((struct sockaddr_in6 *)&s_in)->sin6_scope_id =
 				    ipi->ipi6_ifindex;
-#endif
 			break;
 		}
 	}
@@ -1459,6 +1457,7 @@ nak(struct tftp_client *client, int error)
 	struct tftphdr	*tp;
 	struct errmsg	*pe;
 	size_t		 length;
+	ssize_t		 rslt;
 
 	tp = (struct tftphdr *)client->buf;
 	tp->th_opcode = htons((u_short)ERROR);
@@ -1477,8 +1476,14 @@ nak(struct tftp_client *client, int error)
 	if (length > client->packet_size)
 		length = client->packet_size;
 
-	if (send(client->sock, client->buf, length, 0) != length)
-		lwarn("nak");
+	linfo("%s: nak: %s", getip(&client->ss), tp->th_msg);
+
+	rslt = send(client->sock, client->buf, length, 0);
+	if (rslt == -1)
+		lwarn("%s: nak", getip(&client->ss));
+	else if ((size_t)rslt != length)
+		lwarnx("%s: nak: sent %zd of %zu bytes", getip(&client->ss),
+		    rslt, length);
 
 	client_free(client);
 }

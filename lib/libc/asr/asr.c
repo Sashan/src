@@ -1,4 +1,4 @@
-/*	$OpenBSD: asr.c,v 1.62 2019/10/24 05:57:41 otto Exp $	*/
+/*	$OpenBSD: asr.c,v 1.65 2021/01/06 19:54:17 otto Exp $	*/
 /*
  * Copyright (c) 2010-2012 Eric Faurot <eric@openbsd.org>
  *
@@ -117,7 +117,7 @@ _asr_resolver_done(void *arg)
 		_asr_ctx_unref(ac);
 		return;
 	} else {
-		priv = _THREAD_PRIVATE(_asr, _asr, &_asr);
+		priv = _THREAD_PRIVATE_DT(_asr, _asr, NULL, &_asr);
 		if (*priv == NULL)
 			return;
 		asr = *priv;
@@ -126,6 +126,23 @@ _asr_resolver_done(void *arg)
 
 	_asr_ctx_unref(asr->a_ctx);
 	free(asr);
+}
+
+static void
+_asr_resolver_done_tp(void *arg)
+{
+	char buf[100];
+	int len;
+	struct asr **priv = arg;
+	struct asr *asr;
+
+	if (*priv == NULL)
+		return;
+	asr = *priv;
+
+	_asr_ctx_unref(asr->a_ctx);
+	free(asr);
+	free(priv);
 }
 
 void *
@@ -171,6 +188,8 @@ asr_run(struct asr_query *as, struct asr_result *ar)
 {
 	int	r, saved_errno = errno;
 
+	memset(ar, 0, sizeof(*ar));
+
 	DPRINT("asr: asr_run(%p, %p) %s ctx=[%p]\n", as, ar,
 	    _asr_querystr(as->as_type), as->as_ctx);
 	r = as->as_run(as, ar);
@@ -196,11 +215,11 @@ poll_intrsafe(struct pollfd *fds, nfds_t nfds, int timeout)
 	struct timespec pollstart, pollend, elapsed;
 	int r;
 
-	if (clock_gettime(CLOCK_MONOTONIC, &pollstart))
+	if (WRAP(clock_gettime)(CLOCK_MONOTONIC, &pollstart))
 		return -1;
 
 	while ((r = poll(fds, 1, timeout)) == -1 && errno == EINTR) {
-		if (clock_gettime(CLOCK_MONOTONIC, &pollend))
+		if (WRAP(clock_gettime)(CLOCK_MONOTONIC, &pollend))
 			return -1;
 		timespecsub(&pollend, &pollstart, &elapsed);
 		timeout -= elapsed.tv_sec * 1000 + elapsed.tv_nsec / 1000000;
@@ -347,7 +366,8 @@ _asr_use_resolver(void *arg)
 	}
 	else {
 		DPRINT("using thread-local resolver\n");
-		priv = _THREAD_PRIVATE(_asr, _asr, &_asr);
+		priv = _THREAD_PRIVATE_DT(_asr, _asr, _asr_resolver_done_tp,
+		    &_asr);
 		if (*priv == NULL) {
 			DPRINT("setting up thread-local resolver\n");
 			*priv = _asr_resolver();
@@ -418,7 +438,7 @@ asr_check_reload(struct asr *asr)
 		asr->a_rtime = 0;
 	}
 
-	if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1)
+	if (WRAP(clock_gettime)(CLOCK_MONOTONIC, &ts) == -1)
 		return;
 
 	if ((ts.tv_sec - asr->a_rtime) < RELOAD_DELAY && asr->a_rtime != 0)

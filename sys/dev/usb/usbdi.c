@@ -1,4 +1,4 @@
-/*	$OpenBSD: usbdi.c,v 1.104 2020/03/21 12:08:31 patrick Exp $ */
+/*	$OpenBSD: usbdi.c,v 1.110 2021/02/03 11:34:24 mglocker Exp $ */
 /*	$NetBSD: usbdi.c,v 1.103 2002/09/27 15:37:38 provos Exp $	*/
 /*	$FreeBSD: src/sys/dev/usb/usbdi.c,v 1.28 1999/11/17 22:33:49 n_hibma Exp $	*/
 
@@ -98,15 +98,15 @@ usbd_get_devcnt(struct usbd_device *dev)
 }
 
 void
-usbd_claim_iface(struct usbd_device *dev, int ifaceidx)
+usbd_claim_iface(struct usbd_device *dev, int ifaceno)
 {
-	dev->ifaces[ifaceidx].claimed = 1;
+	dev->ifaces[ifaceno].claimed = 1;
 }
 
 int
-usbd_iface_claimed(struct usbd_device *dev, int ifaceidx)
+usbd_iface_claimed(struct usbd_device *dev, int ifaceno)
 {
-	return (dev->ifaces[ifaceidx].claimed);
+	return (dev->ifaces[ifaceno].claimed);
 }
 
 #ifdef USB_DEBUG
@@ -311,15 +311,9 @@ usbd_transfer(struct usbd_xfer *xfer)
 		xfer->rqflags |= URQ_AUTO_DMABUF;
 	}
 
-	if (!usbd_xfer_isread(xfer)) {
-		if ((xfer->flags & USBD_NO_COPY) == 0)
-			memcpy(KERNADDR(&xfer->dmabuf, 0), xfer->buffer,
-			    xfer->length);
-		usb_syncmem(&xfer->dmabuf, 0, xfer->length,
-		    BUS_DMASYNC_PREWRITE);
-	} else
-		usb_syncmem(&xfer->dmabuf, 0, xfer->length,
-		    BUS_DMASYNC_PREREAD);
+	if (!usbd_xfer_isread(xfer) && (xfer->flags & USBD_NO_COPY) == 0)
+		memcpy(KERNADDR(&xfer->dmabuf, 0), xfer->buffer,
+		    xfer->length);
 
 	usb_tap(bus, xfer, USBTAP_DIR_OUT);
 
@@ -644,17 +638,32 @@ usbd_status
 usbd_device2interface_handle(struct usbd_device *dev, u_int8_t ifaceno,
     struct usbd_interface **iface)
 {
+	u_int8_t idx;
+
 	if (dev->cdesc == NULL)
 		return (USBD_NOT_CONFIGURED);
-	if (ifaceno >= dev->cdesc->bNumInterface)
-		return (USBD_INVAL);
-	*iface = &dev->ifaces[ifaceno];
-	return (USBD_NORMAL_COMPLETION);
+	if (ifaceno < dev->cdesc->bNumInterfaces) {
+		*iface = &dev->ifaces[ifaceno];
+		return (USBD_NORMAL_COMPLETION);
+	}
+	/*
+	 * The correct interface should be at dev->ifaces[ifaceno], but we've
+	 * seen non-compliant devices in the wild which present non-contiguous
+	 * interface numbers and this skews the indices. For this reason we
+	 * linearly search the interface array.
+	 */
+	for (idx = 0; idx < dev->cdesc->bNumInterfaces; idx++) {
+		if (dev->ifaces[idx].idesc->bInterfaceNumber == ifaceno) {
+			*iface = &dev->ifaces[idx];
+			return (USBD_NORMAL_COMPLETION);
+		}
+	}
+	return (USBD_INVAL);
 }
 
 /* XXXX use altno */
 usbd_status
-usbd_set_interface(struct usbd_interface *iface, int altidx)
+usbd_set_interface(struct usbd_interface *iface, int altno)
 {
 	usb_device_request_t req;
 	usbd_status err;
@@ -666,7 +675,7 @@ usbd_set_interface(struct usbd_interface *iface, int altidx)
 
 	endpoints = iface->endpoints;
 	nendpt = iface->nendpt;
-	err = usbd_fill_iface_data(iface->device, iface->index, altidx);
+	err = usbd_fill_iface_data(iface->device, iface->index, altno);
 	if (err)
 		return (err);
 
@@ -749,17 +758,10 @@ usb_transfer_complete(struct usbd_xfer *xfer)
 	}
 #endif
 
-	if (xfer->actlen != 0) {
-		if (usbd_xfer_isread(xfer)) {
-			usb_syncmem(&xfer->dmabuf, 0, xfer->actlen,
-			    BUS_DMASYNC_POSTREAD);
-			if (!(xfer->flags & USBD_NO_COPY))
-				memcpy(xfer->buffer, KERNADDR(&xfer->dmabuf, 0),
-				    xfer->actlen);
-		} else
-			usb_syncmem(&xfer->dmabuf, 0, xfer->actlen,
-			    BUS_DMASYNC_POSTWRITE);
-	}
+	if (usbd_xfer_isread(xfer) && xfer->actlen != 0 &&
+	    (xfer->flags & USBD_NO_COPY) == 0)
+		memcpy(xfer->buffer, KERNADDR(&xfer->dmabuf, 0),
+		    xfer->actlen);
 
 	/* if we allocated the buffer in usbd_transfer() we free it here. */
 	if (xfer->rqflags & URQ_AUTO_DMABUF) {

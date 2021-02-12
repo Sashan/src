@@ -1,4 +1,4 @@
-.\"	$OpenBSD: ifconfig.8,v 1.344 2020/02/24 10:05:34 stsp Exp $
+.\"	$OpenBSD: ifconfig.8,v 1.361 2021/02/01 16:39:50 sthen Exp $
 .\"	$NetBSD: ifconfig.8,v 1.11 1996/01/04 21:27:29 pk Exp $
 .\"     $FreeBSD: ifconfig.8,v 1.16 1998/02/01 07:03:29 steve Exp $
 .\"
@@ -31,7 +31,7 @@
 .\"
 .\"     @(#)ifconfig.8	8.4 (Berkeley) 6/1/94
 .\"
-.Dd $Mdocdate: February 24 2020 $
+.Dd $Mdocdate: February 1 2021 $
 .Dt IFCONFIG 8
 .Os
 .Sh NAME
@@ -181,6 +181,7 @@ The default broadcast address is the address with a host part of all 1's.
 Create the specified network pseudo-device.
 At least the following devices can be created on demand:
 .Pp
+.Xr aggr 4 ,
 .Xr bridge 4 ,
 .Xr carp 4 ,
 .Xr egre 4 ,
@@ -203,11 +204,13 @@ At least the following devices can be created on demand:
 .Xr svlan 4 ,
 .Xr switch 4 ,
 .Xr tap 4 ,
+.Xr tpmr 4 ,
 .Xr trunk 4 ,
 .Xr tun 4 ,
 .Xr vether 4 ,
 .Xr vlan 4 ,
-.Xr vxlan 4
+.Xr vxlan 4 ,
+.Xr wg 4
 .It Cm debug
 Enable driver-dependent debugging code; usually, this turns on
 extra console error logging.
@@ -235,8 +238,8 @@ transmit messages through that interface.
 If possible, the interface will be reset to disable reception as well.
 This action automatically disables routes using the interface.
 .It Cm group Ar group-name
-Assign the interface to a
-.Dq group .
+Assign the interface to a group.
+The
 .Ar group-name
 may not be longer than 15 characters and must not end with a digit.
 Any interface can be in multiple groups.
@@ -251,36 +254,35 @@ Some interfaces belong to specific groups by default:
 .Bl -dash -width Ds -compact
 .It
 All interfaces are members of the
-.Em all
+.Dq all
 interface group.
 .It
 Cloned interfaces are members of their interface family group.
 For example, a PPP interface such as
-.Em ppp0
+.Dq ppp0
 is a member of the
-.Em ppp
+.Dq ppp
 interface family group.
 .It
 .Xr pppx 4
 interfaces are members of the
-.Em pppx
+.Dq pppx
 interface group.
 .It
-The interface(s) the default route(s) point to are members of the
-.Em egress
+The interfaces the default routes point to are members of the
+.Dq egress
 interface group.
 .It
 IEEE 802.11 wireless interfaces are members of the
-.Em wlan
+.Dq wlan
 interface group.
 .It
 Any interfaces used for network booting are members of the
-.Em netboot
+.Dq netboot
 interface group.
 .El
 .It Cm -group Ar group-name
-Remove the interface from the given
-.Dq group .
+Remove the interface from the given group.
 .It Cm hwfeatures
 Display the interface hardware features:
 .Pp
@@ -453,7 +455,10 @@ Set the interface routing priority to
 .Ar n
 is in the range of 0 to 15 with smaller numbers being better.
 The default priority of an interface is 0,
-except for IEEE 802.11 wireless interfaces (priority 4) and
+except for IEEE 802.11 wireless interfaces (priority 4),
+.Xr umb 4
+interfaces (priority 6),
+and
 .Xr carp 4
 interfaces (priority 15).
 The default priority of newly connected routes (routes created by
@@ -631,7 +636,7 @@ command for setting the protocol version.
 Set the transmit hold count, which is the number of spanning tree protocol
 packets transmitted before being rate limited.
 Defaults to 6, minimum of 1, maximum of 10.
-.It Cm ifcost Ar interface Ar num
+.It Cm ifcost Ar interface num
 Set the spanning tree path cost of
 .Ar interface
 to
@@ -643,7 +648,7 @@ Automatically calculate the spanning tree priority of
 .Ar interface
 based on the current link speed, interface status, and spanning tree mode.
 This is the default for interfaces added to the bridge.
-.It Cm ifpriority Ar interface Ar num
+.It Cm ifpriority Ar interface num
 Set the spanning tree priority of
 .Ar interface
 to
@@ -750,7 +755,7 @@ like a hub or a wireless network.
 .Bk -words
 .Op Cm tag Ar tagname
 .Oo
-.Cm arp | rarp Op Ar request | reply
+.Cm arp Ns | Ns Cm rarp Op Cm request | reply
 .Op Cm sha Ar lladdr
 .Op Cm spa Ar ipaddr
 .Op Cm tha Ar lladdr
@@ -778,9 +783,9 @@ packets can be matched with the
 keyword for regular packets and
 .Cm rarp
 for reverse arp.
-.Ar request
+.Cm request
 and
-.Ar reply
+.Cm reply
 limit matches to requests or replies.
 The source and target host addresses can be matched with the
 .Cm sha
@@ -1053,6 +1058,13 @@ flag will disable the direct bridging of frames between associated
 nodes when operating in Host AP mode.
 Setting this flag will block and filter direct inter-station
 communications.
+.It nomimo
+The
+.Ql nomimo
+flag will disable MIMO reception and transmission even if the driver
+and wireless network device support MIMO.
+This flag can be used to work around packet loss in 11n mode if the
+wireless network device has unused antenna connectors.
 .It stayauth
 The
 .Ql stayauth
@@ -1342,10 +1354,8 @@ will be configured upon reception of a router advertisement indicating
 that the prefix is still valid.
 Deprecated addresses will not be used for new connections as long as a
 non-deprecated address remains available.
-Temporary addresses become invalid after one week, at which time they
+Temporary addresses become invalid after another 24 hours, at which time they
 will be removed from the interface.
-Address lifetime extension through router advertisements is ignored
-for temporary addresses.
 .It Cm -autoconfprivacy
 Disable IPv6 autoconf privacy extensions on the interface.
 Currently configured addresses will not be removed until they become
@@ -1395,17 +1405,17 @@ Specify the group.
 .It Cm carpdemote Op Ar number
 Increase
 .Xr carp 4
-demote count for given interface group by
+demotion counter for given interface group by
 .Ar number .
 Acceptable values are 0 to 128.
 If
 .Ar number
 is omitted, it is increased by 1.
-Demote count can be set up to 255.
+The maximum value for a demotion counter is 255.
 .It Cm -carpdemote Op Ar number
 Decrease
 .Xr carp 4
-demote count for given interface group by
+demotion counter for given interface group by
 .Ar number .
 Acceptable values are 0 to 128.
 If
@@ -1729,7 +1739,7 @@ The default value is 10000.
 .It Cm maxgroup Ar number
 Set the maximum number of groups.
 The default value is 1000.
-.It Cm portno Ar interface Ar number
+.It Cm portno Ar interface number
 Set the port number for the port named
 .Ar interface .
 The default value is the interface index of the
@@ -1751,26 +1761,77 @@ from all protected domains.
 .It Cm up
 Start the switch processing packets.
 .El
-.Sh TRUNK
+.Sh TPMR
+.nr nS 1
+.Bk -words
+.Nm ifconfig
+.Ar tpmr-interface
+.Op Cm add Ar child-iface
+.Op Cm del Ar child-iface
+.Op Oo Fl Oc Ns Cm link0
+.Op Oo Fl Oc Ns Cm link1
+.Op Oo Fl Oc Ns Cm link2
+.Ek
+.Pp
+The following options are available for a
+.Xr tpmr 4
+interface:
+.Bl -tag -width Ds
+.It Cm add Ar child-iface
+Add
+.Ar child-iface
+as a member.
+.It Cm del Ar child-iface
+Remove the member
+.Ar child-iface .
+.It Cm link0
+Disable the filtering of Ethernet frames destined for the TPMR
+component reserved addresses, as specified by IEEE 802.1Q.
+.It Cm -link0
+Enable the filtering of Ethernet frames destined for the TPMR
+component reserved addresses, as specified by IEEE 802.1Q.
+This is the default.
+.It Cm link1
+Disable the filtering of IPv4 and IPv6 packets with
+.Xr pf 4 .
+.It Cm -link1
+Enable the filtering of IPv4 and IPv6 packets with
+.Xr pf 4 .
+Packets will appear to enter or leave the member port interfaces.
+This is the default.
+.It Cm link2
+Disable the filtering of 802.1Q VLAN and QinQ SVLAN packets.
+.It Cm -link2
+Enable the filtering of 802.1Q VLAN and QinQ SVLAN packets.
+.Xr pf 4 .
+Packets will appear to enter or leave the member port interfaces.
+This is the default.
+.El
+.Sh TRUNK (LINK AGGREGATION)
 .Nm ifconfig
 .Ar trunk-interface
+.Op Cm lacpmode Cm active Ns | Ns Cm passive
+.Op Cm lacptimeout Cm fast Ns | Ns Cm slow
 .Op Oo Fl Oc Ns Cm trunkport Ar child-iface
 .Op Cm trunkproto Ar proto
 .Pp
-The following options are available for a
+The following options are available for
+.Xr aggr 4
+and
 .Xr trunk 4
-interface:
+interfaces:
 .Bl -tag -width Ds
 .It Cm lacpmode Cm active Ns | Ns Cm passive
 Set the LACP trunk mode to either
 .Cm active
-or
+(default) or
 .Cm passive .
 .It Cm lacptimeout Cm fast Ns | Ns Cm slow
 Set the LACP timeout speed to either
 .Cm fast
 or
-.Cm slow .
+.Cm slow
+(default).
 .It Cm trunkport Ar child-iface
 Add
 .Ar child-iface
@@ -1779,7 +1840,9 @@ as a trunk port.
 Remove the trunk port
 .Ar child-iface .
 .It Cm trunkproto Ar proto
-Set the trunk protocol.
+Set the link aggregation protocol on
+.Xr trunk 4
+interfaces.
 Refer to
 .Xr trunk 4
 for a complete list of the available protocols.
@@ -1916,10 +1979,10 @@ Clear the virtual network identifier.
 .Nm ifconfig
 .Ar umb-interface
 .Op Oo Fl Oc Ns Cm apn Ar apn
-.Op Cm chgpin Ar oldpin Ar newpin
+.Op Cm chgpin Ar oldpin newpin
 .Op Oo Fl Oc Ns Cm class Ar class,class,...
 .Op Cm pin Ar pin
-.Op Cm puk Ar puk Ar newpin
+.Op Cm puk Ar puk newpin
 .Op Oo Fl Oc Ns Cm roaming
 .Ek
 .nr nS 0
@@ -1932,7 +1995,7 @@ interface:
 Set the Access Point Name (APN) required by the network provider.
 .It Cm -apn
 Clear the current APN.
-.It Cm chgpin Ar oldpin Ar newpin
+.It Cm chgpin Ar oldpin newpin
 Permanently change the PIN of the SIM card from the current value
 .Ar oldpin
 to
@@ -1957,7 +2020,7 @@ and deregister with the service provider.
 Enter the PIN required to unlock the SIM card.
 Most SIM cards will not be able to establish a network association without
 providing a PIN.
-.It Cm puk Ar puk Ar newpin
+.It Cm puk Ar puk newpin
 Sets the PIN of the SIM card to
 .Ar newpin
 using the PUK
@@ -2034,6 +2097,129 @@ Valid tag values are from 1 to 4094 inclusive.
 Clear the tag value.
 Packets on a VLAN interface without a tag set will use a value of
 0 in their headers.
+.El
+.Sh WIREGUARD
+.nr nS 1
+.Bk -words
+.Nm ifconfig
+.Ar wg-interface
+.Op Cm wgkey Ar privatekey
+.Op Cm wgport Ar port
+.Op Cm wgrtable Ar rtable
+.Oo
+.Oo Fl Oc Ns Cm wgpeer Ar publickey
+.Op Cm wgpsk Ar presharedkey
+.Op Fl wgpsk
+.Op Cm wgpka Ar persistent-keepalive
+.Op Cm wgendpoint Ar ip port
+.Op Cm wgaip Ar allowed-ip/prefix
+.Oc
+.Op Fl wgpeerall
+.Ek
+.nr nS 0
+.Pp
+The following options are available for
+.Xr wg 4
+interfaces:
+.Bl -tag -width Ds
+.It Cm wgkey Ar privatekey
+Set the local private key of the interface to
+.Ar privatekey .
+This is a random 32-byte value, encoded as base64.
+It may be generated as follows:
+.Pp
+.Dl $ openssl rand -base64 32
+.Pp
+A valid Curve25519 key is required to have 5 bits set to specific
+values.
+This is done by the interface, so it is safe to provide a random
+32-byte base64 string.
+.Pp
+Once set, the corresponding public key will be displayed
+in the interface status; it must be distributed to peers
+that this interface intends to communicate with.
+.It Cm wgport Ar port
+Set the UDP
+.Ar port
+that the tunnel operates on.
+The interface will bind to
+.Dv INADDR_ANY
+and
+.Dv IN6ADDR_ANY_INIT .
+If no port is configured, one will be chosen automatically.
+.It Cm wgrtable Ar rtable
+Use routing table
+.Ar rtable
+instead of the default table for the tunnel.
+The tunnel does not need to terminate in the same routing domain as the
+interface itself.
+.Ar rtable
+can be set to any valid routing table ID; the corresponding routing
+domain is derived from this table.
+.It Cm wgpeer Ar publickey
+Select the peer to perform the subsequent operations on.
+This creates a peer with the associated 32-byte, base64-encoded
+.Ar publickey
+if it does not yet exist.
+This option can be specified multiple times in a single command.
+.It Cm -wgpeer Ar publickey
+Remove the peer with the associated
+.Ar publickey .
+.It Cm -wgpeerall
+Remove all peers from the interface.
+.El
+.Pp
+The following options configure peers for the interface.
+Each interface can have multiple peers.
+In order to add a peer, a
+.Cm wgpeer
+option must be specified, followed by its configuration options.
+.Bl -tag -width Ds
+.It Cm wgpsk Ar presharedkey
+Set the preshared key for the peer.
+This is a random 32-byte, base64-encoded string
+that both ends must agree on.
+It offers a post-quantum resistance to the Diffie-Hellman exchange.
+If there is no preshared key, the exact same handshake is performed,
+however the preshared key is set to all zero.
+This can be generated in the same way as
+.Ar privatekey .
+.It Cm -wgpsk
+Remove the preshared key from the specified peer.
+.It Cm wgpka Ar persistent-keepalive
+Set the interval of additional keepalive packets in seconds.
+By default this functionality is disabled, equivalent to a value of 0.
+This is often used to ensure a peer will be accessible when protected by
+a firewall, as when behind a NAT address.
+A value of 25 is commonly used.
+.It Cm wgendpoint Ar ip port
+Set the IP address and port to send the encapsulated packets to.
+If the peer changes address, the local interface will update the address
+after receiving a correctly authenticated packet.
+The IP address can be either
+IPv4 or IPv6, and the port is a regular 16-bit UDP port.
+.It Cm wgaip Ar allowed-ip/prefix
+Set the allowed IPs for the peer.
+The allowed IPs indicate the IP addresses a peer is allowed to send
+from.
+That is, in order for an incoming packet from a peer to reach the host,
+the decrypted IP source address must be in the peer's
+.Ar allowed-ip
+ranges.
+.Pp
+The
+.Ar allowed-ip
+list also provides an outgoing routing table for outgoing packets.
+Overlapping ranges can be configured, with packets being
+directed to the most specific route.
+Likewise, packets can only be received for the most specific route.
+.Pp
+Both IPv4 and IPv6 addresses are supported.
+To set multiple allowed IPs, specify the
+.Cm wgaip
+option multiple times in the same
+.Nm
+invocation.
 .El
 .Sh EXAMPLES
 Assign the

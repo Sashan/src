@@ -1,4 +1,4 @@
-/* $OpenBSD: popup.c,v 1.4 2020/03/30 07:42:44 nicm Exp $ */
+/* $OpenBSD: popup.c,v 1.21 2021/02/02 13:03:03 nicm Exp $ */
 
 /*
  * Copyright (c) 2020 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -19,9 +19,11 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
+#include <paths.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "tmux.h"
 
@@ -40,6 +42,8 @@ struct popup_data {
 	struct job		 *job;
 	struct input_ctx	 *ictx;
 	int			  status;
+	popup_close_cb		  cb;
+	void			 *arg;
 
 	u_int			  px;
 	u_int			  py;
@@ -55,6 +59,52 @@ struct popup_data {
 	u_int			  lb;
 };
 
+struct popup_editor {
+	char			*path;
+	popup_finish_edit_cb	 cb;
+	void			*arg;
+};
+
+static void
+popup_redraw_cb(const struct tty_ctx *ttyctx)
+{
+	struct popup_data	*pd = ttyctx->arg;
+
+	pd->c->flags |= CLIENT_REDRAWOVERLAY;
+}
+
+static int
+popup_set_client_cb(struct tty_ctx *ttyctx, struct client *c)
+{
+	struct popup_data	*pd = ttyctx->arg;
+
+	if (c != pd->c)
+		return (0);
+	if (pd->c->flags & CLIENT_REDRAWOVERLAY)
+		return (0);
+
+	ttyctx->bigger = 0;
+	ttyctx->wox = 0;
+	ttyctx->woy = 0;
+	ttyctx->wsx = c->tty.sx;
+	ttyctx->wsy = c->tty.sy;
+
+	ttyctx->xoff = ttyctx->rxoff = pd->px + 1;
+	ttyctx->yoff = ttyctx->ryoff = pd->py + 1;
+
+	return (1);
+}
+
+static void
+popup_init_ctx_cb(struct screen_write_ctx *ctx, struct tty_ctx *ttyctx)
+{
+	struct popup_data	*pd = ctx->arg;
+
+	ttyctx->redraw_cb = popup_redraw_cb;
+	ttyctx->set_client_cb = popup_set_client_cb;
+	ttyctx->arg = pd;
+}
+
 static void
 popup_write_screen(struct client *c, struct popup_data *pd)
 {
@@ -64,13 +114,13 @@ popup_write_screen(struct client *c, struct popup_data *pd)
 	struct format_tree	*ft;
 	u_int			 i, y;
 
-	ft = format_create(item->client, item, FORMAT_NONE, 0);
+	ft = format_create(c, item, FORMAT_NONE, 0);
 	if (cmd_find_valid_state(&pd->fs))
 		format_defaults(ft, c, pd->fs.s, pd->fs.wl, pd->fs.wp);
 	else
 		format_defaults(ft, c, NULL, NULL, NULL);
 
-	screen_write_start(&ctx, NULL, &pd->s);
+	screen_write_start(&ctx, &pd->s);
 	screen_write_clearscreen(&ctx, 8);
 
 	y = 0;
@@ -96,7 +146,7 @@ popup_write_screen(struct client *c, struct popup_data *pd)
 	screen_write_stop(&ctx);
 }
 
-static int
+static struct screen *
 popup_mode_cb(struct client *c, u_int *cx, u_int *cy)
 {
 	struct popup_data	*pd = c->overlay_data;
@@ -105,7 +155,7 @@ popup_mode_cb(struct client *c, u_int *cx, u_int *cy)
 		return (0);
 	*cx = pd->px + 1 + pd->s.cx;
 	*cy = pd->py + 1 + pd->s.cy;
-	return (pd->s.mode);
+	return (&pd->s);
 }
 
 static int
@@ -130,7 +180,7 @@ popup_draw_cb(struct client *c, __unused struct screen_redraw_ctx *ctx0)
 	u_int			 i, px = pd->px, py = pd->py;
 
 	screen_init(&s, pd->sx, pd->sy, 0);
-	screen_write_start(&ctx, NULL, &s);
+	screen_write_start(&ctx, &s);
 	screen_write_clearscreen(&ctx, 8);
 	screen_write_box(&ctx, pd->sx, pd->sy);
 	screen_write_cursormove(&ctx, 1, 1, 0);
@@ -138,8 +188,10 @@ popup_draw_cb(struct client *c, __unused struct screen_redraw_ctx *ctx0)
 	screen_write_stop(&ctx);
 
 	c->overlay_check = NULL;
-	for (i = 0; i < pd->sy; i++)
-		tty_draw_line(tty, NULL, &s, 0, i, pd->sx, px, py + i);
+	for (i = 0; i < pd->sy; i++){
+		tty_draw_line(tty, &s, 0, i, pd->sx, px, py + i,
+		    &grid_default_cell, NULL);
+	}
 	c->overlay_check = popup_check_cb;
 }
 
@@ -150,11 +202,14 @@ popup_free_cb(struct client *c)
 	struct cmdq_item	*item = pd->item;
 	u_int			 i;
 
+	if (pd->cb != NULL)
+		pd->cb(pd->status, pd->arg);
+
 	if (item != NULL) {
 		if (pd->ictx != NULL &&
-		    item->client != NULL &&
-		    item->client->session == NULL)
-			item->client->retval = pd->status;
+		    cmdq_get_client(item) != NULL &&
+		    cmdq_get_client(item)->session == NULL)
+			cmdq_get_client(item)->retval = pd->status;
 		cmdq_continue(item);
 	}
 	server_client_unref(pd->c);
@@ -200,14 +255,14 @@ popup_handle_drag(struct client *c, struct popup_data *pd,
 		pd->dy = m->y - pd->py;
 		server_redraw_client(c);
 	} else if (pd->dragging == SIZE) {
-		if (m->x < pd->px + 2)
+		if (m->x < pd->px + 3)
 			return;
-		if (m->y < pd->py + 2)
+		if (m->y < pd->py + 3)
 			return;
 		pd->sx = m->x - pd->px;
 		pd->sy = m->y - pd->py;
 
-		screen_resize(&pd->s, pd->sx, pd->sy, 0);
+		screen_resize(&pd->s, pd->sx - 2, pd->sy - 2, 0);
 		if (pd->ictx == NULL)
 			popup_write_screen(c, pd);
 		else if (pd->job != NULL)
@@ -222,10 +277,12 @@ popup_key_cb(struct client *c, struct key_event *event)
 	struct popup_data	*pd = c->overlay_data;
 	struct mouse_event	*m = &event->m;
 	struct cmd_find_state	*fs = &pd->fs;
-	struct cmdq_item	*new_item;
-	struct cmd_parse_result	*pr;
 	struct format_tree	*ft;
-	const char		*cmd;
+	const char		*cmd, *buf;
+	size_t			 len;
+	struct cmdq_state	*state;
+	enum cmd_parse_status	 status;
+	char			*error;
 
 	if (KEYC_IS_MOUSE(event->key)) {
 		if (pd->dragging != OFF) {
@@ -258,15 +315,21 @@ popup_key_cb(struct client *c, struct key_event *event)
 	}
 
 	if (pd->ictx != NULL && (pd->flags & POPUP_WRITEKEYS)) {
-		if (KEYC_IS_MOUSE(event->key))
-			return (0);
 		if (((pd->flags & (POPUP_CLOSEEXIT|POPUP_CLOSEEXITZERO)) == 0 ||
 		    pd->job == NULL) &&
 		    (event->key == '\033' || event->key == '\003'))
 			return (1);
 		if (pd->job == NULL)
 			return (0);
-		input_key(NULL, &pd->s, job_get_event(pd->job), event->key);
+		if (KEYC_IS_MOUSE(event->key)) {
+			/* Must be inside, checked already. */
+			if (!input_key_get_mouse(&pd->s, m, m->x - pd->px - 1,
+			    m->y - pd->py - 1, &buf, &len))
+				return (0);
+			bufferevent_write(job_get_event(pd->job), buf, len);
+			return (0);
+		}
+		input_key(&pd->s, job_get_event(pd->job), event->key);
 		return (0);
 	}
 
@@ -278,7 +341,7 @@ popup_key_cb(struct client *c, struct key_event *event)
 		format_defaults(ft, c, fs->s, fs->wl, fs->wp);
 	else
 		format_defaults(ft, c, NULL, NULL, NULL);
-	format_add(ft, "popup_key", "%s", key_string_lookup_key(event->key));
+	format_add(ft, "popup_key", "%s", key_string_lookup_key(event->key, 0));
 	if (KEYC_IS_MOUSE(event->key)) {
 		format_add(ft, "popup_mouse", "1");
 		format_add(ft, "popup_mouse_x", "%u", m->x - pd->px);
@@ -287,25 +350,19 @@ popup_key_cb(struct client *c, struct key_event *event)
 	cmd = format_expand(ft, pd->cmd);
 	format_free(ft);
 
-	pr = cmd_parse_from_string(cmd, NULL);
-	switch (pr->status) {
-	case CMD_PARSE_EMPTY:
-		break;
-	case CMD_PARSE_ERROR:
-		new_item = cmdq_get_error(pr->error);
-		free(pr->error);
-		cmdq_append(c, new_item);
-		break;
-	case CMD_PARSE_SUCCESS:
-		if (pd->item != NULL)
-			m = &pd->item->shared->mouse;
-		else
-			m = NULL;
-		new_item = cmdq_get_command(pr->cmdlist, fs, m, 0);
-		cmd_list_free(pr->cmdlist);
-		cmdq_append(c, new_item);
-		break;
+	if (pd->item != NULL)
+		event = cmdq_get_event(pd->item);
+	else
+		event = NULL;
+	state = cmdq_new_state(&pd->fs, event, 0);
+
+	status = cmd_parse_and_append(cmd, NULL, c, state, &error);
+	if (status == CMD_PARSE_ERROR) {
+		cmdq_append(c, cmdq_get_error(error));
+		free(error);
 	}
+	cmdq_free_state(state);
+
 	return (1);
 
 out:
@@ -320,15 +377,23 @@ popup_job_update_cb(struct job *job)
 {
 	struct popup_data	*pd = job_get_data(job);
 	struct evbuffer		*evb = job_get_event(job)->input;
+	struct client		*c = pd->c;
 	struct screen		*s = &pd->s;
 	void			*data = EVBUFFER_DATA(evb);
 	size_t			 size = EVBUFFER_LENGTH(evb);
 
-	if (size != 0) {
-		input_parse_screen(pd->ictx, s, data, size);
-		evbuffer_drain(evb, size);
-		pd->c->flags |= CLIENT_REDRAWOVERLAY;
-	}
+	if (size == 0)
+		return;
+
+	c->overlay_check = NULL;
+	c->tty.flags &= ~TTY_FREEZE;
+
+	input_parse_screen(pd->ictx, s, popup_init_ctx_cb, pd, data, size);
+
+	c->tty.flags |= TTY_FREEZE;
+	c->overlay_check = popup_check_cb;
+
+	evbuffer_drain(evb, size);
 }
 
 static void
@@ -375,7 +440,7 @@ popup_width(struct cmdq_item *item, u_int nlines, const char **lines,
 	struct format_tree	*ft;
 	u_int			 i, width = 0, tmpwidth;
 
-	ft = format_create(item->client, item, FORMAT_NONE, 0);
+	ft = format_create(cmdq_get_client(item), item, FORMAT_NONE, 0);
 	if (fs != NULL && cmd_find_valid_state(fs))
 		format_defaults(ft, c, fs->s, fs->wl, fs->wp);
 	else
@@ -401,7 +466,7 @@ int
 popup_display(int flags, struct cmdq_item *item, u_int px, u_int py, u_int sx,
     u_int sy, u_int nlines, const char **lines, const char *shellcmd,
     const char *cmd, const char *cwd, struct client *c,
-    struct cmd_find_state *fs)
+    struct cmd_find_state *fs, popup_close_cb cb, void *arg)
 {
 	struct popup_data	*pd;
 	u_int			 i;
@@ -420,6 +485,8 @@ popup_display(int flags, struct cmdq_item *item, u_int px, u_int py, u_int sx,
 	pd->c = c;
 	pd->c->references++;
 
+	pd->cb = cb;
+	pd->arg = arg;
 	pd->status = 128 + SIGHUP;
 
 	if (fs != NULL)
@@ -443,8 +510,6 @@ popup_display(int flags, struct cmdq_item *item, u_int px, u_int py, u_int sx,
 	popup_write_screen(c, pd);
 
 	if (shellcmd != NULL) {
-		pd->ictx = input_init(NULL);
-
 		if (fs != NULL)
 			s = fs->s;
 		else
@@ -455,9 +520,100 @@ popup_display(int flags, struct cmdq_item *item, u_int px, u_int py, u_int sx,
 		pd->job = job_run(shellcmd, s, cwd, popup_job_update_cb,
 		    popup_job_complete_cb, NULL, pd, jobflags, pd->sx - 2,
 		    pd->sy - 2);
+		pd->ictx = input_init(NULL, job_get_event(pd->job));
 	}
 
 	server_client_set_overlay(c, 0, popup_check_cb, popup_mode_cb,
 	    popup_draw_cb, popup_key_cb, popup_free_cb, pd);
+	return (0);
+}
+
+static void
+popup_editor_free(struct popup_editor *pe)
+{
+	unlink(pe->path);
+	free(pe->path);
+	free(pe);
+}
+
+static void
+popup_editor_close_cb(int status, void *arg)
+{
+	struct popup_editor	*pe = arg;
+	FILE			*f;
+	char			*buf = NULL;
+	off_t			 len = 0;
+
+	if (status != 0) {
+		pe->cb(NULL, 0, pe->arg);
+		popup_editor_free(pe);
+		return;
+	}
+
+	f = fopen(pe->path, "r");
+	if (f != NULL) {
+		fseeko(f, 0, SEEK_END);
+		len = ftello(f);
+		fseeko(f, 0, SEEK_SET);
+
+		if (len == 0 ||
+		    (uintmax_t)len > (uintmax_t)SIZE_MAX ||
+		    (buf = malloc(len)) == NULL ||
+		    fread(buf, len, 1, f) != 1) {
+			free(buf);
+			buf = NULL;
+			len = 0;
+		}
+		fclose(f);
+	}
+	pe->cb(buf, len, pe->arg); /* callback now owns buffer */
+	popup_editor_free(pe);
+}
+
+int
+popup_editor(struct client *c, const char *buf, size_t len,
+    popup_finish_edit_cb cb, void *arg)
+{
+	struct popup_editor	*pe;
+	int			 fd;
+	FILE			*f;
+	char			*cmd;
+	char			 path[] = _PATH_TMP "tmux.XXXXXXXX";
+	const char		*editor;
+	u_int			 px, py, sx, sy;
+
+	editor = options_get_string(global_options, "editor");
+	if (*editor == '\0')
+		return (-1);
+
+	fd = mkstemp(path);
+	if (fd == -1)
+		return (-1);
+	f = fdopen(fd, "w");
+	if (fwrite(buf, len, 1, f) != 1) {
+		fclose(f);
+		return (-1);
+	}
+	fclose(f);
+
+	pe = xcalloc(1, sizeof *pe);
+	pe->path = xstrdup(path);
+	pe->cb = cb;
+	pe->arg = arg;
+
+	sx = c->tty.sx * 9 / 10;
+	sy = c->tty.sy * 9 / 10;
+	px = (c->tty.sx / 2) - (sx / 2);
+	py = (c->tty.sy / 2) - (sy / 2);
+
+	xasprintf(&cmd, "%s %s", editor, path);
+	if (popup_display(POPUP_WRITEKEYS|POPUP_CLOSEEXIT, NULL, px, py, sx, sy,
+	    0, NULL, cmd, NULL, _PATH_TMP, c, NULL, popup_editor_close_cb,
+	    pe) != 0) {
+		popup_editor_free(pe);
+		free(cmd);
+		return (-1);
+	}
+	free(cmd);
 	return (0);
 }

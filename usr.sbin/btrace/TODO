@@ -7,9 +7,9 @@ Missing language features:
 - if/else
 - scratch variable ($name)
 - `args', tracepoint arguments support (requires kernel work)
-- str()
-- @ = hist(x)
-- @ = lhist(x, min, max, step)
+- str(args->buf, args->count)
+- 'argv'
+- $1 support
 
 Improvements:
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.h,v 1.145 2020/02/12 10:33:56 claudio Exp $ */
+/*	$OpenBSD: session.h,v 1.149 2020/12/23 13:20:48 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -59,6 +59,7 @@ enum session_events {
 	EVNT_TIMER_CONNRETRY,
 	EVNT_TIMER_HOLDTIME,
 	EVNT_TIMER_KEEPALIVE,
+	EVNT_TIMER_SENDHOLD,
 	EVNT_RCVD_OPEN,
 	EVNT_RCVD_KEEPALIVE,
 	EVNT_RCVD_UPDATE,
@@ -146,8 +147,6 @@ struct ctl_conn {
 	int			terminate;
 };
 
-TAILQ_HEAD(ctl_conns, ctl_conn)	ctl_conns;
-
 struct peer_stats {
 	unsigned long long	 msg_rcvd_open;
 	unsigned long long	 msg_rcvd_update;
@@ -174,7 +173,7 @@ struct peer_stats {
 	u_int8_t		 last_sent_suberr;
 	u_int8_t		 last_rcvd_errcode;
 	u_int8_t		 last_rcvd_suberr;
-	char			 last_shutcomm[SHUT_COMM_LEN];
+	char			 last_reason[REASON_LEN];
 };
 
 enum Timer {
@@ -182,6 +181,7 @@ enum Timer {
 	Timer_ConnectRetry,
 	Timer_Keepalive,
 	Timer_Hold,
+	Timer_SendHold,
 	Timer_IdleHold,
 	Timer_IdleHoldReset,
 	Timer_CarpUndemote,
@@ -189,13 +189,13 @@ enum Timer {
 	Timer_Max
 };
 
-struct peer_timer {
-	TAILQ_ENTRY(peer_timer)	entry;
+struct timer {
+	TAILQ_ENTRY(timer)	entry;
 	enum Timer		type;
 	time_t			val;
 };
 
-TAILQ_HEAD(peer_timer_head, peer_timer);
+TAILQ_HEAD(timer_head, timer);
 
 struct peer {
 	struct peer_config	 conf;
@@ -216,7 +216,7 @@ struct peer {
 	struct bgpd_addr	 local;
 	struct bgpd_addr	 local_alt;
 	struct bgpd_addr	 remote;
-	struct peer_timer_head	 timers;
+	struct timer_head	 timers;
 	struct msgbuf		 wbuf;
 	struct ibuf_read	*rbuf;
 	struct peer		*template;
@@ -260,8 +260,9 @@ int	 prepare_listeners(struct bgpd_config *);
 int	control_check(char *);
 int	control_init(int, char *);
 int	control_listen(int);
+size_t	control_fill_pfds(struct pollfd *, size_t);
 void	control_shutdown(int);
-int	control_dispatch_msg(struct pollfd *, u_int *, struct peer_head *);
+int	control_dispatch_msg(struct pollfd *, struct peer_head *);
 unsigned int	control_accept(int, int);
 
 /* log.c */
@@ -315,11 +316,11 @@ int		 imsg_ctl_rde(int, pid_t, void *, u_int16_t);
 void		 session_stop(struct peer *, u_int8_t);
 
 /* timer.c */
-struct peer_timer	*timer_get(struct peer *, enum Timer);
-struct peer_timer	*timer_nextisdue(struct peer *, time_t);
-time_t			 timer_nextduein(struct peer *, time_t);
-int			 timer_running(struct peer *, enum Timer, time_t *);
-void			 timer_set(struct peer *, enum Timer, u_int);
-void			 timer_stop(struct peer *, enum Timer);
-void			 timer_remove(struct peer *, enum Timer);
-void			 timer_remove_all(struct peer *);
+struct timer	*timer_get(struct timer_head *, enum Timer);
+struct timer	*timer_nextisdue(struct timer_head *, time_t);
+time_t		 timer_nextduein(struct timer_head *, time_t);
+int		 timer_running(struct timer_head *, enum Timer, time_t *);
+void		 timer_set(struct timer_head *, enum Timer, u_int);
+void		 timer_stop(struct timer_head *, enum Timer);
+void		 timer_remove(struct timer_head *, enum Timer);
+void		 timer_remove_all(struct timer_head *);

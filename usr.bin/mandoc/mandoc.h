@@ -1,7 +1,7 @@
-/*	$OpenBSD: mandoc.h,v 1.208 2020/01/19 17:59:01 schwarze Exp $ */
+/* $OpenBSD: mandoc.h,v 1.211 2020/09/01 18:24:09 schwarze Exp $ */
 /*
- * Copyright (c) 2010, 2011, 2014 Kristaps Dzonsons <kristaps@bsd.lv>
  * Copyright (c) 2012-2020 Ingo Schwarze <schwarze@openbsd.org>
+ * Copyright (c) 2010, 2011, 2014 Kristaps Dzonsons <kristaps@bsd.lv>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -16,6 +16,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
  * Error handling, escape sequence, and character utilities.
+ * Can be used by all code in the mandoc package.
  */
 
 #define ASCII_NBRSP	 31  /* non-breaking space */
@@ -83,6 +84,7 @@ enum	mandocerr {
 	MANDOCERR_TH_NOTITLE, /* missing manual title, using "": [macro] */
 	MANDOCERR_MSEC_MISSING, /* missing manual section, using "": macro */
 	MANDOCERR_MSEC_BAD, /* unknown manual section: Dt ... section */
+	MANDOCERR_MSEC_FILE, /* filename/section mismatch: ... */
 	MANDOCERR_DATE_MISSING, /* missing date, using "": [macro] */
 	MANDOCERR_DATE_BAD, /* cannot parse date, using it verbatim: date */
 	MANDOCERR_DATE_FUTURE, /* date in the future, using it anyway: date */
@@ -187,6 +189,7 @@ enum	mandocerr {
 	MANDOCERR_TBLLAYOUT_NONE, /* empty tbl layout */
 	MANDOCERR_TBLLAYOUT_CHAR, /* invalid character in tbl layout: char */
 	MANDOCERR_TBLLAYOUT_PAR, /* unmatched parenthesis in tbl layout */
+	MANDOCERR_TBLLAYOUT_SPC, /* ignoring excessive spacing in tbl layout */
 	MANDOCERR_TBLDATA_NONE, /* tbl without any data cells */
 	MANDOCERR_TBLDATA_SPAN, /* ignoring data in spanned tbl cell: data */
 	MANDOCERR_TBLDATA_EXTRA, /* ignoring extra tbl data cells: data */
@@ -299,7 +302,7 @@ enum	mandoc_esc {
 };
 
 
-enum mandoc_esc	  mandoc_font(const char *, int sz);
+enum mandoc_esc	  mandoc_font(const char *, int);
 enum mandoc_esc	  mandoc_escape(const char **, const char **, int *);
 void		  mandoc_msg_setoutfile(FILE *);
 const char	 *mandoc_msg_getinfilename(void);

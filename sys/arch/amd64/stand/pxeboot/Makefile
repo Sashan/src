@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.38 2020/03/05 16:36:30 otto Exp $
+#	$OpenBSD: Makefile,v 1.40 2020/08/02 15:38:52 deraadt Exp $
 
 MAN=	pxeboot.8
 
@@ -18,7 +18,7 @@ BINMODE=644
 .PATH:	${SADIR}/libsa
 # i386 stuff (so, it will possibly load in the same 64k)
 SRCS+=	machdep.c exec_i386.c cmd_i386.c run_amd64.S
-SRCS+=	gidt.S random_i386.S biosdev.c bioscons.c gateA20.c \
+SRCS+=	gidt.S mdrandom.c biosdev.c bioscons.c gateA20.c \
 	memprobe.c diskprobe.c time.c ## biosprobe.c
 SRCS+=	pxe.c pxe_call.S pxe_net.c pxe_udp.c
 SRCS+=	softraid_amd64.c
@@ -43,7 +43,8 @@ SRCS+=	bootp.c bootparam.c
 SRCS+=	ufs.c ufs2.c nfs.c tftp.c
 
 .PATH:	${S}/lib/libkern/arch/amd64 ${S}/lib/libkern
-SRCS+=	divdi3.c moddi3.c qdivrem.c udivdi3.c umoddi3.c
+SRCS+=	ashldi3.c ashrdi3.c divdi3.c lshrdi3.c moddi3.c qdivrem.c
+SRCS+=	udivdi3.c umoddi3.c
 
 .PATH:	${S}/lib/libz
 SRCS+=	adler32.c crc32.c inflate.c inftrees.c

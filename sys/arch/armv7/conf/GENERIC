@@ -1,4 +1,4 @@
-#	$OpenBSD: GENERIC,v 1.127 2019/12/17 13:08:55 reyk Exp $
+#	$OpenBSD: GENERIC,v 1.134 2021/02/04 16:25:39 anton Exp $
 #
 # For further information on compiling OpenBSD kernels, see the config(8)
 # man page.
@@ -17,9 +17,9 @@ makeoptions	KERNEL_BASE_VIRT="0xc0300000"
 maxusers	32			# estimated number of users
 option		CPU_ARMv7		# Support the ARMv7
 
-#option WSDISPLAY_COMPAT_USL		# VT handling
+option WSDISPLAY_COMPAT_USL		# VT handling
 option WSDISPLAY_COMPAT_RAWKBD		# can get raw scancodes
-option WSDISPLAY_DEFAULTSCREENS=1
+option WSDISPLAY_DEFAULTSCREENS=6	# initial number of text consoles
 
 option		CONF_HAVE_GPIO
 option		PCIVERBOSE
@@ -70,7 +70,9 @@ omap0		at mainbus?
 omapid*		at omap?
 
 # OMAP on-chip devices
-intc*		at fdt?			# OMAP3 interrupt controller
+intc*		at fdt? early 1		# OMAP3 interrupt controller
+omclock*	at fdt? early 1
+omcm*		at fdt? early 1
 omwugen*	at fdt?			# Wake-up generator
 #edma*		at fdt?			# OMAP3 dma controller
 prcm*		at omap?		# power/clock controller
@@ -78,6 +80,9 @@ pinctrl*	at fdt?			# pin muxing
 omdog*		at fdt?			# watchdog timer
 omgpio*		at fdt?			# user-visible GPIO pins?
 gpio*		at omgpio?
+omrng*		at fdt?
+omsysc*		at fdt? early 1
+omsysc*		at fdt?
 tiiic*		at fdt?
 iic*		at tiiic?
 gptimer*	at omap?		# general purpose timers
@@ -162,8 +167,20 @@ exrtc*		at fdt?
 exuart*		at fdt?
 
 # Raspberry Pi 2/3
-bcmintc*	at fdt?
+bcmaux*		at fdt? early 1
+bcmbsc*		at fdt?
+iic*		at bcmbsc?
+bcmclock*	at fdt? early 1
+bcmdmac*	at fdt? early 1
 bcmdog*		at fdt?
+bcmgpio*	at fdt? early 1
+gpio*		at bcmgpio?
+bcmintc*	at fdt? early 1
+bcmmbox*	at fdt? early 1
+bcmrng*		at fdt?
+bcmsdhost*	at fdt?
+sdmmc*		at bcmsdhost?
+bcmtemp*	at fdt?
 dwctwo*		at fdt?
 usb*		at dwctwo?
 
@@ -194,11 +211,17 @@ iic*		at rkiic?
 rktemp*		at fdt?
 dwdog*		at fdt?
 
+# I2C devices
+abcrtc*		at iic?			# Abracon x80x RTC
 axppmic*	at iic?			# axp209 pmic
 crosec*		at iic?
 wskbd*		at crosec? mux 1
-pcfrtc*		at iic?
-pcxrtc*		at iic?
+dsxrtc*		at iic?			# DS3231 RTC
+islrtc*		at iic?			# ISL1208 RTC
+maxrtc*		at iic?			# DS1307 RTC
+mcprtc*		at iic?			# MCP794XX RTC
+pcfrtc*		at iic?			# PCF8523 RTC
+pcxrtc*		at iic?			# PCF8563 RTC
 rkpmic*		at iic?			# RK808 PMIC
 tpspmic*	at iic?
 pcagpio*	at iic?
@@ -298,6 +321,8 @@ uslhcom* at uhidev?		# Silicon Labs CP2110 USB HID UART
 ucom*	at uslhcom?
 uhid*	at uhidev?		# USB generic HID support
 fido*	at uhidev?		# FIDO/U2F security key support
+ujoy*	at uhidev?		# USB joystick/gamecontroller support
+uhidpp*	at uhidev?		# Logitech HID++ Devices
 upd*	at uhidev?		# USB Power Devices sensors
 aue*	at uhub?		# ADMtek AN986 Pegasus Ethernet
 atu*	at uhub?		# Atmel AT76c50x based 802.11b

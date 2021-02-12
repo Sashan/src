@@ -1,4 +1,4 @@
-/*	$OpenBSD: pass5.c,v 1.48 2015/01/20 18:22:21 deraadt Exp $	*/
+/*	$OpenBSD: pass5.c,v 1.50 2020/07/13 06:52:53 otto Exp $	*/
 /*	$NetBSD: pass5.c,v 1.16 1996/09/27 22:45:18 christos Exp $	*/
 
 /*
@@ -48,32 +48,35 @@
 
 #define MINIMUM(a, b)	(((a) < (b)) ? (a) : (b))
 
-static int info_cg;
-static int info_maxcg;
+static u_int info_cg;
+static u_int info_maxcg;
 
 static int
 pass5_info(char *buf, size_t buflen)
 {
-	return (snprintf(buf, buflen, "phase 5, cg %d/%d",
+	return (snprintf(buf, buflen, "phase 5, cg %u/%u",
 	    info_cg, info_maxcg) > 0);
 }
 
 void
 pass5(void)
 {
-	int c, blk, frags, basesize, sumsize, mapsize, savednrpos=0;
+	int blk, frags, basesize, sumsize, mapsize, savednrpos=0;
+	u_int c;
 	int inomapsize, blkmapsize;
 	struct fs *fs = &sblock;
-	struct cg *cg = &cgrp;
 	daddr_t dbase, dmax;
 	daddr_t d;
-	long i, j, k, rewritecg = 0;
+	long i, k, rewritecg = 0;
+	ino_t j;
 	struct csum *cs;
 	struct csum_total cstotal;
 	struct inodesc idesc[3];
 	char buf[MAXBSIZE];
 	struct cg *newcg = (struct cg *)buf;
 	struct ocg *ocg = (struct ocg *)buf;
+	struct cg *cg;
+	struct bufarea *cgbp;
 
 	memset(newcg, 0, (size_t)fs->fs_cgsize);
 	if (cvtlevel >= 3) {
@@ -177,9 +180,10 @@ pass5(void)
 	info_fn = pass5_info;
 	for (c = 0; c < fs->fs_ncg; c++) {
 		info_cg = c;
-		getblk(&cgblk, cgtod(fs, c), fs->fs_cgsize);
+		cgbp = cglookup(c);
+		cg = cgbp->b_un.b_cg;
 		if (!cg_chkmagic(cg))
-			pfatal("CG %d: BAD MAGIC NUMBER\n", c);
+			pfatal("CG %u: BAD MAGIC NUMBER\n", c);
 		dbase = cgbase(fs, c);
 		dmax = dbase + fs->fs_fpg;
 		if (dmax > fs->fs_size)
@@ -215,7 +219,7 @@ pass5(void)
 				newcg->cg_irotor = cg->cg_irotor;
 		} else {
 			newcg->cg_ncyl = 0;
-			if ((unsigned)cg->cg_initediblk > fs->fs_ipg)
+			if (cg->cg_initediblk > fs->fs_ipg)
 				newcg->cg_initediblk = fs->fs_ipg;
 			else
 				newcg->cg_initediblk = cg->cg_initediblk;
@@ -321,13 +325,13 @@ pass5(void)
 		}
 		if (rewritecg) {
 			memcpy(cg, newcg, (size_t)fs->fs_cgsize);
-			cgdirty();
+			dirty(cgbp);
 			continue;
 		}
 		if (memcmp(newcg, cg, basesize) &&
 		    dofix(&idesc[2], "SUMMARY INFORMATION BAD")) {
 			memcpy(cg, newcg, (size_t)basesize);
-			cgdirty();
+			dirty(cgbp);
 		}
 		if (usedsoftdep) {
 			for (i = 0; i < inomapsize; i++) {
@@ -339,8 +343,8 @@ pass5(void)
 						continue;
 					if (cg_inosused(cg)[i] & (1 << k))
 						continue;
-					pwarn("ALLOCATED INODE %lld MARKED FREE\n",
-					      ((long long)c * fs->fs_ipg + i * 8) + k);
+					pwarn("ALLOCATED INODE %llu MARKED FREE\n",
+					      ((ino_t)c * fs->fs_ipg + i * 8) + k);
 				}
 			}
 			for (i = 0; i < blkmapsize; i++) {
@@ -362,7 +366,7 @@ pass5(void)
 		    dofix(&idesc[1], "BLK(S) MISSING IN BIT MAPS")) {
 			memmove(cg_inosused(cg), cg_inosused(newcg),
 				(size_t)mapsize);
-			cgdirty();
+			dirty(cgbp);
 		}
 	}
 	info_fn = NULL;

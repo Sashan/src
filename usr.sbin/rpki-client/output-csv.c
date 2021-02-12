@@ -1,4 +1,4 @@
-/*	$OpenBSD: output-csv.c,v 1.6 2019/12/04 23:03:05 benno Exp $ */
+/*	$OpenBSD: output-csv.c,v 1.8 2020/09/12 15:46:48 claudio Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  *
@@ -16,12 +16,11 @@
  */
 
 #include <stdlib.h>
-#include <openssl/ssl.h>
 
 #include "extern.h"
 
 int
-output_csv(FILE *out, struct vrp_tree *vrps)
+output_csv(FILE *out, struct vrp_tree *vrps, struct stats *st)
 {
 	char		 buf[64];
 	struct vrp	*v;

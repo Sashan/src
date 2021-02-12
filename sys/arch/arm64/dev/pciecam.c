@@ -1,4 +1,4 @@
-/* $OpenBSD: pciecam.c,v 1.9 2019/06/02 18:40:58 kettenis Exp $ */
+/* $OpenBSD: pciecam.c,v 1.11 2020/11/19 17:42:19 kettenis Exp $ */
 /*
  * Copyright (c) 2013,2017 Patrick Wildt <patrick@blueri.se>
  *
@@ -102,9 +102,11 @@ pcireg_t pciecam_conf_read(void *, pcitag_t, int);
 void pciecam_conf_write(void *, pcitag_t, int, pcireg_t);
 int pciecam_intr_map(struct pci_attach_args *, pci_intr_handle_t *);
 const char *pciecam_intr_string(void *, pci_intr_handle_t);
-void *pciecam_intr_establish(void *, pci_intr_handle_t, int, int (*func)(void *), void *, char *);
+void *pciecam_intr_establish(void *, pci_intr_handle_t, int,
+    struct cpu_info *, int (*func)(void *), void *, char *);
 void pciecam_intr_disestablish(void *, void *);
 int pciecam_bs_map(bus_space_tag_t, bus_addr_t, bus_size_t, int, bus_space_handle_t *);
+paddr_t pciecam_bs_mmap(bus_space_tag_t, bus_addr_t, off_t, int, int);
 
 struct cfattach pciecam_ca = {
 	sizeof (struct pciecam_softc), pciecam_match, pciecam_attach
@@ -216,6 +218,7 @@ pciecam_attach(struct device *parent, struct device *self, void *aux)
 	memcpy(&sc->sc_bus, sc->sc_iot, sizeof(sc->sc_bus));
 	sc->sc_bus.bus_private = sc;
 	sc->sc_bus._space_map = pciecam_bs_map;
+	sc->sc_bus._space_mmap = pciecam_bs_mmap;
 
 	sc->sc_pc.pc_conf_v = sc;
 	sc->sc_pc.pc_attach_hook = pciecam_attach_hook;
@@ -342,7 +345,7 @@ pciecam_intr_string(void *sc, pci_intr_handle_t ih)
 
 void *
 pciecam_intr_establish(void *self, pci_intr_handle_t ih, int level,
-    int (*func)(void *), void *arg, char *name)
+    struct cpu_info *ci, int (*func)(void *), void *arg, char *name)
 {
 	struct pciecam_softc *sc = (struct pciecam_softc *)self;
 	void *cookie;
@@ -354,8 +357,8 @@ pciecam_intr_establish(void *self, pci_intr_handle_t ih, int level,
 
 		/* Assume hardware passes Requester ID as sideband data. */
 		data = pci_requester_id(ih.ih_pc, ih.ih_tag);
-		cookie = arm_intr_establish_fdt_msi(sc->sc_node, &addr,
-		    &data, level, func, arg, (void *)name);
+		cookie = fdt_intr_establish_msi_cpu(sc->sc_node, &addr,
+		    &data, level, ci, func, arg, (void *)name);
 		if (cookie == NULL)
 			return NULL;
 
@@ -376,8 +379,8 @@ pciecam_intr_establish(void *self, pci_intr_handle_t ih, int level,
 		reg[1] = reg[2] = 0;
 		reg[3] = ih.ih_intrpin;
 
-		cookie = arm_intr_establish_fdt_imap(sc->sc_node, reg,
-		    sizeof(reg), level, func, arg, name);
+		cookie = fdt_intr_establish_imap_cpu(sc->sc_node, reg,
+		    sizeof(reg), level, ci, func, arg, name);
 	}
 
 	return cookie;
@@ -411,4 +414,25 @@ pciecam_bs_map(bus_space_tag_t t, bus_addr_t bpa, bus_size_t size,
 	}
 
 	return ENXIO;
+}
+
+paddr_t
+pciecam_bs_mmap(bus_space_tag_t t, bus_addr_t bpa, off_t off,
+    int prot, int flags)
+{
+	struct pciecam_softc *sc = t->bus_private;
+	uint64_t physbase, pcibase, psize;
+	int i;
+
+	for (i = 0; i < sc->sc_pcirangeslen; i++) {
+		physbase = sc->sc_pciranges[i].phys_base;
+		pcibase = sc->sc_pciranges[i].pci_base;
+		psize = sc->sc_pciranges[i].size;
+
+		if (bpa >= pcibase && bpa < pcibase + psize)
+			return bus_space_mmap(sc->sc_iot,
+			    bpa - pcibase + physbase, off, prot, flags);
+	}
+
+	return -1;
 }

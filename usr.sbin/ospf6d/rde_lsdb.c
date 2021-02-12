@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde_lsdb.c,v 1.43 2020/02/17 08:12:22 denis Exp $ */
+/*	$OpenBSD: rde_lsdb.c,v 1.47 2020/10/04 07:24:46 denis Exp $ */
 
 /*
  * Copyright (c) 2004, 2005 Claudio Jeker <claudio@openbsd.org>
@@ -467,6 +467,7 @@ lsa_add(struct rde_nbr *nbr, struct lsa *lsa)
 	struct lsa_tree	*tree;
 	struct vertex	*new, *old;
 	struct timeval	 tv, now, res;
+	int		 update = 1;
 
 	if (LSA_IS_SCOPE_AS(ntohs(lsa->hdr.type)))
 		tree = &asext_tree;
@@ -495,16 +496,13 @@ lsa_add(struct rde_nbr *nbr, struct lsa *lsa)
 				fatal("lsa_add");
 			return (1);
 		}
-		if (!lsa_equal(new->lsa, old->lsa)) {
-			if (ntohs(lsa->hdr.type) == LSA_TYPE_LINK)
-				orig_intra_area_prefix_lsas(nbr->area);
-			if (ntohs(lsa->hdr.type) != LSA_TYPE_EXTERNAL)
-				nbr->area->dirty = 1;
-			start_spf_timer();
-		}
+		if (lsa_equal(new->lsa, old->lsa))
+			update = 0;
 		vertex_free(old);
 		RB_INSERT(lsa_tree, tree, new);
-	} else {
+	}
+
+	if (update) {
 		if (ntohs(lsa->hdr.type) == LSA_TYPE_LINK)
 			orig_intra_area_prefix_lsas(nbr->area);
 		if (ntohs(lsa->hdr.type) != LSA_TYPE_EXTERNAL)
@@ -763,9 +761,7 @@ lsa_dump(struct lsa_tree *tree, int imsg_type, pid_t pid)
 		lsa_age(v);
 		switch (imsg_type) {
 		case IMSG_CTL_SHOW_DATABASE:
-			rde_imsg_compose_ospfe(IMSG_CTL_SHOW_DATABASE, 0, pid,
-			    &v->lsa->hdr, ntohs(v->lsa->hdr.len));
-			continue;
+			break;
 		case IMSG_CTL_SHOW_DB_SELF:
 			if (v->lsa->hdr.adv_rtr == rde_router_id())
 				break;
@@ -789,6 +785,7 @@ lsa_dump(struct lsa_tree *tree, int imsg_type, pid_t pid)
 		case IMSG_CTL_SHOW_DB_INTRA:
 			if (v->type == LSA_TYPE_INTRA_A_PREFIX)
 				break;
+			continue;
 		case IMSG_CTL_SHOW_DB_SUM:
 			if (v->type == LSA_TYPE_INTER_A_PREFIX)
 				break;

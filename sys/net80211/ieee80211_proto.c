@@ -1,4 +1,4 @@
-/*	$OpenBSD: ieee80211_proto.c,v 1.96 2019/11/06 13:55:44 stsp Exp $	*/
+/*	$OpenBSD: ieee80211_proto.c,v 1.101 2020/12/09 15:50:58 stsp Exp $	*/
 /*	$NetBSD: ieee80211_proto.c,v 1.8 2004/04/30 23:58:20 dyoung Exp $	*/
 
 /*-
@@ -433,6 +433,7 @@ ieee80211_setkeys(struct ieee80211com *ic)
 {
 	struct ieee80211_key *k;
 	u_int8_t kid;
+	int rekeysta = 0;
 
 	/* Swap(GM, GN) */
 	kid = (ic->ic_def_txkey == 1) ? 2 : 1;
@@ -457,6 +458,9 @@ ieee80211_setkeys(struct ieee80211com *ic)
 	}
 
 	ieee80211_iterate_nodes(ic, ieee80211_node_gtk_rekey, ic);
+	ieee80211_iterate_nodes(ic, ieee80211_count_rekeysta, &rekeysta);
+	if (rekeysta == 0)
+		ieee80211_setkeysdone(ic);
 }
 
 /*
@@ -467,17 +471,34 @@ ieee80211_setkeysdone(struct ieee80211com *ic)
 {
 	u_int8_t kid;
 
+	/*
+	 * Discard frames buffered for power-saving which were encrypted with
+	 * the old group key. Clients are no longer able to decrypt them.
+	 */
+	mq_purge(&ic->ic_bss->ni_savedq);
+
 	/* install GTK */
 	kid = (ic->ic_def_txkey == 1) ? 2 : 1;
-	if ((*ic->ic_set_key)(ic, ic->ic_bss, &ic->ic_nw_keys[kid]) == 0)
+	switch ((*ic->ic_set_key)(ic, ic->ic_bss, &ic->ic_nw_keys[kid])) {
+	case 0:
+	case EBUSY:
 		ic->ic_def_txkey = kid;
+		break;
+	default:
+		break;
+	}
 
 	if (ic->ic_caps & IEEE80211_C_MFP) {
 		/* install IGTK */
 		kid = (ic->ic_igtk_kid == 4) ? 5 : 4;
-		if ((*ic->ic_set_key)(ic, ic->ic_bss,
-		    &ic->ic_nw_keys[kid]) == 0)
+		switch ((*ic->ic_set_key)(ic, ic->ic_bss, &ic->ic_nw_keys[kid])) {
+		case 0:
+		case EBUSY:
 			ic->ic_igtk_kid = kid;
+			break;
+		default:
+			break;
+		}
 	}
 }
 
@@ -675,12 +696,7 @@ ieee80211_addba_request(struct ieee80211com *ic, struct ieee80211_node *ni,
 	    (ba->ba_winsize << IEEE80211_ADDBA_BUFSZ_SHIFT) |
 	    (tid << IEEE80211_ADDBA_TID_SHIFT);
 #if 0
-	/*
-	 * XXX A-MSDUs inside A-MPDUs expose a problem with bad TCP connection
-	 * sharing behaviour. One connection eats all available bandwidth
-	 * while others stall. Leave this disabled for now to give packets
-	 * from disparate connections better chances of interleaving.
-	 */
+	/* iwm(4) 9k and iwx(4) need more work before AMSDU can be enabled. */
 	ba->ba_params |= IEEE80211_ADDBA_AMSDU;
 #endif
 	if ((ic->ic_htcaps & IEEE80211_HTCAP_DELAYEDBA) == 0)

@@ -1,4 +1,4 @@
-/*	$OpenBSD: in6.h,v 1.105 2019/11/11 17:42:29 bluhm Exp $	*/
+/*	$OpenBSD: in6.h,v 1.107 2020/08/24 16:40:07 gnezdo Exp $	*/
 /*	$KAME: in6.h,v 1.83 2001/03/29 02:55:07 jinmei Exp $	*/
 
 /*
@@ -280,11 +280,11 @@ struct route_in6 {
 
 #define IFA6_IS_DEPRECATED(a) \
 	((a)->ia6_lifetime.ia6t_pltime != ND6_INFINITE_LIFETIME && \
-	 (u_int32_t)((time_uptime - (a)->ia6_updatetime)) > \
+	 (u_int32_t)((getuptime() - (a)->ia6_updatetime)) > \
 	 (a)->ia6_lifetime.ia6t_pltime)
 #define IFA6_IS_INVALID(a) \
 	((a)->ia6_lifetime.ia6t_vltime != ND6_INFINITE_LIFETIME && \
-	 (u_int32_t)((time_uptime - (a)->ia6_updatetime)) > \
+	 (u_int32_t)((getuptime() - (a)->ia6_updatetime)) > \
 	 (a)->ia6_lifetime.ia6t_vltime)
 
 #endif /* _KERNEL */
@@ -651,63 +651,6 @@ ifatoia6(struct ifaddr *ifa)
 	{ "mrtmif", CTLTYPE_STRUCT }, \
 	{ "mrtmfc", CTLTYPE_STRUCT }, \
 	{ "soiikey", CTLTYPE_STRING }, /* binary string */ \
-}
-
-#define IPV6CTL_VARS { \
-	NULL, \
-	&ip6_forwarding, \
-	&ip6_sendredirects, \
-	&ip6_defhlim, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	&ip6_maxfragpackets, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	&ip6_log_interval, \
-	&ip6_hdrnestlimit, \
-	&ip6_dad_count, \
-	&ip6_auto_flowlabel, \
-	&ip6_defmcasthlim, \
-	NULL, \
-	NULL, \
-	&ip6_use_deprecated, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	&ip6_maxfrags, \
-	&ip6_mforwarding, \
-	&ip6_multipath, \
-	&ip6_mcast_pmtu, \
-	&ip6_neighborgcthresh, \
-	NULL, \
-	NULL, \
-	&ip6_maxdynroutes, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
 }
 
 __BEGIN_DECLS

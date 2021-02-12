@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_amap.h,v 1.31 2019/05/15 06:12:19 anton Exp $	*/
+/*	$OpenBSD: uvm_amap.h,v 1.33 2021/01/19 13:21:36 mpi Exp $	*/
 /*	$NetBSD: uvm_amap.h,v 1.14 2001/02/18 21:19:08 chs Exp $	*/
 
 /*
@@ -133,6 +133,7 @@ struct vm_amap_chunk {
 };
 
 struct vm_amap {
+	struct rwlock *am_lock;	/* lock for all vm_amap flags */
 	int am_ref;		/* reference count */
 	int am_flags;		/* flags */
 	int am_nslot;		/* # of slots currently in map */
@@ -261,22 +262,8 @@ struct vm_amap {
 #define amap_flags(AMAP)	((AMAP)->am_flags)
 #define amap_refs(AMAP)		((AMAP)->am_ref)
 
-/*
- * if we enable PPREF, then we have a couple of extra functions that
- * we need to prototype here...
- */
-
-#ifdef UVM_AMAP_PPREF
-
-#define PPREF_NONE ((int *) -1)	/* not using ppref */
-
-					/* adjust references */
-void		amap_pp_adjref(struct vm_amap *, int, vsize_t, int);
-					/* establish ppref */
-void		amap_pp_establish(struct vm_amap *);
-					/* wipe part of an amap */
-void		amap_wiperange(struct vm_amap *, int, int);
-#endif	/* UVM_AMAP_PPREF */
+#define amap_lock(AMAP)		rw_enter_write((AMAP)->am_lock)
+#define amap_unlock(AMAP)	rw_exit_write((AMAP)->am_lock)
 
 #endif /* _KERNEL */
 

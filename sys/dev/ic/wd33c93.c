@@ -1,4 +1,4 @@
-/*	$OpenBSD: wd33c93.c,v 1.10 2017/04/30 16:45:46 mpi Exp $	*/
+/*	$OpenBSD: wd33c93.c,v 1.19 2020/09/22 19:32:53 krw Exp $	*/
 /*	$NetBSD: wd33c93.c,v 1.24 2010/11/13 13:52:02 uebayasi Exp $	*/
 
 /*
@@ -187,7 +187,7 @@ wd33c93_attach(struct wd33c93_softc *sc, struct scsi_adapter *adapter)
 	sc->sc_cfflags = sc->sc_dev.dv_cfdata->cf_flags;
 	timeout_set(&sc->sc_watchdog, wd33c93_watchdog, sc);
 	wd33c93_init(sc);
-	
+
 	printf(": %s, %d.%d MHz, %s\n",
 	    wd33c93_chip_names[sc->sc_chip],
 	    sc->sc_clkfreq / 10, sc->sc_clkfreq % 10,
@@ -202,16 +202,15 @@ wd33c93_attach(struct wd33c93_softc *sc, struct scsi_adapter *adapter)
 		printf("\n");
 	}
 
-	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.adapter_target = sc->sc_id;
-	sc->sc_link.adapter_buswidth = SBIC_NTARG;
-	sc->sc_link.adapter = adapter;
-	sc->sc_link.openings = 2;
-	sc->sc_link.luns = SBIC_NLUN;
-	sc->sc_link.pool = &wd33c93_iopool;
-
-	bzero(&saa, sizeof(saa));
-	saa.saa_sc_link = &sc->sc_link;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter_target = sc->sc_id;
+	saa.saa_adapter_buswidth = SBIC_NTARG;
+	saa.saa_adapter = adapter;
+	saa.saa_luns = SBIC_NLUN;
+	saa.saa_openings = 2;
+	saa.saa_pool = &wd33c93_iopool;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
 	config_found(&sc->sc_dev, &saa, scsiprint);
 	timeout_add_sec(&sc->sc_watchdog, 60);
@@ -284,7 +283,7 @@ wd33c93_reset(struct wd33c93_softc *sc)
 	if (sc->sc_reset != NULL)
 		(*sc->sc_reset)(sc);
 
-	my_id = sc->sc_link.adapter_target & SBIC_ID_MASK;
+	my_id = sc->sc_id & SBIC_ID_MASK;
 
 	/* Enable advanced features and really(!) advanced features */
 #if 1
@@ -539,7 +538,7 @@ void
 wd33c93_scsi_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link *sc_link = xs->sc_link;
-	struct wd33c93_softc *sc = sc_link->adapter_softc;
+	struct wd33c93_softc *sc = sc_link->bus->sb_adapter_softc;
 	struct wd33c93_acb *acb;
 	int flags, s;
 
@@ -550,7 +549,7 @@ wd33c93_scsi_cmd(struct scsi_xfer *xs)
 	 * to be six bytes long.
 	 */
 	if (sc->sc_chip <= SBIC_CHIP_WD33C93) {
-		switch (xs->cmd->opcode >> 5) {
+		switch (xs->cmd.opcode >> 5) {
 		case 0:
 		case 1:
 		case 5:
@@ -576,8 +575,8 @@ wd33c93_scsi_cmd(struct scsi_xfer *xs)
 	 * time to recover when the target powers down (the fewer
 	 * targets on the bus, the larger the time needed to recover).
 	 */
-	if (xs->cmd->opcode == START_STOP &&
-	    ((struct scsi_start_stop *)xs->cmd)->how == SSS_STOP) {
+	if (xs->cmd.opcode == START_STOP &&
+	    ((struct scsi_start_stop *)&xs->cmd)->how == SSS_STOP) {
 		if (xs->timeout < 30000)
 			xs->timeout = 30000;
 	}
@@ -594,7 +593,7 @@ wd33c93_scsi_cmd(struct scsi_xfer *xs)
 	acb->timeout = xs->timeout;
 	timeout_set(&acb->to, wd33c93_timeout, acb);
 
-	memcpy(&acb->cmd, xs->cmd, xs->cmdlen);
+	memcpy(&acb->cmd, &xs->cmd, xs->cmdlen);
 	acb->clen  = xs->cmdlen;
 	acb->daddr = xs->data;
 	acb->dleft = xs->datalen;
@@ -678,7 +677,7 @@ wd33c93_sched(struct wd33c93_softc *sc)
 			if (lun < SBIC_NLUN)
 				ti->lun[lun] = li;
 		}
-		li->last_used = time_second;
+		li->last_used = getuptime();
 
 		/*
 		 * We've found a potential command, but is the target/lun busy?
@@ -2252,7 +2251,7 @@ wd33c93_timeout(void *arg)
 	struct wd33c93_acb *acb = arg;
 	struct scsi_xfer *xs = acb->xs;
 	struct scsi_link *sc_link = xs->sc_link;
-	struct wd33c93_softc *sc = sc_link->adapter_softc;
+	struct wd33c93_softc *sc = sc_link->bus->sb_adapter_softc;
 	int s, asr, csr;
 
 	s = splbio();
@@ -2284,7 +2283,7 @@ wd33c93_watchdog(void *arg)
 	struct wd33c93_linfo *li;
 	int t, s, l;
 	/* scrub LUN's that have not been used in the last 10min. */
-	time_t old = time_second - (10 * 60);
+	time_t old = getuptime() - (10 * 60);
 
 	for (t = 0; t < SBIC_NTARG; t++) {
 		ti = &sc->sc_tinfo[t];

@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.h,v 1.13 2019/06/17 12:42:52 florian Exp $ */
+/*	$OpenBSD: parse.h,v 1.15 2020/09/14 16:00:17 florian Exp $ */
 /*
  * Copyright (c) 2016 Sebastian Benoit <benno@openbsd.org>
  *
@@ -38,6 +38,7 @@ struct authority_c {
 	char				*api;
 	char				*account;
 	enum keytype			 keytype;
+	char				*contact;
 };
 
 struct domain_c {
@@ -45,6 +46,7 @@ struct domain_c {
 	TAILQ_HEAD(, altname_c)	 altname_list;
 	int			 altname_count;
 	enum keytype		 keytype;
+	char			*handle;
 	char			*domain;
 	char			*key;
 	char			*cert;
@@ -80,7 +82,7 @@ int			 cmdline_symset(char *);
 /* use these to find a authority or domain by name */
 struct authority_c	*authority_find(struct acme_conf *, char *);
 struct authority_c	*authority_find0(struct acme_conf *);
-struct domain_c		*domain_find(struct acme_conf *, char *);
+struct domain_c		*domain_find_handle(struct acme_conf *, char *);
 
 int			 domain_valid(const char *);
 

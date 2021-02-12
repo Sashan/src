@@ -1,4 +1,4 @@
-/*	$OpenBSD: ksyms.c,v 1.1 2020/01/21 16:24:55 mpi Exp $ */
+/*	$OpenBSD: ksyms.c,v 1.3 2020/12/07 18:28:09 bluhm Exp $ */
 
 /*
  * Copyright (c) 2016 Martin Pieuchot <mpi@openbsd.org>
@@ -118,20 +118,27 @@ kelf_snprintsym(char *str, size_t size, unsigned long pc)
 
 	name = elf_strptr(kelf, kstrtabndx, sym.st_name);
 	if (name != NULL)
-		cnt = snprintf(str, size, "%s", name);
+		cnt = snprintf(str, size, "\n%s", name);
 	else
-		cnt = snprintf(str, size, "0x%llx", sym.st_value);
+		cnt = snprintf(str, size, "\n0x%llx", sym.st_value);
+	if (cnt < 0)
+		return cnt;
 
 	offset = pc - sym.st_value;
-	if (offset != 0)
-		cnt += snprintf(str + cnt, size - cnt, "+0x%llx\n", offset);
-	else
-		cnt += snprintf(str + cnt, size - cnt, "\n");
+	if (offset != 0) {
+		int l;
+
+		l = snprintf(str + cnt, size > (size_t)cnt ? size - cnt : 0,
+		    "+0x%llx", offset);
+		if (l < 0)
+			return l;
+		cnt += l;
+	}
 
 	return cnt;
 
 fallback:
-	return snprintf(str, size, "0x%lx\n", pc);
+	return snprintf(str, size, "\n0x%lx", pc);
 }
 
 int

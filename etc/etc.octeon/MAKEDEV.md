@@ -1,6 +1,6 @@
 define(MACHINE,octeon)dnl
 vers(__file__,
-	{-$OpenBSD: MAKEDEV.md,v 1.17 2020/01/23 02:47:29 dlg Exp $-},
+	{-$OpenBSD: MAKEDEV.md,v 1.20 2021/01/23 05:08:33 thfr Exp $-},
 etc.MACHINE)dnl
 dnl
 dnl Copyright (c) 2001-2006 Todd T. Fries <todd@OpenBSD.org>
@@ -67,6 +67,7 @@ _DEV(uall)
 _DEV(usb, 61)
 _DEV(uhid, 62)
 _DEV(fido, 76)
+_DEV(ujoy, 78)
 _TITLE(spec)
 _DEV(au, 44)
 _DEV(bio, 49)
@@ -87,6 +88,7 @@ _DEV(uk, 32)
 _DEV(vi, 45)
 _DEV(vscsi, 69)
 _DEV(switch, 75)
+_DEV(kstat, 51)
 dnl
 divert(__mddivert)dnl
 dnl
@@ -100,7 +102,7 @@ _std(2, 3, 35, 6)
 dnl
 dnl *** octeon specific targets
 dnl
-twrget(all, au, audio, 0, 1, 2)dnl
+twrget(all, au, audio, 0, 1, 2, 3)dnl
 target(all, ch, 0)dnl
 target(all, vscsi, 0)dnl
 target(all, diskmap)dnl

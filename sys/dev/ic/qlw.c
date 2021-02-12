@@ -1,4 +1,4 @@
-/*	$OpenBSD: qlw.c,v 1.34 2020/02/05 16:29:30 krw Exp $ */
+/*	$OpenBSD: qlw.c,v 1.47 2020/09/22 19:32:52 krw Exp $ */
 
 /*
  * Copyright (c) 2011 David Gwynne <dlg@openbsd.org>
@@ -39,7 +39,9 @@
 #include <dev/ic/qlwvar.h>
 
 #ifndef SMALL_KERNEL
+#ifndef QLW_DEBUG
 #define QLW_DEBUG
+#endif
 #endif
 
 #ifdef QLW_DEBUG
@@ -62,7 +64,6 @@ struct cfdriver qlw_cd = {
 };
 
 void		qlw_scsi_cmd(struct scsi_xfer *);
-int		qlw_scsi_probe(struct scsi_link *);
 
 u_int16_t	qlw_read(struct qlw_softc *, bus_size_t);
 void		qlw_write(struct qlw_softc *, bus_size_t, u_int16_t);
@@ -130,7 +131,17 @@ void		qlw_dump_iocb_segs(struct qlw_softc *, void *, int);
 static inline int
 qlw_xs_bus(struct qlw_softc *sc, struct scsi_xfer *xs)
 {
-	return ((xs->sc_link->scsibus == sc->sc_link[0].scsibus) ? 0 : 1);
+	/*
+	 * sc_scsibus[0] == NULL -> bus 0 probing during config_found().
+	 * sc_scsibus[0] == xs->sc_link->bus -> bus 0 normal operation.
+	 * sc_scsibus[1] == NULL -> bus 1 probing during config_found().
+	 * sc_scsibus[1] == xs->sc_link->bus -> bus 1 normal operation.
+	 */
+	if ((sc->sc_scsibus[0] == NULL) ||
+	    (xs->sc_link->bus == sc->sc_scsibus[0]))
+		return 0;
+	else
+		return 1;
 }
 
 static inline u_int16_t
@@ -164,7 +175,7 @@ qlw_queue_write(struct qlw_softc *sc, bus_size_t offset, u_int16_t value)
 }
 
 struct scsi_adapter qlw_switch = {
-	qlw_scsi_cmd, NULL, qlw_scsi_probe, NULL, NULL
+	qlw_scsi_cmd, NULL, NULL, NULL, NULL
 };
 
 int
@@ -268,7 +279,7 @@ qlw_attach(struct qlw_softc *sc)
 			sc->sc_max_queue_depth[bus] = sc->sc_maxrequests;
 	}
 
-	/* 
+	/*
 	 * On some 1020/1040 variants the response queue is limited to
 	 * 256 entries.  We don't really need all that many anyway.
 	 */
@@ -302,7 +313,7 @@ qlw_attach(struct qlw_softc *sc)
 		printf("couldn't set clock rate: %x\n", sc->sc_mbox[0]);
 		return (ENXIO);
 	}
-	
+
 	sc->sc_mbox[0] = QLW_MBOX_SET_RETRY_COUNT;
 	sc->sc_mbox[1] = sc->sc_retry_count[0];
 	sc->sc_mbox[2] = sc->sc_retry_delay[0];
@@ -312,7 +323,7 @@ qlw_attach(struct qlw_softc *sc)
 		printf("couldn't set retry count: %x\n", sc->sc_mbox[0]);
 		return (ENXIO);
 	}
-	
+
 	sc->sc_mbox[0] = QLW_MBOX_SET_ASYNC_DATA_SETUP;
 	sc->sc_mbox[1] = sc->sc_async_data_setup[0];
 	sc->sc_mbox[2] = sc->sc_async_data_setup[1];
@@ -394,19 +405,17 @@ qlw_attach(struct qlw_softc *sc)
 	/* wait for the busses to settle */
 	delay(reset_delay * 1000000);
 
-	/* we should be good to go now, attach scsibus */
+	saa.saa_adapter = &qlw_switch;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter_buswidth = QLW_MAX_TARGETS;
+	saa.saa_luns = QLW_MAX_LUNS;
+	saa.saa_pool = &sc->sc_iopool;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 	for (bus = 0; bus < sc->sc_numbusses; bus++) {
-		sc->sc_link[bus].adapter = &qlw_switch;
-		sc->sc_link[bus].adapter_softc = sc;
-		sc->sc_link[bus].adapter_target = sc->sc_initiator[bus];
-		sc->sc_link[bus].adapter_buswidth = QLW_MAX_TARGETS;
-		sc->sc_link[bus].openings = sc->sc_max_queue_depth[bus];
-		sc->sc_link[bus].pool = &sc->sc_iopool;
+		saa.saa_adapter_target = sc->sc_initiator[bus];
+		saa.saa_openings = sc->sc_max_queue_depth[bus];
 
-		memset(&saa, 0, sizeof(saa));
-		saa.saa_sc_link = &sc->sc_link[bus];
-
-		/* config_found() returns the scsibus attached to us */
 		sc->sc_scsibus[bus] = (struct scsibus_softc *)
 		    config_found(&sc->sc_dev, &saa, scsiprint);
 
@@ -661,7 +670,7 @@ qlw_handle_resp(struct qlw_softc *sc, u_int16_t id)
 
 		case QLW_IOCB_STATUS_WIDE_FAILED:
 			DPRINTF(QLW_D_INTR, "%s: wide failed\n", DEVNAME(sc));
-			sc->sc_link->quirks |= SDEV_NOWIDE;
+			xs->sc_link->quirks |= SDEV_NOWIDE;
 			atomic_setbits_int(&sc->sc_update_required[bus],
 			    1 << xs->sc_link->target);
 			task_add(systq, &sc->sc_update_task);
@@ -671,7 +680,7 @@ qlw_handle_resp(struct qlw_softc *sc, u_int16_t id)
 
 		case QLW_IOCB_STATUS_SYNCXFER_FAILED:
 			DPRINTF(QLW_D_INTR, "%s: sync failed\n", DEVNAME(sc));
-			sc->sc_link->quirks |= SDEV_NOSYNC;
+			xs->sc_link->quirks |= SDEV_NOSYNC;
 			atomic_setbits_int(&sc->sc_update_required[bus],
 			    1 << xs->sc_link->target);
 			task_add(systq, &sc->sc_update_task);
@@ -787,20 +796,11 @@ qlw_intr(void *xsc)
 	return (1);
 }
 
-int
-qlw_scsi_probe(struct scsi_link *link)
-{
-	if (link->lun >= QLW_MAX_LUNS)
-		return (EINVAL);
-
-	return (0);
-}
-
 void
 qlw_scsi_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link	*link = xs->sc_link;
-	struct qlw_softc	*sc = link->adapter_softc;
+	struct qlw_softc	*sc = link->bus->sb_adapter_softc;
 	struct qlw_ccb		*ccb;
 	struct qlw_iocb_req0	*iocb;
 	struct qlw_ccb_list	list;
@@ -1379,7 +1379,7 @@ qlw_put_cmd(struct qlw_softc *sc, void *buf, struct scsi_xfer *xs,
 	lun = xs->sc_link->lun;
 	req->device = qlw_swap16(sc, (((bus << 7) | target) << 8) | lun);
 
-	memcpy(req->cdb, xs->cmd, xs->cmdlen);
+	memcpy(req->cdb, &xs->cmd, xs->cmdlen);
 	req->ccblen = qlw_swap16(sc, xs->cmdlen);
 
 	req->handle = qlw_swap32(sc, ccb->ccb_id);

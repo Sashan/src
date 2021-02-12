@@ -1,4 +1,4 @@
-/*	$OpenBSD: ofw_misc.c,v 1.18 2020/03/22 14:56:24 kettenis Exp $	*/
+/*	$OpenBSD: ofw_misc.c,v 1.27 2020/11/30 17:57:36 kettenis Exp $	*/
 /*
  * Copyright (c) 2017 Mark Kettenis
  *
@@ -16,13 +16,21 @@
  */
 
 #include <sys/types.h>
-#include <sys/systm.h>
+#include <sys/device.h>
 #include <sys/malloc.h>
+#include <sys/systm.h>
+
+#include <net/if.h>
+#include <net/if_media.h>
 
 #include <machine/bus.h>
 
+#include <dev/mii/mii.h>
+#include <dev/mii/miivar.h>
 #include <dev/ofw/openfirm.h>
+#include <dev/ofw/ofw_gpio.h>
 #include <dev/ofw/ofw_misc.h>
+#include <dev/ofw/ofw_regulator.h>
 
 /*
  * Register maps.
@@ -86,6 +94,9 @@ regmap_byphandle(uint32_t phandle)
 {
 	struct regmap *rm;
 
+	if (phandle == 0)
+		return NULL;
+
 	LIST_FOREACH(rm, &regmaps, rm_list) {
 		if (rm->rm_phandle == phandle)
 			return rm;
@@ -128,10 +139,40 @@ phy_register(struct phy_device *pd)
 }
 
 int
+phy_usb_nop_enable(int node)
+{
+	uint32_t vcc_supply;
+	uint32_t *gpio;
+	int len;
+
+	vcc_supply = OF_getpropint(node, "vcc-supply", 0);
+	if (vcc_supply)
+		regulator_enable(vcc_supply);
+
+	len = OF_getproplen(node, "reset-gpios");
+	if (len <= 0)
+		return 0;
+
+	/* There should only be a single GPIO pin. */
+	gpio = malloc(len, M_TEMP, M_WAITOK);
+	OF_getpropintarray(node, "reset-gpios", gpio, len);
+
+	gpio_controller_config_pin(gpio, GPIO_CONFIG_OUTPUT);
+	gpio_controller_set_pin(gpio, 1);
+	delay(10000);
+	gpio_controller_set_pin(gpio, 0);
+
+	free(gpio, M_TEMP, len);
+
+	return 0;
+}
+
+int
 phy_enable_cells(uint32_t *cells)
 {
 	struct phy_device *pd;
 	uint32_t phandle = cells[0];
+	int node;
 
 	LIST_FOREACH(pd, &phy_devices, pd_list) {
 		if (pd->pd_phandle == phandle)
@@ -141,7 +182,14 @@ phy_enable_cells(uint32_t *cells)
 	if (pd && pd->pd_enable)
 		return pd->pd_enable(pd->pd_cookie, &cells[1]);
 
-	return -1;
+	node = OF_getnodebyphandle(phandle);
+	if (node == 0)
+		return ENXIO;
+
+	if (OF_is_compatible(node, "usb-nop-xceiv"))
+		return phy_usb_nop_enable(node);
+
+	return ENXIO;
 }
 
 uint32_t *
@@ -234,6 +282,9 @@ i2c_byphandle(uint32_t phandle)
 {
 	struct i2c_bus *ib;
 
+	if (phandle == 0)
+		return NULL;
+
 	LIST_FOREACH(ib, &i2c_busses, ib_list) {
 		if (ib->ib_phandle == phandle)
 			return ib->ib_ic;
@@ -260,9 +311,40 @@ sfp_register(struct sfp_device *sd)
 }
 
 int
+sfp_do_enable(uint32_t phandle, int enable)
+{
+	struct sfp_device *sd;
+
+	if (phandle == 0)
+		return ENXIO;
+
+	LIST_FOREACH(sd, &sfp_devices, sd_list) {
+		if (sd->sd_phandle == phandle)
+			return sd->sd_enable(sd->sd_cookie, enable);
+	}
+
+	return ENXIO;
+}
+
+int
+sfp_enable(uint32_t phandle)
+{
+	return sfp_do_enable(phandle, 1);
+}
+
+int
+sfp_disable(uint32_t phandle)
+{
+	return sfp_do_enable(phandle, 0);
+}
+
+int
 sfp_get_sffpage(uint32_t phandle, struct if_sffpage *sff)
 {
 	struct sfp_device *sd;
+
+	if (phandle == 0)
+		return ENXIO;
 
 	LIST_FOREACH(sd, &sfp_devices, sd_list) {
 		if (sd->sd_phandle == phandle)
@@ -270,6 +352,81 @@ sfp_get_sffpage(uint32_t phandle, struct if_sffpage *sff)
 	}
 
 	return ENXIO;
+}
+
+#define SFF8472_TCC_XCC			3 /* 10G Ethernet Compliance Codes */
+#define SFF8472_TCC_XCC_10G_SR		(1 << 4)
+#define SFF8472_TCC_XCC_10G_LR		(1 << 5)
+#define SFF8472_TCC_XCC_10G_LRM		(1 << 6)
+#define SFF8472_TCC_XCC_10G_ER		(1 << 7)
+#define SFF8472_TCC_ECC			6 /* Ethernet Compliance Codes */
+#define SFF8472_TCC_ECC_1000_SX		(1 << 0)
+#define SFF8472_TCC_ECC_1000_LX		(1 << 1)
+#define SFF8472_TCC_ECC_1000_CX		(1 << 2)
+#define SFF8472_TCC_ECC_1000_T		(1 << 3)
+#define SFF8472_TCC_SCT			8 /* SFP+ Cable Technology */
+#define SFF8472_TCC_SCT_PASSIVE		(1 << 2)
+#define SFF8472_TCC_SCT_ACTIVE		(1 << 3)
+
+int
+sfp_add_media(uint32_t phandle, struct mii_data *mii)
+{
+	struct if_sffpage sff;
+	int error;
+
+	memset(&sff, 0, sizeof(sff));
+	sff.sff_addr = IFSFF_ADDR_EEPROM;
+	sff.sff_page = 0;
+
+	error = sfp_get_sffpage(phandle, &sff);
+	if (error)
+		return error;
+
+	/* SFP */
+	if (sff.sff_data[SFF8472_TCC_ECC] & SFF8472_TCC_ECC_1000_SX) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_1000_SX, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_1000_SX | IFM_FDX;
+	}
+	if (sff.sff_data[SFF8472_TCC_ECC] & SFF8472_TCC_ECC_1000_LX) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_1000_LX, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_1000_LX | IFM_FDX;
+	}
+	if (sff.sff_data[SFF8472_TCC_ECC] & SFF8472_TCC_ECC_1000_CX) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_1000_CX, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_1000_CX | IFM_FDX;
+	}
+	if (sff.sff_data[SFF8472_TCC_ECC] & SFF8472_TCC_ECC_1000_T) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_1000_T, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_1000_T | IFM_FDX;
+	}
+
+	/* SFP+ */
+	if (sff.sff_data[SFF8472_TCC_XCC] & SFF8472_TCC_XCC_10G_SR) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_10G_SR, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_10G_SR | IFM_FDX;
+	}
+	if (sff.sff_data[SFF8472_TCC_XCC] & SFF8472_TCC_XCC_10G_LR) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_10G_LR, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_10G_LR | IFM_FDX;
+	}
+	if (sff.sff_data[SFF8472_TCC_XCC] & SFF8472_TCC_XCC_10G_LRM) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_10G_LRM, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_10G_LRM | IFM_FDX;
+	}
+	if (sff.sff_data[SFF8472_TCC_XCC] & SFF8472_TCC_XCC_10G_ER) {
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_10G_ER, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_10G_ER | IFM_FDX;
+	}
+
+	/* SFP+ DAC */
+	if (sff.sff_data[SFF8472_TCC_SCT] & SFF8472_TCC_SCT_PASSIVE ||
+	    sff.sff_data[SFF8472_TCC_SCT] & SFF8472_TCC_SCT_ACTIVE) {
+		ifmedia_add(&mii->mii_media,
+		    IFM_ETHER | IFM_10G_SFP_CU, 0, NULL);
+		mii->mii_media_active = IFM_ETHER | IFM_10G_SFP_CU | IFM_FDX;
+	}
+
+	return 0;
 }
 
 /*
@@ -397,6 +554,9 @@ nvmem_read(uint32_t phandle, bus_addr_t addr, void *data, bus_size_t size)
 {
 	struct nvmem_device *nd;
 
+	if (phandle == 0)
+		return ENXIO;
+
 	LIST_FOREACH(nd, &nvmem_devices, nd_list) {
 		if (nd->nd_phandle == phandle)
 			return nd->nd_read(nd->nd_cookie, addr, data, size);
@@ -506,6 +666,9 @@ endpoint_byphandle(uint32_t phandle)
 {
 	struct endpoint *ep;
 
+	if (phandle == 0)
+		return NULL;
+
 	LIST_FOREACH(ep, &endpoints, ep_list) {
 		if (ep->ep_phandle == phandle)
 			return ep;
@@ -573,6 +736,9 @@ device_port_activate(uint32_t phandle, void *arg)
 	int count;
 	int error;
 
+	if (phandle == 0)
+		return ENXIO;
+
 	LIST_FOREACH(ep, &endpoints, ep_list) {
 		if (ep->ep_port->dp_phandle == phandle) {
 			dp = ep->ep_port;
@@ -598,4 +764,78 @@ device_port_activate(uint32_t phandle, void *arg)
 	}
 
 	return count ? 0 : ENXIO;
+}
+
+/* Digital audio interface support */
+
+LIST_HEAD(, dai_device) dai_devices =
+	LIST_HEAD_INITIALIZER(dai_devices);
+
+void
+dai_register(struct dai_device *dd)
+{
+	dd->dd_phandle = OF_getpropint(dd->dd_node, "phandle", 0);
+	if (dd->dd_phandle == 0)
+		return;
+
+	LIST_INSERT_HEAD(&dai_devices, dd, dd_list);
+}
+
+struct dai_device *
+dai_byphandle(uint32_t phandle)
+{
+	struct dai_device *dd;
+
+	if (phandle == 0)
+		return NULL;
+
+	LIST_FOREACH(dd, &dai_devices, dd_list) {
+		if (dd->dd_phandle == phandle)
+			return dd;
+	}
+
+	return NULL;
+}
+
+/* MII support */
+
+LIST_HEAD(, mii_bus) mii_busses =
+	LIST_HEAD_INITIALIZER(mii_busses);
+
+void
+mii_register(struct mii_bus *md)
+{
+	LIST_INSERT_HEAD(&mii_busses, md, md_list);
+}
+
+struct mii_bus *
+mii_bynode(int node)
+{
+	struct mii_bus *md;
+
+	LIST_FOREACH(md, &mii_busses, md_list) {
+		if (md->md_node == node)
+			return md;
+	}
+
+	return NULL;
+}
+
+struct mii_bus *
+mii_byphandle(uint32_t phandle)
+{
+	int node;
+
+	if (phandle == 0)
+		return NULL;
+
+	node = OF_getnodebyphandle(phandle);
+	if (node == 0)
+		return NULL;
+
+	node = OF_parent(node);
+	if (node == 0)
+		return NULL;
+
+	return mii_bynode(node);
 }

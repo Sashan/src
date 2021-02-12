@@ -1,4 +1,4 @@
-/*	$OpenBSD: ospfd.h,v 1.106 2020/01/21 20:38:52 remi Exp $ */
+/*	$OpenBSD: ospfd.h,v 1.108 2021/01/19 09:37:53 claudio Exp $ */
 
 /*
  * Copyright (c) 2004 Esben Norby <norby@openbsd.org>
@@ -374,11 +374,12 @@ struct ifaddrchange {
 };
 
 /* ospf_conf */
-enum {
+enum ospfd_process {
 	PROC_MAIN,
 	PROC_OSPF_ENGINE,
 	PROC_RDE_ENGINE
-} ospfd_process;
+};
+extern enum ospfd_process ospfd_process;
 
 struct ospfd_conf {
 	struct event		ev;
@@ -485,6 +486,8 @@ struct ctl_iface {
 	u_int8_t		 passive;
 	enum auth_type		 auth_type;
 	u_int8_t		 auth_keyid;
+	char			 dependon[IF_NAMESIZE];
+	int			 depend_ok;
 };
 
 struct ctl_nbr {

@@ -1,4 +1,4 @@
-/*	$OpenBSD: syslogd.c,v 1.262 2019/07/05 13:23:27 bluhm Exp $	*/
+/*	$OpenBSD: syslogd.c,v 1.264 2020/09/14 20:36:01 bluhm Exp $	*/
 
 /*
  * Copyright (c) 2014-2017 Alexander Bluhm <bluhm@genua.de>
@@ -354,6 +354,7 @@ int	socket_bind(const char *, const char *, const char *, int,
 int	unix_socket(char *, int, mode_t);
 void	double_sockbuf(int, int, int);
 void	set_sockbuf(int);
+void	set_keepalive(int);
 void	tailify_replytext(char *, int);
 
 int
@@ -853,20 +854,6 @@ main(int argc, char *argv[])
 			event_add(ev_udp, NULL);
 		if (fd_udp6 != -1)
 			event_add(ev_udp6, NULL);
-	} else {
-		/*
-		 * If generic UDP file descriptors are used neither
-		 * for receiving nor for sending, close them.  Then
-		 * there is no useless *.514 in netstat.
-		 */
-		if (fd_udp != -1 && !send_udp) {
-			close(fd_udp);
-			fd_udp = -1;
-		}
-		if (fd_udp6 != -1 && !send_udp6) {
-			close(fd_udp6);
-			fd_udp6 = -1;
-		}
 	}
 	for (i = 0; i < nbind; i++)
 		if (fd_bind[i] != -1)
@@ -993,8 +980,10 @@ socket_bind(const char *proto, const char *host, const char *port,
 		}
 		if (!shutread && res->ai_protocol == IPPROTO_UDP)
 			double_sockbuf(*fdp, SO_RCVBUF, 0);
-		else if (res->ai_protocol == IPPROTO_TCP)
+		else if (res->ai_protocol == IPPROTO_TCP) {
 			set_sockbuf(*fdp);
+			set_keepalive(*fdp);
+		}
 		reuseaddr = 1;
 		if (setsockopt(*fdp, SOL_SOCKET, SO_REUSEADDR, &reuseaddr,
 		    sizeof(reuseaddr)) == -1) {
@@ -2416,6 +2405,7 @@ init(void)
 	s = 0;
 	strlcpy(progblock, "*", sizeof(progblock));
 	strlcpy(hostblock, "*", sizeof(hostblock));
+	send_udp = send_udp6 = 0;
 	while (getline(&cline, &s, cf) != -1) {
 		/*
 		 * check for end-of-section, comments, strip off trailing
@@ -2507,6 +2497,22 @@ init(void)
 
 	Initialized = 1;
 	dropped_warn(&init_dropped, "during initialization");
+
+	if (SecureMode) {
+		/*
+		 * If generic UDP file descriptors are used neither
+		 * for receiving nor for sending, close them.  Then
+		 * there is no useless *.514 in netstat.
+		 */
+		if (fd_udp != -1 && !send_udp) {
+			close(fd_udp);
+			fd_udp = -1;
+		}
+		if (fd_udp6 != -1 && !send_udp6) {
+			close(fd_udp6);
+			fd_udp6 = -1;
+		}
+	}
 
 	if (Debug) {
 		SIMPLEQ_FOREACH(f, &Files, f_next) {
@@ -2704,20 +2710,24 @@ cfline(char *line, char *progblock, char *hostblock)
 		}
 		if (proto == NULL)
 			proto = "udp";
-		ipproto = proto;
 		if (strcmp(proto, "udp") == 0) {
 			if (fd_udp == -1)
 				proto = "udp6";
 			if (fd_udp6 == -1)
 				proto = "udp4";
-			ipproto = proto;
+		}
+		ipproto = proto;
+		if (strcmp(proto, "udp") == 0) {
+			send_udp = send_udp6 = 1;
 		} else if (strcmp(proto, "udp4") == 0) {
+			send_udp = 1;
 			if (fd_udp == -1) {
 				log_warnx("no udp4 \"%s\"",
 				    f->f_un.f_forw.f_loghost);
 				break;
 			}
 		} else if (strcmp(proto, "udp6") == 0) {
+			send_udp6 = 1;
 			if (fd_udp6 == -1) {
 				log_warnx("no udp6 \"%s\"",
 				    f->f_un.f_forw.f_loghost);
@@ -2761,11 +2771,9 @@ cfline(char *line, char *progblock, char *hostblock)
 		if (strncmp(proto, "udp", 3) == 0) {
 			switch (f->f_un.f_forw.f_addr.ss_family) {
 			case AF_INET:
-				send_udp = 1;
 				f->f_file = fd_udp;
 				break;
 			case AF_INET6:
-				send_udp6 = 1;
 				f->f_file = fd_udp6;
 				break;
 			}
@@ -3099,6 +3107,15 @@ set_sockbuf(int fd)
 		log_warn("setsockopt sndbufsize %d", size);
 	if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size)) == -1)
 		log_warn("setsockopt rcvbufsize %d", size);
+}
+
+void
+set_keepalive(int fd)
+{
+	int val = 1;
+
+	if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val)) == -1)
+		log_warn("setsockopt keepalive %d", val);
 }
 
 void

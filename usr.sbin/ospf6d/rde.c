@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.c,v 1.85 2020/03/29 11:59:11 denis Exp $ */
+/*	$OpenBSD: rde.c,v 1.89 2021/01/19 09:54:08 claudio Exp $ */
 
 /*
  * Copyright (c) 2004, 2005 Claudio Jeker <claudio@openbsd.org>
@@ -88,8 +88,8 @@ int		 prefix_compare(struct prefix_node *, struct prefix_node *);
 void		 prefix_tree_add(struct prefix_tree *, struct lsa_link *);
 
 struct ospfd_conf	*rdeconf = NULL, *nconf = NULL;
-struct imsgev		*iev_ospfe;
-struct imsgev		*iev_main;
+static struct imsgev	*iev_ospfe;
+static struct imsgev	*iev_main;
 struct rde_nbr		*nbrself;
 struct lsa_tree		 asext_tree;
 
@@ -651,7 +651,6 @@ rde_dispatch_parent(int fd, short event, void *bula)
 	struct imsgbuf		*ibuf = &iev->ibuf;
 	ssize_t			 n;
 	int			 shut = 0, link_ok, prev_link_ok, orig_lsa;
-	unsigned int		 ifindex;
 
 	if (event & EV_READ) {
 		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
@@ -733,30 +732,6 @@ rde_dispatch_parent(int fd, short event, void *bula)
 
 			orig_intra_area_prefix_lsas(iface->area);
 
-			break;
-		case IMSG_IFADD:
-			if ((iface = malloc(sizeof(struct iface))) == NULL)
-				fatal(NULL);
-			memcpy(iface, imsg.data, sizeof(struct iface));
-
-			LIST_INIT(&iface->nbr_list);
-			TAILQ_INIT(&iface->ls_ack_list);
-			RB_INIT(&iface->lsa_tree);
-
-			LIST_INSERT_HEAD(&iface->area->iface_list, iface, entry);
-			break;
-		case IMSG_IFDELETE:
-			if (imsg.hdr.len != IMSG_HEADER_SIZE +
-			    sizeof(ifindex))
-				fatalx("IFDELETE imsg with wrong len");
-
-			memcpy(&ifindex, imsg.data, sizeof(ifindex));
-			iface = if_find(ifindex);
-			if (iface == NULL)
-				fatalx("interface lost in rde");
-
-			LIST_REMOVE(iface, entry);
-			if_del(iface);
 			break;
 		case IMSG_IFADDRNEW:
 			if (imsg.hdr.len != IMSG_HEADER_SIZE +
@@ -886,6 +861,9 @@ rde_send_change_kroute(struct rt_node *r)
 	TAILQ_FOREACH(rn, &r->nexthop, entry) {
 		if (rn->invalid)
 			continue;
+		if (rn->connected)
+			/* skip self-originated routes */
+			continue;
 		krcount++;
 
 		bzero(&kr, sizeof(kr));
@@ -899,8 +877,12 @@ rde_send_change_kroute(struct rt_node *r)
 		kr.ext_tag = r->ext_tag;
 		imsg_add(wbuf, &kr, sizeof(kr));
 	}
-	if (krcount == 0)
-		fatalx("rde_send_change_kroute: no valid nexthop found");
+	if (krcount == 0) {
+		/* no valid nexthop or self originated, so remove */
+		ibuf_free(wbuf);
+		rde_send_delete_kroute(r);
+		return;
+	}
 
 	imsg_close(&iev_main->ibuf, wbuf);
 	imsg_event_add(iev_main);

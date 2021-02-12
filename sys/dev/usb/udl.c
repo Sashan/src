@@ -1,4 +1,4 @@
-/*	$OpenBSD: udl.c,v 1.91 2020/01/09 14:36:26 mpi Exp $ */
+/*	$OpenBSD: udl.c,v 1.94 2020/07/31 10:49:33 mglocker Exp $ */
 
 /*
  * Copyright (c) 2009 Marcus Glocker <mglocker@openbsd.org>
@@ -79,7 +79,7 @@ int		udl_activate(struct device *, int);
 int		udl_ioctl(void *, u_long, caddr_t, int, struct proc *);
 paddr_t		udl_mmap(void *, off_t, int);
 int		udl_alloc_screen(void *, const struct wsscreen_descr *,
-		    void **, int *, int *, long *);
+		    void **, int *, int *, uint32_t *);
 void		udl_free_screen(void *, void *);
 int		udl_show_screen(void *, void *, int,
 		    void (*)(void *, int, int), void *);
@@ -89,9 +89,9 @@ void		udl_burner(void *, u_int, u_int);
 
 int		udl_copycols(void *, int, int, int, int);
 int		udl_copyrows(void *, int, int, int);
-int		udl_erasecols(void *, int, int, int, long);
-int		udl_eraserows(void *, int, int, long);
-int		udl_putchar(void *, int, int, u_int, long);
+int		udl_erasecols(void *, int, int, int, uint32_t);
+int		udl_eraserows(void *, int, int, uint32_t);
+int		udl_putchar(void *, int, int, u_int, uint32_t);
 int		udl_do_cursor(struct rasops_info *);
 int		udl_draw_char(struct udl_softc *, uint16_t, uint16_t, u_int,
 		    uint32_t, uint32_t);
@@ -438,10 +438,8 @@ udl_detach(struct device *self, int flags)
 	/*
 	 * Close bulk TX pipe.
 	 */
-	if (sc->sc_tx_pipeh != NULL) {
-		usbd_abort_pipe(sc->sc_tx_pipeh);
+	if (sc->sc_tx_pipeh != NULL)
 		usbd_close_pipe(sc->sc_tx_pipeh);
-	}
 
 	/*
 	 * Free command buffer.
@@ -587,7 +585,7 @@ udl_mmap(void *v, off_t off, int prot)
 
 int
 udl_alloc_screen(void *v, const struct wsscreen_descr *type,
-    void **cookiep, int *curxp, int *curyp, long *attrp)
+    void **cookiep, int *curxp, int *curyp, uint32_t *attrp)
 {
 	struct udl_softc *sc = v;
 	struct wsdisplay_font *font;
@@ -627,7 +625,7 @@ udl_alloc_screen(void *v, const struct wsscreen_descr *type,
 	sc->sc_ri.ri_ops.putchar = udl_putchar;
 	sc->sc_ri.ri_do_cursor = udl_do_cursor;
 
-	sc->sc_ri.ri_ops.alloc_attr(&sc->sc_ri, 0, 0, 0, attrp);
+	sc->sc_ri.ri_ops.pack_attr(&sc->sc_ri, 0, 0, 0, attrp);
 
 	udl_stdscreen.nrows = sc->sc_ri.ri_rows;
 	udl_stdscreen.ncols = sc->sc_ri.ri_cols;
@@ -825,7 +823,7 @@ fail:
 }
 
 int
-udl_erasecols(void *cookie, int row, int col, int num, long attr)
+udl_erasecols(void *cookie, int row, int col, int num, uint32_t attr)
 {
 	struct rasops_info *ri = cookie;
 	struct udl_softc *sc = ri->ri_hw;
@@ -868,7 +866,7 @@ fail:
 }
 
 int
-udl_eraserows(void *cookie, int row, int num, long attr)
+udl_eraserows(void *cookie, int row, int num, uint32_t attr)
 {
 	struct rasops_info *ri = cookie;
 	struct udl_softc *sc;
@@ -910,7 +908,7 @@ fail:
 }
 
 int
-udl_putchar(void *cookie, int row, int col, u_int uc, long attr)
+udl_putchar(void *cookie, int row, int col, u_int uc, uint32_t attr)
 {
 	struct rasops_info *ri = cookie;
 	struct udl_softc *sc = ri->ri_hw;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: glob.c,v 1.48 2019/02/04 16:45:40 millert Exp $ */
+/*	$OpenBSD: glob.c,v 1.50 2020/10/13 04:42:28 guenther Exp $ */
 /*
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -429,7 +429,7 @@ g_charclass(const Char **patternp, Char **bufnextp)
 	const Char *pattern = *patternp + 1;
 	Char *bufnext = *bufnextp;
 	const Char *colon;
-	struct cclass *cc;
+	const struct cclass *cc;
 	size_t len;
 
 	if ((colon = g_strchr(pattern, ':')) == NULL || colon[1] != ']')
@@ -819,7 +819,7 @@ globextend(const Char *path, glob_t *pglob, struct glob_lim *limitp,
 	if (pglob->gl_pathv == NULL && pglob->gl_offs > 0) {
 		/* first time around -- clear initial gl_offs items */
 		pathv += pglob->gl_offs;
-		for (i = pglob->gl_offs; --i >= 0; )
+		for (i = pglob->gl_offs; i > 0; i--)
 			*--pathv = NULL;
 	}
 	pglob->gl_pathv = pathv;
@@ -831,7 +831,7 @@ globextend(const Char *path, glob_t *pglob, struct glob_lim *limitp,
 		if (pglob->gl_statv == NULL && pglob->gl_offs > 0) {
 			/* first time around -- clear initial gl_offs items */
 			statv += pglob->gl_offs;
-			for (i = pglob->gl_offs; --i >= 0; )
+			for (i = pglob->gl_offs; i > 0; i--)
 				*--statv = NULL;
 		}
 		pglob->gl_statv = statv;

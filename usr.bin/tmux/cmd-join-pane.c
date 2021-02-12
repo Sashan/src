@@ -1,4 +1,4 @@
-/* $OpenBSD: cmd-join-pane.c,v 1.39 2020/03/21 13:16:15 nicm Exp $ */
+/* $OpenBSD: cmd-join-pane.c,v 1.47 2021/01/06 07:32:23 nicm Exp $ */
 
 /*
  * Copyright (c) 2011 George Nachman <tmux@georgester.com>
@@ -50,8 +50,8 @@ const struct cmd_entry cmd_move_pane_entry = {
 	.name = "move-pane",
 	.alias = "movep",
 
-	.args = { "bdhvp:l:s:t:", 0, 0 },
-	.usage = "[-bdhv] [-l size] " CMD_SRCDST_PANE_USAGE,
+	.args = { "bdfhvp:l:s:t:", 0, 0 },
+	.usage = "[-bdfhv] [-l size] " CMD_SRCDST_PANE_USAGE,
 
 	.source = { 's', CMD_FIND_PANE, CMD_FIND_DEFAULT_MARKED },
 	.target = { 't', CMD_FIND_PANE, 0 },
@@ -63,40 +63,33 @@ const struct cmd_entry cmd_move_pane_entry = {
 static enum cmd_retval
 cmd_join_pane_exec(struct cmd *self, struct cmdq_item *item)
 {
-	struct args		*args = self->args;
-	struct cmd_find_state	*current = &item->shared->current;
+	struct args		*args = cmd_get_args(self);
+	struct cmd_find_state	*current = cmdq_get_current(item);
+	struct cmd_find_state	*target = cmdq_get_target(item);
+	struct cmd_find_state	*source = cmdq_get_source(item);
 	struct session		*dst_s;
 	struct winlink		*src_wl, *dst_wl;
 	struct window		*src_w, *dst_w;
 	struct window_pane	*src_wp, *dst_wp;
 	char			*cause = NULL;
-	int			 size, percentage, dst_idx, not_same_window;
+	int			 size, percentage, dst_idx;
 	int			 flags;
 	enum layout_type	 type;
 	struct layout_cell	*lc;
 
-	if (self->entry == &cmd_join_pane_entry)
-		not_same_window = 1;
-	else
-		not_same_window = 0;
-
-	dst_s = item->target.s;
-	dst_wl = item->target.wl;
-	dst_wp = item->target.wp;
+	dst_s = target->s;
+	dst_wl = target->wl;
+	dst_wp = target->wp;
 	dst_w = dst_wl->window;
 	dst_idx = dst_wl->idx;
 	server_unzoom_window(dst_w);
 
-	src_wl = item->source.wl;
-	src_wp = item->source.wp;
+	src_wl = source->wl;
+	src_wp = source->wp;
 	src_w = src_wl->window;
 	server_unzoom_window(src_w);
 
-	if (not_same_window && src_w == dst_w) {
-		cmdq_error(item, "can't join a pane to its own window");
-		return (CMD_RETURN_ERROR);
-	}
-	if (!not_same_window && src_wp == dst_wp) {
+	if (src_wp == dst_wp) {
 		cmdq_error(item, "source and target panes must be different");
 		return (CMD_RETURN_ERROR);
 	}
@@ -143,13 +136,17 @@ cmd_join_pane_exec(struct cmd *self, struct cmdq_item *item)
 
 	layout_close_pane(src_wp);
 
+	server_client_remove_pane(src_wp);
 	window_lost_pane(src_w, src_wp);
 	TAILQ_REMOVE(&src_w->panes, src_wp, entry);
 
 	src_wp->window = dst_w;
 	options_set_parent(src_wp->options, dst_w->options);
 	src_wp->flags |= PANE_STYLECHANGED;
-	TAILQ_INSERT_AFTER(&dst_w->panes, dst_wp, src_wp, entry);
+	if (flags & SPAWN_BEFORE)
+		TAILQ_INSERT_BEFORE(dst_wp, src_wp, entry);
+	else
+		TAILQ_INSERT_AFTER(&dst_w->panes, dst_wp, src_wp, entry);
 	layout_assign_pane(lc, src_wp);
 
 	recalculate_sizes();
@@ -166,7 +163,7 @@ cmd_join_pane_exec(struct cmd *self, struct cmdq_item *item)
 		server_status_session(dst_s);
 
 	if (window_count_panes(src_w) == 0)
-		server_kill_window(src_w);
+		server_kill_window(src_w, 1);
 	else
 		notify_window("window-layout-changed", src_w);
 	notify_window("window-layout-changed", dst_w);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: armv7_machdep.c,v 1.58 2019/05/06 03:32:48 mlarkin Exp $ */
+/*	$OpenBSD: armv7_machdep.c,v 1.61 2020/05/31 06:23:57 dlg Exp $ */
 /*	$NetBSD: lubbock_machdep.c,v 1.2 2003/07/15 00:25:06 lukem Exp $ */
 
 /*
@@ -174,8 +174,6 @@ extern u_int data_abort_handler_address;
 extern u_int prefetch_abort_handler_address;
 extern u_int undefined_handler_address;
 
-uint32_t	board_id;
-
 #define KERNEL_PT_SYS		0	/* Page table for mapping proc0 zero page */
 #define KERNEL_PT_KERNEL	1	/* Page table for mapping kernel */
 #define	KERNEL_PT_KERNEL_NUM	32
@@ -196,10 +194,10 @@ int   safepri = 0;
 
 /* Prototypes */
 
-char	bootargs[MAX_BOOT_STRING];
 int	bootstrap_bs_map(void *, uint64_t, bus_size_t, int,
     bus_space_handle_t *);
-void	process_kernel_args(char *);
+void	collect_kernel_args(const char *);
+void	process_kernel_args(void);
 void	consinit(void);
 
 bs_protos(bs_notimpl);
@@ -390,14 +388,6 @@ initarm(void *arg0, void *arg1, void *arg2, paddr_t loadaddr)
 	if (arg0)
 		esym = (uint32_t)arg0;
 
-	board_id = (uint32_t)arg1;
-	/*
-	 * u-boot has decided the top four bits are
-	 * 'compatibility revision' for sunxi
-	 */
-	if (board_id != 0xffffffff)
-		board_id &= 0x0fffffff;
-
 	/*
 	 * Heads up ... Setup the CPU / MMU / TLB functions
 	 */
@@ -437,7 +427,11 @@ initarm(void *arg0, void *arg1, void *arg2, paddr_t loadaddr)
 
 		len = fdt_node_property(node, "bootargs", &prop);
 		if (len > 0)
-			process_kernel_args(prop);
+			collect_kernel_args(prop);
+
+		len = fdt_node_property(node, "openbsd,boothowto", &prop);
+		if (len == sizeof(boothowto))
+			boothowto = bemtoh32((uint32_t *)prop);
 
 		len = fdt_node_property(node, "openbsd,bootduid", &prop);
 		if (len == sizeof(bootduid))
@@ -462,6 +456,8 @@ initarm(void *arg0, void *arg1, void *arg2, paddr_t loadaddr)
 		if (len == sizeof(mmap_desc_ver))
 			mmap_desc_ver = bemtoh32((uint32_t *)prop);
 	}
+
+	process_kernel_args();
 
 	if (mmap_start != 0)
 		bootstrap_bs_map(NULL, mmap_start, mmap_size, 0,
@@ -853,7 +849,6 @@ initarm(void *arg0, void *arg1, void *arg2, paddr_t loadaddr)
 	if (boothowto & RB_KDB)
 		db_enter();
 #endif
-	printf("board type: %u\n", board_id);
 
 	cpu_setup();
 
@@ -861,34 +856,34 @@ initarm(void *arg0, void *arg1, void *arg2, paddr_t loadaddr)
 	return(kernelstack.pv_va + USPACE_SVC_STACK_TOP);
 }
 
+char	bootargs[256];
 
 void
-process_kernel_args(char *args)
+collect_kernel_args(const char *args)
 {
-	char *cp = args;
-
-	if (cp == NULL) {
-		boothowto = RB_AUTOBOOT;
-		return;
-	}
-
-	boothowto = 0;
-
 	/* Make a local copy of the bootargs */
-	strncpy(bootargs, cp, MAX_BOOT_STRING - sizeof(int));
+	strlcpy(bootargs, args, sizeof(bootargs));
+}
 
-	cp = bootargs;
+void
+process_kernel_args(void)
+{
+	char *cp = bootargs;
+
+	if (*cp == 0)
+		return;
+
 	boot_file = bootargs;
 
 	/* Skip the kernel image filename */
 	while (*cp != ' ' && *cp != 0)
-		++cp;
+		cp++;
 
 	if (*cp != 0)
 		*cp++ = 0;
 
 	while (*cp == ' ')
-		++cp;
+		cp++;
 
 	boot_args = cp;
 
@@ -900,28 +895,25 @@ process_kernel_args(char *args)
 		if (*cp++ == '\0')
 			return;
 
-	for (;*++cp;) {
-		int fl;
-
-		fl = 0;
+	while (*cp != 0) {
 		switch(*cp) {
 		case 'a':
-			fl |= RB_ASKNAME;
+			boothowto |= RB_ASKNAME;
 			break;
 		case 'c':
-			fl |= RB_CONFIG;
+			boothowto |= RB_CONFIG;
 			break;
 		case 'd':
-			fl |= RB_KDB;
+			boothowto |= RB_KDB;
 			break;
 		case 's':
-			fl |= RB_SINGLE;
+			boothowto |= RB_SINGLE;
 			break;
 		default:
 			printf("unknown option `%c'\n", *cp);
 			break;
 		}
-		boothowto |= fl;
+		cp++;
 	}
 }
 
@@ -1020,4 +1012,13 @@ board_startup(void)
 		printf("kernel does not support -c; continuing..\n");
 #endif
 	}
+}
+
+unsigned int
+cpu_rnd_messybits(void)
+{
+	struct timespec ts;
+
+	nanotime(&ts);
+	return (ts.tv_nsec ^ (ts.tv_sec << 20));
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf_norm.c,v 1.218 2019/02/28 20:20:47 bluhm Exp $ */
+/*	$OpenBSD: pf_norm.c,v 1.220 2021/02/09 14:06:19 patrick Exp $ */
 
 /*
  * Copyright 2001 Niels Provos <provos@citi.umich.edu>
@@ -152,17 +152,11 @@ struct pool		 pf_frent_pl, pf_frag_pl, pf_frnode_pl;
 struct pool		 pf_state_scrub_pl;
 int			 pf_nfrents;
 
-#ifdef WITH_PF_LOCK
 struct mutex		 pf_frag_mtx;
 
 #define PF_FRAG_LOCK_INIT()	mtx_init(&pf_frag_mtx, IPL_SOFTNET)
 #define PF_FRAG_LOCK()		mtx_enter(&pf_frag_mtx)
 #define PF_FRAG_UNLOCK()	mtx_leave(&pf_frag_mtx)
-#else /* !WITH_PF_LOCK */
-#define PF_FRAG_LOCK_INIT()	(void)(0)
-#define PF_FRAG_LOCK()		(void)(0)
-#define PF_FRAG_UNLOCK()	(void)(0)
-#endif /* WITH_PF_LOCK */
 
 void
 pf_normalize_init(void)
@@ -220,7 +214,7 @@ pf_purge_expired_fragments(void)
 
 	PF_ASSERT_UNLOCKED();
 
-	expire = time_uptime - pf_default_rule.timeout[PFTM_FRAG];
+	expire = getuptime() - pf_default_rule.timeout[PFTM_FRAG];
 
 	PF_FRAG_LOCK();
 	while ((frag = TAILQ_LAST(&pf_fragqueue, pf_fragqueue)) != NULL) {
@@ -589,7 +583,7 @@ pf_fillup_fragment(struct pf_frnode *key, u_int32_t id,
 		memset(frag->fr_entries, 0, sizeof(frag->fr_entries));
 		TAILQ_INIT(&frag->fr_queue);
 		frag->fr_id = id;
-		frag->fr_timeout = time_uptime;
+		frag->fr_timeout = getuptime();
 		frag->fr_gen = frnode->fn_gen++;
 		frag->fr_maxlen = frent->fe_len;
 		frag->fr_holes = 1;
@@ -1352,7 +1346,7 @@ pf_normalize_tcp_stateful(struct pf_pdesc *pd, u_short *reason,
 	getmicrouptime(&uptime);
 	if (src->scrub && (src->scrub->pfss_flags & PFSS_PAWS) &&
 	    (uptime.tv_sec - src->scrub->pfss_last.tv_sec > TS_MAX_IDLE ||
-	    time_uptime - state->creation > TS_MAX_CONN))  {
+	    getuptime() - state->creation > TS_MAX_CONN))  {
 		if (pf_status.debug >= LOG_NOTICE) {
 			log(LOG_NOTICE, "pf: src idled out of PAWS ");
 			pf_print_state(state);

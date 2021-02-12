@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_mbuf.c,v 1.274 2020/01/22 22:56:35 dlg Exp $	*/
+/*	$OpenBSD: uipc_mbuf.c,v 1.277 2021/01/13 12:38:36 bluhm Exp $	*/
 /*	$NetBSD: uipc_mbuf.c,v 1.15.4.1 1996/06/13 17:11:44 cgd Exp $	*/
 
 /*
@@ -244,7 +244,7 @@ m_get(int nowait, int type)
 	uint64_t *counters;
 	int s;
 
-	KDASSERT(type < MT_NTYPES);
+	KASSERT(type >= 0 && type < MT_NTYPES);
 
 	m = pool_get(&mbpool, nowait == M_WAIT ? PR_WAITOK : PR_NOWAIT);
 	if (m == NULL)
@@ -277,7 +277,7 @@ m_gethdr(int nowait, int type)
 	uint64_t *counters;
 	int s;
 
-	KDASSERT(type < MT_NTYPES);
+	KASSERT(type >= 0 && type < MT_NTYPES);
 
 	m = pool_get(&mbpool, nowait == M_WAIT ? PR_WAITOK : PR_NOWAIT);
 	if (m == NULL)
@@ -565,7 +565,7 @@ m_defrag(struct mbuf *m, int how)
 	if ((m0 = m_gethdr(how, m->m_type)) == NULL)
 		return (ENOBUFS);
 	if (m->m_pkthdr.len > MHLEN) {
-		MCLGETI(m0, how, NULL, m->m_pkthdr.len);
+		MCLGETL(m0, how, m->m_pkthdr.len);
 		if (!(m0->m_flags & M_EXT)) {
 			m_free(m0);
 			return (ENOBUFS);
@@ -759,7 +759,7 @@ m_copyback(struct mbuf *m0, int off, int len, const void *_cp, int wait)
 			}
 
 			if (off + len > MLEN) {
-				MCLGETI(n, wait, NULL, off + len);
+				MCLGETL(n, wait, off + len);
 				if (!(n->m_flags & M_EXT)) {
 					m_free(n);
 					error = ENOBUFS;
@@ -793,7 +793,7 @@ m_copyback(struct mbuf *m0, int off, int len, const void *_cp, int wait)
 			}
 
 			if (len > MLEN) {
-				MCLGETI(n, wait, NULL, len);
+				MCLGETL(n, wait, len);
 				if (!(n->m_flags & M_EXT)) {
 					m_free(n);
 					error = ENOBUFS;
@@ -978,7 +978,7 @@ m_pullup(struct mbuf *m0, int len)
 			goto bad;
 
 		if (space > MHLEN) {
-			MCLGETI(m0, M_DONTWAIT, NULL, space);
+			MCLGETL(m0, M_DONTWAIT, space);
 			if ((m0->m_flags & M_EXT) == 0)
 				goto bad;
 		}
@@ -1175,7 +1175,7 @@ m_makespace(struct mbuf *m0, int skip, int hlen, int *off)
 		if (remain > 0) {
 			MGET(n, M_DONTWAIT, m->m_type);
 			if (n && remain > MLEN) {
-				MCLGETI(n, M_DONTWAIT, NULL, remain);
+				MCLGETL(n, M_DONTWAIT, remain);
 				if ((n->m_flags & M_EXT) == 0) {
 					m_free(n);
 					n = NULL;
@@ -1441,7 +1441,7 @@ m_dup_pkt(struct mbuf *m0, unsigned int adj, int wait)
 		goto fail;
 
 	if (len > MHLEN) {
-		MCLGETI(m, wait, NULL, len);
+		MCLGETL(m, wait, len);
 		if (!ISSET(m->m_flags, M_EXT))
 			goto fail;
 	}
@@ -1657,6 +1657,25 @@ mq_init(struct mbuf_queue *mq, u_int maxlen, int ipl)
 	mtx_init(&mq->mq_mtx, ipl);
 	ml_init(&mq->mq_list);
 	mq->mq_maxlen = maxlen;
+}
+
+int
+mq_push(struct mbuf_queue *mq, struct mbuf *m)
+{
+	struct mbuf *dropped = NULL;
+
+	mtx_enter(&mq->mq_mtx);
+	if (mq_len(mq) >= mq->mq_maxlen) {
+		mq->mq_drops++;
+		dropped = ml_dequeue(&mq->mq_list);
+	}
+	ml_enqueue(&mq->mq_list, m);
+	mtx_leave(&mq->mq_mtx);
+
+	if (dropped)
+		m_freem(dropped);
+
+	return (dropped != NULL);
 }
 
 int

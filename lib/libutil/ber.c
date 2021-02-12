@@ -1,4 +1,4 @@
-/*	$OpenBSD: ber.c,v 1.15 2019/10/24 12:39:26 tb Exp $ */
+/*	$OpenBSD: ber.c,v 1.20 2021/01/28 19:56:33 martijn Exp $ */
 
 /*
  * Copyright (c) 2007, 2012 Reyk Floeter <reyk@openbsd.org>
@@ -684,9 +684,14 @@ ober_scanf_elements(struct ber_element *ber, char *fmt, ...)
 
 	va_start(ap, fmt);
 	while (*fmt) {
-		if (ber == NULL && *fmt != '}' && *fmt != ')')
+		if (ber == NULL && *fmt != '$' && *fmt != '}' && *fmt != ')')
 			goto fail;
 		switch (*fmt++) {
+		case '$':
+			if (ber != NULL)
+				goto fail;
+			ret++;
+			continue;
 		case 'B':
 			ptr = va_arg(ap, void **);
 			len = va_arg(ap, size_t *);
@@ -781,7 +786,7 @@ ober_scanf_elements(struct ber_element *ber, char *fmt, ...)
 			continue;
 		case '}':
 		case ')':
-			if (parent[level] == NULL)
+			if (level < 0 || parent[level] == NULL)
 				goto fail;
 			ber = parent[level--];
 			ret++;
@@ -1258,16 +1263,24 @@ ober_read_element(struct ber *ber, struct ber_element *elm)
 		}
 	case BER_TYPE_INTEGER:
 	case BER_TYPE_ENUMERATED:
-		if (len > (ssize_t)sizeof(long long))
+		if (len < 1) {
+			errno = EINVAL;
 			return -1;
+		}
+		if (len > (ssize_t)sizeof(long long)) {
+			errno = ERANGE;
+			return -1;
+		}
 		for (i = 0; i < len; i++) {
 			if (ober_getc(ber, &c) != 1)
 				return -1;
 
 			/* smallest number of contents octets only */
 			if ((i == 1 && last == 0 && (c & 0x80) == 0) ||
-			    (i == 1 && last == 0xff && (c & 0x80) != 0))
+			    (i == 1 && last == 0xff && (c & 0x80) != 0)) {
+				errno = EINVAL;
 				return -1;
+			}
 
 			val <<= 8;
 			val |= c;
@@ -1299,8 +1312,10 @@ ober_read_element(struct ber *ber, struct ber_element *elm)
 		((u_char *)elm->be_val)[len] = '\0';
 		break;
 	case BER_TYPE_NULL:	/* no payload */
-		if (len != 0)
+		if (len != 0) {
+			errno = EINVAL;
 			return -1;
+		}
 		break;
 	case BER_TYPE_SEQUENCE:
 	case BER_TYPE_SET:
@@ -1346,8 +1361,10 @@ ober_read(struct ber *ber, void *buf, size_t len)
 {
 	size_t	sz;
 
-	if (ber->br_rbuf == NULL)
+	if (ber->br_rbuf == NULL) {
+		errno = ENOBUFS;
 		return -1;
+	}
 
 	sz = ber->br_rend - ber->br_rptr;
 	if (len > sz) {

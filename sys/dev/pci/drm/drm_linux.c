@@ -1,4 +1,4 @@
-/*	$OpenBSD: drm_linux.c,v 1.58 2020/03/15 10:14:49 claudio Exp $	*/
+/*	$OpenBSD: drm_linux.c,v 1.77 2021/02/08 08:18:45 mpi Exp $	*/
 /*
  * Copyright (c) 2013 Jonathan Gray <jsg@openbsd.org>
  * Copyright (c) 2015, 2016 Mark Kettenis <kettenis@openbsd.org>
@@ -16,18 +16,40 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include <drm/drmP.h>
-#include <dev/pci/ppbreg.h>
+#include <sys/types.h>
+#include <sys/systm.h>
+#include <sys/param.h>
 #include <sys/event.h>
 #include <sys/filedesc.h>
 #include <sys/kthread.h>
 #include <sys/stat.h>
 #include <sys/unistd.h>
+#include <sys/proc.h>
+#include <sys/pool.h>
+#include <sys/fcntl.h>
+
+#include <dev/pci/ppbreg.h>
+
 #include <linux/dma-buf.h>
 #include <linux/mod_devicetable.h>
 #include <linux/acpi.h>
 #include <linux/pagevec.h>
 #include <linux/dma-fence-array.h>
+#include <linux/interrupt.h>
+#include <linux/err.h>
+#include <linux/idr.h>
+#include <linux/scatterlist.h>
+#include <linux/i2c.h>
+#include <linux/pci.h>
+#include <linux/notifier.h>
+#include <linux/backlight.h>
+#include <linux/shrinker.h>
+#include <linux/fb.h>
+#include <linux/xarray.h>
+#include <linux/interval_tree.h>
+
+#include <drm/drm_device.h>
+#include <drm/drm_print.h>
 
 #if defined(__amd64__) || defined(__i386__)
 #include "bios.h"
@@ -45,6 +67,11 @@ tasklet_run(void *arg)
 		tasklet_unlock(ts);
 	}
 }
+
+/* 32 bit powerpc lacks 64 bit atomics */
+#if defined(__powerpc__) && !defined(__powerpc64__)
+struct mutex atomic64_mtx = MUTEX_INITIALIZER(IPL_HIGH);
+#endif
 
 struct mutex sch_mtx = MUTEX_INITIALIZER(IPL_SCHED);
 volatile struct proc *sch_proc;
@@ -82,15 +109,15 @@ long
 schedule_timeout(long timeout)
 {
 	struct sleep_state sls;
-	long deadline;
-	int wait, spl;
+	unsigned long deadline;
+	int wait, spl, timo = 0;
 
 	MUTEX_ASSERT_LOCKED(&sch_mtx);
 	KASSERT(!cold);
 
-	sleep_setup(&sls, sch_ident, sch_priority, "schto");
 	if (timeout != MAX_SCHEDULE_TIMEOUT)
-		sleep_setup_timeout(&sls, timeout);
+		timo = timeout;
+	sleep_setup(&sls, sch_ident, sch_priority, "schto", timo);
 
 	wait = (sch_proc == curproc && timeout > 0);
 
@@ -98,19 +125,24 @@ schedule_timeout(long timeout)
 	MUTEX_OLDIPL(&sch_mtx) = splsched();
 	mtx_leave(&sch_mtx);
 
-	sleep_setup_signal(&sls);
-
 	if (timeout != MAX_SCHEDULE_TIMEOUT)
-		deadline = ticks + timeout;
-	sleep_finish_all(&sls, wait);
+		deadline = jiffies + timeout;
+	sleep_finish(&sls, wait);
 	if (timeout != MAX_SCHEDULE_TIMEOUT)
-		timeout = deadline - ticks;
+		timeout = deadline - jiffies;
 
 	mtx_enter(&sch_mtx);
 	MUTEX_OLDIPL(&sch_mtx) = spl;
 	sch_ident = curproc;
 
 	return timeout > 0 ? timeout : 0;
+}
+
+long
+schedule_timeout_uninterruptible(long timeout)
+{
+	tsleep(curproc, PWAIT, "schtou", timeout);
+	return 0;
 }
 
 int
@@ -178,6 +210,7 @@ kthread_func(void *arg)
 
 	ret = thread->func(thread->data);
 	thread->flags |= KTHREAD_STOPPED;
+	wakeup(thread);
 	kthread_exit(ret);
 }
 
@@ -269,77 +302,13 @@ kthread_stop(struct proc *p)
 
 	while ((thread->flags & KTHREAD_STOPPED) == 0) {
 		thread->flags |= KTHREAD_SHOULDSTOP;
+		kthread_unpark(p);
 		wake_up_process(thread->proc);
 		tsleep_nsec(thread, PPAUSE, "stop", INFSLP);
 	}
 	LIST_REMOVE(thread, next);
 	free(thread, M_DRM, sizeof(*thread));
 }
-
-struct timespec
-ns_to_timespec(const int64_t nsec)
-{
-	struct timespec ts;
-	int32_t rem;
-
-	if (nsec == 0) {
-		ts.tv_sec = 0;
-		ts.tv_nsec = 0;
-		return (ts);
-	}
-
-	ts.tv_sec = nsec / NSEC_PER_SEC;
-	rem = nsec % NSEC_PER_SEC;
-	if (rem < 0) {
-		ts.tv_sec--;
-		rem += NSEC_PER_SEC;
-	}
-	ts.tv_nsec = rem;
-	return (ts);
-}
-
-int64_t
-timeval_to_ns(const struct timeval *tv)
-{
-	return ((int64_t)tv->tv_sec * NSEC_PER_SEC) +
-		tv->tv_usec * NSEC_PER_USEC;
-}
-
-struct timeval
-ns_to_timeval(const int64_t nsec)
-{
-	struct timeval tv;
-	int32_t rem;
-
-	if (nsec == 0) {
-		tv.tv_sec = 0;
-		tv.tv_usec = 0;
-		return (tv);
-	}
-
-	tv.tv_sec = nsec / NSEC_PER_SEC;
-	rem = nsec % NSEC_PER_SEC;
-	if (rem < 0) {
-		tv.tv_sec--;
-		rem += NSEC_PER_SEC;
-	}
-	tv.tv_usec = rem / 1000;
-	return (tv);
-}
-
-int64_t
-timeval_to_ms(const struct timeval *tv)
-{
-	return ((int64_t)tv->tv_sec * 1000) + (tv->tv_usec / 1000);
-}
-
-int64_t
-timeval_to_us(const struct timeval *tv)
-{
-	return ((int64_t)tv->tv_sec * 1000000) + tv->tv_usec;
-}
-
-extern char *hw_vendor, *hw_prod, *hw_ver;
 
 #if NBIOS > 0
 extern char smbios_board_vendor[];
@@ -521,7 +490,7 @@ kmap(struct vm_page *pg)
 }
 
 void
-kunmap(void *addr)
+kunmap_va(void *addr)
 {
 	vaddr_t va = (vaddr_t)addr;
 
@@ -593,7 +562,7 @@ memchr_inv(const void *s, int c, size_t n)
 		do {
 			if (*p++ != (unsigned char)c)
 				return ((void *)(p - 1));
-		}while (--n != 0);
+		} while (--n != 0);
 	}
 	return (NULL);
 }
@@ -626,13 +595,6 @@ struct idr_entry *idr_entry_cache;
 void
 idr_init(struct idr *idr)
 {
-	static int initialized;
-
-	if (!initialized) {
-		pool_init(&idr_pool, sizeof(struct idr_entry), 0, IPL_TTY, 0,
-		    "idrpl", NULL);
-		initialized = 1;
-	}
 	SPLAY_INIT(&idr->tree);
 }
 
@@ -659,8 +621,7 @@ idr_preload(unsigned int gfp_mask)
 }
 
 int
-idr_alloc(struct idr *idr, void *ptr, int start, int end,
-    unsigned int gfp_mask)
+idr_alloc(struct idr *idr, void *ptr, int start, int end, gfp_t gfp_mask)
 {
 	int flags = (gfp_mask & GFP_NOWAIT) ? PR_NOWAIT : PR_WAITOK;
 	struct idr_entry *id;
@@ -686,8 +647,10 @@ idr_alloc(struct idr *idr, void *ptr, int start, int end,
 	id->id = begin = start;
 #endif
 	while (SPLAY_INSERT(idr_tree, &idr->tree, id)) {
-		if (++id->id == end)
+		if (id->id == end)
 			id->id = start;
+		else
+			id->id++;
 		if (id->id == begin) {
 			pool_put(&idr_pool, id);
 			return -ENOSPC;
@@ -698,7 +661,7 @@ idr_alloc(struct idr *idr, void *ptr, int start, int end,
 }
 
 void *
-idr_replace(struct idr *idr, void *ptr, int id)
+idr_replace(struct idr *idr, void *ptr, unsigned long id)
 {
 	struct idr_entry find, *res;
 	void *old;
@@ -713,7 +676,7 @@ idr_replace(struct idr *idr, void *ptr, int id)
 }
 
 void *
-idr_remove(struct idr *idr, int id)
+idr_remove(struct idr *idr, unsigned long id)
 {
 	struct idr_entry find, *res;
 	void *ptr = NULL;
@@ -729,7 +692,7 @@ idr_remove(struct idr *idr, int id)
 }
 
 void *
-idr_find(struct idr *idr, int id)
+idr_find(struct idr *idr, unsigned long id)
 {
 	struct idr_entry find, *res;
 
@@ -781,38 +744,135 @@ SPLAY_GENERATE(idr_tree, idr_entry, entry, idr_cmp);
 void
 ida_init(struct ida *ida)
 {
-	ida->counter = 0;
+	idr_init(&ida->idr);
 }
 
 void
 ida_destroy(struct ida *ida)
 {
-}
-
-void
-ida_remove(struct ida *ida, int id)
-{
+	idr_destroy(&ida->idr);
 }
 
 int
 ida_simple_get(struct ida *ida, unsigned int start, unsigned int end,
-    int flags)
+    gfp_t gfp_mask)
 {
-	if (end <= 0)
-		end = INT_MAX;
-
-	if (start > ida->counter)
-		ida->counter = start;
-
-	if (ida->counter >= end)
-		return -ENOSPC;
-
-	return ida->counter++;
+	return idr_alloc(&ida->idr, NULL, start, end, gfp_mask);
 }
 
 void
-ida_simple_remove(struct ida *ida, int id)
+ida_simple_remove(struct ida *ida, unsigned int id)
 {
+	idr_remove(&ida->idr, id);
+}
+
+int
+xarray_cmp(struct xarray_entry *a, struct xarray_entry *b)
+{
+	return (a->id < b->id ? -1 : a->id > b->id);
+}
+
+SPLAY_PROTOTYPE(xarray_tree, xarray_entry, entry, xarray_cmp);
+struct pool xa_pool;
+SPLAY_GENERATE(xarray_tree, xarray_entry, entry, xarray_cmp);
+
+void
+xa_init_flags(struct xarray *xa, gfp_t flags)
+{
+	static int initialized;
+
+	if (!initialized) {
+		pool_init(&xa_pool, sizeof(struct xarray_entry), 0, IPL_TTY, 0,
+		    "xapl", NULL);
+		initialized = 1;
+	}
+	SPLAY_INIT(&xa->xa_tree);
+}
+
+void
+xa_destroy(struct xarray *xa)
+{
+	struct xarray_entry *id;
+
+	while ((id = SPLAY_MIN(xarray_tree, &xa->xa_tree))) {
+		SPLAY_REMOVE(xarray_tree, &xa->xa_tree, id);
+		pool_put(&xa_pool, id);
+	}
+}
+
+int
+xa_alloc(struct xarray *xa, u32 *id, void *entry, int limit, gfp_t gfp)
+{
+	struct xarray_entry *xid;
+	int flags = (gfp & GFP_NOWAIT) ? PR_NOWAIT : PR_WAITOK;
+	int start = (xa->xa_flags & XA_FLAGS_ALLOC1) ? 1 : 0;
+	int begin;
+
+	xid = pool_get(&xa_pool, flags);
+	if (xid == NULL)
+		return -ENOMEM;
+
+	if (limit <= 0)
+		limit = INT_MAX;
+
+	xid->id = begin = start;
+
+	while (SPLAY_INSERT(xarray_tree, &xa->xa_tree, xid)) {
+		if (xid->id == limit)
+			xid->id = start;
+		else
+			xid->id++;
+		if (xid->id == begin) {
+			pool_put(&xa_pool, xid);
+			return -EBUSY;
+		}
+	}
+	xid->ptr = entry;
+	*id = xid->id;
+	return 0;
+}
+
+void *
+xa_erase(struct xarray *xa, unsigned long index)
+{
+	struct xarray_entry find, *res;
+	void *ptr = NULL;
+
+	find.id = index;
+	res = SPLAY_FIND(xarray_tree, &xa->xa_tree, &find);
+	if (res) {
+		SPLAY_REMOVE(xarray_tree, &xa->xa_tree, res);
+		ptr = res->ptr;
+		pool_put(&xa_pool, res);
+	}
+	return ptr;
+}
+
+void *
+xa_load(struct xarray *xa, unsigned long index)
+{
+	struct xarray_entry find, *res;
+
+	find.id = index;
+	res = SPLAY_FIND(xarray_tree, &xa->xa_tree, &find);
+	if (res == NULL)
+		return NULL;
+	return res->ptr;
+}
+
+void *
+xa_get_next(struct xarray *xa, unsigned long *index)
+{
+	struct xarray_entry *res;
+
+	SPLAY_FOREACH(res, xarray_tree, &xa->xa_tree) {
+		if (res->id >= *index) {
+			*index = res->id;
+			return res->ptr;
+		}
+	}
+
+	return NULL;
 }
 
 int
@@ -831,6 +891,7 @@ sg_free_table(struct sg_table *table)
 {
 	free(table->sgl, M_DRM,
 	    table->orig_nents * sizeof(struct scatterlist));
+	table->sgl = NULL;
 }
 
 size_t
@@ -891,10 +952,20 @@ fail:
 int
 i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
 {
-	if (adap->algo)
-		return adap->algo->master_xfer(adap, msgs, num);
+	int ret;
 
-	return i2c_master_xfer(adap, msgs, num);
+	if (adap->lock_ops)
+		adap->lock_ops->lock_bus(adap, 0);
+
+	if (adap->algo)
+		ret = adap->algo->master_xfer(adap, msgs, num);
+	else
+		ret = i2c_master_xfer(adap, msgs, num);
+
+	if (adap->lock_ops)
+		adap->lock_ops->unlock_bus(adap, 0);
+
+	return ret;
 }
 
 int
@@ -1199,18 +1270,40 @@ backlight_schedule_update_status(struct backlight_device *bd)
 	task_add(systq, &bd->task);
 }
 
+inline int
+backlight_enable(struct backlight_device *bd)
+{
+	if (bd == NULL)
+		return 0;
+
+	bd->props.power = FB_BLANK_UNBLANK;
+
+	return bd->ops->update_status(bd);
+}
+
+inline int
+backlight_disable(struct backlight_device *bd)
+{
+	if (bd == NULL)
+		return 0;
+
+	bd->props.power = FB_BLANK_POWERDOWN;
+
+	return bd->ops->update_status(bd);
+}
+
 void
 drm_sysfs_hotplug_event(struct drm_device *dev)
 {
 	KNOTE(&dev->note, NOTE_CHANGE);
 }
 
-unsigned int drm_fence_count;
+static atomic64_t drm_fence_context_count = ATOMIC64_INIT(1);
 
-unsigned int
+uint64_t
 dma_fence_context_alloc(unsigned int num)
 {
-	return __sync_add_and_fetch(&drm_fence_count, num) - num;
+  return atomic64_add_return(num, &drm_fence_context_count) - num;
 }
 
 struct default_wait_cb {
@@ -1230,9 +1323,12 @@ long
 dma_fence_default_wait(struct dma_fence *fence, bool intr, signed long timeout)
 {
 	long ret = timeout ? timeout : 1;
+	unsigned long end;
 	int err;
 	struct default_wait_cb cb;
 	bool was_set;
+
+	KASSERT(timeout <= INT_MAX);
 
 	if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags))
 		return ret;
@@ -1261,14 +1357,14 @@ dma_fence_default_wait(struct dma_fence *fence, bool intr, signed long timeout)
 	cb.proc = curproc;
 	list_add(&cb.base.node, &fence->cb_list);
 
-	while (!test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags)) {
-		err = msleep(curproc, fence->lock, intr ? PCATCH : 0, "dmafence",
-		    timeout);
+	end = jiffies + timeout;
+	for (ret = timeout; ret > 0; ret = MAX(0, end - jiffies)) {
+		if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags))
+			break;
+		err = msleep(curproc, fence->lock, intr ? PCATCH : 0,
+		    "dmafence", ret);
 		if (err == EINTR || err == ERESTART) {
 			ret = -ERESTARTSYS;
-			break;
-		} else if (err == EWOULDBLOCK) {
-			ret = 0;
 			break;
 		}
 	}
@@ -1303,8 +1399,11 @@ dma_fence_wait_any_timeout(struct dma_fence **fences, uint32_t count,
     bool intr, long timeout, uint32_t *idx)
 {
 	struct default_wait_cb *cb;
+	long ret = timeout;
+	unsigned long end;
 	int i, err;
-	int ret = timeout;
+
+	KASSERT(timeout <= INT_MAX);
 
 	if (timeout == 0) {
 		for (i = 0; i < count; i++) {
@@ -1332,17 +1431,13 @@ dma_fence_wait_any_timeout(struct dma_fence **fences, uint32_t count,
 		}
 	}
 
-	while (ret > 0) {
+	end = jiffies + timeout;
+	for (ret = timeout; ret > 0; ret = MAX(0, end - jiffies)) {
 		if (dma_fence_test_signaled_any(fences, count, idx))
 			break;
-
-		err = tsleep(curproc, intr ? PCATCH : 0,
-		    "dfwat", timeout);
+		err = tsleep(curproc, intr ? PCATCH : 0, "dfwat", ret);
 		if (err == EINTR || err == ERESTART) {
 			ret = -ERESTARTSYS;
-			break;
-		} else if (err == EWOULDBLOCK) {
-			ret = 0;
 			break;
 		}
 	}
@@ -1352,6 +1447,34 @@ cb_cleanup:
 		dma_fence_remove_callback(fences[i], &cb[i].base);
 	free(cb, M_DRM, count * sizeof(*cb));
 	return ret;
+}
+
+static struct dma_fence dma_fence_stub;
+static struct mutex dma_fence_stub_mtx = MUTEX_INITIALIZER(IPL_TTY);
+
+static const char *
+dma_fence_stub_get_name(struct dma_fence *fence)
+{
+	return "stub";
+}
+
+static const struct dma_fence_ops dma_fence_stub_ops = {
+	.get_driver_name = dma_fence_stub_get_name,
+	.get_timeline_name = dma_fence_stub_get_name,
+};
+
+struct dma_fence *
+dma_fence_get_stub(void)
+{
+	mtx_enter(&dma_fence_stub_mtx);
+	if (dma_fence_stub.ops == NULL) {
+		dma_fence_init(&dma_fence_stub, &dma_fence_stub_ops,
+		    &dma_fence_stub_mtx, 0, 0);
+		dma_fence_signal_locked(&dma_fence_stub);
+	}
+	mtx_leave(&dma_fence_stub_mtx);
+
+	return dma_fence_get(&dma_fence_stub);
 }
 
 static const char *
@@ -1567,6 +1690,7 @@ dma_buf_export(const struct dma_buf_export_info *info)
 	dmabuf->size = info->size;
 	dmabuf->file = fp;
 	fp->f_data = dmabuf;
+	INIT_LIST_HEAD(&dmabuf->attachments);
 	return dmabuf;
 }
 
@@ -1711,24 +1835,18 @@ pcie_get_width_cap(struct pci_dev *pdev)
 }
 
 int
-default_wake_function(struct wait_queue_entry *wqe, unsigned int mode,
+autoremove_wake_function(struct wait_queue_entry *wqe, unsigned int mode,
     int sync, void *key)
 {
 	wakeup(wqe);
 	if (wqe->proc)
 		wake_up_process(wqe->proc);
-	return 0;
-}
-
-int
-autoremove_wake_function(struct wait_queue_entry *wqe, unsigned int mode,
-    int sync, void *key)
-{
-	default_wake_function(wqe, mode, sync, key);
 	list_del_init(&wqe->entry);
 	return 0;
 }
 
+static wait_queue_head_t bit_waitq;
+wait_queue_head_t var_waitq;
 struct mutex wait_bit_mtx = MUTEX_INITIALIZER(IPL_TTY);
 
 int
@@ -1780,7 +1898,22 @@ wake_up_bit(void *word, int bit)
 	mtx_leave(&wait_bit_mtx);
 }
 
+void
+clear_and_wake_up_bit(int bit, void *word)
+{
+	clear_bit(bit, word);
+	wake_up_bit(word, bit);
+}
+
+wait_queue_head_t *
+bit_waitqueue(void *word, int bit)
+{
+	/* XXX hash table of wait queues? */
+	return &bit_waitq;
+}
+
 struct workqueue_struct *system_wq;
+struct workqueue_struct *system_highpri_wq;
 struct workqueue_struct *system_unbound_wq;
 struct workqueue_struct *system_long_wq;
 struct taskq *taskletq;
@@ -1788,21 +1921,35 @@ struct taskq *taskletq;
 void
 drm_linux_init(void)
 {
-	if (system_wq == NULL) {
-		system_wq = (struct workqueue_struct *)
-		    taskq_create("drmwq", 4, IPL_HIGH, 0);
-	}
-	if (system_unbound_wq == NULL) {
-		system_unbound_wq = (struct workqueue_struct *)
-		    taskq_create("drmubwq", 4, IPL_HIGH, 0);
-	}
-	if (system_long_wq == NULL) {
-		system_long_wq = (struct workqueue_struct *)
-		    taskq_create("drmlwq", 4, IPL_HIGH, 0);
-	}
+	system_wq = (struct workqueue_struct *)
+	    taskq_create("drmwq", 4, IPL_HIGH, 0);
+	system_highpri_wq = (struct workqueue_struct *)
+	    taskq_create("drmhpwq", 4, IPL_HIGH, 0);
+	system_unbound_wq = (struct workqueue_struct *)
+	    taskq_create("drmubwq", 4, IPL_HIGH, 0);
+	system_long_wq = (struct workqueue_struct *)
+	    taskq_create("drmlwq", 4, IPL_HIGH, 0);
 
-	if (taskletq == NULL)
-		taskletq = taskq_create("drmtskl", 1, IPL_HIGH, 0);
+	taskletq = taskq_create("drmtskl", 1, IPL_HIGH, 0);
+
+	init_waitqueue_head(&bit_waitq);
+	init_waitqueue_head(&var_waitq);
+
+	pool_init(&idr_pool, sizeof(struct idr_entry), 0, IPL_TTY, 0,
+	    "idrpl", NULL);
+}
+
+void
+drm_linux_exit(void)
+{
+	pool_destroy(&idr_pool);
+
+	taskq_destroy(taskletq);
+
+	taskq_destroy((struct taskq *)system_long_wq);
+	taskq_destroy((struct taskq *)system_unbound_wq);
+	taskq_destroy((struct taskq *)system_highpri_wq);
+	taskq_destroy((struct taskq *)system_wq);
 }
 
 #define PCIE_ECAP_RESIZE_BAR	0x15
@@ -1887,4 +2034,98 @@ drmbackoff(long npages)
 		npages -= ret;
 		shrinker = TAILQ_NEXT(shrinker, next);
 	}
+}
+
+void *
+bitmap_zalloc(u_int n, gfp_t flags)
+{
+	return kcalloc(BITS_TO_LONGS(n), sizeof(long), flags);
+}
+
+void
+bitmap_free(void *p)
+{
+	kfree(p);
+}
+
+int
+atomic_dec_and_mutex_lock(volatile int *v, struct rwlock *lock)
+{
+	if (atomic_add_unless(v, -1, 1))
+		return 0;
+
+	rw_enter_write(lock);
+	if (atomic_dec_return(v) == 0)
+		return 1;
+	rw_exit_write(lock);
+	return 0;
+}
+
+int
+printk(const char *fmt, ...)
+{
+	int ret, level;
+	va_list ap;
+
+	if (fmt != NULL && *fmt == '\001') {
+		level = fmt[1];
+#ifndef DRMDEBUG
+		if (level >= KERN_INFO[1] && level <= '9')
+			return 0;
+#endif
+		fmt += 2;
+	}
+
+	va_start(ap, fmt);
+	ret = vprintf(fmt, ap);
+	va_end(ap);
+
+	return ret;
+}
+
+#define START(node) ((node)->start)
+#define LAST(node) ((node)->last)
+
+struct interval_tree_node *
+interval_tree_iter_first(struct rb_root_cached *root, unsigned long start,
+    unsigned long last)
+{
+	struct interval_tree_node *node;
+	struct rb_node *rb;
+
+	for (rb = rb_first_cached(root); rb; rb = rb_next(rb)) {
+		node = rb_entry(rb, typeof(*node), rb);
+		if (LAST(node) >= start && START(node) <= last)
+			return node;
+	}
+	return NULL;
+}
+
+void
+interval_tree_remove(struct interval_tree_node *node,
+    struct rb_root_cached *root) 
+{
+	rb_erase_cached(&node->rb, root);
+}
+
+void
+interval_tree_insert(struct interval_tree_node *node,
+    struct rb_root_cached *root)
+{
+	struct rb_node **iter = &root->rb_root.rb_node;
+	struct rb_node *parent = NULL;
+	struct interval_tree_node *iter_node;
+
+	while (*iter) {
+		parent = *iter;
+		iter_node = rb_entry(*iter, struct interval_tree_node, rb);
+
+		if (node->start < iter_node->start)
+			iter = &(*iter)->rb_left;
+		else
+			iter = &(*iter)->rb_right;
+	}
+
+	rb_link_node(&node->rb, parent, iter);
+	rb_insert_color_cached(&node->rb, root, false);
 }

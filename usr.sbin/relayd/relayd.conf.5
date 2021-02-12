@@ -1,4 +1,4 @@
-.\"	$OpenBSD: relayd.conf.5,v 1.194 2020/02/10 13:18:21 schwarze Exp $
+.\"	$OpenBSD: relayd.conf.5,v 1.203 2021/01/09 08:53:58 denis Exp $
 .\"
 .\" Copyright (c) 2006 - 2016 Reyk Floeter <reyk@openbsd.org>
 .\" Copyright (c) 2006, 2007 Pierre-Yves Ritschard <pyr@openbsd.org>
@@ -15,7 +15,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: February 10 2020 $
+.Dd $Mdocdate: January 9 2021 $
 .Dt RELAYD.CONF 5
 .Os
 .Sh NAME
@@ -118,6 +118,21 @@ table <webhosts> {
 .Sh GLOBAL CONFIGURATION
 Here are the settings that can be set globally:
 .Bl -tag -width Ds
+.It Ic agentx Oo Ic context Ar context Oc Oo Ic path Ar path Oc
+Export
+.Xr relayd 8
+metrics via an agentx compatible
+.Pq snmp
+daemon by connecting to
+.Ar path .
+Metrics can be found under the relaydMIBObjects subtree
+.Pq enterprises.30155.3 .
+If
+.Ar path
+is omitted it will default to
+.Pa /var/agentx/master .
+.Ar Context
+is the SNMPv3 context and can usually be omitted.
 .It Ic interval Ar number
 Set the interval in seconds at which the hosts will be checked.
 The default interval is 10 seconds.
@@ -153,22 +168,6 @@ to a relay.
 .Xr relayd 8
 runs 3 relay processes by default and every process will handle
 all configured relays.
-.It Ic snmp Oo Ic trap Oc Op Qq Ar path
-Send an SNMP trap when the state of a host changes.
-.Xr relayd 8
-will try to connect to
-.Xr snmpd 8
-over the AgentX SNMP socket specified by
-.Ar path
-and request it send a trap to the registered trap receivers.
-If
-.Ar path
-is not specified, a default path of
-.Pa /var/run/agentx.sock
-will be used.
-See
-.Xr snmpd.conf 5
-for more information about SNMP configuration.
 .It Ic socket Qo Ar path Qc
 Create a control socket at
 .Ar path .
@@ -960,17 +959,21 @@ suites, in order of preference.
 The special value of "default" will use the default curves; see
 .Xr tls_config_set_ecdhecurves 3
 for further details.
-.It Ic edh Op Ic params Ar maximum
+.It Ic edh Op Ic params Pq Ic none Ns | Ns Ic auto Ns | Ns Ic legacy
 Enable EDH-based cipher suites with Perfect Forward Secrecy (PFS) for
 older clients that do not support ECDHE.
-If the
-.Ar maximum
-length of the DH params for EDH is not specified, the default value of
-1024 bits will be used.
-Other possible values are numbers between 1024 and 8192, including
-1024, 1536, 2048, 4096, or 8192.
-Values higher than 1024 bits can cause incompatibilities with older
-TLS clients.
+In
+.Ic auto
+mode, the key size of the ephemeral key is automatically selected
+based on the size of the private key used for signing.
+In
+.Ic legacy
+mode, a 1024 bit ephemeral key is used.
+If
+.Ic params
+is omitted,
+.Ic auto
+is used.
 The default is
 .Ic no edh .
 .It Ic keypair Ar name
@@ -1005,12 +1008,15 @@ OCSP server for the certificate in use, and can be created using
 Prefer the client's cipher list over the server's preferences when
 choosing a cipher for the connection.
 The default is to prefer the server's cipher list.
-.It Ic no session tickets
-Disable TLS session tickets.
+.It Ic session tickets
+Enable TLS session tickets.
 .Xr relayd 8
 supports stateless TLS session tickets (RFC 5077) to implement TLS session
-resumption.
-The default is to enable session tickets.
+resumption for connections not using TLSv1.3.
+The default is to disable session tickets.
+.It Ic no tlsv1.3
+Disable the TLSv1.3 protocol.
+The default is to enable TLSv1.3.
 .It Ic no tlsv1.2
 Disable the TLSv1.2 protocol.
 The default is to enable TLSv1.2.
@@ -1023,8 +1029,9 @@ Enable all TLSv1 protocols.
 This is an alias that includes
 .Ic tlsv1.0 ,
 .Ic tlsv1.1 ,
+.Ic tlsv1.2 ,
 and
-.Ic tlsv1.2 .
+.Ic tlsv1.3 .
 The default is
 .Ic no tlsv1 .
 .It Ic tlsv1.0
@@ -1205,7 +1212,7 @@ and can be either
 or
 .Ic VERSION-CONTROL .
 .It Xo
-.Ar type Ar option
+.Ar type option
 .Oo Oo Ic digest Oc
 .Pq Ar key Ns | Ns Ic file Ar path
 .Oo Ic value Ar value Oc Oc
@@ -1282,6 +1289,15 @@ for example:
 block path "/index.html"
 block path "/cgi-bin/t.cgi" value "foo=bar*"
 .Ed
+.It Ic path  strip Ar number
+Strip
+.Ar number
+path components from the beginning of the path of the requested URL
+when using the
+.Ic http
+protocol.
+This type is only available with the direction
+.Ic request .
 .It Ic query Ar option Oo Ar key Oo Ic value Ar value Oc Oc
 Look up the entity as a query variable in the URL when using the
 .Ic http
@@ -1638,7 +1654,6 @@ router "uplinks" {
 .Xr ocspcheck 8 ,
 .Xr relayctl 8 ,
 .Xr relayd 8 ,
-.Xr snmpd 8 ,
 .Xr ssl 8
 .Sh HISTORY
 The

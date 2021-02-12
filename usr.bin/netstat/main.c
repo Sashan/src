@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.116 2019/04/28 17:59:51 mpi Exp $	*/
+/*	$OpenBSD: main.c,v 1.121 2021/01/26 18:22:45 deraadt Exp $	*/
 /*	$NetBSD: main.c,v 1.9 1996/05/07 02:55:02 thorpej Exp $	*/
 
 /*
@@ -106,6 +106,35 @@ void gettable(u_int);
 
 kvm_t *kvmd;
 
+int     Aflag;          /* show addresses of protocol control block */
+int     aflag;          /* show all sockets (including servers) */
+int     Bflag;          /* show TCP send and receive buffer sizes */
+int     bflag;          /* show bytes instead of packets */
+int     dflag;          /* show i/f dropped packets */
+int     Fflag;          /* show routes whose gateways are in specified AF */
+int     gflag;          /* show group (multicast) routing or stats */
+int     hflag;          /* print human numbers */
+int     iflag;          /* show interfaces */
+int     lflag;          /* show only listening sockets (only servers), */
+                        /* with -g, show routing table with use and ref */
+int     mflag;          /* show memory stats */
+int     nflag;          /* show addresses numerically */
+int     pflag;          /* show given protocol */
+int     Pflag;          /* show given PCB */
+int     qflag;          /* only display non-zero values for output */
+int     rflag;          /* show routing tables (or routing stats) */
+int     Rflag;          /* show rdomain and rtable summary */
+int     sflag;          /* show protocol statistics */
+int     tflag;          /* show i/f watchdog timers */
+int     vflag;          /* be verbose */
+int     Wflag;          /* show net80211 protocol statistics */
+
+int     interval;       /* repeat interval for i/f stats */
+
+char    *interface;     /* desired i/f for stats, or NULL for all i/fs */
+
+int     af;             /* address family */
+
 int
 main(int argc, char *argv[])
 {
@@ -127,7 +156,7 @@ main(int argc, char *argv[])
 	tableid = getrtable();
 
 	while ((ch = getopt(argc, argv,
-	    "AaBbc:deFf:ghI:iLlM:mN:np:P:qrsT:tuvW:w:")) != -1)
+	    "AaBbc:deFf:ghI:iLlM:mN:np:P:qRrsT:tuvW:w:")) != -1)
 		switch (ch) {
 		case 'A':
 			Aflag = 1;
@@ -225,6 +254,9 @@ main(int argc, char *argv[])
 		case 'q':
 			qflag = 1;
 			break;
+		case 'R':
+			Rflag = 1;
+			break;
 		case 'r':
 			rflag = 1;
 			break;
@@ -318,6 +350,11 @@ main(int argc, char *argv[])
 			mroutepr();
 		if (af == AF_INET6 || af == AF_UNSPEC)
 			mroute6pr();
+		exit(0);
+	}
+
+	if (Rflag) {
+		rdomainpr();
 		exit(0);
 	}
 
@@ -445,16 +482,17 @@ static void
 usage(void)
 {
 	(void)fprintf(stderr,
-	    "usage: %s [-AaBln] [-f address_family] [-M core] [-N system]\n"
-	    "       %s [-bdeFgilmnqrstu] [-f address_family] [-M core] [-N system]\n"
+	    "usage: netstat [-AaBln] [-M core] [-N system] [-p protocol] [-T rtable]\n"
+	    "       netstat -W interface\n"
+	    "       netstat -m\n"
+	    "       netstat -I interface | -i [-bdehnqt]\n"
+	    "       netstat -w wait [-bdehnqt] [-c count] [-I interface]\n"
+	    "       netstat -s [-gru] [-f address_family] [-p protocol]\n"
+	    "       netstat -g [-lnu] [-f address_family]\n"
+	    "       netstat -R\n"
+	    "       netstat -r [-AFu] [-f address_family] [-M core] [-N system] [-p protocol]\n"
 	    "               [-T rtable]\n"
-	    "       %s [-bdehn] [-c count] [-I interface] [-M core] [-N system] [-w wait]\n"
-	    "       %s [-v] [-M core] [-N system] -P pcbaddr\n"
-	    "       %s [-s] [-M core] [-N system] [-p protocol]\n"
-	    "       %s [-a] [-f address_family] [-i | -I interface]\n"
-	    "       %s [-W interface]\n",
-	    __progname, __progname, __progname, __progname,
-	    __progname, __progname, __progname);
+	    "       netstat -P pcbaddr [-v] [-M core] [-N system]\n");
 	exit(1);
 }
 

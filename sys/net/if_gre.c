@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_gre.c,v 1.155 2019/11/10 11:44:10 dlg Exp $ */
+/*	$OpenBSD: if_gre.c,v 1.164 2021/01/19 07:31:47 mvs Exp $ */
 /*	$NetBSD: if_gre.c,v 1.9 1999/10/25 19:18:11 drochner Exp $ */
 
 /*
@@ -715,7 +715,6 @@ egre_clone_create(struct if_clone *ifc, int unit)
 	ifp->if_ioctl = egre_ioctl;
 	ifp->if_start = egre_start;
 	ifp->if_xflags = IFXF_CLONED;
-	IFQ_SET_MAXLEN(&ifp->if_snd, IFQ_MAXLEN);
 	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	ether_fakeaddr(ifp);
 
@@ -777,7 +776,6 @@ nvgre_clone_create(struct if_clone *ifc, int unit)
 	ifp->if_ioctl = nvgre_ioctl;
 	ifp->if_start = nvgre_start;
 	ifp->if_xflags = IFXF_CLONED;
-	IFQ_SET_MAXLEN(&ifp->if_snd, IFQ_MAXLEN);
 	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	ether_fakeaddr(ifp);
 
@@ -849,7 +847,6 @@ eoip_clone_create(struct if_clone *ifc, int unit)
 	ifp->if_ioctl = eoip_ioctl;
 	ifp->if_start = eoip_start;
 	ifp->if_xflags = IFXF_CLONED;
-	IFQ_SET_MAXLEN(&ifp->if_snd, IFQ_MAXLEN);
 	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	ether_fakeaddr(ifp);
 
@@ -1012,7 +1009,9 @@ gre_input_key(struct mbuf **mp, int *offp, int type, int af, uint8_t otos,
 	void (*input)(struct ifnet *, struct mbuf *);
 	struct mbuf *(*patch)(const struct gre_tunnel *, struct mbuf *,
 	    uint8_t *, uint8_t);
+#if NBPFILTER > 0
 	int bpf_af = AF_UNSPEC; /* bpf */
+#endif
 	int mcast = 0;
 	uint8_t itos;
 
@@ -1110,7 +1109,7 @@ gre_input_key(struct mbuf **mp, int *offp, int type, int af, uint8_t otos,
 		if (n == NULL)
 			goto decline;
 		if (n->m_data[off] >> 4 != IPVERSION)
-			hlen += sizeof(gre_wccp);
+			hlen += 4;  /* four-octet Redirect header */
 
 		/* FALLTHROUGH */
 	}
@@ -1167,8 +1166,9 @@ gre_input_key(struct mbuf **mp, int *offp, int type, int af, uint8_t otos,
 		return (IPPROTO_DONE);
 
 	if (tunnel->t_key_mask == GRE_KEY_ENTROPY) {
-		m->m_pkthdr.ph_flowid = M_FLOWID_VALID |
-		    (bemtoh32(&key->t_key) & ~GRE_KEY_ENTROPY);
+		SET(m->m_pkthdr.csum_flags, M_FLOWID);
+		m->m_pkthdr.ph_flowid =
+		    bemtoh32(&key->t_key) & ~GRE_KEY_ENTROPY;
 	}
 
 	rxprio = tunnel->t_rxhprio;
@@ -1326,8 +1326,9 @@ egre_input(const struct gre_tunnel *key, struct mbuf *m, int hlen, uint8_t otos)
 		return (0);
 
 	if (sc->sc_tunnel.t_key_mask == GRE_KEY_ENTROPY) {
-		m->m_pkthdr.ph_flowid = M_FLOWID_VALID |
-		    (bemtoh32(&key->t_key) & ~GRE_KEY_ENTROPY);
+		SET(m->m_pkthdr.csum_flags, M_FLOWID);
+		m->m_pkthdr.ph_flowid =
+		    bemtoh32(&key->t_key) & ~GRE_KEY_ENTROPY;
 	}
 
 	m->m_flags &= ~(M_MCAST|M_BCAST);
@@ -1469,7 +1470,7 @@ nvgre_input_map(struct nvgre_softc *sc, const struct gre_tunnel *key,
 		nv->nv_age = ticks;
 
 		if (nv->nv_type != NVGRE_ENTRY_DYNAMIC ||
-		    gre_ip_cmp(key->t_af, &key->t_dst, &nv->nv_gateway))
+		    gre_ip_cmp(key->t_af, &key->t_dst, &nv->nv_gateway) == 0)
 			nv = NULL;
 		else
 			refcnt_take(&nv->nv_refs);
@@ -1577,8 +1578,8 @@ nvgre_input(const struct gre_tunnel *key, struct mbuf *m, int hlen,
 
 	nvgre_input_map(sc, key, mtod(m, struct ether_header *));
 
-	m->m_pkthdr.ph_flowid = M_FLOWID_VALID |
-	    (bemtoh32(&key->t_key) & ~GRE_KEY_ENTROPY);
+	SET(m->m_pkthdr.csum_flags, M_FLOWID);
+	m->m_pkthdr.ph_flowid = bemtoh32(&key->t_key) & ~GRE_KEY_ENTROPY;
 
 	gre_l2_prio(&sc->sc_tunnel, m, otos);
 
@@ -2132,9 +2133,9 @@ gre_encap_dst(const struct gre_tunnel *tunnel, const union gre_addr *dst,
 		gkh->gre_key = tunnel->t_key;
 
 		if (tunnel->t_key_mask == GRE_KEY_ENTROPY &&
-		    ISSET(m->m_pkthdr.ph_flowid, M_FLOWID_VALID)) {
+		    ISSET(m->m_pkthdr.csum_flags, M_FLOWID)) {
 			gkh->gre_key |= htonl(~GRE_KEY_ENTROPY &
-			    (m->m_pkthdr.ph_flowid & M_FLOWID_MASK));
+			    m->m_pkthdr.ph_flowid);
 		}
 	}
 
@@ -2179,8 +2180,8 @@ gre_encap_dst_ip(const struct gre_tunnel *tunnel, const union gre_addr *dst,
 			return (NULL);
 
 		ip6 = mtod(m, struct ip6_hdr *);
-		ip6->ip6_flow = ISSET(m->m_pkthdr.ph_flowid, M_FLOWID_VALID) ?
-		    htonl(m->m_pkthdr.ph_flowid & M_FLOWID_MASK) : 0;
+		ip6->ip6_flow = ISSET(m->m_pkthdr.csum_flags, M_FLOWID) ?
+		    htonl(m->m_pkthdr.ph_flowid) : 0;
 		ip6->ip6_vfc |= IPV6_VERSION;
 		ip6->ip6_flow |= htonl((uint32_t)tos << 20);
 		ip6->ip6_plen = htons(len);
@@ -3197,7 +3198,7 @@ gre_keepalive_send(void *arg)
 		return;
 
 	if (len > MHLEN) {
-		MCLGETI(m, M_DONTWAIT, NULL, len);
+		MCLGETL(m, M_DONTWAIT, len);
 		if (!ISSET(m->m_flags, M_EXT)) {
 			m_freem(m);
 			return;
@@ -3752,15 +3753,18 @@ nvgre_set_parent(struct nvgre_softc *sc, const char *parent)
 {
 	struct ifnet *ifp0;
 
-	ifp0 = ifunit(parent); /* doesn't need an if_put */
+	ifp0 = if_unit(parent);
 	if (ifp0 == NULL)
 		return (EINVAL);
 
-	if (!ISSET(ifp0->if_flags, IFF_MULTICAST))
+	if (!ISSET(ifp0->if_flags, IFF_MULTICAST)) {
+		if_put(ifp0);
 		return (EPROTONOSUPPORT);
+	}
 
 	/* commit */
 	sc->sc_ifp0 = ifp0->if_index;
+	if_put(ifp0);
 
 	return (0);
 }
@@ -3904,12 +3908,12 @@ nvgre_send4(struct nvgre_softc *sc, struct mbuf_list *ml)
 	imo.imo_ttl = sc->sc_tunnel.t_ttl;
 	imo.imo_loop = 0;
 
-	NET_RLOCK();
+	NET_LOCK();
 	while ((m = ml_dequeue(ml)) != NULL) {
 		if (ip_output(m, NULL, NULL, IP_RAWOUTPUT, &imo, NULL, 0) != 0)
 			oerrors++;
 	}
-	NET_RUNLOCK();
+	NET_UNLOCK();
 
 	return (oerrors);
 }
@@ -3926,12 +3930,12 @@ nvgre_send6(struct nvgre_softc *sc, struct mbuf_list *ml)
 	im6o.im6o_hlim = sc->sc_tunnel.t_ttl;
 	im6o.im6o_loop = 0;
 
-	NET_RLOCK();
+	NET_LOCK();
 	while ((m = ml_dequeue(ml)) != NULL) {
 		if (ip6_output(m, NULL, NULL, 0, &im6o, NULL) != 0)
 			oerrors++;
 	}
-	NET_RUNLOCK();
+	NET_UNLOCK();
 
 	return (oerrors);
 }
@@ -4098,7 +4102,7 @@ eoip_keepalive_send(void *arg)
 		return;
 
 	if (linkhdr > MHLEN) {
-		MCLGETI(m, M_DONTWAIT, NULL, linkhdr);
+		MCLGETL(m, M_DONTWAIT, linkhdr);
 		if (!ISSET(m->m_flags, M_EXT)) {
 			m_freem(m);
 			return;
@@ -4228,31 +4232,22 @@ drop:
 	return (NULL);
 }
 
+const struct sysctl_bounded_args gre_vars[] = {
+	{ GRECTL_ALLOW, &gre_allow, 0, 1 },
+	{ GRECTL_WCCP, &gre_wccp, 0, 1 },
+};
+
 int
 gre_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
     size_t newlen)
 {
 	int error;
 
-	/* All sysctl names at this level are terminal. */
-	if (namelen != 1)
-		return (ENOTDIR);
-
-	switch (name[0]) {
-	case GRECTL_ALLOW:
-		NET_LOCK();
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &gre_allow);
-		NET_UNLOCK();
-		return (error);
-	case GRECTL_WCCP:
-		NET_LOCK();
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &gre_wccp);
-		NET_UNLOCK();
-		return (error);
-	default:
-		return (ENOPROTOOPT);
-	}
-	/* NOTREACHED */
+	NET_LOCK();
+	error = sysctl_bounded_arr(gre_vars, nitems(gre_vars), name,
+	    namelen, oldp, oldlenp, newp, newlen);
+	NET_UNLOCK();
+	return error;
 }
 
 static inline int

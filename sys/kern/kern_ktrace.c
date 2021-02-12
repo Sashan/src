@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_ktrace.c,v 1.102 2020/03/23 15:45:39 visa Exp $	*/
+/*	$OpenBSD: kern_ktrace.c,v 1.104 2020/09/13 09:48:39 claudio Exp $	*/
 /*	$NetBSD: kern_ktrace.c,v 1.23 1996/02/09 18:59:36 christos Exp $	*/
 
 /*
@@ -83,6 +83,7 @@ ktrcleartrace(struct process *pr)
 		pr->ps_tracevp = NULL;
 		pr->ps_tracecred = NULL;
 
+		vp->v_writecount--;
 		vrele(vp);
 		crfree(cred);
 	}
@@ -109,6 +110,7 @@ ktrsettrace(struct process *pr, int facs, struct vnode *newvp,
 
 	vref(newvp);
 	crhold(newcred);
+	newvp->v_writecount++;
 
 	oldvp = pr->ps_tracevp;
 	oldcred = pr->ps_tracecred;
@@ -117,6 +119,7 @@ ktrsettrace(struct process *pr, int facs, struct vnode *newvp,
 	pr->ps_tracecred = newcred;
 
 	if (oldvp != NULL) {
+		oldvp->v_writecount--;
 		vrele(oldvp);
 		crfree(oldcred);
 	}
@@ -288,7 +291,9 @@ ktrpsig(struct proc *p, int sig, sig_t action, int mask, int code,
 	kp.code = code;
 	kp.si = *si;
 
+	KERNEL_LOCK();
 	ktrwrite(p, &kth, &kp, sizeof(kp));
+	KERNEL_UNLOCK();
 	atomic_clearbits_int(&p->p_flag, P_INKTR);
 }
 

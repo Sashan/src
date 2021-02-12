@@ -1,4 +1,4 @@
-/*	$OpenBSD: ofw_regulator.c,v 1.13 2019/04/30 19:53:27 patrick Exp $	*/
+/*	$OpenBSD: ofw_regulator.c,v 1.15 2020/12/23 11:58:36 kettenis Exp $	*/
 /*
  * Copyright (c) 2016 Mark Kettenis
  *
@@ -92,28 +92,35 @@ regulator_fixed_set(int node, int enable)
 {
 	uint32_t *gpio;
 	uint32_t startup_delay;
-	int active;
 	int len;
 
 	pinctrl_byname(node, "default");
-
-	if (OF_getproplen(node, "enable-active-high") == 0)
-		active = 1;
-	else
-		active = 0;
 
 	/* The "gpio" property is optional. */
 	len = OF_getproplen(node, "gpio");
 	if (len < 0)
 		return 0;
 
+	/*
+	 * We deliberately ignore the "enable-active-high" property
+	 * here.  Its presence (or absence) is used to override the
+	 * polarity encoded by the GPIO flags in the device tree.  But
+	 * supporting this behaviour is awkward since it would require
+	 * interpreting the GPIO flags here which would be a layer
+	 * violation since those flags may be driver-specific.  In
+	 * practice the presence of "enable-active-high" is always
+	 * aligned with the polarity encoded by the GPIO flags and any
+	 * discrepancy is considered to be a bug by the Linux device
+	 * tree maintainers.
+	 */
+
 	gpio = malloc(len, M_TEMP, M_WAITOK);
 	OF_getpropintarray(node, "gpio", gpio, len);
 	gpio_controller_config_pin(gpio, GPIO_CONFIG_OUTPUT);
 	if (enable)
-		gpio_controller_set_pin(gpio, active);
+		gpio_controller_set_pin(gpio, 1);
 	else
-		gpio_controller_set_pin(gpio, !active);
+		gpio_controller_set_pin(gpio, 0);
 	free(gpio, M_TEMP, len);
 
 	startup_delay = OF_getpropint(node, "startup-delay-us", 0);
@@ -128,6 +135,9 @@ regulator_set(uint32_t phandle, int enable)
 {
 	struct regulator_device *rd;
 	int node;
+
+	if (phandle == 0)
+		return ENODEV;
 
 	node = OF_getnodebyphandle(phandle);
 	if (node == 0)
@@ -169,6 +179,9 @@ regulator_get_voltage(uint32_t phandle)
 	struct regulator_device *rd;
 	int node;
 
+	if (phandle == 0)
+		return 0;
+
 	LIST_FOREACH(rd, &regulator_devices, rd_list) {
 		if (rd->rd_phandle == phandle)
 			break;
@@ -197,6 +210,9 @@ regulator_set_voltage(uint32_t phandle, uint32_t voltage)
 	struct regulator_device *rd;
 	uint32_t old, delta;
 	int error, node;
+
+	if (phandle == 0)
+		return ENODEV;
 
 	LIST_FOREACH(rd, &regulator_devices, rd_list) {
 		if (rd->rd_phandle == phandle)
@@ -238,6 +254,9 @@ regulator_get_current(uint32_t phandle)
 	struct regulator_device *rd;
 	int node;
 
+	if (phandle == 0)
+		return 0;
+
 	LIST_FOREACH(rd, &regulator_devices, rd_list) {
 		if (rd->rd_phandle == phandle)
 			break;
@@ -266,6 +285,9 @@ regulator_set_current(uint32_t phandle, uint32_t current)
 	struct regulator_device *rd;
 	uint32_t old, delta;
 	int error, node;
+
+	if (phandle == 0)
+		return ENODEV;
 
 	LIST_FOREACH(rd, &regulator_devices, rd_list) {
 		if (rd->rd_phandle == phandle)

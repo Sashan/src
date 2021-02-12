@@ -1,4 +1,4 @@
-/*	$OpenBSD: ch.c,v 1.64 2019/12/06 16:57:24 krw Exp $	*/
+/*	$OpenBSD: ch.c,v 1.67 2020/09/22 19:32:53 krw Exp $	*/
 /*	$NetBSD: ch.c,v 1.26 1997/02/21 22:06:52 thorpej Exp $	*/
 
 /*
@@ -50,6 +50,7 @@
 
 #include <scsi/scsi_all.h>
 #include <scsi/scsi_changer.h>
+#include <scsi/scsi_debug.h>
 #include <scsi/scsiconf.h>
 
 #define CHRETRIES	2
@@ -136,10 +137,10 @@ int
 chmatch(struct device *parent, void *match, void *aux)
 {
 	struct scsi_attach_args		*sa = aux;
+	struct scsi_inquiry_data	*inq = &sa->sa_sc_link->inqdata;
 	int				 priority;
 
-	(void)scsi_inqmatch(sa->sa_inqbuf,
-	    ch_patterns, nitems(ch_patterns),
+	(void)scsi_inqmatch(inq, ch_patterns, nitems(ch_patterns),
 	    sizeof(ch_patterns[0]), &priority);
 
 	return priority;
@@ -163,8 +164,7 @@ chattach(struct device *parent, struct device *self, void *aux)
 	/*
 	 * Store our our device's quirks.
 	 */
-	ch_get_quirks(sc, sa->sa_inqbuf);
-
+	ch_get_quirks(sc, &link->inqdata);
 }
 
 int
@@ -366,7 +366,7 @@ ch_move(struct ch_softc *sc, struct changer_move *cm)
 	xs->retries = CHRETRIES;
 	xs->timeout = 100000;
 
-	cmd = (struct scsi_move_medium *)xs->cmd;
+	cmd = (struct scsi_move_medium *)&xs->cmd;
 	cmd->opcode = MOVE_MEDIUM;
 	_lto2b(sc->sc_picker, cmd->tea);
 	_lto2b(fromelem, cmd->src);
@@ -425,7 +425,7 @@ ch_exchange(struct ch_softc *sc, struct changer_exchange *ce)
 	xs->retries = CHRETRIES;
 	xs->timeout = 100000;
 
-	cmd = (struct scsi_exchange_medium *)xs->cmd;
+	cmd = (struct scsi_exchange_medium *)&xs->cmd;
 	cmd->opcode = EXCHANGE_MEDIUM;
 	_lto2b(sc->sc_picker, cmd->tea);
 	_lto2b(src, cmd->src);
@@ -473,7 +473,7 @@ ch_position(struct ch_softc *sc, struct changer_position *cp)
 	xs->retries = CHRETRIES;
 	xs->timeout = 100000;
 
-	cmd = (struct scsi_position_to_element *)xs->cmd;
+	cmd = (struct scsi_position_to_element *)&xs->cmd;
 	cmd->opcode = POSITION_TO_ELEMENT;
 	_lto2b(sc->sc_picker, cmd->tea);
 	_lto2b(dst, cmd->dst);
@@ -640,7 +640,7 @@ ch_getelemstatus(struct ch_softc *sc, int first, int count, caddr_t data,
 	xs->retries = CHRETRIES;
 	xs->timeout = 100000;
 
-	cmd = (struct scsi_read_element_status *)xs->cmd;
+	cmd = (struct scsi_read_element_status *)&xs->cmd;
 	cmd->opcode = READ_ELEMENT_STATUS;
 	_lto2b(first, cmd->sea);
 	_lto2b(count, cmd->count);

@@ -1,4 +1,4 @@
-/* $OpenBSD: armv7.c,v 1.15 2017/09/08 05:36:51 deraadt Exp $ */
+/* $OpenBSD: armv7.c,v 1.17 2020/04/29 15:25:07 kettenis Exp $ */
 /*
  * Copyright (c) 2005,2008 Dale Rahn <drahn@openbsd.com>
  * Copyright (c) 2012-2013 Patrick Wildt <patrick@blueri.se>
@@ -27,8 +27,6 @@
 #include <armv7/armv7/armv7_machdep.h>
 
 struct arm32_bus_dma_tag armv7_bus_dma_tag = {
-	0,
-	0,
 	NULL,
 	_bus_dmamap_create,
 	_bus_dmamap_destroy,
@@ -36,6 +34,7 @@ struct arm32_bus_dma_tag armv7_bus_dma_tag = {
 	_bus_dmamap_load_mbuf,
 	_bus_dmamap_load_uio,
 	_bus_dmamap_load_raw,
+	_bus_dmamap_load_buffer,
 	_bus_dmamap_unload,
 	_bus_dmamap_sync,
 	_bus_dmamem_alloc,
@@ -89,8 +88,6 @@ armv7_find_dev(const char *name, int unit)
 	return (NULL);
 }
 
-extern char *hw_prod;
-
 void
 armv7_attach(struct device *parent, struct device *self, void *aux)
 {
@@ -122,4 +119,3 @@ armv7_attach(struct device *parent, struct device *self, void *aux)
 			    DEVNAME(sc), bd->name, bd->unit);
 	}
 }
-

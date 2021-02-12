@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.18 2020/02/21 19:39:28 kn Exp $	*/
+/*	$OpenBSD: parse.y,v 1.23 2021/01/30 19:32:44 kn Exp $	*/
 
 /*
  * Copyright (c) 2012 Mark Kettenis <kettenis@openbsd.org>
@@ -64,6 +64,7 @@ int		 lungetc(int);
 int		 findeol(void);
 
 struct ldom_config		*conf;
+struct domain			*domain;
 
 struct vcpu_opts {
 	uint64_t	count;
@@ -80,7 +81,7 @@ struct vnet_opts {
 	const char	*devalias;
 } vnet_opts;
 
-void		vcput_opts_default(void);
+void		vcpu_opts_default(void);
 void		vdisk_opts_default(void);
 void		vnet_opts_default(void);
 
@@ -166,19 +167,37 @@ domainoptsl	: domainopts nl
 		;
 
 domainopts	: VCPU vcpu {
+			if (domain->vcpu) {
+				yyerror("duplicate vcpu option");
+				YYERROR;
+			}
 			domain->vcpu = $2.count;
 			domain->vcpu_stride = $2.stride;
 		}
 		| MEMORY memory {
+			if (domain->memory) {
+				yyerror("duplicate memory option");
+				YYERROR;
+			}
 			domain->memory = $2;
 		}
 		| VDISK STRING vdisk_opts {
+			if (strcmp(domain->name, "primary") == 0) {
+				yyerror("vdisk option invalid for primary"
+				    " domain");
+				YYERROR;
+			}
 			struct vdisk *vdisk = xmalloc(sizeof(struct vdisk));
 			vdisk->path = $2;
 			vdisk->devalias = $3.devalias;
 			SIMPLEQ_INSERT_TAIL(&domain->vdisk_list, vdisk, entry);
 		}
 		| VNET vnet_opts {
+			if (strcmp(domain->name, "primary") == 0) {
+				yyerror("vnet option invalid for primary"
+				    " domain");
+				YYERROR;
+			}
 			struct vnet *vnet = xmalloc(sizeof(struct vnet));
 			vnet->mac_addr = $2.mac_addr;
 			vnet->mtu = $2.mtu;
@@ -192,10 +211,24 @@ domainopts	: VCPU vcpu {
 			SIMPLEQ_INSERT_TAIL(&domain->var_list, var, entry);
 		}
 		| IODEVICE STRING {
-			struct iodev *iodev = xmalloc(sizeof(struct iodev));
+			if (strcmp(domain->name, "primary") == 0) {
+				yyerror("iodevice option invalid for primary"
+				    " domain");
+				YYERROR;
+			}
+			struct domain *odomain;
+			struct iodev *iodev;
+			SIMPLEQ_FOREACH(odomain, &conf->domain_list, entry)
+				SIMPLEQ_FOREACH(iodev, &odomain->iodev_list, entry)
+					if (strcmp(iodev->path, $2) == 0) {
+						yyerror("iodevice %s already"
+						    " assigned", $2);
+						YYERROR;
+					}
+			iodev = xmalloc(sizeof(struct iodev));
 			iodev->path = $2;
 			SIMPLEQ_INSERT_TAIL(&domain->iodev_list, iodev, entry);
-		    }
+		}
 		;
 
 vdisk_opts	:	{ vdisk_opts_default(); }

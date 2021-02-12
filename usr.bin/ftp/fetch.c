@@ -1,4 +1,4 @@
-/*	$OpenBSD: fetch.c,v 1.194 2020/02/22 01:00:07 jca Exp $	*/
+/*	$OpenBSD: fetch.c,v 1.200 2021/02/02 12:58:42 robert Exp $	*/
 /*	$NetBSD: fetch.c,v 1.14 1997/08/18 10:20:20 lukem Exp $	*/
 
 /*-
@@ -58,6 +58,7 @@
 #include <unistd.h>
 #include <util.h>
 #include <resolv.h>
+#include <utime.h>
 
 #ifndef NOSSL
 #include <tls.h>
@@ -72,7 +73,6 @@ static int	file_get(const char *, const char *);
 static int	url_get(const char *, const char *, const char *, int);
 static int	save_chunked(FILE *, struct tls *, int , char *, size_t);
 static void	aborthttp(int);
-static void	abortfile(int);
 static char	hextochar(const char *);
 static char	*urldecode(const char *);
 static char	*recode_credentials(const char *_userinfo);
@@ -190,10 +190,10 @@ static int
 file_get(const char *path, const char *outfile)
 {
 	struct stat	 st;
-	int		 fd, out, rval = -1, save_errno;
+	int		 fd, out = -1, rval = -1, save_errno;
 	volatile sig_t	 oldintr, oldinti;
 	const char	*savefile;
-	char		*buf = NULL, *cp;
+	char		*buf = NULL, *cp, *pathbuf = NULL;
 	const size_t	 buflen = 128 * 1024;
 	off_t		 hashbytes;
 	ssize_t		 len, wlen;
@@ -216,8 +216,12 @@ file_get(const char *path, const char *outfile)
 	else {
 		if (path[strlen(path) - 1] == '/')	/* Consider no file */
 			savefile = NULL;		/* after dir invalid. */
-		else
-			savefile = basename(path);
+		else {
+			pathbuf = strdup(path);
+			if (pathbuf == NULL)
+				errx(1, "Can't allocate memory for filename");
+			savefile = basename(pathbuf);
+		}
 	}
 
 	if (EMPTYSTRING(savefile)) {
@@ -248,7 +252,7 @@ file_get(const char *path, const char *outfile)
 			(void)signal(SIGINFO, oldinti);
 		goto cleanup_copy;
 	}
-	oldintr = signal(SIGINT, abortfile);
+	oldintr = signal(SIGINT, aborthttp);
 
 	bytes = 0;
 	hashbytes = mark;
@@ -261,6 +265,7 @@ file_get(const char *path, const char *outfile)
 		for (cp = buf; len > 0; len -= wlen, cp += wlen) {
 			if ((wlen = write(out, cp, len)) == -1) {
 				warn("Writing %s", savefile);
+				signal(SIGINT, oldintr);
 				signal(SIGINFO, oldinti);
 				goto cleanup_copy;
 			}
@@ -274,6 +279,7 @@ file_get(const char *path, const char *outfile)
 		}
 	}
 	save_errno = errno;
+	signal(SIGINT, oldintr);
 	signal(SIGINFO, oldinti);
 	if (hash && !progress && bytes > 0) {
 		if (bytes < mark)
@@ -288,12 +294,12 @@ file_get(const char *path, const char *outfile)
 	progressmeter(1, NULL);
 	if (verbose)
 		ptransfer(0);
-	(void)signal(SIGINT, oldintr);
 
 	rval = 0;
 
 cleanup_copy:
 	free(buf);
+	free(pathbuf);
 	if (out >= 0 && out != fileno(stdout))
 		close(out);
 	close(fd);
@@ -315,6 +321,7 @@ url_get(const char *origline, const char *proxyenv, const char *outfile, int las
 	int isunavail = 0, retryafter = -1;
 	struct addrinfo hints, *res0, *res;
 	const char *savefile;
+	char *pathbuf = NULL;
 	char *proxyurl = NULL;
 	char *credentials = NULL, *proxy_credentials = NULL;
 	int fd = -1, out = -1;
@@ -333,6 +340,11 @@ url_get(const char *origline, const char *proxyenv, const char *outfile, int las
 	const char *scheme;
 	char *locbase;
 	struct addrinfo *ares = NULL;
+	char tmbuf[32];
+	time_t mtime = 0;
+	struct stat stbuf;
+	struct tm lmt = { 0 };
+	struct timespec ts[2];
 #endif /* !SMALL */
 	struct tls *tls = NULL;
 	int status;
@@ -412,8 +424,12 @@ noslash:
 	else {
 		if (path[strlen(path) - 1] == '/')	/* Consider no file */
 			savefile = NULL;		/* after dir invalid. */
-		else
-			savefile = basename(path);
+		else {
+			pathbuf = strdup(path);
+			if (pathbuf == NULL)
+				errx(1, "Can't allocate memory for filename");
+			savefile = basename(pathbuf);
+		}
 	}
 
 	if (EMPTYSTRING(savefile)) {
@@ -721,13 +737,16 @@ noslash:
 		if (verbose)
 			fprintf(ttyout, "Requesting %s\n", origline);
 #ifndef SMALL
-		if (resume) {
-			struct stat stbuf;
-
-			if (stat(savefile, &stbuf) == 0)
-				restart_point = stbuf.st_size;
-			else
+		if (resume || timestamp) {
+			if (stat(savefile, &stbuf) == 0) {
+				if (resume)
+					restart_point = stbuf.st_size;
+				if (timestamp)
+					mtime = stbuf.st_mtime;
+			} else {
 				restart_point = 0;
+				mtime = 0;
+			}
 		}
 #endif	/* SMALL */
 		ftp_printf(fin,
@@ -767,6 +786,12 @@ noslash:
 		if (port && strcmp(port, "80") != 0)
 			ftp_printf(fin, ":%s", port);
 #endif /* !NOSSL */
+
+#ifndef SMALL
+		if (mtime && (http_time(mtime, tmbuf, sizeof(tmbuf)) != 0))
+			ftp_printf(fin, "\r\nIf-Modified-Since: %s", tmbuf);
+#endif /* SMALL */
+
 		ftp_printf(fin, "\r\n%s%s\r\n",
 		    buf ? buf : "", httpuseragent);
 		if (credentials)
@@ -833,6 +858,7 @@ noslash:
 	case 302:	/* Found */
 	case 303:	/* See Other */
 	case 307:	/* Temporary Redirect */
+	case 308:	/* Permanent Redirect (RFC 7538) */
 		isredirect++;
 		if (redirect_loop++ > 10) {
 			warnx("Too many redirections requested");
@@ -840,6 +866,9 @@ noslash:
 		}
 		break;
 #ifndef SMALL
+	case 304:	/* Not Modified */
+		warnx("File is not modified on the server");
+		goto cleanup_url_get;
 	case 416:	/* Requested Range Not Satisfiable */
 		warnx("File is already fully retrieved.");
 		goto cleanup_url_get;
@@ -962,6 +991,15 @@ noslash:
 			cp[strcspn(cp, " \t")] = '\0';
 			if (strcasecmp(cp, "chunked") == 0)
 				chunked = 1;
+#ifndef SMALL
+#define LAST_MODIFIED "Last-Modified: "
+		} else if (strncasecmp(cp, LAST_MODIFIED,
+			    sizeof(LAST_MODIFIED) - 1) == 0) {
+			cp += sizeof(LAST_MODIFIED) - 1;
+			cp[strcspn(cp, "\t")] = '\0';
+			if (strptime(cp, "%a, %d %h %Y %T %Z", &lmt) == NULL)
+				server_timestamps = 0;
+#endif /* !SMALL */
 		}
 		free(buf);
 	}
@@ -1032,6 +1070,7 @@ noslash:
 	oldinti = signal(SIGINFO, psummary);
 	if (chunked) {
 		error = save_chunked(fin, tls, out, buf, buflen);
+		signal(SIGINT, oldintr);
 		signal(SIGINFO, oldinti);
 		if (error == -1)
 			goto cleanup_url_get;
@@ -1041,6 +1080,7 @@ noslash:
 			for (cp = buf; len > 0; len -= wlen, cp += wlen) {
 				if ((wlen = write(out, cp, len)) == -1) {
 					warn("Writing %s", savefile);
+					signal(SIGINT, oldintr);
 					signal(SIGINFO, oldinti);
 					goto cleanup_url_get;
 				}
@@ -1054,6 +1094,7 @@ noslash:
 			}
 		}
 		save_errno = errno;
+		signal(SIGINT, oldintr);
 		signal(SIGINFO, oldinti);
 		if (hash && !progress && bytes > 0) {
 			if (bytes < mark)
@@ -1080,7 +1121,6 @@ noslash:
 
 	if (verbose)
 		ptransfer(0);
-	(void)signal(SIGINT, oldintr);
 
 	rval = 0;
 	goto cleanup_url_get;
@@ -1101,9 +1141,21 @@ cleanup_url_get:
 	free(sslhost);
 #endif /* !NOSSL */
 	ftp_close(&fin, &tls, &fd);
-	if (out >= 0 && out != fileno(stdout))
+	if (out >= 0 && out != fileno(stdout)) {
+#ifndef SMALL
+		if (server_timestamps && lmt.tm_zone != 0) {
+			ts[0].tv_nsec = UTIME_NOW;
+			ts[1].tv_nsec = 0;
+			setenv("TZ", lmt.tm_zone, 1);
+			if (((ts[1].tv_sec = mktime(&lmt)) != -1) &&
+			    (futimens(out, ts) == -1))
+				warnx("Unable to set file modification time");
+		}
+#endif /* !SMALL */
 		close(out);
+	}
 	free(buf);
+	free(pathbuf);
 	free(proxyhost);
 	free(proxyurl);
 	free(newline);
@@ -1184,24 +1236,10 @@ save_chunked(FILE *fin, struct tls *tls, int out, char *buf, size_t buflen)
 static void
 aborthttp(int signo)
 {
+	const char errmsg[] = "\nfetch aborted.\n";
 
 	alarmtimer(0);
-	fputs("\nhttp fetch aborted.\n", ttyout);
-	(void)fflush(ttyout);
-	longjmp(httpabort, 1);
-}
-
-/*
- * Abort a http retrieval
- */
-/* ARGSUSED */
-static void
-abortfile(int signo)
-{
-
-	alarmtimer(0);
-	fputs("\nfile fetch aborted.\n", ttyout);
-	(void)fflush(ttyout);
+	write(fileno(ttyout), errmsg, sizeof(errmsg) - 1);
 	longjmp(httpabort, 1);
 }
 

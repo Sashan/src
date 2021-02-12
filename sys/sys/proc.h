@@ -1,4 +1,4 @@
-/*	$OpenBSD: proc.h,v 1.293 2020/03/20 08:14:07 claudio Exp $	*/
+/*	$OpenBSD: proc.h,v 1.308 2021/02/08 10:51:02 mpi Exp $	*/
 /*	$NetBSD: proc.h,v 1.44 1996/04/22 01:23:21 christos Exp $	*/
 
 /*-
@@ -150,9 +150,12 @@ struct unveil;
 /*
  * Locks used to protect struct members in this file:
  *	a	atomic operations
+ *	K	kernel lock
  *	m	this process' `ps_mtx'
  *	p	this process' `ps_lock'
- *	r	rlimit_lock
+ *	R	rlimit_lock
+ *	S	scheduler lock
+ *	T	itimer_mtx
  */
 struct process {
 	/*
@@ -199,7 +202,7 @@ struct process {
 	u_int	ps_flags;		/* [a] PS_* flags. */
 	int	ps_siglist;		/* Signals pending for the process. */
 
-	struct	proc *ps_single;	/* Single threading to this thread. */
+	struct	proc *ps_single;	/* [S] Thread for single-threading. */
 	u_int	ps_singlecount;		/* [a] Not yet suspended threads. */
 
 	int	ps_traceflag;		/* Kernel trace points. */
@@ -209,14 +212,16 @@ struct process {
 	u_int	ps_xexit;		/* Exit status for wait */
 	int	ps_xsig;		/* Stopping or killing signal */
 
-	pid_t	ps_oppid;	 	/* Save parent pid during ptrace. */
+	pid_t	ps_ppid;		/* [a] Cached parent pid */
+	pid_t	ps_oppid;	 	/* [a] Save parent pid during ptrace. */
 	int	ps_ptmask;		/* Ptrace event mask */
 	struct	ptrace_state *ps_ptstat;/* Ptrace state */
 
 	struct	rusage *ps_ru;		/* sum of stats for dead threads. */
 	struct	tusage ps_tu;		/* accumulated times. */
 	struct	rusage ps_cru;		/* sum of stats for reaped children */
-	struct	itimerspec ps_timer[3];	/* timers, indexed by ITIMER_* */
+	struct	itimerspec ps_timer[3];	/* [m] ITIMER_REAL timer */
+					/* [T] ITIMER_{VIRTUAL,PROF} timers */
 	struct	timeout ps_rucheck_to;	/* [] resource limit check timer */
 	time_t	ps_nextxcpu;		/* when to send next SIGXCPU, */
 					/* in seconds of process runtime */
@@ -235,13 +240,14 @@ struct process {
 
 /* The following fields are all copied upon creation in process_new. */
 #define	ps_startcopy	ps_limit
-	struct	plimit *ps_limit;	/* [m,r] Process limits. */
+	struct	plimit *ps_limit;	/* [m,R] Process limits. */
 	struct	pgrp *ps_pgrp;		/* Pointer to process group. */
 	struct	emul *ps_emul;		/* Emulation information */
 
 	char	ps_comm[MAXCOMLEN+1];
 
 	vaddr_t	ps_strings;		/* User pointers to argv/env */
+	vaddr_t ps_timekeep; 		/* User pointer to timekeep */
 	vaddr_t	ps_sigcode;		/* User pointer to the signal code */
 	vaddr_t ps_sigcoderet;		/* User pointer to sigreturn retPC */
 	u_long	ps_sigcookie;
@@ -268,7 +274,7 @@ struct process {
 	int	ps_refcnt;		/* Number of references. */
 
 	struct	timespec ps_start;	/* starting uptime. */
-	struct	timeout ps_realit_to;	/* real-time itimer trampoline. */
+	struct	timeout ps_realit_to;	/* [m] ITIMER_REAL timeout */
 };
 
 #define	ps_session	ps_pgrp->pg_session
@@ -315,6 +321,7 @@ struct process {
 
 struct kcov_dev;
 struct lock_list_entry;
+struct kqueue;
 
 struct p_inentry {
 	u_long	 ie_serial;
@@ -325,12 +332,12 @@ struct p_inentry {
 /*
  *  Locks used to protect struct members in this file:
  *	I	immutable after creation
- *	s	scheduler lock
+ *	S	scheduler lock
  *	l	read only reference, see lim_read_enter()
  *	o	owned (read/modified only) by this thread
  */
 struct proc {
-	TAILQ_ENTRY(proc) p_runq;	/* [s] current run/sleep queue */
+	TAILQ_ENTRY(proc) p_runq;	/* [S] current run/sleep queue */
 	LIST_ENTRY(proc) p_list;	/* List of all threads. */
 
 	struct	process *p_p;		/* [I] The process of this thread. */
@@ -347,8 +354,8 @@ struct proc {
 
 	int	p_flag;			/* P_* flags. */
 	u_char	p_spare;		/* unused */
-	char	p_stat;			/* [s] S* process status. */
-	u_char	p_runpri;		/* [s] Runqueue priority */
+	char	p_stat;			/* [S] S* process status. */
+	u_char	p_runpri;		/* [S] Runqueue priority */
 	u_char	p_descfd;		/* if not 255, fdesc permits this fd */
 
 	pid_t	p_tid;			/* Thread identifier. */
@@ -360,15 +367,15 @@ struct proc {
 
 	/* scheduling */
 	int	p_cpticks;	 /* Ticks of cpu time. */
-	const volatile void *p_wchan;	/* [s] Sleep address. */
+	const volatile void *p_wchan;	/* [S] Sleep address. */
 	struct	timeout p_sleep_to;/* timeout for tsleep() */
-	const char *p_wmesg;		/* [s] Reason for sleep. */
-	fixpt_t	p_pctcpu;		/* [s] %cpu for this thread */
-	u_int	p_slptime;		/* [s] Time since last blocked. */
+	const char *p_wmesg;		/* [S] Reason for sleep. */
+	fixpt_t	p_pctcpu;		/* [S] %cpu for this thread */
+	u_int	p_slptime;		/* [S] Time since last blocked. */
 	u_int	p_uticks;		/* Statclock hits in user mode. */
 	u_int	p_sticks;		/* Statclock hits in system mode. */
 	u_int	p_iticks;		/* Statclock hits processing intr. */
-	struct	cpu_info * volatile p_cpu; /* [s] CPU we're running on. */
+	struct	cpu_info * volatile p_cpu; /* [S] CPU we're running on. */
 
 	struct	rusage p_ru;		/* Statistics */
 	struct	tusage p_tu;		/* accumulated times. */
@@ -377,22 +384,24 @@ struct proc {
 	struct	plimit	*p_limit;	/* [l] read ref. of p_p->ps_limit */
 	struct	kcov_dev *p_kd;		/* kcov device handle */
 	struct	lock_list_entry *p_sleeplocks;	/* WITNESS lock tracking */ 
+	struct	kqueue *p_kq;		/* [o] select/poll queue of evts */
+	unsigned long p_kq_serial;	/* [o] to check against enqueued evts */
 
-	int	 p_siglist;		/* Signals arrived but not delivered. */
+	int	 p_siglist;		/* [a] Signals arrived & not delivered*/
 
 /* End area that is zeroed on creation. */
 #define	p_endzero	p_startcopy
 
 /* The following fields are all copied upon creation in fork. */
 #define	p_startcopy	p_sigmask
-	sigset_t p_sigmask;	/* Current signal mask. */
+	sigset_t p_sigmask;		/* [a] Current signal mask */
 
-	u_char	p_slppri;		/* [s] Sleeping priority */
-	u_char	p_usrpri;	/* [s] Priority based on p_estcpu & ps_nice */
-	u_int	p_estcpu;		/* [s] Time averaged val of p_cpticks */
+	u_char	p_slppri;		/* [S] Sleeping priority */
+	u_char	p_usrpri;	/* [S] Priority based on p_estcpu & ps_nice */
+	u_int	p_estcpu;		/* [S] Time averaged val of p_cpticks */
 	int	p_pledge_syscall;	/* Cache of current syscall */
 
-	struct	ucred *p_ucred;		/* cached credentials */
+	struct	ucred *p_ucred;		/* [o] cached credentials */
 	struct	sigaltstack p_sigstk;	/* sp & on stack state variable */
 
 	u_long	p_prof_addr;	/* tmp storage for profiling addr until AST */
@@ -607,9 +616,7 @@ int	proc_cansugid(struct proc *);
 struct sleep_state {
 	int sls_s;
 	int sls_catch;
-	int sls_do_sleep;
 	int sls_locked;
-	int sls_sig;
 	int sls_timeout;
 };
 

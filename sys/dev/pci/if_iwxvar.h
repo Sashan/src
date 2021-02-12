@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwxvar.h,v 1.2 2020/02/28 14:17:48 stsp Exp $	*/
+/*	$OpenBSD: if_iwxvar.h,v 1.13 2020/10/11 07:05:28 mpi Exp $	*/
 
 /*
  * Copyright (c) 2014 genua mbh <info@genua.de>
@@ -116,16 +116,14 @@ struct iwx_tx_radiotap_header {
 	uint8_t		wt_rate;
 	uint16_t	wt_chan_freq;
 	uint16_t	wt_chan_flags;
-	uint8_t		wt_hwqueue;
 } __packed;
 
 #define IWX_TX_RADIOTAP_PRESENT						\
 	((1 << IEEE80211_RADIOTAP_FLAGS) |				\
 	 (1 << IEEE80211_RADIOTAP_RATE) |				\
-	 (1 << IEEE80211_RADIOTAP_CHANNEL) |				\
-	 (1 << IEEE80211_RADIOTAP_HWQUEUE))
+	 (1 << IEEE80211_RADIOTAP_CHANNEL))
 
-#define IWX_UCODE_SECT_MAX 39
+#define IWX_UCODE_SECT_MAX 42
 #define IWX_FWDMASEGSZ (192*1024)
 #define IWX_FWDMASEGSZ_8000 (320*1024)
 /* sanity check value */
@@ -181,29 +179,19 @@ struct iwx_nvm_data {
 	int n_hw_addrs;
 	uint8_t hw_addr[ETHER_ADDR_LEN];
 
-	uint8_t calib_version;
-	uint16_t calib_voltage;
-
-	uint16_t raw_temperature;
-	uint16_t kelvin_temperature;
-	uint16_t kelvin_voltage;
-	uint16_t xtal_calib[2];
-
 	int sku_cap_band_24GHz_enable;
 	int sku_cap_band_52GHz_enable;
 	int sku_cap_11n_enable;
+	int sku_cap_11ac_enable;
+	int sku_cap_11ax_enable;
 	int sku_cap_amt_enable;
 	int sku_cap_ipan_enable;
 	int sku_cap_mimo_disable;
+	int lar_enabled;
 
-	uint8_t radio_cfg_type;
-	uint8_t radio_cfg_step;
-	uint8_t radio_cfg_dash;
-	uint8_t radio_cfg_pnum;
 	uint8_t valid_tx_ant, valid_rx_ant;
 
 	uint16_t nvm_version;
-	uint8_t max_tx_pwr_half_dbm;
 };
 
 /* max bufs per tfd the driver will use */
@@ -245,7 +233,6 @@ struct iwx_tx_data {
 	bus_addr_t	cmd_paddr;
 	struct mbuf	*m;
 	struct iwx_node *in;
-	int done;
 };
 
 struct iwx_tx_ring {
@@ -345,13 +332,15 @@ struct iwx_bf_data {
 /**
  * struct iwx_self_init_dram - dram data used by self init process
  * @fw: lmac and umac dram data
- * @fw_cnt: total number of items in array
+ * @lmac_cnt: number of lmac sections in fw image
+ * @umac_cnt: number of umac sections in fw image
  * @paging: paging dram data
- * @paging_cnt: total number of items in array
+ * @paging_cnt: number of paging sections needed by fw image
  */
 struct iwx_self_init_dram {
 	struct iwx_dma_info *fw;
-	int fw_cnt;
+	int lmac_cnt;
+	int umac_cnt;
 	struct iwx_dma_info *paging;
 	int paging_cnt;
 };
@@ -361,9 +350,6 @@ struct iwx_softc {
 	struct ieee80211com sc_ic;
 	int (*sc_newstate)(struct ieee80211com *, enum ieee80211_state, int);
 	int sc_newstate_pending;
-
-	struct ieee80211_amrr sc_amrr;
-	struct timeout sc_calib_to;
 
 	struct task		init_task; /* NB: not reference-counted */
 	struct refcnt		task_refs;
@@ -453,7 +439,6 @@ struct iwx_softc {
 
 	const char *sc_fwname;
 	bus_size_t sc_fwdmasegsz;
-	size_t sc_nvm_max_section_size;
 	struct iwx_fw_info sc_fw;
 	struct iwx_dma_info fw_mon;
 	int sc_fw_phy_config;
@@ -489,12 +474,16 @@ struct iwx_softc {
 	struct iwx_notif_statistics sc_stats;
 	int sc_noise;
 
+	int sc_pm_support;
 	int sc_ltr_enabled;
-	enum iwx_nvm_type nvm_type;
 
 	int sc_integrated;
 	int sc_tx_with_siso_diversity;
 	int sc_max_tfd_queue_size;
+	int sc_ltr_delay;
+	int sc_xtal_latency;
+	int sc_low_latency_xtal;
+	int sc_uhb_supported;
 
 #if NBPFILTER > 0
 	caddr_t			sc_drvbpf;
@@ -521,13 +510,6 @@ struct iwx_node {
 
 	uint16_t in_id;
 	uint16_t in_color;
-
-	struct ieee80211_amrr_node in_amn;
-	struct ieee80211_mira_node in_mn;
-
-	/* Set in 11n mode if we don't receive ACKs for OFDM frames. */
-	int ht_force_cck;
-
 };
 #define IWX_STATION_ID 0
 #define IWX_AUX_STA_ID 1

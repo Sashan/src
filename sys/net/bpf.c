@@ -1,4 +1,4 @@
-/*	$OpenBSD: bpf.c,v 1.188 2020/02/20 16:56:52 visa Exp $	*/
+/*	$OpenBSD: bpf.c,v 1.203 2021/01/21 12:33:14 dlg Exp $	*/
 /*	$NetBSD: bpf.c,v 1.33 1997/02/21 23:59:35 thorpej Exp $	*/
 
 /*
@@ -60,6 +60,7 @@
 #include <sys/selinfo.h>
 #include <sys/sigio.h>
 #include <sys/task.h>
+#include <sys/time.h>
 
 #include <net/if.h>
 #include <net/bpf.h>
@@ -76,9 +77,6 @@
 #define BPF_BUFSIZE 32768
 
 #define PRINET  26			/* interruptible */
-
-/* from kern/kern_clock.c; incremented each clock tick. */
-extern int ticks;
 
 /*
  * The default read buffer size is patchable.
@@ -103,8 +101,9 @@ int	bpfpoll(dev_t, int, struct proc *);
 int	bpfkqfilter(dev_t, struct knote *);
 void	bpf_wakeup(struct bpf_d *);
 void	bpf_wakeup_cb(void *);
+int	_bpf_mtap(caddr_t, const struct mbuf *, const struct mbuf *, u_int);
 void	bpf_catchpacket(struct bpf_d *, u_char *, size_t, size_t,
-	    struct timeval *);
+	    const struct bpf_hdr *);
 int	bpf_getdltlist(struct bpf_d *, struct bpf_dltlist *);
 int	bpf_setdlt(struct bpf_d *, u_int);
 
@@ -206,7 +205,7 @@ bpf_movein(struct uio *uio, struct bpf_d *d, struct mbuf **mp,
 	m->m_pkthdr.len = len - hlen;
 
 	if (len > MHLEN) {
-		MCLGETI(m, M_WAIT, NULL, len);
+		MCLGETL(m, M_WAIT, len);
 		if ((m->m_flags & M_EXT) == 0) {
 			error = ENOBUFS;
 			goto bad;
@@ -379,8 +378,7 @@ bpfopen(dev_t dev, int flag, int mode, struct proc *p)
 	smr_init(&bd->bd_smr);
 	sigio_init(&bd->bd_sigio);
 
-	if (flag & FNONBLOCK)
-		bd->bd_rtout = -1;
+	bd->bd_rtout = 0;	/* no timeout by default */
 
 	bpf_get(bd);
 	LIST_INSERT_HEAD(&bpf_d_list, bd, bd_list);
@@ -421,15 +419,30 @@ bpfclose(dev_t dev, int flag, int mode, struct proc *p)
 	(d)->bd_sbuf = (d)->bd_fbuf; \
 	(d)->bd_slen = 0; \
 	(d)->bd_fbuf = NULL;
+
+/*
+ * TODO Move nsecuptime() into kern_tc.c and document it when we have
+ * more users elsewhere in the kernel.
+ */
+static uint64_t
+nsecuptime(void)
+{
+	struct timespec now;
+
+	nanouptime(&now);
+	return TIMESPEC_TO_NSEC(&now);
+}
+
 /*
  *  bpfread - read next chunk of packets from buffers
  */
 int
 bpfread(dev_t dev, struct uio *uio, int ioflag)
 {
+	uint64_t end, now;
 	struct bpf_d *d;
 	caddr_t hbuf;
-	int hlen, error;
+	int error, hlen;
 
 	KERNEL_ASSERT_LOCKED();
 
@@ -450,13 +463,14 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 	}
 
 	/*
-	 * If there's a timeout, bd_rdStart is tagged when we start the read.
-	 * we can then figure out when we're done reading.
+	 * If there's a timeout, mark when the read should end.
 	 */
-	if (d->bd_rtout != -1 && d->bd_rdStart == 0)
-		d->bd_rdStart = ticks;
-	else
-		d->bd_rdStart = 0;
+	if (d->bd_rtout != 0) {
+		now = nsecuptime();
+		end = now + d->bd_rtout;
+		if (end < now)
+			end = UINT64_MAX;
+	}
 
 	/*
 	 * If the hold buffer is empty, then do a timed sleep, which
@@ -482,16 +496,24 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 			ROTATE_BUFFERS(d);
 			break;
 		}
-		if (d->bd_rtout == -1) {
+		if (ISSET(ioflag, IO_NDELAY)) {
 			/* User requested non-blocking I/O */
 			error = EWOULDBLOCK;
+		} else if (d->bd_rtout == 0) {
+			/* No read timeout set. */
+			d->bd_nreaders++;
+			error = msleep_nsec(d, &d->bd_mtx, PRINET|PCATCH,
+			    "bpf", INFSLP);
+			d->bd_nreaders--;
+		} else if ((now = nsecuptime()) < end) {
+			/* Read timeout has not expired yet. */
+			d->bd_nreaders++;
+			error = msleep_nsec(d, &d->bd_mtx, PRINET|PCATCH,
+			    "bpf", end - now);
+			d->bd_nreaders--;
 		} else {
-			if (d->bd_rdStart <= ULONG_MAX - d->bd_rtout &&
-			    d->bd_rdStart + d->bd_rtout < ticks) {
-				error = msleep(d, &d->bd_mtx, PRINET|PCATCH,
-				    "bpf", d->bd_rtout);
-			} else
-				error = EWOULDBLOCK;
+			/* Read timeout has expired. */
+			error = EWOULDBLOCK;
 		}
 		if (error == EINTR || error == ERESTART)
 			goto out;
@@ -548,7 +570,6 @@ out:
 	return (error);
 }
 
-
 /*
  * If there are processes sleeping on this descriptor, wake them up.
  */
@@ -557,14 +578,20 @@ bpf_wakeup(struct bpf_d *d)
 {
 	MUTEX_ASSERT_LOCKED(&d->bd_mtx);
 
+	if (d->bd_nreaders)
+		wakeup(d);
+
 	/*
 	 * As long as pgsigio() and selwakeup() need to be protected
 	 * by the KERNEL_LOCK() we have to delay the wakeup to
 	 * another context to keep the hot path KERNEL_LOCK()-free.
 	 */
-	bpf_get(d);
-	if (!task_add(systq, &d->bd_wake_task))
-		bpf_put(d);
+	if ((d->bd_async && d->bd_sig) ||
+	    (!klist_empty(&d->bd_sel.si_note) || d->bd_sel.si_seltid != 0)) {
+		bpf_get(d);
+		if (!task_add(systq, &d->bd_wake_task))
+			bpf_put(d);
+	}
 }
 
 void
@@ -572,7 +599,6 @@ bpf_wakeup_cb(void *xd)
 {
 	struct bpf_d *d = xd;
 
-	wakeup(d);
 	if (d->bd_async && d->bd_sig)
 		pgsigio(&d->bd_sigio, d->bd_sig, 0);
 
@@ -855,26 +881,20 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	case BIOCSRTIMEOUT:
 		{
 			struct timeval *tv = (struct timeval *)addr;
-			u_long rtout;
+			uint64_t rtout;
 
-			/* Compute number of ticks. */
 			if (tv->tv_sec < 0 || !timerisvalid(tv)) {
 				error = EINVAL;
 				break;
 			}
-			if (tv->tv_sec > INT_MAX / hz) {
+			rtout = TIMEVAL_TO_NSEC(tv);
+			if (rtout > MAXTSLP) {
 				error = EOVERFLOW;
 				break;
 			}
-			rtout = tv->tv_sec * hz;
-			if (tv->tv_usec / tick > INT_MAX - rtout) {
-				error = EOVERFLOW;
-				break;
-			}
-			rtout += tv->tv_usec / tick;
+			mtx_enter(&d->bd_mtx);
 			d->bd_rtout = rtout;
-			if (d->bd_rtout == 0 && tv->tv_usec != 0)
-				d->bd_rtout = 1;
+			mtx_leave(&d->bd_mtx);
 			break;
 		}
 
@@ -885,8 +905,10 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		{
 			struct timeval *tv = (struct timeval *)addr;
 
-			tv->tv_sec = d->bd_rtout / hz;
-			tv->tv_usec = (d->bd_rtout % hz) * tick;
+			memset(tv, 0, sizeof(*tv));
+			mtx_enter(&d->bd_mtx);
+			NSEC_TO_TIMEVAL(d->bd_rtout, tv);
+			mtx_leave(&d->bd_mtx);
 			break;
 		}
 
@@ -959,10 +981,7 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		break;
 
 	case FIONBIO:		/* Non-blocking I/O */
-		if (*(int *)addr)
-			d->bd_rtout = -1;
-		else
-			d->bd_rtout = 0;
+		/* let vfs to keep track of this */
 		break;
 
 	case FIOASYNC:		/* Send signal on receive packets */
@@ -1148,15 +1167,8 @@ bpfpoll(dev_t dev, int events, struct proc *p)
 		mtx_enter(&d->bd_mtx);
 		if (d->bd_hlen != 0 || (d->bd_immediate && d->bd_slen != 0))
 			revents |= events & (POLLIN | POLLRDNORM);
-		else {
-			/*
-			 * if there's a timeout, mark the time we
-			 * started waiting.
-			 */
-			if (d->bd_rtout != -1 && d->bd_rdStart == 0)
-				d->bd_rdStart = ticks;
+		else
 			selrecord(p, &d->bd_sel);
-		}
 		mtx_leave(&d->bd_mtx);
 	}
 	return (revents);
@@ -1190,12 +1202,7 @@ bpfkqfilter(dev_t dev, struct knote *kn)
 
 	bpf_get(d);
 	kn->kn_hook = d;
-	SLIST_INSERT_HEAD(klist, kn, kn_selnext);
-
-	mtx_enter(&d->bd_mtx);
-	if (d->bd_rtout != -1 && d->bd_rdStart == 0)
-		d->bd_rdStart = ticks;
-	mtx_leave(&d->bd_mtx);
+	klist_insert_locked(klist, kn);
 
 	return (0);
 }
@@ -1207,7 +1214,7 @@ filt_bpfrdetach(struct knote *kn)
 
 	KERNEL_ASSERT_LOCKED();
 
-	SLIST_REMOVE(&d->bd_sel.si_note, kn, knote, kn_selnext);
+	klist_remove_locked(&d->bd_sel.si_note, kn);
 	bpf_put(d);
 }
 
@@ -1254,12 +1261,19 @@ bpf_mcopy(const void *src_arg, void *dst_arg, size_t len)
 int
 bpf_mtap(caddr_t arg, const struct mbuf *m, u_int direction)
 {
+	return _bpf_mtap(arg, m, m, direction);
+}
+
+int
+_bpf_mtap(caddr_t arg, const struct mbuf *mp, const struct mbuf *m,
+    u_int direction)
+{
 	struct bpf_if *bp = (struct bpf_if *)arg;
 	struct bpf_d *d;
 	size_t pktlen, slen;
 	const struct mbuf *m0;
-	struct timeval tv;
-	int gottime = 0;
+	struct bpf_hdr tbh;
+	int gothdr = 0;
 	int drop = 0;
 
 	if (m == NULL)
@@ -1292,17 +1306,31 @@ bpf_mtap(caddr_t arg, const struct mbuf *m, u_int direction)
 		if (d->bd_fildrop != BPF_FILDROP_PASS)
 			drop = 1;
 		if (d->bd_fildrop != BPF_FILDROP_DROP) {
-			if (!gottime) {
-				if (ISSET(m->m_flags, M_PKTHDR))
-					m_microtime(m, &tv);
-				else
+			if (!gothdr) {
+				struct timeval tv;
+				memset(&tbh, 0, sizeof(tbh));
+
+				if (ISSET(mp->m_flags, M_PKTHDR)) {
+					tbh.bh_ifidx = mp->m_pkthdr.ph_ifidx;
+					tbh.bh_flowid = mp->m_pkthdr.ph_flowid;
+					tbh.bh_flags = mp->m_pkthdr.pf.prio;
+					if (ISSET(mp->m_pkthdr.csum_flags,
+					    M_FLOWID))
+						SET(tbh.bh_flags, BPF_F_FLOWID);
+
+					m_microtime(mp, &tv);
+				} else
 					microtime(&tv);
 
-				gottime = 1;
+				tbh.bh_tstamp.tv_sec = tv.tv_sec;
+				tbh.bh_tstamp.tv_usec = tv.tv_usec;
+				SET(tbh.bh_flags, direction << BPF_F_DIR_SHIFT);
+
+				gothdr = 1;
 			}
 
 			mtx_enter(&d->bd_mtx);
-			bpf_catchpacket(d, (u_char *)m, pktlen, slen, &tv);
+			bpf_catchpacket(d, (u_char *)m, pktlen, slen, &tbh);
 			mtx_leave(&d->bd_mtx);
 		}
 	}
@@ -1375,7 +1403,7 @@ bpf_mtap_hdr(caddr_t arg, const void *data, u_int dlen, const struct mbuf *m,
 	} else 
 		m0 = m;
 
-	return bpf_mtap(arg, m0, direction);
+	return _bpf_mtap(arg, m, m0, direction);
 }
 
 /*
@@ -1411,35 +1439,33 @@ bpf_mtap_ether(caddr_t arg, const struct mbuf *m, u_int direction)
 {
 #if NVLAN > 0
 	struct ether_vlan_header evh;
-	struct m_hdr mh;
-	uint8_t prio;
+	struct m_hdr mh, md;
 
 	if ((m->m_flags & M_VLANTAG) == 0)
 #endif
 	{
-		return bpf_mtap(arg, m, direction);
+		return _bpf_mtap(arg, m, m, direction);
 	}
 
 #if NVLAN > 0
 	KASSERT(m->m_len >= ETHER_HDR_LEN);
 
-	prio = m->m_pkthdr.pf.prio;
-	if (prio <= 1)
-		prio = !prio;
-
 	memcpy(&evh, mtod(m, char *), ETHER_HDR_LEN);
 	evh.evl_proto = evh.evl_encap_proto;
 	evh.evl_encap_proto = htons(ETHERTYPE_VLAN);
-	evh.evl_tag = htons(m->m_pkthdr.ether_vtag |
-	    (prio << EVL_PRIO_BITS));
+	evh.evl_tag = htons(m->m_pkthdr.ether_vtag);
 
 	mh.mh_flags = 0;
-	mh.mh_data = m->m_data + ETHER_HDR_LEN;
-	mh.mh_len = m->m_len - ETHER_HDR_LEN;
-	mh.mh_next = m->m_next;
+	mh.mh_data = (caddr_t)&evh;
+	mh.mh_len = sizeof(evh);
+	mh.mh_next = (struct mbuf *)&md;
 
-	return bpf_mtap_hdr(arg, &evh, sizeof(evh),
-	    (struct mbuf *)&mh, direction);
+	md.mh_flags = 0;
+	md.mh_data = m->m_data + ETHER_HDR_LEN;
+	md.mh_len = m->m_len - ETHER_HDR_LEN;
+	md.mh_next = m->m_next;
+
+	return _bpf_mtap(arg, m, (struct mbuf *)&mh, direction);
 #endif
 }
 
@@ -1453,9 +1479,9 @@ bpf_mtap_ether(caddr_t arg, const struct mbuf *m, u_int direction)
  */
 void
 bpf_catchpacket(struct bpf_d *d, u_char *pkt, size_t pktlen, size_t snaplen,
-    struct timeval *tv)
+    const struct bpf_hdr *tbh)
 {
-	struct bpf_hdr *hp;
+	struct bpf_hdr *bh;
 	int totlen, curlen;
 	int hdrlen, do_wakeup = 0;
 
@@ -1501,17 +1527,16 @@ bpf_catchpacket(struct bpf_d *d, u_char *pkt, size_t pktlen, size_t snaplen,
 	/*
 	 * Append the bpf header.
 	 */
-	hp = (struct bpf_hdr *)(d->bd_sbuf + curlen);
-	hp->bh_tstamp.tv_sec = tv->tv_sec;
-	hp->bh_tstamp.tv_usec = tv->tv_usec;
-	hp->bh_datalen = pktlen;
-	hp->bh_hdrlen = hdrlen;
+	bh = (struct bpf_hdr *)(d->bd_sbuf + curlen);
+	*bh = *tbh;
+	bh->bh_datalen = pktlen;
+	bh->bh_hdrlen = hdrlen;
+	bh->bh_caplen = totlen - hdrlen;
 
 	/*
 	 * Copy the packet data into the store buffer and update its length.
 	 */
-	bpf_mcopy(pkt, (u_char *)hp + hdrlen,
-	    (hp->bh_caplen = totlen - hdrlen));
+	bpf_mcopy(pkt, (u_char *)bh + hdrlen, bh->bh_caplen);
 	d->bd_slen = curlen + totlen;
 
 	if (d->bd_immediate) {
@@ -1520,20 +1545,6 @@ bpf_catchpacket(struct bpf_d *d, u_char *pkt, size_t pktlen, size_t snaplen,
 		 * reads should be woken up.
 		 */
 		do_wakeup = 1;
-	}
-
-	if (d->bd_rdStart && d->bd_rdStart <= ULONG_MAX - d->bd_rtout &&
-	    d->bd_rdStart + d->bd_rtout < ticks) {
-		/*
-		 * we could be selecting on the bpf, and we
-		 * may have timeouts set.  We got here by getting
-		 * a packet, so wake up the reader.
-		 */
-		if (d->bd_fbuf != NULL) {
-			d->bd_rdStart = 0;
-			ROTATE_BUFFERS(d);
-			do_wakeup = 1;
-		}
 	}
 
 	if (do_wakeup)
@@ -1699,32 +1710,16 @@ int
 bpf_sysctl_locked(int *name, u_int namelen, void *oldp, size_t *oldlenp,
     void *newp, size_t newlen)
 {
-	int newval;
-	int error;
-
 	switch (name[0]) {
 	case NET_BPF_BUFSIZE:
-		newval = bpf_bufsize;
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &newval);
-		if (error)
-			return (error);
-		if (newval < BPF_MINBUFSIZE || newval > bpf_maxbufsize)
-			return (EINVAL);
-		bpf_bufsize = newval;
-		break;
+		return sysctl_int_bounded(oldp, oldlenp, newp, newlen,
+		    &bpf_bufsize, BPF_MINBUFSIZE, bpf_maxbufsize);
 	case NET_BPF_MAXBUFSIZE:
-		newval = bpf_maxbufsize;
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &newval);
-		if (error)
-			return (error);
-		if (newval < BPF_MINBUFSIZE)
-			return (EINVAL);
-		bpf_maxbufsize = newval;
-		break;
+		return sysctl_int_bounded(oldp, oldlenp, newp, newlen,
+		    &bpf_maxbufsize, BPF_MINBUFSIZE, INT_MAX);
 	default:
 		return (EOPNOTSUPP);
 	}
-	return (0);
 }
 
 int

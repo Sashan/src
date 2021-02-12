@@ -1,4 +1,4 @@
-/* $OpenBSD: man_validate.c,v 1.121 2020/03/13 00:31:05 schwarze Exp $ */
+/* $OpenBSD: man_validate.c,v 1.125 2020/10/30 13:24:26 schwarze Exp $ */
 /*
  * Copyright (c) 2010, 2012-2020 Ingo Schwarze <schwarze@openbsd.org>
  * Copyright (c) 2008, 2009, 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -32,11 +32,11 @@
 #include "mandoc_aux.h"
 #include "mandoc.h"
 #include "roff.h"
-#include "tag.h"
 #include "man.h"
 #include "libmandoc.h"
 #include "roff_int.h"
 #include "libman.h"
+#include "tag.h"
 
 #define	CHKARGS	  struct roff_man *man, struct roff_node *n
 
@@ -309,9 +309,32 @@ static void
 post_SH(CHKARGS)
 {
 	struct roff_node	*nc;
+	char			*cp, *tag;
 
-	if (n->type != ROFFT_BODY || (nc = n->child) == NULL)
+	nc = n->child;
+	switch (n->type) {
+	case ROFFT_HEAD:
+		tag = NULL;
+		deroff(&tag, n);
+		if (tag != NULL) {
+			for (cp = tag; *cp != '\0'; cp++)
+				if (*cp == ' ')
+					*cp = '_';
+			if (nc != NULL && nc->type == ROFFT_TEXT &&
+			    strcmp(nc->string, tag) == 0)
+				tag_put(NULL, TAG_STRONG, n);
+			else
+				tag_put(tag, TAG_FALLBACK, n);
+			free(tag);
+		}
 		return;
+	case ROFFT_BODY:
+		if (nc != NULL)
+			break;
+		return;
+	default:
+		return;
+	}
 
 	if (nc->tok == MAN_PP && nc->body->child != NULL) {
 		while (nc->body->last != NULL) {
@@ -485,9 +508,14 @@ post_TH(CHKARGS)
 
 	if (n != NULL)
 		n = n->next;
-	if (n != NULL && n->string != NULL)
+	if (n != NULL && n->string != NULL) {
 		man->meta.msec = mandoc_strdup(n->string);
-	else {
+		if (man->filesec != '\0' &&
+		    man->filesec != *n->string &&
+		    *n->string >= '1' && *n->string <= '9')
+			mandoc_msg(MANDOCERR_MSEC_FILE, n->line, n->pos,
+			    "*.%c vs TH ... %c", man->filesec, *n->string);
+	} else {
 		man->meta.msec = mandoc_strdup("");
 		mandoc_msg(MANDOCERR_MSEC_MISSING,
 		    nb->line, nb->pos, "TH %s", man->meta.title);

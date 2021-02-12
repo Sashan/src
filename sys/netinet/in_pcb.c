@@ -1,4 +1,4 @@
-/*	$OpenBSD: in_pcb.c,v 1.248 2019/07/15 12:40:42 bluhm Exp $	*/
+/*	$OpenBSD: in_pcb.c,v 1.253 2021/01/25 03:40:46 dlg Exp $	*/
 /*	$NetBSD: in_pcb.c,v 1.25 1996/02/13 23:41:53 christos Exp $	*/
 
 /*
@@ -94,6 +94,11 @@
 #ifdef IPSEC
 #include <netinet/ip_esp.h>
 #endif /* IPSEC */
+
+#include "stoeplitz.h"
+#if NSTOEPLITZ > 0
+#include <net/toeplitz.h>
+#endif
 
 const struct in_addr zeroin_addr;
 
@@ -516,6 +521,10 @@ in_pcbconnect(struct inpcb *inp, struct mbuf *nam)
 	inp->inp_faddr = sin->sin_addr;
 	inp->inp_fport = sin->sin_port;
 	in_pcbrehash(inp);
+#if NSTOEPLITZ > 0
+	inp->inp_flowid = stoeplitz_ip4port(inp->inp_laddr.s_addr,
+	    inp->inp_faddr.s_addr, inp->inp_lport, inp->inp_fport);
+#endif
 #ifdef IPSEC
 	{
 		/* Cause an IPsec SA to be established. */
@@ -530,6 +539,13 @@ in_pcbconnect(struct inpcb *inp, struct mbuf *nam)
 void
 in_pcbdisconnect(struct inpcb *inp)
 {
+#if NPF > 0
+	if (inp->inp_pf_sk) {
+		pf_remove_divert_state(inp->inp_pf_sk);
+		/* pf_remove_divert_state() may have detached the state */
+		pf_inp_unlink(inp);
+	}
+#endif
 	switch (sotopf(inp->inp_socket)) {
 #ifdef INET6
 	case PF_INET6:
@@ -542,6 +558,7 @@ in_pcbdisconnect(struct inpcb *inp)
 	}
 
 	inp->inp_fport = 0;
+	inp->inp_flowid = 0;
 	in_pcbrehash(inp);
 	if (inp->inp_socket->so_state & SS_NOFDREF)
 		in_pcbdetach(inp);
@@ -880,6 +897,7 @@ in_pcbselsrc(struct in_addr **insrc, struct sockaddr_in *sin,
 	struct route *ro = &inp->inp_route;
 	struct in_addr *laddr = &inp->inp_laddr;
 	u_int rtableid = inp->inp_rtableid;
+	struct sockaddr	*ip4_source = NULL;
 
 	struct sockaddr_in *sin2;
 	struct in_ifaddr *ia = NULL;
@@ -916,6 +934,7 @@ in_pcbselsrc(struct in_addr **insrc, struct sockaddr_in *sin,
 			return (0);
 		}
 	}
+
 	/*
 	 * If route is known or can be allocated now,
 	 * our src addr is taken from the i/f, else punt.
@@ -940,12 +959,32 @@ in_pcbselsrc(struct in_addr **insrc, struct sockaddr_in *sin,
 		sin2 = satosin(&ro->ro_dst);
 		memset(sin2->sin_zero, 0, sizeof(sin2->sin_zero));
 	}
+
 	/*
 	 * If we found a route, use the address
 	 * corresponding to the outgoing interface.
 	 */
 	if (ro->ro_rt != NULL)
 		ia = ifatoia(ro->ro_rt->rt_ifa);
+
+	/*
+	 * Use preferred source address if :
+	 * - destination is not onlink
+	 * - preferred source addresss is set
+	 * - output interface is UP
+	 */
+	if (ro->ro_rt && !(ro->ro_rt->rt_flags & RTF_LLINFO) &&
+	    !(ro->ro_rt->rt_flags & RTF_HOST)) {
+		ip4_source = rtable_getsource(rtableid, AF_INET);
+		if (ip4_source != NULL) {
+			struct ifaddr *ifa;
+			if ((ifa = ifa_ifwithaddr(ip4_source, rtableid)) !=
+			    NULL && ISSET(ifa->ifa_ifp->if_flags, IFF_UP)) {
+				*insrc = &satosin(ip4_source)->sin_addr;
+				return (0);
+			}
+		}
+	}
 
 	if (ia == NULL)
 		return (EADDRNOTAVAIL);

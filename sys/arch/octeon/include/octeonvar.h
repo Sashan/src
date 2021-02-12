@@ -1,4 +1,4 @@
-/*	$OpenBSD: octeonvar.h,v 1.47 2019/09/29 04:28:52 visa Exp $	*/
+/*	$OpenBSD: octeonvar.h,v 1.51 2021/02/04 16:16:11 visa Exp $	*/
 /*	$NetBSD: maltavar.h,v 1.3 2002/03/18 10:10:16 simonb Exp $	*/
 
 /*-
@@ -16,13 +16,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *	This product includes software developed by the NetBSD
- *	Foundation, Inc. and its contributors.
- * 4. Neither the name of The NetBSD Foundation nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
@@ -162,23 +155,75 @@ struct octeon_fau_map {
 
 #define	OCTEON_POW_GROUP_MAX		16
 
-/*
- * Octeon board types known to work with OpenBSD/octeon.
- * NB: BOARD_TYPE_UBIQUITI_E100 is also used by other vendors, but we don't run
- * on those boards yet.
- */
-#define	BOARD_TYPE_CN3010_EVB_HS5	11
-#define	BOARD_TYPE_UBIQUITI_E100	20002
-#define	BOARD_TYPE_UBIQUITI_E200	20003
-#define	BOARD_TYPE_UBIQUITI_E120	20004
-#define	BOARD_TYPE_UBIQUITI_E220	20005
-#define	BOARD_TYPE_UBIQUITI_E1000	20010
-#define	BOARD_TYPE_RHINOLABS_SHASTA	20012
-#define	BOARD_TYPE_DSR_500		20015
-#define	BOARD_TYPE_UBIQUITI_E300	20300
+enum cnmac_stat {
+	cnmac_stat_rx_toto_gmx,
+	cnmac_stat_rx_totp_gmx,
+	cnmac_stat_rx_toto_pip,
+	cnmac_stat_rx_totp_pip,
+	cnmac_stat_rx_h64,
+	cnmac_stat_rx_h127,
+	cnmac_stat_rx_h255,
+	cnmac_stat_rx_h511,
+	cnmac_stat_rx_h1023,
+	cnmac_stat_rx_h1518,
+	cnmac_stat_rx_hmax,
+	cnmac_stat_rx_bcast,
+	cnmac_stat_rx_mcast,
+	cnmac_stat_rx_qdpo,
+	cnmac_stat_rx_qdpp,
+	cnmac_stat_rx_fcs,
+	cnmac_stat_rx_frag,
+	cnmac_stat_rx_undersz,
+	cnmac_stat_rx_jabber,
+	cnmac_stat_rx_oversz,
+	cnmac_stat_rx_raw,
+	cnmac_stat_rx_bad,
+	cnmac_stat_rx_drop,
+	cnmac_stat_rx_ctl,
+	cnmac_stat_rx_dmac,
+	cnmac_stat_tx_toto,
+	cnmac_stat_tx_totp,
+	cnmac_stat_tx_hmin,
+	cnmac_stat_tx_h64,
+	cnmac_stat_tx_h127,
+	cnmac_stat_tx_h255,
+	cnmac_stat_tx_h511,
+	cnmac_stat_tx_h1023,
+	cnmac_stat_tx_h1518,
+	cnmac_stat_tx_hmax,
+	cnmac_stat_tx_bcast,
+	cnmac_stat_tx_mcast,
+	cnmac_stat_tx_coll,
+	cnmac_stat_tx_defer,
+	cnmac_stat_tx_scol,
+	cnmac_stat_tx_mcol,
+	cnmac_stat_tx_ctl,
+	cnmac_stat_tx_uflow,
+	cnmac_stat_count
+};
 
 #if defined(_KERNEL) || defined(_STANDALONE)
 #define OCTEON_ARGV_MAX 64
+
+/*
+ * OCTEON board types recognized by OpenBSD/octeon.
+ *
+ * It is fine to use BOARD_UNKNOWN when the board does not need
+ * special treatment.
+ */
+enum octeon_board {
+	BOARD_UNKNOWN,
+	BOARD_CN3010_EVB_HS5,
+	BOARD_DLINK_DSR_500,
+	BOARD_NETGEAR_UTM25,
+	BOARD_RHINOLABS_UTM8,
+	BOARD_UBIQUITI_E100,
+	BOARD_UBIQUITI_E120,
+	BOARD_UBIQUITI_E200,
+	BOARD_UBIQUITI_E220,
+	BOARD_UBIQUITI_E300,
+	BOARD_UBIQUITI_E1000,
+};
 
 struct boot_desc {
 	uint32_t	desc_ver;
@@ -266,6 +311,7 @@ struct octeon_bootmem_block {
 	uint64_t	size;
 };
 
+extern enum octeon_board octeon_board;
 extern struct boot_desc *octeon_boot_desc;
 extern struct boot_info *octeon_boot_info;
 

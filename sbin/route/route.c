@@ -1,4 +1,4 @@
-/*	$OpenBSD: route.c,v 1.247 2020/01/15 10:26:25 kn Exp $	*/
+/*	$OpenBSD: route.c,v 1.252 2021/01/24 08:58:50 florian Exp $	*/
 /*	$NetBSD: route.c,v 1.16 1996/04/15 18:27:05 cgd Exp $	*/
 
 /*
@@ -49,6 +49,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
+#include <ifaddrs.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -68,7 +69,8 @@
 const struct if_status_description
 			if_status_descriptions[] = LINK_STATE_DESCRIPTIONS;
 
-union sockunion so_dst, so_gate, so_mask, so_ifa, so_ifp, so_src, so_label;
+union sockunion so_dst, so_gate, so_mask, so_ifa, so_ifp, so_src, so_label,
+    so_source;
 
 typedef union sockunion *sup;
 pid_t	pid;
@@ -85,6 +87,8 @@ struct rt_metrics	rt_metrics;
 
 int	 flushroutes(int, char **);
 int	 newroute(int, char **);
+int	 setsource(int, char **);
+int	 pushsrc(int, char *, int);
 int	 show(int, char *[]);
 int	 keycmp(const void *, const void *);
 int	 keyword(char *);
@@ -107,7 +111,6 @@ void	 print_rtmsg(struct rt_msghdr *, int);
 void	 pmsg_common(struct rt_msghdr *);
 void	 pmsg_addrs(char *, int);
 void	 bprintf(FILE *, int, char *);
-void	 mask_addr(union sockunion *, union sockunion *, int);
 int	 getaddr(int, int, char *, struct hostent **);
 void	 getmplslabel(char *, int);
 int	 rtmsg(int, int, int, uint8_t);
@@ -133,7 +136,8 @@ usage(char *cp)
 	    "usage: %s [-dnqtv] [-T rtable] command [[modifiers] args]\n",
 	    __progname);
 	fprintf(stderr,
-	    "commands: add, change, delete, exec, flush, get, monitor, show\n");
+	    "commands: add, change, delete, exec, flush, get, monitor, show, "
+	    "sourceaddr\n");
 	exit(1);
 }
 
@@ -258,6 +262,10 @@ main(int argc, char **argv)
 		break;
 	case K_FLUSH:
 		exit(flushroutes(argc, argv));
+		break;
+	case K_SOURCEADDR:
+		nflag = 1;
+		exit(setsource(argc, argv));
 		break;
 	}
 
@@ -451,6 +459,93 @@ set_metric(char *value, int key)
 		locking = 0;
 }
 
+
+int
+setsource(int argc, char **argv)
+{
+	struct ifaddrs	*ifap, *ifa = NULL;
+	char *cmd;
+	int af = AF_UNSPEC, ret = 0, key;
+	unsigned int ifindex = 0;
+
+	cmd = argv[0];
+	while (--argc > 0) {
+		if (**(++argv)== '-') {
+			switch (key = keyword(1 + *argv)) {
+			case K_INET:
+				af = AF_INET;
+				aflen = sizeof(struct sockaddr_in);
+				break;
+			case K_INET6:
+				af = AF_INET6;
+				aflen = sizeof(struct sockaddr_in6);
+				break;
+			case K_IFP:
+				if (!--argc)
+					usage(1+*argv);
+				ifindex = if_nametoindex(*++argv);
+				if (ifindex == 0)
+					errx(1, "no such interface %s", *argv);
+				break;
+			}
+		} else
+			break;
+	}
+
+	if (argc <= 0 && ifindex == 0)
+		printsource(af, tableid);
+	if (argc > 1 && ifindex == 0)
+		usage(NULL);
+
+	if (uid)
+		errx(1, "must be root to alter source address");
+
+	if (ifindex) {
+		if (getifaddrs(&ifap) == -1)
+			err(1, "getifaddrs");
+		for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
+			if (if_nametoindex(ifa->ifa_name) != ifindex)
+				continue;
+			if (ifa->ifa_addr == NULL ||
+			    !(ifa->ifa_addr->sa_family == AF_INET ||
+			    ifa->ifa_addr->sa_family == AF_INET6))
+				continue;
+			if ((af != AF_UNSPEC) &&
+			    (ifa->ifa_addr->sa_family != af))
+				continue;
+			if (ifa->ifa_addr->sa_family == AF_INET6) {
+				struct sockaddr_in6 *sin6 =
+				    (struct sockaddr_in6 *)ifa->ifa_addr;
+				if (IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr) ||
+				    IN6_IS_ADDR_MULTICAST(&sin6->sin6_addr))
+					continue;
+			}
+			if (pushsrc(*cmd, routename(ifa->ifa_addr),
+			    ifa->ifa_addr->sa_family))
+				break;
+		}
+		freeifaddrs(ifap);
+	} else {
+		ret = pushsrc(*cmd, *argv, af);
+	}
+
+	return (ret != 0);
+}
+
+int
+pushsrc(int cmd, char *src, int af)
+{
+	int ret = 0;
+
+	getaddr(RTA_IFA, af, src, NULL);
+
+	errno = 0;
+	ret = rtmsg(cmd, 0, 0, 0);
+	if (!qflag && ret != 0)
+		printf("sourceaddr %s: %s\n", src, strerror(errno));
+
+	return (ret);
+}
 int
 newroute(int argc, char **argv)
 {
@@ -767,7 +862,6 @@ void
 inet_makenetandmask(u_int32_t net, struct sockaddr_in *sin, int bits)
 {
 	u_int32_t mask;
-	char *cp;
 
 	rtm_addrs |= RTA_NETMASK;
 	if (bits == 0 && net == 0)
@@ -781,12 +875,8 @@ inet_makenetandmask(u_int32_t net, struct sockaddr_in *sin, int bits)
 	sin->sin_addr.s_addr = htonl(net);
 	sin = &so_mask.sin;
 	sin->sin_addr.s_addr = htonl(mask);
-	sin->sin_len = 0;
-	sin->sin_family = 0;
-	cp = (char *)(&sin->sin_addr + 1);
-	while (*--cp == '\0' && cp > (char *)sin)
-		continue;
-	sin->sin_len = 1 + cp - (char *)sin;
+	sin->sin_family = AF_INET;
+	sin->sin_len = sizeof(struct sockaddr_in);
 }
 
 /*
@@ -836,6 +926,7 @@ getaddr(int which, int af, char *s, struct hostent **hpp)
 		errx(1, "internal error");
 		/* NOTREACHED */
 	}
+	memset(su, 0, sizeof(union sockunion));
 	su->sa.sa_len = aflength;
 	su->sa.sa_family = afamily;
 
@@ -883,6 +974,7 @@ getaddr(int which, int af, char *s, struct hostent **hpp)
 			errx(1, "%s: resolved to multiple values", s);
 		memcpy(&su->sin6, res->ai_addr, sizeof(su->sin6));
 		freeaddrinfo(res);
+#ifdef __KAME__
 		if ((IN6_IS_ADDR_LINKLOCAL(&su->sin6.sin6_addr) ||
 		     IN6_IS_ADDR_MC_LINKLOCAL(&su->sin6.sin6_addr) ||
 		     IN6_IS_ADDR_MC_INTFACELOCAL(&su->sin6.sin6_addr)) &&
@@ -891,6 +983,7 @@ getaddr(int which, int af, char *s, struct hostent **hpp)
 				htons(su->sin6.sin6_scope_id);
 			su->sin6.sin6_scope_id = 0;
 		}
+#endif
 		if (hints.ai_flags == AI_NUMERICHOST) {
 			if (which == RTA_DST) {
 				if (sep == NULL && su->sin6.sin6_scope_id == 0 &&
@@ -1001,7 +1094,8 @@ prefixlen(int af, char *s)
 		memset(&so_mask, 0, sizeof(so_mask));
 		so_mask.sin.sin_family = AF_INET;
 		so_mask.sin.sin_len = sizeof(struct sockaddr_in);
-		so_mask.sin.sin_addr.s_addr = htonl(0xffffffff << (32 - len));
+		if (len != 0)
+			so_mask.sin.sin_addr.s_addr = htonl(0xffffffff << (32 - len));
 		break;
 	case AF_INET6:
 		so_mask.sin6.sin6_family = AF_INET6;
@@ -1072,6 +1166,8 @@ rtmsg(int cmd, int flags, int fmask, uint8_t prio)
 			so_ifp.sa.sa_len = sizeof(struct sockaddr_dl);
 			rtm_addrs |= RTA_IFP;
 		}
+	} else if (cmd == 's') {
+		cmd = RTM_SOURCE;
 	} else
 		cmd = RTM_DELETE;
 #define rtm m_rtmsg.m_rtm
@@ -1088,8 +1184,6 @@ rtmsg(int cmd, int flags, int fmask, uint8_t prio)
 	rtm.rtm_mpls = mpls_flags;
 	rtm.rtm_hdrlen = sizeof(rtm);
 
-	if (rtm_addrs & RTA_NETMASK)
-		mask_addr(&so_dst, &so_mask, RTA_DST);
 	/* store addresses in ascending order of RTA values */
 	NEXTADDR(RTA_DST, so_dst);
 	NEXTADDR(RTA_GATEWAY, so_gate);
@@ -1118,34 +1212,6 @@ rtmsg(int cmd, int flags, int fmask, uint8_t prio)
 	}
 #undef rtm
 	return (0);
-}
-
-void
-mask_addr(union sockunion *addr, union sockunion *mask, int which)
-{
-	int olen = mask->sa.sa_len;
-	char *cp1 = olen + (char *)mask, *cp2;
-
-	for (mask->sa.sa_len = 0; cp1 > (char *)mask; )
-		if (*--cp1 != '\0') {
-			mask->sa.sa_len = 1 + cp1 - (char *)mask;
-			break;
-		}
-	if ((rtm_addrs & which) == 0)
-		return;
-	switch (addr->sa.sa_family) {
-	case AF_INET:
-	case AF_INET6:
-	case AF_UNSPEC:
-		return;
-	}
-	cp1 = mask->sa.sa_len + 1 + (char *)addr;
-	cp2 = addr->sa.sa_len + 1 + (char *)addr;
-	while (cp2 > cp1)
-		*--cp2 = '\0';
-	cp2 = mask->sa.sa_len + 1 + (char *)mask;
-	while (cp1 > addr->sa.sa_data)
-		*--cp1 &= *--cp2;
 }
 
 char *msgtypes[] = {
@@ -1186,6 +1252,13 @@ char ifnetflags[] =
 "\23INET6_NOPRIVACY\24MPLS\25WOL\26AUTOCONF6\27INET6_NOSOII\30AUTOCONF4";
 char addrnames[] =
 "\1DST\2GATEWAY\3NETMASK\4GENMASK\5IFP\6IFA\7AUTHOR\010BRD\011SRC\012SRCMASK\013LABEL\014BFD\015DNS\016STATIC\017SEARCH";
+char ieee80211flags[] =
+    "\1ASCAN\2SIBSS\011WEPON\012IBSSON\013PMGTON\014DESBSSID\016ROAMING"
+    "\020TXPOW_FIXED\021TXPOW_AUTO\022SHSLOT\023SHPREAMBLE\024QOS"
+    "\025USEPROT\026RSNON\027PSK\030COUNTERM\031MFPR\032HTON\033PBAR"
+    "\034BGSCAN\035AUTO_JOIN\036VHTON";
+char ieee80211xflags[] =
+    "\1TX_MGMT_ONLY";
 
 const char *
 get_linkstate(int mt, int link_state)
@@ -2142,9 +2215,12 @@ print_80211info(struct if_ieee80211_msghdr *ifim)
 	}
 	printf("channel %u, ", ifim->ifim_ifie.ifie_channel);
 	bssid = ifim->ifim_ifie.ifie_addr;
-	printf("bssid %02x:%02x:%02x:%02x:%02x:%02x, ",
+	printf("bssid %02x:%02x:%02x:%02x:%02x:%02x\n",
 	    bssid[0], bssid[1], bssid[2],
 	    bssid[3], bssid[4], bssid[5]);
-	printf("flags: 0x%x, xflags: 0x%x\n", ifim->ifim_ifie.ifie_flags,
-	    ifim->ifim_ifie.ifie_xflags);
+	printf("flags:");
+	bprintf(stdout, ifim->ifim_ifie.ifie_flags, ieee80211flags);
+	printf("\nxflags:");
+	bprintf(stdout, ifim->ifim_ifie.ifie_xflags, ieee80211xflags);
+	printf("\n");
 }

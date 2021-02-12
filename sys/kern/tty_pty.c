@@ -1,4 +1,4 @@
-/*	$OpenBSD: tty_pty.c,v 1.97 2020/02/20 16:56:52 visa Exp $	*/
+/*	$OpenBSD: tty_pty.c,v 1.108 2021/02/08 09:18:30 claudio Exp $	*/
 /*	$NetBSD: tty_pty.c,v 1.33.4.1 1996/06/02 09:08:11 mrg Exp $	*/
 
 /*
@@ -289,8 +289,7 @@ ptsread(dev_t dev, struct uio *uio, int flag)
 again:
 	if (pti->pt_flags & PF_REMOTE) {
 		while (isbackground(pr, tp)) {
-			if ((pr->ps_sigacts->ps_sigignore & sigmask(SIGTTIN)) ||
-			    (p->p_sigmask & sigmask(SIGTTIN)) ||
+			if (sigismasked(p, SIGTTIN) ||
 			    pr->ps_pgrp->pg_jobc == 0 ||
 			    pr->ps_flags & PS_PPWAIT)
 				return (EIO);
@@ -564,7 +563,9 @@ again:
 				wakeup(&tp->t_rawq);
 				goto block;
 			}
-			(*linesw[tp->t_line].l_rint)(*cp++, tp);
+			if ((*linesw[tp->t_line].l_rint)(*cp++, tp) == 1 &&
+			    tsleep(tp, TTIPRI | PCATCH, "ttyretype", 1) == EINTR)
+				goto interrupt;
 			cnt++;
 			cc--;
 		}
@@ -591,6 +592,7 @@ block:
 	if (error == 0)
 		goto again;
 
+interrupt:
 	/* adjust for data copied in but not written */
 	uio->uio_resid += cc;
 done:
@@ -655,7 +657,7 @@ filt_ptcrdetach(struct knote *kn)
 	int s;
 
 	s = spltty();
-	SLIST_REMOVE(&pti->pt_selr.si_note, kn, knote, kn_selnext);
+	klist_remove_locked(&pti->pt_selr.si_note, kn);
 	splx(s);
 }
 
@@ -668,6 +670,16 @@ filt_ptcread(struct knote *kn, long hint)
 	tp = pti->pt_tty;
 	kn->kn_data = 0;
 
+	if (kn->kn_sfflags & NOTE_OOB) {
+		/* If in packet or user control mode, check for data. */
+		if (((pti->pt_flags & PF_PKT) && pti->pt_send) ||
+		    ((pti->pt_flags & PF_UCNTL) && pti->pt_ucntl)) {
+			kn->kn_fflags |= NOTE_OOB;
+			kn->kn_data = 1;
+			return (1);
+		}
+		return (0);
+	}
 	if (ISSET(tp->t_state, TS_ISOPEN)) {
 		if (!ISSET(tp->t_state, TS_TTSTOP))
 			kn->kn_data = tp->t_outq.c_cc;
@@ -678,6 +690,8 @@ filt_ptcread(struct knote *kn, long hint)
 
 	if (!ISSET(tp->t_state, TS_CARR_ON)) {
 		kn->kn_flags |= EV_EOF;
+		if (kn->kn_flags & __EV_POLL)
+			kn->kn_flags |= __EV_HUP;
 		return (1);
 	}
 
@@ -691,7 +705,7 @@ filt_ptcwdetach(struct knote *kn)
 	int s;
 
 	s = spltty();
-	SLIST_REMOVE(&pti->pt_selw.si_note, kn, knote, kn_selnext);
+	klist_remove_locked(&pti->pt_selw.si_note, kn);
 	splx(s);
 }
 
@@ -708,7 +722,8 @@ filt_ptcwrite(struct knote *kn, long hint)
 		if (ISSET(pti->pt_flags, PF_REMOTE)) {
 			if (tp->t_canq.c_cc == 0)
 				kn->kn_data = tp->t_canq.c_cn;
-		} else if (tp->t_rawq.c_cc + tp->t_canq.c_cc < TTYHOG(tp)-2)
+		} else if ((tp->t_rawq.c_cc + tp->t_canq.c_cc < TTYHOG(tp)-2) ||
+		    (tp->t_canq.c_cc == 0 && ISSET(tp->t_lflag, ICANON)))
 			kn->kn_data = tp->t_canq.c_cn -
 			    (tp->t_rawq.c_cc + tp->t_canq.c_cc);
 	}
@@ -730,6 +745,13 @@ const struct filterops ptcwrite_filtops = {
 	.f_event	= filt_ptcwrite,
 };
 
+const struct filterops ptcexcept_filtops = {
+	.f_flags	= FILTEROP_ISFD,
+	.f_attach	= NULL,
+	.f_detach	= filt_ptcrdetach,
+	.f_event	= filt_ptcread,
+};
+
 int
 ptckqfilter(dev_t dev, struct knote *kn)
 {
@@ -746,6 +768,10 @@ ptckqfilter(dev_t dev, struct knote *kn)
 		klist = &pti->pt_selw.si_note;
 		kn->kn_fop = &ptcwrite_filtops;
 		break;
+	case EVFILT_EXCEPT:
+		klist = &pti->pt_selr.si_note;
+		kn->kn_fop = &ptcexcept_filtops;
+		break;
 	default:
 		return (EINVAL);
 	}
@@ -753,7 +779,7 @@ ptckqfilter(dev_t dev, struct knote *kn)
 	kn->kn_hook = (caddr_t)pti;
 
 	s = spltty();
-	SLIST_INSERT_HEAD(klist, kn, kn_selnext);
+	klist_insert_locked(klist, kn);
 	splx(s);
 
 	return (0);
@@ -1062,12 +1088,12 @@ ptmclose(dev_t dev, int flag, int mode, struct proc *p)
 int
 ptmioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 {
-	dev_t newdev, error;
+	dev_t newdev;
 	struct pt_softc * pti;
 	struct nameidata cnd, snd;
 	struct filedesc *fdp = p->p_fd;
 	struct file *cfp = NULL, *sfp = NULL;
-	int cindx, sindx;
+	int cindx, sindx, error;
 	uid_t uid;
 	gid_t gid;
 	struct vattr vattr;
@@ -1084,10 +1110,11 @@ ptmioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 		}
 		if ((error = falloc(p, &sfp, &sindx)) != 0) {
 			fdremove(fdp, cindx);
-			closef(cfp, p);
 			fdpunlock(fdp);
+			closef(cfp, p);
 			break;
 		}
+		fdpunlock(fdp);
 
 retry:
 		/* Find and open a free master pty. */
@@ -1177,6 +1204,7 @@ retry:
 		memcpy(ptm->sn, pti->pty_sn, sizeof(pti->pty_sn));
 
 		/* insert files now that we've passed all errors */
+		fdplock(fdp);
 		fdinsert(fdp, cindx, 0, cfp);
 		fdinsert(fdp, sindx, 0, sfp);
 		fdpunlock(fdp);
@@ -1189,10 +1217,11 @@ retry:
 	}
 	return (error);
 bad:
+	fdplock(fdp);
 	fdremove(fdp, cindx);
-	closef(cfp, p);
 	fdremove(fdp, sindx);
-	closef(sfp, p);
 	fdpunlock(fdp);
+	closef(cfp, p);
+	closef(sfp, p);
 	return (error);
 }

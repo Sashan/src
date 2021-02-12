@@ -1,7 +1,7 @@
-/*	$OpenBSD: bt_parser.h,v 1.5 2020/03/19 15:52:30 mpi Exp $	*/
+/*	$OpenBSD: bt_parser.h,v 1.13 2021/02/08 09:46:45 mpi Exp $	*/
 
 /*
- * Copyright (c) 2019 Martin Pieuchot <mpi@openbsd.org>
+ * Copyright (c) 2019-2021 Martin Pieuchot <mpi@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -24,7 +24,10 @@
 #endif
 
 /*
- * Representation of a probe.
+ * Probes represent entry points where events can be recorded.
+ *
+ * Those specified in a given bt(5) script are enabled at runtime. They
+ * are represented as:
  *
  *	"provider:function:name"
  * or
@@ -38,21 +41,31 @@ struct bt_probe {
 #define bp_unit	bp_func
 };
 
+
 /*
- * Representation of a filter (aka predicate).
+ * Event filters correspond to checks performed in-kernel.
  */
-struct bt_filter {
-	enum bt_operand {
-		B_OP_NONE = 1,
-		B_OP_EQ,
-		B_OP_NE,
-	}			 bf_op;
-	enum  bt_filtervar {
+struct bt_evtfilter {
+	int			bf_op;
+	enum bt_filtervar {
 		B_FV_NONE = 1,
 		B_FV_PID,
 		B_FV_TID
 	}			 bf_var;
 	uint32_t		 bf_val;
+};
+
+/*
+ * Filters, also known as predicates, describe under which set of
+ * conditions a rule is executed.
+ *
+ * Depending on their type they are performed in-kernel or when a rule
+ * is evaluated.  In the first case they might prevent the recording of
+ * events, in the second case events might be discarded at runtime.
+ */
+struct bt_filter {
+	struct bt_evtfilter	  bf_evtfilter;	/* in-kernel event filter */
+	struct bt_stmt		 *bf_condition;	/* per event condition */
 };
 
 TAILQ_HEAD(bt_ruleq, bt_rule);
@@ -82,6 +95,8 @@ struct bt_rule {
 
 /*
  * Global variable representation.
+ *
+ * Variables are untyped and also include maps and histograms.
  */
 struct bt_var {
 	SLIST_ENTRY(bt_var)	 bv_next;	/* linkage in global list */
@@ -98,16 +113,18 @@ struct bt_var {
 struct bt_arg {
 	SLIST_ENTRY(bt_arg)	 ba_next;
 	void			*ba_value;
-	struct bt_arg		*ba_key;	/* key for maps */
+	struct bt_arg		*ba_key;	/* key for maps/histograms */
 	enum  bt_argtype {
 		B_AT_STR = 1,			/* C-style string */
 		B_AT_LONG,			/* Number (integer) */
 		B_AT_VAR,			/* global variable (@var) */
 		B_AT_MAP,			/* global map (@map[]) */
+		B_AT_HIST,			/* histogram */
 
 		B_AT_BI_PID,
 		B_AT_BI_TID,
 		B_AT_BI_COMM,
+		B_AT_BI_CPU,
 		B_AT_BI_NSECS,
 		B_AT_BI_KSTACK,
 		B_AT_BI_USTACK,
@@ -129,36 +146,51 @@ struct bt_arg {
 		B_AT_MF_MIN,			/* @map[key] = min(pid) */
 		B_AT_MF_SUM,			/* @map[key] = sum(@elapsed) */
 
-		B_AT_OP_ADD,
+		B_AT_OP_PLUS,
 		B_AT_OP_MINUS,
 		B_AT_OP_MULT,
 		B_AT_OP_DIVIDE,
+		B_AT_OP_BAND,
+		B_AT_OP_BOR,
+		B_AT_OP_EQ,
+		B_AT_OP_NE,
+		B_AT_OP_LE,
+		B_AT_OP_GE,
+		B_AT_OP_LAND,
+		B_AT_OP_LOR,
 	}			 ba_type;
 };
 
+#define BA_INITIALIZER(v, t)	{ { NULL }, (void *)(v), NULL, (t) }
+
 /*
- * Statements define what should be done with each event recorded
- * by the corresponding probe.
+ * Each action associated with a given probe is made of at least one
+ * statement.
+ *
+ * Statements are interpreted linearly in userland to format data
+ * recorded in the form of events.
  */
 struct bt_stmt {
 	SLIST_ENTRY(bt_stmt)	 bs_next;
 	struct bt_var		*bs_var;	/* for STOREs */
 	SLIST_HEAD(, bt_arg)	 bs_args;
 	enum bt_action {
-		B_AC_STORE = 1,			/* @a = 3 */
-		B_AC_INSERT,			/* @map[key] = 42 */
+		B_AC_BUCKETIZE,			/* @h = hist(42) */
 		B_AC_CLEAR,			/* clear(@map) */
 		B_AC_DELETE,			/* delete(@map[key]) */
 		B_AC_EXIT,			/* exit() */
+		B_AC_INSERT,			/* @map[key] = 42 */
 		B_AC_PRINT,			/* print(@map, 10) */
 		B_AC_PRINTF,			/* printf("hello!\n") */
+		B_AC_STORE,			/* @a = 3 */
+		B_AC_TEST,			/* if (@a) */
 		B_AC_TIME,			/* time("%H:%M:%S  ") */
 		B_AC_ZERO,			/* zero(@map) */
 	}			 bs_act;
 };
 
-struct bt_ruleq		 g_rules;	/* Successfully parsed rules. */
-int			 g_nprobes;	/* # of probes to attach */
+extern struct bt_ruleq	 g_rules;	/* Successfully parsed rules. */
+extern int		 g_nprobes;	/* # of probes to attach */
 
 int			 btparse(const char *, size_t, const char *, int);
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_pledge.c,v 1.261 2020/02/15 09:35:48 anton Exp $	*/
+/*	$OpenBSD: kern_pledge.c,v 1.270 2021/02/03 22:46:55 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2015 Nicholas Marriott <nicm@openbsd.org>
@@ -527,9 +527,8 @@ pledge_syscall(struct proc *p, int code, uint64_t *tval)
 int
 pledge_fail(struct proc *p, int error, uint64_t code)
 {
-	char *codes = "";
+	const char *codes = "";
 	int i;
-	struct sigaction sa;
 
 	/* Print first matching pledge */
 	for (i = 0; code && pledgenames[i].bits != 0; i++)
@@ -550,11 +549,7 @@ pledge_fail(struct proc *p, int error, uint64_t code)
 	p->p_p->ps_acflag |= APLEDGE;
 
 	/* Send uncatchable SIGABRT for coredump */
-	memset(&sa, 0, sizeof sa);
-	sa.sa_handler = SIG_DFL;
-	setsigvec(p, SIGABRT, &sa);
-	atomic_clearbits_int(&p->p_sigmask, sigmask(SIGABRT));
-	psignal(p, SIGABRT);
+	sigabort(p);
 
 	p->p_p->ps_pledge = 0;		/* Disable all PLEDGE_ flags */
 	KERNEL_UNLOCK();
@@ -724,14 +719,6 @@ pledge_namei(struct proc *p, struct nameidata *ni, char *origpath)
 		}
 
 		break;
-	case SYS_readlink:
-		/* Allow /etc/malloc.conf for malloc(3). */
-		if ((ni->ni_pledge == PLEDGE_RPATH) &&
-		    strcmp(path, "/etc/malloc.conf") == 0) {
-			ni->ni_cnd.cn_flags |= BYPASSUNVEIL;
-			return (0);
-		}
-		break;
 	case SYS_stat:
 		/* DNS needs /etc/resolv.conf. */
 		if ((ni->ni_pledge == PLEDGE_RPATH) &&
@@ -833,7 +820,7 @@ pledge_sysctl(struct proc *p, int miblen, int *mib, void *new)
 		    mib[0] == CTL_NET && mib[1] == PF_ROUTE &&
 		    mib[2] == 0 &&
 		    (mib[3] == 0 || mib[3] == AF_INET6 || mib[3] == AF_INET) &&
-		    mib[4] == NET_RT_TABLE)
+		    (mib[4] == NET_RT_TABLE || mib[4] == NET_RT_SOURCE))
 			return (0);
 
 		if (miblen == 7 &&		/* exposes MACs */
@@ -882,9 +869,6 @@ pledge_sysctl(struct proc *p, int miblen, int *mib, void *new)
 			return (0);
 		if (miblen == 3 &&		/* kern.proc_cwd.* */
 		    mib[0] == CTL_KERN && mib[1] == KERN_PROC_CWD)
-			return (0);
-		if (miblen == 2 &&		/* hw.physmem */
-		    mib[0] == CTL_HW && mib[1] == HW_PHYSMEM64)
 			return (0);
 		if (miblen == 2 &&		/* kern.ccpu */
 		    mib[0] == CTL_KERN && mib[1] == KERN_CCPU)
@@ -967,6 +951,7 @@ pledge_sysctl(struct proc *p, int miblen, int *mib, void *new)
 			switch (mib[1]) {
 			case HW_MACHINE: 	/* uname() */
 			case HW_PAGESIZE: 	/* getpagesize() */
+			case HW_PHYSMEM64:	/* hw.physmem */
 			case HW_NCPU:		/* hw.ncpu */
 			case HW_NCPUONLINE:	/* hw.ncpuonline */
 				return (0);
@@ -1313,6 +1298,8 @@ pledge_ioctl(struct proc *p, long com, struct file *fp)
 
 	if ((pl & PLEDGE_WROUTE)) {
 		switch (com) {
+		case SIOCAIFADDR:
+		case SIOCDIFADDR:
 		case SIOCAIFADDR_IN6:
 		case SIOCDIFADDR_IN6:
 			if (fp->f_type == DTYPE_SOCKET)
@@ -1355,6 +1342,16 @@ pledge_sockopt(struct proc *p, int set, int level, int optname)
 			return 0;
 		}
 		break;
+	}
+
+	if ((p->p_p->ps_pledge & PLEDGE_WROUTE)) {
+		switch (level) {
+		case SOL_SOCKET:
+			switch (optname) {
+			case SO_RTABLE:
+				return (0);
+			}
+		}
 	}
 
 	if ((p->p_p->ps_pledge & (PLEDGE_INET|PLEDGE_UNIX|PLEDGE_DNS|PLEDGE_YPACTIVE)) == 0)
@@ -1406,7 +1403,7 @@ pledge_sockopt(struct proc *p, int set, int level, int optname)
 	case SOL_SOCKET:
 		switch (optname) {
 		case SO_RTABLE:
-			return pledge_fail(p, EINVAL, PLEDGE_INET);
+			return pledge_fail(p, EINVAL, PLEDGE_WROUTE);
 		}
 		return (0);
 	}

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ulpt.c,v 1.56 2020/01/08 12:57:35 mpi Exp $ */
+/*	$OpenBSD: ulpt.c,v 1.58 2021/01/29 17:12:19 sthen Exp $ */
 /*	$NetBSD: ulpt.c,v 1.57 2003/01/05 10:19:42 scw Exp $	*/
 /*	$FreeBSD: src/sys/dev/usb/ulpt.c,v 1.24 1999/11/17 22:33:44 n_hibma Exp $	*/
 
@@ -34,7 +34,7 @@
 
 /*
  * Printer Class spec:
- *   http://www.usb.org/developers/devclass_docs/usbprint11.pdf
+ *   https://www.usb.org/sites/default/files/usbprint11a021811.pdf
  */
 
 #include <sys/param.h>
@@ -575,7 +575,6 @@ ulptclose(dev_t dev, int flag, int mode, struct proc *p)
 		sc->sc_out_pipe = NULL;
 	}
 	if (sc->sc_in_pipe != NULL) {
-		usbd_abort_pipe(sc->sc_in_pipe);
 		usbd_close_pipe(sc->sc_in_pipe);
 		sc->sc_in_pipe = NULL;
 		if (sc->sc_in_xfer1 != NULL) {

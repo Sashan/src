@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtp_session.c,v 1.425 2020/03/15 16:34:57 millert Exp $	*/
+/*	$OpenBSD: smtp_session.c,v 1.428 2020/12/21 11:44:07 martijn Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -637,8 +637,8 @@ smtp_session(struct listener *listener, int sock,
 		s->fcrdns = 1;
 		smtp_lookup_servername(s);
 	} else {
-		resolver_getnameinfo((struct sockaddr *)&s->ss, NI_NAMEREQD,
-		    smtp_getnameinfo_cb, s);
+		resolver_getnameinfo((struct sockaddr *)&s->ss,
+		    NI_NAMEREQD | NI_NUMERICSERV, smtp_getnameinfo_cb, s);
 	}
 
 	/* session may have been freed by now */
@@ -1131,6 +1131,10 @@ smtp_io(struct io *io, int evt, void *arg)
 		/* No complete line received */
 		if (line == NULL)
 			return;
+
+		/* Strip trailing '\r' */
+		if (len && line[len - 1] == '\r')
+			line[--len] = '\0';
 
 		/* Message body */
 		eom = 0;
@@ -2579,7 +2583,8 @@ smtp_tx_rcpt_to(struct smtp_tx *tx, const char *line)
 
 			if (!text_to_mailaddr(&tx->evp.dsn_orcpt, opt) ||
 			    !valid_localpart(tx->evp.dsn_orcpt.user) ||
-			    !valid_domainpart(tx->evp.dsn_orcpt.domain)) {
+			    (strlen(tx->evp.dsn_orcpt.domain) != 0 &&
+			     !valid_domainpart(tx->evp.dsn_orcpt.domain))) {
 				smtp_reply(tx->session,
 				    "553 ORCPT address syntax error");
 				return;

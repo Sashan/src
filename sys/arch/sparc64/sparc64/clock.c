@@ -1,4 +1,4 @@
-/*	$OpenBSD: clock.c,v 1.59 2017/04/30 16:45:45 mpi Exp $	*/
+/*	$OpenBSD: clock.c,v 1.67 2020/10/20 15:59:17 cheloha Exp $	*/
 /*	$NetBSD: clock.c,v 1.41 2001/07/24 19:29:25 eeh Exp $ */
 
 /*
@@ -109,13 +109,15 @@ struct cfdriver clock_cd = {
 u_int tick_get_timecount(struct timecounter *);
 
 struct timecounter tick_timecounter = {
-	tick_get_timecount, NULL, ~0u, 0, "tick", 0, NULL
+	tick_get_timecount, NULL, ~0u, 0, "tick", 0,
+	NULL, TC_TICK
 };
 
 u_int sys_tick_get_timecount(struct timecounter *);
 
 struct timecounter sys_tick_timecounter = {
-	sys_tick_get_timecount, NULL, ~0u, 0, "sys_tick", 1000, NULL
+	sys_tick_get_timecount, NULL, ~0u, 0, "sys_tick", 1000,
+	NULL, TC_SYS_TICK
 };
 
 /*
@@ -170,7 +172,7 @@ struct cfattach clock_fhc_ca = {
 };
 
 /* Global TOD clock handle & idprom pointer */
-todr_chip_handle_t todr_handle = NULL;
+extern todr_chip_handle_t todr_handle;
 static struct idprom *idprom;
 
 static int	timermatch(struct device *, void *, void *);
@@ -565,6 +567,7 @@ cpu_initclocks(void)
 	if (intrdebug) {
 		hz = 1;
 		tick = 1000000 / hz;
+		tick_nsec = 1000000000 / hz;
 		printf("intrdebug set: 1Hz clock\n");
 	}
 #endif
@@ -573,6 +576,7 @@ cpu_initclocks(void)
 		printf("cannot get %d Hz clock; using 100 Hz\n", hz);
 		hz = 100;
 		tick = 1000000 / hz;
+		tick_nsec = 1000000000 / hz;
 	}
 
 	/* Make sure we have a sane cpu_clockrate -- we'll need it */
@@ -691,7 +695,8 @@ cpu_initclocks(void)
 	     timerreg_4u.t_mapintr[1]|INTMAP_V); 
 
 	statmin = statint - (statvar >> 1);
-	
+
+	tick_enable();
 }
 
 /*
@@ -884,105 +889,13 @@ schedintr(arg)
 	return (1);
 }
 
-
-/*
- * `sparc_clock_time_is_ok' is used in cpu_reboot() to determine
- * whether it is appropriate to call resettodr() to consolidate
- * pending time adjustments.
- */
-int sparc_clock_time_is_ok;
-
-/*
- * Set up the system's time, given a `reasonable' time value.
- */
-void
-inittodr(time_t base)
-{
-	int badbase = 0, waszero = base == 0;
-	char *bad = NULL;
-	struct timeval tv;
-	struct timespec ts;
-
-	tv.tv_sec = tv.tv_usec = 0;
-
-	if (base < 5 * SECYR) {
-		/*
-		 * If base is 0, assume filesystem time is just unknown
-		 * in stead of preposterous. Don't bark.
-		 */
-		if (base != 0)
-			printf("WARNING: preposterous time in file system\n");
-		/* not going to use it anyway, if the chip is readable */
-		base = 21*SECYR + 186*SECDAY + SECDAY/2;
-		badbase = 1;
-	}
-
-	if (todr_handle != NULL)
-		todr_gettime(todr_handle, &tv);
-
-	if (tv.tv_sec == 0) {
-		/*
-		 * Believe the time in the file system for lack of
-		 * anything better, resetting the clock.
-		 */
-		bad = "WARNING: bad date in battery clock";
-		tv.tv_sec = base;
-		tv.tv_usec = 0;
-		if (!badbase)
-			resettodr();
-	} else {
-		time_t deltat = tv.tv_sec - base;
-
-		sparc_clock_time_is_ok = 1;
-
-		if (deltat < 0)
-			deltat = -deltat;
-		if (!(waszero || deltat < 2 * SECDAY)) {
-#ifndef SMALL_KERNEL
-			printf("WARNING: clock %s %lld days",
-			    tv.tv_sec < base ? "lost" : "gained",
-			    (long long)(deltat / SECDAY));
-			bad = "";
-#endif
-		}
-	}
-
-	ts.tv_sec = tv.tv_sec;
-	ts.tv_nsec = tv.tv_usec * 1000;
-	tc_setclock(&ts);
-
-	if (bad) {
-		printf("%s", bad);
-		printf(" -- CHECK AND RESET THE DATE!\n");
-	}
-}
-
-/*
- * Reset the clock based on the current time.
- * Used when the current clock is preposterous, when the time is changed,
- * and when rebooting.  Do nothing if the time is not yet known, e.g.,
- * when crashing during autoconfig.
- */
-void
-resettodr(void)
-{
-	struct timeval tv;
-
-	if (time_second == 1)
-		return;
-
-	microtime(&tv);
-
-	sparc_clock_time_is_ok = 1;
-	if (todr_handle == 0 || todr_settime(todr_handle, &tv) != 0)
-		printf("Cannot set time in time-of-day clock\n");
-}
-
 void
 tick_start(void)
 {
 	struct cpu_info *ci = curcpu();
 	u_int64_t s;
+
+	tick_enable();
 
 	/*
 	 * Try to make the tick interrupts as synchronously as possible on
@@ -1001,6 +914,11 @@ sys_tick_start(void)
 	struct cpu_info *ci = curcpu();
 	u_int64_t s;
 
+	if (CPU_ISSUN4U || CPU_ISSUN4US) {
+		tick_enable();
+		sys_tick_enable();
+	}
+
 	/*
 	 * Try to make the tick interrupts as synchronously as possible on
 	 * all CPUs to avoid inaccuracies for migrating processes.
@@ -1018,6 +936,8 @@ stick_start(void)
 	struct cpu_info *ci = curcpu();
 	u_int64_t s;
 
+	tick_enable();
+
 	/*
 	 * Try to make the tick interrupts as synchronously as possible on
 	 * all CPUs to avoid inaccuracies for migrating processes.
@@ -1034,7 +954,7 @@ tick_get_timecount(struct timecounter *tc)
 {
 	u_int64_t tick;
 
-	__asm volatile("rd %%tick, %0" : "=r" (tick) :);
+	__asm volatile("rd %%tick, %0" : "=r" (tick));
 
 	return (tick & ~0u);
 }
@@ -1044,7 +964,7 @@ sys_tick_get_timecount(struct timecounter *tc)
 {
 	u_int64_t tick;
 
-	__asm volatile("rd %%sys_tick, %0" : "=r" (tick) :);
+	__asm volatile("rd %%sys_tick, %0" : "=r" (tick));
 
 	return (tick & ~0u);
 }

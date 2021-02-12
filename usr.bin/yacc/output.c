@@ -1,4 +1,4 @@
-/*	$OpenBSD: output.c,v 1.26 2016/09/21 16:26:30 otto Exp $	*/
+/*	$OpenBSD: output.c,v 1.28 2020/09/03 04:19:53 tb Exp $	*/
 /*	$NetBSD: output.c,v 1.4 1996/03/19 03:21:41 jtc Exp $	*/
 
 /*
@@ -832,10 +832,7 @@ output_defines(void)
 	fprintf(code_file, "#define YYERRCODE %d\n", symbol_value[1]);
 
 	if (dflag && unionized) {
-		fclose(union_file);
-		union_file = fopen(union_file_name, "r");
-		if (union_file == NULL)
-			open_error(union_file_name);
+		rewind(union_file);
 		while ((c = getc(union_file)) != EOF)
 			putc(c, defines_file);
 		fprintf(defines_file, " YYSTYPE;\n");
@@ -852,10 +849,7 @@ output_stored_text(void)
 	int c;
 	FILE *in, *out;
 
-	fclose(text_file);
-	text_file = fopen(text_file_name, "r");
-	if (text_file == NULL)
-		open_error(text_file_name);
+	rewind(text_file);
 	in = text_file;
 	if ((c = getc(in)) == EOF)
 		return;
@@ -911,7 +905,7 @@ output_debug(void)
 	    "\t{", symbol_prefix);
 	j = 80;
 	for (i = 0; i <= max; ++i) {
-		if ((s = symnam[i]) != '\0') {
+		if ((s = symnam[i]) != NULL) {
 			if (s[0] == '"') {
 				k = 7;
 				while (*++s != '"') {
@@ -1133,10 +1127,7 @@ output_semantic_actions(void)
 	int c, last;
 	FILE *out;
 
-	fclose(action_file);
-	action_file = fopen(action_file_name, "r");
-	if (action_file == NULL)
-		open_error(action_file_name);
+	rewind(action_file);
 
 	if ((c = getc(action_file)) == EOF)
 		return;

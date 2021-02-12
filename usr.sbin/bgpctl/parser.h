@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.h,v 1.37 2019/06/25 07:44:20 claudio Exp $ */
+/*	$OpenBSD: parser.h,v 1.39 2020/12/30 07:31:19 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -32,6 +32,7 @@ enum actions {
 	SHOW_FIB_TABLES,
 	SHOW_RIB,
 	SHOW_MRT,
+	SHOW_SET,
 	SHOW_RIB_MEM,
 	SHOW_NEXTHOP,
 	SHOW_INTERFACE,
@@ -64,7 +65,7 @@ struct parse_result {
 	struct community	 community;
 	char			 peerdesc[PEER_DESCR_LEN];
 	char			 rib[PEER_DESCR_LEN];
-	char			 shutcomm[SHUT_COMM_LEN];
+	char			 reason[REASON_LEN];
 	const char		*ext_comm_subtype;
 	u_int64_t		 rd;
 	int			 flags;

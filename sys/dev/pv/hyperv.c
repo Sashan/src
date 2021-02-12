@@ -63,8 +63,6 @@
 
 #include <machine/i82489var.h>
 
-#include <dev/rndvar.h>
-
 #include <dev/pv/pvvar.h>
 #include <dev/pv/pvreg.h>
 #include <dev/pv/hypervreg.h>
@@ -143,7 +141,7 @@ struct {
 };
 
 struct timecounter hv_timecounter = {
-	hv_gettime, 0, 0xffffffff, 10000000, "hyperv", 9001
+	hv_gettime, 0, 0xffffffff, 10000000, "hyperv", 9001, NULL, 0
 };
 
 struct cfdriver hyperv_cd = {
@@ -560,8 +558,10 @@ hv_start(struct hv_softc *sc, struct hv_msg *msg)
 			s = splnet();
 			hv_intr();
 			splx(s);
-		} else
-			tsleep(wchan, PRIBIO, wchan, 1);
+		} else {
+			tsleep_nsec(wchan, PRIBIO, wchan,
+			    USEC_TO_NSEC(delays[i]));
+		}
 	}
 	if (status != 0) {
 		printf("%s: posting vmbus message failed with %d\n",
@@ -622,8 +622,10 @@ hv_wait(struct hv_softc *sc, int (*cond)(struct hv_softc *, struct hv_msg *),
 			s = splnet();
 			hv_intr();
 			splx(s);
-		} else
-			tsleep(wchan, PRIBIO, wmsg ? wmsg : "hvwait", 1);
+		} else {
+			tsleep_nsec(wchan, PRIBIO, wmsg ? wmsg : "hvwait",
+			    USEC_TO_NSEC(1000));
+		}
 	}
 }
 

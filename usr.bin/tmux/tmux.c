@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.c,v 1.194 2020/03/17 11:10:12 nicm Exp $ */
+/* $OpenBSD: tmux.c,v 1.204 2021/01/17 16:17:41 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -28,6 +28,7 @@
 #include <locale.h>
 #include <paths.h>
 #include <pwd.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -56,8 +57,8 @@ static __dead void
 usage(void)
 {
 	fprintf(stderr,
-	    "usage: %s [-2CluvV] [-c shell-command] [-f file] [-L socket-name]\n"
-	    "            [-S socket-path] [command [flags]]\n",
+	    "usage: %s [-2CDlNuvV] [-c shell-command] [-f file] [-L socket-name]\n"
+	    "            [-S socket-path] [-T features] [command [flags]]\n",
 	    getprogname());
 	exit(1);
 }
@@ -109,33 +110,103 @@ areshell(const char *shell)
 }
 
 static char *
+expand_path(const char *path, const char *home)
+{
+	char			*expanded, *name;
+	const char		*end;
+	struct environ_entry	*value;
+
+	if (strncmp(path, "~/", 2) == 0) {
+		if (home == NULL)
+			return (NULL);
+		xasprintf(&expanded, "%s%s", home, path + 1);
+		return (expanded);
+	}
+
+	if (*path == '$') {
+		end = strchr(path, '/');
+		if (end == NULL)
+			name = xstrdup(path + 1);
+		else
+			name = xstrndup(path + 1, end - path - 1);
+		value = environ_find(global_environ, name);
+		free(name);
+		if (value == NULL)
+			return (NULL);
+		if (end == NULL)
+			end = "";
+		xasprintf(&expanded, "%s%s", value->value, end);
+		return (expanded);
+	}
+
+	return (xstrdup(path));
+}
+
+void
+expand_paths(const char *s, char ***paths, u_int *n)
+{
+	const char	*home = find_home();
+	char		*copy, *next, *tmp, resolved[PATH_MAX], *expanded;
+	u_int		 i;
+
+	*paths = NULL;
+	*n = 0;
+
+	copy = tmp = xstrdup(s);
+	while ((next = strsep(&tmp, ":")) != NULL) {
+		expanded = expand_path(next, home);
+		if (expanded == NULL) {
+			log_debug("%s: invalid path: %s", __func__, next);
+			continue;
+		}
+		if (realpath(expanded, resolved) == NULL) {
+			log_debug("%s: realpath(\"%s\") failed: %s", __func__,
+			    expanded, strerror(errno));
+			free(expanded);
+			continue;
+		}
+		free(expanded);
+		for (i = 0; i < *n; i++) {
+			if (strcmp(resolved, (*paths)[i]) == 0)
+				break;
+		}
+		if (i != *n) {
+			log_debug("%s: duplicate path: %s", __func__, resolved);
+			continue;
+		}
+		*paths = xreallocarray(*paths, (*n) + 1, sizeof *paths);
+		(*paths)[(*n)++] = xstrdup(resolved);
+	}
+	free(copy);
+}
+
+static char *
 make_label(const char *label, char **cause)
 {
-	char		*base, resolved[PATH_MAX], *path, *s;
-	struct stat	 sb;
-	uid_t		 uid;
+	char		**paths, *path, *base;
+	u_int		  i, n;
+	struct stat	  sb;
+	uid_t		  uid;
 
 	*cause = NULL;
-
 	if (label == NULL)
 		label = "default";
 	uid = getuid();
 
-	if ((s = getenv("TMUX_TMPDIR")) != NULL && *s != '\0')
-		xasprintf(&base, "%s/tmux-%ld", s, (long)uid);
-	else
-		xasprintf(&base, "%s/tmux-%ld", _PATH_TMP, (long)uid);
-	if (realpath(base, resolved) == NULL &&
-	    strlcpy(resolved, base, sizeof resolved) >= sizeof resolved) {
-		errno = ERANGE;
-		free(base);
-		goto fail;
+	expand_paths(TMUX_SOCK, &paths, &n);
+	if (n == 0) {
+		xasprintf(cause, "no suitable socket path");
+		return (NULL);
 	}
-	free(base);
+	path = paths[0]; /* can only have one socket! */
+	for (i = 1; i < n; i++)
+		free(paths[i]);
+	free(paths);
 
-	if (mkdir(resolved, S_IRWXU) != 0 && errno != EEXIST)
+	xasprintf(&base, "%s/tmux-%ld", path, (long)uid);
+	if (mkdir(base, S_IRWXU) != 0 && errno != EEXIST)
 		goto fail;
-	if (lstat(resolved, &sb) != 0)
+	if (lstat(base, &sb) != 0)
 		goto fail;
 	if (!S_ISDIR(sb.st_mode)) {
 		errno = ENOTDIR;
@@ -145,11 +216,13 @@ make_label(const char *label, char **cause)
 		errno = EACCES;
 		goto fail;
 	}
-	xasprintf(&path, "%s/%s", resolved, label);
+	xasprintf(&path, "%s/%s", base, label);
+	free(base);
 	return (path);
 
 fail:
-	xasprintf(cause, "error creating %s (%s)", resolved, strerror(errno));
+	xasprintf(cause, "error creating %s (%s)", base, strerror(errno));
+	free(base);
 	return (NULL);
 }
 
@@ -165,6 +238,31 @@ setblocking(int fd, int state)
 			mode &= ~O_NONBLOCK;
 		fcntl(fd, F_SETFL, mode);
 	}
+}
+
+uint64_t
+get_timer(void)
+{
+	struct timespec	ts;
+
+	/*
+	 * We want a timestamp in milliseconds suitable for time measurement,
+	 * so prefer the monotonic clock.
+	 */
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+		clock_gettime(CLOCK_REALTIME, &ts);
+	return ((ts.tv_sec * 1000ULL) + (ts.tv_nsec / 1000000ULL));
+}
+
+const char *
+sig2name(int signo)
+{
+     static char	s[11];
+
+     if (signo > 0 && signo < NSIG)
+	     return (sys_signame[signo]);
+     xsnprintf(s, sizeof s, "%d", signo);
+     return (s);
 }
 
 const char *
@@ -224,15 +322,17 @@ getversion(void)
 			fatalx("uname failed");
 		xasprintf(&version, "openbsd-%s", u.release);
 	}
-	return version;
+	return (version);
 }
 
 int
 main(int argc, char **argv)
 {
-	char					*path, *label, *cause, **var;
+	char					*path = NULL, *label = NULL;
+	char					*cause, **var;
 	const char				*s, *shell, *cwd;
-	int					 opt, flags, keys;
+	int					 opt, keys, feat = 0;
+	uint64_t				 flags = 0;
 	const struct options_table_entry	*oe;
 
 	if (setlocale(LC_CTYPE, "en_US.UTF-8") == NULL &&
@@ -249,17 +349,17 @@ main(int argc, char **argv)
 
 	if (**argv == '-')
 		flags = CLIENT_LOGIN;
-	else
-		flags = 0;
 
-	label = path = NULL;
-	while ((opt = getopt(argc, argv, "2c:Cdf:lL:qS:uUvV")) != -1) {
+	while ((opt = getopt(argc, argv, "2c:CDdf:lL:NqS:T:uUvV")) != -1) {
 		switch (opt) {
 		case '2':
-			flags |= CLIENT_256COLOURS;
+			tty_add_features(&feat, "256", ":,");
 			break;
 		case 'c':
 			shell_command = optarg;
+			break;
+		case 'D':
+			flags |= CLIENT_NOFORK;
 			break;
 		case 'C':
 			if (flags & CLIENT_CONTROL)
@@ -280,11 +380,17 @@ main(int argc, char **argv)
 			free(label);
 			label = xstrdup(optarg);
 			break;
+		case 'N':
+			flags |= CLIENT_NOSTARTSERVER;
+			break;
 		case 'q':
 			break;
 		case 'S':
 			free(path);
 			path = xstrdup(optarg);
+			break;
+		case 'T':
+			tty_add_features(&feat, optarg, ":,");
 			break;
 		case 'u':
 			flags |= CLIENT_UTF8;
@@ -300,6 +406,8 @@ main(int argc, char **argv)
 	argv += optind;
 
 	if (shell_command != NULL && argc != 0)
+		usage();
+	if ((flags & CLIENT_NOFORK) && argc != 0)
 		usage();
 
 	if ((ptm_fd = getptmfd()) == -1)
@@ -332,9 +440,9 @@ main(int argc, char **argv)
 
 	global_environ = environ_create();
 	for (var = environ; *var != NULL; var++)
-		environ_put(global_environ, *var);
+		environ_put(global_environ, *var, 0);
 	if ((cwd = find_cwd()) != NULL)
-		environ_set(global_environ, "PWD", "%s", cwd);
+		environ_set(global_environ, "PWD", 0, "%s", cwd);
 
 	global_options = options_create(NULL);
 	global_s_options = options_create(NULL);
@@ -357,6 +465,7 @@ main(int argc, char **argv)
 
 	/* Override keys to vi if VISUAL or EDITOR are set. */
 	if ((s = getenv("VISUAL")) != NULL || (s = getenv("EDITOR")) != NULL) {
+		options_set_string(global_options, "editor", 0, "%s", s);
 		if (strrchr(s, '/') != NULL)
 			s = strrchr(s, '/') + 1;
 		if (strstr(s, "vi") != NULL)
@@ -393,5 +502,5 @@ main(int argc, char **argv)
 	free(label);
 
 	/* Pass control to the client. */
-	exit(client_main(event_init(), argc, argv, flags));
+	exit(client_main(event_init(), argc, argv, flags, feat));
 }

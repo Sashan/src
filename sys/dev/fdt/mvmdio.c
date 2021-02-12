@@ -1,4 +1,4 @@
-/*	$OpenBSD: mvmdio.c,v 1.1 2017/08/25 20:09:34 patrick Exp $	*/
+/*	$OpenBSD: mvmdio.c,v 1.3 2020/11/28 20:06:05 kettenis Exp $	*/
 /*	$NetBSD: if_mvneta.c,v 1.41 2015/04/15 10:15:40 hsuenaga Exp $	*/
 /*
  * Copyright (c) 2007, 2008, 2013 KIYOHARA Takashi
@@ -36,8 +36,16 @@
 #include <machine/bus.h>
 #include <machine/fdt.h>
 
+#ifdef __armv7__
+#include <arm/simplebus/simplebusvar.h>
+#else
+#include <arm64/dev/simplebusvar.h>
+#endif
+
 #include <dev/ofw/openfirm.h>
+#include <dev/ofw/ofw_clock.h>
 #include <dev/ofw/ofw_pinctrl.h>
+#include <dev/ofw/ofw_misc.h>
 #include <dev/ofw/fdt.h>
 
 #include <dev/fdt/if_mvnetareg.h>
@@ -50,21 +58,20 @@
 	bus_space_write_4((sc)->sc_iot, (sc)->sc_ioh, (reg), (val))
 
 struct mvmdio_softc {
-	struct device sc_dev;
+	struct simplebus_softc sc_sbus;
 
 	bus_space_tag_t sc_iot;
 	bus_space_handle_t sc_ioh;
 
 	struct mutex sc_mtx;
+	struct mii_bus sc_mii;
 };
-
-struct mvmdio_softc *mvmdio_sc;
 
 static int mvmdio_match(struct device *, void *, void *);
 static void mvmdio_attach(struct device *, struct device *, void *);
 
-int mvmdio_miibus_readreg(struct device *, int, int);
-void mvmdio_miibus_writereg(struct device *, int, int, int);
+int mvmdio_smi_readreg(struct device *, int, int);
+void mvmdio_smi_writereg(struct device *, int, int, int);
 
 struct cfdriver mvmdio_cd = {
 	NULL, "mvmdio", DV_DULL
@@ -88,22 +95,34 @@ mvmdio_attach(struct device *parent, struct device *self, void *aux)
 	struct mvmdio_softc *sc = (struct mvmdio_softc *) self;
 	struct fdt_attach_args *faa = aux;
 
-	printf("\n");
+	if (faa->fa_nreg < 1) {
+		printf(": no registers\n");
+		return;
+	}
 
 	sc->sc_iot = faa->fa_iot;
 	if (bus_space_map(sc->sc_iot, faa->fa_reg[0].addr,
-	    faa->fa_reg[0].size, 0, &sc->sc_ioh))
-		panic("%s: cannot map registers", sc->sc_dev.dv_xname);
+	    faa->fa_reg[0].size, 0, &sc->sc_ioh)) {
+		printf(": can't map registers\n");
+		return;
+	}
 
 	pinctrl_byname(faa->fa_node, "default");
+	clock_enable_all(faa->fa_node);
 
 	mtx_init(&sc->sc_mtx, IPL_NET);
 
-	mvmdio_sc = sc;
+	sc->sc_mii.md_node = faa->fa_node;
+	sc->sc_mii.md_cookie = sc;
+	sc->sc_mii.md_readreg = mvmdio_smi_readreg;
+	sc->sc_mii.md_writereg = mvmdio_smi_writereg;
+	mii_register(&sc->sc_mii);
+
+	simplebus_attach(parent, &sc->sc_sbus.sc_dev, faa);
 }
 
 int
-mvmdio_miibus_readreg(struct device *dev, int phy, int reg)
+mvmdio_smi_readreg(struct device *dev, int phy, int reg)
 {
 	struct mvmdio_softc *sc = (struct mvmdio_softc *) dev;
 	uint32_t smi, val;
@@ -117,7 +136,7 @@ mvmdio_miibus_readreg(struct device *dev, int phy, int reg)
 			break;
 	}
 	if (i == MVNETA_PHY_TIMEOUT) {
-		printf("%s: SMI busy timeout\n", sc->sc_dev.dv_xname);
+		printf("%s: SMI busy timeout\n", sc->sc_sbus.sc_dev.dv_xname);
 		mtx_leave(&sc->sc_mtx);
 		return -1;
 	}
@@ -141,7 +160,7 @@ mvmdio_miibus_readreg(struct device *dev, int phy, int reg)
 }
 
 void
-mvmdio_miibus_writereg(struct device *dev, int phy, int reg, int val)
+mvmdio_smi_writereg(struct device *dev, int phy, int reg, int val)
 {
 	struct mvmdio_softc *sc = (struct mvmdio_softc *) dev;
 	uint32_t smi;
@@ -155,7 +174,7 @@ mvmdio_miibus_writereg(struct device *dev, int phy, int reg, int val)
 			break;
 	}
 	if (i == MVNETA_PHY_TIMEOUT) {
-		printf("%s: SMI busy timeout\n", sc->sc_dev.dv_xname);
+		printf("%s: SMI busy timeout\n", sc->sc_sbus.sc_dev.dv_xname);
 		mtx_leave(&sc->sc_mtx);
 		return;
 	}
@@ -173,5 +192,5 @@ mvmdio_miibus_writereg(struct device *dev, int phy, int reg, int val)
 	mtx_leave(&sc->sc_mtx);
 
 	if (i == MVNETA_PHY_TIMEOUT)
-		printf("%s: phy write timed out\n", sc->sc_dev.dv_xname);
+		printf("%s: phy write timed out\n", sc->sc_sbus.sc_dev.dv_xname);
 }

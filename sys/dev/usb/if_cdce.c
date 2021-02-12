@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_cdce.c,v 1.76 2019/11/14 13:50:55 abieber Exp $ */
+/*	$OpenBSD: if_cdce.c,v 1.80 2021/01/29 17:12:19 sthen Exp $ */
 
 /*
  * Copyright (c) 1997, 1998, 1999, 2000-2003 Bill Paul <wpaul@windriver.com>
@@ -36,7 +36,7 @@
 
 /*
  * USB Communication Device Class (Ethernet Networking Control Model)
- * http://www.usb.org/developers/devclass_docs/usbcdc11.pdf
+ * https://www.usb.org/sites/default/files/CDC1.2_WMC1.1_012011.zip
  *
  */
 
@@ -375,17 +375,15 @@ cdce_start(struct ifnet *ifp)
 	if (usbd_is_dying(sc->cdce_udev) || ifq_is_oactive(&ifp->if_snd))
 		return;
 
-	m_head = ifq_deq_begin(&ifp->if_snd);
+	m_head = ifq_dequeue(&ifp->if_snd);
 	if (m_head == NULL)
 		return;
 
 	if (cdce_encap(sc, m_head, 0)) {
-		ifq_deq_rollback(&ifp->if_snd, m_head);
+		m_freem(m_head);
 		ifq_set_oactive(&ifp->if_snd);
 		return;
 	}
-
-	ifq_deq_commit(&ifp->if_snd, m_head);
 
 #if NBPFILTER > 0
 	if (ifp->if_bpf)
@@ -422,6 +420,7 @@ cdce_encap(struct cdce_softc *sc, struct mbuf *m, int idx)
 	    10000, cdce_txeof);
 	err = usbd_transfer(c->cdce_xfer);
 	if (err != USBD_IN_PROGRESS) {
+		c->cdce_mbuf = NULL;
 		cdce_stop(sc);
 		return (EIO);
 	}
@@ -443,7 +442,6 @@ cdce_stop(struct cdce_softc *sc)
 	ifq_clr_oactive(&ifp->if_snd);
 
 	if (sc->cdce_bulkin_pipe != NULL) {
-		usbd_abort_pipe(sc->cdce_bulkin_pipe);
 		err = usbd_close_pipe(sc->cdce_bulkin_pipe);
 		if (err)
 			printf("%s: close rx pipe failed: %s\n",
@@ -452,7 +450,6 @@ cdce_stop(struct cdce_softc *sc)
 	}
 
 	if (sc->cdce_bulkout_pipe != NULL) {
-		usbd_abort_pipe(sc->cdce_bulkout_pipe);
 		err = usbd_close_pipe(sc->cdce_bulkout_pipe);
 		if (err)
 			printf("%s: close tx pipe failed: %s\n",
@@ -461,7 +458,6 @@ cdce_stop(struct cdce_softc *sc)
 	}
 
 	if (sc->cdce_intr_pipe != NULL) {
-		usbd_abort_pipe(sc->cdce_intr_pipe);
 		err = usbd_close_pipe(sc->cdce_intr_pipe);
 		if (err)
 			printf("%s: close interrupt pipe failed: %s\n",
@@ -813,7 +809,7 @@ cdce_txeof(struct usbd_xfer *xfer, void *priv, usbd_status status)
 	if (err)
 		ifp->if_oerrors++;
 
-	if (IFQ_IS_EMPTY(&ifp->if_snd) == 0)
+	if (ifq_empty(&ifp->if_snd) == 0)
 		cdce_start(ifp);
 
 	splx(s);

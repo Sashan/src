@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_uath.c,v 1.84 2019/11/12 07:47:30 mpi Exp $	*/
+/*	$OpenBSD: if_uath.c,v 1.86 2020/12/12 11:48:54 jan Exp $	*/
 
 /*-
  * Copyright (c) 2006
@@ -587,7 +587,7 @@ uath_alloc_rx_data_list(struct uath_softc *sc)
 			error = ENOMEM;
 			goto fail;
 		}
-		MCLGETI(data->m, M_DONTWAIT, NULL, sc->rxbufsz);
+		MCLGETL(data->m, M_DONTWAIT, sc->rxbufsz);
 		if (!(data->m->m_flags & M_EXT)) {
 			printf("%s: could not allocate rx mbuf cluster\n",
 			    sc->sc_dev.dv_xname);
@@ -1201,7 +1201,7 @@ uath_data_rxeof(struct usbd_xfer *xfer, void *priv,
 		ifp->if_ierrors++;
 		goto skip;
 	}
-	MCLGETI(mnew, M_DONTWAIT, NULL, sc->rxbufsz);
+	MCLGETL(mnew, M_DONTWAIT, sc->rxbufsz);
 	if (!(mnew->m_flags & M_EXT)) {
 		printf("%s: could not allocate rx mbuf cluster\n",
 		    sc->sc_dev.dv_xname);
@@ -1482,7 +1482,7 @@ uath_start(struct ifnet *ifp)
 			if (ic->ic_state != IEEE80211_S_RUN)
 				break;
 
-			IFQ_DEQUEUE(&ifp->if_snd, m0);
+			m0 = ifq_dequeue(&ifp->if_snd);
 			if (m0 == NULL)
 				break;
 #if NBPFILTER > 0

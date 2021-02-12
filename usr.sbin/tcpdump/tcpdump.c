@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcpdump.c,v 1.92 2020/01/24 22:46:37 procter Exp $	*/
+/*	$OpenBSD: tcpdump.c,v 1.95 2020/12/04 11:36:13 mvs Exp $	*/
 
 /*
  * Copyright (c) 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997
@@ -232,7 +232,7 @@ main(int argc, char **argv)
 
 	opterr = 0;
 	while ((op = getopt(argc, argv,
-	    "AaB:c:D:deE:fF:i:IlLnNOopqr:s:StT:vw:xXy:Y")) != -1)
+	    "AaB:c:D:deE:fF:i:IlLnNOopqr:s:StT:vw:xXy:")) != -1)
 		switch (op) {
 
 		case 'A':
@@ -365,12 +365,16 @@ main(int argc, char **argv)
 				packettype = PT_GRE;
 			else if (strcasecmp(optarg, "vxlan") == 0)
 				packettype = PT_VXLAN;
+			else if (strcasecmp(optarg, "geneve") == 0)
+				packettype = PT_GENEVE;
 			else if (strcasecmp(optarg, "erspan") == 0)
 				packettype = PT_ERSPAN;
 			else if (strcasecmp(optarg, "mpls") == 0)
 				packettype = PT_MPLS;
 			else if (strcasecmp(optarg, "tftp") == 0)
 				packettype = PT_TFTP;
+			else if (strcasecmp(optarg, "wg") == 0)
+				packettype = PT_WIREGUARD;
 			else if (strcasecmp(optarg, "sack") == 0)
 				/*
 				 * kept for compatibility; DEFAULT_SNAPLEN
@@ -388,15 +392,7 @@ main(int argc, char **argv)
 		case 'w':
 			WFileName = optarg;
 			break;
-#ifdef YYDEBUG
-		case 'Y':
-			{
-			/* Undocumented flag */
-			extern int yydebug;
-			yydebug = 1;
-			}
-			break;
-#endif
+
 		case 'y':
 			i = pcap_datalink_name_to_val(optarg);
 			if (i < 0)

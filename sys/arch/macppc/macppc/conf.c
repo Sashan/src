@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.c,v 1.71 2020/01/23 02:40:21 dlg Exp $ */
+/*	$OpenBSD: conf.c,v 1.73 2021/01/23 05:08:35 thfr Exp $ */
 
 /*
  * Copyright (c) 1997 Per Fogelstrom
@@ -94,9 +94,11 @@ cdev_decl(com);
 #include "tun.h"
 
 #include "ksyms.h"
+#include "kstat.h"
 #include "usb.h"
 #include "uhid.h"
 #include "fido.h"
+#include "ujoy.h"
 #include "ugen.h"
 #include "ulpt.h"
 #include "ucom.h"
@@ -181,7 +183,7 @@ struct cdevsw cdevsw[] = {
 	cdev_notdef(),			/* 48 */
 	cdev_notdef(),			/* 49 */
 	cdev_notdef(),			/* 50 */
-	cdev_notdef(),			/* 51 */
+	cdev_kstat_init(NKSTAT,kstat),	/* 51: kernel statistics */
 	cdev_midi_init(NMIDI,midi),	/* 52: MIDI I/O */
 	cdev_notdef(),			/* 53 was: sequencer I/O */
 	cdev_notdef(),			/* 54 was: RAIDframe disk driver */
@@ -230,6 +232,7 @@ struct cdevsw cdevsw[] = {
 	cdev_switch_init(NSWITCH,switch), /* 89: switch(4) control interface */
 	cdev_fido_init(NFIDO,fido),	/* 90: FIDO/U2F security key */
 	cdev_pppx_init(NPPPX,pppac),	/* 91: PPP Access Concentrator */
+	cdev_ujoy_init(NUJOY,ujoy),	/* 92: USB joystick/gamecontroller */
 };
 int nchrdev = nitems(cdevsw);
 

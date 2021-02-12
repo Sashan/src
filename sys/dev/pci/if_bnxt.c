@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_bnxt.c,v 1.21 2019/09/03 09:00:44 sf Exp $	*/
+/*	$OpenBSD: if_bnxt.c,v 1.28 2020/12/12 11:48:53 jan Exp $	*/
 /*-
  * Broadcom NetXtreme-C/E network driver.
  *
@@ -45,6 +45,7 @@
 
 
 #include "bpfilter.h"
+#include "vlan.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -88,6 +89,7 @@
 #define BNXT_CP_PAGES		4
 
 #define BNXT_MAX_TX_SEGS	32	/* a bit much? */
+#define BNXT_TX_SLOTS(bs)	(bs->bs_map->dm_nsegs + 1)
 
 #define BNXT_HWRM_SHORT_REQ_LEN	sizeof(struct hwrm_short_input)
 
@@ -600,9 +602,13 @@ bnxt_attach(struct device *parent, struct device *self, void *aux)
 	ifp->if_qstart = bnxt_start;
 	ifp->if_watchdog = bnxt_watchdog;
 	ifp->if_hardmtu = BNXT_MAX_MTU;
-	ifp->if_capabilities = IFCAP_VLAN_MTU;	 /* ? */
-	/* checksum flags, hwtagging? */
-	IFQ_SET_MAXLEN(&ifp->if_snd, 1024);	/* ? */
+	ifp->if_capabilities = IFCAP_VLAN_MTU | IFCAP_CSUM_IPv4 |
+	    IFCAP_CSUM_UDPv4 | IFCAP_CSUM_TCPv4 | IFCAP_CSUM_UDPv6 |
+	    IFCAP_CSUM_TCPv6;
+#if NVLAN > 0
+	ifp->if_capabilities |= IFCAP_VLAN_HWTAGGING;
+#endif
+	ifq_set_maxlen(&ifp->if_snd, 1024);	/* ? */
 
 	ifmedia_init(&sc->sc_media, IFM_IMASK, bnxt_media_change,
 	    bnxt_media_status);
@@ -752,7 +758,8 @@ bnxt_up(struct bnxt_softc *sc)
 	sc->sc_vnic.mru = BNXT_MAX_MTU;
 	sc->sc_vnic.cos_rule = (uint16_t)HWRM_NA_SIGNATURE;
 	sc->sc_vnic.lb_rule = (uint16_t)HWRM_NA_SIGNATURE;
-	sc->sc_vnic.flags = BNXT_VNIC_FLAG_DEFAULT;
+	sc->sc_vnic.flags = BNXT_VNIC_FLAG_DEFAULT |
+	    BNXT_VNIC_FLAG_VLAN_STRIP;
 	if (bnxt_hwrm_vnic_alloc(sc, &sc->sc_vnic) != 0) {
 		printf("%s: failed to allocate vnic\n", DEVNAME(sc));
 		goto dealloc_vnic_ctx;
@@ -911,7 +918,7 @@ bnxt_down(struct bnxt_softc *sc)
 	
 	CLR(ifp->if_flags, IFF_RUNNING);
 
-	ifq_clr_oactive(&ifp->if_snd);
+	intr_barrier(sc->sc_ih);
 	ifq_barrier(&ifp->if_snd);
 
 	timeout_del(&sc->sc_rx_refill);
@@ -1093,6 +1100,7 @@ bnxt_start(struct ifqueue *ifq)
 {
 	struct ifnet *ifp = ifq->ifq_if;
 	struct tx_bd_short *txring;
+	struct tx_bd_long_hi *txhi;
 	struct bnxt_softc *sc = ifp->if_softc;
 	struct bnxt_slot *bs;
 	bus_dmamap_t map;
@@ -1112,7 +1120,8 @@ bnxt_start(struct ifqueue *ifq)
 	used = 0;
 
 	for (;;) {
-		if (used + BNXT_MAX_TX_SEGS > free) {
+		/* +1 for tx_bd_long_hi */
+		if (used + BNXT_MAX_TX_SEGS + 1 > free) {
 			ifq_set_oactive(ifq);
 			break;
 		}
@@ -1135,28 +1144,61 @@ bnxt_start(struct ifqueue *ifq)
 		map = bs->bs_map;
 		bus_dmamap_sync(sc->sc_dmat, map, 0, map->dm_mapsize,
 		    BUS_DMASYNC_PREWRITE);
-		used += map->dm_nsegs;
+		used += BNXT_TX_SLOTS(bs);
+
+		/* first segment */
+		laststart = idx;
+		txring[idx].len = htole16(map->dm_segs[0].ds_len);
+		txring[idx].opaque = sc->sc_tx_prod;
+		txring[idx].addr = htole64(map->dm_segs[0].ds_addr);
 
 		if (map->dm_mapsize < 512)
-			txflags = TX_BD_SHORT_FLAGS_LHINT_LT512;
+			txflags = TX_BD_LONG_FLAGS_LHINT_LT512;
 		else if (map->dm_mapsize < 1024)
-			txflags = TX_BD_SHORT_FLAGS_LHINT_LT1K;
+			txflags = TX_BD_LONG_FLAGS_LHINT_LT1K;
 		else if (map->dm_mapsize < 2048)
-			txflags = TX_BD_SHORT_FLAGS_LHINT_LT2K;
+			txflags = TX_BD_LONG_FLAGS_LHINT_LT2K;
 		else
-			txflags = TX_BD_SHORT_FLAGS_LHINT_GTE2K;
+			txflags = TX_BD_LONG_FLAGS_LHINT_GTE2K;
+		txflags |= TX_BD_LONG_TYPE_TX_BD_LONG |
+		    TX_BD_LONG_FLAGS_NO_CMPL |
+		    (BNXT_TX_SLOTS(bs) << TX_BD_LONG_FLAGS_BD_CNT_SFT);
+		if (map->dm_nsegs == 1)
+			txflags |= TX_BD_SHORT_FLAGS_PACKET_END;
+		txring[idx].flags_type = htole16(txflags);
 
-		txflags |= TX_BD_SHORT_TYPE_TX_BD_SHORT |
-		    TX_BD_SHORT_FLAGS_NO_CMPL |
-		    (map->dm_nsegs << TX_BD_SHORT_FLAGS_BD_CNT_SFT);
-		laststart = idx;
+		idx++;
+		if (idx == sc->sc_tx_ring.ring_size)
+			idx = 0;
 
-		for (i = 0; i < map->dm_nsegs; i++) {
-			txring[idx].flags_type = htole16(txflags);
+		/* long tx descriptor */
+		txhi = (struct tx_bd_long_hi *)&txring[idx];
+		memset(txhi, 0, sizeof(*txhi));
+		txflags = 0;
+		if (m->m_pkthdr.csum_flags & (M_UDP_CSUM_OUT | M_TCP_CSUM_OUT))
+			txflags |= TX_BD_LONG_LFLAGS_TCP_UDP_CHKSUM;
+		if (m->m_pkthdr.csum_flags & M_IPV4_CSUM_OUT)
+			txflags |= TX_BD_LONG_LFLAGS_IP_CHKSUM;
+		txhi->lflags = htole16(txflags);
+
+#if NVLAN > 0
+		if (m->m_flags & M_VLANTAG) {
+			txhi->cfa_meta = htole32(m->m_pkthdr.ether_vtag |
+			    TX_BD_LONG_CFA_META_VLAN_TPID_TPID8100 |
+			    TX_BD_LONG_CFA_META_KEY_VLAN_TAG);
+		}
+#endif
+
+		idx++;
+		if (idx == sc->sc_tx_ring.ring_size)
+			idx = 0;
+
+		/* remaining segments */
+		txflags = TX_BD_SHORT_TYPE_TX_BD_SHORT;
+		for (i = 1; i < map->dm_nsegs; i++) {
 			if (i == map->dm_nsegs - 1)
-				txring[idx].flags_type |=
-				    TX_BD_SHORT_FLAGS_PACKET_END;
-			txflags = TX_BD_SHORT_TYPE_TX_BD_SHORT;
+				txflags |= TX_BD_SHORT_FLAGS_PACKET_END;
+			txring[idx].flags_type = htole16(txflags);
 
 			txring[idx].len =
 			    htole16(bs->bs_map->dm_segs[i].ds_len);
@@ -1303,12 +1345,15 @@ bnxt_intr(void *xsc)
 		if_rxr_put(&sc->sc_rxr[0], rxfree);
 		if_rxr_put(&sc->sc_rxr[1], agfree);
 
+		if (ifiq_input(&sc->sc_ac.ac_if.if_rcv, &ml)) {
+			if_rxr_livelocked(&sc->sc_rxr[0]);
+			if_rxr_livelocked(&sc->sc_rxr[1]);
+		}
+
 		bnxt_rx_fill(sc);
 		if ((sc->sc_rx_cons == sc->sc_rx_prod) ||
 		    (sc->sc_rx_ag_cons == sc->sc_rx_ag_prod))
 			timeout_add(&sc->sc_rx_refill, 0);
-
-		if_input(&sc->sc_ac.ac_if, &ml);
 	}
 	if (txfree != 0) {
 		if (ifq_is_oactive(&ifp->if_snd))
@@ -1834,7 +1879,7 @@ bnxt_rx_fill_slots(struct bnxt_softc *sc, struct bnxt_ring *ring, void *ring_mem
 	p = *prod;
 	for (fills = 0; fills < nslots; fills++) {
 		bs = &slots[p];
-		m = MCLGETI(NULL, M_DONTWAIT, NULL, bufsize);
+		m = MCLGETL(NULL, M_DONTWAIT, bufsize);
 		if (m == NULL)
 			break;
 
@@ -1907,11 +1952,17 @@ int
 bnxt_rx(struct bnxt_softc *sc, struct bnxt_cp_ring *cpr, struct mbuf_list *ml,
     int *slots, int *agslots, struct cmpl_base *cmpl)
 {
+	struct ifnet *ifp = &sc->sc_ac.ac_if;
 	struct mbuf *m, *am;
 	struct bnxt_slot *bs;
 	struct rx_pkt_cmpl *rx = (struct rx_pkt_cmpl *)cmpl;
 	struct rx_pkt_cmpl_hi *rxhi;
 	struct rx_abuf_cmpl *ag;
+	uint32_t flags;
+	uint16_t errors;
+
+	if (!ISSET(ifp->if_flags, IFF_RUNNING))
+		return (0);
 
 	/* second part of the rx completion */
 	rxhi = (struct rx_pkt_cmpl_hi *)bnxt_cpr_next_cmpl(sc, cpr);
@@ -1938,6 +1989,26 @@ bnxt_rx(struct bnxt_softc *sc, struct bnxt_cp_ring *cpr, struct mbuf_list *ml,
 	m->m_pkthdr.len = m->m_len = letoh16(rx->len);
 	(*slots)++;
 
+	/* checksum flags */
+	flags = lemtoh32(&rxhi->flags2);
+	errors = lemtoh16(&rxhi->errors_v2);
+	if ((flags & RX_PKT_CMPL_FLAGS2_IP_CS_CALC) != 0 &&
+	    (errors & RX_PKT_CMPL_ERRORS_IP_CS_ERROR) == 0)
+		m->m_pkthdr.csum_flags |= M_IPV4_CSUM_IN_OK;
+
+	if ((flags & RX_PKT_CMPL_FLAGS2_L4_CS_CALC) != 0 &&
+	    (errors & RX_PKT_CMPL_ERRORS_L4_CS_ERROR) == 0)
+		m->m_pkthdr.csum_flags |= M_TCP_CSUM_IN_OK |
+		    M_UDP_CSUM_IN_OK;
+
+#if NVLAN > 0
+	if ((flags & RX_PKT_CMPL_FLAGS2_META_FORMAT_MASK) ==
+	    RX_PKT_CMPL_FLAGS2_META_FORMAT_VLAN) {
+		m->m_pkthdr.ether_vtag = lemtoh16(&rxhi->metadata);
+		m->m_flags |= M_VLANTAG;
+	}
+#endif
+
 	if (ag != NULL) {
 		bs = &sc->sc_rx_ag_slots[ag->opaque];
 		bus_dmamap_sync(sc->sc_dmat, bs->bs_map, 0,
@@ -1959,10 +2030,14 @@ bnxt_rx(struct bnxt_softc *sc, struct bnxt_cp_ring *cpr, struct mbuf_list *ml,
 void
 bnxt_txeof(struct bnxt_softc *sc, int *txfree, struct cmpl_base *cmpl)
 {
+	struct ifnet *ifp = &sc->sc_ac.ac_if;
 	struct tx_cmpl *txcmpl = (struct tx_cmpl *)cmpl;
 	struct bnxt_slot *bs;
 	bus_dmamap_t map;
 	u_int idx, segs, last;
+
+	if (!ISSET(ifp->if_flags, IFF_RUNNING))
+		return;
 
 	idx = sc->sc_tx_ring_cons;
 	last = sc->sc_tx_cons;
@@ -1970,7 +2045,7 @@ bnxt_txeof(struct bnxt_softc *sc, int *txfree, struct cmpl_base *cmpl)
 		bs = &sc->sc_tx_slots[sc->sc_tx_cons];
 		map = bs->bs_map;
 
-		segs = map->dm_nsegs;
+		segs = BNXT_TX_SLOTS(bs);
 		bus_dmamap_sync(sc->sc_dmat, map, 0, map->dm_mapsize,
 		    BUS_DMASYNC_POSTWRITE);
 		bus_dmamap_unload(sc->sc_dmat, map);
@@ -2816,7 +2891,8 @@ bnxt_hwrm_set_filter(struct bnxt_softc *softc, struct bnxt_vnic_info *vnic)
 	resp = BNXT_DMA_KVA(softc->sc_cmd_resp);
 	bnxt_hwrm_cmd_hdr_init(softc, &req, HWRM_CFA_L2_FILTER_ALLOC);
 
-	req.flags = htole32(HWRM_CFA_L2_FILTER_ALLOC_INPUT_FLAGS_PATH_RX);
+	req.flags = htole32(HWRM_CFA_L2_FILTER_ALLOC_INPUT_FLAGS_PATH_RX
+	    | HWRM_CFA_L2_FILTER_ALLOC_INPUT_FLAGS_OUTERMOST);
 	enables = HWRM_CFA_L2_FILTER_ALLOC_INPUT_ENABLES_L2_ADDR
 	    | HWRM_CFA_L2_FILTER_ALLOC_INPUT_ENABLES_L2_ADDR_MASK
 	    | HWRM_CFA_L2_FILTER_ALLOC_INPUT_ENABLES_DST_ID;

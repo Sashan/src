@@ -1,4 +1,4 @@
-/* $OpenBSD: pms.c,v 1.92 2020/03/18 22:38:10 bru Exp $ */
+/* $OpenBSD: pms.c,v 1.95 2020/10/23 22:06:27 bru Exp $ */
 /* $NetBSD: psm.c,v 1.11 2000/06/05 22:20:57 sommerfeld Exp $ */
 
 /*-
@@ -142,6 +142,7 @@ struct elantech_softc {
 
 	int max_x, max_y;
 	int old_x, old_y;
+	int initial_pkt;
 };
 #define ELANTECH_IS_CLICKPAD(sc) (((sc)->elantech->fw_version & 0x1000) != 0)
 
@@ -304,7 +305,7 @@ void	pms_proc_elantech_v3(struct pms_softc *);
 void	pms_proc_elantech_v4(struct pms_softc *);
 
 int	synaptics_knock(struct pms_softc *);
-int	synaptics_set_mode(struct pms_softc *, int);
+int	synaptics_set_mode(struct pms_softc *, int, int);
 int	synaptics_query(struct pms_softc *, int, int *);
 int	synaptics_get_hwinfo(struct pms_softc *);
 void	synaptics_sec_proc(struct pms_softc *);
@@ -970,12 +971,12 @@ pmsinput(void *vsc, int data)
 }
 
 int
-synaptics_set_mode(struct pms_softc *sc, int mode)
+synaptics_set_mode(struct pms_softc *sc, int mode, int rate)
 {
 	struct synaptics_softc *syn = sc->synaptics;
 
 	if (pms_spec_cmd(sc, mode) ||
-	    pms_set_rate(sc, SYNAPTICS_CMD_SET_MODE))
+	    pms_set_rate(sc, rate == 0 ? SYNAPTICS_CMD_SET_MODE : rate))
 		return (-1);
 
 	/*
@@ -984,7 +985,8 @@ synaptics_set_mode(struct pms_softc *sc, int mode)
 	 */
 	delay(10000);
 
-	syn->mode = mode;
+	if (rate == 0)
+		syn->mode = mode;
 
 	return (0);
 }
@@ -1208,12 +1210,12 @@ pms_enable_synaptics(struct pms_softc *sc)
 		mode |= SYNAPTICS_W_MODE;
 	else if (SYNAPTICS_ID_MAJOR(syn->identify) >= 4)
 		mode |= SYNAPTICS_DISABLE_GESTURE;
-	if (synaptics_set_mode(sc, mode))
+	if (synaptics_set_mode(sc, mode, 0))
 		goto err;
 
 	if (SYNAPTICS_SUPPORTS_AGM(syn->ext_capabilities) &&
-	    (pms_spec_cmd(sc, SYNAPTICS_QUE_MODEL) ||
-	     pms_set_rate(sc, SYNAPTICS_CMD_SET_ADV_GESTURE_MODE)))
+	    synaptics_set_mode(sc, SYNAPTICS_QUE_MODEL,
+	        SYNAPTICS_CMD_SET_ADV_GESTURE_MODE))
 		goto err;
 
 	return (1);
@@ -1386,7 +1388,7 @@ pms_disable_synaptics(struct pms_softc *sc)
 
 	if (syn->capabilities & SYNAPTICS_CAP_SLEEP)
 		synaptics_set_mode(sc, SYNAPTICS_SLEEP_MODE |
-		    SYNAPTICS_DISABLE_GESTURE);
+		    SYNAPTICS_DISABLE_GESTURE, 0);
 }
 
 int
@@ -2291,7 +2293,12 @@ pms_sync_elantech_v1(struct pms_softc *sc, int data)
 	}
 
 	if (data < 0 || data >= nitems(elantech->parity) ||
-	    elantech->parity[data] != p)
+	/*
+	 * FW 0x20022 sends inverted parity bits on cold boot, returning
+	 * to normal after suspend & resume, so the parity check is
+	 * disabled for this one.
+	 */
+	    (elantech->fw_version != 0x20022 && elantech->parity[data] != p))
 		return (-1);
 
 	return (0);
@@ -2437,15 +2444,29 @@ pms_proc_elantech_v1(struct pms_softc *sc)
 	else
 		w = (sc->packet[0] & 0xc0) >> 6;
 
+	/*
+	 * Firmwares 0x20022 and 0x20600 have a bug, position data in the
+	 * first two reports for single-touch contacts may be corrupt.
+	 */
+	if (elantech->fw_version == 0x20022 ||
+	    elantech->fw_version == 0x20600) {
+		if (w == 1) {
+			if (elantech->initial_pkt < 2) {
+				elantech->initial_pkt++;
+				return;
+			}
+		} else if (elantech->initial_pkt) {
+			elantech->initial_pkt = 0;
+		}
+	}
+
 	/* Hardware version 1 doesn't report pressure. */
 	if (w) {
 		x = ((sc->packet[1] & 0x0c) << 6) | sc->packet[2];
 		y = ((sc->packet[1] & 0x03) << 8) | sc->packet[3];
 		z = SYNAPTICS_PRESSURE;
 	} else {
-		x = elantech->old_x;
-		y = elantech->old_y;
-		z = 0;
+		x = y = z = 0;
 	}
 
 	WSMOUSE_TOUCH(sc->sc_wsmousedev, buttons, x, y, z, w);
@@ -2482,9 +2503,7 @@ pms_proc_elantech_v2(struct pms_softc *sc)
 		y = (((sc->packet[0] & 0x20) << 3) | sc->packet[2]) << 2;
 		z = SYNAPTICS_PRESSURE;
 	} else {
-		x = elantech->old_x;
-		y = elantech->old_y;
-		z = 0;
+		x = y = z = 0;
 	}
 
 	WSMOUSE_TOUCH(sc->sc_wsmousedev, buttons, x, y, z, w);

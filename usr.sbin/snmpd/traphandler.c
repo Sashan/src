@@ -1,4 +1,4 @@
-/*	$OpenBSD: traphandler.c,v 1.16 2020/03/11 06:53:42 martijn Exp $	*/
+/*	$OpenBSD: traphandler.c,v 1.20 2021/01/22 06:33:27 martijn Exp $	*/
 
 /*
  * Copyright (c) 2014 Bret Stephen Lambert <blambert@openbsd.org>
@@ -28,6 +28,7 @@
 #include <arpa/inet.h>
 
 #include <ber.h>
+#include <errno.h>
 #include <event.h>
 #include <fcntl.h>
 #include <imsg.h>
@@ -42,21 +43,13 @@
 #include "snmpd.h"
 #include "mib.h"
 
-char	 trap_path[PATH_MAX];
-
-void	 traphandler_init(struct privsep *, struct privsep_proc *, void *arg);
-int	 traphandler_dispatch_parent(int, struct privsep_proc *, struct imsg *);
-int	 traphandler_bind(struct address *);
-void	 traphandler_recvmsg(int, short, void *);
 int	 traphandler_priv_recvmsg(struct privsep_proc *, struct imsg *);
 int	 traphandler_fork_handler(struct privsep_proc *, struct imsg *);
-int	 traphandler_parse(char *, size_t, struct ber_element **,
-	    struct ber_element **, u_int *, struct ber_oid *);
-void	 traphandler_v1translate(struct ber_oid *, u_int, u_int);
-
+struct ber_element *
+	 traphandler_v1translate(struct snmp_message *, int);
 int	 trapcmd_cmp(struct trapcmd *, struct trapcmd *);
 void	 trapcmd_exec(struct trapcmd *, struct sockaddr *,
-	    struct ber_element *, char *, u_int);
+	    struct ber_element *);
 
 char	*traphandler_hostname(struct sockaddr *, int);
 
@@ -65,215 +58,197 @@ RB_GENERATE(trapcmd_tree, trapcmd, cmd_entry, trapcmd_cmp)
 
 struct trapcmd_tree trapcmd_tree = RB_INITIALIZER(&trapcmd_tree);
 
-static struct privsep_proc procs[] = {
-	{ "parent",	PROC_PARENT,	traphandler_dispatch_parent }
-};
-
-void
-traphandler(struct privsep *ps, struct privsep_proc *p)
-{
-	struct snmpd		*env = ps->ps_env;
-	struct address		*h;
-	struct listen_sock	*so;
-
-	if (env->sc_traphandler) {
-		TAILQ_FOREACH(h, &env->sc_addresses, entry) {
-			if (h->ipproto != IPPROTO_UDP)
-				continue;
-			if ((so = calloc(1, sizeof(*so))) == NULL)
-				fatal("%s", __func__);
-			if ((so->s_fd = traphandler_bind(h)) == -1)
-				fatal("could not create trap listener socket");
-			TAILQ_INSERT_TAIL(&env->sc_sockets, so, entry);
-		}
-	}
-
-	proc_run(ps, p, procs, nitems(procs), traphandler_init, NULL);
-}
-
-void
-traphandler_init(struct privsep *ps, struct privsep_proc *p, void *arg)
-{
-	struct snmpd		*env = ps->ps_env;
-	struct listen_sock	*so;
-
-	if (pledge("stdio id proc recvfd exec", NULL) == -1)
-		fatal("pledge");
-
-	if (!env->sc_traphandler)
-		return;
-
-	/* listen for SNMP trap messages */
-	TAILQ_FOREACH(so, &env->sc_sockets, entry) {
-		event_set(&so->s_ev, so->s_fd, EV_READ|EV_PERSIST,
-		    traphandler_recvmsg, ps);
-		event_add(&so->s_ev, NULL);
-	}
-}
-
-int
-traphandler_bind(struct address *addr)
-{
-	int			 s;
-	char			 buf[512];
-
-	if ((s = snmpd_socket_af(&addr->ss, htons(SNMPD_TRAPPORT),
-	    IPPROTO_UDP)) == -1)
-		return (-1);
-
-	if (fcntl(s, F_SETFL, O_NONBLOCK) == -1)
-		goto bad;
-
-	if (bind(s, (struct sockaddr *)&addr->ss, addr->ss.ss_len) == -1)
-		goto bad;
-
-	if (print_host(&addr->ss, buf, sizeof(buf)) == NULL)
-		goto bad;
-
-	log_info("traphandler: listening on %s:%d", buf, SNMPD_TRAPPORT);
-
-	return (s);
- bad:
-	close (s);
-	return (-1);
-}
-
-void
-traphandler_shutdown(void)
-{
-	struct listen_sock	*so;
-
-	TAILQ_FOREACH(so, &snmpd_env->sc_sockets, entry) {
-		event_del(&so->s_ev);
-		close(so->s_fd);
-	}
-}
-
-int
-traphandler_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
-{
-	switch (imsg->hdr.type) {
-	default:
-		break;
-	}
-
-	return (-1);
-}
-
-int
-snmpd_dispatch_traphandler(int fd, struct privsep_proc *p, struct imsg *imsg)
-{
-	switch (imsg->hdr.type) {
-	case IMSG_ALERT:
-		return (traphandler_priv_recvmsg(p, imsg));
-	default:
-		break;
-	}
-
-	return (-1);
-}
-
-void
-traphandler_recvmsg(int fd, short events, void *arg)
-{
-	struct privsep		*ps = arg;
-	char			 buf[8196];
-	struct iovec		 iov[2];
-	struct sockaddr_storage	 ss;
-	socklen_t		 slen;
-	ssize_t			 n;
-	struct ber_element	*req, *iter;
-	struct ber_oid		 trapoid;
-	u_int			 uptime;
-
-	slen = sizeof(ss);
-	if ((n = recvfrom(fd, buf, sizeof(buf), 0, (struct sockaddr *)&ss,
-	    &slen)) == -1)
-		return;
-
-	if (traphandler_parse(buf, n, &req, &iter, &uptime, &trapoid) == -1)
-		goto done;
-
-	iov[0].iov_base = &ss;
-	iov[0].iov_len = ss.ss_len;
-	iov[1].iov_base = buf;
-	iov[1].iov_len = n;
-
-	/* Forward it to the parent process */
-	if (proc_composev(ps, PROC_PARENT, IMSG_ALERT, iov, 2) == -1)
-		goto done;
-
- done:
-	if (req != NULL)
-		ober_free_elements(req);
-	return;
-}
-
 /*
  * Validate received message
  */
 int
-traphandler_parse(char *buf, size_t n, struct ber_element **req,
-    struct ber_element **vbinds, u_int *uptime, struct ber_oid *trapoid)
+traphandler_parse(struct snmp_message *msg)
 {
-	struct ber		 ber;
-	struct ber_element	*elm;
-	u_int			 vers, gtype, etype;
+	struct privsep		*ps = &snmpd_env->sc_ps;
+	struct snmp_stats	*stats = &snmpd_env->sc_stats;
+	struct ber		 ber = {0};
+	struct ber_element	*vblist = NULL, *elm, *elm2;
+	struct ber_oid		 o1, o2, snmpTrapOIDOID;
+	struct ber_oid		 snmpTrapOID, sysUpTimeOID;
+	int			 sysUpTime;
+	struct iovec		 iov[2];
+	void			*buf;
+	ssize_t			 buflen;
+	int			 ret = -1;
 
-	bzero(&ber, sizeof(ber));
-	ober_set_application(&ber, smi_application);
-	ober_set_readbuf(&ber, buf, n);
-
-	if ((*req = ober_read_elements(&ber, NULL)) == NULL)
-		goto done;
-
-	if (ober_scanf_elements(*req, "{dSe", &vers, &elm) == -1)
-		goto done;
-
-	switch (vers) {
-	case SNMP_V1:
-		if (ober_scanf_elements(elm, "{oSddde",
-		    trapoid, &gtype, &etype, uptime, &elm) == -1)
+	switch (msg->sm_pdu->be_type) {
+	case SNMP_C_TRAP:
+		if ((vblist = traphandler_v1translate(msg, 0)) == NULL)
 			goto done;
-		traphandler_v1translate(trapoid, gtype, etype);
-		if (elm->be_type != BER_TYPE_SEQUENCE)
-			goto done;
-		*vbinds = elm->be_sub;
 		break;
-
-	case SNMP_V2:
-		if (ober_scanf_elements(elm, "{SSS{e}}", &elm) == -1 ||
-		    ober_scanf_elements(elm, "{Sd}{So}",
-		    uptime, trapoid) == -1)
+	case SNMP_C_TRAPV2:
+		if (ober_scanf_elements(msg->sm_pdu, "{SSe}", &elm) == -1) {
+			stats->snmp_inasnparseerrs++;
 			goto done;
-		*vbinds = elm->be_next->be_next;
+		}
+		if (elm->be_type != BER_TYPE_INTEGER) {
+			stats->snmp_inasnparseerrs++;
+			goto done;
+		}
+		vblist = ober_unlink_elements(elm);
 		break;
-
 	default:
-		log_warnx("unsupported SNMP trap version '%d'", vers);
+		fatalx("%s called without proper context", __func__);
+	}
+
+	(void)ober_string2oid("1.3.6.1.2.1.1.3.0", &sysUpTimeOID);
+	(void)ober_string2oid("1.3.6.1.6.3.1.1.4.1.0", &snmpTrapOIDOID);
+	if (ober_scanf_elements(vblist, "{{od}{oo}", &o1, &sysUpTime, &o2,
+	    &snmpTrapOID) == -1 ||
+	    ober_oid_cmp(&o1, &sysUpTimeOID) != 0 ||
+	    ober_oid_cmp(&o2, &snmpTrapOIDOID) != 0) {
+		stats->snmp_inasnparseerrs++;
+		goto done;
+	}
+	(void)ober_scanf_elements(vblist, "{Se", &elm);
+	for (elm = elm->be_next; elm != NULL; elm = elm->be_next) {
+		if (ober_scanf_elements(elm, "{oe}", &o1, &elm2) == -1 ||
+		    elm2->be_next != NULL) {
+			stats->snmp_inasnparseerrs++;
+			goto done;
+		}
+	}
+
+	ober_set_application(&ber, smi_application);
+
+	if ((buflen = ober_write_elements(&ber, vblist)) == -1 ||
+	    ober_get_writebuf(&ber, &buf) == -1) {
+		msg->sm_errstr = "failed to handle trap";
 		goto done;
 	}
 
-	ober_free(&ber);
-	return (0);
+	iov[0].iov_base = &(msg->sm_ss);
+	iov[0].iov_len = msg->sm_slen;
+	iov[1].iov_base = buf;
+	iov[1].iov_len = buflen;
 
- done:
+	/* Forward it to the parent process */
+	if (proc_composev(ps, PROC_PARENT, IMSG_TRAP_EXEC, iov, 2) == -1) {
+		msg->sm_errstr = "failed to handle trap";
+		goto done;
+	}
+
+	ret = 0;
+done:
 	ober_free(&ber);
-	if (*req)
-		ober_free_elements(*req);
-	*req = NULL;
-	return (-1);
+	if (vblist != NULL)
+		ober_free_elements(vblist);
+	return ret;
 }
 
-void
-traphandler_v1translate(struct ber_oid *oid, u_int gtype, u_int etype)
+struct ber_element *
+traphandler_v1translate(struct snmp_message *msg, int proxy)
 {
-	/* append 'specific trap' number to 'enterprise specific' traps */
-	if (gtype >= 6) {
-		oid->bo_id[oid->bo_n] = 0;
-		oid->bo_id[oid->bo_n + 1] = etype;
-		oid->bo_n += 2;
+	struct snmp_stats	*stats = &snmpd_env->sc_stats;
+	struct ber_oid trapoid, enterprise, oid, snmpTrapAddressOid;
+	struct ber_oid snmpTrapCommunityOid, snmpTrapEnterpriseOid;
+	struct ber_element *elm, *last, *vblist, *vb0 = NULL;
+	void *agent_addr;
+	size_t agent_addrlen;
+	int generic_trap, specific_trap, time_stamp;
+	int hasaddress = 0, hascommunity = 0, hasenterprise = 0;
+
+	if (ober_scanf_elements(msg->sm_pdu, "{oxddde", &enterprise,
+	    &agent_addr, &agent_addrlen, &generic_trap, &specific_trap,
+	    &time_stamp, &vblist) == -1 ||
+	    agent_addrlen != 4 ||
+	    vblist->be_type != BER_TYPE_SEQUENCE) {
+		stats->snmp_inasnparseerrs++;
+		return NULL;
 	}
+	switch (generic_trap) {
+	case 0:
+		(void)ober_string2oid("1.3.6.1.6.3.1.1.5.1", &trapoid);
+		break;
+	case 1:
+		(void)ober_string2oid("1.3.6.1.6.3.1.1.5.2", &trapoid);
+		break;
+	case 2:
+		(void)ober_string2oid("1.3.6.1.6.3.1.1.5.3", &trapoid);
+		break;
+	case 3:
+		(void)ober_string2oid("1.3.6.1.6.3.1.1.5.4", &trapoid);
+		break;
+	case 4:
+		(void)ober_string2oid("1.3.6.1.6.3.1.1.5.5", &trapoid);
+		break;
+	case 5:
+		(void)ober_string2oid("1.3.6.1.6.3.1.1.5.6", &trapoid);
+		break;
+	case 6:
+		trapoid = enterprise;
+		/* Officially this should be 128, but BER_MAX_OID_LEN is 64 */
+		if (trapoid.bo_n + 2 > BER_MAX_OID_LEN) {
+			stats->snmp_inasnparseerrs++;
+			return NULL;
+		}
+		trapoid.bo_id[trapoid.bo_n++] = 0;
+		trapoid.bo_id[trapoid.bo_n++] = specific_trap;
+		break;
+	default:
+		stats->snmp_inasnparseerrs++;
+		return NULL;
+	}
+
+	/* work aronud net-snmp's snmptrap: It adds an EOC element in vblist */
+	if (vblist->be_len != 0)
+		vb0 = ober_unlink_elements(vblist);
+
+	if ((vblist = ober_add_sequence(NULL)) == NULL) {
+		msg->sm_errstr = strerror(errno);
+		if (vb0 != NULL)
+			ober_free_elements(vb0);
+		return NULL;
+	}
+	if (ober_printf_elements(vblist, "{od}{oO}e", "1.3.6.1.2.1.1.3.0",
+	    time_stamp, "1.3.6.1.6.3.1.1.4.1.0", &trapoid, vb0) == NULL) {
+		msg->sm_errstr = strerror(errno);
+		if (vb0 != 0)
+			ober_free_elements(vb0);
+		ober_free_elements(vblist);
+		return NULL;
+	}
+
+	if (proxy) {
+		(void)ober_string2oid("1.3.6.1.6.3.18.1.3.0",
+		    &snmpTrapAddressOid);
+		(void)ober_string2oid("1.3.6.1.6.3.18.1.4.0",
+		    &snmpTrapCommunityOid);
+		(void)ober_string2oid("1.3.6.1.6.3.1.1.4.3.0",
+		    &snmpTrapEnterpriseOid);
+		for (elm = vblist->be_sub; elm != NULL; elm = elm->be_next) {
+			if (ober_get_oid(elm->be_sub, &oid) == -1) {
+				msg->sm_errstr = "failed to read oid";
+				ober_free_elements(vblist);
+				return NULL;
+			}
+			if (ober_oid_cmp(&oid, &snmpTrapAddressOid) == 0)
+				hasaddress = 1;
+			else if (ober_oid_cmp(&oid, &snmpTrapCommunityOid) == 0)
+				hascommunity = 1;
+			else if (ober_oid_cmp(&oid,
+			    &snmpTrapEnterpriseOid) == 0)
+				hasenterprise = 1;
+			last = elm;
+		}
+		if (!hasaddress || !hascommunity || !hasenterprise) {
+			if (ober_printf_elements(last, "{Oxt}{Os}{OO}",
+			    &snmpTrapAddressOid, agent_addr, 4,
+			    BER_CLASS_APPLICATION, SNMP_T_IPADDR,
+			    &snmpTrapCommunityOid, msg->sm_community,
+			    &snmpTrapEnterpriseOid, &enterprise) == NULL) {
+				msg->sm_errstr = strerror(errno);
+				ober_free_elements(vblist);
+				return NULL;
+			}
+		}
+	}
+	return vblist;
 }
 
 int
@@ -304,14 +279,13 @@ traphandler_fork_handler(struct privsep_proc *p, struct imsg *imsg)
 {
 	struct privsep		*ps = p->p_ps;
 	struct snmpd		*env = ps->ps_env;
-	char			 oidbuf[SNMP_MAX_OID_STRLEN];
+	struct ber		 ber = {0};
 	struct sockaddr		*sa;
 	char			*buf;
 	ssize_t			 n;
-	struct ber_element	*req, *iter;
-	struct trapcmd		*cmd;
+	struct ber_element	*vblist;
 	struct ber_oid		 trapoid;
-	u_int			 uptime;
+	struct trapcmd		*cmd;
 	struct passwd		*pw;
 	int			 verbose;
 
@@ -335,22 +309,25 @@ traphandler_fork_handler(struct privsep_proc *p, struct imsg *imsg)
 	n -= sa->sa_len;
 	buf = (char *)imsg->data + sa->sa_len;
 
-	if (traphandler_parse(buf, n, &req, &iter, &uptime, &trapoid) == -1)
+	ober_set_application(&ber, smi_application);
+	ober_set_readbuf(&ber, buf, n);
+
+	if ((vblist = ober_read_elements(&ber, NULL)) == NULL)
 		fatalx("couldn't parse SNMP trap message");
+	ober_free(&ber);
 
-	smi_oid2string(&trapoid, oidbuf, sizeof(oidbuf), 0);
+	(void)ober_scanf_elements(vblist, "{S{So", &trapoid);
 	if ((cmd = trapcmd_lookup(&trapoid)) != NULL)
-		trapcmd_exec(cmd, sa, iter, oidbuf, uptime);
+		trapcmd_exec(cmd, sa, vblist->be_sub);
 
-	if (req != NULL)
-		ober_free_elements(req);
+	ober_free_elements(vblist);
 
 	exit(0);
 }
 
 void
 trapcmd_exec(struct trapcmd *cmd, struct sockaddr *sa,
-    struct ber_element *iter, char *trapoid, u_int uptime)
+    struct ber_element *vb)
 {
 	char			 oidbuf[SNMP_MAX_OID_STRLEN];
 	struct ber_oid		 oid;
@@ -401,18 +378,8 @@ trapcmd_exec(struct trapcmd *cmd, struct sockaddr *sa,
 	if (dprintf(s[0], "%s\n", host) == -1)
 		goto out;
 
-	if (dprintf(s[0],
-	    "iso.org.dod.internet.mgmt.mib-2.system.sysUpTime.0 %u\n",
-	    uptime) == -1)
-		goto out;
-
-	if (dprintf(s[0],
-	    "iso.org.dod.internet.snmpV2.snmpModules.snmpMIB.snmpMIBObjects."
-	    "snmpTrap.snmpTrapOID.0 %s\n", trapoid) == -1)
-		goto out;
-
-	for (; iter != NULL; iter = iter->be_next) {
-		if (ober_scanf_elements(iter, "{oe}", &oid, &elm) == -1)
+	for (; vb != NULL; vb = vb->be_next) {
+		if (ober_scanf_elements(vb, "{oe}", &oid, &elm) == -1)
 			goto out;
 		if ((value = smi_print_element(elm)) == NULL)
 			goto out;
@@ -435,7 +402,7 @@ trapcmd_exec(struct trapcmd *cmd, struct sockaddr *sa,
 	} else {
 		log_debug("child %i finished", child);
 	}
-		close(s[1]);
+	close(s[1]);
 
 	return;
 }

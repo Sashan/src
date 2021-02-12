@@ -1,6 +1,6 @@
-#	$OpenBSD: Makefile,v 1.15 2019/12/01 05:16:40 deraadt Exp $
+#	$OpenBSD: Makefile,v 1.18 2021/01/05 15:10:43 deraadt Exp $
 
-FS=		miniroot${OSrev}.fs
+FS=		miniroot${OSrev}.img
 FSSIZE=		8064
 FSDISKTYPE=	mini34
 CDROM=		cd${OSrev}.iso
@@ -22,7 +22,7 @@ ${FS}: bsd.gz
 	fdisk -yi -l ${FSSIZE} -f ${DESTDIR}/usr/mdec/mbr `cat vnd`
 .endif
 	disklabel -w `cat vnd` ${FSDISKTYPE}
-	newfs -m 0 -o space -i 524288 -c ${FSSIZE} /dev/r`cat vnd`a
+	newfs -O 1 -m 0 -o space -i 524288 -c ${FSSIZE} /dev/r`cat vnd`a
 	mount /dev/`cat vnd`a ${MOUNT_POINT}
 	cp ${DESTDIR}/usr/mdec/boot ${.OBJDIR}/boot
 	strip ${.OBJDIR}/boot
@@ -96,7 +96,7 @@ unconfig:
 
 .ifdef RELEASEDIR
 install:
-	cp bsd.rd ${RELEASEDIR}/bsd.rd
+	cp bsd.gz ${RELEASEDIR}/bsd.rd
 	chmod a+r ${RELEASEDIR}/bsd.rd
 	cp ${FS} ${RELEASEDIR}
 	cp ${CDROM} ${RELEASEDIR}
@@ -104,7 +104,7 @@ install:
 
 clean cleandir:
 	rm -f *.core mr.fs instbin instbin.mk instbin*.cache \
-	    *.o *.lo *.c bsd bsd.rd bsd.gz bsd.strip floppy*.fs \
+	    *.o *.lo *.c bsd bsd.rd bsd.gz bsd.strip floppy*.img \
 	    lib*.a lib*.olist instbin.map boot instbin.conf ${FS}
 	rm -rf mr.fs.d
 	rm -f ${CDROM}

@@ -1,4 +1,4 @@
-/*	$OpenBSD: snapper.c,v 1.37 2016/09/19 06:46:43 ratchov Exp $	*/
+/*	$OpenBSD: snapper.c,v 1.39 2020/08/26 03:29:06 visa Exp $	*/
 /*	$NetBSD: snapper.c,v 1.1 2003/12/27 02:19:34 grant Exp $	*/
 
 /*-
@@ -442,6 +442,9 @@ snapper_match(struct device *parent, void *match, void *aux)
 	bzero(compat, sizeof compat);
 	OF_getprop(soundchip, "compatible", compat, sizeof compat);
 
+	if (strcmp(compat, "AOAKeylargo") == 0 &&
+	    strcmp(hw_prod, "PowerBook5,4") == 0)
+		return (1);
 	if (strcmp(compat, "snapper") == 0)
 		return (1);
 

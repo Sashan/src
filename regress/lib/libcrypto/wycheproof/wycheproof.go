@@ -1,4 +1,4 @@
-/* $OpenBSD: wycheproof.go,v 1.116 2020/01/27 00:37:59 tb Exp $ */
+/* $OpenBSD: wycheproof.go,v 1.120 2020/05/14 18:11:45 tb Exp $ */
 /*
  * Copyright (c) 2018 Joel Sing <jsing@openbsd.org>
  * Copyright (c) 2018, 2019 Theo Buehler <tb@openbsd.org>
@@ -605,13 +605,13 @@ func checkAesCbcPkcs5(ctx *C.EVP_CIPHER_CTX, doEncrypt int, key []byte, keyLen i
 		return false
 	}
 
-	openedMsg := out[0:cipherOutLen]
+	openedMsg := cipherOut[0:cipherOutLen]
 	if outLen == 0 {
 		out = nil
 	}
 
 	success := false
-	if bytes.Equal(openedMsg, out) || wt.Result == "invalid" {
+	if bytes.Equal(openedMsg, out) == (wt.Result != "invalid") {
 		success = true
 		if acceptableAudit && wt.Result == "acceptable" {
 			gatherAcceptableStatistics(wt.TCID, wt.Comment, wt.Flags)
@@ -1117,7 +1117,7 @@ func checkAeadOpen(ctx *C.EVP_AEAD_CTX, iv []byte, ivLen int, aad []byte, aadLen
 	}
 
 	success := false
-	if bytes.Equal(openedMsg, msg) || wt.Result == "invalid" {
+	if bytes.Equal(openedMsg, msg) == (wt.Result != "invalid") {
 		if acceptableAudit && wt.Result == "acceptable" {
 			gatherAcceptableStatistics(wt.TCID, wt.Comment, wt.Flags)
 		}
@@ -1163,7 +1163,7 @@ func checkAeadSeal(ctx *C.EVP_AEAD_CTX, iv []byte, ivLen int, aad []byte, aadLen
 	sealedTag := sealed[msgLen:maxOutLen]
 
 	success := false
-	if bytes.Equal(sealedCt, ct) && bytes.Equal(sealedTag, tag) || wt.Result == "invalid" {
+	if (bytes.Equal(sealedCt, ct) && bytes.Equal(sealedTag, tag)) == (wt.Result != "invalid") {
 		if acceptableAudit && wt.Result == "acceptable" {
 			gatherAcceptableStatistics(wt.TCID, wt.Comment, wt.Flags)
 		}
@@ -1536,10 +1536,10 @@ func runECDHTest(nid int, variant testVariant, wt *wycheproofTestECDH) bool {
 	}
 
 	// XXX The shared fields of the secp224k1 test cases have a 0 byte preprended.
-	if len(shared) == int(secLen) + 1 && shared[0] == 0 {
+	if len(shared) == int(secLen)+1 && shared[0] == 0 {
 		fmt.Printf("INFO: Test case %d (%q) %v - prepending 0 byte\n", wt.TCID, wt.Comment, wt.Flags)
 		// shared = shared[1:];
-		zero := make([]byte, 1, secLen + 1)
+		zero := make([]byte, 1, secLen+1)
 		secret = append(zero, secret...)
 	}
 
@@ -2761,10 +2761,9 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to glob %v test vectors: %v", test.name, err)
 		}
-		// XXX put check back after wycheproof-testvectors update to 20191214
-		// if len(tvs) == 0 {
-		// 	log.Fatalf("Failed to find %v test vectors at %q\n", test.name, testVectorPath)
-		// }
+		if len(tvs) == 0 {
+			log.Fatalf("Failed to find %v test vectors at %q\n", test.name, testVectorPath)
+		}
 		for _, tv := range tvs {
 			if test.variant == Skip || (test.variant == Normal && skipNormal.Match([]byte(tv))) {
 				fmt.Printf("INFO: Skipping tests from \"%s\"\n", strings.TrimPrefix(tv, testVectorPath+"/"))

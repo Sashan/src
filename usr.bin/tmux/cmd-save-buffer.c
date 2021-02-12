@@ -1,4 +1,4 @@
-/* $OpenBSD: cmd-save-buffer.c,v 1.47 2019/12/12 11:39:56 nicm Exp $ */
+/* $OpenBSD: cmd-save-buffer.c,v 1.51 2020/07/21 05:24:33 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Tiago Cunha <me@tiagocunha.org>
@@ -73,16 +73,13 @@ cmd_save_buffer_done(__unused struct client *c, const char *path, int error,
 static enum cmd_retval
 cmd_save_buffer_exec(struct cmd *self, struct cmdq_item *item)
 {
-	struct args		*args = self->args;
-	struct client		*c = cmd_find_client(item, NULL, 1);
-	struct session		*s = item->target.s;
-	struct winlink		*wl = item->target.wl;
-	struct window_pane	*wp = item->target.wp;
+	struct args		*args = cmd_get_args(self);
+	struct client		*c = cmdq_get_client(item);
 	struct paste_buffer	*pb;
 	int			 flags;
 	const char		*bufname = args_get(args, 'b'), *bufdata;
 	size_t			 bufsize;
-	char			*path;
+	char			*path, *tmp;
 
 	if (bufname == NULL) {
 		if ((pb = paste_get_top(NULL)) == NULL) {
@@ -98,15 +95,22 @@ cmd_save_buffer_exec(struct cmd *self, struct cmdq_item *item)
 	}
 	bufdata = paste_buffer_data(pb, &bufsize);
 
-	if (self->entry == &cmd_show_buffer_entry)
+	if (cmd_get_entry(self) == &cmd_show_buffer_entry) {
+		if (c->session != NULL || (c->flags & CLIENT_CONTROL)) {
+			utf8_stravisx(&tmp, bufdata, bufsize,
+			    VIS_OCTAL|VIS_CSTYLE|VIS_TAB);
+			cmdq_print(item, "%s", tmp);
+			free(tmp);
+			return (CMD_RETURN_NORMAL);
+		}
 		path = xstrdup("-");
-	else
-		path = format_single(item, args->argv[0], c, s, wl, wp);
-	if (args_has(self->args, 'a'))
+	} else
+		path = format_single_from_target(item, args->argv[0]);
+	if (args_has(args, 'a'))
 		flags = O_APPEND;
 	else
 		flags = 0;
-	file_write(item->client, path, flags, bufdata, bufsize,
+	file_write(cmdq_get_client(item), path, flags, bufdata, bufsize,
 	    cmd_save_buffer_done, item);
 	free(path);
 

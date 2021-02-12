@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: grammar.h,v 1.3 2020/02/25 05:00:43 jsg Exp $ */
+/* $Id: grammar.h,v 1.6 2020/09/15 08:19:29 florian Exp $ */
 
 #ifndef ISCCFG_GRAMMAR_H
 #define ISCCFG_GRAMMAR_H 1
@@ -22,7 +22,6 @@
 /*! \file isccfg/grammar.h */
 
 #include <isc/lex.h>
-#include <isc/netaddr.h>
 #include <isc/sockaddr.h>
 #include <isc/region.h>
 #include <isc/types.h>
@@ -94,7 +93,6 @@ struct cfg_obj {
 		cfg_map_t	map;
 		cfg_list_t	list;
 	}               value;
-	isc_refcount_t  references;     /*%< reference counter */
 	const char *	file;
 	unsigned int    line;
 };
@@ -113,10 +111,10 @@ struct cfg_parser {
 	isc_token_t     token;
 
 	/*% We are at the end of all input. */
-	isc_boolean_t	seen_eof;
+	int	seen_eof;
 
 	/*% The current token has been pushed back. */
-	isc_boolean_t	ungotten;
+	int	ungotten;
 
 	/*%
 	 * The stack of currently active files, represented
@@ -150,9 +148,6 @@ struct cfg_parser {
 	 * from one token to the next.
 	 */
 	unsigned int flags;
-
-	/*%< Reference counter */
-	isc_refcount_t  references;
 };
 
 /*@{*/

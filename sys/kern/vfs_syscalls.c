@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_syscalls.c,v 1.344 2020/03/19 13:55:20 anton Exp $	*/
+/*	$OpenBSD: vfs_syscalls.c,v 1.348 2020/10/02 15:45:22 deraadt Exp $	*/
 /*	$NetBSD: vfs_syscalls.c,v 1.71 1996/04/23 10:29:02 mycroft Exp $	*/
 
 /*
@@ -251,7 +251,7 @@ update:
 	 */
 	error = VFS_MOUNT(mp, fspath, args, &nd, p);
 	if (!error) {
-		mp->mnt_stat.f_ctime = time_second;
+		mp->mnt_stat.f_ctime = gettime();
 	}
 	if (mp->mnt_flag & MNT_UPDATE) {
 		vfs_unbusy(vp->v_mount);
@@ -523,11 +523,6 @@ dounmount_leaf(struct mount *mp, int flags, struct proc *p)
 /*
  * Sync each mounted filesystem.
  */
-#ifdef DEBUG
-int syncprt = 0;
-struct ctldebug debug0 = { "syncprt", &syncprt };
-#endif
-
 int
 sys_sync(struct proc *p, void *v, register_t *retval)
 {
@@ -2592,6 +2587,10 @@ sys_utimes(struct proc *p, void *v, register_t *retval)
 		error = copyin(tvp, tv, sizeof(tv));
 		if (error)
 			return (error);
+#ifdef KTRACE
+		if (KTRPOINT(p, KTR_STRUCT))
+			ktrabstimeval(p, &tv);
+#endif
 		if (!timerisvalid(&tv[0]) || !timerisvalid(&tv[1]))
 			return (EINVAL);
 		TIMEVAL_TO_TIMESPEC(&tv[0], &ts[0]);
@@ -2626,6 +2625,10 @@ sys_utimensat(struct proc *p, void *v, register_t *retval)
 				continue;
 			if (ts[i].tv_nsec == UTIME_OMIT)
 				continue;
+#ifdef KTRACE
+			if (KTRPOINT(p, KTR_STRUCT))
+				ktrabstimespec(p, &ts[i]);
+#endif
 			if (!timespecisvalid(&ts[i]))
 				return (EINVAL);
 		}
@@ -2724,6 +2727,12 @@ sys_futimes(struct proc *p, void *v, register_t *retval)
 		error = copyin(tvp, tv, sizeof(tv));
 		if (error)
 			return (error);
+#ifdef KTRACE
+		if (KTRPOINT(p, KTR_STRUCT)) {
+			ktrabstimeval(p, &tv[0]);
+			ktrabstimeval(p, &tv[1]);
+		}
+#endif
 		if (!timerisvalid(&tv[0]) || !timerisvalid(&tv[1]))
 			return (EINVAL);
 		TIMEVAL_TO_TIMESPEC(&tv[0], &ts[0]);
@@ -2755,6 +2764,10 @@ sys_futimens(struct proc *p, void *v, register_t *retval)
 				continue;
 			if (ts[i].tv_nsec == UTIME_OMIT)
 				continue;
+#ifdef KTRACE
+			if (KTRPOINT(p, KTR_STRUCT))
+				ktrabstimespec(p, &ts[i]);
+#endif
 			if (!timespecisvalid(&ts[i]))
 				return (EINVAL);
 		}

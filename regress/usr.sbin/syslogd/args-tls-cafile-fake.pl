@@ -7,7 +7,11 @@
 
 use strict;
 use warnings;
+use Errno ':POSIX';
 use Socket;
+
+my @errors = (EPIPE);
+my $errors = "(". join("|", map { $! = $_ } @errors). ")";
 
 our %args = (
     syslogd => {
@@ -29,7 +33,9 @@ our %args = (
 	exit => 255,
 	loggrep => {
 	    qr/listen sock: (127.0.0.1|::1) \d+/ => 1,
-	    qr/SSL accept attempt failed because of handshake problems/ => 1,
+	    qr/IO::Socket::SSL socket accept failed: /.
+		qr/.*,SSL accept attempt failed error:.*/.
+		qr/(tlsv1 alert decrypt error|$errors)/ => 1,
 	    get_testgrep() => 0,
 	},
     },

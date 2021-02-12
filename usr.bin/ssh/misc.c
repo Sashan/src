@@ -1,28 +1,22 @@
-/* $OpenBSD: misc.c,v 1.146 2020/01/28 01:49:36 djm Exp $ */
+/* $OpenBSD: misc.c,v 1.160 2021/01/15 02:58:11 dtucker Exp $ */
 /*
  * Copyright (c) 2000 Markus Friedl.  All rights reserved.
- * Copyright (c) 2005,2006 Damien Miller.  All rights reserved.
+ * Copyright (c) 2005-2020 Damien Miller.  All rights reserved.
+ * Copyright (c) 2004 Henning Brauer <henning@openbsd.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
+
 
 #include <sys/types.h>
 #include <sys/ioctl.h>
@@ -210,6 +204,49 @@ set_rdomain(int fd, const char *name)
 	return 0;
 }
 
+int
+get_sock_af(int fd)
+{
+	struct sockaddr_storage to;
+	socklen_t tolen = sizeof(to);
+
+	memset(&to, 0, sizeof(to));
+	if (getsockname(fd, (struct sockaddr *)&to, &tolen) == -1)
+		return -1;
+	return to.ss_family;
+}
+
+void
+set_sock_tos(int fd, int tos)
+{
+	int af;
+
+	switch ((af = get_sock_af(fd))) {
+	case -1:
+		/* assume not a socket */
+		break;
+	case AF_INET:
+		debug3_f("set socket %d IP_TOS 0x%02x", fd, tos);
+		if (setsockopt(fd, IPPROTO_IP, IP_TOS,
+		    &tos, sizeof(tos)) == -1) {
+			error("setsockopt socket %d IP_TOS %d: %s:",
+			    fd, tos, strerror(errno));
+		}
+		break;
+	case AF_INET6:
+		debug3_f("set socket %d IPV6_TCLASS 0x%02x", fd, tos);
+		if (setsockopt(fd, IPPROTO_IPV6, IPV6_TCLASS,
+		    &tos, sizeof(tos)) == -1) {
+			error("setsockopt socket %d IPV6_TCLASS %d: %.100s:",
+			    fd, tos, strerror(errno));
+		}
+		break;
+	default:
+		debug2_f("unsupported socket family %d", af);
+		break;
+	}
+}
+
 /*
  * Wait up to *timeoutp milliseconds for events on fd. Updates
  * *timeoutp with time remaining.
@@ -222,17 +259,17 @@ waitfd(int fd, int *timeoutp, short events)
 	struct timeval t_start;
 	int oerrno, r;
 
-	monotime_tv(&t_start);
 	pfd.fd = fd;
 	pfd.events = events;
 	for (; *timeoutp >= 0;) {
+		monotime_tv(&t_start);
 		r = poll(&pfd, 1, *timeoutp);
 		oerrno = errno;
 		ms_subtract_diff(&t_start, timeoutp);
 		errno = oerrno;
 		if (r > 0)
 			return 0;
-		else if (r == -1 && errno != EAGAIN)
+		else if (r == -1 && errno != EAGAIN && errno != EINTR)
 			return -1;
 		else if (r == 0)
 			break;
@@ -271,12 +308,17 @@ timeout_connect(int sockfd, const struct sockaddr *serv_addr,
 		return connect(sockfd, serv_addr, addrlen);
 
 	set_nonblock(sockfd);
-	if (connect(sockfd, serv_addr, addrlen) == 0) {
-		/* Succeeded already? */
-		unset_nonblock(sockfd);
-		return 0;
-	} else if (errno != EINPROGRESS)
-		return -1;
+	for (;;) {
+		if (connect(sockfd, serv_addr, addrlen) == 0) {
+			/* Succeeded already? */
+			unset_nonblock(sockfd);
+			return 0;
+		} else if (errno == EINTR)
+			continue;
+		else if (errno != EINPROGRESS)
+			return -1;
+		break;
+	}
 
 	if (waitfd(sockfd, timeoutp, POLLIN | POLLOUT) == -1)
 		return -1;
@@ -455,10 +497,10 @@ a2tun(const char *s, int *remote)
  *
  * Return -1 if time string is invalid.
  */
-long
+int
 convtime(const char *s)
 {
-	long total, secs, multiplier = 1;
+	long total, secs, multiplier;
 	const char *p;
 	char *endp;
 
@@ -472,10 +514,11 @@ convtime(const char *s)
 	while (*p) {
 		secs = strtol(p, &endp, 10);
 		if (p == endp ||
-		    (errno == ERANGE && (secs == LONG_MIN || secs == LONG_MAX)) ||
+		    (errno == ERANGE && (secs == INT_MIN || secs == INT_MAX)) ||
 		    secs < 0)
 			return -1;
 
+		multiplier = 1;
 		switch (*endp++) {
 		case '\0':
 			endp--;
@@ -502,10 +545,10 @@ convtime(const char *s)
 		default:
 			return -1;
 		}
-		if (secs >= LONG_MAX / multiplier)
+		if (secs > INT_MAX / multiplier)
 			return -1;
 		secs *= multiplier;
-		if  (total >= LONG_MAX - secs)
+		if  (total > INT_MAX - secs)
 			return -1;
 		total += secs;
 		if (total < 0)
@@ -514,6 +557,43 @@ convtime(const char *s)
 	}
 
 	return total;
+}
+
+#define TF_BUFS	8
+#define TF_LEN	9
+
+const char *
+fmt_timeframe(time_t t)
+{
+	char		*buf;
+	static char	 tfbuf[TF_BUFS][TF_LEN];	/* ring buffer */
+	static int	 idx = 0;
+	unsigned int	 sec, min, hrs, day;
+	unsigned long long	week;
+
+	buf = tfbuf[idx++];
+	if (idx == TF_BUFS)
+		idx = 0;
+
+	week = t;
+
+	sec = week % 60;
+	week /= 60;
+	min = week % 60;
+	week /= 60;
+	hrs = week % 24;
+	week /= 24;
+	day = week % 7;
+	week /= 7;
+
+	if (week > 0)
+		snprintf(buf, TF_LEN, "%02lluw%01ud%02uh", week, day, hrs);
+	else if (day > 0)
+		snprintf(buf, TF_LEN, "%01ud%02uh%02um", day, hrs, min);
+	else
+		snprintf(buf, TF_LEN, "%02u:%02u:%02u", hrs, min, sec);
+
+	return (buf);
 }
 
 /*
@@ -1017,76 +1097,179 @@ tilde_expand_filename(const char *filename, uid_t uid)
 }
 
 /*
- * Expand a string with a set of %[char] escapes. A number of escapes may be
- * specified as (char *escape_chars, char *replacement) pairs. The list must
- * be terminated by a NULL escape_char. Returns replaced string in memory
- * allocated by xmalloc.
+ * Expand a string with a set of %[char] escapes and/or ${ENVIRONMENT}
+ * substitutions.  A number of escapes may be specified as
+ * (char *escape_chars, char *replacement) pairs. The list must be terminated
+ * by a NULL escape_char. Returns replaced string in memory allocated by
+ * xmalloc which the caller must free.
  */
-char *
-percent_expand(const char *string, ...)
+static char *
+vdollar_percent_expand(int *parseerror, int dollar, int percent,
+    const char *string, va_list ap)
 {
 #define EXPAND_MAX_KEYS	16
-	u_int num_keys, i;
+	u_int num_keys = 0, i;
 	struct {
 		const char *key;
 		const char *repl;
 	} keys[EXPAND_MAX_KEYS];
 	struct sshbuf *buf;
-	va_list ap;
-	int r;
-	char *ret;
+	int r, missingvar = 0;
+	char *ret = NULL, *var, *varend, *val;
+	size_t len;
 
 	if ((buf = sshbuf_new()) == NULL)
-		fatal("%s: sshbuf_new failed", __func__);
+		fatal_f("sshbuf_new failed");
+	if (parseerror == NULL)
+		fatal_f("null parseerror arg");
+	*parseerror = 1;
 
-	/* Gather keys */
-	va_start(ap, string);
-	for (num_keys = 0; num_keys < EXPAND_MAX_KEYS; num_keys++) {
-		keys[num_keys].key = va_arg(ap, char *);
-		if (keys[num_keys].key == NULL)
-			break;
-		keys[num_keys].repl = va_arg(ap, char *);
-		if (keys[num_keys].repl == NULL)
-			fatal("%s: NULL replacement", __func__);
+	/* Gather keys if we're doing percent expansion. */
+	if (percent) {
+		for (num_keys = 0; num_keys < EXPAND_MAX_KEYS; num_keys++) {
+			keys[num_keys].key = va_arg(ap, char *);
+			if (keys[num_keys].key == NULL)
+				break;
+			keys[num_keys].repl = va_arg(ap, char *);
+			if (keys[num_keys].repl == NULL) {
+				fatal_f("NULL replacement for token %s",
+				    keys[num_keys].key);
+			}
+		}
+		if (num_keys == EXPAND_MAX_KEYS && va_arg(ap, char *) != NULL)
+			fatal_f("too many keys");
+		if (num_keys == 0)
+			fatal_f("percent expansion without token list");
 	}
-	if (num_keys == EXPAND_MAX_KEYS && va_arg(ap, char *) != NULL)
-		fatal("%s: too many keys", __func__);
-	va_end(ap);
 
 	/* Expand string */
 	for (i = 0; *string != '\0'; string++) {
-		if (*string != '%') {
- append:
-			if ((r = sshbuf_put_u8(buf, *string)) != 0) {
-				fatal("%s: sshbuf_put_u8: %s",
-				    __func__, ssh_err(r));
+		/* Optionally process ${ENVIRONMENT} expansions. */
+		if (dollar && string[0] == '$' && string[1] == '{') {
+			string += 2;  /* skip over '${' */
+			if ((varend = strchr(string, '}')) == NULL) {
+				error_f("environment variable '%s' missing "
+				   "closing '}'", string);
+				goto out;
 			}
+			len = varend - string;
+			if (len == 0) {
+				error_f("zero-length environment variable");
+				goto out;
+			}
+			var = xmalloc(len + 1);
+			(void)strlcpy(var, string, len + 1);
+			if ((val = getenv(var)) == NULL) {
+				error_f("env var ${%s} has no value", var);
+				missingvar = 1;
+			} else {
+				debug3_f("expand ${%s} -> '%s'", var, val);
+				if ((r = sshbuf_put(buf, val, strlen(val))) !=0)
+					fatal_fr(r, "sshbuf_put ${}");
+			}
+			free(var);
+			string += len;
+			continue;
+		}
+
+		/*
+		 * Process percent expansions if we have a list of TOKENs.
+		 * If we're not doing percent expansion everything just gets
+		 * appended here.
+		 */
+		if (*string != '%' || !percent) {
+ append:
+			if ((r = sshbuf_put_u8(buf, *string)) != 0)
+				fatal_fr(r, "sshbuf_put_u8 %%");
 			continue;
 		}
 		string++;
 		/* %% case */
 		if (*string == '%')
 			goto append;
-		if (*string == '\0')
-			fatal("%s: invalid format", __func__);
+		if (*string == '\0') {
+			error_f("invalid format");
+			goto out;
+		}
 		for (i = 0; i < num_keys; i++) {
 			if (strchr(keys[i].key, *string) != NULL) {
 				if ((r = sshbuf_put(buf, keys[i].repl,
-				    strlen(keys[i].repl))) != 0) {
-					fatal("%s: sshbuf_put: %s",
-					    __func__, ssh_err(r));
-				}
+				    strlen(keys[i].repl))) != 0)
+					fatal_fr(r, "sshbuf_put %%-repl");
 				break;
 			}
 		}
-		if (i >= num_keys)
-			fatal("%s: unknown key %%%c", __func__, *string);
+		if (i >= num_keys) {
+			error_f("unknown key %%%c", *string);
+			goto out;
+		}
 	}
-	if ((ret = sshbuf_dup_string(buf)) == NULL)
-		fatal("%s: sshbuf_dup_string failed", __func__);
+	if (!missingvar && (ret = sshbuf_dup_string(buf)) == NULL)
+		fatal_f("sshbuf_dup_string failed");
+	*parseerror = 0;
+ out:
 	sshbuf_free(buf);
-	return ret;
+	return *parseerror ? NULL : ret;
 #undef EXPAND_MAX_KEYS
+}
+
+/*
+ * Expand only environment variables.
+ * Note that although this function is variadic like the other similar
+ * functions, any such arguments will be unused.
+ */
+
+char *
+dollar_expand(int *parseerr, const char *string, ...)
+{
+	char *ret;
+	int err;
+	va_list ap;
+
+	va_start(ap, string);
+	ret = vdollar_percent_expand(&err, 1, 0, string, ap);
+	va_end(ap);
+	if (parseerr != NULL)
+		*parseerr = err;
+	return ret;
+}
+
+/*
+ * Returns expanded string or NULL if a specified environment variable is
+ * not defined, or calls fatal if the string is invalid.
+ */
+char *
+percent_expand(const char *string, ...)
+{
+	char *ret;
+	int err;
+	va_list ap;
+
+	va_start(ap, string);
+	ret = vdollar_percent_expand(&err, 0, 1, string, ap);
+	va_end(ap);
+	if (err)
+		fatal_f("failed");
+	return ret;
+}
+
+/*
+ * Returns expanded string or NULL if a specified environment variable is
+ * not defined, or calls fatal if the string is invalid.
+ */
+char *
+percent_dollar_expand(const char *string, ...)
+{
+	char *ret;
+	int err;
+	va_list ap;
+
+	va_start(ap, string);
+	ret = vdollar_percent_expand(&err, 1, 1, string, ap);
+	va_end(ap);
+	if (err)
+		fatal_f("failed");
+	return ret;
 }
 
 int
@@ -1115,16 +1298,16 @@ tun_open(int tun, int mode, char **ifname)
 				break;
 		}
 	} else {
-		debug("%s: invalid tunnel %u", __func__, tun);
+		debug_f("invalid tunnel %u", tun);
 		return -1;
 	}
 
 	if (fd == -1) {
-		debug("%s: %s open: %s", __func__, name, strerror(errno));
+		debug_f("%s open: %s", name, strerror(errno));
 		return -1;
 	}
 
-	debug("%s: %s mode %d fd %d", __func__, name, mode, fd);
+	debug_f("%s mode %d fd %d", name, mode, fd);
 
 	/* Bring interface up if it is not already */
 	snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s%d", tunbase, tun);
@@ -1132,16 +1315,16 @@ tun_open(int tun, int mode, char **ifname)
 		goto failed;
 
 	if (ioctl(sock, SIOCGIFFLAGS, &ifr) == -1) {
-		debug("%s: get interface %s flags: %s", __func__,
-		    ifr.ifr_name, strerror(errno));
+		debug_f("get interface %s flags: %s", ifr.ifr_name,
+		    strerror(errno));
 		goto failed;
 	}
 
 	if (!(ifr.ifr_flags & IFF_UP)) {
 		ifr.ifr_flags |= IFF_UP;
 		if (ioctl(sock, SIOCSIFFLAGS, &ifr) == -1) {
-			debug("%s: activate interface %s: %s", __func__,
-			    ifr.ifr_name, strerror(errno));
+			debug_f("activate interface %s: %s", ifr.ifr_name,
+			    strerror(errno));
 			goto failed;
 		}
 	}
@@ -1464,7 +1647,7 @@ mktemp_proto(char *s, size_t len)
 	}
 	r = snprintf(s, len, "/tmp/ssh-XXXXXXXXXXXX");
 	if (r < 0 || (size_t)r >= len)
-		fatal("%s: template string too short", __func__);
+		fatal_f("template string too short");
 }
 
 static const struct {
@@ -1551,8 +1734,7 @@ unix_listener(const char *path, int backlog, int unlink_first)
 	sunaddr.sun_family = AF_UNIX;
 	if (strlcpy(sunaddr.sun_path, path,
 	    sizeof(sunaddr.sun_path)) >= sizeof(sunaddr.sun_path)) {
-		error("%s: path \"%s\" too long for Unix domain socket",
-		    __func__, path);
+		error_f("path \"%s\" too long for Unix domain socket", path);
 		errno = ENAMETOOLONG;
 		return -1;
 	}
@@ -1560,7 +1742,7 @@ unix_listener(const char *path, int backlog, int unlink_first)
 	sock = socket(PF_UNIX, SOCK_STREAM, 0);
 	if (sock == -1) {
 		saved_errno = errno;
-		error("%s: socket: %.100s", __func__, strerror(errno));
+		error_f("socket: %.100s", strerror(errno));
 		errno = saved_errno;
 		return -1;
 	}
@@ -1570,16 +1752,14 @@ unix_listener(const char *path, int backlog, int unlink_first)
 	}
 	if (bind(sock, (struct sockaddr *)&sunaddr, sizeof(sunaddr)) == -1) {
 		saved_errno = errno;
-		error("%s: cannot bind to path %s: %s",
-		    __func__, path, strerror(errno));
+		error_f("cannot bind to path %s: %s", path, strerror(errno));
 		close(sock);
 		errno = saved_errno;
 		return -1;
 	}
 	if (listen(sock, backlog) == -1) {
 		saved_errno = errno;
-		error("%s: cannot listen on path %s: %s",
-		    __func__, path, strerror(errno));
+		error_f("cannot listen on path %s: %s", path, strerror(errno));
 		close(sock);
 		unlink(path);
 		errno = saved_errno;
@@ -1731,7 +1911,7 @@ argv_assemble(int argc, char **argv)
 	struct sshbuf *buf, *arg;
 
 	if ((buf = sshbuf_new()) == NULL || (arg = sshbuf_new()) == NULL)
-		fatal("%s: sshbuf_new failed", __func__);
+		fatal_f("sshbuf_new failed");
 
 	for (i = 0; i < argc; i++) {
 		ws = 0;
@@ -1756,17 +1936,16 @@ argv_assemble(int argc, char **argv)
 				break;
 			}
 			if (r != 0)
-				fatal("%s: sshbuf_put_u8: %s",
-				    __func__, ssh_err(r));
+				fatal_fr(r, "sshbuf_put_u8");
 		}
 		if ((i != 0 && (r = sshbuf_put_u8(buf, ' ')) != 0) ||
 		    (ws != 0 && (r = sshbuf_put_u8(buf, '"')) != 0) ||
 		    (r = sshbuf_putb(buf, arg)) != 0 ||
 		    (ws != 0 && (r = sshbuf_put_u8(buf, '"')) != 0))
-			fatal("%s: buffer error: %s", __func__, ssh_err(r));
+			fatal_fr(r, "assemble");
 	}
 	if ((ret = malloc(sshbuf_len(buf) + 1)) == NULL)
-		fatal("%s: malloc failed", __func__);
+		fatal_f("malloc failed");
 	memcpy(ret, sshbuf_ptr(buf), sshbuf_len(buf));
 	ret[sshbuf_len(buf)] = '\0';
 	sshbuf_free(buf);
@@ -1782,7 +1961,7 @@ exited_cleanly(pid_t pid, const char *tag, const char *cmd, int quiet)
 
 	while (waitpid(pid, &status, 0) == -1) {
 		if (errno != EINTR) {
-			error("%s: waitpid: %s", tag, strerror(errno));
+			error("%s waitpid: %s", tag, strerror(errno));
 			return -1;
 		}
 	}
@@ -2167,7 +2346,7 @@ ssh_signal(int signum, sshsig_t handler)
 	struct sigaction sa, osa;
 
 	/* mask all other signals while in handler */
-	bzero(&sa, sizeof(sa));
+	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = handler;
 	sigfillset(&sa.sa_mask);
 	if (signum != SIGALRM)
@@ -2177,4 +2356,194 @@ ssh_signal(int signum, sshsig_t handler)
 		return SIG_ERR;
 	}
 	return osa.sa_handler;
+}
+
+int
+stdfd_devnull(int do_stdin, int do_stdout, int do_stderr)
+{
+	int devnull, ret = 0;
+
+	if ((devnull = open(_PATH_DEVNULL, O_RDWR)) == -1) {
+		error_f("open %s: %s", _PATH_DEVNULL,
+		    strerror(errno));
+		return -1;
+	}
+	if ((do_stdin && dup2(devnull, STDIN_FILENO) == -1) ||
+	    (do_stdout && dup2(devnull, STDOUT_FILENO) == -1) ||
+	    (do_stderr && dup2(devnull, STDERR_FILENO) == -1)) {
+		error_f("dup2: %s", strerror(errno));
+		ret = -1;
+	}
+	if (devnull > STDERR_FILENO)
+		close(devnull);
+	return ret;
+}
+
+/*
+ * Runs command in a subprocess with a minimal environment.
+ * Returns pid on success, 0 on failure.
+ * The child stdout and stderr maybe captured, left attached or sent to
+ * /dev/null depending on the contents of flags.
+ * "tag" is prepended to log messages.
+ * NB. "command" is only used for logging; the actual command executed is
+ * av[0].
+ */
+pid_t
+subprocess(const char *tag, const char *command,
+    int ac, char **av, FILE **child, u_int flags,
+    struct passwd *pw, privdrop_fn *drop_privs, privrestore_fn *restore_privs)
+{
+	FILE *f = NULL;
+	struct stat st;
+	int fd, devnull, p[2], i;
+	pid_t pid;
+	char *cp, errmsg[512];
+	u_int nenv = 0;
+	char **env = NULL;
+
+	/* If dropping privs, then must specify user and restore function */
+	if (drop_privs != NULL && (pw == NULL || restore_privs == NULL)) {
+		error("%s: inconsistent arguments", tag); /* XXX fatal? */
+		return 0;
+	}
+	if (pw == NULL && (pw = getpwuid(getuid())) == NULL) {
+		error("%s: no user for current uid", tag);
+		return 0;
+	}
+	if (child != NULL)
+		*child = NULL;
+
+	debug3_f("%s command \"%s\" running as %s (flags 0x%x)",
+	    tag, command, pw->pw_name, flags);
+
+	/* Check consistency */
+	if ((flags & SSH_SUBPROCESS_STDOUT_DISCARD) != 0 &&
+	    (flags & SSH_SUBPROCESS_STDOUT_CAPTURE) != 0) {
+		error_f("inconsistent flags");
+		return 0;
+	}
+	if (((flags & SSH_SUBPROCESS_STDOUT_CAPTURE) == 0) != (child == NULL)) {
+		error_f("inconsistent flags/output");
+		return 0;
+	}
+
+	/*
+	 * If executing an explicit binary, then verify the it exists
+	 * and appears safe-ish to execute
+	 */
+	if (!path_absolute(av[0])) {
+		error("%s path is not absolute", tag);
+		return 0;
+	}
+	if (drop_privs != NULL)
+		drop_privs(pw);
+	if (stat(av[0], &st) == -1) {
+		error("Could not stat %s \"%s\": %s", tag,
+		    av[0], strerror(errno));
+		goto restore_return;
+	}
+	if ((flags & SSH_SUBPROCESS_UNSAFE_PATH) == 0 &&
+	    safe_path(av[0], &st, NULL, 0, errmsg, sizeof(errmsg)) != 0) {
+		error("Unsafe %s \"%s\": %s", tag, av[0], errmsg);
+		goto restore_return;
+	}
+	/* Prepare to keep the child's stdout if requested */
+	if (pipe(p) == -1) {
+		error("%s: pipe: %s", tag, strerror(errno));
+ restore_return:
+		if (restore_privs != NULL)
+			restore_privs();
+		return 0;
+	}
+	if (restore_privs != NULL)
+		restore_privs();
+
+	switch ((pid = fork())) {
+	case -1: /* error */
+		error("%s: fork: %s", tag, strerror(errno));
+		close(p[0]);
+		close(p[1]);
+		return 0;
+	case 0: /* child */
+		/* Prepare a minimal environment for the child. */
+		if ((flags & SSH_SUBPROCESS_PRESERVE_ENV) == 0) {
+			nenv = 5;
+			env = xcalloc(sizeof(*env), nenv);
+			child_set_env(&env, &nenv, "PATH", _PATH_STDPATH);
+			child_set_env(&env, &nenv, "USER", pw->pw_name);
+			child_set_env(&env, &nenv, "LOGNAME", pw->pw_name);
+			child_set_env(&env, &nenv, "HOME", pw->pw_dir);
+			if ((cp = getenv("LANG")) != NULL)
+				child_set_env(&env, &nenv, "LANG", cp);
+		}
+
+		for (i = 0; i < NSIG; i++)
+			ssh_signal(i, SIG_DFL);
+
+		if ((devnull = open(_PATH_DEVNULL, O_RDWR)) == -1) {
+			error("%s: open %s: %s", tag, _PATH_DEVNULL,
+			    strerror(errno));
+			_exit(1);
+		}
+		if (dup2(devnull, STDIN_FILENO) == -1) {
+			error("%s: dup2: %s", tag, strerror(errno));
+			_exit(1);
+		}
+
+		/* Set up stdout as requested; leave stderr in place for now. */
+		fd = -1;
+		if ((flags & SSH_SUBPROCESS_STDOUT_CAPTURE) != 0)
+			fd = p[1];
+		else if ((flags & SSH_SUBPROCESS_STDOUT_DISCARD) != 0)
+			fd = devnull;
+		if (fd != -1 && dup2(fd, STDOUT_FILENO) == -1) {
+			error("%s: dup2: %s", tag, strerror(errno));
+			_exit(1);
+		}
+		closefrom(STDERR_FILENO + 1);
+
+		if (setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid) == -1) {
+			error("%s: setresgid %u: %s", tag, (u_int)pw->pw_gid,
+			    strerror(errno));
+			_exit(1);
+		}
+		if (setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid) == -1) {
+			error("%s: setresuid %u: %s", tag, (u_int)pw->pw_uid,
+			    strerror(errno));
+			_exit(1);
+		}
+		/* stdin is pointed to /dev/null at this point */
+		if ((flags & SSH_SUBPROCESS_STDOUT_DISCARD) != 0 &&
+		    dup2(STDIN_FILENO, STDERR_FILENO) == -1) {
+			error("%s: dup2: %s", tag, strerror(errno));
+			_exit(1);
+		}
+		if (env != NULL)
+			execve(av[0], av, env);
+		else
+			execv(av[0], av);
+		error("%s %s \"%s\": %s", tag, env == NULL ? "execv" : "execve",
+		    command, strerror(errno));
+		_exit(127);
+	default: /* parent */
+		break;
+	}
+
+	close(p[1]);
+	if ((flags & SSH_SUBPROCESS_STDOUT_CAPTURE) == 0)
+		close(p[0]);
+	else if ((f = fdopen(p[0], "r")) == NULL) {
+		error("%s: fdopen: %s", tag, strerror(errno));
+		close(p[0]);
+		/* Don't leave zombie child */
+		kill(pid, SIGTERM);
+		while (waitpid(pid, NULL, 0) == -1 && errno == EINTR)
+			;
+		return 0;
+	}
+	/* Success */
+	debug3_f("%s pid %ld", tag, (long)pid);
+	if (child != NULL)
+		*child = f;
+	return pid;
 }

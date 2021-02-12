@@ -1,4 +1,4 @@
-/*	$OpenBSD: icmp6.h,v 1.48 2018/12/25 19:28:25 denis Exp $	*/
+/*	$OpenBSD: icmp6.h,v 1.51 2021/01/11 13:28:53 bluhm Exp $	*/
 /*	$KAME: icmp6.h,v 1.84 2003/04/23 10:26:51 itojun Exp $	*/
 
 /*
@@ -535,28 +535,6 @@ struct icmp6stat {
 	{ "nd6_debug", CTLTYPE_INT }, \
 }
 
-#define ICMPV6CTL_VARS { \
-	NULL, \
-	NULL, \
-	NULL, \
-	&icmp6_redirtimeout, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	&nd6_delay, \
-	&nd6_umaxtries, \
-	&nd6_mmaxtries, \
-	NULL, \
-	NULL, \
-	NULL, \
-	&icmp6errppslim, \
-	&nd6_maxnudhint, \
-	&icmp6_mtudisc_hiwat, \
-	&icmp6_mtudisc_lowat, \
-	&nd6_debug, \
-}
-
 #define RTF_PROBEMTU	RTF_PROTO1
 
 #ifdef _KERNEL
@@ -616,11 +594,12 @@ struct mbuf	*icmp6_do_error(struct mbuf *, int, int, int);
 void		 icmp6_error(struct mbuf *, int, int, int);
 int		 icmp6_input(struct mbuf **, int *, int, int);
 void		 icmp6_fasttimo(void);
-int		 icmp6_reflect(struct mbuf *, size_t, struct sockaddr *);
+int		 icmp6_reflect(struct mbuf **, size_t, struct sockaddr *);
 void		 icmp6_prepare(struct mbuf *);
 void		 icmp6_redirect_input(struct mbuf *, int);
 void		 icmp6_redirect_output(struct mbuf *, struct rtentry *);
 int		 icmp6_sysctl(int *, u_int, void *, size_t *, void *, size_t);
+struct rtentry	*icmp6_mtudisc_clone(struct sockaddr_in6 *, u_int, int);
 
 struct	ip6ctlparam;
 void	icmp6_mtudisc_update(struct ip6ctlparam *, int);

@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_versions.c,v 1.4 2018/11/06 01:40:23 jsing Exp $ */
+/* $OpenBSD: ssl_versions.c,v 1.9 2021/02/07 15:04:10 jsing Exp $ */
 /*
  * Copyright (c) 2016, 2017 Joel Sing <jsing@openbsd.org>
  *
@@ -53,7 +53,7 @@ ssl_version_set_min(const SSL_METHOD *meth, uint16_t ver, uint16_t max_ver,
 		return 0;
 
 	*out_ver = min_version;
-	
+
 	return 1;
 }
 
@@ -76,7 +76,7 @@ ssl_version_set_max(const SSL_METHOD *meth, uint16_t ver, uint16_t min_ver,
 		return 0;
 
 	*out_ver = max_version;
-	
+
 	return 1;
 }
 
@@ -137,7 +137,7 @@ ssl_supported_version_range(SSL *s, uint16_t *min_ver, uint16_t *max_ver)
 	uint16_t min_version, max_version;
 
 	/* DTLS cannot currently be disabled... */
-	if (SSL_IS_DTLS(s)) {
+	if (SSL_is_dtls(s)) {
 		min_version = max_version = DTLS1_VERSION;
 		goto done;
 	}
@@ -167,7 +167,7 @@ ssl_max_shared_version(SSL *s, uint16_t peer_ver, uint16_t *max_ver)
 
 	*max_ver = 0;
 
-	if (SSL_IS_DTLS(s)) {
+	if (SSL_is_dtls(s)) {
 		if (peer_ver >= DTLS1_VERSION) {
 			*max_ver = DTLS1_VERSION;
 			return 1;
@@ -200,26 +200,44 @@ ssl_max_shared_version(SSL *s, uint16_t peer_ver, uint16_t *max_ver)
 	return 1;
 }
 
-uint16_t
-ssl_max_server_version(SSL *s)
+int
+ssl_downgrade_max_version(SSL *s, uint16_t *max_ver)
 {
-	uint16_t max_version, min_version = 0;
+	uint16_t min_version, max_version;
 
-	if (SSL_IS_DTLS(s))
-		return (DTLS1_VERSION);
+	/*
+	 * The downgrade maximum version is based on the versions that are
+	 * enabled, however we also have to then limit to the versions
+	 * supported by the method. The SSL method will be changed during
+	 * version negotiation and when switching from the new stack to
+	 * the legacy context, as such we want to use the method from the
+	 * context.
+	 */
+
+	if (SSL_is_dtls(s)) {
+		*max_ver = DTLS1_VERSION;
+		return 1;
+	}
 
 	if (!ssl_enabled_version_range(s, &min_version, &max_version))
 		return 0;
 
-	/*
-	 * Limit to the versions supported by this method. The SSL method
-	 * will be changed during version negotiation, as such we want to
-	 * use the SSL method from the context.
-	 */
 	if (!ssl_clamp_version_range(&min_version, &max_version,
 	    s->ctx->method->internal->min_version,
 	    s->ctx->method->internal->max_version))
 		return 0;
 
-	return (max_version);
+	*max_ver = max_version;
+
+	return 1;
+}
+
+int
+ssl_legacy_stack_version(SSL *s, uint16_t version)
+{
+	if (SSL_is_dtls(s))
+		return version == DTLS1_VERSION;
+
+	return version == TLS1_VERSION || version == TLS1_1_VERSION ||
+	    version == TLS1_2_VERSION;
 }

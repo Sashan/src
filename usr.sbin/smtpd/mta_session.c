@@ -1,4 +1,4 @@
-/*	$OpenBSD: mta_session.c,v 1.133 2020/02/24 23:54:27 millert Exp $	*/
+/*	$OpenBSD: mta_session.c,v 1.138 2020/12/21 11:44:07 martijn Exp $	*/
 
 /*
  * Copyright (c) 2008 Pierre-Yves Ritschard <pyr@openbsd.org>
@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <sys/uio.h>
 
+#include <arpa/inet.h>
 #include <ctype.h>
 #include <err.h>
 #include <errno.h>
@@ -273,7 +274,8 @@ mta_session(struct mta_relay *relay, struct mta_route *route, const char *mxname
 		evtimer_set(&s->ev, mta_start, s);
 		evtimer_add(&s->ev, &tv);
 	} else if (waitq_wait(&route->dst->ptrname, mta_on_ptr, s)) {
-		resolver_getnameinfo(s->route->dst->sa, 0, mta_getnameinfo_cb, s);
+		resolver_getnameinfo(s->route->dst->sa, NI_NUMERICSERV,
+		    mta_getnameinfo_cb, s);
 	}
 }
 
@@ -1257,6 +1259,10 @@ mta_io(struct io *io, int evt, void *arg)
 			return;
 		}
 
+		/* Strip trailing '\r' */
+		if (len && line[len - 1] == '\r')
+			line[--len] = '\0';
+
 		log_trace(TRACE_MTA, "mta: %p: <<< %s", s, line);
 		mta_report_protocol_server(s, line);
 
@@ -1600,6 +1606,10 @@ mta_cert_init_cb(void *arg, int status, const char *name, const void *cert,
 	struct mta_session *s = arg;
 	void *ssl;
 	char *xname = NULL, *xcert = NULL;
+	union {
+		struct in_addr in4;
+		struct in6_addr in6;
+	} addrbuf;
 
 	if (s->flags & MTA_WAIT)
 		mta_tree_pop(&wait_tls_init, s->id);
@@ -1619,6 +1629,22 @@ mta_cert_init_cb(void *arg, int status, const char *name, const void *cert,
 	free(xcert);
 	if (ssl == NULL)
 		fatal("mta: ssl_mta_init");
+
+	/*
+	 * RFC4366 (SNI): Literal IPv4 and IPv6 addresses are not
+	 * permitted in "HostName".
+	 */
+	if (s->relay->domain->as_host == 1) {
+		if (inet_pton(AF_INET, s->relay->domain->name, &addrbuf) != 1 &&
+		    inet_pton(AF_INET6, s->relay->domain->name, &addrbuf) != 1) {
+			log_debug("%016"PRIx64" mta tls setting SNI name=%s",
+			    s->id, s->relay->domain->name);
+			if (SSL_set_tlsext_host_name(ssl, s->relay->domain->name) == 0)
+				log_warnx("%016"PRIx64" mta tls setting SNI failed",
+				   s->id);
+		}
+	}
+
 	io_start_tls(s->io, ssl);
 }
 
@@ -1664,8 +1690,12 @@ mta_cert_verify_cb(void *arg, int status)
 			match = 0;
 			(void)ssl_check_name(cert, s->mxname, &match);
 			X509_free(cert);
-			if (!match)
+			if (!match) {
+				log_info("%016"PRIx64" mta "
+				    "ssl_check_name: no match for '%s' in cert",
+				    s->id, s->mxname);
 				status = CERT_INVALID;
+			}
 		}
 	}
 
@@ -1801,21 +1831,25 @@ mta_filter_end(struct mta_session *s)
 static void
 mta_connected(struct mta_session *s)
 {
-	struct sockaddr sa_src;
-	struct sockaddr sa_dest;
+	struct sockaddr_storage sa_src;
+	struct sockaddr_storage sa_dest;
 	int sa_len;
 
 	log_info("%016"PRIx64" mta connected", s->id);
 
-	if (getsockname(io_fileno(s->io), &sa_src, &sa_len) == -1)
+	sa_len = sizeof sa_src;
+	if (getsockname(io_fileno(s->io),
+	    (struct sockaddr *)&sa_src, &sa_len) == -1)
 		bzero(&sa_src, sizeof sa_src);
-	if (getpeername(io_fileno(s->io), &sa_dest, &sa_len) == -1)
+	sa_len = sizeof sa_dest;
+	if (getpeername(io_fileno(s->io),
+	    (struct sockaddr *)&sa_dest, &sa_len) == -1)
 		bzero(&sa_dest, sizeof sa_dest);
 
 	mta_report_link_connect(s,
 	    s->route->dst->ptrname, 1,
-	    (struct sockaddr_storage *)&sa_src,
-	    (struct sockaddr_storage *)&sa_dest);
+	    &sa_src,
+	    &sa_dest);
 }
 
 static void

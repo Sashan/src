@@ -1,4 +1,4 @@
-/* $OpenBSD: readconf.h,v 1.132 2020/01/23 02:46:49 dtucker Exp $ */
+/* $OpenBSD: readconf.h,v 1.139 2021/01/26 05:32:21 dtucker Exp $ */
 
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
@@ -55,7 +55,8 @@ typedef struct {
 	int	ip_qos_bulk;		/* IP ToS/DSCP/class for bulk traffic */
 	SyslogFacility log_facility;	/* Facility for system logging. */
 	LogLevel log_level;	/* Level for logging. */
-
+	u_int	num_log_verbose;	/* Verbose log overrides */
+	char   **log_verbose;
 	int     port;		/* Port to connect. */
 	int     address_family;
 	int     connection_attempts;	/* Max attempts (seconds) before
@@ -97,6 +98,7 @@ typedef struct {
 	struct sshkey *certificates[SSH_MAX_CERTIFICATE_FILES];
 
 	int	add_keys_to_agent;
+	int	add_keys_to_agent_lifespan;
 	char   *identity_agent;		/* Optional path to ssh-agent socket */
 
 	/* Local TCP/IP forward requests. */
@@ -159,13 +161,15 @@ typedef struct {
 
 	int	 update_hostkeys; /* one of SSH_UPDATE_HOSTKEYS_* */
 
-	char   *hostbased_key_types;
-	char   *pubkey_key_types;
+	char   *hostbased_accepted_algos;
+	char   *pubkey_accepted_algos;
 
 	char   *jump_user;
 	char   *jump_host;
 	int	jump_port;
 	char   *jump_extra;
+
+	char   *known_hosts_command;
 
 	char	*ignored_unknown; /* Pattern list of unknown tokens to ignore */
 }       Options;
@@ -200,9 +204,12 @@ typedef struct {
 #define SSH_STRICT_HOSTKEY_ASK	3
 
 const char *kex_default_pk_alg(void);
+char	*ssh_connection_hash(const char *thishost, const char *host,
+    const char *portstr, const char *user);
 void     initialize_options(Options *);
-void     fill_default_options(Options *);
+int      fill_default_options(Options *);
 void	 fill_default_options_for_canonicalization(Options *);
+void	 free_options(Options *o);
 int	 process_config_line(Options *, struct passwd *, const char *,
     const char *, char *, const char *, int, int *, int);
 int	 read_config_file(const char *, struct passwd *, const char *,

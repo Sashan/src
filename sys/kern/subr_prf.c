@@ -1,4 +1,4 @@
-/*	$OpenBSD: subr_prf.c,v 1.99 2019/07/20 23:06:51 mpi Exp $	*/
+/*	$OpenBSD: subr_prf.c,v 1.102 2020/11/28 17:53:05 deraadt Exp $	*/
 /*	$NetBSD: subr_prf.c,v 1.45 1997/10/24 18:14:25 chuck Exp $	*/
 
 /*-
@@ -138,6 +138,14 @@ int splassert_ctl = 1;
 
 void (*v_putc)(int) = cnputc;	/* start with cnputc (normal cons) */
 
+/*
+ * Silence kernel printf when masquerading as a bootloader.
+ */
+#ifdef BOOT_QUIET
+int printf_flags = TOLOG;
+#else
+int printf_flags = TOCONS | TOLOG;
+#endif
 
 /*
  * functions
@@ -181,6 +189,9 @@ panic(const char *fmt, ...)
 
 	/* do not trigger assertions, we know that we are inconsistent */
 	splassert_ctl = 0;
+
+	/* make sure we see kernel printf output */
+	printf_flags |= TOCONS;
 
 	bootopt = RB_AUTOBOOT | RB_DUMP;
 	va_start(ap, fmt);
@@ -500,10 +511,9 @@ printf(const char *fmt, ...)
 	va_list ap;
 	int retval;
 
-
 	va_start(ap, fmt);
 	mtx_enter(&kprintf_mutex);
-	retval = kprintf(fmt, TOCONS | TOLOG, NULL, NULL, ap);
+	retval = kprintf(fmt, printf_flags, NULL, NULL, ap);
 	mtx_leave(&kprintf_mutex);
 	va_end(ap);
 	if (!panicstr)
@@ -649,17 +659,17 @@ vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
 	    (u_long)va_arg(ap, u_int))
 
 #define KPRINTF_PUTCHAR(C) do {					\
-	int chr = (C);							\
-	ret += 1;							\
-	if (oflags & TOBUFONLY) {					\
-		if ((vp != NULL) && (sbuf == tailp)) {			\
-			if (!(oflags & TOCOUNT))				\
-				goto overflow;				\
-		} else							\
-			*sbuf++ = chr;					\
-	} else {							\
-		kputchar(chr, oflags, (struct tty *)vp);			\
-	}								\
+	int chr = (C);						\
+	ret += 1;						\
+	if (oflags & TOBUFONLY) {				\
+		if ((vp != NULL) && (sbuf == tailp)) {		\
+			if (!(oflags & TOCOUNT))		\
+				goto overflow;			\
+		} else						\
+			*sbuf++ = chr;				\
+	} else {						\
+		kputchar(chr, oflags, (struct tty *)vp);	\
+	}							\
 } while(0)
 
 int
@@ -859,18 +869,8 @@ reswitch:	switch (ch) {
 			base = DEC;
 			goto number;
 		case 'n':
-			/* %n is unsupported in the kernel; just skip it */
-			if (flags & QUADINT)
-				(void)va_arg(ap, quad_t *);
-			else if (flags & LONGINT)
-				(void)va_arg(ap, long *);
-			else if (flags & SHORTINT)
-				(void)va_arg(ap, short *);
-			else if (flags & SIZEINT)
-				(void)va_arg(ap, ssize_t *);
-			else
-				(void)va_arg(ap, int *);
-			continue;	/* no output */
+			panic("no %%n support\n");
+			break;
 		case 'O':
 			flags |= LONGINT;
 			/*FALLTHROUGH*/

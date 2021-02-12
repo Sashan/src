@@ -1,4 +1,4 @@
-/*	$OpenBSD: top.c,v 1.102 2020/01/06 20:05:10 zhuk Exp $	*/
+/*	$OpenBSD: top.c,v 1.106 2020/08/26 16:21:28 kn Exp $	*/
 
 /*
  *  Top users/processes display for Unix
@@ -29,6 +29,7 @@
  */
 
 #include <sys/types.h>
+#include <sys/socket.h>
 #include <curses.h>
 #include <err.h>
 #include <errno.h>
@@ -131,6 +132,9 @@ struct statics  statics;
 #define CMD_up		25
 #define CMD_pagedown	26
 #define CMD_pageup	27
+#define CMD_grep2	28
+#define CMD_rtableid	29
+#define CMD_rtable	30
 
 static void
 usage(void)
@@ -138,8 +142,8 @@ usage(void)
 	extern char *__progname;
 
 	fprintf(stderr,
-	    "usage: %s [-1bCHIinqSu] [-d count] [-g string] [-o [-]field] "
-	    "[-p pid] [-s time]\n\t[-U [-]user] [number]\n",
+	    "usage: %s [-1bCHIinqStu] [-d count] [-g string] [-o [-]field] "
+	    "[-p pid] [-s time]\n\t[-T [-]rtable] [-U [-]user] [number]\n",
 	    __progname);
 }
 
@@ -206,13 +210,39 @@ filterpid(char buf[], int hl)
 	return 0;
 }
 
+static int
+filterrtable(char buf[])
+{
+	const char *errstr;
+	char *bufp = buf;
+	uint32_t *rtableidp;
+	uint32_t rtableid;
+
+	if (bufp[0] == '-') {
+		bufp++;
+		rtableidp = &ps.hrtableid;
+		ps.rtableid = -1;
+	} else {
+		rtableidp = &ps.rtableid;
+		ps.hrtableid = -1;
+	}
+
+	rtableid = strtonum(bufp, 0, RT_TABLEID_MAX, &errstr);
+	if (errstr == NULL) {
+		*rtableidp = rtableid;
+		return 0;
+	}
+
+	return -1;
+}
+
 static void
 parseargs(int ac, char **av)
 {
 	char *endp;
 	int i;
 
-	while ((i = getopt(ac, av, "1SHICbinqus:d:p:U:o:g:")) != -1) {
+	while ((i = getopt(ac, av, "1SHICbinqus:d:p:U:o:g:T:t")) != -1) {
 		switch (i) {
 		case '1':
 			combine_cpus = 1;
@@ -304,6 +334,16 @@ parseargs(int ac, char **av)
 				err(1, NULL);
 			break;
 
+		case 'T':
+			if (filterrtable(optarg) == -1)
+				new_message(MT_delayed,
+				    "%s: invalid routing table", optarg);
+			break;
+
+		case 't':
+			ps.rtable = true;
+			break;
+
 		default:
 			usage();
 			exit(1);
@@ -335,7 +375,9 @@ parseargs(int ac, char **av)
 int
 main(int argc, char *argv[])
 {
-	char *uname_field = "USERNAME", *header_text, *env_top;
+	char *header_text, *env_top;
+	char *uname_field = "USERNAME", *thread_field = "     TID";
+	char *wait_field = "WAIT   ", *rtable_field = " RTABLE";
 	const char *(*get_userid)(uid_t, int) = user_from_uid;
 	char **preset_argv = NULL, **av = argv;
 	int preset_argc = 0, ac = argc, active_procs, i, ncpuonline_now;
@@ -356,6 +398,9 @@ main(int argc, char *argv[])
 	ps.uid = (uid_t)-1;
 	ps.huid = (uid_t)-1;
 	ps.pid = (pid_t)-1;
+	ps.rtable = false;
+	ps.rtableid = -1;
+	ps.hrtableid = -1;
 	ps.command = NULL;
 
 	/* get preset options from the environment */
@@ -536,7 +581,9 @@ restart:
 		i_message();
 
 		/* get the string to use for the process area header */
-		header_text = format_header(ps.threads ? NULL : uname_field);
+		header_text = format_header(
+		    ps.threads ? thread_field : uname_field,
+		    ps.rtable ? rtable_field : wait_field);
 
 		/* update the header area */
 		i_header(header_text);
@@ -569,15 +616,15 @@ restart:
 			 */
 			if (skip + active_procs > system_info.p_active)
 				skip = system_info.p_active - active_procs;
-			for (i = skip; i > 0; i--)
-				skip_next_process(processes);
+			skip_processes(processes, skip);
 			/* now show the top "n" processes. */
 			for (i = 0; i < active_procs; i++) {
 				pid_t pid;
 				char * s;
 
 				s = format_next_process(processes,
-				    ps.threads ? NULL : get_userid, &pid);
+				    ps.threads ? NULL : get_userid, ps.rtable,
+				    &pid);
 				i_process(i, s, pid == hlpid);
 			}
 		}
@@ -632,7 +679,7 @@ rundisplay(void)
 	char ch, *iptr;
 	int change, i;
 	struct pollfd pfd[1];
-	static char command_chars[] = "\f qh?en#sdkriIuSopCHg+P109)(";
+	static char command_chars[] = "\f qh?en#sdkriIuSopCHg+P109)(/Tt";
 
 	/*
 	 * assume valid command unless told
@@ -938,6 +985,7 @@ rundisplay(void)
 			break;
 
 		case CMD_grep:
+		case CMD_grep2:
 			new_message(MT_standout,
 			    "Grep command name: ");
 			if (readline(tempbuf, sizeof(tempbuf)) > 0) {
@@ -972,6 +1020,8 @@ rundisplay(void)
 			ps.uid = (uid_t)-1;	/* uid */
 			ps.huid = (uid_t)-1;
 			ps.pid = (pid_t)-1;	/* pid */
+			ps.rtableid = -1;	/* rtableid */
+			ps.hrtableid = -1;
 			ps.system = old_system;
 			ps.command = NULL;	/* grep */
 			hlpid = (pid_t)-1;
@@ -995,6 +1045,30 @@ rundisplay(void)
 			skip -= max_topn / 2;
 			if (skip < 0)
 				skip = 0;
+			break;
+		case CMD_rtableid:
+			new_message(MT_standout,
+			    "Routing table: ");
+			if (readline(tempbuf, sizeof(tempbuf)) > 0) {
+				if (tempbuf[0] == '+' && tempbuf[1] == '\0') {
+					ps.rtableid = -1;
+					ps.hrtableid = -1;
+				} else if (filterrtable(tempbuf) == -1) {
+					new_message(MT_standout,
+					    " %s: invalid routing table",
+					    tempbuf[0] == '-' ? tempbuf + 1 :
+					    tempbuf);
+					no_command = true;
+				}
+				putr();
+			} else
+				clear_message();
+			break;
+		case CMD_rtable:
+			ps.rtable = !ps.rtable;
+			new_message(MT_standout | MT_delayed,
+			    " %sisplaying routing tables.",
+			    ps.rtable ? "D" : "Not d");
 			break;
 		default:
 			new_message(MT_standout, " BAD CASE IN SWITCH!");

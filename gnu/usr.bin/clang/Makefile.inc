@@ -1,6 +1,9 @@
-# $OpenBSD: Makefile.inc,v 1.18 2019/11/26 10:58:23 sthen Exp $
+# $OpenBSD: Makefile.inc,v 1.21 2020/11/10 09:06:11 patrick Exp $
 
-LLVM_SRCS?=	${.CURDIR}/../../../llvm
+CLANG_SRCS?=	${.CURDIR}/../../../llvm/clang
+LLDB_SRCS?=	${.CURDIR}/../../../llvm/lldb
+LLD_SRCS?=	${.CURDIR}/../../../llvm/lld
+LLVM_SRCS?=	${.CURDIR}/../../../llvm/llvm
 
 .if ${COMPILER_VERSION:L} != "clang"
 CC=		clang
@@ -16,17 +19,17 @@ CXX=		eg++
 DEBUG=
 NOPIE=
 
-CLANG_INCLUDES=	-I${LLVM_SRCS}/tools/clang/include
-LLDB_INCLUDES=	-I${LLVM_SRCS}/tools/lldb/include \
-		-I${LLVM_SRCS}/tools/lldb/source
+CLANG_INCLUDES=	-I${CLANG_SRCS}/include
+LLDB_INCLUDES=	-I${LLDB_SRCS}/include \
+		-I${LLDB_SRCS}/source
 CPPFLAGS+=	-I${LLVM_SRCS}/include -I${.CURDIR}/../include -I${.OBJDIR} \
 		-I${.OBJDIR}/../include
 CPPFLAGS+=	-DNDEBUG
 
 # Disable some protections in the compiler to regain performance.
-.if ${MACHINE_ARCH} == "amd64" || ${MACHINE_ARCH} == "i386" || \
-    ${MACHINE_ARCH} == "mips64" || ${MACHINE_ARCH} == "mips64el" || \
-    ${MACHINE_ARCH} == "aarch64" 
+.if ${MACHINE_ARCH} == "aarch64" || ${MACHINE_ARCH} == "amd64" || \
+    ${MACHINE_ARCH} == "i386" || ${MACHINE_ARCH} == "mips64" || \
+    ${MACHINE_ARCH} == "mips64el" || ${MACHINE_ARCH} == "powerpc"
 CXXFLAGS+=	-fno-ret-protector
 .endif
 .if ${MACHINE_ARCH} == "amd64" || ${MACHINE_ARCH} == "i386"
@@ -53,15 +56,14 @@ TRIPLE=		${MACHINE_ARCH}-unknown-openbsd${OSREV}
 .endif
 CPPFLAGS+=	-DLLVM_PREFIX=\"/usr\"
 .include "Makefile.arch"
-CPPFLAGS+=-DLLDB_DISABLE_PYTHON
 
 # upstream defaults
 CFLAGS+=	-ffunction-sections
 .if ${MACHINE_ARCH} != "powerpc"
 # XXX
-CFLAGS+=        -fdata-sections
+CFLAGS+=	-fdata-sections
 .endif
-CXXFLAGS+=	-std=c++11
+CXXFLAGS+=	-std=c++14
 CXXFLAGS+=	-fvisibility-inlines-hidden
 CXXFLAGS+=	-fno-exceptions -fno-rtti
 # warnings (from upstream)

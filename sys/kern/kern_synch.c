@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_synch.c,v 1.168 2020/03/26 08:03:50 claudio Exp $	*/
+/*	$OpenBSD: kern_synch.c,v 1.176 2021/02/08 10:51:02 mpi Exp $	*/
 /*	$NetBSD: kern_synch.c,v 1.37 1996/04/22 01:38:37 christos Exp $	*/
 
 /*
@@ -65,6 +65,7 @@
 #include <sys/ktrace.h>
 #endif
 
+int	sleep_signal_check(void);
 int	thrsleep(struct proc *, struct sys___thrsleep_args *);
 int	thrsleep_unlock(void *);
 
@@ -86,6 +87,11 @@ sleep_queue_init(void)
 		TAILQ_INIT(&slpque[i]);
 }
 
+/*
+ * Global sleep channel for threads that do not want to
+ * receive wakeup(9) broadcasts.
+ */
+int nowake;
 
 /*
  * During autoconfiguration or after a panic, a sleep will simply
@@ -118,6 +124,7 @@ tsleep(const volatile void *ident, int priority, const char *wmesg, int timo)
 #endif
 
 	KASSERT((priority & ~(PRIMASK | PCATCH)) == 0);
+	KASSERT(ident != &nowake || ISSET(priority, PCATCH) || timo != 0);
 
 #ifdef MULTIPROCESSOR
 	KASSERT(timo || _kernel_lock_held());
@@ -147,11 +154,8 @@ tsleep(const volatile void *ident, int priority, const char *wmesg, int timo)
 		return (0);
 	}
 
-	sleep_setup(&sls, ident, priority, wmesg);
-	sleep_setup_timeout(&sls, timo);
-	sleep_setup_signal(&sls);
-
-	return sleep_finish_all(&sls, 1);
+	sleep_setup(&sls, ident, priority, wmesg, timo);
+	return sleep_finish(&sls, 1);
 }
 
 int
@@ -197,22 +201,6 @@ tsleep_nsec(const volatile void *ident, int priority, const char *wmesg,
 	return tsleep(ident, priority, wmesg, (int)to_ticks);
 }
 
-int
-sleep_finish_all(struct sleep_state *sls, int do_sleep)
-{
-	int error, error1;
-
-	sleep_finish(sls, do_sleep);
-	error1 = sleep_finish_timeout(sls);
-	error = sleep_finish_signal(sls);
-
-	/* Signal errors are higher priority than timeouts. */
-	if (error == 0 && error1 != 0)
-		error = error1;
-
-	return error;
-}
-
 /*
  * Same as tsleep, but if we have a mutex provided, then once we've
  * entered the sleep queue we drop the mutex. After sleeping we re-lock.
@@ -228,6 +216,7 @@ msleep(const volatile void *ident, struct mutex *mtx, int priority,
 #endif
 
 	KASSERT((priority & ~(PRIMASK | PCATCH | PNORELOCK)) == 0);
+	KASSERT(ident != &nowake || ISSET(priority, PCATCH) || timo != 0);
 	KASSERT(mtx != NULL);
 
 	if (priority & PCATCH)
@@ -257,8 +246,7 @@ msleep(const volatile void *ident, struct mutex *mtx, int priority,
 		return (0);
 	}
 
-	sleep_setup(&sls, ident, priority, wmesg);
-	sleep_setup_timeout(&sls, timo);
+	sleep_setup(&sls, ident, priority, wmesg, timo);
 
 	/* XXX - We need to make sure that the mutex doesn't
 	 * unblock splsched. This can be made a bit more
@@ -268,9 +256,7 @@ msleep(const volatile void *ident, struct mutex *mtx, int priority,
 	MUTEX_OLDIPL(mtx) = splsched();
 	mtx_leave(mtx);
 	/* signal may stop the process, release mutex before that */
-	sleep_setup_signal(&sls);
-
-	error = sleep_finish_all(&sls, 1);
+	error = sleep_finish(&sls, 1);
 
 	if ((priority & PNORELOCK) == 0) {
 		mtx_enter(mtx);
@@ -316,17 +302,15 @@ rwsleep(const volatile void *ident, struct rwlock *rwl, int priority,
 	int error, status;
 
 	KASSERT((priority & ~(PRIMASK | PCATCH | PNORELOCK)) == 0);
+	KASSERT(ident != &nowake || ISSET(priority, PCATCH) || timo != 0);
 	rw_assert_anylock(rwl);
 	status = rw_status(rwl);
 
-	sleep_setup(&sls, ident, priority, wmesg);
-	sleep_setup_timeout(&sls, timo);
+	sleep_setup(&sls, ident, priority, wmesg, timo);
 
 	rw_exit(rwl);
 	/* signal may stop the process, release rwlock before that */
-	sleep_setup_signal(&sls);
-
-	error = sleep_finish_all(&sls, 1);
+	error = sleep_finish(&sls, 1);
 
 	if ((priority & PNORELOCK) == 0)
 		rw_enter(rwl, status);
@@ -359,7 +343,7 @@ rwsleep_nsec(const volatile void *ident, struct rwlock *rwl, int priority,
 
 void
 sleep_setup(struct sleep_state *sls, const volatile void *ident, int prio,
-    const char *wmesg)
+    const char *wmesg, int timo)
 {
 	struct proc *p = curproc;
 
@@ -373,14 +357,12 @@ sleep_setup(struct sleep_state *sls, const volatile void *ident, int prio,
 #endif
 
 	sls->sls_catch = prio & PCATCH;
-	sls->sls_do_sleep = 1;
 	sls->sls_locked = 0;
-	sls->sls_sig = 1;
 	sls->sls_timeout = 0;
 
 	/*
 	 * The kernel has to be locked for signal processing.
-	 * This is done here and not in sleep_setup_signal() because
+	 * This is done here and not in sleep_finish() because
 	 * KERNEL_LOCK() has to be taken before SCHED_LOCK().
 	 */
 	if (sls->sls_catch != 0) {
@@ -397,19 +379,53 @@ sleep_setup(struct sleep_state *sls, const volatile void *ident, int prio,
 	p->p_slptime = 0;
 	p->p_slppri = prio & PRIMASK;
 	TAILQ_INSERT_TAIL(&slpque[LOOKUP(ident)], p, p_runq);
+
+	KASSERT((p->p_flag & P_TIMEOUT) == 0);
+	if (timo) {
+		sls->sls_timeout = 1;
+		timeout_add(&p->p_sleep_to, timo);
+	}
 }
 
-void
+int
 sleep_finish(struct sleep_state *sls, int do_sleep)
 {
 	struct proc *p = curproc;
+	int error = 0, error1 = 0;
 
-	if (sls->sls_do_sleep && do_sleep) {
+	if (sls->sls_catch != 0) {
+		/* sleep_setup() has locked the kernel. */
+		KERNEL_ASSERT_LOCKED();
+
+		/*
+		 * We put ourselves on the sleep queue and start our
+		 * timeout before calling sleep_signal_check(), as we could
+		 * stop there, and a wakeup or a SIGCONT (or both) could
+		 * occur while we were stopped.  A SIGCONT would cause
+		 * us to be marked as SSLEEP without resuming us, thus
+		 * we must be ready for sleep when sleep_signal_check() is
+		 * called.
+		 * If the wakeup happens while we're stopped, p->p_wchan
+		 * will be NULL upon return from sleep_signal_check().  In
+		 * that case we need to unwind immediately.
+		 */
+		atomic_setbits_int(&p->p_flag, P_SINTR);
+		if ((error = sleep_signal_check()) != 0) {
+			p->p_stat = SONPROC;
+			sls->sls_catch = 0;
+			do_sleep = 0;
+		} else if (p->p_wchan == NULL) {
+			sls->sls_catch = 0;
+			do_sleep = 0;
+		}
+	}
+
+	if (do_sleep) {
 		p->p_stat = SSLEEP;
 		p->p_ru.ru_nvcsw++;
 		SCHED_ASSERT_LOCKED();
 		mi_switch();
-	} else if (!do_sleep) {
+	} else {
 		unsleep(p);
 	}
 
@@ -426,29 +442,11 @@ sleep_finish(struct sleep_state *sls, int do_sleep)
 	 * we need to clear it before the ktrace.
 	 */
 	atomic_clearbits_int(&p->p_flag, P_SINTR);
-}
-
-void
-sleep_setup_timeout(struct sleep_state *sls, int timo)
-{
-	struct proc *p = curproc;
-
-	if (timo) {
-		KASSERT((p->p_flag & P_TIMEOUT) == 0);
-		sls->sls_timeout = 1;
-		timeout_add(&p->p_sleep_to, timo);
-	}
-}
-
-int
-sleep_finish_timeout(struct sleep_state *sls)
-{
-	struct proc *p = curproc;
 
 	if (sls->sls_timeout) {
 		if (p->p_flag & P_TIMEOUT) {
 			atomic_clearbits_int(&p->p_flag, P_TIMEOUT);
-			return (EWOULDBLOCK);
+			error1 = EWOULDBLOCK;
 		} else {
 			/* This must not sleep. */
 			timeout_del_barrier(&p->p_sleep_to);
@@ -456,64 +454,38 @@ sleep_finish_timeout(struct sleep_state *sls)
 		}
 	}
 
-	return (0);
-}
-
-void
-sleep_setup_signal(struct sleep_state *sls)
-{
-	struct proc *p = curproc;
-
-	if (sls->sls_catch == 0)
-		return;
-
-	/* sleep_setup() has locked the kernel. */
-	KERNEL_ASSERT_LOCKED();
-
-	/*
-	 * We put ourselves on the sleep queue and start our timeout
-	 * before calling CURSIG, as we could stop there, and a wakeup
-	 * or a SIGCONT (or both) could occur while we were stopped.
-	 * A SIGCONT would cause us to be marked as SSLEEP
-	 * without resuming us, thus we must be ready for sleep
-	 * when CURSIG is called.  If the wakeup happens while we're
-	 * stopped, p->p_wchan will be 0 upon return from CURSIG.
-	 */
-	atomic_setbits_int(&p->p_flag, P_SINTR);
-	if ((p->p_flag & P_SUSPSINGLE) || (sls->sls_sig = CURSIG(p)) != 0) {
-		unsleep(p);
-		p->p_stat = SONPROC;
-		sls->sls_do_sleep = 0;
-	} else if (p->p_wchan == 0) {
-		sls->sls_catch = 0;
-		sls->sls_do_sleep = 0;
-	}
-}
-
-int
-sleep_finish_signal(struct sleep_state *sls)
-{
-	struct proc *p = curproc;
-	int error = 0;
-
-	if (sls->sls_catch != 0) {
-		KERNEL_ASSERT_LOCKED();
-
-		error = single_thread_check(p, 1);
-		if (error == 0 &&
-		    (sls->sls_sig != 0 || (sls->sls_sig = CURSIG(p)) != 0)) {
-			if (p->p_p->ps_sigacts->ps_sigintr &
-			    sigmask(sls->sls_sig))
-				error = EINTR;
-			else
-				error = ERESTART;
-		}
-	}
+	/* Check if thread was woken up because of a unwind or signal */
+	if (sls->sls_catch != 0)
+		error = sleep_signal_check();
 
 	if (sls->sls_locked)
 		KERNEL_UNLOCK();
 
-	return (error);
+	/* Signal errors are higher priority than timeouts. */
+	if (error == 0 && error1 != 0)
+		error = error1;
+
+	return error;
+}
+
+/*
+ * Check and handle signals and suspensions around a sleep cycle.
+ */
+int
+sleep_signal_check(void)
+{
+	struct proc *p = curproc;
+	int err, sig;
+
+	if ((err = single_thread_check(p, 1)) != 0)
+		return err;
+	if ((sig = CURSIG(p)) != 0) {
+		if (p->p_p->ps_sigacts->ps_sigintr & sigmask(sig))
+			return EINTR;
+		else
+			return ERESTART;
+	}
+	return 0;
 }
 
 int
@@ -534,6 +506,7 @@ wakeup_proc(struct proc *p, const volatile void *chan)
 
 	return awakened;
 }
+
 
 /*
  * Implement timeout for tsleep.
@@ -870,7 +843,7 @@ refcnt_finalize(struct refcnt *r, const char *wmesg)
 
 	refcnt = atomic_dec_int_nv(&r->refs);
 	while (refcnt) {
-		sleep_setup(&sls, r, PWAIT, wmesg);
+		sleep_setup(&sls, r, PWAIT, wmesg, 0);
 		refcnt = r->refs;
 		sleep_finish(&sls, refcnt);
 	}
@@ -898,7 +871,7 @@ cond_wait(struct cond *c, const char *wmesg)
 
 	wait = c->c_wait;
 	while (wait) {
-		sleep_setup(&sls, c, PWAIT, wmesg);
+		sleep_setup(&sls, c, PWAIT, wmesg, 0);
 		wait = c->c_wait;
 		sleep_finish(&sls, wait);
 	}

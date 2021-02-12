@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_wpi.c,v 1.149 2019/09/30 01:53:05 dlg Exp $	*/
+/*	$OpenBSD: if_wpi.c,v 1.155 2020/12/12 11:48:53 jan Exp $	*/
 
 /*-
  * Copyright (c) 2006-2008
@@ -674,7 +674,7 @@ wpi_alloc_rx_ring(struct wpi_softc *sc, struct wpi_rx_ring *ring)
 			goto fail;
 		}
 
-		data->m = MCLGETI(NULL, M_DONTWAIT, NULL, WPI_RBUF_SIZE);
+		data->m = MCLGETL(NULL, M_DONTWAIT, WPI_RBUF_SIZE);
 		if (data->m == NULL) {
 			printf("%s: could not allocate RX mbuf\n",
 			    sc->sc_dev.dv_xname);
@@ -1132,6 +1132,7 @@ wpi_calib_timeout(void *arg)
 int
 wpi_ccmp_decap(struct wpi_softc *sc, struct mbuf *m, struct ieee80211_key *k)
 {
+	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_frame *wh;
 	uint64_t pn, *prsc;
 	uint8_t *ivp;
@@ -1142,7 +1143,7 @@ wpi_ccmp_decap(struct wpi_softc *sc, struct mbuf *m, struct ieee80211_key *k)
 	hdrlen = ieee80211_get_hdrlen(wh);
 	ivp = (uint8_t *)wh + hdrlen;
 
-	/* Check that ExtIV bit is be set. */
+	/* Check that ExtIV bit is set. */
 	if (!(ivp[3] & IEEE80211_WEP_EXTIV)) {
 		DPRINTF(("CCMP decap ExtIV not set\n"));
 		return 1;
@@ -1159,21 +1160,13 @@ wpi_ccmp_decap(struct wpi_softc *sc, struct mbuf *m, struct ieee80211_key *k)
 	     (uint64_t)ivp[6] << 32 |
 	     (uint64_t)ivp[7] << 40;
 	if (pn <= *prsc) {
-		/*
-		 * Not necessarily a replayed frame since we did not check
-		 * the sequence number of the 802.11 header yet.
-		 */
 		DPRINTF(("CCMP replayed\n"));
+		ic->ic_stats.is_ccmp_replays++;
 		return 1;
 	}
-	/* Update last seen packet number. */
-	*prsc = pn;
+	/* Last seen packet number is updated in ieee80211_inputm(). */
 
-	/* Clear Protected bit and strip IV. */
-	wh->i_fc[1] &= ~IEEE80211_FC1_PROTECTED;
-	memmove(mtod(m, caddr_t) + IEEE80211_CCMP_HDRLEN, wh, hdrlen);
-	m_adj(m, IEEE80211_CCMP_HDRLEN);
-	/* Strip MIC. */
+	/* Strip MIC. IV will be stripped by ieee80211_inputm(). */
 	m_adj(m, -IEEE80211_CCMP_MICLEN);
 	return 0;
 }
@@ -1223,7 +1216,7 @@ wpi_rx_done(struct wpi_softc *sc, struct wpi_rx_desc *desc,
 		return;
 	}
 
-	m1 = MCLGETI(NULL, M_DONTWAIT, NULL, WPI_RBUF_SIZE);
+	m1 = MCLGETL(NULL, M_DONTWAIT, WPI_RBUF_SIZE);
 	if (m1 == NULL) {
 		ic->ic_stats.is_rx_nombuf++;
 		ifp->if_ierrors++;
@@ -1278,6 +1271,7 @@ wpi_rx_done(struct wpi_softc *sc, struct wpi_rx_desc *desc,
 			ic->ic_stats.is_ccmp_dec_errs++;
 			ifp->if_ierrors++;
 			m_freem(m);
+			ieee80211_release_node(ic, ni);
 			return;
 		}
 		/* Check whether decryption was successful or not. */
@@ -1286,11 +1280,13 @@ wpi_rx_done(struct wpi_softc *sc, struct wpi_rx_desc *desc,
 			ic->ic_stats.is_ccmp_dec_errs++;
 			ifp->if_ierrors++;
 			m_freem(m);
+			ieee80211_release_node(ic, ni);
 			return;
 		}
 		if (wpi_ccmp_decap(sc, m, &ni->ni_pairwise_key) != 0) {
 			ifp->if_ierrors++;
 			m_freem(m);
+			ieee80211_release_node(ic, ni);
 			return;
 		}
 		rxi.rxi_flags |= IEEE80211_RXI_HWDEC;
@@ -1705,7 +1701,6 @@ wpi_tx(struct wpi_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 		tap->wt_chan_freq = htole16(ni->ni_chan->ic_freq);
 		tap->wt_chan_flags = htole16(ni->ni_chan->ic_flags);
 		tap->wt_rate = rinfo->rate;
-		tap->wt_hwqueue = ac;
 		if ((ic->ic_flags & IEEE80211_F_WEPON) &&
 		    (wh->i_fc[1] & IEEE80211_FC1_PROTECTED))
 			tap->wt_flags |= IEEE80211_RADIOTAP_F_WEP;
@@ -1914,7 +1909,7 @@ wpi_start(struct ifnet *ifp)
 			break;
 
 		/* Encapsulate and send data frames. */
-		IFQ_DEQUEUE(&ifp->if_snd, m);
+		m = ifq_dequeue(&ifp->if_snd);
 		if (m == NULL)
 			break;
 #if NBPFILTER > 0

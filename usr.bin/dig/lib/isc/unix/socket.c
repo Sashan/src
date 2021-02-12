@@ -34,7 +34,6 @@
 
 #include <isc/list.h>
 #include <isc/log.h>
-#include <isc/net.h>
 #include <isc/region.h>
 #include <isc/socket.h>
 #include <isc/task.h>
@@ -154,7 +153,7 @@ struct isc_socket {
 	intev_t			readable_ev;
 	intev_t			writable_ev;
 
-	isc_sockaddr_t		peer_address;       /* remote address */
+	struct sockaddr_storage		peer_address;       /* remote address */
 
 	unsigned int		pending_recv : 1,
 				pending_send : 1,
@@ -240,11 +239,11 @@ enum {
 };
 
 static void
-socket_log(isc_socket_t *sock, isc_sockaddr_t *address,
+socket_log(isc_socket_t *sock, struct sockaddr_storage *address,
 	   isc_logcategory_t *category, isc_logmodule_t *module, int level,
 	   const char *fmt, ...) __attribute__((__format__(__printf__, 6, 7)));
 static void
-socket_log(isc_socket_t *sock, isc_sockaddr_t *address,
+socket_log(isc_socket_t *sock, struct sockaddr_storage *address,
 	   isc_logcategory_t *category, isc_logmodule_t *module, int level,
 	   const char *fmt, ...)
 {
@@ -506,8 +505,8 @@ build_msghdr_send(isc_socket_t *sock, char* cmsgbuf, isc_socketevent_t *dev,
 	memset(msg, 0, sizeof(*msg));
 
 	if (!sock->connected) {
-		msg->msg_name = (void *)&dev->address.type.sa;
-		msg->msg_namelen = dev->address.length;
+		msg->msg_name = (void *)&dev->address;
+		msg->msg_namelen = dev->address.ss_len;
 	} else {
 		msg->msg_name = NULL;
 		msg->msg_namelen = 0;
@@ -704,8 +703,8 @@ build_msghdr_recv(isc_socket_t *sock, char *cmsgbuf, isc_socketevent_t *dev,
 
 	if (sock->type == isc_sockettype_udp) {
 		memset(&dev->address, 0, sizeof(dev->address));
-		msg->msg_name = (void *)&dev->address.type.sa;
-		msg->msg_namelen = sizeof(dev->address.type);
+		msg->msg_name = (void *)&dev->address;
+		msg->msg_namelen = sizeof(dev->address);
 	} else { /* TCP */
 		msg->msg_name = NULL;
 		msg->msg_namelen = 0;
@@ -769,7 +768,7 @@ build_msghdr_recv(isc_socket_t *sock, char *cmsgbuf, isc_socketevent_t *dev,
 }
 
 static void
-set_dev_address(isc_sockaddr_t *address, isc_socket_t *sock,
+set_dev_address(struct sockaddr_storage *address, isc_socket_t *sock,
 		isc_socketevent_t *dev)
 {
 	if (sock->type == isc_sockettype_udp) {
@@ -834,9 +833,14 @@ doio_recv(isc_socket_t *sock, isc_socketevent_t *dev) {
 	struct msghdr msghdr;
 	isc_buffer_t *buffer;
 	int recv_errno;
-	char cmsgbuf[RECVCMSGBUFLEN] = {0};
+	union {
+		struct msghdr msghdr;
+		char m[RECVCMSGBUFLEN];
+	} cmsgbuf;
+	
+	memset(&cmsgbuf, 0, sizeof(cmsgbuf));
 
-	build_msghdr_recv(sock, cmsgbuf, dev, &msghdr, iov, &read_count);
+	build_msghdr_recv(sock, cmsgbuf.m, dev, &msghdr, iov, &read_count);
 
 	cc = recvmsg(sock->fd, &msghdr, 0);
 	recv_errno = errno;
@@ -906,7 +910,7 @@ doio_recv(isc_socket_t *sock, isc_socketevent_t *dev) {
 	}
 
 	if (sock->type == isc_sockettype_udp) {
-		dev->address.length = msghdr.msg_namelen;
+		dev->address.ss_len = msghdr.msg_namelen;
 		if (isc_sockaddr_getport(&dev->address) == 0) {
 			if (isc_log_wouldlog(isc_lctx, IOEVENT_LEVEL)) {
 				socket_log(sock, &dev->address, IOEVENT,
@@ -989,9 +993,14 @@ doio_send(isc_socket_t *sock, isc_socketevent_t *dev) {
 	char addrbuf[ISC_SOCKADDR_FORMATSIZE];
 	int attempts = 0;
 	int send_errno;
-	char cmsgbuf[SENDCMSGBUFLEN] = {0};
+	union {
+		struct msghdr msghdr;
+		char m[SENDCMSGBUFLEN];
+	} cmsgbuf;
+	
+	memset(&cmsgbuf, 0, sizeof(cmsgbuf));
 
-	build_msghdr_send(sock, cmsgbuf, dev, &msghdr, iov, &write_count);
+	build_msghdr_send(sock, cmsgbuf.m, dev, &msghdr, iov, &write_count);
 
  resend:
 	cc = sendmsg(sock->fd, &msghdr, 0);
@@ -1338,8 +1347,7 @@ socket_create(isc_socketmgr_t *manager0, int pf, isc_sockettype_t type,
 
 	switch (sock->type) {
 	case isc_sockettype_udp:
-#define DCSPPKT(pf) ((pf == AF_INET) ? ISC_NET_DSCPPKTV4 : ISC_NET_DSCPPKTV6)
-		sock->pktdscp = (isc_net_probedscp() & DCSPPKT(pf)) != 0;
+		sock->pktdscp = 1;
 		break;
 	case isc_sockettype_tcp:
 		break;
@@ -1409,7 +1417,7 @@ isc_socket_attach(isc_socket_t *sock0, isc_socket_t **socketp) {
 void
 isc_socket_detach(isc_socket_t **socketp) {
 	isc_socket_t *sock;
-	isc_boolean_t kill_socket = ISC_FALSE;
+	int kill_socket = 0;
 
 	REQUIRE(socketp != NULL);
 	sock = (isc_socket_t *)*socketp;
@@ -1417,7 +1425,7 @@ isc_socket_detach(isc_socket_t **socketp) {
 	REQUIRE(sock->references > 0);
 	sock->references--;
 	if (sock->references == 0)
-		kill_socket = ISC_TRUE;
+		kill_socket = 1;
 
 	if (kill_socket)
 		destroy(&sock);
@@ -1444,7 +1452,7 @@ dispatch_recv(isc_socket_t *sock) {
 	ev = ISC_LIST_HEAD(sock->recv_list);
 	if (ev == NULL)
 		return;
-	socket_log(sock, NULL, EVENT, NULL, 0, 0,
+	socket_log(sock, NULL, EVENT,
 		   "dispatch_recv:  event %p -> task %p",
 		   ev, ev->ev_sender);
 	sender = ev->ev_sender;
@@ -1471,7 +1479,7 @@ dispatch_send(isc_socket_t *sock) {
 	ev = ISC_LIST_HEAD(sock->send_list);
 	if (ev == NULL)
 		return;
-	socket_log(sock, NULL, EVENT, NULL, 0, 0,
+	socket_log(sock, NULL, EVENT,
 		   "dispatch_send:  event %p -> task %p",
 		   ev, ev->ev_sender);
 	sender = ev->ev_sender;
@@ -1671,11 +1679,11 @@ internal_send(isc_task_t *me, isc_event_t *ev) {
  * and unlocking twice if both reads and writes are possible.
  */
 static void
-process_fd(isc_socketmgr_t *manager, int fd, isc_boolean_t readable,
-	   isc_boolean_t writeable)
+process_fd(isc_socketmgr_t *manager, int fd, int readable,
+	   int writeable)
 {
 	isc_socket_t *sock;
-	isc_boolean_t unwatch_read = ISC_FALSE, unwatch_write = ISC_FALSE;
+	int unwatch_read = 0, unwatch_write = 0;
 
 	/*
 	 * If the socket is going to be closed, don't do more I/O.
@@ -1689,18 +1697,18 @@ process_fd(isc_socketmgr_t *manager, int fd, isc_boolean_t readable,
 	sock = manager->fds[fd];
 	if (readable) {
 		if (sock == NULL) {
-			unwatch_read = ISC_TRUE;
+			unwatch_read = 1;
 			goto check_write;
 		}
 		if (!SOCK_DEAD(sock)) {
 			dispatch_recv(sock);
 		}
-		unwatch_read = ISC_TRUE;
+		unwatch_read = 1;
 	}
 check_write:
 	if (writeable) {
 		if (sock == NULL) {
-			unwatch_write = ISC_TRUE;
+			unwatch_write = 1;
 			goto unlock_fd;
 		}
 		if (!SOCK_DEAD(sock)) {
@@ -1709,7 +1717,7 @@ check_write:
 			else
 				dispatch_send(sock);
 		}
-		unwatch_write = ISC_TRUE;
+		unwatch_write = 1;
 	}
 
  unlock_fd:
@@ -1960,7 +1968,7 @@ socket_recv(isc_socket_t *sock, isc_socketevent_t *dev, isc_task_t *task,
 			select_poke(sock->manager, sock->fd, SELECT_POKE_READ);
 		ISC_LIST_ENQUEUE(sock->recv_list, dev, ev_link);
 
-		socket_log(sock, NULL, EVENT, NULL, 0, 0,
+		socket_log(sock, NULL, EVENT,
 			   "socket_recv: event %p -> task %p",
 			   dev, ntask);
 
@@ -2034,7 +2042,7 @@ isc_socket_recvv(isc_socket_t *sock0, isc_bufferlist_t *buflist,
 
 static isc_result_t
 socket_send(isc_socket_t *sock, isc_socketevent_t *dev, isc_task_t *task,
-	    isc_sockaddr_t *address, struct in6_pktinfo *pktinfo,
+	    struct sockaddr_storage *address, struct in6_pktinfo *pktinfo,
 	    unsigned int flags)
 {
 	int io_state;
@@ -2092,7 +2100,7 @@ socket_send(isc_socket_t *sock, isc_socketevent_t *dev, isc_task_t *task,
 					    SELECT_POKE_WRITE);
 			ISC_LIST_ENQUEUE(sock->send_list, dev, ev_link);
 
-			socket_log(sock, NULL, EVENT, NULL, 0, 0,
+			socket_log(sock, NULL, EVENT,
 				   "socket_send: event %p -> task %p",
 				   dev, ntask);
 
@@ -2124,7 +2132,7 @@ isc_socket_sendv(isc_socket_t *sock, isc_bufferlist_t *buflist,
 isc_result_t
 isc_socket_sendtov2(isc_socket_t *sock0, isc_bufferlist_t *buflist,
 		     isc_task_t *task, isc_taskaction_t action, void *arg,
-		     isc_sockaddr_t *address, struct in6_pktinfo *pktinfo,
+		     struct sockaddr_storage *address, struct in6_pktinfo *pktinfo,
 		     unsigned int flags)
 {
 	isc_socket_t *sock = (isc_socket_t *)sock0;
@@ -2159,14 +2167,14 @@ isc_socket_sendtov2(isc_socket_t *sock0, isc_bufferlist_t *buflist,
 }
 
 isc_result_t
-isc_socket_bind(isc_socket_t *sock0, isc_sockaddr_t *sockaddr,
+isc_socket_bind(isc_socket_t *sock0, struct sockaddr_storage *sockaddr,
 		 unsigned int options) {
 	isc_socket_t *sock = (isc_socket_t *)sock0;
 	int on = 1;
 
 	INSIST(!sock->bound);
 
-	if (sock->pf != sockaddr->type.sa.sa_family) {
+	if (sock->pf != sockaddr->ss_family) {
 		return (ISC_R_FAMILYMISMATCH);
 	}
 
@@ -2181,7 +2189,7 @@ isc_socket_bind(isc_socket_t *sock0, isc_sockaddr_t *sockaddr,
 				 "setsockopt(%d) %s", sock->fd, "failed");
 		/* Press on... */
 	}
-	if (bind(sock->fd, &sockaddr->type.sa, sockaddr->length) < 0) {
+	if (bind(sock->fd, (struct sockaddr *)sockaddr, sockaddr->ss_len) < 0) {
 		switch (errno) {
 		case EACCES:
 			return (ISC_R_NOPERM);
@@ -2205,7 +2213,7 @@ isc_socket_bind(isc_socket_t *sock0, isc_sockaddr_t *sockaddr,
 }
 
 isc_result_t
-isc_socket_connect(isc_socket_t *sock0, isc_sockaddr_t *addr,
+isc_socket_connect(isc_socket_t *sock0, struct sockaddr_storage *addr,
 		   isc_task_t *task, isc_taskaction_t action, void *arg)
 {
 	isc_socket_t *sock = (isc_socket_t *)sock0;
@@ -2241,7 +2249,7 @@ isc_socket_connect(isc_socket_t *sock0, isc_sockaddr_t *addr,
 	 * outstanding, and it might happen to complete.
 	 */
 	sock->peer_address = *addr;
-	cc = connect(sock->fd, &addr->type.sa, addr->length);
+	cc = connect(sock->fd, (struct sockaddr *)addr, addr->ss_len);
 	if (cc < 0) {
 		/*
 		 * HP-UX "fails" to connect a UDP socket and sets errno to

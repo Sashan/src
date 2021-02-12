@@ -1,4 +1,4 @@
-/*	$OpenBSD: nvme.c,v 1.75 2020/03/15 20:50:46 krw Exp $ */
+/*	$OpenBSD: nvme.c,v 1.90 2021/02/09 01:50:10 jmatthew Exp $ */
 
 /*
  * Copyright (c) 2014 David Gwynne <dlg@openbsd.org>
@@ -363,19 +363,17 @@ nvme_attach(struct nvme_softc *sc)
 	sc->sc_namespaces = mallocarray(sc->sc_nn + 1,
 	    sizeof(*sc->sc_namespaces), M_DEVBUF, M_WAITOK|M_ZERO);
 
-	sc->sc_link.adapter = &nvme_switch;
-	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.adapter_buswidth = sc->sc_nn + 1;
-	sc->sc_link.luns = 1;
-	sc->sc_link.adapter_target = 0;
-	sc->sc_link.openings = 64;
-	sc->sc_link.pool = &sc->sc_iopool;
+	saa.saa_adapter = &nvme_switch;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter_buswidth = sc->sc_nn + 1;
+	saa.saa_luns = 1;
+	saa.saa_adapter_target = 0;
+	saa.saa_openings = 64;
+	saa.saa_pool = &sc->sc_iopool;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
-	memset(&saa, 0, sizeof(saa));
-	saa.saa_sc_link = &sc->sc_link;
-
-	sc->sc_scsibus = (struct scsibus_softc *)config_found(&sc->sc_dev,
-	    &saa, scsiprint);
+	config_found(&sc->sc_dev, &saa, scsiprint);
 
 	return (0);
 
@@ -435,7 +433,7 @@ disable:
 int
 nvme_scsi_probe(struct scsi_link *link)
 {
-	struct nvme_softc *sc = link->adapter_softc;
+	struct nvme_softc *sc = link->bus->sb_adapter_softc;
 	struct nvme_sqe sqe;
 	struct nvm_identify_namespace *identify;
 	struct nvme_dmamem *mem;
@@ -464,19 +462,14 @@ nvme_scsi_probe(struct scsi_link *link)
 
 	scsi_io_put(&sc->sc_iopool, ccb);
 
-	if (rv != 0) {
-		rv = EIO;
-		goto done;
+	identify = NVME_DMA_KVA(mem);
+	if (rv == 0 && lemtoh64(&identify->nsze) > 0) {
+		/* Commit namespace if it has a size greater than zero. */
+		identify = malloc(sizeof(*identify), M_DEVBUF, M_WAITOK);
+		memcpy(identify, NVME_DMA_KVA(mem), sizeof(*identify));
+		sc->sc_namespaces[link->target].ident = identify;
 	}
 
-	/* commit */
-
-	identify = malloc(sizeof(*identify), M_DEVBUF, M_WAITOK|M_ZERO);
-	memcpy(identify, NVME_DMA_KVA(mem), sizeof(*identify));
-
-	sc->sc_namespaces[link->target].ident = identify;
-
-done:
 	nvme_dmamem_free(sc, mem);
 
 	return (rv);
@@ -543,15 +536,15 @@ nvme_activate(struct nvme_softc *sc, int act)
 void
 nvme_scsi_cmd(struct scsi_xfer *xs)
 {
-	switch (xs->cmd->opcode) {
+	switch (xs->cmd.opcode) {
 	case READ_COMMAND:
-	case READ_BIG:
+	case READ_10:
 	case READ_12:
 	case READ_16:
 		nvme_scsi_io(xs, SCSI_DATA_IN);
 		return;
 	case WRITE_COMMAND:
-	case WRITE_BIG:
+	case WRITE_10:
 	case WRITE_12:
 	case WRITE_16:
 		nvme_scsi_io(xs, SCSI_DATA_OUT);
@@ -589,7 +582,7 @@ nvme_scsi_cmd(struct scsi_xfer *xs)
 void
 nvme_minphys(struct buf *bp, struct scsi_link *link)
 {
-	struct nvme_softc *sc = link->adapter_softc;
+	struct nvme_softc *sc = link->bus->sb_adapter_softc;
 
 	if (bp->b_bcount > sc->sc_mdts)
 		bp->b_bcount = sc->sc_mdts;
@@ -599,7 +592,7 @@ void
 nvme_scsi_io(struct scsi_xfer *xs, int dir)
 {
 	struct scsi_link *link = xs->sc_link;
-	struct nvme_softc *sc = link->adapter_softc;
+	struct nvme_softc *sc = link->bus->sb_adapter_softc;
 	struct nvme_ccb *ccb = xs->io;
 	bus_dmamap_t dmap = ccb->ccb_dmamap;
 	int i;
@@ -654,7 +647,7 @@ nvme_scsi_io_fill(struct nvme_softc *sc, struct nvme_ccb *ccb, void *slot)
 	u_int64_t lba;
 	u_int32_t blocks;
 
-	scsi_cmd_rw_decode(xs->cmd, &lba, &blocks);
+	scsi_cmd_rw_decode(&xs->cmd, &lba, &blocks);
 
 	sqe->opcode = ISSET(xs->flags, SCSI_DATA_IN) ?
 	    NVM_CMD_READ : NVM_CMD_WRITE;
@@ -712,7 +705,7 @@ void
 nvme_scsi_sync(struct scsi_xfer *xs)
 {
 	struct scsi_link *link = xs->sc_link;
-	struct nvme_softc *sc = link->adapter_softc;
+	struct nvme_softc *sc = link->bus->sb_adapter_softc;
 	struct nvme_ccb *ccb = xs->io;
 
 	ccb->ccb_done = nvme_scsi_sync_done;
@@ -756,7 +749,7 @@ nvme_scsi_sync_done(struct nvme_softc *sc, struct nvme_ccb *ccb,
 void
 nvme_scsi_inq(struct scsi_xfer *xs)
 {
-	struct scsi_inquiry *inq = (struct scsi_inquiry *)xs->cmd;
+	struct scsi_inquiry *inq = (struct scsi_inquiry *)&xs->cmd;
 
 	if (!ISSET(inq->flags, SI_EVPD)) {
 		nvme_scsi_inquiry(xs);
@@ -778,7 +771,7 @@ nvme_scsi_inquiry(struct scsi_xfer *xs)
 {
 	struct scsi_inquiry_data inq;
 	struct scsi_link *link = xs->sc_link;
-	struct nvme_softc *sc = link->adapter_softc;
+	struct nvme_softc *sc = link->bus->sb_adapter_softc;
 	struct nvm_identify_namespace *ns;
 
 	ns = sc->sc_namespaces[link->target].ident;
@@ -786,15 +779,15 @@ nvme_scsi_inquiry(struct scsi_xfer *xs)
 	memset(&inq, 0, sizeof(inq));
 
 	inq.device = T_DIRECT;
-	inq.version = 0x06; /* SPC-4 */
-	inq.response_format = 2;
-	inq.additional_length = 32;
+	inq.version = SCSI_REV_SPC4;
+	inq.response_format = SID_SCSI2_RESPONSE;
+	inq.additional_length = SID_SCSI2_ALEN;
 	inq.flags |= SID_CmdQue;
 	memcpy(inq.vendor, "NVMe    ", sizeof(inq.vendor));
 	memcpy(inq.product, sc->sc_identify.mn, sizeof(inq.product));
 	memcpy(inq.revision, sc->sc_identify.fr, sizeof(inq.revision));
 
-	memcpy(xs->data, &inq, MIN(sizeof(inq), xs->datalen));
+	scsi_copy_internal_data(xs, &inq, sizeof(inq));
 
 	xs->error = XS_NOERROR;
 	scsi_done(xs);
@@ -805,7 +798,7 @@ nvme_scsi_capacity16(struct scsi_xfer *xs)
 {
 	struct scsi_read_cap_data_16 rcd;
 	struct scsi_link *link = xs->sc_link;
-	struct nvme_softc *sc = link->adapter_softc;
+	struct nvme_softc *sc = link->bus->sb_adapter_softc;
 	struct nvm_identify_namespace *ns;
 	struct nvm_namespace_format *f;
 	u_int64_t nsze;
@@ -839,7 +832,7 @@ nvme_scsi_capacity(struct scsi_xfer *xs)
 {
 	struct scsi_read_cap_data rcd;
 	struct scsi_link *link = xs->sc_link;
-	struct nvme_softc *sc = link->adapter_softc;
+	struct nvme_softc *sc = link->bus->sb_adapter_softc;
 	struct nvm_identify_namespace *ns;
 	struct nvm_namespace_format *f;
 	u_int64_t nsze;
@@ -872,7 +865,7 @@ nvme_scsi_capacity(struct scsi_xfer *xs)
 void
 nvme_scsi_free(struct scsi_link *link)
 {
-	struct nvme_softc *sc = link->adapter_softc;
+	struct nvme_softc *sc = link->bus->sb_adapter_softc;
 	struct nvm_identify_namespace *identify;
 
 	identify = sc->sc_namespaces[link->target].ident;
@@ -1000,6 +993,8 @@ nvme_q_complete(struct nvme_softc *sc, struct nvme_queue *q)
 		flags = lemtoh16(&cqe->flags);
 		if ((flags & NVME_CQE_PHASE) != q->q_cq_phase)
 			break;
+
+		membar_consumer();
 
 		ccb = &sc->sc_ccbs[cqe->cid];
 		ccb->ccb_done(sc, ccb, cqe);

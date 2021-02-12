@@ -29,10 +29,6 @@
 #ifndef	_LINUX_RBTREE_H_
 #define	_LINUX_RBTREE_H_
 
-/* for printf */
-#include <sys/types.h>
-#include <sys/systm.h>
-
 #include <sys/tree.h>
 
 struct rb_node {
@@ -50,7 +46,7 @@ struct rb_root {
 };
 
 struct rb_root_cached {
-	struct	rb_node	*rb_node;
+	struct rb_root rb_root;
 };
 
 /*
@@ -77,17 +73,20 @@ RB_PROTOTYPE(linux_root, rb_node, __entry, panic_cmp);
 
 #define	rb_insert_color(node, root)					\
 	linux_root_RB_INSERT_COLOR((struct linux_root *)(root), (node))
-#define	rb_insert_color_cached(node, root, leftmost)			\
-	linux_root_RB_INSERT_COLOR((struct linux_root *)(root), (node))
 #define	rb_erase(node, root)						\
-	linux_root_RB_REMOVE((struct linux_root *)(root), (node))
-#define	rb_erase_cached(node, root)						\
 	linux_root_RB_REMOVE((struct linux_root *)(root), (node))
 #define	rb_next(node)	RB_NEXT(linux_root, NULL, (node))
 #define	rb_prev(node)	RB_PREV(linux_root, NULL, (node))
 #define	rb_first(root)	RB_MIN(linux_root, (struct linux_root *)(root))
-#define	rb_first_cached(root)	RB_MIN(linux_root, (struct linux_root *)(root))
 #define	rb_last(root)	RB_MAX(linux_root, (struct linux_root *)(root))
+
+#define	rb_insert_color_cached(node, root, leftmost)			\
+	linux_root_RB_INSERT_COLOR((struct linux_root *)(&(root)->rb_root), (node))
+#define	rb_erase_cached(node, root)						\
+	linux_root_RB_REMOVE((struct linux_root *)(&(root)->rb_root), (node))
+#define	rb_first_cached(root)	RB_MIN(linux_root, (struct linux_root *)(&(root)->rb_root))
+#define	rb_replace_node_cached(old, new, root)				\
+	rb_replace_node(old, new, &(root)->rb_root)
 
 static inline struct rb_node *
 __rb_deepest_left(struct rb_node *node)
@@ -156,38 +155,10 @@ rb_replace_node(struct rb_node *victim, struct rb_node *new,
 
 #undef RB_ROOT
 #define RB_ROOT		(struct rb_root) { NULL }
+#ifdef __clang__
 #define RB_ROOT_CACHED	(struct rb_root_cached) { NULL }
-
-struct interval_tree_node {
-	struct rb_node rb;
-	unsigned long start;
-	unsigned long last;
-};
-
-static inline struct interval_tree_node *
-interval_tree_iter_first(struct rb_root *root,
-    unsigned long start, unsigned long last)
-{
-#ifdef DRMDEBUG
-	printf("%s: stub start: 0x%lx last: 0x%lx\n", __func__, start, last);
+#else
+#define RB_ROOT_CACHED	(struct rb_root_cached) { { NULL } }
 #endif
-	return NULL;
-}
-
-static inline void
-interval_tree_insert(struct interval_tree_node *node, struct rb_root *root)
-{
-#ifdef DRMDEBUG
-	printf("%s: stub start: 0x%lx last: 0x%lx\n", __func__, node->start, node->last);
-#endif
-}
-
-static inline void
-interval_tree_remove(struct interval_tree_node *node, struct rb_root *root)
-{
-#ifdef DRMDEBUG
-	printf("%s: stub start: 0x%lx last: 0x%lx\n", __func__, node->start, node->last);
-#endif
-}
 
 #endif	/* _LINUX_RBTREE_H_ */

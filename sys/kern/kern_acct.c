@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_acct.c,v 1.42 2019/10/22 21:19:22 cheloha Exp $	*/
+/*	$OpenBSD: kern_acct.c,v 1.44 2021/01/29 00:31:41 rob Exp $	*/
 /*	$NetBSD: kern_acct.c,v 1.42 1996/02/04 02:15:12 christos Exp $	*/
 
 /*-
@@ -118,8 +118,7 @@ sys_acct(struct proc *p, void *v, register_t *retval)
 	 * writing and make sure it's 'normal'.
 	 */
 	if (SCARG(uap, path) != NULL) {
-		NDINIT(&nd, 0, 0, UIO_USERSPACE, SCARG(uap, path),
-		    p);
+		NDINIT(&nd, 0, 0, UIO_USERSPACE, SCARG(uap, path), p);
 		if ((error = vn_open(&nd, FWRITE|O_APPEND, 0)) != 0)
 			return (error);
 		VOP_UNLOCK(nd.ni_vp);
@@ -233,7 +232,7 @@ acct_process(struct proc *p)
 	else
 		acct.ac_tty = NODEV;
 
-	/* (8) The boolean flags that tell how the process terminated, etc. */
+	/* (8) The boolean flags that tell how process terminated or misbehaved. */
 	acct.ac_flag = pr->ps_acflag;
 
 	/*

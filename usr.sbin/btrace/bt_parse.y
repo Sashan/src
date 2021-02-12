@@ -1,7 +1,7 @@
-/*	$OpenBSD: bt_parse.y,v 1.10 2020/03/27 09:37:06 mpi Exp $	*/
+/*	$OpenBSD: bt_parse.y,v 1.23 2021/02/08 09:46:45 mpi Exp $	*/
 
 /*
- * Copyright (c) 2019 - 2020 Martin Pieuchot <mpi@openbsd.org>
+ * Copyright (c) 2019-2021 Martin Pieuchot <mpi@openbsd.org>
  * Copyright (c) 2019 Tobias Heider <tobhe@openbsd.org>
  * Copyright (c) 2015 Ted Unangst <tedu@openbsd.org>
  *
@@ -55,7 +55,7 @@ SLIST_HEAD(, bt_var)	 g_variables;
 
 struct bt_rule	*br_new(struct bt_probe *, struct bt_filter *, struct bt_stmt *,
 		     enum bt_rtype);
-struct bt_filter *bf_new(enum bt_operand, enum bt_filtervar, int);
+struct bt_filter *bf_new(enum bt_argtype, enum bt_filtervar, int);
 struct bt_probe	*bp_new(const char *, const char *, const char *, int32_t);
 struct bt_arg	*ba_append(struct bt_arg *, struct bt_arg *);
 struct bt_stmt	*bs_new(enum bt_action, struct bt_arg *, struct bt_var *);
@@ -67,7 +67,9 @@ struct bt_stmt	*bv_set(const char *, struct bt_arg *);
 
 struct bt_arg	*bm_get(const char *, struct bt_arg *);
 struct bt_stmt	*bm_set(const char *, struct bt_arg *, struct bt_arg *);
-struct bt_stmt	*bm_fn(enum bt_action, struct bt_arg *, struct bt_arg *);
+struct bt_stmt	*bm_op(enum bt_action, struct bt_arg *, struct bt_arg *);
+
+struct bt_stmt	*bh_inc(const char *, struct bt_arg *, struct bt_arg *);
 
 /*
  * Lexer
@@ -96,26 +98,30 @@ typedef struct {
 
 static void	 yyerror(const char *, ...);
 static int	 yylex(void);
+
+static int pflag;
 %}
 
-%token	ERROR OP_EQ OP_NEQ BEGIN END
+%token	ERROR OP_EQ OP_NE OP_LE OP_GE OP_LAND OP_LOR BEGIN END HZ
 /* Builtins */
-%token	ARG0 ARG1 ARG2 ARG3 ARG4 ARG5 ARG6 ARG7 ARG8 ARG9
-%token	COMM HZ KSTACK USTACK NSECS PID RETVAL TID
-/* Functions */
-%token  F_CLEAR F_DELETE F_EXIT F_PRINT F_PRINTF F_TIME F_ZERO
-/* Map functions */
-%token  M_COUNT M_MAX M_MIN M_SUM
+%token	BUILTIN PID TID
+/* Functions and Map operators */
+%token  F_DELETE F_PRINT FUNC0 FUNC1 FUNCN OP1 OP4 MOP0 MOP1
 %token	<v.string>	STRING CSTRING
 %token	<v.number>	NUMBER
+
 %type	<v.string>	gvar
-%type	<v.i>		filterval oper builtin fn0 fn1 fnN mfn0 mfn1 mfnN
-%type	<v.probe>	probe
+%type	<v.i>		fval testop binop builtin
+%type	<v.i>		BUILTIN F_DELETE F_PRINT FUNC0 FUNC1 FUNCN OP1 OP4
+%type	<v.i>		MOP0 MOP1
+%type	<v.probe>	probe probeval
 %type	<v.filter>	predicate
 %type	<v.stmt>	action stmt stmtlist
-%type	<v.arg>		arg arglist map marg term
+%type	<v.arg>		expr vargs map mexpr printargs term condition
 %type	<v.rtype>	beginend
 
+%left	'|'
+%left	'&'
 %left	'+' '-'
 %left	'/' '*'
 %%
@@ -134,106 +140,93 @@ beginend	: BEGIN				{ $$ = B_RT_BEGIN; }
 		| END				{ $$ = B_RT_END; }
 		;
 
-probe		: STRING ':' STRING ':' STRING	{ $$ = bp_new($1, $3, $5, 0); }
+probe		: { pflag = 1; } probeval	{ $$ = $2; pflag = 0; }
+
+probeval	: STRING ':' STRING ':' STRING	{ $$ = bp_new($1, $3, $5, 0); }
 		| STRING ':' HZ ':' NUMBER	{ $$ = bp_new($1, "hz", NULL, $5); }
 		;
 
 
-filterval	: PID				{ $$ = B_FV_PID; }
+fval		: PID				{ $$ = B_FV_PID; }
 		| TID				{ $$ = B_FV_TID; }
 		;
 
-oper		: OP_EQ				{ $$ = B_OP_EQ; }
-		| OP_NEQ			{ $$ = B_OP_NE; }
+testop		: OP_EQ				{ $$ = B_AT_OP_EQ; }
+		| OP_NE				{ $$ = B_AT_OP_NE; }
+		| OP_LE				{ $$ = B_AT_OP_LE; }
+		| OP_GE				{ $$ = B_AT_OP_GE; }
+		| OP_LAND			{ $$ = B_AT_OP_LAND; }
+		| OP_LOR			{ $$ = B_AT_OP_LOR; }
+		;
+
+binop		: testop
+		| '+'				{ $$ = B_AT_OP_PLUS; }
+		| '-'				{ $$ = B_AT_OP_MINUS; }
+		| '*'				{ $$ = B_AT_OP_MULT; }
+		| '/'				{ $$ = B_AT_OP_DIVIDE; }
+		| '&'				{ $$ = B_AT_OP_BAND; }
+		| '|'				{ $$ = B_AT_OP_BOR; }
 		;
 
 predicate	: /* empty */			{ $$ = NULL; }
-		| '/' filterval oper NUMBER '/' { $$ = bf_new($3, $2, $4); }
-		| '/' NUMBER oper filterval '/' { $$ = bf_new($3, $4, $2); }
+		| '/' fval testop NUMBER '/'	{ $$ = bf_new($3, $2, $4); }
+		| '/' NUMBER testop fval '/'	{ $$ = bf_new($3, $4, $2); }
+		| '/' condition '/' 		{ $$ = bc_new($2); }
+		;
+
+condition	: gvar				{ $$ = bv_get($1); }
+		| map				{ $$ = $1; }
 		;
 
 builtin		: PID 				{ $$ = B_AT_BI_PID; }
 		| TID 				{ $$ = B_AT_BI_TID; }
-		| COMM 				{ $$ = B_AT_BI_COMM; }
-		| NSECS 			{ $$ = B_AT_BI_NSECS; }
-		| KSTACK			{ $$ = B_AT_BI_KSTACK; }
-		| USTACK			{ $$ = B_AT_BI_USTACK; }
-		| ARG0				{ $$ = B_AT_BI_ARG0; }
-		| ARG1				{ $$ = B_AT_BI_ARG1; }
-		| ARG2				{ $$ = B_AT_BI_ARG2; }
-		| ARG3				{ $$ = B_AT_BI_ARG3; }
-		| ARG4				{ $$ = B_AT_BI_ARG4; }
-		| ARG5				{ $$ = B_AT_BI_ARG5; }
-		| ARG6				{ $$ = B_AT_BI_ARG6; }
-		| ARG7				{ $$ = B_AT_BI_ARG7; }
-		| ARG8				{ $$ = B_AT_BI_ARG8; }
-		| ARG9				{ $$ = B_AT_BI_ARG9; }
-		| RETVAL			{ $$ = B_AT_BI_RETVAL; }
+		| BUILTIN			{ $$ = $1; }
 		;
 
-fn0		: F_EXIT			{ $$ = B_AC_EXIT; }
+mexpr		: MOP0 '(' ')'			{ $$ = ba_new(NULL, $1); }
+		| MOP1 '(' expr ')'		{ $$ = ba_new($3, $1); }
+		| expr				{ $$ = $1; }
 		;
 
-fn1		: F_CLEAR			{ $$ = B_AC_CLEAR; }
-		| F_TIME			{ $$ = B_AC_TIME; }
-		| F_ZERO			{ $$ = B_AC_ZERO; }
-		;
-
-fnN		: F_PRINTF			{ $$ = B_AC_PRINTF; }
-		| F_PRINT			{ $$ = B_AC_PRINT; }
-		;
-
-mfn0		: M_COUNT 			{ $$ = B_AT_MF_COUNT; }
-		;
-
-mfn1		: F_DELETE			{ $$ = B_AC_DELETE; }
-		;
-
-mfnN		: M_MAX				{ $$ = B_AT_MF_MAX; }
-		| M_MIN				{ $$ = B_AT_MF_MIN; }
-		| M_SUM				{ $$ = B_AT_MF_SUM; }
+expr		: CSTRING			{ $$ = ba_new($1, B_AT_STR); }
+		| term
 		;
 
 term		: '(' term ')'			{ $$ = $2; }
-		| term '+' term			{ $$ = ba_op('+', $1, $3); }
-		| term '-' term			{ $$ = ba_op('-', $1, $3); }
-		| term '/' term			{ $$ = ba_op('/', $1, $3); }
-		| term '*' term			{ $$ = ba_op('*', $1, $3); }
+		| term binop term		{ $$ = ba_op($2, $1, $3); }
 		| NUMBER			{ $$ = ba_new($1, B_AT_LONG); }
 		| builtin			{ $$ = ba_new(NULL, $1); }
 		| gvar				{ $$ = bv_get($1); }
 		| map				{ $$ = $1; }
-		;
+
 
 gvar		: '@' STRING			{ $$ = $2; }
 		| '@'				{ $$ = UNNAMED_MAP; }
 
-map		: gvar '[' arg ']'		{ $$ = bm_get($1, $3); }
+map		: gvar '[' vargs ']'		{ $$ = bm_get($1, $3); }
 		;
 
-marg		: arg				{ $$ = $1; }
-		| mfn0 '(' ')'			{ $$ = ba_new(NULL, $1); }
-		| mfnN '(' arg ')'		{ $$ = ba_new($3, $1); }
+vargs		: expr
+		| vargs ',' expr		{ $$ = ba_append($1, $3); }
 		;
 
-arg		: CSTRING			{ $$ = ba_new($1, B_AT_STR); }
-		| term
-		;
-
-arglist		: arg
-		| arglist ',' arg		{ $$ = ba_append($1, $3); }
+printargs	: gvar				{ $$ = bv_get($1); }
+		| gvar ',' expr			{ $$ = ba_append(bv_get($1), $3); }
 		;
 
 NL		: /* empty */ | '\n'
 		;
 
 stmt		: ';' NL			{ $$ = NULL; }
-		| gvar '=' arg			{ $$ = bv_set($1, $3); }
-		| gvar '[' arg ']' '=' marg	{ $$ = bm_set($1, $3, $6); }
-		| fnN '(' arglist ')'		{ $$ = bs_new($1, $3, NULL); }
-		| fn1 '(' arg ')'		{ $$ = bs_new($1, $3, NULL); }
-		| fn0 '(' ')'			{ $$ = bs_new($1, NULL, NULL); }
-		| mfn1 '(' map ')'		{ $$ = bm_fn($1, $3, NULL); }
+		| gvar '=' expr			{ $$ = bv_set($1, $3); }
+		| gvar '[' vargs ']' '=' mexpr	{ $$ = bm_set($1, $3, $6); }
+		| FUNCN '(' vargs ')'		{ $$ = bs_new($1, $3, NULL); }
+		| FUNC1 '(' expr ')'		{ $$ = bs_new($1, $3, NULL); }
+		| FUNC0 '(' ')'			{ $$ = bs_new($1, NULL, NULL); }
+		| F_DELETE '(' map ')'		{ $$ = bm_op($1, $3, NULL); }
+		| F_PRINT '(' printargs ')'	{ $$ = bs_new($1, $3, NULL); }
+		| gvar '=' OP1 '(' expr ')'	{ $$ = bh_inc($1, $5, NULL); }
+		| gvar '=' OP4 '(' expr ',' vargs ')' {$$ = bh_inc($1, $5, $7);}
 		;
 
 stmtlist	: stmt
@@ -252,7 +245,7 @@ br_new(struct bt_probe *probe, struct bt_filter *filter, struct bt_stmt *head,
 {
 	struct bt_rule *br;
 
-	br = calloc(1, sizeof(struct bt_rule));
+	br = calloc(1, sizeof(*br));
 	if (br == NULL)
 		err(1, "bt_rule: calloc");
 	br->br_probe = probe;
@@ -271,23 +264,38 @@ br_new(struct bt_probe *probe, struct bt_filter *filter, struct bt_stmt *head,
 	return br;
 }
 
-/* Create a new filter */
+/* Create a new event filter */
 struct bt_filter *
-bf_new(enum bt_operand op, enum bt_filtervar var, int val)
+bf_new(enum bt_argtype op, enum bt_filtervar var, int val)
 {
-	struct bt_filter *df;
+	struct bt_filter *bf;
 
 	if (val < 0 || val > INT_MAX)
 		errx(1, "invalid pid '%d'", val);
 
-	df = calloc(1, sizeof(struct bt_filter));
-	if (df == NULL)
+	bf = calloc(1, sizeof(*bf));
+	if (bf == NULL)
 		err(1, "bt_filter: calloc");
-	df->bf_op = op;
-	df->bf_var = var;
-	df->bf_val = val;
+	bf->bf_evtfilter.bf_op = op;
+	bf->bf_evtfilter.bf_var = var;
+	bf->bf_evtfilter.bf_val = val;
 
-	return df;
+	return bf;
+}
+
+/* Create a new condition */
+struct bt_filter *
+bc_new(struct bt_arg *ba)
+{
+	struct bt_filter *bf;
+
+	bf = calloc(1, sizeof(*bf));
+	if (bf == NULL)
+		err(1, "bt_filter: calloc");
+
+	bf->bf_condition = bs_new(B_AC_TEST, ba, NULL);
+
+	return bf;
 }
 
 /* Create a new probe */
@@ -299,7 +307,7 @@ bp_new(const char *prov, const char *func, const char *name, int32_t rate)
 	if (rate < 0 || rate > INT32_MAX)
 		errx(1, "only positive values permitted");
 
-	bp = calloc(1, sizeof(struct bt_probe));
+	bp = calloc(1, sizeof(*bp));
 	if (bp == NULL)
 		err(1, "bt_probe: calloc");
 	bp->bp_prov = prov;
@@ -316,7 +324,7 @@ ba_new0(void *val, enum bt_argtype type)
 {
 	struct bt_arg *ba;
 
-	ba = calloc(1, sizeof(struct bt_arg));
+	ba = calloc(1, sizeof(*ba));
 	if (ba == NULL)
 		err(1, "bt_arg: calloc");
 	ba->ba_value = val;
@@ -349,27 +357,8 @@ ba_append(struct bt_arg *da0, struct bt_arg *da1)
 
 /* Create an operator argument */
 struct bt_arg *
-ba_op(const char op, struct bt_arg *da0, struct bt_arg *da1)
+ba_op(enum bt_argtype type, struct bt_arg *da0, struct bt_arg *da1)
 {
-	enum bt_argtype type;
-
-	switch (op) {
-	case '+':
-		type = B_AT_OP_ADD;
-		break;
-	case '-':
-		type = B_AT_OP_MINUS;
-		break;
-	case '*':
-		type = B_AT_OP_MULT;
-		break;
-	case '/':
-		type = B_AT_OP_DIVIDE;
-		break;
-	default:
-		assert(0);
-	}
-
 	return ba_new(ba_append(da0, da1), type);
 }
 
@@ -379,7 +368,7 @@ bs_new(enum bt_action act, struct bt_arg *head, struct bt_var *var)
 {
 	struct bt_stmt *bs;
 
-	bs = calloc(1, sizeof(struct bt_stmt));
+	bs = calloc(1, sizeof(*bs));
 	if (bs == NULL)
 		err(1, "bt_stmt: calloc");
 	bs->bs_act = act;
@@ -438,7 +427,7 @@ bv_new(const char *vname)
 {
 	struct bt_var *bv;
 
-	bv = calloc(1, sizeof(struct bt_var));
+	bv = calloc(1, sizeof(*bv));
 	if (bv == NULL)
 		err(1, "bt_var: calloc");
 	bv->bv_name = vname;
@@ -473,7 +462,7 @@ bv_get(const char *vname)
 }
 
 struct bt_stmt *
-bm_fn(enum bt_action mact, struct bt_arg *ba, struct bt_arg *mval)
+bm_op(enum bt_action mact, struct bt_arg *ba, struct bt_arg *mval)
 {
 	return bs_new(mact, ba, (struct bt_var *)mval);
 }
@@ -505,9 +494,64 @@ bm_get(const char *mname, struct bt_arg *mkey)
 	return ba;
 }
 
+/*
+ * Histograms implemented using associative arrays (maps).  In the case
+ * of linear histograms `ba_key' points to a list of (min, max, step)
+ * necessary to "bucketize" any value.
+ */
+struct bt_stmt *
+bh_inc(const char *hname, struct bt_arg *hval, struct bt_arg *hrange)
+{
+	struct bt_arg *ba;
+	struct bt_var *bv;
+
+	if (hrange == NULL) {
+		/* Power-of-2 histogram */
+	} else {
+		long min, max;
+		int count = 0;
+
+		/* Linear histogram */
+		for (ba = hrange; ba != NULL; ba = SLIST_NEXT(ba, ba_next)) {
+			if (++count > 3)
+				yyerror("too many arguments");
+			if (ba->ba_type != B_AT_LONG)
+				yyerror("type invalid");
+
+			switch (count) {
+			case 1:
+				min = (long)ba->ba_value;
+				if (min >= 0)
+					break;
+				yyerror("negative minium");
+			case 2:
+				max = (long)ba->ba_value;
+				if (max > min)
+					break;
+				yyerror("maximum smaller than minium (%d < %d)",
+				    max,  min);
+			case 3:
+				break;
+			default:
+				assert(0);
+			}
+		}
+		if (count < 3)
+			yyerror("%d missing arguments", 3 - count);
+	}
+
+	bv = bv_find(hname);
+	if (bv == NULL)
+		bv = bv_new(hname);
+	ba = ba_new(bv, B_AT_HIST);
+	ba->ba_key = hrange;
+	return bs_new(B_AC_BUCKETIZE, ba, (struct bt_var *)hval);
+}
+
 struct keyword {
 	const char	*word;
 	int		 token;
+	int		 type;
 };
 
 int
@@ -516,52 +560,47 @@ kw_cmp(const void *str, const void *xkw)
 	return (strcmp(str, ((const struct keyword *)xkw)->word));
 }
 
-int
+struct keyword *
 lookup(char *s)
 {
 	static const struct keyword kws[] = {
-		{ "!=",		OP_NEQ },
-		{ "==",		OP_EQ },
-		{ "BEGIN",	BEGIN },
-		{ "END",	END },
-		{ "arg0",	ARG0 },
-		{ "arg1",	ARG1 },
-		{ "arg2",	ARG2 },
-		{ "arg3",	ARG3 },
-		{ "arg4",	ARG4 },
-		{ "arg5",	ARG5 },
-		{ "arg6",	ARG6 },
-		{ "arg7",	ARG7 },
-		{ "arg8",	ARG8 },
-		{ "arg9",	ARG9 },
-		{ "clear",	F_CLEAR },
-		{ "comm",	COMM },
-		{ "count",	M_COUNT },
-		{ "delete",	F_DELETE },
-		{ "exit",	F_EXIT },
-		{ "hz",		HZ },
-		{ "kstack",	KSTACK },
-		{ "max",	M_MAX },
-		{ "min",	M_MIN },
-		{ "nsecs",	NSECS },
-		{ "pid",	PID },
-		{ "print",	F_PRINT },
-		{ "printf",	F_PRINTF },
-		{ "retval",	RETVAL },
-		{ "sum",	M_SUM },
-		{ "tid",	TID },
-		{ "time",	F_TIME },
-		{ "ustack",	USTACK },
-		{ "zero",	F_ZERO },
+		{ "BEGIN",	BEGIN,		0 },
+		{ "END",	END,		0 },
+		{ "arg0",	BUILTIN,	B_AT_BI_ARG0 },
+		{ "arg1",	BUILTIN,	B_AT_BI_ARG1 },
+		{ "arg2",	BUILTIN,	B_AT_BI_ARG2 },
+		{ "arg3",	BUILTIN,	B_AT_BI_ARG3 },
+		{ "arg4",	BUILTIN,	B_AT_BI_ARG4 },
+		{ "arg5",	BUILTIN,	B_AT_BI_ARG5 },
+		{ "arg6",	BUILTIN,	B_AT_BI_ARG6 },
+		{ "arg7",	BUILTIN,	B_AT_BI_ARG7 },
+		{ "arg8",	BUILTIN,	B_AT_BI_ARG8 },
+		{ "arg9",	BUILTIN,	B_AT_BI_ARG9 },
+		{ "clear",	FUNC1,		B_AC_CLEAR },
+		{ "comm",	BUILTIN,	B_AT_BI_COMM },
+		{ "count",	MOP0, 		B_AT_MF_COUNT },
+		{ "cpu",	BUILTIN,	B_AT_BI_CPU },
+		{ "delete",	F_DELETE,	B_AC_DELETE },
+		{ "exit",	FUNC0,		B_AC_EXIT },
+		{ "hist",	OP1,		0 },
+		{ "hz",		HZ,		0 },
+		{ "kstack",	BUILTIN,	B_AT_BI_KSTACK },
+		{ "lhist",	OP4,		0 },
+		{ "max",	MOP1,		B_AT_MF_MAX },
+		{ "min",	MOP1,		B_AT_MF_MIN },
+		{ "nsecs",	BUILTIN,	B_AT_BI_NSECS },
+		{ "pid",	PID,		0 /*B_AT_BI_PID*/ },
+		{ "print",	F_PRINT,	B_AC_PRINT },
+		{ "printf",	FUNCN,		B_AC_PRINTF },
+		{ "retval",	BUILTIN,	B_AT_BI_RETVAL },
+		{ "sum",	MOP1,		B_AT_MF_SUM },
+		{ "tid",	TID,		0 /*B_AT_BI_TID*/ },
+		{ "time",	FUNC1,		B_AC_TIME },
+		{ "ustack",	BUILTIN,	B_AT_BI_USTACK },
+		{ "zero",	FUNC1,		B_AC_ZERO },
 	};
-	const struct keyword	*kw;
 
-	kw = bsearch(s, kws, nitems(kws), sizeof(kws[0]), kw_cmp);
-	if (kw != NULL) {
-		return kw->token;
-	} else {
-		return STRING;
-	}
+	return bsearch(s, kws, nitems(kws), sizeof(kws[0]), kw_cmp);
 }
 
 int
@@ -600,7 +639,7 @@ yylex(void)
 {
 	unsigned char	 buf[1024];
 	unsigned char	*ebuf, *p, *str;
-	int		 c, token;
+	int		 c;
 
 	ebuf = buf + sizeof(buf);
 	p = buf;
@@ -634,14 +673,29 @@ again:
 		for (pc = 0, c = lgetc(); c != EOF; c = lgetc()) {
 			if (pc == '*' && c == '/')
 				goto again;
+			else if (c == '\n')
+				yylval.lineno++;
 			pc = c;
 		}
 	}
 
 	switch (c) {
+	case '!':
 	case '=':
-		if (peek() == '=')
-			break;
+		if (peek() == '=') {
+			lgetc();
+			return (c == '=') ? OP_EQ : OP_NE;
+		}
+	case '&':
+		if (peek() == '&') {
+			lgetc();
+			return OP_LAND;
+		}
+	case '|':
+		if (peek() == '|') {
+			lgetc();
+			return OP_LOR;
+		}
 	case ',':
 	case '(':
 	case ')':
@@ -695,7 +749,7 @@ again:
 	}
 
 #define allowed_to_end_number(x) \
-	(isspace(x) || x == ')' || x == '/' || x == '{' || x == ';' || x == ']')
+    (isspace(x) || x == ')' || x == '/' || x == '{' || x == ';' || x == ']' || x == ',')
 
 	/* parsing number */
 	if (isdigit(c)) {
@@ -728,10 +782,11 @@ again:
 		}
 	}
 
-#define allowed_in_string(x) (isalnum(c) || c == '!' || c == '=' || c == '_')
+#define allowed_in_string(x) (isalnum(c) || c == '_')
 
 	/* parsing next word */
 	if (allowed_in_string(c)) {
+		struct keyword *kwp;
 		do {
 			*p++ = c;
 			if (p == ebuf) {
@@ -741,10 +796,27 @@ again:
 		} while ((c = lgetc()) != EOF && (allowed_in_string(c)));
 		lungetc();
 		*p = '\0';
-		if ((token = lookup(buf)) == STRING)
+		kwp = lookup(buf);
+		if (kwp == NULL) {
 			if ((yylval.v.string = strdup(buf)) == NULL)
 				err(1, "%s", __func__);
-		return token;
+			return STRING;
+		}
+		if (pflag) {
+			/*
+			 * Probe lexer backdoor, interpret the token as a string
+			 * rather than a keyword. Otherwise, reserved keywords
+			 * would conflict with syscall names. The exception to
+			 * this is 'hz', which hopefully will never be a
+			 * syscall.
+			 */
+			if (kwp->token != HZ) {
+				yylval.v.string = kwp->word;
+				return STRING;
+			}
+		}
+		yylval.v.i = kwp->type;
+		return kwp->token;
 	}
 
 	if (c == '\n') {

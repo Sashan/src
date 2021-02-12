@@ -1,4 +1,4 @@
-/*	$OpenBSD: slowcgi.c,v 1.55 2018/10/19 08:13:34 claudio Exp $ */
+/*	$OpenBSD: slowcgi.c,v 1.58 2021/01/08 22:05:34 millert Exp $ */
 /*
  * Copyright (c) 2013 David Gwynne <dlg@openbsd.org>
  * Copyright (c) 2013 Florian Obser <florian@openbsd.org>
@@ -166,8 +166,7 @@ struct fcgi_end_request_body {
 __dead void	usage(void);
 int		slowcgi_listen(char *, struct passwd *);
 void		slowcgi_paused(int, short, void *);
-int		accept_reserve(int, struct sockaddr *, socklen_t *, int,
-		    volatile int *);
+int		accept_reserve(int, struct sockaddr *, socklen_t *, int, int *);
 void		slowcgi_accept(int, short, void *);
 void		slowcgi_request(int, short, void *);
 void		slowcgi_response(int, short, void *);
@@ -300,7 +299,7 @@ main(int argc, char *argv[])
 	while ((c = getopt(argc, argv, "dp:s:U:u:")) != -1) {
 		switch (c) {
 		case 'd':
-			debug = 1;
+			debug++;
 			break;
 		case 'p':
 			chrootpath = optarg;
@@ -406,8 +405,7 @@ slowcgi_listen(char *path, struct passwd *pw)
 		if (errno != ENOENT)
 			lerr(1, "slowcgi_listen: unlink %s", path);
 
-	old_umask = umask(S_IXUSR|S_IXGRP|S_IWOTH|S_IROTH|
-	    S_IXOTH);
+	old_umask = umask(S_IXUSR|S_IXGRP|S_IWOTH|S_IROTH|S_IXOTH);
 
 	if (bind(fd, (struct sockaddr *)&sun, sizeof(sun)) == -1)
 		lerr(1,"slowcgi_listen: bind: %s", path);
@@ -433,7 +431,7 @@ slowcgi_paused(int fd, short events, void *arg)
 
 int
 accept_reserve(int sockfd, struct sockaddr *addr, socklen_t *addrlen,
-	int reserve, volatile int *counter)
+    int reserve, int *counter)
 {
 	int ret;
 	if (getdtablecount() + reserve +
@@ -606,7 +604,7 @@ slowcgi_response(int fd, short events, void *arg)
 
 	while ((resp = TAILQ_FIRST(&c->response_head))) {
 		header = (struct fcgi_record_header*) resp->data;
-		if (debug)
+		if (debug > 1)
 			dump_fcgi_record("resp ", header);
 
 		n = write(fd, resp->data + resp->data_pos, resp->data_len);
@@ -708,6 +706,7 @@ parse_begin_request(uint8_t *buf, uint16_t n, struct request *c, uint16_t id)
 	SLIST_INIT(&c->env);
 	c->env_count = 0;
 }
+
 void
 parse_params(uint8_t *buf, uint16_t n, struct request *c, uint16_t id)
 {
@@ -842,7 +841,7 @@ parse_record(uint8_t *buf, size_t n, struct request *c)
 
 	h = (struct fcgi_record_header*) buf;
 
-	if (debug)
+	if (debug > 1)
 		dump_fcgi_record("", h);
 
 	if (n < sizeof(struct fcgi_record_header) + ntohs(h->content_len)
@@ -1292,9 +1291,6 @@ void
 syslog_debug(const char *fmt, ...)
 {
 	va_list ap;
-
-	if (!debug)
-		return;
 
 	va_start(ap, fmt);
 	vsyslog(LOG_DEBUG, fmt, ap);

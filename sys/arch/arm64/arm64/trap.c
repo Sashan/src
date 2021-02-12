@@ -1,4 +1,4 @@
-/* $OpenBSD: trap.c,v 1.27 2020/01/06 12:37:30 kettenis Exp $ */
+/* $OpenBSD: trap.c,v 1.35 2021/01/25 19:37:18 kettenis Exp $ */
 /*-
  * Copyright (c) 2014 Andrew Turner
  * All rights reserved.
@@ -65,15 +65,30 @@ void do_el0_error(struct trapframe *);
 
 void dumpregs(struct trapframe*);
 
+/* Check whether we're executing an unprivileged load/store instruction. */
+static inline int
+is_unpriv_ldst(uint64_t elr)
+{
+	uint32_t insn = *(uint32_t *)elr;
+	return ((insn & 0x3f200c00) == 0x38000800);
+}
+
+static inline int
+accesstype(uint64_t esr, int exe)
+{
+	if (exe)
+		return PROT_EXEC;
+	return (!(esr & ISS_DATA_CM) && (esr & ISS_DATA_WnR)) ?
+	    PROT_WRITE : PROT_READ;
+}
+
 static void
-data_abort(struct trapframe *frame, uint64_t esr, uint64_t far,
-    int lower, int exe)
+udata_abort(struct trapframe *frame, uint64_t esr, uint64_t far, int exe)
 {
 	struct vm_map *map;
 	struct proc *p;
 	struct pcb *pcb;
-	vm_fault_t ftype;
-	vm_prot_t access_type;
+	vm_prot_t access_type = accesstype(esr, exe);
 	vaddr_t va;
 	union sigval sv;
 	int error = 0, sig, code;
@@ -85,85 +100,100 @@ data_abort(struct trapframe *frame, uint64_t esr, uint64_t far,
 	if (va >= VM_MAXUSER_ADDRESS)
 		curcpu()->ci_flush_bp();
 
-	if (lower) {
-		switch (esr & ISS_DATA_DFSC_MASK) {
-		case ISS_DATA_DFSC_ALIGN:
-			sv.sival_ptr = (void *)far;
-			KERNEL_LOCK();
-			trapsignal(p, SIGBUS, 0, BUS_ADRALN, sv);
-			KERNEL_UNLOCK();
-			return;
-		default:
-			break;
-		}
+	switch (esr & ISS_DATA_DFSC_MASK) {
+	case ISS_DATA_DFSC_ALIGN:
+		sv.sival_ptr = (void *)far;
+		trapsignal(p, SIGBUS, 0, BUS_ADRALN, sv);
+		return;
+	default:
+		break;
 	}
 
-	if (lower)
-		map = &p->p_vmspace->vm_map;
-	else {
-		/* The top bit tells us which range to use */
-		if ((far >> 63) == 1)
-			map = kernel_map;
-		else
-			map = &p->p_vmspace->vm_map;
+	map = &p->p_vmspace->vm_map;
+
+	if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+	    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+	    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+		return;
+
+	/* Handle referenced/modified emulation */
+	if (pmap_fault_fixup(map->pmap, va, access_type))
+		return;
+
+	KERNEL_LOCK();
+	error = uvm_fault(map, va, 0, access_type);
+	KERNEL_UNLOCK();
+
+	if (error == 0) {
+		uvm_grow(p, va);
+		return;
 	}
 
-	if (exe)
-		access_type = PROT_EXEC;
-	else
-		access_type = (!(esr & ISS_DATA_CM) && (esr & ISS_DATA_WnR)) ?
-		    PROT_WRITE : PROT_READ;
-
-	ftype = VM_FAULT_INVALID; // should check for failed permissions.
-
-	if (map != kernel_map) {
-		/* Fault in the user page: */
-		if (!pmap_fault_fixup(map->pmap, va, access_type, 1)) {
-			KERNEL_LOCK();
-			error = uvm_fault(map, va, ftype, access_type);
-			KERNEL_UNLOCK();
-		}
+	if (error == ENOMEM) {
+		sig = SIGKILL;
+		code = 0;
+	} else if (error == EIO) {
+		sig = SIGBUS;
+		code = BUS_OBJERR;
+	} else if (error == EACCES) {
+		sig = SIGSEGV;
+		code = SEGV_ACCERR;
 	} else {
+		sig = SIGSEGV;
+		code = SEGV_MAPERR;
+	}
+	sv.sival_ptr = (void *)far;
+	trapsignal(p, sig, 0, code, sv);
+}
+
+static void
+kdata_abort(struct trapframe *frame, uint64_t esr, uint64_t far, int exe)
+{
+	struct vm_map *map;
+	struct proc *p;
+	struct pcb *pcb;
+	vm_prot_t access_type = accesstype(esr, exe);
+	vaddr_t va;
+	int error = 0;
+
+	pcb = curcpu()->ci_curpcb;
+	p = curcpu()->ci_curproc;
+
+	va = trunc_page(far);
+
+	/* The top bit tells us which range to use */
+	if ((far >> 63) == 1)
+		map = kernel_map;
+	else {
 		/*
-		 * Don't have to worry about process locking or stacks in the
-		 * kernel.
+		 * Only allow user-space access using
+		 * unprivileged load/store instructions.
 		 */
-		if (!pmap_fault_fixup(map->pmap, va, access_type, 0)) {
-			KERNEL_LOCK();
-			error = uvm_fault(map, va, ftype, access_type);
-			KERNEL_UNLOCK();
+		if (!is_unpriv_ldst(frame->tf_elr)) {
+			panic("attempt to access user address"
+			      " 0x%llx from EL1", far);
 		}
+		map = &p->p_vmspace->vm_map;
+	}
+
+	/* Handle referenced/modified emulation */
+	if (!pmap_fault_fixup(map->pmap, va, access_type)) {
+		KERNEL_LOCK();
+		error = uvm_fault(map, va, 0, access_type);
+		KERNEL_UNLOCK();
+
+		if (error == 0 && map != kernel_map)
+			uvm_grow(p, va);
 	}
 
 	if (error != 0) {
-		if (lower) {
-			if (error == ENOMEM) {
-				sig = SIGKILL;
-				code = 0;
-			} else if (error == EIO) {
-				sig = SIGBUS;
-				code = BUS_OBJERR;
-			} else if (error == EACCES) {
-				sig = SIGSEGV;
-				code = SEGV_ACCERR;
-			} else {
-				sig = SIGSEGV;
-				code = SEGV_MAPERR;
-			}
-			sv.sival_ptr = (void *)far;
-
-			KERNEL_LOCK();
-			trapsignal(p, sig, 0, code, sv);
-			KERNEL_UNLOCK();
-		} else {
-			if (curcpu()->ci_idepth == 0 &&
-			    pcb->pcb_onfault != 0) {
-				frame->tf_elr = (register_t)pcb->pcb_onfault;
-				return;
-			}
-			panic("uvm_fault failed: %lx esr %llx far %llx",
-			    frame->tf_elr, esr, far);
+		if (curcpu()->ci_idepth == 0 &&
+		    pcb->pcb_onfault != 0) {
+			frame->tf_elr = (register_t)pcb->pcb_onfault;
+			return;
 		}
+		panic("uvm_fault failed: %lx esr %llx far %llx",
+		    frame->tf_elr, esr, far);
 	}
 }
 
@@ -199,7 +229,7 @@ do_el1h_sync(struct trapframe *frame)
 	case EXCP_TRAP_FP:
 		panic("VFP exception in the kernel");
 	case EXCP_DATA_ABORT:
-		data_abort(frame, esr, far, 0, 0);
+		kdata_abort(frame, esr, far, 0);
 		break;
 	case EXCP_BRK:
 	case EXCP_WATCHPT_EL1:
@@ -244,19 +274,13 @@ do_el0_sync(struct trapframe *frame)
 
 	p->p_addr->u_pcb.pcb_tf = frame;
 	refreshcreds(p);
-	if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-	    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-	    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-		goto out;
 
 	switch (exception) {
 	case EXCP_UNKNOWN:
 		vfp_save();
 		curcpu()->ci_flush_bp();
 		sv.sival_ptr = (void *)frame->tf_elr;
-		KERNEL_LOCK();
 		trapsignal(p, SIGILL, 0, ILL_ILLOPC, sv);
-		KERNEL_UNLOCK();
 		break;
 	case EXCP_FP_SIMD:
 	case EXCP_TRAP_FP:
@@ -268,41 +292,33 @@ do_el0_sync(struct trapframe *frame)
 		break;
 	case EXCP_INSN_ABORT_L:
 		vfp_save();
-		data_abort(frame, esr, far, 1, 1);
+		udata_abort(frame, esr, far, 1);
 		break;
 	case EXCP_PC_ALIGN:
 		vfp_save();
 		curcpu()->ci_flush_bp();
 		sv.sival_ptr = (void *)frame->tf_elr;
-		KERNEL_LOCK();
 		trapsignal(p, SIGBUS, 0, BUS_ADRALN, sv);
-		KERNEL_UNLOCK();
 		break;
 	case EXCP_SP_ALIGN:
 		vfp_save();
 		curcpu()->ci_flush_bp();
 		sv.sival_ptr = (void *)frame->tf_sp;
-		KERNEL_LOCK();
 		trapsignal(p, SIGBUS, 0, BUS_ADRALN, sv);
-		KERNEL_UNLOCK();
 		break;
 	case EXCP_DATA_ABORT_L:
 		vfp_save();
-		data_abort(frame, esr, far, 1, 0);
+		udata_abort(frame, esr, far, 0);
 		break;
 	case EXCP_BRK:
 		vfp_save();
 		sv.sival_ptr = (void *)frame->tf_elr;
-		KERNEL_LOCK();
 		trapsignal(p, SIGTRAP, 0, TRAP_BRKPT, sv);
-		KERNEL_UNLOCK();
 		break;
 	case EXCP_SOFTSTP_EL0:
 		vfp_save();
 		sv.sival_ptr = (void *)frame->tf_elr;
-		KERNEL_LOCK();
 		trapsignal(p, SIGTRAP, 0, TRAP_TRACE, sv);
-		KERNEL_UNLOCK();
 		break;
 	default:
 		// panic("Unknown userland exception %x esr_el1 %lx\n", exception,
@@ -318,7 +334,7 @@ do_el0_sync(struct trapframe *frame)
 		sigexit(p, SIGILL);
 		KERNEL_UNLOCK();
 	}
-out:
+
 	userret(p);
 }
 
@@ -326,4 +342,19 @@ void
 do_el0_error(struct trapframe *frame)
 {
 	panic("do_el0_error");
+}
+
+void
+dumpregs(struct trapframe *frame)
+{
+	int i;
+
+	for (i = 0; i < 30; i += 2) {
+		printf("x%02d: 0x%016lx 0x%016lx\n",
+		    i, frame->tf_x[i], frame->tf_x[i+1]);
+	}
+	printf("sp: 0x%016lx\n", frame->tf_sp);
+	printf("lr: 0x%016lx\n", frame->tf_lr);
+	printf("pc: 0x%016lx\n", frame->tf_elr);
+	printf("spsr: 0x%016lx\n", frame->tf_spsr);
 }

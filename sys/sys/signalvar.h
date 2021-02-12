@@ -1,4 +1,4 @@
-/*	$OpenBSD: signalvar.h,v 1.40 2020/03/13 09:25:21 mpi Exp $	*/
+/*	$OpenBSD: signalvar.h,v 1.45 2020/11/08 20:37:24 mpi Exp $	*/
 /*	$NetBSD: signalvar.h,v 1.17 1996/04/22 01:23:31 christos Exp $	*/
 
 /*
@@ -86,9 +86,9 @@ struct	sigacts {
  * Clear a pending signal from a process.
  */
 #define CLRSIG(p, sig)	do {						\
-	int _mask = sigmask(sig);					\
-	atomic_clearbits_int(&(p)->p_siglist, _mask);			\
-	atomic_clearbits_int(&(p)->p_p->ps_siglist, _mask);		\
+	int __mask = sigmask(sig);					\
+	atomic_clearbits_int(&(p)->p_siglist, __mask);			\
+	atomic_clearbits_int(&(p)->p_p->ps_siglist, __mask);		\
 } while (0)
 
 /*
@@ -122,12 +122,13 @@ void	pgsignal(struct pgrp *pgrp, int sig, int checkctty);
 void	psignal(struct proc *p, int sig);
 void	ptsignal(struct proc *p, int sig, enum signal_type type);
 #define prsignal(pr,sig)	ptsignal((pr)->ps_mainproc, (sig), SPROCESS)
-void	siginit(struct process *);
+void	siginit(struct sigacts *);
 void	trapsignal(struct proc *p, int sig, u_long code, int type,
 	    union sigval val);
 void	sigexit(struct proc *, int);
+void	sigabort(struct proc *);
+int	sigismasked(struct proc *, int);
 int	sigonstack(size_t);
-void	setsigvec(struct proc *, int, struct sigaction *);
 int	killpg1(struct proc *, int, int, int);
 
 void	signal_init(void);
@@ -139,6 +140,6 @@ void	sigactsfree(struct process *);
 /*
  * Machine-dependent functions:
  */
-void	sendsig(sig_t _catcher, int _sig, sigset_t _mask, const siginfo_t *_si);
+int	sendsig(sig_t _catcher, int _sig, sigset_t _mask, const siginfo_t *_si);
 #endif	/* _KERNEL */
 #endif	/* !_SYS_SIGNALVAR_H_ */

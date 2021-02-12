@@ -1,6 +1,6 @@
 define(MACHINE,sparc64)dnl
 vers(__file__,
-	{-$OpenBSD: MAKEDEV.md,v 1.91 2020/01/23 02:47:29 dlg Exp $-},
+	{-$OpenBSD: MAKEDEV.md,v 1.96 2021/01/23 05:08:33 thfr Exp $-},
 etc.MACHINE)dnl
 dnl
 dnl Copyright (c) 2001-2006 Todd T. Fries <todd@OpenBSD.org>
@@ -104,6 +104,7 @@ _DEV(uall)
 _DEV(ugen, 92)
 _DEV(uhid, 91)
 _DEV(fido, 137)
+_DEV(ujoy, 139)
 _DEV(ulpt, 93)
 _DEV(usb, 90)
 _TITLE(spec)
@@ -134,6 +135,7 @@ _DEV(vldc_spds, 132)
 _DEV(vldc_ldom, 132)
 _DEV(vdsp, 133)
 _DEV(switch, 136)
+_DEV(kstat, 51)
 dnl
 divert(__mddivert)dnl
 dnl
@@ -146,6 +148,7 @@ _std(2, 3, 76, 16)
 	M openprom	c 70 0 600
 	M mdesc		c 70 1 640 kmem
 	M pri		c 70 2 640 kmem
+	M vcons0	c 125 0 600
 	;;
 dnl
 dnl *** sparc64 specific targets
@@ -157,7 +160,7 @@ twrget(wscons, wscons, ttyG, cfg, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, a, b)dnl
 twrget(wscons, wscons, ttyH, cfg, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, a, b)dnl
 twrget(wscons, wscons, ttyI, cfg, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, a, b)dnl
 twrget(wscons, wscons, ttyJ, cfg, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, a, b)dnl
-twrget(all, au, audio, 0, 1, 2)dnl
+twrget(all, au, audio, 0, 1, 2, 3)dnl
 target(all, ch, 0)dnl
 target(all, vscsi, 0)dnl
 target(all, diskmap)dnl
@@ -177,8 +180,8 @@ target(all, drm, 0, 1, 2, 3)dnl
 target(all, switch, 0, 1, 2, 3)dnl
 twrget(all, s64_tzs, tty, a, b, c, d)dnl
 twrget(all, s64_czs, cua, a, b, c, d)dnl
-twrget(all, vcc, ttyV, 0, 1, 2, 3, 4, 5, 6, 7)dnl
+twrget(all, vcc, ttyV, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, a, b, c, d, e, f)dnl
 twrget(all, vldc_hvctl, hvctl)dnl
 twrget(all, vldc_spds, spds)dnl
-twrget(all, vldc_ldom, ldom, 0, 1, 2, 3, 4, 5, 6, 7)dnl
+twrget(all, vldc_ldom, ldom, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)dnl
 target(all, vdsp, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)dnl

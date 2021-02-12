@@ -1,4 +1,4 @@
-/*	$OpenBSD: pcivar.h,v 1.72 2019/06/25 16:46:33 kettenis Exp $	*/
+/*	$OpenBSD: pcivar.h,v 1.74 2020/09/08 20:13:52 kettenis Exp $	*/
 /*	$NetBSD: pcivar.h,v 1.23 1997/06/06 23:48:05 thorpej Exp $	*/
 
 /*
@@ -237,6 +237,8 @@ int	pci_get_capability(pci_chipset_tag_t, pcitag_t, int,
 	    int *, pcireg_t *);
 int	pci_get_ht_capability(pci_chipset_tag_t, pcitag_t, int,
 	    int *, pcireg_t *);
+int	pci_get_ext_capability(pci_chipset_tag_t, pcitag_t, int,
+	    int *, pcireg_t *);
 
 struct msix_vector;
 
@@ -246,6 +248,8 @@ void	pci_suspend_msix(pci_chipset_tag_t, pcitag_t, bus_space_tag_t,
 	    pcireg_t *, struct msix_vector *);
 void	pci_resume_msix(pci_chipset_tag_t, pcitag_t, bus_space_tag_t,
 	    pcireg_t, struct msix_vector *);
+
+int	pci_intr_msix_count(pci_chipset_tag_t, pcitag_t);
 
 uint16_t pci_requester_id(pci_chipset_tag_t, pcitag_t);
 

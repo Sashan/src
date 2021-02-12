@@ -1,4 +1,4 @@
-/*	$OpenBSD: zic.c,v 1.23 2019/01/12 15:33:17 schwarze Exp $	*/
+/*	$OpenBSD: zic.c,v 1.26 2020/10/13 00:18:46 deraadt Exp $	*/
 /*
 ** This file is in the public domain, so clarified as of
 ** 2006-07-17 by Arthur David Olson.
@@ -45,13 +45,12 @@ typedef int_fast64_t	zic_t;
 #define end(cp, n)	(memchr((cp), '\0', (n)))
 
 struct rule {
-	const char 	*r_filename;
+	const char	*r_filename;
 	int		r_linenum;
-	const char 	*r_name;
+	const char	*r_name;
 
 	int		r_loyear;	/* for example, 1986 */
 	int		r_hiyear;	/* for example, 1986 */
-	const char 	*r_yrtype;
 	int		r_lowasnum;
 	int		r_hiwasnum;
 
@@ -67,7 +66,7 @@ struct rule {
 	int		r_todisgmt;	/* above is GMT if TRUE */
 					/* or local time if FALSE */
 	long		r_stdoff;	/* offset from standard time */
-	const char 	*r_abbrvar;	/* variable part of abbreviation */
+	const char	*r_abbrvar;	/* variable part of abbreviation */
 
 	int		r_todo;		/* a rule to do (used in outzone) */
 	zic_t		r_temp;		/* used in outzone */
@@ -82,17 +81,17 @@ struct rule {
 #define DC_DOWLEQ	2	/* 1..31 */	/* 0..6 (Sun..Sat) */
 
 struct zone {
-	const char 	*z_filename;
+	const char	*z_filename;
 	int		z_linenum;
 
-	const char 	*z_name;
+	const char	*z_name;
 	long		z_gmtoff;
-	const char 	*z_rule;
-	const char 	*z_format;
+	const char	*z_rule;
+	const char	*z_format;
 
 	long		z_stdoff;
 
-	struct rule 	*z_rules;
+	struct rule	*z_rules;
 	int		z_nrules;
 
 	struct rule	z_untilrule;
@@ -137,22 +136,21 @@ static zic_t	rpytime(const struct rule *rp, int wantedy);
 static void	rulesub(struct rule *rp, const char *loyearp, const char *hiyearp,
 	    const char *typep, const char *monthp,
 	    const char *dayp, const char *timep);
-static int 	stringoffset(char *result, size_t size, long offset);
+static int	stringoffset(char *result, size_t size, long offset);
 static int	stringrule(char *result, size_t size, const struct rule *rp,
 	    long dstoff, long gmtoff);
-static void 	stringzone(char *result, size_t size,
+static void	stringzone(char *result, size_t size,
 	    const struct zone *zp, int ntzones);
 static void	setboundaries(void);
 static zic_t	tadd(zic_t t1, long t2);
 static void	usage(void);
 static void	writezone(const char *name, const char *string);
-static int	yearistype(int year, const char *type);
 
-extern char 	*__progname;
+extern char	*__progname;
 
 static int		charcnt;
 static int		errors;
-static const char 	*filename;
+static const char	*filename;
 static int		leapcnt;
 static int		leapseen;
 static int		leapminyear;
@@ -165,7 +163,7 @@ static int		max_year;
 static zic_t		min_time;
 static int		min_year;
 static int		noise;
-static const char 	*rfilename;
+static const char	*rfilename;
 static int		rlinenum;
 static int		timecnt;
 static int		typecnt;
@@ -251,28 +249,28 @@ static int		typecnt;
 #define YR_MAXIMUM	1
 #define YR_ONLY		2
 
-static struct rule 	*rules;
+static struct rule	*rules;
 static int		nrules;	/* number of rules */
 
-static struct zone 	*zones;
+static struct zone	*zones;
 static int		nzones;	/* number of zones */
 
 struct link {
-	const char 	*l_filename;
+	const char	*l_filename;
 	int		l_linenum;
-	const char 	*l_from;
-	const char 	*l_to;
+	const char	*l_from;
+	const char	*l_to;
 };
 
-static struct link 	*links;
+static struct link	*links;
 static int		nlinks;
 
 struct lookup {
-	const char 	*l_word;
+	const char	*l_word;
 	const int	l_value;
 };
 
-static struct lookup const 	*byword(const char *string, const struct lookup *lp);
+static struct lookup const	*byword(const char *string, const struct lookup *lp);
 
 static struct lookup const	line_codes[] = {
 	{ "Rule",	LC_RULE },
@@ -431,7 +429,7 @@ error(const char *string)
 static void
 warning(const char *string)
 {
-	char 	*cp;
+	char	*cp;
 
 	cp = ecpyalloc("warning: ");
 	cp = ecatalloc(cp, string);
@@ -444,8 +442,8 @@ warning(const char *string)
 static const char *
 scheck(const char *string, const char *format)
 {
-	const char 	*fp, *result;
-	char 		*fbuf, *tp, dummy;
+	const char	*fp, *result;
+	char		*fbuf, *tp, dummy;
 	int		c;
 
 	result = "";
@@ -491,16 +489,15 @@ usage(void)
 {
 	fprintf(stderr,
 	    "usage: %s [-v] [-d directory] [-L leapsecondfilename] [-l timezone]\n"
-	    "\t\t[-p timezone] [-y command] [filename ...]\n",
+	    "\t\t[-p timezone] [filename ...]\n",
 		__progname);
 	exit(EXIT_FAILURE);
 }
 
-static const char 	*psxrules;
-static const char 	*lcltime;
-static const char 	*directory;
-static const char 	*leapsec;
-static const char 	*yitcommand;
+static const char	*psxrules;
+static const char	*lcltime;
+static const char	*directory;
+static const char	*leapsec;
 
 int
 main(int argc, char **argv)
@@ -534,10 +531,7 @@ main(int argc, char **argv)
 					errx(1, "More than one -p option specified");
 				break;
 			case 'y':
-				if (yitcommand == NULL)
-					yitcommand = optarg;
-				else
-					errx(1, "More than one -y option specified");
+				warning("ignoring obsolescent option -y");
 				break;
 			case 'L':
 				if (leapsec == NULL)
@@ -553,8 +547,6 @@ main(int argc, char **argv)
 		usage();	/* usage message by request */
 	if (directory == NULL)
 		directory = TZDIR;
-	if (yitcommand == NULL)
-		yitcommand = "yearistype";
 
 	setboundaries();
 
@@ -602,7 +594,7 @@ main(int argc, char **argv)
 static void
 dolink(const char *fromfield, const char *tofield)
 {
-	char 	*fromname, *toname;
+	char	*fromname, *toname;
 
 	if (fromfield[0] == '/')
 		fromname = ecpyalloc(fromfield);
@@ -656,7 +648,7 @@ setboundaries(void)
 static int
 itsdir(const char *name)
 {
-	char 	*myname;
+	char	*myname;
 	int	accres;
 
 	myname = ecpyalloc(name);
@@ -684,8 +676,8 @@ rcomp(const void *cp1, const void *cp2)
 static void
 associate(void)
 {
-	struct zone 	*zp;
-	struct rule 	*rp;
+	struct zone	*zp;
+	struct rule	*rp;
 	int		base, out, i, j;
 
 	if (nrules != 0) {
@@ -758,9 +750,9 @@ associate(void)
 static void
 infile(const char *name)
 {
-	FILE 			*fp;
+	FILE			*fp;
 	char			**fields, *cp;
-	const struct lookup 	*lp;
+	const struct lookup	*lp;
 	int			nfields, wantcont, num;
 	char			buf[BUFSIZ];
 
@@ -909,7 +901,7 @@ static int
 inzone(char **fields, int nfields)
 {
 	int	i;
-	static char 	*buf;
+	static char	*buf;
 	size_t		len;
 
 	if (nfields < ZONE_MINFIELDS || nfields > ZONE_MAXFIELDS) {
@@ -964,7 +956,7 @@ inzcont(char **fields, int nfields)
 static int
 inzsub(char **fields, int nfields, int iscont)
 {
-	char 		*cp;
+	char		*cp;
 	static struct zone	z;
 	int		i_gmtoff, i_rule, i_format;
 	int		i_untilyear, i_untilmonth;
@@ -1039,8 +1031,8 @@ inzsub(char **fields, int nfields, int iscont)
 static void
 inleap(char **fields, int nfields)
 {
-	const char 		*cp;
-	const struct lookup 	*lp;
+	const char		*cp;
+	const struct lookup	*lp;
 	int			i, j;
 	int			year, month, day;
 	long			dayoff, tod;
@@ -1167,9 +1159,9 @@ rulesub(struct rule * const rp, const char * const loyearp,
     const char * const monthp, const char * const dayp,
     const char * const timep)
 {
-	const struct lookup 	*lp;
-	const char 		*cp;
-	char 			*dp, *ep;
+	const struct lookup	*lp;
+	const char		*cp;
+	char			*dp, *ep;
 
 	if ((lp = byword(monthp, mon_names)) == NULL) {
 		error("invalid month name");
@@ -1245,14 +1237,12 @@ rulesub(struct rule * const rp, const char * const loyearp,
 		error("starting year greater than ending year");
 		return;
 	}
-	if (*typep == '\0')
-		rp->r_yrtype = NULL;
-	else {
+	if (*typep != '\0') {
 		if (rp->r_loyear == rp->r_hiyear) {
 			error("typed single year");
 			return;
 		}
-		rp->r_yrtype = ecpyalloc(typep);
+		warning("year type is obsolete; use \"-\" instead");
 	}
 	/*
 	** Day work.
@@ -1357,12 +1347,12 @@ is32(zic_t x)
 static void
 writezone(const char *name, const char *string)
 {
-	FILE 			*fp;
+	FILE			*fp;
 	int			i, j;
 	int			leapcnt32, leapi32;
 	int			timecnt32, timei32;
 	int			pass;
-	static char 		*fullname;
+	static char		*fullname;
 	static const struct tzhead	tzh0;
 	static struct tzhead	tzh;
 	zic_t			ats[TZ_MAX_TIMES];
@@ -1462,7 +1452,7 @@ writezone(const char *name, const char *string)
 		int	thistypecnt;
 		char	thischars[TZ_MAX_CHARS];
 		char	thischarcnt;
-		int 	indmap[TZ_MAX_CHARS];
+		int	indmap[TZ_MAX_CHARS];
 
 		if (pass == 1) {
 			thistimei = timei32;
@@ -1550,7 +1540,7 @@ writezone(const char *name, const char *string)
 			indmap[i] = -1;
 		thischarcnt = 0;
 		for (i = 0; i < typecnt; ++i) {
-			char 	*thisabbr;
+			char	*thisabbr;
 
 			if (!writetype[i])
 				continue;
@@ -1649,7 +1639,7 @@ static void
 doabbr(char *abbr, size_t size, const char *format, const char *letters,
     int isdst, int doquotes)
 {
-	char 	*cp, *slashp;
+	char	*cp, *slashp;
 	int	len;
 
 	slashp = strchr(format, '/');
@@ -1694,7 +1684,7 @@ static int
 stringoffset(char *result, size_t size, long offset)
 {
 	int	hours, minutes, seconds;
-	char 	*ep;
+	char	*ep;
 
 	result[0] = '\0';
 	if (offset < 0) {
@@ -1727,7 +1717,7 @@ static int
 stringrule(char *result, size_t size, const struct rule *rp, long dstoff, long gmtoff)
 {
 	long	tod;
-	char 	*ep;
+	char	*ep;
 
 	ep = end(result, size);
 	size -= ep - result;
@@ -1782,11 +1772,11 @@ stringrule(char *result, size_t size, const struct rule *rp, long dstoff, long g
 static void
 stringzone(char *result, size_t size, const struct zone *zpfirst, int zonecount)
 {
-	const struct zone 	*zp;
-	struct rule 		*rp, *stdrp, *dstrp;
+	const struct zone	*zp;
+	struct rule		*rp, *stdrp, *dstrp;
 	int			i;
-	const char 		*abbrvar;
-	char 			*ep;
+	const char		*abbrvar;
+	char			*ep;
 
 	result[0] = '\0';
 	zp = zpfirst + zonecount - 1;
@@ -1794,8 +1784,6 @@ stringzone(char *result, size_t size, const struct zone *zpfirst, int zonecount)
 	for (i = 0; i < zp->z_nrules; ++i) {
 		rp = &zp->z_rules[i];
 		if (rp->r_hiwasnum || rp->r_hiyear != INT_MAX)
-			continue;
-		if (rp->r_yrtype != NULL)
 			continue;
 		if (rp->r_stdoff == 0) {
 			if (stdrp == NULL)
@@ -1867,13 +1855,13 @@ stringzone(char *result, size_t size, const struct zone *zpfirst, int zonecount)
 static void
 outzone(const struct zone *zpfirst, int zonecount)
 {
-	const struct zone 	*zp;
-	struct rule 		*rp;
+	const struct zone	*zp;
+	struct rule		*rp;
 	int			i, j, usestart, useuntil, type;
 	zic_t			starttime = 0, untiltime = 0;
 	long			gmtoff, stdoff, startoff;
 	int			year, startttisstd = FALSE, startttisgmt = FALSE;
-	char 			*startbuf, *ab, *envvar;
+	char			*startbuf, *ab, *envvar;
 	int			max_abbr_len, max_envvar_len;
 	int			prodstic; /* all rules are min to max */
 
@@ -1991,8 +1979,7 @@ outzone(const struct zone *zpfirst, int zonecount)
 				eats(zp->z_filename, zp->z_linenum,
 					rp->r_filename, rp->r_linenum);
 				rp->r_todo = year >= rp->r_loyear &&
-				    year <= rp->r_hiyear &&
-				    yearistype(year, rp->r_yrtype);
+				    year <= rp->r_hiyear;
 				if (rp->r_todo)
 					rp->r_temp = rpytime(rp, year);
 			}
@@ -2245,30 +2232,6 @@ adjleap(void)
 	}
 }
 
-static int
-yearistype(int year, const char *type)
-{
-	static char 	*buf;
-	int		result;
-	size_t		len;
-
-	if (type == NULL || *type == '\0')
-		return TRUE;
-	len = 132 + strlen(yitcommand) + strlen(type);
-	buf = erealloc(buf, len);
-	snprintf(buf, len, "%s %d %s", yitcommand, year, type);
-	result = system(buf);
-	if (WIFEXITED(result))
-		switch (WEXITSTATUS(result)) {
-		case 0:
-			return TRUE;
-		case 1:
-			return FALSE;
-		}
-	error("Wild result from command execution");
-	errx(1, "command was '%s', result was %d", buf, result);
-}
-
 /* this function is not strncasecmp */
 static int
 itsabbr(const char *sabbr, const char *sword)
@@ -2290,8 +2253,8 @@ itsabbr(const char *sabbr, const char *sword)
 static const struct lookup *
 byword(const char *word, const struct lookup *table)
 {
-	const struct lookup 	*foundlp;
-	const struct lookup 	*lp;
+	const struct lookup	*foundlp;
+	const struct lookup	*lp;
 
 	if (word == NULL || table == NULL)
 		return NULL;

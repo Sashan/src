@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.138 2020/01/24 05:27:31 kettenis Exp $	*/
+/*	$OpenBSD: pmap.c,v 1.141 2020/12/16 21:11:35 bluhm Exp $	*/
 /*	$NetBSD: pmap.c,v 1.3 2003/05/08 18:13:13 thorpej Exp $	*/
 
 /*
@@ -503,7 +503,7 @@ pmap_kenter_pa(vaddr_t va, paddr_t pa, vm_prot_t prot)
 #endif
 	if (pmap_valid_entry(opte)) {
 		if (pa & PMAP_NOCACHE && (opte & PG_N) == 0)
-			wbinvd();
+			wbinvd_on_all_cpus();
 		/* This shouldn't happen */
 		pmap_tlb_shootpage(pmap_kernel(), va, 1);
 		pmap_tlb_shootwait();
@@ -854,7 +854,7 @@ pmap_bootstrap(paddr_t first_avail, paddr_t max_pa)
 	 * initialize the pmap pools.
 	 */
 
-	pool_init(&pmap_pmap_pool, sizeof(struct pmap), 0, IPL_NONE, 0,
+	pool_init(&pmap_pmap_pool, sizeof(struct pmap), 0, IPL_VM, 0,
 	    "pmappl", NULL);
 	pool_init(&pmap_pv_pool, sizeof(struct pv_entry), 0, IPL_VM, 0,
 	    "pvpl", &pool_allocator_single);
@@ -864,8 +864,8 @@ pmap_bootstrap(paddr_t first_avail, paddr_t max_pa)
 	 * initialize the PDE pool.
 	 */
 
-	pool_init(&pmap_pdp_pool, PAGE_SIZE, 0, IPL_NONE, PR_WAITOK,
-	    "pdppl", NULL);
+	pool_init(&pmap_pdp_pool, PAGE_SIZE, 0, IPL_VM, 0,
+	    "pdppl", &pool_allocator_single);
 
 	kpm->pm_pdir_intel = NULL;
 	kpm->pm_pdirpa_intel = 0;
@@ -1543,7 +1543,7 @@ pmap_flush_cache(vaddr_t addr, vsize_t len)
 	vaddr_t	i;
 
 	if (curcpu()->ci_cflushsz == 0) {
-		wbinvd();
+		wbinvd_on_all_cpus();
 		return;
 	}
 
@@ -1626,17 +1626,18 @@ pmap_remove_ptes(struct pmap *pmap, struct vm_page *ptp, vaddr_t ptpva,
 		if ((opte & PG_PVLIST) == 0) {
 #ifdef DIAGNOSTIC
 			if (pg != NULL)
-				panic("%s: managed page without PG_PVLIST "
-				      "for 0x%lx", __func__, startva);
+				panic("%s: managed page without PG_PVLIST: "
+				    "va 0x%lx, opte 0x%llx", __func__,
+				    startva, opte);
 #endif
 			continue;
 		}
 
 #ifdef DIAGNOSTIC
 		if (pg == NULL)
-			panic("%s: unmanaged page marked PG_PVLIST, "
-			      "va = 0x%lx, pa = 0x%lx", __func__,
-			      startva, (u_long)(opte & PG_FRAME));
+			panic("%s: unmanaged page marked PG_PVLIST: "
+			    "va 0x%lx, opte 0x%llx", __func__,
+			    startva, opte);
 #endif
 
 		/* sync R/M bits */
@@ -1692,16 +1693,16 @@ pmap_remove_pte(struct pmap *pmap, struct vm_page *ptp, pt_entry_t *pte,
 	if ((opte & PG_PVLIST) == 0) {
 #ifdef DIAGNOSTIC
 		if (pg != NULL)
-			panic("%s: managed page without PG_PVLIST for 0x%lx",
-			      __func__, va);
+			panic("%s: managed page without PG_PVLIST: "
+			    "va 0x%lx, opte 0x%llx", __func__, va, opte);
 #endif
 		return 1;
 	}
 
 #ifdef DIAGNOSTIC
 	if (pg == NULL)
-		panic("%s: unmanaged page marked PG_PVLIST, va = 0x%lx, "
-		      "pa = 0x%lx", __func__, va, (u_long)(opte & PG_FRAME));
+		panic("%s: unmanaged page marked PG_PVLIST: "
+		    "va 0x%lx, opte 0x%llx", __func__, va, opte);
 #endif
 
 	/* sync R/M bits */
@@ -2724,18 +2725,19 @@ pmap_enter(struct pmap *pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, int flags)
 				pg = PHYS_TO_VM_PAGE(pa);
 #ifdef DIAGNOSTIC
 				if (pg == NULL)
-					panic("%s: same pa PG_PVLIST "
-					      "mapping with unmanaged page "
-					      "pa = 0x%lx (0x%lx)", __func__,
-					      pa, atop(pa));
+					panic("%s: same pa, PG_PVLIST "
+					    "mapping with unmanaged page: "
+					    "va 0x%lx, opte 0x%llx, pa 0x%lx",
+					    __func__, va, opte, pa);
 #endif
 				pmap_sync_flags_pte(pg, opte);
 			} else {
 #ifdef DIAGNOSTIC
 				if (PHYS_TO_VM_PAGE(pa) != NULL)
-					panic("%s: same pa, managed "
-					    "page, no PG_VLIST pa: 0x%lx",
-					    __func__, pa);
+					panic("%s: same pa, no PG_PVLIST "
+					    "mapping with managed page: "
+					    "va 0x%lx, opte 0x%llx, pa 0x%lx",
+					    __func__, va, opte, pa);
 #endif
 			}
 			goto enter_now;
@@ -2755,8 +2757,8 @@ pmap_enter(struct pmap *pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, int flags)
 #ifdef DIAGNOSTIC
 			if (pg == NULL)
 				panic("%s: PG_PVLIST mapping with unmanaged "
-				      "page pa = 0x%lx (0x%lx)",
-				      __func__, pa, atop(pa));
+				    "page: va 0x%lx, opte 0x%llx, pa 0x%lx",
+				    __func__, va, opte, pa);
 #endif
 			pmap_sync_flags_pte(pg, opte);
 			opve = pmap_remove_pv(pg, pmap, va);
@@ -2834,7 +2836,7 @@ enter_now:
 	 */
 	if (pmap_valid_entry(opte)) {
 		if (nocache && (opte & PG_N) == 0)
-			wbinvd();
+			wbinvd_on_all_cpus();
 		pmap_tlb_shootpage(pmap, va, shootself);
 	}
 

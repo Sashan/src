@@ -1,4 +1,4 @@
-/*	$OpenBSD: relayd.h,v 1.260 2019/09/15 19:23:29 rob Exp $	*/
+/*	$OpenBSD: relayd.h,v 1.265 2021/01/27 20:33:05 eric Exp $	*/
 
 /*
  * Copyright (c) 2006 - 2016 Reyk Floeter <reyk@openbsd.org>
@@ -26,6 +26,7 @@
 #include <sys/queue.h>
 #include <sys/tree.h>
 #include <sys/time.h>
+#include <sys/un.h>
 
 #include <net/if.h>
 #include <net/pfvar.h>
@@ -97,7 +98,7 @@
 #define ICMP_BUF_SIZE		64
 #define ICMP_RCVBUF_SIZE	262144
 
-#define SNMP_RECONNECT_TIMEOUT	{ 3, 0 }	/* sec, usec */
+#define AGENTX_RECONNECT_TIMEOUT	{ 3, 0 }	/* sec, usec */
 
 #define PROC_PARENT_SOCK_FILENO	3
 #define PROC_MAX_INSTANCES	32
@@ -291,7 +292,8 @@ enum key_option {
 	KEY_OPTION_SET,
 	KEY_OPTION_REMOVE,
 	KEY_OPTION_HASH,
-	KEY_OPTION_LOG
+	KEY_OPTION_LOG,
+	KEY_OPTION_STRIP
 };
 
 enum key_type {
@@ -389,7 +391,7 @@ union hashkey {
 #define F_DEMOTED		0x00008000
 #define F_UDP			0x00010000
 #define F_RETURN		0x00020000
-#define F_SNMP			0x00040000
+#define F_AGENTX		0x00040000
 #define F_NEEDPF		0x00080000
 #define F_PORT			0x00100000
 #define F_TLSCLIENT		0x00200000
@@ -399,7 +401,7 @@ union hashkey {
 #define F_SCRIPT		0x02000000
 #define F_TLSINSPECT		0x04000000
 #define F_HASHKEY		0x08000000
-#define	F_SNMP_TRAPONLY		0x10000000
+#define F_AGENTX_TRAPONLY	0x10000000
 
 #define F_BITS								\
 	"\10\01DISABLE\02BACKUP\03USED\04DOWN\05ADD\06DEL\07CHANGED"	\
@@ -407,7 +409,7 @@ union hashkey {
 	"\14TLS\15NAT_LOOKUP\16DEMOTE\17LOOKUP_PATH\20DEMOTED\21UDP"	\
 	"\22RETURN\23TRAP\24NEEDPF\25PORT\26TLS_CLIENT\27NEEDRT"	\
 	"\30MATCH\31DIVERT\32SCRIPT\33TLS_INSPECT\34HASHKEY"		\
-	"\35SNMP_TRAPONLY"
+	"\35AGENTX_TRAPONLY"
 
 enum forwardmode {
 	FWD_NORMAL		= 0,
@@ -695,15 +697,16 @@ TAILQ_HEAD(relay_rules, relay_rule);
 #define TLSFLAG_TLSV1_0				0x02
 #define TLSFLAG_TLSV1_1				0x04
 #define TLSFLAG_TLSV1_2				0x08
-#define TLSFLAG_TLSV1				0x0e
+#define TLSFLAG_TLSV1_3				0x10
+#define TLSFLAG_TLSV1				0x1e
 #define TLSFLAG_VERSION				0x1f
 #define TLSFLAG_CIPHER_SERVER_PREF		0x20
 #define TLSFLAG_CLIENT_RENEG			0x40
 #define TLSFLAG_DEFAULT				\
-	(TLSFLAG_TLSV1_2|TLSFLAG_CIPHER_SERVER_PREF)
+	(TLSFLAG_TLSV1_2|TLSFLAG_TLSV1_3|TLSFLAG_CIPHER_SERVER_PREF)
 
 #define TLSFLAG_BITS						\
-	"\06\01sslv3\02tlsv1.0\03tlsv1.1\04tlsv1.2"	\
+	"\06\01sslv3\02tlsv1.0\03tlsv1.1\04tlsv1.2\05tlsv1.3"	\
 	"\06cipher-server-preference\07client-renegotiation"
 
 #define TLSCIPHERS_DEFAULT	"HIGH:!aNULL"
@@ -911,7 +914,7 @@ struct control_sock {
 };
 TAILQ_HEAD(control_socks, control_sock);
 
-struct {
+extern struct {
 	struct event	 ev;
 	int		 fd;
 } control_state;
@@ -985,7 +988,7 @@ enum imsg_type {
 	IMSG_DEMOTE,
 	IMSG_STATISTICS,
 	IMSG_SCRIPT,
-	IMSG_SNMPSOCK,
+	IMSG_AGENTXSOCK,
 	IMSG_BINDANY,
 	IMSG_RTMSG,		/* from pfe to parent */
 	IMSG_CFG_TABLE,		/* configuration from parent */
@@ -1016,7 +1019,8 @@ enum privsep_procid {
 	PROC_PFE,
 	PROC_CA,
 	PROC_MAX
-} privsep_process;
+};
+extern enum privsep_procid privsep_process;
 
 /* Attach the control socket to the following process */
 #define PROC_CONTROL	PROC_PFE
@@ -1072,7 +1076,8 @@ struct privsep_fd {
 
 struct relayd_config {
 	char			 tls_sid[SSL_MAX_SID_CTX_LENGTH];
-	char			 snmp_path[PATH_MAX];
+	char			 agentx_path[sizeof(((struct sockaddr_un *)NULL)->sun_path)];
+	char			 agentx_context[32];
 	struct timeval		 interval;
 	struct timeval		 timeout;
 	struct timeval		 statinterval;
@@ -1120,9 +1125,7 @@ struct relayd {
 
 	struct event		 sc_statev;
 
-	int			 sc_snmp;
-	struct event		 sc_snmpto;
-	struct event		 sc_snmpev;
+	struct event		 sc_agentxev;
 
 	int			 sc_has_icmp;
 	int			 sc_has_icmp6;
@@ -1297,7 +1300,6 @@ char	*ssl_load_key(struct relayd *, const char *, off_t *, char *);
 uint8_t *ssl_update_certificate(const uint8_t *, size_t, EVP_PKEY *,
 	    EVP_PKEY *, X509 *, size_t *);
 int	 ssl_load_pkey(char *, off_t, X509 **, EVP_PKEY **);
-int	 ssl_ctx_fake_private_key(char *, off_t, const char **);
 
 /* ca.c */
 void	 ca(struct privsep *, struct privsep_proc *);
@@ -1392,10 +1394,10 @@ const char	*tag_id2name(u_int16_t);
 void		 tag_unref(u_int16_t);
 void		 tag_ref(u_int16_t);
 
-/* snmp.c */
-void	 snmp_init(struct relayd *, enum privsep_procid);
-void	 snmp_setsock(struct relayd *, enum privsep_procid);
-int	 snmp_getsock(struct relayd *, struct imsg *);
+/* agentx_control.c */
+void	 agentx_init(struct relayd *);
+void	 agentx_setsock(struct relayd *, enum privsep_procid);
+int	 agentx_getsock(struct imsg *);
 void	 snmp_hosttrap(struct relayd *, struct table *, struct host *);
 
 /* shuffle.c */

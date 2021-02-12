@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ppp.c,v 1.112 2018/11/09 14:14:31 claudio Exp $	*/
+/*	$OpenBSD: if_ppp.c,v 1.117 2020/08/21 22:59:27 kn Exp $	*/
 /*	$NetBSD: if_ppp.c,v 1.39 1997/05/17 21:11:59 christos Exp $	*/
 
 /*
@@ -204,9 +204,11 @@ int
 ppp_clone_create(struct if_clone *ifc, int unit)
 {
 	struct ppp_softc *sc;
+	struct ifnet *ifp;
 
 	sc = malloc(sizeof(*sc), M_DEVBUF, M_WAITOK|M_ZERO);
 	sc->sc_unit = unit;
+	ifp = &sc->sc_if;
 	snprintf(sc->sc_if.if_xname, sizeof sc->sc_if.if_xname, "%s%d",
 	    ifc->ifc_name, unit);
 	sc->sc_if.if_softc = sc;
@@ -218,13 +220,12 @@ ppp_clone_create(struct if_clone *ifc, int unit)
 	sc->sc_if.if_output = pppoutput;
 	sc->sc_if.if_start = ppp_ifstart;
 	sc->sc_if.if_rtrequest = p2p_rtrequest;
-	IFQ_SET_MAXLEN(&sc->sc_if.if_snd, IFQ_MAXLEN);
 	mq_init(&sc->sc_inq, IFQ_MAXLEN, IPL_NET);
 	ppp_pkt_list_init(&sc->sc_rawq, IFQ_MAXLEN);
 	if_attach(&sc->sc_if);
 	if_alloc_sadl(&sc->sc_if);
 #if NBPFILTER > 0
-	bpfattach(&sc->sc_bpf, &sc->sc_if, DLT_PPP, PPP_HDRLEN);
+	bpfattach(&ifp->if_bpf, ifp, DLT_PPP, PPP_HDRLEN);
 #endif
 	NET_LOCK();
 	LIST_INSERT_HEAD(&ppp_softc_list, sc, sc_list);
@@ -292,7 +293,7 @@ pppalloc(pid_t pid)
 	for (i = 0; i < NUM_NP; ++i)
 		sc->sc_npmode[i] = NPMODE_ERROR;
 	ml_init(&sc->sc_npqueue);
-	sc->sc_last_sent = sc->sc_last_recv = time_uptime;
+	sc->sc_last_sent = sc->sc_last_recv = getuptime();
 
 	return sc;
 }
@@ -512,7 +513,7 @@ pppioctl(struct ppp_softc *sc, u_long cmd, caddr_t data, int flag,
 		break;
 
 	case PPPIOCGIDLE:
-		t = time_uptime;
+		t = getuptime();
 		((struct ppp_idle *)data)->xmit_idle = t - sc->sc_last_sent;
 		((struct ppp_idle *)data)->recv_idle = t - sc->sc_last_recv;
 		break;
@@ -742,23 +743,21 @@ pppoutput(struct ifnet *ifp, struct mbuf *m0, struct sockaddr *dst,
 		if (sc->sc_active_filt.bf_insns == 0 ||
 		    bpf_filter(sc->sc_active_filt.bf_insns, (u_char *)m0,
 		    len, 0))
-			sc->sc_last_sent = time_uptime;
+			sc->sc_last_sent = getuptime();
 
 		*mtod(m0, u_char *) = address;
 #else
 		/*
 		 * Update the time we sent the most recent packet.
 		 */
-		sc->sc_last_sent = time_uptime;
+		sc->sc_last_sent = getuptime();
 #endif
 	}
 
 #if NBPFILTER > 0
-	/*
-	 * See if bpf wants to look at the packet.
-	 */
-	if (sc->sc_bpf)
-		bpf_mtap(sc->sc_bpf, m0, BPF_DIRECTION_OUT);
+	/* See if bpf wants to look at the packet. */
+	if (ifp->if_bpf)
+		bpf_mtap(ifp->if_bpf, m0, BPF_DIRECTION_OUT);
 #endif
 
 	/*
@@ -768,7 +767,7 @@ pppoutput(struct ifnet *ifp, struct mbuf *m0, struct sockaddr *dst,
 		/* XXX we should limit the number of packets on this queue */
 		ml_enqueue(&sc->sc_npqueue, m0);
 	} else {
-		IFQ_ENQUEUE(&sc->sc_if.if_snd, m0, error);
+		error = ifq_enqueue(&sc->sc_if.if_snd, m0);
 		if (error) {
 			sc->sc_if.if_oerrors++;
 			sc->sc_stats.ppp_oerrors++;
@@ -811,7 +810,7 @@ ppp_requeue(struct ppp_softc *sc)
 
 		switch (mode) {
 		case NPMODE_PASS:
-			IFQ_ENQUEUE(&sc->sc_if.if_snd, m, error);
+			error = ifq_enqueue(&sc->sc_if.if_snd, m);
 			if (error) {
 				sc->sc_if.if_oerrors++;
 				sc->sc_stats.ppp_oerrors++;
@@ -858,7 +857,7 @@ ppp_dequeue(struct ppp_softc *sc)
 	 * Grab a packet to send: first try the fast queue, then the
 	 * normal queue.
 	 */
-	IFQ_DEQUEUE(&sc->sc_if.if_snd, m);
+	m = ifq_dequeue(&sc->sc_if.if_snd);
 	if (m == NULL)
 		return NULL;
 
@@ -992,7 +991,7 @@ pppintr(void)
 
 	LIST_FOREACH(sc, &ppp_softc_list, sc_list) {
 		if (!(sc->sc_flags & SC_TBUSY) &&
-		    (!IFQ_IS_EMPTY(&sc->sc_if.if_snd))) {
+		    (!ifq_empty(&sc->sc_if.if_snd))) {
 			s = splnet();
 			sc->sc_flags |= SC_TBUSY;
 			splx(s);
@@ -1356,21 +1355,21 @@ ppp_inproc(struct ppp_softc *sc, struct mbuf *m)
 		if (sc->sc_active_filt.bf_insns == 0 ||
 		    bpf_filter(sc->sc_active_filt.bf_insns, (u_char *)m,
 		     ilen, 0))
-			sc->sc_last_recv = time_uptime;
+			sc->sc_last_recv = getuptime();
 
 		*mtod(m, u_char *) = adrs;
 #else
 		/*
 		 * Record the time that we received this packet.
 		 */
-		sc->sc_last_recv = time_uptime;
+		sc->sc_last_recv = getuptime();
 #endif
 	}
 
 #if NBPFILTER > 0
 	/* See if bpf wants to look at the packet. */
-	if (sc->sc_bpf)
-		bpf_mtap(sc->sc_bpf, m, BPF_DIRECTION_IN);
+	if (ifp->if_bpf)
+		bpf_mtap(ifp->if_bpf, m, BPF_DIRECTION_IN);
 #endif
 
 	rv = 0;

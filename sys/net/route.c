@@ -1,4 +1,4 @@
-/*	$OpenBSD: route.c,v 1.390 2020/03/21 20:12:37 krw Exp $	*/
+/*	$OpenBSD: route.c,v 1.397 2020/10/29 21:15:27 denis Exp $	*/
 /*	$NetBSD: route.c,v 1.14 1996/02/13 22:00:46 christos Exp $	*/
 
 /*
@@ -452,7 +452,7 @@ rt_setgwroute(struct rtentry *rt, u_int rtableid)
 	/*
 	 * To avoid reference counting problems when writting link-layer
 	 * addresses in an outgoing packet, we ensure that the lifetime
-	 * of a cached entry is greater that the bigger lifetime of the
+	 * of a cached entry is greater than the bigger lifetime of the
 	 * gateway entries it is pointed by.
 	 */
 	nhrt->rt_flags |= RTF_CACHED;
@@ -663,6 +663,7 @@ rtdeletemsg(struct rtentry *rt, struct ifnet *ifp, u_int tableid)
 {
 	int			error;
 	struct rt_addrinfo	info;
+	struct sockaddr_rtlabel sa_rl;
 	struct sockaddr_in6	sa_mask;
 
 	KASSERT(rt->rt_ifidx == ifp->if_index);
@@ -677,8 +678,13 @@ rtdeletemsg(struct rtentry *rt, struct ifnet *ifp, u_int tableid)
 	info.rti_info[RTAX_GATEWAY] = rt->rt_gateway;
 	if (!ISSET(rt->rt_flags, RTF_HOST))
 		info.rti_info[RTAX_NETMASK] = rt_plen2mask(rt, &sa_mask);
+	info.rti_info[RTAX_LABEL] = rtlabel_id2sa(rt->rt_labelid, &sa_rl);
+	info.rti_flags = rt->rt_flags;
+	info.rti_info[RTAX_IFP] = sdltosa(ifp->if_sadl);
+	info.rti_info[RTAX_IFA] = rt->rt_ifa->ifa_addr;
 	error = rtrequest_delete(&info, rt->rt_priority, ifp, &rt, tableid);
-	rtm_send(rt, RTM_DELETE, error, tableid);
+	rtm_miss(RTM_DELETE, &info, info.rti_flags, rt->rt_priority,
+	    rt->rt_ifidx, error, tableid);
 	if (error == 0)
 		rtfree(rt);
 	return (error);
@@ -932,7 +938,8 @@ rtrequest(int req, struct rt_addrinfo *info, u_int8_t prio,
 			ifafree(ifa);
 			rtfree(rt->rt_parent);
 			rt_putgwroute(rt);
-			free(rt->rt_gateway, M_RTABLE, 0);
+			free(rt->rt_gateway, M_RTABLE,
+			    ROUNDUP(rt->rt_gateway->sa_len));
 			free(ndst, M_RTABLE, ndst->sa_len);
 			pool_put(&rtentry_pool, rt);
 			return (error);
@@ -944,7 +951,8 @@ rtrequest(int req, struct rt_addrinfo *info, u_int8_t prio,
 		if (error != 0 &&
 		    (crt = rtable_match(tableid, ndst, NULL)) != NULL) {
 			/* overwrite cloned route */
-			if (ISSET(crt->rt_flags, RTF_CLONED)) {
+			if (ISSET(crt->rt_flags, RTF_CLONED) &&
+			    !ISSET(crt->rt_flags, RTF_CACHED)) {
 				struct ifnet *cifp;
 
 				cifp = if_get(crt->rt_ifidx);
@@ -963,7 +971,8 @@ rtrequest(int req, struct rt_addrinfo *info, u_int8_t prio,
 			ifafree(ifa);
 			rtfree(rt->rt_parent);
 			rt_putgwroute(rt);
-			free(rt->rt_gateway, M_RTABLE, 0);
+			free(rt->rt_gateway, M_RTABLE,
+			    ROUNDUP(rt->rt_gateway->sa_len));
 			free(ndst, M_RTABLE, ndst->sa_len);
 			pool_put(&rtentry_pool, rt);
 			return (EEXIST);
@@ -1183,6 +1192,7 @@ rt_ifa_del(struct ifaddr *ifa, int flags, struct sockaddr *dst,
 	if (flags & RTF_CONNECTED)
 		prio = ifp->if_priority + RTP_CONNECTED;
 
+	rtable_clearsource(rdomain, ifa->ifa_addr);
 	error = rtrequest_delete(&info, prio, ifp, &rt, rdomain);
 	if (error == 0) {
 		rtm_send(rt, RTM_DELETE, 0, rdomain);
@@ -1468,8 +1478,8 @@ rt_timer_add(struct rtentry *rt, void (*func)(struct rtentry *,
 	struct rttimer	*r;
 	long		 current_time;
 
-	current_time = time_uptime;
-	rt->rt_expire = time_uptime + queue->rtq_timeout;
+	current_time = getuptime();
+	rt->rt_expire = getuptime() + queue->rtq_timeout;
 
 	/*
 	 * If there's already a timer with this action, destroy it before
@@ -1512,7 +1522,7 @@ rt_timer_timer(void *arg)
 	struct rttimer		*r;
 	long			 current_time;
 
-	current_time = time_uptime;
+	current_time = getuptime();
 
 	NET_LOCK();
 	LIST_FOREACH(rtq, &rttimer_queue_head, rtq_link) {
@@ -1667,7 +1677,7 @@ rt_if_track(struct ifnet *ifp)
 {
 	unsigned int rtableid;
 	struct rtentry *rt = NULL;
-	int i, error;
+	int i, error = 0;
 
 	for (rtableid = 0; rtableid < rtmap_limit; rtableid++) {
 		/* skip rtables that are not in the rdomain of the ifp */

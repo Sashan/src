@@ -1,4 +1,4 @@
-/*	$Id: extern.h,v 1.17 2020/02/07 14:34:15 florian Exp $ */
+/*	$Id: extern.h,v 1.20 2020/09/14 16:00:17 florian Exp $ */
 /*
  * Copyright (c) 2016 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -159,6 +159,7 @@ enum	chngstatus {
 struct	chng {
 	char		*uri; /* uri on ACME server */
 	char		*token; /* token we must offer */
+	char		*error; /* "detail" field in case of error */
 	size_t		 retry; /* how many times have we tried */
 	enum chngstatus	 status; /* challenge accepted? */
 };
@@ -258,10 +259,11 @@ int		 json_parse_order(struct jsmnn *, struct order *);
 int		 json_parse_upd_order(struct jsmnn *, struct order *);
 void		 json_free_capaths(struct capaths *);
 int		 json_parse_capaths(struct jsmnn *, struct capaths *);
+char		*json_getstr(struct jsmnn *, const char *);
 
 char		*json_fmt_newcert(const char *);
 char		*json_fmt_chkacc(void);
-char		*json_fmt_newacc(void);
+char		*json_fmt_newacc(const char *);
 char		*json_fmt_neworder(const char *const *, size_t);
 char		*json_fmt_protected_rsa(const char *,
 			const char *, const char *, const char *);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: vscsi.c,v 1.48 2020/02/20 16:56:52 visa Exp $ */
+/*	$OpenBSD: vscsi.c,v 1.58 2020/12/25 12:59:52 visa Exp $ */
 
 /*
  * Copyright (c) 2008 David Gwynne <dlg@openbsd.org>
@@ -18,7 +18,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/kernel.h>  
+#include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/device.h>
 #include <sys/conf.h>
@@ -56,7 +56,6 @@ enum vscsi_state {
 
 struct vscsi_softc {
 	struct device		sc_dev;
-	struct scsi_link	sc_link;
 	struct scsibus_softc	*sc_scsibus;
 
 	struct mutex		sc_state_mtx;
@@ -112,7 +111,7 @@ void		vscsi_ccb_put(void *, void *);
 
 void		filt_vscsidetach(struct knote *);
 int		filt_vscsiread(struct knote *, long);
-  
+
 const struct filterops vscsi_filtops = {
 	.f_flags	= FILTEROP_ISFD,
 	.f_attach	= NULL,
@@ -145,15 +144,15 @@ vscsi_attach(struct device *parent, struct device *self, void *aux)
 	rw_init(&sc->sc_ioc_lock, "vscsiioc");
 	scsi_iopool_init(&sc->sc_iopool, sc, vscsi_ccb_get, vscsi_ccb_put);
 
-	sc->sc_link.adapter = &vscsi_switch;
-	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.adapter_target = 256;
-	sc->sc_link.adapter_buswidth = 256;
-	sc->sc_link.openings = 16;
-	sc->sc_link.pool = &sc->sc_iopool;
-
-	memset(&saa, 0, sizeof(saa));
-	saa.saa_sc_link = &sc->sc_link;
+	saa.saa_adapter = &vscsi_switch;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter_target = SDEV_NO_ADAPTER_TARGET;
+	saa.saa_adapter_buswidth = 256;
+	saa.saa_luns = 8;
+	saa.saa_openings = 16;
+	saa.saa_pool = &sc->sc_iopool;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
 	sc->sc_scsibus = (struct scsibus_softc *)config_found(&sc->sc_dev,
 	    &saa, scsiprint);
@@ -163,14 +162,14 @@ void
 vscsi_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link		*link = xs->sc_link;
-	struct vscsi_softc		*sc = link->adapter_softc;
+	struct vscsi_softc		*sc = link->bus->sb_adapter_softc;
 	struct vscsi_ccb		*ccb = xs->io;
 	int				polled = ISSET(xs->flags, SCSI_POLL);
 	int				running = 0;
 
 	if (ISSET(xs->flags, SCSI_POLL) && ISSET(xs->flags, SCSI_NOSLEEP)) {
 		printf("%s: POLL && NOSLEEP for 0x%02x\n", DEVNAME(sc),
-		    xs->cmd->opcode);
+		    xs->cmd.opcode);
 		xs->error = XS_DRIVER_STUFFUP;
 		scsi_done(xs);
 		return;
@@ -220,7 +219,7 @@ vscsi_done(struct vscsi_softc *sc, struct vscsi_ccb *ccb)
 int
 vscsi_probe(struct scsi_link *link)
 {
-	struct vscsi_softc		*sc = link->adapter_softc;
+	struct vscsi_softc		*sc = link->bus->sb_adapter_softc;
 	int				rv = 0;
 
 	mtx_enter(&sc->sc_state_mtx);
@@ -236,7 +235,7 @@ vscsi_probe(struct scsi_link *link)
 void
 vscsi_free(struct scsi_link *link)
 {
-	struct vscsi_softc		*sc = link->adapter_softc;
+	struct vscsi_softc		*sc = link->bus->sb_adapter_softc;
 
 	mtx_enter(&sc->sc_state_mtx);
 	sc->sc_ref_count--;
@@ -352,7 +351,7 @@ vscsi_i2t(struct vscsi_softc *sc, struct vscsi_ioc_i2t *i2t)
 	i2t->tag = ccb->ccb_tag;
 	i2t->target = link->target;
 	i2t->lun = link->lun;
-	memcpy(&i2t->cmd, xs->cmd, xs->cmdlen);
+	memcpy(&i2t->cmd, &xs->cmd, xs->cmdlen);
 	i2t->cmdlen = xs->cmdlen;
 	i2t->datalen = xs->datalen;
 
@@ -576,7 +575,7 @@ vscsikqfilter(dev_t dev, struct knote *kn)
 	kn->kn_hook = sc;
 
 	mtx_enter(&sc->sc_sel_mtx);
-	SLIST_INSERT_HEAD(klist, kn, kn_selnext);
+	klist_insert_locked(klist, kn);
 	mtx_leave(&sc->sc_sel_mtx);
 
 	/* device ref is given to the knote in the klist */
@@ -589,9 +588,9 @@ filt_vscsidetach(struct knote *kn)
 {
 	struct vscsi_softc *sc = kn->kn_hook;
 	struct klist *klist = &sc->sc_sel.si_note;
- 
+
 	mtx_enter(&sc->sc_sel_mtx);
-	SLIST_REMOVE(klist, kn, knote, kn_selnext);
+	klist_remove_locked(klist, kn);
 	mtx_leave(&sc->sc_sel_mtx);
 
 	device_unref(&sc->sc_dev);

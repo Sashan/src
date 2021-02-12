@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.128 2019/09/02 02:35:08 deraadt Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.130 2020/07/11 15:18:08 visa Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -277,6 +277,8 @@ void	smp_rendezvous_cpus(unsigned long, void (*)(void *), void *arg);
 extern void (*md_startclock)(struct cpu_info *);
 void	cp0_calibrate(struct cpu_info *);
 
+unsigned int cpu_rnd_messybits(void);
+
 #include <machine/frame.h>
 
 /*
@@ -411,6 +413,7 @@ void	signotify(struct proc *);
 #if defined(_KERNEL) && !defined(_LOCORE)
 
 extern register_t protosr;
+extern int cpu_has_synced_cp0_count;
 extern int cpu_has_userlocal;
 
 #ifdef FPUEMUL

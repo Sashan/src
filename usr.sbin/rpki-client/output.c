@@ -1,4 +1,4 @@
-/*	$OpenBSD: output.c,v 1.9 2020/03/10 14:22:26 jca Exp $ */
+/*	$OpenBSD: output.c,v 1.19 2020/12/09 11:29:04 claudio Exp $ */
 /*
  * Copyright (c) 2019 Theo de Raadt <deraadt@openbsd.org>
  *
@@ -19,12 +19,13 @@
 
 #include <err.h>
 #include <fcntl.h>
+#include <unistd.h>
+#include <netdb.h>
 #include <signal.h>
 #include <string.h>
 #include <limits.h>
 #include <unistd.h>
-
-#include <openssl/x509v3.h>
+#include <time.h>
 
 #include "extern.h"
 
@@ -37,7 +38,7 @@ static char	 output_name[PATH_MAX];
 static const struct outputs {
 	int	 format;
 	char	*name;
-	int	(*fn)(FILE *, struct vrp_tree *);
+	int	(*fn)(FILE *, struct vrp_tree *, struct stats *);
 } outputs[] = {
 	{ FORMAT_OPENBGPD, "openbgpd", output_bgpd },
 	{ FORMAT_BIRD, "bird1v4", output_bird1v4 },
@@ -55,7 +56,7 @@ static void	 sig_handler(int);
 static void	 set_signal_handler(void);
 
 int
-outputfiles(struct vrp_tree *v)
+outputfiles(struct vrp_tree *v, struct stats *st)
 {
 	int i, rc = 0;
 
@@ -74,7 +75,7 @@ outputfiles(struct vrp_tree *v)
 			rc = 1;
 			continue;
 		}
-		if ((*outputs[i].fn)(fout, v) != 0) {
+		if ((*outputs[i].fn)(fout, v, st) != 0) {
 			warn("output for %s format failed", outputs[i].name);
 			fclose(fout);
 			output_cleantmp();
@@ -108,7 +109,7 @@ output_createtmp(char *name)
 		err(1, "path too long");
 	fd = mkostemp(output_tmpname, O_CLOEXEC);
 	if (fd == -1)
-		err(1, "mkostemp");
+		err(1, "mkostemp: %s", output_tmpname);
 	(void) fchmod(fd, 0644);
 	f = fdopen(fd, "w");
 	if (f == NULL)
@@ -139,7 +140,7 @@ output_cleantmp(void)
  * Signal handler that clears the temporary files.
  */
 static void
-sig_handler(int sig __unused)
+sig_handler(int sig)
 {
 	output_cleantmp();
 	_exit(2);
@@ -166,4 +167,43 @@ set_signal_handler(void)
 			continue;
 		}
 	}
+}
+
+int
+outputheader(FILE *out, struct stats *st)
+{
+	char		hn[NI_MAXHOST], tbuf[80];
+	struct tm	*tp;
+	time_t		t;
+
+	time(&t);
+	setenv("TZ", "UTC", 1);
+	tp = localtime(&t);
+	strftime(tbuf, sizeof tbuf, "%a %b %e %H:%M:%S %Z %Y", tp);
+
+	gethostname(hn, sizeof hn);
+
+	if (fprintf(out,
+	    "# Generated on host %s at %s\n"
+	    "# Processing time %lld seconds (%lld seconds user, %lld seconds system)\n"
+	    "# Route Origin Authorizations: %zu (%zu failed parse, %zu invalid)\n"
+	    "# Certificates: %zu (%zu failed parse, %zu invalid)\n"
+	    "# Trust Anchor Locators: %zu (%s)\n"
+	    "# Manifests: %zu (%zu failed parse, %zu stale)\n"
+	    "# Certificate revocation lists: %zu\n"
+	    "# Ghostbuster records: %zu\n"
+	    "# Repositories: %zu\n"
+	    "# VRP Entries: %zu (%zu unique)\n",
+	    hn, tbuf, (long long)st->elapsed_time.tv_sec,
+	    (long long)st->user_time.tv_sec, (long long)st->system_time.tv_sec,
+	    st->roas, st->roas_fail, st->roas_invalid,
+	    st->certs, st->certs_fail, st->certs_invalid,
+	    st->tals, st->talnames,
+	    st->mfts, st->mfts_fail, st->mfts_stale,
+	    st->crls,
+	    st->gbrs,
+	    st->repos,
+	    st->vrps, st->uniqs) < 0)
+		return -1;
+	return 0;
 }

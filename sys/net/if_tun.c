@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_tun.c,v 1.219 2020/02/20 16:56:52 visa Exp $	*/
+/*	$OpenBSD: if_tun.c,v 1.229 2021/01/19 19:39:58 mvs Exp $	*/
 /*	$NetBSD: if_tun.c,v 1.24 1996/05/07 02:40:48 thorpej Exp $	*/
 
 /*
@@ -115,7 +115,7 @@ int	tun_dev_poll(dev_t, int, struct proc *);
 int	tun_dev_kqfilter(dev_t, struct knote *);
 
 int	tun_ioctl(struct ifnet *, u_long, caddr_t);
-int	tun_input(struct ifnet *, struct mbuf *, void *);
+void	tun_input(struct ifnet *, struct mbuf *);
 int	tun_output(struct ifnet *, struct mbuf *, struct sockaddr *,
 	    struct rtentry *);
 int	tun_enqueue(struct ifnet *, struct mbuf *);
@@ -235,11 +235,11 @@ tun_create(struct if_clone *ifc, int unit, int flags)
 	ifp->if_start = tun_start;
 	ifp->if_hardmtu = TUNMRU;
 	ifp->if_link_state = LINK_STATE_DOWN;
-	IFQ_SET_MAXLEN(&ifp->if_snd, IFQ_MAXLEN);
 
 	if_counters_alloc(ifp);
 
 	if ((flags & TUN_LAYER2) == 0) {
+		ifp->if_input = tun_input;
 		ifp->if_output = tun_output;
 		ifp->if_mtu = ETHERMTU;
 		ifp->if_flags = (IFF_POINTOPOINT|IFF_MULTICAST);
@@ -253,8 +253,6 @@ tun_create(struct if_clone *ifc, int unit, int flags)
 #if NBPFILTER > 0
 		bpfattach(&ifp->if_bpf, ifp, DLT_LOOP, sizeof(u_int32_t));
 #endif
-
-		if_ih_insert(ifp, tun_input, NULL);
 	} else {
 		sc->sc_flags |= TUN_LAYER2;
 		ether_fakeaddr(ifp);
@@ -299,7 +297,7 @@ tun_clone_destroy(struct ifnet *ifp)
 		struct vnode *vp;
 
 		if (vfinddev(dev, VCHR, &vp))
-                        VOP_REVOKE(vp, REVOKEALL);
+			VOP_REVOKE(vp, REVOKEALL);
 
 		KASSERT(sc->sc_dev == 0);
 	}
@@ -320,9 +318,7 @@ tun_clone_destroy(struct ifnet *ifp)
 	klist_invalidate(&sc->sc_wsel.si_note);
 	splx(s);
 
-	if (!ISSET(sc->sc_flags, TUN_LAYER2))
-		if_ih_remove(ifp, tun_input, NULL);
-	else
+	if (ISSET(sc->sc_flags, TUN_LAYER2))
 		ether_ifdetach(ifp);
 
 	if_detach(ifp);
@@ -382,7 +378,7 @@ tun_dev_open(dev_t dev, const struct if_clone *ifc, int mode, struct proc *p)
 	rdomain = rtable_l2(p->p_p->ps_rtableid);
 
 	/* let's find or make an interface to work with */
-	while ((ifp = ifunit(name)) == NULL) {
+	while ((ifp = if_unit(name)) == NULL) {
 		error = if_clone_create(name, rdomain);
 		switch (error) {
 		case 0: /* it's probably ours */
@@ -401,12 +397,14 @@ tun_dev_open(dev_t dev, const struct if_clone *ifc, int mode, struct proc *p)
 		error = tsleep_nsec(sc, PCATCH, "tuninit", INFSLP);
 		if (error != 0) {
 			/* XXX if_clone_destroy if stayup? */
+			if_put(ifp);
 			return (error);
 		}
 	}
 
 	if (sc->sc_dev != 0) {
 		/* aww, we lost */
+		if_put(ifp);
 		return (EBUSY);
 	}
 	/* it's ours now */
@@ -415,6 +413,7 @@ tun_dev_open(dev_t dev, const struct if_clone *ifc, int mode, struct proc *p)
 
 	/* automatically mark the interface running on open */
 	SET(ifp->if_flags, IFF_UP | IFF_RUNNING);
+	if_put(ifp);
 	tun_link_state(sc, LINK_STATE_FULL_DUPLEX);
 
 	return (0);
@@ -775,8 +774,8 @@ tun_dev_read(dev_t dev, struct uio *uio, int ioflag)
 
 	ifp = &sc->sc_if;
 
-	error = ifq_deq_sleep(&ifp->if_snd, &m0, ioflag, (PZERO + 1)|PCATCH,
-	    "tunread", &sc->sc_reading, &sc->sc_dev);
+	error = ifq_deq_sleep(&ifp->if_snd, &m0, ISSET(ioflag, IO_NDELAY),
+	    (PZERO + 1)|PCATCH, "tunread", &sc->sc_reading, &sc->sc_dev);
 	if (error != 0)
 		goto put;
 
@@ -866,9 +865,9 @@ tun_dev_write(dev_t dev, struct uio *uio, int ioflag, int align)
 	if (error != 0)
 		goto drop;
 
-	NET_RLOCK();
+	NET_LOCK();
 	if_vinput(ifp, m0);
-	NET_RUNLOCK();
+	NET_UNLOCK();
 
 	tun_put(sc);
 	return (0);
@@ -880,8 +879,8 @@ put:
 	return (error);
 }
 
-int
-tun_input(struct ifnet *ifp, struct mbuf *m0, void *cookie)
+void
+tun_input(struct ifnet *ifp, struct mbuf *m0)
 {
 	uint32_t		af;
 
@@ -909,8 +908,6 @@ tun_input(struct ifnet *ifp, struct mbuf *m0, void *cookie)
 		m_freem(m0);
 		break;
 	}
-
-	return (1);
 }
 
 /*
@@ -1001,7 +998,7 @@ tun_dev_kqfilter(dev_t dev, struct knote *kn)
 	kn->kn_hook = (caddr_t)sc; /* XXX give the sc_ref to the hook? */
 
 	s = splhigh();
-	SLIST_INSERT_HEAD(klist, kn, kn_selnext);
+	klist_insert_locked(klist, kn);
 	splx(s);
 
 put:
@@ -1016,7 +1013,7 @@ filt_tunrdetach(struct knote *kn)
 	struct tun_softc	*sc = kn->kn_hook;
 
 	s = splhigh();
-	SLIST_REMOVE(&sc->sc_rsel.si_note, kn, knote, kn_selnext);
+	klist_remove_locked(&sc->sc_rsel.si_note, kn);
 	splx(s);
 }
 
@@ -1038,7 +1035,7 @@ filt_tunwdetach(struct knote *kn)
 	struct tun_softc	*sc = kn->kn_hook;
 
 	s = splhigh();
-	SLIST_REMOVE(&sc->sc_wsel.si_note, kn, knote, kn_selnext);
+	klist_remove_locked(&sc->sc_wsel.si_note, kn);
 	splx(s);
 }
 
@@ -1060,7 +1057,7 @@ tun_start(struct ifnet *ifp)
 
 	splassert(IPL_NET);
 
-	if (IFQ_LEN(&ifp->if_snd))
+	if (ifq_len(&ifp->if_snd))
 		tun_wakeup(sc);
 }
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.c,v 1.501 2020/02/12 10:33:56 claudio Exp $ */
+/*	$OpenBSD: rde.c,v 1.514 2021/01/25 09:15:24 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -69,6 +69,7 @@ void		 rde_dump_ctx_terminate(pid_t);
 void		 rde_dump_mrt_new(struct mrt *, pid_t, int);
 
 int		 rde_l3vpn_import(struct rde_community *, struct l3vpn *);
+static void	 rde_commit_pftable(void);
 void		 rde_reload_done(void);
 static void	 rde_softreconfig_in_done(void *, u_int8_t);
 static void	 rde_softreconfig_out_done(void *, u_int8_t);
@@ -78,6 +79,7 @@ static void	 rde_softreconfig_in(struct rib_entry *, void *);
 static void	 rde_softreconfig_sync_reeval(struct rib_entry *, void *);
 static void	 rde_softreconfig_sync_fib(struct rib_entry *, void *);
 static void	 rde_softreconfig_sync_done(void *, u_int8_t);
+static int	 rde_no_as_set(struct rde_peer *);
 int		 rde_update_queue_pending(void);
 void		 rde_update_queue_runner(void);
 void		 rde_update6_queue_runner(u_int8_t);
@@ -98,12 +100,13 @@ static void	 network_flush_upcall(struct rib_entry *, void *);
 void		 rde_shutdown(void);
 int		 ovs_match(struct prefix *, u_int32_t);
 
+static struct imsgbuf		*ibuf_se;
+static struct imsgbuf		*ibuf_se_ctl;
+static struct imsgbuf		*ibuf_main;
+static struct bgpd_config	*conf, *nconf;
+
 volatile sig_atomic_t	 rde_quit = 0;
-struct bgpd_config	*conf, *nconf;
 struct filter_head	*out_rules, *out_rules_tmp;
-struct imsgbuf		*ibuf_se;
-struct imsgbuf		*ibuf_se_ctl;
-struct imsgbuf		*ibuf_main;
 struct rde_memstats	 rdemem;
 int			 softreconfig;
 
@@ -157,8 +160,7 @@ rde_main(int debug, int verbose)
 	log_init(debug, LOG_DAEMON);
 	log_setverbose(verbose);
 
-	bgpd_process = PROC_RDE;
-	log_procinit(log_procnames[bgpd_process]);
+	log_procinit(log_procnames[PROC_RDE]);
 
 	if ((pw = getpwnam(BGPD_USER)) == NULL)
 		fatal("getpwnam");
@@ -296,6 +298,8 @@ rde_main(int debug, int verbose)
 			for (aid = AID_INET6; aid < AID_MAX; aid++)
 				rde_update6_queue_runner(aid);
 		}
+		/* commit pftable once per poll loop */
+		rde_commit_pftable();
 	}
 
 	/* do not clean up on shutdown on production, it takes ages. */
@@ -342,12 +346,15 @@ rde_dispatch_imsg_session(struct imsgbuf *ibuf)
 	struct imsg		 imsg;
 	struct peer		 p;
 	struct peer_config	 pconf;
+	struct ctl_show_set	 cset;
 	struct ctl_show_rib	 csr;
 	struct ctl_show_rib_request	req;
 	struct rde_peer		*peer;
 	struct rde_aspath	*asp;
 	struct rde_hashstats	 rdehash;
 	struct filter_set	*s;
+	struct as_set		*aset;
+	struct rde_prefixset	*pset;
 	u_int8_t		*asdata;
 	ssize_t			 n;
 	size_t			 aslen;
@@ -497,8 +504,6 @@ badnetdel:
 			    RDE_RUNNER_ROUNDS, peerself, network_flush_upcall,
 			    NULL, NULL) == -1)
 				log_warn("rde_dispatch: IMSG_NETWORK_FLUSH");
-			/* Deletions were performed in network_flush_upcall */
-			rde_send_pftable_commit();
 			break;
 		case IMSG_FILTER_SET:
 			if (imsg.hdr.len - IMSG_HEADER_SIZE !=
@@ -509,8 +514,11 @@ badnetdel:
 			if ((s = malloc(sizeof(struct filter_set))) == NULL)
 				fatal(NULL);
 			memcpy(s, imsg.data, sizeof(struct filter_set));
-			if (s->type == ACTION_SET_NEXTHOP)
-				s->action.nh = nexthop_get(&s->action.nexthop);
+			if (s->type == ACTION_SET_NEXTHOP) {
+				s->action.nh_ref =
+				    nexthop_get(&s->action.nexthop);
+				s->type = ACTION_SET_NEXTHOP_REF;
+			}
 			TAILQ_INSERT_TAIL(&session_set, s, entry);
 			break;
 		case IMSG_CTL_SHOW_NETWORK:
@@ -568,6 +576,53 @@ badnetdel:
 			imsg_compose(ibuf_se_ctl, IMSG_CTL_END, 0, imsg.hdr.pid,
 			    -1, NULL, 0);
 			break;
+		case IMSG_CTL_SHOW_SET:
+			/* first roa set */
+			pset = &conf->rde_roa;
+			memset(&cset, 0, sizeof(cset));
+			cset.type = ROA_SET;
+			strlcpy(cset.name, "RPKI ROA", sizeof(cset.name));
+			cset.lastchange = pset->lastchange;
+			cset.v4_cnt = pset->th.v4_cnt;
+			cset.v6_cnt = pset->th.v6_cnt;
+			imsg_compose(ibuf_se_ctl, IMSG_CTL_SHOW_SET, 0,
+			    imsg.hdr.pid, -1, &cset, sizeof(cset));
+
+			SIMPLEQ_FOREACH(aset, &conf->as_sets, entry) {
+				memset(&cset, 0, sizeof(cset));
+				cset.type = ASNUM_SET;
+				strlcpy(cset.name, aset->name,
+				    sizeof(cset.name));
+				cset.lastchange = aset->lastchange;
+				cset.as_cnt = set_nmemb(aset->set);
+				imsg_compose(ibuf_se_ctl, IMSG_CTL_SHOW_SET, 0,
+				    imsg.hdr.pid, -1, &cset, sizeof(cset));
+			}
+			SIMPLEQ_FOREACH(pset, &conf->rde_prefixsets, entry) {
+				memset(&cset, 0, sizeof(cset));
+				cset.type = PREFIX_SET;
+				strlcpy(cset.name, pset->name,
+				    sizeof(cset.name));
+				cset.lastchange = pset->lastchange;
+				cset.v4_cnt = pset->th.v4_cnt;
+				cset.v6_cnt = pset->th.v6_cnt;
+				imsg_compose(ibuf_se_ctl, IMSG_CTL_SHOW_SET, 0,
+				    imsg.hdr.pid, -1, &cset, sizeof(cset));
+			}
+			SIMPLEQ_FOREACH(pset, &conf->rde_originsets, entry) {
+				memset(&cset, 0, sizeof(cset));
+				cset.type = ORIGIN_SET;
+				strlcpy(cset.name, pset->name,
+				    sizeof(cset.name));
+				cset.lastchange = pset->lastchange;
+				cset.v4_cnt = pset->th.v4_cnt;
+				cset.v6_cnt = pset->th.v6_cnt;
+				imsg_compose(ibuf_se_ctl, IMSG_CTL_SHOW_SET, 0,
+				    imsg.hdr.pid, -1, &cset, sizeof(cset));
+			}
+			imsg_compose(ibuf_se_ctl, IMSG_CTL_END, 0, imsg.hdr.pid,
+			    -1, NULL, 0);
+			break;
 		case IMSG_CTL_LOG_VERBOSE:
 			/* already checked by SE */
 			memcpy(&verbose, imsg.data, sizeof(verbose));
@@ -610,10 +665,10 @@ rde_dispatch_imsg_parent(struct imsgbuf *ibuf)
 {
 	static struct rde_prefixset	*last_prefixset;
 	static struct as_set	*last_as_set;
-	static struct set_table	*last_set;
 	static struct l3vpn	*vpn;
 	struct imsg		 imsg;
 	struct mrt		 xmrt;
+	struct roa		 roa;
 	struct rde_rib		 rr;
 	struct filterstate	 state;
 	struct imsgbuf		*i;
@@ -809,42 +864,27 @@ rde_dispatch_imsg_parent(struct imsgbuf *ibuf)
 				    entry);
 			}
 			last_prefixset = ps;
-			last_set = NULL;
 			break;
 		case IMSG_RECONF_ROA_SET:
 			strlcpy(nconf->rde_roa.name, "RPKI ROA",
 			    sizeof(nconf->rde_roa.name));
 			last_prefixset = &nconf->rde_roa;
-			last_set = NULL;
 			break;
-		case IMSG_RECONF_ROA_SET_ITEMS:
-			nmemb = imsg.hdr.len - IMSG_HEADER_SIZE;
-			nmemb /= sizeof(struct roa_set);
-			if (last_set == NULL) {
-				last_set = set_new(1, sizeof(struct roa_set));
-				if (last_set == NULL)
-					fatal(NULL);
-			}
-			if (set_add(last_set, imsg.data, nmemb) != 0)
-				fatal(NULL);
+		case IMSG_RECONF_ROA_ITEM:
+			if (imsg.hdr.len - IMSG_HEADER_SIZE != sizeof(roa))
+				fatalx("IMSG_RECONF_ROA_ITEM bad len");
+			memcpy(&roa, imsg.data, sizeof(roa));
+			rv = trie_roa_add(&last_prefixset->th, &roa);
 			break;
 		case IMSG_RECONF_PREFIX_SET_ITEM:
-			if (imsg.hdr.len - IMSG_HEADER_SIZE !=
-			    sizeof(psi))
+			if (imsg.hdr.len - IMSG_HEADER_SIZE != sizeof(psi))
 				fatalx("IMSG_RECONF_PREFIX_SET_ITEM bad len");
 			memcpy(&psi, imsg.data, sizeof(psi));
 			if (last_prefixset == NULL)
 				fatalx("King Bula has no prefixset");
-			if (last_set) {
-				set_prep(last_set);
-				rv = trie_roa_add(&last_prefixset->th,
-				    &psi.p.addr, psi.p.len, last_set);
-				last_set = NULL;
-			} else {
-				rv = trie_add(&last_prefixset->th,
-				    &psi.p.addr, psi.p.len,
-				    psi.p.len_min, psi.p.len_max);
-			}
+			rv = trie_add(&last_prefixset->th,
+			    &psi.p.addr, psi.p.len,
+			    psi.p.len_min, psi.p.len_max);
 			if (rv == -1)
 				log_warnx("trie_add(%s) %s/%u) failed",
 				    last_prefixset->name, log_addr(&psi.p.addr),
@@ -922,8 +962,11 @@ rde_dispatch_imsg_parent(struct imsgbuf *ibuf)
 			if ((s = malloc(sizeof(struct filter_set))) == NULL)
 				fatal(NULL);
 			memcpy(s, imsg.data, sizeof(struct filter_set));
-			if (s->type == ACTION_SET_NEXTHOP)
-				s->action.nh = nexthop_get(&s->action.nexthop);
+			if (s->type == ACTION_SET_NEXTHOP) {
+				s->action.nh_ref =
+				    nexthop_get(&s->action.nexthop);
+				s->type = ACTION_SET_NEXTHOP_REF;
+			}
 			TAILQ_INSERT_TAIL(&parent_set, s, entry);
 			break;
 		case IMSG_MRT_OPEN:
@@ -1028,7 +1071,7 @@ rde_update_dispatch(struct rde_peer *peer, struct imsg *imsg)
 	struct bgpd_addr	 prefix;
 	struct mpattr		 mpa;
 	u_char			*p, *mpp = NULL;
-	int			 error = -1, pos = 0;
+	int			 pos = 0;
 	u_int16_t		 afi, len, mplen;
 	u_int16_t		 withdrawn_len;
 	u_int16_t		 attrpath_len;
@@ -1246,10 +1289,8 @@ rde_update_dispatch(struct rde_peer *peer, struct imsg *imsg)
 			break;
 		}
 
-		if ((state.aspath.flags & ~F_ATTR_MP_UNREACH) == 0) {
-			error = 0;
+		if ((state.aspath.flags & ~F_ATTR_MP_UNREACH) == 0)
 			goto done;
-		}
 	}
 
 	/* shift to NLRI information */
@@ -1385,7 +1426,6 @@ rde_update_dispatch(struct rde_peer *peer, struct imsg *imsg)
 
 done:
 	rde_filterstate_clean(&state);
-	rde_send_pftable_commit();
 }
 
 int
@@ -1552,7 +1592,8 @@ bad_flags:
 	case ATTR_ASPATH:
 		if (!CHECK_FLAGS(flags, ATTR_WELL_KNOWN, 0))
 			goto bad_flags;
-		error = aspath_verify(p, attr_len, rde_as4byte(peer));
+		error = aspath_verify(p, attr_len, rde_as4byte(peer),
+		    rde_no_as_set(peer));
 		if (error == AS_ERR_SOFT) {
 			/*
 			 * soft errors like unexpected segment types are
@@ -1560,8 +1601,6 @@ bad_flags:
 			 * marked invalid.
 			 */
 			a->flags |= F_ATTR_PARSE_ERR;
-			log_peer_warnx(&peer->conf, "bad ASPATH, "
-			    "path invalidated and prefix withdrawn");
 		} else if (error != 0) {
 			rde_update_err(peer, ERR_UPDATE, ERR_UPD_ASPATH,
 			    NULL, 0);
@@ -1576,6 +1615,15 @@ bad_flags:
 			npath = aspath_inflate(p, attr_len, &nlen);
 			if (npath == NULL)
 				fatal("aspath_inflate");
+		}
+		if (error == AS_ERR_SOFT) {
+			char *str;
+
+			aspath_asprint(&str, npath, nlen);
+			log_peer_warnx(&peer->conf, "bad ASPATH %s, "
+			    "path invalidated and prefix withdrawn",
+			    str ? str : "(bad aspath)");
+			free(str);
 		}
 		a->flags |= F_ATTR_ASPATH;
 		a->aspath = aspath_get(npath, nlen);
@@ -1678,8 +1726,10 @@ bad_flags:
 		/* 4-byte ready server take the default route */
 		if (memcmp(p, &zero, sizeof(u_int32_t)) == 0) {
 			/* As per RFC7606 use "attribute discard" here. */
-			log_peer_warnx(&peer->conf, "bad AGGREGATOR, "
-			    "AS 0 not allowed, attribute discarded");
+			char *pfmt = log_fmt_peer(&peer->conf);
+			log_debug("%s: bad AGGREGATOR, "
+			    "AS 0 not allowed, attribute discarded", pfmt);
+			free(pfmt);
 			plen += attr_len;
 			break;
 		}
@@ -1801,7 +1851,8 @@ bad_flags:
 		if (!CHECK_FLAGS(flags, ATTR_OPTIONAL|ATTR_TRANSITIVE,
 		    ATTR_PARTIAL))
 			goto bad_flags;
-		if ((error = aspath_verify(p, attr_len, 1)) != 0) {
+		if ((error = aspath_verify(p, attr_len, 1,
+		    rde_no_as_set(peer))) != 0) {
 			/*
 			 * XXX RFC does not specify how to handle errors.
 			 * XXX Instead of dropping the session because of a
@@ -2773,7 +2824,8 @@ rde_send_kroute(struct rib *rib, struct prefix *new, struct prefix *old)
 void
 rde_generate_updates(struct rib *rib, struct prefix *new, struct prefix *old)
 {
-	struct rde_peer			*peer;
+	struct rde_peer	*peer;
+	u_int8_t	 aid;
 
 	/*
 	 * If old is != NULL we know it was active and should be removed.
@@ -2783,6 +2835,14 @@ rde_generate_updates(struct rib *rib, struct prefix *new, struct prefix *old)
 	if (old == NULL && new == NULL)
 		return;
 
+	if ((rib->flags & F_RIB_NOFIB) == 0)
+		rde_send_kroute(rib, new, old);
+
+	if (new)
+		aid = new->pt->aid;
+	else
+		aid = old->pt->aid;
+
 	LIST_FOREACH(peer, &peerlist, peer_l) {
 		if (peer->conf.id == 0)
 			continue;
@@ -2790,6 +2850,14 @@ rde_generate_updates(struct rib *rib, struct prefix *new, struct prefix *old)
 			continue;
 		if (peer->state != PEER_UP)
 			continue;
+		/* check if peer actually supports the address family */
+		if (peer->capa.mp[aid] == 0)
+			continue;
+		/* skip peers with special export types */
+		if (peer->conf.export_type == EXPORT_NONE ||
+		    peer->conf.export_type == EXPORT_DEFAULT_ROUTE)
+			continue;
+
 		up_generate_updates(out_rules, peer, new, old);
 	}
 }
@@ -2944,10 +3012,31 @@ rde_update6_queue_runner(u_int8_t aid)
 /*
  * pf table specific functions
  */
+struct rde_pftable_node {
+	RB_ENTRY(rde_pftable_node)	 entry;
+	struct pt_entry			*prefix;
+	int				 refcnt;
+	u_int16_t			 id;
+};
+RB_HEAD(rde_pftable_tree, rde_pftable_node);
+
+static inline int
+rde_pftable_cmp(struct rde_pftable_node *a, struct rde_pftable_node *b)
+{
+	if (a->prefix > b->prefix)
+		return 1;
+	if (a->prefix < b->prefix)
+		return -1;
+	return (a->id - b->id);
+}
+
+RB_GENERATE_STATIC(rde_pftable_tree, rde_pftable_node, entry, rde_pftable_cmp);
+
+struct rde_pftable_tree pftable_tree = RB_INITIALIZER(&pftable_tree);
 int need_commit;
-void
-rde_send_pftable(u_int16_t id, struct bgpd_addr *addr,
-    u_int8_t len, int del)
+
+static void
+rde_pftable_send(u_int16_t id, struct pt_entry *pt, int del)
 {
 	struct pftable_msg pfm;
 
@@ -2960,8 +3049,8 @@ rde_send_pftable(u_int16_t id, struct bgpd_addr *addr,
 
 	bzero(&pfm, sizeof(pfm));
 	strlcpy(pfm.pftable, pftable_id2name(id), sizeof(pfm.pftable));
-	memcpy(&pfm.addr, addr, sizeof(pfm.addr));
-	pfm.len = len;
+	pt_getaddr(pt, &pfm.addr);
+	pfm.len = pt->prefixlen;
 
 	if (imsg_compose(ibuf_main,
 	    del ? IMSG_PFTABLE_REMOVE : IMSG_PFTABLE_ADD,
@@ -2972,7 +3061,55 @@ rde_send_pftable(u_int16_t id, struct bgpd_addr *addr,
 }
 
 void
-rde_send_pftable_commit(void)
+rde_pftable_add(u_int16_t id, struct prefix *p)
+{
+	struct rde_pftable_node *pfn, node;
+
+	memset(&node, 0, sizeof(node));
+	node.prefix = p->pt;
+	node.id = id;
+
+	pfn = RB_FIND(rde_pftable_tree, &pftable_tree, &node);
+	if (pfn == NULL) {
+		if ((pfn = calloc(1, sizeof(*pfn))) == NULL)
+			fatal("%s", __func__);
+		pfn->prefix = pt_ref(p->pt);
+		pfn->id = id;
+
+		if (RB_INSERT(rde_pftable_tree, &pftable_tree, pfn) != NULL)
+			fatalx("%s: tree corrupt", __func__);
+
+		rde_pftable_send(id, p->pt, 0);
+	}
+	pfn->refcnt++;
+}
+
+void
+rde_pftable_del(u_int16_t id, struct prefix *p)
+{
+	struct rde_pftable_node *pfn, node;
+
+	memset(&node, 0, sizeof(node));
+	node.prefix = p->pt;
+	node.id = id;
+
+	pfn = RB_FIND(rde_pftable_tree, &pftable_tree, &node);
+	if (pfn == NULL)
+		return;
+
+	if (--pfn->refcnt <= 0) {
+		rde_pftable_send(id, p->pt, 1);
+
+		if (RB_REMOVE(rde_pftable_tree, &pftable_tree, pfn) == NULL)
+			fatalx("%s: tree corrupt", __func__);
+
+		pt_unref(pfn->prefix);
+		free(pfn);
+	}
+}
+
+void
+rde_commit_pftable(void)
 {
 	/* do not run while cleaning up */
 	if (rde_quit)
@@ -3040,6 +3177,7 @@ rde_reload_done(void)
 	SIMPLEQ_CONCAT(&conf->as_sets, &nconf->as_sets);
 
 	conf->rde_roa = nconf->rde_roa;
+	conf->rde_roa.lastchange = roa_old.lastchange;
 	memset(&nconf->rde_roa, 0, sizeof(nconf->rde_roa));
 
 	/* apply new set of l3vpn, sync will be done later */
@@ -3063,8 +3201,10 @@ rde_reload_done(void)
 	if (trie_equal(&conf->rde_roa.th, &roa_old.th) == 0) {
 		log_debug("roa change: reloading Adj-RIB-In");
 		conf->rde_roa.dirty = 1;
+		conf->rde_roa.lastchange = getmonotime();
 		reload++;	/* run softreconf in */
 	}
+
 	trie_free(&roa_old.th);	/* old roa no longer needed */
 
 	rde_mark_prefixsets_dirty(&prefixsets_old, &conf->rde_prefixsets);
@@ -3159,9 +3299,6 @@ rde_reload_done(void)
 	free_rde_prefixsets(&originsets_old);
 	as_sets_free(&as_sets_old);
 
-	/* Deletions may have been performed in rib_free() */
-	rde_send_pftable_commit();
-
 	log_info("RDE reconfigured");
 
 	if (reload > 0) {
@@ -3190,8 +3327,6 @@ rde_softreconfig_in_done(void *arg, u_int8_t dummy)
 
 		log_info("softreconfig in done");
 	}
-	/* Changes may have been performed during softreconfig_in run */
-	rde_send_pftable_commit();
 
 	/* now do the Adj-RIB-Out sync and a possible FIB sync */
 	softreconfig = 0;
@@ -3411,8 +3546,7 @@ rde_softreconfig_sync_reeval(struct rib_entry *re, void *arg)
 		/* need to re-link the nexthop if not already linked */
 		if ((p->flags & PREFIX_NEXTHOP_LINKED) == 0)
 			nexthop_link(p);
-		LIST_REMOVE(p, entry.list.rib);
-		prefix_evaluate(p, re);
+		prefix_evaluate(re, p, p);
 	}
 }
 
@@ -3459,6 +3593,12 @@ int
 rde_as4byte(struct rde_peer *peer)
 {
 	return (peer->capa.as4byte);
+}
+
+static int
+rde_no_as_set(struct rde_peer *peer)
+{
+	return (peer->conf.flags & PEERFLAG_NO_AS_SET);
 }
 
 /* End-of-RIB marker, RFC 4724 */
@@ -3534,7 +3674,7 @@ network_add(struct network_config *nc, struct filterstate *state)
 {
 	struct l3vpn		*vpn;
 	struct filter_set_head	*vpnset = NULL;
-	in_addr_t		 prefix4;
+	struct in_addr		 prefix4;
 	struct in6_addr		 prefix6;
 	u_int8_t		 vstate;
 	u_int16_t		 i;
@@ -3545,37 +3685,35 @@ network_add(struct network_config *nc, struct filterstate *state)
 				continue;
 			switch (nc->prefix.aid) {
 			case AID_INET:
-				prefix4 = nc->prefix.v4.s_addr;
-				bzero(&nc->prefix, sizeof(nc->prefix));
+				prefix4 = nc->prefix.v4;
+				memset(&nc->prefix, 0, sizeof(nc->prefix));
 				nc->prefix.aid = AID_VPN_IPv4;
-				nc->prefix.vpn4.rd = vpn->rd;
-				nc->prefix.vpn4.addr.s_addr = prefix4;
-				nc->prefix.vpn4.labellen = 3;
-				nc->prefix.vpn4.labelstack[0] =
+				nc->prefix.rd = vpn->rd;
+				nc->prefix.v4 = prefix4;
+				nc->prefix.labellen = 3;
+				nc->prefix.labelstack[0] =
 				    (vpn->label >> 12) & 0xff;
-				nc->prefix.vpn4.labelstack[1] =
+				nc->prefix.labelstack[1] =
 				    (vpn->label >> 4) & 0xff;
-				nc->prefix.vpn4.labelstack[2] =
+				nc->prefix.labelstack[2] =
 				    (vpn->label << 4) & 0xf0;
-				nc->prefix.vpn4.labelstack[2] |= BGP_MPLS_BOS;
+				nc->prefix.labelstack[2] |= BGP_MPLS_BOS;
 				vpnset = &vpn->export;
 				break;
 			case AID_INET6:
-				memcpy(&prefix6, &nc->prefix.v6.s6_addr,
-				    sizeof(struct in6_addr));
+				prefix6 = nc->prefix.v6;
 				memset(&nc->prefix, 0, sizeof(nc->prefix));
 				nc->prefix.aid = AID_VPN_IPv6;
-				nc->prefix.vpn6.rd = vpn->rd;
-				memcpy(&nc->prefix.vpn6.addr.s6_addr, &prefix6,
-				    sizeof(struct in6_addr));
-				nc->prefix.vpn6.labellen = 3;
-				nc->prefix.vpn6.labelstack[0] =
+				nc->prefix.rd = vpn->rd;
+				nc->prefix.v6 = prefix6;
+				nc->prefix.labellen = 3;
+				nc->prefix.labelstack[0] =
 				    (vpn->label >> 12) & 0xff;
-				nc->prefix.vpn6.labelstack[1] =
+				nc->prefix.labelstack[1] =
 				    (vpn->label >> 4) & 0xff;
-				nc->prefix.vpn6.labelstack[2] =
+				nc->prefix.labelstack[2] =
 				    (vpn->label << 4) & 0xf0;
-				nc->prefix.vpn6.labelstack[2] |= BGP_MPLS_BOS;
+				nc->prefix.labelstack[2] |= BGP_MPLS_BOS;
 				vpnset = &vpn->export;
 				break;
 			default:
@@ -3615,14 +3753,13 @@ network_add(struct network_config *nc, struct filterstate *state)
 		    nc->prefixlen, vstate);
 	}
 	filterset_free(&nc->attrset);
-	rde_send_pftable_commit();
 }
 
 void
 network_delete(struct network_config *nc)
 {
 	struct l3vpn	*vpn;
-	in_addr_t	 prefix4;
+	struct in_addr	 prefix4;
 	struct in6_addr	 prefix6;
 	u_int32_t	 i;
 
@@ -3632,36 +3769,34 @@ network_delete(struct network_config *nc)
 				continue;
 			switch (nc->prefix.aid) {
 			case AID_INET:
-				prefix4 = nc->prefix.v4.s_addr;
-				bzero(&nc->prefix, sizeof(nc->prefix));
+				prefix4 = nc->prefix.v4;
+				memset(&nc->prefix, 0, sizeof(nc->prefix));
 				nc->prefix.aid = AID_VPN_IPv4;
-				nc->prefix.vpn4.rd = vpn->rd;
-				nc->prefix.vpn4.addr.s_addr = prefix4;
-				nc->prefix.vpn4.labellen = 3;
-				nc->prefix.vpn4.labelstack[0] =
+				nc->prefix.rd = vpn->rd;
+				nc->prefix.v4 = prefix4;
+				nc->prefix.labellen = 3;
+				nc->prefix.labelstack[0] =
 				    (vpn->label >> 12) & 0xff;
-				nc->prefix.vpn4.labelstack[1] =
+				nc->prefix.labelstack[1] =
 				    (vpn->label >> 4) & 0xff;
-				nc->prefix.vpn4.labelstack[2] =
+				nc->prefix.labelstack[2] =
 				    (vpn->label << 4) & 0xf0;
-				nc->prefix.vpn4.labelstack[2] |= BGP_MPLS_BOS;
+				nc->prefix.labelstack[2] |= BGP_MPLS_BOS;
 				break;
 			case AID_INET6:
-				memcpy(&prefix6, &nc->prefix.v6.s6_addr,
-				    sizeof(struct in6_addr));
+				prefix6 = nc->prefix.v6;
 				memset(&nc->prefix, 0, sizeof(nc->prefix));
 				nc->prefix.aid = AID_VPN_IPv6;
-				nc->prefix.vpn6.rd = vpn->rd;
-				memcpy(&nc->prefix.vpn6.addr.s6_addr, &prefix6,
-				    sizeof(struct in6_addr));
-				nc->prefix.vpn6.labellen = 3;
-				nc->prefix.vpn6.labelstack[0] =
+				nc->prefix.rd = vpn->rd;
+				nc->prefix.v6 = prefix6;
+				nc->prefix.labellen = 3;
+				nc->prefix.labelstack[0] =
 				    (vpn->label >> 12) & 0xff;
-				nc->prefix.vpn6.labelstack[1] =
+				nc->prefix.labelstack[1] =
 				    (vpn->label >> 4) & 0xff;
-				nc->prefix.vpn6.labelstack[2] =
+				nc->prefix.labelstack[2] =
 				    (vpn->label << 4) & 0xf0;
-				nc->prefix.vpn6.labelstack[2] |= BGP_MPLS_BOS;
+				nc->prefix.labelstack[2] |= BGP_MPLS_BOS;
 				break;
 			default:
 				log_warnx("unable to VPNize prefix");
@@ -3682,8 +3817,6 @@ network_delete(struct network_config *nc)
 	if (prefix_withdraw(rib_byid(RIB_ADJ_IN), peerself, &nc->prefix,
 	    nc->prefixlen))
 		peerself->prefix_cnt--;
-
-	rde_send_pftable_commit();
 }
 
 static void
@@ -3803,9 +3936,13 @@ rde_mark_prefixsets_dirty(struct rde_prefixset_head *psold,
 		if ((psold == NULL) ||
 		    (old = rde_find_prefixset(new->name, psold)) == NULL) {
 			new->dirty = 1;
+			new->lastchange = getmonotime();
 		} else {
-			if (trie_equal(&new->th, &old->th) == 0)
+			if (trie_equal(&new->th, &old->th) == 0) {
 				new->dirty = 1;
+				new->lastchange = getmonotime();
+			} else
+				new->lastchange = old->lastchange;
 		}
 	}
 }

@@ -1,4 +1,4 @@
-/* $OpenBSD: bwfm.c,v 1.70 2020/03/06 08:41:57 patrick Exp $ */
+/* $OpenBSD: bwfm.c,v 1.80 2021/01/31 11:07:51 patrick Exp $ */
 /*
  * Copyright (c) 2010-2016 Broadcom Corporation
  * Copyright (c) 2016,2017 Patrick Wildt <patrick@blueri.se>
@@ -58,11 +58,14 @@ static int bwfm_debug = 1;
 void	 bwfm_start(struct ifnet *);
 void	 bwfm_init(struct ifnet *);
 void	 bwfm_stop(struct ifnet *);
+void	 bwfm_iff(struct bwfm_softc *);
 void	 bwfm_watchdog(struct ifnet *);
 void	 bwfm_update_node(void *, struct ieee80211_node *);
 void	 bwfm_update_nodes(struct bwfm_softc *);
 int	 bwfm_ioctl(struct ifnet *, u_long, caddr_t);
 int	 bwfm_media_change(struct ifnet *);
+
+void	 bwfm_process_clm_blob(struct bwfm_softc *);
 
 int	 bwfm_chip_attach(struct bwfm_softc *);
 int	 bwfm_chip_detach(struct bwfm_softc *, int);
@@ -255,6 +258,8 @@ bwfm_preinit(struct bwfm_softc *sc)
 
 	printf("%s: address %s\n", DEVNAME(sc), ether_sprintf(ic->ic_myaddr));
 
+	bwfm_process_clm_blob(sc);
+
 	if (bwfm_fwvar_var_get_int(sc, "nmode", &nmode))
 		nmode = 0;
 	if (bwfm_fwvar_var_get_int(sc, "vhtmode", &vhtmode))
@@ -348,7 +353,7 @@ bwfm_start(struct ifnet *ifp)
 		return;
 	if (ifq_is_oactive(&ifp->if_snd))
 		return;
-	if (IFQ_IS_EMPTY(&ifp->if_snd))
+	if (ifq_empty(&ifp->if_snd))
 		return;
 
 	/* TODO: return if no link? */
@@ -501,11 +506,7 @@ bwfm_init(struct ifnet *ifp)
 	 */
 	bwfm_fwvar_var_set_int(sc, "sup_wpa", 0);
 
-#if 0
-	/* TODO: set these on proper ioctl */
-	bwfm_fwvar_var_set_int(sc, "allmulti", 1);
-	bwfm_fwvar_cmd_set_int(sc, BWFM_C_SET_PROMISC, 1);
-#endif
+	bwfm_iff(sc);
 
 	ifp->if_flags |= IFF_RUNNING;
 	ifq_clr_oactive(&ifp->if_snd);
@@ -537,6 +538,43 @@ bwfm_stop(struct ifnet *ifp)
 
 	if (sc->sc_bus_ops->bs_stop)
 		sc->sc_bus_ops->bs_stop(sc);
+}
+
+void
+bwfm_iff(struct bwfm_softc *sc)
+{
+	struct arpcom *ac = &sc->sc_ic.ic_ac;
+	struct ifnet *ifp = &ac->ac_if;
+	struct ether_multi *enm;
+	struct ether_multistep step;
+	size_t mcastlen;
+	char *mcast;
+	int i = 0;
+
+	mcastlen = sizeof(uint32_t) + ac->ac_multicnt * ETHER_ADDR_LEN;
+	mcast = malloc(mcastlen, M_TEMP, M_WAITOK);
+	htolem32((uint32_t *)mcast, ac->ac_multicnt);
+
+	ifp->if_flags &= ~IFF_ALLMULTI;
+	if (ifp->if_flags & IFF_PROMISC || ac->ac_multirangecnt > 0) {
+		ifp->if_flags |= IFF_ALLMULTI;
+	} else {
+		ETHER_FIRST_MULTI(step, ac, enm);
+		while (enm != NULL) {
+			memcpy(mcast + sizeof(uint32_t) + i * ETHER_ADDR_LEN,
+			    enm->enm_addrlo, ETHER_ADDR_LEN);
+			ETHER_NEXT_MULTI(step, enm);
+			i++;
+		}
+	}
+
+	bwfm_fwvar_var_set_data(sc, "mcast_list", mcast, mcastlen);
+	bwfm_fwvar_var_set_int(sc, "allmulti",
+	    !!(ifp->if_flags & IFF_ALLMULTI));
+	bwfm_fwvar_cmd_set_int(sc, BWFM_C_SET_PROMISC,
+	    !!(ifp->if_flags & IFF_PROMISC));
+
+	free(mcast, M_TEMP, mcastlen);
 }
 
 void
@@ -708,6 +746,7 @@ bwfm_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 {
 	struct bwfm_softc *sc = ifp->if_softc;
 	struct ieee80211com *ic = &sc->sc_ic;
+	struct ifreq *ifr;
 	int s, error = 0;
 
 	s = splnet();
@@ -722,6 +761,17 @@ bwfm_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		} else {
 			if (ifp->if_flags & IFF_RUNNING)
 				bwfm_stop(ifp);
+		}
+		break;
+	case SIOCADDMULTI:
+	case SIOCDELMULTI:
+		ifr = (struct ifreq *)data;
+		error = (cmd == SIOCADDMULTI) ?
+		    ether_addmulti(ifr, &ic->ic_ac) :
+		    ether_delmulti(ifr, &ic->ic_ac);
+		if (error == ENETRESET) {
+			bwfm_iff(sc);
+			error = 0;
 		}
 		break;
 	case SIOCGIFMEDIA:
@@ -1273,6 +1323,8 @@ bwfm_chip_sr_capable(struct bwfm_softc *sc)
 		reg = sc->sc_buscore_ops->bc_read(sc, core->co_base +
 		    BWFM_CHIP_REG_SR_CONTROL1);
 		return reg != 0;
+	case BRCM_CC_4378_CHIP_ID:
+		return 0;
 	default:
 		core = bwfm_chip_get_pmu(sc);
 		reg = sc->sc_buscore_ops->bc_read(sc, core->co_base +
@@ -1413,10 +1465,15 @@ bwfm_chip_tcm_rambase(struct bwfm_softc *sc)
 	case BRCM_CC_43569_CHIP_ID:
 	case BRCM_CC_43570_CHIP_ID:
 	case BRCM_CC_4358_CHIP_ID:
-	case BRCM_CC_4359_CHIP_ID:
 	case BRCM_CC_43602_CHIP_ID:
 	case BRCM_CC_4371_CHIP_ID:
 		sc->sc_chip.ch_rambase = 0x180000;
+		break;
+	case BRCM_CC_4359_CHIP_ID:
+		if (sc->sc_chip.ch_chiprev < 9)
+			sc->sc_chip.ch_rambase = 0x180000;
+		else
+			sc->sc_chip.ch_rambase = 0x160000;
 		break;
 	case BRCM_CC_43465_CHIP_ID:
 	case BRCM_CC_43525_CHIP_ID:
@@ -1426,6 +1483,9 @@ bwfm_chip_tcm_rambase(struct bwfm_softc *sc)
 		break;
 	case CY_CC_4373_CHIP_ID:
 		sc->sc_chip.ch_rambase = 0x160000;
+		break;
+	case BRCM_CC_4378_CHIP_ID:
+		sc->sc_chip.ch_rambase = 0x352000;
 		break;
 	default:
 		printf("%s: unknown chip: %d\n", DEVNAME(sc),
@@ -1950,7 +2010,7 @@ bwfm_hostap(struct bwfm_softc *sc)
 	memset(join.assoc.bssid, 0xff, sizeof(join.assoc.bssid));
 	bwfm_fwvar_cmd_set_data(sc, BWFM_C_SET_SSID, &join, sizeof(join));
 	bwfm_fwvar_var_set_int(sc, "closednet",
-	    (ic->ic_flags & IEEE80211_F_HIDENWID) != 0);
+	    (ic->ic_userflags & IEEE80211_F_HIDENWID) != 0);
 }
 #endif
 
@@ -2275,7 +2335,7 @@ bwfm_rx_event(struct bwfm_softc *sc, struct mbuf *m)
 {
 	int s;
 
-	s = splsoftnet();
+	s = splnet();
 	ml_enqueue(&sc->sc_evml, m);
 	splx(s);
 
@@ -2487,22 +2547,22 @@ bwfm_task(void *arg)
 	struct mbuf *m;
 	int s;
 
-	s = splsoftnet();
+	s = splnet();
 	while (ring->next != ring->cur) {
 		cmd = &ring->cmd[ring->next];
 		splx(s);
 		cmd->cb(sc, cmd->data);
-		s = splsoftnet();
+		s = splnet();
 		ring->queued--;
 		ring->next = (ring->next + 1) % BWFM_HOST_CMD_RING_COUNT;
 	}
 	splx(s);
 
-	s = splsoftnet();
+	s = splnet();
 	while ((m = ml_dequeue(&sc->sc_evml)) != NULL) {
 		splx(s);
 		bwfm_rx_event_cb(sc, m);
-		s = splsoftnet();
+		s = splnet();
 	}
 	splx(s);
 }
@@ -2515,7 +2575,7 @@ bwfm_do_async(struct bwfm_softc *sc,
 	struct bwfm_host_cmd *cmd;
 	int s;
 
-	s = splsoftnet();
+	s = splnet();
 	KASSERT(ring->queued < BWFM_HOST_CMD_RING_COUNT);
 	if (ring->queued >= BWFM_HOST_CMD_RING_COUNT) {
 		splx(s);
@@ -2552,7 +2612,8 @@ bwfm_set_key(struct ieee80211com *ic, struct ieee80211_node *ni,
 	cmd.ni = ni;
 	cmd.k = k;
 	bwfm_do_async(sc, bwfm_set_key_cb, &cmd, sizeof(cmd));
-	return 0;
+	sc->sc_key_tasks++;
+	return EBUSY;
 }
 
 void
@@ -2561,9 +2622,12 @@ bwfm_set_key_cb(struct bwfm_softc *sc, void *arg)
 	struct bwfm_cmd_key *cmd = arg;
 	struct ieee80211_key *k = cmd->k;
 	struct ieee80211_node *ni = cmd->ni;
+	struct ieee80211com *ic = &sc->sc_ic;
 	struct bwfm_wsec_key key;
 	uint32_t wsec, wsec_enable;
 	int ext_key = 0;
+
+	sc->sc_key_tasks--;
 
 	if ((k->k_flags & IEEE80211_KEY_GROUP) == 0 &&
 	    k->k_cipher != IEEE80211_CIPHER_WEP40 &&
@@ -2599,13 +2663,23 @@ bwfm_set_key_cb(struct bwfm_softc *sc, void *arg)
 	default:
 		printf("%s: cipher %x not supported\n", DEVNAME(sc),
 		    k->k_cipher);
+		ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
 		return;
 	}
+
+	delay(100);
 
 	bwfm_fwvar_var_set_data(sc, "wsec_key", &key, sizeof(key));
 	bwfm_fwvar_var_get_int(sc, "wsec", &wsec);
 	wsec |= wsec_enable;
 	bwfm_fwvar_var_set_int(sc, "wsec", wsec);
+
+	if (sc->sc_key_tasks == 0) {
+		DPRINTF(("%s: marking port %s valid\n", DEVNAME(sc),
+		    ether_sprintf(cmd->ni->ni_macaddr)));
+		cmd->ni->ni_port_valid = 1;
+		ieee80211_set_link_state(ic, LINK_STATE_UP);
+	}
 }
 
 void
@@ -2748,4 +2822,47 @@ bwfm_nvram_convert(u_char *buf, size_t len, size_t *newlenp)
 
 	*newlenp = count;
 	return 0;
+}
+
+void
+bwfm_process_clm_blob(struct bwfm_softc *sc)
+{
+	struct bwfm_dload_data *data;
+	size_t off, remain, len;
+
+	if (sc->sc_clm == NULL || sc->sc_clmsize == 0)
+		return;
+
+	off = 0;
+	remain = sc->sc_clmsize;
+	data = malloc(sizeof(*data) + BWFM_DLOAD_MAX_LEN, M_TEMP, M_WAITOK);
+
+	while (remain) {
+		len = min(remain, BWFM_DLOAD_MAX_LEN);
+
+		data->flag = htole16(BWFM_DLOAD_FLAG_HANDLER_VER_1);
+		if (off == 0)
+			data->flag |= htole16(BWFM_DLOAD_FLAG_BEGIN);
+		if (remain < BWFM_DLOAD_MAX_LEN)
+			data->flag |= htole16(BWFM_DLOAD_FLAG_END);
+		data->type = htole16(BWFM_DLOAD_TYPE_CLM);
+		data->len = htole32(len);
+		data->crc = 0;
+		memcpy(data->data, sc->sc_clm + off, len);
+
+		if (bwfm_fwvar_var_set_data(sc, "clmload", data,
+		    sizeof(*data) + len)) {
+			printf("%s: could not load CLM blob\n", DEVNAME(sc));
+			goto out;
+		}
+
+		off += len;
+		remain -= len;
+	}
+
+out:
+	free(data, M_TEMP, sizeof(*data) + BWFM_DLOAD_MAX_LEN);
+	free(sc->sc_clm, M_DEVBUF, sc->sc_clmsize);
+	sc->sc_clm = NULL;
+	sc->sc_clmsize = 0;
 }

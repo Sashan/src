@@ -1,4 +1,4 @@
-/*	$OpenBSD: ums.c,v 1.43 2016/01/12 19:16:21 jcs Exp $ */
+/*	$OpenBSD: ums.c,v 1.47 2021/01/29 16:59:41 sthen Exp $ */
 /*	$NetBSD: ums.c,v 1.60 2003/03/11 16:44:00 augustss Exp $	*/
 
 /*
@@ -32,7 +32,7 @@
  */
 
 /*
- * HID spec: http://www.usb.org/developers/devclass_docs/HID1_11.pdf
+ * HID spec: https://www.usb.org/sites/default/files/hid1_11.pdf
  */
 
 #include <sys/param.h>
@@ -65,6 +65,7 @@ void ums_intr(struct uhidev *addr, void *ibuf, u_int len);
 int	ums_enable(void *);
 void	ums_disable(void *);
 int	ums_ioctl(void *, u_long, caddr_t, int, struct proc *);
+void	ums_fix_elecom_descriptor(struct ums_softc *, void *, int, int);
 
 const struct wsmouse_accessops ums_accessops = {
 	ums_enable,
@@ -128,8 +129,14 @@ ums_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_hdev.sc_udev = uaa->device;
 	sc->sc_hdev.sc_report_id = uha->reportid;
 
+	usbd_set_idle(uha->parent->sc_udev, uha->parent->sc_ifaceno, 0, 0);
+
 	quirks = usbd_get_quirks(sc->sc_hdev.sc_udev)->uq_flags;
 	uhidev_get_report_desc(uha->parent, &desc, &size);
+
+	if (uaa->vendor == USB_VENDOR_ELECOM)
+		ums_fix_elecom_descriptor(sc, desc, size, uaa->product);
+
 	repid = uha->reportid;
 	sc->sc_hdev.sc_isize = hid_report_size(desc, size, hid_input, repid);
 	sc->sc_hdev.sc_osize = hid_report_size(desc, size, hid_output, repid);
@@ -143,6 +150,8 @@ ums_attach(struct device *parent, struct device *self, void *aux)
 		qflags |= HIDMS_MS_BAD_CLASS;
 	if (quirks & UQ_MS_LEADING_BYTE)
 		qflags |= HIDMS_LEADINGBYTE;
+	if (quirks & UQ_MS_VENDOR_BUTTONS)
+		qflags |= HIDMS_VENDOR_BUTTONS;
 
 	if (hidms_setup(self, ms, qflags, uha->reportid, desc, size) != 0)
 		return;
@@ -236,4 +245,52 @@ ums_ioctl(void *v, u_long cmd, caddr_t data, int flag, struct proc *p)
 	default:
 		return -1;
 	}
+}
+
+/*
+ * Some ELECOM devices present flawed report descriptors.  Instead of a 5-bit
+ * field and a 3-bit padding as defined by the descriptor they actually use
+ * 6 or 8 Bits to report button states, see
+ *     https://flameeyes.blog/2017/04/24/elecom-deft-and-the-broken-descriptor
+ * This function adapts the Report Count value for the button page, its Usage
+ * Maximum and the report size for the padding bits (at offset 31).
+ */
+void
+ums_fix_elecom_descriptor(struct ums_softc *sc, void *desc, int size,
+		int product)
+{
+	static uByte match[] = {    /* a descriptor fragment, offset: 12 */
+	    0x95, 0x05, 0x75, 0x01, /* Report Count (5), Report Size (1) */
+	    0x05, 0x09, 0x19, 0x01, /* Usage Page (Button), Usage Minimum (1) */
+	    0x29, 0x05,             /* Usage Maximum (5) */
+	};
+	uByte *udesc = desc;
+	int nbuttons;
+
+	switch (product) {
+	case USB_PRODUCT_ELECOM_MXT3URBK:	/* EX-G Trackballs */
+	case USB_PRODUCT_ELECOM_MXT3DRBK:
+	case USB_PRODUCT_ELECOM_MXT4DRBK:
+		nbuttons = 6;
+		break;
+	case USB_PRODUCT_ELECOM_MDT1URBK:	/* DEFT Trackballs */
+	case USB_PRODUCT_ELECOM_MDT1DRBK:
+	case USB_PRODUCT_ELECOM_MHT1URBK:	/* HUGE Trackballs */
+	case USB_PRODUCT_ELECOM_MHT1DRBK:
+		nbuttons = 8;
+		break;
+	default:
+		return;
+	}
+
+	if (udesc == NULL || size < 32
+	    || memcmp(&udesc[12], match, sizeof(match))
+	    || udesc[30] != 0x75 || udesc[31] != 3)
+		return;
+
+	printf("%s: fixing Elecom report descriptor (buttons: %d)\n",
+		sc->sc_hdev.sc_dev.dv_xname, nbuttons);
+	udesc[13] = nbuttons;
+	udesc[21] = nbuttons;
+	udesc[31] = 8 - nbuttons;
 }

@@ -1,4 +1,4 @@
-#	$OpenBSD: GENERIC,v 1.264 2019/12/17 13:08:54 reyk Exp $
+#	$OpenBSD: GENERIC,v 1.268 2021/02/04 16:25:38 anton Exp $
 #
 # For further information on compiling OpenBSD kernels, see the config(8)
 # man page.
@@ -107,6 +107,8 @@ uslhcom* at uhidev?			# Silicon Labs CP2110 USB HID UART
 ucom*	at uslhcom?
 uhid*	at uhidev?			# USB generic HID support
 fido*	at uhidev?			# FIDO/U2F security key support
+ujoy*	at uhidev?			# USB joystick/gamecontroller support
+uhidpp*	at uhidev?		# Logitech HID++ Devices
 upd*	at uhidev?			# USB Power Devices sensors
 aue*	at uhub?			# ADMtek AN986 Pegasus Ethernet
 #atu*	at uhub?			# Atmel AT76c50x based 802.11b
@@ -167,8 +169,6 @@ zstty*	at	zs? channel 1
 tcds*	at	tc?
 asc*	at	tcds?
 asc*	at	tc?
-#cfb*	at	tc?
-#sfb*	at	tc?
 le*	at	tc?
 
 # PCI host bus adapter support
@@ -414,8 +414,6 @@ bktr0	at pci?
 radio*	at bktr?
 
 # Workstation Console attachments
-#wsdisplay*	at	cfb?
-#wsdisplay*	at	sfb?
 wsdisplay*	at	vga?
 wsdisplay*	at	tga?
 wskbd*		at	pckbd? mux 1

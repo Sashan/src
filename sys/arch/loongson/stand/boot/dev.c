@@ -1,4 +1,4 @@
-/*	$OpenBSD: dev.c,v 1.9 2018/04/20 14:08:12 visa Exp $	*/
+/*	$OpenBSD: dev.c,v 1.11 2020/12/09 18:10:19 krw Exp $	*/
 
 /*
  * Copyright (c) 2010 Miodrag Vallat.
@@ -66,14 +66,15 @@ struct pmon_iodata {
 int	pmon_getdisklabel(struct pmon_iodata *pi);
 
 int
-pmon_iostrategy(void *f, int rw, daddr32_t dblk, size_t size, void *buf,
+pmon_iostrategy(void *f, int rw, daddr_t dblk, size_t size, void *buf,
     size_t *rsize)
 {
 	struct pmon_iodata *pi = (struct pmon_iodata *)f;
 	off_t offs, pos;
 	int rc;
 
-	*rsize = 0;
+	if (rsize != NULL)
+		*rsize = 0;
 	if (size == 0)
 		return 0;
 
@@ -91,9 +92,9 @@ pmon_iostrategy(void *f, int rw, daddr32_t dblk, size_t size, void *buf,
 	rc = pmon_read(pi->fd, buf, size);
 	if (rc >= 0) {
 		pi->curpos += rc;
-		*rsize = rc;
-	} else
-		*rsize = 0;
+		if (rsize != NULL)
+			*rsize = rc;
+	}
 
 	if (rc != size)
 		return EIO;

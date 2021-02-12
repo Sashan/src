@@ -1,4 +1,4 @@
-#	$OpenBSD: RAMDISK,v 1.112 2019/10/27 08:07:01 kettenis Exp $
+#	$OpenBSD: RAMDISK,v 1.119 2020/06/18 08:48:04 fcambus Exp $
 
 machine		armv7 arm
 
@@ -11,7 +11,7 @@ option		SMALL_KERNEL
 option		NO_PROPOLICE
 option		BOOT_CONFIG
 
-option		MINIROOTSIZE=15360
+option		MINIROOTSIZE=17920
 option		RAMDISK_HOOKS
 
 option		FFS
@@ -63,7 +63,9 @@ omap0		at mainbus?
 omapid*		at omap?
 
 # OMAP on-chip devices
-intc*		at fdt?			# OMAP3 interrupt controller
+intc*		at fdt? early 1		# OMAP3 interrupt controller
+omclock*	at fdt? early 1
+omcm*		at fdt? early 1
 omwugen*	at fdt?			# Wake-up generator
 #edma*		at fdt?			# OMAP3 dma controller
 prcm*		at omap?		# power/clock controller
@@ -71,6 +73,9 @@ pinctrl*	at fdt?			# pin muxing
 omdog*		at fdt?			# watchdog timer
 omgpio*		at fdt?			# user-visible GPIO pins?
 gpio*		at omgpio?
+omrng*		at fdt?
+omsysc*		at fdt? early 1
+omsysc*		at fdt?
 tiiic*		at fdt?
 iic*		at tiiic?
 gptimer*	at omap?		# general purpose timers
@@ -121,6 +126,7 @@ pci*		at pciecam?
 
 sdhc*		at fdt?
 sdmmc*		at sdhc?
+bwfm*		at sdmmc?		# Broadcom FullMAC
 
 psci*		at fdt? early 1
 syscon*		at fdt? early 1
@@ -149,8 +155,18 @@ exrtc*		at fdt?
 exuart*		at fdt?
 
 # Raspberry Pi 2/3
-bcmintc*	at fdt?
+bcmaux*		at fdt? early 1
+bcmbsc*		at fdt?
+iic*		at bcmbsc?
+bcmclock*	at fdt? early 1
 bcmdog*		at fdt?
+bcmdmac*	at fdt? early 1
+bcmgpio*	at fdt? early 1
+bcmintc*	at fdt? early 1
+bcmmbox*	at fdt? early 1
+bcmrng*		at fdt?
+bcmsdhost*	at fdt?
+sdmmc*		at bcmsdhost?
 dwctwo*		at fdt?
 usb*		at dwctwo?
 
@@ -257,6 +273,7 @@ rsu*		at uhub?		# Realtek RTL8188SU/RTL8191SU/RTL8192SU
 uath*		at uhub?		# Atheros AR5005UG/AR5005UX
 otus*		at uhub?		# Atheros AR9001U
 athn*		at uhub?		# Atheros AR9002U
+bwfm*		at uhub?		# Broadcom FullMAC
 
 atphy*		at mii?			# Attansic F1 PHYs
 rgephy*		at mii?			# Realtek 8169S/8110S PHY

@@ -43,9 +43,16 @@
 	} while (0)
 #endif
 
-#if SSH_SK_VERSION_MAJOR != 0x00040000
+#if SSH_SK_VERSION_MAJOR != 0x00070000
 # error SK API has changed, sk-dummy.c needs an update
 #endif
+
+#ifdef SK_DUMMY_INTEGRATE
+# define sk_api_version		ssh_sk_api_version
+# define sk_enroll		ssh_sk_enroll
+# define sk_sign		ssh_sk_sign
+# define sk_load_resident_keys	ssh_sk_load_resident_keys
+#endif /* !SK_STANDALONE */
 
 static void skdebug(const char *func, const char *fmt, ...)
     __attribute__((__format__ (printf, 2, 3)));
@@ -456,13 +463,15 @@ sig_ed25519(const uint8_t *message, size_t message_len,
 }
 
 int
-sk_sign(uint32_t alg, const uint8_t *message, size_t message_len,
+sk_sign(uint32_t alg, const uint8_t *data, size_t datalen,
     const char *application, const uint8_t *key_handle, size_t key_handle_len,
     uint8_t flags, const char *pin, struct sk_option **options,
     struct sk_sign_response **sign_response)
 {
 	struct sk_sign_response *response = NULL;
 	int ret = SSH_SK_ERR_GENERAL;
+	SHA256_CTX ctx;
+	uint8_t message[32];
 
 	if (sign_response == NULL) {
 		skdebug(__func__, "sign_response == NULL");
@@ -475,17 +484,20 @@ sk_sign(uint32_t alg, const uint8_t *message, size_t message_len,
 		skdebug(__func__, "calloc response failed");
 		goto out;
 	}
+	SHA256_Init(&ctx);
+	SHA256_Update(&ctx, data, datalen);
+	SHA256_Final(message, &ctx);
 	response->flags = flags;
 	response->counter = 0x12345678;
 	switch(alg) {
 	case SSH_SK_ECDSA:
-		if (sig_ecdsa(message, message_len, application,
+		if (sig_ecdsa(message, sizeof(message), application,
 		    response->counter, flags, key_handle, key_handle_len,
 		    response) != 0)
 			goto out;
 		break;
 	case SSH_SK_ED25519:
-		if (sig_ed25519(message, message_len, application,
+		if (sig_ed25519(message, sizeof(message), application,
 		    response->counter, flags, key_handle, key_handle_len,
 		    response) != 0)
 			goto out;
@@ -498,6 +510,7 @@ sk_sign(uint32_t alg, const uint8_t *message, size_t message_len,
 	response = NULL;
 	ret = 0;
  out:
+	explicit_bzero(message, sizeof(message));
 	if (response != NULL) {
 		free(response->sig_r);
 		free(response->sig_s);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: init_main.c,v 1.297 2020/03/13 09:25:21 mpi Exp $	*/
+/*	$OpenBSD: init_main.c,v 1.306 2021/02/08 10:51:01 mpi Exp $	*/
 /*	$NetBSD: init_main.c,v 1.84.4.1 1996/06/02 09:08:06 mrg Exp $	*/
 
 /*
@@ -83,8 +83,6 @@
 
 #include <uvm/uvm_extern.h>
 
-#include <dev/rndvar.h>
-
 #include <ufs/ufs/quota.h>
 
 #include <net/if.h>
@@ -104,6 +102,11 @@ extern void kubsan_init(void);
 extern void nfs_init(void);
 #endif
 
+#include "stoeplitz.h"
+#if NSTOEPLITZ > 0
+extern void stoeplitz_init(void);
+#endif
+
 #include "mpath.h"
 #include "vscsi.h"
 #include "softraid.h"
@@ -111,7 +114,7 @@ extern void nfs_init(void);
 const char	copyright[] =
 "Copyright (c) 1982, 1986, 1989, 1991, 1993\n"
 "\tThe Regents of the University of California.  All rights reserved.\n"
-"Copyright (c) 1995-2020 OpenBSD. All rights reserved.  https://www.OpenBSD.org\n";
+"Copyright (c) 1995-2021 OpenBSD. All rights reserved.  https://www.OpenBSD.org\n";
 
 /* Components of the first process -- never freed. */
 struct	session session0;
@@ -229,18 +232,23 @@ main(void *framep)
 	KERNEL_LOCK_INIT();
 	SCHED_LOCK_INIT();
 
+	rw_obj_init();
 	uvm_init();
 	disk_init();		/* must come before autoconfiguration */
 	tty_init();		/* initialise tty's */
 	cpu_startup();
 
-	random_start();		/* Start the flow */
+	random_start(boothowto & RB_GOODRANDOM);	/* Start the flow */
 
 	/*
 	 * Initialize mbuf's.  Do this now because we might attempt to
 	 * allocate mbufs or mbuf clusters during autoconfiguration.
 	 */
 	mbinit();
+
+#if NSTOEPLITZ > 0
+	stoeplitz_init();
+#endif
 
 	/* Initialize sockets. */
 	soinit();
@@ -318,8 +326,8 @@ main(void *framep)
 
 	/* Initialize signal state for process 0. */
 	signal_init();
+	siginit(&sigacts0);
 	pr->ps_sigacts = &sigacts0;
-	siginit(pr);
 
 	/* Create the file descriptor table. */
 	p->p_fd = pr->ps_fd = fdinit();
@@ -425,6 +433,7 @@ main(void *framep)
 #endif
 
 	mbcpuinit();	/* enable per cpu mbuf data */
+	uvm_init_percpu();
 
 	/* init exec and emul */
 	init_exec();

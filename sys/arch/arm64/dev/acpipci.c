@@ -1,4 +1,4 @@
-/*	$OpenBSD: acpipci.c,v 1.13 2019/08/22 17:14:21 kettenis Exp $	*/
+/*	$OpenBSD: acpipci.c,v 1.24 2021/01/15 20:49:38 patrick Exp $	*/
 /*
  * Copyright (c) 2018 Mark Kettenis
  *
@@ -96,6 +96,7 @@ const char *acpipci_hids[] = {
 int	acpipci_parse_resources(int, union acpi_resource *, void *);
 int	acpipci_bs_map(bus_space_tag_t, bus_addr_t, bus_size_t, int,
 	    bus_space_handle_t *);
+paddr_t acpipci_bs_mmap(bus_space_tag_t, bus_addr_t, off_t, int, int);
 
 void	acpipci_attach_hook(struct device *, struct device *,
 	    struct pcibus_attach_args *);
@@ -109,7 +110,7 @@ void	acpipci_conf_write(void *, pcitag_t, int, pcireg_t);
 int	acpipci_intr_map(struct pci_attach_args *, pci_intr_handle_t *);
 const char *acpipci_intr_string(void *, pci_intr_handle_t);
 void	*acpipci_intr_establish(void *, pci_intr_handle_t, int,
-	    int (*)(void *), void *, char *);
+	    struct cpu_info *, int (*)(void *), void *, char *);
 void	acpipci_intr_disestablish(void *, void *);
 
 uint32_t acpipci_iort_map_msi(pci_chipset_tag_t, pcitag_t);
@@ -171,9 +172,11 @@ acpipci_attach(struct device *parent, struct device *self, void *aux)
 	memcpy(&sc->sc_bus_iot, sc->sc_iot, sizeof(sc->sc_bus_iot));
 	sc->sc_bus_iot.bus_private = sc->sc_io_trans;
 	sc->sc_bus_iot._space_map = acpipci_bs_map;
+	sc->sc_bus_iot._space_mmap = acpipci_bs_mmap;
 	memcpy(&sc->sc_bus_memt, sc->sc_iot, sizeof(sc->sc_bus_memt));
 	sc->sc_bus_memt.bus_private = sc->sc_mem_trans;
 	sc->sc_bus_memt._space_map = acpipci_bs_map;
+	sc->sc_bus_memt._space_mmap = acpipci_bs_mmap;
 
 	sc->sc_pc = pci_lookup_segment(seg);
 	KASSERT(sc->sc_pc->pc_intr_v == NULL);
@@ -268,6 +271,10 @@ acpipci_parse_resources(int crsidx, union acpi_resource *crs, void *arg)
 		break;
 	case LR_TYPE_BUS:
 		extent_free(sc->sc_busex, min, len, EX_WAITOK);
+		/*
+		 * Let _CRS minimum bus number override _BBN.
+		 */
+		sc->sc_bus = min;
 		break;
 	}
 
@@ -428,10 +435,11 @@ acpipci_intr_string(void *v, pci_intr_handle_t ih)
 
 void *
 acpipci_intr_establish(void *v, pci_intr_handle_t ih, int level,
-    int (*func)(void *), void *arg, char *name)
+    struct cpu_info *ci, int (*func)(void *), void *arg, char *name)
 {
 	struct acpipci_softc *sc = v;
 	struct interrupt_controller *ic;
+	struct arm_intr_handle *aih;
 	void *cookie;
 
 	extern LIST_HEAD(, interrupt_controller) interrupt_controllers;
@@ -450,7 +458,7 @@ acpipci_intr_establish(void *v, pci_intr_handle_t ih, int level,
 		/* Map Requester ID through IORT to get sideband data. */
 		data = acpipci_iort_map_msi(ih.ih_pc, ih.ih_tag);
 		cookie = ic->ic_establish_msi(ic->ic_cookie, &addr,
-		    &data, level, func, arg, name);
+		    &data, level, ci, func, arg, name);
 		if (cookie == NULL)
 			return NULL;
 
@@ -461,7 +469,14 @@ acpipci_intr_establish(void *v, pci_intr_handle_t ih, int level,
 			    &sc->sc_bus_memt, ih.ih_intrpin, addr, data);
 		} else
 			pci_msi_enable(ih.ih_pc, ih.ih_tag, addr, data);
+
+		aih = malloc(sizeof(*aih), M_DEVBUF, M_WAITOK);
+		aih->ih_ic = ic;
+		aih->ih_ih = cookie;
+		cookie = aih;
 	} else {
+		if (ci != NULL && !CPU_IS_PRIMARY(ci))
+			return NULL;
 		cookie = acpi_intr_establish(ih.ih_intrpin, 0, level,
 		    func, arg, name);
 	}
@@ -472,7 +487,13 @@ acpipci_intr_establish(void *v, pci_intr_handle_t ih, int level,
 void
 acpipci_intr_disestablish(void *v, void *cookie)
 {
-	panic("%s", __func__);
+	struct arm_intr_handle *aih = cookie;
+	struct interrupt_controller *ic = aih->ih_ic;
+
+	if (ic->ic_establish_msi)
+		ic->ic_disestablish(aih->ih_ih);
+	else
+		acpi_intr_disestablish(cookie);
 }
 
 /*
@@ -492,6 +513,22 @@ acpipci_bs_map(bus_space_tag_t t, bus_addr_t addr, bus_size_t size,
 	}
 	
 	return ENXIO;
+}
+
+paddr_t
+acpipci_bs_mmap(bus_space_tag_t t, bus_addr_t addr, off_t off,
+    int prot, int flags)
+{
+	struct acpipci_trans *at;
+
+	for (at = t->bus_private; at; at = at->at_next) {
+		if (addr >= at->at_base && addr < at->at_base + at->at_size) {
+			return bus_space_mmap(at->at_iot,
+			    addr + at->at_offset, off, prot, flags);
+		}
+	}
+
+	return -1;
 }
 
 SLIST_HEAD(,acpipci_mcfg) acpipci_mcfgs =
@@ -561,40 +598,6 @@ pci_lookup_segment(int segment)
  * IORT support.
  */
 
-struct acpi_iort {
-	struct acpi_table_header	hdr;
-#define IORT_SIG	"IORT"
-	uint32_t	number_of_nodes;
-	uint32_t	offset;
-	uint32_t	reserved;
-} __packed;
-
-struct acpi_iort_node {
-	uint8_t		type;
-#define ACPI_IORT_ITS		0
-#define ACPI_IORT_ROOT_COMPLEX	2
-#define ACPI_IORT_SMMU		3
-	uint16_t	length;
-	uint8_t		revision;
-	uint32_t	reserved1;
-	uint32_t	number_of_mappings;
-	uint32_t	mapping_offset;
-	uint64_t	memory_access_properties;
-	uint32_t	atf_attributes;
-	uint32_t	segment;
-	uint8_t		memory_address_size_limit;
-	uint8_t		reserved2[3];
-} __packed;
-
-struct acpi_iort_mapping {
-	uint32_t	input_base;
-	uint32_t	length;
-	uint32_t	output_base;
-	uint32_t	output_reference;
-	uint32_t	flags;
-#define ACPI_IORT_MAPPING_SINGLE	0x00000001
-} __packed;
-
 uint32_t acpipci_iort_map(struct acpi_iort *, uint32_t, uint32_t);
 
 uint32_t
@@ -613,8 +616,9 @@ acpipci_iort_map_node(struct acpi_iort *iort,
 			return acpipci_iort_map(iort, offset, id);
 		}
 
+		/* Mapping encodes number of IDs in the range minus one. */
 		if (map[i].input_base <= id &&
-		    id < map[i].input_base + map[i].length) {
+		    id <= map[i].input_base + map[i].number_of_ids) {
 			id = map[i].output_base + (id - map[i].input_base);
 			return acpipci_iort_map(iort, offset, id);
 		}
@@ -646,6 +650,7 @@ acpipci_iort_map_msi(pci_chipset_tag_t pc, pcitag_t tag)
 	struct acpi_table_header *hdr;
 	struct acpi_iort *iort = NULL;
 	struct acpi_iort_node *node;
+	struct acpi_iort_rc_node *rc;
 	struct acpi_q *entry;
 	uint32_t rid, offset;
 	int i;
@@ -670,7 +675,8 @@ acpipci_iort_map_msi(pci_chipset_tag_t pc, pcitag_t tag)
 		node = (struct acpi_iort_node *)((char *)iort + offset);
 		switch (node->type) {
 		case ACPI_IORT_ROOT_COMPLEX:
-			if (node->segment == sc->sc_seg)
+			rc = (struct acpi_iort_rc_node *)&node[1];
+			if (rc->segment == sc->sc_seg)
 				return acpipci_iort_map_node(iort, node, rid);
 			break;
 		}

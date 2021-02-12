@@ -1,4 +1,4 @@
-/*	$OpenBSD: smi.c,v 1.7 2020/01/17 09:52:44 martijn Exp $	*/
+/*	$OpenBSD: smi.c,v 1.14 2021/01/04 08:00:29 martijn Exp $	*/
 
 /*
  * Copyright (c) 2019 Martijn van Duren <martijn@openbsd.org>
@@ -24,10 +24,12 @@
 #include <arpa/inet.h>
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include <wctype.h>
 
 #include "ber.h"
 #include "mib.h"
@@ -36,8 +38,12 @@
 
 #define MINIMUM(a, b)	(((a) < (b)) ? (a) : (b))
 
+char *smi_displayhint_os(struct textconv *, int, const char *, size_t, int);
+char *smi_displayhint_int(struct textconv*, int, long long);
+
 int smi_oid_cmp(struct oid *, struct oid *);
 int smi_key_cmp(struct oid *, struct oid *);
+int smi_textconv_cmp(struct textconv *, struct textconv *);
 struct oid * smi_findkey(char *);
 
 RB_HEAD(oidtree, oid);
@@ -47,6 +53,10 @@ struct oidtree smi_oidtree;
 RB_HEAD(keytree, oid);
 RB_PROTOTYPE(keytree, oid, o_keyword, smi_key_cmp)
 struct keytree smi_keytree;
+
+RB_HEAD(textconvtree, textconv);
+RB_PROTOTYPE(textconvtree, textconv, tc_entry, smi_textconv_cmp);
+struct textconvtree smi_tctree;
 
 int
 smi_init(void)
@@ -58,7 +68,7 @@ smi_init(void)
 }
 
 void
-smi_debug_elements(struct ber_element *root)
+smi_debug_elements(struct ber_element *root, int utf8)
 {
 	static int	 indent = 0;
 	char		*value;
@@ -84,9 +94,6 @@ smi_debug_elements(struct ber_element *root)
 		switch (root->be_type) {
 		case BER_TYPE_EOC:
 			fprintf(stderr, "end-of-content");
-			break;
-		case BER_TYPE_BOOLEAN:
-			fprintf(stderr, "boolean");
 			break;
 		case BER_TYPE_INTEGER:
 			fprintf(stderr, "integer");
@@ -181,14 +188,11 @@ smi_debug_elements(struct ber_element *root)
 	fprintf(stderr, "(%u) encoding %u ",
 	    root->be_type, root->be_encoding);
 
-	if ((value = smi_print_element(root, 1, smi_os_default,
-	    smi_oidl_numeric)) == NULL)
+	if ((value = smi_print_element(NULL, root, 1, smi_os_default,
+	    smi_oidl_numeric, utf8)) == NULL)
 		goto invalid;
 
 	switch (root->be_encoding) {
-	case BER_TYPE_BOOLEAN:
-		fprintf(stderr, "%s", value);
-		break;
 	case BER_TYPE_INTEGER:
 	case BER_TYPE_ENUMERATED:
 		fprintf(stderr, "value %s", value);
@@ -228,39 +232,44 @@ smi_debug_elements(struct ber_element *root)
 
 	if (constructed && root->be_sub) {
 		indent += 2;
-		smi_debug_elements(root->be_sub);
+		smi_debug_elements(root->be_sub, utf8);
 		indent -= 2;
 	}
 	if (root->be_next)
-		smi_debug_elements(root->be_next);
+		smi_debug_elements(root->be_next, utf8);
 }
 
 char *
-smi_print_element(struct ber_element *root, int print_hint,
-    enum smi_output_string output_string, enum smi_oid_lookup lookup)
+smi_print_element(struct ber_oid *oid, struct ber_element *root, int print_hint,
+    enum smi_output_string output_string, enum smi_oid_lookup lookup, int utf8)
 {
 	char		*str = NULL, *buf, *p;
+	struct oid	 okey;
+	struct oid	*object = NULL;
+	struct textconv	 tckey;
 	size_t		 len, i, slen;
 	long long	 v, ticks;
-	int		 d;
 	int		 is_hex = 0, ret;
 	struct ber_oid	 o;
 	char		 strbuf[BUFSIZ];
 	char		*hint;
 	int		 days, hours, min, sec, csec;
 
+	if (oid != NULL) {
+		bcopy(oid, &(okey.o_id), sizeof(okey));
+		do {
+			object = RB_FIND(oidtree, &smi_oidtree, &okey);
+			okey.o_id.bo_n--;
+		} while (object == NULL && okey.o_id.bo_n > 0);
+		if (object != NULL && object->o_textconv == NULL &&
+		    object->o_tcname != NULL) {
+			tckey.tc_name = object->o_tcname;
+			object->o_textconv = RB_FIND(textconvtree, &smi_tctree,
+			    &tckey);
+		}
+	}
+
 	switch (root->be_encoding) {
-	case BER_TYPE_BOOLEAN:
-		if (ober_get_boolean(root, &d) == -1)
-			goto fail;
-		if (print_hint) {
-			if (asprintf(&str, "INTEGER: %s(%d)",
-			    d ? "true" : "false", d) == -1)
-				goto fail;
-		} else
-			if (asprintf(&str, "%s", d ? "true" : "false") == -1)
-				goto fail;
-		break;
 	case BER_TYPE_INTEGER:
 	case BER_TYPE_ENUMERATED:
 		if (ober_get_integer(root, &v) == -1)
@@ -319,6 +328,10 @@ smi_print_element(struct ber_element *root, int print_hint,
 			break;
 		}
 		hint = "INTEGER: ";
+		if (object != NULL && object->o_textconv != NULL &&
+		    object->o_textconv->tc_syntax == root->be_encoding)
+			return smi_displayhint_int(object->o_textconv,
+			    print_hint, v);
 		if (root->be_class == BER_CLASS_APPLICATION) {
 			if (root->be_type == SNMP_T_COUNTER32)
 				hint = "Counter32: ";
@@ -379,6 +392,10 @@ smi_print_element(struct ber_element *root, int print_hint,
 			else
 				str = strdup("Unknown status at this OID");
 		} else {
+			if (object != NULL && object->o_textconv != NULL &&
+			    object->o_textconv->tc_syntax == root->be_encoding)
+				return smi_displayhint_os(object->o_textconv,
+				    print_hint, buf, root->be_len, utf8);
 			for (i = 0; i < root->be_len; i++) {
 				if (!isprint(buf[i])) {
 					if (output_string == smi_os_default)
@@ -537,7 +554,6 @@ smi_oid2string(struct ber_oid *o, char *buf, size_t len,
 	bzero(buf, len);
 	bzero(&key, sizeof(key));
 	bcopy(o, &key.o_id, sizeof(struct ber_oid));
-	key.o_flags |= OID_KEY;		/* do not match wildcards */
 
 	for (i = 0; i < o->bo_n; i++) {
 		key.o_oidlen = i + 1;
@@ -550,7 +566,7 @@ smi_oid2string(struct ber_oid *o, char *buf, size_t len,
 					continue;
 			}
 		} else
-			snprintf(str, sizeof(str), "%d", key.o_oid[i]);
+			snprintf(str, sizeof(str), "%u", key.o_oid[i]);
 		if (*buf != '\0' || i == 0)
 			strlcat(buf, ".", len);
 		strlcat(buf, str, len);
@@ -562,24 +578,21 @@ smi_oid2string(struct ber_oid *o, char *buf, size_t len,
 void
 smi_mibtree(struct oid *oids)
 {
-	struct oid	*oid, *decl;
 	size_t		 i;
 
-	for (i = 0; oids[i].o_oid[0] != 0; i++) {
-		oid = &oids[i];
-		if (oid->o_name != NULL) {
-			RB_INSERT(oidtree, &smi_oidtree, oid);
-			RB_INSERT(keytree, &smi_keytree, oid);
-			continue;
-		}
-		decl = RB_FIND(oidtree, &smi_oidtree, oid);
-		decl->o_flags = oid->o_flags;
-		decl->o_get = oid->o_get;
-		decl->o_set = oid->o_set;
-		decl->o_table = oid->o_table;
-		decl->o_val = oid->o_val;
-		decl->o_data = oid->o_data;
+	for (i = 0; oids[i].o_name != NULL; i++) {
+		RB_INSERT(oidtree, &smi_oidtree, &(oids[i]));
+		RB_INSERT(keytree, &smi_keytree, &(oids[i]));
 	}
+}
+
+void
+smi_textconvtree(struct textconv *textconvs)
+{
+	size_t		 i = 0;
+
+	for (i = 0; textconvs[i].tc_name != NULL; i++)
+		RB_INSERT(textconvtree, &smi_tctree, &(textconvs[i]));
 }
 
 struct oid *
@@ -593,28 +606,117 @@ smi_findkey(char *name)
 }
 
 struct oid *
-smi_foreach(struct oid *oid, u_int flags)
+smi_foreach(struct oid *oid)
 {
 	/*
 	 * Traverse the tree of MIBs with the option to check
 	 * for specific OID flags.
 	 */
-	if (oid == NULL) {
-		oid = RB_MIN(oidtree, &smi_oidtree);
-		if (oid == NULL)
-			return (NULL);
-		if (flags == 0 || (oid->o_flags & flags))
-			return (oid);
-	}
-	for (;;) {
-		oid = RB_NEXT(oidtree, &smi_oidtree, oid);
-		if (oid == NULL)
-			break;
-		if (flags == 0 || (oid->o_flags & flags))
-			return (oid);
-	}
+	if (oid == NULL)
+		return RB_MIN(oidtree, &smi_oidtree);
+	return RB_NEXT(oidtree, &smi_oidtree, oid);
+}
 
-	return (oid);
+char *
+smi_displayhint_int(struct textconv *tc, int print_hint, long long v)
+{
+	size_t i;
+	char *rbuf;
+
+	for (i = 0; tc->tc_enum[i].tce_name != NULL; i++) {
+		if (tc->tc_enum[i].tce_number == v) {
+			if (print_hint) {
+				if (asprintf(&rbuf, "INTEGER: %s(%lld)",
+				    tc->tc_enum[i].tce_name, v) == -1)
+					return NULL;
+			} else {
+				if (asprintf(&rbuf, "%s",
+				    tc->tc_enum[i].tce_name) == -1)
+					return NULL;
+			}
+			return rbuf;
+		}
+	}
+	if (asprintf(&rbuf, "%s%lld", print_hint ? "INTEGER: " : "", v) == -1)
+		return NULL;
+	return rbuf;
+}
+
+#define REPLACEMENT "\357\277\275"
+char *
+smi_displayhint_os(struct textconv *tc, int print_hint, const char *src,
+    size_t srclen, int utf8)
+{
+	size_t octetlength, i = 0, j = 0;
+	size_t prefixlen;
+	unsigned long ulval;
+	int clen;
+	char *displayformat;
+	const char *prefix;
+	char *rbuf, *dst;
+	wchar_t wc;
+
+	prefix = print_hint ? "STRING: " : "";
+	prefixlen = strlen(prefix);
+
+	errno = 0;
+	ulval = strtoul(tc->tc_display_hint, &displayformat, 10);
+	octetlength = ulval;
+	if (!isdigit(tc->tc_display_hint[0]) ||
+	    (errno != 0 && (ulval == 0 || ulval == ULONG_MAX)) ||
+	    (unsigned long) octetlength != ulval) {
+		errno = EINVAL;
+		return NULL;
+	}
+		
+	if (displayformat[0] == 't' || displayformat[0] == 'a') {
+		if ((rbuf = malloc(prefixlen + octetlength + 1)) == NULL)
+			return NULL;
+		(void)strlcpy(rbuf, prefix, prefixlen + octetlength + 1);
+		dst = rbuf + prefixlen;
+		while (j < octetlength && i < srclen) {
+			clen = mbtowc(&wc, &(src[i]), srclen - i);
+			if (displayformat[0] == 'a' && clen > 1)
+				clen = -1;
+			switch (clen) {
+			case 0:
+				dst[j++] = '.';
+				i++;
+				break;
+			case -1:
+				mbtowc(NULL, NULL, MB_CUR_MAX);
+				if (utf8) {
+					if (octetlength - j <
+					    sizeof(REPLACEMENT) - 1) {
+						dst[j] = '\0';
+						return rbuf;
+					}
+					memcpy(&(dst[j]), REPLACEMENT,
+					    sizeof(REPLACEMENT) - 1);
+					j += sizeof(REPLACEMENT) - 1;
+				} else
+					dst[j++] = '?';
+				i++;
+				break;
+			default:
+				if (!iswprint(wc) || (!utf8 && clen > 1))
+					dst[j++] = '.';
+				else if (octetlength - j < (size_t)clen) {
+					dst[j] = '\0';
+					return rbuf;
+				} else {
+					memcpy(&(dst[j]), &(src[i]), clen);
+					j += clen;
+				}
+				i += clen;
+				break;
+			}
+		}
+		dst[j] = '\0';
+		return rbuf;
+	}
+	errno = EINVAL;
+	return NULL;
 }
 
 int
@@ -627,17 +729,6 @@ smi_oid_cmp(struct oid *a, struct oid *b)
 			return (a->o_oid[i] - b->o_oid[i]);
 	}
 
-	/*
-	 * Return success if the matched object is a table
-	 * or a MIB registered by a subagent
-	 * (it will match any sub-elements)
-	 */
-	if ((b->o_flags & OID_TABLE ||
-	    b->o_flags & OID_REGISTERED) &&
-	    (a->o_flags & OID_KEY) == 0 &&
-	    (a->o_oidlen > b->o_oidlen))
-		return (0);
-
 	return (a->o_oidlen - b->o_oidlen);
 }
 
@@ -649,5 +740,12 @@ smi_key_cmp(struct oid *a, struct oid *b)
 	return (strcasecmp(a->o_name, b->o_name));
 }
 
+int
+smi_textconv_cmp(struct textconv *a, struct textconv *b)
+{
+	return strcmp(a->tc_name, b->tc_name);
+}
+
 RB_GENERATE(oidtree, oid, o_element, smi_oid_cmp)
 RB_GENERATE(keytree, oid, o_keyword, smi_key_cmp)
+RB_GENERATE(textconvtree, textconv, tc_entry, smi_textconv_cmp);

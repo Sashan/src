@@ -1,4 +1,4 @@
-/*	$OpenBSD: control.c,v 1.29 2017/03/03 23:30:57 renato Exp $ */
+/*	$OpenBSD: control.c,v 1.31 2021/01/19 15:14:35 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -29,6 +29,8 @@
 #include "log.h"
 #include "control.h"
 
+TAILQ_HEAD(ctl_conns, ctl_conn) ctl_conns = TAILQ_HEAD_INITIALIZER(ctl_conns);
+
 #define	CONTROL_BACKLOG	5
 
 static void		 control_accept(int, short, void *);
@@ -36,8 +38,6 @@ static struct ctl_conn	*control_connbyfd(int);
 static struct ctl_conn	*control_connbypid(pid_t);
 static void		 control_close(int);
 static void		 control_dispatch_imsg(int, short, void *);
-
-struct ctl_conns	 ctl_conns;
 
 static int		 control_fd;
 
@@ -98,11 +98,10 @@ control_listen(void)
 }
 
 void
-control_cleanup(char *path)
+control_cleanup(void)
 {
 	accept_del(control_fd);
 	close(control_fd);
-	unlink(path);
 }
 
 /* ARGSUSED */

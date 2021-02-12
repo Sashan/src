@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.6 2019/03/05 09:44:41 jsg Exp $
+# $OpenBSD: Makefile,v 1.8 2020/10/12 14:52:08 mortimer Exp $
 
 LIB=	LLVMPowerPCCodeGen
 NOPROFILE=
@@ -12,6 +12,7 @@ SRCS+=	PPCBoolRetToInt.cpp \
 	PPCBranchSelector.cpp \
 	PPCCCState.cpp \
 	PPCCTRLoops.cpp \
+	PPCCallingConv.cpp \
 	PPCExpandISEL.cpp \
 	PPCHazardRecognizers.cpp \
 	PPCInstrInfo.cpp \
@@ -20,14 +21,17 @@ SRCS+=	PPCBoolRetToInt.cpp \
 	PPCEarlyReturn.cpp \
 	PPCFastISel.cpp \
 	PPCFrameLowering.cpp \
-	PPCLoopPreIncPrep.cpp \
+	PPCLoopInstrFormPrep.cpp \
+	PPCLowerMASSVEntries.cpp \
 	PPCMCInstLower.cpp \
 	PPCMachineFunctionInfo.cpp \
+	PPCMachineScheduler.cpp \
 	PPCMIPeephole.cpp \
 	PPCPreEmitPeephole.cpp \
 	PPCQPXLoadSplat.cpp \
 	PPCReduceCRLogicals.cpp \
 	PPCRegisterInfo.cpp \
+	PPCReturnProtectorLowering.cpp \
 	PPCSubtarget.cpp \
 	PPCTargetMachine.cpp \
 	PPCTargetObjectFile.cpp \
@@ -38,4 +42,4 @@ SRCS+=	PPCBoolRetToInt.cpp \
 	PPCVSXFMAMutate.cpp \
 	PPCVSXSwapRemoval.cpp
 
-.PATH:	${.CURDIR}/../../../llvm/lib/Target/PowerPC
+.PATH:	${.CURDIR}/../../../llvm/llvm/lib/Target/PowerPC

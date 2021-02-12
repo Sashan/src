@@ -1,4 +1,4 @@
-/*	$OpenBSD: wds.c,v 1.48 2020/02/16 17:39:47 krw Exp $	*/
+/*	$OpenBSD: wds.c,v 1.57 2020/09/22 19:32:53 krw Exp $	*/
 /*	$NetBSD: wds.c,v 1.13 1996/11/03 16:20:31 mycroft Exp $	*/
 
 #undef	WDSDIAG
@@ -117,7 +117,6 @@ struct wds_softc {
 	TAILQ_HEAD(, wds_scb) sc_free_scb, sc_waiting_scb;
 	int sc_numscbs, sc_mbofull;
 	int sc_scsi_dev;
-	struct scsi_link sc_link;	/* prototype for subdevs */
 
 	struct mutex		sc_scb_mtx;
 	struct scsi_iopool	sc_iopool;
@@ -281,27 +280,21 @@ wdsattach(struct device *parent, struct device *self, void *aux)
 
 	wds_inquire_setup_information(sc);
 
-	/*
-	 * fill in the prototype scsi_link.
-	 */
-	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.adapter_target = sc->sc_scsi_dev;
-	sc->sc_link.adapter = &wds_switch;
-	/* XXX */
-	/* I don't think the -ASE can handle openings > 1. */
-	/* It gives Vendor Error 26 whenever I try it.     */
-	sc->sc_link.openings = 1;
-	sc->sc_link.pool = &sc->sc_iopool;
-
 	sc->sc_ih = isa_intr_establish(ia->ia_ic, sc->sc_irq, IST_EDGE,
 	    IPL_BIO, wdsintr, sc, sc->sc_dev.dv_xname);
 
-	bzero(&saa, sizeof(saa));
-	saa.saa_sc_link = &sc->sc_link;
+	/* XXX */
+	/* I don't think the -ASE can handle openings > 1. */
+	/* It gives Vendor Error 26 whenever I try it.     */
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter_target = sc->sc_scsi_dev;
+	saa.saa_adapter = &wds_switch;
+	saa.saa_luns = saa.saa_adapter_buswidth = 8;
+	saa.saa_openings = 1;
+	saa.saa_pool = &sc->sc_iopool;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
-	/*
-	 * ask the adapter what subunits are present
-	 */
 	config_found(self, &saa, wdsprint);
 }
 
@@ -344,9 +337,9 @@ AGAIN:
 			u_int8_t *cp = (u_int8_t *)&scb->cmd.scb;
 			printf("op=%x %x %x %x %x %x\n",
 			    cp[0], cp[1], cp[2], cp[3], cp[4], cp[5]);
-			printf("stat %x for mbi addr = 0x%08x, ",
+			printf("stat %x for mbi addr = %p, ",
 			    wmbi->stat, wmbi);
-			printf("scb addr = 0x%x\n", scb);
+			printf("scb addr = %p\n", scb);
 		}
 #endif /* WDSDEBUG */
 
@@ -875,7 +868,7 @@ void
 wds_scsi_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link *sc_link = xs->sc_link;
-	struct wds_softc *sc = sc_link->adapter_softc;
+	struct wds_softc *sc = sc_link->bus->sb_adapter_softc;
 	bus_space_tag_t iot = sc->sc_iot;
 	bus_space_handle_t ioh = sc->sc_ioh;
 	struct wds_scb *scb;
@@ -900,7 +893,7 @@ wds_scsi_cmd(struct scsi_xfer *xs)
 
 	/* Zero out the command structure. */
 	bzero(&scb->cmd, sizeof scb->cmd);
-	bcopy(xs->cmd, &scb->cmd.scb, xs->cmdlen < 12 ? xs->cmdlen : 12);
+	bcopy(&xs->cmd, &scb->cmd.scb, xs->cmdlen < 12 ? xs->cmdlen : 12);
 
 	/* Set up some of the command fields. */
 	scb->cmd.targ = (xs->sc_link->target << 5) | xs->sc_link->lun;
@@ -917,8 +910,9 @@ wds_scsi_cmd(struct scsi_xfer *xs)
 		/*
 		 * Set up the scatter-gather block.
 		 */
-		SC_DEBUG(sc_link, SDEV_DB4,
-		    ("%d @0x%x:- ", xs->datalen, xs->data));
+#ifdef WDSDEBUG
+		printf("%s: %d @%p:- ", sc->sc_dev.dv_xname, xs->datalen, xs->data);
+#endif
 
 		datalen = xs->datalen;
 		thiskv = (int)xs->data;
@@ -930,7 +924,9 @@ wds_scsi_cmd(struct scsi_xfer *xs)
 			/* put in the base address */
 			ltophys(thisphys, sg->seg_addr);
 
-			SC_DEBUGN(sc_link, SDEV_DB4, ("0x%x", thisphys));
+#ifdef WDSDEBUG
+			printf("0x%lx", thisphys);
+#endif
 
 			/* do it at least once */
 			nextphys = thisphys;
@@ -964,14 +960,17 @@ wds_scsi_cmd(struct scsi_xfer *xs)
 			/*
 			 * next page isn't contiguous, finish the seg
 			 */
-			SC_DEBUGN(sc_link, SDEV_DB4,
-			    ("(0x%x)", bytes_this_seg));
+#ifdef WDSDEBUG
+			printf("(0x%x)", bytes_this_seg);
+#endif
 			ltophys(bytes_this_seg, sg->seg_len);
 			sg++;
 			seg++;
 		}
 
-		SC_DEBUGN(sc_link, SDEV_DB4, ("\n"));
+#ifdef WDSDEBUG
+		printf("\n");
+#endif
 		if (datalen) {
 			/*
 			 * there's still data, must have run out of segs!
@@ -1154,7 +1153,7 @@ wds_timeout(void *arg)
 	s = splbio();
 	xs = scb->xs;
 	sc_link = xs->sc_link;
-	sc = sc_link->adapter_softc;
+	sc = sc_link->bus->sb_adapter_softc;
 
 	sc_print_addr(sc_link);
 	printf("timed out");

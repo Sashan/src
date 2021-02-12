@@ -1,4 +1,4 @@
-/*	$OpenBSD: httpd.h,v 1.146 2020/02/09 09:44:04 florian Exp $	*/
+/*	$OpenBSD: httpd.h,v 1.154 2021/01/27 07:21:52 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2006 - 2015 Reyk Floeter <reyk@openbsd.org>
@@ -96,6 +96,7 @@
 #define CONFIG_ALL		0xff
 
 #define FCGI_CONTENT_SIZE	65535
+#define FCGI_DEFAULT_PORT	"9000"
 
 #define PROC_PARENT_SOCK_FILENO	3
 #define PROC_MAX_INSTANCES	32
@@ -121,24 +122,12 @@ struct ctl_flags {
 	uint8_t		 cf_tls_sid[TLS_MAX_SESSION_ID_LENGTH];
 };
 
-enum key_type {
-	KEY_TYPE_NONE		= 0,
-	KEY_TYPE_COOKIE,
-	KEY_TYPE_HEADER,
-	KEY_TYPE_PATH,
-	KEY_TYPE_QUERY,
-	KEY_TYPE_URL,
-	KEY_TYPE_MAX
-};
-
 TAILQ_HEAD(kvlist, kv);
 RB_HEAD(kvtree, kv);
 
 struct kv {
 	char			*kv_key;
 	char			*kv_value;
-
-	enum key_type		 kv_type;
 
 #define KV_FLAG_INVALID		 0x01
 #define KV_FLAG_GLOBBING	 0x02
@@ -179,7 +168,7 @@ struct control_sock {
 };
 TAILQ_HEAD(control_socks, control_sock);
 
-struct {
+extern struct {
 	struct event	 ev;
 	int		 fd;
 } control_state;
@@ -241,7 +230,8 @@ enum privsep_procid {
 	PROC_SERVER,
 	PROC_LOGGER,
 	PROC_MAX
-} privsep_process;
+};
+extern enum privsep_procid privsep_process;
 
 /* Attach the control socket to the following process */
 #define PROC_CONTROL	PROC_LOGGER
@@ -387,7 +377,6 @@ SPLAY_HEAD(client_tree, client);
 #define SRVFLAG_NO_FCGI		0x00000080
 #define SRVFLAG_LOG		0x00000100
 #define SRVFLAG_NO_LOG		0x00000200
-#define SRVFLAG_SOCKET		0x00000400
 #define SRVFLAG_SYSLOG		0x00000800
 #define SRVFLAG_NO_SYSLOG	0x00001000
 #define SRVFLAG_TLS		0x00002000
@@ -403,13 +392,16 @@ SPLAY_HEAD(client_tree, client);
 #define SRVFLAG_DEFAULT_TYPE	0x00800000
 #define SRVFLAG_PATH_REWRITE	0x01000000
 #define SRVFLAG_NO_PATH_REWRITE	0x02000000
+#define SRVFLAG_LOCATION_FOUND	0x40000000
+#define SRVFLAG_LOCATION_NOT_FOUND 0x80000000
 
 #define SRVFLAG_BITS							\
 	"\10\01INDEX\02NO_INDEX\03AUTO_INDEX\04NO_AUTO_INDEX"		\
-	"\05ROOT\06LOCATION\07FCGI\10NO_FCGI\11LOG\12NO_LOG\13SOCKET"	\
+	"\05ROOT\06LOCATION\07FCGI\10NO_FCGI\11LOG\12NO_LOG"		\
 	"\14SYSLOG\15NO_SYSLOG\16TLS\17ACCESS_LOG\20ERROR_LOG"		\
 	"\21AUTH\22NO_AUTH\23BLOCK\24NO_BLOCK\25LOCATION_MATCH"		\
-	"\26SERVER_MATCH\27SERVER_HSTS\30DEFAULT_TYPE\31PATH\32NO_PATH"
+	"\26SERVER_MATCH\27SERVER_HSTS\30DEFAULT_TYPE\31PATH\32NO_PATH" \
+	"\37LOCATION_FOUND\40LOCATION_NOT_FOUND"
 
 #define TCPFLAG_NODELAY		0x01
 #define TCPFLAG_NNODELAY	0x02
@@ -447,7 +439,7 @@ struct log_file {
 	uint32_t		log_id;
 	TAILQ_ENTRY(log_file)	log_entry;
 };
-TAILQ_HEAD(log_files, log_file) log_files;
+extern TAILQ_HEAD(log_files, log_file) log_files;
 
 struct media_type {
 	char			 media_name[MEDIATYPE_NAMEMAX];
@@ -487,10 +479,11 @@ struct server_config {
 	char			 root[PATH_MAX];
 	char			 path[PATH_MAX];
 	char			 index[PATH_MAX];
-	char			 socket[PATH_MAX];
 	char			 accesslog[PATH_MAX];
 	char			 errorlog[PATH_MAX];
 	struct media_type	 default_type;
+
+	struct sockaddr_storage	 fastcgi_ss;
 
 	in_port_t		 port;
 	struct sockaddr_storage	 ss;
@@ -701,6 +694,7 @@ const char *
 	 server_root_strip(const char *, int);
 struct server_config *
 	 server_getlocation(struct client *, const char *);
+int	 server_locationaccesstest(struct server_config *, const char *);
 const char *
 	 server_http_host(struct sockaddr_storage *, char *, size_t);
 char	*server_http_parsehost(char *, char *, size_t, int *);
@@ -722,7 +716,6 @@ void		 event_again(struct event *, int, short,
 int		 expand_string(char *, size_t, const char *, const char *);
 const char	*url_decode(char *);
 char		*url_encode(const char *);
-const char	*canonicalize_host(const char *, char *, size_t);
 const char	*canonicalize_path(const char *, char *, size_t);
 size_t		 path_info(char *);
 char		*escape_html(const char *);
@@ -744,8 +737,6 @@ void		 kv_delete(struct kvtree *, struct kv *);
 struct kv	*kv_extend(struct kvtree *, struct kv *, char *);
 void		 kv_purge(struct kvtree *);
 void		 kv_free(struct kv *);
-struct kv	*kv_inherit(struct kv *, struct kv *);
-int		 kv_log(struct evbuffer *, struct kv *);
 struct kv	*kv_find(struct kvtree *, struct kv *);
 int		 kv_cmp(struct kv *, struct kv *);
 struct media_type
@@ -764,7 +755,6 @@ struct auth	*auth_add(struct serverauth *, struct auth *);
 struct auth	*auth_byid(struct serverauth *, uint32_t);
 void		 auth_free(struct serverauth *, struct auth *);
 const char	*print_host(struct sockaddr_storage *, char *, size_t);
-const char	*print_time(struct timeval *, struct timeval *, char *, size_t);
 const char	*printb_flags(const uint32_t, const char *);
 void		 getmonotime(struct timeval *);
 

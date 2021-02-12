@@ -1,4 +1,4 @@
-/*	$OpenBSD: gdt_common.c,v 1.68 2020/02/15 01:58:01 krw Exp $	*/
+/*	$OpenBSD: gdt_common.c,v 1.83 2020/10/15 00:01:24 krw Exp $	*/
 
 /*
  * Copyright (c) 1999, 2000, 2003 Niklas Hallqvist.  All rights reserved.
@@ -61,7 +61,6 @@ int gdt_maxcmds = GDT_MAXCMDS;
 int	gdt_async_event(struct gdt_softc *, int);
 void	gdt_chain(struct gdt_softc *);
 void	gdt_clear_events(struct gdt_softc *);
-void	gdt_copy_internal_data(struct scsi_xfer *, u_int8_t *, size_t);
 struct scsi_xfer *gdt_dequeue(struct gdt_softc *);
 void	gdt_enqueue(struct gdt_softc *, struct scsi_xfer *, int);
 void	gdt_enqueue_ccb(struct gdt_softc *, struct gdt_ccb *);
@@ -149,15 +148,6 @@ gdt_attach(struct gdt_softc *sc)
 		TAILQ_INSERT_TAIL(&sc->sc_free_ccb, &sc->sc_ccbs[i],
 		    gc_chain);
 	}
-
-	/* Fill in the prototype scsi_link. */
-	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.adapter = &gdt_switch;
-	/* openings will be filled in later. */
-	sc->sc_link.adapter_buswidth =
-	    (sc->sc_class & GDT_FC) ? GDT_MAXID : GDT_MAX_HDRIVES;
-	sc->sc_link.adapter_target = sc->sc_link.adapter_buswidth;
-	sc->sc_link.pool = &sc->sc_iopool;
 
 	if (!gdt_internal_cmd(sc, GDT_SCREENSERVICE, GDT_INIT, 0, 0, 0)) {
 		printf("screen service initialization error %d\n",
@@ -451,12 +441,6 @@ gdt_attach(struct gdt_softc *sc)
 				sc->sc_hdr[i].hd_devtype = sc->sc_info;
 		}
 
-	if (sc->sc_ndevs == 0)
-		sc->sc_link.openings = 0;
-	else
-		sc->sc_link.openings = (GDT_MAXCMDS - GDT_CMD_RESERVE) /
-		    sc->sc_ndevs;
-
 	printf("dpmem %llx %d-bus %d cache device%s\n",
 	    (long long)sc->sc_dpmembase,
 	    sc->sc_bus_cnt, cdev_cnt, cdev_cnt == 1 ? "" : "s");
@@ -476,8 +460,20 @@ gdt_attach(struct gdt_softc *sc)
 #endif
 	gdt_cnt++;
 
-	bzero(&saa, sizeof(saa));
-	saa.saa_sc_link = &sc->sc_link;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter = &gdt_switch;
+	saa.saa_adapter_buswidth =
+	    (sc->sc_class & GDT_FC) ? GDT_MAXID : GDT_MAX_HDRIVES;
+	saa.saa_adapter_target = SDEV_NO_ADAPTER_TARGET;
+	saa.saa_luns = 8;
+	if (sc->sc_ndevs == 0)
+		saa.saa_openings = 0;
+	else
+		saa.saa_openings = (GDT_MAXCMDS - GDT_CMD_RESERVE) /
+		    sc->sc_ndevs;
+	saa.saa_pool = &sc->sc_iopool;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
 	config_found(&sc->sc_dev, &saa, scsiprint);
 
@@ -544,12 +540,12 @@ void
 gdt_scsi_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link *link = xs->sc_link;
-	struct gdt_softc *sc = link->adapter_softc;
+	struct gdt_softc *sc = link->bus->sb_adapter_softc;
 	u_int8_t target = link->target;
 	struct gdt_ccb *ccb;
 	u_int32_t blockno, blockcnt;
 	struct scsi_rw *rw;
-	struct scsi_rw_big *rwb;
+	struct scsi_rw_10 *rw10;
 	bus_dmamap_t xfer;
 	int error;
 	int s;
@@ -583,7 +579,7 @@ gdt_scsi_cmd(struct scsi_xfer *xs)
 		link = xs->sc_link;
 		target = link->target;
 		polled = ISSET(xs->flags, SCSI_POLL);
- 
+
 		if (!gdt_polling && !(xs->flags & SCSI_POLL) &&
 		    sc->sc_test_busy(sc)) {
 			/*
@@ -594,7 +590,7 @@ gdt_scsi_cmd(struct scsi_xfer *xs)
 			break;
 		}
 
-		switch (xs->cmd->opcode) {
+		switch (xs->cmd.opcode) {
 		case TEST_UNIT_READY:
 		case REQUEST_SENSE:
 		case INQUIRY:
@@ -617,36 +613,36 @@ gdt_scsi_cmd(struct scsi_xfer *xs)
 
 		default:
 			GDT_DPRINTF(GDT_D_CMD,
-			    ("unknown opc %d ", xs->cmd->opcode));
+			    ("unknown opc %d ", xs->cmd.opcode));
 			/* XXX Not yet implemented */
 			xs->error = XS_DRIVER_STUFFUP;
 			scsi_done(xs);
 			goto ready;
 
 		case READ_COMMAND:
-		case READ_BIG:
+		case READ_10:
 		case WRITE_COMMAND:
-		case WRITE_BIG:
+		case WRITE_10:
 		case SYNCHRONIZE_CACHE:
 			/*
 			 * A new command chain, start from the beginning.
 			 */
 			sc->sc_cmd_off = 0;
 
-			if (xs->cmd->opcode == SYNCHRONIZE_CACHE) {
+			if (xs->cmd.opcode == SYNCHRONIZE_CACHE) {
 				 blockno = blockcnt = 0;
 			} else {
 				/* A read or write operation. */
 				if (xs->cmdlen == 6) {
-					rw = (struct scsi_rw *)xs->cmd;
+					rw = (struct scsi_rw *)&xs->cmd;
 					blockno = _3btol(rw->addr) &
 					    (SRW_TOPADDR << 16 | 0xffff);
 					blockcnt =
 					    rw->length ? rw->length : 0x100;
 				} else {
-					rwb = (struct scsi_rw_big *)xs->cmd;
-					blockno = _4btol(rwb->addr);
-					blockcnt = _2btol(rwb->length);
+					rw10 = (struct scsi_rw_10 *)&xs->cmd;
+					blockno = _4btol(rw10->addr);
+					blockcnt = _2btol(rw10->length);
 				}
 				if (blockno >= sc->sc_hdr[target].hd_size ||
 				    blockno + blockcnt >
@@ -676,7 +672,7 @@ gdt_scsi_cmd(struct scsi_xfer *xs)
 			ccb->gc_flags = 0;
 			gdt_ccb_set_cmd(ccb, GDT_GCF_SCSI);
 
-			if (xs->cmd->opcode != SYNCHRONIZE_CACHE) {
+			if (xs->cmd.opcode != SYNCHRONIZE_CACHE) {
 				xfer = ccb->gc_dmamap_xfer;
 				error = bus_dmamap_load(sc->sc_dmat, xfer,
 				    xs->data, xs->datalen, NULL,
@@ -738,7 +734,7 @@ gdt_exec_ccb(struct gdt_ccb *ccb)
 {
 	struct scsi_xfer *xs = ccb->gc_xs;
 	struct scsi_link *link = xs->sc_link;
-	struct gdt_softc *sc = link->adapter_softc;
+	struct gdt_softc *sc = link->bus->sb_adapter_softc;
 	u_int8_t target = link->target;
 	u_int32_t sg_canz;
 	bus_dmamap_t xfer;
@@ -765,10 +761,10 @@ gdt_exec_ccb(struct gdt_ccb *ccb)
 	gdt_enc16(sc->sc_cmd + GDT_CMD_UNION + GDT_CACHE_DEVICENO,
 	    target);
 
-	switch (xs->cmd->opcode) {
+	switch (xs->cmd.opcode) {
 	case PREVENT_ALLOW:
 	case SYNCHRONIZE_CACHE:
-		if (xs->cmd->opcode == PREVENT_ALLOW) {
+		if (xs->cmd.opcode == PREVENT_ALLOW) {
 			/* XXX PREVENT_ALLOW support goes here */
 		} else {
 			GDT_DPRINTF(GDT_D_CMD,
@@ -781,19 +777,19 @@ gdt_exec_ccb(struct gdt_ccb *ccb)
 		break;
 
 	case WRITE_COMMAND:
-	case WRITE_BIG:
+	case WRITE_10:
 		/* XXX WRITE_THR could be supported too */
 		sc->sc_cmd[GDT_CMD_OPCODE] = GDT_WRITE;
 		break;
 
 	case READ_COMMAND:
-	case READ_BIG:
+	case READ_10:
 		sc->sc_cmd[GDT_CMD_OPCODE] = GDT_READ;
 		break;
 	}
 
-	if (xs->cmd->opcode != PREVENT_ALLOW &&
-	    xs->cmd->opcode != SYNCHRONIZE_CACHE) {
+	if (xs->cmd.opcode != PREVENT_ALLOW &&
+	    xs->cmd.opcode != SYNCHRONIZE_CACHE) {
 		gdt_enc32(sc->sc_cmd + GDT_CMD_UNION + GDT_CACHE_BLOCKNO,
 		    ccb->gc_blockno);
 		gdt_enc32(sc->sc_cmd + GDT_CMD_UNION + GDT_CACHE_BLOCKCNT,
@@ -814,7 +810,7 @@ gdt_exec_ccb(struct gdt_ccb *ccb)
 				    GDT_SG_LEN,
 				    xfer->dm_segs[i].ds_len);
 				GDT_DPRINTF(GDT_D_IO,
-				    ("#%d va %p pa %p len %x\n", i, buf,
+				    ("#%d pa %lx len %lx\n", i,
 				    xfer->dm_segs[i].ds_addr,
 				    xfer->dm_segs[i].ds_len));
 			}
@@ -858,27 +854,12 @@ gdt_exec_ccb(struct gdt_ccb *ccb)
 	return (1);
 }
 
-void
-gdt_copy_internal_data(struct scsi_xfer *xs, u_int8_t *data, size_t size)
-{
-	size_t copy_cnt;
-
-	GDT_DPRINTF(GDT_D_MISC, ("gdt_copy_internal_data "));
-
-	if (!xs->datalen)
-		printf("uio move not yet supported\n");
-	else {
-		copy_cnt = MIN(size, xs->datalen);
-		bcopy(data, xs->data, copy_cnt);
-	}
-}
-
 /* Emulated SCSI operation on cache device */
 void
 gdt_internal_cache_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link *link = xs->sc_link;
-	struct gdt_softc *sc = link->adapter_softc;
+	struct gdt_softc *sc = link->bus->sb_adapter_softc;
 	struct scsi_inquiry_data inq;
 	struct scsi_sense_data sd;
 	struct scsi_read_cap_data rcd;
@@ -886,13 +867,13 @@ gdt_internal_cache_cmd(struct scsi_xfer *xs)
 
 	GDT_DPRINTF(GDT_D_CMD, ("gdt_internal_cache_cmd "));
 
-	switch (xs->cmd->opcode) {
+	switch (xs->cmd.opcode) {
 	case TEST_UNIT_READY:
 	case START_STOP:
 #if 0
 	case VERIFY:
 #endif
-		GDT_DPRINTF(GDT_D_CMD, ("opc %d tgt %d ", xs->cmd->opcode,
+		GDT_DPRINTF(GDT_D_CMD, ("opc %d tgt %d ", xs->cmd.opcode,
 		    target));
 		break;
 
@@ -904,7 +885,7 @@ gdt_internal_cache_cmd(struct scsi_xfer *xs)
 		sd.flags = SKEY_NO_SENSE;
 		gdt_enc32(sd.info, 0);
 		sd.extra_len = 0;
-		gdt_copy_internal_data(xs, (u_int8_t *)&sd, sizeof sd);
+		scsi_copy_internal_data(xs, &sd, sizeof(sd));
 		break;
 
 	case INQUIRY:
@@ -915,15 +896,15 @@ gdt_internal_cache_cmd(struct scsi_xfer *xs)
 		    (sc->sc_hdr[target].hd_devtype & 4) ? T_CDROM : T_DIRECT;
 		inq.dev_qual2 =
 		    (sc->sc_hdr[target].hd_devtype & 1) ? SID_REMOVABLE : 0;
-		inq.version = 2;
-		inq.response_format = 2;
-		inq.additional_length = 32;
+		inq.version = SCSI_REV_2;
+		inq.response_format = SID_SCSI2_RESPONSE;
+		inq.additional_length = SID_SCSI2_ALEN;
 		inq.flags |= SID_CmdQue;
 		strlcpy(inq.vendor, "ICP	   ", sizeof inq.vendor);
 		snprintf(inq.product, sizeof inq.product, "Host drive  #%02d",
 		    target);
 		strlcpy(inq.revision, "	 ", sizeof inq.revision);
-		gdt_copy_internal_data(xs, (u_int8_t *)&inq, sizeof inq);
+		scsi_copy_internal_data(xs, &inq, sizeof(inq));
 		break;
 
 	case READ_CAPACITY:
@@ -931,12 +912,12 @@ gdt_internal_cache_cmd(struct scsi_xfer *xs)
 		bzero(&rcd, sizeof rcd);
 		_lto4b(sc->sc_hdr[target].hd_size - 1, rcd.addr);
 		_lto4b(GDT_SECTOR_SIZE, rcd.length);
-		gdt_copy_internal_data(xs, (u_int8_t *)&rcd, sizeof rcd);
+		scsi_copy_internal_data(xs, &rcd, sizeof(rcd));
 		break;
 
 	default:
 		GDT_DPRINTF(GDT_D_CMD, ("unsupported scsi command %#x tgt %d ",
-		    xs->cmd->opcode, target));
+		    xs->cmd.opcode, target));
 		xs->error = XS_DRIVER_STUFFUP;
 		return;
 	}
@@ -1053,8 +1034,8 @@ gdt_intr(void *arg)
 		timeout_del(&xs->stimeout);
 	ctx.service = ccb->gc_service;
 	prev_cmd = ccb->gc_flags & GDT_GCF_CMD_MASK;
-	if (xs && xs->cmd->opcode != PREVENT_ALLOW &&
-	    xs->cmd->opcode != SYNCHRONIZE_CACHE) {
+	if (xs && xs->cmd.opcode != PREVENT_ALLOW &&
+	    xs->cmd.opcode != SYNCHRONIZE_CACHE) {
 		bus_dmamap_sync(sc->sc_dmat, ccb->gc_dmamap_xfer, 0,
 		    ccb->gc_dmamap_xfer->dm_mapsize,
 		    (xs->flags & SCSI_DATA_IN) ? BUS_DMASYNC_POSTREAD :
@@ -1293,7 +1274,7 @@ gdt_timeout(void *arg)
 {
 	struct gdt_ccb *ccb = arg;
 	struct scsi_link *link = ccb->gc_xs->sc_link;
-	struct gdt_softc *sc = link->adapter_softc;
+	struct gdt_softc *sc = link->bus->sb_adapter_softc;
 	int s;
 
 	sc_print_addr(link);
@@ -1312,7 +1293,7 @@ gdt_watchdog(void *arg)
 {
 	struct gdt_ccb *ccb = arg;
 	struct scsi_link *link = ccb->gc_xs->sc_link;
-	struct gdt_softc *sc = link->adapter_softc;
+	struct gdt_softc *sc = link->bus->sb_adapter_softc;
 	int s;
 
 	s = splbio();

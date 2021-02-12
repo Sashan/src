@@ -1,4 +1,4 @@
-/*	$OpenBSD: ehci.c,v 1.208 2020/03/21 12:08:31 patrick Exp $ */
+/*	$OpenBSD: ehci.c,v 1.214 2021/01/11 14:41:12 mglocker Exp $ */
 /*	$NetBSD: ehci.c,v 1.66 2004/06/30 03:11:56 mycroft Exp $	*/
 
 /*
@@ -856,6 +856,10 @@ ehci_isoc_idone(struct usbd_xfer *xfer)
 #endif
 	xfer->actlen = actlen;
 	xfer->status = USBD_NORMAL_COMPLETION;
+
+	usb_syncmem(&xfer->dmabuf, 0, xfer->length,
+	    usbd_xfer_isread(xfer) ?
+	    BUS_DMASYNC_POSTREAD : BUS_DMASYNC_POSTWRITE);
 	usb_transfer_complete(xfer);
 }
 
@@ -911,9 +915,10 @@ ehci_idone(struct usbd_xfer *xfer)
 	} else
 		xfer->status = USBD_NORMAL_COMPLETION;
 
-	/* XXX transfer_complete memcpys out transfer data (for in endpoints)
-	 * during this call, before methods->done is called: dma sync required
-	 * beforehand? */
+	if (xfer->actlen)
+		usb_syncmem(&xfer->dmabuf, 0, xfer->actlen,
+		    usbd_xfer_isread(xfer) ?
+		    BUS_DMASYNC_POSTREAD : BUS_DMASYNC_POSTWRITE);
 	usb_transfer_complete(xfer);
 	DPRINTFN(/*12*/2, ("ehci_idone: ex=%p done\n", ex));
 }
@@ -1154,7 +1159,7 @@ ehci_device_clear_toggle(struct usbd_pipe *pipe)
 
 #ifdef DIAGNOSTIC
 	if ((epipe->sqh->qh.qh_qtd.qtd_status & htole32(EHCI_QTD_ACTIVE)) != 0)
-		panic("ehci_device_clear_toggle: queue active");
+		printf("%s: queue active\n", __func__);
 #endif
 	epipe->sqh->qh.qh_qtd.qtd_status &= htole32(~EHCI_QTD_TOGGLE_MASK);
 }
@@ -1847,10 +1852,6 @@ ehci_root_ctrl_start(struct usbd_xfer *xfer)
 			USETW(ehci_devd.idVendor, sc->sc_id_vendor);
 			memcpy(buf, &ehci_devd, l);
 			break;
-		/*
-		 * We can't really operate at another speed, but the spec says
-		 * we need this descriptor.
-		 */
 		case UDESC_DEVICE_QUALIFIER:
 			if ((value & 0xff) != 0) {
 				err = USBD_IOERROR;
@@ -2392,24 +2393,20 @@ ehci_alloc_sqtd_chain(struct ehci_softc *sc, u_int alen, struct usbd_xfer *xfer,
 			/* must use multiple TDs, fill as much as possible. */
 			curlen = EHCI_QTD_NBUFFERS * EHCI_PAGE_SIZE -
 				 EHCI_PAGE_OFFSET(dataphys);
-#ifdef DIAGNOSTIC
+
 			if (curlen > len) {
-				printf("ehci_alloc_sqtd_chain: curlen=%u "
+				DPRINTFN(1,("ehci_alloc_sqtd_chain: curlen=%u "
 				    "len=%u offs=0x%x\n", curlen, len,
-				    EHCI_PAGE_OFFSET(dataphys));
-				printf("lastpage=0x%x page=0x%x phys=0x%x\n",
-				    dataphyslastpage, dataphyspage, dataphys);
+				    EHCI_PAGE_OFFSET(dataphys)));
+				DPRINTFN(1,("lastpage=0x%x page=0x%x phys=0x%x\n",
+				    dataphyslastpage, dataphyspage, dataphys));
 				curlen = len;
 			}
-#endif
+
 			/* the length must be a multiple of the max size */
 			curlen -= curlen % mps;
 			DPRINTFN(1,("ehci_alloc_sqtd_chain: multiple QTDs, "
 			    "curlen=%u\n", curlen));
-#ifdef DIAGNOSTIC
-			if (curlen == 0)
-				panic("ehci_alloc_std: curlen == 0");
-#endif
 		}
 
 		DPRINTFN(4,("ehci_alloc_sqtd_chain: dataphys=0x%08x "
@@ -2524,8 +2521,6 @@ ehci_alloc_itd(struct ehci_softc *sc)
 
 	freeitd = NULL;
 	LIST_FOREACH(itd, &sc->sc_freeitds, u.free_list) {
-		if (itd == NULL)
-			break;
 		if (itd->slot != frindex && itd->slot != previndex) {
 			freeitd = itd;
 			break;
@@ -3210,9 +3205,6 @@ ehci_device_intr_done(struct usbd_xfer *xfer)
 	if (xfer->pipe->repeat) {
 		ehci_free_sqtd_chain(sc, ex);
 
-		usb_syncmem(&xfer->dmabuf, 0, xfer->length,
-		    usbd_xfer_isread(xfer) ?
-		    BUS_DMASYNC_POSTREAD : BUS_DMASYNC_POSTWRITE);
 		sqh = epipe->sqh;
 
 		err = ehci_alloc_sqtd_chain(sc, xfer->length, xfer, &data, &dataend);
@@ -3410,6 +3402,9 @@ ehci_alloc_itd_chain(struct ehci_softc *sc, struct usbd_xfer *xfer)
 	if (nframes == 0)
 		return (1);
 
+	usb_syncmem(&xfer->dmabuf, 0, xfer->length,
+	    usbd_xfer_isread(xfer) ?
+	    BUS_DMASYNC_PREREAD : BUS_DMASYNC_PREWRITE);
 	for (i = 0; i < nframes; i++) {
 		uint32_t froffs = offs;
 
@@ -3524,6 +3519,9 @@ ehci_alloc_sitd_chain(struct ehci_softc *sc, struct usbd_xfer *xfer)
 	if (usbd_xfer_isread(xfer))
 		endp |= EHCI_SITD_SET_DIR(1);
 
+	usb_syncmem(&xfer->dmabuf, 0, xfer->length,
+	    usbd_xfer_isread(xfer) ?
+	    BUS_DMASYNC_PREREAD : BUS_DMASYNC_PREWRITE);
 	for (i = 0; i < nframes; i++) {
 		uint32_t addr = DMAADDR(&xfer->dmabuf, offs);
 		uint32_t page = EHCI_PAGE(addr + xfer->frlengths[i] - 1);

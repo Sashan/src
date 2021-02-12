@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_nfe.c,v 1.121 2019/09/25 09:30:28 kevlo Exp $	*/
+/*	$OpenBSD: if_nfe.c,v 1.123 2020/12/12 11:48:53 jan Exp $	*/
 
 /*-
  * Copyright (c) 2006, 2007 Damien Bergamini <damien.bergamini@free.fr>
@@ -320,7 +320,7 @@ nfe_attach(struct device *parent, struct device *self, void *aux)
 	ifp->if_ioctl = nfe_ioctl;
 	ifp->if_start = nfe_start;
 	ifp->if_watchdog = nfe_watchdog;
-	IFQ_SET_MAXLEN(&ifp->if_snd, NFE_IFQ_MAXLEN);
+	ifq_set_maxlen(&ifp->if_snd, NFE_IFQ_MAXLEN);
 	strlcpy(ifp->if_xname, sc->sc_dev.dv_xname, IFNAMSIZ);
 
 	ifp->if_capabilities = IFCAP_VLAN_MTU;
@@ -697,7 +697,7 @@ nfe_rxeof(struct nfe_softc *sc)
 		 * old mbuf. In the unlikely case that the old mbuf can't be
 		 * reloaded either, explicitly panic.
 		 */
-		mnew = MCLGETI(NULL, M_DONTWAIT, NULL, MCLBYTES);
+		mnew = MCLGETL(NULL, M_DONTWAIT, MCLBYTES);
 		if (mnew == NULL) {
 			ifp->if_ierrors++;
 			goto skip;
@@ -1210,7 +1210,7 @@ nfe_alloc_rx_ring(struct nfe_softc *sc, struct nfe_rx_ring *ring)
 	for (i = 0; i < NFE_RX_RING_COUNT; i++) {
 		data = &sc->rxq.data[i];
 
-		data->m = MCLGETI(NULL, M_DONTWAIT, NULL, MCLBYTES);
+		data->m = MCLGETL(NULL, M_DONTWAIT, MCLBYTES);
 		if (data->m == NULL) {
 			printf("%s: could not allocate rx mbuf\n",
 			    sc->sc_dev.dv_xname);

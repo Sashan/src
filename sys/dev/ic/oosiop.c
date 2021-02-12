@@ -1,4 +1,4 @@
-/*	$OpenBSD: oosiop.c,v 1.26 2020/02/17 02:50:23 krw Exp $	*/
+/*	$OpenBSD: oosiop.c,v 1.34 2020/09/22 19:32:52 krw Exp $	*/
 /*	$NetBSD: oosiop.c,v 1.4 2003/10/29 17:45:55 tsutsui Exp $	*/
 
 /*
@@ -256,23 +256,17 @@ oosiop_attach(struct oosiop_softc *sc)
 	sc->sc_active = 0;
 	oosiop_write_4(sc, OOSIOP_DSP, sc->sc_scrbase + Ent_wait_reselect);
 
-	/*
-	 * Fill in the sc_link.
-	 */
-	sc->sc_link.adapter = &oosiop_switch;
-	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.openings = 1;	/* XXX */
-	sc->sc_link.adapter_buswidth = OOSIOP_NTGT;
-	sc->sc_link.adapter_target = sc->sc_id;
-	sc->sc_link.pool = &sc->sc_iopool;
-	sc->sc_link.quirks = ADEV_NODOORLOCK;
+	saa.saa_adapter = &oosiop_switch;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter_buswidth = OOSIOP_NTGT;
+	saa.saa_adapter_target = sc->sc_id;
+	saa.saa_luns = 8;
+	saa.saa_openings = 1;	/* XXX */
+	saa.saa_pool = &sc->sc_iopool;
+	saa.saa_quirks = ADEV_NODOORLOCK;
+	saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
-	bzero(&saa, sizeof(saa));
-	saa.saa_sc_link = &sc->sc_link;
-
-	/*
-	 * Now try to attach all the sub devices.
-	 */
 	config_found(&sc->sc_dev, &saa, scsiprint);
 }
 
@@ -551,7 +545,7 @@ oosiop_setup_dma(struct oosiop_softc *sc)
 	OOSIOP_SCRIPT_SYNC(sc, BUS_DMASYNC_POSTWRITE);
 
 	oosiop_fixup_select(sc, Ent_p_select, cb->id);
-	oosiop_fixup_jump(sc, Ent_p_datain_jump, xferbase + 
+	oosiop_fixup_jump(sc, Ent_p_datain_jump, xferbase +
 	    offsetof(struct oosiop_xfer, datain_scr[0]));
 	oosiop_fixup_jump(sc, Ent_p_dataout_jump, xferbase +
 	    offsetof(struct oosiop_xfer, dataout_scr[0]));
@@ -642,7 +636,7 @@ oosiop_phasemismatch(struct oosiop_softc *sc)
 		sstat1 = oosiop_read_1(sc, OOSIOP_SSTAT1);
 		if (sstat1 & OOSIOP_SSTAT1_OLF)
 			dbc++;
-		if ((sc->sc_tgt[cb->id].sxfer != 0) && 
+		if ((sc->sc_tgt[cb->id].sxfer != 0) &&
 		    (sstat1 & OOSIOP_SSTAT1_ORF) != 0)
 			dbc++;
 
@@ -730,7 +724,7 @@ oosiop_scsicmd(struct scsi_xfer *xs)
 	int s, err;
 	int dopoll;
 
-	sc = (struct oosiop_softc *)xs->sc_link->adapter_softc;
+	sc = xs->sc_link->bus->sb_adapter_softc;
 
 	s = splbio();
 
@@ -746,7 +740,7 @@ oosiop_scsicmd(struct scsi_xfer *xs)
 	xfer = cb->xfer;
 
 	/* Setup SCSI command buffer DMA */
-	err = bus_dmamap_load(sc->sc_dmat, cb->cmddma, xs->cmd,
+	err = bus_dmamap_load(sc->sc_dmat, cb->cmddma, &xs->cmd,
 	    xs->cmdlen, NULL, ((xs->flags & SCSI_NOSLEEP) ?
 	    BUS_DMA_NOWAIT : BUS_DMA_WAITOK) |
 	    BUS_DMA_STREAMING | BUS_DMA_WRITE);
@@ -863,7 +857,7 @@ oosiop_setup(struct oosiop_softc *sc, struct oosiop_cb *cb)
 	OOSIOP_XFERMSG_SYNC(sc, cb,
 	   BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 	xfer->msgout[0] = MSG_IDENTIFY(cb->lun,
-	    (cb->xs->cmd->opcode != REQUEST_SENSE));
+	    (cb->xs->cmd.opcode != REQUEST_SENSE));
 	cb->msgoutlen = 1;
 
 	if (sc->sc_tgt[cb->id].flags & TGTF_SYNCNEG) {
@@ -961,7 +955,7 @@ FREE:
 		sc->sc_tgt[cb->id].nexus = NULL;
 	} else {
 		/* Set up REQUEST_SENSE command */
-		struct scsi_sense *cmd = (struct scsi_sense *)xs->cmd;
+		struct scsi_sense *cmd = (struct scsi_sense *)&xs->cmd;
 		int err;
 
 		bzero(cmd, sizeof(*cmd));
@@ -1015,11 +1009,11 @@ oosiop_timeout(void *arg)
 {
 	struct oosiop_cb *cb = arg;
 	struct scsi_xfer *xs = cb->xs;
-	struct oosiop_softc *sc = xs->sc_link->adapter_softc;
+	struct oosiop_softc *sc = xs->sc_link->bus->sb_adapter_softc;
 	int s;
 
 	sc_print_addr(xs->sc_link);
-	printf("command 0x%02x timeout on xs %p\n", xs->cmd->opcode, xs);
+	printf("command 0x%02x timeout on xs %p\n", xs->cmd.opcode, xs);
 
 	s = splbio();
 

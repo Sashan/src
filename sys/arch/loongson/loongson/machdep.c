@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.87 2019/04/01 07:02:04 tedu Exp $ */
+/*	$OpenBSD: machdep.c,v 1.94 2021/01/02 14:27:53 visa Exp $ */
 
 /*
  * Copyright (c) 2009, 2010, 2014 Miodrag Vallat.
@@ -207,6 +207,10 @@ const struct bonito_flavour bonito_flavours[] = {
 	{ "LM8101",	&yeeloong_platform },
 	/* Lemote Lynloong all-in-one computer */
 	{ "LM9001",	&lynloong_platform },
+	{ "LM9002",	&lynloong_platform },
+	{ "LM9003",	&lynloong_platform },
+	/* Lemote Lynloong all-in-one computer, Xueloong edition */
+	{ "LM9013",	&lynloong_platform },
 #endif
 #ifdef CPU_LOONGSON3
 	/* Laptops */
@@ -352,9 +356,9 @@ loongson_identify(const char *version, int envtype)
 int
 loongson_efi_setup(void)
 {
+	struct pmon_env_mem_entry entry;
 	const struct pmon_env_cpu *cpuenv;
 	const struct pmon_env_mem *mem;
-	const struct pmon_env_mem_entry *entry;
 	paddr_t fp, lp;
 	uint32_t i, ncpus, seg = 0;
 
@@ -385,13 +389,13 @@ loongson_efi_setup(void)
 	mem = pmon_get_env_mem();
 	physmem = 0;
 	for (i = 0; i < mem->nentries && seg < MAXMEMSEGS; i++) {
-		entry = &mem->mem_map[i];
-		if (entry->node != 0 ||
-		    (entry->type != PMON_MEM_SYSTEM_LOW &&
-		     entry->type != PMON_MEM_SYSTEM_HIGH))
+		memcpy(&entry, &mem->mem_map[i], sizeof(entry));
+		if (entry.node != 0 ||
+		    (entry.type != PMON_MEM_SYSTEM_LOW &&
+		     entry.type != PMON_MEM_SYSTEM_HIGH))
 			continue;
-		fp = atop(entry->address);
-		lp = atop(entry->address + (entry->size << 20));
+		fp = atop(entry.address);
+		lp = atop(entry.address + ((uint64_t)entry.size << 20));
 		if (lp > atop(pfn_to_pad(PG_FRAME)) + 1)
 			lp = atop(pfn_to_pad(PG_FRAME)) + 1;
 		if (fp >= lp)
@@ -516,7 +520,6 @@ mips_init(uint64_t argc, uint64_t argv, uint64_t envp, uint64_t cv,
 
 	extern char start[], edata[], end[];
 	extern char exception[], e_exception[];
-	extern char *hw_vendor, *hw_prod;
 	extern void xtlb_miss;
 
 #ifdef MULTIPROCESSOR
@@ -1016,6 +1019,10 @@ cpu_startup()
 	}
 }
 
+const struct sysctl_bounded_args cpuctl_vars[] = {
+	{ CPU_LIDACTION, &lid_action, 0, 2 },
+};
+
 /*
  * Machine dependent system variables.
  */
@@ -1023,26 +1030,8 @@ int
 cpu_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
     size_t newlen, struct proc *p)
 {
-	int val, error;
-
-	/* All sysctl names at this level are terminal. */
-	if (namelen != 1)
-		return ENOTDIR;		/* Overloaded */
-
-	switch (name[0]) {
-	case CPU_LIDACTION:
-		val = lid_action;
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &val);
-		if (!error) {
-			if (val < 0 || val > 2)
-				error = EINVAL;
-			else
-				lid_action = val;
-		}
-		return error;
-	default:
-		return EOPNOTSUPP;
-	}
+	return (sysctl_bounded_arr(cpuctl_vars, nitems(cpuctl_vars),
+	    name, namelen, oldp, oldlenp, newp, newlen));
 }
 
 int	waittime = -1;

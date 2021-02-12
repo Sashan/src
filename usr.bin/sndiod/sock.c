@@ -1,4 +1,4 @@
-/*	$OpenBSD: sock.c,v 1.33 2020/03/08 14:52:20 ratchov Exp $	*/
+/*	$OpenBSD: sock.c,v 1.41 2021/01/29 11:38:23 ratchov Exp $	*/
 /*
  * Copyright (c) 2008-2012 Alexandre Ratchov <alex@caoua.org>
  *
@@ -15,6 +15,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 #include <sys/types.h>
+#include <sys/socket.h>
 #include <netinet/in.h>
 #include <errno.h>
 #include <poll.h>
@@ -113,7 +114,7 @@ sock_log(struct sock *f)
 		midi_log(f->midi);
 	else if (f->ctlslot) {
 		log_puts("ctlslot");
-		log_putu(f->ctlslot - f->ctlslot->dev->ctlslot);
+		log_putu(f->ctlslot - ctlslot_array);
 	} else
 		log_puts("sock");
 #ifdef DEBUG
@@ -129,7 +130,9 @@ sock_log(struct sock *f)
 void
 sock_close(struct sock *f)
 {
+	struct dev *d;
 	struct sock **pf;
+	unsigned int tags, i;
 
 	for (pf = &sock_list; *pf != f; pf = &(*pf)->next) {
 #ifdef DEBUG
@@ -148,12 +151,17 @@ sock_close(struct sock *f)
 	}
 #endif
 	if (f->pstate > SOCK_AUTH)
-		sock_sesrefs--;
+		sock_sesrefs -= f->sesrefs;
 	if (f->slot) {
 		slot_del(f->slot);
 		f->slot = NULL;
 	}
 	if (f->midi) {
+		tags = midi_tags(f->midi);
+		for (i = 0; i < DEV_NMAX; i++) {
+			if ((tags & (1 << i)) && (d = dev_bynum(i)) != NULL)
+				dev_unref(d);
+		}
 		midi_del(f->midi);
 		f->midi = NULL;
 	}
@@ -608,7 +616,7 @@ int
 sock_setpar(struct sock *f)
 {
 	struct slot *s = f->slot;
-	struct dev *d = s->dev;
+	struct dev *d = s->opt->dev;
 	struct amsg_par *p = &f->rmsg.u.par;
 	unsigned int min, max;
 	uint32_t rate, appbufsz;
@@ -780,15 +788,27 @@ int
 sock_auth(struct sock *f)
 {
 	struct amsg_auth *p = &f->rmsg.u.auth;
+	uid_t euid;
+	gid_t egid;
+
+	/*
+	 * root bypasses any authenication checks and has no session
+	 */
+	if (getpeereid(f->fd, &euid, &egid) == 0 && euid == 0) {
+		f->pstate = SOCK_HELLO;
+		f->sesrefs = 0;
+		return 1;
+	}
 
 	if (sock_sesrefs == 0) {
 		/* start a new session */
 		memcpy(sock_sescookie, p->cookie, AMSG_COOKIELEN);
+		f->sesrefs = 1;
 	} else if (memcmp(sock_sescookie, p->cookie, AMSG_COOKIELEN) != 0) {
 		/* another session is active, drop connection */
 		return 0;
 	}
-	sock_sesrefs++;
+	sock_sesrefs += f->sesrefs;
 	f->pstate = SOCK_HELLO;
 	return 1;
 }
@@ -860,6 +880,8 @@ sock_hello(struct sock *f)
 			d = dev_bynum(p->devnum);
 			if (d == NULL)
 				return 0;
+			if (!dev_ref(d))
+				return 0;
 			midi_tag(f->midi, p->devnum);
 		} else if (p->devnum < 32) {
 			midi_tag(f->midi, p->devnum);
@@ -884,7 +906,10 @@ sock_hello(struct sock *f)
 			}
 			return 0;
 		}
-		f->ctlslot = ctlslot_new(d, &sock_ctlops, f);
+		opt = opt_byname(d, p->opt);
+		if (opt == NULL)
+			return 0;
+		f->ctlslot = ctlslot_new(opt, &sock_ctlops, f);
 		if (f->ctlslot == NULL) {
 			if (log_level >= 2) {
 				sock_log(f);
@@ -904,7 +929,7 @@ sock_hello(struct sock *f)
 	opt = opt_byname(d, p->opt);
 	if (opt == NULL)
 		return 0;
-	f->slot = slot_new(d, opt, id, p->who, &sock_slotops, f, mode);
+	f->slot = slot_new(opt, id, p->who, &sock_slotops, f, mode);
 	if (f->slot == NULL)
 		return 0;
 	f->midi = NULL;
@@ -1119,7 +1144,7 @@ sock_execmsg(struct sock *f)
 				f->ralign = s->round * s->mix.bpf;
 			}
 		}
-		slot_stop(s);
+		slot_stop(s, 1);
 		break;
 	case AMSG_SETPAR:
 #ifdef DEBUG
@@ -1214,9 +1239,9 @@ sock_execmsg(struct sock *f)
 		f->rstate = SOCK_RMSG;
 		f->lastvol = ctl; /* dont trigger feedback message */
 		slot_setvol(s, ctl);
-		dev_midi_vol(s->dev, s);
-		dev_onval(s->dev,
-		    CTLADDR_SLOT_LEVEL(f->slot - s->dev->slot), ctl);
+		dev_midi_vol(s->opt->dev, s);
+		dev_onval(s->opt->dev,
+		    CTLADDR_SLOT_LEVEL(f->slot - slot_array), ctl);
 		break;
 	case AMSG_CTLSUB:
 #ifdef DEBUG
@@ -1241,8 +1266,8 @@ sock_execmsg(struct sock *f)
 		}
 		if (m->u.ctlsub.desc) {
 			if (!(f->ctlops & SOCK_CTLDESC)) {
-				ctl = f->ctlslot->mask;
-				c = f->ctlslot->dev->ctl_list;
+				ctl = f->ctlslot->self;
+				c = f->ctlslot->opt->dev->ctl_list;
 				while (c != NULL) {
 					c->desc_mask |= ctl;
 					c = c->next;
@@ -1276,7 +1301,7 @@ sock_execmsg(struct sock *f)
 			sock_close(f);
 			return 0;
 		}
-		if (!dev_setctl(f->ctlslot->dev,
+		if (!dev_setctl(f->ctlslot->opt->dev,
 			ntohs(m->u.ctlset.addr),
 			ntohs(m->u.ctlset.val))) {
 #ifdef DEBUG
@@ -1528,9 +1553,9 @@ sock_buildmsg(struct sock *f)
 	 */
 	if (f->ctlslot && (f->ctlops & SOCK_CTLDESC)) {
 		desc = f->ctldesc;
-		mask = f->ctlslot->mask;
+		mask = f->ctlslot->self;
 		size = 0;
-		pc = &f->ctlslot->dev->ctl_list;
+		pc = &f->ctlslot->opt->dev->ctl_list;
 		while ((c = *pc) != NULL) {
 			if ((c->desc_mask & mask) == 0 ||
 			    (c->refs_mask & mask) == 0) {
@@ -1586,8 +1611,8 @@ sock_buildmsg(struct sock *f)
 		}
 	}
 	if (f->ctlslot && (f->ctlops & SOCK_CTLVAL)) {
-		mask = f->ctlslot->mask;
-		for (c = f->ctlslot->dev->ctl_list; c != NULL; c = c->next) {
+		mask = f->ctlslot->self;
+		for (c = f->ctlslot->opt->dev->ctl_list; c != NULL; c = c->next) {
 			if ((c->val_mask & mask) == 0)
 				continue;
 			c->val_mask &= ~mask;

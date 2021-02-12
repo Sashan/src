@@ -1,4 +1,4 @@
-/*	$OpenBSD: mb89352.c,v 1.23 2017/11/03 06:54:06 aoyama Exp $	*/
+/*	$OpenBSD: mb89352.c,v 1.30 2020/09/22 19:32:51 krw Exp $	*/
 /*	$NetBSD: mb89352.c,v 1.5 2000/03/23 07:01:31 thorpej Exp $	*/
 /*	NecBSD: mb89352.c,v 1.4 1998/03/14 07:31:20 kmatsuda Exp	*/
 
@@ -214,21 +214,15 @@ spc_attach(struct spc_softc *sc, struct scsi_adapter *adapter)
 
 	spc_init(sc);	/* Init chip and driver */
 
-	/*
-	 * Fill in the adapter.
-	 */
-	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.adapter_target = sc->sc_initiator;
-	sc->sc_link.adapter = adapter;
-	sc->sc_link.openings = 2;
-	sc->sc_link.pool = &sc->sc_iopool;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter_target = sc->sc_initiator;
+	saa.saa_adapter = adapter;
+	saa.saa_luns = saa.saa_adapter_buswidth = 8;
+	saa.saa_openings = 2;
+	saa.saa_pool = &sc->sc_iopool;
+	saa.saa_flags = saa.saa_quirks = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
-	bzero(&saa, sizeof(saa));
-	saa.saa_sc_link = &sc->sc_link;
-
-	/*
-	 * ask the adapter what subunits are present
-	 */
 	config_found(&sc->sc_dev, &saa, scsiprint);
 }
 
@@ -412,12 +406,12 @@ void
 spc_scsi_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link *sc_link = xs->sc_link;
-	struct spc_softc *sc = sc_link->adapter_softc;
+	struct spc_softc *sc = sc_link->bus->sb_adapter_softc;
 	struct spc_acb *acb;
 	int s, flags;
 
 	SPC_TRACE(("spc_scsi_cmd  "));
-	SPC_CMDS(("[0x%x, %d]->%d ", (int)xs->cmd->opcode, xs->cmdlen,
+	SPC_CMDS(("[0x%x, %d]->%d ", (int)xs->cmd.opcode, xs->cmdlen,
 	    sc_link->target));
 
 	flags = xs->flags;
@@ -433,7 +427,7 @@ spc_scsi_cmd(struct scsi_xfer *xs)
 		acb->scsi_cmd_length = 0;
 		acb->data_length = 0;
 	} else {
-		bcopy(xs->cmd, &acb->scsi_cmd, xs->cmdlen);
+		bcopy(&xs->cmd, &acb->scsi_cmd, xs->cmdlen);
 		acb->scsi_cmd_length = xs->cmdlen;
 		acb->data_addr = xs->data;
 		acb->data_length = xs->datalen;
@@ -1984,7 +1978,7 @@ spc_timeout(void *arg)
 	struct spc_acb *acb = arg;
 	struct scsi_xfer *xs = acb->xs;
 	struct scsi_link *sc_link = xs->sc_link;
-	struct spc_softc *sc = sc_link->adapter_softc;
+	struct spc_softc *sc = sc_link->bus->sb_adapter_softc;
 	int s;
 
 	sc_print_addr(sc_link);

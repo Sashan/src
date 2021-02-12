@@ -1,4 +1,4 @@
-/*	$OpenBSD: io.c,v 1.8 2019/11/29 05:09:50 benno Exp $ */
+/*	$OpenBSD: io.c,v 1.12 2021/01/08 08:09:07 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -24,8 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#include <openssl/x509.h>
+#include <imsg.h>
 
 #include "extern.h"
 
@@ -52,84 +51,37 @@ io_socket_nonblocking(int fd)
 }
 
 /*
- * Blocking write of a binary buffer.
- * Buffers of length zero are simply ignored.
- */
-void
-io_simple_write(int fd, const void *res, size_t sz)
-{
-	ssize_t	 ssz;
-
-	if (sz == 0)
-		return;
-	if ((ssz = write(fd, res, sz)) == -1)
-		err(1, "write");
-	else if ((size_t)ssz != sz)
-		errx(1, "write: short write");
-}
-
-/*
  * Like io_simple_write() but into a buffer.
  */
 void
-io_simple_buffer(char **b, size_t *bsz,
-	size_t *bmax, const void *res, size_t sz)
+io_simple_buffer(struct ibuf *b, const void *res, size_t sz)
 {
-
-	if (*bsz + sz > *bmax) {
-		if ((*b = realloc(*b, *bsz + sz)) == NULL)
-			err(1, NULL);
-		*bmax = *bsz + sz;
-	}
-
-	memcpy(*b + *bsz, res, sz);
-	*bsz += sz;
+	if (ibuf_add(b, res, sz) == -1)
+		err(1, NULL);
 }
 
 /*
- * Like io_buf_write() but into a buffer.
+ * Add a sz sized buffer into the io buffer.
  */
 void
-io_buf_buffer(char **b, size_t *bsz,
-	size_t *bmax, const void *p, size_t sz)
+io_buf_buffer(struct ibuf *b, const void *p, size_t sz)
 {
-
-	io_simple_buffer(b, bsz, bmax, &sz, sizeof(size_t));
+	if (ibuf_add(b, &sz, sizeof(size_t)) == -1)
+		err(1, NULL);
 	if (sz > 0)
-		io_simple_buffer(b, bsz, bmax, p, sz);
+		if (ibuf_add(b, p, sz) == -1)
+			err(1, NULL);
 }
 
 /*
- * Write a binary buffer of the given size, which may be zero.
+ * Add a string into the io buffer.
  */
 void
-io_buf_write(int fd, const void *p, size_t sz)
+io_str_buffer(struct ibuf *b, const char *p)
 {
+	size_t sz = (p == NULL) ? 0 : strlen(p);
 
-	io_simple_write(fd, &sz, sizeof(size_t));
-	io_simple_write(fd, p, sz);
-}
-
-/*
- * Like io_str_write() but into a buffer.
- */
-void
-io_str_buffer(char **b, size_t *bsz, size_t *bmax, const char *p)
-{
-	size_t	 sz = (p == NULL) ? 0 : strlen(p);
-
-	io_buf_buffer(b, bsz, bmax, p, sz);
-}
-
-/*
- * Write a NUL-terminated string, which may be zero-length.
- */
-void
-io_str_write(int fd, const char *p)
-{
-	size_t	 sz = (p == NULL) ? 0 : strlen(p);
-
-	io_buf_write(fd, p, sz);
+	io_buf_buffer(b, p, sz);
 }
 
 /*
@@ -177,7 +129,7 @@ io_buf_read_alloc(int fd, void **res, size_t *sz)
 }
 
 /*
- * Read a string (which may just be \0 and zero-length), allocating
+ * Read a string (returns NULL for zero-length strings), allocating
  * space for it.
  */
 void
@@ -186,6 +138,10 @@ io_str_read(int fd, char **res)
 	size_t	 sz;
 
 	io_simple_read(fd, &sz, sizeof(size_t));
+	if (sz == 0) {
+		*res = NULL;
+		return;
+	}
 	if ((*res = calloc(sz + 1, 1)) == NULL)
 		err(1, NULL);
 	io_simple_read(fd, *res, sz);

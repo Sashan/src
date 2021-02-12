@@ -1,4 +1,4 @@
-/*	$OpenBSD: ipmi.c,v 1.112 2020/03/29 09:31:10 kettenis Exp $ */
+/*	$OpenBSD: ipmi.c,v 1.115 2021/01/23 12:10:08 kettenis Exp $ */
 
 /*
  * Copyright (c) 2015 Masao Uebayashi
@@ -66,10 +66,6 @@ int	ipmi_enabled = 0;
 #define IPMI_BTMSG_CCODE		4
 #define IPMI_BTMSG_DATASND		4
 #define IPMI_BTMSG_DATARCV		5
-
-#define IPMI_MSG_NFLN			0
-#define IPMI_MSG_CMD			1
-#define IPMI_MSG_CCODE			2
 
 #define IPMI_SENSOR_TYPE_TEMP		0x0101
 #define IPMI_SENSOR_TYPE_VOLT		0x0102
@@ -1497,8 +1493,7 @@ ipmi_poll_thread(void *arg)
 			printf("%s: no SDRs IPMI disabled\n", DEVNAME(sc));
 			goto done;
 		}
-		while (tsleep(sc, PWAIT, "ipmirun", 1) != EWOULDBLOCK)
-			continue;
+		tsleep_nsec(sc, PWAIT, "ipmirun", MSEC_TO_NSEC(1));
 	}
 
 	/* initialize sensor list for thread */

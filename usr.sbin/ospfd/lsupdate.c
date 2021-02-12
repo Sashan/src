@@ -1,4 +1,4 @@
-/*	$OpenBSD: lsupdate.c,v 1.47 2019/11/19 09:55:55 remi Exp $ */
+/*	$OpenBSD: lsupdate.c,v 1.49 2021/01/19 09:25:53 claudio Exp $ */
 
 /*
  * Copyright (c) 2005 Claudio Jeker <claudio@openbsd.org>
@@ -31,9 +31,6 @@
 #include "log.h"
 #include "ospfe.h"
 #include "rde.h"
-
-extern struct ospfd_conf	*oeconf;
-extern struct imsgev		*iev_rde;
 
 struct ibuf *prepare_ls_update(struct iface *);
 int	add_ls_update(struct ibuf *, struct iface *, void *, u_int16_t,
@@ -175,8 +172,8 @@ int
 add_ls_update(struct ibuf *buf, struct iface *iface, void *data, u_int16_t len,
     u_int16_t older)
 {
-	void		*lsage;
-	u_int16_t	 age;
+	size_t		ageoff;
+	u_int16_t	age;
 
 	if ((size_t)iface->mtu < sizeof(struct ip) + sizeof(struct ospf_hdr) +
 	    sizeof(u_int32_t) + ibuf_size(buf) + len + MD5_DIGEST_LENGTH) {
@@ -186,7 +183,7 @@ add_ls_update(struct ibuf *buf, struct iface *iface, void *data, u_int16_t len,
 			return (0);
 	}
 
-	lsage = ibuf_reserve(buf, 0);
+	ageoff = ibuf_size(buf);
 	if (ibuf_add(buf, data, len)) {
 		log_warn("add_ls_update");
 		return (0);
@@ -198,7 +195,7 @@ add_ls_update(struct ibuf *buf, struct iface *iface, void *data, u_int16_t len,
 	if ((age += older + iface->transmit_delay) >= MAX_AGE)
 		age = MAX_AGE;
 	age = htons(age);
-	memcpy(lsage, &age, sizeof(age));
+	memcpy(ibuf_seek(buf, ageoff, sizeof(age)), &age, sizeof(age));
 
 	return (1);
 }
@@ -276,8 +273,8 @@ recv_ls_update(struct nbr *nbr, char *buf, u_int16_t len)
 				    "neighbor ID %s", inet_ntoa(nbr->id));
 				return;
 			}
-			imsg_compose_event(iev_rde, IMSG_LS_UPD, nbr->peerid, 0,
-			    -1, buf, ntohs(lsa.len));
+			ospfe_imsg_compose_rde(IMSG_LS_UPD, nbr->peerid, 0,
+			    buf, ntohs(lsa.len));
 			buf += ntohs(lsa.len);
 			len -= ntohs(lsa.len);
 		}

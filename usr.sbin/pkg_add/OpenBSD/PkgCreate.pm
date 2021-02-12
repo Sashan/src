@@ -1,6 +1,6 @@
 #! /usr/bin/perl
 # ex:ts=8 sw=4:
-# $OpenBSD: PkgCreate.pm,v 1.167 2020/01/26 12:50:17 espie Exp $
+# $OpenBSD: PkgCreate.pm,v 1.171 2021/01/26 12:13:21 espie Exp $
 #
 # Copyright (c) 2003-2014 Marc Espie <espie@openbsd.org>
 #
@@ -132,6 +132,7 @@ sub handle_options
 		$state->{userlist} = $state->parse_userdb($state->opt('u'));
 	}
 	$state->{wrkobjdir} = $state->defines('WRKOBJDIR');
+	$state->{fullpkgpath} = $state->{subst}->value('FULLPKGPATH') // '';
 }
 
 sub parse_userdb
@@ -942,8 +943,18 @@ sub really_solve_dependency
 
 	$state->progress->message($dep->{pkgpath});
 
-	# look in installed packages
-	my $v = $self->find_dep_in_installed($state, $dep);
+	my $v;
+
+	# look in installed packages, but only for different paths
+	my $p1 = $dep->{pkgpath};
+	my $p2 = $state->{fullpkgpath};
+	$p1 =~ s/\,.*//;
+	$p2 =~ s/\,.*//;
+	$p2 =~ s,^debug/,,;
+	if ($p1 ne $p2) {
+		# look in installed packages
+		$v = $self->find_dep_in_installed($state, $dep);
+	}
 	if (!defined $v) {
 		$v = $self->find_dep_in_self($state, $dep);
 	}
@@ -1280,7 +1291,7 @@ sub add_description
 	}
 	return if defined $state->opt('q');
 
-	open(my $fh, '+>', $o->fullname) or die "Can't write to DESC: $!";
+	open(my $fh, '+>', $o->fullname) or die "Can't write to DESCR: $!";
 	if (defined $comment) {
 		print $fh $subst->do($comment), "\n";
 	}
@@ -1300,13 +1311,13 @@ sub add_description
 			print $fh "\n", $subst->do('WWW: ${HOMEPAGE}'), "\n";
 		}
 	}
-	seek($fh, 0, 0) or die "Can't rewind DESC: $!";
+	seek($fh, 0, 0) or die "Can't rewind DESCR: $!";
     	my $errors = 0;
 	while (<$fh>) {
 		chomp;
 		if ($state->safe($_) ne $_) {
 			$state->errsay(
-			    "DESC contains weird characters: #1 on line #2", 
+			    "DESCR contains weird characters: #1 on line #2", 
 			    $_, $.);
 		$errors++;
 		}
@@ -1322,22 +1333,17 @@ sub add_extra_info
 	my ($self, $plist, $state) = @_;
 
 	my $subst = $state->{subst};
-	my $fullpkgpath = $subst->value('FULLPKGPATH');
+	my $fullpkgpath = $state->{fullpkgpath};
 	my $cdrom = $subst->value('PERMIT_PACKAGE_CDROM') ||
 	    $subst->value('CDROM');;
 	my $ftp = $subst->value('PERMIT_PACKAGE_FTP') ||
 	    $subst->value('FTP');
-	if (defined $fullpkgpath || defined $cdrom || defined $ftp) {
-		$fullpkgpath //= '';
-		$ftp //= 'no';
-		$ftp = 'yes' if $ftp =~ m/^yes$/io;
-		$cdrom = 'yes' if defined $cdrom && $cdrom =~ m/^yes$/io;
+	$ftp //= 'no';
+	$ftp = 'yes' if $ftp =~ m/^yes$/io;
+	$cdrom = 'yes' if defined $cdrom && $cdrom =~ m/^yes$/io;
 
-		OpenBSD::PackingElement::ExtraInfo->add($plist,
-		    $fullpkgpath, $cdrom, $ftp);
-	} else {
-		$state->errsay("Package without FULLPKGPATH");
-	}
+	OpenBSD::PackingElement::ExtraInfo->add($plist,
+	    $fullpkgpath, $cdrom, $ftp);
 }
 
 sub add_elements

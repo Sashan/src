@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_km.c,v 1.136 2020/02/18 12:13:40 mpi Exp $	*/
+/*	$OpenBSD: uvm_km.c,v 1.139 2020/12/15 22:14:42 mpi Exp $	*/
 /*	$NetBSD: uvm_km.c,v 1.42 2001/01/14 02:10:01 thorpej Exp $	*/
 
 /* 
@@ -816,7 +816,7 @@ km_alloc(size_t sz, const struct kmem_va_mode *kv,
 	paddr_t pla_align;
 	int pla_flags;
 	int pla_maxseg;
-	vaddr_t va, sva;
+	vaddr_t va, sva = 0;
 
 	KASSERT(sz == round_page(sz));
 

@@ -1,6 +1,7 @@
-/*	$OpenBSD: server_http.c,v 1.137 2020/02/25 15:18:41 sthen Exp $	*/
+/*	$OpenBSD: server_http.c,v 1.143 2021/01/05 19:56:11 tb Exp $	*/
 
 /*
+ * Copyright (c) 2020 Matthias Pressfreund <mpfr@fn.de>
  * Copyright (c) 2006 - 2018 Reyk Floeter <reyk@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
@@ -20,6 +21,7 @@
 #include <sys/queue.h>
 #include <sys/socket.h>
 #include <sys/tree.h>
+#include <sys/stat.h>
 
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -36,6 +38,7 @@
 #include <event.h>
 #include <ctype.h>
 #include <vis.h>
+#include <fcntl.h>
 
 #include "httpd.h"
 #include "http.h"
@@ -100,6 +103,8 @@ server_httpdesc_free(struct http_descriptor *desc)
 
 	free(desc->http_path);
 	desc->http_path = NULL;
+	free(desc->http_path_orig);
+	desc->http_path_orig = NULL;
 	free(desc->http_path_alias);
 	desc->http_path_alias = NULL;
 	free(desc->http_query);
@@ -921,15 +926,17 @@ server_abort_http(struct client *clt, unsigned int code, const char *msg)
 	/* A CSS stylesheet allows minimal customization by the user */
 	style = "body { background-color: white; color: black; font-family: "
 	    "'Comic Sans MS', 'Chalkboard SE', 'Comic Neue', sans-serif; }\n"
-	    "hr { border: 0; border-bottom: 1px dashed; }\n";
+	    "hr { border: 0; border-bottom: 1px dashed; }\n"
+	    "@media (prefers-color-scheme: dark) {\n"
+	    "body { background-color: #1E1F21; color: #EEEFF1; }\n"
+	    "a { color: #BAD7FF; }\n}";
 
 	/* Generate simple HTML error document */
 	if ((bodylen = asprintf(&body,
 	    "<!DOCTYPE html>\n"
 	    "<html>\n"
 	    "<head>\n"
-	    "<meta http-equiv=\"Content-Type\" content=\"text/html; "
-	    "charset=utf-8\"/>\n"
+	    "<meta charset=\"utf-8\">\n"
 	    "<title>%03d %s</title>\n"
 	    "<style type=\"text/css\"><!--\n%s\n--></style>\n"
 	    "</head>\n"
@@ -1202,9 +1209,13 @@ server_response(struct httpd *httpd, struct client *clt)
 	char			*hostval, *query;
 	const char		*errstr = NULL;
 
-	/* Decode the URL */
+	/* Preserve original path */
 	if (desc->http_path == NULL ||
-	    url_decode(desc->http_path) == NULL)
+	    (desc->http_path_orig = strdup(desc->http_path)) == NULL)
+		goto fail;
+
+	/* Decode the URL */
+	if (url_decode(desc->http_path) == NULL)
 		goto fail;
 
 	/* Canonicalize the request path */
@@ -1271,8 +1282,7 @@ server_response(struct httpd *httpd, struct client *clt)
 				    hostname, FNM_CASEFOLD);
 			}
 			if (ret == 0 &&
-			    (portval == -1 ||
-			    (portval != -1 && portval == srv_conf->port))) {
+			    (portval == -1 || portval == srv_conf->port)) {
 				/* Replace host configuration */
 				clt->clt_srv_conf = srv_conf;
 				srv_conf = NULL;
@@ -1310,7 +1320,10 @@ server_response(struct httpd *httpd, struct client *clt)
 		goto fail;
 
 	/* Now search for the location */
-	srv_conf = server_getlocation(clt, desc->http_path);
+	if ((srv_conf = server_getlocation(clt, desc->http_path)) == NULL) {
+		server_abort_http(clt, 500, desc->http_path);
+		return (-1);
+	}
 
 	/* Optional rewrite */
 	if (srv_conf->flags & SRVFLAG_PATH_REWRITE) {
@@ -1346,7 +1359,11 @@ server_response(struct httpd *httpd, struct client *clt)
 			goto fail;
 
 		/* Now search for the updated location */
-		srv_conf = server_getlocation(clt, desc->http_path_alias);
+		if ((srv_conf = server_getlocation(clt,
+		    desc->http_path_alias)) == NULL) {
+			server_abort_http(clt, 500, desc->http_path_alias);
+			return (-1);
+		}
 	}
 
 	if (clt->clt_toread > 0 && (size_t)clt->clt_toread >
@@ -1412,6 +1429,12 @@ server_getlocation(struct client *clt, const char *path)
 				    path, FNM_CASEFOLD);
 			}
 			if (ret == 0 && errstr == NULL) {
+				if ((ret = server_locationaccesstest(location,
+				    path)) == -1)
+					return (NULL);
+
+				if (ret)
+					continue;
 				/* Replace host configuration */
 				clt->clt_srv_conf = srv_conf = location;
 				break;
@@ -1420,6 +1443,27 @@ server_getlocation(struct client *clt, const char *path)
 	}
 
 	return (srv_conf);
+}
+
+int
+server_locationaccesstest(struct server_config *srv_conf, const char *path)
+{
+	int		 rootfd, ret;
+	struct stat	 sb;
+
+	if (((SRVFLAG_LOCATION_FOUND | SRVFLAG_LOCATION_NOT_FOUND) &
+	    srv_conf->flags) == 0)
+		return (0);
+
+	if ((rootfd = open(srv_conf->root, O_RDONLY)) == -1)
+		return (-1);
+
+	path = server_root_strip(path, srv_conf->strip) + 1;
+	if ((ret = faccessat(rootfd, path, R_OK, 0)) != -1)
+		ret = fstatat(rootfd, path, &sb, 0);
+	close(rootfd);
+	return ((ret == -1 && SRVFLAG_LOCATION_FOUND & srv_conf->flags) ||
+	    (ret == 0 && SRVFLAG_LOCATION_NOT_FOUND & srv_conf->flags));
 }
 
 int

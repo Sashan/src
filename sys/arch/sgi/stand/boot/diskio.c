@@ -1,4 +1,4 @@
-/*	$OpenBSD: diskio.c,v 1.12 2018/03/02 15:36:39 visa Exp $ */
+/*	$OpenBSD: diskio.c,v 1.14 2020/12/09 18:10:19 krw Exp $ */
 
 /*
  * Copyright (c) 2016 Miodrag Vallat.
@@ -64,7 +64,7 @@ struct	dio_softc {
 };
 
 int
-diostrategy(void *devdata, int rw, daddr32_t bn, size_t reqcnt, void *addr,
+diostrategy(void *devdata, int rw, daddr_t bn, size_t reqcnt, void *addr,
     size_t *cnt)
 {
 	struct dio_softc *sc = (struct dio_softc *)devdata;
@@ -72,6 +72,9 @@ diostrategy(void *devdata, int rw, daddr32_t bn, size_t reqcnt, void *addr,
 	uint64_t blkoffset;
 	arc_quad_t offset;
 	long result;
+
+	if (rw != F_READ)
+		return EOPNOTSUPP;
 
 	blkoffset =
 	    (DL_SECTOBLK(&sc->sc_label, DL_GETPOFFSET(pp)) + bn) * DEV_BSIZE;
@@ -82,7 +85,8 @@ diostrategy(void *devdata, int rw, daddr32_t bn, size_t reqcnt, void *addr,
 	    Bios_Read(sc->sc_fd, addr, reqcnt, &result) < 0)
 		return EIO;
 
-	*cnt = result;
+	if (cnt != NULL)
+		*cnt = result;
 	return 0;
 }
 

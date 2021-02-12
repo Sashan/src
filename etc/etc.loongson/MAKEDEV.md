@@ -1,6 +1,6 @@
 define(MACHINE,loongson)dnl
 vers(__file__,
-	{-$OpenBSD: MAKEDEV.md,v 1.30 2020/01/23 02:47:28 dlg Exp $-},
+	{-$OpenBSD: MAKEDEV.md,v 1.33 2021/01/23 05:08:33 thfr Exp $-},
 etc.MACHINE)dnl
 dnl
 dnl Copyright (c) 2001-2006 Todd T. Fries <todd@OpenBSD.org>
@@ -60,6 +60,7 @@ _DEV(uall)
 _DEV(ugen, 63)
 _DEV(uhid, 62)
 _DEV(fido, 88)
+_DEV(ujoy, 90)
 _DEV(ulpt, 64)
 _DEV(usb, 61)
 _TITLE(spec)
@@ -84,6 +85,7 @@ _DEV(uk, 32)
 _DEV(vi, 45)
 _DEV(vscsi, 69)
 _DEV(switch, 75)
+_DEV(kstat, 51)
 dnl
 divert(__mddivert)dnl
 dnl
@@ -92,7 +94,7 @@ _std(2, 3, 35, 6)
 dnl
 dnl *** loongson specific targets
 dnl
-twrget(all, au, audio, 0, 1, 2)dnl
+twrget(all, au, audio, 0, 1, 2, 3)dnl
 dnl target(all, ch, 0)dnl
 target(all, vscsi, 0)dnl
 target(all, diskmap)dnl

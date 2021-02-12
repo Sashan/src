@@ -1,4 +1,4 @@
-/* 	$OpenBSD: util.h,v 1.2 2017/07/27 13:34:30 mpi Exp $ */
+/* 	$OpenBSD: util.h,v 1.4 2020/11/07 09:53:21 denis Exp $ */
 
 /*
  * Copyright (c) 2015 Martin Pieuchot

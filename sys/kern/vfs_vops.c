@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_vops.c,v 1.26 2020/03/30 09:08:10 mpi Exp $	*/
+/*	$OpenBSD: vfs_vops.c,v 1.29 2020/10/07 12:33:03 mpi Exp $	*/
 /*
  * Copyright (c) 2010 Thordur I. Bjornsson <thib@openbsd.org> 
  *
@@ -166,7 +166,7 @@ VOP_CLOSE(struct vnode *vp, int fflag, struct ucred *cred, struct proc *p)
 	a.a_cred = cred;
 	a.a_p = p;
 
-	KASSERT(p == curproc);
+	KASSERT(p == NULL || p == curproc);
 	ASSERT_VP_ISLOCKED(vp);
 
 	if (vp->v_op->vop_close == NULL)
@@ -315,10 +315,11 @@ VOP_POLL(struct vnode *vp, int fflag, int events, struct proc *p)
 }
 
 int
-VOP_KQFILTER(struct vnode *vp, struct knote *kn)
+VOP_KQFILTER(struct vnode *vp, int fflag, struct knote *kn)
 {
 	struct vop_kqfilter_args a;
 	a.a_vp = vp;
+	a.a_fflag = fflag;
 	a.a_kn = kn;
 
 	if (vp->v_op->vop_kqfilter == NULL)

@@ -1,4 +1,4 @@
-/*	$OpenBSD: snmpd.c,v 1.41 2019/01/08 15:38:36 bluhm Exp $	*/
+/*	$OpenBSD: snmpd.c,v 1.44 2021/01/27 07:21:54 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2007, 2008, 2012 Reyk Floeter <reyk@openbsd.org>
@@ -52,9 +52,9 @@ struct snmpd	*snmpd_env;
 
 static struct privsep_proc procs[] = {
 	{ "snmpe", PROC_SNMPE, snmpd_dispatch_snmpe, snmpe, snmpe_shutdown },
-	{ "traphandler", PROC_TRAP, snmpd_dispatch_traphandler, traphandler,
-	    traphandler_shutdown }
 };
+
+enum privsep_procid privsep_process;
 
 void
 snmpd_sig_handler(int sig, short event, void *arg)
@@ -300,6 +300,8 @@ int
 snmpd_dispatch_snmpe(int fd, struct privsep_proc *p, struct imsg *imsg)
 {
 	switch (imsg->hdr.type) {
+	case IMSG_TRAP_EXEC:
+		return (traphandler_priv_recvmsg(p, imsg));
 	case IMSG_CTL_RELOAD:
 		/* XXX notyet */
 	default:
@@ -310,33 +312,10 @@ snmpd_dispatch_snmpe(int fd, struct privsep_proc *p, struct imsg *imsg)
 }
 
 int
-snmpd_socket_af(struct sockaddr_storage *ss, in_port_t port, int ipproto)
+snmpd_socket_af(struct sockaddr_storage *ss, int type)
 {
-	int	 s;
-
-	switch (ss->ss_family) {
-	case AF_INET:
-		((struct sockaddr_in *)ss)->sin_port = port;
-		((struct sockaddr_in *)ss)->sin_len =
-		    sizeof(struct sockaddr_in);
-		break;
-	case AF_INET6:
-		((struct sockaddr_in6 *)ss)->sin6_port = port;
-		((struct sockaddr_in6 *)ss)->sin6_len =
-		    sizeof(struct sockaddr_in6);
-		break;
-	default:
-		return (-1);
-	}
-
-	if (ipproto == IPPROTO_TCP)
-		s = socket(ss->ss_family,
-		    SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_TCP);
-	else
-		s = socket(ss->ss_family,
-		    SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_UDP);
-
-	return (s);
+	return socket(ss->ss_family, (type == SOCK_STREAM ?
+	    SOCK_STREAM | SOCK_NONBLOCK : SOCK_DGRAM) | SOCK_CLOEXEC, 0);
 }
 
 void

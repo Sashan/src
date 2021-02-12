@@ -1,4 +1,4 @@
-/*	$OpenBSD: rcsprog.c,v 1.161 2016/07/04 01:39:12 millert Exp $	*/
+/*	$OpenBSD: rcsprog.c,v 1.163 2021/01/18 00:51:15 mortimer Exp $	*/
 /*
  * Copyright (c) 2005 Jean-Francois Brousseau <jfb@openbsd.org>
  * All rights reserved.
@@ -60,6 +60,7 @@ struct rcs_prog {
 	{ "ident",	ident_main,	ident_usage	},
 	{ "merge",	merge_main,	merge_usage	},
 };
+void   (*usage)(void);
 
 struct wklhead temp_files;
 
@@ -518,6 +519,14 @@ rcs_main(int argc, char **argv)
 				 */
 				if (rdp->rd_flags & RCS_RD_SELECT) {
 					rcsnum_tostr(rdp->rd_num, b, sizeof(b));
+
+					if (rdp->rd_locker != NULL) {
+						errx(1, "%s: can't remove "
+						    "locked revision %s",
+						    fpath, b);
+						continue;
+					}
+
 					if (!(rcsflags & QUIET)) {
 						(void)fprintf(stderr, "deleting"
 						    " revision %s\n", b);

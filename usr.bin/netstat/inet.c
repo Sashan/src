@@ -1,4 +1,4 @@
-/*	$OpenBSD: inet.c,v 1.168 2020/01/15 14:02:37 mpi Exp $	*/
+/*	$OpenBSD: inet.c,v 1.171 2021/01/26 18:22:35 deraadt Exp $	*/
 /*	$NetBSD: inet.c,v 1.14 1995/10/03 21:42:37 thorpej Exp $	*/
 
 /*
@@ -87,7 +87,6 @@
 
 struct	inpcb inpcb;
 struct	tcpcb tcpcb;
-struct	socket sockb;
 
 char	*inetname(struct in_addr *);
 void	inetprint(struct in_addr *, in_port_t, const char *, int);
@@ -327,9 +326,10 @@ netdomainpr(struct kinfo_file *kf, int proto)
 		if (Bflag && istcp)
 			printf("%-6.6s %-6.6s %-6.6s ",
 			    "Recv-W", "Send-W", "Cgst-W");
-		printf(" %-*.*s %-*.*s %s\n",
+		printf(" %-*.*s %-*.*s%s\n",
 		    addrlen, addrlen, "Local Address",
-		    addrlen, addrlen, "Foreign Address", "(state)");
+		    addrlen, addrlen, "Foreign Address",
+		    istcp ? " TCP-State" : type == SOCK_RAW ? " IP-Proto" : "");
 	}
 
 	if (Aflag)
@@ -1377,7 +1377,6 @@ sockbuf_dump(struct sockbuf *sb, const char *name)
 	p("%lu", sb_mbmax, ", ");
 	p("%ld", sb_lowat, "\n ");
 	printf("%s ", name);
-	p("%#.8x", sb_flagsintr, ", ");
 	p("%#.4x", sb_flags, ", ");
 	p("%llu", sb_timeo_nsecs, "\n ");
 #undef	p

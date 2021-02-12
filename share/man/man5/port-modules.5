@@ -1,4 +1,4 @@
-.\"	$OpenBSD: port-modules.5,v 1.243 2020/01/26 11:11:39 jasper Exp $
+.\"	$OpenBSD: port-modules.5,v 1.252 2021/02/01 21:48:36 jca Exp $
 .\"
 .\" Copyright (c) 2008 Marc Espie
 .\"
@@ -24,7 +24,7 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.Dd $Mdocdate: January 26 2020 $
+.Dd $Mdocdate: February 1 2021 $
 .Dt PORT-MODULES 5
 .Os
 .Sh NAME
@@ -856,10 +856,15 @@ or
 .Ev VERSION
 it sets
 .Ev PKGNAME .
-Also sets
-.Ev FONTDIR ,
+.Ev TYPEFACE
+should be set to the name of the typeface.
+This sets
+.Ev FONTDIR
+using said typeface name.
 .Ev FONTTYPES
-and
+defaults to `ttf' but can be set to include the extensions of
+fonts which are to be installed.
+Also sets
 .Ev FONT_DISTDIR .
 A
 .Cm do-install
@@ -1107,6 +1112,36 @@ are appended to port's
 .Ev BUILD_DEPENDS .
 Defaults to
 .Ar Yes .
+.It Ev MODGO_MODNAME
+is the module name as defined in the
+.Pa go.mod
+file contained in a project.
+If this is set,
+.Ev MODGO_MODULES ,
+.Ev MODGO_MODFILES
+and
+.Ev MODGO_VERSION
+need to be defined as well.
+Setting this will also set
+.Ev ALL_TARGET .
+When
+.Ev MODGO_MODFILES
+is set, and a "cmd" directory is found in
+.Ev WRKSRC ,
+"cmd/..." is appended to
+.Ev ALL_TARGET
+in
+.Cm do-build
+automatically.
+.It Ev MODGO_VERSION
+Sets the specific version of a Go module to use.
+For example: v0.1.3.
+.It Ev MODGO_MODULES
+List of modules and their specific versions that an application depends on.
+.It Ev MODGO_MODFILES
+List of go.mod files and their versions that are required for dependency
+resolution.
+These are required by Go to determine the full dependency graph.
 .El
 .Pp
 Additionally defines
@@ -1128,6 +1163,18 @@ Go package names as arguments),
 .Ev MODGO_{BUILD,INSTALL,TEST}_TARGET
 and
 .Ev MODGO_{BUILD,RUN}_DEPENDS .
+.Pp
+This module adds one
+.Xr make 1
+target:
+.Bl -tag -width modgo-gen-modules
+.It Cm modgo-gen-modules
+Generate the
+.Ev MODGO_MODULES
+and the
+.Ev MODGO_MODFILES
+lists.
+.El
 .It lang/lua
 Sets
 .Ev MODLUA_BIN ,
@@ -1262,7 +1309,13 @@ Appends to
 .Ev BUILD_DEPENDS
 and
 .Ev MAKE_ENV .
-This selects a %%native%% plist fragment and
+Appends to
+.Ev RUN_DEPENDS
+unless
+.Ev MODOCAML_RUNDEP
+is set to No, or set to if-not-native and native compilation
+is supported on this architecture.
+Including this module selects a %%native%% plist fragment and
 .Ev ocaml_native
 property depending on whether the architecture supports native
 compilation.
@@ -1294,13 +1347,14 @@ and
 .Ev MODPHP_LIBDIR .
 Adds to
 .Ev RUN_DEPENDS
-and
-.Ev BUILD_DEPENDS
 unless
 .Ev MODPHP_RUNDEP
-or
+is set to No.
+Adds to
+.Ev BUILD_DEPENDS
+if
 .Ev MODPHP_BUILDDEP
-are set.
+is set to Yes.
 If
 .Ev MODPHP_DO_PHPIZE
 is set, prepares a build environment for extensions that use phpize.
@@ -1839,253 +1893,6 @@ Some tools require the following goo in the PLIST:
 @unexec-delete %D/bin/update-mime-database %D/share/mime
 .Ed
 .It x11/gnustep
-.It x11/kde
-Used for building KDE3-enabled ports.
-Main variables there is
-.Ev MODKDE_VERSION ,
-which defines what patches and tweaks should be applied,
-depending of exact KDE version the ported software is build
-against of.
-.It x11/kde4
-Required for building KDE4-enabled ports.
-Main variables are: MODKDE4_USE,
-MODKDE4_VERSION, MODKDE4_DEP_DIR, MODKDE4_DEP_VERSION, MODKDE4_FLAVOR.
-It's used both for KDE4 SC itself and for software built on top of it,
-e.g., Digikam.
-This module supports several KDE4 trees at the same time, see below.
-The following variables are designed to be used in both types of ports:
-.Bl -tag -width KDE4LIB
-.It Ev MODKDE4_USE
-Defines the core components of KDE4 to be used by the port.
-Could have zero or more of the following values, in any order:
-.Sq libs ,
-.Sq runtime ,
-.Sq pim ,
-.Sq games ,
-.Sq workspace .
-Could be forced to be empty, this will mean no automated dependencies.
-If
-.Sq libs
-is specified, no dependencies on runtime (kde-runtime or kdepim-runtime)
-will be recorded.
-The
-.Sq workspace
-component implies
-.Sq runtime .
-The
-.Sq games
-component is to be used by games and affects default HOMEPAGE, too.
-If neither
-.Sq libs
-or
-.Sq runtime
-are specified, the
-.Sq runtime
-is implied.
-If both
-.Sq libs
-and
-.Sq runtime
-are specified, then
-.Sq runtime
-takes precedence (actually, it's a libs+ anyway).
-The
-.Sq pim libs
-combination adds dependencies on both kdelibs and kdepimlibs,
-and
-.Sq pim runtime (
-or just
-.Sq pim )
-also adds dependencies on both kde-runtime and kdepim-runtime.
-Defaults to
-.Sq libs
-when
-.Ev MODKDE4_RESOURCES
-is set to
-.Sq Yes ,
-and
-.Sq runtime
-otherwise.
-.It Ev MODKDE4_DEP_DIR
-Expands to
-.Sq x11/kdeVERSION
-where version depends on current
-.Ev MODKDE4_VERSION ,
-see below.
-Read-only.
-.It Ev MODKDE4_DEP_VERSION
-Expands to a string to be used in dependency lines, see
-examples in
-.Pa x11/kde4/*
-ports.
-Read-only.
-.It Ev MODKDE4_RESOURCES
-Should be set to
-.Sq Yes
-for ports that only provide non-executable stuff like icons,
-localization files and so on.
-Affects
-.Ev FLAVORS ,
-.Ev MODKDE4_NO_QT ,
-.Ev MODKDE4_USE ,
-.Ev MODULES ,
-.Ev PKG_ARCH
-and
-.Ev SUBST_VARS
-variables.
-Defaults to
-.Sq \&No .
-.It Ev MODKDE4_INCLUDE_DIR
-Path where KDE4 headers to be placed/searched for, relative to
-.Ev PREFIX .
-Read-only.
-.It Ev MODKDE4_LIB_DIR
-Path where KDE4 headers to be placed/searched for, relative to
-.Ev PREFIX .
-Read-only.
-.It Ev KDE4LIB
-Shorter synonym for
-.Ev MODKDE4_LIB_DIR ,
-to be used in plists and
-.Ev WANTLIB
-declarations.
-Read-only.
-.It Ev MODKDE4_FIX_GETTEXT
-If set to
-.Sq Yes ,
-adds an additional step before building the port that
-searches for KDE-specific uses of the GETTEXT_PROCESS_PO_FILES
-CMake command and tweaks them to be compatible with the one from the
-.Pa FindGettext.cmake
-module provided by CMake itself.
-Defaults to
-.Sq Yes .
-.It Ev MODKDE4_SYSCONF_FILES
-Some KDE ports install files under
-.Pa ${SYSCONFDIR} .
-We want to have them under
-.Ev ${PREFIX}/share/examples
-or such, and just be @sample'd under
-.Pa ${SYSCONFDIR} .
-So add
-.Sq file/dir destination
-pairs to this variable, and appropriate @sample lines to packing list, e.g.:
-.Bd -literal -offset indent
-# in Makefile:
-MODKDE4_SYSCONF_FILES = dbus-1      share/examples
-
-# in PLIST:
-share/examples/dbus-1/system.d/org.kde.baloo.filewatch.conf
-@sample ${SYSCONFDIR}/dbus-1/system.d/org.kde.baloo.filewatch.conf
-.Ed
-.El
-.Pp
-The following variables are mostly used only inside KDE4 SC:
-.Bl -tag -width KDE4LIB
-.It MODKDE4_LIB_LINKS
-If set to
-.Sq Yes ,
-soft links for shared libraries in
-.Pa ${PREFIX}/lib
-to
-.Pa ${MODKDE4_LIB_DIR}
-will be created.
-Used to distinguish libraries from different KDE versions (3, 4...).
-Defaults to
-.Sq \&No .
-.It KDE4_ONLY
-If set to
-.Sq Yes ,
-sets the
-.Xr dpb 1
-tag to
-.Sq kde4 .
-Defaults to
-.Sq \&No
-when
-.Ev MODKDE4_USE
-is empty, and to
-.Sq Yes
-otherwise.
-.El
-.Pp
-The following variables are likely to be used only outside KDE4 SC:
-.Bl -tag -width KDE4LIB
-.It MODKDE4_NO_QT
-If set to
-.Sq Yes ,
-avoids automatic addition of x11/qt4 to
-.Ev MODULES .
-.El
-.Pp
-The x11/kde4 module supports co-existence of different KDE4 SC version
-ports subtrees.
-There always is a so-called stable tree in
-.Pa ${PORTSDIR}/x11/kde4
-and additional trees are placed in
-.Pa ${PORTSDIR}/x11/kdeXYZ ,
-where
-.Sq XYZ
-correspond to the
-.Sq X.Y.Z
-KDE version.
-So, say, KDE 4.12.4 tree should be placed in
-.Pa ${PORTSDIR}/x11/kde4124
-directory.
-The process of preparing a new KDE SC version subtree is automated,
-just use kde-release-helper script:
-.Bd -literal -offset indent
-cd ${PORTSDIR}/x11/kde4
-\&./kde-release-helper prepare 4.12.4
-.Ed
-This will copy the x11/kde4 subtree to x11/kde4124 and strip it:
-remove
-.Ev REVISION
-marks, remove distinfo files and so on.
-.Pp
-To access the new version then you'll need to add appropriate
-values at the top of x11/kde4 module file itself.
-Then you be able to use automatically created
-.Sq kdeXYZ
-.Ev FLAVOR
-to reference corresponding KDE4 SC version outside x11/kde4*.
-.Pp
-The x11/kde4 module sets the following variables unless they're already
-set by a port:
-.Ev CONFIGURE_STYLE ,
-.Ev EXTRACT_SUFX ,
-.Ev ONLY_FOR_ARCHS ,
-.Ev PORTHOME ,
-and
-.Ev SEPARATE_BUILD .
-.Pp
-The x11/kde4 module modifies the following variables if needed:
-.Ev BUILD_DEPENDS ,
-.Ev CONFIGURE_ARGS ,
-.Ev CONFIGURE_ENV ,
-.Ev LIB_DEPENDS ,
-.Ev RUN_DEPENDS ,
-and
-.Ev WANTLIB .
-.Pp
-The x11/kde4 module automatically adds devel/cmake to
-.Ev MODULES
-unless
-.Ev NO_BUILD
-is set to
-.Sq Yes .
-The x11/kde4 module automatically adds x11/qt4 to
-.Ev MODULES
-unless
-.Ev MODKDE4_NO_QT
-is set to
-.Sq Yes .
-The x11/kde4 module automatically adds gcc4 to
-.Ev MODULES
-unless
-.Ev MODKDE4_RESOURCES
-is set to
-.Sq Yes .
 .It x11/qt3, x11/qt4 and x11/qt5
 All qt* modules share a common
 .Ev MODQT_*
@@ -2241,4 +2048,5 @@ One of the latter has to be provided by the port Makefile.
 .Sh SEE ALSO
 .Xr make 1 ,
 .Xr bsd.port.mk 5 ,
+.Xr ruby-module 5 ,
 .Xr ports 7

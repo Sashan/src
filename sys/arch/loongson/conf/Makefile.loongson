@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile.loongson,v 1.77 2019/11/07 20:42:28 guenther Exp $
+#	$OpenBSD: Makefile.loongson,v 1.80 2021/01/28 17:39:03 deraadt Exp $
 
 # For instructions on building kernels consult the config(8) and options(4)
 # manual pages.
@@ -44,12 +44,17 @@ CMACHFLAGS+=	-fno-stack-protector
 .endif
 .if ${IDENT:M-DSMALL_KERNEL}
 SORTR=		cat
-COPTS?=		-Oz
+COPTIMIZE?=	-Oz
+.endif
+.if ${COMPILER_VERSION:Mclang}
+NO_INTEGR_AS=	-no-integrated-as
+CMACHFLAGS+=	-fomit-frame-pointer
+CWARNFLAGS+=	-Wno-address-of-packed-member -Wno-constant-conversion
 .endif
 
 DEBUG?=		-g
-COPTS?=		-O2
-CFLAGS=		${DEBUG} ${CWARNFLAGS} ${CMACHFLAGS} ${COPTS} ${PIPE}
+COPTIMIZE?=	-O2
+CFLAGS=		${DEBUG} ${CWARNFLAGS} ${CMACHFLAGS} ${COPTIMIZE} ${COPTS} ${PIPE}
 AFLAGS=		-D_LOCORE -x assembler-with-cpp ${CWARNFLAGS} ${CMACHFLAGS}
 LINKFLAGS=	-e start -T ld.script -Ttext=${LINK_ADDRESS} -warn-common -nopie
 
@@ -58,7 +63,7 @@ HOSTED_CPPFLAGS=${CPPFLAGS:S/^-nostdinc$//}
 HOSTED_CFLAGS=	${CFLAGS}
 HOSTED_C=	${HOSTCC} ${HOSTED_CFLAGS} ${HOSTED_CPPFLAGS} -c $<
 
-NORMAL_C_NOP=	${CC} ${CFLAGS} ${CPPFLAGS} -c $<
+NORMAL_C_NOP=	${CC} ${CFLAGS} ${CPPFLAGS} -fno-ret-protector -c $<
 NORMAL_C=	${CC} ${CFLAGS} ${CPPFLAGS} ${PROF} -c $<
 NORMAL_S=	${CC} ${AFLAGS} ${CPPFLAGS} ${PROF} -c $<
 
@@ -103,7 +108,7 @@ LINKFLAGS+=	-S
 assym.h: $S/kern/genassym.sh Makefile \
 	 ${_archdir}/${_arch}/genassym.cf ${_machdir}/${_mach}/genassym.cf
 	cat ${_archdir}/${_arch}/genassym.cf ${_machdir}/${_mach}/genassym.cf | \
-	    sh $S/kern/genassym.sh ${CC} ${CFLAGS} ${CPPFLAGS} -MF assym.P > assym.h.tmp
+	    sh $S/kern/genassym.sh ${CC} ${NO_INTEGR_AS} ${CFLAGS} ${CPPFLAGS} -MF assym.P > assym.h.tmp
 	sed '1s/.*/assym.h: \\/' assym.P > assym.d
 	sort -u assym.h.tmp > assym.h
 

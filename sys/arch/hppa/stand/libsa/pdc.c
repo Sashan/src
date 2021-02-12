@@ -1,4 +1,4 @@
-/*	$OpenBSD: pdc.c,v 1.21 2013/03/23 16:08:28 deraadt Exp $	*/
+/*	$OpenBSD: pdc.c,v 1.23 2020/12/09 18:10:18 krw Exp $	*/
 
 /*
  * Copyright (c) 1998-2004 Michael Shalayeff
@@ -128,7 +128,7 @@ int
 iodcstrategy(devdata, rw, blk, size, buf, rsize)
 	void *devdata;
 	int rw;
-	daddr32_t blk;
+	daddr_t blk;
 	size_t size;
 	void *buf;
 	size_t *rsize;
@@ -201,8 +201,9 @@ iodcstrategy(devdata, rw, blk, size, buf, rsize)
 	}
 
 	xfer = 0;
-	/* see if we can scratch anything from buffer */
-	if (dp->last_blk <= blk && (dp->last_blk + dp->last_read) > blk) {
+	/* On read, see if we can scratch anything from buffer */
+	if (rw == F_READ &&
+	    dp->last_blk <= blk && (dp->last_blk + dp->last_read) > blk) {
 		twiddle();
 		offset = blk - dp->last_blk;
 		xfer = min(dp->last_read - offset, size);
@@ -222,10 +223,16 @@ iodcstrategy(devdata, rw, blk, size, buf, rsize)
 	 */
 	for (; size; size -= ret, buf += ret, blk += ret, xfer += ret) {
 		offset = blk & IOPGOFSET;
+		if (rw != F_READ) {
+			/* put block into cache, but invalidate cache */
+			bcopy(buf, dp->buf, size);
+			dp->last_blk = 0;
+			dp->last_read = 0;
+		}
 		if ((ret = ((iodcio_t)pzdev->pz_iodc_io)(pzdev->pz_hpa,
 		    (rw == F_READ? IODC_IO_READ: IODC_IO_WRITE),
 		    pzdev->pz_spa, pzdev->pz_layers, pdcbuf,
-		    blk - offset, dp->buf, IODC_IOSIZ, IODC_IOSIZ)) < 0) {
+		    (u_int)blk - offset, dp->buf, IODC_IOSIZ, IODC_IOSIZ)) < 0) {
 #ifdef DEBUG
 			if (debug)
 				printf("iodc_read(%d,%d): %d\n",
@@ -238,11 +245,13 @@ iodcstrategy(devdata, rw, blk, size, buf, rsize)
 		}
 		if ((ret = pdcbuf[0]) <= 0)
 			break;
-		dp->last_blk = blk - offset;
-		dp->last_read = ret;
-		if ((ret -= offset) > size)
-			ret = size;
-		bcopy(dp->buf + offset, buf, ret);
+		if (rw == F_READ) {
+			dp->last_blk = blk - offset;
+			dp->last_read = ret;
+			if ((ret -= offset) > size)
+				ret = size;
+			bcopy(dp->buf + offset, buf, ret);
+		}
 #ifdef PDCDEBUG
 		if (debug)
 			printf("read %d(%d,%d)@%x ", ret,

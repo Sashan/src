@@ -1,4 +1,4 @@
-/* $OpenBSD: term_tag.c,v 1.1 2020/03/13 00:31:05 schwarze Exp $ */
+/* $OpenBSD: term_tag.c,v 1.5 2020/07/21 15:08:49 schwarze Exp $ */
 /*
  * Copyright (c) 2015,2016,2018,2019,2020 Ingo Schwarze <schwarze@openbsd.org>
  *
@@ -20,6 +20,7 @@
 #include <sys/types.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -29,6 +30,7 @@
 
 #include "mandoc.h"
 #include "roff.h"
+#include "roff_int.h"
 #include "tag.h"
 #include "term_tag.h"
 
@@ -43,7 +45,7 @@ static struct tag_files tag_files;
  * but for simplicity, create it anyway.
  */
 struct tag_files *
-term_tag_init(char *tagname)
+term_tag_init(const char *outfilename, const char *tagfilename)
 {
 	struct sigaction	 sa;
 	int			 ofd;	/* In /tmp/, dup(2)ed to stdout. */
@@ -52,7 +54,6 @@ term_tag_init(char *tagname)
 	ofd = tfd = -1;
 	tag_files.tfs = NULL;
 	tag_files.tcpgid = -1;
-	tag_files.tagname = tagname;
 
 	/* Clean up when dying from a signal. */
 
@@ -81,19 +82,43 @@ term_tag_init(char *tagname)
 
 	/* Create both temporary output files. */
 
-	(void)strlcpy(tag_files.ofn, "/tmp/man.XXXXXXXXXX",
-	    sizeof(tag_files.ofn));
-	(void)strlcpy(tag_files.tfn, "/tmp/man.XXXXXXXXXX",
-	    sizeof(tag_files.tfn));
-	if ((ofd = mkstemp(tag_files.ofn)) == -1) {
-		mandoc_msg(MANDOCERR_MKSTEMP, 0, 0,
-		    "%s: %s", tag_files.ofn, strerror(errno));
-		goto fail;
+	if (outfilename == NULL) {
+		(void)strlcpy(tag_files.ofn, "/tmp/man.XXXXXXXXXX",
+		    sizeof(tag_files.ofn));
+		if ((ofd = mkstemp(tag_files.ofn)) == -1) {
+			mandoc_msg(MANDOCERR_MKSTEMP, 0, 0,
+			    "%s: %s", tag_files.ofn, strerror(errno));
+			goto fail;
+		}
+	} else {
+		(void)strlcpy(tag_files.ofn, outfilename,
+		   sizeof(tag_files.ofn));
+		unlink(outfilename);
+		ofd = open(outfilename, O_WRONLY | O_CREAT | O_EXCL, 0644);
+		if (ofd == -1) {
+			mandoc_msg(MANDOCERR_OPEN, 0, 0,
+			    "%s: %s", outfilename, strerror(errno));
+			goto fail;
+		}
 	}
-	if ((tfd = mkstemp(tag_files.tfn)) == -1) {
-		mandoc_msg(MANDOCERR_MKSTEMP, 0, 0,
-		    "%s: %s", tag_files.tfn, strerror(errno));
-		goto fail;
+	if (tagfilename == NULL) {
+		(void)strlcpy(tag_files.tfn, "/tmp/man.XXXXXXXXXX",
+		    sizeof(tag_files.tfn));
+		if ((tfd = mkstemp(tag_files.tfn)) == -1) {
+			mandoc_msg(MANDOCERR_MKSTEMP, 0, 0,
+			    "%s: %s", tag_files.tfn, strerror(errno));
+			goto fail;
+		}
+	} else {
+		(void)strlcpy(tag_files.tfn, tagfilename,
+		    sizeof(tag_files.tfn));
+		unlink(tagfilename);
+		tfd = open(tagfilename, O_WRONLY | O_CREAT | O_EXCL, 0644);
+		if (tfd == -1) {
+			mandoc_msg(MANDOCERR_OPEN, 0, 0,
+			    "%s: %s", tagfilename, strerror(errno));
+			goto fail;
+		}
 	}
 	if ((tag_files.tfs = fdopen(tfd, "w")) == NULL) {
 		mandoc_msg(MANDOCERR_FDOPEN, 0, 0, "%s", strerror(errno));
@@ -117,7 +142,6 @@ fail:
 		close(tag_files.ofd);
 		tag_files.ofd = -1;
 	}
-	tag_files.tagname = NULL;
 	return NULL;
 }
 
@@ -129,9 +153,7 @@ term_tag_write(struct roff_node *n, size_t line)
 
 	if (tag_files.tfs == NULL)
 		return;
-	if (n->string == NULL)
-		n = n->child;
-	cp = n->string;
+	cp = n->tag == NULL ? n->child->string : n->tag;
 	if (cp[0] == '\\' && (cp[1] == '&' || cp[1] == 'e'))
 		cp += 2;
 	len = strcspn(cp, " \t\\");
@@ -139,27 +161,29 @@ term_tag_write(struct roff_node *n, size_t line)
 	    len, cp, tag_files.ofn, line);
 }
 
-void
-term_tag_finish(void)
+/*
+ * Close both output files and restore the original standard output
+ * to the terminal.  In the unlikely case that the latter fails,
+ * trying to start a pager would be useless, so report the failure
+ * to the main program.
+ */
+int
+term_tag_close(void)
 {
-	if (tag_files.tfs == NULL)
-		return;
-	fclose(tag_files.tfs);
-	tag_files.tfs = NULL;
-	switch (tag_check(tag_files.tagname)) {
-	case TAG_EMPTY:
-		unlink(tag_files.tfn);
-		*tag_files.tfn = '\0';
-		/* FALLTHROUGH */
-	case TAG_MISS:
-		if (tag_files.tagname == NULL)
-			break;
-		mandoc_msg(MANDOCERR_TAG, 0, 0, "%s", tag_files.tagname);
-		tag_files.tagname = NULL;
-		break;
-	case TAG_OK:
-		break;
+	int irc = 0;
+
+	if (tag_files.tfs != NULL) {
+		fclose(tag_files.tfs);
+		tag_files.tfs = NULL;
 	}
+	if (tag_files.ofd != -1) {
+		fflush(stdout);
+		if ((irc = dup2(tag_files.ofd, STDOUT_FILENO)) == -1)
+			mandoc_msg(MANDOCERR_DUP, 0, 0, "%s", strerror(errno));
+		close(tag_files.ofd);
+		tag_files.ofd = -1;
+	}
+	return irc;
 }
 
 void
@@ -168,23 +192,19 @@ term_tag_unlink(void)
 	pid_t	 tc_pgid;
 
 	if (tag_files.tcpgid != -1) {
-		tc_pgid = tcgetpgrp(tag_files.ofd);
+		tc_pgid = tcgetpgrp(STDOUT_FILENO);
 		if (tc_pgid == tag_files.pager_pid ||
 		    tc_pgid == getpgid(0) ||
 		    getpgid(tc_pgid) == -1)
-			(void)tcsetpgrp(tag_files.ofd, tag_files.tcpgid);
+			(void)tcsetpgrp(STDOUT_FILENO, tag_files.tcpgid);
 	}
-	if (*tag_files.ofn != '\0') {
+	if (strncmp(tag_files.ofn, "/tmp/man.", 9) == 0) {
 		unlink(tag_files.ofn);
 		*tag_files.ofn = '\0';
 	}
-	if (*tag_files.tfn != '\0') {
+	if (strncmp(tag_files.tfn, "/tmp/man.", 9) == 0) {
 		unlink(tag_files.tfn);
 		*tag_files.tfn = '\0';
-	}
-	if (tag_files.tfs != NULL) {
-		fclose(tag_files.tfs);
-		tag_files.tfs = NULL;
 	}
 }
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.186 2019/09/03 17:51:52 deraadt Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.193 2020/11/08 20:37:23 mpi Exp $	*/
 /*	$NetBSD: machdep.c,v 1.4 1996/10/16 19:33:11 ws Exp $	*/
 
 /*
@@ -263,6 +263,9 @@ initppc(u_int startkernel, u_int endkernel, char *args)
 			case 'c':
 				boothowto |= RB_CONFIG;
 				break;
+			case 'R':
+				boothowto |= RB_GOODRANDOM;
+				break;
 			default:
 				break;
 			}
@@ -439,7 +442,7 @@ setregs(struct proc *p, struct exec_package *pack, u_long stack,
 /*
  * Send a signal to process.
  */
-void
+int
 sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip)
 {
 	struct proc *p = curproc;
@@ -477,7 +480,7 @@ sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip)
 	}
 	frame.sf_sc.sc_cookie = (long)&fp->sf_sc ^ p->p_p->ps_sigcookie;
 	if (copyout(&frame, fp, sizeof frame) != 0)
-		sigexit(p, SIGILL);
+		return 1;
 
 	tf->fixreg[1] = (int)fp;
 	tf->lr = (int)catcher;
@@ -491,6 +494,8 @@ sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip)
 	syncicache(pa, (p->p_p->ps_emul->e_esigcode -
 	    p->p_p->ps_emul->e_sigcode));
 #endif
+
+	return 0;
 }
 
 /*

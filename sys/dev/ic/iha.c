@@ -1,4 +1,4 @@
-/*	$OpenBSD: iha.c,v 1.48 2020/02/18 17:08:35 krw Exp $ */
+/*	$OpenBSD: iha.c,v 1.52 2020/09/22 19:32:52 krw Exp $ */
 /*-------------------------------------------------------------------------
  *
  * Device driver for the INI-9XXXU/UW or INIC-940/950  PCI SCSI Controller.
@@ -47,14 +47,6 @@
 #include <dev/ic/iha.h>
 
 /* #define IHA_DEBUG_STATE */
-
-struct cfdriver iha_cd = {
-	NULL, "iha", DV_DULL
-};
-
-struct scsi_adapter iha_switch = {
-	iha_scsi_cmd, NULL, NULL, NULL, NULL
-};
 
 /*
  * SCSI Rate Table, indexed by FLAG_SCSI_RATE field of
@@ -250,7 +242,7 @@ iha_scsi_cmd(struct scsi_xfer *xs)
 {
 	struct iha_scb *pScb;
 	struct scsi_link *sc_link = xs->sc_link;
-	struct iha_softc *sc = sc_link->adapter_softc;
+	struct iha_softc *sc = sc_link->bus->sb_adapter_softc;
 	int error;
 
 	if ((xs->cmdlen > 12) || (sc_link->target >= IHA_MAX_TARGETS)) {
@@ -268,13 +260,13 @@ iha_scsi_cmd(struct scsi_xfer *xs)
 	pScb->SCB_Ident  = MSG_IDENTIFYFLAG |
 		(pScb->SCB_Lun & MSG_IDENTIFY_LUNMASK);
 
-	if ((xs->cmd->opcode != REQUEST_SENSE)
+	if ((xs->cmd.opcode != REQUEST_SENSE)
 	    && ((pScb->SCB_Flags & SCSI_POLL) == 0))
 		pScb->SCB_Ident |= MSG_IDENTIFY_DISCFLAG;
 
 	pScb->SCB_Xs	 = xs;
 	pScb->SCB_CDBLen = xs->cmdlen;
-	bcopy(xs->cmd, &pScb->SCB_CDB, xs->cmdlen);
+	bcopy(&xs->cmd, &pScb->SCB_CDB, xs->cmdlen);
 
 	pScb->SCB_BufCharsLeft = pScb->SCB_BufChars = xs->datalen;
 
@@ -350,22 +342,11 @@ iha_init_tulip(struct iha_softc *sc)
 	mtx_init(&sc->sc_scb_mtx, IPL_BIO);
 	scsi_iopool_init(&sc->sc_iopool, sc, iha_scb_alloc, iha_scb_free);
 
-	/*
-	 * fill in the prototype scsi_link.
-	 */
-	sc->sc_link.adapter_softc    = sc;
-	sc->sc_link.adapter	     = &iha_switch;
-	sc->sc_link.openings	     = 4; /* # xs's allowed per device */
-	sc->sc_link.adapter_target   = pScsi->NVM_SCSI_Id;
-	sc->sc_link.adapter_buswidth = pScsi->NVM_SCSI_Targets;
-	sc->sc_link.pool             = &sc->sc_iopool;
-
-	/*
-	 * fill in the rest of the iha_softc fields
-	 */
 	sc->HCS_Semaph	  = ~SEMAPH_IN_MAIN;
 	sc->HCS_JSStatus0 = 0;
 	sc->HCS_ActScb	  = NULL;
+	sc->sc_id	  = pScsi->NVM_SCSI_Id;
+	sc->sc_maxtargets = pScsi->NVM_SCSI_Targets;
 
 	error = iha_alloc_scbs(sc);
 	if (error != 0)
@@ -407,7 +388,7 @@ iha_init_tulip(struct iha_softc *sc)
 	bus_space_write_1(iot, ioh, TUL_SCTRL0, RSMOD);
 
 	/* Program HBA's SCSI ID */
-	bus_space_write_1(iot, ioh, TUL_SID, sc->sc_link.adapter_target << 4);
+	bus_space_write_1(iot, ioh, TUL_SID, sc->sc_id << 4);
 
 	/*
 	 * Configure the channel as requested by the NVRAM settings read
@@ -941,7 +922,7 @@ iha_scsi(struct iha_softc *sc, bus_space_tag_t iot, bus_space_handle_t ioh)
 
 	/* program HBA's SCSI ID & target SCSI ID */
 	bus_space_write_1(iot, ioh, TUL_SID,
-	    (sc->sc_link.adapter_target << 4) | pScb->SCB_Target);
+	    (sc->sc_id << 4) | pScb->SCB_Target);
 
 	if ((pScb->SCB_Flags & SCSI_RESET) == 0) {
 		bus_space_write_1(iot, ioh, TUL_SYNCM, pTcs->TCS_JS_Period);
@@ -2415,8 +2396,8 @@ iha_timeout(void *arg)
 
 	if (xs != NULL) {
 		sc_print_addr(xs->sc_link);
-		printf("SCSI OpCode 0x%02x timed out\n", xs->cmd->opcode);
-		iha_abort_xs(xs->sc_link->adapter_softc, xs, HOST_TIMED_OUT);
+		printf("SCSI OpCode 0x%02x timed out\n", xs->cmd.opcode);
+		iha_abort_xs(xs->sc_link->bus->sb_adapter_softc, xs, HOST_TIMED_OUT);
 	}
 }
 

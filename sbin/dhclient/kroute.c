@@ -1,4 +1,4 @@
-/*	$OpenBSD: kroute.c,v 1.172 2019/11/22 22:45:52 krw Exp $	*/
+/*	$OpenBSD: kroute.c,v 1.194 2021/02/01 16:29:22 cheloha Exp $	*/
 
 /*
  * Copyright 2012 Kenneth R Westerback <krw@openbsd.org>
@@ -51,16 +51,19 @@
 #define ROUNDUP(a) \
 	((a) > 0 ? (1 + (((a) - 1) | (sizeof(long) - 1))) : sizeof(long))
 
+#define	CIDR_MAX_BITS	32
+
 int		 delete_addresses(char *, int, struct in_addr, struct in_addr);
 void		 set_address(char *, int, struct in_addr, struct in_addr);
 void		 delete_address(char *, int, struct in_addr);
 
 char		*get_routes(int, size_t *);
 void		 get_rtaddrs(int, struct sockaddr *, struct sockaddr **);
-unsigned int	 route_in_rtstatic(struct rt_msghdr *, uint8_t *, unsigned int,
+unsigned int	 route_pos(struct rt_msghdr *, uint8_t *, unsigned int,
     struct in_addr);
 void		 flush_routes(int, int, int, uint8_t *, unsigned int,
     struct in_addr);
+void		 discard_route(uint8_t *, unsigned int);
 void		 add_route(char *, int, int, struct in_addr, struct in_addr,
 		    struct in_addr, struct in_addr, int);
 void		 set_routes(char *, int, int, int, struct in_addr,
@@ -68,8 +71,7 @@ void		 set_routes(char *, int, int, int, struct in_addr,
 
 int		 default_route_index(int, int);
 char		*resolv_conf_tail(void);
-char		*set_resolv_conf(char *, uint8_t *, unsigned int,
-    uint8_t *, unsigned int);
+char		*set_resolv_conf(char *, char *, struct unwind_info *);
 
 void		 set_mtu(char *, int, uint16_t);
 
@@ -257,20 +259,20 @@ get_rtaddrs(int addrs, struct sockaddr *sa, struct sockaddr **rti_info)
 	}
 }
 /*
- * route_in_rtstatic() finds the position of the route in *rtm withing
- * the list of routes in rtstatic.
+ * route_pos() finds the position of the *rtm route within
+ * routes.
  *
- * If the route is not contained in rtstatic, return rtstatic_len.
+ * If the *rtm route is not in routes, return routes_len.
  */
 unsigned int
-route_in_rtstatic(struct rt_msghdr *rtm, uint8_t *rtstatic,
-    unsigned int rtstatic_len, struct in_addr ifa)
+route_pos(struct rt_msghdr *rtm, uint8_t *routes, unsigned int routes_len,
+    struct in_addr address)
 {
 	struct sockaddr		*rti_info[RTAX_MAX];
 	struct sockaddr		*dst, *netmask, *gateway;
 	in_addr_t		 dstaddr, netmaskaddr, gatewayaddr;
-	in_addr_t		 rtstaticdstaddr, rtstaticnetmaskaddr;
-	in_addr_t		 rtstaticgatewayaddr;
+	in_addr_t		 routesdstaddr, routesnetmaskaddr;
+	in_addr_t		 routesgatewayaddr;
 	unsigned int		 i, len;
 
 	get_rtaddrs(rtm->rtm_addrs,
@@ -282,11 +284,11 @@ route_in_rtstatic(struct rt_msghdr *rtm, uint8_t *rtstatic,
 	gateway = rti_info[RTAX_GATEWAY];
 
 	if (dst == NULL || netmask == NULL || gateway == NULL)
-		return rtstatic_len;
+		return routes_len;
 
 	if (dst->sa_family != AF_INET || netmask->sa_family != AF_INET ||
 	    gateway->sa_family != AF_INET)
-		return rtstatic_len;
+		return routes_len;
 
 	dstaddr = ((struct sockaddr_in *)dst)->sin_addr.s_addr;
 	netmaskaddr = ((struct sockaddr_in *)netmask)->sin_addr.s_addr;
@@ -294,47 +296,40 @@ route_in_rtstatic(struct rt_msghdr *rtm, uint8_t *rtstatic,
 
 	dstaddr &= netmaskaddr;
 	i = 0;
-	while (i < rtstatic_len)  {
-		len = extract_classless_route(&rtstatic[i], rtstatic_len - i,
-		    &rtstaticdstaddr, &rtstaticnetmaskaddr,
-		    &rtstaticgatewayaddr);
+	while (i < routes_len)  {
+		len = extract_route(&routes[i], routes_len - i, &routesdstaddr,
+		    &routesnetmaskaddr, &routesgatewayaddr);
 		if (len == 0)
 			break;
 
-		/* Direct route in rtstatic:
+		/* Direct route in routes:
 		 *
 		 * dst=1.2.3.4 netmask=255.255.255.255 gateway=0.0.0.0
 		 *
 		 * direct route in rtm:
 		 *
-		 * dst=1.2.3.4 netmask=255.255.255.255 gateway = ifa
+		 * dst=1.2.3.4 netmask=255.255.255.255 gateway = address
 		 *
-		 * So replace 0.0.0.0 with ifa for comparison.
+		 * So replace 0.0.0.0 with address for comparison.
 		 */
-		if (rtstaticgatewayaddr == INADDR_ANY)
-			rtstaticgatewayaddr = ifa.s_addr;
-		rtstaticdstaddr &= rtstaticnetmaskaddr;
+		if (routesgatewayaddr == INADDR_ANY)
+			routesgatewayaddr = address.s_addr;
+		routesdstaddr &= routesnetmaskaddr;
 
-		if (dstaddr == rtstaticdstaddr &&
-		    netmaskaddr == rtstaticnetmaskaddr &&
-		    gatewayaddr == rtstaticgatewayaddr)
+		if (dstaddr == routesdstaddr &&
+		    netmaskaddr == routesnetmaskaddr &&
+		    gatewayaddr == routesgatewayaddr)
 			return i;
 
 		i += len;
 	}
 
-	return rtstatic_len;
+	return routes_len;
 }
 
-/*
- * flush_routes() does the equivalent of
- *
- *	route -q -T $rdomain -n flush -inet -iface $interface
- *	arp -dan
- */
 void
-flush_routes(int index, int routefd, int rdomain, uint8_t *rtstatic,
-    unsigned int rtstatic_len, struct in_addr ifa)
+flush_routes(int index, int routefd, int rdomain, uint8_t *routes,
+    unsigned int routes_len, struct in_addr address)
 {
 	static int			 seqno;
 	char				*lim, *buf, *next;
@@ -361,10 +356,11 @@ flush_routes(int index, int routefd, int rdomain, uint8_t *rtstatic,
 		if ((rtm->rtm_flags & (RTF_LOCAL|RTF_BROADCAST)) != 0)
 			continue;
 
-		/* Don't bother deleting a route we're going to add. */
-		pos = route_in_rtstatic(rtm, rtstatic, rtstatic_len, ifa);
-		if (pos < rtstatic_len)
+		pos = route_pos(rtm, routes, routes_len, address);
+		if (pos < routes_len) {
+			discard_route(routes + pos, routes_len - pos);
 			continue;
+		}
 
 		rtm->rtm_type = RTM_DELETE;
 		rtm->rtm_seq = seqno++;
@@ -381,90 +377,73 @@ flush_routes(int index, int routefd, int rdomain, uint8_t *rtstatic,
 	free(buf);
 }
 
+void
+discard_route(uint8_t *routes, unsigned int routes_len)
+{
+	unsigned int		len;
+
+	len = 1 + sizeof(struct in_addr) + (routes[0] + 7) / 8;
+	memmove(routes, routes + len, routes_len - len);
+	routes[routes_len - len] = CIDR_MAX_BITS + 1;
+}
+
 /*
  * add_route() adds a single route to the routing table.
  */
 void
 add_route(char *name, int rdomain, int routefd, struct in_addr dest,
-    struct in_addr netmask, struct in_addr gateway, struct in_addr ifa,
+    struct in_addr netmask, struct in_addr gateway, struct in_addr address,
     int flags)
 {
 	char			 destbuf[INET_ADDRSTRLEN];
 	char			 maskbuf[INET_ADDRSTRLEN];
 	struct iovec		 iov[5];
+	struct sockaddr_in	 sockaddr_in[4];
 	struct rt_msghdr	 rtm;
-	struct sockaddr_in	 sadest, sagateway, samask, saifa;
-	int			 index, iovcnt = 0;
-
-	index = if_nametoindex(name);
-	if (index == 0)
-		return;
-
-	/* Build RTM header */
+	int			 i, iovcnt = 0;
 
 	memset(&rtm, 0, sizeof(rtm));
+	rtm.rtm_index = if_nametoindex(name);
+	if (rtm.rtm_index == 0)
+		return;
 
 	rtm.rtm_version = RTM_VERSION;
 	rtm.rtm_type = RTM_ADD;
-	rtm.rtm_index = index;
 	rtm.rtm_tableid = rdomain;
 	rtm.rtm_priority = RTP_NONE;
-	rtm.rtm_addrs =	RTA_DST | RTA_NETMASK | RTA_GATEWAY;
 	rtm.rtm_flags = flags;
 
-	rtm.rtm_msglen = sizeof(rtm);
-	iov[iovcnt].iov_base = &rtm;
-	iov[iovcnt++].iov_len = sizeof(rtm);
+	iov[0].iov_base = &rtm;
+	iov[0].iov_len = sizeof(rtm);
 
-	/* Add the destination address. */
-	memset(&sadest, 0, sizeof(sadest));
-	sadest.sin_len = sizeof(sadest);
-	sadest.sin_family = AF_INET;
-	sadest.sin_addr.s_addr = dest.s_addr;
-
-	rtm.rtm_msglen += sizeof(sadest);
-	iov[iovcnt].iov_base = &sadest;
-	iov[iovcnt++].iov_len = sizeof(sadest);
-
-	/* Add the gateways address. */
-	memset(&sagateway, 0, sizeof(sagateway));
-	sagateway.sin_len = sizeof(sagateway);
-	sagateway.sin_family = AF_INET;
-	sagateway.sin_addr.s_addr = gateway.s_addr;
-
-	rtm.rtm_msglen += sizeof(sagateway);
-	iov[iovcnt].iov_base = &sagateway;
-	iov[iovcnt++].iov_len = sizeof(sagateway);
-
-	/* Add the network mask. */
-	memset(&samask, 0, sizeof(samask));
-	samask.sin_len = sizeof(samask);
-	samask.sin_family = AF_INET;
-	samask.sin_addr.s_addr = netmask.s_addr;
-
-	rtm.rtm_msglen += sizeof(samask);
-	iov[iovcnt].iov_base = &samask;
-	iov[iovcnt++].iov_len = sizeof(samask);
-
-	if (ifa.s_addr != INADDR_ANY) {
-		/* Add the ifa */
-		memset(&saifa, 0, sizeof(saifa));
-		saifa.sin_len = sizeof(saifa);
-		saifa.sin_family = AF_INET;
-		saifa.sin_addr.s_addr = ifa.s_addr;
-
-		rtm.rtm_msglen += sizeof(saifa);
-		iov[iovcnt].iov_base = &saifa;
-		iov[iovcnt++].iov_len = sizeof(saifa);
-		rtm.rtm_addrs |= RTA_IFA;
+	memset(sockaddr_in, 0, sizeof(sockaddr_in));
+	for (i = 0; i < 4; i++) {
+		sockaddr_in[i].sin_len = sizeof(sockaddr_in[i]);
+		sockaddr_in[i].sin_family = AF_INET;
+		iov[i+1].iov_base = &sockaddr_in[i];
+		iov[i+1].iov_len = sizeof(sockaddr_in[i]);
 	}
+
+	/* Order of sockaddr_in's is mandatory! */
+	sockaddr_in[0].sin_addr = dest;
+	sockaddr_in[1].sin_addr = gateway;
+	sockaddr_in[2].sin_addr = netmask;
+	sockaddr_in[3].sin_addr = address;
+	if (address.s_addr == INADDR_ANY) {
+		rtm.rtm_addrs = RTA_DST | RTA_GATEWAY | RTA_NETMASK;
+		iovcnt = 4;
+	} else {
+		rtm.rtm_addrs = RTA_DST | RTA_GATEWAY | RTA_NETMASK | RTA_IFA;
+		iovcnt = 5;
+	}
+
+	for (i = 0; i < iovcnt; i++)
+		rtm.rtm_msglen += iov[i].iov_len;
 
 	if (writev(routefd, iov, iovcnt) == -1) {
 		if (errno != EEXIST || log_getverbose() != 0) {
-			strlcpy(destbuf, inet_ntoa(dest),
-			    sizeof(destbuf));
-			strlcpy(maskbuf, inet_ntoa(netmask),
-			    sizeof(maskbuf));
+			strlcpy(destbuf, inet_ntoa(dest), sizeof(destbuf));
+			strlcpy(maskbuf, inet_ntoa(netmask),sizeof(maskbuf));
 			log_warn("%s: add route %s/%s via %s", log_procname,
 			    destbuf, maskbuf, inet_ntoa(gateway));
 		}
@@ -472,11 +451,11 @@ add_route(char *name, int rdomain, int routefd, struct in_addr dest,
 }
 
 /*
- * set_routes() adds the routes contained in rtstatic to the routing table.
+ * set_routes() adds the routes contained in 'routes' to the routing table.
  */
 void
 set_routes(char *name, int index, int rdomain, int routefd, struct in_addr addr,
-    struct in_addr addrmask, uint8_t *rtstatic, unsigned int rtstatic_len)
+    struct in_addr addrmask, uint8_t *routes, unsigned int routes_len)
 {
 	const struct in_addr	 any = { INADDR_ANY };
 	const struct in_addr	 broadcast = { INADDR_BROADCAST };
@@ -484,15 +463,14 @@ set_routes(char *name, int index, int rdomain, int routefd, struct in_addr addr,
 	in_addr_t		 addrnet, gatewaynet;
 	unsigned int		 i, len;
 
-	if (rtstatic_len <= RTLEN)
-		flush_routes(index, routefd, rdomain, rtstatic, rtstatic_len, addr);
+	flush_routes(index, routefd, rdomain, routes, routes_len, addr);
 
 	addrnet = addr.s_addr & addrmask.s_addr;
 
 	/* Add classless static routes. */
 	i = 0;
-	while (i < rtstatic_len) {
-		len = extract_classless_route(&rtstatic[i], rtstatic_len - i,
+	while (i < routes_len) {
+		len = extract_route(&routes[i], routes_len - i,
 		    &dest.s_addr, &netmask.s_addr, &gateway.s_addr);
 		if (len == 0)
 			return;
@@ -573,7 +551,7 @@ int
 default_route_index(int rdomain, int routefd)
 {
 	struct pollfd		 fds[1];
-	time_t			 start_time, cur_time;
+	struct timespec		 now, stop, timeout;
 	int			 nfds;
 	struct iovec		 iov[3];
 	struct sockaddr_in	 sin;
@@ -606,8 +584,10 @@ default_route_index(int rdomain, int routefd)
 	iov[2].iov_len = sizeof(sin);
 
 	pid = getpid();
-	if (time(&start_time) == -1)
-		fatal("start time");
+	clock_gettime(CLOCK_REALTIME, &now);
+	timespecclear(&timeout);
+	timeout.tv_sec = 3;
+	timespecadd(&now, &timeout, &stop);
 
 	if (writev(routefd, iov, 3) == -1) {
 		if (errno == ESRCH)
@@ -618,16 +598,19 @@ default_route_index(int rdomain, int routefd)
 		return 0;
 	}
 
-	do {
-		if (time(&cur_time) == -1)
-			fatal("current time");
+	for (;;) {
+		clock_gettime(CLOCK_REALTIME, &now);
+		if (timespeccmp(&stop, &now, <=))
+			break;
+		timespecsub(&stop, &now, &timeout);
+
 		fds[0].fd = routefd;
 		fds[0].events = POLLIN;
-		nfds = poll(fds, 1, 3);
+		nfds = ppoll(fds, 1, &timeout, NULL);
 		if (nfds == -1) {
 			if (errno == EINTR)
 				continue;
-			log_warn("%s: poll(routefd)", log_procname);
+			log_warn("%s: ppoll(routefd)", log_procname);
 			break;
 		}
 		if ((fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
@@ -649,7 +632,8 @@ default_route_index(int rdomain, int routefd)
 		if (m_rtmsg.m_rtm.rtm_version == RTM_VERSION &&
 		    m_rtmsg.m_rtm.rtm_type == RTM_GET &&
 		    m_rtmsg.m_rtm.rtm_pid == pid &&
-		    m_rtmsg.m_rtm.rtm_seq == seq) {
+		    m_rtmsg.m_rtm.rtm_seq == seq &&
+		    (m_rtmsg.m_rtm.rtm_flags & RTF_UP) == RTF_UP) {
 			if (m_rtmsg.m_rtm.rtm_errno != 0) {
 				log_warnx("%s: read(RTM_GET): %s", log_procname,
 				    strerror(m_rtmsg.m_rtm.rtm_errno));
@@ -657,7 +641,7 @@ default_route_index(int rdomain, int routefd)
 			}
 			return m_rtmsg.m_rtm.rtm_index;
 		}
-	} while ((cur_time - start_time) <= 3);
+	}
 
 	return 0;
 }
@@ -713,88 +697,40 @@ resolv_conf_tail(void)
  * that should be used when IMSG_WRITE_RESOLV_CONF messages are received.
  */
 char *
-set_resolv_conf(char *name, uint8_t *rtsearch, unsigned int rtsearch_len,
-    uint8_t *rtdns, unsigned int rtdns_len)
+set_resolv_conf(char *name, char *search, struct unwind_info *ns_info)
 {
-	char		*dn, *nss[MAXNS], *contents, *courtesy, *resolv_tail;
-	struct in_addr	*addr;
-	size_t		 len;
-	unsigned int	 i, servers;
+	char		*ns, *p, *tail;
+	struct in_addr	 addr;
+	unsigned int	 i;
 	int		 rslt;
 
-	memset(nss, 0, sizeof(nss));
-	len = 0;
-
-	if (rtsearch_len != 0) {
-		rslt = asprintf(&dn, "search %.*s\n", rtsearch_len,
-		    rtsearch);
+	ns = NULL;
+	for (i = 0; i < ns_info->count; i++) {
+		addr.s_addr = ns_info->ns[i];
+		rslt = asprintf(&p, "%snameserver %s\n",
+		    (ns == NULL) ? "" : ns, inet_ntoa(addr));
 		if (rslt == -1)
-			dn = NULL;
-	} else
-		dn = strdup("");
-	if (dn == NULL)
-		fatal("domainname");
-	len += strlen(dn);
-
-	if (rtdns_len != 0) {
-		addr = (struct in_addr *)rtdns;
-		servers = rtdns_len / sizeof(addr->s_addr);
-		if (servers > MAXNS)
-			servers = MAXNS;
-		for (i = 0; i < servers; i++) {
-			rslt = asprintf(&nss[i], "nameserver %s\n",
-			    inet_ntoa(*addr));
-			if (rslt == -1)
-				fatal("nameserver");
-			len += strlen(nss[i]);
-			addr++;
-		}
+			fatal("nameserver");
+		free(ns);
+		ns = p;
 	}
 
-	/*
-	 * XXX historically dhclient-script did not overwrite
-	 *     resolv.conf when neither search nor dns info
-	 *     was provided. Is that really what we want?
-	 */
-	if (len > 0) {
-		resolv_tail = resolv_conf_tail();
-		if (resolv_tail != NULL)
-			len += strlen(resolv_tail);
-	}
-	if (len == 0) {
-		free(dn);
+	if (search == NULL && ns == NULL)
 		return NULL;
-	}
 
-	rslt = asprintf(&courtesy, "# Generated by %s dhclient\n", name);
+	tail = resolv_conf_tail();
+
+	rslt = asprintf(&p, "# Generated by %s dhclient\n%s%s%s", name,
+	    (search == NULL) ? "" : search,
+	    (ns == NULL) ? "" : ns,
+	    (tail == NULL) ? "" : tail);
 	if (rslt == -1)
-		fatal("resolv.conf courtesy line");
-	len += strlen(courtesy);
+		fatal("resolv.conf");
 
-	len++; /* Need room for terminating NUL. */
-	contents = calloc(1, len);
-	if (contents == NULL)
-		fatal("resolv.conf contents");
+	free(tail);
+	free(ns);
 
-	strlcat(contents, courtesy, len);
-	free(courtesy);
-
-	strlcat(contents, dn, len);
-	free(dn);
-
-	for (i = 0; i < MAXNS; i++) {
-		if (nss[i] != NULL) {
-			strlcat(contents, nss[i], len);
-			free(nss[i]);
-		}
-	}
-
-	if (resolv_tail != NULL) {
-		strlcat(contents, resolv_tail, len);
-		free(resolv_tail);
-	}
-
-	return contents;
+	return p;
 }
 
 /*
@@ -823,37 +759,39 @@ set_mtu(char *name, int ioctlfd, uint16_t mtu)
 }
 
 /*
- * extract_classless_route() extracts the encoded route pointed to by rtstatic.
+ * extract_route() decodes the route pointed to by routes into its
+ * {destination, netmask, gateway} and returns the number of bytes consumed
+ * from routes.
  */
 unsigned int
-extract_classless_route(uint8_t *rtstatic, unsigned int rtstatic_len,
-    in_addr_t *dest, in_addr_t *netmask, in_addr_t *gateway)
+extract_route(uint8_t *routes, unsigned int routes_len, in_addr_t *dest,
+    in_addr_t *netmask, in_addr_t *gateway)
 {
 	unsigned int	 bits, bytes, len;
 
-	if (rtstatic[0] > 32)
+	if (routes[0] > CIDR_MAX_BITS)
 		return 0;
 
-	bits = rtstatic[0];
+	bits = routes[0];
 	bytes = (bits + 7) / 8;
 	len = 1 + bytes + sizeof(*gateway);
-	if (len > rtstatic_len)
+	if (len > routes_len)
 		return 0;
 
 	if (dest != NULL)
-		memcpy(dest, &rtstatic[1], bytes);
+		memcpy(dest, &routes[1], bytes);
 
 	if (netmask != NULL) {
 		if (bits == 0)
 			*netmask = INADDR_ANY;
 		else
-			*netmask = htonl(0xffffffff << (32 - bits));
+			*netmask = htonl(0xffffffff << (CIDR_MAX_BITS - bits));
 		if (dest != NULL)
 			*dest &= *netmask;
 	}
 
 	if (gateway != NULL)
-		memcpy(gateway, &rtstatic[1 +  bytes], sizeof(*gateway));
+		memcpy(gateway, &routes[1 +  bytes], sizeof(*gateway));
 
 	return len;
 }
@@ -877,6 +815,7 @@ void
 priv_write_resolv_conf(int index, int routefd, int rdomain, char *contents,
     int *lastidx)
 {
+	char		 ifname[IF_NAMESIZE];
 	const char	*path = "/etc/resolv.conf";
 	ssize_t		 n;
 	size_t		 sz;
@@ -891,19 +830,27 @@ priv_write_resolv_conf(int index, int routefd, int rdomain, char *contents,
 		retries++;
 	} while (newidx == 0 && retries < 3);
 
-	if (newidx != index) {
+	if (newidx == 0) {
+		log_debug("%s: %s not updated, no default route is UP",
+		    log_procname, path);
+		return;
+	} else if (newidx != index) {
 		*lastidx = newidx;
-		log_debug("%s priv_write_resolv_conf: not my problem "
-		    "(%d != %d)", log_procname, newidx, index);
+		if (if_indextoname(newidx, ifname) == NULL) {
+			memset(ifname, 0, sizeof(ifname));
+			strlcat(ifname, "<unknown>", sizeof(ifname));
+		}
+		log_debug("%s: %s not updated, default route on %s",
+		    log_procname, path, ifname);
 		return;
 	} else if (newidx == *lastidx) {
-		log_debug("%s priv_write_resolv_conf: already written",
-		    log_procname);
+		log_debug("%s: %s not updated, same as last write",
+		    log_procname, path);
 		return;
-	} else {
-		*lastidx = newidx;
-		log_debug("%s priv_write_resolv_conf: writing", log_procname);
 	}
+
+	*lastidx = newidx;
+	log_debug("%s: %s updated", log_procname, path);
 
 	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC,
 	    S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
@@ -930,23 +877,60 @@ priv_write_resolv_conf(int index, int routefd, int rdomain, char *contents,
 void
 propose(struct proposal *proposal)
 {
-	struct	imsg_propose	 imsg;
+	struct option_data	 opt;
 	int			 rslt;
 
-	memcpy(&imsg.proposal, proposal, sizeof(imsg.proposal));
+	log_debug("%s: proposing address %s netmask 0x%08x", log_procname,
+	    inet_ntoa(proposal->address), ntohl(proposal->netmask.s_addr));
 
-	rslt = imsg_compose(unpriv_ibuf, IMSG_PROPOSE, 0, 0, -1, &imsg,
-	    sizeof(imsg));
+	opt.data = (u_int8_t *)proposal + sizeof(struct proposal);
+	opt.len = proposal->routes_len;
+	if (opt.len > 0)
+		log_debug("%s: proposing static route(s) %s", log_procname,
+		    pretty_print_option(DHO_CLASSLESS_STATIC_ROUTES, &opt, 0));
+
+	opt.data += opt.len;
+	opt.len = proposal->domains_len;
+	if (opt.len > 0)
+		log_debug("%s: proposing search domain(s) %s", log_procname,
+		    pretty_print_option(DHO_DOMAIN_SEARCH, &opt, 0));
+
+	opt.data += opt.len;
+	opt.len = proposal->ns_len;
+	if (opt.len > 0)
+		log_debug("%s: proposing DNS server(s) %s", log_procname,
+		    pretty_print_option(DHO_DOMAIN_NAME_SERVERS, &opt, 0));
+
+	if (proposal->mtu != 0)
+		log_debug("%s: proposing mtu %u", log_procname, proposal->mtu);
+
+	rslt = imsg_compose(unpriv_ibuf, IMSG_PROPOSE, 0, 0, -1, proposal,
+	    sizeof(*proposal) + proposal->routes_len +
+	    proposal->domains_len + proposal->ns_len);
 	if (rslt == -1)
 		log_warn("%s: imsg_compose(IMSG_PROPOSE)", log_procname);
 }
 
 void
-priv_propose(char *name, int ioctlfd, struct imsg_propose *imsg,
-    char **resolv_conf, int routefd, int rdomain, int index)
+priv_propose(char *name, int ioctlfd, struct proposal *proposal,
+    size_t sz, char **resolv_conf, int routefd, int rdomain, int index,
+    int *lastidx)
 {
-	struct proposal		*proposal = &imsg->proposal;
+	struct unwind_info	 unwind_info;
 	struct ifreq		 ifr;
+	uint8_t			*dns, *domains, *routes;
+	char			*search = NULL;
+	int			 rslt;
+
+	if (sz != proposal->routes_len + proposal->domains_len +
+	    proposal->ns_len) {
+		log_warnx("%s: bad IMSG_PROPOSE data", log_procname);
+		return;
+	}
+
+	routes = (uint8_t *)proposal + sizeof(struct proposal);
+	domains = routes + proposal->routes_len;
+	dns = domains + proposal->domains_len;
 
 	memset(&ifr, 0, sizeof(ifr));
 	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
@@ -955,25 +939,45 @@ priv_propose(char *name, int ioctlfd, struct imsg_propose *imsg,
 	if ((ifr.ifr_flags & IFXF_AUTOCONF4) == 0)
 		return;
 
-	free(*resolv_conf);
-	*resolv_conf = set_resolv_conf(name,
-	    proposal->rtsearch,
-	    proposal->rtsearch_len,
-	    proposal->rtdns,
-	    proposal->rtdns_len);
+	memset(&unwind_info, 0, sizeof(unwind_info));
+	if (proposal->ns_len >= sizeof(in_addr_t)) {
+		if (proposal->ns_len > sizeof(unwind_info.ns)) {
+			memcpy(unwind_info.ns, dns, sizeof(unwind_info.ns));
+			unwind_info.count = sizeof(unwind_info.ns) /
+			    sizeof(in_addr_t);
+		} else {
+			memcpy(unwind_info.ns, dns, proposal->ns_len);
+			unwind_info.count = proposal->ns_len /
+			    sizeof(in_addr_t);
+		}
+	}
 
-	if ((proposal->inits & RTV_MTU) != 0) {
+	if (proposal->domains_len > 0) {
+		rslt = asprintf(&search, "search %.*s\n",
+		    proposal->domains_len, domains);
+		if (rslt == -1)
+			search = NULL;
+	}
+
+	free(*resolv_conf);
+	*resolv_conf = set_resolv_conf(name, search, &unwind_info);
+	free(search);
+
+	if (proposal->mtu != 0) {
 		if (proposal->mtu < 68)
-			log_warnx("%s: mtu size %u < 68: ignored", log_procname,
+			log_warnx("%s: mtu size %d < 68: ignored", log_procname,
 			    proposal->mtu);
 		else
 			set_mtu(name, ioctlfd, proposal->mtu);
 	}
 
-	set_address(name, ioctlfd, proposal->ifa, proposal->netmask);
+	set_address(name, ioctlfd, proposal->address, proposal->netmask);
 
-	set_routes(name, index, rdomain, routefd, proposal->ifa,
-	    proposal->netmask, proposal->rtstatic, proposal->rtstatic_len);
+	set_routes(name, index, rdomain, routefd, proposal->address,
+	    proposal->netmask, routes, proposal->routes_len);
+
+	*lastidx = 0;
+	priv_write_resolv_conf(index, routefd, rdomain, *resolv_conf, lastidx);
 }
 
 /*
@@ -982,30 +986,25 @@ priv_propose(char *name, int ioctlfd, struct imsg_propose *imsg,
 void
 revoke_proposal(struct proposal *proposal)
 {
-	struct	imsg_revoke	 imsg;
 	int			 rslt;
 
 	if (proposal == NULL)
 		return;
 
-	memcpy(&imsg.proposal, proposal, sizeof(imsg.proposal));
-
-	rslt = imsg_compose(unpriv_ibuf, IMSG_REVOKE, 0, 0, -1, &imsg,
-	    sizeof(imsg));
+	rslt = imsg_compose(unpriv_ibuf, IMSG_REVOKE, 0, 0, -1, proposal,
+	    sizeof(*proposal));
 	if (rslt == -1)
 		log_warn("%s: imsg_compose(IMSG_REVOKE)", log_procname);
 }
 
 void
-priv_revoke_proposal(char *name, int ioctlfd, struct imsg_revoke *imsg,
+priv_revoke_proposal(char *name, int ioctlfd, struct proposal *proposal,
     char **resolv_conf)
 {
-	struct proposal		*proposal = &imsg->proposal;
-
 	free(*resolv_conf);
 	*resolv_conf = NULL;
 
-	delete_address(name, ioctlfd, proposal->ifa);
+	delete_address(name, ioctlfd, proposal->address);
 }
 
 /*
@@ -1014,25 +1013,29 @@ priv_revoke_proposal(char *name, int ioctlfd, struct imsg_revoke *imsg,
 void
 tell_unwind(struct unwind_info *unwind_info, int ifi_flags)
 {
-	struct	imsg_tell_unwind	 imsg;
+	struct	unwind_info	 	 noinfo;
 	int				 rslt;
 
 	if ((ifi_flags & IFI_AUTOCONF) == 0 ||
 	    (ifi_flags & IFI_IN_CHARGE) == 0)
 		return;
 
-	memset(&imsg, 0, sizeof(imsg));
 	if (unwind_info != NULL)
-		memcpy(&imsg.unwind_info, unwind_info, sizeof(imsg.unwind_info));
+		rslt = imsg_compose(unpriv_ibuf, IMSG_TELL_UNWIND, 0, 0, -1,
+		    unwind_info, sizeof(*unwind_info));
+	else {
+		memset(&noinfo, 0, sizeof(noinfo));
+		rslt = imsg_compose(unpriv_ibuf, IMSG_TELL_UNWIND, 0, 0, -1,
+		    &noinfo, sizeof(noinfo));
+	}
 
-	rslt = imsg_compose(unpriv_ibuf, IMSG_TELL_UNWIND, 0, 0, -1, &imsg,
-	    sizeof(imsg));
 	if (rslt == -1)
 		log_warn("%s: imsg_compose(IMSG_TELL_UNWIND)", log_procname);
 }
 
 void
-priv_tell_unwind(int index, int routefd, int rdomain, struct imsg_tell_unwind *imsg)
+priv_tell_unwind(int index, int routefd, int rdomain,
+    struct unwind_info *unwind_info)
 {
 	struct rt_msghdr		 rtm;
 	struct sockaddr_rtdns		 rtdns;
@@ -1058,9 +1061,9 @@ priv_tell_unwind(int index, int routefd, int rdomain, struct imsg_tell_unwind *i
 	memset(&rtdns, 0, sizeof(rtdns));
 	rtdns.sr_family = AF_INET;
 
-	rtdns.sr_len = 2 + imsg->unwind_info.count * sizeof(in_addr_t);
-	memcpy(rtdns.sr_dns, imsg->unwind_info.ns,
-	    imsg->unwind_info.count * sizeof(in_addr_t));
+	rtdns.sr_len = 2 + unwind_info->count * sizeof(in_addr_t);
+	memcpy(rtdns.sr_dns, unwind_info->ns,
+	    unwind_info->count * sizeof(in_addr_t));
 
 	iov[iovcnt].iov_base = &rtdns;
 	iov[iovcnt++].iov_len = sizeof(rtdns);

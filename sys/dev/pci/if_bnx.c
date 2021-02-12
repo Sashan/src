@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_bnx.c,v 1.126 2019/12/06 01:58:47 dlg Exp $	*/
+/*	$OpenBSD: if_bnx.c,v 1.130 2020/12/12 11:48:52 jan Exp $	*/
 
 /*-
  * Copyright (c) 2006 Broadcom Corporation
@@ -676,7 +676,7 @@ bnx_attach(struct device *parent, struct device *self, void *aux)
 	    BNX_PCICFG_MISC_CONFIG_REG_WINDOW_ENA |
 	    BNX_PCICFG_MISC_CONFIG_TARGET_MB_WORD_SWAP);
 
-	/* Save ASIC revsion info. */
+	/* Save ASIC revision info. */
 	sc->bnx_chipid =  REG_RD(sc, BNX_MISC_ID);
 
 	/*
@@ -877,7 +877,7 @@ bnx_attachhook(struct device *self)
 	ifp->if_watchdog = bnx_watchdog;
 	ifp->if_hardmtu = BNX_MAX_JUMBO_ETHER_MTU_VLAN -
 	    sizeof(struct ether_header);
-	IFQ_SET_MAXLEN(&ifp->if_snd, USABLE_TX_BD - 1);
+	ifq_set_maxlen(&ifp->if_snd, USABLE_TX_BD - 1);
 	bcopy(sc->eaddr, sc->arpcom.ac_enaddr, ETHER_ADDR_LEN);
 	bcopy(sc->bnx_dev.dv_xname, ifp->if_xname, IFNAMSIZ);
 
@@ -3671,7 +3671,7 @@ bnx_get_buf(struct bnx_softc *sc, u_int16_t *prod,
 	    *prod_bseq);
 
 	/* This is a new mbuf allocation. */
-	m = MCLGETI(NULL, M_DONTWAIT, NULL, BNX_MAX_JUMBO_MRU);
+	m = MCLGETL(NULL, M_DONTWAIT, BNX_MAX_JUMBO_MRU);
 	if (!m)
 		return (0);
 	m->m_len = m->m_pkthdr.len = BNX_MAX_JUMBO_MRU;
@@ -4467,6 +4467,9 @@ bnx_rx_int_next_rx:
 		    BUS_SPACE_BARRIER_READ);
 	}
 
+	if (ifiq_input(&ifp->if_rcv, &ml))
+		if_rxr_livelocked(&sc->rx_ring);
+
 	/* No new packets to process.  Refill the RX chain and exit. */
 	sc->rx_cons = sw_cons;
 	if (!bnx_fill_rx_chain(sc))
@@ -4477,8 +4480,6 @@ bnx_rx_int_next_rx:
 		    sc->rx_bd_chain_map[i], 0,
 		    sc->rx_bd_chain_map[i]->dm_mapsize,
 		    BUS_DMASYNC_PREWRITE);
-
-	if_input(ifp, &ml);
 
 	DBPRINT(sc, BNX_INFO_RECV, "%s(exit): rx_prod = 0x%04X, "
 	    "rx_cons = 0x%04X, rx_prod_bseq = 0x%08X\n",
@@ -5151,7 +5152,7 @@ bnx_intr(void *xsc)
 
 		/* Start moving packets again */
 		if (ifp->if_flags & IFF_RUNNING &&
-		    !IFQ_IS_EMPTY(&ifp->if_snd))
+		    !ifq_empty(&ifp->if_snd))
 			ifq_start(&ifp->if_snd);
 	}
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.h,v 1.233 2020/01/24 05:44:05 claudio Exp $ */
+/*	$OpenBSD: rde.h,v 1.236 2021/01/13 11:34:01 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Claudio Jeker <claudio@openbsd.org> and
@@ -368,9 +368,8 @@ void		 rde_update_log(const char *, u_int16_t,
 void		rde_send_kroute_flush(struct rib *);
 void		rde_send_kroute(struct rib *, struct prefix *, struct prefix *);
 void		rde_send_nexthop(struct bgpd_addr *, int);
-void		rde_send_pftable(u_int16_t, struct bgpd_addr *,
-		    u_int8_t, int);
-void		rde_send_pftable_commit(void);
+void		rde_pftable_add(u_int16_t, struct prefix *);
+void		rde_pftable_del(u_int16_t, struct prefix *);
 
 void		rde_generate_updates(struct rib *, struct prefix *,
 		    struct prefix *);
@@ -484,10 +483,10 @@ communities_unref(struct rde_community *comm)
 		communities_unlink(comm);
 }
 
-int	 community_to_rd(struct community *, u_int64_t *);
+int	community_to_rd(struct community *, u_int64_t *);
 
 /* rde_decide.c */
-void		 prefix_evaluate(struct prefix *, struct rib_entry *);
+void	prefix_evaluate(struct rib_entry *, struct prefix *, struct prefix *);
 
 /* rde_filter.c */
 void	rde_apply_set(struct filter_set_head *, struct rde_peer *,
@@ -556,7 +555,6 @@ re_rib(struct rib_entry *re)
 	return rib_byid(re->rib_id);
 }
 
-void		 path_init(u_int32_t);
 void		 path_init(u_int32_t);
 void		 path_shutdown(void);
 void		 path_hash_stats(struct rde_hashstats *);

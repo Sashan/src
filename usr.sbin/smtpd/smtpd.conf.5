@@ -1,4 +1,4 @@
-.\"	$OpenBSD: smtpd.conf.5,v 1.249 2020/02/12 14:46:36 schwarze Exp $
+.\"	$OpenBSD: smtpd.conf.5,v 1.256 2021/01/27 14:59:10 jmc Exp $
 .\"
 .\" Copyright (c) 2008 Janne Johansson <jj@openbsd.org>
 .\" Copyright (c) 2009 Jacek Masiulaniec <jacekm@dobremiasto.net>
@@ -17,7 +17,7 @@
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
 .\"
-.Dd $Mdocdate: February 12 2020 $
+.Dd $Mdocdate: January 27 2021 $
 .Dt SMTPD.CONF 5
 .Os
 .Sh NAME
@@ -118,13 +118,13 @@ file.
 .It Cm forward-only
 Only accept the message if the recipient results in a remote address
 after the processing of aliases or forward file.
-.It Cm lmtp Ar destination Op Ar rcpt-to
+.It Cm lmtp Ar destination Op Cm rcpt-to
 Deliver the message to an LMTP server at
 .Ar destination .
 The location may be expressed as host:port or as a UNIX socket.
 .Pp
 Optionally,
-.Ar rcpt-to
+.Cm rcpt-to
 might be specified to use the
 recipient email address (after expansion) instead of the
 local user in the LMTP session as RCPT TO.
@@ -141,8 +141,14 @@ may contain format specifiers that are expanded before use
 .Pp
 If the
 .Cm junk
-argument is provided, the message will be moved to the Junk
-folder if it contains a positive X-Spam header.
+argument is provided, the message will be moved to the
+.Ql Junk
+folder if it contains a positive
+.Ql X-Spam
+header.
+This folder will be created under
+.Ar pathname
+if it does not yet exist.
 .It Cm mbox
 Deliver the message to the user's mbox with
 .Xr mail.local 8 .
@@ -274,6 +280,14 @@ and
 .Dq smtps
 protocols for authentication.
 Server certificates for those protocols are verified by default.
+.It Cm pki Ar pkiname
+For secure connections,
+use the certificate associated with
+.Ar pkiname
+(declared in a
+.Ic pki
+directive)
+to prove the client's identity to the remote mail server.
 .It Cm srs
 When relaying a mail resulting from a forward,
 use the Sender Rewriting Scheme to rewrite sender address.
@@ -307,6 +321,11 @@ which is useful on machines with multiple interfaces.
 If the list contains more than one address, all of them are used
 in such a way that traffic is routed as efficiently as possible.
 .El
+.It Ic admd Ar authservid
+The Administrative Management Domain this mailserver belongs to.
+The authservid will be forwarded to filters using it to identify or mark
+authentication-results headers.
+If omitted it defaults to the server name.
 .It Ic bounce Cm warn-interval Ar delay Op , Ar delay ...
 Send warning messages to the envelope sender when temporary delivery
 failures cause a message to remain on the queue for longer than
@@ -598,7 +617,7 @@ Specify that session may originate from authenticated user or user list
 no matter the source IP address.
 .It Xo
 .Op Ic \&!
-.Cm from auth
+.Cm from auth regex
 .Ar user | Pf < Ar user Ns >
 .Xc
 Specify that session may originate from authenticated regex or regex list
@@ -1001,7 +1020,9 @@ Finally, a number of decisions may be taken:
 .Bl -column XXXXXXXXXXXXXXXXXXXXX -offset indent
 .It bypass                Ta the session or transaction bypasses filters
 .It disconnect Ar message Ta the session is disconnected with message
-.It junk                  Ta the session or transaction is junked
+.It junk                  Ta the session or transaction is junked, i.e., an
+.Ql X-Spam: yes
+header is added to any messages
 .It reject Ar message     Ta the command is rejected with message
 .It rewrite Ar value      Ta the command parameter is rewritten with value
 .El

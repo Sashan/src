@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_xnf.c,v 1.63 2018/01/20 20:03:45 mikeb Exp $	*/
+/*	$OpenBSD: if_xnf.c,v 1.65 2020/12/12 11:48:53 jan Exp $	*/
 
 /*
  * Copyright (c) 2015, 2016 Mike Belopuhov
@@ -315,7 +315,7 @@ xnf_attach(struct device *parent, struct device *self, void *aux)
 	if (sc->sc_caps & XNF_CAP_CSUM6)
 		ifp->if_capabilities |= IFCAP_CSUM_TCPv6 | IFCAP_CSUM_UDPv6;
 
-	IFQ_SET_MAXLEN(&ifp->if_snd, XNF_TX_DESC - 1);
+	ifq_set_maxlen(&ifp->if_snd, XNF_TX_DESC - 1);
 
 	ifmedia_init(&sc->sc_media, IFM_IMASK, xnf_media_change,
 	    xnf_media_status);
@@ -855,7 +855,7 @@ xnf_rx_ring_fill(struct xnf_softc *sc)
 		id = rxd->rxd_rsp.rxp_id;
 		if (sc->sc_rx_buf[id])
 			break;
-		m = MCLGETI(NULL, M_DONTWAIT, NULL, XNF_MCLEN);
+		m = MCLGETL(NULL, M_DONTWAIT, XNF_MCLEN);
 		if (m == NULL)
 			break;
 		m->m_len = m->m_pkthdr.len = XNF_MCLEN;

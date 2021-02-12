@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile.inc,v 1.82 2020/01/25 23:02:13 djm Exp $
+#	$OpenBSD: Makefile.inc,v 1.87 2021/01/09 11:58:50 dtucker Exp $
 
 .include <bsd.own.mk>
 
@@ -18,7 +18,6 @@ CDIAGFLAGS+=	-Wstrict-prototypes
 CDIAGFLAGS+=	-Wunused
 CDIAGFLAGS+=	-Wno-unused-parameter # Lots of these in protocol handlers.
 .if ${COMPILER_VERSION:L} == "clang"
-CDIAGFLAGS+=	-Wimplicit-fallthrough
 CDIAGFLAGS+=	-Widiomatic-parentheses -Wparentheses
 .endif
 .if ${COMPILER_VERSION:L} != "gcc3"
@@ -56,6 +55,9 @@ SRCS_BASE+=	ssherr.c
 SRCS_BASE+=	log.c
 SRCS_BASE+=	xmalloc.c
 SRCS_BASE+=	misc.c
+SRCS_BASE+=	addr.c
+SRCS_BASE+=	addrmatch.c
+SRCS_BASE+=	match.c
 
 .if (${OPENSSL:L} == "yes")
 SRCS_KEX+=	dh.c
@@ -68,12 +70,11 @@ SRCS_KEXS+=	kexgexs.c
 SRCS_KEX+=	kexc25519.c
 SRCS_KEX+=	smult_curve25519_ref.c
 SRCS_KEX+=	kexgen.c
-SRCS_KEX+=	kexsntrup4591761x25519.c
-SRCS_KEX+=	sntrup4591761.c
+SRCS_KEX+=	kexsntrup761x25519.c
+SRCS_KEX+=	sntrup761.c
 
 SRCS_KEY+=	sshkey.c
 SRCS_KEY+=	cipher.c
-SRCS_KEY+=	cipher-chachapoly.c
 SRCS_KEY+=	chacha.c
 SRCS_KEY+=	poly1305.c
 .if (${OPENSSL:L} == "yes")
@@ -83,10 +84,12 @@ SRCS_KEY+=	ssh-ecdsa-sk.c
 SRCS_KEY+=	ssh-rsa.c
 SRCS_KEY+=	sshbuf-getput-crypto.c
 SRCS_KEY+=	digest-openssl.c
+SRCS_KEY+=	cipher-chachapoly-libcrypto.c
 .else
 SRCS_KEY+=	cipher-aesctr.c
 SRCS_KEY+=	rijndael.c
 SRCS_KEY+=	digest-libc.c
+SRCS_KEY+=	cipher-chachapoly.c
 .endif
 SRCS_KEY+=	ssh-ed25519.c
 SRCS_KEY+=	ssh-ed25519-sk.c
@@ -118,9 +121,6 @@ SRCS_PROT+=	channels.c
 SRCS_PROT+=	monitor_fdpass.c
 SRCS_PROT+=	nchan.c
 SRCS_PROT+=	ttymodes.c
-
-SRCS_UTL+=	addrmatch.c
-SRCS_UTL+=	match.c
 
 .if (${OPENSSL:L} == "yes")
 SRCS_PKCS11+=		ssh-pkcs11.c

@@ -7,7 +7,12 @@
 
 use strict;
 use warnings;
+use Errno ':POSIX';
 use Socket;
+
+my @errors = (EPIPE, ECONNRESET);
+my $errors = "(". join("|", map { $! = $_ } @errors).
+    "|tlsv1 alert decrypt error)";
 
 our %args = (
     syslogd => {
@@ -16,9 +21,7 @@ our %args = (
 	loggrep => {
 	    qr/ClientCertfile client.crt/ => 1,
 	    qr/ClientKeyfile client.key/ => 1,
-	    qr/syslogd\[\d+\]: loghost .* connection error: /.
-		qr/handshake failed: error:.*:SSL routines:/.
-		qr/CONNECT_CR_FINISHED:tlsv1 alert decrypt error/ => 1,
+	    qr/syslogd\[\d+\]: loghost .* connection error: .*$errors/ => 1,
 	    get_testgrep() => 1,
 	},
     },
@@ -30,8 +33,7 @@ our %args = (
 	exit => 255,
 	loggrep => {
 	    qr/Server IO::Socket::SSL socket accept failed: /.
-		qr/,SSL accept attempt failed error:.*:SSL routines:/.
-		qr/ACCEPT_SR_CERT:no certificate returned/ => 1.
+		qr/.*certificate verify failed/ => 1.
 	},
     },
 );

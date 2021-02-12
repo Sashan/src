@@ -1,4 +1,4 @@
-/*	$OpenBSD: dev.h,v 1.24 2020/03/08 14:52:20 ratchov Exp $	*/
+/*	$OpenBSD: dev.h,v 1.37 2021/01/29 11:38:23 ratchov Exp $	*/
 /*
  * Copyright (c) 2008-2012 Alexandre Ratchov <alex@caoua.org>
  *
@@ -24,7 +24,18 @@
 
 #define CTLADDR_SLOT_LEVEL(n)	(n)
 #define CTLADDR_MASTER		(DEV_NSLOT)
-#define CTLADDR_END		(DEV_NSLOT + 1)
+#define CTLADDR_ALT_SEL		(CTLADDR_MASTER + 1)
+#define CTLADDR_END		(CTLADDR_ALT_SEL + DEV_NMAX)
+
+/*
+ * preallocated audio clients
+ */
+#define DEV_NSLOT	8
+
+/*
+ * preallocated control clients
+ */
+#define DEV_NCTLSLOT 8
 
 /*
  * audio stream state structure
@@ -49,7 +60,6 @@ struct ctlops
 struct slot {
 	struct slotops *ops;			/* client callbacks */
 	struct slot *next;			/* next on the play list */
-	struct dev *dev;			/* device this belongs to */
 	struct opt *opt;			/* config used */
 	void *arg;				/* user data for callbacks */
 	struct aparams par;			/* socket side params */
@@ -81,7 +91,7 @@ struct slot {
 	int xrun;				/* underrun policy */
 	int skip;				/* cycles to skip (for xrun) */
 #define SLOT_BUFSZ(s) \
-	((s)->appbufsz + (s)->dev->bufsz / (s)->dev->round * (s)->round)
+	((s)->appbufsz + (s)->opt->dev->bufsz / (s)->opt->dev->round * (s)->round)
 	int appbufsz;				/* slot-side buffer size */
 	int round;				/* slot-side block size */
 	int rate;				/* slot-side sample rate */
@@ -103,18 +113,6 @@ struct slot {
 	unsigned int id;			/* process id */
 };
 
-struct opt {
-	struct opt *next;
-#define OPT_NAMEMAX 11
-	char name[OPT_NAMEMAX + 1];
-	int maxweight;		/* max dynamic range for clients */
-	int pmin, pmax;		/* play channels */
-	int rmin, rmax;		/* recording channels */
-	int mmc;		/* true if MMC control enabled */
-	int dup;		/* true if join/expand enabled */
-	int mode;		/* bitmap of MODE_XXX */
-};
-
 /*
  * subset of channels of a stream
  */
@@ -126,6 +124,7 @@ struct ctl {
 #define CTL_SW		3		/* on/off switch, only bit 7 counts */
 #define CTL_VEC		4		/* number, element of vector */
 #define CTL_LIST	5		/* switch, element of a list */
+#define CTL_SEL		6		/* element of a selector */
 	unsigned int type;		/* one of above */
 	unsigned int addr;		/* control address */
 #define CTL_NAMEMAX	16		/* max name lenght */
@@ -148,8 +147,8 @@ struct ctl {
 struct ctlslot {
 	struct ctlops *ops;
 	void *arg;
-	struct dev *dev;
-	unsigned int mask;
+	struct opt *opt;
+	unsigned int self;		/* equal to (1 << index) */
 	unsigned int mode;
 };
 
@@ -159,7 +158,6 @@ struct ctlslot {
 struct dev {
 	struct dev *next;
 	struct slot *slot_list;			/* audio streams attached */
-	struct opt *opt_list;
 	struct midi *midi;
 
 	/*
@@ -178,13 +176,6 @@ struct dev {
 	struct conv dec;			/* device->native format */
 	unsigned char *encbuf;			/* buffer for encoding */
 	unsigned char *decbuf;			/* buffer for decoding */
-
-	/*
-	 * preallocated audio sub-devices
-	 */
-#define DEV_NSLOT	8
-	struct slot slot[DEV_NSLOT];
-	unsigned int serial;			/* for slot allocation */
 
 	/*
 	 * current position, relative to the current cycle
@@ -209,7 +200,12 @@ struct dev {
 #define DEV_INIT	1			/* stopped */
 #define DEV_RUN		2			/* playin & recording */
 	unsigned int pstate;			/* one of above */
-	struct name *path_list;
+	struct dev_alt {
+		struct dev_alt *next;
+		char *name;
+		unsigned int idx;
+	} *alt_list;
+	int alt_num;
 
 	/*
 	 * actual parameters and runtime state (i.e. once opened)
@@ -244,25 +240,30 @@ struct dev {
 #define MMC_START	2			/* attempting to start */
 #define MMC_RUN		3			/* started */
 	unsigned int tstate;			/* one of above */
-	unsigned int master;			/* master volume controller */
+
+	unsigned int master;			/* software vol. knob */
+	unsigned int master_enabled;		/* 1 if h/w has no vo. knob */
 
 	/*
 	 * control
 	 */
 
 	struct ctl *ctl_list;
-#define DEV_NCTLSLOT 8
-	struct ctlslot ctlslot[DEV_NCTLSLOT];
 };
 
 extern struct dev *dev_list;
+extern struct slot slot_array[DEV_NSLOT];
+extern struct ctlslot ctlslot_array[DEV_NCTLSLOT];
+
+void slot_array_init(void);
 
 void dev_log(struct dev *);
-void dev_close(struct dev *);
+void dev_abort(struct dev *);
 int dev_reopen(struct dev *);
 struct dev *dev_new(char *, struct aparams *, unsigned int, unsigned int,
     unsigned int, unsigned int, unsigned int, unsigned int);
 struct dev *dev_bynum(int);
+int dev_addname(struct dev *, char *);
 void dev_del(struct dev *);
 void dev_adjpar(struct dev *, int, int, int);
 int  dev_init(struct dev *);
@@ -291,20 +292,23 @@ void dev_midi_vol(struct dev *, struct slot *);
  * sio_open(3) like interface for clients
  */
 void slot_log(struct slot *);
-struct slot *slot_new(struct dev *, struct opt *, unsigned int, char *,
+struct slot *slot_new(struct opt *, unsigned int, char *,
     struct slotops *, void *, int);
 void slot_del(struct slot *);
 void slot_setvol(struct slot *, unsigned int);
 void slot_start(struct slot *);
-void slot_stop(struct slot *);
+void slot_stop(struct slot *, int);
 void slot_read(struct slot *);
 void slot_write(struct slot *);
+void slot_initconv(struct slot *);
+void slot_attach(struct slot *);
+void slot_detach(struct slot *);
 
 /*
  * control related functions
  */
 void ctl_log(struct ctl *);
-struct ctlslot *ctlslot_new(struct dev *, struct ctlops *, void *);
+struct ctlslot *ctlslot_new(struct opt *, struct ctlops *, void *);
 void ctlslot_del(struct ctlslot *);
 int dev_setctl(struct dev *, int, int);
 int dev_onval(struct dev *, int, int);

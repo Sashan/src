@@ -1,4 +1,4 @@
-/*	$OpenBSD: tal.c,v 1.17 2020/03/27 12:46:00 claudio Exp $ */
+/*	$OpenBSD: tal.c,v 1.26 2021/01/08 08:09:07 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -19,30 +19,71 @@
 #include <assert.h>
 #include <ctype.h>
 #include <err.h>
+#include <limits.h>
 #include <libgen.h>
-#include <resolv.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include <openssl/x509.h>
-
 #include "extern.h"
 
+static int
+base64_decode(const unsigned char *in, size_t inlen, unsigned char **out,
+   size_t *outlen)
+{
+	static EVP_ENCODE_CTX *ctx;
+	unsigned char *to;
+	int tolen;
+
+	if (ctx == NULL && (ctx = EVP_ENCODE_CTX_new()) == NULL)
+		err(1, "EVP_ENCODE_CTX_new");
+
+	*out = NULL;
+	*outlen = 0;
+
+	if (inlen >= INT_MAX - 3)
+		return -1;
+	tolen = ((inlen + 3) / 4) * 3 + 1;
+	if ((to = malloc(tolen)) == NULL)
+		return -1;
+
+	EVP_DecodeInit(ctx);
+	if (EVP_DecodeUpdate(ctx, to, &tolen, in, inlen) == -1)
+		goto fail;
+	*outlen = tolen;
+	if (EVP_DecodeFinal(ctx, to + tolen, &tolen) == -1)
+		goto fail;
+	*outlen += tolen;
+	*out = to;
+	return 0;
+
+fail:
+	free(to);
+	return -1;
+}
+
+static int
+tal_cmp(const void *a, const void *b)
+{
+	char * const *sa = a;
+	char * const *sb = b;
+
+	return strcmp(*sa, *sb);
+}
+
 /*
- * Inner function for parsing RFC 7730 from a buffer.
+ * Inner function for parsing RFC 8630 from a buffer.
  * Returns a valid pointer on success, NULL otherwise.
  * The pointer must be freed with tal_free().
  */
 static struct tal *
 tal_parse_buffer(const char *fn, char *buf)
 {
-	char		*nl, *line;
-	unsigned char	*b64 = NULL;
-	size_t		 sz;
-	int		 rc = 0, b64sz;
+	char		*nl, *line, *f, *file = NULL;
+	unsigned char	*der;
+	size_t		 sz, dersz;
+	int		 rc = 0;
 	struct tal	*tal = NULL;
-	enum rtype	 rp;
 	EVP_PKEY	*pkey = NULL;
 
 	if ((tal = calloc(1, sizeof(struct tal))) == NULL)
@@ -60,10 +101,15 @@ tal_parse_buffer(const char *fn, char *buf)
 		if (*line == '\0')
 			break;
 
-		/* ignore https URI for now. */
-		if (strncasecmp(line, "https://", 8) == 0) {
-			warnx("%s: https schema ignored", line);
-			continue;
+		/* Check that the URI is sensible */
+		if (!(strncasecmp(line, "https://", 8) == 0 ||
+		    strncasecmp(line, "rsync://", 8) == 0)) {
+			warnx("%s: unsupported URL schema: %s", fn, line);
+			goto out;
+		}
+		if (strcasecmp(nl - 4, ".cer")) {
+			warnx("%s: not a certificate URL: %s", fn, line);
+			goto out;
 		}
 
 		/* Append to list of URIs. */
@@ -77,27 +123,24 @@ tal_parse_buffer(const char *fn, char *buf)
 			err(1, NULL);
 		tal->urisz++;
 
-		/* Make sure we're a proper rsync URI. */
-		if (!rsync_uri_parse(NULL, NULL,
-		    NULL, NULL, NULL, NULL, &rp, line)) {
-			warnx("%s: RFC 7730 section 2.1: "
-			    "failed to parse URL: %s", fn, line);
-			goto out;
-		}
-		if (rp != RTYPE_CER) {
-			warnx("%s: RFC 7730 section 2.1: "
-			    "not a certificate URL: %s", fn, line);
-			goto out;
-		}
-
+		f = strrchr(line, '/') + 1; /* can not fail */
+		if (file) {
+			if (strcmp(file, f)) {
+				warnx("%s: URL with different file name %s, "
+				    "instead of %s", fn, f, file);
+				goto out;
+			}
+		} else
+			file = f;
 	}
 
 	if (tal->urisz == 0) {
 		warnx("%s: no URIs in manifest part", fn);
 		goto out;
-	} else if (tal->urisz > 1)
-		warnx("%s: multiple URIs: using the first", fn);
-		/* XXX no support for TAL files with multiple TALs yet */
+	}
+
+	/* sort uri lexicographically so https:// is preferred */
+	qsort(tal->uri, tal->urisz, sizeof(tal->uri[0]), tal_cmp);
 
 	sz = strlen(buf);
 	if (sz == 0) {
@@ -107,17 +150,14 @@ tal_parse_buffer(const char *fn, char *buf)
 	}
 
 	/* Now the BASE64-encoded public key. */
-	sz = ((sz + 3) / 4) * 3 + 1;
-	if ((b64 = malloc(sz)) == NULL)
-		err(1, NULL);
-	if ((b64sz = b64_pton(buf, b64, sz)) < 0)
-		errx(1, "b64_pton");
+	if ((base64_decode(buf, sz, &der, &dersz)) == -1)
+		errx(1, "base64 decode");
 
-	tal->pkey = b64;
-	tal->pkeysz = b64sz;
+	tal->pkey = der;
+	tal->pkeysz = dersz;
 
 	/* Make sure it's a valid public key. */
-	pkey = d2i_PUBKEY(NULL, (const unsigned char **)&b64, b64sz);
+	pkey = d2i_PUBKEY(NULL, (const unsigned char **)&der, dersz);
 	if (pkey == NULL) {
 		cryptowarnx("%s: RFC 7730 section 2.1: subjectPublicKeyInfo: "
 		    "failed public key parse", fn);
@@ -142,7 +182,7 @@ struct tal *
 tal_parse(const char *fn, char *buf)
 {
 	struct tal	*p;
-	char		*d;
+	const char	*d;
 	size_t		 dlen;
 
 	p = tal_parse_buffer(fn, buf);
@@ -150,16 +190,16 @@ tal_parse(const char *fn, char *buf)
 		return NULL;
 
 	/* extract the TAL basename (without .tal suffix) */
-	d = basename(fn);
+	d = strrchr(fn, '/');
 	if (d == NULL)
-		err(1, "%s: basename", fn);
+		d = fn;
+	else
+		d++;
 	dlen = strlen(d);
-	if (strcasecmp(d + dlen - 4, ".tal") == 0)
+	if (dlen > 4 && strcasecmp(d + dlen - 4, ".tal") == 0)
 		dlen -= 4;
-	if ((p->descr = malloc(dlen + 1)) == NULL)
+	if ((p->descr = strndup(d, dlen)) == NULL)
 		err(1, NULL);
-	memcpy(p->descr, d, dlen);
-	p->descr[dlen] = '\0';
 
 	return p;
 }
@@ -261,16 +301,16 @@ tal_free(struct tal *p)
  * See tal_read() for the other side of the pipe.
  */
 void
-tal_buffer(char **b, size_t *bsz, size_t *bmax, const struct tal *p)
+tal_buffer(struct ibuf *b, const struct tal *p)
 {
 	size_t	 i;
 
-	io_buf_buffer(b, bsz, bmax, p->pkey, p->pkeysz);
-	io_str_buffer(b, bsz, bmax, p->descr);
-	io_simple_buffer(b, bsz, bmax, &p->urisz, sizeof(size_t));
+	io_buf_buffer(b, p->pkey, p->pkeysz);
+	io_str_buffer(b, p->descr);
+	io_simple_buffer(b, &p->urisz, sizeof(size_t));
 
 	for (i = 0; i < p->urisz; i++)
-		io_str_buffer(b, bsz, bmax, p->uri[i]);
+		io_str_buffer(b, p->uri[i]);
 }
 
 /*
@@ -290,14 +330,17 @@ tal_read(int fd)
 	io_buf_read_alloc(fd, (void **)&p->pkey, &p->pkeysz);
 	assert(p->pkeysz > 0);
 	io_str_read(fd, &p->descr);
+	assert(p->descr);
 	io_simple_read(fd, &p->urisz, sizeof(size_t));
 	assert(p->urisz > 0);
 
 	if ((p->uri = calloc(p->urisz, sizeof(char *))) == NULL)
 		err(1, NULL);
 
-	for (i = 0; i < p->urisz; i++)
+	for (i = 0; i < p->urisz; i++) {
 		io_str_read(fd, &p->uri[i]);
+		assert(p->uri[i]);
+	}
 
 	return p;
 }

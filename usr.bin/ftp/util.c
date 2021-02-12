@@ -1,4 +1,4 @@
-/*	$OpenBSD: util.c,v 1.92 2019/11/18 04:37:35 deraadt Exp $	*/
+/*	$OpenBSD: util.c,v 1.95 2021/02/02 12:58:42 robert Exp $	*/
 /*	$NetBSD: util.c,v 1.12 1997/08/18 10:20:27 lukem Exp $	*/
 
 /*-
@@ -763,7 +763,7 @@ progressmeter(int flag, const char *filename)
 	off_t cursize, abbrevsize;
 	double elapsed;
 	int ratio, barlength, i, remaining, overhead = 30;
-	char buf[512];
+	char buf[512], *filenamebuf;
 
 	if (flag == -1) {
 		clock_gettime(CLOCK_MONOTONIC, &start);
@@ -782,11 +782,12 @@ progressmeter(int flag, const char *filename)
 	ratio = MAXIMUM(ratio, 0);
 	ratio = MINIMUM(ratio, 100);
 	if (!verbose && flag == -1) {
-		filename = basename(filename);
-		if (filename != NULL) {
+		if ((filenamebuf = strdup(filename)) != NULL &&
+		    (filename = basename(filenamebuf)) != NULL) {
 			free(title);
 			title = strdup(filename);
 		}
+		free(filenamebuf);
 	}
 
 	buf[0] = 0;
@@ -921,7 +922,7 @@ void
 ptransfer(int siginfo)
 {
 	struct timespec now, td;
-	double elapsed;
+	double elapsed, pace;
 	off_t bs;
 	int meg, remaining, hh;
 	char buf[100];
@@ -937,11 +938,13 @@ ptransfer(int siginfo)
 	if (bs > (1024 * 1024))
 		meg = 1;
 
-	/* XXX floating point printf in signal handler */
+	pace = bs / (1024.0 * (meg ? 1024.0 : 1.0));
 	(void)snprintf(buf, sizeof(buf),
-	    "%lld byte%s %s in %.2f seconds (%.2f %sB/s)\n",
-	    (long long)bytes, bytes == 1 ? "" : "s", direction, elapsed,
-	    bs / (1024.0 * (meg ? 1024.0 : 1.0)), meg ? "M" : "K");
+	    "%lld byte%s %s in %lld.%02d seconds (%lld.%02d %sB/s)\n",
+	    (long long)bytes, bytes == 1 ? "" : "s", direction,
+	    (long long)elapsed, (int)(elapsed * 100.0) % 100,
+	    (long long)pace, (int)(pace * 100.0) % 100,
+	    meg ? "M" : "K");
 
 	if (siginfo && bytes > 0 && elapsed > 0.0 && filesize >= 0 &&
 	    bytes + restart_point <= filesize) {
@@ -1096,3 +1099,17 @@ connect_wait(int s)
 	}
 	return 0;
 }
+
+#ifndef SMALL
+ssize_t
+http_time(time_t t, char *tmbuf, size_t len)
+{
+	struct tm tm;
+ 
+	/* New HTTP/1.1 RFC 7231 prefers IMF-fixdate from RFC 5322 */
+	if (gmtime_r(&t, &tm) == NULL)
+		return 0;
+	else
+		return (strftime(tmbuf, len, "%a, %d %h %Y %T %Z", &tm));
+}
+#endif /* !SMALL */

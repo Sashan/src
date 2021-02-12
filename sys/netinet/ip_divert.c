@@ -1,4 +1,4 @@
-/*      $OpenBSD: ip_divert.c,v 1.61 2019/02/04 21:40:52 bluhm Exp $ */
+/*      $OpenBSD: ip_divert.c,v 1.64 2020/11/16 06:38:20 gnezdo Exp $ */
 
 /*
  * Copyright (c) 2009 Michele Marchetto <michele@openbsd.org>
@@ -57,7 +57,10 @@ u_int   divert_recvspace = DIVERT_RECVSPACE;
 #define DIVERTHASHSIZE	128
 #endif
 
-int *divertctl_vars[DIVERTCTL_MAXID] = DIVERTCTL_VARS;
+const struct sysctl_bounded_args divertctl_vars[] = {
+	{ DIVERTCTL_RECVSPACE, &divert_recvspace, 0, INT_MAX },
+	{ DIVERTCTL_SENDSPACE, &divert_sendspace, 0, INT_MAX },
+};
 
 int divbhashsize = DIVERTHASHSIZE;
 
@@ -376,30 +379,15 @@ divert_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (ENOTDIR);
 
 	switch (name[0]) {
-	case DIVERTCTL_SENDSPACE:
-		NET_LOCK();
-		error = sysctl_int(oldp, oldlenp, newp, newlen,
-		    &divert_sendspace);
-		NET_UNLOCK();
-		return (error);
-	case DIVERTCTL_RECVSPACE:
-		NET_LOCK();
-		error = sysctl_int(oldp, oldlenp, newp, newlen,
-		    &divert_recvspace);
-		NET_UNLOCK();
-		return (error);
 	case DIVERTCTL_STATS:
 		return (divert_sysctl_divstat(oldp, oldlenp, newp));
 	default:
-		if (name[0] < DIVERTCTL_MAXID) {
-			NET_LOCK();
-			error = sysctl_int_arr(divertctl_vars, name, namelen,
-			    oldp, oldlenp, newp, newlen);
-			NET_UNLOCK();
-			return (error);
-		}
-
-		return (ENOPROTOOPT);
+		NET_LOCK();
+		error = sysctl_bounded_arr(divertctl_vars,
+		    nitems(divertctl_vars), name, namelen, oldp, oldlenp, newp,
+		    newlen);
+		NET_UNLOCK();
+		return (error);
 	}
 	/* NOTREACHED */
 }

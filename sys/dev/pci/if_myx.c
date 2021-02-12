@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_myx.c,v 1.108 2019/07/03 10:34:59 dlg Exp $	*/
+/*	$OpenBSD: if_myx.c,v 1.115 2021/02/08 08:18:45 mpi Exp $	*/
 
 /*
  * Copyright (c) 2007 Reyk Floeter <reyk@openbsd.org>
@@ -21,6 +21,7 @@
  */
 
 #include "bpfilter.h"
+#include "kstat.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -35,6 +36,7 @@
 #include <sys/proc.h>
 #include <sys/queue.h>
 #include <sys/rwlock.h>
+#include <sys/kstat.h>
 
 #include <machine/bus.h>
 #include <machine/intr.h>
@@ -159,6 +161,12 @@ struct myx_softc {
 	volatile u_int8_t	 sc_linkdown;
 
 	struct rwlock		 sc_sff_lock;
+
+#if NKSTAT > 0
+	struct mutex		 sc_kstat_mtx;
+	struct timeout		 sc_kstat_tmo;
+	struct kstat		*sc_kstat;
+#endif
 };
 
 #define MYX_RXSMALL_SIZE	MCLBYTES
@@ -230,6 +238,12 @@ void			myx_tx_free(struct myx_softc *);
 
 void			myx_refill(void *);
 
+#if NKSTAT > 0
+void			myx_kstat_attach(struct myx_softc *);
+void			myx_kstat_start(struct myx_softc *);
+void			myx_kstat_stop(struct myx_softc *);
+#endif
+
 struct cfdriver myx_cd = {
 	NULL, "myx", DV_IFNET
 };
@@ -255,6 +269,8 @@ myx_attach(struct device *parent, struct device *self, void *aux)
 	struct pci_attach_args	*pa = aux;
 	char			 part[32];
 	pcireg_t		 memtype;
+
+	rw_init(&sc->sc_sff_lock, "myxsff");
 
 	sc->sc_pc = pa->pa_pc;
 	sc->sc_tag = pa->pa_tag;
@@ -504,6 +520,10 @@ myx_attachhook(struct device *self)
 		goto freecmd;
 	}
 
+#if NKSTAT > 0
+	myx_kstat_attach(sc);
+#endif
+
 	ifp->if_softc = sc;
 	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	ifp->if_xflags = IFXF_MPSAFE;
@@ -512,7 +532,7 @@ myx_attachhook(struct device *self)
 	ifp->if_watchdog = myx_watchdog;
 	ifp->if_hardmtu = MYX_RXBIG_SIZE;
 	strlcpy(ifp->if_xname, DEVNAME(sc), IFNAMSIZ);
-	IFQ_SET_MAXLEN(&ifp->if_snd, 1);
+	ifq_set_maxlen(&ifp->if_snd, 1);
 
 	ifp->if_capabilities = IFCAP_VLAN_MTU;
 #if 0
@@ -638,7 +658,8 @@ myx_dmamem_alloc(struct myx_softc *sc, struct myx_dmamem *mxm,
 	mxm->mxm_size = size;
 
 	if (bus_dmamap_create(sc->sc_dmat, mxm->mxm_size, 1,
-	    mxm->mxm_size, 0, BUS_DMA_WAITOK | BUS_DMA_ALLOCNOW,
+	    mxm->mxm_size, 0,
+	    BUS_DMA_WAITOK | BUS_DMA_ALLOCNOW | BUS_DMA_64BIT,
 	    &mxm->mxm_map) != 0)
 		return (1);
 	if (bus_dmamem_alloc(sc->sc_dmat, mxm->mxm_size,
@@ -939,9 +960,11 @@ myx_rxrinfo(struct myx_softc *sc, struct if_rxrinfo *ifri)
 
 	ifr[0].ifr_size = MYX_RXSMALL_SIZE;
 	ifr[0].ifr_info = sc->sc_rx_ring[0].mrr_rxr;
+	strlcpy(ifr[0].ifr_name, "small", sizeof(ifr[0].ifr_name));
 
 	ifr[1].ifr_size = MYX_RXBIG_SIZE;
 	ifr[1].ifr_info = sc->sc_rx_ring[1].mrr_rxr;
+	strlcpy(ifr[1].ifr_name, "large", sizeof(ifr[1].ifr_name));
 
 	return (if_rxr_info_ioctl(ifri, nitems(ifr), ifr));
 }
@@ -1065,7 +1088,7 @@ myx_up(struct myx_softc *sc)
 	sc->sc_tx_ring_count = r / sizeof(struct myx_tx_desc);
 	sc->sc_tx_nsegs = min(16, sc->sc_tx_ring_count / 4); /* magic */
 	sc->sc_tx_count = 0;
-	IFQ_SET_MAXLEN(&ifp->if_snd, sc->sc_tx_ring_count - 1);
+	ifq_set_maxlen(&ifp->if_snd, sc->sc_tx_ring_count - 1);
 
 	/* Allocate Interrupt Queue */
 
@@ -1235,6 +1258,10 @@ myx_up(struct myx_softc *sc)
 	SET(ifp->if_flags, IFF_RUNNING);
 	ifq_restart(&ifp->if_snd);
 
+#if NKSTAT > 0
+	timeout_add_sec(&sc->sc_kstat_tmo, 1);
+#endif
+
 	return;
 
 empty_rx_ring_big:
@@ -1370,7 +1397,7 @@ myx_down(struct myx_softc *sc)
 	(void)myx_cmd(sc, MYXCMD_SET_IFDOWN, &mc, NULL);
 
 	while (sc->sc_state != MYX_S_OFF) {
-		sleep_setup(&sls, sts, PWAIT, "myxdown");
+		sleep_setup(&sls, sts, PWAIT, "myxdown", 0);
 		membar_consumer();
 		sleep_finish(&sls, sc->sc_state != MYX_S_OFF);
 	}
@@ -1401,6 +1428,11 @@ myx_down(struct myx_softc *sc)
 
 	myx_tx_empty(sc);
 	myx_tx_free(sc);
+
+#if NKSTAT > 0
+	myx_kstat_stop(sc);
+	sc->sc_sts = NULL;
+#endif
 
 	/* the sleep shizz above already synced this dmamem */
 	myx_dmamem_free(sc, &sc->sc_sts_dma);
@@ -1861,7 +1893,8 @@ myx_rx_init(struct myx_softc *sc, int ring, bus_size_t size)
 	for (i = 0; i < sc->sc_rx_ring_count; i++) {
 		ms = &mrr->mrr_slots[i];
 		rv = bus_dmamap_create(sc->sc_dmat, size, 1, size, 0,
-		    BUS_DMA_WAITOK | BUS_DMA_ALLOCNOW, &ms->ms_map);
+		    BUS_DMA_WAITOK | BUS_DMA_ALLOCNOW | BUS_DMA_64BIT,
+		    &ms->ms_map);
 		if (rv != 0)
 			goto destroy;
 
@@ -1938,7 +1971,7 @@ myx_mcl_small(void)
 {
 	struct mbuf *m;
 
-	m = MCLGETI(NULL, M_DONTWAIT, NULL, MYX_RXSMALL_SIZE);
+	m = MCLGETL(NULL, M_DONTWAIT, MYX_RXSMALL_SIZE);
 	if (m == NULL)
 		return (NULL);
 
@@ -2010,7 +2043,8 @@ myx_tx_init(struct myx_softc *sc, bus_size_t size)
 		ms = &sc->sc_tx_slots[i];
 		rv = bus_dmamap_create(sc->sc_dmat, size, sc->sc_tx_nsegs,
 		    sc->sc_tx_boundary, sc->sc_tx_boundary,
-		    BUS_DMA_WAITOK | BUS_DMA_ALLOCNOW, &ms->ms_map);
+		    BUS_DMA_WAITOK | BUS_DMA_ALLOCNOW | BUS_DMA_64BIT,
+		    &ms->ms_map);
 		if (rv != 0)
 			goto destroy;
 	}
@@ -2063,3 +2097,181 @@ myx_tx_free(struct myx_softc *sc)
 
 	free(sc->sc_tx_slots, M_DEVBUF, sizeof(*ms) * sc->sc_tx_ring_count);
 }
+
+#if NKSTAT > 0
+enum myx_counters {
+	myx_stat_dropped_pause,
+	myx_stat_dropped_ucast_filtered,
+	myx_stat_dropped_bad_crc32,
+	myx_stat_dropped_bad_phy,
+	myx_stat_dropped_mcast_filtered,
+	myx_stat_send_done,
+	myx_stat_dropped_link_overflow,
+	myx_stat_dropped_link,
+	myx_stat_dropped_runt,
+	myx_stat_dropped_overrun,
+	myx_stat_dropped_no_small_bufs,
+	myx_stat_dropped_no_large_bufs,
+
+	myx_ncounters,
+};
+
+struct myx_counter {
+	const char		*mc_name;
+	unsigned int		 mc_offset;
+};
+
+#define MYX_C_OFF(_f)	offsetof(struct myx_status, _f)
+
+static const struct myx_counter myx_counters[myx_ncounters] = {
+	{ "pause drops",	MYX_C_OFF(ms_dropped_pause), },
+	{ "ucast filtered",	MYX_C_OFF(ms_dropped_unicast), },
+	{ "bad crc32",		MYX_C_OFF(ms_dropped_pause), },
+	{ "bad phy",		MYX_C_OFF(ms_dropped_phyerr), },
+	{ "mcast filtered",	MYX_C_OFF(ms_dropped_mcast), },
+	{ "tx done",		MYX_C_OFF(ms_txdonecnt), },
+	{ "rx discards",	MYX_C_OFF(ms_dropped_linkoverflow), },
+	{ "rx errors",		MYX_C_OFF(ms_dropped_linkerror), },
+	{ "rx undersize",	MYX_C_OFF(ms_dropped_runt), },
+	{ "rx oversize",	MYX_C_OFF(ms_dropped_overrun), },
+	{ "small discards",	MYX_C_OFF(ms_dropped_smallbufunderrun), },
+	{ "large discards",	MYX_C_OFF(ms_dropped_bigbufunderrun), },
+};
+
+struct myx_kstats {
+	struct kstat_kv		mk_counters[myx_ncounters];
+	struct kstat_kv		mk_rdma_tags_available;
+};
+
+struct myx_kstat_cache {
+	uint32_t		mkc_counters[myx_ncounters];
+};
+
+struct myx_kstat_state {
+	struct myx_kstat_cache	mks_caches[2];
+	unsigned int		mks_gen;
+};
+
+int
+myx_kstat_read(struct kstat *ks)
+{
+	struct myx_softc *sc = ks->ks_softc;
+	struct myx_kstats *mk = ks->ks_data;
+	struct myx_kstat_state *mks = ks->ks_ptr;
+	unsigned int gen = (mks->mks_gen++ & 1);
+	struct myx_kstat_cache *omkc = &mks->mks_caches[gen];
+	struct myx_kstat_cache *nmkc = &mks->mks_caches[!gen];
+	unsigned int i = 0;
+
+	volatile struct myx_status *sts = sc->sc_sts;
+	bus_dmamap_t map = sc->sc_sts_dma.mxm_map;
+
+	if (sc->sc_sts == NULL)
+		return (0); /* counters are valid, just not updated */
+
+	getnanouptime(&ks->ks_updated);
+
+	bus_dmamap_sync(sc->sc_dmat, map, 0, map->dm_mapsize,
+	    BUS_DMASYNC_POSTREAD);
+	for (i = 0; i < myx_ncounters; i++) {
+		const struct myx_counter *mc = &myx_counters[i];
+		nmkc->mkc_counters[i] =
+		    bemtoh32((uint32_t *)((uint8_t *)sts + mc->mc_offset));
+	}
+
+	kstat_kv_u32(&mk->mk_rdma_tags_available) =
+	    bemtoh32(&sts->ms_rdmatags_available);
+	bus_dmamap_sync(sc->sc_dmat, map, 0, map->dm_mapsize,
+	    BUS_DMASYNC_PREREAD);
+
+	for (i = 0; i < myx_ncounters; i++) {
+		kstat_kv_u64(&mk->mk_counters[i]) +=
+		    nmkc->mkc_counters[i] - omkc->mkc_counters[i];
+	}
+
+	return (0);
+}
+
+void
+myx_kstat_tick(void *arg)
+{
+	struct myx_softc *sc = arg;
+
+	if (!ISSET(sc->sc_ac.ac_if.if_flags, IFF_RUNNING))
+		return;
+
+	timeout_add_sec(&sc->sc_kstat_tmo, 4);
+
+	if (!mtx_enter_try(&sc->sc_kstat_mtx))
+		return;
+
+	myx_kstat_read(sc->sc_kstat);
+
+	mtx_leave(&sc->sc_kstat_mtx);
+}
+
+void
+myx_kstat_start(struct myx_softc *sc)
+{
+	if (sc->sc_kstat == NULL)
+		return;
+
+	myx_kstat_tick(sc);
+}
+
+void
+myx_kstat_stop(struct myx_softc *sc)
+{
+	struct myx_kstat_state *mks;
+
+	if (sc->sc_kstat == NULL)
+		return;
+
+	timeout_del_barrier(&sc->sc_kstat_tmo);
+
+	mks = sc->sc_kstat->ks_ptr;
+
+	mtx_enter(&sc->sc_kstat_mtx);
+	memset(mks, 0, sizeof(*mks));
+	mtx_leave(&sc->sc_kstat_mtx);
+}
+
+void
+myx_kstat_attach(struct myx_softc *sc)
+{
+	struct kstat *ks;
+	struct myx_kstats *mk;
+	struct myx_kstat_state *mks;
+	unsigned int i;
+
+	mtx_init(&sc->sc_kstat_mtx, IPL_SOFTCLOCK);
+	timeout_set(&sc->sc_kstat_tmo, myx_kstat_tick, sc);
+
+	ks = kstat_create(DEVNAME(sc), 0, "myx-stats", 0, KSTAT_T_KV, 0);
+	if (ks == NULL)
+		return;
+
+	mk = malloc(sizeof(*mk), M_DEVBUF, M_WAITOK|M_ZERO);
+	for (i = 0; i < myx_ncounters; i++) {
+		const struct myx_counter *mc = &myx_counters[i];
+
+		kstat_kv_unit_init(&mk->mk_counters[i], mc->mc_name,
+		    KSTAT_KV_T_COUNTER64, KSTAT_KV_U_PACKETS);
+	}
+	kstat_kv_init(&mk->mk_rdma_tags_available, "rdma tags free",
+	    KSTAT_KV_T_UINT32);
+
+	mks = malloc(sizeof(*mks), M_DEVBUF, M_WAITOK|M_ZERO);
+	/* these start at 0 */
+
+	kstat_set_mutex(ks, &sc->sc_kstat_mtx);
+	ks->ks_data = mk;
+	ks->ks_datalen = sizeof(*mk);
+	ks->ks_read = myx_kstat_read;
+	ks->ks_ptr = mks;
+
+	ks->ks_softc = sc;
+	sc->sc_kstat = ks;
+	kstat_install(ks);
+}
+#endif /* NKSTAT > 0 */

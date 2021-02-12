@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_pdaemon.c,v 1.85 2019/12/30 23:58:38 jsg Exp $	*/
+/*	$OpenBSD: uvm_pdaemon.c,v 1.88 2020/11/24 13:49:09 mpi Exp $	*/
 /*	$NetBSD: uvm_pdaemon.c,v 1.23 2000/08/20 10:24:14 bjh21 Exp $	*/
 
 /* 
@@ -210,7 +210,6 @@ uvm_pageout(void *arg)
 {
 	struct uvm_constraint_range constraint;
 	struct uvm_pmalloc *pma;
-	int work_done;
 	int npages = 0;
 
 	/* ensure correct priority and set paging parameters... */
@@ -223,7 +222,6 @@ uvm_pageout(void *arg)
 
 	for (;;) {
 		long size;
-	  	work_done = 0; /* No work done this iteration. */
 
 		uvm_lock_fpageq();
 		if (!uvm_nowait_failed && TAILQ_EMPTY(&uvm.pmr_control.allocs)) {
@@ -282,7 +280,6 @@ uvm_pageout(void *arg)
 		    ((uvmexp.free - BUFPAGES_DEFICIT) < uvmexp.freetarg) ||
 		    ((uvmexp.inactive + BUFPAGES_INACT) < uvmexp.inactarg)) {
 			uvmpd_scan();
-			work_done = 1; /* XXX we hope... */
 		}
 
 		/*
@@ -296,15 +293,18 @@ uvm_pageout(void *arg)
 		}
 
 		if (pma != NULL) {
+			/* 
+			 * XXX If UVM_PMA_FREED isn't set, no pages
+			 * were freed.  Should we set UVM_PMA_FAIL in
+			 * that case?
+			 */
 			pma->pm_flags &= ~UVM_PMA_BUSY;
-			if (!work_done)
-				pma->pm_flags |= UVM_PMA_FAIL;
-			if (pma->pm_flags & (UVM_PMA_FAIL | UVM_PMA_FREED)) {
+			if (pma->pm_flags & UVM_PMA_FREED) {
 				pma->pm_flags &= ~UVM_PMA_LINKED;
 				TAILQ_REMOVE(&uvm.pmr_control.allocs, pma,
 				    pmq);
+				wakeup(pma);
 			}
-			wakeup(pma);
 		}
 		uvm_unlock_fpageq();
 
@@ -522,9 +522,7 @@ uvmpd_scan_inactive(struct pglist *pglst)
 			 * reactivate it so that we eventually cycle
 			 * all pages thru the inactive queue.
 			 */
-			KASSERT(uvmexp.swpgonly <= uvmexp.swpages);
-			if ((p->pg_flags & PQ_SWAPBACKED) &&
-			    uvmexp.swpgonly == uvmexp.swpages) {
+			if ((p->pg_flags & PQ_SWAPBACKED) && uvm_swapisfull()) {
 				dirtyreacts++;
 				uvm_pageactivate(p);
 				continue;
@@ -824,6 +822,8 @@ uvmpd_scan(void)
 	struct uvm_object *uobj;
 	boolean_t got_it;
 
+	MUTEX_ASSERT_LOCKED(&uvm.pageqlock);
+
 	uvmexp.pdrevs++;		/* counter */
 	uobj = NULL;
 
@@ -879,7 +879,7 @@ uvmpd_scan(void)
 	swap_shortage = 0;
 	if (uvmexp.free < uvmexp.freetarg &&
 	    uvmexp.swpginuse == uvmexp.swpages &&
-	    uvmexp.swpgonly < uvmexp.swpages &&
+	    !uvm_swapisfull() &&
 	    pages_freed == 0) {
 		swap_shortage = uvmexp.freetarg - uvmexp.free;
 	}

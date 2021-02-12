@@ -1,4 +1,4 @@
-#	$OpenBSD: RAMDISK,v 1.77 2020/03/05 16:36:30 otto Exp $
+#	$OpenBSD: RAMDISK,v 1.82 2020/12/27 23:05:37 deraadt Exp $
 
 machine		amd64
 maxusers	4
@@ -23,13 +23,14 @@ bios0		at mainbus?
 
 acpi0		at bios?
 #acpitimer*	at acpi?
-#acpihpet*	at acpi?
+acpihpet*	at acpi?
 #acpiac*	at acpi?
 #acpibat*	at acpi?
 #acpibtn*	at acpi?
 #acpicpu*	at acpi?
 acpicmos*	at acpi?
 acpiec*		at acpi?
+acpipci*	at acpi?
 acpiprt*	at acpi?
 acpimadt0	at acpi?
 #acpitz*	at acpi?
@@ -52,11 +53,11 @@ pci*		at pchb?
 xhci*		at pci?
 ehci*		at pci?
 uhci*		at pci?
-ohci*		at pci?
+#ohci*		at pci?
 usb*		at xhci?
 usb*		at ehci?
 usb*		at uhci?
-usb*		at ohci?
+#usb*		at ohci?
 
 uhub*		at usb?
 uhub*		at uhub?
@@ -84,10 +85,10 @@ sd*		at scsibus?		# SCSI disk drives
 
 pciide*		at pci? flags 0x0000
 wd*		at pciide? flags 0x0000
-atapiscsi*	at pciide?
+#atapiscsi*	at pciide?
 
 #fxp*		at pci?			# EtherExpress 10/100B ethernet
-rl*		at pci?			# Realtek 81[23]9 ethernet
+#rl*		at pci?			# Realtek 81[23]9 ethernet
 re*		at pci?			# Realtek 8169/8169S/8110S
 em*		at pci?			# Intel Pro/1000 ethernet
 bge*		at pci?			# Broadcom BCM570x (aka Tigon3)

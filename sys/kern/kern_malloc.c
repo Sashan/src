@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_malloc.c,v 1.141 2019/12/19 17:40:11 mpi Exp $	*/
+/*	$OpenBSD: kern_malloc.c,v 1.143 2020/12/31 11:04:35 claudio Exp $	*/
 /*	$NetBSD: kern_malloc.c,v 1.15.4.2 1996/06/13 17:10:56 cgd Exp $	*/
 
 /*
@@ -42,6 +42,7 @@
 #include <sys/time.h>
 #include <sys/mutex.h>
 #include <sys/rwlock.h>
+#include <sys/tracepoint.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -110,7 +111,7 @@ struct kmemusage *kmemusage;
 char *kmembase, *kmemlimit;
 char buckstring[16 * sizeof("123456,")];
 int buckstring_init = 0;
-#if defined(KMEMSTATS) || defined(DIAGNOSTIC) || defined(FFS_SOFTUPDATES)
+#if defined(KMEMSTATS) || defined(DIAGNOSTIC)
 char *memname[] = INITKMEMNAMES;
 char *memall = NULL;
 struct rwlock sysctl_kmemlock = RWLOCK_INITIALIZER("sysctlklk");
@@ -359,6 +360,9 @@ out:
 
 	if ((flags & M_ZERO) && va != NULL)
 		memset(va, 0, size);
+
+	TRACEPOINT(uvm, malloc, type, va, size, flags);
+
 	return (va);
 }
 
@@ -389,6 +393,8 @@ free(void *addr, int type, size_t freedsize)
 		panic("free: non-malloced addr %p type %s", addr,
 		    memname[type]);
 #endif
+
+	TRACEPOINT(uvm, free, type, addr, freedsize);
 
 	mtx_enter(&malloc_mtx);
 	kup = btokup(addr);
@@ -603,7 +609,7 @@ sysctl_malloc(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 #ifdef KMEMSTATS
 	struct kmemstats km;
 #endif
-#if defined(KMEMSTATS) || defined(DIAGNOSTIC) || defined(FFS_SOFTUPDATES)
+#if defined(KMEMSTATS) || defined(DIAGNOSTIC)
 	int error;
 #endif
 	int i, siz;
@@ -648,7 +654,7 @@ sysctl_malloc(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (EOPNOTSUPP);
 #endif
 	case KERN_MALLOC_KMEMNAMES:
-#if defined(KMEMSTATS) || defined(DIAGNOSTIC) || defined(FFS_SOFTUPDATES)
+#if defined(KMEMSTATS) || defined(DIAGNOSTIC)
 		error = rw_enter(&sysctl_kmemlock, RW_WRITE|RW_INTR);
 		if (error)
 			return (error);

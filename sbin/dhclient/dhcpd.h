@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhcpd.h,v 1.285 2020/01/23 22:39:35 krw Exp $	*/
+/*	$OpenBSD: dhcpd.h,v 1.291 2021/02/01 01:42:20 krw Exp $	*/
 
 /*
  * Copyright (c) 2004 Henning Brauer <henning@openbsd.org>
@@ -135,7 +135,7 @@ struct interface_info {
 	struct dhcp_packet	 sent_packet;
 	int			 sent_packet_length;
 	uint32_t		 xid;
-	time_t			 timeout;
+	struct timespec		 timeout;
 	time_t			 expiry, rebind;
 	void			(*timeout_func)(struct interface_info *);
 	uint16_t		 secs;
@@ -167,7 +167,7 @@ char			*code_to_name(int);
 char			*code_to_format(int);
 int			 code_to_action(int, int);
 int			 name_to_code(char *);
-void			 merge_option_data(struct option_data *,
+void			 merge_option_data(char *, struct option_data *,
     struct option_data *, struct option_data *);
 
 /* conflex.c */
@@ -215,9 +215,6 @@ extern int			 cmd_opts;
 #define		OPT_VERBOSE	0x02
 #define		OPT_FOREGROUND	0x04
 #define		OPT_RELEASE	0x08
-#define		OPT_CONFPATH	0x10
-#define		OPT_DBPATH	0x20
-#define		OPT_IGNORELIST	0x40
 
 void		 dhcpoffer(struct interface_info *, struct option_data *,
     const char *);
@@ -242,12 +239,12 @@ uint32_t	 wrapsum(uint32_t);
 
 /* clparse.c */
 void		 init_config(void);
-void		 read_conf(char *, char *, struct ether_addr *);
+void		 read_conf(char *, uint8_t *, struct ether_addr *);
 void		 read_lease_db(struct client_lease_tq *);
 
 /* kroute.c */
-unsigned int	 extract_classless_route(uint8_t *, unsigned int,
-    in_addr_t *, in_addr_t *, in_addr_t *);
+unsigned int	 extract_route(uint8_t *, unsigned int, in_addr_t *,
+    in_addr_t *, in_addr_t *);
 void		 write_resolv_conf(void);
 
 void		 propose(struct proposal *);

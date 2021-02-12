@@ -1,4 +1,4 @@
-/*	$OpenBSD: cac.c,v 1.59 2020/02/15 18:02:00 krw Exp $	*/
+/*	$OpenBSD: cac.c,v 1.73 2020/10/15 00:01:24 krw Exp $	*/
 /*	$NetBSD: cac.c,v 1.15 2000/11/08 19:20:35 ad Exp $	*/
 
 /*
@@ -109,7 +109,6 @@ int	cac_ccb_start(struct cac_softc *, struct cac_ccb *);
 int	cac_cmd(struct cac_softc *sc, int command, void *data, int datasize,
 	int drive, int blkno, int flags, struct scsi_xfer *xs);
 int	cac_get_dinfo(struct cac_softc *sc, int target);
-void	cac_copy_internal_data(struct scsi_xfer *xs, void *v, size_t size);
 
 struct	cac_ccb *cac_l0_completed(struct cac_softc *);
 int	cac_l0_fifo_full(struct cac_softc *);
@@ -236,19 +235,20 @@ cac_init(struct cac_softc *sc, int startfw)
 		return (-1);
 	}
 
-	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.adapter = &cac_switch;
-	sc->sc_link.adapter_target = cinfo.num_drvs;
-	sc->sc_link.adapter_buswidth = cinfo.num_drvs;
-	sc->sc_link.openings = CAC_MAX_CCBS / sc->sc_nunits;
-	if (sc->sc_link.openings < 4 )
-		sc->sc_link.openings = 4;
-	sc->sc_link.pool = &sc->sc_iopool;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter = &cac_switch;
+	saa.saa_adapter_target = SDEV_NO_ADAPTER_TARGET;
+	saa.saa_adapter_buswidth = cinfo.num_drvs;
+	saa.saa_luns = 8;
+	saa.saa_openings = CAC_MAX_CCBS / sc->sc_nunits;
+	if (saa.saa_openings < 4 )
+		saa.saa_openings = 4;
+	saa.saa_pool = &sc->sc_iopool;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
-	bzero(&saa, sizeof(saa));
-	saa.saa_sc_link = &sc->sc_link;
-
-	config_found(&sc->sc_dv, &saa, scsiprint);
+	sc->sc_scsibus = (struct scsibus_softc *)config_found(&sc->sc_dv, &saa,
+	    scsiprint);
 
 	(*sc->sc_cl->cl_intr_enable)(sc, 1);
 
@@ -561,27 +561,11 @@ cac_get_dinfo(sc, target)
 }
 
 void
-cac_copy_internal_data(xs, v, size)
-	struct scsi_xfer *xs;
-	void *v;
-	size_t size;
-{
-	size_t copy_cnt;
-
-	if (!xs->datalen)
-		printf("uio move is not yet supported\n");
-	else {
-		copy_cnt = MIN(size, xs->datalen);
-		memcpy(xs->data, v, copy_cnt);
-	}
-}
-
-void
 cac_scsi_cmd(xs)
 	struct scsi_xfer *xs;
 {
 	struct scsi_link *link = xs->sc_link;
-	struct cac_softc *sc = link->adapter_softc;
+	struct cac_softc *sc = link->bus->sb_adapter_softc;
 	struct cac_drive_info *dinfo;
 	struct scsi_inquiry_data inq;
 	struct scsi_sense_data sd;
@@ -589,7 +573,7 @@ cac_scsi_cmd(xs)
 	u_int8_t target = link->target;
 	u_int32_t blockno, blockcnt, size;
 	struct scsi_rw *rw;
-	struct scsi_rw_big *rwb;
+	struct scsi_rw_10 *rw10;
 	int op, flags, s, error;
 	const char *p;
 
@@ -603,7 +587,7 @@ cac_scsi_cmd(xs)
 	xs->error = XS_NOERROR;
 	dinfo = &sc->sc_dinfos[target];
 
-	switch (xs->cmd->opcode) {
+	switch (xs->cmd.opcode) {
 	case TEST_UNIT_READY:
 	case START_STOP:
 #if 0
@@ -618,7 +602,7 @@ cac_scsi_cmd(xs)
 		sd.flags = SKEY_NO_SENSE;
 		*(u_int32_t*)sd.info = htole32(0);
 		sd.extra_len = 0;
-		cac_copy_internal_data(xs, &sd, sizeof sd);
+		scsi_copy_internal_data(xs, &sd, sizeof(sd));
 		break;
 
 	case INQUIRY:
@@ -629,9 +613,9 @@ cac_scsi_cmd(xs)
 		bzero(&inq, sizeof inq);
 		inq.device = T_DIRECT;
 		inq.dev_qual2 = 0;
-		inq.version = 2;
-		inq.response_format = 2;
-		inq.additional_length = 32;
+		inq.version = SCSI_REV_2;
+		inq.response_format = SID_SCSI2_RESPONSE;
+		inq.additional_length = SID_SCSI2_ALEN;
 		inq.flags |= SID_CmdQue;
 		strlcpy(inq.vendor, "Compaq  ", sizeof inq.vendor);
 		switch (CAC_GET1(dinfo->mirror)) {
@@ -644,7 +628,7 @@ cac_scsi_cmd(xs)
 		snprintf(inq.product, sizeof inq.product, "%s vol  #%02d",
 		    p, target);
 		strlcpy(inq.revision, "   ", sizeof inq.revision);
-		cac_copy_internal_data(xs, &inq, sizeof inq);
+		scsi_copy_internal_data(xs, &inq, sizeof(inq));
 		break;
 
 	case READ_CAPACITY:
@@ -656,7 +640,7 @@ cac_scsi_cmd(xs)
 		_lto4b( CAC_GET2(dinfo->ncylinders) * CAC_GET1(dinfo->nheads) *
 		    CAC_GET1(dinfo->nsectors) - 1, rcd.addr);
 		_lto4b(CAC_SECTOR_SIZE, rcd.length);
-		cac_copy_internal_data(xs, &rcd, sizeof rcd);
+		scsi_copy_internal_data(xs, &rcd, sizeof(rcd));
 		break;
 
 	case PREVENT_ALLOW:
@@ -668,21 +652,21 @@ cac_scsi_cmd(xs)
 		break;
 
 	case READ_COMMAND:
-	case READ_BIG:
+	case READ_10:
 	case WRITE_COMMAND:
-	case WRITE_BIG:
+	case WRITE_10:
 
 		flags = 0;
 		/* A read or write operation. */
 		if (xs->cmdlen == 6) {
-			rw = (struct scsi_rw *)xs->cmd;
+			rw = (struct scsi_rw *)&xs->cmd;
 			blockno = _3btol(rw->addr) &
 			    (SRW_TOPADDR << 16 | 0xffff);
 			blockcnt = rw->length ? rw->length : 0x100;
 		} else {
-			rwb = (struct scsi_rw_big *)xs->cmd;
-			blockno = _4btol(rwb->addr);
-			blockcnt = _2btol(rwb->length);
+			rw10 = (struct scsi_rw_10 *)&xs->cmd;
+			blockno = _4btol(rw10->addr);
+			blockcnt = _2btol(rw10->length);
 		}
 		size = CAC_GET2(dinfo->ncylinders) *
 		    CAC_GET1(dinfo->nheads) * CAC_GET1(dinfo->nsectors);
@@ -693,14 +677,14 @@ cac_scsi_cmd(xs)
 			break;
 		}
 
-		switch (xs->cmd->opcode) {
+		switch (xs->cmd.opcode) {
 		case READ_COMMAND:
-		case READ_BIG:
+		case READ_10:
 			op = CAC_CMD_READ;
 			flags = CAC_CCB_DATA_IN;
 			break;
 		case WRITE_COMMAND:
-		case WRITE_BIG:
+		case WRITE_10:
 			op = CAC_CMD_WRITE;
 			flags = CAC_CCB_DATA_OUT;
 			break;
@@ -721,8 +705,9 @@ cac_scsi_cmd(xs)
 		return;
 
 	default:
-		SC_DEBUG(link, SDEV_DB1, ("unsupported scsi command %#x "
-		    "tgt %d ", xs->cmd->opcode, target));
+#ifdef CAC_DEBUG
+		printf("unsupported scsi command %#x tgt %d ", xs->cmd.opcode, target);
+#endif
 		xs->error = XS_DRIVER_STUFFUP;
 	}
 
@@ -745,7 +730,7 @@ void
 cac_l0_submit(struct cac_softc *sc, struct cac_ccb *ccb)
 {
 #ifdef CAC_DEBUG
-	printf("submit-%x ", ccb->ccb_paddr);
+	printf("submit-%lx ", ccb->ccb_paddr);
 #endif
 	bus_dmamap_sync(sc->sc_dmat, sc->sc_dmamap, 0,
 	    sc->sc_dmamap->dm_mapsize,
@@ -763,7 +748,7 @@ cac_l0_completed(sc)
 	if (!(off = cac_inl(sc, CAC_REG_DONE_FIFO)))
 		return NULL;
 #ifdef CAC_DEBUG
-	printf("compl-%x ", off);
+	printf("compl-%lx ", off);
 #endif
 	orig_off = off;
 
@@ -893,7 +878,7 @@ cac_create_sensors(struct cac_softc *sc)
 
 		/* check if this is the scsibus for the logical disks */
 		ssc = (struct scsibus_softc *)dev;
-		if (ssc->adapter_link == &sc->sc_link)
+		if (ssc == sc->sc_scsibus)
 			break;
 		ssc = NULL;
 	}

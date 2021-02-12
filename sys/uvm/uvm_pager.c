@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_pager.c,v 1.72 2019/12/08 12:37:45 mpi Exp $	*/
+/*	$OpenBSD: uvm_pager.c,v 1.74 2021/01/19 13:21:36 mpi Exp $	*/
 /*	$NetBSD: uvm_pager.c,v 1.36 2000/11/27 18:26:41 chs Exp $	*/
 
 /*
@@ -43,7 +43,7 @@
 
 struct pool *uvm_aiobuf_pool;
 
-struct uvm_pagerops *uvmpagerops[] = {
+const struct uvm_pagerops *uvmpagerops[] = {
 	&aobj_pager,
 	&uvm_deviceops,
 	&uvm_vnodeops,
@@ -649,7 +649,8 @@ uvm_pager_dropcluster(struct uvm_object *uobj, struct vm_page *pg,
 				UVM_PAGE_OWN(ppsp[lcv], NULL);
 
 				/* kills anon and frees pg */
-				uvm_anfree(ppsp[lcv]->uanon);
+				rw_enter(ppsp[lcv]->uanon->an_lock, RW_WRITE);
+				uvm_anon_release(ppsp[lcv]->uanon);
 
 				continue;
 		} else {

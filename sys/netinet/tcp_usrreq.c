@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_usrreq.c,v 1.172 2019/07/12 19:43:51 bluhm Exp $	*/
+/*	$OpenBSD: tcp_usrreq.c,v 1.179 2021/01/09 20:58:37 gnezdo Exp $	*/
 /*	$NetBSD: tcp_usrreq.c,v 1.20 1996/02/13 23:44:16 christos Exp $	*/
 
 /*
@@ -110,7 +110,25 @@ u_int	tcp_sendspace = TCP_SENDSPACE;
 u_int	tcp_recvspace = TCP_RECVSPACE;
 u_int	tcp_autorcvbuf_inc = 16 * 1024;
 
-int *tcpctl_vars[TCPCTL_MAXID] = TCPCTL_VARS;
+static int pr_slowhz = PR_SLOWHZ;
+const struct sysctl_bounded_args tcpctl_vars[] = {
+	{ TCPCTL_SLOWHZ, &pr_slowhz, 1, 0 },
+	{ TCPCTL_RFC1323, &tcp_do_rfc1323, 0, 1 },
+	{ TCPCTL_KEEPINITTIME, &tcptv_keep_init, 1, 3 * TCPTV_KEEP_INIT },
+	{ TCPCTL_KEEPIDLE, &tcp_keepidle, 1, 5 * TCPTV_KEEP_IDLE },
+	{ TCPCTL_KEEPINTVL, &tcp_keepintvl, 1, 3 * TCPTV_KEEPINTVL },
+	{ TCPCTL_SACK, &tcp_do_sack, 0, 1 },
+	{ TCPCTL_MSSDFLT, &tcp_mssdflt, TCP_MSS, 65535 },
+	{ TCPCTL_RSTPPSLIMIT, &tcp_rst_ppslim, 1, 1000 * 1000 },
+	{ TCPCTL_ACK_ON_PUSH, &tcp_ack_on_push, 0, 1 },
+#ifdef TCP_ECN
+	{ TCPCTL_ECN, &tcp_do_ecn, 0, 1 },
+#endif
+	{ TCPCTL_SYN_CACHE_LIMIT, &tcp_syn_cache_limit, 1, 1000 * 1000 },
+	{ TCPCTL_SYN_BUCKET_LIMIT, &tcp_syn_bucket_limit, 1, INT_MAX },
+	{ TCPCTL_RFC3390, &tcp_do_rfc3390, 0, 2 },
+	{ TCPCTL_ALWAYS_KEEPALIVE, &tcp_always_keepalive, 0, 1 },
+};
 
 struct	inpcbtable tcbtable;
 
@@ -981,16 +999,6 @@ tcp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (ENOTDIR);
 
 	switch (name[0]) {
-	case TCPCTL_SACK:
-		NET_LOCK();
-		error = sysctl_int(oldp, oldlenp, newp, newlen,
-		    &tcp_do_sack);
-		NET_UNLOCK();
-		return (error);
-
-	case TCPCTL_SLOWHZ:
-		return (sysctl_rdint(oldp, oldlenp, newp, PR_SLOWHZ));
-
 	case TCPCTL_BADDYNAMIC:
 		NET_LOCK();
 		error = sysctl_struct(oldp, oldlenp, newp, newlen,
@@ -1019,21 +1027,6 @@ tcp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		NET_UNLOCK();
 		return (error);
 
-	case TCPCTL_ALWAYS_KEEPALIVE:
-		NET_LOCK();
-		error = sysctl_int(oldp, oldlenp, newp, newlen,
-		    &tcp_always_keepalive);
-		NET_UNLOCK();
-		return (error);
-
-#ifdef TCP_ECN
-	case TCPCTL_ECN:
-		NET_LOCK();
-		error = sysctl_int(oldp, oldlenp, newp, newlen,
-		   &tcp_do_ecn);
-		NET_UNLOCK();
-		return (error);
-#endif
 	case TCPCTL_REASS_LIMIT:
 		NET_LOCK();
 		nval = tcp_reass_limit;
@@ -1063,8 +1056,8 @@ tcp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 
 	case TCPCTL_SYN_USE_LIMIT:
 		NET_LOCK();
-		error = sysctl_int(oldp, oldlenp, newp, newlen,
-		    &tcp_syn_use_limit);
+		error = sysctl_int_bounded(oldp, oldlenp, newp, newlen,
+		    &tcp_syn_use_limit, 0, INT_MAX);
 		if (!error && newp != NULL) {
 			/*
 			 * Global tcp_syn_use_limit is used when reseeding a
@@ -1081,35 +1074,29 @@ tcp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	case TCPCTL_SYN_HASH_SIZE:
 		NET_LOCK();
 		nval = tcp_syn_hash_size;
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &nval);
+		error = sysctl_int_bounded(oldp, oldlenp, newp, newlen,
+		    &nval, 1, 100000);
 		if (!error && nval != tcp_syn_hash_size) {
-			if (nval < 1 || nval > 100000) {
-				error = EINVAL;
-			} else {
-				/*
-				 * If global hash size has been changed,
-				 * switch sets as soon as possible.  Then
-				 * the actual hash array will be reallocated.
-				 */
-				if (tcp_syn_cache[0].scs_size != nval)
-					tcp_syn_cache[0].scs_use = 0;
-				if (tcp_syn_cache[1].scs_size != nval)
-					tcp_syn_cache[1].scs_use = 0;
-				tcp_syn_hash_size = nval;
-			}
+			/*
+			 * If global hash size has been changed,
+			 * switch sets as soon as possible.  Then
+			 * the actual hash array will be reallocated.
+			 */
+			if (tcp_syn_cache[0].scs_size != nval)
+				tcp_syn_cache[0].scs_use = 0;
+			if (tcp_syn_cache[1].scs_size != nval)
+				tcp_syn_cache[1].scs_use = 0;
+			tcp_syn_hash_size = nval;
 		}
 		NET_UNLOCK();
 		return (error);
 
 	default:
-		if (name[0] < TCPCTL_MAXID) {
-			NET_LOCK();
-			error = sysctl_int_arr(tcpctl_vars, name, namelen,
-			    oldp, oldlenp, newp, newlen);
-			NET_UNLOCK();
-			return (error);
-		}
-		return (ENOPROTOOPT);
+		NET_LOCK();
+		error = sysctl_bounded_arr(tcpctl_vars, nitems(tcpctl_vars), name,
+		     namelen, oldp, oldlenp, newp, newlen);
+		NET_UNLOCK();
+		return (error);
 	}
 	/* NOTREACHED */
 }

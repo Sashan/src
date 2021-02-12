@@ -1,8 +1,9 @@
-#	$OpenBSD: Makefile,v 1.2 2019/12/24 09:37:53 anton Exp $
+#	$OpenBSD: Makefile,v 1.4 2020/12/16 22:59:55 bluhm Exp $
 
 PROG=		pipe
 
 SRCS+=		pipe.c
+SRCS+=		test-close.c
 SRCS+=		test-kqueue.c
 SRCS+=		test-ping-pong.c
 SRCS+=		test-run-down.c
@@ -13,6 +14,7 @@ DPADD+=		${LIBPTHREAD}
 
 WARNINGS=	yes
 
+TESTS+=	close-race
 TESTS+=	kqueue-read
 TESTS+=	kqueue-read-eof
 TESTS+=	kqueue-write
@@ -25,14 +27,12 @@ TESTS+=	thundering-herd-read-wakeup
 TESTS+=	thundering-herd-write-signal
 TESTS+=	thundering-herd-write-wakeup
 
-REGRESS_SETUP_ONCE=	setup
-setup: ${PROG}
+REGRESS_SETUP=		${PROG}
 
 .for t in ${TESTS}
-${t}:
-	@echo "\n======== ${@} ========"
-	./${PROG} ${t}
-REGRESS_TARGETS+=	${t}
+run-$t:
+	./${PROG} $t
+REGRESS_TARGETS+=	run-$t
 .endfor
 
 .include <bsd.regress.mk>

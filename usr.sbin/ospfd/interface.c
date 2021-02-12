@@ -1,4 +1,4 @@
-/*	$OpenBSD: interface.c,v 1.83 2019/06/28 13:32:49 deraadt Exp $ */
+/*	$OpenBSD: interface.c,v 1.86 2021/01/16 08:03:55 claudio Exp $ */
 
 /*
  * Copyright (c) 2005 Claudio Jeker <claudio@openbsd.org>
@@ -633,6 +633,9 @@ if_to_ctl(struct iface *iface)
 	ictl.auth_type = iface->auth_type;
 	ictl.auth_keyid = iface->auth_keyid;
 
+	memcpy(ictl.dependon, iface->dependon, sizeof(ictl.dependon));
+	ictl.depend_ok = iface->depend_ok;
+
 	gettimeofday(&now, NULL);
 	if (evtimer_pending(&iface->hello_timer, &tv)) {
 		timersub(&tv, &now, &res);
@@ -708,7 +711,7 @@ LIST_HEAD(,if_group_count) ifglist = LIST_HEAD_INITIALIZER(ifglist);
 int
 if_join_group(struct iface *iface, struct in_addr *addr)
 {
-	struct ip_mreq		 mreq;
+	struct ip_mreqn		 mreq;
 	struct if_group_count	*ifg;
 
 	switch (iface->type) {
@@ -730,8 +733,9 @@ if_join_group(struct iface *iface, struct in_addr *addr)
 			/* already joined */
 			return (0);
 
+		memset(&mreq, 0, sizeof(mreq));
 		mreq.imr_multiaddr.s_addr = addr->s_addr;
-		mreq.imr_interface.s_addr = iface->addr.s_addr;
+		mreq.imr_ifindex = iface->ifindex;
 
 		if (setsockopt(iface->fd, IPPROTO_IP, IP_ADD_MEMBERSHIP,
 		    (void *)&mreq, sizeof(mreq)) == -1) {
@@ -757,7 +761,7 @@ if_join_group(struct iface *iface, struct in_addr *addr)
 int
 if_leave_group(struct iface *iface, struct in_addr *addr)
 {
-	struct ip_mreq		 mreq;
+	struct ip_mreqn		 mreq;
 	struct if_group_count	*ifg;
 
 	switch (iface->type) {
@@ -778,8 +782,9 @@ if_leave_group(struct iface *iface, struct in_addr *addr)
 			free(ifg);
 		}
 
+		memset(&mreq, 0, sizeof(mreq));
 		mreq.imr_multiaddr.s_addr = addr->s_addr;
-		mreq.imr_interface.s_addr = iface->addr.s_addr;
+		mreq.imr_ifindex = iface->ifindex;
 
 		if (setsockopt(iface->fd, IPPROTO_IP, IP_DROP_MEMBERSHIP,
 		    (void *)&mreq, sizeof(mreq)) == -1) {
@@ -805,11 +810,15 @@ if_leave_group(struct iface *iface, struct in_addr *addr)
 int
 if_set_mcast(struct iface *iface)
 {
+	struct ip_mreqn		 mreq;
+
 	switch (iface->type) {
 	case IF_TYPE_POINTOPOINT:
 	case IF_TYPE_BROADCAST:
+		memset(&mreq, 0, sizeof(mreq));
+		mreq.imr_ifindex = iface->ifindex;
 		if (setsockopt(iface->fd, IPPROTO_IP, IP_MULTICAST_IF,
-		    &iface->addr.s_addr, sizeof(iface->addr.s_addr)) == -1) {
+		    &mreq, sizeof(mreq)) == -1) {
 			log_warn("if_set_mcast: error setting "
 			    "IP_MULTICAST_IF, interface %s", iface->name);
 			return (-1);

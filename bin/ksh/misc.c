@@ -1,4 +1,4 @@
-/*	$OpenBSD: misc.c,v 1.73 2019/06/28 13:34:59 deraadt Exp $	*/
+/*	$OpenBSD: misc.c,v 1.76 2020/10/26 18:16:51 tb Exp $	*/
 
 /*
  * Miscellaneous functions
@@ -147,6 +147,7 @@ const struct option sh_options[] = {
 	{ "notify",	'b',		OF_ANY },
 	{ "nounset",	'u',		OF_ANY },
 	{ "physical",	  0,		OF_ANY }, /* non-standard */
+	{ "pipefail",	  0,		OF_ANY }, /* non-standard */
 	{ "posix",	  0,		OF_ANY }, /* non-standard */
 	{ "privileged",	'p',		OF_ANY },
 	{ "restricted",	'r',	    OF_CMDLINE },
@@ -614,6 +615,9 @@ do_gmatch(const unsigned char *s, const unsigned char *se,
 			break;
 
 		case '*':
+			/* collapse consecutive stars */
+			while (ISMAGIC(p[0]) && p[1] == '*')
+				p += 2;
 			if (p == pe)
 				return 1;
 			s--;
@@ -709,7 +713,7 @@ do_gmatch(const unsigned char *s, const unsigned char *se,
 static int
 posix_cclass(const unsigned char *pattern, int test, const unsigned char **ep)
 {
-	struct cclass *cc;
+	const struct cclass *cc;
 	const unsigned char *colon;
 	size_t len;
 	int rval = 0;

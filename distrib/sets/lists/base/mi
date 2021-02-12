@@ -68,6 +68,7 @@
 ./etc/examples/ipsec.conf
 ./etc/examples/ldapd.conf
 ./etc/examples/ldpd.conf
+./etc/examples/login_ldap.conf
 ./etc/examples/man.conf
 ./etc/examples/mixerctl.conf
 ./etc/examples/mrouted.conf
@@ -115,6 +116,7 @@
 ./etc/isakmpd/pubkeys/ipv6
 ./etc/isakmpd/pubkeys/ufqdn
 ./etc/ldap
+./etc/ldap/bsd.schema
 ./etc/ldap/certs
 ./etc/ldap/core.schema
 ./etc/ldap/inetorgperson.schema
@@ -217,10 +219,6 @@
 ./etc/rpki/ripe.tal
 ./etc/services
 ./etc/signify
-./etc/signify/openbsd-65-base.pub
-./etc/signify/openbsd-65-fw.pub
-./etc/signify/openbsd-65-pkg.pub
-./etc/signify/openbsd-65-syspatch.pub
 ./etc/signify/openbsd-66-base.pub
 ./etc/signify/openbsd-66-fw.pub
 ./etc/signify/openbsd-66-pkg.pub
@@ -233,6 +231,14 @@
 ./etc/signify/openbsd-68-fw.pub
 ./etc/signify/openbsd-68-pkg.pub
 ./etc/signify/openbsd-68-syspatch.pub
+./etc/signify/openbsd-69-base.pub
+./etc/signify/openbsd-69-fw.pub
+./etc/signify/openbsd-69-pkg.pub
+./etc/signify/openbsd-69-syspatch.pub
+./etc/signify/openbsd-70-base.pub
+./etc/signify/openbsd-70-fw.pub
+./etc/signify/openbsd-70-pkg.pub
+./etc/signify/openbsd-70-syspatch.pub
 ./etc/skel
 ./etc/skel/.ssh
 ./etc/ssh
@@ -634,15 +640,16 @@
 ./usr/games
 ./usr/include
 ./usr/lib
+./usr/lib/libagentx.so.1.0
 ./usr/lib/libc.so.96.0
-./usr/lib/libcbor.so.0.6
+./usr/lib/libcbor.so.1.0
 ./usr/lib/libcrypto.so.46.1
 ./usr/lib/libcurses.so.14.0
 ./usr/lib/libedit.so.5.2
 ./usr/lib/libelf.so.3.0
 ./usr/lib/libevent.so.4.1
 ./usr/lib/libexpat.so.12.0
-./usr/lib/libfido2.so.2.0
+./usr/lib/libfido2.so.4.0
 ./usr/lib/libform.so.6.0
 ./usr/lib/libformw.so.6.0
 ./usr/lib/libfuse.so.2.0
@@ -656,7 +663,7 @@
 ./usr/lib/libossaudio.so.4.0
 ./usr/lib/libpanel.so.6.0
 ./usr/lib/libpanelw.so.6.0
-./usr/lib/libpcap.so.8.4
+./usr/lib/libpcap.so.9.0
 ./usr/lib/libperl.so.20.0
 ./usr/lib/libpthread.so.26.1
 ./usr/lib/libradius.so.1.0
@@ -667,7 +674,7 @@
 ./usr/lib/libssl.so.48.1
 ./usr/lib/libtermcap.so.14.0
 ./usr/lib/libtermlib.so.14.0
-./usr/lib/libtls.so.20.1
+./usr/lib/libtls.so.20.2
 ./usr/lib/libusbhid.so.7.0
 ./usr/lib/libutil.so.15.0
 ./usr/lib/libz.so.5.0
@@ -1536,6 +1543,8 @@
 ./usr/libdata/perl5/pod/perl5282delta.pod
 ./usr/libdata/perl5/pod/perl5300delta.pod
 ./usr/libdata/perl5/pod/perl5301delta.pod
+./usr/libdata/perl5/pod/perl5302delta.pod
+./usr/libdata/perl5/pod/perl5303delta.pod
 ./usr/libdata/perl5/pod/perl561delta.pod
 ./usr/libdata/perl5/pod/perl56delta.pod
 ./usr/libdata/perl5/pod/perl581delta.pod
@@ -2302,6 +2311,7 @@
 ./usr/libexec/auth/login_chpass
 ./usr/libexec/auth/login_crypto
 ./usr/libexec/auth/login_lchpass
+./usr/libexec/auth/login_ldap
 ./usr/libexec/auth/login_passwd
 ./usr/libexec/auth/login_radius
 ./usr/libexec/auth/login_reject
@@ -2487,6 +2497,7 @@
 ./usr/sbin/authpf-noip
 ./usr/sbin/bgpctl
 ./usr/sbin/bgpd
+./usr/sbin/btrace
 ./usr/sbin/chat
 ./usr/sbin/chgrp
 ./usr/sbin/chown
@@ -2759,6 +2770,7 @@
 ./usr/share/man/man4/luna88k
 ./usr/share/man/man4/macppc
 ./usr/share/man/man4/octeon
+./usr/share/man/man4/powerpc64
 ./usr/share/man/man4/sgi
 ./usr/share/man/man4/sparc64
 ./usr/share/man/man5
@@ -2780,6 +2792,7 @@
 ./usr/share/man/man8/luna88k
 ./usr/share/man/man8/macppc
 ./usr/share/man/man8/octeon
+./usr/share/man/man8/powerpc64
 ./usr/share/man/man8/sgi
 ./usr/share/man/man8/sparc64
 ./usr/share/man/man8/user.8
@@ -5802,6 +5815,7 @@
 ./usr/share/zoneinfo/America/North_Dakota/Beulah
 ./usr/share/zoneinfo/America/North_Dakota/Center
 ./usr/share/zoneinfo/America/North_Dakota/New_Salem
+./usr/share/zoneinfo/America/Nuuk
 ./usr/share/zoneinfo/America/Ojinaga
 ./usr/share/zoneinfo/America/Panama
 ./usr/share/zoneinfo/America/Pangnirtung
@@ -6228,7 +6242,6 @@
 ./usr/share/zoneinfo/US/Michigan
 ./usr/share/zoneinfo/US/Mountain
 ./usr/share/zoneinfo/US/Pacific
-./usr/share/zoneinfo/US/Pacific-New
 ./usr/share/zoneinfo/US/Samoa
 ./usr/share/zoneinfo/UTC
 ./usr/share/zoneinfo/Universal

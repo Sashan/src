@@ -1,4 +1,4 @@
-#	$OpenBSD: changelist,v 1.125 2019/08/12 13:28:15 claudio Exp $
+#	$OpenBSD: changelist,v 1.127 2020/09/13 10:03:46 ajacoutot Exp $
 #
 # List of files which the security script backs up and checks
 # for modifications.
@@ -60,6 +60,7 @@
 /etc/ldpd.conf
 /etc/locate.rc
 /etc/login.conf
+/etc/login_ldap.conf
 /etc/mail.rc
 /etc/mail/aliases
 /etc/mail/smtpd.conf
@@ -165,3 +166,5 @@
 /var/unbound/etc/unbound.conf
 /var/yp/Makefile.main
 /var/yp/Makefile.yp
+/.cshrc
+/.profile

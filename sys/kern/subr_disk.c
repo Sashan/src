@@ -1,4 +1,4 @@
-/*	$OpenBSD: subr_disk.c,v 1.236 2020/03/13 09:30:22 mpi Exp $	*/
+/*	$OpenBSD: subr_disk.c,v 1.238 2021/01/19 19:36:48 mvs Exp $	*/
 /*	$NetBSD: subr_disk.c,v 1.17 1996/03/16 23:17:08 christos Exp $	*/
 
 /*
@@ -63,7 +63,6 @@
 
 #include <net/if.h>
 
-#include <dev/rndvar.h>
 #include <dev/cons.h>
 
 #include <lib/libz/zlib.h>
@@ -1611,10 +1610,12 @@ gotswap:
 	}
 
 	if (bootdv != NULL && bootdv->dv_class == DV_IFNET)
-		ifp = ifunit(bootdv->dv_xname);
+		ifp = if_unit(bootdv->dv_xname);
 
-	if (ifp)
+	if (ifp) {
 		if_addgroup(ifp, "netboot");
+		if_put(ifp);
+	}
 
 	switch (rootdv->dv_class) {
 #if defined(NFSCLIENT)

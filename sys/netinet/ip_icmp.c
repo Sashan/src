@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_icmp.c,v 1.181 2018/11/28 08:15:29 claudio Exp $	*/
+/*	$OpenBSD: ip_icmp.c,v 1.184 2020/12/20 21:15:47 bluhm Exp $	*/
 /*	$NetBSD: ip_icmp.c,v 1.19 1996/02/13 23:42:22 christos Exp $	*/
 
 /*
@@ -123,7 +123,14 @@ static struct timeval icmperrppslim_last;
 static struct rttimer_queue *icmp_redirect_timeout_q = NULL;
 struct cpumem *icmpcounters;
 
-int *icmpctl_vars[ICMPCTL_MAXID] = ICMPCTL_VARS;
+const struct sysctl_bounded_args icmpctl_vars[] =  {
+	{ ICMPCTL_MASKREPL, &icmpmaskrepl, 0, 1 },
+	{ ICMPCTL_BMCASTECHO, &icmpbmcastecho, 0, 1 },
+	{ ICMPCTL_ERRPPSLIMIT, &icmperrppslim, -1, INT_MAX },
+	{ ICMPCTL_REDIRACCEPT, &icmp_rediraccept, 0, 1 },
+	{ ICMPCTL_TSTAMPREPL, &icmptstamprepl, 0, 1 },
+};
+
 
 void icmp_mtudisc_timeout(struct rtentry *, struct rttimer *);
 int icmp_ratelimit(const struct in_addr *, const int, const int);
@@ -891,14 +898,10 @@ icmp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		break;
 
 	default:
-		if (name[0] < ICMPCTL_MAXID) {
-			NET_LOCK();
-			error = sysctl_int_arr(icmpctl_vars, name, namelen,
-			    oldp, oldlenp, newp, newlen);
-			NET_UNLOCK();
-			break;
-		}
-		error = ENOPROTOOPT;
+		NET_LOCK();
+		error = sysctl_bounded_arr(icmpctl_vars, nitems(icmpctl_vars),
+		    name, namelen, oldp, oldlenp, newp, newlen);
+		NET_UNLOCK();
 		break;
 	}
 
@@ -925,7 +928,7 @@ icmp_sysctl_icmpstat(void *oldp, size_t *oldlenp, void *newp)
 }
 
 struct rtentry *
-icmp_mtudisc_clone(struct in_addr dst, u_int rtableid)
+icmp_mtudisc_clone(struct in_addr dst, u_int rtableid, int ipsec)
 {
 	struct sockaddr_in sin;
 	struct rtentry *rt;
@@ -939,7 +942,10 @@ icmp_mtudisc_clone(struct in_addr dst, u_int rtableid)
 	rt = rtalloc(sintosa(&sin), RT_RESOLVE, rtableid);
 
 	/* Check if the route is actually usable */
-	if (!rtisvalid(rt) || (rt->rt_flags & (RTF_REJECT|RTF_BLACKHOLE)))
+	if (!rtisvalid(rt))
+		goto bad;
+	/* IPsec needs the route only for PMTU, it can use reject for that */
+	if (!ipsec && (rt->rt_flags & (RTF_REJECT|RTF_BLACKHOLE)))
 		goto bad;
 
 	/*
@@ -997,7 +1003,7 @@ icmp_mtudisc(struct icmp *icp, u_int rtableid)
 	struct ifnet *ifp;
 	u_long mtu = ntohs(icp->icmp_nextmtu);  /* Why a long?  IPv6 */
 
-	rt = icmp_mtudisc_clone(icp->icmp_ip.ip_dst, rtableid);
+	rt = icmp_mtudisc_clone(icp->icmp_ip.ip_dst, rtableid, 0);
 	if (rt == NULL)
 		return;
 

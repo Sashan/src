@@ -25,7 +25,11 @@
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
+
 #include <asm/unaligned.h>
+
+#include <drm/drm_device.h>
+#include <drm/drm_util.h>
 
 #define ATOM_DEBUG
 
@@ -1318,9 +1322,7 @@ struct atom_context *atom_parse(struct card_info *card, void *bios)
 			break;
 		}
 	}
-#ifdef DRMDEBUG
 	pr_info("ATOM BIOS: %s\n", name);
-#endif
 
 	return ctx;
 }

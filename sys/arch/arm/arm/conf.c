@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.c,v 1.54 2020/01/23 02:40:21 dlg Exp $	*/
+/*	$OpenBSD: conf.c,v 1.56 2021/01/23 05:08:34 thfr Exp $	*/
 /*	$NetBSD: conf.c,v 1.10 2002/04/19 01:04:38 wiz Exp $	*/
 
 /*
@@ -73,6 +73,7 @@
 #include "pty.h"
 #include "tun.h"
 #include "ksyms.h"
+#include "kstat.h"
 
 /*
  * APM interface
@@ -125,6 +126,7 @@ cdev_decl(pci);
 #include "ugen.h"
 #include "uhid.h"
 #include "fido.h"
+#include "ujoy.h"
 #include "ulpt.h"
 
 /*
@@ -321,7 +323,7 @@ struct cdevsw cdevsw[] = {
 	cdev_notdef(),				/* 48: reserved */
 	cdev_notdef(),				/* 49: reserved */
 	cdev_notdef(),				/* 50: reserved */
-	cdev_notdef(),				/* 51: reserved */
+	cdev_kstat_init(NKSTAT,kstat),		/* 51: kernel statistics */
  	cdev_bio_init(NBIO,bio),		/* 52: ioctl tunnel */
 	cdev_notdef(),				/* 53: reserved */
 	cdev_notdef(),				/* 54 was FOOTBRIDGE console */
@@ -382,6 +384,7 @@ struct cdevsw cdevsw[] = {
 	cdev_switch_init(NSWITCH,switch),	/* 105: switch(4) control interface */
 	cdev_fido_init(NFIDO,fido),		/* 106: FIDO/U2F security key */
 	cdev_pppx_init(NPPPX,pppac),		/* 107: PPP Access Concentrator */
+	cdev_ujoy_init(NUJOY,ujoy),		/* 108: USB joystick/gamecontroller */
 };
 
 int nblkdev = nitems(bdevsw);

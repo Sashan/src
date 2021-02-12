@@ -1,4 +1,4 @@
-/* $OpenBSD: mdoc_html.c,v 1.211 2020/03/13 00:31:05 schwarze Exp $ */
+/* $OpenBSD: mdoc_html.c,v 1.216 2020/10/16 17:22:39 schwarze Exp $ */
 /*
  * Copyright (c) 2014-2020 Ingo Schwarze <schwarze@openbsd.org>
  * Copyright (c) 2008-2011, 2014 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -347,12 +347,11 @@ print_mdoc_node(MDOC_ARGS)
 	if (n->type == ROFFT_COMMENT || n->flags & NODE_NOPRT)
 		return;
 
-	if (n->flags & NODE_NOFILL) {
-		html_fillmode(h, ROFF_nf);
-		if (n->flags & NODE_LINE)
-			print_endline(h);
-	} else
+	if ((n->flags & NODE_NOFILL) == 0)
 		html_fillmode(h, ROFF_fi);
+	else if (html_fillmode(h, ROFF_nf) == ROFF_nf &&
+	    n->tok != ROFF_fi && n->flags & NODE_LINE)
+		print_endline(h);
 
 	child = 1;
 	n->flags &= ~NODE_ENDED;
@@ -375,10 +374,13 @@ print_mdoc_node(MDOC_ARGS)
 		}
 		t = h->tag;
 		t->refcnt++;
-		if (NODE_DELIMC & n->flags)
+		if (n->flags & NODE_DELIMC)
 			h->flags |= HTML_NOSPACE;
-		print_text(h, n->string);
-		if (NODE_DELIMO & n->flags)
+		if (n->flags & NODE_HREF)
+			print_tagged_text(h, n->string, n);
+		else
+			print_text(h, n->string);
+		if (n->flags & NODE_DELIMO)
 			h->flags |= HTML_NOSPACE;
 		break;
 	case ROFFT_EQN:
@@ -567,7 +569,6 @@ mdoc_sh_pre(MDOC_ARGS)
 		print_otag(h, TAG_SECTION, "c", "Sh");
 		break;
 	case ROFFT_HEAD:
-		n->flags |= NODE_ID;
 		print_otag_id(h, TAG_H1, "Sh", n);
 		break;
 	case ROFFT_BODY:
@@ -589,7 +590,6 @@ mdoc_ss_pre(MDOC_ARGS)
 		print_otag(h, TAG_SECTION, "c", "Ss");
 		break;
 	case ROFFT_HEAD:
-		n->flags |= NODE_ID;
 		print_otag_id(h, TAG_H2, "Ss", n);
 		break;
 	case ROFFT_BODY:
@@ -692,8 +692,10 @@ mdoc_tg_pre(MDOC_ARGS)
 {
 	char	*id;
 
-	if ((id = html_make_id(n, 1)) != NULL)
+	if ((id = html_make_id(n, 1)) != NULL) {
 		print_tagq(h, print_otag(h, TAG_MARK, "i", id));
+		free(id);
+	}
 	return 0;
 }
 
@@ -741,7 +743,7 @@ mdoc_it_pre(MDOC_ARGS)
 		case ROFFT_HEAD:
 			return 0;
 		case ROFFT_BODY:
-			print_otag(h, TAG_LI, "");
+			print_otag_id(h, TAG_LI, NULL, n);
 			break;
 		default:
 			break;
@@ -753,7 +755,7 @@ mdoc_it_pre(MDOC_ARGS)
 	case LIST_ohang:
 		switch (n->type) {
 		case ROFFT_HEAD:
-			print_otag(h, TAG_DT, "");
+			print_otag_id(h, TAG_DT, NULL, n);
 			break;
 		case ROFFT_BODY:
 			print_otag(h, TAG_DD, "");
@@ -765,7 +767,7 @@ mdoc_it_pre(MDOC_ARGS)
 	case LIST_tag:
 		switch (n->type) {
 		case ROFFT_HEAD:
-			print_otag(h, TAG_DT, "");
+			print_otag_id(h, TAG_DT, NULL, n);
 			break;
 		case ROFFT_BODY:
 			if (n->child == NULL) {
@@ -786,7 +788,7 @@ mdoc_it_pre(MDOC_ARGS)
 			print_otag(h, TAG_TD, "");
 			break;
 		default:
-			print_otag(h, TAG_TR, "");
+			print_otag_id(h, TAG_TR, NULL, n);
 		}
 	default:
 		break;
@@ -852,8 +854,8 @@ mdoc_bl_pre(MDOC_ARGS)
 	case LIST_tag:
 		if (bl->offs)
 			print_otag(h, TAG_DIV, "c", "Bd-indent");
-		print_otag(h, TAG_DL, "c", bl->comp ?
-		    "Bl-tag Bl-compact" : "Bl-tag");
+		print_otag_id(h, TAG_DL,
+		    bl->comp ? "Bl-tag Bl-compact" : "Bl-tag", n->body);
 		return 1;
 	case LIST_column:
 		elemtype = TAG_TABLE;
@@ -866,7 +868,7 @@ mdoc_bl_pre(MDOC_ARGS)
 		(void)strlcat(cattr, " Bd-indent", sizeof(cattr));
 	if (bl->comp)
 		(void)strlcat(cattr, " Bl-compact", sizeof(cattr));
-	print_otag(h, elemtype, "c", cattr);
+	print_otag_id(h, elemtype, cattr, n->body);
 	return 1;
 }
 
@@ -898,15 +900,15 @@ mdoc_d1_pre(MDOC_ARGS)
 	switch (n->type) {
 	case ROFFT_BLOCK:
 		html_close_paragraph(h);
-		break;
+		return 1;
 	case ROFFT_HEAD:
 		return 0;
 	case ROFFT_BODY:
-		return 1;
+		break;
 	default:
 		abort();
 	}
-	print_otag(h, TAG_DIV, "c", "Bd Bd-indent");
+	print_otag_id(h, TAG_DIV, "Bd Bd-indent", n);
 	if (n->tok == MDOC_Dl)
 		print_otag(h, TAG_CODE, "c", "Li");
 	return 1;
@@ -963,7 +965,7 @@ mdoc_bd_pre(MDOC_ARGS)
 	    strcmp(n->norm->Bd.offs, "left") != 0)
 		(void)strlcat(buf, " Bd-indent", sizeof(buf));
 
-	print_otag(h, TAG_DIV, "c", buf);
+	print_otag_id(h, TAG_DIV, buf, n);
 	return 1;
 }
 
@@ -1208,13 +1210,21 @@ mdoc_skip_pre(MDOC_ARGS)
 static int
 mdoc_pp_pre(MDOC_ARGS)
 {
+	char	*id;
+
 	if (n->flags & NODE_NOFILL) {
 		print_endline(h);
-		h->col = 1;
-		print_endline(h);
+		if (n->flags & NODE_ID)
+			mdoc_tg_pre(meta, n, h);
+		else {
+			h->col = 1;
+			print_endline(h);
+		}
 	} else {
 		html_close_paragraph(h);
-		print_otag(h, TAG_P, "c", "Pp");
+		id = n->flags & NODE_ID ? html_make_id(n, 1) : NULL;
+		print_otag(h, TAG_P, "ci", "Pp", id);
+		free(id);
 	}
 	return 0;
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_wi.c,v 1.171 2019/12/31 10:05:32 mpi Exp $	*/
+/*	$OpenBSD: if_wi.c,v 1.174 2020/07/10 13:26:37 patrick Exp $	*/
 
 /*
  * Copyright (c) 1997, 1998, 1999
@@ -512,7 +512,7 @@ wi_intr(void *vsc)
 	if (status == 0)
 		return (0);
 
-	if (!IFQ_IS_EMPTY(&ifp->if_snd))
+	if (!ifq_empty(&ifp->if_snd))
 		wi_start(ifp);
 
 	return (1);
@@ -1865,8 +1865,8 @@ wi_ioctl(struct ifnet *ifp, u_long command, caddr_t data)
 		timeout_add(&sc->wi_scan_timeout, len);
 
 		/* Let the userspace process wait for completion */
-		error = tsleep(&sc->wi_scan_lock, PCATCH, "wiscan",
-		    hz * IEEE80211_SCAN_TIMEOUT);
+		error = tsleep_nsec(&sc->wi_scan_lock, PCATCH, "wiscan",
+		    SEC_TO_NSEC(IEEE80211_SCAN_TIMEOUT));
 		break;
 	case SIOCG80211ALLNODES:
 	    {
@@ -2329,7 +2329,7 @@ wi_start(struct ifnet *ifp)
 		return;
 
 nextpkt:
-	IFQ_DEQUEUE(&ifp->if_snd, m0);
+	m0 = ifq_dequeue(&ifp->if_snd);
 	if (m0 == NULL)
 		return;
 

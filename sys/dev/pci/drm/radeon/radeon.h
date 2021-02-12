@@ -68,6 +68,10 @@
 #include <linux/hashtable.h>
 #include <linux/dma-fence.h>
 
+#ifdef CONFIG_MMU_NOTIFIER
+#include <linux/mmu_notifier.h>
+#endif
+
 #include <drm/ttm/ttm_bo_api.h>
 #include <drm/ttm/ttm_bo_driver.h>
 #include <drm/ttm/ttm_placement.h>
@@ -75,12 +79,13 @@
 #include <drm/ttm/ttm_execbuf_util.h>
 
 #include <drm/drm_gem.h>
-
-#include <drm/drmP.h>
+#include <drm/drm_legacy.h>
 
 #include <dev/wscons/wsconsio.h>
 #include <dev/wscons/wsdisplayvar.h>
 #include <dev/rasops/rasops.h>
+
+#include <dev/pci/pcivar.h>
 
 #ifdef __sparc64__
 #include <machine/fbvar.h>
@@ -458,10 +463,7 @@ struct radeon_surface_reg {
  * TTM.
  */
 struct radeon_mman {
-	struct ttm_bo_global_ref        bo_global_ref;
-	struct drm_global_reference	mem_global_ref;
 	struct ttm_bo_device		bdev;
-	bool				mem_global_referenced;
 	bool				initialized;
 
 #if defined(CONFIG_DEBUG_FS)
@@ -518,15 +520,15 @@ struct radeon_bo {
 	struct list_head		va;
 	/* Constant after initialization */
 	struct radeon_device		*rdev;
-	struct drm_gem_object		gem_base;
 
 	struct ttm_bo_kmap_obj		dma_buf_vmap;
 	pid_t				pid;
 
-	struct radeon_mn		*mn;
-	struct list_head		mn_list;
+#ifdef CONFIG_MMU_NOTIFIER
+	struct mmu_interval_notifier	notifier;
+#endif
 };
-#define gem_to_radeon_bo(gobj) container_of((gobj), struct radeon_bo, gem_base)
+#define gem_to_radeon_bo(gobj) container_of((gobj), struct radeon_bo, tbo.base)
 
 int radeon_gem_debugfs_init(struct radeon_device *rdev);
 
@@ -633,7 +635,7 @@ void radeon_sync_fence(struct radeon_sync *sync,
 		       struct radeon_fence *fence);
 int radeon_sync_resv(struct radeon_device *rdev,
 		     struct radeon_sync *sync,
-		     struct reservation_object *resv,
+		     struct dma_resv *resv,
 		     bool shared);
 int radeon_sync_rings(struct radeon_device *rdev,
 		      struct radeon_sync *sync,
@@ -735,6 +737,7 @@ struct radeon_doorbell {
 	/* doorbell mmio */
 	resource_size_t		base;
 	resource_size_t		size;
+	u32 __iomem		*ptr;
 	bus_space_handle_t	bsh;
 	u32			num_doorbells;	/* Number of doorbells actually reserved for radeon. */
 	DECLARE_BITMAP(used, RADEON_MAX_DOORBELLS);
@@ -931,7 +934,7 @@ struct radeon_vm_id {
 struct radeon_vm {
 	struct rwlock		mutex;
 
-	struct rb_root		va;
+	struct rb_root_cached	va;
 
 	/* protecting invalidated and freed */
 	spinlock_t		status_lock;
@@ -1603,7 +1606,7 @@ void radeon_dpm_enable_vce(struct radeon_device *rdev, bool enable);
 struct radeon_pm {
 	struct rwlock		mutex;
 	/* write locked while reprogramming mclk */
-	struct rwlock	mclk_lock;
+	struct rwlock		mclk_lock;
 	u32			active_crtcs;
 	int			active_crtc_count;
 	int			req_vblank;
@@ -1927,20 +1930,20 @@ struct radeon_asic {
 					     uint64_t src_offset,
 					     uint64_t dst_offset,
 					     unsigned num_gpu_pages,
-					     struct reservation_object *resv);
+					     struct dma_resv *resv);
 		u32 blit_ring_index;
 		struct radeon_fence *(*dma)(struct radeon_device *rdev,
 					    uint64_t src_offset,
 					    uint64_t dst_offset,
 					    unsigned num_gpu_pages,
-					    struct reservation_object *resv);
+					    struct dma_resv *resv);
 		u32 dma_ring_index;
 		/* method used for bo copy */
 		struct radeon_fence *(*copy)(struct radeon_device *rdev,
 					     uint64_t src_offset,
 					     uint64_t dst_offset,
 					     unsigned num_gpu_pages,
-					     struct reservation_object *resv);
+					     struct dma_resv *resv);
 		/* ring used for bo copies */
 		u32 copy_ring_index;
 	} copy;
@@ -2397,6 +2400,7 @@ struct radeon_device {
 	/* protects concurrent ENDPOINT (audio) register access */
 	spinlock_t end_idx_lock;
 	bus_space_handle_t		rmmio_bsh;
+	void __iomem			*rmmio;
 	radeon_rreg_t			mc_rreg;
 	radeon_wreg_t			mc_wreg;
 	radeon_rreg_t			pll_rreg;
@@ -2431,7 +2435,6 @@ struct radeon_device {
 	struct radeon_wb		wb;
 	struct radeon_dummy_page	dummy_page;
 	bool				shutdown;
-	bool				need_dma32;
 	bool				need_swiotlb;
 	bool				accel_working;
 	bool				fastfb_working; /* IGP feature*/
@@ -2488,18 +2491,13 @@ struct radeon_device {
 	u32 cg_flags;
 	u32 pg_flags;
 
-#ifdef __linux__
 	struct dev_pm_domain vga_pm_domain;
-#endif
 	bool have_disp_power_ref;
 	u32 px_quirk_flags;
 
 	/* tracking pinned memory */
 	u64 vram_pin_size;
 	u64 gart_pin_size;
-
-	struct rwlock	mn_lock;
-	DECLARE_HASHTABLE(mn_hash, 7);
 };
 
 bool radeon_is_px(struct drm_device *dev);
@@ -2519,7 +2517,7 @@ static inline uint32_t r100_mm_rreg(struct radeon_device *rdev, uint32_t reg,
 {
 	/* The mmio size is 64kb at minimum. Allows the if to be optimized out. */
 	if ((reg < rdev->rmmio_size || reg < RADEON_MIN_MMIO_SIZE) && !always_indirect)
-		return bus_space_read_4(rdev->memt, rdev->rmmio_bsh, reg);
+		return readl(((void __iomem *)rdev->rmmio) + reg);
 	else
 		return r100_mm_rreg_slow(rdev, reg);
 }
@@ -2527,7 +2525,7 @@ static inline void r100_mm_wreg(struct radeon_device *rdev, uint32_t reg, uint32
 				bool always_indirect)
 {
 	if ((reg < rdev->rmmio_size || reg < RADEON_MIN_MMIO_SIZE) && !always_indirect)
-		bus_space_write_4(rdev->memt, rdev->rmmio_bsh, reg, v);
+		writel(v, ((void __iomem *)rdev->rmmio) + reg);
 	else
 		r100_mm_wreg_slow(rdev, reg, v);
 }
@@ -2556,14 +2554,10 @@ static inline struct radeon_fence *to_radeon_fence(struct dma_fence *f)
 /*
  * Registers read & write functions.
  */
-#define RREG8(reg) \
-	bus_space_read_1(rdev->memt, rdev->rmmio_bsh, (reg))
-#define WREG8(reg, v) \
-	bus_space_write_1(rdev->memt, rdev->rmmio_bsh, (reg), (v))
-#define RREG16(reg) \
-	bus_space_read_2(rdev->memt, rdev->rmmio_bsh, (reg))
-#define WREG16(reg, v) \
-	bus_space_write_2(rdev->memt, rdev->rmmio_bsh, (reg), (v))
+#define RREG8(reg) readb((rdev->rmmio) + (reg))
+#define WREG8(reg, v) writeb(v, (rdev->rmmio) + (reg))
+#define RREG16(reg) readw((rdev->rmmio) + (reg))
+#define WREG16(reg, v) writew(v, (rdev->rmmio) + (reg))
 #define RREG32(reg) r100_mm_rreg(rdev, (reg), false)
 #define RREG32_IDX(reg) r100_mm_rreg(rdev, (reg), true)
 #define DREG32(reg) pr_info("REGISTER: " #reg " : 0x%08X\n",	\

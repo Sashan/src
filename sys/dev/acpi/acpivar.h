@@ -1,4 +1,4 @@
-/*	$OpenBSD: acpivar.h,v 1.105 2019/09/07 13:46:20 kettenis Exp $	*/
+/*	$OpenBSD: acpivar.h,v 1.113 2020/12/06 21:19:55 kettenis Exp $	*/
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  *
@@ -43,6 +43,7 @@ extern int acpi_debug;
 #endif
 
 extern int acpi_hasprocfvs;
+extern int acpi_haspci;
 
 struct klist;
 struct acpiec_softc;
@@ -64,6 +65,13 @@ struct acpi_attach_args {
 	struct aml_node *aaa_node;
 	const char	*aaa_dev;
 	const char	*aaa_cdev;
+	uint64_t	 aaa_addr[4];
+	uint64_t	 aaa_size[4];
+	bus_space_tag_t	 aaa_bst[4];
+	int		 aaa_naddr;
+	uint32_t	 aaa_irq[8];
+	uint32_t	 aaa_irq_flags[8];
+	int		 aaa_nirq;
 };
 
 struct acpi_mem_map {
@@ -208,7 +216,8 @@ struct acpi_softc {
 
 	bus_space_tag_t		sc_iot;
 	bus_space_tag_t		sc_memt;
-	bus_dma_tag_t		sc_dmat;
+	bus_dma_tag_t		sc_cc_dmat;
+	bus_dma_tag_t		sc_ci_dmat;
 
 	/*
 	 * First-level ACPI tables
@@ -238,7 +247,6 @@ struct acpi_softc {
 		int slp_typa;
 		int slp_typb;
 	}			sc_sleeptype[6];
-	int			sc_maxgpe;
 	int			sc_lastgpe;
 
 	struct gpe_block	*gpe_table;
@@ -270,6 +278,8 @@ struct acpi_softc {
 	int			sc_pse;		/* passive cooling enabled */
 
 	int			sc_flags;
+
+	int			sc_skip_processor;
 };
 
 extern struct acpi_softc *acpi_softc;
@@ -371,6 +381,7 @@ int	acpi_matchhids(struct acpi_attach_args *, const char *[], const char *);
 int	acpi_parsehid(struct aml_node *, void *, char *, char *, size_t);
 int64_t	acpi_getsta(struct acpi_softc *sc, struct aml_node *);
 
+int	acpi_getprop(struct aml_node *, const char *, void *, int);
 uint32_t acpi_getpropint(struct aml_node *, const char *, uint32_t);
 
 int	acpi_record_event(struct acpi_softc *, u_int);
@@ -394,6 +405,7 @@ struct aml_node *acpi_find_pci(pci_chipset_tag_t, pcitag_t);
 
 void	*acpi_intr_establish(int, int, int, int (*)(void *), void *,
 	    const char *);
+void	acpi_intr_disestablish(void *);
 
 struct acpi_q *acpi_maptable(struct acpi_softc *sc, paddr_t,
 	    const char *, const char *, const char *, int);

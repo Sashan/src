@@ -1,4 +1,4 @@
-#	$OpenBSD: RAMDISK_CD,v 1.188 2020/02/15 08:49:11 stsp Exp $
+#	$OpenBSD: RAMDISK_CD,v 1.190 2020/12/27 23:05:37 deraadt Exp $
 
 machine		amd64
 maxusers	4
@@ -30,13 +30,14 @@ bios0		at mainbus?
 
 acpi0		at bios?
 #acpitimer*	at acpi?
-#acpihpet*	at acpi?
+acpihpet*	at acpi?
 #acpiac*	at acpi?
 #acpibat*	at acpi?
 #acpibtn*	at acpi?
 #acpicpu*	at acpi?
 acpicmos*	at acpi?
 acpiec*		at acpi?
+acpipci*	at acpi?
 acpiprt*	at acpi?
 acpimadt0	at acpi?
 #acpitz*	at acpi?

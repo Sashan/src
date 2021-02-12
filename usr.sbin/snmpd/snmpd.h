@@ -1,4 +1,4 @@
-/*	$OpenBSD: snmpd.h,v 1.86 2020/01/02 10:55:53 florian Exp $	*/
+/*	$OpenBSD: snmpd.h,v 1.94 2021/02/05 10:30:45 martijn Exp $	*/
 
 /*
  * Copyright (c) 2007, 2008, 2012 Reyk Floeter <reyk@openbsd.org>
@@ -48,8 +48,8 @@
 #define CONF_FILE		"/etc/snmpd.conf"
 #define SNMPD_SOCKET		"/var/run/snmpd.sock"
 #define SNMPD_USER		"_snmpd"
-#define SNMPD_PORT		161
-#define SNMPD_TRAPPORT		162
+#define SNMP_PORT		"161"
+#define SNMPTRAP_PORT		"162"
 
 #define SNMPD_MAXSTRLEN		484
 #define SNMPD_MAXCOMMUNITYLEN	SNMPD_MAXSTRLEN
@@ -88,7 +88,7 @@ enum imsg_type {
 	IMSG_CTL_VERBOSE,
 	IMSG_CTL_RELOAD,
 	IMSG_CTL_PROCFD,
-	IMSG_ALERT
+	IMSG_TRAP_EXEC
 };
 
 struct imsgev {
@@ -107,28 +107,13 @@ struct imsgev {
 } while (0)
 #define IMSG_DATA_SIZE(imsg)	((imsg)->hdr.len - IMSG_HEADER_SIZE)
 
-/* initially control.h */
-struct control_sock {
-	const char	*cs_name;
-	struct event	 cs_ev;
-	struct event	 cs_evt;
-	int		 cs_fd;
-	int		 cs_restricted;
-	int		 cs_agentx;
-	void		*cs_env;
-
-	TAILQ_ENTRY(control_sock) cs_entry;
-};
-TAILQ_HEAD(control_socks, control_sock);
-
 enum privsep_procid {
 	PROC_PARENT,	/* Parent process and application interface */
 	PROC_SNMPE,	/* SNMP engine */
-	PROC_TRAP,	/* SNMP trap receiver */
 	PROC_MAX
 };
 
-enum privsep_procid privsep_process;
+extern enum privsep_procid privsep_process;
 
 /* Attach the control socket to the following process */
 #define PROC_CONTROL	PROC_SNMPE
@@ -149,9 +134,6 @@ struct privsep {
 	u_int			 ps_instances[PROC_MAX];
 	u_int			 ps_instance;
 	int			 ps_noaction;
-
-	struct control_sock	 ps_csock;
-	struct control_socks	 ps_rcsocks;
 
 	/* Event and signal handlers */
 	struct event		 ps_evsigint;
@@ -359,12 +341,8 @@ struct ctl_conn {
 #define CTL_CONN_NOTIFY		 0x01
 #define CTL_CONN_LOCKED		 0x02	/* restricted mode */
 	struct imsgev		 iev;
-	struct control_sock	*cs;
-	struct agentx_handle	*handle;
 	struct oidlist		 oids;
 };
-TAILQ_HEAD(ctl_connlist, ctl_conn);
-extern  struct ctl_connlist ctl_conns;
 
 /*
  * pf
@@ -405,8 +383,11 @@ struct snmp_message {
 	struct sockaddr_storage	 sm_ss;
 	socklen_t		 sm_slen;
 	int			 sm_sock_tcp;
+	int			 sm_aflags;
+	int			 sm_type;
 	struct event		 sm_sockev;
 	char			 sm_host[HOST_NAME_MAX+1];
+	in_port_t		 sm_port;
 
 	struct sockaddr_storage	 sm_local_ss;
 	socklen_t		 sm_local_slen;
@@ -415,19 +396,12 @@ struct snmp_message {
 	struct ber_element	*sm_req;
 	struct ber_element	*sm_resp;
 
-	int			 sm_i;
-	struct ber_element	*sm_a;
-	struct ber_element	*sm_b;
-	struct ber_element	*sm_c;
-	struct ber_element	*sm_next;
-	struct ber_element	*sm_last;
-	struct ber_element	*sm_end;
-
 	u_int8_t		 sm_data[READ_BUF_SIZE];
 	size_t			 sm_datalen;
 
+	uint32_t		 sm_transactionid;
+
 	u_int			 sm_version;
-	u_int			 sm_state;
 
 	/* V1, V2c */
 	char			 sm_community[SNMPD_MAXCOMMUNITYLEN];
@@ -464,7 +438,11 @@ struct snmp_message {
 
 	struct ber_element	*sm_varbind;
 	struct ber_element	*sm_varbindresp;
+
+	RB_ENTRY(snmp_message)	 sm_entry;
 };
+RB_HEAD(snmp_messages, snmp_message);
+extern struct snmp_messages snmp_messages;
 
 /* Defined in SNMPv2-MIB.txt (RFC 3418) */
 struct snmp_stats {
@@ -511,25 +489,29 @@ struct snmp_stats {
 struct address {
 	struct sockaddr_storage	 ss;
 	in_port_t		 port;
-	int			 ipproto;
+	int			 type;
+	int			 flags;
+	int			 fd;
+	struct event		 ev;
+	struct event		 evt;
 
 	TAILQ_ENTRY(address)	 entry;
-
-	/* For SNMP trap receivers etc. */
-	char			*sa_community;
-	struct ber_oid		*sa_oid;
-	struct address		*sa_srcaddr;
 };
 TAILQ_HEAD(addresslist, address);
 
-struct listen_sock {
-	int				s_fd;
-	int				s_ipproto;
-	struct event			s_ev;
-	struct event			s_evt;
-	TAILQ_ENTRY(listen_sock)	entry;
+#define ADDRESS_FLAG_READ 0x1
+#define ADDRESS_FLAG_WRITE 0x2
+#define ADDRESS_FLAG_NOTIFY 0x4
+
+struct trap_address {
+	struct sockaddr_storage	 ss;
+	struct sockaddr_storage	 ss_local;
+	char			*sa_community;
+	struct ber_oid		*sa_oid;
+
+	TAILQ_ENTRY(trap_address) entry;
 };
-TAILQ_HEAD(socklist, listen_sock);
+TAILQ_HEAD(trap_addresslist, trap_address);
 
 enum usmauth {
 	AUTH_NONE = 0,
@@ -575,7 +557,6 @@ struct snmpd {
 
 	const char		*sc_confpath;
 	struct addresslist	 sc_addresses;
-	struct socklist		 sc_sockets;
 	struct timeval		 sc_starttime;
 	u_int32_t		 sc_engine_boots;
 
@@ -588,7 +569,7 @@ struct snmpd {
 
 	struct snmp_stats	 sc_stats;
 
-	struct addresslist	 sc_trapreceivers;
+	struct trap_addresslist	 sc_trapreceivers;
 
 	int			 sc_ncpu;
 	int64_t			*sc_cpustates;
@@ -616,10 +597,6 @@ RB_HEAD(trapcmd_tree, trapcmd);
 extern	struct trapcmd_tree trapcmd_tree;
 
 extern struct snmpd *snmpd_env;
-
-/* control.c */
-int		 control_init(struct privsep *, struct control_sock *);
-int		 control_listen(struct control_sock *);
 
 /* parse.y */
 struct snmpd	*parse_config(const char *, u_int);
@@ -671,12 +648,12 @@ struct kif_arp	*karp_getaddr(struct sockaddr *, u_short, int);
 void		 snmpe(struct privsep *, struct privsep_proc *);
 void		 snmpe_shutdown(void);
 void		 snmpe_dispatchmsg(struct snmp_message *);
+int		 snmp_messagecmp(struct snmp_message *, struct snmp_message *);
+RB_PROTOTYPE(snmp_messages, snmp_message, sm_entry, snmp_messagecmp)
 
 /* trap.c */
 void		 trap_init(void);
 int		 trap_imsg(struct imsgev *, pid_t);
-int		 trap_agentx(struct agentx_handle *, struct agentx_pdu *,
-		    int *, char **, int *);
 int		 trap_send(struct ber_oid *, struct ber_element *);
 
 /* mps.c */
@@ -749,7 +726,7 @@ char		*smi_print_element(struct ber_element *);
 void		 timer_init(void);
 
 /* snmpd.c */
-int		 snmpd_socket_af(struct sockaddr_storage *, in_port_t, int);
+int		 snmpd_socket_af(struct sockaddr_storage *, int);
 u_long		 snmpd_engine_time(void);
 char		*tohexstr(u_int8_t *, int);
 
@@ -799,23 +776,18 @@ struct imsgev *
 int	 proc_flush_imsg(struct privsep *, enum privsep_procid, int);
 
 /* traphandler.c */
-void	 traphandler(struct privsep *, struct privsep_proc *);
-void	 traphandler_shutdown(void);
-int	 snmpd_dispatch_traphandler(int, struct privsep_proc *, struct imsg *);
+int	 traphandler_parse(struct snmp_message *);
+int	 traphandler_priv_recvmsg(struct privsep_proc *, struct imsg *);
 void	 trapcmd_free(struct trapcmd *);
 int	 trapcmd_add(struct trapcmd *);
 struct trapcmd *
 	 trapcmd_lookup(struct ber_oid *);
 
 /* util.c */
-int	 varbind_convert(struct agentx_pdu *, struct agentx_varbind_hdr *,
-	    struct ber_element **, struct ber_element **);
 ssize_t	 sendtofrom(int, void *, size_t, int, struct sockaddr *,
 	    socklen_t, struct sockaddr *, socklen_t);
 ssize_t	 recvfromto(int, void *, size_t, int, struct sockaddr *,
 	    socklen_t *, struct sockaddr *, socklen_t *);
-void	 print_debug(const char *, ...);
-void	 print_verbose(const char *, ...);
 const char *log_in6addr(const struct in6_addr *);
 const char *print_host(struct sockaddr_storage *, char *, size_t);
 

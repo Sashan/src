@@ -1,4 +1,4 @@
-/*	$OpenBSD: roa.c,v 1.8 2019/11/29 05:14:11 benno Exp $ */
+/*	$OpenBSD: roa.c,v 1.13 2021/02/04 08:58:19 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -23,7 +23,8 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <openssl/ssl.h>
+#include <openssl/asn1.h>
+#include <openssl/x509.h>
 
 #include "extern.h"
 
@@ -325,13 +326,11 @@ out:
 }
 
 /*
- * Parse a full RFC 6482 file with a SHA256 digest "dgst" and signed by
- * the certificate "cacert" (the latter two are optional and may be
- * passed as NULL to disable).
+ * Parse a full RFC 6482 file.
  * Returns the ROA or NULL if the document was malformed.
  */
 struct roa *
-roa_parse(X509 **x509, const char *fn, const unsigned char *dgst)
+roa_parse(X509 **x509, const char *fn)
 {
 	struct parse	 p;
 	size_t		 cmsz;
@@ -344,7 +343,7 @@ roa_parse(X509 **x509, const char *fn, const unsigned char *dgst)
 	/* OID from section 2, RFC 6482. */
 
 	cms = cms_parse_validate(x509, fn,
-	    "1.2.840.113549.1.9.16.1.24", dgst, &cmsz);
+	    "1.2.840.113549.1.9.16.1.24", &cmsz);
 	if (cms == NULL)
 		return NULL;
 
@@ -390,29 +389,25 @@ roa_free(struct roa *p)
  * See roa_read() for reader.
  */
 void
-roa_buffer(char **b, size_t *bsz, size_t *bmax, const struct roa *p)
+roa_buffer(struct ibuf *b, const struct roa *p)
 {
 	size_t	 i;
 
-	io_simple_buffer(b, bsz, bmax, &p->valid, sizeof(int));
-	io_simple_buffer(b, bsz, bmax, &p->asid, sizeof(uint32_t));
-	io_simple_buffer(b, bsz, bmax, &p->ipsz, sizeof(size_t));
+	io_simple_buffer(b, &p->valid, sizeof(int));
+	io_simple_buffer(b, &p->asid, sizeof(uint32_t));
+	io_simple_buffer(b, &p->ipsz, sizeof(size_t));
 
 	for (i = 0; i < p->ipsz; i++) {
-		io_simple_buffer(b, bsz, bmax,
-		    &p->ips[i].afi, sizeof(enum afi));
-		io_simple_buffer(b, bsz, bmax,
-		    &p->ips[i].maxlength, sizeof(size_t));
-		io_simple_buffer(b, bsz, bmax,
-		    p->ips[i].min, sizeof(p->ips[i].min));
-		io_simple_buffer(b, bsz, bmax,
-		    p->ips[i].max, sizeof(p->ips[i].max));
-		ip_addr_buffer(b, bsz, bmax, &p->ips[i].addr);
+		io_simple_buffer(b, &p->ips[i].afi, sizeof(enum afi));
+		io_simple_buffer(b, &p->ips[i].maxlength, sizeof(size_t));
+		io_simple_buffer(b, p->ips[i].min, sizeof(p->ips[i].min));
+		io_simple_buffer(b, p->ips[i].max, sizeof(p->ips[i].max));
+		ip_addr_buffer(b, &p->ips[i].addr);
 	}
 
-	io_str_buffer(b, bsz, bmax, p->aki);
-	io_str_buffer(b, bsz, bmax, p->ski);
-	io_str_buffer(b, bsz, bmax, p->tal);
+	io_str_buffer(b, p->aki);
+	io_str_buffer(b, p->ski);
+	io_str_buffer(b, p->tal);
 }
 
 /*
@@ -447,6 +442,8 @@ roa_read(int fd)
 	io_str_read(fd, &p->aki);
 	io_str_read(fd, &p->ski);
 	io_str_read(fd, &p->tal);
+	assert(p->aki && p->ski && p->tal);
+
 	return p;
 }
 

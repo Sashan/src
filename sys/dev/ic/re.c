@@ -1,4 +1,4 @@
-/*	$OpenBSD: re.c,v 1.204 2019/11/19 06:34:10 kevlo Exp $	*/
+/*	$OpenBSD: re.c,v 1.208 2020/12/12 11:48:52 jan Exp $	*/
 /*	$FreeBSD: if_re.c,v 1.31 2004/09/04 07:54:05 ru Exp $	*/
 /*
  * Copyright (c) 1997, 1998-2003
@@ -198,8 +198,6 @@ void	in_delayed_cksum(struct mbuf *);
 struct cfdriver re_cd = {
 	0, "re", DV_IFNET
 };
-
-extern char *hw_vendor, *hw_prod;
 
 #define EE_SET(x)					\
 	CSR_WRITE_1(sc, RL_EECMD,			\
@@ -1008,7 +1006,7 @@ re_attach(struct rl_softc *sc, const char *intrstr)
 	ifp->if_qstart = re_start;
 	ifp->if_watchdog = re_watchdog;
 	ifp->if_hardmtu = sc->rl_max_mtu;
-	IFQ_SET_MAXLEN(&ifp->if_snd, sc->rl_ldata.rl_tx_desc_cnt);
+	ifq_set_maxlen(&ifp->if_snd, sc->rl_ldata.rl_tx_desc_cnt);
 
 	ifp->if_capabilities = IFCAP_VLAN_MTU | IFCAP_CSUM_TCPv4 |
 	    IFCAP_CSUM_UDPv4;
@@ -1127,7 +1125,7 @@ re_newbuf(struct rl_softc *sc)
 	u_int32_t	cmdstat;
 	int		error, idx;
 
-	m = MCLGETI(NULL, M_DONTWAIT, NULL, RL_FRAMELEN(sc->rl_max_mtu));
+	m = MCLGETL(NULL, M_DONTWAIT, RL_FRAMELEN(sc->rl_max_mtu));
 	if (!m)
 		return (ENOBUFS);
 
@@ -1398,10 +1396,12 @@ re_rxeof(struct rl_softc *sc)
 		ml_enqueue(&ml, m);
 	}
 
+	if (ifiq_input(&ifp->if_rcv, &ml))
+		if_rxr_livelocked(&sc->rl_ldata.rl_rx_ring);
+
 	sc->rl_ldata.rl_rx_considx = i;
 	re_rx_list_fill(sc);
 
-	if_input(ifp, &ml);
 
 	return (rx);
 }

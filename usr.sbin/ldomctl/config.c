@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.36 2020/03/17 21:24:22 kn Exp $	*/
+/*	$OpenBSD: config.c,v 1.42 2021/01/31 05:14:24 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2012, 2018 Mark Kettenis
@@ -80,6 +80,7 @@ struct device **pcie_busses;
 struct device **network_devices;
 struct mblock **mblocks;
 struct ldc_endpoint **ldc_endpoints;
+extern struct domain *domain;
 
 TAILQ_HEAD(, rootcomplex) rootcomplexes;
 
@@ -1142,6 +1143,8 @@ hvmd_finalize_pcie_device(struct md *md, struct device *device)
 	md_link_node(md, node, parent);
 
 	TAILQ_FOREACH(subdevice, &device->guest->subdevice_list, link) {
+		if (strncmp(path, subdevice->path, strlen(path)) != 0)
+			continue;
 		TAILQ_FOREACH(component, &components, link) {
 			if (strcmp(subdevice->path, component->path) == 0)
 				md_link_node(md, parent, component->hv_node);
@@ -2792,8 +2795,6 @@ build_config(const char *filename, int noaction)
 	SIMPLEQ_INIT(&conf.domain_list);
 	if (parse_config(filename, &conf) < 0)
 		exit(1);
-	if (noaction)
-		exit(0);
 
 	pri = md_read("pri");
 	if (pri == NULL)
@@ -2822,6 +2823,9 @@ build_config(const char *filename, int noaction)
 		errx(1, "not enough VCPU resources available");
 	if (memory > total_memory || primary_memory == 0)
 		errx(1, "not enough memory available");
+
+	if (noaction)
+		exit(0);
 
 	hvmd_init(hvmd);
 	primary = primary_init();

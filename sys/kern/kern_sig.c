@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sig.c,v 1.255 2020/03/20 08:14:07 claudio Exp $	*/
+/*	$OpenBSD: kern_sig.c,v 1.272 2021/02/08 10:51:01 mpi Exp $	*/
 /*	$NetBSD: kern_sig.c,v 1.54 1996/04/22 01:38:32 christos Exp $	*/
 
 /*
@@ -121,6 +121,8 @@ const int sigprop[NSIG + 1] = {
 #define	contsigmask	(sigmask(SIGCONT))
 #define	stopsigmask	(sigmask(SIGSTOP) | sigmask(SIGTSTP) | \
 			    sigmask(SIGTTIN) | sigmask(SIGTTOU))
+
+void setsigvec(struct proc *, int, struct sigaction *);
 
 void proc_stop(struct proc *p, int);
 void proc_stop_sweep(void *);
@@ -398,9 +400,8 @@ setsigvec(struct proc *p, int signum, struct sigaction *sa)
  * set to ignore signals that are ignored by default.
  */
 void
-siginit(struct process *pr)
+siginit(struct sigacts *ps)
 {
-	struct sigacts *ps = pr->ps_sigacts;
 	int i;
 
 	for (i = 0; i < NSIG; i++)
@@ -463,6 +464,8 @@ sys_sigprocmask(struct proc *p, void *v, register_t *retval)
 	int error = 0;
 	sigset_t mask;
 
+	KASSERT(p == curproc);
+
 	*retval = p->p_sigmask;
 	mask = SCARG(uap, mask) &~ sigcantmask;
 
@@ -520,7 +523,7 @@ sys_sigsuspend(struct proc *p, void *v, register_t *retval)
 	struct sigacts *ps = pr->ps_sigacts;
 
 	dosigsuspend(p, SCARG(uap, mask) &~ sigcantmask);
-	while (tsleep_nsec(ps, PPAUSE|PCATCH, "pause", INFSLP) == 0)
+	while (tsleep_nsec(ps, PPAUSE|PCATCH, "sigsusp", INFSLP) == 0)
 		/* void */;
 	/* always return EINTR rather than ERESTART... */
 	return (EINTR);
@@ -802,6 +805,7 @@ trapsignal(struct proc *p, int signum, u_long trapno, int code,
 	struct sigacts *ps = pr->ps_sigacts;
 	int mask;
 
+	KERNEL_LOCK();
 	switch (signum) {
 	case SIGILL:
 	case SIGBUS:
@@ -822,7 +826,10 @@ trapsignal(struct proc *p, int signum, u_long trapno, int code,
 			    p->p_sigmask, code, &si);
 		}
 #endif
-		sendsig(ps->ps_sigact[signum], signum, p->p_sigmask, &si);
+		if (sendsig(ps->ps_sigact[signum], signum, p->p_sigmask, &si)) {
+			sigexit(p, SIGILL);
+			/* NOTREACHED */
+		}
 		postsig_done(p, signum, ps);
 	} else {
 		p->p_sisig = signum;
@@ -842,6 +849,7 @@ trapsignal(struct proc *p, int signum, u_long trapno, int code,
 			sigexit(p, signum);
 		ptsignal(p, signum, STHREAD);
 	}
+	KERNEL_UNLOCK();
 }
 
 /*
@@ -1449,7 +1457,10 @@ postsig(struct proc *p, int signum)
 			p->p_sigval.sival_ptr = NULL;
 		}
 
-		sendsig(action, signum, returnmask, &si);
+		if (sendsig(action, signum, returnmask, &si)) {
+			sigexit(p, SIGILL);
+			/* NOTREACHED */
+		}
 		postsig_done(p, signum, ps);
 		splx(s);
 	}
@@ -1482,6 +1493,37 @@ sigexit(struct proc *p, int signum)
 	}
 	exit1(p, 0, signum, EXIT_NORMAL);
 	/* NOTREACHED */
+}
+
+/*
+ * Send uncatchable SIGABRT for coredump.
+ */
+void
+sigabort(struct proc *p)
+{
+	struct sigaction sa;
+
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = SIG_DFL;
+	setsigvec(p, SIGABRT, &sa);
+	atomic_clearbits_int(&p->p_sigmask, sigmask(SIGABRT));
+	psignal(p, SIGABRT);
+}
+
+/*
+ * Return 1 if `sig', a given signal, is ignored or masked for `p', a given
+ * thread, and 0 otherwise.
+ */
+int
+sigismasked(struct proc *p, int sig)
+{
+	struct process *pr = p->p_p;
+
+	if ((pr->ps_sigacts->ps_sigignore & sigmask(sig)) ||
+	    (p->p_sigmask & sigmask(sig)))
+	    	return 1;
+
+	return 0;
 }
 
 int nosuidcoredump = 1;
@@ -1803,6 +1845,7 @@ int
 filt_sigattach(struct knote *kn)
 {
 	struct process *pr = curproc->p_p;
+	int s;
 
 	if (kn->kn_id >= NSIG)
 		return EINVAL;
@@ -1810,8 +1853,9 @@ filt_sigattach(struct knote *kn)
 	kn->kn_ptr.p_process = pr;
 	kn->kn_flags |= EV_CLEAR;		/* automatically set */
 
-	/* XXX lock the proc here while adding to the list? */
-	SLIST_INSERT_HEAD(&pr->ps_klist, kn, kn_selnext);
+	s = splhigh();
+	klist_insert_locked(&pr->ps_klist, kn);
+	splx(s);
 
 	return (0);
 }
@@ -1820,8 +1864,11 @@ void
 filt_sigdetach(struct knote *kn)
 {
 	struct process *pr = kn->kn_ptr.p_process;
+	int s;
 
-	SLIST_REMOVE(&pr->ps_klist, kn, knote, kn_selnext);
+	s = splhigh();
+	klist_remove_locked(&pr->ps_klist, kn);
+	splx(s);
 }
 
 /*
@@ -1894,14 +1941,14 @@ userret(struct proc *p)
 }
 
 int
-single_thread_check(struct proc *p, int deep)
+single_thread_check_locked(struct proc *p, int deep, int s)
 {
 	struct process *pr = p->p_p;
 
+	SCHED_ASSERT_LOCKED();
+
 	if (pr->ps_single != NULL && pr->ps_single != p) {
 		do {
-			int s;
-
 			/* if we're in deep, we need to unwind to the edge */
 			if (deep) {
 				if (pr->ps_flags & PS_SINGLEUNWIND)
@@ -1910,23 +1957,38 @@ single_thread_check(struct proc *p, int deep)
 					return (EINTR);
 			}
 
+			if (pr->ps_single == NULL)
+				continue;
+
 			if (atomic_dec_int_nv(&pr->ps_singlecount) == 0)
 				wakeup(&pr->ps_singlecount);
+
 			if (pr->ps_flags & PS_SINGLEEXIT) {
+				SCHED_UNLOCK(s);
 				KERNEL_LOCK();
 				exit1(p, 0, 0, EXIT_THREAD_NOCHECK);
-				KERNEL_UNLOCK();
+				/* NOTREACHED */
 			}
 
 			/* not exiting and don't need to unwind, so suspend */
-			SCHED_LOCK(s);
 			p->p_stat = SSTOP;
 			mi_switch();
-			SCHED_UNLOCK(s);
 		} while (pr->ps_single != NULL);
 	}
 
 	return (0);
+}
+
+int
+single_thread_check(struct proc *p, int deep)
+{
+	int s, error;
+
+	SCHED_LOCK(s);
+	error = single_thread_check_locked(p, deep, s);
+	SCHED_UNLOCK(s);
+
+	return error;
 }
 
 /*
@@ -1945,13 +2007,17 @@ single_thread_set(struct proc *p, enum single_thread_mode mode, int deep)
 {
 	struct process *pr = p->p_p;
 	struct proc *q;
-	int error;
+	int error, s;
 
 	KERNEL_ASSERT_LOCKED();
 	KASSERT(curproc == p);
 
-	if ((error = single_thread_check(p, deep)))
+	SCHED_LOCK(s);
+	error = single_thread_check_locked(p, deep, s);
+	if (error) {
+		SCHED_UNLOCK(s);
 		return error;
+	}
 
 	switch (mode) {
 	case SINGLE_SUSPEND:
@@ -1973,22 +2039,17 @@ single_thread_set(struct proc *p, enum single_thread_mode mode, int deep)
 	membar_producer();
 	pr->ps_single = p;
 	TAILQ_FOREACH(q, &pr->ps_threads, p_thr_link) {
-		int s;
-
 		if (q == p)
 			continue;
 		if (q->p_flag & P_WEXIT) {
 			if (mode == SINGLE_EXIT) {
-				SCHED_LOCK(s);
 				if (q->p_stat == SSTOP) {
 					setrunnable(q);
 					atomic_inc_int(&pr->ps_singlecount);
 				}
-				SCHED_UNLOCK(s);
 			}
 			continue;
 		}
-		SCHED_LOCK(s);
 		atomic_setbits_int(&q->p_flag, P_SUSPSINGLE);
 		switch (q->p_stat) {
 		case SIDL:
@@ -2022,8 +2083,8 @@ single_thread_set(struct proc *p, enum single_thread_mode mode, int deep)
 			signotify(q);
 			break;
 		}
-		SCHED_UNLOCK(s);
 	}
+	SCHED_UNLOCK(s);
 
 	if (mode != SINGLE_PTRACE)
 		single_thread_wait(pr, 1);
@@ -2045,7 +2106,7 @@ single_thread_wait(struct process *pr, int recheck)
 	/* wait until they're all suspended */
 	wait = pr->ps_singlecount > 0;
 	while (wait) {
-		sleep_setup(&sls, &pr->ps_singlecount, PWAIT, "suspend");
+		sleep_setup(&sls, &pr->ps_singlecount, PWAIT, "suspend", 0);
 		wait = pr->ps_singlecount > 0;
 		sleep_finish(&sls, wait);
 		if (!recheck)
@@ -2060,16 +2121,16 @@ single_thread_clear(struct proc *p, int flag)
 {
 	struct process *pr = p->p_p;
 	struct proc *q;
+	int s;
 
 	KASSERT(pr->ps_single == p);
 	KASSERT(curproc == p);
 	KERNEL_ASSERT_LOCKED();
 
+	SCHED_LOCK(s);
 	pr->ps_single = NULL;
 	atomic_clearbits_int(&pr->ps_flags, PS_SINGLEUNWIND | PS_SINGLEEXIT);
 	TAILQ_FOREACH(q, &pr->ps_threads, p_thr_link) {
-		int s;
-
 		if (q == p || (q->p_flag & P_SUSPSINGLE) == 0)
 			continue;
 		atomic_clearbits_int(&q->p_flag, P_SUSPSINGLE);
@@ -2079,15 +2140,14 @@ single_thread_clear(struct proc *p, int flag)
 		 * then clearing that either makes it runnable or puts
 		 * it back into some sleep queue
 		 */
-		SCHED_LOCK(s);
 		if (q->p_stat == SSTOP && (q->p_flag & flag) == 0) {
 			if (q->p_wchan == 0)
 				setrunnable(q);
 			else
 				q->p_stat = SSLEEP;
 		}
-		SCHED_UNLOCK(s);
 	}
+	SCHED_UNLOCK(s);
 }
 
 void

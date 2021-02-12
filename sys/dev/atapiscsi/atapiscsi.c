@@ -1,4 +1,4 @@
-/*      $OpenBSD: atapiscsi.c,v 1.109 2020/02/13 15:11:32 krw Exp $     */
+/*      $OpenBSD: atapiscsi.c,v 1.117 2020/09/22 19:32:52 krw Exp $     */
 
 /*
  * This code is derived from code with the copyright below.
@@ -147,7 +147,6 @@ enum atapi_state { as_none, as_data, as_completed };
 
 struct atapiscsi_softc {
 	struct device  sc_dev;
-	struct  scsi_link  sc_adapterlink;
 	struct channel_softc *chp;
 	enum atapi_state protocol_phase;
 
@@ -218,14 +217,6 @@ atapiscsi_attach(struct device *parent, struct device *self, void *aux)
 
 	as->chp = chp;
 	as->drive = drvp->drive;
-	as->sc_adapterlink.adapter_softc = as;
-	as->sc_adapterlink.adapter_target = 7;
-	as->sc_adapterlink.adapter_buswidth = 2;
-	as->sc_adapterlink.adapter = &atapiscsi_switch;
-	as->sc_adapterlink.luns = 1;
-	as->sc_adapterlink.openings = 1;
-	as->sc_adapterlink.flags = SDEV_ATAPI;
-	as->sc_adapterlink.pool = &wdc_xfer_iopool;
 
 	strlcpy(drvp->drive_name, as->sc_dev.dv_xname,
 	    sizeof(drvp->drive_name));
@@ -259,8 +250,17 @@ atapiscsi_attach(struct device *parent, struct device *self, void *aux)
 	WDCDEBUG_PRINT(("driver caps %04x\n", drvp->atapi_cap),
 	    DEBUG_PROBE);
 
-	bzero(&saa, sizeof(saa));
-	saa.saa_sc_link = &as->sc_adapterlink;
+
+	saa.saa_adapter_softc = as;
+	saa.saa_adapter_target = SDEV_NO_ADAPTER_TARGET;
+	saa.saa_adapter_buswidth = 2;
+	saa.saa_adapter = &atapiscsi_switch;
+	saa.saa_luns = 1;
+	saa.saa_openings = 1;
+	saa.saa_flags = SDEV_ATAPI;
+	saa.saa_pool = &wdc_xfer_iopool;
+	saa.saa_quirks = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
 	child = config_found((struct device *)as, &saa, scsiprint);
 
@@ -318,7 +318,7 @@ atapiscsi_detach(struct device *dev, int flags)
 void
 wdc_atapi_send_cmd(struct scsi_xfer *sc_xfer)
 {
-	struct atapiscsi_softc *as = sc_xfer->sc_link->adapter_softc;
+	struct atapiscsi_softc *as = sc_xfer->sc_link->bus->sb_adapter_softc;
  	struct channel_softc *chp = as->chp;
 	struct ata_drive_datas *drvp = &chp->ch_drive[as->drive];
 	struct wdc_xfer *xfer;
@@ -354,7 +354,7 @@ wdc_atapi_send_cmd(struct scsi_xfer *sc_xfer)
 
 	for (idx = 0; idx < sc_xfer->cmdlen; idx++) {
 		WDCDEBUG_PRINT((" %02x",
-				   ((unsigned char *)sc_xfer->cmd)[idx]),
+				   ((unsigned char *)&sc_xfer->cmd)[idx]),
 		    DEBUG_XFERS | DEBUG_ERRORS);
 	}
 	WDCDEBUG_PRINT(("\n"), DEBUG_XFERS | DEBUG_ERRORS);
@@ -363,8 +363,8 @@ wdc_atapi_send_cmd(struct scsi_xfer *sc_xfer)
 
 	if (drvp->atapi_cap & ACAP_DSC) {
 		WDCDEBUG_PRINT(("about to send cmd 0x%x ",
-		    sc_xfer->cmd->opcode), DEBUG_DSC);
-		switch (sc_xfer->cmd->opcode) {
+		    sc_xfer->cmd.opcode), DEBUG_DSC);
+		switch (sc_xfer->cmd.opcode) {
 		case READ:
 		case WRITE:
 			xfer->c_flags |= C_MEDIA_ACCESS;
@@ -377,10 +377,10 @@ wdc_atapi_send_cmd(struct scsi_xfer *sc_xfer)
 				xfer->c_bcount = 0;
 				xfer->transfer_len =
 				  _3btol(((struct scsi_rw_tape *)
-					  sc_xfer->cmd)->len);
+					  &sc_xfer->cmd)->len);
 				_lto3b(0,
 				    ((struct scsi_rw_tape *)
-				    sc_xfer->cmd)->len);
+				    &sc_xfer->cmd)->len);
 				xfer->c_done = wdc_atapi_tape_done;
 				WDCDEBUG_PRINT(
 				    ("R/W in completion mode, do 0 blocks\n"),
@@ -388,7 +388,7 @@ wdc_atapi_send_cmd(struct scsi_xfer *sc_xfer)
 			} else
 				WDCDEBUG_PRINT(("R/W %d blocks %d bytes\n",
 				    _3btol(((struct scsi_rw_tape *)
-					sc_xfer->cmd)->len),
+					&sc_xfer->cmd)->len),
 				    sc_xfer->datalen),
 				    DEBUG_DSC);
 
@@ -421,7 +421,7 @@ wdc_atapi_send_cmd(struct scsi_xfer *sc_xfer)
 int
 wdc_atapi_ioctl (struct scsi_link *sc_link, u_long cmd, caddr_t addr, int flag)
 {
-	struct atapiscsi_softc *as = sc_link->adapter_softc;
+	struct atapiscsi_softc *as = sc_link->bus->sb_adapter_softc;
 	struct channel_softc *chp = as->chp;
 	struct ata_drive_datas *drvp = &chp->ch_drive[as->drive];
 
@@ -808,7 +808,7 @@ wdc_atapi_intr_command(struct channel_softc *chp, struct wdc_xfer *xfer,
 {
 	struct scsi_xfer *sc_xfer = xfer->cmd;
 	struct ata_drive_datas *drvp = &chp->ch_drive[xfer->drive];
-	struct atapiscsi_softc *as = sc_xfer->sc_link->adapter_softc;
+	struct atapiscsi_softc *as = sc_xfer->sc_link->bus->sb_adapter_softc;
 	int i;
 	u_int8_t cmd[16];
 	struct scsi_sense *cmd_reqsense;
@@ -835,7 +835,7 @@ wdc_atapi_intr_command(struct channel_softc *chp, struct wdc_xfer *xfer,
 		cmd_reqsense->opcode = REQUEST_SENSE;
 		cmd_reqsense->length = xfer->c_bcount;
 	} else
-		bcopy(sc_xfer->cmd, cmd, sc_xfer->cmdlen);
+		bcopy(&sc_xfer->cmd, cmd, sc_xfer->cmdlen);
 
 	WDC_LOG_ATAPI_CMD(chp, xfer->drive, xfer->c_flags,
 	    cmdlen, cmd);
@@ -877,8 +877,8 @@ wdc_atapi_intr_command(struct channel_softc *chp, struct wdc_xfer *xfer,
 	/* If we read/write to a tape we will get into buffer
 	   availability mode.  */
 	if (drvp->atapi_cap & ACAP_DSC) {
-		if ((sc_xfer->cmd->opcode == READ ||
-		       sc_xfer->cmd->opcode == WRITE)) {
+		if ((sc_xfer->cmd.opcode == READ ||
+		       sc_xfer->cmd.opcode == WRITE)) {
 			drvp->drive_flags |= DRIVE_DSCBA;
 			WDCDEBUG_PRINT(("set DSCBA\n"), DEBUG_DSC);
 		} else if ((xfer->c_flags & C_MEDIA_ACCESS) &&
@@ -909,7 +909,7 @@ char *
 wdc_atapi_in_data_phase(struct wdc_xfer *xfer, int len, int ire)
 {
 	struct scsi_xfer *sc_xfer = xfer->cmd;
-	struct atapiscsi_softc *as = sc_xfer->sc_link->adapter_softc;
+	struct atapiscsi_softc *as = sc_xfer->sc_link->bus->sb_adapter_softc;
 	char *message;
 
 	if (as->protocol_phase != as_data) {
@@ -1047,7 +1047,7 @@ wdc_atapi_intr_complete(struct channel_softc *chp, struct wdc_xfer *xfer,
 {
 	struct scsi_xfer *sc_xfer = xfer->cmd;
 	struct ata_drive_datas *drvp = &chp->ch_drive[xfer->drive];
-	struct atapiscsi_softc *as = sc_xfer->sc_link->adapter_softc;
+	struct atapiscsi_softc *as = sc_xfer->sc_link->bus->sb_adapter_softc;
 
 	WDCDEBUG_PRINT(("PHASE_COMPLETED\n"), DEBUG_INTR);
 
@@ -1171,7 +1171,7 @@ wdc_atapi_pio_intr(struct channel_softc *chp, struct wdc_xfer *xfer,
     int timeout, struct atapi_return_args *ret)
 {
 	struct scsi_xfer *sc_xfer = xfer->cmd;
-	struct atapiscsi_softc *as = sc_xfer->sc_link->adapter_softc;
+	struct atapiscsi_softc *as = sc_xfer->sc_link->bus->sb_adapter_softc;
 	u_int8_t ireason;
 
 	wdc_atapi_update_status(chp);
@@ -1474,7 +1474,7 @@ wdc_atapi_tape_done(struct channel_softc *chp, struct wdc_xfer *xfer,
 
 	_lto3b(xfer->transfer_len,
 	    ((struct scsi_rw_tape *)
-		sc_xfer->cmd)->len);
+		&sc_xfer->cmd)->len);
 
 	xfer->c_bcount = sc_xfer->datalen;
 	xfer->c_done = NULL;

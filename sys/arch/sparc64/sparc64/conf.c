@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.c,v 1.83 2020/01/23 02:40:22 dlg Exp $	*/
+/*	$OpenBSD: conf.c,v 1.85 2021/01/23 05:08:36 thfr Exp $	*/
 /*	$NetBSD: conf.c,v 1.17 2001/03/26 12:33:26 lukem Exp $ */
 
 /*
@@ -104,6 +104,7 @@ cdev_decl(pci);
 #include "usb.h"
 #include "uhid.h"
 #include "fido.h"
+#include "ujoy.h"
 #include "ugen.h"
 #include "ulpt.h"
 #include "ucom.h"
@@ -112,6 +113,7 @@ cdev_decl(pci);
 #include "pf.h"
 
 #include "ksyms.h"
+#include "kstat.h"
 
 #include "hotplug.h"
 #include "vscsi.h"
@@ -203,7 +205,7 @@ struct cdevsw	cdevsw[] =
 	cdev_notdef(),			/* 48 */
 	cdev_notdef(),			/* 49 */
 	cdev_notdef(),			/* 50 */
-	cdev_notdef(),			/* 51 */
+	cdev_kstat_init(NKSTAT,kstat),	/* 51: kernel statistics */ 
 #ifdef USER_PCICONF
 	cdev_pci_init(NPCI,pci),	/* 52: PCI user */
 #else
@@ -296,6 +298,7 @@ struct cdevsw	cdevsw[] =
 	cdev_switch_init(NSWITCH,switch), /* 136: switch(4) control interface */
 	cdev_fido_init(NFIDO,fido),	/* 137: FIDO/U2F security key */
 	cdev_pppx_init(NPPPX,pppac),	/* 138: PPP Access Concentrator */
+	cdev_ujoy_init(NUJOY,ujoy),	/* 139: USB joystick/gamecontroller */
 };
 int	nchrdev = nitems(cdevsw);
 

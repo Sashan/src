@@ -379,6 +379,7 @@ out:
 	return nr_free;
 }
 
+static struct rwlock lock = RWLOCK_INITIALIZER("ttmshrink");
 /**
  * Callback for mm to request pool to reduce number of page held.
  *
@@ -389,7 +390,6 @@ out:
 static unsigned long
 ttm_pool_shrink_scan(struct shrinker *shrink, struct shrink_control *sc)
 {
-	static DEFINE_MUTEX(lock);
 	static unsigned start_pool;
 	unsigned i;
 	unsigned pool_offset;
@@ -1058,7 +1058,7 @@ void ttm_page_alloc_fini(void)
 static void
 ttm_pool_unpopulate_helper(struct ttm_tt *ttm, unsigned mem_count_update)
 {
-	struct ttm_mem_global *mem_glob = ttm->bdev->glob->mem_glob;
+	struct ttm_mem_global *mem_glob = &ttm_mem_glob;
 	unsigned i;
 
 	if (mem_count_update == 0)
@@ -1079,7 +1079,7 @@ put_pages:
 
 int ttm_pool_populate(struct ttm_tt *ttm, struct ttm_operation_ctx *ctx)
 {
-	struct ttm_mem_global *mem_glob = ttm->bdev->glob->mem_glob;
+	struct ttm_mem_global *mem_glob = &ttm_mem_glob;
 	unsigned i;
 	int ret;
 

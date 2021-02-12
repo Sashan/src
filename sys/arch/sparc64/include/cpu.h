@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.93 2018/12/05 10:28:21 jsg Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.96 2020/09/14 20:28:41 deraadt Exp $	*/
 /*	$NetBSD: cpu.h,v 1.28 2001/06/14 22:56:58 thorpej Exp $ */
 
 /*
@@ -211,6 +211,16 @@ void	cpu_unidle(struct cpu_info *);
 #define curpcb		__curcpu->ci_cpcb
 #define fpproc		__curcpu->ci_fpproc
 
+static inline unsigned int
+cpu_rnd_messybits(void)
+{
+	u_int64_t tick;
+
+	__asm volatile("rd %%tick, %0" : "=r" (tick) :);
+
+	return ((tick >> 32) ^ tick);
+}
+
 /*
  * On processors with multiple threads we force a thread switch.
  *
@@ -334,7 +344,6 @@ void	fb_unblank(void);
 /* tda.c */
 void	tda_full_blast(void);
 /* emul.c */
-int	emulinstr(vaddr_t, struct trapframe64 *);
 int	emul_qf(int32_t, struct proc *, union sigval, struct trapframe64 *);
 int	emul_popc(int32_t, struct proc *, union sigval, struct trapframe64 *);
 

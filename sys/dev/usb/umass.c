@@ -1,4 +1,4 @@
-/*	$OpenBSD: umass.c,v 1.76 2020/02/22 14:01:34 jasper Exp $ */
+/*	$OpenBSD: umass.c,v 1.80 2021/01/29 17:12:19 sthen Exp $ */
 /*	$NetBSD: umass.c,v 1.116 2004/06/30 05:53:46 mycroft Exp $	*/
 
 /*
@@ -61,10 +61,10 @@
 
 /*
  * Universal Serial Bus Mass Storage Class specs:
- * http://www.usb.org/developers/devclass_docs/usb_msc_overview_1.2.pdf
- * http://www.usb.org/developers/devclass_docs/usbmassbulk_10.pdf
- * http://www.usb.org/developers/devclass_docs/usb_msc_cbi_1.1.pdf
- * http://www.usb.org/developers/devclass_docs/usbmass-ufi10.pdf
+ * https://www.usb.org/sites/default/files/Mass_Storage_Specification_Overview_v1.4_2-19-2010.pdf
+ * https://www.usb.org/sites/default/files/usbmassbulk_10.pdf
+ * https://www.usb.org/sites/default/files/usb_msc_cbi_1.1.pdf
+ * https://www.usb.org/sites/default/files/usbmass-ufi10.pdf
  */
 
 /*
@@ -789,18 +789,18 @@ umass_setup_ctrl_transfer(struct umass_softc *sc, usb_device_request_t *req,
 	/* Initialise a USB control transfer and then schedule it */
 
 	usbd_setup_default_xfer(xfer, sc->sc_udev, (void *) sc,
-	    USBD_DEFAULT_TIMEOUT, req, buffer, buflen, flags,
-	    sc->sc_methods->wire_state);
+	    USBD_DEFAULT_TIMEOUT, req, buffer, buflen,
+	    flags | sc->sc_xfer_flags, sc->sc_methods->wire_state);
 
 	if (sc->sc_udev->bus->use_polling) {
 		DPRINTF(UDMASS_XFER,("%s: start polled ctrl xfer buffer=%p "
 		    "buflen=%d flags=0x%x\n", sc->sc_dev.dv_xname, buffer,
-		    buflen, flags));
+		    buflen, flags | sc->sc_xfer_flags));
 		err = umass_polled_transfer(sc, xfer);
 	} else {
 		DPRINTF(UDMASS_XFER,("%s: start ctrl xfer buffer=%p buflen=%d "
 		    "flags=0x%x\n", sc->sc_dev.dv_xname, buffer, buflen,
-		    flags));
+		    flags | sc->sc_xfer_flags));
 		err = usbd_transfer(xfer);
 	}
 	if (err && err != USBD_IN_PROGRESS) {
@@ -819,13 +819,13 @@ umass_adjust_transfer(struct umass_softc *sc)
 {
 	switch (sc->sc_cmd) {
 	case UMASS_CPROTO_UFI:
-		sc->cbw.bCDBLength = UFI_COMMAND_LENGTH; 
+		sc->cbw.bCDBLength = UFI_COMMAND_LENGTH;
 		/* Adjust the length field in certain scsi commands. */
 		switch (sc->cbw.CBWCDB[0]) {
 		case INQUIRY:
-			if (sc->transfer_datalen > 36) {
-				sc->transfer_datalen = 36;
-				sc->cbw.CBWCDB[4] = 36;
+			if (sc->transfer_datalen > SID_SCSI2_HDRLEN + SID_SCSI2_ALEN) {
+				sc->transfer_datalen = SID_SCSI2_HDRLEN + SID_SCSI2_ALEN;
+				sc->cbw.CBWCDB[4] = sc->transfer_datalen;
 			}
 			break;
 		case MODE_SENSE_BIG:
@@ -1299,8 +1299,17 @@ umass_bbb_state(struct usbd_xfer *xfer, void *priv, usbd_status err)
 			return;
 
 		} else {	/* success */
+			u_int32_t residue = UGETDW(sc->csw.dCSWDataResidue);
 			sc->transfer_state = TSTATE_IDLE;
 			if (sc->transfer_dir == DIR_IN) {
+				if (residue == sc->transfer_datalen) {
+					if (sc->cbw.CBWCDB[0] == INQUIRY)
+						SET(sc->sc_quirks,
+						    UMASS_QUIRK_IGNORE_RESIDUE);
+					if (ISSET(sc->sc_quirks,
+					    UMASS_QUIRK_IGNORE_RESIDUE))
+						USETDW(sc->csw.dCSWDataResidue, 0);
+				}
 				sc->transfer_actlen = sc->transfer_datalen -
 				    UGETDW(sc->csw.dCSWDataResidue);
 				memcpy(sc->transfer_data, sc->data_buffer,

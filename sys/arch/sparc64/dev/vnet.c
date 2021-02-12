@@ -1,4 +1,4 @@
-/*	$OpenBSD: vnet.c,v 1.60 2018/01/27 13:44:03 stsp Exp $	*/
+/*	$OpenBSD: vnet.c,v 1.63 2020/12/12 11:48:52 jan Exp $	*/
 /*
  * Copyright (c) 2009, 2015 Mark Kettenis
  *
@@ -314,7 +314,7 @@ vnet_attach(struct device *parent, struct device *self, void *aux)
 	ifp->if_start = vnet_start;
 	ifp->if_watchdog = vnet_watchdog;
 	strlcpy(ifp->if_xname, sc->sc_dv.dv_xname, IFNAMSIZ);
-	IFQ_SET_MAXLEN(&ifp->if_snd, 31); /* XXX */
+	ifq_set_maxlen(&ifp->if_snd, 31); /* XXX */
 
 	ifmedia_init(&sc->sc_media, 0, vnet_media_change, vnet_media_status);
 	ifmedia_add(&sc->sc_media, IFM_ETHER | IFM_AUTO, 0, NULL);
@@ -834,7 +834,7 @@ vnet_rx_vio_dring_data(struct vnet_softc *sc, struct vio_msg_tag *tag)
 				goto skip;
 			}
 
-			m = MCLGETI(NULL, M_DONTWAIT, NULL, desc.nbytes);
+			m = MCLGETL(NULL, M_DONTWAIT, desc.nbytes);
 			if (!m)
 				break;
 			m->m_len = m->m_pkthdr.len = desc.nbytes;
@@ -1087,7 +1087,7 @@ vnet_start(struct ifnet *ifp)
 	if (!(ifp->if_flags & IFF_RUNNING) || ifq_is_oactive(&ifp->if_snd))
 		return;
 
-	if (IFQ_IS_EMPTY(&ifp->if_snd))
+	if (ifq_empty(&ifp->if_snd))
 		return;
 
 	/*
@@ -1132,7 +1132,7 @@ vnet_start(struct ifnet *ifp)
 			break;
 		}
 
-		IFQ_DEQUEUE(&ifp->if_snd, m);
+		m = ifq_dequeue(&ifp->if_snd);
 		if (m == NULL) {
 			pool_put(&sc->sc_pool, buf);
 			break;
@@ -1209,7 +1209,7 @@ vnet_start_desc(struct ifnet *ifp)
 			return;
 		}
 
-		IFQ_DEQUEUE(&ifp->if_snd, m);
+		m = ifq_dequeue(&ifp->if_snd);
 		if (m == NULL) {
 			pool_put(&sc->sc_pool, buf);
 			return;

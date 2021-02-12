@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwnvar.h,v 1.35 2019/07/29 10:50:08 stsp Exp $	*/
+/*	$OpenBSD: if_iwnvar.h,v 1.39 2020/10/11 07:05:28 mpi Exp $	*/
 
 /*-
  * Copyright (c) 2007, 2008
@@ -42,14 +42,12 @@ struct iwn_tx_radiotap_header {
 	uint8_t		wt_rate;
 	uint16_t	wt_chan_freq;
 	uint16_t	wt_chan_flags;
-	uint8_t		wt_hwqueue;
 } __packed;
 
 #define IWN_TX_RADIOTAP_PRESENT						\
 	((1 << IEEE80211_RADIOTAP_FLAGS) |				\
 	 (1 << IEEE80211_RADIOTAP_RATE) |				\
-	 (1 << IEEE80211_RADIOTAP_CHANNEL) |				\
-	 (1 << IEEE80211_RADIOTAP_HWQUEUE))
+	 (1 << IEEE80211_RADIOTAP_CHANNEL))
 
 struct iwn_dma_info {
 	bus_dma_tag_t		tag;
@@ -67,6 +65,16 @@ struct iwn_tx_data {
 	struct mbuf		*m;
 	struct ieee80211_node	*ni;
 	int totlen;
+	int retries;
+	int txfail;
+	int txmcs;
+	int txrate;
+
+	/* A-MPDU subframes */
+	int ampdu_id;
+	int ampdu_txmcs;
+	int ampdu_nframes;
+	int ampdu_size;
 };
 
 struct iwn_tx_ring {
@@ -104,6 +112,7 @@ struct iwn_node {
 	uint16_t			disable_tid;
 	uint8_t				id;
 	uint8_t				ridx[IEEE80211_RATE_MAXSIZE];
+	uint32_t			next_ampdu_id;
 };
 
 struct iwn_calib_state {

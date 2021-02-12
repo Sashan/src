@@ -1,4 +1,4 @@
-/*	$OpenBSD: amldwusb.c,v 1.1 2019/08/29 17:20:03 kettenis Exp $	*/
+/*	$OpenBSD: amldwusb.c,v 1.3 2020/12/17 22:39:45 kettenis Exp $	*/
 /*
  * Copyright (c) 2019 Mark kettenis <kettenis@openbsd.org>
  *
@@ -28,6 +28,7 @@
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_clock.h>
 #include <dev/ofw/ofw_misc.h>
+#include <dev/ofw/ofw_power.h>
 #include <dev/ofw/ofw_regulator.h>
 #include <dev/ofw/fdt.h>
 
@@ -130,7 +131,6 @@ struct cfdriver amldwusb_cd = {
 
 void	amldwusb_init_usb2(struct amldwusb_softc *);
 void	amldwusb_init_usb3(struct amldwusb_softc *);
-void	amldwusb_init_phys(struct amldwusb_softc *);
 
 int
 amldwusb_match(struct device *parent, void *match, void *aux)
@@ -160,6 +160,7 @@ amldwusb_attach(struct device *parent, struct device *self, void *aux)
 		return;
 	}
 
+	power_domain_enable(faa->fa_node);
 	clock_enable_all(faa->fa_node);
 
 	reset_assert_all(faa->fa_node);
@@ -184,12 +185,15 @@ amldwusb_attach(struct device *parent, struct device *self, void *aux)
 	reg |= (0xff << USB_R5_ID_DIG_TH_SHIFT);
 	HWRITE4(sc, USB_R5, reg);
 
-	amldwusb_init_usb3(sc);
-
 	/* Initialize PHYs. */
 	phy_enable(faa->fa_node, "usb2-phy0");
 	phy_enable(faa->fa_node, "usb2-phy1");
-	phy_enable(faa->fa_node, "usb3-phy0");
+
+	/* Only enable USB 3.0 logic and PHY if we have one. */
+	if (OF_getindex(faa->fa_node, "usb3-phy0", "phy-names") >= 0) {
+		amldwusb_init_usb3(sc);
+		phy_enable(faa->fa_node, "usb3-phy0");
+	}
 
 	simplebus_attach(parent, &sc->sc_sbus.sc_dev, faa);
 }

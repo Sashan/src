@@ -1,4 +1,4 @@
-/*	$OpenBSD: disk.c,v 1.17 2015/10/01 16:08:19 krw Exp $	*/
+/*	$OpenBSD: disk.c,v 1.19 2020/12/09 18:10:17 krw Exp $	*/
 /*	$NetBSD: disk.c,v 1.6 1997/04/06 08:40:33 cgd Exp $	*/
 
 /*
@@ -54,7 +54,7 @@ struct	disk_softc {
 };
 
 int
-diskstrategy(void *devdata, int rw, daddr32_t bn, size_t reqcnt, void *addrvoid,
+diskstrategy(void *devdata, int rw, daddr_t bn, size_t reqcnt, void *addrvoid,
     size_t *cnt)
 {
 	char *addr = addrvoid;
@@ -78,10 +78,14 @@ diskstrategy(void *devdata, int rw, daddr32_t bn, size_t reqcnt, void *addrvoid,
 	sc = (struct disk_softc *)devdata;
 	pp = &sc->sc_label.d_partitions[sc->sc_part];
 
-	ret.bits = prom_read(sc->sc_fd, reqcnt, addr, bn + pp->p_offset);
+	if (rw == F_READ)
+		ret.bits = prom_read(sc->sc_fd, reqcnt, addr, bn + pp->p_offset);
+	else
+		ret.bits = prom_write(sc->sc_fd, reqcnt, addr, bn + pp->p_offset);
 	if (ret.u.status)
 		return (EIO);
-	*cnt = ret.u.retval;
+	if (cnt)
+		*cnt = ret.u.retval;
 	return (0);
 }
 
@@ -128,7 +132,7 @@ diskopen(struct open_file *f, int ctlr, int unit, int part)
 	DL_SETPOFFSET(&lp->d_partitions[part], 0);
 	DL_SETPSIZE(&lp->d_partitions[part], 0x7fffffff);
 	i = diskstrategy(sc, F_READ,
-	    (daddr32_t)LABELSECTOR, DEV_BSIZE, buf, &cnt);
+	    LABELSECTOR, DEV_BSIZE, buf, &cnt);
 	if (i || cnt != DEV_BSIZE) {
 		printf("disk%d: error reading disk label\n", unit);
 		goto bad;

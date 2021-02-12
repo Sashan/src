@@ -1,4 +1,4 @@
-/*	$OpenBSD: acpi_machdep.c,v 1.89 2019/12/20 07:49:31 jsg Exp $	*/
+/*	$OpenBSD: acpi_machdep.c,v 1.93 2020/12/06 21:42:24 kettenis Exp $	*/
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  *
@@ -96,7 +96,8 @@ acpi_attach(struct device *parent, struct device *self, void *aux)
 
 	sc->sc_iot = ba->ba_iot;
 	sc->sc_memt = ba->ba_memt;
-	sc->sc_dmat = &pci_bus_dma_tag;
+	sc->sc_cc_dmat = &pci_bus_dma_tag;
+	sc->sc_ci_dmat = &pci_bus_dma_tag;
 
 	acpi_attach_common(sc, ba->ba_acpipbase);
 }
@@ -194,10 +195,16 @@ acpi_intr_establish(int irq, int flags, int level,
 
 	type = (flags & LR_EXTIRQ_MODE) ? IST_EDGE : IST_LEVEL;
 	return (intr_establish(-1, (struct pic *)apic, map->ioapic_pin,
-	    type, level, handler, arg, what));
+	    type, level, NULL, handler, arg, what));
 #else
 	return NULL;
 #endif
+}
+
+void
+acpi_intr_disestablish(void *cookie)
+{
+	intr_disestablish(cookie);
 }
 
 u_int8_t *
@@ -327,7 +334,7 @@ acpi_attach_machdep(struct acpi_softc *sc)
 	extern void (*cpuresetfn)(void);
 
 	sc->sc_interrupt = isa_intr_establish(NULL, sc->sc_fadt->sci_int,
-	    IST_LEVEL, IPL_TTY, acpi_interrupt, sc, sc->sc_dev.dv_xname);
+	    IST_LEVEL, IPL_BIO, acpi_interrupt, sc, sc->sc_dev.dv_xname);
 	cpuresetfn = acpi_reset;
 
 #ifndef SMALL_KERNEL

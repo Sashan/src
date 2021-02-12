@@ -1,4 +1,4 @@
-/*	$OpenBSD: sdmmc.c,v 1.54 2019/12/31 10:05:33 mpi Exp $	*/
+/*	$OpenBSD: sdmmc.c,v 1.58 2020/08/24 15:06:10 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2006 Uwe Stuehler <uwe@openbsd.org>
@@ -29,6 +29,11 @@
 #include <sys/malloc.h>
 #include <sys/rwlock.h>
 #include <sys/systm.h>
+#include <sys/time.h>
+
+#ifdef SDMMC_DEBUG
+#include <sys/proc.h>
+#endif
 
 #include <scsi/scsi_all.h>
 #include <scsi/scsiconf.h>
@@ -106,8 +111,16 @@ sdmmc_attach(struct device *parent, struct device *self, void *aux)
 		printf(": 1-bit");
 	if (ISSET(saa->caps, SMC_CAPS_SD_HIGHSPEED))
 		printf(", sd high-speed");
+	if (ISSET(saa->caps, SMC_CAPS_UHS_SDR50))
+		printf(", sdr50");
+	if (ISSET(saa->caps, SMC_CAPS_UHS_SDR104))
+		printf(", sdr104");
 	if (ISSET(saa->caps, SMC_CAPS_MMC_HIGHSPEED))
 		printf(", mmc high-speed");
+	if (ISSET(saa->caps, SMC_CAPS_MMC_DDR52))
+		printf(", ddr52");
+	if (ISSET(saa->caps, SMC_CAPS_MMC_HS200))
+		printf(", hs200");
 	if (ISSET(saa->caps, SMC_CAPS_DMA))
 		printf(", dma");
 	printf("\n");
@@ -577,10 +590,8 @@ sdmmc_init(struct sdmmc_softc *sc)
 void
 sdmmc_delay(u_int usecs)
 {
-	int nticks = usecs / (1000000 / hz);
-
-	if (!cold && nticks > 0)
-		tsleep(&sdmmc_delay, PWAIT, "mmcdly", nticks);
+	if (!cold && usecs > tick)
+		tsleep_nsec(&sdmmc_delay, PWAIT, "mmcdly", USEC_TO_NSEC(usecs));
 	else
 		delay(usecs);
 }

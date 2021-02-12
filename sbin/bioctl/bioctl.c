@@ -1,4 +1,4 @@
-/* $OpenBSD: bioctl.c,v 1.143 2019/06/28 13:32:43 deraadt Exp $ */
+/* $OpenBSD: bioctl.c,v 1.147 2021/02/08 19:05:05 stsp Exp $ */
 
 /*
  * Copyright (c) 2004, 2005 Marco Peereboom
@@ -131,7 +131,11 @@ main(int argc, char *argv[])
 			break;
 		case 'c': /* create */
 			func |= BIOC_CREATERAID;
-			if (isdigit((unsigned char)*optarg)) {
+			if (strcmp(optarg, "1C") == 0) {
+				cr_level = 0x1C;
+			} else if (strlen(optarg) != 1) {
+				errx(1, "Invalid RAID level");
+			} else if (isdigit((unsigned char)*optarg)) {
 				cr_level = strtonum(optarg, 0, 10, &errstr);
 				if (errstr != NULL)
 					errx(1, "Invalid RAID level");
@@ -280,7 +284,7 @@ usage(void)
 		"usage: %s [-hiqv] [-a alarm-function] "
 		"[-b channel:target[.lun]]\n"
 		"\t[-H channel:target[.lun]] "
-		"[-R device | channel:target[.lun]]\n"
+		"[-R chunk | channel:target[.lun]]\n"
 		"\t[-t patrol-function] "
 		"[-u channel:target[.lun]] "
 		"device\n"
@@ -288,7 +292,7 @@ usage(void)
 		"[-C flag[,flag,...]] [-c raidlevel] [-k keydisk]\n"
 		"\t[-l special[,special,...]] "
 		"[-O device | channel:target[.lun]]\n"
-		"\t[-p passfile] [-R device | channel:target[.lun]]\n"
+		"\t[-p passfile] [-R chunk | channel:target[.lun]]\n"
 		"\t[-r rounds] "
 		"device\n", __progname, __progname);
 
@@ -497,6 +501,11 @@ bio_inq(char *name)
 				printf("%11s %-10s %14s %-7s CONCAT%s%s\n",
 				    volname, status, size, bv.bv_dev,
 				    percent, seconds);
+				break;
+			case 0x1C:
+				printf("%11s %-10s %14s %-7s RAID%X%s%s %s\n",
+				    volname, status, size, bv.bv_dev,
+				    bv.bv_level, percent, seconds, cache);
 				break;
 			default:
 				printf("%11s %-10s %14s %-7s RAID%u%s%s %s\n",
@@ -847,10 +856,11 @@ bio_createraid(u_int16_t level, char *dev_list, char *key_disk)
 		min_disks = 3;
 		break;
 	case 'C':
+	case 0x1C:
 		min_disks = 1;
 		break;
 	case 'c':
-		min_disks = 2;
+		min_disks = 1;
 		break;
 	default:
 		errx(1, "unsupported raid level");
@@ -871,7 +881,7 @@ bio_createraid(u_int16_t level, char *dev_list, char *key_disk)
 	create.bc_flags = BIOC_SCDEVT | cflags;
 	create.bc_key_disk = NODEV;
 
-	if (level == 'C' && key_disk == NULL) {
+	if ((level == 'C' || level == 0x1C) && key_disk == NULL) {
 
 		memset(&kdfinfo, 0, sizeof(kdfinfo));
 		memset(&kdfhint, 0, sizeof(kdfhint));
@@ -899,7 +909,7 @@ bio_createraid(u_int16_t level, char *dev_list, char *key_disk)
 		create.bc_opaque_size = sizeof(kdfinfo);
 		create.bc_opaque_flags = BIOC_SOIN;
 
-	} else if (level == 'C' && key_disk != NULL) {
+	} else if ((level == 'C' || level == 0x1C) && key_disk != NULL) {
 
 		/* Get device number for key disk. */
 		fd = opendev(key_disk, O_RDONLY, OPENDEV_BLCK, NULL);

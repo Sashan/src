@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.106 2020/01/31 23:25:08 djm Exp $
+#	$OpenBSD: Makefile,v 1.110 2020/12/22 06:03:36 djm Exp $
 
 .ifndef SKIP_UNIT
 SUBDIR=		unittests
@@ -32,6 +32,7 @@ LTESTS= 	connect \
 		agent-getpeereid \
 		agent-timeout \
 		agent-ptrace \
+		agent-subprocess \
 		keyscan \
 		keygen-change \
 		keygen-convert \
@@ -57,6 +58,7 @@ LTESTS= 	connect \
 		cfgparse \
 		cfgmatch \
 		cfgmatchlisten \
+		percent \
 		addrmatch \
 		localcommand \
 		forcecommand \
@@ -81,7 +83,9 @@ LTESTS= 	connect \
 		servcfginclude \
 		allow-deny-users \
 		authinfo \
-		sshsig
+		sshsig \
+		keygen-comment \
+		knownhosts-command
 
 INTEROP_TESTS=	putty-transfer putty-ciphers putty-kex conch-ciphers
 #INTEROP_TESTS+=ssh-com ssh-com-client ssh-com-keygen ssh-com-sftp
@@ -107,9 +111,9 @@ CLEANFILES+=	*.core actual agent-key.* authorized_keys_${USERNAME} \
 		rsa_ssh2_crnl.prv scp-ssh-wrapper.exe \
 		scp-ssh-wrapper.scp setuid-allowed sftp-server.log \
 		sftp-server.sh sftp.log ssh-log-wrapper.sh ssh.log \
-		ssh-rsa_oldfmt \
+		ssh-rsa_oldfmt knownhosts_command \
 		ssh_config ssh_config.* ssh_proxy ssh_proxy_bak \
-		ssh_proxy_envpass sshd.log sshd_config sshd_config.* \
+		ssh_proxy_* sshd.log sshd_config sshd_config.* \
 		sshd_proxy sshd_proxy.* sshd_proxy_bak sshd_proxy_orig \
 		t10.out t10.out.pub t12.out t12.out.pub t2.out t3.out \
 		t6.out1 t6.out2 t7.out t7.out.pub t8.out t8.out.pub \

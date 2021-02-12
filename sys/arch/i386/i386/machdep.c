@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.631 2019/06/14 18:13:55 kettenis Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.644 2021/01/09 21:01:20 gnezdo Exp $	*/
 /*	$NetBSD: machdep.c,v 1.214 1996/11/10 03:16:17 thorpej Exp $	*/
 
 /*-
@@ -115,7 +115,6 @@
 #include <machine/mpbiosvar.h>
 #endif /* MULTIPROCESSOR */
 
-#include <dev/rndvar.h>
 #include <dev/isa/isareg.h>
 #include <dev/isa/isavar.h>
 #include <dev/ic/i8042reg.h>
@@ -378,6 +377,7 @@ cpu_startup(void)
 
 	printf("%s", version);
 	startclocks();
+	rtcinit();
 
 	printf("real mem  = %llu (%lluMB)\n",
 	    (unsigned long long)ptoa((psize_t)physmem),
@@ -1099,6 +1099,9 @@ const struct cpu_cpuid_feature cpu_seff0_ecxfeatures[] = {
 const struct cpu_cpuid_feature cpu_seff0_edxfeatures[] = {
 	{ SEFF0EDX_AVX512_4FNNIW, "AVX512FNNIW" },
 	{ SEFF0EDX_AVX512_4FMAPS, "AVX512FMAPS" },
+	{ SEFF0EDX_SRBDS_CTRL,	"SRBDS_CTRL" },
+	{ SEFF0EDX_MD_CLEAR,	"MD_CLEAR" },
+	{ SEFF0EDX_TSXFA,	"TSXFA" },
 	{ SEFF0EDX_IBRS,	"IBRS,IBPB" },
 	{ SEFF0EDX_STIBP,	"STIBP" },
 	{ SEFF0EDX_L1DF,	"L1DF" },
@@ -1846,6 +1849,17 @@ identifycpu(struct cpu_info *ci)
 		}
 	}
 
+	if (ci->ci_feature_flags & CPUID_CFLUSH) {
+		u_int regs[4];
+
+		/* to get the cacheline size you must do cpuid
+		 * with eax 0x01
+		 */
+
+		cpuid(0x01, regs); 
+		ci->ci_cflushsz = ((regs[1] >> 8) & 0xff) * 8;
+	}
+
 	if (vendor == CPUVENDOR_INTEL) {
 		u_int regs[4];
 		/*
@@ -1858,15 +1872,6 @@ identifycpu(struct cpu_info *ci)
 		 */
 		if (ci->ci_family == 6 && ci->ci_model < 15)
 		    ci->ci_feature_flags &= ~CPUID_PAT;
-
-		if (ci->ci_feature_flags & CPUID_CFLUSH) {
-			/* to get the cacheline size you must do cpuid
-			 * with eax 0x01
-			 */
-
-			cpuid(0x01, regs); 
-			ci->ci_cflushsz = ((regs[1] >> 8) & 0xff) * 8;
-		}
 
 		if (cpuid_level >= 0x1) {
 			cpuid(0x80000000, regs);
@@ -2104,7 +2109,7 @@ identifycpu(struct cpu_info *ci)
 			    cpu_device);
 	}
 
-	if (ci->ci_flags & CPUF_PRIMARY) {
+	if (CPU_IS_PRIMARY(ci)) {
 		if (cpu_ecxfeature & CPUIDECX_RDRAND)
 			has_rdrand = 1;
 		if (ci->ci_feature_sefflags_ebx & SEFF0EBX_RDSEED)
@@ -2438,7 +2443,7 @@ pentium_cpuspeed(int *freq)
  * frame pointer, it returns to the user
  * specified pc, psl.
  */
-void
+int
 sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip)
 {
 	struct proc *p = curproc;
@@ -2470,7 +2475,7 @@ sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip)
 		frame.sf_sc.sc_fpstate = (void *)sp;
 		if (copyout(&p->p_addr->u_pcb.pcb_savefpu,
 		    (void *)sp, sizeof(union savefpu)))
-			sigexit(p, SIGILL);
+		    	return 1;
 
 		/* Signal handlers get a completely clean FP state */
 		p->p_md.md_flags &= ~MDP_USEDFPU;
@@ -2511,14 +2516,8 @@ sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip)
 
 	/* XXX don't copyout siginfo if not needed? */
 	frame.sf_sc.sc_cookie = (long)&fp->sf_sc ^ p->p_p->ps_sigcookie;
-	if (copyout(&frame, fp, sizeof(frame)) != 0) {
-		/*
-		 * Process has trashed its stack; give it an illegal
-		 * instruction to halt it in its tracks.
-		 */
-		sigexit(p, SIGILL);
-		/* NOTREACHED */
-	}
+	if (copyout(&frame, fp, sizeof(frame)) != 0)
+		return 1;
 
 	/*
 	 * Build context to run handler in.
@@ -2532,6 +2531,8 @@ sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip)
 	tf->tf_eflags &= ~(PSL_T|PSL_D|PSL_VM|PSL_AC);
 	tf->tf_esp = (int)fp;
 	tf->tf_ss = GSEL(GUDATA_SEL, SEL_UPL);
+
+	return 0;
 }
 
 /*
@@ -2950,15 +2951,7 @@ setregs(struct proc *p, struct exec_package *pack, u_long stack,
 	p->p_md.md_flags &= ~MDP_USEDFPU;
 #endif
 
-	/*
-	 * Reset the code segment limit to I386_MAX_EXE_ADDR in the pmap;
-	 * this gets copied into the GDT for GUCODE_SEL by pmap_activate().
-	 * Similarly, reset the base of each of the two thread data
-	 * segments to zero in the pcb; they'll get copied into the
-	 * GDT for GUFS_SEL and GUGS_SEL.
-	 */
-	setsegment(&pmap->pm_codeseg, 0, atop(I386_MAX_EXE_ADDR) - 1,
-	    SDT_MEMERA, SEL_UPL, 1, 1);
+	initcodesegment(&pmap->pm_codeseg);
 	setsegment(&pcb->pcb_threadsegs[TSEG_FS], 0,
 	    atop(VM_MAXUSER_ADDRESS) - 1, SDT_MEMRWA, SEL_UPL, 1, 1);
 	setsegment(&pcb->pcb_threadsegs[TSEG_GS], 0,
@@ -3047,6 +3040,30 @@ setregion(struct region_descriptor *rd, void *base, size_t limit)
 }
 
 void
+initcodesegment(struct segment_descriptor *cs)
+{
+	if (cpu_pae) {
+		/*
+		 * When code execution is managed using NX feature
+		 * in pmapae.c, GUCODE_SEL should cover userland.
+		 */
+		setsegment(cs, 0, atop(VM_MAXUSER_ADDRESS - 1),
+		    SDT_MEMERA, SEL_UPL, 1, 1);
+	} else {
+		/*
+		 * For pmap.c's non-PAE/NX line-in-the-sand execution, reset
+		 * the code segment limit to I386_MAX_EXE_ADDR in the pmap;
+		 * this gets copied into the GDT for GUCODE_SEL by
+		 * pmap_activate().  Similarly, reset the base of each of
+		 * the two thread data segments to zero in the pcb; they'll
+		 * get copied into the GDT for GUFS_SEL and GUGS_SEL.
+		 */
+		setsegment(cs, 0, atop(I386_MAX_EXE_ADDR - 1),
+		    SDT_MEMERA, SEL_UPL, 1, 1);
+	}
+}
+
+void
 setsegment(struct segment_descriptor *sd, void *base, size_t limit, int type,
     int dpl, int def32, int gran)
 {
@@ -3083,7 +3100,7 @@ fix_f00f(void)
 	void *p;
 
 	/* Allocate two new pages */
-	va = uvm_km_zalloc(kernel_map, NBPG*2);
+	va = (vaddr_t)km_alloc(NBPG*2, &kv_any, &kp_zero, &kd_waitok);
 	p = (void *)(va + NBPG - 7*sizeof(*idt));
 
 	/* Copy over old IDT */
@@ -3541,6 +3558,15 @@ idt_vec_free(int vec)
 	unsetgate(&idt[vec]);
 }
 
+const struct sysctl_bounded_args cpuctl_vars[] = {
+	{ CPU_LIDACTION, &lid_action, 0, 2 },
+	{ CPU_CPUID, &cpu_id, 1, 0 },
+	{ CPU_OSFXSR, &i386_use_fxsave, 1, 0 },
+	{ CPU_SSE, &i386_has_sse, 1, 0 },
+	{ CPU_SSE2, &i386_has_sse2, 1, 0 },
+	{ CPU_XCRYPT, &i386_has_xcrypt, 1, 0 },
+};
+
 /*
  * machine dependent system variables.
  */
@@ -3549,7 +3575,6 @@ cpu_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
     size_t newlen, struct proc *p)
 {
 	dev_t dev;
-	int val, error;
 
 	switch (name[0]) {
 	case CPU_CONSDEV:
@@ -3589,8 +3614,6 @@ cpu_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 #endif
 	case CPU_CPUVENDOR:
 		return (sysctl_rdstring(oldp, oldlenp, newp, cpu_vendor));
-	case CPU_CPUID:
-		return (sysctl_rdint(oldp, oldlenp, newp, cpu_id));
 	case CPU_CPUFEATURE:
 		return (sysctl_rdint(oldp, oldlenp, newp, curcpu()->ci_feature_flags));
 	case CPU_KBDRESET:
@@ -3600,26 +3623,11 @@ cpu_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		else
 			return (sysctl_int(oldp, oldlenp, newp, newlen,
 			    &kbd_reset));
-	case CPU_OSFXSR:
-		return (sysctl_rdint(oldp, oldlenp, newp, i386_use_fxsave));
-	case CPU_SSE:
-		return (sysctl_rdint(oldp, oldlenp, newp, i386_has_sse));
-	case CPU_SSE2:
-		return (sysctl_rdint(oldp, oldlenp, newp, i386_has_sse2));
-	case CPU_XCRYPT:
-		return (sysctl_rdint(oldp, oldlenp, newp, i386_has_xcrypt));
-	case CPU_LIDACTION:
-		val = lid_action;
-		error = sysctl_int(oldp, oldlenp, newp, newlen, &val);
-		if (!error) {
-			if (val < 0 || val > 2)
-				error = EINVAL;
-			else
-				lid_action = val;
-		}
-		return (error);
 #if NPCKBC > 0 && NUKBD > 0
 	case CPU_FORCEUKBD:
+		{
+		int error;
+
 		if (forceukbd)
 			return (sysctl_rdint(oldp, oldlenp, newp, forceukbd));
 
@@ -3627,9 +3635,11 @@ cpu_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		if (forceukbd)
 			pckbc_release_console();
 		return (error);
+		}
 #endif
 	default:
-		return (EOPNOTSUPP);
+		return (sysctl_bounded_arr(cpuctl_vars, nitems(cpuctl_vars),
+		    name, namelen, oldp, oldlenp, newp, newlen));
 	}
 	/* NOTREACHED */
 }
@@ -3981,6 +3991,8 @@ splraise(int ncpl)
 {
 	int ocpl;
 
+	KASSERT(ncpl >= IPL_NONE);
+
 	_SPLRAISE(ocpl, ncpl);
 	return (ocpl);
 }
@@ -4037,3 +4049,11 @@ intr_barrier(void *ih)
 	sched_barrier(NULL);
 }
 
+unsigned int
+cpu_rnd_messybits(void)
+{
+	struct timespec ts;
+
+	nanotime(&ts);
+	return (ts.tv_nsec ^ (ts.tv_sec << 20));
+}

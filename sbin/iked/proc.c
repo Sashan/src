@@ -1,4 +1,4 @@
-/*	$OpenBSD: proc.c,v 1.31 2018/08/06 06:30:06 mestre Exp $	*/
+/*	$OpenBSD: proc.c,v 1.34 2021/01/28 01:20:37 mortimer Exp $	*/
 
 /*
  * Copyright (c) 2010 - 2014 Reyk Floeter <reyk@openbsd.org>
@@ -33,6 +33,8 @@
 #include <imsg.h>
 
 #include "iked.h"
+
+enum privsep_procid privsep_process;
 
 void	 proc_open(struct privsep *, struct privsep_proc *,
 	    struct privsep_proc *, size_t);
@@ -260,7 +262,7 @@ proc_listen(struct privsep *ps, struct privsep_proc *procs, size_t nproc)
 void
 proc_close(struct privsep *ps)
 {
-	unsigned int		 dst, n;
+	unsigned int		 src, dst, n, i, j;
 	struct privsep_pipes	*pp;
 
 	if (ps == NULL)
@@ -284,6 +286,20 @@ proc_close(struct privsep *ps)
 		}
 		free(ps->ps_ievs[dst]);
 	}
+
+	/* undo proc_init() */
+	for (src = 0; src < PROC_MAX; src++) {
+		for (i = 0; i < ps->ps_ninstances; i++) {
+			pp = &ps->ps_pipes[src][i];
+			for (dst = 0; dst < PROC_MAX; dst++) {
+				for (j = 0; j < ps->ps_ninstances; j++)
+					if (pp->pp_pipes[dst][j] != -1)
+						close(pp->pp_pipes[dst][j]);
+				free(pp->pp_pipes[dst]);
+			}
+		}
+		free(ps->ps_pipes[src]);
+	}
 }
 
 void
@@ -292,7 +308,7 @@ proc_shutdown(struct privsep_proc *p)
 	struct privsep	*ps = p->p_ps;
 
 	if (p->p_shutdown != NULL)
-		(*p->p_shutdown)();
+		(*p->p_shutdown)(p);
 
 	proc_close(ps);
 

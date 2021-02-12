@@ -1,4 +1,4 @@
-/*	$OpenBSD: exec_elf.c,v 1.154 2020/01/25 01:28:38 deraadt Exp $	*/
+/*	$OpenBSD: exec_elf.c,v 1.158 2021/02/08 10:51:01 mpi Exp $	*/
 
 /*
  * Copyright (c) 1996 Per Fogelstrom
@@ -124,7 +124,7 @@ extern char *syscallnames[];
 /*
  * How many entries are in the AuxInfo array we pass to the process?
  */
-#define ELF_AUX_ENTRIES	8
+#define ELF_AUX_ENTRIES	9
 
 /*
  * This is the OpenBSD ELF emul
@@ -860,6 +860,10 @@ exec_elf_fixup(struct proc *p, struct exec_package *epp)
 		a->au_v = ap->arg_entry;
 		a++;
 
+		a->au_id = AUX_openbsd_timekeep;
+		a->au_v = p->p_p->ps_timekeep;
+		a++;
+
 		a->au_id = AUX_null;
 		a->au_v = 0;
 		a++;
@@ -1252,7 +1256,7 @@ coredump_notes_elf(struct proc *p, void *iocookie, size_t *sizep)
 		cpi.cpi_sigcatch = pr->ps_sigacts->ps_sigcatch;
 
 		cpi.cpi_pid = pr->ps_pid;
-		cpi.cpi_ppid = pr->ps_pptr->ps_pid;
+		cpi.cpi_ppid = pr->ps_ppid;
 		cpi.cpi_pgrp = pr->ps_pgid;
 		if (pr->ps_session->s_leader)
 			cpi.cpi_sid = pr->ps_session->s_leader->ps_pid;

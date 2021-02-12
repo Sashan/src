@@ -14,7 +14,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: types.h,v 1.4 2020/02/25 13:18:31 jsg Exp $ */
+/* $Id: types.h,v 1.7 2020/09/15 11:47:42 florian Exp $ */
 
 #ifndef ISC_TYPES_H
 #define ISC_TYPES_H 1
@@ -24,11 +24,6 @@
  * OS-specific types, from the OS-specific include directories.
  */
 
-/*
- * XXXDCL should isc_boolean_t be moved here, requiring an explicit include
- * of <isc/boolean.h> when ISC_TRUE/ISC_FALSE/ISC_TF() are desired?
- */
-#include <isc/boolean.h>
 /*
  * XXXDCL This is just for ISC_LIST and ISC_LINK, but gets all of the other
  * list macros too.
@@ -47,10 +42,8 @@ typedef struct isc_log 			isc_log_t;		/*%< Log */
 typedef struct isc_logcategory		isc_logcategory_t;	/*%< Log Category */
 typedef struct isc_logconfig		isc_logconfig_t;	/*%< Log Configuration */
 typedef struct isc_logmodule		isc_logmodule_t;	/*%< Log Module */
-typedef struct isc_netaddr		isc_netaddr_t;		/*%< Net Address */
 typedef struct isc_region		isc_region_t;		/*%< Region */
 typedef unsigned int			isc_result_t;		/*%< Result */
-typedef struct isc_sockaddr		isc_sockaddr_t;		/*%< Socket Address */
 typedef struct isc_socket		isc_socket_t;		/*%< Socket */
 typedef struct isc_socketevent		isc_socketevent_t;	/*%< Socket Event */
 typedef struct isc_socketmgr		isc_socketmgr_t;	/*%< Socket Manager */

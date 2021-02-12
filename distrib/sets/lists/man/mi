@@ -20,7 +20,6 @@
 ./usr/share/man/man1/atq.1
 ./usr/share/man/man1/atrm.1
 ./usr/share/man/man1/aucat.1
-./usr/share/man/man1/audioctl.1
 ./usr/share/man/man1/awk.1
 ./usr/share/man/man1/banner.1
 ./usr/share/man/man1/basename.1
@@ -167,7 +166,6 @@
 ./usr/share/man/man1/mesg.1
 ./usr/share/man/man1/mg.1
 ./usr/share/man/man1/midicat.1
-./usr/share/man/man1/mixerctl.1
 ./usr/share/man/man1/mkdep.1
 ./usr/share/man/man1/mkdir.1
 ./usr/share/man/man1/mkfifo.1
@@ -244,6 +242,9 @@
 ./usr/share/man/man1/perl5281delta.1
 ./usr/share/man/man1/perl5282delta.1
 ./usr/share/man/man1/perl5300delta.1
+./usr/share/man/man1/perl5301delta.1
+./usr/share/man/man1/perl5302delta.1
+./usr/share/man/man1/perl5303delta.1
 ./usr/share/man/man1/perl561delta.1
 ./usr/share/man/man1/perl56delta.1
 ./usr/share/man/man1/perl581delta.1
@@ -1107,6 +1108,7 @@
 ./usr/share/man/man3p/warnings::register.3p
 ./usr/share/man/man4/aac.4
 ./usr/share/man/man4/abcrtc.4
+./usr/share/man/man4/abl.4
 ./usr/share/man/man4/ac97.4
 ./usr/share/man/man4/acphy.4
 ./usr/share/man/man4/acpi.4
@@ -1119,6 +1121,8 @@
 ./usr/share/man/man4/acpicpu.4
 ./usr/share/man/man4/acpidock.4
 ./usr/share/man/man4/acpiec.4
+./usr/share/man/man4/acpige.4
+./usr/share/man/man4/acpihid.4
 ./usr/share/man/man4/acpihpet.4
 ./usr/share/man/man4/acpihve.4
 ./usr/share/man/man4/acpimadt.4
@@ -1242,12 +1246,15 @@
 ./usr/share/man/man4/armv7/intc.4
 ./usr/share/man/man4/armv7/intro.4
 ./usr/share/man/man4/armv7/omap.4
+./usr/share/man/man4/armv7/omclock.4
+./usr/share/man/man4/armv7/omcm.4
 ./usr/share/man/man4/armv7/omdog.4
 ./usr/share/man/man4/armv7/omgpio.4
 ./usr/share/man/man4/armv7/ommmc.4
+./usr/share/man/man4/armv7/omrng.4
+./usr/share/man/man4/armv7/omsysc.4
 ./usr/share/man/man4/armv7/omwugen.4
 ./usr/share/man/man4/armv7/prcm.4
-./usr/share/man/man4/armv7/sitaracm.4
 ./usr/share/man/man4/armv7/sxie.4
 ./usr/share/man/man4/armv7/sxiintc.4
 ./usr/share/man/man4/armv7/sxitimer.4
@@ -1277,9 +1284,18 @@
 ./usr/share/man/man4/azalia.4
 ./usr/share/man/man4/bce.4
 ./usr/share/man/man4/bcmaux.4
+./usr/share/man/man4/bcmbsc.4
+./usr/share/man/man4/bcmclock.4
+./usr/share/man/man4/bcmdmac.4
 ./usr/share/man/man4/bcmdog.4
+./usr/share/man/man4/bcmgpio.4
+./usr/share/man/man4/bcmirng.4
+./usr/share/man/man4/bcmmbox.4
+./usr/share/man/man4/bcmpcie.4
 ./usr/share/man/man4/bcmrng.4
+./usr/share/man/man4/bcmsdhost.4
 ./usr/share/man/man4/bcmtemp.4
+./usr/share/man/man4/bcmtmon.4
 ./usr/share/man/man4/bdpmic.4
 ./usr/share/man/man4/berkwdt.4
 ./usr/share/man/man4/bge.4
@@ -1295,6 +1311,7 @@
 ./usr/share/man/man4/brgphy.4
 ./usr/share/man/man4/bridge.4
 ./usr/share/man/man4/brswphy.4
+./usr/share/man/man4/bse.4
 ./usr/share/man/man4/bwfm.4
 ./usr/share/man/man4/bwi.4
 ./usr/share/man/man4/bytgpio.4
@@ -1316,6 +1333,7 @@
 ./usr/share/man/man4/cmpci.4
 ./usr/share/man/man4/com.4
 ./usr/share/man/man4/cue.4
+./usr/share/man/man4/cwfg.4
 ./usr/share/man/man4/cy.4
 ./usr/share/man/man4/cz.4
 ./usr/share/man/man4/dc.4
@@ -1325,10 +1343,12 @@
 ./usr/share/man/man4/diskmap.4
 ./usr/share/man/man4/divert.4
 ./usr/share/man/man4/drm.4
+./usr/share/man/man4/dsxrtc.4
 ./usr/share/man/man4/dt.4
 ./usr/share/man/man4/dwctwo.4
 ./usr/share/man/man4/dwdog.4
 ./usr/share/man/man4/dwge.4
+./usr/share/man/man4/dwgpio.4
 ./usr/share/man/man4/dwiic.4
 ./usr/share/man/man4/dwmmc.4
 ./usr/share/man/man4/dwpcie.4
@@ -1351,6 +1371,7 @@
 ./usr/share/man/man4/ep.4
 ./usr/share/man/man4/epic.4
 ./usr/share/man/man4/esa.4
+./usr/share/man/man4/escodec.4
 ./usr/share/man/man4/eso.4
 ./usr/share/man/man4/ess.4
 ./usr/share/man/man4/et.4
@@ -1477,6 +1498,7 @@
 ./usr/share/man/man4/imxgpc.4
 ./usr/share/man/man4/imxgpio.4
 ./usr/share/man/man4/imxiic.4
+./usr/share/man/man4/imxpciephy.4
 ./usr/share/man/man4/imxpwm.4
 ./usr/share/man/man4/imxrtc.4
 ./usr/share/man/man4/imxspi.4
@@ -1543,7 +1565,6 @@
 ./usr/share/man/man4/loongson/intro.4
 ./usr/share/man/man4/loongson/leioc.4
 ./usr/share/man/man4/loongson/mem.4
-./usr/share/man/man4/loongson/mfokclock.4
 ./usr/share/man/man4/loongson/sisfb.4
 ./usr/share/man/man4/loongson/smfb.4
 ./usr/share/man/man4/loongson/stsec.4
@@ -1606,6 +1627,7 @@
 ./usr/share/man/man4/mcx.4
 ./usr/share/man/man4/mfi.4
 ./usr/share/man/man4/mfii.4
+./usr/share/man/man4/mfokrtc.4
 ./usr/share/man/man4/midi.4
 ./usr/share/man/man4/mii.4
 ./usr/share/man/man4/mlphy.4
@@ -1631,11 +1653,14 @@
 ./usr/share/man/man4/mvgpio.4
 ./usr/share/man/man4/mvicu.4
 ./usr/share/man/man4/mviic.4
+./usr/share/man/man4/mvkpcie.4
 ./usr/share/man/man4/mvneta.4
 ./usr/share/man/man4/mvpinctrl.4
+./usr/share/man/man4/mvpp.4
 ./usr/share/man/man4/mvrng.4
 ./usr/share/man/man4/mvrtc.4
 ./usr/share/man/man4/mvspi.4
+./usr/share/man/man4/mvsw.4
 ./usr/share/man/man4/mvtemp.4
 ./usr/share/man/man4/mvuart.4
 ./usr/share/man/man4/myx.4
@@ -1657,6 +1682,7 @@
 ./usr/share/man/man4/oce.4
 ./usr/share/man/man4/octeon/amdcf.4
 ./usr/share/man/man4/octeon/cnmac.4
+./usr/share/man/man4/octeon/octboot.4
 ./usr/share/man/man4/octeon/octcf.4
 ./usr/share/man/man4/octeon/octcib.4
 ./usr/share/man/man4/octeon/octcit.4
@@ -1690,11 +1716,13 @@
 ./usr/share/man/man4/pair.4
 ./usr/share/man/man4/pcagpio.4
 ./usr/share/man/man4/pcaled.4
+./usr/share/man/man4/pcamux.4
 ./usr/share/man/man4/pcdisplay.4
 ./usr/share/man/man4/pcfadc.4
 ./usr/share/man/man4/pcfiic.4
 ./usr/share/man/man4/pcfrtc.4
 ./usr/share/man/man4/pchb.4
+./usr/share/man/man4/pchgpio.4
 ./usr/share/man/man4/pchtemp.4
 ./usr/share/man/man4/pci.4
 ./usr/share/man/man4/pcib.4
@@ -1718,6 +1746,15 @@
 ./usr/share/man/man4/plrtc.4
 ./usr/share/man/man4/pluart.4
 ./usr/share/man/man4/pms.4
+./usr/share/man/man4/powerpc64/astfb.4
+./usr/share/man/man4/powerpc64/intro.4
+./usr/share/man/man4/powerpc64/opal.4
+./usr/share/man/man4/powerpc64/opalcons.4
+./usr/share/man/man4/powerpc64/opalsens.4
+./usr/share/man/man4/powerpc64/phb.4
+./usr/share/man/man4/powerpc64/xicp.4
+./usr/share/man/man4/powerpc64/xics.4
+./usr/share/man/man4/powerpc64/xive.4
 ./usr/share/man/man4/ppb.4
 ./usr/share/man/man4/ppp.4
 ./usr/share/man/man4/pppoe.4
@@ -1755,10 +1792,12 @@
 ./usr/share/man/man4/rkgpio.4
 ./usr/share/man/man4/rkgrf.4
 ./usr/share/man/man4/rkiic.4
+./usr/share/man/man4/rkiis.4
 ./usr/share/man/man4/rkpcie.4
 ./usr/share/man/man4/rkpinctrl.4
 ./usr/share/man/man4/rkpmic.4
 ./usr/share/man/man4/rkpwm.4
+./usr/share/man/man4/rkrng.4
 ./usr/share/man/man4/rktemp.4
 ./usr/share/man/man4/rkvop.4
 ./usr/share/man/man4/rl.4
@@ -1813,7 +1852,10 @@
 ./usr/share/man/man4/sgi/xheart.4
 ./usr/share/man/man4/sgi/zs.4
 ./usr/share/man/man4/sili.4
+./usr/share/man/man4/simpleamp.4
+./usr/share/man/man4/simpleaudio.4
 ./usr/share/man/man4/simplefb.4
+./usr/share/man/man4/simplepanel.4
 ./usr/share/man/man4/siop.4
 ./usr/share/man/man4/sis.4
 ./usr/share/man/man4/sk.4
@@ -1925,6 +1967,7 @@
 ./usr/share/man/man4/tap.4
 ./usr/share/man/man4/tcic.4
 ./usr/share/man/man4/tcp.4
+./usr/share/man/man4/tcpci.4
 ./usr/share/man/man4/termios.4
 ./usr/share/man/man4/thmc.4
 ./usr/share/man/man4/tht.4
@@ -1967,7 +2010,9 @@
 ./usr/share/man/man4/uhci.4
 ./usr/share/man/man4/uhid.4
 ./usr/share/man/man4/uhidev.4
+./usr/share/man/man4/uhidpp.4
 ./usr/share/man/man4/uipaq.4
+./usr/share/man/man4/ujoy.4
 ./usr/share/man/man4/uk.4
 ./usr/share/man/man4/ukbd.4
 ./usr/share/man/man4/ukphy.4
@@ -1982,6 +2027,7 @@
 ./usr/share/man/man4/umodem.4
 ./usr/share/man/man4/ums.4
 ./usr/share/man/man4/umsm.4
+./usr/share/man/man4/umstc.4
 ./usr/share/man/man4/umt.4
 ./usr/share/man/man4/unix.4
 ./usr/share/man/man4/uoaklux.4
@@ -2053,6 +2099,7 @@
 ./usr/share/man/man4/wdc.4
 ./usr/share/man/man4/wdsc.4
 ./usr/share/man/man4/we.4
+./usr/share/man/man4/wg.4
 ./usr/share/man/man4/wi.4
 ./usr/share/man/man4/witness.4
 ./usr/share/man/man4/wpi.4
@@ -2083,6 +2130,7 @@
 ./usr/share/man/man5/bsd.port.arch.mk.5
 ./usr/share/man/man5/bsd.port.mk.5
 ./usr/share/man/man5/bsd.regress.mk.5
+./usr/share/man/man5/bt.5
 ./usr/share/man/man5/changelist.5
 ./usr/share/man/man5/chio.conf.5
 ./usr/share/man/man5/core.5
@@ -2137,6 +2185,7 @@
 ./usr/share/man/man5/mk.conf.5
 ./usr/share/man/man5/moduli.5
 ./usr/share/man/man5/motd.5
+./usr/share/man/man5/mygate.5
 ./usr/share/man/man5/myname.5
 ./usr/share/man/man5/netgroup.5
 ./usr/share/man/man5/netid.5
@@ -2234,7 +2283,6 @@
 ./usr/share/man/man8/alpha/boot_alpha.8
 ./usr/share/man/man8/alpha/installboot.8
 ./usr/share/man/man8/alpha/setnetbootinfo.8
-./usr/share/man/man8/alpha/wsmoused.8
 ./usr/share/man/man8/amd.8
 ./usr/share/man/man8/amd64/MAKEDEV.8
 ./usr/share/man/man8/amd64/apm.8
@@ -2247,17 +2295,18 @@
 ./usr/share/man/man8/amd64/hostctl.8
 ./usr/share/man/man8/amd64/memconfig.8
 ./usr/share/man/man8/amd64/pxeboot.8
-./usr/share/man/man8/amd64/wsmoused.8
 ./usr/share/man/man8/amq.8
 ./usr/share/man/man8/arm64/MAKEDEV.8
 ./usr/share/man/man8/arm64/apm.8
 ./usr/share/man/man8/arm64/apmd.8
 ./usr/share/man/man8/arm64/eeprom.8
+./usr/share/man/man8/arm64/gpioctl.8
 ./usr/share/man/man8/armv7/MAKEDEV.8
 ./usr/share/man/man8/armv7/eeprom.8
 ./usr/share/man/man8/armv7/gpioctl.8
 ./usr/share/man/man8/arp.8
 ./usr/share/man/man8/atactl.8
+./usr/share/man/man8/audioctl.8
 ./usr/share/man/man8/authpf.8
 ./usr/share/man/man8/autoinstall.8
 ./usr/share/man/man8/badsect.8
@@ -2267,6 +2316,7 @@
 ./usr/share/man/man8/bgplgsh.8
 ./usr/share/man/man8/bioctl.8
 ./usr/share/man/man8/boot_config.8
+./usr/share/man/man8/btrace.8
 ./usr/share/man/man8/bulk.8
 ./usr/share/man/man8/chat.8
 ./usr/share/man/man8/chown.8
@@ -2330,7 +2380,6 @@
 ./usr/share/man/man8/i386/hostctl.8
 ./usr/share/man/man8/i386/memconfig.8
 ./usr/share/man/man8/i386/pxeboot.8
-./usr/share/man/man8/i386/wsmoused.8
 ./usr/share/man/man8/identd.8
 ./usr/share/man/man8/ifconfig.8
 ./usr/share/man/man8/ifstated.8
@@ -2361,6 +2410,7 @@
 ./usr/share/man/man8/locate.updatedb.8
 ./usr/share/man/man8/login_chpass.8
 ./usr/share/man/man8/login_lchpass.8
+./usr/share/man/man8/login_ldap.8
 ./usr/share/man/man8/login_passwd.8
 ./usr/share/man/man8/login_radius.8
 ./usr/share/man/man8/login_reject.8
@@ -2393,6 +2443,7 @@
 ./usr/share/man/man8/makemap.8
 ./usr/share/man/man8/makewhatis.8
 ./usr/share/man/man8/map-mbone.8
+./usr/share/man/man8/mixerctl.8
 ./usr/share/man/man8/mkalias.8
 ./usr/share/man/man8/mkhybrid.8
 ./usr/share/man/man8/mknetid.8
@@ -2446,6 +2497,8 @@
 ./usr/share/man/man8/ping.8
 ./usr/share/man/man8/pkg_check.8
 ./usr/share/man/man8/portmap.8
+./usr/share/man/man8/powerpc64/MAKEDEV.8
+./usr/share/man/man8/powerpc64/eeprom.8
 ./usr/share/man/man8/pppd.8
 ./usr/share/man/man8/pppstats.8
 ./usr/share/man/man8/pstat.8
@@ -2567,6 +2620,7 @@
 ./usr/share/man/man8/wsconscfg.8
 ./usr/share/man/man8/wsconsctl.8
 ./usr/share/man/man8/wsfontload.8
+./usr/share/man/man8/wsmoused.8
 ./usr/share/man/man8/yp.8
 ./usr/share/man/man8/ypbind.8
 ./usr/share/man/man8/ypinit.8

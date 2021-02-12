@@ -1,4 +1,4 @@
-/*	$OpenBSD: bios.c,v 1.124 2019/10/23 10:14:46 jsg Exp $	*/
+/*	$OpenBSD: bios.c,v 1.126 2020/08/26 03:29:05 visa Exp $	*/
 
 /*
  * Copyright (c) 1997-2001 Michael Shalayeff
@@ -61,8 +61,6 @@
 
 #include <dev/acpi/acpireg.h>
 #include <dev/acpi/acpivar.h>
-
-#include <dev/rndvar.h>
 
 #include "apm.h"
 #include "acpi.h"
@@ -128,10 +126,6 @@ void		smbios_info(char*);
 
 bios_diskinfo_t *bios_getdiskinfo(dev_t);
 
-/*
- * used by hw_sysctl
- */
-extern char *hw_vendor, *hw_prod, *hw_uuid, *hw_serial, *hw_ver;
 const char *smbios_uninfo[] = {
 	"System",
 	"Not ",

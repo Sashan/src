@@ -1,4 +1,4 @@
-/*	$OpenBSD: cat.c,v 1.27 2019/06/28 13:34:58 deraadt Exp $	*/
+/*	$OpenBSD: cat.c,v 1.31 2020/12/11 05:48:22 cheloha Exp $	*/
 /*	$NetBSD: cat.c,v 1.11 1995/09/07 06:12:54 jtc Exp $	*/
 
 /*
@@ -47,16 +47,13 @@
 
 #define MAXIMUM(a, b)	(((a) > (b)) ? (a) : (b))
 
-extern char *__progname;
-
 int bflag, eflag, nflag, sflag, tflag, vflag;
 int rval;
-char *filename;
 
 void cook_args(char *argv[]);
-void cook_buf(FILE *);
+void cook_buf(FILE *, const char *);
 void raw_args(char *argv[]);
-void raw_cat(int);
+void raw_cat(int, const char *);
 
 int
 main(int argc, char *argv[])
@@ -66,7 +63,7 @@ main(int argc, char *argv[])
 	if (pledge("stdio rpath", NULL) == -1)
 		err(1, "pledge");
 
-	while ((ch = getopt(argc, argv, "benstuv")) != -1)
+	while ((ch = getopt(argc, argv, "benstuv")) != -1) {
 		switch (ch) {
 		case 'b':
 			bflag = nflag = 1;	/* -b implies -n */
@@ -90,10 +87,11 @@ main(int argc, char *argv[])
 			vflag = 1;
 			break;
 		default:
-			(void)fprintf(stderr,
-			    "usage: %s [-benstuv] [file ...]\n", __progname);
+			fprintf(stderr, "usage: %s [-benstuv] [file ...]\n",
+			    getprogname());
 			return 1;
 		}
+	}
 	argv += optind;
 
 	if (bflag || eflag || nflag || sflag || tflag || vflag)
@@ -110,32 +108,32 @@ cook_args(char **argv)
 {
 	FILE *fp;
 
-	fp = stdin;
-	filename = "stdin";
-	do {
-		if (*argv) {
-			if (!strcmp(*argv, "-"))
-				fp = stdin;
-			else if ((fp = fopen(*argv, "r")) == NULL) {
-				warn("%s", *argv);
-				rval = 1;
-				++argv;
-				continue;
-			}
-			filename = *argv++;
+	if (*argv == NULL) {
+		cook_buf(stdin, "stdin");
+		return;
+	}
+
+	for (; *argv != NULL; argv++) {
+		if (!strcmp(*argv, "-")) {
+			cook_buf(stdin, "stdin");
+			clearerr(stdin);
+			continue;
 		}
-		cook_buf(fp);
-		if (fp == stdin)
-			clearerr(fp);
-		else
-			(void)fclose(fp);
-	} while (*argv);
+		if ((fp = fopen(*argv, "r")) == NULL) {
+			warn("%s", *argv);
+			rval = 1;
+			continue;
+		}
+		cook_buf(fp, *argv);
+		fclose(fp);
+	}
 }
 
 void
-cook_buf(FILE *fp)
+cook_buf(FILE *fp, const char *filename)
 {
-	int ch, gobble, line, prev;
+	unsigned long long line;
+	int ch, gobble, prev;
 
 	line = gobble = 0;
 	for (prev = '\n'; (ch = getc(fp)) != EOF; prev = ch) {
@@ -150,7 +148,7 @@ cook_buf(FILE *fp)
 			}
 			if (nflag) {
 				if (!bflag || ch != '\n') {
-					(void)fprintf(stdout, "%6d\t", ++line);
+					fprintf(stdout, "%6llu\t", ++line);
 					if (ferror(stdout))
 						break;
 				} else if (eflag) {
@@ -200,28 +198,28 @@ raw_args(char **argv)
 {
 	int fd;
 
-	fd = fileno(stdin);
-	filename = "stdin";
-	do {
-		if (*argv) {
-			if (!strcmp(*argv, "-"))
-				fd = fileno(stdin);
-			else if ((fd = open(*argv, O_RDONLY, 0)) == -1) {
-				warn("%s", *argv);
-				rval = 1;
-				++argv;
-				continue;
-			}
-			filename = *argv++;
+	if (*argv == NULL) {
+		raw_cat(fileno(stdin), "stdin");
+		return;
+	}
+
+	for (; *argv != NULL; argv++) {
+		if (!strcmp(*argv, "-")) {
+			raw_cat(fileno(stdin), "stdin");
+			continue;
 		}
-		raw_cat(fd);
-		if (fd != fileno(stdin))
-			(void)close(fd);
-	} while (*argv);
+		if ((fd = open(*argv, O_RDONLY, 0)) == -1) {
+			warn("%s", *argv);
+			rval = 1;
+			continue;
+		}
+		raw_cat(fd, *argv);
+		close(fd);
+	}
 }
 
 void
-raw_cat(int rfd)
+raw_cat(int rfd, const char *filename)
 {
 	int wfd;
 	ssize_t nr, nw, off;
@@ -235,13 +233,14 @@ raw_cat(int rfd)
 			err(1, "stdout");
 		bsize = MAXIMUM(sbuf.st_blksize, BUFSIZ);
 		if ((buf = malloc(bsize)) == NULL)
-			err(1, "malloc");
+			err(1, NULL);
 	}
-	while ((nr = read(rfd, buf, bsize)) != -1 && nr != 0)
-		for (off = 0; nr; nr -= nw, off += nw)
-			if ((nw = write(wfd, buf + off, (size_t)nr)) == 0 ||
-			     nw == -1)
+	while ((nr = read(rfd, buf, bsize)) != -1 && nr != 0) {
+		for (off = 0; nr; nr -= nw, off += nw) {
+			if ((nw = write(wfd, buf + off, nr)) == -1 || nw == 0)
 				err(1, "stdout");
+		}
+	}
 	if (nr == -1) {
 		warn("%s", filename);
 		rval = 1;

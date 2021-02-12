@@ -25,24 +25,30 @@
  *          Alex Deucher
  *          Jerome Glisse
  */
-#include <linux/seq_file.h>
-#include <linux/slab.h>
-#include <drm/drmP.h>
-#include <drm/radeon_drm.h>
-#include "radeon_reg.h"
-#include "radeon.h"
-#include "radeon_asic.h"
-#include "r100d.h"
-#include "rs100d.h"
-#include "rv200d.h"
-#include "rv250d.h"
-#include "atom.h"
 
 #include <linux/firmware.h>
 #include <linux/module.h>
+#include <linux/pci.h>
+#include <linux/seq_file.h>
+#include <linux/slab.h>
 
+#include <drm/drm_debugfs.h>
+#include <drm/drm_device.h>
+#include <drm/drm_file.h>
+#include <drm/drm_fourcc.h>
+#include <drm/drm_vblank.h>
+#include <drm/radeon_drm.h>
+
+#include "atom.h"
 #include "r100_reg_safe.h"
+#include "r100d.h"
+#include "radeon.h"
+#include "radeon_asic.h"
+#include "radeon_reg.h"
 #include "rn50_reg_safe.h"
+#include "rs100d.h"
+#include "rv200d.h"
+#include "rv250d.h"
 
 /* Firmware Names */
 #define FIRMWARE_R100		"radeon/R100_cp.bin"
@@ -885,7 +891,7 @@ struct radeon_fence *r100_copy_blit(struct radeon_device *rdev,
 				    uint64_t src_offset,
 				    uint64_t dst_offset,
 				    unsigned num_gpu_pages,
-				    struct reservation_object *resv)
+				    struct dma_resv *resv)
 {
 	struct radeon_ring *ring = &rdev->ring[RADEON_RING_TYPE_GFX_INDEX];
 	struct radeon_fence *fence;
@@ -1817,9 +1823,9 @@ static int r100_packet0_check(struct radeon_cs_parser *p,
 	case RADEON_PP_TXFORMAT_2:
 		i = (reg - RADEON_PP_TXFORMAT_0) / 24;
 		if (idx_value & RADEON_TXFORMAT_NON_POWER2) {
-			track->textures[i].use_pitch = 1;
+			track->textures[i].use_pitch = true;
 		} else {
-			track->textures[i].use_pitch = 0;
+			track->textures[i].use_pitch = false;
 			track->textures[i].width = 1 << ((idx_value & RADEON_TXFORMAT_WIDTH_MASK) >> RADEON_TXFORMAT_WIDTH_SHIFT);
 			track->textures[i].height = 1 << ((idx_value & RADEON_TXFORMAT_HEIGHT_MASK) >> RADEON_TXFORMAT_HEIGHT_SHIFT);
 		}
@@ -2381,12 +2387,12 @@ void r100_cs_track_clear(struct radeon_device *rdev, struct r100_cs_track *track
 		else
 			track->num_texture = 6;
 		track->maxy = 2048;
-		track->separate_cube = 1;
+		track->separate_cube = true;
 	} else {
 		track->num_cb = 4;
 		track->num_texture = 16;
 		track->maxy = 4096;
-		track->separate_cube = 0;
+		track->separate_cube = false;
 		track->aaresolve = false;
 		track->aa.robj = NULL;
 	}
@@ -2470,7 +2476,7 @@ static int r100_rbbm_fifo_wait_for_entry(struct radeon_device *rdev, unsigned n)
 		if (tmp >= n) {
 			return 0;
 		}
-		DRM_UDELAY(1);
+		udelay(1);
 	}
 	return -1;
 }
@@ -2488,7 +2494,7 @@ int r100_gui_wait_for_idle(struct radeon_device *rdev)
 		if (!(tmp & RADEON_RBBM_ACTIVE)) {
 			return 0;
 		}
-		DRM_UDELAY(1);
+		udelay(1);
 	}
 	return -1;
 }
@@ -2504,7 +2510,7 @@ int r100_mc_wait_for_idle(struct radeon_device *rdev)
 		if (tmp & RADEON_MC_IDLE) {
 			return 0;
 		}
-		DRM_UDELAY(1);
+		udelay(1);
 	}
 	return -1;
 }
@@ -2809,7 +2815,7 @@ void r100_vga_set_state(struct radeon_device *rdev, bool state)
 	uint32_t temp;
 
 	temp = RREG32(RADEON_CONFIG_CNTL);
-	if (state == false) {
+	if (!state) {
 		temp &= ~RADEON_CFG_VGA_RAM_EN;
 		temp |= RADEON_CFG_VGA_IO_DIS;
 	} else {
@@ -3669,7 +3675,7 @@ int r100_ring_test(struct radeon_device *rdev, struct radeon_ring *ring)
 		if (tmp == 0xDEADBEEF) {
 			break;
 		}
-		DRM_UDELAY(1);
+		udelay(1);
 	}
 	if (i < rdev->usec_timeout) {
 		DRM_INFO("ring test succeeded in %d usecs\n", i);
@@ -3746,7 +3752,7 @@ int r100_ib_test(struct radeon_device *rdev, struct radeon_ring *ring)
 		if (tmp == 0xDEADBEEF) {
 			break;
 		}
-		DRM_UDELAY(1);
+		udelay(1);
 	}
 	if (i < rdev->usec_timeout) {
 		DRM_INFO("ib test succeeded in %u usecs\n", i);
@@ -4111,10 +4117,8 @@ uint32_t r100_mm_rreg_slow(struct radeon_device *rdev, uint32_t reg)
 	uint32_t ret;
 
 	spin_lock_irqsave(&rdev->mmio_idx_lock, flags);
-	bus_space_write_4(rdev->memt, rdev->rmmio_bsh,
-	    RADEON_MM_INDEX, reg);
-	ret = bus_space_read_4(rdev->memt, rdev->rmmio_bsh,
-	    RADEON_MM_DATA);
+	writel(reg, ((void __iomem *)rdev->rmmio) + RADEON_MM_INDEX);
+	ret = readl(((void __iomem *)rdev->rmmio) + RADEON_MM_DATA);
 	spin_unlock_irqrestore(&rdev->mmio_idx_lock, flags);
 	return ret;
 }
@@ -4124,32 +4128,46 @@ void r100_mm_wreg_slow(struct radeon_device *rdev, uint32_t reg, uint32_t v)
 	unsigned long flags;
 
 	spin_lock_irqsave(&rdev->mmio_idx_lock, flags);
-	bus_space_write_4(rdev->memt, rdev->rmmio_bsh,
-	    RADEON_MM_INDEX, reg);
-	bus_space_write_4(rdev->memt, rdev->rmmio_bsh,
-	    RADEON_MM_DATA, v);
+	writel(reg, ((void __iomem *)rdev->rmmio) + RADEON_MM_INDEX);
+	writel(v, ((void __iomem *)rdev->rmmio) + RADEON_MM_DATA);
 	spin_unlock_irqrestore(&rdev->mmio_idx_lock, flags);
 }
 
 u32 r100_io_rreg(struct radeon_device *rdev, u32 reg)
 {
-	if (reg < rdev->rio_mem_size)
-		return bus_space_read_4(rdev->iot, rdev->rio_mem, reg);
-	else {
+	u32 val;
+
+	if (reg < rdev->rio_mem_size) {
+		val = bus_space_read_4(rdev->iot, rdev->rio_mem, reg);
+		bus_space_barrier(rdev->iot, rdev->rio_mem, 0,
+		    rdev->rio_mem_size, BUS_SPACE_BARRIER_READ);
+	} else {
+		bus_space_barrier(rdev->iot, rdev->rio_mem, 0,
+		    rdev->rio_mem_size, BUS_SPACE_BARRIER_WRITE);
 		bus_space_write_4(rdev->iot, rdev->rio_mem,
 		    RADEON_MM_INDEX, reg);
-		return bus_space_read_4(rdev->iot, rdev->rio_mem,
+		val = bus_space_read_4(rdev->iot, rdev->rio_mem,
 		    RADEON_MM_DATA);
+		bus_space_barrier(rdev->iot, rdev->rio_mem, 0,
+		    rdev->rio_mem_size, BUS_SPACE_BARRIER_READ);
 	}
+
+	return val;
 }
 
 void r100_io_wreg(struct radeon_device *rdev, u32 reg, u32 v)
 {
-	if (reg < rdev->rio_mem_size)
+	if (reg < rdev->rio_mem_size) {
+		bus_space_barrier(rdev->iot, rdev->rio_mem, 0,
+		    rdev->rio_mem_size, BUS_SPACE_BARRIER_WRITE);
 		bus_space_write_4(rdev->iot, rdev->rio_mem, reg, v);
-	else {
+	} else {
+		bus_space_barrier(rdev->iot, rdev->rio_mem, 0,
+		    rdev->rio_mem_size, BUS_SPACE_BARRIER_WRITE);
 		bus_space_write_4(rdev->iot, rdev->rio_mem,
 		    RADEON_MM_INDEX, reg);
+		bus_space_barrier(rdev->iot, rdev->rio_mem, 0,
+		    rdev->rio_mem_size, BUS_SPACE_BARRIER_WRITE);
 		bus_space_write_4(rdev->iot, rdev->rio_mem,
 		    RADEON_MM_DATA, v);
 	}

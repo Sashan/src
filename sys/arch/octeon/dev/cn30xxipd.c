@@ -1,4 +1,4 @@
-/*	$OpenBSD: cn30xxipd.c,v 1.12 2019/09/20 15:01:30 visa Exp $	*/
+/*	$OpenBSD: cn30xxipd.c,v 1.14 2020/08/15 11:12:28 visa Exp $	*/
 
 /*
  * Copyright (c) 2007 Internet Initiative Japan, Inc.
@@ -29,14 +29,9 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
-#include <sys/mbuf.h>
 
 #include <machine/octeonvar.h>
 
-#include <octeon/dev/cn30xxciureg.h>
-#include <octeon/dev/cn30xxfpavar.h>
-#include <octeon/dev/cn30xxgmxreg.h>
-#include <octeon/dev/cn30xxpipreg.h>
 #include <octeon/dev/cn30xxipdreg.h>
 #include <octeon/dev/cn30xxipdvar.h>
 
@@ -132,33 +127,4 @@ cn30xxipd_config(struct cn30xxipd_softc *sc)
 	_IPD_WR8(sc, IPD_CTL_STATUS_OFFSET, ctl_status);
 
 	return 0;
-}
-
-/*
- * octeon work queue entry offload
- * L3 error & L4 error
- */
-void
-cn30xxipd_offload(uint64_t word2, uint16_t *rcflags)
-{
-	int cflags;
-
-	/* Skip if the packet is non-IP. */
-	if (ISSET(word2, PIP_WQE_WORD2_IP_NI))
-		return;
-
-	cflags = 0;
-
-	/* Check IP checksum status. */
-	if (!ISSET(word2, PIP_WQE_WORD2_IP_V6) &&
-	    !ISSET(word2, PIP_WQE_WORD2_IP_IE))
-		SET(cflags, M_IPV4_CSUM_IN_OK);
-
-	/* Check TCP/UDP checksum status. Skip if the packet is a fragment. */
-	if (ISSET(word2, PIP_WQE_WORD2_IP_TU) &&
-	    !ISSET(word2, PIP_WQE_WORD2_IP_FR) &&
-	    !ISSET(word2, PIP_WQE_WORD2_IP_LE))
-		SET(cflags, M_TCP_CSUM_IN_OK | M_UDP_CSUM_IN_OK);
-
-	*rcflags = cflags;
 }

@@ -1,6 +1,6 @@
-#	$OpenBSD: Server.pm,v 1.11 2017/01/31 18:02:54 bluhm Exp $
+#	$OpenBSD: Server.pm,v 1.13 2020/10/16 22:46:45 bluhm Exp $
 
-# Copyright (c) 2010-2015 Alexander Bluhm <bluhm@openbsd.org>
+# Copyright (c) 2010-2020 Alexander Bluhm <bluhm@openbsd.org>
 #
 # Permission to use, copy, modify, and distribute this software for any
 # purpose with or without fee is hereby granted, provided that the above
@@ -29,6 +29,8 @@ use IO::Socket::SSL;
 sub new {
 	my $class = shift;
 	my %args = @_;
+	$args{ktracepid} = "ktrace" if $args{ktrace};
+	$args{ktracepid} = $ENV{KTRACE} if $ENV{KTRACE};
 	$args{ktracefile} ||= "server.ktrace";
 	$args{logfile} ||= "server.log";
 	$args{up} ||= "Accepted";
@@ -101,6 +103,10 @@ sub run {
 
 sub child {
 	my $self = shift;
+
+	# TLS 1.3 writes multiple messages without acknowledgement.
+	# If the other side closes early, we want broken pipe error.
+	$SIG{PIPE} = 'IGNORE' if $self->{listenproto} eq "tls";
 
 	my $as = $self->{ls};
 	if ($self->{listenproto} ne "udp") {

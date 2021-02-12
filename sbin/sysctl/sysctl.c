@@ -1,4 +1,4 @@
-/*	$OpenBSD: sysctl.c,v 1.250 2019/12/25 00:15:36 cheloha Exp $	*/
+/*	$OpenBSD: sysctl.c,v 1.255 2021/01/13 16:28:49 cheloha Exp $	*/
 /*	$NetBSD: sysctl.c,v 1.9 1995/09/30 07:12:50 thorpej Exp $	*/
 
 /*
@@ -92,7 +92,6 @@
 #include <nfs/nfs.h>
 
 #include <ddb/db_var.h>
-#include <dev/rndvar.h>
 
 #include <ctype.h>
 #include <err.h>
@@ -131,11 +130,12 @@ struct ctlname machdepname[] = CTL_MACHDEP_NAMES;
 #endif
 struct ctlname ddbname[] = CTL_DDB_NAMES;
 struct ctlname audioname[] = CTL_KERN_AUDIO_NAMES;
+struct ctlname videoname[] = CTL_KERN_VIDEO_NAMES;
 struct ctlname witnessname[] = CTL_KERN_WITNESS_NAMES;
 char names[BUFSIZ];
 int lastused;
 
-/* Maximum size object to expect from sysctl(3) */
+/* Maximum size object to expect from sysctl(2) */
 #define SYSCTL_BUFSIZ	8192
 
 struct list {
@@ -220,6 +220,7 @@ void print_sensor(struct sensor *);
 int sysctl_chipset(char *, char **, int *, int, int *);
 #endif
 int sysctl_audio(char *, char **, int *, int, int *);
+int sysctl_video(char *, char **, int *, int, int *);
 int sysctl_witness(char *, char **, int *, int, int *);
 void vfsinit(void);
 
@@ -515,6 +516,11 @@ parse(char *string, int flags)
 			break;
 		case KERN_AUDIO:
 			len = sysctl_audio(string, &bufp, mib, flags, &type);
+			if (len < 0)
+				return;
+			break;
+		case KERN_VIDEO:
+			len = sysctl_video(string, &bufp, mib, flags, &type);
 			if (len < 0)
 				return;
 			break;
@@ -910,8 +916,8 @@ parse(char *string, int flags)
 		if (!nflag)
 			(void)printf("%s%s", string, equ);
 		(void)printf(
-		    "tick = %d, tickadj = %d, hz = %d, profhz = %d, stathz = %d\n",
-		    clkp->tick, clkp->tickadj, clkp->hz, clkp->profhz, clkp->stathz);
+		    "tick = %d, hz = %d, profhz = %d, stathz = %d\n",
+		    clkp->tick, clkp->hz, clkp->profhz, clkp->stathz);
 		return;
 	}
 	if (special & BOOTTIME) {
@@ -1767,6 +1773,7 @@ struct list shmlist = { shmname, KERN_SHMINFO_MAXID };
 struct list watchdoglist = { watchdogname, KERN_WATCHDOG_MAXID };
 struct list tclist = { tcname, KERN_TIMECOUNTER_MAXID };
 struct list audiolist = { audioname, KERN_AUDIO_MAXID };
+struct list videolist = { videoname, KERN_VIDEO_MAXID };
 struct list witnesslist = { witnessname, KERN_WITNESS_MAXID };
 
 /*
@@ -2760,6 +2767,9 @@ print_sensor(struct sensor *s)
 		case SENSOR_VELOCITY:
 			printf("%4.3f m/s", s->value / 1000000.0);
 			break;
+		case SENSOR_ENERGY:
+			printf("%.2f J", s->value / 1000000.0);
+			break;
 		default:
 			printf("unknown");
 		}
@@ -2811,6 +2821,25 @@ sysctl_audio(char *string, char **bufpp, int mib[], int flags, int *typep)
 		return (-1);
 	mib[2] = indx;
 	*typep = audiolist.list[indx].ctl_type;
+	return (3);
+}
+
+/*
+ * Handle video support
+ */
+int
+sysctl_video(char *string, char **bufpp, int mib[], int flags, int *typep)
+{
+	int indx;
+
+	if (*bufpp == NULL) {
+		listall(string, &videolist);
+		return (-1);
+	}
+	if ((indx = findname(string, "third", bufpp, &videolist)) == -1)
+		return (-1);
+	mib[2] = indx;
+	*typep = videolist.list[indx].ctl_type;
 	return (3);
 }
 

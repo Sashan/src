@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip6_input.c,v 1.224 2019/12/30 14:52:00 bluhm Exp $	*/
+/*	$OpenBSD: ip6_input.c,v 1.230 2020/11/16 06:44:39 gnezdo Exp $	*/
 /*	$KAME: ip6_input.c,v 1.188 2001/03/29 05:34:31 itojun Exp $	*/
 
 /*
@@ -424,8 +424,6 @@ ip6_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 	 */
 	if (rtisvalid(rt) && ISSET(rt->rt_flags, RTF_LOCAL)) {
 		struct in6_ifaddr *ia6 = ifatoia6(rt->rt_ifa);
-		if (ia6->ia6_flags & IN6_IFF_ANYCAST)
-			m->m_flags |= M_ACAST;
 
 		if (ip6_forwarding == 0 && rt->rt_ifidx != ifp->if_index &&
 		    !((ifp->if_flags & IFF_LOOPBACK) ||
@@ -1142,11 +1140,17 @@ ip6_pullexthdr(struct mbuf *m, size_t off, int nxt)
 	}
 #endif
 
+	if (off + sizeof(ip6e) > m->m_pkthdr.len)
+		return NULL;
+
 	m_copydata(m, off, sizeof(ip6e), (caddr_t)&ip6e);
 	if (nxt == IPPROTO_AH)
 		elen = (ip6e.ip6e_len + 2) << 2;
 	else
 		elen = (ip6e.ip6e_len + 1) << 3;
+
+	if (off + elen > m->m_pkthdr.len)
+		return NULL;
 
 	MGET(n, M_DONTWAIT, MT_DATA);
 	if (n && elen >= MLEN) {
@@ -1330,7 +1334,32 @@ const u_char inet6ctlerrmap[PRC_NCMDS] = {
 	ENOPROTOOPT
 };
 
-int *ipv6ctl_vars[IPV6CTL_MAXID] = IPV6CTL_VARS;
+#ifdef MROUTING
+extern int ip6_mrtproto;
+#endif
+
+const struct sysctl_bounded_args ipv6ctl_vars[] = {
+	{ IPV6CTL_DAD_PENDING, &ip6_dad_pending, 1, 0 },
+#ifdef MROUTING
+	{ IPV6CTL_MRTPROTO, &ip6_mrtproto, 1, 0 },
+#endif
+	{ IPV6CTL_FORWARDING, &ip6_forwarding, 0, 1 },
+	{ IPV6CTL_SENDREDIRECTS, &ip6_sendredirects, 0, 1 },
+	{ IPV6CTL_DEFHLIM, &ip6_defhlim, 0, 255 },
+	{ IPV6CTL_MAXFRAGPACKETS, &ip6_maxfragpackets, 0, 1000 },
+	{ IPV6CTL_LOG_INTERVAL, &ip6_log_interval, 0, INT_MAX },
+	{ IPV6CTL_HDRNESTLIMIT, &ip6_hdrnestlimit, 0, 100 },
+	{ IPV6CTL_DAD_COUNT, &ip6_dad_count, 0, 10 },
+	{ IPV6CTL_AUTO_FLOWLABEL, &ip6_auto_flowlabel, 0, 1 },
+	{ IPV6CTL_DEFMCASTHLIM, &ip6_defmcasthlim, 0, 255 },
+	{ IPV6CTL_USE_DEPRECATED, &ip6_use_deprecated, 0, 1 },
+	{ IPV6CTL_MAXFRAGS, &ip6_maxfrags, 0, 1000 },
+	{ IPV6CTL_MFORWARDING, &ip6_mforwarding, 0, 1 },
+	{ IPV6CTL_MULTIPATH, &ip6_multipath, 0, 1 },
+	{ IPV6CTL_MCAST_PMTU, &ip6_mcast_pmtu, 0, 1 },
+	{ IPV6CTL_NEIGHBORGCTHRESH, &ip6_neighborgcthresh, -1, 5 * 2048 },
+	{ IPV6CTL_MAXDYNROUTES, &ip6_maxdynroutes, -1, 5 * 4096 },
+};
 
 int
 ip6_sysctl_ip6stat(void *oldp, size_t *oldlenp, void *newp)
@@ -1372,7 +1401,6 @@ ip6_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
     void *newp, size_t newlen)
 {
 #ifdef MROUTING
-	extern int ip6_mrtproto;
 	extern struct mrt6stat mrt6stat;
 #endif
 	int error;
@@ -1382,8 +1410,6 @@ ip6_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 		return (ENOTDIR);
 
 	switch (name[0]) {
-	case IPV6CTL_DAD_PENDING:
-		return sysctl_rdint(oldp, oldlenp, newp, ip6_dad_pending);
 	case IPV6CTL_STATS:
 		return (ip6_sysctl_ip6stat(oldp, oldlenp, newp));
 #ifdef MROUTING
@@ -1395,8 +1421,6 @@ ip6_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 		    &mrt6stat, sizeof(mrt6stat));
 		NET_UNLOCK();
 		return (error);
-	case IPV6CTL_MRTPROTO:
-		return sysctl_rdint(oldp, oldlenp, newp, ip6_mrtproto);
 	case IPV6CTL_MRTMIF:
 		if (newp)
 			return (EPERM);
@@ -1432,14 +1456,11 @@ ip6_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 	case IPV6CTL_SOIIKEY:
 		return (ip6_sysctl_soiikey(oldp, oldlenp, newp, newlen));
 	default:
-		if (name[0] < IPV6CTL_MAXID) {
-			NET_LOCK();
-			error = sysctl_int_arr(ipv6ctl_vars, name, namelen,
-			    oldp, oldlenp, newp, newlen);
-			NET_UNLOCK();
-			return (error);
-		}
-		return (EOPNOTSUPP);
+		NET_LOCK();
+		error = sysctl_bounded_arr(ipv6ctl_vars, nitems(ipv6ctl_vars),
+		    name, namelen, oldp, oldlenp, newp, newlen);
+		NET_UNLOCK();
+		return (error);
 	}
 	/* NOTREACHED */
 }
@@ -1455,7 +1476,7 @@ ip6_send_dispatch(void *xmq)
 	if (ml_empty(&ml))
 		return;
 
-	NET_RLOCK();
+	NET_LOCK();
 	while ((m = ml_dequeue(&ml)) != NULL) {
 		/*
 		 * To avoid a "too big" situation at an intermediate router and
@@ -1466,7 +1487,7 @@ ip6_send_dispatch(void *xmq)
 		 */
 		ip6_output(m, NULL, NULL, IPV6_MINMTU, NULL, NULL);
 	}
-	NET_RUNLOCK();
+	NET_UNLOCK();
 }
 
 void

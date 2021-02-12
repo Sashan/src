@@ -1,4 +1,4 @@
-/*	$OpenBSD: ofw_gpio.h,v 1.3 2019/09/29 04:25:08 visa Exp $	*/
+/*	$OpenBSD: ofw_gpio.h,v 1.5 2020/12/18 22:14:13 kettenis Exp $	*/
 /*
  * Copyright (c) 2016 Mark Kettenis
  *
@@ -18,8 +18,15 @@
 #ifndef _DEV_OFW_GPIO_H_
 #define _DEV_OFW_GPIO_H_
 
-#define GPIO_ACTIVE_HIGH	0
-#define GPIO_ACTIVE_LOW		1
+#define GPIO_ACTIVE_HIGH	(0 << 0)
+#define GPIO_ACTIVE_LOW		(1 << 0)
+#define GPIO_PUSH_PULL		(0 << 1)
+#define GPIO_SINGLE_ENDED	(1 << 1)
+#define GPIO_LINE_OPEN_SOURCE	(0 << 2)
+#define GPIO_LINE_OPEN_DRAIN	(1 << 2)
+
+#define GPIO_OPEN_DRAIN		(GPIO_SINGLE_ENDED | GPIO_LINE_OPEN_DRAIN)
+#define GPIO_OPEN_SOURCE	(GPIO_SINGLE_ENDED | GPIO_LINE_OPEN_SOURCE)
 
 struct gpio_controller {
 	int	gc_node;
@@ -37,6 +44,8 @@ void	gpio_controller_register(struct gpio_controller *);
 
 #define GPIO_CONFIG_INPUT	0x0000
 #define GPIO_CONFIG_OUTPUT	0x0001
+#define GPIO_CONFIG_PULL_UP	0x0010
+#define GPIO_CONFIG_PULL_DOWN	0x0020
 #define GPIO_CONFIG_MD0		0x1000
 #define GPIO_CONFIG_MD1		0x2000
 #define GPIO_CONFIG_MD2		0x4000

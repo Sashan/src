@@ -1,4 +1,4 @@
-/*	$OpenBSD: twe.c,v 1.51 2020/02/15 18:02:00 krw Exp $	*/
+/*	$OpenBSD: twe.c,v 1.64 2020/10/15 00:01:24 krw Exp $	*/
 
 /*
  * Copyright (c) 2000-2002 Michael Shalayeff.  All rights reserved.
@@ -75,7 +75,6 @@ int  twe_cmd(struct twe_ccb *ccb, int flags, int wait);
 int  twe_start(struct twe_ccb *ccb, int wait);
 int  twe_complete(struct twe_ccb *ccb);
 int  twe_done(struct twe_softc *sc, struct twe_ccb *ccb);
-void twe_copy_internal_data(struct scsi_xfer *xs, void *v, size_t size);
 void twe_thread_create(void *v);
 void twe_thread(void *v);
 void twe_aen(void *, void *);
@@ -119,7 +118,7 @@ twe_dispose(sc)
 			if (ccb->ccb_dmamap)
 				bus_dmamap_destroy(sc->dmat, ccb->ccb_dmamap);
 	}
-	bus_dmamem_unmap(sc->dmat, sc->sc_cmds, 
+	bus_dmamem_unmap(sc->dmat, sc->sc_cmds,
 	    sizeof(struct twe_cmd) * TWE_MAXCMDS);
 	bus_dmamem_free(sc->dmat, sc->sc_cmdseg, 1);
 }
@@ -394,15 +393,15 @@ twe_attach(sc)
 
 	/* TODO: fetch & print cache params? */
 
-	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.adapter = &twe_switch;
-	sc->sc_link.adapter_target = TWE_MAX_UNITS;
-	sc->sc_link.openings = TWE_MAXCMDS / nunits;
-	sc->sc_link.adapter_buswidth = TWE_MAX_UNITS;
-	sc->sc_link.pool = &sc->sc_iopool;
-
-	bzero(&saa, sizeof(saa));
-	saa.saa_sc_link = &sc->sc_link;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter = &twe_switch;
+	saa.saa_adapter_target = SDEV_NO_ADAPTER_TARGET;
+	saa.saa_adapter_buswidth = TWE_MAX_UNITS;
+	saa.saa_luns = 8;
+	saa.saa_openings = TWE_MAXCMDS / nunits;
+	saa.saa_pool = &sc->sc_iopool;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
 	config_found(&sc->sc_dev, &saa, scsiprint);
 
@@ -574,7 +573,7 @@ twe_cmd(ccb, flags, wait)
 			for (i = 0; i < dmap->dm_nsegs; i++, sgp++) {
 				sgp->twes_addr = htole32(dmap->dm_segs[i].ds_addr);
 				sgp->twes_len  = htole32(dmap->dm_segs[i].ds_len);
-				TWE_DPRINTF(TWE_D_DMA, ("%x[%x] ",
+				TWE_DPRINTF(TWE_D_DMA, ("%lx[%lx] ",
 				    dmap->dm_segs[i].ds_addr,
 				    dmap->dm_segs[i].ds_len));
 			}
@@ -708,8 +707,8 @@ twe_done(sc, ccb)
 
 	dmap = ccb->ccb_dmamap;
 	if (xs) {
-		if (xs->cmd->opcode != PREVENT_ALLOW &&
-		    xs->cmd->opcode != SYNCHRONIZE_CACHE) {
+		if (xs->cmd.opcode != PREVENT_ALLOW &&
+		    xs->cmd.opcode != SYNCHRONIZE_CACHE) {
 			bus_dmamap_sync(sc->dmat, dmap, 0,
 			    dmap->dm_mapsize, (xs->flags & SCSI_DATA_IN) ?
 			    BUS_DMASYNC_POSTREAD : BUS_DMASYNC_POSTWRITE);
@@ -753,29 +752,11 @@ twe_done(sc, ccb)
 }
 
 void
-twe_copy_internal_data(xs, v, size)
-	struct scsi_xfer *xs;
-	void *v;
-	size_t size;
-{
-	size_t copy_cnt;
-
-	TWE_DPRINTF(TWE_D_MISC, ("twe_copy_internal_data "));
-
-	if (!xs->datalen)
-		printf("uio move is not yet supported\n");
-	else {
-		copy_cnt = MIN(size, xs->datalen);
-		bcopy(v, xs->data, copy_cnt);
-	}
-}
-
-void
 twe_scsi_cmd(xs)
 	struct scsi_xfer *xs;
 {
 	struct scsi_link *link = xs->sc_link;
-	struct twe_softc *sc = link->adapter_softc;
+	struct twe_softc *sc = link->bus->sb_adapter_softc;
 	struct twe_ccb *ccb = xs->io;
 	struct twe_cmd *cmd;
 	struct scsi_inquiry_data inq;
@@ -784,7 +765,7 @@ twe_scsi_cmd(xs)
 	u_int8_t target = link->target;
 	u_int32_t blockno, blockcnt;
 	struct scsi_rw *rw;
-	struct scsi_rw_big *rwb;
+	struct scsi_rw_10 *rw10;
 	int error, op, flags, wait;
 	twe_lock_t lock;
 
@@ -800,13 +781,13 @@ twe_scsi_cmd(xs)
 
 	xs->error = XS_NOERROR;
 
-	switch (xs->cmd->opcode) {
+	switch (xs->cmd.opcode) {
 	case TEST_UNIT_READY:
 	case START_STOP:
 #if 0
 	case VERIFY:
 #endif
-		TWE_DPRINTF(TWE_D_CMD, ("opc %d tgt %d ", xs->cmd->opcode,
+		TWE_DPRINTF(TWE_D_CMD, ("opc %d tgt %d ", xs->cmd.opcode,
 		    target));
 		break;
 
@@ -818,7 +799,7 @@ twe_scsi_cmd(xs)
 		sd.flags = SKEY_NO_SENSE;
 		*(u_int32_t*)sd.info = htole32(0);
 		sd.extra_len = 0;
-		twe_copy_internal_data(xs, &sd, sizeof sd);
+		scsi_copy_internal_data(xs, &sd, sizeof(sd));
 		break;
 
 	case INQUIRY:
@@ -829,14 +810,14 @@ twe_scsi_cmd(xs)
 		    (sc->sc_hdr[target].hd_devtype & 4) ? T_CDROM : T_DIRECT;
 		inq.dev_qual2 =
 		    (sc->sc_hdr[target].hd_devtype & 1) ? SID_REMOVABLE : 0;
-		inq.version = 2;
-		inq.response_format = 2;
-		inq.additional_length = 32;
+		inq.version = SCSI_REV_2;
+		inq.response_format = SID_SCSI2_RESPONSE;
+		inq.additional_length = SID_SCSI2_ALEN;
 		strlcpy(inq.vendor, "3WARE  ", sizeof inq.vendor);
 		snprintf(inq.product, sizeof inq.product, "Host drive  #%02d",
 		    target);
 		strlcpy(inq.revision, "   ", sizeof inq.revision);
-		twe_copy_internal_data(xs, &inq, sizeof inq);
+		scsi_copy_internal_data(xs, &inq, sizeof(inq));
 		break;
 
 	case READ_CAPACITY:
@@ -844,7 +825,7 @@ twe_scsi_cmd(xs)
 		bzero(&rcd, sizeof rcd);
 		_lto4b(sc->sc_hdr[target].hd_size - 1, rcd.addr);
 		_lto4b(TWE_SECTOR_SIZE, rcd.length);
-		twe_copy_internal_data(xs, &rcd, sizeof rcd);
+		scsi_copy_internal_data(xs, &rcd, sizeof(rcd));
 		break;
 
 	case PREVENT_ALLOW:
@@ -853,29 +834,29 @@ twe_scsi_cmd(xs)
 		return;
 
 	case READ_COMMAND:
-	case READ_BIG:
+	case READ_10:
 	case WRITE_COMMAND:
-	case WRITE_BIG:
+	case WRITE_10:
 	case SYNCHRONIZE_CACHE:
 		lock = TWE_LOCK(sc);
 
 		flags = 0;
-		if (xs->cmd->opcode == SYNCHRONIZE_CACHE) {
+		if (xs->cmd.opcode == SYNCHRONIZE_CACHE) {
 			blockno = blockcnt = 0;
 		} else {
 			/* A read or write operation. */
 			if (xs->cmdlen == 6) {
-				rw = (struct scsi_rw *)xs->cmd;
+				rw = (struct scsi_rw *)&xs->cmd;
 				blockno = _3btol(rw->addr) &
 				    (SRW_TOPADDR << 16 | 0xffff);
 				blockcnt = rw->length ? rw->length : 0x100;
 			} else {
-				rwb = (struct scsi_rw_big *)xs->cmd;
-				blockno = _4btol(rwb->addr);
-				blockcnt = _2btol(rwb->length);
+				rw10 = (struct scsi_rw_10 *)&xs->cmd;
+				blockno = _4btol(rw10->addr);
+				blockcnt = _2btol(rw10->length);
 				/* reflect DPO & FUA flags */
-				if (xs->cmd->opcode == WRITE_BIG &&
-				    rwb->byte2 & 0x18)
+				if (xs->cmd.opcode == WRITE_10 &&
+				    rw10->byte2 & 0x18)
 					flags = TWE_FLAGS_CACHEDISABLE;
 			}
 			if (blockno >= sc->sc_hdr[target].hd_size ||
@@ -890,11 +871,11 @@ twe_scsi_cmd(xs)
 			}
 		}
 
-		switch (xs->cmd->opcode) {
+		switch (xs->cmd.opcode) {
 		case READ_COMMAND:	op = TWE_CMD_READ;	break;
-		case READ_BIG:		op = TWE_CMD_READ;	break;
+		case READ_10:		op = TWE_CMD_READ;	break;
 		case WRITE_COMMAND:	op = TWE_CMD_WRITE;	break;
-		case WRITE_BIG:		op = TWE_CMD_WRITE;	break;
+		case WRITE_10:		op = TWE_CMD_WRITE;	break;
 		default:		op = TWE_CMD_NOP;	break;
 		}
 
@@ -925,7 +906,7 @@ twe_scsi_cmd(xs)
 
 	default:
 		TWE_DPRINTF(TWE_D_CMD, ("unsupported scsi command %#x tgt %d ",
-		    xs->cmd->opcode, target));
+		    xs->cmd.opcode, target));
 		xs->error = XS_DRIVER_STUFFUP;
 	}
 
@@ -1044,6 +1025,6 @@ twe_aen(void *cookie, void *io)
 	}
 
 	aen = *(u_int16_t *)pb->data;
-	if (aen != TWE_AEN_QEMPTY) 
+	if (aen != TWE_AEN_QEMPTY)
 		scsi_ioh_add(&sc->sc_aen);
 }

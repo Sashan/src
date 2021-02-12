@@ -1,4 +1,4 @@
-/*	$OpenBSD: trm.h,v 1.5 2020/02/06 19:17:54 krw Exp $
+/*	$OpenBSD: trm.h,v 1.7 2020/07/22 13:16:04 krw Exp $
  * ------------------------------------------------------------
  *   O.S       : OpenBSD
  *   File Name : trm.h
@@ -209,13 +209,6 @@ struct trm_softc
 
 	u_int8_t	MsgCnt;
 	u_int8_t	MsgBuf[6];
-
-	/*
-	 *----------------------------------
-	 *    Link to the generic SCSI driver
-	 *----------------------------------
-	 */
-	struct	scsi_link	sc_link;
 
 	struct	SRB_HEAD	freeSRB;
 	struct	SRB_HEAD	goingSRB;
@@ -527,5 +520,7 @@ struct trm_adapter_nvram
 
 int   trm_Interrupt(void *);
 int   trm_init(struct trm_softc *, int);
+void  trm_scsi_cmd(struct scsi_xfer *);
+
 
 #endif /* trm_h */

@@ -1,4 +1,4 @@
-/*	$OpenBSD: vdsk.c,v 1.53 2020/02/18 17:20:12 krw Exp $	*/
+/*	$OpenBSD: vdsk.c,v 1.70 2020/10/16 03:59:24 jsg Exp $	*/
 /*
  * Copyright (c) 2009, 2011 Mark Kettenis
  *
@@ -160,7 +160,6 @@ struct vdsk_softc {
 	struct vdsk_soft_desc *sc_vsd;
 
 	struct scsi_iopool sc_iopool;
-	struct scsi_link sc_link;
 
 	uint32_t	sc_vdisk_block_size;
 	uint64_t	sc_vdisk_size;
@@ -179,11 +178,9 @@ struct cfdriver vdsk_cd = {
 };
 
 void	vdsk_scsi_cmd(struct scsi_xfer *);
-int	vdsk_dev_probe(struct scsi_link *);
-void	vdsk_dev_free(struct scsi_link *);
 
 struct scsi_adapter vdsk_switch = {
-	vdsk_scsi_cmd, NULL, vdsk_dev_probe, vdsk_dev_free, NULL
+	vdsk_scsi_cmd, NULL, NULL, NULL, NULL
 };
 
 int	vdsk_tx_intr(void *);
@@ -347,16 +344,17 @@ vdsk_attach(struct device *parent, struct device *self, void *aux)
 
 	scsi_iopool_init(&sc->sc_iopool, sc, vdsk_io_get, vdsk_io_put);
 
-	sc->sc_link.adapter = &vdsk_switch;
-	sc->sc_link.adapter_softc = self;
-	sc->sc_link.adapter_buswidth = 2;
-	sc->sc_link.luns = 1; /* XXX slices should be presented as luns? */
-	sc->sc_link.adapter_target = 2;
-	sc->sc_link.openings = sc->sc_vd->vd_nentries - 1;
-	sc->sc_link.pool = &sc->sc_iopool;
 
-	bzero(&saa, sizeof(saa));
-	saa.saa_sc_link = &sc->sc_link;
+	saa.saa_adapter = &vdsk_switch;
+	saa.saa_adapter_softc = self;
+	saa.saa_adapter_buswidth = 1;
+	saa.saa_luns = 1;
+	saa.saa_adapter_target = SDEV_NO_ADAPTER_TARGET;
+	saa.saa_openings = sc->sc_vd->vd_nentries - 1;
+	saa.saa_pool = &sc->sc_iopool;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
+
 	config_found(self, &saa, scsiprint);
 
 	return;
@@ -925,17 +923,17 @@ vdsk_io_put(void *xsc, void *io)
 void
 vdsk_scsi_cmd(struct scsi_xfer *xs)
 {
-	struct vdsk_softc *sc = xs->sc_link->adapter_softc;
+	struct vdsk_softc *sc = xs->sc_link->bus->sb_adapter_softc;
 	int timeout, s;
 	int desc;
 
-	switch (xs->cmd->opcode) {
-	case READ_BIG:
+	switch (xs->cmd.opcode) {
 	case READ_COMMAND:
+	case READ_10:
 	case READ_12:
 	case READ_16:
-	case WRITE_BIG:
 	case WRITE_COMMAND:
+	case WRITE_10:
 	case WRITE_12:
 	case WRITE_16:
 	case SYNCHRONIZE_CACHE:
@@ -958,7 +956,7 @@ vdsk_scsi_cmd(struct scsi_xfer *xs)
 		return;
 
 	default:
-		printf("%s cmd 0x%02x\n", __func__, xs->cmd->opcode);
+		printf("%s cmd 0x%02x\n", __func__, xs->cmd.opcode);
 	case MODE_SENSE:
 	case MODE_SENSE_BIG:
 	case REPORT_LUNS:
@@ -994,11 +992,11 @@ vdsk_scsi_cmd(struct scsi_xfer *xs)
 int
 vdsk_submit_cmd(struct scsi_xfer *xs)
 {
-	struct vdsk_softc *sc = xs->sc_link->adapter_softc;
+	struct vdsk_softc *sc = xs->sc_link->bus->sb_adapter_softc;
 	struct ldc_map *map = sc->sc_lm;
 	struct vio_dring_msg dm;
 	struct scsi_rw *rw;
-	struct scsi_rw_big *rwb;
+	struct scsi_rw_10 *rw10;
 	struct scsi_rw_12 *rw12;
 	struct scsi_rw_16 *rw16;
 	u_int64_t lba;
@@ -1010,16 +1008,16 @@ vdsk_submit_cmd(struct scsi_xfer *xs)
 	int len, ncookies;
 	int desc;
 
-	switch (xs->cmd->opcode) {
-	case READ_BIG:
+	switch (xs->cmd.opcode) {
 	case READ_COMMAND:
+	case READ_10:
 	case READ_12:
 	case READ_16:
 		operation = VD_OP_BREAD;
 		break;
 
-	case WRITE_BIG:
 	case WRITE_COMMAND:
+	case WRITE_10:
 	case WRITE_12:
 	case WRITE_16:
 		operation = VD_OP_BWRITE;
@@ -1035,19 +1033,19 @@ vdsk_submit_cmd(struct scsi_xfer *xs)
 	 * layout as 10-byte READ/WRITE commands.
 	 */
 	if (xs->cmdlen == 6) {
-		rw = (struct scsi_rw *)xs->cmd;
+		rw = (struct scsi_rw *)&xs->cmd;
 		lba = _3btol(rw->addr) & (SRW_TOPADDR << 16 | 0xffff);
 		sector_count = rw->length ? rw->length : 0x100;
 	} else if (xs->cmdlen == 10) {
-		rwb = (struct scsi_rw_big *)xs->cmd;
-		lba = _4btol(rwb->addr);
-		sector_count = _2btol(rwb->length);
+		rw10 = (struct scsi_rw_10 *)&xs->cmd;
+		lba = _4btol(rw10->addr);
+		sector_count = _2btol(rw10->length);
 	} else if (xs->cmdlen == 12) {
-		rw12 = (struct scsi_rw_12 *)xs->cmd;
+		rw12 = (struct scsi_rw_12 *)&xs->cmd;
 		lba = _4btol(rw12->addr);
 		sector_count = _4btol(rw12->length);
 	} else if (xs->cmdlen == 16) {
-		rw16 = (struct scsi_rw_16 *)xs->cmd;
+		rw16 = (struct scsi_rw_16 *)&xs->cmd;
 		lba = _8btol(rw16->addr);
 		sector_count = _4btol(rw16->length);
 	}
@@ -1117,7 +1115,7 @@ vdsk_submit_cmd(struct scsi_xfer *xs)
 void
 vdsk_complete_cmd(struct scsi_xfer *xs, int desc)
 {
-	struct vdsk_softc *sc = xs->sc_link->adapter_softc;
+	struct vdsk_softc *sc = xs->sc_link->bus->sb_adapter_softc;
 	struct ldc_map *map = sc->sc_lm;
 	int cookie, idx;
 	int error;
@@ -1142,7 +1140,7 @@ vdsk_complete_cmd(struct scsi_xfer *xs, int desc)
 void
 vdsk_scsi_inq(struct scsi_xfer *xs)
 {
-	struct scsi_inquiry *inq = (struct scsi_inquiry *)xs->cmd;
+	struct scsi_inquiry *inq = (struct scsi_inquiry *)&xs->cmd;
 
 	if (ISSET(inq->flags, SI_EVPD))
 		vdsk_scsi_done(xs, XS_DRIVER_STUFFUP);
@@ -1153,7 +1151,7 @@ vdsk_scsi_inq(struct scsi_xfer *xs)
 void
 vdsk_scsi_inquiry(struct scsi_xfer *xs)
 {
-	struct vdsk_softc *sc = xs->sc_link->adapter_softc;
+	struct vdsk_softc *sc = xs->sc_link->bus->sb_adapter_softc;
 	struct scsi_inquiry_data inq;
 	char buf[5];
 
@@ -1171,16 +1169,16 @@ vdsk_scsi_inquiry(struct scsi_xfer *xs)
 		break;
 	}
 
-	inq.version = 0x05; /* SPC-3 */
-	inq.response_format = 2;
-	inq.additional_length = 32;
+	inq.version = SCSI_REV_SPC3;
+	inq.response_format = SID_SCSI2_RESPONSE;
+	inq.additional_length = SID_SCSI2_ALEN;
 	inq.flags |= SID_CmdQue;
 	bcopy("SUN     ", inq.vendor, sizeof(inq.vendor));
 	bcopy("Virtual Disk    ", inq.product, sizeof(inq.product));
 	snprintf(buf, sizeof(buf), "%u.%u ", sc->sc_major, sc->sc_minor);
 	bcopy(buf, inq.revision, sizeof(inq.revision));
 
-	bcopy(&inq, xs->data, MIN(sizeof(inq), xs->datalen));
+	scsi_copy_internal_data(xs, &inq, sizeof(inq));
 
 	vdsk_scsi_done(xs, XS_NOERROR);
 }
@@ -1188,7 +1186,7 @@ vdsk_scsi_inquiry(struct scsi_xfer *xs)
 void
 vdsk_scsi_capacity(struct scsi_xfer *xs)
 {
-	struct vdsk_softc *sc = xs->sc_link->adapter_softc;
+	struct vdsk_softc *sc = xs->sc_link->bus->sb_adapter_softc;
 	struct scsi_read_cap_data rcd;
 	uint64_t capacity;
 
@@ -1209,7 +1207,7 @@ vdsk_scsi_capacity(struct scsi_xfer *xs)
 void
 vdsk_scsi_capacity16(struct scsi_xfer *xs)
 {
-	struct vdsk_softc *sc = xs->sc_link->adapter_softc;
+	struct vdsk_softc *sc = xs->sc_link->bus->sb_adapter_softc;
 	struct scsi_read_cap_data_16 rcd;
 
 	bzero(&rcd, sizeof(rcd));
@@ -1230,19 +1228,3 @@ vdsk_scsi_done(struct scsi_xfer *xs, int error)
 	scsi_done(xs);
 }
 
-int
-vdsk_dev_probe(struct scsi_link *link)
-{
-	KASSERT(link->lun == 0);
-
-	if (link->target == 0)
-		return (0);
-
-	return (ENODEV);
-}
-
-void
-vdsk_dev_free(struct scsi_link *link)
-{
-	printf("%s\n", __func__);
-}

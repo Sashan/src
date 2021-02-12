@@ -1,9 +1,9 @@
-# $OpenBSD: Makefile.inc,v 1.6 2019/02/21 23:06:33 bluhm Exp $
+# $OpenBSD: Makefile.inc,v 1.8 2020/12/17 00:51:11 bluhm Exp $
 
 .PATH:			${.CURDIR}/..
 
-SRCS_client =		client.c util.c
-SRCS_server =		server.c util.c
+SRCS_client ?=		client.c util.c
+SRCS_server ?=		server.c util.c
 WARNINGS =		yes
 CLEANFILES +=		*.out *.fstat
 
@@ -16,7 +16,6 @@ ldd-$p.out: $p
 client-self.out server-self.out: run-self-client-server
 
 run-self-client-server: client server 127.0.0.1.crt
-	@echo '\n======== $@ ========'
 	# check that tls client and server work together
 	LD_LIBRARY_PATH=${LD_LIBRARY_PATH} \
 	    ./server >server-self.out \
@@ -43,8 +42,8 @@ CLEANFILES +=		127.0.0.1.{crt,key} \
 
 127.0.0.1.crt:
 	openssl req -batch -new \
-	    -subj /L=OpenBSD/O=tls-regress/OU=server/CN=127.0.0.1/ \
-	    -nodes -newkey rsa -keyout 127.0.0.1.key -x509 -out $@
+	    -subj /L=OpenBSD/O=tls-regress/OU=server/CN=${@:R}/ \
+	    -nodes -newkey rsa -keyout ${@:R}.key -x509 -out $@
 
 ca.crt fake-ca.crt:
 	openssl req -batch -new \

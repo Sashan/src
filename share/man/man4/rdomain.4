@@ -1,4 +1,4 @@
-.\"	$OpenBSD: rdomain.4,v 1.13 2020/02/01 15:00:20 kn Exp $
+.\"	$OpenBSD: rdomain.4,v 1.17 2020/09/24 11:05:32 kn Exp $
 .\"
 .\" Copyright (c) 2015 Peter Hessler <phessler@openbsd.org>
 .\"
@@ -14,7 +14,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: February 1 2020 $
+.Dd $Mdocdate: September 24 2020 $
 .Dt RDOMAIN 4
 .Os
 .Sh NAME
@@ -98,7 +98,11 @@ Put em0 and lo4 in rdomain 4:
 # ifconfig em0 192.0.2.100/24
 .Ed
 .Pp
-Set a default route and localhost reject route within rdomain 4:
+List all rdomains with associated interfaces and routing tables:
+.Pp
+.Dl $ netstat -R
+.Pp
+Set a default route and localhost reject route within rtable 4:
 .Bd -literal -offset indent
 # route -T4 -qn add -net 127 127.0.0.1 -reject
 # route -T4 -n add default 192.0.2.1
@@ -106,13 +110,13 @@ Set a default route and localhost reject route within rdomain 4:
 .Pp
 Start
 .Xr sshd 8
-in rdomain 4:
+in rtable 4:
 .Pp
 .Dl # route -T4 exec /usr/sbin/sshd
 .Pp
 Display to which rdomain processes are assigned:
 .Pp
-.Dl # ps aux -o rtable
+.Dl $ ps aux -o rtable
 .Pp
 A
 .Xr pf.conf 5
@@ -129,6 +133,7 @@ Delete rdomain 4 again:
 # ifconfig lo4 destroy
 .Ed
 .Sh SEE ALSO
+.Xr netstat 1 ,
 .Xr ps 1 ,
 .Xr lo 4 ,
 .Xr route 4 ,
@@ -146,3 +151,6 @@ and IPv6 support first appeared in
 .Sh CAVEATS
 No tool is available to assign more than one rtable to an rdomain
 other than to the default one (0).
+.Pp
+An rtable cannot be deleted.
+Deleting an rdomain will move its rtable into the default rdomain.

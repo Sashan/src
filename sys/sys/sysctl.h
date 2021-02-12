@@ -1,4 +1,4 @@
-/*	$OpenBSD: sysctl.h,v 1.205 2020/03/13 10:07:01 anton Exp $	*/
+/*	$OpenBSD: sysctl.h,v 1.213 2020/12/28 18:28:11 mglocker Exp $	*/
 /*	$NetBSD: sysctl.h,v 1.16 1996/04/09 20:55:36 cgd Exp $	*/
 
 /*
@@ -189,7 +189,8 @@ struct ctlname {
 #define	KERN_PFSTATUS		86	/* struct: pf status and stats */
 #define	KERN_TIMEOUT_STATS	87	/* struct: timeout status and stats */
 #define	KERN_UTC_OFFSET		88	/* int: adjust RTC time to UTC */
-#define	KERN_MAXID		89	/* number of valid kern ids */
+#define	KERN_VIDEO		89	/* struct: video properties */
+#define	KERN_MAXID		90	/* number of valid kern ids */
 
 #define	CTL_KERN_NAMES { \
 	{ 0, 0 }, \
@@ -281,6 +282,7 @@ struct ctlname {
 	{ "pfstatus", CTLTYPE_STRUCT }, \
 	{ "timeout_stats", CTLTYPE_STRUCT }, \
 	{ "utc_offset", CTLTYPE_INT }, \
+	{ "video", CTLTYPE_STRUCT }, \
 }
 
 /*
@@ -318,6 +320,17 @@ struct ctlname {
 #define KERN_AUDIO_MAXID	2
 
 #define CTL_KERN_AUDIO_NAMES { \
+	{ 0, 0 }, \
+	{ "record", CTLTYPE_INT }, \
+}
+
+/*
+ * KERN_VIDEO
+ */
+#define KERN_VIDEO_RECORD	1
+#define KERN_VIDEO_MAXID	2
+
+#define CTL_KERN_VIDEO_NAMES { \
 	{ 0, 0 }, \
 	{ "record", CTLTYPE_INT }, \
 }
@@ -679,7 +692,7 @@ do {									\
 	PR_UNLOCK(pr);							\
 									\
 	if (((pr)->ps_flags & PS_ZOMBIE) == 0) {			\
-		struct timeval tv;					\
+		struct timeval __tv;					\
 									\
 		(kp)->p_uvalid = 1;					\
 									\
@@ -699,9 +712,9 @@ do {									\
 		(kp)->p_uru_nivcsw = (p)->p_ru.ru_nivcsw;		\
 									\
 		timeradd(&(pr)->ps_cru.ru_utime,			\
-			 &(pr)->ps_cru.ru_stime, &tv);			\
-		(kp)->p_uctime_sec = tv.tv_sec;				\
-		(kp)->p_uctime_usec = tv.tv_usec;			\
+			 &(pr)->ps_cru.ru_stime, &__tv);		\
+		(kp)->p_uctime_sec = __tv.tv_sec;			\
+		(kp)->p_uctime_usec = __tv.tv_usec;			\
 	}								\
 									\
 	(kp)->p_cpuid = KI_NOCPU;					\
@@ -957,7 +970,7 @@ struct kinfo_file {
 #define	CTL_DEBUG_MAXID		20
 
 #ifdef	_KERNEL
-#ifdef	DEBUG
+#ifdef DEBUG_SYSCTL
 /*
  * CTL_DEBUG variables.
  *
@@ -974,11 +987,18 @@ struct ctldebug {
 	char	*debugname;	/* name of debugging variable */
 	int	*debugvar;	/* pointer to debugging variable */
 };
-extern struct ctldebug debug0, debug1, debug2, debug3, debug4;
-extern struct ctldebug debug5, debug6, debug7, debug8, debug9;
-extern struct ctldebug debug10, debug11, debug12, debug13, debug14;
-extern struct ctldebug debug15, debug16, debug17, debug18, debug19;
-#endif	/* DEBUG */
+#endif	/* DEBUG_SYSCTL */
+
+/*
+ * Exported sysctl variable with valid bounds. Both bounds are inclusive to
+ * allow full range of values.
+ */
+struct sysctl_bounded_args {
+	int mib;     /* identifier shared with userspace as a CTL_ #define */
+	int *var;    /* never NULL */
+	int minimum; /* checking is disabled if minimum == maximum  */
+	int maximum; /* read-only variable if minimum > maximum */
+};
 
 /*
  * Internal sysctl function calling convention:
@@ -992,9 +1012,11 @@ extern struct ctldebug debug15, debug16, debug17, debug18, debug19;
 typedef int (sysctlfn)(int *, u_int, void *, size_t *, void *, size_t, struct proc *);
 
 int sysctl_int(void *, size_t *, void *, size_t, int *);
+int sysctl_int_bounded(void *, size_t *, void *, size_t, int *, int, int);
 int sysctl_int_lower(void *, size_t *, void *, size_t, int *);
 int sysctl_rdint(void *, size_t *, void *, int);
-int sysctl_int_arr(int **, int *, u_int, void *, size_t *, void *, size_t);
+int sysctl_bounded_arr(const struct sysctl_bounded_args *, u_int,
+    int *, u_int, void *, size_t *, void *, size_t);
 int sysctl_quad(void *, size_t *, void *, size_t, int64_t *);
 int sysctl_rdquad(void *, size_t *, void *, int64_t);
 int sysctl_string(void *, size_t *, void *, size_t, char *, size_t);
@@ -1023,7 +1045,7 @@ int kern_sysctl(int *, u_int, void *, size_t *, void *, size_t,
 		     struct proc *);
 int hw_sysctl(int *, u_int, void *, size_t *, void *, size_t,
 		   struct proc *);
-#ifdef DEBUG
+#ifdef DEBUG_SYSCTL
 int debug_sysctl(int *, u_int, void *, size_t *, void *, size_t,
 		      struct proc *);
 #endif

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ffs_vfsops.c,v 1.183 2020/02/21 11:11:15 otto Exp $	*/
+/*	$OpenBSD: ffs_vfsops.c,v 1.188 2020/11/07 05:24:20 gnezdo Exp $	*/
 /*	$NetBSD: ffs_vfsops.c,v 1.19 1996/02/09 22:22:26 christos Exp $	*/
 
 /*
@@ -754,14 +754,6 @@ ffs_mountfs(struct vnode *devvp, struct mount *mp, struct proc *p)
 		fs = (struct fs *) bp->b_data;
 		sbloc = sbtry[i];
 
-#if 0
-		if (fs->fs_magic == FS_UFS2_MAGIC) {
-			printf("ffs_mountfs(): Sorry, no UFS2 support (yet)\n");
-			error = EFTYPE;
-			goto out;
-		}
-#endif
-
 		/*
 		 * Do not look for an FFS1 file system at SBLOCK_UFS2. Doing so
 		 * will find the wrong super-block for file systems with 64k
@@ -813,7 +805,7 @@ ffs_mountfs(struct vnode *devvp, struct mount *mp, struct proc *p)
 		printf("ffs_mountfs(): obsolete rotational table format, "
 		    "please use fsck_ffs(8) -c 1\n");
 #endif
-		error = EFTYPE;
+		error = EROFS;
 		goto out;
 	}
 
@@ -1422,9 +1414,8 @@ retry:
 	 * already have one. This should only happen on old filesystems.
 	 */
 	if (DIP(ip, gen) == 0) {
-		DIP_ASSIGN(ip, gen, arc4random() & INT_MAX);
-		if (DIP(ip, gen) == 0 || DIP(ip, gen) == -1)
-			DIP_ASSIGN(ip, gen, 1);	/* Shouldn't happen */
+		while (DIP(ip, gen) == 0)
+			DIP_ASSIGN(ip, gen, arc4random());
 		if ((vp->v_mount->mnt_flag & MNT_RDONLY) == 0)
 			ip->i_flag |= IN_MODIFIED;
 	}
@@ -1526,7 +1517,7 @@ ffs_sbupdate(struct ufsmount *mp, int waitfor)
 	    fs->fs_sblockloc >> (fs->fs_fshift - fs->fs_fsbtodb),
 	    (int)fs->fs_sbsize, 0, INFSLP);
 	fs->fs_fmod = 0;
-	fs->fs_time = time_second;
+	fs->fs_time = gettime();
 	memcpy(bp->b_data, fs, fs->fs_sbsize);
 	/* Restore compatibility to old file systems.		   XXX */
 	dfs = (struct fs *)bp->b_data;				/* XXX */
@@ -1577,6 +1568,34 @@ ffs_init(struct vfsconf *vfsp)
 	return (ufs_init(vfsp));
 }
 
+#ifdef FFS_SOFTUPDATES
+extern int max_softdeps, tickdelay, stat_worklist_push;
+extern int stat_blk_limit_push, stat_ino_limit_push, stat_blk_limit_hit;
+extern int stat_ino_limit_hit, stat_sync_limit_hit, stat_indir_blk_ptrs;
+extern int stat_inode_bitmap, stat_direct_blk_ptrs, stat_dir_entry;
+#endif
+const struct sysctl_bounded_args ffs_vars[] = {
+#ifdef FFS_SOFTUPDATES
+	{ FFS_MAX_SOFTDEPS, &max_softdeps, 0, INT_MAX },
+	{ FFS_SD_TICKDELAY, &tickdelay, 2, INT_MAX },
+	{ FFS_SD_WORKLIST_PUSH, &stat_worklist_push, 1, 0 }, /* read-only */
+	{ FFS_SD_BLK_LIMIT_PUSH, &stat_blk_limit_push, 1, 0 },
+	{ FFS_SD_INO_LIMIT_PUSH, &stat_ino_limit_push, 1, 0 },
+	{ FFS_SD_BLK_LIMIT_HIT, &stat_blk_limit_hit, 1, 0 },
+	{ FFS_SD_INO_LIMIT_HIT, &stat_ino_limit_hit, 1, 0 },
+	{ FFS_SD_SYNC_LIMIT_HIT, &stat_sync_limit_hit, 1, 0 },
+	{ FFS_SD_INDIR_BLK_PTRS, &stat_indir_blk_ptrs, 1, 0 },
+	{ FFS_SD_INODE_BITMAP, &stat_inode_bitmap, 1, 0 },
+	{ FFS_SD_DIRECT_BLK_PTRS, &stat_direct_blk_ptrs, 1, 0 },
+	{ FFS_SD_DIR_ENTRY, &stat_dir_entry, 1, 0 },
+#endif
+#ifdef UFS_DIRHASH
+	{ FFS_DIRHASH_DIRSIZE, &ufs_mindirhashsize, 0, INT_MAX },
+	{ FFS_DIRHASH_MAXMEM, &ufs_dirhashmaxmem, 0, INT_MAX },
+	{ FFS_DIRHASH_MEM, &ufs_dirhashmem, 1, 0 },
+#endif
+};
+
 /*
  * fast filesystem related variables.
  */
@@ -1584,62 +1603,6 @@ int
 ffs_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
     size_t newlen, struct proc *p)
 {
-#ifdef FFS_SOFTUPDATES
-	extern int max_softdeps, tickdelay, stat_worklist_push;
-	extern int stat_blk_limit_push, stat_ino_limit_push, stat_blk_limit_hit;
-	extern int stat_ino_limit_hit, stat_sync_limit_hit, stat_indir_blk_ptrs;
-	extern int stat_inode_bitmap, stat_direct_blk_ptrs, stat_dir_entry;
-#endif
-
-	/* all sysctl names at this level are terminal */
-	if (namelen != 1)
-		return (ENOTDIR);		/* overloaded */
-
-	switch (name[0]) {
-	case FFS_CLUSTERREAD:
-	case FFS_CLUSTERWRITE:
-	case FFS_REALLOCBLKS:
-	case FFS_ASYNCFREE:
-		return (EOPNOTSUPP);
-#ifdef FFS_SOFTUPDATES
-	case FFS_MAX_SOFTDEPS:
-		return (sysctl_int(oldp, oldlenp, newp, newlen, &max_softdeps));
-	case FFS_SD_TICKDELAY:
-		return (sysctl_int(oldp, oldlenp, newp, newlen, &tickdelay));
-	case FFS_SD_WORKLIST_PUSH:
-		return (sysctl_rdint(oldp, oldlenp, newp, stat_worklist_push));
-	case FFS_SD_BLK_LIMIT_PUSH:
-		return (sysctl_rdint(oldp, oldlenp, newp, stat_blk_limit_push));
-	case FFS_SD_INO_LIMIT_PUSH:
-		return (sysctl_rdint(oldp, oldlenp, newp, stat_ino_limit_push));
-	case FFS_SD_BLK_LIMIT_HIT:
-		return (sysctl_rdint(oldp, oldlenp, newp, stat_blk_limit_hit));
-	case FFS_SD_INO_LIMIT_HIT:
-		return (sysctl_rdint(oldp, oldlenp, newp, stat_ino_limit_hit));
-	case FFS_SD_SYNC_LIMIT_HIT:
-		return (sysctl_rdint(oldp, oldlenp, newp, stat_sync_limit_hit));
-	case FFS_SD_INDIR_BLK_PTRS:
-		return (sysctl_rdint(oldp, oldlenp, newp, stat_indir_blk_ptrs));
-	case FFS_SD_INODE_BITMAP:
-		return (sysctl_rdint(oldp, oldlenp, newp, stat_inode_bitmap));
-	case FFS_SD_DIRECT_BLK_PTRS:
-		return (sysctl_rdint(oldp, oldlenp, newp, stat_direct_blk_ptrs));
-	case FFS_SD_DIR_ENTRY:
-		return (sysctl_rdint(oldp, oldlenp, newp, stat_dir_entry));
-#endif
-#ifdef UFS_DIRHASH
-	case FFS_DIRHASH_DIRSIZE:
-		return (sysctl_int(oldp, oldlenp, newp, newlen,
-		    &ufs_mindirhashsize));
-	case FFS_DIRHASH_MAXMEM:
-		return (sysctl_int(oldp, oldlenp, newp, newlen,
-		    &ufs_dirhashmaxmem));
-	case FFS_DIRHASH_MEM:
-		return (sysctl_rdint(oldp, oldlenp, newp, ufs_dirhashmem));
-#endif
-
-	default:
-		return (EOPNOTSUPP);
-	}
-	/* NOTREACHED */
+	return sysctl_bounded_arr(ffs_vars, nitems(ffs_vars), name,
+	    namelen, oldp, oldlenp, newp, newlen);
 }

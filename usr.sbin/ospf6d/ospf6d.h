@@ -1,4 +1,4 @@
-/*	$OpenBSD: ospf6d.h,v 1.45 2020/01/21 20:38:52 remi Exp $ */
+/*	$OpenBSD: ospf6d.h,v 1.50 2021/01/19 09:46:51 claudio Exp $ */
 
 /*
  * Copyright (c) 2004, 2007 Esben Norby <norby@openbsd.org>
@@ -103,8 +103,6 @@ enum imsg_type {
 	IMSG_KROUTE_CHANGE,
 	IMSG_KROUTE_DELETE,
 	IMSG_IFINFO,
-	IMSG_IFADD,
-	IMSG_IFDELETE,
 	IMSG_IFADDRNEW,
 	IMSG_IFADDRDEL,
 	IMSG_NEIGHBOR_UP,
@@ -332,7 +330,6 @@ struct iface {
 	u_int8_t		 cflags;
 #define F_IFACE_PASSIVE		0x01
 #define F_IFACE_CONFIGURED	0x02
-#define F_IFACE_AVAIL		0x04
 };
 
 struct ifaddrchange {
@@ -343,11 +340,12 @@ struct ifaddrchange {
 };
 
 /* ospf_conf */
-enum {
+enum ospfd_process {
 	PROC_MAIN,
 	PROC_OSPF_ENGINE,
 	PROC_RDE_ENGINE
-} ospfd_process;
+};
+extern enum ospfd_process ospfd_process;
 
 #define	REDIST_CONNECTED	0x01
 #define	REDIST_STATIC		0x02
@@ -483,6 +481,7 @@ struct ctl_rt {
 	enum dst_type		 d_type;
 	u_int8_t		 flags;
 	u_int8_t		 prefixlen;
+	u_int8_t		 connected;
 };
 
 struct ctl_sum {

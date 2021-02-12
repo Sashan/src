@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.40 2018/12/08 23:11:24 schwarze Exp $	*/
+/*	$OpenBSD: main.c,v 1.42 2021/01/31 14:23:05 naddy Exp $	*/
 
 /*-
  * Copyright (c) 1992 Diomidis Spinellis.
@@ -252,15 +252,9 @@ again:
 			goto again;
 		}
 	case ST_FILE:
-		if ((p = fgetln(f, &len)) != NULL) {
+		if (getline(outbuf, outsize, f) != -1) {
+			p = *outbuf;
 			linenum++;
-			if (len >= *outsize) {
-				free(*outbuf);
-				*outsize = ROUNDLEN(len + 1);
-				*outbuf = xmalloc(*outsize);
-			}
-			memcpy(*outbuf, p, len);
-			(*outbuf)[len] = '\0';
 			if (linenum == 1 && p[0] == '#' && p[1] == 'n')
 				nflag = 1;
 			return (*outbuf);
@@ -343,7 +337,9 @@ mf_fgets(SPACE *sp, enum e_spflag spflag)
 {
 	struct stat sb;
 	size_t len;
-	char *p;
+	char dirbuf[PATH_MAX];
+	static char *p;
+	static size_t psize;
 	int c, fd;
 	static int firstfile;
 
@@ -397,8 +393,9 @@ mf_fgets(SPACE *sp, enum e_spflag spflag)
 				if (len > sizeof(oldfname))
 					error(FATAL, "%s: name too long", fname);
 			}
-			len = snprintf(tmpfname, sizeof(tmpfname), "%s/sedXXXXXXXXXX",
-			    dirname(fname));
+			strlcpy(dirbuf, fname, sizeof(dirbuf));
+			len = snprintf(tmpfname, sizeof(tmpfname),
+			    "%s/sedXXXXXXXXXX", dirname(dirbuf));
 			if (len >= sizeof(tmpfname))
 				error(FATAL, "%s: name too long", fname);
 			if ((fd = mkstemp(tmpfname)) == -1)
@@ -427,13 +424,13 @@ mf_fgets(SPACE *sp, enum e_spflag spflag)
 	 * We are here only when infile is open and we still have something
 	 * to read from it.
 	 *
-	 * Use fgetln so that we can handle essentially infinite input data.
-	 * Can't use the pointer into the stdio buffer as the process space
-	 * because the ungetc() can cause it to move.
+	 * Use getline() so that we can handle essentially infinite input
+	 * data.  The p and psize are static so each invocation gives
+	 * getline() the same buffer which is expanded as needed.
 	 */
-	p = fgetln(infile, &len);
-	if (ferror(infile))
-		error(FATAL, "%s: %s", fname, strerror(errno ? errno : EIO));
+	len = getline(&p, &psize, infile);
+	if ((ssize_t)len == -1)
+		error(FATAL, "%s: %s", fname, strerror(errno));
 	if (len != 0 && p[len - 1] == '\n') {
 		sp->append_newline = 1;
 		len--;

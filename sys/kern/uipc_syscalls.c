@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_syscalls.c,v 1.184 2020/01/15 13:17:35 mpi Exp $	*/
+/*	$OpenBSD: uipc_syscalls.c,v 1.187 2020/09/29 11:48:54 claudio Exp $	*/
 /*	$NetBSD: uipc_syscalls.c,v 1.19 1996/02/09 19:00:48 christos Exp $	*/
 
 /*
@@ -97,7 +97,6 @@ sys_socket(struct proc *p, void *v, register_t *retval)
 	if (error)
 		return (error);
 
-	KERNEL_LOCK();
 	fdplock(fdp);
 	error = falloc(p, &fp, &fd);
 	if (error) {
@@ -114,7 +113,6 @@ sys_socket(struct proc *p, void *v, register_t *retval)
 		FRELE(fp, p);
 		*retval = fd;
 	}
-	KERNEL_UNLOCK();
 	return (error);
 }
 
@@ -196,12 +194,14 @@ sys_listen(struct proc *p, void *v, register_t *retval)
 	} */ *uap = v;
 	struct file *fp;
 	struct socket *so;
-	int error;
+	int s, error;
 
 	if ((error = getsock(p, SCARG(uap, s), &fp)) != 0)
 		return (error);
 	so = fp->f_data;
+	s = solock(so);
 	error = solisten(so, SCARG(uap, backlog));
+	sounlock(so, s);
 	FRELE(fp, p);
 	return (error);
 }
@@ -422,7 +422,7 @@ sys_socketpair(struct proc *p, void *v, register_t *retval)
 		syscallarg(int *) rsv;
 	} */ *uap = v;
 	struct filedesc *fdp = p->p_fd;
-	struct file *fp1, *fp2;
+	struct file *fp1 = NULL, *fp2 = NULL;
 	struct socket *so1, *so2;
 	int type, cloexec, nonblock, fflag, error, sv[2];
 
@@ -450,7 +450,6 @@ sys_socketpair(struct proc *p, void *v, register_t *retval)
 		if (error != 0)
 			goto free2;
 	}
-	KERNEL_LOCK();
 	fdplock(fdp);
 	if ((error = falloc(p, &fp1, &sv[0])) != 0)
 		goto free3;
@@ -475,19 +474,22 @@ sys_socketpair(struct proc *p, void *v, register_t *retval)
 		fdpunlock(fdp);
 		FRELE(fp1, p);
 		FRELE(fp2, p);
-		KERNEL_UNLOCK();
 		return (0);
 	}
 	fdremove(fdp, sv[1]);
-	closef(fp2, p);
-	so2 = NULL;
 free4:
 	fdremove(fdp, sv[0]);
-	closef(fp1, p);
-	so1 = NULL;
 free3:
 	fdpunlock(fdp);
-	KERNEL_UNLOCK();
+
+	if (fp2 != NULL) {
+		closef(fp2, p);
+		so2 = NULL;
+	}
+	if (fp1 != NULL) {
+		closef(fp1, p);
+		so1 = NULL;
+	}
 free2:
 	if (so2 != NULL)
 		(void)soclose(so2, 0);

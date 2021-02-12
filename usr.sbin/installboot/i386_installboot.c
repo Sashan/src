@@ -1,4 +1,4 @@
-/*	$OpenBSD: i386_installboot.c,v 1.36 2020/03/09 06:16:56 otto Exp $	*/
+/*	$OpenBSD: i386_installboot.c,v 1.38 2020/07/22 05:06:38 deraadt Exp $	*/
 /*	$NetBSD: installboot.c,v 1.5 1995/11/17 23:23:50 gwr Exp $ */
 
 /*
@@ -146,7 +146,7 @@ md_installboot(int devfd, char *dev)
 
 	part = findgptefisys(devfd, &dl);
 	if (part != -1) {
-		write_efisystem(&dl, (char)part);
+		write_filesystem(&dl, (char)part);
 		return;
 	}
 
@@ -222,7 +222,7 @@ write_bootblocks(int devfd, char *dev, struct disklabel *dl)
 }
 
 void
-write_efisystem(struct disklabel *dl, char part)
+write_filesystem(struct disklabel *dl, char part)
 {
 	static char *fsckfmt = "/sbin/fsck_msdos %s >/dev/null";
 	static char *newfsfmt ="/sbin/newfs_msdos %s >/dev/null";
@@ -255,6 +255,7 @@ write_efisystem(struct disklabel *dl, char part)
 
 	args.export_info.ex_root = -2;	/* unchecked anyway on DOS fs */
 	args.export_info.ex_flags = 0;
+	args.flags = MSDOSFSMNT_LONGNAME;
 
 	if (mount(MOUNT_MSDOS, dst, 0, &args) == -1) {
 		/* Try fsck'ing it. */

@@ -7,6 +7,7 @@
 #include <sys/types.h>
 
 #include <sys/ioctl.h>
+#include <sys/time.h>
 #include <dev/usb/usb.h>
 #include <dev/usb/usbhid.h>
 
@@ -80,69 +81,11 @@ fido_hid_manifest(fido_dev_info_t *devlist, size_t ilen, size_t *olen)
 			fido_hid_close,
 			fido_hid_read,
 			fido_hid_write,
-			NULL,
-			NULL,
 		};
 		(*olen)++;
 	}
 
 	return FIDO_OK;
-}
-
-/*
- * Workaround for OpenBSD <=6.6-current (as of 201910) bug that loses
- * sync of DATA0/DATA1 sequence bit across uhid open/close.
- * Send pings until we get a response - early pings with incorrect
- * sequence bits will be ignored as duplicate packets by the device.
- */
-static int
-terrible_ping_kludge(struct hid_openbsd *ctx)
-{
-	u_char data[256];
-	int i, n;
-	struct pollfd pfd;
-
-	if (sizeof(data) < ctx->report_out_len + 1)
-		return -1;
-	for (i = 0; i < 4; i++) {
-		memset(data, 0, sizeof(data));
-		/* broadcast channel ID */
-		data[1] = 0xff;
-		data[2] = 0xff;
-		data[3] = 0xff;
-		data[4] = 0xff;
-		/* Ping command */
-		data[5] = 0x81;
-		/* One byte ping only, Vasili */
-		data[6] = 0;
-		data[7] = 1;
-		fido_log_debug("%s: send ping %d", __func__, i);
-		if (fido_hid_write(ctx, data, ctx->report_out_len + 1) == -1)
-			return -1;
-		fido_log_debug("%s: wait reply", __func__);
-		memset(&pfd, 0, sizeof(pfd));
-		pfd.fd = ctx->fd;
-		pfd.events = POLLIN;
-		if ((n = poll(&pfd, 1, 100)) == -1) {
-			fido_log_debug("%s: poll: %s", __func__, strerror(errno));
-			return -1;
-		} else if (n == 0) {
-			fido_log_debug("%s: timed out", __func__);
-			continue;
-		}
-		if (fido_hid_read(ctx, data, ctx->report_out_len, 250) == -1)
-			return -1;
-		/*
-		 * Ping isn't always supported on the broadcast channel,
-		 * so we might get an error, but we don't care - we're
-		 * synched now.
-		 */
-		fido_log_debug("%s: got reply", __func__);
-		fido_log_xxd(data, ctx->report_out_len);
-		return 0;
-	}
-	fido_log_debug("%s: no response", __func__);
-	return -1;
 }
 
 void *
@@ -159,16 +102,6 @@ fido_hid_open(const char *path)
 	fido_log_debug("%s: inlen = %zu outlen = %zu", __func__,
 	    ret->report_in_len, ret->report_out_len);
 
-	/*
-	 * OpenBSD (as of 201910) has a bug that causes it to lose
-	 * track of the DATA0/DATA1 sequence toggle across uhid device
-	 * open and close. This is a terrible hack to work around it.
-	 */
-	if (terrible_ping_kludge(ret) != 0) {
-		fido_hid_close(ret);
-		return NULL;
-	}
-
 	return (ret);
 }
 
@@ -182,16 +115,59 @@ fido_hid_close(void *handle)
 }
 
 int
+waitfd(int fd, int ms)
+{
+	struct timespec ts_start, ts_now, ts_delta;
+	struct pollfd pfd;
+	int ms_remain, r;
+
+	if (ms < 0)
+		return 0;
+	memset(&pfd, 0, sizeof(pfd));
+	pfd.fd = fd;
+	pfd.events = POLLIN;
+	if (clock_gettime(CLOCK_MONOTONIC, &ts_start) != 0) {
+		fido_log_debug("%s: clock_gettime: %s",
+		    __func__, strerror(errno));
+		return -1;
+	}
+	for (ms_remain = ms; ms_remain > 0;) {
+		if ((r = poll(&pfd, 1, ms_remain)) > 0)
+			return 0;
+		else if (r == 0)
+			break;
+		else if (errno != EINTR) {
+			fido_log_debug("%s: poll: %s",
+			    __func__, strerror(errno));
+			return -1;
+		}
+		/* poll interrupted - subtract time already waited */
+		if (clock_gettime(CLOCK_MONOTONIC, &ts_now) != 0) {
+			fido_log_debug("%s: clock_gettime: %s",
+			    __func__, strerror(errno));
+			return -1;
+		}
+		timespecsub(&ts_now, &ts_start, &ts_delta);
+		ms_remain = ms - ((ts_delta.tv_sec * 1000) +
+		    (ts_delta.tv_nsec / 1000000));
+	}
+	return -1;
+}
+
+int
 fido_hid_read(void *handle, unsigned char *buf, size_t len, int ms)
 {
 	struct hid_openbsd *ctx = (struct hid_openbsd *)handle;
 	ssize_t r;
 
-	(void)ms; /* XXX */
-
+	fido_log_debug("%s: %zu timeout %d", __func__, len, ms);
 	if (len != ctx->report_in_len) {
 		fido_log_debug("%s: invalid len: got %zu, want %zu", __func__,
 		    len, ctx->report_in_len);
+		return (-1);
+	}
+	if (waitfd(ctx->fd, ms) != 0) {
+		fido_log_debug("%s: fd not ready", __func__);
 		return (-1);
 	}
 	if ((r = read(ctx->fd, buf, len)) == -1 || (size_t)r != len) {
@@ -218,4 +194,20 @@ fido_hid_write(void *handle, const unsigned char *buf, size_t len)
 		return (-1);
 	}
 	return ((int)len);
+}
+
+size_t
+fido_hid_report_in_len(void *handle)
+{
+	struct hid_openbsd *ctx = handle;
+
+	return (ctx->report_in_len);
+}
+
+size_t
+fido_hid_report_out_len(void *handle)
+{
+	struct hid_openbsd *ctx = handle;
+
+	return (ctx->report_out_len);
 }

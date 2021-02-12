@@ -1,4 +1,4 @@
-/*	$OpenBSD: pvbus.c,v 1.20 2020/01/24 05:14:51 jsg Exp $	*/
+/*	$OpenBSD: pvbus.c,v 1.22 2020/08/26 03:29:06 visa Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -38,14 +38,11 @@
 #include <machine/bus.h>
 #include <machine/vmmvar.h>
 
-#include <dev/rndvar.h>
-
 #include <dev/pv/pvvar.h>
 #include <dev/pv/pvreg.h>
 
 int has_hv_cpuid = 0;
 
-extern char *hw_vendor;
 extern void rdrand(void *);
 
 int	 pvbus_activate(struct device *, int);

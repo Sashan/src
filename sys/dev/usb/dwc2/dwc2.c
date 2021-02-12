@@ -1,4 +1,4 @@
-/*	$OpenBSD: dwc2.c,v 1.51 2020/03/21 12:08:31 patrick Exp $	*/
+/*	$OpenBSD: dwc2.c,v 1.53 2021/01/28 01:48:54 kurt Exp $	*/
 /*	$NetBSD: dwc2.c,v 1.32 2014/09/02 23:26:20 macallan Exp $	*/
 
 /*-
@@ -643,7 +643,7 @@ STATIC const struct dwc2_config_desc dwc2_confd = {
 		.bLength = USB_CONFIG_DESCRIPTOR_SIZE,
 		.bDescriptorType = UDESC_CONFIG,
 		.wTotalLength[0] = sizeof(dwc2_confd),
-		.bNumInterface = 1,
+		.bNumInterfaces = 1,
 		.bConfigurationValue = 1,
 		.iConfiguration = 0,
 		.bmAttributes = UC_BUS_POWERED | UC_SELF_POWERED,
@@ -1260,6 +1260,9 @@ dwc2_device_start(struct usbd_xfer *xfer)
 		dwc2_urb->usbdma = &xfer->dmabuf;
 		dwc2_urb->buf = KERNADDR(dwc2_urb->usbdma, 0);
 		dwc2_urb->dma = DMAADDR(dwc2_urb->usbdma, 0);
+		usb_syncmem(&xfer->dmabuf, 0, xfer->length,
+		    usbd_xfer_isread(xfer) ?
+		    BUS_DMASYNC_PREREAD : BUS_DMASYNC_PREWRITE);
  	}
 	dwc2_urb->length = len;
  	dwc2_urb->flags = flags;
@@ -1647,6 +1650,17 @@ void dwc2_host_complete(struct dwc2_hsotg *hsotg, struct dwc2_qtd *qtd,
 		dwc2_free_bus_bandwidth(hsotg,
 					dwc2_hcd_get_ep_bandwidth(hsotg, dpipe),
 					xfer);
+	}
+
+	if (xfer->status == USBD_NORMAL_COMPLETION) {
+		if (xfertype == UE_ISOCHRONOUS)
+			usb_syncmem(&xfer->dmabuf, 0, xfer->length,
+			    usbd_xfer_isread(xfer) ?
+			    BUS_DMASYNC_POSTREAD : BUS_DMASYNC_POSTWRITE);
+		else if (xfer->actlen)
+			usb_syncmem(&xfer->dmabuf, 0, xfer->actlen,
+			    usbd_xfer_isread(xfer) ?
+			    BUS_DMASYNC_POSTREAD : BUS_DMASYNC_POSTWRITE);
 	}
 
 	qtd->urb = NULL;

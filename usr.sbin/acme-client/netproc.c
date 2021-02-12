@@ -1,4 +1,4 @@
-/*	$Id: netproc.c,v 1.25 2019/08/11 19:44:25 florian Exp $ */
+/*	$Id: netproc.c,v 1.29 2020/12/24 08:17:49 florian Exp $ */
 /*
  * Copyright (c) 2016 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -23,6 +23,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <tls.h>
+#include <vis.h>
 
 #include "http.h"
 #include "extern.h"
@@ -368,17 +369,29 @@ sreq(struct conn *c, const char *addr, int kid, const char *req, char **loc)
  * Returns non-zero on success.
  */
 static int
-donewacc(struct conn *c, const struct capaths *p)
+donewacc(struct conn *c, const struct capaths *p, const char *contact)
 {
+	struct jsmnn	*j = NULL;
 	int		 rc = 0;
-	char		*req;
+	char		*req, *detail, *error = NULL;
 	long		 lc;
 
-	if ((req = json_fmt_newacc()) == NULL)
+	if ((req = json_fmt_newacc(contact)) == NULL)
 		warnx("json_fmt_newacc");
 	else if ((lc = sreq(c, p->newaccount, 0, req, &c->kid)) < 0)
 		warnx("%s: bad comm", p->newaccount);
-	else if (lc != 200 && lc != 201)
+	else if (lc == 400) {
+		if ((j = json_parse(c->buf.buf, c->buf.sz)) == NULL)
+			warnx("%s: bad JSON object", p->newaccount);
+		else {
+			detail = json_getstr(j, "detail");
+			if (detail != NULL && stravis(&error, detail, VIS_SAFE)
+			    != -1) {
+				warnx("%s", error);
+				free(error);
+			}
+		}
+	} else if (lc != 200 && lc != 201)
 		warnx("%s: bad HTTP: %ld", p->newaccount, lc);
 	else if (c->buf.buf == NULL || c->buf.sz == 0)
 		warnx("%s: empty response", p->newaccount);
@@ -397,7 +410,7 @@ donewacc(struct conn *c, const struct capaths *p)
  * Returns non-zero on success.
  */
 static int
-dochkacc(struct conn *c, const struct capaths *p)
+dochkacc(struct conn *c, const struct capaths *p, const char *contact)
 {
 	int		 rc = 0;
 	char		*req;
@@ -412,7 +425,7 @@ dochkacc(struct conn *c, const struct capaths *p)
 	else if (c->buf.buf == NULL || c->buf.sz == 0)
 		warnx("%s: empty response", p->newaccount);
 	else if (lc == 400)
-		rc = donewacc(c, p);
+		rc = donewacc(c, p, contact);
 	else
 		rc = 1;
 
@@ -664,7 +677,7 @@ netproc(int kfd, int afd, int Cfd, int cfd, int dfd, int rfd,
 {
 	int		 rc = 0;
 	size_t		 i;
-	char		*cert = NULL, *thumb = NULL, *url = NULL;
+	char		*cert = NULL, *thumb = NULL, *url = NULL, *error = NULL;
 	struct conn	 c;
 	struct capaths	 paths;
 	struct order	 order;
@@ -742,7 +755,7 @@ netproc(int kfd, int afd, int Cfd, int cfd, int dfd, int rfd,
 	c.newnonce = paths.newnonce;
 
 	/* Check if our account already exists or create it. */
-	if (!dochkacc(&c, &paths))
+	if (!dochkacc(&c, &paths, authority->contact))
 		goto out;
 
 	/*
@@ -805,7 +818,8 @@ netproc(int kfd, int afd, int Cfd, int cfd, int dfd, int rfd,
 				    "%d", chngs[i].token, chngs[i].uri,
 				    chngs[i].status);
 
-				if (chngs[i].status == CHNG_VALID)
+				if (chngs[i].status == CHNG_VALID ||
+				    chngs[i].status == CHNG_INVALID)
 					continue;
 
 				if (chngs[i].retry++ >= RETRY_MAX) {
@@ -826,7 +840,12 @@ netproc(int kfd, int afd, int Cfd, int cfd, int dfd, int rfd,
 				if (readop(Cfd, COMM_CHNG_ACK) != CHNG_ACK)
 					goto out;
 
-				/* Write to the CA that it's ready. */
+			}
+			/* Write to the CA that it's ready. */
+			for (i = 0; i < order.authsz; i++) {
+				if (chngs[i].status == CHNG_VALID ||
+				    chngs[i].status == CHNG_INVALID)
+					continue;
 				if (!dochngresp(&c, &chngs[i]))
 					goto out;
 			}
@@ -858,8 +877,20 @@ netproc(int kfd, int afd, int Cfd, int cfd, int dfd, int rfd,
 			sleep(RETRY_DELAY);
 	}
 
-	if (order.status != ORDER_VALID)
+	if (order.status != ORDER_VALID) {
+		for (i = 0; i < order.authsz; i++) {
+			dochngreq(&c, order.auths[i], &chngs[i]);
+			if (chngs[i].error != NULL) {
+				if (stravis(&error, chngs[i].error, VIS_SAFE)
+				    != -1) {
+					warnx("%s", error);
+					free(error);
+					error = NULL;
+				}
+			}
+		}
 		goto out;
+	}
 
 	if (order.certificate == NULL) {
 		warnx("no certificate url received");

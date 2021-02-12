@@ -1,4 +1,4 @@
-/*	$OpenBSD: dt_dev.c,v 1.6 2020/03/28 15:42:25 mpi Exp $ */
+/*	$OpenBSD: dt_dev.c,v 1.11 2021/02/08 08:18:45 mpi Exp $ */
 
 /*
  * Copyright (c) 2019 Martin Pieuchot <mpi@openbsd.org>
@@ -56,6 +56,9 @@
 #if defined(__amd64__)
 #define DT_FA_PROFILE	5
 #define DT_FA_STATIC	2
+#elif defined(__powerpc64__)
+#define DT_FA_PROFILE	6
+#define DT_FA_STATIC	2
 #elif defined(__sparc64__)
 #define DT_FA_PROFILE	5
 #define DT_FA_STATIC	1
@@ -74,19 +77,19 @@
  *
  *  Locks used to protect struct members in this file:
  *	m	per-softc mutex
- *	k	kernel lock
+ *	K	kernel lock
  */
 struct dt_softc {
-	SLIST_ENTRY(dt_softc)	 ds_next;	/* [k] descriptor list */
+	SLIST_ENTRY(dt_softc)	 ds_next;	/* [K] descriptor list */
 	int			 ds_unit;	/* [I] D_CLONE unique unit */
 	pid_t			 ds_pid;	/* [I] PID of tracing program */
 
 	struct mutex		 ds_mtx;
 
-	struct dt_pcb_list	 ds_pcbs;	/* [k] list of enabled PCBs */
-	struct dt_evt		*ds_bufqueue;	/* [k] copy evts to userland */
-	size_t			 ds_bufqlen;	/* [k] length of the queue */
-	int			 ds_recording;	/* [k] currently recording? */
+	struct dt_pcb_list	 ds_pcbs;	/* [K] list of enabled PCBs */
+	struct dt_evt		*ds_bufqueue;	/* [K] copy evts to userland */
+	size_t			 ds_bufqlen;	/* [K] length of the queue */
+	int			 ds_recording;	/* [K] currently recording? */
 	int			 ds_evtcnt;	/* [m] # of readable evts */
 
 	/* Counters */
@@ -94,7 +97,7 @@ struct dt_softc {
 	uint64_t		 ds_dropevt;	/* [m] # of events dropped */
 };
 
-SLIST_HEAD(, dt_softc) dtdev_list;	/* [k] list of open /dev/dt nodes */
+SLIST_HEAD(, dt_softc) dtdev_list;	/* [K] list of open /dev/dt nodes */
 
 /*
  * Probes are created during dt_attach() and never modified/freed during
@@ -104,7 +107,7 @@ unsigned int			dt_nprobes;	/* [I] # of probes available */
 SIMPLEQ_HEAD(, dt_probe)	dt_probe_list;	/* [I] list of probes */
 
 struct rwlock			dt_lock = RWLOCK_INITIALIZER("dtlk");
-volatile uint32_t		dt_tracing = 0;	/* [k] # of processes tracing */
+volatile uint32_t		dt_tracing = 0;	/* [K] # of processes tracing */
 
 void	dtattach(struct device *, struct device *, void *);
 int	dtopen(dev_t, int, int, struct proc *);
@@ -222,10 +225,8 @@ dtread(dev_t dev, struct uio *uio, int flags)
 		return (EMSGSIZE);
 
 	while (!sc->ds_evtcnt) {
-		sleep_setup(&sls, sc, PWAIT | PCATCH, "dtread");
-		sleep_setup_signal(&sls);
-		sleep_finish(&sls, !sc->ds_evtcnt);
-		error = sleep_finish_signal(&sls);
+		sleep_setup(&sls, sc, PWAIT | PCATCH, "dtread", 0);
+		error = sleep_finish(&sls, !sc->ds_evtcnt);
 		if (error == EINTR || error == ERESTART)
 			break;
 	}
@@ -347,12 +348,11 @@ dt_ioctl_list_probes(struct dt_softc *sc, struct dtioc_probe *dtpr)
 	size_t size;
 	int error = 0;
 
-	if (dtpr->dtpr_size == 0) {
-		dtpr->dtpr_size = dt_nprobes * sizeof(*dtpi);
-		return 0;
-	}
-
 	size = dtpr->dtpr_size;
+	dtpr->dtpr_size = dt_nprobes * sizeof(*dtpi);
+	if (size == 0)
+		return 0;
+
 	dtpi = dtpr->dtpr_probes;
 	memset(&info, 0, sizeof(info));
 	SIMPLEQ_FOREACH(dtp, &dt_probe_list, dtp_next) {
@@ -449,7 +449,6 @@ dt_ioctl_probe_enable(struct dt_softc *sc, struct dtioc_req *dtrq)
 {
 	struct dt_pcb_list plist;
 	struct dt_probe *dtp;
-	struct dt_pcb *dp;
 	int error;
 
 	KASSERT(suser(curproc) == 0);
@@ -473,10 +472,7 @@ dt_ioctl_probe_enable(struct dt_softc *sc, struct dtioc_req *dtrq)
 	    dtrq->dtrq_pbn, (unsigned int)dtrq->dtrq_evtflags, DTEVT_FLAG_BITS);
 
 	/* Append all PCBs to this instance */
-	while ((dp = TAILQ_FIRST(&plist)) != NULL) {
-		TAILQ_REMOVE(&plist, dp, dp_snext);
-		TAILQ_INSERT_HEAD(&sc->ds_pcbs, dp, dp_snext);
-	}
+	TAILQ_CONCAT(&sc->ds_pcbs, &plist, dp_snext);
 
 	return 0;
 }

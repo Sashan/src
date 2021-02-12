@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfkey.c,v 1.63 2020/01/14 22:28:29 tobhe Exp $	*/
+/*	$OpenBSD: pfkey.c,v 1.76 2021/01/29 21:26:06 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2010-2013 Reyk Floeter <reyk@openbsd.org>
@@ -40,7 +40,7 @@
 #include "ikev2.h"
 
 #define ROUNDUP(x) (((x) + (PFKEYV2_CHUNK - 1)) & ~(PFKEYV2_CHUNK - 1))
-#define IOV_CNT 20
+#define IOV_CNT 21
 
 #define PFKEYV2_CHUNK sizeof(uint64_t)
 #define PFKEY_REPLY_TIMEOUT 1000
@@ -50,6 +50,8 @@
 
 static uint32_t sadb_msg_seq = 0;
 static unsigned int sadb_decoupled = 0;
+
+static int iked_rdomain = 0;
 
 static struct event pfkey_timer_ev;
 static struct timeval pfkey_timer_tv;
@@ -108,6 +110,8 @@ int	pfkey_write(int, struct sadb_msg *, struct iovec *, int,
 	    uint8_t **, ssize_t *);
 int	pfkey_reply(int, uint8_t **, ssize_t *);
 void	pfkey_dispatch(int, short, void *);
+int	pfkey_sa_lookup(int, struct iked_childsa *, uint64_t *);
+int	pfkey_sa_check_exists(int, struct iked_childsa *);
 
 struct sadb_ident *
 	pfkey_id2ident(struct iked_id *, unsigned int);
@@ -184,10 +188,13 @@ pfkey_flow(int sd, uint8_t satype, uint8_t action, struct iked_flow *flow)
 	struct sadb_address	 sa_src, sa_dst, sa_local, sa_peer, sa_smask,
 				 sa_dmask;
 	struct sadb_protocol	 sa_flowtype, sa_protocol;
+	struct sadb_x_rdomain	 sa_rdomain;
 	struct sadb_ident	*sa_srcid, *sa_dstid;
 	struct sockaddr_storage	 ssrc, sdst, slocal, speer, smask, dmask;
 	struct iovec		 iov[IOV_CNT];
 	int			 iov_cnt, ret = -1;
+	uint64_t		 pad = 0;
+	size_t			 padlen;
 
 	sa_srcid = sa_dstid = NULL;
 
@@ -195,19 +202,10 @@ pfkey_flow(int sd, uint8_t satype, uint8_t action, struct iked_flow *flow)
 	flow_dst = &flow->flow_dst;
 
 	if (flow->flow_prenat.addr_af == flow_src->addr_af) {
-		switch (flow->flow_type) {
-		case SADB_X_FLOW_TYPE_USE:
+		if (flow->flow_dir == IPSP_DIRECTION_IN)
 			flow_dst = &flow->flow_prenat;
-			break;
-		case SADB_X_FLOW_TYPE_REQUIRE:
+		else
 			flow_src = &flow->flow_prenat;
-			break;
-		case 0:
-			if (flow->flow_dir == IPSP_DIRECTION_IN)
-				flow_dst = &flow->flow_prenat;
-			else
-				flow_src = &flow->flow_prenat;
-		}
 	}
 
 	bzero(&ssrc, sizeof(ssrc));
@@ -286,8 +284,7 @@ pfkey_flow(int sd, uint8_t satype, uint8_t action, struct iked_flow *flow)
 	sa_flowtype.sadb_protocol_exttype = SADB_X_EXT_FLOW_TYPE;
 	sa_flowtype.sadb_protocol_len = sizeof(sa_flowtype) / 8;
 	sa_flowtype.sadb_protocol_direction = flow->flow_dir;
-	sa_flowtype.sadb_protocol_proto =
-	    flow->flow_type ? flow->flow_type : SADB_X_FLOW_TYPE_REQUIRE;
+	sa_flowtype.sadb_protocol_proto = SADB_X_FLOW_TYPE_REQUIRE;
 
 	bzero(&sa_protocol, sizeof(sa_protocol));
 	sa_protocol.sadb_protocol_exttype = SADB_X_EXT_PROTOCOL;
@@ -335,6 +332,22 @@ pfkey_flow(int sd, uint8_t satype, uint8_t action, struct iked_flow *flow)
 		    SADB_EXT_IDENTITY_DST);
 	}
 
+	if (flow->flow_rdomain >= 0) {
+		/* install flow in specific rdomain */
+		bzero(&sa_rdomain, sizeof(sa_rdomain));
+		sa_rdomain.sadb_x_rdomain_exttype = SADB_X_EXT_RDOMAIN;
+		sa_rdomain.sadb_x_rdomain_len = sizeof(sa_rdomain) / 8;
+		sa_rdomain.sadb_x_rdomain_dom1 = flow->flow_rdomain;
+	}
+
+#define PAD(len)					\
+	padlen = ROUNDUP((len)) - (len);		\
+	if (padlen) {					\
+		iov[iov_cnt].iov_base = &pad;		\
+		iov[iov_cnt].iov_len = padlen;		\
+		iov_cnt++;				\
+	}
+
 	iov_cnt = 0;
 
 	/* header */
@@ -349,25 +362,15 @@ pfkey_flow(int sd, uint8_t satype, uint8_t action, struct iked_flow *flow)
 	iov_cnt++;
 
 	if (action != SADB_X_DELFLOW && flow->flow_local != NULL) {
-#if 0
-		/* local ip */
-		iov[iov_cnt].iov_base = &sa_local;
-		iov[iov_cnt].iov_len = sizeof(sa_local);
-		iov_cnt++;
-		iov[iov_cnt].iov_base = &slocal;
-		iov[iov_cnt].iov_len = ROUNDUP(slocal.ss_len);
-		smsg.sadb_msg_len += sa_local.sadb_address_len;
-		iov_cnt++;
-#endif
-
 		/* remote peer */
 		iov[iov_cnt].iov_base = &sa_peer;
 		iov[iov_cnt].iov_len = sizeof(sa_peer);
 		iov_cnt++;
 		iov[iov_cnt].iov_base = &speer;
-		iov[iov_cnt].iov_len = ROUNDUP(speer.ss_len);
+		iov[iov_cnt].iov_len = speer.ss_len;
 		smsg.sadb_msg_len += sa_peer.sadb_address_len;
 		iov_cnt++;
+		PAD(speer.ss_len);
 	}
 
 	/* src addr */
@@ -375,36 +378,40 @@ pfkey_flow(int sd, uint8_t satype, uint8_t action, struct iked_flow *flow)
 	iov[iov_cnt].iov_len = sizeof(sa_src);
 	iov_cnt++;
 	iov[iov_cnt].iov_base = &ssrc;
-	iov[iov_cnt].iov_len = ROUNDUP(ssrc.ss_len);
+	iov[iov_cnt].iov_len = ssrc.ss_len;
 	smsg.sadb_msg_len += sa_src.sadb_address_len;
 	iov_cnt++;
+	PAD(ssrc.ss_len);
 
 	/* src mask */
 	iov[iov_cnt].iov_base = &sa_smask;
 	iov[iov_cnt].iov_len = sizeof(sa_smask);
 	iov_cnt++;
 	iov[iov_cnt].iov_base = &smask;
-	iov[iov_cnt].iov_len = ROUNDUP(smask.ss_len);
+	iov[iov_cnt].iov_len = smask.ss_len;
 	smsg.sadb_msg_len += sa_smask.sadb_address_len;
 	iov_cnt++;
+	PAD(smask.ss_len);
 
 	/* dest addr */
 	iov[iov_cnt].iov_base = &sa_dst;
 	iov[iov_cnt].iov_len = sizeof(sa_dst);
 	iov_cnt++;
 	iov[iov_cnt].iov_base = &sdst;
-	iov[iov_cnt].iov_len = ROUNDUP(sdst.ss_len);
+	iov[iov_cnt].iov_len = sdst.ss_len;
 	smsg.sadb_msg_len += sa_dst.sadb_address_len;
 	iov_cnt++;
+	PAD(sdst.ss_len);
 
 	/* dst mask */
 	iov[iov_cnt].iov_base = &sa_dmask;
 	iov[iov_cnt].iov_len = sizeof(sa_dmask);
 	iov_cnt++;
 	iov[iov_cnt].iov_base = &dmask;
-	iov[iov_cnt].iov_len = ROUNDUP(dmask.ss_len);
+	iov[iov_cnt].iov_len = dmask.ss_len;
 	smsg.sadb_msg_len += sa_dmask.sadb_address_len;
 	iov_cnt++;
+	PAD(dmask.ss_len);
 
 	/* add protocol */
 	iov[iov_cnt].iov_base = &sa_protocol;
@@ -427,6 +434,14 @@ pfkey_flow(int sd, uint8_t satype, uint8_t action, struct iked_flow *flow)
 		iov_cnt++;
 	}
 
+	if (flow->flow_rdomain >= 0) {
+		iov[iov_cnt].iov_base = &sa_rdomain;
+		iov[iov_cnt].iov_len = sizeof(sa_rdomain);
+		smsg.sadb_msg_len += sa_rdomain.sadb_x_rdomain_len;
+		iov_cnt++;
+	}
+#undef PAD
+
 	ret = pfkey_write(sd, &smsg, iov, iov_cnt, NULL, NULL);
 
 	free(sa_srcid);
@@ -447,6 +462,7 @@ pfkey_sa(int sd, uint8_t satype, uint8_t action, struct iked_childsa *sa)
 	struct sadb_x_tag	 sa_tag;
 	char			*tag = NULL;
 	struct sadb_x_tap	 sa_tap;
+	struct sadb_x_rdomain	 sa_rdomain;
 	struct sockaddr_storage	 ssrc, sdst, spxy;
 	struct sadb_ident	*sa_srcid, *sa_dstid;
 	struct iked_lifetime	*lt;
@@ -456,6 +472,8 @@ pfkey_sa(int sd, uint8_t satype, uint8_t action, struct iked_childsa *sa)
 	uint32_t		 jitter;
 	int			 iov_cnt;
 	int			 ret, dotap = 0;
+	uint64_t		 pad = 0;
+	size_t			 padlen;
 
 	sa_srcid = sa_dstid = NULL;
 
@@ -532,6 +550,24 @@ pfkey_sa(int sd, uint8_t satype, uint8_t action, struct iked_childsa *sa)
 	bzero(&sa_ltime_hard, sizeof(sa_ltime_hard));
 	bzero(&sa_ltime_soft, sizeof(sa_ltime_soft));
 
+	if (pol->pol_rdomain >= 0) {
+		bzero(&sa_rdomain, sizeof(sa_rdomain));
+		sa_rdomain.sadb_x_rdomain_exttype = SADB_X_EXT_RDOMAIN;
+		sa_rdomain.sadb_x_rdomain_len = sizeof(sa_rdomain) / 8;
+		if (satype == SADB_X_SATYPE_IPCOMP) {
+			/* IPCOMP SAs are always in the pol_rdomain */
+			sa_rdomain.sadb_x_rdomain_dom1 = pol->pol_rdomain;
+			sa_rdomain.sadb_x_rdomain_dom2 = pol->pol_rdomain;
+		} else if (sa->csa_dir == IPSP_DIRECTION_OUT) {
+			/* switch rdomain on encrypt/decrypt */
+			sa_rdomain.sadb_x_rdomain_dom1 = pol->pol_rdomain;
+			sa_rdomain.sadb_x_rdomain_dom2 = iked_rdomain;
+		} else {
+			sa_rdomain.sadb_x_rdomain_dom1 = iked_rdomain;
+			sa_rdomain.sadb_x_rdomain_dom2 = pol->pol_rdomain;
+		}
+	}
+
 	if (action == SADB_DELETE)
 		goto send;
 
@@ -603,7 +639,7 @@ pfkey_sa(int sd, uint8_t satype, uint8_t action, struct iked_childsa *sa)
 
 	if (ibuf_length(sa->csa_integrkey)) {
 		sa_authkey.sadb_key_len = (sizeof(sa_authkey) +
-		    ((ibuf_size(sa->csa_integrkey) + 7) / 8) * 8) / 8;
+		    ROUNDUP(ibuf_size(sa->csa_integrkey))) / 8;
 		sa_authkey.sadb_key_exttype = SADB_EXT_KEY_AUTH;
 		sa_authkey.sadb_key_bits =
 		    8 * ibuf_size(sa->csa_integrkey);
@@ -611,7 +647,7 @@ pfkey_sa(int sd, uint8_t satype, uint8_t action, struct iked_childsa *sa)
 
 	if (ibuf_length(sa->csa_encrkey)) {
 		sa_enckey.sadb_key_len = (sizeof(sa_enckey) +
-		    ((ibuf_size(sa->csa_encrkey) + 7) / 8) * 8) / 8;
+		    ROUNDUP(ibuf_size(sa->csa_encrkey))) / 8;
 		sa_enckey.sadb_key_exttype = SADB_EXT_KEY_ENCRYPT;
 		sa_enckey.sadb_key_bits =
 		    8 * ibuf_size(sa->csa_encrkey);
@@ -653,6 +689,15 @@ pfkey_sa(int sd, uint8_t satype, uint8_t action, struct iked_childsa *sa)
 	}
 
  send:
+
+#define PAD(len)					\
+	padlen = ROUNDUP((len)) - (len);		\
+	if (padlen) {					\
+		iov[iov_cnt].iov_base = &pad;		\
+		iov[iov_cnt].iov_len = padlen;		\
+		iov_cnt++;				\
+	}
+
 	iov_cnt = 0;
 
 	/* header */
@@ -671,18 +716,20 @@ pfkey_sa(int sd, uint8_t satype, uint8_t action, struct iked_childsa *sa)
 	iov[iov_cnt].iov_len = sizeof(sa_src);
 	iov_cnt++;
 	iov[iov_cnt].iov_base = &ssrc;
-	iov[iov_cnt].iov_len = ROUNDUP(ssrc.ss_len);
+	iov[iov_cnt].iov_len = ssrc.ss_len;
 	smsg.sadb_msg_len += sa_src.sadb_address_len;
 	iov_cnt++;
+	PAD(ssrc.ss_len);
 
 	/* dst addr */
 	iov[iov_cnt].iov_base = &sa_dst;
 	iov[iov_cnt].iov_len = sizeof(sa_dst);
 	iov_cnt++;
 	iov[iov_cnt].iov_base = &sdst;
-	iov[iov_cnt].iov_len = ROUNDUP(sdst.ss_len);
+	iov[iov_cnt].iov_len = sdst.ss_len;
 	smsg.sadb_msg_len += sa_dst.sadb_address_len;
 	iov_cnt++;
+	PAD(sdst.ss_len);
 
 	if (spxy.ss_len) {
 		/* pxy addr */
@@ -690,9 +737,10 @@ pfkey_sa(int sd, uint8_t satype, uint8_t action, struct iked_childsa *sa)
 		iov[iov_cnt].iov_len = sizeof(sa_pxy);
 		iov_cnt++;
 		iov[iov_cnt].iov_base = &spxy;
-		iov[iov_cnt].iov_len = ROUNDUP(spxy.ss_len);
+		iov[iov_cnt].iov_len = spxy.ss_len;
 		smsg.sadb_msg_len += sa_pxy.sadb_address_len;
 		iov_cnt++;
+		PAD(spxy.ss_len);
 	}
 
 	if (sa_ltime_soft.sadb_lifetime_len) {
@@ -724,10 +772,10 @@ pfkey_sa(int sd, uint8_t satype, uint8_t action, struct iked_childsa *sa)
 		iov[iov_cnt].iov_len = sizeof(sa_enckey);
 		iov_cnt++;
 		iov[iov_cnt].iov_base = ibuf_data(sa->csa_encrkey);
-		iov[iov_cnt].iov_len =
-		    ((ibuf_size(sa->csa_encrkey) + 7) / 8) * 8;
+		iov[iov_cnt].iov_len = ibuf_size(sa->csa_encrkey);
 		smsg.sadb_msg_len += sa_enckey.sadb_key_len;
 		iov_cnt++;
+		PAD(ibuf_size(sa->csa_encrkey));
 	}
 	if (sa_authkey.sadb_key_len) {
 		/* authentication key */
@@ -735,10 +783,10 @@ pfkey_sa(int sd, uint8_t satype, uint8_t action, struct iked_childsa *sa)
 		iov[iov_cnt].iov_len = sizeof(sa_authkey);
 		iov_cnt++;
 		iov[iov_cnt].iov_base = ibuf_data(sa->csa_integrkey);
-		iov[iov_cnt].iov_len =
-		    ((ibuf_size(sa->csa_integrkey) + 7) / 8) * 8;
+		iov[iov_cnt].iov_len = ibuf_size(sa->csa_integrkey);
 		smsg.sadb_msg_len += sa_authkey.sadb_key_len;
 		iov_cnt++;
+		PAD(ibuf_size(sa->csa_integrkey));
 	}
 
 	if (sa_srcid) {
@@ -762,9 +810,10 @@ pfkey_sa(int sd, uint8_t satype, uint8_t action, struct iked_childsa *sa)
 		iov[iov_cnt].iov_len = sizeof(sa_tag);
 		iov_cnt++;
 		iov[iov_cnt].iov_base = tag;
-		iov[iov_cnt].iov_len = ROUNDUP(strlen(tag) + 1);
+		iov[iov_cnt].iov_len = strlen(tag) + 1;
 		smsg.sadb_msg_len += sa_tag.sadb_x_tag_len;
 		iov_cnt++;
+		PAD(strlen(tag) + 1);
 	}
 
 	if (dotap != 0) {
@@ -775,6 +824,14 @@ pfkey_sa(int sd, uint8_t satype, uint8_t action, struct iked_childsa *sa)
 		iov_cnt++;
 	}
 
+	if (pol->pol_rdomain >= 0) {
+		iov[iov_cnt].iov_base = &sa_rdomain;
+		iov[iov_cnt].iov_len = sizeof(sa_rdomain);
+		smsg.sadb_msg_len += sa_rdomain.sadb_x_rdomain_len;
+		iov_cnt++;
+	}
+#undef PAD
+
 	ret = pfkey_write(sd, &smsg, iov, iov_cnt, NULL, NULL);
 
 	free(sa_srcid);
@@ -784,20 +841,25 @@ pfkey_sa(int sd, uint8_t satype, uint8_t action, struct iked_childsa *sa)
 }
 
 int
-pfkey_sa_last_used(int sd, struct iked_childsa *sa, uint64_t *last_used)
+pfkey_sa_lookup(int sd, struct iked_childsa *sa, uint64_t *last_used)
 {
+	struct iked_policy	*pol = sa->csa_ikesa->sa_policy;
 	struct sadb_msg		*msg, smsg;
 	struct sadb_address	 sa_src, sa_dst;
 	struct sadb_sa		 sadb;
+	struct sadb_x_rdomain	 sa_rdomain;
 	struct sadb_lifetime	*sa_life;
 	struct sockaddr_storage	 ssrc, sdst;
 	struct iovec		 iov[IOV_CNT];
+	uint64_t		 pad = 0;
+	size_t			 padlen;
 	uint8_t			*data;
 	ssize_t			 n;
-	int			 iov_cnt, ret = -1;
+	int			 iov_cnt, ret = -1, rdomain;
 	uint8_t			 satype;
 
-	*last_used = 0;
+	if (last_used)
+		*last_used = 0;
 
 	if (pfkey_map(pfkey_satype, sa->csa_saproto, &satype) == -1)
 		return (-1);
@@ -831,6 +893,15 @@ pfkey_sa_last_used(int sd, struct iked_childsa *sa, uint64_t *last_used)
 	sadb.sadb_sa_state = SADB_SASTATE_MATURE;
 	sadb.sadb_sa_replay = 64;
 
+	if (pol->pol_rdomain >= 0) {
+		rdomain = (sa->csa_dir == IPSP_DIRECTION_IN) ?
+		    iked_rdomain : pol->pol_rdomain;
+		bzero(&sa_rdomain, sizeof(sa_rdomain));
+		sa_rdomain.sadb_x_rdomain_exttype = SADB_X_EXT_RDOMAIN;
+		sa_rdomain.sadb_x_rdomain_len = sizeof(sa_rdomain) / 8;
+		sa_rdomain.sadb_x_rdomain_dom1 = rdomain;
+	}
+
 	bzero(&sa_src, sizeof(sa_src));
 	sa_src.sadb_address_len = (sizeof(sa_src) + ROUNDUP(ssrc.ss_len)) / 8;
 	sa_src.sadb_address_exttype = SADB_EXT_ADDRESS_SRC;
@@ -840,6 +911,14 @@ pfkey_sa_last_used(int sd, struct iked_childsa *sa, uint64_t *last_used)
 	sa_dst.sadb_address_exttype = SADB_EXT_ADDRESS_DST;
 
 	iov_cnt = 0;
+
+#define PAD(len)					\
+	padlen = ROUNDUP((len)) - (len);		\
+	if (padlen) {					\
+		iov[iov_cnt].iov_base = &pad;		\
+		iov[iov_cnt].iov_len = padlen;		\
+		iov_cnt++;				\
+	}
 
 	/* header */
 	iov[iov_cnt].iov_base = &smsg;
@@ -857,18 +936,27 @@ pfkey_sa_last_used(int sd, struct iked_childsa *sa, uint64_t *last_used)
 	iov[iov_cnt].iov_len = sizeof(sa_src);
 	iov_cnt++;
 	iov[iov_cnt].iov_base = &ssrc;
-	iov[iov_cnt].iov_len = ROUNDUP(ssrc.ss_len);
+	iov[iov_cnt].iov_len = ssrc.ss_len;
 	smsg.sadb_msg_len += sa_src.sadb_address_len;
 	iov_cnt++;
+	PAD(ssrc.ss_len);
 
 	/* dst addr */
 	iov[iov_cnt].iov_base = &sa_dst;
 	iov[iov_cnt].iov_len = sizeof(sa_dst);
 	iov_cnt++;
 	iov[iov_cnt].iov_base = &sdst;
-	iov[iov_cnt].iov_len = ROUNDUP(sdst.ss_len);
+	iov[iov_cnt].iov_len = sdst.ss_len;
 	smsg.sadb_msg_len += sa_dst.sadb_address_len;
 	iov_cnt++;
+	PAD(sdst.ss_len);
+
+	if (pol->pol_rdomain >= 0) {
+		iov[iov_cnt].iov_base = &sa_rdomain;
+		iov[iov_cnt].iov_len = sizeof(sa_rdomain);
+		smsg.sadb_msg_len += sa_rdomain.sadb_x_rdomain_len;
+		iov_cnt++;
+	}
 
 	if ((ret = pfkey_write(sd, &smsg, iov, iov_cnt, &data, &n)) != 0)
 		return (-1);
@@ -877,21 +965,39 @@ pfkey_sa_last_used(int sd, struct iked_childsa *sa, uint64_t *last_used)
 	if (msg->sadb_msg_errno != 0) {
 		errno = msg->sadb_msg_errno;
 		ret = -1;
-		log_warn("%s: message", __func__);
+		if (errno == ESRCH)
+			log_debug("%s: not found", __func__);
+		else
+			log_warn("%s: message", __func__);
 		goto done;
 	}
-	if ((sa_life = pfkey_find_ext(data, n, SADB_X_EXT_LIFETIME_LASTUSE))
-	    == NULL) {
-		/* has never been used */
-		ret = -1;
-		goto done;
+	if (last_used) {
+		if ((sa_life = pfkey_find_ext(data, n,
+		    SADB_X_EXT_LIFETIME_LASTUSE)) == NULL) {
+			/* has never been used */
+			ret = -1;
+			goto done;
+		}
+		*last_used = sa_life->sadb_lifetime_usetime;
+		log_debug("%s: last_used %llu", __func__, *last_used);
 	}
-	*last_used = sa_life->sadb_lifetime_usetime;
-	log_debug("%s: last_used %llu", __func__, *last_used);
 
+#undef PAD
 done:
 	freezero(data, n);
 	return (ret);
+}
+
+int
+pfkey_sa_last_used(int sd, struct iked_childsa *sa, uint64_t *last_used)
+{
+	return pfkey_sa_lookup(sd, sa, last_used);
+}
+
+int
+pfkey_sa_check_exists(int sd, struct iked_childsa *sa)
+{
+	return pfkey_sa_lookup(sd, sa, NULL);
 }
 
 int
@@ -904,6 +1010,8 @@ pfkey_sa_getspi(int sd, uint8_t satype, struct iked_childsa *sa,
 	struct sadb_spirange	 sa_spirange;
 	struct sockaddr_storage	 ssrc, sdst;
 	struct iovec		 iov[IOV_CNT];
+	uint64_t		 pad = 0;
+	size_t			 padlen;
 	uint8_t			*data;
 	ssize_t			 n;
 	int			 iov_cnt, ret = -1;
@@ -946,6 +1054,14 @@ pfkey_sa_getspi(int sd, uint8_t satype, struct iked_childsa *sa,
 	sa_dst.sadb_address_len = (sizeof(sa_dst) + ROUNDUP(sdst.ss_len)) / 8;
 	sa_dst.sadb_address_exttype = SADB_EXT_ADDRESS_DST;
 
+#define PAD(len)					\
+	padlen = ROUNDUP((len)) - (len);		\
+	if (padlen) {					\
+		iov[iov_cnt].iov_base = &pad;		\
+		iov[iov_cnt].iov_len = padlen;		\
+		iov_cnt++;				\
+	}
+
 	iov_cnt = 0;
 
 	/* header */
@@ -964,18 +1080,20 @@ pfkey_sa_getspi(int sd, uint8_t satype, struct iked_childsa *sa,
 	iov[iov_cnt].iov_len = sizeof(sa_src);
 	iov_cnt++;
 	iov[iov_cnt].iov_base = &ssrc;
-	iov[iov_cnt].iov_len = ROUNDUP(ssrc.ss_len);
+	iov[iov_cnt].iov_len = ssrc.ss_len;
 	smsg.sadb_msg_len += sa_src.sadb_address_len;
 	iov_cnt++;
+	PAD(ssrc.ss_len);
 
 	/* dst addr */
 	iov[iov_cnt].iov_base = &sa_dst;
 	iov[iov_cnt].iov_len = sizeof(sa_dst);
 	iov_cnt++;
 	iov[iov_cnt].iov_base = &sdst;
-	iov[iov_cnt].iov_len = ROUNDUP(sdst.ss_len);
+	iov[iov_cnt].iov_len = sdst.ss_len;
 	smsg.sadb_msg_len += sa_dst.sadb_address_len;
 	iov_cnt++;
+	PAD(sdst.ss_len);
 
 	*spip = 0;
 
@@ -989,12 +1107,14 @@ pfkey_sa_getspi(int sd, uint8_t satype, struct iked_childsa *sa,
 		goto done;
 	}
 	if ((sa_ext = pfkey_find_ext(data, n, SADB_EXT_SA)) == NULL) {
-		log_debug("%s: erronous reply", __func__);
+		log_debug("%s: erroneous reply", __func__);
 		goto done;
 	}
 
 	*spip = ntohl(sa_ext->sadb_sa_spi);
 	log_debug("%s: spi 0x%08x", __func__, *spip);
+
+#undef PAD
 
 done:
 	freezero(data, n);
@@ -1010,8 +1130,13 @@ pfkey_sagroup(int sd, uint8_t satype1, uint8_t action,
 	struct sadb_address	sa_dst1, sa_dst2;
 	struct sockaddr_storage	sdst1, sdst2;
 	struct sadb_protocol	sa_proto;
+	struct sadb_x_rdomain	sa_rdomain;
+	struct iked_policy	*pol;
 	struct iovec		iov[IOV_CNT];
+	uint64_t		pad = 0;
+	size_t			padlen;
 	int			iov_cnt;
+	int			group_rdomain;
 	uint8_t			satype2;
 
 	if (pfkey_map(pfkey_satype, sa2->csa_saproto, &satype2) == -1)
@@ -1052,6 +1177,28 @@ pfkey_sagroup(int sd, uint8_t satype1, uint8_t action,
 	sadb2.sadb_sa_exttype = SADB_X_EXT_SA2;
 	sadb2.sadb_sa_spi = htonl(sa2->csa_spi.spi);
 	sadb2.sadb_sa_state = SADB_SASTATE_MATURE;
+
+	/* Incoming SA1 (IPCOMP) and SA2 (ESP) are in different/other rdomain */
+	group_rdomain =
+	    (pol = sa1->csa_ikesa->sa_policy) != NULL &&
+	    pol->pol_rdomain >= 0 &&
+	    satype1 == SADB_X_SATYPE_IPCOMP &&
+	    satype2 == SADB_SATYPE_ESP;
+	if (group_rdomain) {
+		bzero(&sa_rdomain, sizeof(sa_rdomain));
+		sa_rdomain.sadb_x_rdomain_exttype = SADB_X_EXT_RDOMAIN;
+		sa_rdomain.sadb_x_rdomain_len = sizeof(sa_rdomain) / 8;
+		if (sa1->csa_dir == IPSP_DIRECTION_IN) {
+			/* only ESP SA is iked's rdomain */
+			sa_rdomain.sadb_x_rdomain_dom1 = pol->pol_rdomain;
+			sa_rdomain.sadb_x_rdomain_dom2 = iked_rdomain;
+		} else {
+			/* both SAs are in pol_rdomain */
+			sa_rdomain.sadb_x_rdomain_dom1 = pol->pol_rdomain;
+			sa_rdomain.sadb_x_rdomain_dom2 = pol->pol_rdomain;
+		}
+	}
+
 	iov_cnt = 0;
 
 	bzero(&sa_dst1, sizeof(sa_dst1));
@@ -1070,6 +1217,14 @@ pfkey_sagroup(int sd, uint8_t satype1, uint8_t action,
 	sa_proto.sadb_protocol_direction = 0;
 	sa_proto.sadb_protocol_proto = satype2;
 
+#define PAD(len)					\
+	padlen = ROUNDUP((len)) - (len);		\
+	if (padlen) {					\
+		iov[iov_cnt].iov_base = &pad;		\
+		iov[iov_cnt].iov_len = padlen;		\
+		iov_cnt++;				\
+	}
+
 	/* header */
 	iov[iov_cnt].iov_base = &smsg;
 	iov[iov_cnt].iov_len = sizeof(smsg);
@@ -1086,9 +1241,10 @@ pfkey_sagroup(int sd, uint8_t satype1, uint8_t action,
 	iov[iov_cnt].iov_len = sizeof(sa_dst1);
 	iov_cnt++;
 	iov[iov_cnt].iov_base = &sdst1;
-	iov[iov_cnt].iov_len = ROUNDUP(sdst1.ss_len);
+	iov[iov_cnt].iov_len = sdst1.ss_len;
 	smsg.sadb_msg_len += sa_dst1.sadb_address_len;
 	iov_cnt++;
+	PAD(sdst1.ss_len);
 
 	/* second sa */
 	iov[iov_cnt].iov_base = &sadb2;
@@ -1101,15 +1257,26 @@ pfkey_sagroup(int sd, uint8_t satype1, uint8_t action,
 	iov[iov_cnt].iov_len = sizeof(sa_dst2);
 	iov_cnt++;
 	iov[iov_cnt].iov_base = &sdst2;
-	iov[iov_cnt].iov_len = ROUNDUP(sdst2.ss_len);
+	iov[iov_cnt].iov_len = sdst2.ss_len;
 	smsg.sadb_msg_len += sa_dst2.sadb_address_len;
 	iov_cnt++;
+	PAD(sdst2.ss_len);
 
 	/* SA type */
 	iov[iov_cnt].iov_base = &sa_proto;
 	iov[iov_cnt].iov_len = sizeof(sa_proto);
 	smsg.sadb_msg_len += sa_proto.sadb_protocol_len;
 	iov_cnt++;
+
+	/* SA1 and SA2 are from different rdomains */
+	if (group_rdomain) {
+		iov[iov_cnt].iov_base = &sa_rdomain;
+		iov[iov_cnt].iov_len = sizeof(sa_rdomain);
+		smsg.sadb_msg_len += sa_rdomain.sadb_x_rdomain_len;
+		iov_cnt++;
+	}
+
+#undef PAD
 
 	return (pfkey_write(sd, &smsg, iov, iov_cnt, NULL, NULL));
 }
@@ -1136,7 +1303,8 @@ pfkey_write(int sd, struct sadb_msg *smsg, struct iovec *iov, int iov_cnt,
 	}
 
 	if ((n = writev(sd, iov, iov_cnt)) == -1) {
-		log_warn("%s: writev failed", __func__);
+		log_warn("%s: writev failed: type %u len %zd",
+		    __func__, smsg->sadb_msg_type, len);
 		return (-1);
 	} else if (n != len) {
 		log_warn("%s: short write", __func__);
@@ -1146,6 +1314,7 @@ pfkey_write(int sd, struct sadb_msg *smsg, struct iovec *iov, int iov_cnt,
 	return (pfkey_reply(sd, datap, lenp));
 }
 
+/* wait for pfkey response and returns 0 for ok, -1 for error, -2 for timeout */
 int
 pfkey_reply(int sd, uint8_t **datap, ssize_t *lenp)
 {
@@ -1174,7 +1343,7 @@ pfkey_reply(int sd, uint8_t **datap, ssize_t *lenp)
 		}
 		if (n == 0) {
 			log_warnx("%s: no reply from PF_KEY", __func__);
-			return (-1);
+			return (-2);	/* retry */
 		}
 
 		if (recv(sd, &hdr, sizeof(hdr), MSG_PEEK) != sizeof(hdr)) {
@@ -1234,7 +1403,10 @@ pfkey_reply(int sd, uint8_t **datap, ssize_t *lenp)
 	if (datap == NULL && hdr.sadb_msg_errno != 0) {
 		errno = hdr.sadb_msg_errno;
 		if (errno != EEXIST) {
-			log_warn("%s: message", __func__);
+			if (errno == ESRCH)
+				log_debug("%s: not found", __func__);
+			else
+				log_warn("%s: message", __func__);
 			return (-1);
 		}
 	}
@@ -1300,6 +1472,7 @@ pfkey_sa_add(int fd, struct iked_childsa *sa, struct iked_childsa *last)
 {
 	uint8_t		 satype;
 	unsigned int	 cmd;
+	int		 rval;
 
 	if (pfkey_map(pfkey_satype, sa->csa_saproto, &satype) == -1)
 		return (-1);
@@ -1312,8 +1485,17 @@ pfkey_sa_add(int fd, struct iked_childsa *sa, struct iked_childsa *last)
 	log_debug("%s: %s spi %s", __func__, cmd == SADB_ADD ? "add": "update",
 	    print_spi(sa->csa_spi.spi, 4));
 
-	if (pfkey_sa(fd, satype, cmd, sa) == -1) {
+	rval = pfkey_sa(fd, satype, cmd, sa);
+	if (rval != 0) {
 		if (cmd == SADB_ADD) {
+			if (rval == -2) {
+				/* timeout: check for existence */
+				if (pfkey_sa_check_exists(fd, sa) == 0) {
+					log_debug("%s: SA exists after timeout",
+					    __func__);
+					goto loaded;
+				}
+			}
 			(void)pfkey_sa_delete(fd, sa);
 			return (-1);
 		}
@@ -1328,6 +1510,7 @@ pfkey_sa_add(int fd, struct iked_childsa *sa, struct iked_childsa *last)
 		}
 	}
 
+ loaded:
 	if (last != NULL) {
 		if (pfkey_sagroup(fd, satype,
 		    SADB_X_GRPSPIS, sa, last) == -1) {
@@ -1369,7 +1552,8 @@ pfkey_sa_delete(int fd, struct iked_childsa *sa)
 	if (pfkey_map(pfkey_satype, sa->csa_saproto, &satype) == -1)
 		return (-1);
 
-	if (pfkey_sa(fd, satype, SADB_DELETE, sa) == -1)
+	if (pfkey_sa(fd, satype, SADB_DELETE, sa) == -1 &&
+	    pfkey_sa_check_exists(fd, sa) == 0)
 		return (-1);
 
 	sa->csa_loaded = 0;
@@ -1420,6 +1604,8 @@ pfkey_id2ident(struct iked_id *id, unsigned int exttype)
 		type = SADB_IDENTTYPE_PREFIX;
 		break;
 	case IKEV2_ID_ASN1_DN:
+		type = SADB_IDENTTYPE_ASN1_DN;
+		break;
 	case IKEV2_ID_ASN1_GN:
 	case IKEV2_ID_KEY_ID:
 	case IKEV2_ID_NONE:
@@ -1466,6 +1652,8 @@ pfkey_init(struct iked *env, int fd)
 {
 	struct sadb_msg		smsg;
 	struct iovec		iov;
+
+	iked_rdomain = getrtable();
 
 	/* Set up a timer to process messages deferred by the pfkey_reply */
 	pfkey_timer_tv.tv_sec = 1;
@@ -1595,10 +1783,7 @@ pfkey_timer_cb(int unused, short event, void *arg)
 		}
 	}
 	/* move from retry to postponed */
-	while ((pm = SIMPLEQ_FIRST(&pfkey_retry)) != NULL) {
-		SIMPLEQ_REMOVE_HEAD(&pfkey_retry, pm_entry);
-		SIMPLEQ_INSERT_TAIL(&pfkey_postponed, pm, pm_entry);
-	}
+	SIMPLEQ_CONCAT(&pfkey_postponed, &pfkey_retry);
 	if (!SIMPLEQ_EMPTY(&pfkey_postponed))
 		evtimer_add(&pfkey_timer_ev, &pfkey_timer_tv);
 }
@@ -1781,12 +1966,25 @@ pfkey_process(struct iked *env, struct pfkey_message *pm)
 			return (0);
 		}
 
+		switch (hdr->sadb_msg_satype) {
+		case SADB_SATYPE_AH:
+			flow.flow_saproto = IKEV2_SAPROTO_AH;
+			break;
+		case SADB_SATYPE_ESP:
+			flow.flow_saproto = IKEV2_SAPROTO_ESP;
+			break;
+		case SADB_X_SATYPE_IPCOMP:
+			flow.flow_saproto = IKEV2_SAPROTO_IPCOMP;
+			break;
+		}
+
 		if ((sa_proto = pfkey_find_ext(reply, rlen,
 		    SADB_X_EXT_FLOW_TYPE)) == NULL) {
 			errmsg = "flow protocol";
 			goto out;
 		}
 		flow.flow_dir = sa_proto->sadb_protocol_direction;
+		flow.flow_rdomain = -1;	/* XXX get from kernel */
 
 		log_debug("%s: flow %s from %s/%s to %s/%s via %s", __func__,
 		    flow.flow_dir == IPSP_DIRECTION_IN ? "in" : "out",
@@ -1794,7 +1992,7 @@ pfkey_process(struct iked *env, struct pfkey_message *pm)
 		    print_host(sdst, NULL, 0), print_host(dmask, NULL, 0),
 		    print_host(speer, NULL, 0));
 
-		ret = ikev2_acquire_sa(env, &flow);
+		ret = ikev2_child_sa_acquire(env, &flow);
 
 out:
 		if (errmsg)
@@ -1841,9 +2039,9 @@ out:
 		    "rekeying" : "deletion");
 
 		if (sa_ltime->sadb_lifetime_exttype == SADB_EXT_LIFETIME_SOFT)
-			ret = ikev2_rekey_sa(env, &spi);
+			ret = ikev2_child_sa_rekey(env, &spi);
 		else
-			ret = ikev2_drop_sa(env, &spi);
+			ret = ikev2_child_sa_drop(env, &spi);
 		break;
 	}
 	return (ret);

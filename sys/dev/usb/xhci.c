@@ -1,4 +1,4 @@
-/* $OpenBSD: xhci.c,v 1.113 2020/03/02 16:30:39 visa Exp $ */
+/* $OpenBSD: xhci.c,v 1.120 2020/12/24 14:11:38 mglocker Exp $ */
 
 /*
  * Copyright (c) 2014-2015 Martin Pieuchot
@@ -73,6 +73,10 @@ struct xhci_pipe {
 	int			 halted;
 	size_t			 free_trbs;
 	int			 skip;
+#define TRB_PROCESSED_NO	0
+#define TRB_PROCESSED_YES 	1
+#define TRB_PROCESSED_SHORT	2
+	uint8_t			 trb_processed[XHCI_MAX_XFER];
 };
 
 int	xhci_reset(struct xhci_softc *);
@@ -82,7 +86,7 @@ void	xhci_event_xfer(struct xhci_softc *, uint64_t, uint32_t, uint32_t);
 int	xhci_event_xfer_generic(struct xhci_softc *, struct usbd_xfer *,
 	    struct xhci_pipe *, uint32_t, int, uint8_t, uint8_t, uint8_t);
 int	xhci_event_xfer_isoc(struct usbd_xfer *, struct xhci_pipe *,
-	    uint32_t, int);
+	    uint32_t, int, uint8_t);
 void	xhci_event_command(struct xhci_softc *, uint64_t);
 void	xhci_event_port_change(struct xhci_softc *, uint64_t, uint32_t);
 int	xhci_pipe_init(struct xhci_softc *, struct usbd_pipe *);
@@ -624,12 +628,12 @@ xhci_intr1(struct xhci_softc *sc)
 		return (1);
 	}
 
-	XOWRITE4(sc, XHCI_USBSTS, intrs); /* Acknowledge */
-	usb_schedsoftintr(&sc->sc_bus);
-
-	/* Acknowledge PCI interrupt */
+	/* Acknowledge interrupts */
+	XOWRITE4(sc, XHCI_USBSTS, intrs);
 	intrs = XRREAD4(sc, XHCI_IMAN(0));
 	XRWRITE4(sc, XHCI_IMAN(0), intrs | XHCI_IMAN_INTR_PEND);
+
+	usb_schedsoftintr(&sc->sc_bus);
 
 	return (1);
 }
@@ -800,7 +804,7 @@ xhci_event_xfer(struct xhci_softc *sc, uint64_t paddr, uint32_t status,
 			return;
 		break;
 	case UE_ISOCHRONOUS:
-		if (xhci_event_xfer_isoc(xfer, xp, remain, trb_idx))
+		if (xhci_event_xfer_isoc(xfer, xp, remain, trb_idx, code))
 			return;
 		break;
 	default:
@@ -851,6 +855,10 @@ xhci_event_xfer_generic(struct xhci_softc *sc, struct usbd_xfer *xfer,
 			else
 				xfer->actlen = xfer->length;
 		}
+		if (xfer->actlen)
+			usb_syncmem(&xfer->dmabuf, 0, xfer->actlen,
+			    usbd_xfer_isread(xfer) ?
+			    BUS_DMASYNC_POSTREAD : BUS_DMASYNC_POSTWRITE);
 		xfer->status = USBD_NORMAL_COMPLETION;
 		break;
 	case XHCI_CODE_SHORT_XFER:
@@ -871,6 +879,10 @@ xhci_event_xfer_generic(struct xhci_softc *sc, struct usbd_xfer *xfer,
 			    DEVNAME(sc), xfer, xx->index));
 			return (1);
 		}
+		if (xfer->actlen)
+			usb_syncmem(&xfer->dmabuf, 0, xfer->actlen,
+			    usbd_xfer_isread(xfer) ?
+			    BUS_DMASYNC_POSTREAD : BUS_DMASYNC_POSTWRITE);
 		xfer->status = USBD_NORMAL_COMPLETION;
 		break;
 	case XHCI_CODE_TXERR:
@@ -919,13 +931,23 @@ xhci_event_xfer_generic(struct xhci_softc *sc, struct usbd_xfer *xfer,
 
 int
 xhci_event_xfer_isoc(struct usbd_xfer *xfer, struct xhci_pipe *xp,
-    uint32_t remain, int trb_idx)
+    uint32_t remain, int trb_idx, uint8_t code)
 {
 	struct usbd_xfer *skipxfer;
 	struct xhci_xfer *xx = (struct xhci_xfer *)xfer;
-	int trb0_idx, frame_idx = 0;
+	int trb0_idx, frame_idx = 0, skip_trb = 0;
 
 	KASSERT(xx->index >= 0);
+
+	switch (code) {
+	case XHCI_CODE_SHORT_XFER:
+		xp->trb_processed[trb_idx] = TRB_PROCESSED_SHORT;
+		break;
+	default:
+		xp->trb_processed[trb_idx] = TRB_PROCESSED_YES;
+		break;
+	}
+
 	trb0_idx =
 	    ((xx->index + xp->ring.ntrb) - xx->ntrb) % (xp->ring.ntrb - 1);
 
@@ -950,15 +972,20 @@ xhci_event_xfer_isoc(struct usbd_xfer *xfer, struct xhci_pipe *xp,
 			trb0_idx = xp->ring.ntrb - 2;
 		else
 			trb0_idx = trb_idx - 1;
-		if (xfer->frlengths[frame_idx] == 0) {
+		if (xp->trb_processed[trb0_idx] == TRB_PROCESSED_NO) {
 			xfer->frlengths[frame_idx] = XHCI_TRB_LEN(letoh32(
 			    xp->ring.trbs[trb0_idx].trb_status));
+		} else if (xp->trb_processed[trb0_idx] == TRB_PROCESSED_SHORT) {
+			skip_trb = 1;
 		}
 	}
 
-	xfer->frlengths[frame_idx] +=
-	    XHCI_TRB_LEN(letoh32(xp->ring.trbs[trb_idx].trb_status)) - remain;
-	xfer->actlen += xfer->frlengths[frame_idx];
+	if (!skip_trb) {
+		xfer->frlengths[frame_idx] +=
+		    XHCI_TRB_LEN(letoh32(xp->ring.trbs[trb_idx].trb_status)) -
+		    remain;
+		xfer->actlen += xfer->frlengths[frame_idx];
+	}
 
 	if (xx->index != trb_idx)
 		return (1);
@@ -975,6 +1002,9 @@ xhci_event_xfer_isoc(struct usbd_xfer *xfer, struct xhci_pipe *xp,
 		xp->skip = 0;
 	}
 
+	usb_syncmem(&xfer->dmabuf, 0, xfer->length,
+	    usbd_xfer_isread(xfer) ?
+	    BUS_DMASYNC_POSTREAD : BUS_DMASYNC_POSTWRITE);
 	xfer->status = USBD_NORMAL_COMPLETION;
 
 	return (0);
@@ -1037,10 +1067,16 @@ xhci_event_command(struct xhci_softc *sc, uint64_t paddr)
 	case XHCI_CMD_ADDRESS_DEVICE:
 	case XHCI_CMD_EVAL_CTX:
 	case XHCI_CMD_NOOP:
-		/* All these commands are synchronous. */
-		KASSERT(sc->sc_cmd_trb == trb);
-		sc->sc_cmd_trb = NULL;
-		wakeup(&sc->sc_cmd_trb);
+		/*
+		 * All these commands are synchronous.
+		 *
+		 * If TRBs differ, this could be a delayed result after we
+		 * gave up waiting for the expected TRB due to timeout.
+		 */
+		if (sc->sc_cmd_trb == trb) {
+			sc->sc_cmd_trb = NULL;
+			wakeup(&sc->sc_cmd_trb);
+		}
 		break;
 	default:
 		DPRINTF(("%s: unexpected command %x\n", DEVNAME(sc), flags));
@@ -1099,8 +1135,10 @@ xhci_xfer_done(struct usbd_xfer *xfer)
 			i = (xp->ring.ntrb - 1);
 	}
 	xp->free_trbs += xx->ntrb;
+	xp->free_trbs += xx->zerotd;
 	xx->index = -1;
 	xx->ntrb = 0;
+	xx->zerotd = 0;
 
 	timeout_del(&xfer->timeout_handle);
 	usb_rem_task(xfer->device, &xfer->abort_task);
@@ -1806,6 +1844,7 @@ xhci_xfer_get_trb(struct xhci_softc *sc, struct usbd_xfer *xfer,
 	switch (last) {
 	case -1:	/* This will be a zero-length TD. */
 		xp->pending_xfers[xp->ring.index] = NULL;
+		xx->zerotd += 1;
 		break;
 	case 0:		/* This will be in a chain. */
 		xp->pending_xfers[xp->ring.index] = xfer;
@@ -1818,6 +1857,8 @@ xhci_xfer_get_trb(struct xhci_softc *sc, struct usbd_xfer *xfer,
 		xx->ntrb += 1;
 		break;
 	}
+
+	xp->trb_processed[xp->ring.index] = TRB_PROCESSED_NO;
 
 	return (xhci_ring_produce(sc, &xp->ring));
 }
@@ -1863,7 +1904,14 @@ xhci_command_submit(struct xhci_softc *sc, struct xhci_trb *trb0, int timeout)
 		printf("cmd = %d ", XHCI_TRB_TYPE(letoh32(trb->trb_flags)));
 		xhci_dump_trb(trb);
 #endif
-		KASSERT(sc->sc_cmd_trb == trb);
+		KASSERT(sc->sc_cmd_trb == trb || sc->sc_cmd_trb == NULL);
+		/*
+		 * Just because the timeout expired this does not mean that the
+		 * TRB isn't active anymore! We could get an interrupt from
+		 * this TRB later on and then wonder what to do with it.
+		 * We'd rather abort it.
+		 */
+		xhci_command_abort(sc);
 		sc->sc_cmd_trb = NULL;
 		splx(s);
 		return (error);
@@ -1897,8 +1945,8 @@ xhci_command_abort(struct xhci_softc *sc)
 	XOWRITE4(sc, XHCI_CRCR_LO, reg | XHCI_CRCR_LO_CA);
 	XOWRITE4(sc, XHCI_CRCR_HI, 0);
 
-	for (i = 0; i < 250; i++) {
-		usb_delay_ms(&sc->sc_bus, 1);
+	for (i = 0; i < 2500; i++) {
+		DELAY(100);
 		reg = XOREAD4(sc, XHCI_CRCR_LO) & XHCI_CRCR_LO_CRR;
 		if (!reg)
 			break;
@@ -2809,6 +2857,11 @@ xhci_device_ctrl_start(struct usbd_xfer *xfer)
 	if (xp->free_trbs < 3)
 		return (USBD_NOMEM);
 
+	if (len != 0)
+		usb_syncmem(&xfer->dmabuf, 0, len,
+		    usbd_xfer_isread(xfer) ?
+		    BUS_DMASYNC_PREREAD : BUS_DMASYNC_PREWRITE);
+
 	/* We'll toggle the setup TRB once we're finished with the stages. */
 	trb0 = xhci_xfer_get_trb(sc, xfer, &toggle, 0);
 
@@ -2935,6 +2988,10 @@ xhci_device_generic_start(struct usbd_xfer *xfer)
 	if (xp->free_trbs < (ntrb + zerotd))
 		return (USBD_NOMEM);
 
+	usb_syncmem(&xfer->dmabuf, 0, xfer->length,
+	    usbd_xfer_isread(xfer) ?
+	    BUS_DMASYNC_PREREAD : BUS_DMASYNC_PREWRITE);
+
 	/* We'll toggle the first TRB once we're finished with the chain. */
 	trb0 = xhci_xfer_get_trb(sc, xfer, &toggle, (ntrb == 1));
 	flags = XHCI_TRB_TYPE_NORMAL | (toggle ^ 1);
@@ -3057,13 +3114,6 @@ xhci_device_isoc_start(struct usbd_xfer *xfer)
 
 	KASSERT(!(xfer->rqflags & URQ_REQUEST));
 
-	if (sc->sc_bus.dying || xp->halted)
-		return (USBD_IOERROR);
-
-	/* Why would you do that anyway? */
-	if (sc->sc_bus.use_polling)
-		return (USBD_INVAL);
-
 	/*
 	 * To allow continuous transfers, above we start all transfers
 	 * immediately. However, we're still going to get usbd_start_next call
@@ -3072,6 +3122,13 @@ xhci_device_isoc_start(struct usbd_xfer *xfer)
 	 */
 	if (xx->ntrb > 0)
 		return (USBD_IN_PROGRESS);
+
+	if (sc->sc_bus.dying || xp->halted)
+		return (USBD_IOERROR);
+
+	/* Why would you do that anyway? */
+	if (sc->sc_bus.use_polling)
+		return (USBD_INVAL);
 
 	paddr = DMAADDR(&xfer->dmabuf, 0);
 
@@ -3090,6 +3147,10 @@ xhci_device_isoc_start(struct usbd_xfer *xfer)
 
 	if (xp->free_trbs < ntrb)
 		return (USBD_NOMEM);
+
+	usb_syncmem(&xfer->dmabuf, 0, xfer->length,
+	    usbd_xfer_isread(xfer) ?
+	    BUS_DMASYNC_PREREAD : BUS_DMASYNC_PREWRITE);
 
 	paddr = DMAADDR(&xfer->dmabuf, 0);
 

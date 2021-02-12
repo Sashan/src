@@ -1,4 +1,4 @@
-/*	$OpenBSD: pipex.h,v 1.21 2017/01/24 10:08:30 krw Exp $	*/
+/*	$OpenBSD: pipex.h,v 1.30 2021/01/04 12:21:38 mvs Exp $	*/
 
 /*
  * Copyright (c) 2009 Internet Initiative Japan Inc.
@@ -33,15 +33,11 @@
  * Names for pipex sysctl objects
  */
 #define PIPEXCTL_ENABLE		1
-#define PIPEXCTL_INQ		2
-#define PIPEXCTL_OUTQ		3
-#define PIPEXCTL_MAXID		4
+#define PIPEXCTL_MAXID		2
 
 #define PIPEXCTL_NAMES { \
         { 0, 0 }, \
         { "enable", CTLTYPE_INT }, \
-        { "inq", CTLTYPE_NODE }, \
-        { "outq", CTLTYPE_NODE }, \
 }
 
 #define PIPEX_PROTO_L2TP		1	/* protocol L2TP */
@@ -169,8 +165,6 @@ struct pipex_session_descr_req {
 
 
 /* PIPEX ioctls */
-#define PIPEXSMODE	_IOW ('p',  1, int)
-#define PIPEXGMODE	_IOR ('p',  2, int)
 #define PIPEXASESSION	_IOW ('p',  3, struct pipex_session_req)
 #define PIPEXDSESSION	_IOWR('p',  4, struct pipex_session_close_req)
 #define PIPEXCSESSION	_IOW ('p',  5, struct pipex_session_config_req)
@@ -183,24 +177,9 @@ extern int	pipex_enable;
 
 struct pipex_session;
 
-/* pipex context for a interface. */
-struct pipex_iface_context {
-	struct	ifnet *ifnet_this;	/* outer interface */
-	u_int	pipexmode;		/* pipex mode */
-	/* virtual pipex_session entry for multicast routing */
-	struct pipex_session *multicast_session;
-};
-
 __BEGIN_DECLS
 void                  pipex_init (void);
-void                  pipex_iface_init (struct pipex_iface_context *, struct ifnet *);
-void                  pipex_iface_fini (struct pipex_iface_context *);
 
-int                   pipex_notify_close_session(struct pipex_session *session);
-int                   pipex_notify_close_session_all(void);
-
-struct mbuf           *pipex_output (struct mbuf *, int, int, struct pipex_iface_context *);
-struct pipex_session  *pipex_pppoe_lookup_session (struct mbuf *);
 struct pipex_session  *pipex_pppoe_lookup_session (struct mbuf *);
 struct mbuf           *pipex_pppoe_input (struct mbuf *, struct pipex_session *);
 struct pipex_session  *pipex_pptp_lookup_session (struct mbuf *);
@@ -214,7 +193,7 @@ struct mbuf           *pipex_l2tp_input (struct mbuf *, int off, struct pipex_se
 struct pipex_session  *pipex_l2tp_userland_lookup_session_ipv4 (struct mbuf *, struct in_addr);
 struct pipex_session  *pipex_l2tp_userland_lookup_session_ipv6 (struct mbuf *, struct in6_addr);
 struct mbuf           *pipex_l2tp_userland_output (struct mbuf *, struct pipex_session *);
-int                   pipex_ioctl (struct pipex_iface_context *, u_long, caddr_t);
+int                   pipex_ioctl (void *, u_long, caddr_t);
 void                  pipex_session_init_mppe_recv(struct pipex_session *, int,
 int, u_char *);
 void                  pipex_session_init_mppe_send(struct pipex_session *, int,

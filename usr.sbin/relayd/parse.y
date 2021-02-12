@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.244 2020/02/12 21:15:44 benno Exp $	*/
+/*	$OpenBSD: parse.y,v 1.252 2021/01/17 15:17:13 rob Exp $	*/
 
 /*
  * Copyright (c) 2007 - 2014 Reyk Floeter <reyk@openbsd.org>
@@ -39,6 +39,7 @@
 #include <net/pfvar.h>
 #include <net/route.h>
 
+#include <agentx.h>
 #include <stdint.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -56,7 +57,6 @@
 
 #include "relayd.h"
 #include "http.h"
-#include "snmp.h"
 
 TAILQ_HEAD(files, file)		 files = TAILQ_HEAD_INITIALIZER(files);
 static struct file {
@@ -168,22 +168,22 @@ typedef struct {
 
 %}
 
-%token	APPEND BACKLOG BACKUP BINARY BUFFER CA CACHE SET CHECK CIPHERS CODE
-%token	COOKIE DEMOTE DIGEST DISABLE ERROR EXPECT PASS BLOCK EXTERNAL FILENAME
-%token	FORWARD FROM HASH HEADER HEADERLEN HOST HTTP ICMP INCLUDE INET INET6
-%token	INTERFACE INTERVAL IP KEYPAIR LABEL LISTEN VALUE LOADBALANCE LOG LOOKUP
-%token	METHOD MODE NAT NO DESTINATION NODELAY NOTHING ON PARENT PATH PFTAG PORT
-%token	PREFORK PRIORITY PROTO QUERYSTR REAL REDIRECT RELAY REMOVE REQUEST
-%token	RESPONSE RETRY QUICK RETURN ROUNDROBIN ROUTE SACK SCRIPT SEND SESSION
-%token	SNMP SOCKET SPLICE SSL STICKYADDR STYLE TABLE TAG TAGGED TCP TIMEOUT TLS
-%token	TO ROUTER RTLABEL TRANSPARENT TRAP URL WITH TTL RTABLE
+%token	AGENTX APPEND BACKLOG BACKUP BINARY BUFFER CA CACHE SET CHECK CIPHERS
+%token	CODE COOKIE DEMOTE DIGEST DISABLE ERROR EXPECT PASS BLOCK EXTERNAL
+%token	FILENAME FORWARD FROM HASH HEADER HEADERLEN HOST HTTP ICMP INCLUDE INET
+%token	INET6 INTERFACE INTERVAL IP KEYPAIR LABEL LISTEN VALUE LOADBALANCE LOG
+%token	LOOKUP METHOD MODE NAT NO DESTINATION NODELAY NOTHING ON PARENT PATH
+%token	PFTAG PORT PREFORK PRIORITY PROTO QUERYSTR REAL REDIRECT RELAY REMOVE
+%token	REQUEST RESPONSE RETRY QUICK RETURN ROUNDROBIN ROUTE SACK SCRIPT SEND
+%token	SESSION SOCKET SPLICE SSL STICKYADDR STRIP STYLE TABLE TAG TAGGED TCP
+%token	TIMEOUT TLS TO ROUTER RTLABEL TRANSPARENT URL WITH TTL RTABLE
 %token	MATCH PARAMS RANDOM LEASTSTATES SRCHASH KEY CERTIFICATE PASSWORD ECDHE
-%token	EDH TICKETS CONNECTION CONNECTIONS ERRORS STATE CHANGES CHECKS
+%token	EDH TICKETS CONNECTION CONNECTIONS CONTEXT ERRORS STATE CHANGES CHECKS
 %token	WEBSOCKETS
 %token	<v.string>	STRING
 %token  <v.number>	NUMBER
-%type	<v.string>	hostname interface table value optstring
-%type	<v.number>	http_type loglevel quick trap
+%type	<v.string>	context hostname interface table value path
+%type	<v.number>	http_type loglevel quick
 %type	<v.number>	dstmode flag forwardmode retry
 %type	<v.number>	opttls opttlsclient
 %type	<v.number>	redirect_proto relay_proto match
@@ -429,31 +429,44 @@ main		: INTERVAL NUMBER	{
 			}
 			conf->sc_conf.prefork_relay = $2;
 		}
-		| SNMP trap optstring	{
-			conf->sc_conf.flags |= F_SNMP;
-			if ($2)
-				conf->sc_conf.flags |= F_SNMP_TRAPONLY;
-			if ($3) {
-				if (strlcpy(conf->sc_conf.snmp_path,
-				    $3, sizeof(conf->sc_conf.snmp_path)) >=
-				    sizeof(conf->sc_conf.snmp_path)) {
-					yyerror("snmp path truncated");
+		| AGENTX context path {
+			conf->sc_conf.flags |= F_AGENTX;
+			if ($2 != NULL) {
+				if (strlcpy(conf->sc_conf.agentx_context, $2,
+				    sizeof(conf->sc_conf.agentx_context)) >=
+				    sizeof(conf->sc_conf.agentx_context)) {
+					yyerror("agentx context too long");
+					free($2);
+					free($3);
+					YYERROR;
+				}
+				free($2);
+			} else
+				conf->sc_conf.agentx_context[0] = '\0';
+			if ($3 != NULL) {
+				if (strlcpy(conf->sc_conf.agentx_path, $3,
+				    sizeof(conf->sc_conf.agentx_path)) >=
+				    sizeof(conf->sc_conf.agentx_path)) {
+					yyerror("agentx path too long");
 					free($3);
 					YYERROR;
 				}
 				free($3);
 			} else
-				(void)strlcpy(conf->sc_conf.snmp_path,
-				    AGENTX_SOCKET,
-				    sizeof(conf->sc_conf.snmp_path));
+				(void)strlcpy(conf->sc_conf.agentx_path,
+				    AGENTX_MASTER_PATH,
+				    sizeof(conf->sc_conf.agentx_path));
 		}
 		| SOCKET STRING {
 			conf->sc_ps->ps_csock.cs_name = $2;
 		}
 		;
 
-trap		: /* nothing */		{ $$ = 0; }
-		| TRAP			{ $$ = 1; }
+path		: /* nothing */		{ $$ = NULL; }
+		| PATH STRING		{ $$ = $2; }
+
+context		: /* nothing */		{ $$ = NULL; }
+		| CONTEXT STRING	{ $$ = $2; }
 
 loglevel	: STATE CHANGES		{ $$ = RELAYD_OPT_LOGUPDATE; }
 		| HOST CHECKS		{ $$ = RELAYD_OPT_LOGHOSTCHECK; }
@@ -1355,6 +1368,8 @@ flag		: STRING			{
 				$$ = TLSFLAG_TLSV1_1;
 			else if (strcmp("tlsv1.2", $1) == 0)
 				$$ = TLSFLAG_TLSV1_2;
+			else if (strcmp("tlsv1.3", $1) == 0)
+				$$ = TLSFLAG_TLSV1_3;
 			else if (strcmp("cipher-server-preference", $1) == 0)
 				$$ = TLSFLAG_CIPHER_SERVER_PREF;
 			else if (strcmp("client-renegotiation", $1) == 0)
@@ -1532,6 +1547,20 @@ ruleopts	: METHOD STRING					{
 		| PATH key_option				{
 			keytype = KEY_TYPE_PATH;
 			rule->rule_kv[keytype].kv_option = $2;
+			rule->rule_kv[keytype].kv_type = keytype;
+		}
+		| PATH STRIP NUMBER				{
+			char	*strip = NULL;
+
+			if ($3 < 0 || $3 > INT_MAX) {
+				yyerror("invalid strip number");
+				YYERROR;
+			}
+			if (asprintf(&strip, "%lld", $3) <= 0)
+				fatal("can't parse strip");
+			keytype = KEY_TYPE_PATH;
+			rule->rule_kv[keytype].kv_option = KEY_OPTION_STRIP;
+			rule->rule_kv[keytype].kv_value = strip;
 			rule->rule_kv[keytype].kv_type = keytype;
 		}
 		| QUERYSTR key_option STRING value		{
@@ -1936,7 +1965,7 @@ relayoptsl	: LISTEN ON STRING port opttls {
 				yyerror("more than one protocol specified");
 				YYERROR;
 			}
-				
+
 			TAILQ_FOREACH(p, conf->sc_protos, entry)
 				if (!strcmp(p->name, $2))
 					break;
@@ -2336,10 +2365,6 @@ optnl		: '\n' optnl
 
 nl		: '\n' optnl
 		;
-
-optstring	: STRING		{ $$ = $1; }
-		| /* nothing */		{ $$ = NULL; }
-		;
 %%
 
 struct keywords {
@@ -2374,6 +2399,7 @@ lookup(char *s)
 {
 	/* this has to be sorted always */
 	static const struct keywords keywords[] = {
+		{ "agentx",		AGENTX },
 		{ "append",		APPEND },
 		{ "backlog",		BACKLOG },
 		{ "backup",		BACKUP },
@@ -2389,6 +2415,7 @@ lookup(char *s)
 		{ "ciphers",		CIPHERS },
 		{ "code",		CODE },
 		{ "connection",		CONNECTION },
+		{ "context",		CONTEXT },
 		{ "cookie",		COOKIE },
 		{ "demote",		DEMOTE },
 		{ "destination",	DESTINATION },
@@ -2462,13 +2489,13 @@ lookup(char *s)
 		{ "send",		SEND },
 		{ "session",		SESSION },
 		{ "set",		SET },
-		{ "snmp",		SNMP },
 		{ "socket",		SOCKET },
 		{ "source-hash",	SRCHASH },
 		{ "splice",		SPLICE },
 		{ "ssl",		SSL },
 		{ "state",		STATE },
 		{ "sticky-address",	STICKYADDR },
+		{ "strip",		STRIP },
 		{ "style",		STYLE },
 		{ "table",		TABLE },
 		{ "tag",		TAG },
@@ -2479,7 +2506,6 @@ lookup(char *s)
 		{ "tls",		TLS },
 		{ "to",			TO },
 		{ "transparent",	TRANSPARENT },
-		{ "trap",		TRAP },
 		{ "ttl",		TTL },
 		{ "url",		URL },
 		{ "value",		VALUE },
@@ -3175,7 +3201,8 @@ host_if(const char *s, struct addresslist *al, int max,
 
  nextaf:
 	for (p = ifap; p != NULL && cnt < max; p = p->ifa_next) {
-		if (p->ifa_addr->sa_family != af ||
+		if (p->ifa_addr == NULL ||
+		    p->ifa_addr->sa_family != af ||
 		    (strcmp(s, p->ifa_name) != 0 &&
 		    !is_if_in_group(p->ifa_name, s)))
 			continue;
@@ -3190,6 +3217,7 @@ host_if(const char *s, struct addresslist *al, int max,
 				log_warnx("%s: interface name truncated",
 				    __func__);
 			freeifaddrs(ifap);
+			free(h);
 			return (-1);
 		}
 		if (ipproto != -1)

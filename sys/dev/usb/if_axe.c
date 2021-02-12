@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_axe.c,v 1.139 2019/07/07 06:40:10 kevlo Exp $	*/
+/*	$OpenBSD: if_axe.c,v 1.142 2020/07/31 10:49:32 mglocker Exp $	*/
 
 /*
  * Copyright (c) 2005, 2006, 2007 Jonathan Gray <jsg@openbsd.org>
@@ -1123,7 +1123,7 @@ axe_txeof(struct usbd_xfer *xfer, void *priv, usbd_status status)
 	m_freem(c->axe_mbuf);
 	c->axe_mbuf = NULL;
 
-	if (IFQ_IS_EMPTY(&ifp->if_snd) == 0)
+	if (ifq_empty(&ifp->if_snd) == 0)
 		axe_start(ifp);
 
 	splx(s);
@@ -1223,6 +1223,7 @@ axe_encap(struct axe_softc *sc, struct mbuf *m, int idx)
 	/* Transmit */
 	err = usbd_transfer(c->axe_xfer);
 	if (err != USBD_IN_PROGRESS) {
+		c->axe_mbuf = NULL;
 		axe_stop(sc);
 		return(EIO);
 	}
@@ -1246,16 +1247,15 @@ axe_start(struct ifnet *ifp)
 	if (ifq_is_oactive(&ifp->if_snd))
 		return;
 
-	m_head = ifq_deq_begin(&ifp->if_snd);
+	m_head = ifq_dequeue(&ifp->if_snd);
 	if (m_head == NULL)
 		return;
 
 	if (axe_encap(sc, m_head, 0)) {
-		ifq_deq_rollback(&ifp->if_snd, m_head);
+		m_freem(m_head);
 		ifq_set_oactive(&ifp->if_snd);
 		return;
 	}
-	ifq_deq_commit(&ifp->if_snd, m_head);
 
 	/*
 	 * If there's a BPF listener, bounce a copy of this frame
@@ -1446,7 +1446,7 @@ axe_watchdog(struct ifnet *ifp)
 	usbd_get_xfer_status(c->axe_xfer, NULL, NULL, NULL, &stat);
 	axe_txeof(c->axe_xfer, c, stat);
 
-	if (!IFQ_IS_EMPTY(&ifp->if_snd))
+	if (!ifq_empty(&ifp->if_snd))
 		axe_start(ifp);
 	splx(s);
 }
@@ -1473,7 +1473,6 @@ axe_stop(struct axe_softc *sc)
 
 	/* Stop transfers. */
 	if (sc->axe_ep[AXE_ENDPT_RX] != NULL) {
-		usbd_abort_pipe(sc->axe_ep[AXE_ENDPT_RX]);
 		err = usbd_close_pipe(sc->axe_ep[AXE_ENDPT_RX]);
 		if (err) {
 			printf("axe%d: close rx pipe failed: %s\n",
@@ -1483,7 +1482,6 @@ axe_stop(struct axe_softc *sc)
 	}
 
 	if (sc->axe_ep[AXE_ENDPT_TX] != NULL) {
-		usbd_abort_pipe(sc->axe_ep[AXE_ENDPT_TX]);
 		err = usbd_close_pipe(sc->axe_ep[AXE_ENDPT_TX]);
 		if (err) {
 			printf("axe%d: close tx pipe failed: %s\n",
@@ -1493,7 +1491,6 @@ axe_stop(struct axe_softc *sc)
 	}
 
 	if (sc->axe_ep[AXE_ENDPT_INTR] != NULL) {
-		usbd_abort_pipe(sc->axe_ep[AXE_ENDPT_INTR]);
 		err = usbd_close_pipe(sc->axe_ep[AXE_ENDPT_INTR]);
 		if (err) {
 			printf("axe%d: close intr pipe failed: %s\n",

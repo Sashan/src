@@ -1,4 +1,4 @@
-/*	$OpenBSD: nfs_vnops.c,v 1.182 2020/01/20 23:21:56 claudio Exp $	*/
+/*	$OpenBSD: nfs_vnops.c,v 1.185 2020/09/27 17:25:19 matthieu Exp $	*/
 /*	$NetBSD: nfs_vnops.c,v 1.62.4.1 1996/07/08 20:26:52 jtc Exp $	*/
 
 /*
@@ -342,7 +342,7 @@ nfs_access(void *v)
 	 * shortly before, use the cached result.
 	 */
 	 cachevalid = (np->n_accstamp != -1 &&
-	     (time_second - np->n_accstamp) < nfs_attrtimeo(np) &&
+	     (gettime() - np->n_accstamp) < nfs_attrtimeo(np) &&
 	     np->n_accuid == ap->a_cred->cr_uid);
 
 	if (cachevalid) {
@@ -423,7 +423,7 @@ nfs_access(void *v)
 					np->n_accmode = ap->a_mode;
 			}
 		} else {
-			np->n_accstamp = time_second;
+			np->n_accstamp = gettime();
 			np->n_accuid = ap->a_cred->cr_uid;
 			np->n_accmode = ap->a_mode;
 			np->n_accerror = error;
@@ -1414,6 +1414,7 @@ nfs_create(void *v)
 	struct componentname *cnp = ap->a_cnp;
 	struct nfsv2_sattr *sp;
 	struct nfsm_info	info;
+	struct timespec ts;
 	u_int32_t *tl;
 	int32_t t1;
 	struct nfsnode *np = NULL;
@@ -1486,8 +1487,14 @@ nfsmout:
 			fmode &= ~O_EXCL;
 			goto again;
 		}
-	} else if (info.nmi_v3 && (fmode & O_EXCL))
+	} else if (info.nmi_v3 && (fmode & O_EXCL)) {
+		getnanotime(&ts);
+		if (vap->va_atime.tv_nsec == VNOVAL)
+			vap->va_atime = ts;
+		if (vap->va_mtime.tv_nsec == VNOVAL)
+			vap->va_mtime = ts;
 		error = nfs_setattrrpc(newvp, vap, cnp->cn_cred, cnp->cn_proc);
+	}
 	if (!error) {
 		if (cnp->cn_flags & MAKEENTRY)
 			nfs_cache_enter(dvp, newvp, cnp);

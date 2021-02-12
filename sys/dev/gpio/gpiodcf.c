@@ -1,4 +1,4 @@
-/*	$OpenBSD: gpiodcf.c,v 1.7 2019/08/10 18:18:27 cheloha Exp $ */
+/*	$OpenBSD: gpiodcf.c,v 1.9 2020/06/24 22:03:41 cheloha Exp $ */
 
 /*
  * Copyright (c) 2008 Marc Balmer <mbalmer@openbsd.org>
@@ -88,7 +88,7 @@ struct gpiodcf_softc {
 #define	T_MGSYNC	450	/* resync after a minute gap (450ms) */
 #define	T_SL		3000	/* detect signal loss (3sec) */
 #define	T_WAIT		5000	/* wait (5sec) */
-#define	T_WARN		300000	/* degrade sensor status to warning (5min)
+#define	T_WARN		300000	/* degrade sensor status to warning (5min) */
 #define	T_CRIT		900000	/* degrade sensor status to critical (15min) */
 
 void	gpiodcf_intr(void *);
@@ -348,7 +348,7 @@ gpiodcf_mg_probe(void *xsc)
 		goto cleanbits;
 	}
 
-	if (time_second - sc->sc_last_mg < 57) {
+	if (gettime() - sc->sc_last_mg < 57) {
 		DPRINTF(("\nunexpected gap, resync\n"));
 		sc->sc_sync = sc->sc_minute = 1;
 		goto cleanbits;	
@@ -457,7 +457,7 @@ gpiodcf_mg_probe(void *xsc)
 
 cleanbits:
 	timeout_add_msec(&sc->sc_to, T_MGSYNC);	/* re-sync in 450 ms */
-	sc->sc_last_mg = time_second;
+	sc->sc_last_mg = gettime();
 	sc->sc_tbits = 0LL;
 	sc->sc_mask = 1LL;
 }

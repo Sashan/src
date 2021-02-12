@@ -1,4 +1,4 @@
-/*	$OpenBSD: sndiod.c,v 1.38 2020/02/26 13:53:58 ratchov Exp $	*/
+/*	$OpenBSD: sndiod.c,v 1.44 2021/02/05 17:59:33 jcs Exp $	*/
 /*
  * Copyright (c) 2008-2012 Alexandre Ratchov <alex@caoua.org>
  *
@@ -85,13 +85,6 @@
 #define DEFAULT_BUFSZ	7680
 #endif
 
-/*
- * default device in server mode
- */
-#ifndef DEFAULT_DEV
-#define DEFAULT_DEV "rsnd/0"
-#endif
-
 void sigint(int);
 void sighup(int);
 void opt_ch(int *, int *);
@@ -117,6 +110,23 @@ char usagestr[] = "usage: sndiod [-d] [-a flag] [-b nframes] "
     "[-e enc] [-F device] [-f device] [-j flag] [-L addr] [-m mode]\n\t"
     "[-Q port] [-q port] [-r rate] [-s name] [-t mode] [-U unit]\n\t"
     "[-v volume] [-w flag] [-z nframes]\n";
+
+/*
+ * default audio devices
+ */
+static char *default_devs[] = {
+	"rsnd/0", "rsnd/1", "rsnd/2", "rsnd/3",
+	NULL
+};
+
+/*
+ * default MIDI ports
+ */
+static char *default_ports[] = {
+	"rmidi/0", "rmidi/1", "rmidi/2", "rmidi/3",
+	"rmidi/4", "rmidi/5", "rmidi/6", "rmidi/7",
+	NULL
+};
 
 /*
  * SIGINT handler, it raises the quit flag. If the flag is already set,
@@ -308,8 +318,8 @@ mkdev(char *path, struct aparams *par,
 	struct dev *d;
 
 	for (d = dev_list; d != NULL; d = d->next) {
-		if (d->path_list->next == NULL &&
-		    strcmp(d->path_list->str, path) == 0)
+		if (d->alt_list->next == NULL &&
+		    strcmp(d->alt_list->name, path) == 0)
 			return d;
 	}
 	if (!bufsz && !round) {
@@ -375,6 +385,7 @@ static int
 start_helper(int background)
 {
 	struct dev *d;
+	struct dev_alt *da;
 	struct port *p;
 	struct passwd *pw;
 	struct name *n;
@@ -413,9 +424,9 @@ start_helper(int background)
 				err(1, "cannot drop privileges");
 		}
 		for (d = dev_list; d != NULL; d = d->next) {
-			for (n = d->path_list; n != NULL; n = n->next) {
-				dounveil(n->str, "rsnd/", "/dev/audio");
-				dounveil(n->str, "rsnd/", "/dev/audioctl");
+			for (da = d->alt_list; da != NULL; da = da->next) {
+				dounveil(da->name, "rsnd/", "/dev/audio");
+				dounveil(da->name, "rsnd/", "/dev/audioctl");
 			}
 		}
 		for (p = port_list; p != NULL; p = p->next) {
@@ -445,7 +456,7 @@ stop_helper(void)
 int
 main(int argc, char **argv)
 {
-	int c, background, unit;
+	int c, i, background, unit, devindex;
 	int pmin, pmax, rmin, rmax;
 	char base[SOCKPATH_MAX], path[SOCKPATH_MAX];
 	unsigned int mode, dup, mmc, vol;
@@ -466,11 +477,11 @@ main(int argc, char **argv)
 	/*
 	 * global options defaults
 	 */
-	vol = 118;
+	vol = 127;
 	dup = 1;
 	mmc = 0;
 	hold = 0;
-	autovol = 1;
+	autovol = 0;
 	bufsz = 0;
 	round = 0;
 	rate = DEFAULT_RATE;
@@ -483,6 +494,9 @@ main(int argc, char **argv)
 	aparams_init(&par);
 	mode = MODE_PLAY | MODE_REC;
 	tcpaddr_list = NULL;
+	devindex = 0;
+
+	slot_array_init();
 
 	while ((c = getopt(argc, argv,
 	    "a:b:c:C:de:F:f:j:L:m:Q:q:r:s:t:U:v:w:x:z:")) != -1) {
@@ -532,8 +546,8 @@ main(int argc, char **argv)
 			break;
 		case 's':
 			if ((d = dev_list) == NULL) {
-				d = mkdev(DEFAULT_DEV, &par, 0, bufsz, round,
-				    rate, hold, autovol);
+				d = mkdev(default_devs[devindex++], &par, 0,
+				    bufsz, round, rate, hold, autovol);
 			}
 			if (mkopt(optarg, d, pmin, pmax, rmin, rmax,
 				mode, vol, mmc, dup) == NULL)
@@ -566,11 +580,13 @@ main(int argc, char **argv)
 		case 'f':
 			mkdev(optarg, &par, 0, bufsz, round,
 			    rate, hold, autovol);
+			devindex = -1;
 			break;
 		case 'F':
-			if (dev_list == NULL)
+			if ((d = dev_list) == NULL)
 				errx(1, "-F %s: no devices defined", optarg);
-			namelist_add(&dev_list->path_list, optarg);
+			if (!dev_addname(d, optarg))
+				exit(1);
 			break;
 		default:
 			fputs(usagestr, stderr);
@@ -583,8 +599,16 @@ main(int argc, char **argv)
 		fputs(usagestr, stderr);
 		return 1;
 	}
-	if (dev_list == NULL)
-		mkdev(DEFAULT_DEV, &par, 0, bufsz, round, rate, hold, autovol);
+	if (port_list == NULL) {
+		for (i = 0; default_ports[i] != NULL; i++)
+			mkport(default_ports[i], 0);
+	}
+	if (devindex != -1) {
+		for (i = devindex; default_devs[i] != NULL; i++) {
+			mkdev(default_devs[i], &par, 0,
+			    bufsz, round, rate, 0, autovol);
+		}
+	}
 	for (d = dev_list; d != NULL; d = d->next) {
 		if (opt_byname(d, "default"))
 			continue;
@@ -676,6 +700,8 @@ main(int argc, char **argv)
 		; /* nothing */
 	midi_done();
 
+	while (opt_list)
+		opt_del(opt_list);
 	while (dev_list)
 		dev_del(dev_list);
 	while (port_list)

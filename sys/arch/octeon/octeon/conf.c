@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.c,v 1.24 2020/01/23 02:40:21 dlg Exp $ */
+/*	$OpenBSD: conf.c,v 1.26 2021/01/23 05:08:36 thfr Exp $ */
 
 /*
  * Copyright (c) 1992, 1993
@@ -121,6 +121,7 @@ cdev_decl(octcf);
 cdev_decl(amdcf);
 
 #include "ksyms.h"
+#include "kstat.h"
 
 #include "wsdisplay.h"
 #include "wskbd.h"
@@ -135,6 +136,7 @@ cdev_decl(pci);
 #include "usb.h"
 #include "uhid.h"
 #include "fido.h"
+#include "ujoy.h"
 #include "ugen.h"
 #include "ulpt.h"
 #include "ucom.h"
@@ -207,7 +209,7 @@ struct cdevsw	cdevsw[] =
 	cdev_notdef(),			/* 48: */
 	cdev_bio_init(NBIO,bio),	/* 49: ioctl tunnel */
 	cdev_notdef(),			/* 50: */
-	cdev_notdef(),			/* 51: */
+	cdev_kstat_init(NKSTAT,kstat),	/* 51: kernel statistics */
 	cdev_ptm_init(NPTY,ptm),	/* 52: pseudo-tty ptm device */
 	cdev_fuse_init(NFUSE,fuse),	/* 53: fuse */
 	cdev_notdef(),			/* 54: */
@@ -234,6 +236,7 @@ struct cdevsw	cdevsw[] =
 	cdev_switch_init(NSWITCH,switch), /* 75: switch(4) control interface */
 	cdev_fido_init(NFIDO,fido),	/* 76: FIDO/U2F security key */
 	cdev_pppx_init(NPPPX,pppac),	/* 77: PPP Access Concentrator */
+	cdev_ujoy_init(NUJOY,ujoy),	/* 78: USB joystick/gamecontroller */
 };
 
 int	nchrdev = nitems(cdevsw);

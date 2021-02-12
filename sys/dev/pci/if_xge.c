@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_xge.c,v 1.78 2019/07/17 02:13:43 kevlo Exp $	*/
+/*	$OpenBSD: if_xge.c,v 1.80 2020/12/12 11:48:53 jan Exp $	*/
 /*	$NetBSD: if_xge.c,v 1.1 2005/09/09 10:30:27 ragge Exp $	*/
 
 /*
@@ -679,7 +679,7 @@ xge_attach(struct device *parent, struct device *self, void *aux)
 	ifp->if_ioctl = xge_ioctl;
 	ifp->if_start = xge_start;
 	ifp->if_hardmtu = XGE_MAX_MTU;
-	IFQ_SET_MAXLEN(&ifp->if_snd, NTXDESCS - 1);
+	ifq_set_maxlen(&ifp->if_snd, NTXDESCS - 1);
 
 	ifp->if_capabilities = IFCAP_VLAN_MTU | IFCAP_CSUM_IPv4 |
 	    IFCAP_CSUM_TCPv4 | IFCAP_CSUM_UDPv4;
@@ -1340,7 +1340,7 @@ xge_add_rxbuf(struct xge_softc *sc, int id)
 	MGETHDR(m[0], M_DONTWAIT, MT_DATA);
 	if (m[0] == NULL)
 		return (ENOBUFS);
-	MCLGETI(m[0], M_DONTWAIT, NULL, XGE_MAX_FRAMELEN + ETHER_ALIGN);
+	MCLGETL(m[0], M_DONTWAIT, XGE_MAX_FRAMELEN + ETHER_ALIGN);
 	if ((m[0]->m_flags & M_EXT) == 0) {
 		m_freem(m[0]);
 		return (ENOBUFS);

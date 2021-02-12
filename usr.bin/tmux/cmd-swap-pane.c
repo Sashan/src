@@ -1,4 +1,4 @@
-/* $OpenBSD: cmd-swap-pane.c,v 1.35 2019/08/14 09:58:31 nicm Exp $ */
+/* $OpenBSD: cmd-swap-pane.c,v 1.38 2020/05/16 16:20:59 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -45,16 +45,18 @@ const struct cmd_entry cmd_swap_pane_entry = {
 static enum cmd_retval
 cmd_swap_pane_exec(struct cmd *self, struct cmdq_item *item)
 {
-	struct args		*args = self->args;
+	struct args		*args = cmd_get_args(self);
+	struct cmd_find_state	*source = cmdq_get_source(item);
+	struct cmd_find_state	*target = cmdq_get_target(item);
 	struct window		*src_w, *dst_w;
 	struct window_pane	*tmp_wp, *src_wp, *dst_wp;
 	struct layout_cell	*src_lc, *dst_lc;
 	u_int			 sx, sy, xoff, yoff;
 
-	dst_w = item->target.wl->window;
-	dst_wp = item->target.wp;
-	src_w = item->source.wl->window;
-	src_wp = item->source.wp;
+	dst_w = target->wl->window;
+	dst_wp = target->wp;
+	src_w = source->wl->window;
+	src_wp = source->wp;
 
 	if (window_push_zoom(dst_w, args_has(args, 'Z')))
 		server_redraw_window(dst_w);
@@ -76,6 +78,9 @@ cmd_swap_pane_exec(struct cmd *self, struct cmdq_item *item)
 
 	if (src_wp == dst_wp)
 		goto out;
+
+	server_client_remove_pane(src_wp);
+	server_client_remove_pane(dst_wp);
 
 	tmp_wp = TAILQ_PREV(dst_wp, window_panes, entry);
 	TAILQ_REMOVE(&dst_w->panes, dst_wp, entry);

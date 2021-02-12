@@ -1,6 +1,7 @@
-/*	$OpenBSD: parse.y,v 1.114 2020/02/09 09:44:04 florian Exp $	*/
+/*	$OpenBSD: parse.y,v 1.124 2021/01/22 13:07:17 benno Exp $	*/
 
 /*
+ * Copyright (c) 2020 Matthias Pressfreund <mpfr@fn.de>
  * Copyright (c) 2007 - 2015 Reyk Floeter <reyk@openbsd.org>
  * Copyright (c) 2008 Gilles Chehade <gilles@openbsd.org>
  * Copyright (c) 2006 Pierre-Yves Ritschard <pyr@openbsd.org>
@@ -27,6 +28,7 @@
 %{
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/queue.h>
 #include <sys/tree.h>
@@ -116,6 +118,8 @@ struct server	*server_inherit(struct server *, struct server_config *,
 int		 listen_on(const char *, int, struct portrange *);
 int		 getservice(char *);
 int		 is_if_in_group(const char *, const char *);
+int		 get_fastcgi_dest(struct server_config *, const char *, char *);
+void		 remove_locations(struct server_config *);
 
 typedef struct {
 	union {
@@ -124,10 +128,6 @@ typedef struct {
 		struct timeval		 tv;
 		struct portrange	 port;
 		struct auth		 auth;
-		struct {
-			struct sockaddr_storage	 ss;
-			char			 name[HOST_NAME_MAX+1];
-		}			 addr;
 	} v;
 	int lineno;
 } YYSTYPE;
@@ -140,11 +140,12 @@ typedef struct {
 %token	PROTOCOLS REQUESTS ROOT SACK SERVER SOCKET STRIP STYLE SYSLOG TCP TICKET
 %token	TIMEOUT TLS TYPE TYPES HSTS MAXAGE SUBDOMAINS DEFAULT PRELOAD REQUEST
 %token	ERROR INCLUDE AUTHENTICATE WITH BLOCK DROP RETURN PASS REWRITE
-%token	CA CLIENT CRL OPTIONAL PARAM FORWARDED
+%token	CA CLIENT CRL OPTIONAL PARAM FORWARDED FOUND NOT
 %token	<v.string>	STRING
 %token  <v.number>	NUMBER
 %type	<v.port>	port
-%type	<v.number>	opttls optmatch
+%type	<v.string>	fcgiport
+%type	<v.number>	opttls optmatch optfound
 %type	<v.tv>		timeout
 %type	<v.string>	numberstring optstring
 %type	<v.auth>	authopts
@@ -221,7 +222,8 @@ main		: PREFORK NUMBER	{
 		;
 
 server		: SERVER optmatch STRING	{
-			struct server	*s;
+			struct server		*s;
+			struct sockaddr_un	*sun;
 
 			if (!loadcfg) {
 				free($3);
@@ -277,6 +279,12 @@ server		: SERVER optmatch STRING	{
 			strlcpy(s->srv_conf.tls_ecdhe_curves,
 			    HTTPD_TLS_ECDHE_CURVES,
 			    sizeof(s->srv_conf.tls_ecdhe_curves));
+
+			sun = (struct sockaddr_un *)&s->srv_conf.fastcgi_ss;
+			sun->sun_family = AF_UNIX;
+			(void)strlcpy(sun->sun_path, HTTPD_FCGI_SOCKET,
+			    sizeof(sun->sun_path));
+			sun->sun_len = sizeof(struct sockaddr_un);
 
 			s->srv_conf.hsts_max_age = SERVER_HSTS_DEFAULT_AGE;
 
@@ -345,10 +353,19 @@ server		: SERVER optmatch STRING	{
 				YYERROR;
 			}
 
-			if (server_tls_load_keypair(srv) == -1)
+			if (server_tls_load_keypair(srv) == -1) {
+				/* Soft fail as there may be no certificate. */
 				log_warnx("%s:%d: server \"%s\": failed to "
 				    "load public/private keys", file->name,
 				    yylval.lineno, srv->srv_conf.name);
+
+				remove_locations(srv_conf);
+				serverconfig_free(srv_conf);
+				srv_conf = NULL;
+				free(srv);
+				srv = NULL;
+				break;
+			}
 
 			if (server_tls_load_ca(srv) == -1) {
 				yyerror("server \"%s\": failed to load "
@@ -496,38 +513,39 @@ serveroptsl	: LISTEN ON STRING opttls port	{
 		| fastcgi
 		| authenticate
 		| filter
-		| LOCATION optmatch STRING	{
-			struct server	*s;
+		| LOCATION optfound optmatch STRING	{
+			struct server		*s;
+			struct sockaddr_un	*sun;
 
 			if (srv->srv_conf.ss.ss_family == AF_UNSPEC) {
 				yyerror("listen address not specified");
-				free($3);
+				free($4);
 				YYERROR;
 			}
 
 			if (parentsrv != NULL) {
-				yyerror("location %s inside location", $3);
-				free($3);
+				yyerror("location %s inside location", $4);
+				free($4);
 				YYERROR;
 			}
 
 			if (!loadcfg) {
-				free($3);
+				free($4);
 				YYACCEPT;
 			}
 
 			if ((s = calloc(1, sizeof (*s))) == NULL)
 				fatal("out of memory");
 
-			if (strlcpy(s->srv_conf.location, $3,
+			if (strlcpy(s->srv_conf.location, $4,
 			    sizeof(s->srv_conf.location)) >=
 			    sizeof(s->srv_conf.location)) {
 				yyerror("server location truncated");
-				free($3);
+				free($4);
 				free(s);
 				YYERROR;
 			}
-			free($3);
+			free($4);
 
 			if (strlcpy(s->srv_conf.name, srv->srv_conf.name,
 			    sizeof(s->srv_conf.name)) >=
@@ -537,11 +555,28 @@ serveroptsl	: LISTEN ON STRING opttls port	{
 				YYERROR;
 			}
 
+			sun = (struct sockaddr_un *)&s->srv_conf.fastcgi_ss;
+			sun->sun_family = AF_UNIX;
+			(void)strlcpy(sun->sun_path, HTTPD_FCGI_SOCKET,
+			    sizeof(sun->sun_path));
+			sun->sun_len = sizeof(struct sockaddr_un);
+
 			s->srv_conf.id = ++last_server_id;
 			/* A location entry uses the parent id */
 			s->srv_conf.parent_id = srv->srv_conf.id;
 			s->srv_conf.flags = SRVFLAG_LOCATION;
-			if ($2)
+			if ($2 == 1) {
+				s->srv_conf.flags &=
+				    ~SRVFLAG_LOCATION_NOT_FOUND;
+				s->srv_conf.flags |=
+				    SRVFLAG_LOCATION_FOUND;
+			} else if ($2 == -1) {
+				s->srv_conf.flags &=
+				    ~SRVFLAG_LOCATION_FOUND;
+				s->srv_conf.flags |=
+				    SRVFLAG_LOCATION_NOT_FOUND;
+			}
+			if ($3)
 				s->srv_conf.flags |= SRVFLAG_LOCATION_MATCH;
 			s->srv_s = -1;
 			memcpy(&s->srv_conf.ss, &srv->srv_conf.ss,
@@ -561,10 +596,18 @@ serveroptsl	: LISTEN ON STRING opttls port	{
 			SPLAY_INIT(&srv->srv_clients);
 		} '{' optnl serveropts_l '}'	{
 			struct server	*s = NULL;
+			uint32_t	 f;
+
+			f = SRVFLAG_LOCATION_FOUND |
+			    SRVFLAG_LOCATION_NOT_FOUND;
 
 			TAILQ_FOREACH(s, conf->sc_servers, srv_entry) {
+				/* Compare locations of same parent server */
 				if ((s->srv_conf.flags & SRVFLAG_LOCATION) &&
-				    s->srv_conf.id == srv_conf->id &&
+				    s->srv_conf.parent_id ==
+				    srv_conf->parent_id &&
+				    (s->srv_conf.flags & f) ==
+				    (srv_conf->flags & f) &&
 				    strcmp(s->srv_conf.location,
 				    srv_conf->location) == 0)
 					break;
@@ -600,6 +643,11 @@ serveroptsl	: LISTEN ON STRING opttls port	{
 			}
 			srv->srv_conf.flags |= SRVFLAG_SERVER_HSTS;
 		}
+		;
+
+optfound	: /* empty */	{ $$ = 0; }
+		| FOUND		{ $$ = 1; }
+		| NOT FOUND	{ $$ = -1; }
 		;
 
 hsts		: HSTS '{' optnl hstsflags_l '}'
@@ -648,16 +696,37 @@ fcgiflags_l	: fcgiflags optcommanl fcgiflags_l
 		| fcgiflags optnl
 		;
 
-fcgiflags	: SOCKET STRING		{
-			if (strlcpy(srv_conf->socket, $2,
-			    sizeof(srv_conf->socket)) >=
-			    sizeof(srv_conf->socket)) {
-				yyerror("fastcgi socket too long");
+fcgiflags	: SOCKET STRING {
+			struct sockaddr_un *sun;
+			sun = (struct sockaddr_un *)&srv_conf->fastcgi_ss;
+			memset(sun, 0, sizeof(*sun));
+			sun->sun_family = AF_UNIX;
+			if (strlcpy(sun->sun_path, $2, sizeof(sun->sun_path))
+			    >= sizeof(sun->sun_path)) {
+				yyerror("socket path too long");
 				free($2);
 				YYERROR;
 			}
+			srv_conf->fastcgi_ss.ss_len =
+			    sizeof(struct sockaddr_un);
 			free($2);
-			srv_conf->flags |= SRVFLAG_SOCKET;
+		}
+		| SOCKET TCP STRING {
+			if (get_fastcgi_dest(srv_conf, $3, FCGI_DEFAULT_PORT)
+			    == -1) {
+				free($3);
+				YYERROR;
+			}
+			free($3);
+		}
+		| SOCKET TCP STRING fcgiport {
+			if (get_fastcgi_dest(srv_conf, $3, $4) == -1) {
+				free($3);
+				free($4);
+				YYERROR;
+			}
+			free($3);
+			free($4);
 		}
 		| PARAM STRING STRING	{
 			struct fastcgi_param	*param;
@@ -1086,6 +1155,27 @@ optstring	: /* empty */		{ $$ = NULL; }
 		| STRING		{ $$ = $1; }
 		;
 
+fcgiport	: NUMBER		{
+			if ($1 <= 0 || $1 > (int)USHRT_MAX) {
+				yyerror("invalid port: %lld", $1);
+				YYERROR;
+			}
+			if (asprintf(&$$, "%lld", $1) == -1) {
+				yyerror("out of memory");
+				YYERROR;
+			}
+		}
+		| STRING		{
+			if (getservice($1) <= 0) {
+				yyerror("invalid port: %s", $1);
+				free($1);
+				YYERROR;
+			}
+
+			$$ = $1;
+		}
+		;
+
 tcpip		: TCP '{' optnl tcpflags_l '}'
 		| TCP tcpflags
 		;
@@ -1308,6 +1398,7 @@ lookup(char *s)
 		{ "error",		ERR },
 		{ "fastcgi",		FCGI },
 		{ "forwarded",		FORWARDED },
+		{ "found",		FOUND },
 		{ "hsts",		HSTS },
 		{ "include",		INCLUDE },
 		{ "index",		INDEX },
@@ -1323,6 +1414,7 @@ lookup(char *s)
 		{ "max-age",		MAXAGE },
 		{ "no",			NO },
 		{ "nodelay",		NODELAY },
+		{ "not",		NOT },
 		{ "ocsp",		OCSP },
 		{ "on",			ON },
 		{ "optional",		OPTIONAL },
@@ -2035,7 +2127,8 @@ host_if(const char *s, struct addresslist *al, int max,
 
  nextaf:
 	for (p = ifap; p != NULL && cnt < max; p = p->ifa_next) {
-		if (p->ifa_addr->sa_family != af ||
+		if (p->ifa_addr == NULL ||
+		    p->ifa_addr->sa_family != af ||
 		    (strcmp(s, p->ifa_name) != 0 &&
 		    !is_if_in_group(p->ifa_name, s)))
 			continue;
@@ -2050,6 +2143,7 @@ host_if(const char *s, struct addresslist *al, int max,
 				log_warnx("%s: interface name truncated",
 				    __func__);
 			freeifaddrs(ifap);
+			free(h);
 			return (-1);
 		}
 		if (ipproto != -1)
@@ -2326,10 +2420,8 @@ getservice(char *n)
 		s = getservbyname(n, "tcp");
 		if (s == NULL)
 			s = getservbyname(n, "udp");
-		if (s == NULL) {
-			yyerror("unknown port %s", n);
+		if (s == NULL)
 			return (-1);
-		}
 		return (s->s_port);
 	}
 
@@ -2378,4 +2470,42 @@ is_if_in_group(const char *ifname, const char *groupname)
 end:
 	close(s);
 	return (ret);
+}
+
+int
+get_fastcgi_dest(struct server_config *xsrv_conf, const char *node, char *port)
+{
+	struct addrinfo		 hints, *res;
+	int			 s;
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+
+	if ((s = getaddrinfo(node, port, &hints, &res)) != 0) {
+		yyerror("getaddrinfo: %s\n", gai_strerror(s));
+		return -1;
+	}
+
+	memset(&(xsrv_conf)->fastcgi_ss, 0, sizeof(xsrv_conf->fastcgi_ss));
+	memcpy(&(xsrv_conf)->fastcgi_ss, res->ai_addr, res->ai_addrlen);
+
+	freeaddrinfo(res);
+
+	return (0);
+}
+
+void
+remove_locations(struct server_config *xsrv_conf)
+{
+	struct server *s, *next;
+
+	TAILQ_FOREACH_SAFE(s, conf->sc_servers, srv_entry, next) {
+		if (!(s->srv_conf.flags & SRVFLAG_LOCATION &&
+		    s->srv_conf.parent_id == xsrv_conf->parent_id))
+			continue;
+		TAILQ_REMOVE(conf->sc_servers, s, srv_entry);
+		serverconfig_free(&s->srv_conf);
+		free(s);
+	}
 }

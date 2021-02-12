@@ -1,4 +1,4 @@
-/* $OpenBSD: softraid.c,v 1.399 2020/03/10 08:41:19 tobhe Exp $ */
+/* $OpenBSD: softraid.c,v 1.418 2021/02/08 11:20:03 stsp Exp $ */
 /*
  * Copyright (c) 2007, 2008, 2009 Marco Peereboom <marco@peereboom.us>
  * Copyright (c) 2008 Chris Kuethe <ckuethe@openbsd.org>
@@ -94,8 +94,6 @@ struct cfdriver softraid_cd = {
 /* scsi & discipline */
 void			sr_scsi_cmd(struct scsi_xfer *);
 int			sr_scsi_probe(struct scsi_link *);
-void			sr_copy_internal_data(struct scsi_xfer *,
-			    void *, size_t);
 int			sr_scsi_ioctl(struct scsi_link *, u_long,
 			    caddr_t, int);
 int			sr_bio_ioctl(struct device *, u_long, caddr_t);
@@ -1399,7 +1397,7 @@ sr_boot_assembly(struct sr_softc *sc)
 		 * key disk...
 		 */
 		bcr.bc_key_disk = NODEV;
-		if (bv->sbv_level == 'C') {
+		if (bv->sbv_level == 'C' || bv->sbv_level == 0x1C) {
 			SLIST_FOREACH(bc, &kdh, sbc_link) {
 				if (bcmp(&bc->sbc_metadata->ssdi.ssd_uuid,
 				    &bv->sbv_uuid,
@@ -1449,7 +1447,7 @@ sr_boot_assembly(struct sr_softc *sc)
 		bcr.bc_flags = BIOC_SCDEVT |
 		    (bv->sbv_flags & BIOC_SCNOAUTOASSEMBLE);
 
-		if (bv->sbv_level == 'C' &&
+		if ((bv->sbv_level == 'C' || bv->sbv_level == 0x1C) &&
 		    bcmp(&sr_bootuuid, &bv->sbv_uuid, sizeof(sr_bootuuid)) == 0)
 			data = sr_bootkey;
 
@@ -1802,17 +1800,18 @@ sr_attach(struct device *parent, struct device *self, void *aux)
 
 	printf("\n");
 
-	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.adapter = &sr_switch;
-	sc->sc_link.adapter_target = SR_MAX_LD;
-	sc->sc_link.adapter_buswidth = SR_MAX_LD;
-	sc->sc_link.luns = 1;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter = &sr_switch;
+	saa.saa_adapter_target = SDEV_NO_ADAPTER_TARGET;
+	saa.saa_adapter_buswidth = SR_MAX_LD;
+	saa.saa_luns = 1;
+	saa.saa_openings = 0;
+	saa.saa_pool = NULL;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
-	bzero(&saa, sizeof(saa));
-	saa.saa_sc_link = &sc->sc_link;
-
-	sc->sc_scsibus = (struct scsibus_softc *)config_found(&sc->sc_dev,
-	    &saa, scsiprint);
+	sc->sc_scsibus = (struct scsibus_softc *)config_found(&sc->sc_dev, &saa,
+	    scsiprint);
 
 	softraid_disk_attach = sr_disk_attach;
 
@@ -1883,20 +1882,6 @@ sr_error(struct sr_softc *sc, const char *fmt, ...)
 	va_start(ap, fmt);
 	bio_status(&sc->sc_status, 1, BIO_MSG_ERROR, fmt, &ap);
 	va_end(ap);
-}
-
-void
-sr_copy_internal_data(struct scsi_xfer *xs, void *v, size_t size)
-{
-	size_t			copy_cnt;
-
-	DNPRINTF(SR_D_MISC, "sr_copy_internal_data xs: %p size: %zu\n",
-	    xs, size);
-
-	if (xs->datalen) {
-		copy_cnt = MIN(size, xs->datalen);
-		memcpy(xs->data, v, copy_cnt);
-	}
 }
 
 int
@@ -2327,7 +2312,7 @@ void
 sr_scsi_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link	*link = xs->sc_link;
-	struct sr_softc		*sc = link->adapter_softc;
+	struct sr_softc		*sc = link->bus->sb_adapter_softc;
 	struct sr_workunit	*wu = xs->io;
 	struct sr_discipline	*sd;
 
@@ -2350,15 +2335,15 @@ sr_scsi_cmd(struct scsi_xfer *xs)
 	wu->swu_state = SR_WU_INPROGRESS;
 	wu->swu_xs = xs;
 
-	switch (xs->cmd->opcode) {
+	switch (xs->cmd.opcode) {
 	case READ_COMMAND:
-	case READ_BIG:
+	case READ_10:
 	case READ_16:
 	case WRITE_COMMAND:
-	case WRITE_BIG:
+	case WRITE_10:
 	case WRITE_16:
 		DNPRINTF(SR_D_CMD, "%s: sr_scsi_cmd: READ/WRITE %02x\n",
-		    DEVNAME(sc), xs->cmd->opcode);
+		    DEVNAME(sc), xs->cmd.opcode);
 		if (sd->sd_scsi_rw(wu))
 			goto stuffup;
 		break;
@@ -2394,7 +2379,7 @@ sr_scsi_cmd(struct scsi_xfer *xs)
 	case READ_CAPACITY:
 	case READ_CAPACITY_16:
 		DNPRINTF(SR_D_CMD, "%s: sr_scsi_cmd READ CAPACITY 0x%02x\n",
-		    DEVNAME(sc), xs->cmd->opcode);
+		    DEVNAME(sc), xs->cmd.opcode);
 		if (sd->sd_scsi_read_cap(wu))
 			goto stuffup;
 		goto complete;
@@ -2408,7 +2393,7 @@ sr_scsi_cmd(struct scsi_xfer *xs)
 
 	default:
 		DNPRINTF(SR_D_CMD, "%s: unsupported scsi command %x\n",
-		    DEVNAME(sc), xs->cmd->opcode);
+		    DEVNAME(sc), xs->cmd.opcode);
 		/* XXX might need to add generic function to handle others */
 		goto stuffup;
 	}
@@ -2429,7 +2414,7 @@ complete:
 int
 sr_scsi_probe(struct scsi_link *link)
 {
-	struct sr_softc		*sc = link->adapter_softc;
+	struct sr_softc		*sc = link->bus->sb_adapter_softc;
 	struct sr_discipline	*sd;
 
 	KASSERT(link->target < SR_MAX_LD && link->lun == 0);
@@ -2450,7 +2435,7 @@ sr_scsi_probe(struct scsi_link *link)
 int
 sr_scsi_ioctl(struct scsi_link *link, u_long cmd, caddr_t addr, int flag)
 {
-	struct sr_softc		*sc = link->adapter_softc;
+	struct sr_softc		*sc = link->bus->sb_adapter_softc;
 	struct sr_discipline	*sd;
 
 	sd = sc->sc_targets[link->target];
@@ -2600,7 +2585,8 @@ sr_ioctl_vol(struct sr_softc *sc, struct bioc_vol *bv)
 		bv->bv_nodisk = sd->sd_meta->ssdi.ssd_chunk_no;
 
 #ifdef CRYPTO
-		if (sd->sd_meta->ssdi.ssd_level == 'C' &&
+		if ((sd->sd_meta->ssdi.ssd_level == 'C' ||
+		    sd->sd_meta->ssdi.ssd_level == 0x1C) &&
 		    sd->mds.mdd_crypto.key_disk != NULL)
 			bv->bv_nodisk++;
 #endif
@@ -2656,7 +2642,8 @@ sr_ioctl_disk(struct sr_softc *sc, struct bioc_disk *bd)
 			src = sd->sd_vol.sv_chunks[bd->bd_diskid];
 #ifdef CRYPTO
 		else if (bd->bd_diskid == sd->sd_meta->ssdi.ssd_chunk_no &&
-		    sd->sd_meta->ssdi.ssd_level == 'C' &&
+		    (sd->sd_meta->ssdi.ssd_level == 'C' ||
+		    sd->sd_meta->ssdi.ssd_level == 0x1C) &&
 		    sd->mds.mdd_crypto.key_disk != NULL)
 			src = sd->mds.mdd_crypto.key_disk;
 #endif
@@ -2846,8 +2833,6 @@ sr_hotspare(struct sr_softc *sc, dev_t dev)
 	    NOCRED, curproc)) {
 		DNPRINTF(SR_D_META, "%s: sr_hotspare ioctl failed\n",
 		    DEVNAME(sc));
-		VOP_CLOSE(vn, FREAD | FWRITE, NOCRED, curproc);
-		vput(vn);
 		goto fail;
 	}
 	if (label.d_partitions[part].p_fstype != FS_RAID) {
@@ -3415,12 +3400,16 @@ sr_ioctl_createraid(struct sr_softc *sc, struct bioc_createraid *bc,
 	} else {
 
 		/* Ensure we are assembling the correct # of chunks. */
-		if (sd->sd_meta->ssdi.ssd_chunk_no != no_chunk) {
+		if (bc->bc_level == 0x1C &&
+		    sd->sd_meta->ssdi.ssd_chunk_no > no_chunk) {
+			sr_warn(sc, "trying to bring up %s degraded",
+			    sd->sd_meta->ssd_devname);
+		} else if (sd->sd_meta->ssdi.ssd_chunk_no != no_chunk) {
 			sr_error(sc, "volume chunk count does not match metadata "
 			    "chunk count");
 			goto unwind;
 		}
-			
+
 		/* Ensure metadata level matches requested assembly level. */
 		if (sd->sd_meta->ssdi.ssd_level != bc->bc_level) {
 			sr_error(sc, "volume level does not match metadata "
@@ -3668,7 +3657,7 @@ sr_ioctl_installboot(struct sr_softc *sc, struct sr_discipline *sd,
 	struct sr_meta_opt_item *omi;
 	struct sr_meta_boot	*sbm;
 	struct disk		*dk;
-	u_int32_t		bbs, bls, secsize;
+	u_int32_t		bbs = 0, bls = 0, secsize;
 	u_char			duid[8];
 	int			rv = EINVAL;
 	int			i;
@@ -3706,11 +3695,17 @@ sr_ioctl_installboot(struct sr_softc *sc, struct sr_discipline *sd,
 		goto done;
 	}
 
-	if (bb->bb_bootblk_size > SR_BOOT_BLOCKS_SIZE * DEV_BSIZE)
+	if (bb->bb_bootblk_size > SR_BOOT_BLOCKS_SIZE * DEV_BSIZE) {
+		sr_error(sc, "boot block too large (%d > %d)",
+		    bb->bb_bootblk_size, SR_BOOT_BLOCKS_SIZE * DEV_BSIZE);
 		goto done;
+	}
 
-	if (bb->bb_bootldr_size > SR_BOOT_LOADER_SIZE * DEV_BSIZE)
+	if (bb->bb_bootldr_size > SR_BOOT_LOADER_SIZE * DEV_BSIZE) {
+		sr_error(sc, "boot loader too large (%d > %d)",
+		    bb->bb_bootldr_size, SR_BOOT_LOADER_SIZE * DEV_BSIZE);
 		goto done;
+	}
 
 	secsize = sd->sd_meta->ssdi.ssd_secsize;
 
@@ -3733,7 +3728,7 @@ sr_ioctl_installboot(struct sr_softc *sc, struct sr_discipline *sd,
 	if (omi == NULL) {
 		omi = malloc(sizeof(struct sr_meta_opt_item), M_DEVBUF,
 		    M_WAITOK | M_ZERO);
-		omi->omi_som = malloc(sizeof(struct sr_meta_crypto), M_DEVBUF,
+		omi->omi_som = malloc(sizeof(struct sr_meta_boot), M_DEVBUF,
 		    M_WAITOK | M_ZERO);
 		omi->omi_som->som_type = SR_OPT_BOOT;
 		omi->omi_som->som_length = sizeof(struct sr_meta_boot);
@@ -3896,7 +3891,7 @@ sr_discipline_shutdown(struct sr_discipline *sd, int meta_save, int dying)
 	if (sd->sd_reb_active) {
 		sd->sd_reb_abort = 1;
 		while (sd->sd_reb_active)
-			tsleep(sd, PWAIT, "sr_shutdown", 1);
+			tsleep_nsec(sd, PWAIT, "sr_shutdown", MSEC_TO_NSEC(1));
 	}
 
 	if (meta_save)
@@ -3988,6 +3983,9 @@ sr_discipline_init(struct sr_discipline *sd, int level)
 	case 'C':
 		sr_crypto_discipline_init(sd);
 		break;
+	case 0x1C:
+		sr_raid1c_discipline_init(sd);
+		break;
 #endif
 	case 'c':
 		sr_concat_discipline_init(sd);
@@ -4006,7 +4004,7 @@ sr_raid_inquiry(struct sr_workunit *wu)
 {
 	struct sr_discipline	*sd = wu->swu_dis;
 	struct scsi_xfer	*xs = wu->swu_xs;
-	struct scsi_inquiry	*cdb = (struct scsi_inquiry *)xs->cmd;
+	struct scsi_inquiry	*cdb = (struct scsi_inquiry *)&xs->cmd;
 	struct scsi_inquiry_data inq;
 
 	DNPRINTF(SR_D_DIS, "%s: sr_raid_inquiry\n", DEVNAME(sd->sd_sc));
@@ -4020,9 +4018,9 @@ sr_raid_inquiry(struct sr_workunit *wu)
 	bzero(&inq, sizeof(inq));
 	inq.device = T_DIRECT;
 	inq.dev_qual2 = 0;
-	inq.version = 2;
-	inq.response_format = 2;
-	inq.additional_length = 32;
+	inq.version = SCSI_REV_2;
+	inq.response_format = SID_SCSI2_RESPONSE;
+	inq.additional_length = SID_SCSI2_ALEN;
 	inq.flags |= SID_CmdQue;
 	strlcpy(inq.vendor, sd->sd_meta->ssdi.ssd_vendor,
 	    sizeof(inq.vendor));
@@ -4030,7 +4028,7 @@ sr_raid_inquiry(struct sr_workunit *wu)
 	    sizeof(inq.product));
 	strlcpy(inq.revision, sd->sd_meta->ssdi.ssd_revision,
 	    sizeof(inq.revision));
-	sr_copy_internal_data(xs, &inq, sizeof(inq));
+	scsi_copy_internal_data(xs, &inq, sizeof(inq));
 
 	return (0);
 }
@@ -4051,20 +4049,20 @@ sr_raid_read_cap(struct sr_workunit *wu)
 	secsize = sd->sd_meta->ssdi.ssd_secsize;
 
 	addr = ((sd->sd_meta->ssdi.ssd_size * DEV_BSIZE) / secsize) - 1;
-	if (xs->cmd->opcode == READ_CAPACITY) {
+	if (xs->cmd.opcode == READ_CAPACITY) {
 		bzero(&rcd, sizeof(rcd));
 		if (addr > 0xffffffffllu)
 			_lto4b(0xffffffff, rcd.addr);
 		else
 			_lto4b(addr, rcd.addr);
 		_lto4b(secsize, rcd.length);
-		sr_copy_internal_data(xs, &rcd, sizeof(rcd));
+		scsi_copy_internal_data(xs, &rcd, sizeof(rcd));
 		rv = 0;
-	} else if (xs->cmd->opcode == READ_CAPACITY_16) {
+	} else if (xs->cmd.opcode == READ_CAPACITY_16) {
 		bzero(&rcd16, sizeof(rcd16));
 		_lto8b(addr, rcd16.addr);
 		_lto4b(secsize, rcd16.length);
-		sr_copy_internal_data(xs, &rcd16, sizeof(rcd16));
+		scsi_copy_internal_data(xs, &rcd16, sizeof(rcd16));
 		rv = 0;
 	}
 
@@ -4119,7 +4117,7 @@ int
 sr_raid_start_stop(struct sr_workunit *wu)
 {
 	struct scsi_xfer	*xs = wu->swu_xs;
-	struct scsi_start_stop	*ss = (struct scsi_start_stop *)xs->cmd;
+	struct scsi_start_stop	*ss = (struct scsi_start_stop *)&xs->cmd;
 
 	DNPRINTF(SR_D_DIS, "%s: sr_raid_start_stop\n",
 	    DEVNAME(wu->swu_dis->sd_sc));
@@ -4574,7 +4572,7 @@ sr_validate_io(struct sr_workunit *wu, daddr_t *blkno, char *func)
 	int			rv = 1;
 
 	DNPRINTF(SR_D_DIS, "%s: %s 0x%02x\n", DEVNAME(sd->sd_sc), func,
-	    xs->cmd->opcode);
+	    xs->cmd.opcode);
 
 	if (sd->sd_meta->ssd_data_blkno == 0)
 		panic("invalid data blkno");
@@ -4592,11 +4590,11 @@ sr_validate_io(struct sr_workunit *wu, daddr_t *blkno, char *func)
 	}
 
 	if (xs->cmdlen == 10)
-		*blkno = _4btol(((struct scsi_rw_big *)xs->cmd)->addr);
+		*blkno = _4btol(((struct scsi_rw_10 *)&xs->cmd)->addr);
 	else if (xs->cmdlen == 16)
-		*blkno = _8btol(((struct scsi_rw_16 *)xs->cmd)->addr);
+		*blkno = _8btol(((struct scsi_rw_16 *)&xs->cmd)->addr);
 	else if (xs->cmdlen == 6)
-		*blkno = _3btol(((struct scsi_rw *)xs->cmd)->addr);
+		*blkno = _3btol(((struct scsi_rw *)&xs->cmd)->addr);
 	else {
 		printf("%s: %s: illegal cmdlen for %s\n",
 		    DEVNAME(sd->sd_sc), func, sd->sd_meta->ssd_devname);
@@ -4719,8 +4717,7 @@ sr_rebuild(struct sr_discipline *sd)
 		xs_r.datalen = sz << DEV_BSHIFT;
 		xs_r.data = buf;
 		xs_r.cmdlen = sizeof(*cr);
-		xs_r.cmd = &xs_r.cmdstore;
-		cr = (struct scsi_rw_16 *)xs_r.cmd;
+		cr = (struct scsi_rw_16 *)&xs_r.cmd;
 		cr->opcode = READ_16;
 		_lto4b(sz, cr->length);
 		_lto8b(lba, cr->addr);
@@ -4740,8 +4737,7 @@ sr_rebuild(struct sr_discipline *sd)
 		xs_w.datalen = sz << DEV_BSHIFT;
 		xs_w.data = buf;
 		xs_w.cmdlen = sizeof(*cw);
-		xs_w.cmd = &xs_w.cmdstore;
-		cw = (struct scsi_rw_16 *)xs_w.cmd;
+		cw = (struct scsi_rw_16 *)&xs_w.cmd;
 		cw->opcode = WRITE_16;
 		_lto4b(sz, cw->length);
 		_lto8b(lba, cw->addr);
@@ -4778,7 +4774,7 @@ sr_rebuild(struct sr_discipline *sd)
 		}
 		/* yield if we didn't sleep */
 		if (slept == 0)
-			tsleep(sc, PWAIT, "sr_yield", 1);
+			tsleep_nsec(sc, PWAIT, "sr_yield", MSEC_TO_NSEC(1));
 
 		sr_scsi_wu_put(sd, wu_r);
 		sr_scsi_wu_put(sd, wu_w);

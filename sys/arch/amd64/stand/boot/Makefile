@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.45 2020/03/05 16:36:30 otto Exp $
+#	$OpenBSD: Makefile,v 1.47 2020/08/02 15:38:48 deraadt Exp $
 
 COPTS?=
 MAN?=	boot.8
@@ -24,7 +24,7 @@ LDFLAGS+=-melf_i386 -L/usr/libdata
 SRCS+=	boot.c bootarg.c cmd.c vars.c
 
 .PATH:	${SADIR}/libsa
-SRCS+=	gidt.S random_i386.S run_amd64.S
+SRCS+=	gidt.S mdrandom.c run_amd64.S
 SRCS+=	cmd_i386.c dev_i386.c exec_i386.c gateA20.c machdep.c
 SRCS+=	bioscons.c biosdev.c diskprobe.c memprobe.c time.c
 .if ${SOFTRAID:L} == "yes"
@@ -49,7 +49,7 @@ SRCS+=	aes_xts.c bcrypt_pbkdf.c blowfish.c explicit_bzero.c hmac_sha1.c \
 .endif
 
 .PATH:	${S}/lib/libkern
-SRCS+=	divdi3.c moddi3.c qdivrem.c
+SRCS+=	ashldi3.c ashrdi3.c divdi3.c lshrdi3.c moddi3.c qdivrem.c
 SRCS+=	strlcpy.c
 
 .PATH:	${S}/lib/libz

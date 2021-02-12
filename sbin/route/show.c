@@ -1,4 +1,4 @@
-/*	$OpenBSD: show.c,v 1.114 2018/08/31 15:18:02 yasuoka Exp $	*/
+/*	$OpenBSD: show.c,v 1.119 2021/01/30 22:00:06 danj Exp $	*/
 /*	$NetBSD: show.c,v 1.1 1996/11/15 18:01:41 gwr Exp $	*/
 
 /*
@@ -37,6 +37,7 @@
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/route.h>
+#include <net/rtable.h>
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
 #include <netmpls/mpls.h>
@@ -131,6 +132,54 @@ get_sysctl(const int *mib, u_int mcnt, char **buf)
 }
 
 /*
+ * Print preferred source address
+ */
+void
+printsource(int af, u_int tableid)
+{
+	struct sockaddr *sa;
+	char *buf = NULL, *next, *lim = NULL;
+	size_t needed;
+	int mib[7], mcnt, size;
+
+	mib[0] = CTL_NET;
+	mib[1] = PF_ROUTE;
+	mib[2] = 0;
+	mib[3] = af;
+	mib[4] = NET_RT_SOURCE;
+	mib[5] = tableid;
+	mcnt = 6;
+
+	needed = get_sysctl(mib, mcnt, &buf);
+	lim = buf + needed;
+
+	if (pledge("stdio", NULL) == -1)
+		err(1, "pledge");
+
+	printf("Preferred source address set for rdomain %d\n", tableid);
+
+	if (buf) {
+		for (next = buf; next < lim; next += size) {
+			sa = (struct sockaddr *)next;
+			switch (sa->sa_family) {
+			case AF_INET:
+				size = sizeof(struct sockaddr_in);
+				printf("IPv4: ");
+				break;
+			case AF_INET6:
+				size = sizeof(struct sockaddr_in6);
+				printf("IPv6: ");
+				break;
+			}
+			p_sockaddr(sa, NULL, RTF_HOST, WID_DST(sa->sa_family));
+			printf("\n");
+		}
+	}
+	free(buf);
+
+	exit(0);
+}
+/*
  * Print routing tables.
  */
 void
@@ -174,28 +223,20 @@ p_rttables(int af, u_int tableid, char prio)
  * width of destination/gateway column
  * strlen("fe80::aaaa:bbbb:cccc:dddd@gif0") == 30, strlen("/128") == 4
  */
-#define	WID_GW(af)	((af) == AF_INET6 ? (nflag ? 30 : 18) : 18)
+#define	WID_GW(af)	((af) == AF_INET6 ? 30 : 18)
 
 int
 WID_DST(int af)
 {
 
-	if (nflag)
-		switch (af) {
-		case AF_MPLS:
-			return 9;
-		case AF_INET6:
-			return 34;
-		default:
-			return 18;
-		}
-	else
-		switch (af) {
-		case AF_MPLS:
-			return 9;
- 		default:
-			return 18;
-		}
+	switch (af) {
+	case AF_MPLS:
+		return 9;
+	case AF_INET6:
+		return 34;
+	default:
+		return 18;
+	}
 }
 
 /*
@@ -344,20 +385,23 @@ p_sockaddr(struct sockaddr *sa, struct sockaddr *mask, int flags, int width)
 	case AF_INET6:
 	    {
 		struct sockaddr_in6 *sa6 = (struct sockaddr_in6 *)sa;
+#ifdef __KAME__
 		struct in6_addr *in6 = &sa6->sin6_addr;
 
 		/*
 		 * XXX: This is a special workaround for KAME kernels.
 		 * sin6_scope_id field of SA should be set in the future.
 		 */
-		if (IN6_IS_ADDR_LINKLOCAL(in6) ||
+		if ((IN6_IS_ADDR_LINKLOCAL(in6) ||
 		    IN6_IS_ADDR_MC_LINKLOCAL(in6) ||
-		    IN6_IS_ADDR_MC_INTFACELOCAL(in6)) {
+		    IN6_IS_ADDR_MC_INTFACELOCAL(in6)) &&
+		    sa6->sin6_scope_id == 0) {
 			/* XXX: override is ok? */
 			sa6->sin6_scope_id = (u_int32_t)ntohs(*(u_short *)
 			    &in6->s6_addr[2]);
 			*(u_short *)&in6->s6_addr[2] = 0;
 		}
+#endif
 		if (flags & RTF_HOST)
 			cp = routename((struct sockaddr *)sa6);
 		else
@@ -450,6 +494,7 @@ routename(struct sockaddr *sa)
 		memcpy(&sin6, sa, sa->sa_len);
 		sin6.sin6_len = sizeof(struct sockaddr_in6);
 		sin6.sin6_family = AF_INET6;
+#ifdef __KAME__
 		if (sa->sa_len == sizeof(struct sockaddr_in6) &&
 		    (IN6_IS_ADDR_LINKLOCAL(&sin6.sin6_addr) ||
 		     IN6_IS_ADDR_MC_LINKLOCAL(&sin6.sin6_addr) ||
@@ -460,6 +505,7 @@ routename(struct sockaddr *sa)
 			sin6.sin6_addr.s6_addr[2] = 0;
 			sin6.sin6_addr.s6_addr[3] = 0;
 		}
+#endif
 		return (routename6(&sin6));
 	    }
 

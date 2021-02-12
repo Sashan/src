@@ -1,4 +1,4 @@
-/*	$OpenBSD: in.h,v 1.137 2019/11/04 23:52:28 dlg Exp $	*/
+/*	$OpenBSD: in.h,v 1.140 2021/01/18 12:22:40 sthen Exp $	*/
 /*	$NetBSD: in.h,v 1.20 1996/02/13 23:41:47 christos Exp $	*/
 
 /*
@@ -97,6 +97,7 @@ typedef __in_port_t	in_port_t;	/* IP port type */
 #define	IPPROTO_PIM		103		/* Protocol indep. multicast */
 #define	IPPROTO_IPCOMP		108		/* IP Payload Comp. Protocol */
 #define	IPPROTO_CARP		112		/* CARP */
+#define	IPPROTO_SCTP		132		/* SCTP, RFC 4960 */
 #define	IPPROTO_UDPLITE		136		/* UDP-Lite, RFC 3828 */
 #define	IPPROTO_MPLS		137		/* unicast MPLS packet */
 #define	IPPROTO_PFSYNC		240		/* PFSYNC */
@@ -358,6 +359,12 @@ struct ip_opts {
 struct ip_mreq {
 	struct	in_addr imr_multiaddr;	/* IP multicast address of group */
 	struct	in_addr imr_interface;	/* local IP address of interface */
+};
+
+struct ip_mreqn {
+	struct	in_addr imr_multiaddr;	/* IP multicast address of group */
+	struct	in_addr imr_address;	/* local IP address of interface */
+	int		imr_ifindex;	/* interface index */
 };
 
 /*
@@ -735,50 +742,6 @@ struct ip_mreq {
 	{ "arptimeout", CTLTYPE_INT }, \
 	{ "arpdown", CTLTYPE_INT }, \
 	{ "arpq", CTLTYPE_NODE }, \
-}
-#define	IPCTL_VARS { \
-	NULL, \
-	&ipforwarding, \
-	&ipsendredirects, \
-	&ip_defttl, \
-	NULL, \
-	NULL, \
-	&ip_directedbcast, \
-	&ipport_firstauto, \
-	&ipport_lastauto, \
-	&ipport_hifirstauto, \
-	&ipport_hilastauto, \
-	&ip_maxqueue, \
-	NULL /* encdebug */, \
-	NULL /* ipsecstat */, \
-	NULL /* ipsec_expire_acquire */, \
-	NULL /* ipsec_keep_invalid */, \
-	NULL /* ipsec_require_pfs */, \
-	NULL /* ipsec_soft_allocations */, \
-	NULL /* ipsec_exp_allocations */, \
-	NULL /* ipsec_soft_bytes */, \
-	NULL /* ipsec_exp_bytes */, \
-	NULL /* ipsec_exp_timeout */, \
-	NULL /* ipsec_soft_timeout */, \
-	NULL /* ipsec_soft_first_use */, \
-	NULL /* ipsec_exp_first_use */, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	NULL, \
-	&ipmforwarding, \
-	&ipmultipath, \
-	NULL, \
-	NULL, \
-	NULL, \
-	&la_hold_total, \
-	NULL, \
-	NULL, \
-	&arpt_keep, \
-	&arpt_down, \
-	NULL, \
 }
 
 #endif /* __BSD_VISIBLE */

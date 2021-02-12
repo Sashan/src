@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_both.c,v 1.17 2020/03/12 17:15:33 jsing Exp $ */
+/* $OpenBSD: ssl_both.c,v 1.23 2021/01/07 15:32:59 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -301,13 +301,6 @@ f_err:
 	return (0);
 }
 
-/* for these 2 messages, we need to
- * ssl->enc_read_ctx			re-init
- * ssl->s3->internal->read_sequence		zero
- * ssl->s3->internal->read_mac_secret		re-init
- * ssl->session->read_sym_enc		assign
- * ssl->session->read_hash		assign
- */
 int
 ssl3_send_change_cipher_spec(SSL *s, int a, int b)
 {
@@ -331,7 +324,7 @@ ssl3_send_change_cipher_spec(SSL *s, int a, int b)
 		s->internal->init_num = (int)outlen;
 		s->internal->init_off = 0;
 
-		if (SSL_IS_DTLS(s)) {
+		if (SSL_is_dtls(s)) {
 			D1I(s)->handshake_write_seq =
 			    D1I(s)->next_handshake_write_seq;
 			dtls1_set_message_header_int(s, SSL3_MT_CCS, 0,
@@ -408,6 +401,8 @@ ssl3_output_cert_chain(SSL *s, CBB *cbb, CERT_PKEY *cpk)
 			SSLerror(s, ERR_R_X509_LIB);
 			goto err;
 		}
+		X509_VERIFY_PARAM_set_flags(X509_STORE_CTX_get0_param(xs_ctx),
+		    X509_V_FLAG_LEGACY_VERIFY);
 		X509_verify_cert(xs_ctx);
 		ERR_clear_error();
 		chain = xs_ctx->chain;
@@ -447,7 +442,7 @@ ssl3_get_message(SSL *s, int st1, int stn, int mt, long max, int *ok)
 	CBS cbs;
 	uint8_t u8;
 
-	if (SSL_IS_DTLS(s))
+	if (SSL_is_dtls(s))
 		return (dtls1_get_message(s, st1, stn, mt, max, ok));
 
 	if (S3I(s)->tmp.reuse_message) {
@@ -591,7 +586,7 @@ ssl_cert_type(X509 *x, EVP_PKEY *pkey)
 
 	i = pk->type;
 	if (i == EVP_PKEY_RSA) {
-		ret = SSL_PKEY_RSA_ENC;
+		ret = SSL_PKEY_RSA;
 	} else if (i == EVP_PKEY_EC) {
 		ret = SSL_PKEY_ECC;
 	} else if (i == NID_id_GostR3410_2001 ||
@@ -686,13 +681,23 @@ err:
 	return (0);
 }
 
+void
+ssl3_release_init_buffer(SSL *s)
+{
+	BUF_MEM_free(s->internal->init_buf);
+	s->internal->init_buf = NULL;
+	s->internal->init_msg = NULL;
+	s->internal->init_num = 0;
+	s->internal->init_off = 0;
+}
+
 int
 ssl3_setup_read_buffer(SSL *s)
 {
 	unsigned char *p;
 	size_t len, align, headerlen;
 
-	if (SSL_IS_DTLS(s))
+	if (SSL_is_dtls(s))
 		headerlen = DTLS1_RT_HEADER_LENGTH;
 	else
 		headerlen = SSL3_RT_HEADER_LENGTH;
@@ -708,7 +713,7 @@ ssl3_setup_read_buffer(SSL *s)
 		S3I(s)->rbuf.len = len;
 	}
 
-	s->internal->packet = &(S3I(s)->rbuf.buf[0]);
+	s->internal->packet = S3I(s)->rbuf.buf;
 	return 1;
 
 err:
@@ -722,7 +727,7 @@ ssl3_setup_write_buffer(SSL *s)
 	unsigned char *p;
 	size_t len, align, headerlen;
 
-	if (SSL_IS_DTLS(s))
+	if (SSL_is_dtls(s))
 		headerlen = DTLS1_RT_HEADER_LENGTH + 1;
 	else
 		headerlen = SSL3_RT_HEADER_LENGTH;
@@ -759,18 +764,22 @@ ssl3_setup_buffers(SSL *s)
 	return 1;
 }
 
-int
-ssl3_release_write_buffer(SSL *s)
+void
+ssl3_release_buffer(SSL3_BUFFER_INTERNAL *b)
 {
-	free(S3I(s)->wbuf.buf);
-	S3I(s)->wbuf.buf = NULL;
-	return 1;
+	freezero(b->buf, b->len);
+	b->buf = NULL;
+	b->len = 0;
 }
 
-int
+void
 ssl3_release_read_buffer(SSL *s)
 {
-	free(S3I(s)->rbuf.buf);
-	S3I(s)->rbuf.buf = NULL;
-	return 1;
+	ssl3_release_buffer(&S3I(s)->rbuf);
+}
+
+void
+ssl3_release_write_buffer(SSL *s)
+{
+	ssl3_release_buffer(&S3I(s)->wbuf);
 }

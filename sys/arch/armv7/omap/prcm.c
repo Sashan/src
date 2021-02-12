@@ -1,4 +1,4 @@
-/* $OpenBSD: prcm.c,v 1.13 2017/09/08 05:36:51 deraadt Exp $ */
+/* $OpenBSD: prcm.c,v 1.15 2021/01/19 18:04:43 kettenis Exp $ */
 /*
  * Copyright (c) 2007,2009 Dale Rahn <drahn@openbsd.org>
  *
@@ -75,7 +75,7 @@ uint32_t prcm_imask_addr[PRCM_REG_MAX];
 uint32_t prcm_fmask_addr[PRCM_REG_MAX];
 
 #define SYS_CLK			13    /* SYS_CLK speed in MHz */
-#define PRCM_AM335X_MASTER_OSC	24000 /* KHz */
+#define PRCM_AM335X_MASTER_OSC	24000 /* kHz */
 
 
 struct prcm_softc {
@@ -380,6 +380,8 @@ prcm_am335x_clkctrl(int mod)
 		return PRCM_AM335X_I2C2_CLKCTRL;
 	case PRCM_LCDC:
 		return PRCM_AM335X_LCDC_CLKCTRL;
+	case PRCM_RNG:
+		return PRCM_AM335X_RNG_CLKCTRL;
 	default:
 		panic("%s: module not found\n", __func__);
 	}

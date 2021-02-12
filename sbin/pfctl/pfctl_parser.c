@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfctl_parser.c,v 1.342 2019/10/17 21:54:28 millert Exp $ */
+/*	$OpenBSD: pfctl_parser.c,v 1.346 2021/02/01 00:31:04 dlg Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -535,7 +535,7 @@ print_status(struct pf_status *s, struct pfctl_watermarks *synflwats, int opts)
 	char			buf[PF_MD5_DIGEST_LENGTH * 2 + 1];
 	static const char	hex[] = "0123456789abcdef";
 
-	if (!clock_gettime(CLOCK_UPTIME, &uptime))
+	if (!clock_gettime(CLOCK_BOOTTIME, &uptime))
 		runtime = uptime.tv_sec - s->since;
 	running = s->running ? "Enabled" : "Disabled";
 
@@ -795,7 +795,7 @@ print_rule(struct pf_rule *r, const char *anchor_call, int opts)
 				printf("%sall", count++ ? ", " : "");
 			if (r->log & PF_LOG_MATCHES)
 				printf("%smatches", count++ ? ", " : "");
-			if (r->log & PF_LOG_SOCKET_LOOKUP)
+			if (r->log & PF_LOG_USER)
 				printf("%suser", count++ ? ", " : "");
 			if (r->logif)
 				printf("%sto pflog%u", count++ ? ", " : "",
@@ -1352,7 +1352,8 @@ ifa_load(void)
 		err(1, "getifaddrs");
 
 	for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
-		if (!(ifa->ifa_addr->sa_family == AF_INET ||
+		if (ifa->ifa_addr == NULL ||
+		    !(ifa->ifa_addr->sa_family == AF_INET ||
 		    ifa->ifa_addr->sa_family == AF_INET6 ||
 		    ifa->ifa_addr->sa_family == AF_LINK))
 				continue;
@@ -1614,16 +1615,11 @@ host(const char *s, int opts)
 {
 	struct node_host	*h = NULL, *n;
 	int			 mask = -1;
-	char			*p, *ps, *if_name;
+	char			*p, *ps;
 	const char		*errstr;
 
 	if ((ps = strdup(s)) == NULL)
 		err(1, "%s: strdup", __func__);
-
-	if ((if_name = strrchr(ps, '@')) != NULL) {
-		if_name[0] = '\0';
-		if_name++;
-	}
 
 	if ((p = strchr(ps, '/')) != NULL) {
 		mask = strtonum(p+1, 0, 128, &errstr);
@@ -1641,10 +1637,6 @@ host(const char *s, int opts)
 		goto error;
 	}
 
-	if (if_name && if_name[0])
-		for (n = h; n != NULL; n = n->next)
-			if ((n->ifname = strdup(if_name)) == NULL)
-				err(1, "%s: strdup", __func__);
 	for (n = h; n != NULL; n = n->next) {
 		n->addr.type = PF_ADDR_ADDRMASK;
 		n->weight = 0;

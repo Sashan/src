@@ -1,4 +1,4 @@
-/*	$OpenBSD: frameasm.h,v 1.22 2019/08/07 18:53:28 guenther Exp $	*/
+/*	$OpenBSD: frameasm.h,v 1.25 2020/11/12 23:29:16 guenther Exp $	*/
 /*	$NetBSD: frameasm.h,v 1.1 2003/04/26 18:39:40 fvdl Exp $	*/
 
 #ifndef _AMD64_MACHINE_FRAMEASM_H
@@ -57,10 +57,13 @@
 	xorl	%r15d,%r15d
 
 
-/* For real interrupt code paths, where we can come from userspace */
+/*
+ * For real interrupt code paths, where we can come from userspace.
+ * We only have an iretq_frame on entry.
+ */
 #define INTRENTRY_LABEL(label)	X##label##_untramp
 #define	INTRENTRY(label) \
-	testb	$SEL_RPL,24(%rsp)	; \
+	testb	$SEL_RPL,IRETQ_CS(%rsp)	; \
 	je	INTRENTRY_LABEL(label)	; \
 	swapgs				; \
 	FENCE_SWAPGS_MIS_TAKEN 		; \
@@ -70,38 +73,18 @@
 	movq	%rax,%cr3		; \
 	CODEPATCH_END(CPTAG_MELTDOWN_NOP);\
 	jmp	98f			; \
-	.text				; \
-	_ALIGN_TRAPS			; \
-	.global	INTRENTRY_LABEL(label)	; \
-INTRENTRY_LABEL(label):	/* from kernel */ \
+END(X##label)				; \
+_ENTRY(INTRENTRY_LABEL(label)) /* from kernel */ \
 	FENCE_NO_SAFE_SMAP		; \
-	INTR_ENTRY_KERN			; \
+	subq	$TF_RIP,%rsp		; \
+	movq	%rcx,TF_RCX(%rsp)	; \
 	jmp	99f			; \
 	_ALIGN_TRAPS			; \
 98:	/* from userspace */		  \
-	INTR_ENTRY_USER			; \
-99:	INTR_SAVE_MOST_GPRS_NO_ADJ	; \
-	INTR_CLEAR_GPRS
-
-#define	INTR_ENTRY_KERN \
-	subq	$120,%rsp		; \
-	movq	%rcx,TF_RCX(%rsp)	; \
-	/* the hardware puts err next to %rip, we move it elsewhere and */ \
-	/* later put %rbp in this slot to make it look like a call frame */ \
-	movq	(TF_RIP - 8)(%rsp),%rcx	; \
-	movq	%rcx,TF_ERR(%rsp)
-
-#define	INTR_ENTRY_USER \
 	movq	CPUVAR(KERN_RSP),%rax	; \
 	xchgq	%rax,%rsp		; \
 	movq	%rcx,TF_RCX(%rsp)	; \
 	RET_STACK_REFILL_WITH_RCX	; \
-	/* copy trapno+err to the trap frame */ \
-	movq	0(%rax),%rcx		; \
-	movq	%rcx,TF_TRAPNO(%rsp)	; \
-	movq	8(%rax),%rcx		; \
-	movq	%rcx,TF_ERR(%rsp)	; \
-	addq	$16,%rax		; \
 	/* copy iretq frame to the trap frame */ \
 	movq	IRETQ_RIP(%rax),%rcx	; \
 	movq	%rcx,TF_RIP(%rsp)	; \
@@ -113,16 +96,21 @@ INTRENTRY_LABEL(label):	/* from kernel */ \
 	movq	%rcx,TF_RSP(%rsp)	; \
 	movq	IRETQ_SS(%rax),%rcx	; \
 	movq	%rcx,TF_SS(%rsp)	; \
-	movq	CPUVAR(SCRATCH),%rax
-
-/* For faking up an interrupt frame when we're already in the kernel */
-#define	INTR_REENTRY \
-	INTR_SAVE_GPRS
+	movq	CPUVAR(SCRATCH),%rax	; \
+99:	INTR_SAVE_MOST_GPRS_NO_ADJ	; \
+	INTR_CLEAR_GPRS			; \
+	movq	%rax,TF_ERR(%rsp)
 
 #define INTRFASTEXIT \
 	jmp	intr_fast_exit
 
-#define INTR_RECURSE_HWFRAME \
+/*
+ * Entry for faking up an interrupt frame after spllower() unblocks
+ * a previously received interrupt.  On entry, %r13 has the %rip
+ * to return to.  %r10 and %r11 are scratch.
+ */
+#define	INTR_RECURSE \
+	/* fake the iretq_frame */	; \
 	movq	%rsp,%r10		; \
 	movl	%ss,%r11d		; \
 	pushq	%r11			; \
@@ -130,7 +118,73 @@ INTRENTRY_LABEL(label):	/* from kernel */ \
 	pushfq				; \
 	movl	%cs,%r11d		; \
 	pushq	%r11			; \
-	pushq	%r13			;
+	pushq	%r13			; \
+	/* now do the rest of the intrframe */ \
+	subq	$16,%rsp		; \
+	INTR_SAVE_GPRS
+
+
+/* 
+ * Entry for traps from kernel, where there's a trapno + err already
+ * on the stack.  We have to move the err from its hardware location
+ * to the location we want it.
+ */
+#define	TRAP_ENTRY_KERN \
+	subq	$120,%rsp		; \
+	movq	%rcx,TF_RCX(%rsp)	; \
+	movq	(TF_RIP - 8)(%rsp),%rcx	; \
+	movq	%rcx,TF_ERR(%rsp)	; \
+	INTR_SAVE_MOST_GPRS_NO_ADJ
+
+/*
+ * Entry for traps from userland, where there's a trapno + err on
+ * the iretq stack.
+ * Assumes that %rax has been saved in CPUVAR(SCRATCH).
+ */
+#define	TRAP_ENTRY_USER \
+	movq	CPUVAR(KERN_RSP),%rax		; \
+	xchgq	%rax,%rsp			; \
+	movq	%rcx,TF_RCX(%rsp)		; \
+	RET_STACK_REFILL_WITH_RCX		; \
+	/* copy trapno+err to the trap frame */ \
+	movq	0(%rax),%rcx			; \
+	movq	%rcx,TF_TRAPNO(%rsp)		; \
+	movq	8(%rax),%rcx			; \
+	movq	%rcx,TF_ERR(%rsp)		; \
+	/* copy iretq frame to the trap frame */ \
+	movq	(IRETQ_RIP+16)(%rax),%rcx	; \
+	movq	%rcx,TF_RIP(%rsp)		; \
+	movq	(IRETQ_CS+16)(%rax),%rcx	; \
+	movq	%rcx,TF_CS(%rsp)		; \
+	movq	(IRETQ_RFLAGS+16)(%rax),%rcx	; \
+	movq	%rcx,TF_RFLAGS(%rsp)		; \
+	movq	(IRETQ_RSP+16)(%rax),%rcx	; \
+	movq	%rcx,TF_RSP(%rsp)		; \
+	movq	(IRETQ_SS+16)(%rax),%rcx	; \
+	movq	%rcx,TF_SS(%rsp)		; \
+	movq	CPUVAR(SCRATCH),%rax		; \
+	INTR_SAVE_MOST_GPRS_NO_ADJ		; \
+	INTR_CLEAR_GPRS
+
+/*
+ * Entry from syscall instruction, where RIP is in %rcx and RFLAGS is in %r11.
+ * We stash the syscall # in tf_err for SPL check.
+ * Assumes that %rax has been saved in CPUVAR(SCRATCH).
+ */
+#define	SYSCALL_ENTRY \
+	movq	CPUVAR(KERN_RSP),%rax				; \
+	xchgq	%rax,%rsp					; \
+	movq	%rcx,TF_RCX(%rsp)				; \
+	movq	%rcx,TF_RIP(%rsp)				; \
+	RET_STACK_REFILL_WITH_RCX				; \
+	movq	$(GSEL(GUDATA_SEL, SEL_UPL)),TF_SS(%rsp)	; \
+	movq	%rax,TF_RSP(%rsp)				; \
+	movq	CPUVAR(SCRATCH),%rax				; \
+	INTR_SAVE_MOST_GPRS_NO_ADJ				; \
+	movq	%r11, TF_RFLAGS(%rsp)				; \
+	movq	$(GSEL(GUCODE_SEL, SEL_UPL)), TF_CS(%rsp)	; \
+	movq	%rax,TF_ERR(%rsp)				; \
+	INTR_CLEAR_GPRS
 
 #define CHECK_ASTPENDING(reg)	movq	CPUVAR(CURPROC),reg		; \
 				cmpq	$0, reg				; \

@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtpd.h,v 1.655 2020/02/24 17:49:23 millert Exp $	*/
+/*	$OpenBSD: smtpd.h,v 1.661 2021/01/19 09:16:20 claudio Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -51,7 +51,7 @@
 #define SMTPD_QUEUE_EXPIRY	 (4 * 24 * 60 * 60)
 #define SMTPD_SOCKET		 "/var/run/smtpd.sock"
 #define	SMTPD_NAME		 "OpenSMTPD"
-#define	SMTPD_VERSION		 "6.6.4"
+#define	SMTPD_VERSION		 "6.7.0"
 #define SMTPD_SESSION_TIMEOUT	 300
 #define SMTPD_BACKLOG		 5
 
@@ -345,7 +345,7 @@ enum smtp_proc_type {
 	PROC_QUEUE,
 	PROC_CONTROL,
 	PROC_SCHEDULER,
-	PROC_PONY,
+	PROC_DISPATCHER,
 	PROC_CA,
 	PROC_PROCESSOR,
 	PROC_CLIENT,
@@ -624,6 +624,8 @@ struct smtpd {
 	char				       *sc_srs_key;
 	char				       *sc_srs_key_backup;
 	int				        sc_srs_ttl;
+
+	char				       *sc_admd;
 };
 
 #define	TRACE_DEBUG	0x0001
@@ -1005,7 +1007,7 @@ extern struct mproc *p_parent;
 extern struct mproc *p_lka;
 extern struct mproc *p_queue;
 extern struct mproc *p_scheduler;
-extern struct mproc *p_pony;
+extern struct mproc *p_dispatcher;
 extern struct mproc *p_ca;
 
 extern struct smtpd	*env;
@@ -1577,9 +1579,9 @@ struct scheduler_backend *scheduler_backend_lookup(const char *);
 void scheduler_info(struct scheduler_info *, struct envelope *);
 
 
-/* pony.c */
-int pony(void);
-void pony_imsg(struct mproc *, struct imsg *);
+/* dispatcher.c */
+int dispatcher(void);
+void dispatcher_imsg(struct mproc *, struct imsg *);
 
 
 /* resolver.c */
@@ -1685,7 +1687,7 @@ const char *ss_to_text(const struct sockaddr_storage *);
 const char *time_to_text(time_t);
 const char *duration_to_text(time_t);
 const char *rule_to_text(struct rule *);
-const char *sockaddr_to_text(struct sockaddr *);
+const char *sockaddr_to_text(const struct sockaddr *);
 const char *mailaddr_to_text(const struct mailaddr *);
 const char *expandnode_to_text(struct expandnode *);
 

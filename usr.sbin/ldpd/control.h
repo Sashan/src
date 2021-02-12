@@ -1,4 +1,4 @@
-/*	$OpenBSD: control.h,v 1.9 2017/03/03 23:30:57 renato Exp $ */
+/*	$OpenBSD: control.h,v 1.11 2021/01/19 15:14:35 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -26,13 +26,10 @@ struct ctl_conn {
 	TAILQ_ENTRY(ctl_conn)	entry;
 	struct imsgev		iev;
 };
-TAILQ_HEAD(ctl_conns, ctl_conn);
-
-extern struct ctl_conns ctl_conns;
 
 int	control_init(char *);
 int	control_listen(void);
-void	control_cleanup(char *);
+void	control_cleanup(void);
 int	control_imsg_relay(struct imsg *);
 
 #endif	/* _CONTROL_H_ */

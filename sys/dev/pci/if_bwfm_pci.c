@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_bwfm_pci.c,v 1.36 2020/03/07 09:56:46 patrick Exp $	*/
+/*	$OpenBSD: if_bwfm_pci.c,v 1.39 2021/01/31 11:07:51 patrick Exp $	*/
 /*
  * Copyright (c) 2010-2016 Broadcom Corporation
  * Copyright (c) 2017 Patrick Wildt <patrick@blueri.se>
@@ -431,6 +431,9 @@ bwfm_pci_preinit(struct bwfm_softc *bwfm)
 		break;
 	case BRCM_CC_4371_CHIP_ID:
 		chip = "4371";
+		break;
+	case BRCM_CC_4378_CHIP_ID:
+		chip = "4378";
 		break;
 	default:
 		printf("%s: unknown firmware for chip %s\n",
@@ -963,7 +966,7 @@ bwfm_pci_fill_rx_ioctl_ring(struct bwfm_pci_softc *sc, struct if_rxring *rxring,
 		req = bwfm_pci_ring_write_reserve(sc, &sc->sc_ctrl_submit);
 		if (req == NULL)
 			break;
-		m = MCLGETI(NULL, M_DONTWAIT, NULL, MSGBUF_MAX_PKT_SIZE);
+		m = MCLGETL(NULL, M_DONTWAIT, MSGBUF_MAX_PKT_SIZE);
 		if (m == NULL) {
 			bwfm_pci_ring_write_cancel(sc, &sc->sc_ctrl_submit, 1);
 			break;
@@ -1003,7 +1006,7 @@ bwfm_pci_fill_rx_buf_ring(struct bwfm_pci_softc *sc)
 		req = bwfm_pci_ring_write_reserve(sc, &sc->sc_rxpost_submit);
 		if (req == NULL)
 			break;
-		m = MCLGETI(NULL, M_DONTWAIT, NULL, MSGBUF_MAX_PKT_SIZE);
+		m = MCLGETL(NULL, M_DONTWAIT, MSGBUF_MAX_PKT_SIZE);
 		if (m == NULL) {
 			bwfm_pci_ring_write_cancel(sc, &sc->sc_rxpost_submit, 1);
 			break;
@@ -1914,7 +1917,9 @@ bwfm_pci_intr(void *v)
 		bwfm_pci_ring_rx(sc, &sc->sc_rx_complete, &ml);
 		bwfm_pci_ring_rx(sc, &sc->sc_tx_complete, &ml);
 		bwfm_pci_ring_rx(sc, &sc->sc_ctrl_complete, &ml);
-		if_input(ifp, &ml);
+
+		if (ifiq_input(&ifp->if_rcv, &ml))
+			if_rxr_livelocked(&sc->sc_rxbuf_ring);
 	}
 
 #ifdef BWFM_DEBUG
@@ -1957,7 +1962,7 @@ bwfm_pci_msgbuf_query_dcmd(struct bwfm_softc *bwfm, int ifidx,
 	int s;
 
 	buflen = min(*len, BWFM_DMA_H2D_IOCTL_BUF_LEN);
-	m = MCLGETI(NULL, M_DONTWAIT, NULL, buflen);
+	m = MCLGETL(NULL, M_DONTWAIT, buflen);
 	if (m == NULL)
 		return 1;
 	m->m_len = m->m_pkthdr.len = buflen;

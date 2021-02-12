@@ -1,4 +1,4 @@
-/* $OpenBSD: trap.c,v 1.88 2019/09/06 12:22:01 deraadt Exp $ */
+/* $OpenBSD: trap.c,v 1.99 2020/11/07 16:12:20 deraadt Exp $ */
 /* $NetBSD: trap.c,v 1.52 2000/05/24 16:48:33 thorpej Exp $ */
 
 /*-
@@ -66,17 +66,17 @@
  * All rights reserved.
  *
  * Author: Chris G. Demetriou
- * 
+ *
  * Permission to use, copy, modify and distribute this software and
  * its documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
- * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS" 
- * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND 
+ *
+ * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
+ * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND
  * FOR ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
  *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
@@ -145,18 +145,18 @@ trap_init()
 	/*
 	 * Point interrupt/exception vectors to our own.
 	 */
-	alpha_pal_wrent(XentInt, ALPHA_KENTRY_INT); 
+	alpha_pal_wrent(XentInt, ALPHA_KENTRY_INT);
 	alpha_pal_wrent(XentArith, ALPHA_KENTRY_ARITH);
 	alpha_pal_wrent(XentMM, ALPHA_KENTRY_MM);
 	alpha_pal_wrent(XentIF, ALPHA_KENTRY_IF);
-	alpha_pal_wrent(XentUna, ALPHA_KENTRY_UNA); 
+	alpha_pal_wrent(XentUna, ALPHA_KENTRY_UNA);
 	alpha_pal_wrent(XentSys, ALPHA_KENTRY_SYS);
 
 	/*
 	 * Clear pending machine checks and error reports, and enable
 	 * system- and processor-correctable error reporting.
 	 */
-	alpha_pal_wrmces(alpha_pal_rdmces() & 
+	alpha_pal_wrmces(alpha_pal_rdmces() &
 	    ~(ALPHA_MCES_DSC|ALPHA_MCES_DPC));
 }
 
@@ -232,7 +232,7 @@ trap(a0, a1, a2, entry, framep)
 	caddr_t v;
 	int typ;
 	union sigval sv;
-	vm_prot_t ftype;
+	vm_prot_t access_type;
 	unsigned long onfault;
 
 	atomic_add_int(&uvmexp.traps, 1);
@@ -244,10 +244,6 @@ trap(a0, a1, a2, entry, framep)
 	if (user) {
 		p->p_md.md_tf = framep;
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		   "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto out;
 	}
 
 	switch (entry) {
@@ -370,16 +366,20 @@ trap(a0, a1, a2, entry, framep)
 		break;
 
 	case ALPHA_KENTRY_MM:
+		if (user &&
+		    !uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		   "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+
 		switch (a1) {
 		case ALPHA_MMCSR_FOR:
 		case ALPHA_MMCSR_FOE:
 		case ALPHA_MMCSR_FOW:
-			KERNEL_LOCK();
 			if (pmap_emulate_reference(p, a0, user, a1)) {
-				ftype = PROT_EXEC;
+				access_type = PROT_EXEC;
 				goto do_fault;
 			}
-			KERNEL_UNLOCK();
 			goto out;
 
 		case ALPHA_MMCSR_INVALTRANS:
@@ -393,17 +393,15 @@ trap(a0, a1, a2, entry, framep)
 
 			switch (a2) {
 			case -1:		/* instruction fetch fault */
-				ftype = PROT_EXEC;
+				access_type = PROT_EXEC;
 				break;
 			case 0:			/* load instruction */
-				ftype = PROT_READ;
+				access_type = PROT_READ;
 				break;
 			case 1:			/* store instruction */
-				ftype = PROT_READ | PROT_WRITE;
+				access_type = PROT_READ | PROT_WRITE;
 				break;
 			}
-	
-			KERNEL_LOCK();
 do_fault:
 			/*
 			 * It is only a kernel address space fault iff:
@@ -421,11 +419,15 @@ do_fault:
 				vm = p->p_vmspace;
 				map = &vm->vm_map;
 			}
-	
+
 			va = trunc_page((vaddr_t)a0);
 			onfault = p->p_addr->u_pcb.pcb_onfault;
 			p->p_addr->u_pcb.pcb_onfault = 0;
-			rv = uvm_fault(map, va, 0, ftype);
+
+			KERNEL_LOCK();
+			rv = uvm_fault(map, va, 0, access_type);
+			KERNEL_UNLOCK();
+
 			p->p_addr->u_pcb.pcb_onfault = onfault;
 
 			/*
@@ -435,15 +437,9 @@ do_fault:
 			 * the stack region outside the current limit and
 			 * we need to reflect that as an access error.
 			 */
-			if (map != kernel_map &&
-			    (caddr_t)va >= vm->vm_maxsaddr) {
-				if (rv == 0) {
-					uvm_grow(p, va);
-				} else if (rv == EACCES)
-					rv = EFAULT;
-			}
 			if (rv == 0) {
-				KERNEL_UNLOCK();
+				if (map != kernel_map)
+					uvm_grow(p, va);
 				goto out;
 			}
 
@@ -452,14 +448,11 @@ do_fault:
 				if (p->p_addr->u_pcb.pcb_onfault != 0) {
 					framep->tf_regs[FRAME_PC] =
 					    p->p_addr->u_pcb.pcb_onfault;
-					KERNEL_UNLOCK();
 					goto out;
 				}
-				KERNEL_UNLOCK();
 				goto dopanic;
 			}
-			KERNEL_UNLOCK();
-			ucode = ftype;
+			ucode = access_type;
 			v = (caddr_t)a0;
 			typ = SEGV_MAPERR;
 			if (rv == ENOMEM) {
@@ -488,9 +481,7 @@ do_fault:
 	printtrap(a0, a1, a2, entry, framep, 1, user);
 #endif
 	sv.sival_ptr = v;
-	KERNEL_LOCK();
 	trapsignal(p, i, ucode, typ, sv);
-	KERNEL_UNLOCK();
 out:
 	if (user) {
 		/* Do any deferred user pmap operations. */
@@ -579,17 +570,17 @@ syscall(code, framep)
 		if ((error = copyin((caddr_t)(framep->tf_regs[FRAME_SP]), &args[6],
 		    (nargs - 6) * sizeof(u_long))))
 			goto bad;
-	case 6:	
+	case 6:
 		args[5] = framep->tf_regs[FRAME_A5];
-	case 5:	
+	case 5:
 		args[4] = framep->tf_regs[FRAME_A4];
-	case 4:	
+	case 4:
 		args[3] = framep->tf_regs[FRAME_A3];
-	case 3:	
+	case 3:
 		args[2] = framep->tf_regs[FRAME_A2];
-	case 2:	
+	case 2:
 		args[1] = framep->tf_regs[FRAME_A1];
-	case 1:	
+	case 1:
 		args[0] = framep->tf_regs[FRAME_A0];
 	case 0:
 		break;
@@ -707,8 +698,7 @@ void
 ast(framep)
 	struct trapframe *framep;
 {
-	struct cpu_info *ci = curcpu();
-	struct proc *p = ci->ci_curproc;
+	struct proc *p = curproc;
 
 	p->p_md.md_tf = framep;
 	p->p_md.md_astpending = 0;
@@ -718,8 +708,9 @@ ast(framep)
 		panic("ast and not user");
 #endif
 
+	refreshcreds(p);
 	atomic_add_int(&uvmexp.softs, 1);
-	mi_ast(p, ci->ci_want_resched);
+	mi_ast(p, curcpu()->ci_want_resched);
 
 	/* Do any deferred user pmap operations. */
 	PMAP_USERRET(vm_map_pmap(&p->p_vmspace->vm_map));
@@ -1005,7 +996,7 @@ unaligned_fixup(va, opcode, reg, p)
 	 * process go on without warning.
 	 *
 	 * If we're trying to do a fixup, we assume that things
-	 * will be botched.  If everything works out OK, 
+	 * will be botched.  If everything works out OK,
 	 * unaligned_{load,store}_* clears the signal flag.
 	 */
 	signal = SIGBUS;
@@ -1078,7 +1069,7 @@ unaligned_fixup(va, opcode, reg, p)
 			panic("unaligned_fixup: can't get here");
 #endif
 		}
-	} 
+	}
 
 	/*
 	 * Force SIGBUS if requested.

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ipsec_input.c,v 1.169 2019/09/30 01:53:05 dlg Exp $	*/
+/*	$OpenBSD: ipsec_input.c,v 1.173 2020/09/01 01:53:34 gnezdo Exp $	*/
 /*
  * The authors of this code are John Ioannidis (ji@tla.org),
  * Angelos D. Keromytis (kermit@csd.uch.gr) and
@@ -108,9 +108,17 @@ int esp_enable = 1;
 int ah_enable = 1;
 int ipcomp_enable = 0;
 
-int *espctl_vars[ESPCTL_MAXID] = ESPCTL_VARS;
-int *ahctl_vars[AHCTL_MAXID] = AHCTL_VARS;
-int *ipcompctl_vars[IPCOMPCTL_MAXID] = IPCOMPCTL_VARS;
+const struct sysctl_bounded_args espctl_vars[] = {
+	{ESPCTL_ENABLE, &esp_enable, 0, 1},
+	{ESPCTL_UDPENCAP_ENABLE, &udpencap_enable, 0, 1},
+	{ESPCTL_UDPENCAP_PORT, &udpencap_port, 0, 65535},
+};
+const struct sysctl_bounded_args ahctl_vars[] = {
+	{AHCTL_ENABLE, &ah_enable, 0, 1},
+};
+const struct sysctl_bounded_args ipcompctl_vars[] = {
+	{IPCOMPCTL_ENABLE, &ipcomp_enable, 0, 1},
+};
 
 struct cpumem *espcounters;
 struct cpumem *ahcounters;
@@ -121,7 +129,20 @@ char ipsec_def_enc[20];
 char ipsec_def_auth[20];
 char ipsec_def_comp[20];
 
-int *ipsecctl_vars[IPSEC_MAXID] = IPSECCTL_VARS;
+const struct sysctl_bounded_args ipsecctl_vars[] = {
+	{ IPSEC_ENCDEBUG, &encdebug, 0, 1 },
+	{ IPSEC_EXPIRE_ACQUIRE, &ipsec_expire_acquire, 0, INT_MAX },
+	{ IPSEC_EMBRYONIC_SA_TIMEOUT, &ipsec_keep_invalid, 0, INT_MAX },
+	{ IPSEC_REQUIRE_PFS, &ipsec_require_pfs, 0, 1 },
+	{ IPSEC_SOFT_ALLOCATIONS, &ipsec_soft_allocations, 0, INT_MAX },
+	{ IPSEC_ALLOCATIONS, &ipsec_exp_allocations, 0, INT_MAX },
+	{ IPSEC_SOFT_BYTES, &ipsec_soft_bytes, 0, INT_MAX },
+	{ IPSEC_BYTES, &ipsec_exp_bytes, 0, INT_MAX },
+	{ IPSEC_TIMEOUT, &ipsec_exp_timeout, 0, INT_MAX },
+	{ IPSEC_SOFT_TIMEOUT, &ipsec_soft_timeout,0, INT_MAX },
+	{ IPSEC_SOFT_FIRSTUSE, &ipsec_soft_first_use, 0, INT_MAX },
+	{ IPSEC_FIRSTUSE, &ipsec_exp_first_use, 0, INT_MAX },
+};
 
 int esp_sysctl_espstat(void *, size_t *, void *);
 int ah_sysctl_ahstat(void *, size_t *, void *);
@@ -299,7 +320,7 @@ ipsec_common_input(struct mbuf *m, int skip, int protoff, int af, int sproto,
 	}
 
 	if (sproto != IPPROTO_IPCOMP) {
-		if ((encif = enc_getif(tdbp->tdb_rdomain,
+		if ((encif = enc_getif(tdbp->tdb_rdomain_post,
 		    tdbp->tdb_tap)) == NULL) {
 			DPRINTF(("%s: no enc%u interface for SA %s/%08x/%u\n",
 			    __func__,
@@ -316,7 +337,7 @@ ipsec_common_input(struct mbuf *m, int skip, int protoff, int af, int sproto,
 
 	/* Register first use, setup expiration timer. */
 	if (tdbp->tdb_first_use == 0) {
-		tdbp->tdb_first_use = time_second;
+		tdbp->tdb_first_use = gettime();
 		if (tdbp->tdb_flags & TDBF_FIRSTUSE)
 			timeout_add_sec(&tdbp->tdb_first_tmo,
 			    tdbp->tdb_exp_first_use);
@@ -453,7 +474,7 @@ ipsec_common_input_cb(struct mbuf *m, struct tdb *tdbp, int skip, int protoff)
 	af = tdbp->tdb_dst.sa.sa_family;
 	sproto = tdbp->tdb_sproto;
 
-	tdbp->tdb_last_used = time_second;
+	tdbp->tdb_last_used = gettime();
 
 	/* Sanity check */
 	if (m == NULL) {
@@ -657,6 +678,8 @@ ipsec_common_input_cb(struct mbuf *m, struct tdb *tdbp, int skip, int protoff)
 	pf_tag_packet(m, tdbp->tdb_tag, -1);
 	pf_pkt_addr_changed(m);
 #endif
+	if (tdbp->tdb_rdomain != tdbp->tdb_rdomain_post)
+		m->m_pkthdr.ph_rtableid = tdbp->tdb_rdomain_post;
 
 	if (tdbp->tdb_flags & TDBF_TUNNELING)
 		m->m_flags |= M_TUNNEL;
@@ -665,7 +688,7 @@ ipsec_common_input_cb(struct mbuf *m, struct tdb *tdbp, int skip, int protoff)
 	tdbp->tdb_idecompbytes += m->m_pkthdr.len;
 
 #if NBPFILTER > 0
-	if ((encif = enc_getif(tdbp->tdb_rdomain, tdbp->tdb_tap)) != NULL) {
+	if ((encif = enc_getif(tdbp->tdb_rdomain_post, tdbp->tdb_tap)) != NULL) {
 		encif->if_ipackets++;
 		encif->if_ibytes += m->m_pkthdr.len;
 
@@ -741,14 +764,11 @@ ipsec_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	case IPCTL_IPSEC_STATS:
 		return (ipsec_sysctl_ipsecstat(oldp, oldlenp, newp));
 	default:
-		if (name[0] < IPSEC_MAXID) {
-			NET_LOCK();
-			error = sysctl_int_arr(ipsecctl_vars, name, namelen,
-			    oldp, oldlenp, newp, newlen);
-			NET_UNLOCK();
-			return (error);
-		}
-		return (EOPNOTSUPP);
+		NET_LOCK();
+		error = sysctl_bounded_arr(ipsecctl_vars, nitems(ipsecctl_vars),
+		    name, namelen, oldp, oldlenp, newp, newlen);
+		NET_UNLOCK();
+		return (error);
 	}
 }
 
@@ -766,14 +786,11 @@ esp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	case ESPCTL_STATS:
 		return (esp_sysctl_espstat(oldp, oldlenp, newp));
 	default:
-		if (name[0] < ESPCTL_MAXID) {
-			NET_LOCK();
-			error = sysctl_int_arr(espctl_vars, name, namelen,
-			    oldp, oldlenp, newp, newlen);
-			NET_UNLOCK();
-			return (error);
-		}
-		return (ENOPROTOOPT);
+		NET_LOCK();
+		error = sysctl_bounded_arr(espctl_vars, nitems(espctl_vars),
+		    name, namelen, oldp, oldlenp, newp, newlen);
+		NET_UNLOCK();
+		return (error);
 	}
 }
 
@@ -803,14 +820,11 @@ ah_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	case AHCTL_STATS:
 		return ah_sysctl_ahstat(oldp, oldlenp, newp);
 	default:
-		if (name[0] < AHCTL_MAXID) {
-			NET_LOCK();
-			error = sysctl_int_arr(ahctl_vars, name, namelen,
-			    oldp, oldlenp, newp, newlen);
-			NET_UNLOCK();
-			return (error);
-		}
-		return (ENOPROTOOPT);
+		NET_LOCK();
+		error = sysctl_bounded_arr(ahctl_vars, nitems(ahctl_vars), name,
+		    namelen, oldp, oldlenp, newp, newlen);
+		NET_UNLOCK();
+		return (error);
 	}
 }
 
@@ -839,14 +853,12 @@ ipcomp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	case IPCOMPCTL_STATS:
 		return ipcomp_sysctl_ipcompstat(oldp, oldlenp, newp);
 	default:
-		if (name[0] < IPCOMPCTL_MAXID) {
-			NET_LOCK();
-			error = sysctl_int_arr(ipcompctl_vars, name, namelen,
-			    oldp, oldlenp, newp, newlen);
-			NET_UNLOCK();
-			return (error);
-		}
-		return (ENOPROTOOPT);
+		NET_LOCK();
+		error = sysctl_bounded_arr(ipcompctl_vars,
+		    nitems(ipcompctl_vars), name, namelen, oldp, oldlenp,
+		    newp, newlen);
+		NET_UNLOCK();
+		return (error);
 	}
 }
 
@@ -966,7 +978,7 @@ ipsec_common_ctlinput(u_int rdomain, int cmd, struct sockaddr *sa,
 
 		memcpy(&spi, (caddr_t)ip + hlen, sizeof(u_int32_t));
 
-		tdbp = gettdb(rdomain, spi, (union sockaddr_union *)&dst,
+		tdbp = gettdb_rev(rdomain, spi, (union sockaddr_union *)&dst,
 		    proto);
 		if (tdbp == NULL || tdbp->tdb_flags & TDBF_INVALID)
 			return;
@@ -982,7 +994,7 @@ ipsec_common_ctlinput(u_int rdomain, int cmd, struct sockaddr *sa,
 
 			/* Store adjusted MTU in tdb */
 			tdbp->tdb_mtu = mtu;
-			tdbp->tdb_mtutimeout = time_second +
+			tdbp->tdb_mtutimeout = gettime() +
 			    ip_mtudisc_timeout;
 			DPRINTF(("%s: spi %08x mtu %d adjust %ld\n", __func__,
 			    ntohl(tdbp->tdb_spi), tdbp->tdb_mtu,
@@ -1025,7 +1037,8 @@ udpencap_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 	src.sin_addr.s_addr = ip->ip_src.s_addr;
 	su_src = (union sockaddr_union *)&src;
 
-	tdbp = gettdbbysrcdst(rdomain, 0, su_src, su_dst, IPPROTO_ESP);
+	tdbp = gettdbbysrcdst_rev(rdomain, 0, su_src, su_dst,
+	    IPPROTO_ESP);
 
 	for (; tdbp != NULL; tdbp = tdbp->tdb_snext) {
 		if (tdbp->tdb_sproto == IPPROTO_ESP &&
@@ -1036,7 +1049,7 @@ udpencap_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 			if ((adjust = ipsec_hdrsz(tdbp)) != -1) {
 				/* Store adjusted MTU in tdb */
 				tdbp->tdb_mtu = mtu - adjust;
-				tdbp->tdb_mtutimeout = time_second +
+				tdbp->tdb_mtutimeout = gettime() +
 				    ip_mtudisc_timeout;
 				DPRINTF(("%s: spi %08x mtu %d adjust %ld\n",
 				    __func__,

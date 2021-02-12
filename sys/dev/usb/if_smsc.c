@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_smsc.c,v 1.33 2019/07/07 06:40:10 kevlo Exp $	*/
+/*	$OpenBSD: if_smsc.c,v 1.37 2020/07/31 10:49:32 mglocker Exp $	*/
 /* $FreeBSD: src/sys/dev/usb/net/if_smsc.c,v 1.1 2012/08/15 04:03:55 gonzo Exp $ */
 /*-
  * Copyright (c) 2012
@@ -184,7 +184,7 @@ void
 smsc_enaddr_OF(struct smsc_softc *sc)
 {
 	char *device = "/axi/usb/hub/ethernet";
-	char prop[64];
+	char prop[128];
 	int node;
 
 	if (sc->sc_dev.dv_unit != 0)
@@ -649,16 +649,15 @@ smsc_start(struct ifnet *ifp)
 		return;
 	}
 
-	m_head = ifq_deq_begin(&ifp->if_snd);
+	m_head = ifq_dequeue(&ifp->if_snd);
 	if (m_head == NULL)
 		return;
 
 	if (smsc_encap(sc, m_head, 0)) {
-		ifq_deq_rollback(&ifp->if_snd, m_head);
+		m_freem(m_head);
 		ifq_set_oactive(&ifp->if_snd);
 		return;
 	}
-	ifq_deq_commit(&ifp->if_snd, m_head);
 
 #if NBPFILTER > 0
 	if (ifp->if_bpf)
@@ -699,7 +698,6 @@ smsc_stop(struct smsc_softc *sc)
 
 	/* Stop transfers. */
 	if (sc->sc_ep[SMSC_ENDPT_RX] != NULL) {
-		usbd_abort_pipe(sc->sc_ep[SMSC_ENDPT_RX]);
 		err = usbd_close_pipe(sc->sc_ep[SMSC_ENDPT_RX]);
 		if (err) {
 			printf("%s: close rx pipe failed: %s\n",
@@ -709,7 +707,6 @@ smsc_stop(struct smsc_softc *sc)
 	}
 
 	if (sc->sc_ep[SMSC_ENDPT_TX] != NULL) {
-		usbd_abort_pipe(sc->sc_ep[SMSC_ENDPT_TX]);
 		err = usbd_close_pipe(sc->sc_ep[SMSC_ENDPT_TX]);
 		if (err) {
 			printf("%s: close tx pipe failed: %s\n",
@@ -719,7 +716,6 @@ smsc_stop(struct smsc_softc *sc)
 	}
 
 	if (sc->sc_ep[SMSC_ENDPT_INTR] != NULL) {
-		usbd_abort_pipe(sc->sc_ep[SMSC_ENDPT_INTR]);
 		err = usbd_close_pipe(sc->sc_ep[SMSC_ENDPT_INTR]);
 		if (err) {
 			printf("%s: close intr pipe failed: %s\n",
@@ -1299,7 +1295,7 @@ smsc_txeof(struct usbd_xfer *xfer, void *priv, usbd_status status)
 	m_freem(c->sc_mbuf);
 	c->sc_mbuf = NULL;
 
-	if (IFQ_IS_EMPTY(&ifp->if_snd) == 0)
+	if (ifq_empty(&ifp->if_snd) == 0)
 		smsc_start(ifp);
 
 	splx(s);
@@ -1400,6 +1396,7 @@ smsc_encap(struct smsc_softc *sc, struct mbuf *m, int idx)
 
 	err = usbd_transfer(c->sc_xfer);
 	if (err != USBD_IN_PROGRESS) {
+		c->sc_mbuf = NULL;
 		smsc_stop(sc);
 		return (EIO);
 	}

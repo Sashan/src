@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.148 2020/02/28 05:31:41 deraadt Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.152 2020/11/28 18:40:01 kettenis Exp $	*/
 /* $NetBSD: cpu.c,v 1.1 2003/04/26 18:39:26 fvdl Exp $ */
 
 /*-
@@ -77,7 +77,6 @@
 #include <sys/device.h>
 #include <sys/malloc.h>
 #include <sys/memrange.h>
-#include <dev/rndvar.h>
 #include <sys/atomic.h>
 #include <sys/user.h>
 
@@ -420,44 +419,6 @@ cpu_match(struct device *parent, void *match, void *aux)
 	return 1;
 }
 
-static void
-cpu_vm_init(struct cpu_info *ci)
-{
-	int ncolors = 2, i;
-
-	for (i = CAI_ICACHE; i <= CAI_L2CACHE; i++) {
-		struct x86_cache_info *cai;
-		int tcolors;
-
-		cai = &ci->ci_cinfo[i];
-
-		tcolors = atop(cai->cai_totalsize);
-		switch(cai->cai_associativity) {
-		case 0xff:
-			tcolors = 1; /* fully associative */
-			break;
-		case 0:
-		case 1:
-			break;
-		default:
-			tcolors /= cai->cai_associativity;
-		}
-		ncolors = max(ncolors, tcolors);
-	}
-
-#ifdef notyet
-	/*
-	 * Knowing the size of the largest cache on this CPU, re-color
-	 * our pages.
-	 */
-	if (ncolors <= uvmexp.ncolors)
-		return;
-	printf("%s: %d page colors\n", ci->ci_dev->dv_xname, ncolors);
-	uvm_page_recolor(ncolors);
-#endif
-}
-
-
 void	cpu_idle_mwait_cycle(void);
 void	cpu_init_mwait(struct cpu_softc *);
 
@@ -690,7 +651,6 @@ cpu_attach(struct device *parent, struct device *self, void *aux)
 	default:
 		panic("unknown processor type??");
 	}
-	cpu_vm_init(ci);
 
 #if defined(MULTIPROCESSOR)
 	if (mp_verbose) {
@@ -1323,3 +1283,13 @@ cpu_enter_pages(struct cpu_info_full *cif)
 	/* an empty iomap, by setting its offset to the TSS limit */
 	cif->cif_tss.tss_iobase = sizeof(cif->cif_tss);
 }
+
+#ifdef MULTIPROCESSOR
+int
+wbinvd_on_all_cpus(void)
+{
+	x86_broadcast_ipi(X86_IPI_WBINVD);
+	wbinvd();
+	return 0;
+}
+#endif

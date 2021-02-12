@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.36 2020/03/21 14:54:06 otto Exp $
+#	$OpenBSD: Makefile,v 1.38 2020/08/02 15:39:05 deraadt Exp $
 
 MAN=	cdboot.8
 
@@ -17,7 +17,7 @@ BINMODE=644
 CLEANFILES+=	crt0.o ${PROG}.whole
 
 .PATH:	${SADIR}/libsa
-SRCS+=	debug_i386.S gidt.S random_i386.S
+SRCS+=	debug_i386.S gidt.S pslid.S mdrandom.c
 SRCS+=	cmd_i386.c dev_i386.c exec_i386.c gateA20.c machdep.c
 SRCS+=	apmprobe.c bioscons.c biosdev.c debug.c diskprobe.c memprobe.c \
 	pciprobe.c ps2probe.c time.c
@@ -39,7 +39,7 @@ SRCS+=	aes_xts.c bcrypt_pbkdf.c blowfish.c explicit_bzero.c hmac_sha1.c \
 	pkcs5_pbkdf2.c rijndael.c sha1.c sha2.c softraid.c
 
 .PATH:	${S}/lib/libkern/arch/i386
-SRCS+=	moddi3.c divdi3.c qdivrem.c
+SRCS+=	ashldi3.c ashrdi3.c divdi3.c lshrdi3.c moddi3.c qdivrem.c
 
 .PATH:	${S}/lib/libkern
 SRCS+=	strlcpy.c

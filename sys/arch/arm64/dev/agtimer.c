@@ -1,4 +1,4 @@
-/* $OpenBSD: agtimer.c,v 1.11 2019/10/05 11:27:02 kettenis Exp $ */
+/* $OpenBSD: agtimer.c,v 1.16 2021/01/19 18:07:15 kettenis Exp $ */
 /*
  * Copyright (c) 2011 Dale Rahn <drahn@openbsd.org>
  * Copyright (c) 2013 Patrick Wildt <patrick@blueri.se>
@@ -43,7 +43,8 @@ int32_t agtimer_frequency = TIMER_FREQUENCY;
 u_int agtimer_get_timecount(struct timecounter *);
 
 static struct timecounter agtimer_timecounter = {
-	agtimer_get_timecount, NULL, 0x7fffffff, 0, "agtimer", 0, NULL
+	agtimer_get_timecount, NULL, 0xffffffff, 0, "agtimer", 0, NULL,
+	TC_AGTIMER
 };
 
 struct agtimer_pcpu_softc {
@@ -100,7 +101,7 @@ agtimer_readcnt64(void)
 	 * for the low 32 bits and the new value for the high 32 bits
 	 * upon roll-over of the low 32 bits.
 	 */
-	__asm volatile("isb" : : : "memory");
+	__asm volatile("isb" ::: "memory");
 	__asm volatile("mrs %x0, CNTVCT_EL0" : "=r" (val0));
 	__asm volatile("mrs %x0, CNTVCT_EL0" : "=r" (val1));
 	return ((val0 ^ val1) & 0x100000000ULL) ? val0 : val1;
@@ -129,8 +130,8 @@ agtimer_get_ctrl(void)
 static inline int
 agtimer_set_ctrl(uint32_t val)
 {
-	__asm volatile("msr CNTV_CTL_EL0, %x0" : : "r" (val));
-	__asm volatile("isb" : : : "memory");
+	__asm volatile("msr CNTV_CTL_EL0, %x0" :: "r" (val));
+	__asm volatile("isb" ::: "memory");
 
 	return (0);
 }
@@ -138,8 +139,8 @@ agtimer_set_ctrl(uint32_t val)
 static inline int
 agtimer_set_tval(uint32_t val)
 {
-	__asm volatile("msr CNTV_TVAL_EL0, %x0" : : "r" (val));
-	__asm volatile("isb" : : : "memory");
+	__asm volatile("msr CNTV_TVAL_EL0, %x0" :: "r" (val));
+	__asm volatile("isb" ::: "memory");
 
 	return (0);
 }
@@ -167,9 +168,7 @@ agtimer_attach(struct device *parent, struct device *self, void *aux)
 	    OF_getpropint(sc->sc_node, "clock-frequency", agtimer_frequency);
 	sc->sc_ticks_per_second = agtimer_frequency;
 
-	printf(": tick rate %d KHz\n", sc->sc_ticks_per_second /1000);
-
-	/* XXX: disable user access */
+	printf(": %d kHz\n", sc->sc_ticks_per_second / 1000);
 
 #ifdef AMPTIMER_DEBUG
 	evcount_attach(&sc->sc_clk_count, "clock", NULL);
@@ -193,7 +192,15 @@ agtimer_attach(struct device *parent, struct device *self, void *aux)
 u_int
 agtimer_get_timecount(struct timecounter *tc)
 {
-	return agtimer_readcnt64();
+	uint64_t val;
+
+	/*
+	 * No need to work around Cortex-A73 errata 858921 since we
+	 * only look at the low 32 bits here.
+	 */
+	__asm volatile("isb" ::: "memory");
+	__asm volatile("mrs %x0, CNTVCT_EL0" : "=r" (val));
+	return (val & 0xffffffff);
 }
 
 int
@@ -276,17 +283,18 @@ agtimer_set_clockrate(int32_t new_frequency)
 
 	sc->sc_ticks_per_second = agtimer_frequency;
 	agtimer_timecounter.tc_frequency = sc->sc_ticks_per_second;
-	printf("agtimer0: adjusting clock: new tick rate %d KHz\n",
-	    sc->sc_ticks_per_second /1000);
+	printf("agtimer0: adjusting clock: new tick rate %d kHz\n",
+	    sc->sc_ticks_per_second / 1000);
 }
 
 void
-agtimer_cpu_initclocks()
+agtimer_cpu_initclocks(void)
 {
 	struct agtimer_softc	*sc = agtimer_cd.cd_devs[0];
 	struct agtimer_pcpu_softc *pc = &sc->sc_pstat[CPU_INFO_UNIT(curcpu())];
 	uint32_t		 reg;
 	uint64_t		 next;
+	uint64_t		 kctl;
 
 	stathz = hz;
 	profhz = hz * 10;
@@ -313,6 +321,10 @@ agtimer_cpu_initclocks()
 	reg |= GTIMER_CNTV_CTL_ENABLE;
 	agtimer_set_tval(sc->sc_ticks_per_second);
 	agtimer_set_ctrl(reg);
+
+	/* enable userland access to virtual counter */
+	kctl = READ_SPECIALREG(CNTKCTL_EL1);
+	WRITE_SPECIALREG(CNTKCTL_EL1, kctl | CNTKCTL_EL0VCTEN);
 }
 
 void
@@ -378,6 +390,7 @@ agtimer_startclock(void)
 	struct agtimer_softc	*sc = agtimer_cd.cd_devs[0];
 	struct agtimer_pcpu_softc *pc = &sc->sc_pstat[CPU_INFO_UNIT(curcpu())];
 	uint64_t nextevent;
+	uint64_t kctl;
 	uint32_t reg;
 
 	nextevent = agtimer_readcnt64() + sc->sc_ticks_per_intr;
@@ -390,6 +403,10 @@ agtimer_startclock(void)
 	reg |= GTIMER_CNTV_CTL_ENABLE;
 	agtimer_set_tval(sc->sc_ticks_per_second);
 	agtimer_set_ctrl(reg);
+
+	/* enable userland access to virtual counter */
+	kctl = READ_SPECIALREG(CNTKCTL_EL1);
+	WRITE_SPECIALREG(CNTKCTL_EL1, kctl | CNTKCTL_EL0VCTEN);
 }
 
 void

@@ -1,4 +1,4 @@
-/*	$OpenBSD: tfork_thread.S,v 1.5 2013/01/23 18:59:32 miod Exp $	*/
+/*	$OpenBSD: tfork_thread.S,v 1.7 2020/11/07 02:52:08 aoyama Exp $	*/
 
 /*
  * Copyright (c) 2005, Miodrag Vallat
@@ -27,6 +27,8 @@
 
 #include "SYS.h"
 
+#define NOP	or %r0, %r0, %r0
+
 /*
  * int __tfork_thread(const struct __tfork *param, size_t psize, void (*func)(void *), void *arg);
  */
@@ -51,4 +53,6 @@ ENTRY(__tfork_thread)
 
 	or	%r13, %r0,  __SYSCALLNAME(SYS_,__threxit)
 	tb0	0,    %r0,  450
+	NOP
+	tb0     0, %r0, 130	/* breakpoint */
 END(__tfork_thread)

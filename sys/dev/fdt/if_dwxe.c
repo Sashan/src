@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_dwxe.c,v 1.15 2019/10/07 00:40:04 jmatthew Exp $	*/
+/*	$OpenBSD: if_dwxe.c,v 1.18 2020/12/12 11:48:52 jan Exp $	*/
 /*
  * Copyright (c) 2008 Mark Kettenis
  * Copyright (c) 2017 Patrick Wildt <patrick@blueri.se>
@@ -434,7 +434,7 @@ dwxe_attach(struct device *parent, struct device *self, void *aux)
 	ifp->if_ioctl = dwxe_ioctl;
 	ifp->if_start = dwxe_start;
 	ifp->if_watchdog = dwxe_watchdog;
-	IFQ_SET_MAXLEN(&ifp->if_snd, DWXE_NTXDESC - 1);
+	ifq_set_maxlen(&ifp->if_snd, DWXE_NTXDESC - 1);
 	bcopy(sc->sc_dev.dv_xname, ifp->if_xname, IFNAMSIZ);
 
 	ifp->if_capabilities = IFCAP_VLAN_MTU;
@@ -594,7 +594,7 @@ dwxe_start(struct ifnet *ifp)
 		return;
 	if (ifq_is_oactive(&ifp->if_snd))
 		return;
-	if (IFQ_IS_EMPTY(&ifp->if_snd))
+	if (ifq_empty(&ifp->if_snd))
 		return;
 	if (!sc->sc_link)
 		return;
@@ -966,13 +966,14 @@ dwxe_rx_proc(struct dwxe_softc *sc)
 			sc->sc_rx_cons++;
 	}
 
+	if (ifiq_input(&ifp->if_rcv, &ml))
+		if_rxr_livelocked(&sc->sc_rx_ring);
+
 	dwxe_fill_rx_ring(sc);
 
 	bus_dmamap_sync(sc->sc_dmat, DWXE_DMA_MAP(sc->sc_rxring), 0,
 	    DWXE_DMA_LEN(sc->sc_rxring),
 	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
-
-	if_input(ifp, &ml);
 }
 
 void
@@ -1341,7 +1342,7 @@ dwxe_alloc_mbuf(struct dwxe_softc *sc, bus_dmamap_t map)
 {
 	struct mbuf *m = NULL;
 
-	m = MCLGETI(NULL, M_DONTWAIT, NULL, MCLBYTES);
+	m = MCLGETL(NULL, M_DONTWAIT, MCLBYTES);
 	if (!m)
 		return (NULL);
 	m->m_len = m->m_pkthdr.len = MCLBYTES;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvideo.c,v 1.206 2020/01/16 09:59:26 mpi Exp $ */
+/*	$OpenBSD: uvideo.c,v 1.211 2021/01/27 17:28:19 mglocker Exp $ */
 
 /*
  * Copyright (c) 2008 Robert Nagy <robert@openbsd.org>
@@ -118,7 +118,7 @@ struct uvideo_softc {
 int		uvideo_enable(void *);
 void		uvideo_disable(void *);
 int		uvideo_open(void *, int, int *, uint8_t *, void (*)(void *),
-		    void *arg);
+		    void *);
 int		uvideo_close(void *);
 int		uvideo_match(struct device *, void *, void *);
 void		uvideo_attach(struct device *, struct device *, void *);
@@ -181,11 +181,12 @@ usbd_status	uvideo_vs_decode_stream_header_isight(struct uvideo_softc *,
 		    uint8_t *, int);
 int		uvideo_mmap_queue(struct uvideo_softc *, uint8_t *, int);
 void		uvideo_read(struct uvideo_softc *, uint8_t *, int);
-usbd_status	uvideo_usb_control(struct uvideo_softc *sc, uint8_t rt, uint8_t r,
-		    uint16_t value, uint8_t *data, size_t length);
+usbd_status	uvideo_usb_control(struct uvideo_softc *, uint8_t, uint8_t,
+		    uint16_t, uint8_t *, size_t);
 
 #ifdef UVIDEO_DEBUG
 #include <sys/namei.h>
+#include <sys/proc.h>
 #include <sys/vnode.h>
 
 void		uvideo_dump_desc_all(struct uvideo_softc *);
@@ -1969,7 +1970,6 @@ uvideo_vs_close(struct uvideo_softc *sc)
 	}
 
 	if (sc->sc_vs_cur->pipeh) {
-		usbd_abort_pipe(sc->sc_vs_cur->pipeh);
 		usbd_close_pipe(sc->sc_vs_cur->pipeh);
 		sc->sc_vs_cur->pipeh = NULL;
 	}
@@ -2685,7 +2685,7 @@ uvideo_dump_desc_config(struct uvideo_softc *sc,
 	printf("bLength=%d\n", d->bLength);
 	printf("bDescriptorType=0x%02x\n", d->bDescriptorType);
 	printf("wTotalLength=%d\n", UGETW(d->wTotalLength));
-	printf("bNumInterface=0x%02x\n", d->bNumInterface);
+	printf("bNumInterfaces=0x%02x\n", d->bNumInterfaces);
 	printf("bConfigurationValue=0x%02x\n", d->bConfigurationValue);
 	printf("iConfiguration=0x%02x\n", d->iConfiguration);
 	printf("bmAttributes=0x%02x\n", d->bmAttributes);
@@ -2941,9 +2941,10 @@ uvideo_querycap(void *v, struct v4l2_capability *caps)
 	strlcpy(caps->bus_info, "usb", sizeof(caps->bus_info));
 
 	caps->version = 1;
-	caps->capabilities = V4L2_CAP_VIDEO_CAPTURE
+	caps->device_caps = V4L2_CAP_VIDEO_CAPTURE
 	    | V4L2_CAP_STREAMING
 	    | V4L2_CAP_READWRITE;
+	caps->capabilities = caps->device_caps | V4L2_CAP_DEVICE_CAPS;
 
 	return (0);
 }

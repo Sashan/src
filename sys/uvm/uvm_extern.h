@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_extern.h,v 1.152 2019/12/12 11:12:36 mpi Exp $	*/
+/*	$OpenBSD: uvm_extern.h,v 1.156 2020/12/28 14:01:23 mpi Exp $	*/
 /*	$NetBSD: uvm_extern.h,v 1.57 2001/03/09 01:02:12 chs Exp $	*/
 
 /*
@@ -142,14 +142,15 @@ typedef int		vm_prot_t;
 #define	UVM_PGA_ZERO		0x0002	/* returned page must be zeroed */
 
 /*
- * flags for uvm_pglistalloc()
+ * flags for uvm_pglistalloc() also used by uvm_pmr_getpages()
  */
 #define UVM_PLA_WAITOK		0x0001	/* may sleep */
 #define UVM_PLA_NOWAIT		0x0002	/* can't sleep (need one of the two) */
 #define UVM_PLA_ZERO		0x0004	/* zero all pages before returning */
 #define UVM_PLA_TRYCONTIG	0x0008	/* try to allocate contig physmem */
 #define UVM_PLA_FAILOK		0x0010	/* caller can handle failure */
-#define UVM_PLA_NOWAKE		0x0020	/* don't wake the page daemon on failure */
+#define UVM_PLA_NOWAKE		0x0020	/* don't wake page daemon on failure */
+#define UVM_PLA_USERESERVE	0x0040	/* can allocate from kernel reserve */
 
 /*
  * lockflags that control the locking behavior of various functions.
@@ -192,11 +193,13 @@ struct pmap;
  * Several fields are temporary (text, data stuff).
  *
  *  Locks used to protect struct members in this file:
+ *	K	kernel lock
  *	I	immutable after creation
+ *	v	vm_map's lock
  */
 struct vmspace {
 	struct	vm_map vm_map;	/* VM address map */
-	int	vm_refcnt;	/* number of references */
+	int	vm_refcnt;	/* [K] number of references */
 	caddr_t	vm_shm;		/* SYS5 shared memory private data XXX */
 /* we copy from vm_startcopy to the end of the structure on fork */
 #define vm_startcopy vm_rssize
@@ -205,9 +208,9 @@ struct vmspace {
 	segsz_t vm_tsize;	/* text size (pages) XXX */
 	segsz_t vm_dsize;	/* data size (pages) XXX */
 	segsz_t vm_dused;	/* data segment length (pages) XXX */
-	segsz_t vm_ssize;	/* stack size (pages) */
-	caddr_t	vm_taddr;	/* user virtual address of text XXX */
-	caddr_t	vm_daddr;	/* user virtual address of data XXX */
+	segsz_t vm_ssize;	/* [v] stack size (pages) */
+	caddr_t	vm_taddr;	/* [I] user virtual address of text */
+	caddr_t	vm_daddr;	/* [I] user virtual address of data */
 	caddr_t vm_maxsaddr;	/* [I] user VA at max stack growth */
 	caddr_t vm_minsaddr;	/* [I] user VA at top of stack */
 };
@@ -286,6 +289,7 @@ void			uvm_vsunlock_device(struct proc *, void *, size_t,
 			    void *);
 void			uvm_pause(void);
 void			uvm_init(void);	
+void			uvm_init_percpu(void);
 int			uvm_io(vm_map_t, struct uio *, int);
 
 #define	UVM_IO_FIXPROT	0x01
@@ -413,6 +417,7 @@ void			uvmspace_init(struct vmspace *, struct pmap *,
 			    vaddr_t, vaddr_t, boolean_t, boolean_t);
 void			uvmspace_exec(struct proc *, vaddr_t, vaddr_t);
 struct vmspace		*uvmspace_fork(struct process *);
+void			uvmspace_addref(struct vmspace *);
 void			uvmspace_free(struct vmspace *);
 struct vmspace		*uvmspace_share(struct process *);
 int			uvm_share(vm_map_t, vaddr_t, vm_prot_t,
@@ -451,11 +456,13 @@ int			uvm_coredump_walkmap(struct proc *_p,
 			    uvm_coredump_setup_cb *_setup,
 			    uvm_coredump_walk_cb *_walk, void *_cookie);
 void			uvm_grow(struct proc *, vaddr_t);
-struct uvm_object	*uvn_attach(struct vnode *, vm_prot_t);
 void			uvm_pagezero_thread(void *);
 void			kmeminit_nkmempages(void);
 void			kmeminit(void);
 extern u_int		nkmempages;
+
+struct vnode;
+struct uvm_object	*uvn_attach(struct vnode *, vm_prot_t);
 
 struct process;
 struct kinfo_vmentry;

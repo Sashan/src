@@ -3,8 +3,8 @@
 # THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
 # generated from:
 #
-#	OpenBSD: etc.hppa/MAKEDEV.md,v 1.63 2020/01/24 14:11:01 mpi Exp 
-#	OpenBSD: MAKEDEV.common,v 1.109 2020/01/23 02:47:29 dlg Exp 
+#	OpenBSD: etc.hppa/MAKEDEV.md,v 1.66 2021/01/23 05:08:33 thfr Exp 
+#	OpenBSD: MAKEDEV.common,v 1.112 2021/01/23 05:08:33 thfr Exp 
 #	OpenBSD: MAKEDEV.mi,v 1.83 2016/09/11 03:06:31 deraadt Exp 
 #	OpenBSD: MAKEDEV.sub,v 1.14 2005/02/07 06:14:18 david Exp 
 #
@@ -59,6 +59,7 @@
 #	usb*	Bus control devices used by usbd for attach/detach
 #	uhid*	Generic HID devices
 #	fido	fido/* nodes
+#	ujoy	ujoy/* nodes
 #	ugen*	Generic USB devices
 #	ulpt*	Printer devices
 #	ttyU*	USB serial ports
@@ -83,6 +84,7 @@
 #	video*	Video V4L2 devices
 #	vscsi*	Virtual SCSI controller
 #	switch*	Switch driver
+#	kstat	Kernel Statistics
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 T=$0
 
@@ -229,6 +231,10 @@ std)
 	M pdc		c 22 0 640 operator
 	;;
 
+kstat)
+	M kstat c 51 0 640
+	;;
+
 switch*)
 	M switch$U c 60 $U 600
 	;;
@@ -309,10 +315,8 @@ bio)
 	;;
 
 audio*)
-	M audio$U	c 35 $U
-	M mixer$U	c 35 $(($U+16))
-	M audioctl$U	c 35 $(($U+192))
-	MKlist[${#MKlist[*]}]=";[ -e mixer ] || ln -s mixer$U mixer"
+	M audio$U	c 35 $U 660 _sndiop
+	M audioctl$U	c 35 $(($U+192)) 660 _sndiop
 	;;
 
 ttyU[0-9a-zA-Z])
@@ -334,6 +338,12 @@ ugen*)
 	done
 	;;
 
+ujoy)
+	RMlist[${#RMlist[*]}]=";mkdir -p ujoy;rm -f" n=0
+	while [ $n -lt 4 ];do M ujoy/$n c 63 $n 444;n=$(($n+1));done
+	MKlist[${#MKlist[*]}]=";chmod 555 ujoy"
+	;;
+
 fido)
 	RMlist[${#RMlist[*]}]=";mkdir -p fido;rm -f" n=0
 	while [ $n -lt 4 ];do M fido/$n c 61 $n 666;n=$(($n+1));done
@@ -351,8 +361,9 @@ usb*)
 
 uall)
 	R ttyU0 ttyU1 ttyU2 ttyU3 ugen0 ugen1 ugen2 ugen3 ugen4 ugen5
-	R ugen6 ugen7 ulpt0 ulpt1 fido uhid0 uhid1 uhid2 uhid3 uhid4
-	R uhid5 uhid6 uhid7 usb0 usb1 usb2 usb3 usb4 usb5 usb6 usb7
+	R ugen6 ugen7 ulpt0 ulpt1 ujoy fido uhid0 uhid1 uhid2 uhid3
+	R uhid4 uhid5 uhid6 uhid7 usb0 usb1 usb2 usb3 usb4 usb5 usb6
+	R usb7
 	;;
 
 lpt*|lpa*)
@@ -499,11 +510,11 @@ all)
 	R sd2 sd3 sd4 sd5 sd6 sd7 sd8 sd9 cd0 cd1 rd0 tap0 tap1 tap2
 	R tap3 tun0 tun1 tun2 tun3 pty0 fd1 fd1B fd1C fd1D fd1E fd1F
 	R fd1G fd1H fd0 fd0B fd0C fd0D fd0E fd0F fd0G fd0H diskmap
-	R vscsi0 bio ch0 audio0 audio1 audio2 dt bpf fuse pppac pppx
-	R hotplug ptm local wscons pci0 pci1 pci2 pci3 uall video0
-	R video1 uk0 random lpa0 lpa1 lpa2 lpt0 lpt1 lpt2 tty00 tty01
-	R tty02 tty03 tty04 tty05 tty06 tty07 tty08 tty09 tty0a tty0b
-	R pf wd0 wd1 wd2 wd3 std st0 st1 fd
+	R vscsi0 bio ch0 audio0 audio1 audio2 audio3 kstat dt bpf fuse
+	R pppac pppx hotplug ptm local wscons pci0 pci1 pci2 pci3 uall
+	R video0 video1 uk0 random lpa0 lpa1 lpa2 lpt0 lpt1 lpt2 tty00
+	R tty01 tty02 tty03 tty04 tty05 tty06 tty07 tty08 tty09 tty0a
+	R tty0b pf wd0 wd1 wd2 wd3 std st0 st1 fd
 	;;
 
 wd*|sd*)

@@ -1,4 +1,4 @@
-/* $OpenBSD: spawn.c,v 1.17 2020/03/19 14:03:49 nicm Exp $ */
+/* $OpenBSD: spawn.c,v 1.24 2020/05/21 07:24:13 nicm Exp $ */
 
 /*
  * Copyright (c) 2019 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -56,10 +56,10 @@ spawn_log(const char *from, struct spawn_context *sc)
 	struct session		*s = sc->s;
 	struct winlink		*wl = sc->wl;
 	struct window_pane	*wp0 = sc->wp0;
+	const char		*name = cmdq_get_name(sc->item);
 	char			 tmp[128];
-	const char		*name;
 
-	log_debug("%s: %s, flags=%#x", from, sc->item->name, sc->flags);
+	log_debug("%s: %s, flags=%#x", from, name, sc->flags);
 
 	if (wl != NULL && wp0 != NULL)
 		xsnprintf(tmp, sizeof tmp, "wl=%d wp0=%%%u", wl->idx, wp0->id);
@@ -70,18 +70,14 @@ spawn_log(const char *from, struct spawn_context *sc)
 	else
 		xsnprintf(tmp, sizeof tmp, "wl=none wp0=none");
 	log_debug("%s: s=$%u %s idx=%d", from, s->id, tmp, sc->idx);
-
-	name = sc->name;
-	if (name == NULL)
-		name = "none";
-	log_debug("%s: name=%s", from, name);
+	log_debug("%s: name=%s", from, sc->name == NULL ? "none" : sc->name);
 }
 
 struct winlink *
 spawn_window(struct spawn_context *sc, char **cause)
 {
 	struct cmdq_item	*item = sc->item;
-	struct client		*c = item->client;
+	struct client		*c = cmdq_get_client(item);
 	struct session		*s = sc->s;
 	struct window		*w;
 	struct window_pane	*wp;
@@ -157,7 +153,7 @@ spawn_window(struct spawn_context *sc, char **cause)
 			xasprintf(cause, "couldn't add window %d", idx);
 			return (NULL);
 		}
-		default_window_size(sc->c, s, NULL, &sx, &sy, &xpixel, &ypixel,
+		default_window_size(sc->tc, s, NULL, &sx, &sy, &xpixel, &ypixel,
 		    -1);
 		if ((w = window_create(sx, sy, xpixel, ypixel)) == NULL) {
 			winlink_remove(&s->windows, sc->wl);
@@ -167,7 +163,7 @@ spawn_window(struct spawn_context *sc, char **cause)
 		if (s->curw == NULL)
 			s->curw = sc->wl;
 		sc->wl->session = s;
-		w->latest = sc->c;
+		w->latest = sc->tc;
 		winlink_set_window(sc->wl, w);
 	} else
 		w = NULL;
@@ -207,7 +203,8 @@ struct window_pane *
 spawn_pane(struct spawn_context *sc, char **cause)
 {
 	struct cmdq_item	 *item = sc->item;
-	struct client		 *c = item->client;
+	struct cmd_find_state	 *target = cmdq_get_target(item);
+	struct client		 *c = cmdq_get_client(item);
 	struct session		 *s = sc->s;
 	struct window		 *w = sc->wl->window;
 	struct window_pane	 *new_wp;
@@ -230,9 +227,9 @@ spawn_pane(struct spawn_context *sc, char **cause)
 	 * the pane's stored one unless specified.
 	 */
 	if (sc->cwd != NULL)
-		cwd = format_single(item, sc->cwd, c, item->target.s, NULL, NULL);
+		cwd = format_single(item, sc->cwd, c, target->s, NULL, NULL);
 	else if (~sc->flags & SPAWN_RESPAWN)
-		cwd = xstrdup(server_client_get_cwd(c, item->target.s));
+		cwd = xstrdup(server_client_get_cwd(c, target->s));
 	else
 		cwd = NULL;
 
@@ -256,7 +253,7 @@ spawn_pane(struct spawn_context *sc, char **cause)
 		window_pane_reset_mode_all(sc->wp0);
 		screen_reinit(&sc->wp0->base);
 		input_free(sc->wp0->ictx);
-		sc->wp0->ictx = input_init(sc->wp0);
+		sc->wp0->ictx = NULL;
 		new_wp = sc->wp0;
 		new_wp->flags &= ~(PANE_STATUSREADY|PANE_STATUSDRAWN);
 	} else if (sc->lc == NULL) {
@@ -303,7 +300,7 @@ spawn_pane(struct spawn_context *sc, char **cause)
 	child = environ_for_session(s, 0);
 	if (sc->environ != NULL)
 		environ_copy(sc->environ, child);
-	environ_set(child, "TMUX_PANE", "%%%u", new_wp->id);
+	environ_set(child, "TMUX_PANE", 0, "%%%u", new_wp->id);
 
 	/*
 	 * Then the PATH environment variable. The session one is replaced from
@@ -313,10 +310,10 @@ spawn_pane(struct spawn_context *sc, char **cause)
 	if (c != NULL && c->session == NULL) { /* only unattached clients */
 		ee = environ_find(c->environ, "PATH");
 		if (ee != NULL)
-			environ_set(child, "PATH", "%s", ee->value);
+			environ_set(child, "PATH", 0, "%s", ee->value);
 	}
 	if (environ_find(child, "PATH") == NULL)
-		environ_set(child, "%s", _PATH_DEFPATH);
+		environ_set(child, "PATH", 0, "%s", _PATH_DEFPATH);
 
 	/* Then the shell. If respawning, use the old one. */
 	if (~sc->flags & SPAWN_RESPAWN) {
@@ -326,7 +323,7 @@ spawn_pane(struct spawn_context *sc, char **cause)
 		free(new_wp->shell);
 		new_wp->shell = xstrdup(tmp);
 	}
-	environ_set(child, "SHELL", "%s", new_wp->shell);
+	environ_set(child, "SHELL", 0, "%s", new_wp->shell);
 
 	/* Log the arguments we are going to use. */
 	log_debug("%s: shell=%s", __func__, new_wp->shell);
@@ -365,10 +362,12 @@ spawn_pane(struct spawn_context *sc, char **cause)
 		xasprintf(cause, "fork failed: %s", strerror(errno));
 		new_wp->fd = -1;
 		if (~sc->flags & SPAWN_RESPAWN) {
+			server_client_remove_pane(new_wp);
 			layout_close_pane(new_wp);
 			window_remove_pane(w, new_wp);
 		}
 		sigprocmask(SIG_SETMASK, &oldset, NULL);
+		environ_free(child);
 		return (NULL);
 	}
 
@@ -440,11 +439,12 @@ spawn_pane(struct spawn_context *sc, char **cause)
 	_exit(1);
 
 complete:
-	new_wp->pipe_off = 0;
 	new_wp->flags &= ~PANE_EXITED;
 
 	sigprocmask(SIG_SETMASK, &oldset, NULL);
 	window_pane_set_event(new_wp);
+
+	environ_free(child);
 
 	if (sc->flags & SPAWN_RESPAWN)
 		return (new_wp);

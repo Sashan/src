@@ -1,4 +1,4 @@
-/*	$OpenBSD: ldapd.h,v 1.31 2018/07/31 11:01:00 claudio Exp $ */
+/*	$OpenBSD: ldapd.h,v 1.34 2021/01/27 07:21:54 deraadt Exp $ */
 
 /*
  * Copyright (c) 2009, 2010 Martin Hedenfalk <martin@bzero.se>
@@ -45,7 +45,6 @@
 #define LDAP_PORT		 389
 #define LDAPS_PORT		 636
 #define LDAPD_SESSION_TIMEOUT	 30
-#define MAX_LISTEN		 64
 #define FD_RESERVE		 8 /* 5 overhead, 2 for db, 1 accept */
 
 #define F_STARTTLS		 0x01
@@ -53,6 +52,7 @@
 #define F_SSL			(F_LDAPS|F_STARTTLS)
 
 #define F_SECURE		 0x04
+#define F_LEGACY		 0x08
 
 #define F_SCERT			 0x01
 
@@ -229,7 +229,7 @@ struct conn {
 	struct buffertls	 buftls;
 	unsigned int		 s_flags;
 };
-TAILQ_HEAD(conn_list, conn)	 conn_list;
+extern TAILQ_HEAD(conn_list, conn)	 conn_list;
 
 struct ssl {
 	SPLAY_ENTRY(ssl)	 ssl_nodes;

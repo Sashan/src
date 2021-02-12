@@ -1,4 +1,4 @@
-/*	$OpenBSD: types.h,v 1.34 2020/03/22 15:59:05 tobhe Exp $	*/
+/*	$OpenBSD: types.h,v 1.41 2021/02/08 16:13:58 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -42,13 +42,10 @@
 #define IKED_PUBKEY		"local.pub"
 
 #define IKED_OCSP_RESPCERT	"ocsp/responder.crt"
-#define IKED_OCSP_ISSUER	"ocsp/issuer.crt"
 
 #define IKED_OPT_VERBOSE	0x00000001
 #define IKED_OPT_NOACTION	0x00000002
-#define IKED_OPT_NONATT		0x00000004
-#define IKED_OPT_NATT		0x00000008
-#define IKED_OPT_PASSIVE	0x00000010
+#define IKED_OPT_PASSIVE	0x00000004
 
 #define IKED_IKE_PORT		500
 #define IKED_NATT_PORT		4500
@@ -102,11 +99,10 @@ enum imsg_type {
 	IMSG_CTL_DECOUPLE,
 	IMSG_CTL_ACTIVE,
 	IMSG_CTL_PASSIVE,
-	IMSG_CTL_MOBIKE,
-	IMSG_CTL_FRAGMENTATION,
-	IMSG_CTL_NATTPORT,
 	IMSG_CTL_RESET_ID,
+	IMSG_CTL_EXIT,
 	IMSG_CTL_SHOW_SA,
+	IMSG_CTL_STATIC,
 	IMSG_COMPILE,
 	IMSG_UDP_SOCKET,
 	IMSG_PFKEY_SOCKET,
@@ -118,8 +114,9 @@ enum imsg_type {
 	IMSG_CERT,
 	IMSG_CERTVALID,
 	IMSG_CERTINVALID,
+	IMSG_CERT_PARTIAL_CHAIN,
 	IMSG_OCSP_FD,
-	IMSG_OCSP_URL,
+	IMSG_OCSP_CFG,
 	IMSG_AUTH,
 	IMSG_PRIVKEY,
 	IMSG_PUBKEY
@@ -139,7 +136,8 @@ enum flushmode {
 	RESET_CA,
 	RESET_POLICY,
 	RESET_SA,
-	RESET_USER
+	RESET_USER,
+	RESET_EXIT
 };
 
 #ifndef nitems

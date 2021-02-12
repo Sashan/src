@@ -1,4 +1,4 @@
-/* $OpenBSD: misc.h,v 1.84 2020/01/24 23:54:40 djm Exp $ */
+/* $OpenBSD: misc.h,v 1.92 2021/01/11 02:12:57 dtucker Exp $ */
 
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
@@ -53,6 +53,8 @@ void	 set_nodelay(int);
 int	 set_reuseaddr(int);
 char	*get_rdomain(int);
 int	 set_rdomain(int, const char *);
+int	 get_sock_af(int);
+void	 set_sock_tos(int, int);
 int	 waitrfd(int, int *);
 int	 timeout_connect(int, const struct sockaddr *, socklen_t, int *);
 int	 a2port(const char *);
@@ -65,9 +67,13 @@ char	*colon(char *);
 int	 parse_user_host_path(const char *, char **, char **, char **);
 int	 parse_user_host_port(const char *, char **, char **, int *);
 int	 parse_uri(const char *, const char *, char **, char **, int *, char **);
-long	 convtime(const char *);
+int	 convtime(const char *);
+const char *fmt_timeframe(time_t t);
 char	*tilde_expand_filename(const char *, uid_t);
+
+char	*dollar_expand(int *, const char *string, ...);
 char	*percent_expand(const char *, ...) __attribute__((__sentinel__));
+char	*percent_dollar_expand(const char *, ...) __attribute__((__sentinel__));
 char	*tohex(const void *, size_t);
 void	 xextendf(char **s, const char *sep, const char *fmt, ...)
     __attribute__((__format__ (printf, 3, 4))) __attribute__((__nonnull__ (3)));
@@ -86,9 +92,20 @@ const char *atoi_err(const char *, int *);
 int	 parse_absolute_time(const char *, uint64_t *);
 void	 format_absolute_time(uint64_t, char *, size_t);
 int	 path_absolute(const char *);
+int	 stdfd_devnull(int, int, int);
 
 struct passwd *pwcopy(struct passwd *);
 const char *ssh_gai_strerror(int);
+
+typedef void privdrop_fn(struct passwd *);
+typedef void privrestore_fn(void);
+#define	SSH_SUBPROCESS_STDOUT_DISCARD	(1)     /* Discard stdout */
+#define	SSH_SUBPROCESS_STDOUT_CAPTURE	(1<<1)  /* Redirect stdout */
+#define	SSH_SUBPROCESS_STDERR_DISCARD	(1<<2)  /* Discard stderr */
+#define	SSH_SUBPROCESS_UNSAFE_PATH	(1<<3)	/* Don't check for safe cmd */
+#define	SSH_SUBPROCESS_PRESERVE_ENV	(1<<4)	/* Keep parent environment */
+pid_t subprocess(const char *, const char *, int, char **, FILE **, u_int,
+    struct passwd *, privdrop_fn *, privrestore_fn *);
 
 typedef struct arglist arglist;
 struct arglist {
@@ -184,7 +201,8 @@ char	*read_passphrase(const char *, int);
 int	 ask_permission(const char *, ...) __attribute__((format(printf, 1, 2)));
 struct notifier_ctx *notify_start(int, const char *, ...)
 	__attribute__((format(printf, 2, 3)));
-void	notify_complete(struct notifier_ctx *);
+void	notify_complete(struct notifier_ctx *, const char *, ...)
+	__attribute__((format(printf, 2, 3)));
 
 #define MINIMUM(a, b)	(((a) < (b)) ? (a) : (b))
 #define MAXIMUM(a, b)	(((a) > (b)) ? (a) : (b))

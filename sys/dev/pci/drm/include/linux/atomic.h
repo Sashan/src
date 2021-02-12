@@ -1,4 +1,4 @@
-/* $OpenBSD: atomic.h,v 1.5 2019/08/17 06:07:22 jsg Exp $ */
+/* $OpenBSD: atomic.h,v 1.15 2020/11/09 23:53:30 jsg Exp $ */
 /**
  * \file drm_atomic.h
  * Atomic operations used in the DRM which may or may not be provided by the OS.
@@ -36,25 +36,47 @@
 #include <sys/types.h>
 #include <sys/mutex.h>
 #include <machine/intr.h>
-#include <machine/atomic.h>
 #include <linux/types.h>
+#include <linux/compiler.h>	/* via x86/include/asm/atomic.h */
 
-#define atomic_set(p, v)	(*(p) = (v))
-#define atomic_read(p)		(*(p))
+#define ATOMIC_INIT(x)		(x)
+
+#define atomic_set(p, v)	WRITE_ONCE(*(p), (v))
+#define atomic_read(p)		READ_ONCE(*(p))
 #define atomic_inc(p)		__sync_fetch_and_add(p, 1)
 #define atomic_dec(p)		__sync_fetch_and_sub(p, 1)
 #define atomic_add(n, p)	__sync_fetch_and_add(p, n)
 #define atomic_sub(n, p)	__sync_fetch_and_sub(p, n)
+#define atomic_and(n, p)	__sync_fetch_and_and(p, n)
+#define atomic_or(n, p)		atomic_setbits_int(p, n)
 #define atomic_add_return(n, p) __sync_add_and_fetch(p, n)
 #define atomic_sub_return(n, p) __sync_sub_and_fetch(p, n)
 #define atomic_inc_return(v)	atomic_add_return(1, (v))
 #define atomic_dec_return(v)	atomic_sub_return(1, (v))
 #define atomic_dec_and_test(v)	(atomic_dec_return(v) == 0)
 #define atomic_inc_and_test(v)	(atomic_inc_return(v) == 0)
-#define atomic_or(n, p)		atomic_setbits_int(p, n)
 #define atomic_cmpxchg(p, o, n)	__sync_val_compare_and_swap(p, o, n)
 #define cmpxchg(p, o, n)	__sync_val_compare_and_swap(p, o, n)
 #define atomic_set_release(p, v)	atomic_set((p), (v))
+#define atomic_andnot(bits, p)		atomic_clearbits_int(p,bits)
+#define atomic_fetch_inc(p)		__sync_fetch_and_add(p, 1)
+#define atomic_fetch_xor(n, p)		__sync_fetch_and_xor(p, n)
+
+#define try_cmpxchg(p, op, n)						\
+({									\
+	__typeof(p) __op = (__typeof((p)))(op);				\
+	__typeof(*(p)) __o = *__op;					\
+	__typeof(*(p)) __p = __sync_val_compare_and_swap((p), (__o), (n)); \
+	if (__p != __o)							\
+		*__op = __p;						\
+	(__p == __o);							\
+})
+
+static inline bool
+atomic_try_cmpxchg(volatile int *p, int *op, int n)
+{
+	return try_cmpxchg(p, op, n);
+}
 
 static inline int
 atomic_xchg(volatile int *v, int n)
@@ -68,7 +90,7 @@ atomic_xchg(volatile int *v, int n)
 static inline int
 atomic_add_unless(volatile int *v, int n, int u)
 {
-	int o = *v;
+	int o;
 
 	do {
 		o = *v;
@@ -78,6 +100,8 @@ atomic_add_unless(volatile int *v, int n, int u)
 
 	return 1;
 }
+
+#define atomic_inc_not_zero(v)	atomic_add_unless((v), 1, 0)
 
 static inline int
 atomic_dec_if_positive(volatile int *v)
@@ -94,13 +118,17 @@ atomic_dec_if_positive(volatile int *v)
 	return r;
 }
 
-#define atomic_long_read(p)	(*(p))
+#define atomic_long_read(p)	READ_ONCE(*(p))
 
-#ifdef __LP64__
+/* 32 bit powerpc lacks 64 bit atomics */
+#if !defined(__powerpc__) || defined(__powerpc64__)
+
 typedef int64_t atomic64_t;
 
-#define atomic64_set(p, v)	(*(p) = (v))
-#define atomic64_read(p)	(*(p))
+#define ATOMIC64_INIT(x)	(x)
+
+#define atomic64_set(p, v)	WRITE_ONCE(*(p), (v))
+#define atomic64_read(p)	READ_ONCE(*(p))
 
 static inline int64_t
 atomic64_xchg(volatile int64_t *v, int64_t n)
@@ -117,16 +145,20 @@ atomic64_xchg(volatile int64_t *v, int64_t n)
 
 #else
 
+extern struct mutex atomic64_mtx;
+
 typedef struct {
 	volatile int64_t val;
-	struct mutex lock;
 } atomic64_t;
+
+#define ATOMIC64_INIT(x)	{ (x) }
 
 static inline void
 atomic64_set(atomic64_t *v, int64_t i)
 {
-	mtx_init(&v->lock, IPL_HIGH);
+	mtx_enter(&atomic64_mtx);
 	v->val = i;
+	mtx_leave(&atomic64_mtx);
 }
 
 static inline int64_t
@@ -134,9 +166,9 @@ atomic64_read(atomic64_t *v)
 {
 	int64_t val;
 
-	mtx_enter(&v->lock);
+	mtx_enter(&atomic64_mtx);
 	val = v->val;
-	mtx_leave(&v->lock);
+	mtx_leave(&atomic64_mtx);
 
 	return val;
 }
@@ -146,10 +178,10 @@ atomic64_xchg(atomic64_t *v, int64_t n)
 {
 	int64_t val;
 
-	mtx_enter(&v->lock);
+	mtx_enter(&atomic64_mtx);
 	val = v->val;
 	v->val = n;
-	mtx_leave(&v->lock);
+	mtx_leave(&atomic64_mtx);
 
 	return val;
 }
@@ -157,9 +189,9 @@ atomic64_xchg(atomic64_t *v, int64_t n)
 static inline void
 atomic64_add(int i, atomic64_t *v)
 {
-	mtx_enter(&v->lock);
+	mtx_enter(&atomic64_mtx);
 	v->val += i;
-	mtx_leave(&v->lock);
+	mtx_leave(&atomic64_mtx);
 }
 
 #define atomic64_inc(p)		atomic64_add(p, 1)
@@ -169,10 +201,10 @@ atomic64_add_return(int i, atomic64_t *v)
 {
 	int64_t val;
 
-	mtx_enter(&v->lock);
+	mtx_enter(&atomic64_mtx);
 	val = v->val + i;
 	v->val = val;
-	mtx_leave(&v->lock);
+	mtx_leave(&atomic64_mtx);
 
 	return val;
 }
@@ -182,9 +214,9 @@ atomic64_add_return(int i, atomic64_t *v)
 static inline void
 atomic64_sub(int i, atomic64_t *v)
 {
-	mtx_enter(&v->lock);
+	mtx_enter(&atomic64_mtx);
 	v->val -= i;
-	mtx_leave(&v->lock);
+	mtx_leave(&atomic64_mtx);
 }
 #endif
 
@@ -200,27 +232,6 @@ typedef int32_t atomic_long_t;
 #define atomic_long_cmpxchg(p, o, n)	atomic_cmpxchg(p, o, n)
 #endif
 
-static inline int
-atomic_inc_not_zero(atomic_t *p)
-{
-	if (*p == 0)
-		return (0);
-
-	*(p) += 1;
-	return (*p);
-}
-
-/* FIXME */
-#define atomic_set_int(p, bits)		atomic_setbits_int(p,bits)
-#define atomic_set_mask(bits, p)	atomic_setbits_int(p,bits)
-#define atomic_clear_int(p, bits)	atomic_clearbits_int(p,bits)
-#define atomic_clear_mask(bits, p)	atomic_clearbits_int(p,bits)
-#define atomic_andnot(bits, p)		atomic_clearbits_int(p,bits)
-#define atomic_fetchadd_int(p, n) __sync_fetch_and_add(p, n)
-#define atomic_fetchsub_int(p, n) __sync_fetch_and_sub(p, n)
-#define atomic_fetch_inc(p) __sync_fetch_and_add(p, 1)
-#define atomic_fetch_xor(n, p) __sync_fetch_and_xor(p, n)
-
 static inline atomic_t
 test_and_set_bit(u_int b, volatile void *p)
 {
@@ -232,13 +243,20 @@ test_and_set_bit(u_int b, volatile void *p)
 static inline void
 clear_bit(u_int b, volatile void *p)
 {
-	atomic_clear_int(((volatile u_int *)p) + (b >> 5), 1 << (b & 0x1f));
+	atomic_clearbits_int(((volatile u_int *)p) + (b >> 5), 1 << (b & 0x1f));
+}
+
+static inline void
+clear_bit_unlock(u_int b, volatile void *p)
+{
+	membar_enter();
+	clear_bit(b, p);
 }
 
 static inline void
 set_bit(u_int b, volatile void *p)
 {
-	atomic_set_int(((volatile u_int *)p) + (b >> 5), 1 << (b & 0x1f));
+	atomic_setbits_int(((volatile u_int *)p) + (b >> 5), 1 << (b & 0x1f));
 }
 
 static inline void
@@ -374,22 +392,18 @@ find_next_bit(volatile void *p, int max, int b)
 #define wmb()	__asm __volatile("lock; addl $0,-4(%%esp)" : : : "memory", "cc")
 #define mb()	__asm __volatile("lock; addl $0,-4(%%esp)" : : : "memory", "cc")
 #define smp_mb()	__asm __volatile("lock; addl $0,-4(%%esp)" : : : "memory", "cc")
-#define smp_rmb()	__asm __volatile("" : : : "memory")
-#define smp_wmb()	__asm __volatile("" : : : "memory")
+#define smp_rmb()	__membar("")
+#define smp_wmb()	__membar("")
 #define __smp_store_mb(var, value)	do { (void)xchg(&var, value); } while (0)
 #define smp_mb__after_atomic()	do { } while (0)
 #define smp_mb__before_atomic()	do { } while (0)
-#elif defined(__alpha__)
-#define rmb()	alpha_mb();
-#define wmb()	alpha_wmb();
-#define mb()	alpha_mb();
 #elif defined(__amd64__)
-#define rmb()	__asm __volatile("lfence" : : : "memory")
-#define wmb()	__asm __volatile("sfence" : : : "memory")
-#define mb()	__asm __volatile("mfence" : : : "memory")
-#define smp_mb()	__asm __volatile("lock; addl $0,-4(%%rsp)" : : : "memory", "cc");
-#define smp_rmb()	__asm __volatile("" : : : "memory")
-#define smp_wmb()	__asm __volatile("" : : : "memory")
+#define rmb()	__membar("lfence")
+#define wmb()	__membar("sfence")
+#define mb()	__membar("mfence")
+#define smp_mb()	__asm __volatile("lock; addl $0,-4(%%rsp)" : : : "memory", "cc")
+#define smp_rmb()	__membar("")
+#define smp_wmb()	__membar("")
 #define __smp_store_mb(var, value)	do { (void)xchg(&var, value); } while (0)
 #define smp_mb__after_atomic()	do { } while (0)
 #define smp_mb__before_atomic()	do { } while (0)
@@ -401,10 +415,17 @@ find_next_bit(volatile void *p, int max, int b)
 #define rmb()	mips_sync() 
 #define wmb()	mips_sync()
 #define mb()	mips_sync()
+#elif defined(__powerpc64__)
+#define rmb()	__membar("sync")
+#define wmb()	__membar("sync")
+#define mb()	__membar("sync")
+#define smp_rmb()	__membar("lwsync")
+#define smp_wmb()	__membar("lwsync")
 #elif defined(__powerpc__)
-#define rmb()	__asm __volatile("sync" : : : "memory");
-#define wmb()	__asm __volatile("sync" : : : "memory");
-#define mb()	__asm __volatile("sync" : : : "memory");
+#define rmb()	__membar("sync")
+#define wmb()	__membar("sync")
+#define mb()	__membar("sync")
+#define smp_wmb()	__membar("eieio")
 #elif defined(__sparc64__)
 #define rmb()	membar_sync()
 #define wmb()	membar_sync()

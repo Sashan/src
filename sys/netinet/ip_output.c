@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_output.c,v 1.356 2020/03/06 10:40:13 tobhe Exp $	*/
+/*	$OpenBSD: ip_output.c,v 1.364 2021/02/06 13:15:37 bluhm Exp $	*/
 /*	$NetBSD: ip_output.c,v 1.28 1996/02/13 23:43:07 christos Exp $	*/
 
 /*
@@ -73,11 +73,13 @@
 #endif /* IPSEC */
 
 int ip_pcbopts(struct mbuf **, struct mbuf *);
+int ip_multicast_if(struct ip_mreqn *, u_int, unsigned int *);
 int ip_setmoptions(int, struct ip_moptions **, struct mbuf *, u_int);
 void ip_mloopback(struct ifnet *, struct mbuf *, struct sockaddr_in *);
 static __inline u_int16_t __attribute__((__unused__))
     in_cksum_phdr(u_int32_t, u_int32_t, u_int32_t);
 void in_delayed_cksum(struct mbuf *);
+int in_ifcap_cksum(struct mbuf *, struct ifnet *, int);
 
 #ifdef IPSEC
 struct tdb *
@@ -457,8 +459,7 @@ sendit:
 	 */
 	if (ntohs(ip->ip_len) <= mtu) {
 		ip->ip_sum = 0;
-		if ((ifp->if_capabilities & IFCAP_CSUM_IPv4) &&
-		    (ifp->if_bridgeidx == 0))
+		if (in_ifcap_cksum(m, ifp, IFCAP_CSUM_IPv4))
 			m->m_pkthdr.csum_flags |= M_IPV4_CSUM_OUT;
 		else {
 			ipstat_inc(ips_outswcsum);
@@ -589,7 +590,7 @@ ip_output_ipsec_send(struct tdb *tdb, struct mbuf *m, struct route *ro, int fwd)
 	ip = mtod(m, struct ip *);
 	if (ip_mtudisc && (ip->ip_off & htons(IP_DF)) && tdb->tdb_mtu &&
 	    ntohs(ip->ip_len) > tdb->tdb_mtu &&
-	    tdb->tdb_mtutimeout > time_second) {
+	    tdb->tdb_mtutimeout > gettime()) {
 		struct rtentry *rt = NULL;
 		int rt_mtucloned = 0;
 		int transportmode = 0;
@@ -605,14 +606,14 @@ ip_output_ipsec_send(struct tdb *tdb, struct mbuf *m, struct route *ro, int fwd)
 			rt = NULL;
 		else if (rt == NULL || (rt->rt_flags & RTF_HOST) == 0) {
 			rt = icmp_mtudisc_clone(ip->ip_dst,
-			    m->m_pkthdr.ph_rtableid);
+			    m->m_pkthdr.ph_rtableid, 1);
 			rt_mtucloned = 1;
 		}
 		DPRINTF(("%s: spi %08x mtu %d rt %p cloned %d\n", __func__,
 		    ntohl(tdb->tdb_spi), tdb->tdb_mtu, rt, rt_mtucloned));
 		if (rt != NULL) {
 			rt->rt_mtu = tdb->tdb_mtu;
-			if (ro && ro->ro_rt != NULL) {
+			if (ro != NULL && ro->ro_rt != NULL) {
 				rtfree(ro->ro_rt);
 				ro->ro_rt = rtalloc(&ro->ro_dst, RT_RESOLVE,
 				    m->m_pkthdr.ph_rtableid);
@@ -624,6 +625,9 @@ ip_output_ipsec_send(struct tdb *tdb, struct mbuf *m, struct route *ro, int fwd)
 		m_freem(m);
 		return EMSGSIZE;
 	}
+	/* propagate IP_DF for v4-over-v6 */
+	if (ip_mtudisc && ip->ip_off & htons(IP_DF))
+		SET(m->m_pkthdr.csum_flags, M_IPV6_DF_OUT);
 
 	/*
 	 * Clear these -- they'll be set in the recursive invocation
@@ -715,9 +719,7 @@ ip_fragment(struct mbuf *m, struct ifnet *ifp, u_long mtu)
 		m->m_pkthdr.ph_ifidx = 0;
 		mhip->ip_off = htons((u_int16_t)mhip->ip_off);
 		mhip->ip_sum = 0;
-		if ((ifp != NULL) &&
-		    (ifp->if_capabilities & IFCAP_CSUM_IPv4) &&
-		    (ifp->if_bridgeidx == 0))
+		if (in_ifcap_cksum(m, ifp, IFCAP_CSUM_IPv4))
 			m->m_pkthdr.csum_flags |= M_IPV4_CSUM_OUT;
 		else {
 			ipstat_inc(ips_outswcsum);
@@ -736,9 +738,7 @@ ip_fragment(struct mbuf *m, struct ifnet *ifp, u_long mtu)
 	ip->ip_len = htons((u_int16_t)m->m_pkthdr.len);
 	ip->ip_off |= htons(IP_MF);
 	ip->ip_sum = 0;
-	if ((ifp != NULL) &&
-	    (ifp->if_capabilities & IFCAP_CSUM_IPv4) &&
-	    (ifp->if_bridgeidx == 0))
+	if (in_ifcap_cksum(m, ifp, IFCAP_CSUM_IPv4))
 		m->m_pkthdr.csum_flags |= M_IPV4_CSUM_OUT;
 	else {
 		ipstat_inc(ips_outswcsum);
@@ -1337,6 +1337,51 @@ ip_pcbopts(struct mbuf **pcbopt, struct mbuf *m)
 }
 
 /*
+ * Lookup the interface based on the information in the ip_mreqn struct.
+ */
+int
+ip_multicast_if(struct ip_mreqn *mreq, u_int rtableid, unsigned int *ifidx)
+{
+	struct sockaddr_in sin;
+	struct rtentry *rt;
+
+	/*
+	 * In case userland provides the imr_ifindex use this as interface.
+	 * If no interface address was provided, use the interface of
+	 * the route to the given multicast address.
+	 */
+	if (mreq->imr_ifindex != 0) {
+		*ifidx = mreq->imr_ifindex;
+	} else if (mreq->imr_address.s_addr == INADDR_ANY) {
+		memset(&sin, 0, sizeof(sin));
+		sin.sin_len = sizeof(sin);
+		sin.sin_family = AF_INET;
+		sin.sin_addr = mreq->imr_multiaddr;
+		rt = rtalloc(sintosa(&sin), RT_RESOLVE, rtableid);
+		if (!rtisvalid(rt)) {
+			rtfree(rt);
+			return EADDRNOTAVAIL;
+		}
+		*ifidx = rt->rt_ifidx;
+		rtfree(rt);
+	} else {
+		memset(&sin, 0, sizeof(sin));
+		sin.sin_len = sizeof(sin);
+		sin.sin_family = AF_INET;
+		sin.sin_addr = mreq->imr_address;
+		rt = rtalloc(sintosa(&sin), 0, rtableid);
+		if (!rtisvalid(rt) || !ISSET(rt->rt_flags, RTF_LOCAL)) {
+			rtfree(rt);
+			return EADDRNOTAVAIL;
+		}
+		*ifidx = rt->rt_ifidx;
+		rtfree(rt);
+	}
+
+	return 0;
+}
+
+/*
  * Set the IP multicast options in response to user setsockopt().
  */
 int
@@ -1345,12 +1390,12 @@ ip_setmoptions(int optname, struct ip_moptions **imop, struct mbuf *m,
 {
 	struct in_addr addr;
 	struct in_ifaddr *ia;
-	struct ip_mreq *mreq;
+	struct ip_mreqn mreqn;
 	struct ifnet *ifp = NULL;
 	struct ip_moptions *imo = *imop;
 	struct in_multi **immp;
-	struct rtentry *rt;
 	struct sockaddr_in sin;
+	unsigned int ifidx;
 	int i, error = 0;
 	u_char loop;
 
@@ -1377,11 +1422,42 @@ ip_setmoptions(int optname, struct ip_moptions **imop, struct mbuf *m,
 		/*
 		 * Select the interface for outgoing multicast packets.
 		 */
-		if (m == NULL || m->m_len != sizeof(struct in_addr)) {
+		if (m == NULL) {
 			error = EINVAL;
 			break;
 		}
-		addr = *(mtod(m, struct in_addr *));
+		if (m->m_len == sizeof(struct in_addr)) {
+			addr = *(mtod(m, struct in_addr *));
+		} else if (m->m_len == sizeof(struct ip_mreq) ||
+		    m->m_len == sizeof(struct ip_mreqn)) {
+			memset(&mreqn, 0, sizeof(mreqn));
+			memcpy(&mreqn, mtod(m, void *), m->m_len);
+
+			/*
+			 * If an interface index is given use this
+			 * index to set the imo_ifidx but check first
+			 * that the interface actually exists.
+			 * In the other case just set the addr to
+			 * the imr_address and fall through to the
+			 * regular code.
+			 */
+			if (mreqn.imr_ifindex != 0) {
+				ifp = if_get(mreqn.imr_ifindex);
+				if (ifp == NULL ||
+				    ifp->if_rdomain != rtable_l2(rtableid)) {
+					error = EADDRNOTAVAIL;
+					if_put(ifp);
+					break;
+				}
+				imo->imo_ifidx = ifp->if_index;
+				if_put(ifp);
+				break;
+			} else
+				addr = mreqn.imr_address;
+		} else {
+			error = EINVAL;
+			break;
+		}
 		/*
 		 * INADDR_ANY is used to remove a previous selection.
 		 * When no interface is selected, a default one is
@@ -1438,63 +1514,42 @@ ip_setmoptions(int optname, struct ip_moptions **imop, struct mbuf *m,
 		 * Add a multicast group membership.
 		 * Group must be a valid IP multicast address.
 		 */
-		if (m == NULL || m->m_len != sizeof(struct ip_mreq)) {
+		if (m == NULL || !(m->m_len == sizeof(struct ip_mreq) ||
+		    m->m_len == sizeof(struct ip_mreqn))) {
 			error = EINVAL;
 			break;
 		}
-		mreq = mtod(m, struct ip_mreq *);
-		if (!IN_MULTICAST(mreq->imr_multiaddr.s_addr)) {
+		memset(&mreqn, 0, sizeof(mreqn));
+		memcpy(&mreqn, mtod(m, void *), m->m_len);
+		if (!IN_MULTICAST(mreqn.imr_multiaddr.s_addr)) {
 			error = EINVAL;
 			break;
 		}
-		/*
-		 * If no interface address was provided, use the interface of
-		 * the route to the given multicast address.
-		 */
-		if (mreq->imr_interface.s_addr == INADDR_ANY) {
-			memset(&sin, 0, sizeof(sin));
-			sin.sin_len = sizeof(sin);
-			sin.sin_family = AF_INET;
-			sin.sin_addr = mreq->imr_multiaddr;
-			rt = rtalloc(sintosa(&sin), RT_RESOLVE, rtableid);
-			if (!rtisvalid(rt)) {
-				rtfree(rt);
-				error = EADDRNOTAVAIL;
-				break;
-			}
-		} else {
-			memset(&sin, 0, sizeof(sin));
-			sin.sin_len = sizeof(sin);
-			sin.sin_family = AF_INET;
-			sin.sin_addr = mreq->imr_interface;
-			rt = rtalloc(sintosa(&sin), 0, rtableid);
-			if (!rtisvalid(rt) || !ISSET(rt->rt_flags, RTF_LOCAL)) {
-				rtfree(rt);
-				error = EADDRNOTAVAIL;
-				break;
-			}
-		}
-		ifp = if_get(rt->rt_ifidx);
-		rtfree(rt);
+
+		error = ip_multicast_if(&mreqn, rtableid, &ifidx);
+		if (error)
+			break;
 
 		/*
 		 * See if we found an interface, and confirm that it
 		 * supports multicast.
 		 */
-		if (ifp == NULL || (ifp->if_flags & IFF_MULTICAST) == 0) {
+		ifp = if_get(ifidx);
+		if (ifp == NULL || ifp->if_rdomain != rtable_l2(rtableid) ||
+		    (ifp->if_flags & IFF_MULTICAST) == 0) {
 			error = EADDRNOTAVAIL;
 			if_put(ifp);
 			break;
 		}
+
 		/*
 		 * See if the membership already exists or if all the
 		 * membership slots are full.
 		 */
 		for (i = 0; i < imo->imo_num_memberships; ++i) {
-			if (imo->imo_membership[i]->inm_ifidx
-						== ifp->if_index &&
+			if (imo->imo_membership[i]->inm_ifidx == ifidx &&
 			    imo->imo_membership[i]->inm_addr.s_addr
-						== mreq->imr_multiaddr.s_addr)
+						== mreqn.imr_multiaddr.s_addr)
 				break;
 		}
 		if (i < imo->imo_num_memberships) {
@@ -1506,9 +1561,10 @@ ip_setmoptions(int optname, struct ip_moptions **imop, struct mbuf *m,
 			struct in_multi **nmships, **omships;
 			size_t newmax;
 			/*
-			 * Resize the vector to next power-of-two minus 1. If the
-			 * size would exceed the maximum then we know we've really
-			 * run out of entries. Otherwise, we reallocate the vector.
+			 * Resize the vector to next power-of-two minus 1. If
+			 * the size would exceed the maximum then we know we've
+			 * really run out of entries. Otherwise, we reallocate
+			 * the vector.
 			 */
 			nmships = NULL;
 			omships = imo->imo_membership;
@@ -1538,7 +1594,7 @@ ip_setmoptions(int optname, struct ip_moptions **imop, struct mbuf *m,
 		 * address list for the given interface.
 		 */
 		if ((imo->imo_membership[i] =
-		    in_addmulti(&mreq->imr_multiaddr, ifp)) == NULL) {
+		    in_addmulti(&mreqn.imr_multiaddr, ifp)) == NULL) {
 			error = ENOBUFS;
 			if_put(ifp);
 			break;
@@ -1552,42 +1608,34 @@ ip_setmoptions(int optname, struct ip_moptions **imop, struct mbuf *m,
 		 * Drop a multicast group membership.
 		 * Group must be a valid IP multicast address.
 		 */
-		if (m == NULL || m->m_len != sizeof(struct ip_mreq)) {
+		if (m == NULL || !(m->m_len == sizeof(struct ip_mreq) ||
+		    m->m_len == sizeof(struct ip_mreqn))) {
 			error = EINVAL;
 			break;
 		}
-		mreq = mtod(m, struct ip_mreq *);
-		if (!IN_MULTICAST(mreq->imr_multiaddr.s_addr)) {
+		memset(&mreqn, 0, sizeof(mreqn));
+		memcpy(&mreqn, mtod(m, void *), m->m_len);
+		if (!IN_MULTICAST(mreqn.imr_multiaddr.s_addr)) {
 			error = EINVAL;
 			break;
 		}
+
 		/*
 		 * If an interface address was specified, get a pointer
 		 * to its ifnet structure.
 		 */
-		if (mreq->imr_interface.s_addr == INADDR_ANY)
-			ifp = NULL;
-		else {
-			memset(&sin, 0, sizeof(sin));
-			sin.sin_len = sizeof(sin);
-			sin.sin_family = AF_INET;
-			sin.sin_addr = mreq->imr_interface;
-			ia = ifatoia(ifa_ifwithaddr(sintosa(&sin), rtableid));
-			if (ia == NULL) {
-				error = EADDRNOTAVAIL;
-				break;
-			}
-			ifp = ia->ia_ifp;
-		}
+		error = ip_multicast_if(&mreqn, rtableid, &ifidx);
+		if (error)
+			break;
+
 		/*
 		 * Find the membership in the membership array.
 		 */
 		for (i = 0; i < imo->imo_num_memberships; ++i) {
-			if ((ifp == NULL ||
-			    imo->imo_membership[i]->inm_ifidx ==
-			        ifp->if_index) &&
+			if ((ifidx == 0 ||
+			    imo->imo_membership[i]->inm_ifidx == ifidx) &&
 			     imo->imo_membership[i]->inm_addr.s_addr ==
-			     mreq->imr_multiaddr.s_addr)
+			     mreqn.imr_multiaddr.s_addr)
 				break;
 		}
 		if (i == imo->imo_num_memberships) {
@@ -1803,15 +1851,15 @@ in_proto_cksum_out(struct mbuf *m, struct ifnet *ifp)
 	}
 
 	if (m->m_pkthdr.csum_flags & M_TCP_CSUM_OUT) {
-		if (!ifp || !(ifp->if_capabilities & IFCAP_CSUM_TCPv4) ||
-		    ip->ip_hl != 5 || ifp->if_bridgeidx != 0) {
+		if (!in_ifcap_cksum(m, ifp, IFCAP_CSUM_TCPv4) ||
+		    ip->ip_hl != 5) {
 			tcpstat_inc(tcps_outswcsum);
 			in_delayed_cksum(m);
 			m->m_pkthdr.csum_flags &= ~M_TCP_CSUM_OUT; /* Clear */
 		}
 	} else if (m->m_pkthdr.csum_flags & M_UDP_CSUM_OUT) {
-		if (!ifp || !(ifp->if_capabilities & IFCAP_CSUM_UDPv4) ||
-		    ip->ip_hl != 5 || ifp->if_bridgeidx != 0) {
+		if (!in_ifcap_cksum(m, ifp, IFCAP_CSUM_UDPv4) ||
+		    ip->ip_hl != 5) {
 			udpstat_inc(udps_outswcsum);
 			in_delayed_cksum(m);
 			m->m_pkthdr.csum_flags &= ~M_UDP_CSUM_OUT; /* Clear */
@@ -1820,4 +1868,23 @@ in_proto_cksum_out(struct mbuf *m, struct ifnet *ifp)
 		in_delayed_cksum(m);
 		m->m_pkthdr.csum_flags &= ~M_ICMP_CSUM_OUT; /* Clear */
 	}
+}
+
+int
+in_ifcap_cksum(struct mbuf *m, struct ifnet *ifp, int ifcap)
+{
+	if ((ifp == NULL) ||
+	    !ISSET(ifp->if_capabilities, ifcap) ||
+	    (ifp->if_bridgeidx != 0))
+		return (0);
+	/*
+	 * Simplex interface sends packet back without hardware cksum.
+	 * Keep this check in sync with the condition where ether_resolve()
+	 * calls if_input_local().
+	 */
+	if (ISSET(m->m_flags, M_BCAST) &&
+	    ISSET(ifp->if_flags, IFF_SIMPLEX) &&
+	    !m->m_pkthdr.pf.routed)
+		return (0);
+	return (1);
 }

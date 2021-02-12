@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_kue.c,v 1.89 2018/10/02 19:49:10 stsp Exp $ */
+/*	$OpenBSD: if_kue.c,v 1.92 2020/07/31 10:49:32 mglocker Exp $ */
 /*	$NetBSD: if_kue.c,v 1.50 2002/07/16 22:00:31 augustss Exp $	*/
 /*
  * Copyright (c) 1997, 1998, 1999, 2000
@@ -788,7 +788,7 @@ kue_txeof(struct usbd_xfer *xfer, void *priv, usbd_status status)
 	m_freem(c->kue_mbuf);
 	c->kue_mbuf = NULL;
 
-	if (IFQ_IS_EMPTY(&ifp->if_snd) == 0)
+	if (ifq_empty(&ifp->if_snd) == 0)
 		kue_start(ifp);
 
 	splx(s);
@@ -829,6 +829,7 @@ kue_send(struct kue_softc *sc, struct mbuf *m, int idx)
 	if (err != USBD_IN_PROGRESS) {
 		printf("%s: kue_send error=%s\n", sc->kue_dev.dv_xname,
 		       usbd_errstr(err));
+		c->kue_mbuf = NULL;
 		kue_stop(sc);
 		return (EIO);
 	}
@@ -852,17 +853,15 @@ kue_start(struct ifnet *ifp)
 	if (ifq_is_oactive(&ifp->if_snd))
 		return;
 
-	m_head = ifq_deq_begin(&ifp->if_snd);
+	m_head = ifq_dequeue(&ifp->if_snd);
 	if (m_head == NULL)
 		return;
 
 	if (kue_send(sc, m_head, 0)) {
-		ifq_deq_rollback(&ifp->if_snd, m_head);
+		m_freem(m_head);
 		ifq_set_oactive(&ifp->if_snd);
 		return;
 	}
-
-	ifq_deq_commit(&ifp->if_snd, m_head);
 
 #if NBPFILTER > 0
 	/*
@@ -1074,7 +1073,7 @@ kue_watchdog(struct ifnet *ifp)
 	usbd_get_xfer_status(c->kue_xfer, NULL, NULL, NULL, &stat);
 	kue_txeof(c->kue_xfer, c, stat);
 
-	if (IFQ_IS_EMPTY(&ifp->if_snd) == 0)
+	if (ifq_empty(&ifp->if_snd) == 0)
 		kue_start(ifp);
 	splx(s);
 }
@@ -1099,7 +1098,6 @@ kue_stop(struct kue_softc *sc)
 
 	/* Stop transfers. */
 	if (sc->kue_ep[KUE_ENDPT_RX] != NULL) {
-		usbd_abort_pipe(sc->kue_ep[KUE_ENDPT_RX]);
 		err = usbd_close_pipe(sc->kue_ep[KUE_ENDPT_RX]);
 		if (err) {
 			printf("%s: close rx pipe failed: %s\n",
@@ -1109,7 +1107,6 @@ kue_stop(struct kue_softc *sc)
 	}
 
 	if (sc->kue_ep[KUE_ENDPT_TX] != NULL) {
-		usbd_abort_pipe(sc->kue_ep[KUE_ENDPT_TX]);
 		err = usbd_close_pipe(sc->kue_ep[KUE_ENDPT_TX]);
 		if (err) {
 			printf("%s: close tx pipe failed: %s\n",
@@ -1119,7 +1116,6 @@ kue_stop(struct kue_softc *sc)
 	}
 
 	if (sc->kue_ep[KUE_ENDPT_INTR] != NULL) {
-		usbd_abort_pipe(sc->kue_ep[KUE_ENDPT_INTR]);
 		err = usbd_close_pipe(sc->kue_ep[KUE_ENDPT_INTR]);
 		if (err) {
 			printf("%s: close intr pipe failed: %s\n",

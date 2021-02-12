@@ -1,4 +1,4 @@
-/* $OpenBSD: cmd-split-window.c,v 1.97 2020/03/16 18:08:39 nicm Exp $ */
+/* $OpenBSD: cmd-split-window.c,v 1.104 2020/05/16 16:20:59 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -53,13 +53,14 @@ const struct cmd_entry cmd_split_window_entry = {
 static enum cmd_retval
 cmd_split_window_exec(struct cmd *self, struct cmdq_item *item)
 {
-	struct args		*args = self->args;
-	struct cmd_find_state	*current = &item->shared->current;
+	struct args		*args = cmd_get_args(self);
+	struct cmd_find_state	*current = cmdq_get_current(item);
+	struct cmd_find_state	*target = cmdq_get_target(item);
 	struct spawn_context	 sc;
-	struct client		*c = cmd_find_client(item, NULL, 1);
-	struct session		*s = item->target.s;
-	struct winlink		*wl = item->target.wl;
-	struct window_pane	*wp = item->target.wp, *new_wp;
+	struct client		*tc = cmdq_get_target_client(item);
+	struct session		*s = target->s;
+	struct winlink		*wl = target->wl;
+	struct window_pane	*wp = target->wp, *new_wp;
 	enum layout_type	 type;
 	struct layout_cell	*lc;
 	struct cmd_find_state	 fs;
@@ -142,7 +143,7 @@ cmd_split_window_exec(struct cmd *self, struct cmdq_item *item)
 
 	add = args_first_value(args, 'e', &value);
 	while (add != NULL) {
-		environ_put(sc.environ, add);
+		environ_put(sc.environ, add, 0);
 		add = args_next_value(&value);
 	}
 
@@ -159,6 +160,7 @@ cmd_split_window_exec(struct cmd *self, struct cmdq_item *item)
 		return (CMD_RETURN_ERROR);
 	}
 	if (input && window_pane_start_input(new_wp, item, &cause) != 0) {
+		server_client_remove_pane(new_wp);
 		layout_close_pane(new_wp);
 		window_remove_pane(wp->window, new_wp);
 		cmdq_error(item, "%s", cause);
@@ -173,7 +175,7 @@ cmd_split_window_exec(struct cmd *self, struct cmdq_item *item)
 	if (args_has(args, 'P')) {
 		if ((template = args_get(args, 'F')) == NULL)
 			template = SPLIT_WINDOW_TEMPLATE;
-		cp = format_single(item, template, c, s, wl, new_wp);
+		cp = format_single(item, template, tc, s, wl, new_wp);
 		cmdq_print(item, "%s", cp);
 		free(cp);
 	}

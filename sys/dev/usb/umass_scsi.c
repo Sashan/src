@@ -1,4 +1,4 @@
-/*	$OpenBSD: umass_scsi.c,v 1.50 2020/02/13 15:11:32 krw Exp $ */
+/*	$OpenBSD: umass_scsi.c,v 1.61 2020/09/22 19:32:53 krw Exp $ */
 /*	$NetBSD: umass_scsipi.c,v 1.9 2003/02/16 23:14:08 augustss Exp $	*/
 /*
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -53,7 +53,6 @@
 
 struct umass_scsi_softc {
 	struct device		*sc_child;
-	struct scsi_link	sc_link;
 	struct scsi_iopool	sc_iopool;
 	int			sc_open;
 
@@ -83,26 +82,11 @@ umass_scsi_attach(struct umass_softc *sc)
 {
 	struct scsibus_attach_args saa;
 	struct umass_scsi_softc *scbus;
+	u_int16_t flags = 0;
 
 	scbus = malloc(sizeof(*scbus), M_DEVBUF, M_WAITOK | M_ZERO);
 
 	sc->bus = scbus;
-
-	scsi_iopool_init(&scbus->sc_iopool, scbus, umass_io_get, umass_io_put);
-
-	/* Fill in the link. */
-	scbus->sc_link.adapter_buswidth = 2;
-	scbus->sc_link.adapter = &umass_scsi_switch;
-	scbus->sc_link.adapter_softc = sc;
-	scbus->sc_link.adapter_target = UMASS_SCSIID_HOST;
-	scbus->sc_link.openings = 1;
-	scbus->sc_link.quirks = SDEV_ONLYBIG | sc->sc_busquirks;
-	scbus->sc_link.pool = &scbus->sc_iopool;
-	scbus->sc_link.luns = sc->maxlun + 1;
-	scbus->sc_link.flags = SDEV_UMASS;
-
-	bzero(&saa, sizeof(saa));
-	saa.saa_sc_link = &scbus->sc_link;
 
 	switch (sc->sc_cmd) {
 	case UMASS_CPROTO_RBC:
@@ -113,7 +97,7 @@ umass_scsi_attach(struct umass_softc *sc)
 		break;
 	case UMASS_CPROTO_UFI:
 	case UMASS_CPROTO_ATAPI:
-		scbus->sc_link.flags |= SDEV_ATAPI;
+		flags |= SDEV_ATAPI;
 		DPRINTF(UDMASS_USB, ("%s: umass_attach_bus: ATAPI\n"
 				     "sc = 0x%p, scbus = 0x%p\n",
 				     sc->sc_dev.dv_xname, sc, scbus));
@@ -121,6 +105,19 @@ umass_scsi_attach(struct umass_softc *sc)
 	default:
 		break;
 	}
+
+	scsi_iopool_init(&scbus->sc_iopool, scbus, umass_io_get, umass_io_put);
+
+	saa.saa_adapter_buswidth = 2;
+	saa.saa_adapter = &umass_scsi_switch;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter_target = UMASS_SCSIID_HOST;
+	saa.saa_luns = sc->maxlun + 1;
+	saa.saa_openings = 1;
+	saa.saa_quirks = sc->sc_busquirks;
+	saa.saa_pool = &scbus->sc_iopool;
+	saa.saa_flags = SDEV_UMASS | flags;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
 	sc->sc_refcnt++;
 	scbus->sc_child = config_found((struct device *)sc, &saa, scsiprint);
@@ -149,7 +146,7 @@ umass_scsi_detach(struct umass_softc *sc, int flags)
 int
 umass_scsi_probe(struct scsi_link *link)
 {
-	struct umass_softc *sc = link->adapter_softc;
+	struct umass_softc *sc = link->bus->sb_adapter_softc;
 	struct usb_device_info udi;
 	size_t len;
 
@@ -162,7 +159,7 @@ umass_scsi_probe(struct scsi_link *link)
 	/*
 	 * Create a fake devid using the vendor and product ids and the last
 	 * 12 characters of serial number, as recommended by Section 4.1.1 of
-	 * the USB Mass Storage Class - Bulk Only Transport spec. 
+	 * the USB Mass Storage Class - Bulk Only Transport spec.
 	 */
 	len = strlen(udi.udi_serial);
 	if (len >= 12) {
@@ -180,7 +177,7 @@ void
 umass_scsi_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link *sc_link = xs->sc_link;
-	struct umass_softc *sc = sc_link->adapter_softc;
+	struct umass_softc *sc = sc_link->bus->sb_adapter_softc;
 	struct scsi_generic *cmd;
 	int cmdlen, dir;
 
@@ -188,12 +185,10 @@ umass_scsi_cmd(struct scsi_xfer *xs)
 	microtime(&sc->tv);
 #endif
 
-	DIF(UDMASS_UPPER, sc_link->flags |= SCSIDEBUG_LEVEL);
-
 	DPRINTF(UDMASS_CMD, ("%s: umass_scsi_cmd: at %lld.%06ld: %d:%d "
 		"xs=%p cmd=0x%02x datalen=%d (quirks=0x%x, poll=%d)\n",
 		sc->sc_dev.dv_xname, (long long)sc->tv.tv_sec, sc->tv.tv_usec,
-		sc_link->target, sc_link->lun, xs, xs->cmd->opcode,
+		sc_link->target, sc_link->lun, xs, xs->cmd.opcode,
 		xs->datalen, sc_link->quirks, xs->flags & SCSI_POLL));
 
 	if (usbd_is_dying(sc->sc_udev)) {
@@ -210,7 +205,7 @@ umass_scsi_cmd(struct scsi_xfer *xs)
 	}
 #endif
 
-	cmd = xs->cmd;
+	cmd = &xs->cmd;
 	cmdlen = xs->cmdlen;
 
 	dir = DIR_NONE;
@@ -307,7 +302,7 @@ umass_scsi_cb(struct umass_softc *sc, void *priv, int residue, int status)
 			 * response, omitting response data from the
 			 * "vendor specific data" on...
 			 */
-			if (xs->cmd->opcode == INQUIRY &&
+			if (xs->cmd.opcode == INQUIRY &&
 			    residue < xs->datalen) {
 				xs->error = XS_NOERROR;
 				break;
@@ -319,7 +314,7 @@ umass_scsi_cb(struct umass_softc *sc, void *priv, int residue, int status)
 		/* FALLTHROUGH */
 	case STATUS_CMD_FAILED:
 		DPRINTF(UDMASS_CMD, ("umass_scsi_cb: status cmd failed for "
-		    "scsi op 0x%02x\n", xs->cmd->opcode));
+		    "scsi op 0x%02x\n", xs->cmd.opcode));
 		/* fetch sense data */
 		sc->sc_sense = 1;
 		memset(&scbus->sc_sense_cmd, 0, sizeof(scbus->sc_sense_cmd));

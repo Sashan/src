@@ -31,7 +31,7 @@
 
 *******************************************************************************/
 
-/* $OpenBSD: if_em_hw.h,v 1.82 2020/03/23 15:02:51 mpi Exp $ */
+/* $OpenBSD: if_em_hw.h,v 1.84 2021/01/24 10:21:43 jsg Exp $ */
 /* $FreeBSD: if_em_hw.h,v 1.15 2005/05/26 23:32:02 tackerman Exp $ */
 
 /* if_em_hw.h
@@ -440,7 +440,6 @@ int32_t em_blink_led_start(struct em_hw *hw);
 void em_clear_hw_cntrs(struct em_hw *hw);
 void em_reset_adaptive(struct em_hw *hw);
 void em_update_adaptive(struct em_hw *hw);
-void em_tbi_adjust_stats(struct em_hw *hw, struct em_hw_stats *stats, uint32_t frame_len, uint8_t *mac_addr);
 void em_get_bus_info(struct em_hw *hw);
 void em_pci_set_mwi(struct em_hw *hw);
 void em_pci_clear_mwi(struct em_hw *hw);
@@ -590,6 +589,15 @@ uint32_t em_translate_82542_register(uint32_t);
 #define E1000_DEV_ID_PCH_TGP_I219_LM14   0x15F9
 #define E1000_DEV_ID_PCH_TGP_I219_V14    0x15FA
 #define E1000_DEV_ID_PCH_TGP_I219_LM15   0x15F4
+#define E1000_DEV_ID_PCH_TGP_I219_V15    0x15F5
+#define E1000_DEV_ID_PCH_ADP_I219_LM16   0x1A1E
+#define E1000_DEV_ID_PCH_ADP_I219_V16    0x1A1F
+#define E1000_DEV_ID_PCH_ADP_I219_LM17   0x1A1C
+#define E1000_DEV_ID_PCH_ADP_I219_V17    0x1A1D
+#define E1000_DEV_ID_PCH_MTP_I219_LM18   0x550A
+#define E1000_DEV_ID_PCH_MTP_I219_V18    0x550B
+#define E1000_DEV_ID_PCH_MTP_I219_LM19   0x550C
+#define E1000_DEV_ID_PCH_MTP_I219_V19    0x550D
 #define E1000_DEV_ID_82575EB_PT          0x10A7
 #define E1000_DEV_ID_82575EB_PF          0x10A9
 #define E1000_DEV_ID_82575GB_QP          0x10D6

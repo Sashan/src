@@ -1,4 +1,4 @@
-/*	$OpenBSD: aic6360.c,v 1.31 2020/02/05 16:29:29 krw Exp $	*/
+/*	$OpenBSD: aic6360.c,v 1.38 2020/09/22 19:32:52 krw Exp $	*/
 /*	$NetBSD: aic6360.c,v 1.52 1996/12/10 21:27:51 thorpej Exp $	*/
 
 #ifdef DDB
@@ -236,7 +236,7 @@ aic_find(bus_space_tag_t iot, bus_space_handle_t ioh)
 	return (1);
 }
 
-/* 
+/*
  * Attach the AIC6360, fill out some high and low level data structures
  */
 void
@@ -263,17 +263,14 @@ aicattach(struct aic_softc *sc)
 
 	aic_init(sc);	/* init chip and driver */
 
-	/*
-	 * Fill in the prototype scsi_link
-	 */
-	sc->sc_link.adapter_softc = sc;
-	sc->sc_link.adapter_target = sc->sc_initiator;
-	sc->sc_link.adapter = &aic_switch;
-	sc->sc_link.openings = 2;
-	sc->sc_link.pool = &sc->sc_iopool;
-
-	bzero(&saa, sizeof(saa));
-	saa.saa_sc_link = &sc->sc_link;
+	saa.saa_adapter_softc = sc;
+	saa.saa_adapter_target = sc->sc_initiator;
+	saa.saa_adapter = &aic_switch;
+	saa.saa_luns = saa.saa_adapter_buswidth = 8;
+	saa.saa_openings = 2;
+	saa.saa_pool = &sc->sc_iopool;
+	saa.saa_quirks = saa.saa_flags = 0;
+	saa.saa_wwpn = saa.saa_wwnn = 0;
 
 	config_found(&sc->sc_dev, &saa, scsiprint);
 }
@@ -481,12 +478,12 @@ void
 aic_scsi_cmd(struct scsi_xfer *xs)
 {
 	struct scsi_link *sc_link = xs->sc_link;
-	struct aic_softc *sc = sc_link->adapter_softc;
+	struct aic_softc *sc = sc_link->bus->sb_adapter_softc;
 	struct aic_acb *acb;
 	int s, flags;
 
 	AIC_TRACE(("aic_scsi_cmd  "));
-	AIC_CMDS(("[0x%x, %d]->%d ", (int)xs->cmd->opcode, xs->cmdlen,
+	AIC_CMDS(("[0x%x, %d]->%d ", (int)xs->cmd.opcode, xs->cmdlen,
 	    sc_link->target));
 
 	flags = xs->flags;
@@ -502,7 +499,7 @@ aic_scsi_cmd(struct scsi_xfer *xs)
 		acb->scsi_cmd_length = 0;
 		acb->data_length = 0;
 	} else {
-		bcopy(xs->cmd, &acb->scsi_cmd, xs->cmdlen);
+		bcopy(&xs->cmd, &acb->scsi_cmd, xs->cmdlen);
 		acb->scsi_cmd_length = xs->cmdlen;
 		acb->data_addr = xs->data;
 		acb->data_length = xs->datalen;
@@ -1974,7 +1971,7 @@ aic_timeout(void *arg)
 	struct aic_acb *acb = arg;
 	struct scsi_xfer *xs = acb->xs;
 	struct scsi_link *sc_link = xs->sc_link;
-	struct aic_softc *sc = sc_link->adapter_softc;
+	struct aic_softc *sc = sc_link->bus->sb_adapter_softc;
 	int s;
 
 	sc_print_addr(sc_link);

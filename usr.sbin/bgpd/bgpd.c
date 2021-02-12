@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.c,v 1.227 2019/10/02 08:58:34 claudio Exp $ */
+/*	$OpenBSD: bgpd.c,v 1.233 2021/01/04 17:44:14 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -90,7 +90,7 @@ usage(void)
 }
 
 #define PFD_PIPE_SESSION	0
-#define PFD_PIPE_ROUTE		1
+#define PFD_PIPE_RDE		1
 #define PFD_SOCK_ROUTE		2
 #define PFD_SOCK_PFKEY		3
 #define POLL_MAX		4
@@ -102,6 +102,7 @@ int
 main(int argc, char *argv[])
 {
 	struct bgpd_config	*conf;
+	enum bgpd_process	 proc = PROC_MAIN;
 	struct rde_rib		*rr;
 	struct peer		*p;
 	struct pollfd		 pfd[POLL_MAX];
@@ -110,17 +111,15 @@ main(int argc, char *argv[])
 	char			*conffile;
 	char			*saved_argv0;
 	int			 debug = 0;
-	int			 rflag = 0, sflag = 0;
 	int			 rfd, keyfd;
 	int			 ch, status;
 	int			 pipe_m2s[2];
 	int			 pipe_m2r[2];
 
 	conffile = CONFFILE;
-	bgpd_process = PROC_MAIN;
 
 	log_init(1, LOG_DAEMON);	/* log to stderr until daemonized */
-	log_procinit(log_procnames[bgpd_process]);
+	log_procinit(log_procnames[PROC_MAIN]);
 	log_setverbose(1);
 
 	saved_argv0 = argv[0];
@@ -152,10 +151,10 @@ main(int argc, char *argv[])
 			cmd_opts |= BGPD_OPT_VERBOSE;
 			break;
 		case 'R':
-			rflag = 1;
+			proc = PROC_RDE;
 			break;
 		case 'S':
-			sflag = 1;
+			proc = PROC_SE;
 			break;
 		default:
 			usage();
@@ -165,7 +164,7 @@ main(int argc, char *argv[])
 
 	argc -= optind;
 	argv += optind;
-	if (argc > 0 || (sflag && rflag))
+	if (argc > 0)
 		usage();
 
 	if (cmd_opts & BGPD_OPT_NOACTION) {
@@ -185,10 +184,16 @@ main(int argc, char *argv[])
 		exit(0);
 	}
 
-	if (rflag)
+	switch (proc) {
+	case PROC_MAIN:
+		break;
+	case PROC_RDE:
 		rde_main(debug, cmd_opts & BGPD_OPT_VERBOSE);
-	else if (sflag)
+		/* NOTREACHED */
+	case PROC_SE:
 		session_main(debug, cmd_opts & BGPD_OPT_VERBOSE);
+		/* NOTREACHED */
+	}
 
 	if (geteuid())
 		errx(1, "need root privileges");
@@ -279,7 +284,7 @@ BROKEN	if (pledge("stdio rpath wpath cpath fattr unix route recvfd sendfd",
 		pfd[PFD_SOCK_PFKEY].events = POLLIN;
 
 		set_pollfd(&pfd[PFD_PIPE_SESSION], ibuf_se);
-		set_pollfd(&pfd[PFD_PIPE_ROUTE], ibuf_rde);
+		set_pollfd(&pfd[PFD_PIPE_RDE], ibuf_rde);
 
 		if (timeout < 0 || timeout > MAX_TIMEOUT)
 			timeout = MAX_TIMEOUT;
@@ -301,14 +306,14 @@ BROKEN	if (pledge("stdio rpath wpath cpath fattr unix route recvfd sendfd",
 				quit = 1;
 		}
 
-		if (handle_pollfd(&pfd[PFD_PIPE_ROUTE], ibuf_rde) == -1) {
+		if (handle_pollfd(&pfd[PFD_PIPE_RDE], ibuf_rde) == -1) {
 			log_warnx("main: Lost connection to RDE");
 			msgbuf_clear(&ibuf_rde->w);
 			free(ibuf_rde);
 			ibuf_rde = NULL;
 			quit = 1;
 		} else {
-			if (dispatch_imsg(ibuf_rde, PFD_PIPE_ROUTE, conf) ==
+			if (dispatch_imsg(ibuf_rde, PFD_PIPE_RDE, conf) ==
 			    -1)
 				quit = 1;
 		}
@@ -503,6 +508,7 @@ send_config(struct bgpd_config *conf)
 	struct as_set		*aset;
 	struct prefixset	*ps;
 	struct prefixset_item	*psi, *npsi;
+	struct roa		*roa, *nroa;
 
 	reconfpending = 2;	/* one per child */
 
@@ -568,7 +574,6 @@ send_config(struct bgpd_config *conf)
 			if (imsg_compose(ibuf_rde, IMSG_RECONF_PREFIX_SET_ITEM,
 			    0, 0, -1, psi, sizeof(*psi)) == -1)
 				return (-1);
-			set_free(psi->set);
 			free(psi);
 		}
 		free(ps);
@@ -580,23 +585,12 @@ send_config(struct bgpd_config *conf)
 		if (imsg_compose(ibuf_rde, IMSG_RECONF_ORIGIN_SET, 0, 0, -1,
 		    ps->name, sizeof(ps->name)) == -1)
 			return (-1);
-		RB_FOREACH_SAFE(psi, prefixset_tree, &ps->psitems, npsi) {
-			struct roa_set *rs;
-			size_t i, l, n;
-			RB_REMOVE(prefixset_tree, &ps->psitems, psi);
-			rs = set_get(psi->set, &n);
-			for (i = 0; i < n; i += l) {
-				l = (n - i > 1024 ? 1024 : n - i);
-				if (imsg_compose(ibuf_rde,
-				    IMSG_RECONF_ROA_SET_ITEMS,
-				    0, 0, -1, rs + i, l * sizeof(*rs)) == -1)
-					return -1;
-			}
-			if (imsg_compose(ibuf_rde, IMSG_RECONF_PREFIX_SET_ITEM,
-			    0, 0, -1, psi, sizeof(*psi)) == -1)
+		RB_FOREACH_SAFE(roa, roa_tree, &ps->roaitems, nroa) {
+			RB_REMOVE(roa_tree, &ps->roaitems, roa);
+			if (imsg_compose(ibuf_rde, IMSG_RECONF_ROA_ITEM, 0, 0,
+			    -1, roa, sizeof(*roa)) == -1)
 				return (-1);
-			set_free(psi->set);
-			free(psi);
+			free(roa);
 		}
 		free(ps);
 	}
@@ -605,23 +599,12 @@ send_config(struct bgpd_config *conf)
 		if (imsg_compose(ibuf_rde, IMSG_RECONF_ROA_SET, 0, 0, -1,
 		    NULL, 0) == -1)
 			return (-1);
-		RB_FOREACH_SAFE(psi, prefixset_tree, &conf->roa, npsi) {
-			struct roa_set *rs;
-			size_t i, l, n;
-			RB_REMOVE(prefixset_tree, &conf->roa, psi);
-			rs = set_get(psi->set, &n);
-			for (i = 0; i < n; i += l) {
-				l = (n - i > 1024 ? 1024 : n - i);
-				if (imsg_compose(ibuf_rde,
-				    IMSG_RECONF_ROA_SET_ITEMS,
-				    0, 0, -1, rs + i, l * sizeof(*rs)) == -1)
-					return -1;
-			}
-			if (imsg_compose(ibuf_rde, IMSG_RECONF_PREFIX_SET_ITEM,
-			    0, 0, -1, psi, sizeof(*psi)) == -1)
+		RB_FOREACH_SAFE(roa, roa_tree, &conf->roa, nroa) {
+			RB_REMOVE(roa_tree, &conf->roa, roa);
+			if (imsg_compose(ibuf_rde, IMSG_RECONF_ROA_ITEM, 0, 0,
+			    -1, roa, sizeof(*roa)) == -1)
 				return (-1);
-			set_free(psi->set);
-			free(psi);
+			free(roa);
 		}
 	}
 
@@ -736,7 +719,7 @@ dispatch_imsg(struct imsgbuf *ibuf, int idx, struct bgpd_config *conf)
 
 		switch (imsg.hdr.type) {
 		case IMSG_KROUTE_CHANGE:
-			if (idx != PFD_PIPE_ROUTE)
+			if (idx != PFD_PIPE_RDE)
 				log_warnx("route request not from RDE");
 			else if (imsg.hdr.len != IMSG_HEADER_SIZE +
 			    sizeof(struct kroute_full))
@@ -746,7 +729,7 @@ dispatch_imsg(struct imsgbuf *ibuf, int idx, struct bgpd_config *conf)
 				rv = -1;
 			break;
 		case IMSG_KROUTE_DELETE:
-			if (idx != PFD_PIPE_ROUTE)
+			if (idx != PFD_PIPE_RDE)
 				log_warnx("route request not from RDE");
 			else if (imsg.hdr.len != IMSG_HEADER_SIZE +
 			    sizeof(struct kroute_full))
@@ -756,7 +739,7 @@ dispatch_imsg(struct imsgbuf *ibuf, int idx, struct bgpd_config *conf)
 				rv = -1;
 			break;
 		case IMSG_KROUTE_FLUSH:
-			if (idx != PFD_PIPE_ROUTE)
+			if (idx != PFD_PIPE_RDE)
 				log_warnx("route request not from RDE");
 			else if (imsg.hdr.len != IMSG_HEADER_SIZE)
 				log_warnx("wrong imsg len");
@@ -764,7 +747,7 @@ dispatch_imsg(struct imsgbuf *ibuf, int idx, struct bgpd_config *conf)
 				rv = -1;
 			break;
 		case IMSG_NEXTHOP_ADD:
-			if (idx != PFD_PIPE_ROUTE)
+			if (idx != PFD_PIPE_RDE)
 				log_warnx("nexthop request not from RDE");
 			else if (imsg.hdr.len != IMSG_HEADER_SIZE +
 			    sizeof(struct bgpd_addr))
@@ -774,7 +757,7 @@ dispatch_imsg(struct imsgbuf *ibuf, int idx, struct bgpd_config *conf)
 				rv = -1;
 			break;
 		case IMSG_NEXTHOP_REMOVE:
-			if (idx != PFD_PIPE_ROUTE)
+			if (idx != PFD_PIPE_RDE)
 				log_warnx("nexthop request not from RDE");
 			else if (imsg.hdr.len != IMSG_HEADER_SIZE +
 			    sizeof(struct bgpd_addr))
@@ -784,7 +767,7 @@ dispatch_imsg(struct imsgbuf *ibuf, int idx, struct bgpd_config *conf)
 				    conf);
 			break;
 		case IMSG_PFTABLE_ADD:
-			if (idx != PFD_PIPE_ROUTE)
+			if (idx != PFD_PIPE_RDE)
 				log_warnx("pftable request not from RDE");
 			else
 				if (imsg.hdr.len != IMSG_HEADER_SIZE +
@@ -794,7 +777,7 @@ dispatch_imsg(struct imsgbuf *ibuf, int idx, struct bgpd_config *conf)
 					rv = -1;
 			break;
 		case IMSG_PFTABLE_REMOVE:
-			if (idx != PFD_PIPE_ROUTE)
+			if (idx != PFD_PIPE_RDE)
 				log_warnx("pftable request not from RDE");
 			else
 				if (imsg.hdr.len != IMSG_HEADER_SIZE +
@@ -804,7 +787,7 @@ dispatch_imsg(struct imsgbuf *ibuf, int idx, struct bgpd_config *conf)
 					rv = -1;
 			break;
 		case IMSG_PFTABLE_COMMIT:
-			if (idx != PFD_PIPE_ROUTE)
+			if (idx != PFD_PIPE_RDE)
 				log_warnx("pftable request not from RDE");
 			else if (imsg.hdr.len != IMSG_HEADER_SIZE)
 				log_warnx("wrong imsg len");
@@ -829,6 +812,10 @@ dispatch_imsg(struct imsgbuf *ibuf, int idx, struct bgpd_config *conf)
 			else {
 				reconfig = 1;
 				reconfpid = imsg.hdr.pid;
+				if (imsg.hdr.len == IMSG_HEADER_SIZE +
+				    REASON_LEN && ((char *)imsg.data)[0])
+					log_info("reload due to: %s",
+					    log_reason(imsg.data));
 			}
 			break;
 		case IMSG_CTL_FIB_COUPLE:

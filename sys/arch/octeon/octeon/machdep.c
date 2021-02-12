@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.119 2019/12/20 13:34:41 visa Exp $ */
+/*	$OpenBSD: machdep.c,v 1.129 2021/02/04 16:16:11 visa Exp $ */
 
 /*
  * Copyright (c) 2009, 2010 Miodrag Vallat.
@@ -99,8 +99,10 @@ struct uvm_constraint_range *uvm_md_constraints[] = { NULL };
 vm_map_t exec_map;
 vm_map_t phys_map;
 
+extern struct timecounter cp0_timecounter;
 extern uint8_t dt_blob_start[];
 
+enum octeon_board octeon_board;
 struct boot_desc *octeon_boot_desc;
 struct boot_info *octeon_boot_info;
 
@@ -133,10 +135,12 @@ void		dumpconf(void);
 vaddr_t		mips_init(register_t, register_t, register_t, register_t);
 int		is_memory_range(paddr_t, psize_t, psize_t);
 void		octeon_memory_init(struct boot_info *);
+void		octeon_sync_tc(vaddr_t, uint64_t, uint64_t);
 int		octeon_cpuspeed(int *);
 void		octeon_tlb_init(void);
 static void	process_bootargs(void);
 static uint64_t	get_ncpusfound(void);
+static enum octeon_board get_octeon_board(void);
 
 cons_decl(octuart);
 struct consdev uartcons = cons_init(octuart);
@@ -151,9 +155,34 @@ struct timecounter ioclock_timecounter = {
 	.tc_name = "ioclock",
 	.tc_quality = 0,		/* ioclock can be overridden
 					 * by cp0 counter */
-	.tc_priv = 0			/* clock register,
+	.tc_priv = 0,			/* clock register,
 					 * determined at runtime */
+	.tc_user = 0,			/* expose to user */
 };
+
+static int
+atoi(const char *s)
+{
+	int n, neg;
+
+	n = 0;
+	neg = 0;
+
+	while (*s == '-') {
+		s++;
+		neg = !neg;
+	}
+
+	while (*s != '\0') {
+		if (*s < '0' || *s > '9')
+			break;
+
+		n = (10 * n) + (*s - '0');
+		s++;
+	}
+
+	return (neg ? -n : n);
+}
 
 static struct octeon_bootmem_block *
 pa_to_block(paddr_t addr)
@@ -249,6 +278,7 @@ mips_init(register_t a0, register_t a1, register_t a2, register_t a3)
 {
 	uint prid;
 	vaddr_t xtlb_handler;
+	size_t len;
 	int i;
 	struct boot_desc *boot_desc;
 	struct boot_info *boot_info;
@@ -413,8 +443,8 @@ mips_init(register_t a0, register_t a1, register_t a2, register_t a3)
 		 bootcpu_hwinfo.clock / 1000000);
 
 	cpu_cpuspeed = octeon_cpuspeed;
-
 	ncpusfound = get_ncpusfound();
+	octeon_board = get_octeon_board();
 
 	process_bootargs();
 
@@ -500,6 +530,17 @@ mips_init(register_t a0, register_t a1, register_t a2, register_t a3)
 		panic("cannot run without physical CPU 0");
 
 	/*
+	 * Use bits of board information to improve initial entropy.
+	 */
+	enqueue_randomness((octeon_boot_info->board_type << 16) |
+	    (octeon_boot_info->board_rev_major << 8) |
+	    octeon_boot_info->board_rev_minor);
+	len = strnlen(octeon_boot_info->board_serial,
+	    sizeof(octeon_boot_info->board_serial));
+	for (i = 0; i < len; i++)
+		enqueue_randomness(octeon_boot_info->board_serial[i]);
+
+	/*
 	 * Init message buffer.
 	 */
 	msgbufbase = (caddr_t)pmap_steal_memory(MSGBUFSIZE, NULL,NULL);
@@ -551,6 +592,7 @@ mips_init(register_t a0, register_t a1, register_t a2, register_t a3)
 
 	switch (octeon_model_family(prid)) {
 	case OCTEON_MODEL_FAMILY_CN73XX:
+	case OCTEON_MODEL_FAMILY_CN78XX:
 		ioclock_timecounter.tc_priv = (void *)FPA3_CLK_COUNT;
 		break;
 	default:
@@ -559,6 +601,10 @@ mips_init(register_t a0, register_t a1, register_t a2, register_t a3)
 	}
 	ioclock_timecounter.tc_frequency = octeon_ioclock_speed();
 	tc_init(&ioclock_timecounter);
+
+	cpu_has_synced_cp0_count = 1;
+	cp0_timecounter.tc_quality = 1000;
+	cp0_timecounter.tc_user = TC_CP0_COUNT;
 
 	/*
 	 * Return the new kernel stack pointer.
@@ -658,7 +704,7 @@ octeon_ioclock_speed(void)
 void
 octeon_tlb_init(void)
 {
-	uint64_t cvmmemctl;
+	uint64_t clk_reg, cvmmemctl, frac, cmul, imul, val;
 	uint32_t hwrena = 0;
 	uint32_t pgrain = 0;
 	int chipid;
@@ -679,6 +725,58 @@ octeon_tlb_init(void)
 	 * Make sure Coprocessor 2 is disabled.
 	 */
 	setsr(getsr() & ~SR_COP_2_BIT);
+
+	/*
+	 * Synchronize this core's cycle counter with the system-wide
+	 * IO clock counter.
+	 *
+	 * The IO clock counter's value has to be scaled from the IO clock
+	 * frequency domain to the core clock frequency domain:
+	 *
+	 * cclk / cmul = iclk / imul
+	 * cclk = iclk * cmul / imul
+	 *
+	 * Division is very slow and possibly variable-time on the system,
+	 * so the synchronization routine uses multiplication:
+	 *
+	 * cclk = iclk * cmul * frac / 2^64,
+	 *
+	 * where frac = 2^64 / imul is precomputed.
+	 */
+	switch (octeon_model_family(chipid)) {
+	case OCTEON_MODEL_FAMILY_CN73XX:
+	case OCTEON_MODEL_FAMILY_CN78XX:
+		clk_reg = FPA3_CLK_COUNT;
+		break;
+	default:
+		clk_reg = IPD_CLK_COUNT;
+		break;
+	}
+	switch (octeon_ver) {
+	case OCTEON_2:
+		val = octeon_xkphys_read_8(MIO_RST_BOOT);
+		cmul = (val >> MIO_RST_BOOT_C_MUL_SHIFT) &
+		    MIO_RST_BOOT_C_MUL_MASK;
+		imul = (val >> MIO_RST_BOOT_PNR_MUL_SHIFT) &
+		    MIO_RST_BOOT_PNR_MUL_MASK;
+		break;
+	case OCTEON_3:
+		val = octeon_xkphys_read_8(RST_BOOT);
+		cmul = (val >> RST_BOOT_C_MUL_SHIFT) &
+		    RST_BOOT_C_MUL_MASK;
+		imul = (val >> RST_BOOT_PNR_MUL_SHIFT) &
+		    RST_BOOT_PNR_MUL_MASK;
+		break;
+	default:
+		cmul = 1;
+		imul = 1;
+		break;
+	}
+	frac = ((1ULL << 63) / imul) * 2;
+	octeon_sync_tc(PHYS_TO_XKPHYS(clk_reg, CCA_NC), cmul, frac);
+
+	/* Let userspace access the cycle counter. */
+	hwrena |= HWRENA_CC;
 
 	/*
 	 * If the UserLocal register is available, let userspace
@@ -726,6 +824,38 @@ get_ncpusfound(void)
 	return ncpus;
 }
 
+static enum octeon_board
+get_octeon_board(void)
+{
+	switch (octeon_boot_info->board_type) {
+	case 11:
+		return BOARD_CN3010_EVB_HS5;
+	case 20002:
+		return BOARD_UBIQUITI_E100;
+	case 20003:
+		return BOARD_UBIQUITI_E200;
+	case 20004:
+		/* E120 has two cores, whereas UTM25 has one core. */
+		if (ncpusfound == 1)
+			return BOARD_NETGEAR_UTM25;
+		return BOARD_UBIQUITI_E120;
+	case 20005:
+		return BOARD_UBIQUITI_E220;
+	case 20010:
+		return BOARD_UBIQUITI_E1000;
+	case 20012:
+		return BOARD_RHINOLABS_UTM8;
+	case 20015:
+		return BOARD_DLINK_DSR_500;
+	case 20300:
+		return BOARD_UBIQUITI_E300;
+	default:
+		break;
+	}
+
+	return BOARD_UNKNOWN;
+}
+
 static void
 process_bootargs(void)
 {
@@ -747,10 +877,11 @@ process_bootargs(void)
 		printf("boot_desc->argv[%d] = %s\n", i, arg);
 #endif
 
-		/*
-		 * XXX: We currently only expect one other argument,
-		 * rootdev=ROOTDEV.
-		 */
+		if (strncmp(arg, "boothowto=", 10) == 0) {
+			boothowto = atoi(arg + 10);
+			continue;
+		}
+
 		if (strncmp(arg, "rootdev=", 8) == 0) {
 			parse_uboot_root(arg + 8);
 			continue;

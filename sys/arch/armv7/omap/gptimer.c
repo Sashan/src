@@ -1,4 +1,4 @@
-/* $OpenBSD: gptimer.c,v 1.7 2019/05/06 03:45:58 mlarkin Exp $ */
+/* $OpenBSD: gptimer.c,v 1.11 2021/01/19 18:04:43 kettenis Exp $ */
 /*
  * Copyright (c) 2007,2009 Dale Rahn <drahn@openbsd.org>
  *
@@ -98,10 +98,6 @@
 
 static struct evcount clk_count;
 static struct evcount stat_count;
-#define GPT1_IRQ  38
-#define GPTIMER0_IRQ	38
-
-//static int clk_irq = GPT1_IRQ; /* XXX 37 */
 
 void gptimer_attach(struct device *parent, struct device *self, void *args);
 int gptimer_intr(void *frame);
@@ -117,7 +113,7 @@ int gptimer_irq = 0;
 u_int gptimer_get_timecount(struct timecounter *);
 
 static struct timecounter gptimer_timecounter = {
-	gptimer_get_timecount, NULL, 0x7fffffff, 0, "gptimer", 0, NULL
+	gptimer_get_timecount, NULL, 0xffffffff, 0, "gptimer", 0, NULL, 0
 };
 
 volatile u_int32_t nexttickevent;
@@ -274,14 +270,13 @@ gptimer_intr(void *frame)
 
 /*
  * would be interesting to play with trigger mode while having one timer
- * in 32KHz mode, and the other timer running in sysclk mode and use
+ * in 32kHz mode, and the other timer running in sysclk mode and use
  * the high resolution speeds (matters more for delay than tick timer
  */
 
 void
 gptimer_cpu_initclocks()
 {
-//	u_int32_t now;
 	stathz = 128;
 	profhz = 1024;
 

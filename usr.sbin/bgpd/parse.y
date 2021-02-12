@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.405 2020/03/16 14:47:30 claudio Exp $ */
+/*	$OpenBSD: parse.y,v 1.412 2021/01/25 09:15:23 claudio Exp $ */
 
 /*
  * Copyright (c) 2002, 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -94,7 +94,7 @@ static struct peer		*curgroup;
 static struct rde_rib		*currib;
 static struct l3vpn		*curvpn;
 static struct prefixset		*curpset, *curoset;
-static struct prefixset_tree	*curpsitree;
+static struct roa_tree		*curroatree;
 static struct filter_head	*filter_l;
 static struct filter_head	*peerfilter_l;
 static struct filter_head	*groupfilter_l;
@@ -498,9 +498,9 @@ prefixset_item	: prefix prefixlenop			{
 		;
 
 roa_set		: ROASET '{' optnl		{
-			curpsitree = &conf->roa;
+			curroatree = &conf->roa;
 		} roa_set_l optnl '}'			{
-			curpsitree = NULL;
+			curroatree = NULL;
 		}
 		| ROASET '{' optnl '}'		/* nothing */
 		;
@@ -510,12 +510,12 @@ origin_set	: ORIGINSET STRING '{' optnl		{
 				free($2);
 				YYERROR;
 			}
-			curpsitree = &curoset->psitems;
+			curroatree = &curoset->roaitems;
 			free($2);
 		} roa_set_l optnl '}'			{
 			SIMPLEQ_INSERT_TAIL(&conf->originsets, curoset, entry);
 			curoset = NULL;
-			curpsitree = NULL;
+			curroatree = NULL;
 		}
 		| ORIGINSET STRING '{' optnl '}'		{
 			if ((curoset = new_prefix_set($2, 1)) == NULL) {
@@ -525,7 +525,7 @@ origin_set	: ORIGINSET STRING '{' optnl		{
 			free($2);
 			SIMPLEQ_INSERT_TAIL(&conf->originsets, curoset, entry);
 			curoset = NULL;
-			curpsitree = NULL;
+			curroatree = NULL;
 		}
 		;
 
@@ -537,6 +537,7 @@ roa_set_l	: prefixset_item SOURCEAS as4number_any			{
 				YYERROR;
 			}
 			add_roa_set($1, $3, $1->p.len_max);
+			free($1);
 		}
 		| roa_set_l comma prefixset_item SOURCEAS as4number_any	{
 			if ($3->p.len_min != $3->p.len) {
@@ -546,6 +547,7 @@ roa_set_l	: prefixset_item SOURCEAS as4number_any			{
 				YYERROR;
 			}
 			add_roa_set($3, $5, $3->p.len_max);
+			free($3);
 		}
 		;
 
@@ -620,6 +622,12 @@ conf_main	: AS as4number		{
 				conf->flags |= BGPD_FLAG_DECISION_TRANS_AS;
 			else
 				conf->flags &= ~BGPD_FLAG_DECISION_TRANS_AS;
+		}
+		| REJECT ASSET yesno	{
+			if ($3 == 1)
+				conf->flags |= BGPD_FLAG_NO_AS_SET;
+			else
+				conf->flags &= ~BGPD_FLAG_NO_AS_SET;
 		}
 		| LOG STRING		{
 			if (!strcmp($2, "updates"))
@@ -1178,8 +1186,10 @@ neighbor	: {	curpeer = new_peer(); }
 			curpeer_filter[0] = NULL;
 			curpeer_filter[1] = NULL;
 
-			if (neighbor_consistent(curpeer) == -1)
+			if (neighbor_consistent(curpeer) == -1) {
+				free(curpeer);
 				YYERROR;
+			}
 			if (RB_INSERT(peer_head, new_peers, curpeer) != NULL)
 				fatalx("%s: peer tree is corrupt", __func__);
 			curpeer = curgroup;
@@ -1194,11 +1204,13 @@ group		: GROUP string			{
 				yyerror("group name \"%s\" too long: max %zu",
 				    $2, sizeof(curgroup->conf.group) - 1);
 				free($2);
+				free(curgroup);
 				YYERROR;
 			}
 			free($2);
 			if (get_id(curgroup)) {
 				yyerror("get_id failed");
+				free(curgroup);
 				YYERROR;
 			}
 		} '{' groupopts_l '}'		{
@@ -1260,8 +1272,27 @@ peeropts	: REMOTEAS as4number	{
 			free($2);
 		}
 		| LOCALADDR address	{
-			memcpy(&curpeer->conf.local_addr, &$2,
-			    sizeof(curpeer->conf.local_addr));
+			if ($2.aid == AID_INET)
+				memcpy(&curpeer->conf.local_addr_v4, &$2,
+				    sizeof(curpeer->conf.local_addr_v4));
+			else if ($2.aid == AID_INET6)
+				memcpy(&curpeer->conf.local_addr_v6, &$2,
+				    sizeof(curpeer->conf.local_addr_v6));
+			else {
+				yyerror("Unsupported address family %s for "
+				    "local-addr", aid2str($2.aid));
+				YYERROR;
+			}
+		}
+		| yesno LOCALADDR	{
+			if ($1) {
+				yyerror("bad local-address definition");
+				YYERROR;
+			}
+			memset(&curpeer->conf.local_addr_v4, 0,
+			    sizeof(curpeer->conf.local_addr_v4));
+			memset(&curpeer->conf.local_addr_v6, 0,
+			    sizeof(curpeer->conf.local_addr_v6));
 		}
 		| MULTIHOP NUMBER	{
 			if ($2 < 2 || $2 > 255) {
@@ -1278,9 +1309,9 @@ peeropts	: REMOTEAS as4number	{
 		}
 		| DOWN STRING		{
 			curpeer->conf.down = 1;
-			if (strlcpy(curpeer->conf.shutcomm, $2,
-				sizeof(curpeer->conf.shutcomm)) >=
-				sizeof(curpeer->conf.shutcomm)) {
+			if (strlcpy(curpeer->conf.reason, $2,
+				sizeof(curpeer->conf.reason)) >=
+				sizeof(curpeer->conf.reason)) {
 				    yyerror("shutdown reason too long");
 				    free($2);
 				    YYERROR;
@@ -1546,7 +1577,7 @@ peeropts	: REMOTEAS as4number	{
 			if (merge_filterset(&r->set, $2) == -1)
 				YYERROR;
 		}
-		| SET "{" optnl filter_set_l optnl "}"	{
+		| SET '{' optnl filter_set_l optnl '}'	{
 			struct filter_rule	*r;
 			struct filter_set	*s;
 
@@ -1631,6 +1662,12 @@ peeropts	: REMOTEAS as4number	{
 				YYERROR;
 			}
 			free($2);
+		}
+		| REJECT ASSET yesno	{
+			if ($3 == 1)
+				curpeer->conf.flags |= PEERFLAG_NO_AS_SET;
+			else
+				curpeer->conf.flags &= ~PEERFLAG_NO_AS_SET;
 		}
 		;
 
@@ -2333,7 +2370,7 @@ filter_set	: /* empty */					{ $$ = NULL; }
 			TAILQ_INIT($$);
 			TAILQ_INSERT_TAIL($$, $2, entry);
 		}
-		| SET "{" optnl filter_set_l optnl "}"	{ $$ = $4; }
+		| SET '{' optnl filter_set_l optnl '}'	{ $$ = $4; }
 		;
 
 filter_set_l	: filter_set_l comma filter_set_opt	{
@@ -3790,6 +3827,8 @@ alloc_peer(void)
 
 	if (conf->flags & BGPD_FLAG_DECISION_TRANS_AS)
 		p->conf.flags |= PEERFLAG_TRANS_AS;
+	if (conf->flags & BGPD_FLAG_NO_AS_SET)
+		p->conf.flags |= PEERFLAG_NO_AS_SET;
 
 	return (p);
 }
@@ -3968,7 +4007,9 @@ get_id(struct peer *newpeer)
 		/* neighbor */
 		if (cur_peers)
 			RB_FOREACH(p, peer_head, cur_peers)
-				if (memcmp(&p->conf.remote_addr,
+				if (p->conf.remote_masklen ==
+				    newpeer->conf.remote_masklen &&
+				    memcmp(&p->conf.remote_addr,
 				    &newpeer->conf.remote_addr,
 				    sizeof(p->conf.remote_addr)) == 0)
 					break;
@@ -4176,11 +4217,18 @@ str2key(char *s, char *dest, size_t max_len)
 int
 neighbor_consistent(struct peer *p)
 {
-	/* local-address and peer's address: same address family */
-	if (p->conf.local_addr.aid &&
-	    p->conf.local_addr.aid != p->conf.remote_addr.aid) {
-		yyerror("local-address and neighbor address "
-		    "must be of the same address family");
+	struct bgpd_addr *local_addr;
+	struct peer *xp;
+
+	switch (p->conf.remote_addr.aid) {
+	case AID_INET:
+		local_addr = &p->conf.local_addr_v4;
+		break;
+	case AID_INET6:
+		local_addr = &p->conf.local_addr_v6;
+		break;
+	default:
+		yyerror("Bad address family for remote-addr");
 		return (-1);
 	}
 
@@ -4189,7 +4237,7 @@ neighbor_consistent(struct peer *p)
 	    p->conf.auth.method == AUTH_IPSEC_IKE_AH ||
 	    p->conf.auth.method == AUTH_IPSEC_MANUAL_ESP ||
 	    p->conf.auth.method == AUTH_IPSEC_MANUAL_AH) &&
-	    !p->conf.local_addr.aid) {
+	    local_addr->aid == AID_UNSPEC) {
 		yyerror("neighbors with any form of IPsec configured "
 		    "need local-address to be specified");
 		return (-1);
@@ -4226,6 +4274,21 @@ neighbor_consistent(struct peer *p)
 	if (p->conf.reflector_client && p->conf.ebgp) {
 		yyerror("EBGP neighbors are not allowed in route "
 		    "reflector clusters");
+		return (-1);
+	}
+
+	/* check for duplicate peer definitions */
+	RB_FOREACH(xp, peer_head, new_peers)
+		if (xp->conf.remote_masklen ==
+		    p->conf.remote_masklen &&
+		    memcmp(&xp->conf.remote_addr,
+		    &p->conf.remote_addr,
+		    sizeof(p->conf.remote_addr)) == 0)
+			break;
+	if (xp != NULL) {
+		char *descr = log_fmt_peer(&p->conf);
+		yyerror("duplicate %s", descr);
+		free(descr);
 		return (-1);
 	}
 
@@ -4455,7 +4518,7 @@ new_prefix_set(char *name, int is_roa)
 	struct prefixset *pset;
 
 	if (is_roa) {
-		type = "roa-set";
+		type = "origin-set";
 		sets = &conf->originsets;
 	}
 
@@ -4473,36 +4536,35 @@ new_prefix_set(char *name, int is_roa)
 		return NULL;
 	}
 	RB_INIT(&pset->psitems);
+	RB_INIT(&pset->roaitems);
 	return pset;
 }
 
 static void
 add_roa_set(struct prefixset_item *npsi, u_int32_t as, u_int8_t max)
 {
-	struct prefixset_item	*psi;
-	struct roa_set rs, *rsp;
+	struct roa *roa, *r;
 
-	/* no prefixlen option in this tree */
-	npsi->p.op = OP_NONE;
-	npsi->p.len_max = npsi->p.len_min = npsi->p.len;
-	psi = RB_INSERT(prefixset_tree, curpsitree, npsi);
-	if (psi == NULL)
-		psi = npsi;
+	if ((roa = calloc(1, sizeof(*roa))) == NULL)
+		fatal("add_roa_set");
 
-	if (psi->set == NULL)
-		if ((psi->set = set_new(1, sizeof(rs))) == NULL)
-			fatal("set_new");
-
-	/* merge sets with same key, longer maxlen wins */
-	if ((rsp = set_match(psi->set, as)) != NULL) {
-		if (rsp->maxlen < max)
-			rsp->maxlen = max;
-	} else  {
-		rs.as = as;
-		rs.maxlen = max;
-		if (set_add(psi->set, &rs, 1) != 0)
-			fatal("as_set_new");
-		/* prep data so that set_match works */
-		set_prep(psi->set);
+	roa->aid = npsi->p.addr.aid;
+	roa->prefixlen = npsi->p.len;
+	roa->maxlen = max;
+	roa->asnum = as;
+	switch (roa->aid) {
+	case AID_INET:
+		roa->prefix.inet = npsi->p.addr.v4;
+		break;
+	case AID_INET6:
+		roa->prefix.inet6 = npsi->p.addr.v6;
+		break;
+	default:
+		fatalx("Bad address family for roa_set address");
 	}
+
+	r = RB_INSERT(roa_tree, curroatree, roa);
+	if (r != NULL)
+		/* just ignore duplicates */
+		free(roa);
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.146 2019/09/06 12:22:01 deraadt Exp $	*/
+/*	$OpenBSD: trap.c,v 1.152 2020/10/22 13:41:51 deraadt Exp $	*/
 
 /*
  * Copyright (c) 1998-2004 Michael Shalayeff
@@ -152,13 +152,12 @@ trap(int type, struct trapframe *frame)
 	vaddr_t va;
 	struct vm_map *map;
 	struct vmspace *vm;
-	register vm_prot_t vftype;
+	register vm_prot_t access_type;
 	register pa_space_t space;
 	union sigval sv;
 	u_int opcode;
 	int ret, trapnum;
 	const char *tts;
-	vm_fault_t fault = VM_FAULT_INVALID;
 #ifdef DIAGNOSTIC
 	int oldcpl = curcpu()->ci_cpl;
 #endif
@@ -170,16 +169,16 @@ trap(int type, struct trapframe *frame)
 	    trapnum == T_IDEBUG || trapnum == T_PERFMON) {
 		va = frame->tf_iioq_head;
 		space = frame->tf_iisq_head;
-		vftype = PROT_EXEC;
+		access_type = PROT_EXEC;
 	} else {
 		va = frame->tf_ior;
 		space = frame->tf_isr;
 		if (va == frame->tf_iioq_head)
-			vftype = PROT_EXEC;
+			access_type = PROT_EXEC;
 		else if (inst_store(opcode))
-			vftype = PROT_WRITE;
+			access_type = PROT_WRITE;
 		else
-			vftype = PROT_READ;
+			access_type = PROT_READ;
 	}
 
 	if (frame->tf_flags & TFF_LAST)
@@ -213,13 +212,8 @@ trap(int type, struct trapframe *frame)
 		mtctl(frame->tf_eiem, CR_EIEM);
 	}
 
-	if (type & T_USER) {
+	if (type & T_USER)
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto out;
-	}
 
 	switch (type) {
 	case T_NONEXIST:
@@ -328,9 +322,7 @@ trap(int type, struct trapframe *frame)
 		fpp[0] &= ~(((u_int64_t)HPPA_FPU_T) << 32);
 
 		sv.sival_int = va;
-		KERNEL_LOCK();
 		trapsignal(p, SIGFPE, type & ~T_USER, flt, sv);
-		KERNEL_UNLOCK();
 		}
 		break;
 
@@ -340,30 +332,22 @@ trap(int type, struct trapframe *frame)
 
 	case T_EMULATION | T_USER:
 		sv.sival_int = va;
-		KERNEL_LOCK();
 		trapsignal(p, SIGILL, type & ~T_USER, ILL_COPROC, sv);
-		KERNEL_UNLOCK();
 		break;
 
 	case T_OVERFLOW | T_USER:
 		sv.sival_int = va;
-		KERNEL_LOCK();
 		trapsignal(p, SIGFPE, type & ~T_USER, FPE_INTOVF, sv);
-		KERNEL_UNLOCK();
 		break;
 
 	case T_CONDITION | T_USER:
 		sv.sival_int = va;
-		KERNEL_LOCK();
 		trapsignal(p, SIGFPE, type & ~T_USER, FPE_INTDIV, sv);
-		KERNEL_UNLOCK();
 		break;
 
 	case T_PRIV_OP | T_USER:
 		sv.sival_int = va;
-		KERNEL_LOCK();
 		trapsignal(p, SIGILL, type & ~T_USER, ILL_PRVOPC, sv);
-		KERNEL_UNLOCK();
 		break;
 
 	case T_PRIV_REG | T_USER:
@@ -379,16 +363,14 @@ trap(int type, struct trapframe *frame)
 			register_t cr;
 
 			if (((opcode >> 21) & 0x1f) == 27)
-				mfctl(CR_TR3, cr);	/* cr27 */
+				cr = frame->tf_cr27;	/* cr27 */
 			else
-				mfctl(CR_TR2, cr);	/* cr26 */
+				cr = 0;			/* cr26 */
 			frame_regmap(frame, opcode & 0x1f) = cr;
 			frame->tf_ipsw |= PSL_N;
 		} else {
 			sv.sival_int = va;
-			KERNEL_LOCK();
 			trapsignal(p, SIGILL, type & ~T_USER, ILL_PRVREG, sv);
-			KERNEL_UNLOCK();
 		}
 		break;
 
@@ -397,9 +379,7 @@ trap(int type, struct trapframe *frame)
 	case T_LOWERPL | T_USER:
 	case T_DATAPID | T_USER:
 		sv.sival_int = va;
-		KERNEL_LOCK();
-		trapsignal(p, SIGSEGV, vftype, SEGV_ACCERR, sv);
-		KERNEL_UNLOCK();
+		trapsignal(p, SIGSEGV, access_type, SEGV_ACCERR, sv);
 		break;
 
 	/*
@@ -416,9 +396,7 @@ trap(int type, struct trapframe *frame)
 		}
 
 		sv.sival_int = va;
-		KERNEL_LOCK();
-		trapsignal(p, SIGSEGV, vftype, SEGV_ACCERR, sv);
-		KERNEL_UNLOCK();
+		trapsignal(p, SIGSEGV, access_type, SEGV_ACCERR, sv);
 		break;
 
 	case T_ITLBMISSNA:
@@ -451,7 +429,7 @@ trap(int type, struct trapframe *frame)
 			if ((type & T_USER && space == HPPA_SID_KERNEL) ||
 			    (frame->tf_iioq_head & 3) != pl ||
 			    (type & T_USER && va >= VM_MAXUSER_ADDRESS) ||
-			    uvm_fault(map, trunc_page(va), fault,
+			    uvm_fault(map, trunc_page(va), 0,
 			     opcode & 0x40? PROT_WRITE : PROT_READ)) {
 				frame_regmap(frame, opcode & 0x1f) = 0;
 				frame->tf_ipsw |= PSL_N;
@@ -460,9 +438,7 @@ trap(int type, struct trapframe *frame)
 			KERNEL_UNLOCK();
 		} else if (type & T_USER) {
 			sv.sival_int = va;
-			KERNEL_LOCK();
 			trapsignal(p, SIGILL, type & ~T_USER, ILL_ILLTRP, sv);
-			KERNEL_UNLOCK();
 		} else
 			panic("trap: %s @ 0x%lx:0x%lx for 0x%x:0x%lx irr 0x%08x",
 			    tts, frame->tf_iisq_head, frame->tf_iioq_head,
@@ -475,11 +451,17 @@ trap(int type, struct trapframe *frame)
 	case T_DATACC:
 	case T_DATACC | T_USER:
 datacc:
-		fault = VM_FAULT_PROTECT;
 	case T_ITLBMISS:
 	case T_ITLBMISS | T_USER:
 	case T_DTLBMISS:
 	case T_DTLBMISS | T_USER:
+		if (type & T_USER) {
+			if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+			    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+			    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+				goto out;
+		}
+
 		/*
 		 * it could be a kernel map for exec_map faults
 		 */
@@ -501,15 +483,13 @@ datacc:
 		if ((type & T_USER && va >= VM_MAXUSER_ADDRESS) ||
 		   (type & T_USER && map->pmap->pm_space != space)) {
 			sv.sival_int = va;
-			KERNEL_LOCK();
-			trapsignal(p, SIGSEGV, vftype, SEGV_MAPERR, sv);
-			KERNEL_UNLOCK();
+			trapsignal(p, SIGSEGV, access_type, SEGV_MAPERR, sv);
 			break;
 		}
 
 		KERNEL_LOCK();
-
-		ret = uvm_fault(map, trunc_page(va), fault, vftype);
+		ret = uvm_fault(map, trunc_page(va), 0, access_type);
+		KERNEL_UNLOCK();
 
 		/*
 		 * If this was a stack access we keep track of the maximum
@@ -518,11 +498,8 @@ datacc:
 		 * the current limit and we need to reflect that as an access
 		 * error.
 		 */
-		if (ret == 0 && space != HPPA_SID_KERNEL &&
-		    va < (vaddr_t)vm->vm_minsaddr)
+		if (ret == 0 && space != HPPA_SID_KERNEL)
 			uvm_grow(p, va);
-
-		KERNEL_UNLOCK();
 
 		if (ret != 0) {
 			if (type & T_USER) {
@@ -537,9 +514,7 @@ datacc:
 					sicode = BUS_OBJERR;
 				}
 				sv.sival_int = va;
-				KERNEL_LOCK();
-				trapsignal(p, signal, vftype, sicode, sv);
-				KERNEL_UNLOCK();
+				trapsignal(p, signal, access_type, sicode, sv);
 			} else {
 				if (p && p->p_addr->u_pcb.pcb_onfault) {
 					frame->tf_iioq_tail = 4 +
@@ -550,8 +525,8 @@ datacc:
 #endif
 				} else {
 					panic("trap: "
-					    "uvm_fault(%p, %lx, %d, %d): %d",
-					    map, va, fault, vftype, ret);
+					    "uvm_fault(%p, %lx, 0, %d): %d",
+					    map, va, access_type, ret);
 				}
 			}
 		}
@@ -573,9 +548,7 @@ datacc:
 	case T_DATALIGN | T_USER:
 datalign_user:
 		sv.sival_int = va;
-		KERNEL_LOCK();
-		trapsignal(p, SIGBUS, vftype, BUS_ADRALN, sv);
-		KERNEL_UNLOCK();
+		trapsignal(p, SIGBUS, access_type, BUS_ADRALN, sv);
 		break;
 
 	case T_INTERRUPT:
@@ -597,9 +570,7 @@ datalign_user:
 		}
 		if (type & T_USER) {
 			sv.sival_int = va;
-			KERNEL_LOCK();
 			trapsignal(p, SIGILL, type & ~T_USER, ILL_ILLOPC, sv);
-			KERNEL_UNLOCK();
 			break;
 		}
 		/* FALLTHROUGH */

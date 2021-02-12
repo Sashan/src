@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip.c,v 1.9 2019/11/27 17:18:24 deraadt Exp $ */
+/*	$OpenBSD: ip.c,v 1.14 2021/01/08 08:09:07 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -25,8 +25,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <openssl/ssl.h>
-
 #include "extern.h"
 
 #define   PREFIX_SIZE(x)  (((x) + 7) / 8)
@@ -41,8 +39,7 @@
 int
 ip_addr_afi_parse(const char *fn, const ASN1_OCTET_STRING *p, enum afi *afi)
 {
-	char	 buf[2];
-	short	 v;
+	uint16_t v;
 
 	if (p->length == 0 || p->length > 3) {
 		warnx("%s: invalid field length, want 1--3, have %d",
@@ -50,8 +47,8 @@ ip_addr_afi_parse(const char *fn, const ASN1_OCTET_STRING *p, enum afi *afi)
 		return 0;
 	}
 
-	memcpy(buf, p->data, sizeof(uint16_t));
-	v = ntohs(*(uint16_t *)buf);
+	memcpy(&v, p->data, sizeof(v));
+	v = ntohs(v);
 
 	/* Only accept IPv4 and IPv6 AFIs. */
 
@@ -279,13 +276,13 @@ ip_addr_print(const struct ip_addr *addr,
  * Matched with ip_addr_read().
  */
 void
-ip_addr_buffer(char **b, size_t *bsz, size_t *bmax, const struct ip_addr *p)
+ip_addr_buffer(struct ibuf *b, const struct ip_addr *p)
 {
 	size_t sz = PREFIX_SIZE(p->prefixlen);
 
 	assert(sz <= 16);
-	io_simple_buffer(b, bsz, bmax, &p->prefixlen, sizeof(unsigned char));
-	io_simple_buffer(b, bsz, bmax, p->addr, sz);
+	io_simple_buffer(b, &p->prefixlen, sizeof(unsigned char));
+	io_simple_buffer(b, p->addr, sz);
 }
 
 /*
@@ -293,12 +290,10 @@ ip_addr_buffer(char **b, size_t *bsz, size_t *bmax, const struct ip_addr *p)
  * Matched with ip_addr_range_read().
  */
 void
-ip_addr_range_buffer(char **b, size_t *bsz, size_t *bmax,
-    const struct ip_addr_range *p)
+ip_addr_range_buffer(struct ibuf *b, const struct ip_addr_range *p)
 {
-
-	ip_addr_buffer(b, bsz, bmax, &p->min);
-	ip_addr_buffer(b, bsz, bmax, &p->max);
+	ip_addr_buffer(b, &p->min);
+	ip_addr_buffer(b, &p->max);
 }
 
 /*

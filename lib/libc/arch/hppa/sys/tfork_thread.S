@@ -1,4 +1,4 @@
-/*	$OpenBSD: tfork_thread.S,v 1.2 2012/06/21 00:56:59 guenther Exp $	*/
+/*	$OpenBSD: tfork_thread.S,v 1.4 2021/02/03 13:00:39 kurt Exp $	*/
 
 /*
  * Copyright (c) 2005, Miodrag Vallat

@@ -31,7 +31,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 ***************************************************************************/
 
-/* $OpenBSD: if_em.c,v 1.349 2020/03/24 09:30:06 mpi Exp $ */
+/* $OpenBSD: if_em.c,v 1.358 2021/01/24 10:21:43 jsg Exp $ */
 /* $FreeBSD: if_em.c,v 1.46 2004/09/29 18:28:28 mlaier Exp $ */
 
 #include <dev/pci/if_em.h>
@@ -162,6 +162,10 @@ const struct pci_matchid em_devices[] = {
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_LM13 },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_LM14 },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_LM15 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_LM16 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_LM17 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_LM18 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_LM19 },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V2 },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V4 },
@@ -175,6 +179,11 @@ const struct pci_matchid em_devices[] = {
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V12 },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V13 },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V14 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V15 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V16 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V17 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V18 },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I219_V19 },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_82580_COPPER },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_82580_FIBER },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_82580_SERDES },
@@ -270,9 +279,6 @@ void em_receive_checksum(struct em_softc *, struct em_rx_desc *,
 u_int	em_transmit_checksum_setup(struct em_queue *, struct mbuf *, u_int,
 	    u_int32_t *, u_int32_t *);
 void em_iff(struct em_softc *);
-#ifdef EM_DEBUG
-void em_print_hw_stats(struct em_softc *);
-#endif
 void em_update_link_status(struct em_softc *);
 int  em_get_buf(struct em_queue *, int);
 void em_enable_hw_vlans(struct em_softc *);
@@ -300,6 +306,12 @@ int  em_link_intr_msix(void *);
 void em_enable_queue_intr_msix(struct em_queue *);
 #else
 #define em_allocate_msix(_sc) 	(-1)
+#endif
+
+#if NKSTAT > 0
+void	em_kstat_attach(struct em_softc *);
+int	em_kstat_read(struct kstat *);
+void	em_tbi_adjust_stats(struct em_softc *, uint32_t, uint8_t *);
 #endif
 
 /*********************************************************************
@@ -561,8 +573,8 @@ em_attach(struct device *parent, struct device *self, void *aux)
 
 	/* Initialize statistics */
 	em_clear_hw_cntrs(&sc->hw);
-#ifndef SMALL_KERNEL
-	em_update_stats_counters(sc);
+#if NKSTAT > 0
+	em_kstat_attach(sc);
 #endif
 	sc->hw.get_link_status = 1;
 	if (!defer)
@@ -1467,26 +1479,21 @@ em_iff(struct em_softc *sc)
 void
 em_local_timer(void *arg)
 {
-	struct ifnet   *ifp;
 	struct em_softc *sc = arg;
 	int s;
 
-	ifp = &sc->sc_ac.ac_if;
-
-	s = splnet();
-
-#ifndef SMALL_KERNEL
-	em_update_stats_counters(sc);
-#ifdef EM_DEBUG
-	if (ifp->if_flags & IFF_DEBUG && ifp->if_flags & IFF_RUNNING)
-		em_print_hw_stats(sc);
-#endif
-#endif
-	em_smartspeed(sc);
-
 	timeout_add_sec(&sc->timer_handle, 1);
 
+	s = splnet();
+	em_smartspeed(sc);
 	splx(s);
+
+#if NKSTAT > 0
+	if (sc->kstat != NULL && mtx_enter_try(&sc->kstat_mtx)) {
+		em_kstat_read(sc->kstat);
+		mtx_leave(&sc->kstat_mtx);
+	}
+#endif
 }
 
 void
@@ -1779,21 +1786,22 @@ em_free_pci_resources(struct em_softc *sc)
 				sc->osdep.em_memsize);
 	sc->osdep.em_membase = 0;
 
-	que = sc->queues; /* Use only first queue. */
-	if (que->rx.sc_rx_desc_ring != NULL) {
-		que->rx.sc_rx_desc_ring = NULL;
-		em_dma_free(sc, &que->rx.sc_rx_dma);
+	FOREACH_QUEUE(sc, que) {
+		if (que->rx.sc_rx_desc_ring != NULL) {
+			que->rx.sc_rx_desc_ring = NULL;
+			em_dma_free(sc, &que->rx.sc_rx_dma);
+		}
+		if (que->tx.sc_tx_desc_ring != NULL) {
+			que->tx.sc_tx_desc_ring = NULL;
+			em_dma_free(sc, &que->tx.sc_tx_dma);
+		}
+		if (que->tag)
+			pci_intr_disestablish(pc, que->tag);
+		que->tag = NULL;
+		que->eims = 0;
+		que->me = 0;
+		que->sc = NULL;
 	}
-	if (que->tx.sc_tx_desc_ring != NULL) {
-		que->tx.sc_tx_desc_ring = NULL;
-		em_dma_free(sc, &que->tx.sc_tx_dma);
-	}
-	if (que->tag)
-		pci_intr_disestablish(pc, que->tag);
-	que->tag = NULL;
-	que->eims = 0;
-	que->me = 0;
-	que->sc = NULL;
 	sc->legacy_irq = 0;
 	sc->msix_linkvec = 0;
 	sc->msix_queuesmask = 0;
@@ -1934,7 +1942,7 @@ em_setup_interface(struct em_softc *sc)
 	ifp->if_watchdog = em_watchdog;
 	ifp->if_hardmtu =
 		sc->hw.max_frame_size - ETHER_HDR_LEN - ETHER_CRC_LEN;
-	IFQ_SET_MAXLEN(&ifp->if_snd, sc->sc_tx_slots - 1);
+	ifq_set_maxlen(&ifp->if_snd, sc->sc_tx_slots - 1);
 
 	ifp->if_capabilities = IFCAP_VLAN_MTU;
 
@@ -2112,7 +2120,7 @@ em_dma_malloc(struct em_softc *sc, bus_size_t size, struct em_dma_alloc *dma)
 		goto destroy;
 
 	r = bus_dmamem_map(sc->sc_dmat, &dma->dma_seg, dma->dma_nseg, size,
-	    &dma->dma_vaddr, BUS_DMA_WAITOK);
+	    &dma->dma_vaddr, BUS_DMA_WAITOK | BUS_DMA_COHERENT);
 	if (r != 0)
 		goto free;
 
@@ -2152,18 +2160,20 @@ em_dma_free(struct em_softc *sc, struct em_dma_alloc *dma)
 int
 em_allocate_transmit_structures(struct em_softc *sc)
 {
-	struct em_queue *que = sc->queues; /* Use only first queue. */
+	struct em_queue *que;
 
-	bus_dmamap_sync(sc->sc_dmat, que->tx.sc_tx_dma.dma_map,
-	    0, que->tx.sc_tx_dma.dma_map->dm_mapsize,
-	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
+	FOREACH_QUEUE(sc, que) {
+		bus_dmamap_sync(sc->sc_dmat, que->tx.sc_tx_dma.dma_map,
+		    0, que->tx.sc_tx_dma.dma_map->dm_mapsize,
+		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
-	que->tx.sc_tx_pkts_ring = mallocarray(sc->sc_tx_slots,
-	    sizeof(*que->tx.sc_tx_pkts_ring), M_DEVBUF, M_NOWAIT | M_ZERO);
-	if (que->tx.sc_tx_pkts_ring == NULL) {
-		printf("%s: Unable to allocate tx_buffer memory\n", 
-		       DEVNAME(sc));
-		return (ENOMEM);
+		que->tx.sc_tx_pkts_ring = mallocarray(sc->sc_tx_slots,
+		    sizeof(*que->tx.sc_tx_pkts_ring), M_DEVBUF, M_NOWAIT | M_ZERO);
+		if (que->tx.sc_tx_pkts_ring == NULL) {
+			printf("%s: Unable to allocate tx_buffer memory\n", 
+			    DEVNAME(sc));
+			return (ENOMEM);
+		}
 	}
 
 	return (0);
@@ -2177,33 +2187,35 @@ em_allocate_transmit_structures(struct em_softc *sc)
 int
 em_setup_transmit_structures(struct em_softc *sc)
 {
-	struct em_queue *que = sc->queues; /* Use only first queue. */
+	struct em_queue *que;
 	struct em_packet *pkt;
 	int error, i;
 
 	if ((error = em_allocate_transmit_structures(sc)) != 0)
 		goto fail;
 
-	bzero((void *) que->tx.sc_tx_desc_ring,
-	      (sizeof(struct em_tx_desc)) * sc->sc_tx_slots);
+	FOREACH_QUEUE(sc, que) {
+		bzero((void *) que->tx.sc_tx_desc_ring,
+		    (sizeof(struct em_tx_desc)) * sc->sc_tx_slots);
 
-	for (i = 0; i < sc->sc_tx_slots; i++) {
-		pkt = &que->tx.sc_tx_pkts_ring[i];
-		error = bus_dmamap_create(sc->sc_dmat, MAX_JUMBO_FRAME_SIZE,
-		    EM_MAX_SCATTER / (sc->pcix_82544 ? 2 : 1),
-		    MAX_JUMBO_FRAME_SIZE, 0, BUS_DMA_NOWAIT, &pkt->pkt_map);
-		if (error != 0) {
-			printf("%s: Unable to create TX DMA map\n",
-			    DEVNAME(sc));
-			goto fail;
+		for (i = 0; i < sc->sc_tx_slots; i++) {
+			pkt = &que->tx.sc_tx_pkts_ring[i];
+			error = bus_dmamap_create(sc->sc_dmat, MAX_JUMBO_FRAME_SIZE,
+			    EM_MAX_SCATTER / (sc->pcix_82544 ? 2 : 1),
+			    MAX_JUMBO_FRAME_SIZE, 0, BUS_DMA_NOWAIT, &pkt->pkt_map);
+			if (error != 0) {
+				printf("%s: Unable to create TX DMA map\n",
+				    DEVNAME(sc));
+				goto fail;
+			}
 		}
+
+		que->tx.sc_tx_desc_head = 0;
+		que->tx.sc_tx_desc_tail = 0;
+
+		/* Set checksum context */
+		que->tx.active_checksum_context = OFFLOAD_NONE;
 	}
-
-	que->tx.sc_tx_desc_head = 0;
-	que->tx.sc_tx_desc_tail = 0;
-
-	/* Set checksum context */
-	que->tx.active_checksum_context = OFFLOAD_NONE;
 
 	return (0);
 
@@ -2220,68 +2232,70 @@ fail:
 void
 em_initialize_transmit_unit(struct em_softc *sc)
 {
-	struct em_queue *que = sc->queues; /* Use only first queue. */
 	u_int32_t	reg_tctl, reg_tipg = 0;
 	u_int64_t	bus_addr;
+	struct em_queue *que;
 
 	INIT_DEBUGOUT("em_initialize_transmit_unit: begin");
 
-	/* Setup the Base and Length of the Tx Descriptor Ring */
-	bus_addr = que->tx.sc_tx_dma.dma_map->dm_segs[0].ds_addr;
-	E1000_WRITE_REG(&sc->hw, TDLEN(que->me),
-			sc->sc_tx_slots *
-			sizeof(struct em_tx_desc));
-	E1000_WRITE_REG(&sc->hw, TDBAH(que->me), (u_int32_t)(bus_addr >> 32));
-	E1000_WRITE_REG(&sc->hw, TDBAL(que->me), (u_int32_t)bus_addr);
+	FOREACH_QUEUE(sc, que) {
+		/* Setup the Base and Length of the Tx Descriptor Ring */
+		bus_addr = que->tx.sc_tx_dma.dma_map->dm_segs[0].ds_addr;
+		E1000_WRITE_REG(&sc->hw, TDLEN(que->me),
+		    sc->sc_tx_slots *
+		    sizeof(struct em_tx_desc));
+		E1000_WRITE_REG(&sc->hw, TDBAH(que->me), (u_int32_t)(bus_addr >> 32));
+		E1000_WRITE_REG(&sc->hw, TDBAL(que->me), (u_int32_t)bus_addr);
 
-	/* Setup the HW Tx Head and Tail descriptor pointers */
-	E1000_WRITE_REG(&sc->hw, TDT(que->me), 0);
-	E1000_WRITE_REG(&sc->hw, TDH(que->me), 0);
+		/* Setup the HW Tx Head and Tail descriptor pointers */
+		E1000_WRITE_REG(&sc->hw, TDT(que->me), 0);
+		E1000_WRITE_REG(&sc->hw, TDH(que->me), 0);
 
-	HW_DEBUGOUT2("Base = %x, Length = %x\n", 
-		     E1000_READ_REG(&sc->hw, TDBAL(que->me)),
-		     E1000_READ_REG(&sc->hw, TDLEN(que->me)));
+		HW_DEBUGOUT2("Base = %x, Length = %x\n",
+		    E1000_READ_REG(&sc->hw, TDBAL(que->me)),
+		    E1000_READ_REG(&sc->hw, TDLEN(que->me)));
 
-	/* Set the default values for the Tx Inter Packet Gap timer */
-	switch (sc->hw.mac_type) {
-	case em_82542_rev2_0:
-	case em_82542_rev2_1:
-		reg_tipg = DEFAULT_82542_TIPG_IPGT;
-		reg_tipg |= DEFAULT_82542_TIPG_IPGR1 << E1000_TIPG_IPGR1_SHIFT;
-		reg_tipg |= DEFAULT_82542_TIPG_IPGR2 << E1000_TIPG_IPGR2_SHIFT;
-		break;
-	case em_80003es2lan:
-		reg_tipg = DEFAULT_82543_TIPG_IPGR1;
-		reg_tipg |= DEFAULT_80003ES2LAN_TIPG_IPGR2 << E1000_TIPG_IPGR2_SHIFT;
-		break;
-	default:
-		if (sc->hw.media_type == em_media_type_fiber ||
-		    sc->hw.media_type == em_media_type_internal_serdes)
-			reg_tipg = DEFAULT_82543_TIPG_IPGT_FIBER;
-		else
-			reg_tipg = DEFAULT_82543_TIPG_IPGT_COPPER;
-		reg_tipg |= DEFAULT_82543_TIPG_IPGR1 << E1000_TIPG_IPGR1_SHIFT;
-		reg_tipg |= DEFAULT_82543_TIPG_IPGR2 << E1000_TIPG_IPGR2_SHIFT;
+		/* Set the default values for the Tx Inter Packet Gap timer */
+		switch (sc->hw.mac_type) {
+		case em_82542_rev2_0:
+		case em_82542_rev2_1:
+			reg_tipg = DEFAULT_82542_TIPG_IPGT;
+			reg_tipg |= DEFAULT_82542_TIPG_IPGR1 << E1000_TIPG_IPGR1_SHIFT;
+			reg_tipg |= DEFAULT_82542_TIPG_IPGR2 << E1000_TIPG_IPGR2_SHIFT;
+			break;
+		case em_80003es2lan:
+			reg_tipg = DEFAULT_82543_TIPG_IPGR1;
+			reg_tipg |= DEFAULT_80003ES2LAN_TIPG_IPGR2 << E1000_TIPG_IPGR2_SHIFT;
+			break;
+		default:
+			if (sc->hw.media_type == em_media_type_fiber ||
+			    sc->hw.media_type == em_media_type_internal_serdes)
+				reg_tipg = DEFAULT_82543_TIPG_IPGT_FIBER;
+			else
+				reg_tipg = DEFAULT_82543_TIPG_IPGT_COPPER;
+			reg_tipg |= DEFAULT_82543_TIPG_IPGR1 << E1000_TIPG_IPGR1_SHIFT;
+			reg_tipg |= DEFAULT_82543_TIPG_IPGR2 << E1000_TIPG_IPGR2_SHIFT;
+		}
+
+
+		E1000_WRITE_REG(&sc->hw, TIPG, reg_tipg);
+		E1000_WRITE_REG(&sc->hw, TIDV, sc->tx_int_delay);
+		if (sc->hw.mac_type >= em_82540)
+			E1000_WRITE_REG(&sc->hw, TADV, sc->tx_abs_int_delay);
+
+		/* Setup Transmit Descriptor Base Settings */
+		que->tx.sc_txd_cmd = E1000_TXD_CMD_IFCS;
+
+		if (sc->hw.mac_type == em_82575 || sc->hw.mac_type == em_82580 ||
+		    sc->hw.mac_type == em_82576 ||
+		    sc->hw.mac_type == em_i210 || sc->hw.mac_type == em_i350) {
+			/* 82575/6 need to enable the TX queue and lack the IDE bit */
+			reg_tctl = E1000_READ_REG(&sc->hw, TXDCTL(que->me));
+			reg_tctl |= E1000_TXDCTL_QUEUE_ENABLE;
+			E1000_WRITE_REG(&sc->hw, TXDCTL(que->me), reg_tctl);
+		} else if (sc->tx_int_delay > 0)
+			que->tx.sc_txd_cmd |= E1000_TXD_CMD_IDE;
 	}
-
-
-	E1000_WRITE_REG(&sc->hw, TIPG, reg_tipg);
-	E1000_WRITE_REG(&sc->hw, TIDV, sc->tx_int_delay);
-	if (sc->hw.mac_type >= em_82540)
-		E1000_WRITE_REG(&sc->hw, TADV, sc->tx_abs_int_delay);
-
-	/* Setup Transmit Descriptor Base Settings */   
-	que->tx.sc_txd_cmd = E1000_TXD_CMD_IFCS;
-
-	if (sc->hw.mac_type == em_82575 || sc->hw.mac_type == em_82580 ||
-	    sc->hw.mac_type == em_82576 ||
-	    sc->hw.mac_type == em_i210 || sc->hw.mac_type == em_i350) {
-		/* 82575/6 need to enable the TX queue and lack the IDE bit */
-		reg_tctl = E1000_READ_REG(&sc->hw, TXDCTL(que->me));
-		reg_tctl |= E1000_TXDCTL_QUEUE_ENABLE;
-		E1000_WRITE_REG(&sc->hw, TXDCTL(que->me), reg_tctl);
-	} else if (sc->tx_int_delay > 0)
-		que->tx.sc_txd_cmd |= E1000_TXD_CMD_IDE;
 
 	/* Program the Transmit Control Register */
 	reg_tctl = E1000_TCTL_PSP | E1000_TCTL_EN |
@@ -2320,40 +2334,44 @@ em_initialize_transmit_unit(struct em_softc *sc)
 void
 em_free_transmit_structures(struct em_softc *sc)
 {
-	struct em_queue *que = sc->queues; /* Use only first queue. */
+	struct em_queue *que;
 	struct em_packet *pkt;
 	int i;
 
 	INIT_DEBUGOUT("free_transmit_structures: begin");
 
-	if (que->tx.sc_tx_pkts_ring != NULL) {
-		for (i = 0; i < sc->sc_tx_slots; i++) {
-			pkt = &que->tx.sc_tx_pkts_ring[i];
+	FOREACH_QUEUE(sc, que) {
+		if (que->tx.sc_tx_pkts_ring != NULL) {
+			for (i = 0; i < sc->sc_tx_slots; i++) {
+				pkt = &que->tx.sc_tx_pkts_ring[i];
 
-			if (pkt->pkt_m != NULL) {
-				bus_dmamap_sync(sc->sc_dmat, pkt->pkt_map,
-				    0, pkt->pkt_map->dm_mapsize,
-				    BUS_DMASYNC_POSTWRITE);
-				bus_dmamap_unload(sc->sc_dmat, pkt->pkt_map);
+				if (pkt->pkt_m != NULL) {
+					bus_dmamap_sync(sc->sc_dmat, pkt->pkt_map,
+					    0, pkt->pkt_map->dm_mapsize,
+					    BUS_DMASYNC_POSTWRITE);
+					bus_dmamap_unload(sc->sc_dmat,
+					    pkt->pkt_map);
 
-				m_freem(pkt->pkt_m);
-				pkt->pkt_m = NULL;
+					m_freem(pkt->pkt_m);
+					pkt->pkt_m = NULL;
+				}
+
+				if (pkt->pkt_map != NULL) {
+					bus_dmamap_destroy(sc->sc_dmat,
+					    pkt->pkt_map);
+					pkt->pkt_map = NULL;
+				}
 			}
 
-			if (pkt->pkt_map != NULL) {
-				bus_dmamap_destroy(sc->sc_dmat, pkt->pkt_map);
-				pkt->pkt_map = NULL;
-			}
+			free(que->tx.sc_tx_pkts_ring, M_DEVBUF,
+			    sc->sc_tx_slots * sizeof(*que->tx.sc_tx_pkts_ring));
+			que->tx.sc_tx_pkts_ring = NULL;
 		}
 
-		free(que->tx.sc_tx_pkts_ring, M_DEVBUF,
-		    sc->sc_tx_slots * sizeof(*que->tx.sc_tx_pkts_ring));
-		que->tx.sc_tx_pkts_ring = NULL;
+		bus_dmamap_sync(sc->sc_dmat, que->tx.sc_tx_dma.dma_map,
+		    0, que->tx.sc_tx_dma.dma_map->dm_mapsize,
+		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 	}
-
-	bus_dmamap_sync(sc->sc_dmat, que->tx.sc_tx_dma.dma_map,
-	    0, que->tx.sc_tx_dma.dma_map->dm_mapsize,
-	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 }
 
 /*********************************************************************
@@ -2506,7 +2524,7 @@ em_get_buf(struct em_queue *que, int i)
 
 	KASSERT(pkt->pkt_m == NULL);
 
-	m = MCLGETI(NULL, M_DONTWAIT, NULL, EM_MCLBYTES);
+	m = MCLGETL(NULL, M_DONTWAIT, EM_MCLBYTES);
 	if (m == NULL) {
 		sc->mbuf_cluster_failed++;
 		return (ENOBUFS);
@@ -2543,36 +2561,39 @@ em_get_buf(struct em_queue *que, int i)
 int
 em_allocate_receive_structures(struct em_softc *sc)
 {
-	struct em_queue *que = sc->queues; /* Use only first queue. */
+	struct em_queue *que;
 	struct em_packet *pkt;
 	int i;
 	int error;
 
-	que->rx.sc_rx_pkts_ring = mallocarray(sc->sc_rx_slots,
-	    sizeof(*que->rx.sc_rx_pkts_ring), M_DEVBUF, M_NOWAIT | M_ZERO);
-	if (que->rx.sc_rx_pkts_ring == NULL) {
-		printf("%s: Unable to allocate rx_buffer memory\n", 
-		    DEVNAME(sc));
-		return (ENOMEM);
-	}
-
-	bus_dmamap_sync(sc->sc_dmat, que->rx.sc_rx_dma.dma_map,
-	    0, que->rx.sc_rx_dma.dma_map->dm_mapsize,
-	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
-
-	for (i = 0; i < sc->sc_rx_slots; i++) {
-		pkt = &que->rx.sc_rx_pkts_ring[i];
-
-		error = bus_dmamap_create(sc->sc_dmat, EM_MCLBYTES, 1,
-		    EM_MCLBYTES, 0, BUS_DMA_NOWAIT, &pkt->pkt_map);
-		if (error != 0) {
-			printf("%s: em_allocate_receive_structures: "
-			    "bus_dmamap_create failed; error %u\n",
-			    DEVNAME(sc), error);
-			goto fail;
+	FOREACH_QUEUE(sc, que) {
+		que->rx.sc_rx_pkts_ring = mallocarray(sc->sc_rx_slots,
+		    sizeof(*que->rx.sc_rx_pkts_ring),
+		    M_DEVBUF, M_NOWAIT | M_ZERO);
+		if (que->rx.sc_rx_pkts_ring == NULL) {
+			printf("%s: Unable to allocate rx_buffer memory\n",
+			    DEVNAME(sc));
+			return (ENOMEM);
 		}
 
-		pkt->pkt_m = NULL;
+		bus_dmamap_sync(sc->sc_dmat, que->rx.sc_rx_dma.dma_map,
+		    0, que->rx.sc_rx_dma.dma_map->dm_mapsize,
+		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
+
+		for (i = 0; i < sc->sc_rx_slots; i++) {
+			pkt = &que->rx.sc_rx_pkts_ring[i];
+
+			error = bus_dmamap_create(sc->sc_dmat, EM_MCLBYTES, 1,
+			    EM_MCLBYTES, 0, BUS_DMA_NOWAIT, &pkt->pkt_map);
+			if (error != 0) {
+				printf("%s: em_allocate_receive_structures: "
+				    "bus_dmamap_create failed; error %u\n",
+				    DEVNAME(sc), error);
+				goto fail;
+			}
+
+			pkt->pkt_m = NULL;
+		}
 	}
 
         return (0);
@@ -2590,26 +2611,29 @@ fail:
 int
 em_setup_receive_structures(struct em_softc *sc)
 {
-	struct em_queue *que = sc->queues; /* Use only first queue. */
 	struct ifnet *ifp = &sc->sc_ac.ac_if;
+	struct em_queue *que;
 	u_int lwm;
 
 	if (em_allocate_receive_structures(sc))
 		return (ENOMEM);
 
-	memset(que->rx.sc_rx_desc_ring, 0,
-	    sc->sc_rx_slots * sizeof(*que->rx.sc_rx_desc_ring));
+	FOREACH_QUEUE(sc, que) {
+		memset(que->rx.sc_rx_desc_ring, 0,
+		    sc->sc_rx_slots * sizeof(*que->rx.sc_rx_desc_ring));
 
-	/* Setup our descriptor pointers */
-	que->rx.sc_rx_desc_tail = 0;
-	que->rx.sc_rx_desc_head = sc->sc_rx_slots - 1;
+		/* Setup our descriptor pointers */
+		que->rx.sc_rx_desc_tail = 0;
+		que->rx.sc_rx_desc_head = sc->sc_rx_slots - 1;
 
-	lwm = max(4, 2 * ((ifp->if_hardmtu / MCLBYTES) + 1));
-	if_rxr_init(&que->rx.sc_rx_ring, lwm, sc->sc_rx_slots);
+		lwm = max(4, 2 * ((ifp->if_hardmtu / MCLBYTES) + 1));
+		if_rxr_init(&que->rx.sc_rx_ring, lwm, sc->sc_rx_slots);
 
-	if (em_rxfill(que) == 0) {
-		printf("%s: unable to fill any rx descriptors\n",
-		    DEVNAME(sc));
+		if (em_rxfill(que) == 0) {
+			printf("%s: unable to fill any rx descriptors\n",
+			    DEVNAME(sc));
+			return (ENOMEM);
+		}
 	}
 
 	return (0);
@@ -2623,9 +2647,10 @@ em_setup_receive_structures(struct em_softc *sc)
 void
 em_initialize_receive_unit(struct em_softc *sc)
 {
-	struct em_queue *que = sc->queues; /* Use only first queue. */
+	struct em_queue *que;
 	u_int32_t	reg_rctl;
 	u_int32_t	reg_rxcsum;
+	u_int32_t	reg_srrctl;
 	u_int64_t	bus_addr;
 
 	INIT_DEBUGOUT("em_initialize_receive_unit: begin");
@@ -2695,29 +2720,43 @@ em_initialize_receive_unit(struct em_softc *sc)
 	if (sc->hw.mac_type == em_82573)
 		E1000_WRITE_REG(&sc->hw, RDTR, 0x20);
 
-	/* Setup the Base and Length of the Rx Descriptor Ring */
-	bus_addr = que->rx.sc_rx_dma.dma_map->dm_segs[0].ds_addr;
-	E1000_WRITE_REG(&sc->hw, RDLEN(que->me),
-	    sc->sc_rx_slots * sizeof(*que->rx.sc_rx_desc_ring));
-	E1000_WRITE_REG(&sc->hw, RDBAH(que->me), (u_int32_t)(bus_addr >> 32));
-	E1000_WRITE_REG(&sc->hw, RDBAL(que->me), (u_int32_t)bus_addr);
+	FOREACH_QUEUE(sc, que) {
+		if (sc->num_queues > 1) {
+			/*
+			 * Disable Drop Enable for every queue, default has
+			 * it enabled for queues > 0
+			 */
+			reg_srrctl = E1000_READ_REG(&sc->hw, SRRCTL(que->me));
+			reg_srrctl &= ~E1000_SRRCTL_DROP_EN;
+			E1000_WRITE_REG(&sc->hw, SRRCTL(que->me), reg_srrctl);
+		}
 
-	if (sc->hw.mac_type == em_82575 || sc->hw.mac_type == em_82580 ||
-	    sc->hw.mac_type == em_82576 ||
-	    sc->hw.mac_type == em_i210 || sc->hw.mac_type == em_i350) {
-		/* 82575/6 need to enable the RX queue */
-		uint32_t reg;
-		reg = E1000_READ_REG(&sc->hw, RXDCTL(que->me));
-		reg |= E1000_RXDCTL_QUEUE_ENABLE;
-		E1000_WRITE_REG(&sc->hw, RXDCTL(que->me), reg);
+		/* Setup the Base and Length of the Rx Descriptor Ring */
+		bus_addr = que->rx.sc_rx_dma.dma_map->dm_segs[0].ds_addr;
+		E1000_WRITE_REG(&sc->hw, RDLEN(que->me),
+		    sc->sc_rx_slots * sizeof(*que->rx.sc_rx_desc_ring));
+		E1000_WRITE_REG(&sc->hw, RDBAH(que->me), (u_int32_t)(bus_addr >> 32));
+		E1000_WRITE_REG(&sc->hw, RDBAL(que->me), (u_int32_t)bus_addr);
+
+		if (sc->hw.mac_type == em_82575 || sc->hw.mac_type == em_82580 ||
+		    sc->hw.mac_type == em_82576 ||
+		    sc->hw.mac_type == em_i210 || sc->hw.mac_type == em_i350) {
+			/* 82575/6 need to enable the RX queue */
+			uint32_t reg;
+			reg = E1000_READ_REG(&sc->hw, RXDCTL(que->me));
+			reg |= E1000_RXDCTL_QUEUE_ENABLE;
+			E1000_WRITE_REG(&sc->hw, RXDCTL(que->me), reg);
+		}
 	}
 
 	/* Enable Receives */
 	E1000_WRITE_REG(&sc->hw, RCTL, reg_rctl);
 
 	/* Setup the HW Rx Head and Tail Descriptor Pointers */
-	E1000_WRITE_REG(&sc->hw, RDH(que->me), 0);
-	E1000_WRITE_REG(&sc->hw, RDT(que->me), que->rx.sc_rx_desc_head);
+	FOREACH_QUEUE(sc, que) {
+		E1000_WRITE_REG(&sc->hw, RDH(que->me), 0);
+		E1000_WRITE_REG(&sc->hw, RDT(que->me), que->rx.sc_rx_desc_head);
+	}
 }
 
 /*********************************************************************
@@ -2728,41 +2767,45 @@ em_initialize_receive_unit(struct em_softc *sc)
 void
 em_free_receive_structures(struct em_softc *sc)
 {
-	struct em_queue *que = sc->queues; /* Use only first queue. */
+	struct em_queue *que;
 	struct em_packet *pkt;
 	int i;
 
 	INIT_DEBUGOUT("free_receive_structures: begin");
 
-	if_rxr_init(&que->rx.sc_rx_ring, 0, 0);
+	FOREACH_QUEUE(sc, que) {
+		if_rxr_init(&que->rx.sc_rx_ring, 0, 0);
 
-	bus_dmamap_sync(sc->sc_dmat, que->rx.sc_rx_dma.dma_map,
-	    0, que->rx.sc_rx_dma.dma_map->dm_mapsize,
-	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
+		bus_dmamap_sync(sc->sc_dmat, que->rx.sc_rx_dma.dma_map,
+		    0, que->rx.sc_rx_dma.dma_map->dm_mapsize,
+		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
-	if (que->rx.sc_rx_pkts_ring != NULL) {
-		for (i = 0; i < sc->sc_rx_slots; i++) {
-			pkt = &que->rx.sc_rx_pkts_ring[i];
-			if (pkt->pkt_m != NULL) {
-				bus_dmamap_sync(sc->sc_dmat, pkt->pkt_map,
-				    0, pkt->pkt_map->dm_mapsize,
-				    BUS_DMASYNC_POSTREAD);
-				bus_dmamap_unload(sc->sc_dmat, pkt->pkt_map);
-				m_freem(pkt->pkt_m);
-				pkt->pkt_m = NULL;
+		if (que->rx.sc_rx_pkts_ring != NULL) {
+			for (i = 0; i < sc->sc_rx_slots; i++) {
+				pkt = &que->rx.sc_rx_pkts_ring[i];
+				if (pkt->pkt_m != NULL) {
+					bus_dmamap_sync(sc->sc_dmat,
+					    pkt->pkt_map,
+					    0, pkt->pkt_map->dm_mapsize,
+					    BUS_DMASYNC_POSTREAD);
+					bus_dmamap_unload(sc->sc_dmat,
+					    pkt->pkt_map);
+					m_freem(pkt->pkt_m);
+					pkt->pkt_m = NULL;
+				}
+				bus_dmamap_destroy(sc->sc_dmat, pkt->pkt_map);
 			}
-			bus_dmamap_destroy(sc->sc_dmat, pkt->pkt_map);
+
+			free(que->rx.sc_rx_pkts_ring, M_DEVBUF,
+			    sc->sc_rx_slots * sizeof(*que->rx.sc_rx_pkts_ring));
+			que->rx.sc_rx_pkts_ring = NULL;
 		}
 
-		free(que->rx.sc_rx_pkts_ring, M_DEVBUF,
-		    sc->sc_rx_slots * sizeof(*que->rx.sc_rx_pkts_ring));
-		que->rx.sc_rx_pkts_ring = NULL;
-	}
-
-	if (que->rx.fmp != NULL) {
-		m_freem(que->rx.fmp);
-		que->rx.fmp = NULL;
-		que->rx.lmp = NULL;
+		if (que->rx.fmp != NULL) {
+			m_freem(que->rx.fmp);
+			que->rx.fmp = NULL;
+			que->rx.lmp = NULL;
+		}
 	}
 }
 
@@ -2809,7 +2852,7 @@ em_rxrefill(void *arg)
 
 	if (em_rxfill(que))
 		E1000_WRITE_REG(&sc->hw, RDT(que->me), que->rx.sc_rx_desc_head);
-	else if (if_rxr_inuse(&que->rx.sc_rx_ring) == 0)
+	else if (if_rxr_needrefill(&que->rx.sc_rx_ring))
 		timeout_add(&que->rx_refill, 1);
 }
 
@@ -2898,8 +2941,8 @@ em_rxeof(struct em_queue *que)
 			last_byte = *(mtod(m, caddr_t) + desc_len - 1);
 			if (TBI_ACCEPT(&sc->hw, status, desc->errors,
 			    pkt_len, last_byte)) {
-#ifndef SMALL_KERNEL
-				em_tbi_adjust_stats(&sc->hw, &sc->stats, 
+#if NKSTAT > 0
+				em_tbi_adjust_stats(sc,
 				    pkt_len, sc->hw.mac_addr);
 #endif
 				if (len > 0)
@@ -2972,7 +3015,8 @@ em_rxeof(struct em_queue *que)
 
 	que->rx.sc_rx_desc_tail = i;
 
-	if_input(ifp, &ml);
+	if (ifiq_input(&ifp->if_rcv, &ml))
+		if_rxr_livelocked(&que->rx.sc_rx_ring);
 
 	return (rv);
 }
@@ -3359,210 +3403,365 @@ em_allocate_legacy(struct em_softc *sc)
 	return (0);
 }
 
+#if NKSTAT > 0
+/* this is used to look up the array of kstats quickly */
+enum em_stat {
+	em_stat_crcerrs,
+	em_stat_algnerrc,
+	em_stat_symerrs,
+	em_stat_rxerrc,
+	em_stat_mpc,
+	em_stat_scc,
+	em_stat_ecol,
+	em_stat_mcc,
+	em_stat_latecol,
+	em_stat_colc,
+	em_stat_dc,
+	em_stat_tncrs,
+	em_stat_sec,
+	em_stat_cexterr,
+	em_stat_rlec,
+	em_stat_xonrxc,
+	em_stat_xontxc,
+	em_stat_xoffrxc,
+	em_stat_xofftxc,
+	em_stat_fcruc,
+	em_stat_prc64,
+	em_stat_prc127,
+	em_stat_prc255,
+	em_stat_prc511,
+	em_stat_prc1023,
+	em_stat_prc1522,
+	em_stat_gprc,
+	em_stat_bprc,
+	em_stat_mprc,
+	em_stat_gptc,
+	em_stat_gorc,
+	em_stat_gotc,
+	em_stat_rnbc,
+	em_stat_ruc,
+	em_stat_rfc,
+	em_stat_roc,
+	em_stat_rjc,
+	em_stat_mgtprc,
+	em_stat_mgtpdc,
+	em_stat_mgtptc,
+	em_stat_tor,
+	em_stat_tot,
+	em_stat_tpr,
+	em_stat_tpt,
+	em_stat_ptc64,
+	em_stat_ptc127,
+	em_stat_ptc255,
+	em_stat_ptc511,
+	em_stat_ptc1023,
+	em_stat_ptc1522,
+	em_stat_mptc,
+	em_stat_bptc,
+#if 0
+	em_stat_tsctc,
+	em_stat_tsctf,
+#endif
 
-#ifndef SMALL_KERNEL
+	em_stat_count,
+};
+
+struct em_counter {
+	const char		*name;
+	enum kstat_kv_unit	 unit;
+	uint32_t		 reg;
+};
+
+static const struct em_counter em_counters[em_stat_count] = {
+	[em_stat_crcerrs] =
+	    { "rx crc errs",	KSTAT_KV_U_PACKETS,	E1000_CRCERRS },
+	[em_stat_algnerrc] = /* >= em_82543 */
+	    { "rx align errs",	KSTAT_KV_U_PACKETS,	0 },
+	[em_stat_symerrs] = /* >= em_82543 */
+	    { "rx align errs",	KSTAT_KV_U_PACKETS,	0 },
+	[em_stat_rxerrc] =
+	    { "rx errs",	KSTAT_KV_U_PACKETS,	E1000_RXERRC },
+	[em_stat_mpc] =
+	    { "rx missed",	KSTAT_KV_U_PACKETS,	E1000_MPC },
+	[em_stat_scc] =
+	    { "tx single coll",	KSTAT_KV_U_PACKETS,	E1000_SCC },
+	[em_stat_ecol] =
+	    { "tx excess coll",	KSTAT_KV_U_PACKETS,	E1000_ECOL },
+	[em_stat_mcc] =
+	    { "tx multi coll",	KSTAT_KV_U_PACKETS,	E1000_MCC },
+	[em_stat_latecol] =
+	    { "tx late coll",	KSTAT_KV_U_PACKETS,	E1000_LATECOL },
+	[em_stat_colc] =
+	    { "tx coll",	KSTAT_KV_U_NONE,	E1000_COLC },
+	[em_stat_dc] =
+	    { "tx defers",	KSTAT_KV_U_NONE,	E1000_DC },
+	[em_stat_tncrs] = /* >= em_82543 */
+	    { "tx no CRS",	KSTAT_KV_U_PACKETS,	0 },
+	[em_stat_sec] =
+	    { "seq errs",	KSTAT_KV_U_NONE,	E1000_SEC },
+	[em_stat_cexterr] = /* >= em_82543 */
+	    { "carr ext errs",	KSTAT_KV_U_PACKETS,	0 },
+	[em_stat_rlec] =
+	    { "rx len errs",	KSTAT_KV_U_PACKETS,	E1000_RLEC },
+	[em_stat_xonrxc] =
+	    { "rx xon",		KSTAT_KV_U_PACKETS,	E1000_XONRXC },
+	[em_stat_xontxc] =
+	    { "tx xon",		KSTAT_KV_U_PACKETS,	E1000_XONTXC },
+	[em_stat_xoffrxc] =
+	    { "rx xoff",	KSTAT_KV_U_PACKETS,	E1000_XOFFRXC },
+	[em_stat_xofftxc] =
+	    { "tx xoff",	KSTAT_KV_U_PACKETS,	E1000_XOFFTXC },
+	[em_stat_fcruc] =
+	    { "FC unsupported",	KSTAT_KV_U_PACKETS,	E1000_FCRUC },
+	[em_stat_prc64] =
+	    { "rx 64B",		KSTAT_KV_U_PACKETS,	E1000_PRC64 },
+	[em_stat_prc127] =
+	    { "rx 65-127B",	KSTAT_KV_U_PACKETS,	E1000_PRC127 },
+	[em_stat_prc255] =
+	    { "rx 128-255B",	KSTAT_KV_U_PACKETS,	E1000_PRC255 },
+	[em_stat_prc511] =
+	    { "rx 256-511B",	KSTAT_KV_U_PACKETS,	E1000_PRC511 },
+	[em_stat_prc1023] =
+	    { "rx 512-1023B",	KSTAT_KV_U_PACKETS,	E1000_PRC1023 },
+	[em_stat_prc1522] =
+	    { "rx 1024-maxB",	KSTAT_KV_U_PACKETS,	E1000_PRC1522 },
+	[em_stat_gprc] =
+	    { "rx good",	KSTAT_KV_U_PACKETS,	E1000_GPRC },
+	[em_stat_bprc] =
+	    { "rx bcast",	KSTAT_KV_U_PACKETS,	E1000_BPRC },
+	[em_stat_mprc] =
+	    { "rx mcast",	KSTAT_KV_U_PACKETS,	E1000_MPRC },
+	[em_stat_gptc] =
+	    { "tx good",	KSTAT_KV_U_PACKETS,	E1000_GPTC },
+	[em_stat_gorc] = /* 64bit */
+	    { "rx good",	KSTAT_KV_U_BYTES,	0 },
+	[em_stat_gotc] = /* 64bit */
+	    { "tx good",	KSTAT_KV_U_BYTES,	0 },
+	[em_stat_rnbc] =
+	    { "rx no buffers",	KSTAT_KV_U_PACKETS,	E1000_RNBC },
+	[em_stat_ruc] =
+	    { "rx undersize",	KSTAT_KV_U_PACKETS,	E1000_RUC },
+	[em_stat_rfc] =
+	    { "rx fragments",	KSTAT_KV_U_PACKETS,	E1000_RFC },
+	[em_stat_roc] =
+	    { "rx oversize",	KSTAT_KV_U_PACKETS,	E1000_ROC },
+	[em_stat_rjc] =
+	    { "rx jabbers",	KSTAT_KV_U_PACKETS,	E1000_RJC },
+	[em_stat_mgtprc] =
+	    { "rx mgmt",	KSTAT_KV_U_PACKETS,	E1000_MGTPRC },
+	[em_stat_mgtpdc] =
+	    { "rx mgmt drops",	KSTAT_KV_U_PACKETS,	E1000_MGTPDC },
+	[em_stat_mgtptc] =
+	    { "tx mgmt",	KSTAT_KV_U_PACKETS,	E1000_MGTPTC },
+	[em_stat_tor] = /* 64bit */
+	    { "rx total",	KSTAT_KV_U_BYTES,	0 },
+	[em_stat_tot] = /* 64bit */
+	    { "tx total",	KSTAT_KV_U_BYTES,	0 },
+	[em_stat_tpr] =
+	    { "rx total",	KSTAT_KV_U_PACKETS,	E1000_TPR },
+	[em_stat_tpt] =
+	    { "tx total",	KSTAT_KV_U_PACKETS,	E1000_TPT },
+	[em_stat_ptc64] =
+	    { "tx 64B",		KSTAT_KV_U_PACKETS,	E1000_PTC64 },
+	[em_stat_ptc127] =
+	    { "tx 65-127B",	KSTAT_KV_U_PACKETS,	E1000_PTC127 },
+	[em_stat_ptc255] =
+	    { "tx 128-255B",	KSTAT_KV_U_PACKETS,	E1000_PTC255 },
+	[em_stat_ptc511] =
+	    { "tx 256-511B",	KSTAT_KV_U_PACKETS,	E1000_PTC511 },
+	[em_stat_ptc1023] =
+	    { "tx 512-1023B",	KSTAT_KV_U_PACKETS,	E1000_PTC1023 },
+	[em_stat_ptc1522] =
+	    { "tx 1024-maxB",	KSTAT_KV_U_PACKETS,	E1000_PTC1522 },
+	[em_stat_mptc] =
+	    { "tx mcast",	KSTAT_KV_U_PACKETS,	E1000_MPTC },
+	[em_stat_bptc] =
+	    { "tx bcast",	KSTAT_KV_U_PACKETS,	E1000_BPTC },
+};
+
 /**********************************************************************
  *
  *  Update the board statistics counters. 
  *
  **********************************************************************/
-void
-em_update_stats_counters(struct em_softc *sc)
+int
+em_kstat_read(struct kstat *ks)
 {
-	struct em_queue *que = sc->queues; /* Use only first queue. */
-	struct ifnet   *ifp = &sc->sc_ac.ac_if;
+	struct em_softc *sc = ks->ks_softc;
+	struct em_hw *hw = &sc->hw;
+	struct kstat_kv *kvs = ks->ks_data;
+	uint32_t lo, hi;
+	unsigned int i;
 
-	sc->stats.crcerrs += E1000_READ_REG(&sc->hw, CRCERRS);
-	sc->stats.mpc += E1000_READ_REG(&sc->hw, MPC);
-	sc->stats.ecol += E1000_READ_REG(&sc->hw, ECOL);
+	for (i = 0; i < nitems(em_counters); i++) {
+		const struct em_counter *c = &em_counters[i];
+		if (c->reg == 0)
+			continue;
 
-	sc->stats.latecol += E1000_READ_REG(&sc->hw, LATECOL);
-	sc->stats.colc += E1000_READ_REG(&sc->hw, COLC);
+		kstat_kv_u64(&kvs[i]) += EM_READ_REG(hw,
+		    E1000_REG_TR(hw, c->reg)); /* wtf */
+	}
 
-	sc->stats.ruc += E1000_READ_REG(&sc->hw, RUC);
-	sc->stats.roc += E1000_READ_REG(&sc->hw, ROC);
+	/* Handle the exceptions. */
 
 	if (sc->hw.mac_type >= em_82543) {
-		sc->stats.algnerrc += 
-		E1000_READ_REG(&sc->hw, ALGNERRC);
-		sc->stats.rxerrc += 
-		E1000_READ_REG(&sc->hw, RXERRC);
-		sc->stats.cexterr += 
-		E1000_READ_REG(&sc->hw, CEXTERR);
+		kstat_kv_u64(&kvs[em_stat_algnerrc]) +=
+		    E1000_READ_REG(hw, ALGNERRC);
+		kstat_kv_u64(&kvs[em_stat_rxerrc]) +=
+		    E1000_READ_REG(hw, RXERRC);
+		kstat_kv_u64(&kvs[em_stat_cexterr]) +=
+		    E1000_READ_REG(hw, CEXTERR);
+		kstat_kv_u64(&kvs[em_stat_tncrs]) +=
+		    E1000_READ_REG(hw, TNCRS);
+#if 0
+		sc->stats.tsctc += 
+		E1000_READ_REG(hw, TSCTC);
+		sc->stats.tsctfc += 
+		E1000_READ_REG(hw, TSCTFC);
+#endif
 	}
-
-#ifdef EM_DEBUG
-	if (sc->hw.media_type == em_media_type_copper ||
-	    (E1000_READ_REG(&sc->hw, STATUS) & E1000_STATUS_LU)) {
-		sc->stats.symerrs += E1000_READ_REG(&sc->hw, SYMERRS);
-		sc->stats.sec += E1000_READ_REG(&sc->hw, SEC);
-	}
-	sc->stats.scc += E1000_READ_REG(&sc->hw, SCC);
-
-	sc->stats.mcc += E1000_READ_REG(&sc->hw, MCC);
-	sc->stats.dc += E1000_READ_REG(&sc->hw, DC);
-	sc->stats.rlec += E1000_READ_REG(&sc->hw, RLEC);
-	sc->stats.xonrxc += E1000_READ_REG(&sc->hw, XONRXC);
-	sc->stats.xontxc += E1000_READ_REG(&sc->hw, XONTXC);
-	sc->stats.xoffrxc += E1000_READ_REG(&sc->hw, XOFFRXC);
-	sc->stats.xofftxc += E1000_READ_REG(&sc->hw, XOFFTXC);
-	sc->stats.fcruc += E1000_READ_REG(&sc->hw, FCRUC);
-	sc->stats.prc64 += E1000_READ_REG(&sc->hw, PRC64);
-	sc->stats.prc127 += E1000_READ_REG(&sc->hw, PRC127);
-	sc->stats.prc255 += E1000_READ_REG(&sc->hw, PRC255);
-	sc->stats.prc511 += E1000_READ_REG(&sc->hw, PRC511);
-	sc->stats.prc1023 += E1000_READ_REG(&sc->hw, PRC1023);
-	sc->stats.prc1522 += E1000_READ_REG(&sc->hw, PRC1522);
-	sc->stats.gprc += E1000_READ_REG(&sc->hw, GPRC);
-	sc->stats.bprc += E1000_READ_REG(&sc->hw, BPRC);
-	sc->stats.mprc += E1000_READ_REG(&sc->hw, MPRC);
-	sc->stats.gptc += E1000_READ_REG(&sc->hw, GPTC);
 
 	/* For the 64-bit byte counters the low dword must be read first. */
 	/* Both registers clear on the read of the high dword */
 
-	sc->stats.gorcl += E1000_READ_REG(&sc->hw, GORCL); 
-	sc->stats.gorch += E1000_READ_REG(&sc->hw, GORCH);
-	sc->stats.gotcl += E1000_READ_REG(&sc->hw, GOTCL);
-	sc->stats.gotch += E1000_READ_REG(&sc->hw, GOTCH);
+	lo = E1000_READ_REG(hw, GORCL);
+	hi = E1000_READ_REG(hw, GORCH);
+	kstat_kv_u64(&kvs[em_stat_gorc]) +=
+	    ((uint64_t)hi << 32) | (uint64_t)lo;
 
-	sc->stats.rnbc += E1000_READ_REG(&sc->hw, RNBC);
-	sc->stats.rfc += E1000_READ_REG(&sc->hw, RFC);
-	sc->stats.rjc += E1000_READ_REG(&sc->hw, RJC);
+	lo = E1000_READ_REG(hw, GOTCL);
+	hi = E1000_READ_REG(hw, GOTCH);
+	kstat_kv_u64(&kvs[em_stat_gotc]) +=
+	    ((uint64_t)hi << 32) | (uint64_t)lo;
 
-	sc->stats.torl += E1000_READ_REG(&sc->hw, TORL);
-	sc->stats.torh += E1000_READ_REG(&sc->hw, TORH);
-	sc->stats.totl += E1000_READ_REG(&sc->hw, TOTL);
-	sc->stats.toth += E1000_READ_REG(&sc->hw, TOTH);
+	lo = E1000_READ_REG(hw, TORL);
+	hi = E1000_READ_REG(hw, TORH);
+	kstat_kv_u64(&kvs[em_stat_tor]) +=
+	    ((uint64_t)hi << 32) | (uint64_t)lo;
 
-	sc->stats.tpr += E1000_READ_REG(&sc->hw, TPR);
-	sc->stats.tpt += E1000_READ_REG(&sc->hw, TPT);
-	sc->stats.ptc64 += E1000_READ_REG(&sc->hw, PTC64);
-	sc->stats.ptc127 += E1000_READ_REG(&sc->hw, PTC127);
-	sc->stats.ptc255 += E1000_READ_REG(&sc->hw, PTC255);
-	sc->stats.ptc511 += E1000_READ_REG(&sc->hw, PTC511);
-	sc->stats.ptc1023 += E1000_READ_REG(&sc->hw, PTC1023);
-	sc->stats.ptc1522 += E1000_READ_REG(&sc->hw, PTC1522);
-	sc->stats.mptc += E1000_READ_REG(&sc->hw, MPTC);
-	sc->stats.bptc += E1000_READ_REG(&sc->hw, BPTC);
-	sc->stats.sdpc += E1000_READ_REG(&sc->hw, SDPC);
-	sc->stats.mngpdc += E1000_READ_REG(&sc->hw, MGTPDC);
-	sc->stats.mngprc += E1000_READ_REG(&sc->hw, MGTPRC);
-	sc->stats.mngptc += E1000_READ_REG(&sc->hw, MGTPTC);
-	sc->stats.b2ospc += E1000_READ_REG(&sc->hw, B2OSPC);
-	sc->stats.o2bgptc += E1000_READ_REG(&sc->hw, O2BGPTC);
-	sc->stats.b2ogprc += E1000_READ_REG(&sc->hw, B2OGPRC);
-	sc->stats.o2bspc += E1000_READ_REG(&sc->hw, O2BSPC);
-	sc->stats.rpthc += E1000_READ_REG(&sc->hw, RPTHC);
+	lo = E1000_READ_REG(hw, TOTL);
+	hi = E1000_READ_REG(hw, TOTH);
+	kstat_kv_u64(&kvs[em_stat_tot]) +=
+	    ((uint64_t)hi << 32) | (uint64_t)lo;
 
-	if (sc->hw.mac_type >= em_82543) {
-		sc->stats.tncrs += 
-		E1000_READ_REG(&sc->hw, TNCRS);
-		sc->stats.tsctc += 
-		E1000_READ_REG(&sc->hw, TSCTC);
-		sc->stats.tsctfc += 
-		E1000_READ_REG(&sc->hw, TSCTFC);
-	}
-#endif
+	getnanouptime(&ks->ks_updated);
 
-	/* Fill out the OS statistics structure */
-	ifp->if_collisions = sc->stats.colc;
-
-	/* Rx Errors */
-	ifp->if_ierrors =
-	    que->rx.dropped_pkts +
-	    sc->stats.rxerrc +
-	    sc->stats.crcerrs +
-	    sc->stats.algnerrc +
-	    sc->stats.ruc + sc->stats.roc +
-	    sc->stats.mpc + sc->stats.cexterr +
-	    sc->rx_overruns;
-
-	/* Tx Errors */
-	ifp->if_oerrors = sc->stats.ecol + sc->stats.latecol +
-	    sc->watchdog_events;
+	return (0);
 }
 
-#ifdef EM_DEBUG
-/**********************************************************************
- *
- *  This routine is called only when IFF_DEBUG is enabled.
- *  This routine provides a way to take a look at important statistics
- *  maintained by the driver and hardware.
- *
- **********************************************************************/
 void
-em_print_hw_stats(struct em_softc *sc)
+em_kstat_attach(struct em_softc *sc)
 {
-	const char * const unit = DEVNAME(sc);
+	struct kstat *ks;
+	struct kstat_kv *kvs;
+	unsigned int i;
 
-	printf("%s: Excessive collisions = %lld\n", unit,
-		(long long)sc->stats.ecol);
-	printf("%s: Symbol errors = %lld\n", unit,
-		(long long)sc->stats.symerrs);
-	printf("%s: Sequence errors = %lld\n", unit,
-		(long long)sc->stats.sec);
-	printf("%s: Defer count = %lld\n", unit,
-		(long long)sc->stats.dc);
+	mtx_init(&sc->kstat_mtx, IPL_SOFTCLOCK);
 
-	printf("%s: Missed Packets = %lld\n", unit,
-		(long long)sc->stats.mpc);
-	printf("%s: Receive No Buffers = %lld\n", unit,
-		(long long)sc->stats.rnbc);
-	/* RLEC is inaccurate on some hardware, calculate our own */
-	printf("%s: Receive Length Errors = %lld\n", unit,
-		((long long)sc->stats.roc +
-		(long long)sc->stats.ruc));
-	printf("%s: Receive errors = %lld\n", unit,
-		(long long)sc->stats.rxerrc);
-	printf("%s: Crc errors = %lld\n", unit,
-		(long long)sc->stats.crcerrs);
-	printf("%s: Alignment errors = %lld\n", unit,
-		(long long)sc->stats.algnerrc);
-	printf("%s: Carrier extension errors = %lld\n", unit,
-		(long long)sc->stats.cexterr);
+	ks = kstat_create(DEVNAME(sc), 0, "em-stats", 0,
+	    KSTAT_T_KV, 0);
+	if (ks == NULL)
+		return;
 
-	printf("%s: RX overruns = %ld\n", unit,
-		sc->rx_overruns);
-	printf("%s: watchdog timeouts = %ld\n", unit,
-		sc->watchdog_events);
+	kvs = mallocarray(nitems(em_counters), sizeof(*kvs),
+	    M_DEVBUF, M_WAITOK|M_ZERO);
+	for (i = 0; i < nitems(em_counters); i++) {
+		const struct em_counter *c = &em_counters[i];
+		kstat_kv_unit_init(&kvs[i], c->name,
+		    KSTAT_KV_T_COUNTER64, c->unit);
+	}
 
-	printf("%s: XON Rcvd = %lld\n", unit,
-		(long long)sc->stats.xonrxc);
-	printf("%s: XON Xmtd = %lld\n", unit,
-		(long long)sc->stats.xontxc);
-	printf("%s: XOFF Rcvd = %lld\n", unit,
-		(long long)sc->stats.xoffrxc);
-	printf("%s: XOFF Xmtd = %lld\n", unit,
-		(long long)sc->stats.xofftxc);
+	ks->ks_softc = sc;
+	ks->ks_data = kvs;
+	ks->ks_datalen = nitems(em_counters) * sizeof(*kvs);
+	ks->ks_read = em_kstat_read;
+	kstat_set_mutex(ks, &sc->kstat_mtx);
 
-	printf("%s: Good Packets Rcvd = %lld\n", unit,
-		(long long)sc->stats.gprc);
-	printf("%s: Good Packets Xmtd = %lld\n", unit,
-		(long long)sc->stats.gptc);
-	printf("%s: Switch Drop Packet Count = %lld\n", unit,
-	    (long long)sc->stats.sdpc);
-	printf("%s: Management Packets Dropped Count  = %lld\n", unit,
-	    (long long)sc->stats.mngptc);
-	printf("%s: Management Packets Received Count  = %lld\n", unit,
-	    (long long)sc->stats.mngprc);
-	printf("%s: Management Packets Transmitted Count  = %lld\n", unit,
-	    (long long)sc->stats.mngptc);
-	printf("%s: OS2BMC Packets Sent by MC Count  = %lld\n", unit,
-	    (long long)sc->stats.b2ospc);
-	printf("%s: OS2BMC Packets Received by MC Count  = %lld\n", unit,
-	    (long long)sc->stats.o2bgptc);
-	printf("%s: OS2BMC Packets Received by Host Count  = %lld\n", unit,
-	    (long long)sc->stats.b2ogprc);
-	printf("%s: OS2BMC Packets Transmitted by Host Count  = %lld\n", unit,
-	    (long long)sc->stats.o2bspc);
-	printf("%s: Multicast Packets Received Count  = %lld\n", unit,
-	    (long long)sc->stats.mprc);
-	printf("%s: Rx Packets to Host Count = %lld\n", unit,
-	    (long long)sc->stats.rpthc);
+	kstat_install(ks);
 }
-#endif
 
+/******************************************************************************
+ * Adjusts the statistic counters when a frame is accepted by TBI_ACCEPT
+ *****************************************************************************/
+void
+em_tbi_adjust_stats(struct em_softc *sc, uint32_t frame_len, uint8_t *mac_addr)
+{
+	struct em_hw *hw = &sc->hw;
+	struct kstat *ks = sc->kstat;
+	struct kstat_kv *kvs;
+
+	if (ks == NULL)
+		return;
+
+	/* First adjust the frame length. */
+	frame_len--;
+
+	mtx_enter(&sc->kstat_mtx);
+	kvs = ks->ks_data;
+
+	/*
+	 * We need to adjust the statistics counters, since the hardware
+	 * counters overcount this packet as a CRC error and undercount the
+	 * packet as a good packet
+	 */
+
+	/* This packet should not be counted as a CRC error.	*/
+	kstat_kv_u64(&kvs[em_stat_crcerrs])--;
+	/* This packet does count as a Good Packet Received.	*/
+	kstat_kv_u64(&kvs[em_stat_gprc])++;
+
+	/* Adjust the Good Octets received counters		*/
+	kstat_kv_u64(&kvs[em_stat_gorc]) += frame_len;
+
+	/*
+	 * Is this a broadcast or multicast?  Check broadcast first, since
+	 * the test for a multicast frame will test positive on a broadcast
+	 * frame.
+	 */
+	if (ETHER_IS_BROADCAST(mac_addr)) {
+		/* Broadcast packet */
+		kstat_kv_u64(&kvs[em_stat_bprc])++;
+	} else if (ETHER_IS_MULTICAST(mac_addr)) { 
+		/* Multicast packet */
+		kstat_kv_u64(&kvs[em_stat_mprc])++;
+	}
+
+	if (frame_len == hw->max_frame_size) {
+		/*
+		 * In this case, the hardware has overcounted the number of
+		 * oversize frames.
+		 */
+		kstat_kv_u64(&kvs[em_stat_roc])--;
+	}
+
+	/*
+	 * Adjust the bin counters when the extra byte put the frame in the
+	 * wrong bin. Remember that the frame_len was adjusted above.
+	 */
+	if (frame_len == 64) {
+		kstat_kv_u64(&kvs[em_stat_prc64])++;
+		kstat_kv_u64(&kvs[em_stat_prc127])--;
+	} else if (frame_len == 127) {
+		kstat_kv_u64(&kvs[em_stat_prc127])++;
+		kstat_kv_u64(&kvs[em_stat_prc255])--;
+	} else if (frame_len == 255) {
+		kstat_kv_u64(&kvs[em_stat_prc255])++;
+		kstat_kv_u64(&kvs[em_stat_prc511])--;
+	} else if (frame_len == 511) {
+		kstat_kv_u64(&kvs[em_stat_prc511])++;
+		kstat_kv_u64(&kvs[em_stat_prc1023])--;
+	} else if (frame_len == 1023) {
+		kstat_kv_u64(&kvs[em_stat_prc1023])++;
+		kstat_kv_u64(&kvs[em_stat_prc1522])--;
+	} else if (frame_len == 1522) {
+		kstat_kv_u64(&kvs[em_stat_prc1522])++;
+	}
+
+	mtx_leave(&sc->kstat_mtx);
+}
+#endif /* NKSTAT > 0 */
+
+#ifndef SMALL_KERNEL
 int
 em_allocate_msix(struct em_softc *sc)
 {
@@ -3683,8 +3882,8 @@ em_link_intr_msix(void *arg)
 int
 em_setup_queues_msix(struct em_softc *sc)
 {
-	struct em_queue *que = sc->queues; /* Use only first queue. */
 	uint32_t ivar, newitr, index;
+	struct em_queue *que;
 
 	KASSERT(sc->msix);
 
@@ -3706,29 +3905,33 @@ em_setup_queues_msix(struct em_softc *sc)
 		 * odd is due to the weird register distribution, the datasheet
 		 * explains it well.
 		 */
-		index = que->me >> 1;
-		ivar = E1000_READ_REG_ARRAY(&sc->hw, IVAR0, index);
-		if (que->me & 1) {
-			ivar &= 0xFF00FFFF;
-			ivar |= (que->me | E1000_IVAR_VALID) << 16;
-		} else {
-			ivar &= 0xFFFFFF00;
-			ivar |= que->me | E1000_IVAR_VALID;
+		FOREACH_QUEUE(sc, que) {
+			index = que->me >> 1;
+			ivar = E1000_READ_REG_ARRAY(&sc->hw, IVAR0, index);
+			if (que->me & 1) {
+				ivar &= 0xFF00FFFF;
+				ivar |= (que->me | E1000_IVAR_VALID) << 16;
+			} else {
+				ivar &= 0xFFFFFF00;
+				ivar |= que->me | E1000_IVAR_VALID;
+			}
+			E1000_WRITE_REG_ARRAY(&sc->hw, IVAR0, index, ivar);
 		}
-		E1000_WRITE_REG_ARRAY(&sc->hw, IVAR0, index, ivar);
 
 		/* TX entries */
-		index = que->me >> 1;
-		ivar = E1000_READ_REG_ARRAY(&sc->hw, IVAR0, index);
-		if (que->me & 1) {
-			ivar &= 0x00FFFFFF;
-			ivar |= (que->me | E1000_IVAR_VALID) << 24;
-		} else {
-			ivar &= 0xFFFF00FF;
-			ivar |= (que->me | E1000_IVAR_VALID) << 8;
+		FOREACH_QUEUE(sc, que) {
+			index = que->me >> 1;
+			ivar = E1000_READ_REG_ARRAY(&sc->hw, IVAR0, index);
+			if (que->me & 1) {
+				ivar &= 0x00FFFFFF;
+				ivar |= (que->me | E1000_IVAR_VALID) << 24;
+			} else {
+				ivar &= 0xFFFF00FF;
+				ivar |= (que->me | E1000_IVAR_VALID) << 8;
+			}
+			E1000_WRITE_REG_ARRAY(&sc->hw, IVAR0, index, ivar);
+			sc->msix_queuesmask |= que->eims;
 		}
-		E1000_WRITE_REG_ARRAY(&sc->hw, IVAR0, index, ivar);
-		sc->msix_queuesmask |= que->eims;
 
 		/* And for the link interrupt */
 		ivar = (sc->msix_linkvec | E1000_IVAR_VALID) << 8;
@@ -3737,29 +3940,33 @@ em_setup_queues_msix(struct em_softc *sc)
 		break;
 	case em_82576:
 		/* RX entries */
-		index = que->me & 0x7; /* Each IVAR has two entries */
-		ivar = E1000_READ_REG_ARRAY(&sc->hw, IVAR0, index);
-		if (que->me < 8) {
-			ivar &= 0xFFFFFF00;
-			ivar |= que->me | E1000_IVAR_VALID;
-		} else {
-			ivar &= 0xFF00FFFF;
-			ivar |= (que->me | E1000_IVAR_VALID) << 16;
+		FOREACH_QUEUE(sc, que) {
+			index = que->me & 0x7; /* Each IVAR has two entries */
+			ivar = E1000_READ_REG_ARRAY(&sc->hw, IVAR0, index);
+			if (que->me < 8) {
+				ivar &= 0xFFFFFF00;
+				ivar |= que->me | E1000_IVAR_VALID;
+			} else {
+				ivar &= 0xFF00FFFF;
+				ivar |= (que->me | E1000_IVAR_VALID) << 16;
+			}
+			E1000_WRITE_REG_ARRAY(&sc->hw, IVAR0, index, ivar);
+			sc->msix_queuesmask |= que->eims;
 		}
-		E1000_WRITE_REG_ARRAY(&sc->hw, IVAR0, index, ivar);
-		sc->msix_queuesmask |= que->eims;
 		/* TX entries */
-		index = que->me & 0x7; /* Each IVAR has two entries */
-		ivar = E1000_READ_REG_ARRAY(&sc->hw, IVAR0, index);
-		if (que->me < 8) {
-			ivar &= 0xFFFF00FF;
-			ivar |= (que->me | E1000_IVAR_VALID) << 8;
-		} else {
-			ivar &= 0x00FFFFFF;
-			ivar |= (que->me | E1000_IVAR_VALID) << 24;
+		FOREACH_QUEUE(sc, que) {
+			index = que->me & 0x7; /* Each IVAR has two entries */
+			ivar = E1000_READ_REG_ARRAY(&sc->hw, IVAR0, index);
+			if (que->me < 8) {
+				ivar &= 0xFFFF00FF;
+				ivar |= (que->me | E1000_IVAR_VALID) << 8;
+			} else {
+				ivar &= 0x00FFFFFF;
+				ivar |= (que->me | E1000_IVAR_VALID) << 24;
+			}
+			E1000_WRITE_REG_ARRAY(&sc->hw, IVAR0, index, ivar);
+			sc->msix_queuesmask |= que->eims;
 		}
-		E1000_WRITE_REG_ARRAY(&sc->hw, IVAR0, index, ivar);
-		sc->msix_queuesmask |= que->eims;
 
 		/* And for the link interrupt */
 		ivar = (sc->msix_linkvec | E1000_IVAR_VALID) << 8;
@@ -3779,7 +3986,8 @@ em_setup_queues_msix(struct em_softc *sc)
 	else
 		newitr |= E1000_EITR_CNT_IGNR;
 
-	E1000_WRITE_REG(&sc->hw, EITR(que->me), newitr);
+	FOREACH_QUEUE(sc, que)
+		E1000_WRITE_REG(&sc->hw, EITR(que->me), newitr);
 
 	return (0);
 }
@@ -3794,27 +4002,29 @@ em_enable_queue_intr_msix(struct em_queue *que)
 int
 em_allocate_desc_rings(struct em_softc *sc)
 {
-	struct em_queue *que = sc->queues; /* Use only first queue. */
+	struct em_queue *que;
 
-	/* Allocate Transmit Descriptor ring */
-	if (em_dma_malloc(sc, sc->sc_tx_slots * sizeof(struct em_tx_desc),
-	    &que->tx.sc_tx_dma) != 0) {
-		printf("%s: Unable to allocate tx_desc memory\n", 
-		       DEVNAME(sc));
-		return (ENOMEM);
-	}
-	que->tx.sc_tx_desc_ring =
-	    (struct em_tx_desc *)que->tx.sc_tx_dma.dma_vaddr;
+	FOREACH_QUEUE(sc, que) {
+		/* Allocate Transmit Descriptor ring */
+		if (em_dma_malloc(sc, sc->sc_tx_slots * sizeof(struct em_tx_desc),
+		    &que->tx.sc_tx_dma) != 0) {
+			printf("%s: Unable to allocate tx_desc memory\n",
+			    DEVNAME(sc));
+			return (ENOMEM);
+		}
+		que->tx.sc_tx_desc_ring =
+		    (struct em_tx_desc *)que->tx.sc_tx_dma.dma_vaddr;
 
-	/* Allocate Receive Descriptor ring */
-	if (em_dma_malloc(sc, sc->sc_rx_slots * sizeof(struct em_rx_desc),
-	    &que->rx.sc_rx_dma) != 0) {
-		printf("%s: Unable to allocate rx_desc memory\n",
-		       DEVNAME(sc));
-		return (ENOMEM);
+		/* Allocate Receive Descriptor ring */
+		if (em_dma_malloc(sc, sc->sc_rx_slots * sizeof(struct em_rx_desc),
+		    &que->rx.sc_rx_dma) != 0) {
+			printf("%s: Unable to allocate rx_desc memory\n",
+			    DEVNAME(sc));
+			return (ENOMEM);
+		}
+		que->rx.sc_rx_desc_ring =
+		    (struct em_rx_desc *)que->rx.sc_rx_dma.dma_vaddr;
 	}
-	que->rx.sc_rx_desc_ring =
-	    (struct em_rx_desc *)que->rx.sc_rx_dma.dma_vaddr;
 
 	return (0);
 }

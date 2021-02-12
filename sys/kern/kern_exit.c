@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_exit.c,v 1.188 2020/03/18 15:48:21 visa Exp $	*/
+/*	$OpenBSD: kern_exit.c,v 1.195 2021/02/08 10:51:01 mpi Exp $	*/
 /*	$NetBSD: kern_exit.c,v 1.39 1996/04/22 01:38:25 christos Exp $	*/
 
 /*
@@ -140,7 +140,7 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 			single_thread_check(p, 0);
 	}
 
-	if (flags == EXIT_NORMAL) {
+	if (flags == EXIT_NORMAL && !(pr->ps_flags & PS_EXITING)) {
 		if (pr->ps_pid == 1)
 			panic("init died (signal %d, exit %d)", xsig, xexit);
 
@@ -184,6 +184,8 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 	if ((p->p_flag & P_THREAD) == 0)
 		pr->ps_siglist = 0;
 
+	kqpoll_exit();
+
 #if NKCOV > 0
 	kcov_exit(p);
 #endif
@@ -194,7 +196,8 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 		/* close open files and release open-file table */
 		fdfree(p);
 
-		timeout_del(&pr->ps_realit_to);
+		cancel_all_itimers();
+
 		timeout_del(&pr->ps_rucheck_to);
 #ifdef SYSVSEM
 		semexit(pr);
@@ -690,6 +693,7 @@ process_reparent(struct process *child, struct process *parent)
 	}
 
 	child->ps_pptr = parent;
+	child->ps_ppid = parent->ps_pid;
 }
 
 void
