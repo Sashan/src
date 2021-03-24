@@ -765,6 +765,11 @@ ip_insertoptions(struct mbuf *m, struct mbuf *opt, int *phlen)
 	optlen = opt->m_len - sizeof(p->ipopt_dst);
 	if (optlen + ntohs(ip->ip_len) > IP_MAXPACKET)
 		return (m);		/* XXX should fail */
+
+	/* check if options will fit to IP header */
+	if ((optlen + (ip->ip_hl << 2)) > (0x0f << 2))
+		return (m);
+
 	if (p->ipopt_dst.s_addr)
 		ip->ip_dst = p->ipopt_dst;
 	if (m->m_flags & M_EXT || m->m_data - optlen < m->m_pktdat) {
@@ -790,6 +795,7 @@ ip_insertoptions(struct mbuf *m, struct mbuf *opt, int *phlen)
 	memcpy(ip + 1, p->ipopt_list, optlen);
 	*phlen = sizeof(struct ip) + optlen;
 	ip->ip_len = htons(ntohs(ip->ip_len) + optlen);
+	ip->ip_hl += (optlen >> 2);
 	return (m);
 }
 

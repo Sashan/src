@@ -1789,7 +1789,7 @@ ip_send_dispatch(void *xmq)
 
 	NET_LOCK();
 	while ((m = ml_dequeue(&ml)) != NULL) {
-		ip_output(m, NULL, NULL, 0, NULL, NULL, 0);
+		ip_output(m, NULL, NULL, IP_RAWOUTPUT, NULL, NULL, 0);
 	}
 	NET_UNLOCK();
 }
