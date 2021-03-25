@@ -240,6 +240,7 @@ struct mbuf *
 u_int16_t
 	 ip_randomid(void);
 void	 ip_send(struct mbuf *);
+void	 ip_send_raw(struct mbuf *);
 void	 ip_slowtimo(void);
 struct mbuf *
 	 ip_srcroute(struct mbuf *);

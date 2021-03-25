@@ -139,6 +139,7 @@ struct cpumem *ipcounters;
 int ip_sysctl_ipstat(void *, size_t *, void *);
 
 static struct mbuf_queue	ipsend_mq;
+static struct mbuf_queue	ipsendraw_mq;
 
 extern struct niqueue		arpinq;
 
@@ -147,7 +148,11 @@ int	ip_dooptions(struct mbuf *, struct ifnet *);
 int	in_ouraddr(struct mbuf *, struct ifnet *, struct rtentry **);
 
 static void ip_send_dispatch(void *);
+static void ip_sendraw_dispatch(void *);
 static struct task ipsend_task = TASK_INITIALIZER(ip_send_dispatch, &ipsend_mq);
+static struct task ipsendraw_task =
+	TASK_INITIALIZER(ip_sendraw_dispatch, &ipsendraw_mq);
+
 /*
  * Used to save the IP options in case a protocol wants to respond
  * to an incoming packet over the same route if the packet got here
@@ -1777,7 +1782,7 @@ ip_savecontrol(struct inpcb *inp, struct mbuf **mp, struct ip *ip,
 }
 
 void
-ip_send_dispatch(void *xmq)
+ip_sendraw_dispatch(void *xmq)
 {
 	struct mbuf_queue *mq = xmq;
 	struct mbuf *m;
@@ -1795,8 +1800,33 @@ ip_send_dispatch(void *xmq)
 }
 
 void
+ip_send_dispatch(void *xmq)
+{
+	struct mbuf_queue *mq = xmq;
+	struct mbuf *m;
+	struct mbuf_list ml;
+
+	mq_delist(mq, &ml);
+	if (ml_empty(&ml))
+		return;
+
+	NET_LOCK();
+	while ((m = ml_dequeue(&ml)) != NULL) {
+		ip_output(m, NULL, NULL, 0, NULL, NULL, 0);
+	}
+	NET_UNLOCK();
+}
+
+void
 ip_send(struct mbuf *m)
 {
 	mq_enqueue(&ipsend_mq, m);
 	task_add(net_tq(0), &ipsend_task);
+}
+
+void
+ip_send_raw(struct mbuf *m)
+{
+	mq_enqueue(&ipsendraw_mq, m);
+	task_add(net_tq(0), &ipsendraw_task);
 }

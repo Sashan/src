@@ -846,10 +846,15 @@ icmp_send(struct mbuf *m, struct mbuf *opts)
 		printf("icmp_send dst %s src %s\n", dst, src);
 	}
 #endif
-	if (opts != NULL)
+	if (opts != NULL) {
 		m = ip_insertoptions(m, opts, &hlen);
-
-	ip_send(m);
+		ip->ip_v = IPVERSION;
+		ip->ip_off &= htons(IP_DF);
+		ip->ip_id = htons(ip_randomid());
+		ipstat_inc(ips_localout);
+		ip_send_raw(m);
+	} else
+		ip_send(m);
 }
 
 u_int32_t
