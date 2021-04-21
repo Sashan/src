@@ -1,4 +1,4 @@
-/* $OpenBSD: grid-reader.c,v 1.1 2020/12/22 09:22:14 nicm Exp $ */
+/* $OpenBSD: grid-reader.c,v 1.3 2021/03/09 08:24:09 nicm Exp $ */
 
 /*
  * Copyright (c) 2020 Anindya Mukherjee <anindya49@hotmail.com>
@@ -17,6 +17,7 @@
  */
 
 #include "tmux.h"
+#include <string.h>
 
 /* Initialise virtual cursor. */
 void
@@ -171,7 +172,7 @@ grid_reader_cursor_next_word(struct grid_reader *gr, const char *separators)
 
 	/* Do not break up wrapped words. */
 	if (grid_get_line(gr->gd, gr->cy)->flags & GRID_LINE_WRAPPED)
-		xx = grid_reader_line_length(gr) - 1;
+		xx = gr->gd->sx - 1;
 	else
 		xx = grid_reader_line_length(gr);
 	yy = gr->gd->hsize + gr->gd->sy - 1;
@@ -196,7 +197,7 @@ grid_reader_cursor_next_word(struct grid_reader *gr, const char *separators)
 
 				if (grid_get_line(gr->gd, gr->cy)->flags &
 				    GRID_LINE_WRAPPED)
-					xx = grid_reader_line_length(gr) - 1;
+					xx = gr->gd->sx - 1;
 				else
 					xx = grid_reader_line_length(gr);
 			} else
@@ -215,7 +216,7 @@ grid_reader_cursor_next_word_end(struct grid_reader *gr, const char *separators)
 
 	/* Do not break up wrapped words. */
 	if (grid_get_line(gr->gd, gr->cy)->flags & GRID_LINE_WRAPPED)
-		xx = grid_reader_line_length(gr) - 1;
+		xx = gr->gd->sx - 1;
 	else
 		xx = grid_reader_line_length(gr);
 	yy = gr->gd->hsize + gr->gd->sy - 1;
@@ -240,7 +241,7 @@ grid_reader_cursor_next_word_end(struct grid_reader *gr, const char *separators)
 
 				if (grid_get_line(gr->gd, gr->cy)->flags &
 				    GRID_LINE_WRAPPED)
-					xx = grid_reader_line_length(gr) - 1;
+					xx = gr->gd->sx - 1;
 				else
 					xx = grid_reader_line_length(gr);
 			} else
@@ -293,11 +294,72 @@ grid_reader_cursor_previous_word(struct grid_reader *gr, const char *separators,
 			  GRID_LINE_WRAPPED)
 				break;
 			grid_reader_cursor_up(gr);
-			grid_reader_cursor_end_of_line(gr, 0, 0);
+			grid_reader_cursor_end_of_line(gr, 0, 1);
 		}
 		if (gr->cx > 0)
 			gr->cx--;
 	} while (!grid_reader_in_set(gr, separators));
 	gr->cx = oldx;
 	gr->cy = oldy;
+}
+
+/* Jump forward to character. */
+int
+grid_reader_cursor_jump(struct grid_reader *gr, const struct utf8_data *jc)
+{
+	struct grid_cell	gc;
+	u_int			px, py, xx, yy;
+
+	px = gr->cx;
+	yy = gr->gd->hsize + gr->gd->sy - 1;
+
+	for (py = gr->cy; py <= yy; py++) {
+		xx = grid_line_length(gr->gd, py);
+		while (px < xx) {
+			grid_get_cell(gr->gd, px, py, &gc);
+			if (!(gc.flags & GRID_FLAG_PADDING) &&
+			    gc.data.size == jc->size &&
+			    memcmp(gc.data.data, jc->data, gc.data.size) == 0) {
+				gr->cx = px;
+				gr->cy = py;
+				return 1;
+			}
+			px++;
+		}
+
+		if (py == yy ||
+		    !(grid_get_line(gr->gd, py)->flags & GRID_LINE_WRAPPED))
+			return 0;
+		px = 0;
+	}
+	return 0;
+}
+
+/* Jump back to character. */
+int
+grid_reader_cursor_jump_back(struct grid_reader *gr, const struct utf8_data *jc)
+{
+	struct grid_cell	gc;
+	u_int			px, py, xx;
+
+	xx = gr->cx + 1;
+
+	for (py = gr->cy + 1; py > 0; py--) {
+		for (px = xx; px > 0; px--) {
+			grid_get_cell(gr->gd, px - 1, py - 1, &gc);
+			if (!(gc.flags & GRID_FLAG_PADDING) &&
+			    gc.data.size == jc->size &&
+			    memcmp(gc.data.data, jc->data, gc.data.size) == 0) {
+				gr->cx = px - 1;
+				gr->cy = py - 1;
+				return 1;
+			}
+		}
+
+		if (py == 1 ||
+		    !(grid_get_line(gr->gd, py - 2)->flags & GRID_LINE_WRAPPED))
+			return 0;
+		xx = grid_line_length(gr->gd, py - 2);
+	}
+	return 0;
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: dwpcie.c,v 1.24 2020/12/28 12:24:31 kettenis Exp $	*/
+/*	$OpenBSD: dwpcie.c,v 1.28 2021/03/22 20:30:21 patrick Exp $	*/
 /*
  * Copyright (c) 2018 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -100,6 +100,14 @@
 #define  PCIE_AXUSER_DOMAIN_MASK		(0x3 << 4)
 #define  PCIE_AXUSER_DOMAIN_INNER_SHARABLE	(0x1 << 4)
 #define  PCIE_AXUSER_DOMAIN_OUTER_SHARABLE	(0x2 << 4)
+#define PCIE_STREAMID		0x8064
+#define  PCIE_STREAMID_FUNC_BITS(x)		((x) << 0)
+#define  PCIE_STREAMID_DEV_BITS(x)		((x) << 4)
+#define  PCIE_STREAMID_BUS_BITS(x)		((x) << 8)
+#define  PCIE_STREAMID_ROOTPORT(x)		((x) << 12)
+#define  PCIE_STREAMID_8040			\
+    (PCIE_STREAMID_ROOTPORT(0x80) | PCIE_STREAMID_BUS_BITS(2) | \
+     PCIE_STREAMID_DEV_BITS(2) | PCIE_STREAMID_FUNC_BITS(3))
 
 /* Amlogic G12A registers */
 #define PCIE_CFG0		0x0000
@@ -217,6 +225,12 @@ struct dwpcie_softc {
 	void			*sc_ih;
 };
 
+struct dwpcie_intr_handle {
+	struct arm_intr_handle	 pih_ih;
+	bus_dma_tag_t		 pih_dmat;
+	bus_dmamap_t		 pih_map;
+};
+
 int dwpcie_match(struct device *, void *, void *);
 void dwpcie_attach(struct device *, struct device *, void *);
 
@@ -264,6 +278,7 @@ void	dwpcie_decompose_tag(void *, pcitag_t, int *, int *, int *);
 int	dwpcie_conf_size(void *, pcitag_t);
 pcireg_t dwpcie_conf_read(void *, pcitag_t, int);
 void	dwpcie_conf_write(void *, pcitag_t, int, pcireg_t);
+int	dwpcie_probe_device_hook(void *, struct pci_attach_args *);
 
 int	dwpcie_intr_map(struct pci_attach_args *, pci_intr_handle_t *);
 const char *dwpcie_intr_string(void *, pci_intr_handle_t);
@@ -275,6 +290,10 @@ int	dwpcie_bs_iomap(bus_space_tag_t, bus_addr_t, bus_size_t, int,
 	    bus_space_handle_t *);
 int	dwpcie_bs_memmap(bus_space_tag_t, bus_addr_t, bus_size_t, int,
 	    bus_space_handle_t *);
+
+struct interrupt_controller dwpcie_ic = {
+	.ic_barrier = intr_barrier
+};
 
 void
 dwpcie_attach(struct device *parent, struct device *self, void *aux)
@@ -535,6 +554,7 @@ dwpcie_attach_deferred(struct device *self)
 	sc->sc_pc.pc_conf_size = dwpcie_conf_size;
 	sc->sc_pc.pc_conf_read = dwpcie_conf_read;
 	sc->sc_pc.pc_conf_write = dwpcie_conf_write;
+	sc->sc_pc.pc_probe_device_hook = dwpcie_probe_device_hook;
 
 	sc->sc_pc.pc_intr_v = sc;
 	sc->sc_pc.pc_intr_map = dwpcie_intr_map;
@@ -618,6 +638,12 @@ dwpcie_armada8k_init(struct dwpcie_softc *sc)
 		reg &= ~PCIE_GLOBAL_CTRL_APP_LTSSM_EN;
 		HWRITE4(sc, PCIE_GLOBAL_CTRL, reg);
 	}
+
+	/*
+	 * Setup Requester-ID to Stream-ID mapping
+	 * XXX: TF-A is supposed to set this up, but doesn't!
+	 */
+	HWRITE4(sc, PCIE_STREAMID, PCIE_STREAMID_8040);
 
 	/* Enable Root Complex mode. */
 	reg = HREAD4(sc, PCIE_GLOBAL_CTRL);
@@ -1131,6 +1157,18 @@ dwpcie_conf_write(void *v, pcitag_t tag, int reg, pcireg_t data)
 }
 
 int
+dwpcie_probe_device_hook(void *v, struct pci_attach_args *pa)
+{
+	struct dwpcie_softc *sc = v;
+	uint16_t rid;
+
+	rid = pci_requester_id(pa->pa_pc, pa->pa_tag);
+	pa->pa_dmat = iommu_device_map_pci(sc->sc_node, rid, pa->pa_dmat);
+
+	return 0;
+}
+
+int
 dwpcie_intr_map(struct pci_attach_args *pa, pci_intr_handle_t *ihp)
 {
 	int pin = pa->pa_rawintrpin;
@@ -1167,6 +1205,8 @@ dwpcie_intr_establish(void *v, pci_intr_handle_t ih, int level,
     struct cpu_info *ci, int (*func)(void *), void *arg, char *name)
 {
 	struct dwpcie_softc *sc = v;
+	struct dwpcie_intr_handle *pih;
+	bus_dma_segment_t seg;
 	void *cookie;
 
 	KASSERT(ih.ih_type != PCI_NONE);
@@ -1181,8 +1221,31 @@ dwpcie_intr_establish(void *v, pci_intr_handle_t ih, int level,
 		if (cookie == NULL)
 			return NULL;
 
-		/* TODO: translate address to the PCI device's view */
+		pih = malloc(sizeof(*pih), M_DEVBUF, M_WAITOK);
+		pih->pih_ih.ih_ic = &dwpcie_ic;
+		pih->pih_ih.ih_ih = cookie;
+		pih->pih_dmat = ih.ih_dmat;
 
+		if (bus_dmamap_create(pih->pih_dmat, sizeof(uint32_t), 1,
+		    sizeof(uint32_t), 0, BUS_DMA_WAITOK, &pih->pih_map)) {
+			free(pih, M_DEVBUF, sizeof(*pih));
+			fdt_intr_disestablish(cookie);
+			return NULL;
+		}
+
+		memset(&seg, 0, sizeof(seg));
+		seg.ds_addr = addr;
+		seg.ds_len = sizeof(uint32_t);
+
+		if (bus_dmamap_load_raw(pih->pih_dmat, pih->pih_map,
+		    &seg, 1, sizeof(uint32_t), BUS_DMA_WAITOK)) {
+			bus_dmamap_destroy(pih->pih_dmat, pih->pih_map);
+			free(pih, M_DEVBUF, sizeof(*pih));
+			fdt_intr_disestablish(cookie);
+			return NULL;
+		}
+
+		addr = pih->pih_map->dm_segs[0].ds_addr;
 		if (ih.ih_type == PCI_MSIX) {
 			pci_msix_enable(ih.ih_pc, ih.ih_tag,
 			    &sc->sc_bus_memt, ih.ih_intrpin, addr, data);
@@ -1200,15 +1263,29 @@ dwpcie_intr_establish(void *v, pci_intr_handle_t ih, int level,
 
 		cookie = fdt_intr_establish_imap_cpu(sc->sc_node, reg,
 		    sizeof(reg), level, ci, func, arg, name);
+		if (cookie == NULL)
+			return NULL;
+
+		pih = malloc(sizeof(*pih), M_DEVBUF, M_WAITOK);
+		pih->pih_ih.ih_ic = &dwpcie_ic;
+		pih->pih_ih.ih_ih = cookie;
+		pih->pih_dmat = NULL;
 	}
 
-	return cookie;
+	return pih;
 }
 
 void
 dwpcie_intr_disestablish(void *v, void *cookie)
 {
-	panic("%s", __func__);
+	struct dwpcie_intr_handle *pih = cookie;
+
+	fdt_intr_disestablish(pih->pih_ih.ih_ih);
+	if (pih->pih_dmat) {
+		bus_dmamap_unload(pih->pih_dmat, pih->pih_map);
+		bus_dmamap_destroy(pih->pih_dmat, pih->pih_map);
+	}
+	free(pih, M_DEVBUF, sizeof(*pih));
 }
 
 int

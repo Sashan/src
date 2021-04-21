@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_verify.c,v 1.30 2021/01/09 03:51:42 jsing Exp $ */
+/* $OpenBSD: x509_verify.c,v 1.36 2021/03/13 23:01:49 tobhe Exp $ */
 /*
  * Copyright (c) 2020-2021 Bob Beck <beck@openbsd.org>
  *
@@ -52,7 +52,8 @@ x509_verify_chain_new(void)
 	if ((chain->cert_errors = calloc(X509_VERIFY_MAX_CHAIN_CERTS,
 	    sizeof(int))) == NULL)
 		goto err;
-	if ((chain->names = x509_constraints_names_new()) == NULL)
+	if ((chain->names =
+	    x509_constraints_names_new(X509_VERIFY_MAX_CHAIN_NAMES)) == NULL)
 		goto err;
 
 	return chain;
@@ -195,24 +196,29 @@ x509_verify_ctx_cert_is_root(struct x509_verify_ctx *ctx, X509 *cert)
 
 static int
 x509_verify_ctx_set_xsc_chain(struct x509_verify_ctx *ctx,
-    struct x509_verify_chain *chain, int set_error)
+    struct x509_verify_chain *chain, int set_error, int is_trusted)
 {
-	X509 *last = x509_verify_chain_last(chain);
-	size_t depth;
+	size_t num_untrusted;
 	int i;
 
 	if (ctx->xsc == NULL)
 		return 1;
 
-	depth = sk_X509_num(chain->certs);
-	if (depth > 0)
-		depth--;
+	/*
+	 * XXX last_untrusted is actually the number of untrusted certs at the
+	 * bottom of the chain. This works now since we stop at the first
+	 * trusted cert. This will need fixing once we allow more than one
+	 * trusted certificate.
+	 */
+	num_untrusted = sk_X509_num(chain->certs);
+	if (is_trusted && num_untrusted > 0)
+		num_untrusted--;
+	ctx->xsc->last_untrusted = num_untrusted;
 
-	ctx->xsc->last_untrusted = depth ? depth - 1 : 0;
 	sk_X509_pop_free(ctx->xsc->chain, X509_free);
 	ctx->xsc->chain = X509_chain_up_ref(chain->certs);
 	if (ctx->xsc->chain == NULL)
-		return x509_verify_cert_error(ctx, last, depth,
+		return x509_verify_cert_error(ctx, NULL, 0,
 		    X509_V_ERR_OUT_OF_MEM, 0);
 
 	if (set_error) {
@@ -264,7 +270,7 @@ x509_verify_ctx_add_chain(struct x509_verify_ctx *ctx,
 		ctx->xsc->error = X509_V_OK;
 		ctx->xsc->error_depth = 0;
 
-		if (!x509_verify_ctx_set_xsc_chain(ctx, chain, 0))
+		if (!x509_verify_ctx_set_xsc_chain(ctx, chain, 0, 1))
 			return 0;
 
 		/*
@@ -430,7 +436,7 @@ x509_verify_consider_candidate(struct x509_verify_ctx *ctx, X509 *cert,
 	 * give up.
 	 */
 	if (is_root_cert) {
-		if (!x509_verify_ctx_set_xsc_chain(ctx, new_chain, 0)) {
+		if (!x509_verify_ctx_set_xsc_chain(ctx, new_chain, 0, 1)) {
 			x509_verify_chain_free(new_chain);
 			return 0;
 		}
@@ -555,7 +561,7 @@ x509_verify_build_chains(struct x509_verify_ctx *ctx, X509 *cert,
 		if (depth == 0 &&
 		    ctx->error == X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY)
 			ctx->error = X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE;
-		if (!x509_verify_ctx_set_xsc_chain(ctx, current_chain, 0))
+		if (!x509_verify_ctx_set_xsc_chain(ctx, current_chain, 0, 0))
 			return;
 		(void) x509_verify_cert_error(ctx, cert, depth,
 		    ctx->error, 0);
@@ -715,11 +721,13 @@ x509_verify_validate_constraints(X509 *cert,
 		return 1;
 
 	if (cert->nc != NULL) {
-		if ((permitted = x509_constraints_names_new()) == NULL) {
+		if ((permitted = x509_constraints_names_new(
+		    X509_VERIFY_MAX_CHAIN_CONSTRAINTS)) == NULL) {
 			err = X509_V_ERR_OUT_OF_MEM;
 			goto err;
 		}
-		if ((excluded = x509_constraints_names_new()) == NULL) {
+		if ((excluded = x509_constraints_names_new(
+		    X509_VERIFY_MAX_CHAIN_CONSTRAINTS)) == NULL) {
 			err = X509_V_ERR_OUT_OF_MEM;
 			goto err;
 		}
@@ -748,6 +756,10 @@ x509_verify_cert_extensions(struct x509_verify_ctx *ctx, X509 *cert, int need_ca
 		CRYPTO_w_lock(CRYPTO_LOCK_X509);
 		x509v3_cache_extensions(cert);
 		CRYPTO_w_unlock(CRYPTO_LOCK_X509);
+		if (cert->ex_flags & EXFLAG_INVALID) {
+			ctx->error = X509_V_ERR_UNSPECIFIED;
+			return 0;
+		}
 	}
 
 	if (ctx->xsc != NULL)
@@ -1041,7 +1053,8 @@ x509_verify(struct x509_verify_ctx *ctx, X509 *leaf, char *name)
 		ctx->xsc->error = ctx->error;
 		if (ctx->chains_count > 0) {
 			/* Take the first chain we found. */
-			if (!x509_verify_ctx_set_xsc_chain(ctx, ctx->chains[0], 1))
+			if (!x509_verify_ctx_set_xsc_chain(ctx, ctx->chains[0],
+			    1, 1))
 				goto err;
 		}
 		return ctx->xsc->verify_cb(ctx->chains_count > 0, ctx->xsc);

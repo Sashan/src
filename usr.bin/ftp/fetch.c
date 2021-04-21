@@ -1,4 +1,4 @@
-/*	$OpenBSD: fetch.c,v 1.200 2021/02/02 12:58:42 robert Exp $	*/
+/*	$OpenBSD: fetch.c,v 1.203 2021/03/13 11:36:31 sthen Exp $	*/
 /*	$NetBSD: fetch.c,v 1.14 1997/08/18 10:20:20 lukem Exp $	*/
 
 /*-
@@ -56,7 +56,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <util.h>
 #include <resolv.h>
 #include <utime.h>
 
@@ -76,7 +75,6 @@ static void	aborthttp(int);
 static char	hextochar(const char *);
 static char	*urldecode(const char *);
 static char	*recode_credentials(const char *_userinfo);
-static char	*ftp_readline(FILE *, size_t *);
 static void	ftp_close(FILE **, struct tls **, int *);
 static const char *sockerror(struct tls *);
 #ifdef SMALL
@@ -330,6 +328,7 @@ url_get(const char *origline, const char *proxyenv, const char *outfile, int las
 	off_t hashbytes;
 	const char *errstr;
 	ssize_t len, wlen;
+	size_t bufsize;
 	char *proxyhost = NULL;
 #ifndef NOSSL
 	char *sslpath = NULL, *sslhost = NULL;
@@ -805,12 +804,13 @@ noslash:
 	free(buf);
 #endif /* !NOSSL */
 	buf = NULL;
+	bufsize = 0;
 
 	if (fflush(fin) == EOF) {
 		warnx("Writing HTTP request: %s", sockerror(tls));
 		goto cleanup_url_get;
 	}
-	if ((buf = ftp_readline(fin, &len)) == NULL) {
+	if ((len = getline(&buf, &bufsize, fin)) == -1) {
 		warnx("Receiving HTTP reply: %s", sockerror(tls));
 		goto cleanup_url_get;
 	}
@@ -885,11 +885,10 @@ noslash:
 	/*
 	 * Read the rest of the header.
 	 */
-	free(buf);
 	filesize = -1;
 
 	for (;;) {
-		if ((buf = ftp_readline(fin, &len)) == NULL) {
+		if ((len = getline(&buf, &bufsize, fin)) == -1) {
 			warnx("Receiving HTTP reply: %s", sockerror(tls));
 			goto cleanup_url_get;
 		}
@@ -1001,8 +1000,9 @@ noslash:
 				server_timestamps = 0;
 #endif /* !SMALL */
 		}
-		free(buf);
 	}
+	free(buf);
+	buf = NULL;
 
 	/* Content-Length should be ignored for Transfer-Encoding: chunked */
 	if (chunked)
@@ -1046,7 +1046,6 @@ noslash:
 #endif
 	}
 
-	free(buf);
 	if ((buf = malloc(buflen)) == NULL)
 		errx(1, "Can't allocate memory for transfer buffer");
 
@@ -1143,7 +1142,8 @@ cleanup_url_get:
 	ftp_close(&fin, &tls, &fd);
 	if (out >= 0 && out != fileno(stdout)) {
 #ifndef SMALL
-		if (server_timestamps && lmt.tm_zone != 0) {
+		if (server_timestamps && lmt.tm_zone != 0 &&
+		    fstat(out, &stbuf) == 0 && S_ISREG(stbuf.st_mode) != 0) {
 			ts[0].tv_nsec = UTIME_NOW;
 			ts[1].tv_nsec = 0;
 			setenv("TZ", lmt.tm_zone, 1);
@@ -1168,15 +1168,14 @@ static int
 save_chunked(FILE *fin, struct tls *tls, int out, char *buf, size_t buflen)
 {
 
-	char			*header, *end, *cp;
+	char			*header = NULL, *end, *cp;
 	unsigned long		chunksize;
-	size_t			hlen, rlen, wlen;
+	size_t			hsize = 0, rlen, wlen;
 	ssize_t			written;
 	char			cr, lf;
 
 	for (;;) {
-		header = ftp_readline(fin, &hlen);
-		if (header == NULL)
+		if (getline(&header, &hsize, fin) == -1)
 			break;
 		/* strip CRLF and any optional chunk extension */
 		header[strcspn(header, ";\r\n")] = '\0';
@@ -1188,10 +1187,10 @@ save_chunked(FILE *fin, struct tls *tls, int out, char *buf, size_t buflen)
 			free(header);
 			return -1;
 		}
-		free(header);
 
 		if (chunksize == 0) {
 			/* We're done.  Ignore optional trailer. */
+			free(header);
 			return 0;
 		}
 
@@ -1205,6 +1204,7 @@ save_chunked(FILE *fin, struct tls *tls, int out, char *buf, size_t buflen)
 			    wlen -= written, cp += written) {
 				if ((written = write(out, cp, wlen)) == -1) {
 					warn("Writing output file");
+					free(header);
 					return -1;
 				}
 			}
@@ -1217,9 +1217,11 @@ save_chunked(FILE *fin, struct tls *tls, int out, char *buf, size_t buflen)
 
 		if (cr != '\r' || lf != '\n') {
 			warnx("Invalid chunked encoding");
+			free(header);
 			return -1;
 		}
 	}
+	free(header);
 
 	if (ferror(fin))
 		warnx("Error while reading from socket: %s", sockerror(tls));
@@ -1652,12 +1654,6 @@ isurl(const char *p)
 	    strstr(p, ":/"))
 		return (1);
 	return (0);
-}
-
-static char *
-ftp_readline(FILE *fp, size_t *lenp)
-{
-	return fparseln(fp, lenp, NULL, "\0\0\0", 0);
 }
 
 #ifndef SMALL

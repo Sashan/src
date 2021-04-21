@@ -1,4 +1,4 @@
-/* $OpenBSD: misc.h,v 1.92 2021/01/11 02:12:57 dtucker Exp $ */
+/* $OpenBSD: misc.h,v 1.94 2021/03/03 08:42:52 djm Exp $ */
 
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
@@ -18,6 +18,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <stdio.h>
 
 /* Data structure for representing a forwarding request. */
 struct Forward {
@@ -188,6 +189,13 @@ int	opt_flag(const char *opt, int allow_negate, const char **optsp);
 char	*opt_dequote(const char **sp, const char **errstrp);
 int	opt_match(const char **opts, const char *term);
 
+/* readconf/servconf option lists */
+void	opt_array_append(const char *file, const int line,
+	    const char *directive, char ***array, u_int *lp, const char *s);
+void	opt_array_append2(const char *file, const int line,
+	    const char *directive, char ***array, int **iarray, u_int *lp,
+	    const char *s, int i);
+
 /* readpass.c */
 
 #define RP_ECHO			0x0001
@@ -210,4 +218,5 @@ void	notify_complete(struct notifier_ctx *, const char *, ...)
 
 typedef void (*sshsig_t)(int);
 sshsig_t ssh_signal(int, sshsig_t);
+
 #endif /* _MISC_H */

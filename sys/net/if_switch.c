@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_switch.c,v 1.40 2021/01/19 19:39:14 mvs Exp $	*/
+/*	$OpenBSD: if_switch.c,v 1.43 2021/03/05 06:44:09 dlg Exp $	*/
 
 /*
  * Copyright (c) 2016 Kazuya GODA <goda@openbsd.org>
@@ -69,7 +69,7 @@ void	 switch_port_detach(void *);
 int	 switch_port_del(struct switch_softc *, struct ifbreq *);
 int	 switch_port_list(struct switch_softc *, struct ifbifconf *);
 struct mbuf *
-	 switch_input(struct ifnet *, struct mbuf *, void *);
+	 switch_input(struct ifnet *, struct mbuf *, uint64_t, void *);
 struct mbuf
 	*switch_port_ingress(struct switch_softc *, struct ifnet *,
 	    struct mbuf *);
@@ -196,6 +196,7 @@ switch_clone_destroy(struct ifnet *ifp)
 	struct switch_port	*swpo, *tp;
 	struct ifnet		*ifs;
 
+	NET_LOCK();
 	TAILQ_FOREACH_SAFE(swpo, &sc->sc_swpo_list, swpo_list_next, tp) {
 		if ((ifs = if_get(swpo->swpo_ifindex)) != NULL) {
 			switch_port_detach(ifs);
@@ -204,6 +205,7 @@ switch_clone_destroy(struct ifnet *ifp)
 			log(LOG_ERR, "failed to cleanup on ifindex(%d)\n",
 			    swpo->swpo_ifindex);
 	}
+	NET_UNLOCK();
 	LIST_REMOVE(sc, sc_switch_next);
 	bstp_destroy(sc->sc_stp);
 	swofp_destroy(sc);
@@ -666,7 +668,7 @@ switch_port_del(struct switch_softc *sc, struct ifbreq *req)
 }
 
 struct mbuf *
-switch_input(struct ifnet *ifp, struct mbuf *m, void *null)
+switch_input(struct ifnet *ifp, struct mbuf *m, uint64_t dst, void *null)
 {
 	KASSERT(m->m_flags & M_PKTHDR);
 
@@ -690,7 +692,7 @@ switch_port_ingress(struct switch_softc *sc, struct ifnet *src_if,
 	sc->sc_if.if_ipackets++;
 	sc->sc_if.if_ibytes += m->m_pkthdr.len;
 
-	m_copydata(m, 0, ETHER_HDR_LEN, (caddr_t)&eh);
+	m_copydata(m, 0, ETHER_HDR_LEN, &eh);
 #if 0
 	/* It's the "#if 0" because it doesn't test switch(4) with pf(4)
 	 * or with ipsec(4).
@@ -720,7 +722,7 @@ switch_port_egress(struct switch_softc *sc, struct switch_fwdp_queue *fwdp_q,
 		bpf_mtap(sc->sc_if.if_bpf, m, BPF_DIRECTION_OUT);
 #endif
 
-	m_copydata(m, 0, ETHER_HDR_LEN, (caddr_t)&eh);
+	m_copydata(m, 0, ETHER_HDR_LEN, &eh);
 	TAILQ_FOREACH(swpo, fwdp_q, swpo_fwdp_next) {
 
 		if ((dst_if = if_get(swpo->swpo_ifindex)) == NULL)
@@ -1547,7 +1549,7 @@ ofp_split_mbuf(struct mbuf *m, struct mbuf **mtail)
 		return (-1);
 
 	m_copydata(m, offsetof(struct ofp_header, oh_length), sizeof(ohlen),
-	    (caddr_t)&ohlen);
+	    &ohlen);
 	ohlen = ntohs(ohlen);
 
 	/* We got an invalid packet header, skip it. */

@@ -1,4 +1,4 @@
-/* $OpenBSD: pciecam.c,v 1.11 2020/11/19 17:42:19 kettenis Exp $ */
+/* $OpenBSD: pciecam.c,v 1.14 2021/03/22 20:30:21 patrick Exp $ */
 /*
  * Copyright (c) 2013,2017 Patrick Wildt <patrick@blueri.se>
  *
@@ -35,6 +35,7 @@
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_clock.h>
 #include <dev/ofw/ofw_pinctrl.h>
+#include <dev/ofw/ofw_misc.h>
 
 /* Assembling ECAM Configuration Address */
 #define PCIE_BUS_SHIFT			20
@@ -91,6 +92,12 @@ struct pciecam_softc {
 	struct arm64_pci_chipset	 sc_pc;
 };
 
+struct pciecam_intr_handle {
+	struct arm_intr_handle	 pih_ih;
+	bus_dma_tag_t		 pih_dmat;
+	bus_dmamap_t		 pih_map;
+};
+
 int pciecam_match(struct device *, void *, void *);
 void pciecam_attach(struct device *, struct device *, void *);
 void pciecam_attach_hook(struct device *, struct device *, struct pcibus_attach_args *);
@@ -100,6 +107,7 @@ void pciecam_decompose_tag(void *, pcitag_t, int *, int *, int *);
 int pciecam_conf_size(void *, pcitag_t);
 pcireg_t pciecam_conf_read(void *, pcitag_t, int);
 void pciecam_conf_write(void *, pcitag_t, int, pcireg_t);
+int pciecam_probe_device_hook(void *, struct pci_attach_args *);
 int pciecam_intr_map(struct pci_attach_args *, pci_intr_handle_t *);
 const char *pciecam_intr_string(void *, pci_intr_handle_t);
 void *pciecam_intr_establish(void *, pci_intr_handle_t, int,
@@ -107,6 +115,10 @@ void *pciecam_intr_establish(void *, pci_intr_handle_t, int,
 void pciecam_intr_disestablish(void *, void *);
 int pciecam_bs_map(bus_space_tag_t, bus_addr_t, bus_size_t, int, bus_space_handle_t *);
 paddr_t pciecam_bs_mmap(bus_space_tag_t, bus_addr_t, off_t, int, int);
+
+struct interrupt_controller pciecam_ic = {
+	.ic_barrier = intr_barrier
+};
 
 struct cfattach pciecam_ca = {
 	sizeof (struct pciecam_softc), pciecam_match, pciecam_attach
@@ -228,6 +240,7 @@ pciecam_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_pc.pc_conf_size = pciecam_conf_size;
 	sc->sc_pc.pc_conf_read = pciecam_conf_read;
 	sc->sc_pc.pc_conf_write = pciecam_conf_write;
+	sc->sc_pc.pc_probe_device_hook = pciecam_probe_device_hook;
 
 	sc->sc_pc.pc_intr_v = sc;
 	sc->sc_pc.pc_intr_map = pciecam_intr_map;
@@ -320,6 +333,18 @@ pciecam_conf_write(void *v, pcitag_t tag, int reg, pcireg_t data)
 }
 
 int
+pciecam_probe_device_hook(void *v, struct pci_attach_args *pa)
+{
+	struct pciecam_softc *sc = (struct pciecam_softc *)v;
+	uint16_t rid;
+
+	rid = pci_requester_id(pa->pa_pc, pa->pa_tag);
+	pa->pa_dmat = iommu_device_map_pci(sc->sc_node, rid, pa->pa_dmat);
+
+	return 0;
+}
+
+int
 pciecam_intr_map(struct pci_attach_args *pa, pci_intr_handle_t *ihp)
 {
 	ihp->ih_pc = pa->pa_pc;
@@ -348,6 +373,8 @@ pciecam_intr_establish(void *self, pci_intr_handle_t ih, int level,
     struct cpu_info *ci, int (*func)(void *), void *arg, char *name)
 {
 	struct pciecam_softc *sc = (struct pciecam_softc *)self;
+	struct pciecam_intr_handle *pih;
+	bus_dma_segment_t seg;
 	void *cookie;
 
 	KASSERT(ih.ih_type != PCI_NONE);
@@ -362,8 +389,31 @@ pciecam_intr_establish(void *self, pci_intr_handle_t ih, int level,
 		if (cookie == NULL)
 			return NULL;
 
-		/* TODO: translate address to the PCI device's view */
+		pih = malloc(sizeof(*pih), M_DEVBUF, M_WAITOK);
+		pih->pih_ih.ih_ic = &pciecam_ic;
+		pih->pih_ih.ih_ih = cookie;
+		pih->pih_dmat = ih.ih_dmat;
 
+		if (bus_dmamap_create(pih->pih_dmat, sizeof(uint32_t), 1,
+		    sizeof(uint32_t), 0, BUS_DMA_WAITOK, &pih->pih_map)) {
+			free(pih, M_DEVBUF, sizeof(*pih));
+			fdt_intr_disestablish(cookie);
+			return NULL;
+		}
+
+		memset(&seg, 0, sizeof(seg));
+		seg.ds_addr = addr;
+		seg.ds_len = sizeof(uint32_t);
+
+		if (bus_dmamap_load_raw(pih->pih_dmat, pih->pih_map,
+		    &seg, 1, sizeof(uint32_t), BUS_DMA_WAITOK)) {
+			bus_dmamap_destroy(pih->pih_dmat, pih->pih_map);
+			free(pih, M_DEVBUF, sizeof(*pih));
+			fdt_intr_disestablish(cookie);
+			return NULL;
+		}
+
+		addr = pih->pih_map->dm_segs[0].ds_addr;
 		if (ih.ih_type == PCI_MSIX) {
 			pci_msix_enable(ih.ih_pc, ih.ih_tag,
 			    &sc->sc_bus, ih.ih_intrpin, addr, data);
@@ -381,15 +431,29 @@ pciecam_intr_establish(void *self, pci_intr_handle_t ih, int level,
 
 		cookie = fdt_intr_establish_imap_cpu(sc->sc_node, reg,
 		    sizeof(reg), level, ci, func, arg, name);
+		if (cookie == NULL)
+			return NULL;
+
+		pih = malloc(sizeof(*pih), M_DEVBUF, M_WAITOK);
+		pih->pih_ih.ih_ic = &pciecam_ic;
+		pih->pih_ih.ih_ih = cookie;
+		pih->pih_dmat = NULL;
 	}
 
-	return cookie;
+	return pih;
 }
 
 void
 pciecam_intr_disestablish(void *sc, void *cookie)
 {
-	/* do something */
+	struct pciecam_intr_handle *pih = cookie;
+
+	fdt_intr_disestablish(pih->pih_ih.ih_ih);
+	if (pih->pih_dmat) {
+		bus_dmamap_unload(pih->pih_dmat, pih->pih_map);
+		bus_dmamap_destroy(pih->pih_dmat, pih->pih_map);
+	}
+	free(pih, M_DEVBUF, sizeof(*pih));
 }
 
 /*

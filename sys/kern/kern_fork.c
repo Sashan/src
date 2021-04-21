@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_fork.c,v 1.232 2021/02/08 10:51:01 mpi Exp $	*/
+/*	$OpenBSD: kern_fork.c,v 1.235 2021/03/23 10:30:40 mpi Exp $	*/
 /*	$NetBSD: kern_fork.c,v 1.29 1996/02/09 18:59:34 christos Exp $	*/
 
 /*
@@ -95,12 +95,15 @@ fork_return(void *arg)
 int
 sys_fork(struct proc *p, void *v, register_t *retval)
 {
+	void (*func)(void *) = child_return;
 	int flags;
 
 	flags = FORK_FORK;
-	if (p->p_p->ps_ptmask & PTRACE_FORK)
+	if (p->p_p->ps_ptmask & PTRACE_FORK) {
 		flags |= FORK_PTRACE;
-	return fork1(p, flags, fork_return, NULL, retval, NULL);
+		func = fork_return;
+	}
+	return fork1(p, flags, func, NULL, retval, NULL);
 }
 
 int
@@ -299,7 +302,7 @@ fork_check_maxthread(uid_t uid)
 		static struct timeval lasttfm;
 
 		if (ratecheck(&lasttfm, &fork_tfmrate))
-			tablefull("proc");
+			tablefull("thread");
 		return EAGAIN;
 	}
 	nthreads++;
@@ -558,13 +561,13 @@ thread_fork(struct proc *curp, void *stack, void *tcb, pid_t *tidptr,
 
 	LIST_INSERT_HEAD(&allproc, p, p_list);
 	LIST_INSERT_HEAD(TIDHASH(p->p_tid), p, p_hash);
-	TAILQ_INSERT_TAIL(&pr->ps_threads, p, p_thr_link);
 
+	SCHED_LOCK(s);
+	TAILQ_INSERT_TAIL(&pr->ps_threads, p, p_thr_link);
 	/*
 	 * if somebody else wants to take us to single threaded mode,
 	 * count ourselves in.
 	 */
-	SCHED_LOCK(s);
 	if (pr->ps_single) {
 		atomic_inc_int(&pr->ps_singlecount);
 		atomic_setbits_int(&p->p_flag, P_SUSPSINGLE);

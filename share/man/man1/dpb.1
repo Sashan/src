@@ -1,4 +1,4 @@
-.\"	$OpenBSD: dpb.1,v 1.20 2020/04/04 08:41:54 espie Exp $
+.\"	$OpenBSD: dpb.1,v 1.22 2021/03/22 07:34:34 espie Exp $
 .\"
 .\" Copyright (c) 2010-2013 Marc Espie <espie@openbsd.org>
 .\"
@@ -14,7 +14,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: April 4 2020 $
+.Dd $Mdocdate: March 22 2021 $
 .Dt DPB 1
 .Os
 .Sh NAME
@@ -301,6 +301,10 @@ If 1, will also fetch extra
 default for
 .Nm Fl F
 .Pc .
+.It Ar NEVER_CLEAN
+If 1,
+.Nm
+will never clean any work directory after build.
 .It Ar NO_BUILD_STATS
 Disable reading/saving of default build stats under
 .Pa ${DISTDIR}/build-stats/${ARCH} .
@@ -1379,6 +1383,12 @@ pkgpath to build / distfile to download.
 .It V
 pkgpath put back in the buildable queue, after job that was running in
 the same directory returned.
+.It W
+only happens when the external control
+.Cm wipe
+command is used: pkgpath will be cleaned up, next log entry will be
+.Sq N
+since the job did not finish and is ready to restart.
 .It X
 only happens when rescanning after an error.
 The engine temporarily locks paths that are incomplete (detained).

@@ -2,7 +2,7 @@
  * THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
  *
  * generated from:
- *	OpenBSD: pcidevs,v 1.1954 2021/01/31 10:51:53 patrick Exp 
+ *	OpenBSD: pcidevs,v 1.1961 2021/03/17 15:58:38 stsp Exp 
  */
 
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
@@ -1208,6 +1208,38 @@ static const struct pci_known_product pci_known_products[] = {
 	    "16h PCIE",
 	},
 	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_7X_DF_1,
+	    "17h Data Fabric",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_7X_DF_2,
+	    "17h Data Fabric",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_7X_DF_3,
+	    "17h Data Fabric",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_7X_DF_4,
+	    "17h Data Fabric",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_7X_DF_5,
+	    "17h Data Fabric",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_7X_DF_6,
+	    "17h Data Fabric",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_7X_DF_7,
+	    "17h Data Fabric",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_7X_DF_8,
+	    "17h Data Fabric",
+	},
+	{
 	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_6X_DF_0,
 	    "17h/6xh Data Fabric",
 	},
@@ -1321,15 +1353,35 @@ static const struct pci_known_product pci_known_products[] = {
 	},
 	{
 	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_3X_RC,
-	    "17h/3xh Root Complex",
+	    "17h Root Complex",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_7X_IOMMU,
+	    "17h IOMMU",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_7X_HB,
+	    "17h Host",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_7X_PCIE_1,
+	    "17h PCIE",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_7X_PCIE_2,
+	    "17h PCIE",
 	},
 	{
 	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_3X_CCP,
-	    "17h/3xh Crypto",
+	    "17h Crypto",
 	},
 	{
 	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_3X_HDA,
-	    "17h/3xh HD Audio",
+	    "17h HD Audio",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_17_7X_XHCI,
+	    "17h xHCI",
 	},
 	{
 	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_14_HB,
@@ -1762,6 +1814,22 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_400SERIES_XHCI,
 	    "400 Series xHCI",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_500SERIES_PCIE_1,
+	    "500 Series PCIE",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_500SERIES_PCIE_2,
+	    "500 Series PCIE",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_500SERIES_AHCI,
+	    "500 Series AHCI",
+	},
+	{
+	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_500SERIES_XHCI,
+	    "500 Series xHCI",
 	},
 	{
 	    PCI_VENDOR_AMD, PCI_PRODUCT_AMD_SC751_SC,
@@ -2368,6 +2436,10 @@ static const struct pci_known_product pci_known_products[] = {
 	    "Intrepid 2 GMAC",
 	},
 	{
+	    PCI_VENDOR_APPLE, PCI_PRODUCT_APPLE_M1_PCIE,
+	    "M1 PCIe",
+	},
+	{
 	    PCI_VENDOR_APPLE, PCI_PRODUCT_APPLE_BCM5701,
 	    "BCM5701",
 	},
@@ -2802,6 +2874,14 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_ATI, PCI_PRODUCT_ATI_KAVERI_22,
 	    "Kaveri Radeon R6",
+	},
+	{
+	    PCI_VENDOR_ATI, PCI_PRODUCT_ATI_NAVI10_PPB_1,
+	    "Navi 10 PCIE",
+	},
+	{
+	    PCI_VENDOR_ATI, PCI_PRODUCT_ATI_NAVI10_PPB_2,
+	    "Navi 10 PCIE",
 	},
 	{
 	    PCI_VENDOR_ATI, PCI_PRODUCT_ATI_PICASSO,
@@ -7008,6 +7088,10 @@ static const struct pci_known_product pci_known_products[] = {
 	    "Radeon Rx Vega HD Audio",
 	},
 	{
+	    PCI_VENDOR_ATI, PCI_PRODUCT_ATI_NAVI10_HDA_1,
+	    "Navi 10 HD Audio",
+	},
+	{
 	    PCI_VENDOR_ATI, PCI_PRODUCT_ATI_RS100_AGP,
 	    "RS100 AGP",
 	},
@@ -9520,6 +9604,10 @@ static const struct pci_known_product pci_known_products[] = {
 	    "FL1009 xHCI",
 	},
 	{
+	    PCI_VENDOR_FRESCO, PCI_PRODUCT_FRESCO_FL1100,
+	    "FL1100 xHCI",
+	},
+	{
 	    PCI_VENDOR_FRESCO, PCI_PRODUCT_FRESCO_FL1400,
 	    "FL1400 xHCI",
 	},
@@ -11214,6 +11302,10 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CORE4G_R_ULT_GT3_2,
 	    "Iris Graphics 5100",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_NVME_5,
+	    "SSD DC",
 	},
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_GMA3600_0,
@@ -13204,6 +13296,10 @@ static const struct pci_known_product pci_known_products[] = {
 	    "I225",
 	},
 	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_X710_10G_T,
+	    "X710 10GBaseT",
+	},
+	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CORE5G_H_PCIE_X16,
 	    "Core 5G PCIE",
 	},
@@ -14106,6 +14202,226 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I354_BP_2_5GBPS,
 	    "I354",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_UBOX_1,
+	    "Xeon Scalable Ubox",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_UBOX_2,
+	    "Xeon Scalable Ubox",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_UBOX_3,
+	    "Xeon Scalable Ubox",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_M2PCI,
+	    "Xeon Scalable M2PCI",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_HB,
+	    "Xeon Scalable Host",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_CBDMA,
+	    "Xeon Scalable CBDMA",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_VTD_1,
+	    "Xeon Scalable VT-d",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_RAS_1,
+	    "Xeon Scalable RAS",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_IOAPIC,
+	    "Xeon Scalable I/O APIC",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_PCIE_1,
+	    "Xeon Scalable PCIE",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_PCIE_2,
+	    "Xeon Scalable PCIE",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_PCIE_3,
+	    "Xeon Scalable PCIE",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_PCIE_4,
+	    "Xeon Scalable PCIE",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_VTD_2,
+	    "Xeon Scalable VT-d",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_RAS_2,
+	    "Xeon Scalable RAS",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_IOXAPIC,
+	    "Xeon Scalable IOxAPIC",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_IMC_1,
+	    "Xeon Scalable IMC",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_IMC_2,
+	    "Xeon Scalable IMC",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_IMC_3,
+	    "Xeon Scalable IMC",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_IMC_4,
+	    "Xeon Scalable IMC",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_IMC_5,
+	    "Xeon Scalable IMC",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_LM_C1,
+	    "Xeon Scalable LM",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_LMS_C1,
+	    "Xeon Scalable LMS",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_LMDP_C1,
+	    "Xeon Scalable LMDP",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_DECS_C2,
+	    "Xeon Scalable DECS",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_LM_C2,
+	    "Xeon Scalable LM",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_LMS_C2,
+	    "Xeon Scalable LMS",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_LMDP_C2,
+	    "Xeon Scalable LMDP",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_M3KTI_1,
+	    "Xeon Scalable M3KTI",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_M3KTI_2,
+	    "Xeon Scalable M3KTI",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_M3KTI_3,
+	    "Xeon Scalable M3KTI",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_CHA_1,
+	    "Xeon Scalable CHA",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_CHA_2,
+	    "Xeon Scalable CHA",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_CHA_3,
+	    "Xeon Scalable CHA",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_CHA_4,
+	    "Xeon Scalable CHA",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_KTI,
+	    "Xeon Scalable KTI",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_UPI,
+	    "Xeon Scalable UPI",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_IMC,
+	    "Xeon Scalable IMC",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_DDRIO_1,
+	    "Xeon Scalable DDRIO",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_DDRIO_2,
+	    "Xeon Scalable DDRIO",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_DDRIO_3,
+	    "Xeon Scalable DDRIO",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_DDRIO_4,
+	    "Xeon Scalable DDRIO",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_DDRIO_5,
+	    "Xeon Scalable DDRIO",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_DDRIO_6,
+	    "Xeon Scalable DDRIO",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_DDRIO_7,
+	    "Xeon Scalable DDRIO",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_PCU_1,
+	    "Xeon Scalable PCU",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_PCU_2,
+	    "Xeon Scalable PCU",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_PCU_3,
+	    "Xeon Scalable PCU",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_PCU_4,
+	    "Xeon Scalable PCU",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_PCU_5,
+	    "Xeon Scalable PCU",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_PCU_6,
+	    "Xeon Scalable PCU",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_PCU_7,
+	    "Xeon Scalable PCU",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_M2PCIE,
+	    "Xeon Scalable M2PCIe",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_CHA_5,
+	    "Xeon Scalable CHA",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_XEONS_CHA_6,
+	    "Xeon Scalable CHA",
 	},
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_BSW_HB,
@@ -17048,6 +17364,10 @@ static const struct pci_known_product pci_known_products[] = {
 	    "495 Series Shared SRAM",
 	},
 	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_WL_22500_4,
+	    "Wi-Fi 6 AX201",
+	},
+	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_495SERIES_LP_SDXC,
 	    "495 Series SDXC",
 	},
@@ -19844,6 +20164,26 @@ static const struct pci_known_product pci_known_products[] = {
 	    "C610 MS SMBus",
 	},
 	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I2OPCIB,
+	    "I2O RAID",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_RCU21,
+	    "RCU21 I2O RAID",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_RCUXX,
+	    "RCUxx I2O RAID",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_RCU31,
+	    "RCU31 I2O RAID",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_RCU31L,
+	    "RCU31L I2O RAID",
+	},
+	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_TGL_UP4_2C_HB,
 	    "Core 11G Host",
 	},
@@ -19918,26 +20258,6 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_TGL_NPK,
 	    "Core 11G NPK",
-	},
-	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_I2OPCIB,
-	    "I2O RAID",
-	},
-	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_RCU21,
-	    "RCU21 I2O RAID",
-	},
-	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_RCUXX,
-	    "RCUxx I2O RAID",
-	},
-	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_RCU31,
-	    "RCU31 I2O RAID",
-	},
-	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_RCU31L,
-	    "RCU31L I2O RAID",
 	},
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_TGL_GT2_1,
@@ -20072,12 +20392,12 @@ static const struct pci_known_product pci_known_products[] = {
 	    "UHD Graphics 630",
 	},
 	{
-	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CML_GT2_2,
-	    "UHD Graphics 630",
-	},
-	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CML_GT2_5,
 	    "UHD Graphics P630",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CML_GT2_2,
+	    "UHD Graphics 630",
 	},
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_CML_U_GT2_2,
@@ -21360,6 +21680,10 @@ static const struct pci_known_product pci_known_products[] = {
 	    "X299 LPC",
 	},
 	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_C422_LPC,
+	    "C422 LPC",
+	},
+	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_200SERIES_I2C_1,
 	    "200 Series I2C",
 	},
@@ -22142,6 +22466,10 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_JMICRON, PCI_PRODUCT_JMICRON_XD_2,
 	    "xD",
+	},
+	{
+	    PCI_VENDOR_KINGSTON, PCI_PRODUCT_KINGSTON_A2000,
+	    "A2000",
 	},
 	{
 	    PCI_VENDOR_KTI, PCI_PRODUCT_KTI_KTIE,
@@ -28364,6 +28692,10 @@ static const struct pci_known_product pci_known_products[] = {
 	    "966 HD Audio",
 	},
 	{
+	    PCI_VENDOR_SKHYNIX, PCI_PRODUCT_SKHYNIX_SSD,
+	    "BC501 NVMe",
+	},
+	{
 	    PCI_VENDOR_SMC, PCI_PRODUCT_SMC_83C170,
 	    "83C170",
 	},
@@ -29054,10 +29386,6 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_SYNOPSYS, PCI_PRODUCT_SYNOPSYS_DW_PCIE,
 	    "DesignWare PCIE",
-	},
-	{
-	    PCI_VENDOR_SKHYNIX, PCI_PRODUCT_SKHYNIX_SSD,
-	    "BC501 NVMe",
 	},
 	{
 	    PCI_VENDOR_TAMARACK, PCI_PRODUCT_TAMARACK_TC9021,
@@ -32630,6 +32958,10 @@ static const struct pci_known_vendor pci_known_vendors[] = {
 	{
 	    PCI_VENDOR_SUNIX2,
 	    "Sunix",
+	},
+	{
+	    PCI_VENDOR_KINGSTON,
+	    "Kingston",
 	},
 	{
 	    PCI_VENDOR_HINT,

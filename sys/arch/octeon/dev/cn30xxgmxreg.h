@@ -3,7 +3,7 @@
  * DONT EDIT THIS FILE
  */
 
-/*	$OpenBSD: cn30xxgmxreg.h,v 1.7 2020/09/08 13:54:48 visa Exp $	*/
+/*	$OpenBSD: cn30xxgmxreg.h,v 1.9 2021/03/11 11:16:59 jsg Exp $	*/
 
 /*
  * Copyright (c) 2007 Internet Initiative Japan, Inc.
@@ -64,12 +64,7 @@
 #define	GMX0_RX0_STATS_PKTS_BAD			0x0c0
 #define	GMX0_RX0_ADR_CTL			0x100
 #define	GMX0_RX0_ADR_CAM_EN			0x108
-#define	GMX0_RX0_ADR_CAM0			0x180
-#define	GMX0_RX0_ADR_CAM1			0x188
-#define	GMX0_RX0_ADR_CAM2			0x190
-#define	GMX0_RX0_ADR_CAM3			0x198
-#define	GMX0_RX0_ADR_CAM4			0x1a0
-#define	GMX0_RX0_ADR_CAM5			0x1a8
+#define	GMX0_RX0_ADR_CAM(i)			(0x180 + (i) * 8)
 #define	GMX0_TX0_CLK				0x208
 #define	GMX0_TX0_THRESH				0x210
 #define	GMX0_TX0_APPEND				0x218
@@ -223,7 +218,7 @@
 #define	RXN_RRM_MAX_XXX_63_16			0xffffffffffff0000ULL
 #define	RXN_RRM_MAX_LEN				0x000000000000ffffULL
 
-/* GMX Maximun Packet-Size Registers */
+/* GMX Maximum Packet-Size Registers */
 
 #define	RXN_JABBER_XXX_63_16			0xffffffffffff0000ULL
 #define	RXN_JABBER_CNT				0x000000000000ffffULL
@@ -245,7 +240,7 @@
 #define	RXN_STATS_CTL_XXX_63_1			0xfffffffffffffffeULL
 #define	RXN_STATS_CTL_RD_CLR			0x0000000000000001ULL
 
-/* GMX Minimun Interface-Gap Cycles Registers */
+/* GMX Minimum Interface-Gap Cycles Registers */
 
 #define	RXN_IFG_XXX_63_4			0xfffffffffffffff0ULL
 #define	RXN_IFG_IFG				0x000000000000000fULL

@@ -1,4 +1,4 @@
-/*	$OpenBSD: vm.c,v 1.58 2020/06/28 16:52:45 pd Exp $	*/
+/*	$OpenBSD: vm.c,v 1.60 2021/03/19 09:29:33 kn Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -278,7 +278,6 @@ start_vm(struct vmd_vm *vm, int fd)
 	int			 nicfds[VMM_MAX_NICS_PER_VM];
 	int			 ret;
 	FILE			*fp;
-	struct vmboot_params	 vmboot;
 	size_t			 i;
 	struct vm_rwregs_params  vrp;
 
@@ -332,14 +331,11 @@ start_vm(struct vmd_vm *vm, int fd)
 		memcpy(&vrs, &vcpu_init_flat64, sizeof(vrs));
 
 		/* Find and open kernel image */
-		if ((fp = vmboot_open(vm->vm_kernel,
-		    vm->vm_disks[0], vmc->vmc_diskbases[0],
-		    vmc->vmc_disktypes[0], &vmboot)) == NULL)
+		if ((fp = fdopen(vm->vm_kernel, "r")) == NULL)
 			fatalx("failed to open kernel - exiting");
 
 		/* Load kernel image */
-		ret = loadfile_elf(fp, vcp, &vrs,
-		    vmboot.vbp_bootdev, vmboot.vbp_howto, vmc->vmc_bootdevice);
+		ret = loadfile_elf(fp, vcp, &vrs);
 
 		/*
 		 * Try BIOS as a fallback (only if it was provided as an image
@@ -351,7 +347,8 @@ start_vm(struct vmd_vm *vm, int fd)
 		if (ret)
 			fatal("failed to load kernel or BIOS - exiting");
 
-		vmboot_close(fp, &vmboot);
+		if (fp)
+			fclose(fp);
 	}
 
 	if (vm->vm_kernel != -1)
@@ -485,7 +482,7 @@ vm_dispatch_vmm(int fd, short event, void *arg)
 }
 
 /*
- * vm_ctl
+ * vm_shutdown
  *
  * Tell the vmm parent process to shutdown or reboot the VM and exit.
  */
@@ -1463,7 +1460,10 @@ vcpu_run_loop(void *arg)
 
 		/* Still more pending? */
 		if (i8259_is_pending()) {
-			/* XXX can probably avoid ioctls here by providing intr in vrp */
+			/*
+			 * XXX can probably avoid ioctls here by providing intr
+			 * in vrp
+			 */
 			if (vcpu_pic_intr(vrp->vrp_vm_id,
 			    vrp->vrp_vcpu_id, 1)) {
 				fatal("can't set INTR");
@@ -1596,7 +1596,6 @@ vcpu_exit_inout(struct vm_run_params *vrp)
  *
  * handle an EPT Violation
  *
- *
  * Parameters:
  *  vrp: vcpu run parameters containing guest state for this exit
  *
@@ -1608,9 +1607,10 @@ int
 vcpu_exit_eptviolation(struct vm_run_params *vrp)
 {
 	struct vm_exit *ve = vrp->vrp_exit;
+
 	/*
 	 * vmd may be exiting to vmd to handle a pending interrupt
-	 * but last exit type may have bee VMX_EXIT_EPT_VIOLATION,
+	 * but last exit type may have been VMX_EXIT_EPT_VIOLATION,
 	 * check the fault_type to ensure we really are processing
 	 * a VMX_EXIT_EPT_VIOLATION.
 	 */

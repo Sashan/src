@@ -1,4 +1,4 @@
-/*	$OpenBSD: mft.c,v 1.25 2021/02/04 08:58:19 claudio Exp $ */
+/*	$OpenBSD: mft.c,v 1.29 2021/03/05 16:00:00 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -193,13 +193,12 @@ mft_parse_filehash(struct parse *p, const ASN1_OCTET_STRING *os)
 
 	/* Insert the filename and hash value. */
 
-	p->res->files = reallocarray(p->res->files, p->res->filesz + 1,
-	    sizeof(struct mftfile));
+	p->res->files = recallocarray(p->res->files, p->res->filesz,
+	    p->res->filesz + 1, sizeof(struct mftfile));
 	if (p->res->files == NULL)
 		err(1, NULL);
 
 	fent = &p->res->files[p->res->filesz++];
-	memset(fent, 0, sizeof(struct mftfile));
 
 	fent->file = fn;
 	fn = NULL;
@@ -395,7 +394,8 @@ mft_parse(X509 **x509, const char *fn)
 		err(1, NULL);
 	if ((p.res->file = strdup(fn)) == NULL)
 		err(1, NULL);
-	if (!x509_get_ski_aki(*x509, fn, &p.res->ski, &p.res->aki))
+	if (!x509_get_extensions(*x509, fn, &p.res->ski, &p.res->aki,
+	    &p.res->aia))
 		goto out;
 
 	/*
@@ -434,49 +434,6 @@ out:
 }
 
 /*
- * Check the hash value of a file.
- * Return zero on failure, non-zero on success.
- */
-static int
-mft_validfilehash(const char *fn, const struct mftfile *m)
-{
-	char	filehash[SHA256_DIGEST_LENGTH];
-	char	buffer[8192];
-	char	*cp, *path = NULL;
-	SHA256_CTX ctx;
-	ssize_t	nr;
-	int	fd;
-
-	/* Check hash of file now, but first build path for it */
-	cp = strrchr(fn, '/');
-	assert(cp != NULL);
-	assert(cp - fn < INT_MAX);
-	if (asprintf(&path, "%.*s/%s", (int)(cp - fn), fn, m->file) == -1)
-		err(1, "asprintf");
-
-	if ((fd = open(path, O_RDONLY)) == -1) {
-		warn("%s: referenced file %s", fn, m->file);
-		free(path);
-		return 0;
-	}
-	free(path);
-
-	SHA256_Init(&ctx);
-	while ((nr = read(fd, buffer, sizeof(buffer))) > 0) {
-		SHA256_Update(&ctx, buffer, nr);
-	}
-	close(fd);
-
-	SHA256_Final(filehash, &ctx);
-	if (memcmp(m->hash, filehash, SHA256_DIGEST_LENGTH) != 0) {
-		warnx("%s: bad message digest for %s", fn, m->file);
-		return 0;
-	}
-
-	return 1;
-}
-
-/*
  * Check all files and their hashes in a MFT structure.
  * Return zero on failure, non-zero on success.
  */
@@ -485,10 +442,24 @@ mft_check(const char *fn, struct mft *p)
 {
 	size_t	i;
 	int	rc = 1;
+	char	*cp, *path = NULL;
 
-	for (i = 0; i < p->filesz; i++)
-		if (!mft_validfilehash(fn, &p->files[i]))
+	/* Check hash of file now, but first build path for it */
+	cp = strrchr(fn, '/');
+	assert(cp != NULL);
+	assert(cp - fn < INT_MAX);
+
+	for (i = 0; i < p->filesz; i++) {
+		const struct mftfile *m = &p->files[i];
+		if (asprintf(&path, "%.*s/%s", (int)(cp - fn), fn,
+		    m->file) == -1)
+			err(1, NULL);
+		if (!valid_filehash(path, m->hash, sizeof(m->hash))) {
+			warnx("%s: bad message digest for %s", fn, m->file);
 			rc = 0;
+		}
+		free(path);
+	}
 
 	return rc;
 }
@@ -509,6 +480,7 @@ mft_free(struct mft *p)
 		for (i = 0; i < p->filesz; i++)
 			free(p->files[i].file);
 
+	free(p->aia);
 	free(p->aki);
 	free(p->ski);
 	free(p->file);
@@ -534,6 +506,7 @@ mft_buffer(struct ibuf *b, const struct mft *p)
 		io_simple_buffer(b, p->files[i].hash, SHA256_DIGEST_LENGTH);
 	}
 
+	io_str_buffer(b, p->aia);
 	io_str_buffer(b, p->aki);
 	io_str_buffer(b, p->ski);
 }
@@ -564,9 +537,10 @@ mft_read(int fd)
 		io_simple_read(fd, p->files[i].hash, SHA256_DIGEST_LENGTH);
 	}
 
+	io_str_read(fd, &p->aia);
 	io_str_read(fd, &p->aki);
 	io_str_read(fd, &p->ski);
-	assert(p->aki && p->ski);
+	assert(p->aia && p->aki && p->ski);
 
 	return p;
 }

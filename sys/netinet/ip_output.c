@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_output.c,v 1.364 2021/02/06 13:15:37 bluhm Exp $	*/
+/*	$OpenBSD: ip_output.c,v 1.369 2021/03/20 01:15:28 dlg Exp $	*/
 /*	$NetBSD: ip_output.c,v 1.28 1996/02/13 23:43:07 christos Exp $	*/
 
 /*
@@ -96,20 +96,20 @@ ip_output_ipsec_send(struct tdb *, struct mbuf *, struct route *, int);
  * The mbuf opt, if present, will not be freed.
  */
 int
-ip_output(struct mbuf *m0, struct mbuf *opt, struct route *ro, int flags,
+ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
     struct ip_moptions *imo, struct inpcb *inp, u_int32_t ipsecflowinfo)
 {
 	struct ip *ip;
 	struct ifnet *ifp = NULL;
-	struct mbuf *m = m0;
+	struct mbuf_list fml;
 	int hlen = sizeof (struct ip);
 	int error = 0;
 	struct route iproute;
 	struct sockaddr_in *dst;
 	struct tdb *tdb = NULL;
 	u_long mtu;
-#if defined(MROUTING)
-	int rv;
+#if NPF > 0
+	u_int orig_rtableid;
 #endif
 
 	NET_ASSERT_LOCKED();
@@ -151,6 +151,7 @@ ip_output(struct mbuf *m0, struct mbuf *opt, struct route *ro, int flags,
 	}
 
 #if NPF > 0
+	orig_rtableid = m->m_pkthdr.ph_rtableid;
 reroute:
 #endif
 
@@ -246,8 +247,7 @@ reroute:
 			/* Should silently drop packet */
 			if (error == -EINVAL)
 				error = 0;
-			m_freem(m);
-			goto done;
+			goto bad;
 		}
 		if (tdb != NULL) {
 			/*
@@ -344,13 +344,13 @@ reroute:
 			 */
 			if (ipmforwarding && ip_mrouter[ifp->if_rdomain] &&
 			    (flags & IP_FORWARDING) == 0) {
+				int rv;
+
 				KERNEL_LOCK();
 				rv = ip_mforward(m, ifp);
 				KERNEL_UNLOCK();
-				if (rv != 0) {
-					m_freem(m);
-					goto done;
-				}
+				if (rv != 0)
+					goto bad;
 			}
 		}
 #endif
@@ -362,10 +362,8 @@ reroute:
 		 * loop back a copy if this host actually belongs to the
 		 * destination group on the loopback interface.
 		 */
-		if (ip->ip_ttl == 0 || (ifp->if_flags & IFF_LOOPBACK) != 0) {
-			m_freem(m);
-			goto done;
-		}
+		if (ip->ip_ttl == 0 || (ifp->if_flags & IFF_LOOPBACK) != 0)
+			goto bad;
 
 		goto sendit;
 	}
@@ -423,8 +421,7 @@ sendit:
 	if (pf_test(AF_INET, (flags & IP_FORWARDING) ? PF_FWD : PF_OUT,
 	    ifp, &m) != PF_PASS) {
 		error = EACCES;
-		m_freem(m);
-		goto done;
+		goto bad;
 	}
 	if (m == NULL)
 		goto done;
@@ -449,8 +446,7 @@ sendit:
 	if (ipsec_in_use && (flags & IP_FORWARDING) && (ipforwarding == 2) &&
 	    (m_tag_find(m, PACKET_TAG_IPSEC_IN_DONE, NULL) == NULL)) {
 		error = EHOSTUNREACH;
-		m_freem(m);
-		goto done;
+		goto bad;
 	}
 #endif
 
@@ -480,6 +476,15 @@ sendit:
 			ipsec_adjust_mtu(m, ifp->if_mtu);
 #endif
 		error = EMSGSIZE;
+#if NPF > 0
+		/* pf changed routing table, use orig rtable for path MTU */
+		if (ro->ro_tableid != orig_rtableid) {
+			rtfree(ro->ro_rt);
+			ro->ro_tableid = orig_rtableid;
+			ro->ro_rt = icmp_mtudisc_clone(
+			    satosin(&ro->ro_dst)->sin_addr, ro->ro_tableid, 0);
+		}
+#endif
 		/*
 		 * This case can happen if the user changed the MTU
 		 * of an interface after enabling IP on it.  Because
@@ -497,22 +502,18 @@ sendit:
 		goto bad;
 	}
 
-	error = ip_fragment(m, ifp, mtu);
-	if (error) {
-		m = m0 = NULL;
-		goto bad;
-	}
+	error = ip_fragment(m, &fml, ifp, mtu);
+	if (error)
+		goto done;
 
-	for (; m; m = m0) {
-		m0 = m->m_nextpkt;
-		m->m_nextpkt = 0;
-		if (error == 0)
-			error = ifp->if_output(ifp, m, sintosa(dst), ro->ro_rt);
-		else
-			m_freem(m);
+	while ((m = ml_dequeue(&fml)) != NULL) {
+		error = ifp->if_output(ifp, m, sintosa(dst), ro->ro_rt);
+		if (error)
+			break;
 	}
-
-	if (error == 0)
+	if (error)
+		ml_purge(&fml);
+	else
 		ipstat_inc(ips_fragmented);
 
 done:
@@ -520,8 +521,9 @@ done:
 		rtfree(ro->ro_rt);
 	if_put(ifp);
 	return (error);
+
 bad:
-	m_freem(m0);
+	m_freem(m);
 	goto done;
 }
 
@@ -646,23 +648,24 @@ ip_output_ipsec_send(struct tdb *tdb, struct mbuf *m, struct route *ro, int fwd)
 #endif /* IPSEC */
 
 int
-ip_fragment(struct mbuf *m, struct ifnet *ifp, u_long mtu)
+ip_fragment(struct mbuf *m, struct mbuf_list *fml, struct ifnet *ifp,
+    u_long mtu)
 {
 	struct ip *ip, *mhip;
 	struct mbuf *m0;
 	int len, hlen, off;
 	int mhlen, firstlen;
-	struct mbuf **mnext;
-	int fragments = 0;
-	int error = 0;
+	int error;
+
+	ml_init(fml);
+	ml_enqueue(fml, m);
 
 	ip = mtod(m, struct ip *);
 	hlen = ip->ip_hl << 2;
-
 	len = (mtu - hlen) &~ 7;
 	if (len < 8) {
-		m_freem(m);
-		return (EMSGSIZE);
+		error = EMSGSIZE;
+		goto bad;
 	}
 
 	/*
@@ -671,7 +674,6 @@ ip_fragment(struct mbuf *m, struct ifnet *ifp, u_long mtu)
 	 */
 	in_proto_cksum_out(m, NULL);
 	firstlen = len;
-	mnext = &m->m_nextpkt;
 
 	/*
 	 * Loop through length of segment after first fragment,
@@ -682,19 +684,15 @@ ip_fragment(struct mbuf *m, struct ifnet *ifp, u_long mtu)
 	for (off = hlen + len; off < ntohs(ip->ip_len); off += len) {
 		MGETHDR(m, M_DONTWAIT, MT_HEADER);
 		if (m == NULL) {
-			ipstat_inc(ips_odropped);
 			error = ENOBUFS;
-			goto sendorfree;
+			goto bad;
 		}
-		*mnext = m;
-		mnext = &m->m_nextpkt;
+		ml_enqueue(fml, m);
+		if ((error = m_dup_pkthdr(m, m0, M_DONTWAIT)) != 0)
+			goto bad;
 		m->m_data += max_linkhdr;
 		mhip = mtod(m, struct ip *);
 		*mhip = *ip;
-		/* we must inherit MCAST/BCAST flags, routing table and prio */
-		m->m_flags |= m0->m_flags & (M_MCAST|M_BCAST);
-		m->m_pkthdr.ph_rtableid = m0->m_pkthdr.ph_rtableid;
-		m->m_pkthdr.pf.prio = m0->m_pkthdr.pf.prio;
 		if (hlen > sizeof (struct ip)) {
 			mhlen = ip_optcopy(ip, mhip) + sizeof (struct ip);
 			mhip->ip_hl = mhlen >> 2;
@@ -710,10 +708,9 @@ ip_fragment(struct mbuf *m, struct ifnet *ifp, u_long mtu)
 			mhip->ip_off |= IP_MF;
 		mhip->ip_len = htons((u_int16_t)(len + mhlen));
 		m->m_next = m_copym(m0, off, len, M_NOWAIT);
-		if (m->m_next == 0) {
-			ipstat_inc(ips_odropped);
+		if (m->m_next == NULL) {
 			error = ENOBUFS;
-			goto sendorfree;
+			goto bad;
 		}
 		m->m_pkthdr.len = mhlen + len;
 		m->m_pkthdr.ph_ifidx = 0;
@@ -725,8 +722,6 @@ ip_fragment(struct mbuf *m, struct ifnet *ifp, u_long mtu)
 			ipstat_inc(ips_outswcsum);
 			mhip->ip_sum = in_cksum(m, mhlen);
 		}
-		ipstat_inc(ips_ofragments);
-		fragments++;
 	}
 	/*
 	 * Update first fragment by trimming what's been copied out
@@ -744,15 +739,13 @@ ip_fragment(struct mbuf *m, struct ifnet *ifp, u_long mtu)
 		ipstat_inc(ips_outswcsum);
 		ip->ip_sum = in_cksum(m, hlen);
 	}
-sendorfree:
-	if (error) {
-		for (m = m0; m; m = m0) {
-			m0 = m->m_nextpkt;
-			m->m_nextpkt = NULL;
-			m_freem(m);
-		}
-	}
 
+	ipstat_add(ips_ofragments, ml_len(fml));
+	return (0);
+
+bad:
+	ipstat_inc(ips_odropped);
+	ml_purge(fml);
 	return (error);
 }
 

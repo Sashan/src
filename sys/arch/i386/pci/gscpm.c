@@ -1,4 +1,4 @@
-/*	$OpenBSD: gscpm.c,v 1.10 2020/07/06 13:33:07 pirofti Exp $	*/
+/*	$OpenBSD: gscpm.c,v 1.12 2021/03/11 11:16:57 jsg Exp $	*/
 /*
  * Copyright (c) 2004 Alexander Yurchenko <grange@openbsd.org>
  *
@@ -50,14 +50,14 @@ void	gscpm_setperf(int);
 u_int	gscpm_get_timecount(struct timecounter *tc);
 
 struct timecounter gscpm_timecounter = {
-	gscpm_get_timecount,	/* get_timecount */
-	0,			/* no poll_pps */
-	0xffffff,		/* counter_mask */
-	3579545,		/* frequency */
-	"GSCPM",		/* name */
-	1000,			/* quality */
-	NULL,			/* private bits */
-	0			/* expose to user */
+	.tc_get_timecount = gscpm_get_timecount,
+	.tc_poll_pps = 0,
+	.tc_counter_mask = 0xffffff,
+	.tc_frequency = 3579545,
+	.tc_name = "GSCPM",
+	.tc_quality = 1000,
+	.tc_priv = NULL,
+	.tc_user = 0,
 };
 
 struct cfattach gscpm_ca = {
@@ -145,7 +145,7 @@ gscpm_setperf(int level)
 	pctl = bus_space_read_4(sc->sc_iot, sc->sc_acpi_ioh, GSCPM_P_CNT);
 
 	if (level == 100) {
-		/* 100 is a maximum perfomance, disable throttling */
+		/* 100 is a maximum performance, disable throttling */
 		pctl &= ~GSCPM_P_CNT_THTEN;
 	} else {
 		for (i = 0; i < GSCPM_THT_LEVELS; i++)

@@ -1,4 +1,4 @@
-/* $OpenBSD: agtimer.c,v 1.16 2021/01/19 18:07:15 kettenis Exp $ */
+/* $OpenBSD: agtimer.c,v 1.18 2021/03/11 11:16:56 jsg Exp $ */
 /*
  * Copyright (c) 2011 Dale Rahn <drahn@openbsd.org>
  * Copyright (c) 2013 Patrick Wildt <patrick@blueri.se>
@@ -43,8 +43,14 @@ int32_t agtimer_frequency = TIMER_FREQUENCY;
 u_int agtimer_get_timecount(struct timecounter *);
 
 static struct timecounter agtimer_timecounter = {
-	agtimer_get_timecount, NULL, 0xffffffff, 0, "agtimer", 0, NULL,
-	TC_AGTIMER
+	.tc_get_timecount = agtimer_get_timecount,
+	.tc_poll_pps = NULL,
+	.tc_counter_mask = 0xffffffff,
+	.tc_frequency = 0,
+	.tc_name = "agtimer",
+	.tc_quality = 0,
+	.tc_priv = NULL,
+	.tc_user = TC_AGTIMER,
 };
 
 struct agtimer_pcpu_softc {
@@ -309,7 +315,7 @@ agtimer_cpu_initclocks(void)
 	sc->sc_ticks_err_cnt = sc->sc_ticks_per_second % hz;
 	pc->pc_ticks_err_sum = 0;
 
-	/* configure virtual timer interupt */
+	/* configure virtual timer interrupt */
 	sc->sc_ih = arm_intr_establish_fdt_idx(sc->sc_node, 2,
 	    IPL_CLOCK|IPL_MPSAFE, agtimer_intr, NULL, "tick");
 

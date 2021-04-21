@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh.c,v 1.550 2021/02/02 22:36:59 djm Exp $ */
+/* $OpenBSD: ssh.c,v 1.552 2021/02/23 00:05:31 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -1398,6 +1398,12 @@ main(int ac, char **av)
 		free(p);
 		free(options.forward_agent_sock_path);
 		options.forward_agent_sock_path = cp;
+		if (stat(options.forward_agent_sock_path, &st) != 0) {
+			error("Cannot forward agent socket path \"%s\": %s",
+			    options.forward_agent_sock_path, strerror(errno));
+			if (options.exit_on_forward_failure)
+				cleanup_exit(255);
+		}
 	}
 
 	if (options.num_system_hostfiles > 0 &&
@@ -1854,10 +1860,51 @@ ssh_init_stdio_forwarding(struct ssh *ssh)
 }
 
 static void
+ssh_init_forward_permissions(struct ssh *ssh, const char *what, char **opens,
+    u_int num_opens)
+{
+	u_int i;
+	int port;
+	char *addr, *arg, *oarg, ch;
+	int where = FORWARD_LOCAL;
+
+	channel_clear_permission(ssh, FORWARD_ADM, where);
+	if (num_opens == 0)
+		return; /* permit any */
+
+	/* handle keywords: "any" / "none" */
+	if (num_opens == 1 && strcmp(opens[0], "any") == 0)
+		return;
+	if (num_opens == 1 && strcmp(opens[0], "none") == 0) {
+		channel_disable_admin(ssh, where);
+		return;
+	}
+	/* Otherwise treat it as a list of permitted host:port */
+	for (i = 0; i < num_opens; i++) {
+		oarg = arg = xstrdup(opens[i]);
+		ch = '\0';
+		addr = hpdelim2(&arg, &ch);
+		if (addr == NULL || ch == '/')
+			fatal_f("missing host in %s", what);
+		addr = cleanhostname(addr);
+		if (arg == NULL || ((port = permitopen_port(arg)) < 0))
+			fatal_f("bad port number in %s", what);
+		/* Send it to channels layer */
+		channel_add_permission(ssh, FORWARD_ADM,
+		    where, addr, port);
+		free(oarg);
+	}
+}
+
+static void
 ssh_init_forwarding(struct ssh *ssh, char **ifname)
 {
 	int success = 0;
 	int i;
+
+	ssh_init_forward_permissions(ssh, "permitremoteopen",
+	    options.permitted_remote_opens,
+	    options.num_permitted_remote_opens);
 
 	if (options.exit_on_forward_failure)
 		forward_confirms_pending = 0; /* track pending requests */

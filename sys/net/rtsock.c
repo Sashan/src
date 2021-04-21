@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtsock.c,v 1.304 2020/11/07 09:51:40 denis Exp $	*/
+/*	$OpenBSD: rtsock.c,v 1.308 2021/03/18 15:55:19 claudio Exp $	*/
 /*	$NetBSD: rtsock.c,v 1.18 1996/03/29 00:32:10 cgd Exp $	*/
 
 /*
@@ -118,7 +118,7 @@ int	route_arp_conflict(struct rtentry *, struct rt_addrinfo *);
 int	route_cleargateway(struct rtentry *, void *, unsigned int);
 void	rtm_senddesync_timer(void *);
 void	rtm_senddesync(struct socket *);
-int	rtm_sendup(struct socket *, struct mbuf *, int);
+int	rtm_sendup(struct socket *, struct mbuf *);
 
 int	rtm_getifa(struct rt_addrinfo *, unsigned int);
 int	rtm_output(struct rt_msghdr *, struct rtentry **, struct rt_addrinfo *,
@@ -301,6 +301,9 @@ route_attach(struct socket *so, int proto)
 	struct rtpcb	*rop;
 	int		 error;
 
+	error = soreserve(so, ROUTESNDQ, ROUTERCVQ);
+	if (error)
+		return (error);
 	/*
 	 * use the rawcb but allocate a rtpcb, this
 	 * code does not care about the additional fields
@@ -311,15 +314,6 @@ route_attach(struct socket *so, int proto)
 	/* Init the timeout structure */
 	timeout_set(&rop->rop_timeout, rtm_senddesync_timer, so);
 	refcnt_init(&rop->rop_refcnt);
-
-	if (curproc == NULL)
-		error = EACCES;
-	else
-		error = soreserve(so, ROUTESNDQ, ROUTERCVQ);
-	if (error) {
-		pool_put(&rtpcb_pool, rop);
-		return (error);
-	}
 
 	rop->rop_socket = so;
 	rop->rop_proto = proto;
@@ -495,7 +489,6 @@ route_input(struct mbuf *m0, struct socket *so0, sa_family_t sa_family)
 	struct rtpcb *rop;
 	struct rt_msghdr *rtm;
 	struct mbuf *m = m0;
-	struct socket *last = NULL;
 	struct srp_ref sr;
 	int s;
 
@@ -525,11 +518,8 @@ route_input(struct mbuf *m0, struct socket *so0, sa_family_t sa_family)
 		 */
 		if ((so0 == so && !(so0->so_options & SO_USELOOPBACK)) ||
 		    !(so->so_state & SS_ISCONNECTED) ||
-		    (so->so_state & SS_CANTRCVMORE)) {
-next:
-			sounlock(so, s);
-			continue;
-		}
+		    (so->so_state & SS_CANTRCVMORE))
+			goto next;
 
 		/* filter messages that the process does not want */
 		rtm = mtod(m, struct rt_msghdr *);
@@ -574,43 +564,27 @@ next:
 		 */
 		if ((rop->rop_flags & ROUTECB_FLAG_FLUSH) != 0)
 			goto next;
-		sounlock(so, s);
 
-		if (last) {
-			s = solock(last);
-			rtm_sendup(last, m, 1);
-			sounlock(last, s);
-			refcnt_rele_wake(&sotortpcb(last)->rop_refcnt);
-		}
-		/* keep a reference for last */
-		refcnt_take(&rop->rop_refcnt);
-		last = rop->rop_socket;
+		rtm_sendup(so, m);
+next:
+		sounlock(so, s);
 	}
 	SRPL_LEAVE(&sr);
 
-	if (last) {
-		s = solock(last);
-		rtm_sendup(last, m, 0);
-		sounlock(last, s);
-		refcnt_rele_wake(&sotortpcb(last)->rop_refcnt);
-	} else
-		m_freem(m);
+	m_freem(m);
 }
 
 int
-rtm_sendup(struct socket *so, struct mbuf *m0, int more)
+rtm_sendup(struct socket *so, struct mbuf *m0)
 {
 	struct rtpcb *rop = sotortpcb(so);
 	struct mbuf *m;
 
 	soassertlocked(so);
 
-	if (more) {
-		m = m_copym(m0, 0, M_COPYALL, M_NOWAIT);
-		if (m == NULL)
-			return (ENOMEM);
-	} else
-		m = m0;
+	m = m_copym(m0, 0, M_COPYALL, M_NOWAIT);
+	if (m == NULL)
+		return (ENOMEM);
 
 	if (sbspace(so, &so->so_rcv) < (2 * MSIZE) ||
 	    sbappendaddr(so, &so->so_rcv, &route_src, m, NULL) == 0) {
@@ -730,7 +704,7 @@ route_output(struct mbuf *m, struct socket *so, struct sockaddr *dstaddr,
 			goto fail;
 		}
 		rtm = malloc(len, M_RTABLE, M_WAITOK);
-		m_copydata(m, 0, len, (caddr_t)rtm);
+		m_copydata(m, 0, len, rtm);
 		break;
 	default:
 		error = EPROTONOSUPPORT;
@@ -1734,12 +1708,15 @@ rtm_miss(int type, struct rt_addrinfo *rtinfo, int flags, uint8_t prio,
 void
 rtm_ifchg(struct ifnet *ifp)
 {
+	struct rt_addrinfo	 info;
 	struct if_msghdr	*ifm;
 	struct mbuf		*m;
 
 	if (rtptable.rtp_count == 0)
 		return;
-	m = rtm_msg1(RTM_IFINFO, NULL);
+	memset(&info, 0, sizeof(info));
+	info.rti_info[RTAX_IFP] = sdltosa(ifp->if_sadl);
+	m = rtm_msg1(RTM_IFINFO, &info);
 	if (m == NULL)
 		return;
 	ifm = mtod(m, struct if_msghdr *);
@@ -1748,7 +1725,7 @@ rtm_ifchg(struct ifnet *ifp)
 	ifm->ifm_flags = ifp->if_flags;
 	ifm->ifm_xflags = ifp->if_xflags;
 	if_getdata(ifp, &ifm->ifm_data);
-	ifm->ifm_addrs = 0;
+	ifm->ifm_addrs = info.rti_addrs;
 	route_input(m, NULL, AF_UNSPEC);
 }
 

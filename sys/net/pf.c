@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf.c,v 1.1108 2021/02/04 00:55:41 sashan Exp $ */
+/*	$OpenBSD: pf.c,v 1.1114 2021/03/10 10:21:48 jsg Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -1404,6 +1404,10 @@ pf_remove_divert_state(struct pf_state_key *sk)
 {
 	struct pf_state_item	*si;
 
+	PF_ASSERT_UNLOCKED();
+
+	PF_LOCK();
+	PF_STATE_ENTER_WRITE();
 	TAILQ_FOREACH(si, &sk->states, entry) {
 		if (sk == si->s->key[PF_SK_STACK] && si->s->rule.ptr &&
 		    (si->s->rule.ptr->divert.type == PF_DIVERT_TO ||
@@ -1412,6 +1416,8 @@ pf_remove_divert_state(struct pf_state_key *sk)
 			break;
 		}
 	}
+	PF_STATE_EXIT_WRITE();
+	PF_UNLOCK();
 }
 
 void
@@ -3145,7 +3151,7 @@ pf_step_into_anchor(struct pf_test_ctx *ctx, struct pf_rule *r)
 	} else {
 		rv = pf_match_rule(ctx, &r->anchor->ruleset);
 		/*
-		 * Unless errors occured, stop iff any rule matched
+		 * Unless errors occurred, stop iff any rule matched
 		 * within quick anchors.
 		 */
 		if (rv != PF_TEST_FAIL && r->quick == PF_TEST_QUICK &&
@@ -5963,7 +5969,8 @@ pf_rtlabel_match(struct pf_addr *addr, sa_family_t af, struct pf_addr_wrap *aw,
 void
 pf_route(struct pf_pdesc *pd, struct pf_state *s)
 {
-	struct mbuf		*m0, *m1;
+	struct mbuf		*m0;
+	struct mbuf_list	 fml;
 	struct sockaddr_in	*dst, sin;
 	struct rtentry		*rt = NULL;
 	struct ip		*ip;
@@ -6014,7 +6021,7 @@ pf_route(struct pf_pdesc *pd, struct pf_state *s)
 	dst->sin_addr = s->rt_addr.v4;
 	rtableid = m0->m_pkthdr.ph_rtableid;
 
-	rt = rtalloc(sintosa(dst), RT_RESOLVE, rtableid);
+	rt = rtalloc_mpath(sintosa(dst), &ip->ip_src.s_addr, rtableid);
 	if (!rtisvalid(rt)) {
 		if (s->rt != PF_DUPTO) {
 			pf_send_icmp(m0, ICMP_UNREACH, ICMP_UNREACH_HOST,
@@ -6072,23 +6079,18 @@ pf_route(struct pf_pdesc *pd, struct pf_state *s)
 		goto bad;
 	}
 
-	m1 = m0;
-	error = ip_fragment(m0, ifp, ifp->if_mtu);
-	if (error) {
-		m0 = NULL;
-		goto bad;
-	}
+	error = ip_fragment(m0, &fml, ifp, ifp->if_mtu);
+	if (error)
+		goto done;
 
-	for (m0 = m1; m0; m0 = m1) {
-		m1 = m0->m_nextpkt;
-		m0->m_nextpkt = 0;
-		if (error == 0)
-			error = ifp->if_output(ifp, m0, sintosa(dst), rt);
-		else
-			m_freem(m0);
+	while ((m0 = ml_dequeue(&fml)) != NULL) {
+		error = ifp->if_output(ifp, m0, sintosa(dst), rt);
+		if (error)
+			break;
 	}
-
-	if (error == 0)
+	if (error)
+		ml_purge(&fml);
+	else
 		ipstat_inc(ips_fragmented);
 
 done:
@@ -6156,9 +6158,8 @@ pf_route6(struct pf_pdesc *pd, struct pf_state *s)
 	dst->sin6_addr = s->rt_addr.v6;
 	rtableid = m0->m_pkthdr.ph_rtableid;
 
-	if (IN6_IS_SCOPE_EMBED(&dst->sin6_addr))
-		dst->sin6_addr.s6_addr16[1] = htons(ifp->if_index);
-	rt = rtalloc(sin6tosa(dst), RT_RESOLVE, rtableid);
+	rt = rtalloc_mpath(sin6tosa(dst), &ip6->ip6_src.s6_addr32[0],
+	    rtableid);
 	if (!rtisvalid(rt)) {
 		if (s->rt != PF_DUPTO) {
 			pf_send_icmp(m0, ICMP6_DST_UNREACH,

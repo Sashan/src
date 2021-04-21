@@ -1,4 +1,4 @@
-/* $OpenBSD: server.c,v 1.195 2020/09/16 18:37:55 nicm Exp $ */
+/* $OpenBSD: server.c,v 1.197 2021/03/11 07:08:18 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -48,6 +48,7 @@ static int		 server_fd = -1;
 static uint64_t		 server_client_flags;
 static int		 server_exit;
 static struct event	 server_ev_accept;
+static struct event	 server_ev_tidy;
 
 struct cmd_find_state	 marked_pane;
 
@@ -151,40 +152,41 @@ fail:
 	return (-1);
 }
 
+/* Tidy up every hour. */
+static void
+server_tidy_event(__unused int fd, __unused short events, __unused void *data)
+{
+    struct timeval	tv = { .tv_sec = 3600 };
+    uint64_t		t = get_timer();
+
+    format_tidy_jobs();
+
+    log_debug("%s: took %llu milliseconds", __func__, get_timer() - t);
+    evtimer_add(&server_ev_tidy, &tv);
+}
+
 /* Fork new server. */
 int
 server_start(struct tmuxproc *client, int flags, struct event_base *base,
     int lockfd, char *lockfile)
 {
-	int		 pair[2];
+	int		 fd;
 	sigset_t	 set, oldset;
 	struct client	*c = NULL;
 	char		*cause = NULL;
+	struct timeval	 tv = { .tv_sec = 3600 };
 
 	sigfillset(&set);
 	sigprocmask(SIG_BLOCK, &set, &oldset);
 
 	if (~flags & CLIENT_NOFORK) {
-		if (socketpair(AF_UNIX, SOCK_STREAM, PF_UNSPEC, pair) != 0)
-			fatal("socketpair failed");
-
-		switch (fork()) {
-		case -1:
-			fatal("fork failed");
-		case 0:
-			break;
-		default:
+		if (proc_fork_and_daemon(&fd) != 0) {
 			sigprocmask(SIG_SETMASK, &oldset, NULL);
-			close(pair[1]);
-			return (pair[0]);
+			return (fd);
 		}
-		close(pair[0]);
-		if (daemon(1, 0) != 0)
-			fatal("daemon failed");
 	}
-
-	server_client_flags = flags;
 	proc_clear_signals(client, 0);
+	server_client_flags = flags;
 
 	if (event_reinit(base) != 0)
 		fatalx("event_reinit failed");
@@ -213,7 +215,7 @@ server_start(struct tmuxproc *client, int flags, struct event_base *base,
 	if (server_fd != -1)
 		server_update_socket();
 	if (~flags & CLIENT_NOFORK)
-		c = server_client_create(pair[1]);
+		c = server_client_create(fd);
 	else
 		options_set_number(global_options, "exit-empty", 0);
 
@@ -230,6 +232,9 @@ server_start(struct tmuxproc *client, int flags, struct event_base *base,
 		}
 		free(cause);
 	}
+
+	evtimer_set(&server_ev_tidy, server_tidy_event, NULL);
+	evtimer_add(&server_ev_tidy, &tv);
 
 	server_add_accept(0);
 	proc_loop(server_proc, server_loop);

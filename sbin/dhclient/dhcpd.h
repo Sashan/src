@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhcpd.h,v 1.291 2021/02/01 01:42:20 krw Exp $	*/
+/*	$OpenBSD: dhcpd.h,v 1.297 2021/03/11 15:30:49 krw Exp $	*/
 
 /*
  * Copyright (c) 2004 Henning Brauer <henning@openbsd.org>
@@ -101,12 +101,12 @@ struct client_config {
 	uint8_t			 requested_options[DHO_COUNT];
 	int			 requested_option_count;
 	int			 required_option_count;
-	time_t			 timeout;
+	time_t			 offer_interval;
 	time_t			 initial_interval;
-	time_t			 link_timeout;
+	time_t			 link_interval;
 	time_t			 retry_interval;
 	time_t			 select_interval;
-	time_t			 reboot_timeout;
+	time_t			 reboot_interval;
 	time_t			 backoff_cutoff;
 	TAILQ_HEAD(, reject_elem) reject_list;
 	char			*filename;
@@ -129,18 +129,20 @@ struct interface_info {
 	int			 rdomain;
 	int			 flags;
 #define IFI_IN_CHARGE		0x01
-#define IFI_AUTOCONF		0x02
 	uint32_t		 mtu;
 	struct dhcp_packet	 recv_packet;
 	struct dhcp_packet	 sent_packet;
 	int			 sent_packet_length;
 	uint32_t		 xid;
 	struct timespec		 timeout;
+	struct timespec		 reboot_timeout;
 	time_t			 expiry, rebind;
 	void			(*timeout_func)(struct interface_info *);
 	uint16_t		 secs;
 	time_t			 first_sending;
-	time_t			 startup_time;
+	struct timespec		 link_timeout;
+	struct timespec		 offer_timeout;
+	struct timespec		 select_timeout;
 	enum dhcp_state		 state;
 	struct in_addr		 destination;
 	time_t			 interval;
@@ -230,8 +232,6 @@ char		*rfc1035_as_string(unsigned char *, size_t);
 
 /* packet.c */
 void		 assemble_eh_header(struct ether_addr, struct ether_header *);
-ssize_t		 decode_hw_header(unsigned char *, uint32_t,
-    struct ether_addr *);
 ssize_t		 decode_udp_ip_header(unsigned char *, uint32_t,
     struct sockaddr_in *);
 uint32_t	 checksum(unsigned char *, uint32_t, uint32_t);

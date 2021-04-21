@@ -1,4 +1,4 @@
-/*	$OpenBSD: roa.c,v 1.13 2021/02/04 08:58:19 claudio Exp $ */
+/*	$OpenBSD: roa.c,v 1.15 2021/02/19 12:18:23 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -111,12 +111,11 @@ roa_parse_addr(const ASN1_OCTET_STRING *os, enum afi afi, struct parse *p)
 		/* FIXME: maximum check. */
 	}
 
-	p->res->ips = reallocarray(p->res->ips,
-		p->res->ipsz + 1, sizeof(struct roa_ip));
+	p->res->ips = recallocarray(p->res->ips, p->res->ipsz, p->res->ipsz + 1,
+	    sizeof(struct roa_ip));
 	if (p->res->ips == NULL)
 		err(1, NULL);
 	res = &p->res->ips[p->res->ipsz++];
-	memset(res, 0, sizeof(struct roa_ip));
 
 	res->addr = addr;
 	res->afi = afi;
@@ -349,7 +348,8 @@ roa_parse(X509 **x509, const char *fn)
 
 	if ((p.res = calloc(1, sizeof(struct roa))) == NULL)
 		err(1, NULL);
-	if (!x509_get_ski_aki(*x509, fn, &p.res->ski, &p.res->aki))
+	if (!x509_get_extensions(*x509, fn, &p.res->ski, &p.res->aki,
+	    &p.res->aia))
 		goto out;
 	if (!roa_parse_econtent(cms, cmsz, &p))
 		goto out;
@@ -377,6 +377,7 @@ roa_free(struct roa *p)
 
 	if (p == NULL)
 		return;
+	free(p->aia);
 	free(p->aki);
 	free(p->ski);
 	free(p->ips);
@@ -405,6 +406,7 @@ roa_buffer(struct ibuf *b, const struct roa *p)
 		ip_addr_buffer(b, &p->ips[i].addr);
 	}
 
+	io_str_buffer(b, p->aia);
 	io_str_buffer(b, p->aki);
 	io_str_buffer(b, p->ski);
 	io_str_buffer(b, p->tal);
@@ -439,10 +441,11 @@ roa_read(int fd)
 		ip_addr_read(fd, &p->ips[i].addr);
 	}
 
+	io_str_read(fd, &p->aia);
 	io_str_read(fd, &p->aki);
 	io_str_read(fd, &p->ski);
 	io_str_read(fd, &p->tal);
-	assert(p->aki && p->ski && p->tal);
+	assert(p->aia && p->aki && p->ski && p->tal);
 
 	return p;
 }

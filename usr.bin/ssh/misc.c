@@ -1,4 +1,4 @@
-/* $OpenBSD: misc.c,v 1.160 2021/01/15 02:58:11 dtucker Exp $ */
+/* $OpenBSD: misc.c,v 1.162 2021/02/28 01:50:47 dtucker Exp $ */
 /*
  * Copyright (c) 2000 Markus Friedl.  All rights reserved.
  * Copyright (c) 2005-2020 Damien Miller.  All rights reserved.
@@ -2340,6 +2340,32 @@ opt_match(const char **opts, const char *term)
 	return 0;
 }
 
+void
+opt_array_append2(const char *file, const int line, const char *directive,
+    char ***array, int **iarray, u_int *lp, const char *s, int i)
+{
+
+	if (*lp >= INT_MAX)
+		fatal("%s line %d: Too many %s entries", file, line, directive);
+
+	if (iarray != NULL) {
+		*iarray = xrecallocarray(*iarray, *lp, *lp + 1,
+		    sizeof(**iarray));
+		(*iarray)[*lp] = i;
+	}
+
+	*array = xrecallocarray(*array, *lp, *lp + 1, sizeof(**array));
+	(*array)[*lp] = xstrdup(s);
+	(*lp)++;
+}
+
+void
+opt_array_append(const char *file, const int line, const char *directive,
+    char ***array, u_int *lp, const char *s)
+{
+	opt_array_append2(file, line, directive, array, NULL, lp, s, 0);
+}
+
 sshsig_t
 ssh_signal(int signum, sshsig_t handler)
 {
@@ -2477,7 +2503,7 @@ subprocess(const char *tag, const char *command,
 				child_set_env(&env, &nenv, "LANG", cp);
 		}
 
-		for (i = 0; i < NSIG; i++)
+		for (i = 1; i < NSIG; i++)
 			ssh_signal(i, SIG_DFL);
 
 		if ((devnull = open(_PATH_DEVNULL, O_RDWR)) == -1) {

@@ -1,4 +1,4 @@
-/*	$OpenBSD: in_pcb.c,v 1.253 2021/01/25 03:40:46 dlg Exp $	*/
+/*	$OpenBSD: in_pcb.c,v 1.255 2021/03/10 10:21:48 jsg Exp $	*/
 /*	$NetBSD: in_pcb.c,v 1.25 1996/02/13 23:41:53 christos Exp $	*/
 
 /*
@@ -522,8 +522,8 @@ in_pcbconnect(struct inpcb *inp, struct mbuf *nam)
 	inp->inp_fport = sin->sin_port;
 	in_pcbrehash(inp);
 #if NSTOEPLITZ > 0
-	inp->inp_flowid = stoeplitz_ip4port(inp->inp_laddr.s_addr,
-	    inp->inp_faddr.s_addr, inp->inp_lport, inp->inp_fport);
+	inp->inp_flowid = stoeplitz_ip4port(inp->inp_faddr.s_addr,
+	    inp->inp_laddr.s_addr, inp->inp_fport, inp->inp_lport);
 #endif
 #ifdef IPSEC
 	{
@@ -970,7 +970,7 @@ in_pcbselsrc(struct in_addr **insrc, struct sockaddr_in *sin,
 	/*
 	 * Use preferred source address if :
 	 * - destination is not onlink
-	 * - preferred source addresss is set
+	 * - preferred source address is set
 	 * - output interface is UP
 	 */
 	if (ro->ro_rt && !(ro->ro_rt->rt_flags & RTF_LLINFO) &&

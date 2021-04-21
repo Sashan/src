@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.185 2021/02/04 16:25:38 anton Exp $
+# $OpenBSD: GENERIC,v 1.193 2021/03/08 20:56:10 patrick Exp $
 #
 # GENERIC machine description file
 #
@@ -42,6 +42,8 @@ acpibtn*	at acpi?
 acpiec*		at acpi?
 acpige*		at acpi?
 acpimcfg*	at acpi?
+acpiiort*	at acpi?
+#smmu*		at acpiiort?
 acpipci*	at acpi?
 pci*		at acpipci?
 acpipwrres*	at acpi?
@@ -81,6 +83,7 @@ pci*		at pciecam?
 sdhc*		at fdt?
 sdmmc*		at sdhc?
 bwfm*		at sdmmc?	# Broadcom FullMAC
+#smmu*		at fdt?
 xhci*		at fdt?
 ccp*		at fdt?		# AMD Cryptographic Co-processor
 ipmi*		at fdt?
@@ -125,6 +128,14 @@ wsdisplay*	at radeondrm?
 amdgpu*		at pci?
 drm*		at amdgpu?
 wsdisplay*	at amdgpu?
+
+# Apple
+apldart*	at fdt?
+apldog*		at fdt? early 1
+aplintc*	at fdt? early 1
+aplpcie*	at fdt?
+pci*		at aplpcie?
+exuart*		at fdt?
 
 # iMX
 imxccm*		at fdt? early 1
@@ -272,8 +283,10 @@ pci*		at ppb?
 
 # PCI Ethernet
 bnxt*		at pci?			# Broadcom BCM573xx, BCM574xx
+bge*		at pci?			# Broadcom BCM57xx
 em*		at pci?			# Intel Pro/1000 Ethernet
 ix*		at pci?			# Intel 82598EB 10Gb Ethernet
+ixl*		at pci?			# Intel Ethernet 700 Series
 mcx*		at pci?			# Mellanox ConnectX-4/5 Ethernet
 mskc*		at pci?			# Marvell Yukon-2
 msk*		at mskc?		#  each port of above

@@ -1,4 +1,4 @@
-#   $OpenBSD: tlsfuzzer.py,v 1.22 2021/01/27 20:16:58 tb Exp $
+#   $OpenBSD: tlsfuzzer.py,v 1.24 2021/03/20 12:17:45 tb Exp $
 #
 # Copyright (c) 2020 Theo Buehler <tb@openbsd.org>
 #
@@ -242,6 +242,13 @@ tls13_failing_tests = TestGroup("failing TLSv1.3 tests", [
         '-e', 'x448 - right 0-padded key_share',
         '-e', 'x448 - right-truncated key_share',
     ]),
+
+    # The test sends records with protocol version 0x0300 instead of 0x0303
+    # and currently fails with OpenSSL and LibreSSL for this reason.
+    # We have the logic corresponding to NSS's fix for CVE-2020-25648
+    # https://hg.mozilla.org/projects/nss/rev/57bbefa793232586d27cee83e74411171e128361
+    # so should not be affected by this issue.
+    Test("test-tls13-multiple-ccs-messages.py"),
 
     # https://github.com/openssl/openssl/issues/8369
     Test("test-tls13-obsolete-curves.py"),

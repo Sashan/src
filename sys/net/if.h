@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.h,v 1.206 2021/02/01 07:43:33 mvs Exp $	*/
+/*	$OpenBSD: if.h,v 1.208 2021/03/11 19:53:40 florian Exp $	*/
 /*	$NetBSD: if.h,v 1.23 1996/05/07 02:40:27 thorpej Exp $	*/
 
 /*
@@ -224,12 +224,13 @@ struct if_status_description {
 
 #define	IFXF_MPSAFE		0x1	/* [I] if_start is mpsafe */
 #define	IFXF_CLONED		0x2	/* [I] pseudo interface */
-#define	IFXF_INET6_NOPRIVACY	0x4	/* [N] don't autoconf privacy */
+#define	IFXF_AUTOCONF6TEMP	0x4	/* [N] v6 temporary addrs enabled */
 #define	IFXF_MPLS		0x8	/* [N] supports MPLS */
 #define	IFXF_WOL		0x10	/* [N] wake on lan enabled */
 #define	IFXF_AUTOCONF6		0x20	/* [N] v6 autoconf enabled */
 #define IFXF_INET6_NOSOII	0x40	/* [N] don't do RFC 7217 */
 #define	IFXF_AUTOCONF4		0x80	/* [N] v4 autoconf (aka dhcp) enabled */
+#define	IFXF_MONITOR		0x100	/* [N] only used for bpf */
 
 #define	IFXF_CANTCHANGE \
 	(IFXF_MPSAFE|IFXF_CLONED)

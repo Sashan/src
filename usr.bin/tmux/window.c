@@ -1,4 +1,4 @@
-/* $OpenBSD: window.c,v 1.268 2021/01/20 07:16:54 nicm Exp $ */
+/* $OpenBSD: window.c,v 1.270 2021/03/11 06:31:05 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -62,17 +62,6 @@ struct window_pane_tree all_window_panes;
 static u_int	next_window_pane_id;
 static u_int	next_window_id;
 static u_int	next_active_point;
-
-/* List of window modes. */
-const struct window_mode *all_window_modes[] = {
-	&window_buffer_mode,
-	&window_client_mode,
-	&window_clock_mode,
-	&window_copy_mode,
-	&window_tree_mode,
-	&window_view_mode,
-	NULL
-};
 
 struct window_pane_input_data {
 	struct cmdq_item	*item;
@@ -633,18 +622,18 @@ window_unzoom(struct window *w)
 		wp->layout_cell = wp->saved_layout_cell;
 		wp->saved_layout_cell = NULL;
 	}
-	layout_fix_panes(w);
+	layout_fix_panes(w, NULL);
 	notify_window("window-layout-changed", w);
 
 	return (0);
 }
 
 int
-window_push_zoom(struct window *w, int flag)
+window_push_zoom(struct window *w, int always, int flag)
 {
 	log_debug("%s: @%u %d", __func__, w->id,
 	    flag && (w->flags & WINDOW_ZOOMED));
-	if (flag && (w->flags & WINDOW_ZOOMED))
+	if (flag && (always || (w->flags & WINDOW_ZOOMED)))
 		w->flags |= WINDOW_WASZOOMED;
 	else
 		w->flags &= ~WINDOW_WASZOOMED;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: slaacd.c,v 1.56 2021/01/19 16:49:56 florian Exp $	*/
+/*	$OpenBSD: slaacd.c,v 1.59 2021/03/21 18:25:24 florian Exp $	*/
 
 /*
  * Copyright (c) 2017 Florian Obser <florian@openbsd.org>
@@ -131,7 +131,7 @@ main(int argc, char *argv[])
 	int			 pipe_main2engine[2];
 	int			 frontend_routesock, rtfilter;
 	int			 rtable_any = RTABLE_ANY;
-	char			*csock = SLAACD_SOCKET;
+	char			*csock = _PATH_SLAACD_SOCKET;
 #ifndef SMALL
 	struct imsg_propose_rdns rdns;
 	int			 control_fd;
@@ -380,7 +380,6 @@ main_dispatch_frontend(int fd, short event, void *bula)
 	int			 rdomain;
 #ifndef	SMALL
 	struct imsg_addrinfo	 imsg_addrinfo;
-	struct imsg_link_state	 imsg_link_state;
 	int			 verbose;
 #endif	/* SMALL */
 
@@ -430,16 +429,6 @@ main_dispatch_frontend(int fd, short event, void *bula)
 			    sizeof(imsg_addrinfo));
 			main_imsg_compose_engine(IMSG_UPDATE_ADDRESS, 0,
 			    &imsg_addrinfo, sizeof(imsg_addrinfo));
-			break;
-		case IMSG_UPDATE_LINK_STATE:
-			if (IMSG_DATA_SIZE(imsg) != sizeof(imsg_link_state))
-				fatalx("%s: IMSG_UPDATE_LINK_STATE wrong "
-				    "length: %lu", __func__,
-				    IMSG_DATA_SIZE(imsg));
-			memcpy(&imsg_link_state, imsg.data,
-			    sizeof(imsg_link_state));
-			main_imsg_compose_engine(IMSG_UPDATE_LINK_STATE, 0,
-			    &imsg_link_state, sizeof(imsg_link_state));
 			break;
 #endif	/* SMALL */
 		case IMSG_UPDATE_IF:
@@ -668,7 +657,7 @@ configure_interface(struct imsg_configure_address *address)
 
 	in6_addreq.ifra_flags |= IN6_IFF_AUTOCONF;
 
-	if (address->privacy)
+	if (address->temporary)
 		in6_addreq.ifra_flags |= IN6_IFF_TEMPORARY;
 
 	log_debug("%s: %s", __func__, if_name);

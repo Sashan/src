@@ -1,4 +1,4 @@
-/*	$OpenBSD: printconf.c,v 1.145 2021/01/25 09:15:23 claudio Exp $	*/
+/*	$OpenBSD: printconf.c,v 1.147 2021/03/02 09:45:07 claudio Exp $	*/
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -42,6 +42,7 @@ void		 print_as_sets(struct as_set_head *);
 void		 print_prefixsets(struct prefixset_head *);
 void		 print_originsets(struct prefixset_head *);
 void		 print_roa(struct roa_tree *);
+void		 print_rtrs(struct rtr_config_head *);
 void		 print_peer(struct peer_config *, struct bgpd_config *,
 		    const char *);
 const char	*print_auth_alg(u_int8_t);
@@ -389,9 +390,10 @@ print_mainconf(struct bgpd_config *conf)
 
 	if (conf->flags & BGPD_FLAG_DECISION_ROUTEAGE)
 		printf("rde route-age evaluate\n");
-
 	if (conf->flags & BGPD_FLAG_DECISION_MED_ALWAYS)
 		printf("rde med compare always\n");
+	if (conf->flags & BGPD_FLAG_DECISION_ALL_PATHS)
+		printf("rde evaluate all\n");
 
 	if (conf->flags & BGPD_FLAG_NO_AS_SET)
 		printf("reject as-set yes\n");
@@ -579,6 +581,21 @@ print_roa(struct roa_tree *r)
 }
 
 void
+print_rtrs(struct rtr_config_head *rh)
+{
+	struct rtr_config *r;
+
+	SIMPLEQ_FOREACH(r, rh, entry) {
+		printf("rtr %s {\n", log_addr(&r->remote_addr));
+		printf("\tdescr \"%s\"\n", r->descr);
+		printf("\tport %u\n", r->remote_port);
+		if (r->local_addr.aid != AID_UNSPEC)
+			printf("local-addr %s\n", log_addr(&r->local_addr));
+		printf("}\n\n");
+	}
+}
+
+void
 print_peer(struct peer_config *p, struct bgpd_config *conf, const char *c)
 {
 	char		*method;
@@ -665,6 +682,14 @@ print_peer(struct peer_config *p, struct bgpd_config *conf, const char *c)
 		printf("%s\tdepend on \"%s\"\n", c, p->if_depend);
 	if (p->flags & PEERFLAG_TRANS_AS)
 		printf("%s\ttransparent-as yes\n", c);
+
+	if (conf->flags & BGPD_FLAG_DECISION_ALL_PATHS) {
+		if (!(p->flags & PEERFLAG_EVALUATE_ALL))
+			printf("%s\trde evaluate default\n", c);
+	} else {
+		if (p->flags & PEERFLAG_EVALUATE_ALL)
+			printf("%s\trde evaluate all\n", c);
+	}
 
 	if (conf->flags & BGPD_FLAG_NO_AS_SET) {
 		if (!(p->flags & PEERFLAG_NO_AS_SET))
@@ -1010,6 +1035,7 @@ print_config(struct bgpd_config *conf, struct rib_names *rib_l)
 	struct l3vpn		*vpn;
 
 	print_mainconf(conf);
+	print_rtrs(&conf->rtrs);
 	print_roa(&conf->roa);
 	print_as_sets(&conf->as_sets);
 	print_prefixsets(&conf->prefixsets);

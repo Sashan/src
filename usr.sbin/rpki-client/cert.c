@@ -1,4 +1,4 @@
-/*	$OpenBSD: cert.c,v 1.25 2021/02/08 09:22:53 claudio Exp $ */
+/*	$OpenBSD: cert.c,v 1.28 2021/03/05 17:15:19 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -19,7 +19,6 @@
 
 #include <arpa/inet.h>
 #include <assert.h>
-#include <ctype.h>
 #include <err.h>
 #include <inttypes.h>
 #include <stdarg.h>
@@ -140,11 +139,8 @@ sbgp_addr(struct parse *p,
  * Returns zero on failure, non-zero on success.
  */
 static int
-sbgp_sia_resource_notify(struct parse *p,
-	const unsigned char *d, size_t dsz)
+sbgp_sia_resource_notify(struct parse *p, const char *d, size_t dsz)
 {
-	size_t i;
-
 	if (p->res->notify != NULL) {
 		warnx("%s: RFC 6487 section 4.8.8: SIA: "
 		    "Notify location already specified", p->fn);
@@ -152,21 +148,12 @@ sbgp_sia_resource_notify(struct parse *p,
 	}
 
 	/* Make sure it's a https:// address. */
-	if (dsz <= 8 || strncasecmp(d, "https://", 8)) {
-		warnx("%s: RFC 8182 section 3.2: not using https schema",
-		    p->fn);
-		return 0;
-	}
-	/* make sure only US-ASCII chars are in the URL */
-	for (i = 0; i < dsz; i++) {
-		if (isalnum(d[i]) || ispunct(d[i]))
-			continue;
-		warnx("%s: invalid URI", p->fn);
+	if (!valid_uri(d, dsz, "https://")) {
+		warnx("%s: RFC 8182 section 3.2: bad Notify URI", p->fn);
 		return 0;
 	}
 
-
-	if ((p->res->notify = strndup((const char *)d, dsz)) == NULL)
+	if ((p->res->notify = strndup(d, dsz)) == NULL)
 		err(1, NULL);
 
 	return 1;
@@ -177,11 +164,8 @@ sbgp_sia_resource_notify(struct parse *p,
  * Returns zero on failure, non-zero on success.
  */
 static int
-sbgp_sia_resource_mft(struct parse *p,
-	const unsigned char *d, size_t dsz)
+sbgp_sia_resource_mft(struct parse *p, const char *d, size_t dsz)
 {
-	size_t i;
-
 	if (p->res->mft != NULL) {
 		warnx("%s: RFC 6487 section 4.8.8: SIA: "
 		    "MFT location already specified", p->fn);
@@ -189,26 +173,18 @@ sbgp_sia_resource_mft(struct parse *p,
 	}
 
 	/* Make sure it's an MFT rsync address. */
-	if (dsz <= 8 || strncasecmp(d, "rsync://", 8)) {
-		warnx("%s: RFC 6487 section 4.8.8: not using rsync schema",
-		    p->fn);
+	if (!valid_uri(d, dsz, "rsync://")) {
+		warnx("%s: RFC 6487 section 4.8.8: bad MFT location", p->fn);
 		return 0;
 	}
 
-	if (strcasecmp(d + dsz - 4, ".mft") != 0) {
+	if (dsz < 4 || strcasecmp(d + dsz - 4, ".mft") != 0) {
 		warnx("%s: RFC 6487 section 4.8.8: SIA: "
-		    "invalid rsync URI suffix", p->fn);
-		return 0;
-	}
-	/* make sure only US-ASCII chars are in the URL */
-	for (i = 0; i < dsz; i++) {
-		if (isalnum(d[i]) || ispunct(d[i]))
-			continue;
-		warnx("%s: invalid URI", p->fn);
+		    "not an MFT file", p->fn);
 		return 0;
 	}
 
-	if ((p->res->mft = strndup((const char *)d, dsz)) == NULL)
+	if ((p->res->mft = strndup(d, dsz)) == NULL)
 		err(1, NULL);
 
 	return 1;
@@ -219,11 +195,8 @@ sbgp_sia_resource_mft(struct parse *p,
  * Returns zero on failure, non-zero on success.
  */
 static int
-sbgp_sia_resource_carepo(struct parse *p,
-	const unsigned char *d, size_t dsz)
+sbgp_sia_resource_carepo(struct parse *p, const char *d, size_t dsz)
 {
-	size_t i;
-
 	if (p->res->repo != NULL) {
 		warnx("%s: RFC 6487 section 4.8.8: SIA: "
 		    "CA repository already specified", p->fn);
@@ -231,21 +204,13 @@ sbgp_sia_resource_carepo(struct parse *p,
 	}
 
 	/* Make sure it's an rsync:// address. */
-	if (dsz <= 8 || strncasecmp(d, "rsync://", 8)) {
-		warnx("%s: RFC 6487 section 4.8.8: not using rsync schema",
+	if (!valid_uri(d, dsz, "rsync://")) {
+		warnx("%s: RFC 6487 section 4.8.8: bad CA repository URI",
 		    p->fn);
 		return 0;
 	}
 
-	/* make sure only US-ASCII chars are in the URL */
-	for (i = 0; i < dsz; i++) {
-		if (isalnum(d[i]) || ispunct(d[i]))
-			continue;
-		warnx("%s: invalid URI", p->fn);
-		return 0;
-	}
-
-	if ((p->res->repo = strndup((const char *)d, dsz)) == NULL)
+	if ((p->res->repo = strndup(d, dsz)) == NULL)
 		err(1, NULL);
 
 	return 1;
@@ -1079,15 +1044,11 @@ cert_parse_inner(X509 **xp, const char *fn, int ta)
 		case NID_crl_distribution_points:
 			/* ignored here, handled later */
 			break;
+		case NID_info_access:
+			break;
 		case NID_authority_key_identifier:
-			free(p.res->aki);
-			p.res->aki = x509_get_aki_ext(ext, p.fn);
-			c = (p.res->aki != NULL);
 			break;
 		case NID_subject_key_identifier:
-			free(p.res->ski);
-			p.res->ski = x509_get_ski_ext(ext, p.fn);
-			c = (p.res->ski != NULL);
 			break;
 		default:
 			/* {
@@ -1102,8 +1063,12 @@ cert_parse_inner(X509 **xp, const char *fn, int ta)
 			goto out;
 	}
 
-	if (!ta)
+	p.res->aki = x509_get_aki(x, ta, p.fn);
+	p.res->ski = x509_get_ski(x, p.fn);
+	if (!ta) {
+		p.res->aia = x509_get_aia(x, p.fn);
 		p.res->crl = x509_get_crl(x, p.fn);
+	}
 
 	/* Validation on required fields. */
 
@@ -1126,6 +1091,16 @@ cert_parse_inner(X509 **xp, const char *fn, int ta)
 	} else if (!ta && strcmp(p.res->aki, p.res->ski) == 0) {
 		warnx("%s: RFC 6487 section 8.4.2: "
 		    "non-trust anchor AKI may not match SKI", p.fn);
+		goto out;
+	}
+
+	if (!ta && p.res->aia == NULL) {
+		warnx("%s: RFC 6487 section 8.4.7: "
+		    "non-trust anchor missing AIA", p.fn);
+		goto out;
+	} else if (ta && p.res->aia != NULL) {
+		warnx("%s: RFC 6487 section 8.4.7: "
+		    "trust anchor must not have AIA", p.fn);
 		goto out;
 	}
 
@@ -1165,7 +1140,6 @@ out:
 struct cert *
 cert_parse(X509 **xp, const char *fn)
 {
-
 	return cert_parse_inner(xp, fn, 0);
 }
 
@@ -1223,6 +1197,7 @@ cert_free(struct cert *p)
 	free(p->notify);
 	free(p->ips);
 	free(p->as);
+	free(p->aia);
 	free(p->aki);
 	free(p->ski);
 	X509_free(p->x509);
@@ -1279,6 +1254,7 @@ cert_buffer(struct ibuf *b, const struct cert *p)
 	io_str_buffer(b, p->notify);
 	io_str_buffer(b, p->repo);
 	io_str_buffer(b, p->crl);
+	io_str_buffer(b, p->aia);
 	io_str_buffer(b, p->aki);
 	io_str_buffer(b, p->ski);
 }
@@ -1347,6 +1323,7 @@ cert_read(int fd)
 	io_str_read(fd, &p->notify);
 	io_str_read(fd, &p->repo);
 	io_str_read(fd, &p->crl);
+	io_str_read(fd, &p->aia);
 	io_str_read(fd, &p->aki);
 	io_str_read(fd, &p->ski);
 	assert(p->ski);

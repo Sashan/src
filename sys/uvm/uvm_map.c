@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_map.c,v 1.270 2021/01/19 13:21:36 mpi Exp $	*/
+/*	$OpenBSD: uvm_map.c,v 1.273 2021/03/12 14:15:49 jsg Exp $	*/
 /*	$NetBSD: uvm_map.c,v 1.86 2000/11/27 08:40:03 chs Exp $	*/
 
 /*
@@ -183,7 +183,6 @@ void			 uvm_map_splitentry(struct vm_map*,
 			    struct vm_map_entry*, struct vm_map_entry*,
 			    vaddr_t);
 vsize_t			 uvm_map_boundary(struct vm_map*, vaddr_t, vaddr_t);
-int			 uvm_mapent_bias(struct vm_map*, struct vm_map_entry*);
 
 /*
  * uvm_vmspace_fork helper functions.
@@ -668,7 +667,7 @@ uvm_map_sel_limits(vaddr_t *min, vaddr_t *max, vsize_t sz, int guardpg,
 
 		/*
 		 * Fixup: it's possible that pmap_min and pmap_max
-		 * cross eachother. In this case, try to find one
+		 * cross each other. In this case, try to find one
 		 * address that is allowed.
 		 * (This usually happens in biased case.)
 		 */
@@ -1474,14 +1473,14 @@ uvm_mapent_isjoinable(struct vm_map *map, struct vm_map_entry *e1,
 	if (e2->aref.ar_amap && amap_refs(e2->aref.ar_amap) != 1)
 		return 0;
 
-	/* Apprently, e1 and e2 match. */
+	/* Apparently, e1 and e2 match. */
 	return 1;
 }
 
 /*
  * Join support function.
  *
- * Returns the merged entry on succes.
+ * Returns the merged entry on success.
  * Returns NULL if the merge failed.
  */
 struct vm_map_entry*
@@ -3155,10 +3154,8 @@ print_uaddr:
  * uvm_object_printit: actually prints the object
  */
 void
-uvm_object_printit(uobj, full, pr)
-	struct uvm_object *uobj;
-	boolean_t full;
-	int (*pr)(const char *, ...);
+uvm_object_printit(struct uvm_object *uobj, boolean_t full,
+    int (*pr)(const char *, ...))
 {
 	struct vm_page *pg;
 	int cnt = 0;
@@ -3195,10 +3192,8 @@ static const char page_flagbits[] =
 	"\27ENCRYPT\31PMAP0\32PMAP1\33PMAP2\34PMAP3\35PMAP4\36PMAP5";
 
 void
-uvm_page_printit(pg, full, pr)
-	struct vm_page *pg;
-	boolean_t full;
-	int (*pr)(const char *, ...);
+uvm_page_printit(struct vm_page *pg, boolean_t full,
+    int (*pr)(const char *, ...))
 {
 	struct vm_page *tpg;
 	struct uvm_object *uobj;
@@ -5376,39 +5371,6 @@ out:
 		*addr_p = addr;
 	return error;
 }
-
-/*
- * Determine allocation bias.
- *
- * Returns 1 if we should bias to high addresses, -1 for a bias towards low
- * addresses, or 0 for no bias.
- * The bias mechanism is intended to avoid clashing with brk() and stack
- * areas.
- */
-int
-uvm_mapent_bias(struct vm_map *map, struct vm_map_entry *entry)
-{
-	vaddr_t start, end;
-
-	start = VMMAP_FREE_START(entry);
-	end = VMMAP_FREE_END(entry);
-
-	/* Stay at the top of brk() area. */
-	if (end >= map->b_start && start < map->b_end)
-		return 1;
-	/* Stay at the far end of the stack area. */
-	if (end >= map->s_start && start < map->s_end) {
-#ifdef MACHINE_STACK_GROWS_UP
-		return 1;
-#else
-		return -1;
-#endif
-	}
-
-	/* No bias, this area is meant for us. */
-	return 0;
-}
-
 
 boolean_t
 vm_map_lock_try_ln(struct vm_map *map, char *file, int line)

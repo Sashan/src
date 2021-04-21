@@ -1,4 +1,4 @@
-/* $OpenBSD: wstpad.c,v 1.26 2020/09/13 10:05:46 fcambus Exp $ */
+/* $OpenBSD: wstpad.c,v 1.29 2021/03/24 07:40:37 bru Exp $ */
 
 /*
  * Copyright (c) 2015, 2016 Ulf Brosziewski
@@ -33,9 +33,11 @@
 #include <dev/wscons/wseventvar.h>
 #include <dev/wscons/wsmouseinput.h>
 
-#define LEFTBTN			(1 << 0)
-#define MIDDLEBTN		(1 << 1)
-#define RIGHTBTN		(1 << 2)
+#define BTNMASK(n)		((n) > 0 && (n) <= 32 ? 1 << ((n) - 1) : 0)
+
+#define LEFTBTN			BTNMASK(1)
+#define MIDDLEBTN		BTNMASK(2)
+#define RIGHTBTN		BTNMASK(3)
 
 #define PRIMARYBTN LEFTBTN
 
@@ -57,6 +59,7 @@
 #define TAP_MAXTIME_DEFAULT	180
 #define TAP_CLICKTIME_DEFAULT	180
 #define TAP_LOCKTIME_DEFAULT	0
+#define TAP_BTNMAP_SIZE		3
 
 #define CLICKDELAY_MS		20
 #define FREEZE_MS		100
@@ -147,7 +150,6 @@ struct tpad_touch {
 #define WSTPAD_HORIZSCROLL	(1 << 5)
 #define WSTPAD_SWAPSIDES	(1 << 6)
 #define WSTPAD_DISABLE		(1 << 7)
-#define WSTPAD_TAPPING		(1 << 8)
 
 #define WSTPAD_MT		(1 << 31)
 
@@ -218,6 +220,7 @@ struct wstpad {
 		struct timespec maxtime;
 		int clicktime;
 		int locktime;
+		u_int btnmap[TAP_BTNMAP_SIZE];
 	} tap;
 
 	struct {
@@ -654,14 +657,8 @@ wstpad_is_tap(struct wstpad *tp, struct tpad_touch *t)
 	struct timespec ts;
 	int dx, dy, dist = 0;
 
-	/*
-	 * No distance limit applies if there has been more than one contact
-	 * on a single-touch device.  We cannot use (t->x - t->orig.x) in this
-	 * case.  Accumulated deltas might be an alternative, but some
-	 * touchpads provide unreliable coordinates at the start or end of a
-	 * multi-finger touch.
-	 */
-	if (IS_MT(tp) || tp->tap.contacts < 2) {
+	/* Try to distinguish one-finger taps from short movements. */
+	if (tp->tap.contacts == (tp->ignore ? 2 : 1)) {
 		dx = abs(t->x - t->orig.x) << 12;
 		dy = abs(t->y - t->orig.y) * tp->ratio;
 		dist = (dx >= dy ? dx + 3 * dy / 8 : dy + 3 * dx / 8);
@@ -722,7 +719,7 @@ tap_btn(struct wstpad *tp, int nmasked)
 {
 	int n = tp->tap.contacts - nmasked;
 
-	return (n == 2 ? RIGHTBTN : (n == 3 ? MIDDLEBTN : LEFTBTN));
+	return (n <= TAP_BTNMAP_SIZE ? tp->tap.btnmap[n - 1] : 0);
 }
 
 /*
@@ -793,9 +790,13 @@ wstpad_tap(struct wsmouseinput *input, u_int *cmds)
 				tp->tap.centered = 0;
 			}
 			if (tp->tap.state == TAP_LIFTED) {
-				*cmds |= 1 << TAPBUTTON_DOWN;
-				err = !timeout_add_msec(&tp->tap.to,
-				    tp->tap.clicktime);
+				if (tp->tap.button != 0) {
+					*cmds |= 1 << TAPBUTTON_DOWN;
+					err = !timeout_add_msec(&tp->tap.to,
+					    tp->tap.clicktime);
+				} else {
+					tp->tap.state = TAP_DETECT;
+				}
 			}
 		}
 		break;
@@ -1528,7 +1529,7 @@ int
 wstpad_configure(struct wsmouseinput *input)
 {
 	struct wstpad *tp;
-	int width, height, diag, offset, h_res, v_res, h_unit, v_unit;
+	int width, height, diag, offset, h_res, v_res, h_unit, v_unit, i;
 
 	width = abs(input->hw.x_max - input->hw.x_min);
 	height = abs(input->hw.y_max - input->hw.y_min);
@@ -1626,12 +1627,16 @@ wstpad_configure(struct wsmouseinput *input)
 	else if (tp->features & WSTPAD_EDGESCROLL)
 		tp->handlers |= 1 << EDGESCROLL_HDLR;
 
-	if (tp->features & WSTPAD_TAPPING) {
+	for (i = 0; i < TAP_BTNMAP_SIZE; i++) {
+		if (tp->tap.btnmap[i] == 0)
+			continue;
+
 		tp->tap.clicktime = imin(imax(tp->tap.clicktime, 80), 350);
 		if (tp->tap.locktime)
 			tp->tap.locktime =
 			    imin(imax(tp->tap.locktime, 150), 5000);
 		tp->handlers |= 1 << TAP_HDLR;
+		break;
 	}
 
 	if (input->hw.hw_type == WSMOUSEHW_CLICKPAD)
@@ -1659,6 +1664,19 @@ wstpad_reset(struct wsmouseinput *input)
 	}
 }
 
+void
+wstpad_cleanup(struct wsmouseinput *input)
+{
+	struct wstpad *tp = input->tp;
+	int slots;
+
+	timeout_del(&tp->tap.to);
+	slots = imax(input->mt.num_slots, 1);
+	free(tp->tpad_touches, M_DEVBUF, slots * sizeof(struct tpad_touch));
+	free(tp, M_DEVBUF, sizeof(struct wstpad));
+	input->tp = NULL;
+}
+
 int
 wstpad_set_param(struct wsmouseinput *input, int key, int val)
 {
@@ -1669,7 +1687,7 @@ wstpad_set_param(struct wsmouseinput *input, int key, int val)
 		return (EINVAL);
 
 	switch (key) {
-	case WSMOUSECFG_SOFTBUTTONS ... WSMOUSECFG_TAPPING:
+	case WSMOUSECFG_SOFTBUTTONS ... WSMOUSECFG_DISABLE:
 		switch (key) {
 		case WSMOUSECFG_SOFTBUTTONS:
 			flag = WSTPAD_SOFTBUTTONS;
@@ -1694,9 +1712,6 @@ wstpad_set_param(struct wsmouseinput *input, int key, int val)
 			break;
 		case WSMOUSECFG_DISABLE:
 			flag = WSTPAD_DISABLE;
-			break;
-		case WSMOUSECFG_TAPPING:
-			flag = WSTPAD_TAPPING;
 			break;
 		}
 		if (val)
@@ -1740,6 +1755,15 @@ wstpad_set_param(struct wsmouseinput *input, int key, int val)
 	case WSMOUSECFG_TAP_LOCKTIME:
 		tp->tap.locktime = val;
 		break;
+	case WSMOUSECFG_TAP_ONE_BTNMAP:
+		tp->tap.btnmap[0] = BTNMASK(val);
+		break;
+	case WSMOUSECFG_TAP_TWO_BTNMAP:
+		tp->tap.btnmap[1] = BTNMASK(val);
+		break;
+	case WSMOUSECFG_TAP_THREE_BTNMAP:
+		tp->tap.btnmap[2] = BTNMASK(val);
+		break;
 	default:
 		return (ENOTSUP);
 	}
@@ -1757,7 +1781,7 @@ wstpad_get_param(struct wsmouseinput *input, int key, int *pval)
 		return (EINVAL);
 
 	switch (key) {
-	case WSMOUSECFG_SOFTBUTTONS ... WSMOUSECFG_TAPPING:
+	case WSMOUSECFG_SOFTBUTTONS ... WSMOUSECFG_DISABLE:
 		switch (key) {
 		case WSMOUSECFG_SOFTBUTTONS:
 			flag = WSTPAD_SOFTBUTTONS;
@@ -1782,9 +1806,6 @@ wstpad_get_param(struct wsmouseinput *input, int key, int *pval)
 			break;
 		case WSMOUSECFG_DISABLE:
 			flag = WSTPAD_DISABLE;
-			break;
-		case WSMOUSECFG_TAPPING:
-			flag = WSTPAD_TAPPING;
 			break;
 		}
 		*pval = !!(tp->features & flag);
@@ -1824,6 +1845,15 @@ wstpad_get_param(struct wsmouseinput *input, int key, int *pval)
 		break;
 	case WSMOUSECFG_TAP_LOCKTIME:
 		*pval = tp->tap.locktime;
+		break;
+	case WSMOUSECFG_TAP_ONE_BTNMAP:
+		*pval = ffs(tp->tap.btnmap[0]);
+		break;
+	case WSMOUSECFG_TAP_TWO_BTNMAP:
+		*pval = ffs(tp->tap.btnmap[1]);
+		break;
+	case WSMOUSECFG_TAP_THREE_BTNMAP:
+		*pval = ffs(tp->tap.btnmap[2]);
 		break;
 	default:
 		return (ENOTSUP);

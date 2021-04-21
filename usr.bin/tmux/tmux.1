@@ -1,4 +1,4 @@
-.\" $OpenBSD: tmux.1,v 1.820 2021/02/08 14:46:53 nicm Exp $
+.\" $OpenBSD: tmux.1,v 1.830 2021/03/16 09:14:58 nicm Exp $
 .\"
 .\" Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
 .\"
@@ -14,7 +14,7 @@
 .\" IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING
 .\" OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: February 8 2021 $
+.Dd $Mdocdate: March 16 2021 $
 .Dt TMUX 1
 .Os
 .Sh NAME
@@ -522,6 +522,67 @@ Commands separated by semicolons together form a
 - if a command in the sequence encounters an error, no subsequent commands are
 executed.
 .Pp
+It is recommended that a semicolon used as a command separator should be
+written as an individual token, for example from
+.Xr sh 1 :
+.Bd -literal -offset indent
+$ tmux neww \\; splitw
+.Ed
+.Pp
+Or:
+.Bd -literal -offset indent
+$ tmux neww ';' splitw
+.Ed
+.Pp
+Or from the tmux command prompt:
+.Bd -literal -offset indent
+neww ; splitw
+.Ed
+.Pp
+However, a trailing semicolon is also interpreted as a command separator,
+for example in these
+.Xr sh 1
+commands:
+.Bd -literal -offset indent
+$ tmux neww\e\e; splitw
+.Ed
+.Pp
+Or:
+.Bd -literal -offset indent
+$ tmux 'neww;' splitw
+.Ed
+.Pp
+As in these examples, when running tmux from the shell extra care must be taken
+to properly quote semicolons:
+.Bl -enum -offset Ds
+.It
+Semicolons that should be interpreted as a command separator
+should be escaped according to the shell conventions.
+For
+.Xr sh 1
+this typically means quoted (such as
+.Ql neww ';' splitw )
+or escaped (such as
+.Ql neww \e\e\e\e; splitw ) .
+.It
+Individual semicolons or trailing semicolons that should be interpreted as
+arguments should be escaped twice: once according to the shell conventions and
+a second time for
+.Nm ;
+for example:
+.Bd -literal -offset indent
+$ tmux neww 'foo\e\e;' bar
+$ tmux neww foo\e\e\e\e; bar
+.Ed
+.It
+Semicolons that are not individual tokens or trailing another token should only
+be escaped once according to shell conventions; for example:
+.Bd -literal -offset indent
+$ tmux neww 'foo-;-bar'
+$ tmux neww foo-\e\e;-bar
+.Ed
+.El
+.Pp
 Comments are marked by the unquoted # character - any remaining text after a
 comment is ignored until the end of the line.
 .Pp
@@ -872,12 +933,12 @@ arguments are
 commands.
 This may be a single argument passed to the shell, for example:
 .Bd -literal -offset indent
-new-window 'vi /etc/passwd'
+new-window 'vi ~/.tmux.conf'
 .Ed
 .Pp
 Will run:
 .Bd -literal -offset indent
-/bin/sh -c 'vi /etc/passwd'
+/bin/sh -c 'vi ~/.tmux.conf'
 .Ed
 .Pp
 Additionally, the
@@ -894,7 +955,7 @@ to be given as multiple arguments and executed directly (without
 This can avoid issues with shell quoting.
 For example:
 .Bd -literal -offset indent
-$ tmux new-window vi /etc/passwd
+$ tmux new-window vi ~/.tmux.conf
 .Ed
 .Pp
 Will run
@@ -940,7 +1001,7 @@ $ tmux kill-window -t :1
 
 $ tmux new-window \e; split-window -d
 
-$ tmux new-session -d 'vi /etc/passwd' \e; split-window -d \e; attach
+$ tmux new-session -d 'vi ~/.tmux.conf' \e; split-window -d \e; attach
 .Ed
 .Sh CLIENTS AND SESSIONS
 The
@@ -2743,7 +2804,7 @@ is given and the selected window is already the current window,
 the command behaves like
 .Ic last-window .
 .It Xo Ic split-window
-.Op Fl bdfhIvP
+.Op Fl bdfhIvPZ
 .Op Fl c Ar start-directory
 .Op Fl e Ar environment
 .Op Fl l Ar size
@@ -2779,6 +2840,8 @@ option creates a new pane spanning the full window height (with
 or full window width (with
 .Fl v ) ,
 instead of splitting the active pane.
+.Fl Z
+zooms if the window is not zoomed, or keeps it zoomed if already zoomed.
 .Pp
 An empty
 .Ar shell-command
@@ -3752,10 +3815,11 @@ seconds.
 By default, updates will occur every 15 seconds.
 A setting of zero disables redrawing at interval.
 .It Xo Ic status-justify
-.Op Ic left | centre | right
+.Op Ic left | centre | right | absolute-centre
 .Xc
-Set the position of the window list component of the status line: left, centre
-or right justified.
+Set the position of the window list in the status line: left, centre or right.
+centre puts the window list in the relative centre of the available free space;
+absolute-centre uses the centre of the entire horizontal space.
 .It Xo Ic status-keys
 .Op Ic vi | emacs
 .Xc
@@ -4756,6 +4820,7 @@ will be replaced by
 The following variables are available, where appropriate:
 .Bl -column "XXXXXXXXXXXXXXXXXXX" "XXXXX"
 .It Sy "Variable name" Ta Sy "Alias" Ta Sy "Replaced with"
+.It Li "active_window_index" Ta "" Ta "Index of active window in session"
 .It Li "alternate_on" Ta "" Ta "1 if pane is in alternate screen"
 .It Li "alternate_saved_x" Ta "" Ta "Saved cursor X in alternate screen"
 .It Li "alternate_saved_y" Ta "" Ta "Saved cursor Y in alternate screen"
@@ -4778,9 +4843,9 @@ The following variables are available, where appropriate:
 .It Li "client_prefix" Ta "" Ta "1 if prefix key has been pressed"
 .It Li "client_readonly" Ta "" Ta "1 if client is readonly"
 .It Li "client_session" Ta "" Ta "Name of the client's session"
+.It Li "client_termfeatures" Ta "" Ta "Terminal features of client, if any"
 .It Li "client_termname" Ta "" Ta "Terminal name of client"
 .It Li "client_termtype" Ta "" Ta "Terminal type of client, if available"
-.It Li "client_termfeatures" Ta "" Ta "Terminal features of client, if any"
 .It Li "client_tty" Ta "" Ta "Pseudo terminal of client"
 .It Li "client_utf8" Ta "" Ta "1 if client supports UTF-8"
 .It Li "client_width" Ta "" Ta "Width of client"
@@ -4789,6 +4854,7 @@ The following variables are available, where appropriate:
 .It Li "command_list_alias" Ta "" Ta "Command alias if listing commands"
 .It Li "command_list_name" Ta "" Ta "Command name if listing commands"
 .It Li "command_list_usage" Ta "" Ta "Command usage if listing commands"
+.It Li "config_files" Ta "" Ta "List of configuration files loaded"
 .It Li "copy_cursor_line" Ta "" Ta "Line the cursor is on in copy mode"
 .It Li "copy_cursor_word" Ta "" Ta "Word under cursor in copy mode"
 .It Li "copy_cursor_x" Ta "" Ta "Cursor X position in copy mode"
@@ -4811,6 +4877,7 @@ The following variables are available, where appropriate:
 .It Li "insert_flag" Ta "" Ta "Pane insert flag"
 .It Li "keypad_cursor_flag" Ta "" Ta "Pane keypad cursor flag"
 .It Li "keypad_flag" Ta "" Ta "Pane keypad flag"
+.It Li "last_window_index" Ta "" Ta "Index of last window in session"
 .It Li "line" Ta "" Ta "Line number in the list"
 .It Li "mouse_all_flag" Ta "" Ta "Pane mouse all flag"
 .It Li "mouse_any_flag" Ta "" Ta "Pane mouse any flag"
@@ -4828,11 +4895,13 @@ The following variables are available, where appropriate:
 .It Li "pane_at_left" Ta "" Ta "1 if pane is at the left of window"
 .It Li "pane_at_right" Ta "" Ta "1 if pane is at the right of window"
 .It Li "pane_at_top" Ta "" Ta "1 if pane is at the top of window"
+.It Li "pane_bg" Ta "" Ta "Pane background colour"
 .It Li "pane_bottom" Ta "" Ta "Bottom of pane"
 .It Li "pane_current_command" Ta "" Ta "Current command if available"
 .It Li "pane_current_path" Ta "" Ta "Current path if available"
 .It Li "pane_dead" Ta "" Ta "1 if pane is dead"
 .It Li "pane_dead_status" Ta "" Ta "Exit status of process in dead pane"
+.It Li "pane_fg" Ta "" Ta "Pane foreground colour"
 .It Li "pane_format" Ta "" Ta "1 if format is for a pane"
 .It Li "pane_height" Ta "" Ta "Height of pane"
 .It Li "pane_id" Ta "#D" Ta "Unique pane ID"
@@ -4857,15 +4926,12 @@ The following variables are available, where appropriate:
 .It Li "pane_tty" Ta "" Ta "Pseudo terminal of pane"
 .It Li "pane_width" Ta "" Ta "Width of pane"
 .It Li "pid" Ta "" Ta "Server PID"
-.It Li "popup_key" Ta "" Ta "Key pressed in popup"
-.It Li "popup_mouse_x" Ta "" Ta "Mouse X position in popup"
-.It Li "popup_mouse_y" Ta "" Ta "Mouse Y position in popup"
 .It Li "rectangle_toggle" Ta "" Ta "1 if rectangle selection is activated"
 .It Li "scroll_position" Ta "" Ta "Scroll position in copy mode"
 .It Li "scroll_region_lower" Ta "" Ta "Bottom of scroll region in pane"
 .It Li "scroll_region_upper" Ta "" Ta "Top of scroll region in pane"
-.It Li "search_present" Ta "" Ta "1 if search started in copy mode"
 .It Li "search_match" Ta "" Ta "Search match if any"
+.It Li "search_present" Ta "" Ta "1 if search started in copy mode"
 .It Li "selection_active" Ta "" Ta "1 if selection started and changes with the cursor in copy mode"
 .It Li "selection_end_x" Ta "" Ta "X position of the end of the selection"
 .It Li "selection_end_y" Ta "" Ta "Y position of the end of the selection"
@@ -5518,58 +5584,24 @@ lists the format variables and their values.
 forwards any input read from stdin to the empty pane given by
 .Ar target-pane .
 .It Xo Ic display-popup
-.Op Fl CEK
+.Op Fl CE
 .Op Fl c Ar target-client
 .Op Fl d Ar start-directory
 .Op Fl h Ar height
-.Op Fl R Ar shell-command
 .Op Fl t Ar target-pane
 .Op Fl w Ar width
 .Op Fl x Ar position
 .Op Fl y Ar position
-.Op Ar command Ar line Ar ...
+.Op Ar shell-command
 .Xc
 .D1 (alias: Ic popup )
-Display a popup on
+Display a popup running
+.Ar shell-command
+on
 .Ar target-client .
 A popup is a rectangular box drawn over the top of any panes.
 Panes are not updated while a popup is present.
-The popup content may be given in two ways:
-.Bl -enum -offset Ds
-.It
-A set of lines as arguments.
-Each line is a format which is expanded using
-.Ar target-pane
-as the target.
-If a line contains newlines it is split into multiple lines.
-Lines may use styles, see the
-.Sx STYLES
-section.
-.It
-A shell command given by
-.Fl R
-which is run and any output shown in the pane.
-.El
 .Pp
-The first argument,
-.Ar command ,
-is a
-.Nm
-command which is run when a key is pressed.
-The key is available in the
-.Ql popup_key
-format.
-After
-.Ar command
-is run, the popup is closed.
-It may be empty to discard any key presses.
-If
-.Fl K
-is given together with
-.Fl R ,
-key presses are instead passed to the
-.Fl R
-shell command.
 .Fl E
 closes the popup automatically when
 .Ar shell-command
@@ -5579,14 +5611,6 @@ Two
 closes the popup only if
 .Ar shell-command
 exited with success.
-With
-.Fl K ,
-.Ql Escape
-and
-.Ql C-c
-close the popup unless
-.Fl E
-is also given.
 .Pp
 .Fl x
 and
@@ -5599,11 +5623,7 @@ and
 .Fl h
 give the width and height - both may be a percentage (followed by
 .Ql % ) .
-If omitted, without
-.Fl R
-they are calculated from the given lines and with
-.Fl R
-they use half the terminal size.
+If omitted, half of the terminal size is used.
 .Pp
 The
 .Fl C
@@ -6087,6 +6107,8 @@ A notification will never occur inside an output block.
 .Pp
 The following notifications are defined:
 .Bl -tag -width Ds
+.It Ic %client-detached Ar client
+The client has detached.
 .It Ic %client-session-changed Ar client session-id name
 The client is now attached to the session with ID
 .Ar session-id ,

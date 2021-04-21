@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_locl.h,v 1.320 2021/02/07 15:26:32 jsing Exp $ */
+/* $OpenBSD: ssl_locl.h,v 1.328 2021/03/21 18:36:34 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -168,6 +168,10 @@ __BEGIN_HIDDEN_DECLS
 
 #define CTASSERT(x)	extern char  _ctassert[(x) ? 1 : -1 ]   \
 			    __attribute__((__unused__))
+
+#ifndef LIBRESSL_HAS_DTLS1_2
+#define LIBRESSL_HAS_DTLS1_2
+#endif
 
 #ifndef LIBRESSL_HAS_TLS1_3_CLIENT
 #define LIBRESSL_HAS_TLS1_3_CLIENT
@@ -362,8 +366,8 @@ typedef struct ssl_method_internal_st {
 	int server;
 	int version;
 
-	uint16_t min_version;
-	uint16_t max_version;
+	uint16_t min_tls_version;
+	uint16_t max_tls_version;
 
 	int (*ssl_new)(SSL *s);
 	void (*ssl_clear)(SSL *s);
@@ -406,28 +410,6 @@ typedef struct ssl_session_internal_st {
 } SSL_SESSION_INTERNAL;
 #define SSI(s) (s->session->internal)
 
-typedef struct ssl_handshake_st {
-	/* state contains one of the SSL3_ST_* values. */
-	int state;
-
-	/* used when SSL_ST_FLUSH_DATA is entered */
-	int next_state;
-
-	/*  new_cipher is the cipher being negotiated in this handshake. */
-	const SSL_CIPHER *new_cipher;
-
-	/* key_block is the record-layer key block for TLS 1.2 and earlier. */
-	size_t key_block_len;
-	unsigned char *key_block;
-
-	/* Extensions seen in this handshake. */
-	uint32_t extensions_seen;
-
-	/* sigalgs offered in this handshake in wire form */
-	size_t sigalgs_len;
-	uint8_t *sigalgs;
-} SSL_HANDSHAKE;
-
 typedef struct cert_pkey_st {
 	X509 *x509;
 	EVP_PKEY *privatekey;
@@ -435,10 +417,6 @@ typedef struct cert_pkey_st {
 } CERT_PKEY;
 
 typedef struct ssl_handshake_tls13_st {
-	uint16_t min_version;
-	uint16_t max_version;
-	uint16_t version;
-
 	int use_legacy;
 	int hrr;
 
@@ -468,8 +446,48 @@ typedef struct ssl_handshake_tls13_st {
 	EVP_MD_CTX *clienthello_md_ctx;
 	unsigned char *clienthello_hash;
 	unsigned int clienthello_hash_len;
-
 } SSL_HANDSHAKE_TLS13;
+
+typedef struct ssl_handshake_st {
+	/*
+	 * Minimum and maximum versions supported for this handshake. These are
+	 * initialised at the start of a handshake based on the method in use
+	 * and the current protocol version configuration.
+	 */
+	uint16_t our_min_tls_version;
+	uint16_t our_max_tls_version;
+
+	/*
+	 * Version negotiated for this session. For a client this is set once
+	 * the server selected version is parsed from the ServerHello (either
+	 * from the legacy version or supported versions extension). For a
+	 * server this is set once we select the version we will use with the
+	 * client.
+	 */
+	uint16_t negotiated_tls_version;
+
+	SSL_HANDSHAKE_TLS13 tls13;
+
+	/* state contains one of the SSL3_ST_* values. */
+	int state;
+
+	/* used when SSL_ST_FLUSH_DATA is entered */
+	int next_state;
+
+	/*  new_cipher is the cipher being negotiated in this handshake. */
+	const SSL_CIPHER *new_cipher;
+
+	/* key_block is the record-layer key block for TLS 1.2 and earlier. */
+	size_t key_block_len;
+	unsigned char *key_block;
+
+	/* Extensions seen in this handshake. */
+	uint32_t extensions_seen;
+
+	/* sigalgs offered in this handshake in wire form */
+	size_t sigalgs_len;
+	uint8_t *sigalgs;
+} SSL_HANDSHAKE;
 
 struct tls12_record_layer;
 
@@ -483,6 +501,9 @@ int tls12_record_layer_read_protected(struct tls12_record_layer *rl);
 int tls12_record_layer_write_protected(struct tls12_record_layer *rl);
 void tls12_record_layer_set_aead(struct tls12_record_layer *rl,
     const EVP_AEAD *aead);
+void tls12_record_layer_set_cipher_hash(struct tls12_record_layer *rl,
+    const EVP_CIPHER *cipher, const EVP_MD *handshake_hash,
+    const EVP_MD *mac_hash);
 void tls12_record_layer_set_version(struct tls12_record_layer *rl,
     uint16_t version);
 void tls12_record_layer_set_write_epoch(struct tls12_record_layer *rl,
@@ -494,16 +515,8 @@ void tls12_record_layer_write_epoch_done(struct tls12_record_layer *rl,
 void tls12_record_layer_clear_read_state(struct tls12_record_layer *rl);
 void tls12_record_layer_clear_write_state(struct tls12_record_layer *rl);
 void tls12_record_layer_reflect_seq_num(struct tls12_record_layer *rl);
-int tls12_record_layer_set_read_aead(struct tls12_record_layer *rl,
-    SSL_AEAD_CTX *aead_ctx);
-int tls12_record_layer_set_write_aead(struct tls12_record_layer *rl,
-    SSL_AEAD_CTX *aead_ctx);
-int tls12_record_layer_set_read_cipher_hash(struct tls12_record_layer *rl,
-    EVP_CIPHER_CTX *cipher_ctx, EVP_MD_CTX *hash_ctx, int stream_mac);
-int tls12_record_layer_set_write_cipher_hash(struct tls12_record_layer *rl,
-    EVP_CIPHER_CTX *cipher_ctx, EVP_MD_CTX *hash_ctx, int stream_mac);
-int tls12_record_layer_set_read_mac_key(struct tls12_record_layer *rl,
-    const uint8_t *mac_key, size_t mac_key_len);
+void tls12_record_layer_read_cipher_hash(struct tls12_record_layer *rl,
+    EVP_CIPHER_CTX **cipher, EVP_MD_CTX **hash);
 int tls12_record_layer_change_read_cipher_state(struct tls12_record_layer *rl,
     const uint8_t *mac_key, size_t mac_key_len, const uint8_t *key,
     size_t key_len, const uint8_t *iv, size_t iv_len);
@@ -517,8 +530,15 @@ int tls12_record_layer_seal_record(struct tls12_record_layer *rl,
     CBB *out);
 
 typedef struct ssl_ctx_internal_st {
-	uint16_t min_version;
-	uint16_t max_version;
+	uint16_t min_tls_version;
+	uint16_t max_tls_version;
+
+	/*
+	 * These may be zero to imply minimum or maximum version supported by
+	 * the method.
+	 */
+	uint16_t min_proto_version;
+	uint16_t max_proto_version;
 
 	unsigned long options;
 	unsigned long mode;
@@ -679,8 +699,15 @@ typedef struct ssl_ctx_internal_st {
 typedef struct ssl_internal_st {
 	struct tls13_ctx *tls13;
 
-	uint16_t min_version;
-	uint16_t max_version;
+	uint16_t min_tls_version;
+	uint16_t max_tls_version;
+
+	/*
+	 * These may be zero to imply minimum or maximum version supported by
+	 * the method.
+	 */
+	uint16_t min_proto_version;
+	uint16_t max_proto_version;
 
 	unsigned long options; /* protocol behaviour */
 	unsigned long mode; /* API behaviour */
@@ -759,9 +786,6 @@ typedef struct ssl_internal_st {
 	int hit;		/* reusing a previous session */
 
 	STACK_OF(SSL_CIPHER) *cipher_list_tls13;
-
-	EVP_CIPHER_CTX *enc_write_ctx;		/* cryptographic state */
-	EVP_MD_CTX *write_hash;			/* used for mac generation */
 
 	struct tls12_record_layer *rl;
 
@@ -885,11 +909,8 @@ typedef struct ssl3_state_internal_st {
 	int in_read_app_data;
 
 	SSL_HANDSHAKE hs;
-	SSL_HANDSHAKE_TLS13 hs_tls13;
 
 	struct	{
-		int new_mac_secret_size;
-
 		unsigned char cert_verify_md[EVP_MAX_MD_SIZE];
 
 		unsigned char finish_md[EVP_MAX_MD_SIZE];
@@ -917,8 +938,8 @@ typedef struct ssl3_state_internal_st {
 
 		const EVP_CIPHER *new_sym_enc;
 		const EVP_AEAD *new_aead;
-		const EVP_MD *new_hash;
-		int new_mac_pkey_type;
+		int new_mac_secret_size;
+
 		int cert_request;
 	} tmp;
 
@@ -1107,17 +1128,20 @@ struct ssl_aead_ctx_st {
 extern const SSL_CIPHER ssl3_ciphers[];
 
 const char *ssl_version_string(int ver);
-int ssl_enabled_version_range(SSL *s, uint16_t *min_ver, uint16_t *max_ver);
-int ssl_supported_version_range(SSL *s, uint16_t *min_ver, uint16_t *max_ver);
+int ssl_version_set_min(const SSL_METHOD *meth, uint16_t proto_ver,
+    uint16_t max_tls_ver, uint16_t *out_tls_ver, uint16_t *out_proto_ver);
+int ssl_version_set_max(const SSL_METHOD *meth, uint16_t proto_ver,
+    uint16_t min_tls_ver, uint16_t *out_tls_ver, uint16_t *out_proto_ver);
+int ssl_enabled_tls_version_range(SSL *s, uint16_t *min_ver, uint16_t *max_ver);
+int ssl_supported_tls_version_range(SSL *s, uint16_t *min_ver, uint16_t *max_ver);
+uint16_t ssl_tls_version(uint16_t version);
+uint16_t ssl_effective_tls_version(SSL *s);
+int ssl_max_supported_version(SSL *s, uint16_t *max_ver);
 int ssl_max_shared_version(SSL *s, uint16_t peer_ver, uint16_t *max_ver);
-int ssl_version_set_min(const SSL_METHOD *meth, uint16_t ver, uint16_t max_ver,
-    uint16_t *out_ver);
-int ssl_version_set_max(const SSL_METHOD *meth, uint16_t ver, uint16_t min_ver,
-    uint16_t *out_ver);
-int ssl_downgrade_max_version(SSL *s, uint16_t *max_ver);
+int ssl_check_version_from_server(SSL *s, uint16_t server_version);
 int ssl_legacy_stack_version(SSL *s, uint16_t version);
 int ssl_cipher_in_list(STACK_OF(SSL_CIPHER) *ciphers, const SSL_CIPHER *cipher);
-int ssl_cipher_allowed_in_version_range(const SSL_CIPHER *cipher,
+int ssl_cipher_allowed_in_tls_version_range(const SSL_CIPHER *cipher,
     uint16_t min_ver, uint16_t max_ver);
 
 const SSL_METHOD *tls_legacy_method(void);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_mbuf.c,v 1.277 2021/01/13 12:38:36 bluhm Exp $	*/
+/*	$OpenBSD: uipc_mbuf.c,v 1.279 2021/03/06 09:20:49 jsg Exp $	*/
 /*	$NetBSD: uipc_mbuf.c,v 1.15.4.1 1996/06/13 17:11:44 cgd Exp $	*/
 
 /*
@@ -202,7 +202,7 @@ mbinit(void)
 }
 
 void
-mbcpuinit()
+mbcpuinit(void)
 {
 	int i;
 
@@ -711,8 +711,9 @@ nospace:
  * continuing for "len" bytes, into the indicated buffer.
  */
 void
-m_copydata(struct mbuf *m, int off, int len, caddr_t cp)
+m_copydata(struct mbuf *m, int off, int len, void *p)
 {
+	caddr_t cp = p;
 	unsigned count;
 
 	if (off < 0)

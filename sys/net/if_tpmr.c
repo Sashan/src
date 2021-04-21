@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_tpmr.c,v 1.22 2021/01/19 07:31:05 mvs Exp $ */
+/*	$OpenBSD: if_tpmr.c,v 1.24 2021/03/05 06:44:09 dlg Exp $ */
 
 /*
  * Copyright (c) 2019 The University of Queensland
@@ -61,12 +61,6 @@
 #if NVLAN > 0
 #include <net/if_vlan_var.h>
 #endif
-
-static const uint8_t	ether_8021_prefix[ETHER_ADDR_LEN - 1] =
-    { 0x01, 0x80, 0xc2, 0x00, 0x00 };
-
-#define ETHER_IS_8021_PREFIX(_m) \
-    (memcmp((_m), ether_8021_prefix, sizeof(ether_8021_prefix)) == 0)
 
 /*
  * tpmr interface
@@ -230,16 +224,10 @@ tpmr_vlan_filter(const struct mbuf *m)
 }
 
 static int
-tpmr_8021q_filter(const struct mbuf *m)
+tpmr_8021q_filter(const struct mbuf *m, uint64_t dst)
 {
-	const struct ether_header *eh;
-
-	if (m->m_len < sizeof(*eh))
-		return (1);
-
-	eh = mtod(m, struct ether_header *);
-	if (ETHER_IS_8021_PREFIX(eh->ether_dhost)) {
-		switch (eh->ether_dhost[5]) {
+	if (ETH64_IS_8021_RSVD(dst)) {
+		switch (dst & 0xf) {
 		case 0x01: /* IEEE MAC-specific Control Protocols */
 		case 0x02: /* IEEE 802.3 Slow Protocols */
 		case 0x04: /* IEEE MAC-specific Control Protocols */
@@ -296,7 +284,7 @@ tpmr_pf(struct ifnet *ifp0, int dir, struct mbuf *m)
 #endif /* NPF > 0 */
 
 static struct mbuf *
-tpmr_input(struct ifnet *ifp0, struct mbuf *m, void *brport)
+tpmr_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
 {
 	struct tpmr_port *p = brport;
 	struct tpmr_softc *sc = p->p_tpmr;
@@ -329,7 +317,7 @@ tpmr_input(struct ifnet *ifp0, struct mbuf *m, void *brport)
 		goto drop;
 
 	if (!ISSET(ifp->if_flags, IFF_LINK0) &&
-	    tpmr_8021q_filter(m))
+	    tpmr_8021q_filter(m, dst))
 		goto drop;
 
 #if NPF > 0

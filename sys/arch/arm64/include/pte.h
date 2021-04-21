@@ -1,4 +1,4 @@
-/* $OpenBSD: pte.h,v 1.5 2017/04/13 23:29:02 kettenis Exp $ */
+/* $OpenBSD: pte.h,v 1.7 2021/02/28 21:28:33 patrick Exp $ */
 /*
  * Copyright (c) 2014 Dale Rahn <drahn@dalerahn.com>
  *
@@ -53,11 +53,17 @@
 #define		ATTR_IDX(x)	((x) << 2)
 #define		ATTR_IDX_MASK	(7 << 2)
 
-#define		PTE_ATTR_DEV	0
-#define		PTE_ATTR_CI	1
-#define		PTE_ATTR_WB	2
-#define		PTE_ATTR_WT	3
+#define		PTE_ATTR_DEV_NGNRNE	0
+#define		PTE_ATTR_DEV_NGNRE	1
+#define		PTE_ATTR_CI		2
+#define		PTE_ATTR_WB		3
+#define		PTE_ATTR_WT		4
 
+#define		PTE_MEMATTR_DEV_NGNRNE	0x0
+#define		PTE_MEMATTR_DEV_NGNRE	0x1
+#define		PTE_MEMATTR_CI		0x5
+#define		PTE_MEMATTR_WB		0xf
+#define		PTE_MEMATTR_WT		0xa
 
 #define		SH_INNER	3
 #define		SH_OUTER	2

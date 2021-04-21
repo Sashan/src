@@ -1,4 +1,4 @@
-/*	$OpenBSD: dispatch.c,v 1.167 2021/02/01 01:42:21 krw Exp $	*/
+/*	$OpenBSD: dispatch.c,v 1.171 2021/03/09 14:32:24 krw Exp $	*/
 
 /*
  * Copyright 2004 Henning Brauer <henning@openbsd.org>
@@ -83,16 +83,21 @@ void flush_unpriv_ibuf(void);
 void
 dispatch(struct interface_info *ifi, int routefd)
 {
+	const struct timespec	 link_intvl = {config->link_interval, 0};
 	struct pollfd		 fds[3];
 	struct timespec		 timeout;
 	struct timespec		*ts;
 	void			(*func)(struct interface_info *);
 	int			 nfds;
 
+	log_debug("%s: link is %s", log_procname,
+	    LINK_STATE_IS_UP(ifi->link_state) ? "up" : "down");
+
 	while (quit == 0 || quit == RESTART) {
 		if (quit == RESTART) {
 			quit = 0;
-			time(&ifi->startup_time);
+			clock_gettime(CLOCK_REALTIME, &ifi->link_timeout);
+			timespecadd(&ifi->link_timeout, &link_intvl, &ifi->link_timeout);
 			free(ifi->configured);
 			ifi->configured = NULL;
 			free(ifi->unwind_info);
@@ -132,7 +137,7 @@ dispatch(struct interface_info *ifi, int routefd)
 		if (nfds == -1) {
 			if (errno == EINTR)
 				continue;
-			log_warn("%s: poll(bpffd, routefd, unpriv_ibuf)",
+			log_warn("%s: ppoll(bpffd, routefd, unpriv_ibuf)",
 			    log_procname);
 			break;
 		}
@@ -300,12 +305,12 @@ void
 set_timeout(struct interface_info *ifi, time_t secs,
     void (*where)(struct interface_info *))
 {
-	struct timespec		cur_time;
+	struct timespec		now;
 
-	clock_gettime(CLOCK_REALTIME, &cur_time);
+	clock_gettime(CLOCK_REALTIME, &now);
 	timespecclear(&ifi->timeout);
 	ifi->timeout.tv_sec = secs;
-	timespecadd(&ifi->timeout, &cur_time, &ifi->timeout);
+	timespecadd(&ifi->timeout, &now, &ifi->timeout);
 	ifi->timeout_func = where;
 }
 

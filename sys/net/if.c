@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.c,v 1.627 2021/02/08 12:30:10 bluhm Exp $	*/
+/*	$OpenBSD: if.c,v 1.639 2021/03/20 17:08:57 florian Exp $	*/
 /*	$NetBSD: if.c,v 1.35 1996/05/07 05:26:04 thorpej Exp $	*/
 
 /*
@@ -228,7 +228,7 @@ TAILQ_HEAD(, ifg_group) ifg_head = TAILQ_HEAD_INITIALIZER(ifg_head);
 LIST_HEAD(, if_clone) if_cloners = LIST_HEAD_INITIALIZER(if_cloners);
 int if_cloners_count;
 
-struct rwlock if_cloners_lock = RWLOCK_INITIALIZER("clonerlock");
+struct rwlock if_cloners_lock = RWLOCK_INITIALIZER("clonelk");
 
 /* hooks should only be added, deleted, and run from a process context */
 struct mutex if_hooks_mtx = MUTEX_INITIALIZER(IPL_NONE);
@@ -423,8 +423,6 @@ if_attachsetup(struct ifnet *ifp)
 
 	NET_ASSERT_LOCKED();
 
-	TAILQ_INIT(&ifp->if_groups);
-
 	if_addgroup(ifp, IFG_ALL);
 
 	if_attachdomain(ifp);
@@ -596,6 +594,7 @@ if_attach_common(struct ifnet *ifp)
 
 	TAILQ_INIT(&ifp->if_addrlist);
 	TAILQ_INIT(&ifp->if_maddrlist);
+	TAILQ_INIT(&ifp->if_groups);
 
 	if (!ISSET(ifp->if_xflags, IFXF_MPSAFE)) {
 		KASSERTMSG(ifp->if_qstart == NULL,
@@ -630,6 +629,10 @@ if_attach_common(struct ifnet *ifp)
 		ifp->if_rtrequest = if_rtrequest_dummy;
 	if (ifp->if_enqueue == NULL)
 		ifp->if_enqueue = if_enqueue_ifq;
+#if NBPFILTER > 0
+	if (ifp->if_bpf_mtap == NULL)
+		ifp->if_bpf_mtap = bpf_mtap_ether;
+#endif
 	ifp->if_llprio = IFQ_DEFPRIO;
 }
 
@@ -664,7 +667,7 @@ if_qstart_compat(struct ifqueue *ifq)
 	 * the stack assumes that an interface can have multiple
 	 * transmit rings, but a lot of drivers are still written
 	 * so that interfaces and send rings have a 1:1 mapping.
-	 * this provides compatability between the stack and the older
+	 * this provides compatibility between the stack and the older
 	 * drivers by translating from the only queue they have
 	 * (ifp->if_snd) back to the interface and calling if_start.
 	 */
@@ -850,17 +853,22 @@ if_vinput(struct ifnet *ifp, struct mbuf *m)
 	counters_pkt(ifp->if_counters,
 	    ifc_ipackets, ifc_ibytes, m->m_pkthdr.len);
 
+#if NPF > 0
+	pf_pkt_addr_changed(m);
+#endif
+
 #if NBPFILTER > 0
 	if_bpf = ifp->if_bpf;
 	if (if_bpf) {
-		if (bpf_mtap_ether(if_bpf, m, BPF_DIRECTION_IN)) {
+		if ((*ifp->if_bpf_mtap)(if_bpf, m, BPF_DIRECTION_IN)) {
 			m_freem(m);
 			return;
 		}
 	}
 #endif
 
-	(*ifp->if_input)(ifp, m);
+	if (__predict_true(!ISSET(ifp->if_xflags, IFXF_MONITOR)))
+		(*ifp->if_input)(ifp, m);
 }
 
 void
@@ -1497,6 +1505,42 @@ p2p_rtrequest(struct ifnet *ifp, int req, struct rtentry *rt)
 	}
 }
 
+int
+p2p_bpf_mtap(caddr_t if_bpf, const struct mbuf *m, u_int dir)
+{
+#if NBPFILTER > 0
+	return (bpf_mtap_af(if_bpf, m->m_pkthdr.ph_family, m, dir));
+#else
+	return (0);
+#endif
+}
+
+void
+p2p_input(struct ifnet *ifp, struct mbuf *m)
+{
+	void (*input)(struct ifnet *, struct mbuf *);
+
+	switch (m->m_pkthdr.ph_family) {
+	case AF_INET:
+		input = ipv4_input;
+		break;
+#ifdef INET6
+	case AF_INET6:
+		input = ipv6_input;
+		break;
+#endif
+#ifdef MPLS
+	case AF_MPLS:
+		input = mpls_input;
+		break;
+#endif
+	default:
+		m_freem(m);
+		return;
+	}
+
+	(*input)(ifp, m);
+}
 
 /*
  * Bring down all interfaces
@@ -1908,35 +1952,16 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		NET_UNLOCK();
 		break;
 
-	case SIOCSIFFLAGS:
-		if ((error = suser(p)) != 0)
-			break;
-
-		NET_LOCK();
-		ifp->if_flags = (ifp->if_flags & IFF_CANTCHANGE) |
-			(ifr->ifr_flags & ~IFF_CANTCHANGE);
-
-		error = (*ifp->if_ioctl)(ifp, cmd, data);
-		if (error != 0) {
-			ifp->if_flags = oif_flags;
-		} else if (ISSET(oif_flags ^ ifp->if_flags, IFF_UP)) {
-			s = splnet();
-			if (ISSET(ifp->if_flags, IFF_UP))
-				if_up(ifp);
-			else
-				if_down(ifp);
-			splx(s);
-		}
-		NET_UNLOCK();
-		break;
-
 	case SIOCSIFXFLAGS:
 		if ((error = suser(p)) != 0)
 			break;
 
 		NET_LOCK();
 #ifdef INET6
-		if (ISSET(ifr->ifr_flags, IFXF_AUTOCONF6)) {
+		if ((ISSET(ifr->ifr_flags, IFXF_AUTOCONF6) ||
+		    ISSET(ifr->ifr_flags, IFXF_AUTOCONF6TEMP)) &&
+		    !ISSET(ifp->if_xflags, IFXF_AUTOCONF6) &&
+		    !ISSET(ifp->if_xflags, IFXF_AUTOCONF6TEMP)) {
 			error = in6_ifattach(ifp);
 			if (error != 0) {
 				NET_UNLOCK();
@@ -1998,6 +2023,41 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		if (error == 0)
 			ifp->if_xflags = (ifp->if_xflags & IFXF_CANTCHANGE) |
 				(ifr->ifr_flags & ~IFXF_CANTCHANGE);
+
+		if (!ISSET(ifp->if_flags, IFF_UP) &&
+		    ((!ISSET(oif_xflags, IFXF_AUTOCONF4) &&
+		    ISSET(ifp->if_xflags, IFXF_AUTOCONF4)) ||
+		    (!ISSET(oif_xflags, IFXF_AUTOCONF6) &&
+		    ISSET(ifp->if_xflags, IFXF_AUTOCONF6)) ||
+		    (!ISSET(oif_xflags, IFXF_AUTOCONF6TEMP) &&
+		    ISSET(ifp->if_xflags, IFXF_AUTOCONF6TEMP)))) {
+			ifr->ifr_flags = ifp->if_flags | IFF_UP;
+			cmd = SIOCSIFFLAGS;
+			goto forceup;
+		}
+
+		NET_UNLOCK();
+		break;
+
+	case SIOCSIFFLAGS:
+		if ((error = suser(p)) != 0)
+			break;
+
+		NET_LOCK();
+forceup:
+		ifp->if_flags = (ifp->if_flags & IFF_CANTCHANGE) |
+			(ifr->ifr_flags & ~IFF_CANTCHANGE);
+		error = (*ifp->if_ioctl)(ifp, cmd, data);
+		if (error != 0) {
+			ifp->if_flags = oif_flags;
+		} else if (ISSET(oif_flags ^ ifp->if_flags, IFF_UP)) {
+			s = splnet();
+			if (ISSET(ifp->if_flags, IFF_UP))
+				if_up(ifp);
+			else
+				if_down(ifp);
+			splx(s);
+		}
 		NET_UNLOCK();
 		break;
 
@@ -2015,7 +2075,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		NET_LOCK();
 		error = (*ifp->if_ioctl)(ifp, cmd, data);
 		NET_UNLOCK();
-		if (!error)
+		if (error == 0)
 			rtm_ifchg(ifp);
 		break;
 
@@ -2116,6 +2176,8 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		if (error == 0)
 			ifnewlladdr(ifp);
 		NET_UNLOCK();
+		if (error == 0)
+			rtm_ifchg(ifp);
 		break;
 
 	case SIOCSIFLLPRIO:
@@ -2228,8 +2290,11 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		break;
 	}
 
-	if (oif_flags != ifp->if_flags || oif_xflags != ifp->if_xflags)
-		rtm_ifchg(ifp);
+	if (oif_flags != ifp->if_flags || oif_xflags != ifp->if_xflags) {
+		/* if_up() and if_down() already sent an update, skip here */
+		if (((oif_flags ^ ifp->if_flags) & IFF_UP) == 0)
+			rtm_ifchg(ifp);
+	}
 
 	if (((oif_flags ^ ifp->if_flags) & IFF_UP) != 0)
 		getmicrotime(&ifp->if_lastchange);
@@ -2621,9 +2686,11 @@ if_addgroup(struct ifnet *ifp, const char *groupname)
 	struct ifg_list		*ifgl;
 	struct ifg_group	*ifg = NULL;
 	struct ifg_member	*ifgm;
+	size_t			 namelen;
 
-	if (groupname[0] && groupname[strlen(groupname) - 1] >= '0' &&
-	    groupname[strlen(groupname) - 1] <= '9')
+	namelen = strlen(groupname);
+	if (namelen == 0 || namelen >= IFNAMSIZ ||
+	    (groupname[namelen - 1] >= '0' && groupname[namelen - 1] <= '9'))
 		return (EINVAL);
 
 	TAILQ_FOREACH(ifgl, &ifp->if_groups, ifgl_next)
