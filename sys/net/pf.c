@@ -7374,7 +7374,6 @@ pf_state_key_link_reverse(struct pf_state_key *sk, struct pf_state_key *skrev)
 	else
 		pf_state_key_ref(skrev);
 
-
 	old_reverse = atomic_cas_ptr(&skrev->reverse, NULL, sk);
 	if (old_reverse != NULL)
 		KASSERT(old_reverse == sk);
