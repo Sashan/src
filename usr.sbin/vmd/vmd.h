@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmd.h,v 1.102 2021/03/19 09:29:33 kn Exp $	*/
+/*	$OpenBSD: vmd.h,v 1.105 2021/04/11 14:12:42 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -120,6 +120,8 @@ enum imsg_type {
 	IMSG_VMDOP_PRIV_IFADDR,
 	IMSG_VMDOP_PRIV_IFADDR6,
 	IMSG_VMDOP_PRIV_IFRDOMAIN,
+	IMSG_VMDOP_PRIV_GET_ADDR,
+	IMSG_VMDOP_PRIV_GET_ADDR_RESPONSE,
 	IMSG_VMDOP_VM_SHUTDOWN,
 	IMSG_VMDOP_VM_REBOOT,
 	IMSG_VMDOP_CONFIG,
@@ -156,6 +158,17 @@ struct vmop_ifreq {
 	char				 vfr_value[VM_NAME_MAX];
 	struct sockaddr_storage		 vfr_addr;
 	struct sockaddr_storage		 vfr_mask;
+};
+
+struct vmop_addr_req {
+	uint32_t		 var_vmid;
+	unsigned int		 var_nic_idx;
+};
+
+struct vmop_addr_result {
+	uint32_t		 var_vmid;
+	unsigned int		 var_nic_idx;
+	uint8_t			 var_addr[ETHER_ADDR_LEN];
 };
 
 struct vmop_owner {
@@ -459,7 +472,7 @@ void	 vm_pipe_init(struct vm_dev_pipe *, void (*)(int, short, void *));
 void	 vm_pipe_send(struct vm_dev_pipe *, enum pipe_msg_type);
 enum pipe_msg_type vm_pipe_recv(struct vm_dev_pipe *);
 
-/* control.c */
+/* config.c */
 int	 config_init(struct vmd *);
 void	 config_purge(struct vmd *, unsigned int);
 int	 config_setconfig(struct vmd *);
@@ -471,10 +484,6 @@ int	 config_getvm(struct privsep *, struct imsg *);
 int	 config_getdisk(struct privsep *, struct imsg *);
 int	 config_getif(struct privsep *, struct imsg *);
 int	 config_getcdrom(struct privsep *, struct imsg *);
-
-/* vmboot.c */
-FILE	*vmboot_open(int, int *, int, unsigned int, struct vmboot_params *);
-void	 vmboot_close(FILE *, struct vmboot_params *);
 
 /* parse.y */
 int	 parse_config(const char *);

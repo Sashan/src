@@ -1,4 +1,4 @@
-/* $OpenBSD: tls13_server.c,v 1.72 2021/03/21 18:36:34 jsing Exp $ */
+/* $OpenBSD: tls13_server.c,v 1.74 2021/03/29 16:46:09 jsing Exp $ */
 /*
  * Copyright (c) 2019, 2020 Joel Sing <jsing@openbsd.org>
  * Copyright (c) 2020 Bob Beck <beck@openbsd.org>
@@ -249,7 +249,7 @@ tls13_client_hello_process(struct tls13_ctx *ctx, CBS *cbs)
 		ctx->alert = TLS13_ALERT_HANDSHAKE_FAILURE;
 		goto err;
 	}
-	ctx->hs->new_cipher = cipher;
+	ctx->hs->cipher = cipher;
 
 	sk_SSL_CIPHER_free(s->session->ciphers);
 	s->session->ciphers = ciphers;
@@ -314,7 +314,7 @@ tls13_server_hello_build(struct tls13_ctx *ctx, CBB *cbb, int hrr)
 	SSL *s = ctx->ssl;
 	uint16_t cipher;
 
-	cipher = SSL_CIPHER_get_value(ctx->hs->new_cipher);
+	cipher = SSL_CIPHER_get_value(ctx->hs->cipher);
 	server_random = s->s3->server_random;
 
 	if (hrr) {
@@ -362,11 +362,11 @@ tls13_server_engage_record_protection(struct tls13_ctx *ctx)
 	    &shared_key, &shared_key_len))
 		goto err;
 
-	s->session->cipher = ctx->hs->new_cipher;
+	s->session->cipher = ctx->hs->cipher;
 
-	if ((ctx->aead = tls13_cipher_aead(ctx->hs->new_cipher)) == NULL)
+	if ((ctx->aead = tls13_cipher_aead(ctx->hs->cipher)) == NULL)
 		goto err;
-	if ((ctx->hash = tls13_cipher_hash(ctx->hs->new_cipher)) == NULL)
+	if ((ctx->hash = tls13_cipher_hash(ctx->hs->cipher)) == NULL)
 		goto err;
 
 	if ((secrets = tls13_secrets_create(ctx->hash, 0)) == NULL)
@@ -783,7 +783,6 @@ tls13_server_finished_send(struct tls13_ctx *ctx, CBB *cbb)
 	unsigned int hlen;
 	HMAC_CTX *hmac_ctx = NULL;
 	CBS cbs;
-	SSL *s = ctx->ssl;
 	int ret = 0;
 
 	if (!tls13_secret_init(&finished_key, EVP_MD_size(ctx->hash)))
@@ -815,8 +814,8 @@ tls13_server_finished_send(struct tls13_ctx *ctx, CBB *cbb)
 		goto err;
 
 	CBS_init(&cbs, verify_data, verify_data_len);
-	if (!CBS_write_bytes(&cbs, S3I(s)->tmp.finish_md,
-	    sizeof(S3I(s)->tmp.finish_md), &S3I(s)->tmp.finish_md_len))
+	if (!CBS_write_bytes(&cbs, ctx->hs->finished,
+	    sizeof(ctx->hs->finished), &ctx->hs->finished_len))
 		goto err;
 
 	ret = 1;
@@ -1050,7 +1049,6 @@ tls13_client_finished_recv(struct tls13_ctx *ctx, CBS *cbs)
 	uint8_t key[EVP_MAX_MD_SIZE];
 	HMAC_CTX *hmac_ctx = NULL;
 	unsigned int hlen;
-	SSL *s = ctx->ssl;
 	int ret = 0;
 
 	/*
@@ -1085,9 +1083,9 @@ tls13_client_finished_recv(struct tls13_ctx *ctx, CBS *cbs)
 		goto err;
 	}
 
-	if (!CBS_write_bytes(cbs, S3I(s)->tmp.peer_finish_md,
-	    sizeof(S3I(s)->tmp.peer_finish_md),
-	    &S3I(s)->tmp.peer_finish_md_len))
+	if (!CBS_write_bytes(cbs, ctx->hs->peer_finished,
+	    sizeof(ctx->hs->peer_finished),
+	    &ctx->hs->peer_finished_len))
 		goto err;
 
 	if (!CBS_skip(cbs, verify_data_len))

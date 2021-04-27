@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtpd.h,v 1.662 2021/03/05 12:37:32 eric Exp $	*/
+/*	$OpenBSD: smtpd.h,v 1.668 2021/04/21 07:54:10 eric Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -51,7 +51,7 @@
 #define SMTPD_QUEUE_EXPIRY	 (4 * 24 * 60 * 60)
 #define SMTPD_SOCKET		 "/var/run/smtpd.sock"
 #define	SMTPD_NAME		 "OpenSMTPD"
-#define	SMTPD_VERSION		 "6.7.0"
+#define	SMTPD_VERSION		 "6.9.0"
 #define SMTPD_SESSION_TIMEOUT	 300
 #define SMTPD_BACKLOG		 5
 
@@ -101,12 +101,6 @@
 #define P_SENDMAIL	0
 #define P_NEWALIASES	1
 #define P_MAKEMAP	2
-
-#define	CERT_ERROR	-1
-#define	CERT_OK		 0
-#define	CERT_NOCA	 1
-#define	CERT_NOCERT	 2
-#define	CERT_INVALID	 3
 
 struct userinfo {
 	char username[SMTPD_VUSERNAME_SIZE];
@@ -210,10 +204,6 @@ enum imsg_type {
 	IMSG_GETADDRINFO_END,
 	IMSG_GETNAMEINFO,
 	IMSG_RES_QUERY,
-
-	IMSG_CERT_INIT,
-	IMSG_CERT_CERTIFICATE,
-	IMSG_CERT_VERIFY,
 
 	IMSG_SETUP_KEY,
 	IMSG_SETUP_PEER,
@@ -543,6 +533,8 @@ struct listener {
 
 	int			 local;		/* there must be a better way */
 
+	char			*tls_protocols;
+	char			*tls_ciphers;
 	struct tls		*tls;
 	struct pki		**pki;
 	int			 pkicount;
@@ -1192,6 +1184,8 @@ struct dispatcher_remote {
 	char	*auth;
 	int	 tls_required;
 	int	 tls_noverify;
+	char	*tls_protocols;
+	char	*tls_ciphers;
 
 	int	 backup;
 	char	*backupmx;
@@ -1277,14 +1271,6 @@ int	 ca_X509_verify(void *, void *, const char *, const char *, const char **);
 void	 ca_imsg(struct mproc *, struct imsg *);
 void	 ca_init(void);
 void	 ca_engine_init(void);
-
-
-/* cert.c */
-int cert_init(const char *, int,
-    void (*)(void *, int, const char *, const void *, size_t), void *);
-int cert_verify(const void *, const char *, int, void (*)(void *, int), void *);
-void cert_dispatch_request(struct mproc *, struct imsg *);
-void cert_dispatch_result(struct mproc *, struct imsg *);
 
 
 /* compress_backend.c */
@@ -1634,11 +1620,6 @@ const char *srs_encode(const char *, const char *);
 const char *srs_decode(const char *);
 
 
-/* ssl_smtpd.c */
-void   *ssl_mta_init(void *, char *, off_t, const char *);
-void   *ssl_smtp_init(void *, int);
-
-
 /* stat_backend.c */
 struct stat_backend	*stat_backend_lookup(const char *);
 void	stat_increment(const char *, size_t);
@@ -1747,8 +1728,9 @@ int base64_encode_rfc3548(unsigned char const *, size_t,
 		      char *, size_t);
 
 void log_trace_verbose(int);
-void log_trace(int, const char *, ...)
-    __attribute__((format (printf, 2, 3)));
+void log_trace0(const char *, ...)
+    __attribute__((format (printf, 1, 2)));
+#define log_trace(m, ...)  do { if (tracing & (m)) log_trace0(__VA_ARGS__); } while (0)
 
 /* waitq.c */
 int  waitq_wait(void *, void (*)(void *, void *, void *), void *);

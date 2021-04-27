@@ -1,4 +1,4 @@
-/*	$OpenBSD: vroute.c,v 1.6 2021/02/28 19:25:59 tobhe Exp $	*/
+/*	$OpenBSD: vroute.c,v 1.8 2021/04/03 21:29:14 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2021 Tobias Heider <tobhe@openbsd.org>
@@ -37,8 +37,7 @@
 
 #define IKED_VROUTE_PRIO	6
 
-#define ROUNDUP(a)			\
-    (((a) & (sizeof(long) - 1)) ? (1 + ((a) | (sizeof(long) - 1))) : (a))
+#define ROUNDUP(a) (a>0 ? (1 + (((a) - 1) | (sizeof(long) - 1))) : sizeof(long))
 
 int vroute_setroute(struct iked *, uint8_t, struct sockaddr *, uint8_t,
     struct sockaddr *, int);
@@ -109,6 +108,8 @@ vroute_getaddr(struct iked *env, struct imsg *imsg)
 	ptr += addr->sa_len;
 	left -= addr->sa_len;
 
+	if (left < sizeof(*mask))
+		fatalx("bad length imsg received");
 	mask = (struct sockaddr *) ptr;
 	if (mask->sa_family != af)
 		return (-1);

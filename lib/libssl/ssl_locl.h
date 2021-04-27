@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_locl.h,v 1.328 2021/03/21 18:36:34 jsing Exp $ */
+/* $OpenBSD: ssl_locl.h,v 1.336 2021/04/19 17:26:39 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -416,6 +416,28 @@ typedef struct cert_pkey_st {
 	STACK_OF(X509) *chain;
 } CERT_PKEY;
 
+typedef struct ssl_handshake_tls12_st {
+	/* Used when SSL_ST_FLUSH_DATA is entered. */
+	int next_state;
+
+	/* Handshake message type and size. */
+	int message_type;
+	unsigned long message_size;
+
+	/* Reuse current handshake message. */
+	int reuse_message;
+
+	/* Size of the MAC secret. */
+	int mac_secret_size;
+
+	/* Record-layer key block for TLS 1.2 and earlier. */
+	unsigned char *key_block;
+	size_t key_block_len;
+
+	/* Transcript hash prior to sending certificate verify message. */
+	uint8_t cert_verify[EVP_MAX_MD_SIZE];
+} SSL_HANDSHAKE_TLS12;
+
 typedef struct ssl_handshake_tls13_st {
 	int use_legacy;
 	int hrr;
@@ -466,27 +488,34 @@ typedef struct ssl_handshake_st {
 	 */
 	uint16_t negotiated_tls_version;
 
-	SSL_HANDSHAKE_TLS13 tls13;
-
-	/* state contains one of the SSL3_ST_* values. */
+	/*
+	 * Current handshake state - contains one of the SSL3_ST_* values and
+	 * is used by the TLSv1.2 state machine, as well as being updated by
+	 * the TLSv1.3 stack due to it being exposed externally.
+	 */
 	int state;
 
-	/* used when SSL_ST_FLUSH_DATA is entered */
-	int next_state;
-
-	/*  new_cipher is the cipher being negotiated in this handshake. */
-	const SSL_CIPHER *new_cipher;
-
-	/* key_block is the record-layer key block for TLS 1.2 and earlier. */
-	size_t key_block_len;
-	unsigned char *key_block;
+	/* Cipher being negotiated in this handshake. */
+	const SSL_CIPHER *cipher;
 
 	/* Extensions seen in this handshake. */
 	uint32_t extensions_seen;
 
 	/* sigalgs offered in this handshake in wire form */
-	size_t sigalgs_len;
 	uint8_t *sigalgs;
+	size_t sigalgs_len;
+
+	/*
+	 * Copies of the verify data sent in our finished message and the
+	 * verify data received in the finished message sent by our peer.
+	 */
+	uint8_t finished[EVP_MAX_MD_SIZE];
+	size_t finished_len;
+	uint8_t peer_finished[EVP_MAX_MD_SIZE];
+	size_t peer_finished_len;
+
+	SSL_HANDSHAKE_TLS12 tls12;
+	SSL_HANDSHAKE_TLS13 tls13;
 } SSL_HANDSHAKE;
 
 struct tls12_record_layer;
@@ -499,6 +528,8 @@ int tls12_record_layer_write_overhead(struct tls12_record_layer *rl,
     size_t *overhead);
 int tls12_record_layer_read_protected(struct tls12_record_layer *rl);
 int tls12_record_layer_write_protected(struct tls12_record_layer *rl);
+const EVP_AEAD *tls12_record_layer_aead(struct tls12_record_layer *rl);
+const EVP_CIPHER *tls12_record_layer_cipher(struct tls12_record_layer *rl);
 void tls12_record_layer_set_aead(struct tls12_record_layer *rl,
     const EVP_AEAD *aead);
 void tls12_record_layer_set_cipher_hash(struct tls12_record_layer *rl,
@@ -748,8 +779,6 @@ typedef struct ssl_internal_st {
 
 	/* XXX non-callback */
 
-	int type; /* SSL_ST_CONNECT or SSL_ST_ACCEPT */
-
 	/* This holds a variable that indicates what we were doing
 	 * when a 0 or -1 is returned.  This is needed for
 	 * non-blocking IO so we know what request needs re-doing when
@@ -911,16 +940,6 @@ typedef struct ssl3_state_internal_st {
 	SSL_HANDSHAKE hs;
 
 	struct	{
-		unsigned char cert_verify_md[EVP_MAX_MD_SIZE];
-
-		unsigned char finish_md[EVP_MAX_MD_SIZE];
-		size_t finish_md_len;
-		unsigned char peer_finish_md[EVP_MAX_MD_SIZE];
-		size_t peer_finish_md_len;
-
-		unsigned long message_size;
-		int message_type;
-
 		DH *dh;
 
 		EC_KEY *ecdh; /* holds short lived ECDH key */
@@ -928,17 +947,11 @@ typedef struct ssl3_state_internal_st {
 
 		uint8_t *x25519;
 
-		int reuse_message;
-
 		/* used for certificate requests */
 		int cert_req;
 		int ctype_num;
 		char ctype[SSL3_CT_NUMBER];
 		STACK_OF(X509_NAME) *ca_names;
-
-		const EVP_CIPHER *new_sym_enc;
-		const EVP_AEAD *new_aead;
-		int new_mac_secret_size;
 
 		int cert_request;
 	} tmp;
@@ -1256,7 +1269,6 @@ int ssl3_handshake_msg_finish(SSL *s, CBB *handshake);
 int ssl3_handshake_write(SSL *s);
 int ssl3_record_write(SSL *s, int type);
 
-void tls1_record_sequence_increment(unsigned char *seq);
 int ssl3_do_change_cipher_spec(SSL *ssl);
 
 int dtls1_do_write(SSL *s, int type);

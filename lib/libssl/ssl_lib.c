@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_lib.c,v 1.251 2021/03/02 15:43:12 tb Exp $ */
+/* $OpenBSD: ssl_lib.c,v 1.255 2021/03/29 16:57:38 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -185,8 +185,6 @@ SSL_clear(SSL *s)
 		SSLerror(s, ERR_R_INTERNAL_ERROR);
 		return (0);
 	}
-
-	s->internal->type = 0;
 
 	s->version = s->method->internal->version;
 	s->client_version = s->version;
@@ -725,10 +723,10 @@ SSL_get_finished(const SSL *s, void *buf, size_t count)
 {
 	size_t	ret;
 
-	ret = S3I(s)->tmp.finish_md_len;
+	ret = S3I(s)->hs.finished_len;
 	if (count > ret)
 		count = ret;
-	memcpy(buf, S3I(s)->tmp.finish_md, count);
+	memcpy(buf, S3I(s)->hs.finished, count);
 	return (ret);
 }
 
@@ -738,10 +736,10 @@ SSL_get_peer_finished(const SSL *s, void *buf, size_t count)
 {
 	size_t	ret;
 
-	ret = S3I(s)->tmp.peer_finish_md_len;
+	ret = S3I(s)->hs.peer_finished_len;
 	if (count > ret)
 		count = ret;
-	memcpy(buf, S3I(s)->tmp.peer_finish_md, count);
+	memcpy(buf, S3I(s)->hs.peer_finished, count);
 	return (ret);
 }
 
@@ -1718,9 +1716,6 @@ void
 SSL_get0_alpn_selected(const SSL *ssl, const unsigned char **data,
     unsigned int *len)
 {
-	*data = NULL;
-	*len = 0;
-
 	*data = ssl->s3->internal->alpn_selected;
 	*len = ssl->s3->internal->alpn_selected_len;
 }
@@ -2111,8 +2106,8 @@ ssl_using_ecc_cipher(SSL *s)
 {
 	unsigned long alg_a, alg_k;
 
-	alg_a = S3I(s)->hs.new_cipher->algorithm_auth;
-	alg_k = S3I(s)->hs.new_cipher->algorithm_mkey;
+	alg_a = S3I(s)->hs.cipher->algorithm_auth;
+	alg_k = S3I(s)->hs.cipher->algorithm_mkey;
 
 	return SSI(s)->tlsext_ecpointformatlist != NULL &&
 	    SSI(s)->tlsext_ecpointformatlist_length > 0 &&
@@ -2122,7 +2117,7 @@ ssl_using_ecc_cipher(SSL *s)
 int
 ssl_check_srvr_ecc_cert_and_alg(X509 *x, SSL *s)
 {
-	const SSL_CIPHER	*cs = S3I(s)->hs.new_cipher;
+	const SSL_CIPHER	*cs = S3I(s)->hs.cipher;
 	unsigned long		 alg_a;
 
 	alg_a = cs->algorithm_auth;
@@ -2150,9 +2145,9 @@ ssl_get_server_send_pkey(const SSL *s)
 	int		 i;
 
 	c = s->cert;
-	ssl_set_cert_masks(c, S3I(s)->hs.new_cipher);
+	ssl_set_cert_masks(c, S3I(s)->hs.cipher);
 
-	alg_a = S3I(s)->hs.new_cipher->algorithm_auth;
+	alg_a = S3I(s)->hs.cipher->algorithm_auth;
 
 	if (alg_a & SSL_aECDSA) {
 		i = SSL_PKEY_ECC;
@@ -2211,9 +2206,9 @@ ssl_get_auto_dh(SSL *s)
 
 	if (s->cert->dh_tmp_auto == 2) {
 		keylen = 1024;
-	} else if (S3I(s)->hs.new_cipher->algorithm_auth & SSL_aNULL) {
+	} else if (S3I(s)->hs.cipher->algorithm_auth & SSL_aNULL) {
 		keylen = 1024;
-		if (S3I(s)->hs.new_cipher->strength_bits == 256)
+		if (S3I(s)->hs.cipher->strength_bits == 256)
 			keylen = 3072;
 	} else {
 		if ((cpk = ssl_get_server_send_pkey(s)) == NULL)
@@ -2494,7 +2489,6 @@ SSL_dup(SSL *s)
 		goto err;
 
 	ret->version = s->version;
-	ret->internal->type = s->internal->type;
 	ret->method = s->method;
 
 	if (s->session != NULL) {

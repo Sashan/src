@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.55 2021/03/19 13:56:10 claudio Exp $ */
+/*	$OpenBSD: extern.h,v 1.63 2021/04/14 18:05:47 benno Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -156,6 +156,7 @@ struct mft {
 	struct mftfile	*files; /* file and hash */
 	size_t		 filesz; /* number of filenames */
 	int		 stale; /* if a stale manifest */
+	char		*seqnum; /* manifestNumber */
 	char		*aia; /* AIA */
 	char		*aki; /* AKI */
 	char		*ski; /* SKI */
@@ -264,6 +265,43 @@ enum rtype {
 	RTYPE_GBR,
 };
 
+enum http_result {
+	HTTP_FAILED,	/* anything else */
+	HTTP_OK,	/* 200 OK */
+	HTTP_NOT_MOD,	/* 304 Not Modified */
+};
+
+/*
+ * Message types for communication with RRDP process.
+ */
+enum rrdp_msg {
+	RRDP_START,
+	RRDP_SESSION,
+	RRDP_FILE,
+	RRDP_END,
+	RRDP_HTTP_REQ,
+	RRDP_HTTP_INI,
+	RRDP_HTTP_FIN
+};
+
+/*
+ * RRDP session state, needed to pickup at the right spot on next run.
+ */
+struct rrdp_session {
+	char			*last_mod;
+	char			*session_id;
+	long long		 serial;
+};
+
+/*
+ * File types used in RRDP_FILE messages.
+ */
+enum publish_type {
+	PUB_ADD,
+	PUB_UPD,
+	PUB_DEL,
+};
+
 /*
  * An entity (MFT, ROA, certificate, etc.) that needs to be downloaded
  * and parsed.
@@ -278,6 +316,11 @@ struct	entity {
 	TAILQ_ENTRY(entity) entries;
 };
 TAILQ_HEAD(entityq, entity);
+
+struct repo;
+struct filepath;
+RB_HEAD(filepath_tree, filepath);
+
 
 /*
  * Statistics collected during run-time.
@@ -294,11 +337,18 @@ struct	stats {
 	size_t	 roas_fail; /* failing syntactic parse */
 	size_t	 roas_invalid; /* invalid resources */
 	size_t	 repos; /* repositories */
+	size_t	 rsync_repos; /* synced rsync repositories */
+	size_t	 rsync_fails; /* failed rsync repositories */
+	size_t	 http_repos; /* synced http repositories */
+	size_t	 http_fails; /* failed http repositories */
+	size_t	 rrdp_repos; /* synced rrdp repositories */
+	size_t	 rrdp_fails; /* failed rrdp repositories */
 	size_t	 crls; /* revocation lists */
 	size_t	 gbrs; /* ghostbuster records */
 	size_t	 vrps; /* total number of vrps */
 	size_t	 uniqs; /* number of unique vrps */
 	size_t	 del_files; /* number of files removed in cleanup */
+	size_t	 del_dirs; /* number of directories removed in cleanup */
 	char	*talnames;
 	struct timeval	elapsed_time;
 	struct timeval	user_time;
@@ -312,6 +362,8 @@ extern int verbose;
 
 /* Routines for RPKI entities. */
 
+int		 base64_decode(const unsigned char *, unsigned char **,
+		    size_t *);
 void		 tal_buffer(struct ibuf *, const struct tal *);
 void		 tal_free(struct tal *);
 struct tal	*tal_parse(const char *, char *);
@@ -393,6 +445,7 @@ int		 as_check_covered(uint32_t, uint32_t,
 /* Parser-specific */
 void		 entity_free(struct entity *);
 void		 entity_read_req(int fd, struct entity *);
+void		 entityq_flush(struct entityq *, struct repo *);
 void		 proc_parser(int) __attribute__((noreturn));
 
 /* Rsync-specific. */
@@ -400,9 +453,33 @@ void		 proc_parser(int) __attribute__((noreturn));
 char		*rsync_base_uri(const char *);
 void		 proc_rsync(char *, char *, int) __attribute__((noreturn));
 
-/* Http-specific. */
+/* HTTP and RRDP processes. */
 
 void		 proc_http(char *, int);
+void		 proc_rrdp(int);
+
+/* Repository handling */
+int		 filepath_add(struct filepath_tree *, char *);
+void		 rrdp_save_state(size_t, struct rrdp_session *);
+int		 rrdp_handle_file(size_t, enum publish_type, char *,
+		    char *, size_t, char *, size_t);
+char		*repo_filename(const struct repo *, const char *);
+struct repo	*ta_lookup(struct tal *);
+struct repo	*repo_lookup(const char *, const char *);
+int		 repo_queued(struct repo *, struct entity *);
+void		 repo_cleanup(struct filepath_tree *);
+void		 repo_free(void);
+
+void		 rsync_finish(size_t, int);
+void		 http_finish(size_t, enum http_result, const char *);
+void		 rrdp_finish(size_t, int);
+
+void		 rsync_fetch(size_t, const char *, const char *);
+void		 http_fetch(size_t, const char *, const char *, int);
+void		 rrdp_fetch(size_t, const char *, const char *,
+		    struct rrdp_session *);
+void		 rrdp_http_done(size_t, enum http_result, const char *);
+
 
 /* Logging (though really used for OpenSSL errors). */
 
@@ -411,6 +488,13 @@ void		 cryptowarnx(const char *, ...)
 void		 cryptoerrx(const char *, ...)
 			__attribute__((format(printf, 1, 2)))
 			__attribute__((noreturn));
+
+/* Encoding functions for hex and base64. */
+
+int		 base64_decode(const unsigned char *, unsigned char **,
+		    size_t *);
+char		*hex_encode(const unsigned char *, size_t);
+
 
 /* Functions for moving data between processes. */
 
@@ -426,11 +510,10 @@ int		 io_recvfd(int, void *, size_t);
 
 /* X509 helpers. */
 
+char		*hex_encode(const unsigned char *, size_t);
 char		*x509_get_aia(X509 *, const char *);
 char		*x509_get_aki(X509 *, int, const char *);
 char		*x509_get_ski(X509 *, const char *);
-int		 x509_get_extensions(X509 *, const char *, char **, char **,
-			char **);
 char		*x509_get_crl(X509 *, const char *);
 char		*x509_crl_get_aki(X509_CRL *, const char *);
 
@@ -458,6 +541,5 @@ int	mkpath(const char *);
 
 #define		RPKI_PATH_OUT_DIR	"/var/db/rpki-client"
 #define		RPKI_PATH_BASE_DIR	"/var/cache/rpki-client"
-#define		RPKI_VERSION		"OpenBSD"
 
 #endif /* ! EXTERN_H */

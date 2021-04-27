@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmm.c,v 1.97 2021/03/02 02:56:22 jsg Exp $	*/
+/*	$OpenBSD: vmm.c,v 1.100 2021/04/11 21:02:40 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -53,14 +53,14 @@
 #include "vmd.h"
 #include "vmm.h"
 
-void vmm_sighdlr(int, short, void *);
-int vmm_start_vm(struct imsg *, uint32_t *, pid_t *);
-int vmm_dispatch_parent(int, struct privsep_proc *, struct imsg *);
-void vmm_run(struct privsep *, struct privsep_proc *, void *);
-void vmm_dispatch_vm(int, short, void *);
-int terminate_vm(struct vm_terminate_params *);
-int get_info_vm(struct privsep *, struct imsg *, int);
-int opentap(char *);
+void	vmm_sighdlr(int, short, void *);
+int	vmm_start_vm(struct imsg *, uint32_t *, pid_t *);
+int	vmm_dispatch_parent(int, struct privsep_proc *, struct imsg *);
+void	vmm_run(struct privsep *, struct privsep_proc *, void *);
+void	vmm_dispatch_vm(int, short, void *);
+int	terminate_vm(struct vm_terminate_params *);
+int	get_info_vm(struct privsep *, struct imsg *, int);
+int	opentap(char *);
 
 extern struct vmd *env;
 
@@ -109,6 +109,7 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 	struct vmop_id		 vid;
 	struct vmop_result	 vmr;
 	struct vmop_create_params vmc;
+	struct vmop_addr_result  var;
 	uint32_t		 id = 0, peerid = imsg->hdr.peerid;
 	pid_t			 pid = 0;
 	unsigned int		 mode, flags;
@@ -198,7 +199,7 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 				/*
 				 * Request reboot but mark the VM as shutting
 				 * down. This way we can terminate the VM after
-				 * the triple fault instead of reboot and 
+				 * the triple fault instead of reboot and
 				 * avoid being stuck in the ACPI-less powerdown
 				 * ("press any key to reboot") of the VM.
 				 */
@@ -231,7 +232,7 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 				vm->vm_peerid = imsg->hdr.peerid;
 			}
 		} else {
-			/* vm doesn't exist, cannot stop vm */
+			/* VM doesn't exist, cannot stop vm */
 			log_debug("%s: cannot stop vm that is not running",
 			    __func__);
 			res = VMD_VM_STOP_INVALID;
@@ -272,7 +273,6 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 		IMSG_SIZE_CHECK(imsg, &vid);
 		memcpy(&vid, imsg->data, sizeof(vid));
 		id = vid.vid_id;
-		vm = vm_getbyvmid(id);
 		if ((vm = vm_getbyvmid(id)) == NULL) {
 			res = ENOENT;
 			cmd = IMSG_VMDOP_PAUSE_VM_RESPONSE;
@@ -331,6 +331,18 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 		if ((id = vm_id2vmid(id, NULL)) == 0)
 			res = ENOENT;
 		cmd = IMSG_VMDOP_START_VM_RESPONSE;
+		break;
+	case IMSG_VMDOP_PRIV_GET_ADDR_RESPONSE:
+		IMSG_SIZE_CHECK(imsg, &var);
+		memcpy(&var, imsg->data, sizeof(var));
+		if ((vm = vm_getbyvmid(var.var_vmid)) == NULL) {
+			res = ENOENT;
+			break;
+		}
+		/* Forward hardware address details to the guest vm */
+		imsg_compose_event(&vm->vm_iev,
+		    imsg->hdr.type, imsg->hdr.peerid, imsg->hdr.pid,
+		    imsg->fd, &var, sizeof(var));
 		break;
 	default:
 		return (-1);
@@ -404,8 +416,9 @@ vmm_sighdlr(int sig, short event, void *arg)
 				if (WIFEXITED(status))
 					ret = WEXITSTATUS(status);
 
-				/* don't reboot on pending shutdown */
-				if (ret == EAGAIN && (vm->vm_state & VM_STATE_SHUTDOWN))
+				/* Don't reboot on pending shutdown */
+				if (ret == EAGAIN &&
+				    (vm->vm_state & VM_STATE_SHUTDOWN))
 					ret = 0;
 
 				vmid = vm->vm_params.vmc_params.vcp_id;
@@ -502,7 +515,7 @@ vmm_dispatch_vm(int fd, short event, void *arg)
 		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
 			fatal("%s: imsg_read", __func__);
 		if (n == 0) {
-			/* this pipe is dead, so remove the event handler */
+			/* This pipe is dead, so remove the event handler */
 			event_del(&iev->ev);
 			return;
 		}
@@ -512,7 +525,7 @@ vmm_dispatch_vm(int fd, short event, void *arg)
 		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
 			fatal("%s: msgbuf_write fd %d", __func__, ibuf->fd);
 		if (n == 0) {
-			/* this pipe is dead, so remove the event handler */
+			/* This pipe is dead, so remove the event handler */
 			event_del(&iev->ev);
 			return;
 		}
@@ -569,8 +582,7 @@ vmm_dispatch_vm(int fd, short event, void *arg)
  *
  * Return values:
  *  0: success
- *  !0 : ioctl to vmm(4) failed (eg, ENOENT if the supplied VM is not
- *      valid)
+ *  !0: ioctl to vmm(4) failed (eg, ENOENT if the supplied VM is not valid)
  */
 int
 terminate_vm(struct vm_terminate_params *vtp)
@@ -623,7 +635,7 @@ opentap(char *ifname)
  *
  * Return values:
  *  0: success
- *  !0 : failure - typically an errno indicating the source of the failure
+ *  !0: failure - typically an errno indicating the source of the failure
  */
 int
 vmm_start_vm(struct imsg *imsg, uint32_t *id, pid_t *pid)
@@ -690,7 +702,7 @@ vmm_start_vm(struct imsg *imsg, uint32_t *id, pid_t *pid)
 			vm->vm_tty = -1;
 		}
 
-		/* read back the kernel-generated vm id from the child */
+		/* Read back the kernel-generated vm id from the child */
 		if (read(fds[0], &vcp->vcp_id, sizeof(vcp->vcp_id)) !=
 		    sizeof(vcp->vcp_id))
 			fatal("read vcp id");
@@ -735,7 +747,7 @@ vmm_start_vm(struct imsg *imsg, uint32_t *id, pid_t *pid)
  *
  * Return values:
  *  0: success
- *  !0 : failure (eg, ENOMEM, EIO or another error code from vmm(4) ioctl)
+ *  !0: failure (eg, ENOMEM, EIO or another error code from vmm(4) ioctl)
  */
 int
 get_info_vm(struct privsep *ps, struct imsg *imsg, int terminate)
@@ -754,7 +766,7 @@ get_info_vm(struct privsep *ps, struct imsg *imsg, int terminate)
 	 * and then we call it again after malloc'ing the required
 	 * number of bytes.
 	 *
-	 * It is possible that we could fail a second time (eg, if
+	 * It is possible that we could fail a second time (e.g. if
 	 * another VM was created in the instant between the two
 	 * ioctls, but in that case the caller can just try again
 	 * as vmm(4) will return a zero-sized list in that case.
@@ -802,5 +814,6 @@ get_info_vm(struct privsep *ps, struct imsg *imsg, int terminate)
 			return (EIO);
 	}
 	free(info);
+
 	return (0);
 }

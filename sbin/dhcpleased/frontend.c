@@ -1,4 +1,4 @@
-/*	$OpenBSD: frontend.c,v 1.8 2021/03/22 16:28:25 florian Exp $	*/
+/*	$OpenBSD: frontend.c,v 1.10 2021/04/14 23:35:24 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2017, 2021 Florian Obser <florian@openbsd.org>
@@ -64,7 +64,7 @@ struct bpf_ev {
 	uint8_t			 buf[BPFLEN];
 };
 
-struct iface           {
+struct iface {
 	LIST_ENTRY(iface)	 entries;
 	struct bpf_ev		 bpfev;
 	struct imsg_ifinfo	 ifinfo;
@@ -567,13 +567,13 @@ init_ifaces(void)
 	if (getifaddrs(&ifap) != 0)
 		fatal("getifaddrs");
 
-	for(ifnidx = ifnidxp; ifnidx->if_index != 0 && ifnidx->if_name != NULL;
+	for (ifnidx = ifnidxp; ifnidx->if_index != 0 && ifnidx->if_name != NULL;
 	    ifnidx++) {
 		if_index = ifnidx->if_index;
 		if_name = ifnidx->if_name;
 		if ((flags = get_flags(if_name)) == -1)
 			continue;
-		if((xflags = get_xflags(if_name)) == -1)
+		if ((xflags = get_xflags(if_name)) == -1)
 			continue;
 		if (!(xflags & IFXF_AUTOCONF4))
 			continue;
@@ -590,7 +590,7 @@ init_ifaces(void)
 			if (ifa->ifa_addr == NULL)
 				continue;
 
-			switch(ifa->ifa_addr->sa_family) {
+			switch (ifa->ifa_addr->sa_family) {
 			case AF_LINK: {
 				struct if_data		*if_data;
 				struct sockaddr_dl	*sdl;
@@ -776,9 +776,9 @@ build_packet(uint8_t message_type, uint32_t xid, struct ether_addr *hw_address,
 	static uint8_t	 dhcp_client_id[] = {DHO_DHCP_CLIENT_IDENTIFIER, 7,
 		HTYPE_ETHER, 0, 0, 0, 0, 0, 0};
 	static uint8_t	 dhcp_req_list[] = {DHO_DHCP_PARAMETER_REQUEST_LIST,
-		8, DHO_SUBNET_MASK, DHO_ROUTERS, DHO_DOMAIN_NAME_SERVERS,
+		7, DHO_SUBNET_MASK, DHO_ROUTERS, DHO_DOMAIN_NAME_SERVERS,
 		DHO_HOST_NAME, DHO_DOMAIN_NAME, DHO_BROADCAST_ADDRESS,
-		DHO_DOMAIN_SEARCH, DHO_CLASSLESS_STATIC_ROUTES};
+		DHO_DOMAIN_SEARCH};
 	static uint8_t	 dhcp_requested_address[] = {DHO_DHCP_REQUESTED_ADDRESS,
 		4, 0, 0, 0, 0};
 	static uint8_t	 dhcp_server_identifier[] = {DHO_DHCP_SERVER_IDENTIFIER,

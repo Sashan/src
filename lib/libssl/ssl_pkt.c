@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_pkt.c,v 1.37 2021/03/10 18:27:02 jsing Exp $ */
+/* $OpenBSD: ssl_pkt.c,v 1.40 2021/03/29 16:46:09 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -1038,7 +1038,7 @@ ssl3_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
 		}
 
 		/* Check we have a cipher to change to */
-		if (S3I(s)->hs.new_cipher == NULL) {
+		if (S3I(s)->hs.cipher == NULL) {
 			al = SSL_AD_UNEXPECTED_MESSAGE;
 			SSLerror(s, SSL_R_CCS_RECEIVED_EARLY);
 			goto fatal_err;
@@ -1163,14 +1163,14 @@ ssl3_do_change_cipher_spec(SSL *s)
 	else
 		i = SSL3_CHANGE_CIPHER_CLIENT_READ;
 
-	if (S3I(s)->hs.key_block == NULL) {
+	if (S3I(s)->hs.tls12.key_block == NULL) {
 		if (s->session == NULL || s->session->master_key_length == 0) {
 			/* might happen if dtls1_read_bytes() calls this */
 			SSLerror(s, SSL_R_CCS_RECEIVED_EARLY);
 			return (0);
 		}
 
-		s->session->cipher = S3I(s)->hs.new_cipher;
+		s->session->cipher = S3I(s)->hs.cipher;
 		if (!tls1_setup_key_block(s))
 			return (0);
 	}
@@ -1190,12 +1190,12 @@ ssl3_do_change_cipher_spec(SSL *s)
 	}
 
 	i = tls1_final_finish_mac(s, sender, slen,
-	    S3I(s)->tmp.peer_finish_md);
+	    S3I(s)->hs.peer_finished);
 	if (i == 0) {
 		SSLerror(s, ERR_R_INTERNAL_ERROR);
 		return 0;
 	}
-	S3I(s)->tmp.peer_finish_md_len = i;
+	S3I(s)->hs.peer_finished_len = i;
 
 	return (1);
 }

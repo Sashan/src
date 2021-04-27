@@ -1,4 +1,4 @@
-/*	$OpenBSD: tal.c,v 1.28 2021/03/05 17:15:19 claudio Exp $ */
+/*	$OpenBSD: tal.c,v 1.30 2021/04/01 06:43:23 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -19,48 +19,12 @@
 #include <assert.h>
 #include <ctype.h>
 #include <err.h>
-#include <limits.h>
 #include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "extern.h"
-
-static int
-base64_decode(const unsigned char *in, size_t inlen, unsigned char **out,
-   size_t *outlen)
-{
-	static EVP_ENCODE_CTX *ctx;
-	unsigned char *to;
-	int tolen;
-
-	if (ctx == NULL && (ctx = EVP_ENCODE_CTX_new()) == NULL)
-		err(1, "EVP_ENCODE_CTX_new");
-
-	*out = NULL;
-	*outlen = 0;
-
-	if (inlen >= INT_MAX - 3)
-		return -1;
-	tolen = ((inlen + 3) / 4) * 3 + 1;
-	if ((to = malloc(tolen)) == NULL)
-		return -1;
-
-	EVP_DecodeInit(ctx);
-	if (EVP_DecodeUpdate(ctx, to, &tolen, in, inlen) == -1)
-		goto fail;
-	*outlen = tolen;
-	if (EVP_DecodeFinal(ctx, to + tolen, &tolen) == -1)
-		goto fail;
-	*outlen += tolen;
-	*out = to;
-	return 0;
-
-fail:
-	free(to);
-	return -1;
-}
 
 static int
 tal_cmp(const void *a, const void *b)
@@ -81,7 +45,7 @@ tal_parse_buffer(const char *fn, char *buf)
 {
 	char		*nl, *line, *f, *file = NULL;
 	unsigned char	*der;
-	size_t		 sz, dersz;
+	size_t		 dersz;
 	int		 rc = 0;
 	struct tal	*tal = NULL;
 	EVP_PKEY	*pkey = NULL;
@@ -147,16 +111,12 @@ tal_parse_buffer(const char *fn, char *buf)
 	/* sort uri lexicographically so https:// is preferred */
 	qsort(tal->uri, tal->urisz, sizeof(tal->uri[0]), tal_cmp);
 
-	sz = strlen(buf);
-	if (sz == 0) {
+	/* Now the Base64-encoded public key. */
+	if ((base64_decode(buf, &der, &dersz)) == -1) {
 		warnx("%s: RFC 7730 section 2.1: subjectPublicKeyInfo: "
-		    "zero-length public key", fn);
+		    "bad public key", fn);
 		goto out;
 	}
-
-	/* Now the BASE64-encoded public key. */
-	if ((base64_decode(buf, sz, &der, &dersz)) == -1)
-		errx(1, "base64 decode");
 
 	tal->pkey = der;
 	tal->pkeysz = dersz;

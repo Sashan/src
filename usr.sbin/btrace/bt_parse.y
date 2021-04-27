@@ -1,4 +1,4 @@
-/*	$OpenBSD: bt_parse.y,v 1.23 2021/02/08 09:46:45 mpi Exp $	*/
+/*	$OpenBSD: bt_parse.y,v 1.29 2021/04/21 10:53:17 mpi Exp $	*/
 
 /*
  * Copyright (c) 2019-2021 Martin Pieuchot <mpi@openbsd.org>
@@ -22,7 +22,7 @@
  * B tracing language parser.
  *
  * The dialect of the language understood by this parser aims to be
- * compatible with the one understood bpftrace(8), see:
+ * compatible with the one understood by bpftrace(8), see:
  *
  * https://github.com/iovisor/bpftrace/blob/master/docs/reference_guide.md
  *
@@ -53,20 +53,29 @@ int		 	g_nprobes;
 /* List of global variables, including maps. */
 SLIST_HEAD(, bt_var)	 g_variables;
 
+/* List of local variables, cleaned for each new rule. */
+SLIST_HEAD(, bt_var)	l_variables;
+
 struct bt_rule	*br_new(struct bt_probe *, struct bt_filter *, struct bt_stmt *,
 		     enum bt_rtype);
 struct bt_filter *bf_new(enum bt_argtype, enum bt_filtervar, int);
 struct bt_probe	*bp_new(const char *, const char *, const char *, int32_t);
 struct bt_arg	*ba_append(struct bt_arg *, struct bt_arg *);
+struct bt_arg	*ba_op(enum bt_argtype, struct bt_arg *, struct bt_arg *);
 struct bt_stmt	*bs_new(enum bt_action, struct bt_arg *, struct bt_var *);
 struct bt_stmt	*bs_append(struct bt_stmt *, struct bt_stmt *);
 
-struct bt_var	*bv_find(const char *);
-struct bt_arg	*bv_get(const char *);
-struct bt_stmt	*bv_set(const char *, struct bt_arg *);
+struct bt_var	*bg_lookup(const char *);
+struct bt_stmt	*bg_store(const char *, struct bt_arg *);
+struct bt_arg	*bg_find(const char *);
+struct bt_var	*bg_get(const char *);
 
-struct bt_arg	*bm_get(const char *, struct bt_arg *);
-struct bt_stmt	*bm_set(const char *, struct bt_arg *, struct bt_arg *);
+struct bt_var	*bl_lookup(const char *);
+struct bt_stmt	*bl_store(const char *, struct bt_arg *);
+struct bt_arg	*bl_find(const char *);
+
+struct bt_arg	*bm_find(const char *, struct bt_arg *);
+struct bt_stmt	*bm_insert(const char *, struct bt_arg *, struct bt_arg *);
 struct bt_stmt	*bm_op(enum bt_action, struct bt_arg *, struct bt_arg *);
 
 struct bt_stmt	*bh_inc(const char *, struct bt_arg *, struct bt_arg *);
@@ -110,14 +119,15 @@ static int pflag;
 %token	<v.string>	STRING CSTRING
 %token	<v.number>	NUMBER
 
-%type	<v.string>	gvar
+%type	<v.string>	gvar lvar
+%type	<v.number>	staticval
 %type	<v.i>		fval testop binop builtin
 %type	<v.i>		BUILTIN F_DELETE F_PRINT FUNC0 FUNC1 FUNCN OP1 OP4
 %type	<v.i>		MOP0 MOP1
-%type	<v.probe>	probe probeval
-%type	<v.filter>	predicate
+%type	<v.probe>	probe probename
+%type	<v.filter>	predicate conditional
 %type	<v.stmt>	action stmt stmtlist
-%type	<v.arg>		expr vargs map mexpr printargs term condition
+%type	<v.arg>		expr vargs mentry mexpr printargs term globalvar variable
 %type	<v.rtype>	beginend
 
 %left	'|'
@@ -140,9 +150,9 @@ beginend	: BEGIN				{ $$ = B_RT_BEGIN; }
 		| END				{ $$ = B_RT_END; }
 		;
 
-probe		: { pflag = 1; } probeval	{ $$ = $2; pflag = 0; }
+probe		: { pflag = 1; } probename	{ $$ = $2; pflag = 0; }
 
-probeval	: STRING ':' STRING ':' STRING	{ $$ = bp_new($1, $3, $5, 0); }
+probename	: STRING ':' STRING ':' STRING	{ $$ = bp_new($1, $3, $5, 0); }
 		| STRING ':' HZ ':' NUMBER	{ $$ = bp_new($1, "hz", NULL, $5); }
 		;
 
@@ -168,24 +178,43 @@ binop		: testop
 		| '|'				{ $$ = B_AT_OP_BOR; }
 		;
 
-predicate	: /* empty */			{ $$ = NULL; }
-		| '/' fval testop NUMBER '/'	{ $$ = bf_new($3, $2, $4); }
-		| '/' NUMBER testop fval '/'	{ $$ = bf_new($3, $4, $2); }
-		| '/' condition '/' 		{ $$ = bc_new($2); }
+staticval	: NUMBER
+		| '$' NUMBER			{ $$ = get_varg($2); }
 		;
 
-condition	: gvar				{ $$ = bv_get($1); }
-		| map				{ $$ = $1; }
+gvar		: '@' STRING			{ $$ = $2; }
+		| '@'				{ $$ = UNNAMED_MAP; }
+
+lvar		: '$' STRING			{ $$ = $2; }
+
+
+conditional	: variable		{ $$ = bc_new(NULL, B_AT_OP_NE, $1); }
+		| term testop variable		{ $$ = bc_new($1, $2, $3); }
+		;
+
+predicate	: /* empty */			{ $$ = NULL; }
+		| '/' conditional '/' 		{ $$ = $2; }
+		;
+
+mentry		: gvar '[' vargs ']'		{ $$ = bm_find($1, $3); }
+		;
+
+globalvar	: gvar				{ $$ = bg_find($1); }
+		| mentry
+		;
+
+variable	: globalvar
+		| lvar				{ $$ = bl_find($1); }
 		;
 
 builtin		: PID 				{ $$ = B_AT_BI_PID; }
 		| TID 				{ $$ = B_AT_BI_TID; }
-		| BUILTIN			{ $$ = $1; }
+		| BUILTIN
 		;
 
 mexpr		: MOP0 '(' ')'			{ $$ = ba_new(NULL, $1); }
 		| MOP1 '(' expr ')'		{ $$ = ba_new($3, $1); }
-		| expr				{ $$ = $1; }
+		| expr
 		;
 
 expr		: CSTRING			{ $$ = ba_new($1, B_AT_STR); }
@@ -194,36 +223,31 @@ expr		: CSTRING			{ $$ = ba_new($1, B_AT_STR); }
 
 term		: '(' term ')'			{ $$ = $2; }
 		| term binop term		{ $$ = ba_op($2, $1, $3); }
-		| NUMBER			{ $$ = ba_new($1, B_AT_LONG); }
+		| staticval			{ $$ = ba_new($1, B_AT_LONG); }
 		| builtin			{ $$ = ba_new(NULL, $1); }
-		| gvar				{ $$ = bv_get($1); }
-		| map				{ $$ = $1; }
+		| variable
 
 
-gvar		: '@' STRING			{ $$ = $2; }
-		| '@'				{ $$ = UNNAMED_MAP; }
-
-map		: gvar '[' vargs ']'		{ $$ = bm_get($1, $3); }
-		;
 
 vargs		: expr
 		| vargs ',' expr		{ $$ = ba_append($1, $3); }
 		;
 
-printargs	: gvar				{ $$ = bv_get($1); }
-		| gvar ',' expr			{ $$ = ba_append(bv_get($1), $3); }
+printargs	: term
+		| gvar ',' expr			{ $$ = ba_append(bg_find($1), $3); }
 		;
 
 NL		: /* empty */ | '\n'
 		;
 
 stmt		: ';' NL			{ $$ = NULL; }
-		| gvar '=' expr			{ $$ = bv_set($1, $3); }
-		| gvar '[' vargs ']' '=' mexpr	{ $$ = bm_set($1, $3, $6); }
+		| gvar '=' expr			{ $$ = bg_store($1, $3); }
+		| lvar '=' expr			{ $$ = bl_store($1, $3); }
+		| gvar '[' vargs ']' '=' mexpr	{ $$ = bm_insert($1, $3, $6); }
 		| FUNCN '(' vargs ')'		{ $$ = bs_new($1, $3, NULL); }
 		| FUNC1 '(' expr ')'		{ $$ = bs_new($1, $3, NULL); }
 		| FUNC0 '(' ')'			{ $$ = bs_new($1, NULL, NULL); }
-		| F_DELETE '(' map ')'		{ $$ = bm_op($1, $3, NULL); }
+		| F_DELETE '(' mentry ')'	{ $$ = bm_op($1, $3, NULL); }
 		| F_PRINT '(' printargs ')'	{ $$ = bs_new($1, $3, NULL); }
 		| gvar '=' OP1 '(' expr ')'	{ $$ = bh_inc($1, $5, NULL); }
 		| gvar '=' OP4 '(' expr ',' vargs ')' {$$ = bh_inc($1, $5, $7);}
@@ -237,6 +261,16 @@ action		: '{' stmtlist '}'		{ $$ = $2; }
 		;
 
 %%
+
+int
+get_varg(int index)
+{
+	extern int vargs[];
+
+	assert(index == 1);
+
+	return vargs[index - 1];
+}
 
 /* Create a new rule, representing  "probe / filter / { action }" */
 struct bt_rule *
@@ -253,6 +287,9 @@ br_new(struct bt_probe *probe, struct bt_filter *filter, struct bt_stmt *head,
 	/* SLIST_INSERT_HEAD() nullify the next pointer. */
 	SLIST_FIRST(&br->br_action) = head;
 	br->br_type = rtype;
+
+	SLIST_FIRST(&br->br_variables) = SLIST_FIRST(&l_variables);
+	SLIST_INIT(&l_variables);
 
 	if (rtype == B_RT_PROBE) {
 		g_nprobes++;
@@ -285,7 +322,7 @@ bf_new(enum bt_argtype op, enum bt_filtervar var, int val)
 
 /* Create a new condition */
 struct bt_filter *
-bc_new(struct bt_arg *ba)
+bc_new(struct bt_arg *term, enum bt_argtype op, struct bt_arg *ba)
 {
 	struct bt_filter *bf;
 
@@ -293,7 +330,7 @@ bc_new(struct bt_arg *ba)
 	if (bf == NULL)
 		err(1, "bt_filter: calloc");
 
-	bf->bf_condition = bs_new(B_AC_TEST, ba, NULL);
+	bf->bf_condition = bs_new(B_AC_TEST, ba_op(op, term, ba), NULL);
 
 	return bf;
 }
@@ -357,9 +394,9 @@ ba_append(struct bt_arg *da0, struct bt_arg *da1)
 
 /* Create an operator argument */
 struct bt_arg *
-ba_op(enum bt_argtype type, struct bt_arg *da0, struct bt_arg *da1)
+ba_op(enum bt_argtype op, struct bt_arg *da0, struct bt_arg *da1)
 {
-	return ba_new(ba_append(da0, da1), type);
+	return ba_new(ba_append(da0, da1), op);
 }
 
 /* Create a new statement: function call or assignment. */
@@ -407,9 +444,23 @@ bv_name(struct bt_var *bv)
 	return bv->bv_name;
 }
 
+/* Allocate a variable. */
+struct bt_var *
+bv_new(const char *vname)
+{
+	struct bt_var *bv;
+
+	bv = calloc(1, sizeof(*bv));
+	if (bv == NULL)
+		err(1, "bt_var: calloc");
+	bv->bv_name = vname;
+
+	return bv;
+}
+
 /* Return the global variable corresponding to `vname'. */
 struct bt_var *
-bv_find(const char *vname)
+bg_lookup(const char *vname)
 {
 	struct bt_var *bv;
 
@@ -421,44 +472,83 @@ bv_find(const char *vname)
 	return bv;
 }
 
-/* Find or allocate a global variable. */
+/* Find or allocate a global variable corresponding to `vname' */
 struct bt_var *
-bv_new(const char *vname)
+bg_get(const char *vname)
 {
 	struct bt_var *bv;
 
-	bv = calloc(1, sizeof(*bv));
-	if (bv == NULL)
-		err(1, "bt_var: calloc");
-	bv->bv_name = vname;
-	SLIST_INSERT_HEAD(&g_variables, bv, bv_next);
+	bv = bg_lookup(vname);
+	if (bv == NULL) {
+		bv = bv_new(vname);
+		SLIST_INSERT_HEAD(&g_variables, bv, bv_next);
+	}
 
 	return bv;
 }
 
-/* Create a 'variable store' statement to assign a value to a variable. */
-struct bt_stmt *
-bv_set(const char *vname, struct bt_arg *vval)
-{
-	struct bt_var *bv;
-
-	bv = bv_find(vname);
-	if (bv == NULL)
-		bv = bv_new(vname);
-	return bs_new(B_AC_STORE, vval, bv);
-}
-
-/* Create an argument that points to a variable. */
+/* Create an "argument" that points to an existing untyped variable. */
 struct bt_arg *
-bv_get(const char *vname)
+bg_find(const char *vname)
 {
 	struct bt_var *bv;
 
-	bv = bv_find(vname);
+	bv = bg_lookup(vname);
 	if (bv == NULL)
 		yyerror("variable '%s' accessed before being set", vname);
 
 	return ba_new(bv, B_AT_VAR);
+}
+
+/* Create a 'store' statement to assign a value to a global variable. */
+struct bt_stmt *
+bg_store(const char *vname, struct bt_arg *vval)
+{
+	return bs_new(B_AC_STORE, vval, bg_get(vname));
+}
+
+/* Return the local variable corresponding to `vname'. */
+struct bt_var *
+bl_lookup(const char *vname)
+{
+	struct bt_var *bv;
+
+	SLIST_FOREACH(bv, &l_variables, bv_next) {
+		if (strcmp(vname, bv->bv_name) == 0)
+			break;
+	}
+
+	return bv;
+}
+
+/* Find or create a local variable corresponding to `vname' */
+struct bt_arg *
+bl_find(const char *vname)
+{
+	struct bt_var *bv;
+
+	bv = bl_lookup(vname);
+	if (bv == NULL) {
+		bv = bv_new(vname);
+		SLIST_INSERT_HEAD(&l_variables, bv, bv_next);
+	}
+
+	return ba_new(bv, B_AT_VAR);
+}
+
+/* Create a 'store' statement to assign a value to a local variable. */
+struct bt_stmt *
+bl_store(const char *vname, struct bt_arg *vval)
+{
+	struct bt_var *bv;
+
+	bv = bl_lookup(vname);
+	if (bv == NULL) {
+		bv = bv_new(vname);
+		SLIST_INSERT_HEAD(&l_variables, bv, bv_next);
+	}
+
+	return bs_new(B_AC_STORE, vval, bv);
 }
 
 struct bt_stmt *
@@ -469,27 +559,28 @@ bm_op(enum bt_action mact, struct bt_arg *ba, struct bt_arg *mval)
 
 /* Create a 'map store' statement to assign a value to a map entry. */
 struct bt_stmt *
-bm_set(const char *mname, struct bt_arg *mkey, struct bt_arg *mval)
+bm_insert(const char *mname, struct bt_arg *mkey, struct bt_arg *mval)
 {
 	struct bt_arg *ba;
-	struct bt_var *bv;
 
-	bv = bv_find(mname);
-	if (bv == NULL)
-		bv = bv_new(mname);
-	ba = ba_new(bv, B_AT_MAP);
+	ba = ba_new(bg_get(mname), B_AT_MAP);
 	ba->ba_key = mkey;
+
 	return bs_new(B_AC_INSERT, ba, (struct bt_var *)mval);
 }
 
 /* Create an argument that points to a variable and attach a key to it. */
 struct bt_arg *
-bm_get(const char *mname, struct bt_arg *mkey)
+bm_find(const char *vname, struct bt_arg *mkey)
 {
+	struct bt_var *bv;
 	struct bt_arg *ba;
 
-	ba = bv_get(mname);
-	ba->ba_type = B_AT_MAP;
+	bv = bg_lookup(vname);
+	if (bv == NULL)
+		yyerror("variable '%s' accessed before being set", vname);
+
+	ba = ba_new(bv, B_AT_MAP);
 	ba->ba_key = mkey;
 	return ba;
 }
@@ -503,12 +594,11 @@ struct bt_stmt *
 bh_inc(const char *hname, struct bt_arg *hval, struct bt_arg *hrange)
 {
 	struct bt_arg *ba;
-	struct bt_var *bv;
 
 	if (hrange == NULL) {
 		/* Power-of-2 histogram */
 	} else {
-		long min, max;
+		long min = 0, max;
 		int count = 0;
 
 		/* Linear histogram */
@@ -540,10 +630,7 @@ bh_inc(const char *hname, struct bt_arg *hval, struct bt_arg *hrange)
 			yyerror("%d missing arguments", 3 - count);
 	}
 
-	bv = bv_find(hname);
-	if (bv == NULL)
-		bv = bv_new(hname);
-	ba = ba_new(bv, B_AT_HIST);
+	ba = ba_new(bg_get(hname), B_AT_HIST);
 	ba->ba_key = hrange;
 	return bs_new(B_AC_BUCKETIZE, ba, (struct bt_var *)hval);
 }
@@ -877,6 +964,8 @@ btparse(const char *str, size_t len, const char *filename, int debug)
 	yylval.lineno = 1;
 
 	yyparse();
+
+	assert(SLIST_EMPTY(&l_variables));
 
 	return perrors;
 }

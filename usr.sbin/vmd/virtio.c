@@ -1,4 +1,4 @@
-/*	$OpenBSD: virtio.c,v 1.82 2019/12/11 06:45:16 pd Exp $	*/
+/*	$OpenBSD: virtio.c,v 1.84 2021/03/29 23:37:01 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -1404,7 +1404,6 @@ vionet_notify_tx(struct vionet_dev *dev)
 
 	vr = pkt = dhcppkt = NULL;
 	ret = spc = 0;
-	dhcpsz = 0;
 
 	vr_sz = vring_size(VIONET_QUEUE_SIZE);
 	q_gpa = dev->vq[TXQ].qa;
@@ -1510,7 +1509,7 @@ vionet_notify_tx(struct vionet_dev *dev)
 			log_debug("vionet: wrong source address %s for vm %d",
 			    ether_ntoa((struct ether_addr *)
 			    eh->ether_shost), dev->vm_id);
-		else if (dev->local && dhcpsz == 0 &&
+		else if (dev->local &&
 		    (dhcpsz = dhcp_request(dev, pkt, pktsz, &dhcppkt)) != -1) {
 			log_debug("vionet: dhcp request,"
 			    " local response size %zd", dhcpsz);
@@ -2033,6 +2032,31 @@ virtio_init(struct vmd_vm *vm, int child_cdrom,
 	vmmci.pci_id = id;
 
 	evtimer_set(&vmmci.timeout, vmmci_timeout, NULL);
+}
+
+/*
+ * vionet_set_hostmac
+ *
+ * Sets the hardware address for the host-side tap(4) on a vionet_dev.
+ *
+ * This should only be called from the event-loop thread
+ *
+ * vm: pointer to the current vmd_vm instance
+ * idx: index into the array of vionet_dev's for the target vionet_dev
+ * addr: ethernet address to set
+ */
+void
+vionet_set_hostmac(struct vmd_vm *vm, unsigned int idx, uint8_t *addr)
+{
+	struct vmop_create_params *vmc = &vm->vm_params;
+	struct vm_create_params	  *vcp = &vmc->vmc_params;
+	struct vionet_dev	  *dev;
+
+	if (idx > vcp->vcp_nnics)
+		fatalx("vionet_set_hostmac");
+
+	dev = &vionet[idx];
+	memcpy(dev->hostmac, addr, sizeof(dev->hostmac));
 }
 
 void

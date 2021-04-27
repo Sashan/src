@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.285 2021/03/05 12:37:32 eric Exp $	*/
+/*	$OpenBSD: parse.y,v 1.287 2021/04/09 16:43:43 eric Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -137,6 +137,8 @@ static struct listen_opts {
 	char	       *filtername;
 	char	       *pki[PKI_MAX];
 	int		pkicount;
+	char	       *tls_ciphers;
+	char	       *tls_protocols;
 	char	       *ca;
 	uint16_t       	auth;
 	struct table   *authtable;
@@ -190,7 +192,7 @@ typedef struct {
 %token	MAIL_FROM MAILDIR MASK_SRC MASQUERADE MATCH MAX_MESSAGE_SIZE MAX_DEFERRED MBOX MDA MTA MX
 %token	NO_DSN NO_VERIFY NOOP
 %token	ON
-%token	PHASE PKI PORT PROC PROC_EXEC PROXY_V2
+%token	PHASE PKI PORT PROC PROC_EXEC PROTOCOLS PROXY_V2
 %token	QUEUE QUIT
 %token	RCPT_TO RDNS RECIPIENT RECEIVEDAUTH REGEX RELAY REJECT REPORT REWRITE RSET
 %token	SCHEDULER SENDER SENDERS SMTP SMTP_IN SMTP_OUT SMTPS SOCKET SRC SRS SUB_ADDR_DELIM
@@ -767,6 +769,22 @@ HELO STRING {
 	}
 
 	dsp->u.remote.ca = $2;
+}
+| CIPHERS STRING {
+	if (dsp->u.remote.tls_ciphers) {
+		yyerror("ciphers already specified for this dispatcher");
+		YYERROR;
+	}
+
+	dsp->u.remote.tls_ciphers = $2;
+}
+| PROTOCOLS STRING {
+	if (dsp->u.remote.tls_protocols) {
+		yyerror("protocols already specified for this dispatcher");
+		YYERROR;
+	}
+
+	dsp->u.remote.tls_protocols = $2;
 }
 | SRC tables {
 	struct table   *t = $2;
@@ -2317,6 +2335,20 @@ opt_if_listen : INET4 {
 			listen_opts.options |= LO_SSL;
 			listen_opts.ssl = F_STARTTLS|F_STARTTLS_REQUIRE|F_TLS_VERIFY;
 		}
+		| CIPHERS STRING {
+			if (listen_opts.tls_ciphers) {
+				yyerror("ciphers already specified");
+				YYERROR;
+			}
+			listen_opts.tls_ciphers = $2;
+		}
+		| PROTOCOLS STRING {
+			if (listen_opts.tls_protocols) {
+				yyerror("protocols already specified");
+				YYERROR;
+			}
+			listen_opts.tls_protocols = $2;
+		}
 		| PKI STRING			{
 			if (listen_opts.pkicount == PKI_MAX) {
 				yyerror("too many pki specified");
@@ -2500,7 +2532,11 @@ listen		: LISTEN {
 			memset(&listen_opts, 0, sizeof listen_opts);
 			listen_opts.family = AF_UNSPEC;
 			listen_opts.flags |= F_EXT_DSN;
-		} ON listener_type
+		} ON listener_type {
+			free(listen_opts.tls_protocols);
+			free(listen_opts.tls_ciphers);
+			memset(&listen_opts, 0, sizeof listen_opts);
+		}
 		;
 
 table		: TABLE STRING STRING	{
@@ -2682,6 +2718,7 @@ lookup(char *s)
 		{ "port",		PORT },
 		{ "proc",		PROC },
 		{ "proc-exec",		PROC_EXEC },
+		{ "protocols",		PROTOCOLS },
 		{ "proxy-v2",		PROXY_V2 },
 		{ "queue",		QUEUE },
 		{ "quit",		QUIT },
@@ -3293,6 +3330,16 @@ config_listener(struct listener *h,  struct listen_opts *lo)
 			log_warnx("pki name not found: %s", lo->pki[i]);
 			fatalx(NULL);
 		}
+	}
+
+	if (lo->tls_ciphers != NULL &&
+	    (h->tls_ciphers = strdup(lo->tls_ciphers)) == NULL) {
+		fatal("strdup");
+	}
+
+	if (lo->tls_protocols != NULL &&
+	    (h->tls_protocols = strdup(lo->tls_protocols)) == NULL) {
+		fatal("strdup");
 	}
 
 	if (lo->ca != NULL) {

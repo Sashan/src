@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip.c,v 1.14 2021/01/08 08:09:07 claudio Exp $ */
+/*	$OpenBSD: ip.c,v 1.17 2021/04/19 17:04:35 deraadt Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -110,7 +110,6 @@ ip_addr_check_overlap(const struct cert_ip *ip, const char *fn,
 	size_t	 i, sz = ip->afi == AFI_IPV4 ? 4 : 16;
 	int	 inherit_v4 = 0, inherit_v6 = 0;
 	int	 has_v4 = 0, has_v6 = 0, socktype;
-	char	 buf[64];
 
 	/*
 	 * FIXME: cache this by having a flag on the cert_ip, else we're
@@ -147,6 +146,8 @@ ip_addr_check_overlap(const struct cert_ip *ip, const char *fn,
 	/* Check our ranges. */
 
 	for (i = 0; i < ipsz; i++) {
+		char	 buf[64];
+
 		if (ips[i].afi != ip->afi)
 			continue;
 		if (memcmp(ips[i].max, ip->min, sz) <= 0 ||
@@ -157,13 +158,17 @@ ip_addr_check_overlap(const struct cert_ip *ip, const char *fn,
 		    "cannot have overlapping IP addresses", fn);
 		ip_addr_print(&ip->ip, ip->afi, buf, sizeof(buf));
 		warnx("%s: certificate IP: %s", fn, buf);
-		inet_ntop(socktype, ip->min, buf, sizeof(buf));
+		if (inet_ntop(socktype, ip->min, buf, sizeof(buf)) == NULL)
+			err(1, "inet_ntop");
 		warnx("%s: certificate IP minimum: %s", fn, buf);
-		inet_ntop(socktype, ip->max, buf, sizeof(buf));
+		if (inet_ntop(socktype, ip->max, buf, sizeof(buf)) == NULL)
+			err(1, "inet_ntop");
 		warnx("%s: certificate IP maximum: %s", fn, buf);
-		inet_ntop(socktype, ips[i].min, buf, sizeof(buf));
+		if (inet_ntop(socktype, ips[i].min, buf, sizeof(buf)) == NULL)
+			err(1, "inet_ntop");
 		warnx("%s: offending IP minimum: %s", fn, buf);
-		inet_ntop(socktype, ips[i].max, buf, sizeof(buf));
+		if (inet_ntop(socktype, ips[i].max, buf, sizeof(buf)) == NULL)
+			err(1, "inet_ntop");
 		warnx("%s: offending IP maximum: %s", fn, buf);
 		return 0;
 	}
@@ -236,9 +241,13 @@ static void
 ip4_addr2str(const struct ip_addr *addr, char *b, size_t bsz)
 {
 	char buf[16];
+	int ret;
 
-	snprintf(b, bsz, "%s/%hhu", inet_ntop(AF_INET, addr->addr, buf,
-	    sizeof(buf)), addr->prefixlen);
+	if (inet_ntop(AF_INET, addr->addr, buf, sizeof(buf)) == NULL)
+		err(1, "inet_ntop");
+	ret = snprintf(b, bsz, "%s/%hhu", buf, addr->prefixlen);
+	if (ret < 0 || (size_t)ret >= bsz)
+		err(1, "malformed IPV4 address");
 }
 
 /*
@@ -249,10 +258,14 @@ ip4_addr2str(const struct ip_addr *addr, char *b, size_t bsz)
 static void
 ip6_addr2str(const struct ip_addr *addr, char *b, size_t bsz)
 {
-	char	 buf[44];
+	char buf[44];
+	int ret;
 
-	snprintf(b, bsz, "%s/%hhu", inet_ntop(AF_INET6, addr->addr, buf,
-	    sizeof(buf)), addr->prefixlen);
+	if (inet_ntop(AF_INET6, addr->addr, buf, sizeof(buf)) == NULL)
+		err(1, "inet_ntop");
+	ret = snprintf(b, bsz, "%s/%hhu", buf, addr->prefixlen);
+	if (ret < 0 || (size_t)ret >= bsz)
+		err(1, "malformed IPV6 address");
 }
 
 /*

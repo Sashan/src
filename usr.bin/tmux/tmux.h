@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.1100 2021/03/16 09:14:58 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.1103 2021/04/12 09:36:12 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -1687,6 +1687,7 @@ struct client {
 
 	uint64_t	 redraw_panes;
 
+	int		 message_ignore_keys;
 	int		 message_ignore_styles;
 	char		*message_string;
 	struct event	 message_timer;
@@ -2490,7 +2491,7 @@ struct style_range *status_get_range(struct client *, u_int, u_int);
 void	 status_init(struct client *);
 void	 status_free(struct client *);
 int	 status_redraw(struct client *);
-void status_message_set(struct client *, int, int, const char *, ...);
+void status_message_set(struct client *, int, int, int, const char *, ...);
 void	 status_message_clear(struct client *);
 int	 status_message_redraw(struct client *);
 void	 status_prompt_set(struct client *, struct cmd_find_state *,
@@ -2583,7 +2584,7 @@ void	 grid_reader_get_cursor(struct grid_reader *, u_int *, u_int *);
 u_int	 grid_reader_line_length(struct grid_reader *);
 int	 grid_reader_in_set(struct grid_reader *, const char *);
 void	 grid_reader_cursor_right(struct grid_reader *, int, int);
-void	 grid_reader_cursor_left(struct grid_reader *);
+void	 grid_reader_cursor_left(struct grid_reader *, int);
 void	 grid_reader_cursor_down(struct grid_reader *);
 void	 grid_reader_cursor_up(struct grid_reader *);
 void	 grid_reader_cursor_start_of_line(struct grid_reader *, int);
@@ -2596,6 +2597,7 @@ int	 grid_reader_cursor_jump(struct grid_reader *,
 	     const struct utf8_data *);
 int	 grid_reader_cursor_jump_back(struct grid_reader *,
 	     const struct utf8_data *);
+void	 grid_reader_cursor_back_to_indentation(struct grid_reader *);
 
 /* grid-view.c */
 void	 grid_view_get_cell(struct grid *, u_int, u_int, struct grid_cell *);
@@ -2854,6 +2856,7 @@ typedef void (*mode_tree_draw_cb)(void *, void *, struct screen_write_ctx *,
 typedef int (*mode_tree_search_cb)(void *, void *, const char *);
 typedef void (*mode_tree_menu_cb)(void *, struct client *, key_code);
 typedef u_int (*mode_tree_height_cb)(void *, u_int);
+typedef key_code (*mode_tree_key_cb)(void *, void *, u_int);
 typedef void (*mode_tree_each_cb)(void *, void *, struct client *, key_code);
 u_int	 mode_tree_count_tagged(struct mode_tree_data *);
 void	*mode_tree_get_current(struct mode_tree_data *);
@@ -2868,7 +2871,7 @@ void	 mode_tree_up(struct mode_tree_data *, int);
 void	 mode_tree_down(struct mode_tree_data *, int);
 struct mode_tree_data *mode_tree_start(struct window_pane *, struct args *,
 	     mode_tree_build_cb, mode_tree_draw_cb, mode_tree_search_cb,
-	     mode_tree_menu_cb, mode_tree_height_cb, void *,
+	     mode_tree_menu_cb, mode_tree_height_cb, mode_tree_key_cb, void *,
 	     const struct menu_item *, const char **, u_int, struct screen **);
 void	 mode_tree_zoom(struct mode_tree_data *, struct args *);
 void	 mode_tree_build(struct mode_tree_data *);
