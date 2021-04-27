@@ -1,4 +1,4 @@
-/*	$OpenBSD: bt_parse.y,v 1.29 2021/04/21 10:53:17 mpi Exp $	*/
+/*	$OpenBSD: bt_parse.y,v 1.34 2021/04/22 11:53:13 mpi Exp $	*/
 
 /*
  * Copyright (c) 2019-2021 Martin Pieuchot <mpi@openbsd.org>
@@ -58,7 +58,6 @@ SLIST_HEAD(, bt_var)	l_variables;
 
 struct bt_rule	*br_new(struct bt_probe *, struct bt_filter *, struct bt_stmt *,
 		     enum bt_rtype);
-struct bt_filter *bf_new(enum bt_argtype, enum bt_filtervar, int);
 struct bt_probe	*bp_new(const char *, const char *, const char *, int32_t);
 struct bt_arg	*ba_append(struct bt_arg *, struct bt_arg *);
 struct bt_arg	*ba_op(enum bt_argtype, struct bt_arg *, struct bt_arg *);
@@ -97,7 +96,6 @@ typedef struct {
 		struct bt_filter	*filter;
 		struct bt_stmt		*stmt;
 		struct bt_arg		*arg;
-		enum bt_rtype		 rtype;
 	} v;
 	const char			*filename;
 	int				 lineno;
@@ -111,154 +109,125 @@ static int	 yylex(void);
 static int pflag;
 %}
 
-%token	ERROR OP_EQ OP_NE OP_LE OP_GE OP_LAND OP_LOR BEGIN END HZ
+%token	<v.i>		ERROR ENDFILT OP_EQ OP_NE OP_LE OP_GE OP_LAND OP_LOR
 /* Builtins */
-%token	BUILTIN PID TID
+%token	<v.i>		BUILTIN BEGIN END HZ
 /* Functions and Map operators */
-%token  F_DELETE F_PRINT FUNC0 FUNC1 FUNCN OP1 OP4 MOP0 MOP1
+%token  <v.i>		F_DELETE F_PRINT FUNC0 FUNC1 FUNCN OP1 OP4 MOP0 MOP1
 %token	<v.string>	STRING CSTRING
 %token	<v.number>	NUMBER
 
 %type	<v.string>	gvar lvar
-%type	<v.number>	staticval
-%type	<v.i>		fval testop binop builtin
-%type	<v.i>		BUILTIN F_DELETE F_PRINT FUNC0 FUNC1 FUNCN OP1 OP4
-%type	<v.i>		MOP0 MOP1
-%type	<v.probe>	probe probename
-%type	<v.filter>	predicate conditional
+%type	<v.number>	staticv
+%type	<v.i>		beginend
+%type	<v.probe>	probe pname
+%type	<v.filter>	filter
 %type	<v.stmt>	action stmt stmtlist
-%type	<v.arg>		expr vargs mentry mexpr printargs term globalvar variable
-%type	<v.rtype>	beginend
+%type	<v.arg>		expr vargs mentry mexpr pargs term
 
-%left	'|'
-%left	'&'
+%right	'='
+%nonassoc OP_EQ OP_NE OP_LE OP_GE OP_LAND OP_LOR
+%left	'&' '|'
 %left	'+' '-'
 %left	'/' '*'
 %%
 
-grammar		: /* empty */
-		| grammar '\n'
-		| grammar rule
-		| grammar error
+grammar	: /* empty */
+	| grammar '\n'
+	| grammar rule
+	| grammar error
+	;
+
+rule	: beginend action		{ br_new(NULL, NULL, $2, $1); }
+	| probe filter action		{ br_new($1, $2, $3, B_RT_PROBE); }
+	;
+
+beginend: BEGIN	| END ;
+
+probe	: { pflag = 1; } pname		{ $$ = $2; pflag = 0; }
+
+pname	: STRING ':' STRING ':' STRING	{ $$ = bp_new($1, $3, $5, 0); }
+	| STRING ':' HZ ':' NUMBER	{ $$ = bp_new($1, "hz", NULL, $5); }
+	;
+
+staticv	: NUMBER
+	| '$' NUMBER			{ $$ = get_varg($2); }
+	;
+
+gvar	: '@' STRING			{ $$ = $2; }
+	| '@'				{ $$ = UNNAMED_MAP; }
+	;
+
+lvar	: '$' STRING			{ $$ = $2; }
+	;
+
+mentry	: gvar '[' vargs ']'		{ $$ = bm_find($1, $3); }
+	;
+
+mexpr	: MOP0 '(' ')'			{ $$ = ba_new(NULL, $1); }
+	| MOP1 '(' expr ')'		{ $$ = ba_new($3, $1); }
+	| expr
+	;
+
+expr	: CSTRING			{ $$ = ba_new($1, B_AT_STR); }
+	| term
+	;
+
+filter	: /* empty */			{ $$ = NULL; }
+	| '/' term ENDFILT		{ $$ = bc_new(NULL, B_AT_OP_NE, $2); }
+	;
+
+term	: '(' term ')'			{ $$ = $2; }
+	| term OP_EQ term		{ $$ = ba_op(B_AT_OP_EQ, $1, $3); }
+	| term OP_NE term		{ $$ = ba_op(B_AT_OP_NE, $1, $3); }
+	| term OP_LE term		{ $$ = ba_op(B_AT_OP_LE, $1, $3); }
+	| term OP_GE term		{ $$ = ba_op(B_AT_OP_GE, $1, $3); }
+	| term OP_LAND term		{ $$ = ba_op(B_AT_OP_LAND, $1, $3); }
+	| term OP_LOR term		{ $$ = ba_op(B_AT_OP_LOR, $1, $3); }
+	| term '+' term			{ $$ = ba_op(B_AT_OP_PLUS, $1, $3); }
+	| term '-' term			{ $$ = ba_op(B_AT_OP_MINUS, $1, $3); }
+	| term '*' term			{ $$ = ba_op(B_AT_OP_MULT, $1, $3); }
+	| term '/' term			{ $$ = ba_op(B_AT_OP_DIVIDE, $1, $3); }
+	| term '&' term			{ $$ = ba_op(B_AT_OP_BAND, $1, $3); }
+	| term '|' term			{ $$ = ba_op(B_AT_OP_BOR, $1, $3); }
+	| staticv			{ $$ = ba_new($1, B_AT_LONG); }
+	| BUILTIN			{ $$ = ba_new(NULL, $1); }
+	| lvar				{ $$ = bl_find($1); }
+	| gvar				{ $$ = bg_find($1); }
+	| mentry
+	;
+
+
+vargs	: expr
+	| vargs ',' expr	{ $$ = ba_append($1, $3); }
+	;
+
+pargs	: term
+	| gvar ',' expr		{ $$ = ba_append(bg_find($1), $3); }
+	;
+
+NL	: /* empty */ | '\n'
 		;
 
-rule		: beginend action	 { br_new(NULL, NULL, $2, $1); }
-		| probe predicate action { br_new($1, $2, $3, B_RT_PROBE); }
-		;
+stmt	: ';' NL			{ $$ = NULL; }
+	| gvar '=' expr			{ $$ = bg_store($1, $3); }
+	| lvar '=' expr			{ $$ = bl_store($1, $3); }
+	| gvar '[' vargs ']' '=' mexpr	{ $$ = bm_insert($1, $3, $6); }
+	| FUNCN '(' vargs ')'		{ $$ = bs_new($1, $3, NULL); }
+	| FUNC1 '(' expr ')'		{ $$ = bs_new($1, $3, NULL); }
+	| FUNC0 '(' ')'			{ $$ = bs_new($1, NULL, NULL); }
+	| F_DELETE '(' mentry ')'	{ $$ = bm_op($1, $3, NULL); }
+	| F_PRINT '(' pargs ')'		{ $$ = bs_new($1, $3, NULL); }
+	| gvar '=' OP1 '(' expr ')'	{ $$ = bh_inc($1, $5, NULL); }
+	| gvar '=' OP4 '(' expr ',' vargs ')'	{ $$ = bh_inc($1, $5, $7); }
+	;
 
-beginend	: BEGIN				{ $$ = B_RT_BEGIN; }
-		| END				{ $$ = B_RT_END; }
-		;
+stmtlist: stmt
+	| stmtlist stmt			{ $$ = bs_append($1, $2); }
+	;
 
-probe		: { pflag = 1; } probename	{ $$ = $2; pflag = 0; }
-
-probename	: STRING ':' STRING ':' STRING	{ $$ = bp_new($1, $3, $5, 0); }
-		| STRING ':' HZ ':' NUMBER	{ $$ = bp_new($1, "hz", NULL, $5); }
-		;
-
-
-fval		: PID				{ $$ = B_FV_PID; }
-		| TID				{ $$ = B_FV_TID; }
-		;
-
-testop		: OP_EQ				{ $$ = B_AT_OP_EQ; }
-		| OP_NE				{ $$ = B_AT_OP_NE; }
-		| OP_LE				{ $$ = B_AT_OP_LE; }
-		| OP_GE				{ $$ = B_AT_OP_GE; }
-		| OP_LAND			{ $$ = B_AT_OP_LAND; }
-		| OP_LOR			{ $$ = B_AT_OP_LOR; }
-		;
-
-binop		: testop
-		| '+'				{ $$ = B_AT_OP_PLUS; }
-		| '-'				{ $$ = B_AT_OP_MINUS; }
-		| '*'				{ $$ = B_AT_OP_MULT; }
-		| '/'				{ $$ = B_AT_OP_DIVIDE; }
-		| '&'				{ $$ = B_AT_OP_BAND; }
-		| '|'				{ $$ = B_AT_OP_BOR; }
-		;
-
-staticval	: NUMBER
-		| '$' NUMBER			{ $$ = get_varg($2); }
-		;
-
-gvar		: '@' STRING			{ $$ = $2; }
-		| '@'				{ $$ = UNNAMED_MAP; }
-
-lvar		: '$' STRING			{ $$ = $2; }
-
-
-conditional	: variable		{ $$ = bc_new(NULL, B_AT_OP_NE, $1); }
-		| term testop variable		{ $$ = bc_new($1, $2, $3); }
-		;
-
-predicate	: /* empty */			{ $$ = NULL; }
-		| '/' conditional '/' 		{ $$ = $2; }
-		;
-
-mentry		: gvar '[' vargs ']'		{ $$ = bm_find($1, $3); }
-		;
-
-globalvar	: gvar				{ $$ = bg_find($1); }
-		| mentry
-		;
-
-variable	: globalvar
-		| lvar				{ $$ = bl_find($1); }
-		;
-
-builtin		: PID 				{ $$ = B_AT_BI_PID; }
-		| TID 				{ $$ = B_AT_BI_TID; }
-		| BUILTIN
-		;
-
-mexpr		: MOP0 '(' ')'			{ $$ = ba_new(NULL, $1); }
-		| MOP1 '(' expr ')'		{ $$ = ba_new($3, $1); }
-		| expr
-		;
-
-expr		: CSTRING			{ $$ = ba_new($1, B_AT_STR); }
-		| term
-		;
-
-term		: '(' term ')'			{ $$ = $2; }
-		| term binop term		{ $$ = ba_op($2, $1, $3); }
-		| staticval			{ $$ = ba_new($1, B_AT_LONG); }
-		| builtin			{ $$ = ba_new(NULL, $1); }
-		| variable
-
-
-
-vargs		: expr
-		| vargs ',' expr		{ $$ = ba_append($1, $3); }
-		;
-
-printargs	: term
-		| gvar ',' expr			{ $$ = ba_append(bg_find($1), $3); }
-		;
-
-NL		: /* empty */ | '\n'
-		;
-
-stmt		: ';' NL			{ $$ = NULL; }
-		| gvar '=' expr			{ $$ = bg_store($1, $3); }
-		| lvar '=' expr			{ $$ = bl_store($1, $3); }
-		| gvar '[' vargs ']' '=' mexpr	{ $$ = bm_insert($1, $3, $6); }
-		| FUNCN '(' vargs ')'		{ $$ = bs_new($1, $3, NULL); }
-		| FUNC1 '(' expr ')'		{ $$ = bs_new($1, $3, NULL); }
-		| FUNC0 '(' ')'			{ $$ = bs_new($1, NULL, NULL); }
-		| F_DELETE '(' mentry ')'	{ $$ = bm_op($1, $3, NULL); }
-		| F_PRINT '(' printargs ')'	{ $$ = bs_new($1, $3, NULL); }
-		| gvar '=' OP1 '(' expr ')'	{ $$ = bh_inc($1, $5, NULL); }
-		| gvar '=' OP4 '(' expr ',' vargs ')' {$$ = bh_inc($1, $5, $7);}
-		;
-
-stmtlist	: stmt
-		| stmtlist stmt			{ $$ = bs_append($1, $2); }
-		;
-
-action		: '{' stmtlist '}'		{ $$ = $2; }
-		;
+action	: '{' stmtlist '}'		{ $$ = $2; }
+	;
 
 %%
 
@@ -299,25 +268,6 @@ br_new(struct bt_probe *probe, struct bt_filter *filter, struct bt_stmt *head,
 	}
 
 	return br;
-}
-
-/* Create a new event filter */
-struct bt_filter *
-bf_new(enum bt_argtype op, enum bt_filtervar var, int val)
-{
-	struct bt_filter *bf;
-
-	if (val < 0 || val > INT_MAX)
-		errx(1, "invalid pid '%d'", val);
-
-	bf = calloc(1, sizeof(*bf));
-	if (bf == NULL)
-		err(1, "bt_filter: calloc");
-	bf->bf_evtfilter.bf_op = op;
-	bf->bf_evtfilter.bf_var = var;
-	bf->bf_evtfilter.bf_val = val;
-
-	return bf;
 }
 
 /* Create a new condition */
@@ -651,8 +601,8 @@ struct keyword *
 lookup(char *s)
 {
 	static const struct keyword kws[] = {
-		{ "BEGIN",	BEGIN,		0 },
-		{ "END",	END,		0 },
+		{ "BEGIN",	BEGIN,		B_RT_BEGIN },
+		{ "END",	END,		B_RT_END },
 		{ "arg0",	BUILTIN,	B_AT_BI_ARG0 },
 		{ "arg1",	BUILTIN,	B_AT_BI_ARG1 },
 		{ "arg2",	BUILTIN,	B_AT_BI_ARG2 },
@@ -676,12 +626,12 @@ lookup(char *s)
 		{ "max",	MOP1,		B_AT_MF_MAX },
 		{ "min",	MOP1,		B_AT_MF_MIN },
 		{ "nsecs",	BUILTIN,	B_AT_BI_NSECS },
-		{ "pid",	PID,		0 /*B_AT_BI_PID*/ },
+		{ "pid",	BUILTIN,	B_AT_BI_PID },
 		{ "print",	F_PRINT,	B_AC_PRINT },
 		{ "printf",	FUNCN,		B_AC_PRINTF },
 		{ "retval",	BUILTIN,	B_AT_BI_RETVAL },
 		{ "sum",	MOP1,		B_AT_MF_SUM },
-		{ "tid",	TID,		0 /*B_AT_BI_TID*/ },
+		{ "tid",	BUILTIN,	B_AT_BI_TID },
 		{ "time",	FUNC1,		B_AC_TIME },
 		{ "ustack",	BUILTIN,	B_AT_BI_USTACK },
 		{ "zero",	FUNC1,		B_AC_ZERO },
@@ -783,6 +733,11 @@ again:
 			lgetc();
 			return OP_LOR;
 		}
+	case '/':
+		if (peek() == '{' || peek() == '/' || peek() == '\n') {
+			return ENDFILT;
+		}
+		/* FALLTHROUGH */
 	case ',':
 	case '(':
 	case ')':
@@ -790,7 +745,6 @@ again:
 	case '}':
 	case ':':
 	case ';':
-	case '/':
 		return c;
 	case EOF:
 		return 0;

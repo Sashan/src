@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ether.c,v 1.243 2020/06/24 22:03:43 cheloha Exp $	*/
+/*	$OpenBSD: if_ether.c,v 1.246 2021/04/26 07:55:16 bluhm Exp $	*/
 /*	$NetBSD: if_ether.c,v 1.31 1996/05/11 12:59:58 mycroft Exp $	*/
 
 /*
@@ -60,6 +60,7 @@
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/if_ether.h>
+#include <netinet/ip_var.h>
 #if NCARP > 0
 #include <netinet/ip_carp.h>
 #endif
@@ -67,7 +68,7 @@
 struct llinfo_arp {
 	LIST_ENTRY(llinfo_arp)	 la_list;
 	struct rtentry		*la_rt;		/* backpointer to rtentry */
-	struct mbuf_list	 la_ml;		/* packet hold queue */
+	struct mbuf_queue	 la_mq;		/* packet hold queue */
 	time_t			 la_refreshed;	/* when was refresh sent */
 	int			 la_asked;	/* number of queries sent */
 };
@@ -95,7 +96,6 @@ struct niqueue arpinq = NIQUEUE_INITIALIZER(50, NETISR_ARP);
 LIST_HEAD(, llinfo_arp) arp_list;
 struct	pool arp_pool;		/* pool for llinfo_arp structures */
 int	arp_maxtries = 5;
-int	arpinit_done;
 int	la_hold_total;
 
 #ifdef NFSCLIENT
@@ -112,7 +112,7 @@ unsigned int revarp_ifidx;
 void
 arptimer(void *arg)
 {
-	struct timeout *to = (struct timeout *)arg;
+	struct timeout *to = arg;
 	struct llinfo_arp *la, *nla;
 
 	NET_LOCK();
@@ -127,21 +127,22 @@ arptimer(void *arg)
 }
 
 void
+arpinit(void)
+{
+	static struct timeout arptimer_to;
+
+	pool_init(&arp_pool, sizeof(struct llinfo_arp), 0,
+	    IPL_SOFTNET, 0, "arp", NULL);
+
+	timeout_set_proc(&arptimer_to, arptimer, &arptimer_to);
+	timeout_add_sec(&arptimer_to, arpt_prune);
+}
+
+void
 arp_rtrequest(struct ifnet *ifp, int req, struct rtentry *rt)
 {
 	struct sockaddr *gate = rt->rt_gateway;
 	struct llinfo_arp *la = (struct llinfo_arp *)rt->rt_llinfo;
-
-	if (!arpinit_done) {
-		static struct timeout arptimer_to;
-
-		arpinit_done = 1;
-		pool_init(&arp_pool, sizeof(struct llinfo_arp), 0,
-		    IPL_SOFTNET, 0, "arp", NULL);
-
-		timeout_set_proc(&arptimer_to, arptimer, &arptimer_to);
-		timeout_add_sec(&arptimer_to, arpt_prune);
-	}
 
 	if (ISSET(rt->rt_flags,
 	    RTF_GATEWAY|RTF_BROADCAST|RTF_MULTICAST|RTF_MPLS))
@@ -188,7 +189,7 @@ arp_rtrequest(struct ifnet *ifp, int req, struct rtentry *rt)
 			break;
 		}
 
-		ml_init(&la->la_ml);
+		mq_init(&la->la_mq, LA_HOLD_QUEUE, IPL_SOFTNET);
 		la->la_rt = rt;
 		rt->rt_flags |= RTF_LLINFO;
 		if ((rt->rt_flags & RTF_LOCAL) == 0)
@@ -202,7 +203,7 @@ arp_rtrequest(struct ifnet *ifp, int req, struct rtentry *rt)
 		LIST_REMOVE(la, la_list);
 		rt->rt_llinfo = NULL;
 		rt->rt_flags &= ~RTF_LLINFO;
-		la_hold_total -= ml_purge(&la->la_ml);
+		atomic_sub_int(&la_hold_total, mq_purge(&la->la_mq));
 		pool_put(&arp_pool, la);
 		break;
 
@@ -373,18 +374,11 @@ arpresolve(struct ifnet *ifp, struct rtentry *rt0, struct mbuf *m,
 	 * response yet. Insert mbuf in hold queue if below limit
 	 * if above the limit free the queue without queuing the new packet.
 	 */
-	if (la_hold_total < LA_HOLD_TOTAL) {
-		struct mbuf *mh;
-
-		if (ml_len(&la->la_ml) >= LA_HOLD_QUEUE) {
-			mh = ml_dequeue(&la->la_ml);
-			la_hold_total--;
-			m_freem(mh);
-		}
-		ml_enqueue(&la->la_ml, m);
-		la_hold_total++;
+	if (atomic_inc_int_nv(&la_hold_total) <= LA_HOLD_TOTAL) {
+		if (mq_push(&la->la_mq, m) != 0)
+			atomic_dec_int(&la_hold_total);
 	} else {
-		la_hold_total -= ml_purge(&la->la_ml);
+		atomic_sub_int(&la_hold_total, mq_purge(&la->la_mq) + 1);
 		m_freem(m);
 	}
 
@@ -413,7 +407,8 @@ arpresolve(struct ifnet *ifp, struct rtentry *rt0, struct mbuf *m,
 				rt->rt_expire += arpt_down;
 				la->la_asked = 0;
 				la->la_refreshed = 0;
-				la_hold_total -= ml_purge(&la->la_ml);
+				atomic_sub_int(&la_hold_total,
+				    mq_purge(&la->la_mq));
 			}
 		}
 	}
@@ -599,7 +594,7 @@ arpcache(struct ifnet *ifp, struct ether_arp *ea, struct rtentry *rt)
 	struct in_addr *spa = (struct in_addr *)ea->arp_spa;
 	char addr[INET_ADDRSTRLEN];
 	struct ifnet *rifp;
-	unsigned int len;
+	struct mbuf *m;
 	int changed = 0;
 
 	KERNEL_ASSERT_LOCKED();
@@ -671,20 +666,18 @@ arpcache(struct ifnet *ifp, struct ether_arp *ea, struct rtentry *rt)
 
 	la->la_asked = 0;
 	la->la_refreshed = 0;
-	while ((len = ml_len(&la->la_ml)) != 0) {
-		struct mbuf *mh;
+	while ((m = mq_dequeue(&la->la_mq)) != NULL) {
+		unsigned int len;
 
-		mh = ml_dequeue(&la->la_ml);
-		la_hold_total--;
+		atomic_dec_int(&la_hold_total);
+		len = mq_len(&la->la_mq);
 
-		ifp->if_output(ifp, mh, rt_key(rt), rt);
+		ifp->if_output(ifp, m, rt_key(rt), rt);
 
-		if (ml_len(&la->la_ml) == len) {
+		/* XXXSMP we discard if other CPU enqueues */
+		if (mq_len(&la->la_mq) > len) {
 			/* mbuf is back in queue. Discard. */
-			while ((mh = ml_dequeue(&la->la_ml)) != NULL) {
-				la_hold_total--;
-				m_freem(mh);
-			}
+			atomic_sub_int(&la_hold_total, mq_purge(&la->la_mq));
 			break;
 		}
 	}
@@ -698,7 +691,7 @@ arpinvalidate(struct rtentry *rt)
 	struct llinfo_arp *la = (struct llinfo_arp *)rt->rt_llinfo;
 	struct sockaddr_dl *sdl = satosdl(rt->rt_gateway);
 
-	la_hold_total -= ml_purge(&la->la_ml);
+	atomic_sub_int(&la_hold_total, mq_purge(&la->la_mq));
 	sdl->sdl_alen = 0;
 	la->la_asked = 0;
 }
