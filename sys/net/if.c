@@ -238,7 +238,7 @@ int	ifq_congestion;
 
 int		 netisr;
 
-#define	NET_TASKQ	1
+#define	NET_TASKQ	4
 struct taskq	*nettqmp[NET_TASKQ];
 
 struct task if_input_task_locked = TASK_INITIALIZER(if_netisr, NULL);
@@ -834,10 +834,10 @@ if_input_process(struct ifnet *ifp, struct mbuf_list *ml)
 	 * to PF globals, pipex globals, unicast and multicast addresses
 	 * lists and the socket layer.
 	 */
-	NET_LOCK();
+	NET_RLOCK_IN_SOFTNET();
 	while ((m = ml_dequeue(ml)) != NULL)
 		(*ifp->if_input)(ifp, m);
-	NET_UNLOCK();
+	NET_RUNLOCK_IN_SOFTNET();
 }
 
 void
@@ -894,6 +894,12 @@ if_netisr(void *unused)
 			arpintr();
 			KERNEL_UNLOCK();
 		}
+#endif
+		if (n & (1 << NETISR_IP))
+			ipintr();
+#ifdef INET6
+		if (n & (1 << NETISR_IPV6))
+			ip6intr();
 #endif
 #if NPPP > 0
 		if (n & (1 << NETISR_PPP)) {
@@ -3316,12 +3322,15 @@ unhandled_af(int af)
  * globals aren't ready to be accessed by multiple threads in
  * parallel.
  */
-int		 nettaskqs = NET_TASKQ;
+int		 nettaskqs;
 
 struct taskq *
 net_tq(unsigned int ifindex)
 {
 	struct taskq *t = NULL;
+
+	if (nettaskqs == 0)
+		nettaskqs = min(NET_TASKQ, ncpus);
 
 	t = nettqmp[ifindex % nettaskqs];
 
