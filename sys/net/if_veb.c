@@ -1273,6 +1273,8 @@ veb_add_port(struct veb_softc *sc, const struct ifbreq *req, unsigned int span)
 	SMR_TAILQ_INSERT_TAIL_LOCKED(&port_list->l_list, p, p_entry);
 	port_list->l_count++;
 
+
+	veb_eb_port_take(NULL, p);
 	ether_brport_set(ifp0, &p->p_brport);
 	if (ifp0->if_enqueue != vport_enqueue) { /* vport is special */
 		ifp0->if_ioctl = veb_p_ioctl;
@@ -1880,8 +1882,7 @@ veb_p_dtor(struct veb_softc *sc, struct veb_port *p, const char *op)
 
 	veb_rule_list_free(TAILQ_FIRST(&p->p_vrl));
 
-	if_put(ifp0);
-	free(p, M_DEVBUF, sizeof(*p));
+	veb_eb_port_rele(NULL, p);
 }
 
 static void
@@ -1977,8 +1978,13 @@ static void
 veb_eb_port_rele(void *arg, void *port)
 {
 	struct veb_port *p = port;
+	struct ifnet *ifp0 = p->p_ifp0;
 
-	refcnt_rele_wake(&p->p_refs);
+	if (refcnt_rele(&p->p_refs)) {
+		if_put(ifp0);
+		wakeup_one(&p->p_refs);
+		free(p, M_DEVBUF, sizeof(*p));
+	}
 }
 
 static size_t
@@ -2146,6 +2152,9 @@ vport_enqueue(struct ifnet *ifp, struct mbuf *m)
 
 	smr_read_enter();
 	eb = SMR_PTR_GET(&ac->ac_brport);
+	if (eb != NULL)
+		eb->eb_port_take(eb->eb_port);
+	smr_read_leave();
 	if (eb != NULL) {
 		struct ether_header *eh;
 		uint64_t dst;
@@ -2164,8 +2173,9 @@ vport_enqueue(struct ifnet *ifp, struct mbuf *m)
 		m = (*eb->eb_input)(ifp, m, dst, eb->eb_port);
 
 		error = 0;
+
+		eb->eb_port_rele(eb->eb_port);
 	}
-	smr_read_leave();
 
 	m_freem(m);
 

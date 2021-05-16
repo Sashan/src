@@ -426,14 +426,16 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 
 	smr_read_enter();
 	eb = SMR_PTR_GET(&ac->ac_brport);
+	if (eb != NULL)
+		eb->eb_port_take(eb->eb_port);
+	smr_read_leave();
 	if (eb != NULL) {
 		m = (*eb->eb_input)(ifp, m, dst, eb->eb_port);
+		eb->eb_port_rele(eb->eb_port);
 		if (m == NULL) {
-			smr_read_leave();
 			return;
 		}
 	}
-	smr_read_leave();
 
 	/*
 	 * Fourth phase: drop service delimited packets.

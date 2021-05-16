@@ -220,6 +220,8 @@ do {									\
 struct ether_brport {
 	struct mbuf	*(*eb_input)(struct ifnet *, struct mbuf *,
 			   uint64_t, void *);
+	void		(*eb_port_take)(void *);
+	void		(*eb_port_rele)(void *);
 	void		  *eb_port;
 };
 

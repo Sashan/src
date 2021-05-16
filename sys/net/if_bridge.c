@@ -138,6 +138,8 @@ int bridge_ipsec(struct ifnet *, struct ether_header *, int, struct llc *,
 #endif
 int     bridge_clone_create(struct if_clone *, int);
 int	bridge_clone_destroy(struct ifnet *);
+void	bridge_take(void *);
+void	bridge_rele(void *);
 
 #define	ETHERADDR_IS_IP_MCAST(a) \
 	/* struct etheraddr *a;	*/				\
@@ -152,6 +154,8 @@ struct if_clone bridge_cloner =
 
 const struct ether_brport bridge_brport = {
 	bridge_input,
+	bridge_take,
+	bridge_rele,
 	NULL,
 };
 
@@ -2048,4 +2052,16 @@ bridge_send_icmp_err(struct ifnet *ifp,
 
  dropit:
 	m_freem(n);
+}
+
+void
+bridge_take(void *unused)
+{
+	return;
+}
+
+void
+bridge_rele(void *unused)
+{
+	return;
 }
