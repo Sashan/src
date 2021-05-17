@@ -688,7 +688,7 @@ tpmr_p_rele(void *p)
 
 	if (atomic_dec_int_nv((int *)(&port->p_refcnt)) == 0) {
 		if_put(ifp0);
-		free(p, M_DEVBUF, sizeof(*p));
+		free(port, M_DEVBUF, sizeof(*port));
 	}
 }
 

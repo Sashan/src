@@ -209,6 +209,9 @@ static void	 veb_eb_port_rele(void *, void *);
 static size_t	 veb_eb_port_ifname(void *, char *, size_t, void *);
 static void	 veb_eb_port_sa(void *, struct sockaddr_storage *, void *);
 
+static void	 veb_eb_brport_take(void *);
+static void	 veb_eb_brport_rele(void *);
+
 static const struct etherbridge_ops veb_etherbridge_ops = {
 	veb_eb_port_cmp,
 	veb_eb_port_take,
@@ -1256,6 +1259,9 @@ veb_add_port(struct veb_softc *sc, const struct ifbreq *req, unsigned int span)
 		p->p_brport.eb_input = veb_port_input;
 	}
 
+	p->p_brport.eb_port_take = veb_eb_brport_take;
+	p->p_brport.eb_port_rele = veb_eb_brport_rele;
+
 	/* this might have changed if we slept for malloc or ifpromisc */
 	error = ether_brport_isset(ifp0);
 	if (error != 0)
@@ -1272,7 +1278,6 @@ veb_add_port(struct veb_softc *sc, const struct ifbreq *req, unsigned int span)
 	/* commit */
 	SMR_TAILQ_INSERT_TAIL_LOCKED(&port_list->l_list, p, p_entry);
 	port_list->l_count++;
-
 
 	veb_eb_port_take(NULL, p);
 	ether_brport_set(ifp0, &p->p_brport);
@@ -1985,6 +1990,18 @@ veb_eb_port_rele(void *arg, void *port)
 		wakeup_one(&p->p_refs);
 		free(p, M_DEVBUF, sizeof(*p));
 	}
+}
+
+static void
+veb_eb_brport_take(void *port)
+{
+	veb_eb_port_take(NULL, port);
+}
+
+static void
+veb_eb_brport_rele(void *port)
+{
+	veb_eb_port_rele(NULL, port);
 }
 
 static size_t
