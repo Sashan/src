@@ -1279,7 +1279,6 @@ veb_add_port(struct veb_softc *sc, const struct ifbreq *req, unsigned int span)
 	SMR_TAILQ_INSERT_TAIL_LOCKED(&port_list->l_list, p, p_entry);
 	port_list->l_count++;
 
-	veb_eb_port_take(NULL, p);
 	ether_brport_set(ifp0, &p->p_brport);
 	if (ifp0->if_enqueue != vport_enqueue) { /* vport is special */
 		ifp0->if_ioctl = veb_p_ioctl;
@@ -1887,7 +1886,8 @@ veb_p_dtor(struct veb_softc *sc, struct veb_port *p, const char *op)
 
 	veb_rule_list_free(TAILQ_FIRST(&p->p_vrl));
 
-	veb_eb_port_rele(NULL, p);
+	if_put(ifp0);
+	free(p, M_DEVBUF, sizeof(*p));
 }
 
 static void
@@ -1983,13 +1983,8 @@ static void
 veb_eb_port_rele(void *arg, void *port)
 {
 	struct veb_port *p = port;
-	struct ifnet *ifp0 = p->p_ifp0;
 
-	if (refcnt_rele(&p->p_refs)) {
-		if_put(ifp0);
-		wakeup_one(&p->p_refs);
-		free(p, M_DEVBUF, sizeof(*p));
-	}
+	refcnt_rele_wake(&p->p_refs);
 }
 
 static void
