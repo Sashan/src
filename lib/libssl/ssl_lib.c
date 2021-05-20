@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_lib.c,v 1.256 2021/05/10 17:05:26 tb Exp $ */
+/* $OpenBSD: ssl_lib.c,v 1.259 2021/05/16 14:10:43 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -146,13 +146,12 @@
 
 #include <stdio.h>
 
-#include "ssl_locl.h"
-
 #include <openssl/bn.h>
 #include <openssl/dh.h>
 #include <openssl/lhash.h>
 #include <openssl/objects.h>
 #include <openssl/ocsp.h>
+#include <openssl/opensslconf.h>
 #include <openssl/x509v3.h>
 
 #ifndef OPENSSL_NO_ENGINE
@@ -160,6 +159,8 @@
 #endif
 
 #include "bytestring.h"
+#include "dtls_locl.h"
+#include "ssl_locl.h"
 #include "ssl_sigalgs.h"
 
 const char *SSL_version_str = OPENSSL_VERSION_TEXT;

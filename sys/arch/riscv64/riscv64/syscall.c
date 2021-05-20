@@ -1,4 +1,4 @@
-/*	$OpenBSD: syscall.c,v 1.4 2021/05/12 01:20:52 jsg Exp $	*/
+/*	$OpenBSD: syscall.c,v 1.8 2021/05/16 03:29:35 jsg Exp $	*/
 
 /*
  * Copyright (c) 2020 Brian Bamsch <bbamsch@google.com>
@@ -19,10 +19,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
-#include <sys/signalvar.h>
 #include <sys/user.h>
-#include <sys/vnode.h>
-#include <sys/signal.h>
 #include <sys/syscall.h>
 #include <sys/syscall_mi.h>
 #include <sys/systm.h>
@@ -56,7 +53,7 @@ svc_handler(trapframe_t *frame)
 
 	/* Re-enable interrupts if they were enabled previously */
 	if (__predict_true(frame->tf_scause & EXCP_INTR))
-		enable_interrupts();
+		intr_enable();
 
 	ap = &frame->tf_a[0]; // Pointer to first arg
 	code = frame->tf_t[0]; // Syscall code
@@ -120,16 +117,14 @@ svc_handler(trapframe_t *frame)
 }
 
 void
-child_return(arg)
-	void *arg;
+child_return(void *arg)
 {
 	struct proc *p = arg;
 	struct trapframe *frame = process_frame(p);;
 
 	frame->tf_a[0] = 0;
 	frame->tf_a[1] = 1;
-	// XXX How to signal error?
-	frame->tf_t[0] = 0;
+	frame->tf_t[0] = 0;			/* no error */
 
 	KERNEL_UNLOCK();
 

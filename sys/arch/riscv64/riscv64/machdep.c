@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.14 2021/05/12 01:20:52 jsg Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.17 2021/05/16 10:38:53 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2014 Patrick Wildt <patrick@blueri.se>
@@ -28,14 +28,11 @@
 #include <sys/user.h>
 #include <sys/conf.h>
 #include <sys/kcore.h>
-#include <sys/core.h>
 #include <sys/msgbuf.h>
 #include <sys/buf.h>
-#include <sys/termios.h>
 #include <sys/sensors.h>
 #include <sys/malloc.h>
 #include <sys/syscallargs.h>
-#include <sys/stdarg.h>
 
 #include <net/if.h>
 #include <uvm/uvm.h>
@@ -202,7 +199,7 @@ void
 cpu_idle_cycle(void)
 {
 	// Enable interrupts
-	enable_interrupts();
+	intr_enable();
 	// XXX Data Sync Barrier? (Maybe SFENCE???)
 	__asm volatile("wfi");
 }
@@ -926,6 +923,20 @@ pmap_bootstrap_bs_map(bus_space_tag_t t, bus_addr_t bpa, bus_size_t size,
 void
 memreg_add(const struct fdt_reg *reg)
 {
+	int i;
+
+	for (i = 0; i < nmemreg; i++) {
+		if (reg->addr == memreg[i].addr + memreg[i].size) {
+			memreg[i].size += reg->size;
+			return;
+		}
+		if (reg->addr + reg->size == memreg[i].addr) {
+			memreg[i].addr = reg->addr;
+			memreg[i].size += reg->size;
+			return;
+		}
+	}
+
 	if (nmemreg >= nitems(memreg))
 		return;
 

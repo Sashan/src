@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile.riscv64,v 1.6 2021/05/12 01:20:52 jsg Exp $
+#	$OpenBSD: Makefile.riscv64,v 1.9 2021/05/15 20:51:12 kettenis Exp $
 
 # For instructions on building kernels consult the config(8) and options(4)
 # manual pages.
@@ -11,7 +11,7 @@
 .include <bsd.own.mk>
 
 SIZE?=	size
-STRIP?=	llvm-strip
+STRIP?=	strip
 
 # source tree is located via $S relative to the compilation directory
 .ifndef S
@@ -28,10 +28,10 @@ CWARNFLAGS=	-Werror -Wall -Wimplicit-function-declaration \
 		-Wno-constant-conversion -Wno-address-of-packed-member \
 		-Wframe-larger-than=2047
 
-CMACHFLAGS=	--target=riscv64-unknown-openbsd6.6 -march=rv64gc \
-		-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -mno-relax \
-		-mcmodel=medany
+CMACHFLAGS=	-march=rv64gc -mcmodel=medany -mno-relax \
+		-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
 CMACHFLAGS+=	-ffreestanding ${NOPIE_FLAGS}
+CMACHFLAGS+=	-target riscv64-unknown-openbsd
 SORTR=		sort -R
 .if ${IDENT:M-DNO_PROPOLICE}
 CMACHFLAGS+=	-fno-stack-protector
@@ -144,7 +144,7 @@ cleandir: clean
 depend obj:
 
 locore0.o: ${_archdir}/${_arch}/locore0.S assym.h
-copy.o copystr.o copyinout.o: assym.h
+copy.o copystr.o: assym.h
 pagezero.o: assym.h
 cpuswitch.o exception.o support.o: assym.h
 locore.o trampoline.o: assym.h
@@ -172,16 +172,5 @@ install: update-link hardlink-obsd newinstall
 RAM_ADDR?=0x40000000
 #KERNEL_LOAD_ADDR!=echo "x = hex(${KERNEL_BASE_PHYS} + ${RAM_ADDR}); print x" | python
 KERNEL_LOAD_ADDR=0x40200000
-
-# until we get native booting working, put this in the tree.
-bsdrd.umg: bsd.rd
-	mkuboot -a arm -o linux -e ${KERNEL_LOAD_ADDR} -l ${KERNEL_LOAD_ADDR} bsd.rd bsdrd.umg
-
-bsd.umg: bsd
-	mkuboot -a arm -o linux -e ${KERNEL_LOAD_ADDR} -l ${KERNEL_LOAD_ADDR} bsd bsd.umg
-
-bsd.rd: bsd
-	cp -p bsd bsd.rd
-	rdsetroot bsd.rd $S/../distrib/${_mach}/ramdisk/mr.fs
 
 %RULES

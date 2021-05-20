@@ -1,4 +1,4 @@
-/* $OpenBSD: s3_lib.c,v 1.208 2021/04/21 19:27:56 jsing Exp $ */
+/* $OpenBSD: s3_lib.c,v 1.210 2021/05/16 13:56:30 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -156,9 +156,11 @@
 #include <openssl/dh.h>
 #include <openssl/md5.h>
 #include <openssl/objects.h>
+#include <openssl/opensslconf.h>
 
-#include "ssl_locl.h"
 #include "bytestring.h"
+#include "dtls_locl.h"
+#include "ssl_locl.h"
 
 #define SSL3_NUM_CIPHERS	(sizeof(ssl3_ciphers) / sizeof(SSL_CIPHER))
 

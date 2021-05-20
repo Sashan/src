@@ -1,4 +1,4 @@
-/*	$OpenBSD: intr.c,v 1.4 2021/05/12 01:20:52 jsg Exp $	*/
+/*	$OpenBSD: intr.c,v 1.6 2021/05/14 06:48:52 jsg Exp $	*/
 
 /*
  * Copyright (c) 2011 Dale Rahn <drahn@openbsd.org>
@@ -18,13 +18,10 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/timetc.h>
 #include <sys/malloc.h>
 
-#include <dev/clock_subr.h>
 #include <machine/cpu.h>
 #include <machine/intr.h>
-#include <machine/frame.h>
 
 #include <dev/ofw/openfirm.h>
 
@@ -404,18 +401,18 @@ void
 riscv_do_pending_intr(int pcpl)
 {
 	struct cpu_info *ci = curcpu();
-	int sie;
+	u_long sie;
 
-	sie = disable_interrupts();
+	sie = intr_disable();
 
 #define DO_SOFTINT(si, ipl) \
 	if ((ci->ci_ipending & riscv_smask[pcpl]) &	\
-	    SI_TO_IRQBIT(si)) {						\
-		ci->ci_ipending &= ~SI_TO_IRQBIT(si);			\
-		riscv_intr_func.setipl(ipl);				\
-		restore_interrupts(sie);			\
-		softintr_dispatch(si);					\
-		sie = disable_interrupts();			\
+	    SI_TO_IRQBIT(si)) {				\
+		ci->ci_ipending &= ~SI_TO_IRQBIT(si);	\
+		riscv_intr_func.setipl(ipl);		\
+		intr_restore(sie);			\
+		softintr_dispatch(si);			\
+		sie = intr_disable();			\
 	}
 
 	do {
@@ -427,7 +424,7 @@ riscv_do_pending_intr(int pcpl)
 
 	/* Don't use splx... we are here already! */
 	riscv_intr_func.setipl(pcpl);
-	restore_interrupts(sie);
+	intr_restore(sie);
 }
 
 void riscv_set_intr_func(int (*raise)(int), int (*lower)(int),

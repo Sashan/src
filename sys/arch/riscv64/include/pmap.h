@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.h,v 1.4 2021/05/12 01:20:52 jsg Exp $	*/
+/*	$OpenBSD: pmap.h,v 1.6 2021/05/16 03:29:35 jsg Exp $	*/
 
 /*
  * Copyright (c) 2019-2020 Brian Bamsch <bbamsch@google.com>
@@ -101,8 +101,8 @@ void pmap_kenter_cache(vaddr_t va, paddr_t pa, vm_prot_t prot, int cacheable);
 void pmap_page_ro(pmap_t pm, vaddr_t va, vm_prot_t prot);
 
 paddr_t pmap_steal_avail(size_t size, int align, void **kva);
-void pmap_avail_fixup();
-void pmap_physload_avail();
+void pmap_avail_fixup(void);
+void pmap_physload_avail(void);
 
 #define PMAP_GROWKERNEL
 
@@ -110,7 +110,7 @@ struct pv_entry;
 
 /* investigate */
 #define pmap_unuse_final(p)		do { /* nothing */ } while (0)
-int	pmap_fault_fixup(pmap_t, vaddr_t, vm_prot_t, int);
+int	pmap_fault_fixup(pmap_t, vaddr_t, vm_prot_t);
 void	pmap_postinit(void);
 
 #endif /* _KERNEL && !_LOCORE */

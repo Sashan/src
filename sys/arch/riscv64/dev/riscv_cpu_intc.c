@@ -1,4 +1,4 @@
-/*	$OpenBSD: riscv_cpu_intc.c,v 1.6 2021/05/12 01:20:52 jsg Exp $	*/
+/*	$OpenBSD: riscv_cpu_intc.c,v 1.8 2021/05/14 06:48:52 jsg Exp $	*/
 
 /*
  * Copyright (c) 2020, Mars Li <mengshi.li.mars@gmail.com>
@@ -18,19 +18,14 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/queue.h>
 #include <sys/malloc.h>
 #include <sys/device.h>
-#include <sys/evcount.h>
 
-#include <machine/bus.h>
 #include <machine/fdt.h>
 #include <machine/riscvreg.h>
 
 #include <dev/ofw/openfirm.h>
-#include <dev/ofw/fdt.h>
 
-#include "riscv64/dev/plic.h"
 #include "riscv_cpu_intc.h"
 
 struct intrhand {
@@ -97,7 +92,7 @@ riscv_intc_attach(struct device *parent, struct device *self, void *aux)
 	 * XXX right time to enable interrupts ??
 	 * might need to postpone untile autoconf is finished
 	 */
-	enable_interrupts();
+	intr_enable();
 }
 
 
@@ -130,13 +125,12 @@ void *
 riscv_intc_intr_establish(int irqno, int dummy_level, int (*func)(void *),
     void *arg, char *name)
 {
-	int sie;
 	struct intrhand *ih;
+	u_long sie;
 
 	if (irqno < 0 || irqno >= INTC_NIRQS)
 		panic("intc_intr_establish: bogus irqnumber %d: %s",
 		    irqno, name);
-	sie = disable_interrupts();
 
 	ih = malloc(sizeof(*ih), M_DEVBUF, M_WAITOK);
 	ih->ih_func = func;
@@ -144,24 +138,23 @@ riscv_intc_intr_establish(int irqno, int dummy_level, int (*func)(void *),
 	ih->ih_irq = irqno;
 	ih->ih_name = name;
 
+	sie = intr_disable();
 	intc_handler[irqno] = ih;
-#ifdef DEBUG_INTC
-	printf("\nintc_intr_establish irq %d [%s]\n", irqno, name);
-#endif
-	restore_interrupts(sie);
+	intr_restore(sie);
+
 	return (ih);
 }
 
 void
 riscv_intc_intr_disestablish(void *cookie)
 {
-	int sie;
 	struct intrhand *ih = cookie;
 	int irqno = ih->ih_irq;
-	sie = disable_interrupts();
+	u_long sie;
 
+	sie = intr_disable();
 	intc_handler[irqno] = NULL;
-	free(ih, M_DEVBUF, 0);
+	intr_restore(sie);
 
-	restore_interrupts(sie);
+	free(ih, M_DEVBUF, 0);
 }

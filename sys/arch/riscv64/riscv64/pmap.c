@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.7 2021/05/12 01:20:52 jsg Exp $	*/
+/*	$OpenBSD: pmap.c,v 1.10 2021/05/15 14:05:35 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2019-2020 Brian Bamsch <bbamsch@google.com>
@@ -18,9 +18,7 @@
  */
 
 #include <sys/param.h>
-#include <sys/malloc.h>
 #include <sys/proc.h>
-#include <sys/user.h>
 #include <sys/systm.h>
 #include <sys/pool.h>
 #include <sys/atomic.h>
@@ -30,12 +28,7 @@
 #include "machine/vmparam.h"
 #include "machine/pmap.h"
 #include "machine/cpufunc.h"
-#include "machine/pcb.h"
 #include "machine/riscvreg.h"
-
-#include <machine/db_machdep.h>
-#include <ddb/db_extern.h>
-#include <ddb/db_output.h>
 
 void pmap_set_satp(struct proc *);
 void pmap_free_asid(pmap_t);
@@ -1425,12 +1418,12 @@ void
 pmap_activate(struct proc *p)
 {
 	pmap_t pm = p->p_vmspace->vm_map.pmap;
-	int sie;
+	u_long sie;
 
-	sie = disable_interrupts();
+	sie = intr_disable();
 	if (p == curproc && pm != curcpu()->ci_curpm)
 		pmap_set_satp(p);
-	restore_interrupts(sie);
+	intr_restore(sie);
 }
 
 /*
@@ -1716,7 +1709,7 @@ pmap_pte_remove(struct pte_desc *pted, int remove_pted)
  * for this emulation, or to tell the caller that it's a legit fault.
  */
 int
-pmap_fault_fixup(pmap_t pm, vaddr_t va, vm_prot_t ftype, int user)
+pmap_fault_fixup(pmap_t pm, vaddr_t va, vm_prot_t ftype)
 {
 	struct pte_desc *pted;
 	struct vm_page *pg;
