@@ -343,6 +343,9 @@ tpmr_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
 
 	smr_read_enter();
 	pn = SMR_PTR_GET(&sc->sc_ports[!p->p_slot]);
+	if (pn != NULL)
+		tpmr_p_take(pn);
+	smr_read_leave();
 	if (pn == NULL)
 		m_freem(m);
 	else {
@@ -360,8 +363,9 @@ tpmr_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
 			counters_pkt(ifp->if_counters,
 			    ifc_opackets, ifc_obytes, len);
 		}
+
+		tpmr_p_rele(p);
 	}
-	smr_read_leave();
 
 	return (NULL);
 

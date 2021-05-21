@@ -1028,8 +1028,12 @@ veb_port_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
 
 		smr_read_enter();
 		tp = etherbridge_resolve(&sc->sc_eb, dst);
-		m = veb_transmit(sc, p, tp, m, src, dst);
+		if (tp != NULL)
+			veb_eb_port_take(NULL, tp);
 		smr_read_leave();
+		m = veb_transmit(sc, p, tp, m, src, dst);
+		if (tp != NULL)
+			veb_eb_port_rele(NULL, tp);
 
 		if (m == NULL)
 			return (NULL);
