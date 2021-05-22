@@ -364,7 +364,7 @@ tpmr_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
 			    ifc_opackets, ifc_obytes, len);
 		}
 
-		tpmr_p_rele(p);
+		tpmr_p_rele(pn);
 	}
 
 	return (NULL);
