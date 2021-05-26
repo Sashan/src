@@ -1885,8 +1885,8 @@ veb_p_dtor(struct veb_softc *sc, struct veb_port *p, const char *op)
 	SMR_TAILQ_REMOVE_LOCKED(&port_list->l_list, p, p_entry);
 	port_list->l_count--;
 
-	smr_barrier();
 	refcnt_finalize(&p->p_refs, "vebpdtor");
+	smr_barrier();
 
 	veb_rule_list_free(TAILQ_FIRST(&p->p_vrl));
 

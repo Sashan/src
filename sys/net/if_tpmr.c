@@ -721,9 +721,9 @@ tpmr_p_dtor(struct tpmr_softc *sc, struct tpmr_port *p, const char *op)
 	if_detachhook_del(ifp0, &p->p_dtask);
 	if_linkstatehook_del(ifp0, &p->p_ltask);
 
-	smr_barrier();
-
 	tpmr_p_rele(p);
+
+	smr_barrier();
 
 	if (ifp->if_link_state != LINK_STATE_DOWN) {
 		ifp->if_link_state = LINK_STATE_DOWN;
