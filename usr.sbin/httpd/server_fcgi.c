@@ -1,4 +1,4 @@
-/*	$OpenBSD: server_fcgi.c,v 1.86 2021/05/17 09:26:52 florian Exp $	*/
+/*	$OpenBSD: server_fcgi.c,v 1.88 2021/05/20 15:12:10 florian Exp $	*/
 
 /*
  * Copyright (c) 2014 Florian Obser <florian@openbsd.org>
@@ -620,6 +620,14 @@ server_fcgi_header(struct client *clt, unsigned int code)
 	    EVBUFFER_LENGTH(clt->clt_srvevb) == 0) {
 		/* Can't chunk encode an empty body. */
 		clt->clt_fcgi.chunked = 0;
+
+		/* But then we need a Content-Length... */
+		key.kv_key = "Content-Length";
+		if ((kv = kv_find(&resp->http_headers, &key)) == NULL) {
+			if (kv_add(&resp->http_headers,
+			    "Content-Length", "0") == NULL)
+				return (-1);
+		}
 	}
 
 	/* Set chunked encoding */

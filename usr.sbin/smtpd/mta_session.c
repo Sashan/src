@@ -1,4 +1,4 @@
-/*	$OpenBSD: mta_session.c,v 1.140 2021/03/07 20:56:41 eric Exp $	*/
+/*	$OpenBSD: mta_session.c,v 1.142 2021/05/26 18:08:55 eric Exp $	*/
 
 /*
  * Copyright (c) 2008 Pierre-Yves Ritschard <pyr@openbsd.org>
@@ -28,7 +28,6 @@
 
 #include <arpa/inet.h>
 #include <ctype.h>
-#include <err.h>
 #include <errno.h>
 #include <event.h>
 #include <imsg.h>
@@ -358,7 +357,7 @@ mta_session_imsg(struct mproc *p, struct imsg *imsg)
 		return;
 
 	default:
-		errx(1, "mta_session_imsg: unexpected %s imsg",
+		fatalx("mta_session_imsg: unexpected %s imsg",
 		    imsg_to_str(imsg->hdr.type));
 	}
 }
@@ -1596,7 +1595,11 @@ mta_tls_init(struct mta_session *s)
 		return;
 	}
 
-	io_connect_tls(s->io, tls, s->mxname);
+	if (io_connect_tls(s->io, tls, s->mxname) == -1) {
+		log_info("%016"PRIx64" mta closing reason=tls-connect-failed", s->id);
+		tls_free(tls);
+		mta_free(s);
+	}
 }
 
 static void

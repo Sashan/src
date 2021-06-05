@@ -1,4 +1,4 @@
-/* $OpenBSD: clientloop.c,v 1.362 2021/05/04 22:53:52 dtucker Exp $ */
+/* $OpenBSD: clientloop.c,v 1.364 2021/05/26 01:47:24 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -1397,14 +1397,6 @@ client_loop(struct ssh *ssh, int have_pty, int escape_char_arg,
 	if (have_pty)
 		leave_raw_mode(options.request_tty == REQUEST_TTY_FORCE);
 
-	/* restore blocking io */
-	if (!isatty(fileno(stdin)))
-		unset_nonblock(fileno(stdin));
-	if (!isatty(fileno(stdout)))
-		unset_nonblock(fileno(stdout));
-	if (!isatty(fileno(stderr)))
-		unset_nonblock(fileno(stderr));
-
 	/*
 	 * If there was no shell or command requested, there will be no remote
 	 * exit status to be returned.  In that case, clear error code if the
@@ -1946,7 +1938,7 @@ hostkeys_check_old(struct hostkey_foreach_line *l, void *_ctx)
 		if (!sshkey_equal(l->key, ctx->old_keys[i]))
 			continue;
 		debug3_f("found deprecated %s key at %s:%ld as %s",
-		    sshkey_ssh_name(ctx->keys[i]), l->path, l->linenum,
+		    sshkey_ssh_name(ctx->old_keys[i]), l->path, l->linenum,
 		    hashed ? "[HASHED]" : l->hosts);
 		ctx->old_key_seen = 1;
 		break;

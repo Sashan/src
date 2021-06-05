@@ -1,4 +1,4 @@
-/*	$OpenBSD: monitor.c,v 1.27 2021/05/15 13:37:43 jan Exp $	*/
+/*	$OpenBSD: monitor.c,v 1.29 2021/05/31 16:18:01 jan Exp $	*/
 
 /*
  * Copyright (c) 2004 Moritz Jodeit <moritz@openbsd.org>
@@ -206,7 +206,7 @@ monitor_init(void)
  * for the user-privileged slave process and 1 for the monitor process.
  */
 int
-monitor_post_auth()
+monitor_post_auth(void)
 {
 	slave_pid = fork();
 	if (slave_pid == -1)
@@ -296,7 +296,7 @@ handle_cmds(void)
 				break;
 			case AUTH_SLAVE:
 				if (pledge("stdio rpath wpath cpath inet recvfd"
-				   " sendfd proc tty getpw", NULL) == -1)
+				    " sendfd proc tty getpw", NULL) == -1)
 					fatalx("pledge");
 				/* User-privileged slave */
 				debugmsg("user-privileged slave started");

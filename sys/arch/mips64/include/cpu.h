@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.132 2021/05/05 15:29:19 visa Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.134 2021/06/02 00:39:26 cheloha Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -183,11 +183,6 @@ struct cpu_info {
 
 	u_int32_t	ci_pendingticks;
 
-#ifdef TGT_ORIGIN
-	u_int16_t	ci_nasid;
-	u_int16_t	ci_slice;
-#endif
-
 	struct pmap	*ci_curpmap;
 	uint		ci_intrdepth;		/* interrupt depth */
 #ifdef MULTIPROCESSOR
@@ -201,11 +196,12 @@ struct cpu_info {
 #define	CI_DDB_INDDB		4
 
 #ifdef DIAGNOSTIC
-	int	ci_mutex_level;
+	int		ci_mutex_level;
 #endif
 #ifdef GPROF
 	struct gmonparam *ci_gmon;
 #endif
+	char		ci_panicbuf[512];
 };
 
 #define	CPUF_PRIMARY	0x01		/* CPU is primary CPU */

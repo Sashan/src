@@ -1,4 +1,4 @@
-/*	$OpenBSD: s_lroundl.c,v 1.3 2019/03/15 05:42:38 kevlo Exp $	*/
+/*	$OpenBSD: s_lroundl.c,v 1.5 2021/05/31 17:39:24 tb Exp $	*/
 
 /*-
  * Copyright (c) 2005 David Schultz <das@FreeBSD.ORG>

@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf.c,v 1.1116 2021/04/27 09:38:29 sashan Exp $ */
+/*	$OpenBSD: pf.c,v 1.1118 2021/06/01 09:57:11 dlg Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -1335,7 +1335,7 @@ pf_purge_expired_src_nodes(void)
 	PF_ASSERT_LOCKED();
 
 	for (cur = RB_MIN(pf_src_tree, &tree_src_tracking); cur; cur = next) {
-	next = RB_NEXT(pf_src_tree, &tree_src_tracking, cur);
+		next = RB_NEXT(pf_src_tree, &tree_src_tracking, cur);
 
 		if (cur->states == 0 && cur->expire <= getuptime()) {
 			next = RB_NEXT(pf_src_tree, &tree_src_tracking, cur);
@@ -3440,7 +3440,7 @@ pf_set_rt_ifp(struct pf_state *s, struct pf_addr *saddr, sa_family_t af,
 	if (!r->rt)
 		return (0);
 
-	rv = pf_map_addr(af, r, saddr, &s->rt_addr, NULL, sns, 
+	rv = pf_map_addr(af, r, saddr, &s->rt_addr, NULL, sns,
 	    &r->route, PF_SN_ROUTE);
 	if (rv == 0)
 		s->rt = r->rt;
@@ -7373,14 +7373,21 @@ pf_state_key_link_reverse(struct pf_state_key *sk, struct pf_state_key *skrev)
 	old_reverse = atomic_cas_ptr(&sk->reverse, NULL, skrev);
 	if (old_reverse != NULL)
 		KASSERT(old_reverse == skrev);
-	else
+	else {
 		pf_state_key_ref(skrev);
 
-	old_reverse = atomic_cas_ptr(&skrev->reverse, NULL, sk);
-	if (old_reverse != NULL)
-		KASSERT(old_reverse == sk);
-	else
+		/*
+		 * NOTE: if sk == skrev, then KASSERT() below holds true, we
+		 * still want to grab a reference in such case, because
+		 * pf_state_key_unlink_reverse() does not check whether keys
+		 * are identical or not.
+		 */
+		old_reverse = atomic_cas_ptr(&skrev->reverse, NULL, sk);
+		if (old_reverse != NULL)
+			KASSERT(old_reverse == sk);
+
 		pf_state_key_ref(sk);
+	}
 }
 
 #if NPFLOG > 0
