@@ -379,7 +379,7 @@ tpmr_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
 	}
 #endif
 
-	SMR_ASSERT_CRITICAL(); /* ether_input calls us in a crit section */
+	smr_read_enter();
 	pn = SMR_PTR_GET(&sc->sc_ports[!p->p_slot]);
 	if (pn != NULL)
 		tpmr_p_take(pn);
@@ -390,8 +390,10 @@ tpmr_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
 	ifpn = pn->p_ifp0;
 #if NPF > 0
 	if (!ISSET(iff, IFF_LINK1) &&
-	    (m = tpmr_pf(ifpn, PF_OUT, m)) == NULL)
+	    (m = tpmr_pf(ifpn, PF_OUT, m)) == NULL) {
+		tpmr_p_rele(pn);
 		return (NULL);
+	}
 #endif
 
 	if (if_enqueue(ifpn, m))
@@ -400,6 +402,8 @@ tpmr_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
 		counters_pkt(ifp->if_counters,
 		    ifc_opackets, ifc_obytes, len);
 	}
+
+	tpmr_p_rele(pn);
 
 	return (NULL);
 

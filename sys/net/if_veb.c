@@ -1066,9 +1066,10 @@ veb_port_input(struct ifnet *ifp0, struct mbuf *m, uint64_t dst, void *brport)
 		if (tp != NULL)
 			veb_eb_port_take(NULL, tp);
 		smr_read_leave();
-		m = veb_transmit(sc, p, tp, m, src, dst);
-		if (tp != NULL)
+		if (tp != NULL) {
+			m = veb_transmit(sc, p, tp, m, src, dst);
 			veb_eb_port_rele(NULL, tp);
+		}
 
 		if (m == NULL)
 			return (NULL);
