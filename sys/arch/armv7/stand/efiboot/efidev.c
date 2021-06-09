@@ -1,4 +1,4 @@
-/*	$OpenBSD: efidev.c,v 1.6 2020/12/09 18:10:18 krw Exp $	*/
+/*	$OpenBSD: efidev.c,v 1.8 2021/06/07 21:18:31 krw Exp $	*/
 
 /*
  * Copyright (c) 2015 YASUOKA Masahiko <yasuoka@yasuoka.net>
@@ -36,7 +36,6 @@
 #include "libsa.h"
 
 #include <efi.h>
-#include "eficall.h"
 
 extern EFI_BOOT_SERVICES *BS;
 
@@ -90,8 +89,7 @@ efid_io(int rw, efi_diskinfo_t ed, u_int off, int nsect, void *buf)
 
 	switch (rw) {
 	case F_READ:
-		status = EFI_CALL(ed->blkio->ReadBlocks,
-		    ed->blkio, ed->mediaid, off,
+		status = ed->blkio->ReadBlocks(ed->blkio, ed->mediaid, off,
 		    nsect * DEV_BSIZE, data);
 		if (EFI_ERROR(status))
 			goto on_eio;
@@ -101,8 +99,7 @@ efid_io(int rw, efi_diskinfo_t ed, u_int off, int nsect, void *buf)
 		if (ed->blkio->Media->ReadOnly)
 			goto on_eio;
 		memcpy(data, buf, nsect * DEV_BSIZE);
-		status = EFI_CALL(ed->blkio->WriteBlocks,
-		    ed->blkio, ed->mediaid, off,
+		status = ed->blkio->WriteBlocks(ed->blkio, ed->mediaid, off,
 		    nsect * DEV_BSIZE, data);
 		if (EFI_ERROR(status))
 			goto on_eio;
@@ -150,12 +147,11 @@ gpt_chk_mbr(struct dos_partition *dp, u_int64_t dsize)
 		found++;
 		if (dp2->dp_typ != DOSPTYP_EFI)
 			continue;
+		if (letoh32(dp2->dp_start) != GPTSECTOR)
+			continue;
 		psize = letoh32(dp2->dp_size);
-		if (psize == (dsize - 1) ||
-		    psize == UINT32_MAX) {
-			if (letoh32(dp2->dp_start) == 1)
-				efi++;
-		}
+		if (psize <= (dsize - GPTSECTOR) || psize == UINT32_MAX)
+			efi++;
 	}
 	if (found == 1 && efi == 1)
 		return (0);
@@ -283,8 +279,8 @@ findopenbsd_gpt(efi_diskinfo_t ed, const char **err)
 		return (-1);
 	}
 
-	/* LBA1: GPT Header */
-	lba = 1;
+	/* GPT Header */
+	lba = GPTSECTOR;
 	status = efid_io(F_READ, ed, EFI_SECTOBLK(ed, lba), EFI_BLKSPERSEC(ed),
 	    buf);
 	if (EFI_ERROR(status)) {
