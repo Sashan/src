@@ -1682,7 +1682,7 @@ RB_HEAD(pf_state_tree_id, pf_state);
 RB_PROTOTYPE(pf_state_tree_id, pf_state,
     entry_id, pf_state_compare_id);
 extern struct pf_state_tree_id tree_id;
-extern struct pf_state_queue state_list;
+extern struct pf_state_list pf_state_list;
 
 TAILQ_HEAD(pf_queuehead, pf_queuespec);
 extern struct pf_queuehead		  pf_queues[2];
