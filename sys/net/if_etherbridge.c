@@ -317,10 +317,9 @@ etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 
 		/* does this entry need to be replaced? */
 		if (oebe->ebe_type == EBE_DYNAMIC &&
-		    !eb_port_eq(eb, oebe->ebe_port, port)) {
+		    !eb_port_eq(eb, oebe->ebe_port, port))
 			new = 1;
-			ebe_take(oebe);
-		} else
+		else
 			oebe = NULL;
 	}
 	smr_read_leave();
@@ -352,15 +351,30 @@ etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 
 	mtx_enter(&eb->eb_lock);
 	num = eb->eb_num + (oebe == NULL);
-	if (num <= eb->eb_max && ebt_insert(eb, nebe) == oebe) {
-		/* we won, do the update */
+	/*
+	 * ebt_insert() below may retrieve a different
+	 * conflicting oebe, than we got earlier, when
+	 * code was not running under ->eb_lock protection.
+	 * We forget the old one here, so we can resolve
+	 * current conflict properly.
+	 */
+	oebe = NULL;
+	if (num <= eb->eb_max) {
 		ebl_insert(ebl, nebe);
+		oebe = ebt_insert(eb, nebe);
 
 		if (oebe != NULL) {
+			/* resolve conflict */
 			ebl_remove(ebl, oebe);
 			ebt_replace(eb, oebe, nebe);
 
-			/* take the table reference away */
+			/* grab reference for ebe_rele() */
+			ebe_take(oebe);
+
+			/*
+			 * take the table reference away
+			 * (the reference we got from refcnt_init())
+			 */
 			if (refcnt_rele(&oebe->ebe_refs)) {
 				panic("%s: eb %p oebe %p refcnt",
 				    __func__, eb, oebe);
@@ -382,9 +396,10 @@ etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 
 	if (oebe != NULL) {
 		/*
-		 * the old entry could be referenced in
-		 * multiple places, including an smr read
-		 * section, so release it properly.
+		 * the old entry we got from ebt_insert()
+		 * could be referenced in multiple places,
+		 * including an smr read section, so release
+		 * it properly.
 		 */
 		ebe_rele(oebe);
 	}
