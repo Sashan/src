@@ -364,12 +364,12 @@ etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 			 * may remove oebe from table. if this happens,
 			 * then cebe is NULL.
 			 */
-			if ((cebe == NULL) && (oebe != NULL)) {
+			if ((cebe != NULL) && (oebe == cebe)) {
 				ebl_remove(ebl, oebe);
 				ebt_replace(eb, oebe, nebe);
 
 				/* take the table reference away */
-				if (refcnt_rele(&oebe->ebe_refs)) {
+				if (refcnt_rele(&cebe->ebe_refs)) {
 					panic("%s: eb %p oebe %p refcnt",
 					    __func__, eb, oebe);
 				}
