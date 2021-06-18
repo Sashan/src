@@ -288,7 +288,7 @@ void
 etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 {
 	struct eb_list *ebl;
-	struct eb_entry *oebe, *nebe, *cebe;;
+	struct eb_entry *oebe, *nebe, *cebe;
 	unsigned int num;
 	void *nport;
 	int new = 0;
@@ -348,37 +348,20 @@ etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 	if (num <= eb->eb_max) {
 		cebe = ebt_insert(eb, nebe);
 
-		if ((cebe == NULL) || (cebe == oebe)) {
+		if (cebe == NULL) {
+			/* nebe got inserted without conflict */
+			eb->eb_num++;
+			ebl_insert(ebl, nebe);
+			nebe = NULL;
+		} else if ((oebe != NULL) && (oebe == cebe)) {
 			/* we won, do the update */
 			ebl_insert(ebl, nebe);
-
-			/*
-			 * to distinguish insertion from replace, we need to
-			 * check whether we found oldebe. If there was no oebe,
-			 * just turn it into non-NULL, so we can tell difference
-			 * between insert and update.
-			 */
-			if (oebe == NULL)
-				oebe = (void *)-1;
-
-			if ((cebe != NULL) && (oebe == cebe)) {
-				/*
-				 * conflicting ebe (cebe) is same as old one (oebe),
-				 * we do replace.
-				 */
-				ebl_remove(ebl, cebe);
-				ebt_replace(eb, cebe, nebe);
-				nebe = NULL;
-				/* cebe owns the tables ref now */
-			} else if (cebe != NULL) {
-				/* we lost the race to update existing entry */
-				cebe = NULL;
-			} else {
-				/* nebe got inserted */
-				nebe = NULL;
-			}
+			ebl_remove(ebl, cebe);
+			ebt_replace(eb, cebe, nebe);
+			nebe = NULL;
+		} else {
+			cebe = NULL;
 		}
-		eb->eb_num = num;
 	}
 	mtx_leave(&eb->eb_lock);
 
