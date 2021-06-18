@@ -295,7 +295,7 @@ void
 etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 {
 	struct eb_list *ebl;
-	struct eb_entry *oebe, *nebe;
+	struct eb_entry *oebe, *nebe, *cebe;;
 	unsigned int num;
 	void *nport;
 	int new = 0;
@@ -317,9 +317,10 @@ etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 
 		/* does this entry need to be replaced? */
 		if (oebe->ebe_type == EBE_DYNAMIC &&
-		    !eb_port_eq(eb, oebe->ebe_port, port))
+		    !eb_port_eq(eb, oebe->ebe_port, port)) {
 			new = 1;
-		else
+			ebe_take(oebe);
+		} else
 			oebe = NULL;
 	}
 	smr_read_leave();
@@ -351,38 +352,31 @@ etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 
 	mtx_enter(&eb->eb_lock);
 	num = eb->eb_num + (oebe == NULL);
-	/*
-	 * ebt_insert() below may retrieve a different
-	 * conflicting oebe, than we got earlier, when
-	 * code was not running under ->eb_lock protection.
-	 * We forget the old one here, so we can resolve
-	 * current conflict properly.
-	 */
-	oebe = NULL;
 	if (num <= eb->eb_max) {
-		ebl_insert(ebl, nebe);
-		oebe = ebt_insert(eb, nebe);
+		cebe = ebt_insert(eb, nebe);
 
-		if (oebe != NULL) {
-			/* resolve conflict */
-			ebl_remove(ebl, oebe);
-			ebt_replace(eb, oebe, nebe);
-
-			/* grab reference for ebe_rele() */
-			ebe_take(oebe);
+		if ((cebe == NULL) || (cebe == oebe)) {
+			/* we won, do the update */
+			ebl_insert(ebl, nebe);
 
 			/*
-			 * take the table reference away
-			 * (the reference we got from refcnt_init())
+			 * there is a potential race with time, which
+			 * may remove oebe from table. if this happens,
+			 * then cebe is NULL.
 			 */
-			if (refcnt_rele(&oebe->ebe_refs)) {
-				panic("%s: eb %p oebe %p refcnt",
-				    __func__, eb, oebe);
-			}
-		}
+			if ((cebe == NULL) && (oebe != NULL)) {
+				ebl_remove(ebl, oebe);
+				ebt_replace(eb, oebe, nebe);
 
-		nebe = NULL;
-		eb->eb_num = num;
+				/* take the table reference away */
+				if (refcnt_rele(&oebe->ebe_refs)) {
+					panic("%s: eb %p oebe %p refcnt",
+					    __func__, eb, oebe);
+				}
+			}
+			nebe = NULL;
+			eb->eb_num = num;
+		}
 	}
 	mtx_leave(&eb->eb_lock);
 
@@ -396,10 +390,9 @@ etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 
 	if (oebe != NULL) {
 		/*
-		 * the old entry we got from ebt_insert()
-		 * could be referenced in multiple places,
-		 * including an smr read section, so release
-		 * it properly.
+		 * the old entry could be referenced in
+		 * multiple places, including an smr read
+		 * section, so release it properly.
 		 */
 		ebe_rele(oebe);
 	}
