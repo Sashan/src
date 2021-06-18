@@ -44,7 +44,6 @@
 
 #include <net/if_etherbridge.h>
 
-static inline void	ebe_take(struct eb_entry *);
 static inline void	ebe_rele(struct eb_entry *);
 static void		ebe_free(void *);
 
@@ -232,12 +231,6 @@ ebt_remove(struct etherbridge *eb, struct eb_entry *ebe)
 	RBT_REMOVE(eb_tree, &eb->eb_tree, ebe);
 }
 
-static inline void
-ebe_take(struct eb_entry *ebe)
-{
-	refcnt_take(&ebe->ebe_refs);
-}
-
 static void
 ebe_rele(struct eb_entry *ebe)
 {
@@ -317,10 +310,9 @@ etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 
 		/* does this entry need to be replaced? */
 		if (oebe->ebe_type == EBE_DYNAMIC &&
-		    !eb_port_eq(eb, oebe->ebe_port, port)) {
+		    !eb_port_eq(eb, oebe->ebe_port, port))
 			new = 1;
-			ebe_take(oebe);
-		} else
+		else
 			oebe = NULL;
 	}
 	smr_read_leave();
@@ -360,23 +352,34 @@ etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 			ebl_insert(ebl, nebe);
 
 			/*
-			 * there is a potential race with time, which
-			 * may remove oebe from table. if this happens,
-			 * then cebe is NULL.
+			 * to distinguish insertion from replace, we need to
+			 * check whether we found oldebe. If there was no oebe,
+			 * just turn it into non-NULL, so we can tell difference
+			 * between insert and update.
 			 */
+			if (oebe == NULL)
+				oebe = (void *)-1;
+
 			if ((cebe != NULL) && (oebe == cebe)) {
+				/*
+				 * conflicting ebe (cebe) is same as old one (oebe),
+				 * we do replace.
+				 */
 				ebl_remove(ebl, oebe);
 				ebt_replace(eb, oebe, nebe);
-
-				/* take the table reference away */
-				if (refcnt_rele(&cebe->ebe_refs)) {
-					panic("%s: eb %p oebe %p refcnt",
-					    __func__, eb, oebe);
-				}
+				/* oebe owns the tables ref now */
+			} else {
+				/*
+				 * world has changed, while we were waiting
+				 * for mutex, the old ebe is no longer valid,
+				 * just forget we ever seen it.
+				 */
+				oebe = NULL;
 			}
+
 			nebe = NULL;
-			eb->eb_num = num;
 		}
+		eb->eb_num = num;
 	}
 	mtx_leave(&eb->eb_lock);
 
