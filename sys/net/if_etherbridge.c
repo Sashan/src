@@ -344,6 +344,7 @@ etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 
 	mtx_enter(&eb->eb_lock);
 	num = eb->eb_num + (oebe == NULL);
+	cebe = NULL;
 	if (num <= eb->eb_max) {
 		cebe = ebt_insert(eb, nebe);
 
@@ -365,23 +366,20 @@ etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 				 * conflicting ebe (cebe) is same as old one (oebe),
 				 * we do replace.
 				 */
-				ebl_remove(ebl, oebe);
-				ebt_replace(eb, oebe, nebe);
-				/* oebe owns the tables ref now */
+				ebl_remove(ebl, cebe);
+				ebt_replace(eb, cebe, nebe);
+				nebe = NULL;
+				/* cebe owns the tables ref now */
+			} else if (cebe != NULL) {
+				/* we lost the race to update existing entry */
+				cebe = NULL;
 			} else {
-				/*
-				 * world has changed, while we were waiting
-				 * for mutex, the old ebe is no longer valid,
-				 * just forget we ever seen it.
-				 */
-				oebe = NULL;
+				/* nebe got inserted */
+				nebe = NULL;
 			}
-
-			nebe = NULL;
 		}
 		eb->eb_num = num;
-	} else
-		oebe = NULL;
+	}
 	mtx_leave(&eb->eb_lock);
 
 	if (nebe != NULL) {
@@ -392,13 +390,13 @@ etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 		ebe_free(nebe);
 	}
 
-	if (oebe != NULL) {
+	if (cebe != NULL) {
 		/*
 		 * the old entry could be referenced in
 		 * multiple places, including an smr read
 		 * section, so release it properly.
 		 */
-		ebe_rele(oebe);
+		ebe_rele(cebe);
 	}
 }
 
