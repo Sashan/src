@@ -380,7 +380,8 @@ etherbridge_map(struct etherbridge *eb, void *port, uint64_t eba)
 			nebe = NULL;
 		}
 		eb->eb_num = num;
-	}
+	} else
+		oebe = NULL;
 	mtx_leave(&eb->eb_lock);
 
 	if (nebe != NULL) {
