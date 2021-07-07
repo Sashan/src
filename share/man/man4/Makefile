@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.800 2021/06/13 02:45:23 jsg Exp $
+#	$OpenBSD: Makefile,v 1.803 2021/06/29 12:51:18 patrick Exp $
 
 MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	acpi.4 acpiac.4 acpials.4 acpiasus.4 acpibat.4 \
@@ -27,6 +27,7 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	cduart.4 cfxga.4 \
 	ch.4 chvgpio.4 ciphy.4 ciss.4 clcs.4 clct.4 cmpci.4 \
 	com.4 cue.4 cwfg.4 cy.4 cz.4 \
+	dapmic.4 \
 	dc.4 dcphy.4 ddb.4 de.4 diskmap.4 divert.4 drm.4 dsxrtc.4 dt.4 \
 	dwctwo.4 dwdog.4 dwge.4 dwgpio.4 dwiic.4 dwmmc.4 dwpcie.4 dwxe.4 \
 	eap.4 ec.4 eephy.4 ef.4 eg.4 ehci.4 eisa.4 el.4 em.4 emc.4 gcu.4 \
@@ -57,8 +58,8 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	mvtemp.4 mvsw.4 mvuart.4 myx.4 \
 	ne.4 neo.4 nep.4 netintro.4 nfe.4 nge.4 nmea.4 \
 	nsclpcsio.4 nsgphy.4 nsphy.4 nsphyter.4 null.4 nviic.4 nvme.4 nvt.4 \
-	oce.4 ohci.4 onewire.4 oosiop.4 openprom.4 options.4 osiop.4 otus.4 \
-	owid.4 owctr.4 owsbm.4 owtemp.4 \
+	oce.4 ociic.4 ohci.4 onewire.4 oosiop.4 openprom.4 options.4 \
+	osiop.4 otus.4 owid.4 owctr.4 owsbm.4 owtemp.4 \
 	pair.4 pcagpio.4 pcaled.4 pcamux.4 \
 	pcdisplay.4 pchb.4 pchtemp.4 pci.4 pcib.4 \
 	pcfadc.4 pcfiic.4 pcfrtc.4 pchgpio.4 pciide.4 pckbc.4 pckbd.4 \
@@ -70,7 +71,7 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	radio.4 ral.4 random.4 rdomain.4 rd.4 rdac.4 re.4 rdcphy.4 rgephy.4 \
 	rge.4 ricohrtc.4 rkanxdp.4 rkclock.4 rkdrm.4 rkdwhdmi.4 rkdwusb.4 \
 	rkemmcphy.4 rkgpio.4 rkgrf.4 rkiic.4 rkiis.4 rkpcie.4 rkpinctrl.4 \
-	rkpmic.4 rkpwm.4 rkrng.4 rktemp.4 rkvop.4 \
+	rkpmic.4 rkpwm.4 rkrng.4 rktcphy.4 rktemp.4 rkvop.4 \
 	rl.4 rlphy.4 route.4 rsu.4 rtsx.4 rum.4 run.4 rtw.4 rtwn.4 \
 	safe.4 safte.4 sbus.4 schsio.4 scsi.4 sd.4 \
 	sdmmc.4 sdhc.4 se.4 ses.4 sf.4 sili.4 \
@@ -79,7 +80,7 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	ssdfb.4 st.4 ste.4 stge.4 sti.4 stp.4 sv.4 switch.4 sxiccmu.4 \
 	sxidog.4 sximmc.4 sxipio.4 sxipwm.4 sxirsb.4 sxirtc.4 sxisid.4 \
 	sxisyscon.4 sxitemp.4 sxitwi.4 sym.4 sypwr.4 syscon.4 \
-	tcic.4 tcp.4 tcpci.4 termios.4 tht.4 ti.4 tipmic.4 tl.4 \
+	tcic.4 tcp.4 tcpci.4 termios.4 tht.4 ti.4 tipmic.4 titmp.4 tl.4 \
 	tlphy.4 thmc.4 tpm.4 tpmr.4 tqphy.4 trm.4 trunk.4 tsl.4 tty.4 \
 	tun.4 tap.4 twe.4 \
 	txp.4 txphy.4 uaudio.4 uark.4 uath.4 ubcmtp.4 uberry.4 ubsa.4 \

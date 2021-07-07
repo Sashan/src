@@ -1,4 +1,4 @@
-/*	$OpenBSD: sbi.c,v 1.4 2021/05/12 01:20:52 jsg Exp $	*/
+/*	$OpenBSD: sbi.c,v 1.6 2021/07/02 08:44:37 kettenis Exp $	*/
 
 /*-
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
@@ -43,10 +43,6 @@ u_long sbi_spec_version;
 u_long sbi_impl_id;
 u_long sbi_impl_version;
 
-extern register_t mvendorid;
-extern register_t mimpid;
-extern register_t marchid;
-
 static struct sbi_ret
 sbi_get_spec_version(void)
 {
@@ -63,25 +59,6 @@ static struct sbi_ret
 sbi_get_impl_version(void)
 {
 	return (SBI_CALL0(SBI_EXT_ID_BASE, SBI_BASE_GET_IMPL_VERSION));
-}
-
-static struct sbi_ret
-sbi_get_mvendorid(void)
-{
-	return (SBI_CALL0(SBI_EXT_ID_BASE, SBI_BASE_GET_MVENDORID));
-}
-
-
-static struct sbi_ret
-sbi_get_marchid(void)
-{
-	return (SBI_CALL0(SBI_EXT_ID_BASE, SBI_BASE_GET_MARCHID));
-}
-
-static struct sbi_ret
-sbi_get_mimpid(void)
-{
-	return (SBI_CALL0(SBI_EXT_ID_BASE, SBI_BASE_GET_MIMPID));
 }
 
 void
@@ -117,6 +94,36 @@ sbi_print_version(void)
 	printf("SBI Specification Version: %u.%u\n", major, minor);
 }
 
+#ifdef MULTIPROCESSOR
+
+int
+sbi_hsm_hart_start(u_long hart, u_long start_addr, u_long priv)
+{
+	struct sbi_ret ret;
+
+	ret = SBI_CALL3(SBI_EXT_ID_HSM, SBI_HSM_HART_START, hart, start_addr,
+	    priv);
+	return (ret.error != 0 ? (int)ret.error : 0);
+}
+
+void
+sbi_hsm_hart_stop(void)
+{
+	(void)SBI_CALL0(SBI_EXT_ID_HSM, SBI_HSM_HART_STOP);
+}
+
+int
+sbi_hsm_hart_status(u_long hart)
+{
+	struct sbi_ret ret;
+
+	ret = SBI_CALL1(SBI_EXT_ID_HSM, SBI_HSM_HART_STATUS, hart);
+
+	return (ret.error != 0 ? (int)ret.error : (int)ret.value);
+}
+
+#endif
+
 void
 sbi_init(void)
 {
@@ -137,11 +144,6 @@ sbi_init(void)
 	sbi_spec_version = sret.value;
 	sbi_impl_id = sbi_get_impl_id().value;
 	sbi_impl_version = sbi_get_impl_version().value;
-
-	/* Set the hardware implementation info. */
-	mvendorid = sbi_get_mvendorid().value;
-	marchid = sbi_get_marchid().value;
-	mimpid = sbi_get_mimpid().value;
 
 	/*
 	 * Probe for legacy extensions. Currently we rely on all of them

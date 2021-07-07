@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2.c,v 1.323 2021/06/11 13:11:20 tobhe Exp $	*/
+/*	$OpenBSD: ikev2.c,v 1.325 2021/06/29 15:39:20 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -805,6 +805,7 @@ ikev2_auth_verify(struct iked *env, struct iked_sa *sa)
 		    ikev2_auth_map),
 		    print_map(ikeauth.auth_method,
 		    ikev2_auth_map));
+		ikev2_send_auth_failed(env, sa);
 		return (-1);
 	}
 	ikeauth.auth_method = sa->sa_peerauth.id_type;
@@ -813,6 +814,7 @@ ikev2_auth_verify(struct iked *env, struct iked_sa *sa)
 	    sa->sa_hdr.sh_initiator)) == NULL) {
 		log_debug("%s: failed to get auth data",
 		    __func__);
+		ikev2_send_auth_failed(env, sa);
 		return (-1);
 	}
 
@@ -7063,25 +7065,25 @@ ikev2_cp_fixaddr(struct iked_sa *sa, struct iked_addr *addr,
 		return (-1);
 	switch (addr->addr_af) {
 	case AF_INET:
+		in4 = (struct sockaddr_in *)&addr->addr;
+		if (in4->sin_addr.s_addr)
+			return (-2);
 		naddr = (sa->sa_cp == IKEV2_CP_REQUEST) ?
 		    sa->sa_addrpool : sa->sa_cp_addr;
 		if (naddr == NULL)
 			return (-1);
-		in4 = (struct sockaddr_in *)&addr->addr;
-		if (in4->sin_addr.s_addr)
-			return (-2);
 		memcpy(patched, naddr, sizeof(*patched));
 		patched->addr_net = 0;
 		patched->addr_mask = 32;
 		break;
 	case AF_INET6:
+		in6 = (struct sockaddr_in6 *)&addr->addr;
+		if (!IN6_IS_ADDR_UNSPECIFIED(&in6->sin6_addr))
+			return (-2);
 		naddr = (sa->sa_cp == IKEV2_CP_REQUEST) ?
 		    sa->sa_addrpool6 : sa->sa_cp_addr6;
 		if (naddr == NULL)
 			return (-1);
-		in6 = (struct sockaddr_in6 *)&addr->addr;
-		if (!IN6_IS_ADDR_UNSPECIFIED(&in6->sin6_addr))
-			return (-2);
 		memcpy(patched, naddr, sizeof(*patched));
 		patched->addr_net = 0;
 		patched->addr_mask = 128;

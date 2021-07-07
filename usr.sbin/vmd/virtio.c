@@ -1,4 +1,4 @@
-/*	$OpenBSD: virtio.c,v 1.88 2021/06/11 21:46:00 dv Exp $	*/
+/*	$OpenBSD: virtio.c,v 1.91 2021/06/21 02:38:18 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -40,13 +40,12 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "atomicio.h"
 #include "pci.h"
+#include "vioscsi.h"
+#include "virtio.h"
 #include "vmd.h"
 #include "vmm.h"
-#include "virtio.h"
-#include "vioscsi.h"
-#include "loadfile.h"
-#include "atomicio.h"
 
 extern char *__progname;
 struct viornd_dev viornd;
@@ -518,6 +517,11 @@ vioblk_notifyq(struct vioblk_dev *dev)
 		}
 
 		/* Read command from descriptor ring */
+		if (cmd_desc->flags & VRING_DESC_F_WRITE) {
+			log_warnx("vioblk: unexpected writable cmd descriptor "
+			    "%d", cmd_desc_idx);
+			goto out;
+		}
 		if (read_mem(cmd_desc->addr, &cmd, sizeof(cmd))) {
 			log_warnx("vioblk: command read_mem error @ 0x%llx",
 			    cmd_desc->addr);
@@ -541,6 +545,13 @@ vioblk_notifyq(struct vioblk_dev *dev)
 			do {
 				struct ioinfo *info;
 				const uint8_t *secdata;
+
+				if ((secdata_desc->flags & VRING_DESC_F_WRITE)
+				    == 0) {
+					log_warnx("vioblk: unwritable data "
+					    "descriptor %d", secdata_desc_idx);
+					goto out;
+				}
 
 				info = vioblk_start_read(dev,
 				    cmd.sector + secbias, secdata_desc->len);
@@ -608,6 +619,13 @@ vioblk_notifyq(struct vioblk_dev *dev)
 			do {
 				struct ioinfo *info;
 
+				if (secdata_desc->flags & VRING_DESC_F_WRITE) {
+					log_warnx("wr vioblk: unexpected "
+					    "writable data descriptor %d",
+					    secdata_desc_idx);
+					goto out;
+				}
+
 				info = vioblk_start_write(dev,
 				    cmd.sector + secbias,
 				    secdata_desc->addr, secdata_desc->len);
@@ -655,7 +673,35 @@ vioblk_notifyq(struct vioblk_dev *dev)
 			ds_desc_idx = cmd_desc->next & VIOBLK_QUEUE_MASK;
 			ds_desc = &desc[ds_desc_idx];
 
-			ds = VIRTIO_BLK_S_OK;
+			ds = VIRTIO_BLK_S_UNSUPP;
+			break;
+		case VIRTIO_BLK_T_GET_ID:
+			secdata_desc_idx = cmd_desc->next & VIOBLK_QUEUE_MASK;
+			secdata_desc = &desc[secdata_desc_idx];
+
+			/*
+			 * We don't support this command yet. While it's not
+			 * officially part of the virtio spec (will be in v1.2)
+			 * there's no feature to negotiate. Linux drivers will
+			 * often send this command regardless.
+			 *
+			 * When the command is received, it should appear as a
+			 * chain of 3 descriptors, similar to the IN/OUT
+			 * commands. The middle descriptor should have have a
+			 * length of VIRTIO_BLK_ID_BYTES bytes.
+			 */
+			if ((secdata_desc->flags & VRING_DESC_F_NEXT) == 0) {
+				log_warnx("id vioblk: unchained vioblk data "
+				    "descriptor received (idx %d)",
+				    cmd_desc_idx);
+				goto out;
+			}
+
+			/* Skip the data descriptor. */
+			ds_desc_idx = secdata_desc->next & VIOBLK_QUEUE_MASK;
+			ds_desc = &desc[ds_desc_idx];
+
+			ds = VIRTIO_BLK_S_UNSUPP;
 			break;
 		default:
 			log_warnx("%s: unsupported command 0x%x", __func__,
@@ -667,6 +713,11 @@ vioblk_notifyq(struct vioblk_dev *dev)
 			break;
 		}
 
+		if ((ds_desc->flags & VRING_DESC_F_WRITE) == 0) {
+			log_warnx("%s: ds descriptor %d unwritable", __func__,
+			    ds_desc_idx);
+			goto out;
+		}
 		if (write_mem(ds_desc->addr, &ds, ds_desc->len)) {
 			log_warnx("%s: can't write device status data @ 0x%llx",
 			    __func__, ds_desc->addr);
@@ -1044,6 +1095,13 @@ vionet_update_qs(struct vionet_dev *dev)
 }
 
 /*
+ * vionet_enq_rx
+ *
+ * Take a given packet from the host-side tap and copy it into the guest's
+ * buffers utilizing the rx virtio ring. If the packet length is invalid
+ * (too small or too large) or if there are not enough buffers available,
+ * the packet is dropped.
+ *
  * Must be called with dev->mutex acquired.
  */
 int
@@ -1051,23 +1109,24 @@ vionet_enq_rx(struct vionet_dev *dev, char *pkt, size_t sz, int *spc)
 {
 	uint64_t q_gpa;
 	uint32_t vr_sz;
-	uint16_t idx, pkt_desc_idx, hdr_desc_idx;
-	ptrdiff_t off;
-	int ret;
-	char *vr;
-	size_t rem;
+	uint16_t dxx, idx, hdr_desc_idx, chain_hdr_idx;
+	int ret = 0;
+	char *vr = NULL;
+	size_t bufsz = 0, off = 0, pkt_offset = 0, chunk_size = 0;
+	size_t chain_len = 0;
 	struct vring_desc *desc, *pkt_desc, *hdr_desc;
 	struct vring_avail *avail;
 	struct vring_used *used;
 	struct vring_used_elem *ue;
 	struct virtio_net_hdr hdr;
+	size_t hdr_sz;
 
-	ret = 0;
-
-	if (sz < 1 || sz > IP_MAXPACKET + ETHER_HDR_LEN) {
+	if (sz < VIONET_MIN_TXLEN || sz > VIONET_MAX_TXLEN) {
 		log_warn("%s: invalid packet size", __func__);
 		return (0);
 	}
+
+	hdr_sz = sizeof(hdr);
 
 	if (!(dev->cfg.device_status & VIRTIO_CONFIG_DEVICE_STATUS_DRIVER_OK))
 		return ret;
@@ -1093,90 +1152,91 @@ vionet_enq_rx(struct vionet_dev *dev, char *pkt, size_t sz, int *spc)
 	used = (struct vring_used *)(vr + dev->vq[RXQ].vq_usedoffset);
 
 	idx = dev->vq[RXQ].last_avail & VIONET_QUEUE_MASK;
-
 	if ((dev->vq[RXQ].notified_avail & VIONET_QUEUE_MASK) == idx) {
-		log_debug("vionet queue notify - no space, dropping packet");
+		log_debug("%s: insufficient available buffer capacity, "
+		    "dropping packet.", __func__);
 		goto out;
 	}
 
 	hdr_desc_idx = avail->ring[idx] & VIONET_QUEUE_MASK;
 	hdr_desc = &desc[hdr_desc_idx];
 
-	pkt_desc_idx = hdr_desc->next & VIONET_QUEUE_MASK;
-	pkt_desc = &desc[pkt_desc_idx];
+	dxx = hdr_desc_idx;
+	chain_hdr_idx = dxx;
+	chain_len = 0;
 
-	/* Set up the virtio header (written first, before the packet data) */
-	memset(&hdr, 0, sizeof(struct virtio_net_hdr));
-	hdr.hdr_len = sizeof(struct virtio_net_hdr);
-
-	/* Check size of header descriptor */
-	if (hdr_desc->len < sizeof(struct virtio_net_hdr)) {
-		log_warnx("%s: invalid header descriptor (too small)",
-		    __func__);
-		goto out;
-	}
-
-	/* Write out virtio header */
-	if (write_mem(hdr_desc->addr, &hdr, sizeof(struct virtio_net_hdr))) {
-	    log_warnx("vionet: rx enq header write_mem error @ "
-		    "0x%llx", hdr_desc->addr);
-		goto out;
-	}
-
-	/*
-	 * Compute remaining space in the first (header) descriptor, and
-	 * copy the packet data after if space is available. Otherwise,
-	 * copy to the pkt_desc descriptor.
-	 */
-	rem = hdr_desc->len - sizeof(struct virtio_net_hdr);
-
-	if (rem >= sz) {
-		if (write_mem(hdr_desc->addr + sizeof(struct virtio_net_hdr),
-			pkt, sz)) {
-			log_warnx("vionet: rx enq packet write_mem error @ "
-			    "0x%llx", pkt_desc->addr);
-			goto out;
-		}
-	} else {
-		/* Fallback to pkt_desc descriptor */
-		if (pkt_desc->len >= sz) {
-			/* Must be not readable */
-			if ((pkt_desc->flags & VRING_DESC_F_WRITE) == 0) {
-				log_warnx("unexpected readable rx desc %d",
-				    pkt_desc_idx);
-				goto out;
-			}
-
-			/* Write packet to descriptor ring */
-			if (write_mem(pkt_desc->addr, pkt, sz)) {
-				log_warnx("vionet: rx enq packet write_mem "
-				    "error @ 0x%llx", pkt_desc->addr);
-				goto out;
-			}
-		} else {
-			log_warnx("%s: descriptor too small for packet data",
+	/* Process the descriptor and walk any potential chain. */
+	do {
+		off = 0;
+		pkt_desc = &desc[dxx];
+		if (!(pkt_desc->flags & VRING_DESC_F_WRITE)) {
+			log_warnx("%s: invalid descriptor, not writable",
 			    __func__);
 			goto out;
 		}
+
+		/* How much data do we get to write? */
+		if (sz - bufsz > pkt_desc->len)
+			chunk_size = pkt_desc->len;
+		else
+			chunk_size = sz - bufsz;
+
+		if (chain_len == 0) {
+			off = hdr_sz;
+			if (chunk_size == pkt_desc->len)
+				chunk_size -= off;
+		}
+
+		/* Write a chunk of data if we need to */
+		if (chunk_size && write_mem(pkt_desc->addr + off,
+			pkt + pkt_offset, chunk_size)) {
+			log_warnx("%s: failed to write to buffer 0x%llx",
+			    __func__, pkt_desc->addr);
+			goto out;
+		}
+
+		chain_len += chunk_size + off;
+		bufsz += chunk_size;
+		pkt_offset += chunk_size;
+
+		dxx = pkt_desc->next & VIONET_QUEUE_MASK;
+	} while (bufsz < sz && pkt_desc->flags & VRING_DESC_F_NEXT);
+
+	/* Update the list of used buffers. */
+	ue = &used->ring[(used->idx) & VIONET_QUEUE_MASK];
+	ue->id = chain_hdr_idx;
+	ue->len = chain_len;
+	off = ((char *)ue - vr);
+	if (write_mem(q_gpa + off, ue, sizeof(*ue))) {
+		log_warnx("%s: error updating rx used ring", __func__);
+		goto out;
 	}
+
+	/* Move our marker in the ring...*/
+	used->idx++;
+	dev->vq[RXQ].last_avail = (dev->vq[RXQ].last_avail + 1) &
+	    VIONET_QUEUE_MASK;
+
+	/* Prepend the virtio net header in the first buffer. */
+	memset(&hdr, 0, sizeof(hdr));
+	hdr.hdr_len = hdr_sz;
+	if (write_mem(hdr_desc->addr, &hdr, hdr_sz)) {
+	    log_warnx("vionet: rx enq header write_mem error @ 0x%llx",
+		hdr_desc->addr);
+		goto out;
+	}
+
+	/* Update the index field in the used ring. This must be done last. */
+	dev->cfg.isr_status = 1;
+	off = (char *)&used->idx - vr;
+	*spc = (dev->vq[RXQ].notified_avail - dev->vq[RXQ].last_avail) &
+	    VIONET_QUEUE_MASK;
+
+	if (write_mem(q_gpa + off, &used->idx, sizeof(used->idx)))
+		log_warnx("vionet: error writing vio ring");
 
 	ret = 1;
-	dev->cfg.isr_status = 1;
-	ue = &used->ring[used->idx & VIONET_QUEUE_MASK];
-	ue->id = hdr_desc_idx;
-	ue->len = sz + sizeof(struct virtio_net_hdr);
-	used->idx++;
-	dev->vq[RXQ].last_avail++;
-	*spc = dev->vq[RXQ].notified_avail - dev->vq[RXQ].last_avail;
 
-	off = (char *)ue - vr;
-	if (write_mem(q_gpa + off, ue, sizeof *ue))
-		log_warnx("vionet: error writing vio ring");
-	else {
-		off = (char *)&used->idx - vr;
-		if (write_mem(q_gpa + off, &used->idx, sizeof used->idx))
-			log_warnx("vionet: error writing vio ring");
-	}
 out:
 	free(vr);
 	return (ret);
@@ -1439,11 +1499,11 @@ vionet_notify_tx(struct vionet_dev *dev)
 		/* Remove virtio header descriptor len */
 		pktsz -= hdr_desc->len;
 
-		/* Only allow buffer len < max IP packet + Ethernet header */
-		if (pktsz > IP_MAXPACKET + ETHER_HDR_LEN) {
+		/* Drop packets violating device MTU-based limits */
+		if (pktsz < VIONET_MIN_TXLEN || pktsz > VIONET_MAX_TXLEN) {
 			log_warnx("%s: invalid packet size %lu", __func__,
 			    pktsz);
-			goto out;
+			goto drop_packet;
 		}
 		pkt = malloc(pktsz);
 		if (pkt == NULL) {
@@ -1524,6 +1584,7 @@ vionet_notify_tx(struct vionet_dev *dev)
 			goto out;
 		}
 
+	drop_packet:
 		ret = 1;
 		dev->cfg.isr_status = 1;
 		used->ring[used->idx & VIONET_QUEUE_MASK].id = hdr_desc_idx;
@@ -1865,6 +1926,8 @@ virtio_init(struct vmd_vm *vm, int child_cdrom,
 			    sizeof(struct vring_desc) * VIONET_QUEUE_SIZE
 			    + sizeof(uint16_t) * (2 + VIONET_QUEUE_SIZE));
 			vionet[i].vq[RXQ].last_avail = 0;
+			vionet[i].vq[RXQ].notified_avail = 0;
+
 			vionet[i].vq[TXQ].qs = VIONET_QUEUE_SIZE;
 			vionet[i].vq[TXQ].vq_availoffset =
 			    sizeof(struct vring_desc) * VIONET_QUEUE_SIZE;

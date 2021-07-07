@@ -1,4 +1,4 @@
-/*	$OpenBSD: sig_machdep.c,v 1.5 2021/05/20 04:22:33 drahn Exp $	*/
+/*	$OpenBSD: sig_machdep.c,v 1.8 2021/06/30 22:20:56 kettenis Exp $	*/
 
 /*
  * Copyright (c) 1990 The Regents of the University of California.
@@ -137,11 +137,13 @@ sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip)
 	/* make the stack aligned */
 	fp = (struct sigframe *)STACKALIGN(fp);
 
+	/* Save FPU state to PCB if necessary. */
+	if (p->p_addr->u_pcb.pcb_flags & PCB_FPU)
+		fpu_save(p, tf);
+
 	/* Build stack frame for signal trampoline. */
 	bzero(&frame, sizeof(frame));
 	frame.sf_signum = sig;
-
-	//dumpframe ("before", tf, fp);
 
 	/* Save register context. */
 	for (i=0; i < 7; i++)
@@ -158,12 +160,11 @@ sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip)
 	/* Save signal mask. */
 	frame.sf_sc.sc_mask = mask;
 
+	/* Copy the saved FPU state into the frame if necessary. */
 	if (p->p_addr->u_pcb.pcb_flags & PCB_FPU) {
-		fpu_save(p, tf);
 		fpreg = &p->p_addr->u_pcb.pcb_fpstate;
-		for (i=0; i < 32; i++) {
+		for (i = 0; i < 32; i++)
 			frame.sf_sc.sc_f[i] = fpreg->fp_f[i];
-		}
 		frame.sf_sc.sc_fcsr = fpreg->fp_fcsr;
 	}
 
@@ -252,19 +253,17 @@ sys_sigreturn(struct proc *p, void *v, register_t *retval)
 	tf->tf_tp = ksc.sc_tp;
 	tf->tf_sepc = ksc.sc_sepc;
 
+	/* Write saved FPU state back to PCB if necessary. */
 	if (p->p_addr->u_pcb.pcb_flags & PCB_FPU) {
 		fpreg = &p->p_addr->u_pcb.pcb_fpstate;
-		for (i=0; i < 32; i++) {
+		for (i = 0; i < 32; i++)
 			fpreg->fp_f[i] = ksc.sc_f[i];
-		}
 		fpreg->fp_fcsr = ksc.sc_fcsr;
 
-		/* force disable and discard FPU contents */
-		tf->tf_sstatus &= ~SSTATUS_FS_MASK; /* disable fpu */
-		fpu_discard(p);
+		/* drop FPU state */
+		tf->tf_sstatus &= ~SSTATUS_FS_MASK;
+		tf->tf_sstatus |= SSTATUS_FS_OFF;
 	}
-
-	//dumpframe ("after", tf, 0);
 
 	/* Restore signal mask. */
 	p->p_sigmask = ksc.sc_mask & ~sigcantmask;

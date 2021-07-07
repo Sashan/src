@@ -1,4 +1,4 @@
-/*	$OpenBSD: gpt.c,v 1.29 2021/06/14 12:46:47 krw Exp $	*/
+/*	$OpenBSD: gpt.c,v 1.34 2021/06/28 19:50:30 krw Exp $	*/
 /*
  * Copyright (c) 2015 Markus Muller <mmu@grummel.net>
  * Copyright (c) 2015 Kenneth R Westerback <krw@openbsd.org>
@@ -49,7 +49,7 @@ int			  add_partition(const uint8_t *, const char *, uint64_t);
 int			  get_header(off_t);
 int			  get_partition_table(void);
 int			  init_gh(void);
-int			  init_gp(void);
+int			  init_gp(int, uint32_t);
 
 int
 get_header(off_t where)
@@ -334,8 +334,8 @@ add_partition(const uint8_t *beuuid, const char *name, uint64_t sectors)
 	if (rslt == -1)
 		goto done;
 
-	if (start % 64)
-		start += (64 - start % 64);
+	if (start % BLOCKALIGNMENT)
+		start += (BLOCKALIGNMENT - start % BLOCKALIGNMENT);
 	if (start >= end)
 		goto done;
 
@@ -386,9 +386,8 @@ init_gh(void)
 
 	needed = sizeof(gp) / secsize + 2;
 
-	/* Start usable LBA area on 64 sector boundary. */
-	if (needed % 64)
-		needed += (64 - (needed % 64));
+	if (needed % BLOCKALIGNMENT)
+		needed += (needed - (needed % BLOCKALIGNMENT));
 
 	gh.gh_sig = htole64(GPTSIGNATURE);
 	gh.gh_rev = htole32(GPTREVISION);
@@ -414,21 +413,28 @@ init_gh(void)
 }
 
 int
-init_gp(void)
+init_gp(int how, uint32_t bootsectors)
 {
-	extern uint32_t b_arg;
 	const uint8_t gpt_uuid_efi_system[] = GPT_UUID_EFI_SYSTEM;
 	const uint8_t gpt_uuid_openbsd[] = GPT_UUID_OPENBSD;
 	struct gpt_partition oldgp[NGPTPARTITIONS];
-	int rslt;
+	int pn, rslt;
 
 	memcpy(&oldgp, &gp, sizeof(oldgp));
-	memset(&gp, 0, sizeof(gp));
+	if (how == GHANDGP)
+		memset(&gp, 0, sizeof(gp));
+	else {
+		for (pn = 0; pn < NGPTPARTITIONS; pn++) {
+			if (PRT_protected_guid(&gp[pn].gp_type))
+				continue;
+			memset(&gp[pn], 0, sizeof(gp[pn]));
+		}
+	}
 
 	rslt = 0;
-	if (b_arg > 0) {
+	if (bootsectors > 0) {
 		rslt = add_partition(gpt_uuid_efi_system, "EFI System Area",
-		    b_arg);
+		    bootsectors);
 	}
 	if (rslt == 0)
 		rslt = add_partition(gpt_uuid_openbsd, "OpenBSD Area", 0);
@@ -440,15 +446,45 @@ init_gp(void)
 }
 
 int
-GPT_init(void)
+GPT_init(int how, uint32_t bootsectors)
 {
-	int rslt;
+	int rslt = 0;
 
-	rslt = init_gh();
+	if (how == GHANDGP)
+		rslt = init_gh();
 	if (rslt == 0)
-		rslt = init_gp();
+		rslt = init_gp(how, bootsectors);
 
 	return rslt;
+}
+
+void
+GPT_zap_headers(void)
+{
+	char *secbuf;
+	uint64_t sig;
+
+	secbuf = DISK_readsector(GPTSECTOR);
+	if (secbuf == NULL)
+		return;
+
+	memcpy(&sig, secbuf, sizeof(sig));
+	if (letoh64(sig) == GPTSIGNATURE) {
+		memset(secbuf, 0, dl.d_secsize);
+		DISK_writesector(secbuf, GPTSECTOR);
+	}
+	free(secbuf);
+
+	secbuf = DISK_readsector(DL_GETDSIZE(&dl) - 1);
+	if (secbuf == NULL)
+		return;
+
+	memcpy(&sig, secbuf, sizeof(sig));
+	if (letoh64(sig) == GPTSIGNATURE) {
+		memset(secbuf, 0, dl.d_secsize);
+		DISK_writesector(secbuf, DL_GETDSIZE(&dl) - 1);
+	}
+	free(secbuf);
 }
 
 int
@@ -461,10 +497,9 @@ GPT_write(void)
 	uint64_t altgh, altgp, prigh, prigp, gpbytes;
 
 	/*
-	 * XXX Assume we always write full-size partition table.
 	 * XXX Assume size of gp is multiple of sector size.
 	 */
-	gpbytes = sizeof(gp);
+	gpbytes = letoh64(gh.gh_part_num) * letoh64(gh.gh_part_size);
 
 	prigh = GPTSECTOR;
 	prigp = prigh + 1;

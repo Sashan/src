@@ -1,4 +1,4 @@
-/*	$OpenBSD: cmd.c,v 1.115 2021/06/14 17:34:06 krw Exp $	*/
+/*	$OpenBSD: cmd.c,v 1.118 2021/06/28 19:50:30 krw Exp $	*/
 
 /*
  * Copyright (c) 1997 Tobias Weingartner
@@ -45,9 +45,9 @@ int
 Xreinit(char *args, struct mbr *mbr)
 {
 	struct dos_mbr dos_mbr;
-	int efi, dogpt;
+	int dogpt;
 
-	efi = MBR_protective_mbr(mbr);
+	dogpt = 0;
 
 	if (strncasecmp(args, "gpt", 3) == 0)
 		dogpt = 1;
@@ -56,17 +56,14 @@ Xreinit(char *args, struct mbr *mbr)
 	else if (strlen(args) > 0) {
 		printf("Unrecognized modifier '%s'\n", args);
 		return (CMD_CONT);
-	} else if (efi != -1)
-		dogpt = 1;
-	else
-		dogpt = 0;
+	}
 
 	MBR_make(&initial_mbr, &dos_mbr);
 	MBR_parse(&dos_mbr, mbr->offset, mbr->reloffset, mbr);
 
 	if (dogpt) {
 		MBR_init_GPT(mbr);
-		GPT_init();
+		GPT_init(GHANDGP, 0);
 		GPT_print("s", TERSE);
 	} else {
 		memset(&gh, 0, sizeof(gh));
@@ -310,12 +307,25 @@ gsetpid(int pn)
 	GPT_print_parthdr(TERSE);
 	GPT_print_part(pn, "s", TERSE);
 
+	if (PRT_protected_guid(&gg->gp_type)) {
+		uuid_dec_le(&gg->gp_type, &guid);
+		printf("can't edit partition type %s\n",
+		    PRT_uuid_to_typename(&guid));
+		goto done;
+	}
+
 	/* Ask for partition type or GUID. */
 	uuid_dec_le(&gg->gp_type, &guid);
 	num = ask_pid(PRT_uuid_to_type(&guid), &guid);
 	if (num <= 0xff)
 		guid = *(PRT_type_to_uuid(num));
 	uuid_enc_le(&gg->gp_type, &guid);
+	if (PRT_protected_guid(&gg->gp_type)) {
+		uuid_dec_le(&gg->gp_type, &guid);
+		printf("can't change partition type to %s\n",
+		    PRT_uuid_to_typename(&guid));
+		goto done;
+	}
 
 	if (uuid_is_nil(&gg->gp_guid, NULL)) {
 		uuid_create(&guid, &status);
@@ -455,8 +465,7 @@ Xwrite(char *args, struct mbr *mbr)
 			return (CMD_CONT);
 		}
 	} else {
-		/* Ensure any on-disk GPT headers are zeroed. */
-		MBR_zapgpt(&dos_mbr, DL_GETDSIZE(&dl) - 1);
+		GPT_zap_headers();
 	}
 
 	/* Refresh in memory copy to reflect what was just written. */

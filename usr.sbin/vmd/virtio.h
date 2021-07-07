@@ -1,4 +1,4 @@
-/*	$OpenBSD: virtio.h,v 1.38 2021/04/21 18:27:36 dv Exp $	*/
+/*	$OpenBSD: virtio.h,v 1.40 2021/06/21 02:38:18 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -16,7 +16,17 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <sys/types.h>
+
 #include <dev/pv/virtioreg.h>
+#include <net/if_tun.h>
+
+#include <event.h>
+
+#include "vmd.h"
+
+#ifndef _VIRTIO_H_
+#define _VIRTIO_H_
 
 #define VIRTQUEUE_ALIGN(n)	(((n)+(VIRTIO_PAGE_SIZE-1))&    \
 				    ~(VIRTIO_PAGE_SIZE-1))
@@ -35,6 +45,11 @@
 
 #define VIONET_QUEUE_SIZE	256
 #define VIONET_QUEUE_MASK	(VIONET_QUEUE_SIZE - 1)
+
+/* Virtio network device is backed by tap(4), so inherit limits */
+#define VIONET_HARD_MTU		TUNMRU
+#define VIONET_MIN_TXLEN	ETHER_HDR_LEN
+#define VIONET_MAX_TXLEN	VIONET_HARD_MTU + ETHER_HDR_LEN
 
 /* VMM Control Interface shutdown timeout (in seconds) */
 #define VMMCI_TIMEOUT		3
@@ -322,3 +337,5 @@ void vioscsi_update_qa(struct vioscsi_dev *);
 int vioscsi_notifyq(struct vioscsi_dev *);
 void virtio_stop(struct vm_create_params *vcp);
 void virtio_start(struct vm_create_params *vcp);
+
+#endif /* _VIRTIO_H_ */

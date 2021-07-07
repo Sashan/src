@@ -1,7 +1,6 @@
-/*	$OpenBSD: eficall.h,v 1.2 2021/06/04 00:09:34 krw Exp $	*/
-
+/*	$OpenBSD: fabs.c,v 1.1 2021/06/19 18:43:28 deraadt Exp $	*/
 /*
- * Copyright (c) 2015 YASUOKA Masahiko <yasuoka@yasuoka.net>
+ * Copyright (c) 2008 Martynas Venckus <martynas@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -16,4 +15,21 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#define	EFI_CALL(_func_, ...) (_func_)(__VA_ARGS__)
+#include <sys/types.h>
+#include <machine/ieee.h>
+#include <math.h>
+
+/*
+ * fabs(d) returns the absolute value of d.
+ */
+double
+fabs(double d)
+{
+	struct ieee_double *p = (struct ieee_double *)&d;
+
+	p->dbl_sign = 0;
+
+	return(d);
+}
+
+__strong_alias(fabsl, fabs);

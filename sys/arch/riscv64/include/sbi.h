@@ -1,4 +1,4 @@
-/*	$OpenBSD: sbi.h,v 1.2 2021/05/12 01:20:52 jsg Exp $	*/
+/*	$OpenBSD: sbi.h,v 1.4 2021/07/02 08:44:37 kettenis Exp $	*/
 
 /*-
  * Copyright (c) 2016-2017 Ruslan Bukin <br@bsdpad.com>
@@ -33,8 +33,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
 #ifndef _MACHINE_SBI_H_
@@ -67,6 +65,16 @@
 #define	SBI_BASE_GET_MVENDORID		4
 #define	SBI_BASE_GET_MARCHID		5
 #define	SBI_BASE_GET_MIMPID		6
+
+/* Hart State Management (HSM) Extension */
+#define	SBI_EXT_ID_HSM			0x48534D
+#define	SBI_HSM_HART_START		0
+#define	SBI_HSM_HART_STOP		1
+#define	SBI_HSM_HART_STATUS		2
+#define	 SBI_HSM_STATUS_STARTED		0
+#define	 SBI_HSM_STATUS_STOPPED		1
+#define	 SBI_HSM_STATUS_START_PENDING	2
+#define	 SBI_HSM_STATUS_STOP_PENDING	3
 
 /* Legacy Extensions */
 #define	SBI_SET_TIMER			0
@@ -124,11 +132,54 @@ extern u_long sbi_spec_version;
 extern u_long sbi_impl_id;
 extern u_long sbi_impl_version;
 
+static __inline u_int
+sbi_get_mvendorid(void)
+{
+	return (SBI_CALL0(SBI_EXT_ID_BASE, SBI_BASE_GET_MVENDORID).value);
+}
+
+
+static __inline u_long
+sbi_get_marchid(void)
+{
+	return (SBI_CALL0(SBI_EXT_ID_BASE, SBI_BASE_GET_MARCHID).value);
+}
+
+static __inline u_long
+sbi_get_mimpid(void)
+{
+	return (SBI_CALL0(SBI_EXT_ID_BASE, SBI_BASE_GET_MIMPID).value);
+}
+
 static __inline long
 sbi_probe_extension(long id)
 {
 	return (SBI_CALL1(SBI_EXT_ID_BASE, SBI_BASE_PROBE_EXTENSION, id).value);
 }
+
+/* Hart State Management extension functions. */
+
+/*
+ * Start execution on the specified hart at physical address start_addr. The
+ * register a0 will contain the hart's ID, and a1 will contain the value of
+ * priv.
+ */
+int sbi_hsm_hart_start(u_long hart, u_long start_addr, u_long priv);
+
+/*
+ * Stop execution on the current hart. Interrupts should be disabled, or this
+ * function may return.
+ */
+void sbi_hsm_hart_stop(void);
+
+/*
+ * Get the execution status of the specified hart. The status will be one of:
+ *  - SBI_HSM_STATUS_STARTED
+ *  - SBI_HSM_STATUS_STOPPED
+ *  - SBI_HSM_STATUS_START_PENDING
+ *  - SBI_HSM_STATUS_STOP_PENDING
+ */
+int sbi_hsm_hart_status(u_long hart);
 
 /* Legacy extension functions. */
 static __inline void

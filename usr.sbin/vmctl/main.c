@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.65 2021/05/12 20:13:00 dv Exp $	*/
+/*	$OpenBSD: main.c,v 1.67 2021/06/28 14:01:38 tb Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -95,14 +95,9 @@ __dead void
 usage(void)
 {
 	extern char	*__progname;
-	int		 i;
 
-	fprintf(stderr, "usage:\t%s [-v] command [arg ...]\n",
-	    __progname);
-	for (i = 0; ctl_commands[i].name != NULL; i++) {
-		fprintf(stderr, "\t%s %s %s\n", __progname,
-		    ctl_commands[i].name, ctl_commands[i].usage);
-	}
+	fprintf(stderr, "usage:\t%s [-v] command [arg ...]\n", __progname);
+
 	exit(1);
 }
 
