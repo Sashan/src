@@ -83,7 +83,7 @@ struct tpmr_port {
 	struct tpmr_softc	*p_tpmr;
 	unsigned int		 p_slot;
 
-	unsigned int		 p_refcnt;
+	int		 	 p_refcnt;
 
 	struct ether_brport	 p_brport;
 };
@@ -719,7 +719,7 @@ tpmr_p_take(void *p)
 {
 	struct tpmr_port *port = p;
 
-	atomic_inc_int((int *)(&port->p_refcnt));
+	atomic_inc_int(&port->p_refcnt);
 }
 
 static void
@@ -728,7 +728,7 @@ tpmr_p_rele(void *p)
 	struct tpmr_port *port = p;
 	struct ifnet *ifp0 = port->p_ifp0;
 
-	if (atomic_dec_int_nv((int *)(&port->p_refcnt)) == 0) {
+	if (atomic_dec_int_nv(&port->p_refcnt) == 0) {
 		if_put(ifp0);
 		free(port, M_DEVBUF, sizeof(*port));
 	}
