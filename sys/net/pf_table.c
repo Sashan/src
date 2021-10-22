@@ -1282,14 +1282,15 @@ pfr_clr_tables(struct pfr_table *filter, int *ndel, int flags)
 int
 pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 {
-	struct pfr_ktableworkq	 addq, changeq;
-	struct pfr_ktable	*p, *q, *r, key;
+	struct pfr_ktableworkq	 addq, changeq, newq;
+	struct pfr_ktable	*p, *q, *n, *w;
 	int			 i, rv, xadd = 0;
 	time_t			 tzero = gettime();
 
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
 	SLIST_INIT(&addq);
 	SLIST_INIT(&changeq);
+	SLIST_INIT(&newq);
 	for (i = 0; i < size; i++) {
 		YIELD(i, flags & PFR_FLAG_USERIOCTL);
 		if (COPYIN(tbl+i, &key.pfrkt_t, sizeof(key.pfrkt_t), flags))
@@ -1298,18 +1299,44 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 		    flags & PFR_FLAG_USERIOCTL))
 			senderr(EINVAL);
 		key.pfrkt_flags |= PFR_TFLAG_ACTIVE;
-		p = RB_FIND(pfr_ktablehead, &pfr_ktables, &key);
-		if (p == NULL) {
-			p = pfr_create_ktable(&key.pfrkt_t, tzero, 1,
-			    !(flags & PFR_FLAG_USERIOCTL));
-			if (p == NULL)
-				senderr(ENOMEM);
-			SLIST_FOREACH(q, &addq, pfrkt_workq) {
-				if (!pfr_ktable_compare(p, q)) {
-					pfr_destroy_ktable(p, 0);
-					goto _skip;
-				}
+		p = pfr_create_ktable(&key.pfrkt_t, tzero, 0,
+		    !(flags & PFR_FLAG_USERIOCTL));
+		if (p == NULL)
+			senderr(ENOMEM);
+
+		SLIST_FOREACH(q, &newq, pfrkt_workq) {
+			if (!pfr_ktable_compare(p, q)) {
+				pfr_destroy_ktable(p, 0);
+				continue;
 			}
+		}
+
+		SLIST_INSERT_HEAD(&newq, p);
+	}
+
+	/*
+	 * newq contains freshly allocated tables with no dups.
+	 * note there are no rulesets attached.
+	 */
+	SLIST_FOREACH_SAFE(n, &newq, pfrkt_workq, w) {
+		p = RB_FIND(pfr_ktablehead, &pfr_ktables, n);
+		if (p == NULL) {
+			SLIST_REMOVE(&newq, n, pfr_ktable, pfrkt_workq);
+			SLIST_INSERT_HEAD(&addq, n);
+			
+		} else if (
+			p->pfrkt_nflags = (p->pfrkt_flags &
+			    ~PFR_TFLAG_USRMASK) | key.pfrkt_flags;
+			SLIST_INSERT_HEAD(&changeq, p, pfrkt_workq);
+		}
+	}
+
+	/*
+	 * addq contains tables we have to insert and attach rules to them
+	 * changeq contains tables we need to update
+	 * newq contains tables we must free.
+	 */
+
 			SLIST_INSERT_HEAD(&addq, p, pfrkt_workq);
 			xadd++;
 			if (!key.pfrkt_anchor[0])
@@ -2005,6 +2032,7 @@ pfr_create_ktable(struct pfr_table *tbl, time_t tzero, int attachruleset,
 	kt->pfrkt_t = *tbl;
 
 	if (attachruleset) {
+		PF_ASSERT_LOCKED();
 		rs = pf_find_or_create_ruleset(tbl->pfrt_anchor);
 		if (!rs) {
 			pfr_destroy_ktable(kt, 0);
