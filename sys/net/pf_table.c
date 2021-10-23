@@ -1362,10 +1362,6 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 	SLIST_FOREACH_SAFE(p, &addq, pfrkt_workq, w) {
 		p->pfrkt_rs = pf_find_or_create_ruleset(p->pfrkt_anchor);
 		if (p->pfrkt_rs == NULL) {
-			/*
-			 * could not find/create ruleset, just give up adding
-			 * the table.
-			 */
 			xadd--;
 			SLIST_REMOVE(&addq, p, pfr_ktable, pfrkt_workq);
 			SLIST_INSERT_HEAD(&auxq, p, pfrkt_workq);
@@ -1406,15 +1402,15 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 		}
 		q->pfrkt_rs = pf_find_or_create_ruleset(
 		    q->pfrkt_root->pfrkt_anchor);
+		/*
+		 * root tables are attached to main ruleset,
+		 * because ->pfrkt_anchor[0] == '\0'
+		 */
+		KASSERT(q->pfrkt_rs == &pf_main_ruleset);
 		q->pfrkt_rs->tables++;
 		p->pfrkt_root = q;
-		/*
-		 * we are going to use pre-allocated root, just insert it
-		 * addq so we can add it later.
-		 */
-		SLIST_INSERT_HEAD(&addq, p->pfrkt_root, pfrkt_workq);
+		SLIST_INSERT_HEAD(&addq, q, pfrkt_workq);
 	}
-
 	if (!(flags & PFR_FLAG_DUMMY)) {
 		pfr_insert_ktables(&addq);
 		pfr_setflags_ktables(&changeq);
