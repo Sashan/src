@@ -1391,7 +1391,7 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 		 */
 		SLIST_FOREACH(r, &addq, pfrkt_workq) {
 			if (!pfr_ktable_compare(r, q)) {
-				/* 
+				/*
 				 * `q` is our root table we've found earlier,
 				 * `w` can get dropped.
 				 */
