@@ -1730,7 +1730,7 @@ int
 pfr_ina_commit(struct pfr_table *trs, u_int32_t ticket, int *nadd,
     int *nchange, int flags)
 {
-	struct pfr_ktable	*p;
+	struct pfr_ktable	*p, *q;
 	struct pfr_ktableworkq	 workq;
 	struct pf_ruleset	*rs;
 	int			 xadd = 0, xchange = 0;
@@ -1754,7 +1754,7 @@ pfr_ina_commit(struct pfr_table *trs, u_int32_t ticket, int *nadd,
 	}
 
 	if (!(flags & PFR_FLAG_DUMMY)) {
-		SLIST_FOREACH(p, &workq, pfrkt_workq) {
+		SLIST_FOREACH_SAFE(p, &workq, pfrkt_workq, q) {
 			pfr_commit_ktable(p, tzero);
 		}
 		rs->topen = 0;
@@ -1790,7 +1790,8 @@ pfr_commit_ktable(struct pfr_ktable *kt, time_t tzero)
 		SLIST_INIT(&delq);
 		SLIST_INIT(&garbageq);
 		pfr_clean_node_mask(shadow, &addrq);
-		SLIST_FOREACH(p, &addrq, pfrke_workq) {
+		while ((p = SLIST_FIRST(&addrq, pfrke_workq)) != NULL) {
+			SLIST_REMOVE_HEAD(&addrq, pfrke_workq);
 			pfr_copyout_addr(&ad, p);
 			q = pfr_lookup_addr(kt, &ad, 1);
 			if (q != NULL) {
