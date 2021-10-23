@@ -184,6 +184,7 @@ void			 pfr_clstats_ktable(struct pfr_ktable *, time_t, int);
 struct pfr_ktable	*pfr_create_ktable(struct pfr_table *, time_t, int,
 			    int);
 void			 pfr_destroy_ktables(struct pfr_ktableworkq *, int);
+void			 pfr_destroy_ktables_aux(struct pfr_ktableworkq *);
 void			 pfr_destroy_ktable(struct pfr_ktable *, int);
 int			 pfr_ktable_compare(struct pfr_ktable *,
 			    struct pfr_ktable *);
@@ -1285,7 +1286,7 @@ pfr_clr_tables(struct pfr_table *filter, int *ndel, int flags)
 int
 pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 {
-	struct pfr_ktableworkq	 addq, changeq, newq;
+	struct pfr_ktableworkq	 addq, changeq, auxq;
 	struct pfr_ktable	*p, *q, *r, *n, *w, key;
 	int			 i, rv, xadd = 0;
 	time_t			 tzero = gettime();
@@ -1293,8 +1294,8 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
 	SLIST_INIT(&addq);
 	SLIST_INIT(&changeq);
-	SLIST_INIT(&newq);
-	/* pre-allocate all memory we my need outside of locks */
+	SLIST_INIT(&auxq);
+	/* pre-allocate all memory outside of locks */
 	for (i = 0; i < size; i++) {
 		YIELD(flags & PFR_FLAG_USERIOCTL);
 		if (COPYIN(tbl+i, &key.pfrkt_t, sizeof(key.pfrkt_t), flags))
@@ -1308,6 +1309,10 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 		if (p == NULL)
 			senderr(ENOMEM);
 
+		/*
+		 * Note: we also pre-allocate a root table here. We keep it
+		 * at ->pfrkt_root, which we must not forget about.
+		 */
 		key.pfrkt_flags = 0;
 		memset(key.pfrkt_anchor, 0, sizeof(key.pfrkt_anchor));
 		p->pfrkt_root = pfr_create_ktable(&key.pfrkt_t, 0, 0,
@@ -1317,7 +1322,7 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 			senderr(ENOMEM);
 		}
 
-		SLIST_FOREACH(q, &newq, pfrkt_workq) {
+		SLIST_FOREACH(q, &auxq, pfrkt_workq) {
 			if (!pfr_ktable_compare(p, q)) {
 				pfr_destroy_ktable(p->pfrkt_root, 0);
 				p->pfrkt_root = NULL;
@@ -1326,28 +1331,25 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 			}
 		}
 
-		SLIST_INSERT_HEAD(&newq, p, pfrkt_workq);
+		SLIST_INSERT_HEAD(&auxq, p, pfrkt_workq);
 	}
 
 	/*
-	 * newq contains freshly allocated tables with no dups.
-	 * note there are no rulesets attached.
+	 * auxq contains freshly allocated tables with no dups.
+	 * also note there are no rulesets attached, because
+	 * the attach operation requires PF_LOCK().
 	 */
 	NET_LOCK();
 	PF_LOCK();
-	SLIST_FOREACH_SAFE(n, &newq, pfrkt_workq, w) {
-		SLIST_REMOVE(&newq, n, pfr_ktable, pfrkt_workq);
+	SLIST_FOREACH_SAFE(n, &auxq, pfrkt_workq, w) {
 		p = RB_FIND(pfr_ktablehead, &pfr_ktables, n);
-		if (p == NULL)
+		if (p == NULL) {
+			SLIST_REMOVE(&auxq, n, pfr_ktable, pfrkt_workq);
 			SLIST_INSERT_HEAD(&addq, n, pfrkt_workq);
-		else {
+		} else {
 			p->pfrkt_nflags = (p->pfrkt_flags &
 			    ~PFR_TFLAG_USRMASK) | key.pfrkt_flags;
 			SLIST_INSERT_HEAD(&changeq, p, pfrkt_workq);
-			SLIST_INSERT_HEAD(&newq, n, pfrkt_workq);
-			q = n->pfrkt_root;
-			n->pfrkt_root = NULL;
-			SLIST_INSERT_HEAD(&newq, q, pfrkt_workq);
 		}
 		xadd++;
 	}
@@ -1355,9 +1357,8 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 	/*
 	 * addq contains tables we have to insert and attach rules to them
 	 * changeq contains tables we need to update
-	 * newq is empty. We will re-use it as garbage collection queue.
+	 * auxq contains pre-allocated tables, we won't use and we must free
 	 */
-	KASSERT(SLIST_EMPTY(&newq));
 	SLIST_FOREACH_SAFE(p, &addq, pfrkt_workq, w) {
 		p->pfrkt_rs = pf_find_or_create_ruleset(p->pfrkt_anchor);
 		if (p->pfrkt_rs == NULL) {
@@ -1367,10 +1368,7 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 			 */
 			xadd--;
 			SLIST_REMOVE(&addq, p, pfr_ktable, pfrkt_workq);
-			SLIST_INSERT_HEAD(&newq, p, pfrkt_workq);
-			q = p->pfrkt_root;
-			p->pfrkt_root = NULL;
-			SLIST_INSERT_HEAD(&newq, q, pfrkt_workq);
+			SLIST_INSERT_HEAD(&auxq, p, pfrkt_workq);
 			continue;
 		}
 		p->pfrkt_rs->tables++;
@@ -1378,7 +1376,7 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 		if (!p->pfrkt_anchor[0]) {
 			q = p->pfrkt_root;
 			p->pfrkt_root = NULL;
-			SLIST_INSERT_HEAD(&newq, q, pfrkt_workq);
+			SLIST_INSERT_HEAD(&auxq, q, pfrkt_workq);
 			continue;
 		}
 
@@ -1388,12 +1386,12 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 		r = RB_FIND(pfr_ktablehead, &pfr_ktables, q);
 		if (r != NULL) {
 			p->pfrkt_root = r;
-			SLIST_INSERT_HEAD(&newq, q, pfrkt_workq);
+			SLIST_INSERT_HEAD(&auxq, q, pfrkt_workq);
 			continue;
 		}
 		/*
 		 * there is a chance we could create root table in earlier
-		 * iteration.
+		 * iteration. such table may exist in addq then.
 		 */
 		SLIST_FOREACH(r, &addq, pfrkt_workq) {
 			if (!pfr_ktable_compare(r, q)) {
@@ -1402,13 +1400,12 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 				 * `w` can get dropped.
 				 */
 				p->pfrkt_root = r;
-				SLIST_INSERT_HEAD(&newq, q, pfrkt_workq);
+				SLIST_INSERT_HEAD(&auxq, q, pfrkt_workq);
 				continue;
 			}
 		}
 		q->pfrkt_rs = pf_find_or_create_ruleset(
 		    q->pfrkt_root->pfrkt_anchor);
-		KASSERT(q->pfrkt_rs == &pf_main_ruleset);
 		q->pfrkt_rs->tables++;
 		p->pfrkt_root = q;
 		/*
@@ -1424,7 +1421,7 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 	} else
 		pfr_destroy_ktables(&addq, 0);
 
-	pfr_destroy_ktables(&newq, 0);
+	pfr_destroy_ktables_aux(&auxq);
 
 	/*
 	 * all pfr_destroy_ktables() must be kept under the lock,
@@ -1437,13 +1434,7 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 		*nadd = xadd;
 	return (0);
 _bad:
-	SLIST_FOREACH(n, &newq, pfrkt_workq) {
-		if (n->pfrkt_root != NULL) {
-			pfr_destroy_ktable(n->pfrkt_root, 0);
-			n->pfrkt_root = NULL;
-		}
-	}
-	pfr_destroy_ktables(&newq, 0);
+	pfr_destroy_ktables_aux(&auxq);
 	return (rv);
 }
 
@@ -2125,6 +2116,21 @@ pfr_destroy_ktables(struct pfr_ktableworkq *workq, int flushaddr)
 	for (p = SLIST_FIRST(workq); p; p = q) {
 		q = SLIST_NEXT(p, pfrkt_workq);
 		pfr_destroy_ktable(p, flushaddr);
+	}
+}
+
+void
+pfr_destroy_ktables_aux(struct pfr_ktableworkq *auxq)
+{
+	struct pfr_ktable	*p, *q;
+
+	for (p = SLIST_FIRST(auxq); p; p = q) {
+		q = SLIST_NEXT(p, pfrkt_workq);
+		if (p->pfrkt_root != NULL) {
+			pfr_destroy_ktable(p->pfrkt_root, 0);
+			p->pfrkt_root = NULL;
+		}
+		pfr_destroy_ktable(p, 0);
 	}
 }
 
