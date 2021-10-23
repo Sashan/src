@@ -1790,7 +1790,7 @@ pfr_commit_ktable(struct pfr_ktable *kt, time_t tzero)
 		SLIST_INIT(&delq);
 		SLIST_INIT(&garbageq);
 		pfr_clean_node_mask(shadow, &addrq);
-		while ((p = SLIST_FIRST(&addrq, pfrke_workq)) != NULL) {
+		while ((p = SLIST_FIRST(&addrq)) != NULL) {
 			SLIST_REMOVE_HEAD(&addrq, pfrke_workq);
 			pfr_copyout_addr(&ad, p);
 			q = pfr_lookup_addr(kt, &ad, 1);
