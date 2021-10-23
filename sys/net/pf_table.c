@@ -2118,10 +2118,10 @@ pfr_destroy_ktables(struct pfr_ktableworkq *workq, int flushaddr)
 void
 pfr_destroy_ktables_aux(struct pfr_ktableworkq *auxq)
 {
-	struct pfr_ktable	*p, *q;
+	struct pfr_ktable	*p;
 
-	for (p = SLIST_FIRST(auxq); p; p = q) {
-		q = SLIST_NEXT(p, pfrkt_workq);
+	while ((p = SLIST_FIRST(auxq)) != NULL) {
+		SLIST_REMOVE_HEAD(auxq, pfrkt_workq);
 		if (p->pfrkt_root != NULL) {
 			pfr_destroy_ktable(p->pfrkt_root, 0);
 			p->pfrkt_root = NULL;
