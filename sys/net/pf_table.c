@@ -1924,9 +1924,9 @@ pfr_insert_ktable(struct pfr_ktable *kt)
 void
 pfr_setflags_ktables(struct pfr_ktableworkq *workq)
 {
-	struct pfr_ktable	*p;
+	struct pfr_ktable	*p, *q;
 
-	SLIST_FOREACH(p, workq, pfrkt_workq) {
+	SLIST_FOREACH_SAFE(p, workq, pfrkt_workq, q) {
 		pfr_setflags_ktable(p, p->pfrkt_nflags);
 	}
 }
