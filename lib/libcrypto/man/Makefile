@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.196 2021/10/21 16:26:34 schwarze Exp $
+# $OpenBSD: Makefile,v 1.199 2021/10/22 15:50:19 schwarze Exp $
 
 .include <bsd.own.mk>
 
@@ -159,6 +159,7 @@ MAN=	\
 	EVP_EncodeInit.3 \
 	EVP_EncryptInit.3 \
 	EVP_OpenInit.3 \
+	EVP_PKEY_add1_attr.3 \
 	EVP_PKEY_asn1_new.3 \
 	EVP_PKEY_asn1_get_count.3 \
 	EVP_PKEY_CTX_ctrl.3 \
@@ -275,7 +276,6 @@ MAN=	\
 	UI_get_string_type.3 \
 	UI_new.3 \
 	X25519.3 \
-	X509V3_get_d2i.3 \
 	X509_ALGOR_dup.3 \
 	X509_ATTRIBUTE_get0_object.3 \
 	X509_ATTRIBUTE_new.3 \
@@ -344,6 +344,9 @@ MAN=	\
 	X509_verify_cert.3 \
 	X509V3_EXT_print.3 \
 	X509V3_extensions_print.3 \
+	X509V3_get_d2i.3 \
+	X509at_add1_attr.3 \
+	X509at_get_attr.3 \
 	X509v3_get_ext_by_NID.3 \
 	crypto.3 \
 	d2i_ASN1_NULL.3 \
