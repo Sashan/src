@@ -1,4 +1,4 @@
-/* $OpenBSD: tls13_server.c,v 1.84 2021/07/01 17:53:39 jsing Exp $ */
+/* $OpenBSD: tls13_server.c,v 1.86 2021/10/23 14:40:54 jsing Exp $ */
 /*
  * Copyright (c) 2019, 2020 Joel Sing <jsing@openbsd.org>
  * Copyright (c) 2020 Bob Beck <beck@openbsd.org>
@@ -164,6 +164,7 @@ tls13_client_hello_process(struct tls13_ctx *ctx, CBS *cbs)
 		return tls13_use_legacy_server(ctx);
 	}
 	ctx->hs->negotiated_tls_version = TLS1_3_VERSION;
+	ctx->hs->peer_legacy_version = legacy_version;
 
 	/* Ensure we send subsequent alerts with the correct record version. */
 	tls13_record_layer_set_legacy_version(ctx->rl, TLS1_2_VERSION);
@@ -649,7 +650,7 @@ tls13_server_certificate_send(struct tls13_ctx *ctx, CBB *cbb)
 		    X509_V_FLAG_LEGACY_VERIFY);
 		X509_verify_cert(xsc);
 		ERR_clear_error();
-		chain = xsc->chain;
+		chain = X509_STORE_CTX_get0_chain(xsc);
 	}
 
 	if (!CBB_add_u8_length_prefixed(cbb, &cert_request_context))

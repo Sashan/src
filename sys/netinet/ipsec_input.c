@@ -1,4 +1,4 @@
-/*	$OpenBSD: ipsec_input.c,v 1.185 2021/10/22 15:44:20 bluhm Exp $	*/
+/*	$OpenBSD: ipsec_input.c,v 1.187 2021/10/23 22:19:37 bluhm Exp $	*/
 /*
  * The authors of this code are John Ioannidis (ji@tla.org),
  * Angelos D. Keromytis (kermit@csd.uch.gr) and
@@ -176,7 +176,7 @@ ipsec_init(void)
  * filtering).
  */
 int
-ipsec_common_input(struct mbuf *m, int skip, int protoff, int af, int sproto,
+ipsec_common_input(struct mbuf **mp, int skip, int protoff, int af, int sproto,
     int udpencap)
 {
 #define IPSEC_ISTAT(x,y,z) do {			\
@@ -188,6 +188,7 @@ ipsec_common_input(struct mbuf *m, int skip, int protoff, int af, int sproto,
 		ipcompstat_inc(z);		\
 } while (0)
 
+	struct mbuf *m = *mp;
 	union sockaddr_union dst_address;
 	struct tdb *tdbp = NULL;
 	struct ifnet *encif;
@@ -351,7 +352,7 @@ ipsec_common_input(struct mbuf *m, int skip, int protoff, int af, int sproto,
 	 * Call appropriate transform and return -- callback takes care of
 	 * everything else.
 	 */
-	error = (*(tdbp->tdb_xform->xf_input))(m, tdbp, skip, protoff);
+	error = (*(tdbp->tdb_xform->xf_input))(mp, tdbp, skip, protoff);
 	if (error) {
 		ipsecstat_inc(ipsec_idrops);
 		tdbp->tdb_idrops++;
@@ -359,83 +360,11 @@ ipsec_common_input(struct mbuf *m, int skip, int protoff, int af, int sproto,
 	return error;
 
  drop:
-	m_freem(m);
+	m_freemp(mp);
 	ipsecstat_inc(ipsec_idrops);
 	if (tdbp != NULL)
 		tdbp->tdb_idrops++;
 	return error;
-}
-
-void
-ipsec_input_cb(struct cryptop *crp)
-{
-	struct tdb_crypto *tc = (struct tdb_crypto *) crp->crp_opaque;
-	struct mbuf *m = (struct mbuf *) crp->crp_buf;
-	struct tdb *tdb = NULL;
-	int clen, error;
-
-	NET_ASSERT_LOCKED();
-
-	if (m == NULL) {
-		DPRINTF("bogus returned buffer from crypto");
-		ipsecstat_inc(ipsec_crypto);
-		goto drop;
-	}
-
-	tdb = gettdb(tc->tc_rdomain, tc->tc_spi, &tc->tc_dst, tc->tc_proto);
-	if (tdb == NULL) {
-		DPRINTF("TDB is expired while in crypto");
-		ipsecstat_inc(ipsec_notdb);
-		goto drop;
-	}
-
-	/* Check for crypto errors */
-	if (crp->crp_etype) {
-		if (crp->crp_etype == EAGAIN) {
-			/* Reset the session ID */
-			if (tdb->tdb_cryptoid != 0)
-				tdb->tdb_cryptoid = crp->crp_sid;
-			crypto_dispatch(crp);
-			return;
-		}
-		DPRINTF("crypto error %d", crp->crp_etype);
-		ipsecstat_inc(ipsec_noxform);
-		goto drop;
-	}
-
-	/* Length of data after processing */
-	clen = crp->crp_olen;
-
-	/* Release the crypto descriptors */
-	crypto_freereq(crp);
-
-	switch (tdb->tdb_sproto) {
-	case IPPROTO_ESP:
-		error = esp_input_cb(tdb, tc, m, clen);
-		break;
-	case IPPROTO_AH:
-		error = ah_input_cb(tdb, tc, m, clen);
-		break;
-	case IPPROTO_IPCOMP:
-		error = ipcomp_input_cb(tdb, tc, m, clen);
-		break;
-	default:
-		panic("%s: unknown/unsupported security protocol %d",
-		    __func__, tdb->tdb_sproto);
-	}
-	if (error) {
-		ipsecstat_inc(ipsec_idrops);
-		tdb->tdb_idrops++;
-	}
-	return;
-
- drop:
-	m_freem(m);
-	free(tc, M_XDATA, 0);
-	crypto_freereq(crp);
-	ipsecstat_inc(ipsec_idrops);
-	if (tdb != NULL)
-		tdb->tdb_idrops++;
 }
 
 /*
@@ -873,7 +802,7 @@ ah4_input(struct mbuf **mp, int *offp, int proto, int af)
 	    !ah_enable)
 		return rip_input(mp, offp, proto, af);
 
-	ipsec_common_input(*mp, *offp, offsetof(struct ip, ip_p), AF_INET,
+	ipsec_common_input(mp, *offp, offsetof(struct ip, ip_p), AF_INET,
 	    proto, 0);
 	return IPPROTO_DONE;
 }
@@ -899,7 +828,7 @@ esp4_input(struct mbuf **mp, int *offp, int proto, int af)
 	    !esp_enable)
 		return rip_input(mp, offp, proto, af);
 
-	ipsec_common_input(*mp, *offp, offsetof(struct ip, ip_p), AF_INET,
+	ipsec_common_input(mp, *offp, offsetof(struct ip, ip_p), AF_INET,
 	    proto, 0);
 	return IPPROTO_DONE;
 }
@@ -915,7 +844,7 @@ ipcomp4_input(struct mbuf **mp, int *offp, int proto, int af)
 	    !ipcomp_enable)
 		return rip_input(mp, offp, proto, af);
 
-	ipsec_common_input(*mp, *offp, offsetof(struct ip, ip_p), AF_INET,
+	ipsec_common_input(mp, *offp, offsetof(struct ip, ip_p), AF_INET,
 	    proto, 0);
 	return IPPROTO_DONE;
 }
@@ -1092,7 +1021,7 @@ ah6_input(struct mbuf **mp, int *offp, int proto, int af)
 		}
 		protoff += offsetof(struct ip6_ext, ip6e_nxt);
 	}
-	ipsec_common_input(*mp, *offp, protoff, AF_INET6, proto, 0);
+	ipsec_common_input(mp, *offp, protoff, AF_INET6, proto, 0);
 	return IPPROTO_DONE;
 }
 
@@ -1149,7 +1078,7 @@ esp6_input(struct mbuf **mp, int *offp, int proto, int af)
 		}
 		protoff += offsetof(struct ip6_ext, ip6e_nxt);
 	}
-	ipsec_common_input(*mp, *offp, protoff, AF_INET6, proto, 0);
+	ipsec_common_input(mp, *offp, protoff, AF_INET6, proto, 0);
 	return IPPROTO_DONE;
 
 }
@@ -1207,7 +1136,7 @@ ipcomp6_input(struct mbuf **mp, int *offp, int proto, int af)
 
 		protoff += offsetof(struct ip6_ext, ip6e_nxt);
 	}
-	ipsec_common_input(*mp, *offp, protoff, AF_INET6, proto, 0);
+	ipsec_common_input(mp, *offp, protoff, AF_INET6, proto, 0);
 	return IPPROTO_DONE;
 }
 #endif /* INET6 */

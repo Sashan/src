@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_esp.c,v 1.177 2021/10/22 15:44:20 bluhm Exp $ */
+/*	$OpenBSD: ip_esp.c,v 1.179 2021/10/23 22:19:37 bluhm Exp $ */
 /*
  * The authors of this code are John Ioannidis (ji@tla.org),
  * Angelos D. Keromytis (kermit@csd.uch.gr) and
@@ -340,14 +340,15 @@ esp_zeroize(struct tdb *tdbp)
  * ESP input processing, called (eventually) through the protocol switch.
  */
 int
-esp_input(struct mbuf *m, struct tdb *tdb, int skip, int protoff)
+esp_input(struct mbuf **mp, struct tdb *tdb, int skip, int protoff)
 {
 	const struct auth_hash *esph = tdb->tdb_authalgxform;
 	const struct enc_xform *espx = tdb->tdb_encalgxform;
+	struct mbuf *m = *mp;
 	struct cryptodesc *crde = NULL, *crda = NULL;
 	struct cryptop *crp = NULL;
 	struct tdb_crypto *tc = NULL;
-	int plen, alen, hlen, error;
+	int plen, alen, hlen, error, clen;
 	u_int32_t btsx, esn;
 #ifdef ENCDEBUG
 	char buf[INET6_ADDRSTRLEN];
@@ -498,9 +499,7 @@ esp_input(struct mbuf *m, struct tdb *tdb, int skip, int protoff)
 	crp->crp_ilen = m->m_pkthdr.len; /* Total input length */
 	crp->crp_flags = CRYPTO_F_IMBUF | CRYPTO_F_MPSAFE;
 	crp->crp_buf = (caddr_t)m;
-	crp->crp_callback = ipsec_input_cb;
 	crp->crp_sid = tdb->tdb_cryptoid;
-	crp->crp_opaque = (caddr_t)tc;
 
 	/* These are passed as-is to the callback */
 	tc->tc_skip = skip;
@@ -526,11 +525,37 @@ esp_input(struct mbuf *m, struct tdb *tdb, int skip, int protoff)
 			crde->crd_len = m->m_pkthdr.len - (skip + hlen + alen);
 	}
 
-	crypto_dispatch(crp);
+	KERNEL_LOCK();
+	crypto_invoke(crp);
+	while (crp->crp_etype == EAGAIN) {
+		/* Reset the session ID */
+		if (tdb->tdb_cryptoid != 0)
+			tdb->tdb_cryptoid = crp->crp_sid;
+		crypto_invoke(crp);
+	}
+	KERNEL_UNLOCK();
+	if (crp->crp_etype) {
+		DPRINTF("crypto error %d", crp->crp_etype);
+		ipsecstat_inc(ipsec_noxform);
+		error = crp->crp_etype;
+		goto drop;
+	}
+
+	clen = crp->crp_olen;
+
+	/* Release the crypto descriptors */
+	crypto_freereq(crp);
+
+	error = esp_input_cb(tdb, tc, m, clen);
+	if (error) {
+		ipsecstat_inc(ipsec_idrops);
+		tdb->tdb_idrops++;
+	}
+
 	return 0;
 
  drop:
-	m_freem(m);
+	m_freemp(mp);
 	crypto_freereq(crp);
 	free(tc, M_XDATA, 0);
 	return error;
@@ -742,7 +767,7 @@ esp_output(struct mbuf *m, struct tdb *tdb, int skip, int protoff)
 {
 	const struct enc_xform *espx = tdb->tdb_encalgxform;
 	const struct auth_hash *esph = tdb->tdb_authalgxform;
-	int ilen, hlen, rlen, padding, blks, alen, roff, error;
+	int ilen, olen, hlen, rlen, padding, blks, alen, roff, error;
 	u_int64_t replay64;
 	u_int32_t replay;
 	struct mbuf *mi, *mo = (struct mbuf *) NULL;
@@ -980,8 +1005,6 @@ esp_output(struct mbuf *m, struct tdb *tdb, int skip, int protoff)
 	crp->crp_ilen = m->m_pkthdr.len; /* Total input length. */
 	crp->crp_flags = CRYPTO_F_IMBUF | CRYPTO_F_MPSAFE;
 	crp->crp_buf = (caddr_t)m;
-	crp->crp_callback = ipsec_output_cb;
-	crp->crp_opaque = (caddr_t)tc;
 	crp->crp_sid = tdb->tdb_cryptoid;
 
 	if (esph) {
@@ -1010,7 +1033,34 @@ esp_output(struct mbuf *m, struct tdb *tdb, int skip, int protoff)
 			crda->crd_len = m->m_pkthdr.len - (skip + alen);
 	}
 
-	crypto_dispatch(crp);
+	KERNEL_LOCK();
+	crypto_invoke(crp);
+	while (crp->crp_etype == EAGAIN) {
+		/* Reset the session ID */
+		if (tdb->tdb_cryptoid != 0)
+			tdb->tdb_cryptoid = crp->crp_sid;
+		crypto_invoke(crp);
+	}
+	KERNEL_UNLOCK();
+	if (crp->crp_etype) {
+		DPRINTF("crypto error %d", crp->crp_etype);
+		ipsecstat_inc(ipsec_noxform);
+		error = crp->crp_etype;
+		goto drop;
+	}
+
+	ilen = crp->crp_ilen;
+	olen = crp->crp_olen;
+
+	/* Release the crypto descriptors */
+	crypto_freereq(crp);
+
+	error = esp_output_cb(tdb, tc, m, ilen, olen);
+	if (error) {
+		ipsecstat_inc(ipsec_odrops);
+		tdb->tdb_odrops++;
+	}
+
 	return 0;
 
  drop:

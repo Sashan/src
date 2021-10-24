@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_lib.c,v 1.268 2021/09/10 08:59:56 tb Exp $ */
+/* $OpenBSD: ssl_lib.c,v 1.275 2021/10/23 20:42:50 beck Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -141,6 +141,7 @@
  */
 
 #include <arpa/inet.h>
+#include <sys/limits.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 
@@ -264,6 +265,7 @@ SSL_new(SSL_CTX *ctx)
 	s->internal->options = ctx->internal->options;
 	s->internal->mode = ctx->internal->mode;
 	s->internal->max_cert_list = ctx->internal->max_cert_list;
+	s->internal->num_tickets = ctx->internal->num_tickets;
 
 	if ((s->cert = ssl_cert_dup(ctx->internal->cert)) == NULL)
 		goto err;
@@ -770,6 +772,46 @@ int
 	return (s->internal->verify_callback);
 }
 
+void
+SSL_CTX_set_keylog_callback(SSL_CTX *ctx, SSL_CTX_keylog_cb_func cb)
+{
+	ctx->internal->keylog_callback = cb;
+}
+
+SSL_CTX_keylog_cb_func
+SSL_CTX_get_keylog_callback(const SSL_CTX *ctx)
+{
+	return (ctx->internal->keylog_callback);
+}
+
+int
+SSL_set_num_tickets(SSL *s, size_t num_tickets)
+{
+	s->internal->num_tickets = num_tickets;
+
+	return 1;
+}
+
+size_t
+SSL_get_num_tickets(const SSL *s)
+{
+	return s->internal->num_tickets;
+}
+
+int
+SSL_CTX_set_num_tickets(SSL_CTX *ctx, size_t num_tickets)
+{
+	ctx->internal->num_tickets = num_tickets;
+
+	return 1;
+}
+
+size_t
+SSL_CTX_get_num_tickets(const SSL_CTX *ctx)
+{
+	return ctx->internal->num_tickets;
+}
+
 int
 SSL_CTX_get_verify_mode(const SSL_CTX *ctx)
 {
@@ -834,7 +876,7 @@ SSL_get_peer_certificate(const SSL *s)
 	if (r == NULL)
 		return (r);
 
-	CRYPTO_add(&r->references, 1, CRYPTO_LOCK_X509);
+	X509_up_ref(r);
 
 	return (r);
 }
@@ -856,6 +898,12 @@ SSL_get_peer_cert_chain(const SSL *s)
 	 * if we are a server, it does not.
 	 */
 	return (r);
+}
+
+STACK_OF(X509) *
+SSL_get0_verified_chain(const SSL *s)
+{
+	return s->internal->verified_chain;
 }
 
 /*
@@ -983,6 +1031,11 @@ SSL_get_default_timeout(const SSL *s)
 int
 SSL_read(SSL *s, void *buf, int num)
 {
+	if (num < 0) {
+		SSLerror(s, SSL_R_BAD_LENGTH);
+		return -1;
+	}
+
 	if (s->internal->handshake_func == NULL) {
 		SSLerror(s, SSL_R_UNINITIALIZED);
 		return (-1);
@@ -996,8 +1049,32 @@ SSL_read(SSL *s, void *buf, int num)
 }
 
 int
+SSL_read_ex(SSL *s, void *buf, size_t num, size_t *bytes_read)
+{
+	int ret;
+
+	/* We simply don't bother supporting enormous reads */
+	if (num > INT_MAX) {
+		SSLerror(s, SSL_R_BAD_LENGTH);
+		return 0;
+	}
+
+	ret = SSL_read(s, buf, (int)num);
+	if (ret < 0)
+		ret = 0;
+	*bytes_read = ret;
+
+	return ret > 0;
+}
+
+int
 SSL_peek(SSL *s, void *buf, int num)
 {
+	if (num < 0) {
+		SSLerror(s, SSL_R_BAD_LENGTH);
+		return -1;
+	}
+
 	if (s->internal->handshake_func == NULL) {
 		SSLerror(s, SSL_R_UNINITIALIZED);
 		return (-1);
@@ -1010,8 +1087,32 @@ SSL_peek(SSL *s, void *buf, int num)
 }
 
 int
+SSL_peek_ex(SSL *s, void *buf, size_t num, size_t *bytes_peeked)
+{
+	int ret;
+
+	/* We simply don't bother supporting enormous peeks */
+	if (num > INT_MAX) {
+		SSLerror(s, SSL_R_BAD_LENGTH);
+		return 0;
+	}
+
+	ret = SSL_peek(s, buf, (int)num);
+	if (ret < 0)
+		ret = 0;
+	*bytes_peeked = ret;
+
+	return ret > 0;
+}
+
+int
 SSL_write(SSL *s, const void *buf, int num)
 {
+	if (num < 0) {
+		SSLerror(s, SSL_R_BAD_LENGTH);
+		return -1;
+	}
+
 	if (s->internal->handshake_func == NULL) {
 		SSLerror(s, SSL_R_UNINITIALIZED);
 		return (-1);
@@ -1023,6 +1124,31 @@ SSL_write(SSL *s, const void *buf, int num)
 		return (-1);
 	}
 	return ssl3_write(s, buf, num);
+}
+
+int
+SSL_write_ex(SSL *s, const void *buf, size_t num, size_t *bytes_written)
+{
+	int ret;
+
+	/* We simply don't bother supporting enormous writes */
+	if (num > INT_MAX) {
+		SSLerror(s, SSL_R_BAD_LENGTH);
+		return 0;
+	}
+
+	if (num == 0) {
+		/* This API is special */
+		bytes_written = 0;
+		return 1;
+	}
+
+	ret = SSL_write(s, buf, (int)num);
+	if (ret < 0)
+		ret = 0;
+	*bytes_written = ret;
+
+	return ret > 0;
 }
 
 uint32_t
@@ -1166,7 +1292,7 @@ SSL_ctrl(SSL *s, int cmd, long larg, void *parg)
 			return (0);
 #endif
 		if (SSL_is_dtls(s)) {
-			D1I(s)->mtu = larg;
+			s->d1->mtu = larg;
 			return (larg);
 		}
 		return (0);
@@ -2697,21 +2823,7 @@ SSL_dup(SSL *s)
 void
 ssl_clear_cipher_state(SSL *s)
 {
-	ssl_clear_cipher_read_state(s);
-	ssl_clear_cipher_write_state(s);
-}
-
-void
-ssl_clear_cipher_read_state(SSL *s)
-{
 	tls12_record_layer_clear_read_state(s->internal->rl);
-	tls12_record_layer_read_cipher_hash(s->internal->rl,
-	    &s->enc_read_ctx, &s->read_hash);
-}
-
-void
-ssl_clear_cipher_write_state(SSL *s)
-{
 	tls12_record_layer_clear_write_state(s->internal->rl);
 }
 

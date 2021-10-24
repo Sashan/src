@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_srvr.c,v 1.120 2021/10/23 08:34:36 jsing Exp $ */
+/* $OpenBSD: ssl_srvr.c,v 1.122 2021/10/23 14:40:54 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -183,7 +183,7 @@ ssl3_accept(SSL *s)
 	errno = 0;
 
 	if (SSL_is_dtls(s))
-		listen = D1I(s)->listen;
+		listen = s->d1->listen;
 
 	/* init things to blank */
 	s->internal->in_handshake++;
@@ -191,7 +191,7 @@ ssl3_accept(SSL *s)
 		SSL_clear(s);
 
 	if (SSL_is_dtls(s))
-		D1I(s)->listen = listen;
+		s->d1->listen = listen;
 
 	for (;;) {
 		state = S3I(s)->hs.state;
@@ -332,14 +332,14 @@ ssl3_accept(SSL *s)
 				/* If we're just listening, stop here */
 				if (listen && S3I(s)->hs.state == SSL3_ST_SW_SRVR_HELLO_A) {
 					ret = 2;
-					D1I(s)->listen = 0;
+					s->d1->listen = 0;
 					/*
 					 * Set expected sequence numbers to
 					 * continue the handshake.
 					 */
-					D1I(s)->handshake_read_seq = 2;
-					D1I(s)->handshake_write_seq = 1;
-					D1I(s)->next_handshake_write_seq = 1;
+					s->d1->handshake_read_seq = 2;
+					s->d1->handshake_write_seq = 1;
+					s->d1->next_handshake_write_seq = 1;
 					goto end;
 				}
 			} else {
@@ -584,7 +584,7 @@ ssl3_accept(SSL *s)
 		case SSL3_ST_SR_CERT_VRFY_A:
 		case SSL3_ST_SR_CERT_VRFY_B:
 			if (SSL_is_dtls(s))
-				D1I(s)->change_cipher_spec_ok = 1;
+				s->d1->change_cipher_spec_ok = 1;
 			else
 				s->s3->flags |= SSL3_FLAGS_CCS_OK;
 
@@ -599,7 +599,7 @@ ssl3_accept(SSL *s)
 		case SSL3_ST_SR_FINISHED_A:
 		case SSL3_ST_SR_FINISHED_B:
 			if (SSL_is_dtls(s))
-				D1I(s)->change_cipher_spec_ok = 1;
+				s->d1->change_cipher_spec_ok = 1;
 			else
 				s->s3->flags |= SSL3_FLAGS_CCS_OK;
 			ret = ssl3_get_finished(s, SSL3_ST_SR_FINISHED_A,
@@ -706,10 +706,10 @@ ssl3_accept(SSL *s)
 
 			if (SSL_is_dtls(s)) {
 				/* Done handshaking, next message is client hello. */
-				D1I(s)->handshake_read_seq = 0;
+				s->d1->handshake_read_seq = 0;
 				/* Next message is server hello. */
-				D1I(s)->handshake_write_seq = 0;
-				D1I(s)->next_handshake_write_seq = 0;
+				s->d1->handshake_write_seq = 0;
+				s->d1->next_handshake_write_seq = 0;
 			}
 			goto end;
 			/* break; */
@@ -837,19 +837,19 @@ ssl3_get_client_hello(SSL *s)
 	 * (may differ: see RFC 2246, Appendix E, second paragraph)
 	 */
 	if (!ssl_max_shared_version(s, client_version, &shared_version)) {
-		if ((s->client_version >> 8) == SSL3_VERSION_MAJOR &&
+		if ((client_version >> 8) == SSL3_VERSION_MAJOR &&
 		    !tls12_record_layer_write_protected(s->internal->rl)) {
 			/*
 			 * Similar to ssl3_get_record, send alert using remote
 			 * version number.
 			 */
-			s->version = s->client_version;
+			s->version = client_version;
 		}
 		SSLerror(s, SSL_R_WRONG_VERSION_NUMBER);
 		al = SSL_AD_PROTOCOL_VERSION;
 		goto fatal_err;
 	}
-	s->client_version = client_version;
+	S3I(s)->hs.peer_legacy_version = client_version;
 	s->version = shared_version;
 
 	S3I(s)->hs.negotiated_tls_version = ssl_tls_version(shared_version);
@@ -924,7 +924,7 @@ ssl3_get_client_hello(SSL *s)
 		 * message has not been sent - make sure that it does not cause
 		 * an overflow.
 		 */
-		if (CBS_len(&cookie) > sizeof(D1I(s)->rcvd_cookie)) {
+		if (CBS_len(&cookie) > sizeof(s->d1->rcvd_cookie)) {
 			al = SSL_AD_DECODE_ERROR;
 			SSLerror(s, SSL_R_COOKIE_MISMATCH);
 			goto fatal_err;
@@ -936,21 +936,21 @@ ssl3_get_client_hello(SSL *s)
 			size_t cookie_len;
 
 			/* XXX - rcvd_cookie seems to only be used here... */
-			if (!CBS_write_bytes(&cookie, D1I(s)->rcvd_cookie,
-			    sizeof(D1I(s)->rcvd_cookie), &cookie_len))
+			if (!CBS_write_bytes(&cookie, s->d1->rcvd_cookie,
+			    sizeof(s->d1->rcvd_cookie), &cookie_len))
 				goto err;
 
 			if (s->ctx->internal->app_verify_cookie_cb != NULL) {
 				if (s->ctx->internal->app_verify_cookie_cb(s,
-				    D1I(s)->rcvd_cookie, cookie_len) == 0) {
+				    s->d1->rcvd_cookie, cookie_len) == 0) {
 					al = SSL_AD_HANDSHAKE_FAILURE;
 					SSLerror(s, SSL_R_COOKIE_MISMATCH);
 					goto fatal_err;
 				}
 				/* else cookie verification succeeded */
 			/* XXX - can d1->cookie_len > sizeof(rcvd_cookie) ? */
-			} else if (timingsafe_memcmp(D1I(s)->rcvd_cookie,
-			    D1I(s)->cookie, D1I(s)->cookie_len) != 0) {
+			} else if (timingsafe_memcmp(s->d1->rcvd_cookie,
+			    s->d1->cookie, s->d1->cookie_len) != 0) {
 				/* default verification */
 				al = SSL_AD_HANDSHAKE_FAILURE;
 				SSLerror(s, SSL_R_COOKIE_MISMATCH);
@@ -1166,8 +1166,8 @@ ssl3_send_dtls_hello_verify_request(SSL *s)
 
 	if (S3I(s)->hs.state == DTLS1_ST_SW_HELLO_VERIFY_REQUEST_A) {
 		if (s->ctx->internal->app_gen_cookie_cb == NULL ||
-		    s->ctx->internal->app_gen_cookie_cb(s, D1I(s)->cookie,
-			&(D1I(s)->cookie_len)) == 0) {
+		    s->ctx->internal->app_gen_cookie_cb(s, s->d1->cookie,
+			&(s->d1->cookie_len)) == 0) {
 			SSLerror(s, ERR_R_INTERNAL_ERROR);
 			return 0;
 		}
@@ -1184,7 +1184,7 @@ ssl3_send_dtls_hello_verify_request(SSL *s)
 			goto err;
 		if (!CBB_add_u8_length_prefixed(&verify, &cookie))
 			goto err;
-		if (!CBB_add_bytes(&cookie, D1I(s)->cookie, D1I(s)->cookie_len))
+		if (!CBB_add_bytes(&cookie, s->d1->cookie, s->d1->cookie_len))
 			goto err;
 		if (!ssl3_handshake_msg_finish(s, &cbb))
 			goto err;
@@ -1723,9 +1723,8 @@ ssl3_get_client_kex_rsa(SSL *s, CBS *cbs)
 
 	arc4random_buf(fakekey, sizeof(fakekey));
 
-	/* XXX - peer max protocol version. */
-	fakekey[0] = s->client_version >> 8;
-	fakekey[1] = s->client_version & 0xff;
+	fakekey[0] = S3I(s)->hs.peer_legacy_version >> 8;
+	fakekey[1] = S3I(s)->hs.peer_legacy_version & 0xff;
 
 	pkey = s->cert->pkeys[SSL_PKEY_RSA].privatekey;
 	if ((pkey == NULL) || (pkey->type != EVP_PKEY_RSA) ||
@@ -1760,9 +1759,8 @@ ssl3_get_client_kex_rsa(SSL *s, CBS *cbs)
 		/* SSLerror(s, SSL_R_BAD_RSA_DECRYPT); */
 	}
 
-	/* XXX - peer max version. */
-	if ((al == -1) && !((pms[0] == (s->client_version >> 8)) &&
-	    (pms[1] == (s->client_version & 0xff)))) {
+	if ((al == -1) && !((pms[0] == (S3I(s)->hs.peer_legacy_version >> 8)) &&
+	    (pms[1] == (S3I(s)->hs.peer_legacy_version & 0xff)))) {
 		/*
 		 * The premaster secret must contain the same version number
 		 * as the ClientHello to detect version rollback attacks

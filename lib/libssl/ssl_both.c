@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_both.c,v 1.36 2021/10/23 08:34:36 jsing Exp $ */
+/* $OpenBSD: ssl_both.c,v 1.38 2021/10/23 13:36:03 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -288,10 +288,10 @@ ssl3_send_change_cipher_spec(SSL *s, int a, int b)
 		s->internal->init_off = 0;
 
 		if (SSL_is_dtls(s)) {
-			D1I(s)->handshake_write_seq =
-			    D1I(s)->next_handshake_write_seq;
+			s->d1->handshake_write_seq =
+			    s->d1->next_handshake_write_seq;
 			dtls1_set_message_header_int(s, SSL3_MT_CCS, 0,
-			    D1I(s)->handshake_write_seq, 0, 0);
+			    s->d1->handshake_write_seq, 0, 0);
 			dtls1_buffer_message(s, 1);
 		}
 
@@ -368,7 +368,7 @@ ssl3_output_cert_chain(SSL *s, CBB *cbb, CERT_PKEY *cpk)
 		    X509_V_FLAG_LEGACY_VERIFY);
 		X509_verify_cert(xs_ctx);
 		ERR_clear_error();
-		chain = xs_ctx->chain;
+		chain = X509_STORE_CTX_get0_chain(xs_ctx);
 	}
 
 	for (i = 0; i < sk_X509_num(chain); i++) {
