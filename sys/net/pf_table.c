@@ -368,6 +368,11 @@ pfr_add_addrs(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 				/* defer destroy after feedback is processed */
 				ke->pfrke_fb = PFR_FB_NONE;
 			} else {
+				/*
+				 * mark entry as added to table, so we won't
+				 * kill it with rest of the ioq
+				 */
+				ke->pfrke_fb = PFR_FB_ADDED;
 				SLIST_INSERT_HEAD(&workq, ke, pfrke_workq);
 				xadd++;
 			}
