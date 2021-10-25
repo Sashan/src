@@ -103,13 +103,12 @@ void			 pf_hash_rule_addr(MD5_CTX *, struct pf_rule_addr *);
 int			 pf_commit_rules(u_int32_t, char *);
 int			 pf_addr_setup(struct pf_ruleset *,
 			    struct pf_addr_wrap *, sa_family_t);
-int			 pf_kif_setup(char *, struct pfi_kif **);
+struct pfi_kif		*pf_kif_setup(struct pfi_kif *);
 void			 pf_addr_copyout(struct pf_addr_wrap *);
 void			 pf_trans_set_commit(void);
 void			 pf_pool_copyin(struct pf_pool *, struct pf_pool *);
 int			 pf_validate_range(u_int8_t, u_int16_t[2]);
-int			 pf_rule_copyin(struct pf_rule *, struct pf_rule *,
-			    struct pf_ruleset *);
+int			 pf_rule_copyin(struct pf_rule *, struct pf_rule *);
 u_int16_t		 pf_qname2qid(char *, int);
 void			 pf_qid2qname(u_int16_t, char *);
 void			 pf_qid_unref(u_int16_t);
@@ -266,6 +265,18 @@ pfclose(dev_t dev, int flags, int fmt, struct proc *p)
 	if (minor(dev) >= 1)
 		return (ENXIO);
 	return (0);
+}
+
+void
+pf_destroy_rule(struct pf_rule *rule)
+{
+	pfi_kif_destroy(rule->kif);
+	pfi_kif_destroy(rule->rcv_kif);
+	pfi_kif_destroy(rule->rdr.kif);
+	pfi_kif_destroy(rule->nat.kif);
+	pfi_kif_destroy(rule->route.kif);
+
+	pool_put(&pf_rule_pl, rule);
 }
 
 void
@@ -880,19 +891,21 @@ pf_addr_setup(struct pf_ruleset *ruleset, struct pf_addr_wrap *addr,
 	return (0);
 }
 
-int
-pf_kif_setup(char *ifname, struct pfi_kif **kif)
+struct pfi_kif *
+pf_kif_setup(struct pfi_kif *kif_buf)
 {
-	if (ifname[0]) {
-		*kif = pfi_kif_get(ifname, NULL);
-		if (*kif == NULL)
-			return (EINVAL);
+	struct pfi_kif *kif;
 
-		pfi_kif_ref(*kif, PFI_KIF_REF_RULE);
-	} else
-		*kif = NULL;
+	if (kif_buf == NULL)
+		return (NULL);
 
-	return (0);
+	KASSERT(kif_buf->pfik_name[0] != '\0');
+
+	kif = pfi_kif_get(kif_buf->pfik_name, &kif_buf);
+	if (kif_buf != NULL)
+		pfi_kif_destroy(kif_buf);
+
+	return (kif);
 }
 
 void
@@ -1318,41 +1331,18 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			break;
 		}
 
-		NET_LOCK();
-		PF_LOCK();
-		pr->anchor[sizeof(pr->anchor) - 1] = '\0';
-		ruleset = pf_find_ruleset(pr->anchor);
-		if (ruleset == NULL) {
-			error = EINVAL;
-			PF_UNLOCK();
-			NET_UNLOCK();
-			pool_put(&pf_rule_pl, rule);
+		if ((error = pf_rule_copyin(&pr->rule, rule))) {
+			pf_destroy_rule(rule);
+			rule = NULL;
 			break;
 		}
+
 		if (pr->rule.return_icmp >> 8 > ICMP_MAXTYPE) {
 			error = EINVAL;
-			PF_UNLOCK();
-			NET_UNLOCK();
-			pool_put(&pf_rule_pl, rule);
-			break;
-		}
-		if (pr->ticket != ruleset->rules.inactive.ticket) {
-			error = EBUSY;
-			PF_UNLOCK();
-			NET_UNLOCK();
-			pool_put(&pf_rule_pl, rule);
-			break;
-		}
-		if ((error = pf_rule_copyin(&pr->rule, rule, ruleset))) {
-			pf_rm_rule(NULL, rule);
+			pf_destroy_rule(rule);
 			rule = NULL;
-			PF_UNLOCK();
-			NET_UNLOCK();
 			break;
 		}
-		rule->cuid = p->p_ucred->cr_ruid;
-		rule->cpid = p->p_p->ps_pid;
-
 		switch (rule->af) {
 		case 0:
 			break;
@@ -1363,13 +1353,33 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			break;
 #endif /* INET6 */
 		default:
-			pf_rm_rule(NULL, rule);
+			pf_destroy_rule(rule);
 			rule = NULL;
 			error = EAFNOSUPPORT;
-			PF_UNLOCK();
-			NET_UNLOCK();
 			goto fail;
 		}
+
+		NET_LOCK();
+		PF_LOCK();
+		pr->anchor[sizeof(pr->anchor) - 1] = '\0';
+		ruleset = pf_find_ruleset(pr->anchor);
+		if (ruleset == NULL) {
+			error = EINVAL;
+			PF_UNLOCK();
+			NET_UNLOCK();
+			pf_destroy_rule(rule);
+			break;
+		}
+		if (pr->ticket != ruleset->rules.inactive.ticket) {
+			error = EBUSY;
+			PF_UNLOCK();
+			NET_UNLOCK();
+			pf_destroy_rule(rule);
+			break;
+		}
+		rule->cuid = p->p_ucred->cr_ruid;
+		rule->cpid = p->p_p->ps_pid;
+
 		tail = TAILQ_LAST(ruleset->rules.inactive.ptr,
 		    pf_rulequeue);
 		if (tail)
@@ -1380,6 +1390,20 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		if (rule->src.addr.type == PF_ADDR_NONE ||
 		    rule->dst.addr.type == PF_ADDR_NONE)
 			error = EINVAL;
+
+		rule->kif = pf_kif_setup(rule->kif);
+		rule->rcv_kif = pf_kif_setup(rule->rcv_kif);
+		rule->rdr.kif = pf_kif_setup(rule->rdr.kif);
+		rule->nat.kif = pf_kif_setup(rule->nat.kif);
+		rule->route.kif = pf_kif_setup(rule->route.kif);
+
+		if (rule->overload_tblname[0]) {
+			if ((rule->overload_tbl = pfr_attach_table(ruleset,
+			    rule->overload_tblname, 0)) == NULL)
+				error = EINVAL;
+			else
+				rule->overload_tbl->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+		}
 
 		if (pf_addr_setup(ruleset, &rule->src.addr, rule->af))
 			error = EINVAL;
@@ -3003,6 +3027,19 @@ pf_validate_range(u_int8_t op, u_int16_t port[2])
 }
 
 int
+pf_rule_commit(struct pf_rule *to, struct pf_ruleset *ruleset)
+{
+	struct pfi_kif *kif;
+
+	NET_LOCK();
+	PF_LOCK();
+
+
+	PF_UNLOCK();
+	NET_UNLOCK();
+}
+
+int
 pf_rule_copyin(struct pf_rule *from, struct pf_rule *to,
     struct pf_ruleset *ruleset)
 {
@@ -3038,24 +3075,15 @@ pf_rule_copyin(struct pf_rule *from, struct pf_rule *to,
 	if (pf_validate_range(to->rdr.port_op, to->rdr.proxy_port))
 		return (EINVAL);
 
-	if (pf_kif_setup(to->ifname, &to->kif))
-		return (EINVAL);
-	if (pf_kif_setup(to->rcv_ifname, &to->rcv_kif))
-		return (EINVAL);
-	if (to->overload_tblname[0]) {
-		if ((to->overload_tbl = pfr_attach_table(ruleset,
-		    to->overload_tblname, 0)) == NULL)
-			return (EINVAL);
-		else
-			to->overload_tbl->pfrkt_flags |= PFR_TFLAG_ACTIVE;
-	}
-
-	if (pf_kif_setup(to->rdr.ifname, &to->rdr.kif))
-		return (EINVAL);
-	if (pf_kif_setup(to->nat.ifname, &to->nat.kif))
-		return (EINVAL);
-	if (pf_kif_setup(to->route.ifname, &to->route.kif))
-		return (EINVAL);
+	to->kif = (to->ifname[0]) ? pfi_kif_create(to->ifname) : NULL;
+	to->rcv_ifname = (to->rcv_ifname[0]) ?
+	    pfi_kif_create(to->rcv_ifname) : NULL;
+	to->rdr.kif = (to->rdr.ifname[0]) ?
+	    pfi_kif_create(to->rdr.ifname) : NULL;
+	to->net.ifname = (to->nat.ifname[0]) ?
+	    pfi_kif_create(to->nat.ifname) : NULL;
+	to->route.ifname = (to->route.ifname[0]) ?
+	    pfi_kif_create(to->route.ifname[0]) : NULL;
 
 	to->os_fingerprint = from->os_fingerprint;
 
