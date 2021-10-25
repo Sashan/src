@@ -1591,7 +1591,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		if (pcr->action != PF_CHANGE_REMOVE) {
-			pf_rule_copyin(&pcr->rule, newrule, ruleset);
+			pf_rule_copyin(&pcr->rule, newrule);
 			newrule->cuid = p->p_ucred->cr_ruid;
 			newrule->cpid = p->p_p->ps_pid;
 
@@ -3027,21 +3027,7 @@ pf_validate_range(u_int8_t op, u_int16_t port[2])
 }
 
 int
-pf_rule_commit(struct pf_rule *to, struct pf_ruleset *ruleset)
-{
-	struct pfi_kif *kif;
-
-	NET_LOCK();
-	PF_LOCK();
-
-
-	PF_UNLOCK();
-	NET_UNLOCK();
-}
-
-int
-pf_rule_copyin(struct pf_rule *from, struct pf_rule *to,
-    struct pf_ruleset *ruleset)
+pf_rule_copyin(struct pf_rule *from, struct pf_rule *to)
 {
 	int i;
 
@@ -3076,14 +3062,14 @@ pf_rule_copyin(struct pf_rule *from, struct pf_rule *to,
 		return (EINVAL);
 
 	to->kif = (to->ifname[0]) ? pfi_kif_create(to->ifname) : NULL;
-	to->rcv_ifname = (to->rcv_ifname[0]) ?
+	to->rcv_kif = (to->rcv_ifname[0]) ?
 	    pfi_kif_create(to->rcv_ifname) : NULL;
 	to->rdr.kif = (to->rdr.ifname[0]) ?
 	    pfi_kif_create(to->rdr.ifname) : NULL;
-	to->net.ifname = (to->nat.ifname[0]) ?
+	to->nat.kif = (to->nat.ifname[0]) ?
 	    pfi_kif_create(to->nat.ifname) : NULL;
-	to->route.ifname = (to->route.ifname[0]) ?
-	    pfi_kif_create(to->route.ifname[0]) : NULL;
+	to->route.kif = (to->route.ifname[0]) ?
+	    pfi_kif_create(to->route.ifname) : NULL;
 
 	to->os_fingerprint = from->os_fingerprint;
 
