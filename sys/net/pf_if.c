@@ -85,8 +85,7 @@ RB_GENERATE(pfi_ifhead, pfi_kif, pfik_tree, pfi_if_compare);
 void
 pfi_initialize(void)
 {
-	if (pfi_all != NULL)	/* already initialized */
-		return;
+	KASSERT(pfi_all == NULL);
 
 	pool_init(&pfi_addr_pl, sizeof(struct pfi_dynaddr), 0, IPL_SOFTNET, 0,
 	    "pfiaddrpl", NULL);
@@ -237,7 +236,8 @@ pfi_attach_ifnet(struct ifnet *ifp)
 	struct pfi_kif		*kif;
 	struct task		*t;
 
-	pfi_initialize();
+	KASSERT(pfi_all != NULL);
+
 	pfi_update++;
 	if ((kif = pfi_kif_get(ifp->if_xname)) == NULL)
 		panic("%s: pfi_kif_get failed", __func__);
@@ -280,7 +280,8 @@ pfi_attach_ifgroup(struct ifg_group *ifg)
 {
 	struct pfi_kif	*kif;
 
-	pfi_initialize();
+	KASSERT(pfi_all != NULL);
+
 	pfi_update++;
 	if ((kif = pfi_kif_get(ifg->ifg_group)) == NULL)
 		panic("%s: pfi_kif_get failed", __func__);
