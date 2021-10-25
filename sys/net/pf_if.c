@@ -129,7 +129,7 @@ pfi_initialize(void)
 	pfi_buffer_max = 64;
 	pfi_buffer = mallocarray(pfi_buffer_max, sizeof(*pfi_buffer),
 	    PFI_MTYPE, M_WAITOK);
-	
+
 	pfi_all = pfi_kif_create(IFG_ALL);
 
 	if (RB_INSERT(pfi_ifhead, &pfi_ifs, pfi_all) != NULL)
