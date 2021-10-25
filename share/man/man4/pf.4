@@ -351,35 +351,6 @@ On exit,
 is always set to the total size required to hold all state table entries
 (i.e., it is set to
 .Li sizeof(struct pfsync_state) * nr ) .
-.It Dv DIOCCHANGERULE Fa "struct pfioc_rule *pcr"
-Add or remove the
-.Va rule
-in the ruleset specified by
-.Va rule.action .
-.Pp
-The type of operation to be performed is indicated by
-.Va action ,
-which can be any of the following:
-.Bd -literal
-enum	{ PF_CHANGE_NONE, PF_CHANGE_ADD_HEAD, PF_CHANGE_ADD_TAIL,
-	  PF_CHANGE_ADD_BEFORE, PF_CHANGE_ADD_AFTER,
-	  PF_CHANGE_REMOVE, PF_CHANGE_GET_TICKET };
-.Ed
-.Pp
-.Va ticket
-must be set to the value obtained with
-.Dv PF_CHANGE_GET_TICKET
-for all actions except
-.Dv PF_CHANGE_GET_TICKET .
-.Va anchor
-indicates to which anchor the operation applies.
-.Va nr
-indicates the rule number against which
-.Dv PF_CHANGE_ADD_BEFORE ,
-.Dv PF_CHANGE_ADD_AFTER ,
-or
-.Dv PF_CHANGE_REMOVE
-actions are applied.
 .It Dv DIOCSETTIMEOUT Fa "struct pfioc_tm *pt"
 .Bd -literal
 struct pfioc_tm {
