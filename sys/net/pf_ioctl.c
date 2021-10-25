@@ -342,8 +342,22 @@ pf_purge_rule(struct pf_rule *rule)
 		pf_calc_chksum(ruleset);
 }
 
+struct pf_tagname *
+tagnmae_create(int mflag)
+{
+	return (pool_get(&pf_tag_pl, mflag | PR_ZERO));
+}
+
+void
+tagname_destroy(struct pf_tagname *tag)
+{
+	KASSERT(tag->tag == 0);
+	pool_put(&pf_tag_pl, tag);
+}
+
 u_int16_t
-tagname2tag(struct pf_tags *head, char *tagname, int create)
+tagname2tag(struct pf_tags *head, char *tagname, int create,
+    struct pf_tagname **tag_buf)
 {
 	struct pf_tagname	*tag, *p = NULL;
 	u_int16_t		 new_tagid = 1;
@@ -354,7 +368,7 @@ tagname2tag(struct pf_tags *head, char *tagname, int create)
 			return (tag->tag);
 		}
 
-	if (!create)
+	if ((tag_buf == NULL) || (*tag_buf == NULL))
 		return (0);
 
 	/*
