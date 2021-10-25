@@ -848,7 +848,7 @@ pfr_create_kentry(struct pfr_addr *ad)
 		/* FALLTHROUGH */
 	case PFRKE_ROUTE:
 		if (ad->pfra_ifname[0])
-			ke->pfrke_rkif = pfi_kif_get(ad->pfra_ifname);
+			ke->pfrke_rkif = pfi_kif_get(ad->pfra_ifname, NULL);
 		if (ke->pfrke_rkif)
 			pfi_kif_ref(ke->pfrke_rkif, PFI_KIF_REF_ROUTE);
 		break;

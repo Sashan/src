@@ -547,7 +547,7 @@ pfsync_state_import(struct pfsync_state *sp, int flags)
 		return (EINVAL);
 	}
 
-	if ((kif = pfi_kif_get(sp->ifname)) == NULL) {
+	if ((kif = pfi_kif_get(sp->ifname, NULL)) == NULL) {
 		DPFPRINTF(LOG_NOTICE, "pfsync_state_import: "
 		    "unknown interface: %s", sp->ifname);
 		if (flags & PFSYNC_SI_IOCTL)

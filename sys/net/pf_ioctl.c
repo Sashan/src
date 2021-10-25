@@ -884,7 +884,7 @@ int
 pf_kif_setup(char *ifname, struct pfi_kif **kif)
 {
 	if (ifname[0]) {
-		*kif = pfi_kif_get(ifname);
+		*kif = pfi_kif_get(ifname, NULL);
 		if (*kif == NULL)
 			return (EINVAL);
 
@@ -1289,7 +1289,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			pool_put(&pf_queue_pl, qs);
 			break;
 		}
-		qs->kif = pfi_kif_get(qs->ifname);
+		qs->kif = pfi_kif_get(qs->ifname, NULL);
 		if (qs->kif == NULL) {
 			error = ESRCH;
 			PF_UNLOCK();
