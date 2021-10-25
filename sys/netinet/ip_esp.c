@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_esp.c,v 1.182 2021/10/24 15:47:39 tobhe Exp $ */
+/*	$OpenBSD: ip_esp.c,v 1.184 2021/10/24 23:33:37 tobhe Exp $ */
 /*
  * The authors of this code are John Ioannidis (ji@tla.org),
  * Angelos D. Keromytis (kermit@csd.uch.gr) and
@@ -342,17 +342,18 @@ esp_zeroize(struct tdb *tdbp)
 int
 esp_input(struct mbuf **mp, struct tdb *tdb, int skip, int protoff)
 {
-	uint8_t abuf[AH_HMAC_MAX_HASHLEN];
 	const struct auth_hash *esph = tdb->tdb_authalgxform;
 	const struct enc_xform *espx = tdb->tdb_encalgxform;
-	struct mbuf *m = *mp;
+	struct mbuf *m = *mp, *m1, *mo;
 	struct cryptodesc *crde = NULL, *crda = NULL;
 	struct cryptop *crp = NULL;
-	int plen, alen, hlen, error, clen;
-	u_int32_t btsx, esn;
+	int plen, alen, hlen, error, clen, roff;
+	uint32_t btsx, esn;
 #ifdef ENCDEBUG
 	char buf[INET6_ADDRSTRLEN];
 #endif
+	uint8_t abuf[AH_HMAC_MAX_HASHLEN];
+	uint8_t lastthree[3], aalg[AH_HMAC_MAX_HASHLEN];
 
 	/* Determine the ESP header length */
 	hlen = 2 * sizeof(u_int32_t) + tdb->tdb_ivlen; /* "new" ESP */
@@ -521,34 +522,7 @@ esp_input(struct mbuf **mp, struct tdb *tdb, int skip, int protoff)
 
 	/* Release the crypto descriptors */
 	crypto_freereq(crp);
-
-	return esp_input_cb(tdb, abuf, skip, protoff, tdb->tdb_rpl, m, clen);
-
- drop:
-	m_freemp(mp);
-	crypto_freereq(crp);
-	return error;
-}
-
-/*
- * ESP input callback, called directly by the crypto driver.
- */
-int
-esp_input_cb(struct tdb *tdb, uint8_t *abuf, int skip, int protoff, uint64_t rpl,
-    struct mbuf *m, int clen)
-{
-	u_int8_t lastthree[3], aalg[AH_HMAC_MAX_HASHLEN];
-	int hlen, roff;
-	struct mbuf *m1, *mo;
-	const struct auth_hash *esph;
-	u_int32_t btsx, esn;
-#ifdef ENCDEBUG
-	char buf[INET6_ADDRSTRLEN];
-#endif
-
-	NET_ASSERT_LOCKED();
-
-	esph = tdb->tdb_authalgxform;
+	crp = NULL;
 
 	/* If authentication was performed, check now. */
 	if (esph != NULL) {
@@ -563,7 +537,8 @@ esp_input_cb(struct tdb *tdb, uint8_t *abuf, int skip, int protoff, uint64_t rpl
 			    ipsp_address(&tdb->tdb_dst, buf, sizeof(buf)),
 			    ntohl(tdb->tdb_spi));
 			espstat_inc(esps_badauth);
-			goto baddone;
+			error = -1;
+			goto drop;
 		}
 
 		/* Remove trailing authenticator */
@@ -576,7 +551,7 @@ esp_input_cb(struct tdb *tdb, uint8_t *abuf, int skip, int protoff, uint64_t rpl
 		    &btsx);
 		btsx = ntohl(btsx);
 
-		switch (checkreplaywindow(tdb, rpl, btsx, &esn, 1)) {
+		switch (checkreplaywindow(tdb, tdb->tdb_rpl, btsx, &esn, 1)) {
 		case 0: /* All's well */
 #if NPFSYNC > 0
 			pfsync_update_tdb(tdb,0);
@@ -588,31 +563,32 @@ esp_input_cb(struct tdb *tdb, uint8_t *abuf, int skip, int protoff, uint64_t rpl
 			    ipsp_address(&tdb->tdb_dst, buf, sizeof(buf)),
 			    ntohl(tdb->tdb_spi));
 			espstat_inc(esps_wrap);
-			goto baddone;
+			error = -1;
+			goto drop;
 		case 2:
 			DPRINTF("old packet received in SA %s/%08x",
 			    ipsp_address(&tdb->tdb_dst, buf, sizeof(buf)),
 			    ntohl(tdb->tdb_spi));
 			espstat_inc(esps_replay);
-			goto baddone;
+			error = -1;
+			goto drop;
 		case 3:
 			DPRINTF("duplicate packet received in SA %s/%08x",
 			    ipsp_address(&tdb->tdb_dst, buf, sizeof(buf)),
 			    ntohl(tdb->tdb_spi));
 			espstat_inc(esps_replay);
-			goto baddone;
+			error = -1;
+			goto drop;
 		default:
 			DPRINTF("bogus value from checkreplaywindow() "
 			    "in SA %s/%08x",
 			    ipsp_address(&tdb->tdb_dst, buf, sizeof(buf)),
 			    ntohl(tdb->tdb_spi));
 			espstat_inc(esps_replay);
-			goto baddone;
+			error = -1;
+			goto drop;
 		}
 	}
-
-	/* Determine the ESP header length */
-	hlen = 2 * sizeof(u_int32_t) + tdb->tdb_ivlen;
 
 	/* Find beginning of ESP header */
 	m1 = m_getptr(m, skip, &roff);
@@ -621,7 +597,8 @@ esp_input_cb(struct tdb *tdb, uint8_t *abuf, int skip, int protoff, uint64_t rpl
 		    ipsp_address(&tdb->tdb_dst, buf, sizeof(buf)),
 		    ntohl(tdb->tdb_spi));
 		espstat_inc(esps_hdrops);
-		goto baddone;
+		error = -1;
+		goto drop;
 	}
 
 	/* Remove the ESP header and IV from the mbuf. */
@@ -691,7 +668,8 @@ esp_input_cb(struct tdb *tdb, uint8_t *abuf, int skip, int protoff, uint64_t rpl
 		    ipsp_address(&tdb->tdb_dst, buf, sizeof(buf)),
 		    ntohl(tdb->tdb_spi));
 		espstat_inc(esps_badilen);
-		goto baddone;
+		error = -1;
+		goto drop;
 	}
 
 	/* Verify correct decryption by checking the last padding bytes */
@@ -700,7 +678,8 @@ esp_input_cb(struct tdb *tdb, uint8_t *abuf, int skip, int protoff, uint64_t rpl
 		    ipsp_address(&tdb->tdb_dst, buf, sizeof(buf)),
 		    ntohl(tdb->tdb_spi));
 		espstat_inc(esps_badenc);
-		goto baddone;
+		error = -1;
+		goto drop;
 	}
 
 	/* Trim the mbuf chain to remove the trailing authenticator and padding */
@@ -710,11 +689,12 @@ esp_input_cb(struct tdb *tdb, uint8_t *abuf, int skip, int protoff, uint64_t rpl
 	m_copyback(m, protoff, sizeof(u_int8_t), lastthree + 2, M_NOWAIT);
 
 	/* Back to generic IPsec input processing */
-	return ipsec_common_input_cb(m, tdb, skip, protoff);
+	return ipsec_common_input_cb(mp, tdb, skip, protoff);
 
- baddone:
-	m_freem(m);
-	return -1;
+ drop:
+	m_freemp(mp);
+	crypto_freereq(crp);
+	return error;
 }
 
 /*
@@ -726,11 +706,11 @@ esp_output(struct mbuf *m, struct tdb *tdb, int skip, int protoff)
 	const struct enc_xform *espx = tdb->tdb_encalgxform;
 	const struct auth_hash *esph = tdb->tdb_authalgxform;
 	int ilen, olen, hlen, rlen, padding, blks, alen, roff, error;
-	u_int64_t replay64;
-	u_int32_t replay;
+	uint64_t replay64;
+	uint32_t replay;
 	struct mbuf *mi, *mo = (struct mbuf *) NULL;
 	unsigned char *pad;
-	u_int8_t prot;
+	uint8_t prot;
 #ifdef ENCDEBUG
 	char buf[INET6_ADDRSTRLEN];
 #endif
