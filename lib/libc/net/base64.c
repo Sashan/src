@@ -1,4 +1,4 @@
-/*	$OpenBSD: base64.c,v 1.13 2021/10/24 10:05:22 jsg Exp $	*/
+/*	$OpenBSD: base64.c,v 1.15 2021/10/25 14:41:09 jca Exp $	*/
 
 /*
  * Copyright (c) 1996 by Internet Software Consortium.
