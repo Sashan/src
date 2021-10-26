@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_clnt.c,v 1.113 2021/10/23 08:34:36 jsing Exp $ */
+/* $OpenBSD: ssl_clnt.c,v 1.117 2021/10/25 10:01:46 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -249,7 +249,7 @@ ssl3_connect(SSL *s)
 				/* mark client_random uninitialized */
 				memset(s->s3->client_random, 0,
 				    sizeof(s->s3->client_random));
-				D1I(s)->send_cookie = 0;
+				s->d1->send_cookie = 0;
 				s->internal->hit = 0;
 			}
 			break;
@@ -269,7 +269,7 @@ ssl3_connect(SSL *s)
 			if (ret <= 0)
 				goto end;
 
-			if (SSL_is_dtls(s) && D1I(s)->send_cookie) {
+			if (SSL_is_dtls(s) && s->d1->send_cookie) {
 				S3I(s)->hs.state = SSL3_ST_CW_FLUSH;
 				S3I(s)->hs.tls12.next_state = SSL3_ST_CR_SRVR_HELLO_A;
 			} else
@@ -314,7 +314,7 @@ ssl3_connect(SSL *s)
 			if (ret <= 0)
 				goto end;
 			dtls1_stop_timer(s);
-			if (D1I(s)->send_cookie) /* start again, with a cookie */
+			if (s->d1->send_cookie) /* start again, with a cookie */
 				S3I(s)->hs.state = SSL3_ST_CW_CLNT_HELLO_A;
 			else
 				S3I(s)->hs.state = SSL3_ST_CR_CERT_A;
@@ -529,7 +529,7 @@ ssl3_connect(SSL *s)
 		case SSL3_ST_CR_FINISHED_A:
 		case SSL3_ST_CR_FINISHED_B:
 			if (SSL_is_dtls(s))
-				D1I(s)->change_cipher_spec_ok = 1;
+				s->d1->change_cipher_spec_ok = 1;
 			else
 				s->s3->flags |= SSL3_FLAGS_CCS_OK;
 			ret = ssl3_get_finished(s, SSL3_ST_CR_FINISHED_A,
@@ -595,8 +595,8 @@ ssl3_connect(SSL *s)
 
 			if (SSL_is_dtls(s)) {
 				/* done with handshaking */
-				D1I(s)->handshake_read_seq = 0;
-				D1I(s)->next_handshake_write_seq = 0;
+				s->d1->handshake_read_seq = 0;
+				s->d1->next_handshake_write_seq = 0;
 			}
 
 			goto end;
@@ -650,12 +650,12 @@ ssl3_send_client_hello(SSL *s)
 			SSLerror(s, SSL_R_NO_PROTOCOLS_AVAILABLE);
 			return (-1);
 		}
-		s->client_version = s->version = max_version;
+		s->version = max_version;
 
 		if (sess == NULL ||
 		    sess->ssl_version != s->version ||
 		    (!sess->session_id_length && !sess->tlsext_tick) ||
-		    sess->internal->not_resumable) {
+		    sess->not_resumable) {
 			if (!ssl_get_new_session(s, 0))
 				goto err;
 		}
@@ -666,44 +666,14 @@ ssl3_send_client_hello(SSL *s)
 		 * HelloVerifyRequest, we must retain the original client
 		 * random value.
 		 */
-		if (!SSL_is_dtls(s) || D1I(s)->send_cookie == 0)
+		if (!SSL_is_dtls(s) || s->d1->send_cookie == 0)
 			arc4random_buf(s->s3->client_random, SSL3_RANDOM_SIZE);
 
 		if (!ssl3_handshake_msg_start(s, &cbb, &client_hello,
 		    SSL3_MT_CLIENT_HELLO))
 			goto err;
 
-		/*
-		 * Version indicates the negotiated version: for example from
-		 * an SSLv2/v3 compatible client hello). The client_version
-		 * field is the maximum version we permit and it is also
-		 * used in RSA encrypted premaster secrets. Some servers can
-		 * choke if we initially report a higher version then
-		 * renegotiate to a lower one in the premaster secret. This
-		 * didn't happen with TLS 1.0 as most servers supported it
-		 * but it can with TLS 1.1 or later if the server only supports
-		 * 1.0.
-		 *
-		 * Possible scenario with previous logic:
-		 *	1. Client hello indicates TLS 1.2
-		 *	2. Server hello says TLS 1.0
-		 *	3. RSA encrypted premaster secret uses 1.2.
-		 *	4. Handhaked proceeds using TLS 1.0.
-		 *	5. Server sends hello request to renegotiate.
-		 *	6. Client hello indicates TLS v1.0 as we now
-		 *	   know that is maximum server supports.
-		 *	7. Server chokes on RSA encrypted premaster secret
-		 *	   containing version 1.0.
-		 *
-		 * For interoperability it should be OK to always use the
-		 * maximum version we support in client hello and then rely
-		 * on the checking of version to ensure the servers isn't
-		 * being inconsistent: for example initially negotiating with
-		 * TLS 1.0 and renegotiating with TLS 1.2. We do this by using
-		 * client_version in client hello and not resetting it to
-		 * the negotiated version.
-		 */
-		if (!CBB_add_u16(&client_hello, s->client_version))
+		if (!CBB_add_u16(&client_hello, s->version))
 			goto err;
 
 		/* Random stuff */
@@ -728,14 +698,14 @@ ssl3_send_client_hello(SSL *s)
 
 		/* DTLS Cookie. */
 		if (SSL_is_dtls(s)) {
-			if (D1I(s)->cookie_len > sizeof(D1I(s)->cookie)) {
+			if (s->d1->cookie_len > sizeof(s->d1->cookie)) {
 				SSLerror(s, ERR_R_INTERNAL_ERROR);
 				goto err;
 			}
 			if (!CBB_add_u8_length_prefixed(&client_hello, &cookie))
 				goto err;
-			if (!CBB_add_bytes(&cookie, D1I(s)->cookie,
-			    D1I(s)->cookie_len))
+			if (!CBB_add_bytes(&cookie, s->d1->cookie,
+			    s->d1->cookie_len))
 				goto err;
 		}
 
@@ -789,7 +759,7 @@ ssl3_get_dtls_hello_verify(SSL *s)
 		return ret;
 
 	if (S3I(s)->hs.tls12.message_type != DTLS1_MT_HELLO_VERIFY_REQUEST) {
-		D1I(s)->send_cookie = 0;
+		s->d1->send_cookie = 0;
 		S3I(s)->hs.tls12.reuse_message = 1;
 		return (1);
 	}
@@ -819,14 +789,14 @@ ssl3_get_dtls_hello_verify(SSL *s)
 		goto fatal_err;
 	}
 
-	if (!CBS_write_bytes(&cookie, D1I(s)->cookie,
-	    sizeof(D1I(s)->cookie), &cookie_len)) {
-		D1I(s)->cookie_len = 0;
+	if (!CBS_write_bytes(&cookie, s->d1->cookie,
+	    sizeof(s->d1->cookie), &cookie_len)) {
+		s->d1->cookie_len = 0;
 		al = SSL_AD_ILLEGAL_PARAMETER;
 		goto fatal_err;
 	}
-	D1I(s)->cookie_len = cookie_len;
-	D1I(s)->send_cookie = 1;
+	s->d1->cookie_len = cookie_len;
+	s->d1->send_cookie = 1;
 
 	return 1;
 
@@ -862,7 +832,7 @@ ssl3_get_server_hello(SSL *s)
 
 	if (SSL_is_dtls(s)) {
 		if (S3I(s)->hs.tls12.message_type == DTLS1_MT_HELLO_VERIFY_REQUEST) {
-			if (D1I(s)->send_cookie == 0) {
+			if (s->d1->send_cookie == 0) {
 				S3I(s)->hs.tls12.reuse_message = 1;
 				return (1);
 			} else {
@@ -889,6 +859,7 @@ ssl3_get_server_hello(SSL *s)
 		al = SSL_AD_PROTOCOL_VERSION;
 		goto fatal_err;
 	}
+	S3I(s)->hs.peer_legacy_version = server_version;
 	s->version = server_version;
 
 	S3I(s)->hs.negotiated_tls_version = ssl_tls_version(server_version);
@@ -1186,8 +1157,8 @@ ssl3_get_server_certificate(SSL *s)
 	sc = ssl_sess_cert_new();
 	if (sc == NULL)
 		goto err;
-	ssl_sess_cert_free(SSI(s)->sess_cert);
-	SSI(s)->sess_cert = sc;
+	ssl_sess_cert_free(s->session->sess_cert);
+	s->session->sess_cert = sc;
 
 	sc->cert_chain = sk;
 	/*
@@ -1216,7 +1187,7 @@ ssl3_get_server_certificate(SSL *s)
 	}
 
 	sc->peer_cert_type = i;
-	CRYPTO_add(&x->references, 1, CRYPTO_LOCK_X509);
+	X509_up_ref(x);
 	/*
 	 * Why would the following ever happen?
 	 * We just created sc a couple of lines ago.
@@ -1226,7 +1197,7 @@ ssl3_get_server_certificate(SSL *s)
 	sc->peer_key = &(sc->peer_pkeys[i]);
 
 	X509_free(s->session->peer);
-	CRYPTO_add(&x->references, 1, CRYPTO_LOCK_X509);
+	X509_up_ref(x);
 	s->session->peer = x;
 	s->session->verify_result = s->verify_result;
 
@@ -1260,7 +1231,7 @@ ssl3_get_server_kex_dhe(SSL *s, EVP_PKEY **pkey, CBS *cbs)
 	int al;
 
 	alg_a = S3I(s)->hs.cipher->algorithm_auth;
-	sc = SSI(s)->sess_cert;
+	sc = s->session->sess_cert;
 
 	if ((dh = DH_new()) == NULL) {
 		SSLerror(s, ERR_R_DH_LIB);
@@ -1388,7 +1359,7 @@ ssl3_get_server_kex_ecdhe(SSL *s, EVP_PKEY **pkey, CBS *cbs)
 	int al;
 
 	alg_a = S3I(s)->hs.cipher->algorithm_auth;
-	sc = SSI(s)->sess_cert;
+	sc = s->session->sess_cert;
 
 	/* Only named curves are supported. */
 	if (!CBS_get_u8(cbs, &curve_type) ||
@@ -1497,18 +1468,18 @@ ssl3_get_server_key_exchange(SSL *s)
 		return (1);
 	}
 
-	if (SSI(s)->sess_cert != NULL) {
-		DH_free(SSI(s)->sess_cert->peer_dh_tmp);
-		SSI(s)->sess_cert->peer_dh_tmp = NULL;
+	if (s->session->sess_cert != NULL) {
+		DH_free(s->session->sess_cert->peer_dh_tmp);
+		s->session->sess_cert->peer_dh_tmp = NULL;
 
-		EC_KEY_free(SSI(s)->sess_cert->peer_ecdh_tmp);
-		SSI(s)->sess_cert->peer_ecdh_tmp = NULL;
+		EC_KEY_free(s->session->sess_cert->peer_ecdh_tmp);
+		s->session->sess_cert->peer_ecdh_tmp = NULL;
 
-		free(SSI(s)->sess_cert->peer_x25519_tmp);
-		SSI(s)->sess_cert->peer_x25519_tmp = NULL;
+		free(s->session->sess_cert->peer_x25519_tmp);
+		s->session->sess_cert->peer_x25519_tmp = NULL;
 	} else {
-		SSI(s)->sess_cert = ssl_sess_cert_new();
-		if (SSI(s)->sess_cert == NULL)
+		s->session->sess_cert = ssl_sess_cert_new();
+		if (s->session->sess_cert == NULL)
 			goto err;
 	}
 
@@ -1952,6 +1923,7 @@ ssl3_send_client_kex_rsa(SSL *s, SESS_CERT *sess_cert, CBB *cbb)
 {
 	unsigned char pms[SSL_MAX_MASTER_KEY_LENGTH];
 	unsigned char *enc_pms = NULL;
+	uint16_t max_legacy_version;
 	EVP_PKEY *pkey = NULL;
 	int ret = -1;
 	int enc_len;
@@ -1968,9 +1940,17 @@ ssl3_send_client_kex_rsa(SSL *s, SESS_CERT *sess_cert, CBB *cbb)
 		goto err;
 	}
 
-	/* XXX - our max protocol version. */
-	pms[0] = s->client_version >> 8;
-	pms[1] = s->client_version & 0xff;
+	/*
+	 * Our maximum legacy protocol version - while RFC 5246 section 7.4.7.1
+	 * says "The latest (newest) version supported by the client", if we're
+	 * doing RSA key exchange then we have to presume that we're talking to
+	 * a server that does not understand the supported versions extension
+	 * and therefore our maximum version is that sent in the ClientHello.
+	 */
+	if (!ssl_max_legacy_version(s, &max_legacy_version))
+		goto err;
+	pms[0] = max_legacy_version >> 8;
+	pms[1] = max_legacy_version & 0xff;
 	arc4random_buf(&pms[2], sizeof(pms) - 2);
 
 	if ((enc_pms = malloc(RSA_size(pkey->pkey.rsa))) == NULL) {
@@ -2287,7 +2267,7 @@ ssl3_send_client_key_exchange(SSL *s)
 	if (S3I(s)->hs.state == SSL3_ST_CW_KEY_EXCH_A) {
 		alg_k = S3I(s)->hs.cipher->algorithm_mkey;
 
-		if ((sess_cert = SSI(s)->sess_cert) == NULL) {
+		if ((sess_cert = s->session->sess_cert) == NULL) {
 			ssl3_send_alert(s, SSL3_AL_FATAL,
 			    SSL_AD_UNEXPECTED_MESSAGE);
 			SSLerror(s, ERR_R_INTERNAL_ERROR);
@@ -2690,12 +2670,12 @@ ssl3_check_cert_and_algorithm(SSL *s)
 	if (alg_a & SSL_aNULL)
 		return (1);
 
-	sc = SSI(s)->sess_cert;
+	sc = s->session->sess_cert;
 	if (sc == NULL) {
 		SSLerror(s, ERR_R_INTERNAL_ERROR);
 		goto err;
 	}
-	dh = SSI(s)->sess_cert->peer_dh_tmp;
+	dh = s->session->sess_cert->peer_dh_tmp;
 
 	/* This is the passed certificate. */
 

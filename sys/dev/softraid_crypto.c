@@ -1,4 +1,4 @@
-/* $OpenBSD: softraid_crypto.c,v 1.143 2021/10/22 05:06:37 anton Exp $ */
+/* $OpenBSD: softraid_crypto.c,v 1.145 2021/10/24 14:50:42 tobhe Exp $ */
 /*
  * Copyright (c) 2007 Marco Peereboom <marco@peereboom.us>
  * Copyright (c) 2008 Hans-Joerg Hoexer <hshoexer@openbsd.org>
@@ -87,13 +87,11 @@ int		sr_crypto_meta_opt_handler_internal(struct sr_discipline *,
 		    struct sr_crypto *, struct sr_meta_opt_hdr *);
 int		sr_crypto_meta_opt_handler(struct sr_discipline *,
 		    struct sr_meta_opt_hdr *);
-void		sr_crypto_write(struct cryptop *);
 int		sr_crypto_rw(struct sr_workunit *);
 int		sr_crypto_dev_rw(struct sr_workunit *, struct sr_crypto_wu *);
 void		sr_crypto_done_internal(struct sr_workunit *,
 		    struct sr_crypto *);
 void		sr_crypto_done(struct sr_workunit *);
-void		sr_crypto_read(struct cryptop *);
 void		sr_crypto_calculate_check_hmac_sha1(u_int8_t *, int,
 		   u_int8_t *, int, u_char *);
 void		sr_crypto_hotplug(struct sr_discipline *, struct disk *, int);
@@ -322,7 +320,6 @@ sr_crypto_prepare(struct sr_workunit *wu, struct sr_crypto *mdd_crypto,
 	keyndx = blkno >> SR_CRYPTO_KEY_BLKSHIFT;
 	crwu->cr_crp->crp_sid = mdd_crypto->scr_sid[keyndx];
 
-	crwu->cr_crp->crp_opaque = crwu;
 	crwu->cr_crp->crp_ilen = xs->datalen;
 	crwu->cr_crp->crp_alloctype = M_DEVBUF;
 	crwu->cr_crp->crp_flags = CRYPTO_F_IOV;
@@ -1157,7 +1154,8 @@ sr_crypto_rw(struct sr_workunit *wu)
 	struct sr_crypto_wu	*crwu;
 	struct sr_crypto	*mdd_crypto;
 	daddr_t			blkno;
-	int			rv;
+	int			rv, err;
+	int			s;
 
 	DNPRINTF(SR_D_DIS, "%s: sr_crypto_rw wu %p\n",
 	    DEVNAME(wu->swu_dis->sd_sc), wu);
@@ -1168,34 +1166,25 @@ sr_crypto_rw(struct sr_workunit *wu)
 	if (wu->swu_xs->flags & SCSI_DATA_OUT) {
 		mdd_crypto = &wu->swu_dis->mds.mdd_crypto;
 		crwu = sr_crypto_prepare(wu, mdd_crypto, 1);
-		crwu->cr_crp->crp_callback = sr_crypto_write;
-		crypto_dispatch(crwu->cr_crp);
-		rv = crwu->cr_crp->crp_etype;
+		rv = crypto_invoke(crwu->cr_crp);
+
+		DNPRINTF(SR_D_INTR, "%s: sr_crypto_rw: wu %p xs: %p\n",
+		    DEVNAME(wu->swu_dis->sd_sc), wu, wu->swu_xs);
+
+		if (rv) {
+			/* fail io */
+			wu->swu_xs->error = XS_DRIVER_STUFFUP;
+			s = splbio();
+			sr_scsi_done(wu->swu_dis, wu->swu_xs);
+			splx(s);
+		}
+
+		if ((err = sr_crypto_dev_rw(wu, crwu)) != 0)
+			return err;
 	} else
 		rv = sr_crypto_dev_rw(wu, NULL);
 
 	return (rv);
-}
-
-void
-sr_crypto_write(struct cryptop *crp)
-{
-	struct sr_crypto_wu	*crwu = crp->crp_opaque;
-	struct sr_workunit	*wu = &crwu->cr_wu;
-	int			s;
-
-	DNPRINTF(SR_D_INTR, "%s: sr_crypto_write: wu %p xs: %p\n",
-	    DEVNAME(wu->swu_dis->sd_sc), wu, wu->swu_xs);
-
-	if (crp->crp_etype) {
-		/* fail io */
-		wu->swu_xs->error = XS_DRIVER_STUFFUP;
-		s = splbio();
-		sr_scsi_done(wu->swu_dis, wu->swu_xs);
-		splx(s);
-	}
-
-	sr_crypto_dev_rw(wu, crwu);
 }
 
 int
@@ -1227,10 +1216,7 @@ sr_crypto_dev_rw(struct sr_workunit *wu, struct sr_crypto_wu *crwu)
 	return (0);
 
 bad:
-	/* wu is unwound by sr_wu_put */
-	if (crwu)
-		crwu->cr_crp->crp_etype = EINVAL;
-	return (1);
+	return (EINVAL);
 }
 
 void
@@ -1238,6 +1224,7 @@ sr_crypto_done_internal(struct sr_workunit *wu, struct sr_crypto *mdd_crypto)
 {
 	struct scsi_xfer	*xs = wu->swu_xs;
 	struct sr_crypto_wu	*crwu;
+	int			rv;
 	int			s;
 
 	if (ISSET(wu->swu_flags, SR_WUF_REBUILD)) /* RAID 1C */
@@ -1246,10 +1233,19 @@ sr_crypto_done_internal(struct sr_workunit *wu, struct sr_crypto *mdd_crypto)
 	/* If this was a successful read, initiate decryption of the data. */
 	if (ISSET(xs->flags, SCSI_DATA_IN) && xs->error == XS_NOERROR) {
 		crwu = sr_crypto_prepare(wu, mdd_crypto, 0);
-		crwu->cr_crp->crp_callback = sr_crypto_read;
-		DNPRINTF(SR_D_INTR, "%s: sr_crypto_done: crypto_dispatch %p\n",
+		DNPRINTF(SR_D_INTR, "%s: sr_crypto_done: crypto_invoke %p\n",
 		    DEVNAME(wu->swu_dis->sd_sc), crwu->cr_crp);
-		crypto_dispatch(crwu->cr_crp);
+		rv = crypto_invoke(crwu->cr_crp);
+
+		DNPRINTF(SR_D_INTR, "%s: sr_crypto_done: wu %p xs: %p\n",
+		    DEVNAME(wu->swu_dis->sd_sc), wu, wu->swu_xs);
+
+		if (rv)
+			wu->swu_xs->error = XS_DRIVER_STUFFUP;
+
+		s = splbio();
+		sr_scsi_done(wu->swu_dis, wu->swu_xs);
+		splx(s);
 		return;
 	}
 
@@ -1263,24 +1259,6 @@ sr_crypto_done(struct sr_workunit *wu)
 {
 	struct sr_crypto *mdd_crypto = &wu->swu_dis->mds.mdd_crypto;
 	sr_crypto_done_internal(wu, mdd_crypto);
-}
-
-void
-sr_crypto_read(struct cryptop *crp)
-{
-	struct sr_crypto_wu	*crwu = crp->crp_opaque;
-	struct sr_workunit	*wu = &crwu->cr_wu;
-	int			s;
-
-	DNPRINTF(SR_D_INTR, "%s: sr_crypto_read: wu %p xs: %p\n",
-	    DEVNAME(wu->swu_dis->sd_sc), wu, wu->swu_xs);
-
-	if (crp->crp_etype)
-		wu->swu_xs->error = XS_DRIVER_STUFFUP;
-
-	s = splbio();
-	sr_scsi_done(wu->swu_dis, wu->swu_xs);
-	splx(s);
 }
 
 void

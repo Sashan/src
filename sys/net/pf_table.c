@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf_table.c,v 1.135 2021/10/23 09:36:58 sashan Exp $	*/
+/*	$OpenBSD: pf_table.c,v 1.136 2021/10/24 10:58:43 sashan Exp $	*/
 
 /*
  * Copyright (c) 2002 Cedric Berger
@@ -1054,12 +1054,11 @@ pfr_kentry_kif_ref(struct pfr_kentry *ke_all)
 void
 pfr_destroy_kentries(struct pfr_kentryworkq *workq)
 {
-	struct pfr_kentry	*p, *q;
-	int			 i;
+	struct pfr_kentry	*p;
 
-	for (i = 0, p = SLIST_FIRST(workq); p != NULL; i++, p = q) {
+	while ((p = SLIST_FIRST(workq)) != NULL) {
 		YIELD(1);
-		q = SLIST_NEXT(p, pfrke_workq);
+		SLIST_REMOVE_HEAD(workq, pfrke_workq);
 		pfr_destroy_kentry(p);
 	}
 }
@@ -1947,8 +1946,7 @@ pfr_ina_commit(struct pfr_table *trs, u_int32_t ticket, int *nadd,
 	}
 
 	if (!(flags & PFR_FLAG_DUMMY)) {
-		for (p = SLIST_FIRST(&workq); p != NULL; p = q) {
-			q = SLIST_NEXT(p, pfrkt_workq);
+		SLIST_FOREACH_SAFE(p, &workq, pfrkt_workq, q) {
 			pfr_commit_ktable(p, tzero);
 		}
 		rs->topen = 0;
@@ -1974,7 +1972,7 @@ pfr_commit_ktable(struct pfr_ktable *kt, time_t tzero)
 	} else if (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) {
 		/* kt might contain addresses */
 		struct pfr_kentryworkq	 addrq, addq, changeq, delq, garbageq;
-		struct pfr_kentry	*p, *q, *next;
+		struct pfr_kentry	*p, *q;
 		struct pfr_addr		 ad;
 
 		pfr_enqueue_addrs(shadow, &addrq, NULL, 0);
@@ -1984,8 +1982,8 @@ pfr_commit_ktable(struct pfr_ktable *kt, time_t tzero)
 		SLIST_INIT(&delq);
 		SLIST_INIT(&garbageq);
 		pfr_clean_node_mask(shadow, &addrq);
-		for (p = SLIST_FIRST(&addrq); p != NULL; p = next) {
-			next = SLIST_NEXT(p, pfrke_workq);	/* XXX */
+		while ((p = SLIST_FIRST(&addrq)) != NULL) {
+			SLIST_REMOVE_HEAD(&addrq, pfrke_workq);
 			pfr_copyout_addr(&ad, p);
 			q = pfr_lookup_addr(kt, &ad, 1);
 			if (q != NULL) {
@@ -2121,8 +2119,7 @@ pfr_setflags_ktables(struct pfr_ktableworkq *workq)
 {
 	struct pfr_ktable	*p, *q;
 
-	for (p = SLIST_FIRST(workq); p; p = q) {
-		q = SLIST_NEXT(p, pfrkt_workq);
+	SLIST_FOREACH_SAFE(p, workq, pfrkt_workq, q) {
 		pfr_setflags_ktable(p, p->pfrkt_nflags);
 	}
 }
@@ -2227,10 +2224,10 @@ pfr_create_ktable(struct pfr_table *tbl, time_t tzero, int attachruleset,
 void
 pfr_destroy_ktables(struct pfr_ktableworkq *workq, int flushaddr)
 {
-	struct pfr_ktable	*p, *q;
+	struct pfr_ktable	*p;
 
-	for (p = SLIST_FIRST(workq); p; p = q) {
-		q = SLIST_NEXT(p, pfrkt_workq);
+	while ((p = SLIST_FIRST(workq)) != NULL) {
+		SLIST_REMOVE_HEAD(workq, pfrkt_workq);
 		pfr_destroy_ktable(p, flushaddr);
 	}
 }

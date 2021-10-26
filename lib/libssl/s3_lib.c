@@ -1,4 +1,4 @@
-/* $OpenBSD: s3_lib.c,v 1.215 2021/09/08 12:56:14 tb Exp $ */
+/* $OpenBSD: s3_lib.c,v 1.217 2021/10/25 10:01:46 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -1574,6 +1574,7 @@ ssl3_free(SSL *s)
 	tls13_clienthello_hash_clear(&S3I(s)->hs.tls13);
 
 	sk_X509_NAME_pop_free(S3I(s)->hs.tls12.ca_names, X509_NAME_free);
+	sk_X509_pop_free(s->internal->verified_chain, X509_free);
 
 	tls1_transcript_free(s);
 	tls1_transcript_hash_free(s);
@@ -1595,6 +1596,8 @@ ssl3_clear(SSL *s)
 
 	tls1_cleanup_key_block(s);
 	sk_X509_NAME_pop_free(S3I(s)->hs.tls12.ca_names, X509_NAME_free);
+	sk_X509_pop_free(s->internal->verified_chain, X509_free);
+	s->internal->verified_chain = NULL;
 
 	DH_free(S3I(s)->tmp.dh);
 	S3I(s)->tmp.dh = NULL;
@@ -1665,10 +1668,10 @@ _SSL_get_peer_tmp_key(SSL *s, EVP_PKEY **key)
 
 	*key = NULL;
 
-	if (s->session == NULL || SSI(s)->sess_cert == NULL)
+	if (s->session == NULL || s->session->sess_cert == NULL)
 		return 0;
 
-	sc = SSI(s)->sess_cert;
+	sc = s->session->sess_cert;
 
 	if ((pkey = EVP_PKEY_new()) == NULL)
 		return 0;

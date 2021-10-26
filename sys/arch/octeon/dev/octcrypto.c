@@ -1,4 +1,4 @@
-/*	$OpenBSD: octcrypto.c,v 1.6 2021/10/13 13:08:58 bluhm Exp $	*/
+/*	$OpenBSD: octcrypto.c,v 1.8 2021/10/24 10:26:22 patrick Exp $	*/
 
 /*
  * Copyright (c) 2018 Visa Hankala
@@ -656,9 +656,6 @@ octcrypto_process(struct cryptop *crp)
 
 out:
 	smr_read_leave();
-
-	crp->crp_etype = error;
-	crypto_done(crp);
 	return error;
 }
 

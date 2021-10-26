@@ -1896,6 +1896,7 @@
 ./usr/share/man/man3/EVP_OpenInit.3
 ./usr/share/man/man3/EVP_PKEY_CTX_ctrl.3
 ./usr/share/man/man3/EVP_PKEY_CTX_new.3
+./usr/share/man/man3/EVP_PKEY_add1_attr.3
 ./usr/share/man/man3/EVP_PKEY_asn1_get_count.3
 ./usr/share/man/man3/EVP_PKEY_asn1_new.3
 ./usr/share/man/man3/EVP_PKEY_cmp.3
@@ -2035,6 +2036,7 @@
 ./usr/share/man/man3/SSL_CTX_set_default_passwd_cb.3
 ./usr/share/man/man3/SSL_CTX_set_generate_session_id.3
 ./usr/share/man/man3/SSL_CTX_set_info_callback.3
+./usr/share/man/man3/SSL_CTX_set_keylog_callback.3
 ./usr/share/man/man3/SSL_CTX_set_max_cert_list.3
 ./usr/share/man/man3/SSL_CTX_set_min_proto_version.3
 ./usr/share/man/man3/SSL_CTX_set_mode.3
@@ -2104,6 +2106,7 @@
 ./usr/share/man/man3/SSL_num_renegotiations.3
 ./usr/share/man/man3/SSL_pending.3
 ./usr/share/man/man3/SSL_read.3
+./usr/share/man/man3/SSL_read_early_data.3
 ./usr/share/man/man3/SSL_renegotiate.3
 ./usr/share/man/man3/SSL_rstate_string.3
 ./usr/share/man/man3/SSL_session_reused.3
@@ -2201,6 +2204,8 @@
 ./usr/share/man/man3/X509_sign.3
 ./usr/share/man/man3/X509_signature_dump.3
 ./usr/share/man/man3/X509_verify_cert.3
+./usr/share/man/man3/X509at_add1_attr.3
+./usr/share/man/man3/X509at_get_attr.3
 ./usr/share/man/man3/X509v3_get_ext_by_NID.3
 ./usr/share/man/man3/__tfork_thread.3
 ./usr/share/man/man3/a64l.3

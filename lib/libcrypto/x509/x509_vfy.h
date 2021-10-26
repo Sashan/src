@@ -1,25 +1,25 @@
-/* $OpenBSD: x509_vfy.h,v 1.32 2021/02/24 18:01:31 tb Exp $ */
+/* $OpenBSD: x509_vfy.h,v 1.37 2021/10/24 13:52:13 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
  * This package is an SSL implementation written
  * by Eric Young (eay@cryptsoft.com).
  * The implementation was written so as to conform with Netscapes SSL.
- * 
+ *
  * This library is free for commercial and non-commercial use as long as
  * the following conditions are aheared to.  The following conditions
  * apply to all code found in this distribution, be it the RC4, RSA,
  * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
  * included with this distribution is covered by the same copyright terms
  * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- * 
+ *
  * Copyright remains Eric Young's, and as such any Copyright notices in
  * the code are not to be removed.
  * If this package is used in a product, Eric Young should be given attribution
  * as the author of the parts of the library used.
  * This can be in the form of a textual message at program startup or
  * in documentation (online or textual) provided with the package.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -34,10 +34,10 @@
  *     Eric Young (eay@cryptsoft.com)"
  *    The word 'cryptographic' can be left out if the rouines from the library
  *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from 
+ * 4. If you include any Windows specific code (or a derivative thereof) from
  *    the apps directory (application code) you must include an acknowledgement:
  *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -49,7 +49,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- * 
+ *
  * The licence and distribution terms for any publically available version or
  * derivative of this code cannot be changed.  i.e. this code cannot simply be
  * copied and put under another distribution licence
@@ -85,23 +85,22 @@ typedef struct x509_file_st
 	int *path_type;
 	} X509_CERT_FILE_CTX;
 
-/*******************************/
 /*
-SSL_CTX -> X509_STORE    
-		-> X509_LOOKUP
-			->X509_LOOKUP_METHOD
-		-> X509_LOOKUP
-			->X509_LOOKUP_METHOD
- 
-SSL	-> X509_STORE_CTX
-		->X509_STORE    
-
-The X509_STORE holds the tables etc for verification stuff.
-A X509_STORE_CTX is used while validating a single certificate.
-The X509_STORE has X509_LOOKUPs for looking up certs.
-The X509_STORE then calls a function to actually verify the
-certificate chain.
-*/
+ * SSL_CTX -> X509_STORE
+ *		-> X509_LOOKUP
+ *			->X509_LOOKUP_METHOD
+ *		-> X509_LOOKUP
+ *			->X509_LOOKUP_METHOD
+ *
+ * SSL	-> X509_STORE_CTX
+ *		->X509_STORE
+ *
+ * The X509_STORE holds the tables etc for verification stuff.
+ * A X509_STORE_CTX is used while validating a single certificate.
+ * The X509_STORE has X509_LOOKUPs for looking up certs.
+ * The X509_STORE then calls a function to actually verify the
+ * certificate chain.
+ */
 
 #define X509_LU_RETRY		-1
 #define X509_LU_FAIL		0
@@ -422,6 +421,10 @@ void X509_STORE_CTX_set_depth(X509_STORE_CTX *ctx, int depth);
 				| X509_V_FLAG_INHIBIT_ANY \
 				| X509_V_FLAG_INHIBIT_MAP)
 
+#if defined(LIBRESSL_NEW_API)
+X509_OBJECT *X509_OBJECT_new(void);
+void X509_OBJECT_free(X509_OBJECT *a);
+#endif
 int X509_OBJECT_idx_by_subject(STACK_OF(X509_OBJECT) *h, int type,
 	     X509_NAME *name);
 X509_OBJECT *X509_OBJECT_retrieve_by_subject(STACK_OF(X509_OBJECT) *h,int type,X509_NAME *name);
@@ -515,7 +518,13 @@ void *	X509_STORE_CTX_get_ex_data(X509_STORE_CTX *ctx,int idx);
 int	X509_STORE_CTX_get_error(X509_STORE_CTX *ctx);
 void	X509_STORE_CTX_set_error(X509_STORE_CTX *ctx,int s);
 int	X509_STORE_CTX_get_error_depth(X509_STORE_CTX *ctx);
+#if defined(LIBRESSL_NEW_API)
+void	X509_STORE_CTX_set_error_depth(X509_STORE_CTX *ctx, int depth);
+#endif
 X509 *	X509_STORE_CTX_get_current_cert(X509_STORE_CTX *ctx);
+#if defined(LIBRESSL_NEW_API)
+void	X509_STORE_CTX_set_current_cert(X509_STORE_CTX *ctx, X509 *x);
+#endif
 X509 *X509_STORE_CTX_get0_current_issuer(X509_STORE_CTX *ctx);
 X509_CRL *X509_STORE_CTX_get0_current_crl(X509_STORE_CTX *ctx);
 X509_STORE_CTX *X509_STORE_CTX_get0_parent_ctx(X509_STORE_CTX *ctx);
@@ -531,11 +540,21 @@ int X509_STORE_CTX_purpose_inherit(X509_STORE_CTX *ctx, int def_purpose,
 void X509_STORE_CTX_set_flags(X509_STORE_CTX *ctx, unsigned long flags);
 void X509_STORE_CTX_set_time(X509_STORE_CTX *ctx, unsigned long flags,
 								time_t t);
+#if defined(LIBRESSL_NEW_API)
+void X509_STORE_CTX_set0_verified_chain(X509_STORE_CTX *ctx, STACK_OF(X509) *sk);
+int (*X509_STORE_CTX_get_verify(X509_STORE_CTX *ctx))(X509_STORE_CTX *);
+void X509_STORE_CTX_set_verify(X509_STORE_CTX *ctx,
+    int (*verify)(X509_STORE_CTX *));
+int (*X509_STORE_CTX_get_verify_cb(X509_STORE_CTX *ctx))(int, X509_STORE_CTX *);
+#endif
 void X509_STORE_CTX_set_verify_cb(X509_STORE_CTX *ctx,
 				  int (*verify_cb)(int, X509_STORE_CTX *));
- 
+
 X509_POLICY_TREE *X509_STORE_CTX_get0_policy_tree(X509_STORE_CTX *ctx);
 int X509_STORE_CTX_get_explicit_policy(X509_STORE_CTX *ctx);
+#if defined(LIBRESSL_NEW_API)
+int X509_STORE_CTX_get_num_untrusted(X509_STORE_CTX *ctx);
+#endif
 
 X509_VERIFY_PARAM *X509_STORE_CTX_get0_param(X509_STORE_CTX *ctx);
 void X509_STORE_CTX_set0_param(X509_STORE_CTX *ctx, X509_VERIFY_PARAM *param);
@@ -547,7 +566,7 @@ X509_VERIFY_PARAM *X509_VERIFY_PARAM_new(void);
 void X509_VERIFY_PARAM_free(X509_VERIFY_PARAM *param);
 int X509_VERIFY_PARAM_inherit(X509_VERIFY_PARAM *to,
 						const X509_VERIFY_PARAM *from);
-int X509_VERIFY_PARAM_set1(X509_VERIFY_PARAM *to, 
+int X509_VERIFY_PARAM_set1(X509_VERIFY_PARAM *to,
 						const X509_VERIFY_PARAM *from);
 int X509_VERIFY_PARAM_set1_name(X509_VERIFY_PARAM *param, const char *name);
 int X509_VERIFY_PARAM_set_flags(X509_VERIFY_PARAM *param, unsigned long flags);
@@ -560,7 +579,7 @@ void X509_VERIFY_PARAM_set_depth(X509_VERIFY_PARAM *param, int depth);
 void X509_VERIFY_PARAM_set_time(X509_VERIFY_PARAM *param, time_t t);
 int X509_VERIFY_PARAM_add0_policy(X509_VERIFY_PARAM *param,
 						ASN1_OBJECT *policy);
-int X509_VERIFY_PARAM_set1_policies(X509_VERIFY_PARAM *param, 
+int X509_VERIFY_PARAM_set1_policies(X509_VERIFY_PARAM *param,
 					STACK_OF(ASN1_OBJECT) *policies);
 int X509_VERIFY_PARAM_get_depth(const X509_VERIFY_PARAM *param);
 int X509_VERIFY_PARAM_set1_host(X509_VERIFY_PARAM *param, const char *name,

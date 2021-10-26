@@ -1,5 +1,5 @@
 #!/bin/ksh
-#	$OpenBSD: install.sub,v 1.1180 2021/10/17 13:20:46 kn Exp $
+#	$OpenBSD: install.sub,v 1.1183 2021/10/24 12:32:42 kn Exp $
 #
 # Copyright (c) 1997-2015 Todd Miller, Theo de Raadt, Ken Westerback
 # Copyright (c) 2015, Robert Peichaer <rpe@openbsd.org>
@@ -1241,23 +1241,23 @@ ieee80211_config() {
 			ask_until "$_prompt" "O"
 			case "$_haswpa-$resp" in
 			?-[Oo]) # No further questions
-				ifconfig $_if nwid "$_nwid"
-				quote nwid "$_nwid" >>$_hn
+				ifconfig $_if join "$_nwid"
+				quote join "$_nwid" >>$_hn
 				break
 				;;
 			?-[Ww])	ask_until "WEP key? (will echo)"
 				# Make sure ifconfig accepts the key.
-				if _err=$(ifconfig $_if nwid "$_nwid" nwkey "$resp" 2>&1) &&
+				if _err=$(ifconfig $_if join "$_nwid" nwkey "$resp" 2>&1) &&
 					[[ -z $_err ]]; then
-					quote nwid "$_nwid" nwkey "$resp" >>$_hn
+					quote join "$_nwid" nwkey "$resp" >>$_hn
 					break
 				fi
 				echo "$_err"
 				;;
 			1-[Pp])	ask_until "WPA passphrase? (will echo)"
 				# Make sure ifconfig accepts the key.
-				if ifconfig $_if nwid "$_nwid" wpakey "$resp"; then
-					quote nwid "$_nwid" wpakey "$resp" >>$_hn
+				if ifconfig $_if join "$_nwid" wpakey "$resp"; then
+					quote join "$_nwid" wpakey "$resp" >>$_hn
 					break
 				fi
 				;;
@@ -1867,8 +1867,7 @@ install_http() {
 		case $_tls in
 		force)	$AI && exit 1 || return
 			;;
-		try)	ask_yn "Unable to connect using https. Use http instead?" ||
-				return
+		try)	echo "Unable to connect using HTTPS; using HTTP instead."
 			_http_proto=http
 			_url_base="http://$HTTP_SERVER/$HTTP_DIR"
 			unpriv -f $_sig ftp -vMo $_sig "$_url_base/SHA256.sig" \
@@ -2072,8 +2071,8 @@ donetconfig() {
 	fi
 
 	# Get & apply fqdn to hostname. Don't ask if there's only one configured
-	# interface and if it's managed by dhclient and if the domain name is
-	# configured via dhclient too.
+	# interface and if it's managed by dhcp and if the domain name is
+	# configured via dhcp too.
 	resp="${_dn:-$(get_fqdn)}"
 	if ifconfig dhcp >/dev/null 2>&1 && [[ $NIFS == 1 && -z $_dn ]]; then
 		# If we have a 'domain-name' option in the lease file use that.

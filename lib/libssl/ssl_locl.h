@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_locl.h,v 1.361 2021/10/23 08:34:36 jsing Exp $ */
+/* $OpenBSD: ssl_locl.h,v 1.368 2021/10/25 10:09:28 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -412,28 +412,6 @@ struct ssl_method_st {
 	unsigned int enc_flags;		/* SSL_ENC_FLAG_* */
 };
 
-typedef struct ssl_session_internal_st {
-	CRYPTO_EX_DATA ex_data; /* application specific data */
-
-	/* These are used to make removal of session-ids more
-	 * efficient and to implement a maximum cache size. */
-	struct ssl_session_st *prev, *next;
-
-	/* Used to indicate that session resumption is not allowed.
-	 * Applications can also set this bit for a new session via
-	 * not_resumable_session_cb to disable session caching and tickets. */
-	int not_resumable;
-
-	/* The cert is the certificate used to establish this connection */
-	struct sess_cert_st /* SESS_CERT */ *sess_cert;
-
-	size_t tlsext_ecpointformatlist_length;
-	uint8_t *tlsext_ecpointformatlist; /* peer's list */
-	size_t tlsext_supportedgroups_length;
-	uint16_t *tlsext_supportedgroups; /* peer's list */
-} SSL_SESSION_INTERNAL;
-#define SSI(s) (s->session->internal)
-
 /* Lets make this into an ASN.1 type structure as follows
  * SSL_SESSION_ID ::= SEQUENCE {
  *	version 		INTEGER,	-- structure version number
@@ -500,7 +478,24 @@ struct ssl_session_st {
 	size_t tlsext_ticklen;			/* Session ticket length */
 	uint32_t tlsext_tick_lifetime_hint;	/* Session lifetime hint in seconds */
 
-	struct ssl_session_internal_st *internal;
+	CRYPTO_EX_DATA ex_data; /* application specific data */
+
+	/* These are used to make removal of session-ids more
+	 * efficient and to implement a maximum cache size. */
+	struct ssl_session_st *prev, *next;
+
+	/* Used to indicate that session resumption is not allowed.
+	 * Applications can also set this bit for a new session via
+	 * not_resumable_session_cb to disable session caching and tickets. */
+	int not_resumable;
+
+	/* The cert is the certificate used to establish this connection */
+	struct sess_cert_st /* SESS_CERT */ *sess_cert;
+
+	size_t tlsext_ecpointformatlist_length;
+	uint8_t *tlsext_ecpointformatlist; /* peer's list */
+	size_t tlsext_supportedgroups_length;
+	uint16_t *tlsext_supportedgroups; /* peer's list */
 };
 
 typedef struct cert_pkey_st {
@@ -583,6 +578,13 @@ typedef struct ssl_handshake_st {
 	uint16_t negotiated_tls_version;
 
 	/*
+	 * Legacy version advertised by our peer. For a server this is the
+	 * version specified by the client in the ClientHello message. For a
+	 * client, this is the version provided in the ServerHello message.
+	 */
+	uint16_t peer_legacy_version;
+
+	/*
 	 * Current handshake state - contains one of the SSL3_ST_* values and
 	 * is used by the TLSv1.2 state machine, as well as being updated by
 	 * the TLSv1.3 stack due to it being exposed externally.
@@ -663,8 +665,6 @@ void tls12_record_layer_write_epoch_done(struct tls12_record_layer *rl,
 void tls12_record_layer_clear_read_state(struct tls12_record_layer *rl);
 void tls12_record_layer_clear_write_state(struct tls12_record_layer *rl);
 void tls12_record_layer_reflect_seq_num(struct tls12_record_layer *rl);
-void tls12_record_layer_read_cipher_hash(struct tls12_record_layer *rl,
-    EVP_CIPHER_CTX **cipher, EVP_MD_CTX **hash);
 int tls12_record_layer_change_read_cipher_state(struct tls12_record_layer *rl,
     CBS *mac_key, CBS *key, CBS *iv);
 int tls12_record_layer_change_write_cipher_state(struct tls12_record_layer *rl,
@@ -843,6 +843,8 @@ typedef struct ssl_ctx_internal_st {
 	uint8_t *tlsext_ecpointformatlist; /* our list */
 	size_t tlsext_supportedgroups_length;
 	uint16_t *tlsext_supportedgroups; /* our list */
+	SSL_CTX_keylog_cb_func keylog_callback; /* Unused. For OpenSSL compatibility. */
+	size_t num_tickets; /* Unused, for OpenSSL compatibility */
 } SSL_CTX_INTERNAL;
 
 struct ssl_ctx_st {
@@ -1022,6 +1024,9 @@ typedef struct ssl_internal_st {
 	int mac_packet;
 
 	int empty_record_count;
+
+	size_t num_tickets; /* Unused, for OpenSSL compatibility */
+	STACK_OF(X509) *verified_chain;
 } SSL_INTERNAL;
 
 struct ssl_st {
@@ -1086,14 +1091,6 @@ struct ssl_st {
 
 	SSL_CTX * initial_ctx; /* initial ctx, used to store sessions */
 #define session_ctx initial_ctx
-
-	/*
-	 * XXX really should be internal, but is
-	 * touched unnaturally by wpa-supplicant
-	 * and freeradius and other perversions
-	 */
-	EVP_CIPHER_CTX *enc_read_ctx;		/* cryptographic state */
-	EVP_MD_CTX *read_hash;			/* used for mac generation */
 
 	struct ssl_internal_st *internal;
 };
@@ -1290,6 +1287,7 @@ int ssl_supported_tls_version_range(SSL *s, uint16_t *min_ver, uint16_t *max_ver
 uint16_t ssl_tls_version(uint16_t version);
 uint16_t ssl_effective_tls_version(SSL *s);
 int ssl_max_supported_version(SSL *s, uint16_t *max_ver);
+int ssl_max_legacy_version(SSL *s, uint16_t *max_ver);
 int ssl_max_shared_version(SSL *s, uint16_t peer_ver, uint16_t *max_ver);
 int ssl_check_version_from_server(SSL *s, uint16_t server_version);
 int ssl_legacy_stack_version(SSL *s, uint16_t version);
@@ -1301,8 +1299,6 @@ const SSL_METHOD *tls_legacy_method(void);
 const SSL_METHOD *ssl_get_method(uint16_t version);
 
 void ssl_clear_cipher_state(SSL *s);
-void ssl_clear_cipher_read_state(SSL *s);
-void ssl_clear_cipher_write_state(SSL *s);
 int ssl_clear_bad_session(SSL *s);
 
 void ssl_info_callback(const SSL *s, int type, int value);
@@ -1375,6 +1371,8 @@ uint16_t ssl3_cipher_get_value(const SSL_CIPHER *c);
 int ssl3_renegotiate(SSL *ssl);
 
 int ssl3_renegotiate_check(SSL *ssl);
+
+void ssl_force_want_read(SSL *s);
 
 int ssl3_dispatch_alert(SSL *s);
 int ssl3_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek);

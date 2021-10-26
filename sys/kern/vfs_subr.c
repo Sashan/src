@@ -1,4 +1,4 @@
-/*	$OpenBSD: vfs_subr.c,v 1.309 2021/10/21 09:59:14 claudio Exp $	*/
+/*	$OpenBSD: vfs_subr.c,v 1.313 2021/10/25 10:24:54 claudio Exp $	*/
 /*	$NetBSD: vfs_subr.c,v 1.53 1996/04/22 01:39:13 christos Exp $	*/
 
 /*
@@ -271,8 +271,8 @@ vfs_rootmountalloc(char *fstypename, char *devname, struct mount **mpp)
 	mp = vfs_mount_alloc(NULLVP, vfsp);
 	mp->mnt_flag |= MNT_RDONLY;
 	mp->mnt_stat.f_mntonname[0] = '/';
-	copystr(devname, mp->mnt_stat.f_mntfromname, MNAMELEN, 0);
-	copystr(devname, mp->mnt_stat.f_mntfromspec, MNAMELEN, 0);
+	copystr(devname, mp->mnt_stat.f_mntfromname, MNAMELEN, NULL);
+	copystr(devname, mp->mnt_stat.f_mntfromspec, MNAMELEN, NULL);
 	*mpp = mp;
 	return (0);
  }
@@ -410,6 +410,7 @@ getnewvnode(enum vtagtype tag, struct mount *mp, const struct vops *vops,
 		vp = pool_get(&vnode_pool, PR_WAITOK | PR_ZERO);
 		vp->v_uvm = pool_get(&uvm_vnode_pool, PR_WAITOK | PR_ZERO);
 		vp->v_uvm->u_vnode = vp;
+		uvm_obj_init(&vp->v_uvm->u_obj, &uvm_vnodeops, 0);
 		RBT_INIT(buf_rb_bufs, &vp->v_bufs_tree);
 		cache_tree_init(&vp->v_nc_tree);
 		TAILQ_INIT(&vp->v_cache_dst);
@@ -427,7 +428,7 @@ getnewvnode(enum vtagtype tag, struct mount *mp, const struct vops *vops,
 		if (vp == NULL) {
 			splx(s);
 			tablefull("vnode");
-			*vpp = 0;
+			*vpp = NULL;
 			return (ENFILE);
 		}
 
@@ -464,7 +465,7 @@ getnewvnode(enum vtagtype tag, struct mount *mp, const struct vops *vops,
 	insmntque(vp, mp);
 	*vpp = vp;
 	vp->v_usecount = 1;
-	vp->v_data = 0;
+	vp->v_data = NULL;
 	return (0);
 }
 
@@ -530,7 +531,7 @@ getdevvp(dev_t dev, struct vnode **vpp, enum vtype type)
 	}
 	vp = nvp;
 	vp->v_type = type;
-	if ((nvp = checkalias(vp, dev, NULL)) != 0) {
+	if ((nvp = checkalias(vp, dev, NULL)) != NULL) {
 		vput(vp);
 		vp = nvp;
 	}
@@ -689,6 +690,8 @@ vget(struct vnode *vp, int flags)
 void
 vref(struct vnode *vp)
 {
+	KERNEL_ASSERT_LOCKED();
+
 #ifdef DIAGNOSTIC
 	if (vp->v_usecount == 0)
 		panic("vref used where vget required");
@@ -1150,7 +1153,8 @@ vgonel(struct vnode *vp, struct proc *p)
 	 * If special device, remove it from special device alias list
 	 * if it is on one.
 	 */
-	if ((vp->v_type == VBLK || vp->v_type == VCHR) && vp->v_specinfo != 0) {
+	if ((vp->v_type == VBLK || vp->v_type == VCHR) &&
+	    vp->v_specinfo != NULL) {
 		if ((vp->v_flag & VALIASED) == 0 && vp->v_type == VCHR &&
 		    (cdevsw[major(vp->v_rdev)].d_flags & D_CLONE) &&
 		    (minor(vp->v_rdev) >> CLONE_SHIFT == 0)) {
@@ -1430,7 +1434,7 @@ vfs_hang_addrlist(struct mount *mp, struct netexport *nep,
 	struct radix_node_head *rnh;
 	int nplen, i;
 	struct radix_node *rn;
-	struct sockaddr *saddr, *smask = 0;
+	struct sockaddr *saddr, *smask = NULL;
 	int error;
 
 	if (argp->ex_addrlen == 0) {
@@ -1483,7 +1487,7 @@ vfs_hang_addrlist(struct mount *mp, struct netexport *nep,
 		goto out;
 	}
 	rn = rn_addroute(saddr, smask, rnh, np->netc_rnodes, 0);
-	if (rn == 0 || np != (struct netcred *)rn) { /* already exists */
+	if (rn == NULL || np != (struct netcred *)rn) { /* already exists */
 		error = EPERM;
 		goto out;
 	}
@@ -1701,10 +1705,8 @@ void
 vfs_stall_barrier(void)
 {
 	if (__predict_false(vfs_stalling)) {
-		if (curproc != RWLOCK_OWNER(&vfs_stall_lock)) {
-			rw_enter_read(&vfs_stall_lock);
-			rw_exit_read(&vfs_stall_lock);
-		}
+		rw_enter_read(&vfs_stall_lock);
+		rw_exit_read(&vfs_stall_lock);
 	}
 }
 
@@ -1754,7 +1756,7 @@ vfs_shutdown(struct proc *p)
 
 	printf("syncing disks...");
 
-	if (panicstr == 0) {
+	if (panicstr == NULL) {
 		/* Sync before unmount, in case we hang on something. */
 		sys_sync(p, NULL, NULL);
 		vfs_unmountall();

@@ -1,4 +1,4 @@
-/* $OpenBSD: tls13_client.c,v 1.86 2021/06/29 19:20:39 jsing Exp $ */
+/* $OpenBSD: tls13_client.c,v 1.88 2021/10/25 10:01:46 jsing Exp $ */
 /*
  * Copyright (c) 2018, 2019 Joel Sing <jsing@openbsd.org>
  *
@@ -36,7 +36,7 @@ tls13_client_init(struct tls13_ctx *ctx)
 		SSLerror(s, SSL_R_NO_PROTOCOLS_AVAILABLE);
 		return 0;
 	}
-	s->client_version = s->version = ctx->hs->our_max_tls_version;
+	s->version = ctx->hs->our_max_tls_version;
 
 	tls13_record_layer_set_retry_after_phh(ctx->rl,
 	    (s->internal->mode & SSL_MODE_AUTO_RETRY) != 0);
@@ -92,9 +92,8 @@ tls13_client_hello_build(struct tls13_ctx *ctx, CBB *cbb)
 	SSL *s = ctx->ssl;
 
 	/* Legacy client version is capped at TLS 1.2. */
-	client_version = ctx->hs->our_max_tls_version;
-	if (client_version > TLS1_2_VERSION)
-		client_version = TLS1_2_VERSION;
+	if (!ssl_max_legacy_version(s, &client_version))
+		goto err;
 
 	if (!CBB_add_u16(cbb, client_version))
 		goto err;
@@ -282,6 +281,7 @@ tls13_server_hello_process(struct tls13_ctx *ctx, CBS *cbs)
 		goto err;
 	}
 	ctx->hs->negotiated_tls_version = ctx->hs->tls13.server_version;
+	ctx->hs->peer_legacy_version = legacy_version;
 
 	/* The session_id must match. */
 	if (!CBS_mem_equal(&session_id, ctx->hs->tls13.legacy_session_id,
@@ -628,16 +628,16 @@ tls13_server_certificate_recv(struct tls13_ctx *ctx, CBS *cbs)
 	if ((cert_idx = ssl_cert_type(cert, pkey)) < 0)
 		goto err;
 
-	ssl_sess_cert_free(SSI(s)->sess_cert);
-	if ((SSI(s)->sess_cert = ssl_sess_cert_new()) == NULL)
+	ssl_sess_cert_free(s->session->sess_cert);
+	if ((s->session->sess_cert = ssl_sess_cert_new()) == NULL)
 		goto err;
 
-	SSI(s)->sess_cert->cert_chain = certs;
+	s->session->sess_cert->cert_chain = certs;
 	certs = NULL;
 
 	X509_up_ref(cert);
-	SSI(s)->sess_cert->peer_pkeys[cert_idx].x509 = cert;
-	SSI(s)->sess_cert->peer_key = &(SSI(s)->sess_cert->peer_pkeys[cert_idx]);
+	s->session->sess_cert->peer_pkeys[cert_idx].x509 = cert;
+	s->session->sess_cert->peer_key = &(s->session->sess_cert->peer_pkeys[cert_idx]);
 
 	X509_free(s->session->peer);
 

@@ -1,4 +1,4 @@
-/* $OpenBSD: ip_ipcomp.c,v 1.79 2021/10/22 15:44:20 bluhm Exp $ */
+/* $OpenBSD: ip_ipcomp.c,v 1.86 2021/10/24 18:15:58 tobhe Exp $ */
 
 /*
  * Copyright (c) 2001 Jean-Jacques Bernard-Gundol (jj@wabbitt.org)
@@ -131,33 +131,31 @@ ipcomp_zeroize(struct tdb *tdbp)
  * ipcomp_input() gets called to uncompress an input packet
  */
 int
-ipcomp_input(struct mbuf *m, struct tdb *tdb, int skip, int protoff)
+ipcomp_input(struct mbuf **mp, struct tdb *tdb, int skip, int protoff)
 {
 	const struct comp_algo *ipcompx = tdb->tdb_compalgxform;
-	struct tdb_crypto *tc;
-	int hlen;
-
+	struct mbuf *m = *mp;
 	struct cryptodesc *crdc = NULL;
 	struct cryptop *crp;
+	int hlen, error, clen, roff;
+	u_int8_t nproto;
+	u_int64_t ibytes;
+	struct mbuf *m1, *mo;
+	struct ipcomp  *ipcomp;
+	caddr_t addr;
+#ifdef ENCDEBUG
+	char buf[INET6_ADDRSTRLEN];
+#endif
 
 	hlen = IPCOMP_HLENGTH;
 
 	/* Get crypto descriptors */
 	crp = crypto_getreq(1);
 	if (crp == NULL) {
-		m_freem(m);
 		DPRINTF("failed to acquire crypto descriptors");
 		ipcompstat_inc(ipcomps_crypto);
-		return ENOBUFS;
-	}
-	/* Get IPsec-specific opaque pointer */
-	tc = malloc(sizeof(*tc), M_XDATA, M_NOWAIT | M_ZERO);
-	if (tc == NULL) {
-		m_freem(m);
-		crypto_freereq(crp);
-		DPRINTF("failed to allocate tdb_crypto");
-		ipcompstat_inc(ipcomps_crypto);
-		return ENOBUFS;
+		error = ENOBUFS;
+		goto drop;
 	}
 	crdc = &crp->crp_desc[0];
 
@@ -172,39 +170,26 @@ ipcomp_input(struct mbuf *m, struct tdb *tdb, int skip, int protoff)
 	crp->crp_ilen = m->m_pkthdr.len - (skip + hlen);
 	crp->crp_flags = CRYPTO_F_IMBUF | CRYPTO_F_MPSAFE;
 	crp->crp_buf = (caddr_t)m;
-	crp->crp_callback = ipsec_input_cb;
 	crp->crp_sid = tdb->tdb_cryptoid;
-	crp->crp_opaque = (caddr_t)tc;
 
-	/* These are passed as-is to the callback */
-	tc->tc_skip = skip;
-	tc->tc_protoff = protoff;
-	tc->tc_spi = tdb->tdb_spi;
-	tc->tc_proto = IPPROTO_IPCOMP;
-	tc->tc_rdomain = tdb->tdb_rdomain;
-	tc->tc_dst = tdb->tdb_dst;
+	KERNEL_LOCK();
+	while ((error = crypto_invoke(crp)) == EAGAIN) {
+		/* Reset the session ID */
+		if (tdb->tdb_cryptoid != 0)
+			tdb->tdb_cryptoid = crp->crp_sid;
+	}
+	KERNEL_UNLOCK();
+	if (error) {
+		DPRINTF("crypto error %d", error);
+		ipsecstat_inc(ipsec_noxform);
+		goto drop;
+	}
 
-	crypto_dispatch(crp);
-	return 0;
-}
+	clen = crp->crp_olen;
 
-int
-ipcomp_input_cb(struct tdb *tdb, struct tdb_crypto *tc, struct mbuf *m, int clen)
-{
-	int skip, protoff, roff, hlen = IPCOMP_HLENGTH;
-	u_int8_t nproto;
-	u_int64_t ibytes;
-	struct mbuf *m1, *mo;
-	struct ipcomp  *ipcomp;
-	caddr_t addr;
-#ifdef ENCDEBUG
-	char buf[INET6_ADDRSTRLEN];
-#endif
-
-	NET_ASSERT_LOCKED();
-
-	skip = tc->tc_skip;
-	protoff = tc->tc_protoff;
+	/* Release the crypto descriptors */
+	crypto_freereq(crp);
+	crp = NULL;
 
 	/* update the counters */
 	ibytes = m->m_pkthdr.len - (skip + hlen);
@@ -217,7 +202,8 @@ ipcomp_input_cb(struct tdb *tdb, struct tdb_crypto *tc, struct mbuf *m, int clen
 	    (tdb->tdb_cur_bytes >= tdb->tdb_exp_bytes)) {
 		pfkeyv2_expire(tdb, SADB_EXT_LIFETIME_HARD);
 		tdb_delete(tdb);
-		goto baddone;
+		error = -1;
+		goto drop;
 	}
 	/* Notify on soft expiration */
 	if ((tdb->tdb_flags & TDBF_SOFT_BYTES) &&
@@ -229,9 +215,11 @@ ipcomp_input_cb(struct tdb *tdb, struct tdb_crypto *tc, struct mbuf *m, int clen
 	/* In case it's not done already, adjust the size of the mbuf chain */
 	m->m_pkthdr.len = clen + hlen + skip;
 
-	if ((m->m_len < skip + hlen) && (m = m_pullup(m, skip + hlen)) == 0) {
+	if (m->m_len < skip + hlen &&
+	    (m = *mp = m_pullup(m, skip + hlen)) == NULL) {
 		ipcompstat_inc(ipcomps_hdrops);
-		goto baddone;
+		error = -1;
+		goto drop;
 	}
 
 	/* Find the beginning of the IPCOMP header */
@@ -241,7 +229,8 @@ ipcomp_input_cb(struct tdb *tdb, struct tdb_crypto *tc, struct mbuf *m, int clen
 		    ipsp_address(&tdb->tdb_dst, buf, sizeof(buf)),
 		    ntohl(tdb->tdb_spi));
 		ipcompstat_inc(ipcomps_hdrops);
-		goto baddone;
+		error = -1;
+		goto drop;
 	}
 	/* Keep the next protocol field */
 	addr = (caddr_t) mtod(m, struct ip *) + skip;
@@ -297,19 +286,16 @@ ipcomp_input_cb(struct tdb *tdb, struct tdb_crypto *tc, struct mbuf *m, int clen
 		m->m_pkthdr.len -= hlen;
 	}
 
-	/* Release the crypto descriptors */
-	free(tc, M_XDATA, 0);
-
 	/* Restore the Next Protocol field */
 	m_copyback(m, protoff, sizeof(u_int8_t), &nproto, M_NOWAIT);
 
 	/* Back to generic IPsec input processing */
-	return ipsec_common_input_cb(m, tdb, skip, protoff);
+	return ipsec_common_input_cb(mp, tdb, skip, protoff);
 
- baddone:
-	m_freem(m);
-	free(tc, M_XDATA, 0);
-	return -1;
+ drop:
+	m_freemp(mp);
+	crypto_freereq(crp);
+	return error;
 }
 
 /*
@@ -319,16 +305,21 @@ int
 ipcomp_output(struct mbuf *m, struct tdb *tdb, int skip, int protoff)
 {
 	const struct comp_algo *ipcompx = tdb->tdb_compalgxform;
-	int error, hlen;
+	int error, hlen, ilen, olen, rlen, roff;
 	struct cryptodesc *crdc = NULL;
 	struct cryptop *crp = NULL;
-	struct tdb_crypto *tc;
-	struct mbuf    *mi;
+	struct mbuf *mi, *mo;
+	struct ip *ip;
+	u_int16_t cpi;
+#ifdef INET6
+	struct ip6_hdr *ip6;
+#endif
 #ifdef ENCDEBUG
 	char buf[INET6_ADDRSTRLEN];
 #endif
 #if NBPFILTER > 0
 	struct ifnet *encif;
+	struct ipcomp  *ipcomp;
 
 	if ((encif = enc_getif(0, tdb->tdb_tap)) != NULL) {
 		encif->if_opackets++;
@@ -393,7 +384,6 @@ ipcomp_output(struct mbuf *m, struct tdb *tdb, int skip, int protoff)
 	}
 
 	/* Update the counters */
-
 	tdb->tdb_cur_bytes += m->m_pkthdr.len - skip;
 	ipcompstat_add(ipcomps_obytes, m->m_pkthdr.len - skip);
 
@@ -455,59 +445,32 @@ ipcomp_output(struct mbuf *m, struct tdb *tdb, int skip, int protoff)
 	/* Compression operation */
 	crdc->crd_alg = ipcompx->type;
 
-	/* IPsec-specific opaque crypto info */
-	tc = malloc(sizeof(*tc), M_XDATA, M_NOWAIT | M_ZERO);
-	if (tc == NULL) {
-		DPRINTF("failed to allocate tdb_crypto");
-		ipcompstat_inc(ipcomps_crypto);
-		error = ENOBUFS;
-		goto drop;
-	}
-
-	tc->tc_spi = tdb->tdb_spi;
-	tc->tc_proto = tdb->tdb_sproto;
-	tc->tc_skip = skip;
-	tc->tc_rdomain = tdb->tdb_rdomain;
-	tc->tc_dst = tdb->tdb_dst;
-
 	/* Crypto operation descriptor */
 	crp->crp_ilen = m->m_pkthdr.len;	/* Total input length */
 	crp->crp_flags = CRYPTO_F_IMBUF | CRYPTO_F_MPSAFE;
 	crp->crp_buf = (caddr_t)m;
-	crp->crp_callback = ipsec_output_cb;
-	crp->crp_opaque = (caddr_t)tc;
 	crp->crp_sid = tdb->tdb_cryptoid;
 
-	crypto_dispatch(crp);
-	return 0;
+	KERNEL_LOCK();
+	while ((error = crypto_invoke(crp)) == EAGAIN) {
+		/* Reset the session ID */
+		if (tdb->tdb_cryptoid != 0)
+			tdb->tdb_cryptoid = crp->crp_sid;
+	}
+	KERNEL_UNLOCK();
+	if (error) {
+		DPRINTF("crypto error %d", error);
+		ipsecstat_inc(ipsec_noxform);
+		goto drop;
+	}
 
- drop:
-	m_freem(m);
+	ilen = crp->crp_ilen;
+	olen = crp->crp_olen;
+
+	/* Release the crypto descriptors */
 	crypto_freereq(crp);
-	return error;
-}
+	crp = NULL;
 
-/*
- * IPComp output callback.
- */
-int
-ipcomp_output_cb(struct tdb *tdb, struct tdb_crypto *tc, struct mbuf *m,
-    int ilen, int olen)
-{
-	struct mbuf *mo;
-	int skip, rlen, roff;
-	u_int16_t cpi;
-	struct ip *ip;
-#ifdef INET6
-	struct ip6_hdr *ip6;
-#endif
-	struct ipcomp  *ipcomp;
-#ifdef ENCDEBUG
-	char buf[INET6_ADDRSTRLEN];
-#endif
-	int error;
-
-	skip = tc->tc_skip;
 	rlen = ilen - skip;
 
 	/* Check sizes. */
@@ -559,9 +522,6 @@ ipcomp_output_cb(struct tdb *tdb, struct tdb_crypto *tc, struct mbuf *m,
 	}
 
  skiphdr:
-	/* Release the crypto descriptor. */
-	free(tc, M_XDATA, 0);
-
 	error = ipsp_process_done(m, tdb);
 	if (error)
 		ipcompstat_inc(ipcomps_outfail);
@@ -569,6 +529,6 @@ ipcomp_output_cb(struct tdb *tdb, struct tdb_crypto *tc, struct mbuf *m,
 
  drop:
 	m_freem(m);
-	free(tc, M_XDATA, 0);
+	crypto_freereq(crp);
 	return error;
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: tmpfs_vnops.c,v 1.46 2021/03/11 13:31:35 jsg Exp $	*/
+/*	$OpenBSD: tmpfs_vnops.c,v 1.50 2021/10/24 16:02:44 patrick Exp $	*/
 /*	$NetBSD: tmpfs_vnops.c,v 1.100 2012/11/05 17:27:39 dholland Exp $	*/
 
 /*
@@ -289,12 +289,12 @@ done:
 	}
 out:
 	/*
-	 * If (1) we succeeded, (2) found a distinct vnode to return and (3)
+	 * If (1) we succeeded, (2) found a distinct vnode != .. to return and (3)
 	 * were either explicitly told to keep the parent locked or are in the
 	 * middle of a lookup, unlock the parent vnode.
 	 */
 	if ((error == 0 || error == EJUSTRETURN) && /* (1) */
-	    *vpp != dvp &&			    /* (2) */
+	    (*vpp != dvp || (cnp->cn_flags & ISDOTDOT))  && /* (2) */
 	    (!lockparent || !lastcn)) {		    /* (3) */
 		VOP_UNLOCK(dvp);
 		cnp->cn_flags |= PDIRUNLOCK;
@@ -625,7 +625,7 @@ tmpfs_write(void *v)
 	error = 0;
 	while (error == 0 && uio->uio_resid > 0) {
 		vsize_t len;
-
+		uvm_vnp_uncache(vp);
 		len = MIN(node->tn_size - uio->uio_offset, uio->uio_resid);
 		if (len == 0) {
 			break;
@@ -888,7 +888,7 @@ tmpfs_rmdir(void *v)
 	KASSERT(node->tn_spec.tn_dir.tn_parent == dnode);
 
 	/*
-	 * Directories with more than two entries ('.' and '..') cannot be 
+	 * Directories with more than two entries ('.' and '..') cannot be
 	 * removed.
 	 */
 	if (node->tn_size > 0) {
@@ -1328,8 +1328,10 @@ tmpfs_rename(void *v)
 
 	/*
 	 * Check for cross-device rename.
+	 * Also don't allow renames of mount points.
 	 */
 	if (fvp->v_mount != tdvp->v_mount ||
+	    fdvp->v_mount != fvp->v_mount ||
 	    (tvp != NULL && (fvp->v_mount != tvp->v_mount))) {
 	    	tmpfs_rename_abort(v);
 		return EXDEV;
@@ -2654,7 +2656,7 @@ filt_tmpfsread(struct knote *kn, long hint)
 	tmpfs_node_t *node = VP_TO_TMPFS_NODE(vp);
 
 	/*
-	 * filesystem is gone, so set the EOF flag and schedule 
+	 * filesystem is gone, so set the EOF flag and schedule
 	 * the knote for deletion.
 	 */
 	if (hint == NOTE_REVOKE) {
@@ -2678,7 +2680,7 @@ int
 filt_tmpfswrite(struct knote *kn, long hint)
 {
 	/*
-	 * filesystem is gone, so set the EOF flag and schedule 
+	 * filesystem is gone, so set the EOF flag and schedule
 	 * the knote for deletion.
 	 */
 	if (hint == NOTE_REVOKE) {

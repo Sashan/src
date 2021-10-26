@@ -1,4 +1,4 @@
-/*	$OpenBSD: aesni.c,v 1.51 2021/10/13 13:08:58 bluhm Exp $	*/
+/*	$OpenBSD: aesni.c,v 1.53 2021/10/24 10:26:22 patrick Exp $	*/
 /*-
  * Copyright (c) 2003 Jason Wright
  * Copyright (c) 2003, 2004 Theo de Raadt
@@ -698,8 +698,6 @@ aesni_process(struct cryptop *crp)
 
 out:
 	smr_read_leave();
-	crp->crp_etype = err;
-	crypto_done(crp);
 	return (err);
 }
 

@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.73 2021/09/14 14:30:57 schwarze Exp $
+# $OpenBSD: Makefile,v 1.76 2021/10/25 15:16:35 tb Exp $
 
 .include <bsd.own.mk>
 
@@ -14,15 +14,16 @@ MAN =	BIO_f_ssl.3 \
 	SSL_CTX_ctrl.3 \
 	SSL_CTX_flush_sessions.3 \
 	SSL_CTX_free.3 \
+	SSL_CTX_get0_certificate.3 \
 	SSL_CTX_get_ex_new_index.3 \
 	SSL_CTX_get_verify_mode.3 \
-	SSL_CTX_get0_certificate.3 \
 	SSL_CTX_load_verify_locations.3 \
 	SSL_CTX_new.3 \
 	SSL_CTX_sess_number.3 \
 	SSL_CTX_sess_set_cache_size.3 \
 	SSL_CTX_sess_set_get_cb.3 \
 	SSL_CTX_sessions.3 \
+	SSL_CTX_set1_groups.3 \
 	SSL_CTX_set_alpn_select_cb.3 \
 	SSL_CTX_set_cert_store.3 \
 	SSL_CTX_set_cert_verify_callback.3 \
@@ -32,6 +33,7 @@ MAN =	BIO_f_ssl.3 \
 	SSL_CTX_set_default_passwd_cb.3 \
 	SSL_CTX_set_generate_session_id.3 \
 	SSL_CTX_set_info_callback.3 \
+	SSL_CTX_set_keylog_callback.3 \
 	SSL_CTX_set_max_cert_list.3 \
 	SSL_CTX_set_min_proto_version.3 \
 	SSL_CTX_set_mode.3 \
@@ -50,16 +52,15 @@ MAN =	BIO_f_ssl.3 \
 	SSL_CTX_set_tmp_dh_callback.3 \
 	SSL_CTX_set_tmp_rsa_callback.3 \
 	SSL_CTX_set_verify.3 \
-	SSL_CTX_set1_groups.3 \
 	SSL_CTX_use_certificate.3 \
 	SSL_SESSION_free.3 \
+	SSL_SESSION_get0_cipher.3 \
+	SSL_SESSION_get0_peer.3 \
 	SSL_SESSION_get_compress_id.3 \
 	SSL_SESSION_get_ex_new_index.3 \
 	SSL_SESSION_get_id.3 \
 	SSL_SESSION_get_protocol_version.3 \
 	SSL_SESSION_get_time.3 \
-	SSL_SESSION_get0_cipher.3 \
-	SSL_SESSION_get0_peer.3 \
 	SSL_SESSION_has_ticket.3 \
 	SSL_SESSION_is_resumable.3 \
 	SSL_SESSION_new.3 \
@@ -102,6 +103,7 @@ MAN =	BIO_f_ssl.3 \
 	SSL_num_renegotiations.3 \
 	SSL_pending.3 \
 	SSL_read.3 \
+	SSL_read_early_data.3 \
 	SSL_renegotiate.3 \
 	SSL_rstate_string.3 \
 	SSL_session_reused.3 \
@@ -123,9 +125,6 @@ MAN =	BIO_f_ssl.3 \
 	SSL_write.3 \
 	d2i_SSL_SESSION.3 \
 	ssl.3
-
-# To be enabled after the release of OpenBSD 6.8:
-#	SSL_read_early_data.3 \
 
 all clean cleandir depend includes obj tags:
 
