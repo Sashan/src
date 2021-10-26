@@ -1,4 +1,4 @@
-/*	$OpenBSD: exf.c,v 1.46 2017/04/26 13:14:28 millert Exp $	*/
+/*	$OpenBSD: exf.c,v 1.48 2021/10/25 14:17:24 dv Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993, 1994
@@ -173,6 +173,16 @@ file_init(SCR *sp, FREF *frp, char *rcv_name, int flags)
 	 * to the real name (we display that until the user renames it).
 	 */
 	oname = frp->name;
+
+	/*
+	 * User is editing a named file that doesn't exist yet other than as a
+	 * temporary file.
+	 */
+	if (!exists && oname != NULL && frp->tname != NULL) {
+		free(ep);
+		return (1);
+	}
+
 	if (LF_ISSET(FS_OPENERR) || oname == NULL || !exists) {
 		/*
 		 * Don't try to create a temporary support file twice.
@@ -977,7 +987,7 @@ file_backup(SCR *sp, char *name, char *bname)
 	 * up.
 	 */
 	errno = 0;
-	if ((rfd = open(name, O_RDONLY, 0)) < 0) {
+	if ((rfd = open(name, O_RDONLY)) < 0) {
 		if (errno == ENOENT)
 			return (0);
 		estr = name;
