@@ -1849,8 +1849,8 @@ struct pfr_ktable
 extern struct pfi_kif		*pfi_all;
 
 void		 pfi_initialize(void);
-struct pfi_kif	*pfi_kif_create(const char *);
-void		 pfi_kif_destroy(struct pfi_kif *);
+struct pfi_kif	*pfi_kif_alloc(const char *);
+void		 pfi_kif_free(struct pfi_kif *);
 struct pfi_kif	*pfi_kif_find(const char *);
 struct pfi_kif	*pfi_kif_get(const char *, struct pfi_kif **);
 void		 pfi_kif_ref(struct pfi_kif *, enum pfi_kif_refs);
