@@ -154,7 +154,8 @@ struct rwlock		 pf_state_lock = RWLOCK_INITIALIZER("pf_state_lock");
 #if (PF_QNAME_SIZE != PF_TAG_NAME_SIZE)
 #error PF_QNAME_SIZE must be equal to PF_TAG_NAME_SIZE
 #endif
-u_int16_t		 tagname2tag(struct pf_tags *, char *, int);
+u_int16_t		 tagname2tag(struct pf_tags *, char *, int,
+			    struct pf_tagname **);
 void			 tag2tagname(struct pf_tags *, u_int16_t, char *);
 void			 tag_unref(struct pf_tags *, u_int16_t);
 int			 pf_rtlabel_add(struct pf_addr_wrap *);
@@ -343,13 +344,13 @@ pf_purge_rule(struct pf_rule *rule)
 }
 
 struct pf_tagname *
-tagnmae_create(int mflag)
+pf_tagnmae_alloc(int mflag)
 {
 	return (pool_get(&pf_tag_pl, mflag | PR_ZERO));
 }
 
 void
-tagname_destroy(struct pf_tagname *tag)
+pf_tagname_free(struct pf_tagname *tag)
 {
 	KASSERT(tag->tag == 0);
 	pool_put(&pf_tag_pl, tag);
@@ -368,7 +369,7 @@ tagname2tag(struct pf_tags *head, char *tagname, int create,
 			return (tag->tag);
 		}
 
-	if ((tag_buf == NULL) || (*tag_buf == NULL))
+	if (create == 0)
 		return (0);
 
 	/*
@@ -387,10 +388,15 @@ tagname2tag(struct pf_tags *head, char *tagname, int create,
 	if (new_tagid > TAGID_MAX)
 		return (0);
 
-	/* allocate and fill new struct pf_tagname */
-	tag = pool_get(&pf_tag_pl, PR_NOWAIT | PR_ZERO);
-	if (tag == NULL)
-		return (0);
+	if ((tag_buf == NULL) || (*tag_buf == NULL)) {
+		/* allocate and fill new struct pf_tagname */
+		tag = pool_get(&pf_tag_pl, PR_NOWAIT | PR_ZERO);
+		if (tag == NULL)
+			return (0);
+	} else {
+		tag = *tag_buf;
+		*tag_buf = NULL;
+	}
 	strlcpy(tag->name, tagname, sizeof(tag->name));
 	tag->tag = new_tagid;
 	tag->ref++;
@@ -437,7 +443,7 @@ tag_unref(struct pf_tags *head, u_int16_t tag)
 u_int16_t
 pf_tagname2tag(char *tagname, int create)
 {
-	return (tagname2tag(&pf_tags, tagname, create));
+	return (tagname2tag(&pf_tags, tagname, create, NULL));
 }
 
 void
@@ -498,7 +504,7 @@ pf_rtlabel_copyout(struct pf_addr_wrap *a)
 u_int16_t
 pf_qname2qid(char *qname, int create)
 {
-	return (tagname2tag(&pf_qids, qname, create));
+	return (tagname2tag(&pf_qids, qname, create, NULL));
 }
 
 void
@@ -1413,6 +1419,18 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		    (rule->set_prio[0] > IFQ_MAXPRIO ||
 		    rule->set_prio[1] > IFQ_MAXPRIO))
 			error = EINVAL;
+
+		if (rule->qname[0] != 0) {
+			rule->qid = pf_qname2qid(rule->qname, 0);
+			if (rule->qid == 0)
+				error = EBUSY;
+			if (rule->pqname[0] != 0) {
+				rule->pqid = pf_qname2qid(rule->pqname, 0);
+				if (rule->pqid == 0)
+					error = EBUSY;
+			} else
+				rule->pqid = rule->qid;
+		}
 
 		if (error) {
 			pf_rm_rule(NULL, rule);
@@ -3093,26 +3111,15 @@ pf_rule_copyin(struct pf_rule *from, struct pf_rule *to,
 	pf_init_threshold(&to->pktrate, from->pktrate.limit,
 	    from->pktrate.seconds);
 
-	if (to->qname[0] != 0) {
-		if ((to->qid = pf_qname2qid(to->qname, 0)) == 0)
-			return (EBUSY);
-		if (to->pqname[0] != 0) {
-			if ((to->pqid = pf_qname2qid(to->pqname, 0)) == 0)
-				return (EBUSY);
-		} else
-			to->pqid = to->qid;
-	}
 	to->rt_listid = from->rt_listid;
 	to->prob = from->prob;
 	to->return_icmp = from->return_icmp;
 	to->return_icmp6 = from->return_icmp6;
 	to->max_mss = from->max_mss;
 	if (to->tagname[0])
-		if ((to->tag = pf_tagname2tag(to->tagname, 1)) == 0)
-			return (EBUSY);
+		to->tag_buf = pf_tagnmae_alloc(M_WAITOK);
 	if (to->match_tagname[0])
-		if ((to->match_tag = pf_tagname2tag(to->match_tagname, 1)) == 0)
-			return (EBUSY);
+		to->match_tag_buf = pf_tagnmae_alloc(M_WAITOK);
 	to->scrub_flags = from->scrub_flags;
 	to->delay = from->delay;
 	to->uid = from->uid;

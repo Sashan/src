@@ -548,7 +548,9 @@ struct pf_rule {
 	u_int16_t		 return_icmp6;
 	u_int16_t		 max_mss;
 	u_int16_t		 tag;
+	struct pf_tagname	*tag_buf;
 	u_int16_t		 match_tag;
+	struct pf_tagname	*match_tag_buf;
 	u_int16_t		 scrub_flags;
 	u_int16_t		 delay;
 
