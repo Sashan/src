@@ -904,6 +904,7 @@ pf_kif_setup(struct pfi_kif *kif_buf)
 	kif = pfi_kif_get(kif_buf->pfik_name, &kif_buf);
 	if (kif_buf != NULL)
 		pfi_kif_free(kif_buf);
+	pfi_kif_ref(kif, PFI_KIF_REF_RULE);
 
 	return (kif);
 }
