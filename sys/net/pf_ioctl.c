@@ -268,7 +268,7 @@ pfclose(dev_t dev, int flags, int fmt, struct proc *p)
 }
 
 void
-pf_destroy_rule(struct pf_rule *rule)
+pf_rule_free(struct pf_rule *rule)
 {
 	pfi_kif_free(rule->kif);
 	pfi_kif_free(rule->rcv_kif);
@@ -1332,14 +1332,14 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		if ((error = pf_rule_copyin(&pr->rule, rule))) {
-			pf_destroy_rule(rule);
+			pf_rule_free(rule);
 			rule = NULL;
 			break;
 		}
 
 		if (pr->rule.return_icmp >> 8 > ICMP_MAXTYPE) {
 			error = EINVAL;
-			pf_destroy_rule(rule);
+			pf_rule_free(rule);
 			rule = NULL;
 			break;
 		}
@@ -1353,7 +1353,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			break;
 #endif /* INET6 */
 		default:
-			pf_destroy_rule(rule);
+			pf_rule_free(rule);
 			rule = NULL;
 			error = EAFNOSUPPORT;
 			goto fail;
@@ -1367,14 +1367,14 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			error = EINVAL;
 			PF_UNLOCK();
 			NET_UNLOCK();
-			pf_destroy_rule(rule);
+			pf_rule_free(rule);
 			break;
 		}
 		if (pr->ticket != ruleset->rules.inactive.ticket) {
 			error = EBUSY;
 			PF_UNLOCK();
 			NET_UNLOCK();
-			pf_destroy_rule(rule);
+			pf_rule_free(rule);
 			break;
 		}
 		rule->cuid = p->p_ucred->cr_ruid;
