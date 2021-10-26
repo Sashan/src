@@ -83,7 +83,7 @@ RB_GENERATE(pfi_ifhead, pfi_kif, pfik_tree, pfi_if_compare);
 #define PFI_MTYPE		M_IFADDR
 
 struct pfi_kif *
-pfi_kif_create(const char *kif_name)
+pfi_kif_alloc(const char *kif_name)
 {
 	struct pfi_kif *kif;
 
@@ -102,7 +102,7 @@ pfi_kif_create(const char *kif_name)
 }
 
 void
-pfi_kif_destroy(struct pfi_kif *kif)
+pfi_kif_free(struct pfi_kif *kif)
 {
 	if ((kif->pfik_rules != 0) || (kif->pfik_states != 0) ||
 	    (kif->pfik_states != 0) || (kif->pfik_states != 0) ||
@@ -130,7 +130,7 @@ pfi_initialize(void)
 	pfi_buffer = mallocarray(pfi_buffer_max, sizeof(*pfi_buffer),
 	    PFI_MTYPE, M_WAITOK);
 
-	pfi_all = pfi_kif_create(IFG_ALL);
+	pfi_all = pfi_kif_alloc(IFG_ALL);
 
 	if (RB_INSERT(pfi_ifhead, &pfi_ifs, pfi_all) != NULL)
 		panic("IFG_ALL kif found already");
