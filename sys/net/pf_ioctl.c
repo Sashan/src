@@ -270,11 +270,11 @@ pfclose(dev_t dev, int flags, int fmt, struct proc *p)
 void
 pf_destroy_rule(struct pf_rule *rule)
 {
-	pfi_kif_destroy(rule->kif);
-	pfi_kif_destroy(rule->rcv_kif);
-	pfi_kif_destroy(rule->rdr.kif);
-	pfi_kif_destroy(rule->nat.kif);
-	pfi_kif_destroy(rule->route.kif);
+	pfi_kif_free(rule->kif);
+	pfi_kif_free(rule->rcv_kif);
+	pfi_kif_free(rule->rdr.kif);
+	pfi_kif_free(rule->nat.kif);
+	pfi_kif_free(rule->route.kif);
 
 	pool_put(&pf_rule_pl, rule);
 }
@@ -903,7 +903,7 @@ pf_kif_setup(struct pfi_kif *kif_buf)
 
 	kif = pfi_kif_get(kif_buf->pfik_name, &kif_buf);
 	if (kif_buf != NULL)
-		pfi_kif_destroy(kif_buf);
+		pfi_kif_free(kif_buf);
 
 	return (kif);
 }
@@ -3061,15 +3061,16 @@ pf_rule_copyin(struct pf_rule *from, struct pf_rule *to)
 	if (pf_validate_range(to->rdr.port_op, to->rdr.proxy_port))
 		return (EINVAL);
 
-	to->kif = (to->ifname[0]) ? pfi_kif_create(to->ifname) : NULL;
+	to->kif = (to->ifname[0]) ?
+	    pfi_kif_alloc(to->ifname) : NULL;
 	to->rcv_kif = (to->rcv_ifname[0]) ?
-	    pfi_kif_create(to->rcv_ifname) : NULL;
+	    pfi_kif_alloc(to->rcv_ifname) : NULL;
 	to->rdr.kif = (to->rdr.ifname[0]) ?
-	    pfi_kif_create(to->rdr.ifname) : NULL;
+	    pfi_kif_alloc(to->rdr.ifname) : NULL;
 	to->nat.kif = (to->nat.ifname[0]) ?
-	    pfi_kif_create(to->nat.ifname) : NULL;
+	    pfi_kif_alloc(to->nat.ifname) : NULL;
 	to->route.kif = (to->route.ifname[0]) ?
-	    pfi_kif_create(to->route.ifname) : NULL;
+	    pfi_kif_alloc(to->route.ifname) : NULL;
 
 	to->os_fingerprint = from->os_fingerprint;
 
