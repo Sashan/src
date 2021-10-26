@@ -319,6 +319,8 @@ pf_rm_rule(struct pf_rulequeue *rulequeue, struct pf_rule *rule)
 	pfi_kif_unref(rule->nat.kif, PFI_KIF_REF_RULE);
 	pfi_kif_unref(rule->route.kif, PFI_KIF_REF_RULE);
 	pf_remove_anchor(rule);
+	KASSERT(rule->tag_buf == NULL);
+	KASSERT(rule->match_tag_buf == NULL);
 	pool_put(&pf_rule_pl, rule);
 }
 
@@ -352,6 +354,9 @@ pf_tagnmae_alloc(int mflag)
 void
 pf_tagname_free(struct pf_tagname *tag)
 {
+	if (tag == NULL)
+		return;
+
 	KASSERT(tag->tag == 0);
 	pool_put(&pf_tag_pl, tag);
 }
@@ -1400,6 +1405,22 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		if (rule->src.addr.type == PF_ADDR_NONE ||
 		    rule->dst.addr.type == PF_ADDR_NONE)
 			error = EINVAL;
+
+		if (rule->tagname[0]) {
+			KASSERT(rule->tag_buf != NULL);
+			rule->tag = tagname2tag(&pf_tags, rule->tagname, 1,
+			    &rule->tag_buf);
+			pf_tagname_free(rule->tag_buf);
+			rule->tag_buf = NULL;
+		}
+
+		if (rule->match_tagname[0]) {
+			KASSERT(rule->match_tag_buf != NULL);
+			rule->match_tag = tagname2tag(&pf_tags,
+			    rule->match_tagname, 1, &rule->match_tag_buf);
+			pf_tagname_free(rule->match_tag_buf);
+			rule->match_tag_buf = NULL;
+		}
 
 		if (pf_addr_setup(ruleset, &rule->src.addr, rule->af))
 			error = EINVAL;
