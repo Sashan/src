@@ -270,6 +270,9 @@ pfclose(dev_t dev, int flags, int fmt, struct proc *p)
 void
 pf_rule_free(struct pf_rule *rule)
 {
+	if (rule == NULL)
+		return;
+
 	pfi_kif_free(rule->kif);
 	pfi_kif_free(rule->rcv_kif);
 	pfi_kif_free(rule->rdr.kif);
@@ -1360,6 +1363,30 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
+		if (rule->src.addr.type == PF_ADDR_NONE ||
+		    rule->dst.addr.type == PF_ADDR_NONE) {
+			error = EINVAL;
+			pf_rule_free(rule);
+			rule = NULL;
+			break;
+		}
+
+		if (rule->rt && !rule->direction) {
+			error = EINVAL;
+			pf_rule_free(rule);
+			rule = NULL;
+			break;
+		}
+
+		if (rule->scrub_flags & PFSTATE_SETPRIO &&
+		    (rule->set_prio[0] > IFQ_MAXPRIO ||
+		    rule->set_prio[1] > IFQ_MAXPRIO)) {
+			error = EINVAL;
+			pf_rule_free(rule);
+			rule = NULL;
+			break;
+		}
+
 		NET_LOCK();
 		PF_LOCK();
 		pr->anchor[sizeof(pr->anchor) - 1] = '\0';
@@ -1388,10 +1415,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		else
 			rule->nr = 0;
 
-		if (rule->src.addr.type == PF_ADDR_NONE ||
-		    rule->dst.addr.type == PF_ADDR_NONE)
-			error = EINVAL;
-
 		rule->kif = pf_kif_setup(rule->kif);
 		rule->rcv_kif = pf_kif_setup(rule->rcv_kif);
 		rule->rdr.kif = pf_kif_setup(rule->rdr.kif);
@@ -1417,12 +1440,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		if (pf_addr_setup(ruleset, &rule->route.addr, rule->af))
 			error = EINVAL;
 		if (pf_anchor_setup(rule, ruleset, pr->anchor_call))
-			error = EINVAL;
-		if (rule->rt && !rule->direction)
-			error = EINVAL;
-		if (rule->scrub_flags & PFSTATE_SETPRIO &&
-		    (rule->set_prio[0] > IFQ_MAXPRIO ||
-		    rule->set_prio[1] > IFQ_MAXPRIO))
 			error = EINVAL;
 
 		if (error) {
@@ -1550,51 +1567,35 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			break;
 		}
 
-		newrule = pool_get(&pf_rule_pl, PR_WAITOK|PR_LIMITFAIL|PR_ZERO);
-		if (newrule == NULL) {
-			error = ENOMEM;
-			break;
-		}
-
-		NET_LOCK();
-		PF_LOCK();
-		ruleset = pf_find_ruleset(pcr->anchor);
-		if (ruleset == NULL) {
-			error = EINVAL;
-			PF_UNLOCK();
-			NET_UNLOCK();
-			pool_put(&pf_rule_pl, newrule);
-			break;
-		}
-
 		if (pcr->action == PF_CHANGE_GET_TICKET) {
-			pcr->ticket = ++ruleset->rules.active.ticket;
+			NET_LOCK();
+			PF_LOCK();
+
+			ruleset = pf_find_ruleset(pcr->anchor);
+			if (ruleset != NULL)
+				error = EINVAL;
+			else
+				pcr->ticket = ++ruleset->rules.active.ticket;
+
 			PF_UNLOCK();
 			NET_UNLOCK();
-			pool_put(&pf_rule_pl, newrule);
 			break;
-		} else {
-			if (pcr->ticket !=
-			    ruleset->rules.active.ticket) {
-				error = EINVAL;
-				PF_UNLOCK();
-				NET_UNLOCK();
-				pool_put(&pf_rule_pl, newrule);
-				break;
-			}
-			if (pcr->rule.return_icmp >> 8 > ICMP_MAXTYPE) {
-				error = EINVAL;
-				PF_UNLOCK();
-				NET_UNLOCK();
-				pool_put(&pf_rule_pl, newrule);
-				break;
-			}
 		}
 
 		if (pcr->action != PF_CHANGE_REMOVE) {
-			pf_rule_copyin(&pcr->rule, newrule);
-			newrule->cuid = p->p_ucred->cr_ruid;
-			newrule->cpid = p->p_p->ps_pid;
+			newrule = pool_get(&pf_rule_pl,
+			    PR_WAITOK|PR_LIMITFAIL|PR_ZERO);
+			if (newrule == NULL) {
+				error = ENOMEM;
+				break;
+			}
+
+			error = pf_rule_copyin(&pcr->rule, newrule);
+			if (error != 0) {
+				pf_rule_free(newrule);
+				newrule = NULL;
+				break;
+			}
 
 			switch (newrule->af) {
 			case 0:
@@ -1606,24 +1607,74 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				break;
 #endif /* INET6 */
 			default:
-				pf_rm_rule(NULL, newrule);
 				error = EAFNOSUPPORT;
-				PF_UNLOCK();
-				NET_UNLOCK();
+				pf_rule_free(newrule);
+				newrule = NULL;
 				goto fail;
 			}
 
-			if (newrule->rt && !newrule->direction)
+			if (newrule->rt && !newrule->direction) {
+				pf_rule_free(newrule);
 				error = EINVAL;
-			if (pf_addr_setup(ruleset, &newrule->src.addr, newrule->af))
+				newrule = NULL;
+				break;
+			}
+		}
+
+		NET_LOCK();
+		PF_LOCK();
+		ruleset = pf_find_ruleset(pcr->anchor);
+		if (ruleset == NULL) {
+			error = EINVAL;
+			PF_UNLOCK();
+			NET_UNLOCK();
+			pf_rule_free(newrule);
+			break;
+		}
+
+		if (pcr->ticket != ruleset->rules.active.ticket) {
+			error = EINVAL;
+			PF_UNLOCK();
+			NET_UNLOCK();
+			pf_rule_free(newrule);
+			break;
+		}
+
+		if (pcr->action != PF_CHANGE_REMOVE) {
+			KASSERT(newrule != NULL);
+			newrule->cuid = p->p_ucred->cr_ruid;
+			newrule->cpid = p->p_p->ps_pid;
+
+			newrule->kif = pf_kif_setup(newrule->kif);
+			newrule->rcv_kif = pf_kif_setup(newrule->rcv_kif);
+			newrule->rdr.kif = pf_kif_setup(newrule->rdr.kif);
+			newrule->nat.kif = pf_kif_setup(newrule->nat.kif);
+			newrule->route.kif = pf_kif_setup(newrule->route.kif);
+
+			if (newrule->overload_tblname[0]) {
+				newrule->overload_tbl = pfr_attach_table(
+				    ruleset, newrule->overload_tblname, 0);
+				if (newrule->overload_tbl == NULL)
+					error = EINVAL;
+				else
+					newrule->overload_tbl->pfrkt_flags |=
+					    PFR_TFLAG_ACTIVE;
+			}
+
+			if (pf_addr_setup(ruleset, &newrule->src.addr,
+			    newrule->af))
 				error = EINVAL;
-			if (pf_addr_setup(ruleset, &newrule->dst.addr, newrule->af))
+			if (pf_addr_setup(ruleset, &newrule->dst.addr,
+			    newrule->af))
 				error = EINVAL;
-			if (pf_addr_setup(ruleset, &newrule->rdr.addr, newrule->af))
+			if (pf_addr_setup(ruleset, &newrule->rdr.addr,
+			    newrule->af))
 				error = EINVAL;
-			if (pf_addr_setup(ruleset, &newrule->nat.addr, newrule->af))
+			if (pf_addr_setup(ruleset, &newrule->nat.addr,
+			    newrule->af))
 				error = EINVAL;
-			if (pf_addr_setup(ruleset, &newrule->route.addr, newrule->af))
+			if (pf_addr_setup(ruleset, &newrule->route.addr,
+			    newrule->af))
 				error = EINVAL;
 			if (pf_anchor_setup(newrule, ruleset, pcr->anchor_call))
 				error = EINVAL;
