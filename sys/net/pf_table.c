@@ -161,7 +161,7 @@ struct pfr_kentry	*pfr_create_kentry(struct pfr_addr *);
 struct pfr_kentry 	*pfr_create_kentry_unlocked(struct pfr_addr *);
 void			 pfr_kentry_kif_ref(struct pfr_kentry *);
 void			 pfr_destroy_kentries(struct pfr_kentryworkq *);
-void			 pfr_destroy_ioq(struct pfr_kentryworkq *);
+void			 pfr_destroy_ioq(struct pfr_kentryworkq *, int);
 void			 pfr_destroy_kentry(struct pfr_kentry *);
 void			 pfr_insert_kentries(struct pfr_ktable *,
 			    struct pfr_kentryworkq *, time_t);
@@ -386,26 +386,28 @@ pfr_add_addrs(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 	PF_UNLOCK();
 	NET_UNLOCK();
 
-	i = 0;
-	while ((ke = SLIST_FIRST(&ioq)) != NULL) {
-		if (flags & PFR_FLAG_FEEDBACK) {
+	if (flags & PFR_FLAG_FEEDBACK) {
+		i = 0;
+		while ((ke = SLIST_FIRST(&ioq)) != NULL) {
+			YIELD(flags & PFR_FLAG_USERIOCTL);
 			pfr_fill_feedback((struct pfr_kentry_all *)ke, &ad);
 			if (COPYOUT(&ad, addr+i, sizeof(ad), flags))
 				senderr(EFAULT);
 			i++;
-		}
-		SLIST_REMOVE_HEAD(&ioq, pfrke_ioq);
-		switch (ke->pfrke_fb) {
-		case PFR_FB_CONFLICT:
-		case PFR_FB_DUPLICATE:
-		case PFR_FB_NONE:
-			pfr_destroy_kentry(ke);
-			break;
-		case PFR_FB_ADDED:
-			if (flags & PFR_FLAG_DUMMY)
+			SLIST_REMOVE_HEAD(&ioq, pfrke_ioq);
+			switch (ke->pfrke_fb) {
+			case PFR_FB_CONFLICT:
+			case PFR_FB_DUPLICATE:
+			case PFR_FB_NONE:
 				pfr_destroy_kentry(ke);
+				break;
+			case PFR_FB_ADDED:
+				if (flags & PFR_FLAG_DUMMY)
+					pfr_destroy_kentry(ke);
+			}
 		}
-	}
+	} else
+		pfr_destroy_ioq(&ioq, flags);
 
 	if (nadd != NULL)
 		*nadd = xadd;
@@ -413,7 +415,7 @@ pfr_add_addrs(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 	pfr_destroy_ktable(tmpkt, 0);
 	return (0);
 _bad:
-	pfr_destroy_ioq(&ioq);
+	pfr_destroy_ioq(&ioq, flags);
 	if (flags & PFR_FLAG_FEEDBACK)
 		pfr_reset_feedback(addr, size, flags);
 	pfr_destroy_ktable(tmpkt, 0);
@@ -1064,15 +1066,18 @@ pfr_destroy_kentries(struct pfr_kentryworkq *workq)
 }
 
 void
-pfr_destroy_ioq(struct pfr_kentryworkq *ioq)
+pfr_destroy_ioq(struct pfr_kentryworkq *ioq, int flags)
 {
 	struct pfr_kentry	*p;
 
 	while ((p = SLIST_FIRST(ioq)) != NULL) {
-		YIELD(1);
+		YIELD(flags & PFR_FLAG_USERIOCTL);
 		SLIST_REMOVE_HEAD(ioq, pfrke_ioq);
-		/* we destroy only those entires, which not made it to table */
-		if (p->pfrke_fb != PFR_FB_ADDED)
+		/*
+		 * we destroy only those entires, which did not make it to
+		 * table
+		 */
+		if ((p->pfrke_fb != PFR_FB_ADDED) || (flags & PFR_FLAG_DUMMY))
 			pfr_destroy_kentry(p);
 	}
 }
