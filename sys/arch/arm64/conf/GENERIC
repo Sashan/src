@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.208 2021/09/25 18:40:08 kn Exp $
+# $OpenBSD: GENERIC,v 1.213 2021/11/09 16:16:11 kn Exp $
 #
 # GENERIC machine description file
 #
@@ -131,8 +131,9 @@ amdgpu*		at pci?
 drm*		at amdgpu?
 wsdisplay*	at amdgpu?
 
-gpioleds*	at fdt?
 gpiocharger*	at fdt?
+gpiokeys*	at fdt?
+gpioleds*	at fdt?
 
 # Apple
 apldart*	at fdt?
@@ -142,6 +143,12 @@ aplintc*	at fdt? early 1
 aplpcie*	at fdt?
 pci*		at aplpcie?
 aplpinctrl*	at fdt? early 1
+aplspi*		at fdt?
+aplhidev*	at spi?
+aplkbd*		at aplhidev?
+wskbd*		at aplkbd? mux 1
+aplms*		at aplhidev?
+wsmouse*	at aplms? mux 0
 aplspmi*	at fdt?
 aplpmu*		at aplspmi?
 exuart*		at fdt?
@@ -305,6 +312,7 @@ mskc*		at pci?			# Marvell Yukon-2
 msk*		at mskc?		#  each port of above
 re*		at pci?			# Realtek 8169/8169S/8110S
 rge*		at pci?			# Realtek 8125
+vmx*		at pci?			# VMware VMXNET3 virtual interface
 
 # PCI WiFi
 athn*		at pci?			# Atheros AR9k (802.11a/g/n)

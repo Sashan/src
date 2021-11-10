@@ -1,4 +1,4 @@
-/* $OpenBSD: status.c,v 1.227 2021/08/20 17:50:42 nicm Exp $ */
+/* $OpenBSD: status.c,v 1.230 2021/11/01 07:48:04 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -439,7 +439,8 @@ status_redraw(struct client *c)
 			screen_write_cursormove(&ctx, 0, i, 0);
 
 			status_free_ranges(&sle->ranges);
-			format_draw(&ctx, &gc, width, expanded, &sle->ranges);
+			format_draw(&ctx, &gc, width, expanded, &sle->ranges,
+			    0);
 
 			free(sle->expanded);
 			sle->expanded = expanded;
@@ -562,7 +563,7 @@ status_message_redraw(struct client *c)
 	if (c->message_ignore_styles)
 		screen_write_nputs(&ctx, len, &gc, "%s", c->message_string);
 	else
-		format_draw(&ctx, &gc, c->tty.sx, c->message_string, NULL);
+		format_draw(&ctx, &gc, c->tty.sx, c->message_string, NULL, 0);
 	screen_write_stop(&ctx);
 
 	if (grid_compare(sl->active->grid, old_screen.grid) == 0) {
@@ -809,14 +810,23 @@ status_prompt_translate_key(struct client *c, key_code key, key_code *new_key)
 {
 	if (c->prompt_mode == PROMPT_ENTRY) {
 		switch (key) {
+		case '\001': /* C-a */
 		case '\003': /* C-c */
+		case '\005': /* C-e */
 		case '\007': /* C-g */
 		case '\010': /* C-h */
 		case '\011': /* Tab */
+		case '\013': /* C-k */
+		case '\016': /* C-n */
+		case '\020': /* C-p */
+		case '\024': /* C-t */
 		case '\025': /* C-u */
 		case '\027': /* C-w */
+		case '\031': /* C-y */
 		case '\n':
 		case '\r':
+		case KEYC_LEFT|KEYC_CTRL:
+		case KEYC_RIGHT|KEYC_CTRL:
 		case KEYC_BSPACE:
 		case KEYC_DC:
 		case KEYC_DOWN:
@@ -837,6 +847,9 @@ status_prompt_translate_key(struct client *c, key_code key, key_code *new_key)
 	}
 
 	switch (key) {
+	case KEYC_BSPACE:
+		*new_key = KEYC_LEFT;
+		return (1);
 	case 'A':
 	case 'I':
 	case 'C':
@@ -882,7 +895,7 @@ status_prompt_translate_key(struct client *c, key_code key, key_code *new_key)
 		*new_key = 'B'|KEYC_VI;
 		return (1);
 	case 'd':
-		*new_key = '\025';
+		*new_key = '\025'; /* C-u */
 		return (1);
 	case 'e':
 		*new_key = 'e'|KEYC_VI;
@@ -1714,7 +1727,7 @@ status_prompt_complete_list_menu(struct client *c, char **list, u_int size,
 		item.name = list[i];
 		item.key = '0' + (i - spm->start);
 		item.command = NULL;
-		menu_add_item(menu, &item, NULL, NULL, NULL);
+		menu_add_item(menu, &item, NULL, c, NULL);
 	}
 
 	if (options_get_number(c->session->options, "status-position") == 0)

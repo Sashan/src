@@ -1235,11 +1235,13 @@
 ./usr/share/man/man4/arm64/ampintc.4
 ./usr/share/man/man4/arm64/apldart.4
 ./usr/share/man/man4/arm64/apldog.4
+./usr/share/man/man4/arm64/aplhidev.4
 ./usr/share/man/man4/arm64/aplintc.4
 ./usr/share/man/man4/arm64/aplns.4
 ./usr/share/man/man4/arm64/aplpcie.4
 ./usr/share/man/man4/arm64/aplpinctrl.4
 ./usr/share/man/man4/arm64/aplpmu.4
+./usr/share/man/man4/arm64/aplspi.4
 ./usr/share/man/man4/arm64/aplspmi.4
 ./usr/share/man/man4/arm64/apm.4
 ./usr/share/man/man4/arm64/efi.4
@@ -1421,6 +1423,7 @@
 ./usr/share/man/man4/gpiocharger.4
 ./usr/share/man/man4/gpiodcf.4
 ./usr/share/man/man4/gpioiic.4
+./usr/share/man/man4/gpiokeys.4
 ./usr/share/man/man4/gpioleds.4
 ./usr/share/man/man4/gpioow.4
 ./usr/share/man/man4/graphaudio.4
@@ -1508,6 +1511,7 @@
 ./usr/share/man/man4/icmp6.4
 ./usr/share/man/man4/icsphy.4
 ./usr/share/man/man4/ifmedia.4
+./usr/share/man/man4/igc.4
 ./usr/share/man/man4/iha.4
 ./usr/share/man/man4/ihidev.4
 ./usr/share/man/man4/iic.4
@@ -2174,6 +2178,7 @@
 ./usr/share/man/man5/ifstated.conf.5
 ./usr/share/man/man5/iked.conf.5
 ./usr/share/man/man5/info.5
+./usr/share/man/man5/install.site.5
 ./usr/share/man/man5/installurl.5
 ./usr/share/man/man5/intro.5
 ./usr/share/man/man5/ipsec.conf.5

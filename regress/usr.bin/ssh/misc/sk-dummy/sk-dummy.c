@@ -44,7 +44,7 @@
 	} while (0)
 #endif
 
-#if SSH_SK_VERSION_MAJOR != 0x00070000
+#if SSH_SK_VERSION_MAJOR != 0x00090000
 # error SK API has changed, sk-dummy.c needs an update
 #endif
 
@@ -241,6 +241,7 @@ sk_enroll(uint32_t alg, const uint8_t *challenge, size_t challenge_len,
 		skdebug(__func__, "calloc response failed");
 		goto out;
 	}
+	response->flags = flags;
 	switch(alg) {
 	case SSH_SK_ECDSA:
 		if (pack_key_ecdsa(response) != 0)
@@ -336,7 +337,7 @@ sig_ecdsa(const uint8_t *message, size_t message_len,
 	/* Prepare data to be signed */
 	dump("message", message, message_len);
 	SHA256Init(&ctx);
-	SHA256Update(&ctx, application, strlen(application));
+	SHA256Update(&ctx, (const u_char *)application, strlen(application));
 	SHA256Final(apphash, &ctx);
 	dump("apphash", apphash, sizeof(apphash));
 	countbuf[0] = (counter >> 24) & 0xff;
@@ -412,7 +413,7 @@ sig_ed25519(const uint8_t *message, size_t message_len,
 	/* Prepare data to be signed */
 	dump("message", message, message_len);
 	SHA256Init(&ctx);
-	SHA256Update(&ctx, application, strlen(application));
+	SHA256Update(&ctx, (const u_char *)application, strlen(application));
 	SHA256Final(apphash, &ctx);
 	dump("apphash", apphash, sizeof(apphash));
 

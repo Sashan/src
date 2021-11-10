@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_internal.h,v 1.12 2021/09/03 08:58:53 beck Exp $ */
+/* $OpenBSD: x509_internal.h,v 1.15 2021/11/04 23:52:34 beck Exp $ */
 /*
  * Copyright (c) 2020 Bob Beck <beck@openbsd.org>
  *
@@ -21,6 +21,8 @@
 #include <netinet/in.h>
 
 #include <openssl/x509_verify.h>
+
+#include "x509_lcl.h"
 
 /* Hard limits on structure size and number of signature checks. */
 #define X509_VERIFY_MAX_CHAINS		8	/* Max validated chains */
@@ -94,8 +96,7 @@ int x509_vfy_callback_indicate_success(X509_STORE_CTX *ctx);
 void x509v3_cache_extensions(X509 *x);
 X509 *x509_vfy_lookup_cert_match(X509_STORE_CTX *ctx, X509 *x);
 
-int x509_verify_asn1_time_to_tm(const ASN1_TIME *atime, struct tm *tm,
-    int notafter);
+time_t x509_verify_asn1_time_to_time_t(const ASN1_TIME *atime, int notafter);
 
 struct x509_verify_ctx *x509_verify_ctx_new_from_xsc(X509_STORE_CTX *xsc);
 
@@ -106,6 +107,8 @@ struct x509_constraints_names *x509_constraints_names_dup(
     struct x509_constraints_names *names);
 void x509_constraints_names_clear(struct x509_constraints_names *names);
 struct x509_constraints_names *x509_constraints_names_new(size_t names_max);
+int x509_constraints_general_to_bytes(GENERAL_NAME *name, uint8_t **bytes,
+    size_t *len);
 void x509_constraints_names_free(struct x509_constraints_names *names);
 int x509_constraints_valid_host(uint8_t *name, size_t len);
 int x509_constraints_valid_sandns(uint8_t *name, size_t len);
@@ -128,6 +131,7 @@ int x509_constraints_check(struct x509_constraints_names *names,
     struct x509_constraints_names *excluded, int *error);
 int x509_constraints_chain(STACK_OF(X509) *chain, int *error,
     int *depth);
+void x509_verify_cert_info_populate(X509 *cert);
 
 __END_HIDDEN_DECLS
 

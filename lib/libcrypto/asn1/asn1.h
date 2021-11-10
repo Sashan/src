@@ -1,4 +1,4 @@
-/* $OpenBSD: asn1.h,v 1.54 2020/12/08 15:06:42 tb Exp $ */
+/* $OpenBSD: asn1.h,v 1.56 2021/11/01 08:14:36 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -772,6 +772,9 @@ void ASN1_TIME_free(ASN1_TIME *a);
 ASN1_TIME *d2i_ASN1_TIME(ASN1_TIME **a, const unsigned char **in, long len);
 int i2d_ASN1_TIME(ASN1_TIME *a, unsigned char **out);
 extern const ASN1_ITEM ASN1_TIME_it;
+
+int ASN1_TIME_diff(int *pday, int *psec, const ASN1_TIME *from,
+    const ASN1_TIME *to);
 
 extern const ASN1_ITEM ASN1_OCTET_STRING_NDEF_it;
 

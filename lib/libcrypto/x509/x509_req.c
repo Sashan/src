@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_req.c,v 1.23 2021/10/23 11:56:10 tb Exp $ */
+/* $OpenBSD: x509_req.c,v 1.26 2021/11/03 13:27:28 schwarze Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -69,6 +69,8 @@
 #include <openssl/objects.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
+
+#include "x509_lcl.h"
 
 X509_REQ *
 X509_to_X509_REQ(X509 *x, EVP_PKEY *pkey, const EVP_MD *md)
@@ -210,66 +212,43 @@ X509_REQ_get_extensions(X509_REQ *req)
 	int idx, *pnid;
 	const unsigned char *p;
 
-	if ((req == NULL) || (req->req_info == NULL) || !ext_nids)
-		return (NULL);
+	if (req == NULL || req->req_info == NULL || ext_nids == NULL)
+		return NULL;
 	for (pnid = ext_nids; *pnid != NID_undef; pnid++) {
 		idx = X509_REQ_get_attr_by_NID(req, *pnid, -1);
 		if (idx == -1)
 			continue;
 		attr = X509_REQ_get_attr(req, idx);
-		if (attr->single)
-			ext = attr->value.single;
-		else if (sk_ASN1_TYPE_num(attr->value.set))
-			ext = sk_ASN1_TYPE_value(attr->value.set, 0);
+		ext = X509_ATTRIBUTE_get0_type(attr, 0);
 		break;
 	}
-	if (!ext || (ext->type != V_ASN1_SEQUENCE))
+	if (ext == NULL || ext->type != V_ASN1_SEQUENCE)
 		return NULL;
 	p = ext->value.sequence->data;
-	return (STACK_OF(X509_EXTENSION) *)ASN1_item_d2i(NULL, &p,
-	    ext->value.sequence->length, &X509_EXTENSIONS_it);
+	return d2i_X509_EXTENSIONS(NULL, &p, ext->value.sequence->length);
 }
 
-/* Add a STACK_OF extensions to a certificate request: allow alternative OIDs
- * in case we want to create a non standard one.
+/*
+ * Add a STACK_OF extensions to a certificate request: allow alternative OIDs
+ * in case we want to create a non-standard one.
  */
 
 int
 X509_REQ_add_extensions_nid(X509_REQ *req, STACK_OF(X509_EXTENSION) *exts,
     int nid)
 {
-	ASN1_TYPE *at = NULL;
-	X509_ATTRIBUTE *attr = NULL;
+	unsigned char *ext = NULL;
+	int extlen;
+	int rv;
 
-	if (!(at = ASN1_TYPE_new()) ||
-	    !(at->value.sequence = ASN1_STRING_new()))
-		goto err;
+	extlen = i2d_X509_EXTENSIONS(exts, &ext);
+	if (extlen <= 0)
+		return 0;
 
-	at->type = V_ASN1_SEQUENCE;
-	/* Generate encoding of extensions */
-	at->value.sequence->length = ASN1_item_i2d((ASN1_VALUE *)exts,
-	    &at->value.sequence->data, &X509_EXTENSIONS_it);
-	if (!(attr = X509_ATTRIBUTE_new()))
-		goto err;
-	if (!(attr->value.set = sk_ASN1_TYPE_new_null()))
-		goto err;
-	if (!sk_ASN1_TYPE_push(attr->value.set, at))
-		goto err;
-	at = NULL;
-	attr->single = 0;
-	attr->object = OBJ_nid2obj(nid);
-	if (!req->req_info->attributes) {
-		if (!(req->req_info->attributes = sk_X509_ATTRIBUTE_new_null()))
-			goto err;
-	}
-	if (!sk_X509_ATTRIBUTE_push(req->req_info->attributes, attr))
-		goto err;
-	return 1;
+	rv = X509_REQ_add1_attr_by_NID(req, nid, V_ASN1_SEQUENCE, ext, extlen);
+	free(ext);
 
-err:
-	X509_ATTRIBUTE_free(attr);
-	ASN1_TYPE_free(at);
-	return 0;
+	return rv;
 }
 
 /* This is the normal usage: use the "official" OID */

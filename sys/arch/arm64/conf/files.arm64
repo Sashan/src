@@ -1,4 +1,4 @@
-# $OpenBSD: files.arm64,v 1.44 2021/08/31 15:20:06 kettenis Exp $
+# $OpenBSD: files.arm64,v 1.46 2021/11/01 09:02:46 kettenis Exp $
 
 maxpartitions	16
 maxusers	2 8 128
@@ -152,6 +152,14 @@ device	aplintc
 attach	aplintc at fdt
 file	arch/arm64/dev/aplintc.c		aplintc
 
+device	aplhidev {}
+attach	aplhidev at spi
+device	aplkbd: hid, hidkbd, wskbddev
+attach	aplkbd at aplhidev
+device	aplms: hid, hidms, wsmousedev
+attach	aplms at aplhidev
+file	arch/arm64/dev/aplhidev.c		aplhidev | aplkbd | aplms needs-flag
+
 device	aplpcie: pcibus
 attach	aplpcie at fdt
 file	arch/arm64/dev/aplpcie.c		aplpcie
@@ -170,6 +178,10 @@ define	spmi {}
 device	aplpmu
 attach	aplpmu at spmi
 file	arch/arm64/dev/aplpmu.c			aplpmu
+
+device	aplspi: spi
+attach	aplspi at fdt
+file	arch/arm64/dev/aplspi.c			aplspi
 
 device	aplspmi: spmi
 attach	aplspmi at fdt

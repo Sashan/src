@@ -1,4 +1,4 @@
-/* $OpenBSD: tty.c,v 1.408 2021/10/25 09:22:17 nicm Exp $ */
+/* $OpenBSD: tty.c,v 1.411 2021/11/03 13:37:17 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -38,7 +38,7 @@ static int	tty_client_ready(struct client *);
 
 static void	tty_set_italics(struct tty *);
 static int	tty_try_colour(struct tty *, int, const char *);
-static void	tty_force_cursor_colour(struct tty *, const char *);
+static void	tty_force_cursor_colour(struct tty *, int);
 static void	tty_cursor_pane(struct tty *, const struct tty_ctx *, u_int,
 		    u_int);
 static void	tty_cursor_pane_unless_wrap(struct tty *,
@@ -105,7 +105,7 @@ tty_init(struct tty *tty, struct client *c)
 	tty->client = c;
 
 	tty->cstyle = SCREEN_CURSOR_DEFAULT;
-	tty->ccolour = xstrdup("");
+	tty->ccolour = -1;
 
 	if (tcgetattr(c->fd, &tty->tio) != 0)
 		return (-1);
@@ -341,8 +341,8 @@ tty_start_tty(struct tty *tty)
 	tty->flags |= TTY_STARTED;
 	tty_invalidate(tty);
 
-	if (*tty->ccolour != '\0')
-		tty_force_cursor_colour(tty, "");
+	if (tty->ccolour != -1)
+		tty_force_cursor_colour(tty, -1);
 
 	tty->mouse_drag_flag = 0;
 	tty->mouse_drag_update = NULL;
@@ -406,7 +406,7 @@ tty_stop_tty(struct tty *tty)
 	}
 	if (tty->mode & MODE_BRACKETPASTE)
 		tty_raw(tty, tty_term_string(tty->term, TTYC_DSBP));
-	if (*tty->ccolour != '\0')
+	if (tty->ccolour != -1)
 		tty_raw(tty, tty_term_string(tty->term, TTYC_CR));
 
 	tty_raw(tty, tty_term_string(tty->term, TTYC_CNORM));
@@ -451,7 +451,6 @@ void
 tty_free(struct tty *tty)
 {
 	tty_close(tty);
-	free(tty->ccolour);
 }
 
 void
@@ -650,39 +649,66 @@ tty_set_title(struct tty *tty, const char *title)
 }
 
 static void
-tty_force_cursor_colour(struct tty *tty, const char *ccolour)
+tty_force_cursor_colour(struct tty *tty, int c)
 {
-	if (*ccolour == '\0')
+	u_char	r, g, b;
+	char	s[13] = "";
+
+	if (c != -1)
+		c = colour_force_rgb(c);
+	if (c == tty->ccolour)
+		return;
+	if (c == -1)
 		tty_putcode(tty, TTYC_CR);
-	else
-		tty_putcode_ptr1(tty, TTYC_CS, ccolour);
-	free(tty->ccolour);
-	tty->ccolour = xstrdup(ccolour);
+	else {
+		colour_split_rgb(c, &r, &g, &b);
+		xsnprintf(s, sizeof s, "rgb:%02hhx/%02hhx/%02hhx", r, g, b);
+		tty_putcode_ptr1(tty, TTYC_CS, s);
+	}
+	tty->ccolour = c;
 }
 
-static void
-tty_update_cursor(struct tty *tty, int mode, int changed, struct screen *s)
+static int
+tty_update_cursor(struct tty *tty, int mode, struct screen *s)
 {
-	enum screen_cursor_style cstyle;
+	enum screen_cursor_style	cstyle;
+	int				ccolour, changed, cmode = mode;
 
 	/* Set cursor colour if changed. */
-	if (s != NULL && strcmp(s->ccolour, tty->ccolour) != 0)
-		tty_force_cursor_colour(tty, s->ccolour);
+	if (s != NULL) {
+		ccolour = s->ccolour;
+		if (s->ccolour == -1)
+			ccolour = s->default_ccolour;
+		tty_force_cursor_colour(tty, ccolour);
+	}
 
 	/* If cursor is off, set as invisible. */
-	if (~mode & MODE_CURSOR) {
-		if (changed & MODE_CURSOR)
+	if (~cmode & MODE_CURSOR) {
+		if (tty->mode & MODE_CURSOR)
 			tty_putcode(tty, TTYC_CIVIS);
-		return;
+		return (cmode);
 	}
 
 	/* Check if blinking or very visible flag changed or style changed. */
 	if (s == NULL)
 		cstyle = tty->cstyle;
-	else
+	else {
 		cstyle = s->cstyle;
+		if (cstyle == SCREEN_CURSOR_DEFAULT) {
+			if (~cmode & MODE_CURSOR_BLINKING_SET) {
+				if (s->default_mode & MODE_CURSOR_BLINKING)
+					cmode |= MODE_CURSOR_BLINKING;
+				else
+					cmode &= ~MODE_CURSOR_BLINKING;
+			}
+			cstyle = s->default_cstyle;
+		}
+	}
+
+	/* If nothing changed, do nothing. */
+	changed = cmode ^ tty->mode;
 	if ((changed & CURSOR_MODES) == 0 && cstyle == tty->cstyle)
-		return;
+		return (cmode);
 
 	/*
 	 * Set cursor style. If an explicit style has been set with DECSCUSR,
@@ -700,48 +726,55 @@ tty_update_cursor(struct tty *tty, int mode, int changed, struct screen *s)
 			else
 				tty_putcode1(tty, TTYC_SS, 0);
 		}
-		if (mode & (MODE_CURSOR_BLINKING|MODE_CURSOR_VERY_VISIBLE))
+		if (cmode & (MODE_CURSOR_BLINKING|MODE_CURSOR_VERY_VISIBLE))
 			tty_putcode(tty, TTYC_CVVIS);
 		break;
 	case SCREEN_CURSOR_BLOCK:
 		if (tty_term_has(tty->term, TTYC_SS)) {
-			if (mode & MODE_CURSOR_BLINKING)
+			if (cmode & MODE_CURSOR_BLINKING)
 				tty_putcode1(tty, TTYC_SS, 1);
 			else
 				tty_putcode1(tty, TTYC_SS, 2);
-		} else if (mode & MODE_CURSOR_BLINKING)
+		} else if (cmode & MODE_CURSOR_BLINKING)
 			tty_putcode(tty, TTYC_CVVIS);
 		break;
 	case SCREEN_CURSOR_UNDERLINE:
 		if (tty_term_has(tty->term, TTYC_SS)) {
-			if (mode & MODE_CURSOR_BLINKING)
+			if (cmode & MODE_CURSOR_BLINKING)
 				tty_putcode1(tty, TTYC_SS, 3);
 			else
 				tty_putcode1(tty, TTYC_SS, 4);
-		} else if (mode & MODE_CURSOR_BLINKING)
+		} else if (cmode & MODE_CURSOR_BLINKING)
 			tty_putcode(tty, TTYC_CVVIS);
 		break;
 	case SCREEN_CURSOR_BAR:
 		if (tty_term_has(tty->term, TTYC_SS)) {
-			if (mode & MODE_CURSOR_BLINKING)
+			if (cmode & MODE_CURSOR_BLINKING)
 				tty_putcode1(tty, TTYC_SS, 5);
 			else
 				tty_putcode1(tty, TTYC_SS, 6);
-		} else if (mode & MODE_CURSOR_BLINKING)
+		} else if (cmode & MODE_CURSOR_BLINKING)
 			tty_putcode(tty, TTYC_CVVIS);
 		break;
 	}
 	tty->cstyle = cstyle;
+	return (cmode);
  }
 
 void
 tty_update_mode(struct tty *tty, int mode, struct screen *s)
 {
+	struct tty_term	*term = tty->term;
 	struct client	*c = tty->client;
 	int		 changed;
 
 	if (tty->flags & TTY_NOCURSOR)
 		mode &= ~MODE_CURSOR;
+
+	if (tty_update_cursor(tty, mode, s) & MODE_CURSOR_BLINKING)
+		mode |= MODE_CURSOR_BLINKING;
+	else
+		mode &= ~MODE_CURSOR_BLINKING;
 
 	changed = mode ^ tty->mode;
 	if (log_get_level() != 0 && changed != 0) {
@@ -751,9 +784,7 @@ tty_update_mode(struct tty *tty, int mode, struct screen *s)
 		    screen_mode_to_string(mode));
 	}
 
-	tty_update_cursor(tty, mode, changed, s);
-	if ((changed & ALL_MOUSE_MODES) &&
-	    tty_term_has(tty->term, TTYC_KMOUS)) {
+	if ((changed & ALL_MOUSE_MODES) && tty_term_has(term, TTYC_KMOUS)) {
 		/*
 		 * If the mouse modes have changed, clear any that are set and
 		 * apply again. There are differences in how terminals track
@@ -2278,17 +2309,25 @@ tty_cursor(struct tty *tty, u_int cx, u_int cy)
 	if (tty->flags & TTY_BLOCK)
 		return;
 
-	if (cx > tty->sx - 1)
-		cx = tty->sx - 1;
-
 	thisx = tty->cx;
 	thisy = tty->cy;
+
+	/*
+	 * If in the automargin space, and want to be there, do not move.
+	 * Otherwise, force the cursor to be in range (and complain).
+	 */
+	if (cx == thisx && cy == thisy && cx == tty->sx)
+		return;
+	if (cx > tty->sx - 1) {
+		log_debug("%s: x too big %u > %u", __func__, cx, tty->sx - 1);
+		cx = tty->sx - 1;
+	}
 
 	/* No change. */
 	if (cx == thisx && cy == thisy)
 		return;
 
-	/* Very end of the line, just use absolute movement. */
+	/* Currently at the very end of the line - use absolute movement. */
 	if (thisx > tty->sx - 1)
 		goto absolute;
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: rrdp.c,v 1.14 2021/10/23 20:01:16 claudio Exp $ */
+/*	$OpenBSD: rrdp.c,v 1.17 2021/10/29 09:27:36 claudio Exp $ */
 /*
  * Copyright (c) 2020 Nils Fisher <nils_fisher@hotmail.com>
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
@@ -80,7 +80,7 @@ struct publish_xml {
 	char			*uri;
 	char			*data;
 	char			 hash[SHA256_DIGEST_LENGTH];
-	int			 data_length;
+	size_t			 data_length;
 	enum publish_type	 type;
 };
 
@@ -208,7 +208,8 @@ rrdp_new(size_t id, char *local, char *notify, char *session_id,
 	if ((s->parser = XML_ParserCreate("US-ASCII")) == NULL)
 		err(1, "XML_ParserCreate");
 
-	s->nxml = new_notification_xml(s->parser, &s->repository, &s->current);
+	s->nxml = new_notification_xml(s->parser, &s->repository, &s->current,
+	    notify);
 
 	TAILQ_INSERT_TAIL(&states, s, entry);
 
@@ -622,27 +623,34 @@ free_publish_xml(struct publish_xml *pxml)
  * Add buf to the base64 data string, ensure that this remains a proper
  * string by NUL-terminating the string.
  */
-void
+int
 publish_add_content(struct publish_xml *pxml, const char *buf, int length)
 {
-	int new_length;
+	size_t newlen, outlen;
 
 	/*
 	 * optmisiation, this often gets called with '\n' as the
 	 * only data... seems wasteful
 	 */
 	if (length == 1 && buf[0] == '\n')
-		return;
+		return 0;
 
 	/* append content to data */
-	new_length = pxml->data_length + length;
-	pxml->data = realloc(pxml->data, new_length + 1);
+	if (SIZE_MAX - length - 1 <= pxml->data_length)
+		return -1;
+	newlen = pxml->data_length + length;
+	if (base64_decode_len(newlen, &outlen) == -1 ||
+	    outlen > MAX_FILE_SIZE)
+		return -1;
+
+	pxml->data = realloc(pxml->data, newlen + 1);
 	if (pxml->data == NULL)
 		err(1, "%s", __func__);
 
 	memcpy(pxml->data + pxml->data_length, buf, length);
-	pxml->data[new_length] = '\0';
-	pxml->data_length = new_length;
+	pxml->data[newlen] = '\0';
+	pxml->data_length = newlen;
+	return 0;
 }
 
 /*
@@ -661,7 +669,8 @@ publish_done(struct rrdp *s, struct publish_xml *pxml)
 	size_t datasz = 0;
 
 	if (pxml->data_length > 0)
-		if ((base64_decode(pxml->data, &data, &datasz)) == -1)
+		if ((base64_decode(pxml->data, pxml->data_length,
+		    &data, &datasz)) == -1)
 			return -1;
 
 	/* only send files if the fetch did not fail already */
