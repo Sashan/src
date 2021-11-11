@@ -1055,7 +1055,7 @@ pfr_kentry_kif_ref(struct pfr_kentry *ke_all)
 	case PFRKE_COST:
 	case PFRKE_ROUTE:
 		if (ke->pfrke_rifname[0])
-			ke->pfrke_rkif = pfi_kif_get(ke->pfrke_rifname);
+			ke->pfrke_rkif = pfi_kif_get(ke->pfrke_rifname, NULL);
 		if (ke->pfrke_rkif)
 			pfi_kif_ref(ke->pfrke_rkif, PFI_KIF_REF_ROUTE);
 		break;
