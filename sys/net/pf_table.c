@@ -158,7 +158,7 @@ struct pfr_kentry	*pfr_lookup_addr(struct pfr_ktable *,
 struct pfr_kentry	*pfr_lookup_kentry(struct pfr_ktable *,
 			    struct pfr_kentry *, int);
 struct pfr_kentry	*pfr_create_kentry(struct pfr_addr *);
-struct pfr_kentry 	*pfr_create_kentry_unlocked(struct pfr_addr *);
+struct pfr_kentry 	*pfr_create_kentry_unlocked(struct pfr_addr *, int);
 void			 pfr_kentry_kif_ref(struct pfr_kentry *);
 void			 pfr_destroy_kentries(struct pfr_kentryworkq *);
 void			 pfr_destroy_ioq(struct pfr_kentryworkq *, int);
@@ -333,7 +333,10 @@ pfr_add_addrs(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 		YIELD(flags & PFR_FLAG_USERIOCTL);
 		if (COPYIN(addr+i, &ad, sizeof(ad), flags))
 			senderr(EFAULT);
-		ke = pfr_create_kentry_unlocked(&ad);
+		pfr_validate_addr(&ad);
+			senderr(EINVAL);
+
+		ke = pfr_create_kentry_unlocked(&ad, flags);
 		if (ke == NULL)
 			senderr(ENOMEM);
 		ke->pfrke_fb = PFR_FB_NONE;
@@ -985,14 +988,20 @@ pfr_create_kentry(struct pfr_addr *ad)
 }
 
 struct pfr_kentry *
-pfr_create_kentry_unlocked(struct pfr_addr *ad)
+pfr_create_kentry_unlocked(struct pfr_addr *ad, int flags)
 {
 	struct pfr_kentry_all	*ke;
+	int mflags = PR_ZERO;
 
 	if (ad->pfra_type >= PFRKE_MAX)
 		panic("unknown pfra_type %d", ad->pfra_type);
 
-	ke = pool_get(&pfr_kentry_pl[ad->pfra_type], PR_NOWAIT | PR_ZERO);
+	if (flags & PFR_FLAG_USERIOCTL)
+		mflags |= PR_WAITOK;
+	else
+		mflags |= PR_NOWAIT;
+
+	ke = pool_get(&pfr_kentry_pl[ad->pfra_type], mflags);
 	if (ke == NULL)
 		return (NULL);
 
