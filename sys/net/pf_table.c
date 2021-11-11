@@ -333,7 +333,7 @@ pfr_add_addrs(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 		YIELD(flags & PFR_FLAG_USERIOCTL);
 		if (COPYIN(addr+i, &ad, sizeof(ad), flags))
 			senderr(EFAULT);
-		pfr_validate_addr(&ad);
+		if (pfr_validate_addr(&ad))
 			senderr(EINVAL);
 
 		ke = pfr_create_kentry_unlocked(&ad, flags);
