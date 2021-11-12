@@ -1572,7 +1572,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			PF_LOCK();
 
 			ruleset = pf_find_ruleset(pcr->anchor);
-			if (ruleset != NULL)
+			if (ruleset == NULL)
 				error = EINVAL;
 			else
 				pcr->ticket = ++ruleset->rules.active.ticket;
