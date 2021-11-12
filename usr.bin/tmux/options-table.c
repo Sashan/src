@@ -1,4 +1,4 @@
-/* $OpenBSD: options-table.c,v 1.152 2021/10/14 13:19:01 nicm Exp $ */
+/* $OpenBSD: options-table.c,v 1.154 2021/11/03 13:37:17 nicm Exp $ */
 
 /*
  * Copyright (c) 2011 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -56,6 +56,10 @@ static const char *options_table_bell_action_list[] = {
 };
 static const char *options_table_visual_bell_list[] = {
 	"off", "on", "both", NULL
+};
+static const char *options_table_cursor_style_list[] = {
+	"default", "blinking-block", "block", "blinking-underline", "underline",
+	"blinking-bar", "bar", NULL
 };
 static const char *options_table_pane_status_list[] = {
 	"off", "top", "bottom", NULL
@@ -188,6 +192,7 @@ const struct options_name_map options_other_names[] = {
 	{ "display-panes-color", "display-panes-colour" },
 	{ "display-panes-active-color", "display-panes-active-colour" },
 	{ "clock-mode-color", "clock-mode-colour" },
+	{ "cursor-color", "cursor-colour" },
 	{ "pane-colors", "pane-colours" },
 	{ NULL, NULL }
 };
@@ -233,6 +238,21 @@ const struct options_table_entry options_table[] = {
 	  .default_str = "",
 	  .text = "Shell command run when text is copied. "
 		  "If empty, no command is run."
+	},
+
+	{ .name = "cursor-colour",
+	  .type = OPTIONS_TABLE_COLOUR,
+	  .scope = OPTIONS_TABLE_WINDOW|OPTIONS_TABLE_PANE,
+	  .default_num = -1,
+	  .text = "Colour of the cursor."
+	},
+
+	{ .name = "cursor-style",
+	  .type = OPTIONS_TABLE_CHOICE,
+	  .scope = OPTIONS_TABLE_WINDOW|OPTIONS_TABLE_PANE,
+	  .choices = options_table_cursor_style_list,
+	  .default_num = 0,
+	  .text = "Style of the cursor."
 	},
 
 	{ .name = "default-terminal",

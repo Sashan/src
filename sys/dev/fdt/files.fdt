@@ -1,4 +1,4 @@
-#	$OpenBSD: files.fdt,v 1.157 2021/09/25 18:40:08 kn Exp $
+#	$OpenBSD: files.fdt,v 1.159 2021/11/09 16:16:11 kn Exp $
 #
 # Config file and device description for machine-independent FDT code.
 # Included by ports that need it.
@@ -589,10 +589,14 @@ device	dapmic
 attach	dapmic at i2c
 file	dev/fdt/dapmic.c		dapmic
 
+device	gpiocharger
+attach	gpiocharger at fdt
+file	dev/fdt/gpiocharger.c		gpiocharger
+
 device	gpioleds
 attach	gpioleds at fdt
 file	dev/fdt/gpioleds.c		gpioleds
 
-device	gpiocharger
-attach	gpiocharger at fdt
-file	dev/fdt/gpiocharger.c		gpiocharger
+device	gpiokeys
+attach	gpiokeys at fdt
+file	dev/fdt/gpiokeys.c		gpiokeys

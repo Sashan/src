@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.60 2021/10/22 11:10:34 claudio Exp $ */
+/*	$OpenBSD: main.c,v 1.63 2021/11/03 14:42:12 deraadt Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <util.h>
 
 #include "extern.h"
 
@@ -283,6 +284,8 @@ static struct opts	 opts;
 #define OP_COMP_DEST	1009
 #define OP_COPY_DEST	1010
 #define OP_LINK_DEST	1011
+#define OP_MAX_SIZE	1012
+#define OP_MIN_SIZE	1013
 
 const struct option	 lopts[] = {
     { "address",	required_argument, NULL,		OP_ADDRESS },
@@ -298,14 +301,16 @@ const struct option	 lopts[] = {
     { "devices",	no_argument,	&opts.devices,		1 },
     { "no-devices",	no_argument,	&opts.devices,		0 },
     { "dry-run",	no_argument,	&opts.dry_run,		1 },
-    { "exclude",	required_argument, NULL, 		OP_EXCLUDE },
+    { "exclude",	required_argument, NULL,		OP_EXCLUDE },
     { "exclude-from",	required_argument, NULL,		OP_EXCLUDE_FROM },
     { "group",		no_argument,	&opts.preserve_gids,	1 },
     { "no-group",	no_argument,	&opts.preserve_gids,	0 },
     { "help",		no_argument,	NULL,			'h' },
-    { "include",	required_argument, NULL, 		OP_INCLUDE },
+    { "include",	required_argument, NULL,		OP_INCLUDE },
     { "include-from",	required_argument, NULL,		OP_INCLUDE_FROM },
     { "links",		no_argument,	&opts.preserve_links,	1 },
+    { "max-size",	required_argument, NULL,		OP_MAX_SIZE },
+    { "min-size",	required_argument, NULL,		OP_MIN_SIZE },
     { "no-links",	no_argument,	&opts.preserve_links,	0 },
     { "no-motd",	no_argument,	&opts.no_motd,		1 },
     { "numeric-ids",	no_argument,	&opts.numeric_ids,	1 },
@@ -337,16 +342,18 @@ main(int argc, char *argv[])
 	pid_t		 child;
 	int		 fds[2], sd = -1, rc, c, st, i, lidx;
 	size_t		 basedir_cnt = 0;
-	struct sess	  sess;
+	struct sess	 sess;
 	struct fargs	*fargs;
 	char		**args;
-	const char 	*errstr;
+	const char	*errstr;
 
 	/* Global pledge. */
 
 	if (pledge("stdio unix rpath wpath cpath dpath inet fattr chown dns getpw proc exec unveil",
 	    NULL) == -1)
 		err(ERR_IPC, "pledge");
+
+	opts.max_size = opts.min_size = -1;
 
 	while ((c = getopt_long(argc, argv, "Dae:ghlnoprtvxz", lopts, &lidx))
 	    != -1) {
@@ -466,6 +473,14 @@ basedir:
 				errx(1, "too many --%s directories specified",
 				    lopts[lidx].name);
 			opts.basedir[basedir_cnt++] = optarg;
+			break;
+		case OP_MAX_SIZE:
+			if (scan_scaled(optarg, &opts.max_size) == -1)
+				err(1, "bad max-size");
+			break;
+		case OP_MIN_SIZE:
+			if (scan_scaled(optarg, &opts.min_size) == -1)
+				err(1, "bad min-size");
 			break;
 		case OP_VERSION:
 			fprintf(stderr, "openrsync: protocol version %u\n",

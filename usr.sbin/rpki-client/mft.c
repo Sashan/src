@@ -1,4 +1,4 @@
-/*	$OpenBSD: mft.c,v 1.40 2021/10/24 12:06:16 job Exp $ */
+/*	$OpenBSD: mft.c,v 1.42 2021/10/28 13:51:42 job Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -228,6 +228,12 @@ mft_parse_flist(struct parse *p, const ASN1_OCTET_STRING *os)
 		goto out;
 	}
 
+	if (sk_ASN1_TYPE_num(seq) > MAX_MANIFEST_ENTRIES) {
+		warnx("%s: %d exceeds manifest entry limit (%d)", p->fn,
+		    sk_ASN1_TYPE_num(seq), MAX_MANIFEST_ENTRIES);
+		goto out;
+	}
+
 	p->res->files = calloc(sk_ASN1_TYPE_num(seq), sizeof(struct mftfile));
 	if (p->res->files == NULL)
 		err(1, NULL);
@@ -244,7 +250,7 @@ mft_parse_flist(struct parse *p, const ASN1_OCTET_STRING *os)
 	}
 
 	rc = 1;
-out:
+ out:
 	sk_ASN1_TYPE_pop_free(seq, ASN1_TYPE_free);
 	return rc;
 }
@@ -409,7 +415,7 @@ out:
  * The MFT content is otherwise returned.
  */
 struct mft *
-mft_parse(X509 **x509, const char *fn)
+mft_parse(X509 **x509, const char *fn, const unsigned char *der, size_t len)
 {
 	struct parse	 p;
 	int		 c, rc = 0;
@@ -426,7 +432,7 @@ mft_parse(X509 **x509, const char *fn)
 			    "1.2.840.113549.1.9.16.1.26");
 	}
 
-	cms = cms_parse_validate(x509, fn, mft_oid, &cmsz);
+	cms = cms_parse_validate(x509, fn, der, len, mft_oid, &cmsz);
 	if (cms == NULL)
 		return NULL;
 	assert(*x509 != NULL);

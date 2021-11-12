@@ -1,4 +1,4 @@
-/*	$OpenBSD: ifconfig.c,v 1.445 2021/10/06 06:14:08 florian Exp $	*/
+/*	$OpenBSD: ifconfig.c,v 1.449 2021/11/11 09:39:16 claudio Exp $	*/
 /*	$NetBSD: ifconfig.c,v 1.40 1997/10/01 02:19:43 enami Exp $	*/
 
 /*
@@ -411,11 +411,6 @@ const struct	cmd {
 	{ "alias",	IFF_UP,		0,		notealias },
 	{ "-alias",	-IFF_UP,	0,		notealias },
 	{ "delete",	-IFF_UP,	0,		notealias },
-#ifdef notdef
-#define	EN_SWABIPS	0x1000
-	{ "swabips",	EN_SWABIPS,	0,		setifflags },
-	{ "-swabips",	-EN_SWABIPS,	0,		setifflags },
-#endif /* notdef */
 	{ "netmask",	NEXTARG,	0,		setifnetmask },
 	{ "mtu",	NEXTARG,	0,		setifmtu },
 	{ "nwid",	NEXTARG,	0,		setifnwid },
@@ -613,8 +608,6 @@ const struct	cmd {
 	{ "-roaming",	0,		0,		umb_roaming },
 	{ "patch",	NEXTARG,	0,		setpair },
 	{ "-patch",	1,		0,		unsetpair },
-	{ "datapath",	NEXTARG,	0,		switch_datapathid },
-	{ "portno",	NEXTARG2,	0,		NULL, switch_portno },
 	{ "addlocal",	NEXTARG,	0,		addlocal },
 	{ "transceiver", NEXTARG0,	0,		transceiver },
 	{ "sff",	NEXTARG0,	0,		transceiver },
@@ -2033,7 +2026,7 @@ setifnwkey(const char *val, int d)
 	}
 
 	if (ioctl(sock, SIOCS80211NWKEY, (caddr_t)&nwkey) == -1)
-		warn("SIOCS80211NWKEY");
+		err(1, "SIOCS80211NWKEY");
 }
 
 /* ARGSUSED */

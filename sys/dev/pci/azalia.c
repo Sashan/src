@@ -1,4 +1,4 @@
-/*	$OpenBSD: azalia.c,v 1.264 2021/08/09 12:59:53 kevlo Exp $	*/
+/*	$OpenBSD: azalia.c,v 1.266 2021/10/30 03:24:59 jsg Exp $	*/
 /*	$NetBSD: azalia.c,v 1.20 2006/05/07 08:31:44 kent Exp $	*/
 
 /*-
@@ -286,7 +286,7 @@ struct cfattach azalia_ca = {
 };
 
 struct cfdriver azalia_cd = {
-	NULL, "azalia", DV_DULL
+	NULL, "azalia", DV_DULL, CD_SKIPHIBERNATE
 };
 
 struct audio_hw_if azalia_hw_if = {
@@ -472,6 +472,7 @@ azalia_configure_pci(azalia_t *az)
 	case PCI_PRODUCT_INTEL_500SERIES_HDA:
 	case PCI_PRODUCT_INTEL_500SERIES_HDA_2:
 	case PCI_PRODUCT_INTEL_500SERIES_LP_HDA:
+	case PCI_PRODUCT_INTEL_600SERIES_HDA:
 	case PCI_PRODUCT_INTEL_C600_HDA:
 	case PCI_PRODUCT_INTEL_C610_HDA_1:
 	case PCI_PRODUCT_INTEL_C610_HDA_2:

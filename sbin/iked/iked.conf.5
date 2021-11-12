@@ -1,4 +1,4 @@
-.\" $OpenBSD: iked.conf.5,v 1.86 2021/08/03 12:46:30 tobhe Exp $
+.\" $OpenBSD: iked.conf.5,v 1.90 2021/11/09 22:38:25 tobhe Exp $
 .\"
 .\" Copyright (c) 2010 - 2014 Reyk Floeter <reyk@openbsd.org>
 .\" Copyright (c) 2004 Mathieu Sauve-Frankel  All rights reserved.
@@ -15,7 +15,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: August 3 2021 $
+.Dd $Mdocdate: November 9 2021 $
 .Dt IKED.CONF 5
 .Os
 .Sh NAME
@@ -92,6 +92,16 @@ Additional configuration files can be included with the
 keyword, for example:
 .Bd -literal -offset indent
 include "/etc/macros.conf"
+.Ed
+.Pp
+Certain parameters can be expressed as lists, in which case
+.Xr iked 8
+generates all the necessary flow combinations.
+For example:
+.Bd -literal -offset indent
+ikev2 esp proto { tcp, udp } \e
+	from 192.168.1.1 to 10.0.0.18 \e
+	peer 192.168.10.1
 .Ed
 .Sh MACROS
 Macros can be defined that will later be expanded in context.
@@ -354,7 +364,13 @@ Note that this only matters for IKEv2 endpoints and does not
 restrict the traffic selectors to negotiate flows with different
 address families, e.g. IPv6 flows negotiated by IPv4 endpoints.
 .Pp
-.It Ic proto Ar protocol
+.It Xo
+.Ic proto Ar protocol
+.Xc
+.It Xo
+.Ic proto
+.Ic { Ar protocol ... Ic }
+.Xc
 The optional
 .Ic proto
 parameter restricts the flow to a specific IP protocol.
@@ -367,6 +383,14 @@ For a list of all the protocol name to number mappings used by
 .Xr iked 8 ,
 see the file
 .Pa /etc/protocols .
+.Pp
+Multiple
+.Ar protocol
+entries can be specified, separated by commas or whitespace,
+if enclosed in curly brackets:
+.Bd -literal -offset indent
+proto { tcp, udp }
+.Ed
 .Pp
 .It Ic rdomain Ar number
 Specify a different routing domain for unencrypted traffic.
@@ -679,7 +703,8 @@ The address of an internal remote access server.
 .El
 .Pp
 .It Ic iface Ar interface
-Configure requested addresses and routes on the specified
+Enable automatic network configuration as initiator.
+Received addresses, routes and nameservers will be installed on the specified
 .Ar interface .
 .Pp
 .It Ic tag Ar string
@@ -974,9 +999,9 @@ keyword.
 3DES requires 24 bytes to form its 168-bit key.
 This is because the most significant bit of each byte is used for parity.
 .Pp
-The keysize of AES-CTR is actually 128-bit.
+The keysize of AES-CTR can be 128, 192, or 256 bits.
 However as well as the key, a 32-bit nonce has to be supplied.
-Thus 160 bits of key material have to be supplied.
+Thus 160, 224, or 288 bits of key material, respectively, have to be supplied.
 The same applies to AES-GCM, AES-GMAC and Chacha20-Poly1305,
 however in the latter case the keysize is 256 bit.
 .Pp
@@ -1046,13 +1071,13 @@ ikev2 "big test" \e
 	from 192.168.1.1 to 192.168.2.2 \e
 	peer any local any \e
 	ikesa \e
-		enc 3des auth hmac-sha2-256 \e
-		group ecp256 group modp1024 \e
+		enc aes-128-gcm \e
+		group ecp256 group curve25519 \e
 	ikesa \e
-		enc 3des auth hmac-sha1 \e
-		group ecp256 group modp1024 \e
-	childsa enc aes-128 auth hmac-sha2-256 \e
-	childsa enc aes-128 auth hmac-sha1 \e
+		enc aes-128 auth hmac-sha2-256 \e
+		group ecp256 group curve25519 \e
+	childsa enc aes-128-gcm \e
+	childsa enc aes-128 auth hmac-sha2-256  \e
 	srcid host.example.com \e
 	dstid 192.168.0.254 \e
 	psk "foobar"

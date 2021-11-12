@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_usrreq.c,v 1.151 2021/10/23 20:44:42 mvs Exp $	*/
+/*	$OpenBSD: uipc_usrreq.c,v 1.154 2021/11/06 17:35:14 mvs Exp $	*/
 /*	$NetBSD: uipc_usrreq.c,v 1.18 1996/02/09 19:00:50 christos Exp $	*/
 
 /*
@@ -52,14 +52,19 @@
 #include <sys/pledge.h>
 #include <sys/pool.h>
 #include <sys/rwlock.h>
+#include <sys/mutex.h>
 #include <sys/sysctl.h>
 
 /*
  * Locks used to protect global data and struct members:
  *      I       immutable after creation
  *      U       unp_lock
+ *      R       unp_rights_mtx
+ *      a       atomic
  */
+
 struct rwlock unp_lock = RWLOCK_INITIALIZER("unplock");
+struct mutex unp_rights_mtx = MUTEX_INITIALIZER(IPL_SOFTNET);
 
 /*
  * Stack of sets of files that were passed over a socket but were
@@ -99,7 +104,7 @@ SLIST_HEAD(,unp_deferral)	unp_deferred =
 	SLIST_HEAD_INITIALIZER(unp_deferred);
 
 ino_t	unp_ino;	/* [U] prototype for fake inode numbers */
-int	unp_rights;	/* [U] file descriptors in flight */
+int	unp_rights;	/* [R] file descriptors in flight */
 int	unp_defer;	/* [U] number of deferred fp to close by the GC task */
 int	unp_gcing;	/* [U] GC task currently running */
 
@@ -305,7 +310,13 @@ uipc_usrreq(struct socket *so, int req, struct mbuf *m, struct mbuf *nam,
 		break;
 
 	case PRU_ABORT:
-		unp_drop(unp, ECONNABORTED);
+		unp_detach(unp);
+		/*
+		 * As long as `unp_lock' is taken before entering
+		 * uipc_usrreq() releasing it here would lead to a
+		 * double unlock.
+		 */
+		sofree(so, SL_NOUNLOCK);
 		break;
 
 	case PRU_SENSE: {
@@ -777,17 +788,6 @@ unp_drop(struct unpcb *unp, int errno)
 
 	so->so_error = errno;
 	unp_disconnect(unp);
-	if (so->so_head) {
-		so->so_pcb = NULL;
-		/*
-		 * As long as `unp_lock' is taken before entering
-		 * uipc_usrreq() releasing it here would lead to a
-		 * double unlock.
-		 */
-		sofree(so, SL_NOUNLOCK);
-		m_freem(unp->unp_addr);
-		pool_put(&unpcb_pool, unp);
-	}
 }
 
 #ifdef notdef
@@ -932,17 +932,18 @@ restart:
 	 */
 	rp = (struct fdpass *)CMSG_DATA(cm);
 
-	rw_enter_write(&unp_lock);
 	for (i = 0; i < nfds; i++) {
 		struct unpcb *unp;
 
 		fp = rp->fp;
 		rp++;
 		if ((unp = fptounp(fp)) != NULL)
-			unp->unp_msgcount--;
-		unp_rights--;
+			atomic_dec_long(&unp->unp_msgcount);
 	}
-	rw_exit_write(&unp_lock);
+
+	mtx_enter(&unp_rights_mtx);
+	unp_rights -= nfds;
+	mtx_leave(&unp_rights_mtx);
 
 	/*
 	 * Copy temporary array to message and adjust length, in case of
@@ -990,13 +991,13 @@ unp_internalize(struct mbuf *control, struct proc *p)
 		return (EINVAL);
 	nfds = (cm->cmsg_len - CMSG_ALIGN(sizeof(*cm))) / sizeof (int);
 
-	rw_enter_write(&unp_lock);
+	mtx_enter(&unp_rights_mtx);
 	if (unp_rights + nfds > maxfiles / 10) {
-		rw_exit_write(&unp_lock);
+		mtx_leave(&unp_rights_mtx);
 		return (EMFILE);
 	}
 	unp_rights += nfds;
-	rw_exit_write(&unp_lock);
+	mtx_leave(&unp_rights_mtx);
 
 	/* Make sure we have room for the struct file pointers */
 morespace:
@@ -1036,7 +1037,6 @@ morespace:
 	ip = ((int *)CMSG_DATA(cm)) + nfds - 1;
 	rp = ((struct fdpass *)CMSG_DATA(cm)) + nfds - 1;
 	fdplock(fdp);
-	rw_enter_write(&unp_lock);
 	for (i = 0; i < nfds; i++) {
 		memcpy(&fd, ip, sizeof fd);
 		ip--;
@@ -1061,15 +1061,13 @@ morespace:
 		rp->flags = fdp->fd_ofileflags[fd] & UF_PLEDGED;
 		rp--;
 		if ((unp = fptounp(fp)) != NULL) {
+			atomic_inc_long(&unp->unp_msgcount);
 			unp->unp_file = fp;
-			unp->unp_msgcount++;
 		}
 	}
-	rw_exit_write(&unp_lock);
 	fdpunlock(fdp);
 	return (0);
 fail:
-	rw_exit_write(&unp_lock);
 	fdpunlock(fdp);
 	if (fp != NULL)
 		FRELE(fp, p);
@@ -1077,17 +1075,15 @@ fail:
 	for ( ; i > 0; i--) {
 		rp++;
 		fp = rp->fp;
-		rw_enter_write(&unp_lock);
 		if ((unp = fptounp(fp)) != NULL)
-			unp->unp_msgcount--;
-		rw_exit_write(&unp_lock);
+			atomic_dec_long(&unp->unp_msgcount);
 		FRELE(fp, p);
 	}
 
 nospace:
-	rw_enter_write(&unp_lock);
+	mtx_enter(&unp_rights_mtx);
 	unp_rights -= nfds;
-	rw_exit_write(&unp_lock);
+	mtx_leave(&unp_rights_mtx);
 
 	return (error);
 }
@@ -1110,21 +1106,23 @@ unp_gc(void *arg __unused)
 	/* close any fds on the deferred list */
 	while ((defer = SLIST_FIRST(&unp_deferred)) != NULL) {
 		SLIST_REMOVE_HEAD(&unp_deferred, ud_link);
+		rw_exit_write(&unp_lock);
 		for (i = 0; i < defer->ud_n; i++) {
 			fp = defer->ud_fp[i].fp;
 			if (fp == NULL)
 				continue;
+			if ((unp = fptounp(fp)) != NULL)
+				atomic_dec_long(&unp->unp_msgcount);
+			mtx_enter(&unp_rights_mtx);
+			unp_rights--;
+			mtx_leave(&unp_rights_mtx);
 			 /* closef() expects a refcount of 2 */
 			FREF(fp);
-			if ((unp = fptounp(fp)) != NULL)
-				unp->unp_msgcount--;
-			unp_rights--;
-			rw_exit_write(&unp_lock);
 			(void) closef(fp, NULL);
-			rw_enter_write(&unp_lock);
 		}
 		free(defer, M_TEMP, sizeof(*defer) +
 		    sizeof(struct fdpass) * defer->ud_n);
+		rw_enter_write(&unp_lock);
 	}
 
 	unp_defer = 0;

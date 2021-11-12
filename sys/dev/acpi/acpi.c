@@ -1,4 +1,4 @@
-/* $OpenBSD: acpi.c,v 1.399 2021/07/20 00:41:54 mlarkin Exp $ */
+/* $OpenBSD: acpi.c,v 1.401 2021/11/02 02:17:56 deraadt Exp $ */
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  * Copyright (c) 2005 Jordan Hargrave <jordan@openbsd.org>
@@ -1174,7 +1174,7 @@ acpi_attach_common(struct acpi_softc *sc, paddr_t base)
 			    wentry->q_state);
 		else if (wakeup_dev_ct == 16)
 			printf(" [...]");
-		wakeup_dev_ct ++;
+		wakeup_dev_ct++;
 	}
 	printf("\n");
 
@@ -3556,6 +3556,7 @@ acpiioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 	case APM_IOC_GETPOWER:
 		/* A/C */
 		pi->ac_state = APM_AC_UNKNOWN;
+// XXX replace with new power code
 		SLIST_FOREACH(ac, &sc->sc_ac, aac_link) {
 			if (ac->aac_softc->sc_ac_stat == PSR_ONLINE)
 				pi->ac_state = APM_AC_ON;

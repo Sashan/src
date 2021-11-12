@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.154 2021/10/24 21:24:19 deraadt Exp $ */
+/*	$OpenBSD: main.c,v 1.164 2021/11/09 11:03:39 claudio Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -49,6 +49,11 @@
  */
 #define	TALSZ_MAX	8
 
+const char	*tals[TALSZ_MAX];
+const char	*taldescs[TALSZ_MAX];
+unsigned int	 talrepocnt[TALSZ_MAX];
+size_t		 talsz;
+
 size_t	entity_queue;
 int	timeout = 60*60;
 volatile sig_atomic_t killme;
@@ -82,15 +87,24 @@ logx(const char *fmt, ...)
 	}
 }
 
+time_t
+getmonotime(void)
+{
+	struct timespec ts;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+		err(1, "clock_gettime");
+	return (ts.tv_sec);
+}
+
 void
 entity_free(struct entity *ent)
 {
 	if (ent == NULL)
 		return;
 
-	free(ent->pkey);
+	free(ent->data);
 	free(ent->file);
-	free(ent->descr);
 	free(ent);
 }
 
@@ -103,11 +117,11 @@ void
 entity_read_req(struct ibuf *b, struct entity *ent)
 {
 	io_read_buf(b, &ent->type, sizeof(ent->type));
+	io_read_buf(b, &ent->talid, sizeof(ent->talid));
 	io_read_str(b, &ent->file);
-	io_read_buf(b, &ent->has_pkey, sizeof(ent->has_pkey));
-	if (ent->has_pkey)
-		io_read_buf_alloc(b, (void **)&ent->pkey, &ent->pkeysz);
-	io_read_str(b, &ent->descr);
+	io_read_buf(b, &ent->has_data, sizeof(ent->has_data));
+	if (ent->has_data)
+		io_read_buf_alloc(b, (void **)&ent->data, &ent->datasz);
 }
 
 /*
@@ -127,11 +141,11 @@ entity_write_req(const struct entity *ent)
 
 	b = io_new_buffer();
 	io_simple_buffer(b, &ent->type, sizeof(ent->type));
+	io_simple_buffer(b, &ent->talid, sizeof(ent->talid));
 	io_str_buffer(b, ent->file);
-	io_simple_buffer(b, &ent->has_pkey, sizeof(int));
-	if (ent->has_pkey)
-		io_buf_buffer(b, ent->pkey, ent->pkeysz);
-	io_str_buffer(b, ent->descr);
+	io_simple_buffer(b, &ent->has_data, sizeof(int));
+	if (ent->has_data)
+		io_buf_buffer(b, ent->data, ent->datasz);
 	io_close_buffer(&procq, b);
 }
 
@@ -169,7 +183,7 @@ entityq_flush(struct entityq *q, struct repo *rp)
  */
 static void
 entityq_add(char *file, enum rtype type, struct repo *rp,
-    const unsigned char *pkey, size_t pkeysz, char *descr)
+    unsigned char *data, size_t datasz, int talid)
 {
 	struct entity	*p;
 
@@ -177,17 +191,13 @@ entityq_add(char *file, enum rtype type, struct repo *rp,
 		err(1, NULL);
 
 	p->type = type;
+	p->talid = talid;
 	p->file = file;
-	p->has_pkey = pkey != NULL;
-	if (p->has_pkey) {
-		p->pkeysz = pkeysz;
-		if ((p->pkey = malloc(pkeysz)) == NULL)
-			err(1, NULL);
-		memcpy(p->pkey, pkey, pkeysz);
+	p->has_data = data != NULL;
+	if (p->has_data) {
+		p->data = data;
+		p->datasz = datasz;
 	}
-	if (descr != NULL)
-		if ((p->descr = strdup(descr)) == NULL)
-			err(1, NULL);
 
 	entity_queue++;
 
@@ -338,7 +348,7 @@ queue_add_from_mft(const char *mft, const struct mftfile *file, enum rtype type)
 	 * that the repository has already been loaded.
 	 */
 
-	entityq_add(nfile, type, NULL, NULL, 0, NULL);
+	entityq_add(nfile, type, NULL, NULL, 0, -1);
 }
 
 /*
@@ -386,31 +396,22 @@ queue_add_from_mft_set(const struct mft *mft)
  * Add a local TAL file (RFC 7730) to the queue of files to fetch.
  */
 static void
-queue_add_tal(const char *file)
+queue_add_tal(const char *file, int id)
 {
-	char	*nfile, *buf;
+	unsigned char	*buf;
+	char		*nfile;
+	size_t		 len;
 
 	if ((nfile = strdup(file)) == NULL)
 		err(1, NULL);
-	buf = tal_read_file(file);
-
-	/* Record tal for later reporting */
-	if (stats.talnames == NULL) {
-		if ((stats.talnames = strdup(file)) == NULL)
-			err(1, NULL);
-	} else {
-		char *tmp;
-
-		if (asprintf(&tmp, "%s %s", stats.talnames, file) == -1)
-			err(1, NULL);
-		free(stats.talnames);
-		stats.talnames = tmp;
+	buf = load_file(file, &len);
+	if (buf == NULL) {
+		warn("%s", file);
+		return;
 	}
 
 	/* Not in a repository, so directly add to queue. */
-	entityq_add(nfile, RTYPE_TAL, NULL, NULL, 0, buf);
-	/* entityq_add makes a copy of buf */
-	free(buf);
+	entityq_add(nfile, RTYPE_TAL, NULL, buf, len, id);
 }
 
 /*
@@ -420,14 +421,23 @@ static void
 queue_add_from_tal(struct tal *tal)
 {
 	struct repo	*repo;
+	unsigned char	*data;
 
 	assert(tal->urisz);
 
-	/* Look up the repository. */
-	repo = ta_lookup(tal);
+	if ((taldescs[tal->id] = strdup(tal->descr)) == NULL)
+		err(1, NULL);
 
-	entityq_add(NULL, RTYPE_CER, repo, tal->pkey,
-	    tal->pkeysz, tal->descr);
+	/* Look up the repository. */
+	repo = ta_lookup(tal->id, tal);
+	if (repo == NULL)
+		return;
+
+	/* steal the pkey from the tal structure */
+	data = tal->pkey;
+	tal->pkey = NULL;
+	entityq_add(NULL, RTYPE_CER, repo, data,
+	    tal->pkeysz, tal->id);
 }
 
 /*
@@ -439,15 +449,14 @@ queue_add_from_cert(const struct cert *cert)
 	struct repo	*repo;
 	char		*nfile;
 
-	repo = repo_lookup(cert->repo, rrdpon ? cert->notify : NULL);
-	if (repo == NULL) {
-		warnx("%s: repository lookup failed", cert->repo);
+	repo = repo_lookup(cert->talid, cert->repo,
+	    rrdpon ? cert->notify : NULL);
+	if (repo == NULL)
 		return;
-	}
 
 	if ((nfile = strdup(cert->mft)) == NULL)
 		err(1, NULL);
-	entityq_add(nfile, RTYPE_MFT, repo, NULL, 0, NULL);
+	entityq_add(nfile, RTYPE_MFT, repo, NULL, 0, -1);
 }
 
 /*
@@ -491,24 +500,18 @@ entity_process(struct ibuf *b, struct stats *st, struct vrp_tree *tree,
 		}
 		cert = cert_read(b);
 		if (cert->purpose == CERT_PURPOSE_CA) {
-			if (cert->valid) {
-				/*
-				 * Process the revocation list from the
-				 * certificate *first*, since it might mark that
-				 * we're revoked and then we don't want to
-				 * process the MFT.
-				 */
-				queue_add_from_cert(cert);
-			} else
-				st->certs_invalid++;
+			/*
+			 * Process the revocation list from the
+			 * certificate *first*, since it might mark that
+			 * we're revoked and then we don't want to
+			 * process the MFT.
+			 */
+			queue_add_from_cert(cert);
 		} else if (cert->purpose == CERT_PURPOSE_BGPSEC_ROUTER) {
-			if (cert->valid) {
-				cert_insert_brks(brktree, cert);
-				st->brks++;
-			} else
-				st->brks_invalids++;
+			cert_insert_brks(brktree, cert);
+			st->brks++;
 		} else
-			st->certs_invalid++;
+			st->certs_fail++;
 		cert_free(cert);
 		break;
 	case RTYPE_MFT:
@@ -609,7 +612,7 @@ rrdp_process(struct ibuf *b)
  * Don't exceded "max" filenames.
  */
 static size_t
-tal_load_default(const char *tals[], size_t max)
+tal_load_default(void)
 {
 	static const char *confdir = "/etc/rpki";
 	size_t s = 0;
@@ -623,7 +626,7 @@ tal_load_default(const char *tals[], size_t max)
 	while ((dp = readdir(dirp)) != NULL) {
 		if (fnmatch("*.tal", dp->d_name, FNM_PERIOD) == FNM_NOMATCH)
 			continue;
-		if (s >= max)
+		if (s >= TALSZ_MAX)
 			err(1, "too many tal files found in %s",
 			    confdir);
 		if (asprintf(&path, "%s/%s", confdir, dp->d_name) == -1)
@@ -672,7 +675,7 @@ main(int argc, char *argv[])
 {
 	int		 rc, c, st, proc, rsync, http, rrdp, ok, hangup = 0;
 	int		 fl = SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK;
-	size_t		 i, id, talsz = 0;
+	size_t		 i, id;
 	pid_t		 pid, procpid, rsyncpid, httppid, rrdppid;
 	int		 fd[2];
 	struct pollfd	 pfd[NPFD];
@@ -682,7 +685,8 @@ main(int argc, char *argv[])
 	char		*rsync_prog = "openrsync";
 	char		*bind_addr = NULL;
 	const char	*cachedir = NULL, *outputdir = NULL;
-	const char	*tals[TALSZ_MAX], *errs, *name;
+	const char	*errs, *name;
+	const char	*file = NULL;
 	struct vrp_tree	 vrps = RB_INITIALIZER(&vrps);
 	struct brk_tree  brks = RB_INITIALIZER(&brks);
 	struct rusage	ru;
@@ -709,7 +713,7 @@ main(int argc, char *argv[])
 	    "proc exec unveil", NULL) == -1)
 		err(1, "pledge");
 
-	while ((c = getopt(argc, argv, "b:Bcd:e:jnorRs:t:T:vV")) != -1)
+	while ((c = getopt(argc, argv, "b:Bcd:e:f:jnorRs:t:T:vV")) != -1)
 		switch (c) {
 		case 'b':
 			bind_addr = optarg;
@@ -725,6 +729,10 @@ main(int argc, char *argv[])
 			break;
 		case 'e':
 			rsync_prog = optarg;
+			break;
+		case 'f':
+			file = optarg;
+			noop = 1;
 			break;
 		case 'j':
 			outformats |= FORMAT_JSON;
@@ -794,7 +802,7 @@ main(int argc, char *argv[])
 		outformats = FORMAT_OPENBGPD;
 
 	if (talsz == 0)
-		talsz = tal_load_default(tals, TALSZ_MAX);
+		talsz = tal_load_default();
 	if (talsz == 0)
 		err(1, "no TAL files found in %s", "/etc/rpki");
 
@@ -994,44 +1002,54 @@ main(int argc, char *argv[])
 	 */
 
 	for (i = 0; i < talsz; i++)
-		queue_add_tal(tals[i]);
+		queue_add_tal(tals[i], i);
 
 	/* change working directory to the cache directory */
 	if (fchdir(cachefd) == -1)
 		err(1, "fchdir");
 
 	while (entity_queue > 0 && !killme) {
+		int polltim;
+
 		for (i = 0; i < NPFD; i++) {
 			pfd[i].events = POLLIN;
 			if (queues[i]->queued)
 				pfd[i].events |= POLLOUT;
 		}
 
-		if ((c = poll(pfd, NPFD, INFTIM)) == -1) {
+		polltim = repo_next_timeout(INFTIM);
+
+		if ((c = poll(pfd, NPFD, polltim)) == -1) {
 			if (errno == EINTR)
 				continue;
 			err(1, "poll");
 		}
 
 		for (i = 0; i < NPFD; i++) {
-			if (pfd[i].revents & (POLLERR|POLLNVAL))
-				errx(1, "poll[%zu]: bad fd", i);
-			if (pfd[i].revents & POLLHUP) {
-				warnx("poll[%zu]: hangup", i);
+			if (pfd[i].revents & (POLLERR|POLLNVAL)) {
+				warnx("poll[%zu]: bad fd", i);
 				hangup = 1;
 			}
+			if (pfd[i].revents & POLLHUP)
+				hangup = 1;
 			if (pfd[i].revents & POLLOUT) {
 				switch (msgbuf_write(queues[i])) {
 				case 0:
-					errx(1, "write[%zu]: "
+					warnx("write[%zu]: "
 					    "connection closed", i);
+					hangup = 1;
+					break;
 				case -1:
-					err(1, "write[%zu]", i);
+					warn("write[%zu]", i);
+					hangup = 1;
+					break;
 				}
 			}
 		}
 		if (hangup)
 			break;
+
+		repo_check_timeout();
 
 		/*
 		 * Check the rsync and http process.
@@ -1141,7 +1159,7 @@ main(int argc, char *argv[])
 
 	/* processing did not finish because of error */
 	if (entity_queue != 0)
-		return 1;
+		errx(1, "not all files processed, giving up");
 
 	logx("all files parsed: generating output");
 
@@ -1165,18 +1183,22 @@ main(int argc, char *argv[])
 	if (outputfiles(&vrps, &brks, &stats))
 		rc = 1;
 
-
+	logx("Processing time %lld seconds "
+	    "(%lld seconds user, %lld seconds system)",
+	    (long long)stats.elapsed_time.tv_sec,
+	    (long long)stats.user_time.tv_sec,
+	    (long long)stats.system_time.tv_sec);
 	logx("Route Origin Authorizations: %zu (%zu failed parse, %zu invalid)",
 	    stats.roas, stats.roas_fail, stats.roas_invalid);
-	logx("Certificates: %zu (%zu failed parse, %zu invalid)",
-	    stats.certs, stats.certs_fail, stats.certs_invalid);
-	logx("Trust Anchor Locators: %zu", stats.tals);
+	logx("BGPsec Router Certificates: %zu", stats.brks);
+	logx("Certificates: %zu (%zu invalid)",
+	    stats.certs, stats.certs_fail);
+	logx("Trust Anchor Locators: %zu (%zu invalid)",
+	    stats.tals, talsz - stats.tals);
 	logx("Manifests: %zu (%zu failed parse, %zu stale)",
 	    stats.mfts, stats.mfts_fail, stats.mfts_stale);
 	logx("Certificate revocation lists: %zu", stats.crls);
 	logx("Ghostbuster records: %zu", stats.gbrs);
-	logx("BGPsec Router Certificates: %zu (%zu invalid)",
-	    stats.brks, stats.brks_invalids);
 	logx("Repositories: %zu", stats.repos);
 	logx("Cleanup: removed %zu files, %zu directories",
 	    stats.del_files, stats.del_dirs);

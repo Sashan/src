@@ -1,4 +1,4 @@
-/*	$OpenBSD: who.c,v 1.30 2021/07/12 15:09:20 beck Exp $	*/
+/*	$OpenBSD: who.c,v 1.33 2021/11/11 08:48:48 mestre Exp $	*/
 /*	$NetBSD: who.c,v 1.4 1994/12/07 04:28:49 jtc Exp $	*/
 
 /*
@@ -44,7 +44,6 @@
 #include <unistd.h>
 #include <time.h>
 #include <err.h>
-#include <locale.h>
 
 void  output(struct utmp *);
 void  output_labels(void);
@@ -71,8 +70,6 @@ main(int argc, char *argv[])
 	FILE *ufp;
 	char *t;
 	int c;
-
-	setlocale(LC_ALL, "");
 
 	if (pledge("stdio unveil rpath getpw", NULL) == -1)
 		err(1, "pledge");
@@ -128,10 +125,15 @@ main(int argc, char *argv[])
 		if (unveil(_PATH_DEV, "r") == -1)
 			err(1, "unveil %s", _PATH_DEV);
 	}
+	if (argc == 1) {
+		if (unveil(*argv, "r") == -1)
+			err(1, "unveil %s", *argv);
+	}
+	if (pledge("stdio rpath getpw", NULL) == -1)
+		err(1, "pledge");
+
 	switch (argc) {
 	case 0:					/* who */
-		if (pledge("stdio rpath getpw", NULL) == -1)
-			err(1, "pledge");
 		ufp = file(_PATH_UTMP);
 
 		if (only_current_term) {
@@ -158,10 +160,6 @@ main(int argc, char *argv[])
 		}
 		break;
 	case 1:					/* who utmp_file */
-		if (unveil(*argv, "r") == -1)
-			err(1, "unveil %s", *argv);
-		if (pledge("stdio rpath getpw", NULL) == -1)
-			err(1, "pledge");
 		ufp = file(*argv);
 
 		if (only_current_term) {
@@ -187,8 +185,6 @@ main(int argc, char *argv[])
 		}
 		break;
 	case 2:					/* who am i */
-		if (pledge("stdio rpath getpw", NULL) == -1)
-			err(1, "pledge");
 		ufp = file(_PATH_UTMP);
 		who_am_i(ufp);
 		break;
@@ -236,7 +232,7 @@ output(struct utmp *up)
 	if (show_term || show_idle) {
 		if (now == 0)
 			time(&now);
-		
+
 		memset(line, 0, sizeof line);
 		strlcpy(line, _PATH_DEV, sizeof line);
 		strlcat(line, up->ut_line, sizeof line);
@@ -248,7 +244,6 @@ output(struct utmp *up)
 			state = '?';
 			idle = 0;
 		}
-		
 	}
 
 	(void)printf("%-*.*s ", NAME_WIDTH, UT_NAMESIZE, up->ut_name);
@@ -261,16 +256,16 @@ output(struct utmp *up)
 	(void)printf("%.12s ", ctime(&up->ut_time) + 4);
 
 	if (show_idle) {
-		if (idle < 60) 
+		if (idle < 60)
 			(void)printf("  .   ");
 		else if (idle < (24 * 60 * 60))
-			(void)printf("%02d:%02d ", 
+			(void)printf("%02d:%02d ",
 				     ((int)idle / (60 * 60)),
 				     ((int)idle % (60 * 60)) / 60);
 		else
 			(void)printf(" old  ");
 	}
-	
+
 	if (*up->ut_host)
 		printf("  (%.*s)", hostwidth, up->ut_host);
 	(void)putchar('\n');
@@ -304,10 +299,7 @@ file(char *name)
 		err(1, "%s", name);
 		/* NOTREACHED */
 	}
-	if (show_term || show_idle) {
-		if (pledge("stdio rpath getpw", NULL) == -1)
-			err(1, "pledge");
-	} else {
+	if (!show_term && !show_idle) {
 		if (pledge("stdio getpw", NULL) == -1)
 			err(1, "pledge");
 	}

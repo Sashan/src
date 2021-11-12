@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf_if.c,v 1.100 2020/06/24 22:03:42 cheloha Exp $ */
+/*	$OpenBSD: pf_if.c,v 1.101 2021/11/11 12:35:01 sashan Exp $ */
 
 /*
  * Copyright 2005 Henning Brauer <henning@openbsd.org>
@@ -83,11 +83,11 @@ RB_GENERATE(pfi_ifhead, pfi_kif, pfik_tree, pfi_if_compare);
 #define PFI_MTYPE		M_IFADDR
 
 struct pfi_kif *
-pfi_kif_alloc(const char *kif_name)
+pfi_kif_alloc(const char *kif_name, int mflags)
 {
 	struct pfi_kif *kif;
 
-	kif = malloc(sizeof(*pfi_all), PFI_MTYPE, M_WAITOK|M_ZERO);
+	kif = malloc(sizeof(*pfi_all), PFI_MTYPE, mflags|M_ZERO);
 	strlcpy(kif->pfik_name, kif_name, sizeof(kif->pfik_name));
 	kif->pfik_tzero = gettime();
 	TAILQ_INIT(&kif->pfik_dynaddrs);
@@ -104,6 +104,9 @@ pfi_kif_alloc(const char *kif_name)
 void
 pfi_kif_free(struct pfi_kif *kif)
 {
+	if (kif == NULL)
+		return;
+
 	if ((kif->pfik_rules != 0) || (kif->pfik_states != 0) ||
 	    (kif->pfik_states != 0) || (kif->pfik_states != 0) ||
 	    (kif->pfik_srcnodes != 0))
@@ -130,7 +133,7 @@ pfi_initialize(void)
 	pfi_buffer = mallocarray(pfi_buffer_max, sizeof(*pfi_buffer),
 	    PFI_MTYPE, M_WAITOK);
 
-	pfi_all = pfi_kif_alloc(IFG_ALL);
+	pfi_all = pfi_kif_alloc(IFG_ALL, M_WAITOK);
 
 	if (RB_INSERT(pfi_ifhead, &pfi_ifs, pfi_all) != NULL)
 		panic("IFG_ALL kif found already");
@@ -156,19 +159,9 @@ pfi_kif_get(const char *kif_name, struct pfi_kif **prealloc)
 
 	/* create new one */
 	if ((prealloc == NULL) || (*prealloc == NULL)) {
-		kif = malloc(sizeof(*kif), PFI_MTYPE, M_NOWAIT|M_ZERO);
+		kif = pfi_kif_alloc(kif_name, M_NOWAIT);
 		if (kif == NULL)
 			return (NULL);
-
-		strlcpy(kif->pfik_name, kif_name, sizeof(kif->pfik_name));
-		kif->pfik_tzero = gettime();
-		TAILQ_INIT(&kif->pfik_dynaddrs);
-
-		if (!strcmp(kif->pfik_name, "any")) {
-			/* both so it works in the ioctl and the regular case */
-			kif->pfik_flags |= PFI_IFLAG_ANY;
-			kif->pfik_flags_new |= PFI_IFLAG_ANY;
-		}
 	} else {
 		kif = *prealloc;
 		*prealloc = NULL;
@@ -843,4 +836,5 @@ pfi_unmask(void *addr)
 	}
 	return (b);
 }
+
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: rrdp_notification.c,v 1.8 2021/10/24 17:16:09 claudio Exp $ */
+/*	$OpenBSD: rrdp_notification.c,v 1.11 2021/11/09 11:01:04 claudio Exp $ */
 /*
  * Copyright (c) 2020 Nils Fisher <nils_fisher@hotmail.com>
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
@@ -54,6 +54,7 @@ struct notification_xml {
 	XML_Parser		 parser;
 	struct rrdp_session	*repository;
 	struct rrdp_session	*current;
+	const char		*notifyuri;
 	char			*session_id;
 	char			*snapshot_uri;
 	char			 snapshot_hash[SHA256_DIGEST_LENGTH];
@@ -140,7 +141,7 @@ start_notification_elem(struct notification_xml *nxml, const char **attr)
 				continue;
 		}
 		PARSE_FAIL(p, "parse failed - non conforming "
-		    "attribute found in notification elem");
+		    "attribute '%s' found in notification elem", attr[i]);
 	}
 	if (!(has_xmlns && nxml->version && nxml->session_id && nxml->serial))
 		PARSE_FAIL(p, "parse failed - incomplete "
@@ -172,7 +173,8 @@ start_snapshot_elem(struct notification_xml *nxml, const char **attr)
 	for (i = 0; attr[i]; i += 2) {
 		if (strcmp("uri", attr[i]) == 0 && hasUri++ == 0) {
 			if (valid_uri(attr[i + 1], strlen(attr[i + 1]),
-			    "https://")) {
+			    "https://") &&
+			    valid_origin(attr[i + 1], nxml->notifyuri)) {
 				nxml->snapshot_uri = xstrdup(attr[i + 1]);
 				continue;
 			}
@@ -183,7 +185,7 @@ start_snapshot_elem(struct notification_xml *nxml, const char **attr)
 				continue;
 		}
 		PARSE_FAIL(p, "parse failed - non conforming "
-		    "attribute found in snapshot elem");
+		    "attribute '%s' found in snapshot elem", attr[i]);
 	}
 	if (hasUri != 1 || hasHash != 1)
 		PARSE_FAIL(p, "parse failed - incomplete snapshot attributes");
@@ -217,7 +219,8 @@ start_delta_elem(struct notification_xml *nxml, const char **attr)
 	for (i = 0; attr[i]; i += 2) {
 		if (strcmp("uri", attr[i]) == 0 && hasUri++ == 0) {
 			if (valid_uri(attr[i + 1], strlen(attr[i + 1]),
-			    "https://")) {
+			    "https://") &&
+			    valid_origin(attr[i + 1], nxml->notifyuri)) {
 				delta_uri = attr[i + 1];
 				continue;
 			}
@@ -236,7 +239,7 @@ start_delta_elem(struct notification_xml *nxml, const char **attr)
 				continue;
 		}
 		PARSE_FAIL(p, "parse failed - non conforming "
-		    "attribute found in snapshot elem");
+		    "attribute '%s' found in snapshot elem", attr[i]);
 	}
 	/* Only add to the list if we are relevant */
 	if (hasUri != 1 || hasHash != 1 || delta_serial == 0)
@@ -305,9 +308,19 @@ notification_xml_elem_end(void *data, const char *el)
 		PARSE_FAIL(p, "parse failed - unexpected elem exit found");
 }
 
+static void
+notification_doctype_handler(void *data, const char *doctypeName,
+    const char *sysid, const char *pubid, int subset)
+{
+	struct notification_xml *nxml = data;
+	XML_Parser p = nxml->parser;
+
+	PARSE_FAIL(p, "parse failed - DOCTYPE not allowed");
+}
+
 struct notification_xml *
 new_notification_xml(XML_Parser p, struct rrdp_session *repository,
-    struct rrdp_session *current)
+    struct rrdp_session *current, const char *notifyuri)
 {
 	struct notification_xml *nxml;
 
@@ -317,10 +330,13 @@ new_notification_xml(XML_Parser p, struct rrdp_session *repository,
 	nxml->parser = p;
 	nxml->repository = repository;
 	nxml->current = current;
+	nxml->notifyuri = notifyuri;
 
 	XML_SetElementHandler(nxml->parser, notification_xml_elem_start,
 	    notification_xml_elem_end);
 	XML_SetUserData(nxml->parser, nxml);
+	XML_SetDoctypeDeclHandler(nxml->parser, notification_doctype_handler,
+	    NULL);
 
 	return nxml;
 }

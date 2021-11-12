@@ -1,4 +1,4 @@
-/*	$OpenBSD: uhidev.c,v 1.95 2021/09/12 06:58:08 anton Exp $	*/
+/*	$OpenBSD: uhidev.c,v 1.99 2021/11/11 07:04:45 anton Exp $	*/
 /*	$NetBSD: uhidev.c,v 1.14 2003/03/11 16:44:00 augustss Exp $	*/
 
 /*
@@ -89,7 +89,6 @@ void uhidev_intr(struct usbd_xfer *, void *, usbd_status);
 
 int uhidev_maxrepid(void *buf, int len);
 int uhidevprint(void *aux, const char *pnp);
-int uhidevsubmatch(struct device *parent, void *cf, void *aux);
 
 int uhidev_match(struct device *, void *, void *);
 void uhidev_attach(struct device *, struct device *, void *);
@@ -254,7 +253,7 @@ uhidev_attach(struct device *parent, struct device *self, void *aux)
 	uha.claimed = malloc(nrepid, M_TEMP, M_WAITOK|M_ZERO);
 
 	/* Look for a driver claiming multiple report IDs first. */
-	dev = config_found_sm(self, &uha, NULL, uhidevsubmatch);
+	dev = config_found_sm(self, &uha, NULL, NULL);
 	if (dev != NULL) {
 		for (repid = 0; repid < nrepid; repid++) {
 			/*
@@ -283,7 +282,7 @@ uhidev_attach(struct device *parent, struct device *self, void *aux)
 			continue;
 
 		uha.reportid = repid;
-		dev = config_found_sm(self, &uha, uhidevprint, uhidevsubmatch);
+		dev = config_found_sm(self, &uha, uhidevprint, NULL);
 		sc->sc_subdevs[repid] = (struct uhidev *)dev;
 	}
 }
@@ -366,17 +365,6 @@ uhidevprint(void *aux, const char *pnp)
 	return (UNCONF);
 }
 
-int uhidevsubmatch(struct device *parent, void *match, void *aux)
-{
-	struct uhidev_attach_arg *uha = aux;
-        struct cfdata *cf = match;
-
-	if (cf->uhidevcf_reportid != UHIDEV_UNK_REPORTID &&
-	    cf->uhidevcf_reportid != uha->reportid)
-		return (0);
-	return ((*cf->cf_attach->ca_match)(parent, cf, aux));
-}
-
 int
 uhidev_activate(struct device *self, int act)
 {
@@ -451,6 +439,7 @@ uhidev_detach(struct device *self, int flags)
 
 		sc->sc_subdevs[i] = NULL;
 	}
+	free(sc->sc_subdevs, M_USBDEV, sc->sc_nrepid * sizeof(struct uhidev *));
 
 	return (rv);
 }

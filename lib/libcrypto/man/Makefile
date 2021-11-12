@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.202 2021/10/25 15:23:50 tb Exp $
+# $OpenBSD: Makefile,v 1.211 2021/11/11 12:06:25 schwarze Exp $
 
 .include <bsd.own.mk>
 
@@ -16,7 +16,10 @@ MAN=	\
 	ASN1_generate_nconf.3 \
 	ASN1_get_object.3 \
 	ASN1_item_d2i.3 \
+	ASN1_item_digest.3 \
 	ASN1_item_new.3 \
+	ASN1_item_sign.3 \
+	ASN1_item_verify.3 \
 	ASN1_mbstring_copy.3 \
 	ASN1_parse_dump.3 \
 	ASN1_put_object.3 \
@@ -286,6 +289,7 @@ MAN=	\
 	X509_ATTRIBUTE_new.3 \
 	X509_ATTRIBUTE_set1_object.3 \
 	X509_CINF_new.3 \
+	X509_CRL_METHOD_new.3 \
 	X509_CRL_get0_by_serial.3 \
 	X509_CRL_new.3 \
 	X509_CRL_print.3 \
@@ -303,8 +307,12 @@ MAN=	\
 	X509_PKEY_new.3 \
 	X509_PUBKEY_new.3 \
 	X509_PURPOSE_set.3 \
+	X509_REQ_add1_attr.3 \
+	X509_REQ_add_extensions.3 \
 	X509_REQ_new.3 \
+	X509_REQ_print_ex.3 \
 	X509_REVOKED_new.3 \
+	X509_SIG_get0.3 \
 	X509_SIG_new.3 \
 	X509_STORE_CTX_get_error.3 \
 	X509_STORE_CTX_get_ex_new_index.3 \
@@ -333,15 +341,18 @@ MAN=	\
 	X509_get0_notBefore.3 \
 	X509_get0_signature.3 \
 	X509_get1_email.3 \
+	X509_get_extension_flags.3 \
 	X509_get_pubkey.3 \
 	X509_get_pubkey_parameters.3 \
 	X509_get_serialNumber.3 \
 	X509_get_subject_name.3 \
 	X509_get_version.3 \
 	X509_keyid_set1.3 \
+	X509_load_cert_file.3 \
 	X509_new.3 \
 	X509_ocspid_print.3 \
 	X509_policy_check.3 \
+	X509_policy_tree_get0_policies.3 \
 	X509_policy_tree_level_count.3 \
 	X509_print_ex.3 \
 	X509_sign.3 \

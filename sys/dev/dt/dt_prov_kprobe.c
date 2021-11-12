@@ -1,4 +1,4 @@
-/*	$OpenBSD: dt_prov_kprobe.c,v 1.1 2021/09/03 16:45:45 jasper Exp $	*/
+/*	$OpenBSD: dt_prov_kprobe.c,v 1.4 2021/10/28 08:47:40 jasper Exp $	*/
 
 /*
  * Copyright (c) 2020 Tom Rollet <tom.rollet@epita.fr>
@@ -39,7 +39,8 @@ int dt_prov_kprobe_hook(struct dt_provider *dtpv, ...);
 int dt_prov_kprobe_dealloc(struct dt_probe *dtp, struct dt_softc *sc,
     struct dtioc_req *dtrq);
 
-void db_prof_count(struct trapframe *frame);
+void	db_prof_count(struct trapframe *frame);
+vaddr_t	db_get_probe_addr(struct trapframe *);
 
 struct kprobe_probe {
 	struct dt_probe* dtp;
@@ -243,7 +244,6 @@ dt_prov_kprobe_alloc(struct dt_probe *dtp, struct dt_softc *sc,
 		return ENOMEM;
 
 	/* Patch only if it's first pcb referencing this probe */
-	mtx_enter(&dtp->dtp_mtx);
 	dtp->dtp_ref++;
 	KASSERT(dtp->dtp_ref != 0);
 
@@ -252,7 +252,6 @@ dt_prov_kprobe_alloc(struct dt_probe *dtp, struct dt_softc *sc,
 		db_write_bytes(dtp->dtp_addr, BKPT_SIZE, &patch);
 		intr_restore(s);
 	}
-	mtx_leave(&dtp->dtp_mtx);
 
 	dp->dp_filter = dtrq->dtrq_filter;
 	dp->dp_evtflags = dtrq->dtrq_evtflags & DTEVT_PROV_KPROBE;
@@ -282,7 +281,6 @@ dt_prov_kprobe_dealloc(struct dt_probe *dtp, struct dt_softc *sc,
 	} else
 		KASSERT(0 && "Trying to dealloc not yet implemented probe type");
 
-	mtx_enter(&dtp->dtp_mtx);
 	dtp->dtp_ref--;
 
 	if (dtp->dtp_ref == 0) {
@@ -290,8 +288,6 @@ dt_prov_kprobe_dealloc(struct dt_probe *dtp, struct dt_softc *sc,
 		db_write_bytes(dtp->dtp_addr, size, &patch);
 		intr_restore(s);
 	}
-
-	mtx_leave(&dtp->dtp_mtx);
 
 	/* Deallocation of PCB is done by dt_pcb_purge when closing the dev */
 	return 0;
@@ -307,7 +303,7 @@ dt_prov_kprobe_hook(struct dt_provider *dtpv, ...)
 	va_list ap;
 	int is_dt_bkpt = 0;
 	int error;	/* Return values for return probes*/
-	vaddr_t *args;
+	vaddr_t *args, addr;
 	size_t argsize;
 	register_t retval[2];
 
@@ -317,11 +313,7 @@ dt_prov_kprobe_hook(struct dt_provider *dtpv, ...)
 	tf = va_arg(ap, struct trapframe*);
 	va_end(ap);
 
-#if defined(__amd64__)
-	vaddr_t addr = tf->tf_rip - BKPT_SIZE;
-#elif defined(__i386)
-	vaddr_t addr = tf->tf_eip - BKPT_SIZE;
-#endif
+	addr = db_get_probe_addr(tf);
 
 	SLIST_FOREACH(kprobe_dtp, &dtpf_entry[INSTTOIDX(addr)], kprobe_next) {
 		dtp = kprobe_dtp->dtp;
@@ -417,8 +409,6 @@ dt_prov_kprobe_patch_all_entry(void)
 	for (i = 0; i < PPTMASK; ++i) {
 		SLIST_FOREACH(kprobe_dtp, &dtpf_entry[i], kprobe_next) {
 			dtp = kprobe_dtp->dtp;
-
-			mtx_enter(&dtp->dtp_mtx);
 			dtp->dtp_ref++;
 
 			if (dtp->dtp_ref == 1) {
@@ -427,8 +417,6 @@ dt_prov_kprobe_patch_all_entry(void)
 				db_write_bytes(dtp->dtp_addr, BKPT_SIZE, &patch);
 				intr_restore(s);
 			}
-
-			mtx_leave(&dtp->dtp_mtx);
 		}
 	}
 }
@@ -445,8 +433,6 @@ dt_prov_kprobe_depatch_all_entry(void)
 	for (i = 0; i < PPTMASK; ++i) {
 		SLIST_FOREACH(kprobe_dtp, &dtpf_entry[i], kprobe_next) {
 			dtp = kprobe_dtp->dtp;
-
-			mtx_enter(&dtp->dtp_mtx);
 			dtp->dtp_ref--;
 
 			if (dtp->dtp_ref == 0) {
@@ -455,8 +441,6 @@ dt_prov_kprobe_depatch_all_entry(void)
 				db_write_bytes(dtp->dtp_addr, SSF_SIZE, &patch);
 				intr_restore(s);
 			}
-
-			mtx_leave(&dtp->dtp_mtx);
 		}
 
 	}
