@@ -3114,15 +3114,15 @@ pf_rule_copyin(struct pf_rule *from, struct pf_rule *to)
 		return (EINVAL);
 
 	to->kif = (to->ifname[0]) ?
-	    pfi_kif_alloc(to->ifname) : NULL;
+	    pfi_kif_alloc(to->ifname, M_WAITOK) : NULL;
 	to->rcv_kif = (to->rcv_ifname[0]) ?
-	    pfi_kif_alloc(to->rcv_ifname) : NULL;
+	    pfi_kif_alloc(to->rcv_ifname, M_WAITOK) : NULL;
 	to->rdr.kif = (to->rdr.ifname[0]) ?
-	    pfi_kif_alloc(to->rdr.ifname) : NULL;
+	    pfi_kif_alloc(to->rdr.ifname, M_WAITOK) : NULL;
 	to->nat.kif = (to->nat.ifname[0]) ?
-	    pfi_kif_alloc(to->nat.ifname) : NULL;
+	    pfi_kif_alloc(to->nat.ifname, M_WAITOK) : NULL;
 	to->route.kif = (to->route.ifname[0]) ?
-	    pfi_kif_alloc(to->route.ifname) : NULL;
+	    pfi_kif_alloc(to->route.ifname, M_WAITOK) : NULL;
 
 	to->os_fingerprint = from->os_fingerprint;
 
