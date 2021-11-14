@@ -924,7 +924,7 @@ pfr_lookup_kentry(struct pfr_ktable *kt, struct pfr_kentry *key, int exact)
 	default:
 		unhandled_af(key->pfrke_af);
 	}
-	if (KENTRY_NETWORK(ke)) {
+	if (KENTRY_NETWORK(key)) {
 		pfr_prepare_network(&mask, key->pfrke_af, key->pfrke_net);
 		ke = (struct pfr_kentry *)rn_lookup(&key->pfrke_sa, &mask,
 		    head);
