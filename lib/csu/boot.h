@@ -1,4 +1,4 @@
-/*	$OpenBSD: boot.h,v 1.30 2019/05/10 13:29:21 guenther Exp $ */
+/*	$OpenBSD: boot.h,v 1.32 2021/11/16 02:46:46 guenther Exp $ */
 
 /*
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
@@ -36,18 +36,9 @@
 
 #include <sys/types.h>
 #include <sys/mman.h>
-#include <sys/exec.h>
-#include <sys/sysctl.h>
-#include <nlist.h>
-#include <link.h>
-#include <dlfcn.h>
+#include <sys/exec_elf.h>
 
-#include "syscall.h"
 #include "archdep.h"
-#include "path.h"
-#include "resolve.h"
-#include "sod.h"
-#include "stdlib.h"
 
 /*
  * Use the internal, hidden name for any syscalls we need, to avoid
@@ -58,8 +49,6 @@ REDIRECT_SYSCALL(mprotect);
 
 #ifdef RCRT0
 
-#define	DT_PROC(n)	((n) - DT_LOPROC)
-
 #if RELOC_TAG == DT_RELA
 typedef	Elf_RelA	RELOC_TYPE;
 #elif RELOC_TAG == DT_REL
@@ -67,19 +56,6 @@ typedef	Elf_Rel		RELOC_TYPE;
 #else
 # error "unknown RELOC_TAG"
 #endif
-
-/* The set of dynamic tags that we're interested in for bootstrapping */
-struct boot_dyn {
-	RELOC_TYPE	*dt_reloc;	/* DT_RELA   or DT_REL */
-	Elf_Addr	dt_relocsz;	/* DT_RELASZ or DT_RELSZ */
-	Elf_Addr	*dt_pltgot;
-	Elf_Addr	dt_pltrelsz;
-	const Elf_Sym	*dt_symtab;
-	RELOC_TYPE	*dt_jmprel;
-#if DT_PROCNUM > 0
-	u_long		dt_proc[DT_PROCNUM];
-#endif
-};
 
 static void *relro_addr;
 static size_t relro_size;
@@ -95,16 +71,16 @@ static size_t relro_size;
 void _dl_boot_bind(const long, long *, Elf_Dyn *);
 
 void
-_dl_boot_bind(const long sp, long *dl_data, Elf_Dyn *dynamicp)
+_dl_boot_bind(const long sp, long *dl_data, Elf_Dyn *dynp)
 {
-	struct boot_dyn	dynld;		/* Resolver data for the loader */
 	AuxInfo		*auxstack;
 	long		*stack;
-	Elf_Dyn		*dynp;
 	int		n, argc;
 	char		**argv, **envp;
 	long		loff;
-	RELOC_TYPE	*rp;
+	RELOC_TYPE	*dt_reloc, *rend;	/* DT_RELA   or DT_REL */
+	Elf_Word	dt_relocsz;		/* DT_RELASZ or DT_RELSZ */
+	const Elf_Sym	*dt_symtab;
 	Elf_Phdr	*phdp;
 	Elf_Addr	i;
 
@@ -139,87 +115,40 @@ _dl_boot_bind(const long sp, long *dl_data, Elf_Dyn *dynamicp)
 	loff = dl_data[AUX_base];	/* XXX assumes ld.so is linked at 0x0 */
 
 	/*
-	 * We need to do 'selfreloc' in case the code weren't
-	 * loaded at the address it was linked to.
-	 *
-	 * Scan the DYNAMIC section for the loader.
-	 * Cache the data for easier access.
+	 * Scan the DYNAMIC section for the items we need
 	 */
-	dynp = dynamicp;
-
-	_dl_memset(&dynld, 0, sizeof(dynld));
+	dt_reloc = NULL;
+	dt_relocsz = 0;
 	while (dynp->d_tag != DT_NULL) {
 		/* first the tags that are pointers to be relocated */
-		if (dynp->d_tag == DT_PLTGOT)
-			dynld.dt_pltgot = (void *)(dynp->d_un.d_ptr + loff);
-		else if (dynp->d_tag == DT_SYMTAB)
-			dynld.dt_symtab = (void *)(dynp->d_un.d_ptr + loff);
+		if (dynp->d_tag == DT_SYMTAB)
+			dt_symtab = (void *)(dynp->d_un.d_ptr + loff);
 		else if (dynp->d_tag == RELOC_TAG)	/* DT_{RELA,REL} */
-			dynld.dt_reloc = (void *)(dynp->d_un.d_ptr + loff);
-		else if (dynp->d_tag == DT_JMPREL)
-			dynld.dt_jmprel = (void *)(dynp->d_un.d_ptr + loff);
+			dt_reloc = (void *)(dynp->d_un.d_ptr + loff);
 
 		/* Now for the tags that are just sizes or counts */
-		else if (dynp->d_tag == DT_PLTRELSZ)
-			dynld.dt_pltrelsz = dynp->d_un.d_val;
 		else if (dynp->d_tag == RELOC_TAG+1)	/* DT_{RELA,REL}SZ */
-			dynld.dt_relocsz = dynp->d_un.d_val;
-#if DT_PROCNUM > 0
-		else if (dynp->d_tag >= DT_LOPROC &&
-		    dynp->d_tag < DT_LOPROC + DT_PROCNUM)
-			dynld.dt_proc[dynp->d_tag - DT_LOPROC] =
-			    dynp->d_un.d_val;
-#endif /* DT_PROCNUM */
+			dt_relocsz = dynp->d_un.d_val;
 		dynp++;
 	}
 
-	rp = dynld.dt_jmprel;
-	for (i = 0; i < dynld.dt_pltrelsz; i += sizeof *rp) {
-		const Elf_Sym *sp;
-
-		sp = dynld.dt_symtab + ELF_R_SYM(rp->r_info);
-		if (!ELF_R_SYM(rp->r_info) || sp->st_value != 0) {
-#ifdef HAVE_JMPREL
-			Elf_Addr *ra = (Elf_Addr *)(rp->r_offset + loff);
-			RELOC_JMPREL(rp, sp, ra, loff, dynld.dt_pltgot);
-#else
-			_dl_exit(6);
-#endif
-		}
-		rp++;
-	}
-
-	rp = dynld.dt_reloc;
-	for (i = 0; i < dynld.dt_relocsz; i += sizeof *rp) {
+	rend = (RELOC_TYPE *)((char *)dt_reloc + dt_relocsz);
+	for (; dt_reloc < rend; dt_reloc++) {
 		Elf_Addr *ra;
 		const Elf_Sym *sp;
 
-		sp = dynld.dt_symtab + ELF_R_SYM(rp->r_info);
-		if (!ELF_R_SYM(rp->r_info) || sp->st_value != 0) {
-			ra = (Elf_Addr *)(rp->r_offset + loff);
-			RELOC_DYN(rp, sp, ra, loff);
+		sp = dt_symtab + ELF_R_SYM(dt_reloc->r_info);
+		if (!ELF_R_SYM(dt_reloc->r_info) || sp->st_value != 0) {
+			ra = (Elf_Addr *)(dt_reloc->r_offset + loff);
+			RELOC_DYN(dt_reloc, sp, ra, loff);
 		}
-		rp++;
 	}
-
-	RELOC_GOT(&dynld, loff);
-
-	/*
-	 * we have been fully relocated here, so most things no longer
-	 * need the loff adjustment
-	 */
-
-	/*
-	 * No further changes to the PLT and/or GOT are needed so make
-	 * them read-only.
-	 */
 
 	/* do any RWX -> RX fixups for executable PLTs and apply GNU_RELRO */
 	phdp = (Elf_Phdr *)dl_data[AUX_phdr];
 	for (i = 0; i < dl_data[AUX_phnum]; i++, phdp++) {
 		switch (phdp->p_type) {
-#if defined(__alpha__) || defined(__hppa__) || defined(__powerpc__) || \
-    defined(__sparc64__)
+#if defined(__alpha__) || defined(__powerpc__) || defined(__sparc64__)
 		case PT_LOAD:
 			if ((phdp->p_flags & (PF_X | PF_W)) != (PF_X | PF_W))
 				break;

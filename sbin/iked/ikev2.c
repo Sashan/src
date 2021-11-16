@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2.c,v 1.330 2021/11/10 13:09:05 tobhe Exp $	*/
+/*	$OpenBSD: ikev2.c,v 1.332 2021/11/16 21:43:36 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -806,6 +806,7 @@ ikev2_auth_verify(struct iked *env, struct iked_sa *sa)
 		    print_map(ikeauth.auth_method,
 		    ikev2_auth_map));
 		ikev2_send_auth_failed(env, sa);
+		explicit_bzero(&ikeauth, sizeof(ikeauth));
 		return (-1);
 	}
 	ikeauth.auth_method = sa->sa_peerauth.id_type;
@@ -815,6 +816,7 @@ ikev2_auth_verify(struct iked *env, struct iked_sa *sa)
 		log_debug("%s: failed to get auth data",
 		    __func__);
 		ikev2_send_auth_failed(env, sa);
+		explicit_bzero(&ikeauth, sizeof(ikeauth));
 		return (-1);
 	}
 
@@ -827,6 +829,7 @@ ikev2_auth_verify(struct iked *env, struct iked_sa *sa)
 		log_info("%s: ikev2_msg_authverify failed",
 		    SPI_SA(sa, __func__));
 		ikev2_send_auth_failed(env, sa);
+		explicit_bzero(&ikeauth, sizeof(ikeauth));
 		return (-1);
 	}
 	if (sa->sa_eapmsk != NULL) {
@@ -834,6 +837,7 @@ ikev2_auth_verify(struct iked *env, struct iked_sa *sa)
 		    !sa->sa_hdr.sh_initiator)) == NULL) {
 			log_debug("%s: failed to get auth data",
 			    __func__);
+			explicit_bzero(&ikeauth, sizeof(ikeauth));
 			return (-1);
 		}
 
@@ -842,6 +846,7 @@ ikev2_auth_verify(struct iked *env, struct iked_sa *sa)
 		ibuf_release(authmsg);
 		if (ret != 0) {
 			ikev2_send_auth_failed(env, sa);
+			explicit_bzero(&ikeauth, sizeof(ikeauth));
 			return (-1);
 		}
 
@@ -851,6 +856,7 @@ ikev2_auth_verify(struct iked *env, struct iked_sa *sa)
 		sa_state(env, sa, IKEV2_STATE_EAP_SUCCESS);
 	}
 
+	explicit_bzero(&ikeauth, sizeof(ikeauth));
 	return (0);
 }
 
@@ -3146,12 +3152,14 @@ ikev2_handle_notifies(struct iked *env, struct iked_message *msg)
 	/* Signature hash algorithm */
 	if (msg->msg_flags & IKED_MSG_FLAGS_SIGSHA2)
 		sa->sa_sigsha2 = 1;
+
 	if (msg->msg_flags & IKED_MSG_FLAGS_USE_TRANSPORT)
 		sa->sa_use_transport_mode = 1;
 
 	if ((msg->msg_flags & IKED_MSG_FLAGS_TEMPORARY_FAILURE)
 	    && sa->sa_nexti != NULL)
 		sa->sa_tmpfail = 1;
+
 	return (0);
 }
 

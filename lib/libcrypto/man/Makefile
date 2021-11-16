@@ -1,23 +1,27 @@
-# $OpenBSD: Makefile,v 1.211 2021/11/11 12:06:25 schwarze Exp $
+# $OpenBSD: Makefile,v 1.215 2021/11/15 16:18:36 schwarze Exp $
 
 .include <bsd.own.mk>
 
 MAN=	\
 	ACCESS_DESCRIPTION_new.3 \
 	AES_encrypt.3 \
+	ASN1_BIT_STRING_set.3 \
 	ASN1_INTEGER_get.3 \
 	ASN1_OBJECT_new.3 \
+	ASN1_PRINTABLE_type.3 \
 	ASN1_STRING_TABLE_add.3 \
 	ASN1_STRING_length.3 \
 	ASN1_STRING_new.3 \
 	ASN1_STRING_print_ex.3 \
 	ASN1_TIME_set.3 \
 	ASN1_TYPE_get.3 \
+	ASN1_UNIVERSALSTRING_to_string.3 \
 	ASN1_generate_nconf.3 \
 	ASN1_get_object.3 \
 	ASN1_item_d2i.3 \
 	ASN1_item_digest.3 \
 	ASN1_item_new.3 \
+	ASN1_item_pack.3 \
 	ASN1_item_sign.3 \
 	ASN1_item_verify.3 \
 	ASN1_mbstring_copy.3 \
@@ -398,6 +402,7 @@ MAN=	\
 	des_read_pw.3 \
 	evp.3 \
 	get_rfc3526_prime_8192.3 \
+	i2a_ASN1_STRING.3 \
 	i2d_CMS_bio_stream.3 \
 	i2d_PKCS7_bio_stream.3 \
 	lh_new.3 \
