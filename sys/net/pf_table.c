@@ -1083,7 +1083,7 @@ pfr_destroy_ioq(struct pfr_kentryworkq *ioq, int flags)
 		YIELD(flags & PFR_FLAG_USERIOCTL);
 		SLIST_REMOVE_HEAD(ioq, pfrke_ioq);
 		/*
-		 * we destroy only those entires, which did not make it to
+		 * we destroy only those entries, which did not make it to
 		 * table
 		 */
 		if ((p->pfrke_fb != PFR_FB_ADDED) || (flags & PFR_FLAG_DUMMY))
