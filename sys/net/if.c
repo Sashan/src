@@ -869,6 +869,8 @@ if_vinput(struct ifnet *ifp, struct mbuf *m)
 
 	if (__predict_true(!ISSET(ifp->if_xflags, IFXF_MONITOR)))
 		(*ifp->if_input)(ifp, m);
+	else
+		m_freem(m);
 }
 
 void

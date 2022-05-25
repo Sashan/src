@@ -944,7 +944,7 @@ veb_broadcast(struct veb_softc *sc, struct veb_port *rp, struct mbuf *m0,
 	 * let pf look at it, but use the veb interface as a proxy.
 	 */
 	if (ISSET(ifp->if_flags, IFF_LINK1) &&
-	    (m = veb_pf(ifp, PF_OUT, m0)) == NULL)
+	    (m0 = veb_pf(ifp, PF_OUT, m0)) == NULL)
 		return;
 #endif
 
@@ -2497,8 +2497,6 @@ vport_enqueue(struct ifnet *ifp, struct mbuf *m)
 		eh = mtod(m, struct ether_header *);
 		dst = ether_addr_to_e64((struct ether_addr *)eh->ether_dhost);
 
-		if (input == veb_vport_input)
-			input = veb_port_input;
 		m = (*input)(ifp, m, dst, eb->eb_port);
 
 		error = 0;
