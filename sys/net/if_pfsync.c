@@ -276,6 +276,7 @@ void	pfsync_syncdev_state(void *);
 void	pfsync_ifdetach(void *);
 
 void	pfsync_deferred(struct pf_state *, int);
+void	pfsync_undefer_notify(struct pfsync_deferral *);
 void	pfsync_undefer(struct pfsync_deferral *, int);
 void	pfsync_deferrals_tmo(void *);
 
@@ -409,6 +410,11 @@ pfsync_clone_destroy(struct ifnet *ifp)
 	}
 	if_put(ifp0);
 
+	pfsyncif = NULL;
+	timeout_del(&sc->sc_bulkfail_tmo);
+	timeout_del(&sc->sc_bulk_tmo);
+	timeout_del(&sc->sc_tmo);
+
 	/* XXXSMP breaks atomicity */
 	NET_UNLOCK();
 	if_detach(ifp);
@@ -425,14 +431,13 @@ pfsync_clone_destroy(struct ifnet *ifp)
 
 		while ((pd = TAILQ_FIRST(&deferrals)) != NULL) {
 			TAILQ_REMOVE(&deferrals, pd, pd_entry);
-			pfsync_undefer(pd, 0);
+			CLR(pd->pd_st->state_flags, PFSTATE_ACK);
+			pfsync_undefer_notify(pd);
+			pf_state_unref(pd->pd_st);
+			m_freem(pd->pd_m);
+			pool_put(&sc->sc_pool, pd);
 		}
 	}
-
-	pfsyncif = NULL;
-	timeout_del(&sc->sc_bulkfail_tmo);
-	timeout_del(&sc->sc_bulk_tmo);
-	timeout_del(&sc->sc_tmo);
 
 	NET_UNLOCK();
 
