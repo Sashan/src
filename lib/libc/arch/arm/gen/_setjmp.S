@@ -1,4 +1,4 @@
-/*	$OpenBSD: _setjmp.S,v 1.6 2018/06/22 15:18:50 kettenis Exp $	*/
+/*	$OpenBSD: _setjmp.S,v 1.8 2022/05/25 17:32:36 guenther Exp $	*/
 /*	$NetBSD: _setjmp.S,v 1.5 2003/04/05 23:08:51 bjh21 Exp $	*/
 
 /*
@@ -37,7 +37,7 @@
 #include <machine/setjmp.h>
 
 	.section	.openbsd.randomdata,"aw",%progbits
-	.align 4
+	.balign	4
 	.globl	__jmpxor
 __jmpxor:
 	.zero 4*2		/* (sp, lr) */
@@ -87,6 +87,7 @@ ENTRY(_setjmp)
 
 .L_setjmp_magic:
 	.word	_JB_MAGIC__SETJMP
+
 .L_jmpxor_setjmp:
 	.word	__jmpxor - 1b
 END_STRONG(_setjmp)
@@ -95,7 +96,7 @@ ENTRY(_longjmp)
 	ldr	r2, .L_setjmp_magic
 	ldr	r3, [r0], #4
 	teq	r2, r3
-	bne	botch
+	bne	.Lbotch
 
 #ifdef SOFTFLOAT
 	add	r0, r0, #68
@@ -121,7 +122,7 @@ ENTRY(_longjmp)
 	/* Validate sp and lr */
 	teq	sp, #0
 	teqne	lr, #0
-	beq	botch
+	beq	.Lbotch
 
 	/* Set return value */
 	mov	r0, r1
@@ -133,7 +134,7 @@ ENTRY(_longjmp)
 	.word	__jmpxor - 1b
 
 	/* validation failed, die die die. */
-botch:
+.Lbotch:
 	bl	_HIDDEN(abort)
 	b	. - 8		/* Cannot get here */
 END_STRONG(_longjmp)
