@@ -410,15 +410,9 @@ pfsync_clone_destroy(struct ifnet *ifp)
 	}
 	if_put(ifp0);
 
-	pfsyncif = NULL;
 	timeout_del(&sc->sc_bulkfail_tmo);
 	timeout_del(&sc->sc_bulk_tmo);
 	timeout_del(&sc->sc_tmo);
-
-	/* XXXSMP breaks atomicity */
-	NET_UNLOCK();
-	if_detach(ifp);
-	NET_LOCK();
 
 	pfsync_drop(sc);
 
@@ -431,15 +425,15 @@ pfsync_clone_destroy(struct ifnet *ifp)
 
 		while ((pd = TAILQ_FIRST(&deferrals)) != NULL) {
 			TAILQ_REMOVE(&deferrals, pd, pd_entry);
-			CLR(pd->pd_st->state_flags, PFSTATE_ACK);
-			pfsync_undefer_notify(pd);
-			pf_state_unref(pd->pd_st);
-			m_freem(pd->pd_m);
-			pool_put(&sc->sc_pool, pd);
+			pfsync_undefer(pd, 0);
 		}
 	}
 
+	pfsyncif = NULL;
+
 	NET_UNLOCK();
+
+	if_detach(ifp);
 
 	pool_destroy(&sc->sc_pool);
 	free(sc->sc_imo.imo_membership, M_IPMOPTS,
@@ -2436,7 +2430,7 @@ pfsync_q_ins(struct pf_state *st, int q)
 		 * the same state, or the state is just being processed
 		 * (is on snapshot queue).
 		 */
-		if (st->sync_state != PFSYNC_S_NONE) {
+		if ((st->sync_state != PFSYNC_S_NONE) || (st->snapped == 1)) {
 			mtx_leave(&sc->sc_st_mtx);
 			break;
 		}
@@ -2477,7 +2471,7 @@ pfsync_q_del(struct pf_state *st)
 	 * if state is snapped already, then just bail out, because we came
 	 * too late, the state is being just processed/dispatched to peer.
 	 */
-	if ((q == PFSYNC_S_NONE) || (st->snapped)) {
+	if ((q == PFSYNC_S_NONE) || (st->snapped == 1)) {
 		mtx_leave(&sc->sc_st_mtx);
 		return;
 	}
