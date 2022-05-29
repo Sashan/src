@@ -4108,6 +4108,7 @@ pf_create_state(struct pf_pdesc *pd, struct pf_rule *r, struct pf_rule *a,
 	 * pf_state_inserts() grabs reference for pfsync!
 	 */
 	refcnt_init(&s->refcnt);
+	mtx_init(&s->mtx, IPL_NET, 0);
 
 	switch (pd->proto) {
 	case IPPROTO_TCP:

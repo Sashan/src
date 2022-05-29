@@ -763,6 +763,7 @@ struct pf_state {
 	struct pf_sn_head	 src_nodes;
 	struct pf_state_key	*key[2];	/* addresses stack and wire  */
 	struct pfi_kif		*kif;
+	struct mutex		 mtx;
 	u_int64_t		 packets[2];
 	u_int64_t		 bytes[2];
 	int32_t			 creation;
