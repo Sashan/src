@@ -2497,6 +2497,8 @@ vport_enqueue(struct ifnet *ifp, struct mbuf *m)
 		eh = mtod(m, struct ether_header *);
 		dst = ether_addr_to_e64((struct ether_addr *)eh->ether_dhost);
 
+		if (input == veb_vport_input)
+			input = veb_port_input;
 		m = (*input)(ifp, m, dst, eb->eb_port);
 
 		error = 0;
