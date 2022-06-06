@@ -326,7 +326,7 @@ int			pfsync_sysctl(int *, u_int,  void *, size_t *,
 #define	PFSYNC_SI_CKSUM		0x02
 #define	PFSYNC_SI_ACK		0x04
 int			pfsync_state_import(struct pfsync_state *, int);
-void			pfsync_state_export(struct pfsync_state *,
+int			pfsync_state_export(struct pfsync_state *,
 			    struct pf_state *);
 
 void			pfsync_insert_state(struct pf_state *);

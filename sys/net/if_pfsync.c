@@ -157,16 +157,16 @@ struct {
 };
 
 struct pfsync_q {
-	void		(*write)(struct pf_state *, void *);
+	int		(*write)(struct pf_state *, void *);
 	size_t		len;
 	u_int8_t	action;
 };
 
 /* we have one of these for every PFSYNC_S_ */
-void	pfsync_out_state(struct pf_state *, void *);
-void	pfsync_out_iack(struct pf_state *, void *);
-void	pfsync_out_upd_c(struct pf_state *, void *);
-void	pfsync_out_del(struct pf_state *, void *);
+int	pfsync_out_state(struct pf_state *, void *);
+int	pfsync_out_iack(struct pf_state *, void *);
+int	pfsync_out_upd_c(struct pf_state *, void *);
+int	pfsync_out_del(struct pf_state *, void *);
 
 struct pfsync_q pfsync_qs[] = {
 	{ pfsync_out_iack,  sizeof(struct pfsync_ins_ack), PFSYNC_ACT_INS_ACK },
@@ -516,10 +516,10 @@ pfsync_alloc_scrub_memory(struct pfsync_state_peer *s,
 	return (0);
 }
 
-void
+int
 pfsync_state_export(struct pfsync_state *sp, struct pf_state *st)
 {
-	pf_state_export(sp, st);
+	return (pf_state_export(sp, st));
 }
 
 int
@@ -1529,24 +1529,25 @@ pfsyncioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	return (0);
 }
 
-void
+int
 pfsync_out_state(struct pf_state *st, void *buf)
 {
 	struct pfsync_state *sp = buf;
 
-	pfsync_state_export(sp, st);
+	return (pfsync_state_export(sp, st));
 }
 
-void
+int
 pfsync_out_iack(struct pf_state *st, void *buf)
 {
 	struct pfsync_ins_ack *iack = buf;
 
 	iack->id = st->id;
 	iack->creatorid = st->creatorid;
+	return (0);
 }
 
-void
+int
 pfsync_out_upd_c(struct pf_state *st, void *buf)
 {
 	struct pfsync_upd_c *up = buf;
@@ -1557,9 +1558,10 @@ pfsync_out_upd_c(struct pf_state *st, void *buf)
 	pf_state_peer_hton(&st->dst, &up->dst);
 	up->creatorid = st->creatorid;
 	up->timeout = st->timeout;
+	return (0);
 }
 
-void
+int
 pfsync_out_del(struct pf_state *st, void *buf)
 {
 	struct pfsync_del_c *dp = buf;
@@ -1568,6 +1570,7 @@ pfsync_out_del(struct pf_state *st, void *buf)
 	dp->creatorid = st->creatorid;
 
 	SET(st->state_flags, PFSTATE_NOSYNC);
+	return (0);
 }
 
 void
@@ -1881,8 +1884,8 @@ pfsync_sendout(void)
 			KASSERT(st->snapped == 1);
 			st->sync_state = PFSYNC_S_NONE;
 			st->snapped = 0;
-			pfsync_qs[q].write(st, m->m_data + offset);
-			offset += pfsync_qs[q].len;
+			if (pfsync_qs[q].write(st, m->m_data + offset) == 0)
+				offset += pfsync_qs[q].len;
 
 			pf_state_unref(st);
 			count++;
