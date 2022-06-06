@@ -1,4 +1,3 @@
-/*	$OpenBSD: FIXES,v 1.43 2022/01/27 16:58:37 millert Exp $	*/
 /****************************************************************
 Copyright (C) Lucent Technologies 1997
 All Rights Reserved
@@ -25,6 +24,23 @@ THIS SOFTWARE.
 
 This file lists all bug fixes, changes, etc., made since the AWK book
 was sent to the printers in August, 1987.
+
+
+May 23, 2022:
+	Memory leak when assigning a string to some of the built-in
+	variables. allocated string erroneously marked DONTFREE.
+	Thanks to Miguel Pineiro Jr. <mpj@pineiro.cc>.
+
+Mar 14, 2022:
+	Historic bug: command-line "name=value" assignment had been
+	truncating its entry in ARGV. (circa 1989) Thanks to 
+	Miguel Pineiro Jr. <mpj@pineiro.cc>.
+
+Mar 3, 2022:
+	Fixed file management memory leak that appears to have been
+	there since the files array was first initialized with stdin,
+	stdout, and stderr (circa 1992). Thanks to Miguel Pineiro Jr.
+	<mpj@pineiro.cc>.
 
 December 8, 2021:
 	The error handling in closefile and closeall was mangled. Long

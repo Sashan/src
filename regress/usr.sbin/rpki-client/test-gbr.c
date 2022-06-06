@@ -1,4 +1,4 @@
-/*	$Id: test-gbr.c,v 1.7 2022/04/20 17:26:53 tb Exp $ */
+/*	$Id: test-gbr.c,v 1.9 2022/05/31 21:35:46 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -72,10 +72,10 @@ main(int argc, char *argv[])
 		errx(1, "argument missing");
 
 	for (i = 0; i < argc; i++) {
-		buf = load_file(argv[1], &len);
+		buf = load_file(argv[i], &len);
 		if ((p = gbr_parse(&xp, argv[i], buf, len)) == NULL) {
 			free(buf);
-			continue;
+			break;
 		}
 		if (verb)
 			gbr_print(xp, p);

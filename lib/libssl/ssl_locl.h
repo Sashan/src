@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_locl.h,v 1.388 2022/03/17 17:22:16 jsing Exp $ */
+/* $OpenBSD: ssl_locl.h,v 1.391 2022/06/06 16:11:00 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -213,10 +213,10 @@ __BEGIN_HIDDEN_DECLS
 
 /* Bits for algorithm_auth (server authentication) */
 #define SSL_aRSA		0x00000001L /* RSA auth */
-#define SSL_aDSS 		0x00000002L /* DSS auth */
-#define SSL_aNULL 		0x00000004L /* no auth (i.e. use ADH or AECDH) */
+#define SSL_aDSS		0x00000002L /* DSS auth */
+#define SSL_aNULL		0x00000004L /* no auth (i.e. use ADH or AECDH) */
 #define SSL_aECDSA              0x00000040L /* ECDSA auth*/
-#define SSL_aGOST01 		0x00000200L /* GOST R 34.10-2001 signature auth */
+#define SSL_aGOST01		0x00000200L /* GOST R 34.10-2001 signature auth */
 #define SSL_aTLS1_3		0x00000400L /* TLSv1.3 authentication */
 
 /* Bits for algorithm_enc (symmetric encryption) */
@@ -234,7 +234,7 @@ __BEGIN_HIDDEN_DECLS
 #define SSL_AES256GCM		0x00000800L
 #define SSL_CHACHA20POLY1305	0x00001000L
 
-#define SSL_AES        		(SSL_AES128|SSL_AES256|SSL_AES128GCM|SSL_AES256GCM)
+#define SSL_AES			(SSL_AES128|SSL_AES256|SSL_AES128GCM|SSL_AES256GCM)
 #define SSL_CAMELLIA		(SSL_CAMELLIA128|SSL_CAMELLIA256)
 
 
@@ -341,7 +341,7 @@ __BEGIN_HIDDEN_DECLS
 #define SSL_MAX_EMPTY_RECORDS	32
 
 /* SSL_kRSA <- RSA_ENC | (RSA_TMP & RSA_SIGN) |
- * 	    <- (EXPORT & (RSA_ENC | RSA_TMP) & RSA_SIGN)
+ *	    <- (EXPORT & (RSA_ENC | RSA_TMP) & RSA_SIGN)
  * SSL_kDH  <- DH_ENC & (RSA_ENC | RSA_SIGN | DSA_SIGN)
  * SSL_kDHE <- RSA_ENC | RSA_SIGN | DSA_SIGN
  * SSL_aRSA <- RSA_ENC | RSA_SIGN
@@ -434,13 +434,14 @@ struct ssl_method_st {
 	unsigned int enc_flags;		/* SSL_ENC_FLAG_* */
 };
 
-/* Lets make this into an ASN.1 type structure as follows
+/*
+ * Let's make this into an ASN.1 type structure as follows
  * SSL_SESSION_ID ::= SEQUENCE {
- *	version 		INTEGER,	-- structure version number
- *	SSLversion 		INTEGER,	-- SSL version number
- *	Cipher 			OCTET STRING,	-- the 3 byte cipher ID
- *	Session_ID 		OCTET STRING,	-- the Session ID
- *	Master_key 		OCTET STRING,	-- the master key
+ *	version			INTEGER,	-- structure version number
+ *	SSLversion		INTEGER,	-- SSL version number
+ *	Cipher			OCTET STRING,	-- the 2 byte cipher ID
+ *	Session_ID		OCTET STRING,	-- the Session ID
+ *	Master_key		OCTET STRING,	-- the master key
  *	KRB5_principal		OCTET STRING	-- optional Kerberos principal
  *	Time [ 1 ] EXPLICIT	INTEGER,	-- optional Start Time
  *	Timeout [ 2 ] EXPLICIT	INTEGER,	-- optional Timeout ins seconds
@@ -454,7 +455,7 @@ struct ssl_method_st {
  *	Ticket [10]             EXPLICIT OCTET STRING, -- session ticket (clients only)
  *	Compression_meth [11]   EXPLICIT OCTET STRING, -- optional compression method
  *	SRP_username [ 12 ] EXPLICIT OCTET STRING -- optional SRP username
- *	}
+ * }
  * Look in ssl/ssl_asn1.c for more details
  * I'm using EXPLICIT tags so I can read the damn things using asn1parse :-).
  */
@@ -547,6 +548,9 @@ typedef struct ssl_handshake_tls12_st {
 typedef struct ssl_handshake_tls13_st {
 	int use_legacy;
 	int hrr;
+
+	/* Client indicates psk_dhe_ke support in PskKeyExchangeMode. */
+	int use_psk_dhe_ke;
 
 	/* Certificate selected for use (static pointer). */
 	const SSL_CERT_PKEY *cpk;
@@ -1034,7 +1038,7 @@ typedef struct ssl_internal_st {
 	const SRTP_PROTECTION_PROFILE *srtp_profile;		/* What's been chosen */
 
 	int renegotiate;/* 1 if we are renegotiating.
-		 	 * 2 if we are a server and are inside a handshake
+			 * 2 if we are a server and are inside a handshake
 	                 * (i.e. not just sending a HelloRequest) */
 
 	int rstate;	/* where we are when reading */

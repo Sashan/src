@@ -1,7 +1,7 @@
 #! /usr/bin/perl
 
 # ex:ts=8 sw=4:
-# $OpenBSD: PkgAdd.pm,v 1.134 2022/05/11 17:17:35 espie Exp $
+# $OpenBSD: PkgAdd.pm,v 1.137 2022/06/06 08:03:32 espie Exp $
 #
 # Copyright (c) 2003-2014 Marc Espie <espie@openbsd.org>
 #
@@ -81,45 +81,61 @@ sub tie_files
 package OpenBSD::PackingElement::FileBase;
 sub hash_files
 {
-	my ($self, $sha, $state) = @_;
+	my ($self, $state, $sha) = @_;
 	return if $self->{link} or $self->{symlink} or $self->{nochecksum};
 	if (defined $self->{d}) {
-		push @{$sha->{$self->{d}->key}}, $self;
+		$sha->{$self->{d}->key}{$self->name} = $self;
 	}
 }
 
 sub tie_files
 {
-	my ($self, $sha, $state) = @_;
+	my ($self, $state, $sha) = @_;
 	return if $self->{link} or $self->{symlink} or $self->{nochecksum};
 	# XXX python doesn't like this, overreliance on timestamps
+
 	return if $self->{name} =~ m/\.py$/ && !defined $self->{ts};
-	if (exists $sha->{$self->{d}->key}) {
-		my ($tied, $realname);
-		for my $c (@{$sha->{$self->{d}->key}}) {
-			# don't tie if there's a problem with the file
+
+	my $h = $sha->{$self->{d}->key};
+	return if !defined $h;
+
+	my ($tied, $realname);
+	my $c = $h->{$self->name};
+	# first we try to match with the same name
+	if (defined $c) {
+		$realname = $c->realname($state);
+		# don't tie if the file doesn't exist
+		if (-f $realname && 
+		# or was altered
+		    (stat _)[7] == $self->{size}) {
+			$tied = $c;
+		}
+	}
+	# otherwise we grab any other match under similar rules
+	if (!defined $tied) {
+		for my $c ( values %{$h} ) {
 			$realname = $c->realname($state);
 			next unless -f $realname;
-			# and do a sanity check that this file wasn't altered
 			next unless (stat _)[7] == $self->{size};
 			$tied = $c;
-			last if $tied->name eq $self->name;
+			last;
 		}
-		return if !defined $tied;
-		if ($state->defines('checksum')) {
-			my $d = $self->compute_digest($realname, $self->{d});
-			# XXX we don't have to display anything here
-			# because delete will take care of that
-			return unless $d->equals($self->{d});
-		}
-		# so we found a match that find_extractible will use
-		$self->{tieto} = $tied;
-		# and we also need to tell size computation we won't be
-		# needing extra room for this.
-		$tied->{tied} = 1;
-		$state->say("Tying #1 to #2", $self->stringize,
-		    $tied->realname($state)) if $state->verbose >= 3;
 	}
+	return if !defined $tied;
+
+	if ($state->defines('checksum')) {
+		my $d = $self->compute_digest($realname, $self->{d});
+		# XXX we don't have to display anything here
+		# because delete will take care of that
+		return unless $d->equals($self->{d});
+	}
+	# so we found a match that find_extractible will use
+	$self->{tieto} = $tied;
+	# and we also need to tell size computation we won't be needing 
+	# extra diskspace for this.
+	$tied->{tied} = 1;
+	$state->say("Tying #1 to #2", $self->stringize, $realname) 
+	    if $state->verbose >= 3;
 }
 
 package OpenBSD::PkgAdd::State;
@@ -752,7 +768,7 @@ sub delete_old_packages
 		$state->set_name_from_handle($o, '-');
 		require OpenBSD::Delete;
 		try {
-			OpenBSD::Delete::delete_handle($o, $state);
+			OpenBSD::Delete::delete_plist($o->plist, $state);
 		} catch {
 			$state->errsay($_);
 			$state->fatal(partial_install(
@@ -787,13 +803,6 @@ sub really_add
 	my ($set, $state) = @_;
 
 	my $errors = 0;
-
-	if ($state->{not}) {
-		$state->status->what("Pretending to add");
-	} else {
-		$state->status->what("Adding");
-	}
-	$set->setup_header($state);
 
 	# XXX in `combined' updates, some dependencies may remove extra
 	# packages, so we do a double-take on the list of packages we
@@ -961,10 +970,14 @@ sub may_tie_files
 		my $sha = {};
 
 		for my $o ($set->older_to_do) {
-			$o->{plist}->hash_files($sha, $state);
+			$set->setup_header($state, $o, "hashing");
+			$state->progress->visit_with_count($o->{plist}, 
+			    'hash_files', $sha);
 		}
 		for my $n ($set->newer) {
-			$n->{plist}->tie_files($sha, $state);
+			$set->setup_header($state, $n, "tieing");
+			$state->progress->visit_with_count($n->{plist}, 
+			    'tie_files', $sha);
 		}
 	}
 }
@@ -1079,13 +1092,18 @@ sub process_set
 	if ($state->verbose && !$set->{simple_update}) {
 		$state->say("Update Set #1 runs exec commands", $set->print);
 	}
-	may_tie_files($set, $state);
 	if ($set->newer > 0 || $set->older_to_do > 0) {
+		if ($state->{not}) {
+			$state->status->what("Pretending to add");
+		} else {
+			$state->status->what("Adding");
+		}
 		for my $h ($set->newer) {
 			$h->plist->set_infodir($h->location->info);
 			delete $h->location->{contents};
 		}
 
+		may_tie_files($set, $state);
 		if (!$set->validate_plists($state)) {
 			$state->{bad}++;
 			$set->cleanup(OpenBSD::Handle::CANT_INSTALL,

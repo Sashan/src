@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_mvneta.c,v 1.17 2021/10/24 17:52:26 mpi Exp $	*/
+/*	$OpenBSD: if_mvneta.c,v 1.26 2022/06/05 02:54:18 dlg Exp $	*/
 /*	$NetBSD: if_mvneta.c,v 1.41 2015/04/15 10:15:40 hsuenaga Exp $	*/
 /*
  * Copyright (c) 2007, 2008, 2013 KIYOHARA Takashi
@@ -27,6 +27,7 @@
  */
 
 #include "bpfilter.h"
+#include "kstat.h"
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -39,6 +40,7 @@
 #include <sys/sockio.h>
 #include <uvm/uvm_extern.h>
 #include <sys/mbuf.h>
+#include <sys/kstat.h>
 
 #include <machine/bus.h>
 #include <machine/cpufunc.h>
@@ -133,6 +135,9 @@ struct mvneta_softc {
 	bus_space_tag_t sc_iot;
 	bus_space_handle_t sc_ioh;
 	bus_dma_tag_t sc_dmat;
+	void *sc_ih;
+
+	uint64_t		sc_clk_freq;
 
 	struct arpcom sc_ac;
 #define sc_enaddr sc_ac.ac_enaddr
@@ -144,16 +149,15 @@ struct mvneta_softc {
 	struct mvneta_dmamem	*sc_txring;
 	struct mvneta_buf	*sc_txbuf;
 	struct mvneta_tx_desc	*sc_txdesc;
-	int			 sc_tx_prod;	/* next free tx desc */
-	int			 sc_tx_cnt;	/* amount of tx sent */
-	int			 sc_tx_cons;	/* first tx desc sent */
+	unsigned int		 sc_tx_prod;	/* next free tx desc */
+	unsigned int		 sc_tx_cons;	/* first tx desc sent */
 
 	struct mvneta_dmamem	*sc_rxring;
 	struct mvneta_buf	*sc_rxbuf;
 	struct mvneta_rx_desc	*sc_rxdesc;
-	int			 sc_rx_prod;	/* next rx desc to fill */
+	unsigned int		 sc_rx_prod;	/* next rx desc to fill */
+	unsigned int		 sc_rx_cons;	/* next rx desc recvd */
 	struct if_rxring	 sc_rx_ring;
-	int			 sc_rx_cons;	/* next rx desc recvd */
 
 	enum {
 		PHY_MODE_QSGMII,
@@ -170,6 +174,12 @@ struct mvneta_softc {
 	int			 sc_link;
 	int			 sc_sfp;
 	int			 sc_node;
+
+#if NKSTAT > 0
+	struct mutex		 sc_kstat_lock;
+	struct timeout		 sc_kstat_tick;
+	struct kstat		*sc_kstat;
+#endif
 };
 
 
@@ -187,7 +197,7 @@ void mvneta_attach_deferred(struct device *);
 void mvneta_tick(void *);
 int mvneta_intr(void *);
 
-void mvneta_start(struct ifnet *);
+void mvneta_start(struct ifqueue *);
 int mvneta_ioctl(struct ifnet *, u_long, caddr_t);
 void mvneta_inband_statchg(struct mvneta_softc *);
 void mvneta_port_change(struct mvneta_softc *);
@@ -199,7 +209,6 @@ void mvneta_watchdog(struct ifnet *);
 int mvneta_mediachange(struct ifnet *);
 void mvneta_mediastatus(struct ifnet *, struct ifmediareq *);
 
-int mvneta_encap(struct mvneta_softc *, struct mbuf *, uint32_t *);
 void mvneta_rx_proc(struct mvneta_softc *);
 void mvneta_tx_proc(struct mvneta_softc *);
 uint8_t mvneta_crc8(const uint8_t *, size_t);
@@ -209,6 +218,10 @@ struct mvneta_dmamem *mvneta_dmamem_alloc(struct mvneta_softc *,
     bus_size_t, bus_size_t);
 void mvneta_dmamem_free(struct mvneta_softc *, struct mvneta_dmamem *);
 void mvneta_fill_rx_ring(struct mvneta_softc *);
+
+#if NKSTAT > 0
+void		mvneta_kstat_attach(struct mvneta_softc *);
+#endif
 
 static struct rwlock mvneta_sff_lock = RWLOCK_INITIALIZER("mvnetasff");
 
@@ -431,8 +444,6 @@ mvneta_attach(struct device *parent, struct device *self, void *aux)
 	char *phy_mode;
 	char *managed;
 
-	printf("\n");
-
 	sc->sc_iot = faa->fa_iot;
 	timeout_set(&sc->sc_tick_ch, mvneta_tick, sc);
 	if (bus_space_map(sc->sc_iot, faa->fa_reg[0].addr,
@@ -444,12 +455,13 @@ mvneta_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_node = faa->fa_node;
 
 	clock_enable(faa->fa_node, NULL);
+	sc->sc_clk_freq = clock_get_frequency_idx(faa->fa_node, 0);
 
 	pinctrl_byname(faa->fa_node, "default");
 
 	len = OF_getproplen(faa->fa_node, "phy-mode");
 	if (len <= 0) {
-		printf("%s: cannot extract phy-mode\n", self->dv_xname);
+		printf(": cannot extract phy-mode\n");
 		return;
 	}
 
@@ -468,8 +480,7 @@ mvneta_attach(struct device *parent, struct device *self, void *aux)
 	else if (!strncmp(phy_mode, "2500base-x", strlen("2500base-x")))
 		sc->sc_phy_mode = PHY_MODE_2500BASEX;
 	else {
-		printf("%s: cannot use phy-mode %s\n", self->dv_xname,
-		    phy_mode);
+		printf(": cannot use phy-mode %s\n", phy_mode);
 		return;
 	}
 	free(phy_mode, M_TEMP, len);
@@ -494,12 +505,12 @@ mvneta_attach(struct device *parent, struct device *self, void *aux)
 		sc->sc_phy = OF_getpropint(faa->fa_node, "phy", 0);
 		node = OF_getnodebyphandle(sc->sc_phy);
 		if (!node) {
-			printf("%s: cannot find phy in fdt\n", self->dv_xname);
+			printf(": cannot find phy in fdt\n");
 			return;
 		}
 
 		if ((sc->sc_phyloc = OF_getpropint(node, "reg", -1)) == -1) {
-			printf("%s: cannot extract phy addr\n", self->dv_xname);
+			printf(": cannot extract phy addr\n");
 			return;
 		}
 	}
@@ -528,8 +539,7 @@ mvneta_attach(struct device *parent, struct device *self, void *aux)
 
 	sc->sc_sfp = OF_getpropint(faa->fa_node, "sfp", 0);
 
-	printf("%s: Ethernet address %s\n", self->dv_xname,
-	    ether_sprintf(sc->sc_enaddr));
+	printf(": address %s\n", ether_sprintf(sc->sc_enaddr));
 
 	/* disable port */
 	MVNETA_WRITE(sc, MVNETA_PMACC0,
@@ -684,13 +694,14 @@ mvneta_attach(struct device *parent, struct device *self, void *aux)
 	while (MVNETA_READ(sc, MVNETA_PMACC2) & MVNETA_PMACC2_PORTMACRESET)
 		;
 
-	fdt_intr_establish(faa->fa_node, IPL_NET, mvneta_intr, sc,
-	    sc->sc_dev.dv_xname);
+	sc->sc_ih = fdt_intr_establish(faa->fa_node, IPL_NET | IPL_MPSAFE,
+	    mvneta_intr, sc, sc->sc_dev.dv_xname);
 
 	ifp = &sc->sc_ac.ac_if;
 	ifp->if_softc = sc;
 	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
-	ifp->if_start = mvneta_start;
+	ifp->if_xflags = IFXF_MPSAFE;
+	ifp->if_qstart = mvneta_start;
 	ifp->if_ioctl = mvneta_ioctl;
 	ifp->if_watchdog = mvneta_watchdog;
 	ifp->if_capabilities = IFCAP_VLAN_MTU;
@@ -781,6 +792,10 @@ mvneta_attach_deferred(struct device *self)
 	 */
 	if_attach(ifp);
 	ether_ifattach(ifp);
+
+#if NKSTAT > 0
+	mvneta_kstat_attach(sc);
+#endif
 }
 
 void
@@ -807,6 +822,7 @@ mvneta_intr(void *arg)
 	ic = MVNETA_READ(sc, MVNETA_PRXTXTIC);
 
 	if (ic & MVNETA_PRXTXTI_PMISCICSUMMARY) {
+		KERNEL_LOCK();
 		misc = MVNETA_READ(sc, MVNETA_PMIC);
 		MVNETA_WRITE(sc, MVNETA_PMIC, 0);
 		if (sc->sc_inband_status && (misc &
@@ -815,85 +831,174 @@ mvneta_intr(void *arg)
 		    MVNETA_PMI_PSCSYNCCHNG))) {
 			mvneta_inband_statchg(sc);
 		}
+		KERNEL_UNLOCK();
 	}
 
-	if (!(ifp->if_flags & IFF_RUNNING))
+	if (!ISSET(ifp->if_flags, IFF_RUNNING))
 		return 1;
 
 	if (ic & MVNETA_PRXTXTI_TBTCQ(0))
 		mvneta_tx_proc(sc);
 
-	if (ic & MVNETA_PRXTXTI_RBICTAPQ(0))
+	if (ISSET(ic, MVNETA_PRXTXTI_RBICTAPQ(0) | MVNETA_PRXTXTI_RDTAQ(0)))
 		mvneta_rx_proc(sc);
-
-	if (!ifq_empty(&ifp->if_snd))
-		mvneta_start(ifp);
 
 	return 1;
 }
 
-void
-mvneta_start(struct ifnet *ifp)
+static inline int
+mvneta_load_mbuf(struct mvneta_softc *sc, bus_dmamap_t map, struct mbuf *m)
 {
-	struct mvneta_softc *sc = ifp->if_softc;
-	struct mbuf *m_head = NULL;
-	int idx;
+	int error;
 
-	DPRINTFN(3, ("mvneta_start (idx %d)\n", sc->sc_tx_prod));
-
-	if (!(ifp->if_flags & IFF_RUNNING))
-		return;
-	if (ifq_is_oactive(&ifp->if_snd))
-		return;
-	if (ifq_empty(&ifp->if_snd))
-		return;
-
-	/* If Link is DOWN, can't start TX */
-	if (!MVNETA_IS_LINKUP(sc))
-		return;
-
-	bus_dmamap_sync(sc->sc_dmat, MVNETA_DMA_MAP(sc->sc_txring), 0,
-	    MVNETA_DMA_LEN(sc->sc_txring),
-	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
-
-	idx = sc->sc_tx_prod;
-	while (sc->sc_tx_cnt < MVNETA_TX_RING_CNT) {
-		m_head = ifq_deq_begin(&ifp->if_snd);
-		if (m_head == NULL)
+	error = bus_dmamap_load_mbuf(sc->sc_dmat, map, m,
+	    BUS_DMA_STREAMING | BUS_DMA_NOWAIT);
+	switch (error) {
+	case EFBIG:
+		error = m_defrag(m, M_DONTWAIT);
+		if (error != 0)
 			break;
 
-		/*
-		 * Pack the data into the transmit ring. If we
-		 * don't have room, set the OACTIVE flag and wait
-		 * for the NIC to drain the ring.
-		 */
-		if (mvneta_encap(sc, m_head, &idx)) {
-			ifq_deq_rollback(&ifp->if_snd, m_head);
-			ifq_set_oactive(&ifp->if_snd);
+		error = bus_dmamap_load_mbuf(sc->sc_dmat, map, m,
+		    BUS_DMA_STREAMING | BUS_DMA_NOWAIT);
+		if (error != 0)
+			break;
+
+		/* FALLTHROUGH */
+	case 0:
+		return (0);
+
+	default:
+		break;
+	}
+
+        return (error);
+}
+
+static inline void
+mvneta_encap(struct mvneta_softc *sc, bus_dmamap_t map, struct mbuf *m,
+    unsigned int prod)
+{
+	struct mvneta_tx_desc *txd;
+	uint32_t cmdsts;
+	unsigned int i;
+
+	cmdsts = MVNETA_TX_FIRST_DESC | MVNETA_TX_ZERO_PADDING |
+	    MVNETA_TX_L4_CSUM_NOT;
+#if notyet
+	int m_csumflags;
+	if (m_csumflags & M_CSUM_IPv4)
+		cmdsts |= MVNETA_TX_GENERATE_IP_CHKSUM;
+	if (m_csumflags & M_CSUM_TCPv4)
+		cmdsts |=
+		    MVNETA_TX_GENERATE_L4_CHKSUM | MVNETA_TX_L4_TYPE_TCP;
+	if (m_csumflags & M_CSUM_UDPv4)
+		cmdsts |=
+		    MVNETA_TX_GENERATE_L4_CHKSUM | MVNETA_TX_L4_TYPE_UDP;
+	if (m_csumflags & (M_CSUM_IPv4 | M_CSUM_TCPv4 | M_CSUM_UDPv4)) {
+		const int iphdr_unitlen = sizeof(struct ip) / sizeof(uint32_t);
+
+		cmdsts |= MVNETA_TX_IP_NO_FRAG |
+		    MVNETA_TX_IP_HEADER_LEN(iphdr_unitlen);	/* unit is 4B */
+	}
+#endif
+
+	for (i = 0; i < map->dm_nsegs; i++) {
+		txd = &sc->sc_txdesc[prod];
+		txd->bytecnt = map->dm_segs[i].ds_len;
+		txd->l4ichk = 0;
+		txd->cmdsts = cmdsts;
+		txd->nextdescptr = 0;
+		txd->bufptr = map->dm_segs[i].ds_addr;
+		txd->_padding[0] = 0;
+		txd->_padding[1] = 0;
+		txd->_padding[2] = 0;
+		txd->_padding[3] = 0;
+
+		prod = MVNETA_TX_RING_NEXT(prod);
+		cmdsts = 0;
+	}
+	txd->cmdsts |= MVNETA_TX_LAST_DESC;
+}
+
+static inline void
+mvneta_sync_txring(struct mvneta_softc *sc, int ops)
+{
+	bus_dmamap_sync(sc->sc_dmat, MVNETA_DMA_MAP(sc->sc_txring), 0,
+	    MVNETA_DMA_LEN(sc->sc_txring), ops);
+}
+
+void
+mvneta_start(struct ifqueue *ifq)
+{
+	struct ifnet *ifp = ifq->ifq_if;
+	struct mvneta_softc *sc = ifp->if_softc;
+	unsigned int prod, nprod, free, used = 0, nused;
+	struct mbuf *m;
+	bus_dmamap_t map;
+
+	/* If Link is DOWN, can't start TX */
+	if (!MVNETA_IS_LINKUP(sc)) {
+		ifq_purge(ifq);
+		return;
+	}
+
+	mvneta_sync_txring(sc, BUS_DMASYNC_POSTWRITE);
+
+	prod = sc->sc_tx_prod;
+	free = MVNETA_TX_RING_CNT - (prod - sc->sc_tx_cons);
+
+	for (;;) {
+		if (free < MVNETA_NTXSEG - 1) {
+			ifq_set_oactive(ifq);
 			break;
 		}
 
-		/* now we are committed to transmit the packet */
-		ifq_deq_commit(&ifp->if_snd, m_head);
+		m = ifq_dequeue(ifq);
+		if (m == NULL)
+			break;
 
-		/*
-		 * If there's a BPF listener, bounce a copy of this frame
-		 * to him.
-		 */
+		map = sc->sc_txbuf[prod].tb_map;
+		if (mvneta_load_mbuf(sc, map, m) != 0) {
+			m_freem(m);
+			ifp->if_oerrors++; /* XXX atomic */
+			continue;
+		}
+
 #if NBPFILTER > 0
 		if (ifp->if_bpf)
-			bpf_mtap(ifp->if_bpf, m_head, BPF_DIRECTION_OUT);
+			bpf_mtap(ifp->if_bpf, m, BPF_DIRECTION_OUT);
 #endif
+
+		bus_dmamap_sync(sc->sc_dmat, map, 0, map->dm_mapsize,
+		    BUS_DMASYNC_PREWRITE);
+
+		mvneta_encap(sc, map, m, prod);
+
+		nprod = (prod + map->dm_nsegs) % MVNETA_TX_RING_CNT;
+		sc->sc_txbuf[prod].tb_map = sc->sc_txbuf[nprod].tb_map;
+		prod = nprod;
+		sc->sc_txbuf[prod].tb_map = map;
+		sc->sc_txbuf[prod].tb_m = m;
+
+		free -= map->dm_nsegs;
+
+		nused = used + map->dm_nsegs;
+		if (nused > MVNETA_PTXSU_MAX) {
+			mvneta_sync_txring(sc,
+			    BUS_DMASYNC_PREWRITE|BUS_DMASYNC_POSTWRITE);
+			MVNETA_WRITE(sc, MVNETA_PTXSU(0),
+			    MVNETA_PTXSU_NOWD(used));
+			used = map->dm_nsegs;
+		} else
+			used = nused;
 	}
 
-	if (sc->sc_tx_prod != idx) {
-		sc->sc_tx_prod = idx;
+	mvneta_sync_txring(sc, BUS_DMASYNC_PREWRITE);
 
-		/*
-		 * Set a timeout in case the chip goes out to lunch.
-		 */
-		ifp->if_timer = 5;
-	}
+	sc->sc_tx_prod = prod;
+	if (used)
+		MVNETA_WRITE(sc, MVNETA_PTXSU(0), MVNETA_PTXSU_NOWD(used));
 }
 
 int
@@ -1012,7 +1117,6 @@ mvneta_up(struct mvneta_softc *sc)
 	}
 
 	sc->sc_tx_prod = sc->sc_tx_cons = 0;
-	sc->sc_tx_cnt = 0;
 
 	/* Allocate Rx descriptor ring. */
 	sc->sc_rxring = mvneta_dmamem_alloc(sc,
@@ -1033,7 +1137,24 @@ mvneta_up(struct mvneta_softc *sc)
 	MVNETA_WRITE(sc, MVNETA_PRXDQA(0), MVNETA_DMA_DVA(sc->sc_rxring));
 	MVNETA_WRITE(sc, MVNETA_PRXDQS(0), MVNETA_RX_RING_CNT |
 	    ((MCLBYTES >> 3) << 19));
-	MVNETA_WRITE(sc, MVNETA_PRXDQTH(0), 0);
+
+	if (sc->sc_clk_freq != 0) {
+		/*
+		 * Use the Non Occupied Descriptors Threshold to
+		 * interrupt when the descriptors granted by rxr are
+		 * used up, otherwise wait until the RX Interrupt
+		 * Time Threshold is reached.
+		 */
+		MVNETA_WRITE(sc, MVNETA_PRXDQTH(0),
+		    MVNETA_PRXDQTH_ODT(MVNETA_RX_RING_CNT) |
+		    MVNETA_PRXDQTH_NODT(2));
+		MVNETA_WRITE(sc, MVNETA_PRXITTH(0), sc->sc_clk_freq / 4000);
+	} else {
+		/* Time based moderation is hard without a clock */
+		MVNETA_WRITE(sc, MVNETA_PRXDQTH(0), 0);
+		MVNETA_WRITE(sc, MVNETA_PRXITTH(0), 0);
+	}
+
 	MVNETA_WRITE(sc, MVNETA_PRXC(0), 0);
 
 	/* Set Tx queue bandwidth. */
@@ -1043,7 +1164,8 @@ mvneta_up(struct mvneta_softc *sc)
 	/* Set Tx descriptor ring data. */
 	MVNETA_WRITE(sc, MVNETA_PTXDQA(0), MVNETA_DMA_DVA(sc->sc_txring));
 	MVNETA_WRITE(sc, MVNETA_PTXDQS(0),
-	    MVNETA_PTXDQS_DQS(MVNETA_TX_RING_CNT));
+	    MVNETA_PTXDQS_DQS(MVNETA_TX_RING_CNT) |
+	    MVNETA_PTXDQS_TBT(MIN(MVNETA_TX_RING_CNT / 2, ifp->if_txmit)));
 
 	sc->sc_rx_prod = sc->sc_rx_cons = 0;
 
@@ -1077,7 +1199,8 @@ mvneta_up(struct mvneta_softc *sc)
 
 	/* Enable interrupt masks */
 	MVNETA_WRITE(sc, MVNETA_PRXTXTIM, MVNETA_PRXTXTI_RBICTAPQ(0) |
-	    MVNETA_PRXTXTI_TBTCQ(0) | MVNETA_PRXTXTI_PMISCICSUMMARY);
+	    MVNETA_PRXTXTI_TBTCQ(0) | MVNETA_PRXTXTI_RDTAQ(0) |
+	    MVNETA_PRXTXTI_PMISCICSUMMARY);
 	MVNETA_WRITE(sc, MVNETA_PMIM, MVNETA_PMI_PHYSTATUSCHNG |
 	    MVNETA_PMI_LINKCHANGE | MVNETA_PMI_PSCSYNCCHNG);
 
@@ -1100,6 +1223,8 @@ mvneta_down(struct mvneta_softc *sc)
 	DPRINTFN(2, ("mvneta_down\n"));
 
 	timeout_del(&sc->sc_tick_ch);
+	ifp->if_flags &= ~IFF_RUNNING;
+	intr_barrier(sc->sc_ih);
 
 	/* Stop Rx port activity. Check port Rx activity. */
 	reg = MVNETA_READ(sc, MVNETA_RQC);
@@ -1210,7 +1335,6 @@ mvneta_down(struct mvneta_softc *sc)
 	MVNETA_WRITE(sc, MVNETA_PRXINIT, 0);
 	MVNETA_WRITE(sc, MVNETA_PTXINIT, 0);
 
-	ifp->if_flags &= ~IFF_RUNNING;
 	ifq_clr_oactive(&ifp->if_snd);
 }
 
@@ -1224,7 +1348,7 @@ mvneta_watchdog(struct ifnet *ifp)
 	 * interrupts.
 	 */
 	mvneta_tx_proc(sc);
-	if (sc->sc_tx_cnt != 0) {
+	if (sc->sc_tx_prod != sc->sc_tx_cons) {
 		printf("%s: watchdog timeout\n", sc->sc_dev.dv_xname);
 
 		ifp->if_oerrors++;
@@ -1265,88 +1389,6 @@ mvneta_mediastatus(struct ifnet *ifp, struct ifmediareq *ifmr)
 	}
 }
 
-int
-mvneta_encap(struct mvneta_softc *sc, struct mbuf *m, uint32_t *idx)
-{
-	struct mvneta_tx_desc *txd;
-	bus_dmamap_t map;
-	uint32_t cmdsts;
-	int i, current, first, last;
-
-	DPRINTFN(3, ("mvneta_encap\n"));
-
-	first = last = current = *idx;
-	map = sc->sc_txbuf[current].tb_map;
-
-	if (bus_dmamap_load_mbuf(sc->sc_dmat, map, m, BUS_DMA_NOWAIT))
-		return (ENOBUFS);
-
-	if (map->dm_nsegs > (MVNETA_TX_RING_CNT - sc->sc_tx_cnt - 2)) {
-		bus_dmamap_unload(sc->sc_dmat, map);
-		return (ENOBUFS);
-	}
-
-	bus_dmamap_sync(sc->sc_dmat, map, 0, map->dm_mapsize,
-	    BUS_DMASYNC_PREWRITE);
-
-	DPRINTFN(2, ("mvneta_encap: dm_nsegs=%d\n", map->dm_nsegs));
-
-	cmdsts = MVNETA_TX_L4_CSUM_NOT;
-#if notyet
-	int m_csumflags;
-	if (m_csumflags & M_CSUM_IPv4)
-		cmdsts |= MVNETA_TX_GENERATE_IP_CHKSUM;
-	if (m_csumflags & M_CSUM_TCPv4)
-		cmdsts |=
-		    MVNETA_TX_GENERATE_L4_CHKSUM | MVNETA_TX_L4_TYPE_TCP;
-	if (m_csumflags & M_CSUM_UDPv4)
-		cmdsts |=
-		    MVNETA_TX_GENERATE_L4_CHKSUM | MVNETA_TX_L4_TYPE_UDP;
-	if (m_csumflags & (M_CSUM_IPv4 | M_CSUM_TCPv4 | M_CSUM_UDPv4)) {
-		const int iphdr_unitlen = sizeof(struct ip) / sizeof(uint32_t);
-
-		cmdsts |= MVNETA_TX_IP_NO_FRAG |
-		    MVNETA_TX_IP_HEADER_LEN(iphdr_unitlen);	/* unit is 4B */
-	}
-#endif
-
-	for (i = 0; i < map->dm_nsegs; i++) {
-		txd = &sc->sc_txdesc[current];
-		memset(txd, 0, sizeof(*txd));
-		txd->bufptr = map->dm_segs[i].ds_addr;
-		txd->bytecnt = map->dm_segs[i].ds_len;
-		txd->cmdsts = cmdsts |
-		    MVNETA_TX_ZERO_PADDING;
-		if (i == 0)
-		    txd->cmdsts |= MVNETA_TX_FIRST_DESC;
-		if (i == (map->dm_nsegs - 1))
-		    txd->cmdsts |= MVNETA_TX_LAST_DESC;
-
-		bus_dmamap_sync(sc->sc_dmat, MVNETA_DMA_MAP(sc->sc_txring),
-		    current * sizeof(*txd), sizeof(*txd),
-		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
-
-		last = current;
-		current = MVNETA_TX_RING_NEXT(current);
-		KASSERT(current != sc->sc_tx_cons);
-	}
-
-	KASSERT(sc->sc_txbuf[last].tb_m == NULL);
-	sc->sc_txbuf[first].tb_map = sc->sc_txbuf[last].tb_map;
-	sc->sc_txbuf[last].tb_map = map;
-	sc->sc_txbuf[last].tb_m = m;
-
-	sc->sc_tx_cnt += map->dm_nsegs;
-	*idx = current;
-
-	/* Let him know we sent another packet. */
-	MVNETA_WRITE(sc, MVNETA_PTXSU(0), map->dm_nsegs);
-
-	DPRINTFN(3, ("mvneta_encap: completed successfully\n"));
-
-	return 0;
-}
-
 void
 mvneta_rx_proc(struct mvneta_softc *sc)
 {
@@ -1356,45 +1398,27 @@ mvneta_rx_proc(struct mvneta_softc *sc)
 	struct mbuf_list ml = MBUF_LIST_INITIALIZER();
 	struct mbuf *m;
 	uint32_t rxstat;
-	int i, idx, len, ready;
+	unsigned int i, done, cons;
 
-	DPRINTFN(3, ("%s: %d\n", __func__, sc->sc_rx_cons));
-
-	if (!(ifp->if_flags & IFF_RUNNING))
+	done = MVNETA_PRXS_ODC(MVNETA_READ(sc, MVNETA_PRXS(0)));
+	if (done == 0)
 		return;
 
-	bus_dmamap_sync(sc->sc_dmat, MVNETA_DMA_MAP(sc->sc_rxring), 0,
-	    MVNETA_DMA_LEN(sc->sc_rxring),
-	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
+	bus_dmamap_sync(sc->sc_dmat, MVNETA_DMA_MAP(sc->sc_rxring),
+	    0, MVNETA_DMA_LEN(sc->sc_rxring), BUS_DMASYNC_POSTREAD);
 
-	ready = MVNETA_PRXS_ODC(MVNETA_READ(sc, MVNETA_PRXS(0)));
-	MVNETA_WRITE(sc, MVNETA_PRXSU(0), ready);
+	cons = sc->sc_rx_cons;
 
-	for (i = 0; i < ready; i++) {
-		idx = sc->sc_rx_cons;
-		KASSERT(idx < MVNETA_RX_RING_CNT);
-
-		rxd = &sc->sc_rxdesc[idx];
-
-#ifdef DIAGNOSTIC
-		if ((rxd->cmdsts &
-		    (MVNETA_RX_LAST_DESC | MVNETA_RX_FIRST_DESC)) !=
-		    (MVNETA_RX_LAST_DESC | MVNETA_RX_FIRST_DESC))
-			panic("%s: buffer size is smaller than packet",
-			    __func__);
-#endif
-
-		len = rxd->bytecnt;
-		rxb = &sc->sc_rxbuf[idx];
-		KASSERT(rxb->tb_m);
-
-		bus_dmamap_sync(sc->sc_dmat, rxb->tb_map, 0,
-		    len, BUS_DMASYNC_POSTREAD);
-		bus_dmamap_unload(sc->sc_dmat, rxb->tb_map);
+	for (i = 0; i < done; i++) {
+		rxd = &sc->sc_rxdesc[cons];
+		rxb = &sc->sc_rxbuf[cons];
 
 		m = rxb->tb_m;
 		rxb->tb_m = NULL;
-		m->m_pkthdr.len = m->m_len = len;
+
+		bus_dmamap_sync(sc->sc_dmat, rxb->tb_map, 0,
+		    m->m_pkthdr.len, BUS_DMASYNC_POSTREAD);
+		bus_dmamap_unload(sc->sc_dmat, rxb->tb_map);
 
 		rxstat = rxd->cmdsts;
 		if (rxstat & MVNETA_ERROR_SUMMARY) {
@@ -1412,8 +1436,12 @@ mvneta_rx_proc(struct mvneta_softc *sc)
 #else
 			ifp->if_ierrors++;
 #endif
-			panic("%s: handle input errors", __func__);
-			continue;
+			m_freem(m);
+		} else {
+			m->m_pkthdr.len = m->m_len = rxd->bytecnt;
+			m_adj(m, MVNETA_HWHEADER_SIZE);
+
+			ml_enqueue(&ml, m);
 		}
 
 #if notyet
@@ -1449,14 +1477,28 @@ mvneta_rx_proc(struct mvneta_softc *sc)
 		}
 #endif
 
-		/* Skip on first 2byte (HW header) */
-		m_adj(m, MVNETA_HWHEADER_SIZE);
-
-		ml_enqueue(&ml, m);
-
 		if_rxr_put(&sc->sc_rx_ring, 1);
 
-		sc->sc_rx_cons = MVNETA_RX_RING_NEXT(idx);
+		cons = MVNETA_RX_RING_NEXT(cons);
+
+		if (i == MVNETA_PRXSU_MAX) {
+			MVNETA_WRITE(sc, MVNETA_PRXSU(0),
+			    MVNETA_PRXSU_NOPD(MVNETA_PRXSU_MAX));
+
+			/* tweaking the iterator inside the loop is fun */
+			done -= MVNETA_PRXSU_MAX;
+			i = 0;
+		}
+	}
+
+	sc->sc_rx_cons = cons;
+
+	bus_dmamap_sync(sc->sc_dmat, MVNETA_DMA_MAP(sc->sc_rxring),
+	    0, MVNETA_DMA_LEN(sc->sc_rxring), BUS_DMASYNC_PREREAD);
+
+	if (i > 0) {
+		MVNETA_WRITE(sc, MVNETA_PRXSU(0),
+		    MVNETA_PRXSU_NOPD(i));
 	}
 
 	if (ifiq_input(&ifp->if_rcv, &ml))
@@ -1469,28 +1511,28 @@ void
 mvneta_tx_proc(struct mvneta_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_ac.ac_if;
+	struct ifqueue *ifq = &ifp->if_snd;
 	struct mvneta_tx_desc *txd;
 	struct mvneta_buf *txb;
-	int i, idx, sent;
-
-	DPRINTFN(3, ("%s\n", __func__));
+	unsigned int i, cons, done;
 
 	if (!(ifp->if_flags & IFF_RUNNING))
+		return;
+
+	done = MVNETA_PTXS_TBC(MVNETA_READ(sc, MVNETA_PTXS(0)));
+	if (done == 0)
 		return;
 
 	bus_dmamap_sync(sc->sc_dmat, MVNETA_DMA_MAP(sc->sc_txring), 0,
 	    MVNETA_DMA_LEN(sc->sc_txring),
 	    BUS_DMASYNC_POSTREAD);
 
-	sent = MVNETA_PTXS_TBC(MVNETA_READ(sc, MVNETA_PTXS(0)));
-	MVNETA_WRITE(sc, MVNETA_PTXSU(0), MVNETA_PTXSU_NORB(sent));
+	cons = sc->sc_tx_cons;
 
-	for (i = 0; i < sent; i++) {
-		idx = sc->sc_tx_cons;
-		KASSERT(idx < MVNETA_TX_RING_CNT);
+	for (i = 0; i < done; i++) {
+		txd = &sc->sc_txdesc[cons];
+		txb = &sc->sc_txbuf[cons];
 
-		txd = &sc->sc_txdesc[idx];
-		txb = &sc->sc_txbuf[idx];
 		if (txb->tb_m) {
 			bus_dmamap_sync(sc->sc_dmat, txb->tb_map, 0,
 			    txb->tb_map->dm_mapsize, BUS_DMASYNC_POSTWRITE);
@@ -1499,10 +1541,6 @@ mvneta_tx_proc(struct mvneta_softc *sc)
 			m_freem(txb->tb_m);
 			txb->tb_m = NULL;
 		}
-
-		ifq_clr_oactive(&ifp->if_snd);
-
-		sc->sc_tx_cnt--;
 
 		if (txd->cmdsts & MVNETA_ERROR_SUMMARY) {
 			int err = txd->cmdsts & MVNETA_TX_ERROR_CODE_MASK;
@@ -1515,11 +1553,30 @@ mvneta_tx_proc(struct mvneta_softc *sc)
 				ifp->if_collisions++;
 		}
 
-		sc->sc_tx_cons = MVNETA_TX_RING_NEXT(sc->sc_tx_cons);
+		cons = MVNETA_TX_RING_NEXT(cons);
+
+		if (i == MVNETA_PTXSU_MAX) {
+			MVNETA_WRITE(sc, MVNETA_PTXSU(0),
+			    MVNETA_PTXSU_NORB(MVNETA_PTXSU_MAX));
+
+			/* tweaking the iterator inside the loop is fun */
+			done -= MVNETA_PTXSU_MAX;
+			i = 0;
+		}
 	}
 
-	if (sc->sc_tx_cnt == 0)
-		ifp->if_timer = 0;
+	sc->sc_tx_cons = cons;
+
+	bus_dmamap_sync(sc->sc_dmat, MVNETA_DMA_MAP(sc->sc_txring), 0,
+	    MVNETA_DMA_LEN(sc->sc_txring),
+	    BUS_DMASYNC_PREREAD);
+
+	if (i > 0) {
+		MVNETA_WRITE(sc, MVNETA_PTXSU(0),
+		    MVNETA_PTXSU_NORB(i));
+	}
+	if (ifq_is_oactive(ifq))
+		ifq_restart(ifq);
 }
 
 uint8_t
@@ -1649,13 +1706,13 @@ mvneta_dmamem_free(struct mvneta_softc *sc, struct mvneta_dmamem *mdm)
 	free(mdm, M_DEVBUF, 0);
 }
 
-struct mbuf *
+static inline struct mbuf *
 mvneta_alloc_mbuf(struct mvneta_softc *sc, bus_dmamap_t map)
 {
 	struct mbuf *m = NULL;
 
 	m = MCLGETL(NULL, M_DONTWAIT, MCLBYTES);
-	if (!m)
+	if (m == NULL)
 		return (NULL);
 	m->m_len = m->m_pkthdr.len = MCLBYTES;
 
@@ -1676,29 +1733,243 @@ mvneta_fill_rx_ring(struct mvneta_softc *sc)
 {
 	struct mvneta_rx_desc *rxd;
 	struct mvneta_buf *rxb;
-	u_int slots;
+	unsigned int slots, used = 0;
+	unsigned int prod;
 
-	for (slots = if_rxr_get(&sc->sc_rx_ring, MVNETA_RX_RING_CNT);
+	bus_dmamap_sync(sc->sc_dmat, MVNETA_DMA_MAP(sc->sc_rxring),
+	    0, MVNETA_DMA_LEN(sc->sc_rxring), BUS_DMASYNC_POSTWRITE);
+
+	prod = sc->sc_rx_prod;
+
+	for (slots = if_rxr_get(&sc->sc_rx_ring, MVNETA_PRXSU_MAX);
 	    slots > 0; slots--) {
-		rxb = &sc->sc_rxbuf[sc->sc_rx_prod];
+		rxb = &sc->sc_rxbuf[prod];
 		rxb->tb_m = mvneta_alloc_mbuf(sc, rxb->tb_map);
 		if (rxb->tb_m == NULL)
 			break;
 
-		rxd = &sc->sc_rxdesc[sc->sc_rx_prod];
-		memset(rxd, 0, sizeof(*rxd));
+		rxd = &sc->sc_rxdesc[prod];
+		rxd->cmdsts = 0;
+		rxd->bufsize = 0;
+		rxd->bytecnt = 0;
 		rxd->bufptr = rxb->tb_map->dm_segs[0].ds_addr;
+		rxd->nextdescptr = 0;
+		rxd->_padding[0] = 0;
+		rxd->_padding[1] = 0;
+		rxd->_padding[2] = 0;
+		rxd->_padding[3] = 0;
 
-		bus_dmamap_sync(sc->sc_dmat, MVNETA_DMA_MAP(sc->sc_rxring),
-		    sc->sc_rx_prod * sizeof(*rxd), sizeof(*rxd),
-		    BUS_DMASYNC_PREWRITE);
+		prod = MVNETA_RX_RING_NEXT(prod);
+		used++;
+	}
+	if_rxr_put(&sc->sc_rx_ring, slots);
 
-		sc->sc_rx_prod = MVNETA_RX_RING_NEXT(sc->sc_rx_prod);
+	sc->sc_rx_prod = prod;
 
-		/* Tell him that there's a new free desc. */
-		MVNETA_WRITE(sc, MVNETA_PRXSU(0),
-		    MVNETA_PRXSU_NOOFNEWDESCRIPTORS(1));
+	bus_dmamap_sync(sc->sc_dmat, MVNETA_DMA_MAP(sc->sc_rxring),
+	    0, MVNETA_DMA_LEN(sc->sc_rxring), BUS_DMASYNC_PREWRITE);
+
+	if (used > 0)
+		MVNETA_WRITE(sc, MVNETA_PRXSU(0), MVNETA_PRXSU_NOND(used));
+}
+
+#if NKSTAT > 0
+
+/* this is used to sort and look up the array of kstats quickly */
+enum mvneta_stat {
+	mvneta_stat_good_octets_received,
+	mvneta_stat_bad_octets_received,
+	mvneta_stat_good_frames_received,
+	mvneta_stat_mac_trans_error,
+	mvneta_stat_bad_frames_received,
+	mvneta_stat_broadcast_frames_received,
+	mvneta_stat_multicast_frames_received,
+	mvneta_stat_frames_64_octets,
+	mvneta_stat_frames_65_to_127_octets,
+	mvneta_stat_frames_128_to_255_octets,
+	mvneta_stat_frames_256_to_511_octets,
+	mvneta_stat_frames_512_to_1023_octets,
+	mvneta_stat_frames_1024_to_max_octets,
+	mvneta_stat_good_octets_sent,
+	mvneta_stat_good_frames_sent,
+	mvneta_stat_excessive_collision,
+	mvneta_stat_multicast_frames_sent,
+	mvneta_stat_broadcast_frames_sent,
+	mvneta_stat_unrecog_mac_control_received,
+	mvneta_stat_good_fc_received,
+	mvneta_stat_bad_fc_received,
+	mvneta_stat_undersize,
+	mvneta_stat_fc_sent,
+	mvneta_stat_fragments,
+	mvneta_stat_oversize,
+	mvneta_stat_jabber,
+	mvneta_stat_mac_rcv_error,
+	mvneta_stat_bad_crc,
+	mvneta_stat_collisions,
+	mvneta_stat_late_collisions,
+
+	mvneta_stat_port_discard,
+	mvneta_stat_port_overrun,
+
+	mvnet_stat_count
+};
+
+struct mvneta_counter {
+	const char		 *name;
+	enum kstat_kv_unit	 unit;
+	bus_size_t		 reg;
+};
+
+static const struct mvneta_counter mvneta_counters[] = {
+	[mvneta_stat_good_octets_received] =
+	    { "rx good",	KSTAT_KV_U_BYTES,	0x0 /* 64bit */ },
+	[mvneta_stat_bad_octets_received] =
+	    { "rx bad",		KSTAT_KV_U_BYTES,	0x3008 },
+	[mvneta_stat_good_frames_received] =
+	    { "rx good",	KSTAT_KV_U_PACKETS,	0x3010 },
+	[mvneta_stat_mac_trans_error] =
+	    { "tx mac error",	KSTAT_KV_U_PACKETS,	0x300c },
+	[mvneta_stat_bad_frames_received] =
+	    { "rx bad",		KSTAT_KV_U_PACKETS,	0x3014 },
+	[mvneta_stat_broadcast_frames_received] =
+	    { "rx bcast",	KSTAT_KV_U_PACKETS,	0x3018 },
+	[mvneta_stat_multicast_frames_received] =
+	    { "rx mcast",	KSTAT_KV_U_PACKETS,	0x301c },
+	[mvneta_stat_frames_64_octets] =
+	    { "64B",		KSTAT_KV_U_PACKETS,	0x3020 },
+	[mvneta_stat_frames_65_to_127_octets] =
+	    { "65-127B",	KSTAT_KV_U_PACKETS,	0x3024 },
+	[mvneta_stat_frames_128_to_255_octets] =
+	    { "128-255B",	KSTAT_KV_U_PACKETS,	0x3028 },
+	[mvneta_stat_frames_256_to_511_octets] =
+	    { "256-511B",	KSTAT_KV_U_PACKETS,	0x302c },
+	[mvneta_stat_frames_512_to_1023_octets] =
+	    { "512-1023B",	KSTAT_KV_U_PACKETS,	0x3030 },
+	[mvneta_stat_frames_1024_to_max_octets] =
+	    { "1024-maxB",	KSTAT_KV_U_PACKETS,	0x3034 },
+	[mvneta_stat_good_octets_sent] =
+	    { "tx good",	KSTAT_KV_U_BYTES,	0x0 /* 64bit */ },
+	[mvneta_stat_good_frames_sent] = 
+	    { "tx good",	KSTAT_KV_U_PACKETS,	0x3040 },
+	[mvneta_stat_excessive_collision] = 
+	    { "tx excess coll",	KSTAT_KV_U_PACKETS,	0x3044 },
+	[mvneta_stat_multicast_frames_sent] = 
+	    { "tx mcast",	KSTAT_KV_U_PACKETS,	0x3048 },
+	[mvneta_stat_broadcast_frames_sent] = 
+	    { "tx bcast",	KSTAT_KV_U_PACKETS,	0x304c },
+	[mvneta_stat_unrecog_mac_control_received] = 
+	    { "rx unknown fc",	KSTAT_KV_U_PACKETS,	0x3050 },
+	[mvneta_stat_good_fc_received] = 
+	    { "rx fc good",	KSTAT_KV_U_PACKETS,	0x3058 },
+	[mvneta_stat_bad_fc_received] = 
+	    { "rx fc bad",	KSTAT_KV_U_PACKETS,	0x305c },
+	[mvneta_stat_undersize] = 
+	    { "rx undersize",	KSTAT_KV_U_PACKETS,	0x3060 },
+	[mvneta_stat_fc_sent] = 
+	    { "tx fc",		KSTAT_KV_U_PACKETS,	0x3054 },
+	[mvneta_stat_fragments] = 
+	    { "rx fragments",	KSTAT_KV_U_NONE,	0x3064 },
+	[mvneta_stat_oversize] = 
+	    { "rx oversize",	KSTAT_KV_U_PACKETS,	0x3068 },
+	[mvneta_stat_jabber] = 
+	    { "rx jabber",	KSTAT_KV_U_PACKETS,	0x306c },
+	[mvneta_stat_mac_rcv_error] = 
+	    { "rx mac errors",	KSTAT_KV_U_PACKETS,	0x3070 },
+	[mvneta_stat_bad_crc] = 
+	    { "rx bad crc",	KSTAT_KV_U_PACKETS,	0x3074 },
+	[mvneta_stat_collisions] = 
+	    { "rx colls",	KSTAT_KV_U_PACKETS,	0x3078 },
+	[mvneta_stat_late_collisions] = 
+	    { "rx late colls",	KSTAT_KV_U_PACKETS,	0x307c },
+
+	[mvneta_stat_port_discard] = 
+	    { "rx discard",	KSTAT_KV_U_PACKETS,	MVNETA_PXDFC },
+	[mvneta_stat_port_overrun] = 
+	    { "rx overrun",	KSTAT_KV_U_PACKETS,	MVNETA_POFC },
+};
+
+CTASSERT(nitems(mvneta_counters) == mvnet_stat_count);
+
+int
+mvneta_kstat_read(struct kstat *ks)
+{
+	struct mvneta_softc *sc = ks->ks_softc;
+	struct kstat_kv *kvs = ks->ks_data;
+	unsigned int i;
+	uint32_t hi, lo;
+
+	for (i = 0; i < nitems(mvneta_counters); i++) {
+		const struct mvneta_counter *c = &mvneta_counters[i];
+		if (c->reg == 0)
+			continue;
+
+		kstat_kv_u64(&kvs[i]) += (uint64_t)MVNETA_READ(sc, c->reg);
 	}
 
-	if_rxr_put(&sc->sc_rx_ring, slots);
+	/* handle the exceptions */
+
+	lo = MVNETA_READ(sc, 0x3000);
+	hi = MVNETA_READ(sc, 0x3004);
+	kstat_kv_u64(&kvs[mvneta_stat_good_octets_received]) +=
+	    (uint64_t)hi << 32 | (uint64_t)lo;
+
+	lo = MVNETA_READ(sc, 0x3038);
+	hi = MVNETA_READ(sc, 0x303c);
+	kstat_kv_u64(&kvs[mvneta_stat_good_octets_sent]) +=
+	    (uint64_t)hi << 32 | (uint64_t)lo;
+
+	nanouptime(&ks->ks_updated);
+
+	return (0);
 }
+
+void
+mvneta_kstat_tick(void *arg)
+{
+	struct mvneta_softc *sc = arg;
+
+	timeout_add_sec(&sc->sc_kstat_tick, 37);
+
+	if (mtx_enter_try(&sc->sc_kstat_lock)) {
+		mvneta_kstat_read(sc->sc_kstat);
+		mtx_leave(&sc->sc_kstat_lock);
+	}
+}
+
+void
+mvneta_kstat_attach(struct mvneta_softc *sc)
+{
+	struct kstat *ks;
+	struct kstat_kv *kvs;
+	unsigned int i;
+
+	mtx_init(&sc->sc_kstat_lock, IPL_SOFTCLOCK);
+	timeout_set(&sc->sc_kstat_tick, mvneta_kstat_tick, sc);
+
+	ks = kstat_create(sc->sc_dev.dv_xname, 0, "mvneta-stats", 0,
+	    KSTAT_T_KV, 0);
+	if (ks == NULL)
+		return;
+
+	kvs = mallocarray(nitems(mvneta_counters), sizeof(*kvs),
+	    M_DEVBUF, M_WAITOK|M_ZERO);
+	for (i = 0; i < nitems(mvneta_counters); i++) {
+		const struct mvneta_counter *c = &mvneta_counters[i];
+		kstat_kv_unit_init(&kvs[i], c->name,
+		    KSTAT_KV_T_COUNTER64, c->unit);
+	}
+
+	ks->ks_softc = sc;
+	ks->ks_data = kvs;
+	ks->ks_datalen = nitems(mvneta_counters) * sizeof(*kvs);
+	ks->ks_read = mvneta_kstat_read;
+	kstat_set_mutex(ks, &sc->sc_kstat_lock);
+
+	kstat_install(ks);
+
+	sc->sc_kstat = ks;
+
+	timeout_add_sec(&sc->sc_kstat_tick, 37);
+}
+
+#endif

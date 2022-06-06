@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.1166 2022/03/24 09:05:57 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.1171 2022/06/04 07:42:07 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -579,6 +579,12 @@ enum tty_code_code {
 #define ALL_MOUSE_MODES (MODE_MOUSE_STANDARD|MODE_MOUSE_BUTTON|MODE_MOUSE_ALL)
 #define MOTION_MOUSE_MODES (MODE_MOUSE_BUTTON|MODE_MOUSE_ALL)
 #define CURSOR_MODES (MODE_CURSOR|MODE_CURSOR_BLINKING|MODE_CURSOR_VERY_VISIBLE)
+
+/* Mouse protocol constants. */
+#define MOUSE_PARAM_MAX 0xff
+#define MOUSE_PARAM_UTF8_MAX 0x7ff
+#define MOUSE_PARAM_BTN_OFF 0x20
+#define MOUSE_PARAM_POS_OFF 0x21
 
 /* A single UTF-8 character. */
 typedef u_int utf8_char;
@@ -2024,6 +2030,7 @@ struct tmuxpeer *proc_add_peer(struct tmuxproc *, int,
 	    void (*)(struct imsg *, void *), void *);
 void	proc_remove_peer(struct tmuxpeer *);
 void	proc_kill_peer(struct tmuxpeer *);
+void	proc_flush_peer(struct tmuxpeer *);
 void	proc_toggle_log(struct tmuxproc *);
 pid_t	proc_fork_and_daemon(int *);
 uid_t	proc_get_peer_uid(struct tmuxpeer *);
@@ -2050,6 +2057,7 @@ u_int		 paste_buffer_order(struct paste_buffer *);
 time_t		 paste_buffer_created(struct paste_buffer *);
 const char	*paste_buffer_data(struct paste_buffer *, size_t *);
 struct paste_buffer *paste_walk(struct paste_buffer *);
+int		 paste_is_empty(void);
 struct paste_buffer *paste_get_top(const char **);
 struct paste_buffer *paste_get_name(const char *);
 void		 paste_free(struct paste_buffer *);
@@ -3017,7 +3025,7 @@ void		 layout_spread_out(struct window_pane *);
 
 /* layout-custom.c */
 char		*layout_dump(struct layout_cell *);
-int		 layout_parse(struct window *, const char *);
+int		 layout_parse(struct window *, const char *, char **);
 
 /* layout-set.c */
 int		 layout_set_lookup(const char *);
@@ -3082,8 +3090,9 @@ extern const struct window_mode window_client_mode;
 /* window-copy.c */
 extern const struct window_mode window_copy_mode;
 extern const struct window_mode window_view_mode;
-void printflike(2, 3) window_copy_add(struct window_pane *, const char *, ...);
-void printflike(2, 0) window_copy_vadd(struct window_pane *, const char *,
+void printflike(3, 4) window_copy_add(struct window_pane *, int, const char *,
+		     ...);
+void printflike(3, 0) window_copy_vadd(struct window_pane *, int, const char *,
 		     va_list);
 void		 window_copy_pageup(struct window_pane *, int);
 void		 window_copy_start_drag(struct client *, struct mouse_event *);
@@ -3265,5 +3274,16 @@ struct window_pane *spawn_pane(struct spawn_context *, char **);
 
 /* regsub.c */
 char		*regsub(const char *, const char *, const char *, int);
+
+/* server-acl.c */
+void			 server_acl_init(void);
+struct server_acl_user	*server_acl_user_find(uid_t);
+void 			 server_acl_display(struct cmdq_item *);
+void			 server_acl_user_allow(uid_t);
+void			 server_acl_user_deny(uid_t);
+void			 server_acl_user_allow_write(uid_t);
+void			 server_acl_user_deny_write(uid_t);
+int			 server_acl_join(struct client *);
+uid_t			 server_acl_get_uid(struct server_acl_user *);
 
 #endif /* TMUX_H */
