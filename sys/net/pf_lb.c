@@ -430,6 +430,8 @@ pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 			case AF_INET:
 				rpool->counter.addr32[0] =
 				    arc4random_uniform(~(rmask->addr32[0]) + 1);
+				rpool->counter.addr32[0] |=
+				    raddr->addr32[0] & rmask->addr32[0];
 				break;
 #ifdef INET6
 			case AF_INET6:
