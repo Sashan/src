@@ -3049,11 +3049,41 @@ pf_trans_set_commit(void)
 }
 
 void
-pf_pool_copyin(struct pf_pool *from, struct pf_pool *to)
+pf_pool_copyin(struct pf_pool *from, struct pf_pool *to, sa_family_t af)
 {
 	memmove(to, from, sizeof(*to));
 	to->kif = NULL;
 	to->addr.p.tbl = NULL;
+	if (to->addr.type == PF_ADDR_ADDRMASK) {
+		switch (af) {
+		case AF_INET:
+			to->addr.v.a.addr.addr32[0] =
+			    htonl(to->addr.v.a.addr.addr32[0]);
+			to->addr.v.a.mask.addr32[0] =
+			    htonl(to->addr.v.a.mask.addr32[0]);
+			break;
+		case AF_INET6:
+			to->addr.v.a.addr.addr32[0] =
+			    htonl(to->addr.v.a.addr.addr32[0]);
+			to->addr.v.a.addr.addr32[1] =
+			    htonl(to->addr.v.a.addr.addr32[1]);
+			to->addr.v.a.addr.addr32[2] =
+			    htonl(to->addr.v.a.addr.addr32[2]);
+			to->addr.v.a.addr.addr32[3] =
+			    htonl(to->addr.v.a.addr.addr32[3]);
+
+			to->addr.v.a.mask.addr32[0] =
+			    htonl(to->addr.v.a.mask.addr32[0]);
+			to->addr.v.a.mask.addr32[1] =
+			    htonl(to->addr.v.a.mask.addr32[1]);
+			to->addr.v.a.mask.addr32[2] =
+			    htonl(to->addr.v.a.mask.addr32[2]);
+			to->addr.v.a.mask.addr32[3] =
+			    htonl(to->addr.v.a.mask.addr32[3]);
+		default:
+			unhandled_af(af);
+		}
+	}
 }
 
 int
