@@ -106,7 +106,8 @@ int			 pf_addr_setup(struct pf_ruleset *,
 struct pfi_kif		*pf_kif_setup(struct pfi_kif *);
 void			 pf_addr_copyout(struct pf_addr_wrap *);
 void			 pf_trans_set_commit(void);
-void			 pf_pool_copyin(struct pf_pool *, struct pf_pool *);
+void			 pf_pool_copyin(struct pf_pool *, struct pf_pool *,
+			    sa_family_t);
 int			 pf_validate_range(u_int8_t, u_int16_t[2], int);
 int			 pf_rule_copyin(struct pf_rule *, struct pf_rule *);
 int			 pf_rule_checkaf(struct pf_rule *);
@@ -3132,9 +3133,9 @@ pf_rule_copyin(struct pf_rule *from, struct pf_rule *to)
 	strlcpy(to->overload_tblname, from->overload_tblname,
 	    sizeof(to->overload_tblname));
 
-	pf_pool_copyin(&from->nat, &to->nat);
-	pf_pool_copyin(&from->rdr, &to->rdr);
-	pf_pool_copyin(&from->route, &to->route);
+	pf_pool_copyin(&from->nat, &to->nat, from->naf);
+	pf_pool_copyin(&from->rdr, &to->rdr, from->naf);
+	pf_pool_copyin(&from->route, &to->route, from->af);
 
 	if (pf_validate_range(to->rdr.port_op, to->rdr.proxy_port,
 	    PF_ORDER_HOST))
