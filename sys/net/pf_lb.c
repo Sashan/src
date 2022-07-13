@@ -428,10 +428,7 @@ pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 		} else if (init_addr != NULL && PF_AZERO(init_addr, af)) {
 			switch (af) {
 			case AF_INET:
-				rpool->counter.addr32[0] =
-				    arc4random_uniform(~(rmask->addr32[0]) + 1);
-				rpool->counter.addr32[0] |=
-				    raddr->addr32[0] & rmask->addr32[0];
+				rpool->counter.addr32[0] = arc4random();
 				break;
 #ifdef INET6
 			case AF_INET6:
@@ -454,7 +451,8 @@ pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 			default:
 				unhandled_af(af);
 			}
-			pf_poolmask(naddr, raddr, rmask, &rpool->counter, af);
+			pf_poolmask(naddr, htonl(raddr->addr32[0]),
+			    htonl(rmask->addr32[0]), &rpool->counter, af);
 			pf_addrcpy(init_addr, naddr, af);
 
 		} else {
