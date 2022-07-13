@@ -3133,8 +3133,8 @@ pf_rule_copyin(struct pf_rule *from, struct pf_rule *to)
 	strlcpy(to->overload_tblname, from->overload_tblname,
 	    sizeof(to->overload_tblname));
 
-	pf_pool_copyin(&from->nat, &to->nat, from->naf);
-	pf_pool_copyin(&from->rdr, &to->rdr, from->naf);
+	pf_pool_copyin(&from->nat, &to->nat, from->af);
+	pf_pool_copyin(&from->rdr, &to->rdr, from->af);
 	pf_pool_copyin(&from->route, &to->route, from->af);
 
 	if (pf_validate_range(to->rdr.port_op, to->rdr.proxy_port,
