@@ -3242,6 +3242,37 @@ pf_step_into_anchor(struct pf_test_ctx *ctx, struct pf_rule *r)
 }
 
 void
+pf_poolmask_dbg(struct pf_addr *naddr, struct pf_addr *raddr,
+    struct pf_addr *rmask, struct pf_addr *saddr, sa_family_t af)
+{
+	switch (af) {
+	case AF_INET:
+		naddr->addr32[0] = (raddr->addr32[0] & rmask->addr32[0]) |
+		((rmask->addr32[0] ^ 0xffffffff ) & saddr->addr32[0]);
+		panic("%s naddr: %x, raddr: %x, rmask: %x (%x), saddr: %x (%x)\n",
+		    __func__,
+		    naddr->addr32[0], raddr->addr32[0], rmask->addr32[0],
+		    (rmask->addr32[0] ^ 0xffffffff), saddr->addr32[0],
+		    (rmask->addr32[0] ^ 0xffffffff ) & saddr->addr32[0]);
+		break;
+#ifdef INET6
+	case AF_INET6:
+		naddr->addr32[0] = (raddr->addr32[0] & rmask->addr32[0]) |
+		((rmask->addr32[0] ^ 0xffffffff ) & saddr->addr32[0]);
+		naddr->addr32[1] = (raddr->addr32[1] & rmask->addr32[1]) |
+		((rmask->addr32[1] ^ 0xffffffff ) & saddr->addr32[1]);
+		naddr->addr32[2] = (raddr->addr32[2] & rmask->addr32[2]) |
+		((rmask->addr32[2] ^ 0xffffffff ) & saddr->addr32[2]);
+		naddr->addr32[3] = (raddr->addr32[3] & rmask->addr32[3]) |
+		((rmask->addr32[3] ^ 0xffffffff ) & saddr->addr32[3]);
+		break;
+#endif /* INET6 */
+	default:
+		unhandled_af(af);
+	}
+}
+
+void
 pf_poolmask(struct pf_addr *naddr, struct pf_addr *raddr,
     struct pf_addr *rmask, struct pf_addr *saddr, sa_family_t af)
 {
@@ -3250,6 +3281,7 @@ pf_poolmask(struct pf_addr *naddr, struct pf_addr *raddr,
 		naddr->addr32[0] = (raddr->addr32[0] & rmask->addr32[0]) |
 		((rmask->addr32[0] ^ 0xffffffff ) & saddr->addr32[0]);
 		panic("%s naddr: %x, raddr: %x, rmask: %x (%x), saddr: %x (%x)\n",
+		    __func__,
 		    naddr->addr32[0], raddr->addr32[0], rmask->addr32[0],
 		    (rmask->addr32[0] ^ 0xffffffff), saddr->addr32[0],
 		    (rmask->addr32[0] ^ 0xffffffff ) & saddr->addr32[0]);
