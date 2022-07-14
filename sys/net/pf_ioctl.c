@@ -106,8 +106,7 @@ int			 pf_addr_setup(struct pf_ruleset *,
 struct pfi_kif		*pf_kif_setup(struct pfi_kif *);
 void			 pf_addr_copyout(struct pf_addr_wrap *);
 void			 pf_trans_set_commit(void);
-void			 pf_pool_copyin(struct pf_pool *, struct pf_pool *,
-			    sa_family_t);
+void			 pf_pool_copyin(struct pf_pool *, struct pf_pool *);
 int			 pf_validate_range(u_int8_t, u_int16_t[2], int);
 int			 pf_rule_copyin(struct pf_rule *, struct pf_rule *);
 int			 pf_rule_checkaf(struct pf_rule *);
@@ -3050,41 +3049,11 @@ pf_trans_set_commit(void)
 }
 
 void
-pf_pool_copyin(struct pf_pool *from, struct pf_pool *to, sa_family_t af)
+pf_pool_copyin(struct pf_pool *from, struct pf_pool *to)
 {
 	memmove(to, from, sizeof(*to));
 	to->kif = NULL;
 	to->addr.p.tbl = NULL;
-	if (to->addr.type == PF_ADDR_ADDRMASK) {
-		switch (af) {
-		case AF_INET:
-			to->addr.v.a.addr.addr32[0] =
-			    htonl(to->addr.v.a.addr.addr32[0]);
-			to->addr.v.a.mask.addr32[0] =
-			    htonl(to->addr.v.a.mask.addr32[0]);
-			break;
-		case AF_INET6:
-			to->addr.v.a.addr.addr32[0] =
-			    htonl(to->addr.v.a.addr.addr32[0]);
-			to->addr.v.a.addr.addr32[1] =
-			    htonl(to->addr.v.a.addr.addr32[1]);
-			to->addr.v.a.addr.addr32[2] =
-			    htonl(to->addr.v.a.addr.addr32[2]);
-			to->addr.v.a.addr.addr32[3] =
-			    htonl(to->addr.v.a.addr.addr32[3]);
-
-			to->addr.v.a.mask.addr32[0] =
-			    htonl(to->addr.v.a.mask.addr32[0]);
-			to->addr.v.a.mask.addr32[1] =
-			    htonl(to->addr.v.a.mask.addr32[1]);
-			to->addr.v.a.mask.addr32[2] =
-			    htonl(to->addr.v.a.mask.addr32[2]);
-			to->addr.v.a.mask.addr32[3] =
-			    htonl(to->addr.v.a.mask.addr32[3]);
-		default:
-			unhandled_af(af);
-		}
-	}
 }
 
 int
@@ -3133,9 +3102,9 @@ pf_rule_copyin(struct pf_rule *from, struct pf_rule *to)
 	strlcpy(to->overload_tblname, from->overload_tblname,
 	    sizeof(to->overload_tblname));
 
-	pf_pool_copyin(&from->nat, &to->nat, from->af);
-	pf_pool_copyin(&from->rdr, &to->rdr, from->af);
-	pf_pool_copyin(&from->route, &to->route, from->af);
+	pf_pool_copyin(&from->nat, &to->nat);
+	pf_pool_copyin(&from->rdr, &to->rdr);
+	pf_pool_copyin(&from->route, &to->route);
 
 	if (pf_validate_range(to->rdr.port_op, to->rdr.proxy_port,
 	    PF_ORDER_HOST))
