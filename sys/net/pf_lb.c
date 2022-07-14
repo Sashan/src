@@ -456,12 +456,12 @@ pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 			default:
 				unhandled_af(af);
 			}
-			pf_poolmask_dbg(naddr, raddr, rmask, &rpool->counter, af);
+			pf_poolmask(naddr, raddr, rmask, &rpool->counter, af);
 			pf_addrcpy(init_addr, naddr, af);
 
 		} else {
 			pf_addr_inc(&rpool->counter, af);
-			pf_poolmask_dbg(naddr, raddr, rmask, &rpool->counter, af);
+			pf_poolmask(naddr, raddr, rmask, &rpool->counter, af);
 		}
 		break;
 	case PF_POOL_SRCHASH:
@@ -505,11 +505,16 @@ pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 			}
 		} else if (PF_AZERO(&rpool->counter, af)) {
 			/*
-			 * fall back to POOL_NONE if there are no addresses in
-			 * pool
+			 * fall back to POOL_NONE if there is a single host
+			 * address in pool.
 			 */
-			pf_addrcpy(naddr, raddr, af);
-			break;
+			if ((af == AF_INET &&
+			    rmask->addr32[0] == INADDR_BROADCAST) ||
+			    (af == AF_INET6 &&
+			    IN6_ARE_ADDR_EQUAL(&rmask->v6, &in6mask128))) {
+				pf_addrcpy(naddr, raddr, af);
+				break;
+			}
 		} else if (pf_match_addr(0, raddr, rmask, &rpool->counter, af))
 			return (1);
 
@@ -540,7 +545,7 @@ pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 		pf_addr_inc(&rpool->counter, af);
 		if (init_addr != NULL && PF_AZERO(init_addr, af))
 			pf_addrcpy(init_addr, &rpool->counter, af);
-		pf_poolmask_dbg(naddr, raddr, rmask, &rpool->counter, af);
+		pf_poolmask(naddr, raddr, rmask, &rpool->counter, af);
 		break;
 	case PF_POOL_LEASTSTATES:
 		/* retrieve an address first */
