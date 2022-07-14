@@ -3249,6 +3249,10 @@ pf_poolmask(struct pf_addr *naddr, struct pf_addr *raddr,
 	case AF_INET:
 		naddr->addr32[0] = (raddr->addr32[0] & rmask->addr32[0]) |
 		((rmask->addr32[0] ^ 0xffffffff ) & saddr->addr32[0]);
+		panic("%s naddr: %x, raddr: %x, rmask: %x (%x), saddr: %x (%x)\n",
+		    naddr->addr32[0], raddr->addr32[0], rmask->addr32[0],
+		    (rmask->addr32[0] ^ 0xffffffff), saddr->addr32[0],
+		    (rmask->addr32[0] ^ 0xffffffff ) & saddr->addr32[0]);
 		break;
 #ifdef INET6
 	case AF_INET6:
