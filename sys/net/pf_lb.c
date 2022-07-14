@@ -540,7 +540,7 @@ pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 		pf_addr_inc(&rpool->counter, af);
 		if (init_addr != NULL && PF_AZERO(init_addr, af))
 			pf_addrcpy(init_addr, &rpool->counter, af);
-		pf_poolmask(naddr, raddr, rmask, &rpool->counter, af);
+		pf_poolmask_dbg(naddr, raddr, rmask, &rpool->counter, af);
 		break;
 	case PF_POOL_LEASTSTATES:
 		/* retrieve an address first */
