@@ -344,6 +344,18 @@ pf_map_addr_sticky(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 	return (0);
 }
 
+uint32_t
+pf_rand_addr(uint32_t mask)
+{
+	uint32_t addr;
+
+	mask = ntohl(mask);
+	do {
+		addr = arc4random_uniform(~mask + 1);
+	} while (addr == 0);
+	return (htonl(addr));
+}
+
 int
 pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
     struct pf_addr *naddr, struct pf_addr *init_addr, struct pf_src_node **sns,
@@ -428,29 +440,29 @@ pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 		} else if (init_addr != NULL && PF_AZERO(init_addr, af)) {
 			switch (af) {
 			case AF_INET:
-				rpool->counter.addr32[0] = arc4random_uniform(
-				    ~rmask->addr32[0] + 1);
-				if (rpool->counter.addr32[0] == 0)
-					rpool->counter.addr32[0]++;
-				rpool->counter.addr32[0] =
-				    htonl(rpool->counter.addr32[0]);
+				rpool->counter.addr32[0] = pf_rand_addr(
+				    rmask->addr32[0]);
 				break;
 #ifdef INET6
 			case AF_INET6:
 				if (rmask->addr32[3] != 0xffffffff)
-					rpool->counter.addr32[3] = arc4random();
+					rpool->counter.addr32[3] = pf_rand_addr(
+					    rmask->addr32[3]);
 				else
 					break;
 				if (rmask->addr32[2] != 0xffffffff)
-					rpool->counter.addr32[2] = arc4random();
+					rpool->counter.addr32[2] = pf_rand_addr(
+					    rmask->addr32[2]);
 				else
 					break;
 				if (rmask->addr32[1] != 0xffffffff)
-					rpool->counter.addr32[1] = arc4random();
+					rpool->counter.addr32[1] = pf_rand_addr(
+					    rmask->addr32[1]);
 				else
 					break;
 				if (rmask->addr32[0] != 0xffffffff)
-					rpool->counter.addr32[0] = arc4random();
+					rpool->counter.addr32[0] = pf_rand_addr(
+					    rmask->addr32[0]);
 				break;
 #endif /* INET6 */
 			default:
