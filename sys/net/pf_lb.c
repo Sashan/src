@@ -349,10 +349,14 @@ pf_rand_addr(uint32_t mask)
 {
 	uint32_t addr;
 
+	if (mask == 0)
+		return (arc4random());
+
 	mask = ntohl(mask);
 	do {
 		addr = arc4random_uniform(~mask + 1);
 	} while (addr == 0);
+
 	return (htonl(addr));
 }
 
