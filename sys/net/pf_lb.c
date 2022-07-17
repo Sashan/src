@@ -352,12 +352,34 @@ pf_rand_addr(uint32_t mask)
 	if (mask == 0)
 		return (arc4random());
 
-	mask = ntohl(mask);
+	mask = ~ntohl(mask);
 	do {
-		addr = arc4random_uniform(~mask + 1);
-	} while (addr == 0);
+		addr = arc4random_uniform(mask + 1);
+	} while ((addr == 0) || (addr == mask));
 
 	return (htonl(addr));
+}
+
+int
+pf_is_broadcast_addr(struct pf_addr *a, struct pf_addr *m, sa_family_t af)
+{
+	int	rv;
+
+	switch (af) {
+	case AF_INET:
+		rv = (a->addr32[0] == ~m->addr32[0]);
+		break;
+	case AF_INET6:
+		rv = ((a->addr32[0] == ~m->addr32[0]) &&
+		    (a->addr32[1] == ~m->addr32[1]) &&
+		    (a->addr32[2] == ~m->addr32[2]) &&
+		    (a->addr32[3] == ~m->addr32[3]));
+		break;
+	default:
+		unhandled_af(af);
+	}
+
+	return (rv);
 }
 
 int
@@ -561,6 +583,11 @@ pf_map_addr(sa_family_t af, struct pf_rule *r, struct pf_addr *saddr,
 		pf_addr_inc(&rpool->counter, af);
 		if (init_addr != NULL && PF_AZERO(init_addr, af))
 			pf_addrcpy(init_addr, &rpool->counter, af);
+
+		/* skip network broadcast addresses */
+		if (pf_is_broadcast_addr(&rpool->counter, rmask, af))
+			pf_addr_inc(&rpool->counter, af);
+
 		pf_poolmask(naddr, raddr, rmask, &rpool->counter, af);
 		break;
 	case PF_POOL_LEASTSTATES:
