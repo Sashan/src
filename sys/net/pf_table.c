@@ -1875,7 +1875,7 @@ pfr_ina_begin(struct pfr_table *trs, u_int32_t *ticket, int *ndel, int flags)
 	if (!(flags & PFR_FLAG_DUMMY)) {
 		pfr_setflags_ktables(&workq);
 		if (ticket != NULL)
-			*ticket = ++rs->tticket;
+			*ticket = ++rs->tversion;
 		rs->topen = 1;
 	} else
 		pf_remove_if_empty_ruleset(rs);
@@ -1903,7 +1903,7 @@ pfr_ina_define(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 	    flags & PFR_FLAG_USERIOCTL))
 		return (EINVAL);
 	rs = pf_find_ruleset(tbl->pfrt_anchor);
-	if (rs == NULL || !rs->topen || ticket != rs->tticket)
+	if (rs == NULL || !rs->topen || ticket != rs->tversion)
 		return (EBUSY);
 	tbl->pfrt_flags |= PFR_TFLAG_INACTIVE;
 	SLIST_INIT(&tableq);
@@ -2001,7 +2001,7 @@ pfr_ina_rollback(struct pfr_table *trs, u_int32_t ticket, int *ndel, int flags)
 
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
 	rs = pf_find_ruleset(trs->pfrt_anchor);
-	if (rs == NULL || !rs->topen || ticket != rs->tticket)
+	if (rs == NULL || !rs->topen || ticket != rs->tversion)
 		return (0);
 	SLIST_INIT(&workq);
 	RB_FOREACH(p, pfr_ktablehead, &pfr_ktables) {
@@ -2034,7 +2034,7 @@ pfr_ina_commit(struct pfr_table *trs, u_int32_t ticket, int *nadd,
 
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
 	rs = pf_find_ruleset(trs->pfrt_anchor);
-	if (rs == NULL || !rs->topen || ticket != rs->tticket)
+	if (rs == NULL || !rs->topen || ticket != rs->tversion)
 		return (EBUSY);
 
 	SLIST_INIT(&workq);

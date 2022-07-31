@@ -929,12 +929,12 @@ struct pf_ruleset {
 		struct {
 			struct pf_rulequeue	*ptr;
 			u_int32_t		 rcount;
-			u_int32_t		 ticket;
+			u_int32_t		 version;
 			int			 open;
 		}			 active, inactive;
 	}			 rules;
 	struct pf_anchor	*anchor;
-	u_int32_t		 tticket;
+	u_int32_t		 tversion;
 	int			 tables;
 	int			 topen;
 };

@@ -1598,7 +1598,7 @@ pfctl_rules(int dev, char *filename, int opts, int optimize,
 		 */
 		if (pfctl_ruleset_trans(&pf, anchorname, pf.anchor))
 			ERRX("pfctl_rules");
-		pf.astack[0]->ruleset.tticket =
+		pf.astack[0]->ruleset.tversion =
 		    pfctl_get_ticket(t, PF_TRANS_TABLE, anchorname);
 	}
 

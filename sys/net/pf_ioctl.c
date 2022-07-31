@@ -359,7 +359,7 @@ pf_purge_rule(struct pf_rule *rule)
 	ruleset->rules.active.rcount--;
 	TAILQ_FOREACH(rule, ruleset->rules.active.ptr, entries)
 		rule->nr = nr++;
-	ruleset->rules.active.ticket++;
+	ruleset->rules.active.version++;
 	pf_calc_skip_steps(ruleset->rules.active.ptr);
 	pf_remove_if_empty_ruleset(ruleset);
 
@@ -536,7 +536,7 @@ pf_begin_rules(u_int32_t *ticket, const char *anchor)
 		pf_rm_rule(rs->rules.inactive.ptr, rule);
 		rs->rules.inactive.rcount--;
 	}
-	*ticket = ++rs->rules.inactive.ticket;
+	*ticket = ++rs->rules.inactive.version;
 	rs->rules.inactive.open = 1;
 	return (0);
 }
@@ -549,7 +549,7 @@ pf_rollback_rules(u_int32_t ticket, char *anchor)
 
 	rs = pf_find_ruleset(anchor);
 	if (rs == NULL || !rs->rules.inactive.open ||
-	    rs->rules.inactive.ticket != ticket)
+	    rs->rules.inactive.version != ticket)
 		return;
 	while ((rule = TAILQ_FIRST(rs->rules.inactive.ptr)) != NULL) {
 		pf_rm_rule(rs->rules.inactive.ptr, rule);
@@ -840,7 +840,7 @@ pf_commit_rules(u_int32_t ticket, char *anchor)
 
 	rs = pf_find_ruleset(anchor);
 	if (rs == NULL || !rs->rules.inactive.open ||
-	    ticket != rs->rules.inactive.ticket)
+	    ticket != rs->rules.inactive.version)
 		return (EBUSY);
 
 	if (rs == &pf_main_ruleset)
@@ -855,7 +855,7 @@ pf_commit_rules(u_int32_t ticket, char *anchor)
 	rs->rules.inactive.ptr = old_rules;
 	rs->rules.inactive.rcount = old_rcount;
 
-	rs->rules.active.ticket = rs->rules.inactive.ticket;
+	rs->rules.active.version = rs->rules.inactive.version;
 	pf_calc_skip_steps(rs->rules.active.ptr);
 
 
@@ -1197,7 +1197,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		NET_LOCK();
 		PF_LOCK();
-		pq->ticket = pf_main_ruleset.rules.active.ticket;
+		pq->ticket = pf_main_ruleset.rules.active.version;
 
 		/* save state to not run over them all each time? */
 		qs = TAILQ_FIRST(pf_queues_active);
@@ -1218,7 +1218,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		NET_LOCK();
 		PF_LOCK();
-		if (pq->ticket != pf_main_ruleset.rules.active.ticket) {
+		if (pq->ticket != pf_main_ruleset.rules.active.version) {
 			error = EBUSY;
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -1249,7 +1249,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		NET_LOCK();
 		PF_LOCK();
-		if (pq->ticket != pf_main_ruleset.rules.active.ticket) {
+		if (pq->ticket != pf_main_ruleset.rules.active.version) {
 			error = EBUSY;
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -1296,7 +1296,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		NET_LOCK();
 		PF_LOCK();
-		if (q->ticket != pf_main_ruleset.rules.inactive.ticket) {
+		if (q->ticket != pf_main_ruleset.rules.inactive.version) {
 			error = EBUSY;
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -1392,7 +1392,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			pf_rule_free(rule);
 			goto fail;
 		}
-		if (pr->ticket != ruleset->rules.inactive.ticket) {
+		if (pr->ticket != ruleset->rules.inactive.version) {
 			error = EBUSY;
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -1471,7 +1471,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			pr->nr = tail->nr + 1;
 		else
 			pr->nr = 0;
-		pr->ticket = ruleset->rules.active.ticket;
+		pr->ticket = ruleset->rules.active.version;
 		PF_UNLOCK();
 		NET_UNLOCK();
 		break;
@@ -1493,7 +1493,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			NET_UNLOCK();
 			goto fail;
 		}
-		if (pr->ticket != ruleset->rules.active.ticket) {
+		if (pr->ticket != ruleset->rules.active.version) {
 			error = EBUSY;
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -1569,7 +1569,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			if (ruleset == NULL)
 				error = EINVAL;
 			else
-				pcr->ticket = ++ruleset->rules.active.ticket;
+				pcr->ticket = ++ruleset->rules.active.version;
 
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -1619,7 +1619,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		if (pcr->ticket != ruleset->rules.active.ticket) {
+		if (pcr->ticket != ruleset->rules.active.version) {
 			error = EINVAL;
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -1717,7 +1717,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		TAILQ_FOREACH(oldrule, ruleset->rules.active.ptr, entries)
 			oldrule->nr = nr++;
 
-		ruleset->rules.active.ticket++;
+		ruleset->rules.active.version++;
 
 		pf_calc_skip_steps(ruleset->rules.active.ptr);
 		pf_remove_if_empty_ruleset(ruleset);
@@ -2642,7 +2642,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			case PF_TRANS_TABLE:
 				rs = pf_find_ruleset(ioe->anchor);
 				if (rs == NULL || !rs->topen || ioe->ticket !=
-				     rs->tticket) {
+				     rs->tversion) {
 					PF_UNLOCK();
 					NET_UNLOCK();
 					free(table, M_TEMP, sizeof(*table));
@@ -2655,7 +2655,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				rs = pf_find_ruleset(ioe->anchor);
 				if (rs == NULL ||
 				    !rs->rules.inactive.open ||
-				    rs->rules.inactive.ticket !=
+				    rs->rules.inactive.version !=
 				    ioe->ticket) {
 					PF_UNLOCK();
 					NET_UNLOCK();

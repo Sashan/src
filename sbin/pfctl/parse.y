@@ -4008,7 +4008,7 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 		    " for <%s>\n", file->name, yylval.lineno, name);
 	if (!(pf->opts & PF_OPT_NOACTION) &&
 	    pfctl_define_table(name, opts->flags, opts->init_addr,
-	    pf->anchor->path, &ab, pf->anchor->ruleset.tticket)) {
+	    pf->anchor->path, &ab, pf->anchor->ruleset.tversion)) {
 		yyerror("cannot define table %s: %s", name,
 		    pf_strerror(errno));
 		goto _error;
