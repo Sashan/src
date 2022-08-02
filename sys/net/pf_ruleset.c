@@ -290,6 +290,24 @@ pf_find_or_create_ruleset(struct pf_rules_container *rc, const char *path)
 	return (&anchor->ruleset);
 }
 
+u_int32_t
+pf_get_ruleset_version(const char *path)
+{
+	struct pf_ruleset	*rs;
+	u_int32_t		 version;
+
+	PF_LOCK();
+	rs = pf_find_ruleset(&pf_global, path);
+	if (rs != NULL) {
+		rs->rules.version++;
+		version = rs->rules.version;
+	} else
+		version = 0;
+	PF_UNLOCK();
+
+	return (version);
+}
+
 void
 pf_remove_if_empty_ruleset(struct pf_rules_container *rc,
     struct pf_ruleset *ruleset)

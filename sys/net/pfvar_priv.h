@@ -39,6 +39,8 @@
 
 #include <sys/rwlock.h>
 #include <sys/mutex.h>
+#include <sys/queue.h>
+#include <net/pfvar.h>
 
 /*
  *
@@ -209,6 +211,15 @@ struct pf_pdesc {
 	} hdr;
 };
 
+struct pf_trans {
+	pid_t			pid;		/* process id */
+	uint64_t		ticket;
+	LIST_ENTRY(pf_trans)	entry;
+	struct pf_rules_container
+				rc;
+	struct pfr_ktablehead	ktables;
+};
+
 extern struct task	pf_purge_task;
 extern struct timeout	pf_purge_to;
 
@@ -264,6 +275,7 @@ extern struct rwlock	pf_state_lock;
 
 extern void			 pf_purge_timeout(void *);
 extern void			 pf_purge(void *);
+extern u_int32_t		 pf_get_ruleset_version(const char *);
 #endif /* _KERNEL */
 
 #endif /* _NET_PFVAR_PRIV_H_ */

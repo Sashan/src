@@ -925,13 +925,9 @@ struct pf_anchor;
 
 struct pf_ruleset {
 	struct {
-		struct pf_rulequeue	 queues[2];
-		struct {
-			struct pf_rulequeue	*ptr;
-			u_int32_t		 rcount;
-			u_int32_t		 version;
-			int			 open;
-		}			 active, inactive;
+		struct pf_rulequeue	*ptr;
+		u_int32_t		 rcount;
+		u_int32_t		 version;
 	}			 rules;
 	struct pf_anchor	*anchor;
 	u_int32_t		 tversion;
@@ -1550,6 +1546,7 @@ struct pfioc_ruleset {
 struct pfioc_trans {
 	int		 size;	/* number of elements */
 	int		 esize; /* size of each element in bytes */
+	uint64_t	 ticket;
 	struct pfioc_trans_e {
 		int		type;
 		char		anchor[PATH_MAX];

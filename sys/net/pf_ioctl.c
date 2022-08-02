@@ -116,6 +116,13 @@ void			 pf_qid_unref(u_int16_t);
 int			 pf_states_clr(struct pfioc_state_kill *);
 int			 pf_states_get(struct pfioc_states *);
 
+struct pf_trans 	*pf_open_trans(pid_t);
+struct pf_trans		*pf_find_trans(pid_t);
+int			 pf_begin_trans(struct pf_trans *);
+int			 pf_commit_trans(struct pf_trans *);
+void			 pf_free_trans(struct pf_trans *);
+void			 pf_rollback_trans(struct pf_trans *);
+
 struct pf_rule		 pf_default_rule, pf_default_rule_new;
 
 struct {
@@ -165,6 +172,8 @@ int			 pf_rtlabel_add(struct pf_addr_wrap *);
 void			 pf_rtlabel_remove(struct pf_addr_wrap *);
 void			 pf_rtlabel_copyout(struct pf_addr_wrap *);
 
+uint64_t trans_ticket = 1;
+LIST_HEAD(, struct pf_trans)	pf_ioctl_trans;
 
 void
 pfattach(int num)
@@ -273,8 +282,29 @@ pfopen(dev_t dev, int flags, int fmt, struct proc *p)
 int
 pfclose(dev_t dev, int flags, int fmt, struct proc *p)
 {
+	struct pf_transe *w, *s;
+	LIST_HEAD(,struct pf_trans)	tmp_list;
+
 	if (minor(dev) >= 1)
 		return (ENXIO);
+
+	if (flags & FWRITE) {
+		LIST_INIT(&tmp_list);
+		rw_enter_write(&pfioctl_rw);
+		LIST_FOREACH_SAFE(w, &pf_ioctl_trans, entry, s) {
+			if (w->pid == p->p_p->ps_pid) {
+				LIST_REMOVE(w, entry);
+				LIST_INSERT_HEAD(&tmp, w, entry);
+			}
+		}
+		rw_exit_write(&pfioctl_rw);
+
+		while ((w = LIST_FIRST(&tmp_list)) != NULL) {
+			LIST_REMOVE(w, entry);
+			pf_free_trans(w);
+		}
+	}
+
 	return (0);
 }
 
@@ -525,19 +555,18 @@ pf_qid_unref(u_int16_t qid)
 }
 
 int
-pf_begin_rules(u_int32_t *ticket, const char *anchor)
+pf_begin_rules(struct pf_trans *t, u_int32_t *version, const char *anchor)
 {
-	struct pf_ruleset	*rs;
-	struct pf_rule		*rule;
 
-	if ((rs = pf_find_or_create_ruleset(&pf_global, anchor)) == NULL)
+	while (*path == '/')
+		path++;
+
+	*ticket = pf_get_ruleset_version(anchor);
+
+	if ((*path != '\0') &&
+	    (pf_find_or_create_ruleset(&t->rc, path) == NULL))
 		return (EINVAL);
-	while ((rule = TAILQ_FIRST(rs->rules.inactive.ptr)) != NULL) {
-		pf_rm_rule(rs->rules.inactive.ptr, rule);
-		rs->rules.inactive.rcount--;
-	}
-	*ticket = ++rs->rules.inactive.version;
-	rs->rules.inactive.open = 1;
+	
 	return (0);
 }
 
@@ -2471,12 +2500,15 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pfioc_trans_e	*ioe;
 		struct pfr_table	*table;
+		struct pf_trans		*t = NULL;
 		int			 i;
 
 		if (io->esize != sizeof(*ioe)) {
 			error = ENODEV;
 			goto fail;
 		}
+
+		t = pf_open_trans(p->p_p->ps_pid);
 		ioe = malloc(sizeof(*ioe), M_TEMP, M_WAITOK);
 		table = malloc(sizeof(*table), M_TEMP, M_WAITOK);
 		NET_LOCK();
@@ -2489,6 +2521,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			if (copyin(io->array+i, ioe, sizeof(*ioe))) {
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
+				pf_rollback_trans(t);
 				error = EFAULT;
 				goto fail;
 			}
@@ -2496,51 +2529,51 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			    sizeof(ioe->anchor)) {
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
+				pf_rollback_trans(t);
 				error = ENAMETOOLONG;
 				goto fail;
 			}
-			NET_LOCK();
-			PF_LOCK();
 			switch (ioe->type) {
 			case PF_TRANS_TABLE:
 				memset(table, 0, sizeof(*table));
 				strlcpy(table->pfrt_anchor, ioe->anchor,
 				    sizeof(table->pfrt_anchor));
-				if ((error = pfr_ina_begin(table,
+				if ((error = pfr_ina_begin(trans, table,
 				    &ioe->ticket, NULL, 0))) {
 					PF_UNLOCK();
 					NET_UNLOCK();
 					free(table, M_TEMP, sizeof(*table));
 					free(ioe, M_TEMP, sizeof(*ioe));
+					pf_rollback_trans(t);
 					goto fail;
 				}
 				break;
 			case PF_TRANS_RULESET:
-				if ((error = pf_begin_rules(&ioe->ticket,
-				    ioe->anchor))) {
+				if ((error = pf_begin_rules(trans,
+				    &ioe->ticket, NULL, 0))) {
 					PF_UNLOCK();
 					NET_UNLOCK();
 					free(table, M_TEMP, sizeof(*table));
 					free(ioe, M_TEMP, sizeof(*ioe));
+					pf_rollback_trans(p->p_p->ps_pid);
 					goto fail;
 				}
 				break;
 			default:
-				PF_UNLOCK();
-				NET_UNLOCK();
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				error = EINVAL;
+				pf_rollback_trans(p->p_p->ps_pid);
 				goto fail;
 			}
-			PF_UNLOCK();
-			NET_UNLOCK();
 			if (copyout(ioe, io->array+i, sizeof(io->array[i]))) {
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				error = EFAULT;
+				pf_rollback_trans(t);
 				goto fail;
 			}
+			ioe->ticket = t->ticket;
 		}
 		free(table, M_TEMP, sizeof(*table));
 		free(ioe, M_TEMP, sizeof(*ioe));
@@ -2548,13 +2581,17 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCXROLLBACK: {
+		struct pf_trans		*t = pf_find_trans(p->p_p->ps_pid);
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pfioc_trans_e	*ioe;
 		struct pfr_table	*table;
 		int			 i;
 
+		KASSERT(t != NULL);
+
 		if (io->esize != sizeof(*ioe)) {
 			error = ENODEV;
+			pf_rollback_trans(p->p_p->ps_pid);
 			goto fail;
 		}
 		ioe = malloc(sizeof(*ioe), M_TEMP, M_WAITOK);
@@ -2564,6 +2601,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				error = EFAULT;
+				pf_rollback_trans(p->p_p->ps_pid);
 				goto fail;
 			}
 			if (strnlen(ioe->anchor, sizeof(ioe->anchor)) ==
@@ -2571,6 +2609,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				error = ENAMETOOLONG;
+				pf_rollback_trans(p->p_p->ps_pid);
 				goto fail;
 			}
 			NET_LOCK();
@@ -2586,6 +2625,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 					NET_UNLOCK();
 					free(table, M_TEMP, sizeof(*table));
 					free(ioe, M_TEMP, sizeof(*ioe));
+					pf_rollback_trans(p->p_p->ps_pid);
 					goto fail; /* really bad */
 				}
 				break;
@@ -2598,6 +2638,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				error = EINVAL;
+				pf_rollback_trans(p->p_p->ps_pid);
 				goto fail; /* really bad */
 			}
 			PF_UNLOCK();
@@ -2605,18 +2646,23 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 		free(table, M_TEMP, sizeof(*table));
 		free(ioe, M_TEMP, sizeof(*ioe));
+		pf_rollback_trans(p->p_p->ps_pid);
 		break;
 	}
 
 	case DIOCXCOMMIT: {
+		struct pf_trans		*t = pf_find_trans(p->p_p->ps_pid);
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pfioc_trans_e	*ioe;
 		struct pfr_table	*table;
 		struct pf_ruleset	*rs;
 		int			 i;
 
+		KASSERT(t != NULL);
+
 		if (io->esize != sizeof(*ioe)) {
 			error = ENODEV;
+			pf_rollback_trans(p->p_p->ps_pid);
 			goto fail;
 		}
 		ioe = malloc(sizeof(*ioe), M_TEMP, M_WAITOK);
@@ -2627,6 +2673,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				error = EFAULT;
+				pf_rollback_trans(p->p_p->ps_pid);
 				goto fail;
 			}
 			if (strnlen(ioe->anchor, sizeof(ioe->anchor)) ==
@@ -2634,6 +2681,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				error = ENAMETOOLONG;
+				pf_rollback_trans(p->p_p->ps_pid);
 				goto fail;
 			}
 			NET_LOCK();
@@ -2648,6 +2696,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 					free(table, M_TEMP, sizeof(*table));
 					free(ioe, M_TEMP, sizeof(*ioe));
 					error = EBUSY;
+					pf_rollback_trans(p->p_p->ps_pid);
 					goto fail;
 				}
 				break;
@@ -2662,6 +2711,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 					free(table, M_TEMP, sizeof(*table));
 					free(ioe, M_TEMP, sizeof(*ioe));
 					error = EBUSY;
+					pf_rollback_trans(p->p_p->ps_pid);
 					goto fail;
 				}
 				break;
@@ -2671,6 +2721,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				error = EINVAL;
+				pf_rollback_trans(p->p_p->ps_pid);
 				goto fail;
 			}
 			PF_UNLOCK();
@@ -2691,6 +2742,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				error = EBUSY;
+				pf_rollback_trans(p->p_p->ps_pid);
 				goto fail;
 			}
 		}
@@ -2702,6 +2754,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				error = EFAULT;
+				pf_rollback_trans(p->p_p->ps_pid);
 				goto fail;
 			}
 			if (strnlen(ioe->anchor, sizeof(ioe->anchor)) ==
@@ -2709,6 +2762,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				error = ENAMETOOLONG;
+				pf_rollback_trans(p->p_p->ps_pid);
 				goto fail;
 			}
 			NET_LOCK();
@@ -2724,6 +2778,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 					NET_UNLOCK();
 					free(table, M_TEMP, sizeof(*table));
 					free(ioe, M_TEMP, sizeof(*ioe));
+					pf_rollback_trans(p->p_p->ps_pid);
 					goto fail; /* really bad */
 				}
 				break;
@@ -2734,6 +2789,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 					NET_UNLOCK();
 					free(table, M_TEMP, sizeof(*table));
 					free(ioe, M_TEMP, sizeof(*ioe));
+					pf_rollback_trans(p->p_p->ps_pid);
 					goto fail; /* really bad */
 				}
 				break;
@@ -2743,6 +2799,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				error = EINVAL;
+				pf_rollback_trans(p->p_p->ps_pid);
 				goto fail; /* really bad */
 			}
 		}
@@ -2756,6 +2813,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				error = EBUSY;
+				pf_rollback_trans(p->p_p->ps_pid);
 				goto fail; /* really bad */
 			}
 			pf_pool_limits[i].limit = pf_pool_limits[i].limit_new;
@@ -2775,6 +2833,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		NET_UNLOCK();
 		free(table, M_TEMP, sizeof(*table));
 		free(ioe, M_TEMP, sizeof(*ioe));
+		pf_rollback_trans(p->p_p->ps_pid);
 		break;
 	}
 
@@ -3253,3 +3312,71 @@ pf_sysctl(void *oldp, size_t *oldlenp, void *newp, size_t newlen)
 
 	return sysctl_rdstruct(oldp, oldlenp, newp, &pfs, sizeof(pfs));
 }
+
+struct pf_trans *
+pf_open_trans(pid_t pid)
+{
+	struct pf_trans	*t, *w;
+
+	rw_assert_wrlock(&pfioctl_rw);
+
+	t = malloc(sizeof(*t), M_TEMP, M_WAITOK);
+	t->pid = pid;
+	t->ticket = ticket++;
+	RB_INIT(&t->rc.anchors);
+	pf_init_ruleset(&t->rc.main_anchor.ruleset);
+
+	LIST_INSERT_HEAD(&pf_ioctl_trans, t, entry);
+
+	return (t);
+}
+
+struct pf_trans *
+pf_find_trans(uint64_t ticket)
+{
+	struct pf_trans	*t;
+
+	LIST_FOREACH(t, &pf_ioctl_trans, entry) {
+		if (t->ticket == ticket)
+			break;
+	}
+
+	return (t);
+}
+
+int
+pf_begin_trans(struct pf_trans *t)
+{
+	return (0);
+}
+
+int
+pf_commit_trans(struct pf_trans *t)
+{
+	return (0);
+}
+
+void
+pf_free_trans(struct pf_trans *t)
+{
+	/*
+	 * remove anchors, and main ruleset
+	 */
+	free(t, M_TEMP, sizeof(*t));
+}
+
+void
+pf_rollback_trans(struct pf_trans *t)
+{
+	if (t != NULL) {
+		LIST_REMOVE(t, entry);
+		pf_free_trans(t);
+	}
+}
+
+int
+pf_copyin_trans(struct pf_trans *t, struct pfioc_trans *io)
+{
+	return (0);
+}
+
