@@ -84,8 +84,7 @@ struct pool	pf_anchor_pl;
 #endif /* _KERNEL */
 
 
-struct pf_anchor_global	 pf_anchors;
-struct pf_anchor	 pf_main_anchor;
+struct pf_rules_container pf_global;
 
 static __inline int pf_anchor_compare(struct pf_anchor *, struct pf_anchor *);
 
@@ -111,7 +110,7 @@ pf_init_ruleset(struct pf_ruleset *ruleset)
 }
 
 struct pf_anchor *
-pf_find_anchor(const char *path)
+pf_find_anchor(struct pf_rules_container *rc, const char *path)
 {
 	struct pf_anchor	*key, *found;
 
@@ -119,21 +118,21 @@ pf_find_anchor(const char *path)
 	if (key == NULL)
 		return (NULL);
 	strlcpy(key->path, path, sizeof(key->path));
-	found = RB_FIND(pf_anchor_global, &pf_anchors, key);
+	found = RB_FIND(pf_anchor_global, &rc->anchors, key);
 	rs_free(key, sizeof(*key));
 	return (found);
 }
 
 struct pf_ruleset *
-pf_find_ruleset(const char *path)
+pf_find_ruleset(struct pf_rules_container *rc, const char *path)
 {
 	struct pf_anchor	*anchor;
 
 	while (*path == '/')
 		path++;
 	if (!*path)
-		return (&pf_main_ruleset);
-	anchor = pf_find_anchor(path);
+		return (&rc->main_anchor.ruleset);
+	anchor = pf_find_anchor(rc, path);
 	if (anchor == NULL)
 		return (NULL);
 	else
@@ -141,7 +140,8 @@ pf_find_ruleset(const char *path)
 }
 
 struct pf_ruleset *
-pf_get_leaf_ruleset(char *path, char **path_remainder)
+pf_get_leaf_ruleset(struct pf_rules_container *rc, char *path,
+    char **path_remainder)
 {
 	struct pf_ruleset	*ruleset;
 	char			*leaf, *p;
@@ -151,21 +151,21 @@ pf_get_leaf_ruleset(char *path, char **path_remainder)
 	while (*p == '/')
 		p++;
 
-	ruleset = pf_find_ruleset(p);
+	ruleset = pf_find_ruleset(rc, p);
 	leaf = p;
 	while (ruleset == NULL) {
 		leaf = strrchr(p, '/');
 		if (leaf != NULL) {
 			*leaf = '\0';
 			i++;
-			ruleset = pf_find_ruleset(p);
+			ruleset = pf_find_ruleset(rc, p);
 		} else {
 			leaf = path;
 			/*
 			 * if no path component exists, then main ruleset is
 			 * our parent.
 			 */
-			ruleset = &pf_main_ruleset;
+			ruleset = &rc->main_anchor.ruleset;
 		}
 	}
 
@@ -184,7 +184,8 @@ pf_get_leaf_ruleset(char *path, char **path_remainder)
 }
 
 struct pf_anchor *
-pf_create_anchor(struct pf_anchor *parent, const char *aname)
+pf_create_anchor(struct pf_rules_container *rc, struct pf_anchor *parent,
+    const char *aname)
 {
 	struct pf_anchor	*anchor, *dup;
 
@@ -208,7 +209,7 @@ pf_create_anchor(struct pf_anchor *parent, const char *aname)
 	}
 	strlcat(anchor->path, anchor->name, sizeof(anchor->path));
 
-	if ((dup = RB_INSERT(pf_anchor_global, &pf_anchors, anchor)) != NULL) {
+	if ((dup = RB_INSERT(pf_anchor_global, &rc->anchors, anchor)) != NULL) {
 		DPFPRINTF(LOG_NOTICE,
 		    "%s: RB_INSERT to global '%s' '%s' collides with '%s' '%s'",
 		    __func__, anchor->path, anchor->name, dup->path, dup->name);
@@ -224,7 +225,7 @@ pf_create_anchor(struct pf_anchor *parent, const char *aname)
 			    "%s: RB_INSERT to parent '%s' '%s' collides with "
 			    "'%s' '%s'", __func__, anchor->path, anchor->name,
 			    dup->path, dup->name);
-			RB_REMOVE(pf_anchor_global, &pf_anchors,
+			RB_REMOVE(pf_anchor_global, &rc->anchors,
 			    anchor);
 			rs_pool_put_anchor(anchor);
 			return (NULL);
@@ -238,19 +239,19 @@ pf_create_anchor(struct pf_anchor *parent, const char *aname)
 }
 
 struct pf_ruleset *
-pf_find_or_create_ruleset(const char *path)
+pf_find_or_create_ruleset(struct pf_rules_container *rc, const char *path)
 {
 	char			*p, *aname, *r;
 	struct pf_ruleset	*ruleset;
 	struct pf_anchor	*anchor;
 
 	if (path[0] == 0)
-		return (&pf_main_ruleset);
+		return (&rc->main_anchor.ruleset);
 
 	while (*path == '/')
 		path++;
 
-	ruleset = pf_find_ruleset(path);
+	ruleset = pf_find_ruleset(rc, path);
 	if (ruleset != NULL)
 		return (ruleset);
 
@@ -259,7 +260,7 @@ pf_find_or_create_ruleset(const char *path)
 		return (NULL);
 	strlcpy(p, path, MAXPATHLEN);
 
-	ruleset = pf_get_leaf_ruleset(p, &aname);
+	ruleset = pf_get_leaf_ruleset(rc, p, &aname);
 	anchor = ruleset->anchor;
 
 	while (*aname == '/')
@@ -273,7 +274,7 @@ pf_find_or_create_ruleset(const char *path)
 		if (r != NULL)
 			*r = 0;
 
-		anchor = pf_create_anchor(anchor, aname);
+		anchor = pf_create_anchor(rc, anchor, aname);
 		if (anchor == NULL) {
 			rs_free(p, MAXPATHLEN);
 			return (NULL);
@@ -290,12 +291,13 @@ pf_find_or_create_ruleset(const char *path)
 }
 
 void
-pf_remove_if_empty_ruleset(struct pf_ruleset *ruleset)
+pf_remove_if_empty_ruleset(struct pf_rules_container *rc,
+    struct pf_ruleset *ruleset)
 {
 	struct pf_anchor	*parent;
 
 	while (ruleset != NULL) {
-		if (ruleset == &pf_main_ruleset ||
+		if (ruleset == &rc->main_anchor.ruleset ||
 		    !RB_EMPTY(&ruleset->anchor->children) ||
 		    ruleset->anchor->refcnt > 0 || ruleset->tables > 0 ||
 		    ruleset->topen)
@@ -304,7 +306,7 @@ pf_remove_if_empty_ruleset(struct pf_ruleset *ruleset)
 		    !TAILQ_EMPTY(ruleset->rules.inactive.ptr) ||
 		    ruleset->rules.inactive.open)
 			return;
-		RB_REMOVE(pf_anchor_global, &pf_anchors, ruleset->anchor);
+		RB_REMOVE(pf_anchor_global, &rc->anchors, ruleset->anchor);
 		if ((parent = ruleset->anchor->parent) != NULL)
 			RB_REMOVE(pf_anchor_node, &parent->children,
 			    ruleset->anchor);
@@ -361,7 +363,7 @@ pf_anchor_setup(struct pf_rule *r, const struct pf_ruleset *s,
 		r->anchor_wildcard = 1;
 		*p = 0;
 	}
-	ruleset = pf_find_or_create_ruleset(path);
+	ruleset = pf_find_or_create_ruleset(&pf_global, path);
 	rs_free(path, MAXPATHLEN);
 	if (ruleset == NULL || ruleset == &pf_main_ruleset) {
 		DPFPRINTF(LOG_NOTICE,
@@ -428,6 +430,6 @@ pf_remove_anchor(struct pf_rule *r)
 	if (r->anchor->refcnt <= 0)
 		DPFPRINTF(LOG_NOTICE, "pf_remove_anchor: broken refcount");
 	else if (!--r->anchor->refcnt)
-		pf_remove_if_empty_ruleset(&r->anchor->ruleset);
+		pf_remove_if_empty_ruleset(&pf_global, &r->anchor->ruleset);
 	r->anchor = NULL;
 }

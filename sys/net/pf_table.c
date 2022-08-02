@@ -1582,7 +1582,7 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 		 * free them
 		 */
 		SLIST_FOREACH_SAFE(p, &addq, pfrkt_workq, w) {
-			p->pfrkt_rs = pf_find_or_create_ruleset(
+			p->pfrkt_rs = pf_find_or_create_ruleset(&pf_global,
 			    p->pfrkt_anchor);
 			if (p->pfrkt_rs == NULL) {
 				xadd--;
@@ -1628,7 +1628,8 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 			if (r != NULL)
 				continue;
 
-			q->pfrkt_rs = pf_find_or_create_ruleset(q->pfrkt_anchor);
+			q->pfrkt_rs = pf_find_or_create_ruleset(&pf_global,
+			    q->pfrkt_anchor);
 			/*
 			 * root tables are attached to main ruleset,
 			 * because ->pfrkt_anchor[0] == '\0'
@@ -1860,7 +1861,7 @@ pfr_ina_begin(struct pfr_table *trs, u_int32_t *ticket, int *ndel, int flags)
 	int			 xdel = 0;
 
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
-	rs = pf_find_or_create_ruleset(trs->pfrt_anchor);
+	rs = pf_find_or_create_ruleset(&pf_global, trs->pfrt_anchor);
 	if (rs == NULL)
 		return (ENOMEM);
 	SLIST_INIT(&workq);
@@ -1878,7 +1879,7 @@ pfr_ina_begin(struct pfr_table *trs, u_int32_t *ticket, int *ndel, int flags)
 			*ticket = ++rs->tversion;
 		rs->topen = 1;
 	} else
-		pf_remove_if_empty_ruleset(rs);
+		pf_remove_if_empty_ruleset(&pf_global, rs);
 	if (ndel != NULL)
 		*ndel = xdel;
 	return (0);
@@ -1902,7 +1903,7 @@ pfr_ina_define(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 	if (pfr_validate_table(tbl, PFR_TFLAG_USRMASK,
 	    flags & PFR_FLAG_USERIOCTL))
 		return (EINVAL);
-	rs = pf_find_ruleset(tbl->pfrt_anchor);
+	rs = pf_find_ruleset(&pf_global, tbl->pfrt_anchor);
 	if (rs == NULL || !rs->topen || ticket != rs->tversion)
 		return (EBUSY);
 	tbl->pfrt_flags |= PFR_TFLAG_INACTIVE;
@@ -2000,7 +2001,7 @@ pfr_ina_rollback(struct pfr_table *trs, u_int32_t ticket, int *ndel, int flags)
 	int			 xdel = 0;
 
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
-	rs = pf_find_ruleset(trs->pfrt_anchor);
+	rs = pf_find_ruleset(&pf_global, trs->pfrt_anchor);
 	if (rs == NULL || !rs->topen || ticket != rs->tversion)
 		return (0);
 	SLIST_INIT(&workq);
@@ -2015,7 +2016,7 @@ pfr_ina_rollback(struct pfr_table *trs, u_int32_t ticket, int *ndel, int flags)
 	if (!(flags & PFR_FLAG_DUMMY)) {
 		pfr_setflags_ktables(&workq);
 		rs->topen = 0;
-		pf_remove_if_empty_ruleset(rs);
+		pf_remove_if_empty_ruleset(&pf_global, rs);
 	}
 	if (ndel != NULL)
 		*ndel = xdel;
@@ -2033,7 +2034,7 @@ pfr_ina_commit(struct pfr_table *trs, u_int32_t ticket, int *nadd,
 	time_t			 tzero = gettime();
 
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
-	rs = pf_find_ruleset(trs->pfrt_anchor);
+	rs = pf_find_ruleset(&pf_global, trs->pfrt_anchor);
 	if (rs == NULL || !rs->topen || ticket != rs->tversion)
 		return (EBUSY);
 
@@ -2054,7 +2055,7 @@ pfr_ina_commit(struct pfr_table *trs, u_int32_t ticket, int *nadd,
 			pfr_commit_ktable(p, tzero);
 		}
 		rs->topen = 0;
-		pf_remove_if_empty_ruleset(rs);
+		pf_remove_if_empty_ruleset(&pf_global, rs);
 	}
 	if (nadd != NULL)
 		*nadd = xadd;
@@ -2182,7 +2183,7 @@ pfr_table_count(struct pfr_table *filter, int flags)
 	if (flags & PFR_FLAG_ALLRSETS)
 		return (pfr_ktable_cnt);
 	if (filter->pfrt_anchor[0]) {
-		rs = pf_find_ruleset(filter->pfrt_anchor);
+		rs = pf_find_ruleset(&pf_global, filter->pfrt_anchor);
 		return ((rs != NULL) ? rs->tables : -1);
 	}
 	return (pf_main_ruleset.tables);
@@ -2299,7 +2300,7 @@ pfr_create_ktable(struct pfr_table *tbl, time_t tzero, int attachruleset,
 
 	if (attachruleset) {
 		PF_ASSERT_LOCKED();
-		rs = pf_find_or_create_ruleset(tbl->pfrt_anchor);
+		rs = pf_find_or_create_ruleset(&pf_global, tbl->pfrt_anchor);
 		if (!rs) {
 			pfr_destroy_ktable(kt, 0);
 			return (NULL);
@@ -2377,7 +2378,7 @@ pfr_destroy_ktable(struct pfr_ktable *kt, int flushaddr)
 		pfr_destroy_ktable(kt->pfrkt_shadow, flushaddr);
 	if (kt->pfrkt_rs != NULL) {
 		kt->pfrkt_rs->tables--;
-		pf_remove_if_empty_ruleset(kt->pfrkt_rs);
+		pf_remove_if_empty_ruleset(&pf_global, kt->pfrkt_rs);
 	}
 	pool_put(&pfr_ktable_pl, kt);
 }

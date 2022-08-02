@@ -851,7 +851,7 @@ pfa_anchor	: '{'
 			 * contents will be moved afterwards.
 			 */
 			snprintf(ta, PF_ANCHOR_NAME_SIZE, "_%d", pf->bn);
-			rs = pf_find_or_create_ruleset(ta);
+			rs = pf_find_or_create_ruleset(&pf_global, ta);
 			if (rs == NULL)
 				err(1, "pfa_anchor: pf_find_or_create_ruleset");
 			pf->astack[pf->asd] = rs->anchor;
@@ -900,7 +900,8 @@ anchorrule	: ANCHOR anchorname dir quick interface af proto fromto
 					mv_rules(&pf->alast->ruleset,
 					    &r.anchor->ruleset);
 				}
-				pf_remove_if_empty_ruleset(&pf->alast->ruleset);
+				pf_remove_if_empty_ruleset(&pf_global,
+				    &pf->alast->ruleset);
 				pf->alast = r.anchor;
 			} else {
 				if (!$2) {

@@ -460,7 +460,8 @@ pfi_dynaddr_setup(struct pf_addr_wrap *aw, sa_family_t af, int wait)
 	if (dyn->pfid_net != 128)
 		snprintf(tblname + strlen(tblname),
 		    sizeof(tblname) - strlen(tblname), "/%d", dyn->pfid_net);
-	if ((ruleset = pf_find_or_create_ruleset(PF_RESERVED_ANCHOR)) == NULL) {
+	ruleset = pf_find_or_create_ruleset(&pf_global, PF_RESERVED_ANCHOR);
+	if (ruleset == NULL) {
 		rv = 1;
 		goto _bad;
 	}
@@ -483,7 +484,7 @@ _bad:
 	if (dyn->pfid_kt != NULL)
 		pfr_detach_table(dyn->pfid_kt);
 	if (ruleset != NULL)
-		pf_remove_if_empty_ruleset(ruleset);
+		pf_remove_if_empty_ruleset(&pf_global, ruleset);
 	if (dyn->pfid_kif != NULL)
 		pfi_kif_unref(dyn->pfid_kif, PFI_KIF_REF_RULE);
 	pool_put(&pfi_addr_pl, dyn);

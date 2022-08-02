@@ -361,7 +361,7 @@ pf_purge_rule(struct pf_rule *rule)
 		rule->nr = nr++;
 	ruleset->rules.active.version++;
 	pf_calc_skip_steps(ruleset->rules.active.ptr);
-	pf_remove_if_empty_ruleset(ruleset);
+	pf_remove_if_empty_ruleset(&pf_global, ruleset);
 
 	if (ruleset == &pf_main_ruleset)
 		pf_calc_chksum(ruleset);
@@ -530,7 +530,7 @@ pf_begin_rules(u_int32_t *ticket, const char *anchor)
 	struct pf_ruleset	*rs;
 	struct pf_rule		*rule;
 
-	if ((rs = pf_find_or_create_ruleset(anchor)) == NULL)
+	if ((rs = pf_find_or_create_ruleset(&pf_global, anchor)) == NULL)
 		return (EINVAL);
 	while ((rule = TAILQ_FIRST(rs->rules.inactive.ptr)) != NULL) {
 		pf_rm_rule(rs->rules.inactive.ptr, rule);
@@ -547,7 +547,7 @@ pf_rollback_rules(u_int32_t ticket, char *anchor)
 	struct pf_ruleset	*rs;
 	struct pf_rule		*rule;
 
-	rs = pf_find_ruleset(anchor);
+	rs = pf_find_ruleset(&pf_global, anchor);
 	if (rs == NULL || !rs->rules.inactive.open ||
 	    rs->rules.inactive.version != ticket)
 		return;
@@ -838,7 +838,7 @@ pf_commit_rules(u_int32_t ticket, char *anchor)
 	/* Make sure any expired rules get removed from active rules first. */
 	pf_purge_expired_rules();
 
-	rs = pf_find_ruleset(anchor);
+	rs = pf_find_ruleset(&pf_global, anchor);
 	if (rs == NULL || !rs->rules.inactive.open ||
 	    ticket != rs->rules.inactive.version)
 		return (EBUSY);
@@ -864,7 +864,7 @@ pf_commit_rules(u_int32_t ticket, char *anchor)
 		pf_rm_rule(old_rules, rule);
 	rs->rules.inactive.rcount = 0;
 	rs->rules.inactive.open = 0;
-	pf_remove_if_empty_ruleset(rs);
+	pf_remove_if_empty_ruleset(&pf_global, rs);
 
 	/* queue defs only in the main ruleset */
 	if (anchor[0])
@@ -1384,7 +1384,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		NET_LOCK();
 		PF_LOCK();
 		pr->anchor[sizeof(pr->anchor) - 1] = '\0';
-		ruleset = pf_find_ruleset(pr->anchor);
+		ruleset = pf_find_ruleset(&pf_global, pr->anchor);
 		if (ruleset == NULL) {
 			error = EINVAL;
 			PF_UNLOCK();
@@ -1459,7 +1459,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		NET_LOCK();
 		PF_LOCK();
 		pr->anchor[sizeof(pr->anchor) - 1] = '\0';
-		ruleset = pf_find_ruleset(pr->anchor);
+		ruleset = pf_find_ruleset(&pf_global, pr->anchor);
 		if (ruleset == NULL) {
 			error = EINVAL;
 			PF_UNLOCK();
@@ -1486,7 +1486,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		NET_LOCK();
 		PF_LOCK();
 		pr->anchor[sizeof(pr->anchor) - 1] = '\0';
-		ruleset = pf_find_ruleset(pr->anchor);
+		ruleset = pf_find_ruleset(&pf_global, pr->anchor);
 		if (ruleset == NULL) {
 			error = EINVAL;
 			PF_UNLOCK();
@@ -1565,7 +1565,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			NET_LOCK();
 			PF_LOCK();
 
-			ruleset = pf_find_ruleset(pcr->anchor);
+			ruleset = pf_find_ruleset(&pf_global, pcr->anchor);
 			if (ruleset == NULL)
 				error = EINVAL;
 			else
@@ -1610,7 +1610,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		NET_LOCK();
 		PF_LOCK();
-		ruleset = pf_find_ruleset(pcr->anchor);
+		ruleset = pf_find_ruleset(&pf_global, pcr->anchor);
 		if (ruleset == NULL) {
 			error = EINVAL;
 			PF_UNLOCK();
@@ -1720,7 +1720,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		ruleset->rules.active.version++;
 
 		pf_calc_skip_steps(ruleset->rules.active.ptr);
-		pf_remove_if_empty_ruleset(ruleset);
+		pf_remove_if_empty_ruleset(&pf_global, ruleset);
 
 		PF_UNLOCK();
 		NET_UNLOCK();
@@ -2137,7 +2137,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		NET_LOCK();
 		PF_LOCK();
 		pr->path[sizeof(pr->path) - 1] = '\0';
-		if ((ruleset = pf_find_ruleset(pr->path)) == NULL) {
+		if ((ruleset = pf_find_ruleset(&pf_global, pr->path)) == NULL) {
 			error = EINVAL;
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -2168,7 +2168,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		NET_LOCK();
 		PF_LOCK();
 		pr->path[sizeof(pr->path) - 1] = '\0';
-		if ((ruleset = pf_find_ruleset(pr->path)) == NULL) {
+		if ((ruleset = pf_find_ruleset(&pf_global, pr->path)) == NULL) {
 			error = EINVAL;
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -2640,7 +2640,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			PF_LOCK();
 			switch (ioe->type) {
 			case PF_TRANS_TABLE:
-				rs = pf_find_ruleset(ioe->anchor);
+				rs = pf_find_ruleset(&pf_global, ioe->anchor);
 				if (rs == NULL || !rs->topen || ioe->ticket !=
 				     rs->tversion) {
 					PF_UNLOCK();
@@ -2652,7 +2652,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				}
 				break;
 			case PF_TRANS_RULESET:
-				rs = pf_find_ruleset(ioe->anchor);
+				rs = pf_find_ruleset(&pf_global, ioe->anchor);
 				if (rs == NULL ||
 				    !rs->rules.inactive.open ||
 				    rs->rules.inactive.version !=

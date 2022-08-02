@@ -1910,8 +1910,14 @@ extern struct pf_pool_limit	pf_pool_limits[PF_LIMIT_MAX];
 
 #endif /* _KERNEL */
 
-extern struct pf_anchor_global	pf_anchors;
-extern struct pf_anchor		pf_main_anchor;
+struct pf_rules_container {
+	struct pf_anchor_global	 anchors;
+	struct pf_anchor	 main_anchor;
+};
+
+extern struct pf_rules_container pf_global;
+#define pf_anchors	pf_global.anchors
+#define pf_main_anchor	pf_global.main_anchor
 #define pf_main_ruleset		pf_main_anchor.ruleset
 
 struct tcphdr;
@@ -1923,12 +1929,18 @@ int			 pf_anchor_setup(struct pf_rule *,
 int			 pf_anchor_copyout(const struct pf_ruleset *,
 			    const struct pf_rule *, struct pfioc_rule *);
 void			 pf_remove_anchor(struct pf_rule *);
-void			 pf_remove_if_empty_ruleset(struct pf_ruleset *);
-struct pf_anchor	*pf_find_anchor(const char *);
-struct pf_ruleset	*pf_find_ruleset(const char *);
-struct pf_ruleset 	*pf_get_leaf_ruleset(char *, char **);
-struct pf_anchor 	*pf_create_anchor(struct pf_anchor *, const char *);
-struct pf_ruleset	*pf_find_or_create_ruleset(const char *);
+void			 pf_remove_if_empty_ruleset(struct pf_rules_container *,
+			    struct pf_ruleset *);
+struct pf_anchor	*pf_find_anchor(struct pf_rules_container *,
+			    const char *);
+struct pf_ruleset	*pf_find_ruleset(struct pf_rules_container *,
+			    const char *);
+struct pf_ruleset 	*pf_get_leaf_ruleset(struct pf_rules_container *,
+			    char *, char **);
+struct pf_anchor 	*pf_create_anchor(struct pf_rules_container *,
+			    struct pf_anchor *, const char *);
+struct pf_ruleset	*pf_find_or_create_ruleset(struct pf_rules_container *,
+			    const char *);
 void			 pf_rs_initialize(void);
 
 /* The fingerprint functions can be linked into userland programs (tcpdump) */
