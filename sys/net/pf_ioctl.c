@@ -118,7 +118,10 @@ int			 pf_states_get(struct pfioc_states *);
 
 struct pf_trans 	*pf_open_trans(pid_t);
 struct pf_trans		*pf_find_trans(pid_t);
-int			 pf_begin_trans(struct pf_trans *);
+int			 pf_begin_table_trans(struct pf_trans *,
+			    struct pfr_table *, u_int32_t *);
+int			 pf_begin_ruleset_trans(struct pf_trans *,
+			    const char *, u_int32_t *);
 int			 pf_commit_trans(struct pf_trans *);
 void			 pf_free_trans(struct pf_trans *);
 void			 pf_rollback_trans(struct pf_trans *);
@@ -3324,6 +3327,7 @@ pf_open_trans(pid_t pid)
 	t->pid = pid;
 	t->ticket = ticket++;
 	RB_INIT(&t->rc.anchors);
+	RB_INIT(&t->ktables);
 	pf_init_ruleset(&t->rc.main_anchor.ruleset);
 
 	LIST_INSERT_HEAD(&pf_ioctl_trans, t, entry);
@@ -3336,6 +3340,8 @@ pf_find_trans(uint64_t ticket)
 {
 	struct pf_trans	*t;
 
+	rw_assert_anylock(&pfioctl_rw);
+
 	LIST_FOREACH(t, &pf_ioctl_trans, entry) {
 		if (t->ticket == ticket)
 			break;
@@ -3345,7 +3351,14 @@ pf_find_trans(uint64_t ticket)
 }
 
 int
-pf_begin_trans(struct pf_trans *t)
+pf_begin_table_trans(struct pf_trans *t, pfr_table *tbl, u_int32_t *version)
+{
+	return (0);
+}
+
+int
+pf_begin_ruleset_trans(struct pf_trans *t, const char *anchor,
+    u_int32_t *version)
 {
 	return (0);
 }
@@ -3359,9 +3372,42 @@ pf_commit_trans(struct pf_trans *t)
 void
 pf_free_trans(struct pf_trans *t)
 {
-	/*
-	 * remove anchors, and main ruleset
-	 */
+	struct pf_anchor *wa, *sa;
+	struct pfr_ktable *wt, *st;
+	struct pf_rule *r;
+
+	RB_FOREACH_SAFE(wa, pf_anchor_global, &t->rc.anchors, sa) {
+		RB_REMOVE(pf_anchor_global, &t->rc.anchors, wa);
+		while ((r = TAILQ_FIRST(wa->ruleset.rules.ptr)) != NULL) {
+			pf_rm_rule(&wa->ruleset, r);
+			wa->ruleset.rules.rcount--;
+		}
+
+		/*
+		 * Unlike pf_remove_if_empty_ruleset() we don't need to deal
+		 * with parents, because all parents are part of transaction
+		 * (are found in t->rc.anchors).
+		 */
+
+		pool_put(&pf_anchor_pool, wa);
+	}
+
+	while ((r = TAILQ_FIRST(t->rc.main_anchor.ruleset.rules.ptr)) != NULL) {
+		pf_rm_rule(&t->rc.main_anchor.ruleset, r);
+		t->rc.main_anchor.ruleset.rules.rcount--;
+	}
+
+	RB_FOREACH_SAFE(wt, pfr_ktablehead, &t->ktables, st) {
+		RB_REMOVE(pfr_ktablehead, &t->ktables, wt);
+		/*
+		 * Hint pfr_destroy_ktable() not to call
+		 * pf_remove_if_empty_ruleset(), because we destroyed ruleset
+		 * while ago. The pfrkt_rs is just part of transaction.
+		 */
+		kt->pfrkt_rs = NULL;
+		pfr_destroy_ktable(wt, 1);
+	}
+
 	free(t, M_TEMP, sizeof(*t));
 }
 
@@ -3369,6 +3415,7 @@ void
 pf_rollback_trans(struct pf_trans *t)
 {
 	if (t != NULL) {
+		rw_assert_wrlock(&pfioctl_rw);
 		LIST_REMOVE(t, entry);
 		pf_free_trans(t);
 	}
