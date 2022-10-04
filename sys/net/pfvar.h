@@ -925,6 +925,7 @@ struct pf_anchor;
 
 struct pf_ruleset {
 	struct {
+		struct pf_rulequeue	 queue;
 		struct pf_rulequeue	*ptr;
 		u_int32_t		 rcount;
 		u_int32_t		 version;

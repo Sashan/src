@@ -49,6 +49,7 @@
 # define DEBUG(str, v...) ((void)0)
 #endif
 
+struct pf_rules_container	rc;
 
 /*
  * A container that lets us sort a superblock to optimize the skip step jumps
@@ -268,9 +269,8 @@ pfctl_optimize_ruleset(struct pfctl *pf, struct pf_ruleset *rs)
 	struct superblock *block;
 	struct pf_opt_rule *por;
 	struct pf_rule *r;
-	struct pf_rulequeue *old_rules;
 
-	if (TAILQ_EMPTY(rs->rules.active.ptr))
+	if (TAILQ_EMPTY(rs->rules.ptr))
 		return (0);
 
 	DEBUG("optimizing ruleset \"%s\"", rs->anchor->path);
@@ -278,19 +278,16 @@ pfctl_optimize_ruleset(struct pfctl *pf, struct pf_ruleset *rs)
 	skip_init();
 	TAILQ_INIT(&opt_queue);
 
-	old_rules = rs->rules.active.ptr;
-	rs->rules.active.ptr = rs->rules.inactive.ptr;
-	rs->rules.inactive.ptr = old_rules;
-
 	/*
 	 * XXX expanding the pf_opt_rule format throughout pfctl might allow
 	 * us to avoid all this copying.
 	 */
-	while ((r = TAILQ_FIRST(rs->rules.inactive.ptr)) != NULL) {
-		TAILQ_REMOVE(rs->rules.inactive.ptr, r, entries);
+	while ((r = TAILQ_FIRST(rs->rules.ptr)) != NULL) {
+		TAILQ_REMOVE(rs->rules.ptr, r, entries);
 		if ((por = calloc(1, sizeof(*por))) == NULL)
 			err(1, "calloc");
 		memcpy(&por->por_rule, r, sizeof(*r));
+		free(r);
 
 		TAILQ_INSERT_TAIL(&opt_queue, por, por_entry);
 	}
@@ -319,7 +316,7 @@ pfctl_optimize_ruleset(struct pfctl *pf, struct pf_ruleset *rs)
 			if ((r = calloc(1, sizeof(*r))) == NULL)
 				err(1, "calloc");
 			memcpy(r, &por->por_rule, sizeof(*r));
-			TAILQ_INSERT_TAIL(rs->rules.active.ptr, r, entries);
+			TAILQ_INSERT_TAIL(rs->rules.ptr, r, entries);
 			pf_opt_table_unref(por->por_src_tbl);
 			pf_opt_table_unref(por->por_dst_tbl);
 			free(por);
@@ -878,7 +875,7 @@ load_feedback_profile(struct pfctl *pf, struct superblocks *superblocks)
 			return (1);
 		}
 		memcpy(&por->por_rule, &pr.rule, sizeof(por->por_rule));
-		rs = pf_find_or_create_ruleset(pr.anchor_call);
+		rs = pf_find_or_create_ruleset(&rc, pr.anchor_call);
 		por->por_rule.anchor = rs->anchor;
 		TAILQ_INSERT_TAIL(&queue, por, por_entry);
 	}

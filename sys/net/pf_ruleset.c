@@ -103,10 +103,8 @@ void
 pf_init_ruleset(struct pf_ruleset *ruleset)
 {
 	memset(ruleset, 0, sizeof(struct pf_ruleset));
-	TAILQ_INIT(&ruleset->rules.queues[0]);
-	TAILQ_INIT(&ruleset->rules.queues[1]);
-	ruleset->rules.active.ptr = &ruleset->rules.queues[0];
-	ruleset->rules.inactive.ptr = &ruleset->rules.queues[1];
+	TAILQ_INIT(&ruleset->rules.queue);
+	ruleset->rules.ptr = &ruleset->rules.queue;
 }
 
 struct pf_anchor *
@@ -290,6 +288,7 @@ pf_find_or_create_ruleset(struct pf_rules_container *rc, const char *path)
 	return (&anchor->ruleset);
 }
 
+#ifdef _KERNEL
 u_int32_t
 pf_get_ruleset_version(const char *path)
 {
@@ -307,6 +306,7 @@ pf_get_ruleset_version(const char *path)
 
 	return (version);
 }
+#endif	/* _KERNEL */
 
 void
 pf_remove_if_empty_ruleset(struct pf_rules_container *rc,
@@ -320,9 +320,7 @@ pf_remove_if_empty_ruleset(struct pf_rules_container *rc,
 		    ruleset->anchor->refcnt > 0 || ruleset->tables > 0 ||
 		    ruleset->topen)
 			return;
-		if (!TAILQ_EMPTY(ruleset->rules.active.ptr) ||
-		    !TAILQ_EMPTY(ruleset->rules.inactive.ptr) ||
-		    ruleset->rules.inactive.open)
+		if (!TAILQ_EMPTY(ruleset->rules.ptr) || ruleset->rules.open)
 			return;
 		RB_REMOVE(pf_anchor_global, &rc->anchors, ruleset->anchor);
 		if ((parent = ruleset->anchor->parent) != NULL)
