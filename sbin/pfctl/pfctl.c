@@ -1170,7 +1170,7 @@ pfctl_add_rule(struct pfctl *pf, struct pf_rule *r)
 		err(1, "calloc");
 	bcopy(r, rule, sizeof(*rule));
 
-	TAILQ_INSERT_TAIL(rs->rules.active.ptr, rule, entries);
+	TAILQ_INSERT_TAIL(rs->rules.ptr, rule, entries);
 }
 
 int
@@ -1409,7 +1409,7 @@ pfctl_check_qassignments(struct pf_ruleset *rs)
 		}
 	}
 
-	TAILQ_FOREACH(r, rs->rules.active.ptr, entries) {
+	TAILQ_FOREACH(r, rs->rules.ptr, entries) {
 		if (r->anchor)
 			errs += pfctl_check_qassignments(&r->anchor->ruleset);
 		if (pfctl_leafqueue_check(r->qname) ||
@@ -1436,7 +1436,7 @@ pfctl_load_ruleset(struct pfctl *pf, char *path, struct pf_ruleset *rs,
 		snprintf(&path[len], PATH_MAX - len, "%s", pf->anchor->path);
 
 	if (depth) {
-		if (TAILQ_FIRST(rs->rules.active.ptr) != NULL) {
+		if (TAILQ_FIRST(rs->rules.ptr) != NULL) {
 			brace++;
 			if (pf->opts & PF_OPT_VERBOSE)
 				printf(" {\n");
@@ -1454,8 +1454,8 @@ pfctl_load_ruleset(struct pfctl *pf, char *path, struct pf_ruleset *rs,
 	if (pf->optimize)
 		pfctl_optimize_ruleset(pf, rs);
 
-	while ((r = TAILQ_FIRST(rs->rules.active.ptr)) != NULL) {
-		TAILQ_REMOVE(rs->rules.active.ptr, r, entries);
+	while ((r = TAILQ_FIRST(rs->rules.ptr)) != NULL) {
+		TAILQ_REMOVE(rs->rules.ptr, r, entries);
 		pfctl_expand_label_nr(r, rno);
 		rno++;
 		if ((error = pfctl_load_rule(pf, path, r, depth)))

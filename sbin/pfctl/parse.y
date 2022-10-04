@@ -5549,11 +5549,10 @@ mv_rules(struct pf_ruleset *src, struct pf_ruleset *dst)
 {
 	struct pf_rule *r;
 
-	TAILQ_FOREACH(r, src->rules.active.ptr, entries)
+	TAILQ_FOREACH(r, src->rules.ptr, entries)
 		dst->anchor->match++;
-	TAILQ_CONCAT(dst->rules.active.ptr, src->rules.active.ptr, entries);
+	TAILQ_CONCAT(dst->rules.ptr, src->rules.ptr, entries);
 	src->anchor->match = 0;
-	TAILQ_CONCAT(dst->rules.inactive.ptr, src->rules.inactive.ptr, entries);
 }
 
 void
