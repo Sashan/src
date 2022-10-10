@@ -3625,7 +3625,7 @@ pf_match_rule(struct pf_test_ctx *ctx, struct pf_ruleset *ruleset)
 	struct pf_rule	*save_a;
 	struct pf_ruleset	*save_aruleset;
 
-	r = TAILQ_FIRST(ruleset->rules.active.ptr);
+	r = TAILQ_FIRST(ruleset->rules.ptr);
 	while (r != NULL) {
 		r->evaluations++;
 		PF_TEST_ATTRIB(

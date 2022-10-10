@@ -57,6 +57,13 @@
 
 
 #ifdef _KERNEL
+#include <netinet/ip_var.h>
+#include <netinet/ip_icmp.h>
+#include <netinet/icmp_var.h>
+#include <netinet/udp.h>
+#include <netinet/udp_var.h>
+#include <netinet/icmp6.h>
+#include <net/pfvar_priv.h>
 #define rs_malloc(x)		malloc(x, M_TEMP, M_WAITOK|M_CANFAIL|M_ZERO)
 #define rs_free(x, siz)		free(x, M_TEMP, siz)
 #define rs_pool_get_anchor()	pool_get(&pf_anchor_pl, \
@@ -320,7 +327,7 @@ pf_remove_if_empty_ruleset(struct pf_rules_container *rc,
 		    ruleset->anchor->refcnt > 0 || ruleset->tables > 0 ||
 		    ruleset->topen)
 			return;
-		if (!TAILQ_EMPTY(ruleset->rules.ptr) || ruleset->rules.open)
+		if (!TAILQ_EMPTY(ruleset->rules.ptr))
 			return;
 		RB_REMOVE(pf_anchor_global, &rc->anchors, ruleset->anchor);
 		if ((parent = ruleset->anchor->parent) != NULL)
