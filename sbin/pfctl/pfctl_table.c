@@ -510,7 +510,7 @@ print_astats(struct pfr_astats *as, int dns)
 
 int
 pfctl_define_table(char *name, int flags, int addrs, const char *anchor,
-    struct pfr_buffer *ab, u_int32_t ticket)
+    struct pfr_buffer *ab, uint64_t ticket)
 {
 	struct pfr_table tbl;
 

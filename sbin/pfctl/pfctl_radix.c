@@ -347,7 +347,7 @@ pfr_tst_addrs(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 
 int
 pfr_ina_define(struct pfr_table *tbl, struct pfr_addr *addr, int size,
-    int *nadd, int *naddr, int ticket, int flags)
+    int *nadd, int *naddr, uint64_t ticket, int flags)
 {
 	struct pfioc_table io;
 
