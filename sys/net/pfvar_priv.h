@@ -217,7 +217,6 @@ struct pf_trans {
 	LIST_ENTRY(pf_trans)	entry;
 	struct pf_rules_container
 				rc;
-	struct pfr_ktablehead	ktables;
 };
 
 extern struct task	pf_purge_task;
@@ -276,6 +275,8 @@ extern struct rwlock	pf_state_lock;
 extern void			 pf_purge_timeout(void *);
 extern void			 pf_purge(void *);
 extern u_int32_t		 pf_get_ruleset_version(const char *);
+extern void			 pfr_destroy_ktable(struct pfr_ktable *, int);
+RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 #endif /* _KERNEL */
 
 #endif /* _NET_PFVAR_PRIV_H_ */

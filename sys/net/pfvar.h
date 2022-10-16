@@ -1115,7 +1115,6 @@ struct pfr_ktable {
 	SLIST_ENTRY(pfr_ktable)	 pfrkt_workq;
 	struct radix_node_head	*pfrkt_ip4;
 	struct radix_node_head	*pfrkt_ip6;
-	struct pfr_ktable	*pfrkt_shadow;
 	struct pfr_ktable	*pfrkt_root;
 	struct pf_ruleset	*pfrkt_rs;
 	long			 pfrkt_larg;
@@ -1462,7 +1461,7 @@ struct pf_pktdelay {
 
 struct pfioc_rule {
 	u_int32_t	 action;
-	u_int32_t	 ticket;
+	uint64_t	 ticket;
 	u_int32_t	 nr;
 	char		 anchor[PATH_MAX];
 	char		 anchor_call[PATH_MAX];
@@ -1590,7 +1589,7 @@ struct pfioc_table {
 	int			 pfrio_ndel;
 	int			 pfrio_nchange;
 	int			 pfrio_flags;
-	u_int32_t		 pfrio_ticket;
+	uint64_t		 pfrio_ticket;
 };
 #define	pfrio_exists	pfrio_nadd
 #define	pfrio_nzero	pfrio_nadd
@@ -1684,6 +1683,7 @@ struct pfioc_synflwats {
 #ifdef _KERNEL
 
 struct pf_pdesc;
+struct pf_trans;
 
 RB_HEAD(pf_src_tree, pf_src_node);
 RB_PROTOTYPE(pf_src_tree, pf_src_node, entry, pf_src_compare);
@@ -1849,11 +1849,11 @@ int	pfr_clr_astats(struct pfr_table *, struct pfr_addr *, int, int *,
 	    int);
 int	pfr_tst_addrs(struct pfr_table *, struct pfr_addr *, int, int *,
 	    int);
-int	pfr_ina_begin(struct pfr_table *, u_int32_t *, int *, int);
+int	pfr_ina_begin(struct pf_trans *, u_int32_t *, const char *);
 int	pfr_ina_rollback(struct pfr_table *, u_int32_t, int *, int);
 int	pfr_ina_commit(struct pfr_table *, u_int32_t, int *, int *, int);
-int	pfr_ina_define(struct pfr_table *, struct pfr_addr *, int, int *,
-	    int *, u_int32_t, int);
+int	pfr_ina_define(struct pf_trans *, struct pfr_table *,
+	    struct pfr_addr *, int, int *, int *, int);
 struct pfr_ktable
 	*pfr_ktable_select_active(struct pfr_ktable *);
 
@@ -1911,6 +1911,7 @@ extern struct pf_pool_limit	pf_pool_limits[PF_LIMIT_MAX];
 struct pf_rules_container {
 	struct pf_anchor_global	 anchors;
 	struct pf_anchor	 main_anchor;
+	struct pfr_ktablehead	 ktables;
 };
 
 extern struct pf_rules_container pf_global;
