@@ -1842,7 +1842,7 @@ pfctl_load_limit(struct pfctl *pf, unsigned int index, unsigned int limit)
 	memset(&pl, 0, sizeof(pl));
 	pl.index = index;
 	pl.limit = limit;
-	if (ioctl(pf->dev, DIOCSETLIMIT, &pl) == -1) {
+	if (pfctl_trans(pf->dev, &pl, DIOCSETLIMIT, 0) == -1) {
 		if (errno == EBUSY)
 			warnx("Current pool size exceeds requested %s limit %u",
 			    pf_limits[index].name, limit);
@@ -1887,7 +1887,7 @@ pfctl_load_timeout(struct pfctl *pf, unsigned int timeout, unsigned int seconds)
 	memset(&pt, 0, sizeof(pt));
 	pt.timeout = timeout;
 	pt.seconds = seconds;
-	if (ioctl(pf->dev, DIOCSETTIMEOUT, &pt) == -1) {
+	if (pfctl_trans(pf->dev, &pt, DIOCSETTIMEOUT, 0) == -1) {
 		warnx("DIOCSETTIMEOUT");
 		return (1);
 	}
@@ -1903,7 +1903,7 @@ pfctl_set_synflwats(struct pfctl *pf, u_int32_t lowat, u_int32_t hiwat)
 	ps.hiwat = hiwat;
 	ps.lowat = lowat;
 
-	if (ioctl(pf->dev, DIOCSETSYNFLWATS, &ps) == -1) {
+	if (pfctl_trans(pf->dev, &ps, DIOCSETSYNFLWATS, 0) == -1) {
 		warnx("Cannot set synflood detection watermarks");
 		return (1);
 	}
@@ -2030,7 +2030,7 @@ pfctl_load_logif(struct pfctl *pf, char *ifname)
 		warnx("pfctl_load_logif: strlcpy");
 		return (1);
 	}
-	if (ioctl(pf->dev, DIOCSETSTATUSIF, &pi) == -1) {
+	if (pfctl_trans(pf->dev, &pi, DIOCSETSTATUSIF, 0) == -1) {
 		warnx("DIOCSETSTATUSIF");
 		return (1);
 	}
@@ -2052,7 +2052,7 @@ pfctl_set_hostid(struct pfctl *pf, u_int32_t hostid)
 int
 pfctl_load_hostid(struct pfctl *pf, u_int32_t hostid)
 {
-	if (ioctl(dev, DIOCSETHOSTID, &hostid) == -1) {
+	if (pfctl_trans(dev, &hostid, DIOCSETHOSTID, 0) == -1) {
 		warnx("DIOCSETHOSTID");
 		return (1);
 	}
@@ -2062,7 +2062,7 @@ pfctl_load_hostid(struct pfctl *pf, u_int32_t hostid)
 int
 pfctl_load_reassembly(struct pfctl *pf, u_int32_t reassembly)
 {
-	if (ioctl(dev, DIOCSETREASS, &reassembly) == -1) {
+	if (pfctl_trans(dev, &reassembly, DIOCSETREASS, 0) == -1) {
 		warnx("DIOCSETREASS");
 		return (1);
 	}
@@ -2095,7 +2095,7 @@ pfctl_set_debug(struct pfctl *pf, char *d)
 	pf->debug_set = 1;
 
 	if ((pf->opts & PF_OPT_NOACTION) == 0)
-		if (ioctl(dev, DIOCSETDEBUG, &level) == -1)
+		if (pfctl_trans(dev, &level, DIOCSETDEBUG, 0) == -1)
 			err(1, "DIOCSETDEBUG");
 
 	if (pf->opts & PF_OPT_VERBOSE)
@@ -2107,7 +2107,7 @@ pfctl_set_debug(struct pfctl *pf, char *d)
 int
 pfctl_load_debug(struct pfctl *pf, unsigned int level)
 {
-	if (ioctl(pf->dev, DIOCSETDEBUG, &level) == -1) {
+	if (pfctl_trans(pf->dev, &level, DIOCSETDEBUG, 0) == -1) {
 		warnx("DIOCSETDEBUG");
 		return (1);
 	}
@@ -2674,6 +2674,8 @@ main(int argc, char *argv[])
 		dev = open(pf_device, mode);
 		if (dev == -1)
 			err(1, "%s", pf_device);
+		if (pfctl_trans(dev, NULL, DIOCXBEGIN, 0) != 0)
+			errx(1, "pfctl_trans(): %s", strerror(errno));
 	} else {
 		dev = open(pf_device, O_RDONLY);
 		if (dev >= 0)

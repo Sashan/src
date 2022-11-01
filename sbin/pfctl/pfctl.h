@@ -101,7 +101,7 @@ int	 pfctl_cmdline_symset(char *);
 int	 pfctl_add_trans(struct pfr_buffer *, int, const char *);
 u_int32_t
 	 pfctl_get_ticket(struct pfr_buffer *, int, const char *);
-int	 pfctl_trans(int, struct pfr_buffer *, u_long, int);
+int	 pfctl_trans(int, void *, u_long, int);
 
 int	 pfctl_show_queues(int, const char *, int, int);
 

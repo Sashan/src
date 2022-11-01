@@ -1902,7 +1902,6 @@ extern struct pool	pf_frent_pl, pf_frag_pl;
 struct pf_pool_limit {
 	void		*pp;
 	unsigned	 limit;
-	unsigned	 limit_new;
 };
 extern struct pf_pool_limit	pf_pool_limits[PF_LIMIT_MAX];
 
@@ -1923,8 +1922,9 @@ struct tcphdr;
 
 /* these ruleset functions can be linked into userland programs (pfctl) */
 void			 pf_init_ruleset(struct pf_ruleset *);
-int			 pf_anchor_setup(struct pf_rule *,
-			    const struct pf_ruleset *, const char *);
+int			 pf_anchor_setup(struct pf_rules_container *,
+			    struct pf_rule *, const struct pf_ruleset *,
+			    const char *);
 int			 pf_anchor_copyout(const struct pf_ruleset *,
 			    const struct pf_rule *, struct pfioc_rule *);
 void			 pf_remove_anchor(struct pf_rule *);

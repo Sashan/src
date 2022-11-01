@@ -211,12 +211,33 @@ struct pf_pdesc {
 	} hdr;
 };
 
+struct pf_trans_set {
+	char		statusif[IFNAMSIZ];
+	u_int32_t	debug;
+	u_int32_t	hostid;
+	u_int32_t	reass;
+	u_int32_t	mask;
+};
+
+#define	PF_ORDER_HOST	0
+#define	PF_ORDER_NET	1
+
+#define	PF_TSET_STATUSIF	0x01
+#define	PF_TSET_DEBUG		0x02
+#define	PF_TSET_HOSTID		0x04
+#define	PF_TSET_REASS		0x08
+
 struct pf_trans {
 	pid_t			pid;		/* process id */
 	uint64_t		ticket;
 	LIST_ENTRY(pf_trans)	entry;
 	struct pf_rules_container
 				rc;
+	char			modify_defaults;
+	uint32_t		default_vers;
+	struct pf_rule		default_rule;
+	struct pf_trans_set	trans_set;
+	unsigned		pool_limits[PF_LIMIT_MAX];
 };
 
 extern struct task	pf_purge_task;

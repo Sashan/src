@@ -882,7 +882,7 @@ anchorrule	: ANCHOR anchorname dir quick interface af proto fromto
 				}
 
 				/* Move inline rules into relative location. */
-				pf_anchor_setup(&r,
+				pf_anchor_setup(&pf_global, &r,
 				    &pf->astack[pf->asd]->ruleset,
 				    $2 ? $2 : pf->alast->name);
 

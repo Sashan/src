@@ -106,7 +106,7 @@ int			 pf_addr_setup(struct pf_ruleset *,
 			    struct pf_addr_wrap *, sa_family_t);
 struct pfi_kif		*pf_kif_setup(struct pfi_kif *);
 void			 pf_addr_copyout(struct pf_addr_wrap *);
-void			 pf_trans_set_commit(void);
+void			 pf_trans_set_commit(struct pf_trans_set *);
 void			 pf_pool_copyin(struct pf_pool *, struct pf_pool *);
 int			 pf_validate_range(u_int8_t, u_int16_t[2], int);
 int			 pf_rule_copyin(struct pf_rule *, struct pf_rule *);
@@ -127,23 +127,8 @@ int			 pf_commit_trans(struct pf_trans *);
 void			 pf_free_trans(struct pf_trans *);
 void			 pf_rollback_trans(struct pf_trans *);
 
-struct pf_rule		 pf_default_rule, pf_default_rule_new;
-
-struct {
-	char		statusif[IFNAMSIZ];
-	u_int32_t	debug;
-	u_int32_t	hostid;
-	u_int32_t	reass;
-	u_int32_t	mask;
-} pf_trans_set;
-
-#define	PF_ORDER_HOST	0
-#define	PF_ORDER_NET	1
-
-#define	PF_TSET_STATUSIF	0x01
-#define	PF_TSET_DEBUG		0x02
-#define	PF_TSET_HOSTID		0x04
-#define	PF_TSET_REASS		0x08
+struct pf_rule		 pf_default_rule;
+uint32_t		 pf_default_vers = 1;
 
 #define	TAGID_MAX	 50000
 TAILQ_HEAD(pf_tags, pf_tagname)	pf_tags = TAILQ_HEAD_INITIALIZER(pf_tags),
@@ -271,8 +256,6 @@ pfattach(int num)
 
 	/* XXX do our best to avoid a conflict */
 	pf_status.hostid = arc4random();
-
-	pf_default_rule_new = pf_default_rule;
 }
 
 int
@@ -1074,6 +1057,31 @@ fail:
 	return (error);
 }
 
+void
+pf_swap_rules(struct pf_ruleset *grs, struct pf_ruleset *trs)
+{
+	struct pf_ruleset tmp;
+	struct pf_rule *r;
+
+	KASSERT(grs->rules.version == trs->rules.version);
+
+	pf_init_ruleset(&tmp);
+	tmp.rules.rcount = trs->rules.rcount;
+	TAILQ_CONCAT(tmp.rules.ptr, trs->rules.ptr, entries);
+
+	trs->rules.rcount = grs->rules.rcount;
+	TAILQ_CONCAT(trs->rules.ptr, grs->rules.ptr, entries);
+	TAILQ_FOREACH(r, trs->rules.ptr, entries) {
+		r->ruleset = trs;
+	}
+
+	grs->rules.rcount = tmp.rules.rcount;
+	TAILQ_CONCAT(grs->rules.ptr, tmp.rules.ptr, entries);
+	TAILQ_FOREACH(r, grs->rules.ptr, entries) {
+		r->ruleset = grs;
+	}
+}
+
 int
 pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 {
@@ -1457,7 +1465,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			error = EINVAL;
 		if (pf_addr_setup(ruleset, &rule->route.addr, rule->af))
 			error = EINVAL;
-		if (pf_anchor_setup(rule, ruleset, pr->anchor_call))
+		if (pf_anchor_setup(&t->rc, rule, ruleset, pr->anchor_call))
 			error = EINVAL;
 
 		if (error) {
@@ -1683,7 +1691,12 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			if (pf_addr_setup(ruleset, &newrule->route.addr,
 			    newrule->af))
 				error = EINVAL;
-			if (pf_anchor_setup(newrule, ruleset, pcr->anchor_call))
+			/*
+			 * TODO: we have to ensure no ruleset/anchors get
+			 * 0 created here.
+			 */
+			if (pf_anchor_setup(&pf_global, newrule, ruleset,
+			    pcr->anchor_call))
 				error = EINVAL;
 
 			if (error) {
@@ -1947,20 +1960,31 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCSETSTATUSIF: {
-		struct pfioc_iface	*pi = (struct pfioc_iface *)addr;
+		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
+		struct pf_trans		*t;
+		struct pfioc_iface	 pi;
 
-		NET_LOCK();
-		PF_LOCK();
-		if (pi->pfiio_name[0] == 0) {
-			memset(pf_status.ifname, 0, IFNAMSIZ);
-			PF_UNLOCK();
-			NET_UNLOCK();
+		if (io->esize != sizeof(pi) || io->size != 1) {
+			error = ENODEV;
+			log(LOG_ERR, "%s DIOCSETSTATUSIF\n", __func__);
 			goto fail;
 		}
-		strlcpy(pf_trans_set.statusif, pi->pfiio_name, IFNAMSIZ);
-		pf_trans_set.mask |= PF_TSET_STATUSIF;
-		PF_UNLOCK();
-		NET_UNLOCK();
+
+		t = pf_find_trans(io->ticket);
+		if (t == NULL || t->pid != p->p_p->ps_pid) {
+			error = ENXIO;
+			goto fail;
+		}
+
+		if (copyin(io->array, &pi, sizeof(pi))) {
+			error = EFAULT;
+			goto fail;
+		}
+
+		strlcpy(t->trans_set.statusif, pi.pfiio_name, IFNAMSIZ);
+		t->trans_set.mask |= PF_TSET_STATUSIF;
+		t->modify_defaults = 1;
+
 		break;
 	}
 
@@ -2054,21 +2078,39 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCSETTIMEOUT: {
-		struct pfioc_tm	*pt = (struct pfioc_tm *)addr;
+		struct pfioc_trans *io = (struct pfioc_trans *)addr;
+		struct pfioc_tm	 pt;
+		struct pf_trans *t;
 
-		if (pt->timeout < 0 || pt->timeout >= PFTM_MAX ||
-		    pt->seconds < 0) {
+		if ((io->esize != sizeof(pt)) || (io->size != 1)) {
+			error = ENODEV;
+			log(LOG_ERR, "%s DIOCSETTIMEOUT\n", __func__);
+			goto fail;
+		}
+
+		t = pf_find_trans(io->ticket);
+		if ((t == NULL) || (t->pid != p->p_p->ps_pid)) {
+			error = ENXIO;
+			goto fail;
+		}
+
+		if (copyin(io->array, &pt, sizeof(pt)) != 0) {
+			error = EFAULT;
+			goto fail;
+		}
+
+		if (pt.timeout < 0 || pt.timeout >= PFTM_MAX ||
+		    pt.seconds < 0) {
 			error = EINVAL;
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
-		if (pt->timeout == PFTM_INTERVAL && pt->seconds == 0)
-			pt->seconds = 1;
-		pf_default_rule_new.timeout[pt->timeout] = pt->seconds;
-		pt->seconds = pf_default_rule.timeout[pt->timeout];
-		PF_UNLOCK();
-		NET_UNLOCK();
+		if (pt.timeout == PFTM_INTERVAL && pt.seconds == 0)
+			pt.seconds = 1;
+		t->default_rule.timeout[pt.timeout] = pt.seconds;
+		t->modify_defaults = 1;
+
+		pt.seconds = pf_default_rule.timeout[pt.timeout];
+
 		break;
 	}
 
@@ -2088,7 +2130,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCGETLIMIT: {
-		struct pfioc_limit	*pl = (struct pfioc_limit *)addr;
+		struct pfioc_limit *pl = (struct pfioc_limit *)addr;
 
 		if (pl->index < 0 || pl->index >= PF_LIMIT_MAX) {
 			error = EINVAL;
@@ -2103,48 +2145,85 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCSETLIMIT: {
-		struct pfioc_limit	*pl = (struct pfioc_limit *)addr;
+		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
+		struct pf_trans		*t;
+		struct pfioc_limit	 pl;
+
+		if (io->esize != sizeof(pl) || io->size != 1) {
+			error = ENODEV;
+			log(LOG_ERR, "%s DIOCSETLIMIT\n", __func__);
+			goto fail;
+		}
+
+		t = pf_find_trans(io->ticket);
+		if (t == NULL || t->pid != p->p_p->ps_pid) {
+			error = ENXIO;
+			goto fail;
+		}
+
+		if (copyin(io->array, &pl, sizeof(pl)) != 0) {
+			error = EFAULT;
+			goto fail;
+		}
 
 		NET_LOCK();
 		PF_LOCK();
-		if (pl->index < 0 || pl->index >= PF_LIMIT_MAX ||
-		    pf_pool_limits[pl->index].pp == NULL) {
+		if (pl.index < 0 || pl.index >= PF_LIMIT_MAX ||
+		    pf_pool_limits[pl.index].pp == NULL) {
 			error = EINVAL;
 			PF_UNLOCK();
 			NET_UNLOCK();
 			goto fail;
 		}
-		if (((struct pool *)pf_pool_limits[pl->index].pp)->pr_nout >
-		    pl->limit) {
+		if (((struct pool *)pf_pool_limits[pl.index].pp)->pr_nout >
+		    pl.limit) {
 			error = EBUSY;
 			PF_UNLOCK();
 			NET_UNLOCK();
 			goto fail;
 		}
 		/* Fragments reference mbuf clusters. */
-		if (pl->index == PF_LIMIT_FRAGS && pl->limit > nmbclust) {
+		if (pl.index == PF_LIMIT_FRAGS && pl.limit > nmbclust) {
 			error = EINVAL;
 			PF_UNLOCK();
 			NET_UNLOCK();
 			goto fail;
 		}
 
-		pf_pool_limits[pl->index].limit_new = pl->limit;
-		pl->limit = pf_pool_limits[pl->index].limit;
+		t->pool_limits[pl.index] = pl.limit;
+		t->modify_defaults = 1;
+		pl.limit = pf_pool_limits[pl.index].limit;
 		PF_UNLOCK();
 		NET_UNLOCK();
 		break;
 	}
 
 	case DIOCSETDEBUG: {
-		u_int32_t	*level = (u_int32_t *)addr;
+		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
+		struct pf_trans	*t;
+		u_int32_t	 level;
 
-		NET_LOCK();
-		PF_LOCK();
-		pf_trans_set.debug = *level;
-		pf_trans_set.mask |= PF_TSET_DEBUG;
-		PF_UNLOCK();
-		NET_UNLOCK();
+		if (io->esize != sizeof(level) || io->size != 1) {
+			error = ENODEV;
+			log(LOG_ERR, "%s DIOCSETDEBUG\n", __func__);
+			goto fail;
+		}
+
+		t = pf_find_trans(io->ticket);
+		if (t == NULL || t->pid != p->p_p->ps_pid) {
+			error = ENXIO;
+			goto fail;
+		}
+
+		if (copyin(io->array, &level, sizeof(level))) {
+			error = EFAULT;
+			goto fail;
+		}
+
+		t->trans_set.debug = level;
+		t->trans_set.mask |= PF_TSET_DEBUG;
+		t->modify_defaults = 1;
+
 		break;
 	}
 
@@ -2223,6 +2302,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != 0) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRCLRTABLES\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2239,6 +2319,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRADDTABLES\n", __func__);
 			goto fail;
 		}
 		error = pfr_add_tables(io->pfrio_buffer, io->pfrio_size,
@@ -2251,6 +2332,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRDELTABLES\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2267,6 +2349,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRGETTABLES\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2283,6 +2366,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_tstats)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRGETTSTATS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2299,6 +2383,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRCLRTSTATS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2315,6 +2400,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRSETTFLAGS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2332,6 +2418,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != 0) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRCLRADDRS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2348,6 +2435,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRADDADDRS\n", __func__);
 			goto fail;
 		}
 		error = pfr_add_addrs(&io->pfrio_table, io->pfrio_buffer,
@@ -2361,6 +2449,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRDELADDRS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2378,6 +2467,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRSETADDRS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2396,6 +2486,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRGETADDRS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2412,6 +2503,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_astats)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRGETASTATS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2428,6 +2520,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRCLRASTATS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2445,6 +2538,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRTSTADDRS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2463,6 +2557,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCRINADEFINE\n", __func__);
 			goto fail;
 		}
 
@@ -2499,20 +2594,28 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->esize != sizeof(*ioe)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCXBEGIN\n", __func__);
 			goto fail;
 		}
 
-		t = pf_open_trans(p->p_p->ps_pid);
+		/*
+		 * pfctl may call DIOCXBEGIN multiple times for single ruleset.
+		 * New rulesets/anchors are appended to pfrb buffer which holds
+		 * all rulesets we are going to create/update. We apply
+		 * DIOCXBEGIN to the whole buffer evey time new item is added.
+		 * We have to take this into account here. If we find existing
+		 * transaction for our pid, then just new item got added,
+		 * otherwise we must create a new transaction.
+		 */
+		t = pf_find_trans(io->ticket);
+		if ((t == NULL) || (t->pid != p->p_p->ps_pid))
+			t = pf_open_trans(p->p_p->ps_pid);
 		ioe = malloc(sizeof(*ioe), M_TEMP, M_WAITOK);
 		table = malloc(sizeof(*table), M_TEMP, M_WAITOK);
 
-		NET_LOCK();
-		PF_LOCK();
-		pf_default_rule_new = pf_default_rule;
-		PF_UNLOCK();
-		NET_UNLOCK();
+		t->default_rule = pf_default_rule;
+		t->default_vers = pf_default_vers;
 
-		memset(&pf_trans_set, 0, sizeof(pf_trans_set));
 		for (i = 0; i < io->size; i++) {
 			if (copyin(io->array+i, ioe, sizeof(*ioe))) {
 				free(table, M_TEMP, sizeof(*table));
@@ -2582,6 +2685,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			pf_rollback_trans(t);
 		else
 			error = ENXIO;
+		io->ticket = 0;
 
 		break;
 	}
@@ -2592,12 +2696,13 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pfioc_trans_e	*ioe;
 		struct pfr_table	*table;
 		struct pf_ruleset	*rs;
-		struct pf_anchor	*ta;
+		struct pf_anchor	*ta, *tmp;
 		int			 i, bailout = 0;
 		u_int32_t		 version;
 
 		if (io->esize != sizeof(*ioe)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCXCOMMIT\n", __func__);
 			goto fail;
 		}
 
@@ -2626,6 +2731,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		version = t->rc.main_anchor.ruleset.rules.version;
 		bailout = ((version != 0) &&
 		    (version != pf_main_ruleset.rules.version));
+		bailout |= (t->default_vers == pf_default_vers);
 		if (bailout == 0) {
 			RB_FOREACH(ta, pf_anchor_global, &t->rc.anchors) {
 				version = ta->ruleset.rules.version;
@@ -2641,42 +2747,31 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		PF_UNLOCK();
-		if (bailout == 1) {
+		if (bailout != 0) {
 			error = EBUSY;
 			goto fail;
 		}
 
 		/* commit changes */
 		PF_LOCK();	/* now upgrade to w-lock */
-		PF_UNLOCK();
-
-		for (i = 0; i < PF_LIMIT_MAX; i++) {
-			if (((struct pool *)pf_pool_limits[i].pp)->pr_nout >
-			    pf_pool_limits[i].limit_new) {
-				PF_UNLOCK();
-				NET_UNLOCK();
-				free(table, M_TEMP, sizeof(*table));
-				free(ioe, M_TEMP, sizeof(*ioe));
-				error = EBUSY;
-				pf_rollback_trans(t);
-				goto fail;
+		/*
+		 * upgrade to w-lock is safe, because no other ioctl can
+		 * mess up with global rules. we still hold ioctl rw
+		 */
+		version = t->rc.main_anchor.ruleset.rules.version;
+		if (version != 0) {
+			if (t->rc.main_anchor.ruleset.topen) {
+				/*
+				 * TODO: handle tables:
+				 *	drop/clean all tables which are
+				 *	attached to main ruleset
+				 *
+				 *	attach new tables
+				 */
 			}
-		}
-
-		for (i = 0; i < PF_LIMIT_MAX; i++) {
-			if (pf_pool_limits[i].limit_new !=
-			    pf_pool_limits[i].limit &&
-			    pool_sethardlimit(pf_pool_limits[i].pp,
-			    pf_pool_limits[i].limit_new, NULL, 0) != 0) {
-				PF_UNLOCK();
-				NET_UNLOCK();
-				free(table, M_TEMP, sizeof(*table));
-				free(ioe, M_TEMP, sizeof(*ioe));
-				error = EBUSY;
-				pf_rollback_trans(t);
-				goto fail; /* really bad */
-			}
-			pf_pool_limits[i].limit = pf_pool_limits[i].limit_new;
+			pf_swap_rules(&pf_main_ruleset,
+			    &t->rc.main_anchor.ruleset);
+			pf_main_ruleset.rules.version++;
 		}
 
 		/*
@@ -2688,20 +2783,68 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		 *
 		 * create/update tables in global container
 		 */
+		
+		RB_FOREACH_SAFE(ta, pf_anchor_global, &t->rc.anchors, tmp) {
+		}
 
-		for (i = 0; i < PFTM_MAX; i++) {
-			int old = pf_default_rule.timeout[i];
+		if (t->modify_defaults) {
+			/*
+			 * too late to derail transaction here.  I think
+			 * warning we failed to update limit is sufficient
+			 * here.
+			 */
+			for (i = 0; i < PF_LIMIT_MAX; i++) {
+				struct pool *pp;
 
-			pf_default_rule.timeout[i] =
-			    pf_default_rule_new.timeout[i];
-			if (pf_default_rule.timeout[i] == PFTM_INTERVAL &&
-			    pf_default_rule.timeout[i] < old)
-				task_add(net_tq(0), &pf_purge_task);
+				pp = (struct pool *)pf_pool_limits[i].pp;
+				if (pp->pr_nout > t->pool_limits[i]) {
+					log(LOG_WARNING,
+					    "pr_nout (%u) exceeds new "
+					    "limit (%u) for %s\n",
+					    pp->pr_nout,
+					    t->pool_limits[i],
+					    pp->pr_wchan);
+				} else if (t->pool_limits[i] !=
+				    pf_pool_limits[i].limit &&
+				    pool_sethardlimit(pp, t->pool_limits[i],
+				    NULL, 0) != 0) {
+					log(LOG_WARNING,
+					    "setting limit to %u failed "
+					    "for %s\n",
+					    t->pool_limits[i],
+					    pp->pr_wchan);
+				} else {
+					pf_pool_limits[i].limit =
+					    t->pool_limits[i];
+				}
+			}
+
+			/*
+			 * is there a better way to modify default rule?
+			 */
+			pf_default_rule = t->default_rule;
+
+			for (i = 0; i < PFTM_MAX; i++) {
+				int old = pf_default_rule.timeout[i];
+
+				pf_default_rule.timeout[i] =
+				    t->default_rule.timeout[i];
+
+				if (i == PFTM_INTERVAL &&
+				    pf_default_rule.timeout[i] < old)
+					task_add(net_tq(0), &pf_purge_task);
+			}
+
+			pf_default_vers++;
 		}
 		pfi_xcommit();
-		pf_trans_set_commit();
+		pf_trans_set_commit(&t->trans_set);
 		PF_UNLOCK();
 		NET_UNLOCK();
+		/*
+		 * rollback should stay to release old stuff
+		 * we keep after calling pf_swap_rules() et. al.
+		 */
 		pf_rollback_trans(t);
 		break;
 	}
@@ -2831,17 +2974,35 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCSETHOSTID: {
-		u_int32_t	*hostid = (u_int32_t *)addr;
+		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
+		struct pf_trans		*t;
+		u_int32_t	hostid;
 
-		NET_LOCK();
-		PF_LOCK();
-		if (*hostid == 0)
-			pf_trans_set.hostid = arc4random();
+		if (io->esize != sizeof(hostid) || io->size != 1) {
+			error = ENODEV;
+			log(LOG_ERR, "%s DIOCSETHOSTID\n", __func__);
+			goto fail;
+		}
+
+		t = pf_find_trans(io->ticket);
+		if (t == NULL || t->pid != p->p_p->ps_pid) {
+			error = ENXIO;
+			goto fail;
+		}
+
+		if (copyin(io->array, &hostid, sizeof(hostid))) {
+			error = EFAULT;
+			goto fail;
+		}
+
+		if (hostid == 0)
+			t->trans_set.hostid = arc4random();
 		else
-			pf_trans_set.hostid = *hostid;
-		pf_trans_set.mask |= PF_TSET_HOSTID;
-		PF_UNLOCK();
-		NET_UNLOCK();
+			t->trans_set.hostid = hostid;
+
+		t->trans_set.mask |= PF_TSET_HOSTID;
+		t->modify_defaults = 1;
+
 		break;
 	}
 
@@ -2856,6 +3017,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfiio_esize != sizeof(struct pfi_kif)) {
 			error = ENODEV;
+			log(LOG_ERR, "%s DIOCIGETIFACES\n", __func__);
 			goto fail;
 		}
 
@@ -2910,14 +3072,30 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCSETREASS: {
-		u_int32_t	*reass = (u_int32_t *)addr;
+		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
+		struct pf_trans		*t;
+		u_int32_t	 reass;
 
-		NET_LOCK();
-		PF_LOCK();
-		pf_trans_set.reass = *reass;
-		pf_trans_set.mask |= PF_TSET_REASS;
-		PF_UNLOCK();
-		NET_UNLOCK();
+		if (io->esize != sizeof(reass) || io->size != 1) {
+			error = EINVAL;
+			goto fail;
+		}
+
+		t = pf_find_trans(io->ticket);
+		if (t == NULL || t->pid != p->p_p->ps_pid) {
+			error = ENXIO;
+			goto fail;
+		}
+
+		if (copyin(io->array, &reass, sizeof(reass))) {
+			error = EFAULT;
+			goto fail;
+		}
+
+		t->trans_set.reass = reass;
+		t->trans_set.mask |= PF_TSET_REASS;
+		t->modify_defaults = 1;
+
 		break;
 	}
 
@@ -2956,6 +3134,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	default:
 		error = ENODEV;
+		log(LOG_ERR, "%s default\n", __func__);
 		break;
 	}
 fail:
@@ -2968,16 +3147,18 @@ fail:
 }
 
 void
-pf_trans_set_commit(void)
+pf_trans_set_commit(struct pf_trans_set *status)
 {
-	if (pf_trans_set.mask & PF_TSET_STATUSIF)
-		strlcpy(pf_status.ifname, pf_trans_set.statusif, IFNAMSIZ);
-	if (pf_trans_set.mask & PF_TSET_DEBUG)
-		pf_status.debug = pf_trans_set.debug;
-	if (pf_trans_set.mask & PF_TSET_HOSTID)
-		pf_status.hostid = pf_trans_set.hostid;
-	if (pf_trans_set.mask & PF_TSET_REASS)
-		pf_status.reass = pf_trans_set.reass;
+	if (status->mask & PF_TSET_STATUSIF) {
+		memset(pf_status.ifname, 0, IFNAMSIZ);
+		strlcpy(pf_status.ifname, status->statusif, IFNAMSIZ);
+	}
+	if (status->mask & PF_TSET_DEBUG)
+		pf_status.debug = status->debug;
+	if (status->mask & PF_TSET_HOSTID)
+		pf_status.hostid = status->hostid;
+	if (status->mask & PF_TSET_REASS)
+		pf_status.reass = status->reass;
 }
 
 void

@@ -271,13 +271,13 @@ extern struct pool pfr_ktable_pl;
 extern struct pool pfr_kentry_pl;
 
 struct pf_pool_limit pf_pool_limits[PF_LIMIT_MAX] = {
-	{ &pf_state_pl, PFSTATE_HIWAT, PFSTATE_HIWAT },
-	{ &pf_src_tree_pl, PFSNODE_HIWAT, PFSNODE_HIWAT },
-	{ &pf_frent_pl, PFFRAG_FRENT_HIWAT, PFFRAG_FRENT_HIWAT },
-	{ &pfr_ktable_pl, PFR_KTABLE_HIWAT, PFR_KTABLE_HIWAT },
-	{ &pfr_kentry_pl, PFR_KENTRY_HIWAT, PFR_KENTRY_HIWAT },
-	{ &pf_pktdelay_pl, PF_PKTDELAY_MAXPKTS, PF_PKTDELAY_MAXPKTS },
-	{ &pf_anchor_pl, PF_ANCHOR_HIWAT, PF_ANCHOR_HIWAT }
+	{ &pf_state_pl, PFSTATE_HIWAT },
+	{ &pf_src_tree_pl, PFSNODE_HIWAT },
+	{ &pf_frent_pl, PFFRAG_FRENT_HIWAT },
+	{ &pfr_ktable_pl, PFR_KTABLE_HIWAT },
+	{ &pfr_kentry_pl, PFR_KENTRY_HIWAT },
+	{ &pf_pktdelay_pl, PF_PKTDELAY_MAXPKTS },
+	{ &pf_anchor_pl, PF_ANCHOR_HIWAT }
 };
 
 #define BOUND_IFACE(r, k) \

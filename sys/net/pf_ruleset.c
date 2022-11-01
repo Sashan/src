@@ -341,8 +341,8 @@ pf_remove_if_empty_ruleset(struct pf_rules_container *rc,
 }
 
 int
-pf_anchor_setup(struct pf_rule *r, const struct pf_ruleset *s,
-    const char *name)
+pf_anchor_setup(struct pf_rules_container *rc, struct pf_rule *r,
+    const struct pf_ruleset *s, const char *name)
 {
 	char			*p, *path;
 	struct pf_ruleset	*ruleset;
@@ -386,7 +386,7 @@ pf_anchor_setup(struct pf_rule *r, const struct pf_ruleset *s,
 		r->anchor_wildcard = 1;
 		*p = 0;
 	}
-	ruleset = pf_find_or_create_ruleset(&pf_global, path);
+	ruleset = pf_find_or_create_ruleset(rc, path);
 	rs_free(path, MAXPATHLEN);
 	if (ruleset == NULL || ruleset == &pf_main_ruleset) {
 		DPFPRINTF(LOG_NOTICE,

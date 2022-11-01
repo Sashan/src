@@ -1934,13 +1934,96 @@ pfctl_get_ticket(struct pfr_buffer *buf, int type, const char *anchor)
 }
 
 int
-pfctl_trans(int dev, struct pfr_buffer *buf, u_long cmd, int from)
+pfctl_trans(int dev, void *buf, u_long cmd, int from)
 {
 	struct pfioc_trans trans;
+	struct pfr_buffer *pfrb;
+	static uint64_t ticket = 0;
+	int rv;
 
 	bzero(&trans, sizeof(trans));
-	trans.size = buf->pfrb_size - from;
-	trans.esize = sizeof(struct pfioc_trans_e);
-	trans.array = ((struct pfioc_trans_e *)buf->pfrb_caddr) + from;
-	return ioctl(dev, cmd, &trans);
+	trans.ticket = ticket;
+	switch (cmd) {
+	case DIOCXBEGIN:
+	case DIOCXROLLBACK:
+	case DIOCXCOMMIT:
+		pfrb = (struct pfr_buffer *)buf;
+		trans.esize = sizeof(struct pfioc_trans_e);
+		if (pfrb != NULL) {
+			trans.size = pfrb->pfrb_size - from;
+			trans.array = ((struct pfioc_trans_e *)pfrb->pfrb_caddr) + from;
+		}
+		break;
+	case DIOCSETTIMEOUT:
+		if (ticket == 0) {
+			errno = ENXIO;
+			return (-1);
+		}
+		trans.size = 1;
+		trans.esize = sizeof(struct pfioc_tm);
+		trans.array = buf;
+		break;
+	case DIOCSETSYNFLWATS:
+		if (ticket == 0) {
+			errno = ENXIO;
+			return (-1);
+		}
+		trans.size = 1;
+		trans.esize = sizeof(struct pfioc_synflwats);
+		trans.array = buf;
+		break;
+	case DIOCSETLIMIT:
+		if (ticket == 0) {
+			errno = ENXIO;
+			return (-1);
+		}
+		trans.size = 1;
+		trans.esize = sizeof(struct pfioc_limit);
+		trans.array = buf;
+		break;
+	case DIOCSETDEBUG:
+		if (ticket == 0) {
+			errno = ENXIO;
+			return (-1);
+		}
+		trans.size = 1;
+		trans.esize = sizeof(u_int32_t);
+		trans.array = buf;
+		break;
+	case DIOCSETHOSTID:
+		if (ticket == 0) {
+			errno = ENXIO;
+			return (-1);
+		}
+		trans.size = 1;
+		trans.esize = sizeof(u_int32_t);
+		trans.array = buf;
+		break;
+	case DIOCSETREASS:
+		if (ticket == 0) {
+			errno = ENXIO;
+			return (-1);
+		}
+		trans.size = 1;
+		trans.esize = sizeof(u_int32_t);
+		trans.array = buf;
+		break;
+	case DIOCSETSTATUSIF:
+		if (ticket == 0) {
+			errno = ENXIO;
+			return (-1);
+		}
+		trans.size = 1;
+		trans.esize = sizeof(struct pfioc_iface);
+		trans.array = buf;
+		break;
+	default:
+		errno = EINVAL;
+		return (-1);
+	}
+	rv = ioctl(dev, cmd, &trans);
+	if ((rv == 0) && ((cmd == DIOCXBEGIN) || (cmd == DIOCXROLLBACK)))
+		ticket = trans.ticket;
+
+	return (rv);
 }
