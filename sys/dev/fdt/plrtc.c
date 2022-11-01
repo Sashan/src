@@ -1,4 +1,4 @@
-/*	$OpenBSD: plrtc.c,v 1.2 2021/10/24 17:52:26 mpi Exp $	*/
+/*	$OpenBSD: plrtc.c,v 1.4 2022/10/17 19:09:46 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2015 Jonathan Gray <jsg@openbsd.org>
@@ -38,8 +38,6 @@
 #define RTCICR	0x1c
 
 #define RTCCR_START	(1 << 0)
-
-extern todr_chip_handle_t todr_handle;
 
 struct plrtc_softc {
 	struct device		 sc_dev;
@@ -120,7 +118,8 @@ plrtc_attach(struct device *parent, struct device *self, void *aux)
 	handle->cookie = sc;
 	handle->todr_gettime = plrtc_gettime;
 	handle->todr_settime = plrtc_settime;
-	todr_handle = handle;
+	handle->todr_quality = 0;
+	todr_attach(handle);
 
 	/* enable the rtc */
 	bus_space_write_4(sc->sc_iot, sc->sc_ioh, RTCCR, RTCCR_START);

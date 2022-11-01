@@ -1,4 +1,4 @@
-/*	$OpenBSD: apldma.c,v 1.2 2022/07/27 20:18:46 kettenis Exp $	*/
+/*	$OpenBSD: apldma.c,v 1.4 2022/10/23 22:15:45 tobhe Exp $	*/
 /*
  * Copyright (c) 2022 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -159,7 +159,7 @@ apldma_attach(struct device *parent, struct device *self, void *aux)
 		goto unmap;
 	}
 	sc->sc_ac = mallocarray(sc->sc_nchannels,
-	    sizeof(struct apldma_channel), M_DEVBUF, M_WAITOK | M_ZERO);
+	    sizeof(struct apldma_channel *), M_DEVBUF, M_WAITOK | M_ZERO);
 
 	sc->sc_dmat = faa->fa_dmat;
 	sc->sc_node = faa->fa_node;
@@ -180,7 +180,7 @@ apldma_attach(struct device *parent, struct device *self, void *aux)
 
 free:
 	free(sc->sc_ac, M_DEVBUF,
-	    sc->sc_nchannels * sizeof(struct apldma_channel));
+	    sc->sc_nchannels * sizeof(struct apldma_channel *));
 unmap:
 	bus_space_unmap(sc->sc_iot, sc->sc_ioh, faa->fa_reg[0].size);
 }
@@ -259,7 +259,7 @@ apldma_alloc_channel(unsigned int chan)
 	struct apldma_softc *sc = apldma_sc;
 	struct apldma_channel *ac;
 
-	if (chan >= sc->sc_nchannels)
+	if (sc == NULL || chan >= sc->sc_nchannels)
 		return NULL;
 
 	/* We only support Tx channels for now. */

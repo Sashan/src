@@ -1,8 +1,4 @@
-.if ! exists(/usr/local/bin/eopenssl11)
-regress:
-	@echo 'Run "pkg_add openssl--%1.1" to run tests against OpenSSL 1.1'
-	@echo SKIPPED
-.endif
+# $OpenBSD: Makefile,v 1.12 2022/10/14 17:17:13 tb Exp $
 
 LDADD +=	-Wl,-rpath,/usr/local/lib/eopenssl11 -L/usr/local/lib/eopenssl11
 CFLAGS +=	-I${.CURDIR}/ -I/usr/local/include/eopenssl11/

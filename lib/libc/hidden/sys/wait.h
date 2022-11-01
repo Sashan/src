@@ -1,4 +1,4 @@
-/*	$OpenBSD: wait.h,v 1.2 2016/05/07 19:05:22 guenther Exp $	*/
+/*	$OpenBSD: wait.h,v 1.3 2022/10/26 23:16:24 kettenis Exp $	*/
 /*
  * Copyright (c) 2015 Philip Guenther <guenther@openbsd.org>
  *
@@ -24,5 +24,6 @@ PROTO_DEPRECATED(wait);
 PROTO_NORMAL(waitpid);
 PROTO_DEPRECATED(wait3);
 PROTO_CANCEL(wait4);
+PROTO_CANCEL(waitid);
 
 #endif /* !_LIBC_SYS_WAIT_H_ */

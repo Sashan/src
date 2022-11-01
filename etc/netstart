@@ -1,13 +1,13 @@
 #!/bin/sh -
 #
-#	$OpenBSD: netstart,v 1.219 2022/07/03 12:14:36 kn Exp $
+#	$OpenBSD: netstart,v 1.227 2022/11/01 11:18:06 kn Exp $
 
 # Turn off Strict Bourne shell mode.
 set +o sh
 
 # Show usage of the netstart script and exit.
 usage() {
-	print -u2 "usage: ${0##*/} [[-n] interface ...]"
+	print -u2 "usage: sh ${0##*/} [-n] [interface ...]"
 	exit 1
 }
 
@@ -290,13 +290,23 @@ ip6routes() {
 
 # wait for autoconf interfaces
 wait_autoconf_default() {
+	local _count=0
+
 	if ifconfig | grep -q ': flags=.*<.*AUTOCONF.*>'; then
-		count=0
-		while ((count++ < 20)); do
+		while ((_count++ < 20)); do
 			route -n show | grep -q ^default && break
 			sleep .5
 		done
 	fi
+}
+
+# Ensure IPv6 Duplicate Address Detection (DAD) is completed.
+wait_dad() {
+	local _count=0
+
+	while ((_count++ < 10 && $(sysctl -n net.inet6.ip6.dad_pending) != 0)); do
+		sleep 1
+	done
 }
 
 # Make sure the invoking user has the right privileges.  Check for presence of
@@ -313,6 +323,7 @@ _rc_parse_conf
 PRINT_ONLY=false
 V4_AUTOCONF=false
 V6_AUTOCONF=false
+IP6KERNEL=false
 
 while getopts ":n" opt; do
 	case $opt in
@@ -322,10 +333,16 @@ while getopts ":n" opt; do
 done
 shift $((OPTIND-1))
 
+if ifconfig lo0 inet6 >/dev/null 2>&1; then
+	IP6KERNEL=true
+fi
+
 # Load key material for the generation of IPv6 Semantically Opaque Interface
-# Identifiers (SOII) used for link local and SLAAC addresses.
-$PRINT_ONLY || [[ ! -f /etc/soii.key ]] ||
-	sysctl -q "net.inet6.ip6.soiikey=$(</etc/soii.key)"
+# Identifiers (SOII) used for SLAAC addresses.
+if $IP6KERNEL && ! $PRINT_ONLY; then
+	[[ -f /etc/soii.key ]] &&
+		sysctl -q "net.inet6.ip6.soiikey=$(</etc/soii.key)"
+fi
 
 # If we were invoked with a list of interface names, just reconfigure these
 # interfaces (or bridges), add default routes and return.
@@ -349,12 +366,8 @@ else
 	ifconfig lo0 inet 127.0.0.1/8
 fi
 
-# IPv6 configuration.
-if ifconfig lo0 inet6 >/dev/null 2>&1; then
-	ip6kernel=YES
+if $IP6KERNEL && ! $PRINT_ONLY; then
 	ip6routes
-else
-	ip6kernel=NO
 fi
 
 # Create all the pseudo interfaces up front.
@@ -391,15 +404,11 @@ else
 fi
 
 # If interface autoconf exists, pause a little for at least one default route
-wait_autoconf_default
+$PRINT_ONLY || wait_autoconf_default
 
 # Configure interfaces that rely on routing
 ifmstart "tun tap gif etherip gre egre nvgre eoip vxlan pflow wg"
 
-if [[ $ip6kernel == YES ]]; then
-	# Ensure IPv6 Duplicate Address Detection (DAD) is completed.
-	count=0
-	while ((count++ < 10 && $(sysctl -n net.inet6.ip6.dad_pending) != 0)); do
-		sleep 1
-	done
+if $IP6KERNEL && ! $PRINT_ONLY; then
+	wait_dad
 fi

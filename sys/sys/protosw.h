@@ -1,4 +1,4 @@
-/*	$OpenBSD: protosw.h,v 1.56 2022/09/13 09:05:47 mvs Exp $	*/
+/*	$OpenBSD: protosw.h,v 1.58 2022/10/17 14:49:02 mvs Exp $	*/
 /*	$NetBSD: protosw.h,v 1.10 1996/04/09 20:55:32 cgd Exp $	*/
 
 /*-
@@ -62,7 +62,7 @@ struct stat;
 struct ifnet;
 
 struct pr_usrreqs {
-	int	(*pru_attach)(struct socket *, int);
+	int	(*pru_attach)(struct socket *, int, int);
 	int	(*pru_detach)(struct socket *);
 	void	(*pru_lock)(struct socket *);
 	void	(*pru_unlock)(struct socket *);
@@ -75,7 +75,7 @@ struct pr_usrreqs {
 	void	(*pru_rcvd)(struct socket *);
 	int	(*pru_send)(struct socket *, struct mbuf *, struct mbuf *,
 		    struct mbuf *);
-	int	(*pru_abort)(struct socket *);
+	void	(*pru_abort)(struct socket *);
 	int	(*pru_control)(struct socket *, u_long, caddr_t,
 		    struct ifnet *);
 	int	(*pru_sense)(struct socket *, struct stat *);
@@ -267,9 +267,9 @@ extern const struct protosw inet6sw[];
 #endif /* INET6 */
 
 static inline int
-pru_attach(struct socket *so, int proto)
+pru_attach(struct socket *so, int proto, int wait)
 {
-	return (*so->so_proto->pr_usrreqs->pru_attach)(so, proto);
+	return (*so->so_proto->pr_usrreqs->pru_attach)(so, proto, wait);
 }
 
 static inline int
@@ -349,10 +349,10 @@ pru_send(struct socket *so, struct mbuf *top, struct mbuf *addr,
 	return (*so->so_proto->pr_usrreqs->pru_send)(so, top, addr, control);
 }
 
-static inline int
+static inline void
 pru_abort(struct socket *so)
 {
-	return (*so->so_proto->pr_usrreqs->pru_abort)(so);
+	(*so->so_proto->pr_usrreqs->pru_abort)(so);
 }
 
 static inline int

@@ -1,4 +1,4 @@
-/*	$OpenBSD: agentx.c,v 1.17 2022/09/13 10:20:22 martijn Exp $ */
+/*	$OpenBSD: agentx.c,v 1.20 2022/11/01 13:34:44 martijn Exp $ */
 /*
  * Copyright (c) 2019 Martijn van Duren <martijn@openbsd.org>
  *
@@ -133,6 +133,7 @@ void (*agentx_wantwrite)(struct agentx *, int) =
     agentx_wantwritenow;
 static void agentx_reset(struct agentx *);
 static void agentx_free_finalize(struct agentx *);
+static int agentx_session_retry(struct agentx_session *);
 static int agentx_session_start(struct agentx_session *);
 static int agentx_session_finalize(struct ax_pdu *, void *);
 static int agentx_session_close(struct agentx_session *,
@@ -140,6 +141,7 @@ static int agentx_session_close(struct agentx_session *,
 static int agentx_session_close_finalize(struct ax_pdu *, void *);
 static void agentx_session_free_finalize(struct agentx_session *);
 static void agentx_session_reset(struct agentx_session *);
+static int agentx_context_retry(struct agentx_context *);
 static void agentx_context_start(struct agentx_context *);
 static void agentx_context_free_finalize(struct agentx_context *);
 static void agentx_context_reset(struct agentx_context *);
@@ -149,6 +151,7 @@ static int agentx_agentcaps_close(struct agentx_agentcaps *);
 static int agentx_agentcaps_close_finalize(struct ax_pdu *, void *);
 static void agentx_agentcaps_free_finalize(struct agentx_agentcaps *);
 static void agentx_agentcaps_reset(struct agentx_agentcaps *);
+static int agentx_region_retry(struct agentx_region *);
 static int agentx_region_start(struct agentx_region *);
 static int agentx_region_finalize(struct ax_pdu *, void *);
 static int agentx_region_close(struct agentx_region *);
@@ -227,6 +230,25 @@ void
 agentx_connect(struct agentx *ax, int fd)
 {
 	agentx_finalize(ax, fd);
+}
+
+void
+agentx_retry(struct agentx *ax)
+{
+	struct agentx_session *axs;
+
+	if (ax->ax_fd == -1)
+		return;
+
+	TAILQ_FOREACH(axs, &(ax->ax_sessions), axs_ax_sessions) {
+		if (axs->axs_cstate == AX_CSTATE_OPEN) {
+			if (agentx_session_retry(axs) == -1)
+				return;
+		} else if (axs->axs_cstate == AX_CSTATE_CLOSE) {
+			if (agentx_session_start(axs) == -1)
+				return;
+		}
+	}
 }
 
 static void
@@ -402,6 +424,26 @@ agentx_session(struct agentx *ax, uint32_t oid[],
 }
 
 static int
+agentx_session_retry(struct agentx_session *axs)
+{
+	struct agentx_context *axc;
+
+#ifdef AX_DEBUG
+	if (axs->axs_cstate != AX_CSTATE_OPEN)
+		agentx_log_axs_fatalx(axs, "%s: unexpected retry", __func__);
+#endif
+
+	TAILQ_FOREACH(axc, &(axs->axs_contexts), axc_axs_contexts) {
+		if (axc->axc_cstate == AX_CSTATE_OPEN) {
+			if (agentx_context_retry(axc) == -1)
+				return -1;
+		} else if (axc->axc_cstate == AX_CSTATE_CLOSE)
+			agentx_context_start(axc);
+	}
+	return 0;
+}
+
+static int
 agentx_session_start(struct agentx_session *axs)
 {
 	struct agentx *ax = axs->axs_ax;
@@ -444,7 +486,7 @@ agentx_session_finalize(struct ax_pdu *pdu, void *cookie)
 	if (pdu->ap_payload.ap_response.ap_error != AX_PDU_ERROR_NOERROR) {
 		agentx_log_ax_warnx(ax, "failed to open session: %s",
 		    ax_error2string(pdu->ap_payload.ap_response.ap_error));
-		agentx_reset(ax);
+		axs->axs_cstate = AX_CSTATE_CLOSE;
 		return -1;
 	}
 
@@ -627,6 +669,36 @@ agentx_context(struct agentx_session *axs, const char *name)
 
 	return axc;
 }
+
+static int
+agentx_context_retry(struct agentx_context *axc)
+{
+	struct agentx_agentcaps *axa;
+	struct agentx_region *axr;
+
+#ifdef AX_DEBUG
+	if (axc->axc_cstate != AX_CSTATE_OPEN)
+		agentx_log_axc_fatalx(axc, "%s: unexpected retry", __func__);
+#endif
+
+	TAILQ_FOREACH(axa, &(axc->axc_agentcaps), axa_axc_agentcaps) {
+		if (axa->axa_cstate == AX_CSTATE_CLOSE) {
+			if (agentx_agentcaps_start(axa) == -1)
+				return -1;
+		}
+	}
+	TAILQ_FOREACH(axr, &(axc->axc_regions), axr_axc_regions) {
+		if (axr->axr_cstate == AX_CSTATE_OPEN) {
+			if (agentx_region_retry(axr) == -1)
+				return -1;
+		} else if (axr->axr_cstate == AX_CSTATE_CLOSE) {
+			if (agentx_region_start(axr) == -1)
+				return -1;
+		}
+	}
+	return 0;
+}
+
 
 static void
 agentx_context_start(struct agentx_context *axc)
@@ -1077,6 +1149,33 @@ agentx_region(struct agentx_context *axc, uint32_t oid[],
 }
 
 static int
+agentx_region_retry(struct agentx_region *axr)
+{
+	struct agentx_index *axi;
+	struct agentx_object *axo;
+
+#ifdef AX_DEBUG
+	if (axr->axr_cstate != AX_CSTATE_OPEN)
+		agentx_log_axc_fatalx(axr->axr_axc,
+		    "%s: unexpected retry", __func__);
+#endif
+
+	TAILQ_FOREACH(axi, &(axr->axr_indices), axi_axr_indices) {
+		if (axi->axi_cstate == AX_CSTATE_CLOSE) {
+			if (agentx_index_start(axi) == -1)
+				return -1;
+		}
+	}
+	TAILQ_FOREACH(axo, &(axr->axr_objects), axo_axr_objects) {
+		if (axo->axo_cstate == AX_CSTATE_CLOSE) {
+			if (agentx_object_start(axo) == -1)
+				return -1;
+		}
+	}
+	return 0;
+}
+
+static int
 agentx_region_start(struct agentx_region *axr)
 {
 	struct agentx_context *axc = axr->axr_axc;
@@ -1112,8 +1211,6 @@ agentx_region_finalize(struct ax_pdu *pdu, void *cookie)
 {
 	struct agentx_region *axr = cookie;
 	struct agentx_context *axc = axr->axr_axc;
-	struct agentx_session *axs = axc->axc_axs;
-	struct agentx *ax = axs->axs_ax;
 	struct agentx_index *axi;
 	struct agentx_object *axo;
 
@@ -1140,22 +1237,11 @@ agentx_region_finalize(struct ax_pdu *pdu, void *cookie)
 		agentx_log_axc_info(axc, "region %s: duplicate, can't "
 		    "reduce priority, ignoring",
 		    ax_oid2string(&(axr->axr_oid)));
-	} else if (pdu->ap_payload.ap_response.ap_error ==
-	    AX_PDU_ERROR_REQUESTDENIED) {
+	} else {
 		axr->axr_cstate = AX_CSTATE_CLOSE;
 		agentx_log_axc_warnx(axc, "region %s: %s",
 		     ax_oid2string(&(axr->axr_oid)),
 		     ax_error2string(pdu->ap_payload.ap_response.ap_error));
-		/*
-		 * If we can't register a region, related objects are useless.
-		 * But no need to retry.
-		 */
-		return 0;
-	} else {
-		agentx_log_axc_info(axc, "region %s: %s",
-		    ax_oid2string(&(axr->axr_oid)),
-		    ax_error2string(pdu->ap_payload.ap_response.ap_error));
-		agentx_reset(ax);
 		return -1;
 	}
 
@@ -1648,8 +1734,6 @@ agentx_index_finalize(struct ax_pdu *pdu, void *cookie)
 	struct agentx_index *axi = cookie;
 	struct agentx_region *axr = axi->axi_axr;
 	struct agentx_context *axc = axr->axr_axc;
-	struct agentx_session *axs = axc->axc_axs;
-	struct agentx *ax = axs->axs_ax;
 	struct ax_pdu_response *resp;
 	size_t i;
 
@@ -1675,20 +1759,20 @@ agentx_index_finalize(struct ax_pdu *pdu, void *cookie)
 	if (resp->ap_nvarbind != 1) {
 		agentx_log_axc_warnx(axc, "index %s: unexpected number of "
 		    "indices", ax_oid2string(&(axr->axr_oid)));
-		agentx_reset(ax);
+		axi->axi_cstate = AX_CSTATE_CLOSE;
 		return -1;
 	}
 	if (resp->ap_varbindlist[0].avb_type != axi->axi_vb.avb_type) {
 		agentx_log_axc_warnx(axc, "index %s: unexpected index type",
 		    ax_oid2string(&(axr->axr_oid)));
-		agentx_reset(ax);
+		axi->axi_cstate = AX_CSTATE_CLOSE;
 		return -1;
 	}
 	if (ax_oid_cmp(&(resp->ap_varbindlist[0].avb_oid),
 	    &(axi->axi_vb.avb_oid)) != 0) {
 		agentx_log_axc_warnx(axc, "index %s: unexpected oid",
 		    ax_oid2string(&(axr->axr_oid)));
-		agentx_reset(ax);
+		axi->axi_cstate = AX_CSTATE_CLOSE;
 		return -1;
 	}
 
@@ -1702,7 +1786,7 @@ agentx_index_finalize(struct ax_pdu *pdu, void *cookie)
 		    resp->ap_varbindlist[0].avb_data.avb_int32) {
 			agentx_log_axc_warnx(axc, "index %s: unexpected "
 			    "index value", ax_oid2string(&(axr->axr_oid)));
-			agentx_reset(ax);
+			axi->axi_cstate = AX_CSTATE_CLOSE;
 			return -1;
 		}
 		agentx_log_axc_info(axc, "index %s: allocated '%d'",
@@ -3342,6 +3426,8 @@ agentx_varbind_endofmibview(struct agentx_varbind *axv)
 		return;
 	}
 
+	bcopy(&(axv->axv_start), &(axv->axv_vb.avb_oid),
+	    sizeof(axv->axv_start));
 	axv->axv_vb.avb_type = AX_DATA_TYPE_ENDOFMIBVIEW;
 
 	if (axv->axv_axo != NULL)

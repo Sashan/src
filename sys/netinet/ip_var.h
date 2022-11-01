@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_var.h,v 1.105 2022/09/13 09:05:02 mvs Exp $	*/
+/*	$OpenBSD: ip_var.h,v 1.107 2022/10/17 14:49:02 mvs Exp $	*/
 /*	$NetBSD: ip_var.h,v 1.16 1996/02/13 23:43:20 christos Exp $	*/
 
 /*
@@ -256,7 +256,7 @@ void	 rip_init(void);
 int	 rip_input(struct mbuf **, int *, int, int);
 int	 rip_output(struct mbuf *, struct socket *, struct sockaddr *,
 	    struct mbuf *);
-int	 rip_attach(struct socket *, int);
+int	 rip_attach(struct socket *, int, int);
 int	 rip_detach(struct socket *);
 void	 rip_lock(struct socket *);
 void	 rip_unlock(struct socket *);
@@ -266,7 +266,6 @@ int	 rip_disconnect(struct socket *);
 int	 rip_shutdown(struct socket *);
 int	 rip_send(struct socket *, struct mbuf *, struct mbuf *,
 	     struct mbuf *);
-int	 rip_abort(struct socket *);
 #ifdef MROUTING
 extern struct socket *ip_mrouter[];	/* multicast routing daemon */
 #endif

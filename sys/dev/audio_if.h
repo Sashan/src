@@ -1,4 +1,4 @@
-/*	$OpenBSD: audio_if.h,v 1.38 2022/03/21 19:22:40 miod Exp $	*/
+/*	$OpenBSD: audio_if.h,v 1.41 2022/10/28 15:13:59 kn Exp $	*/
 /*	$NetBSD: audio_if.h,v 1.24 1998/01/10 14:07:25 tv Exp $	*/
 
 /*
@@ -39,13 +39,6 @@
 #define _SYS_DEV_AUDIO_IF_H_
 
 #include <sys/mutex.h>
-
-/*
- * get_props
- */
-#define AUDIO_PROP_FULLDUPLEX	0x01
-#define AUDIO_PROP_MMAP		0x02
-#define AUDIO_PROP_INDEPENDENT	0x04
 
 #define AUDIO_BPS(bits)		(bits) <= 8 ? 1 : ((bits) <= 16 ? 2 : 4)
 
@@ -110,8 +103,6 @@ struct audio_hw_if {
 #define SPKR_ON		1
 #define SPKR_OFF	0
 
-	int	(*setfd)(void *, int);
-
 	/* Mixer (in/out ports) */
 	int	(*set_port)(void *, struct mixer_ctrl *);
 	int	(*get_port)(void *, struct mixer_ctrl *);
@@ -124,8 +115,6 @@ struct audio_hw_if {
 	void	*(*allocm)(void *, int, size_t, int, int);
 	void	(*freem)(void *, void *, int);
 	size_t	(*round_buffersize)(void *, int, size_t);
-
-	int	(*get_props)(void *); /* device properties */
 
 	int	(*trigger_output)(void *, void *, void *, int,
 		    void (*)(void *), void *, struct audio_params *);

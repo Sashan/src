@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtsock.c,v 1.356 2022/09/13 09:05:47 mvs Exp $	*/
+/*	$OpenBSD: rtsock.c,v 1.358 2022/10/17 14:49:02 mvs Exp $	*/
 /*	$NetBSD: rtsock.c,v 1.18 1996/03/29 00:32:10 cgd Exp $	*/
 
 /*
@@ -111,14 +111,13 @@ void	rcb_ref(void *, void *);
 void	rcb_unref(void *, void *);
 int	route_output(struct mbuf *, struct socket *);
 int	route_ctloutput(int, struct socket *, int, int, struct mbuf *);
-int	route_attach(struct socket *, int);
+int	route_attach(struct socket *, int, int);
 int	route_detach(struct socket *);
 int	route_disconnect(struct socket *);
 int	route_shutdown(struct socket *);
 void	route_rcvd(struct socket *);
 int	route_send(struct socket *, struct mbuf *, struct mbuf *,
 	    struct mbuf *);
-int	route_abort(struct socket *);
 int	route_sockaddr(struct socket *, struct mbuf *);
 int	route_peeraddr(struct socket *, struct mbuf *);
 void	route_input(struct mbuf *m0, struct socket *, sa_family_t);
@@ -216,7 +215,7 @@ rcb_unref(void *null, void *v)
 }
 
 int
-route_attach(struct socket *so, int proto)
+route_attach(struct socket *so, int proto, int wait)
 {
 	struct rtpcb	*rop;
 	int		 error;
@@ -229,7 +228,10 @@ route_attach(struct socket *so, int proto)
 	 * code does not care about the additional fields
 	 * and works directly on the raw socket.
 	 */
-	rop = pool_get(&rtpcb_pool, PR_WAITOK|PR_ZERO);
+	rop = pool_get(&rtpcb_pool, (wait == M_WAIT ? PR_WAITOK : PR_NOWAIT) |
+	    PR_ZERO);
+	if (rop == NULL)
+		return (ENOBUFS);
 	so->so_pcb = rop;
 	/* Init the timeout structure */
 	timeout_set_proc(&rop->rop_timeout, rtm_senddesync_timer, so);
@@ -342,13 +344,6 @@ out:
 	m_freem(m);
 
 	return (error);
-}
-
-int
-route_abort(struct socket *so)
-{
-	soisdisconnected(so);
-	return (0);
 }
 
 int
@@ -2406,7 +2401,6 @@ const struct pr_usrreqs route_usrreqs = {
 	.pru_shutdown	= route_shutdown,
 	.pru_rcvd	= route_rcvd,
 	.pru_send	= route_send,
-	.pru_abort	= route_abort,
 	.pru_sockaddr	= route_sockaddr,
 	.pru_peeraddr	= route_peeraddr,
 };

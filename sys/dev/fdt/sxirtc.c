@@ -1,4 +1,4 @@
-/*	$OpenBSD: sxirtc.c,v 1.6 2021/10/24 17:52:27 mpi Exp $	*/
+/*	$OpenBSD: sxirtc.c,v 1.8 2022/10/17 19:09:46 kettenis Exp $	*/
 /*
  * Copyright (c) 2008 Mark Kettenis
  * Copyright (c) 2013 Artturi Alm
@@ -45,9 +45,6 @@
     (((y) % 4 == 0 &&    \
     (y) % 100 != 0) ||    \
     (y) % 400 == 0) 
-
-
-extern todr_chip_handle_t todr_handle;
 
 struct sxirtc_softc {
 	struct device		sc_dev;
@@ -148,7 +145,8 @@ sxirtc_attach(struct device *parent, struct device *self, void *aux)
 	handle->todr_settime = sxirtc_settime;
 	handle->bus_cookie = NULL;
 	handle->todr_setwen = NULL;
-	todr_handle = handle;
+	handle->todr_quality = 0;
+	todr_attach(handle);
 
 	printf("\n");
 }

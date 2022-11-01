@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.200 2021/10/06 15:46:03 claudio Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.205 2022/10/30 17:43:40 guenther Exp $	*/
 /*	$NetBSD: machdep.c,v 1.108 2001/07/24 19:30:14 eeh Exp $ */
 
 /*-
@@ -255,20 +255,13 @@ cpu_startup(void)
  * Set up registers on exec.
  */
 
-#define STACK_OFFSET	BIAS
 #define CPOUTREG(l,v)	copyout(&(v), (l), sizeof(v))
-#undef CCFSZ
-#define CCFSZ	CC64FSZ
 
-/* ARGSUSED */
 void
-setregs(p, pack, stack, retval)
-	struct proc *p;
-	struct exec_package *pack;
-	vaddr_t stack;
-	register_t *retval;
+setregs(struct proc *p, struct exec_package *pack, u_long stack,
+    struct ps_strings *arginfo)
 {
-	struct trapframe64 *tf = p->p_md.md_tf;
+	struct trapframe *tf = p->p_md.md_tf;
 	int64_t tstate;
 	int pstate = PSTATE_USER;
 	Elf_Ehdr *eh = pack->ep_hdr;
@@ -282,7 +275,7 @@ setregs(p, pack, stack, retval)
 
 	/* The cookie needs to guarantee invalid alignment after the XOR. */
 	switch (p->p_addr->u_pcb.pcb_wcookie % 3) {
-	case 0: /* Two lsb's already both set except if the cookie is 0. */
+	case 0: /* Set two lsbs. */
 		p->p_addr->u_pcb.pcb_wcookie |= 0x3;
 		break;
 	case 1: /* Set the lsb. */
@@ -327,21 +320,19 @@ setregs(p, pack, stack, retval)
 		 * to save it.  In any case, get rid of our FPU state.
 		 */
 		fpusave_proc(p, 0);
-		free(p->p_md.md_fpstate, M_SUBPROC, sizeof(struct fpstate64));
+		free(p->p_md.md_fpstate, M_SUBPROC, sizeof(struct fpstate));
 		p->p_md.md_fpstate = NULL;
 	}
-	bzero((caddr_t)tf, sizeof *tf);
+	memset(tf, 0, sizeof *tf);
 	tf->tf_tstate = tstate;
 	tf->tf_pc = pack->ep_entry & ~3;
 	tf->tf_npc = tf->tf_pc + 4;
-	tf->tf_global[2] = tf->tf_pc;
 	stack -= sizeof(struct rwindow);
-	tf->tf_out[6] = stack - STACK_OFFSET;
+	tf->tf_out[6] = stack - BIAS;
 #ifdef NOTDEF_DEBUG
 	printf("setregs: setting tf %p sp %p pc %p\n", (long)tf, 
 	       (long)tf->tf_out[6], (long)tf->tf_pc);
 #endif
-	retval[1] = 0;
 }
 
 struct sigframe {
@@ -408,12 +399,12 @@ sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip,
 {
 	struct proc *p = curproc;
 	struct sigframe *fp;
-	struct trapframe64 *tf;
+	struct trapframe *tf;
 	vaddr_t addr, oldsp, newsp;
 	struct sigframe sf;
 
 	tf = p->p_md.md_tf;
-	oldsp = tf->tf_out[6] + STACK_OFFSET;
+	oldsp = tf->tf_out[6] + BIAS;
 
 	/*
 	 * Compute new user stack addresses, subtract off
@@ -488,7 +479,7 @@ sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip,
 	tf->tf_global[1] = (vaddr_t)catcher;
 	tf->tf_pc = addr;
 	tf->tf_npc = addr + 4;
-	tf->tf_out[6] = newsp - STACK_OFFSET;
+	tf->tf_out[6] = newsp - BIAS;
 
 	return 0;
 }
@@ -510,7 +501,7 @@ sys_sigreturn(struct proc *p, void *v, register_t *retval)
 		syscallarg(struct sigcontext *) sigcntxp;
 	} */ *uap = v;
 	struct sigcontext ksc, *scp = SCARG(uap, sigcntxp);
-	struct trapframe64 *tf;
+	struct trapframe *tf;
 	int error = EINVAL;
 
 	if (PROC_PC(p) != p->p_p->ps_sigcoderet) {
@@ -715,8 +706,7 @@ dumpconf(void)
 static vaddr_t dumpspace;
 
 caddr_t
-reserve_dumppages(p)
-	caddr_t p;
+reserve_dumppages(caddr_t p)
 {
 
 	dumpspace = (vaddr_t)p;
@@ -836,13 +826,12 @@ printf("starting dump, blkno %lld\n", (long long)blkno);
 	}
 }
 
-void trapdump(struct trapframe64*);
+void trapdump(struct trapframe *);
 /*
  * dump out a trapframe.
  */
 void
-trapdump(tf)
-	struct trapframe64* tf;
+trapdump(struct trapframe *tf)
 {
 	printf("TRAPFRAME: tstate=%llx pc=%llx npc=%llx y=%x\n",
 	       (unsigned long long)tf->tf_tstate, (unsigned long long)tf->tf_pc,
@@ -872,36 +861,24 @@ trapdump(tf)
 void
 stackdump(void)
 {
-	struct frame32 *fp = (struct frame32 *)getfp(), *sfp;
-	struct frame64 *fp64;
+	struct frame *sfp = getfp(), *fp64;
 
-	sfp = fp;
-	printf("Frame pointer is at %p\n", fp);
+	fp64 = sfp = v9next_frame(sfp);
+	printf("Frame pointer is at %p\n", fp64);
 	printf("Call traceback:\n");
-	while (fp && ((u_long)fp >> PGSHIFT) == ((u_long)sfp >> PGSHIFT)) {
-		if( ((long)fp) & 1 ) {
-			fp64 = (struct frame64*)(((char *)fp)+BIAS);
-			/* 64-bit frame */
-			printf("%llx(%llx, %llx, %llx, %llx, %llx, %llx, %llx) "
-			    "fp = %llx\n",
-			       (unsigned long long)fp64->fr_pc,
-			       (unsigned long long)fp64->fr_arg[0],
-			       (unsigned long long)fp64->fr_arg[1],
-			       (unsigned long long)fp64->fr_arg[2],
-			       (unsigned long long)fp64->fr_arg[3],
-			       (unsigned long long)fp64->fr_arg[4],
-			       (unsigned long long)fp64->fr_arg[5],	
-			       (unsigned long long)fp64->fr_arg[6],
-			       (unsigned long long)fp64->fr_fp);
-			fp = (struct frame32 *)(u_long)fp64->fr_fp;
-		} else {
-			/* 32-bit frame */
-			printf("  pc = %x  args = (%x, %x, %x, %x, %x, %x) "
-			    "fp = %x\n", fp->fr_pc, fp->fr_arg[0],
-			    fp->fr_arg[1], fp->fr_arg[2], fp->fr_arg[3],
-			    fp->fr_arg[4], fp->fr_arg[5], fp->fr_fp);
-			fp = (struct frame32*)(u_long)(u_short)fp->fr_fp;
-		}
+	while (fp64 && ((u_long)fp64 >> PGSHIFT) == ((u_long)sfp >> PGSHIFT)) {
+		printf("%llx(%llx, %llx, %llx, %llx, %llx, %llx, %llx) "
+		    "fp = %llx\n",
+		       (unsigned long long)fp64->fr_pc,
+		       (unsigned long long)fp64->fr_arg[0],
+		       (unsigned long long)fp64->fr_arg[1],
+		       (unsigned long long)fp64->fr_arg[2],
+		       (unsigned long long)fp64->fr_arg[3],
+		       (unsigned long long)fp64->fr_arg[4],
+		       (unsigned long long)fp64->fr_arg[5],	
+		       (unsigned long long)fp64->fr_arg[6],
+		       (unsigned long long)fp64->fr_fp);
+		fp64 = v9next_frame(fp64);
 	}
 }
 
@@ -911,14 +888,9 @@ stackdump(void)
  * DMA map creation functions.
  */
 int
-_bus_dmamap_create(t, t0, size, nsegments, maxsegsz, boundary, flags, dmamp)
-	bus_dma_tag_t t, t0;
-	bus_size_t size;
-	int nsegments;
-	bus_size_t maxsegsz;
-	bus_size_t boundary;
-	int flags;
-	bus_dmamap_t *dmamp;
+_bus_dmamap_create(bus_dma_tag_t t, bus_dma_tag_t t0, bus_size_t size,
+    int nsegments, bus_size_t maxsegsz, bus_size_t boundary, int flags,
+    bus_dmamap_t *dmamp)
 {
 	struct sparc_bus_dmamap *map;
 	void *mapstore;
@@ -961,10 +933,7 @@ _bus_dmamap_create(t, t0, size, nsegments, maxsegsz, boundary, flags, dmamp)
  * DMA map destruction functions.
  */
 void
-_bus_dmamap_destroy(t, t0, map)
-	bus_dma_tag_t t, t0;
-	bus_dmamap_t map;
-
+_bus_dmamap_destroy(bus_dma_tag_t t, bus_dma_tag_t t0, bus_dmamap_t map)
 {
 	/*
 	 * Unload the map if it is still loaded.  This is required
@@ -991,13 +960,8 @@ _bus_dmamap_destroy(t, t0, map)
  * bypass DVMA.
  */
 int
-_bus_dmamap_load(t, t0, map, buf, buflen, p, flags)
-	bus_dma_tag_t t, t0;
-	bus_dmamap_t map;
-	void *buf;
-	bus_size_t buflen;
-	struct proc *p;
-	int flags;
+_bus_dmamap_load(bus_dma_tag_t t, bus_dma_tag_t t0, bus_dmamap_t map, void *buf,
+    bus_size_t buflen, struct proc *p, int flags)
 {
 	bus_addr_t lastaddr;
 	int seg, error;
@@ -1025,11 +989,8 @@ _bus_dmamap_load(t, t0, map, buf, buflen, p, flags)
  * Like _bus_dmamap_load(), but for mbufs.
  */
 int
-_bus_dmamap_load_mbuf(t, t0, map, m, flags)
-	bus_dma_tag_t t, t0;
-	bus_dmamap_t map;
-	struct mbuf *m;
-	int flags;
+_bus_dmamap_load_mbuf(bus_dma_tag_t t, bus_dma_tag_t t0, bus_dmamap_t map,
+    struct mbuf *m, int flags)
 {
 	bus_dma_segment_t segs[MAX_DMA_SEGS];
 	int i;
@@ -1105,11 +1066,8 @@ _bus_dmamap_load_mbuf(t, t0, map, m, flags)
  * Like _bus_dmamap_load(), but for uios.
  */
 int
-_bus_dmamap_load_uio(t, t0, map, uio, flags)
-	bus_dma_tag_t t, t0;
-	bus_dmamap_t map;
-	struct uio *uio;
-	int flags;
+_bus_dmamap_load_uio(bus_dma_tag_t t, bus_dma_tag_t t0, bus_dmamap_t map,
+    struct uio *uio, int flags)
 {
 	/*
 	 * XXXXXXX The problem with this routine is that it needs to 
@@ -1184,13 +1142,8 @@ _bus_dmamap_load_uio(t, t0, map, uio, flags)
  * bus_dmamem_alloc().
  */
 int
-_bus_dmamap_load_raw(t, t0, map, segs, nsegs, size, flags)
-	bus_dma_tag_t t, t0;
-	bus_dmamap_t map;
-	bus_dma_segment_t *segs;
-	int nsegs;
-	bus_size_t size;
-	int flags;
+_bus_dmamap_load_raw(bus_dma_tag_t t, bus_dma_tag_t t0, bus_dmamap_t map,
+    bus_dma_segment_t *segs, int nsegs, bus_size_t size, int flags)
 {
 
 	panic("_bus_dmamap_load_raw: not implemented");
@@ -1282,9 +1235,7 @@ _bus_dmamap_load_buffer(bus_dma_tag_t t, bus_dmamap_t map, void *buf,
  * bus-specific DMA map unload functions.
  */
 void
-_bus_dmamap_unload(t, t0, map)
-	bus_dma_tag_t t, t0;
-	bus_dmamap_t map;
+_bus_dmamap_unload(bus_dma_tag_t t, bus_dma_tag_t t0, bus_dmamap_t map)
 {
 	/* Mark the mappings as invalid. */
 	map->dm_mapsize = 0;
@@ -1297,12 +1248,8 @@ _bus_dmamap_unload(t, t0, map)
  * by bus-specific DMA map synchronization functions.
  */
 void
-_bus_dmamap_sync(t, t0, map, offset, len, ops)
-	bus_dma_tag_t t, t0;
-	bus_dmamap_t map;
-	bus_addr_t offset;
-	bus_size_t len;
-	int ops;
+_bus_dmamap_sync(bus_dma_tag_t t, bus_dma_tag_t t0, bus_dmamap_t map,
+    bus_addr_t offset, bus_size_t len, int ops)
 {
 	if (ops & (BUS_DMASYNC_PREWRITE | BUS_DMASYNC_POSTREAD))
 		__membar("#MemIssue");
@@ -1313,13 +1260,9 @@ _bus_dmamap_sync(t, t0, map, offset, len, ops)
  * by bus-specific DMA memory allocation functions.
  */
 int
-_bus_dmamem_alloc(t, t0, size, alignment, boundary, segs, nsegs, rsegs, flags)
-	bus_dma_tag_t t, t0;
-	bus_size_t size, alignment, boundary;
-	bus_dma_segment_t *segs;
-	int nsegs;
-	int *rsegs;
-	int flags;
+_bus_dmamem_alloc(bus_dma_tag_t t, bus_dma_tag_t t0, bus_size_t size,
+    bus_size_t alignment, bus_size_t boundary, bus_dma_segment_t *segs,
+    int nsegs, int *rsegs, int flags)
 {
 	struct pglist *mlist;
 	int error, plaflag;
@@ -1380,10 +1323,8 @@ _bus_dmamem_alloc(t, t0, size, alignment, boundary, segs, nsegs, rsegs, flags)
  * bus-specific DMA memory free functions.
  */
 void
-_bus_dmamem_free(t, t0, segs, nsegs)
-	bus_dma_tag_t t, t0;
-	bus_dma_segment_t *segs;
-	int nsegs;
+_bus_dmamem_free(bus_dma_tag_t t, bus_dma_tag_t t0, bus_dma_segment_t *segs,
+    int nsegs)
 {
 
 #ifdef DIAGNOSTIC
@@ -1403,13 +1344,8 @@ _bus_dmamem_free(t, t0, segs, nsegs)
  * bus-specific DMA memory map functions.
  */
 int
-_bus_dmamem_map(t, t0, segs, nsegs, size, kvap, flags)
-	bus_dma_tag_t t, t0;
-	bus_dma_segment_t *segs;
-	int nsegs;
-	size_t size;
-	caddr_t *kvap;
-	int flags;
+_bus_dmamem_map(bus_dma_tag_t t, bus_dma_tag_t t0, bus_dma_segment_t *segs,
+    int nsegs, size_t size, caddr_t *kvap, int flags)
 {
 	const struct kmem_dyn_mode *kd;
 	struct vm_page *m;
@@ -1466,10 +1402,7 @@ _bus_dmamem_map(t, t0, segs, nsegs, size, kvap, flags)
  * bus-specific DMA memory unmapping functions.
  */
 void
-_bus_dmamem_unmap(t, t0, kva, size)
-	bus_dma_tag_t t, t0;
-	caddr_t kva;
-	size_t size;
+_bus_dmamem_unmap(bus_dma_tag_t t, bus_dma_tag_t t0, caddr_t kva, size_t size)
 {
 
 #ifdef DIAGNOSTIC
@@ -1485,12 +1418,8 @@ _bus_dmamem_unmap(t, t0, kva, size)
  * bus-specific DMA mmap(2)'ing functions.
  */
 paddr_t
-_bus_dmamem_mmap(t, t0, segs, nsegs, off, prot, flags)
-	bus_dma_tag_t t, t0;
-	bus_dma_segment_t *segs;
-	int nsegs;
-	off_t off;
-	int prot, flags;
+_bus_dmamem_mmap(bus_dma_tag_t t, bus_dma_tag_t t0, bus_dma_segment_t *segs,
+    int nsegs, off_t off, int prot, int flags)
 {
 	int i;
 

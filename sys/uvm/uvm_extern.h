@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_extern.h,v 1.163 2022/08/15 03:21:04 jsg Exp $	*/
+/*	$OpenBSD: uvm_extern.h,v 1.165 2022/10/16 16:16:37 deraadt Exp $	*/
 /*	$NetBSD: uvm_extern.h,v 1.57 2001/03/09 01:02:12 chs Exp $	*/
 
 /*
@@ -112,6 +112,7 @@ typedef int		vm_prot_t;
 #define UVM_FLAG_WC      0x4000000 /* write combining */
 #define UVM_FLAG_CONCEAL 0x8000000 /* omit from dumps */
 #define UVM_FLAG_SYSCALL 0x10000000 /* system calls allowed */
+#define UVM_FLAG_SIGALTSTACK 0x20000000 /* sigaltstack validation required */
 
 /* macros to extract info */
 #define UVM_PROTECTION(X)	((X) & PROT_MASK)
@@ -399,7 +400,7 @@ int			uvm_map_pageable_all(vm_map_t, int, vsize_t);
 boolean_t		uvm_map_checkprot(vm_map_t, vaddr_t,
 			    vaddr_t, vm_prot_t);
 int			uvm_map_protect(vm_map_t, vaddr_t, 
-			    vaddr_t, vm_prot_t, boolean_t);
+			    vaddr_t, vm_prot_t, boolean_t, boolean_t);
 struct vmspace		*uvmspace_alloc(vaddr_t, vaddr_t,
 			    boolean_t, boolean_t);
 void			uvmspace_init(struct vmspace *, struct pmap *,

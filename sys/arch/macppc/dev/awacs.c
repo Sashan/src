@@ -1,4 +1,4 @@
-/*	$OpenBSD: awacs.c,v 1.37 2022/03/21 19:22:39 miod Exp $	*/
+/*	$OpenBSD: awacs.c,v 1.40 2022/10/26 20:19:07 kn Exp $	*/
 /*	$NetBSD: awacs.c,v 1.4 2001/02/26 21:07:51 wiz Exp $	*/
 
 /*-
@@ -108,7 +108,6 @@ int awacs_set_port(void *, mixer_ctrl_t *);
 int awacs_get_port(void *, mixer_ctrl_t *);
 int awacs_query_devinfo(void *, mixer_devinfo_t *);
 size_t awacs_round_buffersize(void *, int, size_t);
-int awacs_get_props(void *);
 void *awacs_allocm(void *, int, size_t, int, int);
 
 static inline u_int awacs_read_reg(struct awacs_softc *, int);
@@ -127,28 +126,19 @@ struct cfdriver awacs_cd = {
 };
 
 const struct audio_hw_if awacs_hw_if = {
-	awacs_open,
-	awacs_close,
-	awacs_set_params,
-	awacs_round_blocksize,
-	NULL,			/* commit_setting */
-	NULL,			/* init_output */
-	NULL,			/* init_input */
-	NULL,			/* start_output */
-	NULL,			/* start_input */
-	awacs_halt_output,
-	awacs_halt_input,
-	NULL,			/* speaker_ctl */
-	NULL,			/* getfd */
-	awacs_set_port,
-	awacs_get_port,
-	awacs_query_devinfo,
-	awacs_allocm,		/* allocm */
-	NULL,			/* freem */
-	awacs_round_buffersize,	/* round_buffersize */
-	awacs_get_props,
-	awacs_trigger_output,
-	awacs_trigger_input
+	.open = awacs_open,
+	.close = awacs_close,
+	.set_params = awacs_set_params,
+	.round_blocksize = awacs_round_blocksize,
+	.halt_output = awacs_halt_output,
+	.halt_input = awacs_halt_input,
+	.set_port = awacs_set_port,
+	.get_port = awacs_get_port,
+	.query_devinfo = awacs_query_devinfo,
+	.allocm = awacs_allocm,
+	.round_buffersize = awacs_round_buffersize,
+	.trigger_output = awacs_trigger_output,
+	.trigger_input = awacs_trigger_input,
 };
 
 /* register offset */
@@ -868,12 +858,6 @@ awacs_allocm(void *h, int dir, size_t size, int type, int flags)
 	sc->sc_dmas = p;
 
 	return p->addr;
-}
-
-int
-awacs_get_props(void *h)
-{
-	return AUDIO_PROP_FULLDUPLEX /* | AUDIO_PROP_MMAP */;
 }
 
 int

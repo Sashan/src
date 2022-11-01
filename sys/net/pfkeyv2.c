@@ -1,4 +1,4 @@
-/* $OpenBSD: pfkeyv2.c,v 1.252 2022/09/03 22:43:38 mvs Exp $ */
+/* $OpenBSD: pfkeyv2.c,v 1.254 2022/10/17 14:49:01 mvs Exp $ */
 
 /*
  *	@(#)COPYRIGHT	1.1 (NRL) 17 January 1995
@@ -169,13 +169,12 @@ static int npromisc = 0;
 
 void pfkey_init(void);
 
-int pfkeyv2_attach(struct socket *, int);
+int pfkeyv2_attach(struct socket *, int, int);
 int pfkeyv2_detach(struct socket *);
 int pfkeyv2_disconnect(struct socket *);
 int pfkeyv2_shutdown(struct socket *);
 int pfkeyv2_send(struct socket *, struct mbuf *, struct mbuf *,
     struct mbuf *);
-int pfkeyv2_abort(struct socket *);
 int pfkeyv2_sockaddr(struct socket *, struct mbuf *);
 int pfkeyv2_peeraddr(struct socket *, struct mbuf *);
 int pfkeyv2_output(struct mbuf *, struct socket *);
@@ -209,7 +208,6 @@ const struct pr_usrreqs pfkeyv2_usrreqs = {
 	.pru_disconnect	= pfkeyv2_disconnect,
 	.pru_shutdown	= pfkeyv2_shutdown,
 	.pru_send	= pfkeyv2_send,
-	.pru_abort	= pfkeyv2_abort,
 	.pru_sockaddr	= pfkeyv2_sockaddr,
 	.pru_peeraddr	= pfkeyv2_peeraddr,
 };
@@ -269,7 +267,7 @@ pfkey_init(void)
  * Attach a new PF_KEYv2 socket.
  */
 int
-pfkeyv2_attach(struct socket *so, int proto)
+pfkeyv2_attach(struct socket *so, int proto, int wait)
 {
 	struct pkpcb *kp;
 	int error;
@@ -281,7 +279,10 @@ pfkeyv2_attach(struct socket *so, int proto)
 	if (error)
 		return (error);
 
-	kp = pool_get(&pkpcb_pool, PR_WAITOK|PR_ZERO);
+	kp = pool_get(&pkpcb_pool, (wait == M_WAIT ? PR_WAITOK : PR_NOWAIT) |
+	    PR_ZERO);
+	if (kp == NULL)
+		return (ENOBUFS);
 	so->so_pcb = kp;
 	refcnt_init(&kp->kcb_refcnt);
 	kp->kcb_socket = so;
@@ -380,13 +381,6 @@ out:
 	m_freem(m);
 
 	return (error);
-}
-
-int
-pfkeyv2_abort(struct socket *so)
-{
-	soisdisconnected(so);
-	return (0);
 }
 
 int

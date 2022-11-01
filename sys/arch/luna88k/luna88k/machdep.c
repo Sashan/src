@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.138 2022/08/10 03:18:19 jsg Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.140 2022/10/25 11:39:33 aoyama Exp $	*/
 /*
  * Copyright (c) 1998, 1999, 2000, 2001 Steve Murphree, Jr.
  * Copyright (c) 1996 Nivas Madhur
@@ -187,7 +187,6 @@ extern char *esym;
 
 int machtype = LUNA_88K;	/* may be overwritten in cpu_startup() */
 int cputyp = CPU_88100;
-int bootdev;			/* XXX: should be set in boot loader and locore.S */
 int cpuspeed = 33;		/* safe guess */
 int sysconsole = 0;		/* 0 = ttya, may be overwritten in locore0.S */
 u_int16_t dipswitch = 0;	/* set in locore.S */
@@ -860,6 +859,17 @@ luna88k_ext_int(struct trapframe *eframe)
 			if (CPU_IS_PRIMARY(ci))
 				isrdispatch_autovec(cur_int_level);
 			break;
+#ifdef MULTIPROCESSOR
+		case 1:
+			/*
+			 * Another processor may have sent us an IPI
+			 * while we were servicing a device interrupt.
+			 */
+			set_psr(get_psr() | PSR_IND);
+			luna88k_ipi_handler(eframe);
+			set_psr(get_psr() & ~PSR_IND);
+			break;
+#endif
 		default:
 			printf("%s: cpu%d level %d interrupt.\n",
 				__func__, ci->ci_cpuid, cur_int_level);

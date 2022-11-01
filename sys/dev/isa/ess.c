@@ -1,4 +1,4 @@
-/*	$OpenBSD: ess.c,v 1.28 2022/03/21 19:22:40 miod Exp $	*/
+/*	$OpenBSD: ess.c,v 1.32 2022/10/28 14:55:46 kn Exp $	*/
 /*	$NetBSD: ess.c,v 1.44.4.1 1999/06/21 01:18:00 thorpej Exp $	*/
 
 /*
@@ -74,6 +74,7 @@
 #include <sys/device.h>
 #include <sys/kernel.h>
 #include <sys/timeout.h>
+#include <sys/fcntl.h>
 
 #include <machine/cpu.h>
 #include <machine/intr.h>
@@ -115,6 +116,7 @@ struct audio_params ess_audio_default =
 
 int	ess_setup_sc(struct ess_softc *, int);
 
+int	ess_1788_open(void *, int);
 int	ess_open(void *, int);
 void	ess_1788_close(void *);
 void	ess_1888_close(void *);
@@ -148,8 +150,6 @@ size_t	ess_round_buffersize(void *, int, size_t);
 
 
 int	ess_query_devinfo(void *, mixer_devinfo_t *);
-int	ess_1788_get_props(void *);
-int	ess_1888_get_props(void *);
 
 void	ess_speaker_on(struct ess_softc *);
 void	ess_speaker_off(struct ess_softc *);
@@ -181,7 +181,7 @@ void	ess_clear_mreg_bits(struct ess_softc *, u_char, u_char);
 void	ess_set_mreg_bits(struct ess_softc *, u_char, u_char);
 void	ess_read_multi_mix_reg(struct ess_softc *, u_char, u_int8_t *, bus_size_t);
 
-static char *essmodel[] = {
+static const char *essmodel[] = {
 	"unsupported",
 	"1888",
 	"1887",
@@ -198,53 +198,39 @@ static char *essmodel[] = {
  */
 
 const struct audio_hw_if ess_1788_hw_if = {
-	ess_open,
-	ess_1788_close,
-	ess_set_params,
-	ess_round_blocksize,
-	NULL,
-	NULL,
-	NULL,
-	NULL,
-	NULL,
-	ess_audio1_halt,
-	ess_audio1_halt,
-	ess_speaker_ctl,
-	NULL,
-	ess_set_port,
-	ess_get_port,
-	ess_query_devinfo,
-	ess_malloc,
-	ess_free,
-	ess_round_buffersize,
-	ess_1788_get_props,
-	ess_audio1_trigger_output,
-	ess_audio1_trigger_input
+	.open = ess_1788_open,
+	.close = ess_1788_close,
+	.set_params = ess_set_params,
+	.round_blocksize = ess_round_blocksize,
+	.halt_output = ess_audio1_halt,
+	.halt_input = ess_audio1_halt,
+	.speaker_ctl = ess_speaker_ctl,
+	.set_port = ess_set_port,
+	.get_port = ess_get_port,
+	.query_devinfo = ess_query_devinfo,
+	.allocm = ess_malloc,
+	.freem = ess_free,
+	.round_buffersize = ess_round_buffersize,
+	.trigger_output = ess_audio1_trigger_output,
+	.trigger_input = ess_audio1_trigger_input,
 };
 
 const struct audio_hw_if ess_1888_hw_if = {
-	ess_open,
-	ess_1888_close,
-	ess_set_params,
-	ess_round_blocksize,
-	NULL,
-	NULL,
-	NULL,
-	NULL,
-	NULL,
-	ess_audio2_halt,
-	ess_audio1_halt,
-	ess_speaker_ctl,
-	NULL,
-	ess_set_port,
-	ess_get_port,
-	ess_query_devinfo,
-	ess_malloc,
-	ess_free,
-	ess_round_buffersize,
-	ess_1888_get_props,
-	ess_audio2_trigger_output,
-	ess_audio1_trigger_input
+	.open = ess_open,
+	.close = ess_1888_close,
+	.set_params = ess_set_params,
+	.round_blocksize = ess_round_blocksize,
+	.halt_output = ess_audio2_halt,
+	.halt_input = ess_audio1_halt,
+	.speaker_ctl = ess_speaker_ctl,
+	.set_port = ess_set_port,
+	.get_port = ess_get_port,
+	.query_devinfo = ess_query_devinfo,
+	.allocm = ess_malloc,
+	.freem = ess_free,
+	.round_buffersize = ess_round_buffersize,
+	.trigger_output = ess_audio2_trigger_output,
+	.trigger_input = ess_audio1_trigger_input,
 };
 
 #ifdef AUDIO_DEBUG
@@ -993,6 +979,15 @@ essattach(struct ess_softc *sc)
 /*
  * Various routines to interface to higher level audio driver
  */
+
+int
+ess_1788_open(void *addr, int flags)
+{
+	if ((flags & (FWRITE | FREAD)) == (FWRITE | FREAD))
+		return ENXIO;
+
+	return ess_open(addr, flags);
+}
 
 int
 ess_open(void *addr, int flags)
@@ -2069,18 +2064,6 @@ ess_round_buffersize(void *addr, int direction, size_t size)
 	if (size > MAX_ISADMA)
 		size = MAX_ISADMA;
 	return (size);
-}
-
-int
-ess_1788_get_props(void *addr)
-{
-	return (AUDIO_PROP_MMAP | AUDIO_PROP_INDEPENDENT);
-}
-
-int
-ess_1888_get_props(void *addr)
-{
-	return (AUDIO_PROP_MMAP | AUDIO_PROP_INDEPENDENT | AUDIO_PROP_FULLDUPLEX);
 }
 
 /* ============================================

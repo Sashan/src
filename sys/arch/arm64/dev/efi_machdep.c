@@ -1,4 +1,4 @@
-/*	$OpenBSD: efi.c,v 1.14 2022/07/30 17:56:54 kettenis Exp $	*/
+/*	$OpenBSD: efi_machdep.c,v 1.4 2022/10/29 20:35:50 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2017 Mark Kettenis <kettenis@openbsd.org>
@@ -30,7 +30,7 @@
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/fdt.h>
 
-#include <dev/acpi/efi.h>
+#include <dev/efi/efi.h>
 
 #include <dev/clock_subr.h>
 
@@ -39,8 +39,6 @@
  * memory on some machines.
  */
 #define EFI_SPACE_BITS	48
-
-extern todr_chip_handle_t todr_handle;
 
 extern uint32_t mmap_size;
 extern uint32_t mmap_desc_size;
@@ -120,6 +118,10 @@ efi_attach(struct device *parent, struct device *self, void *aux)
 		printf(".%d", minor % 10);
 	printf("\n");
 
+	/* Early implementations can be buggy. */
+	if (major < 2 || (major == 2 && minor < 10))
+		return;
+
 	efi_map_runtime(sc);
 
 	/*
@@ -136,11 +138,14 @@ efi_attach(struct device *parent, struct device *self, void *aux)
 	for (i = 0; i < st->NumberOfTableEntries; i++) {
 		EFI_CONFIGURATION_TABLE *ct = &st->ConfigurationTable[i];
 		static EFI_GUID acpi_guid = EFI_ACPI_20_TABLE_GUID;
-		static EFI_GUID smbios_guid = SMBIOS3_TABLE_GUID;
+		static EFI_GUID smbios_guid = SMBIOS_TABLE_GUID;
+		static EFI_GUID smbios3_guid = SMBIOS3_TABLE_GUID;
 
 		if (efi_guidcmp(&acpi_guid, &ct->VendorGuid) == 0)
 			efi_acpi_table = (uint64_t)ct->VendorTable;
 		if (efi_guidcmp(&smbios_guid, &ct->VendorGuid) == 0)
+			efi_smbios_table = (uint64_t)ct->VendorTable;
+		if (efi_guidcmp(&smbios3_guid, &ct->VendorGuid) == 0)
 			efi_smbios_table = (uint64_t)ct->VendorTable;
 	}
 	efi_leave(sc);
@@ -162,10 +167,17 @@ efi_attach(struct device *parent, struct device *self, void *aux)
 	if (status != EFI_SUCCESS)
 		return;
 
+	/*
+	 * EDK II implementations provide an implementation of
+	 * GetTime() that returns a fixed compiled-in time on hardware
+	 * without a (supported) RTC.  So only use this interface as a
+	 * last resort.
+	 */
 	sc->sc_todr.cookie = sc;
 	sc->sc_todr.todr_gettime = efi_gettime;
 	sc->sc_todr.todr_settime = efi_settime;
-	todr_handle = &sc->sc_todr;
+	sc->sc_todr.todr_quality = -1000;
+	todr_attach(&sc->sc_todr);
 }
 
 void

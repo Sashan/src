@@ -1,4 +1,4 @@
-/*      $OpenBSD: ip6_divert.c,v 1.86 2022/09/05 14:56:09 bluhm Exp $ */
+/*      $OpenBSD: ip6_divert.c,v 1.88 2022/10/17 14:49:02 mvs Exp $ */
 
 /*
  * Copyright (c) 2009 Michele Marchetto <michele@openbsd.org>
@@ -71,7 +71,6 @@ const struct pr_usrreqs divert6_usrreqs = {
 	.pru_bind	= divert6_bind,
 	.pru_shutdown	= divert6_shutdown,
 	.pru_send	= divert6_send,
-	.pru_abort	= divert6_abort,
 	.pru_control	= in6_control,
 	.pru_sockaddr	= in6_sockaddr,
 	.pru_peeraddr	= in6_peeraddr,
@@ -261,7 +260,7 @@ divert6_packet(struct mbuf *m, int dir, u_int16_t divert_port)
 }
 
 int
-divert6_attach(struct socket *so, int proto)
+divert6_attach(struct socket *so, int proto, int wait)
 {
 	int error;
 
@@ -271,7 +270,7 @@ divert6_attach(struct socket *so, int proto)
 	if ((so->so_state & SS_PRIV) == 0)
 		return EACCES;
 
-	error = in_pcballoc(so, &divb6table);
+	error = in_pcballoc(so, &divb6table, wait);
 	if (error)
 		return (error);
 
@@ -341,18 +340,6 @@ divert6_send(struct socket *so, struct mbuf *m, struct mbuf *addr,
 
 	soassertlocked(so);
 	return (divert6_output(inp, m, addr, control));
-}
-
-int
-divert6_abort(struct socket *so)
-{
-	struct inpcb *inp = sotoinpcb(so);
-
-	soassertlocked(so);
-	soisdisconnected(so);
-	in_pcbdetach(inp);
-
-	return (0);
 }
 
 int

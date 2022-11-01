@@ -1,4 +1,4 @@
-/* $OpenBSD: screen-write.c,v 1.209 2022/08/02 11:09:26 nicm Exp $ */
+/* $OpenBSD: screen-write.c,v 1.211 2022/10/25 17:53:31 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -1506,7 +1506,8 @@ screen_write_fullredraw(struct screen_write_ctx *ctx)
 	screen_write_collect_flush(ctx, 0, __func__);
 
 	screen_write_initctx(ctx, &ttyctx, 1);
-	ttyctx.redraw_cb(&ttyctx);
+	if (ttyctx.redraw_cb != NULL)
+		ttyctx.redraw_cb(&ttyctx);
 }
 
 /* Trim collected items. */
@@ -2128,7 +2129,8 @@ screen_write_alternateon(struct screen_write_ctx *ctx, struct grid_cell *gc,
 	screen_alternate_on(ctx->s, gc, cursor);
 
 	screen_write_initctx(ctx, &ttyctx, 1);
-	ttyctx.redraw_cb(&ttyctx);
+	if (ttyctx.redraw_cb != NULL)
+		ttyctx.redraw_cb(&ttyctx);
 }
 
 /* Turn alternate screen off. */
@@ -2146,5 +2148,6 @@ screen_write_alternateoff(struct screen_write_ctx *ctx, struct grid_cell *gc,
 	screen_alternate_off(ctx->s, gc, cursor);
 
 	screen_write_initctx(ctx, &ttyctx, 1);
-	ttyctx.redraw_cb(&ttyctx);
+	if (ttyctx.redraw_cb != NULL)
+		ttyctx.redraw_cb(&ttyctx);
 }

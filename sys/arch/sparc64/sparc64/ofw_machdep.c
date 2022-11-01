@@ -1,4 +1,4 @@
-/*	$OpenBSD: ofw_machdep.c,v 1.34 2018/08/28 00:00:42 dlg Exp $	*/
+/*	$OpenBSD: ofw_machdep.c,v 1.36 2022/10/17 18:49:06 kettenis Exp $	*/
 /*	$NetBSD: ofw_machdep.c,v 1.16 2001/07/20 00:07:14 eeh Exp $	*/
 
 /*
@@ -105,9 +105,7 @@ get_memory_handle(void)
  * Point prom to our trap table.  This stops the prom from mapping us.
  */
 int
-prom_set_trap_table(tba, mmfsa)
-	vaddr_t tba;
-	paddr_t mmfsa;
+prom_set_trap_table(vaddr_t tba, paddr_t mmfsa)
 {
 	struct {
 		cell_t name;
@@ -134,8 +132,7 @@ prom_set_trap_table(tba, mmfsa)
  * Only works while the prom is actively mapping us.
  */
 paddr_t
-prom_vtop(vaddr)
-	vaddr_t vaddr;
+prom_vtop(vaddr_t vaddr)
 {
 	struct {
 		cell_t name;
@@ -186,9 +183,7 @@ prom_vtop(vaddr)
  * Only works while the prom is actively mapping us.
  */
 vaddr_t
-prom_claim_virt(vaddr, len)
-	vaddr_t vaddr;
-	int len;
+prom_claim_virt(vaddr_t vaddr, int len)
 {
 	struct {
 		cell_t name;
@@ -226,9 +221,7 @@ prom_claim_virt(vaddr, len)
  * Only works while the prom is actively mapping us.
  */
 vaddr_t
-prom_alloc_virt(len, align)
-	int len;
-	int align;
+prom_alloc_virt(int len, int align)
 {
 	struct {
 		cell_t name;
@@ -264,9 +257,7 @@ prom_alloc_virt(len, align)
  * Only works while the prom is actively mapping us.
  */
 int
-prom_free_virt(vaddr, len)
-	vaddr_t vaddr;
-	int len;
+prom_free_virt(vaddr_t vaddr, int len)
 {
 	struct {
 		cell_t name;
@@ -299,9 +290,7 @@ prom_free_virt(vaddr, len)
  * Only works while the prom is actively mapping us.
  */
 int
-prom_unmap_virt(vaddr, len)
-	vaddr_t vaddr;
-	int len;
+prom_unmap_virt(vaddr_t vaddr, int len)
 {
 	struct {
 		cell_t name;
@@ -333,11 +322,7 @@ prom_unmap_virt(vaddr, len)
  * Only works while the prom is actively mapping us.
  */
 int
-prom_map_phys(paddr, size, vaddr, mode)
-	paddr_t paddr;
-	off_t size;
-	vaddr_t vaddr;
-	int mode;
+prom_map_phys(paddr_t paddr, off_t size, vaddr_t vaddr, int mode)
 {
 	struct {
 		cell_t name;
@@ -350,8 +335,6 @@ prom_map_phys(paddr, size, vaddr, mode)
 		cell_t vaddr;
 		cell_t phys_hi;
 		cell_t phys_lo;
-		cell_t status;
-		cell_t retaddr;
 	} args;
 
 	if (mmuh == -1 && ((mmuh = get_mmu_handle()) == -1)) {
@@ -360,7 +343,7 @@ prom_map_phys(paddr, size, vaddr, mode)
 	}
 	args.name = ADR2CELL("call-method");
 	args.nargs = 7;
-	args.nreturns = 1;
+	args.nreturns = 0;
 	args.method = ADR2CELL("map");
 	args.ihandle = HDL2CELL(mmuh);
 	args.mode = mode;
@@ -368,12 +351,7 @@ prom_map_phys(paddr, size, vaddr, mode)
 	args.vaddr = ADR2CELL(vaddr);
 	args.phys_hi = HDQ2CELL_HI(paddr);
 	args.phys_lo = HDQ2CELL_LO(paddr);
-
-	if (openfirmware(&args) == -1)
-		return -1;
-	if (args.status)
-		return -1;
-	return (int)args.retaddr;
+	return openfirmware(&args);
 }
 
 
@@ -383,9 +361,7 @@ prom_map_phys(paddr, size, vaddr, mode)
  * Only works while the prom is actively mapping us.
  */
 paddr_t
-prom_alloc_phys(len, align)
-	int len;
-	int align;
+prom_alloc_phys(int len, int align)
 {
 	struct {
 		cell_t name;
@@ -422,9 +398,7 @@ prom_alloc_phys(len, align)
  * Only works while the prom is actively mapping us.
  */
 paddr_t
-prom_claim_phys(phys, len)
-	paddr_t phys;
-	int len;
+prom_claim_phys(paddr_t phys, int len)
 {
 	struct {
 		cell_t name;
@@ -465,9 +439,7 @@ prom_claim_phys(phys, len)
  * Only works while the prom is actively mapping us.
  */
 int
-prom_free_phys(phys, len)
-	paddr_t phys;
-	int len;
+prom_free_phys(paddr_t phys, int len)
 {
 	struct {
 		cell_t name;
@@ -501,9 +473,7 @@ prom_free_phys(phys, len)
  * Only works while the prom is actively mapping us.
  */
 paddr_t
-prom_get_msgbuf(len, align)
-	int len;
-	int align;
+prom_get_msgbuf(int len, int align)
 {
 	struct {
 		cell_t name;

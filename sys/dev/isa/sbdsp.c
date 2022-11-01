@@ -1,4 +1,4 @@
-/*	$OpenBSD: sbdsp.c,v 1.40 2022/01/09 05:42:44 jsg Exp $	*/
+/*	$OpenBSD: sbdsp.c,v 1.43 2022/10/30 10:55:52 kn Exp $	*/
 
 /*
  * Copyright (c) 1991-1993 Regents of the University of California.
@@ -53,6 +53,7 @@
 #include <sys/syslog.h>
 #include <sys/device.h>
 #include <sys/buf.h>
+#include <sys/fcntl.h>
 
 #include <machine/cpu.h>
 #include <machine/intr.h>
@@ -760,6 +761,9 @@ sbdsp_open(void *addr, int flags)
 
         DPRINTF(("sbdsp_open: sc=%p\n", sc));
 
+	if ((flags & (FWRITE | FREAD)) == (FWRITE | FREAD) &&
+	    !sc->sc_fullduplex)
+		return ENXIO;
 	if (sc->sc_open != SB_CLOSED)
 		return EBUSY;
 	if (sbdsp_reset(sc) != 0)
@@ -2110,14 +2114,6 @@ sb_round(void *addr, int direction, size_t size)
 	if (size > MAX_ISADMA)
 		size = MAX_ISADMA;
 	return size;
-}
-
-int
-sbdsp_get_props(void *addr)
-{
-	struct sbdsp_softc *sc = addr;
-	return AUDIO_PROP_MMAP | AUDIO_PROP_INDEPENDENT |
-	       (sc->sc_fullduplex ? AUDIO_PROP_FULLDUPLEX : 0);
 }
 
 #if NMIDI > 0

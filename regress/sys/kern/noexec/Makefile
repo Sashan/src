@@ -1,8 +1,9 @@
-#	$OpenBSD: Makefile,v 1.23 2021/05/16 03:23:48 deraadt Exp $
+#	$OpenBSD: Makefile,v 1.25 2022/10/11 05:45:41 anton Exp $
 
 PROG=		noexec
 SRCS=		noexec.c testfly.S
 CFLAGS=		-Wall -fno-inline
+LDFLAGS=	-pthread
 LDSTATIC=	${STATIC}
 
 REGRESS_TARGETS=	nxtext-mmap	nxtext-mprotect \

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ds1307.c,v 1.5 2022/04/06 18:59:28 naddy Exp $ */
+/*	$OpenBSD: ds1307.c,v 1.8 2022/10/20 10:35:35 mglocker Exp $ */
 
 /*
  * Copyright (c) 2016 Marcus Glocker <mglocker@openbsd.org>
@@ -84,8 +84,6 @@ struct cfdriver maxrtc_cd = {
 	NULL, "maxrtc", DV_DULL
 };
 
-extern todr_chip_handle_t todr_handle;
-
 /*
  * Functions.
  */
@@ -95,7 +93,8 @@ maxrtc_match(struct device *parent, void *v, void *arg)
 	struct i2c_attach_args *ia = arg;
 
 	if (strcmp(ia->ia_name, "dallas,ds1307") == 0 ||
-	    strcmp(ia->ia_name, "ds1307") == 0)
+	    strcmp(ia->ia_name, "ds1307") == 0 ||
+	    strcmp(ia->ia_name, "dallas,ds1339") == 0)
 		return (1);
 
 	return (0);
@@ -109,10 +108,6 @@ maxrtc_attach(struct device *parent, struct device *self, void *arg)
 
 	sc->sc_tag = ia->ia_tag;
 	sc->sc_addr = ia->ia_addr;
-	sc->sc_todr.cookie = sc;
-	sc->sc_todr.todr_gettime = maxrtc_gettime;
-	sc->sc_todr.todr_settime = maxrtc_settime;
-	sc->sc_todr.todr_setwen = NULL;
 
 	if (maxrtc_enable_osc(sc) == -1)
 		return;
@@ -120,7 +115,11 @@ maxrtc_attach(struct device *parent, struct device *self, void *arg)
 	if (maxrtc_set_24h_mode(sc) == -1)
 		return;
 
-	todr_handle = &sc->sc_todr;
+	sc->sc_todr.cookie = sc;
+	sc->sc_todr.todr_gettime = maxrtc_gettime;
+	sc->sc_todr.todr_settime = maxrtc_settime;
+	sc->sc_todr.todr_quality = 1000;
+	todr_attach(&sc->sc_todr);
 }
 
 int

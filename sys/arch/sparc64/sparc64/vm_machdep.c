@@ -1,4 +1,4 @@
-/*	$OpenBSD: vm_machdep.c,v 1.40 2022/05/27 18:55:30 kettenis Exp $	*/
+/*	$OpenBSD: vm_machdep.c,v 1.42 2022/10/25 06:05:57 guenther Exp $	*/
 /*	$NetBSD: vm_machdep.c,v 1.38 2001/06/30 00:02:20 eeh Exp $ */
 
 /*
@@ -72,7 +72,6 @@
  * The offset of the topmost frame in the kernel stack.
  */
 #define	TOPFRAMEOFF (USPACE-sizeof(struct trapframe)-CC64FSZ)
-#define	STACK_OFFSET	BIAS
 
 #ifdef DEBUG
 char cpu_forkname[] = "cpu_fork()";
@@ -140,10 +139,10 @@ cpu_fork(struct proc *p1, struct proc *p2, void *stack, void *tcb,
 	bcopy((caddr_t)opcb, (caddr_t)npcb, sizeof(struct pcb));
 	if (p1->p_md.md_fpstate) {
 		fpusave_proc(p1, 1);
-		p2->p_md.md_fpstate = malloc(sizeof(struct fpstate64),
+		p2->p_md.md_fpstate = malloc(sizeof(struct fpstate),
 		    M_SUBPROC, M_WAITOK);
 		bcopy(p1->p_md.md_fpstate, p2->p_md.md_fpstate,
-		    sizeof(struct fpstate64));
+		    sizeof(struct fpstate));
 	} else
 		p2->p_md.md_fpstate = NULL;
 
@@ -176,7 +175,7 @@ cpu_fork(struct proc *p1, struct proc *p2, void *stack, void *tcb,
 	rp->rw_local[1] = (long)arg;		/* and its argument */
 
 	npcb->pcb_pc = (long)proc_trampoline - 8;
-	npcb->pcb_sp = (long)rp - STACK_OFFSET;
+	npcb->pcb_sp = (long)rp - BIAS;
 
 	/* Need to create a %tstate if we're forking from proc0. */
 	if (p1 == &proc0)
@@ -265,7 +264,7 @@ cpu_exit(struct proc *p)
 {
 	if (p->p_md.md_fpstate != NULL) {
 		fpusave_proc(p, 0);
-		free(p->p_md.md_fpstate, M_SUBPROC, sizeof(struct fpstate64));
+		free(p->p_md.md_fpstate, M_SUBPROC, sizeof(struct fpstate));
 	}
 
 	pmap_deactivate(p);

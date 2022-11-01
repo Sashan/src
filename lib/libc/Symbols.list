@@ -131,6 +131,7 @@ _thread_sys_lseek
 _thread_sys_lstat
 _thread_sys_madvise
 _thread_sys_minherit
+_thread_sys_mimmutable
 _thread_sys_mkdir
 _thread_sys_mkdirat
 _thread_sys_mkfifo
@@ -239,6 +240,7 @@ _thread_sys_utimes
 _thread_sys_utrace
 _thread_sys_vfork
 _thread_sys_wait4
+_thread_sys_waitid
 _thread_sys_write
 _thread_sys_writev
 accept4
@@ -327,6 +329,7 @@ listen
 lseek
 lstat
 madvise
+mimmutable
 minherit
 mkdir
 mkdirat
@@ -446,6 +449,7 @@ utimes
 utrace
 vfork
 wait4
+waitid
 write
 writev
 

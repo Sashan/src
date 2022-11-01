@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.101 2022/08/29 19:42:01 tb Exp $	*/
+/*	$OpenBSD: main.c,v 1.104 2022/10/26 00:40:40 millert Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -52,17 +52,16 @@
 
 enum program_mode pmode;
 
-int cat, decomp, pipin, force, verbose, testmode, list, recurse, storename;
-int kflag;
+static int cat, decomp, kflag, pipin, force, verbose, testmode, list, recurse;
+static int storename;
+static char suffix[16];
 extern char *__progname;
 
 const struct compressor {
 	const char *name;
 	const char *suffix;
 	const u_char *magic;
-	const char *comp_opts;
-	const char *decomp_opts;
-	const char *cat_opts;
+	const char *opts;
 	void *(*ropen)(int, char *, int);
 	int (*read)(void *, char *, int);
 #ifndef SMALL
@@ -77,8 +76,6 @@ const struct compressor {
 		".gz",
 		"\037\213",
 		"123456789ab:cdfhkLlNnOo:qrS:tVv",
-		"cfhkLlNno:qrtVv",
-		"fhqr",
 		gz_ropen,
 		gz_read,
 #ifndef SMALL
@@ -94,13 +91,23 @@ const struct compressor {
 		".Z",
 		"\037\235",
 		"123456789ab:cdfghlNnOo:qrS:tv",
-		"cfhlNno:qrtv",
-		"fghqr",
 		z_ropen,
 		zread,
 		z_wopen,
 		zwrite,
 		z_close
+	},
+#define M_UNZIP (&c_table[2])
+	{
+		"unzip",
+		".zip",
+		"PK",
+		NULL,
+		zip_ropen,
+		zip_read,
+		NULL,
+		NULL,
+		zip_close
 	},
 #endif /* SMALL */
   { NULL }
@@ -112,8 +119,6 @@ const struct compressor null_method = {
 	".nul",
 	"XX",
 	"123456789ab:cdfghlNnOo:qrS:tv",
-	"cfhlNno:qrtv",
-	"fghqr",
 	null_ropen,
 	null_read,
 	null_wopen,
@@ -122,19 +127,19 @@ const struct compressor null_method = {
 };
 #endif /* SMALL */
 
-int permission(const char *);
-__dead void usage(int);
-int docompress(const char *, char *, const struct compressor *,
+static int permission(const char *);
+static __dead void usage(int);
+static int docompress(const char *, char *, const struct compressor *,
     int, struct stat *);
-int dodecompress(const char *, char *, struct stat *);
-const struct compressor *check_method(int);
-const char *check_suffix(const char *);
-char *set_outfile(const char *, char *, size_t);
-void list_stats(const char *, const struct compressor *, struct z_info *);
-void verbose_info(const char *, off_t, off_t, u_int32_t);
+static int dodecompress(const char *, char *, struct stat *);
+static const char *check_suffix(const char *);
+static char *set_outfile(const char *, char *, size_t);
+static void list_stats(const char *, const struct compressor *,
+    struct z_info *);
+static void verbose_info(const char *, off_t, off_t, u_int32_t);
 
-const struct option longopts[] = {
 #ifndef SMALL
+const struct option longopts[] = {
 	{ "ascii",	no_argument,		0, 'a' },
 	{ "stdout",	no_argument,		0, 'c' },
 	{ "to-stdout",	no_argument,		0, 'c' },
@@ -155,9 +160,11 @@ const struct option longopts[] = {
 	{ "version",	no_argument,		0, 'V' },
 	{ "fast",	no_argument,		0, '1' },
 	{ "best",	no_argument,		0, '9' },
-#endif /* SMALL */
 	{ NULL }
 };
+#else /* SMALL */
+const struct option *longopts = NULL;
+#endif /* SMALL */
 
 int
 main(int argc, char *argv[])
@@ -167,7 +174,7 @@ main(int argc, char *argv[])
 	const struct compressor *method;
 	const char *optstr, *s;
 	char *p, *infile;
-	char outfile[PATH_MAX], _infile[PATH_MAX], suffix[16];
+	char outfile[PATH_MAX], _infile[PATH_MAX];
 	int bits, ch, error, rc, cflag, oflag;
 
 	if (pledge("stdio rpath wpath cpath fattr chown", NULL) == -1)
@@ -187,7 +194,7 @@ main(int argc, char *argv[])
 		method = M_COMPRESS;
 #endif /* SMALL */
 	}
-	optstr = method->comp_opts;
+	optstr = method->opts;
 
 	decomp = 0;
 	pmode = MODE_COMP;
@@ -312,7 +319,6 @@ main(int argc, char *argv[])
 			if (optarg[0] != '.')
 				*p++ = '.';
 			strlcpy(p, optarg, sizeof(suffix) - (p - suffix));
-			p = optarg;
 			break;
 		case 't':
 			testmode = 1;
@@ -482,54 +488,91 @@ main(int argc, char *argv[])
 	exit(rc);
 }
 
-int
+static int
+open_input(const char *in)
+{
+	int fd;
+
+	fd = pipin ? dup(STDIN_FILENO) : open(in, O_RDONLY);
+	if (fd == -1) {
+		if (verbose >= 0)
+			warn("%s", in);
+		return -1;
+	}
+	if (decomp && !force && isatty(fd)) {
+		if (verbose >= 0)
+			warnx("%s: won't read compressed data from terminal",
+			    in);
+		close(fd);
+		return -1;
+	}
+
+	return fd;
+}
+
+static int
+open_output(const char *out, int *errorp, int *oreg)
+{
+	struct stat sb;
+	int fd, error = FAILURE;
+
+	if (cat) {
+		fd = dup(STDOUT_FILENO);
+		if (fd == -1)
+			goto bad;
+		sb.st_mode = 0;
+	} else {
+		fd = open(out, O_WRONLY, S_IWUSR);
+		if (fd != -1) {
+			if (fstat(fd, &sb) == -1)
+				goto bad;
+			if (!force && S_ISREG(sb.st_mode) && !permission(out)) {
+				error = WARNING;
+				goto bad;
+			}
+			if (ftruncate(fd, 0) == -1)
+				goto bad;
+		} else {
+			fd = open(out, O_WRONLY|O_CREAT|O_TRUNC, S_IWUSR);
+			if (fd == -1 || fstat(fd, &sb) == -1)
+				goto bad;
+		}
+	}
+
+	*oreg = S_ISREG(sb.st_mode);
+	*errorp = SUCCESS;
+	return fd;
+bad:
+	if (error == FAILURE && verbose >= 0)
+		warn("%s", out);
+	if (fd != -1)
+		close(fd);
+	*errorp = FAILURE;
+	return -1;
+}
+
+static int
 docompress(const char *in, char *out, const struct compressor *method,
     int bits, struct stat *sb)
 {
 #ifndef SMALL
 	u_char buf[Z_BUFSIZE];
 	char namebuf[PATH_MAX];
-	char *name;
+	char *name = NULL;
 	int error, ifd, ofd, oreg;
 	void *cookie;
 	ssize_t nr;
-	u_int32_t mtime;
+	u_int32_t mtime = 0;
 	struct z_info info;
-	struct stat osb;
 
-	mtime = 0;
-	oreg = 0;
-	error = SUCCESS;
-	name = NULL;
-	cookie  = NULL;
-
-	if (pipin)
-		ifd = dup(STDIN_FILENO);
-	else
-		ifd = open(in, O_RDONLY);
-	if (ifd == -1) {
-		if (verbose >= 0)
-			warn("%s", in);
+	ifd = open_input(in);
+	if (ifd == -1)
 		return (FAILURE);
-	}
 
-	if (cat)
-		ofd = dup(STDOUT_FILENO);
-	else {
-		if (stat(out, &osb) == 0) {
-			oreg = S_ISREG(osb.st_mode);
-			if (!force && oreg && !permission(out)) {
-				(void) close(ifd);
-				return (WARNING);
-			}
-		}
-		ofd = open(out, O_WRONLY|O_CREAT|O_TRUNC, S_IWUSR);
-	}
+	ofd = open_output(out, &error, &oreg);
 	if (ofd == -1) {
-		if (verbose >= 0)
-			warn("%s", out);
-		(void) close(ifd);
-		return (FAILURE);
+		close(ifd);
+		return error;
 	}
 
 	if (method != M_COMPRESS && !force && isatty(ofd)) {
@@ -603,7 +646,7 @@ docompress(const char *in, char *out, const struct compressor *method,
 #endif
 }
 
-const struct compressor *
+static const struct compressor *
 check_method(int fd)
 {
 	const struct compressor *method;
@@ -626,7 +669,7 @@ check_method(int fd)
 	return (NULL);
 }
 
-int
+static int
 dodecompress(const char *in, char *out, struct stat *sb)
 {
 	const struct compressor *method;
@@ -636,29 +679,10 @@ dodecompress(const char *in, char *out, struct stat *sb)
 	void *cookie;
 	ssize_t nr;
 	struct z_info info;
-	struct stat osb;
 
-	oreg = 0;
-	error = SUCCESS;
-	cookie = NULL;
-
-	if (pipin)
-		ifd = dup(STDIN_FILENO);
-	else
-		ifd = open(in, O_RDONLY);
-	if (ifd == -1) {
-		if (verbose >= 0)
-			warn("%s", in);
-		return -1;
-	}
-
-	if (!force && isatty(ifd)) {
-		if (verbose >= 0)
-			warnx("%s: won't read compressed data from terminal",
-			    in);
-		close (ifd);
-		return -1;
-	}
+	ifd = open_input(in);
+	if (ifd == -1)
+		return (FAILURE);
 
 	if ((method = check_method(ifd)) == NULL) {
 		if (verbose >= 0)
@@ -676,7 +700,7 @@ dodecompress(const char *in, char *out, struct stat *sb)
 		return (FAILURE);
 	}
 	if (storename && oldname[0] != '\0') {
-		char *oldbase = basename(oldname);
+		const char *oldbase = basename(oldname);
 		char *cp = strrchr(out, '/');
 		if (cp != NULL) {
 			*(cp + 1) = '\0';
@@ -686,26 +710,15 @@ dodecompress(const char *in, char *out, struct stat *sb)
 		cat = 0;			/* XXX should -c override? */
 	}
 
-	if (testmode)
+	if (testmode) {
 		ofd = -1;
-	else {
-		if (cat)
-			ofd = dup(STDOUT_FILENO);
-		else {
-			if (stat(out, &osb) == 0) {
-				oreg = S_ISREG(osb.st_mode);
-				if (!force && oreg && !permission(out)) {
-					(void) close(ifd);
-					return (WARNING);
-				}
-			}
-			ofd = open(out, O_WRONLY|O_CREAT|O_TRUNC, S_IWUSR);
-		}
+		oreg = 0;
+		error = SUCCESS;
+	} else {
+		ofd = open_output(out, &error, &oreg);
 		if (ofd == -1) {
-			if (verbose >= 0)
-				warn("%s", in);
 			method->close(cookie, NULL, NULL, NULL);
-			return (FAILURE);
+			return error;
 		}
 	}
 
@@ -725,10 +738,21 @@ dodecompress(const char *in, char *out, struct stat *sb)
 		error = errno == EINVAL ? WARNING : FAILURE;
 	}
 
-	if (method->close(cookie, &info, NULL, NULL)) {
-		if (!error && verbose >= 0)
-			warnx("%s", in);
-		error = FAILURE;
+	if (method->close(cookie, &info, NULL, NULL) && !error) {
+#ifdef M_UNZIP
+		if (errno == EEXIST) {
+			if (verbose >= 0) {
+				warnx("more than one entry in %s: %s", in,
+				    cat ? "ignoring the rest" : "unchanged");
+			}
+			error = cat ? WARNING : FAILURE;
+		} else
+#endif
+		{
+			if (verbose >= 0)
+				warn("%s", in);
+			error = FAILURE;
+		}
 	}
 	if (storename && !cat) {
 		if (info.mtime != 0) {
@@ -736,10 +760,9 @@ dodecompress(const char *in, char *out, struct stat *sb)
 			    sb->st_atimespec.tv_sec = info.mtime;
 			sb->st_mtimespec.tv_nsec =
 			    sb->st_atimespec.tv_nsec = 0;
-		} else
-			storename = 0;		/* no timestamp to restore */
+		}
 	}
-	if (error == SUCCESS)
+	if (error != FAILURE)
 		setfile(out, ofd, sb);
 
 	if (ofd != -1 && close(ofd)) {
@@ -748,7 +771,7 @@ dodecompress(const char *in, char *out, struct stat *sb)
 		error = FAILURE;
 	}
 
-	if (!error) {
+	if (error != FAILURE) {
 		if (list) {
 			if (info.mtime == 0)
 				info.mtime = (u_int32_t)sb->st_mtime;
@@ -760,7 +783,7 @@ dodecompress(const char *in, char *out, struct stat *sb)
 	}
 
 	/* On error, clean up the file we created but preserve errno. */
-	if (error && oreg)
+	if (error == FAILURE && oreg)
 		unlink(out);
 
 	return (error);
@@ -808,7 +831,7 @@ setfile(const char *name, int fd, struct stat *fs)
 		warn("futimens: %s", name);
 }
 
-int
+static int
 permission(const char *fname)
 {
 	int ch, first;
@@ -825,18 +848,21 @@ permission(const char *fname)
 /*
  * Check infile for a known suffix and return the suffix portion or NULL.
  */
-const char *
+static const char *
 check_suffix(const char *infile)
 {
 	int i;
-	char *suf, *sep, *separators = ".-_";
-	static char *suffixes[] = { "Z", "gz", "z", "tgz", "taz", NULL };
+	const char *suf, *sep;
+	const char separators[] = ".-_";
+	const char *suffixes[] = { "Z", "gz", "z", "tgz", "taz", NULL };
 
 	for (sep = separators; *sep != '\0'; sep++) {
 		if ((suf = strrchr(infile, *sep)) == NULL)
 			continue;
 		suf++;
 
+		if (strcmp(suf, suffix + 1) == 0)
+			return (suf - 1);
 		for (i = 0; suffixes[i] != NULL; i++) {
 			if (strcmp(suf, suffixes[i]) == 0)
 				return (suf - 1);
@@ -849,7 +875,7 @@ check_suffix(const char *infile)
  * Set outfile based on the suffix.  In most cases we just strip
  * off the suffix but things like .tgz and .taz are special.
  */
-char *
+static char *
 set_outfile(const char *infile, char *outfile, size_t osize)
 {
 	const char *s;
@@ -876,7 +902,7 @@ set_outfile(const char *infile, char *outfile, size_t osize)
 /*
  * Print output for the -l option.
  */
-void
+static void
 list_stats(const char *name, const struct compressor *method,
     struct z_info *info)
 {
@@ -925,7 +951,7 @@ list_stats(const char *name, const struct compressor *method,
 	}
 }
 
-void
+static void
 verbose_info(const char *file, off_t compressed, off_t uncompressed,
     u_int32_t hlen)
 {
@@ -944,7 +970,7 @@ verbose_info(const char *file, off_t compressed, off_t uncompressed,
 	    (long long)(decomp ? uncompressed : compressed));
 }
 
-__dead void
+static __dead void
 usage(int status)
 {
 	const bool gzip = (__progname[0] == 'g');

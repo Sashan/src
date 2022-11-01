@@ -1,4 +1,4 @@
-/*	$OpenBSD: adb.c,v 1.46 2022/07/02 08:50:41 visa Exp $	*/
+/*	$OpenBSD: adb.c,v 1.48 2022/10/23 03:43:03 gkoehler Exp $	*/
 /*	$NetBSD: adb.c,v 1.6 1999/08/16 06:28:09 tsubai Exp $	*/
 /*	$NetBSD: adb_direct.c,v 1.14 2000/06/08 22:10:45 tsubai Exp $	*/
 
@@ -89,6 +89,7 @@
 #include <sys/fcntl.h>
 #include <sys/proc.h>
 #include <sys/signalvar.h>
+#include <sys/task.h>
 #include <sys/timeout.h>
 #include <sys/systm.h>
 
@@ -241,6 +242,16 @@ void	setsoftadb(void);
 int	adb_intr(void *arg);
 void	adb_cuda_autopoll(void);
 void 	adb_cuda_fileserver_mode(void);
+
+#ifndef SMALL_KERNEL
+void	adb_shutdown(void *);
+struct	task adb_shutdown_task = TASK_INITIALIZER(adb_shutdown, NULL);
+#ifdef SUSPEND
+void	adb_suspend(void *);
+struct	task adb_suspend_task = TASK_INITIALIZER(adb_suspend, NULL);
+struct	taskq *adb_suspendq;
+#endif
+#endif
 
 #ifdef ADB_DEBUG
 /*
@@ -829,6 +840,64 @@ adb_soft_intr(void)
 		}
 
 	}
+}
+
+#ifndef SMALL_KERNEL
+void
+adb_shutdown(void *arg)
+{
+	extern int allowpowerdown;
+
+	if (allowpowerdown == 1) {
+		allowpowerdown = 0;
+		prsignal(initprocess, SIGUSR2);
+	}
+}
+
+#ifdef SUSPEND
+void
+adb_suspend(void *arg)
+{
+	extern struct cfdriver apm_cd;
+
+	if (apm_cd.cd_ndevs > 0)
+		sleep_state(apm_cd.cd_devs[0], SLEEP_SUSPEND);
+}
+#endif
+#endif /* !SMALL_KERNEL */
+
+void
+adb_lid_closed_intr(void)
+{
+#ifndef SMALL_KERNEL
+	switch (lid_action) {
+#ifdef SUSPEND
+	case 1:
+		task_add(adb_suspendq, &adb_suspend_task);
+		break;
+#endif
+	case 2:
+		/* Hibernate. */
+		break;
+	}
+#endif
+}
+
+void
+adb_power_button_intr(void)
+{
+#ifndef SMALL_KERNEL
+	switch (pwr_action) {
+	case 1:
+		task_add(systq, &adb_shutdown_task);
+		break;
+#ifdef SUSPEND
+	case 2:
+		task_add(adb_suspendq, &adb_suspend_task);
+		break;
+#endif
+	}
+#endif
 }
 
 
@@ -1588,6 +1657,14 @@ adbattach(struct device *parent, struct device *self, void *aux)
 	int totaladbs;
 	int adbindex, adbaddr;
 
+#if !defined(SMALL_KERNEL) && defined(SUSPEND)
+	adb_suspendq = taskq_create(sc->sc_dev.dv_xname, 1, IPL_TTY, 0);
+	if (adb_suspendq == NULL) {
+		printf(": can't create taskq\n");
+		return;
+	}
+#endif
+
 	ca->ca_reg[0] += ca->ca_baseaddr;
 
 	sc->sc_regbase = mapiodev(ca->ca_reg[0], ca->ca_reg[1]);
@@ -1597,6 +1674,7 @@ adbattach(struct device *parent, struct device *self, void *aux)
 		adbHardware = ADB_HW_CUDA;
 	else if (strcmp(ca->ca_name, "via-pmu") == 0) {
 		adbHardware = ADB_HW_PMU;
+		pm_in_adbattach(sc->sc_dev.dv_xname);
 
 		/*
 		 * Bus reset can take a long time if no adb devices are

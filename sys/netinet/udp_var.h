@@ -1,4 +1,4 @@
-/*	$OpenBSD: udp_var.h,v 1.47 2022/09/05 14:56:09 bluhm Exp $	*/
+/*	$OpenBSD: udp_var.h,v 1.49 2022/10/17 14:49:02 mvs Exp $	*/
 /*	$NetBSD: udp_var.h,v 1.12 1996/02/13 23:44:41 christos Exp $	*/
 
 /*
@@ -143,7 +143,7 @@ int	 udp6_output(struct inpcb *, struct mbuf *, struct mbuf *,
 	struct mbuf *);
 #endif /* INET6 */
 int	 udp_sysctl(int *, u_int, void *, size_t *, void *, size_t);
-int	 udp_attach(struct socket *, int);
+int	 udp_attach(struct socket *, int, int);
 int	 udp_detach(struct socket *);
 void	 udp_lock(struct socket *);
 void	 udp_unlock(struct socket *);
@@ -153,6 +153,5 @@ int	 udp_disconnect(struct socket *);
 int	 udp_shutdown(struct socket *);
 int	 udp_send(struct socket *, struct mbuf *, struct mbuf *,
 	     struct mbuf *);
-int	 udp_abort(struct socket *);
 #endif /* _KERNEL */
 #endif /* _NETINET_UDP_VAR_H_ */

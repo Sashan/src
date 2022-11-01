@@ -1,4 +1,4 @@
-/* $OpenBSD: input.c,v 1.209 2022/09/12 12:02:17 nicm Exp $ */
+/* $OpenBSD: input.c,v 1.211 2022/10/28 13:00:02 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -1755,7 +1755,6 @@ static void
 input_csi_dispatch_sm_private(struct input_ctx *ictx)
 {
 	struct screen_write_ctx	*sctx = &ictx->ctx;
-	struct window_pane	*wp = ictx->wp;
 	struct grid_cell	*gc = &ictx->cell.cell;
 	u_int			 i;
 
@@ -1797,17 +1796,7 @@ input_csi_dispatch_sm_private(struct input_ctx *ictx)
 			screen_write_mode_set(sctx, MODE_MOUSE_ALL);
 			break;
 		case 1004:
-			if (sctx->s->mode & MODE_FOCUSON)
-				break;
 			screen_write_mode_set(sctx, MODE_FOCUSON);
-			if (wp == NULL)
-				break;
-			if (!options_get_number(global_options, "focus-events"))
-				break;
-			if (wp->flags & PANE_FOCUSED)
-				bufferevent_write(wp->event, "\033[I", 3);
-			else
-				bufferevent_write(wp->event, "\033[O", 3);
 			break;
 		case 1005:
 			screen_write_mode_set(sctx, MODE_MOUSE_UTF8);

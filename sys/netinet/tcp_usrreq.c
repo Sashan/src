@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_usrreq.c,v 1.208 2022/09/13 09:05:47 mvs Exp $	*/
+/*	$OpenBSD: tcp_usrreq.c,v 1.210 2022/10/17 14:49:02 mvs Exp $	*/
 /*	$NetBSD: tcp_usrreq.c,v 1.20 1996/02/13 23:44:16 christos Exp $	*/
 
 /*
@@ -460,7 +460,7 @@ tcp_ctloutput(int op, struct socket *so, int level, int optname,
  * buffer space, and entering LISTEN state to accept connections.
  */
 int
-tcp_attach(struct socket *so, int proto)
+tcp_attach(struct socket *so, int proto, int wait)
 {
 	struct tcpcb *tp;
 	struct inpcb *inp;
@@ -477,11 +477,11 @@ tcp_attach(struct socket *so, int proto)
 	}
 
 	NET_ASSERT_LOCKED();
-	error = in_pcballoc(so, &tcbtable);
+	error = in_pcballoc(so, &tcbtable, wait);
 	if (error)
 		return (error);
 	inp = sotoinpcb(so);
-	tp = tcp_newtcpcb(inp);
+	tp = tcp_newtcpcb(inp, wait);
 	if (tp == NULL) {
 		unsigned int nofd = so->so_state & SS_NOFDREF;	/* XXX */
 
@@ -865,18 +865,17 @@ out:
 /*
  * Abort the TCP.
  */
-int
+void
 tcp_abort(struct socket *so)
 {
 	struct inpcb *inp;
 	struct tcpcb *tp, *otp = NULL;
-	int error;
 	short ostate;
 
 	soassertlocked(so);
 
-	if ((error = tcp_sogetpcb(so, &inp, &tp)))
-		return (error);
+	if (tcp_sogetpcb(so, &inp, &tp))
+		return;
 
 	if (so->so_options & SO_DEBUG) {
 		otp = tp;
@@ -887,7 +886,6 @@ tcp_abort(struct socket *so)
 
 	if (otp)
 		tcp_trace(TA_USER, ostate, tp, otp, NULL, PRU_ABORT, 0);
-	return (0);
 }
 
 int

@@ -131,8 +131,6 @@ static void guc_ct_buffer_desc_init(struct guc_ct_buffer_desc *desc)
 
 static void guc_ct_buffer_reset(struct intel_guc_ct_buffer *ctb)
 {
-	STUB();
-#ifdef notyet
 	u32 space;
 
 	ctb->broken = false;
@@ -142,7 +140,6 @@ static void guc_ct_buffer_reset(struct intel_guc_ct_buffer *ctb)
 	atomic_set(&ctb->space, space);
 
 	guc_ct_buffer_desc_init(ctb->desc);
-#endif
 }
 
 static void guc_ct_buffer_init(struct intel_guc_ct_buffer *ctb,
@@ -596,14 +593,10 @@ static inline bool h2g_has_room(struct intel_guc_ct *ct, u32 len_dw)
 		return false;
 	}
 
-	STUB();
-	return false;
-#ifdef notyet
 	space = CIRC_SPACE(ctb->tail, head, ctb->size);
 	atomic_set(&ctb->space, space);
 
 	return space >= len_dw;
-#endif
 }
 
 static int has_room_nb(struct intel_guc_ct *ct, u32 h2g_dw, u32 g2h_dw)
@@ -668,9 +661,6 @@ static int ct_send(struct intel_guc_ct *ct,
 		   u32 response_buf_size,
 		   u32 *status)
 {
-	STUB();
-	return -ENOSYS;
-#ifdef notyet
 	struct intel_guc_ct_buffer *ctb = &ct->ctbs.send;
 	struct ct_request request;
 	unsigned long flags;
@@ -758,7 +748,6 @@ unlink:
 	spin_unlock_irqrestore(&ct->requests.lock, flags);
 
 	return err;
-#endif
 }
 
 /*
