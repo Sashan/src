@@ -95,9 +95,9 @@ int	 pfctl_show_timeouts(int, int);
 int	 pfctl_show_limits(int, int);
 void	 pfctl_debug(int, u_int32_t, int);
 int	 pfctl_show_anchors(int, int, char *);
-int	 pfctl_ruleset_trans(struct pfctl *, char *, struct pf_anchor *);
+int	 pfctl_ruleset(struct pfctl *, char *);
 u_int	 pfctl_find_childqs(struct pfctl_qsitem *);
-void	 pfctl_load_queue(struct pfctl *, u_int32_t, struct pfctl_qsitem *);
+void	 pfctl_load_queue(struct pfctl *, struct pfctl_qsitem *);
 int	 pfctl_load_queues(struct pfctl *);
 u_int	 pfctl_leafqueue_check(char *);
 u_int	 pfctl_check_qassignments(struct pf_ruleset *);
@@ -147,6 +147,17 @@ int		 exit_val = 0;
 				}					\
 			} while (0)					\
 
+#define PF_SET_TRANS(_t_, _tdata_, _tcount_)	do {		\
+		(_t_)->array = &(_tdata_);			\
+		(_t_)->size = (_tcount_);			\
+		(_t_)->esize = sizeof(_tdata_);			\
+	} while (0)
+
+#define PF_RESET_TRANS(_t_)			do {		\
+		(_t_)->array = NULL;				\
+		(_t_)->size = 0;				\
+		(_t_)->esize = 0;				\
+	} while (0)
 
 static const struct {
 	const char	*name;
@@ -367,14 +378,41 @@ pfctl_clear_interface_flags(int dev, int opts)
 int
 pfctl_clear_rules(int dev, int opts, char *anchorname)
 {
-	struct pfr_buffer 	t;
+	struct pfioc_trans	t;
+	struct pfioc_trans_e	e;
 
 	memset(&t, 0, sizeof(t));
-	t.pfrb_type = PFRB_TRANS;
-	if (pfctl_add_trans(&t, PF_TRANS_RULESET, anchorname) ||
-	    pfctl_trans(dev, &t, DIOCXBEGIN, 0) ||
-	    pfctl_trans(dev, &t, DIOCXCOMMIT, 0)) {
-		pfctl_err(opts, 1, "%s", __func__);
+	memset(&e, 0, sizeof(e));
+	if (strlcpy(e.anchor, anchorname, sizeof(e.anchor))
+	    >= sizeof(e.anchor)) {
+		pfctl_err(opts, 1, "%s: anchorname (%s) too long\n", __func__,
+		    anchorname);
+		return (1);
+	}
+
+	if (ioctl(dev, DIOCXBEGIN, &t) != 0) {
+		pfctl_err(opts, 1, "%s DIOCXBEGIN (%s)\n", __func__,
+		    strerror(errno));
+		return (1);
+	}
+
+	t.esize = sizeof(struct pfioc_trans_e);
+	t.size = 1;
+	t.array = &e;
+	e.type = PF_TRANS_RULESET;
+	if (ioctl(dev, DIOCXRULESET, &t) != 0) {
+		pfctl_err(opts, 1, "%s DIOCXRULESET (%s)\n", __func__,
+		    strerror(errno));
+		return (1);
+	}
+
+	t.size = 0;
+	t.esize = 0;
+	t.array = NULL;
+
+	if (ioctl(dev, DIOCXCOMMIT, &t) != 0) {
+		pfctl_err(opts, 1, "%s DIOCXCOMMIT (%s)\n", __func__,
+		    strerror(errno));
 		return (1);
 	} else if ((opts & PF_OPT_QUIET) == 0)
 		fprintf(stderr, "rules cleared\n");
@@ -1174,16 +1212,33 @@ pfctl_add_rule(struct pfctl *pf, struct pf_rule *r)
 }
 
 int
-pfctl_ruleset_trans(struct pfctl *pf, char *path, struct pf_anchor *a)
+pfctl_ruleset(struct pfctl *pf, char *path)
 {
-	int osize = pf->trans->pfrb_size;
+	struct pfioc_trans_e e[2];
+	struct pfioc_trans_e *rs = &e[0];
+	struct pfioc_trans_e *table = &e[1];
 
-	if (pfctl_add_trans(pf->trans, PF_TRANS_RULESET, path))
-		return (3);
-	if (pfctl_add_trans(pf->trans, PF_TRANS_TABLE, path))
-		return (4);
-	if (pfctl_trans(pf->dev, pf->trans, DIOCXBEGIN, osize))
-		return (5);
+	if (pf->trans == NULL)
+		return (1);
+
+	bzero(&e, sizeof(e));
+	rs->type = PF_TRANS_RULESET;
+	if (strlcpy(rs->anchor, path, sizeof(rs->anchor)) >= sizeof(rs->anchor))
+		errx(1, "pfctl_ruleset: strlcpy");
+
+	*table = *rs;
+	table->type = PF_TRANS_TABLE;
+
+	pf->trans->array = e;
+	pf->trans->size = 2;
+	pf->trans->esize = sizeof(struct pfioc_trans_e);
+	
+	if (ioctl(pf->dev, DIOCXRULESET, &pf->trans))
+		errx(1, "pfctl_ruleset: %s", strerror(errno));
+
+	pf->trans->array = NULL;
+	pf->trans->size = 0;
+	pf->trans->esize = 0;
 
 	return (0);
 }
@@ -1283,8 +1338,12 @@ pfctl_find_childqs(struct pfctl_qsitem *qi)
 }
 
 void
-pfctl_load_queue(struct pfctl *pf, u_int32_t ticket, struct pfctl_qsitem *qi)
+pfctl_load_queue(struct pfctl *pf, struct pfctl_qsitem *qi)
 {
+/*
+ * make queues such transactions will be used
+ */
+#if 0
 	struct pfioc_queue	 q;
 	struct pfctl_qsitem	*p;
 
@@ -1300,6 +1359,7 @@ pfctl_load_queue(struct pfctl *pf, u_int32_t ticket, struct pfctl_qsitem *qi)
 		strlcpy(p->qs.ifname, qi->qs.ifname, IFNAMSIZ);
 		pfctl_load_queue(pf, ticket, p);
 	}
+#endif
 }
 
 int
@@ -1307,7 +1367,6 @@ pfctl_load_queues(struct pfctl *pf)
 {
 	struct pfctl_qsitem	*qi, *tempqi;
 	struct pf_queue_scspec	*rtsc, *lssc, *ulsc;
-	u_int32_t		 ticket;
 
 	TAILQ_FOREACH(qi, &qspecs, entries) {
 		if (qi->matches == 0)
@@ -1330,12 +1389,9 @@ pfctl_load_queues(struct pfctl *pf)
 			    qi->qs.qname);
 	}
 
-	if ((pf->opts & PF_OPT_NOACTION) == 0)
-		ticket = pfctl_get_ticket(pf->trans, PF_TRANS_RULESET, "");
-
 	TAILQ_FOREACH_SAFE(qi, &rootqs, entries, tempqi) {
 		TAILQ_REMOVE(&rootqs, qi, entries);
-		pfctl_load_queue(pf, ticket, qi);
+		pfctl_load_queue(pf, qi);
 		TAILQ_INSERT_HEAD(&rootqs, qi, entries);
 	}
 
@@ -1441,8 +1497,7 @@ pfctl_load_ruleset(struct pfctl *pf, char *path, struct pf_ruleset *rs,
 			if (pf->opts & PF_OPT_VERBOSE)
 				printf(" {\n");
 			if ((pf->opts & PF_OPT_NOACTION) == 0 &&
-			    (error = pfctl_ruleset_trans(pf,
-			    path, rs->anchor))) {
+			    (error = pfctl_ruleset(pf, path))) {
 				printf("pfctl_load_ruleset: "
 				    "pfctl_ruleset_trans %d\n", error);
 				goto error;
@@ -1490,8 +1545,11 @@ pfctl_load_rule(struct pfctl *pf, char *path, struct pf_rule *r, int depth)
 
 	bzero(&pr, sizeof(pr));
 	/* set up anchor before adding to path for anchor_call */
-	if ((pf->opts & PF_OPT_NOACTION) == 0)
-		pr.ticket = pfctl_get_ticket(pf->trans, PF_TRANS_RULESET, path);
+	if ((pf->opts & PF_OPT_NOACTION) == 0) {
+		if (pf->trans == NULL)
+			errx(1, "pfctl_load_rule: no transaction");
+		pr.ticket = pf->trans->ticket;
+	}
 	if (strlcpy(pr.anchor, path, sizeof(pr.anchor)) >= sizeof(pr.anchor))
 		errx(1, "pfctl_load_rule: strlcpy");
 
@@ -1528,34 +1586,35 @@ pfctl_load_rule(struct pfctl *pf, char *path, struct pf_rule *r, int depth)
 
 int
 pfctl_rules(int dev, char *filename, int opts, int optimize,
-    char *anchorname, struct pfr_buffer *trans)
+    char *anchorname, struct pfioc_trans *trans)
 {
 #define ERR(x) do { warn(x); goto _error; } while(0)
 #define ERRX(x) do { warnx(x); goto _error; } while(0)
 
-	struct pfr_buffer	*t, buf;
+	struct pfioc_trans	 tr;
 	struct pfctl		 pf;
 	struct pf_ruleset	*rs;
 	struct pfr_table	 trs;
 	char			*path = NULL;
-	int			 osize;
 	char			*p;
 
 	RB_INIT(&pf_anchors);
 	memset(&pf_main_anchor, 0, sizeof(pf_main_anchor));
 	pf_init_ruleset(&pf_main_anchor.ruleset);
-	if (trans == NULL) {
-		bzero(&buf, sizeof(buf));
-		buf.pfrb_type = PFRB_TRANS;
-		t = &buf;
-		osize = 0;
-	} else {
-		t = trans;
-		osize = t->pfrb_size;
-	}
-
 	memset(&pf, 0, sizeof(pf));
 	memset(&trs, 0, sizeof(trs));
+
+	if (trans == NULL) {
+		bzero(&tr, sizeof(tr));
+		if ((opts & PF_OPT_NOACTION) == 0) {
+			if (ioctl(dev, DIOCXBEGIN, &tr))
+				ERRX("pfctl_rules: DIOCXBEGIN");
+		}
+		pf.trans = &tr;
+	} else {
+		pf.trans = trans;
+	}
+
 	if ((path = calloc(1, PATH_MAX)) == NULL)
 		ERRX("pfctl_rules: calloc");
 	if (strlcpy(trs.pfrt_anchor, anchorname,
@@ -1587,7 +1646,6 @@ pfctl_rules(int dev, char *filename, int opts, int optimize,
 
 	pf.astack[0] = pf.anchor;
 	pf.asd = 0;
-	pf.trans = t;
 	pfctl_init_options(&pf);
 
 	if ((opts & PF_OPT_NOACTION) == 0) {
@@ -1596,10 +1654,8 @@ pfctl_rules(int dev, char *filename, int opts, int optimize,
 		 * the main ruleset before parsing, because tables are still
 		 * loaded at parse time.
 		 */
-		if (pfctl_ruleset_trans(&pf, anchorname, pf.anchor))
+		if (pfctl_ruleset(&pf, anchorname))
 			ERRX("pfctl_rules");
-		pf.astack[0]->ruleset.tversion =
-		    pfctl_get_ticket(t, PF_TRANS_TABLE, anchorname);
 	}
 
 	if (parse_config(filename, &pf) < 0) {
@@ -1632,7 +1688,7 @@ pfctl_rules(int dev, char *filename, int opts, int optimize,
 		/*
 		 * process "load anchor" directives that might have used queues
 		 */
-		if (pfctl_load_anchors(dev, &pf, t) == -1)
+		if (pfctl_load_anchors(dev, &pf) == -1)
 			ERRX("load anchors");
 		pfctl_clear_queues(&qspecs);
 		pfctl_clear_queues(&rootqs);
@@ -1640,7 +1696,7 @@ pfctl_rules(int dev, char *filename, int opts, int optimize,
 		if ((opts & PF_OPT_NOACTION) == 0) {
 			if (!anchorname[0] && pfctl_load_options(&pf))
 				goto _error;
-			if (pfctl_trans(dev, t, DIOCXCOMMIT, osize))
+			if (ioctl(dev, DIOCXCOMMIT, pf.trans))
 				ERR("DIOCXCOMMIT");
 		}
 	}
@@ -1649,7 +1705,7 @@ pfctl_rules(int dev, char *filename, int opts, int optimize,
 _error:
 	if (trans == NULL) {	/* main ruleset */
 		if ((opts & PF_OPT_NOACTION) == 0)
-			if (pfctl_trans(dev, t, DIOCXROLLBACK, osize))
+			if (ioctl(dev, DIOCXROLLBACK, pf.trans))
 				err(1, "DIOCXROLLBACK");
 		exit(1);
 	} else {		/* sub ruleset */
@@ -1838,17 +1894,28 @@ int
 pfctl_load_limit(struct pfctl *pf, unsigned int index, unsigned int limit)
 {
 	struct pfioc_limit pl;
+	int rv;
+
+	if (pf->trans == NULL) {
+		warnx("%s no transaction is opened", __func__);
+		return (1);
+	}
 
 	memset(&pl, 0, sizeof(pl));
 	pl.index = index;
 	pl.limit = limit;
-	if (pfctl_trans(pf->dev, &pl, DIOCSETLIMIT, 0) == -1) {
+
+	PF_SET_TRANS(pf->trans, pl, 1);
+	rv = ioctl(pf->dev, DIOCSETLIMIT, pf->trans);
+	PF_RESET_TRANS(pf->trans);
+
+	if (rv != 0) {
 		if (errno == EBUSY)
 			warnx("Current pool size exceeds requested %s limit %u",
 			    pf_limits[index].name, limit);
 		else
-			warnx("Cannot set %s limit to %u",
-			    pf_limits[index].name, limit);
+			warnx("Cannot set %s limit to %u (%s)",
+			    pf_limits[index].name, limit, strerror(errno));
 		return (1);
 	}
 	return (0);
@@ -1883,14 +1950,26 @@ int
 pfctl_load_timeout(struct pfctl *pf, unsigned int timeout, unsigned int seconds)
 {
 	struct pfioc_tm pt;
+	int rv;
+
+	if (pf->trans == NULL) {
+		warnx("%s no transaction is opened", __func__);
+		return (1);
+	}
 
 	memset(&pt, 0, sizeof(pt));
 	pt.timeout = timeout;
 	pt.seconds = seconds;
-	if (pfctl_trans(pf->dev, &pt, DIOCSETTIMEOUT, 0) == -1) {
-		warnx("DIOCSETTIMEOUT");
+
+	PF_SET_TRANS(pf->trans, pt, 1);
+	rv = ioctl(pf->dev, DIOCSETTIMEOUT, pf->trans);
+	PF_RESET_TRANS(pf->trans);
+
+	if (rv != 0) {
+		warnx("DIOCSETTIMEOUT (%s)", strerror(errno));
 		return (1);
 	}
+
 	return (0);
 }
 
@@ -1898,15 +1977,26 @@ int
 pfctl_set_synflwats(struct pfctl *pf, u_int32_t lowat, u_int32_t hiwat)
 {
 	struct pfioc_synflwats ps;
+	int rv;
+
+	if (pf->trans == NULL) {
+		warnx("%s no transaction is opened", __func__);
+		return (1);
+	}
 
 	memset(&ps, 0, sizeof(ps));
 	ps.hiwat = hiwat;
 	ps.lowat = lowat;
 
-	if (pfctl_trans(pf->dev, &ps, DIOCSETSYNFLWATS, 0) == -1) {
+	PF_SET_TRANS(pf->trans, ps, 1);
+	rv = ioctl(pf->dev, DIOCSETSYNFLWATS, pf->trans);
+	PF_RESET_TRANS(pf->trans);
+
+	if (rv != 0) {
 		warnx("Cannot set synflood detection watermarks");
 		return (1);
 	}
+
 	return (0);
 }
 
@@ -2023,6 +2113,12 @@ int
 pfctl_load_logif(struct pfctl *pf, char *ifname)
 {
 	struct pfioc_iface	pi;
+	int rv;
+
+	if (pf->trans == NULL) {
+		warnx("%s no transaction is opened", __func__);
+		return (1);
+	}
 
 	memset(&pi, 0, sizeof(pi));
 	if (ifname && strlcpy(pi.pfiio_name, ifname,
@@ -2030,10 +2126,16 @@ pfctl_load_logif(struct pfctl *pf, char *ifname)
 		warnx("pfctl_load_logif: strlcpy");
 		return (1);
 	}
-	if (pfctl_trans(pf->dev, &pi, DIOCSETSTATUSIF, 0) == -1) {
+
+	PF_SET_TRANS(pf->trans, pi, 1);
+	rv = ioctl(pf->dev, DIOCSETSTATUSIF, pf->trans);
+	PF_RESET_TRANS(pf->trans);
+
+	if (rv != 0) {
 		warnx("DIOCSETSTATUSIF");
 		return (1);
 	}
+
 	return (0);
 }
 
@@ -2052,30 +2154,66 @@ pfctl_set_hostid(struct pfctl *pf, u_int32_t hostid)
 int
 pfctl_load_hostid(struct pfctl *pf, u_int32_t hostid)
 {
-	if (pfctl_trans(dev, &hostid, DIOCSETHOSTID, 0) == -1) {
+	int rv;
+
+	if (pf->trans == NULL) {
+		warnx("%s no transaction is opened", __func__);
+		return (1);
+	}
+
+	PF_SET_TRANS(pf->trans, hostid, 1);
+	rv = ioctl(pf->dev, DIOCSETHOSTID, pf->trans);
+	PF_RESET_TRANS(pf->trans);
+
+	if (rv != 0) {
 		warnx("DIOCSETHOSTID");
 		return (1);
 	}
+
 	return (0);
 }
 
 int
 pfctl_load_reassembly(struct pfctl *pf, u_int32_t reassembly)
 {
-	if (pfctl_trans(dev, &reassembly, DIOCSETREASS, 0) == -1) {
+	int rv;
+
+	if (pf->trans == NULL) {
+		warnx("%s no transaction is opened", __func__);
+		return (1);
+	}
+
+	PF_SET_TRANS(pf->trans, reassembly, 1);
+	rv = ioctl(pf->dev, DIOCSETREASS, pf->trans);
+	PF_RESET_TRANS(pf->trans);
+
+	if (rv != 0) {
 		warnx("DIOCSETREASS");
 		return (1);
 	}
+
 	return (0);
 }
 
 int
 pfctl_load_syncookies(struct pfctl *pf, u_int8_t val)
 {
-	if (ioctl(dev, DIOCSETSYNCOOKIES, &val) == -1) {
+	int rv;
+
+	if (pf->trans == NULL) {
+		warnx("%s no transaction is opened", __func__);
+		return (1);
+	}
+
+	PF_SET_TRANS(pf->trans, val, 1);
+	rv = ioctl(pf->dev, DIOCSETSYNCOOKIES, pf->trans);
+	PF_RESET_TRANS(pf->trans);
+
+	if (rv != 0) {
 		warnx("DIOCSETSYNCOOKIES");
 		return (1);
 	}
+
 	return (0);
 }
 
@@ -2084,6 +2222,7 @@ pfctl_set_debug(struct pfctl *pf, char *d)
 {
 	u_int32_t	level;
 	int		loglevel;
+	int		rv;
 
 	if ((loglevel = string_to_loglevel(d)) >= 0)
 		level = loglevel;
@@ -2094,9 +2233,15 @@ pfctl_set_debug(struct pfctl *pf, char *d)
 	pf->debug = level;
 	pf->debug_set = 1;
 
-	if ((pf->opts & PF_OPT_NOACTION) == 0)
-		if (pfctl_trans(dev, &level, DIOCSETDEBUG, 0) == -1)
+	if ((pf->opts & PF_OPT_NOACTION) == 0) {
+		if (pf->trans == NULL)
+			err(1, "DIOCSETDEBUG no transaction is opened");
+		PF_SET_TRANS(pf->trans, level, 1);
+		rv = ioctl(pf->dev, DIOCSETDEBUG, pf->trans);
+		PF_RESET_TRANS(pf->trans);
+		if (rv == 0)
 			err(1, "DIOCSETDEBUG");
+	}
 
 	if (pf->opts & PF_OPT_VERBOSE)
 		printf("set debug %s\n", d);
@@ -2107,10 +2252,22 @@ pfctl_set_debug(struct pfctl *pf, char *d)
 int
 pfctl_load_debug(struct pfctl *pf, unsigned int level)
 {
-	if (pfctl_trans(pf->dev, &level, DIOCSETDEBUG, 0) == -1) {
+	int rv;
+
+	if (pf->trans == NULL) {
+		warnx("DIOCSETDEBUG no transaction is opened");
+		return (1);
+	}
+
+	PF_SET_TRANS(pf->trans, level, 1);
+	rv = ioctl(pf->dev, DIOCSETDEBUG, pf->trans);
+	PF_RESET_TRANS(pf->trans);
+
+	if (rv != 0) {
 		warnx("DIOCSETDEBUG");
 		return (1);
 	}
+
 	return (0);
 }
 
@@ -2142,14 +2299,19 @@ pfctl_set_interface_flags(struct pfctl *pf, char *ifname, int flags, int how)
 void
 pfctl_debug(int dev, u_int32_t level, int opts)
 {
-	struct pfr_buffer t;
+	struct pfioc_trans	t;
 
 	memset(&t, 0, sizeof(t));
-	t.pfrb_type = PFRB_TRANS;
-	if (pfctl_trans(dev, &t, DIOCXBEGIN, 0) ||
-	    ioctl(dev, DIOCSETDEBUG, &level) == -1||
-	    pfctl_trans(dev, &t, DIOCXCOMMIT, 0))
-		err(1, "pfctl_debug ioctl");
+	if (ioctl(dev, DIOCXBEGIN, &t) == -1)
+		err(1, "%s DIOCXBEGIN (%s)", __func__, strerror(errno));
+
+	PF_SET_TRANS(&t, level, 1);
+	if (ioctl(dev, DIOCSETDEBUG, &t) == -1)
+		err(1, "%s DIOCSETDEBUG (%s)", __func__, strerror(errno));
+	PF_RESET_TRANS(&t);
+
+	if (ioctl(dev, DIOCXCOMMIT, &t) == -1)
+		err(1, "%s DIOCXCOMMIT (%s)", __func__, strerror(errno));
 
 	if ((opts & PF_OPT_QUIET) == 0)
 		fprintf(stderr, "debug level set to '%s'\n",
@@ -2425,10 +2587,12 @@ void
 pfctl_reset(int dev, int opts)
 {
 	struct pfctl	pf;
-	struct pfr_buffer t;
 	int		i;
+	struct pfioc_trans t;
 
+	memset(&t, 0, sizeof(t));
 	memset(&pf, 0, sizeof(pf));
+
 	pf.dev = dev;
 	pfctl_init_options(&pf);
 
@@ -2441,11 +2605,10 @@ pfctl_reset(int dev, int opts)
 	if (pf.ifname == NULL)
 		err(1, "%s: strdup", __func__);
 	pf.ifname_set = 1;
+	pf.trans = &t;
 
-	memset(&t, 0, sizeof(t));
-	t.pfrb_type = PFRB_TRANS;
-	if (pfctl_trans(dev, &t, DIOCXBEGIN, 0))
-		err(1, "%s: DIOCXBEGIN", __func__);
+	if (ioctl(dev, DIOCXBEGIN, pf.trans))
+		err(1, "%s: DIOCXBEGIN (%s)", __func__, strerror(errno));
 
 	for (i = 0; pf_limits[i].name; i++)
 		pf.limit_set[pf_limits[i].index] = 1;
@@ -2455,7 +2618,7 @@ pfctl_reset(int dev, int opts)
 
 	pfctl_load_options(&pf);
 
-	if (pfctl_trans(dev, &t, DIOCXCOMMIT, 0))
+	if (ioctl(dev, DIOCXCOMMIT, pf.trans))
 		err(1, "%s: DIOCXCOMMIT", __func__);
 
 	pfctl_clear_interface_flags(dev, opts);
@@ -2674,8 +2837,6 @@ main(int argc, char *argv[])
 		dev = open(pf_device, mode);
 		if (dev == -1)
 			err(1, "%s", pf_device);
-		if (pfctl_trans(dev, NULL, DIOCXBEGIN, 0) != 0)
-			errx(1, "pfctl_trans(): %s", strerror(errno));
 	} else {
 		dev = open(pf_device, O_RDONLY);
 		if (dev >= 0)

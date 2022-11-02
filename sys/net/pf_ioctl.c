@@ -2585,36 +2585,27 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		break;
 	}
 
-	case DIOCXBEGIN: {
+	case DIOCXRULESET: {
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pfioc_trans_e	*ioe;
-		struct pfr_table	*table;
 		struct pf_trans		*t = NULL;
+		struct pfr_table	*table;
 		int			 i;
 
 		if (io->esize != sizeof(*ioe)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCXBEGIN\n", __func__);
+			log(LOG_ERR, "%s DIOCRULESET\n", __func__);
 			goto fail;
 		}
 
-		/*
-		 * pfctl may call DIOCXBEGIN multiple times for single ruleset.
-		 * New rulesets/anchors are appended to pfrb buffer which holds
-		 * all rulesets we are going to create/update. We apply
-		 * DIOCXBEGIN to the whole buffer evey time new item is added.
-		 * We have to take this into account here. If we find existing
-		 * transaction for our pid, then just new item got added,
-		 * otherwise we must create a new transaction.
-		 */
 		t = pf_find_trans(io->ticket);
-		if ((t == NULL) || (t->pid != p->p_p->ps_pid))
-			t = pf_open_trans(p->p_p->ps_pid);
+		if ((t == NULL) || (t->pid != p->p_p->ps_pid)) {
+			error = ENXIO;
+			goto fail;
+		}
+
 		ioe = malloc(sizeof(*ioe), M_TEMP, M_WAITOK);
 		table = malloc(sizeof(*table), M_TEMP, M_WAITOK);
-
-		t->default_rule = pf_default_rule;
-		t->default_vers = pf_default_vers;
 
 		for (i = 0; i < io->size; i++) {
 			if (copyin(io->array+i, ioe, sizeof(*ioe))) {
@@ -2670,9 +2661,35 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				goto fail;
 			}
 		}
-		io->ticket = t->ticket;
 		free(table, M_TEMP, sizeof(*table));
 		free(ioe, M_TEMP, sizeof(*ioe));
+
+		break;
+	}
+
+	case DIOCXBEGIN: {
+		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
+		struct pf_trans		*t = NULL;
+#if 0
+		/*
+		 * pfctl may call DIOCXBEGIN multiple times for single ruleset.
+		 * New rulesets/anchors are appended to pfrb buffer which holds
+		 * all rulesets we are going to create/update. We apply
+		 * DIOCXBEGIN to the whole buffer evey time new item is added.
+		 * We have to take this into account here. If we find existing
+		 * transaction for our pid, then just new item got added,
+		 * otherwise we must create a new transaction.
+		 */
+		t = pf_find_trans(io->ticket);
+		if ((t == NULL) || (t->pid != p->p_p->ps_pid))
+			t = pf_open_trans(p->p_p->ps_pid);
+#endif
+
+		t = pf_open_trans(p->p_p->ps_pid);
+		t->default_rule = pf_default_rule;
+		t->default_vers = pf_default_vers;
+
+		io->ticket = t->ticket;
 		break;
 	}
 
@@ -2693,18 +2710,10 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCXCOMMIT: {
 		struct pf_trans		*t;
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
-		struct pfioc_trans_e	*ioe;
-		struct pfr_table	*table;
 		struct pf_ruleset	*rs;
 		struct pf_anchor	*ta, *tmp;
 		int			 i, bailout = 0;
 		u_int32_t		 version;
-
-		if (io->esize != sizeof(*ioe)) {
-			error = ENODEV;
-			log(LOG_ERR, "%s DIOCXCOMMIT\n", __func__);
-			goto fail;
-		}
 
 		/*
 		 * XXX
@@ -2717,9 +2726,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		ioe = malloc(sizeof(*ioe), M_TEMP, M_WAITOK);
-		table = malloc(sizeof(*table), M_TEMP, M_WAITOK);
-		/* first makes sure everything will succeed */
+		/* first make sure everything will succeed */
 		
 		PF_LOCK();	/* the first pass can be r-lock */
 		/*

@@ -1543,15 +1543,17 @@ struct pfioc_ruleset {
 	char		 name[PF_ANCHOR_NAME_SIZE];
 };
 
+struct pfioc_trans_e {
+	int		type;
+	char		anchor[PATH_MAX];
+	u_int32_t	ticket;
+};
+
 struct pfioc_trans {
 	int		 size;	/* number of elements */
 	int		 esize; /* size of each element in bytes */
 	uint64_t	 ticket;
-	struct pfioc_trans_e {
-		int		type;
-		char		anchor[PATH_MAX];
-		u_int32_t	ticket;
-	}		*array;
+	void		*array;
 };
 
 struct pfioc_queue {
@@ -1679,6 +1681,7 @@ struct pfioc_synflwats {
 #define DIOCSETSYNFLWATS	_IOWR('D', 97, struct pfioc_synflwats)
 #define DIOCSETSYNCOOKIES	_IOWR('D', 98, u_int8_t)
 #define DIOCGETSYNFLWATS	_IOWR('D', 99, struct pfioc_synflwats)
+#define DIOCXRULESET	_IOW('D', 100, struct pfioc_trans)
 
 #ifdef _KERNEL
 

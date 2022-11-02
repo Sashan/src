@@ -99,9 +99,8 @@ void	 print_state(struct pfsync_state *, int);
 
 int	 pfctl_cmdline_symset(char *);
 int	 pfctl_add_trans(struct pfr_buffer *, int, const char *);
-u_int32_t
+u_int64_t
 	 pfctl_get_ticket(struct pfr_buffer *, int, const char *);
-int	 pfctl_trans(int, void *, u_long, int);
 
 int	 pfctl_show_queues(int, const char *, int, int);
 

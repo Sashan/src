@@ -82,7 +82,7 @@ struct pfctl {
 #define PFCTL_ANCHOR_STACK_DEPTH 64
 	struct pf_anchor *astack[PFCTL_ANCHOR_STACK_DEPTH];
 	struct pfioc_queue *pqueue;
-	struct pfr_buffer *trans;
+	struct pfioc_trans *trans;
 	struct pf_anchor *anchor, *alast;
 	const char *ruleset;
 
@@ -212,7 +212,7 @@ struct pfctl_watermarks {
 
 void		 copy_satopfaddr(struct pf_addr *, struct sockaddr *);
 
-int	pfctl_rules(int, char *, int, int, char *, struct pfr_buffer *);
+int	pfctl_rules(int, char *, int, int, char *, struct pfioc_trans *);
 int	pfctl_optimize_ruleset(struct pfctl *, struct pf_ruleset *);
 int     pf_opt_create_table(struct pfctl *, struct pf_opt_tbl *);
 int     add_opt_table(struct pfctl *, struct pf_opt_tbl **, sa_family_t,
@@ -233,7 +233,7 @@ int	pfctl_set_interface_flags(struct pfctl *, char *, int, int);
 
 int	parse_config(char *, struct pfctl *);
 int	parse_flags(char *);
-int	pfctl_load_anchors(int, struct pfctl *, struct pfr_buffer *);
+int	pfctl_load_anchors(int, struct pfctl *);
 
 int	pfctl_load_queues(struct pfctl *);
 int	pfctl_add_queue(struct pfctl *, struct pf_queuespec *);

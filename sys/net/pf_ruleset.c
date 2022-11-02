@@ -302,6 +302,7 @@ pf_get_ruleset_version(const char *path)
 	struct pf_ruleset	*rs;
 	u_int32_t		 version;
 
+	NET_LOCK();
 	PF_LOCK();
 	rs = pf_find_ruleset(&pf_global, path);
 	if (rs != NULL) {
@@ -310,6 +311,7 @@ pf_get_ruleset_version(const char *path)
 	} else
 		version = 0;
 	PF_UNLOCK();
+	NET_UNLOCK();
 
 	return (version);
 }

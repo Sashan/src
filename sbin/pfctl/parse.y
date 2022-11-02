@@ -5711,7 +5711,7 @@ parseport(char *port, struct range *r, int extensions)
 }
 
 int
-pfctl_load_anchors(int dev, struct pfctl *pf, struct pfr_buffer *trans)
+pfctl_load_anchors(int dev, struct pfctl *pf)
 {
 	struct loadanchors	*la;
 
@@ -5720,7 +5720,7 @@ pfctl_load_anchors(int dev, struct pfctl *pf, struct pfr_buffer *trans)
 			fprintf(stderr, "\nLoading anchor %s from %s\n",
 			    la->anchorname, la->filename);
 		if (pfctl_rules(dev, la->filename, pf->opts, pf->optimize,
-		    la->anchorname, trans) == -1)
+		    la->anchorname, pf->trans) == -1)
 			return (-1);
 	}
 
