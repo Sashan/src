@@ -1224,21 +1224,15 @@ pfctl_ruleset(struct pfctl *pf, char *path)
 	bzero(&e, sizeof(e));
 	rs->type = PF_TRANS_RULESET;
 	if (strlcpy(rs->anchor, path, sizeof(rs->anchor)) >= sizeof(rs->anchor))
-		errx(1, "pfctl_ruleset: strlcpy");
+		errx(1, "%s: strlcpy", __func__);
 
 	*table = *rs;
 	table->type = PF_TRANS_TABLE;
 
-	pf->trans->array = e;
-	pf->trans->size = 2;
-	pf->trans->esize = sizeof(struct pfioc_trans_e);
-	
-	if (ioctl(pf->dev, DIOCXRULESET, &pf->trans))
-		errx(1, "pfctl_ruleset: %s", strerror(errno));
-
-	pf->trans->array = NULL;
-	pf->trans->size = 0;
-	pf->trans->esize = 0;
+	PF_SET_TRANS(pf->trans, e[0], 2);
+	if (ioctl(pf->dev, DIOCXRULESET, pf->trans))
+		errx(1, "%s: %s", __func__, strerror(errno));
+	PF_RESET_TRANS(pf->trans);
 
 	return (0);
 }

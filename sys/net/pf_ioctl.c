@@ -2157,6 +2157,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		t = pf_find_trans(io->ticket);
 		if (t == NULL || t->pid != p->p_p->ps_pid) {
+			log(LOG_ERR, "%s DIOCSETLIMIT no transaction for %llu\n", __func__, io->ticket);
 			error = ENXIO;
 			goto fail;
 		}
@@ -2594,7 +2595,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->esize != sizeof(*ioe)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRULESET\n", __func__);
+			log(LOG_ERR, "%s DIOCRULESET %d != %lu\n", __func__, io->esize, sizeof(*ioe));
 			goto fail;
 		}
 
@@ -2728,6 +2729,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		/* first make sure everything will succeed */
 		
+		NET_LOCK();
 		PF_LOCK();	/* the first pass can be r-lock */
 		/*
 		 * check all ruleset found in transaction if they have
@@ -2738,7 +2740,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		version = t->rc.main_anchor.ruleset.rules.version;
 		bailout = ((version != 0) &&
 		    (version != pf_main_ruleset.rules.version));
-		bailout |= (t->default_vers == pf_default_vers);
+		bailout |= (t->default_vers != pf_default_vers);
 		if (bailout == 0) {
 			RB_FOREACH(ta, pf_anchor_global, &t->rc.anchors) {
 				version = ta->ruleset.rules.version;
