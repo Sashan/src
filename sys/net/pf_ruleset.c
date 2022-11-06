@@ -250,11 +250,11 @@ pf_find_or_create_ruleset(struct pf_rules_container *rc, const char *path)
 	struct pf_ruleset	*ruleset;
 	struct pf_anchor	*anchor;
 
-	if (path[0] == 0)
-		return (&rc->main_anchor.ruleset);
-
 	while (*path == '/')
 		path++;
+
+	if (path[0] == 0)
+		return (&rc->main_anchor.ruleset);
 
 	ruleset = pf_find_ruleset(rc, path);
 	if (ruleset != NULL)

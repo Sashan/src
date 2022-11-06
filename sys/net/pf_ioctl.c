@@ -542,7 +542,7 @@ pf_qid_unref(u_int16_t qid)
 }
 
 int
-pf_begin_rules(struct pf_trans *t, u_int32_t *version, const char *anchor)
+pf_begin_rules(struct pf_trans *t, const char *anchor)
 {
 	struct pf_ruleset	*rs;
 
@@ -554,11 +554,6 @@ pf_begin_rules(struct pf_trans *t, u_int32_t *version, const char *anchor)
 		return (EINVAL);
 
 	rs->rules.version = pf_get_ruleset_version(anchor);
-	/*
-	 * We record version along the `ioe` we copy back to userland
-	 * as debugging aid.
-	 */
-	*version = rs->rules.version;
 
 	return (0);
 }
@@ -2595,7 +2590,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->esize != sizeof(*ioe)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRULESET %d != %lu\n", __func__, io->esize, sizeof(*ioe));
+			log(LOG_ERR, "%s DIOCRULESET %d != %lu\n", __func__,
+			    io->esize, sizeof(*ioe));
 			goto fail;
 		}
 
@@ -2638,8 +2634,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				}
 				break;
 			case PF_TRANS_RULESET:
-				error = pf_begin_rules(t, &ioe->ticket,
-				    ioe->anchor);
+				error = pf_begin_rules(t, ioe->anchor);
 				if (error != 0) {
 					free(table, M_TEMP, sizeof(*table));
 					free(ioe, M_TEMP, sizeof(*ioe));
@@ -2713,6 +2708,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pf_ruleset	*rs;
 		struct pf_anchor	*ta, *tmp;
+		struct pool		*pp;
 		int			 i, bailout = 0;
 		u_int32_t		 version;
 
@@ -2731,16 +2727,38 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		
 		NET_LOCK();
 		PF_LOCK();	/* the first pass can be r-lock */
+
 		/*
-		 * check all ruleset found in transaction if they have
-		 * the same version as ruleset found in global table.
-		 * if no ruleset is found in global table then transaction
-		 * ruleset must have version 0.
+		 * main ruleset always exists, therefore it can never have
+		 * version 0. If main ruleset in transaction comes with 0, then
+		 * transaction does not intend to modify it.
 		 */
 		version = t->rc.main_anchor.ruleset.rules.version;
 		bailout = ((version != 0) &&
 		    (version != pf_main_ruleset.rules.version));
-		bailout |= (t->default_vers != pf_default_vers);
+
+		/* check if defaults can be modified/updated */
+		if (bailout == 0 && t->modify_defaults) {
+			bailout = (t->default_vers == pf_default_vers);
+			for (i = 0; i < PF_LIMIT_MAX && bailout == 0; i++) {
+				pp = (struct pool *)pf_pool_limits[i].pp;
+				if (pp->pr_nout > t->pool_limits[i]) {
+					log(LOG_WARNING,
+					    "pr_nout (%u) exceeds new "
+					    "limit (%u) for %s\n",
+					    pp->pr_nout,
+					    t->pool_limits[i],
+					    pp->pr_wchan);
+					bailout = 1;
+				}
+			}
+		}
+
+		/*
+		 * check ruleset versions in transaction to match versions
+		 * found in global table. We let transaction to fail on the
+		 * first mismatch.
+		 */
 		if (bailout == 0) {
 			RB_FOREACH(ta, pf_anchor_global, &t->rc.anchors) {
 				version = ta->ruleset.rules.version;
@@ -2761,12 +2779,11 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		/* commit changes */
-		PF_LOCK();	/* now upgrade to w-lock */
-		/*
+		/* commit changes
 		 * upgrade to w-lock is safe, because no other ioctl can
 		 * mess up with global rules. we still hold ioctl rw
 		 */
+		PF_LOCK();
 		version = t->rc.main_anchor.ruleset.rules.version;
 		if (version != 0) {
 			if (t->rc.main_anchor.ruleset.topen) {
@@ -2792,8 +2809,20 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		 *
 		 * create/update tables in global container
 		 */
-		
 		RB_FOREACH_SAFE(ta, pf_anchor_global, &t->rc.anchors, tmp) {
+			rs = pf_find_ruleset(&pf_global, ta->path);
+			if (rs != NULL) {
+				pf_swap_rules(rs, &ta->ruleset);
+				rs->rules.version++;
+			} else {
+				/*
+				 * should be ok to steal 'ta' from transaction
+				 * without dealing without dealing with 'node
+				 * anchor.
+				 */
+				RB_REMOVE(pf_anchor_global, &t->rc.anchors,
+				    ta);
+			}
 		}
 
 		if (t->modify_defaults) {
@@ -2809,7 +2838,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				if (pp->pr_nout > t->pool_limits[i]) {
 					log(LOG_WARNING,
 					    "pr_nout (%u) exceeds new "
-					    "limit (%u) for %s\n",
+					    "limit (%u) for %s at commit\n",
 					    pp->pr_nout,
 					    t->pool_limits[i],
 					    pp->pr_wchan);
@@ -2819,7 +2848,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				    NULL, 0) != 0) {
 					log(LOG_WARNING,
 					    "setting limit to %u failed "
-					    "for %s\n",
+					    "for %s at commit\n",
 					    t->pool_limits[i],
 					    pp->pr_wchan);
 				} else {
@@ -2851,8 +2880,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		PF_UNLOCK();
 		NET_UNLOCK();
 		/*
-		 * rollback should stay to release old stuff
-		 * we keep after calling pf_swap_rules() et. al.
+		 * use rollback to release stuff which became invalidated.
 		 */
 		pf_rollback_trans(t);
 		break;
