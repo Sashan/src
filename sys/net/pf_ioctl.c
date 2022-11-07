@@ -93,8 +93,7 @@ void			 pf_thread_create(void *);
 int			 pfopen(dev_t, int, int, struct proc *);
 int			 pfclose(dev_t, int, int, struct proc *);
 int			 pfioctl(dev_t, u_long, caddr_t, int, struct proc *);
-int			 pf_begin_rules(struct pf_trans *, u_int32_t *,
-			    const char *);
+int			 pf_begin_rules(struct pf_trans *, const char *);
 void			 pf_rollback_rules(u_int32_t, char *);
 void			 pf_remove_queues(void);
 int			 pf_commit_queues(void);

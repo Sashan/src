@@ -1305,8 +1305,8 @@ pf_state_import(const struct pfsync_state *sp, int flags)
 	 */
 	if (sp->rule != htonl(-1) && sp->anchor == htonl(-1) &&
 	    (flags & (PFSYNC_SI_IOCTL | PFSYNC_SI_CKSUM)) &&
-	    ntohl(sp->rule) < pf_main_ruleset.rules.active.rcount) {
-		TAILQ_FOREACH(r, pf_main_ruleset.rules.active.ptr, entries)
+	    ntohl(sp->rule) < pf_main_ruleset.rules.rcount) {
+		TAILQ_FOREACH(r, pf_main_ruleset.rules.ptr, entries)
 			if (ntohl(sp->rule) == n++)
 				break;
 	} else
