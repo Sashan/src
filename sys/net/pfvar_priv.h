@@ -238,6 +238,7 @@ struct pf_trans {
 	struct pf_rule		default_rule;
 	struct pf_trans_set	trans_set;
 	unsigned		pool_limits[PF_LIMIT_MAX];
+	struct pf_anchor_global	done;
 };
 
 extern struct task	pf_purge_task;

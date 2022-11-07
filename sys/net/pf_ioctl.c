@@ -1056,7 +1056,30 @@ fail:
 }
 
 void
-pf_swap_rules(struct pf_ruleset *grs, struct pf_ruleset *trs)
+pf_update_anchor(struct pf_rule *r, struct pf_trans *t)
+{
+	struct pf_ruleset *rs;
+
+	rs = pf_find_ruleset(&pf_global, r->anchor->name);
+	if (rs != NULL) {
+		rs->anchor->refcnt++;
+		r->anchor->refcnt--;
+		r->anchor = rs->anchor;
+	} else if ((rs = pf_find_ruleset(&t->rc, r->anchor->name)) != NULL) {
+		RB_REMOVE(pf_anchor_global, &t->rc.anchors, rs->anchor);
+		RB_INSERT(pf_anchor_global, &pf_global.anchors, rs->anchor);
+		/*
+		 * how to update node anchors
+		 */
+	} else {
+		panic("%s anchor (%s) [%p] not found\n",
+		    __func__, r->anchor->name, r->anchor);
+	}
+}
+
+void
+pf_swap_rules(struct pf_ruleset *grs, struct pf_ruleset *trs,
+    struct pf_trans *t)
 {
 	struct pf_ruleset tmp;
 	struct pf_rule *r;
@@ -1070,13 +1093,23 @@ pf_swap_rules(struct pf_ruleset *grs, struct pf_ruleset *trs)
 	trs->rules.rcount = grs->rules.rcount;
 	TAILQ_CONCAT(trs->rules.ptr, grs->rules.ptr, entries);
 	TAILQ_FOREACH(r, trs->rules.ptr, entries) {
-		r->ruleset = trs;
+		if (r->anchor != NULL) {
+			KASSERT(r->anchor->refcnt > 1);
+			r->anchor->refcnt--;
+			r->anchor = NULL;
+		}
 	}
 
 	grs->rules.rcount = tmp.rules.rcount;
 	TAILQ_CONCAT(grs->rules.ptr, tmp.rules.ptr, entries);
 	TAILQ_FOREACH(r, grs->rules.ptr, entries) {
-		r->ruleset = grs;
+		/*
+		 * anchor still refers to ruleset attached to transaction.
+		 * we need to carefully bring it to the real world found
+		 * in global ruleset.
+		 */
+		if (r->anchor != NULL)
+			pf_update_anchor(r, t);
 	}
 }
 
@@ -2710,7 +2743,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pf_trans		*t;
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pf_ruleset	*rs;
-		struct pf_anchor	*ta, *tmp;
+		struct pf_anchor	*ta;
+		struct pf_rule		*r;
 		struct pool		*pp;
 		int			 i, bailout = 0;
 		u_int32_t		 version;
@@ -2799,7 +2833,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				 */
 			}
 			pf_swap_rules(&pf_main_ruleset,
-			    &t->rc.main_anchor.ruleset);
+			    &t->rc.main_anchor.ruleset, t);
 			pf_main_ruleset.rules.version++;
 		}
 
@@ -2812,19 +2846,32 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		 *
 		 * create/update tables in global container
 		 */
-		RB_FOREACH_SAFE(ta, pf_anchor_global, &t->rc.anchors, tmp) {
+		while (!RB_EMPTY(&t->rc.anchors)) {
+			ta = RB_MIN(pf_anchor_global, &t->rc.anchors);
+			RB_REMOVE(pf_anchor_global, &t->rc.anchors, ta);
 			rs = pf_find_ruleset(&pf_global, ta->path);
 			if (rs != NULL) {
-				pf_swap_rules(rs, &ta->ruleset);
+				pf_swap_rules(rs, &ta->ruleset, t);
 				rs->rules.version++;
-			} else {
 				/*
-				 * should be ok to steal 'ta' from transaction
-				 * without dealing without dealing with 'node
-				 * anchor.
+				 * TODO there are few things we need to sort
+				 * out:
+				 *	- must make sure ->anchor found in
+				 *	  each rule instance gets updated
+				 *	  to point to anchor found in global
+				 *	  ruleset
+				 *
+				 *	- remove empty rulesets.
 				 */
-				RB_REMOVE(pf_anchor_global, &t->rc.anchors,
+				RB_INSERT(pf_anchor_global, &t->done, ta);
+				pf_remove_if_empty_ruleset(&pf_global, rs);
+			} else {
+				RB_INSERT(pf_anchor_global, &pf_global.anchors,
 				    ta);
+				TAILQ_FOREACH(r, rs->rules.ptr, entries) {
+					if (r->anchor != NULL)
+						pf_update_anchor(r, t);
+				}
 			}
 		}
 
