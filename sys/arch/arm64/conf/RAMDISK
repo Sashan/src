@@ -1,4 +1,4 @@
-# $OpenBSD: RAMDISK,v 1.177 2022/09/11 10:37:54 kettenis Exp $
+# $OpenBSD: RAMDISK,v 1.181 2022/11/06 15:36:13 patrick Exp $
 
 machine		arm64
 maxusers	4
@@ -34,6 +34,7 @@ mainbus0	at root
 softraid0	at root
 cpu0		at mainbus?
 efi0		at mainbus?
+smbios0		at efi?
 acpi0		at mainbus?
 acpiec*		at acpi?
 acpimcfg*	at acpi?
@@ -232,8 +233,11 @@ dwmmc*		at fdt?
 sdmmc*		at dwmmc?
 
 # Qualcomm SoCs
+qcdwusb*	at fdt?
 qcgpio*		at acpi?
+qcgpio*		at fdt?
 qciic*		at acpi?
+qciic*		at fdt?
 iic*		at qciic?
 
 # Sunxi SoCs

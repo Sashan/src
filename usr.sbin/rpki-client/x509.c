@@ -1,4 +1,4 @@
-/*	$OpenBSD: x509.c,v 1.51 2022/10/24 10:26:59 tb Exp $ */
+/*	$OpenBSD: x509.c,v 1.58 2022/11/07 09:18:14 job Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
@@ -34,6 +34,7 @@
 ASN1_OBJECT	*certpol_oid;	/* id-cp-ipAddr-asNumber cert policy */
 ASN1_OBJECT	*carepo_oid;	/* 1.3.6.1.5.5.7.48.5 (caRepository) */
 ASN1_OBJECT	*manifest_oid;	/* 1.3.6.1.5.5.7.48.10 (rpkiManifest) */
+ASN1_OBJECT	*signedobj_oid;	/* 1.3.6.1.5.5.7.48.11 (signedObject) */
 ASN1_OBJECT	*notify_oid;	/* 1.3.6.1.5.5.7.48.13 (rpkiNotify) */
 ASN1_OBJECT	*roa_oid;	/* id-ct-routeOriginAuthz CMS content type */
 ASN1_OBJECT	*mft_oid;	/* id-ct-rpkiManifest CMS content type */
@@ -45,6 +46,7 @@ ASN1_OBJECT	*sign_time_oid;	/* pkcs-9 id-signingTime */
 ASN1_OBJECT	*bin_sign_time_oid;	/* pkcs-9 id-aa-binarySigningTime */
 ASN1_OBJECT	*rsc_oid;	/* id-ct-signedChecklist */
 ASN1_OBJECT	*aspa_oid;	/* id-ct-ASPA */
+ASN1_OBJECT	*tak_oid;	/* id-ct-SignedTAL */
 
 static const struct {
 	const char	 *oid;
@@ -61,6 +63,10 @@ static const struct {
 	{
 		.oid = "1.3.6.1.5.5.7.48.10",
 		.ptr = &manifest_oid,
+	},
+	{
+		.oid = "1.3.6.1.5.5.7.48.11",
+		.ptr = &signedobj_oid,
 	},
 	{
 		.oid = "1.3.6.1.5.5.7.48.13",
@@ -105,6 +111,10 @@ static const struct {
 	{
 		.oid = "1.2.840.113549.1.9.16.1.49",
 		.ptr = &aspa_oid,
+	},
+	{
+		.oid = "1.2.840.113549.1.9.16.1.50",
+		.ptr = &tak_oid,
 	},
 };
 
@@ -219,11 +229,18 @@ out:
 enum cert_purpose
 x509_get_purpose(X509 *x, const char *fn)
 {
+	BASIC_CONSTRAINTS		*bc = NULL;
 	EXTENDED_KEY_USAGE		*eku = NULL;
 	int				 crit;
 	enum cert_purpose		 purpose = CERT_PURPOSE_INVALID;
 
 	if (X509_check_ca(x) == 1) {
+		bc = X509_get_ext_d2i(x, NID_basic_constraints, &crit, NULL);
+		if (bc->pathlen != NULL) {
+			warnx("%s: RFC 6487 section 4.8.1: Path Length "
+			    "Constraint must be absent", fn);
+			goto out;
+		}
 		purpose = CERT_PURPOSE_CA;
 		goto out;
 	}
@@ -254,6 +271,7 @@ x509_get_purpose(X509 *x, const char *fn)
 	}
 
  out:
+	BASIC_CONSTRAINTS_free(bc);
 	EXTENDED_KEY_USAGE_free(eku);
 	return purpose;
 }
@@ -365,6 +383,87 @@ out:
 }
 
 /*
+ * Parse the Subject Information Access (SIA) extension
+ * See RFC 6487, section 4.8.8 for details.
+ * Returns NULL on failure, on success returns the SIA signedObject URI
+ * (which has to be freed after use).
+ */
+int
+x509_get_sia(X509 *x, const char *fn, char **sia)
+{
+	ACCESS_DESCRIPTION		*ad;
+	AUTHORITY_INFO_ACCESS		*info;
+	ASN1_OBJECT			*oid;
+	int				 i, crit, rsync_found = 0;
+
+	*sia = NULL;
+
+	info = X509_get_ext_d2i(x, NID_sinfo_access, &crit, NULL);
+	if (info == NULL)
+		return 1;
+
+	if (crit != 0) {
+		warnx("%s: RFC 6487 section 4.8.8: "
+		    "SIA: extension not non-critical", fn);
+		goto out;
+	}
+
+	for (i = 0; i < sk_ACCESS_DESCRIPTION_num(info); i++) {
+		ad = sk_ACCESS_DESCRIPTION_value(info, i);
+		oid = ad->method;
+
+		/*
+		 * XXX: RFC 6487 4.8.8.2 states that the accessMethod MUST be
+		 * signedObject. However, rpkiNotify accessMethods currently
+		 * exist in the wild. Consider removing this special case.
+		 * See also https://www.rfc-editor.org/errata/eid7239.
+		 */
+		if (OBJ_cmp(oid, notify_oid) == 0) {
+			if (verbose > 1)
+				warnx("%s: RFC 6487 section 4.8.8.2: SIA should"
+				    " not contain rpkiNotify accessMethod", fn);
+			continue;
+		}
+		if (OBJ_cmp(oid, signedobj_oid) != 0) {
+			char buf[128];
+
+			OBJ_obj2txt(buf, sizeof(buf), oid, 0);
+			warnx("%s: RFC 6487 section 4.8.8.2: unexpected"
+			    " accessMethod: %s", fn, buf);
+			goto out;
+		}
+
+		/* Don't fail on non-rsync URI, so check this afterward. */
+		if (!x509_location(fn, "SIA: signedObject", NULL, ad->location,
+		    sia))
+			goto out;
+
+		if (rsync_found)
+			continue;
+
+		if (strncasecmp(*sia, "rsync://", 8) == 0) {
+			rsync_found = 1;
+			continue;
+		}
+
+		free(*sia);
+		*sia = NULL;
+	}
+
+	if (!rsync_found)
+		goto out;
+
+	AUTHORITY_INFO_ACCESS_free(info);
+	return 1;
+
+ out:
+	free(*sia);
+	*sia = NULL;
+	AUTHORITY_INFO_ACCESS_free(info);
+	return 0;
+}
+
+/*
  * Extract the expire time (not-after) of a certificate.
  */
 int
@@ -377,7 +476,7 @@ x509_get_expire(X509 *x, const char *fn, time_t *tt)
 		warnx("%s: X509_get0_notafter failed", fn);
 		return 0;
 	}
-	if (x509_get_time(at, tt) == -1) {
+	if (!x509_get_time(at, tt)) {
 		warnx("%s: ASN1_time_parse failed", fn);
 		return 0;
 	}
@@ -469,7 +568,7 @@ x509_get_crl(X509 *x, const char *fn, char **crl)
 	DIST_POINT		*dp;
 	GENERAL_NAMES		*names;
 	GENERAL_NAME		*name;
-	int			 i, crit, rc = 0;
+	int			 i, crit, rsync_found = 0;
 
 	*crl = NULL;
 	crldp = X509_get_ext_d2i(x, NID_crl_distribution_points, &crit, NULL);
@@ -504,14 +603,17 @@ x509_get_crl(X509 *x, const char *fn, char **crl)
 	names = dp->distpoint->name.fullname;
 	for (i = 0; i < sk_GENERAL_NAME_num(names); i++) {
 		name = sk_GENERAL_NAME_value(names, i);
-		/* Don't warn on non-rsync URI, so check this afterward. */
+
+		/* Don't fail on non-rsync URI, so check this afterward. */
 		if (!x509_location(fn, "CRL distribution point", NULL, name,
 		    crl))
 			goto out;
+
 		if (strncasecmp(*crl, "rsync://", 8) == 0) {
-			rc = 1;
+			rsync_found = 1;
 			goto out;
 		}
+
 		free(*crl);
 		*crl = NULL;
 	}
@@ -521,7 +623,7 @@ x509_get_crl(X509 *x, const char *fn, char **crl)
 
  out:
 	CRL_DIST_POINTS_free(crldp);
-	return rc;
+	return rsync_found;
 }
 
 /*

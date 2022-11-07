@@ -1,4 +1,4 @@
-/*	$OpenBSD: loader.c,v 1.196 2022/10/28 15:07:25 kettenis Exp $ */
+/*	$OpenBSD: loader.c,v 1.201 2022/11/07 10:35:26 deraadt Exp $ */
 
 /*
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
@@ -247,7 +247,7 @@ _dl_dopreload(char *paths)
 	dp = paths;
 	while ((cp = _dl_strsep(&dp, ":")) != NULL) {
 		shlib = _dl_load_shlib(cp, _dl_objects, OBJTYPE_LIB,
-		    _dl_objects->obj_flags);
+		    _dl_objects->obj_flags, 1);
 		if (shlib == NULL)
 			_dl_die("can't preload library '%s'", cp);
 		_dl_add_object(shlib);
@@ -375,7 +375,7 @@ _dl_load_dep_libs(elf_object_t *object, int flags, int booting)
 				DL_DEB(("loading: %s required by %s\n", libname,
 				    dynobj->load_name));
 				depobj = _dl_load_shlib(libname, dynobj,
-				    OBJTYPE_LIB, depflags);
+				    OBJTYPE_LIB, depflags, booting);
 				if (depobj == 0) {
 					if (booting) {
 						_dl_die(
@@ -432,6 +432,8 @@ _dl_self_relro(long loff)
 		case PT_GNU_RELRO:
 			_dl_mprotect((void *)(phdp->p_vaddr + loff),
 			    phdp->p_memsz, PROT_READ);
+			_dl_mimmutable((void *)(phdp->p_vaddr + loff),
+			    phdp->p_memsz);
 			break;
 		}
 	}
@@ -751,6 +753,18 @@ _dl_rtld(elf_object_t *object)
 		}
 	}
 
+	/* 
+	 * TEXTREL binaries are loaded without immutable on un-writeable sections.
+	 * After text relocations are finished, these regions can become
+	 * immutable.  OPENBSD_MUTABLE section always overlaps writeable LOADs,
+	 * so don't be afraid.
+	 */
+	if (object->dyn.textrel) {
+		for (llist = object->load_list; llist != NULL; llist = llist->next)
+			if ((llist->prot & PROT_WRITE) == 0)
+				_dl_mimmutable(llist->start, llist->size);
+	}
+
 	if (fails == 0)
 		object->status |= STAT_RELOC_DONE;
 
@@ -791,6 +805,10 @@ _dl_relro(elf_object_t *object)
 		DL_DEB(("protect RELRO [0x%lx,0x%lx) in %s\n",
 		    addr, addr + object->relro_size, object->load_name));
 		_dl_mprotect((void *)addr, object->relro_size, PROT_READ);
+
+		/* if library will never be unloaded, RELRO can be immutable */
+		if (object->nodelete)
+			_dl_mimmutable((void *)addr, object->relro_size);
 	}
 }
 

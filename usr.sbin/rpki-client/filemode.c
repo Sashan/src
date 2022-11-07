@@ -1,4 +1,4 @@
-/*	$OpenBSD: filemode.c,v 1.14 2022/09/06 11:16:51 job Exp $ */
+/*	$OpenBSD: filemode.c,v 1.16 2022/11/04 17:39:36 job Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -269,6 +269,7 @@ proc_parser_file(char *file, unsigned char *buf, size_t len)
 	struct tal *tal = NULL;
 	struct rsc *rsc = NULL;
 	struct aspa *aspa = NULL;
+	struct tak *tak = NULL;
 	char *aia = NULL, *aki = NULL;
 	char filehash[SHA256_DIGEST_LENGTH];
 	char *hash;
@@ -299,8 +300,8 @@ proc_parser_file(char *file, unsigned char *buf, size_t len)
 		printf("{\n\t\"file\": \"%s\",\n", file);
 		printf("\t\"hash_id\": \"%s\",\n", hash);
 	} else {
-		printf("File: %s\n", file);
-		printf("Hash identifier: %s\n", hash);
+		printf("File:                     %s\n", file);
+		printf("Hash identifier:          %s\n", hash);
 	}
 
 	free(hash);
@@ -375,6 +376,14 @@ proc_parser_file(char *file, unsigned char *buf, size_t len)
 		aspa_print(x509, aspa);
 		aia = aspa->aia;
 		aki = aspa->aki;
+		break;
+	case RTYPE_TAK:
+		tak = tak_parse(&x509, file, buf, len);
+		if (tak == NULL)
+			break;
+		tak_print(x509, tak);
+		aia = tak->aia;
+		aki = tak->aki;
 		break;
 	default:
 		printf("%s: unsupported file type\n", file);
@@ -469,6 +478,7 @@ proc_parser_file(char *file, unsigned char *buf, size_t len)
 	tal_free(tal);
 	rsc_free(rsc);
 	aspa_free(aspa);
+	tak_free(tak);
 }
 
 /*

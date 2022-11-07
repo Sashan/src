@@ -1,4 +1,4 @@
-/*	$OpenBSD: print.c,v 1.16 2022/08/30 23:41:53 tb Exp $ */
+/*	$OpenBSD: print.c,v 1.19 2022/11/04 17:39:36 job Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -101,8 +101,8 @@ tal_print(const struct tal *p)
 		}
 		printf("],\n");
 	} else {
-		printf("Trust anchor name: %s\n", p->descr);
-		printf("Subject key identifier: %s\n", pretty_key_id(ski));
+		printf("Trust anchor name:        %s\n", p->descr);
+		printf("Subject key identifier:   %s\n", pretty_key_id(ski));
 		printf("Trust anchor locations:\n");
 		for (i = 0; i < p->urisz; i++)
 			printf("%5zu: %s\n", i + 1, p->uri[i]);
@@ -134,7 +134,7 @@ x509_print(const X509 *x)
 	if (outformats & FORMAT_JSON) {
 		printf("\t\"cert_serial\": \"%s\",\n", serial);
 	} else {
-		printf("Certificate serial: %s\n", serial);
+		printf("Certificate serial:       %s\n", serial);
 	}
 
  out:
@@ -173,13 +173,13 @@ cert_print(const struct cert *p)
 		printf("\t\"valid_until\": %lld,\n", (long long)p->expires);
 		printf("\t\"subordinate_resources\": [\n");
 	} else {
-		printf("Subject key identifier: %s\n", pretty_key_id(p->ski));
+		printf("Subject key identifier:   %s\n", pretty_key_id(p->ski));
 		if (p->aki != NULL)
 			printf("Authority key identifier: %s\n",
 			    pretty_key_id(p->aki));
 		x509_print(p->x509);
 		if (p->aia != NULL)
-			printf("Authority info access: %s\n", p->aia);
+			printf("Authority info access:    %s\n", p->aia);
 		if (p->mft != NULL)
 			printf("Manifest: %s\n", p->mft);
 		if (p->repo != NULL)
@@ -187,9 +187,9 @@ cert_print(const struct cert *p)
 		if (p->notify != NULL)
 			printf("Notify URL: %s\n", p->notify);
 		if (p->pubkey != NULL)
-			printf("BGPsec P-256 ECDSA public key: %s\n",
+			printf("BGPsec ECDSA public key:  %s\n",
 			    p->pubkey);
-		printf("Valid until: %s\n", tbuf);
+		printf("Router key valid until:   %s\n", tbuf);
 		printf("Subordinate Resources:\n");
 	}
 
@@ -284,7 +284,7 @@ crl_print(const struct crl *p)
 		if (outformats & FORMAT_JSON)
 			printf("\t\"crl_serial\": \"%s\",\n", serial);
 		else
-			printf("CRL Serial Number: %s\n", serial);
+			printf("CRL Serial Number:        %s\n", serial);
 	}
 	free(serial);
 	ASN1_INTEGER_free(crlnum);
@@ -294,8 +294,8 @@ crl_print(const struct crl *p)
 		printf("\t\"valid_until\": %lld,\n", (long long)p->expires);
 		printf("\t\"revoked_certs\": [\n");
 	} else {
-		printf("CRL valid since: %s\n", time2str(p->issued));
-		printf("CRL valid until: %s\n", time2str(p->expires));
+		printf("CRL valid since:          %s\n", time2str(p->issued));
+		printf("CRL valid until:          %s\n", time2str(p->expires));
 		printf("Revoked Certificates:\n");
 	}
 
@@ -337,17 +337,20 @@ mft_print(const X509 *x, const struct mft *p)
 		x509_print(x);
 		printf("\t\"aki\": \"%s\",\n", pretty_key_id(p->aki));
 		printf("\t\"aia\": \"%s\",\n", p->aia);
+		printf("\t\"sia\": \"%s\",\n", p->sia);
 		printf("\t\"manifest_number\": \"%s\",\n", p->seqnum);
 		printf("\t\"valid_since\": %lld,\n", (long long)p->valid_since);
 		printf("\t\"valid_until\": %lld,\n", (long long)p->valid_until);
 	} else {
-		printf("Subject key identifier: %s\n", pretty_key_id(p->ski));
+		printf("Subject key identifier:   %s\n", pretty_key_id(p->ski));
 		printf("Authority key identifier: %s\n", pretty_key_id(p->aki));
 		x509_print(x);
-		printf("Authority info access: %s\n", p->aia);
-		printf("Manifest Number: %s\n", p->seqnum);
-		printf("Manifest valid since: %s\n", time2str(p->valid_since));
-		printf("Manifest valid until: %s\n", time2str(p->valid_until));
+		printf("Authority info access:    %s\n", p->aia);
+		printf("Subject info access:      %s\n", p->sia);
+		printf("Manifest Number:          %s\n", p->seqnum);
+		printf("Manifest valid since:     %s\n", time2str(p->valid_since));
+		printf("Manifest valid until:     %s\n", time2str(p->valid_until));
+		printf("Files and hashes:\n");
 	}
 
 	for (i = 0; i < p->filesz; i++) {
@@ -388,14 +391,17 @@ roa_print(const X509 *x, const struct roa *p)
 		x509_print(x);
 		printf("\t\"aki\": \"%s\",\n", pretty_key_id(p->aki));
 		printf("\t\"aia\": \"%s\",\n", p->aia);
+		printf("\t\"sia\": \"%s\",\n", p->sia);
 		printf("\t\"valid_until\": %lld,\n", (long long)p->expires);
 	} else {
-		printf("Subject key identifier: %s\n", pretty_key_id(p->ski));
+		printf("Subject key identifier:   %s\n", pretty_key_id(p->ski));
 		x509_print(x);
 		printf("Authority key identifier: %s\n", pretty_key_id(p->aki));
-		printf("Authority info access: %s\n", p->aia);
-		printf("ROA valid until: %s\n", time2str(p->expires));
-		printf("asID: %u\n", p->asid);
+		printf("Authority info access:    %s\n", p->aia);
+		printf("Subject info access:      %s\n", p->sia);
+		printf("ROA valid until:          %s\n", time2str(p->expires));
+		printf("asID:                     %u\n", p->asid);
+		printf("IP address blocks:\n");
 	}
 
 	for (i = 0; i < p->ipsz; i++) {
@@ -432,6 +438,7 @@ gbr_print(const X509 *x, const struct gbr *p)
 		x509_print(x);
 		printf("\t\"aki\": \"%s\",\n", pretty_key_id(p->aki));
 		printf("\t\"aia\": \"%s\",\n", p->aia);
+		printf("\t\"sia\": \"%s\",\n", p->sia);
 		printf("\t\"vcard\": \"");
 		for (i = 0; i < strlen(p->vcard); i++) {
 			if (p->vcard[i] == '"')
@@ -445,10 +452,11 @@ gbr_print(const X509 *x, const struct gbr *p)
 		}
 		printf("\",\n");
 	} else {
-		printf("Subject key identifier: %s\n", pretty_key_id(p->ski));
+		printf("Subject key identifier:   %s\n", pretty_key_id(p->ski));
 		x509_print(x);
 		printf("Authority key identifier: %s\n", pretty_key_id(p->aki));
-		printf("Authority info access: %s\n", p->aia);
+		printf("Authority info access:    %s\n", p->aia);
+		printf("Subject info access:      %s\n", p->sia);
 		printf("vcard:\n%s", p->vcard);
 	}
 }
@@ -471,11 +479,11 @@ rsc_print(const X509 *x, const struct rsc *p)
 		printf("\t\"valid_until\": %lld,\n", (long long)p->expires);
 		printf("\t\"signed_with_resources\": [\n");
 	} else {
-		printf("Subject key identifier: %s\n", pretty_key_id(p->ski));
+		printf("Subject key identifier:   %s\n", pretty_key_id(p->ski));
 		printf("Authority key identifier: %s\n", pretty_key_id(p->aki));
 		x509_print(x);
-		printf("Authority info access: %s\n", p->aia);
-		printf("Valid until: %s\n", tbuf);
+		printf("Authority info access:    %s\n", p->aia);
+		printf("Valid until:              %s\n", tbuf);
 		printf("Signed with resources:\n");
 	}
 
@@ -580,6 +588,7 @@ aspa_print(const X509 *x, const struct aspa *p)
 		x509_print(x);
 		printf("\t\"aki\": \"%s\",\n", pretty_key_id(p->aki));
 		printf("\t\"aia\": \"%s\",\n", p->aia);
+		printf("\t\"sia\": \"%s\",\n", p->sia);
 		printf("\t\"customer_asid\": %u,\n", p->custasid);
 		printf("\t\"provider_set\": [\n");
 		for (i = 0; i < p->providersz; i++) {
@@ -595,11 +604,12 @@ aspa_print(const X509 *x, const struct aspa *p)
 		}
 		printf("\t],\n");
 	} else {
-		printf("Subject key identifier: %s\n", pretty_key_id(p->ski));
+		printf("Subject key identifier:   %s\n", pretty_key_id(p->ski));
 		x509_print(x);
 		printf("Authority key identifier: %s\n", pretty_key_id(p->aki));
-		printf("Authority info access: %s\n", p->aia);
-		printf("Customer AS: %u\n", p->custasid);
+		printf("Authority info access:    %s\n", p->aia);
+		printf("Subject info access:      %s\n", p->sia);
+		printf("Customer AS:              %u\n", p->custasid);
 		printf("Provider Set:\n");
 		for (i = 0; i < p->providersz; i++) {
 			printf("%5zu: AS: %d", i + 1, p->providers[i].as);
@@ -616,4 +626,98 @@ aspa_print(const X509 *x, const struct aspa *p)
 			printf("\n");
 		}
 	}
+}
+
+static void
+takey_print(char *name, const struct takey *t)
+{
+	char	*spki = NULL;
+	size_t	 i, j = 0;
+
+	if (base64_encode(t->pubkey, t->pubkeysz, &spki) != 0)
+		errx(1, "base64_encode failed in %s", __func__);
+
+	if (outformats & FORMAT_JSON) {
+		printf("\t\t{\n\t\t\t\"name\": \"%s\",\n", name);
+		printf("\t\t\t\"comments\": [");
+		for (i = 0; i < t->commentsz; i++) {
+			printf("\"%s\"", t->comments[i]);
+			if (i + 1 < t->commentsz)
+				printf(", ");
+		}
+		printf("],\n");
+		printf("\t\t\t\"uris\": [");
+		for (i = 0; i < t->urisz; i++) {
+			printf("\"%s\"", t->uris[i]);
+			if (i + 1 < t->urisz)
+				printf(", ");
+		}
+		printf("],\n");
+		printf("\t\t\t\"spki\": \"%s\"\n\t\t}", spki);
+	} else {
+		printf("TAL derived from the '%s' Trust Anchor Key:\n\n", name);
+
+		for (i = 0; i < t->commentsz; i++) {
+			printf("\t# %s\n", t->comments[i]);
+		}
+
+		for (i = 0; i < t->urisz; i++) {
+			printf("\t%s\n\n\t", t->uris[i]);
+		}
+
+		for (i = 0; i < strlen(spki); i++) {
+			printf("%c", spki[i]);
+			j++;
+			if (j == 64) {
+				printf("\n\t");
+				j = 0;
+			}
+		}
+
+		printf("\n\n");
+	}
+
+	free(spki);
+}
+
+void
+tak_print(const X509 *x, const struct tak *p)
+{
+	char	tbuf[21];
+
+	if (outformats & FORMAT_JSON) {
+		printf("\t\"type\": \"tak\",\n");
+		printf("\t\"ski\": \"%s\",\n", pretty_key_id(p->ski));
+		x509_print(x);
+		printf("\t\"aki\": \"%s\",\n", pretty_key_id(p->aki));
+		printf("\t\"aia\": \"%s\",\n", p->aia);
+		printf("\t\"sia\": \"%s\",\n", p->sia);
+		printf("\t\"valid_until\": %lld,\n", (long long)p->expires);
+		printf("\t\"takeys\": [\n");
+	} else {
+		strftime(tbuf, sizeof(tbuf), "%FT%TZ", gmtime(&p->expires));
+		printf("Subject key identifier:   %s\n", pretty_key_id(p->ski));
+		x509_print(x);
+		printf("Authority key identifier: %s\n", pretty_key_id(p->aki));
+		printf("Authority info access:    %s\n", p->aia);
+		printf("Subject info access:      %s\n", p->sia);
+		printf("TAK valid until:          %s\n", tbuf);
+	}
+
+	takey_print("current", p->current);
+
+	if (p->predecessor != NULL) {
+		if (outformats & FORMAT_JSON)
+			printf(",\n");
+		takey_print("predecessor", p->predecessor);
+	}
+
+	if (p->successor != NULL) {
+		if (outformats & FORMAT_JSON)
+			printf(",\n");
+		takey_print("successor", p->successor);
+	}
+
+	if (outformats & FORMAT_JSON)
+		printf("\n\t],\n");
 }

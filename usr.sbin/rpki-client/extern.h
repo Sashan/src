@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.156 2022/09/03 21:24:02 job Exp $ */
+/*	$OpenBSD: extern.h,v 1.159 2022/11/04 12:05:36 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -183,6 +183,7 @@ enum rtype {
 	RTYPE_FILE,
 	RTYPE_RSC,
 	RTYPE_ASPA,
+	RTYPE_TAK,
 };
 
 enum location {
@@ -212,6 +213,7 @@ struct mft {
 	char		*seqnum; /* manifestNumber */
 	char		*aia; /* AIA */
 	char		*aki; /* AKI */
+	char		*sia; /* SIA signedObject */
 	char		*ski; /* SKI */
 	char		*crl; /* CRL file name */
 	unsigned char	 crlhash[SHA256_DIGEST_LENGTH];
@@ -247,6 +249,7 @@ struct roa {
 	int		 valid; /* validated resources */
 	char		*aia; /* AIA */
 	char		*aki; /* AKI */
+	char		*sia; /* SIA signedObject */
 	char		*ski; /* SKI */
 	time_t		 expires; /* do not use after */
 };
@@ -275,12 +278,41 @@ struct rsc {
 };
 
 /*
+ * Datastructure representing the TAKey sequence inside TAKs.
+ */
+struct takey {
+	char		**comments; /* Comments */
+	size_t		 commentsz; /* number of Comments */
+	char		**uris; /* CertificateURI */
+	size_t		 urisz; /* number of CertificateURIs */
+	unsigned char	*pubkey; /* DER encoded SubjectPublicKeyInfo */
+	size_t		 pubkeysz;
+	char		*ski; /* hex encoded SubjectKeyIdentifier of pubkey */
+};
+
+/*
+ * A Signed TAL (TAK) draft-ietf-sidrops-signed-tal-12
+ */
+struct tak {
+	int		 talid; /* TAK covered by what TAL */
+	struct takey	*current;
+	struct takey	*predecessor;
+	struct takey	*successor;
+	char		*aia; /* AIA */
+	char		*aki; /* AKI */
+	char		*sia; /* SIA signed Object */
+	char		*ski; /* SKI */
+	time_t		 expires; /* Not After of the TAK EE */
+};
+
+/*
  * A single Ghostbuster record
  */
 struct gbr {
 	char		*vcard;
 	char		*aia; /* AIA */
 	char		*aki; /* AKI */
+	char		*sia; /* SIA signedObject */
 	char		*ski; /* SKI */
 };
 
@@ -297,11 +329,12 @@ struct aspa {
 	int			 talid; /* TAL the ASPA is chained up to */
 	char			*aia; /* AIA */
 	char			*aki; /* AKI */
+	char			*sia; /* SIA signedObject */
 	char			*ski; /* SKI */
-	uint32_t	 	 custasid; /* the customerASID */
+	uint32_t		 custasid; /* the customerASID */
 	struct aspa_provider	*providers; /* the providers */
 	size_t			 providersz; /* number of providers */
-	time_t		 	 expires; /* NotAfter of the ASPA EE cert */
+	time_t			 expires; /* NotAfter of the ASPA EE cert */
 };
 
 /*
@@ -474,6 +507,7 @@ struct stats {
 	size_t	 rrdp_fails; /* failed rrdp repositories */
 	size_t	 crls; /* revocation lists */
 	size_t	 gbrs; /* ghostbuster records */
+	size_t	 taks; /* signed TAL objects */
 	size_t	 aspas; /* ASPA objects */
 	size_t	 aspas_fail; /* ASPA objects failing syntactic parse */
 	size_t	 aspas_invalid; /* ASPAs with invalid customerASID */
@@ -543,6 +577,12 @@ struct gbr	*gbr_parse(X509 **, const char *, const unsigned char *,
 void		 rsc_free(struct rsc *);
 struct rsc	*rsc_parse(X509 **, const char *, const unsigned char *,
 		    size_t);
+
+void		 takey_free(struct takey *);
+void		 tak_free(struct tak *);
+struct tak	*tak_parse(X509 **, const char *, const unsigned char *,
+		    size_t);
+struct tak	*tak_read(struct ibuf *);
 
 void		 aspa_buffer(struct ibuf *, const struct aspa *);
 void		 aspa_free(struct aspa *);
@@ -702,6 +742,7 @@ struct ibuf	*io_buf_recvfd(int, struct ibuf **);
 void		 x509_init_oid(void);
 int		 x509_get_aia(X509 *, const char *, char **);
 int		 x509_get_aki(X509 *, const char *, char **);
+int		 x509_get_sia(X509 *, const char *, char **);
 int		 x509_get_ski(X509 *, const char *, char **);
 int		 x509_get_expire(X509 *, const char *, time_t *);
 int		 x509_get_crl(X509 *, const char *, char **);
@@ -713,7 +754,7 @@ char		*x509_convert_seqnum(const char *, const ASN1_INTEGER *);
 int		 x509_location(const char *, const char *, const char *,
 		    GENERAL_NAME *, char **);
 int		 x509_inherits(X509 *);
-int	 	 x509_any_inherits(X509 *);
+int		 x509_any_inherits(X509 *);
 
 /* printers */
 char		*time2str(time_t);
@@ -726,6 +767,7 @@ void		 roa_print(const X509 *, const struct roa *);
 void		 gbr_print(const X509 *, const struct gbr *);
 void		 rsc_print(const X509 *, const struct rsc *);
 void		 aspa_print(const X509 *, const struct aspa *);
+void		 tak_print(const X509 *, const struct tak *);
 
 /* Output! */
 

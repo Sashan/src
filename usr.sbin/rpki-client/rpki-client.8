@@ -1,4 +1,4 @@
-.\"	$OpenBSD: rpki-client.8,v 1.73 2022/09/05 20:08:26 job Exp $
+.\"	$OpenBSD: rpki-client.8,v 1.78 2022/11/03 17:43:39 jmc Exp $
 .\"
 .\" Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
 .\"
@@ -14,12 +14,12 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: September 5 2022 $
+.Dd $Mdocdate: November 3 2022 $
 .Dt RPKI-CLIENT 8
 .Os
 .Sh NAME
 .Nm rpki-client
-.Nd RPKI validator to support BGP Origin Validation
+.Nd RPKI validator to support BGP routing security
 .Sh SYNOPSIS
 .Nm
 .Op Fl BcjnoRrVv
@@ -42,7 +42,7 @@
 The
 .Nm
 utility queries the RPKI repository system with
-a built-in HTTP client and
+a built-in HTTPS client and
 .Xr openrsync 1
 to fetch all X.509 certificates, manifests, and revocation lists under a given
 .Em Trust Anchor .
@@ -53,9 +53,10 @@ by constructing and verifying a certification path for the certificate
 associated with the Object (including checking relevant CRLs).
 .Nm
 produces lists of the
-.Em Validated ROA Payloads Pq VRPs
+.Em Validated ROA Payloads Pq VRPs ,
+.Em BGPsec Router Keys Pq BRKs ,
 and
-.Em BGPsec Router Keys Pq BRKs
+.Em Validated ASPA Payloads Pq VAPs
 in various formats.
 .Pp
 The options are as follows:
@@ -301,10 +302,12 @@ A Profile for BGPsec Router Certificates, Certificate Revocation Lists, and
 Certification Requests.
 .It RFC 8630
 Resource Public Key Infrastructure (RPKI) Trust Anchor Locator.
-.It draft-ietf-sidrops-rpki-rsc-10
-A profile for Resource Public Key Infrastructure (RPKI) Signed Checklists (RSC).
+.It RFC 9323
+A Profile for RPKI Signed Checklists (RSCs).
 .It draft-ietf-sidrops-aspa-profile-10
 A Profile for Autonomous System Provider Authorization (ASPA).
+.It draft-ietf-sidrops-signed-tal-12
+RPKI Signed Object for Trust Anchor Key.
 .El
 .Sh HISTORY
 .Nm

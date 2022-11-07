@@ -1,4 +1,4 @@
-/*	$OpenBSD: mft.c,v 1.75 2022/10/13 04:43:32 job Exp $ */
+/*	$OpenBSD: mft.c,v 1.77 2022/11/04 09:43:13 job Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -168,6 +168,8 @@ rtype_from_file_extension(const char *fn)
 		return RTYPE_RSC;
 	if (strcasecmp(fn + sz - 4, ".asa") == 0)
 		return RTYPE_ASPA;
+	if (strcasecmp(fn + sz - 4, ".tak") == 0)
+		return RTYPE_TAK;
 
 	return RTYPE_INVALID;
 }
@@ -208,6 +210,7 @@ rtype_from_mftfile(const char *fn)
 	case RTYPE_GBR:
 	case RTYPE_ROA:
 	case RTYPE_ASPA:
+	case RTYPE_TAK:
 		return type;
 	default:
 		return RTYPE_INVALID;
@@ -365,11 +368,14 @@ mft_parse(X509 **x509, const char *fn, const unsigned char *der, size_t len)
 		goto out;
 	if (!x509_get_aki(*x509, fn, &p.res->aki))
 		goto out;
+	if (!x509_get_sia(*x509, fn, &p.res->sia))
+		goto out;
 	if (!x509_get_ski(*x509, fn, &p.res->ski))
 		goto out;
-	if (p.res->aia == NULL || p.res->aki == NULL || p.res->ski == NULL) {
+	if (p.res->aia == NULL || p.res->aki == NULL || p.res->sia == NULL ||
+	    p.res->ski == NULL) {
 		warnx("%s: RFC 6487 section 4.8: "
-		    "missing AIA, AKI or SKI X509 extension", fn);
+		    "missing AIA, AKI, SIA, or SKI X509 extension", fn);
 		goto out;
 	}
 
@@ -430,6 +436,7 @@ mft_free(struct mft *p)
 
 	free(p->aia);
 	free(p->aki);
+	free(p->sia);
 	free(p->ski);
 	free(p->path);
 	free(p->files);

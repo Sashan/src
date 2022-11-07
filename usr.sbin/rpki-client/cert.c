@@ -1,4 +1,4 @@
-/*	$OpenBSD: cert.c,v 1.89 2022/09/03 21:24:02 job Exp $ */
+/*	$OpenBSD: cert.c,v 1.95 2022/11/04 12:05:36 tb Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Job Snijders <job@openbsd.org>
@@ -433,6 +433,7 @@ sbgp_sia(struct parse *p, X509_EXTENSION *ext)
 	AUTHORITY_INFO_ACCESS	*sia = NULL;
 	ACCESS_DESCRIPTION	*ad;
 	ASN1_OBJECT		*oid;
+	const char		*mftfilename;
 	int			 i, rc = 0;
 
 	if (X509_EXTENSION_get_critical(ext)) {
@@ -470,6 +471,14 @@ sbgp_sia(struct parse *p, X509_EXTENSION *ext)
 	if (p->res->mft == NULL || p->res->repo == NULL) {
 		warnx("%s: RFC 6487 section 4.8.8: SIA: missing caRepository "
 		    "or rpkiManifest", p->fn);
+		goto out;
+	}
+
+	mftfilename = strrchr(p->res->mft, '/');
+	if (mftfilename == NULL || !valid_filename(mftfilename + 1,
+	    strlen(mftfilename) - 1)) {
+		warnx("%s: SIA: rpkiManifest filename contains invalid "
+		    "characters", p->fn);
 		goto out;
 	}
 
@@ -560,7 +569,7 @@ certificate_policies(struct parse *p, X509_EXTENSION *ext)
 		goto out;
 	}
 
-	if (verbose > 1)
+	if (verbose > 1 && !filemode)
 		warnx("%s: CPS %.*s", p->fn, qualifier->d.cpsuri->length,
 		    qualifier->d.cpsuri->data);
 
@@ -587,6 +596,18 @@ cert_parse_ee_cert(const char *fn, X509 *x)
 	p.fn = fn;
 	if ((p.res = calloc(1, sizeof(struct cert))) == NULL)
 		err(1, NULL);
+
+	if (X509_get_key_usage(x) != KU_DIGITAL_SIGNATURE) {
+		warnx("%s: RFC 6487 section 4.8.4: KU must be digitalSignature",
+		    fn);
+		goto out;
+	}
+
+	/* EKU may be allowed for some purposes in the future. */
+	if (X509_get_extended_key_usage(x) != UINT32_MAX) {
+		warnx("%s: RFC 6487 section 4.8.5: EKU not allowed", fn);
+		goto out;
+	}
 
 	index = X509_get_ext_by_NID(x, NID_sbgp_ipAddrBlock, -1);
 	if ((ext = X509_get_ext(x, index)) != NULL) {
@@ -689,13 +710,18 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 			break;
 		case NID_ext_key_usage:
 			break;
+		case NID_basic_constraints:
+			break;
+		case NID_key_usage:
+			break;
 		default:
-			/* {
+			/* unexpected extensions warrant investigation */
+			{
 				char objn[64];
 				OBJ_obj2txt(objn, sizeof(objn), obj, 0);
 				warnx("%s: ignoring %s (NID %d)",
-					p.fn, objn, OBJ_obj2nid(obj));
-			} */
+				    p.fn, objn, OBJ_obj2nid(obj));
+			}
 			break;
 		}
 	}
@@ -716,6 +742,19 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 
 	switch (p.res->purpose) {
 	case CERT_PURPOSE_CA:
+		if (X509_get_key_usage(x) != (KU_KEY_CERT_SIGN | KU_CRL_SIGN)) {
+			warnx("%s: RFC 6487 section 4.8.4: key usage violation",
+			    p.fn);
+			goto out;
+		}
+
+		/* EKU may be allowed for some purposes in the future. */
+		if (X509_get_extended_key_usage(x) != UINT32_MAX) {
+			warnx("%s: RFC 6487 section 4.8.5: EKU not allowed",
+			    fn);
+			goto out;
+		}
+
 		if (p.res->mft == NULL) {
 			warnx("%s: RFC 6487 section 4.8.8: missing SIA", p.fn);
 			goto out;

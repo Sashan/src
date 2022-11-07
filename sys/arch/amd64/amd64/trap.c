@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.90 2021/12/09 00:26:11 guenther Exp $	*/
+/*	$OpenBSD: trap.c,v 1.93 2022/11/07 01:41:57 guenther Exp $	*/
 /*	$NetBSD: trap.c,v 1.2 2003/05/04 23:51:56 fvdl Exp $	*/
 
 /*-
@@ -226,9 +226,23 @@ kpageflttrap(struct trapframe *frame, uint64_t cr2)
 		return 0;
 
 	pcb = &p->p_addr->u_pcb;
+	if (pcb->pcb_onfault != NULL) {
+		extern caddr_t __nofault_start[], __nofault_end[];
+		caddr_t *nf = __nofault_start;
+		while (*nf++ != pcb->pcb_onfault) {
+			if (nf >= __nofault_end) {
+				KERNEL_LOCK();
+				fault("invalid pcb_nofault=%lx",
+				    (long)pcb->pcb_onfault);
+				return 0;
+				/* retain kernel lock */
+			}
+		}
+	}
 
 	/* This will only trigger if SMEP is enabled */
-	if (cr2 <= VM_MAXUSER_ADDRESS && frame->tf_err & PGEX_I) {
+	if (pcb->pcb_onfault == NULL && cr2 <= VM_MAXUSER_ADDRESS &&
+	    frame->tf_err & PGEX_I) {
 		KERNEL_LOCK();
 		fault("attempt to execute user address %p "
 		    "in supervisor mode", (void *)cr2);
@@ -580,14 +594,13 @@ syscall(struct trapframe *frame)
 	}
 
 	rval[0] = 0;
-	rval[1] = frame->tf_rdx;
+	rval[1] = 0;
 
 	error = mi_syscall(p, code, callp, argp, rval);
 
 	switch (error) {
 	case 0:
 		frame->tf_rax = rval[0];
-		frame->tf_rdx = rval[1];
 		frame->tf_rflags &= ~PSL_C;	/* carry bit */
 		break;
 	case ERESTART:
@@ -614,7 +627,6 @@ child_return(void *arg)
 	struct trapframe *tf = p->p_md.md_regs;
 
 	tf->tf_rax = 0;
-	tf->tf_rdx = 1;
 	tf->tf_rflags &= ~PSL_C;
 
 	KERNEL_UNLOCK();
