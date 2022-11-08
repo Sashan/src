@@ -389,6 +389,7 @@ pfctl_clear_rules(int dev, int opts, char *anchorname)
 		    anchorname);
 		return (1);
 	}
+	e.type = PF_TRANS_RULESET;
 
 	if (ioctl(dev, DIOCXBEGIN, &t) != 0) {
 		pfctl_err(opts, 1, "%s DIOCXBEGIN (%s)\n", __func__,
@@ -396,19 +397,13 @@ pfctl_clear_rules(int dev, int opts, char *anchorname)
 		return (1);
 	}
 
-	t.esize = sizeof(struct pfioc_trans_e);
-	t.size = 1;
-	t.array = &e;
-	e.type = PF_TRANS_RULESET;
+	PF_SET_TRANS(&t, e, 1);
 	if (ioctl(dev, DIOCXRULESET, &t) != 0) {
 		pfctl_err(opts, 1, "%s DIOCXRULESET (%s)\n", __func__,
 		    strerror(errno));
 		return (1);
 	}
-
-	t.size = 0;
-	t.esize = 0;
-	t.array = NULL;
+	PF_RESET_TRANS(&t);
 
 	if (ioctl(dev, DIOCXCOMMIT, &t) != 0) {
 		pfctl_err(opts, 1, "%s DIOCXCOMMIT (%s)\n", __func__,
@@ -1216,7 +1211,7 @@ pfctl_ruleset(struct pfctl *pf, char *path)
 {
 	struct pfioc_trans_e e[2];
 	struct pfioc_trans_e *rs = &e[0];
-	struct pfioc_trans_e *table = &e[1];
+	struct pfioc_trans_e *t = &e[1];
 
 	if (pf->trans == NULL)
 		return (1);
@@ -1226,10 +1221,13 @@ pfctl_ruleset(struct pfctl *pf, char *path)
 	if (strlcpy(rs->anchor, path, sizeof(rs->anchor)) >= sizeof(rs->anchor))
 		errx(1, "%s: strlcpy", __func__);
 
-	*table = *rs;
-	table->type = PF_TRANS_TABLE;
+	if (strlcpy(t->anchor, path, sizeof(t->anchor)) >= sizeof(t->anchor))
+	t->type = PF_TRANS_TABLE;
 
 	PF_SET_TRANS(pf->trans, e[0], 2);
+	printf("%s %p\n", __func__, pf->trans->array);
+	pf->trans->array = e;
+	printf("%s %p\n", __func__, pf->trans->array);
 	if (ioctl(pf->dev, DIOCXRULESET, pf->trans))
 		errx(1, "%s: %s", __func__, strerror(errno));
 	PF_RESET_TRANS(pf->trans);

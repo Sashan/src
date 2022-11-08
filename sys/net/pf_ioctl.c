@@ -1113,6 +1113,269 @@ pf_swap_rules(struct pf_ruleset *grs, struct pf_ruleset *trs,
 	}
 }
 
+const char *
+pfioctl_name(u_long cmd)
+{
+	static struct {
+		const char	*cmd_name;
+		unsigned int	cmd_code;
+	} ioctl_tab [] = {
+		{
+			"DIOCSTART",
+			DIOCSTART
+		},
+		{
+			"DIOCSTOP",
+			DIOCSTOP,
+		},
+		{
+			"DIOCADDRULE",
+			DIOCADDRULE,
+		},
+		{
+			"DIOCGETRULES",
+			DIOCGETRULES,
+		},
+		{
+			"DIOCGETRULE",
+			DIOCGETRULE,
+		},
+		{
+			"DIOCCLRSTATES",
+			DIOCCLRSTATES,
+		},
+		{
+			"DIOCGETSTATE",
+			DIOCGETSTATE,
+		},
+		{
+			"DIOCSETSTATUSIF",
+			DIOCSETSTATUSIF,
+		},
+		{
+			"DIOCGETSTATUS",
+			DIOCGETSTATUS,
+		},
+		{
+			"DIOCCLRSTATUS",
+			DIOCCLRSTATUS,
+		},
+		{
+			"DIOCNATLOOK",
+			DIOCNATLOOK,
+		},
+		{
+			"DIOCSETDEBUG",
+			DIOCSETDEBUG,
+		},
+		{
+			"DIOCGETSTATES",
+			DIOCGETSTATES,
+		},
+		{
+			"DIOCCHANGERULE",
+			DIOCCHANGERULE,
+		},
+		{
+			"DIOCSETTIMEOUT",
+			DIOCSETTIMEOUT,
+		},
+		{
+			"DIOCGETTIMEOUT",
+			DIOCGETTIMEOUT,
+		},
+		{
+			"DIOCADDSTATE",
+			DIOCADDSTATE,
+		},
+		{
+			"DIOCGETLIMIT",
+			DIOCGETLIMIT,
+		},
+		{
+			"DIOCSETLIMIT",
+			DIOCSETLIMIT,
+		},
+		{
+			"DIOCKILLSTATES",
+			DIOCKILLSTATES,
+		},
+		{
+			"DIOCGETRULESETS",
+			DIOCGETRULESETS,
+		},
+		{
+			"DIOCGETRULESET",
+			DIOCGETRULESET,
+		},
+		{
+			"DIOCRCLRTABLES",
+			DIOCRCLRTABLES,
+		},
+		{
+			"DIOCRADDTABLES",
+			DIOCRADDTABLES,
+		},
+		{
+			"DIOCRDELTABLES",
+			DIOCRDELTABLES,
+		},
+		{
+			"DIOCRGETTABLES",
+			DIOCRGETTABLES,
+		},
+		{
+			"DIOCRGETTSTATS",
+			DIOCRGETTSTATS,
+		},
+		{
+			"DIOCRCLRTSTATS",
+			DIOCRCLRTSTATS,
+		},
+		{
+			"DIOCRCLRADDRS",
+			DIOCRCLRADDRS,
+		},
+		{
+			"DIOCRADDADDRS",
+			DIOCRADDADDRS,
+		},
+		{
+			"DIOCRDELADDRS",
+			DIOCRDELADDRS,
+		},
+		{
+			"DIOCRSETADDRS",
+			DIOCRSETADDRS,
+		},
+		{
+			"DIOCRGETADDRS",
+			DIOCRGETADDRS,
+		},
+		{
+			"DIOCRGETASTATS",
+			DIOCRGETASTATS,
+		},
+		{
+			"DIOCRCLRASTATS",
+			DIOCRCLRASTATS,
+		},
+		{
+			"DIOCRTSTADDRS",
+			DIOCRTSTADDRS,
+		},
+		{
+			"DIOCRSETTFLAGS",
+			DIOCRSETTFLAGS,
+		},
+		{
+			"DIOCRINADEFINE",
+			DIOCRINADEFINE,
+		},
+		{
+			"DIOCOSFPFLUSH",
+			DIOCOSFPFLUSH,
+		},
+		{
+			"DIOCOSFPADD",
+			DIOCOSFPADD,
+		},
+		{
+			"DIOCOSFPGET",
+			DIOCOSFPGET,
+		},
+		{
+			"DIOCXBEGIN",
+			DIOCXBEGIN,
+		},
+		{
+			"DIOCXCOMMIT",
+			DIOCXCOMMIT,
+		},
+		{
+			"DIOCXROLLBACK",
+			DIOCXROLLBACK,
+		},
+		{
+			"DIOCGETSRCNODES",
+			DIOCGETSRCNODES,
+		},
+		{
+			"DIOCCLRSRCNODES",
+			DIOCCLRSRCNODES,
+		},
+		{
+			"DIOCSETHOSTID",
+			DIOCSETHOSTID,
+		},
+		{
+			"DIOCIGETIFACES",
+			DIOCIGETIFACES,
+		},
+		{
+			"DIOCSETIFFLAG",
+			DIOCSETIFFLAG,
+		},
+		{
+			"DIOCCLRIFFLAG",
+			DIOCCLRIFFLAG,
+		},
+		{
+			"DIOCKILLSRCNODES",
+			DIOCKILLSRCNODES,
+		},
+		{
+			"DIOCSETREASS",
+			DIOCSETREASS,
+		},
+		{
+			"DIOCADDQUEUE",
+			DIOCADDQUEUE,
+		},
+		{
+			"DIOCGETQUEUES",
+			DIOCGETQUEUES,
+		},
+		{
+			"DIOCGETQUEUE",
+			DIOCGETQUEUE,
+		},
+		{
+			"DIOCGETQSTATS",
+			DIOCGETQSTATS,
+		},
+		{
+			"DIOCSETSYNFLWATS",
+			DIOCSETSYNFLWATS,
+		},
+		{
+			"DIOCSETSYNCOOKIES",
+			DIOCSETSYNCOOKIES,
+		},
+		{
+			"DIOCGETSYNFLWATS",
+			DIOCGETSYNFLWATS,
+		},
+		{
+			"DIOCXRULESET",
+			DIOCXRULESET
+		},
+		{
+			NULL,
+			0
+		}
+	};
+	unsigned int i = 0;
+
+	while (ioctl_tab[i].cmd_name != NULL && ioctl_tab[i].cmd_code != cmd)
+		i++;
+
+	if (ioctl_tab[i].cmd_name == NULL)
+		return ("UNKNOWN");
+
+	return (ioctl_tab[i].cmd_name);
+}
+
 int
 pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 {
@@ -2658,6 +2921,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			}
 			switch (ioe->type) {
 			case PF_TRANS_TABLE:
+				log(LOG_ERR, "%s got table (%d)\n", __func__, i);
 				memset(table, 0, sizeof(*table));
 				strlcpy(table->pfrt_anchor, ioe->anchor,
 				    sizeof(table->pfrt_anchor));
@@ -2670,6 +2934,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				}
 				break;
 			case PF_TRANS_RULESET:
+				log(LOG_ERR, "%s got ruleset (%d)\n", __func__, i);
 				error = pf_begin_rules(t, ioe->anchor);
 				if (error != 0) {
 					free(table, M_TEMP, sizeof(*table));
@@ -2679,6 +2944,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				}
 				break;
 			default:
+				log(LOG_ERR, "%s got ??? (%d)\n", __func__, i);
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				error = EINVAL;
@@ -2695,6 +2961,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 		free(table, M_TEMP, sizeof(*table));
 		free(ioe, M_TEMP, sizeof(*ioe));
+		log(LOG_ERR, "%s %s is done\n", __func__, pfioctl_name(cmd));
 
 		break;
 	}
@@ -2740,6 +3007,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCXCOMMIT: {
+#if 0
 		struct pf_trans		*t;
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pf_ruleset	*rs;
@@ -2933,6 +3201,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		 * use rollback to release stuff which became invalidated.
 		 */
 		pf_rollback_trans(t);
+#endif
 		break;
 	}
 
@@ -3221,7 +3490,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	default:
 		error = ENODEV;
-		log(LOG_ERR, "%s default\n", __func__);
+		log(LOG_ERR, "%s default [ %s (%lx) ]\n", __func__,
+		    pfioctl_name(cmd), cmd);
 		break;
 	}
 fail:
