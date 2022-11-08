@@ -2904,7 +2904,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		table = malloc(sizeof(*table), M_TEMP, M_WAITOK);
 
 		for (i = 0; i < io->size; i++) {
-			if (copyin(io->array+i, ioe, sizeof(*ioe))) {
+			if (copyin(io->array + (i*sizeof(*ioe)) , ioe,
+			    sizeof(*ioe))) {
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				pf_rollback_trans(t);
@@ -2934,7 +2935,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				}
 				break;
 			case PF_TRANS_RULESET:
-				log(LOG_ERR, "%s got ruleset (%d)\n", __func__, i);
 				error = pf_begin_rules(t, ioe->anchor);
 				if (error != 0) {
 					free(table, M_TEMP, sizeof(*table));
@@ -2944,17 +2944,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				}
 				break;
 			default:
-				log(LOG_ERR, "%s got ??? (%d)\n", __func__, i);
 				free(table, M_TEMP, sizeof(*table));
 				free(ioe, M_TEMP, sizeof(*ioe));
 				error = EINVAL;
-				pf_rollback_trans(t);
-				goto fail;
-			}
-			if (copyout(ioe, io->array+i, sizeof(io->array[i]))) {
-				free(table, M_TEMP, sizeof(*table));
-				free(ioe, M_TEMP, sizeof(*ioe));
-				error = EFAULT;
 				pf_rollback_trans(t);
 				goto fail;
 			}

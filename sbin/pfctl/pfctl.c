@@ -1212,27 +1212,32 @@ pfctl_ruleset(struct pfctl *pf, char *path)
 	struct pfioc_trans_e e[2];
 	struct pfioc_trans_e *rs = &e[0];
 	struct pfioc_trans_e *t = &e[1];
+	int rv = 0;
 
 	if (pf->trans == NULL)
 		return (1);
 
 	bzero(&e, sizeof(e));
 	rs->type = PF_TRANS_RULESET;
-	if (strlcpy(rs->anchor, path, sizeof(rs->anchor)) >= sizeof(rs->anchor))
-		errx(1, "%s: strlcpy", __func__);
+	if (strlcpy(rs->anchor, path, sizeof(rs->anchor)) >= sizeof(rs->anchor)) {
+		warnx("%s: strlcpy", __func__);
+		return (1);
+	}
 
-	if (strlcpy(t->anchor, path, sizeof(t->anchor)) >= sizeof(t->anchor))
+	if (strlcpy(t->anchor, path, sizeof(t->anchor)) >= sizeof(t->anchor)) {
+		warnx("%s: strlcpy", __func__);
+		return (1);
+	}
 	t->type = PF_TRANS_TABLE;
 
 	PF_SET_TRANS(pf->trans, e[0], 2);
-	printf("%s %p\n", __func__, pf->trans->array);
-	pf->trans->array = e;
-	printf("%s %p\n", __func__, pf->trans->array);
-	if (ioctl(pf->dev, DIOCXRULESET, pf->trans))
-		errx(1, "%s: %s", __func__, strerror(errno));
+	if (ioctl(pf->dev, DIOCXRULESET, pf->trans)) {
+		warnx("%s: %s", __func__, strerror(errno));
+		rv = 1;
+	}
 	PF_RESET_TRANS(pf->trans);
 
-	return (0);
+	return (rv);
 }
 
 int
