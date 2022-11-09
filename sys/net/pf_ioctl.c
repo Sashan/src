@@ -126,6 +126,8 @@ int			 pf_begin_ruleset_trans(struct pf_trans *,
 int			 pf_commit_trans(struct pf_trans *);
 void			 pf_free_trans(struct pf_trans *);
 void			 pf_rollback_trans(struct pf_trans *);
+void			 pf_update_parent(struct pf_anchor *,
+			    struct pf_trans *);
 
 struct pf_rule		 pf_default_rule;
 uint32_t		 pf_default_vers = 1;
@@ -1056,21 +1058,119 @@ fail:
 }
 
 void
+pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
+{
+	struct pf_anchor *parent_g;
+	struct pf_anchor *parent_t;
+
+	if (child->parent != NULL)
+		pf_update_parent(child->parent, t);
+
+	strlcpy(t->key.path, child->parent->path, sizeof(t->key.path));
+	parent_g = RB_FIND(pf_anchor_global, &pf_global.anchors, &t->key);
+
+	if (parent_g != NULL) {
+		/*
+		 * parent found in global ruleset, check version number
+		 * with parent found in transaction.
+		 */
+		parent_t = RB_FIND(pf_anchor_global, &t->rc.anchors, &t->key);
+		if (parent_t == NULL) {
+			/*
+			 * parent_t is not in transaction already, so
+			 * it must be just committed. Let's do some paranoid
+			 * checks then.
+			 */
+			if (parent_g->ruleset.rules.version != 0)
+				panic(
+				    "%s(%p, %p) %p (%s) version (%d) "
+				    "should be 0\n",
+				    __func__, child, t, parent_g->name,
+				    parent_g->ruleset.rules.version);
+
+			/*
+			 * if parent is not in transaction, the child must refer
+			 * to parent in global ruleset already.
+			 */
+			if (child->parent != parent_g)
+				panic(
+				    "%s(%p, %p), child->parent (%p) != "
+				    "parent_t (%p), [ %s ]\n", __func__, child,
+				    t, child->parent, parent_g, child->name);
+
+			/*
+			 * the child must be also present in global parent
+			 */
+			if (RB_FIND(pf_anchor_node,
+			    &parent_g->children, &t->key) != child)
+				panic(
+				    "%s(%p, %p), child [%s] not found in "
+				    "global parent (%p)\n", __func__,
+				    child, t, child->name, parent_g);
+		} else {
+			/*
+			 * we found suitable parent anchor in both trees:
+			 * 	transaction tree
+			 *	global tree
+			 * it means we just happen to be updating a global
+			 * anchor. In this case we update one-by-one only.
+			 */
+			RB_REMOVE(pf_anchor_node, &parent_t->children, child);
+			parent_t->refcnt--;
+			RB_INSERT(pf_anchor_node, &parent_g->children, child);
+			parent_g->refcnt++;
+			if (parent_t->ruleset->rules.version !=
+			    parent_g->ruleset->rules..version)
+				panic("%s(%p, %p), version mismatch "
+				    "[ %p/%d, %p/%d ]\n", __func__, child, t,
+				    parent_t, parent_t->ruleset.rules.version,
+				    parent_g, parent_g->ruleset.rules.version);
+			/*
+			 * update global ruleset version, when transaction
+			 * nodes become empty.
+			 */
+			if (RB_EMPTY(parent_t->children))
+				parent_g->ruleset.rules.version++;
+		}
+	} else {
+		/*
+		 * parent ruleset not found in global tree, just move the whole
+		 * anchor from transaction to tree and bump revision number.
+		 */
+		RB_REMOVE(pf_anchor_global, &t->rc.anchors, child);
+		parent_g = RB_INSERT(pf_anchor_global, &pf_global.anchors,
+		    child);
+		if (parent_g != NULL)
+			panic("%s should not happen\n");
+	}
+}
+
+void
 pf_update_anchor(struct pf_rule *r, struct pf_trans *t)
 {
 	struct pf_ruleset *rs;
 
 	rs = pf_find_ruleset(&pf_global, r->anchor->name);
 	if (rs != NULL) {
+		/*
+		 * anchor/ruleset found in global tree already,
+		 * then just move ownership by updating a
+		 * refcount and reference.
+		 */
 		rs->anchor->refcnt++;
 		r->anchor->refcnt--;
 		r->anchor = rs->anchor;
 	} else if ((rs = pf_find_ruleset(&t->rc, r->anchor->name)) != NULL) {
+		/*
+		 * anchor not found in global tree, then we need to
+		 * add ruleset to tree.
+		 */
 		RB_REMOVE(pf_anchor_global, &t->rc.anchors, rs->anchor);
 		RB_INSERT(pf_anchor_global, &pf_global.anchors, rs->anchor);
-		/*
-		 * how to update node anchors
-		 */
+
+		if (rs->anchor->parent != NULL) {
+			pf_update_parent(rs->anchor, t);
+		}
 	} else {
 		panic("%s anchor (%s) [%p] not found\n",
 		    __func__, r->anchor->name, r->anchor);
@@ -3021,10 +3121,10 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		bailout = ((version != 0) &&
 		    (version != pf_main_ruleset.rules.version));
 
-		log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
+		log(LOG_ERR, "%s:%s @ %d bailout: %d\n", __func__, pfioctl_name(cmd), __LINE__, bailout);
 		/* check if defaults can be modified/updated */
 		if (bailout == 0 && t->modify_defaults) {
-			bailout = (t->default_vers == pf_default_vers);
+			bailout = (t->default_vers != pf_default_vers);
 			for (i = 0; i < PF_LIMIT_MAX && bailout == 0; i++) {
 				pp = (struct pool *)pf_pool_limits[i].pp;
 				if (pp->pr_nout > t->pool_limits[i]) {
@@ -3044,6 +3144,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		 * found in global table. We let transaction to fail on the
 		 * first mismatch.
 		 */
+		log(LOG_ERR, "%s:%s @ %d bailout == %d\n", __func__, pfioctl_name(cmd), __LINE__, bailout);
 		if (bailout == 0) {
 			RB_FOREACH(ta, pf_anchor_global, &t->rc.anchors) {
 				version = ta->ruleset.rules.version;

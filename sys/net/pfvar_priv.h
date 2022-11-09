@@ -233,12 +233,13 @@ struct pf_trans {
 	LIST_ENTRY(pf_trans)	entry;
 	struct pf_rules_container
 				rc;
+	struct pf_anchor_global	done;
+	struct pf_anchor	key;
 	char			modify_defaults;
 	uint32_t		default_vers;
 	struct pf_rule		default_rule;
 	struct pf_trans_set	trans_set;
 	unsigned		pool_limits[PF_LIMIT_MAX];
-	struct pf_anchor_global	done;
 };
 
 extern struct task	pf_purge_task;
