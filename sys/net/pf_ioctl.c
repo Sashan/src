@@ -1085,7 +1085,8 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 				panic(
 				    "%s(%p, %p) %p (%s) version (%d) "
 				    "should be 0\n",
-				    __func__, child, t, parent_g->name,
+				    __func__, child, t, parent_g,
+				    parent_g->name,
 				    parent_g->ruleset.rules.version);
 
 			/*
@@ -1119,8 +1120,8 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 			parent_t->refcnt--;
 			RB_INSERT(pf_anchor_node, &parent_g->children, child);
 			parent_g->refcnt++;
-			if (parent_t->ruleset->rules.version !=
-			    parent_g->ruleset->rules..version)
+			if (parent_t->ruleset.rules.version !=
+			    parent_g->ruleset.rules.version)
 				panic("%s(%p, %p), version mismatch "
 				    "[ %p/%d, %p/%d ]\n", __func__, child, t,
 				    parent_t, parent_t->ruleset.rules.version,
@@ -1129,7 +1130,7 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 			 * update global ruleset version, when transaction
 			 * nodes become empty.
 			 */
-			if (RB_EMPTY(parent_t->children))
+			if (RB_EMPTY(&parent_t->children))
 				parent_g->ruleset.rules.version++;
 		}
 	} else {
@@ -1141,7 +1142,7 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 		parent_g = RB_INSERT(pf_anchor_global, &pf_global.anchors,
 		    child);
 		if (parent_g != NULL)
-			panic("%s should not happen\n");
+			panic("%s should not happen\n", __func__);
 	}
 }
 
@@ -3091,7 +3092,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pf_ruleset	*rs;
 		struct pf_anchor	*ta;
+/*
 		struct pf_rule		*r;
+*/
 		struct pool		*pp;
 		int			 i, bailout = 0;
 		u_int32_t		 version;
@@ -3201,11 +3204,16 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		 * create/update tables in global container
 		 */
 		log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
+#if 0
 		while (!RB_EMPTY(&t->rc.anchors)) {
 			ta = RB_MIN(pf_anchor_global, &t->rc.anchors);
+			log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 			RB_REMOVE(pf_anchor_global, &t->rc.anchors, ta);
+			log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 			rs = pf_find_ruleset(&pf_global, ta->path);
+			log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 			if (rs != NULL) {
+				log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 				pf_swap_rules(rs, &ta->ruleset, t);
 				rs->rules.version++;
 				/*
@@ -3219,16 +3227,22 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				 *	- remove empty rulesets.
 				 */
 				RB_INSERT(pf_anchor_global, &t->done, ta);
+				log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 				pf_remove_if_empty_ruleset(&pf_global, rs);
+				log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 			} else {
+				log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 				RB_INSERT(pf_anchor_global, &pf_global.anchors,
 				    ta);
+				log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 				TAILQ_FOREACH(r, rs->rules.ptr, entries) {
 					if (r->anchor != NULL)
 						pf_update_anchor(r, t);
 				}
+				log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 			}
 		}
+#endif
 		log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 
 		if (t->modify_defaults) {
