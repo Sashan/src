@@ -1086,6 +1086,7 @@ pf_swap_rules(struct pf_ruleset *grs, struct pf_ruleset *trs,
 
 	KASSERT(grs->rules.version == trs->rules.version);
 
+	log(LOG_ERR, "-> %s\n", __func__);
 	pf_init_ruleset(&tmp);
 	tmp.rules.rcount = trs->rules.rcount;
 	TAILQ_CONCAT(tmp.rules.ptr, trs->rules.ptr, entries);
@@ -1111,6 +1112,7 @@ pf_swap_rules(struct pf_ruleset *grs, struct pf_ruleset *trs,
 		if (r->anchor != NULL)
 			pf_update_anchor(r, t);
 	}
+	log(LOG_ERR, "<- %s\n", __func__);
 }
 
 const char *
@@ -2961,20 +2963,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCXBEGIN: {
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pf_trans		*t = NULL;
-#if 0
-		/*
-		 * pfctl may call DIOCXBEGIN multiple times for single ruleset.
-		 * New rulesets/anchors are appended to pfrb buffer which holds
-		 * all rulesets we are going to create/update. We apply
-		 * DIOCXBEGIN to the whole buffer evey time new item is added.
-		 * We have to take this into account here. If we find existing
-		 * transaction for our pid, then just new item got added,
-		 * otherwise we must create a new transaction.
-		 */
-		t = pf_find_trans(io->ticket);
-		if ((t == NULL) || (t->pid != p->p_p->ps_pid))
-			t = pf_open_trans(p->p_p->ps_pid);
-#endif
 
 		t = pf_open_trans(p->p_p->ps_pid);
 		t->default_rule = pf_default_rule;
@@ -2999,7 +2987,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCXCOMMIT: {
-#if 0
 		struct pf_trans		*t;
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pf_ruleset	*rs;
@@ -3034,6 +3021,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		bailout = ((version != 0) &&
 		    (version != pf_main_ruleset.rules.version));
 
+		log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 		/* check if defaults can be modified/updated */
 		if (bailout == 0 && t->modify_defaults) {
 			bailout = (t->default_vers == pf_default_vers);
@@ -3070,7 +3058,10 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			}
 		}
 
+		log(LOG_ERR, "%s:%s @ %d bailout == %d\n", __func__, pfioctl_name(cmd), __LINE__, bailout);
+
 		PF_UNLOCK();
+		NET_UNLOCK();
 		if (bailout != 0) {
 			error = EBUSY;
 			goto fail;
@@ -3080,7 +3071,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		 * upgrade to w-lock is safe, because no other ioctl can
 		 * mess up with global rules. we still hold ioctl rw
 		 */
+		NET_LOCK();
 		PF_LOCK();
+		log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 		version = t->rc.main_anchor.ruleset.rules.version;
 		if (version != 0) {
 			if (t->rc.main_anchor.ruleset.topen) {
@@ -3106,6 +3099,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		 *
 		 * create/update tables in global container
 		 */
+		log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 		while (!RB_EMPTY(&t->rc.anchors)) {
 			ta = RB_MIN(pf_anchor_global, &t->rc.anchors);
 			RB_REMOVE(pf_anchor_global, &t->rc.anchors, ta);
@@ -3134,6 +3128,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				}
 			}
 		}
+		log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 
 		if (t->modify_defaults) {
 			/*
@@ -3193,7 +3188,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		 * use rollback to release stuff which became invalidated.
 		 */
 		pf_rollback_trans(t);
-#endif
+		log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 		break;
 	}
 
