@@ -1046,6 +1046,7 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 		 * ruleset. Also update children in main ruleset. We are done
 		 * with it.
 		 */
+		log(LOG_ERR, "%s parent for %s is a main anchor %p\n", __func__, child->name, child);
 		RB_REMOVE(pf_anchor_global, &t->rc.anchors, child);
 		RB_REMOVE(pf_anchor_node, &t->rc.main_anchor.children, child);
 		parent_t = RB_INSERT(pf_anchor_global, &pf_global.anchors,
@@ -1056,6 +1057,7 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 		KASSERT(parent_t == NULL);
 		return;
 	} else if (child->parent != NULL) {
+		log(LOG_ERR, "%s (%s) recursing to parent\n", __func__, child->parent->name);
 		pf_update_parent(child->parent, t);
 	}
 
@@ -1146,6 +1148,7 @@ pf_update_anchor(struct pf_rule *r, struct pf_trans *t)
 
 	rs = pf_find_ruleset(&pf_global, r->anchor->name);
 	if (rs != NULL) {
+		log(LOG_ERR, "%s found parent %p (%s)\n", __func__,  rs, rs->anchor->name);
 		/*
 		 * anchor/ruleset found in global tree already,
 		 * then just move ownership by updating a
@@ -1155,6 +1158,7 @@ pf_update_anchor(struct pf_rule *r, struct pf_trans *t)
 		r->anchor->refcnt--;
 		r->anchor = rs->anchor;
 	} else if ((rs = pf_find_ruleset(&t->rc, r->anchor->name)) != NULL) {
+		log(LOG_ERR, "%s no parrent found in global %p (%s)\n", __func__,  rs, rs->anchor->name);
 		/*
 		 * anchor not found in global tree, then we need to
 		 * add ruleset to tree.
@@ -1163,6 +1167,7 @@ pf_update_anchor(struct pf_rule *r, struct pf_trans *t)
 		RB_INSERT(pf_anchor_global, &pf_global.anchors, rs->anchor);
 
 		if (rs->anchor->parent != NULL) {
+			log(LOG_ERR, "%s going to update parent children %p (%s)\n", __func__, rs->anchor, rs->anchor->name);
 			pf_update_parent(rs->anchor, t);
 		}
 	} else {
