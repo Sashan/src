@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmmvar.h,v 1.81 2022/09/01 22:01:40 dv Exp $	*/
+/*	$OpenBSD: vmmvar.h,v 1.83 2022/11/09 17:53:12 dv Exp $	*/
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -932,8 +932,8 @@ struct vcpu {
 	uint8_t vc_virt_mode;			/* [I] */
 
 	struct rwlock vc_lock;
-	struct refcnt vc_refcnt;		/* [a] */
 
+	struct cpu_info *vc_curcpu;		/* [a] */
 	struct cpu_info *vc_last_pcpu;		/* [v] */
 	struct vm_exit vc_exit;			/* [v] */
 

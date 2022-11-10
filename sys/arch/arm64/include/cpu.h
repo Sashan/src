@@ -1,4 +1,4 @@
-/* $OpenBSD: cpu.h,v 1.28 2022/08/29 02:01:18 jsg Exp $ */
+/* $OpenBSD: cpu.h,v 1.30 2022/11/08 20:41:36 mlarkin Exp $ */
 /*
  * Copyright (c) 2016 Dale Rahn <drahn@dalerahn.com>
  *
@@ -22,7 +22,7 @@
  * User-visible definitions
  */
 
-/* 
+/*
  * CTL_MACHDEP definitions.
  */
 #define	CPU_COMPATIBLE		1	/* compatible property */
@@ -81,6 +81,7 @@ void	arm32_vector_init(vaddr_t, int);
  * Per-CPU information.  For now we assume one CPU.
  */
 
+#include <sys/clockintr.h>
 #include <sys/device.h>
 #include <sys/sched.h>
 #include <sys/srp.h>
@@ -120,7 +121,7 @@ struct cpu_info {
 
 	uint64_t		ci_ttbr1;
 	vaddr_t			ci_el1_stkend;
-	
+
 	struct opp_table	*ci_opp_table;
 	volatile int		ci_opp_idx;
 	volatile int		ci_opp_max;
@@ -142,7 +143,7 @@ struct cpu_info {
 #ifdef GPROF
 	struct gmonparam	*ci_gmon;
 #endif
-
+	struct clockintr_queue	ci_queue;
 	char			ci_panicbuf[512];
 };
 

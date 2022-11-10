@@ -1,4 +1,4 @@
-/*	$OpenBSD: loader.c,v 1.201 2022/11/07 10:35:26 deraadt Exp $ */
+/*	$OpenBSD: loader.c,v 1.204 2022/11/09 19:50:25 deraadt Exp $ */
 
 /*
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
@@ -219,9 +219,13 @@ _dl_clean_boot(void)
 	extern char boot_data_start[], boot_data_end[];
 #endif
 
-	_dl_munmap(boot_text_start, boot_text_end - boot_text_start);
+	_dl_mmap(boot_text_start, boot_text_end - boot_text_start,
+	    PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0);
+	_dl_mimmutable(boot_text_start, boot_text_end - boot_text_start);
 #if 0	/* XXX breaks boehm-gc?!? */
-	_dl_munmap(boot_data_start, boot_data_end - boot_data_start);
+	_dl_mmap(boot_data_start, boot_data_end - boot_data_start,
+	    PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0);
+	_dl_mimmutable(boot_data_start, boot_data_end - boot_data_start);
 #endif
 }
 #endif /* DO_CLEAN_BOOT */
@@ -316,7 +320,7 @@ _dl_load_dep_libs(elf_object_t *object, int flags, int booting)
 	Elf_Dyn *dynp;
 	unsigned int loop;
 	int libcount;
-	int depflags;
+	int depflags, nodelete = 0;
 
 	dynobj = object;
 	while (dynobj) {
@@ -325,6 +329,8 @@ _dl_load_dep_libs(elf_object_t *object, int flags, int booting)
 
 		/* propagate DF_1_NOW to deplibs (can be set by dynamic tags) */
 		depflags = flags | (dynobj->obj_flags & DF_1_NOW);
+		if (booting || object->nodelete)
+			nodelete = 1;
 
 		for (dynp = dynobj->load_dyn; dynp->d_tag; dynp++) {
 			if (dynp->d_tag == DT_NEEDED) {
@@ -375,7 +381,7 @@ _dl_load_dep_libs(elf_object_t *object, int flags, int booting)
 				DL_DEB(("loading: %s required by %s\n", libname,
 				    dynobj->load_name));
 				depobj = _dl_load_shlib(libname, dynobj,
-				    OBJTYPE_LIB, depflags, booting);
+				    OBJTYPE_LIB, depflags, nodelete);
 				if (depobj == 0) {
 					if (booting) {
 						_dl_die(
@@ -563,6 +569,7 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 	}
 	exe_obj->load_list = load_list;
 	exe_obj->obj_flags |= DF_1_GLOBAL;
+	exe_obj->nodelete = 1;
 	exe_obj->load_size = maxva - minva;
 	exe_obj->relro_addr = relro_addr;
 	exe_obj->relro_size = relro_size;

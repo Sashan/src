@@ -1,4 +1,4 @@
-/*	$OpenBSD: curve25519.c,v 1.7 2022/11/06 16:31:19 jsing Exp $ */
+/*	$OpenBSD: curve25519.c,v 1.13 2022/11/09 17:45:55 jsing Exp $ */
 /*
  * Copyright (c) 2015, Google Inc.
  *
@@ -641,9 +641,6 @@ static void fe_invert(fe out, const fe z) {
   int i;
 
   fe_sq(t0, z);
-  for (i = 1; i < 1; ++i) {
-    fe_sq(t0, t0);
-  }
   fe_sq(t1, t0);
   for (i = 1; i < 2; ++i) {
     fe_sq(t1, t1);
@@ -651,9 +648,6 @@ static void fe_invert(fe out, const fe z) {
   fe_mul(t1, z, t1);
   fe_mul(t0, t0, t1);
   fe_sq(t2, t0);
-  for (i = 1; i < 1; ++i) {
-    fe_sq(t2, t2);
-  }
   fe_mul(t1, t1, t2);
   fe_sq(t2, t1);
   for (i = 1; i < 5; ++i) {
@@ -908,9 +902,6 @@ static void fe_pow22523(fe out, const fe z) {
   int i;
 
   fe_sq(t0, z);
-  for (i = 1; i < 1; ++i) {
-    fe_sq(t0, t0);
-  }
   fe_sq(t1, t0);
   for (i = 1; i < 2; ++i) {
     fe_sq(t1, t1);
@@ -918,9 +909,6 @@ static void fe_pow22523(fe out, const fe z) {
   fe_mul(t1, z, t1);
   fe_mul(t0, t0, t1);
   fe_sq(t0, t0);
-  for (i = 1; i < 1; ++i) {
-    fe_sq(t0, t0);
-  }
   fe_mul(t0, t1, t0);
   fe_sq(t1, t0);
   for (i = 1; i < 5; ++i) {
@@ -3506,7 +3494,7 @@ static void table_select(ge_precomp *t, int pos, signed char b) {
  *
  * Preconditions:
  *   a[31] <= 127 */
-void x25519_ge_scalarmult_base(ge_p3 *h, const uint8_t a[32]) {
+void x25519_ge_scalarmult_base(ge_p3 *h, const uint8_t *a) {
   signed char e[64];
   signed char carry;
   ge_p1p1 r;
@@ -4627,12 +4615,10 @@ sc_muladd(uint8_t *s, const uint8_t *a, const uint8_t *b,
   s[31] = s11 >> 17;
 }
 
-void ED25519_keypair(uint8_t out_public_key[32], uint8_t out_private_key[64]) {
-  uint8_t seed[32];
-  arc4random_buf(seed, 32);
-
+void ED25519_public_from_private(uint8_t out_public_key[ED25519_PUBLIC_KEY_LENGTH],
+    const uint8_t private_key[ED25519_PRIVATE_KEY_LENGTH]) {
   uint8_t az[SHA512_DIGEST_LENGTH];
-  SHA512(seed, 32, az);
+  SHA512(private_key, 32, az);
 
   az[0] &= 248;
   az[31] &= 63;
@@ -4641,13 +4627,18 @@ void ED25519_keypair(uint8_t out_public_key[32], uint8_t out_private_key[64]) {
   ge_p3 A;
   x25519_ge_scalarmult_base(&A, az);
   ge_p3_tobytes(out_public_key, &A);
+}
 
-  memcpy(out_private_key, seed, 32);
-  memmove(out_private_key + 32, out_public_key, 32);
+void ED25519_keypair(uint8_t out_public_key[ED25519_PUBLIC_KEY_LENGTH],
+    uint8_t out_private_key[ED25519_PRIVATE_KEY_LENGTH]) {
+  arc4random_buf(out_private_key, 32);
+
+  ED25519_public_from_private(out_public_key, out_private_key);
 }
 
 int ED25519_sign(uint8_t *out_sig, const uint8_t *message, size_t message_len,
-                 const uint8_t private_key[64]) {
+    const uint8_t public_key[ED25519_PUBLIC_KEY_LENGTH],
+    const uint8_t private_key[ED25519_PRIVATE_KEY_LENGTH]) {
   uint8_t az[SHA512_DIGEST_LENGTH];
   SHA512(private_key, 32, az);
 
@@ -4669,7 +4660,7 @@ int ED25519_sign(uint8_t *out_sig, const uint8_t *message, size_t message_len,
 
   SHA512_Init(&hash_ctx);
   SHA512_Update(&hash_ctx, out_sig, 32);
-  SHA512_Update(&hash_ctx, private_key + 32, 32);
+  SHA512_Update(&hash_ctx, public_key, 32);
   SHA512_Update(&hash_ctx, message, message_len);
   uint8_t hram[SHA512_DIGEST_LENGTH];
   SHA512_Final(hram, &hash_ctx);
@@ -4681,7 +4672,8 @@ int ED25519_sign(uint8_t *out_sig, const uint8_t *message, size_t message_len,
 }
 
 int ED25519_verify(const uint8_t *message, size_t message_len,
-                   const uint8_t signature[64], const uint8_t public_key[32]) {
+    const uint8_t signature[ED25519_SIGNATURE_LENGTH],
+    const uint8_t public_key[ED25519_PUBLIC_KEY_LENGTH]) {
   ge_p3 A;
   if ((signature[63] & 224) != 0 ||
       x25519_ge_frombytes_vartime(&A, public_key) != 0) {
@@ -4849,7 +4841,7 @@ x25519_scalar_mult_generic(uint8_t out[32], const uint8_t scalar[32],
 
 #ifdef unused
 void
-x25519_public_from_private_generic(uint8_t out_public_value[32],
+x25519_public_from_private_generic(uint8_t out_public_key[32],
     const uint8_t private_key[32])
 {
   uint8_t e[32];
@@ -4869,21 +4861,21 @@ x25519_public_from_private_generic(uint8_t out_public_value[32],
   fe_sub(zminusy, A.Z, A.Y);
   fe_invert(zminusy_inv, zminusy);
   fe_mul(zplusy, zplusy, zminusy_inv);
-  fe_tobytes(out_public_value, zplusy);
+  fe_tobytes(out_public_key, zplusy);
 }
 #endif
 
 void
-x25519_public_from_private(uint8_t out_public_value[32],
-    const uint8_t private_key[32])
+X25519_public_from_private(uint8_t out_public_key[X25519_KEY_LENGTH],
+    const uint8_t private_key[X25519_KEY_LENGTH])
 {
   static const uint8_t kMongomeryBasePoint[32] = {9};
 
-  x25519_scalar_mult(out_public_value, private_key, kMongomeryBasePoint);
+  x25519_scalar_mult(out_public_key, private_key, kMongomeryBasePoint);
 }
 
 void
-X25519_keypair(uint8_t out_public_value[X25519_KEY_LENGTH],
+X25519_keypair(uint8_t out_public_key[X25519_KEY_LENGTH],
     uint8_t out_private_key[X25519_KEY_LENGTH])
 {
   /* All X25519 implementations should decode scalars correctly (see
@@ -4905,17 +4897,17 @@ X25519_keypair(uint8_t out_public_value[X25519_KEY_LENGTH],
   out_private_key[31] &= 63;
   out_private_key[31] |= 128;
 
-  x25519_public_from_private(out_public_value, out_private_key);
+  X25519_public_from_private(out_public_key, out_private_key);
 }
 
 int
 X25519(uint8_t out_shared_key[X25519_KEY_LENGTH],
     const uint8_t private_key[X25519_KEY_LENGTH],
-    const uint8_t peer_public_value[X25519_KEY_LENGTH])
+    const uint8_t peer_public_key[X25519_KEY_LENGTH])
 {
   static const uint8_t kZeros[32] = {0};
 
-  x25519_scalar_mult(out_shared_key, private_key, peer_public_value);
+  x25519_scalar_mult(out_shared_key, private_key, peer_public_key);
 
   /* The all-zero output results when the input is a point of small order. */
   return timingsafe_memcmp(kZeros, out_shared_key, 32) != 0;

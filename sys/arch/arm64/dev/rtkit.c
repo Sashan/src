@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtkit.c,v 1.6 2022/09/03 19:04:28 kettenis Exp $	*/
+/*	$OpenBSD: rtkit.c,v 1.8 2022/11/09 19:18:11 kettenis Exp $	*/
 /*
  * Copyright (c) 2021 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -433,7 +433,7 @@ rtkit_rx_callback(void *cookie)
 }
 
 struct rtkit_state *
-rtkit_init(int node, const char *name, struct rtkit *rk)
+rtkit_init(int node, const char *name, int flags, struct rtkit *rk)
 {
 	struct rtkit_state *state;
 	struct mbox_client client;
@@ -441,6 +441,9 @@ rtkit_init(int node, const char *name, struct rtkit *rk)
 	state = malloc(sizeof(*state), M_DEVBUF, M_WAITOK | M_ZERO);
 	client.mc_rx_callback = rtkit_rx_callback;
 	client.mc_rx_arg = state;
+	if (flags & RK_WAKEUP)
+		client.mc_flags |= MC_WAKEUP;
+
 	state->mc = mbox_channel(node, name, &client);
 	if (state->mc == NULL) {
 		free(state, M_DEVBUF, sizeof(*state));
@@ -470,6 +473,25 @@ rtkit_boot(struct rtkit_state *state)
 		rtkit_poll(state);
 
 	return 0;
+}
+
+void
+rtkit_shutdown(struct rtkit_state *state)
+{
+	struct mbox_channel *mc = state->mc;
+
+	if (state->ap_pwrstate != RTKIT_MGMT_PWR_STATE_QUIESCED)
+		rtkit_set_ap_pwrstate(state, RTKIT_MGMT_PWR_STATE_QUIESCED);
+
+	rtkit_send(mc, RTKIT_EP_MGMT, RTKIT_MGMT_IOP_PWR_STATE,
+		   RTKIT_MGMT_PWR_STATE_SLEEP);
+
+	while (state->iop_pwrstate != RTKIT_MGMT_PWR_STATE_SLEEP)
+		rtkit_poll(state);
+
+	KASSERT(state->iop_pwrstate == RTKIT_MGMT_PWR_STATE_SLEEP);
+	KASSERT(state->ap_pwrstate == RTKIT_MGMT_PWR_STATE_QUIESCED);
+	state->epmap = 0;
 }
 
 int

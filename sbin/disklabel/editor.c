@@ -1,4 +1,4 @@
-/*	$OpenBSD: editor.c,v 1.376 2022/10/14 16:36:36 krw Exp $	*/
+/*	$OpenBSD: editor.c,v 1.379 2022/11/09 22:25:27 krw Exp $	*/
 
 /*
  * Copyright (c) 1997-2000 Todd C. Miller <millert@openbsd.org>
@@ -1287,7 +1287,7 @@ void
 edit_parms(struct disklabel *lp)
 {
 	char *p;
-	u_int64_t freesectors, ui;
+	u_int64_t ui;
 	struct disklabel oldlabel = *lp;
 
 	printf("Changing disk type and label description for %s:\n", specname);
@@ -1373,12 +1373,9 @@ getdisktype(struct disklabel *lp, char *banner, char *dev)
 		{ "sd",   "SCSI" },
 		{ "wd",   "IDE" },
 		{ "fd",   "FLOPPY" },
-		{ "xd",   "SMD" },
-		{ "xy",   "SMD" },
 		{ "hd",   "HP-IB" },
 		{ "vnd",  "VND" },
 		{ "svnd", "VND" },
-		{ NULL,   NULL }
 	};
 
 	if ((s = basename(dev)) != NULL) {
@@ -1387,7 +1384,7 @@ getdisktype(struct disklabel *lp, char *banner, char *dev)
 		i = strcspn(s, "0123456789");
 		s[i] = '\0';
 		dev = s;
-		for (i = 0; dtypes[i].dev != NULL; i++) {
+		for (i = 0; i < nitems(dtypes); i++) {
 			if (strcmp(dev, dtypes[i].dev) == 0) {
 				def = dtypes[i].type;
 				break;

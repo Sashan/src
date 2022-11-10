@@ -1,4 +1,4 @@
-/*	$OpenBSD: softraid.c,v 1.5 2020/06/08 19:17:12 kn Exp $	*/
+/*	$OpenBSD: softraid.c,v 1.8 2022/11/08 14:05:41 kn Exp $	*/
 /*
  * Copyright (c) 2012 Joel Sing <jsing@openbsd.org>
  *
@@ -15,18 +15,57 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <sys/types.h>
+#include <sys/disklabel.h>
 #include <sys/dkio.h>
 #include <sys/ioctl.h>
 
 #include <dev/biovar.h>
 
 #include <err.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+#include <util.h>
 
 #include "installboot.h"
 
 static int sr_volume(int, char *, int *, int *);
+
+static void
+sr_prepare_chunk(int devfd, int vol, int disk)
+{
+	struct bioc_disk bd;
+	char *realdev;
+	char part;
+	int diskfd;
+
+	diskfd = sr_open_chunk(devfd, vol, disk, &bd, &realdev, &part);
+	if (diskfd == -1)
+		return;
+
+	/* Prepare file system on device. */
+	md_prepareboot(diskfd, realdev);
+
+	close(diskfd);
+}
+
+void
+sr_prepareboot(int devfd, char *dev)
+{
+	int vol = -1, ndisks = 0, disk;
+
+	/* Use the normal process if this is not a softraid volume. */
+	if (!sr_volume(devfd, dev, &vol, &ndisks)) {
+		md_prepareboot(devfd, dev);
+		return;
+	}
+
+	/* Prepare file system on each disk that is part of this volume. */
+	for (disk = 0; disk < ndisks; disk++)
+		sr_prepare_chunk(devfd, vol, disk);
+}
 
 void
 sr_installboot(int devfd, char *dev)
@@ -107,4 +146,44 @@ sr_status(struct bio_status *bs)
 		else
 			exit(1);
 	}
+}
+
+int
+sr_open_chunk(int devfd, int vol, int disk, struct bioc_disk *bd,
+    char **realdev, char *part)
+{
+	int diskfd;
+
+	/* Get device name for this disk/chunk. */
+	memset(bd, 0, sizeof(*bd));
+	bd->bd_volid = vol;
+	bd->bd_diskid = disk;
+	if (ioctl(devfd, BIOCDISK, bd) == -1)
+		err(1, "BIOCDISK");
+
+	/* Keydisks always have a size of zero. */
+	if (bd->bd_size == 0)
+		return -1;
+
+	/* Check disk status. */
+	if (bd->bd_status != BIOC_SDONLINE &&
+	    bd->bd_status != BIOC_SDREBUILD) {
+		fprintf(stderr, "softraid chunk %u not online - skipping...\n",
+		    disk);
+		return -1;
+	}
+
+	if (strlen(bd->bd_vendor) < 1)
+		errx(1, "invalid disk name");
+	*part = bd->bd_vendor[strlen(bd->bd_vendor) - 1];
+	if (*part < 'a' || *part >= 'a' + MAXPARTITIONS)
+		errx(1, "invalid partition %c\n", *part);
+	bd->bd_vendor[strlen(bd->bd_vendor) - 1] = '\0';
+
+	/* Open device. */
+	if ((diskfd = opendev(bd->bd_vendor, (nowrite ? O_RDONLY : O_RDWR),
+	    OPENDEV_PART, realdev)) == -1)
+		err(1, "open: %s", *realdev);
+
+	return diskfd;
 }
