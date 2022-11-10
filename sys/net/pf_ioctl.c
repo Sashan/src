@@ -1040,8 +1040,24 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 	struct pf_anchor *parent_g;
 	struct pf_anchor *parent_t;
 
-	if (child->parent != NULL)
+	if (child->parent == &t->rc.main_anchor) {
+		/*
+		 * move anchor from transaction main ruleset, to global main
+		 * ruleset. Also update children in main ruleset. We are done
+		 * with it.
+		 */
+		RB_REMOVE(pf_anchor_global, &t->rc.anchors, child);
+		RB_REMOVE(pf_anchor_node, &t->rc.main_anchor.children, child);
+		parent_t = RB_INSERT(pf_anchor_global, &pf_global.anchors,
+		    child);
+		KASSERT(parent_t == NULL);
+		parent_t = RB_INSERT(pf_anchor_node,
+		    &pf_global.main_anchor.children, child);
+		KASSERT(parent_t == NULL);
+		return;
+	} else if (child->parent != NULL) {
 		pf_update_parent(child->parent, t);
+	}
 
 	strlcpy(t->key.path, child->parent->path, sizeof(t->key.path));
 	parent_g = RB_FIND(pf_anchor_global, &pf_global.anchors, &t->key);
@@ -1176,6 +1192,11 @@ pf_swap_rules(struct pf_ruleset *grs, struct pf_ruleset *trs,
 			KASSERT(r->anchor->refcnt > 1);
 			r->anchor->refcnt--;
 			r->anchor = NULL;
+			/*
+			 * looks like we will have to walk a tree
+			 * and find orphaned rulesets before we
+			 * will be done with transaction.
+			 */
 		}
 	}
 
