@@ -1172,8 +1172,8 @@ pf_update_anchor(struct pf_rule *r, struct pf_trans *t)
 			pf_update_parent(rs->anchor, t);
 		}
 	} else {
-		panic("%s anchor (%s) [%p] not found\n",
-		    __func__, r->anchor->name, r->anchor);
+		panic("%s anchor (%s\\%s) [%p] not found\n",
+		    __func__, r->anchor->name, r->anchor->path, r->anchor);
 	}
 }
 
