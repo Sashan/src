@@ -128,6 +128,8 @@ void			 pf_free_trans(struct pf_trans *);
 void			 pf_rollback_trans(struct pf_trans *);
 void			 pf_update_parent(struct pf_anchor *,
 			    struct pf_trans *);
+void			 pf_swap_rules(struct pf_ruleset *, struct pf_ruleset *,
+			    struct pf_trans *t);
 
 struct pf_rule		 pf_default_rule;
 uint32_t		 pf_default_vers = 1;
@@ -1149,22 +1151,21 @@ pf_update_anchor(struct pf_rule *r, struct pf_trans *t)
 	rs = pf_find_ruleset(&pf_global, r->anchor->name);
 	if (rs != NULL) {
 		log(LOG_ERR, "%s found parent %p (%s)\n", __func__,  rs, rs->anchor->name);
-		/*
-		 * anchor/ruleset found in global tree already,
-		 * then just move ownership by updating a
-		 * refcount and reference.
-		 */
-		rs->anchor->refcnt++;
-		r->anchor->refcnt--;
-		r->anchor = rs->anchor;
+		pf_swap_rules(rs, r->anchor->ruleset, t);
 	} else if ((rs = pf_find_ruleset(&t->rc, r->anchor->name)) != NULL) {
 		log(LOG_ERR, "%s no parrent found in global %p (%s)\n", __func__,  rs, rs->anchor->name);
 		/*
-		 * anchor not found in global tree, then we need to
-		 * add ruleset to tree.
+		 * anchor not found in global tree, so we will move
+		 * the anchor/ruleset from transaction to global tree.
+		 * Then we also walk all rules, updating the anchor
+		 * rules.
 		 */
 		RB_REMOVE(pf_anchor_global, &t->rc.anchors, rs->anchor);
 		RB_INSERT(pf_anchor_global, &pf_global.anchors, rs->anchor);
+		TAILQ_FOREACH(r, rs->rules.ptr, entries) {
+			if (r->anchor != NULL)
+				pf_update_anchor(r, t);
+		}
 
 		if (rs->anchor->parent != NULL) {
 			log(LOG_ERR, "%s going to update parent children %p (%s)\n", __func__, rs->anchor, rs->anchor->name);
