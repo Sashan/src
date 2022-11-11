@@ -1,4 +1,4 @@
-/* $OpenBSD: evp.h,v 1.108 2022/11/09 19:18:08 jsing Exp $ */
+/* $OpenBSD: evp.h,v 1.111 2022/11/10 16:37:52 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -115,6 +115,10 @@
 #define EVP_PKEY_HKDF		NID_hkdf
 #define EVP_PKEY_GOSTR12_256	NID_id_tc26_gost3410_2012_256
 #define EVP_PKEY_GOSTR12_512	NID_id_tc26_gost3410_2012_512
+#if defined(LIBRESSL_NEXT_API) || defined(LIBRESSL_INTERNAL)
+#define EVP_PKEY_ED25519	NID_ED25519
+#define EVP_PKEY_X25519		NID_X25519
+#endif
 
 #ifdef	__cplusplus
 extern "C" {
@@ -297,6 +301,11 @@ extern "C" {
 /* Length of tag for TLS */
 #define EVP_CHACHAPOLY_TLS_TAG_LEN			16
 
+#if defined(LIBRESSL_NEXT_API) || defined(LIBRESSL_INTERNAL)
+#define ED25519_KEYLEN					32
+#define X25519_KEYLEN					32
+#endif
+
 typedef struct evp_cipher_info_st {
 	const EVP_CIPHER *cipher;
 	unsigned char iv[EVP_MAX_IV_LENGTH];
@@ -398,6 +407,17 @@ unsigned char *EVP_CIPHER_CTX_buf_noconst(EVP_CIPHER_CTX *ctx);
 #define EVP_CIPHER_CTX_type(c)         EVP_CIPHER_type(EVP_CIPHER_CTX_cipher(c))
 unsigned long EVP_CIPHER_CTX_flags(const EVP_CIPHER_CTX *ctx);
 #define EVP_CIPHER_CTX_mode(e)		(EVP_CIPHER_CTX_flags(e) & EVP_CIPH_MODE)
+
+#if defined(LIBRESSL_NEXT_API) || defined(LIBRESSL_INTERNAL)
+EVP_PKEY *EVP_PKEY_new_raw_private_key(int type, ENGINE *engine,
+    const unsigned char *private_key, size_t len);
+EVP_PKEY *EVP_PKEY_new_raw_public_key(int type, ENGINE *engine,
+    const unsigned char *public_key, size_t len);
+int EVP_PKEY_get_raw_private_key(const EVP_PKEY *pkey,
+    unsigned char *out_private_key, size_t *out_len);
+int EVP_PKEY_get_raw_public_key(const EVP_PKEY *pkey,
+    unsigned char *out_public_key, size_t *out_len);
+#endif
 
 #define EVP_ENCODE_LENGTH(l)	(((l+2)/3*4)+(l/48+1)*2+80)
 #define EVP_DECODE_LENGTH(l)	((l+3)/4*3+80)
@@ -1414,6 +1434,7 @@ void ERR_load_EVP_strings(void);
 #define EVP_R_EXPECTING_A_ECDSA_KEY			 141
 #define EVP_R_EXPECTING_A_EC_KEY			 142
 #define EVP_R_FIPS_MODE_NOT_SUPPORTED			 167
+#define EVP_R_GET_RAW_KEY_FAILED			 182
 #define EVP_R_INITIALIZATION_ERROR			 134
 #define EVP_R_INPUT_NOT_INITIALIZED			 111
 #define EVP_R_INVALID_DIGEST				 152
@@ -1435,6 +1456,7 @@ void ERR_load_EVP_strings(void);
 #define EVP_R_NO_OPERATION_SET				 149
 #define EVP_R_NO_SIGN_FUNCTION_CONFIGURED		 104
 #define EVP_R_NO_VERIFY_FUNCTION_CONFIGURED		 105
+#define EVP_R_ONLY_ONESHOT_SUPPORTED			 177
 #define EVP_R_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE	 150
 #define EVP_R_OPERATON_NOT_INITIALIZED			 151
 #define EVP_R_OUTPUT_ALIASES_INPUT			 172
