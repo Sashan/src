@@ -1151,7 +1151,7 @@ pf_update_anchor(struct pf_rule *r, struct pf_trans *t)
 	rs = pf_find_ruleset(&pf_global, r->anchor->name);
 	if (rs != NULL) {
 		log(LOG_ERR, "%s found parent %p (%s)\n", __func__,  rs, rs->anchor->name);
-		pf_swap_rules(rs, r->anchor->ruleset, t);
+		pf_swap_rules(rs, &r->anchor->ruleset, t);
 	} else if ((rs = pf_find_ruleset(&t->rc, r->anchor->name)) != NULL) {
 		log(LOG_ERR, "%s no parrent found in global %p (%s)\n", __func__,  rs, rs->anchor->name);
 		/*
