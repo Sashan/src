@@ -1048,7 +1048,7 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 		 * ruleset. Also update children in main ruleset. We are done
 		 * with it.
 		 */
-		log(LOG_ERR, "%s parent for %s is a main anchor %p\n", __func__, child->name, child);
+		log(LOG_ERR, "%s parent for %s is a main anchor %p\n", __func__, child->path, child);
 		RB_REMOVE(pf_anchor_global, &t->rc.anchors, child);
 		RB_REMOVE(pf_anchor_node, &t->rc.main_anchor.children, child);
 		parent_t = RB_INSERT(pf_anchor_global, &pf_global.anchors,
@@ -1059,8 +1059,10 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 		KASSERT(parent_t == NULL);
 		return;
 	} else if (child->parent != NULL) {
-		log(LOG_ERR, "%s (%s) recursing to parent\n", __func__, child->parent->name);
+		log(LOG_ERR, "%s (%s) recursing to parent\n", __func__, child->parent->path);
 		pf_update_parent(child->parent, t);
+	} else {
+		return;
 	}
 
 	strlcpy(t->key.path, child->parent->path, sizeof(t->key.path));
@@ -1083,7 +1085,7 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 				    "%s(%p, %p) %p (%s) version (%d) "
 				    "should be 0\n",
 				    __func__, child, t, parent_g,
-				    parent_g->name,
+				    parent_g->path,
 				    parent_g->ruleset.rules.version);
 
 			/*
@@ -1094,7 +1096,7 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 				panic(
 				    "%s(%p, %p), child->parent (%p) != "
 				    "parent_t (%p), [ %s ]\n", __func__, child,
-				    t, child->parent, parent_g, child->name);
+				    t, child->parent, parent_g, child->path);
 
 			/*
 			 * the child must be also present in global parent
@@ -1104,7 +1106,7 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 				panic(
 				    "%s(%p, %p), child [%s] not found in "
 				    "global parent (%p)\n", __func__,
-				    child, t, child->name, parent_g);
+				    child, t, child->path, parent_g);
 		} else {
 			/*
 			 * we found suitable parent anchor in both trees:
@@ -1148,12 +1150,12 @@ pf_update_anchor(struct pf_rule *r, struct pf_trans *t)
 {
 	struct pf_ruleset *rs;
 
-	rs = pf_find_ruleset(&pf_global, r->anchor->name);
+	rs = pf_find_ruleset(&pf_global, r->anchor->path);
 	if (rs != NULL) {
-		log(LOG_ERR, "%s found parent %p (%s)\n", __func__,  rs, rs->anchor->name);
+		log(LOG_ERR, "%s found parent %p (%s)\n", __func__,  rs, rs->anchor->path);
 		pf_swap_rules(rs, &r->anchor->ruleset, t);
-	} else if ((rs = pf_find_ruleset(&t->rc, r->anchor->name)) != NULL) {
-		log(LOG_ERR, "%s no parrent found in global %p (%s)\n", __func__,  rs, rs->anchor->name);
+	} else if ((rs = pf_find_ruleset(&t->rc, r->anchor->path)) != NULL) {
+		log(LOG_ERR, "%s no parrent found in global %p (%s)\n", __func__,  rs, rs->anchor->path);
 		/*
 		 * anchor not found in global tree, so we will move
 		 * the anchor/ruleset from transaction to global tree.
@@ -1168,7 +1170,7 @@ pf_update_anchor(struct pf_rule *r, struct pf_trans *t)
 		}
 
 		if (rs->anchor->parent != NULL) {
-			log(LOG_ERR, "%s going to update parent children %p (%s)\n", __func__, rs->anchor, rs->anchor->name);
+			log(LOG_ERR, "%s going to update parent children %p (%s)\n", __func__, rs->anchor, rs->anchor->path);
 			pf_update_parent(rs->anchor, t);
 		}
 	} else {
