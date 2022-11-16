@@ -1044,104 +1044,56 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 
 	if (child->parent == &t->rc.main_anchor) {
 		/*
-		 * move anchor from transaction main ruleset, to global main
-		 * ruleset. Also update children in main ruleset. We are done
-		 * with it.
+		 * Child is referred by main ruleset, then move it
+		 * to global main ruleset.
 		 */
 		log(LOG_ERR, "%s parent for %s is a main anchor %p\n", __func__, child->path, child);
-		RB_REMOVE(pf_anchor_global, &t->rc.anchors, child);
 		RB_REMOVE(pf_anchor_node, &t->rc.main_anchor.children, child);
-		parent_t = RB_INSERT(pf_anchor_global, &pf_global.anchors,
-		    child);
-		KASSERT(parent_t == NULL);
-		parent_t = RB_INSERT(pf_anchor_node,
+		parent_g = RB_INSERT(pf_anchor_node,
 		    &pf_global.main_anchor.children, child);
-		KASSERT(parent_t == NULL);
+		KASSERT(parent_g == NULL);
 		return;
-	} else if (child->parent != NULL) {
-		log(LOG_ERR, "%s (%s) recursing to parent\n", __func__, child->parent->path);
-		pf_update_parent(child->parent, t);
+	} else if (child->parent == &pf_global.main_anchor) {
+		log(LOG_ERR, "%s leaf -> root path complete\n", __func__);
+		return;
 	} else {
-		return;
-	}
+		parent_g = RB_FIND(pf_anchor_global, &pf_global.anchors,
+		    child->parent);
 
-	strlcpy(t->key.path, child->parent->path, sizeof(t->key.path));
-	parent_g = RB_FIND(pf_anchor_global, &pf_global.anchors, &t->key);
-
-	if (parent_g != NULL) {
-		/*
-		 * parent found in global ruleset, check version number
-		 * with parent found in transaction.
-		 */
-		parent_t = RB_FIND(pf_anchor_global, &t->rc.anchors, &t->key);
-		if (parent_t == NULL) {
+		if (parent_g == NULL) {
 			/*
-			 * parent_t is not in transaction already, so
-			 * it must be just committed. Let's do some paranoid
-			 * checks then.
+			 * parent does not exist in global ruleset yet,
+			 * then move the parent there with its children too.
 			 */
-			if (parent_g->ruleset.rules.version != 0)
-				panic(
-				    "%s(%p, %p) %p (%s) version (%d) "
-				    "should be 0\n",
-				    __func__, child, t, parent_g,
-				    parent_g->path,
-				    parent_g->ruleset.rules.version);
-
-			/*
-			 * if parent is not in transaction, the child must refer
-			 * to parent in global ruleset already.
-			 */
-			if (child->parent != parent_g)
-				panic(
-				    "%s(%p, %p), child->parent (%p) != "
-				    "parent_t (%p), [ %s ]\n", __func__, child,
-				    t, child->parent, parent_g, child->path);
-
-			/*
-			 * the child must be also present in global parent
-			 */
-			if (RB_FIND(pf_anchor_node,
-			    &parent_g->children, &t->key) != child)
-				panic(
-				    "%s(%p, %p), child [%s] not found in "
-				    "global parent (%p)\n", __func__,
-				    child, t, child->path, parent_g);
+			log(LOG_ERR, "%s move parent to global %s %p\n", __func__, child->path, child);
+			RB_REMOVE(pf_anchor_global, &t->rc.anchors, child->parent);
+			(void) RB_INSERT(pf_anchor_global, &pf_global.anchors,
+			    child->parent);
 		} else {
+			log(LOG_ERR, "%s parent exists in global %s %p\n", __func__, child->path, child);
+			parent_t = RB_FIND(pf_anchor_global, &t->rc.anchors,
+			    child->parent);
 			/*
-			 * we found suitable parent anchor in both trees:
-			 * 	transaction tree
-			 *	global tree
-			 * it means we just happen to be updating a global
-			 * anchor. In this case we update one-by-one only.
+			 * parent may exist in both trees:
+			 *	global and transaction.
+			 * if it is the case, then we must move child from
+			 * transaction tree to global tree.
+			 * There is no action for us otherwise, because global
+			 * tree is up-to-date.
 			 */
-			RB_REMOVE(pf_anchor_node, &parent_t->children, child);
-			parent_t->refcnt--;
-			RB_INSERT(pf_anchor_node, &parent_g->children, child);
-			parent_g->refcnt++;
-			if (parent_t->ruleset.rules.version !=
-			    parent_g->ruleset.rules.version)
-				panic("%s(%p, %p), version mismatch "
-				    "[ %p/%d, %p/%d ]\n", __func__, child, t,
-				    parent_t, parent_t->ruleset.rules.version,
-				    parent_g, parent_g->ruleset.rules.version);
-			/*
-			 * update global ruleset version, when transaction
-			 * nodes become empty.
-			 */
-			if (RB_EMPTY(&parent_t->children))
-				parent_g->ruleset.rules.version++;
+			if (parent_t != NULL) {
+				RB_REMOVE(pf_anchor_node, &parent_t->children,
+				    child);
+				parent_t = RB_INSERT(pf_anchor_node,
+			 	   &parent_g->children, child);
+				KASSERT(parent_t == NULL);
+			} else {
+				KASSERT(RB_FIND(pf_anchor_node,
+				    &parent_g->children, child) != NULL);
+			}
 		}
-	} else {
-		/*
-		 * parent ruleset not found in global tree, just move the whole
-		 * anchor from transaction to tree and bump revision number.
-		 */
-		RB_REMOVE(pf_anchor_global, &t->rc.anchors, child);
-		parent_g = RB_INSERT(pf_anchor_global, &pf_global.anchors,
-		    child);
-		if (parent_g != NULL)
-			panic("%s should not happen\n", __func__);
+		if (child->parent->parent != NULL)
+			pf_update_parent(child->parent, t);
 	}
 }
 
@@ -1155,6 +1107,7 @@ pf_update_anchor(struct pf_rule *r, struct pf_trans *t)
 		log(LOG_ERR, "%s found parent %p (%s)\n", __func__,  rs, rs->anchor->path);
 		pf_swap_rules(rs, &r->anchor->ruleset, t);
 	} else if ((rs = pf_find_ruleset(&t->rc, r->anchor->path)) != NULL) {
+		KASSERT(rs == &r->anchor->ruleset);
 		log(LOG_ERR, "%s no parrent found in global %p (%s)\n", __func__,  rs, rs->anchor->path);
 		/*
 		 * anchor not found in global tree, so we will move
@@ -1164,6 +1117,7 @@ pf_update_anchor(struct pf_rule *r, struct pf_trans *t)
 		 */
 		RB_REMOVE(pf_anchor_global, &t->rc.anchors, rs->anchor);
 		RB_INSERT(pf_anchor_global, &pf_global.anchors, rs->anchor);
+		rs->anchor->ruleset.rules.version++;
 		TAILQ_FOREACH(r, rs->rules.ptr, entries) {
 			if (r->anchor != NULL)
 				pf_update_anchor(r, t);
@@ -1209,6 +1163,7 @@ pf_swap_rules(struct pf_ruleset *grs, struct pf_ruleset *trs,
 	}
 
 	grs->rules.rcount = tmp.rules.rcount;
+	grs->rules.version++;
 	TAILQ_CONCAT(grs->rules.ptr, tmp.rules.ptr, entries);
 	TAILQ_FOREACH(r, grs->rules.ptr, entries) {
 		/*
@@ -3192,7 +3147,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			}
 			pf_swap_rules(&pf_main_ruleset,
 			    &t->rc.main_anchor.ruleset, t);
-			pf_main_ruleset.rules.version++;
 		}
 
 		/*
