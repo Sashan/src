@@ -305,13 +305,14 @@ pf_get_ruleset_version(const char *path)
 	NET_LOCK();
 	PF_LOCK();
 	rs = pf_find_ruleset(&pf_global, path);
-	if (rs != NULL) {
-		rs->rules.version++;
+	if (rs != NULL)
 		version = rs->rules.version;
-	} else
+	else
 		version = 0;
 	PF_UNLOCK();
 	NET_UNLOCK();
+	log(LOG_ERR, "%s @ %d found %p for %s, version: %d\n",
+	    __func__, __LINE__, rs, path, version);
 
 	return (version);
 }

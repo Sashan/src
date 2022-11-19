@@ -391,11 +391,13 @@ pfctl_clear_rules(int dev, int opts, char *anchorname)
 	}
 	e.type = PF_TRANS_RULESET;
 
+	t.array = e.anchor;
 	if (ioctl(dev, DIOCXBEGIN, &t) != 0) {
 		pfctl_err(opts, 1, "%s DIOCXBEGIN (%s)\n", __func__,
 		    strerror(errno));
 		return (1);
 	}
+	t.array = NULL;
 
 	PF_SET_TRANS(&t, e, 1);
 	if (ioctl(dev, DIOCXRULESET, &t) != 0) {
@@ -1604,8 +1606,11 @@ pfctl_rules(int dev, char *filename, int opts, int optimize,
 	if (trans == NULL) {
 		bzero(&tr, sizeof(tr));
 		if ((opts & PF_OPT_NOACTION) == 0) {
+			if ((anchorname != NULL) && (anchorname[0] != '\0'))
+				tr.array = anchorname;
 			if (ioctl(dev, DIOCXBEGIN, &tr))
 				ERRX("pfctl_rules: DIOCXBEGIN");
+			tr.array = NULL;
 		}
 		pf.trans = &tr;
 	} else {

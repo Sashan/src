@@ -1862,7 +1862,7 @@ pfr_ina_begin(struct pf_trans *t, u_int32_t *version, const char *anchor)
 		return (ENOMEM);
 
 	rs->rules.version = pf_get_ruleset_version(anchor);
-	rs->topen = 1;
+	/* rs->topen = 1; */
 	*version = rs->rules.version;
 
 	return (0);

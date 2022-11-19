@@ -228,18 +228,17 @@ struct pf_trans_set {
 #define	PF_TSET_REASS		0x08
 
 struct pf_trans {
-	pid_t			pid;		/* process id */
-	uint64_t		ticket;
 	LIST_ENTRY(pf_trans)	entry;
 	struct pf_rules_container
 				rc;
-	struct pf_anchor_global	done;
-	struct pf_anchor	key;
-	char			modify_defaults;
-	uint32_t		default_vers;
+	unsigned		pool_limits[PF_LIMIT_MAX];
 	struct pf_rule		default_rule;
 	struct pf_trans_set	trans_set;
-	unsigned		pool_limits[PF_LIMIT_MAX];
+	char			anchor_path[PATH_MAX];
+	pid_t			pid;		/* process id */
+	uint64_t		ticket;
+	uint32_t		default_vers;
+	char			modify_defaults;
 };
 
 extern struct task	pf_purge_task;

@@ -260,6 +260,8 @@ pfattach(int num)
 
 	/* XXX do our best to avoid a conflict */
 	pf_status.hostid = arc4random();
+
+	pf_main_ruleset.rules.version = 1;
 }
 
 int
@@ -539,7 +541,11 @@ pf_begin_rules(struct pf_trans *t, const char *anchor)
 	if ((rs = pf_find_or_create_ruleset(&t->rc, anchor)) == NULL)
 		return (EINVAL);
 
-	rs->rules.version = pf_get_ruleset_version(anchor);
+	rs->rules.version = pf_get_ruleset_version(
+	    (rs == &t->rc.main_anchor.ruleset) ? "" : rs->anchor->path);
+	log(LOG_ERR, "%s @ %d version: %d, %s vs. %s\n",
+	    __func__, __LINE__, rs->rules.version, anchor,
+	    (rs == &t->rc.main_anchor.ruleset) ? "" : rs->anchor->path);
 
 	return (0);
 }
@@ -1098,16 +1104,17 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 }
 
 void
-pf_update_anchor(struct pf_rule *r, struct pf_trans *t)
+pf_update_anchor(struct pf_anchor *a, struct pf_trans *t)
 {
 	struct pf_ruleset *rs;
+	struct pf_rule *r;
 
-	rs = pf_find_ruleset(&pf_global, r->anchor->path);
+	rs = pf_find_ruleset(&pf_global, a->path);
 	if (rs != NULL) {
 		log(LOG_ERR, "%s found parent %p (%s)\n", __func__,  rs, rs->anchor->path);
-		pf_swap_rules(rs, &r->anchor->ruleset, t);
-	} else if ((rs = pf_find_ruleset(&t->rc, r->anchor->path)) != NULL) {
-		KASSERT(rs == &r->anchor->ruleset);
+		pf_swap_rules(rs, &a->ruleset, t);
+	} else if ((rs = pf_find_ruleset(&t->rc, a->path)) != NULL) {
+		KASSERT(rs == &a->ruleset);
 		log(LOG_ERR, "%s no parrent found in global %p (%s)\n", __func__,  rs, rs->anchor->path);
 		/*
 		 * anchor not found in global tree, so we will move
@@ -1117,10 +1124,9 @@ pf_update_anchor(struct pf_rule *r, struct pf_trans *t)
 		 */
 		RB_REMOVE(pf_anchor_global, &t->rc.anchors, rs->anchor);
 		RB_INSERT(pf_anchor_global, &pf_global.anchors, rs->anchor);
-		rs->anchor->ruleset.rules.version++;
 		TAILQ_FOREACH(r, rs->rules.ptr, entries) {
 			if (r->anchor != NULL)
-				pf_update_anchor(r, t);
+				pf_update_anchor(r->anchor, t);
 		}
 
 		if (rs->anchor->parent != NULL) {
@@ -1128,8 +1134,57 @@ pf_update_anchor(struct pf_rule *r, struct pf_trans *t)
 			pf_update_parent(rs->anchor, t);
 		}
 	} else {
-		panic("%s anchor (%s\\%s) [%p] not found\n",
-		    __func__, r->anchor->name, r->anchor->path, r->anchor);
+		panic("%s anchor (%s\\%s) [%p] not found\n", __func__, a->name,
+		    a->path, a);
+	}
+}
+
+void
+pf_remove_orphans(struct pf_trans *t)
+{
+	struct pf_rule *r;
+	struct pf_anchor *a, *g;
+
+	/*
+	 * r->anchor still refers to anchors kept in pf_global
+	 */
+	TAILQ_FOREACH(r, t->rc.main_anchor.ruleset.rules.ptr, entries) {
+		if (r->anchor != NULL) {
+			r->anchor->refcnt--;
+			log(LOG_ERR, "%s:%d removing %s (refcnt: %d, rules are %s empty, children are %s empty, topen: %d, tables: %d\n",
+				__func__, __LINE__, r->anchor->path, r->anchor->refcnt,
+				TAILQ_EMPTY(r->anchor->ruleset.rules.ptr) ? "" : "not",
+				RB_EMPTY(&r->anchor->children) ? "" : "not",
+				r->anchor->ruleset.topen, r->anchor->ruleset.tables);
+			pf_remove_if_empty_ruleset(&pf_global,
+			    &r->anchor->ruleset);
+			r->anchor = NULL;
+		}
+	}
+
+	RB_FOREACH(a, pf_anchor_global, &t->rc.anchors) {
+		TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
+			if (r->anchor != NULL) {
+				r->anchor->refcnt--;
+				log(LOG_ERR, "%s:%d removing %s (refcnt: %d, rules are %s empty, children are %s empty, topen: %d, tables: %d\n",
+				    __func__, __LINE__, r->anchor->path, r->anchor->refcnt,
+				    TAILQ_EMPTY(r->anchor->ruleset.rules.ptr) ? "" : "not",
+				    RB_EMPTY(&r->anchor->children) ? "" : "not",
+				    r->anchor->ruleset.topen, r->anchor->ruleset.tables);
+				pf_remove_if_empty_ruleset(&pf_global,
+				    &r->anchor->ruleset);
+				r->anchor = NULL;
+			}
+		}
+		g = RB_FIND(pf_anchor_global, &pf_global.anchors, a);
+		if (g != NULL) {
+			log(LOG_ERR, "%s:%d removing %s (refcnt: %d, rules are %s empty, children are %s empty, topen: %d, tables: %d\n",
+			    __func__, __LINE__, g->path, g->refcnt,
+			    TAILQ_EMPTY(g->ruleset.rules.ptr) ? "" : "not",
+			    RB_EMPTY(&g->children) ? "" : "not",
+			    g->ruleset.topen, g->ruleset.tables);
+			pf_remove_if_empty_ruleset(&pf_global, &g->ruleset);
+		}
 	}
 }
 
@@ -1149,18 +1204,6 @@ pf_swap_rules(struct pf_ruleset *grs, struct pf_ruleset *trs,
 
 	trs->rules.rcount = grs->rules.rcount;
 	TAILQ_CONCAT(trs->rules.ptr, grs->rules.ptr, entries);
-	TAILQ_FOREACH(r, trs->rules.ptr, entries) {
-		if (r->anchor != NULL) {
-			KASSERT(r->anchor->refcnt > 1);
-			r->anchor->refcnt--;
-			r->anchor = NULL;
-			/*
-			 * looks like we will have to walk a tree
-			 * and find orphaned rulesets before we
-			 * will be done with transaction.
-			 */
-		}
-	}
 
 	grs->rules.rcount = tmp.rules.rcount;
 	grs->rules.version++;
@@ -1172,7 +1215,7 @@ pf_swap_rules(struct pf_ruleset *grs, struct pf_ruleset *trs,
 		 * in global ruleset.
 		 */
 		if (r->anchor != NULL)
-			pf_update_anchor(r, t);
+			pf_update_anchor(r->anchor, t);
 	}
 	log(LOG_ERR, "<- %s\n", __func__);
 }
@@ -3025,7 +3068,12 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t->default_rule = pf_default_rule;
 		t->default_vers = pf_default_vers;
 
-		io->ticket = t->ticket;
+		if (io->array != NULL)
+			error = copyinstr(io->array, t->anchor_path,
+			    sizeof(t->anchor_path), NULL);
+
+		if (error == 0)
+			io->ticket = t->ticket;
 		break;
 	}
 
@@ -3048,9 +3096,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pf_ruleset	*rs;
 		struct pf_anchor	*ta;
-/*
-		struct pf_rule		*r;
-*/
 		struct pool		*pp;
 		int			 i, bailout = 0;
 		u_int32_t		 version;
@@ -3071,14 +3116,11 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		NET_LOCK();
 		PF_LOCK();	/* the first pass can be r-lock */
 
-		/*
-		 * main ruleset always exists, therefore it can never have
-		 * version 0. If main ruleset in transaction comes with 0, then
-		 * transaction does not intend to modify it.
-		 */
-		version = t->rc.main_anchor.ruleset.rules.version;
-		bailout = ((version != 0) &&
-		    (version != pf_main_ruleset.rules.version));
+		if (t->anchor_path[0] != '\0') {
+			version = t->rc.main_anchor.ruleset.rules.version;
+			bailout = ((version != 0) &&
+			    (version != pf_main_ruleset.rules.version));
+		}
 
 		log(LOG_ERR, "%s:%s @ %d bailout: %d\n", __func__, pfioctl_name(cmd), __LINE__, bailout);
 		/* check if defaults can be modified/updated */
@@ -3086,7 +3128,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			bailout = (t->default_vers != pf_default_vers);
 			for (i = 0; i < PF_LIMIT_MAX && bailout == 0; i++) {
 				pp = (struct pool *)pf_pool_limits[i].pp;
-				if (pp->pr_nout > t->pool_limits[i]) {
+				if (t->pool_limits[i] > 0 && pp->pr_nout > t->pool_limits[i]) {
 					log(LOG_WARNING,
 					    "pr_nout (%u) exceeds new "
 					    "limit (%u) for %s\n",
@@ -3113,8 +3155,13 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 					    (version != rs->rules.version);
 				else
 					bailout = (version != 0);
-				if (bailout != 0)
+
+				if (bailout != 0) {
+					log(LOG_ERR, "%s:%s @ %d %s (rs: %p) tversion: %d vs. version: %d\n",
+					    __func__, pfioctl_name(cmd), __LINE__, ta->path, rs, version,
+					    (rs == NULL) ? 0 : rs->rules.version);
 					break;
+				}
 			}
 		}
 
@@ -3134,8 +3181,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		NET_LOCK();
 		PF_LOCK();
 		log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
-		version = t->rc.main_anchor.ruleset.rules.version;
-		if (version != 0) {
+		if (t->anchor_path[0] == '\0') {
 			if (t->rc.main_anchor.ruleset.topen) {
 				/*
 				 * TODO: handle tables:
@@ -3147,57 +3193,15 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			}
 			pf_swap_rules(&pf_main_ruleset,
 			    &t->rc.main_anchor.ruleset, t);
-		}
-
-		/*
-		 * the rough plan here is as follows:
-		 * walk all rulesets found in transaction. every ruleset
-		 * with tables attached reset all tables.
-		 *
-		 * create/update rulesets in global container
-		 *
-		 * create/update tables in global container
-		 */
-		log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
-#if 0
-		while (!RB_EMPTY(&t->rc.anchors)) {
-			ta = RB_MIN(pf_anchor_global, &t->rc.anchors);
+		} else {
 			log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
-			RB_REMOVE(pf_anchor_global, &t->rc.anchors, ta);
-			log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
-			rs = pf_find_ruleset(&pf_global, ta->path);
-			log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
-			if (rs != NULL) {
-				log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
-				pf_swap_rules(rs, &ta->ruleset, t);
-				rs->rules.version++;
-				/*
-				 * TODO there are few things we need to sort
-				 * out:
-				 *	- must make sure ->anchor found in
-				 *	  each rule instance gets updated
-				 *	  to point to anchor found in global
-				 *	  ruleset
-				 *
-				 *	- remove empty rulesets.
-				 */
-				RB_INSERT(pf_anchor_global, &t->done, ta);
-				log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
-				pf_remove_if_empty_ruleset(&pf_global, rs);
-				log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
-			} else {
-				log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
-				RB_INSERT(pf_anchor_global, &pf_global.anchors,
-				    ta);
-				log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
-				TAILQ_FOREACH(r, rs->rules.ptr, entries) {
-					if (r->anchor != NULL)
-						pf_update_anchor(r, t);
-				}
-				log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
+			rs = pf_find_ruleset(&t->rc, t->anchor_path);
+			if (rs == NULL) {
+				error = ENOENT;
+				goto fail;
 			}
+			pf_update_anchor(rs->anchor, t);
 		}
-#endif
 		log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 
 		if (t->modify_defaults) {
@@ -3252,6 +3256,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 		pfi_xcommit();
 		pf_trans_set_commit(&t->trans_set);
+		pf_remove_orphans(t);
 		PF_UNLOCK();
 		NET_UNLOCK();
 		/*
@@ -3791,6 +3796,7 @@ pf_open_trans(pid_t pid)
 	RB_INIT(&t->rc.anchors);
 	RB_INIT(&t->rc.ktables);
 	pf_init_ruleset(&t->rc.main_anchor.ruleset);
+	memset(t->anchor_path, 0, sizeof(t->anchor_path));
 
 	LIST_INSERT_HEAD(&pf_ioctl_trans, t, entry);
 
