@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.88 2022/10/10 11:33:55 tobhe Exp $	*/
+/*	$OpenBSD: config.c,v 1.90 2022/11/18 18:56:39 mbuhl Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>

@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfvar_priv.h,v 1.12 2022/11/07 16:35:12 dlg Exp $	*/
+/*	$OpenBSD: pfvar_priv.h,v 1.21 2022/11/11 17:12:30 dlg Exp $	*/
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -41,6 +41,64 @@
 #include <sys/mutex.h>
 #include <sys/queue.h>
 #include <net/pfvar.h>
+
+/*
+ * Protection/ownership of pf_state members:
+ *	I	immutable after creation
+ *	M	pf_state mtx
+ *	P	PF_STATE_LOCK
+ *	S	pfsync mutex
+ *	L	pf_state_list
+ *	g	pf_purge gc
+ */
+
+struct pf_state {
+	u_int64_t		 id;		/* [I] */
+	u_int32_t		 creatorid;	/* [I] */
+	u_int8_t		 direction;	/* [I] */
+	u_int8_t		 pad[3];
+
+	TAILQ_ENTRY(pf_state)	 sync_list;	/* [S] */
+	TAILQ_ENTRY(pf_state)	 sync_snap;	/* [S] */
+	TAILQ_ENTRY(pf_state)	 entry_list;	/* [L] */
+	SLIST_ENTRY(pf_state)	 gc_list;	/* [g] */
+	RB_ENTRY(pf_state)	 entry_id;	/* [P] */
+	struct pf_state_peer	 src;
+	struct pf_state_peer	 dst;
+	struct pf_rule_slist	 match_rules;	/* [I] */
+	union pf_rule_ptr	 rule;		/* [I] */
+	union pf_rule_ptr	 anchor;	/* [I] */
+	union pf_rule_ptr	 natrule;	/* [I] */
+	struct pf_addr		 rt_addr;	/* [I] */
+	struct pf_sn_head	 src_nodes;	/* [I] */
+	struct pf_state_key	*key[2];	/* stack and wire  */
+	struct pfi_kif		*kif;		/* [I] */
+	struct mutex		 mtx;
+	pf_refcnt_t		 refcnt;
+	u_int64_t		 packets[2];
+	u_int64_t		 bytes[2];
+	int32_t			 creation;	/* [I] */
+	int32_t			 expire;
+	int32_t			 pfsync_time;
+	int			 rtableid[2];	/* [I] rtables stack and wire */
+	u_int16_t		 qid;		/* [I] */
+	u_int16_t		 pqid;		/* [I] */
+	u_int16_t		 tag;		/* [I] */
+	u_int16_t		 state_flags;
+	u_int8_t		 log;		/* [I] */
+	u_int8_t		 timeout;
+	u_int8_t		 sync_state;	/* PFSYNC_S_x */
+	u_int8_t		 sync_updates;
+	u_int8_t		 min_ttl;	/* [I] */
+	u_int8_t		 set_tos;	/* [I] */
+	u_int8_t		 set_prio[2];	/* [I] */
+	u_int16_t		 max_mss;	/* [I] */
+	u_int16_t		 if_index_in;	/* [I] */
+	u_int16_t		 if_index_out;	/* [I] */
+	u_int16_t		 delay;		/* [I] */
+	u_int8_t		 rt;		/* [I] */
+	u_int8_t		 snapped;	/* [S] */
+};
 
 /*
  *
@@ -211,6 +269,8 @@ struct pf_pdesc {
 	} hdr;
 };
 
+extern struct timeout	pf_purge_states_to;
+
 struct pf_trans_set {
 	char		statusif[IFNAMSIZ];
 	u_int32_t	debug;
@@ -294,6 +354,11 @@ extern struct rwlock	pf_state_lock;
 			    rw_status(&pf_state_lock), __func__);\
 	} while (0)
 
+/* for copies to/from network byte order */
+void			pf_state_peer_hton(const struct pf_state_peer *,
+			    struct pfsync_state_peer *);
+void			pf_state_peer_ntoh(const struct pfsync_state_peer *,
+			    struct pf_state_peer *);
 extern void			 pf_purge_timeout(void *);
 extern void			 pf_purge(void *);
 extern u_int32_t		 pf_get_ruleset_version(const char *);

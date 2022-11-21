@@ -1,4 +1,4 @@
-/*	$OpenBSD: btrace.c,v 1.63 2022/06/02 21:38:46 jca Exp $ */
+/*	$OpenBSD: btrace.c,v 1.67 2022/11/12 14:19:08 mpi Exp $ */
 
 /*
  * Copyright (c) 2019 - 2021 Martin Pieuchot <mpi@openbsd.org>
@@ -434,14 +434,23 @@ rules_setup(int fd)
 	struct bt_rule *r, *rbegin = NULL;
 	struct bt_probe *bp;
 	struct bt_stmt *bs;
+	struct bt_arg *ba;
 	int dokstack = 0, on = 1;
 	uint64_t evtflags;
 
 	TAILQ_FOREACH(r, &g_rules, br_next) {
 		evtflags = 0;
-		SLIST_FOREACH(bs, &r->br_action, bs_next) {
-			struct bt_arg *ba;
 
+		if (r->br_filter != NULL &&
+		    r->br_filter->bf_condition != NULL)  {
+
+			bs = r->br_filter->bf_condition;
+			ba = SLIST_FIRST(&bs->bs_args);
+
+			evtflags |= ba2dtflags(ba);
+		}
+
+		SLIST_FOREACH(bs, &r->br_action, bs_next) {
 			SLIST_FOREACH(ba, &bs->bs_args, ba_next)
 				evtflags |= ba2dtflags(ba);
 
@@ -599,8 +608,16 @@ rule_eval(struct bt_rule *r, struct dt_evt *dtev)
 	}
 
 	SLIST_FOREACH(bs, &r->br_action, bs_next) {
-		if ((bs->bs_act == B_AC_TEST) && stmt_test(bs, dtev) == true)
-			stmt_eval((struct bt_stmt *)bs->bs_var, dtev);
+		if ((bs->bs_act == B_AC_TEST) && stmt_test(bs, dtev) == true) {
+			struct bt_stmt *bbs = (struct bt_stmt *)bs->bs_var;
+
+			while (bbs != NULL) {
+				stmt_eval(bbs, dtev);
+				bbs = SLIST_NEXT(bbs, bs_next);
+			}
+
+			continue;
+		}
 
 		stmt_eval(bs, dtev);
 	}
@@ -947,6 +964,8 @@ stmt_store(struct bt_stmt *bs, struct dt_evt *dtev)
 		bv->bv_value = ba_new(builtin_nsecs(dtev), B_AT_LONG);
 		bv->bv_type = B_VT_LONG;
 		break;
+	case B_AT_BI_ARG0 ... B_AT_BI_ARG9:
+	/* FALLTHROUGH */
 	case B_AT_OP_PLUS ... B_AT_OP_LOR:
 		bv->bv_value = ba_new(ba2long(ba, dtev), B_AT_LONG);
 		bv->bv_type = B_VT_LONG;
@@ -1175,6 +1194,36 @@ baexpr2long(struct bt_arg *ba, struct dt_evt *dtev)
 	lhs = ba->ba_value;
 	rhs = SLIST_NEXT(lhs, ba_next);
 
+	/*
+	 * String comparison also use '==' and '!='.
+	 */
+	if (lhs->ba_type == B_AT_STR ||
+	    (rhs != NULL && rhs->ba_type == B_AT_STR)) {
+	    	char lstr[STRLEN], rstr[STRLEN];
+
+		strlcpy(lstr, ba2str(lhs, dtev), sizeof(lstr));
+		strlcpy(rstr, ba2str(rhs, dtev), sizeof(rstr));
+
+	    	result = strncmp(lstr, rstr, STRLEN) == 0;
+
+		switch (ba->ba_type) {
+		case B_AT_OP_EQ:
+			break;
+		case B_AT_OP_NE:
+	    		result = !result;
+			break;
+		default:
+			warnx("operation '%d' unsupported on strings",
+			    ba->ba_type);
+			result = 1;
+		}
+
+		debug("ba=%p eval '(%s %s %s) = %d'\n", ba, lstr, ba_name(ba),
+		   rstr, result);
+
+		goto out;
+	}
+
 	lval = ba2long(lhs, dtev);
 	if (rhs == NULL) {
 		rval = 0;
@@ -1230,12 +1279,13 @@ baexpr2long(struct bt_arg *ba, struct dt_evt *dtev)
 		result = (lval || rval);
 		break;
 	default:
-		xabort("unsuported operation %d", ba->ba_type);
+		xabort("unsupported operation %d", ba->ba_type);
 	}
 
-	debug("ba=%p eval '%ld %s %ld = %d'\n", ba, lval, ba_name(ba),
+	debug("ba=%p eval '(%ld %s %ld) = %d'\n", ba, lval, ba_name(ba),
 	   rval, result);
 
+out:
 	--recursions;
 
 	return result;
@@ -1245,10 +1295,15 @@ const char *
 ba_name(struct bt_arg *ba)
 {
 	switch (ba->ba_type) {
+	case B_AT_STR:
+		return (const char *)ba->ba_value;
+	case B_AT_LONG:
+		return ba2str(ba, NULL);
 	case B_AT_NIL:
 		return "0";
 	case B_AT_VAR:
 	case B_AT_MAP:
+	case B_AT_HIST:
 		break;
 	case B_AT_BI_PID:
 		return "pid";
@@ -1323,10 +1378,11 @@ ba_name(struct bt_arg *ba)
 	case B_AT_OP_LOR:
 		return "||";
 	default:
-		xabort("unsuported type %d", ba->ba_type);
+		xabort("unsupported type %d", ba->ba_type);
 	}
 
-	assert(ba->ba_type == B_AT_VAR || ba->ba_type == B_AT_MAP);
+	assert(ba->ba_type == B_AT_VAR || ba->ba_type == B_AT_MAP ||
+	    ba->ba_type == B_AT_HIST);
 
 	static char buf[64];
 	size_t sz;
@@ -1516,8 +1572,12 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 int
 ba2dtflags(struct bt_arg *ba)
 {
+	static long recursions;
 	struct bt_arg *bval;
 	int flags = 0;
+
+	if (++recursions >= __MAXOPERANDS)
+		errx(1, "too many operands (>%d) in expression", __MAXOPERANDS);
 
 	do {
 		if (ba->ba_type == B_AT_MAP)
@@ -1557,12 +1617,16 @@ ba2dtflags(struct bt_arg *ba)
 		case B_AT_MF_MIN:
 		case B_AT_MF_SUM:
 		case B_AT_FN_STR:
+			break;
 		case B_AT_OP_PLUS ... B_AT_OP_LOR:
+			flags |= ba2dtflags(bval->ba_value);
 			break;
 		default:
 			xabort("invalid argument type %d", bval->ba_type);
 		}
 	} while ((ba = SLIST_NEXT(ba, ba_next)) != NULL);
+
+	--recursions;
 
 	return flags;
 }

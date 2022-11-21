@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2.c,v 1.357 2022/11/07 22:39:52 tobhe Exp $	*/
+/*	$OpenBSD: ikev2.c,v 1.359 2022/11/18 18:56:39 mbuhl Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>

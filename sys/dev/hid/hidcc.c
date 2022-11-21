@@ -1,4 +1,4 @@
-/*	$OpenBSD: hidcc.c,v 1.1 2022/11/11 06:46:48 anton Exp $	*/
+/*	$OpenBSD: hidcc.c,v 1.5 2022/11/14 00:16:44 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2022 Anton Lindqvist <anton@openbsd.org>
@@ -19,6 +19,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
+#include <sys/device.h>
 
 #include <dev/hid/hidccvar.h>
 #include <dev/hid/hid.h>
@@ -163,8 +164,8 @@ static const struct hidcc_keysym hidcc_keysyms[] = {
 	N(0x006C,	"Yellow Menu Button",				0,		0)
 	N(0x006D,	"Aspect",					0,		0)
 	N(0x006E,	"3D Mode Select",				0,		0)
-	N(0x006F,	"Display Brightness Increment",			0,		0)
-	N(0x0070,	"Display Brightness Decrement",			0,		0)
+	Y(0x006F,	"Display Brightness Increment",			KS_Cmd_BrightnessUp,		0)
+	Y(0x0070,	"Display Brightness Decrement",			KS_Cmd_BrightnessDown,		0)
 	N(0x0071,	"Display Brightness",				0,		0)
 	N(0x0072,	"Display Backlight Toggle",			0,		0)
 	N(0x0073,	"Display Set Brightness to Minimum",		0,		0)
@@ -696,12 +697,8 @@ hidcc_intr(struct hidcc *sc, void *data, u_int len)
 
 	hidcc_dump(sc, __func__, data, len);
 
-	if (len > sc->sc_input.i_bufsiz) {
-		DPRINTF("%s: too much data: len %d, bufsiz %d\n", DEVNAME(sc),
-		    len, sc->sc_input.i_bufsiz);
-		return;
-	}
-
+	if (len > sc->sc_input.i_bufsiz)
+		len = sc->sc_input.i_bufsiz;
 	error = hidcc_intr_slice(sc, data, buf, &len);
 	if (error) {
 		DPRINTF("%s: slice failure: error %d\n", DEVNAME(sc), error);

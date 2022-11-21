@@ -1806,6 +1806,7 @@
 ./usr/share/man/man3/BN_BLINDING_new.3
 ./usr/share/man/man3/BN_CTX_new.3
 ./usr/share/man/man3/BN_CTX_start.3
+./usr/share/man/man3/BN_GF2m_add.3
 ./usr/share/man/man3/BN_add.3
 ./usr/share/man/man3/BN_add_word.3
 ./usr/share/man/man3/BN_bn2bin.3
@@ -1813,9 +1814,11 @@
 ./usr/share/man/man3/BN_copy.3
 ./usr/share/man/man3/BN_generate_prime.3
 ./usr/share/man/man3/BN_get0_nist_prime_521.3
+./usr/share/man/man3/BN_kronecker.3
 ./usr/share/man/man3/BN_mod_inverse.3
 ./usr/share/man/man3/BN_mod_mul_montgomery.3
 ./usr/share/man/man3/BN_mod_mul_reciprocal.3
+./usr/share/man/man3/BN_mod_sqrt.3
 ./usr/share/man/man3/BN_new.3
 ./usr/share/man/man3/BN_num_bytes.3
 ./usr/share/man/man3/BN_rand.3

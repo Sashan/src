@@ -1,4 +1,4 @@
-/* $OpenBSD: eck_prn.c,v 1.18 2022/11/10 12:37:00 tobhe Exp $ */
+/* $OpenBSD: eck_prn.c,v 1.20 2022/11/19 07:29:29 tb Exp $ */
 /*
  * Written by Nils Larsch for the OpenSSL project.
  */
@@ -69,8 +69,8 @@
 #include <openssl/err.h>
 #include <openssl/evp.h>
 
-int 
-ECPKParameters_print_fp(FILE * fp, const EC_GROUP * x, int off)
+int
+ECPKParameters_print_fp(FILE *fp, const EC_GROUP *x, int off)
 {
 	BIO *b;
 	int ret;
@@ -85,8 +85,8 @@ ECPKParameters_print_fp(FILE * fp, const EC_GROUP * x, int off)
 	return (ret);
 }
 
-int 
-EC_KEY_print_fp(FILE * fp, const EC_KEY * x, int off)
+int
+EC_KEY_print_fp(FILE *fp, const EC_KEY *x, int off)
 {
 	BIO *b;
 	int ret;
@@ -101,8 +101,8 @@ EC_KEY_print_fp(FILE * fp, const EC_KEY * x, int off)
 	return (ret);
 }
 
-int 
-ECParameters_print_fp(FILE * fp, const EC_KEY * x)
+int
+ECParameters_print_fp(FILE *fp, const EC_KEY *x)
 {
 	BIO *b;
 	int ret;
@@ -117,8 +117,8 @@ ECParameters_print_fp(FILE * fp, const EC_KEY * x)
 	return (ret);
 }
 
-int 
-EC_KEY_print(BIO * bp, const EC_KEY * x, int off)
+int
+EC_KEY_print(BIO *bp, const EC_KEY *x, int off)
 {
 	EVP_PKEY *pk;
 	int ret = 0;
@@ -135,8 +135,8 @@ EC_KEY_print(BIO * bp, const EC_KEY * x, int off)
 	return ret;
 }
 
-int 
-ECParameters_print(BIO * bp, const EC_KEY * x)
+int
+ECParameters_print(BIO *bp, const EC_KEY *x)
 {
 	EVP_PKEY *pk;
 	int ret = 0;
@@ -153,12 +153,12 @@ ECParameters_print(BIO * bp, const EC_KEY * x)
 	return ret;
 }
 
-static int 
-print_bin(BIO * fp, const char *str, const unsigned char *num,
+static int
+print_bin(BIO *fp, const char *str, const unsigned char *num,
     size_t len, int off);
 
-int 
-ECPKParameters_print(BIO * bp, const EC_GROUP * x, int off)
+int
+ECPKParameters_print(BIO *bp, const EC_GROUP *x, int off)
 {
 	unsigned char *buffer = NULL;
 	size_t buf_len = 0, i;
@@ -333,8 +333,8 @@ ECPKParameters_print(BIO * bp, const EC_GROUP * x, int off)
 	return (ret);
 }
 
-static int 
-print_bin(BIO * fp, const char *name, const unsigned char *buf,
+static int
+print_bin(BIO *fp, const char *name, const unsigned char *buf,
     size_t len, int off)
 {
 	size_t i;

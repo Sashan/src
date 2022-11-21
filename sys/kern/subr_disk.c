@@ -1,4 +1,4 @@
-/*	$OpenBSD: subr_disk.c,v 1.268 2022/11/10 16:12:05 krw Exp $	*/
+/*	$OpenBSD: subr_disk.c,v 1.270 2022/11/11 18:53:29 krw Exp $	*/
 /*	$NetBSD: subr_disk.c,v 1.17 1996/03/16 23:17:08 christos Exp $	*/
 
 /*

@@ -1,4 +1,4 @@
-/*	$OpenBSD: in6.c,v 1.249 2022/09/08 10:22:06 kn Exp $	*/
+/*	$OpenBSD: in6.c,v 1.251 2022/11/19 14:26:40 kn Exp $	*/
 /*	$KAME: in6.c,v 1.372 2004/06/14 08:14:21 itojun Exp $	*/
 
 /*
@@ -207,11 +207,15 @@ in6_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp)
 #ifdef MROUTING
 	case SIOCGETSGCNT_IN6:
 	case SIOCGETMIFCNT_IN6:
+		KERNEL_LOCK();
 		error = mrt6_ioctl(so, cmd, data);
+		KERNEL_UNLOCK();
 		break;
 #endif /* MROUTING */
 	default:
+		KERNEL_LOCK();
 		error = in6_ioctl(cmd, data, ifp, privileged);
+		KERNEL_UNLOCK();
 		break;
 	}
 
@@ -1602,8 +1606,6 @@ in6_domifattach(struct ifnet *ifp)
 	ext = malloc(sizeof(*ext), M_IFADDR, M_WAITOK | M_ZERO);
 
 	ext->nd_ifinfo = nd6_ifattach(ifp);
-	ext->nprefixes = 0;
-	ext->ndefrouters = 0;
 	return ext;
 }
 
