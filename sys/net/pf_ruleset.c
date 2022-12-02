@@ -239,6 +239,7 @@ pf_create_anchor(struct pf_rules_container *rc, struct pf_anchor *parent,
 
 	pf_init_ruleset(&anchor->ruleset);
 	anchor->ruleset.anchor = anchor;
+	anchor->ruleset.rules.version = pf_get_ruleset_version(anchor->path);
 
 	return (anchor);
 }
