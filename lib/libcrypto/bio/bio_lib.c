@@ -1,4 +1,4 @@
-/* $OpenBSD: bio_lib.c,v 1.36 2022/08/15 10:48:45 tb Exp $ */
+/* $OpenBSD: bio_lib.c,v 1.38 2022/11/30 01:56:18 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -161,7 +161,6 @@ BIO_set(BIO *bio, const BIO_METHOD *method)
 	bio->retry_reason = 0;
 	bio->num = 0;
 	bio->ptr = NULL;
-	bio->prev_bio = NULL;
 	bio->next_bio = NULL;
 	bio->references = 1;
 	bio->num_read = 0L;
@@ -323,11 +322,18 @@ BIO_read(BIO *b, void *out, int outl)
 	size_t readbytes = 0;
 	int ret;
 
-	if (b == NULL)
+	if (b == NULL) {
+		BIOerror(ERR_R_PASSED_NULL_PARAMETER);
+		return (-1);
+	}
+
+	if (outl <= 0)
 		return (0);
 
-	if (out == NULL || outl <= 0)
-		return (0);
+	if (out == NULL) {
+		BIOerror(ERR_R_PASSED_NULL_PARAMETER);
+		return (-1);
+	}
 
 	if (b->method == NULL || b->method->bread == NULL) {
 		BIOerror(BIO_R_UNSUPPORTED_METHOD);
@@ -373,11 +379,18 @@ BIO_write(BIO *b, const void *in, int inl)
 	size_t writebytes = 0;
 	int ret;
 
-	if (b == NULL)
+	if (b == NULL) {
+		BIOerror(ERR_R_PASSED_NULL_PARAMETER);
+		return (-1);
+	}
+
+	if (inl <= 0)
 		return (0);
 
-	if (in == NULL || inl <= 0)
-		return (0);
+	if (in == NULL) {
+		BIOerror(ERR_R_PASSED_NULL_PARAMETER);
+		return (-1);
+	}
 
 	if (b->method == NULL || b->method->bwrite == NULL) {
 		BIOerror(BIO_R_UNSUPPORTED_METHOD);
@@ -623,8 +636,6 @@ BIO_push(BIO *b, BIO *bio)
 	while (lb->next_bio != NULL)
 		lb = lb->next_bio;
 	lb->next_bio = bio;
-	if (bio != NULL)
-		bio->prev_bio = lb;
 	/* called to do internal processing */
 	BIO_ctrl(b, BIO_CTRL_PUSH, 0, lb);
 	return (b);
@@ -642,13 +653,7 @@ BIO_pop(BIO *b)
 
 	BIO_ctrl(b, BIO_CTRL_POP, 0, b);
 
-	if (b->prev_bio != NULL)
-		b->prev_bio->next_bio = b->next_bio;
-	if (b->next_bio != NULL)
-		b->next_bio->prev_bio = b->prev_bio;
-
 	b->next_bio = NULL;
-	b->prev_bio = NULL;
 	return (ret);
 }
 

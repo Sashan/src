@@ -1,4 +1,4 @@
-/*	$OpenBSD: nd6.c,v 1.250 2022/11/10 16:00:17 kn Exp $	*/
+/*	$OpenBSD: nd6.c,v 1.256 2022/11/28 19:13:36 kn Exp $	*/
 /*	$KAME: nd6.c,v 1.280 2002/06/08 19:52:07 itojun Exp $	*/
 
 /*
@@ -104,20 +104,11 @@ struct task nd6_expire_task;
 void
 nd6_init(void)
 {
-	static int nd6_init_done = 0;
-
-	if (nd6_init_done) {
-		log(LOG_NOTICE, "%s called more than once\n", __func__);
-		return;
-	}
-
 	TAILQ_INIT(&nd6_list);
 	pool_init(&nd6_pool, sizeof(struct llinfo_nd6), 0,
 	    IPL_SOFTNET, 0, "nd6", NULL);
 
 	task_set(&nd6_expire_task, nd6_expire, NULL);
-
-	nd6_init_done = 1;
 
 	/* start timer */
 	timeout_set_proc(&nd6_timer_to, nd6_timer, NULL);
@@ -126,25 +117,24 @@ nd6_init(void)
 	timeout_set(&nd6_expire_timeout, nd6_expire_timer, NULL);
 }
 
-struct nd_ifinfo *
+void
 nd6_ifattach(struct ifnet *ifp)
 {
 	struct nd_ifinfo *nd;
 
 	nd = malloc(sizeof(*nd), M_IP6NDP, M_WAITOK | M_ZERO);
 
-	nd->initialized = 1;
-
 	nd->basereachable = REACHABLE_TIME;
 	nd->reachable = ND_COMPUTE_RTIME(nd->basereachable);
 	nd->retrans = RETRANS_TIMER;
 
-	return nd;
+	ifp->if_nd = nd;
 }
 
 void
-nd6_ifdetach(struct nd_ifinfo *nd)
+nd6_ifdetach(struct ifnet *ifp)
 {
+	struct nd_ifinfo *nd = ifp->if_nd;
 
 	free(nd, M_IP6NDP, sizeof(*nd));
 }
@@ -356,20 +346,17 @@ nd6_llinfo_timer(struct rtentry *rt)
 	struct llinfo_nd6 *ln = (struct llinfo_nd6 *)rt->rt_llinfo;
 	struct sockaddr_in6 *dst = satosin6(rt_key(rt));
 	struct ifnet *ifp;
-	struct nd_ifinfo *ndi = NULL;
 
 	NET_ASSERT_LOCKED();
 
 	if ((ifp = if_get(rt->rt_ifidx)) == NULL)
 		return 1;
 
-	ndi = ND_IFINFO(ifp);
-
 	switch (ln->ln_state) {
 	case ND6_LLINFO_INCOMPLETE:
 		if (ln->ln_asked < nd6_mmaxtries) {
 			ln->ln_asked++;
-			nd6_llinfo_settimer(ln, ndi->retrans / 1000);
+			nd6_llinfo_settimer(ln, ifp->if_nd->retrans / 1000);
 			nd6_ns_output(ifp, NULL, &dst->sin6_addr, ln, 0);
 		} else {
 			struct mbuf *m = ln->ln_hold;
@@ -413,19 +400,16 @@ nd6_llinfo_timer(struct rtentry *rt)
 		break;
 
 	case ND6_LLINFO_DELAY:
-		if (ndi) {
-			/* We need NUD */
-			ln->ln_asked = 1;
-			ln->ln_state = ND6_LLINFO_PROBE;
-			nd6_llinfo_settimer(ln, ndi->retrans / 1000);
-			nd6_ns_output(ifp, &dst->sin6_addr,
-			    &dst->sin6_addr, ln, 0);
-		}
+		/* We need NUD */
+		ln->ln_asked = 1;
+		ln->ln_state = ND6_LLINFO_PROBE;
+		nd6_llinfo_settimer(ln, ifp->if_nd->retrans / 1000);
+		nd6_ns_output(ifp, &dst->sin6_addr, &dst->sin6_addr, ln, 0);
 		break;
 	case ND6_LLINFO_PROBE:
 		if (ln->ln_asked < nd6_umaxtries) {
 			ln->ln_asked++;
-			nd6_llinfo_settimer(ln, ndi->retrans / 1000);
+			nd6_llinfo_settimer(ln, ifp->if_nd->retrans / 1000);
 			nd6_ns_output(ifp, &dst->sin6_addr,
 			    &dst->sin6_addr, ln, 0);
 		} else {
@@ -493,7 +477,7 @@ nd6_expire(void *unused)
 		TAILQ_FOREACH_SAFE(ifa, &ifp->if_addrlist, ifa_list, nifa) {
 			if (ifa->ifa_addr->sa_family != AF_INET6)
 				continue;
-			ia6 = ifatoia6(ifaref(ifa));
+			ia6 = ifatoia6(ifa);
 			/* check address lifetime */
 			if (IFA6_IS_INVALID(ia6)) {
 				in6_purgeaddr(&ia6->ia_ifa);
@@ -771,7 +755,7 @@ nd6_nud_hint(struct rtentry *rt)
 
 	ln->ln_state = ND6_LLINFO_REACHABLE;
 	if (!ND6_LLINFO_PERMANENT(ln))
-		nd6_llinfo_settimer(ln, ND_IFINFO(ifp)->reachable);
+		nd6_llinfo_settimer(ln, ifp->if_nd->reachable);
 out:
 	if_put(ifp);
 }
@@ -1019,7 +1003,7 @@ nd6_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp)
 	switch (cmd) {
 	case SIOCGIFINFO_IN6:
 		NET_LOCK_SHARED();
-		ndi->ndi = *ND_IFINFO(ifp);
+		ndi->ndi = *ifp->if_nd;
 		NET_UNLOCK_SHARED();
 		return (0);
 	case SIOCGNBRINFO_IN6:
@@ -1300,7 +1284,7 @@ nd6_slowtimo(void *ignored_arg)
 	timeout_add_sec(&nd6_slowtimo_ch, ND6_SLOWTIMER_INTERVAL);
 
 	TAILQ_FOREACH(ifp, &ifnetlist, if_list) {
-		nd6if = ND_IFINFO(ifp);
+		nd6if = ifp->if_nd;
 		if (nd6if->basereachable && /* already initialized */
 		    (nd6if->recalctm -= ND6_SLOWTIMER_INTERVAL) <= 0) {
 			/*
@@ -1419,7 +1403,7 @@ nd6_resolve(struct ifnet *ifp, struct rtentry *rt0, struct mbuf *m,
 	 */
 	if (!ND6_LLINFO_PERMANENT(ln) && ln->ln_asked == 0) {
 		ln->ln_asked++;
-		nd6_llinfo_settimer(ln, ND_IFINFO(ifp)->retrans / 1000);
+		nd6_llinfo_settimer(ln, ifp->if_nd->retrans / 1000);
 		nd6_ns_output(ifp, NULL, &satosin6(dst)->sin6_addr, ln, 0);
 	}
 	return (EAGAIN);
