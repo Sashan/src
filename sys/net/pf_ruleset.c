@@ -317,6 +317,12 @@ pf_get_ruleset_version(const char *path)
 
 	return (version);
 }
+#else	/* !_KERNEL_ */
+u_int32_t
+pf_get_ruleset_version(const char *path)
+{
+	return (0);
+}
 #endif	/* _KERNEL */
 
 void

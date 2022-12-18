@@ -1868,6 +1868,7 @@ struct pf_anchor 	*pf_create_anchor(struct pf_rules_container *,
 struct pf_ruleset	*pf_find_or_create_ruleset(struct pf_rules_container *,
 			    const char *);
 void			 pf_rs_initialize(void);
+u_int32_t		 pf_get_ruleset_version(const char *);
 
 /* The fingerprint functions can be linked into userland programs (tcpdump) */
 int	pf_osfp_add(struct pf_osfp_ioctl *);
