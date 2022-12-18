@@ -1,4 +1,4 @@
-/* $OpenBSD: bio_lib.c,v 1.38 2022/11/30 01:56:18 jsing Exp $ */
+/* $OpenBSD: bio_lib.c,v 1.43 2022/12/16 13:41:55 schwarze Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -161,6 +161,7 @@ BIO_set(BIO *bio, const BIO_METHOD *method)
 	bio->retry_reason = 0;
 	bio->num = 0;
 	bio->ptr = NULL;
+	bio->prev_bio = NULL;
 	bio->next_bio = NULL;
 	bio->references = 1;
 	bio->num_read = 0L;
@@ -624,7 +625,11 @@ BIO_ctrl_wpending(BIO *bio)
 }
 
 
-/* put the 'bio' on the end of b's list of operators */
+/*
+ * Append "bio" to the end of the chain containing "b":
+ * Two chains "b -> lb" and "oldhead -> bio"
+ * become two chains "b -> lb -> bio" and "oldhead".
+ */
 BIO *
 BIO_push(BIO *b, BIO *bio)
 {
@@ -636,6 +641,11 @@ BIO_push(BIO *b, BIO *bio)
 	while (lb->next_bio != NULL)
 		lb = lb->next_bio;
 	lb->next_bio = bio;
+	if (bio != NULL) {
+		if (bio->prev_bio != NULL)
+			bio->prev_bio->next_bio = NULL;
+		bio->prev_bio = lb;
+	}
 	/* called to do internal processing */
 	BIO_ctrl(b, BIO_CTRL_PUSH, 0, lb);
 	return (b);
@@ -653,7 +663,13 @@ BIO_pop(BIO *b)
 
 	BIO_ctrl(b, BIO_CTRL_POP, 0, b);
 
+	if (b->prev_bio != NULL)
+		b->prev_bio->next_bio = b->next_bio;
+	if (b->next_bio != NULL)
+		b->next_bio->prev_bio = b->prev_bio;
+
 	b->next_bio = NULL;
+	b->prev_bio = NULL;
 	return (ret);
 }
 
@@ -718,10 +734,25 @@ BIO_next(BIO *b)
 	return b->next_bio;
 }
 
+/*
+ * Two chains "bio -> oldtail" and "oldhead -> next" become
+ * three chains "oldtail", "bio -> next", and "oldhead".
+ */
 void
-BIO_set_next(BIO *b, BIO *next)
+BIO_set_next(BIO *bio, BIO *next)
 {
-	b->next_bio = next;
+	/* Cut off the tail of the chain containing bio after bio. */
+	if (bio->next_bio != NULL)
+		bio->next_bio->prev_bio = NULL;
+
+	/* Cut off the head of the chain containing next before next. */
+	if (next != NULL && next->prev_bio != NULL)
+		next->prev_bio->next_bio = NULL;
+
+	/* Append the chain starting at next to the chain ending at bio. */
+	bio->next_bio = next;
+	if (next != NULL)
+		next->prev_bio = bio;
 }
 
 void

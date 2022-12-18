@@ -1,4 +1,4 @@
-/*	$OpenBSD: loader.c,v 1.204 2022/11/09 19:50:25 deraadt Exp $ */
+/*	$OpenBSD: loader.c,v 1.207 2022/12/16 03:14:52 deraadt Exp $ */
 
 /*
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
@@ -215,18 +215,14 @@ void
 _dl_clean_boot(void)
 {
 	extern char boot_text_start[], boot_text_end[];
-#if 0	/* XXX breaks boehm-gc?!? */
 	extern char boot_data_start[], boot_data_end[];
-#endif
 
 	_dl_mmap(boot_text_start, boot_text_end - boot_text_start,
 	    PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0);
 	_dl_mimmutable(boot_text_start, boot_text_end - boot_text_start);
-#if 0	/* XXX breaks boehm-gc?!? */
 	_dl_mmap(boot_data_start, boot_data_end - boot_data_start,
 	    PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0);
 	_dl_mimmutable(boot_data_start, boot_data_end - boot_data_start);
-#endif
 }
 #endif /* DO_CLEAN_BOOT */
 
@@ -625,10 +621,7 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 	 */
 	map_link = NULL;
 #ifdef __mips__
-	if (exe_obj->Dyn.info[DT_MIPS_RLD_MAP_REL - DT_LOPROC + DT_NUM] != 0)
-		map_link = (struct r_debug **)(exe_obj->Dyn.info[
-		    DT_MIPS_RLD_MAP_REL - DT_LOPROC + DT_NUM] + exe_loff);
-	else if (exe_obj->Dyn.info[DT_MIPS_RLD_MAP - DT_LOPROC + DT_NUM] != 0)
+	if (exe_obj->Dyn.info[DT_MIPS_RLD_MAP - DT_LOPROC + DT_NUM] != 0)
 		map_link = (struct r_debug **)(exe_obj->Dyn.info[
 		    DT_MIPS_RLD_MAP - DT_LOPROC + DT_NUM] + exe_loff);
 #endif
@@ -840,8 +833,10 @@ _dl_call_init_recurse(elf_object_t *object, int initfirst)
 	if (initfirst && (object->obj_flags & DF_1_INITFIRST) == 0)
 		return;
 
-	if (!initfirst)
+	if (!initfirst) {
 		_dl_relro(object);
+		_dl_apply_immutable(object);
+	}
 
 	if (object->dyn.init) {
 		DL_DEB(("doing ctors obj %p @%p: [%s]\n",
@@ -860,8 +855,10 @@ _dl_call_init_recurse(elf_object_t *object, int initfirst)
 			    environ, &_dl_cb_cb);
 	}
 
-	if (initfirst)
+	if (initfirst) {
 		_dl_relro(object);
+		_dl_apply_immutable(object);
+	}
 
 	object->status |= STAT_INIT_DONE;
 }
@@ -1008,3 +1005,93 @@ _dl_rreloc(elf_object_t *object)
 	}
 }
 
+void
+_dl_defer_immut(struct mutate *m, vaddr_t start, vsize_t len)
+{
+	int i;
+
+	for (i = 0; i < MAXMUT; i++) {
+		if (m[i].valid == 0) {
+			m[i].start = start;
+			m[i].end = start + len;
+			m[i].valid = 1;
+			return;
+		}
+	}
+	if (i == MAXMUT)
+		_dl_die("too many _dl_defer_immut");
+}
+
+void
+_dl_defer_mut(struct mutate *m, vaddr_t start, size_t len)
+{
+	int i;
+
+	for (i = 0; i < MAXMUT; i++) {
+		if (m[i].valid == 0) {
+			m[i].start = start;
+			m[i].end = start + len;
+			m[i].valid = 1;
+			return;
+		}
+	}
+	if (i == MAXMUT)
+		_dl_die("too many _dl_defer_mut");
+}
+
+void
+_dl_apply_immutable(elf_object_t *object)
+{
+	struct mutate *m, *im, *imtail;
+	int mut, imut;
+	
+	if (object->obj_type != OBJTYPE_LIB)
+		return;
+
+	imtail = &object->imut[MAXMUT - 1];
+
+	for (imut = 0; imut < MAXMUT; imut++) {
+		im = &object->imut[imut];
+		if (im->valid == 0)
+			continue;
+
+		for (mut = 0; mut < MAXMUT; mut++) {
+			m = &object->mut[mut];
+			if (m->valid == 0)
+				continue;
+			if (m->start <= im->start) {
+				if (m->end < im->start) {
+					;
+				} else if (m->end >= im->end) {
+					im->start = im->end = im->valid = 0;
+				} else {
+					im->start = m->end;
+				}
+			} else if (m->start > im->start) {
+				if (m->end > im->end) {
+					;
+				} else if (m->end == im->end) {
+					im->end = m->start;
+				} else if (m->end < im->end) {
+					imtail->start = im->start;
+					imtail->end = m->start;
+					imtail->valid = 1;
+					imtail--;
+					imtail->start = m->end;
+					imtail->end = im->end;
+					imtail->valid = 1;
+					imtail--;
+					im->start = im->end = im->valid = 0;
+				}
+			}
+		}
+	}
+
+	/* and now, install immutability for objects */
+	for (imut = 0; imut < MAXMUT; imut++) {
+		im = &object->imut[imut];
+		if (im->valid == 0)
+			continue;
+		_dl_mimmutable((void *)im->start, im->end - im->start);
+	}
+}

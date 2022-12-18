@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_tc.c,v 1.79 2022/11/08 18:17:51 cheloha Exp $ */
+/*	$OpenBSD: kern_tc.c,v 1.81 2022/12/13 17:30:36 cheloha Exp $ */
 
 /*
  * Copyright (c) 2000 Poul-Henning Kamp <phk@FreeBSD.org>
@@ -165,7 +165,7 @@ void
 microboottime(struct timeval *tvp)
 {
 	struct bintime bt;
-	
+
 	binboottime(&bt);
 	BINTIME_TO_TIMEVAL(&bt, tvp);
 }
@@ -174,7 +174,7 @@ void
 nanoboottime(struct timespec *tsp)
 {
 	struct bintime bt;
-	
+
 	binboottime(&bt);
 	BINTIME_TO_TIMESPEC(&bt, tsp);
 }
@@ -292,6 +292,30 @@ nanoruntime(struct timespec *ts)
 
 	binruntime(&bt);
 	BINTIME_TO_TIMESPEC(&bt, ts);
+}
+
+void
+getbinruntime(struct bintime *bt)
+{
+	struct timehands *th;
+	u_int gen;
+
+	do {
+		th = timehands;
+		gen = th->th_generation;
+		membar_consumer();
+		bintimesub(&th->th_offset, &th->th_naptime, bt);
+		membar_consumer();
+	} while (gen == 0 || gen != th->th_generation);
+}
+
+uint64_t
+getnsecruntime(void)
+{
+	struct bintime bt;
+
+	getbinruntime(&bt);
+	return BINTIME_TO_NSEC(&bt);
 }
 
 void

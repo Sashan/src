@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_usrreq.c,v 1.194 2022/11/26 17:51:18 mvs Exp $	*/
+/*	$OpenBSD: uipc_usrreq.c,v 1.197 2022/12/12 08:30:22 tb Exp $	*/
 /*	$NetBSD: uipc_usrreq.c,v 1.18 1996/02/09 19:00:50 christos Exp $	*/
 
 /*
@@ -677,7 +677,7 @@ uipc_connect2(struct socket *so, struct socket *so2)
 {
 	struct unpcb *unp = sotounpcb(so), *unp2;
 	int error;
-	
+
 	if ((error = unp_connect2(so, so2)))
 		return (error);
 

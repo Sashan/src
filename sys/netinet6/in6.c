@@ -1,4 +1,4 @@
-/*	$OpenBSD: in6.c,v 1.257 2022/11/30 14:01:02 kn Exp $	*/
+/*	$OpenBSD: in6.c,v 1.259 2022/12/06 22:19:39 mvs Exp $	*/
 /*	$KAME: in6.c,v 1.372 2004/06/14 08:14:21 itojun Exp $	*/
 
 /*
@@ -422,7 +422,6 @@ in6_ioctl_get(u_long cmd, caddr_t data, struct ifnet *ifp)
 			return (error);
 	}
 
-	KERNEL_LOCK();
 	NET_LOCK_SHARED();
 
 	if (sa6 != NULL) {
@@ -518,7 +517,6 @@ in6_ioctl_get(u_long cmd, caddr_t data, struct ifnet *ifp)
 
 err:
 	NET_UNLOCK_SHARED();
-	KERNEL_UNLOCK();
 	return (error);
 }
 
@@ -1065,7 +1063,9 @@ in6_addmulti(struct in6_addr *maddr6, struct ifnet *ifp, int *errorp)
 		 * filter appropriately for the new address.
 		 */
 		memcpy(&ifr.ifr_addr, &in6m->in6m_sin, sizeof(in6m->in6m_sin));
+		KERNEL_LOCK();
 		*errorp = (*ifp->if_ioctl)(ifp, SIOCADDMULTI, (caddr_t)&ifr);
+		KERNEL_UNLOCK();
 		if (*errorp) {
 			free(in6m, M_IPMADDR, sizeof(*in6m));
 			return (NULL);

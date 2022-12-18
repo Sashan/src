@@ -1,4 +1,4 @@
-/*	$OpenBSD: nd6_nbr.c,v 1.136 2022/11/28 13:08:53 kn Exp $	*/
+/*	$OpenBSD: nd6_nbr.c,v 1.141 2022/12/10 21:29:10 mvs Exp $	*/
 /*	$KAME: nd6_nbr.c,v 1.61 2001/02/10 16:06:14 jinmei Exp $	*/
 
 /*
@@ -76,7 +76,7 @@ struct dadq {
 };
 
 struct dadq *nd6_dad_find(struct ifaddr *);
-void nd6_dad_starttimer(struct dadq *, int);
+void nd6_dad_starttimer(struct dadq *);
 void nd6_dad_stoptimer(struct dadq *);
 void nd6_dad_timer(void *);
 void nd6_dad_ns_output(struct dadq *, struct ifaddr *);
@@ -109,7 +109,7 @@ nd6_ns_input(struct mbuf *m, int off, int icmp6len)
 	int anycast = 0, proxy = 0, tentative = 0;
 	int router = ip6_forwarding;
 	int tlladdr;
-	union nd_opts ndopts;
+	struct nd_opts ndopts;
 	struct sockaddr_dl *proxydl = NULL;
 	char addr[INET6_ADDRSTRLEN], addr0[INET6_ADDRSTRLEN];
 
@@ -170,8 +170,7 @@ nd6_ns_input(struct mbuf *m, int off, int icmp6len)
 		taddr6.s6_addr16[1] = htons(ifp->if_index);
 
 	icmp6len -= sizeof(*nd_ns);
-	nd6_option_init(nd_ns + 1, icmp6len, &ndopts);
-	if (nd6_options(&ndopts) < 0) {
+	if (nd6_options(nd_ns + 1, icmp6len, &ndopts) < 0) {
 		nd6log((LOG_INFO,
 		    "nd6_ns_input: invalid ND option, ignored\n"));
 		/* nd6_options have incremented stats */
@@ -573,7 +572,7 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 	struct llinfo_nd6 *ln;
 	struct rtentry *rt = NULL;
 	struct sockaddr_dl *sdl;
-	union nd_opts ndopts;
+	struct nd_opts ndopts;
 	char addr[INET6_ADDRSTRLEN], addr0[INET6_ADDRSTRLEN];
 
 	NET_ASSERT_LOCKED();
@@ -620,8 +619,7 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 	}
 
 	icmp6len -= sizeof(*nd_na);
-	nd6_option_init(nd_na + 1, icmp6len, &ndopts);
-	if (nd6_options(&ndopts) < 0) {
+	if (nd6_options(nd_na + 1, icmp6len, &ndopts) < 0) {
 		nd6log((LOG_INFO,
 		    "nd6_na_input: invalid ND option, ignored\n"));
 		/* nd6_options have incremented stats */
@@ -1050,17 +1048,15 @@ nd6_dad_find(struct ifaddr *ifa)
 }
 
 void
-nd6_dad_starttimer(struct dadq *dp, int msec)
+nd6_dad_starttimer(struct dadq *dp)
 {
-
 	timeout_set_proc(&dp->dad_timer_ch, nd6_dad_timer, dp->dad_ifa);
-	timeout_add_msec(&dp->dad_timer_ch, msec);
+	timeout_add_msec(&dp->dad_timer_ch, RETRANS_TIMER);
 }
 
 void
 nd6_dad_stoptimer(struct dadq *dp)
 {
-
 	timeout_del(&dp->dad_timer_ch);
 }
 
@@ -1103,7 +1099,6 @@ nd6_dad_start(struct ifaddr *ifa)
 			ifa->ifa_ifp ? ifa->ifa_ifp->if_xname : "???");
 		return;
 	}
-	bzero(&dp->dad_timer_ch, sizeof(dp->dad_timer_ch));
 
 	TAILQ_INSERT_TAIL(&dadq, dp, dad_list);
 	ip6_dad_pending++;
@@ -1122,7 +1117,7 @@ nd6_dad_start(struct ifaddr *ifa)
 	dp->dad_ns_icount = dp->dad_na_icount = 0;
 	dp->dad_ns_ocount = dp->dad_ns_tcount = 0;
 	nd6_dad_ns_output(dp, ifa);
-	nd6_dad_starttimer(dp, ifa->ifa_ifp->if_nd->retrans);
+	nd6_dad_starttimer(dp);
 }
 
 /*
@@ -1202,32 +1197,17 @@ nd6_dad_timer(void *xifa)
 		 * We have more NS to go.  Send NS packet for DAD.
 		 */
 		nd6_dad_ns_output(dp, ifa);
-		nd6_dad_starttimer(dp, ifa->ifa_ifp->if_nd->retrans);
+		nd6_dad_starttimer(dp);
 	} else {
 		/*
 		 * We have transmitted sufficient number of DAD packets.
-		 * See what we've got.
 		 */
-		int duplicate;
-
-		duplicate = 0;
-
-		if (dp->dad_na_icount) {
-			duplicate++;
-		}
-
-		if (dp->dad_ns_icount) {
-			/* We've seen NS, means DAD has failed. */
-			duplicate++;
-		}
-
-		if (duplicate) {
+		if (dp->dad_na_icount || dp->dad_ns_icount) {
 			/* dp will be freed in nd6_dad_duplicated() */
 			nd6_dad_duplicated(dp);
 		} else {
 			/*
 			 * We are done with DAD.  No NA came, no NS came.
-			 * duplicated address found.
 			 */
 			ia6->ia6_flags &= ~IN6_IFF_TENTATIVE;
 
@@ -1312,12 +1292,10 @@ void
 nd6_dad_ns_input(struct ifaddr *ifa)
 {
 	struct dadq *dp;
-	int duplicate;
 
 	if (!ifa)
 		panic("%s: ifa == NULL", __func__);
 
-	duplicate = 0;
 	dp = nd6_dad_find(ifa);
 	if (dp == NULL) {
 		log(LOG_ERR, "%s: DAD structure not found\n", __func__);
@@ -1328,12 +1306,8 @@ nd6_dad_ns_input(struct ifaddr *ifa)
 	 * if I'm yet to start DAD, someone else started using this address
 	 * first.  I have a duplicate and you win.
 	 */
-	if (dp->dad_ns_ocount == 0)
-		duplicate++;
-
 	/* XXX more checks for loopback situation - see nd6_dad_timer too */
-
-	if (duplicate) {
+	if (dp->dad_ns_ocount == 0) {
 		/* dp will be freed in nd6_dad_duplicated() */
 		nd6_dad_duplicated(dp);
 	} else {

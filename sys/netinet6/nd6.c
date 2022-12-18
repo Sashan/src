@@ -1,4 +1,4 @@
-/*	$OpenBSD: nd6.c,v 1.256 2022/11/28 19:13:36 kn Exp $	*/
+/*	$OpenBSD: nd6.c,v 1.260 2022/12/10 21:26:21 kn Exp $	*/
 /*	$KAME: nd6.c,v 1.280 2002/06/08 19:52:07 itojun Exp $	*/
 
 /*
@@ -101,6 +101,8 @@ struct timeout nd6_slowtimo_ch;
 struct timeout nd6_expire_timeout;
 struct task nd6_expire_task;
 
+struct nd_opt_hdr *nd6_option(struct nd_opts *);
+
 void
 nd6_init(void)
 {
@@ -124,9 +126,7 @@ nd6_ifattach(struct ifnet *ifp)
 
 	nd = malloc(sizeof(*nd), M_IP6NDP, M_WAITOK | M_ZERO);
 
-	nd->basereachable = REACHABLE_TIME;
-	nd->reachable = ND_COMPUTE_RTIME(nd->basereachable);
-	nd->retrans = RETRANS_TIMER;
+	nd->reachable = ND_COMPUTE_RTIME(REACHABLE_TIME);
 
 	ifp->if_nd = nd;
 }
@@ -139,33 +139,15 @@ nd6_ifdetach(struct ifnet *ifp)
 	free(nd, M_IP6NDP, sizeof(*nd));
 }
 
-void
-nd6_option_init(void *opt, int icmp6len, union nd_opts *ndopts)
-{
-	bzero(ndopts, sizeof(*ndopts));
-	ndopts->nd_opts_search = (struct nd_opt_hdr *)opt;
-	ndopts->nd_opts_last
-		= (struct nd_opt_hdr *)(((u_char *)opt) + icmp6len);
-
-	if (icmp6len == 0) {
-		ndopts->nd_opts_done = 1;
-		ndopts->nd_opts_search = NULL;
-	}
-}
-
 /*
  * Take one ND option.
  */
 struct nd_opt_hdr *
-nd6_option(union nd_opts *ndopts)
+nd6_option(struct nd_opts *ndopts)
 {
 	struct nd_opt_hdr *nd_opt;
 	int olen;
 
-	if (!ndopts)
-		panic("%s: ndopts == NULL", __func__);
-	if (!ndopts->nd_opts_last)
-		panic("%s: uninitialized ndopts", __func__);
 	if (!ndopts->nd_opts_search)
 		return NULL;
 	if (ndopts->nd_opts_done)
@@ -208,21 +190,25 @@ nd6_option(union nd_opts *ndopts)
  * multiple options of the same type.
  */
 int
-nd6_options(union nd_opts *ndopts)
+nd6_options(void *opt, int icmp6len, struct nd_opts *ndopts)
 {
-	struct nd_opt_hdr *nd_opt;
+	struct nd_opt_hdr *nd_opt = opt;
 	int i = 0;
 
-	if (!ndopts)
-		panic("%s: ndopts == NULL", __func__);
-	if (!ndopts->nd_opts_last)
-		panic("%s: uninitialized ndopts", __func__);
-	if (!ndopts->nd_opts_search)
+	bzero(ndopts, sizeof(*ndopts));
+	ndopts->nd_opts_search = nd_opt;
+	ndopts->nd_opts_last =
+	    (struct nd_opt_hdr *)(((u_char *)nd_opt) + icmp6len);
+
+	if (icmp6len == 0) {
+		ndopts->nd_opts_done = 1;
+		ndopts->nd_opts_search = NULL;
 		return 0;
+	}
 
 	while (1) {
 		nd_opt = nd6_option(ndopts);
-		if (!nd_opt && !ndopts->nd_opts_last) {
+		if (nd_opt == NULL && ndopts->nd_opts_last == NULL) {
 			/*
 			 * Message validation requires that all included
 			 * options have a length that is greater than zero.
@@ -232,35 +218,30 @@ nd6_options(union nd_opts *ndopts)
 			return -1;
 		}
 
-		if (!nd_opt)
+		if (nd_opt == NULL)
 			goto skip1;
 
 		switch (nd_opt->nd_opt_type) {
 		case ND_OPT_SOURCE_LINKADDR:
+			if (ndopts->nd_opts_src_lladdr != NULL)
+				nd6log((LOG_INFO, "duplicated ND6 option found "
+				    "(type=%d)\n", nd_opt->nd_opt_type));
+			else
+				ndopts->nd_opts_src_lladdr = nd_opt;
+			break;
 		case ND_OPT_TARGET_LINKADDR:
+			if (ndopts->nd_opts_tgt_lladdr != NULL)
+				nd6log((LOG_INFO, "duplicated ND6 option found "
+				    "(type=%d)\n", nd_opt->nd_opt_type));
+			else
+				ndopts->nd_opts_tgt_lladdr = nd_opt;
+			break;
 		case ND_OPT_MTU:
 		case ND_OPT_REDIRECTED_HEADER:
-			if (ndopts->nd_opt_array[nd_opt->nd_opt_type]) {
-				nd6log((LOG_INFO,
-				    "duplicated ND6 option found (type=%d)\n",
-				    nd_opt->nd_opt_type));
-				/* XXX bark? */
-			} else {
-				ndopts->nd_opt_array[nd_opt->nd_opt_type]
-					= nd_opt;
-			}
-			break;
 		case ND_OPT_PREFIX_INFORMATION:
-			if (ndopts->nd_opt_array[nd_opt->nd_opt_type] == 0) {
-				ndopts->nd_opt_array[nd_opt->nd_opt_type]
-					= nd_opt;
-			}
-			ndopts->nd_opts_pi_end =
-				(struct nd_opt_prefix_info *)nd_opt;
-			break;
 		case ND_OPT_DNSSL:
 		case ND_OPT_RDNSS:
-			/* Don't warn */
+			/* Don't warn, not used by kernel */
 			break;
 		default:
 			/*
@@ -270,6 +251,7 @@ nd6_options(union nd_opts *ndopts)
 			nd6log((LOG_DEBUG,
 			    "nd6_options: unsupported option %d - "
 			    "option ignored\n", nd_opt->nd_opt_type));
+			break;
 		}
 
 skip1:
@@ -356,7 +338,7 @@ nd6_llinfo_timer(struct rtentry *rt)
 	case ND6_LLINFO_INCOMPLETE:
 		if (ln->ln_asked < nd6_mmaxtries) {
 			ln->ln_asked++;
-			nd6_llinfo_settimer(ln, ifp->if_nd->retrans / 1000);
+			nd6_llinfo_settimer(ln, RETRANS_TIMER / 1000);
 			nd6_ns_output(ifp, NULL, &dst->sin6_addr, ln, 0);
 		} else {
 			struct mbuf *m = ln->ln_hold;
@@ -403,13 +385,13 @@ nd6_llinfo_timer(struct rtentry *rt)
 		/* We need NUD */
 		ln->ln_asked = 1;
 		ln->ln_state = ND6_LLINFO_PROBE;
-		nd6_llinfo_settimer(ln, ifp->if_nd->retrans / 1000);
+		nd6_llinfo_settimer(ln, RETRANS_TIMER / 1000);
 		nd6_ns_output(ifp, &dst->sin6_addr, &dst->sin6_addr, ln, 0);
 		break;
 	case ND6_LLINFO_PROBE:
 		if (ln->ln_asked < nd6_umaxtries) {
 			ln->ln_asked++;
-			nd6_llinfo_settimer(ln, ifp->if_nd->retrans / 1000);
+			nd6_llinfo_settimer(ln, RETRANS_TIMER / 1000);
 			nd6_ns_output(ifp, &dst->sin6_addr,
 			    &dst->sin6_addr, ln, 0);
 		} else {
@@ -1285,8 +1267,7 @@ nd6_slowtimo(void *ignored_arg)
 
 	TAILQ_FOREACH(ifp, &ifnetlist, if_list) {
 		nd6if = ifp->if_nd;
-		if (nd6if->basereachable && /* already initialized */
-		    (nd6if->recalctm -= ND6_SLOWTIMER_INTERVAL) <= 0) {
+		if ((nd6if->recalctm -= ND6_SLOWTIMER_INTERVAL) <= 0) {
 			/*
 			 * Since reachable time rarely changes by router
 			 * advertisements, we SHOULD insure that a new random
@@ -1294,7 +1275,7 @@ nd6_slowtimo(void *ignored_arg)
 			 * (RFC 2461, 6.3.4)
 			 */
 			nd6if->recalctm = ND6_RECALC_REACHTM_INTERVAL;
-			nd6if->reachable = ND_COMPUTE_RTIME(nd6if->basereachable);
+			nd6if->reachable = ND_COMPUTE_RTIME(REACHABLE_TIME);
 		}
 	}
 	NET_UNLOCK();
@@ -1403,7 +1384,7 @@ nd6_resolve(struct ifnet *ifp, struct rtentry *rt0, struct mbuf *m,
 	 */
 	if (!ND6_LLINFO_PERMANENT(ln) && ln->ln_asked == 0) {
 		ln->ln_asked++;
-		nd6_llinfo_settimer(ln, ifp->if_nd->retrans / 1000);
+		nd6_llinfo_settimer(ln, RETRANS_TIMER / 1000);
 		nd6_ns_output(ifp, NULL, &satosin6(dst)->sin6_addr, ln, 0);
 	}
 	return (EAGAIN);
