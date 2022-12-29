@@ -1,4 +1,4 @@
-/*	$OpenBSD: vm.c,v 1.76 2022/11/11 10:52:44 dv Exp $	*/
+/*	$OpenBSD: vm.c,v 1.78 2022/12/26 23:50:20 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -899,6 +899,7 @@ create_memory_map(struct vm_create_params *vcp)
 	len = LOWMEM_KB * 1024;
 	vcp->vcp_memranges[0].vmr_gpa = 0x0;
 	vcp->vcp_memranges[0].vmr_size = len;
+	vcp->vcp_memranges[0].vmr_type = VM_MEM_RAM;
 	mem_bytes -= len;
 
 	/*
@@ -913,12 +914,14 @@ create_memory_map(struct vm_create_params *vcp)
 	len = MB(1) - (LOWMEM_KB * 1024);
 	vcp->vcp_memranges[1].vmr_gpa = LOWMEM_KB * 1024;
 	vcp->vcp_memranges[1].vmr_size = len;
+	vcp->vcp_memranges[1].vmr_type = VM_MEM_RESERVED;
 	mem_bytes -= len;
 
 	/* If we have less than 2MB remaining, still create a 2nd BIOS area. */
 	if (mem_bytes <= MB(2)) {
 		vcp->vcp_memranges[2].vmr_gpa = VMM_PCI_MMIO_BAR_END;
 		vcp->vcp_memranges[2].vmr_size = MB(2);
+		vcp->vcp_memranges[2].vmr_type = VM_MEM_RESERVED;
 		vcp->vcp_nmemranges = 3;
 		return;
 	}
@@ -939,18 +942,27 @@ create_memory_map(struct vm_create_params *vcp)
 	/* Third memory region: area above 1MB to MMIO region */
 	vcp->vcp_memranges[2].vmr_gpa = MB(1);
 	vcp->vcp_memranges[2].vmr_size = above_1m;
+	vcp->vcp_memranges[2].vmr_type = VM_MEM_RAM;
 
-	/* Fourth region: 2nd copy of BIOS above MMIO ending at 4GB */
-	vcp->vcp_memranges[3].vmr_gpa = VMM_PCI_MMIO_BAR_END + 1;
-	vcp->vcp_memranges[3].vmr_size = MB(2);
+	/* Fourth region: PCI MMIO range */
+	vcp->vcp_memranges[3].vmr_gpa = VMM_PCI_MMIO_BAR_BASE;
+	vcp->vcp_memranges[3].vmr_size = VMM_PCI_MMIO_BAR_END -
+	    VMM_PCI_MMIO_BAR_BASE + 1;
+	vcp->vcp_memranges[3].vmr_type = VM_MEM_MMIO;
 
-	/* Fifth region: any remainder above 4GB */
+	/* Fifth region: 2nd copy of BIOS above MMIO ending at 4GB */
+	vcp->vcp_memranges[4].vmr_gpa = VMM_PCI_MMIO_BAR_END + 1;
+	vcp->vcp_memranges[4].vmr_size = MB(2);
+	vcp->vcp_memranges[4].vmr_type = VM_MEM_RESERVED;
+
+	/* Sixth region: any remainder above 4GB */
 	if (above_4g > 0) {
-		vcp->vcp_memranges[4].vmr_gpa = GB(4);
-		vcp->vcp_memranges[4].vmr_size = above_4g;
-		vcp->vcp_nmemranges = 5;
+		vcp->vcp_memranges[5].vmr_gpa = GB(4);
+		vcp->vcp_memranges[5].vmr_size = above_4g;
+		vcp->vcp_memranges[5].vmr_type = VM_MEM_RAM;
+		vcp->vcp_nmemranges = 6;
 	} else
-		vcp->vcp_nmemranges = 4;
+		vcp->vcp_nmemranges = 5;
 }
 
 /*
@@ -1988,6 +2000,47 @@ read_mem(paddr_t src, void *buf, size_t len)
 	}
 
 	return (0);
+}
+
+/*
+ * hvaddr_mem
+ *
+ * Translate a guest physical address to a host virtual address, checking the
+ * provided memory range length to confirm it's contiguous within the same
+ * guest memory range (vm_mem_range).
+ *
+ * Parameters:
+ *  gpa: guest physical address to translate
+ *  len: number of bytes in the intended range
+ *
+ * Return values:
+ *  void* to host virtual memory on success
+ *  NULL on error, setting errno to:
+ *    EFAULT: gpa falls outside guest memory ranges
+ *    EINVAL: requested len extends beyond memory range
+ */
+void *
+hvaddr_mem(paddr_t gpa, size_t len)
+{
+	struct vm_mem_range *vmr;
+	size_t off;
+
+	vmr = find_gpa_range(&current_vm->vm_params.vmc_params, gpa, len);
+	if (vmr == NULL) {
+		log_warnx("%s: failed - invalid gpa: 0x%lx\n", __func__, gpa);
+		errno = EFAULT;
+		return (NULL);
+	}
+
+	off = gpa - vmr->vmr_gpa;
+	if (len > (vmr->vmr_size - off)) {
+		log_warnx("%s: failed - invalid memory range: gpa=0x%lx, "
+		    "len=%zu", __func__, gpa, len);
+		errno = EINVAL;
+		return (NULL);
+	}
+
+	return ((char *)vmr->vmr_va + off);
 }
 
 /*

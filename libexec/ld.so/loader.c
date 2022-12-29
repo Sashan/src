@@ -1,4 +1,4 @@
-/*	$OpenBSD: loader.c,v 1.207 2022/12/16 03:14:52 deraadt Exp $ */
+/*	$OpenBSD: loader.c,v 1.209 2022/12/25 09:39:37 visa Exp $ */
 
 /*
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
@@ -215,14 +215,18 @@ void
 _dl_clean_boot(void)
 {
 	extern char boot_text_start[], boot_text_end[];
+#if 0	/* XXX breaks boehm-gc?!? */
 	extern char boot_data_start[], boot_data_end[];
+#endif
 
 	_dl_mmap(boot_text_start, boot_text_end - boot_text_start,
 	    PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0);
 	_dl_mimmutable(boot_text_start, boot_text_end - boot_text_start);
+#if 0	/* XXX breaks boehm-gc?!? */
 	_dl_mmap(boot_data_start, boot_data_end - boot_data_start,
 	    PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0);
 	_dl_mimmutable(boot_data_start, boot_data_end - boot_data_start);
+#endif
 }
 #endif /* DO_CLEAN_BOOT */
 
@@ -621,9 +625,17 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 	 */
 	map_link = NULL;
 #ifdef __mips__
-	if (exe_obj->Dyn.info[DT_MIPS_RLD_MAP - DT_LOPROC + DT_NUM] != 0)
-		map_link = (struct r_debug **)(exe_obj->Dyn.info[
-		    DT_MIPS_RLD_MAP - DT_LOPROC + DT_NUM] + exe_loff);
+	for (dynp = exe_obj->load_dyn; dynp->d_tag; dynp++) {
+		if (dynp->d_tag == DT_MIPS_RLD_MAP_REL) {
+			map_link = (struct r_debug **)
+			    (dynp->d_un.d_ptr + (Elf_Addr)dynp);
+			break;
+		} else if (dynp->d_tag == DT_MIPS_RLD_MAP) {
+			map_link = (struct r_debug **)
+			    (dynp->d_un.d_ptr + exe_loff);
+			break;
+		}
+	}
 #endif
 	if (map_link == NULL) {
 		for (dynp = exe_obj->load_dyn; dynp->d_tag; dynp++) {
