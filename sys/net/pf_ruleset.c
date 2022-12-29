@@ -334,8 +334,7 @@ pf_remove_if_empty_ruleset(struct pf_rules_container *rc,
 	while (ruleset != NULL) {
 		if (ruleset == &rc->main_anchor.ruleset ||
 		    !RB_EMPTY(&ruleset->anchor->children) ||
-		    ruleset->anchor->refcnt > 0 || ruleset->tables > 0 ||
-		    ruleset->topen)
+		    ruleset->anchor->refcnt > 0 || ruleset->tables > 0)
 			return;
 		if (!TAILQ_EMPTY(ruleset->rules.ptr))
 			return;

@@ -1151,11 +1151,11 @@ pf_remove_orphans(struct pf_trans *t)
 	TAILQ_FOREACH(r, t->rc.main_anchor.ruleset.rules.ptr, entries) {
 		if (r->anchor != NULL) {
 			r->anchor->refcnt--;
-			log(LOG_ERR, "%s:%d removing %s (refcnt: %d, rules are %s empty, children are %s empty, topen: %d, tables: %d\n",
+			log(LOG_ERR, "%s:%d removing %s (refcnt: %d, rules are %s empty, children are %s empty, tables: %d\n",
 				__func__, __LINE__, r->anchor->path, r->anchor->refcnt,
 				TAILQ_EMPTY(r->anchor->ruleset.rules.ptr) ? "" : "not",
 				RB_EMPTY(&r->anchor->children) ? "" : "not",
-				r->anchor->ruleset.topen, r->anchor->ruleset.tables);
+				r->anchor->ruleset.tables);
 			pf_remove_if_empty_ruleset(&pf_global,
 			    &r->anchor->ruleset);
 			r->anchor = NULL;
@@ -1166,11 +1166,11 @@ pf_remove_orphans(struct pf_trans *t)
 		TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
 			if (r->anchor != NULL) {
 				r->anchor->refcnt--;
-				log(LOG_ERR, "%s:%d removing %s (refcnt: %d, rules are %s empty, children are %s empty, topen: %d, tables: %d\n",
+				log(LOG_ERR, "%s:%d removing %s (refcnt: %d, rules are %s empty, children are %s empty, tables: %d\n",
 				    __func__, __LINE__, r->anchor->path, r->anchor->refcnt,
 				    TAILQ_EMPTY(r->anchor->ruleset.rules.ptr) ? "" : "not",
 				    RB_EMPTY(&r->anchor->children) ? "" : "not",
-				    r->anchor->ruleset.topen, r->anchor->ruleset.tables);
+				    r->anchor->ruleset.tables);
 				pf_remove_if_empty_ruleset(&pf_global,
 				    &r->anchor->ruleset);
 				r->anchor = NULL;
@@ -1178,11 +1178,11 @@ pf_remove_orphans(struct pf_trans *t)
 		}
 		g = RB_FIND(pf_anchor_global, &pf_global.anchors, a);
 		if (g != NULL) {
-			log(LOG_ERR, "%s:%d removing %s (refcnt: %d, rules are %s empty, children are %s empty, topen: %d, tables: %d\n",
+			log(LOG_ERR, "%s:%d removing %s (refcnt: %d, rules are %s empty, children are %s empty, tables: %d\n",
 			    __func__, __LINE__, g->path, g->refcnt,
 			    TAILQ_EMPTY(g->ruleset.rules.ptr) ? "" : "not",
 			    RB_EMPTY(&g->children) ? "" : "not",
-			    g->ruleset.topen, g->ruleset.tables);
+			    g->ruleset.tables);
 			pf_remove_if_empty_ruleset(&pf_global, &g->ruleset);
 		}
 	}
@@ -3185,7 +3185,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		PF_LOCK();
 		log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 		if (t->anchor_path[0] == '\0') {
-			if (t->rc.main_anchor.ruleset.topen) {
 				/*
 				 * TODO: handle tables:
 				 *	drop/clean all tables which are
@@ -3193,7 +3192,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				 *
 				 *	attach new tables
 				 */
-			}
 			pf_swap_rules(&pf_main_ruleset,
 			    &t->rc.main_anchor.ruleset, t);
 		} else {

@@ -1887,7 +1887,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 	    flags & PFR_FLAG_USERIOCTL))
 		return (EINVAL);
 	rs = pf_find_ruleset(&t->rc, tbl->pfrt_anchor);
-	if (rs == NULL || !rs->topen)
+	if (rs == NULL)
 		return (EBUSY);
 
 	SLIST_INIT(&tableq);
@@ -1985,7 +1985,7 @@ pfr_ina_rollback(struct pfr_table *trs, u_int32_t ticket, int *ndel, int flags)
 
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
 	rs = pf_find_ruleset(&pf_global, trs->pfrt_anchor);
-	if (rs == NULL || !rs->topen || ticket != rs->tversion)
+	if (rs == NULL || ticket != rs->tversion)
 		return (0);
 	SLIST_INIT(&workq);
 	RB_FOREACH(p, pfr_ktablehead, &pfr_ktables) {
@@ -1998,7 +1998,6 @@ pfr_ina_rollback(struct pfr_table *trs, u_int32_t ticket, int *ndel, int flags)
 	}
 	if (!(flags & PFR_FLAG_DUMMY)) {
 		pfr_setflags_ktables(&workq);
-		rs->topen = 0;
 		pf_remove_if_empty_ruleset(&pf_global, rs);
 	}
 	if (ndel != NULL)
@@ -2018,7 +2017,7 @@ pfr_ina_commit(struct pfr_table *trs, u_int32_t ticket, int *nadd,
 
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
 	rs = pf_find_ruleset(&pf_global, trs->pfrt_anchor);
-	if (rs == NULL || !rs->topen || ticket != rs->tversion)
+	if (rs == NULL || ticket != rs->tversion)
 		return (EBUSY);
 
 	SLIST_INIT(&workq);
@@ -2037,7 +2036,6 @@ pfr_ina_commit(struct pfr_table *trs, u_int32_t ticket, int *nadd,
 		SLIST_FOREACH_SAFE(p, &workq, pfrkt_workq, q) {
 			pfr_commit_ktable(p, tzero);
 		}
-		rs->topen = 0;
 		pf_remove_if_empty_ruleset(&pf_global, rs);
 	}
 	if (nadd != NULL)

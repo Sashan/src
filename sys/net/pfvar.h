@@ -826,7 +826,6 @@ struct pf_ruleset {
 	struct pf_anchor	*anchor;
 	u_int32_t		 tversion;
 	int			 tables;
-	int			 topen;
 };
 
 RB_HEAD(pf_anchor_global, pf_anchor);
