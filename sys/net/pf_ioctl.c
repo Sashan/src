@@ -537,7 +537,6 @@ pf_begin_rules(struct pf_trans *t, const char *anchor)
 	while (*anchor == '/')
 		anchor++;
 
-
 	if ((rs = pf_find_or_create_ruleset(&t->rc, anchor)) == NULL)
 		return (EINVAL);
 
