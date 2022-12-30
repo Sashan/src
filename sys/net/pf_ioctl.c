@@ -102,7 +102,7 @@ void			 pf_calc_chksum(struct pf_ruleset *);
 void			 pf_hash_rule(MD5_CTX *, struct pf_rule *);
 void			 pf_hash_rule_addr(MD5_CTX *, struct pf_rule_addr *);
 int			 pf_commit_rules(u_int32_t, char *);
-int			 pf_addr_setup(struct pf_ruleset *,
+int			 pf_addr_setup(struct pf_trans *t, struct pf_ruleset *,
 			    struct pf_addr_wrap *, sa_family_t);
 struct pfi_kif		*pf_kif_setup(struct pfi_kif *);
 void			 pf_addr_copyout(struct pf_addr_wrap *);
@@ -888,11 +888,11 @@ pf_calc_chksum(struct pf_ruleset *rs)
 }
 
 int
-pf_addr_setup(struct pf_ruleset *ruleset, struct pf_addr_wrap *addr,
-    sa_family_t af)
+pf_addr_setup(struct pf_trans *t, struct pf_ruleset *ruleset,
+    struct pf_addr_wrap *addr, sa_family_t af)
 {
 	if (pfi_dynaddr_setup(addr, af, PR_WAITOK) ||
-	    pf_tbladdr_setup(ruleset, addr, PR_WAITOK) ||
+	    pf_tbladdr_setup(t, ruleset, addr, PR_WAITOK) ||
 	    pf_rtlabel_add(addr))
 		return (EINVAL);
 
@@ -1848,22 +1848,22 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		rule->route.kif = pf_kif_setup(rule->route.kif);
 
 		if (rule->overload_tblname[0]) {
-			if ((rule->overload_tbl = pfr_attach_table(ruleset,
+			if ((rule->overload_tbl = pfr_attach_table(t, ruleset,
 			    rule->overload_tblname, PR_WAITOK)) == NULL)
 				error = EINVAL;
 			else
 				rule->overload_tbl->pfrkt_flags |= PFR_TFLAG_ACTIVE;
 		}
 
-		if (pf_addr_setup(ruleset, &rule->src.addr, rule->af))
+		if (pf_addr_setup(t, ruleset, &rule->src.addr, rule->af))
 			error = EINVAL;
-		if (pf_addr_setup(ruleset, &rule->dst.addr, rule->af))
+		if (pf_addr_setup(t, ruleset, &rule->dst.addr, rule->af))
 			error = EINVAL;
-		if (pf_addr_setup(ruleset, &rule->rdr.addr, rule->af))
+		if (pf_addr_setup(t, ruleset, &rule->rdr.addr, rule->af))
 			error = EINVAL;
-		if (pf_addr_setup(ruleset, &rule->nat.addr, rule->af))
+		if (pf_addr_setup(t, ruleset, &rule->nat.addr, rule->af))
 			error = EINVAL;
-		if (pf_addr_setup(ruleset, &rule->route.addr, rule->af))
+		if (pf_addr_setup(t, ruleset, &rule->route.addr, rule->af))
 			error = EINVAL;
 		if (pf_anchor_setup(&t->rc, rule, ruleset, pr->anchor_call))
 			error = EINVAL;
@@ -1973,6 +1973,11 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	}
 
 	case DIOCCHANGERULE: {
+		/*
+		 * TODO: this must be rewrittern so it will use transactions,
+		 * for rules we are adding/changing. Remove action must bump
+		 * ruleset version number
+		 */
 		struct pfioc_rule	*pcr = (struct pfioc_rule *)addr;
 		struct pf_ruleset	*ruleset;
 		struct pf_rule		*oldrule = NULL, *newrule = NULL;
@@ -2051,6 +2056,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		if (pcr->action != PF_CHANGE_REMOVE) {
+			/* FixMe: here we need a proper transaction */
+			struct pf_trans *t = NULL;
+
 			KASSERT(newrule != NULL);
 			newrule->cuid = p->p_ucred->cr_ruid;
 			newrule->cpid = p->p_p->ps_pid;
@@ -2062,7 +2070,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			newrule->route.kif = pf_kif_setup(newrule->route.kif);
 
 			if (newrule->overload_tblname[0]) {
-				newrule->overload_tbl = pfr_attach_table(
+				newrule->overload_tbl = pfr_attach_table(NULL,
 				    ruleset, newrule->overload_tblname,
 				    PR_WAITOK);
 				if (newrule->overload_tbl == NULL)
@@ -2072,19 +2080,19 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 					    PFR_TFLAG_ACTIVE;
 			}
 
-			if (pf_addr_setup(ruleset, &newrule->src.addr,
+			if (pf_addr_setup(t, ruleset, &newrule->src.addr,
 			    newrule->af))
 				error = EINVAL;
-			if (pf_addr_setup(ruleset, &newrule->dst.addr,
+			if (pf_addr_setup(t, ruleset, &newrule->dst.addr,
 			    newrule->af))
 				error = EINVAL;
-			if (pf_addr_setup(ruleset, &newrule->rdr.addr,
+			if (pf_addr_setup(t, ruleset, &newrule->rdr.addr,
 			    newrule->af))
 				error = EINVAL;
-			if (pf_addr_setup(ruleset, &newrule->nat.addr,
+			if (pf_addr_setup(t, ruleset, &newrule->nat.addr,
 			    newrule->af))
 				error = EINVAL;
-			if (pf_addr_setup(ruleset, &newrule->route.addr,
+			if (pf_addr_setup(t, ruleset, &newrule->route.addr,
 			    newrule->af))
 				error = EINVAL;
 			/*
@@ -3098,6 +3106,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pf_ruleset	*rs;
 		struct pf_anchor	*ta;
+		struct pfr_ktable	*tkt, *kt;
 		struct pool		*pp;
 		int			 i, bailout = 0;
 		u_int32_t		 version;
@@ -3162,6 +3171,26 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 					log(LOG_ERR, "%s:%s @ %d %s (rs: %p) tversion: %d vs. version: %d\n",
 					    __func__, pfioctl_name(cmd), __LINE__, ta->path, rs, version,
 					    (rs == NULL) ? 0 : rs->rules.version);
+					break;
+				}
+			}
+		}
+
+		if (bailout == 0) {
+			RB_FOREACH(tkt, pfr_ktablehead, &t->rc.ktables) {
+				version = tkt->pfrkt_version;
+				kt = pfr_lookup_table(&pf_global,
+				    (struct pfr_table *)tkt);
+				if (kt != NULL)
+					bailout =
+					    (version != kt->pfrkt_version);
+				else
+					bailout = (version != 0);
+
+				if (bailout != 0) {
+					log(LOG_ERR, "%s:%s @ %d %s (tkt %p), tversion: %d vs. version %d\n",
+					    __func__, pfioctl_name(cmd), __LINE__, tkt->pfrkt_name, tkt, version,
+					    (kt == NULL) ? 0 : kt->pfrkt_version);
 					break;
 				}
 			}

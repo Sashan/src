@@ -1899,11 +1899,12 @@ pf_purge_expired_states(u_int32_t maxcheck)
 }
 
 int
-pf_tbladdr_setup(struct pf_ruleset *rs, struct pf_addr_wrap *aw, int wait)
+pf_tbladdr_setup(struct pf_trans *t, struct pf_ruleset *rs,
+    struct pf_addr_wrap *aw, int wait)
 {
 	if (aw->type != PF_ADDR_TABLE)
 		return (0);
-	if ((aw->p.tbl = pfr_attach_table(rs, aw->v.tblname, wait)) == NULL)
+	if ((aw->p.tbl = pfr_attach_table(t, rs, aw->v.tblname, wait)) == NULL)
 		return (1);
 	return (0);
 }

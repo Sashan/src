@@ -196,7 +196,6 @@ int			 pfr_ktable_compare(struct pfr_ktable *,
 			    struct pfr_ktable *);
 void			 pfr_ktable_winfo_update(struct pfr_ktable *,
 			    struct pfr_kentry *);
-struct pfr_ktable	*pfr_lookup_table(struct pfr_table *);
 void			 pfr_clean_node_mask(struct pfr_ktable *,
 			    struct pfr_kentryworkq *);
 int			 pfr_table_count(struct pfr_table *, int);
@@ -204,6 +203,7 @@ int			 pfr_skip_table(struct pfr_table *,
 			    struct pfr_ktable *, int);
 struct pfr_kentry	*pfr_kentry_byidx(struct pfr_ktable *, int, int);
 int			 pfr_islinklocal(sa_family_t, struct pf_addr *);
+u_int32_t		 pfr_get_ktable_version(struct pfr_ktable *);
 
 RB_GENERATE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 
@@ -252,7 +252,8 @@ pfr_clr_addrs(struct pfr_table *tbl, int *ndel, int flags)
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
 	if (pfr_validate_table(tbl, 0, flags & PFR_FLAG_USERIOCTL))
 		return (EINVAL);
-	kt = pfr_lookup_table(tbl);
+	PF_ASSERT_LOCKED();
+	kt = pfr_lookup_table(&pf_global, tbl);
 	if (kt == NULL || !(kt->pfrkt_flags & PFR_TFLAG_ACTIVE))
 		return (ESRCH);
 	if (kt->pfrkt_flags & PFR_TFLAG_CONST)
@@ -267,7 +268,10 @@ pfr_clr_addrs(struct pfr_table *tbl, int *ndel, int flags)
 			    kt->pfrkt_cnt);
 			kt->pfrkt_cnt = 0;
 		}
+
+		kt->pfrkt_version++;
 	}
+
 	return (0);
 }
 
@@ -344,7 +348,7 @@ pfr_add_addrs(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 
 	NET_LOCK();
 	PF_LOCK();
-	kt = pfr_lookup_table(tbl);
+	kt = pfr_lookup_table(&pf_global, tbl);
 	if (kt == NULL || !(kt->pfrkt_flags & PFR_TFLAG_ACTIVE)) {
 		PF_UNLOCK();
 		NET_UNLOCK();
@@ -387,8 +391,10 @@ pfr_add_addrs(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 	}
 	/* remove entries, which we will insert from tmpkt */
 	pfr_clean_node_mask(tmpkt, &workq);
-	if (!(flags & PFR_FLAG_DUMMY))
+	if (!(flags & PFR_FLAG_DUMMY)) {
 		pfr_insert_kentries(kt, &workq, tzero);
+		kt->pfrkt_version++;
+	}
 
 	PF_UNLOCK();
 	NET_UNLOCK();
@@ -442,7 +448,8 @@ pfr_del_addrs(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY | PFR_FLAG_FEEDBACK);
 	if (pfr_validate_table(tbl, 0, flags & PFR_FLAG_USERIOCTL))
 		return (EINVAL);
-	kt = pfr_lookup_table(tbl);
+	PF_ASSERT_LOCKED();
+	kt = pfr_lookup_table(&pf_global, tbl);
 	if (kt == NULL || !(kt->pfrkt_flags & PFR_TFLAG_ACTIVE))
 		return (ESRCH);
 	if (kt->pfrkt_flags & PFR_TFLAG_CONST)
@@ -508,6 +515,7 @@ pfr_del_addrs(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 	}
 	if (!(flags & PFR_FLAG_DUMMY)) {
 		pfr_remove_kentries(kt, &workq);
+		kt->pfrkt_version++;
 	}
 	if (ndel != NULL)
 		*ndel = xdel;
@@ -534,7 +542,8 @@ pfr_set_addrs(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 	if (pfr_validate_table(tbl, ignore_pfrt_flags, flags &
 	    PFR_FLAG_USERIOCTL))
 		return (EINVAL);
-	kt = pfr_lookup_table(tbl);
+	PF_ASSERT_LOCKED();
+	kt = pfr_lookup_table(&pf_global, tbl);
 	if (kt == NULL || !(kt->pfrkt_flags & PFR_TFLAG_ACTIVE))
 		return (ESRCH);
 	if (kt->pfrkt_flags & PFR_TFLAG_CONST)
@@ -612,6 +621,7 @@ _skip:
 		pfr_insert_kentries(kt, &addq, tzero);
 		pfr_remove_kentries(kt, &delq);
 		pfr_clstats_kentries(&changeq, tzero, INVERT_NEG_FLAG);
+		kt->pfrkt_version++;
 	} else
 		pfr_destroy_kentries(&addq);
 	if (nadd != NULL)
@@ -645,7 +655,8 @@ pfr_tst_addrs(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 	ACCEPT_FLAGS(flags, PFR_FLAG_REPLACE);
 	if (pfr_validate_table(tbl, 0, 0))
 		return (EINVAL);
-	kt = pfr_lookup_table(tbl);
+	PF_ASSERT_LOCKED();
+	kt = pfr_lookup_table(&pf_global, tbl);
 	if (kt == NULL || !(kt->pfrkt_flags & PFR_TFLAG_ACTIVE))
 		return (ESRCH);
 
@@ -684,7 +695,8 @@ pfr_get_addrs(struct pfr_table *tbl, struct pfr_addr *addr, int *size,
 	ACCEPT_FLAGS(flags, 0);
 	if (pfr_validate_table(tbl, 0, 0))
 		return (EINVAL);
-	kt = pfr_lookup_table(tbl);
+	PF_ASSERT_LOCKED();
+	kt = pfr_lookup_table(&pf_global, tbl);
 	if (kt == NULL || !(kt->pfrkt_flags & PFR_TFLAG_ACTIVE))
 		return (ESRCH);
 	if (kt->pfrkt_cnt > *size) {
@@ -724,7 +736,8 @@ pfr_get_astats(struct pfr_table *tbl, struct pfr_astats *addr, int *size,
 
 	if (pfr_validate_table(tbl, 0, 0))
 		return (EINVAL);
-	kt = pfr_lookup_table(tbl);
+	PF_ASSERT_LOCKED();
+	kt = pfr_lookup_table(&pf_global, tbl);
 	if (kt == NULL || !(kt->pfrkt_flags & PFR_TFLAG_ACTIVE))
 		return (ESRCH);
 	if (kt->pfrkt_cnt > *size) {
@@ -769,7 +782,8 @@ pfr_clr_astats(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY | PFR_FLAG_FEEDBACK);
 	if (pfr_validate_table(tbl, 0, 0))
 		return (EINVAL);
-	kt = pfr_lookup_table(tbl);
+	PF_ASSERT_LOCKED();
+	kt = pfr_lookup_table(&pf_global, tbl);
 	if (kt == NULL || !(kt->pfrkt_flags & PFR_TFLAG_ACTIVE))
 		return (ESRCH);
 	SLIST_INIT(&workq);
@@ -794,6 +808,7 @@ pfr_clr_astats(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 
 	if (!(flags & PFR_FLAG_DUMMY)) {
 		pfr_clstats_kentries(&workq, gettime(), 0);
+		kt->pfrkt_version++;
 	}
 	if (nzero != NULL)
 		*nzero = xzero;
@@ -1499,6 +1514,9 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 	int			 i, rv, xadd = 0;
 	time_t			 tzero = gettime();
 
+	/*
+	 * TODO: rewrite it so this function will be using transaction
+	 */
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
 	SLIST_INIT(&addq);
 	SLIST_INIT(&changeq);
@@ -1857,12 +1875,14 @@ pfr_ina_begin(struct pf_trans *t, u_int32_t *version, const char *anchor)
 {
 	struct pf_ruleset	*rs;
 
+	while (*anchor == '/')
+		anchor++;
+
 	rs = pf_find_or_create_ruleset(&t->rc, anchor);
 	if (rs == NULL)
 		return (ENOMEM);
 
 	rs->rules.version = pf_get_ruleset_version(anchor);
-	/* rs->topen = 1; */
 	*version = rs->rules.version;
 
 	return (0);
@@ -1895,6 +1915,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 	if (kt == NULL) {
 		kt = pfr_create_ktable(tbl, 0, 0, PR_WAITOK);
 		SLIST_INSERT_HEAD(&tableq, kt, pfrkt_workq);
+		kt->pfrkt_version = pfr_get_ktable_version(kt);
 		kt->pfrkt_rs = rs;
 		rs->tables++;
 		xadd++;
@@ -1912,18 +1933,23 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		rt = pfr_create_ktable(&key.pfrkt_t, 0, 0, PR_WAITOK);
 		SLIST_INSERT_HEAD(&tableq, rt, pfrkt_workq);
 		kt->pfrkt_root = rt;
+		kt->pfrkt_version = pfr_get_ktable_version(kt);
 		kt->pfrkt_rs = rs;
 		rs->tables++;
 	} else {
 		/*
-		 * former code was using shadow/pfrkt_shadow to deal with
-		 * situation as follows:
+		 * Note 1:
+		 * former code was using shadow/pfrkt_shadow here. table
+		 * bound to transaction works as shadow in fact.
+		 *
+		 * Note 2:
+		 * consider file snippet as follows:
 		 *	table <dup> { 1.2.3.4, 1.2.3.5 }
 		 *	table <dup> { 1.2.3.6, 1.2.3.7 }
-		 * loading tables above will result into dup table
-		 * which contains addresses .6 and .7 that's
-		 * how *shadow tables used to work. To achieve same
-		 * behavior we just flush table here.
+		 * loading pf.conf with definitions as above above will result 
+		 * to table dup with addresses .6 and .7. This is how current
+		 * (7.2) behaves.  To achieve the same behavior we just flush
+		 * table here.
 		 */
 		pfr_enqueue_addrs(kt, &addrq, NULL, 0);
 		pfr_clean_node_mask(kt, &addrq);
@@ -1933,10 +1959,10 @@ _skip:
 	/*
 	 * also dealing with dummy flag is easy, all operations
 	 * on transaction (pfr_ina_*())) are in fact dummy until
-	 * we doo 'COMMIT', so if pfctl runs in dummy mode we just
+	 * we do 'COMMIT', so if pfctl runs in dummy mode we just
 	 * avoid a commit operation and that's it.
 	 *
-	 * the transaction will be cleaned up as with close of
+	 * the transaction will be cleaned up with close on 
 	 * /dev/pf
 	 */
 	xadd++;
@@ -1976,36 +2002,6 @@ _bad:
 }
 
 int
-pfr_ina_rollback(struct pfr_table *trs, u_int32_t ticket, int *ndel, int flags)
-{
-	struct pfr_ktableworkq	 workq;
-	struct pfr_ktable	*p;
-	struct pf_ruleset	*rs;
-	int			 xdel = 0;
-
-	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
-	rs = pf_find_ruleset(&pf_global, trs->pfrt_anchor);
-	if (rs == NULL || ticket != rs->tversion)
-		return (0);
-	SLIST_INIT(&workq);
-	RB_FOREACH(p, pfr_ktablehead, &pfr_ktables) {
-		if (!(p->pfrkt_flags & PFR_TFLAG_INACTIVE) ||
-		    pfr_skip_table(trs, p, 0))
-			continue;
-		p->pfrkt_nflags = p->pfrkt_flags & ~PFR_TFLAG_INACTIVE;
-		SLIST_INSERT_HEAD(&workq, p, pfrkt_workq);
-		xdel++;
-	}
-	if (!(flags & PFR_FLAG_DUMMY)) {
-		pfr_setflags_ktables(&workq);
-		pf_remove_if_empty_ruleset(&pf_global, rs);
-	}
-	if (ndel != NULL)
-		*ndel = xdel;
-	return (0);
-}
-
-int
 pfr_ina_commit(struct pfr_table *trs, u_int32_t ticket, int *nadd,
     int *nchange, int flags)
 {
@@ -2015,6 +2011,7 @@ pfr_ina_commit(struct pfr_table *trs, u_int32_t ticket, int *nadd,
 	int			 xadd = 0, xchange = 0;
 	time_t			 tzero = gettime();
 
+	PF_ASSERT_LOCKED();
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
 	rs = pf_find_ruleset(&pf_global, trs->pfrt_anchor);
 	if (rs == NULL || ticket != rs->tversion)
@@ -2375,10 +2372,10 @@ pfr_ktable_compare(struct pfr_ktable *p, struct pfr_ktable *q)
 }
 
 struct pfr_ktable *
-pfr_lookup_table(struct pfr_table *tbl)
+pfr_lookup_table(struct pf_rules_container *rc, struct pfr_table *tbl)
 {
 	/* struct pfr_ktable start like a struct pfr_table */
-	return (RB_FIND(pfr_ktablehead, &pfr_ktables,
+	return (RB_FIND(pfr_ktablehead, &rc->ktables,
 	    (struct pfr_ktable *)tbl));
 }
 
@@ -2513,35 +2510,51 @@ pfr_update_stats(struct pfr_ktable *kt, struct pf_addr *a, struct pf_pdesc *pd,
 }
 
 struct pfr_ktable *
-pfr_attach_table(struct pf_ruleset *rs, char *name, int wait)
+pfr_attach_table(struct pf_trans *t, struct pf_ruleset *rs, char *name,
+    int wait)
 {
 	struct pfr_ktable	*kt, *rt;
 	struct pfr_table	 tbl;
 	struct pf_anchor	*ac = rs->anchor;
+	struct pf_rules_container *rc;
 
 	bzero(&tbl, sizeof(tbl));
 	strlcpy(tbl.pfrt_name, name, sizeof(tbl.pfrt_name));
 	if (ac != NULL)
 		strlcpy(tbl.pfrt_anchor, ac->path, sizeof(tbl.pfrt_anchor));
-	kt = pfr_lookup_table(&tbl);
+
+	if (t == NULL) {
+		/*
+		 * if there is no transaction, then we act on global data,
+		 * in this case PF_LOCK must be held.
+		 */
+		PF_ASSERT_LOCKED();
+		rc = &pf_global;
+		wait = 0;
+	} else {
+		rc = &t->rc;
+		wait = 1;
+	}
+	kt = pfr_lookup_table(rc, &tbl);
 	if (kt == NULL) {
 		kt = pfr_create_ktable(&tbl, gettime(), 1, wait);
 		if (kt == NULL)
 			return (NULL);
 		if (ac != NULL) {
 			bzero(tbl.pfrt_anchor, sizeof(tbl.pfrt_anchor));
-			rt = pfr_lookup_table(&tbl);
+			rt = pfr_lookup_table(rc, &tbl);
 			if (rt == NULL) {
+				/* TODO: transaction scope ? */
 				rt = pfr_create_ktable(&tbl, 0, 1, wait);
 				if (rt == NULL) {
 					pfr_destroy_ktable(kt, 0);
 					return (NULL);
 				}
-				pfr_insert_ktable(&pf_global, rt);
+				pfr_insert_ktable(rc, rt);
 			}
 			kt->pfrkt_root = rt;
 		}
-		pfr_insert_ktable(&pf_global, kt);
+		pfr_insert_ktable(rc, kt);
 	}
 	if (!kt->pfrkt_refcnt[PFR_REFCNT_RULE]++)
 		pfr_setflags_ktable(kt, kt->pfrkt_flags|PFR_TFLAG_REFERENCED);
@@ -2873,4 +2886,25 @@ pfr_ktable_select_active(struct pfr_ktable *kt)
 		return (NULL);
 
 	return (kt);
+}
+
+u_int32_t
+pfr_get_ktable_version(struct pfr_ktable *ktt)
+{
+	struct pfr_ktable	*kt;
+	u_int32_t		 version;
+
+	NET_LOCK();
+	PF_LOCK();
+	kt = pfr_lookup_table(&pf_global, (struct pfr_table *)ktt);
+	if (kt != NULL)
+		version = kt->pfrkt_version;
+	else
+		version = 0;
+	PF_UNLOCK();
+	NET_UNLOCK();
+	log(LOG_ERR, "%s @ %d found %p for %s, version: %d\n",
+	    __func__, __LINE__, kt, ktt->pfrkt_name, version);
+
+	return (version);
 }

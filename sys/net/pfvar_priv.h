@@ -383,13 +383,16 @@ extern void			 pf_purge_timeout(void *);
 extern void			 pf_purge(void *);
 
 /* for copies to/from network byte order */
-void			pf_state_peer_hton(const struct pf_state_peer *,
+void			 pf_state_peer_hton(const struct pf_state_peer *,
 			    struct pfsync_state_peer *);
-void			pf_state_peer_ntoh(const struct pfsync_state_peer *,
+void			 pf_state_peer_ntoh(const struct pfsync_state_peer *,
 			    struct pf_state_peer *);
-extern void			 pf_purge_timeout(void *);
-extern void			 pf_purge(void *);
-extern void			 pfr_destroy_ktable(struct pfr_ktable *, int);
+extern void		 pf_purge_timeout(void *);
+extern void		 pf_purge(void *);
+extern void		 pfr_destroy_ktable(struct pfr_ktable *, int);
+extern struct pfr_ktable
+			*pfr_lookup_table(struct pf_rules_container *,
+			    struct pfr_table *);
 RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 #endif /* _KERNEL */
 

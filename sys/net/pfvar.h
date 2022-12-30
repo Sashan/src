@@ -1014,6 +1014,7 @@ struct pfr_ktable {
 	u_int64_t		 pfrkt_refcntcost;
 	u_int16_t		 pfrkt_gcdweight;
 	u_int16_t		 pfrkt_maxweight;
+	u_int32_t		 pfrkt_version;
 };
 #define pfrkt_t		pfrkt_ts.pfrts_t
 #define pfrkt_name	pfrkt_t.pfrt_name
@@ -1603,8 +1604,9 @@ extern struct pool		 pf_state_scrub_pl;
 extern struct ifnet		*sync_ifp;
 extern struct pf_rule		 pf_default_rule;
 
-extern int			 pf_tbladdr_setup(struct pf_ruleset *,
-				    struct pf_addr_wrap *, int);
+extern int			 pf_tbladdr_setup(struct pf_trans *,
+				    struct pf_ruleset *, struct pf_addr_wrap *,
+				    int);
 extern void			 pf_tbladdr_remove(struct pf_addr_wrap *);
 extern void			 pf_tbladdr_copyout(struct pf_addr_wrap *);
 extern void			 pf_calc_skip_steps(struct pf_rulequeue *);
@@ -1728,7 +1730,7 @@ struct pfr_kentry *
 	    int);
 void	pfr_dynaddr_update(struct pfr_ktable *, struct pfi_dynaddr *);
 struct pfr_ktable *
-	pfr_attach_table(struct pf_ruleset *, char *, int);
+	pfr_attach_table(struct pf_trans *, struct pf_ruleset *, char *, int);
 void	pfr_detach_table(struct pfr_ktable *);
 int	pfr_clr_tables(struct pfr_table *, int *, int);
 int	pfr_add_tables(struct pfr_table *, int, int *, int);
@@ -1752,7 +1754,6 @@ int	pfr_clr_astats(struct pfr_table *, struct pfr_addr *, int, int *,
 int	pfr_tst_addrs(struct pfr_table *, struct pfr_addr *, int, int *,
 	    int);
 int	pfr_ina_begin(struct pf_trans *, u_int32_t *, const char *);
-int	pfr_ina_rollback(struct pfr_table *, u_int32_t, int *, int);
 int	pfr_ina_commit(struct pfr_table *, u_int32_t, int *, int *, int);
 int	pfr_ina_define(struct pf_trans *, struct pfr_table *,
 	    struct pfr_addr *, int, int *, int *, int);
