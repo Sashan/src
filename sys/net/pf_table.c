@@ -2019,6 +2019,16 @@ pfr_ina_commit(struct pfr_table *trs, u_int32_t ticket, int *nadd,
 
 	SLIST_INIT(&workq);
 	RB_FOREACH(p, pfr_ktablehead, &pfr_ktables) {
+		/*
+		 * pfr_ina_define() in current creates tables
+		 * with INACTIVE flag set. Thus tables with
+		 * INACTIVE flag are new and commit will bring them
+		 * alive.
+		 *
+		 * We also insert tables to workq which are bound the same
+		 * reuleset as trs is bound to. Those tables will be removed
+		 * by commit operation.
+		 */
 		if (!(p->pfrkt_flags & PFR_TFLAG_INACTIVE) ||
 		    pfr_skip_table(trs, p, 0))
 			continue;
@@ -2054,6 +2064,11 @@ pfr_commit_ktable(struct pfr_ktable *kt, time_t tzero)
 		if (!(kt->pfrkt_flags & PFR_TFLAG_ACTIVE))
 			pfr_clstats_ktable(kt, tzero, 1);
 	} else if (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) {
+		/* kt with ACTIVE flag, new ruleset does
+		 * not refer it, thus table must die.
+		 * this else branch just removes addresses
+		 * found in table.
+		 */
 		/* kt might contain addresses */
 		struct pfr_kentryworkq	 addrq, addq, changeq, delq, garbageq;
 		struct pfr_kentry	*p, *q;
@@ -2088,14 +2103,16 @@ pfr_commit_ktable(struct pfr_ktable *kt, time_t tzero)
 		pfr_clstats_kentries(&changeq, tzero, INVERT_NEG_FLAG);
 		pfr_destroy_kentries(&garbageq);
 	} else {
+		/* table is being inserted to ruleset just swap shadow and kt*/
 		/* kt cannot contain addresses */
 		SWAP(struct radix_node_head *, kt->pfrkt_ip4,
 		    shadow->pfrkt_ip4);
 		SWAP(struct radix_node_head *, kt->pfrkt_ip6,
 		    shadow->pfrkt_ip6);
 		SWAP(int, kt->pfrkt_cnt, shadow->pfrkt_cnt);
-		pfr_clstats_ktable(kt, tzero, 1);
+		    pfr_clstats_ktable(kt, tzero, 1);
 	}
+	/* this nflags magic determines whether table will survive commit or not */
 	nflags = ((shadow->pfrkt_flags & PFR_TFLAG_USRMASK) |
 	    (kt->pfrkt_flags & PFR_TFLAG_SETMASK) | PFR_TFLAG_ACTIVE)
 		& ~PFR_TFLAG_INACTIVE;
