@@ -827,6 +827,7 @@ anchorname	: STRING			{
 
 pfa_anchorlist	: /* empty */
 		| pfa_anchorlist '\n'
+		| pfa_anchorlist tabledef '\n'
 		| pfa_anchorlist pfrule '\n'
 		| pfa_anchorlist anchorrule '\n'
 		| pfa_anchorlist include '\n'
