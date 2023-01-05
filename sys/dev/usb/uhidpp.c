@@ -1,4 +1,4 @@
-/*	$OpenBSD: uhidpp.c,v 1.39 2022/11/29 06:30:34 anton Exp $	*/
+/*	$OpenBSD: uhidpp.c,v 1.42 2023/01/03 15:52:02 anton Exp $	*/
 
 /*
  * Copyright (c) 2021 Anton Lindqvist <anton@openbsd.org>
@@ -72,21 +72,21 @@ int uhidpp_debug = 1;
 
 #define HIDPP_DEVICE_ID_RECEIVER		0xff
 
-#define HIDPP_FEAT_ROOT_IDX			0x00
+#define HIDPP_FEAT_ROOT_ID			0x00
 #define HIDPP_FEAT_ROOT_PING_FUNC		0x01
-#define HIDPP_FEAT_ROOT_PING_DATA		0x5a
+#define  HIDPP_PING_DATA			0x5a
 
 #define HIDPP_SET_REGISTER			0x80
 #define HIDPP_GET_REGISTER			0x81
 #define HIDPP_SET_LONG_REGISTER			0x82
 #define HIDPP_GET_LONG_REGISTER			0x83
 
-#define HIDPP_REG_ENABLE_REPORTS		0x00
-#define HIDPP_REG_PAIRING_INFORMATION		0xb5
+#define HIDPP_REG_ENABLE_REPORTS			0x00
+#define  HIDPP_ENABLE_REPORTS_DEVICE_BATTERY_STATUS	0x10
+#define  HIDPP_ENABLE_REPORTS_RECEIVER_WIRELESS		0x01
+#define  HIDPP_ENABLE_REPORTS_RECEIVER_SOFTWARE_PRESENT	0x08
 
-#define HIDPP_NOTIF_DEVICE_BATTERY_STATUS	(1 << 4)
-#define HIDPP_NOTIF_RECEIVER_WIRELESS		(1 << 0)
-#define HIDPP_NOTIF_RECEIVER_SOFTWARE_PRESENT	(1 << 3)
+#define HIDPP_REG_PAIRING_INFORMATION		0xb5
 
 /* HID++ 1.0 error codes. */
 #define HIDPP_ERROR				0x8f
@@ -108,8 +108,11 @@ int uhidpp_debug = 1;
  * The software ID is added to feature access reports (FAP) and used to
  * distinguish responses from notifications. Note, the software ID must be
  * greater than zero which is reserved for notifications.
+ * The effective software ID round robins within its allowed interval [1, 15]
+ * making it easier to correlate requests and responses.
  */
-#define HIDPP_SOFTWARE_ID			0x01
+#define HIDPP_SOFTWARE_ID_MIN			1
+#define HIDPP_SOFTWARE_ID_MAX			15
 #define HIDPP_SOFTWARE_ID_LEN			4
 
 #define HIDPP20_FEAT_ROOT_ID			0x0000
@@ -238,6 +241,7 @@ struct uhidpp_softc {
 	struct uhidpp_report *sc_req;	/* [m] synchronous request buffer */
 	struct uhidpp_report *sc_resp;	/* [m] synchronous response buffer */
 	u_int sc_resp_state;		/* [m] synchronous response state */
+	u_int sc_swid;			/* [m] request software id */
 
 	enum {
 		UHIDPP_RECEIVER_UNIFYING,
@@ -372,6 +376,7 @@ uhidpp_attach(struct device *parent, struct device *self, void *aux)
 
 	sc->sc_resp = NULL;
 	sc->sc_resp_state = UHIDPP_RESP_NONE;
+	sc->sc_swid = HIDPP_SOFTWARE_ID_MIN;
 
 	error = uhidev_open(&sc->sc_hdev);
 	if (error) {
@@ -663,7 +668,7 @@ uhidpp_device_connect(struct uhidpp_softc *sc, struct uhidpp_device *dev)
 	 */
 	KASSERT(sc->sc_senstsk == NULL);
 	mtx_leave(&sc->sc_mtx);
-	sc->sc_senstsk = sensor_task_register(sc, uhidpp_refresh, 30);
+	sc->sc_senstsk = sensor_task_register(sc, uhidpp_refresh, 60);
 	mtx_enter(&sc->sc_mtx);
 }
 
@@ -835,13 +840,13 @@ hidpp_get_protocol_version(struct uhidpp_softc *sc, uint8_t device_id,
     uint8_t *major, uint8_t *minor)
 {
 	struct uhidpp_report resp;
-	uint8_t params[3] = { 0, 0, HIDPP_FEAT_ROOT_PING_DATA };
+	uint8_t params[3] = { 0, 0, HIDPP_PING_DATA };
 	int error;
 
 	error = hidpp_send_fap_report(sc,
 	    HIDPP_REPORT_ID_SHORT,
 	    device_id,
-	    HIDPP_FEAT_ROOT_IDX,
+	    HIDPP_FEAT_ROOT_ID,
 	    HIDPP_FEAT_ROOT_PING_FUNC,
 	    params, sizeof(params), &resp);
 	if (error == HIDPP_ERROR_INVALID_SUBID) {
@@ -851,7 +856,7 @@ hidpp_get_protocol_version(struct uhidpp_softc *sc, uint8_t device_id,
 	}
 	if (error)
 		return error;
-	if (resp.rap.params[2] != HIDPP_FEAT_ROOT_PING_DATA)
+	if (resp.rap.params[2] != HIDPP_PING_DATA)
 		return -EPROTO;
 
 	*major = resp.fap.params[0];
@@ -969,10 +974,10 @@ hidpp10_enable_notifications(struct uhidpp_softc *sc, uint8_t device_id)
 	uint8_t params[3];
 
 	/* Device reporting flags. */
-	params[0] = HIDPP_NOTIF_DEVICE_BATTERY_STATUS;
+	params[0] = HIDPP_ENABLE_REPORTS_DEVICE_BATTERY_STATUS;
 	/* Receiver reporting flags. */
-	params[1] = HIDPP_NOTIF_RECEIVER_WIRELESS |
-	    HIDPP_NOTIF_RECEIVER_SOFTWARE_PRESENT;
+	params[1] = HIDPP_ENABLE_REPORTS_RECEIVER_WIRELESS |
+	    HIDPP_ENABLE_REPORTS_RECEIVER_SOFTWARE_PRESENT;
 	/* Device reporting flags (continued). */
 	params[2] = 0;
 
@@ -1268,8 +1273,10 @@ hidpp_send_fap_report(struct uhidpp_softc *sc, uint8_t report_id,
 	memset(&req, 0, sizeof(req));
 	req.device_id = device_id;
 	req.fap.feature_idx = feature_idx;
+	sc->sc_swid = sc->sc_swid == HIDPP_SOFTWARE_ID_MAX ?
+	    HIDPP_SOFTWARE_ID_MIN : sc->sc_swid + 1;
 	req.fap.funcidx_swid =
-	    (funcidx_swid << HIDPP_SOFTWARE_ID_LEN) | HIDPP_SOFTWARE_ID;
+	    (funcidx_swid << HIDPP_SOFTWARE_ID_LEN) | sc->sc_swid;
 	memcpy(req.fap.params, params, nparams);
 	return hidpp_send_report(sc, report_id, &req, resp);
 }

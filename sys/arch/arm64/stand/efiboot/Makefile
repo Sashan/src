@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.17 2022/12/07 23:04:26 patrick Exp $
+#	$OpenBSD: Makefile,v 1.19 2023/01/04 13:01:46 deraadt Exp $
 
 NOMAN=		#
 
@@ -19,7 +19,7 @@ OBJCOPY?=	objcopy
 OBJDUMP?=	objdump
 
 LDFLAGS+=-nostdlib -T ${.CURDIR}/ldscript.arm64 -Bsymbolic -shared
-LDFLAGS+=--pack-dyn-relocs=none
+LDFLAGS+=--pack-dyn-relocs=none --no-execute-only
 
 .PATH:	${S}/stand/boot
 SRCS+=	boot.c cmd.c vars.c
@@ -53,6 +53,9 @@ COPTS+=		-Wno-attributes -Wno-format
 COPTS+=		-ffreestanding -fno-stack-protector
 COPTS+=		-fshort-wchar -fPIC -fno-builtin
 COPTS+=		-Wall -Werror
+# XXX Workaround for zlib + clang 15
+# https://github.com/madler/zlib/issues/633
+COPTS+=		-Wno-deprecated-non-prototype -Wno-unknown-warning-option
 
 PROG.elf=	${PROG:S/.EFI/.elf/}
 CLEANFILES+=	${PROG.elf} ${PROG.elf}.tmp

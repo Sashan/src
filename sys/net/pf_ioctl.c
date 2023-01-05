@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf_ioctl.c,v 1.393 2022/12/21 02:23:10 dlg Exp $ */
+/*	$OpenBSD: pf_ioctl.c,v 1.395 2023/01/04 10:31:55 dlg Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -2219,7 +2219,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				key.port[sidx] = psk->psk_src.port[0];
 				key.port[didx] = psk->psk_dst.port[0];
 
-				sk = RB_FIND(pf_state_tree, &pf_statetbl, &key);
+				sk = RBT_FIND(pf_state_tree, &pf_statetbl,
+				    &key);
 				if (sk == NULL)
 					continue;
 
@@ -2256,10 +2257,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		NET_LOCK();
 		PF_LOCK();
 		PF_STATE_ENTER_WRITE();
-		for (s = RB_MIN(pf_state_tree_id, &tree_id); s;
-		    s = nexts) {
-			nexts = RB_NEXT(pf_state_tree_id, &tree_id, s);
-
+		RBT_FOREACH_SAFE(s, pf_state_tree_id, &tree_id, nexts) {
 			if (s->direction == PF_OUT) {
 				sk = s->key[PF_SK_STACK];
 				srcaddr = &sk->addr[1];
@@ -3368,7 +3366,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		NET_LOCK();
 		PF_LOCK();
 		PF_STATE_ENTER_WRITE();
-		RB_FOREACH(state, pf_state_tree_id, &tree_id)
+		RBT_FOREACH(state, pf_state_tree_id, &tree_id)
 			pf_src_tree_remove_state(state);
 		PF_STATE_EXIT_WRITE();
 		RB_FOREACH(n, pf_src_tree, &tree_src_tracking)
@@ -3401,7 +3399,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				if (sn->states != 0) {
 					PF_ASSERT_LOCKED();
 					PF_STATE_ENTER_WRITE();
-					RB_FOREACH(s, pf_state_tree_id,
+					RBT_FOREACH(s, pf_state_tree_id,
 					   &tree_id)
 						pf_state_rm_src_node(s, sn);
 					PF_STATE_EXIT_WRITE();

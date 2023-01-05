@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.c,v 1.437 2022/12/27 17:05:38 claudio Exp $ */
+/*	$OpenBSD: session.c,v 1.439 2023/01/04 14:33:30 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004, 2005 Henning Brauer <henning@openbsd.org>
@@ -586,7 +586,7 @@ init_peer(struct peer *p)
 
 	/*
 	 * on startup, demote if requested.
-	 * do not handle new peers. they must reach ESTABLISHED beforehands.
+	 * do not handle new peers. they must reach ESTABLISHED beforehand.
 	 * peers added at runtime have reconf_action set to RECONF_REINIT.
 	 */
 	if (p->reconf_action != RECONF_REINIT && p->conf.demote_group[0])
@@ -1412,6 +1412,47 @@ session_sendmsg(struct bgp_msg *msg, struct peer *p)
 	return (0);
 }
 
+/*
+ * Translate between internal roles and the value expected by RFC 9234.
+ */
+static uint8_t
+role2capa(enum role role)
+{
+	switch (role) {
+	case ROLE_CUSTOMER:
+		return CAPA_ROLE_CUSTOMER;
+	case ROLE_PROVIDER:
+		return CAPA_ROLE_PROVIDER;
+	case ROLE_RS:
+		return CAPA_ROLE_RS;
+	case ROLE_RS_CLIENT:
+		return CAPA_ROLE_RS_CLIENT;
+	case ROLE_PEER:
+		return CAPA_ROLE_PEER;
+	default:
+		fatalx("Unsupported role for role capability");
+	}
+}
+
+static enum role
+capa2role(uint8_t val)
+{
+	switch (val) {
+	case CAPA_ROLE_PROVIDER:
+		return ROLE_PROVIDER;
+	case CAPA_ROLE_RS:
+		return ROLE_RS;
+	case CAPA_ROLE_RS_CLIENT:
+		return ROLE_RS_CLIENT;
+	case CAPA_ROLE_CUSTOMER:
+		return ROLE_CUSTOMER;
+	case CAPA_ROLE_PEER:
+		return ROLE_PEER;
+	default:
+		return ROLE_NONE;
+	}
+}
+
 void
 session_open(struct peer *p)
 {
@@ -1442,9 +1483,12 @@ session_open(struct peer *p)
 		errs += session_capa_add(opb, CAPA_REFRESH, 0);
 
 	/* BGP open policy, RFC 9234, only for ebgp sessions */
-	if (p->capa.ann.role_ena && p->conf.ebgp) {
+	if (p->conf.ebgp && p->capa.ann.role_ena &&
+	    p->capa.ann.role != ROLE_NONE) {
+		uint8_t val;
+		val = role2capa(p->capa.ann.role);
 		errs += session_capa_add(opb, CAPA_ROLE, 1);
-		errs += ibuf_add(opb, &p->capa.ann.role, 1);
+		errs += ibuf_add(opb, &val, 1);
 	}
 
 	/* graceful restart and End-of-RIB marker, RFC 4724 */
@@ -1505,7 +1549,7 @@ session_open(struct peer *p)
 	if (optparamlen == 0) {
 		/* nothing */
 	} else if (optparamlen + 2 >= 255) {
-		/* RFC9072: 2 byte lenght instead of 1 + 3 byte extra header */
+		/* RFC9072: 2 byte length instead of 1 + 3 byte extra header */
 		optparamlen += sizeof(op_type) + 2 + 3;
 		msg.optparamlen = 255;
 		extlen = 1;
@@ -2628,7 +2672,7 @@ parse_capabilities(struct peer *peer, u_char *d, uint16_t dlen, uint32_t *as)
 				log_peer_warnx(&peer->conf,
 				    "Received role capability on iBGP session");
 			peer->capa.peer.role_ena = 1;
-			peer->capa.peer.role = *capa_val;
+			peer->capa.peer.role = capa2role(*capa_val);
 			break;
 		case CAPA_RESTART:
 			if (capa_len == 2) {
@@ -2775,7 +2819,7 @@ capa_neg_calc(struct peer *p, uint8_t *suberr)
 	/*
 	 * graceful restart: the peer capabilities are of interest here.
 	 * It is necessary to compare the new values with the previous ones
-	 * and act acordingly. AFI/SAFI that are not part in the MP capability
+	 * and act accordingly. AFI/SAFI that are not part in the MP capability
 	 * are treated as not being present.
 	 * Also make sure that a flush happens if the session stopped
 	 * supporting graceful restart.
@@ -2847,24 +2891,24 @@ capa_neg_calc(struct peer *p, uint8_t *suberr)
 	if (p->capa.ann.role_ena != 0 && p->capa.peer.role_ena != 0 &&
 	    p->conf.ebgp) {
 		switch (p->capa.ann.role) {
-		case CAPA_ROLE_PROVIDER:
-			if (p->capa.peer.role != CAPA_ROLE_CUSTOMER)
+		case ROLE_PROVIDER:
+			if (p->capa.peer.role != ROLE_CUSTOMER)
 				goto fail;
 			break;
-		case CAPA_ROLE_RS:
-			if (p->capa.peer.role != CAPA_ROLE_RS_CLIENT)
+		case ROLE_RS:
+			if (p->capa.peer.role != ROLE_RS_CLIENT)
 				goto fail;
 			break;
-		case CAPA_ROLE_RS_CLIENT:
-			if (p->capa.peer.role != CAPA_ROLE_RS)
+		case ROLE_RS_CLIENT:
+			if (p->capa.peer.role != ROLE_RS)
 				goto fail;
 			break;
-		case CAPA_ROLE_CUSTOMER:
-			if (p->capa.peer.role != CAPA_ROLE_PROVIDER)
+		case ROLE_CUSTOMER:
+			if (p->capa.peer.role != ROLE_PROVIDER)
 				goto fail;
 			break;
-		case CAPA_ROLE_PEER:
-			if (p->capa.peer.role != CAPA_ROLE_PEER)
+		case ROLE_PEER:
+			if (p->capa.peer.role != ROLE_PEER)
 				goto fail;
 			break;
 		default:

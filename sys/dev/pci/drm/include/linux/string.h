@@ -9,6 +9,8 @@
 #include <sys/stdint.h>
 #include <sys/errno.h>
 
+#include <linux/compiler.h>
+
 void *memchr_inv(const void *, int, size_t);
 
 static inline void *
@@ -77,6 +79,23 @@ match_string(const char * const *array,  size_t n, const char *str)
 	}
 
 	return -EINVAL;
+}
+
+static inline ssize_t
+strscpy(char *dst, const char *src, size_t dstsize)
+{
+	ssize_t r;
+	r = strlcpy(dst, src, dstsize);
+	if (dstsize == 0 || r >= dstsize)
+		return -E2BIG;
+	return r;
+}
+
+static inline ssize_t
+strscpy_pad(char *dst, const char *src, size_t dstsize)
+{
+	memset(dst, 0, dstsize);
+	return strscpy(dst, src, dstsize);
 }
 
 #endif
