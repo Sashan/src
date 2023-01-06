@@ -207,7 +207,6 @@ u_int32_t		 pfr_get_ktable_version(struct pfr_ktable *);
 
 RB_GENERATE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 
-struct pfr_ktablehead	 pfr_ktables;
 struct pfr_table	 pfr_nulltable;
 int			 pfr_ktable_cnt;
 
@@ -2381,18 +2380,17 @@ pfr_destroy_ktable(struct pfr_ktable *kt, int flushaddr)
 int
 pfr_ktable_compare(struct pfr_ktable *p, struct pfr_ktable *q)
 {
-	int d;
-
-	if ((d = strncmp(p->pfrkt_name, q->pfrkt_name, PF_TABLE_NAME_SIZE)))
-		return (d);
-	return (strcmp(p->pfrkt_anchor, q->pfrkt_anchor));
+	return (strncmp(p->pfrkt_name, q->pfrkt_name, PF_TABLE_NAME_SIZE));
 }
 
 struct pfr_ktable *
-pfr_lookup_table(struct pf_rules_container *rc, struct pfr_table *tbl)
+pfr_lookup_table(struct pf_anchor *ac, struct pfr_table *tbl)
 {
 	/* struct pfr_ktable start like a struct pfr_table */
-	return (RB_FIND(pfr_ktablehead, &rc->ktables,
+	if (ac == NULL)
+		ac = &pf_main_anchor;
+
+	return (RB_FIND(pfr_ktablehead, &ac->ktables,
 	    (struct pfr_ktable *)tbl));
 }
 
@@ -2527,8 +2525,7 @@ pfr_update_stats(struct pfr_ktable *kt, struct pf_addr *a, struct pf_pdesc *pd,
 }
 
 struct pfr_ktable *
-pfr_attach_table(struct pf_trans *t, struct pf_ruleset *rs, char *name,
-    int wait)
+pfr_attach_table(struct pf_ruleset *rs, char *name, int wait)
 {
 	struct pfr_ktable	*kt, *rt;
 	struct pfr_table	 tbl;
@@ -2537,44 +2534,35 @@ pfr_attach_table(struct pf_trans *t, struct pf_ruleset *rs, char *name,
 
 	bzero(&tbl, sizeof(tbl));
 	strlcpy(tbl.pfrt_name, name, sizeof(tbl.pfrt_name));
-	if (ac != NULL)
-		strlcpy(tbl.pfrt_anchor, ac->path, sizeof(tbl.pfrt_anchor));
 
-	if (t == NULL) {
-		/*
-		 * if there is no transaction, then we act on global data,
-		 * in this case PF_LOCK must be held.
-		 */
-		PF_ASSERT_LOCKED();
-		rc = &pf_global;
-		wait = 0;
-	} else {
-		rc = &t->rc;
-		wait = 1;
+	/*
+	 * try to find desired table in anchor and its ancestors
+	 * up to the root (main anchor)
+	 */
+	kt = NULL;
+	while (kt == NULL) {
+		kt = pfr_lookup_table(ac, &tbl);
+		ac = ac->parent;
+		if (ac == NULL)
+			break;
 	}
-	kt = pfr_lookup_table(rc, &tbl);
+	if (kt == NULL)
+		pfr_lookup_table(NULL, &tbl);
+
 	if (kt == NULL) {
 		kt = pfr_create_ktable(&tbl, gettime(), 1, wait);
 		if (kt == NULL)
 			return (NULL);
-		if (ac != NULL) {
-			bzero(tbl.pfrt_anchor, sizeof(tbl.pfrt_anchor));
-			rt = pfr_lookup_table(rc, &tbl);
-			if (rt == NULL) {
-				/* TODO: transaction scope ? */
-				rt = pfr_create_ktable(&tbl, 0, 1, wait);
-				if (rt == NULL) {
-					pfr_destroy_ktable(kt, 0);
-					return (NULL);
-				}
-				pfr_insert_ktable(rc, rt);
-			}
-			kt->pfrkt_root = rt;
-		}
-		pfr_insert_ktable(rc, kt);
+		/*
+		 * Tables created on behalf of pfr_attach_table()
+		 * must always go to root anchor.
+		 */
+		KASSERT(ac == NULL);
+		pfr_insert_ktable(ac, kt);
 	}
 	if (!kt->pfrkt_refcnt[PFR_REFCNT_RULE]++)
 		pfr_setflags_ktable(kt, kt->pfrkt_flags|PFR_TFLAG_REFERENCED);
+
 	return (kt);
 }
 

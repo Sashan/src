@@ -824,8 +824,6 @@ struct pf_ruleset {
 		u_int32_t		 version;
 	}			 rules;
 	struct pf_anchor	*anchor;
-	u_int32_t		 tversion;
-	int			 tables;
 };
 
 RB_HEAD(pf_anchor_global, pf_anchor);
@@ -840,6 +838,8 @@ struct pf_anchor {
 	struct pf_ruleset	 ruleset;
 	int			 refcnt;	/* anchor rules */
 	int			 match;
+	struct pfr_ktablehead	*ktables;
+	u_int32_t		 tables;
 };
 RB_PROTOTYPE(pf_anchor_global, pf_anchor, entry_global, pf_anchor_compare)
 RB_PROTOTYPE(pf_anchor_node, pf_anchor, entry_node, pf_anchor_compare)
@@ -1806,7 +1806,6 @@ extern struct pf_pool_limit	pf_pool_limits[PF_LIMIT_MAX];
 struct pf_rules_container {
 	struct pf_anchor_global	 anchors;
 	struct pf_anchor	 main_anchor;
-	struct pfr_ktablehead	 ktables;
 };
 
 extern struct pf_rules_container pf_global;
