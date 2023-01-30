@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.456 2023/01/04 14:33:30 claudio Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.460 2023/01/24 14:13:11 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -94,6 +94,9 @@
 #define	F_CTL_OVS_NOTFOUND	0x200000
 #define	F_CTL_NEIGHBORS		0x400000 /* only used by bgpctl */
 #define	F_CTL_HAS_PATHID	0x800000 /* only set on requests */
+#define	F_CTL_AVS_VALID		0x1000000
+#define	F_CTL_AVS_INVALID	0x2000000
+#define	F_CTL_AVS_UNKNOWN	0x4000000
 
 #define CTASSERT(x)	extern char  _ctassert[(x) ? 1 : -1 ] \
 			    __attribute__((__unused__))
@@ -106,6 +109,12 @@
 #define	ROA_INVALID		0x1
 #define	ROA_VALID		0x2
 #define	ROA_MASK		0x3
+
+#define	ASPA_UNKNOWN		0x00	/* default */
+#define	ASPA_INVALID		0x01
+#define	ASPA_VALID		0x02
+#define	ASPA_MASK		0x03
+#define	ASPA_NEVER_KNOWN	0x08	/* unknown and check never needed */
 
 /*
  * Limit the number of messages queued in the session engine.
@@ -598,6 +607,7 @@ enum imsg_type {
 	IMSG_RECONF_ASPA_TAS,
 	IMSG_RECONF_ASPA_TAS_AID,
 	IMSG_RECONF_ASPA_DONE,
+	IMSG_RECONF_ASPA_PREP,
 	IMSG_RECONF_RTR_CONFIG,
 	IMSG_RECONF_DRAIN,
 	IMSG_RECONF_DONE,
@@ -795,6 +805,7 @@ struct ctl_show_set {
 		PREFIX_SET,
 		ORIGIN_SET,
 		ROA_SET,
+		ASPA_SET,
 	}			type;
 };
 
@@ -832,7 +843,8 @@ struct ctl_show_rib {
 	uint32_t		flags;
 	uint8_t			prefixlen;
 	uint8_t			origin;
-	uint8_t			validation_state;
+	uint8_t			roa_validation_state;
+	uint8_t			aspa_validation_state;
 	int8_t			dmetric;
 	/* plus an aspath */
 };
@@ -887,7 +899,7 @@ struct filter_originset {
 	struct rde_prefixset	*ps;
 };
 
-struct filter_ovs {
+struct filter_vs {
 	uint8_t			 validity;
 	uint8_t			 is_set;
 };
@@ -1073,7 +1085,8 @@ struct filter_match {
 	struct community		community[MAX_COMM_MATCH];
 	struct filter_prefixset		prefixset;
 	struct filter_originset		originset;
-	struct filter_ovs		ovs;
+	struct filter_vs		ovs;
+	struct filter_vs		avs;
 	int				maxcomm;
 	int				maxextcomm;
 	int				maxlargecomm;
@@ -1172,6 +1185,11 @@ struct aspa_set {
 	uint32_t			 *tas;
 	uint8_t				 *tas_aid;
 	RB_ENTRY(aspa_set)		 entry;
+};
+
+struct aspa_prep {
+	size_t				datasize;
+	uint32_t			entries;
 };
 
 struct l3vpn {

@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpctl.c,v 1.287 2022/10/18 09:30:29 job Exp $ */
+/*	$OpenBSD: bgpctl.c,v 1.289 2023/01/24 11:29:34 claudio Exp $ */
 
 /*
  * Copyright (c) 2003 Henning Brauer <henning@openbsd.org>
@@ -772,6 +772,19 @@ fmt_ovs(uint8_t validation_state, int sum)
 }
 
 const char *
+fmt_avs(uint8_t validation_state, int sum)
+{
+	switch (validation_state) {
+	case ASPA_INVALID:
+		return (sum ? "!" : "invalid");
+	case ASPA_VALID:
+		return (sum ? "V" : "valid");
+	default:
+		return (sum ? "?" : "unknown");
+	}
+}
+
+const char *
 fmt_mem(long long num)
 {
 	static char	buf[16];
@@ -1062,6 +1075,8 @@ const char *
 fmt_set_type(struct ctl_show_set *set)
 {
 	switch (set->type) {
+	case ASPA_SET:
+		return "ASPA";
 	case ROA_SET:
 		return "ROA";
 	case PREFIX_SET:

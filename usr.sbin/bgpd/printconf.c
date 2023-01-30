@@ -1,4 +1,4 @@
-/*	$OpenBSD: printconf.c,v 1.161 2023/01/04 14:33:30 claudio Exp $	*/
+/*	$OpenBSD: printconf.c,v 1.163 2023/01/24 14:13:12 claudio Exp $	*/
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -609,9 +609,8 @@ print_aspa(struct aspa_tree *a)
 		printf(" provider-as { ");
 		for (i = 0; i < aspa->num; i++) {
 			printf("%s ", log_as(aspa->tas[i]));
-			if (aspa->tas_aid != NULL &&
-			    aspa->tas_aid[i] != AID_UNSPEC)
-				printf("allow %s ", print_af(aspa->tas_aid[i]));
+			if (aspa->tas_aid[i] != AID_UNSPEC)
+				printf("%s ", print_af(aspa->tas_aid[i]));
 		}
 		printf("}");
 	}
@@ -942,6 +941,22 @@ print_rule(struct bgpd_config *conf, struct filter_rule *r)
 			break;
 		default:
 			printf("ovs ??? %d ??? ", r->match.ovs.validity);
+		}
+	}
+
+	if (r->match.avs.is_set) {
+		switch (r->match.avs.validity) {
+		case ASPA_VALID:
+			printf("avs valid ");
+			break;
+		case ASPA_INVALID:
+			printf("avs invalid ");
+			break;
+		case ASPA_UNKNOWN:
+			printf("avs unknown ");
+			break;
+		default:
+			printf("avs ??? %d ??? ", r->match.avs.validity);
 		}
 	}
 

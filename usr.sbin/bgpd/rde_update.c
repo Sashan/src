@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde_update.c,v 1.148 2022/09/23 15:49:20 claudio Exp $ */
+/*	$OpenBSD: rde_update.c,v 1.153 2023/01/24 11:28:41 claudio Exp $ */
 
 /*
  * Copyright (c) 2004 Claudio Jeker <claudio@openbsd.org>
@@ -176,11 +176,9 @@ up_generate_updates(struct filter_head *rules, struct rde_peer *peer,
 		    !(peer->flags & PEERFLAG_EVALUATE_ALL))
 			break;
 
-		rde_filterstate_prep(&state, prefix_aspath(new),
-		    prefix_communities(new), prefix_nexthop(new),
-		    prefix_nhflags(new));
+		rde_filterstate_prep(&state, new);
 		if (rde_filter(rules, peer, prefix_peer(new), &addr,
-		    prefixlen, prefix_vstate(new), &state) == ACTION_DENY) {
+		    prefixlen, &state) == ACTION_DENY) {
 			rde_filterstate_clean(&state);
 			if (peer->flags & PEERFLAG_EVALUATE_ALL) {
 				new = TAILQ_NEXT(new, entry.list.rib);
@@ -201,14 +199,16 @@ up_generate_updates(struct filter_head *rules, struct rde_peer *peer,
 		}
 
 		/* check if this was actually a withdraw */
-		if (need_withdraw)
+		if (need_withdraw) {
+			rde_filterstate_clean(&state);
 			break;
+		}
 
 		/* from here on we know this is an update */
 
 		up_prep_adjout(peer, &state, addr.aid);
 		prefix_adjout_update(p, peer, &state, &addr,
-		    new->pt->prefixlen, new->path_id_tx, prefix_vstate(new));
+		    new->pt->prefixlen, new->path_id_tx);
 		rde_filterstate_clean(&state);
 
 		/* max prefix checker outbound */
@@ -317,11 +317,9 @@ up_generate_addpath(struct filter_head *rules, struct rde_peer *peer,
 		if (!up_test_update(peer, new))
 			continue;
 
-		rde_filterstate_prep(&state, prefix_aspath(new),
-		    prefix_communities(new), prefix_nexthop(new),
-		    prefix_nhflags(new));
+		rde_filterstate_prep(&state, new);
 		if (rde_filter(rules, peer, prefix_peer(new), &addr,
-		    prefixlen, prefix_vstate(new), &state) == ACTION_DENY) {
+		    prefixlen, &state) == ACTION_DENY) {
 			rde_filterstate_clean(&state);
 			continue;
 		}
@@ -340,7 +338,7 @@ up_generate_addpath(struct filter_head *rules, struct rde_peer *peer,
 
 		up_prep_adjout(peer, &state, addr.aid);
 		prefix_adjout_update(p, peer, &state, &addr,
-		    new->pt->prefixlen, new->path_id_tx, prefix_vstate(new));
+		    new->pt->prefixlen, new->path_id_tx);
 		rde_filterstate_clean(&state);
 
 		/* max prefix checker outbound */
@@ -426,11 +424,9 @@ up_generate_addpath_all(struct filter_head *rules, struct rde_peer *peer,
 		if (!up_test_update(peer, new))
 			continue;
 
-		rde_filterstate_prep(&state, prefix_aspath(new),
-		    prefix_communities(new), prefix_nexthop(new),
-		    prefix_nhflags(new));
+		rde_filterstate_prep(&state, new);
 		if (rde_filter(rules, peer, prefix_peer(new), &addr,
-		    prefixlen, prefix_vstate(new), &state) == ACTION_DENY) {
+		    prefixlen, &state) == ACTION_DENY) {
 			rde_filterstate_clean(&state);
 			continue;
 		}
@@ -445,7 +441,7 @@ up_generate_addpath_all(struct filter_head *rules, struct rde_peer *peer,
 
 		up_prep_adjout(peer, &state, addr.aid);
 		prefix_adjout_update(p, peer, &state, &addr,
-		    prefixlen, new->path_id_tx, prefix_vstate(new));
+		    prefixlen, new->path_id_tx);
 		rde_filterstate_clean(&state);
 
 		/* max prefix checker outbound */
@@ -486,10 +482,11 @@ up_generate_default(struct filter_head *rules, struct rde_peer *peer,
 	if (peer->capa.mp[aid] == 0)
 		return;
 
-	rde_filterstate_prep(&state, NULL, NULL, NULL, 0);
+	rde_filterstate_init(&state);
 	asp = &state.aspath;
 	asp->aspath = aspath_get(NULL, 0);
 	asp->origin = ORIGIN_IGP;
+	rde_filterstate_set_vstate(&state, ROA_NOTFOUND, ASPA_NEVER_KNOWN);
 	/* the other default values are OK, nexthop is once again NULL */
 
 	/*
@@ -503,14 +500,14 @@ up_generate_default(struct filter_head *rules, struct rde_peer *peer,
 	p = prefix_adjout_lookup(peer, &addr, 0);
 
 	/* outbound filter as usual */
-	if (rde_filter(rules, peer, peerself, &addr, 0, ROA_NOTFOUND,
-	    &state) == ACTION_DENY) {
+	if (rde_filter(rules, peer, peerself, &addr, 0, &state) ==
+	    ACTION_DENY) {
 		rde_filterstate_clean(&state);
 		return;
 	}
 
 	up_prep_adjout(peer, &state, addr.aid);
-	prefix_adjout_update(p, peer, &state, &addr, 0, 0, ROA_NOTFOUND);
+	prefix_adjout_update(p, peer, &state, &addr, 0, 0);
 	rde_filterstate_clean(&state);
 
 	/* max prefix checker outbound */
@@ -1028,9 +1025,7 @@ up_dump_attrnlri(u_char *buf, int len, struct rde_peer *peer)
 	if (p == NULL)
 		goto done;
 
-	rde_filterstate_prep(&state, prefix_aspath(p), prefix_communities(p),
-	    prefix_nexthop(p), prefix_nhflags(p));
-
+	rde_filterstate_prep(&state, p);
 	r = up_generate_attr(buf + 2, len - 2, peer, &state, AID_INET);
 	rde_filterstate_clean(&state);
 	if (r == -1) {
@@ -1167,8 +1162,7 @@ up_dump_mp_reach(u_char *buf, int len, struct rde_peer *peer, uint8_t aid)
 
 	wpos = 4;	/* reserve space for length fields */
 
-	rde_filterstate_prep(&state, prefix_aspath(p), prefix_communities(p),
-	    prefix_nexthop(p), prefix_nhflags(p));
+	rde_filterstate_prep(&state, p);
 
 	/* write regular path attributes */
 	r = up_generate_attr(buf + wpos, len - wpos, peer, &state, aid);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: editor.c,v 1.386 2023/01/05 00:19:53 krw Exp $	*/
+/*	$OpenBSD: editor.c,v 1.398 2023/01/25 21:44:08 krw Exp $	*/
 
 /*
  * Copyright (c) 1997-2000 Todd C. Miller <millert@openbsd.org>
@@ -42,7 +42,8 @@
 #include "extern.h"
 #include "pathnames.h"
 
-#define MAXIMUM(a, b)	(((a) > (b)) ? (a) : (b))
+#define	ROUNDUP(_s, _a)		((((_s) + (_a) - 1) / (_a)) * (_a))
+#define	ROUNDDOWN(_s, _a)	(((_s) / (_a)) * (_a))
 
 /* flags for getuint64() */
 #define	DO_CONVERSIONS	0x00000001
@@ -136,22 +137,23 @@ struct alloc_table *alloc_table = alloc_table_default;
 int alloc_table_nitems = 4;
 
 void	edit_parms(struct disklabel *);
-void	editor_resize(struct disklabel *, char *);
-void	editor_add(struct disklabel *, char *);
-void	editor_change(struct disklabel *, char *);
+void	editor_resize(struct disklabel *, const char *);
+void	editor_add(struct disklabel *, const char *);
+void	editor_change(struct disklabel *, const char *);
 u_int64_t editor_countfree(const struct disklabel *);
-void	editor_delete(struct disklabel *, char *);
+void	editor_delete(struct disklabel *, const char *);
 void	editor_help(void);
-void	editor_modify(struct disklabel *, char *);
-void	editor_name(struct disklabel *, char *);
+void	editor_modify(struct disklabel *, const char *);
+void	editor_name(const struct disklabel *, const char *);
 char	*getstring(const char *, const char *, const char *);
 u_int64_t getuint64(const struct disklabel *, char *, char *, u_int64_t,
     u_int64_t, int *);
-u_int64_t getnumber(char *, char *, u_int32_t, u_int32_t);
+u_int64_t getnumber(const char *, const char *, u_int32_t, u_int32_t);
+int	getpartno(const struct disklabel *, const char *, const char *);
 int	has_overlap(struct disklabel *);
 int	partition_cmp(const void *, const void *);
 const struct partition **sort_partitions(const struct disklabel *, int);
-void	getdisktype(struct disklabel *, char *, char *);
+void	getdisktype(struct disklabel *, const char *, char *);
 void	find_bounds(const struct disklabel *);
 void	set_bounds(struct disklabel *);
 void	set_duid(struct disklabel *);
@@ -162,7 +164,7 @@ int	get_bsize(struct disklabel *, int);
 int	get_fsize(struct disklabel *, int);
 int	get_cpg(struct disklabel *, int);
 int	get_fstype(struct disklabel *, int);
-int	get_mp(struct disklabel *, int);
+int	get_mp(const struct disklabel *, int);
 int	get_offset(struct disklabel *, int);
 int	get_size(struct disklabel *, int);
 void	zero_partitions(struct disklabel *);
@@ -179,7 +181,7 @@ int	alignpartition(struct disklabel *, int, u_int64_t, u_int64_t, int);
 static u_int64_t starting_sector;
 static u_int64_t ending_sector;
 static int expert;
-static int overlap;
+static int resizeok;
 
 /*
  * Simple partition editor.
@@ -214,10 +216,10 @@ editor(int f)
 
 	/* If we don't have a 'c' partition, create one. */
 	pp = &newlab.d_partitions[RAW_PART];
-	if (newlab.d_npartitions < 3 || DL_GETPSIZE(pp) == 0) {
+	if (newlab.d_npartitions <= RAW_PART || DL_GETPSIZE(pp) == 0) {
 		puts("No 'c' partition found, adding one that spans the disk.");
-		if (newlab.d_npartitions < 3)
-			newlab.d_npartitions = 3;
+		if (newlab.d_npartitions <= RAW_PART)
+			newlab.d_npartitions = RAW_PART + 1;
 		DL_SETPOFFSET(pp, 0);
 		DL_SETPSIZE(pp, DL_GETDSIZE(&newlab));
 		pp->p_fstype = FS_UNUSED;
@@ -399,7 +401,7 @@ editor(int f)
 			break;
 
 		case 'R':
-			if (aflag && !overlap)
+			if (aflag && resizeok)
 				editor_resize(&newlab, arg);
 			else
 				fputs("Resize only implemented for auto "
@@ -532,8 +534,8 @@ editor_allocspace(struct disklabel *lp_org)
 	struct space_allocation *ap;
 	struct partition *pp;
 	const struct diskchunk *chunk;
-	u_int64_t chunkstart, chunkstop, chunksize;
-	u_int64_t cylsecs, secs, xtrasecs;
+	u_int64_t chunkstart, chunksize, start, stop;
+	u_int64_t secs, xtrasecs;
 	char **partmp;
 	int i, lastalloc, index, partno, freeparts;
 	extern int64_t physmem;
@@ -541,26 +543,18 @@ editor_allocspace(struct disklabel *lp_org)
 	/* How big is the OpenBSD portion of the disk?  */
 	find_bounds(lp_org);
 
-	overlap = 0;
+	resizeok = 1;
 	freeparts = 0;
 	for (i = 0;  i < MAXPARTITIONS; i++) {
-		u_int64_t psz, pstart, pend;
-
+		if (i == RAW_PART)
+			continue;
 		pp = &lp_org->d_partitions[i];
-		psz = DL_GETPSIZE(pp);
-		if (psz == 0)
+		if (DL_GETPSIZE(pp) == 0 || pp->p_fstype == FS_UNUSED)
 			freeparts++;
-		pstart = DL_GETPOFFSET(pp);
-		pend = pstart + psz;
-		if (i != RAW_PART && psz != 0 &&
-		    ((pstart >= starting_sector && pstart < ending_sector) ||
-		    (pend > starting_sector && pend <= ending_sector))) {
-			overlap = 1;
-			break;
-		}
+		else
+			resizeok = 0;
 	}
 
-	cylsecs = lp_org->d_secpercyl;
 	alloc = NULL;
 	index = -1;
 again:
@@ -626,19 +620,20 @@ again:
 		chunk = free_chunks(lp, -1);
 		chunksize = 0;
 		for (; chunk->start != 0 || chunk->stop != 0; chunk++) {
-			if ((chunk->stop - chunk->start) > chunksize) {
-				chunkstart = chunk->start;
-				chunkstop = chunk->stop;
+			start = chunk->start;
+			stop = chunk->stop;
 #ifdef SUN_CYLCHECK
-				if (lp->d_flags & D_VENDOR) {
-					/* Align to cylinder boundaries. */
-					chunkstart = ((chunkstart + cylsecs - 1)
-					    / cylsecs) * cylsecs;
-					chunkstop = (chunkstop / cylsecs) *
-					    cylsecs;
-				}
+			if (lp->d_flags & D_VENDOR) {
+				/* Align to cylinder boundaries. */
+				start = ROUNDUP(start, lp_org->d_secpercyl);
+				stop = ROUNDDOWN(stop, lp_org->d_secpercyl);
+				if (start > stop)
+					start = stop;
+			}
 #endif
-				chunksize = chunkstop - chunkstart;
+			if (stop - start > chunksize) {
+				chunkstart = start;
+				chunksize = stop - start;
 			}
 		}
 
@@ -657,9 +652,9 @@ again:
 		}
 #ifdef SUN_CYLCHECK
 		if (lp->d_flags & D_VENDOR) {
-			secs = ((secs + cylsecs - 1) / cylsecs) * cylsecs;
+			secs = ROUNDUP(secs, lp_org->d_secpercyl);
 			while (secs > chunksize)
-				secs -= cylsecs;
+				secs -= lp_org->d_secpercyl;
 		}
 #endif
 
@@ -703,7 +698,7 @@ again:
  * Resize a partition, moving all subsequent partitions
  */
 void
-editor_resize(struct disklabel *lp, char *p)
+editor_resize(struct disklabel *lp, const char *p)
 {
 	struct disklabel label;
 	struct partition *pp, *prev;
@@ -712,25 +707,11 @@ editor_resize(struct disklabel *lp, char *p)
 
 	label = *lp;
 
-	/* Change which partition? */
-	if (p == NULL)
-		p = getstring("partition to resize",
-		    "The letter of the partition to name, a - p.", NULL);
-	if (p == NULL)
+	if ((partno = getpartno(&label, p, "resize")) == -1)
 		return;
-	partno = p[0] - 'a';
-	if (partno < 0 || partno == RAW_PART || partno >= lp->d_npartitions) {
-		fprintf(stderr, "Partition must be between 'a' and '%c' "
-		    "(excluding 'c').\n", 'a' + lp->d_npartitions - 1);
-		return;
-	}
 
 	pp = &label.d_partitions[partno];
 	sz = DL_GETPSIZE(pp);
-	if (sz == 0) {
-		fputs("No such partition\n", stderr);
-		return;
-	}
 	if (pp->p_fstype != FS_BSDFFS && pp->p_fstype != FS_SWAP) {
 		fputs("Cannot resize spoofed partition\n", stderr);
 		return;
@@ -750,11 +731,8 @@ editor_resize(struct disklabel *lp, char *p)
 	}
 
 #ifdef SUN_CYLCHECK
-	if (lp->d_flags & D_VENDOR) {
-		u_int64_t cylsecs;
-		cylsecs = lp->d_secpercyl;
-		ui = ((ui + cylsecs - 1) / cylsecs) * cylsecs;
-	}
+	if (lp->d_flags & D_VENDOR)
+		ui = ROUNDUP(ui, lp->d_secpercyl);
 #endif
 	if (DL_GETPOFFSET(pp) + ui > ending_sector) {
 		fputs("Amount too big\n", stderr);
@@ -815,63 +793,41 @@ editor_resize(struct disklabel *lp, char *p)
  * Add a new partition.
  */
 void
-editor_add(struct disklabel *lp, char *p)
+editor_add(struct disklabel *lp, const char *p)
 {
 	struct partition *pp;
 	const struct diskchunk *chunk;
 	char buf[2];
 	int partno;
-	u_int64_t freesectors, new_offset, new_size;
+	u_int64_t new_offset, new_size;
 
-	freesectors = editor_countfree(lp);
+	chunk = free_chunks(lp, -1);
+	new_size = new_offset = 0;
+	for (; chunk->start != 0 || chunk->stop != 0; chunk++) {
+		if (chunk->stop - chunk->start > new_size) {
+			new_size = chunk->stop - chunk->start;
+			new_offset = chunk->start;
+		}
+	}
 
-	/* XXX - prompt user to steal space from another partition instead */
 #ifdef SUN_CYLCHECK
-	if ((lp->d_flags & D_VENDOR) && freesectors < lp->d_secpercyl) {
+	if ((lp->d_flags & D_VENDOR) && new_size < lp->d_secpercyl) {
 		fputs("No space left, you need to shrink a partition "
 		    "(need at least one full cylinder)\n",
 		    stderr);
 		return;
 	}
 #endif
-	if (freesectors == 0) {
+	if (new_size == 0) {
 		fputs("No space left, you need to shrink a partition\n",
 		    stderr);
 		return;
 	}
 
-	if (p == NULL) {
-		/*
-		 * Use the first unused partition that is not 'c' as the
-		 * default partition in the prompt string.
-		 */
-		pp = &lp->d_partitions[0];
-		buf[0] = buf[1] = '\0';
-		for (partno = 0; partno < MAXPARTITIONS; partno++, pp++) {
-			if (DL_GETPSIZE(pp) == 0 && partno != RAW_PART) {
-				buf[0] = partno + 'a';
-				p = &buf[0];
-				break;
-			}
-		}
-		p = getstring("partition",
-		    "The letter of the new partition, a - p.", p);
-	}
-	if (p == NULL)
+	if ((partno = getpartno(lp, p, "add")) == -1)
 		return;
-	partno = p[0] - 'a';
-	if (partno < 0 || partno == RAW_PART || partno >= MAXPARTITIONS) {
-		fprintf(stderr, "Partition must be between 'a' and '%c' "
-		    "(excluding 'c').\n", 'a' + MAXPARTITIONS - 1);
-		return;
-	}
 	pp = &lp->d_partitions[partno];
-
-	if (pp->p_fstype != FS_UNUSED && DL_GETPSIZE(pp) != 0) {
-		fprintf(stderr, "Partition '%c' exists.  Delete it first.\n",
-		    p[0]);
-		return;
-	}
+	memset(pp, 0, sizeof(*pp));
 
 	/*
 	 * Increase d_npartitions if necessary. Ensure all new partitions are
@@ -880,22 +836,6 @@ editor_add(struct disklabel *lp, char *p)
 	for(; lp->d_npartitions <= partno; lp->d_npartitions++)
 		memset(&lp->d_partitions[lp->d_npartitions], 0, sizeof(*pp));
 
-	/* Make sure selected partition is zero'd too. */
-	memset(pp, 0, sizeof(*pp));
-	chunk = free_chunks(lp, -1);
-
-	/*
-	 * Since we know there's free space, there must be at least one
-	 * chunk. So find the largest chunk and assume we want to add the
-	 * partition in that free space.
-	 */
-	new_size = new_offset = 0;
-	for (; chunk->start != 0 || chunk->stop != 0; chunk++) {
-		if (chunk->stop - chunk->start > new_size) {
-			new_size = chunk->stop - chunk->start;
-			new_offset = chunk->start;
-		}
-	}
 	DL_SETPSIZE(pp, new_size);
 	DL_SETPOFFSET(pp, new_offset);
 	pp->p_fstype = partno == 1 ? FS_SWAP : FS_BSDFFS;
@@ -917,29 +857,12 @@ editor_add(struct disklabel *lp, char *p)
  * Set the mountpoint of an existing partition ('name').
  */
 void
-editor_name(struct disklabel *lp, char *p)
+editor_name(const struct disklabel *lp, const char *p)
 {
-	struct partition *pp;
 	int partno;
 
-	/* Change which partition? */
-	if (p == NULL)
-		p = getstring("partition to name",
-		    "The letter of the partition to name, a - p.", NULL);
-	if (p == NULL)
+	if ((partno = getpartno(lp, p, "name")) == -1)
 		return;
-	partno = p[0] - 'a';
-	if (partno < 0 || partno == RAW_PART || partno >= lp->d_npartitions) {
-		fprintf(stderr, "Partition must be between 'a' and '%c' "
-		    "(excluding 'c').\n", 'a' + lp->d_npartitions - 1);
-		return;
-	}
-	pp = &lp->d_partitions[partno];
-
-	if (pp->p_fstype == FS_UNUSED && DL_GETPSIZE(pp) == 0) {
-		fprintf(stderr, "Partition '%c' is not in use.\n", p[0]);
-		return;
-	}
 
 	get_mp(lp, partno);
 }
@@ -948,30 +871,15 @@ editor_name(struct disklabel *lp, char *p)
  * Change an existing partition.
  */
 void
-editor_modify(struct disklabel *lp, char *p)
+editor_modify(struct disklabel *lp, const char *p)
 {
 	struct partition opp, *pp;
 	int partno;
 
-	/* Change which partition? */
-	if (p == NULL)
-		p = getstring("partition to modify",
-		    "The letter of the partition to modify, a - p.", NULL);
-	if (p == NULL)
+	if ((partno = getpartno(lp, p, "modify")) == -1)
 		return;
-	partno = p[0] - 'a';
-	if (partno < 0 || partno == RAW_PART || partno >= lp->d_npartitions) {
-		fprintf(stderr, "Partition must be between 'a' and '%c' "
-		    "(excluding 'c').\n", 'a' + lp->d_npartitions - 1);
-		return;
-	}
+
 	pp = &lp->d_partitions[partno];
-
-	if (pp->p_fstype == FS_UNUSED && DL_GETPSIZE(pp) == 0) {
-		fprintf(stderr, "Partition '%c' is not in use.\n", p[0]);
-		return;
-	}
-
 	opp = *pp;
 
 	if (get_offset(lp, partno) == 0 &&
@@ -991,33 +899,18 @@ editor_modify(struct disklabel *lp, char *p)
  * Delete an existing partition.
  */
 void
-editor_delete(struct disklabel *lp, char *p)
+editor_delete(struct disklabel *lp, const char *p)
 {
 	struct partition *pp;
 	int partno;
 
-	if (p == NULL)
-		p = getstring("partition to delete",
-		    "The letter of the partition to delete, a - p, or '*'.",
-		    NULL);
-	if (p == NULL)
+	if ((partno = getpartno(lp, p, "delete")) == -1)
 		return;
-	if (p[0] == '*') {
+	if (partno == lp->d_npartitions) {
 		zero_partitions(lp);
 		return;
 	}
-	partno = p[0] - 'a';
-	if (partno < 0 || partno == RAW_PART || partno >= lp->d_npartitions) {
-		fprintf(stderr, "Partition must be between 'a' and '%c' "
-		    "(excluding 'c').\n", 'a' + lp->d_npartitions - 1);
-		return;
-	}
 	pp = &lp->d_partitions[partno];
-
-	if (pp->p_fstype == FS_UNUSED && DL_GETPSIZE(pp) == 0) {
-		fprintf(stderr, "Partition '%c' is not in use.\n", p[0]);
-		return;
-	}
 
 	/* Really delete it (as opposed to just setting to "unused") */
 	memset(pp, 0, sizeof(*pp));
@@ -1029,32 +922,18 @@ editor_delete(struct disklabel *lp, char *p)
  * Change the size of an existing partition.
  */
 void
-editor_change(struct disklabel *lp, char *p)
+editor_change(struct disklabel *lp, const char *p)
 {
 	struct partition *pp;
 	int partno;
 
-	if (p == NULL)
-		p = getstring("partition to change size",
-		    "The letter of the partition to change size, a - p.", NULL);
-	if (p == NULL)
+	if ((partno = getpartno(lp, p, "change size")) == -1)
 		return;
-	partno = p[0] - 'a';
-	if (partno < 0 || partno == RAW_PART || partno >= lp->d_npartitions) {
-		fprintf(stderr, "Partition must be between 'a' and '%c' "
-		    "(excluding 'c').\n", 'a' + lp->d_npartitions - 1);
-		return;
-	}
+
 	pp = &lp->d_partitions[partno];
-
-	if (DL_GETPSIZE(pp) == 0) {
-		fprintf(stderr, "Partition '%c' is not in use.\n", p[0]);
-		return;
-	}
-
 	printf("Partition %c is currently %llu sectors in size, and can have "
 	    "a maximum\nsize of %llu sectors.\n",
-	    p[0], DL_GETPSIZE(pp), max_partition_size(lp, partno));
+	    'a' + partno, DL_GETPSIZE(pp), max_partition_size(lp, partno));
 
 	/* Get new size */
 	get_size(lp, partno);
@@ -1110,6 +989,75 @@ getstring(const char *prompt, const char *helpstring, const char *oval)
 	return (&buf[0]);
 }
 
+int
+getpartno(const struct disklabel *lp, const char *p, const char *action)
+{
+	char buf[2] = { '\0', '\0'};
+	const char *promptfmt = "partition to %s";
+	const char *helpfmt = "Partition must be between 'a' and '%c' "
+	    "(excluding 'c')%s.\n";
+	const struct partition *pp;
+	char *help = NULL, *prompt = NULL;
+	unsigned char maxpart;
+	unsigned int partno;
+	int add, delete, inuse;
+
+	add = strcmp("add", action) == 0;
+	delete = strcmp("delete", action) == 0;
+	maxpart = 'a' - 1 + (add ? MAXPARTITIONS : lp->d_npartitions);
+
+	if (p == NULL) {
+		if (asprintf(&prompt, promptfmt, action) == -1 ||
+		    asprintf(&help, helpfmt, maxpart, delete ? ", or '*'" : "")
+		    == -1) {
+			fprintf(stderr, "Unable to build prompt or help\n");
+			goto done;
+		}
+		if (add) {
+			/* Default to first unused partition. */
+			for (partno = 0; partno < MAXPARTITIONS; partno++) {
+				if (partno == RAW_PART)
+					continue;
+				pp = &lp->d_partitions[partno];
+				if (partno >= lp->d_npartitions ||
+				    DL_GETPSIZE(pp) == 0 ||
+				    pp->p_fstype == FS_UNUSED) {
+					buf[0] = 'a' + partno;
+					p = buf;
+					break;
+				}
+			}
+		}
+		p = getstring(prompt, help, p);
+		free(prompt);
+		free(help);
+		if (p == NULL || *p == '\0')
+			goto done;
+	}
+
+	if (delete && strlen(p) == 1 && *p == '*')
+		return (lp->d_npartitions);
+
+	if (strlen(p) > 1 || *p < 'a' || *p > maxpart || *p == 'c') {
+		fprintf(stderr, helpfmt, maxpart, delete ? ", or '*'" : "");
+		goto done;
+	}
+
+	partno = *p - 'a';
+	pp = &lp->d_partitions[partno];
+	inuse = partno < lp->d_npartitions && DL_GETPSIZE(pp) > 0 &&
+	    pp->p_fstype != FS_UNUSED;
+
+	if ((add && !inuse) || (!add && inuse))
+		return (partno);
+
+	fprintf(stderr, "Partition '%c' is %sin use.\n", *p,
+	    inuse ? "" : "not ");
+
+ done:
+	return (-1);
+}
+
 /*
  * Returns
  * 0 .. CMD_ABORTED - 1	==> valid value
@@ -1117,7 +1065,8 @@ getstring(const char *prompt, const char *helpstring, const char *oval)
  * CMD_ABORTED		==> ^D on input
  */
 u_int64_t
-getnumber(char *prompt, char *helpstring, u_int32_t oval, u_int32_t maxval)
+getnumber(const char *prompt, const char *helpstring, u_int32_t oval,
+    u_int32_t maxval)
 {
 	char buf[BUFSIZ], *p;
 	int rslt;
@@ -1360,7 +1309,7 @@ sort_partitions(const struct disklabel *lp, int ignore)
  * Get a valid disk type if necessary.
  */
 void
-getdisktype(struct disklabel *lp, char *banner, char *dev)
+getdisktype(struct disklabel *lp, const char *banner, char *dev)
 {
 	int i;
 	char *s;
@@ -2001,9 +1950,9 @@ get_fstype(struct disklabel *lp, int partno)
 }
 
 int
-get_mp(struct disklabel *lp, int partno)
+get_mp(const struct disklabel *lp, int partno)
 {
-	struct partition *pp = &lp->d_partitions[partno];
+	const struct partition *pp = &lp->d_partitions[partno];
 	char *p;
 	int i;
 
@@ -2305,9 +2254,9 @@ alignpartition(struct disklabel *lp, int partno, u_int64_t startalign,
 
 	start = DL_GETPOFFSET(pp);
 	if ((flags & ROUND_OFFSET_UP) == ROUND_OFFSET_UP)
-		start = ((start + startalign - 1) / startalign) * startalign;
+		start = ROUNDUP(start, startalign);
 	else if ((flags & ROUND_OFFSET_DOWN) == ROUND_OFFSET_DOWN)
-		start = (start / startalign) * startalign;
+		start = ROUNDDOWN(start, startalign);
 
 	/* Find the chunk that contains 'start'. */
 	chunk = free_chunks(lp, partno);
@@ -2324,15 +2273,15 @@ alignpartition(struct disklabel *lp, int partno, u_int64_t startalign,
 
 	/* Calculate the new 'stop' sector, the sector after the partition. */
 	if ((flags & ROUND_SIZE_OVERLAP) == 0)
-		maxstop = (chunk->stop / stopalign) * stopalign;
+		maxstop = ROUNDDOWN(chunk->stop, stopalign);
 	else
-		maxstop = (ending_sector / stopalign) * stopalign;
+		maxstop = ROUNDDOWN(ending_sector, stopalign);
 
 	stop = DL_GETPOFFSET(pp) + DL_GETPSIZE(pp);
 	if ((flags & ROUND_SIZE_UP) == ROUND_SIZE_UP)
-		stop = ((stop + stopalign - 1) / stopalign) * stopalign;
+		stop = ROUNDUP(stop, stopalign);
 	else if ((flags & ROUND_SIZE_DOWN) == ROUND_SIZE_DOWN)
-		stop = (stop / stopalign) * stopalign;
+		stop = ROUNDDOWN(stop, stopalign);
 	if (stop > maxstop)
 		stop = maxstop;
 

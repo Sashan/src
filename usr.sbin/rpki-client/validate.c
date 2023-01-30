@@ -1,4 +1,4 @@
-/*	$OpenBSD: validate.c,v 1.52 2023/01/04 14:22:43 claudio Exp $ */
+/*	$OpenBSD: validate.c,v 1.54 2023/01/18 18:12:20 job Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -396,6 +396,7 @@ valid_x509(char *file, X509_STORE_CTX *store_ctx, X509 *x509, struct auth *a,
 		cryptoerrx("X509_VERIFY_PARAM_add0_policy");
 
 	flags = X509_V_FLAG_CRL_CHECK;
+	flags |= X509_V_FLAG_POLICY_CHECK;
 	flags |= X509_V_FLAG_EXPLICIT_POLICY;
 	flags |= X509_V_FLAG_INHIBIT_MAP;
 	X509_STORE_CTX_set_flags(store_ctx, flags);
@@ -565,7 +566,6 @@ valid_uuid(const char *s)
 			if (s[n] != '-')
 				return 0;
 			break;
-#ifdef NOTYET	/* World is not yet ready to enfoce UUID version and variant */
 		/* Check UUID is version 4 */
 		case 14:
 			if (s[n] != '4')
@@ -577,7 +577,6 @@ valid_uuid(const char *s)
 			    s[n] != 'A' && s[n] != 'b' && s[n] != 'B')
 				return 0;
 			break;
-#endif
 		case 36:
 			return s[n] == '\0';
 		default:

@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.90 2022/12/17 22:01:29 tb Exp $
+# $OpenBSD: Makefile,v 1.93 2023/01/21 17:29:56 jsing Exp $
 
 LIB=	crypto
 LIBREBUILD=y
@@ -36,6 +36,7 @@ CFLAGS+= -I${LCRYPTO_SRC}/arch/${MACHINE_CPU}
 CFLAGS+= -I${LCRYPTO_SRC}/asn1
 CFLAGS+= -I${LCRYPTO_SRC}/bio
 CFLAGS+= -I${LCRYPTO_SRC}/bn
+CFLAGS+= -I${LCRYPTO_SRC}/bn/arch/${MACHINE_CPU}
 CFLAGS+= -I${LCRYPTO_SRC}/bytestring
 CFLAGS+= -I${LCRYPTO_SRC}/curve25519
 CFLAGS+= -I${LCRYPTO_SRC}/dh
@@ -361,10 +362,6 @@ SRCS+= ec_print.c
 SRCS+= eck_prn.c
 SRCS+= ecp_mont.c
 SRCS+= ecp_nist.c
-SRCS+= ecp_nistp224.c
-SRCS+= ecp_nistp256.c
-SRCS+= ecp_nistp521.c
-SRCS+= ecp_nistputil.c
 SRCS+= ecp_oct.c
 SRCS+= ecp_smpl.c
 SRCS+= ecx_methods.c
@@ -736,13 +733,14 @@ SRCS+= x509spki.c
 SRCS+= x509type.c
 SRCS+= x_all.c
 
-.PATH:	${.CURDIR}/arch/${MACHINE_CPU} \
+.PATH:	${LCRYPTO_SRC}/arch/${MACHINE_CPU} \
 	${LCRYPTO_SRC} \
 	${LCRYPTO_SRC}/aes \
 	${LCRYPTO_SRC}/asn1 \
 	${LCRYPTO_SRC}/bf \
 	${LCRYPTO_SRC}/bio \
 	${LCRYPTO_SRC}/bn \
+	${LCRYPTO_SRC}/bn/arch/${MACHINE_CPU} \
 	${LCRYPTO_SRC}/bn/asm \
 	${LCRYPTO_SRC}/buffer \
 	${LCRYPTO_SRC}/bytestring \

@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.h,v 1.275 2022/12/28 21:30:16 jmc Exp $ */
+/*	$OpenBSD: rde.h,v 1.281 2023/01/24 11:28:41 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Claudio Jeker <claudio@openbsd.org> and
@@ -102,6 +102,7 @@ struct rde_peer {
 	uint32_t			 path_id_tx;
 	enum peer_state			 state;
 	enum export_type		 export_type;
+	enum role			 role;
 	uint16_t			 loc_rib_id;
 	uint16_t			 short_as;
 	uint16_t			 mrt_idx;
@@ -111,6 +112,14 @@ struct rde_peer {
 	uint8_t				 reconf_rib;	/* rib changed */
 	uint8_t				 throttled;
 	uint8_t				 flags;
+};
+
+struct rde_aspa;
+struct rde_aspa_state {
+	uint8_t		onlyup_v4;
+	uint8_t		downup_v4;
+	uint8_t		onlyup_v6;
+	uint8_t		downup_v6;
 };
 
 #define AS_SET			1
@@ -216,6 +225,7 @@ struct rde_aspath {
 	RB_ENTRY(rde_aspath)		 entry;
 	struct attr			**others;
 	struct aspath			*aspath;
+	struct rde_aspa_state		 aspa_state;
 	int				 refcnt;
 	uint32_t			 flags;		/* internally used */
 	uint32_t			 med;		/* multi exit disc */
@@ -225,6 +235,7 @@ struct rde_aspath {
 	uint16_t			 pftableid;	/* pf table id */
 	uint8_t				 origin;
 	uint8_t				 others_len;
+	uint8_t				 aspa_generation;
 };
 
 enum nexthop_state {
@@ -361,6 +372,7 @@ struct filterstate {
 	struct rde_community	 communities;
 	struct nexthop		*nexthop;
 	uint8_t			 nhflags;
+	uint8_t			 vstate;
 };
 
 enum eval_mode {
@@ -471,7 +483,6 @@ aspath_origin(struct aspath *aspath)
 	return (aspath->source_as);
 }
 
-
 /* rde_community.c */
 int	community_match(struct rde_community *, struct community *,
 	    struct rde_peer *);
@@ -532,14 +543,16 @@ void		 prefix_evaluate_nexthop(struct prefix *, enum nexthop_state,
 /* rde_filter.c */
 void	rde_apply_set(struct filter_set_head *, struct rde_peer *,
 	    struct rde_peer *, struct filterstate *, uint8_t);
-void	rde_filterstate_prep(struct filterstate *, struct rde_aspath *,
-	    struct rde_community *, struct nexthop *, uint8_t);
+void	rde_filterstate_init(struct filterstate *);
+void	rde_filterstate_prep(struct filterstate *, struct prefix *);
+void	rde_filterstate_copy(struct filterstate *, struct filterstate *);
+void	rde_filterstate_set_vstate(struct filterstate *, uint8_t, uint8_t);
 void	rde_filterstate_clean(struct filterstate *);
 int	rde_filter_equal(struct filter_head *, struct filter_head *,
 	    struct rde_peer *);
 void	rde_filter_calc_skip_steps(struct filter_head *);
 enum filter_actions rde_filter(struct filter_head *, struct rde_peer *,
-	    struct rde_peer *, struct bgpd_addr *, uint8_t, uint8_t,
+	    struct rde_peer *, struct bgpd_addr *, uint8_t,
 	    struct filterstate *);
 
 /* rde_prefix.c */
@@ -620,14 +633,12 @@ struct prefix	*prefix_adjout_lookup(struct rde_peer *, struct bgpd_addr *,
 		    int);
 struct prefix	*prefix_adjout_next(struct rde_peer *, struct prefix *);
 int		 prefix_update(struct rib *, struct rde_peer *, uint32_t,
-		    uint32_t, struct filterstate *, struct bgpd_addr *,
-		    int, uint8_t);
+		    uint32_t, struct filterstate *, struct bgpd_addr *, int);
 int		 prefix_withdraw(struct rib *, struct rde_peer *, uint32_t,
 		    struct bgpd_addr *, int);
 void		 prefix_add_eor(struct rde_peer *, uint8_t);
 void		 prefix_adjout_update(struct prefix *, struct rde_peer *,
-		    struct filterstate *, struct bgpd_addr *, int,
-		    uint32_t, uint8_t);
+		    struct filterstate *, struct bgpd_addr *, int, uint32_t);
 void		 prefix_adjout_withdraw(struct prefix *);
 void		 prefix_adjout_destroy(struct prefix *);
 void		 prefix_adjout_dump(struct rde_peer *, void *,
@@ -685,9 +696,22 @@ prefix_nhvalid(struct prefix *p)
 }
 
 static inline uint8_t
-prefix_vstate(struct prefix *p)
+prefix_roa_vstate(struct prefix *p)
 {
 	return (p->validation_state & ROA_MASK);
+}
+
+static inline uint8_t
+prefix_aspa_vstate(struct prefix *p)
+{
+	return (p->validation_state >> 4);
+}
+
+static inline void
+prefix_set_vstate(struct prefix *p, uint8_t roa_vstate, uint8_t aspa_vstate)
+{
+	p->validation_state = roa_vstate & ROA_MASK;
+	p->validation_state |= aspa_vstate << 4;
 }
 
 static inline struct rib_entry *
@@ -727,5 +751,20 @@ int		 up_dump_withdraws(u_char *, int, struct rde_peer *, uint8_t);
 int		 up_dump_mp_unreach(u_char *, int, struct rde_peer *, uint8_t);
 int		 up_dump_attrnlri(u_char *, int, struct rde_peer *);
 int		 up_dump_mp_reach(u_char *, int, struct rde_peer *, uint8_t);
+
+/* rde_aspa.c */
+void		 aspa_validation(struct rde_aspa *, struct aspath *,
+		    struct rde_aspa_state *);
+struct rde_aspa	*aspa_table_prep(uint32_t, size_t);
+void		 aspa_add_set(struct rde_aspa *, uint32_t, const uint32_t *,
+		    uint32_t, const uint32_t *);
+void		 aspa_table_free(struct rde_aspa *);
+void		 aspa_table_stats(const struct rde_aspa *,
+		    struct ctl_show_set *);
+int		 aspa_table_equal(const struct rde_aspa *,
+		    const struct rde_aspa *);
+void		 aspa_table_unchanged(struct rde_aspa *,
+		    const struct rde_aspa *);
+void		 aspa_table_set_generation(struct rde_aspa *, uint8_t);
 
 #endif /* __RDE_H__ */

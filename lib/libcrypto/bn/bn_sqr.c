@@ -1,4 +1,4 @@
-/* $OpenBSD: bn_sqr.c,v 1.16 2022/11/26 16:08:51 tb Exp $ */
+/* $OpenBSD: bn_sqr.c,v 1.22 2023/01/23 12:09:06 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -56,97 +56,184 @@
  * [including the GNU Public Licence.]
  */
 
+#include <assert.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "bn_arch.h"
 #include "bn_local.h"
 
-/* I've just gone over this and it is now %20 faster on x86 - eay - 27 Jun 96 */
-int
-BN_sqr(BIGNUM *r, const BIGNUM *a, BN_CTX *ctx)
+int bn_sqr(BIGNUM *r, const BIGNUM *a, int max, BN_CTX *ctx);
+
+#ifndef HAVE_BN_SQR_COMBA4
+void
+bn_sqr_comba4(BN_ULONG *r, const BN_ULONG *a)
 {
-	int max, al;
-	int ret = 0;
-	BIGNUM *tmp, *rr;
+	BN_ULONG c1, c2, c3;
 
-#ifdef BN_COUNT
-	fprintf(stderr, "BN_sqr %d * %d\n", a->top, a->top);
-#endif
-
-	al = a->top;
-	if (al <= 0) {
-		r->top = 0;
-		r->neg = 0;
-		return 1;
-	}
-
-	BN_CTX_start(ctx);
-	rr = (a != r) ? r : BN_CTX_get(ctx);
-	tmp = BN_CTX_get(ctx);
-	if (rr == NULL || tmp == NULL)
-		goto err;
-
-	max = 2 * al; /* Non-zero (from above) */
-	if (!bn_wexpand(rr, max))
-		goto err;
-
-	if (al == 4) {
-#ifndef BN_SQR_COMBA
-		BN_ULONG t[8];
-		bn_sqr_normal(rr->d, a->d, 4, t);
-#else
-		bn_sqr_comba4(rr->d, a->d);
-#endif
-	} else if (al == 8) {
-#ifndef BN_SQR_COMBA
-		BN_ULONG t[16];
-		bn_sqr_normal(rr->d, a->d, 8, t);
-#else
-		bn_sqr_comba8(rr->d, a->d);
-#endif
-	} else {
-#if defined(BN_RECURSION)
-		if (al < BN_SQR_RECURSIVE_SIZE_NORMAL) {
-			BN_ULONG t[BN_SQR_RECURSIVE_SIZE_NORMAL*2];
-			bn_sqr_normal(rr->d, a->d, al, t);
-		} else {
-			int j, k;
-
-			j = BN_num_bits_word((BN_ULONG)al);
-			j = 1 << (j - 1);
-			k = j + j;
-			if (al == j) {
-				if (!bn_wexpand(tmp, k * 2))
-					goto err;
-				bn_sqr_recursive(rr->d, a->d, al, tmp->d);
-			} else {
-				if (!bn_wexpand(tmp, max))
-					goto err;
-				bn_sqr_normal(rr->d, a->d, al, tmp->d);
-			}
-		}
-#else
-		if (!bn_wexpand(tmp, max))
-			goto err;
-		bn_sqr_normal(rr->d, a->d, al, tmp->d);
-#endif
-	}
-
-	rr->neg = 0;
-	/* If the most-significant half of the top word of 'a' is zero, then
-	 * the square of 'a' will max-1 words. */
-	if (a->d[al - 1] == (a->d[al - 1] & BN_MASK2l))
-		rr->top = max - 1;
-	else
-		rr->top = max;
-	if (rr != r)
-		BN_copy(r, rr);
-	ret = 1;
-
-err:
-	BN_CTX_end(ctx);
-	return (ret);
+	c1 = 0;
+	c2 = 0;
+	c3 = 0;
+	sqr_add_c(a, 0, c1, c2, c3);
+	r[0] = c1;
+	c1 = 0;
+	sqr_add_c2(a, 1, 0, c2, c3, c1);
+	r[1] = c2;
+	c2 = 0;
+	sqr_add_c(a, 1, c3, c1, c2);
+	sqr_add_c2(a, 2, 0, c3, c1, c2);
+	r[2] = c3;
+	c3 = 0;
+	sqr_add_c2(a, 3, 0, c1, c2, c3);
+	sqr_add_c2(a, 2, 1, c1, c2, c3);
+	r[3] = c1;
+	c1 = 0;
+	sqr_add_c(a, 2, c2, c3, c1);
+	sqr_add_c2(a, 3, 1, c2, c3, c1);
+	r[4] = c2;
+	c2 = 0;
+	sqr_add_c2(a, 3, 2, c3, c1, c2);
+	r[5] = c3;
+	c3 = 0;
+	sqr_add_c(a, 3, c1, c2, c3);
+	r[6] = c1;
+	r[7] = c2;
 }
+#endif
+
+#ifndef HAVE_BN_SQR_COMBA8
+void
+bn_sqr_comba8(BN_ULONG *r, const BN_ULONG *a)
+{
+	BN_ULONG c1, c2, c3;
+
+	c1 = 0;
+	c2 = 0;
+	c3 = 0;
+	sqr_add_c(a, 0, c1, c2, c3);
+	r[0] = c1;
+	c1 = 0;
+	sqr_add_c2(a, 1, 0, c2, c3, c1);
+	r[1] = c2;
+	c2 = 0;
+	sqr_add_c(a, 1, c3, c1, c2);
+	sqr_add_c2(a, 2, 0, c3, c1, c2);
+	r[2] = c3;
+	c3 = 0;
+	sqr_add_c2(a, 3, 0, c1, c2, c3);
+	sqr_add_c2(a, 2, 1, c1, c2, c3);
+	r[3] = c1;
+	c1 = 0;
+	sqr_add_c(a, 2, c2, c3, c1);
+	sqr_add_c2(a, 3, 1, c2, c3, c1);
+	sqr_add_c2(a, 4, 0, c2, c3, c1);
+	r[4] = c2;
+	c2 = 0;
+	sqr_add_c2(a, 5, 0, c3, c1, c2);
+	sqr_add_c2(a, 4, 1, c3, c1, c2);
+	sqr_add_c2(a, 3, 2, c3, c1, c2);
+	r[5] = c3;
+	c3 = 0;
+	sqr_add_c(a, 3, c1, c2, c3);
+	sqr_add_c2(a, 4, 2, c1, c2, c3);
+	sqr_add_c2(a, 5, 1, c1, c2, c3);
+	sqr_add_c2(a, 6, 0, c1, c2, c3);
+	r[6] = c1;
+	c1 = 0;
+	sqr_add_c2(a, 7, 0, c2, c3, c1);
+	sqr_add_c2(a, 6, 1, c2, c3, c1);
+	sqr_add_c2(a, 5, 2, c2, c3, c1);
+	sqr_add_c2(a, 4, 3, c2, c3, c1);
+	r[7] = c2;
+	c2 = 0;
+	sqr_add_c(a, 4, c3, c1, c2);
+	sqr_add_c2(a, 5, 3, c3, c1, c2);
+	sqr_add_c2(a, 6, 2, c3, c1, c2);
+	sqr_add_c2(a, 7, 1, c3, c1, c2);
+	r[8] = c3;
+	c3 = 0;
+	sqr_add_c2(a, 7, 2, c1, c2, c3);
+	sqr_add_c2(a, 6, 3, c1, c2, c3);
+	sqr_add_c2(a, 5, 4, c1, c2, c3);
+	r[9] = c1;
+	c1 = 0;
+	sqr_add_c(a, 5, c2, c3, c1);
+	sqr_add_c2(a, 6, 4, c2, c3, c1);
+	sqr_add_c2(a, 7, 3, c2, c3, c1);
+	r[10] = c2;
+	c2 = 0;
+	sqr_add_c2(a, 7, 4, c3, c1, c2);
+	sqr_add_c2(a, 6, 5, c3, c1, c2);
+	r[11] = c3;
+	c3 = 0;
+	sqr_add_c(a, 6, c1, c2, c3);
+	sqr_add_c2(a, 7, 5, c1, c2, c3);
+	r[12] = c1;
+	c1 = 0;
+	sqr_add_c2(a, 7, 6, c2, c3, c1);
+	r[13] = c2;
+	c2 = 0;
+	sqr_add_c(a, 7, c3, c1, c2);
+	r[14] = c3;
+	r[15] = c1;
+}
+#endif
+
+#ifndef HAVE_BN_SQR_WORDS
+#if defined(BN_LLONG) || defined(BN_UMULT_HIGH)
+void
+bn_sqr_words(BN_ULONG *r, const BN_ULONG *a, int n)
+{
+	assert(n >= 0);
+	if (n <= 0)
+		return;
+
+#ifndef OPENSSL_SMALL_FOOTPRINT
+	while (n & ~3) {
+		sqr(r[0], r[1], a[0]);
+		sqr(r[2], r[3], a[1]);
+		sqr(r[4], r[5], a[2]);
+		sqr(r[6], r[7], a[3]);
+		a += 4;
+		r += 8;
+		n -= 4;
+	}
+#endif
+	while (n) {
+		sqr(r[0], r[1], a[0]);
+		a++;
+		r += 2;
+		n--;
+	}
+}
+#else /* !(defined(BN_LLONG) || defined(BN_UMULT_HIGH)) */
+void
+bn_sqr_words(BN_ULONG *r, const BN_ULONG *a, int n)
+{
+	assert(n >= 0);
+	if (n <= 0)
+		return;
+
+#ifndef OPENSSL_SMALL_FOOTPRINT
+	while (n & ~3) {
+		sqr64(r[0], r[1], a[0]);
+		sqr64(r[2], r[3], a[1]);
+		sqr64(r[4], r[5], a[2]);
+		sqr64(r[6], r[7], a[3]);
+		a += 4;
+		r += 8;
+		n -= 4;
+	}
+#endif
+	while (n) {
+		sqr64(r[0], r[1], a[0]);
+		a++;
+		r += 2;
+		n--;
+	}
+}
+#endif
+#endif
 
 /* tmp must have 2*n words */
 void
@@ -203,22 +290,11 @@ bn_sqr_recursive(BN_ULONG *r, const BN_ULONG *a, int n2, BN_ULONG *t)
 	int zero, c1;
 	BN_ULONG ln, lo, *p;
 
-#ifdef BN_COUNT
-	fprintf(stderr, " bn_sqr_recursive %d * %d\n", n2, n2);
-#endif
 	if (n2 == 4) {
-#ifndef BN_SQR_COMBA
-		bn_sqr_normal(r, a, 4, t);
-#else
 		bn_sqr_comba4(r, a);
-#endif
 		return;
 	} else if (n2 == 8) {
-#ifndef BN_SQR_COMBA
-		bn_sqr_normal(r, a, 8, t);
-#else
 		bn_sqr_comba8(r, a);
-#endif
 		return;
 	}
 	if (n2 < BN_SQR_RECURSIVE_SIZE_NORMAL) {
@@ -280,3 +356,105 @@ bn_sqr_recursive(BN_ULONG *r, const BN_ULONG *a, int n2, BN_ULONG *t)
 	}
 }
 #endif
+
+/*
+ * bn_sqr() computes a * a, storing the result in r. The caller must ensure that
+ * r is not the same BIGNUM as a and that r has been expanded to rn = a->top * 2
+ * words.
+ */
+#ifndef HAVE_BN_SQR
+int
+bn_sqr(BIGNUM *r, const BIGNUM *a, int rn, BN_CTX *ctx)
+{
+	BIGNUM *tmp;
+	int ret = 0;
+
+	BN_CTX_start(ctx);
+
+	if ((tmp = BN_CTX_get(ctx)) == NULL)
+		goto err;
+
+#if defined(BN_RECURSION)
+	if (a->top < BN_SQR_RECURSIVE_SIZE_NORMAL) {
+		BN_ULONG t[BN_SQR_RECURSIVE_SIZE_NORMAL*2];
+		bn_sqr_normal(r->d, a->d, a->top, t);
+	} else {
+		int j, k;
+
+		j = BN_num_bits_word((BN_ULONG)a->top);
+		j = 1 << (j - 1);
+		k = j + j;
+		if (a->top == j) {
+			if (!bn_wexpand(tmp, k * 2))
+				goto err;
+			bn_sqr_recursive(r->d, a->d, a->top, tmp->d);
+		} else {
+			if (!bn_wexpand(tmp, rn))
+				goto err;
+			bn_sqr_normal(r->d, a->d, a->top, tmp->d);
+		}
+	}
+#else
+	if (!bn_wexpand(tmp, rn))
+		goto err;
+	bn_sqr_normal(r->d, a->d, a->top, tmp->d);
+#endif
+
+	ret = 1;
+
+ err:
+	BN_CTX_end(ctx);
+
+	return ret;
+}
+#endif
+
+int
+BN_sqr(BIGNUM *r, const BIGNUM *a, BN_CTX *ctx)
+{
+	BIGNUM *rr;
+	int rn;
+	int ret = 1;
+
+	BN_CTX_start(ctx);
+
+	if (BN_is_zero(a)) {
+		BN_zero(r);
+		goto done;
+	}
+
+	if ((rr = r) == a)
+		rr = BN_CTX_get(ctx);
+	if (rr == NULL)
+		goto err;
+
+	rn = a->top * 2;
+	if (rn < a->top)
+		goto err;
+	if (!bn_wexpand(rr, rn))
+		goto err;
+
+	if (a->top == 4) {
+		bn_sqr_comba4(rr->d, a->d);
+	} else if (a->top == 8) {
+		bn_sqr_comba8(rr->d, a->d);
+	} else {
+		if (!bn_sqr(rr, a, rn, ctx))
+			goto err;
+	}
+
+	rr->top = rn;
+	rr->neg = 0;
+
+	bn_correct_top(rr);
+
+	if (rr != r)
+		BN_copy(r, rr);
+
+ done:
+	ret = 1;
+ err:
+	BN_CTX_end(ctx);
+
+	return ret;
+}

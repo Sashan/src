@@ -1,4 +1,4 @@
-/*	$OpenBSD: apm.c,v 1.19 2022/11/10 23:42:15 jsg Exp $	*/
+/*	$OpenBSD: apm.c,v 1.21 2023/01/22 13:14:21 kettenis Exp $	*/
 
 /*-
  * Copyright (c) 2001 Alexander Guy.  All rights reserved.
@@ -43,6 +43,7 @@
 #include <sys/event.h>
 #include <sys/reboot.h>
 #include <sys/hibernate.h>
+#include <sys/task.h>
 
 #include <machine/conf.h>
 #include <machine/cpu.h>
@@ -53,6 +54,12 @@
 #define DPRINTF(x)	printf x
 #else
 #define	DPRINTF(x)	/**/
+#endif
+
+#ifdef SUSPEND
+struct taskq *suspend_taskq;
+struct task suspend_task;
+void	do_suspend(void *);
 #endif
 
 struct apm_softc {
@@ -119,6 +126,11 @@ apmmatch(struct device *parent, void *match, void *aux)
 void
 apmattach(struct device *parent, struct device *self, void *aux)
 {
+#ifdef SUSPEND
+	suspend_taskq = taskq_create("suspend", 1, IPL_NONE, 0);
+	task_set(&suspend_task, do_suspend, NULL);
+#endif
+
 	acpiapm_open = apmopen;
 	acpiapm_close = apmclose;
 	acpiapm_ioctl = apmioctl;
@@ -323,29 +335,34 @@ apm_setinfohook(int (*hook)(struct apm_power_info *))
 }
 
 int
-apm_record_event(u_int event, const char *src, const char *msg)
+apm_record_event(u_int event)
 {
+	struct apm_softc *sc = apm_cd.cd_devs[0];
 	static int apm_evindex;
-	struct apm_softc *sc;
-
-	/* apm0 only */
-	if (apm_cd.cd_ndevs == 0 || (sc = apm_cd.cd_devs[0]) == NULL)
-		return ENXIO;
-
-	if ((sc->sc_flags & SCFLAG_NOPRINT) == 0)
-		printf("%s: %s %s\n", sc->sc_dev.dv_xname, src, msg);
 
 	/* skip if no user waiting */
-	if ((sc->sc_flags & SCFLAG_OPEN) == 0)
-		return (1);
+	if (sc == NULL || (sc->sc_flags & SCFLAG_OPEN) == 0)
+		return 1;
 
 	apm_evindex++;
 	KNOTE(&sc->sc_note, APM_EVENT_COMPOSE(event, apm_evindex));
-
-	return (0);
+	return 0;
 }
 
 #ifdef SUSPEND
+
+void
+do_suspend(void *v)
+{
+	sleep_state(v, SLEEP_SUSPEND);
+}
+
+void
+suspend(void)
+{
+	if (suspend_taskq)
+		task_add(suspend_taskq, &suspend_task);
+}
 
 #ifdef MULTIPROCESSOR
 
@@ -415,6 +432,7 @@ sleep_resume(void *v)
 int
 suspend_finish(void *v)
 {
+	apm_record_event(APM_NORMAL_RESUME);
 	return 0;
 }
 

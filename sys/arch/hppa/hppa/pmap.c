@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.179 2022/10/25 18:44:36 miod Exp $	*/
+/*	$OpenBSD: pmap.c,v 1.181 2023/01/24 16:51:05 kettenis Exp $	*/
 
 /*
  * Copyright (c) 1998-2004 Michael Shalayeff
@@ -407,6 +407,7 @@ pmap_check_alias(struct vm_page *pg, vaddr_t va, pt_entry_t pte)
 	for (pve = pg->mdpage.pvh_list; pve; pve = pve->pv_next) {
 		pte |= pmap_vp_find(pve->pv_pmap, pve->pv_va);
 		if ((va & HPPA_PGAOFF) != (pve->pv_va & HPPA_PGAOFF) &&
+		    (pte & PTE_PROT(TLB_GATEWAY)) == 0 &&
 		    (pte & PTE_PROT(TLB_WRITE))) {
 #ifdef PMAPDEBUG
 			printf("pmap_check_alias: "
@@ -494,7 +495,7 @@ pmap_bootstrap(vaddr_t vstart)
 	hppa_prot[PROT_READ]  = TLB_AR_R;
 	hppa_prot[PROT_WRITE] = TLB_AR_RW;
 	hppa_prot[PROT_READ | PROT_WRITE] = TLB_AR_RW;
-	hppa_prot[PROT_EXEC]  = TLB_AR_RX;
+	hppa_prot[PROT_EXEC]  = TLB_AR_X;
 	hppa_prot[PROT_READ | PROT_EXEC] = TLB_AR_RX;
 	hppa_prot[PROT_WRITE | PROT_EXEC] = TLB_AR_RWX;
 	hppa_prot[PROT_READ | PROT_WRITE | PROT_EXEC] = TLB_AR_RWX;
@@ -891,6 +892,43 @@ pmap_remove(struct pmap *pmap, vaddr_t sva, vaddr_t eva)
 
 	DPRINTF(PDB_FOLLOW|PDB_REMOVE, ("pmap_remove: leaving\n"));
 	pmap_unlock(pmap);
+}
+
+void
+pmap_page_write_protect(struct vm_page *pg)
+{
+	struct pv_entry *pve;
+	int attrs;
+
+	DPRINTF(PDB_FOLLOW|PDB_BITS, ("pmap_page_write_protect(%p)\n", pg));
+
+	attrs = 0;
+	mtx_enter(&pg->mdpage.pvh_mtx);
+	for (pve = pg->mdpage.pvh_list; pve; pve = pve->pv_next) {
+		struct pmap *pmap = pve->pv_pmap;
+		vaddr_t va = pve->pv_va;
+		volatile pt_entry_t *pde;
+		pt_entry_t opte, pte;
+
+		if ((pde = pmap_pde_get(pmap->pm_pdir, va))) {
+			opte = pte = pmap_pte_get(pde, va);
+			if (pte & TLB_GATEWAY)
+				continue;
+			pte &= ~TLB_WRITE;
+			attrs |= pmap_pvh_attrs(pte);
+
+			if (opte != pte) {
+				pmap_pte_flush(pmap, va, opte);
+				pmap_pte_set(pde, va, pte);
+			}
+		}
+	}
+	mtx_leave(&pg->mdpage.pvh_mtx);
+	if (attrs != (PG_PMAP_REF | PG_PMAP_MOD))
+		atomic_clearbits_int(&pg->pg_flags,
+		    attrs ^(PG_PMAP_REF | PG_PMAP_MOD));
+	if (attrs != 0)
+		atomic_setbits_int(&pg->pg_flags, attrs);
 }
 
 void

@@ -1,4 +1,4 @@
-#	$OpenBSD: rc,v 1.568 2022/12/28 09:53:33 kn Exp $
+#	$OpenBSD: rc,v 1.570 2023/01/25 10:53:15 asou Exp $
 
 # System startup script run by init on autoboot or after single-user.
 # Output and error are redirected to console by init, and the console is the
@@ -188,7 +188,7 @@ reorder_libs() {
 		fi
 	done
 
-	echo 'reordering libraries:'
+	echo 'reordering:'
 
 	# Remount the (read-only) filesystems in _ro_list as read-write.
 	for _mp in $_ro_list; do
@@ -233,6 +233,21 @@ reorder_libs() {
 			LD_BIND_NOW=1 LD_LIBRARY_PATH=$_tmpdir openssl \
 			    x509 -in /etc/ssl/cert.pem -out /dev/null
 			$_install $_lib $_lib_dir/$_lib
+		fi
+		) || { _error=true; break; }
+	done
+
+	for _bin in $_relink/usr/sbin/sshd; do
+		_tmpdir=$(mktemp -dq $_relink/_rebuild.XXXXXXXXXXXX) &&
+		(
+		set -o errexit
+		cd $_tmpdir
+		_binn=${_bin##*/}
+		_bint=${_bin}/${_binn}.tar
+		if [[ -f $_bint ]]; then
+			echo " $_binn"
+			tar xf $_bint
+			make -f Makefile.relink relink >/dev/null 2>&1
 		fi
 		) || { _error=true; break; }
 	done

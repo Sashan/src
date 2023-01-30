@@ -1,4 +1,4 @@
-/* $OpenBSD: bn_local.h,v 1.3 2022/11/30 03:08:39 jsing Exp $ */
+/* $OpenBSD: bn_local.h,v 1.5 2023/01/20 17:26:03 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -481,15 +481,165 @@ struct bn_gencb_st {
 	}
 #endif /* !BN_LLONG */
 
+/* mul_add_c(a,b,c0,c1,c2)  -- c+=a*b for three word number c=(c2,c1,c0) */
+/* mul_add_c2(a,b,c0,c1,c2) -- c+=2*a*b for three word number c=(c2,c1,c0) */
+/* sqr_add_c(a,i,c0,c1,c2)  -- c+=a[i]^2 for three word number c=(c2,c1,c0) */
+/* sqr_add_c2(a,i,c0,c1,c2) -- c+=2*a[i]*a[j] for three word number c=(c2,c1,c0) */
+
+#ifdef BN_LLONG
+/*
+ * Keep in mind that additions to multiplication result can not
+ * overflow, because its high half cannot be all-ones.
+ */
+#define mul_add_c(a,b,c0,c1,c2)		do {	\
+	BN_ULONG hi;				\
+	BN_ULLONG t = (BN_ULLONG)(a)*(b);	\
+	t += c0;		/* no carry */	\
+	c0 = (BN_ULONG)Lw(t);			\
+	hi = (BN_ULONG)Hw(t);			\
+	c1 = (c1+hi)&BN_MASK2; if (c1<hi) c2++;	\
+	} while(0)
+
+#define mul_add_c2(a,b,c0,c1,c2)	do {	\
+	BN_ULONG hi;				\
+	BN_ULLONG t = (BN_ULLONG)(a)*(b);	\
+	BN_ULLONG tt = t+c0;	/* no carry */	\
+	c0 = (BN_ULONG)Lw(tt);			\
+	hi = (BN_ULONG)Hw(tt);			\
+	c1 = (c1+hi)&BN_MASK2; if (c1<hi) c2++;	\
+	t += c0;		/* no carry */	\
+	c0 = (BN_ULONG)Lw(t);			\
+	hi = (BN_ULONG)Hw(t);			\
+	c1 = (c1+hi)&BN_MASK2; if (c1<hi) c2++;	\
+	} while(0)
+
+#define sqr_add_c(a,i,c0,c1,c2)		do {	\
+	BN_ULONG hi;				\
+	BN_ULLONG t = (BN_ULLONG)a[i]*a[i];	\
+	t += c0;		/* no carry */	\
+	c0 = (BN_ULONG)Lw(t);			\
+	hi = (BN_ULONG)Hw(t);			\
+	c1 = (c1+hi)&BN_MASK2; if (c1<hi) c2++;	\
+	} while(0)
+
+#define sqr_add_c2(a,i,j,c0,c1,c2) \
+	mul_add_c2((a)[i],(a)[j],c0,c1,c2)
+
+#elif defined(BN_UMULT_LOHI)
+/*
+ * Keep in mind that additions to hi can not overflow, because
+ * the high word of a multiplication result cannot be all-ones.
+ */
+#define mul_add_c(a,b,c0,c1,c2)		do {	\
+	BN_ULONG ta = (a), tb = (b);		\
+	BN_ULONG lo, hi;			\
+	BN_UMULT_LOHI(lo,hi,ta,tb);		\
+	c0 += lo; hi += (c0<lo)?1:0;		\
+	c1 += hi; c2 += (c1<hi)?1:0;		\
+	} while(0)
+
+#define mul_add_c2(a,b,c0,c1,c2)	do {	\
+	BN_ULONG ta = (a), tb = (b);		\
+	BN_ULONG lo, hi, tt;			\
+	BN_UMULT_LOHI(lo,hi,ta,tb);		\
+	c0 += lo; tt = hi+((c0<lo)?1:0);	\
+	c1 += tt; c2 += (c1<tt)?1:0;		\
+	c0 += lo; hi += (c0<lo)?1:0;		\
+	c1 += hi; c2 += (c1<hi)?1:0;		\
+	} while(0)
+
+#define sqr_add_c(a,i,c0,c1,c2)		do {	\
+	BN_ULONG ta = (a)[i];			\
+	BN_ULONG lo, hi;			\
+	BN_UMULT_LOHI(lo,hi,ta,ta);		\
+	c0 += lo; hi += (c0<lo)?1:0;		\
+	c1 += hi; c2 += (c1<hi)?1:0;		\
+	} while(0)
+
+#define sqr_add_c2(a,i,j,c0,c1,c2)	\
+	mul_add_c2((a)[i],(a)[j],c0,c1,c2)
+
+#elif defined(BN_UMULT_HIGH)
+/*
+ * Keep in mind that additions to hi can not overflow, because
+ * the high word of a multiplication result cannot be all-ones.
+ */
+#define mul_add_c(a,b,c0,c1,c2)		do {	\
+	BN_ULONG ta = (a), tb = (b);		\
+	BN_ULONG lo = ta * tb;			\
+	BN_ULONG hi = BN_UMULT_HIGH(ta,tb);	\
+	c0 += lo; hi += (c0<lo)?1:0;		\
+	c1 += hi; c2 += (c1<hi)?1:0;		\
+	} while(0)
+
+#define mul_add_c2(a,b,c0,c1,c2)	do {	\
+	BN_ULONG ta = (a), tb = (b), tt;	\
+	BN_ULONG lo = ta * tb;			\
+	BN_ULONG hi = BN_UMULT_HIGH(ta,tb);	\
+	c0 += lo; tt = hi + ((c0<lo)?1:0);	\
+	c1 += tt; c2 += (c1<tt)?1:0;		\
+	c0 += lo; hi += (c0<lo)?1:0;		\
+	c1 += hi; c2 += (c1<hi)?1:0;		\
+	} while(0)
+
+#define sqr_add_c(a,i,c0,c1,c2)		do {	\
+	BN_ULONG ta = (a)[i];			\
+	BN_ULONG lo = ta * ta;			\
+	BN_ULONG hi = BN_UMULT_HIGH(ta,ta);	\
+	c0 += lo; hi += (c0<lo)?1:0;		\
+	c1 += hi; c2 += (c1<hi)?1:0;		\
+	} while(0)
+
+#define sqr_add_c2(a,i,j,c0,c1,c2)	\
+	mul_add_c2((a)[i],(a)[j],c0,c1,c2)
+
+#else /* !BN_LLONG */
+/*
+ * Keep in mind that additions to hi can not overflow, because
+ * the high word of a multiplication result cannot be all-ones.
+ */
+#define mul_add_c(a,b,c0,c1,c2)		do {	\
+	BN_ULONG lo = LBITS(a), hi = HBITS(a);	\
+	BN_ULONG bl = LBITS(b), bh = HBITS(b);	\
+	mul64(lo,hi,bl,bh);			\
+	c0 = (c0+lo)&BN_MASK2; if (c0<lo) hi++;	\
+	c1 = (c1+hi)&BN_MASK2; if (c1<hi) c2++;	\
+	} while(0)
+
+#define mul_add_c2(a,b,c0,c1,c2)	do {	\
+	BN_ULONG tt;				\
+	BN_ULONG lo = LBITS(a), hi = HBITS(a);	\
+	BN_ULONG bl = LBITS(b), bh = HBITS(b);	\
+	mul64(lo,hi,bl,bh);			\
+	tt = hi;				\
+	c0 = (c0+lo)&BN_MASK2; if (c0<lo) tt++;	\
+	c1 = (c1+tt)&BN_MASK2; if (c1<tt) c2++;	\
+	c0 = (c0+lo)&BN_MASK2; if (c0<lo) hi++;	\
+	c1 = (c1+hi)&BN_MASK2; if (c1<hi) c2++;	\
+	} while(0)
+
+#define sqr_add_c(a,i,c0,c1,c2)		do {	\
+	BN_ULONG lo, hi;			\
+	sqr64(lo,hi,(a)[i]);			\
+	c0 = (c0+lo)&BN_MASK2; if (c0<lo) hi++;	\
+	c1 = (c1+hi)&BN_MASK2; if (c1<hi) c2++;	\
+	} while(0)
+
+#define sqr_add_c2(a,i,j,c0,c1,c2) \
+	mul_add_c2((a)[i],(a)[j],c0,c1,c2)
+#endif /* !BN_LLONG */
+
 /* The least significant word of a BIGNUM. */
 #define BN_lsw(n) (((n)->top == 0) ? (BN_ULONG) 0 : (n)->d[0])
 
 void bn_mul_normal(BN_ULONG *r, BN_ULONG *a, int na, BN_ULONG *b, int nb);
-void bn_mul_comba8(BN_ULONG *r, BN_ULONG *a, BN_ULONG *b);
 void bn_mul_comba4(BN_ULONG *r, BN_ULONG *a, BN_ULONG *b);
+void bn_mul_comba8(BN_ULONG *r, BN_ULONG *a, BN_ULONG *b);
+
 void bn_sqr_normal(BN_ULONG *r, const BN_ULONG *a, int n, BN_ULONG *tmp);
-void bn_sqr_comba8(BN_ULONG *r, const BN_ULONG *a);
 void bn_sqr_comba4(BN_ULONG *r, const BN_ULONG *a);
+void bn_sqr_comba8(BN_ULONG *r, const BN_ULONG *a);
+
 int bn_cmp_words(const BN_ULONG *a, const BN_ULONG *b, int n);
 int bn_cmp_part_words(const BN_ULONG *a, const BN_ULONG *b,
     int cl, int dl);
@@ -498,16 +648,10 @@ void bn_mul_recursive(BN_ULONG *r, BN_ULONG *a, BN_ULONG *b, int n2,
 void bn_mul_part_recursive(BN_ULONG *r, BN_ULONG *a, BN_ULONG *b,
     int n, int tna, int tnb, BN_ULONG *t);
 void bn_sqr_recursive(BN_ULONG *r, const BN_ULONG *a, int n2, BN_ULONG *t);
-void bn_mul_low_normal(BN_ULONG *r, BN_ULONG *a, BN_ULONG *b, int n);
-void bn_mul_low_recursive(BN_ULONG *r, BN_ULONG *a, BN_ULONG *b, int n2,
-    BN_ULONG *t);
-void bn_mul_high(BN_ULONG *r, BN_ULONG *a, BN_ULONG *b, BN_ULONG *l, int n2,
-    BN_ULONG *t);
-BN_ULONG bn_add_part_words(BN_ULONG *r, const BN_ULONG *a, const BN_ULONG *b,
-    int cl, int dl);
 BN_ULONG bn_sub_part_words(BN_ULONG *r, const BN_ULONG *a, const BN_ULONG *b,
     int cl, int dl);
-int bn_mul_mont(BN_ULONG *rp, const BN_ULONG *ap, const BN_ULONG *bp, const BN_ULONG *np, const BN_ULONG *n0, int num);
+int bn_mul_mont(BN_ULONG *rp, const BN_ULONG *ap, const BN_ULONG *bp,
+    const BN_ULONG *np, const BN_ULONG *n0, int num);
 
 void bn_correct_top(BIGNUM *a);
 int bn_expand(BIGNUM *a, int bits);

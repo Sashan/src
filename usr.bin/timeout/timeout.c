@@ -1,4 +1,4 @@
-/* $OpenBSD: timeout.c,v 1.22 2022/12/22 19:53:23 kn Exp $ */
+/* $OpenBSD: timeout.c,v 1.25 2023/01/13 06:53:04 cheloha Exp $ */
 
 /*
  * Copyright (c) 2021 Job Snijders <job@openbsd.org>
@@ -46,19 +46,17 @@
 
 #define EXIT_TIMEOUT 124
 
-static sig_atomic_t sig_chld = 0;
-static sig_atomic_t sig_term = 0;
-static sig_atomic_t sig_alrm = 0;
-static sig_atomic_t sig_ign = 0;
+static volatile sig_atomic_t sig_chld = 0;
+static volatile sig_atomic_t sig_term = 0;
+static volatile sig_atomic_t sig_alrm = 0;
+static volatile sig_atomic_t sig_ign = 0;
 
 static void __dead
 usage(void)
 {
 	fprintf(stderr,
-	    "usage: timeout [-k time] [-s sig] [--foreground]"
-	    " [--preserve-status] duration\n"
-	    "               command [arg ...]\n");
-
+	    "usage: timeout [-fp] [-k time] [-s signal] duration command"
+	    " [arg ...]\n");
 	exit(1);
 }
 
@@ -180,8 +178,8 @@ main(int argc, char **argv)
 			    SIGALRM, SIGQUIT};
 
 	const struct option longopts[] = {
-		{ "preserve-status", no_argument,       &preserve,    1 },
-		{ "foreground",      no_argument,       &foreground,  1 },
+		{ "preserve-status", no_argument,       NULL,        'p'},
+		{ "foreground",      no_argument,       NULL,        'f'},
 		{ "kill-after",      required_argument, NULL,        'k'},
 		{ "signal",          required_argument, NULL,        's'},
 		{ "help",            no_argument,       NULL,        'h'},
@@ -191,11 +189,18 @@ main(int argc, char **argv)
 	if (pledge("stdio proc exec", NULL) == -1)
 		err(1, "pledge");
 
-	while ((ch = getopt_long(argc, argv, "+k:s:h", longopts, NULL)) != -1) {
+	while ((ch = getopt_long(argc, argv, "+fk:ps:h", longopts, NULL))
+	    != -1) {
 		switch (ch) {
+		case 'f':
+			foreground = 1;
+			break;
 		case 'k':
 			do_second_kill = true;
 			second_kill = parse_duration(optarg);
+			break;
+		case 'p':
+			preserve = 1;
 			break;
 		case 's':
 			killsig = parse_signal(optarg);

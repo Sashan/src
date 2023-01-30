@@ -1,4 +1,4 @@
-/* $OpenBSD: wsdisplay.c,v 1.150 2022/11/26 06:20:18 anton Exp $ */
+/* $OpenBSD: wsdisplay.c,v 1.152 2023/01/10 16:33:18 tobhe Exp $ */
 /* $NetBSD: wsdisplay.c,v 1.82 2005/02/27 00:27:52 perry Exp $ */
 
 /*
@@ -2212,7 +2212,7 @@ wsdisplay_switchtoconsole(void)
 }
 
 /*
- * Switch rhe console display to its ddb screen, avoiding locking
+ * Switch the console display to its ddb screen, avoiding locking
  * where we can.
  */
 void
@@ -2265,13 +2265,11 @@ wsdisplay_suspend_device(struct device *dev)
 
 	scr = sc->sc_scr[active];
 	/*
-	 * We want to switch out of graphics mode for the suspend, but
-	 * only if we're in WSDISPLAY_MODE_MAPPED.
+	 * We want to switch out of graphics mode for the suspend
 	 */
 retry:
 	idx = WSDISPLAY_MAXSCREEN;
-	if (scr->scr_flags & SCR_GRAPHICS &&
-	    (scr->scr_flags & SCR_DUMBFB) == 0) {
+	if (scr->scr_flags & SCR_GRAPHICS) {
 		for (idx = 0; idx < WSDISPLAY_MAXSCREEN; idx++) {
 			if (sc->sc_scr[idx] == NULL || sc->sc_scr[idx] == scr)
 				continue;

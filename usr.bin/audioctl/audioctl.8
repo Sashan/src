@@ -1,4 +1,4 @@
-.\" $OpenBSD: audioctl.8,v 1.4 2020/04/23 00:16:59 schwarze Exp $
+.\" $OpenBSD: audioctl.8,v 1.7 2023/01/09 17:13:46 jmc Exp $
 .\" $NetBSD: audioctl.1,v 1.7 1998/04/27 16:55:23 augustss Exp $
 .\" Copyright (c) 1997 The NetBSD Foundation, Inc.
 .\" All rights reserved.
@@ -26,7 +26,7 @@
 .\" ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 .\" POSSIBILITY OF SUCH DAMAGE.
 .\"
-.Dd $Mdocdate: April 23 2020 $
+.Dd $Mdocdate: January 9 2023 $
 .Dt AUDIOCTL 8
 .Os
 .Sh NAME
@@ -34,15 +34,10 @@
 .Nd get or set audio driver variables
 .Sh SYNOPSIS
 .Nm audioctl
-.Op Fl f Ar file
-.Nm audioctl
-.Op Fl n
-.Op Fl f Ar file
-.Ar name ...
-.Nm audioctl
 .Op Fl nq
 .Op Fl f Ar file
-.Ar name Ns = Ns Ar value ...
+.Op Fl w Ar wait
+.Op Ar name Ns Oo = Ns Ar value Oc Ar ...
 .Sh DESCRIPTION
 The
 .Nm
@@ -59,11 +54,19 @@ The default is
 Suppress printing of the variable name.
 .It Fl q
 Suppress all output when setting a variable.
-.It Ar name Ns = Ns Ar value
-Attempt to set the specified variable
-.Ar name
-to
-.Ar value .
+.It Fl w Ar wait
+Display variables every
+.Ar wait
+seconds.
+.Nm
+will continue to display variables until interrupted.
+.It Ar name Ns Op = Ns Ar value
+Retrieve the specified variable
+.Ar name ,
+or attempt to set it to value.
+Multiple
+.Ar name Ns Op = Ns Ar value
+arguments may be given.
 .El
 .Pp
 If the audio control device is used, then values are only stored in the
@@ -130,10 +133,10 @@ audio control devices
 audio devices
 .El
 .Sh EXAMPLES
-Display the number of bytes of silence inserted during play buffer
-underruns since device started:
+Once per second, display the number of bytes of silence inserted due to buffer
+underruns (since the device started playback):
 .Bd -literal -offset indent
-# audioctl play.errors
+# audioctl -w 1 play.errors
 .Ed
 .Pp
 Use signed 24-bit samples and 44100Hz sample rate:

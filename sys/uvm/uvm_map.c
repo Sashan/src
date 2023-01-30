@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_map.c,v 1.305 2022/12/18 23:41:17 deraadt Exp $	*/
+/*	$OpenBSD: uvm_map.c,v 1.308 2023/01/25 23:42:03 deraadt Exp $	*/
 /*	$NetBSD: uvm_map.c,v 1.86 2000/11/27 08:40:03 chs Exp $	*/
 
 /*
@@ -4469,8 +4469,12 @@ uvm_map_extract(struct vm_map *srcmap, vaddr_t start, vsize_t len,
 			goto fail2_unmap;
 		}
 		kernel_map->size += cp_len;
-		if (flags & UVM_EXTRACT_FIXPROT)
+
+		/* Figure out the best protection */ 
+		if ((flags & UVM_EXTRACT_FIXPROT) &&
+		    newentry->protection != PROT_NONE)
 			newentry->protection = newentry->max_protection;
+		newentry->protection &= ~PROT_EXEC;
 
 		/*
 		 * Step 2: perform pmap copy.

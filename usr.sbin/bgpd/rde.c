@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.c,v 1.582 2022/12/28 21:30:16 jmc Exp $ */
+/*	$OpenBSD: rde.c,v 1.591 2023/01/24 14:13:12 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -61,6 +61,8 @@ uint8_t		 rde_attr_missing(struct rde_aspath *, int, uint16_t);
 int		 rde_get_mp_nexthop(u_char *, uint16_t, uint8_t,
 		    struct filterstate *);
 void		 rde_as4byte_fixup(struct rde_peer *, struct rde_aspath *);
+uint8_t		 rde_aspa_validity(struct rde_peer *, struct rde_aspath *,
+		    uint8_t);
 void		 rde_reflector(struct rde_peer *, struct rde_aspath *);
 
 void		 rde_dump_ctx_new(struct ctl_show_rib_request *, pid_t,
@@ -80,7 +82,9 @@ static void	 rde_softreconfig_in(struct rib_entry *, void *);
 static void	 rde_softreconfig_sync_reeval(struct rib_entry *, void *);
 static void	 rde_softreconfig_sync_fib(struct rib_entry *, void *);
 static void	 rde_softreconfig_sync_done(void *, uint8_t);
-static void	 rde_roa_reload(void);
+static void	 rde_rpki_reload(void);
+static int	 rde_roa_reload(void);
+static int	 rde_aspa_reload(void);
 int		 rde_update_queue_pending(void);
 void		 rde_update_queue_runner(void);
 void		 rde_update6_queue_runner(uint8_t);
@@ -99,7 +103,8 @@ static void	 network_dump_upcall(struct rib_entry *, void *);
 static void	 network_flush_upcall(struct rib_entry *, void *);
 
 void		 rde_shutdown(void);
-int		 ovs_match(struct prefix *, uint32_t);
+static int	 ovs_match(struct prefix *, uint32_t);
+static int	 avs_match(struct prefix *, uint32_t);
 
 static struct imsgbuf		*ibuf_se;
 static struct imsgbuf		*ibuf_se_ctl;
@@ -107,6 +112,8 @@ static struct imsgbuf		*ibuf_rtr;
 static struct imsgbuf		*ibuf_main;
 static struct bgpd_config	*conf, *nconf;
 static struct rde_prefixset	 rde_roa, roa_new;
+static struct rde_aspa		*rde_aspa, *aspa_new;
+static uint8_t			 rde_aspa_generation;
 
 volatile sig_atomic_t	 rde_quit = 0;
 struct filter_head	*out_rules, *out_rules_tmp;
@@ -245,8 +252,8 @@ rde_main(int debug, int verbose)
 			}
 		}
 
-		if (rib_dump_pending() || rde_update_queue_pending() ||
-		    nexthop_pending() || peer_imsg_pending())
+		if (peer_imsg_pending() || rde_update_queue_pending() ||
+		    nexthop_pending() || rib_dump_pending())
 			timeout = 0;
 
 		if (poll(pfd, i, timeout) == -1) {
@@ -459,8 +466,7 @@ rde_dispatch_imsg_session(struct imsgbuf *ibuf)
 			}
 			memcpy(&netconf_s, imsg.data, sizeof(netconf_s));
 			TAILQ_INIT(&netconf_s.attrset);
-			rde_filterstate_prep(&netconf_state, NULL, NULL, NULL,
-			    0);
+			rde_filterstate_init(&netconf_state);
 			asp = &netconf_state.aspath;
 			asp->aspath = aspath_get(NULL, 0);
 			asp->origin = ORIGIN_IGP;
@@ -639,6 +645,14 @@ badnetdel:
 			imsg_compose(ibuf_se_ctl, IMSG_CTL_SHOW_SET, 0,
 			    imsg.hdr.pid, -1, &cset, sizeof(cset));
 
+			/* then aspa set */
+			memset(&cset, 0, sizeof(cset));
+			cset.type = ASPA_SET;
+			strlcpy(cset.name, "RPKI ASPA", sizeof(cset.name));
+			aspa_table_stats(rde_aspa, &cset);
+			imsg_compose(ibuf_se_ctl, IMSG_CTL_SHOW_SET, 0,
+			    imsg.hdr.pid, -1, &cset, sizeof(cset));
+
 			SIMPLEQ_FOREACH(aset, &conf->as_sets, entry) {
 				memset(&cset, 0, sizeof(cset));
 				cset.type = ASNUM_SET;
@@ -799,7 +813,7 @@ rde_dispatch_imsg_parent(struct imsgbuf *ibuf)
 		case IMSG_NETWORK_DONE:
 			TAILQ_CONCAT(&netconf_p.attrset, &parent_set, entry);
 
-			rde_filterstate_prep(&state, NULL, NULL, NULL, 0);
+			rde_filterstate_init(&state);
 			asp = &state.aspath;
 			asp->aspath = aspath_get(NULL, 0);
 			asp->origin = ORIGIN_IGP;
@@ -1063,9 +1077,11 @@ rde_dispatch_imsg_parent(struct imsgbuf *ibuf)
 void
 rde_dispatch_imsg_rtr(struct imsgbuf *ibuf)
 {
-	struct imsg	 imsg;
-	struct roa	 roa;
-	int		 n;
+	static struct aspa_set	*aspa;
+	struct imsg		 imsg;
+	struct roa		 roa;
+	struct aspa_prep	 ap;
+	int			 n;
 
 	while (ibuf) {
 		if ((n = imsg_get(ibuf, &imsg)) == -1)
@@ -1092,9 +1108,65 @@ rde_dispatch_imsg_rtr(struct imsgbuf *ibuf)
 				    log_addr(&p), roa.prefixlen);
 			}
 			break;
+		case IMSG_RECONF_ASPA_PREP:
+			if (imsg.hdr.len - IMSG_HEADER_SIZE != sizeof(ap))
+				fatalx("IMSG_RECONF_ASPA_PREP bad len");
+			if (aspa_new)
+				fatalx("unexpected IMSG_RECONF_ASPA_PREP");
+			memcpy(&ap, imsg.data, sizeof(ap));
+			aspa_new = aspa_table_prep(ap.entries, ap.datasize);
+			break;
+		case IMSG_RECONF_ASPA:
+			if (aspa_new == NULL)
+				fatalx("unexpected IMSG_RECONF_ASPA");
+			if (aspa != NULL)
+				fatalx("IMSG_RECONF_ASPA already sent");
+			if (imsg.hdr.len - IMSG_HEADER_SIZE !=
+			    sizeof(uint32_t) * 2)
+				fatalx("IMSG_RECONF_ASPA bad len");
+
+			if ((aspa = calloc(1, sizeof(*aspa))) == NULL)
+				fatal("IMSG_RECONF_ASPA");
+			memcpy(&aspa->as, imsg.data, sizeof(aspa->as));
+			memcpy(&aspa->num, (char *)imsg.data + sizeof(aspa->as),
+			    sizeof(aspa->num));
+			break;
+		case IMSG_RECONF_ASPA_TAS:
+			if (aspa == NULL)
+				fatalx("unexpected IMSG_RECONF_ASPA_TAS");
+			if (imsg.hdr.len - IMSG_HEADER_SIZE !=
+			     aspa->num * sizeof(uint32_t))
+				fatalx("IMSG_RECONF_ASPA_TAS bad len");
+			aspa->tas = reallocarray(NULL, aspa->num,
+			    sizeof(uint32_t));
+			if (aspa->tas == NULL)
+				fatal("IMSG_RECONF_ASPA_TAS");
+			memcpy(aspa->tas, imsg.data,
+			    aspa->num * sizeof(uint32_t));
+			break;
+		case IMSG_RECONF_ASPA_TAS_AID:
+			if (aspa == NULL)
+				fatalx("unexpected IMSG_RECONF_ASPA_TAS_AID");
+			if (imsg.hdr.len - IMSG_HEADER_SIZE !=
+			     (aspa->num + 15) / 16)
+				fatalx("IMSG_RECONF_ASPA_TAS_AID bad len");
+			aspa->tas_aid = malloc((aspa->num + 15) / 16);
+			if (aspa->tas_aid == NULL)
+				fatal("IMSG_RECONF_ASPA_TAS_AID");
+			memcpy(aspa->tas_aid, imsg.data, (aspa->num + 15) / 16);
+			break;
+		case IMSG_RECONF_ASPA_DONE:
+			if (aspa_new == NULL)
+				fatalx("unexpected IMSG_RECONF_ASPA");
+			aspa_add_set(aspa_new, aspa->as, aspa->tas,
+			    aspa->num, (void *)aspa->tas_aid);
+			free_aspa(aspa);
+			aspa = NULL;
+			break;
 		case IMSG_RECONF_DONE:
 			/* end of update */
-			rde_roa_reload();
+			if (rde_roa_reload() + rde_aspa_reload() != 0)
+				rde_rpki_reload();
 			break;
 		}
 		imsg_free(&imsg);
@@ -1127,7 +1199,7 @@ rde_dispatch_imsg_peer(struct rde_peer *peer, void *bula)
 			    "route refresh: bad AID %d", rr.aid);
 			break;
 		}
-		if (peer->capa.mp[rr.aid]) {
+		if (peer->capa.mp[rr.aid] == 0) {
 			log_peer_warnx(&peer->conf,
 			    "route refresh: AID %s not negotiated",
 			    aid2str(rr.aid));
@@ -1232,7 +1304,7 @@ rde_update_dispatch(struct rde_peer *peer, struct imsg *imsg)
 	}
 
 	memset(&mpa, 0, sizeof(mpa));
-	rde_filterstate_prep(&state, NULL, NULL, NULL, 0);
+	rde_filterstate_init(&state);
 	if (attrpath_len != 0) { /* 0 = no NLRI information in this message */
 		/* parse path attributes */
 		while (len > 0) {
@@ -1295,6 +1367,13 @@ rde_update_dispatch(struct rde_peer *peer, struct imsg *imsg)
 			state.aspath.flags |= F_ATTR_LOOP;
 
 		rde_reflector(peer, &state.aspath);
+
+		/* Cache aspa lookup for all updates from ebgp sessions. */
+		if (state.aspath.flags & F_ATTR_ASPATH && peer->conf.ebgp) {
+			aspa_validation(rde_aspa, state.aspath.aspath,
+			    &state.aspath.aspa_state);
+			state.aspath.aspa_generation = rde_aspa_generation;
+		}
 	}
 
 	p = imsg->data;
@@ -1655,20 +1734,22 @@ rde_update_update(struct rde_peer *peer, uint32_t path_id,
 {
 	struct filterstate	 state;
 	enum filter_actions	 action;
-	uint8_t			 vstate;
-	uint16_t		 i;
 	uint32_t		 path_id_tx;
+	uint16_t		 i;
+	uint8_t			 roa_state, aspa_state;
 	const char		*wmsg = "filtered, withdraw";
 
 	peer->prefix_rcvd_update++;
-	vstate = rde_roa_validity(&rde_roa, prefix, prefixlen,
+
+	roa_state = rde_roa_validity(&rde_roa, prefix, prefixlen,
 	    aspath_origin(in->aspath.aspath));
+	aspa_state = rde_aspa_validity(peer, &in->aspath, prefix->aid);
+	rde_filterstate_set_vstate(in, roa_state, aspa_state);
 
 	path_id_tx = pathid_assign(peer, path_id, prefix, prefixlen);
-
 	/* add original path to the Adj-RIB-In */
 	if (prefix_update(rib_byid(RIB_ADJ_IN), peer, path_id, path_id_tx,
-	    in, prefix, prefixlen, vstate) == 1)
+	    in, prefix, prefixlen) == 1)
 		peer->prefix_cnt++;
 
 	/* max prefix checker */
@@ -1686,25 +1767,23 @@ rde_update_update(struct rde_peer *peer, uint32_t path_id,
 		struct rib *rib = rib_byid(i);
 		if (rib == NULL)
 			continue;
-		rde_filterstate_prep(&state, &in->aspath, &in->communities,
-		    in->nexthop, in->nhflags);
+		rde_filterstate_copy(&state, in);
 		/* input filter */
 		action = rde_filter(rib->in_rules, peer, peer, prefix,
-		    prefixlen, vstate, &state);
+		    prefixlen, &state);
 
 		if (action == ACTION_ALLOW) {
 			rde_update_log("update", i, peer,
 			    &state.nexthop->exit_nexthop, prefix,
 			    prefixlen);
 			prefix_update(rib, peer, path_id, path_id_tx, &state,
-			    prefix, prefixlen, vstate);
+			    prefix, prefixlen);
 		} else if (prefix_withdraw(rib, peer, path_id, prefix,
 		    prefixlen)) {
 			rde_update_log(wmsg, i, peer,
 			    NULL, prefix, prefixlen);
 		}
 
-		/* clear state */
 		rde_filterstate_clean(&state);
 	}
 	return (0);
@@ -2396,6 +2475,54 @@ rde_as4byte_fixup(struct rde_peer *peer, struct rde_aspath *a)
 }
 
 
+uint8_t
+rde_aspa_validity(struct rde_peer *peer, struct rde_aspath *asp, uint8_t aid)
+{
+	if (!peer->conf.ebgp)	/* ASPA is only performed on ebgp sessions */
+		return ASPA_NEVER_KNOWN;
+	if (aid != AID_INET && aid != AID_INET6) /* skip uncovered aids */
+		return ASPA_NEVER_KNOWN;
+
+#ifdef MAYBE
+	/*
+	 * By default enforce neighbor-as is set for all ebgp sessions.
+	 * So if a admin disables this check should we really "reenable"
+	 * it here in such a dubious way?
+	 * This just fails the ASPA validation for these paths so maybe
+	 * this can be helpful. But it is not transparent to the admin.
+	 */
+
+	/* skip neighbor-as check for transparent RS sessions */
+	if (peer->role != ROLE_RS_CLIENT &&
+	    peer->conf.enforce_as != ENFORCE_AS_ON) {
+		uint32_t fas;
+
+		fas = aspath_neighbor(asp->aspath);
+		if (peer->conf.remote_as != fas)
+			return ASPA_INVALID;
+	}
+#endif
+
+	/* if no role is set, the outcome is unknown */
+	if (peer->role == ROLE_NONE)
+		return ASPA_UNKNOWN;
+
+	switch (aid) {
+	case AID_INET:
+		if (peer->role != ROLE_CUSTOMER)
+			return asp->aspa_state.onlyup_v4;
+		else
+			return asp->aspa_state.downup_v4;
+	case AID_INET6:
+		if (peer->role != ROLE_CUSTOMER)
+			return asp->aspa_state.onlyup_v6;
+		else
+			return asp->aspa_state.downup_v6;
+	default:
+		return ASPA_NEVER_KNOWN;	/* not reachable */
+	}
+}
+
 /*
  * route reflector helper function
  */
@@ -2500,7 +2627,8 @@ rde_dump_rib_as(struct prefix *p, struct rde_aspath *asp, pid_t pid, int flags,
 	pt_getaddr(p->pt, &rib.prefix);
 	rib.prefixlen = p->pt->prefixlen;
 	rib.origin = asp->origin;
-	rib.validation_state = p->validation_state;
+	rib.roa_validation_state = prefix_roa_vstate(p);
+	rib.aspa_validation_state = prefix_aspa_vstate(p);
 	rib.dmetric = p->dmetric;
 	rib.flags = 0;
 	if (!adjout) {
@@ -2648,6 +2776,8 @@ rde_dump_filter(struct prefix *p, struct ctl_show_rib_request *req, int adjout)
 			return;
 	}
 	if (!ovs_match(p, req->flags))
+		return;
+	if (!avs_match(p, req->flags))
 		return;
 	rde_dump_rib_as(p, asp, req->pid, req->flags, adjout);
 }
@@ -3475,6 +3605,13 @@ rde_reload_done(void)
 			/* add-path send needs rde_eval_all */
 			rde_eval_all = 1;
 		}
+		if (peer->role != peer->conf.role) {
+			if (reload == 0)
+				log_debug("peer role change: "
+				    "reloading Adj-RIB-In");
+			peer->role = peer->conf.role;
+			reload++;
+		}
 		peer->export_type = peer->conf.export_type;
 		peer->flags = peer->conf.flags;
 		if (peer->flags & PEERFLAG_EVALUATE_ALL)
@@ -3715,12 +3852,20 @@ rde_softreconfig_in(struct rib_entry *re, void *bula)
 	enum filter_actions	 action;
 	struct bgpd_addr	 prefix;
 	uint16_t		 i;
+	uint8_t			 aspa_vstate;
 
 	pt = re->prefix;
 	pt_getaddr(pt, &prefix);
 	TAILQ_FOREACH(p, &re->prefix_h, entry.list.rib) {
 		asp = prefix_aspath(p);
 		peer = prefix_peer(p);
+
+		/* possible role change update ASPA validation state */
+		if (prefix_aspa_vstate(p) == ASPA_NEVER_KNOWN)
+			aspa_vstate = ASPA_NEVER_KNOWN;
+		else
+			aspa_vstate = rde_aspa_validity(peer, asp, pt->aid);
+		prefix_set_vstate(p, prefix_roa_vstate(p), aspa_vstate);
 
 		/* skip announced networks, they are never filtered */
 		if (asp->flags & F_PREFIX_ANNOUNCED)
@@ -3734,17 +3879,15 @@ rde_softreconfig_in(struct rib_entry *re, void *bula)
 			if (rib->state != RECONF_RELOAD)
 				continue;
 
-			rde_filterstate_prep(&state, asp, prefix_communities(p),
-			    prefix_nexthop(p), prefix_nhflags(p));
+			rde_filterstate_prep(&state, p);
 			action = rde_filter(rib->in_rules, peer, peer, &prefix,
-			    pt->prefixlen, p->validation_state, &state);
+			    pt->prefixlen, &state);
 
 			if (action == ACTION_ALLOW) {
 				/* update Local-RIB */
 				prefix_update(rib, peer, p->path_id,
 				    p->path_id_tx, &state,
-				    &prefix, pt->prefixlen,
-				    p->validation_state);
+				    &prefix, pt->prefixlen);
 			} else if (action == ACTION_DENY) {
 				/* remove from Local-RIB */
 				prefix_withdraw(rib, peer, p->path_id, &prefix,
@@ -3839,7 +3982,7 @@ rde_softreconfig_sync_done(void *arg, uint8_t aid)
  * so this runs outside of the softreconfig handlers.
  */
 static void
-rde_roa_softreload(struct rib_entry *re, void *bula)
+rde_rpki_softreload(struct rib_entry *re, void *bula)
 {
 	struct filterstate	 state;
 	struct rib		*rib;
@@ -3849,7 +3992,7 @@ rde_roa_softreload(struct rib_entry *re, void *bula)
 	struct rde_aspath	*asp;
 	enum filter_actions	 action;
 	struct bgpd_addr	 prefix;
-	uint8_t			 vstate;
+	uint8_t			 roa_vstate, aspa_vstate;
 	uint16_t		 i;
 
 	pt = re->prefix;
@@ -3859,12 +4002,26 @@ rde_roa_softreload(struct rib_entry *re, void *bula)
 		peer = prefix_peer(p);
 
 		/* ROA validation state update */
-		vstate = rde_roa_validity(&rde_roa,
+		roa_vstate = rde_roa_validity(&rde_roa,
 		    &prefix, pt->prefixlen, aspath_origin(asp->aspath));
-		if (vstate == p->validation_state)
-			continue;
-		p->validation_state = vstate;
 
+		/* ASPA validation state update (if needed) */
+		if (prefix_aspa_vstate(p) == ASPA_NEVER_KNOWN) {
+			aspa_vstate = ASPA_NEVER_KNOWN;
+		} else {
+			if (asp->aspa_generation != rde_aspa_generation) {
+				asp->aspa_generation = rde_aspa_generation;
+				aspa_validation(rde_aspa, asp->aspath,
+				    &asp->aspa_state);
+			}
+			aspa_vstate = rde_aspa_validity(peer, asp, pt->aid);
+		}
+
+		if (roa_vstate == prefix_roa_vstate(p) &&
+		    aspa_vstate == prefix_aspa_vstate(p))
+			continue;
+
+		prefix_set_vstate(p, roa_vstate, aspa_vstate);
 		/* skip announced networks, they are never filtered */
 		if (asp->flags & F_PREFIX_ANNOUNCED)
 			continue;
@@ -3874,17 +4031,15 @@ rde_roa_softreload(struct rib_entry *re, void *bula)
 			if (rib == NULL)
 				continue;
 
-			rde_filterstate_prep(&state, asp, prefix_communities(p),
-			    prefix_nexthop(p), prefix_nhflags(p));
+			rde_filterstate_prep(&state, p);
 			action = rde_filter(rib->in_rules, peer, peer, &prefix,
-			    pt->prefixlen, p->validation_state, &state);
+			    pt->prefixlen, &state);
 
 			if (action == ACTION_ALLOW) {
 				/* update Local-RIB */
 				prefix_update(rib, peer, p->path_id,
 				    p->path_id_tx, &state,
-				    &prefix, pt->prefixlen,
-				    p->validation_state);
+				    &prefix, pt->prefixlen);
 			} else if (action == ACTION_DENY) {
 				/* remove from Local-RIB */
 				prefix_withdraw(rib, peer, p->path_id, &prefix,
@@ -3896,24 +4051,39 @@ rde_roa_softreload(struct rib_entry *re, void *bula)
 	}
 }
 
-static int roa_update_pending;
+static int rpki_update_pending;
 
 static void
-rde_roa_softreload_done(void *arg, uint8_t aid)
+rde_rpki_softreload_done(void *arg, uint8_t aid)
 {
 	/* the roa update is done */
-	log_info("ROA softreload done");
-	roa_update_pending = 0;
+	log_info("RPKI softreload done");
+	rpki_update_pending = 0;
 }
 
 static void
+rde_rpki_reload(void)
+{
+	if (rpki_update_pending) {
+		log_info("RPKI softreload skipped, old still running");
+		return;
+	}
+
+	rpki_update_pending = 1;
+	if (rib_dump_new(RIB_ADJ_IN, AID_UNSPEC, RDE_RUNNER_ROUNDS,
+	    rib_byid(RIB_ADJ_IN), rde_rpki_softreload,
+	    rde_rpki_softreload_done, NULL) == -1)
+		fatal("%s: rib_dump_new", __func__);
+}
+
+static int
 rde_roa_reload(void)
 {
 	struct rde_prefixset roa_old;
 
-	if (roa_update_pending) {
-		log_info("ROA softreload skipped, old still running");
-		return;
+	if (rpki_update_pending) {
+		trie_free(&roa_new.th);	/* can't use new roa table */
+		return 1;		/* force call to rde_rpki_reload */
 	}
 
 	roa_old = rde_roa;
@@ -3924,18 +4094,42 @@ rde_roa_reload(void)
 	if (trie_equal(&rde_roa.th, &roa_old.th)) {
 		rde_roa.lastchange = roa_old.lastchange;
 		trie_free(&roa_old.th);	/* old roa no longer needed */
-		return;
+		return 0;
 	}
 
 	rde_roa.lastchange = getmonotime();
-	trie_free(&roa_old.th);	/* old roa no longer needed */
+	trie_free(&roa_old.th);		/* old roa no longer needed */
 
 	log_debug("ROA change: reloading Adj-RIB-In");
-	roa_update_pending = 1;
-	if (rib_dump_new(RIB_ADJ_IN, AID_UNSPEC, RDE_RUNNER_ROUNDS,
-	    rib_byid(RIB_ADJ_IN), rde_roa_softreload,
-	    rde_roa_softreload_done, NULL) == -1)
-		fatal("%s: rib_dump_new", __func__);
+	return 1;
+}
+
+static int
+rde_aspa_reload(void)
+{
+	struct rde_aspa *aspa_old;
+
+	if (rpki_update_pending) {
+		aspa_table_free(aspa_new);	/* can't use new aspa table */
+		aspa_new = NULL;
+		return 1;			/* rpki_client_relaod warns */
+	}
+
+	aspa_old = rde_aspa;
+	rde_aspa = aspa_new;
+	aspa_new = NULL;
+
+	/* check if aspa changed */
+	if (aspa_table_equal(rde_aspa, aspa_old)) {
+		aspa_table_unchanged(rde_aspa, aspa_old);
+		aspa_table_free(aspa_old);	/* old aspa no longer needed */
+		return 0;
+	}
+
+	aspa_table_free(aspa_old);		/* old aspa no longer needed */
+	log_debug("ASPA change: reloading Adj-RIB-In");
+	rde_aspa_generation++;
+	return 1;
 }
 
 /*
@@ -4057,9 +4251,9 @@ network_add(struct network_config *nc, struct filterstate *state)
 	struct filter_set_head	*vpnset = NULL;
 	struct in_addr		 prefix4;
 	struct in6_addr		 prefix6;
-	uint8_t			 vstate;
-	uint16_t		 i;
 	uint32_t		 path_id_tx;
+	uint16_t		 i;
+	uint8_t			 vstate;
 
 	if (nc->rd != 0) {
 		SIMPLEQ_FOREACH(vpn, &conf->l3vpns, entry) {
@@ -4119,11 +4313,13 @@ network_add(struct network_config *nc, struct filterstate *state)
 		rde_apply_set(vpnset, peerself, peerself, state,
 		    nc->prefix.aid);
 
-	vstate = rde_roa_validity(&rde_roa, &nc->prefix,
-	    nc->prefixlen, aspath_origin(state->aspath.aspath));
+	vstate = rde_roa_validity(&rde_roa, &nc->prefix, nc->prefixlen,
+	    aspath_origin(state->aspath.aspath));
+	rde_filterstate_set_vstate(state, vstate, ASPA_NEVER_KNOWN);
+
 	path_id_tx = pathid_assign(peerself, 0, &nc->prefix, nc->prefixlen);
 	if (prefix_update(rib_byid(RIB_ADJ_IN), peerself, 0, path_id_tx,
-	    state, &nc->prefix, nc->prefixlen, vstate) == 1)
+	    state, &nc->prefix, nc->prefixlen) == 1)
 		peerself->prefix_cnt++;
 	for (i = RIB_LOC_START; i < rib_size; i++) {
 		struct rib *rib = rib_byid(i);
@@ -4133,7 +4329,7 @@ network_add(struct network_config *nc, struct filterstate *state)
 		    state->nexthop ? &state->nexthop->exit_nexthop : NULL,
 		    &nc->prefix, nc->prefixlen);
 		prefix_update(rib, peerself, 0, path_id_tx, state, &nc->prefix,
-		    nc->prefixlen, vstate);
+		    nc->prefixlen);
 	}
 	filterset_free(&nc->attrset);
 }
@@ -4335,11 +4531,11 @@ rde_roa_validity(struct rde_prefixset *ps, struct bgpd_addr *prefix,
 	return (r & ROA_MASK);
 }
 
-int
+static int
 ovs_match(struct prefix *p, uint32_t flag)
 {
 	if (flag & (F_CTL_OVS_VALID|F_CTL_OVS_INVALID|F_CTL_OVS_NOTFOUND)) {
-		switch (prefix_vstate(p)) {
+		switch (prefix_roa_vstate(p)) {
 		case ROA_VALID:
 			if (!(flag & F_CTL_OVS_VALID))
 				return 0;
@@ -4350,6 +4546,31 @@ ovs_match(struct prefix *p, uint32_t flag)
 			break;
 		case ROA_NOTFOUND:
 			if (!(flag & F_CTL_OVS_NOTFOUND))
+				return 0;
+			break;
+		default:
+			break;
+		}
+	}
+
+	return 1;
+}
+
+static int
+avs_match(struct prefix *p, uint32_t flag)
+{
+	if (flag & (F_CTL_AVS_VALID|F_CTL_AVS_INVALID|F_CTL_AVS_UNKNOWN)) {
+		switch (prefix_aspa_vstate(p) & ASPA_MASK) {
+		case ASPA_VALID:
+			if (!(flag & F_CTL_AVS_VALID))
+				return 0;
+			break;
+		case ASPA_INVALID:
+			if (!(flag & F_CTL_AVS_INVALID))
+				return 0;
+			break;
+		case ASPA_UNKNOWN:
+			if (!(flag & F_CTL_AVS_UNKNOWN))
 				return 0;
 			break;
 		default:

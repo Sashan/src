@@ -1,8 +1,12 @@
-#	$OpenBSD: Makefile,v 1.12 2019/12/10 11:28:13 aoyama Exp $
+#	$OpenBSD: Makefile,v 1.15 2023/01/13 15:49:26 deraadt Exp $
 #	$NetBSD: Makefile,v 1.9 2013/01/22 15:48:40 tsutsui Exp $
 #	@(#)Makefile	8.2 (Berkeley) 8/15/93
 
-NOMAN= # defined
+MAN?=	boot.8
+MANSUBDIR=luna88k
+
+.if ${MACHINE} == "luna88k"
+PROG=   boot
 
 S= ${.CURDIR}/../../../..
 
@@ -24,12 +28,9 @@ LINKFORMAT=	-static -N -Ttext ${TEXTADDR} -T ${LDSCRIPT} \
 SRCS=	locore.S
 SRCS+=	init_main.c
 SRCS+=	fault.c setjmp.S
-SRCS+=	bcd.c
 SRCS+=	devopen.c
 SRCS+=	conf.c
-SRCS+=	getline.c parse.c
-SRCS+=	boot.c
-SRCS+=	cons.c prf.c awaitkey.c
+SRCS+=	exec.c
 SRCS+=	sio.c
 SRCS+=	bmc.c bmd.c font.c kbd.c
 SRCS+=	sc.c sd.c
@@ -39,16 +40,18 @@ SRCS+=	ufs_disksubr.c
 SRCS+=	if_le.c lance.c getsecs.c
 SRCS+=	dev_net.c
 
-PROG=   boot
-
 ### find out what to use for libkern
 .PATH:	${S}/lib/libkern
 SRCS+=	memcpy.c memmove.c strlcat.c strlcpy.c strlen.c
-SRCS+=	muldi3.c negdi2.c ashldi3.c ashrdi3.c
+SRCS+=	muldi3.c negdi2.c ashldi3.c ashrdi3.c moddi3.c
 
 ### find out what to use for libsa
 .PATH:	${S}/lib/libsa
-SRCS+=	arc4.c strtol.c
+SRCS+=	arc4.c ctime.c hexdump.c strtol.c strtoll.c
+
+### MI boot code
+.PATH:	${S}/stand/boot
+SRCS+=	boot.c cmd.c vars.c
 
 SAREL=
 SADST=	${.CURDIR}/${__objdir}
@@ -70,6 +73,10 @@ CLEANFILES+=	${PROG}.elf
 .BEGIN:
 	@([ -h machine ] || ln -s ${.CURDIR}/../../include machine)
 	@([ -h m88k ] || ln -s ${.CURDIR}/../../../m88k/include m88k)
+.endif
+
+.else
+NOPROG=
 .endif
 
 .include <bsd.prog.mk>

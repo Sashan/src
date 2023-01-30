@@ -358,8 +358,17 @@ static void checkOptions() {
   }
 
   if (config->executeOnly) {
-    if (config->emachine != EM_AARCH64)
-      error("-execute-only is only supported on AArch64 targets");
+    switch (config->emachine) {
+    case EM_AARCH64:
+    case EM_RISCV:
+    case EM_MIPS:
+    case EM_SPARCV9:
+    case EM_X86_64:
+    case EM_PPC64:
+      break;
+    default:
+      error("-execute-only is not supported on this target");
+    }
 
     if (config->singleRoRx && !script->hasSectionsCommand)
       error("-execute-only and -no-rosegment cannot be used together");
@@ -1046,8 +1055,6 @@ static void readConfigs(opt::InputArgList &args) {
   errorHandler().errorHandlingScript =
       args.getLastArgValue(OPT_error_handling_script);
 
-  config->executeOnly =
-      args.hasFlag(OPT_execute_only, OPT_no_execute_only, false);
   config->exportDynamic =
       args.hasFlag(OPT_export_dynamic, OPT_no_export_dynamic, false);
   config->filterList = args::getStrings(args, OPT_filter);
@@ -1470,6 +1477,19 @@ static void setConfigs(opt::InputArgList &args) {
       args.hasFlag(OPT_toc_optimize, OPT_no_toc_optimize, m == EM_PPC64);
   config->pcRelOptimize =
       args.hasFlag(OPT_pcrel_optimize, OPT_no_pcrel_optimize, m == EM_PPC64);
+
+  config->executeOnly = false;
+#ifdef __OpenBSD__
+  switch (m) {
+  case EM_AARCH64:
+  case EM_RISCV:
+  case EM_X86_64:
+    config->executeOnly = true;
+    break;
+  }
+#endif
+  config->executeOnly =
+      args.hasFlag(OPT_execute_only, OPT_no_execute_only, config->executeOnly);
 }
 
 // Returns a value of "-format" option.

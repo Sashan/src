@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.51 2022/09/12 19:33:34 miod Exp $	*/
+/*	$OpenBSD: trap.c,v 1.53 2023/01/16 05:32:05 deraadt Exp $	*/
 /*	$NetBSD: exception.c,v 1.32 2006/09/04 23:57:52 uwe Exp $	*/
 /*	$NetBSD: syscall.c,v 1.6 2006/03/07 07:21:50 thorpej Exp $	*/
 
@@ -416,6 +416,10 @@ tlb_exception(struct proc *p, struct trapframe *tf, uint32_t va)
 	}
 
 	err = uvm_fault(map, va, 0, access_type);
+	if (usermode && access_type == PROT_READ && err == EACCES) {
+		access_type = PROT_EXEC;
+		err = uvm_fault(map, va, 0, access_type);
+	}
 
 	/* User stack extension */
 	if (err == 0 && map != kernel_map)
@@ -512,7 +516,7 @@ syscall(struct proc *p, struct trapframe *tf)
 {
 	caddr_t params;
 	const struct sysent *callp;
-	int error, opc;
+	int error, opc, indirect = -1;
 	int argoff, argsize;
 	register_t code, args[8], rval[2];
 
@@ -528,6 +532,7 @@ syscall(struct proc *p, struct trapframe *tf)
 		/*
 		 * Code is first argument, followed by actual args.
 		 */
+		indirect = code;
 	        code = tf->tf_r4;
 		argoff = 1;
 		break;
@@ -536,6 +541,7 @@ syscall(struct proc *p, struct trapframe *tf)
 		 * Like syscall, but code is a quad, so as to maintain
 		 * quad alignment for the rest of the arguments.
 		 */
+		indirect = code;
 #if _BYTE_ORDER == BIG_ENDIAN
 		code = tf->tf_r5;
 #else
@@ -601,7 +607,7 @@ syscall(struct proc *p, struct trapframe *tf)
 	rval[0] = 0;
 	rval[1] = tf->tf_r1;
 
-	error = mi_syscall(p, code, callp, args, rval);
+	error = mi_syscall(p, code, indirect, callp, args, rval);
 
 	switch (error) {
 	case 0:

@@ -1,4 +1,4 @@
-/*	$OpenBSD: audioctl.c,v 1.44 2022/12/26 19:16:00 jmc Exp $	*/
+/*	$OpenBSD: audioctl.c,v 1.47 2023/01/09 17:13:46 jmc Exp $	*/
 /*
  * Copyright (c) 2016 Alexandre Ratchov <alex@caoua.org>
  *
@@ -43,6 +43,7 @@ struct field {
 #define STR	2
 #define ENC	3
 	int type;
+	int show;
 	int set;
 } fields[] = {
 	{"name",		&rname.name,		NULL,		STR},
@@ -63,11 +64,9 @@ struct field {
 };
 
 const char usagestr[] =
-	"usage: audioctl [-f file]\n"
-	"       audioctl [-n] [-f file] name ...\n"
-	"       audioctl [-nq] [-f file] name=value ...\n";
+	"usage: audioctl [-nq] [-f file] [-w wait] [name[=value] ...]\n";
 
-int fd, show_names = 1, quiet = 0;
+int fd, show_names = 1, quiet = 0, wait_sec = 0;
 
 /*
  * parse encoding string (examples: s8, u8, s16, s16le, s24be ...)
@@ -198,20 +197,9 @@ audio_main(int argc, char **argv)
 	char *lhs, *rhs;
 	int set = 0;
 
-	if (ioctl(fd, AUDIO_GETSTATUS, &rstatus) == -1)
-		err(1, "AUDIO_GETSTATUS");
-	if (ioctl(fd, AUDIO_GETDEV, &rname) == -1)
-		err(1, "AUDIO_GETDEV");
-	if (ioctl(fd, AUDIO_GETPAR, &rpar) == -1)
-		err(1, "AUDIO_GETPAR");
-	if (ioctl(fd, AUDIO_GETPOS, &rpos) == -1)
-		err(1, "AUDIO_GETPOS");
 	if (argc == 0) {
-		for (f = fields; f->name != NULL; f++) {
-			printf("%s=", f->name);
-			print_field(f, f->raddr);
-			printf("\n");
-		}
+		for (f = fields; f->name != NULL; f++)
+			f->show = 1;
 	}
 	AUDIO_INITPAR(&wpar);
 	for (; argc > 0; argc--, argv++) {
@@ -231,15 +219,41 @@ audio_main(int argc, char **argv)
 			parse_field(f, f->waddr, rhs);
 			f->set = 1;
 			set = 1;
-		} else {
+		} else
+			f->show = 1;
+	}
+
+	if (set && wait_sec)
+		errx(1, "Can't set variables wait_secically");
+
+	while (1) {
+		if (ioctl(fd, AUDIO_GETSTATUS, &rstatus) == -1)
+			err(1, "AUDIO_GETSTATUS");
+		if (ioctl(fd, AUDIO_GETDEV, &rname) == -1)
+			err(1, "AUDIO_GETDEV");
+		if (ioctl(fd, AUDIO_GETPAR, &rpar) == -1)
+			err(1, "AUDIO_GETPAR");
+		if (ioctl(fd, AUDIO_GETPOS, &rpos) == -1)
+			err(1, "AUDIO_GETPOS");
+		for (f = fields; f->name != NULL; f++) {
+			if (!f->show)
+				continue;
 			if (show_names)
 				printf("%s=", f->name);
 			print_field(f, f->raddr);
 			printf("\n");
 		}
+
+		if (wait_sec == 0)
+			break;
+
+		/* ioctls are fast, we neglect drift from real-time clock */
+		sleep(wait_sec);
 	}
+
 	if (!set)
 		return;
+
 	if (ioctl(fd, AUDIO_SETPAR, &wpar) == -1)
 		err(1, "AUDIO_SETPAR");
 	if (ioctl(fd, AUDIO_GETPAR, &wpar) == -1)
@@ -261,9 +275,10 @@ int
 main(int argc, char **argv)
 {
 	char *path = "/dev/audioctl0";
+	const char *errstr;
 	int c;
 
-	while ((c = getopt(argc, argv, "anf:q")) != -1) {
+	while ((c = getopt(argc, argv, "anf:qw:")) != -1) {
 		switch (c) {
 		case 'a':	/* ignored, compat */
 			break;
@@ -275,6 +290,11 @@ main(int argc, char **argv)
 			break;
 		case 'q':
 			quiet = 1;
+			break;
+		case 'w':
+			wait_sec = strtonum(optarg, 1, INT_MAX, &errstr);
+			if (errstr != NULL)
+				errx(1, "wait is %s: %s", errstr, optarg);
 			break;
 		default:
 			fputs(usagestr, stderr);

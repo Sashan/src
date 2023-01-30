@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde_filter.c,v 1.129 2022/07/28 13:11:51 deraadt Exp $ */
+/*	$OpenBSD: rde_filter.c,v 1.133 2023/01/24 14:13:12 claudio Exp $ */
 
 /*
  * Copyright (c) 2004 Claudio Jeker <claudio@openbsd.org>
@@ -212,7 +212,7 @@ rde_prefix_match(struct filter_prefix *fp, struct bgpd_addr *prefix,
 static int
 rde_filter_match(struct filter_rule *f, struct rde_peer *peer,
     struct rde_peer *from, struct filterstate *state,
-    struct bgpd_addr *prefix, uint8_t plen, uint8_t vstate)
+    struct bgpd_addr *prefix, uint8_t plen)
 {
 	struct rde_aspath *asp = &state->aspath;
 	int i;
@@ -223,7 +223,12 @@ rde_filter_match(struct filter_rule *f, struct rde_peer *peer,
 		return (0);
 
 	if (f->match.ovs.is_set) {
-		if (vstate != f->match.ovs.validity)
+		if ((state->vstate & ROA_MASK) != f->match.ovs.validity)
+			return (0);
+	}
+
+	if (f->match.avs.is_set) {
+		if (((state->vstate >> 4) & ASPA_MASK) != f->match.avs.validity)
 			return (0);
 	}
 
@@ -426,18 +431,59 @@ rde_filter_equal(struct filter_head *a, struct filter_head *b,
 }
 
 void
-rde_filterstate_prep(struct filterstate *state, struct rde_aspath *asp,
-    struct rde_community *communities, struct nexthop *nh, uint8_t nhflags)
+rde_filterstate_init(struct filterstate *state)
 {
 	memset(state, 0, sizeof(*state));
-
 	path_prep(&state->aspath);
+}
+
+static void
+rde_filterstate_set(struct filterstate *state, struct rde_aspath *asp,
+    struct rde_community *communities, struct nexthop *nh, uint8_t nhflags,
+    uint8_t vstate)
+{
+	rde_filterstate_init(state);
+
 	if (asp)
 		path_copy(&state->aspath, asp);
 	if (communities)
 		communities_copy(&state->communities, communities);
 	state->nexthop = nexthop_ref(nh);
 	state->nhflags = nhflags;
+	state->vstate = vstate;
+}
+
+/*
+ * Build a filterstate based on the prefix p.
+ */
+void
+rde_filterstate_prep(struct filterstate *state, struct prefix *p)
+{
+	rde_filterstate_set(state, prefix_aspath(p), prefix_communities(p),
+	    prefix_nexthop(p), prefix_nhflags(p), p->validation_state);
+}
+
+/*
+ * Copy a filterstate to a new filterstate.
+ */
+void
+rde_filterstate_copy(struct filterstate *state, struct filterstate *src)
+{
+	rde_filterstate_set(state, &src->aspath, &src->communities,
+	    src->nexthop, src->nhflags, src->vstate);
+}
+
+/*
+ * Set the vstate based on the aspa_state and the supplied roa vstate.
+ * This function must be called after rde_filterstate_init().
+ * rde_filterstate_prep() and rde_filterstate_copy() set the right vstate.
+ */
+void
+rde_filterstate_set_vstate(struct filterstate *state, uint8_t roa_vstate,
+    uint8_t aspa_state)
+{
+	state->vstate = aspa_state << 4;
+	state->vstate |= roa_vstate & ROA_MASK;
 }
 
 void
@@ -784,7 +830,7 @@ rde_filter_calc_skip_steps(struct filter_head *rules)
 enum filter_actions
 rde_filter(struct filter_head *rules, struct rde_peer *peer,
     struct rde_peer *from, struct bgpd_addr *prefix, uint8_t plen,
-    uint8_t vstate, struct filterstate *state)
+    struct filterstate *state)
 {
 	struct filter_rule	*f;
 	enum filter_actions	 action = ACTION_DENY; /* default deny */
@@ -814,8 +860,7 @@ rde_filter(struct filter_head *rules, struct rde_peer *peer,
 		     f->peer.peerid != peer->conf.id),
 		     f->skip[RDE_FILTER_SKIP_PEERID]);
 
-		if (rde_filter_match(f, peer, from, state, prefix, plen,
-		    vstate)) {
+		if (rde_filter_match(f, peer, from, state, prefix, plen)) {
 			rde_apply_set(&f->set, peer, from, state, prefix->aid);
 			if (f->action != ACTION_NONE)
 				action = f->action;
