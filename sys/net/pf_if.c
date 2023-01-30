@@ -485,7 +485,7 @@ pfi_dynaddr_setup(struct pf_addr_wrap *aw, sa_family_t af, int wait)
 		goto _bad;
 	}
 
-	if ((dyn->pfid_kt = pfr_attach_table(NULL, ruleset, tblname,
+	if ((dyn->pfid_kt = pfr_attach_table(&pf_global, ruleset, tblname,
 	    wait)) == NULL) {
 		rv = 1;
 		goto _bad;

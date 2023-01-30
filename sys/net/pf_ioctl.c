@@ -1170,7 +1170,7 @@ pf_remove_orphans(struct pf_trans *t)
 				__func__, __LINE__, r->anchor->path, r->anchor->refcnt,
 				TAILQ_EMPTY(r->anchor->ruleset.rules.ptr) ? "" : "not",
 				RB_EMPTY(&r->anchor->children) ? "" : "not",
-				r->anchor->ruleset.tables);
+				r->anchor->tables);
 			pf_remove_if_empty_ruleset(&pf_global,
 			    &r->anchor->ruleset);
 			r->anchor = NULL;
@@ -1185,7 +1185,7 @@ pf_remove_orphans(struct pf_trans *t)
 				    __func__, __LINE__, r->anchor->path, r->anchor->refcnt,
 				    TAILQ_EMPTY(r->anchor->ruleset.rules.ptr) ? "" : "not",
 				    RB_EMPTY(&r->anchor->children) ? "" : "not",
-				    r->anchor->ruleset.tables);
+				    r->anchor->tables);
 				pf_remove_if_empty_ruleset(&pf_global,
 				    &r->anchor->ruleset);
 				r->anchor = NULL;
@@ -1197,7 +1197,7 @@ pf_remove_orphans(struct pf_trans *t)
 			    __func__, __LINE__, g->path, g->refcnt,
 			    TAILQ_EMPTY(g->ruleset.rules.ptr) ? "" : "not",
 			    RB_EMPTY(&g->children) ? "" : "not",
-			    g->ruleset.tables);
+			    g->ruleset.anchor->tables);
 			pf_remove_if_empty_ruleset(&pf_global, &g->ruleset);
 		}
 	}
@@ -1864,8 +1864,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		rule->route.kif = pf_kif_setup(rule->route.kif);
 
 		if (rule->overload_tblname[0]) {
-			if ((rule->overload_tbl = pfr_attach_table(t, ruleset,
-			    rule->overload_tblname, PR_WAITOK)) == NULL)
+			if ((rule->overload_tbl = pfr_attach_table(&t->rc,
+			    ruleset, rule->overload_tblname,
+			    PR_WAITOK)) == NULL)
 				error = EINVAL;
 			else
 				rule->overload_tbl->pfrkt_flags |= PFR_TFLAG_ACTIVE;
@@ -2086,8 +2087,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			newrule->route.kif = pf_kif_setup(newrule->route.kif);
 
 			if (newrule->overload_tblname[0]) {
-				newrule->overload_tbl = pfr_attach_table(NULL,
-				    ruleset, newrule->overload_tblname,
+				newrule->overload_tbl = pfr_attach_table(
+				    &t->rc, ruleset, newrule->overload_tblname,
 				    PR_WAITOK);
 				if (newrule->overload_tbl == NULL)
 					error = EINVAL;
@@ -3120,7 +3121,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pf_ruleset	*rs;
 		struct pf_anchor	*ta;
+/*
 		struct pfr_ktable	*tkt, *kt;
+*/
 		struct pool		*pp;
 		int			 i, bailout = 0;
 		u_int32_t		 version;
@@ -3190,6 +3193,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			}
 		}
 
+#if 0
 		if (bailout == 0) {
 			RB_FOREACH(tkt, pfr_ktablehead, &t->rc.ktables) {
 				version = tkt->pfrkt_version;
@@ -3209,6 +3213,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				}
 			}
 		}
+#endif
 
 		log(LOG_ERR, "%s:%s @ %d bailout == %d\n", __func__, pfioctl_name(cmd), __LINE__, bailout);
 
@@ -3837,7 +3842,6 @@ pf_open_trans(pid_t pid)
 	t->pid = pid;
 	t->ticket = ticket++;
 	RB_INIT(&t->rc.anchors);
-	RB_INIT(&t->rc.ktables);
 	pf_init_ruleset(&t->rc.main_anchor.ruleset);
 	memset(t->anchor_path, 0, sizeof(t->anchor_path));
 
@@ -3871,7 +3875,9 @@ void
 pf_free_trans(struct pf_trans *t)
 {
 	struct pf_anchor *wa, *sa;
+/*
 	struct pfr_ktable *wt, *st;
+*/
 	struct pf_rule *r;
 
 	RB_FOREACH_SAFE(wa, pf_anchor_global, &t->rc.anchors, sa) {
@@ -3895,6 +3901,7 @@ pf_free_trans(struct pf_trans *t)
 		t->rc.main_anchor.ruleset.rules.rcount--;
 	}
 
+#if 0
 	RB_FOREACH_SAFE(wt, pfr_ktablehead, &t->rc.ktables, st) {
 		RB_REMOVE(pfr_ktablehead, &t->rc.ktables, wt);
 		/*
@@ -3905,6 +3912,7 @@ pf_free_trans(struct pf_trans *t)
 		wt->pfrkt_rs = NULL;
 		pfr_destroy_ktable(wt, 1);
 	}
+#endif
 
 	free(t, M_TEMP, sizeof(*t));
 }

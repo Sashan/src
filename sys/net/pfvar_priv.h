@@ -418,7 +418,7 @@ extern void		 pf_purge_timeout(void *);
 extern void		 pf_purge(void *);
 extern void		 pfr_destroy_ktable(struct pfr_ktable *, int);
 extern struct pfr_ktable
-			*pfr_lookup_table(struct pf_rules_container *,
+			*pfr_lookup_table(struct pf_anchor *,
 			    struct pfr_table *);
 RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 #endif /* _KERNEL */

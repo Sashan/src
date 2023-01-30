@@ -815,38 +815,6 @@ struct pfsync_state {
 
 TAILQ_HEAD(pf_rulequeue, pf_rule);
 
-struct pf_anchor;
-
-struct pf_ruleset {
-	struct {
-		struct pf_rulequeue	 queue;
-		struct pf_rulequeue	*ptr;
-		u_int32_t		 rcount;
-		u_int32_t		 version;
-	}			 rules;
-	struct pf_anchor	*anchor;
-};
-
-RB_HEAD(pf_anchor_global, pf_anchor);
-RB_HEAD(pf_anchor_node, pf_anchor);
-struct pf_anchor {
-	RB_ENTRY(pf_anchor)	 entry_global;
-	RB_ENTRY(pf_anchor)	 entry_node;
-	struct pf_anchor	*parent;
-	struct pf_anchor_node	 children;
-	char			 name[PF_ANCHOR_NAME_SIZE];
-	char			 path[PATH_MAX];
-	struct pf_ruleset	 ruleset;
-	int			 refcnt;	/* anchor rules */
-	int			 match;
-	struct pfr_ktablehead	*ktables;
-	u_int32_t		 tables;
-};
-RB_PROTOTYPE(pf_anchor_global, pf_anchor, entry_global, pf_anchor_compare)
-RB_PROTOTYPE(pf_anchor_node, pf_anchor, entry_node, pf_anchor_compare)
-
-#define PF_RESERVED_ANCHOR	"_pf"
-
 #define PFR_TFLAG_PERSIST	0x00000001
 #define PFR_TFLAG_CONST		0x00000002
 #define PFR_TFLAG_ACTIVE	0x00000004
@@ -1035,6 +1003,38 @@ RB_PROTOTYPE(pf_state_tree_ext_gwy, pf_state_key,
     entry_ext_gwy, pf_state_compare_ext_gwy)
 
 RB_HEAD(pfi_ifhead, pfi_kif);
+
+struct pf_anchor;
+
+struct pf_ruleset {
+	struct {
+		struct pf_rulequeue	 queue;
+		struct pf_rulequeue	*ptr;
+		u_int32_t		 rcount;
+		u_int32_t		 version;
+	}			 rules;
+	struct pf_anchor	*anchor;
+};
+
+RB_HEAD(pf_anchor_global, pf_anchor);
+RB_HEAD(pf_anchor_node, pf_anchor);
+struct pf_anchor {
+	RB_ENTRY(pf_anchor)	 entry_global;
+	RB_ENTRY(pf_anchor)	 entry_node;
+	struct pf_anchor	*parent;
+	struct pf_anchor_node	 children;
+	char			 name[PF_ANCHOR_NAME_SIZE];
+	char			 path[PATH_MAX];
+	struct pf_ruleset	 ruleset;
+	int			 refcnt;	/* anchor rules */
+	int			 match;
+	struct pfr_ktablehead	 ktables;
+	u_int32_t		 tables;
+};
+RB_PROTOTYPE(pf_anchor_global, pf_anchor, entry_global, pf_anchor_compare)
+RB_PROTOTYPE(pf_anchor_node, pf_anchor, entry_node, pf_anchor_compare)
+
+#define PF_RESERVED_ANCHOR	"_pf"
 
 /* state tables */
 extern struct pf_state_tree	 pf_statetbl;
@@ -1574,6 +1574,16 @@ struct pfioc_synflwats {
 #define DIOCGETSYNFLWATS	_IOWR('D', 99, struct pfioc_synflwats)
 #define DIOCXRULESET	_IOW('D', 100, struct pfioc_trans)
 
+struct pf_rules_container {
+	struct pf_anchor_global	 anchors;
+	struct pf_anchor	 main_anchor;
+};
+
+extern struct pf_rules_container pf_global;
+#define pf_anchors	pf_global.anchors
+#define pf_main_anchor	pf_global.main_anchor
+#define pf_main_ruleset		pf_main_anchor.ruleset
+
 #ifdef _KERNEL
 
 struct pf_pdesc;
@@ -1724,7 +1734,8 @@ struct pfr_kentry *
 	    int);
 void	pfr_dynaddr_update(struct pfr_ktable *, struct pfi_dynaddr *);
 struct pfr_ktable *
-	pfr_attach_table(struct pf_trans *, struct pf_ruleset *, char *, int);
+	pfr_attach_table(struct pf_rules_container *, struct pf_ruleset *,
+	    char *, int);
 void	pfr_detach_table(struct pfr_ktable *);
 int	pfr_clr_tables(struct pfr_table *, int *, int);
 int	pfr_add_tables(struct pfr_table *, int, int *, int);
@@ -1735,12 +1746,10 @@ int	pfr_clr_tstats(struct pfr_table *, int, int *, int);
 int	pfr_set_tflags(struct pfr_table *, int, int, int, int *, int *, int);
 int	pfr_clr_addrs(struct pfr_table *, int *, int);
 int	pfr_insert_kentry(struct pfr_ktable *, struct pfr_addr *, time_t);
-int	pfr_add_addrs(struct pfr_table *, struct pfr_addr *, int, int *,
-	    int);
-int	pfr_del_addrs(struct pfr_table *, struct pfr_addr *, int, int *,
-	    int);
-int	pfr_set_addrs(struct pfr_table *, struct pfr_addr *, int, int *,
-	    int *, int *, int *, int, u_int32_t);
+int	pfr_add_addrs(struct pfr_table *, struct pfr_addr *, int, int *, int);
+int	pfr_del_addrs(struct pfr_table *, struct pfr_addr *, int, int *, int);
+int	pfr_set_addrs(struct pfr_table *, struct pfr_addr *, int, int *, int *,
+	    int *, int *, int, u_int32_t);
 int	pfr_get_addrs(struct pfr_table *, struct pfr_addr *, int *, int);
 int	pfr_get_astats(struct pfr_table *, struct pfr_astats *, int *, int);
 int	pfr_clr_astats(struct pfr_table *, struct pfr_addr *, int, int *,
@@ -1803,16 +1812,6 @@ struct pf_pool_limit {
 extern struct pf_pool_limit	pf_pool_limits[PF_LIMIT_MAX];
 
 #endif /* _KERNEL */
-
-struct pf_rules_container {
-	struct pf_anchor_global	 anchors;
-	struct pf_anchor	 main_anchor;
-};
-
-extern struct pf_rules_container pf_global;
-#define pf_anchors	pf_global.anchors
-#define pf_main_anchor	pf_global.main_anchor
-#define pf_main_ruleset		pf_main_anchor.ruleset
 
 struct tcphdr;
 

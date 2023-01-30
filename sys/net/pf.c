@@ -1901,7 +1901,8 @@ pf_tbladdr_setup(struct pf_trans *t, struct pf_ruleset *rs,
 {
 	if (aw->type != PF_ADDR_TABLE)
 		return (0);
-	if ((aw->p.tbl = pfr_attach_table(t, rs, aw->v.tblname, wait)) == NULL)
+	if ((aw->p.tbl = pfr_attach_table(&t->rc, rs, aw->v.tblname,
+	    wait)) == NULL)
 		return (1);
 	return (0);
 }
@@ -3984,7 +3985,7 @@ pf_match_rule(struct pf_test_ctx *ctx, struct pf_ruleset *ruleset)
 
 	pf_anchor_stack_init();
 enter_ruleset:
-	r = TAILQ_FIRST(ruleset->rules.active.ptr);
+	r = TAILQ_FIRST(ruleset->rules.ptr);
 	while (r != NULL) {
 		PF_TEST_ATTRIB(r->rule_flag & PFRULE_EXPIRED,
 		    TAILQ_NEXT(r, entries));
