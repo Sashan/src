@@ -976,7 +976,6 @@ struct pfr_ktable {
 	SLIST_ENTRY(pfr_ktable)	 pfrkt_workq;
 	struct radix_node_head	*pfrkt_ip4;
 	struct radix_node_head	*pfrkt_ip6;
-	struct pfr_ktable	*pfrkt_root;
 	struct pf_ruleset	*pfrkt_rs;
 	long			 pfrkt_larg;
 	int			 pfrkt_nflags;

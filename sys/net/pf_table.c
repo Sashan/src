@@ -1920,13 +1920,13 @@ int
 pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
     struct pfr_addr *addr, int size, int *nadd, int *naddr, int flags)
 {
-#if 0
 	struct pfr_ktableworkq	 tableq;
 	struct pfr_kentryworkq	 addrq;
 	struct pfr_ktable	*kt, *rt, key;
 	struct pfr_kentry	*p;
 	struct pfr_addr		 ad;
 	struct pf_ruleset	*rs;
+	struct pf_anchor	*a;
 	int			 i, rv, xadd = 0, xaddr = 0;
 
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY | PFR_FLAG_ADDRSTOO);
@@ -1938,9 +1938,13 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 	rs = pf_find_ruleset(&t->rc, tbl->pfrt_anchor);
 	if (rs == NULL)
 		return (EBUSY);
+	if (rs->anchor == NULL)
+		a = &t->rc.main_anchor;
+	else
+		a = rs->anchor;
 
 	SLIST_INIT(&tableq);
-	kt = RB_FIND(pfr_ktablehead, &t->rc.ktables, (struct pfr_ktable *)tbl);
+	kt = RB_FIND(pfr_ktablehead, &a->ktables, (struct pfr_ktable *)tbl);
 	if (kt == NULL) {
 		kt = pfr_create_ktable(tbl, 0, 0, PR_WAITOK);
 		SLIST_INSERT_HEAD(&tableq, kt, pfrkt_workq);
@@ -2028,8 +2032,6 @@ _skip:
 _bad:
 	pfr_destroy_ktables(&tableq, 1);
 	return (rv);
-#endif
-	return (-1);
 }
 
 int
@@ -2935,6 +2937,7 @@ pfr_get_ktable_version(struct pfr_ktable *ktt)
 	struct pfr_ktable	*kt;
 	u_int32_t		 version;
 	struct pf_ruleset	*rs;
+	struct pf_anchor	*a;
 
 	NET_LOCK();
 	PF_LOCK();
@@ -2942,12 +2945,13 @@ pfr_get_ktable_version(struct pfr_ktable *ktt)
 	if (rs == NULL)
 		panic("%s no ruleset found for %s", __func__,
 		    ktt->pfrkt_anchor);
-	/*
-	 * TODO:
-	 *	rs->anchor is NULL for main ruleset
-	 *	need to recursively step twoarads parent/root
-	 */
-	kt = pfr_lookup_table(rs->anchor, (struct pfr_table *)ktt);
+
+	if (rs->anchor == NULL)
+		a = &pf_main_anchor;
+	else
+		a = rs->anchor;
+
+	kt = pfr_lookup_table(a, (struct pfr_table *)ktt);
 	if (kt != NULL)
 		version = kt->pfrkt_version;
 	else
