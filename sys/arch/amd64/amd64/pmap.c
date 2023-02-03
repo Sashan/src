@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.158 2023/01/20 16:01:04 deraadt Exp $	*/
+/*	$OpenBSD: pmap.c,v 1.162 2023/01/30 11:21:26 deraadt Exp $	*/
 /*	$NetBSD: pmap.c,v 1.3 2003/05/08 18:13:13 thorpej Exp $	*/
 
 /*
@@ -232,7 +232,7 @@ struct pmap kernel_pmap_store;	/* the kernel's pmap (proc0) */
 pt_entry_t pg_nx = 0;
 pt_entry_t pg_g_kern = 0;
 
-/* pg_nx: XO PTE bits, set to PKU key1 (if cpu supports PKU) */
+/* pg_xo: XO PTE bits, set to PKU key1 (if cpu supports PKU) */
 pt_entry_t pg_xo;
 
 /*
@@ -665,9 +665,9 @@ pmap_bootstrap(paddr_t first_avail, paddr_t max_pa)
 	 */
 	if (cpuid_level >= 0x7) {
 		uint32_t ecx, dummy;
+
 		CPUID_LEAF(0x7, 0, dummy, dummy, ecx, dummy);
-		if ((ecx & SEFF0ECX_PKU) &&
-		    (cpu_ecxfeature & CPUIDECX_HV) == 0) {
+		if (ecx & SEFF0ECX_PKU) {
 			lcr4(rcr4() | CR4_PKE);
 			pg_xo = PG_XO;
 		}

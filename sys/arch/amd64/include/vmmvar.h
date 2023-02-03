@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmmvar.h,v 1.87 2023/01/19 15:52:51 dv Exp $	*/
+/*	$OpenBSD: vmmvar.h,v 1.89 2023/01/30 02:32:01 dv Exp $	*/
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -36,10 +36,6 @@
 
 #define VMM_PCI_MMIO_BAR_BASE	0xF0000000ULL
 #define VMM_PCI_MMIO_BAR_END	0xFFDFFFFFULL		/* 2 MiB below 4 GiB */
-#define VMM_PCI_MMIO_BAR_SIZE	0x00010000
-#define VMM_PCI_IO_BAR_BASE	0x1000
-#define VMM_PCI_IO_BAR_END	0xFFFF
-#define VMM_PCI_IO_BAR_SIZE	0x1000
 
 /* VMX: Basic Exit Reasons */
 #define VMX_EXIT_NMI				0
@@ -960,6 +956,9 @@ struct vcpu {
 
 	/* Shadowed MSRs */
 	uint64_t vc_shadow_pat;			/* [v] */
+
+	/* Userland Protection Keys */
+	uint32_t vc_pkru;			/* [v] */
 
 	/* VMX only (all requiring [v]) */
 	uint64_t vc_vmx_basic;

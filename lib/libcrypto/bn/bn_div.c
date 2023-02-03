@@ -1,4 +1,4 @@
-/* $OpenBSD: bn_div.c,v 1.33 2023/01/23 12:02:48 jsing Exp $ */
+/* $OpenBSD: bn_div.c,v 1.36 2023/01/31 06:08:23 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -66,6 +66,7 @@
 
 #include "bn_arch.h"
 #include "bn_local.h"
+#include "bn_internal.h"
 
 BN_ULONG bn_div_3_words(const BN_ULONG *m, BN_ULONG d1, BN_ULONG d0);
 
@@ -150,49 +151,35 @@ bn_div_words(BN_ULONG h, BN_ULONG l, BN_ULONG d)
 #endif /* !defined(BN_LLONG) && defined(BN_DIV2W) */
 #endif
 
-#ifndef HAVE_BN_DIV_3_WORDS
+/*
+ * Divide a double word (h:l) by d, returning the quotient q and the remainder
+ * r, such that q * d + r is equal to the numerator.
+ */
+#ifndef HAVE_BN_DIV_REM_WORDS
+#ifndef HAVE_BN_DIV_REM_WORDS_INLINE
+static inline void
+bn_div_rem_words_inline(BN_ULONG h, BN_ULONG l, BN_ULONG d, BN_ULONG *out_q,
+    BN_ULONG *out_r)
+{
+	BN_ULONG q, r;
 
-#if !defined(OPENSSL_NO_ASM) && !defined(OPENSSL_NO_INLINE_ASM)
-# if defined(__GNUC__) && __GNUC__>=2
-#  if defined(__i386) || defined (__i386__)
-   /*
-    * There were two reasons for implementing this template:
-    * - GNU C generates a call to a function (__udivdi3 to be exact)
-    *   in reply to ((((BN_ULLONG)n0)<<BN_BITS2)|n1)/d0 (I fail to
-    *   understand why...);
-    * - divl doesn't only calculate quotient, but also leaves
-    *   remainder in %edx which we can definitely use here:-)
-    *
-    *					<appro@fy.chalmers.se>
-    */
-#undef bn_div_words
-#  define bn_div_words(n0,n1,d0)		\
-	({  asm volatile (			\
-		"divl	%4"			\
-		: "=a"(q), "=d"(rem)		\
-		: "a"(n1), "d"(n0), "g"(d0)	\
-		: "cc");			\
-	    q;					\
-	})
-#  define REMAINDER_IS_ALREADY_CALCULATED
-#  elif defined(__x86_64)
-   /*
-    * Same story here, but it's 128-bit by 64-bit division. Wow!
-    *					<appro@fy.chalmers.se>
-    */
-#  undef bn_div_words
-#  define bn_div_words(n0,n1,d0)		\
-	({  asm volatile (			\
-		"divq	%4"			\
-		: "=a"(q), "=d"(rem)		\
-		: "a"(n1), "d"(n0), "g"(d0)	\
-		: "cc");			\
-	    q;					\
-	})
-#  define REMAINDER_IS_ALREADY_CALCULATED
-#  endif /* __<cpu> */
-# endif /* __GNUC__ */
-#endif /* OPENSSL_NO_ASM */
+	q = bn_div_words(h, l, d);
+	r = (l - q * d) & BN_MASK2;
+
+	*out_q = q;
+	*out_r = r;
+}
+#endif
+
+void
+bn_div_rem_words(BN_ULONG h, BN_ULONG l, BN_ULONG d, BN_ULONG *out_q,
+    BN_ULONG *out_r)
+{
+	bn_div_rem_words_inline(h, l, d, out_q, out_r);
+}
+#endif
+
+#ifndef HAVE_BN_DIV_3_WORDS
 
 /*
  * Interface is somewhat quirky, |m| is pointer to most significant limb,
@@ -205,7 +192,7 @@ bn_div_words(BN_ULONG h, BN_ULONG l, BN_ULONG d)
 BN_ULONG
 bn_div_3_words(const BN_ULONG *m, BN_ULONG d1, BN_ULONG d0)
 {
-	BN_ULONG n0, n1, q;
+	BN_ULONG n0, n1, q, t2h, t2l;
 	BN_ULONG rem = 0;
 
 	n0 = m[0];
@@ -215,69 +202,20 @@ bn_div_3_words(const BN_ULONG *m, BN_ULONG d1, BN_ULONG d0)
 		return BN_MASK2;
 
 	/* n0 < d0 */
-	{
-#ifdef BN_LLONG
-		BN_ULLONG t2;
+	bn_div_rem_words(n0, n1, d0, &q, &rem);
 
-#if defined(BN_DIV2W) && !defined(bn_div_words)
-		q = (BN_ULONG)((((BN_ULLONG)n0 << BN_BITS2) | n1) / d0);
-#else
-		q = bn_div_words(n0, n1, d0);
-#endif
+	bn_umul_hilo(d1, q, &t2h, &t2l);
 
-#ifndef REMAINDER_IS_ALREADY_CALCULATED
-		/*
-		 * rem doesn't have to be BN_ULLONG. The least we
-		 * know it's less that d0, isn't it?
-		 */
-		rem = (n1 - q * d0) & BN_MASK2;
-#endif
-		t2 = (BN_ULLONG)d1 * q;
-
-		for (;;) {
-			if (t2 <= (((BN_ULLONG)rem << BN_BITS2) | m[-2]))
-				break;
-			q--;
-			rem += d0;
-			if (rem < d0) break; /* don't let rem overflow */
-				t2 -= d1;
-		}
-#else /* !BN_LLONG */
-		BN_ULONG t2l, t2h;
-
-		q = bn_div_words(n0, n1, d0);
-#ifndef REMAINDER_IS_ALREADY_CALCULATED
-		rem = (n1 - q * d0) & BN_MASK2;
-#endif
-
-#if defined(BN_UMULT_LOHI)
-		BN_UMULT_LOHI(t2l, t2h, d1, q);
-#elif defined(BN_UMULT_HIGH)
-		t2l = d1 * q;
-		t2h = BN_UMULT_HIGH(d1, q);
-#else
-		{
-			BN_ULONG ql, qh;
-			t2l = LBITS(d1);
-			t2h = HBITS(d1);
-			ql = LBITS(q);
-			qh = HBITS(q);
-			mul64(t2l, t2h, ql, qh); /* t2 = (BN_ULLONG)d1 * q; */
-		}
-#endif
-
-		for (;;) {
-			if (t2h < rem || (t2h == rem && t2l <= m[-2]))
-				break;
-			q--;
-			rem += d0;
-			if (rem < d0)
-				break; /* don't let rem overflow */
-			if (t2l < d1)
-				t2h--;
-			t2l -= d1;
-		}
-#endif /* !BN_LLONG */
+	for (;;) {
+		if (t2h < rem || (t2h == rem && t2l <= m[-2]))
+			break;
+		q--;
+		rem += d0;
+		if (rem < d0)
+			break; /* don't let rem overflow */
+		if (t2l < d1)
+			t2h--;
+		t2l -= d1;
 	}
 
 	return q;

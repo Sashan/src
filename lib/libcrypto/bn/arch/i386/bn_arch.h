@@ -1,4 +1,4 @@
-/*	$OpenBSD: bn_arch.h,v 1.6 2023/01/23 12:17:57 jsing Exp $ */
+/*	$OpenBSD: bn_arch.h,v 1.8 2023/01/31 05:53:49 jsing Exp $ */
 /*
  * Copyright (c) 2023 Joel Sing <jsing@openbsd.org>
  *
@@ -14,6 +14,8 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
+
+#include <openssl/bn.h>
 
 #ifndef HEADER_BN_ARCH_H
 #define HEADER_BN_ARCH_H
@@ -34,6 +36,51 @@
 #define HAVE_BN_SQR_WORDS
 
 #define HAVE_BN_SUB_WORDS
+
+#if defined(__GNUC__)
+#define HAVE_BN_DIV_REM_WORDS_INLINE
+
+static inline void
+bn_div_rem_words_inline(BN_ULONG h, BN_ULONG l, BN_ULONG d, BN_ULONG *out_q,
+    BN_ULONG *out_r)
+{
+	BN_ULONG q, r;
+
+	/*
+	 * Unsigned division of %edx:%eax by d with quotient being stored in
+	 * %eax and remainder in %edx.
+	 */
+	__asm__ volatile ("divl %4"
+	    : "=a"(q), "=d"(r)
+	    : "a"(l), "d"(h), "rm"(d)
+	    : "cc");
+
+	*out_q = q;
+	*out_r = r;
+}
+#endif /* __GNUC__ */
+
+#if defined(__GNUC__)
+#define HAVE_BN_UMUL_HILO
+
+static inline void
+bn_umul_hilo(BN_ULONG a, BN_ULONG b, BN_ULONG *out_h, BN_ULONG *out_l)
+{
+	BN_ULONG h, l;
+
+	/*
+	 * Unsigned multiplication of %eax, with the double word result being
+	 * stored in %edx:%eax.
+	 */
+	__asm__ ("mull %3"
+	    : "=d"(h), "=a"(l)
+	    : "a"(a), "rm"(b)
+	    : "cc");
+
+	*out_h = h;
+	*out_l = l;
+}
+#endif /* __GNUC__ */
 
 #endif
 #endif

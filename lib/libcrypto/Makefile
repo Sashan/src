@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.93 2023/01/21 17:29:56 jsing Exp $
+# $OpenBSD: Makefile,v 1.96 2023/01/31 06:17:10 jsing Exp $
 
 LIB=	crypto
 LIBREBUILD=y
@@ -182,7 +182,6 @@ SRCS+= bn_blind.c
 SRCS+= bn_bpsw.c
 SRCS+= bn_const.c
 SRCS+= bn_ctx.c
-SRCS+= bn_depr.c
 SRCS+= bn_div.c
 SRCS+= bn_err.c
 SRCS+= bn_exp.c
@@ -860,7 +859,6 @@ HDRS=\
 	${LCRYPTO_SRC}/whrlpool/whrlpool.h \
 	${LCRYPTO_SRC}/x509/x509.h \
 	${LCRYPTO_SRC}/x509/x509_vfy.h \
-	${LCRYPTO_SRC}/x509/x509_verify.h \
 	${LCRYPTO_SRC}/x509/x509v3.h
 
 HDRS_GEN=\
@@ -912,7 +910,6 @@ obj_dat.h: obj_mac.h ${SSL_OBJECTS}/obj_dat.pl
 CFLAGS+=-DOPENSSL_NO_ASM
 SRCS+= aes_core.c aes_cbc.c
 SRCS+= bf_enc.c
-SRCS+= bn_asm.c
 SRCS+= camellia.c cmll_cbc.c cmll_misc.c
 SRCS+= des_enc.c fcrypt_b.c
 SRCS+= rc4_enc.c rc4_skey.c

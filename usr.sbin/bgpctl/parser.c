@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.c,v 1.119 2023/01/24 14:14:15 claudio Exp $ */
+/*	$OpenBSD: parser.c,v 1.121 2023/02/02 19:23:01 job Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -196,7 +196,7 @@ static const struct token t_show_rib[] = {
 static const struct token t_show_avs[] = {
 	{ FLAG,		"valid"	,	F_CTL_AVS_VALID,	t_show_rib},
 	{ FLAG,		"invalid",	F_CTL_AVS_INVALID,	t_show_rib},
-	{ FLAG,		"unknonw",	F_CTL_AVS_UNKNOWN,	t_show_rib},
+	{ FLAG,		"unknown",	F_CTL_AVS_UNKNOWN,	t_show_rib},
 	{ ENDTOKEN,	"",		NONE,		NULL}
 };
 
@@ -1232,11 +1232,11 @@ parseextvalue(int type, char *s, uint32_t *v, uint32_t *flag)
 	} else if (strcmp(s, "neighbor-as") == 0) {
 		*flag = COMMUNITY_NEIGHBOR_AS;
 		*v = 0;
-		return EXT_COMMUNITY_TRANS_FOUR_AS;
+		return EXT_COMMUNITY_TRANS_TWO_AS;
 	} else if (strcmp(s, "local-as") == 0) {
 		*flag = COMMUNITY_LOCAL_AS;
 		*v = 0;
-		return EXT_COMMUNITY_TRANS_FOUR_AS;
+		return EXT_COMMUNITY_TRANS_TWO_AS;
 	} else if ((p = strchr(s, '.')) == NULL) {
 		/* AS_PLAIN number (4 or 2 byte) */
 		strtonum(s, 0, USHRT_MAX, &errstr);

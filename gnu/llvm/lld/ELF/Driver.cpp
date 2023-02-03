@@ -359,12 +359,14 @@ static void checkOptions() {
 
   if (config->executeOnly) {
     switch (config->emachine) {
+    case EM_386:
     case EM_AARCH64:
-    case EM_RISCV:
     case EM_MIPS:
+    case EM_PPC:
+    case EM_PPC64:
+    case EM_RISCV:
     case EM_SPARCV9:
     case EM_X86_64:
-    case EM_PPC64:
       break;
     default:
       error("-execute-only is not supported on this target");
@@ -1482,7 +1484,10 @@ static void setConfigs(opt::InputArgList &args) {
 #ifdef __OpenBSD__
   switch (m) {
   case EM_AARCH64:
+  case EM_PPC:
+  case EM_PPC64:
   case EM_RISCV:
+  case EM_SPARCV9:
   case EM_X86_64:
     config->executeOnly = true;
     break;
