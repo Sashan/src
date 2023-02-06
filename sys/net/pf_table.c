@@ -1899,24 +1899,6 @@ _skip:
 }
 
 int
-pfr_ina_begin(struct pf_trans *t, u_int32_t *version, const char *anchor)
-{
-	struct pf_ruleset	*rs;
-
-	while (*anchor == '/')
-		anchor++;
-
-	rs = pf_find_or_create_ruleset(&t->rc, anchor);
-	if (rs == NULL)
-		return (ENOMEM);
-
-	rs->rules.version = pf_get_ruleset_version(anchor);
-	*version = rs->rules.version;
-
-	return (0);
-}
-
-int
 pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
     struct pfr_addr *addr, int size, int *nadd, int *naddr, int flags)
 {

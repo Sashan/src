@@ -128,8 +128,8 @@ void			 pf_free_trans(struct pf_trans *);
 void			 pf_rollback_trans(struct pf_trans *);
 void			 pf_update_parent(struct pf_anchor *,
 			    struct pf_trans *);
-void			 pf_swap_rules(struct pf_ruleset *, struct pf_ruleset *,
-			    struct pf_trans *t);
+void			 pf_swap_ruleset(struct pf_ruleset *,
+			    struct pf_ruleset *, struct pf_trans *t);
 
 struct pf_rule		 pf_default_rule;
 uint32_t		 pf_default_vers = 1;
@@ -1127,7 +1127,7 @@ pf_update_anchor(struct pf_anchor *a, struct pf_trans *t)
 	rs = pf_find_ruleset(&pf_global, a->path);
 	if (rs != NULL) {
 		log(LOG_ERR, "%s found parent %p (%s)\n", __func__,  rs, rs->anchor->path);
-		pf_swap_rules(rs, &a->ruleset, t);
+		pf_swap_ruleset(rs, &a->ruleset, t);
 	} else if ((rs = pf_find_ruleset(&t->rc, a->path)) != NULL) {
 		KASSERT(rs == &a->ruleset);
 		log(LOG_ERR, "%s no parrent found in global %p (%s)\n", __func__,  rs, rs->anchor->path);
@@ -1204,10 +1204,12 @@ pf_remove_orphans(struct pf_trans *t)
 }
 
 void
-pf_swap_rules(struct pf_ruleset *grs, struct pf_ruleset *trs,
+pf_swap_ruleset(struct pf_ruleset *grs, struct pf_ruleset *trs,
     struct pf_trans *t)
 {
 	struct pf_ruleset tmp;
+	struct pfr_ktablehead root_tables;
+	u_int32_t tables;
 	struct pf_rule *r;
 
 	KASSERT(grs->rules.version == trs->rules.version);
@@ -1216,12 +1218,33 @@ pf_swap_rules(struct pf_ruleset *grs, struct pf_ruleset *trs,
 	pf_init_ruleset(&tmp);
 	tmp.rules.rcount = trs->rules.rcount;
 	TAILQ_CONCAT(tmp.rules.ptr, trs->rules.ptr, entries);
+	if (trs->anchor == NULL) {
+		root_tables = t->rc.main_anchor.ktables;
+		tables = t->rc.main_anchor.tables;
+	} else {
+		tmp.anchor->ktables = trs->anchor->ktables;
+		tmp.anchor->tables = trs->anchor->tables;
+	}
 
 	trs->rules.rcount = grs->rules.rcount;
 	TAILQ_CONCAT(trs->rules.ptr, grs->rules.ptr, entries);
+	if (grs->anchor == NULL) {
+		t->rc.main_anchor.ktables = pf_main_anchor.ktables;
+		t->rc.main_anchor.tables = pf_main_anchor.tables;
+	} else {
+		trs->anchor->ktables = grs->anchor->ktables;
+		trs->anchor->tables = grs->anchor->tables;
+	}
 
 	grs->rules.rcount = tmp.rules.rcount;
 	grs->rules.version++;
+	if (tmp.anchor == NULL) {
+		pf_main_anchor.ktables = root_tables;
+		pf_main_anchor.tables = tables;
+	} else {
+		grs->anchor->ktables = tmp.anchor->ktables;
+		grs->anchor->tables = tmp.anchor->tables;
+	}
 	TAILQ_CONCAT(grs->rules.ptr, tmp.rules.ptr, entries);
 	TAILQ_FOREACH(r, grs->rules.ptr, entries) {
 		/*
@@ -3049,18 +3072,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			}
 			switch (ioe->type) {
 			case PF_TRANS_TABLE:
-				log(LOG_ERR, "%s got table (%d)\n", __func__, i);
-				memset(table, 0, sizeof(*table));
-				strlcpy(table->pfrt_anchor, ioe->anchor,
-				    sizeof(table->pfrt_anchor));
-				if ((error = pfr_ina_begin(t, &ioe->ticket,
-				    ioe->anchor))) {
-					free(table, M_TEMP, sizeof(*table));
-					free(ioe, M_TEMP, sizeof(*ioe));
-					pf_rollback_trans(t);
-					goto fail;
-				}
-				break;
 			case PF_TRANS_RULESET:
 				error = pf_begin_rules(t, ioe->anchor);
 				if (error != 0) {
@@ -3193,28 +3204,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			}
 		}
 
-#if 0
-		if (bailout == 0) {
-			RB_FOREACH(tkt, pfr_ktablehead, &t->rc.ktables) {
-				version = tkt->pfrkt_version;
-				kt = pfr_lookup_table(&pf_global,
-				    (struct pfr_table *)tkt);
-				if (kt != NULL)
-					bailout =
-					    (version != kt->pfrkt_version);
-				else
-					bailout = (version != 0);
-
-				if (bailout != 0) {
-					log(LOG_ERR, "%s:%s @ %d %s (tkt %p), tversion: %d vs. version %d\n",
-					    __func__, pfioctl_name(cmd), __LINE__, tkt->pfrkt_name, tkt, version,
-					    (kt == NULL) ? 0 : kt->pfrkt_version);
-					break;
-				}
-			}
-		}
-#endif
-
 		log(LOG_ERR, "%s:%s @ %d bailout == %d\n", __func__, pfioctl_name(cmd), __LINE__, bailout);
 
 		PF_UNLOCK();
@@ -3239,7 +3228,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				 *
 				 *	attach new tables
 				 */
-			pf_swap_rules(&pf_main_ruleset,
+			pf_swap_ruleset(&pf_main_ruleset,
 			    &t->rc.main_anchor.ruleset, t);
 		} else {
 			log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
