@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.254 2023/01/24 21:48:04 jcs Exp $
+# $OpenBSD: GENERIC,v 1.259 2023/02/16 14:44:48 kettenis Exp $
 #
 # GENERIC machine description file
 #
@@ -62,6 +62,7 @@ ipmi*		at acpi?
 ohci*		at acpi?
 pluart*		at acpi?
 sdhc*		at acpi?
+ufshci*		at acpi?
 xhci*		at acpi?
 simplebus*	at fdt?
 
@@ -81,6 +82,7 @@ ahci*		at fdt?
 dwge*		at fdt?
 dwpcie*		at fdt?
 pci*		at dwpcie?
+dwqe*		at fdt?
 ohci*		at fdt?
 ehci*		at fdt?
 pciecam*	at fdt?
@@ -107,6 +109,7 @@ psci*		at fdt? early 1
 pwmfan*		at fdt?
 pwmleds*	at fdt?
 pwmreg*		at fdt? early 1
+scmi*		at fdt?
 syscon*		at fdt? early 1
 
 virtio*		at fdt?
@@ -555,6 +558,7 @@ pcfrtc*		at iic?			# PCF8523 RTC
 pcxrtc*		at iic?			# PCF8563 RTC
 pcyrtc*		at iic?			# PCF85063A/TP RTC
 rkpmic*		at iic?			# RK808 PMIC
+sncodec*	at iic?			# TAS2764 audio codec
 sypwr*		at iic?			# SY8106A regulator
 tascodec*	at iic?			# TAS2770 audio codec
 tcpci*		at iic?			# USB Type-C controller

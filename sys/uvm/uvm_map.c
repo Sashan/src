@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_map.c,v 1.309 2023/01/31 15:18:55 deraadt Exp $	*/
+/*	$OpenBSD: uvm_map.c,v 1.313 2023/02/24 15:17:48 mpi Exp $	*/
 /*	$NetBSD: uvm_map.c,v 1.86 2000/11/27 08:40:03 chs Exp $	*/
 
 /*
@@ -3982,6 +3982,15 @@ uvmspace_fork(struct process *pr)
 			    new_map, new_entry->start, new_entry->end);
 		}
 	}
+	new_map->flags |= old_map->flags & VM_MAP_SYSCALL_ONCE;
+#ifdef PMAP_CHECK_COPYIN
+	if (PMAP_CHECK_COPYIN) {
+		memcpy(&new_map->check_copyin, &old_map->check_copyin,
+		    sizeof(new_map->check_copyin));
+		membar_producer();
+		new_map->check_copyin_count = old_map->check_copyin_count;
+	}
+#endif
 
 	vm_map_unlock(old_map);
 	vm_map_unlock(new_map);
@@ -4235,6 +4244,7 @@ check_copyin_add(struct vm_map *map, vaddr_t start, vaddr_t end)
 	if (PMAP_CHECK_COPYIN == 0 ||
 	    map->check_copyin_count >= UVM_MAP_CHECK_COPYIN_MAX)
 		return;
+	vm_map_assert_wrlock(map);
 	map->check_copyin[map->check_copyin_count].start = start;
 	map->check_copyin[map->check_copyin_count].end = end;
 	membar_producer();
@@ -4256,7 +4266,9 @@ uvm_map_check_copyin_add(struct vm_map *map, vaddr_t start, vaddr_t end)
 	end = MIN(end, map->max_offset);
 	if (start >= end)
 		return 0;
+	vm_map_lock(map);
 	check_copyin_add(map, start, end);
+	vm_map_unlock(map);
 	return (0);
 }
 #endif /* PMAP_CHECK_COPYIN */
@@ -4557,8 +4569,7 @@ fail:
  * => never a need to flush amap layer since the anonymous memory has
  *	no permanent home, but may deactivate pages there
  * => called from sys_msync() and sys_madvise()
- * => caller must not write-lock map (read OK).
- * => we may sleep while cleaning if SYNCIO [with map read-locked]
+ * => caller must not have map locked
  */
 
 int
@@ -4580,25 +4591,27 @@ uvm_map_clean(struct vm_map *map, vaddr_t start, vaddr_t end, int flags)
 	if (start > end || start < map->min_offset || end > map->max_offset)
 		return EINVAL;
 
-	vm_map_lock_read(map);
+	vm_map_lock(map);
 	first = uvm_map_entrybyaddr(&map->addr, start);
 
 	/* Make a first pass to check for holes. */
 	for (entry = first; entry != NULL && entry->start < end;
 	    entry = RBT_NEXT(uvm_map_addr, entry)) {
 		if (UVM_ET_ISSUBMAP(entry)) {
-			vm_map_unlock_read(map);
+			vm_map_unlock(map);
 			return EINVAL;
 		}
 		if (UVM_ET_ISSUBMAP(entry) ||
 		    UVM_ET_ISHOLE(entry) ||
 		    (entry->end < end &&
 		    VMMAP_FREE_END(entry) != entry->end)) {
-			vm_map_unlock_read(map);
+			vm_map_unlock(map);
 			return EFAULT;
 		}
 	}
 
+	vm_map_busy(map);
+	vm_map_unlock(map);
 	error = 0;
 	for (entry = first; entry != NULL && entry->start < end;
 	    entry = RBT_NEXT(uvm_map_addr, entry)) {
@@ -4710,7 +4723,7 @@ flush_object:
 		}
 	}
 
-	vm_map_unlock_read(map);
+	vm_map_unbusy(map);
 	return error;
 }
 

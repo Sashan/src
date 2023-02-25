@@ -1032,12 +1032,12 @@ $code.=<<___;
 ___
 }
 $code.=<<___;
-.rodata
+.section .rodata
 .align	64
 .Linc:
 	.long	0,0, 1,1
 	.long	2,2, 2,2
-.previous
+.text
 ___
 
 # EXCEPTION_DISPOSITION handler (EXCEPTION_RECORD *rec,ULONG64 frame,

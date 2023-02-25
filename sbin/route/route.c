@@ -1,4 +1,4 @@
-/*	$OpenBSD: route.c,v 1.261 2022/12/22 19:53:22 kn Exp $	*/
+/*	$OpenBSD: route.c,v 1.263 2023/02/18 18:07:38 claudio Exp $	*/
 /*	$NetBSD: route.c,v 1.16 1996/04/15 18:27:05 cgd Exp $	*/
 
 /*
@@ -220,6 +220,9 @@ main(int argc, char **argv)
 					break;
 				case K_INET6:
 					af = AF_INET6;
+					break;
+				case K_MPLS:
+					af = AF_MPLS;
 					break;
 				case K_IFACE:
 				case K_INTERFACE:
@@ -578,7 +581,7 @@ newroute(int argc, char **argv)
 	if (*cmd != 'g')
 		shutdown(s, SHUT_RD); /* Don't want to read back our messages */
 	while (--argc > 0) {
-		if (**(++argv)== '-') {
+		if (**(++argv) == '-') {
 			switch (key = keyword(1 + *argv)) {
 			case K_LINK:
 				af = AF_LINK;

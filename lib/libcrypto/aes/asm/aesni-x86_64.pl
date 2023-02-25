@@ -2720,7 +2720,7 @@ ___
 }
 
 $code.=<<___;
-.rodata
+.section .rodata
 .align	64
 .Lbswap_mask:
 	.byte	15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0
@@ -2731,7 +2731,7 @@ $code.=<<___;
 .Lxts_magic:
 	.long	0x87,0,1,0
 .align	64
-.previous
+.text
 ___
 
 # EXCEPTION_DISPOSITION handler (EXCEPTION_RECORD *rec,ULONG64 frame,

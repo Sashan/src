@@ -1,4 +1,4 @@
-/*	$OpenBSD: bn_arch.c,v 1.3 2023/02/02 18:39:26 jsing Exp $ */
+/*	$OpenBSD: bn_arch.c,v 1.6 2023/02/22 05:46:37 jsing Exp $ */
 /*
  * Copyright (c) 2023 Joel Sing <jsing@openbsd.org>
  *
@@ -23,12 +23,14 @@
 
 #ifdef HAVE_BN_ADD
 BN_ULONG
-bn_add(BIGNUM *r, int rn, const BIGNUM *a, const BIGNUM *b)
+bn_add(BN_ULONG *r, int r_len, const BN_ULONG *a, int a_len, const BN_ULONG *b,
+    int b_len)
 {
-	return bignum_add(rn, (uint64_t *)r->d, a->top, (uint64_t *)a->d,
-	    b->top, (uint64_t *)b->d);
+	return bignum_add(r_len, (uint64_t *)r, a_len, (uint64_t *)a,
+	    b_len, (uint64_t *)b);
 }
 #endif
+
 
 #ifdef HAVE_BN_ADD_WORDS
 BN_ULONG
@@ -41,10 +43,11 @@ bn_add_words(BN_ULONG *rd, const BN_ULONG *ad, const BN_ULONG *bd, int n)
 
 #ifdef HAVE_BN_SUB
 BN_ULONG
-bn_sub(BIGNUM *r, int rn, const BIGNUM *a, const BIGNUM *b)
+bn_sub(BN_ULONG *r, int r_len, const BN_ULONG *a, int a_len, const BN_ULONG *b,
+    int b_len)
 {
-	return bignum_sub(rn, (uint64_t *)r->d, a->top, (uint64_t *)a->d,
-	    b->top, (uint64_t *)b->d);
+	return bignum_sub(r_len, (uint64_t *)r, a_len, (uint64_t *)a,
+	    b_len, (uint64_t *)b);
 }
 #endif
 
@@ -119,10 +122,10 @@ bn_sqr_comba8(BN_ULONG *rd, const BN_ULONG *ad)
 }
 #endif
 
-#ifdef HAVE_BN_SQR_WORDS
-void
-bn_sqr_words(BN_ULONG *rd, const BN_ULONG *ad, int num)
+#ifdef HAVE_BN_WORD_CLZ
+int
+bn_word_clz(BN_ULONG w)
 {
-	bignum_sqr(num, (uint64_t *)rd, num, (uint64_t *)ad);
+	return word_clz(w);
 }
 #endif

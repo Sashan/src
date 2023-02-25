@@ -1,4 +1,4 @@
-/* $OpenBSD: bn_mul.c,v 1.30 2023/01/23 12:17:57 jsing Exp $ */
+/* $OpenBSD: bn_mul.c,v 1.34 2023/02/22 05:57:19 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -63,430 +63,209 @@
 #include <openssl/opensslconf.h>
 
 #include "bn_arch.h"
+#include "bn_internal.h"
 #include "bn_local.h"
 
-#ifndef HAVE_BN_MUL_ADD_WORDS
-#if defined(BN_LLONG) || defined(BN_UMULT_HIGH)
-
-BN_ULONG
-bn_mul_add_words(BN_ULONG *rp, const BN_ULONG *ap, int num, BN_ULONG w)
-{
-	BN_ULONG c1 = 0;
-
-	assert(num >= 0);
-	if (num <= 0)
-		return (c1);
-
-#ifndef OPENSSL_SMALL_FOOTPRINT
-	while (num & ~3) {
-		mul_add(rp[0], ap[0], w, c1);
-		mul_add(rp[1], ap[1], w, c1);
-		mul_add(rp[2], ap[2], w, c1);
-		mul_add(rp[3], ap[3], w, c1);
-		ap += 4;
-		rp += 4;
-		num -= 4;
-	}
-#endif
-	while (num) {
-		mul_add(rp[0], ap[0], w, c1);
-		ap++;
-		rp++;
-		num--;
-	}
-
-	return (c1);
-}
-
-#else /* !(defined(BN_LLONG) || defined(BN_UMULT_HIGH)) */
-
-BN_ULONG
-bn_mul_add_words(BN_ULONG *rp, const BN_ULONG *ap, int num, BN_ULONG w)
-{
-	BN_ULONG c = 0;
-	BN_ULONG bl, bh;
-
-	assert(num >= 0);
-	if (num <= 0)
-		return ((BN_ULONG)0);
-
-	bl = LBITS(w);
-	bh = HBITS(w);
-
-#ifndef OPENSSL_SMALL_FOOTPRINT
-	while (num & ~3) {
-		mul_add(rp[0], ap[0], bl, bh, c);
-		mul_add(rp[1], ap[1], bl, bh, c);
-		mul_add(rp[2], ap[2], bl, bh, c);
-		mul_add(rp[3], ap[3], bl, bh, c);
-		ap += 4;
-		rp += 4;
-		num -= 4;
-	}
-#endif
-	while (num) {
-		mul_add(rp[0], ap[0], bl, bh, c);
-		ap++;
-		rp++;
-		num--;
-	}
-	return (c);
-}
-
-#endif /* !(defined(BN_LLONG) || defined(BN_UMULT_HIGH)) */
-#endif
-
+/*
+ * bn_mul_comba4() computes r[] = a[] * b[] using Comba multiplication
+ * (https://everything2.com/title/Comba+multiplication), where a and b are both
+ * four word arrays, producing an eight word array result.
+ */
 #ifndef HAVE_BN_MUL_COMBA4
 void
 bn_mul_comba4(BN_ULONG *r, BN_ULONG *a, BN_ULONG *b)
 {
-	BN_ULONG c1, c2, c3;
+	BN_ULONG c0, c1, c2;
 
-	c1 = 0;
-	c2 = 0;
-	c3 = 0;
-	mul_add_c(a[0], b[0], c1, c2, c3);
-	r[0] = c1;
-	c1 = 0;
-	mul_add_c(a[0], b[1], c2, c3, c1);
-	mul_add_c(a[1], b[0], c2, c3, c1);
-	r[1] = c2;
-	c2 = 0;
-	mul_add_c(a[2], b[0], c3, c1, c2);
-	mul_add_c(a[1], b[1], c3, c1, c2);
-	mul_add_c(a[0], b[2], c3, c1, c2);
-	r[2] = c3;
-	c3 = 0;
-	mul_add_c(a[0], b[3], c1, c2, c3);
-	mul_add_c(a[1], b[2], c1, c2, c3);
-	mul_add_c(a[2], b[1], c1, c2, c3);
-	mul_add_c(a[3], b[0], c1, c2, c3);
-	r[3] = c1;
-	c1 = 0;
-	mul_add_c(a[3], b[1], c2, c3, c1);
-	mul_add_c(a[2], b[2], c2, c3, c1);
-	mul_add_c(a[1], b[3], c2, c3, c1);
-	r[4] = c2;
-	c2 = 0;
-	mul_add_c(a[2], b[3], c3, c1, c2);
-	mul_add_c(a[3], b[2], c3, c1, c2);
-	r[5] = c3;
-	c3 = 0;
-	mul_add_c(a[3], b[3], c1, c2, c3);
-	r[6] = c1;
-	r[7] = c2;
+	bn_mulw_addtw(a[0], b[0],  0,  0,  0, &c2, &c1, &r[0]);
+
+	bn_mulw_addtw(a[0], b[1],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[1], b[0], c2, c1, c0, &c2, &c1, &r[1]);
+
+	bn_mulw_addtw(a[2], b[0],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[1], b[1], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[0], b[2], c2, c1, c0, &c2, &c1, &r[2]);
+
+	bn_mulw_addtw(a[0], b[3],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[1], b[2], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[2], b[1], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[3], b[0], c2, c1, c0, &c2, &c1, &r[3]);
+
+	bn_mulw_addtw(a[3], b[1],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[2], b[2], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[1], b[3], c2, c1, c0, &c2, &c1, &r[4]);
+
+	bn_mulw_addtw(a[2], b[3],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[3], b[2], c2, c1, c0, &c2, &c1, &r[5]);
+
+	bn_mulw_addtw(a[3], b[3],  0, c2, c1, &c2, &r[7], &r[6]);
 }
 #endif
 
+/*
+ * bn_mul_comba8() computes r[] = a[] * b[] using Comba multiplication
+ * (https://everything2.com/title/Comba+multiplication), where a and b are both
+ * eight word arrays, producing a 16 word array result.
+ */
 #ifndef HAVE_BN_MUL_COMBA8
 void
 bn_mul_comba8(BN_ULONG *r, BN_ULONG *a, BN_ULONG *b)
 {
-	BN_ULONG c1, c2, c3;
+	BN_ULONG c0, c1, c2;
 
-	c1 = 0;
-	c2 = 0;
-	c3 = 0;
-	mul_add_c(a[0], b[0], c1, c2, c3);
-	r[0] = c1;
-	c1 = 0;
-	mul_add_c(a[0], b[1], c2, c3, c1);
-	mul_add_c(a[1], b[0], c2, c3, c1);
-	r[1] = c2;
-	c2 = 0;
-	mul_add_c(a[2], b[0], c3, c1, c2);
-	mul_add_c(a[1], b[1], c3, c1, c2);
-	mul_add_c(a[0], b[2], c3, c1, c2);
-	r[2] = c3;
-	c3 = 0;
-	mul_add_c(a[0], b[3], c1, c2, c3);
-	mul_add_c(a[1], b[2], c1, c2, c3);
-	mul_add_c(a[2], b[1], c1, c2, c3);
-	mul_add_c(a[3], b[0], c1, c2, c3);
-	r[3] = c1;
-	c1 = 0;
-	mul_add_c(a[4], b[0], c2, c3, c1);
-	mul_add_c(a[3], b[1], c2, c3, c1);
-	mul_add_c(a[2], b[2], c2, c3, c1);
-	mul_add_c(a[1], b[3], c2, c3, c1);
-	mul_add_c(a[0], b[4], c2, c3, c1);
-	r[4] = c2;
-	c2 = 0;
-	mul_add_c(a[0], b[5], c3, c1, c2);
-	mul_add_c(a[1], b[4], c3, c1, c2);
-	mul_add_c(a[2], b[3], c3, c1, c2);
-	mul_add_c(a[3], b[2], c3, c1, c2);
-	mul_add_c(a[4], b[1], c3, c1, c2);
-	mul_add_c(a[5], b[0], c3, c1, c2);
-	r[5] = c3;
-	c3 = 0;
-	mul_add_c(a[6], b[0], c1, c2, c3);
-	mul_add_c(a[5], b[1], c1, c2, c3);
-	mul_add_c(a[4], b[2], c1, c2, c3);
-	mul_add_c(a[3], b[3], c1, c2, c3);
-	mul_add_c(a[2], b[4], c1, c2, c3);
-	mul_add_c(a[1], b[5], c1, c2, c3);
-	mul_add_c(a[0], b[6], c1, c2, c3);
-	r[6] = c1;
-	c1 = 0;
-	mul_add_c(a[0], b[7], c2, c3, c1);
-	mul_add_c(a[1], b[6], c2, c3, c1);
-	mul_add_c(a[2], b[5], c2, c3, c1);
-	mul_add_c(a[3], b[4], c2, c3, c1);
-	mul_add_c(a[4], b[3], c2, c3, c1);
-	mul_add_c(a[5], b[2], c2, c3, c1);
-	mul_add_c(a[6], b[1], c2, c3, c1);
-	mul_add_c(a[7], b[0], c2, c3, c1);
-	r[7] = c2;
-	c2 = 0;
-	mul_add_c(a[7], b[1], c3, c1, c2);
-	mul_add_c(a[6], b[2], c3, c1, c2);
-	mul_add_c(a[5], b[3], c3, c1, c2);
-	mul_add_c(a[4], b[4], c3, c1, c2);
-	mul_add_c(a[3], b[5], c3, c1, c2);
-	mul_add_c(a[2], b[6], c3, c1, c2);
-	mul_add_c(a[1], b[7], c3, c1, c2);
-	r[8] = c3;
-	c3 = 0;
-	mul_add_c(a[2], b[7], c1, c2, c3);
-	mul_add_c(a[3], b[6], c1, c2, c3);
-	mul_add_c(a[4], b[5], c1, c2, c3);
-	mul_add_c(a[5], b[4], c1, c2, c3);
-	mul_add_c(a[6], b[3], c1, c2, c3);
-	mul_add_c(a[7], b[2], c1, c2, c3);
-	r[9] = c1;
-	c1 = 0;
-	mul_add_c(a[7], b[3], c2, c3, c1);
-	mul_add_c(a[6], b[4], c2, c3, c1);
-	mul_add_c(a[5], b[5], c2, c3, c1);
-	mul_add_c(a[4], b[6], c2, c3, c1);
-	mul_add_c(a[3], b[7], c2, c3, c1);
-	r[10] = c2;
-	c2 = 0;
-	mul_add_c(a[4], b[7], c3, c1, c2);
-	mul_add_c(a[5], b[6], c3, c1, c2);
-	mul_add_c(a[6], b[5], c3, c1, c2);
-	mul_add_c(a[7], b[4], c3, c1, c2);
-	r[11] = c3;
-	c3 = 0;
-	mul_add_c(a[7], b[5], c1, c2, c3);
-	mul_add_c(a[6], b[6], c1, c2, c3);
-	mul_add_c(a[5], b[7], c1, c2, c3);
-	r[12] = c1;
-	c1 = 0;
-	mul_add_c(a[6], b[7], c2, c3, c1);
-	mul_add_c(a[7], b[6], c2, c3, c1);
-	r[13] = c2;
-	c2 = 0;
-	mul_add_c(a[7], b[7], c3, c1, c2);
-	r[14] = c3;
-	r[15] = c1;
+	bn_mulw_addtw(a[0], b[0],  0,  0,  0, &c2, &c1, &r[0]);
+
+	bn_mulw_addtw(a[0], b[1],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[1], b[0], c2, c1, c0, &c2, &c1, &r[1]);
+
+	bn_mulw_addtw(a[2], b[0],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[1], b[1], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[0], b[2], c2, c1, c0, &c2, &c1, &r[2]);
+
+	bn_mulw_addtw(a[0], b[3],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[1], b[2], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[2], b[1], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[3], b[0], c2, c1, c0, &c2, &c1, &r[3]);
+
+	bn_mulw_addtw(a[4], b[0],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[3], b[1], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[2], b[2], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[1], b[3], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[0], b[4], c2, c1, c0, &c2, &c1, &r[4]);
+
+	bn_mulw_addtw(a[0], b[5],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[1], b[4], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[2], b[3], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[3], b[2], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[4], b[1], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[5], b[0], c2, c1, c0, &c2, &c1, &r[5]);
+
+	bn_mulw_addtw(a[6], b[0],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[5], b[1], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[4], b[2], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[3], b[3], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[2], b[4], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[1], b[5], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[0], b[6], c2, c1, c0, &c2, &c1, &r[6]);
+
+	bn_mulw_addtw(a[0], b[7],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[1], b[6], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[2], b[5], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[3], b[4], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[4], b[3], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[5], b[2], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[6], b[1], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[7], b[0], c2, c1, c0, &c2, &c1, &r[7]);
+
+	bn_mulw_addtw(a[7], b[1],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[6], b[2], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[5], b[3], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[4], b[4], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[3], b[5], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[2], b[6], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[1], b[7], c2, c1, c0, &c2, &c1, &r[8]);
+
+	bn_mulw_addtw(a[2], b[7],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[3], b[6], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[4], b[5], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[5], b[4], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[6], b[3], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[7], b[2], c2, c1, c0, &c2, &c1, &r[9]);
+
+	bn_mulw_addtw(a[7], b[3],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[6], b[4], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[5], b[5], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[4], b[6], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[3], b[7], c2, c1, c0, &c2, &c1, &r[10]);
+
+	bn_mulw_addtw(a[4], b[7],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[5], b[6], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[6], b[5], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[7], b[4], c2, c1, c0, &c2, &c1, &r[11]);
+
+	bn_mulw_addtw(a[7], b[5],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[6], b[6], c2, c1, c0, &c2, &c1, &c0);
+	bn_mulw_addtw(a[5], b[7], c2, c1, c0, &c2, &c1, &r[12]);
+
+	bn_mulw_addtw(a[6], b[7],  0, c2, c1, &c2, &c1, &c0);
+	bn_mulw_addtw(a[7], b[6], c2, c1, c0, &c2, &c1, &r[13]);
+
+	bn_mulw_addtw(a[7], b[7],  0, c2, c1, &c2, &r[15], &r[14]);
 }
 #endif
 
+/*
+ * bn_mul_words() computes (carry:r[i]) = a[i] * w + carry, where a is an array
+ * of words and w is a single word. This should really be called bn_mulw_words()
+ * since only one input is an array. This is used as a step in the multiplication
+ * of word arrays.
+ */
 #ifndef HAVE_BN_MUL_WORDS
-#if defined(BN_LLONG) || defined(BN_UMULT_HIGH)
-
 BN_ULONG
-bn_mul_words(BN_ULONG *rp, const BN_ULONG *ap, int num, BN_ULONG w)
-{
-	BN_ULONG c1 = 0;
-
-	assert(num >= 0);
-	if (num <= 0)
-		return (c1);
-
-#ifndef OPENSSL_SMALL_FOOTPRINT
-	while (num & ~3) {
-		mul(rp[0], ap[0], w, c1);
-		mul(rp[1], ap[1], w, c1);
-		mul(rp[2], ap[2], w, c1);
-		mul(rp[3], ap[3], w, c1);
-		ap += 4;
-		rp += 4;
-		num -= 4;
-	}
-#endif
-	while (num) {
-		mul(rp[0], ap[0], w, c1);
-		ap++;
-		rp++;
-		num--;
-	}
-	return (c1);
-}
-#else /* !(defined(BN_LLONG) || defined(BN_UMULT_HIGH)) */
-
-BN_ULONG
-bn_mul_words(BN_ULONG *rp, const BN_ULONG *ap, int num, BN_ULONG w)
+bn_mul_words(BN_ULONG *r, const BN_ULONG *a, int num, BN_ULONG w)
 {
 	BN_ULONG carry = 0;
-	BN_ULONG bl, bh;
 
 	assert(num >= 0);
 	if (num <= 0)
-		return ((BN_ULONG)0);
-
-	bl = LBITS(w);
-	bh = HBITS(w);
+		return 0;
 
 #ifndef OPENSSL_SMALL_FOOTPRINT
 	while (num & ~3) {
-		mul(rp[0], ap[0], bl, bh, carry);
-		mul(rp[1], ap[1], bl, bh, carry);
-		mul(rp[2], ap[2], bl, bh, carry);
-		mul(rp[3], ap[3], bl, bh, carry);
-		ap += 4;
-		rp += 4;
+		bn_mulw_addw(a[0], w, carry, &carry, &r[0]);
+		bn_mulw_addw(a[1], w, carry, &carry, &r[1]);
+		bn_mulw_addw(a[2], w, carry, &carry, &r[2]);
+		bn_mulw_addw(a[3], w, carry, &carry, &r[3]);
+		a += 4;
+		r += 4;
 		num -= 4;
 	}
 #endif
 	while (num) {
-		mul(rp[0], ap[0], bl, bh, carry);
-		ap++;
-		rp++;
+		bn_mulw_addw(a[0], w, carry, &carry, &r[0]);
+		a++;
+		r++;
 		num--;
 	}
-	return (carry);
+	return carry;
 }
-#endif /* !(defined(BN_LLONG) || defined(BN_UMULT_HIGH)) */
 #endif
 
-#if defined(OPENSSL_NO_ASM) || !defined(OPENSSL_BN_ASM_PART_WORDS)
 /*
- * Here follows a specialised variant of bn_sub_words(), which has the property
- * performing operations on arrays of different sizes. The sizes of those arrays
- * is expressed through cl, which is the common length (basically,
- * min(len(a),len(b))), and dl, which is the delta between the two lengths,
- * calculated as len(a)-len(b). All lengths are the number of BN_ULONGs. For the
- * operations that require a result array as parameter, it must have the length
- * cl+abs(dl).
+ * bn_mul_add_words() computes (carry:r[i]) = a[i] * w + r[i] + carry, where
+ * a is an array of words and w is a single word. This should really be called
+ * bn_mulw_add_words() since only one input is an array. This is used as a step
+ * in the multiplication of word arrays.
  */
+#ifndef HAVE_BN_MUL_ADD_WORDS
 BN_ULONG
-bn_sub_part_words(BN_ULONG *r, const BN_ULONG *a, const BN_ULONG *b, int cl,
-    int dl)
+bn_mul_add_words(BN_ULONG *r, const BN_ULONG *a, int num, BN_ULONG w)
 {
-	BN_ULONG c, t;
+	BN_ULONG carry = 0;
 
-	assert(cl >= 0);
-	c = bn_sub_words(r, a, b, cl);
+	assert(num >= 0);
+	if (num <= 0)
+		return 0;
 
-	if (dl == 0)
-		return c;
-
-	r += cl;
-	a += cl;
-	b += cl;
-
-	if (dl < 0) {
-		for (;;) {
-			t = b[0];
-			r[0] = (0 - t - c) & BN_MASK2;
-			if (t != 0)
-				c = 1;
-			if (++dl >= 0)
-				break;
-
-			t = b[1];
-			r[1] = (0 - t - c) & BN_MASK2;
-			if (t != 0)
-				c = 1;
-			if (++dl >= 0)
-				break;
-
-			t = b[2];
-			r[2] = (0 - t - c) & BN_MASK2;
-			if (t != 0)
-				c = 1;
-			if (++dl >= 0)
-				break;
-
-			t = b[3];
-			r[3] = (0 - t - c) & BN_MASK2;
-			if (t != 0)
-				c = 1;
-			if (++dl >= 0)
-				break;
-
-			b += 4;
-			r += 4;
-		}
-	} else {
-		int save_dl = dl;
-		while (c) {
-			t = a[0];
-			r[0] = (t - c) & BN_MASK2;
-			if (t != 0)
-				c = 0;
-			if (--dl <= 0)
-				break;
-
-			t = a[1];
-			r[1] = (t - c) & BN_MASK2;
-			if (t != 0)
-				c = 0;
-			if (--dl <= 0)
-				break;
-
-			t = a[2];
-			r[2] = (t - c) & BN_MASK2;
-			if (t != 0)
-				c = 0;
-			if (--dl <= 0)
-				break;
-
-			t = a[3];
-			r[3] = (t - c) & BN_MASK2;
-			if (t != 0)
-				c = 0;
-			if (--dl <= 0)
-				break;
-
-			save_dl = dl;
-			a += 4;
-			r += 4;
-		}
-		if (dl > 0) {
-			if (save_dl > dl) {
-				switch (save_dl - dl) {
-				case 1:
-					r[1] = a[1];
-					if (--dl <= 0)
-						break;
-				case 2:
-					r[2] = a[2];
-					if (--dl <= 0)
-						break;
-				case 3:
-					r[3] = a[3];
-					if (--dl <= 0)
-						break;
-				}
-				a += 4;
-				r += 4;
-			}
-		}
-		if (dl > 0) {
-			for (;;) {
-				r[0] = a[0];
-				if (--dl <= 0)
-					break;
-				r[1] = a[1];
-				if (--dl <= 0)
-					break;
-				r[2] = a[2];
-				if (--dl <= 0)
-					break;
-				r[3] = a[3];
-				if (--dl <= 0)
-					break;
-
-				a += 4;
-				r += 4;
-			}
-		}
+#ifndef OPENSSL_SMALL_FOOTPRINT
+	while (num & ~3) {
+		bn_mulw_addw_addw(a[0], w, r[0], carry, &carry, &r[0]);
+		bn_mulw_addw_addw(a[1], w, r[1], carry, &carry, &r[1]);
+		bn_mulw_addw_addw(a[2], w, r[2], carry, &carry, &r[2]);
+		bn_mulw_addw_addw(a[3], w, r[3], carry, &carry, &r[3]);
+		a += 4;
+		r += 4;
+		num -= 4;
 	}
-	return c;
+#endif
+	while (num) {
+		bn_mulw_addw_addw(a[0], w, r[0], carry, &carry, &r[0]);
+		a++;
+		r++;
+		num--;
+	}
+
+	return carry;
 }
 #endif
 
@@ -587,15 +366,15 @@ bn_mul_recursive(BN_ULONG *r, BN_ULONG *a, BN_ULONG *b, int n2, int dna,
 	zero = neg = 0;
 	switch (c1 * 3 + c2) {
 	case -4:
-		bn_sub_part_words(t, &(a[n]), a, tna, tna - n); /* - */
-		bn_sub_part_words(&(t[n]), b, &(b[n]), tnb, n - tnb); /* - */
+		bn_sub(t, n, &a[n], tna, a, n);	/* - */
+		bn_sub(&t[n], n, b, n, &b[n], tnb);	/* - */
 		break;
 	case -3:
 		zero = 1;
 		break;
 	case -2:
-		bn_sub_part_words(t, &(a[n]), a, tna, tna - n); /* - */
-		bn_sub_part_words(&(t[n]), &(b[n]), b, tnb, tnb - n); /* + */
+		bn_sub(t, n, &a[n], tna, a, n);	/* - */
+		bn_sub(&t[n], n, &b[n], tnb, b, n);	/* + */
 		neg = 1;
 		break;
 	case -1:
@@ -604,16 +383,16 @@ bn_mul_recursive(BN_ULONG *r, BN_ULONG *a, BN_ULONG *b, int n2, int dna,
 		zero = 1;
 		break;
 	case 2:
-		bn_sub_part_words(t, a, &(a[n]), tna, n - tna); /* + */
-		bn_sub_part_words(&(t[n]), b, &(b[n]), tnb, n - tnb); /* - */
+		bn_sub(t, n, a, n, &a[n], tna);	/* + */
+		bn_sub(&t[n], n, b, n, &b[n], tnb);	/* - */
 		neg = 1;
 		break;
 	case 3:
 		zero = 1;
 		break;
 	case 4:
-		bn_sub_part_words(t, a, &(a[n]), tna, n - tna);
-		bn_sub_part_words(&(t[n]), &(b[n]), b, tnb, tnb - n);
+		bn_sub(t, n, a, n, &a[n], tna);
+		bn_sub(&t[n], n, &b[n], tnb, b, n);
 		break;
 	}
 
@@ -713,14 +492,14 @@ bn_mul_part_recursive(BN_ULONG *r, BN_ULONG *a, BN_ULONG *b, int n, int tna,
 	neg = 0;
 	switch (c1 * 3 + c2) {
 	case -4:
-		bn_sub_part_words(t, &(a[n]), a, tna, tna - n); /* - */
-		bn_sub_part_words(&(t[n]), b, &(b[n]), tnb, n - tnb); /* - */
+		bn_sub(t, n, &a[n], tna, a, n);		/* - */
+		bn_sub(&t[n], n, b, n, &b[n], tnb);	/* - */
 		break;
 	case -3:
 		/* break; */
 	case -2:
-		bn_sub_part_words(t, &(a[n]), a, tna, tna - n); /* - */
-		bn_sub_part_words(&(t[n]), &(b[n]), b, tnb, tnb - n); /* + */
+		bn_sub(t, n, &a[n], tna, a, n);		/* - */
+		bn_sub(&t[n], n, &b[n], tnb, b, n);	/* + */
 		neg = 1;
 		break;
 	case -1:
@@ -728,15 +507,15 @@ bn_mul_part_recursive(BN_ULONG *r, BN_ULONG *a, BN_ULONG *b, int n, int tna,
 	case 1:
 		/* break; */
 	case 2:
-		bn_sub_part_words(t, a, &(a[n]), tna, n - tna); /* + */
-		bn_sub_part_words(&(t[n]), b, &(b[n]), tnb, n - tnb); /* - */
+		bn_sub(t, n, a, n, &a[n], tna);		/* + */
+		bn_sub(&t[n], n, b, n, &b[n], tnb);	/* - */
 		neg = 1;
 		break;
 	case 3:
 		/* break; */
 	case 4:
-		bn_sub_part_words(t, a, &(a[n]), tna, n - tna);
-		bn_sub_part_words(&(t[n]), &(b[n]), b, tnb, tnb - n);
+		bn_sub(t, n, a, n, &a[n], tna);
+		bn_sub(&t[n], n, &b[n], tnb, b, n);
 		break;
 	}
 		/* The zero case isn't yet implemented here. The speedup
@@ -1003,9 +782,9 @@ BN_mul(BIGNUM *r, const BIGNUM *a, const BIGNUM *b, BN_CTX *ctx)
 	}
 
 	rr->top = rn;
-	rr->neg = a->neg ^ b->neg;
-
 	bn_correct_top(rr);
+
+	BN_set_negative(rr, a->neg ^ b->neg);
 
 	if (r != rr)
 		BN_copy(r, rr);

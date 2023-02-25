@@ -195,4 +195,8 @@ d_newlocale="$undef"
 # OpenBSD's locale support is not that complete yet
 ccflags="-DNO_LOCALE_NUMERIC -DNO_LOCALE_COLLATE $ccflags"
 
+# Seems that OpenBSD returns bogus values in _Thread_local variables in code in
+# shared objects, so we need to disable it. See GH #19109
+d_thread_local=undef
+
 # end

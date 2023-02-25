@@ -3324,7 +3324,7 @@ amdgpu_wsioctl(void *v, u_long cmd, caddr_t data, int flag, struct proc *p)
 		case WSDISPLAYIO_PARAM_BRIGHTNESS:
 			bd->props.brightness = dp->curval;
 			backlight_update_status(bd);
-			KNOTE(&adev->ddev.note, NOTE_CHANGE);
+			knote_locked(&adev->ddev.note, NOTE_CHANGE);
 			return 0;
 		}
 		break;
@@ -3532,6 +3532,7 @@ amdgpu_attachhook(struct device *self)
 		fb = fb_helper->fb;
 		obj = fb->obj[0];
 		rbo = gem_to_amdgpu_bo(obj);
+		amdgpu_bo_pin(rbo, AMDGPU_GEM_DOMAIN_VRAM);
 		amdgpu_bo_kmap(rbo, (void **)(&ri->ri_bits));
 
 		ri->ri_depth = fb->format->cpp[0] * 8;

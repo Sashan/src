@@ -1,4 +1,4 @@
-/*	$OpenBSD: bn_arch.h,v 1.2 2023/01/31 05:53:49 jsing Exp $ */
+/*	$OpenBSD: bn_arch.h,v 1.5 2023/02/17 05:46:57 jsing Exp $ */
 /*
  * Copyright (c) 2023 Joel Sing <jsing@openbsd.org>
  *
@@ -23,21 +23,55 @@
 #ifndef OPENSSL_NO_ASM
 
 #if defined(__GNUC__)
-#define HAVE_BN_UMUL_HILO
+
+#define HAVE_BN_ADDW
 
 static inline void
-bn_umul_hilo(BN_ULONG a, BN_ULONG b, BN_ULONG *out_h, BN_ULONG *out_l)
+bn_addw(BN_ULONG a, BN_ULONG b, BN_ULONG *out_r1, BN_ULONG *out_r0)
 {
-	BN_ULONG h, l;
+	BN_ULONG carry, r0;
+
+	__asm__ ("adds %1, %2, %3; cset %0, cs"
+	    : "=r"(carry), "=r"(r0)
+	    : "r"(a), "r"(b)
+	    : "cc");
+
+	*out_r1 = carry;
+	*out_r0 = r0;
+}
+
+#define HAVE_BN_MULW
+
+static inline void
+bn_mulw(BN_ULONG a, BN_ULONG b, BN_ULONG *out_r1, BN_ULONG *out_r0)
+{
+	BN_ULONG r1, r0;
 
 	/* Unsigned multiplication using a umulh/mul pair. */
 	__asm__ ("umulh %0, %2, %3; mul %1, %2, %3"
-	    : "=r"(h), "=r"(l)
+	    : "=&r"(r1), "=r"(r0)
 	    : "r"(a), "r"(b));
 
-	*out_h = h;
-	*out_l = l;
+	*out_r1 = r1;
+	*out_r0 = r0;
 }
+
+#define HAVE_BN_SUBW
+
+static inline void
+bn_subw(BN_ULONG a, BN_ULONG b, BN_ULONG *out_borrow, BN_ULONG *out_r0)
+{
+	BN_ULONG borrow, r0;
+
+	__asm__ ("subs %1, %2, %3; cset %0, cc"
+	    : "=r"(borrow), "=r"(r0)
+	    : "r"(a), "r"(b)
+	    : "cc");
+
+	*out_borrow = borrow;
+	*out_r0 = r0;
+}
+
 #endif /* __GNUC__ */
 
 #endif

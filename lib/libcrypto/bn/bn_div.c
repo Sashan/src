@@ -1,4 +1,4 @@
-/* $OpenBSD: bn_div.c,v 1.36 2023/01/31 06:08:23 jsing Exp $ */
+/* $OpenBSD: bn_div.c,v 1.39 2023/02/16 10:41:03 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -204,7 +204,7 @@ bn_div_3_words(const BN_ULONG *m, BN_ULONG d1, BN_ULONG d0)
 	/* n0 < d0 */
 	bn_div_rem_words(n0, n1, d0, &q, &rem);
 
-	bn_umul_hilo(d1, q, &t2h, &t2l);
+	bn_mulw(d1, q, &t2h, &t2l);
 
 	for (;;) {
 		if (t2h < rem || (t2h == rem && t2l <= m[-2]))
@@ -237,7 +237,7 @@ static int
 BN_div_internal(BIGNUM *quotient, BIGNUM *remainder, const BIGNUM *numerator,
     const BIGNUM *divisor, BN_CTX *ctx, int ct)
 {
-	int norm_shift, i, loop;
+	int norm_shift, i, loop, r_neg;
 	BIGNUM *tmp, wnum, *snum, *sdiv, *res;
 	BN_ULONG *resp, *wnump;
 	BN_ULONG d0, d1;
@@ -338,10 +338,10 @@ BN_div_internal(BIGNUM *quotient, BIGNUM *remainder, const BIGNUM *numerator,
 	wnump = &(snum->d[num_n - 1]);
 
 	/* Setup to 'res' */
-	res->neg = (numerator->neg ^ divisor->neg);
 	if (!bn_wexpand(res, (loop + 1)))
 		goto err;
 	res->top = loop - no_branch;
+	r_neg = numerator->neg ^ divisor->neg;
 	resp = &(res->d[loop - 1]);
 
 	/* space for temp */
@@ -414,12 +414,13 @@ BN_div_internal(BIGNUM *quotient, BIGNUM *remainder, const BIGNUM *numerator,
 		int neg = numerator->neg;
 
 		BN_rshift(remainder, snum, norm_shift);
-		if (!BN_is_zero(remainder))
-			remainder->neg = neg;
+		BN_set_negative(remainder, neg);
 	}
 
 	if (no_branch)
 		bn_correct_top(res);
+
+	BN_set_negative(res, r_neg);
 
  done:
 	ret = 1;

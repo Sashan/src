@@ -271,6 +271,8 @@
 ./usr/include/dev/ic/dwhdmi.h
 ./usr/include/dev/ic/dwiicreg.h
 ./usr/include/dev/ic/dwiicvar.h
+./usr/include/dev/ic/dwqereg.h
+./usr/include/dev/ic/dwqevar.h
 ./usr/include/dev/ic/elink3reg.h
 ./usr/include/dev/ic/elink3var.h
 ./usr/include/dev/ic/fxpreg.h
@@ -392,6 +394,8 @@
 ./usr/include/dev/ic/trm.h
 ./usr/include/dev/ic/twereg.h
 ./usr/include/dev/ic/twevar.h
+./usr/include/dev/ic/ufshcireg.h
+./usr/include/dev/ic/ufshcivar.h
 ./usr/include/dev/ic/uhareg.h
 ./usr/include/dev/ic/uhavar.h
 ./usr/include/dev/ic/vgareg.h
@@ -1682,6 +1686,7 @@
 ./usr/share/man/man2/nfssvc.2
 ./usr/share/man/man2/open.2
 ./usr/share/man/man2/pathconf.2
+./usr/share/man/man2/pinsyscall.2
 ./usr/share/man/man2/pipe.2
 ./usr/share/man/man2/pledge.2
 ./usr/share/man/man2/poll.2

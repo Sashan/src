@@ -371,8 +371,8 @@ context(ctx, ...)
     PPCODE:
 	if (items > 2) {
 	    STRLEN len;
-	    unsigned char *buf = (unsigned char *)(SvPV(ST(2), len));
 	    ctx->count = SvUV(ST(1)) << 3;
+	    unsigned char *buf = (unsigned char *)(SvPV(ST(2), len));
 	    ctx->state[0] = buf[ 0] | (buf[ 1]<<8) | (buf[ 2]<<16) | (buf[ 3]<<24);
 	    ctx->state[1] = buf[ 4] | (buf[ 5]<<8) | (buf[ 6]<<16) | (buf[ 7]<<24);
 	    ctx->state[2] = buf[ 8] | (buf[ 9]<<8) | (buf[10]<<16) | (buf[11]<<24);
@@ -386,19 +386,21 @@ context(ctx, ...)
 	    XSRETURN(0);
 	}
 
-        w=ctx->state[0]; out[ 0]=w; out[ 1]=(w>>8); out[ 2]=(w>>16); out[ 3]=(w>>24);
-        w=ctx->state[1]; out[ 4]=w; out[ 5]=(w>>8); out[ 6]=(w>>16); out[ 7]=(w>>24);
-        w=ctx->state[2]; out[ 8]=w; out[ 9]=(w>>8); out[10]=(w>>16); out[11]=(w>>24);
-        w=ctx->state[3]; out[12]=w; out[13]=(w>>8); out[14]=(w>>16); out[15]=(w>>24);
+        w=ctx->state[0]; out[ 0]=(char)w; out[ 1]=(char)(w>>8); out[ 2]=(char)(w>>16); out[ 3]=(char)(w>>24);
+        w=ctx->state[0]; out[ 4]=(char)w; out[ 5]=(char)(w>>8); out[ 6]=(char)(w>>16); out[ 7]=(char)(w>>24);
+        w=ctx->state[0]; out[ 8]=(char)w; out[ 9]=(char)(w>>8); out[10]=(char)(w>>16); out[11]=(char)(w>>24);
+        w=ctx->state[0]; out[12]=(char)w; out[13]=(char)(w>>8); out[14]=(char)(w>>16); out[15]=(char)(w>>24);
 
 	EXTEND(SP, 3);
 	ST(0) = sv_2mortal(newSViv((ctx->count >> 3)
 				- ((ctx->count >> 3) % MD5_BLOCK_LENGTH)));
 	ST(1) = sv_2mortal(newSVpv(out, 16));
-	ST(2) = sv_2mortal(newSVpv("",0));
-	if (((ctx->count >> 3) & (MD5_BLOCK_LENGTH - 1)) != 0)
-		ST(2) = sv_2mortal(newSVpv((char *)ctx->buffer,
-		                  (ctx->count >> 3) & (MD5_BLOCK_LENGTH - 1)));
+
+	if (((ctx->count >> 3) & (MD5_BLOCK_LENGTH - 1)) == 0)
+		XSRETURN(2);
+
+	ST(2) = sv_2mortal(newSVpv((char *)ctx->buffer,
+	    (ctx->count >> 3) & (MD5_BLOCK_LENGTH - 1)));
 
 	XSRETURN(3);
 

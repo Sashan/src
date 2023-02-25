@@ -1,4 +1,4 @@
-/* $OpenBSD: bn_lib.c,v 1.72 2023/01/14 15:12:27 jsing Exp $ */
+/* $OpenBSD: bn_lib.c,v 1.76 2023/02/14 18:22:35 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -66,6 +66,7 @@
 #include <openssl/err.h>
 
 #include "bn_local.h"
+#include "bn_internal.h"
 
 BIGNUM *
 BN_new(void)
@@ -219,33 +220,37 @@ BN_value_one(void)
 	return (&const_one);
 }
 
+#ifndef HAVE_BN_WORD_CLZ
 int
-BN_num_bits_word(BN_ULONG l)
+bn_word_clz(BN_ULONG w)
 {
-	BN_ULONG x, mask;
-	int bits;
-	unsigned int shift;
+	BN_ULONG bits, mask, shift;
 
-	/* Constant time calculation of floor(log2(l)) + 1. */
-	bits = (l != 0);
-	shift = BN_BITS4;	/* On _LP64 this is 32, otherwise 16. */
-	do {
-		x = l >> shift;
-		/* If x is 0, set mask to 0, otherwise set it to all 1s. */
-		mask = ((~x & (x - 1)) >> (BN_BITS2 - 1)) - 1;
-		bits += shift & mask;
-		/* If x is 0, leave l alone, otherwise set l = x. */
-		l ^= (x ^ l) & mask;
-	} while ((shift /= 2) != 0);
+	bits = shift = BN_BITS2;
+	mask = 0;
 
-	return bits;
+	while ((shift >>= 1) != 0) {
+		bits += (shift & mask) - (shift & ~mask);
+		mask = bn_ct_ne_zero_mask(w >> bits);
+	}
+	bits += 1 & mask;
+
+	bits -= bn_ct_eq_zero(w);
+
+	return BN_BITS2 - bits;
+}
+#endif
+
+int
+BN_num_bits_word(BN_ULONG w)
+{
+	return BN_BITS2 - bn_word_clz(w);
 }
 
 int
 BN_num_bits(const BIGNUM *a)
 {
 	int i = a->top - 1;
-
 
 	if (BN_is_zero(a))
 		return 0;
@@ -728,12 +733,9 @@ BN_mask_bits(BIGNUM *a, int n)
 }
 
 void
-BN_set_negative(BIGNUM *a, int b)
+BN_set_negative(BIGNUM *bn, int neg)
 {
-	if (b && !BN_is_zero(a))
-		a->neg = 1;
-	else
-		a->neg = 0;
+	bn->neg = ~BN_is_zero(bn) & bn_ct_ne_zero(neg);
 }
 
 int
@@ -914,9 +916,15 @@ BN_abs_is_word(const BIGNUM *a, const BN_ULONG w)
 }
 
 int
-BN_is_zero(const BIGNUM *a)
+BN_is_zero(const BIGNUM *bn)
 {
-	return a->top == 0;
+	BN_ULONG bits = 0;
+	int i;
+
+	for (i = 0; i < bn->top; i++)
+		bits |= bn->d[i];
+
+	return bits == 0;
 }
 
 int

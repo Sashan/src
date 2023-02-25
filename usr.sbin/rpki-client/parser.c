@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.c,v 1.82 2023/01/06 16:06:43 claudio Exp $ */
+/*	$OpenBSD: parser.c,v 1.86 2023/02/23 13:06:42 tb Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -210,43 +210,47 @@ proc_parser_mft_check(const char *fn, struct mft *p)
 }
 
 /*
- * Load the correct CRL using the info from the MFT.
+ * Load the CRL from loc using the info from the MFT.
  */
 static struct crl *
-parse_load_crl_from_mft(struct entity *entp, struct mft *mft, enum location loc)
+parse_load_crl_from_mft(struct entity *entp, struct mft *mft, enum location loc,
+    char **crlfile)
 {
 	struct crl	*crl = NULL;
 	unsigned char	*f = NULL;
 	char		*fn = NULL;
 	size_t		 flen;
 
-	while (1) {
-		fn = parse_filepath(entp->repoid, entp->path, mft->crl, loc);
-		if (fn == NULL)
-			goto next;
+	*crlfile = NULL;
 
-		f = load_file(fn, &flen);
-		if (f == NULL && errno != ENOENT)
+	fn = parse_filepath(entp->repoid, entp->path, mft->crl, loc);
+	if (fn == NULL)
+		goto out;
+
+	f = load_file(fn, &flen);
+	if (f == NULL) {
+		if (errno != ENOENT)
 			warn("parse file %s", fn);
-		if (f == NULL)
-			goto next;
-		if (!valid_hash(f, flen, mft->crlhash, sizeof(mft->crlhash)))
-			goto next;
-		crl = crl_parse(fn, f, flen);
-
-next:
-		free(f);
-		free(fn);
-		f = NULL;
-		fn = NULL;
-
-		if (crl != NULL)
-			return crl;
-		if (loc == DIR_TEMP)
-			loc = DIR_VALID;
-		else
-			return NULL;
+		goto out;
 	}
+
+	if (!valid_hash(f, flen, mft->crlhash, sizeof(mft->crlhash)))
+		goto out;
+
+	crl = crl_parse(fn, f, flen);
+	if (crl == NULL)
+		goto out;
+
+	*crlfile = fn;
+	free(f);
+
+	return crl;
+
+ out:
+	free(f);
+	free(fn);
+
+	return NULL;
 }
 
 /*
@@ -256,26 +260,45 @@ next:
  * Return the mft on success or NULL on failure.
  */
 static struct mft *
-proc_parser_mft_pre(char *file, const unsigned char *der, size_t len,
-    struct entity *entp, enum location loc, struct crl **crl,
-    const char **errstr)
+proc_parser_mft_pre(struct entity *entp, enum location loc, char **file,
+    struct crl **crl, char **crlfile, const char **errstr)
 {
 	struct mft	*mft;
 	X509		*x509;
 	struct auth	*a;
+	unsigned char	*der;
+	size_t		 len;
 
 	*crl = NULL;
+	*crlfile = NULL;
 	*errstr = NULL;
-	if ((mft = mft_parse(&x509, file, der, len)) == NULL)
-		return NULL;
-	*crl = parse_load_crl_from_mft(entp, mft, loc);
 
-	a = valid_ski_aki(file, &auths, mft->ski, mft->aki);
-	if (!valid_x509(file, ctx, x509, a, *crl, errstr)) {
+	*file = parse_filepath(entp->repoid, entp->path, entp->file, loc);
+	if (*file == NULL)
+		return NULL;
+
+	der = load_file(*file, &len);
+	if (der == NULL && errno != ENOENT)
+		warn("parse file %s", *file);
+
+	if ((mft = mft_parse(&x509, *file, der, len)) == NULL) {
+		free(der);
+		return NULL;
+	}
+	free(der);
+
+	*crl = parse_load_crl_from_mft(entp, mft, DIR_TEMP, crlfile);
+	if (*crl == NULL)
+		*crl = parse_load_crl_from_mft(entp, mft, DIR_VALID, crlfile);
+
+	a = valid_ski_aki(*file, &auths, mft->ski, mft->aki);
+	if (!valid_x509(*file, ctx, x509, a, *crl, errstr)) {
 		X509_free(x509);
 		mft_free(mft);
 		crl_free(*crl);
 		*crl = NULL;
+		free(*crlfile);
+		*crlfile = NULL;
 		return NULL;
 	}
 	X509_free(x509);
@@ -332,34 +355,19 @@ proc_parser_mft_post(char *file, struct mft *mft, const char *path,
  * Load the most recent MFT by opening both options and comparing the two.
  */
 static char *
-proc_parser_mft(struct entity *entp, struct mft **mp)
+proc_parser_mft(struct entity *entp, struct mft **mp, char **crlfile)
 {
 	struct mft	*mft1 = NULL, *mft2 = NULL;
-	struct crl	*crl, *crl1 = NULL, *crl2 = NULL;
-	char		*f, *file, *file1, *file2;
+	struct crl	*crl, *crl1, *crl2;
+	char		*file, *file1, *file2, *crl1file, *crl2file;
 	const char	*err1, *err2;
-	size_t		 flen;
 
 	*mp = NULL;
-	file1 = parse_filepath(entp->repoid, entp->path, entp->file, DIR_VALID);
-	file2 = parse_filepath(entp->repoid, entp->path, entp->file, DIR_TEMP);
 
-	if (file1 != NULL) {
-		f = load_file(file1, &flen);
-		if (f == NULL && errno != ENOENT)
-			warn("parse file %s", file1);
-		mft1 = proc_parser_mft_pre(file1, f, flen, entp, DIR_VALID,
-		    &crl1, &err1);
-		free(f);
-	}
-	if (file2 != NULL) {
-		f = load_file(file2, &flen);
-		if (f == NULL && errno != ENOENT)
-			warn("parse file %s", file2);
-		mft2 = proc_parser_mft_pre(file2, f, flen, entp, DIR_TEMP,
-		    &crl2, &err2);
-		free(f);
-	}
+	mft1 = proc_parser_mft_pre(entp, DIR_VALID, &file1, &crl1, &crl1file,
+	    &err1);
+	mft2 = proc_parser_mft_pre(entp, DIR_TEMP, &file2, &crl2, &crl2file,
+	    &err2);
 
 	/* overload error from temp file if it is set */
 	if (mft1 == NULL && mft2 == NULL)
@@ -369,17 +377,21 @@ proc_parser_mft(struct entity *entp, struct mft **mp)
 	if (mft_compare(mft1, mft2) == 1) {
 		mft_free(mft2);
 		crl_free(crl2);
+		free(crl2file);
 		free(file2);
 		*mp = proc_parser_mft_post(file1, mft1, entp->path, err1);
 		crl = crl1;
 		file = file1;
+		*crlfile = crl1file;
 	} else {
 		mft_free(mft1);
 		crl_free(crl1);
+		free(crl1file);
 		free(file1);
 		*mp = proc_parser_mft_post(file2, mft2, entp->path, err2);
 		crl = crl2;
 		file = file2;
+		*crlfile = crl2file;
 	}
 
 	if (*mp != NULL) {
@@ -614,7 +626,7 @@ parse_entity(struct entityq *q, struct msgbuf *msgq)
 	struct ibuf	*b;
 	unsigned char	*f;
 	size_t		 flen;
-	char		*file;
+	char		*file, *crlfile;
 	int		 c;
 
 	while ((entp = TAILQ_FIRST(q)) != NULL) {
@@ -666,22 +678,29 @@ parse_entity(struct entityq *q, struct msgbuf *msgq)
 			 * it here.
 			 */
 			break;
-		case RTYPE_CRL:
-			/*
-			 * CRLs are already loaded with the MFT so nothing
-			 * really needs to be done here.
-			 */
-			file = parse_filepath(entp->repoid, entp->path,
-			    entp->file, entp->location);
-			io_str_buffer(b, file);
-			break;
 		case RTYPE_MFT:
-			file = proc_parser_mft(entp, &mft);
+			file = proc_parser_mft(entp, &mft, &crlfile);
 			io_str_buffer(b, file);
 			c = (mft != NULL);
 			io_simple_buffer(b, &c, sizeof(int));
 			if (mft != NULL)
 				mft_buffer(b, mft);
+
+			/* Push valid CRL together with the MFT. */
+			if (crlfile != NULL) {
+				enum rtype type;
+				struct ibuf *b2;
+
+				b2 = io_new_buffer();
+				type = RTYPE_CRL;
+				io_simple_buffer(b2, &type, sizeof(type));
+				io_simple_buffer(b2, &entp->repoid,
+				    sizeof(entp->repoid));
+				io_str_buffer(b2, crlfile);
+				free(crlfile);
+
+				io_close_buffer(msgq, b2);
+			}
 			mft_free(mft);
 			break;
 		case RTYPE_ROA:
@@ -714,6 +733,7 @@ parse_entity(struct entityq *q, struct msgbuf *msgq)
 			io_str_buffer(b, file);
 			proc_parser_tak(file, f, flen);
 			break;
+		case RTYPE_CRL:
 		default:
 			file = parse_filepath(entp->repoid, entp->path,
 			    entp->file, entp->location);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_mmap.c,v 1.177 2023/01/16 07:09:11 guenther Exp $	*/
+/*	$OpenBSD: uvm_mmap.c,v 1.179 2023/02/16 04:42:08 deraadt Exp $	*/
 /*	$NetBSD: uvm_mmap.c,v 1.49 2001/02/18 21:19:08 chs Exp $	*/
 
 /*
@@ -68,6 +68,7 @@
 
 #include <machine/exec.h>	/* for __LDPGSZ */
 
+#include <sys/syscall.h>
 #include <sys/syscallargs.h>
 
 #include <uvm/uvm.h>
@@ -434,38 +435,6 @@ out:
 	return error;
 }
 
-#if 1
-int
-sys_pad_mquery(struct proc *p, void *v, register_t *retval)
-{
-	struct sys_pad_mquery_args *uap = v;
-	struct sys_mquery_args unpad;
-
-	SCARG(&unpad, addr) = SCARG(uap, addr);
-	SCARG(&unpad, len) = SCARG(uap, len);
-	SCARG(&unpad, prot) = SCARG(uap, prot);
-	SCARG(&unpad, flags) = SCARG(uap, flags);
-	SCARG(&unpad, fd) = SCARG(uap, fd);
-	SCARG(&unpad, pos) = SCARG(uap, pos);
-	return sys_mquery(p, &unpad, retval);
-}
-
-int
-sys_pad_mmap(struct proc *p, void *v, register_t *retval)
-{
-	struct sys_pad_mmap_args *uap = v;
-	struct sys_mmap_args unpad;
-
-	SCARG(&unpad, addr) = SCARG(uap, addr);
-	SCARG(&unpad, len) = SCARG(uap, len);
-	SCARG(&unpad, prot) = SCARG(uap, prot);
-	SCARG(&unpad, flags) = SCARG(uap, flags);
-	SCARG(&unpad, fd) = SCARG(uap, fd);
-	SCARG(&unpad, pos) = SCARG(uap, pos);
-	return sys_mmap(p, &unpad, retval);
-}
-#endif
-
 /*
  * sys_msync: the msync system call (a front-end for flush)
  */
@@ -645,6 +614,38 @@ sys_msyscall(struct proc *p, void *v, register_t *retval)
 		return EINVAL;		/* disallow wrap-around. */
 
 	return uvm_map_syscall(&p->p_vmspace->vm_map, addr, addr+size);
+}
+
+/*
+ * sys_pinsyscall
+ */
+int
+sys_pinsyscall(struct proc *p, void *v, register_t *retval)
+{
+	struct sys_pinsyscall_args /* {
+		syscallarg(int) syscall;
+		syscallarg(void *) addr;
+		syscallarg(size_t) len;
+	} */ *uap = v;
+	struct vmspace *vm = p->p_vmspace;
+	vm_map_t map = &p->p_vmspace->vm_map;
+	vaddr_t start, end;
+
+	if (SCARG(uap, syscall) != SYS_execve)
+		return (EINVAL);
+	start = (vaddr_t)SCARG(uap, addr);
+	end = start + (vsize_t)SCARG(uap, len);
+	if (start >= end || start < map->min_offset || end > map->max_offset)
+		return (EFAULT);
+	vm_map_lock(map);
+	if (vm->vm_execve) {
+		vm_map_unlock(map);
+		return (EPERM);
+	}
+	vm->vm_execve = start;
+	vm->vm_execve_end = end;
+	vm_map_unlock(map);
+	return (0);
 }
 
 /*

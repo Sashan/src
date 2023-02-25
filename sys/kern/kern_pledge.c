@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_pledge.c,v 1.302 2023/01/07 05:24:58 guenther Exp $	*/
+/*	$OpenBSD: kern_pledge.c,v 1.304 2023/02/19 18:46:46 anton Exp $	*/
 
 /*
  * Copyright (c) 2015 Nicholas Marriott <nicm@openbsd.org>
@@ -112,6 +112,7 @@ const uint64_t pledge_syscalls[SYS_MAXSYSCALL] = {
 	[SYS_sendsyslog] = PLEDGE_ALWAYS,	/* stack protector reporting */
 	[SYS_thrkill] = PLEDGE_ALWAYS,		/* raise, abort, stack pro */
 	[SYS_utrace] = PLEDGE_ALWAYS,		/* ltrace(1) from ld.so */
+	[SYS_pinsyscall] = PLEDGE_ALWAYS,
 
 	/* "getting" information about self is considered safe */
 	[SYS_getuid] = PLEDGE_STDIO,
@@ -173,18 +174,6 @@ const uint64_t pledge_syscalls[SYS_MAXSYSCALL] = {
 	[SYS_ftruncate] = PLEDGE_STDIO,
 	[SYS_lseek] = PLEDGE_STDIO,
 	[SYS_fpathconf] = PLEDGE_STDIO,
-
-#if 1
-	[SYS_pad_mquery] = PLEDGE_STDIO,
-	[SYS_pad_mmap] = PLEDGE_STDIO,
-	[SYS_pad_pread] = PLEDGE_STDIO,
-	[SYS_pad_preadv] = PLEDGE_STDIO,
-	[SYS_pad_pwrite] = PLEDGE_STDIO,
-	[SYS_pad_pwritev] = PLEDGE_STDIO,
-	[SYS_pad_ftruncate] = PLEDGE_STDIO,
-	[SYS_pad_lseek] = PLEDGE_STDIO,
-	[SYS_pad_truncate] = PLEDGE_WPATH,
-#endif
 
 	/*
 	 * Address selection required a network pledge ("inet",

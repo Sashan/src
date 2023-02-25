@@ -1,4 +1,4 @@
-/*	$OpenBSD: clock.c,v 1.52 2023/01/27 22:13:48 cheloha Exp $	*/
+/*	$OpenBSD: clock.c,v 1.54 2023/02/04 23:17:05 cheloha Exp $	*/
 /*	$NetBSD: clock.c,v 1.1 1996/09/30 16:34:40 ws Exp $	*/
 
 /*
@@ -69,7 +69,6 @@ const struct intrclock dec_intrclock = {
 
 static struct timecounter tb_timecounter = {
 	.tc_get_timecount = tb_get_timecount,
-	.tc_poll_pps = NULL,
 	.tc_counter_mask = 0xffffffff,
 	.tc_frequency = 0,
 	.tc_name = "tb",
@@ -248,16 +247,13 @@ void
 dec_rearm(void *unused, uint64_t nsecs)
 {
 	uint32_t cycles;
-	int s;
 
 	if (nsecs > dec_nsec_max)
 		nsecs = dec_nsec_max;
 	cycles = (nsecs * dec_nsec_cycle_ratio) >> 32;
 	if (cycles > UINT32_MAX >> 1)
 		cycles = UINT32_MAX >> 1;
-	s = ppc_intr_disable();
 	ppc_mtdec(cycles);
-	ppc_intr_enable(s);
 }
 
 void

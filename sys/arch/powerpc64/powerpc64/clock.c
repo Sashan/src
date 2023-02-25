@@ -1,4 +1,4 @@
-/*	$OpenBSD: clock.c,v 1.8 2023/01/27 22:14:43 cheloha Exp $	*/
+/*	$OpenBSD: clock.c,v 1.10 2023/02/04 23:20:54 cheloha Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -45,7 +45,6 @@ u_int	tb_get_timecount(struct timecounter *);
 
 static struct timecounter tb_timecounter = {
 	.tc_get_timecount = tb_get_timecount,
-	.tc_poll_pps = NULL,
 	.tc_counter_mask = 0xffffffff,
 	.tc_frequency = 0,
 	.tc_name = "tb",
@@ -59,7 +58,6 @@ void	cpu_startclock(void);
 void
 dec_rearm(void *unused, uint64_t nsecs)
 {
-	u_long s;
 	uint32_t cycles;
 
 	if (nsecs > dec_nsec_max)
@@ -67,9 +65,7 @@ dec_rearm(void *unused, uint64_t nsecs)
 	cycles = (nsecs * dec_nsec_cycle_ratio) >> 32;
 	if (cycles > UINT32_MAX >> 1)
 		cycles = UINT32_MAX >> 1;
-	s = intr_disable();
 	mtdec(cycles);
-	intr_restore(s);
 }
 
 void

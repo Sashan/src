@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.c,v 1.439 2023/01/04 14:33:30 claudio Exp $ */
+/*	$OpenBSD: session.c,v 1.441 2023/02/14 15:37:45 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004, 2005 Henning Brauer <henning@openbsd.org>
@@ -258,14 +258,6 @@ session_main(int debug, int verbose)
 				/* new peer that needs init? */
 				if (p->state == STATE_NONE)
 					init_peer(p);
-
-				/* reinit due? */
-				if (p->reconf_action == RECONF_REINIT) {
-					session_stop(p, ERR_CEASE_ADMIN_RESET);
-					if (!p->conf.down)
-						timer_set(&p->timers,
-						    Timer_IdleHold, 0);
-				}
 
 				/* deletion due? */
 				if (p->reconf_action == RECONF_DELETE) {
@@ -580,7 +572,7 @@ init_peer(struct peer *p)
 	if (p->conf.down)
 		timer_stop(&p->timers, Timer_IdleHold); /* no autostart */
 	else
-		timer_set(&p->timers, Timer_IdleHold, 0); /* start ASAP */
+		timer_set(&p->timers, Timer_IdleHold, SESSION_CLEAR_DELAY);
 
 	p->stats.last_updown = getmonotime();
 
@@ -3189,7 +3181,13 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 		case IMSG_CTL_SHOW_TIMER:
 			if (idx != PFD_PIPE_MAIN)
 				fatalx("ctl kroute request not from parent");
-			control_imsg_relay(&imsg);
+			control_imsg_relay(&imsg, NULL);
+			break;
+		case IMSG_CTL_SHOW_NEIGHBOR:
+			if (idx != PFD_PIPE_ROUTE_CTL)
+				fatalx("ctl rib request not from RDE");
+			p = getpeerbyid(conf, imsg.hdr.peerid);
+			control_imsg_relay(&imsg, p);
 			break;
 		case IMSG_CTL_SHOW_RIB:
 		case IMSG_CTL_SHOW_RIB_PREFIX:
@@ -3197,15 +3195,14 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 		case IMSG_CTL_SHOW_RIB_ATTR:
 		case IMSG_CTL_SHOW_RIB_MEM:
 		case IMSG_CTL_SHOW_NETWORK:
-		case IMSG_CTL_SHOW_NEIGHBOR:
 		case IMSG_CTL_SHOW_SET:
 			if (idx != PFD_PIPE_ROUTE_CTL)
 				fatalx("ctl rib request not from RDE");
-			control_imsg_relay(&imsg);
+			control_imsg_relay(&imsg, NULL);
 			break;
 		case IMSG_CTL_END:
 		case IMSG_CTL_RESULT:
-			control_imsg_relay(&imsg);
+			control_imsg_relay(&imsg, NULL);
 			break;
 		case IMSG_UPDATE:
 			if (idx != PFD_PIPE_ROUTE)
@@ -3554,11 +3551,11 @@ int
 imsg_ctl_parent(int type, uint32_t peerid, pid_t pid, void *data,
     uint16_t datalen)
 {
-	return (imsg_compose(ibuf_main, type, peerid, pid, -1, data, datalen));
+	return imsg_compose(ibuf_main, type, peerid, pid, -1, data, datalen);
 }
 
 int
-imsg_ctl_rde(int type, pid_t pid, void *data, uint16_t datalen)
+imsg_ctl_rde(int type, uint32_t peerid, pid_t pid, void *data, uint16_t datalen)
 {
 	if (ibuf_rde_ctl == NULL)
 		return (0);
@@ -3567,7 +3564,7 @@ imsg_ctl_rde(int type, pid_t pid, void *data, uint16_t datalen)
 	 * Use control socket to talk to RDE to bypass the queue of the
 	 * regular imsg socket.
 	 */
-	return (imsg_compose(ibuf_rde_ctl, type, 0, pid, -1, data, datalen));
+	return imsg_compose(ibuf_rde_ctl, type, peerid, pid, -1, data, datalen);
 }
 
 int
@@ -3576,7 +3573,7 @@ imsg_rde(int type, uint32_t peerid, void *data, uint16_t datalen)
 	if (ibuf_rde == NULL)
 		return (0);
 
-	return (imsg_compose(ibuf_rde, type, peerid, 0, -1, data, datalen));
+	return imsg_compose(ibuf_rde, type, peerid, 0, -1, data, datalen);
 }
 
 void

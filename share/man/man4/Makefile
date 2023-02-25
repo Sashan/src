@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.828 2022/12/12 19:25:49 kettenis Exp $
+#	$OpenBSD: Makefile,v 1.831 2023/02/13 19:33:51 kettenis Exp $
 
 MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	acpi.4 acpiac.4 acpials.4 acpiasus.4 acpibat.4 \
@@ -80,10 +80,11 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	rkemmcphy.4 rkgpio.4 rkgrf.4 rkiic.4 rkiis.4 rkpcie.4 rkpinctrl.4 \
 	rkpmic.4 rkpwm.4 rkrng.4 rktcphy.4 rktemp.4 rkvop.4 \
 	rl.4 rlphy.4 route.4 rsu.4 rtsx.4 rum.4 run.4 rtw.4 rtwn.4 \
-	safte.4 sbus.4 schsio.4 scsi.4 sd.4 \
+	safte.4 sbus.4 schsio.4 scmi.4 scsi.4 sd.4 \
 	sdmmc.4 sdhc.4 se.4 ses.4 sf.4 sili.4 \
 	simpleamp.4 simpleaudio.4 simplefb.4 simplepanel.4 siop.4 sis.4 sk.4 \
-	sm.4 smsc.4 softraid.4 spdmem.4 sdtemp.4 speaker.4 sppp.4 sqphy.4 \
+	sm.4 smsc.4 sncodec.4 \
+	softraid.4 spdmem.4 sdtemp.4 speaker.4 sppp.4 sqphy.4 \
 	ssdfb.4 st.4 ste.4 stge.4 sti.4 stp.4 sv.4 sxiccmu.4 \
 	sxidog.4 sximmc.4 sxipio.4 sxipwm.4 sxirintc.4 sxirsb.4 sxirtc.4 \
 	sxisid.4 sxisyscon.4 sxitemp.4 sxitwi.4 sym.4 sypwr.4 syscon.4 \
@@ -93,7 +94,7 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	tun.4 tap.4 twe.4 \
 	txp.4 txphy.4 uaudio.4 uaq.4 uark.4 uath.4 ubcmtp.4 uberry.4 ubsa.4 \
 	ucc.4 ucom.4 uchcom.4 ucrcom.4 ucycom.4 ukspan.4 uslhcom.4 \
-	udav.4 udcf.4 udl.4 udp.4 udsbr.4 \
+	udav.4 udcf.4 udl.4 udp.4 udsbr.4 ufshci.4 \
 	uftdi.4 ugen.4 ugl.4 ugold.4 uguru.4 uhci.4 uhid.4 uhidev.4 uhidpp.4 \
 	uipaq.4 ujoy.4 uk.4 ukbd.4 \
 	ukphy.4 ulpt.4 umass.4 umb.4 umbg.4 umcs.4 umct.4 umidi.4 umodem.4 \

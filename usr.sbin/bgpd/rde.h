@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.h,v 1.281 2023/01/24 11:28:41 claudio Exp $ */
+/*	$OpenBSD: rde.h,v 1.283 2023/02/13 18:07:53 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Claudio Jeker <claudio@openbsd.org> and
@@ -79,6 +79,7 @@ struct rde_peer {
 	RB_ENTRY(rde_peer)		 entry;
 	SIMPLEQ_HEAD(, iq)		 imsg_queue;
 	struct peer_config		 conf;
+	struct rde_peer_stats		 stats;
 	struct bgpd_addr		 remote_addr;
 	struct bgpd_addr		 local_v4_addr;
 	struct bgpd_addr		 local_v6_addr;
@@ -88,17 +89,7 @@ struct rde_peer {
 	struct prefix_tree		 updates[AID_MAX];
 	struct prefix_tree		 withdraws[AID_MAX];
 	time_t				 staletime[AID_MAX];
-	uint64_t			 prefix_rcvd_update;
-	uint64_t			 prefix_rcvd_withdraw;
-	uint64_t			 prefix_rcvd_eor;
-	uint64_t			 prefix_sent_update;
-	uint64_t			 prefix_sent_withdraw;
-	uint64_t			 prefix_sent_eor;
-	uint32_t			 prefix_cnt;
-	uint32_t			 prefix_out_cnt;
 	uint32_t			 remote_bgpid; /* host byte order! */
-	uint32_t			 up_nlricnt;
-	uint32_t			 up_wcnt;
 	uint32_t			 path_id_tx;
 	enum peer_state			 state;
 	enum export_type		 export_type;
@@ -401,9 +392,6 @@ void		rde_pftable_add(uint16_t, struct prefix *);
 void		rde_pftable_del(uint16_t, struct prefix *);
 
 int		rde_evaluate_all(void);
-void		rde_generate_updates(struct rib *, struct prefix *,
-		    struct prefix *, struct prefix *, struct prefix *,
-		    enum eval_mode);
 uint32_t	rde_local_as(void);
 int		rde_decisionflags(void);
 void		rde_peer_send_rrefresh(struct rde_peer *, uint8_t, uint8_t);
@@ -420,6 +408,9 @@ void		 peer_foreach(void (*)(struct rde_peer *, void *), void *);
 struct rde_peer	*peer_get(uint32_t);
 struct rde_peer *peer_match(struct ctl_neighbor *, uint32_t);
 struct rde_peer	*peer_add(uint32_t, struct peer_config *);
+
+void		 rde_generate_updates(struct rib_entry *, struct prefix *,
+		    struct prefix *, enum eval_mode);
 
 void		 peer_up(struct rde_peer *, struct session_up *);
 void		 peer_down(struct rde_peer *, void *);
@@ -738,11 +729,11 @@ int		 nexthop_compare(struct nexthop *, struct nexthop *);
 /* rde_update.c */
 void		 up_init(struct rde_peer *);
 void		 up_generate_updates(struct filter_head *, struct rde_peer *,
-		    struct prefix *, struct prefix *);
+		    struct rib_entry *);
 void		 up_generate_addpath(struct filter_head *, struct rde_peer *,
-		    struct prefix *, struct prefix *);
+		    struct rib_entry *);
 void		 up_generate_addpath_all(struct filter_head *,
-		    struct rde_peer *, struct prefix *, struct prefix *,
+		    struct rde_peer *, struct rib_entry *, struct prefix *,
 		    struct prefix *);
 void		 up_generate_default(struct filter_head *, struct rde_peer *,
 		    uint8_t);

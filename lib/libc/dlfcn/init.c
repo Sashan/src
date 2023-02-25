@@ -1,4 +1,4 @@
-/*	$OpenBSD: init.c,v 1.12 2023/01/16 07:09:12 guenther Exp $ */
+/*	$OpenBSD: init.c,v 1.17 2023/02/24 16:30:19 deraadt Exp $ */
 /*
  * Copyright (c) 2014,2015 Philip Guenther <guenther@openbsd.org>
  *
@@ -35,6 +35,11 @@
 
 #include "init.h"
 
+#if defined(APIWARN)
+__warn_references(syscall,
+    "syscall() may go away, please rewrite code to use direct calls");
+#endif
+
 #define MAX(a,b)	(((a)>(b))?(a):(b))
 
 #ifdef TIB_EXTRA_ALIGN
@@ -70,6 +75,12 @@ extern Elf_Ehdr __executable_start[] __attribute__((weak));
 
 /* provide definitions for these */
 const dl_cb *_dl_cb __relro = NULL;
+
+int	pinsyscall(int, void *, size_t);
+PROTO_NORMAL(pinsyscall);
+
+int	HIDDEN(execve)(const char *, char *const *, char *const *)
+	__attribute__((weak));
 
 void _libc_preinit(int, char **, char **, dl_cb_cb *) __dso_hidden;
 void
@@ -135,8 +146,15 @@ _libc_preinit(int argc, char **argv, char **envp, dl_cb_cb *cb)
 	_static_phdr_info.dlpi_phnum = phnum;
 
 	/* static libc in a static link? */
-	if (cb == NULL)
+	if (cb == NULL) {
 		setup_static_tib(phdr, phnum);
+
+#if !defined(__hppa__)
+		/* XXX 128 maximum size of a system call stub, hopefully */
+		if (&HIDDEN(execve))
+			pinsyscall(SYS_execve, &HIDDEN(execve), 128);
+#endif
+	}
 
 	/*
 	 * If a static binary has text relocations (DT_TEXT), then un-writeable

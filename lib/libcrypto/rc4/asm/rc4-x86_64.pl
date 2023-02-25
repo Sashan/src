@@ -517,14 +517,14 @@ RC4_options:
 	add	\$12,%rax
 .Ldone:
 	ret
-.rodata
+.section .rodata
 .align	64
 .Lopts:
 .asciz	"rc4(8x,int)"
 .asciz	"rc4(8x,char)"
 .asciz	"rc4(16x,int)"
 .align	64
-.previous
+.text
 .size	RC4_options,.-RC4_options
 ___
 
