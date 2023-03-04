@@ -1923,8 +1923,6 @@ pf_tbladdr_copyout(struct pf_addr_wrap *aw)
 
 	if (aw->type != PF_ADDR_TABLE || kt == NULL)
 		return;
-	if (!(kt->pfrkt_flags & PFR_TFLAG_ACTIVE) && kt->pfrkt_root != NULL)
-		kt = kt->pfrkt_root;
 	aw->p.tbl = NULL;
 	aw->p.tblcnt = (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) ?
 		kt->pfrkt_cnt : -1;

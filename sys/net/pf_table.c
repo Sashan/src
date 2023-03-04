@@ -1537,6 +1537,21 @@ pfr_clr_tables(struct pfr_table *filter, int *ndel, int flags)
 int
 pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 {
+	/*
+	 * table insertion here should work as follows:
+	 *	find a ruleset where table should be
+	 *	attached to.
+	 *
+	 *	update rules in ruleset to make sure theyy
+	 *	refere to the table we've just attached. 
+	 *
+	 *	update rules in descendant ruleset so
+	 *	they refere to table here.
+	 *
+	 * The update process 
+	 */
+	return (0);
+#if 0
 	struct pfr_ktableworkq	 addq, changeq, auxq;
 	struct pfr_ktable	*p, *q, *r, *n, *w, key;
 	int			 i, rv, xadd = 0;
@@ -1562,36 +1577,6 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 		    (flags & PFR_FLAG_USERIOCTL? PR_WAITOK : PR_NOWAIT));
 		if (p == NULL)
 			senderr(ENOMEM);
-
-		/*
-		 * Note: we also pre-allocate a root table here. We keep it
-		 * at ->pfrkt_root, which we must not forget about.
-		 */
-		key.pfrkt_flags = 0;
-		memset(key.pfrkt_anchor, 0, sizeof(key.pfrkt_anchor));
-		p->pfrkt_root = pfr_create_ktable(&key.pfrkt_t, 0, 0,
-		    (flags & PFR_FLAG_USERIOCTL? PR_WAITOK : PR_NOWAIT));
-		if (p->pfrkt_root == NULL) {
-			pfr_destroy_ktable(p, 0);
-			senderr(ENOMEM);
-		}
-
-		SLIST_FOREACH(q, &auxq, pfrkt_workq) {
-			if (!pfr_ktable_compare(p, q)) {
-				/*
-				 * We need no lock here, because `p` is empty,
-				 * there are no rules or shadow tables
-				 * attached.
-				 */
-				pfr_destroy_ktable(p->pfrkt_root, 0);
-				p->pfrkt_root = NULL;
-				pfr_destroy_ktable(p, 0);
-				p = NULL;
-				break;
-			}
-		}
-		if (q != NULL)
-			continue;
 
 		SLIST_INSERT_HEAD(&auxq, p, pfrkt_workq);
 	}
@@ -1638,39 +1623,6 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 			}
 			p->pfrkt_rs->anchor->tables++;
 
-			if (!p->pfrkt_anchor[0]) {
-				q = p->pfrkt_root;
-				p->pfrkt_root = NULL;
-				SLIST_INSERT_HEAD(&auxq, q, pfrkt_workq);
-				continue;
-			}
-
-			/* use pre-allocated root table as a key */
-			q = p->pfrkt_root;
-			p->pfrkt_root = NULL;
-			r = RB_FIND(pfr_ktablehead, &pfr_ktables, q);
-			if (r != NULL) {
-				p->pfrkt_root = r;
-				SLIST_INSERT_HEAD(&auxq, q, pfrkt_workq);
-				continue;
-			}
-			/*
-			 * there is a chance we could create root table in
-			 * earlier iteration. such table may exist in addq only
-			 * then.
-			 */
-			SLIST_FOREACH(r, &addq, pfrkt_workq) {
-				if (!pfr_ktable_compare(r, q)) {
-					/*
-					 * `r` is our root table we've found
-					 * earlier, `q` can get dropped.
-					 */
-					p->pfrkt_root = r;
-					SLIST_INSERT_HEAD(&auxq, q,
-					    pfrkt_workq);
-					break;
-				}
-			}
 			if (r != NULL)
 				continue;
 
@@ -1702,6 +1654,7 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 _bad:
 	pfr_destroy_ktables_aux(&auxq);
 	return (rv);
+#endif
 }
 
 int
@@ -1902,6 +1855,20 @@ int
 pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
     struct pfr_addr *addr, int size, int *nadd, int *naddr, int flags)
 {
+	/*
+	 * Tables are attached to anchors there is no global table tree.
+	 * We must update also anchors in our sub-tree. The update
+	 * rule is as follows:
+	 *	if anchor has table with the same name attached, then
+	 *	skip. no update is required
+	 *
+	 *	if anchor does not define table with the same name
+	 *	but rules refer (have attached) table with the same name,
+	 *	then we must update those rules. The rules refer to our
+	 *	parent.
+	 */
+	return (0);
+#if 0
 	struct pfr_ktableworkq	 tableq;
 	struct pfr_kentryworkq	 addrq;
 	struct pfr_ktable	*kt, *rt, key;
@@ -1932,7 +1899,6 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		SLIST_INSERT_HEAD(&tableq, kt, pfrkt_workq);
 		kt->pfrkt_version = pfr_get_ktable_version(kt);
 		kt->pfrkt_rs = rs;
-		rs->tables++;
 		xadd++;
 		if (!tbl->pfrt_anchor[0])
 			goto _skip;
@@ -1940,17 +1906,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		/* find or create root table */
 		bzero(&key, sizeof(key));
 		strlcpy(key.pfrkt_name, tbl->pfrt_name, sizeof(key.pfrkt_name));
-		rt = RB_FIND(pfr_ktablehead, &t->rc.ktables, &key);
-		if (rt != NULL) {
-			kt->pfrkt_root = rt;
-			goto _skip;
-		}
-		rt = pfr_create_ktable(&key.pfrkt_t, 0, 0, PR_WAITOK);
-		SLIST_INSERT_HEAD(&tableq, rt, pfrkt_workq);
-		kt->pfrkt_root = rt;
-		kt->pfrkt_version = pfr_get_ktable_version(kt);
-		kt->pfrkt_rs = rs;
-		rs->tables++;
+		rt = RB_FIND(pfr_ktablehead, &a->ktables, &key);
 	} else {
 		/*
 		 * Note 1:
@@ -2014,6 +1970,7 @@ _skip:
 _bad:
 	pfr_destroy_ktables(&tableq, 1);
 	return (rv);
+#endif
 }
 
 int
@@ -2232,10 +2189,6 @@ pfr_insert_ktable(struct pf_rules_container *rc, struct pfr_ktable *kt)
 	RB_INSERT(pfr_ktablehead, &rs->anchor->ktables, kt);
 	/* we should bump counter with commit */
 	pfr_ktable_cnt++;
-	if (kt->pfrkt_root != NULL)
-		if (!kt->pfrkt_root->pfrkt_refcnt[PFR_REFCNT_ANCHOR]++)
-			pfr_setflags_ktable(kt->pfrkt_root,
-			    kt->pfrkt_root->pfrkt_flags|PFR_TFLAG_REFDANCHOR);
 }
 
 void
@@ -2260,6 +2213,15 @@ pfr_setflags_ktable(struct pfr_ktable *kt, int newf)
 	if (!(newf & PFR_TFLAG_ACTIVE))
 		newf &= ~PFR_TFLAG_USRMASK;
 	if (!(newf & PFR_TFLAG_SETMASK)) {
+#if 0
+	/*
+	 * I'm not entirely sure how to implement setflags. The setflags
+	 * currently helps us to identify table which should be removed
+	 * after commit. We want to remove tables which are not referred
+	 * by any rule and which were not created on behalf of
+	 * pfr_add_tables(). I still need to check 'pfr_add_tables()'
+	 * situation.
+	 */
 		RB_REMOVE(pfr_ktablehead, &pfr_ktables, kt);
 		if (kt->pfrkt_root != NULL)
 			if (!--kt->pfrkt_root->pfrkt_refcnt[PFR_REFCNT_ANCHOR])
@@ -2268,6 +2230,7 @@ pfr_setflags_ktable(struct pfr_ktable *kt, int newf)
 					~PFR_TFLAG_REFDANCHOR);
 		pfr_destroy_ktable(kt, 1);
 		pfr_ktable_cnt--;
+#endif
 		return;
 	}
 	if (!(newf & PFR_TFLAG_ACTIVE) && kt->pfrkt_cnt) {
@@ -2363,17 +2326,6 @@ pfr_destroy_ktables_aux(struct pfr_ktableworkq *auxq)
 
 	while ((p = SLIST_FIRST(auxq)) != NULL) {
 		SLIST_REMOVE_HEAD(auxq, pfrkt_workq);
-		/*
-		 * There must be no extra data (rules, shadow tables, ...)
-		 * attached, because auxq holds just empty memory to be
-		 * initialized. Therefore we can also be called with no lock.
-		 */
-		if (p->pfrkt_root != NULL) {
-			KASSERT(p->pfrkt_root->pfrkt_rs == NULL);
-			KASSERT(p->pfrkt_root->pfrkt_root == NULL);
-			pfr_destroy_ktable(p->pfrkt_root, 0);
-			p->pfrkt_root = NULL;
-		}
 		KASSERT(p->pfrkt_rs == NULL);
 		pfr_destroy_ktable(p, 0);
 	}
@@ -2905,8 +2857,6 @@ pfr_ktable_winfo_update(struct pfr_ktable *kt, struct pfr_kentry *p) {
 struct pfr_ktable *
 pfr_ktable_select_active(struct pfr_ktable *kt)
 {
-	if (!(kt->pfrkt_flags & PFR_TFLAG_ACTIVE) && kt->pfrkt_root != NULL)
-		kt = kt->pfrkt_root;
 	if (!(kt->pfrkt_flags & PFR_TFLAG_ACTIVE))
 		return (NULL);
 
