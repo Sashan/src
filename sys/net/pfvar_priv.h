@@ -420,6 +420,8 @@ extern void		 pfr_destroy_ktable(struct pfr_ktable *, int);
 extern struct pfr_ktable
 			*pfr_lookup_table(struct pf_anchor *,
 			    struct pfr_table *);
+extern void pf_rs_walk_to_leaf(struct pf_anchor *,
+			    int (*)(struct pf_anchor *, void *), void *);
 RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 #endif /* _KERNEL */
 

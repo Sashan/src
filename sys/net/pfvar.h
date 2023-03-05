@@ -1019,6 +1019,7 @@ RB_HEAD(pf_anchor_node, pf_anchor);
 struct pf_anchor {
 	RB_ENTRY(pf_anchor)	 entry_global;
 	RB_ENTRY(pf_anchor)	 entry_node;
+	TAILQ_ENTRY(pf_anchor)	 entry_stack;
 	struct pf_anchor	*parent;
 	struct pf_anchor_node	 children;
 	char			 name[PF_ANCHOR_NAME_SIZE];
