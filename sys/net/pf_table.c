@@ -255,7 +255,9 @@ pfr_clr_addrs(struct pfr_table *tbl, int *ndel, int flags)
 		return (EINVAL);
 	PF_ASSERT_LOCKED();
 	rs = pf_find_ruleset(&pf_global, tbl->pfrt_anchor);
-	kt = pfr_lookup_table(rs->anchor, tbl);
+	if (rs == NULL)
+		return (ESRCH);
+	kt = pfr_lookup_table(PF_SAFE_ANCHOR(rs), tbl);
 	if (kt == NULL || !(kt->pfrkt_flags & PFR_TFLAG_ACTIVE))
 		return (ESRCH);
 	if (kt->pfrkt_flags & PFR_TFLAG_CONST)
@@ -1856,6 +1858,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
     struct pfr_addr *addr, int size, int *nadd, int *naddr, int flags)
 {
 	/*
+	 * this is a plan for merge.
 	 * Tables are attached to anchors there is no global table tree.
 	 * We must update also anchors in our sub-tree. The update
 	 * rule is as follows:
@@ -1867,8 +1870,6 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 	 *	then we must update those rules. The rules refer to our
 	 *	parent.
 	 */
-	return (0);
-#if 0
 	struct pfr_ktableworkq	 tableq;
 	struct pfr_kentryworkq	 addrq;
 	struct pfr_ktable	*kt, *rt, key;
@@ -1970,7 +1971,40 @@ _skip:
 _bad:
 	pfr_destroy_ktables(&tableq, 1);
 	return (rv);
-#endif
+}
+
+/*
+ * this callback is invoked from pf_rs_walk_to_leaf() as it descents
+ * towards leaf. We want to stop descent (return (1)) as soon as we find
+ * table with the same name defined at anchor's `a` desendant.
+ * If descendant does not define table with the same name, then we
+ * want to walk all rules and update any references to same named table
+ * so anchor rules will be using closest parent's (ancestor's)  table.
+ */
+int
+pfr_update_rs(struct pf_anchor *a, void *table)
+{
+	struct pfr_ktable *t = table;
+	struct pf_ruleset *rs = &a->ruleset;
+	struct pf_rule *r;
+	int rv;
+
+	if (RB_FIND(pfr_ktablehead, &a->ktables, t) == NULL) {
+		TAILQ_FOREACH(r, rs->rules.ptr, entries) {
+			if (PF_MATCH_KTABLE(&r->src.addr, t))
+				PF_UPDATE_KTABLE(&r->src.addr, t);
+			if (PF_MATCH_KTABLE(&r->dst.addr, t))
+				PF_UPDATE_KTABLE(&r->dst.addr, t);
+			if (PF_MATCH_KTABLE(&r->nat.addr, t))
+				PF_UPDATE_KTABLE(&r->nat.addr, t);
+			if (PF_MATCH_KTABLE(&r->rdr.addr, t))
+				PF_UPDATE_KTABLE(&r->rdr.addr, t);
+		}
+		rv = 0;
+	} else
+		rv = 1;
+
+	return (rv);
 }
 
 int

@@ -183,6 +183,13 @@ struct pf_addr {
 #define PFI_AFLAG_MODEMASK	0x07
 #define PFI_AFLAG_NOALIAS	0x08
 
+#define PF_MATCH_KTABLE(_aw_, _kt_)		\
+	(((_aw_)->type == PF_ADDR_TABLE) &&	\
+	(strcmp((_aw_)->p.tbl->pfrkt_name, (_kt_)->pfrkt_name) == 0))
+
+#define PF_UPDATE_KTABLE(_aw_, _kt_)		\
+	(_aw_)->p.tbl = (_kt_)
+
 struct pf_addr_wrap {
 	union {
 		struct {
@@ -1013,6 +1020,9 @@ struct pf_ruleset {
 	}			 rules;
 	struct pf_anchor	*anchor;
 };
+
+#define PF_SAFE_ANCHOR(_rs_)	\
+	(((_rs_)->anchor == NULL) ? &pf_main_anchor : (_rs_)->anchor)
 
 RB_HEAD(pf_anchor_global, pf_anchor);
 RB_HEAD(pf_anchor_node, pf_anchor);

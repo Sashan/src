@@ -558,9 +558,8 @@ pf_begin_rules(struct pf_trans *t, const char *anchor)
 
 	rs->rules.version = pf_get_ruleset_version(
 	    (rs == &t->rc.main_anchor.ruleset) ? "" : rs->anchor->path);
-	log(LOG_ERR, "%s @ %d version: %d, %s vs. %s\n",
-	    __func__, __LINE__, rs->rules.version, anchor,
-	    (rs == &t->rc.main_anchor.ruleset) ? "" : rs->anchor->path);
+	log(LOG_DEBUG, "%s %s version: %d\n", __func__, anchor,
+	    rs->rules.version);
 
 	return (0);
 }
@@ -1068,14 +1067,15 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 		 * Child is referred by main ruleset, then move it
 		 * to global main ruleset.
 		 */
-		log(LOG_ERR, "%s parent for %s is a main anchor %p\n", __func__, child->path, child);
+		log(LOG_DEBUG, "%s parent for %s is a main anchor %p\n",
+		    __func__, child->path, child);
 		RB_REMOVE(pf_anchor_node, &t->rc.main_anchor.children, child);
 		parent_g = RB_INSERT(pf_anchor_node,
 		    &pf_global.main_anchor.children, child);
 		KASSERT(parent_g == NULL);
 		return;
 	} else if (child->parent == &pf_global.main_anchor) {
-		log(LOG_ERR, "%s leaf -> root path complete\n", __func__);
+		log(LOG_DEBUG, "%s leaf -> root path complete\n", __func__);
 		return;
 	} else {
 		parent_g = RB_FIND(pf_anchor_global, &pf_global.anchors,
@@ -1086,12 +1086,14 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 			 * parent does not exist in global ruleset yet,
 			 * then move the parent there with its children too.
 			 */
-			log(LOG_ERR, "%s move parent to global %s %p\n", __func__, child->path, child);
+			log(LOG_DEBUG, "%s move parent to global %s %p\n",
+			    __func__, child->path, child);
 			RB_REMOVE(pf_anchor_global, &t->rc.anchors, child->parent);
 			(void) RB_INSERT(pf_anchor_global, &pf_global.anchors,
 			    child->parent);
 		} else {
-			log(LOG_ERR, "%s parent exists in global %s %p\n", __func__, child->path, child);
+			log(LOG_DEBUG, "%s parent exists in global %s %p\n",
+			    __func__, child->path, child);
 			parent_t = RB_FIND(pf_anchor_global, &t->rc.anchors,
 			    child->parent);
 			/*
@@ -1126,11 +1128,13 @@ pf_update_anchor(struct pf_anchor *a, struct pf_trans *t)
 
 	rs = pf_find_ruleset(&pf_global, a->path);
 	if (rs != NULL) {
-		log(LOG_ERR, "%s found parent %p (%s)\n", __func__,  rs, rs->anchor->path);
+		log(LOG_DEBUG, "%s found parent %p (%s)\n", __func__,  rs,
+		    rs->anchor->path);
 		pf_swap_ruleset(rs, &a->ruleset, t);
 	} else if ((rs = pf_find_ruleset(&t->rc, a->path)) != NULL) {
 		KASSERT(rs == &a->ruleset);
-		log(LOG_ERR, "%s no parrent found in global %p (%s)\n", __func__,  rs, rs->anchor->path);
+		log(LOG_DEBUG, "%s no parrent found in global %p (%s)\n",
+		    __func__,  rs, rs->anchor->path);
 		/*
 		 * anchor not found in global tree, so we will move
 		 * the anchor/ruleset from transaction to global tree.
@@ -1145,11 +1149,13 @@ pf_update_anchor(struct pf_anchor *a, struct pf_trans *t)
 		}
 
 		if (rs->anchor->parent != NULL) {
-			log(LOG_ERR, "%s going to update parent children %p (%s)\n", __func__, rs->anchor, rs->anchor->path);
+			log(LOG_DEBUG,
+			    "%s going to update parent children %p (%s)\n",
+			    __func__, rs->anchor, rs->anchor->path);
 			pf_update_parent(rs->anchor, t);
 		}
 	} else {
-		panic("%s anchor (%s\\%s) [%p] not found\n", __func__, a->name,
+		panic("%s anchor (%s\\%s) [%p] not found", __func__, a->name,
 		    a->path, a);
 	}
 }
@@ -1166,11 +1172,14 @@ pf_remove_orphans(struct pf_trans *t)
 	TAILQ_FOREACH(r, t->rc.main_anchor.ruleset.rules.ptr, entries) {
 		if (r->anchor != NULL) {
 			r->anchor->refcnt--;
-			log(LOG_ERR, "%s:%d removing %s (refcnt: %d, rules are %s empty, children are %s empty, tables: %d\n",
-				__func__, __LINE__, r->anchor->path, r->anchor->refcnt,
-				TAILQ_EMPTY(r->anchor->ruleset.rules.ptr) ? "" : "not",
-				RB_EMPTY(&r->anchor->children) ? "" : "not",
-				r->anchor->tables);
+			log(LOG_DEBUG,
+			    "%s (TAILQ) removing %s (refcnt: %d, rules are %s "
+			    "empty, children are %s empty, tables: %d\n",
+			    __func__, r->anchor->path, r->anchor->refcnt,
+			    TAILQ_EMPTY(r->anchor->ruleset.rules.ptr) ? 
+				"" : "not",
+			    RB_EMPTY(&r->anchor->children) ? "" : "not",
+			    r->anchor->tables);
 			pf_remove_if_empty_ruleset(&pf_global,
 			    &r->anchor->ruleset);
 			r->anchor = NULL;
@@ -1181,9 +1190,13 @@ pf_remove_orphans(struct pf_trans *t)
 		TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
 			if (r->anchor != NULL) {
 				r->anchor->refcnt--;
-				log(LOG_ERR, "%s:%d removing %s (refcnt: %d, rules are %s empty, children are %s empty, tables: %d\n",
-				    __func__, __LINE__, r->anchor->path, r->anchor->refcnt,
-				    TAILQ_EMPTY(r->anchor->ruleset.rules.ptr) ? "" : "not",
+				log(LOG_DEBUG,
+				    "%s (RB_FOREEACH) removing %s (refcnt: %d, "
+				    "rules are %s empty, children are %s empty,"
+				    " tables: %d\n", __func__, r->anchor->path,
+				    r->anchor->refcnt,
+				    TAILQ_EMPTY(r->anchor->ruleset.rules.ptr) ?
+					"" : "not",
 				    RB_EMPTY(&r->anchor->children) ? "" : "not",
 				    r->anchor->tables);
 				pf_remove_if_empty_ruleset(&pf_global,
@@ -1193,9 +1206,12 @@ pf_remove_orphans(struct pf_trans *t)
 		}
 		g = RB_FIND(pf_anchor_global, &pf_global.anchors, a);
 		if (g != NULL) {
-			log(LOG_ERR, "%s:%d removing %s (refcnt: %d, rules are %s empty, children are %s empty, tables: %d\n",
-			    __func__, __LINE__, g->path, g->refcnt,
-			    TAILQ_EMPTY(g->ruleset.rules.ptr) ? "" : "not",
+			log(LOG_DEBUG,
+			    "%s (RB_FIND) removing %s (refcnt: %d, rules are "
+			    "%s empty, children are %s empty, tables: %d\n",
+			    __func__, g->path, g->refcnt,
+			    TAILQ_EMPTY(g->ruleset.rules.ptr) ?
+				"" : "not",
 			    RB_EMPTY(&g->children) ? "" : "not",
 			    g->ruleset.anchor->tables);
 			pf_remove_if_empty_ruleset(&pf_global, &g->ruleset);
@@ -1214,7 +1230,7 @@ pf_swap_ruleset(struct pf_ruleset *grs, struct pf_ruleset *trs,
 
 	KASSERT(grs->rules.version == trs->rules.version);
 
-	log(LOG_ERR, "-> %s\n", __func__);
+	log(LOG_DEBUG, "-> %s\n", __func__);
 	pf_init_ruleset(&tmp);
 	tmp.rules.rcount = trs->rules.rcount;
 	TAILQ_CONCAT(tmp.rules.ptr, trs->rules.ptr, entries);
@@ -1255,7 +1271,7 @@ pf_swap_ruleset(struct pf_ruleset *grs, struct pf_ruleset *trs,
 		if (r->anchor != NULL)
 			pf_update_anchor(r->anchor, t);
 	}
-	log(LOG_ERR, "<- %s\n", __func__);
+	log(LOG_DEBUG, "<- %s\n", __func__);
 }
 
 const char *
@@ -1519,6 +1535,73 @@ pfioctl_name(u_long cmd)
 		return ("UNKNOWN");
 
 	return (ioctl_tab[i].cmd_name);
+}
+
+int
+pf_check_version(struct pf_trans *t)
+{
+	u_int32_t		 version;
+	struct pf_ruleset	*rs;
+	struct pfr_ktable	*tkt, *kt;
+	struct pf_anchor	*ta;
+	int			 bailout = 0;
+
+	RB_FOREACH(ta, pf_anchor_global, &t->rc.anchors) {
+		version = ta->ruleset.rules.version;
+		rs = pf_find_ruleset(&pf_global, ta->path);
+		if (rs != NULL)
+			bailout = (version != rs->rules.version);
+		else
+			bailout = (version != 0);
+
+		if (bailout != 0) {
+			log(LOG_DEBUG, "%s: %s (rs: %p) tversion: %d "
+			    "vs. version: %d\n", __func__, ta->path, rs,
+			    version, (rs == NULL) ? 0 : rs->rules.version);
+			break;
+		} else if (rs == NULL) {
+			RB_FOREACH(tkt, pfr_ktablehead, &ta->ktables) {
+				if (tkt->pfrkt_version != 0)
+					break;
+			}
+			if (tkt != NULL) {
+				log(LOG_DEBUG, "%s: %s@%s version %d while "
+				    "expecting 0\n", __func__, tkt->pfrkt_name,
+				    ta->path, tkt->pfrkt_version);
+				bailout = 1;
+				/* break from RB_FOREACH(t->rc.anchors) */
+				break;
+			}
+		} else {
+			RB_FOREACH(tkt, pfr_ktablehead, &rs->anchor->ktables) {
+				version = tkt->pfrkt_version;
+				kt = pfr_lookup_table(PF_SAFE_ANCHOR(rs),
+				    (struct pfr_table *)tkt);
+				if (kt == NULL) {
+					if (version != 0) {
+						log(LOG_DEBUG, "%s: %s@%s "
+						    "version %d != 0\n",
+						    __func__, tkt->pfrkt_name,
+						    tkt->pfrkt_anchor, version);
+						bailout = 1;
+						break;
+					}
+				} else if (kt->pfrkt_version != version) {
+					log(LOG_DEBUG,
+					    "%s: %s@%s version %d != %d\n",
+					    __func__, tkt->pfrkt_name,
+					    tkt->pfrkt_anchor, version,
+					    kt->pfrkt_version);
+					bailout = 1;
+					break;
+				}
+			}
+			if (bailout != 0)
+				break;
+		}
+	}
+
+	return (bailout);
 }
 
 int
@@ -2528,7 +2611,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if ((io->esize != sizeof(pt)) || (io->size != 1)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCSETTIMEOUT\n", __func__);
+			log(LOG_DEBUG, "%s DIOCSETTIMEOUT\n", __func__);
 			goto fail;
 		}
 
@@ -2595,13 +2678,15 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->esize != sizeof(pl) || io->size != 1) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCSETLIMIT\n", __func__);
+			log(LOG_DEBUG, "%s DIOCSETLIMIT\n", __func__);
 			goto fail;
 		}
 
 		t = pf_find_trans(io->ticket);
 		if (t == NULL || t->pid != p->p_p->ps_pid) {
-			log(LOG_ERR, "%s DIOCSETLIMIT no transaction for %llu\n", __func__, io->ticket);
+			log(LOG_DEBUG,
+			    "%s DIOCSETLIMIT no transaction for %llu\n",
+			    __func__, io->ticket);
 			error = ENXIO;
 			goto fail;
 		}
@@ -2650,7 +2735,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->esize != sizeof(level) || io->size != 1) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCSETDEBUG\n", __func__);
+			log(LOG_DEBUG, "%s DIOCSETDEBUG\n", __func__);
 			goto fail;
 		}
 
@@ -2747,7 +2832,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != 0) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRCLRTABLES\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRCLRTABLES\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2764,7 +2849,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRADDTABLES\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRADDTABLES\n", __func__);
 			goto fail;
 		}
 		error = pfr_add_tables(io->pfrio_buffer, io->pfrio_size,
@@ -2777,7 +2862,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRDELTABLES\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRDELTABLES\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2794,7 +2879,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRGETTABLES\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRGETTABLES\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2811,7 +2896,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_tstats)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRGETTSTATS\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRGETTSTATS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2828,7 +2913,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRCLRTSTATS\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRCLRTSTATS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2845,7 +2930,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRSETTFLAGS\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRSETTFLAGS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2863,7 +2948,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != 0) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRCLRADDRS\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRCLRADDRS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2880,7 +2965,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRADDADDRS\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRADDADDRS\n", __func__);
 			goto fail;
 		}
 		error = pfr_add_addrs(&io->pfrio_table, io->pfrio_buffer,
@@ -2894,7 +2979,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRDELADDRS\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRDELADDRS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2912,7 +2997,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRSETADDRS\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRSETADDRS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2931,7 +3016,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRGETADDRS\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRGETADDRS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2948,7 +3033,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_astats)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRGETASTATS\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRGETASTATS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2965,7 +3050,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRCLRASTATS\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRCLRASTATS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -2983,7 +3068,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRTSTADDRS\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRTSTADDRS\n", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -3002,7 +3087,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRINADEFINE\n", __func__);
+			log(LOG_DEBUG, "%s DIOCRINADEFINE\n", __func__);
 			goto fail;
 		}
 
@@ -3039,7 +3124,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->esize != sizeof(*ioe)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCRULESET %d != %lu\n", __func__,
+			log(LOG_DEBUG, "%s DIOCRULESET %d != %lu\n", __func__,
 			    io->esize, sizeof(*ioe));
 			goto fail;
 		}
@@ -3091,7 +3176,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 		free(table, M_TEMP, sizeof(*table));
 		free(ioe, M_TEMP, sizeof(*ioe));
-		log(LOG_ERR, "%s %s is done\n", __func__, pfioctl_name(cmd));
+		log(LOG_DEBUG, "%s %s is done\n", __func__, pfioctl_name(cmd));
 
 		break;
 	}
@@ -3131,13 +3216,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pf_trans		*t;
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pf_ruleset	*rs;
-		struct pf_anchor	*ta;
-/*
-		struct pfr_ktable	*tkt, *kt;
-*/
+		u_int32_t		 version;
 		struct pool		*pp;
 		int			 i, bailout = 0;
-		u_int32_t		 version;
 
 		/*
 		 * XXX
@@ -3161,7 +3242,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			    (version != pf_main_ruleset.rules.version));
 		}
 
-		log(LOG_ERR, "%s:%s @ %d bailout: %d\n", __func__, pfioctl_name(cmd), __LINE__, bailout);
+		log(LOG_DEBUG, "%s:%s (main_ruleset) bailout: %d\n", __func__,
+		    pfioctl_name(cmd), bailout);
 		/* check if defaults can be modified/updated */
 		if (bailout == 0 && t->modify_defaults) {
 			bailout = (t->default_vers != pf_default_vers);
@@ -3179,32 +3261,21 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			}
 		}
 
+		log(LOG_DEBUG, "%s:%s (defaults) bailout == %d\n", __func__,
+		    pfioctl_name(cmd), bailout);
+		if (bailout != 0) {
+			error = EBUSY;
+			goto fail;
+		}
+
 		/*
 		 * check ruleset versions in transaction to match versions
 		 * found in global table. We let transaction to fail on the
 		 * first mismatch.
 		 */
-		log(LOG_ERR, "%s:%s @ %d bailout == %d\n", __func__, pfioctl_name(cmd), __LINE__, bailout);
-		if (bailout == 0) {
-			RB_FOREACH(ta, pf_anchor_global, &t->rc.anchors) {
-				version = ta->ruleset.rules.version;
-				rs = pf_find_ruleset(&pf_global, ta->path);
-			    	if (rs != NULL)
-					bailout =
-					    (version != rs->rules.version);
-				else
-					bailout = (version != 0);
-
-				if (bailout != 0) {
-					log(LOG_ERR, "%s:%s @ %d %s (rs: %p) tversion: %d vs. version: %d\n",
-					    __func__, pfioctl_name(cmd), __LINE__, ta->path, rs, version,
-					    (rs == NULL) ? 0 : rs->rules.version);
-					break;
-				}
-			}
-		}
-
-		log(LOG_ERR, "%s:%s @ %d bailout == %d\n", __func__, pfioctl_name(cmd), __LINE__, bailout);
+		bailout = pf_check_version(t);
+		log(LOG_DEBUG, "%s:%s (anchors & tables) bailout == %d\n",
+		    __func__, pfioctl_name(cmd), bailout);
 
 		PF_UNLOCK();
 		NET_UNLOCK();
@@ -3219,7 +3290,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		 */
 		NET_LOCK();
 		PF_LOCK();
-		log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 		if (t->anchor_path[0] == '\0') {
 				/*
 				 * TODO: handle tables:
@@ -3231,7 +3301,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			pf_swap_ruleset(&pf_main_ruleset,
 			    &t->rc.main_anchor.ruleset, t);
 		} else {
-			log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 			rs = pf_find_ruleset(&t->rc, t->anchor_path);
 			if (rs == NULL) {
 				error = ENOENT;
@@ -3239,7 +3308,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			}
 			pf_update_anchor(rs->anchor, t);
 		}
-		log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 
 		if (t->modify_defaults) {
 			/*
@@ -3300,7 +3368,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		 * use rollback to release stuff which became invalidated.
 		 */
 		pf_rollback_trans(t);
-		log(LOG_ERR, "%s:%s @ %d\n", __func__, pfioctl_name(cmd), __LINE__);
 		break;
 	}
 
@@ -3435,7 +3502,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->esize != sizeof(hostid) || io->size != 1) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCSETHOSTID\n", __func__);
+			log(LOG_DEBUG, "%s DIOCSETHOSTID\n", __func__);
 			goto fail;
 		}
 
@@ -3472,7 +3539,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfiio_esize != sizeof(struct pfi_kif)) {
 			error = ENODEV;
-			log(LOG_ERR, "%s DIOCIGETIFACES\n", __func__);
+			log(LOG_DEBUG, "%s DIOCIGETIFACES\n", __func__);
 			goto fail;
 		}
 
@@ -3589,7 +3656,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	default:
 		error = ENODEV;
-		log(LOG_ERR, "%s default [ %s (%lx) ]\n", __func__,
+		log(LOG_DEBUG, "%s default [ %s (%lx) ]\n", __func__,
 		    pfioctl_name(cmd), cmd);
 		break;
 	}
