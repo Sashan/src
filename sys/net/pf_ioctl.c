@@ -1228,6 +1228,36 @@ pf_swap_ruleset(struct pf_ruleset *grs, struct pf_ruleset *trs,
 	u_int32_t tables;
 	struct pf_rule *r;
 
+	/*
+	 * This function also must update table. Table may
+	 * be attached to anchor which owns ruleset `trs`,
+	 * in this case we just swap tables like we swap
+	 * rules.
+	 *
+	 * If table is not attached to ruleset `trs` then
+	 * we must traverse ruleset tree towards rule
+	 * and find desired table with the same name.
+	 * We should just make sure rules refer to table
+	 * we found in global ruleset. And we should also
+	 * check the version number. We should panic
+	 * if version is not same.
+	 *
+	 * Note: the rules in transaction are traversed
+	 * from root to leaf. So if table is not attached
+	 * to `trs` anchor then it must be found in
+	 * the top.
+	 *
+	 * Alternative strategy to update table:
+	 * 	swap/add table in global ruleset
+	 *	with table found at anchor.
+	 *
+	 *	update descendants in global ruleset
+	 *	as well in transaction tree.
+	 *	then we don't need to bother later
+	 *	because rules will be up-to-date
+	 *	once we reach them..
+	 */
+
 	KASSERT(grs->rules.version == trs->rules.version);
 
 	log(LOG_DEBUG, "-> %s\n", __func__);
@@ -3232,7 +3262,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		/* first make sure everything will succeed */
-		
 		NET_LOCK();
 		PF_LOCK();	/* the first pass can be r-lock */
 
@@ -3263,22 +3292,21 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		log(LOG_DEBUG, "%s:%s (defaults) bailout == %d\n", __func__,
 		    pfioctl_name(cmd), bailout);
-		if (bailout != 0) {
-			error = EBUSY;
-			goto fail;
-		}
-
 		/*
 		 * check ruleset versions in transaction to match versions
 		 * found in global table. We let transaction to fail on the
 		 * first mismatch.
 		 */
-		bailout = pf_check_version(t);
-		log(LOG_DEBUG, "%s:%s (anchors & tables) bailout == %d\n",
-		    __func__, pfioctl_name(cmd), bailout);
+		if (bailout == 0) {
+			bailout = pf_check_version(t);
+			log(LOG_DEBUG,
+			    "%s:%s (anchors & tables) bailout == %d\n",
+			    __func__, pfioctl_name(cmd), bailout);
+		}
 
 		PF_UNLOCK();
 		NET_UNLOCK();
+
 		if (bailout != 0) {
 			error = EBUSY;
 			goto fail;
@@ -3291,13 +3319,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		NET_LOCK();
 		PF_LOCK();
 		if (t->anchor_path[0] == '\0') {
-				/*
-				 * TODO: handle tables:
-				 *	drop/clean all tables which are
-				 *	attached to main ruleset
-				 *
-				 *	attach new tables
-				 */
 			pf_swap_ruleset(&pf_main_ruleset,
 			    &t->rc.main_anchor.ruleset, t);
 		} else {
