@@ -1,4 +1,4 @@
-#	$OpenBSD: files.fdt,v 1.179 2023/02/14 08:26:59 kettenis Exp $
+#	$OpenBSD: files.fdt,v 1.182 2023/03/19 11:17:16 kettenis Exp $
 #
 # Config file and device description for machine-independent FDT code.
 # Included by ports that need it.
@@ -341,6 +341,10 @@ device	rkclock
 attach	rkclock at fdt
 file	dev/fdt/rkclock.c		rkclock
 
+device	rkcomphy
+attach	rkcomphy at fdt
+file	dev/fdt/rkcomphy.c		rkcomphy
+
 device	rkdrm: drmbase, wsemuldisplaydev, rasops15, rasops16, rasops24, rasops32
 attach	rkdrm at fdt
 file	dev/fdt/rkdrm.c				rkdrm
@@ -374,17 +378,21 @@ device	rkiis
 attach	rkiis at fdt
 file	dev/fdt/rkiis.c			rkiis
 
-device	rkpmic
-attach	rkpmic at i2c
-file	dev/fdt/rkpmic.c		rkpmic
+device	rkpcie: pcibus
+attach	rkpcie at fdt
+file	dev/fdt/rkpcie.c		rkpcie
+
+device	rkpciephy
+attach	rkpciephy at fdt
+file	dev/fdt/rkpciephy.c		rkpciephy
 
 device	rkpinctrl: fdt
 attach	rkpinctrl at fdt
 file	dev/fdt/rkpinctrl.c		rkpinctrl
 
-device	rkpcie: pcibus
-attach	rkpcie at fdt
-file	dev/fdt/rkpcie.c		rkpcie
+device	rkpmic
+attach	rkpmic at i2c
+file	dev/fdt/rkpmic.c		rkpmic
 
 device	rkpwm
 attach	rkpwm at fdt

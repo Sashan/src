@@ -1,4 +1,4 @@
-/*	$OpenBSD: geofeed.c,v 1.10 2022/12/28 13:21:11 tb Exp $ */
+/*	$OpenBSD: geofeed.c,v 1.13 2023/03/10 12:44:56 job Exp $ */
 /*
  * Copyright (c) 2022 Job Snijders <job@fastly.com>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -110,7 +110,6 @@ geofeed_parse(X509 **x509, const char *fn, char *buf, size_t len)
 	size_t		 b64sz = 0;
 	unsigned char	*der = NULL;
 	size_t		 dersz;
-	const ASN1_TIME	*at;
 	struct cert	*cert = NULL;
 	int		 rpki_signature_seen = 0, end_signature_seen = 0;
 	int		 rc = 0;
@@ -233,7 +232,7 @@ geofeed_parse(X509 **x509, const char *fn, char *buf, size_t len)
 	}
 
 	if (!cms_parse_validate_detached(x509, fn, der, dersz, geofeed_oid,
-	    bio))
+	    bio, &p.res->signtime))
 		goto out;
 
 	if (!x509_get_aia(*x509, fn, &p.res->aia))
@@ -248,15 +247,10 @@ geofeed_parse(X509 **x509, const char *fn, char *buf, size_t len)
 		goto out;
 	}
 
-	at = X509_get0_notAfter(*x509);
-	if (at == NULL) {
-		warnx("%s: X509_get0_notAfter failed", fn);
+	if (!x509_get_notbefore(*x509, fn, &p.res->notbefore))
 		goto out;
-	}
-	if (!x509_get_time(at, &p.res->expires)) {
-		warnx("%s: ASN1_time_parse failed", fn);
+	if (!x509_get_notafter(*x509, fn, &p.res->notafter))
 		goto out;
-	}
 
 	if ((cert = cert_parse_ee_cert(fn, *x509)) == NULL)
 		goto out;

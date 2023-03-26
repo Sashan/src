@@ -1,4 +1,4 @@
-/*	$OpenBSD: cert.c,v 1.102 2023/02/21 10:18:47 tb Exp $ */
+/*	$OpenBSD: cert.c,v 1.106 2023/03/10 12:44:56 job Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Job Snijders <job@openbsd.org>
@@ -647,8 +647,12 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 	size_t			 i;
 	X509			*x = NULL;
 	X509_EXTENSION		*ext = NULL;
+	const X509_ALGOR	*palg;
+	const ASN1_OBJECT	*cobj;
 	ASN1_OBJECT		*obj;
+	EVP_PKEY		*pkey;
 	struct parse		 p;
+	int			 nid;
 
 	/* just fail for empty buffers, the warning was printed elsewhere */
 	if (der == NULL)
@@ -672,6 +676,19 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 	/* Cache X509v3 extensions, see X509_check_ca(3). */
 	if (X509_check_purpose(x, -1, -1) <= 0) {
 		cryptowarnx("%s: could not cache X509v3 extensions", p.fn);
+		goto out;
+	}
+
+	X509_get0_signature(NULL, &palg, x);
+	if (palg == NULL) {
+		cryptowarnx("%s: X509_get0_signature", p.fn);
+		goto out;
+	}
+	X509_ALGOR_get0(&cobj, NULL, NULL, palg);
+	if ((nid = OBJ_obj2nid(cobj)) != NID_sha256WithRSAEncryption) {
+		warnx("%s: RFC 7935: wrong signature algorithm %s, want %s",
+		    fn, OBJ_nid2ln(nid),
+		    OBJ_nid2ln(NID_sha256WithRSAEncryption));
 		goto out;
 	}
 
@@ -739,7 +756,9 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 		goto out;
 	if (!x509_get_crl(x, p.fn, &p.res->crl))
 		goto out;
-	if (!x509_get_expire(x, p.fn, &p.res->expires))
+	if (!x509_get_notbefore(x, p.fn, &p.res->notbefore))
+		goto out;
+	if (!x509_get_notafter(x, p.fn, &p.res->notafter))
 		goto out;
 	p.res->purpose = x509_get_purpose(x, p.fn);
 
@@ -747,6 +766,13 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 
 	switch (p.res->purpose) {
 	case CERT_PURPOSE_CA:
+		if ((pkey = X509_get0_pubkey(x)) == NULL) {
+			warnx("%s: X509_get0_pubkey failed", p.fn);
+			goto out;
+		}
+		if (!valid_ca_pkey(p.fn, pkey))
+			goto out;
+
 		if (X509_get_key_usage(x) != (KU_KEY_CERT_SIGN | KU_CRL_SIGN)) {
 			warnx("%s: RFC 6487 section 4.8.4: key usage violation",
 			    p.fn);
@@ -950,7 +976,7 @@ cert_free(struct cert *p)
 void
 cert_buffer(struct ibuf *b, const struct cert *p)
 {
-	io_simple_buffer(b, &p->expires, sizeof(p->expires));
+	io_simple_buffer(b, &p->notafter, sizeof(p->notafter));
 	io_simple_buffer(b, &p->purpose, sizeof(p->purpose));
 	io_simple_buffer(b, &p->talid, sizeof(p->talid));
 	io_simple_buffer(b, &p->repoid, sizeof(p->repoid));
@@ -983,7 +1009,7 @@ cert_read(struct ibuf *b)
 	if ((p = calloc(1, sizeof(struct cert))) == NULL)
 		err(1, NULL);
 
-	io_read_buf(b, &p->expires, sizeof(p->expires));
+	io_read_buf(b, &p->notafter, sizeof(p->notafter));
 	io_read_buf(b, &p->purpose, sizeof(p->purpose));
 	io_read_buf(b, &p->talid, sizeof(p->talid));
 	io_read_buf(b, &p->repoid, sizeof(p->repoid));
@@ -1074,7 +1100,7 @@ insert_brk(struct brk_tree *tree, struct cert *cert, int asid)
 		err(1, NULL);
 
 	b->asid = asid;
-	b->expires = cert->expires;
+	b->expires = cert->notafter;
 	b->talid = cert->talid;
 	if ((b->ski = strdup(cert->ski)) == NULL)
 		err(1, NULL);

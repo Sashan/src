@@ -1,4 +1,4 @@
-/*	$OpenBSD: cmd.c,v 1.165 2022/09/11 11:47:55 krw Exp $	*/
+/*	$OpenBSD: cmd.c,v 1.167 2023/03/04 21:22:51 krw Exp $	*/
 
 /*
  * Copyright (c) 1997 Tobias Weingartner
@@ -43,7 +43,7 @@ int		 parsepn(const char *);
 
 int		 ask_num(const char *, int, int, int);
 int		 ask_pid(const int);
-struct uuid	*ask_uuid(const struct uuid *);
+const struct uuid *ask_uuid(const struct uuid *);
 
 extern const unsigned char	manpage[];
 extern const int		manpage_sz;
@@ -385,9 +385,9 @@ Xprint(const char *args, struct mbr *mbr)
 int
 Xwrite(const char *args, struct mbr *mbr)
 {
-	int			i, n;
+	unsigned int		i, n;
 
-	for (i = 0, n = 0; i < NDOSPART; i++)
+	for (i = 0, n = 0; i < nitems(mbr->mbr_prt); i++)
 		if (mbr->mbr_prt[i].prt_id == DOSPTYP_OPENBSD)
 			n++;
 	if (n > 1) {
@@ -493,7 +493,7 @@ Xflag(const char *args, struct mbr *mbr)
 					gp[i].gp_attrs = 0;
 			}
 		} else {
-			for (i = 0; i < NDOSPART; i++) {
+			for (i = 0; i < nitems(mbr->mbr_prt); i++) {
 				if (i == pn)
 					mbr->mbr_prt[i].prt_flag = DOSACTIVE;
 				else
@@ -586,7 +586,7 @@ ask_pid(const int dflt)
 	}
 }
 
-struct uuid *
+const struct uuid *
 ask_uuid(const struct uuid *olduuid)
 {
 	static struct uuid	 uuid;

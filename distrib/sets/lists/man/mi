@@ -1,3 +1,4 @@
+./usr/share/man/man4/rkpciephy.4
 ./usr/share/doc/mg/tutorial
 ./usr/share/info/amdref.info
 ./usr/share/info/cvs.info
@@ -1289,6 +1290,8 @@
 ./usr/share/man/man4/armv7/imxtemp.4
 ./usr/share/man/man4/armv7/intc.4
 ./usr/share/man/man4/armv7/intro.4
+./usr/share/man/man4/armv7/mvodog.4
+./usr/share/man/man4/armv7/mvortc.4
 ./usr/share/man/man4/armv7/omap.4
 ./usr/share/man/man4/armv7/omclock.4
 ./usr/share/man/man4/armv7/omcm.4
@@ -1870,6 +1873,7 @@
 ./usr/share/man/man4/riscv64/stfpinctrl.4
 ./usr/share/man/man4/rkanxdp.4
 ./usr/share/man/man4/rkclock.4
+./usr/share/man/man4/rkcomphy.4
 ./usr/share/man/man4/rkdrm.4
 ./usr/share/man/man4/rkdwhdmi.4
 ./usr/share/man/man4/rkdwusb.4
@@ -2181,6 +2185,7 @@
 ./usr/share/man/man4/xnf.4
 ./usr/share/man/man4/xspd.4
 ./usr/share/man/man4/yds.4
+./usr/share/man/man4/ytphy.4
 ./usr/share/man/man4/zero.4
 ./usr/share/man/man4/zyd.4
 ./usr/share/man/man5/acct.5
@@ -2351,6 +2356,7 @@
 ./usr/share/man/man8/accton.8
 ./usr/share/man/man8/acpidump.8
 ./usr/share/man/man8/alpha/MAKEDEV.8
+./usr/share/man/man8/alpha/boot.8
 ./usr/share/man/man8/alpha/boot_alpha.8
 ./usr/share/man/man8/alpha/installboot.8
 ./usr/share/man/man8/alpha/setnetbootinfo.8

@@ -1,4 +1,4 @@
-/*	$OpenBSD: rkclock.c,v 1.65 2023/02/15 14:06:43 kettenis Exp $	*/
+/*	$OpenBSD: rkclock.c,v 1.71 2023/03/23 13:15:02 jsg Exp $	*/
 /*
  * Copyright (c) 2017, 2018 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -186,12 +186,39 @@
 #define RK3568_PMUCRU_HPLL_CON(i)	(0x0040 + (i) * 4)
 #define RK3568_PMUCRU_MODE_CON		0x0080
 #define RK3568_PMUCRU_CLKSEL_CON(i)	(0x0100 + (i) * 4)
+#define RK3568_PMUCRU_GATE_CON(i)	(0x0180 + (i) * 4)
+
+/* RK3588 registers */
+#define RK3588_CRU_AUPLL_CON(i)		(0x00180 + (i) * 4)
+#define RK3588_CRU_CPLL_CON(i)		(0x001a0 + (i) * 4)
+#define RK3588_CRU_GPLL_CON(i)		(0x001c0 + (i) * 4)
+#define RK3588_CRU_NPLL_CON(i)		(0x001e0 + (i) * 4)
+#define  RK3588_CRU_PLL_M_MASK			(0x3ff << 0)
+#define  RK3588_CRU_PLL_M_SHIFT			0
+#define  RK3588_CRU_PLL_RESETB			(1 << 13)
+#define  RK3588_CRU_PLL_S_MASK			(0x7 << 6)
+#define  RK3588_CRU_PLL_S_SHIFT			6
+#define  RK3588_CRU_PLL_P_MASK			(0x3f << 0)
+#define  RK3588_CRU_PLL_P_SHIFT			0
+#define  RK3588_CRU_PLL_K_MASK			(0xffff << 0)
+#define  RK3588_CRU_PLL_K_SHIFT			0
+#define  RK3588_CRU_PLL_PLL_LOCK		(1 << 15)
+#define RK3588_CRU_MODE_CON		0x00280
+#define  RK3588_CRU_MODE_MASK			0x3
+#define  RK3588_CRU_MODE_SLOW			0x0
+#define  RK3588_CRU_MODE_NORMAL			0x1
+
+#define RK3588_CRU_CLKSEL_CON(i)	(0x00300 + (i) * 4)
+#define RK3588_CRU_GATE_CON(i)		(0x00800 + (i) * 4)
+
+#define RK3588_PHPTOPCRU_PPLL_CON(i)	(0x08200 + (i) * 4)
+#define RK3588_PMUCRU_CLKSEL_CON(i)	(0x30300 + (i) * 4)
 
 #include "rkclock_clocks.h"
 
 struct rkclock {
 	uint16_t idx;
-	uint16_t reg;
+	uint32_t reg;
 	uint16_t sel_mask;
 	uint16_t div_mask;
 	uint16_t parents[8];
@@ -273,6 +300,7 @@ void	rk3399_pmu_reset(void *, uint32_t *, int);
 void	rk3568_init(struct rkclock_softc *);
 uint32_t rk3568_get_frequency(void *, uint32_t *);
 int	rk3568_set_frequency(void *, uint32_t *, uint32_t);
+int	rk3568_set_parent(void *, uint32_t *, uint32_t *);
 void	rk3568_enable(void *, uint32_t *, int);
 void	rk3568_reset(void *, uint32_t *, int);
 
@@ -282,8 +310,15 @@ int	rk3568_pmu_set_frequency(void *, uint32_t *, uint32_t);
 void	rk3568_pmu_enable(void *, uint32_t *, int);
 void	rk3568_pmu_reset(void *, uint32_t *, int);
 
+void	rk3588_init(struct rkclock_softc *);
+uint32_t rk3588_get_frequency(void *, uint32_t *);
+int	rk3588_set_frequency(void *, uint32_t *, uint32_t);
+void	rk3588_enable(void *, uint32_t *, int);
+void	rk3588_reset(void *, uint32_t *, int);
+
 struct rkclock_compat {
 	const char *compat;
+	const char *name;
 	int	assign;
 	void	(*init)(struct rkclock_softc *);
 	void	(*enable)(void *, uint32_t *, int);
@@ -295,47 +330,53 @@ struct rkclock_compat {
 
 const struct rkclock_compat rkclock_compat[] = {
 	{
-		"rockchip,rk3288-cru", 0, rk3288_init,
+		"rockchip,rk3288-cru", NULL, 0, rk3288_init,
 		rk3288_enable, rk3288_get_frequency,
 		rk3288_set_frequency, NULL,
 		rk3288_reset
 	},
 	{
-		"rockchip,rk3308-cru", 1, rk3308_init,
+		"rockchip,rk3308-cru", NULL, 1, rk3308_init,
 		rk3308_enable, rk3308_get_frequency,
 		rk3308_set_frequency, rk3308_set_parent,
 		rk3308_reset
 	},
 	{
-		"rockchip,rk3328-cru", 1, rk3328_init,
+		"rockchip,rk3328-cru", NULL, 1, rk3328_init,
 		rk3328_enable, rk3328_get_frequency,
 		rk3328_set_frequency, rk3328_set_parent,
 		rk3328_reset
 	},
 	{
-		"rockchip,rk3399-cru", 1, rk3399_init,
+		"rockchip,rk3399-cru", NULL, 1, rk3399_init,
 		rk3399_enable, rk3399_get_frequency,
 		rk3399_set_frequency, rk3399_set_parent,
 		rk3399_reset
 	},
 	{
-		"rockchip,rk3399-pmucru", 1, rk3399_pmu_init,
+		"rockchip,rk3399-pmucru", NULL, 1, rk3399_pmu_init,
 		rk3399_pmu_enable, rk3399_pmu_get_frequency,
 		rk3399_pmu_set_frequency, NULL,
 		rk3399_pmu_reset
 	},
 	{
-		"rockchip,rk3568-cru", 1, rk3568_init,
+		"rockchip,rk3568-cru", "CRU", 1, rk3568_init,
 		rk3568_enable, rk3568_get_frequency,
-		rk3568_set_frequency, NULL,
+		rk3568_set_frequency, rk3568_set_parent,
 		rk3568_reset
 	},
 	{
-		"rockchip,rk3568-pmucru", 1, rk3568_pmu_init,
+		"rockchip,rk3568-pmucru", "PMUCRU", 1, rk3568_pmu_init,
 		rk3568_pmu_enable, rk3568_pmu_get_frequency,
 		rk3568_pmu_set_frequency, NULL,
 		rk3568_pmu_reset
-	}
+	},
+	{
+		"rockchip,rk3588-cru", NULL, 1, rk3588_init,
+		rk3588_enable, rk3588_get_frequency,
+		rk3588_set_frequency, NULL,
+		rk3588_reset
+	},
 };
 
 int
@@ -375,8 +416,6 @@ rkclock_attach(struct device *parent, struct device *self, void *aux)
 	grf = OF_getpropint(faa->fa_node, "rockchip,grf", 0);
 	sc->sc_grf = regmap_byphandle(grf);
 
-	printf("\n");
-
 	sc->sc_phandle = OF_getpropint(faa->fa_node, "phandle", 0);
 
 	for (i = 0; i < nitems(rkclock_compat); i++) {
@@ -385,6 +424,11 @@ rkclock_attach(struct device *parent, struct device *self, void *aux)
 		}
 	}
 	KASSERT(i < nitems(rkclock_compat));
+
+	if (rkclock_compat[i].name != NULL)
+		printf(": %s", rkclock_compat[i].name);
+
+	printf("\n");
 
 	if (rkclock_compat[i].init)
 		rkclock_compat[i].init(sc);
@@ -517,7 +561,8 @@ rkclock_set_frequency(struct rkclock_softc *sc, uint32_t idx, uint32_t freq)
 
 	clk = rkclock_lookup(sc, idx);
 	if (clk == NULL) {
-		printf("%s: 0x%08x\n", __func__, idx);
+		printf("%s(%s, %u, %u)\n", __func__, sc->sc_dev.dv_xname,
+		    idx, freq);
 		return -1;
 	}
 
@@ -529,7 +574,8 @@ rkclock_set_frequency(struct rkclock_softc *sc, uint32_t idx, uint32_t freq)
 		mux = (reg & clk->sel_mask) >> sel_shift;
 
 	if (clk->parents[mux] == 0) {
-		printf("%s: parent 0x%08x\n", __func__, idx);
+		printf("%s(%s, %u, %u) parent\n", __func__,
+		    sc->sc_dev.dv_xname, idx, freq);
 		return 0;
 	}
 
@@ -541,27 +587,33 @@ rkclock_set_frequency(struct rkclock_softc *sc, uint32_t idx, uint32_t freq)
 	}
 
 	/*
-	 * If there is no divider, see if we have a parent with the
-	 * right frequency.
+	 * If there is no divider, pick the parent with the frequency
+	 * closest to the target frequency.
 	 */
 	if (clk->div_mask == 0) {
+		/*
+		 * Start out with the current parent.  This prevents
+		 * unnecessary switching to a different parent.
+		 */
 		parent = clk->parents[mux];
-		if (freq == sc->sc_cd.cd_get_frequency(sc, &parent))
-			return 0;
+		best_freq = sc->sc_cd.cd_get_frequency(sc, &parent);
+		best_mux = mux;
 
 		for (i = 0; i < nitems(clk->parents); i++) {
 			if (clk->parents[i] == 0)
 				continue;
 			parent = clk->parents[i];
-			if (freq == sc->sc_cd.cd_get_frequency(sc, &parent)) {
-				HWRITE4(sc, clk->reg,
-				    clk->sel_mask << 16 | i << sel_shift);
-				return 0;
+			f = sc->sc_cd.cd_get_frequency(sc, &parent);
+			if ((best_freq > freq && f < best_freq) ||
+			    (f > best_freq && f <= freq)) {
+				best_freq = f;
+				best_mux = i;
 			}
 		}
 
-		printf("%s: 0x%08x\n", __func__, idx);
-		return -1;
+		HWRITE4(sc, clk->reg,
+		    clk->sel_mask << 16 | best_mux << sel_shift);
+		return 0;
 	}
 
 	/*
@@ -580,8 +632,8 @@ rkclock_set_frequency(struct rkclock_softc *sc, uint32_t idx, uint32_t freq)
 			if (clk->parents[i] == 0)
 				continue;
 			f = rkclock_freq(sc, clk, i, freq);
-			if ((f > best_freq && f <= freq) ||
-			    (f < best_freq && f >= freq)) {
+			if ((best_freq > freq && f < best_freq) ||
+			    (f > best_freq && f <= freq)) {
 				best_freq = f;
 				best_mux = i;
 			}
@@ -1330,7 +1382,7 @@ rk3308_get_rtc32k(struct rkclock_softc *sc)
 	uint32_t reg, mux, pll, div_con;
 
 	reg = HREAD4(sc, RK3308_CRU_CLKSEL_CON(2));
-	mux = (reg & 0x30) >> 8;
+	mux = (reg & 0x300) >> 8;
 	if (mux != 3) {
 		printf("%s: RTC32K not using clk_32k_div\n", __func__);
 		return 0;
@@ -2011,19 +2063,14 @@ rk3328_get_frequency(void *cookie, uint32_t *cells)
 	switch (idx) {
 	case RK3328_PLL_APLL:
 		return rk3328_get_pll(sc, RK3328_CRU_APLL_CON(0));
-		break;
 	case RK3328_PLL_DPLL:
 		return rk3328_get_pll(sc, RK3328_CRU_DPLL_CON(0));
-		break;
 	case RK3328_PLL_CPLL:
 		return rk3328_get_pll(sc, RK3328_CRU_CPLL_CON(0));
-		break;
 	case RK3328_PLL_GPLL:
 		return rk3328_get_pll(sc, RK3328_CRU_GPLL_CON(0));
-		break;
 	case RK3328_PLL_NPLL:
 		return rk3328_get_pll(sc, RK3328_CRU_NPLL_CON(0));
-		break;
 	case RK3328_ARMCLK:
 		return rk3328_get_armclk(sc);
 	case RK3328_XIN24M:
@@ -2989,7 +3036,6 @@ rk3399_pmu_set_frequency(void *cookie, uint32_t *cells, uint32_t freq)
 	switch (idx) {
 	case RK3399_PLL_PPLL:
 		return rk3399_set_pll(sc, RK3399_PMUCRU_PPLL_CON(0), freq);
-		break;
 	default:
 		break;
 	}
@@ -3051,6 +3097,12 @@ const struct rkclock rk3568_clocks[] = {
 	{
 		RK3568_CLK_SDMMC1, RK3568_CRU_CLKSEL_CON(30),
 		SEL(14, 12), 0,
+		{ RK3568_XIN24M, RK3568_GPLL_400M, RK3568_GPLL_300M,
+		  RK3568_CPLL_100M, RK3568_CPLL_50M, RK3568_CLK_OSC0_DIV_750K }
+	},
+	{
+		RK3568_CLK_SDMMC2, RK3568_CRU_CLKSEL_CON(32),
+		SEL(10, 8), 0,
 		{ RK3568_XIN24M, RK3568_GPLL_400M, RK3568_GPLL_300M,
 		  RK3568_CPLL_100M, RK3568_CPLL_50M, RK3568_CLK_OSC0_DIV_750K }
 	},
@@ -3393,22 +3445,16 @@ rk3568_get_frequency(void *cookie, uint32_t *cells)
 	switch (idx) {
 	case RK3568_PLL_APLL:
 		return rk3328_get_pll(sc, RK3568_CRU_APLL_CON(0));
-		break;
 	case RK3568_PLL_DPLL:
 		return rk3328_get_pll(sc, RK3568_CRU_DPLL_CON(0));
-		break;
 	case RK3568_PLL_CPLL:
 		return rk3328_get_pll(sc, RK3568_CRU_CPLL_CON(0));
-		break;
 	case RK3568_PLL_GPLL:
 		return rk3328_get_pll(sc, RK3568_CRU_GPLL_CON(0));
-		break;
 	case RK3568_PLL_NPLL:
 		return rk3328_get_pll(sc, RK3568_CRU_NPLL_CON(0));
-		break;
 	case RK3568_PLL_VPLL:
 		return rk3328_get_pll(sc, RK3568_CRU_VPLL_CON(0));
-		break;
 	case RK3568_SCLK_GMAC0_DIV_50:
 		idx = RK3568_SCLK_GMAC0;
 		return rk3568_get_frequency(sc, &idx) / 50;
@@ -3462,6 +3508,38 @@ rk3568_set_frequency(void *cookie, uint32_t *cells, uint32_t freq)
 	return rkclock_set_frequency(sc, idx, freq);
 }
 
+int
+rk3568_set_parent(void *cookie, uint32_t *cells, uint32_t *pcells)
+{
+	struct rkclock_softc *sc = cookie;
+	char buf[64] = {};
+	int len, node;
+
+	if (pcells[0] != sc->sc_phandle) {
+		node = OF_getnodebyphandle(pcells[0]);
+		if (node == 0)
+			return -1;
+		len = OF_getproplen(node, "clock-output-names");
+		if (len <= 0 || len > sizeof(buf))
+			return -1;
+		OF_getprop(node, "clock-output-names", buf, sizeof(buf));
+
+		if (strcmp(buf, "gmac0_clkin") == 0) {
+			return rkclock_set_parent(sc, cells[0],
+			    RK3568_GMAC0_CLKIN);
+		}
+		if (strcmp(buf, "gmac1_clkin") == 0) {
+			return rkclock_set_parent(sc, cells[0],
+			    RK3568_GMAC1_CLKIN);
+		}
+
+		printf("%s: 0x%08x 0x%08x\n", __func__, cells[0], pcells[0]);
+		return -1;
+	}
+
+	return rkclock_set_parent(sc, cells[0], pcells[1]);
+}
+
 void
 rk3568_enable(void *cookie, uint32_t *cells, int on)
 {
@@ -3499,6 +3577,51 @@ const struct rkclock rk3568_pmu_clocks[] = {
 		{ 0, 0, RK3568_XIN24M }
 	},
 	{
+		RK3568_CLK_PCIEPHY0_OSC0, 0, 0, 0,
+		{ RK3568_XIN24M }
+	},
+	{
+		RK3568_CLK_PCIEPHY0_DIV, RK3568_PMUCRU_CLKSEL_CON(9),
+		0, DIV(2, 0),
+		{ RK3568_PPLL_PH0 }
+	},
+	{
+		RK3568_CLK_PCIEPHY0_REF, RK3568_PMUCRU_CLKSEL_CON(9),
+		SEL(3, 3), 0,
+		{ RK3568_CLK_PCIEPHY0_OSC0, RK3568_CLK_PCIEPHY0_DIV },
+		SET_PARENT
+	},
+	{
+		RK3568_CLK_PCIEPHY1_OSC0, 0, 0, 0,
+		{ RK3568_XIN24M }
+	},
+	{
+		RK3568_CLK_PCIEPHY1_DIV, RK3568_PMUCRU_CLKSEL_CON(9),
+		0, DIV(6, 4),
+		{ RK3568_PPLL_PH0 }
+	},
+	{
+		RK3568_CLK_PCIEPHY1_REF, RK3568_PMUCRU_CLKSEL_CON(9),
+		SEL(7, 7), 0,
+		{ RK3568_CLK_PCIEPHY1_OSC0, RK3568_CLK_PCIEPHY1_DIV },
+		SET_PARENT
+	},
+	{
+		RK3568_CLK_PCIEPHY2_OSC0, 0, 0, 0,
+		{ RK3568_XIN24M }
+	},
+	{
+		RK3568_CLK_PCIEPHY2_DIV, RK3568_PMUCRU_CLKSEL_CON(9),
+		0, DIV(10, 8),
+		{ RK3568_PPLL_PH0 }
+	},
+	{
+		RK3568_CLK_PCIEPHY2_REF, RK3568_PMUCRU_CLKSEL_CON(9),
+		SEL(11, 11), 0,
+		{ RK3568_CLK_PCIEPHY2_OSC0, RK3568_CLK_PCIEPHY2_DIV },
+		SET_PARENT
+	},
+	{
 		RK3568_CLK_PDPMU, RK3568_PMUCRU_CLKSEL_CON(2),
 		SEL(15, 15), 0,
 		{ RK3568_PLL_PPLL, 0 }
@@ -3511,6 +3634,16 @@ const struct rkclock rk3568_pmu_clocks[] = {
 void
 rk3568_pmu_init(struct rkclock_softc *sc)
 {
+	int i;
+
+	/* The code below assumes all clocks are enabled.  Check this!. */
+	for (i = 0; i <= 2; i++) {
+		if (HREAD4(sc, RK3568_PMUCRU_GATE_CON(i)) != 0x00000000) {
+			printf("CRU_GATE_CON%d: 0x%08x\n", i,
+			    HREAD4(sc, RK3568_CRU_GATE_CON(i)));
+		}
+	}
+
 	sc->sc_clocks = rk3568_pmu_clocks;
 }
 
@@ -3591,6 +3724,9 @@ rk3568_pmu_get_frequency(void *cookie, uint32_t *cells)
 		return rk3328_get_pll(sc, RK3568_PMUCRU_PPLL_CON(0));
 	case RK3568_PLL_HPLL:
 		return rk3328_get_pll(sc, RK3568_PMUCRU_HPLL_CON(0));
+	case RK3568_PPLL_PH0:
+		idx = RK3568_PLL_PPLL;
+		return rk3568_get_frequency(sc, &idx) / 2;
 	case RK3568_XIN24M:
 		return 24000000;
 	default:
@@ -3624,6 +3760,11 @@ rk3568_pmu_enable(void *cookie, uint32_t *cells, int on)
 	uint32_t idx = cells[0];
 
 	switch (idx) {
+	case RK3568_CLK_PCIEPHY0_REF:
+	case RK3568_CLK_PCIEPHY1_REF:
+	case RK3568_CLK_PCIEPHY2_REF:
+	case RK3568_CLK_PCIE30PHY_REF_M:
+	case RK3568_CLK_PCIE30PHY_REF_N:
 	case RK3568_CLK_I2C0:
 	case RK3568_SCLK_UART0:
 	case RK3568_PCLK_I2C0:
@@ -3637,6 +3778,499 @@ rk3568_pmu_enable(void *cookie, uint32_t *cells, int on)
 
 void
 rk3568_pmu_reset(void *cookie, uint32_t *cells, int on)
+{
+	uint32_t idx = cells[0];
+
+	printf("%s: 0x%08x\n", __func__, idx);
+}
+
+/* 
+ * Rockchip RK3588 
+ */
+
+const struct rkclock rk3588_clocks[] = {
+	{
+		RK3588_ACLK_BUS_ROOT, RK3588_CRU_CLKSEL_CON(38),
+		SEL(5, 5), DIV(4, 0),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_UART1_SRC, RK3588_CRU_CLKSEL_CON(41),
+		SEL(14, 14), DIV(13, 9),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_UART1, RK3588_CRU_CLKSEL_CON(43),
+		SEL(1, 0), 0,
+		{ RK3588_CLK_UART1_SRC, RK3588_CLK_UART1_FRAC, RK3588_XIN24M }
+	},
+	{
+		RK3588_SCLK_UART1, 0, 0, 0,
+		{ RK3588_CLK_UART1 }
+	},
+	{
+		RK3588_CLK_UART2_SRC, RK3588_CRU_CLKSEL_CON(43),
+		SEL(7, 7), DIV(6, 2),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_UART2, RK3588_CRU_CLKSEL_CON(45),
+		SEL(1, 0), 0,
+		{ RK3588_CLK_UART2_SRC, RK3588_CLK_UART2_FRAC, RK3588_XIN24M }
+	},
+	{
+		RK3588_SCLK_UART2, 0, 0, 0,
+		{ RK3588_CLK_UART2 }
+	},
+	{
+		RK3588_CLK_UART3_SRC, RK3588_CRU_CLKSEL_CON(45),
+		SEL(7, 7), DIV(6, 2),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_UART3, RK3588_CRU_CLKSEL_CON(47),
+		SEL(1, 0), 0,
+		{ RK3588_CLK_UART3_SRC, RK3588_CLK_UART3_FRAC, RK3588_XIN24M }
+	},
+	{
+		RK3588_SCLK_UART3, 0, 0, 0,
+		{ RK3588_CLK_UART3 }
+	},
+	{
+		RK3588_CLK_UART4_SRC, RK3588_CRU_CLKSEL_CON(47),
+		SEL(7, 7), DIV(6, 2),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_UART4, RK3588_CRU_CLKSEL_CON(49),
+		SEL(1, 0), 0,
+		{ RK3588_CLK_UART4_SRC, RK3588_CLK_UART4_FRAC, RK3588_XIN24M }
+	},
+	{
+		RK3588_SCLK_UART4, 0, 0, 0,
+		{ RK3588_CLK_UART4 }
+	},
+	{
+		RK3588_CLK_UART5_SRC, RK3588_CRU_CLKSEL_CON(49),
+		SEL(7, 7), DIV(6, 2),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_UART5, RK3588_CRU_CLKSEL_CON(51),
+		SEL(1, 0), 0,
+		{ RK3588_CLK_UART5_SRC, RK3588_CLK_UART5_FRAC, RK3588_XIN24M }
+	},
+	{
+		RK3588_SCLK_UART5, 0, 0, 0,
+		{ RK3588_CLK_UART5 }
+	},
+	{
+		RK3588_CLK_UART6_SRC, RK3588_CRU_CLKSEL_CON(51),
+		SEL(7, 7), DIV(6, 2),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_UART6, RK3588_CRU_CLKSEL_CON(53),
+		SEL(1, 0), 0,
+		{ RK3588_CLK_UART6_SRC, RK3588_CLK_UART6_FRAC, RK3588_XIN24M }
+	},
+	{
+		RK3588_SCLK_UART6, 0, 0, 0,
+		{ RK3588_CLK_UART6 }
+	},
+	{
+		RK3588_CLK_UART7_SRC, RK3588_CRU_CLKSEL_CON(53),
+		SEL(7, 7), DIV(6, 2),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_UART7, RK3588_CRU_CLKSEL_CON(55),
+		SEL(1, 0), 0,
+		{ RK3588_CLK_UART7_SRC, RK3588_CLK_UART7_FRAC, RK3588_XIN24M }
+	},
+	{
+		RK3588_SCLK_UART7, 0, 0, 0,
+		{ RK3588_CLK_UART7 }
+	},
+	{
+		RK3588_CLK_UART8_SRC, RK3588_CRU_CLKSEL_CON(55),
+		SEL(7, 7), DIV(6, 2),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_UART8, RK3588_CRU_CLKSEL_CON(57),
+		SEL(1, 0), 0,
+		{ RK3588_CLK_UART8_SRC, RK3588_CLK_UART8_FRAC, RK3588_XIN24M }
+	},
+	{
+		RK3588_SCLK_UART8, 0, 0, 0,
+		{ RK3588_CLK_UART8 }
+	},
+	{
+		RK3588_CLK_UART9_SRC, RK3588_CRU_CLKSEL_CON(57),
+		SEL(7, 7), DIV(6, 2),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_UART9, RK3588_CRU_CLKSEL_CON(59),
+		SEL(1, 0), 0,
+		{ RK3588_CLK_UART9_SRC, RK3588_CLK_UART9_FRAC, RK3588_XIN24M }
+	},
+	{
+		RK3588_SCLK_UART9, 0, 0, 0,
+		{ RK3588_CLK_UART9 }
+	},
+	{
+		RK3588_ACLK_CENTER_ROOT, RK3588_CRU_CLKSEL_CON(165),
+		SEL(1, 0), 0,
+		{ RK3588_CLK_700M_SRC, RK3588_CLK_400M_SRC,
+		  RK3588_CLK_200M_SRC, RK3588_XIN24M }
+	},
+	{
+		RK3588_ACLK_CENTER_LOW_ROOT, RK3588_CRU_CLKSEL_CON(165),
+		SEL(3, 2), 0,
+		{ RK3588_CLK_500M_SRC, RK3588_CLK_250M_SRC,
+		  RK3588_CLK_100M_SRC, RK3588_XIN24M }
+	},
+	{
+		RK3588_HCLK_CENTER_ROOT, RK3588_CRU_CLKSEL_CON(165),
+		SEL(5, 4), 0,
+		{ RK3588_CLK_400M_SRC, RK3588_CLK_200M_SRC,
+		  RK3588_CLK_100M_SRC, RK3588_XIN24M }
+	},
+	{
+		RK3588_CLK_50M_SRC, RK3588_CRU_CLKSEL_CON(0),
+		SEL(5, 5), DIV(4, 0),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_100M_SRC, RK3588_CRU_CLKSEL_CON(0),
+		SEL(11, 11), DIV(10, 6),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_150M_SRC, RK3588_CRU_CLKSEL_CON(1),
+		SEL(5, 5), DIV(4, 0),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_200M_SRC, RK3588_CRU_CLKSEL_CON(1),
+		SEL(11, 11), DIV(10, 6),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_250M_SRC, RK3588_CRU_CLKSEL_CON(2),
+		SEL(5, 5), DIV(4, 0),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_400M_SRC, RK3588_CRU_CLKSEL_CON(3),
+		SEL(11, 11), DIV(10, 6),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_500M_SRC, RK3588_CRU_CLKSEL_CON(4),
+		SEL(11, 11), DIV(10, 6),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_700M_SRC, RK3588_CRU_CLKSEL_CON(6),
+		SEL(5, 5), DIV(4, 0),
+		{ RK3588_PLL_GPLL, RK3588_PLL_SPLL }
+	},
+	{
+		RK3588_ACLK_TOP_ROOT, RK3588_CRU_CLKSEL_CON(8),
+		SEL(6, 5), 0,
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL, RK3588_PLL_AUPLL }
+	},
+	{
+		RK3588_PCLK_TOP_ROOT, RK3588_CRU_CLKSEL_CON(8),
+		SEL(8, 7), 0,
+		{ RK3588_CLK_100M_SRC, RK3588_CLK_50M_SRC, RK3588_XIN24M }
+	},
+	{
+		RK3588_ACLK_LOW_TOP_ROOT, RK3588_CRU_CLKSEL_CON(8),
+		SEL(14, 14), DIV(13, 9),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_GPU_SRC, RK3588_CRU_CLKSEL_CON(158),
+		SEL(7, 5), DIV(4, 0),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL, RK3588_PLL_AUPLL,
+		  RK3588_PLL_NPLL, RK3588_PLL_SPLL }
+	},
+	{
+		RK3588_CLK_GPU, 0, 0, 0,
+		{ RK3588_CLK_GPU_SRC },
+		SET_PARENT
+	},
+	{
+		RK3588_ACLK_VOP_ROOT, RK3588_CRU_CLKSEL_CON(110),
+		SEL(7, 5), DIV(4, 0),
+		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL, RK3588_PLL_AUPLL,
+		  RK3588_PLL_NPLL, RK3588_PLL_SPLL }
+	},
+	{
+		RK3588_ACLK_VOP, 0, 0, 0,
+		{ RK3588_ACLK_VOP_SUB_SRC },
+		SET_PARENT
+	},
+	{
+		RK3588_ACLK_VOP_SUB_SRC, RK3588_CRU_CLKSEL_CON(115),
+		SEL(9, 9), 0,
+		{ RK3588_ACLK_VOP_ROOT, 0 /* RK3588_ACLK_VOP_DIV2_SRC */ },
+		SET_PARENT
+	},
+	{
+		RK3588_CLK_PMU1_50M_SRC, RK3588_PMUCRU_CLKSEL_CON(0),
+		0, DIV(3, 0),
+		{ RK3588_CLK_PMU1_400M_SRC }
+	},
+	{
+		RK3588_CLK_PMU1_100M_SRC, RK3588_PMUCRU_CLKSEL_CON(0),
+		0, DIV(6, 4),
+		{ RK3588_CLK_PMU1_400M_SRC }
+	},
+	{
+		RK3588_CLK_PMU1_200M_SRC, RK3588_PMUCRU_CLKSEL_CON(0),
+		0, DIV(9, 7),
+		{ RK3588_CLK_PMU1_400M_SRC }
+	},
+	{
+		RK3588_CLK_PMU1_400M_SRC, RK3588_PMUCRU_CLKSEL_CON(1),
+		SEL(5, 5), DIV(4, 0),
+		{ RK3588_CLK_400M_SRC, RK3588_XIN24M }
+	},
+	{
+		RK3588_PCLK_PMU1_ROOT, RK3588_PMUCRU_CLKSEL_CON(1),
+		SEL(9, 8), 0,
+		{ RK3588_CLK_PMU1_100M_SRC, RK3588_CLK_PMU1_50M_SRC,
+		  RK3588_XIN24M }
+	},
+	{
+		RK3588_PCLK_PMU0_ROOT, 0, 0, 0,
+		{ RK3588_PCLK_PMU1_ROOT },
+		SET_PARENT
+	},
+	{
+		RK3588_HCLK_PMU_CM0_ROOT, RK3588_PMUCRU_CLKSEL_CON(1),
+		SEL(11, 10), 0,
+		{ RK3588_CLK_PMU1_400M_SRC, RK3588_CLK_PMU1_200M_SRC,
+		  RK3588_CLK_PMU1_100M_SRC, RK3588_XIN24M }
+	},
+	{
+		RK3588_CLK_UART0_SRC, RK3588_PMUCRU_CLKSEL_CON(3),
+		0, DIV(11, 7),
+		{ RK3588_PLL_CPLL }
+	},
+	{
+		RK3588_CLK_UART0, RK3588_PMUCRU_CLKSEL_CON(5),
+		SEL(1, 0), 0,
+		{ RK3588_CLK_UART0_SRC, RK3588_CLK_UART0_FRAC, RK3588_XIN24M }
+	},
+	{
+		RK3588_SCLK_UART0, 0, 0, 0,
+		{ RK3588_CLK_UART0 }
+	},
+	{
+		/* Sentinel */
+	}
+};
+
+/* Certain test clocks are disabled. */
+const uint32_t rk3588_gates[78] = {
+	[2] = 0x00000050,
+	[22] = 0x00000200,
+	[25] = 0x00000200,
+	[29] = 0x00000004,
+	[66] = 0x00000004,
+};
+
+void
+rk3588_init(struct rkclock_softc *sc)
+{
+	int i;
+
+	/* The code below assumes all clocks are enabled.  Check this!. */
+	for (i = 0; i < nitems(rk3588_gates); i++) {
+		if (HREAD4(sc, RK3588_CRU_GATE_CON(i)) != rk3588_gates[i]) {
+			printf("CRU_GATE_CON%d: 0x%08x\n", i,
+			    HREAD4(sc, RK3588_CRU_GATE_CON(i)));
+		}
+	}
+
+	sc->sc_clocks = rk3588_clocks;
+}
+
+int
+rk3588_set_pll(struct rkclock_softc *sc, bus_size_t base, uint32_t freq)
+{
+	uint32_t p, m, s, k;
+	int mode_shift = -1;
+
+	switch (base) {
+	case RK3588_CRU_AUPLL_CON(0):
+		mode_shift = 6;
+		break;
+	case RK3588_CRU_GPLL_CON(0):
+		mode_shift = 2;
+		break;
+	case RK3588_CRU_NPLL_CON(0):
+		mode_shift = 0;
+		break;
+	case RK3588_PHPTOPCRU_PPLL_CON(0):
+		mode_shift = 10;
+		break;
+	}
+	KASSERT(mode_shift != -1);
+
+	/*
+	 * It is not clear whether all combinations of the clock
+	 * dividers result in a stable clock.  Therefore this function
+	 * only supports a limited set of PLL clock rates.
+	 */
+	switch (freq) {
+	case 1188000000U:
+		p = 2; m = 198; s = 1; k = 0;
+		break;
+	case 850000000U:
+		p = 3; m = 425; s = 2; k = 0;
+		break;
+	case 786432000U:
+		p = 2; m = 262; s = 2; k = 9437;
+		break;
+	case 100000000U:
+		p = 3; m = 400; s = 5; k = 0;
+		break;
+	default:
+		printf("%s: %u Hz\n", __func__, freq);
+		return -1;
+	}
+
+	/*
+	 * Select slow mode to guarantee a stable clock while we're
+	 * adjusting the PLL.
+	 */
+	HWRITE4(sc, RK3588_CRU_MODE_CON,
+	    (RK3588_CRU_MODE_MASK << 16 |RK3588_CRU_MODE_SLOW) << mode_shift);
+
+	/* Power down PLL. */
+	HWRITE4(sc, base + 0x0004,
+	    RK3588_CRU_PLL_RESETB << 16 | RK3588_CRU_PLL_RESETB);
+	
+	/* Set PLL rate. */
+	HWRITE4(sc, base + 0x0000,
+	    RK3588_CRU_PLL_M_MASK << 16 | m << RK3588_CRU_PLL_M_SHIFT);
+	HWRITE4(sc, base + 0x0004,
+	    RK3588_CRU_PLL_S_MASK << 16 | s << RK3588_CRU_PLL_S_SHIFT |
+	    RK3588_CRU_PLL_P_MASK << 16 | p << RK3588_CRU_PLL_P_SHIFT);
+	HWRITE4(sc, base + 0x0008,
+	    RK3588_CRU_PLL_K_MASK << 16 | k << RK3588_CRU_PLL_K_SHIFT);
+
+	/* Power up PLL. */
+	HWRITE4(sc, base + 0x0004, RK3588_CRU_PLL_RESETB << 16);
+
+	/* Wait for PLL to stabilize. */
+	while ((HREAD4(sc, base + 0x0018) & RK3588_CRU_PLL_PLL_LOCK) == 0)
+		delay(10);
+
+	/* Switch back to normal mode. */
+	HWRITE4(sc, RK3588_CRU_MODE_CON,
+	    (RK3588_CRU_MODE_MASK << 16 | RK3588_CRU_MODE_NORMAL) << mode_shift);
+
+	return 0;
+}
+
+uint32_t
+rk3588_get_pll(struct rkclock_softc *sc, bus_size_t base)
+{
+	uint64_t freq, frac;
+	uint32_t k, m, p, s;
+	uint32_t reg;
+
+	reg = HREAD4(sc, base);
+	m = (reg & RK3588_CRU_PLL_M_MASK) >> RK3588_CRU_PLL_M_SHIFT;
+	reg = HREAD4(sc, base + 4);
+	p = (reg & RK3588_CRU_PLL_P_MASK) >> RK3588_CRU_PLL_P_SHIFT;
+	s = (reg & RK3588_CRU_PLL_S_MASK) >> RK3588_CRU_PLL_S_SHIFT;
+	reg = HREAD4(sc, base + 8);
+	k = (reg & RK3588_CRU_PLL_K_MASK) >> RK3588_CRU_PLL_K_SHIFT;
+
+	freq = (24000000ULL * m) / p;
+	if (k) {
+		frac = ((24000000ULL * k) / (p * 65535));
+		freq += frac;
+	}
+
+	return freq >> s;
+}
+
+uint32_t
+rk3588_get_frequency(void *cookie, uint32_t *cells)
+{
+	struct rkclock_softc *sc = cookie;
+	uint32_t idx = cells[0];
+	uint32_t freq;
+
+	switch (idx) {
+	case RK3588_PLL_AUPLL:
+		return rk3588_get_pll(sc, RK3588_CRU_AUPLL_CON(0));
+	case RK3588_PLL_CPLL:
+		return rk3588_get_pll(sc, RK3588_CRU_CPLL_CON(0));
+	case RK3588_PLL_GPLL:
+		return rk3588_get_pll(sc, RK3588_CRU_GPLL_CON(0));
+	case RK3588_PLL_NPLL:
+		return rk3588_get_pll(sc, RK3588_CRU_NPLL_CON(0));
+	case RK3588_PLL_PPLL:
+		return rk3588_get_pll(sc, RK3588_PHPTOPCRU_PPLL_CON(0));
+	case RK3588_PLL_SPLL:
+		return rkclock_external_frequency("spll");
+	case RK3588_XIN24M:
+		return 24000000;
+	default:
+		break;
+	}
+
+	freq = rkclock_get_frequency(sc, idx);
+	return freq;
+}
+
+int
+rk3588_set_frequency(void *cookie, uint32_t *cells, uint32_t freq)
+{
+	struct rkclock_softc *sc = cookie;
+	uint32_t idx = cells[0];
+
+	switch (idx) {
+	case RK3588_PLL_AUPLL:
+		return rk3588_set_pll(sc, RK3588_CRU_AUPLL_CON(0), freq);
+	case RK3588_PLL_GPLL:
+		return rk3588_set_pll(sc, RK3588_CRU_GPLL_CON(0), freq);
+	case RK3588_PLL_NPLL:
+		return rk3588_set_pll(sc, RK3588_CRU_NPLL_CON(0), freq);
+	case RK3588_PLL_PPLL:
+		return rk3588_set_pll(sc, RK3588_PHPTOPCRU_PPLL_CON(0), freq);
+	default:
+		break;
+	}
+
+	return rkclock_set_frequency(sc, idx, freq);
+}
+
+void
+rk3588_enable(void *cookie, uint32_t *cells, int on)
+{
+	uint32_t idx = cells[0];
+
+	/* All clocks are enabled upon hardware reset. */
+	if (!on) {
+		printf("%s: 0x%08x\n", __func__, idx);
+		return;
+	}
+}
+
+void
+rk3588_reset(void *cookie, uint32_t *cells, int on)
 {
 	uint32_t idx = cells[0];
 

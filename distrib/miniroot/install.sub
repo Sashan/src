@@ -1,5 +1,5 @@
 #!/bin/ksh
-#	$OpenBSD: install.sub,v 1.1230 2023/02/21 12:56:50 kn Exp $
+#	$OpenBSD: install.sub,v 1.1234 2023/03/10 10:33:40 kn Exp $
 #
 # Copyright (c) 1997-2015 Todd Miller, Theo de Raadt, Ken Westerback
 # Copyright (c) 2015, Robert Peichaer <rpe@openbsd.org>
@@ -340,6 +340,8 @@ get_dkdevs_root() {
 		for _d in $_disks; do
 			is_rootdisk "$_d" || _disks=$(rmel "$_d" $_disks)
 		done
+	else
+		_disks=$(rmel "$CRYPTODISK" $_disks)
 	fi
 	echo $_disks
 }
@@ -555,8 +557,15 @@ unlock() {
 
 # Add a trap to kill the dmesg listener co-process on exit of the installer.
 retrap() {
-	trap '_cppid=$(</tmp/cppid); if [ -n $_cppid ]; then kill -KILL -$_cppid 2>/dev/null; rm -f /tmp/cppid; fi; echo; stty echo; exit 0' \
-		INT EXIT TERM
+	trap '
+		if [[ -f /tmp/cppid ]]; then
+			kill -KILL -"$(</tmp/cppid)" 2>/dev/null
+			rm -f /tmp/cppid
+		fi
+		echo
+		stty echo
+		exit 0
+	' INT EXIT TERM
 }
 
 # Start a listener process looking for dmesg changes which indicates a possible
@@ -1245,10 +1254,11 @@ ieee80211_scan() {
 # Configure 802.11 interface $1 and append ifconfig options to hostname.if $2.
 # Ask the user for the access point ESSID, the security protocol and a secret.
 ieee80211_config() {
-	local _if=$1 _hn=$2 _prompt _nwid _haswpa=0 _err
+	local _if=$1 _hn=$2 _prompt _nwid _haswep=0 _haswpa=0 _err
 
-	# Reset 802.11 settings and determine wpa capability.
-	ifconfig $_if -nwid -nwkey
+	# Reset 802.11 settings and determine WEP and WPA capabilities.
+	ifconfig $_if -nwid
+	ifconfig $_if -nwkey 2>/dev/null && _haswep=1
 	ifconfig $_if -wpa 2>/dev/null && _haswpa=1
 
 	# Empty scan cache.
@@ -1273,17 +1283,18 @@ ieee80211_config() {
 	# 'any' implies that only open access points are considered.
 	if [[ $_nwid != any ]]; then
 
-		_prompt="Security protocol? (O)pen, (W)EP"
+		_prompt="Security protocol? (O)pen"
+		((_haswep == 1)) && _prompt="$_prompt, (W)EP"
 		((_haswpa == 1)) && _prompt="$_prompt, WPA-(P)SK"
 		while :; do
 			ask_until "$_prompt" "O"
-			case "$_haswpa-$resp" in
-			?-[Oo]) # No further questions
+			case "${_haswep}${_haswpa}-${resp}" in
+			??-[Oo]) # No further questions
 				ifconfig $_if join "$_nwid"
 				quote join "$_nwid" >>$_hn
 				break
 				;;
-			?-[Ww])	ask_passphrase "WEP key?"
+			1?-[Ww])	ask_passphrase "WEP key?"
 				# Make sure ifconfig accepts the key.
 				if _err=$(ifconfig $_if join "$_nwid" nwkey "$_passphrase" 2>&1) &&
 					[[ -z $_err ]]; then
@@ -1292,7 +1303,7 @@ ieee80211_config() {
 				fi
 				echo "$_err"
 				;;
-			1-[Pp])	ask_passphrase "WPA passphrase?"
+			?1-[Pp])	ask_passphrase "WPA passphrase?"
 				# Make sure ifconfig accepts the key.
 				if ifconfig $_if join "$_nwid" wpakey "$_passphrase"; then
 					quote join "$_nwid" wpakey "$_passphrase" >>$_hn
@@ -1761,7 +1772,7 @@ install_files() {
 	if [[ $MODE == upgrade ]]; then
 		if isin base$VERSION.tgz $_get_sets; then
 			rm -f /mnt/usr/share/relink/usr/lib/*
-			rm -rf /mnt/usr/lib/libLLVM.so.[012].0
+			rm -rf /mnt/usr/lib/libLLVM.so.[0-6].0
 			rm -rf /mnt/usr/libdata/perl5
 		fi
 		if isin comp$VERSION.tgz $_get_sets; then
@@ -2395,6 +2406,8 @@ get_rootinfo() {
 		case $resp in
 		"?")	diskinfo $(get_dkdevs);;
 		'')	;;
+		$CRYPTODISK)
+			echo "$resp is used for root disk encryption.";;
 		*)	# Translate $resp to disk dev name in case it is a DUID.
 			# get_dkdev_name bounces back the disk dev name if not.
 			_dkdev=$(get_dkdev_name "$resp")
@@ -3053,6 +3066,50 @@ do_autoinstall() {
 	exec reboot
 }
 
+encrypt_root() {
+	local _chunk _tries=0
+	local _q="Encrypt the root disk? (disk, 'no' or '?' for details)"
+
+	[[ $MDBOOTSR == y ]] || return
+
+	# The interactive bioctl(8) passphrase prompt requires a TTY.
+	$AI && return
+
+	# Do not even try if softraid is in use already,
+	# e.g. auto-assembled at boot or done in (S)hell.
+	[[ -z $(get_softraid_disks) ]] || return
+
+	while :; do
+		echo "Available disks are: $(get_dkdevs | sed 's/^$/none/')."
+		_ask "$_q" no || continue
+		case $resp in
+		'?')	cat <<'__EOT'
+
+Create a passphrase protected CRYPTO softraid volume to be used as root disk.
+
+__EOT
+			diskinfo $(get_dkdevs);;
+		'')	;;
+		no)	return;;
+		*)	isin "$resp" $(get_dkdevs) && break
+			echo 'No such disk.';;
+		esac
+	done
+	_chunk=$resp
+	log_answers "$_q" $_chunk
+
+	make_dev $_chunk
+	md_prep_fdisk $_chunk softraid
+	echo 'RAID *' | disklabel -w -A -T- $_chunk
+
+	until bioctl -c C -l ${_chunk}a softraid0 >/dev/null; do
+		# Most likely botched passphrases, silently retry twice.
+		((++_tries < 3)) || exit
+	done
+
+        CRYPTODISK=$_chunk
+}
+
 do_install() {
 	local _rootkey _rootpass
 
@@ -3105,6 +3162,8 @@ do_install() {
 	set_timezone /var/tzlist
 
 	echo
+
+	encrypt_root
 
 	# Get information about ROOTDISK, etc.
 	get_rootinfo
@@ -3485,8 +3544,12 @@ umount -af >/dev/null 2>&1
 #	md_prep_disklabel()	  - put an OpenBSD disklabel on the disk
 #	md_consoleinfo()	  - set CDEV, CTTY, CSPEED, CPROM
 #
+# The following functions can be provided if required:
+#	md_prep_fdisk()           - put a partition table on the disk
+#
 # The following variables can be provided if required:
 #	MDEFI       - set to 'y' on archs that support GPT partitioning
+#	MDBOOTSR    - set to 'y' on archs that support boot from softraid volumes
 #	MDFSOPT     - newfs options for non-root partitions, '-O2' assumed if not provided
 #	MDROOTFSOPT - newfs options for the root partition, '-O2' assumed if not provided
 #	MDSETS	    - list of files to add to DEFAULT and ALLSETS
@@ -3516,6 +3579,7 @@ INSTALL_METHOD=
 NIFS=0
 export PS1="$MODE# "
 PUB_KEY=/etc/signify/openbsd-${VERSION}-base.pub
+CRYPTODISK=
 ROOTDEV=
 ROOTDISK=
 SETDIR="$VNAME/$ARCH"

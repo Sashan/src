@@ -1,4 +1,4 @@
-/* $OpenBSD: wsemul_sun.c,v 1.34 2020/05/25 09:55:49 jsg Exp $ */
+/* $OpenBSD: wsemul_sun.c,v 1.36 2023/03/06 20:34:35 miod Exp $ */
 /* $NetBSD: wsemul_sun.c,v 1.11 2000/01/05 11:19:36 drochner Exp $ */
 
 /*
@@ -118,7 +118,7 @@ struct wsemul_sun_emuldata {
 	struct wsemul_inputstate kstate;	/* kernel input state */
 
 #ifdef HAVE_UTF8_SUPPORT
-	u_char translatebuf[6];
+	u_char translatebuf[4];
 #else
 	u_char translatebuf[1];
 #endif
@@ -185,8 +185,10 @@ wsemul_sun_reset(struct wsemul_sun_emuldata *edp)
 	edp->bgcol = WSCOL_WHITE;
 	edp->scrolldist = 1;
 	edp->instate.inchar = 0;
+	edp->instate.lbound = 0;
 	edp->instate.mbleft = 0;
 	edp->kstate.inchar = 0;
+	edp->kstate.lbound = 0;
 	edp->kstate.mbleft = 0;
 }
 
@@ -660,7 +662,7 @@ wsemul_sun_output(void *cookie, const u_char *data, u_int count, int kernel)
 {
 	struct wsemul_sun_emuldata *edp = cookie;
 	struct wsemul_inputstate *instate;
-	u_int processed = 0;
+	u_int prev_count, processed = 0;
 #ifdef HAVE_JUMP_SCROLL
 	int lines;
 #endif
@@ -677,7 +679,7 @@ wsemul_sun_output(void *cookie, const u_char *data, u_int count, int kernel)
 	case ABORT_FAILED_CURSOR:
 		/*
 		 * If we could not display the cursor back, we pretended not
-		 * having been able to display the last character. But this
+		 * having been able to process the last byte. But this
 		 * is a lie, so compensate here.
 		 */
 		data++, count--;
@@ -744,6 +746,7 @@ wsemul_sun_output(void *cookie, const u_char *data, u_int count, int kernel)
 
 		wsemul_resume_abort(&edp->abortstate);
 
+		prev_count = count;
 		if (wsemul_getchar(&data, &count, instate,
 #ifdef HAVE_UTF8_SUPPORT
 		    (edp->state == SUN_EMUL_STATE_NORMAL && !kernel) ?
@@ -758,7 +761,7 @@ wsemul_sun_output(void *cookie, const u_char *data, u_int count, int kernel)
 			rc = wsemul_sun_output_lowchars(edp, instate, kernel);
 			if (rc != 0)
 				break;
-			processed++;
+			processed += prev_count - count;
 			continue;
 		}
 
@@ -766,7 +769,7 @@ wsemul_sun_output(void *cookie, const u_char *data, u_int count, int kernel)
 			rc = wsemul_sun_output_normal(edp, instate, 1);
 			if (rc != 0)
 				break;
-			processed++;
+			processed += prev_count - count;
 			continue;
 		}
 
@@ -797,7 +800,7 @@ wsemul_sun_output(void *cookie, const u_char *data, u_int count, int kernel)
 		}
 		if (rc != 0)
 			break;
-		processed++;
+		processed += prev_count - count;
 	}
 
 	if (rc != 0)
@@ -808,8 +811,9 @@ wsemul_sun_output(void *cookie, const u_char *data, u_int count, int kernel)
 		    (edp->emulcookie, 1, edp->crow, edp->ccol);
 		if (rc != 0) {
 			/*
-			 * Fail the last character output, remembering that
-			 * only the cursor operation really needs to be done.
+			 * Pretend the last byte hasn't been processed, while
+			 * remembering that only the cursor operation really
+			 * needs to be done.
 			 */
 			wsemul_abort_cursor(&edp->abortstate);
 			processed--;

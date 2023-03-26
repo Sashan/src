@@ -1,4 +1,4 @@
-/*	$OpenBSD: mft.c,v 1.82 2022/12/01 10:24:28 claudio Exp $ */
+/*	$OpenBSD: mft.c,v 1.89 2023/03/13 19:54:36 job Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -130,8 +130,8 @@ mft_parse_time(const ASN1_GENERALIZEDTIME *from,
 		return 0;
 	}
 
-	if ((p->res->valid_since = timegm(&tm_from)) == -1 ||
-	    (p->res->valid_until = timegm(&tm_until)) == -1)
+	if ((p->res->thisupdate = timegm(&tm_from)) == -1 ||
+	    (p->res->nextupdate = timegm(&tm_until)) == -1)
 		errx(1, "%s: timegm failed", p->fn);
 
 	return 1;
@@ -353,17 +353,19 @@ mft_parse(X509 **x509, const char *fn, const unsigned char *der, size_t len)
 	size_t		 cmsz;
 	unsigned char	*cms;
 	char		*crldp = NULL, *crlfile;
+	time_t		 signtime = 0;
 
 	memset(&p, 0, sizeof(struct parse));
 	p.fn = fn;
 
-	cms = cms_parse_validate(x509, fn, der, len, mft_oid, &cmsz);
+	cms = cms_parse_validate(x509, fn, der, len, mft_oid, &cmsz, &signtime);
 	if (cms == NULL)
 		return NULL;
 	assert(*x509 != NULL);
 
 	if ((p.res = calloc(1, sizeof(struct mft))) == NULL)
 		err(1, NULL);
+	p.res->signtime = signtime;
 
 	if (!x509_get_aia(*x509, fn, &p.res->aia))
 		goto out;
@@ -411,6 +413,12 @@ mft_parse(X509 **x509, const char *fn, const unsigned char *der, size_t len)
 
 	if (mft_parse_econtent(cms, cmsz, &p) == 0)
 		goto out;
+
+	if (p.res->signtime > p.res->nextupdate) {
+		warnx("%s: dating issue: CMS signing-time after MFT nextUpdate",
+		    fn);
+		goto out;
+	}
 
 	rc = 1;
 out:

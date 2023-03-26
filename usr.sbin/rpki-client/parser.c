@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.c,v 1.86 2023/02/23 13:06:42 tb Exp $ */
+/*	$OpenBSD: parser.c,v 1.89 2023/03/13 09:24:37 job Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -149,20 +149,7 @@ proc_parser_roa(char *file, const unsigned char *der, size_t len)
 
 	roa->talid = a->cert->talid;
 
-	/*
-	 * Check CRL to figure out the soonest transitive expiry moment
-	 */
-	if (crl != NULL && roa->expires > crl->expires)
-		roa->expires = crl->expires;
-
-	/*
-	 * Scan the cert tree to figure out the soonest transitive
-	 * expiry moment
-	 */
-	for (; a != NULL; a = a->parent) {
-		if (roa->expires > a->cert->expires)
-			roa->expires = a->cert->expires;
-	}
+	roa->expires = x509_find_expires(roa->notafter, a, &crlt);
 
 	return roa;
 }
@@ -326,15 +313,15 @@ proc_parser_mft_post(char *file, struct mft *mft, const char *path,
 	}
 
 	/* check that now is not before from */
-	if (now < mft->valid_since) {
+	if (now < mft->thisupdate) {
 		warnx("%s: mft not yet valid %s", file,
-		    time2str(mft->valid_since));
+		    time2str(mft->thisupdate));
 		mft->stale = 1;
 	}
 	/* check that now is not after until */
-	if (now > mft->valid_until) {
+	if (now > mft->nextupdate) {
 		warnx("%s: mft expired on %s", file,
-		    time2str(mft->valid_until));
+		    time2str(mft->nextupdate));
 		mft->stale = 1;
 	}
 
@@ -541,13 +528,7 @@ proc_parser_aspa(char *file, const unsigned char *der, size_t len)
 
 	aspa->talid = a->cert->talid;
 
-	if (crl != NULL && aspa->expires > crl->expires)
-		aspa->expires = crl->expires;
-
-	for (; a != NULL; a = a->parent) {
-		if (aspa->expires > a->cert->expires)
-			aspa->expires = a->cert->expires;
-	}
+	aspa->expires = x509_find_expires(aspa->notafter, a, &crlt);
 
 	return aspa;
 }

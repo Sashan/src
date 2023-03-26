@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.167 2023/01/13 08:58:36 claudio Exp $ */
+/*	$OpenBSD: extern.h,v 1.175 2023/03/13 19:51:49 job Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -139,7 +139,9 @@ struct cert {
 	enum cert_purpose	 purpose; /* BGPSec or CA */
 	char		*pubkey; /* Subject Public Key Info */
 	X509		*x509; /* the cert */
-	time_t		 expires; /* do not use after */
+	time_t		 notbefore; /* cert's Not Before */
+	time_t		 notafter; /* cert's Not After */
+	time_t		 expires; /* when the signature path expires */
 };
 
 /*
@@ -209,8 +211,10 @@ struct mft {
 	char		*ski; /* SKI */
 	char		*crl; /* CRL file name */
 	unsigned char	 crlhash[SHA256_DIGEST_LENGTH];
-	time_t		 valid_since;
-	time_t		 valid_until;
+	time_t		 signtime; /* CMS signing-time attribute */
+	time_t		 thisupdate; /* from the eContent */
+	time_t		 nextupdate; /* from the eContent */
+	time_t		 expires; /* when the signature path expires */
 	size_t		 filesz; /* number of filenames */
 	unsigned int	 repoid;
 	int		 stale; /* if a stale manifest */
@@ -243,7 +247,10 @@ struct roa {
 	char		*aki; /* AKI */
 	char		*sia; /* SIA signedObject */
 	char		*ski; /* SKI */
-	time_t		 expires; /* do not use after */
+	time_t		 signtime; /* CMS signing-time attribute */
+	time_t		 notbefore; /* EE cert's Not Before */
+	time_t		 notafter; /* EE cert's Not After */
+	time_t		 expires; /* when the signature path expires */
 };
 
 struct rscfile {
@@ -266,7 +273,10 @@ struct rsc {
 	char		*aia; /* AIA */
 	char		*aki; /* AKI */
 	char		*ski; /* SKI */
-	time_t		 expires; /* Not After of the RSC EE */
+	time_t		 signtime; /* CMS signing-time attribute */
+	time_t		 notbefore; /* EE cert's Not Before */
+	time_t		 notafter; /* Not After of the RSC EE */
+	time_t		 expires; /* when the signature path expires */
 };
 
 /*
@@ -294,7 +304,10 @@ struct tak {
 	char		*aki; /* AKI */
 	char		*sia; /* SIA signed Object */
 	char		*ski; /* SKI */
-	time_t		 expires; /* Not After of the TAK EE */
+	time_t		 signtime; /* CMS signing-time attribute */
+	time_t		 notbefore; /* EE cert's Not Before */
+	time_t		 notafter; /* Not After of the TAK EE */
+	time_t		 expires; /* when the signature path expires */
 };
 
 /*
@@ -314,7 +327,10 @@ struct geofeed {
 	char		*aia; /* AIA */
 	char		*aki; /* AKI */
 	char		*ski; /* SKI */
-	time_t		 expires; /* Not After of the Geofeed EE */
+	time_t		 signtime; /* CMS signing-time attribute */
+	time_t		 notbefore; /* EE cert's Not Before */
+	time_t		 notafter; /* Not After of the Geofeed EE */
+	time_t		 expires; /* when the signature path expires */
 	int		 valid; /* all resources covered */
 };
 
@@ -327,6 +343,10 @@ struct gbr {
 	char		*aki; /* AKI */
 	char		*sia; /* SIA signedObject */
 	char		*ski; /* SKI */
+	time_t		 signtime; /* CMS signing-time attribute */
+	time_t		 notbefore; /* EE cert's Not Before */
+	time_t		 notafter; /* Not After of the GBR EE */
+	time_t		 expires; /* when the signature path expires */
 };
 
 struct aspa_provider {
@@ -347,7 +367,10 @@ struct aspa {
 	uint32_t		 custasid; /* the customerASID */
 	struct aspa_provider	*providers; /* the providers */
 	size_t			 providersz; /* number of providers */
-	time_t			 expires; /* NotAfter of the ASPA EE cert */
+	time_t			 signtime; /* CMS signing-time attribute */
+	time_t		 	 notbefore; /* EE cert's Not Before */
+	time_t			 notafter; /* notAfter of the ASPA EE cert */
+	time_t			 expires; /* when the signature path expires */
 };
 
 /*
@@ -411,8 +434,8 @@ struct crl {
 	RB_ENTRY(crl)	 entry;
 	char		*aki;
 	X509_CRL	*x509_crl;
-	time_t		 issued;	/* do not use before */
-	time_t		 expires;	/* do not use after */
+	time_t		 lastupdate;	/* do not use before */
+	time_t		 nextupdate;	/* do not use after */
 };
 /*
  * Tree of CRLs sorted by uri
@@ -660,14 +683,15 @@ int		 valid_econtent_version(const char *, const ASN1_INTEGER *);
 int		 valid_aspa(const char *, struct cert *, struct aspa *);
 int		 valid_geofeed(const char *, struct cert *, struct geofeed *);
 int		 valid_uuid(const char *);
+int		 valid_ca_pkey(const char *, EVP_PKEY *);
 
 /* Working with CMS. */
 unsigned char	*cms_parse_validate(X509 **, const char *,
 		    const unsigned char *, size_t,
-		    const ASN1_OBJECT *, size_t *);
+		    const ASN1_OBJECT *, size_t *, time_t *);
 int		 cms_parse_validate_detached(X509 **, const char *,
 		    const unsigned char *, size_t,
-		    const ASN1_OBJECT *, BIO *);
+		    const ASN1_OBJECT *, BIO *, time_t *);
 
 /* Work with RFC 3779 IP addresses, prefixes, ranges. */
 
@@ -797,7 +821,8 @@ int		 x509_get_aia(X509 *, const char *, char **);
 int		 x509_get_aki(X509 *, const char *, char **);
 int		 x509_get_sia(X509 *, const char *, char **);
 int		 x509_get_ski(X509 *, const char *, char **);
-int		 x509_get_expire(X509 *, const char *, time_t *);
+int		 x509_get_notbefore(X509 *, const char *, time_t *);
+int		 x509_get_notafter(X509 *, const char *, time_t *);
 int		 x509_get_crl(X509 *, const char *, char **);
 char		*x509_crl_get_aki(X509_CRL *, const char *);
 char		*x509_get_pubkey(X509 *, const char *);
@@ -808,6 +833,7 @@ int		 x509_location(const char *, const char *, const char *,
 		    GENERAL_NAME *, char **);
 int		 x509_inherits(X509 *);
 int		 x509_any_inherits(X509 *);
+time_t		 x509_find_expires(time_t, struct auth *, struct crl_tree *);
 
 /* printers */
 char		*time2str(time_t);

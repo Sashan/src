@@ -1,4 +1,4 @@
-#	$OpenBSD: GENERIC,v 1.139 2021/08/20 05:23:18 anton Exp $
+#	$OpenBSD: GENERIC,v 1.142 2023/03/12 10:50:06 jmatthew Exp $
 #
 # For further information on compiling OpenBSD kernels, see the config(8)
 # man page.
@@ -200,6 +200,9 @@ mvpcie*		at fdt?
 pci*		at mvpcie?
 mvpxa*		at fdt?
 sdmmc*		at mvpxa?
+mvodog*		at fdt?
+mvortc*		at fdt?
+mvtemp*		at fdt?
 
 # Rockchip SoCs
 rkclock*	at fdt? early 1
@@ -384,6 +387,7 @@ wsdisplay* at udl?
 bwfm*	at uhub?		# Broadcom FullMAC
 
 atphy*		at mii?			# Attansic F1 PHYs
+eephy*		at mii?			# Marvell 88E1000 series PHY
 rgephy*		at mii?			# Realtek 8169S/8110S PHY
 rlphy*		at mii?			# Realtek 8139 internal PHYs
 ukphy*		at mii?			# "unknown" PHYs

@@ -1,4 +1,4 @@
-/*	$OpenBSD: mbr.c,v 1.121 2022/07/26 14:30:37 krw Exp $	*/
+/*	$OpenBSD: mbr.c,v 1.123 2023/03/06 13:24:40 krw Exp $	*/
 
 /*
  * Copyright (c) 1997 Tobias Weingartner
@@ -120,23 +120,29 @@ dos_mbr_to_mbr(const struct dos_mbr *dmbr, const uint64_t lba_self,
 
 	memcpy(dos_parts, dmbr->dmbr_parts, sizeof(dos_parts));
 
-	for (i = 0; i < NDOSPART; i++)
-		PRT_parse(&dos_parts[i], lba_self, lba_firstembr,
-		    &mbr->mbr_prt[i]);
+	for (i = 0; i < nitems(mbr->mbr_prt); i++) {
+		memset(&mbr->mbr_prt[i], 0, sizeof(mbr->mbr_prt[i]));
+		if (i < nitems(dmbr->dmbr_parts))
+			PRT_parse(&dos_parts[i], lba_self, lba_firstembr,
+			    &mbr->mbr_prt[i]);
+	}
 }
 
 void
 mbr_to_dos_mbr(const struct mbr *mbr, struct dos_mbr *dos_mbr)
 {
 	struct dos_partition	dos_partition;
-	int			i;
+	unsigned int		i;
 
 	memcpy(dos_mbr->dmbr_boot, mbr->mbr_code, sizeof(dos_mbr->dmbr_boot));
 	dos_mbr->dmbr_sign = htole16(DOSMBR_SIGNATURE);
 
-	for (i = 0; i < NDOSPART; i++) {
-		PRT_make(&mbr->mbr_prt[i], mbr->mbr_lba_self,
-		    mbr->mbr_lba_firstembr, &dos_partition);
+	for (i = 0; i < nitems(dos_mbr->dmbr_parts); i++) {
+		memset(&dos_partition, 0, sizeof(dos_partition));
+		if (i < nitems(mbr->mbr_prt)) {
+			PRT_make(&mbr->mbr_prt[i], mbr->mbr_lba_self,
+			    mbr->mbr_lba_firstembr, &dos_partition);
+		}
 		memcpy(&dos_mbr->dmbr_parts[i], &dos_partition,
 		    sizeof(dos_mbr->dmbr_parts[i]));
 	}
@@ -145,7 +151,7 @@ mbr_to_dos_mbr(const struct mbr *mbr, struct dos_mbr *dos_mbr)
 void
 MBR_print(const struct mbr *mbr, const char *units)
 {
-	int			i;
+	unsigned int		i;
 
 	DISK_printgeometry("s");
 
@@ -153,7 +159,7 @@ MBR_print(const struct mbr *mbr, const char *units)
 	printf("Signature: 0x%X\n", (int)mbr->mbr_signature);
 	PRT_print_parthdr();
 
-	for (i = 0; i < NDOSPART; i++)
+	for (i = 0; i < nitems(mbr->mbr_prt); i++)
 		PRT_print_part(i, &mbr->mbr_prt[i], units);
 }
 
@@ -198,7 +204,7 @@ MBR_valid_prt(const struct mbr *mbr)
 		return 1;	/* All zeros struct dos_mbr is editable. */
 
 	nprt = 0;
-	for (i = 0; i < NDOSPART; i++) {
+	for (i = 0; i < nitems(mbr->mbr_prt); i++) {
 		bs = mbr->mbr_prt[i].prt_bs;
 		ns = mbr->mbr_prt[i].prt_ns;
 		id = mbr->mbr_prt[i].prt_id;

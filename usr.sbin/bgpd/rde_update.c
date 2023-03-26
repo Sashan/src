@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde_update.c,v 1.156 2023/02/13 18:07:53 claudio Exp $ */
+/*	$OpenBSD: rde_update.c,v 1.159 2023/03/13 16:52:42 claudio Exp $ */
 
 /*
  * Copyright (c) 2004 Claudio Jeker <claudio@openbsd.org>
@@ -66,7 +66,7 @@ up_test_update(struct rde_peer *peer, struct prefix *p)
 
 	if (asp == NULL || asp->flags & F_ATTR_PARSE_ERR)
 		fatalx("try to send out a botched path");
-	if (asp->flags & F_ATTR_LOOP)
+	if (asp->flags & (F_ATTR_LOOP | F_ATTR_OTC_LEAK))
 		fatalx("try to send out a looped path");
 
 	if (peer == frompeer)
@@ -104,27 +104,28 @@ up_test_update(struct rde_peer *peer, struct prefix *p)
 
 /* RFC9234 open policy handling */
 static int
-up_enforce_open_policy(struct rde_peer *peer, struct filterstate *state)
+up_enforce_open_policy(struct rde_peer *peer, struct filterstate *state,
+    uint8_t aid)
 {
-	uint8_t role;
-
-	if (!peer_has_open_policy(peer, &role))
+	/* only for IPv4 and IPv6 unicast */
+	if (aid != AID_INET && aid != AID_INET6)
 		return 0;
 
 	/*
 	 * do not propagate (consider it filtered) if OTC is present and
-	 * neighbor role is peer, provider or rs.
+	 * local role is peer, customer or rs-client.
 	 */
-	if (role == CAPA_ROLE_PEER || role == CAPA_ROLE_PROVIDER ||
-	    role == CAPA_ROLE_RS)
+	if (peer->role == ROLE_PEER || peer->role == ROLE_CUSTOMER ||
+	    peer->role == ROLE_RS_CLIENT)
 		if (state->aspath.flags & F_ATTR_OTC)
-			return (1);
+			return 1;
 
 	/*
-	 * add OTC attribute if not present for peers, customers and rs-clients.
+	 * add OTC attribute if not present towards peers, customers and
+	 * rs-clients (local roles peer, provider, rs).
 	 */
-	if (role == CAPA_ROLE_PEER || role == CAPA_ROLE_CUSTOMER ||
-	    role == CAPA_ROLE_RS_CLIENT)
+	if (peer->role == ROLE_PEER || peer->role == ROLE_PROVIDER ||
+	    peer->role == ROLE_RS)
 		if ((state->aspath.flags & F_ATTR_OTC) == 0) {
 			uint32_t tmp;
 
@@ -149,8 +150,8 @@ up_enforce_open_policy(struct rde_peer *peer, struct filterstate *state)
  * - UP_EXCLUDED if prefix was excluded because of up_test_update()
  */
 static enum up_state
-up_process_prefix(struct filter_head *rules, struct rde_peer *peer,
-    struct prefix *new, struct prefix *p, struct bgpd_addr *addr, uint8_t plen)
+up_process_prefix(struct rde_peer *peer, struct prefix *new, struct prefix *p,
+    struct bgpd_addr *addr, uint8_t plen)
 {
 	struct filterstate state;
 	int excluded = 0;
@@ -165,14 +166,14 @@ up_process_prefix(struct filter_head *rules, struct rde_peer *peer,
 		excluded = 1;
 
 	rde_filterstate_prep(&state, new);
-	if (rde_filter(rules, peer, prefix_peer(new), addr, plen, &state) ==
-	    ACTION_DENY) {
+	if (rde_filter(peer->out_rules, peer, prefix_peer(new), addr, plen,
+	    &state) == ACTION_DENY) {
 		rde_filterstate_clean(&state);
 		return UP_FILTERED;
 	}
 
 	/* Open Policy Check: acts like an output filter */
-	if (up_enforce_open_policy(peer, &state)) {
+	if (up_enforce_open_policy(peer, &state, addr->aid)) {
 		rde_filterstate_clean(&state);
 		return UP_FILTERED;
 	}
@@ -205,8 +206,7 @@ up_process_prefix(struct filter_head *rules, struct rde_peer *peer,
 }
 
 void
-up_generate_updates(struct filter_head *rules, struct rde_peer *peer,
-    struct rib_entry *re)
+up_generate_updates(struct rde_peer *peer, struct rib_entry *re)
 {
 	struct bgpd_addr	addr;
 	struct prefix		*new, *p;
@@ -219,8 +219,7 @@ up_generate_updates(struct filter_head *rules, struct rde_peer *peer,
 
 	new = prefix_best(re);
 	while (new != NULL) {
-		switch (up_process_prefix(rules, peer, new, p,
-		    &addr, prefixlen)) {
+		switch (up_process_prefix(peer, new, p, &addr, prefixlen)) {
 		case UP_OK:
 		case UP_ERR_LIMIT:
 			return;
@@ -250,8 +249,7 @@ done:
  * less churn is needed.
  */
 void
-up_generate_addpath(struct filter_head *rules, struct rde_peer *peer,
-    struct rib_entry *re)
+up_generate_addpath(struct rde_peer *peer, struct rib_entry *re)
 {
 	struct bgpd_addr	addr;
 	struct prefix		*head, *new, *p;
@@ -312,8 +310,8 @@ up_generate_addpath(struct filter_head *rules, struct rde_peer *peer,
 			}
 		}
 
-		switch (up_process_prefix(rules, peer, new, (void *)-1,
-		    &addr, prefixlen)) {
+		switch (up_process_prefix(peer, new, (void *)-1, &addr,
+		    prefixlen)) {
 		case UP_OK:
 			maxpaths++;
 			extrapaths += extra;
@@ -344,8 +342,8 @@ up_generate_addpath(struct filter_head *rules, struct rde_peer *peer,
  * are distributed just remove old and add new.
  */ 
 void
-up_generate_addpath_all(struct filter_head *rules, struct rde_peer *peer,
-    struct rib_entry *re, struct prefix *new, struct prefix *old)
+up_generate_addpath_all(struct rde_peer *peer, struct rib_entry *re,
+    struct prefix *new, struct prefix *old)
 {
 	struct bgpd_addr	addr;
 	struct prefix		*p, *head = NULL;
@@ -378,8 +376,8 @@ up_generate_addpath_all(struct filter_head *rules, struct rde_peer *peer,
 
 	/* add new path (or multiple if all is set) */
 	while (new != NULL) {
-		switch (up_process_prefix(rules, peer, new, (void *)-1,
-		    &addr, prefixlen)) {
+		switch (up_process_prefix(peer, new, (void *)-1, &addr,
+		    prefixlen)) {
 		case UP_OK:
 		case UP_FILTERED:
 		case UP_EXCLUDED:
@@ -413,8 +411,7 @@ int rib_empty(struct rib_entry *);
 
 /* send a default route to the specified peer */
 void
-up_generate_default(struct filter_head *rules, struct rde_peer *peer,
-    uint8_t aid)
+up_generate_default(struct rde_peer *peer, uint8_t aid)
 {
 	extern struct rde_peer	*peerself;
 	struct filterstate	 state;
@@ -443,7 +440,7 @@ up_generate_default(struct filter_head *rules, struct rde_peer *peer,
 	p = prefix_adjout_lookup(peer, &addr, 0);
 
 	/* outbound filter as usual */
-	if (rde_filter(rules, peer, peerself, &addr, 0, &state) ==
+	if (rde_filter(peer->out_rules, peer, peerself, &addr, 0, &state) ==
 	    ACTION_DENY) {
 		rde_filterstate_clean(&state);
 		return;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: x509.c,v 1.65 2023/02/16 14:34:34 tb Exp $ */
+/*	$OpenBSD: x509.c,v 1.70 2023/03/14 07:09:11 tb Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
@@ -186,15 +186,17 @@ out:
 
 /*
  * Parse X509v3 subject key identifier (SKI), RFC 6487 sec. 4.8.2.
- * Returns the SKI or NULL if it could not be parsed.
- * The SKI is formatted as a hex string.
+ * The SKI must be the SHA1 hash of the Subject Public Key.
+ * Returns the SKI formatted as hex string, or NULL if it couldn't be parsed.
  */
 int
 x509_get_ski(X509 *x, const char *fn, char **ski)
 {
-	const unsigned char	*d;
+	const unsigned char	*d, *spk;
 	ASN1_OCTET_STRING	*os;
-	int			 dsz, crit, rc = 0;
+	X509_PUBKEY		*pubkey;
+	unsigned char		 spkd[SHA_DIGEST_LENGTH];
+	int			 crit, dsz, spkz, rc = 0;
 
 	*ski = NULL;
 	os = X509_get_ext_d2i(x, NID_subject_key_identifier, &crit, NULL);
@@ -216,9 +218,28 @@ x509_get_ski(X509 *x, const char *fn, char **ski)
 		goto out;
 	}
 
+	if ((pubkey = X509_get_X509_PUBKEY(x)) == NULL) {
+		warnx("%s: X509_get_X509_PUBKEY", fn);
+		goto out;
+	}
+	if (!X509_PUBKEY_get0_param(NULL, &spk, &spkz, NULL, pubkey)) {
+		warnx("%s: X509_PUBKEY_get0_param", fn);
+		goto out;
+	}
+
+	if (!EVP_Digest(spk, spkz, spkd, NULL, EVP_sha1(), NULL)) {
+		warnx("%s: EVP_Digest failed", fn);
+		goto out;
+	}
+
+	if (memcmp(spkd, d, dsz) != 0) {
+		warnx("%s: SKI does not match SHA1 hash of SPK", fn);
+		goto out;
+	}
+
 	*ski = hex_encode(d, dsz);
 	rc = 1;
-out:
+ out:
 	ASN1_OCTET_STRING_free(os);
 	return rc;
 }
@@ -354,11 +375,18 @@ x509_get_aia(X509 *x, const char *fn, char **aia)
 	if (info == NULL)
 		return 1;
 
+	if ((X509_get_extension_flags(x) & EXFLAG_SS) != 0) {
+		warnx("%s: RFC 6487 section 4.8.7: AIA must be absent from "
+		    "a self-signed certificate", fn);
+		goto out;
+	}
+
 	if (crit != 0) {
 		warnx("%s: RFC 6487 section 4.8.7: "
 		    "AIA: extension not non-critical", fn);
 		goto out;
 	}
+
 	if (sk_ACCESS_DESCRIPTION_num(info) != 1) {
 		warnx("%s: RFC 6487 section 4.8.7: AIA: "
 		    "want 1 element, have %d", fn,
@@ -465,10 +493,30 @@ x509_get_sia(X509 *x, const char *fn, char **sia)
 }
 
 /*
- * Extract the expire time (not-after) of a certificate.
+ * Extract the notBefore of a certificate.
  */
 int
-x509_get_expire(X509 *x, const char *fn, time_t *tt)
+x509_get_notbefore(X509 *x, const char *fn, time_t *tt)
+{
+	const ASN1_TIME	*at;
+
+	at = X509_get0_notBefore(x);
+	if (at == NULL) {
+		warnx("%s: X509_get0_notBefore failed", fn);
+		return 0;
+	}
+	if (!x509_get_time(at, tt)) {
+		warnx("%s: ASN1_time_parse failed", fn);
+		return 0;
+	}
+	return 1;
+}
+
+/*
+ * Extract the notAfter from a certificate.
+ */
+int
+x509_get_notafter(X509 *x, const char *fn, time_t *tt)
 {
 	const ASN1_TIME	*at;
 
@@ -788,4 +836,26 @@ x509_convert_seqnum(const char *fn, const ASN1_INTEGER *i)
  out:
 	BN_free(seqnum);
 	return s;
+}
+
+/*
+ * Find the closest expiry moment by walking the chain of authorities.
+ */
+time_t
+x509_find_expires(time_t notafter, struct auth *a, struct crl_tree *crlt)
+{
+	struct crl	*crl;
+	time_t		 expires;
+
+	expires = notafter;
+
+	for (; a != NULL; a = a->parent) {
+		if (expires > a->cert->notafter)
+			expires = a->cert->notafter;
+		crl = crl_get(crlt, a);
+		if (crl != NULL && expires > crl->nextupdate)
+			expires = crl->nextupdate;
+	}
+
+	return expires;
 }

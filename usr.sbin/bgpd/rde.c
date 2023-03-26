@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.c,v 1.593 2023/02/13 18:07:53 claudio Exp $ */
+/*	$OpenBSD: rde.c,v 1.597 2023/03/21 14:52:36 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -198,16 +198,15 @@ rde_main(int debug, int verbose)
 	imsg_init(ibuf_main, 3);
 
 	/* initialize the RIB structures */
+	if ((out_rules = calloc(1, sizeof(struct filter_head))) == NULL)
+		fatal(NULL);
+	TAILQ_INIT(out_rules);
+
 	pt_init();
-	peer_init();
+	peer_init(out_rules);
 
 	/* make sure the default RIBs are setup */
 	rib_new("Adj-RIB-In", 0, F_RIB_NOFIB | F_RIB_NOEVALUATE);
-
-	out_rules = calloc(1, sizeof(struct filter_head));
-	if (out_rules == NULL)
-		fatal(NULL);
-	TAILQ_INIT(out_rules);
 
 	conf = new_config();
 	log_info("route decision engine ready");
@@ -396,7 +395,7 @@ rde_dispatch_imsg_session(struct imsgbuf *ibuf)
 			if (imsg.hdr.len - IMSG_HEADER_SIZE !=
 			    sizeof(struct peer_config))
 				fatalx("incorrect size of session request");
-			peer = peer_add(imsg.hdr.peerid, imsg.data);
+			peer = peer_add(imsg.hdr.peerid, imsg.data, out_rules);
 			/* make sure rde_eval_all is on if needed. */
 			if (peer->conf.flags & PEERFLAG_EVALUATE_ALL)
 				rde_eval_all = 1;
@@ -896,6 +895,7 @@ rde_dispatch_imsg_parent(struct imsgbuf *ibuf)
 			if ((rib = rib_byid(rib_find(r->rib))) == NULL) {
 				log_warnx("IMSG_RECONF_FILTER: filter rule "
 				    "for nonexistent rib %s", r->rib);
+				filterset_free(&r->set);
 				free(r);
 				break;
 			}
@@ -911,8 +911,9 @@ rde_dispatch_imsg_parent(struct imsgbuf *ibuf)
 					rib->in_rules_tmp = nr;
 				}
 				TAILQ_INSERT_TAIL(nr, r, entry);
-			} else
+			} else {
 				TAILQ_INSERT_TAIL(out_rules_tmp, r, entry);
+			}
 			break;
 		case IMSG_RECONF_PREFIX_SET:
 		case IMSG_RECONF_ORIGIN_SET:
@@ -1242,7 +1243,7 @@ rde_update_dispatch(struct rde_peer *peer, struct imsg *imsg)
 	uint16_t		 withdrawn_len;
 	uint16_t		 attrpath_len;
 	uint16_t		 nlri_len;
-	uint8_t			 aid, prefixlen, safi, subtype, role;
+	uint8_t			 aid, prefixlen, safi, subtype;
 	uint32_t		 fas, pathid;
 
 	p = imsg->data;
@@ -1321,26 +1322,6 @@ rde_update_dispatch(struct rde_peer *peer, struct imsg *imsg)
 			    rde_update_err(peer, ERR_UPDATE, ERR_UPD_ASPATH,
 				    NULL, 0);
 			    goto done;
-			}
-		}
-
-		/* inject open policy OTC attribute if needed */
-		if (peer_has_open_policy(peer, &role) &&
-		    (state.aspath.flags & F_ATTR_OTC) == 0) {
-			uint32_t tmp;
-			switch (role) {
-			case CAPA_ROLE_PROVIDER:
-			case CAPA_ROLE_RS:
-			case CAPA_ROLE_PEER:
-				tmp = htonl(peer->conf.remote_as);
-				if (attr_optadd(&state.aspath,
-				    ATTR_OPTIONAL|ATTR_TRANSITIVE, ATTR_OTC,
-				    &tmp, sizeof(tmp)) == -1) {
-					rde_update_err(peer, ERR_UPDATE,
-					    ERR_UPD_ATTRLIST, NULL, 0);
-					goto done;
-				}
-				state.aspath.flags |= F_ATTR_OTC;
 			}
 		}
 
@@ -1520,6 +1501,28 @@ rde_update_dispatch(struct rde_peer *peer, struct imsg *imsg)
 			    NULL, 0);
 			goto done;
 		}
+
+		/* inject open policy OTC attribute if needed */
+		if ((state.aspath.flags & F_ATTR_OTC) == 0) {
+			uint32_t tmp;
+			switch (peer->role) {
+			case ROLE_CUSTOMER:
+			case ROLE_RS_CLIENT:
+			case ROLE_PEER:
+				tmp = htonl(peer->conf.remote_as);
+				if (attr_optadd(&state.aspath,
+				    ATTR_OPTIONAL|ATTR_TRANSITIVE, ATTR_OTC,
+				    &tmp, sizeof(tmp)) == -1) {
+					rde_update_err(peer, ERR_UPDATE,
+					    ERR_UPD_ATTRLIST, NULL, 0);
+					goto done;
+				}
+				state.aspath.flags |= F_ATTR_OTC;
+				break;
+			default:
+				break;
+			}
+		}
 	}
 	while (nlri_len > 0) {
 		if (peer_has_add_path(peer, AID_INET, CAPA_AP_RECV)) {
@@ -1578,6 +1581,34 @@ rde_update_dispatch(struct rde_peer *peer, struct imsg *imsg)
 			rde_update_err(peer, ERR_UPDATE, ERR_UPD_OPTATTR,
 			    NULL, 0);
 			goto done;
+		}
+
+		if (aid == AID_INET6) {
+			/* inject open policy OTC attribute if needed */
+			if ((state.aspath.flags & F_ATTR_OTC) == 0) {
+				uint32_t tmp;
+				switch (peer->role) {
+				case ROLE_CUSTOMER:
+				case ROLE_RS_CLIENT:
+				case ROLE_PEER:
+					tmp = htonl(peer->conf.remote_as);
+					if (attr_optadd(&state.aspath,
+					    ATTR_OPTIONAL|ATTR_TRANSITIVE,
+					    ATTR_OTC, &tmp,
+					    sizeof(tmp)) == -1) {
+						rde_update_err(peer, ERR_UPDATE,
+						    ERR_UPD_ATTRLIST, NULL, 0);
+						goto done;
+					}
+					state.aspath.flags |= F_ATTR_OTC;
+					break;
+				default:
+					break;
+				}
+			}
+		} else {
+			/* Only IPv4 and IPv6 unicast do OTC handling */
+			state.aspath.flags &= ~F_ATTR_OTC_LEAK;
 		}
 
 		/* unlock the previously locked nexthop, it is no longer used */
@@ -1824,7 +1855,7 @@ rde_attr_parse(u_char *p, uint16_t len, struct rde_peer *peer,
 	int		 error;
 	uint16_t	 attr_len, nlen;
 	uint16_t	 plen = 0;
-	uint8_t		 flags, type, role, tmp8;
+	uint8_t		 flags, type, tmp8;
 
 	if (len < 3) {
 bad_len:
@@ -2086,7 +2117,7 @@ bad_flags:
 			goto bad_flags;
 		goto optattr;
 	case ATTR_MP_REACH_NLRI:
-		if (attr_len < 4)
+		if (attr_len < 5)
 			goto bad_len;
 		if (!CHECK_FLAGS(flags, ATTR_OPTIONAL, 0))
 			goto bad_flags;
@@ -2160,20 +2191,19 @@ bad_flags:
 		if (!CHECK_FLAGS(flags, ATTR_OPTIONAL|ATTR_TRANSITIVE,
 		    ATTR_PARTIAL))
 			goto bad_flags;
-		if (peer_has_open_policy(peer, &role)) {
-			switch (role) {
-			case CAPA_ROLE_CUSTOMER:
-			case CAPA_ROLE_RS_CLIENT:
-				a->flags |= F_ATTR_OTC_LOOP | F_ATTR_PARSE_ERR;
-				break;
-			case CAPA_ROLE_PEER:
-				memcpy(&tmp32, p, sizeof(tmp32));
-				tmp32 = ntohl(tmp32);
-				if (tmp32 != peer->conf.remote_as)
-					a->flags |= F_ATTR_OTC_LOOP |
-					    F_ATTR_PARSE_ERR;
-				break;
-			}
+		switch (peer->role) {
+		case ROLE_PROVIDER:
+		case ROLE_RS:
+			a->flags |= F_ATTR_OTC_LEAK;
+			break;
+		case ROLE_PEER:
+			memcpy(&tmp32, p, sizeof(tmp32));
+			tmp32 = ntohl(tmp32);
+			if (tmp32 != peer->conf.remote_as)
+				a->flags |= F_ATTR_OTC_LEAK;
+			break;
+		default:
+			break;
 		}
 		a->flags |= F_ATTR_OTC;
 		goto optattr;
@@ -2280,7 +2310,7 @@ rde_get_mp_nexthop(u_char *data, uint16_t len, uint8_t aid,
 	totlen = 1;
 	len--;
 
-	if (nhlen > len)
+	if (nhlen + 1 > len)
 		return (-1);
 
 	memset(&nexthop, 0, sizeof(nexthop));
@@ -2648,8 +2678,8 @@ rde_dump_rib_as(struct prefix *p, struct rde_aspath *asp, pid_t pid, int flags,
 	if (prefix_eligible(p))
 		rib.flags |= F_PREF_ELIGIBLE;
 	/* otc loop includes parse err so skip the latter if the first is set */
-	if (asp->flags & F_ATTR_OTC_LOOP)
-		rib.flags |= F_PREF_OTC_LOOP;
+	if (asp->flags & F_ATTR_OTC_LEAK)
+		rib.flags |= F_PREF_OTC_LEAK;
 	else if (asp->flags & F_ATTR_PARSE_ERR)
 		rib.flags |= F_PREF_INVALID;
 	staletime = peer->staletime[p->pt->aid];
@@ -2742,6 +2772,11 @@ rde_dump_filter(struct prefix *p, struct ctl_show_rib_request *req, int adjout)
 		return;
 	if ((req->flags & F_CTL_INVALID) &&
 	    (asp->flags & F_ATTR_PARSE_ERR) == 0)
+		return;
+	if ((req->flags & F_CTL_INELIGIBLE) && prefix_eligible(p))
+		return;
+	if ((req->flags & F_CTL_LEAKED) &&
+	    (asp->flags & F_ATTR_OTC_LEAK) == 0)
 		return;
 	if ((req->flags & F_CTL_HAS_PATHID)) {
 		/* Match against the transmit path id if adjout is used.  */
@@ -3530,19 +3565,14 @@ rde_reload_done(void)
 	rde_mark_prefixsets_dirty(&originsets_old, &conf->rde_originsets);
 	as_sets_mark_dirty(&as_sets_old, &conf->as_sets);
 
-	/*
-	 * make the new filter rules the active one but keep the old for
-	 * softrconfig. This is needed so that changes happening are using
-	 * the right filters.
-	 */
-	fh = out_rules;
-	out_rules = out_rules_tmp;
-	out_rules_tmp = fh;
-
-	rde_filter_calc_skip_steps(out_rules);
 
 	/* make sure that rde_eval_all is correctly set after a config change */
 	rde_eval_all = 0;
+
+	/* Make the new outbound filter rules the active one. */
+	filterlist_free(out_rules);
+	out_rules = out_rules_tmp;
+	out_rules_tmp = NULL;
 
 	/* check if filter changed */
 	RB_FOREACH(peer, peer_tree, &peertable) {
@@ -3612,12 +3642,17 @@ rde_reload_done(void)
 			softreconfig++;	/* account for the running flush */
 			continue;
 		}
-		if (!rde_filter_equal(out_rules, out_rules_tmp, peer)) {
+
+		/* reapply outbound filters for this peer */
+		fh = peer_apply_out_filter(peer, out_rules);
+
+		if (!rde_filter_equal(peer->out_rules, fh)) {
 			char *p = log_fmt_peer(&peer->conf);
 			log_debug("out filter change: reloading peer %s", p);
 			free(p);
 			peer->reconf_out = 1;
 		}
+		filterlist_free(fh);
 	}
 
 	/* bring ribs in sync */
@@ -3667,8 +3702,7 @@ rde_reload_done(void)
 			rib->state = RECONF_KEEP;
 			/* FALLTHROUGH */
 		case RECONF_KEEP:
-			if (rde_filter_equal(rib->in_rules,
-			    rib->in_rules_tmp, NULL))
+			if (rde_filter_equal(rib->in_rules, rib->in_rules_tmp))
 				/* rib is in sync */
 				break;
 			log_debug("in filter change: reloading RIB %s",
@@ -3688,8 +3722,6 @@ rde_reload_done(void)
 		rib->in_rules_tmp = NULL;
 	}
 
-	filterlist_free(out_rules_tmp);
-	out_rules_tmp = NULL;
 	/* old filters removed, free all sets */
 	free_rde_prefixsets(&prefixsets_old);
 	free_rde_prefixsets(&originsets_old);
@@ -3760,8 +3792,7 @@ rde_softreconfig_in_done(void *arg, uint8_t dummy)
 				/* just resend the default route */
 				for (aid = 0; aid < AID_MAX; aid++) {
 					if (peer->capa.mp[aid])
-						up_generate_default(out_rules,
-						    peer, aid);
+						up_generate_default(peer, aid);
 				}
 				peer->reconf_out = 0;
 			} else

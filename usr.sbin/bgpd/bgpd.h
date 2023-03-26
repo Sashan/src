@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.461 2023/02/09 13:43:23 claudio Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.465 2023/03/13 16:52:41 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -83,20 +83,22 @@
 #define	F_MPLS			0x0080
 #define	F_LONGER		0x0200
 #define	F_SHORTER		0x0400
-#define	F_CTL_DETAIL		0x1000	/* only set on requests */
-#define	F_CTL_ADJ_IN		0x2000	/* only set on requests */
-#define	F_CTL_ADJ_OUT		0x4000	/* only set on requests */
+#define	F_CTL_DETAIL		0x1000		/* only set on requests */
+#define	F_CTL_ADJ_IN		0x2000		/* only set on requests */
+#define	F_CTL_ADJ_OUT		0x4000		/* only set on requests */
 #define	F_CTL_BEST		0x8000
-#define	F_CTL_SSV		0x20000	/* only used by bgpctl */
-#define	F_CTL_INVALID		0x40000 /* only set on requests */
+#define	F_CTL_INELIGIBLE	0x10000		/* only set on requests */
+#define	F_CTL_LEAKED		0x20000		/* only set on requests */
+#define	F_CTL_INVALID		0x40000		/* only set on requests */
 #define	F_CTL_OVS_VALID		0x80000
 #define	F_CTL_OVS_INVALID	0x100000
 #define	F_CTL_OVS_NOTFOUND	0x200000
-#define	F_CTL_NEIGHBORS		0x400000 /* only used by bgpctl */
-#define	F_CTL_HAS_PATHID	0x800000 /* only set on requests */
+#define	F_CTL_NEIGHBORS		0x400000	 /* only used by bgpctl */
+#define	F_CTL_HAS_PATHID	0x800000	 /* only set on requests */
 #define	F_CTL_AVS_VALID		0x1000000
 #define	F_CTL_AVS_INVALID	0x2000000
 #define	F_CTL_AVS_UNKNOWN	0x4000000
+#define	F_CTL_SSV		0x80000000	/* only used by bgpctl */
 
 #define CTASSERT(x)	extern char  _ctassert[(x) ? 1 : -1 ] \
 			    __attribute__((__unused__))
@@ -398,13 +400,12 @@ struct capabilities {
 		int8_t	flags[AID_MAX];	/* graceful restart per AID flags */
 		int8_t	restart;	/* graceful restart, RFC 4724 */
 	}	grestart;
-	enum role role;			/* Open Policy, RFC 9234 */
 	int8_t	mp[AID_MAX];		/* multiprotocol extensions, RFC 4760 */
 	int8_t	add_path[AID_MAX];	/* ADD_PATH, RFC 7911 */
 	int8_t	refresh;		/* route refresh, RFC 2918 */
 	int8_t	as4byte;		/* 4-byte ASnum, RFC 4893 */
 	int8_t	enhanced_rr;		/* enhanced route refresh, RFC 7313 */
-	int8_t	role_ena;		/* 1 for enable, 2 for enforce */
+	int8_t	policy;			/* Open Policy, RFC 9234, 2 = enforce */
 };
 
 /* flags for RFC 4724 - graceful restart */
@@ -539,7 +540,7 @@ struct rtr_config {
 	struct bgpd_addr		remote_addr;
 	struct bgpd_addr		local_addr;
 	uint32_t			id;
-	in_addr_t			remote_port;
+	uint16_t			remote_port;
 };
 
 struct ctl_show_rtr {
@@ -551,7 +552,8 @@ struct ctl_show_rtr {
 	uint32_t		retry;
 	uint32_t		expire;
 	int			session_id;
-	in_addr_t		remote_port;
+	uint16_t		remote_port;
+	uint8_t			version;
 	enum rtr_error		last_sent_error;
 	enum rtr_error		last_recv_error;
 	char			last_sent_msg[REASON_LEN];
@@ -837,7 +839,7 @@ struct ctl_neighbor {
 #define	F_PREF_STALE	0x010
 #define	F_PREF_INVALID	0x020
 #define	F_PREF_PATH_ID	0x040
-#define	F_PREF_OTC_LOOP	0x080
+#define	F_PREF_OTC_LEAK	0x080
 #define	F_PREF_ECMP	0x100
 #define	F_PREF_AS_WIDE	0x200
 
@@ -1111,11 +1113,10 @@ struct filter_rule {
 	struct filter_peers		peer;
 	struct filter_match		match;
 	struct filter_set_head		set;
-#define RDE_FILTER_SKIP_DIR		0
+#define RDE_FILTER_SKIP_PEERID		0
 #define RDE_FILTER_SKIP_GROUPID		1
 #define RDE_FILTER_SKIP_REMOTE_AS	2
-#define RDE_FILTER_SKIP_PEERID		3
-#define RDE_FILTER_SKIP_COUNT		4
+#define RDE_FILTER_SKIP_COUNT		3
 	struct filter_rule		*skip[RDE_FILTER_SKIP_COUNT];
 	enum filter_actions		action;
 	enum directions			dir;

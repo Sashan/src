@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf.c,v 1.1171 2023/01/22 23:05:51 yasuoka Exp $ */
+/*	$OpenBSD: pf.c,v 1.1173 2023/03/23 01:41:12 jsg Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -1640,8 +1640,8 @@ pf_state_expires(const struct pf_state *st, uint8_t stimeout)
 	 * next pass of the purge task.
 	 */
 
-	/* handle all PFTM_* > PFTM_MAX here */
-	if (stimeout > PFTM_MAX)
+	/* handle all PFTM_* >= PFTM_MAX here */
+	if (stimeout >= PFTM_MAX)
 		return (0);
 
 	KASSERT(stimeout < PFTM_MAX);
@@ -6846,8 +6846,12 @@ pf_walk_header(struct pf_pdesc *pd, struct ip *h, u_short *reason)
 	pd->proto = h->ip_p;
 	/* IGMP packets have router alert options, allow them */
 	if (pd->proto == IPPROTO_IGMP) {
-		/* According to RFC 1112 ttl must be set to 1. */
-		if ((h->ip_ttl != 1) || !IN_MULTICAST(h->ip_dst.s_addr)) {
+		/*
+		 * According to RFC 1112 ttl must be set to 1 in all IGMP
+		 * packets sent to 224.0.0.1
+		 */
+		if ((h->ip_ttl != 1) &&
+		    (h->ip_dst.s_addr == INADDR_ALLHOSTS_GROUP)) {
 			DPFPRINTF(LOG_NOTICE, "Invalid IGMP");
 			REASON_SET(reason, PFRES_IPOPTIONS);
 			return (PF_DROP);

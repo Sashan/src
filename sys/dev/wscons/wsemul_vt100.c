@@ -1,4 +1,4 @@
-/* $OpenBSD: wsemul_vt100.c,v 1.42 2023/01/12 20:39:37 nicm Exp $ */
+/* $OpenBSD: wsemul_vt100.c,v 1.45 2023/03/06 20:34:35 miod Exp $ */
 /* $NetBSD: wsemul_vt100.c,v 1.13 2000/04/28 21:56:16 mycroft Exp $ */
 
 /*
@@ -191,7 +191,7 @@ wsemul_vt100_cnattach(const struct wsscreen_descr *type, void *cookie, int ccol,
 	edp->dblwid = NULL;
 	edp->dw = 0;
 #endif
-	edp->dcsarg = 0;
+	edp->dcsarg = NULL;
 	edp->isolatin1tab = edp->decgraphtab = edp->dectechtab = NULL;
 	edp->nrctab = NULL;
 	wsemul_vt100_reset(edp);
@@ -309,6 +309,12 @@ wsemul_vt100_reset(struct wsemul_vt100_emuldata *edp)
 	edp->chartab0 = 0;
 	edp->chartab1 = 2;
 	edp->sschartab = 0;
+	edp->instate.inchar = 0;
+	edp->instate.lbound = 0;
+	edp->instate.mbleft = 0;
+	edp->kstate.inchar = 0;
+	edp->kstate.lbound = 0;
+	edp->kstate.mbleft = 0;
 }
 
 /*
@@ -584,12 +590,15 @@ wsemul_vt100_output_esc(struct wsemul_vt100_emuldata *edp,
 		edp->sschartab = 3;
 		break;
 	case 'M': /* RI */
-		if (ROWS_ABOVE > 0) {
-			edp->crow--;
+		i = ROWS_ABOVE;
+		if (i > 0) {
+			if (edp->crow > 0)
+				edp->crow--;
 			CHECK_DW;
-			break;
+		} else if (i == 0) {
+			/* Top of scroll region. */
+			rc = wsemul_vt100_scrolldown(edp, 1);
 		}
-		rc = wsemul_vt100_scrolldown(edp, 1);
 		break;
 	case 'P': /* DCS */
 		edp->nargs = 0;
@@ -817,7 +826,7 @@ int
 wsemul_vt100_output_string(struct wsemul_vt100_emuldata *edp,
     struct wsemul_inputstate *instate)
 {
-	if (edp->dcstype && edp->dcspos < DCS_MAXLEN) {
+	if (edp->dcsarg && edp->dcstype && edp->dcspos < DCS_MAXLEN) {
 		if (instate->inchar & ~0xff) {
 #ifdef VT100_PRINTUNKNOWN
 			printf("unknown char %x in DCS\n", instate->inchar);
@@ -1101,7 +1110,7 @@ wsemul_vt100_output(void *cookie, const u_char *data, u_int count, int kernel)
 {
 	struct wsemul_vt100_emuldata *edp = cookie;
 	struct wsemul_inputstate *instate;
-	u_int processed = 0;
+	u_int prev_count, processed = 0;
 #ifdef HAVE_JUMP_SCROLL
 	int lines;
 #endif
@@ -1118,7 +1127,7 @@ wsemul_vt100_output(void *cookie, const u_char *data, u_int count, int kernel)
 	case ABORT_FAILED_CURSOR:
 		/*
 		 * If we could not display the cursor back, we pretended not
-		 * having been able to display the last character. But this
+		 * having been able to process the last byte. But this
 		 * is a lie, so compensate here.
 		 */
 		data++, count--;
@@ -1191,6 +1200,7 @@ wsemul_vt100_output(void *cookie, const u_char *data, u_int count, int kernel)
 
 		wsemul_resume_abort(&edp->abortstate);
 
+		prev_count = count;
 		if (wsemul_getchar(&data, &count, instate,
 #ifdef HAVE_UTF8_SUPPORT
 		    (edp->state == VT100_EMUL_STATE_NORMAL && !kernel) ?
@@ -1206,7 +1216,7 @@ wsemul_vt100_output(void *cookie, const u_char *data, u_int count, int kernel)
 			rc = wsemul_vt100_output_c0c1(edp, instate, kernel);
 			if (rc != 0)
 				break;
-			processed++;
+			processed += prev_count - count;
  			continue;
  		}
 
@@ -1214,7 +1224,7 @@ wsemul_vt100_output(void *cookie, const u_char *data, u_int count, int kernel)
 			rc = wsemul_vt100_output_normal(edp, instate, kernel);
 			if (rc != 0)
 				break;
-			processed++;
+			processed += prev_count - count;
 			continue;
 		}
 #ifdef DIAGNOSTIC
@@ -1224,7 +1234,7 @@ wsemul_vt100_output(void *cookie, const u_char *data, u_int count, int kernel)
 		rc = vt100_output[edp->state - 1](edp, instate);
 		if (rc != 0)
 			break;
-		processed++;
+		processed += prev_count - count;
 	}
 
 	if (rc != 0)
@@ -1241,9 +1251,9 @@ wsemul_vt100_output(void *cookie, const u_char *data, u_int count, int kernel)
 #endif
 			if (rc != 0) {
 				/*
-				 * Fail the last character output, remembering
-				 * that only the cursor operation really needs
-				 * to be done.
+				 * Pretend the last byte hasn't been processed,
+				 * while remembering that only the cursor
+				 * operation really needs to be done.
 				 */
 				wsemul_abort_cursor(&edp->abortstate);
 				processed--;
