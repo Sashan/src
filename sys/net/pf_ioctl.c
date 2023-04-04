@@ -914,6 +914,51 @@ pf_addr_setup(struct pf_trans *t, struct pf_ruleset *ruleset,
 	return (0);
 }
 
+void
+pf_addr_update(struct pf_trans *t, struct pf_ruleset *grs,
+    struct pf_addr_wrap *addr)
+{
+	struct pf_anchor *a = PF_SAFE_ANCHOR(grs);
+	struct pfr_ktable *kt;
+
+	if (addr->type != PF_ADDR_TABLE)
+		return;
+
+	/*
+	 * Similar to pfr_attach_table(), we just want to find desired table in
+	 * ancestor anchor. The difference is the anchor must 
+	 */
+	kt = NULL;
+	while ((kt == NULL) && (a != NULL)) {
+		kt = pfr_lookup_table(a, (struct pfr_table *)addr->p.tbl);
+		a = a->parent;
+	}
+	if (kt == NULL)
+		kt = pfr_lookup_table(&pf_main_anchor,
+		    (struct pfr_table *)addr->p.tbl);
+
+	/*
+	 * ancestor must define table already.
+	 */
+	KASSERT(kt != NULL);
+
+	/*
+	 * In case the pf.conf defines a table too, then
+	 * rule already refers to the table. However if we
+	 * just adding rule to existing runtime ruleset, then
+	 * we must update table reference in rule.
+	 */
+	if (kt != addr->p.tbl) {
+		addr->p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+		/*
+		 * p.tbl reference can be safely overwritten here.  the table
+		 * will be destroed with transaction.
+		 */
+		addr->p.tbl = kt;
+		addr->p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+	}
+}
+
 struct pfi_kif *
 pf_kif_setup(struct pfi_kif *kif_buf)
 {
@@ -1220,12 +1265,51 @@ pf_remove_orphans(struct pf_trans *t)
 }
 
 void
+pf_swap_tables(struct pf_ruleset *grs, struct pf_ruleset *trs,
+    struct pf_trans *t)
+{
+	struct pfr_ktablehead tmp_tables;
+	u_int32_t tmp_tables_cnt = 0;
+	struct pf_anchor *ta, *a;
+	struct pfr_ktable *kt, *tkt, *tktw;
+
+	RB_INIT(&tmp_tables);
+
+	if (trs->anchor == NULL) {
+		ta = &t->rc.main_anchor;
+		KASSERT(grs->anchor == NULL);
+		a = &pf_main_anchor;
+	} else {
+		ta = trs->anchor;
+		KASSERT(grs->anchor != NULL);
+		a = grs->anchor;
+	}
+
+	RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, tktw) {
+		RB_REMOVE(pfr_ktablehead, &ta->ktables, tkt);
+		kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
+		if (kt != NULL) {
+			KASSERT(kt->pfrkt_version == tkt->pfrkt_version);
+			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
+			RB_INSERT(pfr_ktablehead, &a->ktables, tkt);
+			RB_INSERT(pfr_ktablehead, &tmp_tables, kt);
+			tmp_tables_cnt++;
+		} else {
+			KASSERT(tkt->pfrkt_version == 0);
+			RB_INSERT(pfr_ktablehead, &a->ktables, tkt);
+			a->tables++;
+		}
+	}
+
+	ta->ktables = tmp_tables;
+	ta->tables = tmp_tables_cnt;
+}
+
+void
 pf_swap_ruleset(struct pf_ruleset *grs, struct pf_ruleset *trs,
     struct pf_trans *t)
 {
 	struct pf_ruleset tmp;
-	struct pfr_ktablehead root_tables;
-	u_int32_t tables;
 	struct pf_rule *r;
 
 	/*
@@ -1264,13 +1348,6 @@ pf_swap_ruleset(struct pf_ruleset *grs, struct pf_ruleset *trs,
 	pf_init_ruleset(&tmp);
 	tmp.rules.rcount = trs->rules.rcount;
 	TAILQ_CONCAT(tmp.rules.ptr, trs->rules.ptr, entries);
-	if (trs->anchor == NULL) {
-		root_tables = t->rc.main_anchor.ktables;
-		tables = t->rc.main_anchor.tables;
-	} else {
-		tmp.anchor->ktables = trs->anchor->ktables;
-		tmp.anchor->tables = trs->anchor->tables;
-	}
 
 	trs->rules.rcount = grs->rules.rcount;
 	TAILQ_CONCAT(trs->rules.ptr, grs->rules.ptr, entries);
@@ -1284,22 +1361,20 @@ pf_swap_ruleset(struct pf_ruleset *grs, struct pf_ruleset *trs,
 
 	grs->rules.rcount = tmp.rules.rcount;
 	grs->rules.version++;
-	if (tmp.anchor == NULL) {
-		pf_main_anchor.ktables = root_tables;
-		pf_main_anchor.tables = tables;
-	} else {
-		grs->anchor->ktables = tmp.anchor->ktables;
-		grs->anchor->tables = tmp.anchor->tables;
-	}
 	TAILQ_CONCAT(grs->rules.ptr, tmp.rules.ptr, entries);
+
+	pf_swap_tables(grs, trs, t);
+
 	TAILQ_FOREACH(r, grs->rules.ptr, entries) {
-		/*
-		 * anchor still refers to ruleset attached to transaction.
-		 * we need to carefully bring it to the real world found
-		 * in global ruleset.
-		 */
+
 		if (r->anchor != NULL)
 			pf_update_anchor(r->anchor, t);
+
+		pf_addr_update(t, grs, &r->src.addr);
+		pf_addr_update(t, grs, &r->dst.addr);
+		pf_addr_update(t, grs, &r->rdr.addr);
+		pf_addr_update(t, grs, &r->nat.addr);
+		pf_addr_update(t, grs, &r->route.addr);
 	}
 	log(LOG_DEBUG, "<- %s\n", __func__);
 }

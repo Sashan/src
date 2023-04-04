@@ -1896,18 +1896,15 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 	SLIST_INIT(&tableq);
 	kt = RB_FIND(pfr_ktablehead, &a->ktables, (struct pfr_ktable *)tbl);
 	if (kt == NULL) {
+		/*
+		 * don't attach table to ruleset. because we don't want
+		 * table to get attached to pf_global.
+		 */
 		kt = pfr_create_ktable(tbl, 0, 0, PR_WAITOK);
-		SLIST_INSERT_HEAD(&tableq, kt, pfrkt_workq);
 		kt->pfrkt_version = pfr_get_ktable_version(kt);
 		kt->pfrkt_rs = rs;
 		xadd++;
-		if (!tbl->pfrt_anchor[0])
-			goto _skip;
-
-		/* find or create root table */
-		bzero(&key, sizeof(key));
-		strlcpy(key.pfrkt_name, tbl->pfrt_name, sizeof(key.pfrkt_name));
-		rt = RB_FIND(pfr_ktablehead, &a->ktables, &key);
+		kt->pfrkt_flags |= PFR_TFLAG_REFDANCHOR;
 	} else {
 		/*
 		 * Note 1:
@@ -1958,7 +1955,7 @@ _skip:
 
 	/*
 	 * we don't need shadow table, because table we operate on is not
-	 * globaly visible. The table is private to transaction.
+	 * globally visible. The table is private to transaction.
 	 */
 	pfr_insert_ktables(&t->rc, &tableq);
 	kt->pfrkt_cnt = (flags & PFR_FLAG_ADDRSTOO) ?  xaddr : NO_ADDRESSES;
@@ -2325,6 +2322,7 @@ pfr_create_ktable(struct pfr_table *tbl, time_t tzero, int attachruleset,
 		}
 		kt->pfrkt_rs = rs;
 		rs->anchor->tables++;
+		kt->pfrkt_flags |= PFR_TFLAG_REFDANCHOR;
 	}
 
 	if (!rn_inithead((void **)&kt->pfrkt_ip4,
@@ -2556,18 +2554,29 @@ pfr_attach_table(struct pf_rules_container *rc, struct pf_ruleset *rs,
 		kt = pfr_lookup_table(&rc->main_anchor, &tbl);
 
 	if (kt == NULL) {
-		kt = pfr_create_ktable(&tbl, gettime(), 1, wait);
-		if (kt == NULL)
-			return (NULL);
 		/*
-		 * Tables created on behalf of pfr_attach_table()
-		 * must always go to root anchor.
+		 * Tables created on behalf of pfr_attach_table() must always
+		 * go to root anchor, because those tables are not created
+		 * eexplicitly either by table definition in pf.conf or by
+		 * command line 'pfctl -t ... -T ...'.  Implicit tables are
+		 * typically created by DIOCADDQUEUE when rule refers table
+		 * which does not exist yet.  Another case for implicit table
+		 * are so called dynamic tables (interface etc...).
 		 */
 		KASSERT(a == NULL);
+		/*
+		 * main ruleset/anchor is always attached, no need to ask
+		 * pfr_create_ktable() to do so.
+		 */
+		kt = pfr_create_ktable(&tbl, gettime(), 0, wait);
+		if (kt == NULL)
+			return (NULL);
+		kt->pfrkt_flags = PFR_TFLAG_REFERENCED;
 		pfr_insert_ktable(rc, kt);
+		kt->pfrkt_version = pfr_get_ktable_version(kt);
 	}
-	if (!kt->pfrkt_refcnt[PFR_REFCNT_RULE]++)
-		pfr_setflags_ktable(kt, kt->pfrkt_flags|PFR_TFLAG_REFERENCED);
+
+	kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
 
 	return (kt);
 }
