@@ -938,7 +938,7 @@ pf_addr_update(struct pf_trans *t, struct pf_ruleset *grs,
 		    (struct pfr_table *)addr->p.tbl);
 
 	/*
-	 * ancestor must define table already.
+	 * pf_addr_update() must find table in root ruleset.
 	 */
 	KASSERT(kt != NULL);
 
@@ -956,6 +956,66 @@ pf_addr_update(struct pf_trans *t, struct pf_ruleset *grs,
 		 */
 		addr->p.tbl = kt;
 		addr->p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+	}
+}
+
+/*
+ * pf_validate_tables()  function deals with special case of 'detached
+ * ruleset'.  The easiest way to create a detached ruleset one runs
+ * commad as follows:
+ *
+ *	echo 'pass from <bar> to any' |pfctl -a foo/foo/foo -f -
+ *	echo 'pass all' | pfctl -f -
+ *
+ * the rule found in foo/foo/foo anchor is detached from root ruleset,
+ * because there is no path startigg at main/root anchor to reach
+ * foo/foo/foo anchor. In order to attach rule in foo/foo/foo anchor
+ * to main ruleset one has to run commands:
+ *
+ *	 echo 'anchor foo' |pfctl -f - 
+ *	 echo 'anchor foo' |pfctl -a foo -f -
+ *	 echo 'anchor foo' |pfctl -a foo/foo -f -
+ *
+ * Consider situation foo/foo/foo anchor is detached. The rule in this
+ * anchor refers to table <bar>. If <bar> is not defined within
+ * foo/foo/foo anchor, then we expect to find its definition in parent
+ * anchor. If foo/foo nor foo anchors define <bar> table, then it must
+ * be defiend in root/main anchor. If we run command
+ *
+ *	echo 'acnhor foo' |pfctl -f -
+ *
+ * the command above updates root/main anchor. It removes all tables
+ * found in root anchor which are not persistent. The command also
+ * attempts to remove table <bar>. However <bar> table must be kept
+ * here, because it still referred by rule found foo/foo/foo anchor.
+ *
+ * This function traverses all rulesets and finds a rule which
+ * refers to inactive table. If such inactive reference is found
+ * the table gets revived: moved from transaction ruleset back to
+ * global ruleset
+ */
+void
+pf_reactivate_tables(struct pf_trans *t)
+{
+	struct pf_anchor *a;
+	struct pf_rule *r;
+
+	RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
+		TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
+			pfr_reactivate_table(t, &a->ruleset, &r->src.addr);
+			pfr_reactivate_table(t, &a->ruleset, &r->dst.addr);
+			pfr_reactivate_table(t, &a->ruleset, &r->rdr.addr);
+			pfr_reactivate_table(t, &a->ruleset, &r->nat.addr);
+			pfr_reactivate_table(t, &a->ruleset, &r->route.addr);
+		}
+	}
+
+	TAILQ_FOREACH(r, pf_main_ruleset.rules.ptr, entries) {
+		pfr_reactivate_table(t, &pf_main_ruleset, &r->src.addr);
+		pfr_reactivate_table(t, &pf_main_ruleset, &r->dst.addr);
+		pfr_reactivate_table(t, &pf_main_ruleset, &r->rdr.addr);
+		pfr_reactivate_table(t, &pf_main_ruleset, &r->nat.addr);
+		pfr_reactivate_table(t, &pf_main_ruleset, &r->route.addr);
 	}
 }
 
@@ -1117,7 +1177,15 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 		RB_REMOVE(pf_anchor_node, &t->rc.main_anchor.children, child);
 		parent_g = RB_INSERT(pf_anchor_node,
 		    &pf_global.main_anchor.children, child);
-		KASSERT(parent_g == NULL);
+		KASSERT((parent_g == NULL) ||
+		    (parent_g->ruleset.rules.version ==
+		    child->parent->ruleset.rules.version));
+		if (parent_g == NULL)
+			return;
+
+		/*
+		 * TODO: resolve conflict if the same ruleset exists already.
+		 */
 		return;
 	} else if (child->parent == &pf_global.main_anchor) {
 		log(LOG_DEBUG, "%s leaf -> root path complete\n", __func__);
@@ -1136,6 +1204,34 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 			RB_REMOVE(pf_anchor_global, &t->rc.anchors, child->parent);
 			(void) RB_INSERT(pf_anchor_global, &pf_global.anchors,
 			    child->parent);
+			/*
+			 * TODO: handle tables. We must walk descendant
+			 * rulesets and update references to tables.
+			 * consider root anchor defines table dmz,
+			 * there are no rules. Let's furher assume
+			 * there is a detached ruleset foo/bar with
+			 * signle rule:
+			 *	pass from <dmz> to any
+			 * the rule refers to <dmz> table found in root
+			 * anchor.
+			 *
+			 * the commit operation introduces anchor foo with
+			 * anchor rule 'anchor bar' amd tan;e dmz which
+			 * overrides dmz table in root anchor. the new layout
+			 * looks as follows:
+			 *	table dmz
+			 *	anchor foo {
+			 *		table dmz
+			 *		anchor bar {
+			 *			pass from <dmz> to any
+			 *		}
+			 *	}
+			 *
+			 * we need to update pass rule in foo/bar aanchor
+			 * to refer to <dmz> table found in anchor foo
+			 * All references to <dmz> found in foo subtree must
+			 * be updated.
+			 */
 		} else {
 			log(LOG_DEBUG, "%s parent exists in global %s %p\n",
 			    __func__, child->path, child);
@@ -1159,6 +1255,12 @@ pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
 				KASSERT(RB_FIND(pf_anchor_node,
 				    &parent_g->children, child) != NULL);
 			}
+			/*
+			 * TODO: update tables. Persistent tables must be kept
+			 * in global anchor.  Removed tables must be marked as
+			 * as inactive. Also remember to update references to
+			 * tables in subtrees.
+			 */
 		}
 		if (child->parent->parent != NULL)
 			pf_update_parent(child->parent, t);
@@ -1191,6 +1293,9 @@ pf_update_anchor(struct pf_anchor *a, struct pf_trans *t)
 		TAILQ_FOREACH(r, rs->rules.ptr, entries) {
 			if (r->anchor != NULL)
 				pf_update_anchor(r->anchor, t);
+			/*
+			 * TODO: update tables too.
+			 */
 		}
 
 		if (rs->anchor->parent != NULL) {
@@ -1285,17 +1390,35 @@ pf_swap_tables(struct pf_ruleset *grs, struct pf_ruleset *trs,
 		a = grs->anchor;
 	}
 
+	/*
+	 * keep tables with PFR_TFLAG_PERSIST flag in ruleset.  persistent
+	 * tables are either created by pfctl -t ... -T ...  or by pf.conf(5)
+	 * using 'persist' keyword.
+	 */
+	RB_FOREACH_SAFE(kt, pfr_ktablehead, &a->ktables, tktw) {
+		if ((kt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
+			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
+			a->tables--;
+			RB_INSERT(pfr_ktablehead, &tmp_tables, kt);
+			kt->pfrkt_flags |= PFR_TFLAG_INACTIVE;
+			tmp_tables_cnt++;
+		}
+	}
+
 	RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, tktw) {
 		RB_REMOVE(pfr_ktablehead, &ta->ktables, tkt);
 		kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
 		if (kt != NULL) {
+			/*
+			 * should be updating table with persistent flags.
+			 */
+			KASSERT(kt->pfrkt_flags & PFR_TFLAG_PERSIST);
 			KASSERT(kt->pfrkt_version == tkt->pfrkt_version);
 			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
-			RB_INSERT(pfr_ktablehead, &a->ktables, tkt);
 			RB_INSERT(pfr_ktablehead, &tmp_tables, kt);
+			RB_INSERT(pfr_ktablehead, &a->ktables, tkt);
 			tmp_tables_cnt++;
 		} else {
-			KASSERT(tkt->pfrkt_version == 0);
 			RB_INSERT(pfr_ktablehead, &a->ktables, tkt);
 			a->tables++;
 		}
@@ -1351,13 +1474,6 @@ pf_swap_ruleset(struct pf_ruleset *grs, struct pf_ruleset *trs,
 
 	trs->rules.rcount = grs->rules.rcount;
 	TAILQ_CONCAT(trs->rules.ptr, grs->rules.ptr, entries);
-	if (grs->anchor == NULL) {
-		t->rc.main_anchor.ktables = pf_main_anchor.ktables;
-		t->rc.main_anchor.tables = pf_main_anchor.tables;
-	} else {
-		trs->anchor->ktables = grs->anchor->ktables;
-		trs->anchor->tables = grs->anchor->tables;
-	}
 
 	grs->rules.rcount = tmp.rules.rcount;
 	grs->rules.version++;
@@ -3457,6 +3573,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 		pfi_xcommit();
 		pf_trans_set_commit(&t->trans_set);
+		pf_reactivate_tables(t);
 		pf_remove_orphans(t);
 		PF_UNLOCK();
 		NET_UNLOCK();

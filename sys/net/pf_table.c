@@ -1857,22 +1857,8 @@ int
 pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
     struct pfr_addr *addr, int size, int *nadd, int *naddr, int flags)
 {
-	/*
-	 * this is a plan for merge.
-	 * Tables are attached to anchors there is no global table tree.
-	 * We must update also anchors in our sub-tree. The update
-	 * rule is as follows:
-	 *	if anchor has table with the same name attached, then
-	 *	skip. no update is required
-	 *
-	 *	if anchor does not define table with the same name
-	 *	but rules refer (have attached) table with the same name,
-	 *	then we must update those rules. The rules refer to our
-	 *	parent.
-	 */
-	struct pfr_ktableworkq	 tableq;
 	struct pfr_kentryworkq	 addrq;
-	struct pfr_ktable	*kt, *rt, key;
+	struct pfr_ktable	*kt, *kt_insert;
 	struct pfr_kentry	*p;
 	struct pfr_addr		 ad;
 	struct pf_ruleset	*rs;
@@ -1893,15 +1879,15 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 	else
 		a = rs->anchor;
 
-	SLIST_INIT(&tableq);
+	kt_insert = NULL;
 	kt = RB_FIND(pfr_ktablehead, &a->ktables, (struct pfr_ktable *)tbl);
 	if (kt == NULL) {
 		/*
 		 * don't attach table to ruleset. because we don't want
 		 * table to get attached to pf_global.
 		 */
-		kt = pfr_create_ktable(tbl, 0, 0, PR_WAITOK);
-		kt->pfrkt_version = pfr_get_ktable_version(kt);
+		kt_insert = pfr_create_ktable(tbl, 0, 0, PR_WAITOK);
+		kt_insert->pfrkt_version = pfr_get_ktable_version(kt);
 		kt->pfrkt_rs = rs;
 		xadd++;
 		kt->pfrkt_flags |= PFR_TFLAG_REFDANCHOR;
@@ -1923,8 +1909,10 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		pfr_enqueue_addrs(kt, &addrq, NULL, 0);
 		pfr_clean_node_mask(kt, &addrq);
 		pfr_destroy_kentries(&addrq);
+		kt->pfrkt_version = pfr_get_ktable_version(kt);
+		kt->pfrkt_flags = (tbl->pfrt_flags | PFR_TFLAG_REFDANCHOR);
 	}
-_skip:
+
 	/*
 	 * also dealing with dummy flag is easy, all operations
 	 * on transaction (pfr_ina_*())) are in fact dummy until
@@ -1934,7 +1922,6 @@ _skip:
 	 * the transaction will be cleaned up with close on 
 	 * /dev/pf
 	 */
-	xadd++;
 	for (i = 0; i < size; i++) {
 		if (COPYIN(addr+i, &ad, sizeof(ad), flags))
 			senderr(EFAULT);
@@ -1953,20 +1940,22 @@ _skip:
 		pfr_ktable_winfo_update(kt, p);
 	}
 
-	/*
-	 * we don't need shadow table, because table we operate on is not
-	 * globally visible. The table is private to transaction.
-	 */
-	pfr_insert_ktables(&t->rc, &tableq);
 	kt->pfrkt_cnt = (flags & PFR_FLAG_ADDRSTOO) ?  xaddr : NO_ADDRESSES;
 
+	if (kt_insert != NULL) {
+		kt = RB_INSERT(pfr_ktablehead, &a->ktables, kt_insert);
+		KASSERT(kt == NULL);
+		xadd++;
+		kt_insert = NULL;
+	}
 	if (nadd != NULL)
 		*nadd = xadd;
 	if (naddr != NULL)
 		*naddr = xaddr;
 	return (0);
 _bad:
-	pfr_destroy_ktables(&tableq, 1);
+	if (kt_insert != NULL)
+		pfr_destroy_ktable(kt_insert, 1);
 	return (rv);
 }
 
@@ -2937,4 +2926,32 @@ pfr_get_ktable_version(struct pfr_ktable *ktt)
 	    __func__, __LINE__, kt, ktt->pfrkt_name, version);
 
 	return (version);
+}
+
+void
+pfr_reactivate_table(struct pf_trans *t, struct pf_ruleset *grs,
+    struct pf_addr_wrap *aw)
+{
+	struct pf_ruleset *trs;
+	struct pf_anchor *ta, *a;
+	struct pfr_ktable *kt, *ktchk;
+
+	if ((aw->type == PF_ADDR_TABLE) &&
+	    ((aw->p.tbl->pfrkt_flags & PFR_TFLAG_INACTIVE) != 0)) {
+		if (grs->anchor != NULL) {
+			trs = pf_find_ruleset(&t->rc, grs->anchor->path);
+			KASSERT(trs != NULL);
+			ta = trs->anchor;
+			a = grs->anchor;
+		} else {
+			ta = &t->rc.main_anchor;
+			a = &pf_main_anchor;
+		}
+
+		kt = pfr_lookup_table(a, (struct pfr_table *)aw->p.tbl);
+		KASSERT(kt == aw->p.tbl);
+		RB_REMOVE(pfr_ktablehead, &ta->ktables, kt);
+		ktchk = RB_INSERT(pfr_ktablehead, &a->ktables, kt);
+		kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
+	}
 }

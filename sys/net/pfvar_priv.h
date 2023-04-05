@@ -422,6 +422,8 @@ extern struct pfr_ktable
 			    struct pfr_table *);
 extern void pf_rs_walk_to_leaf(struct pf_anchor *,
 			    int (*)(struct pf_anchor *, void *), void *);
+extern void pfr_reactivate_table(struct pf_trans *, struct pf_ruleset *,
+			    struct pf_addr_wrap *);
 RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 #endif /* _KERNEL */
 
