@@ -183,8 +183,6 @@ void			 pfr_insert_ktables(struct pf_rules_container *,
 			    struct pfr_ktableworkq *);
 void			 pfr_insert_ktable(struct pf_rules_container *,
 			    struct pfr_ktable *);
-void			 pfr_setflags_ktables(struct pfr_ktableworkq *);
-void			 pfr_setflags_ktable(struct pfr_ktable *, int);
 void			 pfr_clstats_ktables(struct pfr_ktableworkq *, time_t,
 			    int);
 void			 pfr_clstats_ktable(struct pfr_ktable *, time_t, int);
@@ -1527,10 +1525,10 @@ pfr_clr_tables(struct pfr_table *filter, int *ndel, int flags)
 		SLIST_INSERT_HEAD(&workq, p, pfrkt_workq);
 		xdel++;
 	}
-#endif
 	if (!(flags & PFR_FLAG_DUMMY)) {
 		pfr_setflags_ktables(&workq);
 	}
+#endif
 	if (ndel != NULL)
 		*ndel = xdel;
 	return (0);
@@ -1662,6 +1660,7 @@ _bad:
 int
 pfr_del_tables(struct pfr_table *tbl, int size, int *ndel, int flags)
 {
+#if 0
 	struct pfr_ktableworkq	 workq;
 	struct pfr_ktable	*p, *q, key;
 	int			 i, xdel = 0;
@@ -1693,6 +1692,7 @@ _skip:
 	}
 	if (ndel != NULL)
 		*ndel = xdel;
+#endif
 	return (0);
 }
 
@@ -1844,7 +1844,9 @@ _skip:
 	;
 	}
 	if (!(flags & PFR_FLAG_DUMMY)) {
+#if 0
 		pfr_setflags_ktables(&workq);
+#endif
 	}
 	if (nchange != NULL)
 		*nchange = xchange;
@@ -1891,6 +1893,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		kt->pfrkt_rs = rs;
 		xadd++;
 		kt->pfrkt_flags |= PFR_TFLAG_REFDANCHOR;
+		kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
 	} else {
 		/*
 		 * Note 1:
@@ -1911,6 +1914,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		pfr_destroy_kentries(&addrq);
 		kt->pfrkt_version = pfr_get_ktable_version(kt);
 		kt->pfrkt_flags = (tbl->pfrt_flags | PFR_TFLAG_REFDANCHOR);
+		kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
 	}
 
 	/*
@@ -1991,130 +1995,6 @@ pfr_update_rs(struct pf_anchor *a, void *table)
 		rv = 1;
 
 	return (rv);
-}
-
-int
-pfr_ina_commit(struct pfr_table *trs, u_int32_t ticket, int *nadd,
-    int *nchange, int flags)
-{
-#if 0
-	struct pfr_ktable	*p, *q;
-	struct pfr_ktableworkq	 workq;
-	struct pf_ruleset	*rs;
-	int			 xadd = 0, xchange = 0;
-	time_t			 tzero = gettime();
-
-	PF_ASSERT_LOCKED();
-	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
-	rs = pf_find_ruleset(&pf_global, trs->pfrt_anchor);
-	if (rs == NULL || ticket != rs->tversion)
-		return (EBUSY);
-
-	SLIST_INIT(&workq);
-	RB_FOREACH(p, pfr_ktablehead, &pfr_ktables) {
-		/*
-		 * pfr_ina_define() in current creates tables
-		 * with INACTIVE flag set. Thus tables with
-		 * INACTIVE flag are new and commit will bring them
-		 * alive.
-		 *
-		 * We also insert tables to workq which are bound the same
-		 * reuleset as trs is bound to. Those tables will be removed
-		 * by commit operation.
-		 */
-		if (!(p->pfrkt_flags & PFR_TFLAG_INACTIVE) ||
-		    pfr_skip_table(trs, p, 0))
-			continue;
-		SLIST_INSERT_HEAD(&workq, p, pfrkt_workq);
-		if (p->pfrkt_flags & PFR_TFLAG_ACTIVE)
-			xchange++;
-		else
-			xadd++;
-	}
-
-	if (!(flags & PFR_FLAG_DUMMY)) {
-		SLIST_FOREACH_SAFE(p, &workq, pfrkt_workq, q) {
-			pfr_commit_ktable(p, tzero);
-		}
-		pf_remove_if_empty_ruleset(&pf_global, rs);
-	}
-	if (nadd != NULL)
-		*nadd = xadd;
-	if (nchange != NULL)
-		*nchange = xchange;
-
-	return (0);
-#endif
-	return (0);
-}
-
-void
-pfr_commit_ktable(struct pfr_ktable *kt, time_t tzero)
-{
-#if 0
-	struct pfr_ktable	*shadow = kt->pfrkt_shadow;
-	int			 nflags;
-
-	if (shadow->pfrkt_cnt == NO_ADDRESSES) {
-		if (!(kt->pfrkt_flags & PFR_TFLAG_ACTIVE))
-			pfr_clstats_ktable(kt, tzero, 1);
-	} else if (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) {
-		/* kt with ACTIVE flag, new ruleset does
-		 * not refer it, thus table must die.
-		 * this else branch just removes addresses
-		 * found in table.
-		 */
-		/* kt might contain addresses */
-		struct pfr_kentryworkq	 addrq, addq, changeq, delq, garbageq;
-		struct pfr_kentry	*p, *q;
-		struct pfr_addr		 ad;
-
-		pfr_enqueue_addrs(shadow, &addrq, NULL, 0);
-		pfr_mark_addrs(kt);
-		SLIST_INIT(&addq);
-		SLIST_INIT(&changeq);
-		SLIST_INIT(&delq);
-		SLIST_INIT(&garbageq);
-		pfr_clean_node_mask(shadow, &addrq);
-		while ((p = SLIST_FIRST(&addrq)) != NULL) {
-			SLIST_REMOVE_HEAD(&addrq, pfrke_workq);
-			pfr_copyout_addr(&ad, p);
-			q = pfr_lookup_addr(kt, &ad, 1);
-			if (q != NULL) {
-				if ((q->pfrke_flags & PFRKE_FLAG_NOT) !=
-				    (p->pfrke_flags & PFRKE_FLAG_NOT))
-					SLIST_INSERT_HEAD(&changeq, q,
-					    pfrke_workq);
-				q->pfrke_flags |= PFRKE_FLAG_MARK;
-				SLIST_INSERT_HEAD(&garbageq, p, pfrke_workq);
-			} else {
-				p->pfrke_tzero = tzero;
-				SLIST_INSERT_HEAD(&addq, p, pfrke_workq);
-			}
-		}
-		pfr_enqueue_addrs(kt, &delq, NULL, ENQUEUE_UNMARKED_ONLY);
-		pfr_insert_kentries(kt, &addq, tzero);
-		pfr_remove_kentries(kt, &delq);
-		pfr_clstats_kentries(&changeq, tzero, INVERT_NEG_FLAG);
-		pfr_destroy_kentries(&garbageq);
-	} else {
-		/* table is being inserted to ruleset just swap shadow and kt*/
-		/* kt cannot contain addresses */
-		SWAP(struct radix_node_head *, kt->pfrkt_ip4,
-		    shadow->pfrkt_ip4);
-		SWAP(struct radix_node_head *, kt->pfrkt_ip6,
-		    shadow->pfrkt_ip6);
-		SWAP(int, kt->pfrkt_cnt, shadow->pfrkt_cnt);
-		    pfr_clstats_ktable(kt, tzero, 1);
-	}
-	/* this nflags magic determines whether table will survive commit or not */
-	nflags = ((shadow->pfrkt_flags & PFR_TFLAG_USRMASK) |
-	    (kt->pfrkt_flags & PFR_TFLAG_SETMASK) | PFR_TFLAG_ACTIVE)
-		& ~PFR_TFLAG_INACTIVE;
-	pfr_destroy_ktable(shadow, 0);
-	kt->pfrkt_shadow = NULL;
-	pfr_setflags_ktable(kt, nflags);
-#endif
 }
 
 int
@@ -2217,53 +2097,10 @@ pfr_setflags_ktables(struct pfr_ktableworkq *workq)
 	struct pfr_ktable	*p, *q;
 
 	SLIST_FOREACH_SAFE(p, workq, pfrkt_workq, q) {
+#if 0
 		pfr_setflags_ktable(p, p->pfrkt_nflags);
-	}
-}
-
-void
-pfr_setflags_ktable(struct pfr_ktable *kt, int newf)
-{
-	struct pfr_kentryworkq	addrq;
-
-	if (!(newf & PFR_TFLAG_REFERENCED) &&
-	    !(newf & PFR_TFLAG_REFDANCHOR) &&
-	    !(newf & PFR_TFLAG_PERSIST))
-		newf &= ~PFR_TFLAG_ACTIVE;
-	if (!(newf & PFR_TFLAG_ACTIVE))
-		newf &= ~PFR_TFLAG_USRMASK;
-	if (!(newf & PFR_TFLAG_SETMASK)) {
-#if 0
-	/*
-	 * I'm not entirely sure how to implement setflags. The setflags
-	 * currently helps us to identify table which should be removed
-	 * after commit. We want to remove tables which are not referred
-	 * by any rule and which were not created on behalf of
-	 * pfr_add_tables(). I still need to check 'pfr_add_tables()'
-	 * situation.
-	 */
-		RB_REMOVE(pfr_ktablehead, &pfr_ktables, kt);
-		if (kt->pfrkt_root != NULL)
-			if (!--kt->pfrkt_root->pfrkt_refcnt[PFR_REFCNT_ANCHOR])
-				pfr_setflags_ktable(kt->pfrkt_root,
-				    kt->pfrkt_root->pfrkt_flags &
-					~PFR_TFLAG_REFDANCHOR);
-		pfr_destroy_ktable(kt, 1);
-		pfr_ktable_cnt--;
 #endif
-		return;
 	}
-	if (!(newf & PFR_TFLAG_ACTIVE) && kt->pfrkt_cnt) {
-		pfr_enqueue_addrs(kt, &addrq, NULL, 0);
-		pfr_remove_kentries(kt, &addrq);
-	}
-#if 0
-	if (!(newf & PFR_TFLAG_INACTIVE) && kt->pfrkt_shadow != NULL) {
-		pfr_destroy_ktable(kt->pfrkt_shadow, 1);
-		kt->pfrkt_shadow = NULL;
-	}
-#endif
-	kt->pfrkt_flags = newf;
 }
 
 void
@@ -2573,11 +2410,13 @@ pfr_attach_table(struct pf_rules_container *rc, struct pf_ruleset *rs,
 void
 pfr_detach_table(struct pfr_ktable *kt)
 {
+#if 0
 	if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] <= 0)
 		DPFPRINTF(LOG_NOTICE, "pfr_detach_table: refcount = %d.",
 		    kt->pfrkt_refcnt[PFR_REFCNT_RULE]);
 	else if (!--kt->pfrkt_refcnt[PFR_REFCNT_RULE])
 		pfr_setflags_ktable(kt, kt->pfrkt_flags&~PFR_TFLAG_REFERENCED);
+#endif
 }
 
 int
@@ -2928,30 +2767,97 @@ pfr_get_ktable_version(struct pfr_ktable *ktt)
 	return (version);
 }
 
+/*
+ * If detached table is still referred by global/active rule
+ * then we must put table back from transaction to global ruleset.
+ */
 void
-pfr_reactivate_table(struct pf_trans *t, struct pf_ruleset *grs,
+pfr_reattach_table(struct pf_trans *t, struct pf_anchor *a,
     struct pf_addr_wrap *aw)
 {
-	struct pf_ruleset *trs;
-	struct pf_anchor *ta, *a;
+	struct pf_anchor *ta, *parent;
 	struct pfr_ktable *kt, *ktchk;
+	struct pfr_kentryworkq	 addrq;
 
 	if ((aw->type == PF_ADDR_TABLE) &&
-	    ((aw->p.tbl->pfrkt_flags & PFR_TFLAG_INACTIVE) != 0)) {
-		if (grs->anchor != NULL) {
-			trs = pf_find_ruleset(&t->rc, grs->anchor->path);
-			KASSERT(trs != NULL);
-			ta = trs->anchor;
-			a = grs->anchor;
-		} else {
-			ta = &t->rc.main_anchor;
-			a = &pf_main_anchor;
+	    ((aw->p.tbl->pfrkt_flags & PFR_TFLAG_DETACHED) != 0)) {
+		/*
+		 * Try to find table with the same name in parent anchor.  Keep
+		 * traversing up to root.
+		 */
+		parent = a;
+		do {
+			kt = pfr_lookup_table(parent,
+			    (struct pfr_table *)aw->p.tbl);
+			parent = parent->parent;
+		} while ((kt == NULL) && (parent != NULL));
+
+		if (kt != NULL) {
+			aw->p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			aw->p.tbl = kt;
+			aw->p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			return;
 		}
 
-		kt = pfr_lookup_table(a, (struct pfr_table *)aw->p.tbl);
+		/*
+		 * no matching table found in ascendant anchors,
+		 * then we must 'recyvle' table from transaction.
+		 * recycled table is removed from anchor found
+		 * in transactrion and moved to global main anchor.
+		 * We also flush all addresses from recycled table.
+		 * Recycled table is marked as inactive.
+		 */
+		if (a == &pf_main_anchor)
+			ta = &t->rc.main_anchor;
+		else {
+			ta = RB_FIND(pf_anchor_global, &t->rc.anchors, a);
+			KASSERT(ta != NULL);
+		}
+
+		parent = ta;
+		do {
+			kt = pfr_lookup_table(parent,
+			    (struct pfr_table *)aw->p.tbl);
+			parent = parent->parent;
+		} while ((kt == NULL) && (parent != NULL));
 		KASSERT(kt == aw->p.tbl);
-		RB_REMOVE(pfr_ktablehead, &ta->ktables, kt);
+
+		RB_REMOVE(pfr_ktablehead, &parent->ktables, kt);
+
+		/* flush all addresses from table when recycling it */
+		pfr_enqueue_addrs(kt, &addrq, NULL, 0);
+		pfr_clean_node_mask(kt, &addrq);
+		pfr_destroy_kentries(&addrq);
+
+		kt->pfrkt_flags &= ~PFR_TFLAG_DETACHED;
+		kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
+		kt->pfrkt_flags |= PFR_TFLAG_INACTIVE;
+		kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+
 		ktchk = RB_INSERT(pfr_ktablehead, &a->ktables, kt);
-		kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
+
+		KASSERT(ktchk == NULL);
+	} else if (aw->type == PF_ADDR_TABLE) {
+		/*
+		 * find the closest ancestor anchor.
+		 */
+		parent = a;
+		do {
+			kt = pfr_lookup_table(parent,
+			    (struct pfr_table *)aw->p.tbl);
+			parent = parent->parent;
+		} while ((kt == NULL) && (parent != NULL));
+
+		if (kt != aw->p.tbl) {
+			aw->p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			if (aw->p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+				aw->p.tbl->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+
+			aw->p.tbl = kt;
+			
+			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+		}
 	}
 }

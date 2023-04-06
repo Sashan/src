@@ -342,6 +342,7 @@ struct pf_trans_set {
 
 struct pf_trans {
 	LIST_ENTRY(pf_trans)	entry;
+	TAILQ_HEAD(, pf_anchor)	anchor_list;
 	struct pf_rules_container
 				rc;
 	unsigned		pool_limits[PF_LIMIT_MAX];
@@ -422,7 +423,7 @@ extern struct pfr_ktable
 			    struct pfr_table *);
 extern void pf_rs_walk_to_leaf(struct pf_anchor *,
 			    int (*)(struct pf_anchor *, void *), void *);
-extern void pfr_reactivate_table(struct pf_trans *, struct pf_ruleset *,
+extern void pfr_reattach_table(struct pf_trans *, struct pf_anchor *,
 			    struct pf_addr_wrap *);
 RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 #endif /* _KERNEL */

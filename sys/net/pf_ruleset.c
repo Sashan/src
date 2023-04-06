@@ -535,6 +535,7 @@ pf_remove_anchor(struct pf_rule *r)
  *	}
  * }
  */
+#if 0
 void
 pf_rs_walk_to_leaf(struct pf_anchor *a, int (*f)(struct pf_anchor *, void *),
     void *f_arg)
@@ -570,3 +571,4 @@ pf_rs_walk_to_leaf(struct pf_anchor *a, int (*f)(struct pf_anchor *, void *),
 	 */
 	f(a, f_arg);
 }
+#endif

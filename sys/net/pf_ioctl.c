@@ -126,10 +126,8 @@ int			 pf_begin_ruleset_trans(struct pf_trans *,
 int			 pf_commit_trans(struct pf_trans *);
 void			 pf_free_trans(struct pf_trans *);
 void			 pf_rollback_trans(struct pf_trans *);
-void			 pf_update_parent(struct pf_anchor *,
-			    struct pf_trans *);
-void			 pf_swap_ruleset(struct pf_ruleset *,
-			    struct pf_ruleset *, struct pf_trans *t);
+void			 pf_swap_anchors(struct pf_trans *, struct pf_anchor *,
+			    struct pf_anchor *);
 
 struct pf_rule		 pf_default_rule;
 uint32_t		 pf_default_vers = 1;
@@ -1002,20 +1000,20 @@ pf_reactivate_tables(struct pf_trans *t)
 
 	RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
 		TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
-			pfr_reactivate_table(t, &a->ruleset, &r->src.addr);
-			pfr_reactivate_table(t, &a->ruleset, &r->dst.addr);
-			pfr_reactivate_table(t, &a->ruleset, &r->rdr.addr);
-			pfr_reactivate_table(t, &a->ruleset, &r->nat.addr);
-			pfr_reactivate_table(t, &a->ruleset, &r->route.addr);
+			pfr_reattach_table(t, a, &r->src.addr);
+			pfr_reattach_table(t, a, &r->dst.addr);
+			pfr_reattach_table(t, a, &r->rdr.addr);
+			pfr_reattach_table(t, a, &r->nat.addr);
+			pfr_reattach_table(t, a, &r->route.addr);
 		}
 	}
 
 	TAILQ_FOREACH(r, pf_main_ruleset.rules.ptr, entries) {
-		pfr_reactivate_table(t, &pf_main_ruleset, &r->src.addr);
-		pfr_reactivate_table(t, &pf_main_ruleset, &r->dst.addr);
-		pfr_reactivate_table(t, &pf_main_ruleset, &r->rdr.addr);
-		pfr_reactivate_table(t, &pf_main_ruleset, &r->nat.addr);
-		pfr_reactivate_table(t, &pf_main_ruleset, &r->route.addr);
+		pfr_reattach_table(t, &pf_main_anchor, &r->src.addr);
+		pfr_reattach_table(t, &pf_main_anchor, &r->dst.addr);
+		pfr_reattach_table(t, &pf_main_anchor, &r->rdr.addr);
+		pfr_reattach_table(t, &pf_main_anchor, &r->nat.addr);
+		pfr_reattach_table(t, &pf_main_anchor, &r->route.addr);
 	}
 }
 
@@ -1162,179 +1160,10 @@ fail:
 }
 
 void
-pf_update_parent(struct pf_anchor *child, struct pf_trans *t)
-{
-	struct pf_anchor *parent_g;
-	struct pf_anchor *parent_t;
-
-	if (child->parent == &t->rc.main_anchor) {
-		/*
-		 * Child is referred by main ruleset, then move it
-		 * to global main ruleset.
-		 */
-		log(LOG_DEBUG, "%s parent for %s is a main anchor %p\n",
-		    __func__, child->path, child);
-		RB_REMOVE(pf_anchor_node, &t->rc.main_anchor.children, child);
-		parent_g = RB_INSERT(pf_anchor_node,
-		    &pf_global.main_anchor.children, child);
-		KASSERT((parent_g == NULL) ||
-		    (parent_g->ruleset.rules.version ==
-		    child->parent->ruleset.rules.version));
-		if (parent_g == NULL)
-			return;
-
-		/*
-		 * TODO: resolve conflict if the same ruleset exists already.
-		 */
-		return;
-	} else if (child->parent == &pf_global.main_anchor) {
-		log(LOG_DEBUG, "%s leaf -> root path complete\n", __func__);
-		return;
-	} else {
-		parent_g = RB_FIND(pf_anchor_global, &pf_global.anchors,
-		    child->parent);
-
-		if (parent_g == NULL) {
-			/*
-			 * parent does not exist in global ruleset yet,
-			 * then move the parent there with its children too.
-			 */
-			log(LOG_DEBUG, "%s move parent to global %s %p\n",
-			    __func__, child->path, child);
-			RB_REMOVE(pf_anchor_global, &t->rc.anchors, child->parent);
-			(void) RB_INSERT(pf_anchor_global, &pf_global.anchors,
-			    child->parent);
-			/*
-			 * TODO: handle tables. We must walk descendant
-			 * rulesets and update references to tables.
-			 * consider root anchor defines table dmz,
-			 * there are no rules. Let's furher assume
-			 * there is a detached ruleset foo/bar with
-			 * signle rule:
-			 *	pass from <dmz> to any
-			 * the rule refers to <dmz> table found in root
-			 * anchor.
-			 *
-			 * the commit operation introduces anchor foo with
-			 * anchor rule 'anchor bar' amd tan;e dmz which
-			 * overrides dmz table in root anchor. the new layout
-			 * looks as follows:
-			 *	table dmz
-			 *	anchor foo {
-			 *		table dmz
-			 *		anchor bar {
-			 *			pass from <dmz> to any
-			 *		}
-			 *	}
-			 *
-			 * we need to update pass rule in foo/bar aanchor
-			 * to refer to <dmz> table found in anchor foo
-			 * All references to <dmz> found in foo subtree must
-			 * be updated.
-			 */
-		} else {
-			log(LOG_DEBUG, "%s parent exists in global %s %p\n",
-			    __func__, child->path, child);
-			parent_t = RB_FIND(pf_anchor_global, &t->rc.anchors,
-			    child->parent);
-			/*
-			 * parent may exist in both trees:
-			 *	global and transaction.
-			 * if it is the case, then we must move child from
-			 * transaction tree to global tree.
-			 * There is no action for us otherwise, because global
-			 * tree is up-to-date.
-			 */
-			if (parent_t != NULL) {
-				RB_REMOVE(pf_anchor_node, &parent_t->children,
-				    child);
-				parent_t = RB_INSERT(pf_anchor_node,
-			 	   &parent_g->children, child);
-				KASSERT(parent_t == NULL);
-			} else {
-				KASSERT(RB_FIND(pf_anchor_node,
-				    &parent_g->children, child) != NULL);
-			}
-			/*
-			 * TODO: update tables. Persistent tables must be kept
-			 * in global anchor.  Removed tables must be marked as
-			 * as inactive. Also remember to update references to
-			 * tables in subtrees.
-			 */
-		}
-		if (child->parent->parent != NULL)
-			pf_update_parent(child->parent, t);
-	}
-}
-
-void
-pf_update_anchor(struct pf_anchor *a, struct pf_trans *t)
-{
-	struct pf_ruleset *rs;
-	struct pf_rule *r;
-
-	rs = pf_find_ruleset(&pf_global, a->path);
-	if (rs != NULL) {
-		log(LOG_DEBUG, "%s found parent %p (%s)\n", __func__,  rs,
-		    rs->anchor->path);
-		pf_swap_ruleset(rs, &a->ruleset, t);
-	} else if ((rs = pf_find_ruleset(&t->rc, a->path)) != NULL) {
-		KASSERT(rs == &a->ruleset);
-		log(LOG_DEBUG, "%s no parrent found in global %p (%s)\n",
-		    __func__,  rs, rs->anchor->path);
-		/*
-		 * anchor not found in global tree, so we will move
-		 * the anchor/ruleset from transaction to global tree.
-		 * Then we also walk all rules, updating the anchor
-		 * rules.
-		 */
-		RB_REMOVE(pf_anchor_global, &t->rc.anchors, rs->anchor);
-		RB_INSERT(pf_anchor_global, &pf_global.anchors, rs->anchor);
-		TAILQ_FOREACH(r, rs->rules.ptr, entries) {
-			if (r->anchor != NULL)
-				pf_update_anchor(r->anchor, t);
-			/*
-			 * TODO: update tables too.
-			 */
-		}
-
-		if (rs->anchor->parent != NULL) {
-			log(LOG_DEBUG,
-			    "%s going to update parent children %p (%s)\n",
-			    __func__, rs->anchor, rs->anchor->path);
-			pf_update_parent(rs->anchor, t);
-		}
-	} else {
-		panic("%s anchor (%s\\%s) [%p] not found", __func__, a->name,
-		    a->path, a);
-	}
-}
-
-void
 pf_remove_orphans(struct pf_trans *t)
 {
 	struct pf_rule *r;
 	struct pf_anchor *a, *g;
-
-	/*
-	 * r->anchor still refers to anchors kept in pf_global
-	 */
-	TAILQ_FOREACH(r, t->rc.main_anchor.ruleset.rules.ptr, entries) {
-		if (r->anchor != NULL) {
-			r->anchor->refcnt--;
-			log(LOG_DEBUG,
-			    "%s (TAILQ) removing %s (refcnt: %d, rules are %s "
-			    "empty, children are %s empty, tables: %d\n",
-			    __func__, r->anchor->path, r->anchor->refcnt,
-			    TAILQ_EMPTY(r->anchor->ruleset.rules.ptr) ? 
-				"" : "not",
-			    RB_EMPTY(&r->anchor->children) ? "" : "not",
-			    r->anchor->tables);
-			pf_remove_if_empty_ruleset(&pf_global,
-			    &r->anchor->ruleset);
-			r->anchor = NULL;
-		}
-	}
 
 	RB_FOREACH(a, pf_anchor_global, &t->rc.anchors) {
 		TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
@@ -1370,25 +1199,13 @@ pf_remove_orphans(struct pf_trans *t)
 }
 
 void
-pf_swap_tables(struct pf_ruleset *grs, struct pf_ruleset *trs,
-    struct pf_trans *t)
+pf_swap_tables(struct pf_trans *t, struct pf_anchor *a, struct pf_anchor *ta)
 {
 	struct pfr_ktablehead tmp_tables;
 	u_int32_t tmp_tables_cnt = 0;
-	struct pf_anchor *ta, *a;
 	struct pfr_ktable *kt, *tkt, *tktw;
 
 	RB_INIT(&tmp_tables);
-
-	if (trs->anchor == NULL) {
-		ta = &t->rc.main_anchor;
-		KASSERT(grs->anchor == NULL);
-		a = &pf_main_anchor;
-	} else {
-		ta = trs->anchor;
-		KASSERT(grs->anchor != NULL);
-		a = grs->anchor;
-	}
 
 	/*
 	 * keep tables with PFR_TFLAG_PERSIST flag in ruleset.  persistent
@@ -1399,7 +1216,9 @@ pf_swap_tables(struct pf_ruleset *grs, struct pf_ruleset *trs,
 		if ((kt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
 			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
 			a->tables--;
+			KASSERT((kt->pfrkt_flags & PFR_TFLAG_DETACHED) == 0);
 			RB_INSERT(pfr_ktablehead, &tmp_tables, kt);
+			kt->pfrkt_flags |= PFR_TFLAG_DETACHED;
 			kt->pfrkt_flags |= PFR_TFLAG_INACTIVE;
 			tmp_tables_cnt++;
 		}
@@ -1416,6 +1235,7 @@ pf_swap_tables(struct pf_ruleset *grs, struct pf_ruleset *trs,
 			KASSERT(kt->pfrkt_version == tkt->pfrkt_version);
 			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
 			RB_INSERT(pfr_ktablehead, &tmp_tables, kt);
+			kt->pfrkt_flags |= PFR_TFLAG_DETACHED;
 			RB_INSERT(pfr_ktablehead, &a->ktables, tkt);
 			tmp_tables_cnt++;
 		} else {
@@ -1428,43 +1248,19 @@ pf_swap_tables(struct pf_ruleset *grs, struct pf_ruleset *trs,
 	ta->tables = tmp_tables_cnt;
 }
 
+/*
+ * Function swaps rules and tables between global anchor 'a' and
+ * transaction anchor 'ta'.
+ */
 void
-pf_swap_ruleset(struct pf_ruleset *grs, struct pf_ruleset *trs,
-    struct pf_trans *t)
+pf_swap_anchors(struct pf_trans *t, struct pf_anchor *a, struct pf_anchor *ta)
 {
 	struct pf_ruleset tmp;
+	struct pf_ruleset *trs, *grs;
 	struct pf_rule *r;
 
-	/*
-	 * This function also must update table. Table may
-	 * be attached to anchor which owns ruleset `trs`,
-	 * in this case we just swap tables like we swap
-	 * rules.
-	 *
-	 * If table is not attached to ruleset `trs` then
-	 * we must traverse ruleset tree towards rule
-	 * and find desired table with the same name.
-	 * We should just make sure rules refer to table
-	 * we found in global ruleset. And we should also
-	 * check the version number. We should panic
-	 * if version is not same.
-	 *
-	 * Note: the rules in transaction are traversed
-	 * from root to leaf. So if table is not attached
-	 * to `trs` anchor then it must be found in
-	 * the top.
-	 *
-	 * Alternative strategy to update table:
-	 * 	swap/add table in global ruleset
-	 *	with table found at anchor.
-	 *
-	 *	update descendants in global ruleset
-	 *	as well in transaction tree.
-	 *	then we don't need to bother later
-	 *	because rules will be up-to-date
-	 *	once we reach them..
-	 */
-
+	trs = &ta->ruleset;
+	grs = &a->ruleset;
 	KASSERT(grs->rules.version == trs->rules.version);
 
 	log(LOG_DEBUG, "-> %s\n", __func__);
@@ -1472,27 +1268,114 @@ pf_swap_ruleset(struct pf_ruleset *grs, struct pf_ruleset *trs,
 	tmp.rules.rcount = trs->rules.rcount;
 	TAILQ_CONCAT(tmp.rules.ptr, trs->rules.ptr, entries);
 
+	/*
+	 * We move rules from global anchor to transaction anchor, we also must
+	 * drop references to global objects referred by rule.
+	 */
 	trs->rules.rcount = grs->rules.rcount;
 	TAILQ_CONCAT(trs->rules.ptr, grs->rules.ptr, entries);
+	TAILQ_FOREACH(r, trs->rules.ptr, entries) {
+		if (r->anchor != NULL) {
+			r->anchor->refcnt--;
+			r->anchor = NULL;
+		}
+		/*
+		 * Detach tables from rule.
+		 */
+		if (r->src.addr.type == PF_ADDR_TABLE) {
+			r->src.addr.p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			r->src.addr.p.tbl = NULL;
+			r->src.addr.type = PF_ADDR_NONE;
+		}
+		if (r->dst.addr.type == PF_ADDR_TABLE) {
+			r->dst.addr.p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			r->dst.addr.p.tbl = NULL;
+			r->dst.addr.type = PF_ADDR_NONE;
+		}
+		if (r->rdr.addr.type == PF_ADDR_TABLE) {
+			r->rdr.addr.p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			r->rdr.addr.p.tbl = NULL;
+			r->rdr.addr.type = PF_ADDR_NONE;
+		}
+		if (r->nat.addr.type == PF_ADDR_TABLE) {
+			r->nat.addr.p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			r->nat.addr.p.tbl = NULL;
+			r->nat.addr.type = PF_ADDR_NONE;
+		}
+		if (r->route.addr.type == PF_ADDR_TABLE) {
+			r->route.addr.p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			r->route.addr.p.tbl = NULL;
+			r->route.addr.type = PF_ADDR_NONE;
+		}
+	}
 
 	grs->rules.rcount = tmp.rules.rcount;
-	grs->rules.version++;
 	TAILQ_CONCAT(grs->rules.ptr, tmp.rules.ptr, entries);
 
-	pf_swap_tables(grs, trs, t);
+	pf_swap_tables(t, a, ta);
 
-	TAILQ_FOREACH(r, grs->rules.ptr, entries) {
+	grs->rules.version++;
 
-		if (r->anchor != NULL)
-			pf_update_anchor(r->anchor, t);
-
-		pf_addr_update(t, grs, &r->src.addr);
-		pf_addr_update(t, grs, &r->dst.addr);
-		pf_addr_update(t, grs, &r->rdr.addr);
-		pf_addr_update(t, grs, &r->nat.addr);
-		pf_addr_update(t, grs, &r->route.addr);
-	}
 	log(LOG_DEBUG, "<- %s\n", __func__);
+}
+
+void
+pf_fix_anchor(struct pf_anchor *a)
+{
+	struct pf_anchor *parent, *anchor;
+	struct pf_rule *r;
+
+	/*
+	 * Remember this function handles the second pass.  All objects we look
+	 * up here must be in place. This is ensured by the first pass.
+	 */
+
+	if (a->parent != NULL) {
+		parent = RB_FIND(pf_anchor_global, &pf_anchors, a);
+		/* global parent must exist. */
+		KASSERT(parent != NULL);
+		if (a->parent != parent) {
+			/* move anchor to global parent */
+			RB_REMOVE(pf_anchor_node, &a->parent->children, a);
+			a->parent = parent;
+			anchor = RB_INSERT(pf_anchor_node,
+			    &parent->children, a);
+			KASSERT(anchor == NULL);
+		}
+	}
+
+	TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
+		if (r->anchor != NULL) {
+			anchor = RB_FIND(pf_anchor_global, &pf_anchors,
+			    r->anchor);
+			/* anchor must exist in global list */
+			KASSERT(anchor != NULL);
+			if (anchor != r->anchor) {
+				r->anchor->refcnt--;
+				r->anchor = anchor;
+				r->anchor++;
+			}
+		}
+	}
+}
+
+int
+pf_is_anchor_empty(struct pf_anchor *a)
+{
+	if (!TAILQ_EMPTY(a->ruleset.rules.ptr))
+		return (0);
+
+	if (!RB_EMPTY(&a->children))
+		return (0);
+
+	/* there is at least 1 rule which still refers to empty anchor */
+	if (a->refcnt != 0)
+		return (0);
+
+	if (!RB_EMPTY(&a->ktables))
+		return (0);
+
+	return (1);
 }
 
 const char *
@@ -3436,7 +3319,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCXCOMMIT: {
 		struct pf_trans		*t;
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
-		struct pf_ruleset	*rs;
+		struct pf_anchor	*a, *ta, *aw;
+		struct pf_rule		*r;
 		u_int32_t		 version;
 		struct pool		*pp;
 		int			 i, bailout = 0;
@@ -3509,17 +3393,60 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		 */
 		NET_LOCK();
 		PF_LOCK();
-		if (t->anchor_path[0] == '\0') {
-			pf_swap_ruleset(&pf_main_ruleset,
-			    &t->rc.main_anchor.ruleset, t);
-		} else {
-			rs = pf_find_ruleset(&t->rc, t->anchor_path);
-			if (rs == NULL) {
-				error = ENOENT;
-				goto fail;
-			}
-			pf_update_anchor(rs->anchor, t);
+		/*
+		 * Commit transaction. We start by moving rules from
+		 * transaction to global rules.
+		 */
+		RB_FOREACH_SAFE(ta, pf_anchor_global, &t->rc.anchors, aw) {
+			a = RB_FIND(pf_anchor_global, &pf_anchors, ta);
+			if (a == NULL) {
+				RB_REMOVE(pf_anchor_global, &t->rc.anchors, ta);
+				a = RB_INSERT(pf_anchor_global, &pf_anchors,
+				    ta);
+				KASSERT(a == NULL);
+			} else
+				pf_swap_anchors(t, a, ta);
 		}
+		if (t->anchor_path[0] == '\0')
+			pf_swap_anchors(t, &pf_main_anchor, &t->rc.main_anchor);
+
+		/*
+		 * The second step fixes child->parent references.
+		 * It also fixes references for anchor rules. Anchor
+		 * rules still refer to anchors found in transaction.
+		 */
+		RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
+			pf_fix_anchor(a);
+		}
+		pf_fix_anchor(&pf_main_anchor);
+
+		/*
+		 * Third pass removes unused/empty anchors.
+		 */
+		TAILQ_INIT(&t->anchor_list);
+		RB_FOREACH_SAFE(a, pf_anchor_global, &pf_anchors, aw) {
+			if (pf_is_anchor_empty(a)) {
+				KASSERT(a->parent != NULL);
+				RB_REMOVE(pf_anchor_node,
+				    &a->parent->children, a);
+				RB_REMOVE(pf_anchor_global, &pf_anchors, a);
+				TAILQ_INSERT_TAIL(&t->anchor_list, a, workq);
+			}
+		}
+
+		/*
+		 * Fourth pass fixes references to tables.
+		 */
+		RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
+			TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
+				pfr_reattach_table(t, a, &r->src.addr);
+				pfr_reattach_table(t, a, &r->dst.addr);
+				pfr_reattach_table(t, a, &r->rdr.addr);
+				pfr_reattach_table(t, a, &r->nat.addr);
+				pfr_reattach_table(t, a, &r->route.addr);
+			}
+		}
+
 
 		if (t->modify_defaults) {
 			/*

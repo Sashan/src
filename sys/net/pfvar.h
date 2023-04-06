@@ -828,10 +828,11 @@ TAILQ_HEAD(pf_rulequeue, pf_rule);
 #define PFR_TFLAG_REFERENCED	0x00000010
 #define PFR_TFLAG_REFDANCHOR	0x00000020
 #define PFR_TFLAG_COUNTERS	0x00000040
+#define PFR_TFLAG_DETACHED	0x00000080
 /* Adjust masks below when adding flags. */
 #define PFR_TFLAG_USRMASK	0x00000043
-#define PFR_TFLAG_SETMASK	0x0000003C
-#define PFR_TFLAG_ALLMASK	0x0000007F
+#define PFR_TFLAG_SETMASK	0x000000BC
+#define PFR_TFLAG_ALLMASK	0x000000FF
 
 struct pfr_table {
 	char			 pfrt_anchor[PATH_MAX];
@@ -1029,7 +1030,7 @@ RB_HEAD(pf_anchor_node, pf_anchor);
 struct pf_anchor {
 	RB_ENTRY(pf_anchor)	 entry_global;
 	RB_ENTRY(pf_anchor)	 entry_node;
-	TAILQ_ENTRY(pf_anchor)	 entry_stack;
+	TAILQ_ENTRY(pf_anchor)	 workq;
 	struct pf_anchor	*parent;
 	struct pf_anchor_node	 children;
 	char			 name[PF_ANCHOR_NAME_SIZE];
