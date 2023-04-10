@@ -123,11 +123,12 @@ int			 pf_begin_table_trans(struct pf_trans *,
 			    struct pfr_table *, u_int32_t *);
 int			 pf_begin_ruleset_trans(struct pf_trans *,
 			    const char *, u_int32_t *);
-int			 pf_commit_trans(struct pf_trans *);
+void			 pf_commit_trans(struct pf_trans *);
 void			 pf_free_trans(struct pf_trans *);
 void			 pf_rollback_trans(struct pf_trans *);
 void			 pf_swap_anchors(struct pf_trans *, struct pf_anchor *,
 			    struct pf_anchor *);
+int			 pf_trans_in_conflict(struct pf_trans *, int);
 
 struct pf_rule		 pf_default_rule;
 uint32_t		 pf_default_vers = 1;
@@ -1648,17 +1649,17 @@ pf_check_version(struct pf_trans *t)
 	struct pf_ruleset	*rs;
 	struct pfr_ktable	*tkt, *kt;
 	struct pf_anchor	*ta;
-	int			 bailout = 0;
+	int			 mismatch = 0;
 
 	RB_FOREACH(ta, pf_anchor_global, &t->rc.anchors) {
 		version = ta->ruleset.rules.version;
 		rs = pf_find_ruleset(&pf_global, ta->path);
 		if (rs != NULL)
-			bailout = (version != rs->rules.version);
+			mismatch = (version != rs->rules.version);
 		else
-			bailout = (version != 0);
+			mismatch = (version != 0);
 
-		if (bailout != 0) {
+		if (mismatch != 0) {
 			log(LOG_DEBUG, "%s: %s (rs: %p) tversion: %d "
 			    "vs. version: %d\n", __func__, ta->path, rs,
 			    version, (rs == NULL) ? 0 : rs->rules.version);
@@ -1672,7 +1673,7 @@ pf_check_version(struct pf_trans *t)
 				log(LOG_DEBUG, "%s: %s@%s version %d while "
 				    "expecting 0\n", __func__, tkt->pfrkt_name,
 				    ta->path, tkt->pfrkt_version);
-				bailout = 1;
+				mismatch = 1;
 				/* break from RB_FOREACH(t->rc.anchors) */
 				break;
 			}
@@ -1687,7 +1688,7 @@ pf_check_version(struct pf_trans *t)
 						    "version %d != 0\n",
 						    __func__, tkt->pfrkt_name,
 						    tkt->pfrkt_anchor, version);
-						bailout = 1;
+						mismatch = 1;
 						break;
 					}
 				} else if (kt->pfrkt_version != version) {
@@ -1696,16 +1697,16 @@ pf_check_version(struct pf_trans *t)
 					    __func__, tkt->pfrkt_name,
 					    tkt->pfrkt_anchor, version,
 					    kt->pfrkt_version);
-					bailout = 1;
+					mismatch = 1;
 					break;
 				}
 			}
-			if (bailout != 0)
+			if (mismatch != 0)
 				break;
 		}
 	}
 
-	return (bailout);
+	return (mismatch);
 }
 
 int
@@ -3319,11 +3320,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCXCOMMIT: {
 		struct pf_trans		*t;
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
-		struct pf_anchor	*a, *ta, *aw;
-		struct pf_rule		*r;
-		u_int32_t		 version;
-		struct pool		*pp;
-		int			 i, bailout = 0;
+		int			 bailout = 0;
 
 		/*
 		 * XXX
@@ -3340,44 +3337,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		NET_LOCK();
 		PF_LOCK();	/* the first pass can be r-lock */
 
-		if (t->anchor_path[0] != '\0') {
-			version = t->rc.main_anchor.ruleset.rules.version;
-			bailout = ((version != 0) &&
-			    (version != pf_main_ruleset.rules.version));
-		}
-
-		log(LOG_DEBUG, "%s:%s (main_ruleset) bailout: %d\n", __func__,
-		    pfioctl_name(cmd), bailout);
-		/* check if defaults can be modified/updated */
-		if (bailout == 0 && t->modify_defaults) {
-			bailout = (t->default_vers != pf_default_vers);
-			for (i = 0; i < PF_LIMIT_MAX && bailout == 0; i++) {
-				pp = (struct pool *)pf_pool_limits[i].pp;
-				if (t->pool_limits[i] > 0 && pp->pr_nout > t->pool_limits[i]) {
-					log(LOG_WARNING,
-					    "pr_nout (%u) exceeds new "
-					    "limit (%u) for %s\n",
-					    pp->pr_nout,
-					    t->pool_limits[i],
-					    pp->pr_wchan);
-					bailout = 1;
-				}
-			}
-		}
-
-		log(LOG_DEBUG, "%s:%s (defaults) bailout == %d\n", __func__,
-		    pfioctl_name(cmd), bailout);
-		/*
-		 * check ruleset versions in transaction to match versions
-		 * found in global table. We let transaction to fail on the
-		 * first mismatch.
-		 */
-		if (bailout == 0) {
-			bailout = pf_check_version(t);
-			log(LOG_DEBUG,
-			    "%s:%s (anchors & tables) bailout == %d\n",
-			    __func__, pfioctl_name(cmd), bailout);
-		}
+		bailout = pf_trans_in_conflict(t, cmd);
 
 		PF_UNLOCK();
 		NET_UNLOCK();
@@ -3393,115 +3353,10 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		 */
 		NET_LOCK();
 		PF_LOCK();
-		/*
-		 * Commit transaction. We start by moving rules from
-		 * transaction to global rules.
-		 */
-		RB_FOREACH_SAFE(ta, pf_anchor_global, &t->rc.anchors, aw) {
-			a = RB_FIND(pf_anchor_global, &pf_anchors, ta);
-			if (a == NULL) {
-				RB_REMOVE(pf_anchor_global, &t->rc.anchors, ta);
-				a = RB_INSERT(pf_anchor_global, &pf_anchors,
-				    ta);
-				KASSERT(a == NULL);
-			} else
-				pf_swap_anchors(t, a, ta);
-		}
-		if (t->anchor_path[0] == '\0')
-			pf_swap_anchors(t, &pf_main_anchor, &t->rc.main_anchor);
 
-		/*
-		 * The second step fixes child->parent references.
-		 * It also fixes references for anchor rules. Anchor
-		 * rules still refer to anchors found in transaction.
-		 */
-		RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
-			pf_fix_anchor(a);
-		}
-		pf_fix_anchor(&pf_main_anchor);
-
-		/*
-		 * Third pass removes unused/empty anchors.
-		 */
-		TAILQ_INIT(&t->anchor_list);
-		RB_FOREACH_SAFE(a, pf_anchor_global, &pf_anchors, aw) {
-			if (pf_is_anchor_empty(a)) {
-				KASSERT(a->parent != NULL);
-				RB_REMOVE(pf_anchor_node,
-				    &a->parent->children, a);
-				RB_REMOVE(pf_anchor_global, &pf_anchors, a);
-				TAILQ_INSERT_TAIL(&t->anchor_list, a, workq);
-			}
-		}
-
-		/*
-		 * Fourth pass fixes references to tables.
-		 */
-		RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
-			TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
-				pfr_reattach_table(t, a, &r->src.addr);
-				pfr_reattach_table(t, a, &r->dst.addr);
-				pfr_reattach_table(t, a, &r->rdr.addr);
-				pfr_reattach_table(t, a, &r->nat.addr);
-				pfr_reattach_table(t, a, &r->route.addr);
-			}
-		}
-
-
-		if (t->modify_defaults) {
-			/*
-			 * too late to derail transaction here.  I think
-			 * warning we failed to update limit is sufficient
-			 * here.
-			 */
-			for (i = 0; i < PF_LIMIT_MAX; i++) {
-				struct pool *pp;
-
-				pp = (struct pool *)pf_pool_limits[i].pp;
-				if (pp->pr_nout > t->pool_limits[i]) {
-					log(LOG_WARNING,
-					    "pr_nout (%u) exceeds new "
-					    "limit (%u) for %s at commit\n",
-					    pp->pr_nout,
-					    t->pool_limits[i],
-					    pp->pr_wchan);
-				} else if (t->pool_limits[i] !=
-				    pf_pool_limits[i].limit &&
-				    pool_sethardlimit(pp, t->pool_limits[i],
-				    NULL, 0) != 0) {
-					log(LOG_WARNING,
-					    "setting limit to %u failed "
-					    "for %s at commit\n",
-					    t->pool_limits[i],
-					    pp->pr_wchan);
-				} else {
-					pf_pool_limits[i].limit =
-					    t->pool_limits[i];
-				}
-			}
-
-			/*
-			 * is there a better way to modify default rule?
-			 */
-			pf_default_rule = t->default_rule;
-
-			for (i = 0; i < PFTM_MAX; i++) {
-				int old = pf_default_rule.timeout[i];
-
-				pf_default_rule.timeout[i] =
-				    t->default_rule.timeout[i];
-
-				if (i == PFTM_INTERVAL &&
-				    pf_default_rule.timeout[i] < old)
-					task_add(net_tq(0), &pf_purge_task);
-			}
-
-			pf_default_vers++;
-		}
+		pf_commit_trans(t);
 		pfi_xcommit();
-		pf_trans_set_commit(&t->trans_set);
-		pf_reactivate_tables(t);
-		pf_remove_orphans(t);
+
 		PF_UNLOCK();
 		NET_UNLOCK();
 		/*
@@ -4062,9 +3917,171 @@ pf_find_trans(uint64_t ticket)
 }
 
 int
+pf_trans_in_conflict(struct pf_trans *t, int cmd)
+{
+	u_int32_t	 version;
+	int		 i, conflict = 0;
+	struct pool	*pp;
+
+	if (t->anchor_path[0] != '\0') {
+		version = t->rc.main_anchor.ruleset.rules.version;
+		conflict = ((version != 0) &&
+		    (version != pf_main_ruleset.rules.version));
+	}
+
+	log(LOG_DEBUG, "%s:%s (main_ruleset) conflict: %d\n", __func__,
+	    pfioctl_name(cmd), conflict);
+	/* check if defaults can be modified/updated */
+	if (conflict == 0 && t->modify_defaults) {
+		conflict = (t->default_vers != pf_default_vers);
+		for (i = 0; i < PF_LIMIT_MAX && conflict == 0; i++) {
+			pp = (struct pool *)pf_pool_limits[i].pp;
+			if (t->pool_limits[i] > 0 &&
+			    pp->pr_nout > t->pool_limits[i]) {
+				log(LOG_WARNING, "pr_nout (%u) exceeds new "
+				    "limit (%u) for %s\n",
+				    pp->pr_nout,
+				    t->pool_limits[i],
+				    pp->pr_wchan);
+				conflict = 1;
+			}
+		}
+	}
+
+	log(LOG_DEBUG, "%s:%s (defaults) conflict == %d\n", __func__,
+	    pfioctl_name(cmd), conflict);
+	/*
+	 * check ruleset versions in transaction to match versions
+	 * found in global table. We let transaction to fail on the
+	 * first mismatch.
+	 */
+	if (conflict == 0) {
+		conflict = pf_check_version(t);
+		log(LOG_DEBUG,
+		    "%s:%s (anchors & tables) conflict == %d\n",
+		    __func__, pfioctl_name(cmd), conflict);
+	}
+
+	return (conflict);
+}
+
+void
 pf_commit_trans(struct pf_trans *t)
 {
-	return (0);
+	struct pf_anchor	*a, *ta, *aw;
+	struct pf_rule		*r;
+	int			 i;
+
+	/*
+	 * Commit transaction. We start by moving rules from
+	 * transaction to global rules.
+	 */
+	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->rc.anchors, aw) {
+		a = RB_FIND(pf_anchor_global, &pf_anchors, ta);
+		if (a == NULL) {
+			RB_REMOVE(pf_anchor_global, &t->rc.anchors, ta);
+			a = RB_INSERT(pf_anchor_global, &pf_anchors,
+			    ta);
+			KASSERT(a == NULL);
+		} else
+			pf_swap_anchors(t, a, ta);
+	}
+	if (t->anchor_path[0] == '\0')
+		pf_swap_anchors(t, &pf_main_anchor, &t->rc.main_anchor);
+
+	/*
+	 * The second step fixes child->parent references.
+	 * It also fixes references for anchor rules. Anchor
+	 * rules still refer to anchors found in transaction.
+	 */
+	RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
+		pf_fix_anchor(a);
+	}
+	pf_fix_anchor(&pf_main_anchor);
+
+	/*
+	 * Third pass removes unused/empty anchors.
+	 */
+	TAILQ_INIT(&t->anchor_list);
+	RB_FOREACH_SAFE(a, pf_anchor_global, &pf_anchors, aw) {
+		if (pf_is_anchor_empty(a)) {
+			KASSERT(a->parent != NULL);
+			RB_REMOVE(pf_anchor_node,
+			    &a->parent->children, a);
+			RB_REMOVE(pf_anchor_global, &pf_anchors, a);
+			TAILQ_INSERT_TAIL(&t->anchor_list, a, workq);
+		}
+	}
+
+	/*
+	 * Fourth pass fixes references to tables.
+	 */
+	RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
+		TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
+			pfr_reattach_table(t, a, &r->src.addr);
+			pfr_reattach_table(t, a, &r->dst.addr);
+			pfr_reattach_table(t, a, &r->rdr.addr);
+			pfr_reattach_table(t, a, &r->nat.addr);
+			pfr_reattach_table(t, a, &r->route.addr);
+		}
+	}
+
+	if (t->modify_defaults) {
+		/*
+		 * too late to derail transaction here.  I think
+		 * warning we failed to update limit is sufficient
+		 * here.
+		 */
+		for (i = 0; i < PF_LIMIT_MAX; i++) {
+			struct pool *pp;
+
+			pp = (struct pool *)pf_pool_limits[i].pp;
+			if (pp->pr_nout > t->pool_limits[i]) {
+				log(LOG_WARNING,
+				    "pr_nout (%u) exceeds new "
+				    "limit (%u) for %s at commit\n",
+				    pp->pr_nout,
+				    t->pool_limits[i],
+				    pp->pr_wchan);
+			} else if (t->pool_limits[i] !=
+			    pf_pool_limits[i].limit &&
+			    pool_sethardlimit(pp, t->pool_limits[i],
+			    NULL, 0) != 0) {
+				log(LOG_WARNING,
+				    "setting limit to %u failed "
+				    "for %s at commit\n",
+				    t->pool_limits[i],
+				    pp->pr_wchan);
+			} else {
+				pf_pool_limits[i].limit =
+				    t->pool_limits[i];
+			}
+		}
+
+		/*
+		 * is there a better way to modify default rule?
+		 */
+		pf_default_rule = t->default_rule;
+
+		for (i = 0; i < PFTM_MAX; i++) {
+			int old = pf_default_rule.timeout[i];
+
+			pf_default_rule.timeout[i] =
+			    t->default_rule.timeout[i];
+
+			if (i == PFTM_INTERVAL &&
+			    pf_default_rule.timeout[i] < old)
+				task_add(net_tq(0), &pf_purge_task);
+		}
+
+		pf_default_vers++;
+	}
+
+	pf_trans_set_commit(&t->trans_set);
+	pf_reactivate_tables(t);
+	pf_remove_orphans(t);
+
+	return;
 }
 
 void
