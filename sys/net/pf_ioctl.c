@@ -128,7 +128,7 @@ void			 pf_free_trans(struct pf_trans *);
 void			 pf_rollback_trans(struct pf_trans *);
 void			 pf_swap_anchors(struct pf_trans *, struct pf_anchor *,
 			    struct pf_anchor *);
-int			 pf_trans_in_conflict(struct pf_trans *, int);
+int			 pf_trans_in_conflict(struct pf_trans *, const char *);
 
 struct pf_rule		 pf_default_rule;
 uint32_t		 pf_default_vers = 1;
@@ -1377,269 +1377,6 @@ pf_is_anchor_empty(struct pf_anchor *a)
 		return (0);
 
 	return (1);
-}
-
-const char *
-pfioctl_name(u_long cmd)
-{
-	static struct {
-		const char	*cmd_name;
-		unsigned int	cmd_code;
-	} ioctl_tab [] = {
-		{
-			"DIOCSTART",
-			DIOCSTART
-		},
-		{
-			"DIOCSTOP",
-			DIOCSTOP,
-		},
-		{
-			"DIOCADDRULE",
-			DIOCADDRULE,
-		},
-		{
-			"DIOCGETRULES",
-			DIOCGETRULES,
-		},
-		{
-			"DIOCGETRULE",
-			DIOCGETRULE,
-		},
-		{
-			"DIOCCLRSTATES",
-			DIOCCLRSTATES,
-		},
-		{
-			"DIOCGETSTATE",
-			DIOCGETSTATE,
-		},
-		{
-			"DIOCSETSTATUSIF",
-			DIOCSETSTATUSIF,
-		},
-		{
-			"DIOCGETSTATUS",
-			DIOCGETSTATUS,
-		},
-		{
-			"DIOCCLRSTATUS",
-			DIOCCLRSTATUS,
-		},
-		{
-			"DIOCNATLOOK",
-			DIOCNATLOOK,
-		},
-		{
-			"DIOCSETDEBUG",
-			DIOCSETDEBUG,
-		},
-		{
-			"DIOCGETSTATES",
-			DIOCGETSTATES,
-		},
-		{
-			"DIOCCHANGERULE",
-			DIOCCHANGERULE,
-		},
-		{
-			"DIOCSETTIMEOUT",
-			DIOCSETTIMEOUT,
-		},
-		{
-			"DIOCGETTIMEOUT",
-			DIOCGETTIMEOUT,
-		},
-		{
-			"DIOCADDSTATE",
-			DIOCADDSTATE,
-		},
-		{
-			"DIOCGETLIMIT",
-			DIOCGETLIMIT,
-		},
-		{
-			"DIOCSETLIMIT",
-			DIOCSETLIMIT,
-		},
-		{
-			"DIOCKILLSTATES",
-			DIOCKILLSTATES,
-		},
-		{
-			"DIOCGETRULESETS",
-			DIOCGETRULESETS,
-		},
-		{
-			"DIOCGETRULESET",
-			DIOCGETRULESET,
-		},
-		{
-			"DIOCRCLRTABLES",
-			DIOCRCLRTABLES,
-		},
-		{
-			"DIOCRADDTABLES",
-			DIOCRADDTABLES,
-		},
-		{
-			"DIOCRDELTABLES",
-			DIOCRDELTABLES,
-		},
-		{
-			"DIOCRGETTABLES",
-			DIOCRGETTABLES,
-		},
-		{
-			"DIOCRGETTSTATS",
-			DIOCRGETTSTATS,
-		},
-		{
-			"DIOCRCLRTSTATS",
-			DIOCRCLRTSTATS,
-		},
-		{
-			"DIOCRCLRADDRS",
-			DIOCRCLRADDRS,
-		},
-		{
-			"DIOCRADDADDRS",
-			DIOCRADDADDRS,
-		},
-		{
-			"DIOCRDELADDRS",
-			DIOCRDELADDRS,
-		},
-		{
-			"DIOCRSETADDRS",
-			DIOCRSETADDRS,
-		},
-		{
-			"DIOCRGETADDRS",
-			DIOCRGETADDRS,
-		},
-		{
-			"DIOCRGETASTATS",
-			DIOCRGETASTATS,
-		},
-		{
-			"DIOCRCLRASTATS",
-			DIOCRCLRASTATS,
-		},
-		{
-			"DIOCRTSTADDRS",
-			DIOCRTSTADDRS,
-		},
-		{
-			"DIOCRSETTFLAGS",
-			DIOCRSETTFLAGS,
-		},
-		{
-			"DIOCRINADEFINE",
-			DIOCRINADEFINE,
-		},
-		{
-			"DIOCOSFPFLUSH",
-			DIOCOSFPFLUSH,
-		},
-		{
-			"DIOCOSFPADD",
-			DIOCOSFPADD,
-		},
-		{
-			"DIOCOSFPGET",
-			DIOCOSFPGET,
-		},
-		{
-			"DIOCXBEGIN",
-			DIOCXBEGIN,
-		},
-		{
-			"DIOCXCOMMIT",
-			DIOCXCOMMIT,
-		},
-		{
-			"DIOCXROLLBACK",
-			DIOCXROLLBACK,
-		},
-		{
-			"DIOCGETSRCNODES",
-			DIOCGETSRCNODES,
-		},
-		{
-			"DIOCCLRSRCNODES",
-			DIOCCLRSRCNODES,
-		},
-		{
-			"DIOCSETHOSTID",
-			DIOCSETHOSTID,
-		},
-		{
-			"DIOCIGETIFACES",
-			DIOCIGETIFACES,
-		},
-		{
-			"DIOCSETIFFLAG",
-			DIOCSETIFFLAG,
-		},
-		{
-			"DIOCCLRIFFLAG",
-			DIOCCLRIFFLAG,
-		},
-		{
-			"DIOCKILLSRCNODES",
-			DIOCKILLSRCNODES,
-		},
-		{
-			"DIOCSETREASS",
-			DIOCSETREASS,
-		},
-		{
-			"DIOCADDQUEUE",
-			DIOCADDQUEUE,
-		},
-		{
-			"DIOCGETQUEUES",
-			DIOCGETQUEUES,
-		},
-		{
-			"DIOCGETQUEUE",
-			DIOCGETQUEUE,
-		},
-		{
-			"DIOCGETQSTATS",
-			DIOCGETQSTATS,
-		},
-		{
-			"DIOCSETSYNFLWATS",
-			DIOCSETSYNFLWATS,
-		},
-		{
-			"DIOCSETSYNCOOKIES",
-			DIOCSETSYNCOOKIES,
-		},
-		{
-			"DIOCGETSYNFLWATS",
-			DIOCGETSYNFLWATS,
-		},
-		{
-			"DIOCXRULESET",
-			DIOCXRULESET
-		},
-		{
-			NULL,
-			0
-		}
-	};
-	unsigned int i = 0;
-
-	while (ioctl_tab[i].cmd_name != NULL && ioctl_tab[i].cmd_code != cmd)
-		i++;
-
-	if (ioctl_tab[i].cmd_name == NULL)
-		return ("UNKNOWN");
-
-	return (ioctl_tab[i].cmd_name);
 }
 
 int
@@ -2951,31 +2688,88 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCRADDTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
 			log(LOG_DEBUG, "%s DIOCRADDTABLES\n", __func__);
 			goto fail;
 		}
-		error = pfr_add_tables(io->pfrio_buffer, io->pfrio_size,
-		    &io->pfrio_nadd, io->pfrio_flags | PFR_FLAG_USERIOCTL);
+
+		t = pf_open_trans(p->p_p->ps_pid);
+
+		error = pfr_add_tables(t, io->pfrio_buffer, io->pfrio_size,
+		    &io->pfrio_nadd);
+
+		if (error != 0) {
+			log(LOG_DEBUG, "%s DIOCRADDTABLES error in "
+			    "pfr_add_tables\n", __func__);
+			pf_rollback_trans(t);
+			goto fail;
+		}
+
+		NET_LOCK();
+		PF_LOCK();
+
+		if (pf_trans_in_conflict(t, "DIOCRDELTABLES") != 0) {
+			PF_UNLOCK();
+			NET_UNLOCK();
+			log(LOG_DEBUG, "%s DIOCRADDTABLES conflict\n",
+			    __func__);
+			error = EBUSY;
+			pf_rollback_trans(t);
+			goto fail;
+		}
+
+		pf_commit_trans(t);
+
+		PF_UNLOCK();
+		NET_UNLOCK();
+
+		pf_rollback_trans(t);
 		break;
 	}
 
 	case DIOCRDELTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
 			log(LOG_DEBUG, "%s DIOCRDELTABLES\n", __func__);
 			goto fail;
 		}
+
+		t = pf_open_trans(p->p_p->ps_pid);
+
+		error = pfr_del_tables(t, io->pfrio_buffer, io->pfrio_size,
+		    &io->pfrio_ndel);
+
+		if (error != 0) {
+			log(LOG_DEBUG, "%s DIOCRDELTABLES error in "
+			    "pfr_del_tables\n", __func__);
+			pf_rollback_trans(t);
+			goto fail;
+		}
+
 		NET_LOCK();
 		PF_LOCK();
-		error = pfr_del_tables(io->pfrio_buffer, io->pfrio_size,
-		    &io->pfrio_ndel, io->pfrio_flags | PFR_FLAG_USERIOCTL);
+
+		if (pf_trans_in_conflict(t, "DIOCRDELTABLES") != 0) {
+			PF_UNLOCK();
+			NET_UNLOCK();
+			log(LOG_DEBUG, "%s DIOCRDELTABLES conflict\n",
+			    __func__);
+			pf_rollback_trans(t);
+			goto fail;
+		}
+
+		pf_commit_trans(t);
+
 		PF_UNLOCK();
 		NET_UNLOCK();
+
+		pf_rollback_trans();
 		break;
 	}
 
@@ -3015,104 +2809,197 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCRCLRTSTATS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
 			log(LOG_DEBUG, "%s DIOCRCLRTSTATS\n", __func__);
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
-		error = pfr_clr_tstats(io->pfrio_buffer, io->pfrio_size,
+
+		t = pf_open_trans(p->p_p->ps_pid);
+
+		error = pfr_clr_tstats(t, io->pfrio_buffer, io->pfrio_size,
 		    &io->pfrio_nzero, io->pfrio_flags | PFR_FLAG_USERIOCTL);
-		PF_UNLOCK();
-		NET_UNLOCK();
+
+		if ((error != 0) && ((io->pfrio_flags & PFR_FLAG_DUMMY) == 0)) {
+			NET_LOCK();
+			PF_LOCK();
+
+			if (pf_trans_in_conflict(t, "DIOCRCLRTSTATS"))
+				error = EBUSY;
+			else
+				pf_commit_trans(t);
+
+			PF_UNLOCK();
+			NET_UNLOCK();
+		}
+
+		pf_rollback_trans(t);
+
 		break;
 	}
 
 	case DIOCRSETTFLAGS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
 			log(LOG_DEBUG, "%s DIOCRSETTFLAGS\n", __func__);
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
-		error = pfr_set_tflags(io->pfrio_buffer, io->pfrio_size,
+
+		t = pf_open_trans(p->p_p->ps_pid);
+
+		error = pfr_set_tflags(t, io->pfrio_buffer, io->pfrio_size,
 		    io->pfrio_setflag, io->pfrio_clrflag, &io->pfrio_nchange,
 		    &io->pfrio_ndel, io->pfrio_flags | PFR_FLAG_USERIOCTL);
-		PF_UNLOCK();
-		NET_UNLOCK();
+
+		if ((error != 0) && ((io->pfrio_flags & PFR_FLAG_DUMMY) == 0)) {
+			NET_LOCK();
+			PF_LOCK();
+
+			if (pf_trans_in_conflict(t, "DIOCRSETTFLAGS"))
+				error = EBUSY;
+			else
+				pf_commit_trans(t);
+
+			PF_UNLOCK();
+			NET_UNLOCK();
+		}
+
+		pf_rollback_trans(t);
 		break;
 	}
 
 	case DIOCRCLRADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != 0) {
 			error = ENODEV;
 			log(LOG_DEBUG, "%s DIOCRCLRADDRS\n", __func__);
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
-		error = pfr_clr_addrs(&io->pfrio_table, &io->pfrio_ndel,
+
+		t = pf_open_trans(p->p_p->ps_pid);
+		error = pfr_clr_addrs(t, &io->pfrio_table, &io->pfrio_ndel,
 		    io->pfrio_flags | PFR_FLAG_USERIOCTL);
-		PF_UNLOCK();
-		NET_UNLOCK();
+
+		if ((error != 0) && ((io->pfrio_flags & PFR_FLAG_DUMMY) == 0)) {
+			NET_LOCK();
+			PF_LOCK();
+
+			if (pf_trans_in_conflict(t, "DIOCRCLRADDRS"))
+				error = EBUSY;
+			else
+				pf_commit_trans(t);
+
+			PF_UNLOCK();
+			NET_UNLOCK();
+		}
+
+		pf_rollback_trans(t);
+
 		break;
 	}
 
 	case DIOCRADDADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
 			log(LOG_DEBUG, "%s DIOCRADDADDRS\n", __func__);
 			goto fail;
 		}
-		error = pfr_add_addrs(&io->pfrio_table, io->pfrio_buffer,
+
+		t = pf_open_trans(p->p_p->ps_pid);
+		error = pfr_add_addrs(t, &io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size, &io->pfrio_nadd, io->pfrio_flags |
 		    PFR_FLAG_USERIOCTL);
+
+		if ((error != 0) && ((io->pfrio_flags & PFR_FLAG_DUMMY)) == 0) {
+			NET_LOCK();
+			PF_LOCK();
+
+			if (pf_trans_in_conflict(t, "DIOCRADDADDRS"))
+				error = EBUSY;
+			else
+				pf_commit_trans(t);
+
+			NET_UNLOCK();
+			PF_UNLOCK();
+		}
+
+		pf_rollback_trans(t);
+
 		break;
 	}
 
 	case DIOCRDELADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trnas *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
 			log(LOG_DEBUG, "%s DIOCRDELADDRS\n", __func__);
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
-		error = pfr_del_addrs(&io->pfrio_table, io->pfrio_buffer,
+
+		t = pf_open_trans(p->p_p->ps_pid);
+
+		error = pfr_del_addrs(t, &io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size, &io->pfrio_ndel, io->pfrio_flags |
 		    PFR_FLAG_USERIOCTL);
-		PF_UNLOCK();
-		NET_UNLOCK();
+
+		if ((error != 0) && ((io->pfrio_flags & PFR_FLAG_DUMMY)) == 0) {
+			NET_LOCK();
+			PF_LOCK();
+
+			if (pf_trans_in_conflict(t, "DIOCRDELADDRS"))
+				error = EBUSY;
+			else
+				pf_commit_trans(t);
+
+			PF_UNLOCK();
+			NET_UNLOCK();
+		}
+
+		pf_rollback_trans(t);
 		break;
 	}
 
 	case DIOCRSETADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
 			log(LOG_DEBUG, "%s DIOCRSETADDRS\n", __func__);
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
-		error = pfr_set_addrs(&io->pfrio_table, io->pfrio_buffer,
+
+		t = pf_open_trans(p->p_p->ps_pid);
+
+		error = pfr_set_addrs(t, &io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size, &io->pfrio_size2, &io->pfrio_nadd,
 		    &io->pfrio_ndel, &io->pfrio_nchange, io->pfrio_flags |
 		    PFR_FLAG_USERIOCTL, 0);
-		PF_UNLOCK();
-		NET_UNLOCK();
+
+		if ((error != 0) && ((io->pfrio_flags & PFR_FLAG_DUMMY)) == 0) {
+			NET_LOCK();
+			PF_LOCK();
+
+			if (pf_trans_in_conflict(t, "DIOCRSETADDRS"))
+				error = EBUSY;
+			else
+				pf_commit_trans(t);
+
+			PF_UNLOCK();
+			NET_UNLOCK();
+		}
 		break;
 	}
 
@@ -3281,7 +3168,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 		free(table, M_TEMP, sizeof(*table));
 		free(ioe, M_TEMP, sizeof(*ioe));
-		log(LOG_DEBUG, "%s %s is done\n", __func__, pfioctl_name(cmd));
+		log(LOG_DEBUG, "%s DIOCXRULESET is done\n", __func__);
 
 		break;
 	}
@@ -3320,12 +3207,34 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCXCOMMIT: {
 		struct pf_trans		*t;
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
-		int			 bailout = 0;
 
 		/*
-		 * XXX
-		 * make sure this will work for tables too before
-		 * transaction for tables will be implemented.
+		 * Looks like we will have to distinguish various
+		 * transaction types:
+		 *	DIOCXRULESET/ina_define
+		 *
+		 * 	DIOCRCLRTSTATS
+		 *
+		 *	DIOCRADDTABLES
+		 *
+		 *	DIOCRSETADDRS
+		 *
+		 *	DIOCRSETTFLAGS
+		 *	...
+		 *
+		 * this kind of hint may make implementation of
+		 * commit operation lot easier.
+		 *
+		 * after thinking more about things:
+		 *	I prefer we bump ruleset version iff
+		 *	we change rules.
+		 *
+		 *	tables bound to rulesets carry their own
+		 *	version number.
+		 *
+		 * we should check ruleset version iff and only iff we
+		 * will be changing rules. if we will be changing table
+		 * bound to ruleset then ruleset version can be ignored.
 		 */
 		t = pf_find_trans(io->ticket);
 		if (t == NULL) {
@@ -3333,32 +3242,19 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		/* first make sure everything will succeed */
-		NET_LOCK();
-		PF_LOCK();	/* the first pass can be r-lock */
-
-		bailout = pf_trans_in_conflict(t, cmd);
-
-		PF_UNLOCK();
-		NET_UNLOCK();
-
-		if (bailout != 0) {
-			error = EBUSY;
-			goto fail;
-		}
-
-		/* commit changes
-		 * upgrade to w-lock is safe, because no other ioctl can
-		 * mess up with global rules. we still hold ioctl rw
-		 */
 		NET_LOCK();
 		PF_LOCK();
 
-		pf_commit_trans(t);
-		pfi_xcommit();
+		if (pf_trans_in_conflict(t, "DIOCXCOMMIT"))
+			error = EBUSY;
+		else {
+			pf_commit_trans(t);
+			pfi_xcommit();
+		}
 
 		PF_UNLOCK();
 		NET_UNLOCK();
+
 		/*
 		 * use rollback to release stuff which became invalidated.
 		 */
@@ -3651,8 +3547,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	default:
 		error = ENODEV;
-		log(LOG_DEBUG, "%s default [ %s (%lx) ]\n", __func__,
-		    pfioctl_name(cmd), cmd);
+		log(LOG_DEBUG, "%s default unknown iocmd (%lx) ]\n",
+		    __func__, cmd);
 		break;
 	}
 fail:
@@ -3917,7 +3813,7 @@ pf_find_trans(uint64_t ticket)
 }
 
 int
-pf_trans_in_conflict(struct pf_trans *t, int cmd)
+pf_trans_in_conflict(struct pf_trans *t, const char *iocmdname)
 {
 	u_int32_t	 version;
 	int		 i, conflict = 0;
@@ -3930,7 +3826,7 @@ pf_trans_in_conflict(struct pf_trans *t, int cmd)
 	}
 
 	log(LOG_DEBUG, "%s:%s (main_ruleset) conflict: %d\n", __func__,
-	    pfioctl_name(cmd), conflict);
+	    iocmdname, conflict);
 	/* check if defaults can be modified/updated */
 	if (conflict == 0 && t->modify_defaults) {
 		conflict = (t->default_vers != pf_default_vers);
@@ -3949,7 +3845,7 @@ pf_trans_in_conflict(struct pf_trans *t, int cmd)
 	}
 
 	log(LOG_DEBUG, "%s:%s (defaults) conflict == %d\n", __func__,
-	    pfioctl_name(cmd), conflict);
+	    iocmdname, conflict);
 	/*
 	 * check ruleset versions in transaction to match versions
 	 * found in global table. We let transaction to fail on the
@@ -3959,7 +3855,7 @@ pf_trans_in_conflict(struct pf_trans *t, int cmd)
 		conflict = pf_check_version(t);
 		log(LOG_DEBUG,
 		    "%s:%s (anchors & tables) conflict == %d\n",
-		    __func__, pfioctl_name(cmd), conflict);
+		    __func__, iocmdname, conflict);
 	}
 
 	return (conflict);

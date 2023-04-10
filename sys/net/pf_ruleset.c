@@ -261,6 +261,14 @@ pf_find_or_create_ruleset(struct pf_rules_container *rc, const char *path)
 	if (ruleset != NULL)
 		return (ruleset);
 
+	/*
+	 * IF we perform look up on global container then ruleset should 
+	 * exist, because the only way to add/remove ruleset is to use
+	 * transaction.
+	 */
+	if (rc == &pf_global)
+		return (NULL);
+
 	p = rs_malloc(MAXPATHLEN);
 	if (p == NULL)
 		return (NULL);
