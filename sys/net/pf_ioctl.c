@@ -169,6 +169,8 @@ void			 pf_rtlabel_copyout(struct pf_addr_wrap *);
 uint64_t trans_ticket = 1;
 LIST_HEAD(, pf_trans)	pf_ioctl_trans = LIST_HEAD_INITIALIZER(pf_trans);
 
+#define PF_ANCHOR_PATH(_a_)	\
+	(((_a_)->path[0] == '\0') ? "/" : (_a_)->path)
 void
 pfattach(int num)
 {
@@ -1199,8 +1201,54 @@ pf_remove_orphans(struct pf_trans *t)
 	}
 }
 
+/*
+ * committing tables which are defined along the ruleset (ina)
+ * is tricky. This is the behavior we want to preserve:
+ *
+ *
+netlock# cat pf-tab.conf
+table <biano>  { 192.168.1.1, 192.168.1.2, 192.168.2.0/24 }
+
+block from <test> to any
+anchor foo {
+        pass in from any to <test>
+}
+netlock# pfctl -sT
+dup
+test
+netlock# pfctl -f pf-tab.conf
+netlock# pfctl -sT
+dup
+test
+ *
+ * pf-tab.,conf does not define table test, the table is left intact because it
+ * got defined by 'pfctl -t test -T add ...'
+ *
+ * table biano did not survive commit operation because there is no rule
+ * using it (PFR_REFCNT_RULE is zero).
+ *
+ * table dup is left intact, because it got defined by 'pfctl -t test -T add'
+ *
+ * let's modify pf-tab.conf so <dup> becomes defined by ruleset. However 
+ * it is still unused:
+ *
+netlock# cat pf-tab.conf
+table <biano>  { 192.168.1.1, 192.168.1.2, 192.168.2.0/24 }
+table <dup>  { 192.168.1.1, 192.168.1.2, 192.168.2.0/24 }
+
+block from <test> to any
+anchor foo {
+        pass in from any to <test>
+}
+netlock# pfctl -f pf-tab.conf
+netlock# pfctl -sT
+test
+ *
+ * table <dup> did not survive commit, because it got redefined by rulest.
+ */
 void
-pf_swap_tables(struct pf_trans *t, struct pf_anchor *a, struct pf_anchor *ta)
+pf_swap_tables_ina(struct pf_trans *t, struct pf_anchor *ta,
+    struct pf_anchor *a)
 {
 	struct pfr_ktablehead tmp_tables;
 	u_int32_t tmp_tables_cnt = 0;
@@ -1209,19 +1257,27 @@ pf_swap_tables(struct pf_trans *t, struct pf_anchor *a, struct pf_anchor *ta)
 	RB_INIT(&tmp_tables);
 
 	/*
-	 * keep tables with PFR_TFLAG_PERSIST flag in ruleset.  persistent
-	 * tables are either created by pfctl -t ... -T ...  or by pf.conf(5)
-	 * using 'persist' keyword.
+	 * Drop all tables which were defined on behalf
+	 * of ina and transaction does not define them
 	 */
-	RB_FOREACH_SAFE(kt, pfr_ktablehead, &a->ktables, tktw) {
-		if ((kt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
+	RB_FOREACH(kt, pfr_ktablehead, &ta->ktables) {
+		tkt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
+		if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
 			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
 			a->tables--;
-			KASSERT((kt->pfrkt_flags & PFR_TFLAG_DETACHED) == 0);
 			RB_INSERT(pfr_ktablehead, &tmp_tables, kt);
-			kt->pfrkt_flags |= PFR_TFLAG_DETACHED;
-			kt->pfrkt_flags |= PFR_TFLAG_INACTIVE;
 			tmp_tables_cnt++;
+			pfr_ktable_cnt--;
+		} else {
+			log(LOG_DEBUG, "%s flushing table %s@%s, "
+			    "still referred by %u rules\n",
+			    __func__,
+			    kt->pfrkt_name,
+			    PF_ANCHOR_PATH(kt->pfrkt_anchor),
+			    kt->pfrkt_refcnt[PFR_REFCNT_RULE]);
+			pfr_flush_table(kt);
+			kt->pfrkt_flags |= PFR_TFLAG_INACTIVE;
+			kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
 		}
 	}
 
@@ -1254,7 +1310,7 @@ pf_swap_tables(struct pf_trans *t, struct pf_anchor *a, struct pf_anchor *ta)
  * transaction anchor 'ta'.
  */
 void
-pf_swap_anchors(struct pf_trans *t, struct pf_anchor *a, struct pf_anchor *ta)
+pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
 {
 	struct pf_ruleset tmp;
 	struct pf_ruleset *trs, *grs;
@@ -1278,42 +1334,66 @@ pf_swap_anchors(struct pf_trans *t, struct pf_anchor *a, struct pf_anchor *ta)
 	TAILQ_FOREACH(r, trs->rules.ptr, entries) {
 		if (r->anchor != NULL) {
 			r->anchor->refcnt--;
+			KASSERT(r->anchor->refcnt >= 0);
 			r->anchor = NULL;
 		}
 		/*
 		 * Detach tables from rule.
 		 */
 		if (r->src.addr.type == PF_ADDR_TABLE) {
-			r->src.addr.p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			struct pfr_ktable *src_kt;
+
+			src_kt = r->src.addr.p.tbl;
 			r->src.addr.p.tbl = NULL;
 			r->src.addr.type = PF_ADDR_NONE;
+
+			src_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			KASSERT(src_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
 		}
 		if (r->dst.addr.type == PF_ADDR_TABLE) {
-			r->dst.addr.p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			struct pfr_ktable *dst_kt;
+
+			dst_kt = r->dst.addr.p.tbl;
 			r->dst.addr.p.tbl = NULL;
 			r->dst.addr.type = PF_ADDR_NONE;
+
+			dst_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			KASSERT(dst_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
 		}
 		if (r->rdr.addr.type == PF_ADDR_TABLE) {
-			r->rdr.addr.p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			struct pfr_ktable *rdr_kt;
+
+			rdr_kt = r->rdr.addr.p.tbl;
 			r->rdr.addr.p.tbl = NULL;
 			r->rdr.addr.type = PF_ADDR_NONE;
+
+			rdr_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			KASSERT(rdr_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
 		}
 		if (r->nat.addr.type == PF_ADDR_TABLE) {
-			r->nat.addr.p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			struct pfr_ktable *nat_kt;
+
+			nat_kt = r->nat.addr.p.tbl;
 			r->nat.addr.p.tbl = NULL;
 			r->nat.addr.type = PF_ADDR_NONE;
+
+			nat_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			KASSERT(nat_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
 		}
 		if (r->route.addr.type == PF_ADDR_TABLE) {
-			r->route.addr.p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			struct pfr_ktable *route_kt;
+
+			route_kt = r->route.addr.p.tbl;
 			r->route.addr.p.tbl = NULL;
 			r->route.addr.type = PF_ADDR_NONE;
+
+			route_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			KASSERT(route_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
 		}
 	}
 
 	grs->rules.rcount = tmp.rules.rcount;
 	TAILQ_CONCAT(grs->rules.ptr, tmp.rules.ptr, entries);
-
-	pf_swap_tables(t, a, ta);
 
 	grs->rules.version++;
 
@@ -1377,73 +1457,6 @@ pf_is_anchor_empty(struct pf_anchor *a)
 		return (0);
 
 	return (1);
-}
-
-int
-pf_check_version(struct pf_trans *t)
-{
-	u_int32_t		 version;
-	struct pf_ruleset	*rs;
-	struct pfr_ktable	*tkt, *kt;
-	struct pf_anchor	*ta;
-	int			 mismatch = 0;
-
-	RB_FOREACH(ta, pf_anchor_global, &t->rc.anchors) {
-		version = ta->ruleset.rules.version;
-		rs = pf_find_ruleset(&pf_global, ta->path);
-		if (rs != NULL)
-			mismatch = (version != rs->rules.version);
-		else
-			mismatch = (version != 0);
-
-		if (mismatch != 0) {
-			log(LOG_DEBUG, "%s: %s (rs: %p) tversion: %d "
-			    "vs. version: %d\n", __func__, ta->path, rs,
-			    version, (rs == NULL) ? 0 : rs->rules.version);
-			break;
-		} else if (rs == NULL) {
-			RB_FOREACH(tkt, pfr_ktablehead, &ta->ktables) {
-				if (tkt->pfrkt_version != 0)
-					break;
-			}
-			if (tkt != NULL) {
-				log(LOG_DEBUG, "%s: %s@%s version %d while "
-				    "expecting 0\n", __func__, tkt->pfrkt_name,
-				    ta->path, tkt->pfrkt_version);
-				mismatch = 1;
-				/* break from RB_FOREACH(t->rc.anchors) */
-				break;
-			}
-		} else {
-			RB_FOREACH(tkt, pfr_ktablehead, &rs->anchor->ktables) {
-				version = tkt->pfrkt_version;
-				kt = pfr_lookup_table(PF_SAFE_ANCHOR(rs),
-				    (struct pfr_table *)tkt);
-				if (kt == NULL) {
-					if (version != 0) {
-						log(LOG_DEBUG, "%s: %s@%s "
-						    "version %d != 0\n",
-						    __func__, tkt->pfrkt_name,
-						    tkt->pfrkt_anchor, version);
-						mismatch = 1;
-						break;
-					}
-				} else if (kt->pfrkt_version != version) {
-					log(LOG_DEBUG,
-					    "%s: %s@%s version %d != %d\n",
-					    __func__, tkt->pfrkt_name,
-					    tkt->pfrkt_anchor, version,
-					    kt->pfrkt_version);
-					mismatch = 1;
-					break;
-				}
-			}
-			if (mismatch != 0)
-				break;
-		}
-	}
-
-	return (mismatch);
 }
 
 int
@@ -3180,6 +3193,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t = pf_open_trans(p->p_p->ps_pid);
 		t->default_rule = pf_default_rule;
 		t->default_vers = pf_default_vers;
+		t->check_op = pf_ina_check;
+		t->commit_op = pf_ina_commit;
 
 		if (io->array != NULL)
 			error = copyinstr(io->array, t->anchor_path,
@@ -3813,20 +3828,110 @@ pf_find_trans(uint64_t ticket)
 }
 
 int
-pf_trans_in_conflict(struct pf_trans *t, const char *iocmdname)
+pf_ina_check(struct pf_anchor *ta, struct pf_anchor *a)
 {
-	u_int32_t	 version;
-	int		 i, conflict = 0;
-	struct pool	*pp;
+	u_int32_t version;
+	int conflict;
+	struct pfr_ktable *kt. *ktt;
 
-	if (t->anchor_path[0] != '\0') {
-		version = t->rc.main_anchor.ruleset.rules.version;
-		conflict = ((version != 0) &&
-		    (version != pf_main_ruleset.rules.version));
+	/*
+	 * if anchor does not exist in global tree, then
+	 * transaction is about to create/insert new anchor.
+	 * in this case we expect to see version 0.
+	 *
+	 * Same goes to ktt later. If desired table is not
+	 * found at global anchor, then we are adding/creating
+	 * a new table to anchor. Therefore expected version
+	 * must be 0.
+	 */
+	if (a != NULL)
+		version = a->ruleset.rules.version;
+	else
+		version = 0;
+
+	conflict = (version != ta->ruleset.rules.version);
+
+	if ((conflict == 0) && (a != NULL)) {
+		RB_FOREACH(ktt, pfr_ktablehead, &ta->tables) {
+			kt = RB_FIND(pfr_ktablehead, &a->tables, ktt);
+			if (kt == NULL)
+				conflict = (ktt->version != 0);
+			else
+				conflict = (ktt->version != kt->version);
+
+			if (conflict) {
+				log(LOG_DEBUG,
+				    "%s table (%s@%s) version mismatch "
+				    "(%lu vs. %lu)\n",
+				    __func__,
+				    ktt->name,
+				    PF_ANCHOR_PATH(a),
+				    ktt->version,
+				    (kt == NULL) ? 0 : kt->version);
+				break;
+			}
+		}
+	} else {
+		log(LOG_DEBUG,
+		    "%s ruleset (%s) version mismatch (%lu vs. %lu)\n",
+		    __func__,
+		    PF_ANCHOR_PATH(a),
+		    ta->ruleset.rules.version,
+		    a->ruleset.ruleset.version);
 	}
 
-	log(LOG_DEBUG, "%s:%s (main_ruleset) conflict: %d\n", __func__,
-	    iocmdname, conflict);
+	return (conflict)
+}
+
+int
+pf_table_check(struct pf_anchor *ta, struct pf_anchor *a)
+{
+	int conflict;
+	struct pfr_ktable *kt. *ktt;
+
+	/*
+	 * we skip version check for rules, because
+	 * we are going to update tables only.
+	 */
+	if (a != NULL) {
+		RB_FOREACH(ktt, pfr_ktablehead, &ta->tables) {
+			kt = RB_FIND(pfr_ktablehead, &a->tables, ktt);
+			if (kt == NULL)
+				conflict = (ktt->version != 0);
+			else
+				conflict = (ktt->version != kt->version);
+
+			if (conflict) {
+				log(LOG_DEBUG,
+				    "%s table (%s@%s) version mismatch "
+				    "(%lu vs. %lu)\n",
+				    __func__,
+				    ktt->name,
+				    PF_ANCHOR_PATH(a),
+				    ktt->version,
+				    (kt == NULL) ? 0 : kt->version);
+				break;
+			}
+		}
+	} else {
+		log(LOG_DEBUG, "%s transaction creates new anchor (%s)\n",
+		    __func__,
+		    ta->path);
+	}
+
+	return (conflict);
+}
+
+int
+pf_trans_in_conflict(struct pf_trans *t, const char *iocmdname)
+{
+	int			 i, conflict = 0;
+	struct pf_anchor	*ta, *a;
+	struct pool		*pp;
+
+	if (t->anchor_path[0] == '\0')
+		conflict = t->check_op(&t->rc.main_anchor, &pf_main_anchor);
+	
 	/* check if defaults can be modified/updated */
 	if (conflict == 0 && t->modify_defaults) {
 		conflict = (t->default_vers != pf_default_vers);
@@ -3846,19 +3951,68 @@ pf_trans_in_conflict(struct pf_trans *t, const char *iocmdname)
 
 	log(LOG_DEBUG, "%s:%s (defaults) conflict == %d\n", __func__,
 	    iocmdname, conflict);
+
 	/*
-	 * check ruleset versions in transaction to match versions
-	 * found in global table. We let transaction to fail on the
-	 * first mismatch.
+	 * check anchor versions in transaction to match versions found in
+	 * global table.
 	 */
 	if (conflict == 0) {
-		conflict = pf_check_version(t);
-		log(LOG_DEBUG,
-		    "%s:%s (anchors & tables) conflict == %d\n",
-		    __func__, iocmdname, conflict);
+		RB_FOREACH(ta, pf_anchor_global, &t->rc.anchors) {
+			a = RB_FIND(pf_anchor_global, &pf_global.anchors, ta);
+			conflict = t->check_op(ta, a);
+			if (conflict != 0)
+				break;
+		}
 	}
 
 	return (conflict);
+}
+
+void
+pf_ina_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
+{
+	struct pf_anchor *exists, *parent;
+
+	if (a == NULL) {
+		RB_REMOVE(pf_anchor_global, &t->rc.anchors, ta);
+		exists = RB_INSERT(pf_anchor_global, &pf_anchors, ta);
+		KASSERT(exists == NULL);
+		if (ta->parent != NULL) {
+			parent = RB_FIND(pf_anchor_global, &pf_anchors,
+			    ta->parent)
+			if (parent != NULL) {
+				/*
+				 * our parent exists in global tree, then
+				 * we must update our parent <-> child
+				 * relationship
+				 */
+				log(LOG_DEBUG,
+				    "%s parent (%s) found for %s in global "
+				    "tree\n", __func__,
+				    PF_ANCHOR_PATH(a),
+				    ta->path);
+				RB_REMOVE(pf_anchor_node,
+				    &ta->parent->children, ta);
+				exists = RB_INSERT(pf_anchor_node,
+				    &parent->children, ta);
+				KASSERT(exists);
+			} else {
+				/*
+				 * parent has not been moved to global tree
+				 * yet. Do nothing parent <-> children
+				 * relationship needs no action in this case.
+				 */
+				log(LOG_DEBUG,
+				    "%s parent not found for %s in global "
+				    "tree\n", __func__,
+				    ta->path);
+			}
+		}
+		pfr_ktable_cnt += ta->tables;
+	} else {
+		pf_swap_anchors_ina(t, ta, a);
+		pf_swap_tables_ina(t, ta, a);
+	}
 }
 
 void
