@@ -1862,7 +1862,7 @@ _skip:
 }
 
 void
-pf_update_tablerefs(struct pf_anchor *ta, struct pfr_ktable *kt)
+pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 {
 	struct pf_rule *r;
 
@@ -1933,6 +1933,43 @@ pf_update_tablerefs(struct pf_anchor *ta, struct pfr_ktable *kt)
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 		}
 	}
+}
+
+void
+pfr_update_table_refs(struct pf_anchor *ta, struct pfr_ktable *kt)
+{
+	struct pf_anchor *recursive_a, *aux_a;
+	TAILQ_HEAD(, pf_anchor) recusive_l, aux;
+
+	pfr_update_tablerefs_anchor(ta, kt_insert);
+
+	/*
+	 * unwind recursion into lists so
+	 * we can descent to leaf child without
+	 * risking stack overflow.
+	 */
+	TAILQ_INIT(&recursive_l);
+	TAILQ_INIT(&aux);
+
+	RB_FOREACH(aux, pf_anchor_node, &ta->children) {
+		TAILQ_INSERT_HEAD(&recusive_l, aux, workq);
+	}
+
+	while (!TAILQ_EMPTY(&recursive_l)) {
+		TAILQ_FOREACH(recusive_a, &recursive_l, workq) {
+			RB_FOREACH(aux_a, pf_anchor_node,
+			    &recursive_a->children) {
+				TAILQ_INSERT_HEAD(&aux, aux_a, workq);
+			}
+			pfr_update_tablerefs_anchor(recursive_a, kt);
+		}
+		/*
+		 * move to the next level twoards leaf in anchor tree.
+		 */
+		TAILQ_INIT(&recusive_l);
+		TAILQ_CONCAT(&recursive_l, &aux, workq);
+	}
+
 }
 
 int
@@ -2028,14 +2065,11 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 	kt->pfrkt_cnt = (flags & PFR_FLAG_ADDRSTOO) ?  xaddr : NO_ADDRESSES;
 
 	if (kt_insert != NULL) {
+
 		kt = RB_INSERT(pfr_ktablehead, &ta->ktables, kt_insert);
 		KASSERT(kt == NULL);
 
-		pf_update_rules(ta, kt_insert);
-		/* musime to projit az k listu ! */
-		RB_FOREACH(child, pf_anchor_node, &ta->children) {
-			pf_update_rules(child, kt_insert);
-		}
+		pfr_update_table_refs(ta, kt_insert);
 
 		xadd++;
 		kt_insert = NULL;
@@ -2048,40 +2082,6 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 _bad:
 	if (kt_insert != NULL)
 		pfr_destroy_ktable(kt_insert, 1);
-	return (rv);
-}
-
-/*
- * this callback is invoked from pf_rs_walk_to_leaf() as it descents
- * towards leaf. We want to stop descent (return (1)) as soon as we find
- * table with the same name defined at anchor's `a` desendant.
- * If descendant does not define table with the same name, then we
- * want to walk all rules and update any references to same named table
- * so anchor rules will be using closest parent's (ancestor's)  table.
- */
-int
-pfr_update_rs(struct pf_anchor *a, void *table)
-{
-	struct pfr_ktable *t = table;
-	struct pf_ruleset *rs = &a->ruleset;
-	struct pf_rule *r;
-	int rv;
-
-	if (RB_FIND(pfr_ktablehead, &a->ktables, t) == NULL) {
-		TAILQ_FOREACH(r, rs->rules.ptr, entries) {
-			if (PF_MATCH_KTABLE(&r->src.addr, t))
-				PF_UPDATE_KTABLE(&r->src.addr, t);
-			if (PF_MATCH_KTABLE(&r->dst.addr, t))
-				PF_UPDATE_KTABLE(&r->dst.addr, t);
-			if (PF_MATCH_KTABLE(&r->nat.addr, t))
-				PF_UPDATE_KTABLE(&r->nat.addr, t);
-			if (PF_MATCH_KTABLE(&r->rdr.addr, t))
-				PF_UPDATE_KTABLE(&r->rdr.addr, t);
-		}
-		rv = 0;
-	} else
-		rv = 1;
-
 	return (rv);
 }
 
@@ -2976,6 +2976,7 @@ pfr_commit_ktable(struct pfr_ktable *tkt, pfr_ktable *kt, time_t tzero)
 		SLIST_INIT(&delq);
 		SLIST_INIT(&garbageq);
 		pfr_clean_node_mask(tkt, &addrq);
+		/* FixMe: we need to read addresses from tkt */
 		while ((p = SLIST_FIRST(&addrq)) != NULL) {
 			SLIST_REMOVE_HEAD(&addrq, pfrke_workq);
 			pfr_copyout_addr(&ad, p);

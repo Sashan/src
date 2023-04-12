@@ -187,9 +187,6 @@ struct pf_addr {
 	(((_aw_)->type == PF_ADDR_TABLE) &&	\
 	(strcmp((_aw_)->p.tbl->pfrkt_name, (_kt_)->pfrkt_name) == 0))
 
-#define PF_UPDATE_KTABLE(_aw_, _kt_)		\
-	(_aw_)->p.tbl = (_kt_)
-
 struct pf_addr_wrap {
 	union {
 		struct {
