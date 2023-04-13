@@ -2085,6 +2085,60 @@ _bad:
 	return (rv);
 }
 
+void
+pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
+    struct pf_anchor *a)
+{
+	struct pfr_ktable *kt, *tkt, *ktw;
+
+	/*
+	 * nothing to be done when the whole anchor got moved
+	 * from transaction to pf_anchors
+	 */
+	if (ta == a)
+		return;
+
+	/*
+	 * `a` can't be NULL because all anchors were moved from transaction to
+	 * pf_anchors already.  Also we have not purged empty anchors from
+	 * pf_anchors yet.
+	 */
+	KASSERT(a != NULL);
+
+	RB_FOREACH_SAFE(kt, pfr_ktablehead, &a->ktables, ktw) {
+		/*
+		 * TODO: we should also identify tables created
+		 * by pfctl -t ... -T ... those tables must also
+		 * stay around.
+		 */
+		if (kt->pfrkt_refcnt == 0 &&
+		    (kt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
+			RB_REMOVE(kt, pfr_ktablehead, &a->tables);
+			SLIST_INSERT_HEAD(&t->workq, kt, pfrkt_workq);
+			a->tables--;
+			pfr_ktable_cnt--;
+		}
+	}
+
+	RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, ktw) {
+		kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
+		if (kt == NULL) {
+			KASSERT(tkt->pfrkt_version == 0);
+			RH_REMOVE(pfr_ktablehead, ta->ktables, tkt);
+			ta->tables--;
+			RB_INSERT(pfr_ktablehead, a->ktables, tkt);
+			a->tables++;
+			pfr_update_table_refs(a, tkt);
+			pfr_ktable_cnt++;
+			tkt->pfrkt_version++;
+		} else {
+			KASSERT(kt->pfrkt_version == tkt->pfrkt_version);
+			pfr_commit_ktable(tkt, kt, gettime());
+			kt->pfrkt_version++;
+		}
+	}
+}
+
 int
 pfr_validate_table(struct pfr_table *tbl, int allowedflags, int no_reserved)
 {
@@ -2860,101 +2914,6 @@ pfr_get_ktable_version(struct pfr_ktable *ktt)
 	    __func__, __LINE__, kt, ktt->pfrkt_name, version);
 
 	return (version);
-}
-
-/*
- * If detached table is still referred by global/active rule
- * then we must put table back from transaction to global ruleset.
- */
-void
-pfr_reattach_table(struct pf_trans *t, struct pf_anchor *a,
-    struct pf_addr_wrap *aw)
-{
-	struct pf_anchor *ta, *parent;
-	struct pfr_ktable *kt, *ktchk;
-	struct pfr_kentryworkq	 addrq;
-
-	if ((aw->type == PF_ADDR_TABLE) &&
-	    ((aw->p.tbl->pfrkt_flags & PFR_TFLAG_DETACHED) != 0)) {
-		/*
-		 * Try to find table with the same name in parent anchor.  Keep
-		 * traversing up to root.
-		 */
-		parent = a;
-		do {
-			kt = pfr_lookup_table(parent,
-			    (struct pfr_table *)aw->p.tbl);
-			parent = parent->parent;
-		} while ((kt == NULL) && (parent != NULL));
-
-		if (kt != NULL) {
-			aw->p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			aw->p.tbl = kt;
-			aw->p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]++;
-			return;
-		}
-
-		/*
-		 * no matching table found in ascendant anchors,
-		 * then we must 'recyvle' table from transaction.
-		 * recycled table is removed from anchor found
-		 * in transactrion and moved to global main anchor.
-		 * We also flush all addresses from recycled table.
-		 * Recycled table is marked as inactive.
-		 */
-		if (a == &pf_main_anchor)
-			ta = &t->rc.main_anchor;
-		else {
-			ta = RB_FIND(pf_anchor_global, &t->rc.anchors, a);
-			KASSERT(ta != NULL);
-		}
-
-		parent = ta;
-		do {
-			kt = pfr_lookup_table(parent,
-			    (struct pfr_table *)aw->p.tbl);
-			parent = parent->parent;
-		} while ((kt == NULL) && (parent != NULL));
-		KASSERT(kt == aw->p.tbl);
-
-		RB_REMOVE(pfr_ktablehead, &parent->ktables, kt);
-
-		/* flush all addresses from table when recycling it */
-		pfr_enqueue_addrs(kt, &addrq, NULL, 0);
-		pfr_clean_node_mask(kt, &addrq);
-		pfr_destroy_kentries(&addrq);
-
-		kt->pfrkt_flags &= ~PFR_TFLAG_DETACHED;
-		kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
-		kt->pfrkt_flags |= PFR_TFLAG_INACTIVE;
-		kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
-
-		ktchk = RB_INSERT(pfr_ktablehead, &a->ktables, kt);
-
-		KASSERT(ktchk == NULL);
-	} else if (aw->type == PF_ADDR_TABLE) {
-		/*
-		 * find the closest ancestor anchor.
-		 */
-		parent = a;
-		do {
-			kt = pfr_lookup_table(parent,
-			    (struct pfr_table *)aw->p.tbl);
-			parent = parent->parent;
-		} while ((kt == NULL) && (parent != NULL));
-
-		if (kt != aw->p.tbl) {
-			aw->p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			if (aw->p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
-				aw->p.tbl->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-
-			aw->p.tbl = kt;
-			
-			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
-			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
-			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
-		}
-	}
 }
 
 void

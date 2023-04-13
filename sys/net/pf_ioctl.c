@@ -960,66 +960,6 @@ pf_addr_update(struct pf_trans *t, struct pf_ruleset *grs,
 	}
 }
 
-/*
- * pf_validate_tables()  function deals with special case of 'detached
- * ruleset'.  The easiest way to create a detached ruleset one runs
- * commad as follows:
- *
- *	echo 'pass from <bar> to any' |pfctl -a foo/foo/foo -f -
- *	echo 'pass all' | pfctl -f -
- *
- * the rule found in foo/foo/foo anchor is detached from root ruleset,
- * because there is no path startigg at main/root anchor to reach
- * foo/foo/foo anchor. In order to attach rule in foo/foo/foo anchor
- * to main ruleset one has to run commands:
- *
- *	 echo 'anchor foo' |pfctl -f - 
- *	 echo 'anchor foo' |pfctl -a foo -f -
- *	 echo 'anchor foo' |pfctl -a foo/foo -f -
- *
- * Consider situation foo/foo/foo anchor is detached. The rule in this
- * anchor refers to table <bar>. If <bar> is not defined within
- * foo/foo/foo anchor, then we expect to find its definition in parent
- * anchor. If foo/foo nor foo anchors define <bar> table, then it must
- * be defiend in root/main anchor. If we run command
- *
- *	echo 'acnhor foo' |pfctl -f -
- *
- * the command above updates root/main anchor. It removes all tables
- * found in root anchor which are not persistent. The command also
- * attempts to remove table <bar>. However <bar> table must be kept
- * here, because it still referred by rule found foo/foo/foo anchor.
- *
- * This function traverses all rulesets and finds a rule which
- * refers to inactive table. If such inactive reference is found
- * the table gets revived: moved from transaction ruleset back to
- * global ruleset
- */
-void
-pf_reactivate_tables(struct pf_trans *t)
-{
-	struct pf_anchor *a;
-	struct pf_rule *r;
-
-	RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
-		TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
-			pfr_reattach_table(t, a, &r->src.addr);
-			pfr_reattach_table(t, a, &r->dst.addr);
-			pfr_reattach_table(t, a, &r->rdr.addr);
-			pfr_reattach_table(t, a, &r->nat.addr);
-			pfr_reattach_table(t, a, &r->route.addr);
-		}
-	}
-
-	TAILQ_FOREACH(r, pf_main_ruleset.rules.ptr, entries) {
-		pfr_reattach_table(t, &pf_main_anchor, &r->src.addr);
-		pfr_reattach_table(t, &pf_main_anchor, &r->dst.addr);
-		pfr_reattach_table(t, &pf_main_anchor, &r->rdr.addr);
-		pfr_reattach_table(t, &pf_main_anchor, &r->nat.addr);
-		pfr_reattach_table(t, &pf_main_anchor, &r->route.addr);
-	}
-}
-
 struct pfi_kif *
 pf_kif_setup(struct pfi_kif *kif_buf)
 {
@@ -1506,7 +1446,7 @@ pf_drop_unused_tables(struct pf_trans *t)
 			RB_REMOVE(tkt, pfr_ktablehead,
 			    &t->rc.main_anchor.ktables);
 			t->rc.main_anchor.tables--;
-			pfr_destroy_ktable(kt, 1);
+			SLIST_INSERT_HEAD(&t->garbage, kt, pfrkt_workq);
 		}
 	}
 	RB_FOREACH(ta, pf_anchor_global, &t->anchors) {
@@ -1516,7 +1456,7 @@ pf_drop_unused_tables(struct pf_trans *t)
 				RB_REMOVE(tkt, pfr_ktablehead,
 				    &ta->ktables);
 				ta->tables--;
-				pfr_destroy_ktable(kt, 1);
+				SLIST_INSERT_HEAD(&t->garbage, kt, pfrkt_workq);
 			}
 		}
 	}
@@ -3339,7 +3279,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		pf_drop_unused_tables(t);
 
 		NET_LOCK();
 		PF_LOCK();
@@ -3347,6 +3286,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		if (pf_trans_in_conflict(t, "DIOCXCOMMIT"))
 			error = EBUSY;
 		else {
+			pf_drop_unused_tables(t);
 			pf_commit_trans(t);
 			pfi_xcommit();
 		}
@@ -3889,7 +3829,7 @@ pf_open_trans(pid_t pid)
 	t->ticket = ticket++;
 	RB_INIT(&t->rc.anchors);
 	TAILQ_INIT(&t->anchor_list);
-	SLIST_INIT(&t->workq);
+	SLIST_INIT(&t->garbage);
 	pf_init_ruleset(&t->rc.main_anchor.ruleset);
 	memset(t->anchor_path, 0, sizeof(t->anchor_path));
 
@@ -4105,53 +4045,6 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 }
 
 void
-pf_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
-    struct pf_anchor *a)
-{
-	struct pfr_ktable *kt, *tkt, *ktw;
-	/*
-	 * nothing to be done when the whole anchor got moved
-	 * from transaction to pf_anchors
-	 */
-	if (ta == a)
-		return;
-
-	/*
-	 * a can't be NULL because all anchors were moved from transaction to
-	 * pf_anchors already.  Also we have not purged empty anchors from
-	 * pf_anchors yet.
-	 */
-	KASSERT(a != NULL);
-
-	RB_FOREACH_SAFE(kt, pfr_ktablehead, &a->ktables, ktw) {
-		/*
-		 * TODO: we should also identify tables created
-		 * by pfctl -t ... -T ... those tables must also
-		 * stay around.
-		 */
-		if (kt->pfrkt_refcnt == 0 &&
-		    (kt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
-			RB_REMOVE(kt, pfr_ktablehead, &a->tables);
-			SLIST_INSERT_HEAD(&t->workq, kt, pfrkt_workq);
-			a->tables--;
-			pfr_ktable_cnt--;
-		}
-	}
-
-	RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, ktw) {
-		kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
-		if (kt == NULL) {
-			RH_REMOVE(pfr_ktablehead, ta->ktables, tkt);
-			ta->tables--;
-			RB_INSERT(pfr_ktablehead, a->ktables, tkt);
-			a->tables++;
-			pfr_update_table_refs(a, tkt);
-		} else
-			pfr_commit_ktable(tkt, kt, gettime());
-	}
-}
-
-void
 pf_ina_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
 {
 	struct pf_anchor	*anchor, *anchorw;
@@ -4229,9 +4122,7 @@ pf_ina_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
 	/*
 	 * next iterations pf_commit_trans() will continue with tables.
 	 */
-	t->commit_op = pf_ina_commit_table;
-
-	return;
+	t->commit_op = pfr_ina_commit_table;
 }
 
 void
@@ -4271,7 +4162,6 @@ pf_commit_trans(struct pf_trans *t)
 	}
 
 	pf_trans_set_commit(&t->trans_set);
-	pf_reactivate_tables(t);
 	pf_remove_orphans(t);
 
 }
@@ -4314,8 +4204,8 @@ pf_free_trans(struct pf_trans *t)
 		}
 	}
 
-	while ((kt = SLIST_FIRST(&t->workq)) != NULL) {
-		SLIST_REMOVE_HEAD(&t->workq, pfrkt_workq);
+	while ((kt = SLIST_FIRST(&t->garbage)) != NULL) {
+		SLIST_REMOVE_HEAD(&t->garbage, pfrkt_workq);
 		pfr_destroy_ktable(kt, 1);
 	}
 

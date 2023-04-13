@@ -343,7 +343,7 @@ struct pf_trans_set {
 struct pf_trans {
 	LIST_ENTRY(pf_trans)	entry;
 	TAILQ_HEAD(, pf_anchor)	anchor_list;
-	struct pfr_ktableworkq	workq;
+	struct pfr_ktableworkq	garbage;
 	struct pf_rules_container
 				rc;
 	unsigned		pool_limits[PF_LIMIT_MAX];

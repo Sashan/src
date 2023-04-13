@@ -1767,6 +1767,8 @@ int	pfr_ina_begin(struct pf_trans *, u_int32_t *, const char *);
 int	pfr_ina_commit(struct pfr_table *, u_int32_t, int *, int *, int);
 int	pfr_ina_define(struct pf_trans *, struct pfr_table *,
 	    struct pfr_addr *, int, int *, int *, int);
+void	pfr_ina_commit_table(struct pf_trans *, struct pf_anchor *,
+	    struct pf_anchor *);
 struct pfr_ktable
 	*pfr_ktable_select_active(struct pfr_ktable *);
 
