@@ -350,6 +350,9 @@ struct pf_trans {
 	struct pf_rule		default_rule;
 	struct pf_trans_set	trans_set;
 	char			anchor_path[PATH_MAX];
+	int (*check_op)(struct pf_anchor *, struct pf_anchor *);
+	void (*commit_op)(struct pf_trans *, struct pf_anchor *,
+	    struct pf_anchor *);
 	pid_t			pid;		/* process id */
 	uint64_t		ticket;
 	uint32_t		default_vers;

@@ -1745,18 +1745,23 @@ struct pfr_ktable *
 	    char *, int);
 void	pfr_detach_table(struct pfr_ktable *);
 int	pfr_clr_tables(struct pfr_table *, int *, int);
-int	pfr_add_tables(struct pf_trans *, struct pfr_table *, int, int *);
-int	pfr_del_tables(struct pfr_table *, int, int *, int);
+int	pfr_add_tables(struct pf_trans *, struct pfr_table *, int, int *, int);
+int	pfr_del_tables(struct pf_trans *, struct pfr_table *, int, int *, int);
 int	pfr_get_tables(struct pfr_table *, struct pfr_table *, int *, int);
 int	pfr_get_tstats(struct pfr_table *, struct pfr_tstats *, int *, int);
-int	pfr_clr_tstats(struct pfr_table *, int, int *, int);
-int	pfr_set_tflags(struct pfr_table *, int, int, int, int *, int *, int);
+int	pfr_clr_tstats(struct pf_trans *, struct pfr_table *, int, int *, int);
+int	pfr_set_tflags(struct pf_trans *, struct pfr_table *, int, int, int,
+	    int *, int *, int);
 int	pfr_clr_addrs(struct pfr_table *, int *, int);
 int	pfr_insert_kentry(struct pfr_ktable *, struct pfr_addr *, time_t);
-int	pfr_add_addrs(struct pfr_table *, struct pfr_addr *, int, int *, int);
-int	pfr_del_addrs(struct pfr_table *, struct pfr_addr *, int, int *, int);
+int	pfr_add_addrs(struct pf_trans *, struct pfr_table *, struct pfr_addr *,
+	    int, int *, int);
+int	pfr_del_addrs(struct pf_trans *, struct pfr_table *, struct pfr_addr *,
+	    int, int *, int);
 int	pfr_set_addrs(struct pfr_table *, struct pfr_addr *, int, int *, int *,
 	    int *, int *, int, u_int32_t);
+int	pfr_set_addrs_ioc(struct pf_trans *, struct pfr_table *,
+	    struct pfr_addr *, int, int *, int *, int *, int *, int, u_int32_t);
 int	pfr_get_addrs(struct pfr_table *, struct pfr_addr *, int *, int);
 int	pfr_get_astats(struct pfr_table *, struct pfr_astats *, int *, int);
 int	pfr_clr_astats(struct pfr_table *, struct pfr_addr *, int, int *,
