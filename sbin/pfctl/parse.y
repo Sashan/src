@@ -833,7 +833,7 @@ pfa_anchorlist	: /* empty */
 		| pfa_anchorlist include '\n'
 		;
 
-pfa_anchor	: '{'
+pfa_anchor_open	: '{' '\n'
 		{
 			char ta[PF_ANCHOR_NAME_SIZE];
 			struct pf_ruleset *rs;
@@ -854,16 +854,21 @@ pfa_anchor	: '{'
 			snprintf(ta, PF_ANCHOR_NAME_SIZE, "_%d", pf->bn);
 			rs = pf_find_or_create_ruleset(&pf_global, ta);
 			if (rs == NULL)
-				err(1, "pfa_anchor: pf_find_or_create_ruleset");
+				err(1, "pfa_anchor: pf_find_or_create_ruleset (%s)", ta);
 			pf->astack[pf->asd] = rs->anchor;
 			pf->anchor = rs->anchor;
-		} '\n' pfa_anchorlist '}'
+		}
+		;
+
+pfa_anchor_close: '}' '\n'
 		{
 			pf->alast = pf->anchor;
 			pf->asd--;
 			pf->anchor = pf->astack[pf->asd];
 		}
-		| /* empty */
+		;
+
+pfa_anchor	: pfa_anchor_open pfa_anchorlist pfa_anchor_close
 		;
 
 anchorrule	: ANCHOR anchorname dir quick interface af proto fromto
