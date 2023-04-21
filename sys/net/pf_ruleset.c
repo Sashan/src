@@ -261,6 +261,7 @@ pf_find_or_create_ruleset(struct pf_rules_container *rc, const char *path)
 	if (ruleset != NULL)
 		return (ruleset);
 
+#ifdef _KERNEL
 	/*
 	 * IF we perform look up on global container then ruleset should 
 	 * exist, because the only way to add/remove ruleset is to use
@@ -268,6 +269,7 @@ pf_find_or_create_ruleset(struct pf_rules_container *rc, const char *path)
 	 */
 	if (rc == &pf_global)
 		return (NULL);
+#endif
 
 	p = rs_malloc(MAXPATHLEN);
 	if (p == NULL)
@@ -320,8 +322,8 @@ pf_get_ruleset_version(const char *path)
 		version = 0;
 	PF_UNLOCK();
 	NET_UNLOCK();
-	log(LOG_ERR, "%s @ %d found %p for %s, version: %d\n",
-	    __func__, __LINE__, rs, path, version);
+	log(LOG_ERR, "%s found %p for %s, version: %d\n",
+	    __func__, rs, path, version);
 
 	return (version);
 }
@@ -412,6 +414,10 @@ pf_anchor_setup(struct pf_rules_container *rc, struct pf_rule *r,
 	}
 	r->anchor = ruleset->anchor;
 	r->anchor->refcnt++;
+	log(LOG_DEBUG, "%s %s->refcnt: %u\n",
+	    __func__,
+	    r->anchor->path,
+	    r->anchor->refcnt);
 	return (0);
 }
 

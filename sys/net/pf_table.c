@@ -1648,8 +1648,6 @@ pfr_get_tables(struct pfr_table *filter, struct pfr_table *tbl, int *size,
 		a = PF_SAFE_ANCHOR(rs);
 		n = a->tables;
 		nn = n;
-		if (n == 0)
-			return (ENOENT);
 		if (n > *size) {
 			*size = n;
 			return (0);
@@ -1663,8 +1661,7 @@ pfr_get_tables(struct pfr_table *filter, struct pfr_table *tbl, int *size,
 		}
 	} else {
 		n = pfr_ktable_cnt;
-		if (n == 0)
-			return (ENOENT);
+		log(LOG_DEBUG, "%s %d\n", __func__, pfr_ktable_cnt);
 
 		if (n > *size) {
 			*size = n;
@@ -1674,15 +1671,27 @@ pfr_get_tables(struct pfr_table *filter, struct pfr_table *tbl, int *size,
 		nn = n;
 
 		RB_FOREACH(p, pfr_ktablehead, &pf_main_anchor.ktables) {
-			if (n-- <=0)
+			if (n-- <=0) {
+				log(LOG_DEBUG, "%s (/) n: %d: %s\n",
+				    __func__, n, p->pfrkt_name);
 				continue;
+			} else
+				log(LOG_DEBUG, "%s (/) n: %d: %s\n",
+				    __func__, n, p->pfrkt_name);
 			if (COPYOUT(&p->pfrkt_t, tbl++, sizeof(*tbl), flags))
 				return (EFAULT);
 		}
 		RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
 			RB_FOREACH(p, pfr_ktablehead, &a->ktables) {
-				if (n-- <= 0)
+				if (n-- <=0) {
+					log(LOG_DEBUG, "%s (%s) n: %d: %s\n",
+					    __func__, a->path, n,
+					    p->pfrkt_name);
 					continue;
+				} else
+					log(LOG_DEBUG, "%s (%s) n: %d: %s\n",
+					    __func__, a->path, n,
+					    p->pfrkt_name);
 				if (COPYOUT(&p->pfrkt_t, tbl++, sizeof(*tbl),
 				    flags))
 					return (EFAULT);
@@ -1692,7 +1701,8 @@ pfr_get_tables(struct pfr_table *filter, struct pfr_table *tbl, int *size,
 
 	if (n) {
 		DPFPRINTF(LOG_ERR,
-		    "pfr_get_tables: corruption detected (%d).", n);
+		    "pfr_get_tables: corruption detected at %s (%d).",
+		    ((flags & PFR_FLAG_ALLRSETS) == 0) ? a->path : "*", n);
 		return (ENOTTY);
 	}
 	*size = nn;
@@ -1970,7 +1980,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 	if (pfr_validate_table(tbl, PFR_TFLAG_USRMASK,
 	    flags & PFR_FLAG_USERIOCTL))
 		return (EINVAL);
-	trs = pf_find_ruleset(&t->rc, tbl->pfrt_anchor);
+	trs = pf_find_or_create_ruleset(&t->rc, tbl->pfrt_anchor);
 	if (trs == NULL)
 		return (EBUSY);
 	if (trs->anchor == NULL)
@@ -1985,8 +1995,8 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		 * so we will attach table ourselves.
 		 */
 		kt_insert = pfr_create_ktable(NULL, tbl, 0, PR_WAITOK);
-		kt_insert->pfrkt_version = pfr_get_ktable_version(kt_insert);
 		kt_insert->pfrkt_rs = trs;
+		kt_insert->pfrkt_version = pfr_get_ktable_version(kt_insert);
 		xadd++;
 		kt_insert->pfrkt_flags |= PFR_TFLAG_REFDANCHOR;
 		/* ina means inactive */
@@ -2047,7 +2057,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 
 		kt = RB_INSERT(pfr_ktablehead, &ta->ktables, kt_insert);
 		KASSERT(kt == NULL);
-		kt_insert->pfrkt_rs->anchor->tables++;
+		PF_SAFE_ANCHOR(kt_insert->pfrkt_rs)->tables++;
 
 		pfr_update_table_refs(ta, kt_insert);
 
@@ -2078,12 +2088,14 @@ pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 	if (ta == a)
 		return;
 
-	/*
-	 * `a` can't be NULL because all anchors were moved from transaction to
-	 * pf_anchors already.  Also we have not purged empty anchors from
-	 * pf_anchors yet.
-	 */
-	KASSERT(a != NULL);
+	if (a == NULL) {
+		/*
+		 * `a` can't be NULL if ta has tables to commit. All non-empty
+		 * anchors are moved to global tree earlier in pf_ina_commit().
+		 */
+		KASSERT(ta->tables == 0);
+		return;
+	}
 
 	/*
 	 * remove unused tables from global anchor `a` first.
@@ -2188,7 +2200,7 @@ pfr_table_count(struct pfr_table *filter, int flags)
 		rs = pf_find_ruleset(&pf_global, filter->pfrt_anchor);
 		return ((rs != NULL) ? rs->anchor->tables : -1);
 	}
-	return (pf_main_ruleset.anchor->tables);
+	return (pf_main_anchor.tables);
 }
 
 int
@@ -2279,12 +2291,13 @@ pfr_create_ktable(struct pf_rules_container *rc, struct pfr_table *tbl,
 		}
 		kt->pfrkt_rs = rs;
 		kt->pfrkt_flags |= PFR_TFLAG_REFDANCHOR;
-		kt_exists = RB_INSERT(pfr_ktablehead, &rs->anchor->ktables, kt);
+		kt_exists = RB_INSERT(pfr_ktablehead,
+		    &PF_SAFE_ANCHOR(rs)->ktables, kt);
 		if (kt_exists != NULL) {
 			pfr_destroy_ktable(kt, 0);
 			kt = kt_exists;
 		} else
-			rs->anchor->tables++;
+			PF_SAFE_ANCHOR(rs)->tables++;
 	}
 
 	if (kt_exists == NULL) {
@@ -2878,9 +2891,12 @@ pfr_get_ktable_version(struct pfr_ktable *ktt)
 	NET_LOCK();
 	PF_LOCK();
 	rs = pf_find_ruleset(&pf_global, ktt->pfrkt_anchor);
-	if (rs == NULL)
-		panic("%s no ruleset found for %s", __func__,
-		    ktt->pfrkt_anchor);
+	if (rs == NULL) {
+		PF_UNLOCK();
+		NET_UNLOCK();
+		KASSERT(ktt->pfrkt_rs->rules.version == 0);
+		return (0);
+	}
 
 	if (rs->anchor == NULL)
 		a = &pf_main_anchor;
