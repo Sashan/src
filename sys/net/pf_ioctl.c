@@ -1105,44 +1105,50 @@ fail:
 	return (error);
 }
 
+int
+pf_is_anchor_empty(struct pf_anchor *a)
+{
+	if (!TAILQ_EMPTY(a->ruleset.rules.ptr))
+		return (0);
+
+	if (!RB_EMPTY(&a->children))
+		return (0);
+
+	/* there is at least 1 rule which still refers to empty anchor */
+	if (a->refcnt != 0)
+		return (0);
+
+	if (!RB_EMPTY(&a->ktables))
+		return (0);
+
+	return (1);
+}
+
 void
 pf_remove_orphans(struct pf_trans *t)
 {
-	struct pf_anchor *ta,  *a;
+	struct pf_anchor *a,  *aw;
 
-	/*
-	 * We wan to start sweeping orphans from leaf towards root
-	 */
-	RB_FOREACH_REVERSE(ta, pf_anchor_global, &t->rc.anchors) {
-		a = RB_FIND(pf_anchor_global, &pf_global.anchors, ta);
-		if (a != NULL) {
-			log(LOG_DEBUG,
-			    "%s (RB_FIND) removing %s (refcnt: %d, rules are "
-			    "%s empty, children are %s empty, tables: %d\n",
-			    __func__, a->path, a->refcnt,
-			    TAILQ_EMPTY(a->ruleset.rules.ptr) ?
-				"" : "not",
-			    RB_EMPTY(&a->children) ? "" : "not",
-			    a->ruleset.anchor->tables);
-			pf_remove_if_empty_ruleset(&pf_global, &a->ruleset);
-		} else
-			log(LOG_DEBUG, "%s %s not found in global\n",
-			    __func__, ta->path);
-	}
-
-	/*
-	 * Also process root ruleset.
-	 */
-	RB_FOREACH_SAFE(a, pf_anchor_node, &pf_main_anchor.children, ta) {
+	RB_FOREACH_REVERSE_SAFE(a, pf_anchor_global, &pf_anchors, aw) {
 		log(LOG_DEBUG,
-		    "%s (RB_FIND) removing %s (refcnt: %d, rules are "
+		    "%s trying to remove %s (refcnt: %d, rules are "
 		    "%s empty, children are %s empty, tables: %d\n",
 		    __func__, a->path, a->refcnt,
 		    TAILQ_EMPTY(a->ruleset.rules.ptr) ?
 			"" : "not",
 		    RB_EMPTY(&a->children) ? "" : "not",
 		    a->ruleset.anchor->tables);
-		pf_remove_if_empty_ruleset(&pf_global, &a->ruleset);
+		if (pf_is_anchor_empty(a)) {
+			RB_REMOVE(pf_anchor_global, &pf_anchors, a);
+			if (a->parent != NULL)
+				RB_REMOVE(pf_anchor_node, &a->parent->children,
+				    a);
+			TAILQ_INSERT_TAIL(&t->anchor_list, a, workq);
+			log(LOG_DEBUG, "%s %s will be removed\n",
+			    __func__, a->path);
+		} else
+			log(LOG_DEBUG, "%s %s will not be removed\n",
+			    __func__, a->path);
 	}
 }
 
@@ -1439,25 +1445,6 @@ pf_drop_unused_tables(struct pf_trans *t)
 			}
 		}
 	}
-}
-
-int
-pf_is_anchor_empty(struct pf_anchor *a)
-{
-	if (!TAILQ_EMPTY(a->ruleset.rules.ptr))
-		return (0);
-
-	if (!RB_EMPTY(&a->children))
-		return (0);
-
-	/* there is at least 1 rule which still refers to empty anchor */
-	if (a->refcnt != 0)
-		return (0);
-
-	if (!RB_EMPTY(&a->ktables))
-		return (0);
-
-	return (1);
 }
 
 int
@@ -3189,11 +3176,12 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t->check_op = pf_ina_check;
 		t->commit_op = pf_ina_commit;
 
-		log(LOG_DEBUG, "%s transaction: %llu\n", __func__, t->ticket);
-
 		if (io->array != NULL)
 			error = copyinstr(io->array, t->anchor_path,
 			    sizeof(t->anchor_path), NULL);
+
+		log(LOG_DEBUG, "%s transaction: %llu on %s\n", __func__,
+		    t->ticket, t->anchor_path);
 
 		if (error == 0)
 			io->ticket = t->ticket;
@@ -3983,6 +3971,23 @@ pf_trans_in_conflict(struct pf_trans *t, const char *iocmdname)
 	return (conflict);
 }
 
+const char *
+pf_match_root_path(const char *a, const char *b)
+{
+	const char *wa;
+
+	if (b == NULL || *b == '\0')
+		return (a);
+
+	wa = a;
+	while (*b && *b == *wa) {
+		b++;
+		wa++;
+	}
+
+	return ((*b == '\0') ? a : NULL);
+}
+
 void
 pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
     struct pf_anchor *a)
@@ -4040,8 +4045,16 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 			}
 		}
 		ta->ruleset.rules.version++;
-	} else
-		pf_swap_anchors_ina(t, ta, a);
+	} else {
+		/*
+		 * swap anchors for transaction root and its descendants only.
+		 */
+		if (pf_match_root_path(a->path, t->anchor_path) == a->path)
+			pf_swap_anchors_ina(t, ta, a);
+		else
+			log(LOG_DEBUG, "%s skipping %s\n",
+			    __func__, a->path);
+	}
 }
 
 void
@@ -4154,17 +4167,6 @@ pf_commit_trans(struct pf_trans *t)
 	 * pf_anchors.
 	 */
 
-	/*
-	 * If main anchor version is 0, then transaction does not change
-	 * main ruleset.
-	 */
-	if ((t->anchor_path[0] == '\0') &&
-	    (t->rc.main_anchor.ruleset.rules.version != 0)) {
-		KASSERT(t->rc.main_anchor.ruleset.rules.version ==
-		    pf_main_ruleset.rules.version);
-		t->commit_op(t, &t->rc.main_anchor, &pf_main_anchor);
-	}
-
 	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->rc.anchors, wa) {
 		t->commit_op(t, ta, RB_FIND(pf_anchor_global,
 		    &pf_anchors, ta));
@@ -4172,7 +4174,6 @@ pf_commit_trans(struct pf_trans *t)
 
 	pf_trans_set_commit(&t->trans_set);
 	pf_remove_orphans(t);
-
 }
 
 void
@@ -4212,6 +4213,16 @@ pf_free_trans(struct pf_trans *t)
 			    tkt);
 			pfr_destroy_ktable(tkt, 1);
 		}
+	}
+
+	while ((ta = TAILQ_FIRST(&t->anchor_list)) != NULL) {
+		TAILQ_REMOVE(&t->anchor_list, ta, workq);
+		KASSERT(ta->refcnt == 0);
+		KASSERT(ta->tables == 0);
+		KASSERT(RB_EMPTY(&ta->children));
+		KASSERT(RB_EMPTY(&ta->ktables));
+		KASSERT(TAILQ_EMPTY(ta->ruleset.rules.ptr));
+		pool_put(&pf_anchor_pl, ta);
 	}
 
 	while ((tkt = SLIST_FIRST(&t->garbage)) != NULL) {
