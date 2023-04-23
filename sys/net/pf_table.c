@@ -2112,6 +2112,8 @@ pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
 			SLIST_INSERT_HEAD(&t->garbage, kt, pfrkt_workq);
 			a->tables--;
+			log(LOG_DEBUG, "%s %s@%s pfr_ktable_cnt: %d\n",
+			    __func__,  kt->pfrkt_name, a->path, pfr_ktable_cnt);
 			pfr_ktable_cnt--;
 		}
 	}
@@ -2129,6 +2131,8 @@ pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 			RB_INSERT(pfr_ktablehead, &a->ktables, tkt);
 			a->tables++;
 			pfr_update_table_refs(a, tkt);
+			log(LOG_DEBUG, "%s %s@%s pfr_ktable_cnt: %d\n",
+			    __func__,  kt->pfrkt_name, a->path, pfr_ktable_cnt);
 			pfr_ktable_cnt++;
 			tkt->pfrkt_version++;
 		} else {
@@ -2231,6 +2235,8 @@ pfr_insert_ktable(struct pf_rules_container *rc, struct pfr_ktable *kt)
 	RB_INSERT(pfr_ktablehead, &rs->anchor->ktables, kt);
 	/* we should bump counter with commit */
 	pfr_ktable_cnt++;
+	log(LOG_DEBUG, "%s %s@%s pfr_ktable_cnt: %d\n",
+	    __func__,  kt->pfrkt_name, kt->pfrkt_anchor, pfr_ktable_cnt);
 }
 
 void
