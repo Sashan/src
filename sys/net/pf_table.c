@@ -247,6 +247,7 @@ pfr_clr_addrs(struct pfr_table *tbl, int *ndel, int flags)
 	struct pfr_ktable	*kt;
 	struct pfr_kentryworkq	 workq;
 	struct pf_ruleset *rs;
+	struct pf_anchor *a;
 
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
 	if (pfr_validate_table(tbl, 0, flags & PFR_FLAG_USERIOCTL))
@@ -256,7 +257,8 @@ pfr_clr_addrs(struct pfr_table *tbl, int *ndel, int flags)
 	rs = pf_find_ruleset(&pf_global, tbl->pfrt_anchor);
 	if (rs == NULL)
 		return (ESRCH);
-	kt = pfr_lookup_table(PF_SAFE_ANCHOR(rs), tbl);
+	a = (rs->anchor == NULL) ? &pf_main_anchor : rs->anchor;
+	kt = pfr_lookup_table(a, tbl);
 	if (kt == NULL || !(kt->pfrkt_flags & PFR_TFLAG_ACTIVE))
 		return (ESRCH);
 	if (kt->pfrkt_flags & PFR_TFLAG_CONST)
@@ -1670,7 +1672,7 @@ pfr_get_tables(struct pfr_table *filter, struct pfr_table *tbl, int *size,
 		if (rs == NULL)
 			return (ENOENT);
 
-		a = PF_SAFE_ANCHOR(rs);
+		a = (rs->anchor == NULL) ? &pf_main_anchor : rs->anchor;
 		n = a->tables;
 		nn = n;
 		if (n > *size) {
@@ -1892,6 +1894,11 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			r->src.addr.p.tbl = kt;
 			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+			log(LOG_DEBUG, "%s %u@%s src %s@%s <-> %s@%s\n",
+			    __func__,
+			    r->nr, ta->path,
+			    kt->pfrkt_name, kt->pfrkt_anchor,
+			    src_kt->pfrkt_name, src_kt->pfrkt_anchor);
 		}
 		if (r->dst.addr.p.tbl != kt &&
 		    PF_MATCH_KTABLE(&r->dst.addr, kt)) {
@@ -1906,6 +1913,11 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			r->dst.addr.p.tbl = kt;
 			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+			log(LOG_DEBUG, "%s %u@%s dst %s@%s <-> %s@%s\n",
+			    __func__,
+			    r->nr, ta->path,
+			    kt->pfrkt_name, kt->pfrkt_anchor,
+			    dst_kt->pfrkt_name, dst_kt->pfrkt_anchor);
 		}
 		if (r->rdr.addr.p.tbl != kt &&
 		    PF_MATCH_KTABLE(&r->rdr.addr, kt)) {
@@ -1920,6 +1932,11 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			r->rdr.addr.p.tbl = kt;
 			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+			log(LOG_DEBUG, "%s %u@%s rdr %s@%s <-> %s@%s\n",
+			    __func__,
+			    r->nr, ta->path,
+			    kt->pfrkt_name, kt->pfrkt_anchor,
+			    rdr_kt->pfrkt_name, rdr_kt->pfrkt_anchor);
 		}
 		if (r->nat.addr.p.tbl != kt &&
 		    PF_MATCH_KTABLE(&r->nat.addr, kt)) {
@@ -1934,6 +1951,11 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			r->nat.addr.p.tbl = kt;
 			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+			log(LOG_DEBUG, "%s %u@%s nat %s@%s <-> %s@%s\n",
+			    __func__,
+			    r->nr, ta->path,
+			    kt->pfrkt_name, kt->pfrkt_anchor,
+			    nat_kt->pfrkt_name, nat_kt->pfrkt_anchor);
 		}
 		if (r->route.addr.p.tbl != kt &&
 		    PF_MATCH_KTABLE(&r->route.addr, kt)) {
@@ -1948,6 +1970,11 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			r->route.addr.p.tbl = kt;
 			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+			log(LOG_DEBUG, "%s %u@%s route %s@%s <-> %s@%s\n",
+			    __func__,
+			    r->nr, ta->path,
+			    kt->pfrkt_name, kt->pfrkt_anchor,
+			    route_kt->pfrkt_name, route_kt->pfrkt_anchor);
 		}
 	}
 }
@@ -2084,7 +2111,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 
 		kt = RB_INSERT(pfr_ktablehead, &ta->ktables, kt_insert);
 		KASSERT(kt == NULL);
-		PF_SAFE_ANCHOR(kt_insert->pfrkt_rs)->tables++;
+		ta->tables++;
 
 		pfr_update_table_refs(ta, kt_insert);
 
@@ -2324,6 +2351,7 @@ pfr_create_ktable(struct pf_rules_container *rc, struct pfr_table *tbl,
 {
 	struct pfr_ktable	*kt_exists, *kt;
 	struct pf_ruleset	*rs;
+	struct pf_anchor	*a;
 
 	kt = pool_get(&pfr_ktable_pl, wait|PR_ZERO|PR_LIMITFAIL);
 	if (kt == NULL)
@@ -2338,15 +2366,15 @@ pfr_create_ktable(struct pf_rules_container *rc, struct pfr_table *tbl,
 			pfr_destroy_ktable(kt, 0);
 			return (NULL);
 		}
+		a = (rs->anchor == NULL) ? &rc->main_anchor : rs->anchor;
 		kt->pfrkt_rs = rs;
 		kt->pfrkt_flags |= PFR_TFLAG_REFDANCHOR;
-		kt_exists = RB_INSERT(pfr_ktablehead,
-		    &PF_SAFE_ANCHOR(rs)->ktables, kt);
+		kt_exists = RB_INSERT(pfr_ktablehead, &a->ktables, kt);
 		if (kt_exists != NULL) {
 			pfr_destroy_ktable(kt, 0);
 			kt = kt_exists;
 		} else
-			PF_SAFE_ANCHOR(rs)->tables++;
+			a->tables++;
 	}
 
 	if (kt_exists == NULL) {
@@ -2566,11 +2594,9 @@ pfr_attach_table(struct pf_rules_container *rc, struct pf_ruleset *rs,
 	 * up to the root (main anchor)
 	 */
 	kt = NULL;
-	while (kt == NULL) {
+	while ((kt == NULL) && (a != NULL)) {
 		kt = pfr_lookup_table(a, &tbl);
 		a = a->parent;
-		if (a == NULL)
-			break;
 	}
 	if (kt == NULL)
 		kt = pfr_lookup_table(&rc->main_anchor, &tbl);
@@ -2581,7 +2607,7 @@ pfr_attach_table(struct pf_rules_container *rc, struct pf_ruleset *rs,
 		 * go to root anchor, because those tables are not created
 		 * eexplicitly either by table definition in pf.conf or by
 		 * command line 'pfctl -t ... -T ...'.  Implicit tables are
-		 * typically created by DIOCADDQUEUE when rule refers table
+		 * typically created by DIOCADDRULE when rule refers table
 		 * which does not exist yet.  Another case for implicit table
 		 * are so called dynamic tables (interface etc...).
 		 */

@@ -922,8 +922,10 @@ void
 pf_addr_update(struct pf_trans *t, struct pf_ruleset *grs,
     struct pf_addr_wrap *addr)
 {
-	struct pf_anchor *a = PF_SAFE_ANCHOR(grs);
+	struct pf_anchor *a;
 	struct pfr_ktable *kt;
+
+	a = (grs->anchor == NULL) ? &pf_main_anchor : grs->anchor;
 
 	if (addr->type != PF_ADDR_TABLE)
 		return;
@@ -4166,6 +4168,10 @@ pf_commit_trans(struct pf_trans *t)
 	 * because pf_ina_commit() may move anchor from transaction to
 	 * pf_anchors.
 	 */
+
+	/* commit main ruleset first if transaction updates it */
+	if (t->rc.main_anchor.ruleset.rules.version != 0)
+		t->commit_op(t, &t->rc.main_anchor, &pf_main_anchor);
 
 	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->rc.anchors, wa) {
 		t->commit_op(t, ta, RB_FIND(pf_anchor_global,

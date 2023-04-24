@@ -1019,9 +1019,6 @@ struct pf_ruleset {
 	struct pf_anchor	*anchor;
 };
 
-#define PF_SAFE_ANCHOR(_rs_)	\
-	(((_rs_)->anchor == NULL) ? &pf_main_anchor : (_rs_)->anchor)
-
 RB_HEAD(pf_anchor_global, pf_anchor);
 RB_HEAD(pf_anchor_node, pf_anchor);
 struct pf_anchor {

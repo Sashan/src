@@ -414,10 +414,12 @@ pf_anchor_setup(struct pf_rules_container *rc, struct pf_rule *r,
 	}
 	r->anchor = ruleset->anchor;
 	r->anchor->refcnt++;
+#ifdef _KERNEL
 	log(LOG_DEBUG, "%s %s->refcnt: %u\n",
 	    __func__,
 	    r->anchor->path,
 	    r->anchor->refcnt);
+#endif
 	return (0);
 }
 
