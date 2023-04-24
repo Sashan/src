@@ -54,6 +54,24 @@ struct pfr_anchoritem {
 	char	*pfra_anchorname;
 };
 
+struct pfr_uktable {
+	struct pfr_ktable	pfrukt_kt;
+	struct pfr_buffer	pfrukt_addrs;
+};
+
+#define pfrukt_t	pfrukt_kt.pfrkt_ts.pfrts_t
+#define pfrukt_name	pfrukt_kt.pfrkt_t.pfrt_name
+#define pfrukt_anchor	pfrukt_kt.pfrkt_t.pfrt_anchor
+#define pfrukt_ruleset	pfrukt_kt.pfrkt_t.pfrt_ruleset
+#define pfrukt_flags	pfrukt_kt.pfrkt_t.pfrt_flags
+#define pfrukt_cnt	pfrukt_kt.pfrkt_ts.pfrts_cnt
+#define pfrukt_refcnt	pfrukt_kt.pfrkt_ts.pfrts_refcnt
+#define pfrukt_packets	pfrukt_kt.pfrkt_ts.pfrts_packets
+#define pfrukt_bytes	pfrukt_kt.pfrkt_ts.pfrts_bytes
+#define pfrukt_match	pfrukt_kt.pfrkt_ts.pfrts_match
+#define pfrukt_nomatch	pfrukt_kt.pfrkt_ts.pfrts_nomatch
+#define pfrukt_tzero	pfrukt_kt.pfrkt_ts.pfrts_tzero
+
 SLIST_HEAD(pfr_anchors, pfr_anchoritem);
 
 int	 pfr_get_fd(void);

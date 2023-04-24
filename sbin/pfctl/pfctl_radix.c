@@ -55,6 +55,13 @@ extern int dev;
 
 static int	 pfr_next_token(char buf[], FILE *);
 
+RB_GENERATE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
+
+int
+pfr_ktable_compare(struct pfr_ktable *p, struct pfr_ktable *q)
+{
+	return (strncmp(p->pfrkt_name, q->pfrkt_name, PF_TABLE_NAME_SIZE));
+}
 
 int
 pfr_clr_tables(struct pfr_table *filter, int *ndel, int flags)

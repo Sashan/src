@@ -210,6 +210,8 @@ struct pfctl_watermarks {
 	u_int32_t	lo;
 };
 
+struct pfr_uktable;
+
 void		 copy_satopfaddr(struct pf_addr *, struct sockaddr *);
 
 int	pfctl_rules(int, char *, int, int, char *, struct pfioc_trans *);
@@ -247,7 +249,7 @@ void	print_status(struct pf_status *, struct pfctl_watermarks *, int);
 void	print_queuespec(struct pf_queuespec *);
 
 int	pfctl_define_table(char *, int, int, const char *, struct pfr_buffer *,
-	    u_int64_t);
+	    u_int64_t, struct pfr_uktable *);
 void	pfctl_expand_label_nr(struct pf_rule *, unsigned int);
 
 void		 pfctl_clear_fingerprints(int, int);
@@ -297,5 +299,8 @@ struct node_host	*host(const char *, int);
 int			 append_addr(struct pfr_buffer *, char *, int, int);
 int			 append_addr_host(struct pfr_buffer *,
 			    struct node_host *, int, int);
+int			 pfr_ktable_compare(struct pfr_ktable *,
+			    struct pfr_ktable *);
+RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 
 #endif /* _PFCTL_PARSER_H_ */

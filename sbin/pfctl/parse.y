@@ -379,6 +379,8 @@ int	 getservice(char *);
 int	 rule_label(struct pf_rule *, char *);
 
 void	 mv_rules(struct pf_ruleset *, struct pf_ruleset *);
+void	 mv_tables(struct pfctl *, struct pfr_ktablehead *,
+		    struct pf_anchor *);
 void	 decide_address_family(struct node_host *, sa_family_t *);
 int	 invalid_redirect(struct node_host *, sa_family_t);
 u_int16_t parseicmpspec(char *, sa_family_t);
@@ -900,6 +902,7 @@ anchorrule	: ANCHOR anchorname dir quick interface af proto fromto
 					}
 					mv_rules(&pf->alast->ruleset,
 					    &r.anchor->ruleset);
+					mv_tables(pf, &pf->alast->ktables, r.anchor);
 				}
 				pf_remove_if_empty_ruleset(&pf_global,
 				    &pf->alast->ruleset);
@@ -3978,6 +3981,7 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 {
 	struct pfr_buffer	 ab;
 	struct node_tinit	*ti;
+	struct pfr_uktable	*ukt;
 
 	bzero(&ab, sizeof(ab));
 	ab.pfrb_type = PFRB_ADDRS;
@@ -4008,13 +4012,50 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 	else if (pf->opts & PF_OPT_VERBOSE)
 		fprintf(stderr, "%s:%d: skipping duplicate table checks"
 		    " for <%s>\n", file->name, yylval.lineno, name);
-	if (!(pf->opts & PF_OPT_NOACTION) &&
-	    pfctl_define_table(name, opts->flags, opts->init_addr,
-	    pf->anchor->path, &ab, pf->trans->ticket)) {
-		yyerror("cannot define table %s: %s", name,
-		    pf_strerror(errno));
-		goto _error;
+
+	if (!(pf->opts & PF_OPT_NOACTION)) {
+		/*
+		 * pf->alast is NULL when we deal with main anchor (ruleset
+		 * root). In this case we don't need to do extra stuff
+		 * w.r.t. to tables and anchors because root anchor
+		 * is always there.
+		 */
+		if (pf->alast != NULL) {
+			ukt = malloc(sizeof(struct pfr_uktable));
+			if (ukt == NULL) {
+				fprintf(stderr,
+				    "%s:%d: not enough memory for <%s>\n",
+				    file->name, yylval.lineno, name);
+				goto _error;
+			}
+		} else
+			ukt = NULL;
+
+		if (pfctl_define_table(name, opts->flags, opts->init_addr,
+		    pf->anchor->path, &ab, pf->trans->ticket, ukt)) {
+			yyerror("cannot define table %s: %s", name,
+			pf_strerror(errno));
+			goto _error;
+		}
+
+		if (ukt != NULL) {
+			if (RB_INSERT(pfr_ktablehead, &pf->alast->ktables,
+			    &ukt->pfrukt_kt) != NULL) {
+				/*
+				 * I think this should not happen, because
+				 * pfctl_define_table() above  does the same
+				 * check effectively.
+				 */
+				fprintf(stderr,
+				    "%s:%d table %s already exists in %s\n",
+				    file->name, yylval.lineno,
+				    ukt->pfrukt_name, pf->alast->path);
+				free(ukt);
+				goto _error;
+			}
+		}
 	}
+
 	pf->tdirty = 1;
 	pfr_buf_clear(&ab);
 	return (0);
@@ -5554,6 +5595,36 @@ mv_rules(struct pf_ruleset *src, struct pf_ruleset *dst)
 		dst->anchor->match++;
 	TAILQ_CONCAT(dst->rules.ptr, src->rules.ptr, entries);
 	src->anchor->match = 0;
+}
+
+void
+mv_tables(struct pfctl *pf, struct pfr_ktablehead *ktables,
+    struct pf_anchor *a)
+{
+	struct pfr_ktable *kt, *ktw;
+	struct pfr_uktable *ukt;
+	int ina_err;
+
+	a->ktables.rbh_root = ktables->rbh_root;
+	ktables->rbh_root = NULL;
+
+	/*
+	 * add tables to transaction again. This time with correct/final anchor
+	 * path. Think of we replace temporal anchor let's say _4 to final/anchor.
+	 */
+	RB_FOREACH_SAFE(kt, pfr_ktablehead, ktables, ktw) {
+		RB_REMOVE(pfr_ktablehead, ktables, kt);
+		ukt = (struct pfr_uktable *)kt;
+		strlcpy(kt->pfrkt_anchor, a->path, sizeof(kt->pfrkt_anchor));
+		ina_err = pfr_ina_define(&kt->pfrkt_t, ukt->pfrukt_addrs.pfrb_caddr,
+		    ukt->pfrukt_addrs.pfrb_size, NULL, NULL, pf->trans->ticket,
+		    (ukt->pfrukt_addrs.pfrb_size != 0) ? PFR_FLAG_ADDRSTOO : 0);
+		if (ina_err != 0)
+			errx(1, "%s error on %s@%s", __func__, kt->pfrkt_name,
+			    kt->pfrkt_anchor);
+		pfr_buf_clear(&ukt->pfrukt_addrs);
+		free(kt);
+	}
 }
 
 void
