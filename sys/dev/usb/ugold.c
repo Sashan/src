@@ -1,4 +1,4 @@
-/*	$OpenBSD: ugold.c,v 1.21 2022/01/09 05:43:00 jsg Exp $   */
+/*	$OpenBSD: ugold.c,v 1.23 2023/04/19 04:51:53 miod Exp $   */
 
 /*
  * Copyright (c) 2013 Takayoshi SASANO <uaa@openbsd.org>
@@ -86,6 +86,7 @@ const struct usb_devno ugold_devs[] = {
 	{ USB_VENDOR_MICRODIA, USB_PRODUCT_MICRODIA_TEMPER },
 	{ USB_VENDOR_MICRODIA, USB_PRODUCT_MICRODIA_TEMPERHUM },
 	{ USB_VENDOR_PCSENSORS, USB_PRODUCT_PCSENSORS_TEMPER },
+	{ USB_VENDOR_WCH2, USB_PRODUCT_WCH2_TEMPER },
 };
 
 int 	ugold_match(struct device *, void *, void *);
@@ -151,6 +152,7 @@ ugold_attach(struct device *parent, struct device *self, void *aux)
 		break;
 	case USB_PRODUCT_MICRODIA_TEMPERHUM:
 	case USB_PRODUCT_PCSENSORS_TEMPER:
+	case USB_PRODUCT_WCH2_TEMPER:
 		sc->sc_hdev.sc_intr = ugold_si700x_intr;
 		break;
 	default:
@@ -184,6 +186,7 @@ ugold_attach(struct device *parent, struct device *self, void *aux)
 		break;
 	case USB_PRODUCT_MICRODIA_TEMPERHUM:
 	case USB_PRODUCT_PCSENSORS_TEMPER:
+	case USB_PRODUCT_WCH2_TEMPER:
 		/* 1 temperature and 1 humidity sensor */
 		sc->sc_sensor[UGOLD_INNER].type = SENSOR_TEMP;
 		strlcpy(sc->sc_sensor[UGOLD_INNER].desc, "inner",
@@ -388,6 +391,9 @@ ugold_si700x_type(struct ugold_softc *sc, uint8_t *buf, u_int len)
 	} else if (memcmp(buf, "ld_V3.1 ", len) == 0) {
 		sc->sc_type = UGOLD_TYPE_GOLD;
 		printf("gold (temperature only)\n");
+	} else if (memcmp(buf, "ld_V3.4 ", len) == 0) {
+		sc->sc_type = UGOLD_TYPE_GOLD;
+		printf("gold (temperature only)\n");
 	} else {
 		sc->sc_type = -1;
 		printf("unknown\n");
@@ -418,7 +424,7 @@ ugold_si700x_intr(struct uhidev *addr, void *ibuf, u_int len)
 		}
 		break;
 	case UGOLD_CMD_DATA:
-		if (buf[1] != 4 && buf[1] != 64)
+		if (buf[1] != 4 && buf[1] != 64 && buf[1] != 128)
 			printf("%s: invalid data length (%d bytes)\n",
 			    sc->sc_hdev.sc_dev.dv_xname, buf[1]);
 		temp = ugold_si700x_temp(sc->sc_type, buf[2], buf[3]);

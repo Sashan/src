@@ -1,4 +1,4 @@
-/*	$OpenBSD: sdmmc_scsi.c,v 1.61 2022/04/16 19:19:59 naddy Exp $	*/
+/*	$OpenBSD: sdmmc_scsi.c,v 1.63 2023/04/19 01:46:10 dlg Exp $	*/
 
 /*
  * Copyright (c) 2006 Uwe Stuehler <uwe@openbsd.org>
@@ -411,6 +411,7 @@ sdmmc_inquiry(struct scsi_xfer *xs)
 	memset(revision, 0, sizeof(revision));
 	switch (tgt->card->cid.mid) {
 	case 0x02:
+	case 0x03:
 	case 0x45:
 		strlcpy(vendor, "Sandisk", sizeof(vendor));
 		break;
@@ -423,8 +424,14 @@ sdmmc_inquiry(struct scsi_xfer *xs)
 	case 0x15:
 		strlcpy(vendor, "Samsung", sizeof(vendor));
 		break;
+	case 0x27:
+		strlcpy(vendor, "Apacer", sizeof(vendor));
+		break;
 	case 0x70:
 		strlcpy(vendor, "Kingston", sizeof(vendor));
+		break;
+	case 0x90:
+		strlcpy(vendor, "Hynix", sizeof(vendor));
 		break;
 	default:
 		strlcpy(vendor, "SD/MMC", sizeof(vendor));
@@ -435,7 +442,8 @@ sdmmc_inquiry(struct scsi_xfer *xs)
 
 	memset(&inq, 0, sizeof inq);
 	inq.device = T_DIRECT;
-	inq.dev_qual2 = SID_REMOVABLE;
+	if (!ISSET(sc->sc_caps, SMC_CAPS_NONREMOVABLE))
+		inq.dev_qual2 = SID_REMOVABLE;
 	inq.version = SCSI_REV_2;
 	inq.response_format = SID_SCSI2_RESPONSE;
 	inq.additional_length = SID_SCSI2_ALEN;

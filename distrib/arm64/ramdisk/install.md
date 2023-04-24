@@ -1,4 +1,4 @@
-#	$OpenBSD: install.md,v 1.36 2023/02/06 08:41:00 kn Exp $
+#	$OpenBSD: install.md,v 1.45 2023/04/14 15:00:40 robert Exp $
 #
 #
 # Copyright (c) 1996 The NetBSD Foundation, Inc.
@@ -32,16 +32,17 @@
 # machine dependent section of installation/upgrade script.
 #
 
+MDBOOTSR=y
 NCPU=$(sysctl -n hw.ncpufound)
+COMPATIBLE=$(sysctl -n machdep.compatible)
 MOUNT_ARGS_msdos="-o-l"
 
 md_installboot() {
-	local _disk=/dev/$1 _mdec _plat
+	local _disk=$1 _chunks _bootdisk _mdec _plat
 
-	case $(sysctl -n machdep.compatible) in
+	case ${COMPATIBLE} in
 	apple,*)		_plat=apple;;
-	pine64,pine64*(+))	_plat=pine64;;
-	raspberrypi,*)		_plat=rpi;
+	raspberrypi,*)		_plat=rpi;;
 	esac
 
 	if ! installboot -r /mnt ${1}; then
@@ -55,33 +56,27 @@ md_installboot() {
 
 	case $_plat in
 	apple)
-		if [[ -d /etc/firmware/apple ]]; then
-			(cd /etc/firmware
-				pax -rw apple /mnt/etc/firmware)
-		fi
-		if [[ -d /etc/firmware/apple-bwfm ]]; then
-			(cd /etc/firmware
-				pax -rw apple-bwfm /mnt/etc/firmware)
-		fi
-		;;
-	pine64)
-		dd if=$_mdec/u-boot-sunxi-with-spl.bin of=${_disk}c \
-		    bs=1024 seek=8 >/dev/null 2>&1
+		(cd /etc/firmware; for _dir in apple{,-bwfm}; do
+			[[ -d $_dir ]] && pax -rw $_dir /mnt/etc/firmware
+		done)
 		;;
 	rpi)
-		mount ${MOUNT_ARGS_msdos} ${_disk}i /mnt/mnt
-		cp $_mdec/{bootcode.bin,start*.elf,fixup*.dat,*.dtb} /mnt/mnt/
-		cp $_mdec/u-boot.bin /mnt/mnt/
-		mkdir -p /mnt/mnt/overlays
-		cp $_mdec/disable-bt.dtbo /mnt/mnt/overlays
-		if [[ ! -f /mnt/mnt/config.txt ]]; then
-			cat > /mnt/mnt/config.txt<<-__EOT
-				arm_64bit=1
-				enable_uart=1
-				dtoverlay=disable-bt
-				kernel=u-boot.bin
-			__EOT
-		fi
+		_chunks=$(get_softraid_chunks)
+		for _bootdisk in ${_chunks:-$_disk}; do
+			mount ${MOUNT_ARGS_msdos} /dev/${_bootdisk}i /mnt/mnt
+			cp $_mdec/{bootcode.bin,start*.elf,fixup*.dat,*.dtb} /mnt/mnt/
+			cp $_mdec/u-boot.bin /mnt/mnt/
+			mkdir -p /mnt/mnt/overlays
+			cp $_mdec/disable-bt.dtbo /mnt/mnt/overlays
+			if [[ ! -f /mnt/mnt/config.txt ]]; then
+				cat > /mnt/mnt/config.txt<<-__EOT
+					arm_64bit=1
+					enable_uart=1
+					dtoverlay=disable-bt
+					kernel=u-boot.bin
+				__EOT
+			fi
+		done
 		umount /mnt/mnt
 		;;
 	esac
@@ -95,7 +90,7 @@ md_prep_fdisk() {
 	local bootsectorsize="32768"
 	local bootfstype="msdos"
 
-	case $(sysctl -n machdep.compatible) in
+	case ${COMPATIBLE} in
 	openbsd,acpi)		bootsectorsize=532480;;
 	esac
 
@@ -212,18 +207,18 @@ md_consoleinfo() {
 		CSPEED=115200;;
 	esac
 
-	_fw=$(dmesgtail | sed -n '\!^bwfm0: failed!{s!^.*/\(.*\),.*$!\1!p;q;}')
-	case $(sysctl -n machdep.compatible) in
+	case ${COMPATIBLE} in
 	apple,*)
-		_fw2=$(sysctl -n machdep.compatible | sed 's/.*apple,//')
+		_fw=$(dmesgtail | sed -n '\!^bwfm0: failed!{s!^.*/\(.*\),.*$!\1!p;q;}')
+		_fw2=${COMPATIBLE##*apple,}
 		make_dev sd0
 		if mount -o ro /dev/sd0l /mnt2 2>/dev/null; then
 			rm -rf /usr/mdec/rpi /etc/firmware/apple
 			rm -rf /etc/firmware/brcm /etc/firmware/apple-bwfm
 			if [[ -s /mnt2/vendorfw/firmware.tar ]]; then
-				tar -x -C /etc/firmware \
+				[[ -n $_fw ]] && tar -x -C /etc/firmware \
 				    -f /mnt2/vendorfw/firmware.tar "*$_fw*" 2>/dev/null
-				tar -x -C /etc/firmware \
+				[[ -n $_fw2 ]] && tar -x -C /etc/firmware \
 				    -f /mnt2/vendorfw/firmware.tar "*$_fw2*" 2>/dev/null
 				mv /etc/firmware/brcm /etc/firmware/apple-bwfm 2>/dev/null
 			fi

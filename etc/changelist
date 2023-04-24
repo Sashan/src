@@ -1,4 +1,4 @@
-#	$OpenBSD: changelist,v 1.132 2022/07/02 03:32:05 danj Exp $
+#	$OpenBSD: changelist,v 1.136 2023/04/24 16:36:54 kn Exp $
 #
 # List of files which the security script backs up and checks
 # for modifications.
@@ -24,7 +24,6 @@
 /etc/daily
 /etc/daily.local
 /etc/defaultdomain
-/etc/dhclient.conf
 /etc/dhcpd.conf
 /etc/dhcpleased.conf
 /etc/disktab
@@ -71,6 +70,7 @@
 /etc/mailer.conf
 /etc/man.conf
 /etc/master.passwd
+/etc/mixerctl.conf
 /etc/mk.conf
 +/etc/moduli
 /etc/monthly
@@ -110,7 +110,6 @@
 /etc/relayd.conf
 /etc/remote
 /etc/resolv.conf
-/etc/resolv.conf.tail
 /etc/ripd.conf
 /etc/rpc
 /etc/rpki/afrinic.tal
@@ -143,6 +142,7 @@
 /etc/sysctl.conf
 /etc/syslog.conf
 /etc/sysmerge.ignore
+/etc/tmux.conf
 /etc/ttys
 /etc/unwind.conf
 /etc/usermgmt.conf
@@ -167,6 +167,10 @@
 /var/db/unwind.key
 +/var/nsd/etc/nsd.conf
 /var/unbound/etc/unbound.conf
++/var/unbound/etc/unbound_control.key
+/var/unbound/etc/unbound_control.pem
++/var/unbound/etc/unbound_server.key
+/var/unbound/etc/unbound_server.pem
 /var/yp/Makefile.main
 /var/yp/Makefile.yp
 /.cshrc

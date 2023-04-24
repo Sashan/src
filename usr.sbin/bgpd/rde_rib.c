@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde_rib.c,v 1.255 2023/02/09 13:43:23 claudio Exp $ */
+/*	$OpenBSD: rde_rib.c,v 1.260 2023/04/23 11:39:10 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Claudio Jeker <claudio@openbsd.org>
@@ -37,8 +37,9 @@
  */
 uint16_t rib_size;
 struct rib **ribs;
+struct rib flowrib = { .id = 1, .tree = RB_INITIALIZER(&flowrib.tree) };
 
-struct rib_entry *rib_add(struct rib *, struct bgpd_addr *, int);
+struct rib_entry *rib_add(struct rib *, struct pt_entry *);
 static inline int rib_compare(const struct rib_entry *,
 			const struct rib_entry *);
 void rib_remove(struct rib_entry *);
@@ -297,18 +298,24 @@ rib_shutdown(void)
 }
 
 struct rib_entry *
-rib_get(struct rib *rib, struct bgpd_addr *prefix, int prefixlen)
+rib_get(struct rib *rib, struct pt_entry *pte)
 {
 	struct rib_entry xre, *re;
 
 	memset(&xre, 0, sizeof(xre));
-	xre.prefix = pt_fill(prefix, prefixlen);
+	xre.prefix = pte;
 
 	re = RB_FIND(rib_tree, rib_tree(rib), &xre);
 	if (re && re->rib_id != rib->id)
 		fatalx("%s: Unexpected RIB %u != %u.", __func__,
 		    re->rib_id, rib->id);
 	return re;
+}
+
+struct rib_entry *
+rib_get_addr(struct rib *rib, struct bgpd_addr *prefix, int prefixlen)
+{
+	return rib_get(rib, pt_fill(prefix, prefixlen));
 }
 
 struct rib_entry *
@@ -321,7 +328,7 @@ rib_match(struct rib *rib, struct bgpd_addr *addr)
 	case AID_INET:
 	case AID_VPN_IPv4:
 		for (i = 32; i >= 0; i--) {
-			re = rib_get(rib, addr, i);
+			re = rib_get_addr(rib, addr, i);
 			if (re != NULL)
 				return (re);
 		}
@@ -329,7 +336,7 @@ rib_match(struct rib *rib, struct bgpd_addr *addr)
 	case AID_INET6:
 	case AID_VPN_IPv6:
 		for (i = 128; i >= 0; i--) {
-			re = rib_get(rib, addr, i);
+			re = rib_get_addr(rib, addr, i);
 			if (re != NULL)
 				return (re);
 		}
@@ -342,14 +349,9 @@ rib_match(struct rib *rib, struct bgpd_addr *addr)
 
 
 struct rib_entry *
-rib_add(struct rib *rib, struct bgpd_addr *prefix, int prefixlen)
+rib_add(struct rib *rib, struct pt_entry *pte)
 {
-	struct pt_entry	*pte;
 	struct rib_entry *re;
-
-	pte = pt_get(prefix, prefixlen);
-	if (pte == NULL)
-		pte = pt_add(prefix, prefixlen);
 
 	if ((re = calloc(1, sizeof(*re))) == NULL)
 		fatal("rib_add");
@@ -861,7 +863,7 @@ prefix_get(struct rib *rib, struct rde_peer *peer, uint32_t path_id,
 {
 	struct rib_entry	*re;
 
-	re = rib_get(rib, prefix, prefixlen);
+	re = rib_get_addr(rib, prefix, prefixlen);
 	if (re == NULL)
 		return (NULL);
 	return (prefix_bypeer(re, peer, path_id));
@@ -873,12 +875,12 @@ prefix_get(struct rib *rib, struct rde_peer *peer, uint32_t path_id,
  */
 struct prefix *
 prefix_adjout_get(struct rde_peer *peer, uint32_t path_id_tx,
-    struct bgpd_addr *prefix, int prefixlen)
+    struct pt_entry *pte)
 {
 	struct prefix xp;
 
 	memset(&xp, 0, sizeof(xp));
-	xp.pt = pt_fill(prefix, prefixlen);
+	xp.pt = pte;
 	xp.path_id_tx = path_id_tx;
 
 	return RB_FIND(prefix_index, &peer->adj_rib_out, &xp);
@@ -889,13 +891,12 @@ prefix_adjout_get(struct rde_peer *peer, uint32_t path_id_tx,
  * Returns NULL if not found.
  */
 struct prefix *
-prefix_adjout_lookup(struct rde_peer *peer, struct bgpd_addr *prefix,
-    int prefixlen)
+prefix_adjout_first(struct rde_peer *peer, struct pt_entry *pte)
 {
 	struct prefix xp, *np;
 
 	memset(&xp, 0, sizeof(xp));
-	xp.pt = pt_fill(prefix, prefixlen);
+	xp.pt = pte;
 
 	np = RB_NFIND(prefix_index, &peer->adj_rib_out, &xp);
 	if (np == NULL || pt_prefix_cmp(np->pt, xp.pt) != 0)
@@ -915,6 +916,16 @@ prefix_adjout_next(struct rde_peer *peer, struct prefix *p)
 	if (np == NULL || np->pt != p->pt)
 		return NULL;
 	return np;
+}
+
+/*
+ * Lookup addr/prefixlen in the peer prefix_index. Returns first match.
+ * Returns NULL if not found.
+ */
+struct prefix *
+prefix_adjout_lookup(struct rde_peer *peer, struct bgpd_addr *addr, int plen)
+{
+	return prefix_adjout_first(peer, pt_fill(addr, plen));
 }
 
 /*
@@ -1015,12 +1026,16 @@ prefix_add(struct bgpd_addr *prefix, int prefixlen, struct rib *rib,
     struct rde_aspath *asp, struct rde_community *comm,
     struct nexthop *nexthop, uint8_t nhflags, uint8_t vstate)
 {
+	struct pt_entry	*pte;
 	struct prefix		*p;
 	struct rib_entry	*re;
 
-	re = rib_get(rib, prefix, prefixlen);
+	pte = pt_get(prefix, prefixlen);
+	if (pte == NULL)
+		pte = pt_add(prefix, prefixlen);
+	re = rib_get(rib, pte);
 	if (re == NULL)
-		re = rib_add(rib, prefix, prefixlen);
+		re = rib_add(rib, pte);
 
 	p = prefix_alloc();
 	prefix_link(p, re, re->prefix, peer, path_id, path_id_tx, asp, comm,
@@ -1104,6 +1119,94 @@ prefix_withdraw(struct rib *rib, struct rde_peer *peer, uint32_t path_id,
 }
 
 /*
+ * Special functions for flowspec until full integration is available.
+ * This just directly feeds the prefixes into the Adj-RIB-Out bypassing
+ * Adj-RIB-In and Loc-RIB for now.
+ */
+int
+prefix_flowspec_update(struct rde_peer *peer, struct filterstate *state,
+    struct pt_entry *pte, uint32_t path_id_tx)
+{
+	struct rde_aspath *asp, *nasp;
+	struct rde_community *comm, *ncomm;
+	struct rib_entry *re;
+	struct prefix *new, *old;
+
+	re = rib_get(&flowrib, pte);
+	if (re == NULL)
+		re = rib_add(&flowrib, pte);
+
+	old = prefix_bypeer(re, peer, 0);
+	new = prefix_alloc();
+
+	nasp = &state->aspath;
+	ncomm = &state->communities;
+	if ((asp = path_lookup(nasp)) == NULL) {
+		/* Path not available, create and link a new one. */
+		asp = path_copy(path_get(), nasp);
+		path_link(asp);
+	}
+	if ((comm = communities_lookup(ncomm)) == NULL) {
+		/* Communities not available, create and link a new one. */
+		comm = communities_link(ncomm);
+	}
+
+	prefix_link(new, re, re->prefix, peer, 0, path_id_tx, asp, comm,
+	    NULL, 0, 0);
+	TAILQ_INSERT_HEAD(&re->prefix_h, new, entry.list.rib);
+
+	rde_generate_updates(re, new, old, EVAL_DEFAULT);
+
+	if (old != NULL) {
+		TAILQ_REMOVE(&re->prefix_h, old, entry.list.rib);
+		prefix_unlink(old);
+		prefix_free(old);
+		return 0;
+	}
+	return 1;
+}
+
+/*
+ * Remove a possible flowspec prefix from all Adj-RIB-Outs.
+ */
+int
+prefix_flowspec_withdraw(struct rde_peer *peer, struct pt_entry *pte)
+{
+	struct rib_entry *re;
+	struct prefix *p;
+
+	re = rib_get(&flowrib, pte);
+	if (re == NULL)
+		return 0;
+	p = prefix_bypeer(re, peer, 0);
+	if (p == NULL)
+		return 0;
+	rde_generate_updates(re, NULL, p, EVAL_DEFAULT);
+	TAILQ_REMOVE(&re->prefix_h, p, entry.list.rib);
+	prefix_unlink(p);
+	prefix_free(p);
+	return 1;
+}
+
+/*
+ * Push all flowspec rules into a newly available Adj-RIB-Out.
+ */
+void
+prefix_flowspec_dump(uint8_t aid, void *arg,
+    void (*call)(struct rib_entry *, void *), void (*done)(void *, uint8_t))
+{
+	struct rib_entry *re, *next;
+
+	RB_FOREACH_SAFE(re, rib_tree, rib_tree(&flowrib), next) {
+		if (aid != AID_UNSPEC && aid != re->prefix->aid)
+			continue;
+		call(re, arg);
+	}
+	if (done != NULL)
+		done(arg, aid);
+}
+
+/*
  * Insert an End-of-RIB marker into the update queue.
  */
 void
@@ -1124,8 +1227,7 @@ prefix_add_eor(struct rde_peer *peer, uint8_t aid)
  */
 void
 prefix_adjout_update(struct prefix *p, struct rde_peer *peer,
-    struct filterstate *state, struct bgpd_addr *prefix, int prefixlen,
-    uint32_t path_id_tx)
+    struct filterstate *state, struct pt_entry *pte, uint32_t path_id_tx)
 {
 	struct rde_aspath *asp;
 	struct rde_community *comm;
@@ -1135,10 +1237,7 @@ prefix_adjout_update(struct prefix *p, struct rde_peer *peer,
 		/* initially mark DEAD so code below is skipped */
 		p->flags |= PREFIX_FLAG_ADJOUT | PREFIX_FLAG_DEAD;
 
-		p->pt = pt_get(prefix, prefixlen);
-		if (p->pt == NULL)
-			p->pt = pt_add(prefix, prefixlen);
-		pt_ref(p->pt);
+		p->pt = pt_ref(pte);
 		p->peer = peer;
 		p->path_id_tx = path_id_tx;
 
@@ -1170,7 +1269,7 @@ prefix_adjout_update(struct prefix *p, struct rde_peer *peer,
 
 		/* if pending update unhook it before it is unlinked */
 		if (p->flags & PREFIX_FLAG_UPDATE) {
-			RB_REMOVE(prefix_tree, &peer->updates[prefix->aid], p);
+			RB_REMOVE(prefix_tree, &peer->updates[pte->aid], p);
 			peer->stats.pending_update--;
 		}
 
@@ -1179,7 +1278,7 @@ prefix_adjout_update(struct prefix *p, struct rde_peer *peer,
 		peer->stats.prefix_out_cnt--;
 	}
 	if (p->flags & PREFIX_FLAG_WITHDRAW) {
-		RB_REMOVE(prefix_tree, &peer->withdraws[prefix->aid], p);
+		RB_REMOVE(prefix_tree, &peer->withdraws[pte->aid], p);
 		peer->stats.pending_withdraw--;
 	}
 
@@ -1213,7 +1312,7 @@ prefix_adjout_update(struct prefix *p, struct rde_peer *peer,
 	if (p->flags & PREFIX_FLAG_MASK)
 		fatalx("%s: bad flags %x", __func__, p->flags);
 	p->flags |= PREFIX_FLAG_UPDATE;
-	if (RB_INSERT(prefix_tree, &peer->updates[prefix->aid], p) != NULL)
+	if (RB_INSERT(prefix_tree, &peer->updates[pte->aid], p) != NULL)
 		fatalx("%s: RB tree invariant violated", __func__);
 	peer->stats.pending_update++;
 }
@@ -1425,86 +1524,6 @@ prefix_dump_subtree(struct rde_peer *peer, struct bgpd_addr *subtree,
 		prefix_dump_r(ctx);
 
 	return 0;
-}
-
-/* dump a prefix into specified buffer */
-int
-prefix_write(u_char *buf, int len, struct bgpd_addr *prefix, uint8_t plen,
-    int withdraw)
-{
-	int	totlen, psize;
-
-	switch (prefix->aid) {
-	case AID_INET:
-	case AID_INET6:
-		totlen = PREFIX_SIZE(plen);
-
-		if (totlen > len)
-			return (-1);
-		*buf++ = plen;
-		memcpy(buf, &prefix->ba, totlen - 1);
-		return (totlen);
-	case AID_VPN_IPv4:
-	case AID_VPN_IPv6:
-		totlen = PREFIX_SIZE(plen) + sizeof(prefix->rd);
-		psize = PREFIX_SIZE(plen) - 1;
-		plen += sizeof(prefix->rd) * 8;
-		if (withdraw) {
-			/* withdraw have one compat label as placeholder */
-			totlen += 3;
-			plen += 3 * 8;
-		} else {
-			totlen += prefix->labellen;
-			plen += prefix->labellen * 8;
-		}
-
-		if (totlen > len)
-			return (-1);
-		*buf++ = plen;
-		if (withdraw) {
-			/* magic compatibility label as per rfc8277 */
-			*buf++ = 0x80;
-			*buf++ = 0x0;
-			*buf++ = 0x0;
-		} else {
-			memcpy(buf, &prefix->labelstack,
-			    prefix->labellen);
-			buf += prefix->labellen;
-		}
-		memcpy(buf, &prefix->rd, sizeof(prefix->rd));
-		buf += sizeof(prefix->rd);
-		memcpy(buf, &prefix->ba, psize);
-		return (totlen);
-	default:
-		return (-1);
-	}
-}
-
-int
-prefix_writebuf(struct ibuf *buf, struct bgpd_addr *prefix, uint8_t plen)
-{
-	int	 totlen;
-	void	*bptr;
-
-	switch (prefix->aid) {
-	case AID_INET:
-	case AID_INET6:
-		totlen = PREFIX_SIZE(plen);
-		break;
-	case AID_VPN_IPv4:
-	case AID_VPN_IPv6:
-		totlen = PREFIX_SIZE(plen) + sizeof(prefix->rd) +
-		    prefix->labellen;
-		break;
-	default:
-		return (-1);
-	}
-
-	if ((bptr = ibuf_reserve(buf, totlen)) == NULL)
-		return (-1);
-	if (prefix_write(bptr, totlen, prefix, plen, 0) == -1)
-		return (-1);
-	return (0);
 }
 
 /*

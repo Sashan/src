@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.165 2023/03/09 13:17:28 jsg Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.168 2023/04/24 09:04:03 dv Exp $	*/
 /* $NetBSD: cpu.c,v 1.1 2003/04/26 18:39:26 fvdl Exp $ */
 
 /*-
@@ -317,7 +317,7 @@ replacemds(void)
 			 * CascadeLake
 			 */
 			/* XXX mds_handler_skl_avx512 */
-			if (xgetbv(0) & XCR0_AVX) {
+			if (xgetbv(0) & XFEATURE_AVX) {
 				handler = &mds_handler_skl_avx;
 				type = "Skylake AVX";
 			} else {
@@ -751,10 +751,9 @@ cpu_init(struct cpu_info *ci)
 	if ((cpu_ecxfeature & CPUIDECX_XSAVE) && cpuid_level >= 0xd) {
 		u_int32_t eax, ebx, ecx, edx;
 
-		xsave_mask = XCR0_X87 | XCR0_SSE;
+		xsave_mask = XFEATURE_X87 | XFEATURE_SSE;
 		CPUID_LEAF(0xd, 0, eax, ebx, ecx, edx);
-		if (eax & XCR0_AVX)
-			xsave_mask |= XCR0_AVX;
+		xsave_mask |= eax & XFEATURE_AVX;
 		xsetbv(0, xsave_mask);
 		CPUID_LEAF(0xd, 0, eax, ebx, ecx, edx);
 		if (CPU_IS_PRIMARY(ci)) {
@@ -990,6 +989,8 @@ cpu_hatch(void *v)
 		delay(10);
 #ifdef HIBERNATE
 	if ((ci->ci_flags & CPUF_PARK) != 0) {
+		if (ci->ci_feature_sefflags_edx & SEFF0EDX_IBT)
+			lcr4(rcr4() & ~CR4_CET);
 		atomic_clearbits_int(&ci->ci_flags, CPUF_PARK);
 		hibernate_drop_to_real_mode();
 	}
@@ -1189,6 +1190,14 @@ cpu_fix_msrs(struct cpu_info *ci)
 			}
 		}
 	}
+
+#ifndef SMALL_KERNEL
+	if (ci->ci_feature_sefflags_edx & SEFF0EDX_IBT) {
+		msr = rdmsr(MSR_S_CET);
+		wrmsr(MSR_S_CET, msr | MSR_CET_ENDBR_EN);
+		lcr4(rcr4() | CR4_CET);
+	}
+#endif
 }
 
 void

@@ -30,9 +30,9 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\"	$OpenBSD: malloc.3,v 1.129 2022/03/31 17:27:16 naddy Exp $
+.\"	$OpenBSD: malloc.3,v 1.132 2023/04/17 05:45:06 jmc Exp $
 .\"
-.Dd $Mdocdate: March 31 2022 $
+.Dd $Mdocdate: April 17 2023 $
 .Dt MALLOC 3
 .Os
 .Sh NAME
@@ -284,16 +284,21 @@ If it has been corrupted, the process is aborted.
 .It Cm D
 .Dq Dump .
 .Fn malloc
-will dump statistics to the file
-.Pa ./malloc.out ,
-if it already exists,
+will dump a leak report using
+.Xr utrace 2
 at exit.
-This option requires the library to have been compiled with -DMALLOC_STATS in
-order to have any effect.
+To record the dump:
+.Pp
+.Dl $ MALLOC_OPTIONS=D ktrace -tu program ...
+.Pp
+To view the leak report:
+.Pp
+.Dl $ kdump -u malloc ...
 .It Cm F
 .Dq Freecheck .
 Enable more extensive double free and use after free detection.
-All chunks in the delayed free list will be checked for double frees.
+All chunks in the delayed free list will be checked for double frees and
+write after frees.
 Unused pages on the freelist are read and write protected to
 cause a segmentation fault upon access.
 .It Cm G
@@ -339,6 +344,11 @@ Enable all options suitable for security auditing.
 Enable use after free protection for larger allocations.
 Unused pages on the freelist are read and write protected to
 cause a segmentation fault upon access.
+.It Cm V
+.Dq Verbose .
+Use with
+.Cm D
+to get a verbose dump of malloc's internal state.
 .It Cm X
 .Dq xmalloc .
 Rather than return failure,

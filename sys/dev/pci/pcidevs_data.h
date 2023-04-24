@@ -2,7 +2,7 @@
  * THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
  *
  * generated from:
- *	OpenBSD: pcidevs,v 1.2026 2023/03/19 09:38:06 jsg Exp 
+ *	OpenBSD: pcidevs,v 1.2030 2023/04/12 15:56:08 kettenis Exp 
  */
 
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
@@ -2720,6 +2720,10 @@ static const struct pci_known_product pci_known_products[] = {
 	    "AQC100",
 	},
 	{
+	    PCI_VENDOR_AQUANTIA, PCI_PRODUCT_AQUANTIA_AQC113,
+	    "AQC113",
+	},
+	{
 	    PCI_VENDOR_AQUANTIA, PCI_PRODUCT_AQUANTIA_AQC107,
 	    "AQC107",
 	},
@@ -2738,6 +2742,22 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_AQUANTIA, PCI_PRODUCT_AQUANTIA_AQC112,
 	    "AQC112",
+	},
+	{
+	    PCI_VENDOR_AQUANTIA, PCI_PRODUCT_AQUANTIA_AQC116C,
+	    "AQC116C",
+	},
+	{
+	    PCI_VENDOR_AQUANTIA, PCI_PRODUCT_AQUANTIA_AQC115C,
+	    "AQC115C",
+	},
+	{
+	    PCI_VENDOR_AQUANTIA, PCI_PRODUCT_AQUANTIA_AQC113C,
+	    "AQC113C",
+	},
+	{
+	    PCI_VENDOR_AQUANTIA, PCI_PRODUCT_AQUANTIA_AQC113CA,
+	    "AQC113CA",
 	},
 	{
 	    PCI_VENDOR_AQUANTIA, PCI_PRODUCT_AQUANTIA_AQC100S,
@@ -2762,6 +2782,14 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_AQUANTIA, PCI_PRODUCT_AQUANTIA_AQC112S,
 	    "AQC112S",
+	},
+	{
+	    PCI_VENDOR_AQUANTIA, PCI_PRODUCT_AQUANTIA_AQC114CS,
+	    "AQC114CS",
+	},
+	{
+	    PCI_VENDOR_AQUANTIA, PCI_PRODUCT_AQUANTIA_AQC113CS,
+	    "AQC113CS",
 	},
 	{
 	    PCI_VENDOR_AQUANTIA, PCI_PRODUCT_AQUANTIA_D100,
@@ -7764,6 +7792,10 @@ static const struct pci_known_product pci_known_products[] = {
 	    "RT2890",
 	},
 	{
+	    PCI_VENDOR_BAIKAL, PCI_PRODUCT_BAIKAL_BE_M1000,
+	    "BE-M1000",
+	},
+	{
 	    PCI_VENDOR_BELKIN, PCI_PRODUCT_BELKIN_F5D6000,
 	    "F5D6000",
 	},
@@ -8470,6 +8502,10 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_BROADCOM, PCI_PRODUCT_BROADCOM_BCM4387,
 	    "BCM4387",
+	},
+	{
+	    PCI_VENDOR_BROADCOM, PCI_PRODUCT_BROADCOM_BCM4388,
+	    "BCM4388",
 	},
 	{
 	    PCI_VENDOR_BROADCOM, PCI_PRODUCT_BROADCOM_BCM4313,
@@ -34520,6 +34556,14 @@ static const struct pci_known_product pci_known_products[] = {
 	    "CH382",
 	},
 	{
+	    PCI_VENDOR_WANGXUN, PCI_PRODUCT_WANGXUN_WX1860A2,
+	    "WX1860A2",
+	},
+	{
+	    PCI_VENDOR_WANGXUN, PCI_PRODUCT_WANGXUN_WX1860AL1,
+	    "WX1860AL1",
+	},
+	{
 	    PCI_VENDOR_WD, PCI_PRODUCT_WD_WD33C193A,
 	    "WD33C193A",
 	},
@@ -35936,6 +35980,10 @@ static const struct pci_known_vendor pci_known_vendors[] = {
 	    "Union Memory",
 	},
 	{
+	    PCI_VENDOR_BAIKAL,
+	    "Baikal Electronics",
+	},
+	{
 	    PCI_VENDOR_AQUANTIA,
 	    "Aquantia",
 	},
@@ -36050,6 +36098,10 @@ static const struct pci_known_vendor pci_known_vendors[] = {
 	{
 	    PCI_VENDOR_INTEL,
 	    "Intel",
+	},
+	{
+	    PCI_VENDOR_WANGXUN,
+	    "Beijing WangXun Technology",
 	},
 	{
 	    PCI_VENDOR_INNOTEK,

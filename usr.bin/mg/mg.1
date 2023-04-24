@@ -1,7 +1,7 @@
-.\"	$OpenBSD: mg.1,v 1.127 2022/10/20 18:59:24 op Exp $
+.\"	$OpenBSD: mg.1,v 1.130 2023/04/21 13:39:37 op Exp $
 .\" This file is in the public domain.
 .\"
-.Dd $Mdocdate: October 20 2022 $
+.Dd $Mdocdate: April 21 2023 $
 .Dt MG 1
 .Os
 .Sh NAME
@@ -738,9 +738,9 @@ Assumes tabs are every eight characters.
 Move forward
 .Va n
 lines.
-.\" .It no-tab-mode
-.\" Toggle notab mode.
-.\" In this mode, spaces are inserted rather than tabs.
+.It no-tab-mode
+Toggle notab mode.
+In this mode, spaces are inserted rather than tabs.
 .It not-modified
 Turn off the modified flag in the current buffer.
 .It open-line
@@ -896,6 +896,9 @@ Used by auto-fill-mode.
 Sets the mark in the current window to the current dot location.
 .It set-prefix-string
 Sets the prefix string to be used by the 'prefix-region' command.
+.It set-tab-width
+Set the tab width for the current buffer, or the default for new buffers
+if called with a prefix argument or from the startup file.
 .It shell-command
 Execute external command from mini-buffer.
 .It shell-command-on-region
@@ -967,7 +970,7 @@ As it moves, convert any characters to upper case.
 Toggle the visible bell.
 If this toggle is on, the modeline will flash.
 .It visit-tags-table
-Record name of the tags file to be used for subsequent find-tag.
+Load tags file to be used for subsequent find-tag.
 .It what-cursor-position
 Display a bunch of useful information about the current location of
 dot.

@@ -1,4 +1,4 @@
-/* $OpenBSD: bn.h,v 1.57 2022/12/17 15:56:25 jsing Exp $ */
+/* $OpenBSD: bn.h,v 1.62 2023/04/19 10:51:22 jsing Exp $ */
 /* Copyright (C) 1995-1997 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -136,12 +136,6 @@
 
 #ifdef  __cplusplus
 extern "C" {
-#endif
-
-#ifndef OPENSSL_SMALL_FOOTPRINT
-#define BN_MUL_COMBA
-#define BN_SQR_COMBA
-#define BN_RECURSION
 #endif
 
 /* This next option uses the C libraries (2 word)/(1 word) function.
@@ -348,7 +342,10 @@ const BIGNUM *BN_value_one(void);
 char *	BN_options(void);
 BN_CTX *BN_CTX_new(void);
 #ifndef OPENSSL_NO_DEPRECATED
+/* Remove in next major bump. */
+#if !defined(LIBRESSL_NEXT_API) || defined(LIBRESSL_INTERNAL)
 void	BN_CTX_init(BN_CTX *c);
+#endif
 #endif
 void	BN_CTX_free(BN_CTX *c);
 void	BN_CTX_start(BN_CTX *ctx);
@@ -361,7 +358,10 @@ int	BN_pseudo_rand_range(BIGNUM *rnd, const BIGNUM *range);
 int	BN_num_bits(const BIGNUM *a);
 int	BN_num_bits_word(BN_ULONG);
 BIGNUM *BN_new(void);
+/* Move to bn_local.h in the next major bump. */
+#if !defined(LIBRESSL_NEXT_API) || defined(LIBRESSL_INTERNAL)
 void	BN_init(BIGNUM *);
+#endif
 void	BN_clear_free(BIGNUM *a);
 BIGNUM *BN_copy(BIGNUM *a, const BIGNUM *b);
 void	BN_swap(BIGNUM *a, BIGNUM *b);
@@ -438,7 +438,10 @@ int	BN_mod_exp_simple(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
 int	BN_mask_bits(BIGNUM *a, int n);
 int	BN_print_fp(FILE *fp, const BIGNUM *a);
 int	BN_print(BIO *fp, const BIGNUM *a);
+/* Move to bn_local.h in the next major bump. */
+#if !defined(LIBRESSL_NEXT_API) || defined(LIBRESSL_INTERNAL)
 int	BN_reciprocal(BIGNUM *r, const BIGNUM *m, int len, BN_CTX *ctx);
+#endif
 int	BN_rshift(BIGNUM *r, const BIGNUM *a, int n);
 int	BN_rshift1(BIGNUM *r, const BIGNUM *a);
 void	BN_clear(BIGNUM *a);
@@ -486,6 +489,8 @@ int	BN_is_prime_ex(const BIGNUM *p, int nchecks, BN_CTX *ctx, BN_GENCB *cb);
 int	BN_is_prime_fasttest_ex(const BIGNUM *p, int nchecks, BN_CTX *ctx,
     int do_trial_division, BN_GENCB *cb);
 
+/* Remove in next major bump. */
+#if !defined(LIBRESSL_NEXT_API) || defined(LIBRESSL_INTERNAL)
 int BN_X931_generate_Xpq(BIGNUM *Xp, BIGNUM *Xq, int nbits, BN_CTX *ctx);
 
 int BN_X931_derive_prime_ex(BIGNUM *p, BIGNUM *p1, BIGNUM *p2,
@@ -496,9 +501,13 @@ int BN_X931_generate_prime_ex(BIGNUM *p, BIGNUM *p1, BIGNUM *p2,
     const BIGNUM *Xp,
     const BIGNUM *e, BN_CTX *ctx,
     BN_GENCB *cb);
+#endif
 
 BN_MONT_CTX *BN_MONT_CTX_new(void );
+/* Remove in next major bump. */
+#if !defined(LIBRESSL_NEXT_API) || defined(LIBRESSL_INTERNAL)
 void BN_MONT_CTX_init(BN_MONT_CTX *ctx);
+#endif
 int BN_mod_mul_montgomery(BIGNUM *r, const BIGNUM *a, const BIGNUM *b,
     BN_MONT_CTX *mont, BN_CTX *ctx);
 int BN_to_montgomery(BIGNUM *r, const BIGNUM *a, BN_MONT_CTX *mont,
@@ -540,6 +549,8 @@ void BN_set_params(int mul, int high, int low, int mont);
 int BN_get_params(int which); /* 0, mul, 1 high, 2 low, 3 mont */
 #endif
 
+/* Move to bn_local.h in the next major bump. */
+#if !defined(LIBRESSL_NEXT_API) || defined(LIBRESSL_INTERNAL)
 void	BN_RECP_CTX_init(BN_RECP_CTX *recp);
 BN_RECP_CTX *BN_RECP_CTX_new(void);
 void	BN_RECP_CTX_free(BN_RECP_CTX *recp);
@@ -550,6 +561,7 @@ int	BN_mod_exp_recp(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
     const BIGNUM *m, BN_CTX *ctx);
 int	BN_div_recp(BIGNUM *dv, BIGNUM *rem, const BIGNUM *m,
     BN_RECP_CTX *recp, BN_CTX *ctx);
+#endif
 
 #ifndef OPENSSL_NO_EC2M
 
@@ -612,6 +624,7 @@ int	BN_GF2m_arr2poly(const int p[], BIGNUM *a);
 
 #endif
 
+#if !defined(LIBRESSL_NEXT_API) || defined(LIBRESSL_INTERNAL)
 /* faster mod functions for the 'NIST primes'
  * 0 <= a < p^2 */
 int BN_nist_mod_192(BIGNUM *r, const BIGNUM *a, const BIGNUM *p, BN_CTX *ctx);
@@ -625,6 +638,7 @@ const BIGNUM *BN_get0_nist_prime_224(void);
 const BIGNUM *BN_get0_nist_prime_256(void);
 const BIGNUM *BN_get0_nist_prime_384(void);
 const BIGNUM *BN_get0_nist_prime_521(void);
+#endif
 
 /* Primes from RFC 2409 */
 BIGNUM *get_rfc2409_prime_768(BIGNUM *bn);

@@ -1,4 +1,4 @@
-/* $OpenBSD: apps.c,v 1.62 2022/01/10 12:17:49 tb Exp $ */
+/* $OpenBSD: apps.c,v 1.64 2023/04/22 20:50:26 tb Exp $ */
 /*
  * Copyright (c) 2014 Joel Sing <jsing@openbsd.org>
  *
@@ -933,7 +933,11 @@ set_name_ex(unsigned long *flags, const char *arg)
 		{"ca_default", XN_FLAG_MULTILINE, 0xffffffffL},
 		{NULL, 0, 0}
 	};
-	return set_multi_opts(flags, arg, ex_tbl);
+	if (!set_multi_opts(flags, arg, ex_tbl))
+		return 0;
+	if (*flags != XN_FLAG_COMPAT && (*flags & XN_FLAG_SEP_MASK) == 0)
+		*flags |= XN_FLAG_SEP_CPLUS_SPC;
+	return 1;
 }
 
 int
@@ -1949,47 +1953,6 @@ pkey_ctrl_string(EVP_PKEY_CTX *ctx, char *value)
 	free(stmp);
 
 	return rv;
-}
-
-static void
-nodes_print(BIO *out, const char *name, STACK_OF(X509_POLICY_NODE) *nodes)
-{
-	X509_POLICY_NODE *node;
-	int i;
-
-	BIO_printf(out, "%s Policies:", name);
-	if (nodes) {
-		BIO_puts(out, "\n");
-		for (i = 0; i < sk_X509_POLICY_NODE_num(nodes); i++) {
-			node = sk_X509_POLICY_NODE_value(nodes, i);
-			X509_POLICY_NODE_print(out, node, 2);
-		}
-	} else
-		BIO_puts(out, " <empty>\n");
-}
-
-void
-policies_print(BIO *out, X509_STORE_CTX *ctx)
-{
-	X509_POLICY_TREE *tree;
-	int explicit_policy;
-	int free_out = 0;
-
-	if (out == NULL) {
-		out = BIO_new_fp(stderr, BIO_NOCLOSE);
-		free_out = 1;
-	}
-	tree = X509_STORE_CTX_get0_policy_tree(ctx);
-	explicit_policy = X509_STORE_CTX_get_explicit_policy(ctx);
-
-	BIO_printf(out, "Require explicit Policy: %s\n",
-	    explicit_policy ? "True" : "False");
-
-	nodes_print(out, "Authority", X509_policy_tree_get0_policies(tree));
-	nodes_print(out, "User", X509_policy_tree_get0_user_policies(tree));
-
-	if (free_out)
-		BIO_free(out);
 }
 
 /*

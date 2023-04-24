@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.h,v 1.44 2022/10/17 16:51:36 claudio Exp $ */
+/*	$OpenBSD: parser.h,v 1.46 2023/04/21 09:12:41 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -56,7 +56,11 @@ enum actions {
 	NETWORK_SHOW,
 	NETWORK_MRT,
 	NETWORK_BULK_ADD,
-	NETWORK_BULK_REMOVE
+	NETWORK_BULK_REMOVE,
+	FLOWSPEC_ADD,
+	FLOWSPEC_REMOVE,
+	FLOWSPEC_FLUSH,
+	FLOWSPEC_SHOW,
 };
 
 struct parse_result {
@@ -72,13 +76,21 @@ struct parse_result {
 	uint64_t		 rd;
 	int			 flags;
 	int			 is_group;
+	int			 mrtfd;
 	u_int			 rtableid;
 	uint32_t		 pathid;
 	enum actions		 action;
 	uint8_t			 validation_state;
 	uint8_t			 prefixlen;
 	uint8_t			 aid;
-	int			 mrtfd;
+	struct flowstate	{
+		struct bgpd_addr	src;
+		struct bgpd_addr	dst;
+		uint8_t			*components[FLOWSPEC_TYPE_MAX];
+		uint16_t		complen[FLOWSPEC_TYPE_MAX];
+		uint8_t			srclen;
+		uint8_t			dstlen;
+	}			flow;
 };
 
 __dead void		 usage(void);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: cmd.c,v 1.167 2023/03/04 21:22:51 krw Exp $	*/
+/*	$OpenBSD: cmd.c,v 1.176 2023/04/10 19:44:43 krw Exp $	*/
 
 /*
  * Copyright (c) 1997 Tobias Weingartner
@@ -264,16 +264,16 @@ gsetpid(const int pn)
 	GPT_print_parthdr(TERSE);
 	GPT_print_part(pn, "s", TERSE);
 
-	if (PRT_protected_guid(&gp[pn].gp_type)) {
+	if (PRT_protected_uuid(&gp[pn].gp_type)) {
 		printf("can't edit partition type %s\n",
-		    PRT_uuid_to_sname(&gp[pn].gp_type));
+		    PRT_uuid_to_desc(&gp[pn].gp_type));
 		return -1;
 	}
 
 	gp[pn].gp_type = *ask_uuid(&gp[pn].gp_type);
-	if (PRT_protected_guid(&gp[pn].gp_type)) {
+	if (PRT_protected_uuid(&gp[pn].gp_type)) {
 		printf("can't change partition type to %s\n",
-		    PRT_uuid_to_sname(&gp[pn].gp_type));
+		    PRT_uuid_to_desc(&gp[pn].gp_type));
 		return -1;
 	}
 
@@ -574,8 +574,9 @@ ask_pid(const int dflt)
 		if (strlen(lbuf) == 0)
 			return dflt;
 		if (strcmp(lbuf, "?") == 0) {
-			PRT_print_mbrtypes();
-			continue;
+			PRT_print_mbrmenu(lbuf, sizeof(lbuf));
+			if (strlen(lbuf) == 0)
+				continue;
 		}
 
 		num = hex_octet(lbuf);
@@ -589,25 +590,15 @@ ask_pid(const int dflt)
 const struct uuid *
 ask_uuid(const struct uuid *olduuid)
 {
-	static struct uuid	 uuid;
 	char			 lbuf[LINEBUFSZ];
-	char			*dflt = NULL;
+	static struct uuid	 uuid;
+	const char		*guid;
+	char			*dflt;
 	uint32_t		 status;
-	int			 num = 0;
 
-	uuid = *olduuid;
-	if (uuid_is_nil(&uuid, NULL) == 0) {
-		num = PRT_uuid_to_type(&uuid);
-		if (num == 0) {
-			uuid_to_string(&uuid, &dflt, &status);
-			if (status != uuid_s_ok) {
-				printf("uuid_to_string() failed\n");
-				goto done;
-			}
-		}
-	}
+	dflt = PRT_uuid_to_menudflt(olduuid);
 	if (dflt == NULL) {
-		if (asprintf(&dflt, "%X", num) == -1) {
+		if (asprintf(&dflt, "00") == -1) {
 			warn("asprintf()");
 			goto done;
 		}
@@ -620,32 +611,23 @@ ask_uuid(const struct uuid *olduuid)
 		string_from_line(lbuf, sizeof(lbuf), TRIMMED);
 
 		if (strcmp(lbuf, "?") == 0) {
-			PRT_print_gpttypes();
-			continue;
+			PRT_print_gptmenu(lbuf, sizeof(lbuf));
+			if (strlen(lbuf) == 0)
+				continue;
 		} else if (strlen(lbuf) == 0) {
 			uuid = *olduuid;
 			goto done;
 		}
 
-		uuid_from_string(lbuf, &uuid, &status);
+		guid = PRT_menuid_to_guid(hex_octet(lbuf));
+		if (guid == NULL)
+			guid = lbuf;
+
+		uuid_from_string(guid, &uuid, &status);
 		if (status == uuid_s_ok)
 			goto done;
 
-		num = hex_octet(lbuf);
-		switch (num) {
-		case -1:
-			printf("'%s' is not a valid partition id\n", lbuf);
-			break;
-		case 0:
-			uuid_create_nil(&uuid, NULL);
-			goto done;
-		default:
-			uuid = *PRT_type_to_guid(num);
-			if (uuid_is_nil(&uuid, NULL) == 0)
-				goto done;
-			printf("'%s' has no associated UUID\n", lbuf);
-			break;
-		}
+		printf("'%s' has no associated UUID\n", lbuf);
 	}
 
  done:

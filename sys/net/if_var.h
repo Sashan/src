@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_var.h,v 1.122 2022/11/23 14:50:59 kn Exp $	*/
+/*	$OpenBSD: if_var.h,v 1.125 2023/04/18 22:01:24 mvs Exp $	*/
 /*	$NetBSD: if.h,v 1.23 1996/05/07 02:40:27 thorpej Exp $	*/
 
 /*
@@ -121,7 +121,7 @@ TAILQ_HEAD(ifnet_head, ifnet);		/* the actual queue head */
 struct ifnet {				/* and the entries */
 	void	*if_softc;		/* [I] lower-level data for this if */
 	struct	refcnt if_refcnt;
-	TAILQ_ENTRY(ifnet) if_list;	/* [K] all struct ifnets are chained */
+	TAILQ_ENTRY(ifnet) if_list;	/* [NK] all struct ifnets are chained */
 	TAILQ_HEAD(, ifaddr) if_addrlist; /* [N] list of addresses per if */
 	TAILQ_HEAD(, ifmaddr) if_maddrlist; /* [N] list of multicast records */
 	TAILQ_HEAD(, ifg_list) if_groups; /* [N] list of groups per if */
@@ -240,7 +240,8 @@ struct ifaddr {
 #define	ifa_broadaddr	ifa_dstaddr	/* broadcast address interface */
 	struct	sockaddr *ifa_netmask;	/* used to determine subnet */
 	struct	ifnet *ifa_ifp;		/* back-pointer to interface */
-	TAILQ_ENTRY(ifaddr) ifa_list;	/* list of addresses for interface */
+	TAILQ_ENTRY(ifaddr) ifa_list;	/* [N] list of addresses for
+					    interface */
 	u_int	ifa_flags;		/* interface flags, see below */
 	struct	refcnt ifa_refcnt;	/* number of `rt_ifa` references */
 	int	ifa_metric;		/* cost of going out this interface */
@@ -320,6 +321,8 @@ extern struct ifnet_head ifnetlist;
 void	if_start(struct ifnet *);
 int	if_enqueue(struct ifnet *, struct mbuf *);
 int	if_enqueue_ifq(struct ifnet *, struct mbuf *);
+void	if_mqoutput(struct ifnet *, struct mbuf_queue *, unsigned int *,
+	    struct sockaddr *, struct rtentry *);
 void	if_input(struct ifnet *, struct mbuf_list *);
 void	if_vinput(struct ifnet *, struct mbuf *);
 void	if_input_process(struct ifnet *, struct mbuf_list *);

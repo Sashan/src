@@ -1,5 +1,5 @@
 #!/bin/ksh
-#	$OpenBSD: install.sub,v 1.1234 2023/03/10 10:33:40 kn Exp $
+#	$OpenBSD: install.sub,v 1.1242 2023/04/17 13:59:16 kn Exp $
 #
 # Copyright (c) 1997-2015 Todd Miller, Theo de Raadt, Ken Westerback
 # Copyright (c) 2015, Robert Peichaer <rpe@openbsd.org>
@@ -281,7 +281,7 @@ diskinfo() {
 		_s=$(disklabel -dpg $_d 2>/dev/null | sed -n '/.*# total bytes: \(.*\)/{s//(\1)/p;}')
 		rm -f /dev/{r,}$_d?
 
-		echo "$_d: $_i $_n $_s"
+		echo "    $_d: $_i $_n $_s"
 	done
 }
 
@@ -297,16 +297,22 @@ scan_dmesg() {
 
 # Extract device names from hw.disknames matching sed expression $1.
 scan_disknames() {
-	local IFS=, _disks=$(sysctl -n hw.disknames)
-
-	bsort $(for _n in $_disks; do echo "${_n%%:*} "; done | sed -n "$1")
+	bsort $(IFS=,
+        	for _d in $(sysctl -n hw.disknames); do
+			echo "${_d%%:*} "
+        	done | sed -n "$1")
 }
 
 # Return list of disks with softraid chunks, optionally limited to the volume $1.
-get_softraid_disks() {
+get_softraid_chunks() {
 	local _device=${1:-softraid0}
 
 	bioctl $_device 2>/dev/null | sed -n 's/.*<\(.*\).>$/\1/p'
+}
+
+# Return list of softraid volumes.
+get_softraid_volumes() {
+	bioctl softraid0 | sed -n 's/^softraid0.*\(sd[0-9]*\).*/\1/p'
 }
 
 # Return disk devices found in hw.disknames.
@@ -326,7 +332,7 @@ get_cddevs() {
 get_dkdevs_uninitialized() {
 	local _disks=$(get_dkdevs) _d
 
-	for _d in $DISKS_DONE $(get_softraid_disks); do
+	for _d in $DISKS_DONE $(get_softraid_chunks); do
 		_disks=$(rmel "$_d" $_disks)
 	done
 	bsort $_disks
@@ -341,7 +347,7 @@ get_dkdevs_root() {
 			is_rootdisk "$_d" || _disks=$(rmel "$_d" $_disks)
 		done
 	else
-		_disks=$(rmel "$CRYPTODISK" $_disks)
+		_disks=$(rmel "$CRYPTOCHUNK" $_disks)
 	fi
 	echo $_disks
 }
@@ -1348,7 +1354,7 @@ configure_ifs() {
 		if [[ $resp == '?' ]]; then
 			for _if in "${_ifs[@]}"; do
 				_lladdr=$(if_name_to_lladdr $_if)
-				[[ -n $_lladdr ]] && echo " $_if: lladdr $_lladdr"
+				[[ -n $_lladdr ]] && echo "    $_if: lladdr $_lladdr"
 			done
 		fi
 
@@ -1432,7 +1438,7 @@ v4_defroute() {
 	[[ -n $_dr ]] && isin "$_dr_if" $(get_ifs dhcp) && return
 
 	while :; do
-		ask_until "Default IPv4 route? (IPv4 address or none)" "$_dr"
+		ask_until "Default IPv4 route? (IPv4 address or 'none')" "$_dr"
 		[[ $resp == none ]] && break
 		route delete -inet default >/dev/null 2>&1
 		if route -n add -inet -host default "$resp"; then
@@ -2042,7 +2048,12 @@ install_cdrom() {
 # Install sets from disk.
 # Ask for the disk device containing the set files.
 install_disk() {
-	if ! ask_yn "Is the disk partition already mounted?" yes; then
+	local _ismounted=yes
+
+	# No partitions are mounted prior to regular installation.
+	[[ $MODE == install ]] && _ismounted=no
+
+	if ! ask_yn "Is the disk partition already mounted?" $_ismounted; then
 		ask_which "disk" "contains the $MODE media" \
 			'$(bsort $(get_dkdevs))' \
 			'$(get_dkdevs_uninitialized)'
@@ -2397,7 +2408,7 @@ is_rootdisk() {
 
 # Get global root information. ie. ROOTDISK, ROOTDEV and SWAPDEV.
 get_rootinfo() {
-	local _default=$(get_dkdevs_root) _dkdev
+	local _default=${CRYPTOVOLUME:-$(get_dkdevs_root)} _dkdev
 	local _q="Which disk is the root disk? ('?' for details)"
 
 	while :; do
@@ -2406,7 +2417,7 @@ get_rootinfo() {
 		case $resp in
 		"?")	diskinfo $(get_dkdevs);;
 		'')	;;
-		$CRYPTODISK)
+		$CRYPTOCHUNK)
 			echo "$resp is used for root disk encryption.";;
 		*)	# Translate $resp to disk dev name in case it is a DUID.
 			# get_dkdev_name bounces back the disk dev name if not.
@@ -2958,7 +2969,7 @@ finish_up() {
 
 	# In case root is on a softraid volume, make sure all underlying
 	# device nodes exist before installing boot-blocks on disk.
-	make_dev $(get_softraid_disks $ROOTDISK)
+	make_dev $(get_softraid_chunks $ROOTDISK)
 	md_installboot $ROOTDISK
 
 	chmod og-rwx /mnt/bsd{,.mp,.rd} 2>/dev/null
@@ -3077,7 +3088,7 @@ encrypt_root() {
 
 	# Do not even try if softraid is in use already,
 	# e.g. auto-assembled at boot or done in (S)hell.
-	[[ -z $(get_softraid_disks) ]] || return
+	[[ -z $(get_softraid_volumes) ]] || return
 
 	while :; do
 		echo "Available disks are: $(get_dkdevs | sed 's/^$/none/')."
@@ -3107,7 +3118,10 @@ __EOT
 		((++_tries < 3)) || exit
 	done
 
-        CRYPTODISK=$_chunk
+        CRYPTOCHUNK=$_chunk
+	# No volumes existed before asking, but we just created one.
+	# Save it for later as sane root disk default.
+	CRYPTOVOLUME=$(get_softraid_volumes)
 }
 
 do_install() {
@@ -3579,7 +3593,8 @@ INSTALL_METHOD=
 NIFS=0
 export PS1="$MODE# "
 PUB_KEY=/etc/signify/openbsd-${VERSION}-base.pub
-CRYPTODISK=
+CRYPTOCHUNK=
+CRYPTOVOLUME=
 ROOTDEV=
 ROOTDISK=
 SETDIR="$VNAME/$ARCH"

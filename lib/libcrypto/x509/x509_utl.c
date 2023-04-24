@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_utl.c,v 1.6 2023/02/16 08:38:17 tb Exp $ */
+/* $OpenBSD: x509_utl.c,v 1.14 2023/04/23 11:52:14 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project.
  */
@@ -61,12 +61,13 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <openssl/asn1.h>
 #include <openssl/bn.h>
 #include <openssl/conf.h>
 #include <openssl/err.h>
 #include <openssl/x509v3.h>
 
-char *bn_to_string(const BIGNUM *bn);
+static char *bn_to_string(const BIGNUM *bn);
 static char *strip_spaces(char *name);
 static int sk_strcmp(const char * const *a, const char * const *b);
 static STACK_OF(OPENSSL_STRING) *get_email(X509_NAME *name,
@@ -161,7 +162,7 @@ X509V3_add_value_bool_nf(const char *name, int asn1_bool,
 }
 LCRYPTO_ALIAS(X509V3_add_value_bool_nf);
 
-char *
+static char *
 bn_to_string(const BIGNUM *bn)
 {
 	const char *sign = "";
@@ -205,6 +206,21 @@ i2s_ASN1_ENUMERATED(X509V3_EXT_METHOD *method, const ASN1_ENUMERATED *a)
 LCRYPTO_ALIAS(i2s_ASN1_ENUMERATED);
 
 char *
+i2s_ASN1_ENUMERATED_TABLE(X509V3_EXT_METHOD *method, const ASN1_ENUMERATED *e)
+{
+	BIT_STRING_BITNAME *enam;
+	long strval;
+
+	strval = ASN1_ENUMERATED_get(e);
+	for (enam = method->usr_data; enam->lname; enam++) {
+		if (strval == enam->bitnum)
+			return strdup(enam->lname);
+	}
+	return i2s_ASN1_ENUMERATED(method, e);
+}
+LCRYPTO_ALIAS(i2s_ASN1_ENUMERATED_TABLE);
+
+char *
 i2s_ASN1_INTEGER(X509V3_EXT_METHOD *method, const ASN1_INTEGER *a)
 {
 	BIGNUM *bntmp;
@@ -225,25 +241,26 @@ s2i_ASN1_INTEGER(X509V3_EXT_METHOD *method, const char *value)
 {
 	BIGNUM *bn = NULL;
 	ASN1_INTEGER *aint;
-	int isneg, ishex;
+	int isneg = 0, ishex = 0;
 	int ret;
 
 	if (!value) {
 		X509V3error(X509V3_R_INVALID_NULL_VALUE);
-		return 0;
+		return NULL;
 	}
-	bn = BN_new();
+	if ((bn = BN_new()) == NULL) {
+		X509V3error(ERR_R_MALLOC_FAILURE);
+		return NULL;
+	}
 	if (value[0] == '-') {
 		value++;
 		isneg = 1;
-	} else
-		isneg = 0;
+	}
 
-	if (value[0] == '0' && ((value[1] == 'x') || (value[1] == 'X'))) {
+	if (value[0] == '0' && (value[1] == 'x' || value[1] == 'X')) {
 		value += 2;
 		ishex = 1;
-	} else
-		ishex = 0;
+	}
 
 	if (ishex)
 		ret = BN_hex2bn(&bn, value);
@@ -253,17 +270,17 @@ s2i_ASN1_INTEGER(X509V3_EXT_METHOD *method, const char *value)
 	if (!ret || value[ret]) {
 		BN_free(bn);
 		X509V3error(X509V3_R_BN_DEC2BN_ERROR);
-		return 0;
+		return NULL;
 	}
 
-	if (isneg && BN_is_zero(bn))
+	if (BN_is_zero(bn))
 		isneg = 0;
 
 	aint = BN_to_ASN1_INTEGER(bn, NULL);
 	BN_free(bn);
 	if (!aint) {
 		X509V3error(X509V3_R_BN_TO_ASN1_INTEGER_ERROR);
-		return 0;
+		return NULL;
 	}
 	if (isneg)
 		aint->type |= V_ASN1_NEG;
@@ -455,9 +472,11 @@ hex_to_string(const unsigned char *buffer, long len)
 	int i;
 	static const char hexdig[] = "0123456789ABCDEF";
 
-	if (!buffer || !len)
+	if (len < 0)
 		return NULL;
-	if (!(tmp = malloc(len * 3 + 1))) {
+	if (len == 0)
+		return calloc(1, 1);
+	if ((tmp = calloc(len, 3)) == NULL) {
 		X509V3error(ERR_R_MALLOC_FAILURE);
 		return NULL;
 	}

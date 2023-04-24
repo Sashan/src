@@ -1,4 +1,4 @@
-$OpenBSD: pcidevs,v 1.2026 2023/03/19 09:38:06 jsg Exp $
+$OpenBSD: pcidevs,v 1.2030 2023/04/12 15:56:08 kettenis Exp $
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
 
 /*
@@ -344,6 +344,7 @@ vendor	SYMPHONY2	0x1c1c	Symphony Labs
 vendor	SKHYNIX		0x1c5c	SK hynix
 vendor	ADATA		0x1cc1	ADATA Technology
 vendor	UMIS		0x1cc4	Union Memory
+vendor	BAIKAL		0x1d39	Baikal Electronics
 vendor	AQUANTIA	0x1d6a	Aquantia
 vendor	ROCKCHIP	0x1d87	Rockchip
 vendor	TEKRAM2		0x1de1	Tekram
@@ -373,6 +374,7 @@ vendor	C4T		0x6374	c't Magazin
 vendor	DCI		0x6666	Decision Computer
 vendor	QUANCOM		0x8008	Quancom Informationssysteme
 vendor	INTEL		0x8086	Intel
+vendor	WANGXUN		0x8088	Beijing WangXun Technology
 vendor	INNOTEK		0x80ee	InnoTek
 vendor	SIGMATEL	0x8384	Sigmatel
 vendor	WINBOND2	0x8c4a	Winbond
@@ -1123,17 +1125,24 @@ product APPLE NVME2		0x2003	NVMe
 
 /* Aquantia Corp. */
 product AQUANTIA AQC100		0x00b1	AQC100
+product AQUANTIA AQC113		0x04c0	AQC113
 product AQUANTIA AQC107		0x07b1	AQC107
 product AQUANTIA AQC108		0x08b1	AQC108
 product AQUANTIA AQC109		0x09b1	AQC109
 product AQUANTIA AQC111		0x11b1	AQC111
 product AQUANTIA AQC112		0x12b1	AQC112
+product AQUANTIA AQC116C	0x11c0	AQC116C
+product AQUANTIA AQC115C	0x12c0	AQC115C
+product AQUANTIA AQC113C	0x14c0	AQC113C
+product AQUANTIA AQC113CA	0x34c0	AQC113CA
 product AQUANTIA AQC100S	0x80b1	AQC100S
 product AQUANTIA AQC107S	0x87b1	AQC107S
 product AQUANTIA AQC108S	0x88b1	AQC108S
 product AQUANTIA AQC109S	0x89b1	AQC109S
 product AQUANTIA AQC111S	0x91b1	AQC111S
 product AQUANTIA AQC112S	0x92b1	AQC112S
+product AQUANTIA AQC114CS	0x93c0	AQC114CS
+product AQUANTIA AQC113CS	0x94c0	AQC113CS
 product AQUANTIA D100		0xd100	D100
 product AQUANTIA D107		0xd107	D107
 product AQUANTIA D108		0xd108	D108
@@ -2421,6 +2430,9 @@ product AVM T1			0x1200	PRI T1 ISDN
 /* AWT products */
 product AWT RT2890		0x1059	RT2890
 
+/* Baikal products */
+product BAIKAL BE_M1000		0x8060	BE-M1000
+
 /* Belkin Components products */
 product BELKIN F5D6000		0xec00	F5D6000
 product BELKIN2 F5D6001		0x6001	F5D6001
@@ -2609,6 +2621,7 @@ product BROADCOM BCM4401B0	0x4402	BCM4401B0
 product BROADCOM BCM4371	0x440d	BCM4371
 product BROADCOM BCM4378	0x4425	BCM4378
 product BROADCOM BCM4387	0x4433	BCM4387
+product BROADCOM BCM4388	0x4434	BCM4388
 product BROADCOM BCM4313	0x4727	BCM4313
 product BROADCOM 5801		0x5801	5801
 product BROADCOM 5802		0x5802	5802
@@ -9618,6 +9631,10 @@ product WCH CH352		0x3253	CH352
 product WCH2 CH351		0x2273	CH351
 product WCH2 CH382_2		0x3250	CH382
 product WCH2 CH382_1		0x3253	CH382
+
+/* Beijing WangXun Technology products */
+product WANGXUN WX1860A2	0x0101	WX1860A2
+product WANGXUN WX1860AL1	0x010b	WX1860AL1
 
 /* Western Digital products */
 product WD WD33C193A		0x0193	WD33C193A

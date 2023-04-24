@@ -1,4 +1,4 @@
-/*	$OpenBSD: mrt.c,v 1.111 2022/12/28 21:30:16 jmc Exp $ */
+/*	$OpenBSD: mrt.c,v 1.114 2023/04/19 09:03:00 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Claudio Jeker <claudio@openbsd.org>
@@ -387,7 +387,7 @@ mrt_dump_entry_mp(struct mrt *mrt, struct prefix *p, uint16_t snum,
 {
 	struct ibuf	*buf, *hbuf = NULL, *h2buf = NULL;
 	struct nexthop	*n;
-	struct bgpd_addr addr, nexthop, *nh;
+	struct bgpd_addr nexthop, *nh;
 	uint16_t	 len;
 	uint8_t		 aid;
 
@@ -445,17 +445,15 @@ mrt_dump_entry_mp(struct mrt *mrt, struct prefix *p, uint16_t snum,
 	/* originated timestamp */
 	DUMP_LONG(h2buf, time(NULL) - (getmonotime() - p->lastchange));
 
-	pt_getaddr(p->pt, &addr);
-
 	n = prefix_nexthop(p);
 	if (n == NULL) {
 		memset(&nexthop, 0, sizeof(struct bgpd_addr));
-		nexthop.aid = addr.aid;
+		nexthop.aid = p->pt->aid;
 		nh = &nexthop;
 	} else
 		nh = &n->exit_nexthop;
 
-	switch (addr.aid) {
+	switch (p->pt->aid) {
 	case AID_INET:
 		DUMP_SHORT(h2buf, AFI_IPv4);	/* afi */
 		DUMP_BYTE(h2buf, SAFI_UNICAST);	/* safi */
@@ -490,13 +488,22 @@ mrt_dump_entry_mp(struct mrt *mrt, struct prefix *p, uint16_t snum,
 			goto fail;
 		}
 		break;
+	case AID_FLOWSPECv4:
+	case AID_FLOWSPECv6:
+		if (p->pt->aid == AID_FLOWSPECv4)
+			DUMP_SHORT(h2buf, AFI_IPv4);	/* afi */
+		else
+			DUMP_SHORT(h2buf, AFI_IPv6);	/* afi */
+		DUMP_BYTE(h2buf, SAFI_FLOWSPEC);	/* safi */
+		DUMP_BYTE(h2buf, 0);			/* nhlen */
+		break;
 	default:
 		log_warnx("king bula found new AF in %s", __func__);
 		goto fail;
 	}
 
-	if (prefix_writebuf(h2buf, &addr, p->pt->prefixlen) == -1) {
-		log_warnx("%s: prefix_writebuf error", __func__);
+	if (pt_writebuf(h2buf, p->pt) == -1) {
+		log_warnx("%s: pt_writebuf error", __func__);
 		goto fail;
 	}
 
@@ -688,19 +695,13 @@ fail:
 int
 mrt_dump_entry_v2(struct mrt *mrt, struct rib_entry *re, uint32_t snum)
 {
-	char		 pbuf[260];
-	struct ibuf	*hbuf = NULL, *nbuf = NULL, *apbuf = NULL;
-	struct bgpd_addr addr;
+	struct ibuf	*hbuf = NULL, *nbuf = NULL, *apbuf = NULL, *pbuf;
 	size_t		 hlen, len;
 	uint16_t	 subtype, apsubtype, nump, apnump, afi;
 	uint8_t		 safi;
-	int		 plen;
 
-	pt_getaddr(re->prefix, &addr);
-	plen = prefix_write(pbuf, sizeof(pbuf), &addr, re->prefix->prefixlen,
-	    0);
-	if (plen == -1) {
-		log_warnx("%s: prefix_write error", __func__);
+	if ((pbuf = ibuf_dynamic(0, UINT_MAX)) == NULL) {
+		log_warn("%s: ibuf_dynamic", __func__);
 		return -1;
 	}
 
@@ -724,15 +725,18 @@ mrt_dump_entry_v2(struct mrt *mrt, struct rib_entry *re, uint32_t snum)
 		apsubtype = MRT_DUMP_V2_RIB_GENERIC_ADDPATH;
 		aid2afi(re->prefix->aid, &afi, &safi);
 
-		/* prepend 3-bytes AFI/SAFI */
-		memmove(pbuf + 3, pbuf, plen);
-		plen += 3;
-		afi = ntohs(afi);
-		memcpy(pbuf, &afi, sizeof(afi));
-		pbuf[2] = safi;
+		/* first add 3-bytes AFI/SAFI */
+		DUMP_SHORT(pbuf, afi);
+		DUMP_BYTE(pbuf, safi);
 		break;
 	}
-	hlen = sizeof(snum) + sizeof(nump) + plen;
+
+	if (pt_writebuf(pbuf, re->prefix) == -1) {
+		log_warnx("%s: pt_writebuf error", __func__);
+		goto fail;
+	}
+
+	hlen = sizeof(snum) + sizeof(nump) + ibuf_size(pbuf);
 
 	if (mrt_dump_entry_v2_rib(re, &nbuf, &apbuf, &nump, &apnump))
 		goto fail;
@@ -744,7 +748,7 @@ mrt_dump_entry_v2(struct mrt *mrt, struct rib_entry *re, uint32_t snum)
 			goto fail;
 
 		DUMP_LONG(hbuf, snum);
-		if (ibuf_add(hbuf, pbuf, plen) == -1) {
+		if (ibuf_add(hbuf, pbuf->buf, ibuf_size(pbuf)) == -1) {
 			log_warn("%s: ibuf_add error", __func__);
 			goto fail;
 		}
@@ -763,7 +767,7 @@ mrt_dump_entry_v2(struct mrt *mrt, struct rib_entry *re, uint32_t snum)
 			goto fail;
 
 		DUMP_LONG(hbuf, snum);
-		if (ibuf_add(hbuf, pbuf, plen) == -1) {
+		if (ibuf_add(hbuf, pbuf->buf, ibuf_size(pbuf)) == -1) {
 			log_warn("%s: ibuf_add error", __func__);
 			goto fail;
 		}
@@ -775,11 +779,13 @@ mrt_dump_entry_v2(struct mrt *mrt, struct rib_entry *re, uint32_t snum)
 		apbuf = NULL;
 	}
 
+	ibuf_free(pbuf);
 	return (0);
 fail:
 	ibuf_free(apbuf);
 	ibuf_free(nbuf);
 	ibuf_free(hbuf);
+	ibuf_free(pbuf);
 	return (-1);
 }
 

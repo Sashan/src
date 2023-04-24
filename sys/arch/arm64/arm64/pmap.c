@@ -1,4 +1,4 @@
-/* $OpenBSD: pmap.c,v 1.92 2023/01/11 11:09:17 kettenis Exp $ */
+/* $OpenBSD: pmap.c,v 1.96 2023/04/16 11:14:26 kettenis Exp $ */
 /*
  * Copyright (c) 2008-2009,2014-2016 Dale Rahn <drahn@dalerahn.com>
  *
@@ -1220,10 +1220,12 @@ pmap_bootstrap(long kvo, paddr_t lpt1, long kernelstart, long kernelend,
 	vp1 = (struct pmapvp1 *)pt1pa;
 	pmap_kernel()->pm_vp.l1 = (struct pmapvp1 *)va;
 	pmap_kernel()->pm_privileged = 1;
+	pmap_kernel()->pm_guarded = ATTR_GP;
 	pmap_kernel()->pm_asid = 0;
 
 	pmap_tramp.pm_vp.l1 = (struct pmapvp1 *)va + 1;
 	pmap_tramp.pm_privileged = 1;
+	pmap_tramp.pm_guarded = ATTR_GP;
 	pmap_tramp.pm_asid = 0;
 
 	/* Mark ASID 0 as in-use. */
@@ -1688,6 +1690,10 @@ pmap_pte_update(struct pte_desc *pted, uint64_t *pl3)
 	else
 		access_bits = ap_bits_user[pted->pted_pte & PROT_MASK];
 
+#ifndef SMALL_KERNEL
+	access_bits |= pm->pm_guarded;
+#endif
+
 	pte = (pted->pted_pte & PTE_RPGN) | attr | access_bits | L3_P;
 	*pl3 = access_bits ? pte : 0;
 }
@@ -1921,13 +1927,6 @@ pmap_clear_reference(struct vm_page *pg)
 	mtx_leave(&pg->mdpage.pv_mtx);
 
 	return 0;
-}
-
-void
-pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vaddr_t dst_addr,
-	vsize_t len, vaddr_t src_addr)
-{
-	/* NOOP */
 }
 
 void

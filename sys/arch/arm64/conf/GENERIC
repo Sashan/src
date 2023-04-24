@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.262 2023/03/19 11:18:11 kettenis Exp $
+# $OpenBSD: GENERIC,v 1.266 2023/04/20 19:28:30 jcs Exp $
 #
 # GENERIC machine description file
 #
@@ -119,6 +119,8 @@ vioblk*		at virtio?
 viomb*		at virtio?
 viornd*		at virtio?
 vioscsi*	at virtio?
+viogpu*		at virtio?
+wsdisplay*	at viogpu?
 
 option	WSDISPLAY_COMPAT_USL		# VT handling
 option	WSDISPLAY_COMPAT_RAWKBD		# provide raw scancodes; needed for X11
@@ -289,10 +291,12 @@ sfp*		at fdt?
 # Rockchip SoCs
 rkclock*	at fdt? early 1
 rkgrf*		at fdt? early 1
+rkiovd*		at fdt? early 1
 rkpinctrl*	at fdt? early 1
 rkcomphy*	at fdt? early 1
 rkpciephy*	at fdt? early 1
 rktcphy*	at fdt? early 1
+rkusbphy*	at fdt? early 1
 rkanxdp*	at fdt?
 rkdrm*		at fdt?
 drm*		at rkdrm?
@@ -312,6 +316,8 @@ rkvop*		at fdt?
 rkdwusb*	at fdt?
 dwmmc*		at fdt?
 sdmmc*		at dwmmc?
+dwmshc*		at fdt?
+sdmmc*		at dwmshc?
 
 # Qualcomm SoCs
 qcdwusb*	at fdt?

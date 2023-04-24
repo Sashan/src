@@ -1,4 +1,4 @@
-#	$OpenBSD: GENERIC,v 1.514 2022/11/11 15:27:39 matthieu Exp $
+#	$OpenBSD: GENERIC,v 1.517 2023/04/23 00:50:29 dlg Exp $
 #
 # For further information on compiling OpenBSD kernels, see the config(8)
 # man page.
@@ -159,6 +159,8 @@ iic*	at amdpm?
 dwiic*	at acpi?		# DesignWare Synopsys i2c controller
 dwiic*	at pci?
 iic*	at dwiic?
+iosf*	at acpi?		# Intel OnChip System Fabric
+iosf*	at pci?
 
 itherm*	at pci?			# Intel 3400 Thermal Sensor
 adc*	at iic?			# Analog Devices AD7416/AD7417/7418
@@ -556,6 +558,7 @@ mcx*	at pci?				# Mellanox ConnectX-4
 iavf*	at pci?				# Intel Ethernet Adaptive VF
 aq*	at pci?				# Aquantia aQtion Ethernet
 igc*	at pci?				# Intel I225 Ethernet
+ngbe*	at pci?				# WangXun WX1860 Ethernet
 
 # Wireless network cards
 acx*	at pci?				# TI ACX100/ACX111 (802.11b/g)
@@ -705,3 +708,6 @@ viornd*		at virtio?	# Virtio entropy device
 vioscsi*	at virtio?	# Virtio SCSI device
 #viocon*	at virtio?	# Virtio console device
 vmmci*		at virtio?	# VMM control interface
+#viogpu*	at virtio?	# VirtIO GPU device
+#wsdisplay0	at viogpu? console 1
+#wsdisplay*	at viogpu? mux -1

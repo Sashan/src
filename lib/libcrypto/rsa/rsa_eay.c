@@ -1,4 +1,4 @@
-/* $OpenBSD: rsa_eay.c,v 1.56 2022/12/26 07:18:52 jmc Exp $ */
+/* $OpenBSD: rsa_eay.c,v 1.59 2023/04/15 18:48:52 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -226,10 +226,11 @@ RSA_eay_public_encrypt(int flen, const unsigned char *from, unsigned char *to,
 		goto err;
 	}
 
-	if (rsa->flags & RSA_FLAG_CACHE_PUBLIC)
+	if (rsa->flags & RSA_FLAG_CACHE_PUBLIC) {
 		if (!BN_MONT_CTX_set_locked(&rsa->_method_mod_n,
 		    CRYPTO_LOCK_RSA, rsa->n, ctx))
 			goto err;
+	}
 
 	if (!rsa->meth->bn_mod_exp(ret, f, rsa->e, rsa->n, ctx,
 	    rsa->_method_mod_n))
@@ -381,14 +382,11 @@ RSA_eay_private_encrypt(int flen, const unsigned char *from, unsigned char *to,
 	case RSA_PKCS1_PADDING:
 		i = RSA_padding_add_PKCS1_type_1(buf, num, from, flen);
 		break;
-	case RSA_X931_PADDING:
-		i = RSA_padding_add_X931(buf, num, from, flen);
-		break;
 	case RSA_NO_PADDING:
 		i = RSA_padding_add_none(buf, num, from, flen);
 		break;
 	default:
-		RSAerror(RSA_R_UNKNOWN_PADDING_TYPE);
+		RSAerror(RSA_R_ILLEGAL_OR_UNSUPPORTED_PADDING_MODE);
 		goto err;
 	}
 	if (i <= 0)
@@ -401,6 +399,12 @@ RSA_eay_private_encrypt(int flen, const unsigned char *from, unsigned char *to,
 		/* usually the padding functions would catch this */
 		RSAerror(RSA_R_DATA_TOO_LARGE_FOR_MODULUS);
 		goto err;
+	}
+
+	if (rsa->flags & RSA_FLAG_CACHE_PUBLIC) {
+		if (!BN_MONT_CTX_set_locked(&rsa->_method_mod_n,
+		    CRYPTO_LOCK_RSA, rsa->n, ctx))
+			goto err;
 	}
 
 	if (!(rsa->flags & RSA_FLAG_NO_BLINDING)) {
@@ -431,11 +435,6 @@ RSA_eay_private_encrypt(int flen, const unsigned char *from, unsigned char *to,
 		BN_init(&d);
 		BN_with_flags(&d, rsa->d, BN_FLG_CONSTTIME);
 
-		if (rsa->flags & RSA_FLAG_CACHE_PUBLIC)
-			if (!BN_MONT_CTX_set_locked(&rsa->_method_mod_n,
-			    CRYPTO_LOCK_RSA, rsa->n, ctx))
-				goto err;
-
 		if (!rsa->meth->bn_mod_exp(ret, f, &d, rsa->n, ctx,
 		    rsa->_method_mod_n)) {
 			goto err;
@@ -447,14 +446,11 @@ RSA_eay_private_encrypt(int flen, const unsigned char *from, unsigned char *to,
 			goto err;
 
 	if (padding == RSA_X931_PADDING) {
-		if (!BN_sub(f, rsa->n, ret))
-			goto err;
-		if (BN_cmp(ret, f) > 0)
-			res = f;
-		else
-			res = ret;
-	} else
-		res = ret;
+		RSAerror(RSA_R_ILLEGAL_OR_UNSUPPORTED_PADDING_MODE);
+		goto err;
+	}
+
+	res = ret;
 
 	/* put in leading 0 bytes if the number is less than the
 	 * length of the modulus */
@@ -521,6 +517,12 @@ RSA_eay_private_decrypt(int flen, const unsigned char *from, unsigned char *to,
 		goto err;
 	}
 
+	if (rsa->flags & RSA_FLAG_CACHE_PUBLIC) {
+		if (!BN_MONT_CTX_set_locked(&rsa->_method_mod_n,
+		    CRYPTO_LOCK_RSA, rsa->n, ctx))
+			goto err;
+	}
+
 	if (!(rsa->flags & RSA_FLAG_NO_BLINDING)) {
 		blinding = rsa_get_blinding(rsa, &local_blinding, ctx);
 		if (blinding == NULL) {
@@ -549,11 +551,6 @@ RSA_eay_private_decrypt(int flen, const unsigned char *from, unsigned char *to,
 
 		BN_init(&d);
 		BN_with_flags(&d, rsa->d, BN_FLG_CONSTTIME);
-
-		if (rsa->flags & RSA_FLAG_CACHE_PUBLIC)
-			if (!BN_MONT_CTX_set_locked(&rsa->_method_mod_n,
-			    CRYPTO_LOCK_RSA, rsa->n, ctx))
-				goto err;
 
 		if (!rsa->meth->bn_mod_exp(ret, f, &d, rsa->n, ctx,
 		    rsa->_method_mod_n)) {
@@ -654,18 +651,20 @@ RSA_eay_public_decrypt(int flen, const unsigned char *from, unsigned char *to,
 		goto err;
 	}
 
-	if (rsa->flags & RSA_FLAG_CACHE_PUBLIC)
+	if (rsa->flags & RSA_FLAG_CACHE_PUBLIC) {
 		if (!BN_MONT_CTX_set_locked(&rsa->_method_mod_n,
 		    CRYPTO_LOCK_RSA, rsa->n, ctx))
 			goto err;
+	}
 
 	if (!rsa->meth->bn_mod_exp(ret, f, rsa->e, rsa->n, ctx,
 	    rsa->_method_mod_n))
 		goto err;
 
-	if (padding == RSA_X931_PADDING && (ret->d[0] & 0xf) != 12)
-		if (!BN_sub(ret, rsa->n, ret))
-			goto err;
+	if (padding == RSA_X931_PADDING) {
+		RSAerror(RSA_R_ILLEGAL_OR_UNSUPPORTED_PADDING_MODE);
+		goto err;
+	}
 
 	p = buf;
 	i = BN_bn2bin(ret, p);
@@ -673,9 +672,6 @@ RSA_eay_public_decrypt(int flen, const unsigned char *from, unsigned char *to,
 	switch (padding) {
 	case RSA_PKCS1_PADDING:
 		r = RSA_padding_check_PKCS1_type_1(to, num, buf, i, num);
-		break;
-	case RSA_X931_PADDING:
-		r = RSA_padding_check_X931(to, num, buf, i, num);
 		break;
 	case RSA_NO_PADDING:
 		r = RSA_padding_check_none(to, num, buf, i, num);
@@ -734,10 +730,11 @@ RSA_eay_mod_exp(BIGNUM *r0, const BIGNUM *I, RSA *rsa, BN_CTX *ctx)
 		}
 	}
 
-	if (rsa->flags & RSA_FLAG_CACHE_PUBLIC)
+	if (rsa->flags & RSA_FLAG_CACHE_PUBLIC) {
 		if (!BN_MONT_CTX_set_locked(&rsa->_method_mod_n,
 		    CRYPTO_LOCK_RSA, rsa->n, ctx))
 			goto err;
+	}
 
 	/* compute I mod q */
 	BN_init(&c);

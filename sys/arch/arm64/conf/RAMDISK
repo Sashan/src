@@ -1,4 +1,4 @@
-# $OpenBSD: RAMDISK,v 1.193 2023/03/19 11:18:11 kettenis Exp $
+# $OpenBSD: RAMDISK,v 1.198 2023/04/20 19:28:30 jcs Exp $
 
 machine		arm64
 maxusers	4
@@ -49,6 +49,7 @@ ehci*		at acpi?
 ohci*		at acpi?
 pluart*		at acpi?
 sdhc*		at acpi?
+ufshci*		at acpi?
 xhci*		at acpi?
 simplebus*	at fdt?
 
@@ -102,6 +103,8 @@ vioblk*		at virtio?
 viomb*		at virtio?
 viornd*		at virtio?
 vioscsi*	at virtio?
+viogpu*		at virtio?
+wsdisplay*	at viogpu?
 
 simplefb*	at fdt?
 wsdisplay*	at simplefb?
@@ -220,10 +223,12 @@ sfp*		at fdt?
 # Rockchip SoCs
 rkclock*	at fdt? early 1
 rkgrf*		at fdt? early 1
+rkiovd*		at fdt? early 1
 rkpinctrl*	at fdt? early 1
 rkpciephy*	at fdt? early 1
 rkcomphy*	at fdt? early 1
 rktcphy*	at fdt? early 1
+rkusbphy*	at fdt? early 1
 rkemmcphy*	at fdt?
 rkgpio*		at fdt?
 rkiic*		at fdt?
@@ -235,6 +240,8 @@ rkrng*		at fdt?
 rkdwusb*	at fdt?
 dwmmc*		at fdt?
 sdmmc*		at dwmmc?
+dwmshc*		at fdt?
+sdmmc*		at dwmshc?
 
 # Qualcomm SoCs
 qcdwusb*	at fdt?

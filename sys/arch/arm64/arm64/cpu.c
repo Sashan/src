@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.86 2023/02/20 00:01:16 patrick Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.88 2023/04/13 02:19:04 jsg Exp $	*/
 
 /*
  * Copyright (c) 2016 Dale Rahn <drahn@dalerahn.com>
@@ -37,7 +37,6 @@
 #include <dev/ofw/fdt.h>
 
 #include <machine/cpufunc.h>
-#include <machine/fdt.h>
 
 #include "psci.h"
 #if NPSCI > 0
@@ -731,6 +730,23 @@ cpu_identify(struct cpu_info *ci)
 		printf("%sDIT", sep);
 		sep = ",";
 	}
+
+	/*
+	 * ID_AA64PFR0
+	 */
+	id = READ_SPECIALREG(id_aa64pfr1_el1);
+
+	if (ID_AA64PFR1_BT(id) >= ID_AA64PFR1_BT_IMPL) {
+		printf("%sBT", sep);
+		sep = ",";
+	}
+
+	if (ID_AA64PFR1_SBSS(id) >= ID_AA64PFR1_SBSS_PSTATE) {
+		printf("%sSBSS", sep);
+		sep = ",";
+	}
+	if (ID_AA64PFR1_SBSS(id) >= ID_AA64PFR1_SBSS_PSTATE_MSR)
+		printf("+MSR");
 
 #ifdef CPU_DEBUG
 	id = READ_SPECIALREG(id_aa64afr0_el1);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_umb.c,v 1.49 2022/01/11 10:34:13 claudio Exp $ */
+/*	$OpenBSD: if_umb.c,v 1.51 2023/04/18 22:01:23 mvs Exp $ */
 
 /*
  * Copyright (c) 2016 genua mbH
@@ -237,13 +237,6 @@ const struct umb_quirk umb_quirks[] = {
 	  2,
 	  UMATCH_VENDOR_PRODUCT
 	},
-
-	{ { USB_VENDOR_QUECTEL, USB_PRODUCT_QUECTEL_EC25 },
-	  0,
-	  1,
-	  UMATCH_VENDOR_PRODUCT
-	},
-
 
 	{ { USB_VENDOR_HUAWEI, USB_PRODUCT_HUAWEI_ME906S },
 	  UMBFLG_NDP_AT_END,
@@ -1836,6 +1829,7 @@ umb_add_inet_config(struct umb_softc *sc, struct in_addr ip, u_int prefixlen,
 	default_sin.sin_len = sizeof (default_sin);
 
 	memset(&info, 0, sizeof(info));
+	NET_LOCK();
 	info.rti_flags = RTF_GATEWAY /* maybe | RTF_STATIC */;
 	info.rti_ifa = ifa_ifwithaddr(sintosa(&ifra.ifra_addr),
 	    ifp->if_rdomain);
@@ -1843,7 +1837,6 @@ umb_add_inet_config(struct umb_softc *sc, struct in_addr ip, u_int prefixlen,
 	info.rti_info[RTAX_NETMASK] = sintosa(&default_sin);
 	info.rti_info[RTAX_GATEWAY] = sintosa(&ifra.ifra_dstaddr);
 
-	NET_LOCK();
 	rv = rtrequest(RTM_ADD, &info, 0, &rt, ifp->if_rdomain);
 	NET_UNLOCK();
 	if (rv) {
@@ -1917,6 +1910,7 @@ umb_add_inet6_config(struct umb_softc *sc, struct in6_addr *ip, u_int prefixlen,
 	default_sin6.sin6_len = sizeof (default_sin6);
 
 	memset(&info, 0, sizeof(info));
+	NET_LOCK();
 	info.rti_flags = RTF_GATEWAY /* maybe | RTF_STATIC */;
 	info.rti_ifa = ifa_ifwithaddr(sin6tosa(&ifra.ifra_addr),
 	    ifp->if_rdomain);
@@ -1924,7 +1918,6 @@ umb_add_inet6_config(struct umb_softc *sc, struct in6_addr *ip, u_int prefixlen,
 	info.rti_info[RTAX_NETMASK] = sin6tosa(&default_sin6);
 	info.rti_info[RTAX_GATEWAY] = sin6tosa(&ifra.ifra_dstaddr);
 
-	NET_LOCK();
 	rv = rtrequest(RTM_ADD, &info, 0, &rt, ifp->if_rdomain);
 	NET_UNLOCK();
 	if (rv) {

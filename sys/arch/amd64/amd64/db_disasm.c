@@ -1,4 +1,4 @@
-/*	$OpenBSD: db_disasm.c,v 1.22 2020/09/11 09:27:09 mpi Exp $	*/
+/*	$OpenBSD: db_disasm.c,v 1.24 2023/04/22 18:26:17 guenther Exp $	*/
 /*	$NetBSD: db_disasm.c,v 1.11 1996/05/03 19:41:58 christos Exp $	*/
 
 /* 
@@ -148,8 +148,8 @@ struct inst db_Grp9[] = {
 };
 
 char *	db_GrpA[] = {
-	"",		"cmpxchg8b",	"",		"",
-	"",		"",		"rdrand",	"rdseed"
+	"",		"cmpxchg8b",	"",		"xrstors",
+	"xsavec",	"xsaves",	"rdrand",	"rdseed"
 };
 
 char *	db_GrpB[] = {
@@ -1176,7 +1176,7 @@ db_disasm(vaddr_t loc, int altfmt)
 	if (segovr_grp > 1)
 		seg = "<bad segment override prefix combination> ";
 	if (repe > 0 && repne > 0)
-		db_printf("<bad repeat prefex combination> ");
+		db_printf("<bad repeat prefix combination> ");
 	else if (repe > 0)
 		db_printf("repe ");	/* XXX "rep" if not CMPSx or SCASx */
 	else if (repne > 0)

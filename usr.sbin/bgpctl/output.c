@@ -1,4 +1,4 @@
-/*	$OpenBSD: output.c,v 1.37 2023/03/09 13:13:14 claudio Exp $ */
+/*	$OpenBSD: output.c,v 1.40 2023/04/21 10:49:01 claudio Exp $ */
 
 /*
  * Copyright (c) 2003 Henning Brauer <henning@openbsd.org>
@@ -32,8 +32,6 @@
 
 #include "bgpctl.h"
 #include "parser.h"
-
-const size_t  pt_sizes[AID_MAX] = AID_PTSIZE;
 
 static void
 show_head(struct parse_result *res)
@@ -87,6 +85,8 @@ show_head(struct parse_result *res)
 		printf("%-5s %-4s %-32s %-32s\n", "flags", "prio",
 		    "destination", "gateway");
 		break;
+	case FLOWSPEC_SHOW:
+		printf("flags: S = Static\n");
 	default:
 		break;
 	}
@@ -495,6 +495,108 @@ show_fib_table(struct ktable *kt)
 }
 
 static void
+print_flowspec_list(struct flowspec *f, int type, int is_v6)
+{
+	const uint8_t *comp;
+	const char *fmt;
+	int complen, off = 0;
+
+	if (flowspec_get_component(f->data, f->len, type, is_v6,
+	    &comp, &complen) != 1)
+		return;
+
+	printf("%s ", flowspec_fmt_label(type));
+	fmt = flowspec_fmt_num_op(comp, complen, &off);
+	if (off == -1) {
+		printf("%s ", fmt);
+	} else {
+		printf("{ %s ", fmt);
+		do {
+			fmt = flowspec_fmt_num_op(comp, complen, &off);
+			printf("%s ", fmt);
+		} while (off != -1);
+		printf("} ");
+	}
+}
+
+static void
+print_flowspec_flags(struct flowspec *f, int type, int is_v6)
+{
+	const uint8_t *comp;
+	const char *fmt, *flags;
+	int complen, off = 0;
+
+	if (flowspec_get_component(f->data, f->len, type, is_v6,
+	    &comp, &complen) != 1)
+		return;
+
+	printf("%s ", flowspec_fmt_label(type));
+
+	switch (type) {
+	case FLOWSPEC_TYPE_TCP_FLAGS:
+		flags = FLOWSPEC_TCP_FLAG_STRING;
+		break;
+	case FLOWSPEC_TYPE_FRAG:
+		if (!is_v6)
+			flags = FLOWSPEC_FRAG_STRING4;
+		else
+			flags = FLOWSPEC_FRAG_STRING6;
+		break;
+	}
+
+	fmt = flowspec_fmt_bin_op(comp, complen, &off, flags);
+	if (off == -1) {
+		printf("%s ", fmt);
+	} else {
+		printf("{ %s ", fmt);
+		do {
+			fmt = flowspec_fmt_bin_op(comp, complen, &off, flags);
+			printf("%s ", fmt);
+		} while (off != -1);
+		printf("} ");
+	}
+}
+
+static void
+print_flowspec_addr(struct flowspec *f, int type, int is_v6)
+{
+	struct bgpd_addr addr;
+	uint8_t plen;
+
+	flowspec_get_addr(f->data, f->len, type, is_v6, &addr, &plen, NULL);
+	if (plen == 0)
+		printf("%s any ", flowspec_fmt_label(type));
+	else
+		printf("%s %s/%u ", flowspec_fmt_label(type),
+		    log_addr(&addr), plen);
+}
+
+static void
+show_flowspec(struct flowspec *f)
+{
+	int is_v6 = (f->aid == AID_FLOWSPECv6);
+
+	printf("%-5s ", fmt_fib_flags(f->flags));
+	print_flowspec_list(f, FLOWSPEC_TYPE_PROTO, is_v6);
+
+	print_flowspec_addr(f, FLOWSPEC_TYPE_SOURCE, is_v6);
+	print_flowspec_list(f, FLOWSPEC_TYPE_SRC_PORT, is_v6);
+
+	print_flowspec_addr(f, FLOWSPEC_TYPE_DEST, is_v6);
+	print_flowspec_list(f, FLOWSPEC_TYPE_DST_PORT, is_v6);
+
+	print_flowspec_list(f, FLOWSPEC_TYPE_DSCP, is_v6);
+	print_flowspec_list(f, FLOWSPEC_TYPE_PKT_LEN, is_v6);
+	print_flowspec_flags(f, FLOWSPEC_TYPE_TCP_FLAGS, is_v6);
+	print_flowspec_flags(f, FLOWSPEC_TYPE_FRAG, is_v6);
+	/* TODO: fixup the code handling to be like in the parser */
+	print_flowspec_list(f, FLOWSPEC_TYPE_ICMP_TYPE, is_v6);
+	print_flowspec_list(f, FLOWSPEC_TYPE_ICMP_CODE, is_v6);
+
+	printf("\n");
+}
+
+static void
 show_nexthop(struct ctl_show_nexthop *nh)
 {
 	char		*s;
@@ -572,11 +674,10 @@ show_communities(u_char *data, size_t len, struct parse_result *res)
 			break;
 		case COMMUNITY_TYPE_EXT:
 			ext = (uint64_t)c.data3 << 48;
-			switch (c.data3 >> 8) {
+			switch ((c.data3 >> 8) & EXT_COMMUNITY_VALUE) {
 			case EXT_COMMUNITY_TRANS_TWO_AS:
 			case EXT_COMMUNITY_TRANS_OPAQUE:
 			case EXT_COMMUNITY_TRANS_EVPN:
-			case EXT_COMMUNITY_NON_TRANS_OPAQUE:
 				ext |= ((uint64_t)c.data1 & 0xffff) << 32;
 				ext |= (uint64_t)c.data2;
 				break;
@@ -994,10 +1095,10 @@ show_rib_mem(struct rde_memstats *stats)
 	for (i = 0; i < AID_MAX; i++) {
 		if (stats->pt_cnt[i] == 0)
 			continue;
-		pts += stats->pt_cnt[i] * pt_sizes[i];
+		pts += stats->pt_size[i];
 		printf("%10lld %s network entries using %s of memory\n",
 		    stats->pt_cnt[i], aid_vals[i].name,
-		    fmt_mem(stats->pt_cnt[i] * pt_sizes[i]));
+		    fmt_mem(stats->pt_size[i]));
 	}
 	printf("%10lld rib entries using %s of memory\n",
 	    stats->rib_cnt, fmt_mem(stats->rib_cnt *
@@ -1119,6 +1220,7 @@ const struct output show_output = {
 	.timer = show_timer,
 	.fib = show_fib,
 	.fib_table = show_fib_table,
+	.flowspec = show_flowspec,
 	.nexthop = show_nexthop,
 	.interface = show_interface,
 	.communities = show_communities,

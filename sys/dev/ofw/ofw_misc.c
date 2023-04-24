@@ -1,4 +1,4 @@
-/*	$OpenBSD: ofw_misc.c,v 1.38 2022/12/17 11:54:32 kettenis Exp $	*/
+/*	$OpenBSD: ofw_misc.c,v 1.41 2023/04/03 01:40:32 dlg Exp $	*/
 /*
  * Copyright (c) 2017-2021 Mark Kettenis
  *
@@ -119,6 +119,49 @@ regmap_read_4(struct regmap *rm, bus_size_t offset)
 	return bus_space_read_4(rm->rm_tag, rm->rm_handle, offset);
 }
 
+/*
+ * Network interface support.
+ */
+
+LIST_HEAD(, if_device) if_devices =
+	LIST_HEAD_INITIALIZER(if_devices);
+
+void
+if_register(struct if_device *ifd)
+{
+	ifd->if_phandle = OF_getpropint(ifd->if_node, "phandle", 0);
+
+	LIST_INSERT_HEAD(&if_devices, ifd, if_list);
+}
+
+struct ifnet *
+if_bynode(int node)
+{
+	struct if_device *ifd;
+
+	LIST_FOREACH(ifd, &if_devices, if_list) {
+		if (ifd->if_node == node)
+			return (ifd->if_ifp);
+	}
+
+	return (NULL);
+}
+
+struct ifnet *
+if_byphandle(uint32_t phandle)
+{
+	struct if_device *ifd;
+
+	if (phandle == 0)
+		return (NULL);
+
+	LIST_FOREACH(ifd, &if_devices, if_list) {
+		if (ifd->if_phandle == phandle)
+			return (ifd->if_ifp);
+	}
+
+	return (NULL);
+}
 
 /*
  * PHY support.
@@ -207,7 +250,7 @@ phy_next_phy(uint32_t *cells)
 }
 
 int
-phy_enable_idx(int node, int idx)
+phy_enable_prop_idx(int node, char *prop, int idx)
 {
 	uint32_t *phys;
 	uint32_t *phy;
@@ -219,7 +262,7 @@ phy_enable_idx(int node, int idx)
 		return -1;
 
 	phys = malloc(len, M_TEMP, M_WAITOK);
-	OF_getpropintarray(node, "phys", phys, len);
+	OF_getpropintarray(node, prop, phys, len);
 
 	phy = phys;
 	while (phy && phy < phys + (len / sizeof(uint32_t))) {
@@ -233,6 +276,12 @@ phy_enable_idx(int node, int idx)
 
 	free(phys, M_TEMP, len);
 	return rv;
+}
+
+int
+phy_enable_idx(int node, int idx)
+{
+	return (phy_enable_prop_idx(node, "phys", idx));
 }
 
 int

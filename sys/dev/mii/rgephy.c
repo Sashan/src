@@ -1,4 +1,4 @@
-/*	$OpenBSD: rgephy.c,v 1.41 2022/04/06 18:59:29 naddy Exp $	*/
+/*	$OpenBSD: rgephy.c,v 1.43 2023/04/05 10:45:07 kettenis Exp $	*/
 /*
  * Copyright (c) 2003
  *	Bill Paul <wpaul@windriver.com>.  All rights reserved.
@@ -76,6 +76,7 @@ void	rgephy_status(struct mii_softc *);
 int	rgephy_mii_phy_auto(struct mii_softc *);
 void	rgephy_reset(struct mii_softc *);
 void	rgephy_loop(struct mii_softc *);
+void	rgephy_init_rtl8211f(struct mii_softc *);
 void	rgephy_load_dspcode(struct mii_softc *);
 
 const struct mii_phy_funcs rgephy_funcs = {
@@ -89,6 +90,8 @@ static const struct mii_phydesc rgephys[] = {
 	  MII_STR_xxREALTEK_RTL8169S },
 	{ MII_OUI_xxREALTEK,		MII_MODEL_xxREALTEK_RTL8251,
 	  MII_STR_xxREALTEK_RTL8251 },
+	{ MII_OUI_xxREALTEK,		MII_MODEL_xxREALTEK_RTL8211FVD,
+	  MII_STR_xxREALTEK_RTL8211FVD },
 
 	{ 0,			0,
 	  NULL },
@@ -134,6 +137,11 @@ rgephyattach(struct device *parent, struct device *self, void *aux)
 	if ((sc->mii_capabilities & BMSR_MEDIAMASK) ||
 	    (sc->mii_extcapabilities & EXTSR_MEDIAMASK))
 		mii_phy_add_media(sc);
+
+	if (sc->mii_model == MII_MODEL_xxREALTEK_RTL8211FVD ||
+	    (sc->mii_model == MII_MODEL_xxREALTEK_RTL8169S &&
+	     sc->mii_rev == RGEPHY_8211F))
+		rgephy_init_rtl8211f(sc);
 
 	PHY_RESET(sc);
 }
@@ -255,7 +263,9 @@ setit:
 				sc->mii_ticks = 0;
 				break;
 			}
-		} else if (sc->mii_rev == RGEPHY_8211F) {
+		} else if (sc->mii_model == MII_MODEL_xxREALTEK_RTL8211FVD ||
+		    (sc->mii_model == MII_MODEL_xxREALTEK_RTL8169S &&
+		     sc->mii_rev == RGEPHY_8211F)) {
 			reg = PHY_READ(sc, RGEPHY_F_SR);
 			if (reg & RGEPHY_F_SR_LINK) {
 				sc->mii_ticks = 0;
@@ -314,7 +324,9 @@ rgephy_status(struct mii_softc *sc)
 		bmsr = PHY_READ(sc, RL_GMEDIASTAT);
 		if (bmsr & RL_GMEDIASTAT_LINK)
 			mii->mii_media_status |= IFM_ACTIVE;
-	} else if (sc->mii_rev == RGEPHY_8211F) {
+	} else if (sc->mii_model == MII_MODEL_xxREALTEK_RTL8211FVD ||
+	    (sc->mii_model == MII_MODEL_xxREALTEK_RTL8169S &&
+	     sc->mii_rev == RGEPHY_8211F)) {
 		bmsr = PHY_READ(sc, RGEPHY_F_SR);
 		if (bmsr & RGEPHY_F_SR_LINK)
 			mii->mii_media_status |= IFM_ACTIVE;
@@ -353,7 +365,9 @@ rgephy_status(struct mii_softc *sc)
 			    IFM_FDX;
 		else
 			mii->mii_media_active |= IFM_HDX;
-	} else if (sc->mii_rev == RGEPHY_8211F) {
+	} else if (sc->mii_model == MII_MODEL_xxREALTEK_RTL8211FVD ||
+	    (sc->mii_model == MII_MODEL_xxREALTEK_RTL8169S &&
+	     sc->mii_rev == RGEPHY_8211F)) {
 		bmsr = PHY_READ(sc, RGEPHY_F_SR);
 		if (RGEPHY_F_SR_SPEED(bmsr) == RGEPHY_F_SR_SPEED_1000MBPS)
 			mii->mii_media_active |= IFM_1000_T;
@@ -418,7 +432,7 @@ rgephy_loop(struct mii_softc *sc)
 	u_int32_t bmsr;
 	int i;
 
-	if (sc->mii_model != MII_MODEL_xxREALTEK_RTL8251 &&
+	if (sc->mii_model == MII_MODEL_xxREALTEK_RTL8169S &&
 	    sc->mii_rev < 2) {
 		PHY_WRITE(sc, MII_BMCR, BMCR_PDOWN);
 		DELAY(1000);
@@ -429,6 +443,35 @@ rgephy_loop(struct mii_softc *sc)
 		if (!(bmsr & BMSR_LINK))
 			break;
 		DELAY(10);
+	}
+}
+
+void
+rgephy_init_rtl8211f(struct mii_softc *sc)
+{
+	if (sc->mii_flags & MIIF_SETDELAY) {
+		int page, val;
+
+		/* save page */
+		page = PHY_READ(sc, RGEPHY_PS);
+		PHY_WRITE(sc, RGEPHY_PS, RGEPHY_PS_PAGE_MII);
+
+		val = PHY_READ(sc, RGEPHY_MIICR1);
+		if (sc->mii_flags & MIIF_TXID)
+			val |= RGEPHY_MIICR1_TXDLY_EN;
+		else
+			val &= ~RGEPHY_MIICR1_TXDLY_EN;
+		PHY_WRITE(sc, RGEPHY_MIICR1, val);
+
+		val = PHY_READ(sc, RGEPHY_MIICR2);
+		if (sc->mii_flags & MIIF_RXID)
+			val |= RGEPHY_MIICR2_RXDLY_EN;
+		else
+			val &= ~RGEPHY_MIICR2_RXDLY_EN;
+		PHY_WRITE(sc, RGEPHY_MIICR2, val);
+
+		/* restore page */
+		PHY_WRITE(sc, RGEPHY_PS, page);
 	}
 }
 
@@ -449,7 +492,7 @@ rgephy_load_dspcode(struct mii_softc *sc)
 {
 	int val;
 
-	if (sc->mii_model == MII_MODEL_xxREALTEK_RTL8251 ||
+	if (sc->mii_model != MII_MODEL_xxREALTEK_RTL8169S ||
 	    sc->mii_rev > 1)
 		return;
 

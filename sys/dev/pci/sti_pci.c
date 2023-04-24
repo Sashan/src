@@ -1,4 +1,4 @@
-/*	$OpenBSD: sti_pci.c,v 1.11 2023/02/20 11:31:16 miod Exp $	*/
+/*	$OpenBSD: sti_pci.c,v 1.13 2023/04/13 15:07:43 miod Exp $	*/
 
 /*
  * Copyright (c) 2006, 2007, 2023 Miodrag Vallat.
@@ -316,7 +316,7 @@ sti_readbar(struct sti_softc *sc, struct pci_attach_args *pa, u_int region,
 {
 	bus_addr_t addr;
 	bus_size_t size;
-	u_int32_t cf;
+	pcireg_t type;
 	int rc;
 
 	if (bar == 0) {
@@ -332,15 +332,9 @@ sti_readbar(struct sti_softc *sc, struct pci_attach_args *pa, u_int region,
 		return EINVAL;
 	}
 
-	cf = pci_conf_read(pa->pa_pc, pa->pa_tag, bar);
-
-	if (PCI_MAPREG_TYPE(cf) == PCI_MAPREG_TYPE_IO) {
-		rc = pci_io_find(pa->pa_pc, pa->pa_tag, bar,
-		    &addr, &size);
-	} else {
-		rc = pci_mem_find(pa->pa_pc, pa->pa_tag, bar,
-		    &addr, &size, NULL);
-	}
+	type = pci_mapreg_type(pa->pa_pc, pa->pa_tag, bar);
+	rc = pci_mapreg_info(pa->pa_pc, pa->pa_tag, bar, type, &addr, &size,
+	    NULL);
 	if (rc != 0) {
 		printf("%s: invalid bar %02x for region %d\n",
 		    sc->sc_dev.dv_xname, bar, region);
@@ -497,7 +491,7 @@ sti_pcirom_walk(struct sti_softc *sc, bus_space_tag_t romt,
 			break;
 		}
 
-		bus_space_read_region_1(romt, romh, dsoffs,
+		bus_space_read_region_1(romt, romh, offs + dsoffs,
 		    (uint8_t *)&ds, sizeof ds);
 		/* convert sizes to host endianness */
 		ds.dslen = letoh16(ds.dslen);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.c,v 1.122 2023/03/13 16:59:22 claudio Exp $ */
+/*	$OpenBSD: parser.c,v 1.132 2023/04/21 10:49:01 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -34,8 +34,9 @@
 #include "parser.h"
 
 enum token_type {
-	NOTOKEN,
 	ENDTOKEN,
+	NOTOKEN,
+	ANYTOKEN,
 	KEYWORD,
 	ADDRESS,
 	PEERADDRESS,
@@ -49,8 +50,7 @@ enum token_type {
 	COMMUNICATION,
 	COMMUNITY,
 	EXTCOMMUNITY,
-	EXTCOM_SUBTYPE,
-	LARGE_COMMUNITY,
+	LRGCOMMUNITY,
 	LOCALPREF,
 	MED,
 	NEXTHOP,
@@ -63,6 +63,17 @@ enum token_type {
 	RTABLE,
 	FILENAME,
 	PATHID,
+	FLOW_PROTO,
+	FLOW_SRC,
+	FLOW_DST,
+	FLOW_SRCPORT,
+	FLOW_DSTPORT,
+	FLOW_ICMPTYPE,
+	FLOW_ICMPCODE,
+	FLOW_LENGTH,
+	FLOW_DSCP,
+	FLOW_FLAGS,
+	FLOW_FRAGS,
 };
 
 struct token {
@@ -71,6 +82,8 @@ struct token {
 	int			 value;
 	const struct token	*next;
 };
+
+static const struct token *prevtable;
 
 static const struct token t_main[];
 static const struct token t_show[];
@@ -93,56 +106,51 @@ static const struct token t_show_rib_as[];
 static const struct token t_show_mrt_as[];
 static const struct token t_show_prefix[];
 static const struct token t_show_ip[];
-static const struct token t_show_community[];
-static const struct token t_show_extcommunity[];
-static const struct token t_show_ext_subtype[];
-static const struct token t_show_largecommunity[];
 static const struct token t_network[];
+static const struct token t_flowspec[];
+static const struct token t_flowfamily[];
+static const struct token t_flowrule[];
+static const struct token t_flowsrc[];
+static const struct token t_flowdst[];
+static const struct token t_flowsrcport[];
+static const struct token t_flowdstport[];
+static const struct token t_flowicmp[];
+static const struct token t_bulk[];
 static const struct token t_network_show[];
 static const struct token t_prefix[];
 static const struct token t_set[];
-static const struct token t_community[];
-static const struct token t_extcommunity[];
-static const struct token t_ext_subtype[];
-static const struct token t_largecommunity[];
-static const struct token t_localpref[];
-static const struct token t_med[];
 static const struct token t_nexthop[];
 static const struct token t_pftable[];
-static const struct token t_prepnbr[];
-static const struct token t_prepself[];
-static const struct token t_weight[];
 static const struct token t_log[];
-static const struct token t_fib_table[];
-static const struct token t_show_fib_table[];
 static const struct token t_communication[];
-static const struct token t_show_rib_path[];
 
 static const struct token t_main[] = {
-	{ KEYWORD,	"reload",	RELOAD,		t_communication},
-	{ KEYWORD,	"show",		SHOW,		t_show},
 	{ KEYWORD,	"fib",		FIB,		t_fib},
+	{ KEYWORD,	"flowspec",	NONE,		t_flowspec},
+	{ KEYWORD,	"log",		NONE,		t_log},
 	{ KEYWORD,	"neighbor",	NEIGHBOR,	t_neighbor},
 	{ KEYWORD,	"network",	NONE,		t_network},
-	{ KEYWORD,	"log",		NONE,		t_log},
+	{ KEYWORD,	"reload",	RELOAD,		t_communication},
+	{ KEYWORD,	"show",		SHOW,		t_show},
 	{ ENDTOKEN,	"",		NONE,		NULL}
 };
 
 static const struct token t_show[] = {
 	{ NOTOKEN,	"",		NONE,		NULL},
 	{ KEYWORD,	"fib",		SHOW_FIB,	t_show_fib},
+	{ KEYWORD,	"flowspec",	FLOWSPEC_SHOW,	t_network_show},
 	{ KEYWORD,	"interfaces",	SHOW_INTERFACE,	NULL},
+	{ KEYWORD,	"ip",		NONE,		t_show_ip},
+	{ KEYWORD,	"metrics",	SHOW_METRICS,	NULL},
+	{ KEYWORD,	"mrt",		SHOW_MRT,	t_show_mrt},
 	{ KEYWORD,	"neighbor",	SHOW_NEIGHBOR,	t_show_neighbor},
 	{ KEYWORD,	"network",	NETWORK_SHOW,	t_network_show},
 	{ KEYWORD,	"nexthop",	SHOW_NEXTHOP,	NULL},
 	{ KEYWORD,	"rib",		SHOW_RIB,	t_show_rib},
-	{ KEYWORD,	"tables",	SHOW_FIB_TABLES, NULL},
-	{ KEYWORD,	"ip",		NONE,		t_show_ip},
-	{ KEYWORD,	"summary",	SHOW_SUMMARY,	t_show_summary},
-	{ KEYWORD,	"sets",		SHOW_SET,	NULL},
 	{ KEYWORD,	"rtr",		SHOW_RTR,	NULL},
-	{ KEYWORD,	"mrt",		SHOW_MRT,	t_show_mrt},
-	{ KEYWORD,	"metrics",	SHOW_METRICS,	NULL},
+	{ KEYWORD,	"sets",		SHOW_SET,	NULL},
+	{ KEYWORD,	"summary",	SHOW_SUMMARY,	t_show_summary},
+	{ KEYWORD,	"tables",	SHOW_FIB_TABLES, NULL},
 	{ ENDTOKEN,	"",		NONE,		NULL}
 };
 
@@ -154,11 +162,11 @@ static const struct token t_show_summary[] = {
 
 static const struct token t_show_fib[] = {
 	{ NOTOKEN,	"",		NONE,		NULL},
-	{ FLAG,		"connected",	F_CONNECTED,	t_show_fib},
-	{ FLAG,		"static",	F_STATIC,	t_show_fib},
 	{ FLAG,		"bgp",		F_BGPD,		t_show_fib},
+	{ FLAG,		"connected",	F_CONNECTED,	t_show_fib},
 	{ FLAG,		"nexthop",	F_NEXTHOP,	t_show_fib},
-	{ KEYWORD,	"table",	NONE,		t_show_fib_table},
+	{ FLAG,		"static",	F_STATIC,	t_show_fib},
+	{ RTABLE,	"table",	NONE,		t_show_fib},
 	{ FAMILY,	"",		NONE,		t_show_fib},
 	{ ADDRESS,	"",		NONE,		NULL},
 	{ ENDTOKEN,	"",		NONE,		NULL}
@@ -167,60 +175,60 @@ static const struct token t_show_fib[] = {
 static const struct token t_show_rib[] = {
 	{ NOTOKEN,	"",		NONE,		NULL},
 	{ ASTYPE,	"as",		AS_ALL,		t_show_rib_as},
-	{ ASTYPE,	"source-as",	AS_SOURCE,	t_show_rib_as},
-	{ ASTYPE,	"transit-as",	AS_TRANSIT,	t_show_rib_as},
-	{ ASTYPE,	"peer-as",	AS_PEER,	t_show_rib_as},
-	{ ASTYPE,	"empty-as",	AS_EMPTY,	t_show_rib},
-	{ KEYWORD,	"community",	NONE,		t_show_community},
-	{ KEYWORD,	"ext-community", NONE,		t_show_extcommunity},
-	{ KEYWORD,	"large-community", NONE,	t_show_largecommunity},
-	{ FLAG,		"best",		F_CTL_BEST,	t_show_rib},
-	{ FLAG,		"selected",	F_CTL_BEST,	t_show_rib},
-	{ FLAG,		"detail",	F_CTL_DETAIL,	t_show_rib},
-	{ FLAG,		"error",	F_CTL_INVALID,	t_show_rib},
-	{ FLAG,		"invalid",	F_CTL_INELIGIBLE, t_show_rib},
-	{ FLAG,		"leaked",	F_CTL_LEAKED,	t_show_rib},
-	{ FLAG,		"in",		F_CTL_ADJ_IN,	t_show_rib},
-	{ FLAG,		"out",		F_CTL_ADJ_OUT,	t_show_rib},
-	{ FLAG,		"ssv"	,	F_CTL_SSV,	t_show_rib},
-	{ KEYWORD,	"neighbor",	NONE,		t_show_rib_neigh},
 	{ KEYWORD,	"avs",		NONE,		t_show_avs},
-	{ KEYWORD,	"ovs",		NONE,		t_show_ovs},
-	{ KEYWORD,	"path-id",	NONE,		t_show_rib_path},
-	{ KEYWORD,	"table",	NONE,		t_show_rib_rib},
-	{ KEYWORD,	"summary",	SHOW_SUMMARY,	t_show_summary},
+	{ FLAG,		"best",		F_CTL_BEST,	t_show_rib},
+	{ COMMUNITY,	"community",	NONE,		t_show_rib},
+	{ FLAG,		"detail",	F_CTL_DETAIL,	t_show_rib},
+	{ ASTYPE,	"empty-as",	AS_EMPTY,	t_show_rib},
+	{ FLAG,		"error",	F_CTL_INVALID,	t_show_rib},
+	{ EXTCOMMUNITY,	"ext-community", NONE,		t_show_rib},
+	{ FLAG,		"in",		F_CTL_ADJ_IN,	t_show_rib},
+	{ FLAG,		"invalid",	F_CTL_INELIGIBLE, t_show_rib},
+	{ LRGCOMMUNITY,	"large-community", NONE,	t_show_rib},
+	{ FLAG,		"leaked",	F_CTL_LEAKED,	t_show_rib},
 	{ KEYWORD,	"memory",	SHOW_RIB_MEM,	NULL},
+	{ KEYWORD,	"neighbor",	NONE,		t_show_rib_neigh},
+	{ FLAG,		"out",		F_CTL_ADJ_OUT,	t_show_rib},
+	{ KEYWORD,	"ovs",		NONE,		t_show_ovs},
+	{ PATHID,	"path-id",	NONE,		t_show_rib},
+	{ ASTYPE,	"peer-as",	AS_PEER,	t_show_rib_as},
+	{ FLAG,		"selected",	F_CTL_BEST,	t_show_rib},
+	{ ASTYPE,	"source-as",	AS_SOURCE,	t_show_rib_as},
+	{ FLAG,		"ssv",		F_CTL_SSV,	t_show_rib},
+	{ KEYWORD,	"summary",	SHOW_SUMMARY,	t_show_summary},
+	{ KEYWORD,	"table",	NONE,		t_show_rib_rib},
+	{ ASTYPE,	"transit-as",	AS_TRANSIT,	t_show_rib_as},
 	{ FAMILY,	"",		NONE,		t_show_rib},
 	{ PREFIX,	"",		NONE,		t_show_prefix},
 	{ ENDTOKEN,	"",		NONE,		NULL}
 };
 
 static const struct token t_show_avs[] = {
-	{ FLAG,		"valid"	,	F_CTL_AVS_VALID,	t_show_rib},
 	{ FLAG,		"invalid",	F_CTL_AVS_INVALID,	t_show_rib},
 	{ FLAG,		"unknown",	F_CTL_AVS_UNKNOWN,	t_show_rib},
+	{ FLAG,		"valid"	,	F_CTL_AVS_VALID,	t_show_rib},
 	{ ENDTOKEN,	"",		NONE,		NULL}
 };
 
 static const struct token t_show_ovs[] = {
-	{ FLAG,		"valid"	,	F_CTL_OVS_VALID,	t_show_rib},
 	{ FLAG,		"invalid",	F_CTL_OVS_INVALID,	t_show_rib},
 	{ FLAG,		"not-found",	F_CTL_OVS_NOTFOUND,	t_show_rib},
+	{ FLAG,		"valid"	,	F_CTL_OVS_VALID,	t_show_rib},
 	{ ENDTOKEN,	"",		NONE,		NULL}
 };
 
 static const struct token t_show_mrt[] = {
 	{ NOTOKEN,	"",		NONE,		NULL},
 	{ ASTYPE,	"as",		AS_ALL,		t_show_mrt_as},
-	{ ASTYPE,	"source-as",	AS_SOURCE,	t_show_mrt_as},
-	{ ASTYPE,	"transit-as",	AS_TRANSIT,	t_show_mrt_as},
-	{ ASTYPE,	"peer-as",	AS_PEER,	t_show_mrt_as},
-	{ ASTYPE,	"empty-as",	AS_EMPTY,	t_show_mrt},
 	{ FLAG,		"detail",	F_CTL_DETAIL,	t_show_mrt},
-	{ FLAG,		"ssv",		F_CTL_SSV,	t_show_mrt},
-	{ KEYWORD,	"neighbor",	NONE,		t_show_mrt_neigh},
-	{ FLAG,		"peers",	F_CTL_NEIGHBORS,t_show_mrt},
+	{ ASTYPE,	"empty-as",	AS_EMPTY,	t_show_mrt},
 	{ KEYWORD,	"file",		NONE,		t_show_mrt_file},
+	{ KEYWORD,	"neighbor",	NONE,		t_show_mrt_neigh},
+	{ ASTYPE,	"peer-as",	AS_PEER,	t_show_mrt_as},
+	{ FLAG,		"peers",	F_CTL_NEIGHBORS,t_show_mrt},
+	{ ASTYPE,	"source-as",	AS_SOURCE,	t_show_mrt_as},
+	{ FLAG,		"ssv",		F_CTL_SSV,	t_show_mrt},
+	{ ASTYPE,	"transit-as",	AS_TRANSIT,	t_show_mrt_as},
 	{ FAMILY,	"",		NONE,		t_show_mrt},
 	{ PREFIX,	"",		NONE,		t_show_prefix},
 	{ ENDTOKEN,	"",		NONE,		NULL}
@@ -255,9 +263,9 @@ static const struct token t_show_rib_rib[] = {
 
 static const struct token t_show_neighbor_modifiers[] = {
 	{ NOTOKEN,	"",		NONE,			NULL},
-	{ KEYWORD,	"timers",	SHOW_NEIGHBOR_TIMERS,	NULL},
 	{ KEYWORD,	"messages",	SHOW_NEIGHBOR,		NULL},
 	{ KEYWORD,	"terse",	SHOW_NEIGHBOR_TERSE,	NULL},
+	{ KEYWORD,	"timers",	SHOW_NEIGHBOR_TIMERS,	NULL},
 	{ ENDTOKEN,	"",		NONE,			NULL}
 };
 
@@ -277,7 +285,7 @@ static const struct token t_show_neighbor[] = {
 static const struct token t_fib[] = {
 	{ KEYWORD,	"couple",	FIB_COUPLE,	NULL},
 	{ KEYWORD,	"decouple",	FIB_DECOUPLE,	NULL},
-	{ KEYWORD,	"table",	NONE,		t_fib_table},
+	{ RTABLE,	"table",	NONE,		t_fib},
 	{ ENDTOKEN,	"",		NONE,		NULL}
 };
 
@@ -300,11 +308,11 @@ static const struct token t_communication[] = {
 };
 
 static const struct token t_neighbor_modifiers[] = {
-	{ KEYWORD,	"up",		NEIGHBOR_UP,		NULL},
-	{ KEYWORD,	"down",		NEIGHBOR_DOWN,		t_communication},
-	{ KEYWORD,	"clear",	NEIGHBOR_CLEAR,		t_communication},
-	{ KEYWORD,	"refresh",	NEIGHBOR_RREFRESH,	NULL},
+	{ KEYWORD,	"clear",	NEIGHBOR_CLEAR,	t_communication},
 	{ KEYWORD,	"destroy",	NEIGHBOR_DESTROY,	NULL},
+	{ KEYWORD,	"down",		NEIGHBOR_DOWN,	t_communication},
+	{ KEYWORD,	"refresh",	NEIGHBOR_RREFRESH,	NULL},
+	{ KEYWORD,	"up",		NEIGHBOR_UP,		NULL},
 	{ ENDTOKEN,	"",		NONE,			NULL}
 };
 
@@ -319,11 +327,11 @@ static const struct token t_show_mrt_as[] = {
 };
 
 static const struct token t_show_prefix[] = {
-	{ NOTOKEN,	"",		NONE,		NULL},
-	{ FLAG,		"all",		F_LONGER,	NULL},
-	{ FLAG,		"longer-prefixes", F_LONGER,	NULL},
-	{ FLAG,		"or-longer", 	F_LONGER,	NULL},
-	{ FLAG,		"or-shorter", 	F_SHORTER,	NULL},
+	{ FLAG,		"all",		F_LONGER,	t_show_rib},
+	{ FLAG,		"longer-prefixes", F_LONGER,	t_show_rib},
+	{ FLAG,		"or-longer", 	F_LONGER,	t_show_rib},
+	{ FLAG,		"or-shorter", 	F_SHORTER,	t_show_rib},
+	{ ANYTOKEN,	"",		NONE,		t_show_rib},
 	{ ENDTOKEN,	"",		NONE,		NULL}
 };
 
@@ -332,47 +340,77 @@ static const struct token t_show_ip[] = {
 	{ ENDTOKEN,	"",		NONE,		NULL}
 };
 
-static const struct token t_show_community[] = {
-	{ COMMUNITY,	"",		NONE,		t_show_rib},
-	{ ENDTOKEN,	"",		NONE,		NULL}
-};
-
-static const struct token t_show_extcommunity[] = {
-	{ EXTCOM_SUBTYPE,	"bdc",		NONE,	t_show_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"defgw",	NONE,	t_show_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"esi-lab",	NONE,	t_show_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"esi-rt",	NONE,	t_show_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"l2vid",	NONE,	t_show_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"mac-mob",	NONE,	t_show_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"odi",		NONE,	t_show_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"ort",		NONE,	t_show_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"ori",		NONE,	t_show_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"ovs",		NONE,	t_show_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"rt",		NONE,	t_show_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"soo",		NONE,	t_show_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"srcas",	NONE,	t_show_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"vrfri",	NONE,	t_show_ext_subtype},
-	{ ENDTOKEN,	"",	NONE,	NULL}
-};
-
-static const struct token t_show_ext_subtype[] = {
-	{ EXTCOMMUNITY,	"",	NONE,	t_show_rib},
-	{ ENDTOKEN,	"",	NONE,	NULL}
-};
-
-static const struct token t_show_largecommunity[] = {
-	{ LARGE_COMMUNITY,	"",	NONE,		t_show_rib},
-	{ ENDTOKEN,	"",		NONE,		NULL}
-};
-
 static const struct token t_network[] = {
 	{ KEYWORD,	"add",		NETWORK_ADD,	t_prefix},
+	{ KEYWORD,	"bulk",		NONE,		t_bulk},
 	{ KEYWORD,	"delete",	NETWORK_REMOVE,	t_prefix},
 	{ KEYWORD,	"flush",	NETWORK_FLUSH,	NULL},
-	{ KEYWORD,	"show",		NETWORK_SHOW,	t_network_show},
 	{ KEYWORD,	"mrt",		NETWORK_MRT,	t_show_mrt},
-	{ KEYWORD,	"bulk",		NETWORK_BULK_ADD,	t_set},
+	{ KEYWORD,	"show",		NETWORK_SHOW,	t_network_show},
 	{ ENDTOKEN,	"",		NONE,		NULL}
+};
+
+static const struct token t_flowspec[] = {
+	{ KEYWORD,	"add",		FLOWSPEC_ADD,	t_flowfamily},
+	{ KEYWORD,	"delete",	FLOWSPEC_REMOVE,t_flowfamily},
+	{ KEYWORD,	"flush",	FLOWSPEC_FLUSH,	NULL},
+	{ KEYWORD,	"show",		FLOWSPEC_SHOW,	t_network_show},
+	{ ENDTOKEN,	"",		NONE,		NULL}
+};
+
+static const struct token t_flowfamily[] = {
+	{ FAMILY,	"",		NONE,		t_flowrule},
+	{ ENDTOKEN,	"",		NONE,		NULL}
+};
+
+static const struct token t_flowrule[] = {
+	{ NOTOKEN,	"",		NONE,		NULL},
+	{ FLOW_FLAGS,	"flags",	NONE,		t_flowrule},
+	{ FLOW_FRAGS,	"fragment",	NONE,		t_flowrule},
+	{ KEYWORD,	"from",		NONE,		t_flowsrc},
+	{ FLOW_ICMPTYPE,"icmp-type",	NONE,		t_flowicmp},
+	{ FLOW_LENGTH,	"length",	NONE,		t_flowrule},
+	{ FLOW_PROTO,	"proto",	NONE,		t_flowrule},
+	{ KEYWORD,	"set",		NONE,		t_set},
+	{ KEYWORD,	"to",		NONE,		t_flowdst},
+	{ FLOW_DSCP,	"dscp",		NONE,		t_flowrule},
+	{ ENDTOKEN,	"",		NONE,		NULL}
+};
+
+static const struct token t_flowsrc[] = {
+	{ KEYWORD,	"any",		NONE,		t_flowsrcport},
+	{ FLOW_SRC,	"",		NONE,		t_flowsrcport},
+	{ ENDTOKEN,	"",		NONE,		NULL}
+};
+
+static const struct token t_flowdst[] = {
+	{ KEYWORD,	"any",		NONE,		t_flowdstport},
+	{ FLOW_DST,	"",		NONE,		t_flowdstport},
+	{ ENDTOKEN,	"",		NONE,		NULL}
+};
+
+static const struct token t_flowsrcport[] = {
+	{ FLOW_SRCPORT,	"port",		NONE,		t_flowrule},
+	{ ANYTOKEN,	"",		NONE,		t_flowrule},
+	{ ENDTOKEN,	"",		NONE,		NULL}
+};
+
+static const struct token t_flowdstport[] = {
+	{ FLOW_DSTPORT,	"port",		NONE,		t_flowrule},
+	{ ANYTOKEN,	"",		NONE,		t_flowrule},
+	{ ENDTOKEN,	"",		NONE,		NULL}
+};
+
+static const struct token t_flowicmp[] = {
+	{ FLOW_ICMPCODE,"code",		NONE,		t_flowrule},
+	{ ANYTOKEN,	"",		NONE,		t_flowrule},
+	{ ENDTOKEN,	"",		NONE,		NULL}
+};
+
+static const struct token t_bulk[] = {
+	{ KEYWORD,	"add",		NETWORK_BULK_ADD,	t_set},
+	{ KEYWORD,	"delete",	NETWORK_BULK_REMOVE,	NULL},
+	{ ENDTOKEN,	"",		NONE,			NULL}
 };
 
 static const struct token t_prefix[] = {
@@ -381,9 +419,9 @@ static const struct token t_prefix[] = {
 };
 
 static const struct token t_network_show[] = {
-	{ NOTOKEN,	"",		NONE,			NULL},
-	{ FAMILY,	"",		NONE,			NULL},
-	{ ENDTOKEN,	"",		NONE,			NULL}
+	{ NOTOKEN,	"",		NONE,		NULL},
+	{ FAMILY,	"",		NONE,		NULL},
+	{ ENDTOKEN,	"",		NONE,		NULL}
 };
 
 static const struct token t_rd[] = {
@@ -393,63 +431,18 @@ static const struct token t_rd[] = {
 
 static const struct token t_set[] = {
 	{ NOTOKEN,	"",			NONE,	NULL},
-	{ KEYWORD,	"community",		NONE,	t_community},
-	{ KEYWORD,	"ext-community",	NONE,	t_extcommunity},
-	{ KEYWORD,	"large-community",	NONE,	t_largecommunity},
-	{ KEYWORD,	"localpref",		NONE,	t_localpref},
-	{ KEYWORD,	"med",			NONE,	t_med},
-	{ KEYWORD,	"metric",		NONE,	t_med},
+	{ COMMUNITY,	"community",		NONE,	t_set},
+	{ EXTCOMMUNITY,	"ext-community",	NONE,	t_set},
+	{ LRGCOMMUNITY,	"large-community",	NONE,	t_set},
+	{ LOCALPREF,	"localpref",		NONE,	t_set},
+	{ MED,		"med",			NONE,	t_set},
+	{ MED,		"metric",		NONE,	t_set},
 	{ KEYWORD,	"nexthop",		NONE,	t_nexthop},
 	{ KEYWORD,	"pftable",		NONE,	t_pftable},
-	{ KEYWORD,	"prepend-neighbor",	NONE,	t_prepnbr},
-	{ KEYWORD,	"prepend-self",		NONE,	t_prepself},
+	{ PREPNBR,	"prepend-neighbor",	NONE,	t_set},
+	{ PREPSELF,	"prepend-self",		NONE,	t_set},
 	{ KEYWORD,	"rd",			NONE,	t_rd},
-	{ KEYWORD,	"weight",		NONE,	t_weight},
-	{ KEYWORD,	"add",			NETWORK_BULK_ADD,	NULL},
-	{ KEYWORD,	"delete",		NETWORK_BULK_REMOVE,	NULL},
-	{ ENDTOKEN,	"",			NONE,	NULL}
-};
-
-static const struct token t_community[] = {
-	{ COMMUNITY,	"",			NONE,	t_set},
-	{ ENDTOKEN,	"",			NONE,	NULL}
-};
-
-static const struct token t_extcommunity[] = {
-	{ EXTCOM_SUBTYPE,	"bdc",		NONE,	t_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"defgw",	NONE,	t_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"esi-lab",	NONE,	t_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"esi-rt",	NONE,	t_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"l2vid",	NONE,	t_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"mac-mob",	NONE,	t_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"odi",		NONE,	t_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"ort",		NONE,	t_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"ori",		NONE,	t_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"ovs",		NONE,	t_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"rt",		NONE,	t_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"soo",		NONE,	t_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"srcas",	NONE,	t_ext_subtype},
-	{ EXTCOM_SUBTYPE,	"vrfri",	NONE,	t_ext_subtype},
-	{ ENDTOKEN,	"",	NONE,	NULL}
-};
-
-static const struct token t_ext_subtype[] = {
-	{ EXTCOMMUNITY,	"",	NONE,	t_set},
-	{ ENDTOKEN,	"",	NONE,	NULL}
-};
-
-static const struct token t_largecommunity[] = {
-	{ LARGE_COMMUNITY,	"",		NONE,	t_set},
-	{ ENDTOKEN,	"",			NONE,	NULL}
-};
-
-static const struct token t_localpref[] = {
-	{ LOCALPREF,	"",			NONE,	t_set},
-	{ ENDTOKEN,	"",			NONE,	NULL}
-};
-
-static const struct token t_med[] = {
-	{ MED,		"",			NONE,	t_set},
+	{ WEIGHT,	"weight",		NONE,	t_set},
 	{ ENDTOKEN,	"",			NONE,	NULL}
 };
 
@@ -463,78 +456,56 @@ static const struct token t_pftable[] = {
 	{ ENDTOKEN,	"",			NONE,	NULL}
 };
 
-static const struct token t_prepnbr[] = {
-	{ PREPNBR,	"",			NONE,	t_set},
-	{ ENDTOKEN,	"",			NONE,	NULL}
-};
-
-static const struct token t_prepself[] = {
-	{ PREPSELF,	"",			NONE,	t_set},
-	{ ENDTOKEN,	"",			NONE,	NULL}
-};
-
-static const struct token t_weight[] = {
-	{ WEIGHT,	"",			NONE,	t_set},
-	{ ENDTOKEN,	"",			NONE,	NULL}
-};
-
 static const struct token t_log[] = {
-	{ KEYWORD,	"verbose",	LOG_VERBOSE,	NULL},
 	{ KEYWORD,	"brief",	LOG_BRIEF,	NULL},
+	{ KEYWORD,	"verbose",	LOG_VERBOSE,	NULL},
 	{ ENDTOKEN,	"",		NONE,		NULL}
-};
-
-static const struct token t_fib_table[] = {
-	{ RTABLE,	"",			NONE,	t_fib},
-	{ ENDTOKEN,	"",			NONE,	NULL}
-};
-
-static const struct token t_show_fib_table[] = {
-	{ RTABLE,	"",			NONE,	t_show_fib},
-	{ ENDTOKEN,	"",			NONE,	NULL}
-};
-
-static const struct token t_show_rib_path[] = {
-	{ PATHID,	"",		NONE,	t_show_rib},
-	{ ENDTOKEN,	"",		NONE,	NULL}
 };
 
 static struct parse_result	res;
 
-const struct token	*match_token(int *argc, char **argv[],
-			    const struct token []);
+const struct token	*match_token(int, char *[], const struct token [],
+			    int *);
 void			 show_valid_args(const struct token []);
 
 int	parse_addr(const char *, struct bgpd_addr *);
 int	parse_asnum(const char *, size_t, uint32_t *);
 int	parse_number(const char *, struct parse_result *, enum token_type);
-void	parsecommunity(struct community *c, int type, char *s);
+void	parsecommunity(struct community *c, char *s);
+void	parselargecommunity(struct community *c, char *s);
 void	parseextcommunity(struct community *c, const char *t, char *s);
 int	parse_nexthop(const char *, struct parse_result *);
+int	parse_flow_numop(int, char *[], struct parse_result *, enum token_type);
 
 struct parse_result *
 parse(int argc, char *argv[])
 {
 	const struct token	*table = t_main;
 	const struct token	*match;
+	int			 used;
 
 	memset(&res, 0, sizeof(res));
 	res.rtableid = getrtable();
 	TAILQ_INIT(&res.set);
 
 	while (argc >= 0) {
-		if ((match = match_token(&argc, &argv, table)) == NULL) {
+		if ((match = match_token(argc, argv, table, &used)) == NULL) {
 			fprintf(stderr, "valid commands/args:\n");
 			show_valid_args(table);
 			return (NULL);
 		}
+		if (match->type == ANYTOKEN) {
+			if (prevtable == NULL)
+				prevtable = table;
+			table = match->next;
+			continue;
+		}
 
-		argc--;
-		argv++;
+		argc -= used;
+		argv += used;
 
 		if (match->type == NOTOKEN || match->next == NULL)
 			break;
-
 		table = match->next;
 	}
 
@@ -547,14 +518,15 @@ parse(int argc, char *argv[])
 }
 
 const struct token *
-match_token(int *argc, char **argv[], const struct token table[])
+match_token(int argc, char *argv[], const struct token table[], int *argsused)
 {
 	u_int			 i, match;
 	const struct token	*t = NULL;
 	struct filter_set	*fs;
-	const char		*word = *argv[0];
-	size_t			wordlen = 0;
+	const char		*word = argv[0];
+	size_t			 wordlen = 0;
 
+	*argsused = 1;
 	match = 0;
 	if (word != NULL)
 		wordlen = strlen(word);
@@ -562,6 +534,13 @@ match_token(int *argc, char **argv[], const struct token table[])
 		switch (table[i].type) {
 		case NOTOKEN:
 			if (word == NULL || wordlen == 0) {
+				match++;
+				t = &table[i];
+			}
+			break;
+		case ANYTOKEN:
+			/* match anything if nothing else matched before */
+			if (match == 0) {
 				match++;
 				t = &table[i];
 			}
@@ -621,6 +600,26 @@ match_token(int *argc, char **argv[], const struct token table[])
 				t = &table[i];
 			}
 			break;
+		case FLOW_SRC:
+			if (parse_prefix(word, wordlen, &res.flow.src,
+			    &res.flow.srclen)) {
+				match++;
+				t = &table[i];
+				if (res.aid != res.flow.src.aid)
+					errx(1, "wrong address family in "
+					    "flowspec rule");
+			}
+			break;
+		case FLOW_DST:
+			if (parse_prefix(word, wordlen, &res.flow.dst,
+			    &res.flow.dstlen)) {
+				match++;
+				t = &table[i];
+				if (res.aid != res.flow.dst.aid)
+					errx(1, "wrong address family in "
+					    "flowspec rule");
+			}
+			break;
 		case PREFIX:
 			if (parse_prefix(word, wordlen, &res.addr,
 			    &res.prefixlen)) {
@@ -677,17 +676,10 @@ match_token(int *argc, char **argv[], const struct token table[])
 			}
 			break;
 		case COMMUNITY:
-		case LARGE_COMMUNITY:
-			if (word != NULL && wordlen > 0) {
-				int type = COMMUNITY_TYPE_BASIC;
-				char *p = strdup(word);
-
-				if (p == NULL)
-					err(1, NULL);
-				if (table[i].type == LARGE_COMMUNITY)
-					type = COMMUNITY_TYPE_LARGE;
-				parsecommunity(&res.community, type, p);
-				free(p);
+			if (word != NULL && strncmp(word, table[i].keyword,
+			    wordlen) == 0 && argc > 1) {
+				parsecommunity(&res.community, argv[1]);
+				*argsused += 1;
 
 				if ((fs = calloc(1, sizeof(*fs))) == NULL)
 					err(1, NULL);
@@ -699,23 +691,28 @@ match_token(int *argc, char **argv[], const struct token table[])
 				t = &table[i];
 			}
 			break;
-		case EXTCOM_SUBTYPE:
+		case LRGCOMMUNITY:
 			if (word != NULL && strncmp(word, table[i].keyword,
-			    wordlen) == 0) {
-				res.ext_comm_subtype = table[i].keyword;
+			    wordlen) == 0 && argc > 1) {
+				parselargecommunity(&res.community, argv[1]);
+				*argsused += 1;
+
+				if ((fs = calloc(1, sizeof(*fs))) == NULL)
+					err(1, NULL);
+				fs->type = ACTION_SET_COMMUNITY;
+				fs->action.community = res.community;
+				TAILQ_INSERT_TAIL(&res.set, fs, entry);
+
 				match++;
 				t = &table[i];
 			}
 			break;
 		case EXTCOMMUNITY:
-			if (word != NULL && wordlen > 0) {
-				char *p = strdup(word);
-
-				if (p == NULL)
-					err(1, NULL);
+			if (word != NULL && strncmp(word, table[i].keyword,
+			    wordlen) == 0 && argc > 2) {
 				parseextcommunity(&res.community,
-				    res.ext_comm_subtype, p);
-				free(p);
+				    argv[1], argv[2]);
+				*argsused += 2;
 
 				if ((fs = calloc(1, sizeof(*fs))) == NULL)
 					err(1, NULL);
@@ -744,7 +741,7 @@ match_token(int *argc, char **argv[], const struct token table[])
 					rd |= ((uint64_t)ext.data1 & 0xffff)
 					    << 32;
 					rd |= (uint64_t)ext.data2;
-				break;
+					break;
 				case EXT_COMMUNITY_TRANS_IPV4:
 					rd = (1ULL << 48);
 					rd |= (uint64_t)ext.data1 << 16;
@@ -770,8 +767,10 @@ match_token(int *argc, char **argv[], const struct token table[])
 		case WEIGHT:
 		case RTABLE:
 		case PATHID:
-			if (word != NULL && wordlen > 0 &&
-			    parse_number(word, &res, table[i].type)) {
+			if (word != NULL && strncmp(word, table[i].keyword,
+			    wordlen) == 0 && argc > 1 &&
+			    parse_number(argv[1], &res, table[i].type)) {
+				*argsused += 1;
 				match++;
 				t = &table[i];
 			}
@@ -814,6 +813,29 @@ match_token(int *argc, char **argv[], const struct token table[])
 				t = &table[i];
 			}
 			break;
+		case FLOW_SRCPORT:
+		case FLOW_DSTPORT:
+		case FLOW_PROTO:
+		case FLOW_ICMPTYPE:
+		case FLOW_ICMPCODE:
+		case FLOW_LENGTH:
+		case FLOW_DSCP:
+			if (word != NULL && strncmp(word, table[i].keyword,
+			    wordlen) == 0 && argc > 1) {
+				*argsused += parse_flow_numop(argc, argv, &res,
+				    table[i].type);
+
+				match++;
+				t = &table[i];
+			}
+			break;
+		case FLOW_FLAGS:
+		case FLOW_FRAGS:
+			if (word != NULL && strncmp(word, table[i].keyword,
+			    wordlen) == 0) {
+				errx(1, "%s not yet implemented", word);
+			}
+			break;
 		case ENDTOKEN:
 			break;
 		}
@@ -837,15 +859,23 @@ show_valid_args(const struct token table[])
 {
 	int	i;
 
+	if (prevtable != NULL) {
+		const struct token *t = prevtable;
+		prevtable = NULL;
+		show_valid_args(t);
+		fprintf(stderr, "or any of\n");
+	}
+
 	for (i = 0; table[i].type != ENDTOKEN; i++) {
 		switch (table[i].type) {
 		case NOTOKEN:
 			fprintf(stderr, "  <cr>\n");
 			break;
+		case ANYTOKEN:
+			break;
 		case KEYWORD:
 		case FLAG:
 		case ASTYPE:
-		case EXTCOM_SUBTYPE:
 			fprintf(stderr, "  %s\n", table[i].keyword);
 			break;
 		case ADDRESS:
@@ -853,6 +883,8 @@ show_valid_args(const struct token table[])
 			fprintf(stderr, "  <address>\n");
 			break;
 		case PREFIX:
+		case FLOW_SRC:
+		case FLOW_DST:
 			fprintf(stderr, "  <address>[/<len>]\n");
 			break;
 		case ASNUM:
@@ -869,13 +901,16 @@ show_valid_args(const struct token table[])
 			fprintf(stderr, "  <reason>\n");
 			break;
 		case COMMUNITY:
-			fprintf(stderr, "  <community>\n");
+			fprintf(stderr, "  %s <community>\n",
+			    table[i].keyword);
 			break;
-		case LARGE_COMMUNITY:
-			fprintf(stderr, "  <large-community>\n");
+		case LRGCOMMUNITY:
+			fprintf(stderr, "  %s <large-community>\n",
+			    table[i].keyword);
 			break;
 		case EXTCOMMUNITY:
-			fprintf(stderr, "  <extended-community>\n");
+			fprintf(stderr, "  %s <extended-community>\n",
+			    table[i].keyword);
 			break;
 		case RD:
 			fprintf(stderr, "  <route-distinguisher>\n");
@@ -885,11 +920,9 @@ show_valid_args(const struct token table[])
 		case PREPNBR:
 		case PREPSELF:
 		case WEIGHT:
-		case PATHID:
-			fprintf(stderr, "  <number>\n");
-			break;
 		case RTABLE:
-			fprintf(stderr, "  <rtableid>\n");
+		case PATHID:
+			fprintf(stderr, "  %s <number>\n", table[i].keyword);
 			break;
 		case NEXTHOP:
 			fprintf(stderr, "  <address>\n");
@@ -903,6 +936,21 @@ show_valid_args(const struct token table[])
 			break;
 		case FILENAME:
 			fprintf(stderr, "  <filename>\n");
+			break;
+		case FLOW_SRCPORT:
+		case FLOW_DSTPORT:
+		case FLOW_PROTO:
+		case FLOW_ICMPTYPE:
+		case FLOW_ICMPCODE:
+		case FLOW_LENGTH:
+		case FLOW_DSCP:
+			fprintf(stderr, "  %s <numberspec>\n",
+			    table[i].keyword);
+			break;
+		case FLOW_FLAGS:
+		case FLOW_FRAGS:
+			fprintf(stderr, "  %s <flagspec>\n",
+			    table[i].keyword);
 			break;
 		case ENDTOKEN:
 			break;
@@ -919,10 +967,10 @@ parse_addr(const char *word, struct bgpd_addr *addr)
 	if (word == NULL)
 		return (0);
 
-	memset(addr, 0, sizeof(struct bgpd_addr));
 	memset(&ina, 0, sizeof(ina));
 
 	if (inet_net_pton(AF_INET, word, &ina, sizeof(ina)) != -1) {
+		memset(addr, 0, sizeof(*addr));
 		addr->aid = AID_INET;
 		addr->v4 = ina;
 		return (1);
@@ -945,6 +993,7 @@ int
 parse_prefix(const char *word, size_t wordlen, struct bgpd_addr *addr,
     uint8_t *prefixlen)
 {
+	struct bgpd_addr tmp;
 	char		*p, *ps;
 	const char	*errstr;
 	int		 mask = -1;
@@ -952,7 +1001,7 @@ parse_prefix(const char *word, size_t wordlen, struct bgpd_addr *addr,
 	if (word == NULL)
 		return (0);
 
-	memset(addr, 0, sizeof(struct bgpd_addr));
+	memset(&tmp, 0, sizeof(tmp));
 
 	if ((p = strrchr(word, '/')) != NULL) {
 		size_t plen = strlen(p);
@@ -964,17 +1013,17 @@ parse_prefix(const char *word, size_t wordlen, struct bgpd_addr *addr,
 			err(1, "parse_prefix: malloc");
 		strlcpy(ps, word, wordlen - plen + 1);
 
-		if (parse_addr(ps, addr) == 0) {
+		if (parse_addr(ps, &tmp) == 0) {
 			free(ps);
 			return (0);
 		}
 
 		free(ps);
 	} else
-		if (parse_addr(word, addr) == 0)
+		if (parse_addr(word, &tmp) == 0)
 			return (0);
 
-	switch (addr->aid) {
+	switch (tmp.aid) {
 	case AID_INET:
 		if (mask == -1)
 			mask = 32;
@@ -989,7 +1038,7 @@ parse_prefix(const char *word, size_t wordlen, struct bgpd_addr *addr,
 		return (0);
 	}
 
-	applymask(addr, addr, mask);
+	applymask(addr, &tmp, mask);
 	*prefixlen = mask;
 	return (1);
 }
@@ -1130,40 +1179,11 @@ setcommunity(struct community *c, uint32_t as, uint32_t data,
 	c->data3 = 0;
 }
 
-static void
-parselargecommunity(struct community *c, char *s)
-{
-	char *p, *q;
-	uint32_t dflag1, dflag2, dflag3;
-
-	if ((p = strchr(s, ':')) == NULL)
-		errx(1, "Bad community syntax");
-	*p++ = 0;
-
-	if ((q = strchr(p, ':')) == NULL)
-		errx(1, "Bad community syntax");
-	*q++ = 0;
-
-	getcommunity(s, 1, &c->data1, &dflag1);
-	getcommunity(p, 1, &c->data2, &dflag2);
-	getcommunity(q, 1, &c->data3, &dflag3);
-
-	c->flags = COMMUNITY_TYPE_LARGE;
-	c->flags |= dflag1 << 8;
-	c->flags |= dflag2 << 16;
-	c->flags |= dflag3 << 24;
-}
-
 void
-parsecommunity(struct community *c, int type, char *s)
+parsecommunity(struct community *c, char *s)
 {
 	char *p;
 	uint32_t as, data, asflag, dataflag;
-
-	if (type == COMMUNITY_TYPE_LARGE) {
-		parselargecommunity(c, s);
-		return;
-	}
 
 	/* Well-known communities */
 	if (strcasecmp(s, "GRACEFUL_SHUTDOWN") == 0) {
@@ -1199,6 +1219,30 @@ parsecommunity(struct community *c, int type, char *s)
 	getcommunity(s, 0, &as, &asflag);
 	getcommunity(p, 0, &data, &dataflag);
 	setcommunity(c, as, data, asflag, dataflag);
+}
+
+void
+parselargecommunity(struct community *c, char *s)
+{
+	char *p, *q;
+	uint32_t dflag1, dflag2, dflag3;
+
+	if ((p = strchr(s, ':')) == NULL)
+		errx(1, "Bad community syntax");
+	*p++ = 0;
+
+	if ((q = strchr(p, ':')) == NULL)
+		errx(1, "Bad community syntax");
+	*q++ = 0;
+
+	getcommunity(s, 1, &c->data1, &dflag1);
+	getcommunity(p, 1, &c->data2, &dflag2);
+	getcommunity(q, 1, &c->data3, &dflag3);
+
+	c->flags = COMMUNITY_TYPE_LARGE;
+	c->flags |= dflag1 << 8;
+	c->flags |= dflag2 << 16;
+	c->flags |= dflag3 << 24;
 }
 
 static int
@@ -1254,7 +1298,7 @@ parseextvalue(int type, char *s, uint32_t *v, uint32_t *flag)
 		type = EXT_COMMUNITY_TRANS_IPV4;
 	}
 
-	switch (type) {
+	switch (type & EXT_COMMUNITY_VALUE) {
 	case EXT_COMMUNITY_TRANS_TWO_AS:
 		uval = strtonum(s, 0, USHRT_MAX, &errstr);
 		if (errstr)
@@ -1311,6 +1355,9 @@ parseextcommunity(struct community *c, const char *t, char *s)
 	case EXT_COMMUNITY_TRANS_TWO_AS:
 	case EXT_COMMUNITY_TRANS_FOUR_AS:
 	case EXT_COMMUNITY_TRANS_IPV4:
+	case EXT_COMMUNITY_GEN_TWO_AS:
+	case EXT_COMMUNITY_GEN_FOUR_AS:
+	case EXT_COMMUNITY_GEN_IPV4:
 	case -1:
 		if (strcmp(s, "*") == 0) {
 			dflag1 = COMMUNITY_ANY;
@@ -1323,10 +1370,13 @@ parseextcommunity(struct community *c, const char *t, char *s)
 
 		switch (type) {
 		case EXT_COMMUNITY_TRANS_TWO_AS:
+		case EXT_COMMUNITY_GEN_TWO_AS:
 			getcommunity(p, 1, &uval2, &dflag2);
 			break;
 		case EXT_COMMUNITY_TRANS_IPV4:
 		case EXT_COMMUNITY_TRANS_FOUR_AS:
+		case EXT_COMMUNITY_GEN_IPV4:
+		case EXT_COMMUNITY_GEN_FOUR_AS:
 			getcommunity(p, 0, &uval2, &dflag2);
 			break;
 		default:
@@ -1415,4 +1465,178 @@ parse_nexthop(const char *word, struct parse_result *r)
 
 	TAILQ_INSERT_TAIL(&r->set, fs, entry);
 	return (1);
+}
+
+static int
+unary_op(const char *op)
+{
+	if (strcmp(op, "=") == 0)
+		return FLOWSPEC_OP_NUM_EQ;
+	if (strcmp(op, "!=") == 0)
+		return FLOWSPEC_OP_NUM_NOT;
+	if (strcmp(op, ">") == 0)
+		return FLOWSPEC_OP_NUM_GT;
+	if (strcmp(op, ">=") == 0)
+		return FLOWSPEC_OP_NUM_GE;
+	if (strcmp(op, "<") == 0)
+		return FLOWSPEC_OP_NUM_LT;
+	if (strcmp(op, "<=") == 0)
+		return FLOWSPEC_OP_NUM_LE;
+	return -1;
+}
+
+static enum comp_ops
+binary_op(const char *op)
+{
+	if (strcmp(op, "-") == 0)
+		return OP_RANGE;
+	if (strcmp(op, "><") == 0)
+		return OP_XRANGE;
+	return OP_NONE;
+}
+
+static void
+push_numop(struct parse_result *r, int type, uint8_t op, int and, long long val)
+{
+	uint8_t *comp;
+	void *data;
+	uint32_t u32;
+	uint16_t u16;
+	uint8_t u8, flag = 0;
+	int len, complen;
+
+	flag |= op;
+	if (and)
+		flag |= FLOWSPEC_OP_AND;
+
+	if (val < 0 || val > 0xffffffff) {
+		errx(1, "unsupported value for flowspec num_op");
+	} else if (val <= 255) {
+		len = 1;
+		u8 = val;
+		data = &u8;
+	} else if (val <= 0xffff) {
+		len = 2;
+		u16 = htons(val);
+		data = &u16;
+		flag |= 1 << FLOWSPEC_OP_LEN_SHIFT;
+	} else {
+		len = 4;
+		u32 = htonl(val);
+		data = &u32;
+		flag |= 2 << FLOWSPEC_OP_LEN_SHIFT;
+	}
+
+	complen = r->flow.complen[type];
+	comp = realloc(r->flow.components[type], complen + len + 1);
+	if (comp == NULL)
+		err(1, NULL);
+
+	comp[complen++] = flag;
+	memcpy(comp + complen, data, len);
+	complen += len;
+	r->flow.complen[type] = complen;
+	r->flow.components[type] = comp;
+}
+
+int
+parse_flow_numop(int argc, char *argv[], struct parse_result *r,
+    enum token_type toktype)
+{
+	const char *errstr;
+	long long val, val2;
+	int numargs, type;
+	int is_list = 0;
+	int op;
+
+	switch (toktype) {
+	case FLOW_PROTO:
+		type = FLOWSPEC_TYPE_PROTO;
+		break;
+	case FLOW_SRCPORT:
+		type = FLOWSPEC_TYPE_SRC_PORT;
+		break;
+	case FLOW_DSTPORT:
+		type = FLOWSPEC_TYPE_DST_PORT;
+		break;
+	case FLOW_ICMPTYPE:
+		type = FLOWSPEC_TYPE_ICMP_TYPE;
+		break;
+	case FLOW_ICMPCODE:
+		type = FLOWSPEC_TYPE_ICMP_CODE;
+		break;
+	case FLOW_LENGTH:
+		type = FLOWSPEC_TYPE_PKT_LEN;
+		break;
+	case FLOW_DSCP:
+		type = FLOWSPEC_TYPE_DSCP;
+		break;
+	default:
+		errx(1, "parse_flow_numop called with unsupported type");
+	}
+
+	/* skip keyword (which is already accounted for) */
+	argc--;
+	argv++;
+	numargs = argc;
+
+	while (argc > 0) {
+		if (strcmp(argv[0], "{") == 0) {
+			is_list = 1;
+			argc--;
+			argv++;
+		} else if (is_list && strcmp(argv[0], "}") == 0) {
+			is_list = 0;
+			argc--;
+			argv++;
+		} else if ((op = unary_op(argv[0])) != -1) {
+			if (argc < 2)
+				errx(1, "missing argument in flowspec "
+				    "definition");
+
+			val = strtonum(argv[1], LLONG_MIN, LLONG_MAX, &errstr);
+			if (errstr)
+				errx(1, "\"%s\" invalid number: %s", argv[0],
+				    errstr);
+			push_numop(r, type, op, 0, val);
+			argc -= 2;
+			argv += 2;
+		} else {
+			val = strtonum(argv[0], LLONG_MIN, LLONG_MAX, &errstr);
+			if (errstr)
+				errx(1, "\"%s\" invalid number: %s", argv[0],
+				    errstr);
+			if (argc >= 3 && (op = binary_op(argv[1])) != OP_NONE) {
+				val2 = strtonum(argv[2], LLONG_MIN, LLONG_MAX,
+				    &errstr);
+				if (errstr)
+					errx(1, "\"%s\" invalid number: %s",
+					    argv[2], errstr);
+				switch (op) {
+				case OP_RANGE:
+					push_numop(r, type, FLOWSPEC_OP_NUM_GE,
+					    0, val);
+					push_numop(r, type, FLOWSPEC_OP_NUM_LE,
+					    1, val2);
+					break;
+				case OP_XRANGE:
+					push_numop(r, type, FLOWSPEC_OP_NUM_LT,
+					    0, val);
+					push_numop(r, type, FLOWSPEC_OP_NUM_GT,
+					    0, val2);
+					break;
+				}
+				argc -= 3;
+				argv += 3;
+			} else {
+				push_numop(r, type, FLOWSPEC_OP_NUM_EQ, 0, val);
+				argc--;
+				argv++;
+			}
+		}
+		if (is_list == 0)
+			break;
+	}
+
+	return numargs - argc;
 }

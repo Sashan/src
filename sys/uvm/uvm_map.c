@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_map.c,v 1.313 2023/02/24 15:17:48 mpi Exp $	*/
+/*	$OpenBSD: uvm_map.c,v 1.315 2023/04/13 15:23:23 miod Exp $	*/
 /*	$NetBSD: uvm_map.c,v 1.86 2000/11/27 08:40:03 chs Exp $	*/
 
 /*
@@ -1793,7 +1793,7 @@ uvm_map_remap_as_stack(struct proc *p, vaddr_t addr, vaddr_t sz)
 
 	/*
 	 * UVM_FLAG_SIGALTSTACK indicates that immutable may be bypassed,
-	 * but the range is checked that it is contigous, is not a syscall
+	 * but the range is checked that it is contiguous, is not a syscall
 	 * mapping, and protection RW.  Then, a new mapping (all zero) is
 	 * placed upon the region, which prevents an attacker from pivoting
 	 * into pre-placed MAP_STACK space.
@@ -2392,7 +2392,7 @@ out:
  * all mapped regions.
  *
  * Map must not be locked.
- * If no flags are specified, all ragions are unwired.
+ * If no flags are specified, all regions are unwired.
  */
 int
 uvm_map_pageable_all(struct vm_map *map, int flags, vsize_t limit)
@@ -2689,7 +2689,7 @@ uvm_map_splitentry(struct vm_map *map, struct vm_map_entry *orig,
 	 * Link orig and next into free-space tree.
 	 *
 	 * Don't insert 'next' into the addr tree until orig has been linked,
-	 * in case the free-list looks at adjecent entries in the addr tree
+	 * in case the free-list looks at adjacent entries in the addr tree
 	 * for its decisions.
 	 */
 	if (orig->fspace > 0)
@@ -3716,15 +3716,6 @@ uvm_mapent_forkshared(struct vmspace *new_vm, struct vm_map *new_map,
 	    old_entry->end - old_entry->start, 0, old_entry->protection,
 	    old_entry->max_protection, old_map, old_entry, dead);
 
-	/*
-	 * pmap_copy the mappings: this routine is optional
-	 * but if it is there it will reduce the number of
-	 * page faults in the new proc.
-	 */
-	if (!UVM_ET_ISHOLE(new_entry))
-		pmap_copy(new_map->pmap, old_map->pmap, new_entry->start,
-		    (new_entry->end - new_entry->start), new_entry->start);
-
 	return (new_entry);
 }
 
@@ -3805,8 +3796,6 @@ uvm_mapent_forkcopy(struct vmspace *new_vm, struct vm_map *new_map,
 		 * resolve all copy-on-write faults now
 		 * (note that there is nothing to do if
 		 * the old mapping does not have an amap).
-		 * XXX: is it worthwhile to bother with
-		 * pmap_copy in this case?
 		 */
 		if (old_entry->aref.ar_amap)
 			amap_cow_now(new_map, new_entry);
@@ -3821,12 +3810,7 @@ uvm_mapent_forkcopy(struct vmspace *new_vm, struct vm_map *new_map,
 			 * fork operation.
 			 *
 			 * if we do not write-protect the parent, then
-			 * we must be sure to write-protect the child
-			 * after the pmap_copy() operation.
-			 *
-			 * XXX: pmap_copy should have some way of telling
-			 * us that it didn't do anything so we can avoid
-			 * calling pmap_protect needlessly.
+			 * we must be sure to write-protect the child.
 			 */
 			if (!UVM_ET_ISNEEDSCOPY(old_entry)) {
 				if (old_entry->max_protection & PROT_WRITE) {
@@ -3854,15 +3838,6 @@ uvm_mapent_forkcopy(struct vmspace *new_vm, struct vm_map *new_map,
 			else
 				protect_child = FALSE;
 		}
-		/*
-		 * copy the mappings
-		 * XXX: need a way to tell if this does anything
-		 */
-		if (!UVM_ET_ISHOLE(new_entry))
-			pmap_copy(new_map->pmap, old_map->pmap,
-			    new_entry->start,
-			    (old_entry->end - old_entry->start),
-			    old_entry->start);
 
 		/* protect the child's mappings if necessary */
 		if (protect_child) {
@@ -4526,13 +4501,6 @@ uvm_map_extract(struct vm_map *srcmap, vaddr_t start, vsize_t len,
 		    newentry->protection != PROT_NONE)
 			newentry->protection = newentry->max_protection;
 		newentry->protection &= ~PROT_EXEC;
-
-		/*
-		 * Step 2: perform pmap copy.
-		 * (Doing this in the loop saves one RB traversal.)
-		 */
-		pmap_copy(kernel_map->pmap, srcmap->pmap,
-		    cp_start - start + dstaddr, cp_len, cp_start);
 	}
 	pmap_update(kernel_map->pmap);
 

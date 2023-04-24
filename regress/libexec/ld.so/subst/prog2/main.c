@@ -1,6 +1,7 @@
-/*	$OpenBSD: bn_mod_exp2_mont.c,v 1.2 2022/12/17 23:41:29 tb Exp $ */
+/*	$OpenBSD: main.c,v 1.1 2023/04/09 23:41:48 gnezdo Exp $	*/
+
 /*
- * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
+ * Copyright (c) 2013 Kurt Miller <kurt@intricatesoftware.com>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -15,29 +16,10 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include <err.h>
-
-#include <openssl/bn.h>
-
-/*
- * Small test for a crash reported by Guido Vranken, fixed in bn_exp2.c r1.13.
- * https://github.com/openssl/openssl/issues/17648
- */
+#include "aa.h"
 
 int
-main(void)
+main()
 {
-	BIGNUM *m;
-
-	if ((m = BN_new()) == NULL)
-		errx(1, "BN_new");
-
-	BN_zero(m);
-
-	if (BN_mod_exp2_mont(NULL, NULL, NULL, NULL, NULL, m, NULL, NULL))
-		errx(1, "BN_mod_exp2_mont succeeded");
-
-	BN_free(m);
-
-	return 0;
+	return (aa());
 }

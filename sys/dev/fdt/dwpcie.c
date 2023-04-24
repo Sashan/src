@@ -1,4 +1,4 @@
-/*	$OpenBSD: dwpcie.c,v 1.41 2023/03/16 18:33:19 kettenis Exp $	*/
+/*	$OpenBSD: dwpcie.c,v 1.45 2023/04/24 15:15:00 patrick Exp $	*/
 /*
  * Copyright (c) 2018 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -292,6 +292,7 @@ dwpcie_match(struct device *parent, void *match, void *aux)
 	struct fdt_attach_args *faa = aux;
 
 	return (OF_is_compatible(faa->fa_node, "amlogic,g12a-pcie") ||
+	    OF_is_compatible(faa->fa_node, "baikal,bm1000-pcie") ||
 	    OF_is_compatible(faa->fa_node, "fsl,imx8mm-pcie") ||
 	    OF_is_compatible(faa->fa_node, "fsl,imx8mq-pcie") ||
 	    OF_is_compatible(faa->fa_node, "marvell,armada8k-pcie") ||
@@ -697,8 +698,10 @@ dwpcie_attach_deferred(struct device *self)
 	pba.pba_pc = &sc->sc_pc;
 	pba.pba_domain = pci_ndomains++;
 	pba.pba_bus = sc->sc_bus;
-	if (OF_is_compatible(sc->sc_node, "marvell,armada8k-pcie") ||
+	if (OF_is_compatible(sc->sc_node, "baikal,bm1000-pcie") ||
+	    OF_is_compatible(sc->sc_node, "marvell,armada8k-pcie") ||
 	    OF_is_compatible(sc->sc_node, "rockchip,rk3568-pcie") ||
+	    OF_getproplen(sc->sc_node, "msi-map") > 0 ||
 	    sc->sc_msi_addr)
 		pba.pba_flags |= PCI_FLAGS_MSI_ENABLED;
 
@@ -1304,6 +1307,8 @@ dwpcie_rk3568_init(struct dwpcie_softc *sc)
 	/* Assert PERST#. */
 	if (reset_gpiolen > 0)
 		gpio_controller_set_pin(reset_gpio, 0);
+
+	dwpcie_link_config(sc);
 
 	/* Enable LTSSM. */
 	bus_space_write_4(sc->sc_iot, sc->sc_glue_ioh, PCIE_CLIENT_GENERAL_CON,

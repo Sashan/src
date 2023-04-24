@@ -1,4 +1,4 @@
-/*	$OpenBSD: apldc.c,v 1.5 2023/03/05 14:45:07 patrick Exp $	*/
+/*	$OpenBSD: apldc.c,v 1.7 2023/04/10 15:14:04 tobhe Exp $	*/
 /*
  * Copyright (c) 2022 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -995,15 +995,17 @@ apldchidev_attachhook(struct device *self)
 		len = OF_getproplen(node, "firmware-name");
 		if (len <= 0)
 			return;
-		firmware_name = malloc(len, M_DEVBUF, M_WAITOK);
+		firmware_name = malloc(len, M_TEMP, M_WAITOK);
 		OF_getprop(node, "firmware-name", firmware_name, len);
 
 		error = loadfirmware(firmware_name, &ucode, &ucode_size);
 		if (error) {
 			printf("%s: error %d, could not read firmware %s\n",
 			    sc->sc_dev.dv_xname, error, firmware_name);
+			free(firmware_name, M_TEMP, len);
 			return;
 		}
+		free(firmware_name, M_TEMP, len);
 
 		hdr = (struct mtp_fwhdr *)ucode;
 		if (sizeof(hdr) > ucode_size ||
@@ -1166,6 +1168,9 @@ apldckbd_ioctl(void *v, u_long cmd, caddr_t data, int flag, struct proc *p)
 	case WSKBDIO_GTYPE:
 		/* XXX: should we set something else? */
 		*(u_int *)data = WSKBD_TYPE_USB;
+		return 0;
+	case WSKBDIO_SETLEDS:
+		apldckbd_set_leds(v, *(int *)data);
 		return 0;
 	default:
 		return hidkbd_ioctl(kbd, cmd, data, flag, p);

@@ -1,8 +1,7 @@
-#	$OpenBSD: Makefile,v 1.4 2023/02/10 15:54:33 krw Exp $
+#	$OpenBSD: Makefile,v 1.6 2023/04/17 22:28:51 krw Exp $
 
 FS=		install${OSrev}.img
 FSSIZE=		1032192
-FSDISKTYPE=	install
 
 MOUNT_POINT=	/mnt
 
@@ -65,8 +64,6 @@ ${FS}: ${BASE} ${XBASE}
 	cp /usr/mdec/BOOTAA64.EFI ${MOUNT_POINT}/efi/boot/bootaa64.efi
 	echo bootaa64.efi > ${MOUNT_POINT}/efi/boot/startup.nsh
 	echo 'arm_64bit=1\nenable_uart=1\ndtoverlay=disable-bt\nkernel=u-boot.bin' > ${MOUNT_POINT}/config.txt
-	dd if=${PUBOOT}/pine64_plus/u-boot-sunxi-with-spl.bin \
-	    of=/dev/r`cat vnd`c bs=1024 seek=8 conv=sync
 	umount ${MOUNT_POINT}
 
 	newfs -O 1 -m 0 -o space -i 524288 -c ${FSSIZE} /dev/r`cat vnd`a

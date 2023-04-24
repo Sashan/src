@@ -1,4 +1,4 @@
-/*	$OpenBSD: sdhc.c,v 1.73 2022/01/19 10:51:04 patrick Exp $	*/
+/*	$OpenBSD: sdhc.c,v 1.75 2023/04/19 02:01:02 dlg Exp $	*/
 
 /*
  * Copyright (c) 2006 Uwe Stuehler <uwe@openbsd.org>
@@ -149,7 +149,7 @@ struct cfdriver sdhc_cd = {
  * for the Transfer Mode register that we write out when we write the
  * Command register.
  *
- * The Arasan controller controller integrated on the Broadcom SoCs
+ * The Arasan controller integrated on the Broadcom SoCs
  * used in the Raspberry Pi has an interesting bug where writing the
  * same 32-bit register twice doesn't work.  This means that we lose
  * writes to the Block Sine and/or Block Count register.  We work
@@ -397,6 +397,7 @@ sdhc_host_found(struct sdhc_softc *sc, bus_space_tag_t iot,
 	saa.sch = hp;
 	saa.caps = SMC_CAPS_4BIT_MODE;
 	saa.dmat = sc->sc_dmat;
+	saa.dma_boundary = sc->sc_dma_boundary;
 	if (ISSET(hp->flags, SHF_USE_DMA))
 		saa.caps |= SMC_CAPS_DMA;
 

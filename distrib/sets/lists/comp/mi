@@ -302,6 +302,7 @@
 ./usr/include/dev/ic/if_wivar.h
 ./usr/include/dev/ic/iha.h
 ./usr/include/dev/ic/imxiicvar.h
+./usr/include/dev/ic/iosfvar.h
 ./usr/include/dev/ic/lancereg.h
 ./usr/include/dev/ic/lancevar.h
 ./usr/include/dev/ic/lemacreg.h
@@ -580,6 +581,7 @@
 ./usr/include/dev/pci/if_myxreg.h
 ./usr/include/dev/pci/if_nfereg.h
 ./usr/include/dev/pci/if_nfevar.h
+./usr/include/dev/pci/if_ngbereg.h
 ./usr/include/dev/pci/if_ngereg.h
 ./usr/include/dev/pci/if_ocereg.h
 ./usr/include/dev/pci/if_rgereg.h
@@ -680,6 +682,7 @@
 ./usr/include/dev/pv/pvreg.h
 ./usr/include/dev/pv/pvvar.h
 ./usr/include/dev/pv/vioblkreg.h
+./usr/include/dev/pv/viogpu.h
 ./usr/include/dev/pv/vioscsireg.h
 ./usr/include/dev/pv/virtioreg.h
 ./usr/include/dev/pv/virtiovar.h
@@ -2894,6 +2897,7 @@
 ./usr/share/man/man3/round.3
 ./usr/share/man/man3/rpc.3
 ./usr/share/man/man3/rs256_pk_new.3
+./usr/share/man/man3/s2i_ASN1_INTEGER.3
 ./usr/share/man/man3/scalbn.3
 ./usr/share/man/man3/scandir.3
 ./usr/share/man/man3/scanf.3

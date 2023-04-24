@@ -1,4 +1,4 @@
-/*	$OpenBSD: gpt.c,v 1.86 2023/03/06 13:24:40 krw Exp $	*/
+/*	$OpenBSD: gpt.c,v 1.89 2023/04/07 16:34:41 krw Exp $	*/
 /*
  * Copyright (c) 2015 Markus Muller <mmu@grummel.net>
  * Copyright (c) 2015 Kenneth R Westerback <krw@openbsd.org>
@@ -449,7 +449,7 @@ GPT_print_part(const unsigned int pn, const char *units, const int verbosity)
 	size = units_size(units, (start > end) ? 0 : end - start + 1, &ut);
 
 	printf(" %3u: %-36s [%12lld: %12.0f%s]\n", pn,
-	    PRT_uuid_to_sname(&gp[pn].gp_type), start, size, ut->ut_abbr);
+	    PRT_uuid_to_desc(&gp[pn].gp_type), start, size, ut->ut_abbr);
 
 	if (verbosity == VERBOSE) {
 		uuid_to_string(&gp[pn].gp_guid, &guidstr, &status);
@@ -619,7 +619,7 @@ init_gp(const int how)
 		memset(&gp, 0, sizeof(gp));
 	else {
 		for (pn = 0; pn < gh.gh_part_num; pn++) {
-			if (PRT_protected_guid(&gp[pn].gp_type) ||
+			if (PRT_protected_uuid(&gp[pn].gp_type) ||
 			    (gp[pn].gp_attrs & GPTPARTATTR_REQUIRED))
 				continue;
 			memset(&gp[pn], 0, sizeof(gp[pn]));

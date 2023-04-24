@@ -1,4 +1,4 @@
-/*	$OpenBSD: util.c,v 1.74 2023/01/04 14:33:30 claudio Exp $ */
+/*	$OpenBSD: util.c,v 1.77 2023/04/17 08:02:21 claudio Exp $ */
 
 /*
  * Copyright (c) 2006 Claudio Jeker <claudio@openbsd.org>
@@ -494,26 +494,24 @@ aspath_inflate(void *data, uint16_t len, uint16_t *newlen)
 }
 
 /* NLRI functions to extract prefixes from the NLRI blobs */
-static int
-extract_prefix(u_char *p, uint16_t len, void *va,
-    uint8_t pfxlen, uint8_t max)
+int
+extract_prefix(const u_char *p, int len, void *va, uint8_t pfxlen, uint8_t max)
 {
 	static u_char	 addrmask[] = {
 	    0x00, 0x80, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc, 0xfe, 0xff };
 	u_char		*a = va;
-	int		 i;
-	uint16_t	 plen = 0;
+	int		 plen;
 
-	for (i = 0; pfxlen && i < max; i++) {
-		if (len <= plen)
-			return (-1);
+	plen = PREFIX_SIZE(pfxlen) - 1;
+	if (len < plen || max < plen)
+		return -1;
+
+	while (pfxlen > 0) {
 		if (pfxlen < 8) {
-			a[i] = *p++ & addrmask[pfxlen];
-			plen++;
+			*a++ = *p++ & addrmask[pfxlen];
 			break;
 		} else {
-			a[i] = *p++;
-			plen++;
+			*a++ = *p++;
 			pfxlen -= 8;
 		}
 	}
@@ -920,6 +918,9 @@ addr2sa(const struct bgpd_addr *addr, uint16_t port, socklen_t *len)
 		sa_in6->sin6_scope_id = addr->scope_id;
 		*len = sizeof(struct sockaddr_in6);
 		break;
+	case AID_FLOWSPECv4:
+	case AID_FLOWSPECv6:
+		return (NULL);
 	}
 
 	return ((struct sockaddr *)&ss);

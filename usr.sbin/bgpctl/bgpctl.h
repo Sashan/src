@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpctl.h,v 1.19 2023/01/24 11:29:34 claudio Exp $ */
+/*	$OpenBSD: bgpctl.h,v 1.21 2023/04/20 14:01:50 claudio Exp $ */
 
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
@@ -24,6 +24,7 @@ struct output {
 	void	(*timer)(struct ctl_timer *);
 	void	(*fib)(struct kroute_full *);
 	void	(*fib_table)(struct ktable *);
+	void	(*flowspec)(struct flowspec *);
 	void	(*nexthop)(struct ctl_show_nexthop *);
 	void	(*interface)(struct ctl_show_interface *);
 	void	(*attr)(u_char *, size_t, int, int);
@@ -38,7 +39,6 @@ struct output {
 };
 
 extern const struct output show_output, json_output, ometric_output;
-extern const size_t pt_sizes[];
 
 #define EOL0(flag)	((flag & F_CTL_SSV) ? ';' : '\n')
 

@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile.arm64,v 1.44 2023/01/01 01:34:33 jsg Exp $
+#	$OpenBSD: Makefile.arm64,v 1.46 2023/04/09 19:48:37 kettenis Exp $
 
 # For instructions on building kernels consult the config(8) and options(4)
 # manual pages.
@@ -70,6 +70,9 @@ CMACHFLAGS+=	-fno-stack-protector
 .if ${IDENT:M-DSMALL_KERNEL}
 SORTR=		cat
 COPTIMIZE?=	-Oz
+CMACHFLAGS+=	-mbranch-protection=none
+.else
+CMACHFLAGS+=	-mbranch-protection=bti
 .endif
 
 DEBUG?=		-g

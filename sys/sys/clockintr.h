@@ -1,4 +1,4 @@
-/* $OpenBSD: clockintr.h,v 1.3 2023/03/09 03:50:38 cheloha Exp $ */
+/* $OpenBSD: clockintr.h,v 1.7 2023/04/20 14:51:28 cheloha Exp $ */
 /*
  * Copyright (c) 2020-2022 Scott Cheloha <cheloha@openbsd.org>
  *
@@ -32,6 +32,7 @@ struct clockintr_stat {
 
 #ifdef _KERNEL
 
+#include <sys/mutex.h>
 #include <sys/queue.h>
 
 /*
@@ -62,33 +63,39 @@ intrclock_trigger(struct intrclock *ic)
  * Struct member protections:
  *
  *	I	Immutable after initialization.
- *	o	Owned by a single CPU.
+ *	m	Parent queue mutex (cl_queue->cq_mtx).
  */
 struct clockintr_queue;
 struct clockintr {
-	uint64_t cl_expiration;				/* [o] dispatch time */
-	TAILQ_ENTRY(clockintr) cl_elink;		/* [o] cq_est glue */
-	TAILQ_ENTRY(clockintr) cl_plink;		/* [o] cq_pend glue */
+	uint64_t cl_expiration;				/* [m] dispatch time */
+	TAILQ_ENTRY(clockintr) cl_elink;		/* [m] cq_est glue */
+	TAILQ_ENTRY(clockintr) cl_plink;		/* [m] cq_pend glue */
 	void (*cl_func)(struct clockintr *, void *);	/* [I] callback */
 	struct clockintr_queue *cl_queue;		/* [I] parent queue */
-	u_int cl_flags;					/* [o] CLST_* flags */
+	u_int cl_flags;					/* [m] CLST_* flags */
 };
 
-#define CLST_PENDING	0x00000001		/* scheduled to run */
+#define CLST_PENDING		0x00000001	/* scheduled to run */
+#define CLST_SHADOW_PENDING	0x00000002	/* shadow is scheduled to run */
+#define CLST_IGNORE_SHADOW	0x00000004	/* ignore shadow copy */
 
 /*
  * Per-CPU clock interrupt state.
  *
  * Struct member protections:
  *
+ *	a	Modified atomically.
  *	I	Immutable after initialization.
+ *	m	Per-queue mutex (cq_mtx).
  *	o	Owned by a single CPU.
  */
 struct clockintr_queue {
+	struct clockintr cq_shadow;	/* [o] copy of running clockintr */
+	struct mutex cq_mtx;		/* [a] per-queue mutex */
 	uint64_t cq_uptime;		/* [o] cached uptime */
-	TAILQ_HEAD(, clockintr) cq_est;	/* [o] established clockintr list */
-	TAILQ_HEAD(, clockintr) cq_pend;/* [o] pending clockintr list */
-	struct clockintr *cq_running;	/* [o] running clockintr */
+	TAILQ_HEAD(, clockintr) cq_est;	/* [m] established clockintr list */
+	TAILQ_HEAD(, clockintr) cq_pend;/* [m] pending clockintr list */
+	struct clockintr *cq_running;	/* [m] running clockintr */
 	struct clockintr *cq_hardclock;	/* [o] hardclock handle */
 	struct clockintr *cq_schedclock;/* [o] schedclock handle, if any */
 	struct clockintr *cq_statclock;	/* [o] statclock handle */
@@ -96,23 +103,21 @@ struct clockintr_queue {
 	struct clockintr_stat cq_stat;	/* [o] dispatch statistics */
 	volatile u_int cq_gen;		/* [o] cq_stat update generation */ 
 	volatile u_int cq_dispatch;	/* [o] dispatch is running */
-	u_int cq_flags;			/* [I] local state flags */
+	u_int cq_flags;			/* [I] CQ_* flags; see below */
 };
+
+#define CQ_INIT			0x00000001	/* clockintr_cpu_init() done */
+#define CQ_INTRCLOCK		0x00000002	/* intrclock installed */
+#define CQ_STATE_MASK		0x00000003
 
 /* Global state flags. */
 #define CL_INIT			0x00000001	/* global init done */
 #define CL_STATCLOCK		0x00000002	/* statclock variables set */
-#define CL_SCHEDCLOCK		0x00000004	/* run separate schedclock */
-#define CL_STATE_MASK		0x00000007
+#define CL_STATE_MASK		0x00000003
 
 /* Global behavior flags. */
 #define CL_RNDSTAT		0x80000000	/* randomized statclock */
 #define CL_FLAG_MASK		0x80000000
-
-/* Per-CPU state flags. */
-#define CL_CPU_INIT		0x00000001	/* CPU is ready for dispatch */
-#define CL_CPU_INTRCLOCK	0x00000002	/* CPU has intrclock */
-#define CL_CPU_STATE_MASK	0x00000003
 
 void clockintr_cpu_init(const struct intrclock *);
 int clockintr_dispatch(void *);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmd.c,v 1.138 2023/01/28 14:40:53 dv Exp $	*/
+/*	$OpenBSD: vmd.c,v 1.143 2023/04/24 15:12:14 kn Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -38,7 +38,6 @@
 #include <unistd.h>
 #include <util.h>
 #include <ctype.h>
-#include <pwd.h>
 #include <grp.h>
 
 #include <machine/specialreg.h>
@@ -75,8 +74,10 @@ static struct privsep_proc procs[] = {
 	/* Keep "priv" on top as procs[0] */
 	{ "priv",	PROC_PRIV,	vmd_dispatch_priv, priv },
 	{ "control",	PROC_CONTROL,	vmd_dispatch_control, control },
-	{ "vmm",	PROC_VMM,	vmd_dispatch_vmm, vmm, vmm_shutdown },
-	{ "agentx", 	PROC_AGENTX,	vmd_dispatch_agentx, vm_agentx, vm_agentx_shutdown, "/" }
+	{ "vmm",	PROC_VMM,	vmd_dispatch_vmm, vmm,
+	  vmm_shutdown, "/" },
+	{ "agentx", 	PROC_AGENTX,	vmd_dispatch_agentx, vm_agentx,
+	  vm_agentx_shutdown, "/" }
 };
 
 enum privsep_procid privsep_process;
@@ -87,6 +88,9 @@ struct event staggered_start_timer;
 static struct privsep_proc *proc_priv = &procs[0];
 static struct passwd proc_privpw;
 static const uint8_t zero_mac[ETHER_ADDR_LEN];
+
+const char		 default_conffile[] = VMD_CONF;
+const char		*conffile = default_conffile;
 
 int
 vmd_dispatch_control(int fd, struct privsep_proc *p, struct imsg *imsg)
@@ -489,7 +493,7 @@ vmd_dispatch_vmm(int fd, struct privsep_proc *p, struct imsg *imsg)
 		memcpy(&vir, imsg->data, sizeof(vir));
 		if ((vm = vm_getbyvmid(vir.vir_info.vir_id)) != NULL) {
 			memset(vir.vir_ttyname, 0, sizeof(vir.vir_ttyname));
-			if (vm->vm_ttyname != NULL)
+			if (vm->vm_ttyname[0] != '\0')
 				strlcpy(vir.vir_ttyname, vm->vm_ttyname,
 				    sizeof(vir.vir_ttyname));
 			log_debug("%s: running vm: %d, vm_state: 0x%x",
@@ -766,9 +770,8 @@ main(int argc, char **argv)
 {
 	struct privsep		*ps;
 	int			 ch;
-	const char		*conffile = VMD_CONF;
 	enum privsep_procid	 proc_id = PROC_PARENT;
-	int			 proc_instance = 0;
+	int			 proc_instance = 0, vm_launch = 0, vm_fd = -1;
 	const char		*errp, *title = NULL;
 	int			 argc0 = argc;
 
@@ -777,7 +780,7 @@ main(int argc, char **argv)
 	if ((env = calloc(1, sizeof(*env))) == NULL)
 		fatal("calloc: env");
 
-	while ((ch = getopt(argc, argv, "D:P:I:df:vn")) != -1) {
+	while ((ch = getopt(argc, argv, "D:P:I:V:df:vn")) != -1) {
 		switch (ch) {
 		case 'D':
 			if (cmdline_symset(optarg) < 0)
@@ -793,6 +796,7 @@ main(int argc, char **argv)
 		case 'v':
 			env->vmd_verbose++;
 			break;
+		/* vmd fork/exec */
 		case 'n':
 			env->vmd_noaction = 1;
 			break;
@@ -807,6 +811,13 @@ main(int argc, char **argv)
 			    PROC_MAX_INSTANCES, &errp);
 			if (errp)
 				fatalx("invalid process instance");
+			break;
+		/* child vm fork/exec */
+		case 'V':
+			vm_launch = VMD_LAUNCH_VM;
+			vm_fd = strtonum(optarg, 0, 128, &errp);
+			if (errp)
+				fatalx("invalid vm fd");
 			break;
 		default:
 			usage();
@@ -823,8 +834,13 @@ main(int argc, char **argv)
 	log_init(env->vmd_debug, LOG_DAEMON);
 	log_setverbose(env->vmd_verbose);
 
+	/* Re-exec from the vmm child process requires an absolute path. */
+	if (proc_id == PROC_PARENT && *argv[0] != '/')
+		fatalx("re-exec requires execution with an absolute path");
+	env->argv0 = argv[0];
+
 	/* check for root privileges */
-	if (env->vmd_noaction == 0) {
+	if (env->vmd_noaction == 0 && !vm_launch) {
 		if (geteuid())
 			fatalx("need root privileges");
 	}
@@ -842,6 +858,14 @@ main(int argc, char **argv)
 	/* First proc runs as root without pledge but in default chroot */
 	proc_priv->p_pw = &proc_privpw; /* initialized to all 0 */
 	proc_priv->p_chroot = ps->ps_pw->pw_dir; /* from VMD_USER */
+
+	/*
+	 * If we're launching a new vm or its device, we short out here.
+	 */
+	if (vm_launch == VMD_LAUNCH_VM) {
+		vm_main(vm_fd);
+		/* NOTREACHED */
+	}
 
 	/* Open /dev/vmm early. */
 	if (env->vmd_noaction == 0 && proc_id == PROC_PARENT) {
@@ -1789,8 +1813,11 @@ vm_opentty(struct vmd_vm *vm)
 
 	vm->vm_tty = ptm.cfd;
 	close(ptm.sfd);
-	if ((vm->vm_ttyname = strdup(ptm.sn)) == NULL)
+	if (strlcpy(vm->vm_ttyname, ptm.sn, sizeof(vm->vm_ttyname))
+	    >= sizeof(vm->vm_ttyname)) {
+		log_warnx("%s: truncated ttyname", __func__);
 		goto fail;
+	}
 
 	uid = vm->vm_uid;
 	gid = vm->vm_params.vmc_owner.gid;
@@ -1858,8 +1885,7 @@ vm_closetty(struct vmd_vm *vm)
 		close(vm->vm_tty);
 		vm->vm_tty = -1;
 	}
-	free(vm->vm_ttyname);
-	vm->vm_ttyname = NULL;
+	memset(&vm->vm_ttyname, 0, sizeof(vm->vm_ttyname));
 }
 
 void
@@ -1955,3 +1981,28 @@ vm_terminate(struct vmd_vm *vm, const char *caller)
 	}
 }
 
+/*
+ * Utility function for closing vm file descriptors. Assumes an fd of -1 was
+ * already closed or never opened.
+ *
+ * Returns 0 on success, otherwise -1 on failure.
+ */
+int
+close_fd(int fd)
+{
+	int	ret;
+
+	if (fd == -1)
+		return (0);
+
+#ifdef POSIX_CLOSE_RESTART
+	do { ret = close(fd); } while (ret == -1 && errno == EINTR);
+#else
+	ret = close(fd);
+#endif /* POSIX_CLOSE_RESTART */
+
+	if (ret == -1 && errno == EIO)
+		log_warn("%s(%d)", __func__, fd);
+
+	return (ret);
+}

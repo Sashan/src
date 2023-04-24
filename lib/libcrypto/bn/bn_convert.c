@@ -1,4 +1,4 @@
-/* $OpenBSD: bn_print.c,v 1.38 2023/02/13 04:25:37 jsing Exp $ */
+/* $OpenBSD: bn_convert.c,v 1.6 2023/04/19 11:14:04 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -59,6 +59,7 @@
 #include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <openssl/opensslconf.h>
 
@@ -68,41 +69,205 @@
 
 #include "bn_local.h"
 
-static const char Hex[]="0123456789ABCDEF";
+static const char hex_digits[] = "0123456789ABCDEF";
 
-/* Must 'free' the returned data */
-char *
-BN_bn2hex(const BIGNUM *a)
+typedef enum {
+	big,
+	little,
+} endianness_t;
+
+/* ignore negative */
+static int
+bn2binpad(const BIGNUM *a, unsigned char *to, int tolen, endianness_t endianness)
 {
-	int i, j, v, z = 0;
-	char *buf;
-	char *p;
+	int n;
+	size_t i, lasti, j, atop, mask;
+	BN_ULONG l;
 
-	buf = malloc(BN_is_negative(a) + a->top * BN_BYTES * 2 + 2);
-	if (buf == NULL) {
-		BNerror(ERR_R_MALLOC_FAILURE);
-		goto err;
+	/*
+	 * In case |a| is fixed-top, BN_num_bytes can return bogus length,
+	 * but it's assumed that fixed-top inputs ought to be "nominated"
+	 * even for padded output, so it works out...
+	 */
+	n = BN_num_bytes(a);
+	if (tolen == -1)
+		tolen = n;
+	else if (tolen < n) {	/* uncommon/unlike case */
+		BIGNUM temp = *a;
+
+		bn_correct_top(&temp);
+
+		n = BN_num_bytes(&temp);
+		if (tolen < n)
+			return -1;
 	}
-	p = buf;
-	if (BN_is_negative(a))
-		*p++ = '-';
-	if (BN_is_zero(a))
-		*p++ = '0';
-	for (i = a->top - 1; i >=0; i--) {
-		for (j = BN_BITS2 - 8; j >= 0; j -= 8) {
-			/* strip leading zeros */
-			v = ((int)(a->d[i] >> (long)j)) & 0xff;
-			if (z || (v != 0)) {
-				*p++ = Hex[v >> 4];
-				*p++ = Hex[v & 0x0f];
-				z = 1;
-			}
+
+	/* Swipe through whole available data and don't give away padded zero. */
+	atop = a->dmax * BN_BYTES;
+	if (atop == 0) {
+		explicit_bzero(to, tolen);
+		return tolen;
+	}
+
+	lasti = atop - 1;
+	atop = a->top * BN_BYTES;
+
+	if (endianness == big)
+		to += tolen; /* start from the end of the buffer */
+
+	for (i = 0, j = 0; j < (size_t)tolen; j++) {
+		unsigned char val;
+
+		l = a->d[i / BN_BYTES];
+		mask = 0 - ((j - atop) >> (8 * sizeof(i) - 1));
+		val = (unsigned char)(l >> (8 * (i % BN_BYTES)) & mask);
+
+		if (endianness == big)
+			*--to = val;
+		else
+			*to++ = val;
+
+		i += (i - lasti) >> (8 * sizeof(i) - 1); /* stay on last limb */
+	}
+
+	return tolen;
+}
+
+int
+BN_bn2bin(const BIGNUM *a, unsigned char *to)
+{
+	return bn2binpad(a, to, -1, big);
+}
+
+int
+BN_bn2binpad(const BIGNUM *a, unsigned char *to, int tolen)
+{
+	if (tolen < 0)
+		return -1;
+	return bn2binpad(a, to, tolen, big);
+}
+
+BIGNUM *
+BN_bin2bn(const unsigned char *s, int len, BIGNUM *ret)
+{
+	unsigned int i, m;
+	unsigned int n;
+	BN_ULONG l;
+	BIGNUM *bn = NULL;
+
+	if (len < 0)
+		return (NULL);
+	if (ret == NULL)
+		ret = bn = BN_new();
+	if (ret == NULL)
+		return (NULL);
+	l = 0;
+	n = len;
+	if (n == 0) {
+		ret->top = 0;
+		return (ret);
+	}
+	i = ((n - 1) / BN_BYTES) + 1;
+	m = ((n - 1) % (BN_BYTES));
+	if (!bn_wexpand(ret, (int)i)) {
+		BN_free(bn);
+		return NULL;
+	}
+	ret->top = i;
+	ret->neg = 0;
+	while (n--) {
+		l = (l << 8L) | *(s++);
+		if (m-- == 0) {
+			ret->d[--i] = l;
+			l = 0;
+			m = BN_BYTES - 1;
 		}
 	}
-	*p = '\0';
+	/* need to call this due to clear byte at top if avoiding
+	 * having the top bit set (-ve number) */
+	bn_correct_top(ret);
+	return (ret);
+}
 
-err:
-	return (buf);
+int
+BN_bn2lebinpad(const BIGNUM *a, unsigned char *to, int tolen)
+{
+	if (tolen < 0)
+		return -1;
+
+	return bn2binpad(a, to, tolen, little);
+}
+
+BIGNUM *
+BN_lebin2bn(const unsigned char *s, int len, BIGNUM *ret)
+{
+	unsigned int i, m, n;
+	BN_ULONG l;
+	BIGNUM *bn = NULL;
+
+	if (ret == NULL)
+		ret = bn = BN_new();
+	if (ret == NULL)
+		return NULL;
+
+
+	s += len;
+	/* Skip trailing zeroes. */
+	for (; len > 0 && s[-1] == 0; s--, len--)
+		continue;
+
+	n = len;
+	if (n == 0) {
+		ret->top = 0;
+		return ret;
+	}
+
+	i = ((n - 1) / BN_BYTES) + 1;
+	m = (n - 1) % BN_BYTES;
+	if (!bn_wexpand(ret, (int)i)) {
+		BN_free(bn);
+		return NULL;
+	}
+
+	ret->top = i;
+	ret->neg = 0;
+	l = 0;
+	while (n-- > 0) {
+		s--;
+		l = (l << 8L) | *s;
+		if (m-- == 0) {
+			ret->d[--i] = l;
+			l = 0;
+			m = BN_BYTES - 1;
+		}
+	}
+
+	/*
+	 * need to call this due to clear byte at top if avoiding having the
+	 * top bit set (-ve number)
+	 */
+	bn_correct_top(ret);
+
+	return ret;
+}
+
+int
+BN_asc2bn(BIGNUM **bn, const char *a)
+{
+	const char *p = a;
+	if (*p == '-')
+		p++;
+
+	if (p[0] == '0' && (p[1] == 'X' || p[1] == 'x')) {
+		if (!BN_hex2bn(bn, p + 2))
+			return 0;
+	} else {
+		if (!BN_dec2bn(bn, p))
+			return 0;
+	}
+	if (*a == '-')
+		BN_set_negative(*bn, 1);
+	return 1;
 }
 
 /* Must 'free' the returned data */
@@ -187,6 +352,110 @@ err:
 }
 
 int
+BN_dec2bn(BIGNUM **bn, const char *a)
+{
+	BIGNUM *ret = NULL;
+	BN_ULONG l = 0;
+	int neg = 0, i, j;
+	int num;
+
+	if ((a == NULL) || (*a == '\0'))
+		return (0);
+	if (*a == '-') {
+		neg = 1;
+		a++;
+	}
+
+	for (i = 0; i <= (INT_MAX / 4) && isdigit((unsigned char)a[i]); i++)
+		;
+	if (i > INT_MAX / 4)
+		return (0);
+
+	num = i + neg;
+	if (bn == NULL)
+		return (num);
+
+	/* a is the start of the digits, and it is 'i' long.
+	 * We chop it into BN_DEC_NUM digits at a time */
+	if (*bn == NULL) {
+		if ((ret = BN_new()) == NULL)
+			return (0);
+	} else {
+		ret = *bn;
+		BN_zero(ret);
+	}
+
+	/* i is the number of digits, a bit of an over expand */
+	if (!bn_expand(ret, i * 4))
+		goto err;
+
+	j = BN_DEC_NUM - (i % BN_DEC_NUM);
+	if (j == BN_DEC_NUM)
+		j = 0;
+	l = 0;
+	while (*a) {
+		l *= 10;
+		l += *a - '0';
+		a++;
+		if (++j == BN_DEC_NUM) {
+			if (!BN_mul_word(ret, BN_DEC_CONV))
+				goto err;
+			if (!BN_add_word(ret, l))
+				goto err;
+			l = 0;
+			j = 0;
+		}
+	}
+
+	bn_correct_top(ret);
+
+	BN_set_negative(ret, neg);
+
+	*bn = ret;
+	return (num);
+
+err:
+	if (*bn == NULL)
+		BN_free(ret);
+	return (0);
+}
+
+/* Must 'free' the returned data */
+char *
+BN_bn2hex(const BIGNUM *a)
+{
+	int i, j, v, z = 0;
+	char *buf;
+	char *p;
+
+	buf = malloc(BN_is_negative(a) + a->top * BN_BYTES * 2 + 2);
+	if (buf == NULL) {
+		BNerror(ERR_R_MALLOC_FAILURE);
+		goto err;
+	}
+	p = buf;
+	if (BN_is_negative(a))
+		*p++ = '-';
+	if (BN_is_zero(a))
+		*p++ = '0';
+	for (i = a->top - 1; i >=0; i--) {
+		for (j = BN_BITS2 - 8; j >= 0; j -= 8) {
+			/* strip leading zeros */
+			v = ((int)(a->d[i] >> (long)j)) & 0xff;
+			if (z || (v != 0)) {
+				*p++ = hex_digits[v >> 4];
+				*p++ = hex_digits[v & 0x0f];
+				z = 1;
+			}
+		}
+	}
+	*p = '\0';
+
+err:
+	return (buf);
+}
+
+int
 BN_hex2bn(BIGNUM **bn, const char *a)
 {
 	BIGNUM *ret = NULL;
@@ -264,91 +533,75 @@ err:
 }
 
 int
-BN_dec2bn(BIGNUM **bn, const char *a)
+BN_bn2mpi(const BIGNUM *a, unsigned char *d)
 {
-	BIGNUM *ret = NULL;
-	BN_ULONG l = 0;
-	int neg = 0, i, j;
-	int num;
+	int bits;
+	int num = 0;
+	int ext = 0;
+	long l;
 
-	if ((a == NULL) || (*a == '\0'))
-		return (0);
-	if (*a == '-') {
-		neg = 1;
-		a++;
+	bits = BN_num_bits(a);
+	num = (bits + 7) / 8;
+	if (bits > 0) {
+		ext = ((bits & 0x07) == 0);
 	}
+	if (d == NULL)
+		return (num + 4 + ext);
 
-	for (i = 0; i <= (INT_MAX / 4) && isdigit((unsigned char)a[i]); i++)
-		;
-	if (i > INT_MAX / 4)
-		return (0);
-
-	num = i + neg;
-	if (bn == NULL)
-		return (num);
-
-	/* a is the start of the digits, and it is 'i' long.
-	 * We chop it into BN_DEC_NUM digits at a time */
-	if (*bn == NULL) {
-		if ((ret = BN_new()) == NULL)
-			return (0);
-	} else {
-		ret = *bn;
-		BN_zero(ret);
-	}
-
-	/* i is the number of digits, a bit of an over expand */
-	if (!bn_expand(ret, i * 4))
-		goto err;
-
-	j = BN_DEC_NUM - (i % BN_DEC_NUM);
-	if (j == BN_DEC_NUM)
-		j = 0;
-	l = 0;
-	while (*a) {
-		l *= 10;
-		l += *a - '0';
-		a++;
-		if (++j == BN_DEC_NUM) {
-			if (!BN_mul_word(ret, BN_DEC_CONV))
-				goto err;
-			if (!BN_add_word(ret, l))
-				goto err;
-			l = 0;
-			j = 0;
-		}
-	}
-
-	bn_correct_top(ret);
-
-	BN_set_negative(ret, neg);
-
-	*bn = ret;
-	return (num);
-
-err:
-	if (*bn == NULL)
-		BN_free(ret);
-	return (0);
+	l = num + ext;
+	d[0] = (unsigned char)(l >> 24) & 0xff;
+	d[1] = (unsigned char)(l >> 16) & 0xff;
+	d[2] = (unsigned char)(l >> 8) & 0xff;
+	d[3] = (unsigned char)(l) & 0xff;
+	if (ext)
+		d[4] = 0;
+	num = BN_bn2bin(a, &(d[4 + ext]));
+	if (a->neg)
+		d[4] |= 0x80;
+	return (num + 4 + ext);
 }
 
-int
-BN_asc2bn(BIGNUM **bn, const char *a)
+BIGNUM *
+BN_mpi2bn(const unsigned char *d, int n, BIGNUM *ain)
 {
-	const char *p = a;
-	if (*p == '-')
-		p++;
+	BIGNUM *a = ain;
+	long len;
+	int neg = 0;
 
-	if (p[0] == '0' && (p[1] == 'X' || p[1] == 'x')) {
-		if (!BN_hex2bn(bn, p + 2))
-			return 0;
-	} else {
-		if (!BN_dec2bn(bn, p))
-			return 0;
+	if (n < 4) {
+		BNerror(BN_R_INVALID_LENGTH);
+		return (NULL);
 	}
-	if (*a == '-')
-		BN_set_negative(*bn, 1);
-	return 1;
+	len = ((long)d[0] << 24) | ((long)d[1] << 16) | ((int)d[2] << 8) |
+	    (int)d[3];
+	if ((len + 4) != n) {
+		BNerror(BN_R_ENCODING_ERROR);
+		return (NULL);
+	}
+
+	if (a == NULL)
+		a = BN_new();
+	if (a == NULL)
+		return (NULL);
+
+	if (len == 0) {
+		a->neg = 0;
+		a->top = 0;
+		return (a);
+	}
+	d += 4;
+	if ((*d) & 0x80)
+		neg = 1;
+	if (BN_bin2bn(d, (int)len, a) == NULL) {
+		if (ain == NULL)
+			BN_free(a);
+		return (NULL);
+	}
+	BN_set_negative(a, neg);
+	if (neg) {
+		BN_clear_bit(a, BN_num_bits(a) - 1);
+	}
+	return (a);
 }
 
 #ifndef OPENSSL_NO_BIO
@@ -381,7 +634,7 @@ BN_print(BIO *bp, const BIGNUM *a)
 			/* strip leading zeros */
 			v = ((int)(a->d[i] >> (long)j)) & 0x0f;
 			if (z || (v != 0)) {
-				if (BIO_write(bp, &(Hex[v]), 1) != 1)
+				if (BIO_write(bp, &hex_digits[v], 1) != 1)
 					goto end;
 				z = 1;
 			}
@@ -393,22 +646,3 @@ end:
 	return (ret);
 }
 #endif
-
-char *
-BN_options(void)
-{
-	static int init = 0;
-	static char data[16];
-
-	if (!init) {
-		init++;
-#ifdef BN_LLONG
-		snprintf(data,sizeof data, "bn(%d,%d)",
-		    (int)sizeof(BN_ULLONG) * 8, (int)sizeof(BN_ULONG) * 8);
-#else
-		snprintf(data,sizeof data, "bn(%d,%d)",
-		    (int)sizeof(BN_ULONG) * 8, (int)sizeof(BN_ULONG) * 8);
-#endif
-	}
-	return (data);
-}

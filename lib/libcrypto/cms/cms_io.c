@@ -1,4 +1,4 @@
-/* $OpenBSD: cms_io.c,v 1.12 2022/11/26 16:08:51 tb Exp $ */
+/* $OpenBSD: cms_io.c,v 1.17 2023/04/21 20:36:07 tb Exp $ */
 /*
  * Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project.
@@ -53,10 +53,11 @@
  */
 
 #include <openssl/asn1t.h>
-#include <openssl/x509.h>
+#include <openssl/cms.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
-#include <openssl/cms.h>
+#include <openssl/x509.h>
+
 #include "cms_local.h"
 
 int
@@ -64,19 +65,21 @@ CMS_stream(unsigned char ***boundary, CMS_ContentInfo *cms)
 {
 	ASN1_OCTET_STRING **pos;
 
-	pos = CMS_get0_content(cms);
-	if (pos == NULL)
+	if ((pos = CMS_get0_content(cms)) == NULL)
 		return 0;
+
 	if (*pos == NULL)
 		*pos = ASN1_OCTET_STRING_new();
-	if (*pos != NULL) {
-		(*pos)->flags |= ASN1_STRING_FLAG_NDEF;
-		(*pos)->flags &= ~ASN1_STRING_FLAG_CONT;
-		*boundary = &(*pos)->data;
-		return 1;
+	if (*pos == NULL) {
+		CMSerror(ERR_R_MALLOC_FAILURE);
+		return 0;
 	}
-	CMSerror(ERR_R_MALLOC_FAILURE);
-	return 0;
+
+	(*pos)->flags |= ASN1_STRING_FLAG_NDEF;
+	(*pos)->flags &= ~ASN1_STRING_FLAG_CONT;
+	*boundary = &(*pos)->data;
+
+	return 1;
 }
 
 CMS_ContentInfo *
@@ -95,36 +98,35 @@ i2d_CMS_bio(BIO *bp, CMS_ContentInfo *cms)
 CMS_ContentInfo *
 PEM_read_bio_CMS(BIO *bp, CMS_ContentInfo **x, pem_password_cb *cb, void *u)
 {
-	return PEM_ASN1_read_bio((d2i_of_void *)d2i_CMS_ContentInfo, PEM_STRING_CMS, bp,
-	    (void **)x, cb, u);
+	return PEM_ASN1_read_bio((d2i_of_void *)d2i_CMS_ContentInfo,
+	    PEM_STRING_CMS, bp, (void **)x, cb, u);
 }
 
 CMS_ContentInfo *
 PEM_read_CMS(FILE *fp, CMS_ContentInfo **x, pem_password_cb *cb, void *u)
 {
-	return PEM_ASN1_read((d2i_of_void *)d2i_CMS_ContentInfo, PEM_STRING_CMS, fp,
-	    (void **)x, cb, u);
+	return PEM_ASN1_read((d2i_of_void *)d2i_CMS_ContentInfo,
+	    PEM_STRING_CMS, fp, (void **)x, cb, u);
 }
 
 int
 PEM_write_bio_CMS(BIO *bp, const CMS_ContentInfo *x)
 {
-	return PEM_ASN1_write_bio((i2d_of_void *)i2d_CMS_ContentInfo, PEM_STRING_CMS, bp,
-	    (void *)x, NULL, NULL, 0, NULL, NULL);
+	return PEM_ASN1_write_bio((i2d_of_void *)i2d_CMS_ContentInfo,
+	    PEM_STRING_CMS, bp, (void *)x, NULL, NULL, 0, NULL, NULL);
 }
 
 int
 PEM_write_CMS(FILE *fp, const CMS_ContentInfo *x)
 {
-	return PEM_ASN1_write((i2d_of_void *)i2d_CMS_ContentInfo, PEM_STRING_CMS, fp,
-	    (void *)x, NULL, NULL, 0, NULL, NULL);
+	return PEM_ASN1_write((i2d_of_void *)i2d_CMS_ContentInfo,
+	    PEM_STRING_CMS, fp, (void *)x, NULL, NULL, 0, NULL, NULL);
 }
 
 BIO *
 BIO_new_CMS(BIO *out, CMS_ContentInfo *cms)
 {
-	return BIO_new_NDEF(out, (ASN1_VALUE *)cms,
-	    &CMS_ContentInfo_it);
+	return BIO_new_NDEF(out, (ASN1_VALUE *)cms, &CMS_ContentInfo_it);
 }
 
 /* CMS wrappers round generalised stream and MIME routines */
@@ -132,7 +134,7 @@ BIO_new_CMS(BIO *out, CMS_ContentInfo *cms)
 int i2d_CMS_bio_stream(BIO *out, CMS_ContentInfo *cms, BIO *in, int flags)
 {
 	return i2d_ASN1_bio_stream(out, (ASN1_VALUE *)cms, in, flags,
-			                   &CMS_ContentInfo_it);
+	    &CMS_ContentInfo_it);
 }
 
 int
@@ -145,14 +147,12 @@ PEM_write_bio_CMS_stream(BIO *out, CMS_ContentInfo *cms, BIO *in, int flags)
 int
 SMIME_write_CMS(BIO *bio, CMS_ContentInfo *cms, BIO *data, int flags)
 {
-	STACK_OF(X509_ALGOR) *mdalgs;
+	STACK_OF(X509_ALGOR) *mdalgs = NULL;
 	int ctype_nid = OBJ_obj2nid(cms->contentType);
 	int econt_nid = OBJ_obj2nid(CMS_get0_eContentType(cms));
 
 	if (ctype_nid == NID_pkcs7_signed)
 		mdalgs = cms->d.signedData->digestAlgorithms;
-	else
-		mdalgs = NULL;
 
 	return SMIME_write_ASN1(bio, (ASN1_VALUE *)cms, data, flags, ctype_nid,
 	    econt_nid, mdalgs, &CMS_ContentInfo_it);

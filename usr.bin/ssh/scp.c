@@ -1,4 +1,4 @@
-/* $OpenBSD: scp.c,v 1.253 2023/03/03 03:12:24 dtucker Exp $ */
+/* $OpenBSD: scp.c,v 1.256 2023/03/31 05:56:36 dtucker Exp $ */
 /*
  * scp - secure remote copy.  This is basically patched BSD rcp which
  * uses ssh to do the data transfer (instead of using rcmd).
@@ -166,11 +166,11 @@ killchild(int signo)
 {
 	if (do_cmd_pid > 1) {
 		kill(do_cmd_pid, signo ? signo : SIGTERM);
-		waitpid(do_cmd_pid, NULL, 0);
+		(void)waitpid(do_cmd_pid, NULL, 0);
 	}
 	if (do_cmd_pid2 > 1) {
 		kill(do_cmd_pid2, signo ? signo : SIGTERM);
-		waitpid(do_cmd_pid2, NULL, 0);
+		(void)waitpid(do_cmd_pid2, NULL, 0);
 	}
 
 	if (signo)
@@ -975,6 +975,7 @@ toremote(int argc, char **argv, enum scp_mode_e mode, char *sftp_direct)
 	struct sftp_conn *conn = NULL, *conn2 = NULL;
 	arglist alist;
 	int i, r, status;
+	struct stat sb;
 	u_int j;
 
 	memset(&alist, '\0', sizeof(alist));
@@ -1117,6 +1118,11 @@ toremote(int argc, char **argv, enum scp_mode_e mode, char *sftp_direct)
 				errs = 1;
 		} else {	/* local to remote */
 			if (mode == MODE_SFTP) {
+				/* no need to glob: already done by shell */
+				if (stat(argv[i], &sb) != 0) {
+					fatal("stat local \"%s\": %s", argv[i],
+					    strerror(errno));
+				}
 				if (remin == -1) {
 					/* Connect to remote now */
 					conn = do_sftp_connect(thost, tuser,
@@ -2176,8 +2182,8 @@ cleanup_exit(int i)
 	if (remout2 > 0)
 		close(remout2);
 	if (do_cmd_pid > 0)
-		waitpid(do_cmd_pid, NULL, 0);
+		(void)waitpid(do_cmd_pid, NULL, 0);
 	if (do_cmd_pid2 > 0)
-		waitpid(do_cmd_pid2, NULL, 0);
+		(void)waitpid(do_cmd_pid2, NULL, 0);
 	exit(i);
 }

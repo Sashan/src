@@ -1,4 +1,4 @@
-#	$OpenBSD: files.pci,v 1.359 2022/03/31 21:41:17 jmatthew Exp $
+#	$OpenBSD: files.pci,v 1.361 2023/04/23 00:20:26 dlg Exp $
 #	$NetBSD: files.pci,v 1.20 1996/09/24 17:47:15 christos Exp $
 #
 # Config file and device description for machine-independent PCI code.
@@ -771,6 +771,10 @@ device	gcu
 attach	gcu at pci
 file	dev/pci/gcu.c			gcu		needs-flag
 
+# Intel OnChip System Fabric
+attach	iosf at pci with iosf_pci
+file	dev/pci/iosf_pci.c		iosf_pci
+
 # AMD Geode CS5536 Audio
 device	auglx: audio, ac97
 attach	auglx at pci
@@ -845,6 +849,11 @@ file	dev/pci/igc_i225.c		igc
 file	dev/pci/igc_mac.c		igc
 file	dev/pci/igc_nvm.c		igc
 file	dev/pci/igc_phy.c		igc
+
+# WangXun AX1860
+device	ngbe: ether, ifnet, ifmedia, intrmap, stoeplitz
+attach	ngbe at pci
+file	dev/pci/if_ngbe.c		ngbe
 
 # NS16550 compatible UART
 attach	com at pci with com_pci

@@ -1,4 +1,4 @@
-/*	$OpenBSD: nd6.c,v 1.265 2023/01/24 20:06:16 claudio Exp $	*/
+/*	$OpenBSD: nd6.c,v 1.272 2023/04/05 23:01:03 kn Exp $	*/
 /*	$KAME: nd6.c,v 1.280 2002/06/08 19:52:07 itojun Exp $	*/
 
 /*
@@ -87,6 +87,7 @@ int nd6_debug = 0;
 TAILQ_HEAD(llinfo_nd6_head, llinfo_nd6) nd6_list;
 struct	pool nd6_pool;		/* pool for llinfo_nd6 structures */
 int	nd6_inuse;
+unsigned int	ln_hold_total;	/* [a] packets currently in the nd6 queue */
 
 void nd6_timer(void *);
 void nd6_slowtimo(void *);
@@ -250,14 +251,18 @@ void
 nd6_timer(void *unused)
 {
 	struct llinfo_nd6 *ln, *nln;
-	time_t expire = getuptime() + nd6_gctimer;
+	time_t uptime, expire;
 	int secs;
 
 	NET_LOCK();
+
+	uptime = getuptime();
+	expire = uptime + nd6_gctimer;
+
 	TAILQ_FOREACH_SAFE(ln, &nd6_list, ln_list, nln) {
 		struct rtentry *rt = ln->ln_rt;
 
-		if (rt->rt_expire && rt->rt_expire <= getuptime())
+		if (rt->rt_expire && rt->rt_expire <= uptime)
 			if (nd6_llinfo_timer(rt))
 				continue;
 
@@ -265,11 +270,11 @@ nd6_timer(void *unused)
 			expire = rt->rt_expire;
 	}
 
-	secs = expire - getuptime();
+	secs = expire - uptime;
 	if (secs < 0)
 		secs = 0;
 	if (!TAILQ_EMPTY(&nd6_list)) {
-		nd6_timer_next = getuptime() + secs;
+		nd6_timer_next = uptime + secs;
 		timeout_add_sec(&nd6_timer_to, secs);
 	}
 
@@ -300,26 +305,33 @@ nd6_llinfo_timer(struct rtentry *rt)
 			nd6_llinfo_settimer(ln, RETRANS_TIMER / 1000);
 			nd6_ns_output(ifp, NULL, &dst->sin6_addr, ln, 0);
 		} else {
-			struct mbuf *m = ln->ln_hold;
-			if (m) {
-				ln->ln_hold = NULL;
+			struct mbuf_list ml;
+			struct mbuf *m;
+			unsigned int len;
+
+			mq_delist(&ln->ln_mq, &ml);
+			len = ml_len(&ml);
+			while ((m = ml_dequeue(&ml)) != NULL) {
 				/*
 				 * Fake rcvif to make the ICMP error
 				 * more helpful in diagnosing for the
 				 * receiver.
-				 * XXX: should we consider
-				 * older rcvif?
+				 * XXX: should we consider older rcvif?
 				 */
 				m->m_pkthdr.ph_ifidx = rt->rt_ifidx;
 
 				icmp6_error(m, ICMP6_DST_UNREACH,
 				    ICMP6_DST_UNREACH_ADDR, 0);
-				if (ln->ln_hold == m) {
-					/* m is back in ln_hold. Discard. */
-					m_freem(ln->ln_hold);
-					ln->ln_hold = NULL;
-				}
 			}
+
+			/* XXXSMP we also discard if other CPU enqueues */
+			if (mq_len(&ln->ln_mq) > 0) {
+				/* mbuf is back in queue. Discard. */
+				atomic_sub_int(&ln_hold_total,
+				    len + mq_purge(&ln->ln_mq));
+			} else
+				atomic_sub_int(&ln_hold_total, len);
+
 			nd6_free(rt);
 			ln = NULL;
 		}
@@ -369,7 +381,6 @@ void
 nd6_expire_timer_update(struct in6_ifaddr *ia6)
 {
 	time_t expire_time = INT64_MAX;
-	int secs;
 
 	if (ia6->ia6_lifetime.ia6t_vltime != ND6_INFINITE_LIFETIME)
 		expire_time = ia6->ia6_lifetime.ia6t_expire;
@@ -392,6 +403,8 @@ nd6_expire_timer_update(struct in6_ifaddr *ia6)
 
 	if (!timeout_pending(&nd6_expire_timeout) ||
 	    nd6_expire_next > expire_time) {
+		int secs;
+
 		secs = expire_time - getuptime();
 		if (secs < 0)
 			secs = 0;
@@ -613,9 +626,8 @@ nd6_invalidate(struct rtentry *rt)
 	struct llinfo_nd6 *ln = (struct llinfo_nd6 *)rt->rt_llinfo;
 	struct sockaddr_dl *sdl = satosdl(rt->rt_gateway);
 
-	m_freem(ln->ln_hold);
+	atomic_sub_int(&ln_hold_total, mq_purge(&ln->ln_mq));
 	sdl->sdl_alen = 0;
-	ln->ln_hold = NULL;
 	ln->ln_state = ND6_LLINFO_INCOMPLETE;
 	ln->ln_asked = 0;
 }
@@ -800,11 +812,12 @@ nd6_rtrequest(struct ifnet *ifp, int req, struct rtentry *rt)
 			log(LOG_DEBUG, "%s: pool get failed\n", __func__);
 			break;
 		}
+		mq_init(&ln->ln_mq, LN_HOLD_QUEUE, IPL_SOFTNET);
 		nd6_inuse++;
 		ln->ln_rt = rt;
 		/* this is required for "ndp" command. - shin */
 		if (req == RTM_ADD) {
-		        /*
+			/*
 			 * gate should have some valid AF_LINK entry,
 			 * and ln expire should have some lifetime
 			 * which is specified by ndp command.
@@ -812,7 +825,7 @@ nd6_rtrequest(struct ifnet *ifp, int req, struct rtentry *rt)
 			ln->ln_state = ND6_LLINFO_REACHABLE;
 			ln->ln_byhint = 0;
 		} else {
-		        /*
+			/*
 			 * When req == RTM_RESOLVE, rt is created and
 			 * initialized in rtrequest(), so rt_expire is 0.
 			 */
@@ -921,7 +934,7 @@ nd6_rtrequest(struct ifnet *ifp, int req, struct rtentry *rt)
 		rt->rt_expire = 0;
 		rt->rt_llinfo = NULL;
 		rt->rt_flags &= ~RTF_LLINFO;
-		m_freem(ln->ln_hold);
+		atomic_sub_int(&ln_hold_total, mq_purge(&ln->ln_mq));
 		pool_put(&nd6_pool, ln);
 		break;
 
@@ -1125,21 +1138,8 @@ fail:
 			 * meaningless.
 			 */
 			nd6_llinfo_settimer(ln, nd6_gctimer);
-
-			if (ln->ln_hold) {
-				struct mbuf *n = ln->ln_hold;
-				ln->ln_hold = NULL;
-				/*
-				 * we assume ifp is not a p2p here, so just
-				 * set the 2nd argument as the 1st one.
-				 */
-				ifp->if_output(ifp, n, rt_key(rt), rt);
-				if (ln->ln_hold == n) {
-					/* n is back in ln_hold. Discard. */
-					m_freem(ln->ln_hold);
-					ln->ln_hold = NULL;
-				}
-			}
+			if_mqoutput(ifp, &ln->ln_mq, &ln_hold_total,
+			    rt_key(rt), rt);
 		} else if (ln->ln_state == ND6_LLINFO_INCOMPLETE) {
 			/* probe right away */
 			nd6_llinfo_settimer(ln, 0);
@@ -1247,17 +1247,22 @@ nd6_resolve(struct ifnet *ifp, struct rtentry *rt0, struct mbuf *m,
 	struct sockaddr_dl *sdl;
 	struct rtentry *rt;
 	struct llinfo_nd6 *ln = NULL;
+	time_t uptime;
 
 	if (m->m_flags & M_MCAST) {
 		ETHER_MAP_IPV6_MULTICAST(&satosin6(dst)->sin6_addr, desten);
 		return (0);
 	}
 
+	/* XXXSMP there is a MP race in nd6_resolve() */
+	KERNEL_LOCK();
+	uptime = getuptime();
 	rt = rt_getll(rt0);
 
 	if (ISSET(rt->rt_flags, RTF_REJECT) &&
-	    (rt->rt_expire == 0 || getuptime() < rt->rt_expire)) {
+	    (rt->rt_expire == 0 || rt->rt_expire > uptime)) {
 		m_freem(m);
+		KERNEL_UNLOCK();
 		return (rt == rt0 ? EHOSTDOWN : EHOSTUNREACH);
 	}
 
@@ -1272,14 +1277,12 @@ nd6_resolve(struct ifnet *ifp, struct rtentry *rt0, struct mbuf *m,
 		log(LOG_DEBUG, "%s: %s: route contains no ND information\n",
 		    __func__, inet_ntop(AF_INET6,
 		    &satosin6(rt_key(rt))->sin6_addr, addr, sizeof(addr)));
-		m_freem(m);
-		return (EINVAL);
+		goto bad;
 	}
 
 	if (rt->rt_gateway->sa_family != AF_LINK) {
 		printf("%s: something odd happens\n", __func__);
-		m_freem(m);
-		return (EINVAL);
+		goto bad;
 	}
 
 	ln = (struct llinfo_nd6 *)rt->rt_llinfo;
@@ -1319,23 +1322,33 @@ nd6_resolve(struct ifnet *ifp, struct rtentry *rt0, struct mbuf *m,
 			    __func__,
 			    inet_ntop(AF_INET6, &satosin6(dst)->sin6_addr,
 				addr, sizeof(addr)));
-			m_freem(m);
-			return (EINVAL);
+			goto bad;
 		}
 
 		bcopy(LLADDR(sdl), desten, sdl->sdl_alen);
+		KERNEL_UNLOCK();
 		return (0);
 	}
 
 	/*
 	 * There is a neighbor cache entry, but no ethernet address
-	 * response yet.  Replace the held mbuf (if any) with this
-	 * latest one.
+	 * response yet.  Insert mbuf in hold queue if below limit.
+	 * If above the limit free the queue without queuing the new packet.
 	 */
 	if (ln->ln_state == ND6_LLINFO_NOSTATE)
 		ln->ln_state = ND6_LLINFO_INCOMPLETE;
-	m_freem(ln->ln_hold);
-	ln->ln_hold = m;
+	/* source address of prompting packet is needed by nd6_ns_output() */
+	if (m->m_len >= sizeof(struct ip6_hdr)) {
+		memcpy(&ln->ln_saddr6, &mtod(m, struct ip6_hdr *)->ip6_src,
+		    sizeof(ln->ln_saddr6));
+	}
+	if (atomic_inc_int_nv(&ln_hold_total) <= LN_HOLD_TOTAL) {
+		if (mq_push(&ln->ln_mq, m) != 0)
+			atomic_dec_int(&ln_hold_total);
+	} else {
+		atomic_sub_int(&ln_hold_total, mq_purge(&ln->ln_mq) + 1);
+		m_freem(m);
+	}
 
 	/*
 	 * If there has been no NS for the neighbor after entering the
@@ -1346,7 +1359,13 @@ nd6_resolve(struct ifnet *ifp, struct rtentry *rt0, struct mbuf *m,
 		nd6_llinfo_settimer(ln, RETRANS_TIMER / 1000);
 		nd6_ns_output(ifp, NULL, &satosin6(dst)->sin6_addr, ln, 0);
 	}
+	KERNEL_UNLOCK();
 	return (EAGAIN);
+
+bad:
+	m_freem(m);
+	KERNEL_UNLOCK();
+	return (EINVAL);
 }
 
 int

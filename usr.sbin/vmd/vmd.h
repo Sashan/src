@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmd.h,v 1.114 2023/01/28 14:40:53 dv Exp $	*/
+/*	$OpenBSD: vmd.h,v 1.117 2023/04/23 12:11:37 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -71,6 +71,9 @@
 #define VM_DEFAULT_MEMORY	512 * 1024 * 1024	/* 512 MiB */
 
 #define VMD_DEFAULT_STAGGERED_START_DELAY 30
+
+/* Launch mode identifiers for when a vm fork+exec's. */
+#define VMD_LAUNCH_VM		1
 
 /* Rate-limit fast reboots */
 #define VM_START_RATE_SEC	6	/* min. seconds since last reboot */
@@ -286,7 +289,7 @@ struct vmd_vm {
 	int			 vm_cdrom;
 	int			 vm_disks[VM_MAX_DISKS_PER_VM][VM_MAX_BASE_PER_DISK];
 	struct vmd_if		 vm_ifs[VM_MAX_NICS_PER_VM];
-	char			*vm_ttyname;
+	char			 vm_ttyname[VM_TTYNAME_MAX];
 	int			 vm_tty;
 	uint32_t		 vm_peerid;
 	/* When set, VM was defined in a config file */
@@ -355,6 +358,7 @@ struct vmd_config {
 struct vmd {
 	struct privsep		 vmd_ps;
 	const char		*vmd_conffile;
+	char			*argv0;	/* abs. path to vmd for exec, unveil */
 
 	/* global configuration that is sent to the children */
 	struct vmd_config	 vmd_cfg;
@@ -443,6 +447,7 @@ char	*get_string(uint8_t *, size_t);
 uint32_t prefixlen2mask(uint8_t);
 void	 prefixlen2mask6(u_int8_t, struct in6_addr *);
 void	 getmonotime(struct timeval *);
+int	 close_fd(int);
 
 /* priv.c */
 void	 priv(struct privsep *, struct privsep_proc *);
@@ -463,6 +468,7 @@ int	 fd_hasdata(int);
 int	 vmm_pipe(struct vmd_vm *, int, void (*)(int, short, void *));
 
 /* vm.c */
+void	 vm_main(int);
 void	 mutex_lock(pthread_mutex_t *);
 void	 mutex_unlock(pthread_mutex_t *);
 int	 read_mem(paddr_t, void *buf, size_t);

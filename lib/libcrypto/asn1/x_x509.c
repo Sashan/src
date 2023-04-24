@@ -1,4 +1,4 @@
-/* $OpenBSD: x_x509.c,v 1.31 2022/11/26 16:08:50 tb Exp $ */
+/* $OpenBSD: x_x509.c,v 1.33 2023/04/24 08:09:29 job Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *

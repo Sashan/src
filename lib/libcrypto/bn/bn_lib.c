@@ -1,4 +1,4 @@
-/* $OpenBSD: bn_lib.c,v 1.76 2023/02/14 18:22:35 jsing Exp $ */
+/* $OpenBSD: bn_lib.c,v 1.84 2023/04/19 11:12:43 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -209,15 +209,19 @@ BN_with_flags(BIGNUM *dest, const BIGNUM *b, int flags)
 	dest->flags = dest_flags;
 }
 
+static const BN_ULONG bn_value_one_data = 1;
+static const BIGNUM bn_value_one = {
+	.d = (BN_ULONG *)&bn_value_one_data,
+	.top = 1,
+	.dmax = 1,
+	.neg = 0,
+	.flags = BN_FLG_STATIC_DATA,
+};
+
 const BIGNUM *
 BN_value_one(void)
 {
-	static const BN_ULONG data_one = 1L;
-	static const BIGNUM const_one = {
-		(BN_ULONG *)&data_one, 1, 1, 0, BN_FLG_STATIC_DATA
-	};
-
-	return (&const_one);
+	return &bn_value_one;
 }
 
 #ifndef HAVE_BN_WORD_CLZ
@@ -333,55 +337,48 @@ BN_dup(const BIGNUM *a)
 	t = BN_new();
 	if (t == NULL)
 		return NULL;
-	if (!BN_copy(t, a)) {
+	if (!bn_copy(t, a)) {
 		BN_free(t);
 		return NULL;
 	}
 	return t;
 }
 
+static inline void
+bn_copy_words(BN_ULONG *ap, const BN_ULONG *bp, int n)
+{
+	while (n > 0) {
+		ap[0] = bp[0];
+		ap++;
+		bp++;
+		n--;
+	}
+}
+
 BIGNUM *
 BN_copy(BIGNUM *a, const BIGNUM *b)
 {
-	int i;
-	BN_ULONG *A;
-	const BN_ULONG *B;
-
-
 	if (a == b)
 		return (a);
+
 	if (!bn_wexpand(a, b->top))
 		return (NULL);
 
-#if 1
-	A = a->d;
-	B = b->d;
-	for (i = b->top >> 2; i > 0; i--, A += 4, B += 4) {
-		BN_ULONG a0, a1, a2, a3;
-		a0 = B[0];
-		a1 = B[1];
-		a2 = B[2];
-		a3 = B[3];
-		A[0] = a0;
-		A[1] = a1;
-		A[2] = a2;
-		A[3] = a3;
-	}
-	switch (b->top & 3) {
-	case 3:
-		A[2] = B[2];
-	case 2:
-		A[1] = B[1];
-	case 1:
-		A[0] = B[0];
-	}
-#else
-	memcpy(a->d, b->d, sizeof(b->d[0]) * b->top);
-#endif
+	bn_copy_words(a->d, b->d, b->top);
+
+	/* Copy constant time flag from b, but make it sticky on a. */
+	a->flags |= b->flags & BN_FLG_CONSTTIME;
 
 	a->top = b->top;
 	a->neg = b->neg;
+
 	return (a);
+}
+
+int
+bn_copy(BIGNUM *dst, const BIGNUM *src)
+{
+	return BN_copy(dst, src) != NULL;
 }
 
 void
@@ -436,186 +433,6 @@ BN_set_word(BIGNUM *a, BN_ULONG w)
 	a->d[0] = w;
 	a->top = (w ? 1 : 0);
 	return (1);
-}
-
-BIGNUM *
-BN_bin2bn(const unsigned char *s, int len, BIGNUM *ret)
-{
-	unsigned int i, m;
-	unsigned int n;
-	BN_ULONG l;
-	BIGNUM *bn = NULL;
-
-	if (len < 0)
-		return (NULL);
-	if (ret == NULL)
-		ret = bn = BN_new();
-	if (ret == NULL)
-		return (NULL);
-	l = 0;
-	n = len;
-	if (n == 0) {
-		ret->top = 0;
-		return (ret);
-	}
-	i = ((n - 1) / BN_BYTES) + 1;
-	m = ((n - 1) % (BN_BYTES));
-	if (!bn_wexpand(ret, (int)i)) {
-		BN_free(bn);
-		return NULL;
-	}
-	ret->top = i;
-	ret->neg = 0;
-	while (n--) {
-		l = (l << 8L) | *(s++);
-		if (m-- == 0) {
-			ret->d[--i] = l;
-			l = 0;
-			m = BN_BYTES - 1;
-		}
-	}
-	/* need to call this due to clear byte at top if avoiding
-	 * having the top bit set (-ve number) */
-	bn_correct_top(ret);
-	return (ret);
-}
-
-typedef enum {
-	big,
-	little,
-} endianness_t;
-
-/* ignore negative */
-static int
-bn2binpad(const BIGNUM *a, unsigned char *to, int tolen, endianness_t endianness)
-{
-	int n;
-	size_t i, lasti, j, atop, mask;
-	BN_ULONG l;
-
-	/*
-	 * In case |a| is fixed-top, BN_num_bytes can return bogus length,
-	 * but it's assumed that fixed-top inputs ought to be "nominated"
-	 * even for padded output, so it works out...
-	 */
-	n = BN_num_bytes(a);
-	if (tolen == -1)
-		tolen = n;
-	else if (tolen < n) {	/* uncommon/unlike case */
-		BIGNUM temp = *a;
-
-		bn_correct_top(&temp);
-
-		n = BN_num_bytes(&temp);
-		if (tolen < n)
-			return -1;
-	}
-
-	/* Swipe through whole available data and don't give away padded zero. */
-	atop = a->dmax * BN_BYTES;
-	if (atop == 0) {
-		explicit_bzero(to, tolen);
-		return tolen;
-	}
-
-	lasti = atop - 1;
-	atop = a->top * BN_BYTES;
-
-	if (endianness == big)
-		to += tolen; /* start from the end of the buffer */
-
-	for (i = 0, j = 0; j < (size_t)tolen; j++) {
-		unsigned char val;
-
-		l = a->d[i / BN_BYTES];
-		mask = 0 - ((j - atop) >> (8 * sizeof(i) - 1));
-		val = (unsigned char)(l >> (8 * (i % BN_BYTES)) & mask);
-
-		if (endianness == big)
-			*--to = val;
-		else
-			*to++ = val;
-
-		i += (i - lasti) >> (8 * sizeof(i) - 1); /* stay on last limb */
-	}
-
-	return tolen;
-}
-
-int
-BN_bn2binpad(const BIGNUM *a, unsigned char *to, int tolen)
-{
-	if (tolen < 0)
-		return -1;
-	return bn2binpad(a, to, tolen, big);
-}
-
-int
-BN_bn2bin(const BIGNUM *a, unsigned char *to)
-{
-	return bn2binpad(a, to, -1, big);
-}
-
-BIGNUM *
-BN_lebin2bn(const unsigned char *s, int len, BIGNUM *ret)
-{
-	unsigned int i, m, n;
-	BN_ULONG l;
-	BIGNUM *bn = NULL;
-
-	if (ret == NULL)
-		ret = bn = BN_new();
-	if (ret == NULL)
-		return NULL;
-
-
-	s += len;
-	/* Skip trailing zeroes. */
-	for (; len > 0 && s[-1] == 0; s--, len--)
-		continue;
-
-	n = len;
-	if (n == 0) {
-		ret->top = 0;
-		return ret;
-	}
-
-	i = ((n - 1) / BN_BYTES) + 1;
-	m = (n - 1) % BN_BYTES;
-	if (!bn_wexpand(ret, (int)i)) {
-		BN_free(bn);
-		return NULL;
-	}
-
-	ret->top = i;
-	ret->neg = 0;
-	l = 0;
-	while (n-- > 0) {
-		s--;
-		l = (l << 8L) | *s;
-		if (m-- == 0) {
-			ret->d[--i] = l;
-			l = 0;
-			m = BN_BYTES - 1;
-		}
-	}
-
-	/*
-	 * need to call this due to clear byte at top if avoiding having the
-	 * top bit set (-ve number)
-	 */
-	bn_correct_top(ret);
-
-	return ret;
-}
-
-int
-BN_bn2lebinpad(const BIGNUM *a, unsigned char *to, int tolen)
-{
-	if (tolen < 0)
-		return -1;
-
-	return bn2binpad(a, to, tolen, little);
 }
 
 int
@@ -736,54 +553,6 @@ void
 BN_set_negative(BIGNUM *bn, int neg)
 {
 	bn->neg = ~BN_is_zero(bn) & bn_ct_ne_zero(neg);
-}
-
-int
-bn_cmp_words(const BN_ULONG *a, const BN_ULONG *b, int n)
-{
-	int i;
-	BN_ULONG aa, bb;
-
-	aa = a[n - 1];
-	bb = b[n - 1];
-	if (aa != bb)
-		return ((aa > bb) ? 1 : -1);
-	for (i = n - 2; i >= 0; i--) {
-		aa = a[i];
-		bb = b[i];
-		if (aa != bb)
-			return ((aa > bb) ? 1 : -1);
-	}
-	return (0);
-}
-
-/* Here follows a specialised variants of bn_cmp_words().  It has the
-   property of performing the operation on arrays of different sizes.
-   The sizes of those arrays is expressed through cl, which is the
-   common length ( basicall, min(len(a),len(b)) ), and dl, which is the
-   delta between the two lengths, calculated as len(a)-len(b).
-   All lengths are the number of BN_ULONGs...  */
-
-int
-bn_cmp_part_words(const BN_ULONG *a, const BN_ULONG *b, int cl, int dl)
-{
-	int n, i;
-
-	n = cl - 1;
-
-	if (dl < 0) {
-		for (i = dl; i < 0; i++) {
-			if (b[n - i] != 0)
-				return -1; /* a < b */
-		}
-	}
-	if (dl > 0) {
-		for (i = dl; i > 0; i--) {
-			if (a[n + i] != 0)
-				return 1; /* a > b */
-		}
-	}
-	return bn_cmp_words(a, b, cl);
 }
 
 /*
@@ -949,6 +718,25 @@ int
 BN_is_negative(const BIGNUM *a)
 {
 	return a->neg != 0;
+}
+
+char *
+BN_options(void)
+{
+	static int init = 0;
+	static char data[16];
+
+	if (!init) {
+		init++;
+#ifdef BN_LLONG
+		snprintf(data,sizeof data, "bn(%d,%d)",
+		    (int)sizeof(BN_ULLONG) * 8, (int)sizeof(BN_ULONG) * 8);
+#else
+		snprintf(data,sizeof data, "bn(%d,%d)",
+		    (int)sizeof(BN_ULONG) * 8, (int)sizeof(BN_ULONG) * 8);
+#endif
+	}
+	return (data);
 }
 
 /*

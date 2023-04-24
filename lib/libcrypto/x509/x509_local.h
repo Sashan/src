@@ -1,4 +1,4 @@
-/*	$OpenBSD: x509_local.h,v 1.2 2022/11/26 17:23:18 tb Exp $ */
+/*	$OpenBSD: x509_local.h,v 1.4 2023/04/16 18:42:30 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2013.
  */
@@ -165,7 +165,6 @@ struct x509_st {
 	CRYPTO_EX_DATA ex_data;
 	/* These contain copies of various extension values */
 	long ex_pathlen;
-	long ex_pcpathlen;
 	unsigned long ex_flags;
 	unsigned long ex_kusage;
 	unsigned long ex_xkusage;
@@ -370,6 +369,17 @@ struct x509_store_ctx_st {
 
 	CRYPTO_EX_DATA ex_data;
 } /* X509_STORE_CTX */;
+
+struct X509_VERIFY_PARAM_ID_st {
+	STACK_OF(OPENSSL_STRING) *hosts; /* Set of acceptable names */
+	unsigned int hostflags;     /* Flags to control matching features */
+	char *peername;             /* Matching hostname in peer certificate */
+	char *email;                /* If not NULL email address to match */
+	size_t emaillen;
+	unsigned char *ip;          /* If not NULL IP address to match */
+	size_t iplen;               /* Length of IP address */
+	int poisoned;
+};
 
 int x509_check_cert_time(X509_STORE_CTX *ctx, X509 *x, int quiet);
 

@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_purp.c,v 1.21 2023/02/16 10:18:59 tb Exp $ */
+/* $OpenBSD: x509_purp.c,v 1.25 2023/04/23 21:49:15 job Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2001.
  */
@@ -380,7 +380,6 @@ X509_supported_extension(X509_EXTENSION *ex)
 		NID_sbgp_autonomousSysNum, /* 291 */
 #endif
 		NID_policy_constraints,	/* 401 */
-		NID_proxyCertInfo,	/* 663 */
 		NID_name_constraints,	/* 666 */
 		NID_policy_mappings,	/* 747 */
 		NID_inhibit_any_policy	/* 748 */
@@ -446,7 +445,6 @@ static void
 x509v3_cache_extensions_internal(X509 *x)
 {
 	BASIC_CONSTRAINTS *bs;
-	PROXY_CERT_INFO_EXTENSION *pci;
 	ASN1_BIT_STRING *usage;
 	ASN1_BIT_STRING *ns;
 	EXTENDED_KEY_USAGE *extusage;
@@ -459,8 +457,11 @@ x509v3_cache_extensions_internal(X509 *x)
 	X509_digest(x, X509_CERT_HASH_EVP, x->hash, NULL);
 
 	/* V1 should mean no extensions ... */
-	if (!X509_get_version(x))
+	if (X509_get_version(x) == 0) {
 		x->ex_flags |= EXFLAG_V1;
+		if (X509_get_ext_count(x) != 0)
+			x->ex_flags |= EXFLAG_INVALID;
+	}
 
 	/* Handle basic constraints */
 	if ((bs = X509_get_ext_d2i(x, NID_basic_constraints, &i, NULL))) {
@@ -477,30 +478,6 @@ x509v3_cache_extensions_internal(X509 *x)
 			x->ex_pathlen = -1;
 		BASIC_CONSTRAINTS_free(bs);
 		x->ex_flags |= EXFLAG_BCONS;
-	} else if (i != -1) {
-		x->ex_flags |= EXFLAG_INVALID;
-	}
-
-	/* Handle proxy certificates */
-	if ((pci = X509_get_ext_d2i(x, NID_proxyCertInfo, &i, NULL))) {
-		if (x->ex_flags & EXFLAG_CA ||
-		    X509_get_ext_by_NID(x, NID_subject_alt_name, -1) >= 0 ||
-		    X509_get_ext_by_NID(x, NID_issuer_alt_name, -1) >= 0) {
-			x->ex_flags |= EXFLAG_INVALID;
-		}
-		if (pci->pcPathLengthConstraint) {
-			if (pci->pcPathLengthConstraint->type ==
-			    V_ASN1_NEG_INTEGER) {
-				x->ex_flags |= EXFLAG_INVALID;
-				x->ex_pcpathlen = 0;
-			} else
-				x->ex_pcpathlen =
-				    ASN1_INTEGER_get(pci->
-				      pcPathLengthConstraint);
-		} else
-			x->ex_pcpathlen = -1;
-		PROXY_CERT_INFO_EXTENSION_free(pci);
-		x->ex_flags |= EXFLAG_PROXY;
 	} else if (i != -1) {
 		x->ex_flags |= EXFLAG_INVALID;
 	}
@@ -908,10 +885,7 @@ X509_check_issued(X509 *issuer, X509 *subject)
 			return ret;
 	}
 
-	if (subject->ex_flags & EXFLAG_PROXY) {
-		if (ku_reject(issuer, KU_DIGITAL_SIGNATURE))
-			return X509_V_ERR_KEYUSAGE_NO_DIGITAL_SIGNATURE;
-	} else if (ku_reject(issuer, KU_KEY_CERT_SIGN))
+	if (ku_reject(issuer, KU_KEY_CERT_SIGN))
 		return X509_V_ERR_KEYUSAGE_NO_CERTSIGN;
 	return X509_V_OK;
 }

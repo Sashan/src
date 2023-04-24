@@ -1,4 +1,4 @@
-/* $OpenBSD: cttest.c,v 1.4 2023/01/01 17:00:08 miod Exp $ */
+/* $OpenBSD: cttest.c,v 1.8 2023/04/14 14:36:13 tb Exp $ */
 /*
  * Copyright (c) 2021 Joel Sing <jsing@openbsd.org>
  *
@@ -18,11 +18,14 @@
 #include <err.h>
 #include <string.h>
 
+#include <openssl/ct.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
 #include <openssl/x509v3.h>
 
-#include "ct/ct.h"
+#ifndef CTPATH
+#define CTPATH "."
+#endif
 
 char *test_ctlog_conf_file;
 char *test_cert_file;
@@ -222,8 +225,9 @@ ct_compare_test_scts(STACK_OF(SCT) *scts)
 		}
 		if (SCT_get_timestamp(sct) != sdt->timestamp) {
 			fprintf(stderr, "FAIL: SCT %d - got timestamp %llu, "
-			    "want %llu\n", i, SCT_get_timestamp(sct),
-			    sdt->timestamp);
+			    "want %llu\n", i,
+			    (unsigned long long)SCT_get_timestamp(sct),
+			    (unsigned long long)sdt->timestamp);
 			goto failure;
 		}
 		if (SCT_get_signature_nid(sct) != sdt->signature_nid) {
@@ -446,6 +450,7 @@ ct_sct_verify_test(void)
 	CTLOG_STORE_free(ctlog_store);
 	X509_free(cert);
 	X509_free(issuer);
+	SCT_LIST_free(scts);
 
 	return failed;
 }
@@ -453,14 +458,15 @@ ct_sct_verify_test(void)
 int
 main(int argc, char **argv)
 {
-	const char *ctpath;
+	const char *ctpath = CTPATH;
 	int failed = 0;
 
-        if (argc != 2) {
-		fprintf(stderr, "usage: %s ctpath\n", argv[0]);
+	if (argc > 2) {
+		fprintf(stderr, "usage %s [ctpath]\n", argv[0]);
 		exit(1);
 	}
-	ctpath = argv[1];
+	if (argc == 2)
+		ctpath = argv[1];
 
 	if (asprintf(&test_cert_file, "%s/%s", ctpath,
 	    "libressl.org.crt") == -1)

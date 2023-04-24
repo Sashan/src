@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.99 2023/03/01 11:28:30 tb Exp $
+# $OpenBSD: Makefile,v 1.108 2023/04/21 06:14:42 tb Exp $
 
 LIB=	crypto
 LIBREBUILD=y
@@ -52,6 +52,7 @@ CFLAGS+= -I${LCRYPTO_SRC}/modes
 CFLAGS+= -I${LCRYPTO_SRC}/ocsp
 CFLAGS+= -I${LCRYPTO_SRC}/pkcs12
 CFLAGS+= -I${LCRYPTO_SRC}/rsa
+CFLAGS+= -I${LCRYPTO_SRC}/sha
 CFLAGS+= -I${LCRYPTO_SRC}/ts
 CFLAGS+= -I${LCRYPTO_SRC}/x509
 
@@ -181,6 +182,7 @@ SRCS+= bn_add.c
 SRCS+= bn_blind.c
 SRCS+= bn_bpsw.c
 SRCS+= bn_const.c
+SRCS+= bn_convert.c
 SRCS+= bn_ctx.c
 SRCS+= bn_div.c
 SRCS+= bn_err.c
@@ -191,18 +193,16 @@ SRCS+= bn_isqrt.c
 SRCS+= bn_kron.c
 SRCS+= bn_lib.c
 SRCS+= bn_mod.c
+SRCS+= bn_mod_sqrt.c
 SRCS+= bn_mont.c
-SRCS+= bn_mpi.c
 SRCS+= bn_mul.c
 SRCS+= bn_nist.c
 SRCS+= bn_prime.c
-SRCS+= bn_print.c
 SRCS+= bn_rand.c
 SRCS+= bn_recp.c
 SRCS+= bn_shift.c
 SRCS+= bn_small_primes.c
 SRCS+= bn_sqr.c
-SRCS+= bn_sqrt.c
 SRCS+= bn_word.c
 SRCS+= bn_x931p.c
 
@@ -310,18 +310,15 @@ SRCS+= xcbc_enc.c
 SRCS+= dh_ameth.c
 SRCS+= dh_asn1.c
 SRCS+= dh_check.c
-SRCS+= dh_depr.c
 SRCS+= dh_err.c
 SRCS+= dh_gen.c
 SRCS+= dh_key.c
 SRCS+= dh_lib.c
 SRCS+= dh_pmeth.c
-SRCS+= dh_prn.c
 
 # dsa/
 SRCS+= dsa_ameth.c
 SRCS+= dsa_asn1.c
-SRCS+= dsa_depr.c
 SRCS+= dsa_err.c
 SRCS+= dsa_gen.c
 SRCS+= dsa_key.c
@@ -373,8 +370,6 @@ SRCS+= ecs_asn1.c
 SRCS+= ecs_err.c
 SRCS+= ecs_lib.c
 SRCS+= ecs_ossl.c
-SRCS+= ecs_sign.c
-SRCS+= ecs_vrf.c
 
 # engine/
 SRCS+= eng_all.c
@@ -450,6 +445,7 @@ SRCS+= m_md5_sha1.c
 SRCS+= m_null.c
 SRCS+= m_ripemd.c
 SRCS+= m_sha1.c
+SRCS+= m_sha3.c
 SRCS+= m_sigver.c
 SRCS+= m_sm3.c
 SRCS+= m_streebog.c
@@ -608,7 +604,6 @@ SRCS+= rsa_ameth.c
 SRCS+= rsa_asn1.c
 SRCS+= rsa_chk.c
 SRCS+= rsa_crpt.c
-SRCS+= rsa_depr.c
 SRCS+= rsa_eay.c
 SRCS+= rsa_err.c
 SRCS+= rsa_gen.c
@@ -625,9 +620,9 @@ SRCS+= rsa_sign.c
 SRCS+= rsa_x931.c
 
 # sha/
-SRCS+= sha1dgst.c
-SRCS+= sha1_one.c
+SRCS+= sha1.c
 SRCS+= sha256.c
+SRCS+= sha3.c
 SRCS+= sha512.c
 
 # sm3/
@@ -690,7 +685,6 @@ SRCS+= x509_cpols.c
 SRCS+= x509_crld.c
 SRCS+= x509_d2.c
 SRCS+= x509_def.c
-SRCS+= x509_enum.c
 SRCS+= x509_err.c
 SRCS+= x509_ext.c
 SRCS+= x509_extku.c

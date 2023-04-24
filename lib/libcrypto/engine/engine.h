@@ -1,4 +1,4 @@
-/* $OpenBSD: engine.h,v 1.35 2022/12/26 07:18:52 jmc Exp $ */
+/* $OpenBSD: engine.h,v 1.38 2023/04/18 09:10:44 tb Exp $ */
 /* Written by Geoff Thorpe (geoff@geoffthorpe.net) for the OpenSSL
  * project 2000.
  */
@@ -70,16 +70,15 @@
 #error ENGINE is disabled.
 #endif
 
-#ifndef OPENSSL_NO_DEPRECATED
 #include <openssl/bn.h>
-#ifndef OPENSSL_NO_RSA
-#include <openssl/rsa.h>
+#ifndef OPENSSL_NO_DH
+#include <openssl/dh.h>
 #endif
 #ifndef OPENSSL_NO_DSA
 #include <openssl/dsa.h>
 #endif
-#ifndef OPENSSL_NO_DH
-#include <openssl/dh.h>
+#ifndef OPENSSL_NO_EC
+#include <openssl/ec.h>
 #endif
 #ifndef OPENSSL_NO_ECDH
 #include <openssl/ecdh.h>
@@ -87,16 +86,14 @@
 #ifndef OPENSSL_NO_ECDSA
 #include <openssl/ecdsa.h>
 #endif
-#ifndef OPENSSL_NO_EC
-#include <openssl/ec.h>
+#include <openssl/err.h>
+#ifndef OPENSSL_NO_RSA
+#include <openssl/rsa.h>
 #endif
 #include <openssl/ui.h>
-#include <openssl/err.h>
-#endif
+#include <openssl/x509.h>
 
 #include <openssl/ossl_typ.h>
-
-#include <openssl/x509.h>
 
 #ifdef  __cplusplus
 extern "C" {

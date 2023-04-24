@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.c,v 1.685 2023/03/07 20:09:48 jan Exp $	*/
+/*	$OpenBSD: if.c,v 1.692 2023/04/22 04:39:46 dlg Exp $	*/
 /*	$NetBSD: if.c,v 1.35 1996/05/07 05:26:04 thorpej Exp $	*/
 
 /*
@@ -272,6 +272,10 @@ ifinit(void)
 
 static struct if_idxmap if_idxmap;
 
+/*
+ * XXXSMP: For `ifnetlist' modification both kernel and net locks
+ * should be taken. For read-only access only one lock of them required.
+ */
 struct ifnet_head ifnetlist = TAILQ_HEAD_INITIALIZER(ifnetlist);
 
 static inline unsigned int
@@ -753,6 +757,27 @@ if_enqueue_ifq(struct ifnet *ifp, struct mbuf *m)
 }
 
 void
+if_mqoutput(struct ifnet *ifp, struct mbuf_queue *mq, unsigned int *total,
+    struct sockaddr *dst, struct rtentry *rt)
+{
+	struct mbuf_list ml;
+	struct mbuf *m;
+	unsigned int len;
+
+	mq_delist(mq, &ml);
+	len = ml_len(&ml);
+	while ((m = ml_dequeue(&ml)) != NULL)
+		ifp->if_output(ifp, m, rt_key(rt), rt);
+
+	/* XXXSMP we also discard if other CPU enqueues */
+	if (mq_len(mq) > 0) {
+		/* mbuf is back in queue. Discard. */
+		atomic_sub_int(total, len + mq_purge(mq));
+	} else
+		atomic_sub_int(total, len);
+}
+
+void
 if_input(struct ifnet *ifp, struct mbuf_list *ml)
 {
 	ifiq_input(&ifp->if_rcv, ml);
@@ -906,11 +931,8 @@ if_netisr(void *unused)
 		atomic_clearbits_int(&netisr, n);
 
 #if NETHER > 0
-		if (n & (1 << NETISR_ARP)) {
-			KERNEL_LOCK();
+		if (n & (1 << NETISR_ARP))
 			arpintr();
-			KERNEL_UNLOCK();
-		}
 #endif
 		if (n & (1 << NETISR_IP))
 			ipintr();
@@ -1107,11 +1129,11 @@ if_detach(struct ifnet *ifp)
 #ifdef INET6
 	nd6_ifdetach(ifp);
 #endif
+	splx(s);
+	NET_UNLOCK();
 
 	/* Announce that the interface is gone. */
 	rtm_ifannounce(ifp, IFAN_DEPARTURE);
-	splx(s);
-	NET_UNLOCK();
 
 	if (ifp->if_counters != NULL)
 		if_counters_free(ifp);
@@ -1391,8 +1413,9 @@ ifa_ifwithaddr(struct sockaddr *addr, u_int rtableid)
 	struct ifaddr *ifa;
 	u_int rdomain;
 
+	NET_ASSERT_LOCKED();
+
 	rdomain = rtable_l2(rtableid);
-	KERNEL_LOCK();
 	TAILQ_FOREACH(ifp, &ifnetlist, if_list) {
 		if (ifp->if_rdomain != rdomain)
 			continue;
@@ -1402,12 +1425,10 @@ ifa_ifwithaddr(struct sockaddr *addr, u_int rtableid)
 				continue;
 
 			if (equal(addr, ifa->ifa_addr)) {
-				KERNEL_UNLOCK();
 				return (ifa);
 			}
 		}
 	}
-	KERNEL_UNLOCK();
 	return (NULL);
 }
 
@@ -1420,8 +1441,9 @@ ifa_ifwithdstaddr(struct sockaddr *addr, u_int rdomain)
 	struct ifnet *ifp;
 	struct ifaddr *ifa;
 
+	NET_ASSERT_LOCKED();
+
 	rdomain = rtable_l2(rdomain);
-	KERNEL_LOCK();
 	TAILQ_FOREACH(ifp, &ifnetlist, if_list) {
 		if (ifp->if_rdomain != rdomain)
 			continue;
@@ -1431,13 +1453,11 @@ ifa_ifwithdstaddr(struct sockaddr *addr, u_int rdomain)
 				    addr->sa_family || ifa->ifa_dstaddr == NULL)
 					continue;
 				if (equal(addr, ifa->ifa_dstaddr)) {
-					KERNEL_UNLOCK();
 					return (ifa);
 				}
 			}
 		}
 	}
-	KERNEL_UNLOCK();
 	return (NULL);
 }
 
@@ -3149,12 +3169,14 @@ ifsettso(struct ifnet *ifp, int on)
 void
 ifa_add(struct ifnet *ifp, struct ifaddr *ifa)
 {
+	NET_ASSERT_LOCKED_EXCLUSIVE();
 	TAILQ_INSERT_TAIL(&ifp->if_addrlist, ifa, ifa_list);
 }
 
 void
 ifa_del(struct ifnet *ifp, struct ifaddr *ifa)
 {
+	NET_ASSERT_LOCKED_EXCLUSIVE();
 	TAILQ_REMOVE(&ifp->if_addrlist, ifa, ifa_list);
 }
 

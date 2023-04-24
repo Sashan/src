@@ -1,4 +1,4 @@
-/* $OpenBSD: ec_lib.c,v 1.51 2023/03/08 06:47:30 jsing Exp $ */
+/* $OpenBSD: ec_lib.c,v 1.55 2023/04/13 07:44:12 tb Exp $ */
 /*
  * Originally written by Bodo Moeller for the OpenSSL project.
  */
@@ -82,7 +82,7 @@ EC_GROUP_new(const EC_METHOD *meth)
 		ECerror(EC_R_SLOT_FULL);
 		return NULL;
 	}
-	if (meth->group_init == 0) {
+	if (meth->group_init == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
 		return NULL;
 	}
@@ -144,7 +144,7 @@ EC_GROUP_copy(EC_GROUP *dest, const EC_GROUP *src)
 {
 	EC_EXTRA_DATA *d;
 
-	if (dest->meth->group_copy == 0) {
+	if (dest->meth->group_copy == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
 		return 0;
 	}
@@ -181,9 +181,9 @@ EC_GROUP_copy(EC_GROUP *dest, const EC_GROUP *src)
 		dest->generator = NULL;
 	}
 
-	if (!BN_copy(&dest->order, &src->order))
+	if (!bn_copy(&dest->order, &src->order))
 		return 0;
-	if (!BN_copy(&dest->cofactor, &src->cofactor))
+	if (!bn_copy(&dest->cofactor, &src->cofactor))
 		return 0;
 
 	dest->curve_name = src->curve_name;
@@ -279,7 +279,7 @@ ec_guess_cofactor(EC_GROUP *group)
 		if (!BN_set_bit(q, BN_num_bits(&group->field) - 1))
 			goto err;
 	} else {
-		if (!BN_copy(q, &group->field))
+		if (!bn_copy(q, &group->field))
 			goto err;
 	}
 
@@ -357,12 +357,12 @@ EC_GROUP_set_generator(EC_GROUP *group, const EC_POINT *generator,
 	if (!EC_POINT_copy(group->generator, generator))
 		return 0;
 
-	if (!BN_copy(&group->order, order))
+	if (!bn_copy(&group->order, order))
 		return 0;
 
 	/* Either take the provided positive cofactor, or try to compute it. */
 	if (cofactor != NULL && !BN_is_zero(cofactor)) {
-		if (!BN_copy(&group->cofactor, cofactor))
+		if (!bn_copy(&group->cofactor, cofactor))
 			return 0;
 	} else if (!ec_guess_cofactor(group))
 		return 0;
@@ -387,7 +387,7 @@ EC_GROUP_get0_generator(const EC_GROUP *group)
 int
 EC_GROUP_get_order(const EC_GROUP *group, BIGNUM *order, BN_CTX *ctx)
 {
-	if (!BN_copy(order, &group->order))
+	if (!bn_copy(order, &group->order))
 		return 0;
 
 	return !BN_is_zero(order);
@@ -402,7 +402,7 @@ EC_GROUP_order_bits(const EC_GROUP *group)
 int
 EC_GROUP_get_cofactor(const EC_GROUP *group, BIGNUM *cofactor, BN_CTX *ctx)
 {
-	if (!BN_copy(cofactor, &group->cofactor))
+	if (!bn_copy(cofactor, &group->cofactor))
 		return 0;
 
 	return !BN_is_zero(&group->cofactor);
@@ -487,24 +487,52 @@ EC_GROUP_get_seed_len(const EC_GROUP *group)
 
 int
 EC_GROUP_set_curve(EC_GROUP *group, const BIGNUM *p, const BIGNUM *a,
-    const BIGNUM *b, BN_CTX *ctx)
+    const BIGNUM *b, BN_CTX *ctx_in)
 {
+	BN_CTX *ctx;
+	int ret = 0;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
 	if (group->meth->group_set_curve == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return 0;
+		goto err;
 	}
-	return group->meth->group_set_curve(group, p, a, b, ctx);
+	ret = group->meth->group_set_curve(group, p, a, b, ctx);
+
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
 }
 
 int
 EC_GROUP_get_curve(const EC_GROUP *group, BIGNUM *p, BIGNUM *a, BIGNUM *b,
-    BN_CTX *ctx)
+    BN_CTX *ctx_in)
 {
+	BN_CTX *ctx;
+	int ret = 0;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
 	if (group->meth->group_get_curve == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return 0;
+		goto err;
 	}
-	return group->meth->group_get_curve(group, p, a, b, ctx);
+	ret = group->meth->group_get_curve(group, p, a, b, ctx);
+
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
 }
 
 int
@@ -540,7 +568,7 @@ EC_GROUP_get_curve_GF2m(const EC_GROUP *group, BIGNUM *p, BIGNUM *a,
 int
 EC_GROUP_get_degree(const EC_GROUP *group)
 {
-	if (group->meth->group_get_degree == 0) {
+	if (group->meth->group_get_degree == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
 		return 0;
 	}
@@ -549,13 +577,27 @@ EC_GROUP_get_degree(const EC_GROUP *group)
 
 
 int
-EC_GROUP_check_discriminant(const EC_GROUP *group, BN_CTX *ctx)
+EC_GROUP_check_discriminant(const EC_GROUP *group, BN_CTX *ctx_in)
 {
-	if (group->meth->group_check_discriminant == 0) {
+	BN_CTX *ctx;
+	int ret = 0;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
+	if (group->meth->group_check_discriminant == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return 0;
+		goto err;
 	}
-	return group->meth->group_check_discriminant(group, ctx);
+	ret = group->meth->group_check_discriminant(group, ctx);
+
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
 }
 
 
@@ -803,9 +845,6 @@ EC_EX_DATA_clear_free_all_data(EC_EXTRA_DATA ** ex_data)
 	*ex_data = NULL;
 }
 
-
-/* functions for EC_POINT objects */
-
 EC_POINT *
 EC_POINT_new(const EC_GROUP *group)
 {
@@ -815,7 +854,7 @@ EC_POINT_new(const EC_GROUP *group)
 		ECerror(ERR_R_PASSED_NULL_PARAMETER);
 		return NULL;
 	}
-	if (group->meth->point_init == 0) {
+	if (group->meth->point_init == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
 		return NULL;
 	}
@@ -854,7 +893,7 @@ EC_POINT_clear_free(EC_POINT *point)
 int
 EC_POINT_copy(EC_POINT *dest, const EC_POINT *src)
 {
-	if (dest->meth->point_copy == 0) {
+	if (dest->meth->point_copy == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
 		return 0;
 	}
@@ -866,7 +905,6 @@ EC_POINT_copy(EC_POINT *dest, const EC_POINT *src)
 		return 1;
 	return dest->meth->point_copy(dest, src);
 }
-
 
 EC_POINT *
 EC_POINT_dup(const EC_POINT *a, const EC_GROUP *group)
@@ -888,18 +926,16 @@ EC_POINT_dup(const EC_POINT *a, const EC_GROUP *group)
 		return t;
 }
 
-
 const EC_METHOD *
 EC_POINT_method_of(const EC_POINT *point)
 {
 	return point->meth;
 }
 
-
 int
 EC_POINT_set_to_infinity(const EC_GROUP *group, EC_POINT *point)
 {
-	if (group->meth->point_set_to_infinity == 0) {
+	if (group->meth->point_set_to_infinity == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
 		return 0;
 	}
@@ -912,40 +948,70 @@ EC_POINT_set_to_infinity(const EC_GROUP *group, EC_POINT *point)
 
 int
 EC_POINT_set_Jprojective_coordinates(const EC_GROUP *group, EC_POINT *point,
-    const BIGNUM *x, const BIGNUM *y, const BIGNUM *z, BN_CTX *ctx)
+    const BIGNUM *x, const BIGNUM *y, const BIGNUM *z, BN_CTX *ctx_in)
 {
+	BN_CTX *ctx;
+	int ret = 0;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
 	if (group->meth->point_set_Jprojective_coordinates == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return 0;
+		goto err;
 	}
 	if (group->meth != point->meth) {
 		ECerror(EC_R_INCOMPATIBLE_OBJECTS);
-		return 0;
+		goto err;
 	}
 	if (!group->meth->point_set_Jprojective_coordinates(group, point,
 	    x, y, z, ctx))
-		return 0;
+		goto err;
+
 	if (EC_POINT_is_on_curve(group, point, ctx) <= 0) {
 		ECerror(EC_R_POINT_IS_NOT_ON_CURVE);
-		return 0;
+		goto err;
 	}
-	return 1;
+
+	ret = 1;
+
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
 }
 
 int
 EC_POINT_get_Jprojective_coordinates(const EC_GROUP *group,
-    const EC_POINT *point, BIGNUM *x, BIGNUM *y, BIGNUM *z, BN_CTX *ctx)
+    const EC_POINT *point, BIGNUM *x, BIGNUM *y, BIGNUM *z, BN_CTX *ctx_in)
 {
+	BN_CTX *ctx;
+	int ret = 0;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
 	if (group->meth->point_get_Jprojective_coordinates == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return 0;
+		goto err;
 	}
 	if (group->meth != point->meth) {
 		ECerror(EC_R_INCOMPATIBLE_OBJECTS);
-		return 0;
+		goto err;
 	}
-	return group->meth->point_get_Jprojective_coordinates(group, point,
+	ret = group->meth->point_get_Jprojective_coordinates(group, point,
 	    x, y, z, ctx);
+
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
 }
 
 int
@@ -964,23 +1030,39 @@ EC_POINT_get_Jprojective_coordinates_GFp(const EC_GROUP *group,
 
 int
 EC_POINT_set_affine_coordinates(const EC_GROUP *group, EC_POINT *point,
-    const BIGNUM *x, const BIGNUM *y, BN_CTX *ctx)
+    const BIGNUM *x, const BIGNUM *y, BN_CTX *ctx_in)
 {
+	BN_CTX *ctx;
+	int ret = 0;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
 	if (group->meth->point_set_affine_coordinates == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return 0;
+		goto err;
 	}
 	if (group->meth != point->meth) {
 		ECerror(EC_R_INCOMPATIBLE_OBJECTS);
-		return 0;
+		goto err;
 	}
 	if (!group->meth->point_set_affine_coordinates(group, point, x, y, ctx))
-		return 0;
+		goto err;
+
 	if (EC_POINT_is_on_curve(group, point, ctx) <= 0) {
 		ECerror(EC_R_POINT_IS_NOT_ON_CURVE);
-		return 0;
+		goto err;
 	}
-	return 1;
+
+	ret = 1;
+
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
 }
 
 int
@@ -1001,17 +1083,31 @@ EC_POINT_set_affine_coordinates_GF2m(const EC_GROUP *group, EC_POINT *point,
 
 int
 EC_POINT_get_affine_coordinates(const EC_GROUP *group, const EC_POINT *point,
-    BIGNUM *x, BIGNUM *y, BN_CTX *ctx)
+    BIGNUM *x, BIGNUM *y, BN_CTX *ctx_in)
 {
+	BN_CTX *ctx;
+	int ret = 0;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
 	if (group->meth->point_get_affine_coordinates == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return 0;
+		goto err;
 	}
 	if (group->meth != point->meth) {
 		ECerror(EC_R_INCOMPATIBLE_OBJECTS);
-		return 0;
+		goto err;
 	}
-	return group->meth->point_get_affine_coordinates(group, point, x, y, ctx);
+	ret = group->meth->point_get_affine_coordinates(group, point, x, y, ctx);
+
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
 }
 
 int
@@ -1032,54 +1128,95 @@ EC_POINT_get_affine_coordinates_GF2m(const EC_GROUP *group, const EC_POINT *poin
 
 int
 EC_POINT_add(const EC_GROUP *group, EC_POINT *r, const EC_POINT *a,
-    const EC_POINT *b, BN_CTX *ctx)
+    const EC_POINT *b, BN_CTX *ctx_in)
 {
-	if (group->meth->add == 0) {
+	BN_CTX *ctx;
+	int ret = 0;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
+	if (group->meth->add == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return 0;
+		goto err;
 	}
-	if ((group->meth != r->meth) || (r->meth != a->meth) || (a->meth != b->meth)) {
+	if (group->meth != r->meth || group->meth != a->meth ||
+	    group->meth != b->meth) {
 		ECerror(EC_R_INCOMPATIBLE_OBJECTS);
-		return 0;
+		goto err;
 	}
-	return group->meth->add(group, r, a, b, ctx);
+	ret = group->meth->add(group, r, a, b, ctx);
+
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
 }
 
-
 int
-EC_POINT_dbl(const EC_GROUP *group, EC_POINT *r, const EC_POINT *a, BN_CTX *ctx)
+EC_POINT_dbl(const EC_GROUP *group, EC_POINT *r, const EC_POINT *a,
+    BN_CTX *ctx_in)
 {
-	if (group->meth->dbl == 0) {
+	BN_CTX *ctx;
+	int ret = 0;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
+	if (group->meth->dbl == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return 0;
+		goto err;
 	}
-	if ((group->meth != r->meth) || (r->meth != a->meth)) {
+	if (group->meth != r->meth || r->meth != a->meth) {
 		ECerror(EC_R_INCOMPATIBLE_OBJECTS);
-		return 0;
+		goto err;
 	}
-	return group->meth->dbl(group, r, a, ctx);
+	ret = group->meth->dbl(group, r, a, ctx);
+
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
 }
 
-
 int
-EC_POINT_invert(const EC_GROUP *group, EC_POINT *a, BN_CTX *ctx)
+EC_POINT_invert(const EC_GROUP *group, EC_POINT *a, BN_CTX *ctx_in)
 {
-	if (group->meth->invert == 0) {
+	BN_CTX *ctx;
+	int ret = 0;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
+	if (group->meth->invert == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return 0;
+		goto err;
 	}
 	if (group->meth != a->meth) {
 		ECerror(EC_R_INCOMPATIBLE_OBJECTS);
-		return 0;
+		goto err;
 	}
-	return group->meth->invert(group, a, ctx);
-}
+	ret = group->meth->invert(group, a, ctx);
 
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
+}
 
 int
 EC_POINT_is_at_infinity(const EC_GROUP *group, const EC_POINT *point)
 {
-	if (group->meth->is_at_infinity == 0) {
+	if (group->meth->is_at_infinity == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
 		return 0;
 	}
@@ -1090,114 +1227,184 @@ EC_POINT_is_at_infinity(const EC_GROUP *group, const EC_POINT *point)
 	return group->meth->is_at_infinity(group, point);
 }
 
-
 int
-EC_POINT_is_on_curve(const EC_GROUP *group, const EC_POINT *point, BN_CTX *ctx)
+EC_POINT_is_on_curve(const EC_GROUP *group, const EC_POINT *point,
+    BN_CTX *ctx_in)
 {
-	if (group->meth->is_on_curve == 0) {
+	BN_CTX *ctx;
+	int ret = 0;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
+	if (group->meth->is_on_curve == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return 0;
+		goto err;
 	}
 	if (group->meth != point->meth) {
 		ECerror(EC_R_INCOMPATIBLE_OBJECTS);
-		return 0;
+		goto err;
 	}
-	return group->meth->is_on_curve(group, point, ctx);
-}
+	ret = group->meth->is_on_curve(group, point, ctx);
 
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
+}
 
 int
 EC_POINT_cmp(const EC_GROUP *group, const EC_POINT *a, const EC_POINT *b,
-    BN_CTX *ctx)
+    BN_CTX *ctx_in)
 {
-	if (group->meth->point_cmp == 0) {
+	BN_CTX *ctx;
+	int ret = -1;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
+	if (group->meth->point_cmp == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return -1;
+		goto err;
 	}
-	if ((group->meth != a->meth) || (a->meth != b->meth)) {
+	if (group->meth != a->meth || a->meth != b->meth) {
 		ECerror(EC_R_INCOMPATIBLE_OBJECTS);
-		return -1;
+		goto err;
 	}
-	return group->meth->point_cmp(group, a, b, ctx);
+	ret = group->meth->point_cmp(group, a, b, ctx);
+
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
 }
 
-
 int
-EC_POINT_make_affine(const EC_GROUP *group, EC_POINT *point, BN_CTX *ctx)
+EC_POINT_make_affine(const EC_GROUP *group, EC_POINT *point, BN_CTX *ctx_in)
 {
-	if (group->meth->make_affine == 0) {
+	BN_CTX *ctx;
+	int ret = 0;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
+	if (group->meth->make_affine == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return 0;
+		goto err;
 	}
 	if (group->meth != point->meth) {
 		ECerror(EC_R_INCOMPATIBLE_OBJECTS);
-		return 0;
+		goto err;
 	}
-	return group->meth->make_affine(group, point, ctx);
-}
+	ret = group->meth->make_affine(group, point, ctx);
 
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
+}
 
 int
 EC_POINTs_make_affine(const EC_GROUP *group, size_t num, EC_POINT *points[],
-    BN_CTX *ctx)
+    BN_CTX *ctx_in)
 {
+	BN_CTX *ctx;
 	size_t i;
+	int ret = 0;
 
-	if (group->meth->points_make_affine == 0) {
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
+	if (group->meth->points_make_affine == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return 0;
+		goto err;
 	}
 	for (i = 0; i < num; i++) {
 		if (group->meth != points[i]->meth) {
 			ECerror(EC_R_INCOMPATIBLE_OBJECTS);
-			return 0;
+			goto err;
 		}
 	}
-	return group->meth->points_make_affine(group, num, points, ctx);
+	ret = group->meth->points_make_affine(group, num, points, ctx);
+
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
 }
 
-
-/* Functions for point multiplication */
 int
 EC_POINTs_mul(const EC_GROUP *group, EC_POINT *r, const BIGNUM *scalar,
-    size_t num, const EC_POINT *points[], const BIGNUM *scalars[], BN_CTX *ctx)
+    size_t num, const EC_POINT *points[], const BIGNUM *scalars[],
+    BN_CTX *ctx_in)
 {
-	/*
-	 * The function pointers must be set, and only support num == 0 and
-	 * num == 1.
-	 */
+	BN_CTX *ctx;
+	int ret = 0;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
+	/* Only num == 0 and num == 1 is supported. */
 	if (group->meth->mul_generator_ct == NULL ||
 	    group->meth->mul_single_ct == NULL ||
 	    group->meth->mul_double_nonct == NULL ||
 	    num > 1) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return 0;
+		goto err;
 	}
 
-	/* Either bP or aG + bP, this is sane. */
-	if (num == 1 && points != NULL && scalars != NULL)
-		return EC_POINT_mul(group, r, scalar, points[0], scalars[0],
-		    ctx);
+	if (num == 1 && points != NULL && scalars != NULL) {
+		/* Either bP or aG + bP, this is sane. */
+		ret = EC_POINT_mul(group, r, scalar, points[0], scalars[0], ctx);
+	} else if (scalar != NULL && points == NULL && scalars == NULL) {
+		/* aG, this is sane */
+		ret = EC_POINT_mul(group, r, scalar, NULL, NULL, ctx);
+	} else {
+		/* anything else is an error */
+		ECerror(ERR_R_EC_LIB);
+		goto err;
+	}
 
-	/* aG, this is sane */
-	if (scalar != NULL && points == NULL && scalars == NULL)
-		return EC_POINT_mul(group, r, scalar, NULL, NULL, ctx);
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
 
-	/* anything else is an error */
-	ECerror(ERR_R_EC_LIB);
-	return 0;
+	return ret;
 }
 
 int
 EC_POINT_mul(const EC_GROUP *group, EC_POINT *r, const BIGNUM *g_scalar,
-    const EC_POINT *point, const BIGNUM *p_scalar, BN_CTX *ctx)
+    const EC_POINT *point, const BIGNUM *p_scalar, BN_CTX *ctx_in)
 {
+	BN_CTX *ctx;
+	int ret = 0;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
 	if (group->meth->mul_generator_ct == NULL ||
 	    group->meth->mul_single_ct == NULL ||
 	    group->meth->mul_double_nonct == NULL) {
 		ECerror(ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
-		return 0;
+		goto err;
 	}
+
 	if (g_scalar != NULL && point == NULL && p_scalar == NULL) {
 		/*
 		 * In this case we want to compute g_scalar * GeneratorPoint:
@@ -1207,52 +1414,69 @@ EC_POINT_mul(const EC_GROUP *group, EC_POINT *r, const BIGNUM *g_scalar,
 		 * secret. This is why we ignore if BN_FLG_CONSTTIME is actually
 		 * set and we always call the constant time version.
 		 */
-		return group->meth->mul_generator_ct(group, r, g_scalar, ctx);
-	}
-	if (g_scalar == NULL && point != NULL && p_scalar != NULL) {
-		/* In this case we want to compute p_scalar * GenericPoint:
+		ret = group->meth->mul_generator_ct(group, r, g_scalar, ctx);
+	} else if (g_scalar == NULL && point != NULL && p_scalar != NULL) {
+		/*
+		 * In this case we want to compute p_scalar * GenericPoint:
 		 * this codepath is reached most prominently by the second half
 		 * of ECDH, where the secret scalar is multiplied by the peer's
 		 * public point. To protect the secret scalar, we ignore if
 		 * BN_FLG_CONSTTIME is actually set and we always call the
 		 * constant time version.
 		 */
-		return group->meth->mul_single_ct(group, r, p_scalar, point,
-		    ctx);
-	}
-	if (g_scalar != NULL && point != NULL && p_scalar != NULL) {
+		ret = group->meth->mul_single_ct(group, r, p_scalar, point, ctx);
+	} else if (g_scalar != NULL && point != NULL && p_scalar != NULL) {
 		/*
 		 * In this case we want to compute
 		 *   g_scalar * GeneratorPoint + p_scalar * GenericPoint:
 		 * this codepath is reached most prominently by ECDSA signature
 		 * verification. So we call the non-ct version.
 		 */
-		return group->meth->mul_double_nonct(group, r, g_scalar,
+		ret = group->meth->mul_double_nonct(group, r, g_scalar,
 		    p_scalar, point, ctx);
+	} else {
+		/* Anything else is an error. */
+		ECerror(ERR_R_EC_LIB);
+		goto err;
 	}
 
-	/* Anything else is an error. */
-	ECerror(ERR_R_EC_LIB);
-	return 0;
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
 }
 
 int
-EC_GROUP_precompute_mult(EC_GROUP *group, BN_CTX *ctx)
+EC_GROUP_precompute_mult(EC_GROUP *group, BN_CTX *ctx_in)
 {
-	if (group->meth->precompute_mult != 0)
-		return group->meth->precompute_mult(group, ctx);
-	else
-		return 1;	/* nothing to do, so report success */
+	BN_CTX *ctx;
+	int ret = 0;
+
+	if (group->meth->precompute_mult == NULL)
+		return 1;
+
+	if ((ctx = ctx_in) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
+		goto err;
+
+	ret = group->meth->precompute_mult(group, ctx);
+
+ err:
+	if (ctx != ctx_in)
+		BN_CTX_free(ctx);
+
+	return ret;
 }
 
 int
 EC_GROUP_have_precompute_mult(const EC_GROUP *group)
 {
-	if (group->meth->have_precompute_mult != 0)
-		return group->meth->have_precompute_mult(group);
-	else
-		return 0;	/* cannot tell whether precomputation has
-				 * been performed */
+	if (group->meth->have_precompute_mult == NULL)
+		return 0;
+
+	return group->meth->have_precompute_mult(group);
 }
 
 int

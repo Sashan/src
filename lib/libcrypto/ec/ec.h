@@ -1,4 +1,4 @@
-/* $OpenBSD: ec.h,v 1.31 2023/03/08 05:45:31 jsing Exp $ */
+/* $OpenBSD: ec.h,v 1.35 2023/04/18 15:14:46 tb Exp $ */
 /*
  * Originally written by Bodo Moeller for the OpenSSL project.
  */
@@ -83,9 +83,7 @@
 #endif
 
 #include <openssl/asn1.h>
-#ifndef OPENSSL_NO_DEPRECATED
 #include <openssl/bn.h>
-#endif
 
 #ifdef  __cplusplus
 extern "C" {
@@ -145,26 +143,11 @@ const EC_METHOD *EC_GFp_simple_method(void);
  */
 const EC_METHOD *EC_GFp_mont_method(void);
 
+#if !defined(LIBRESSL_NEXT_API) || defined(LIBRESSL_INTERNAL)
 /** Returns GFp methods using optimized methods for NIST recommended curves
  *  \return  EC_METHOD object
  */
 const EC_METHOD *EC_GFp_nist_method(void);
-
-#ifndef OPENSSL_NO_EC_NISTP_64_GCC_128
-/** Returns 64-bit optimized methods for nistp224
- *  \return  EC_METHOD object
- */
-const EC_METHOD *EC_GFp_nistp224_method(void);
-
-/** Returns 64-bit optimized methods for nistp256
- *  \return  EC_METHOD object
- */
-const EC_METHOD *EC_GFp_nistp256_method(void);
-
-/** Returns 64-bit optimized methods for nistp521
- *  \return  EC_METHOD object
- */
-const EC_METHOD *EC_GFp_nistp521_method(void);
 #endif
 
 #ifndef OPENSSL_NO_EC2M
@@ -837,6 +820,8 @@ unsigned EC_KEY_get_enc_flags(const EC_KEY *key);
 void EC_KEY_set_enc_flags(EC_KEY *eckey, unsigned int flags);
 point_conversion_form_t EC_KEY_get_conv_form(const EC_KEY *key);
 void EC_KEY_set_conv_form(EC_KEY *eckey, point_conversion_form_t cform);
+
+#if !defined(LIBRESSL_NEXT_API) || defined(LIBRESSL_INTERNAL)
 /* functions to set/get method specific data  */
 void *EC_KEY_get_key_method_data(EC_KEY *key, 
 	void *(*dup_func)(void *), void (*free_func)(void *), void (*clear_free_func)(void *));
@@ -850,6 +835,8 @@ void *EC_KEY_get_key_method_data(EC_KEY *key,
  */
 void *EC_KEY_insert_key_method_data(EC_KEY *key, void *data,
 	void *(*dup_func)(void *), void (*free_func)(void *), void (*clear_free_func)(void *));
+#endif
+
 /* wrapper functions for the underlying EC_GROUP object */
 void EC_KEY_set_asn1_flag(EC_KEY *eckey, int asn1_flag);
 

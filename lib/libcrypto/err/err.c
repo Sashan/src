@@ -1,4 +1,4 @@
-/* $OpenBSD: err.c,v 1.50 2022/12/26 07:18:52 jmc Exp $ */
+/* $OpenBSD: err.c,v 1.52 2023/04/09 19:10:23 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -580,6 +580,7 @@ build_SYS_str_reasons(void)
 	static char strerror_tab[NUM_SYS_STR_REASONS][LEN_SYS_STR_REASON];
 	int i;
 	static int init = 1;
+	int save_errno;
 
 	CRYPTO_r_lock(CRYPTO_LOCK_ERR);
 	if (!init) {
@@ -594,6 +595,8 @@ build_SYS_str_reasons(void)
 		return;
 	}
 
+	/* strerror(3) will set errno to EINVAL when i is an unknown errno. */
+	save_errno = errno;
 	for (i = 1; i <= NUM_SYS_STR_REASONS; i++) {
 		ERR_STRING_DATA *str = &SYS_str_reasons[i - 1];
 
@@ -610,6 +613,7 @@ build_SYS_str_reasons(void)
 		if (str->string == NULL)
 			str->string = "unknown";
 	}
+	errno = save_errno;
 
 	/* Now we still have SYS_str_reasons[NUM_SYS_STR_REASONS] = {0, NULL},
 	 * as required by ERR_load_strings. */
@@ -1036,13 +1040,11 @@ ERR_remove_thread_state(const CRYPTO_THREADID *id)
 	ERRFN(thread_del_item)(&tmp);
 }
 
-#ifndef OPENSSL_NO_DEPRECATED
 void
 ERR_remove_state(unsigned long pid)
 {
 	ERR_remove_thread_state(NULL);
 }
-#endif
 
 ERR_STATE *
 ERR_get_state(void)
