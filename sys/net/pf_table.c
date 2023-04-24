@@ -208,7 +208,6 @@ RB_GENERATE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 
 struct pfr_ktablehead	 pfr_ktables;
 struct pfr_table	 pfr_nulltable;
-int			 pfr_ktable_cnt;
 
 int
 pfr_gcd(int m, int n)
@@ -253,6 +252,7 @@ pfr_clr_addrs(struct pfr_table *tbl, int *ndel, int flags)
 	if (pfr_validate_table(tbl, 0, flags & PFR_FLAG_USERIOCTL))
 		return (EINVAL);
 	PF_ASSERT_LOCKED();
+	/* XXX can not use pf_find_ruleset() under PF_LOCK() */
 	rs = pf_find_ruleset(&pf_global, tbl->pfrt_anchor);
 	if (rs == NULL)
 		return (ESRCH);
@@ -1624,6 +1624,31 @@ pfr_del_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *ndel,
 	return (0);
 }
 
+#ifdef DIAGNOSTIC
+void
+pfr_verify_tables(struct pf_anchor *a)
+{
+	int	got = 0;
+	struct pfr_ktable *kt;
+
+	RB_FOREACH(kt, pfr_ktablehead, &a->ktables) {
+		got++;
+	}
+
+	log(LOG_DEBUG, "%s checking %s (%d)\n",
+	    __func__,
+	    a->path,
+	    got);
+
+	if (a->tables != got)
+		panic("%s table count does not match in "
+		    "%s, got: %d expected: %d",
+		    __func__,
+		    a->path,
+		    got, a->tables);
+}
+#endif
+
 int
 pfr_get_tables(struct pfr_table *filter, struct pfr_table *tbl, int *size,
 	int flags)
@@ -1653,6 +1678,10 @@ pfr_get_tables(struct pfr_table *filter, struct pfr_table *tbl, int *size,
 			return (0);
 		}
 
+#ifdef DIAGNOSTIC
+		pfr_verify_tables(a);
+#endif
+
 		RB_FOREACH(p, pfr_ktablehead, &a->ktables) {
 			if (n-- <= 0)
 				continue;
@@ -1660,9 +1689,7 @@ pfr_get_tables(struct pfr_table *filter, struct pfr_table *tbl, int *size,
 				return (EFAULT);
 		}
 	} else {
-		n = pfr_ktable_cnt;
-		log(LOG_DEBUG, "%s %d\n", __func__, pfr_ktable_cnt);
-
+		n = pfr_table_count(filter, flags);
 		if (n > *size) {
 			*size = n;
 			return (0);
@@ -1671,7 +1698,7 @@ pfr_get_tables(struct pfr_table *filter, struct pfr_table *tbl, int *size,
 		nn = n;
 
 		RB_FOREACH(p, pfr_ktablehead, &pf_main_anchor.ktables) {
-			if (n-- <=0) {
+			if (n-- <= 0) {
 				log(LOG_DEBUG, "%s (/) n: %d: %s\n",
 				    __func__, n, p->pfrkt_name);
 				continue;
@@ -2112,9 +2139,6 @@ pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
 			SLIST_INSERT_HEAD(&t->garbage, kt, pfrkt_workq);
 			a->tables--;
-			log(LOG_DEBUG, "%s %s@%s pfr_ktable_cnt: %d\n",
-			    __func__,  kt->pfrkt_name, a->path, pfr_ktable_cnt);
-			pfr_ktable_cnt--;
 		}
 	}
 
@@ -2131,9 +2155,6 @@ pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 			RB_INSERT(pfr_ktablehead, &a->ktables, tkt);
 			a->tables++;
 			pfr_update_table_refs(a, tkt);
-			log(LOG_DEBUG, "%s %s@%s pfr_ktable_cnt: %d\n",
-			    __func__,  kt->pfrkt_name, a->path, pfr_ktable_cnt);
-			pfr_ktable_cnt++;
 			tkt->pfrkt_version++;
 		} else {
 			KASSERT(kt->pfrkt_version == tkt->pfrkt_version);
@@ -2197,13 +2218,38 @@ int
 pfr_table_count(struct pfr_table *filter, int flags)
 {
 	struct pf_ruleset *rs;
+	int table_cnt;
+	struct pf_anchor *a;
 
-	if (flags & PFR_FLAG_ALLRSETS)
-		return (pfr_ktable_cnt);
+	if (flags & PFR_FLAG_ALLRSETS) {
+#ifdef DIAGNOSTIC
+		pfr_verify_tables(&pf_main_anchor);
+#endif
+		table_cnt = pf_main_anchor.tables;
+		RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
+#ifdef DIAGNOSTIC
+			pfr_verify_tables(a);
+#endif
+			table_cnt += a->tables;
+		}
+		return (table_cnt);
+	}
 	if (filter->pfrt_anchor[0]) {
+		/*
+		 * XXX: can not use pf_find_ruleset() here because it
+		 * does rs_malloc();
+		 */
 		rs = pf_find_ruleset(&pf_global, filter->pfrt_anchor);
+#ifdef DIAGNOSTIC
+		if ((rs != NULL) && (rs->anchor != NULL))
+			pfr_verify_tables(rs->anchor);
+#endif
 		return ((rs != NULL) ? rs->anchor->tables : -1);
 	}
+
+#ifdef DIAGNOSTIC
+	pfr_verify_tables(&pf_main_anchor);
+#endif
 	return (pf_main_anchor.tables);
 }
 
@@ -2234,9 +2280,6 @@ pfr_insert_ktable(struct pf_rules_container *rc, struct pfr_ktable *kt)
 	rs = pf_find_ruleset(rc, kt->pfrkt_anchor);
 	RB_INSERT(pfr_ktablehead, &rs->anchor->ktables, kt);
 	/* we should bump counter with commit */
-	pfr_ktable_cnt++;
-	log(LOG_DEBUG, "%s %s@%s pfr_ktable_cnt: %d\n",
-	    __func__,  kt->pfrkt_name, kt->pfrkt_anchor, pfr_ktable_cnt);
 }
 
 void
@@ -2896,6 +2939,9 @@ pfr_get_ktable_version(struct pfr_ktable *ktt)
 
 	NET_LOCK();
 	PF_LOCK();
+	/*
+	 * XXX: never use pf_find_ruleset() under netlock
+	 */
 	rs = pf_find_ruleset(&pf_global, ktt->pfrkt_anchor);
 	if (rs == NULL) {
 		PF_UNLOCK();
