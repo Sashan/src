@@ -2176,6 +2176,11 @@ pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 	RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, ktw) {
 		kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
 		if (kt == NULL) {
+			if (tkt->pfrkt_version != 0)
+				panic("%s %s@%s but has %d, should have 0",
+				    __func__,
+				    tkt->pfrkt_name,
+				    a->path, tkt->pfrkt_version);
 			KASSERT(tkt->pfrkt_version == 0);
 			RB_REMOVE(pfr_ktablehead, &ta->ktables, tkt);
 			ta->tables--;

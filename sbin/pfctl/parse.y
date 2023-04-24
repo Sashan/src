@@ -5615,6 +5615,9 @@ mv_tables(struct pfctl *pf, struct pfr_ktablehead *ktables,
 	RB_FOREACH_SAFE(kt, pfr_ktablehead, ktables, ktw) {
 		RB_REMOVE(pfr_ktablehead, ktables, kt);
 		ukt = (struct pfr_uktable *)kt;
+		fprintf(stderr, "%s updating %s@%s to %s@%s\n", __func__,
+		    kt->pfrkt_name, kt->pfrkt_anchor,
+		    kt->pfrkt_name, a->path);
 		strlcpy(kt->pfrkt_anchor, a->path, sizeof(kt->pfrkt_anchor));
 		ina_err = pfr_ina_define(&kt->pfrkt_t, ukt->pfrukt_addrs.pfrb_caddr,
 		    ukt->pfrukt_addrs.pfrb_size, NULL, NULL, pf->trans->ticket,
