@@ -2029,14 +2029,23 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 	int			 i, rv, xadd = 0, xaddr = 0;
 
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY | PFR_FLAG_ADDRSTOO);
-	if (size && !(flags & PFR_FLAG_ADDRSTOO))
+	if (size && !(flags & PFR_FLAG_ADDRSTOO)) {
+		log(LOG_DEBUG, "%s %s@%s %d %sPFR_FLAG_ADDRSTOO\n",
+		    __func__, tbl->pfrt_name, tbl->pfrt_anchor,
+		    size, (flags & PFR_FLAG_ADDRSTOO) ? "" : "!");
 		return (EINVAL);
+	}
 	if (pfr_validate_table(tbl, PFR_TFLAG_USRMASK,
-	    flags & PFR_FLAG_USERIOCTL))
+	    flags & PFR_FLAG_USERIOCTL)) {
+		log(LOG_DEBUG, "%s pfr_validate_table() error\n",
+		    __func__);
 		return (EINVAL);
+	}
 	trs = pf_find_or_create_ruleset(&t->rc, tbl->pfrt_anchor);
-	if (trs == NULL)
+	if (trs == NULL) {
+		log(LOG_DEBUG, "%s trs is NULL\n", __func__);
 		return (EBUSY);
+	}
 	if (trs->anchor == NULL)
 		ta = &t->rc.main_anchor;
 	else
@@ -2177,7 +2186,7 @@ pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 		kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
 		if (kt == NULL) {
 			if (tkt->pfrkt_version != 0)
-				panic("%s %s@%s but has %d, should have 0",
+				panic("%s %s@%s has %d, but should have 0",
 				    __func__,
 				    tkt->pfrkt_name,
 				    a->path, tkt->pfrkt_version);
@@ -2201,19 +2210,31 @@ pfr_validate_table(struct pfr_table *tbl, int allowedflags, int no_reserved)
 {
 	int i;
 
-	if (!tbl->pfrt_name[0])
+	if (!tbl->pfrt_name[0]) {
+		log(LOG_DEBUG, "%s empty name\n", __func__);
 		return (-1);
-	if (no_reserved && !strcmp(tbl->pfrt_anchor, PF_RESERVED_ANCHOR))
-		 return (-1);
-	if (tbl->pfrt_name[PF_TABLE_NAME_SIZE-1])
+	}
+	if (no_reserved && !strcmp(tbl->pfrt_anchor, PF_RESERVED_ANCHOR)) {
+		log(LOG_DEBUG, "%s reserved anchor %s\n", __func__, tbl->pfrt_anchor);
 		return (-1);
+	}
+	if (tbl->pfrt_name[PF_TABLE_NAME_SIZE-1]) {
+		log(LOG_DEBUG, "%s table name too long\n", __func__);
+		return (-1);
+	}
 	for (i = strlen(tbl->pfrt_name); i < PF_TABLE_NAME_SIZE; i++)
-		if (tbl->pfrt_name[i])
+		if (tbl->pfrt_name[i]) {
+			log(LOG_DEBUG, "%s non-zero padding in %s@%s\n", __func__, tbl->pfrt_name, tbl->pfrt_anchor);
 			return (-1);
-	if (pfr_fix_anchor(tbl->pfrt_anchor))
+		}
+	if (pfr_fix_anchor(tbl->pfrt_anchor)) {
+		log(LOG_DEBUG, "%s pfr_fix_anchor() error for %s\n", __func__, tbl->pfrt_anchor);
 		return (-1);
-	if (tbl->pfrt_flags & ~allowedflags)
+	}
+	if (tbl->pfrt_flags & ~allowedflags) {
+		log(LOG_DEBUG, "%s illegal flags in %s@%s %x\n", __func__, tbl->pfrt_name, tbl->pfrt_anchor, tbl->pfrt_flags & ~allowedflags);
 		return (-1);
+	}
 	return (0);
 }
 
