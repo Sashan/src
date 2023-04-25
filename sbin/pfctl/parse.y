@@ -864,6 +864,7 @@ pfa_anchor	: '{'
 			pf->alast = pf->anchor;
 			pf->asd--;
 			pf->anchor = pf->astack[pf->asd];
+			mv_tables(pf, &pf->alast->ktables, pf->anchor);
 		}
 		| /* empty */
 		;
@@ -900,9 +901,12 @@ anchorrule	: ANCHOR anchorname dir quick interface af proto fromto
 						    r.anchor->name);
 						YYERROR;
 					}
+					fprintf(stderr, "%s %s -> %s\n",
+					    __func__,
+					    (pf->alast != NULL) ? pf->alast->path : "/",
+					    r.anchor->path);
 					mv_rules(&pf->alast->ruleset,
 					    &r.anchor->ruleset);
-					mv_tables(pf, &pf->alast->ktables, r.anchor);
 				}
 				pf_remove_if_empty_ruleset(&pf_global,
 				    &pf->alast->ruleset);
@@ -4021,7 +4025,7 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 		 * is always there.
 		 */
 		if (pf->alast != NULL) {
-			ukt = malloc(sizeof(struct pfr_uktable));
+			ukt = calloc(1, sizeof(struct pfr_uktable));
 			if (ukt == NULL) {
 				fprintf(stderr,
 				    "%s:%d: not enough memory for <%s>\n",
@@ -4053,7 +4057,11 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 				free(ukt);
 				goto _error;
 			}
-		}
+			fprintf(stderr, "%s %s@%s inserted to tree\n",
+			    __func__, ukt->pfrukt_name, pf->alast->path);
+
+		} else
+			fprintf(stderr, "%s ukt is null\n", __func__);
 	}
 
 	pf->tdirty = 1;
@@ -5608,12 +5616,14 @@ mv_tables(struct pfctl *pf, struct pfr_ktablehead *ktables,
 	a->ktables.rbh_root = ktables->rbh_root;
 	ktables->rbh_root = NULL;
 
+	fprintf(stderr, "%s moving to %s\n", __func__, a->path);
+
 	/*
 	 * add tables to transaction again. This time with correct/final anchor
 	 * path. Think of we replace temporal anchor let's say _4 to final/anchor.
 	 */
-	RB_FOREACH_SAFE(kt, pfr_ktablehead, ktables, ktw) {
-		RB_REMOVE(pfr_ktablehead, ktables, kt);
+	RB_FOREACH_SAFE(kt, pfr_ktablehead, &a->ktables, ktw) {
+		RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
 		ukt = (struct pfr_uktable *)kt;
 		fprintf(stderr, "%s updating %s@%s to %s@%s\n", __func__,
 		    kt->pfrkt_name, kt->pfrkt_anchor,

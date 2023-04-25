@@ -515,7 +515,7 @@ pfctl_define_table(char *name, int flags, int addrs, const char *anchor,
 	struct pfr_table tbl_buf;
 	struct pfr_table *tbl;
 
-	if (tbl == NULL) {
+	if (ukt == NULL) {
 		bzero(&tbl_buf, sizeof(tbl_buf));
 		tbl = &tbl_buf;
 	} else {
@@ -543,6 +543,7 @@ pfctl_define_table(char *name, int flags, int addrs, const char *anchor,
 	    sizeof(tbl->pfrt_anchor)) >= sizeof(tbl->pfrt_anchor))
 		errx(1, "%s: strlcpy", __func__);
 	tbl->pfrt_flags = flags;
+	fprintf(stderr, "%s %s@%s\n", __func__, tbl->pfrt_name, tbl->pfrt_anchor);
 
 	return pfr_ina_define(tbl, ab->pfrb_caddr, ab->pfrb_size, NULL,
 	    NULL, ticket, addrs ? PFR_FLAG_ADDRSTOO : 0);
