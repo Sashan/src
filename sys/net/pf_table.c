@@ -321,6 +321,10 @@ int
 pfr_add_addrs(struct pf_trans *t, struct pfr_table *tbl, struct pfr_addr *addr,
     int size, int *nadd, int flags)
 {
+	if (t->pft_type != PF_TRANS_CONFIG) {
+		log(LOG_ERR, "%s expects PF_TRANS_CONFIG only\n", __func__);
+		return (EINVAL);
+	}
 #if 0
 	struct pfr_ktable	*kt, *tmpkt;
 	struct pfr_kentryworkq	 workq, ioq;
@@ -453,8 +457,13 @@ pfr_del_addrs(struct pf_trans *t, struct pfr_table *tbl,
 	struct pfr_kentryworkq	 workq;
 	struct pfr_kentry	*p;
 	struct pfr_addr		 ad;
-	int			 i, rv, xdel = 0, log = 1;
+	int			 i, rv, xdel = 0, lg = 1;
 	struct pf_ruleset	*rs;
+
+	if (t->pft_type != PF_TRANS_CONFIG) {
+		log(LOG_ERR, "%s expects PF_TRANS_CONFIG only\n", __func__);
+		return (EINVAL);
+	}
 
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY | PFR_FLAG_FEEDBACK);
 	if (pfr_validate_table(tbl, 0, flags & PFR_FLAG_USERIOCTL))
@@ -478,8 +487,8 @@ pfr_del_addrs(struct pf_trans *t, struct pfr_table *tbl,
 	 * following code try to decide which one is best.
 	 */
 	for (i = kt->pfrkt_cnt; i > 0; i >>= 1)
-		log++;
-	if (size > kt->pfrkt_cnt/log) {
+		lg++;
+	if (size > kt->pfrkt_cnt/lg) {
 		/* full table scan */
 		pfr_mark_addrs(kt);
 	} else {
@@ -1567,6 +1576,11 @@ pfr_add_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *nadd,
 	time_t			 tzero = gettime();
 	int			 i;
 
+	if (t->pft_type != PF_TRANS_CONFIG) {
+		log(LOG_ERR, "%s expects PF_TRANS_CONFIG only\n", __func__);
+		return (EINVAL);
+	}
+
 	/* pre-allocate all memory outside of locks */
 	for (i = 0; i < size; i++) {
 		YIELD(1);
@@ -1602,6 +1616,10 @@ pfr_del_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *ndel,
 	int			 i;
 	time_t			 tzero = gettime();
 
+	if (t->pft_type != PF_TRANS_CONFIG) {
+		log(LOG_ERR, "%s expects PF_TRANS_CONFIG only\n", __func__);
+		return (EINVAL);
+	}
 	/* pre-allocate all memory outside of locks */
 	for (i = 0; i < size; i++) {
 		YIELD(1);
@@ -1791,6 +1809,11 @@ pfr_clr_tstats(struct pf_trans *t, struct pfr_table *tbl, int size, int *nzero,
 	int			 i, xzero = 0;
 	time_t			 tzero = gettime();
 
+	if (t->pft_type != PF_TRANS_CONFIG) {
+		log(LOG_ERR, "%s expects PF_TRANS_CONFIG only\n", __func__);
+		return (EINVAL);
+	}
+
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY | PFR_FLAG_ADDRSTOO);
 	for (i = 0; i < size; i++) {
 		YIELD(flags & PFR_FLAG_USERIOCTL);
@@ -1829,6 +1852,11 @@ int
 pfr_set_tflags(struct pf_trans *t, struct pfr_table *tbl, int size, int setflag,
 	int clrflag, int *nchange, int *ndel, int flags)
 {
+	if (t->pft_type != PF_TRANS_CONFIG) {
+		log(LOG_ERR, "%s expects PF_TRANS_CONFIG only\n", __func__);
+		return (EINVAL);
+	}
+
 #if 0
 	struct pfr_ktableworkq	 workq;
 	struct pfr_ktable	*p, *q, key;

@@ -2720,6 +2720,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_open_trans(p->p_p->ps_pid);
+		pf_init_tconf(t);
 
 		error = pfr_add_tables(t, io->pfrio_buffer, io->pfrio_size,
 		    &io->pfrio_nadd, io->pfrio_flags | PFR_FLAG_USERIOCTL);
@@ -2764,6 +2765,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_open_trans(p->p_p->ps_pid);
+		pf_init_tconf(t);
 
 		error = pfr_del_tables(t, io->pfrio_buffer, io->pfrio_size,
 		    &io->pfrio_ndel, io->pfrio_flags | PFR_FLAG_USERIOCTL);
@@ -2841,6 +2843,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_open_trans(p->p_p->ps_pid);
+		pf_init_tconf(t);
 
 		error = pfr_clr_tstats(t, io->pfrio_buffer, io->pfrio_size,
 		    &io->pfrio_nzero, io->pfrio_flags | PFR_FLAG_USERIOCTL);
@@ -2874,6 +2877,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_open_trans(p->p_p->ps_pid);
+		pf_init_tconf(t);
 
 		error = pfr_set_tflags(t, io->pfrio_buffer, io->pfrio_size,
 		    io->pfrio_setflag, io->pfrio_clrflag, &io->pfrio_nchange,
@@ -2931,6 +2935,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_open_trans(p->p_p->ps_pid);
+		pf_init_tconf(t);
 		error = pfr_add_addrs(t, &io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size, &io->pfrio_nadd, io->pfrio_flags |
 		    PFR_FLAG_USERIOCTL);
@@ -2964,6 +2969,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_open_trans(p->p_p->ps_pid);
+		pf_init_tconf(t);
 
 		error = pfr_del_addrs(t, &io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size, &io->pfrio_ndel, io->pfrio_flags |
@@ -2997,6 +3003,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_open_trans(p->p_p->ps_pid);
+		pf_init_tconf(t);
 
 		error = pfr_set_addrs_ioc(t, &io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size, &io->pfrio_size2, &io->pfrio_nadd,
@@ -3950,6 +3957,12 @@ pf_trans_in_conflict(struct pf_trans *t, const char *iocmdname)
 	struct pf_anchor	*ta, *a;
 	struct pool		*pp;
 
+	if (t->pft_type != PF_TRANS_CONFIG) {
+		log(LOG_ERR, "%s version check is available to "
+		    "PF_TRANS_CONFIG only\n", __func__);
+		return (1);
+	}
+
 	if ((t->pftcf_anchor_path[0] == '\0') &&
 	    (t->pftcf_rc.main_anchor.ruleset.rules.version != 0))
 		conflict = t->pftcf_check_op(&t->pftcf_rc.main_anchor,
@@ -4169,6 +4182,12 @@ pf_commit_trans(struct pf_trans *t)
 {
 	struct pf_anchor	*ta, *wa;
 
+	if (t->pft_type != PF_TRANS_CONFIG) {
+		log(LOG_ERR, "%s commit operation is allowed for "
+		    "PF_TRANS_CONFIG only\n", __func__);
+		return;
+	}
+		
 	/*
 	 * All commits except pf_ina_commit() require just single pass through
 	 * anchors. pf_ina_commit() requires two passes:
