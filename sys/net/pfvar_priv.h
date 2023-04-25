@@ -324,7 +324,7 @@ enum {
 
 extern struct cpumem *pf_anchor_stack;
 
-struct pf_trans_set {
+struct pf_opts {
 	char		statusif[IFNAMSIZ];
 	u_int32_t	debug;
 	u_int32_t	hostid;
@@ -340,24 +340,48 @@ struct pf_trans_set {
 #define	PF_TSET_HOSTID		0x04
 #define	PF_TSET_REASS		0x08
 
-struct pf_trans {
-	LIST_ENTRY(pf_trans)	entry;
-	TAILQ_HEAD(, pf_anchor)	anchor_list;
-	struct pfr_ktableworkq	garbage;
-	struct pf_rules_container
-				rc;
-	unsigned		pool_limits[PF_LIMIT_MAX];
-	struct pf_rule		default_rule;
-	struct pf_trans_set	trans_set;
-	char			anchor_path[PATH_MAX];
-	int (*check_op)(struct pf_anchor *, struct pf_anchor *);
-	void (*commit_op)(struct pf_trans *, struct pf_anchor *,
-	    struct pf_anchor *);
-	pid_t			pid;		/* process id */
-	uint64_t		ticket;
-	uint32_t		default_vers;
-	char			modify_defaults;
+enum pf_trans_type {
+	PF_TRANS_NONE,
+	PF_TRANS_CONFIG,
+	PF_TRANS_MAX
 };
+
+struct pf_trans {
+	LIST_ENTRY(pf_trans)	pft_entry;
+	pid_t			pft_pid;		/* process id */
+	uint64_t		pft_ticket;
+	enum pf_trans_type	pft_type;
+	union {
+		struct {
+			TAILQ_HEAD(, pf_anchor)	cf_anchor_list;
+			struct pfr_ktableworkq	cf_garbage;
+			struct pf_rules_container
+						cf_rc;
+			unsigned		cf_pool_limits[PF_LIMIT_MAX];
+			struct pf_rule		cf_default_rule;
+			struct pf_opts		cf_opts;
+			char			cf_anchor_path[PATH_MAX];
+			int (*cf_check_op)(struct pf_anchor *,
+			    struct pf_anchor *);
+			void (*cf_commit_op)(struct pf_trans *,
+			    struct pf_anchor *, struct pf_anchor *);
+			uint32_t		cf_default_vers;
+			char			cf_modify_defaults;
+		} u_conf;
+	} u;
+};
+
+#define pftcf_anchor_list	u.u_conf.cf_anchor_list
+#define pftcf_garbage		u.u_conf.cf_garbage
+#define pftcf_rc		u.u_conf.cf_rc
+#define	pftcf_pool_limits	u.u_conf.cf_pool_limits
+#define pftcf_default_rule	u.u_conf.cf_default_rule
+#define pftcf_opts		u.u_conf.cf_opts
+#define pftcf_anchor_path	u.u_conf.cf_anchor_path
+#define pftcf_check_op		u.u_conf.cf_check_op
+#define	pftcf_commit_op		u.u_conf.cf_commit_op
+#define pftcf_default_vers	u.u_conf.cf_default_vers
+#define	pftcf_modify_defaults	u.u_conf.cf_modify_defaults
 
 extern struct task	pf_purge_task;
 extern struct timeout	pf_purge_to;

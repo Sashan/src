@@ -1580,7 +1580,8 @@ pfr_add_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *nadd,
 		 * flag being set.
 		 */
 		key.pfrkt_flags |= PFR_TFLAG_ACTIVE;
-		kt = pfr_create_ktable(&t->rc, &key.pfrkt_t, tzero, PR_WAITOK);
+		kt = pfr_create_ktable(&t->pftcf_rc, &key.pfrkt_t, tzero,
+		    PR_WAITOK);
 		if (kt == NULL)
 			return (ENOMEM);
 		kt->pfrkt_version = pfr_get_ktable_version(kt); 
@@ -1615,7 +1616,8 @@ pfr_del_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *ndel,
 		key.pfrkt_flags |= PFR_TFLAG_FLUSH_ON_COMMIT;
 		 */
 		key.pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
-		kt = pfr_create_ktable(&t->rc, &key.pfrkt_t, tzero, PR_WAITOK);
+		kt = pfr_create_ktable(&t->pftcf_rc, &key.pfrkt_t, tzero,
+		    PR_WAITOK);
 		kt->pfrkt_version = pfr_get_ktable_version(kt);
 		if (kt == NULL)
 			return (ENOMEM);
@@ -1796,7 +1798,8 @@ pfr_clr_tstats(struct pf_trans *t, struct pfr_table *tbl, int size, int *nzero,
 			return (EFAULT);
 		if (pfr_validate_table(&key.pfrkt_t, 0, 0))
 			return (EINVAL);
-		p = pfr_create_ktable(&t->rc, &key.pfrkt_t, tzero, PR_WAITOK);
+		p = pfr_create_ktable(&t->pftcf_rc, &key.pfrkt_t, tzero,
+		    PR_WAITOK);
 		/*
 		 * TODO: assign a dedicated flag to tell commit operation to
 		 * clear table stats.
@@ -2041,13 +2044,13 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		    __func__);
 		return (EINVAL);
 	}
-	trs = pf_find_or_create_ruleset(&t->rc, tbl->pfrt_anchor);
+	trs = pf_find_or_create_ruleset(&t->pftcf_rc, tbl->pfrt_anchor);
 	if (trs == NULL) {
 		log(LOG_DEBUG, "%s trs is NULL\n", __func__);
 		return (EBUSY);
 	}
 	if (trs->anchor == NULL)
-		ta = &t->rc.main_anchor;
+		ta = &t->pftcf_rc.main_anchor;
 	else
 		ta = trs->anchor;
 
@@ -2173,7 +2176,7 @@ pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 		if (kt != NULL && kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0 &&
 		    (kt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
 			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
-			SLIST_INSERT_HEAD(&t->garbage, kt, pfrkt_workq);
+			SLIST_INSERT_HEAD(&t->pftcf_garbage, kt, pfrkt_workq);
 			a->tables--;
 		}
 	}

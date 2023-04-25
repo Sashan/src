@@ -106,7 +106,7 @@ int			 pf_addr_setup(struct pf_trans *t, struct pf_ruleset *,
 			    struct pf_addr_wrap *, sa_family_t);
 struct pfi_kif		*pf_kif_setup(struct pfi_kif *);
 void			 pf_addr_copyout(struct pf_addr_wrap *);
-void			 pf_trans_set_commit(struct pf_trans_set *);
+void			 pf_trans_set_commit(struct pf_opts *);
 void			 pf_pool_copyin(struct pf_pool *, struct pf_pool *);
 int			 pf_validate_range(u_int8_t, u_int16_t[2], int);
 int			 pf_rule_copyin(struct pf_rule *, struct pf_rule *);
@@ -307,16 +307,16 @@ pfclose(dev_t dev, int flags, int fmt, struct proc *p)
 	if (flags & FWRITE) {
 		LIST_INIT(&tmp_list);
 		rw_enter_write(&pfioctl_rw);
-		LIST_FOREACH_SAFE(w, &pf_ioctl_trans, entry, s) {
-			if (w->pid == p->p_p->ps_pid) {
-				LIST_REMOVE(w, entry);
-				LIST_INSERT_HEAD(&tmp_list, w, entry);
+		LIST_FOREACH_SAFE(w, &pf_ioctl_trans, pft_entry, s) {
+			if (w->pft_pid == p->p_p->ps_pid) {
+				LIST_REMOVE(w, pft_entry);
+				LIST_INSERT_HEAD(&tmp_list, w, pft_entry);
 			}
 		}
 		rw_exit_write(&pfioctl_rw);
 
 		while ((w = LIST_FIRST(&tmp_list)) != NULL) {
-			LIST_REMOVE(w, entry);
+			LIST_REMOVE(w, pft_entry);
 			pf_free_trans(w);
 		}
 	}
@@ -557,11 +557,11 @@ pf_begin_rules(struct pf_trans *t, const char *anchor)
 	while (*anchor == '/')
 		anchor++;
 
-	if ((rs = pf_find_or_create_ruleset(&t->rc, anchor)) == NULL)
+	if ((rs = pf_find_or_create_ruleset(&t->pftcf_rc, anchor)) == NULL)
 		return (EINVAL);
 
 	rs->rules.version = pf_get_ruleset_version(
-	    (rs == &t->rc.main_anchor.ruleset) ? "" : rs->anchor->path);
+	    (rs == &t->pftcf_rc.main_anchor.ruleset) ? "" : rs->anchor->path);
 	log(LOG_DEBUG, "%s %s version: %d\n", __func__, anchor,
 	    rs->rules.version);
 
@@ -1145,7 +1145,7 @@ pf_remove_orphans(struct pf_trans *t)
 			if (a->parent != NULL)
 				RB_REMOVE(pf_anchor_node, &a->parent->children,
 				    a);
-			TAILQ_INSERT_TAIL(&t->anchor_list, a, workq);
+			TAILQ_INSERT_TAIL(&t->pftcf_anchor_list, a, workq);
 			log(LOG_DEBUG, "%s %s will be removed\n",
 			    __func__, a->path);
 		} else
@@ -1265,7 +1265,8 @@ pf_swap_tables_ina(struct pf_trans *t, struct pf_anchor *ta,
  * transaction anchor 'ta'.
  */
 void
-pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
+pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
+    struct pf_anchor *a)
 {
 	struct pf_ruleset tmp;
 	struct pf_ruleset *trs, *grs;
@@ -1394,7 +1395,7 @@ pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *
 				 */
 				if (anchor == NULL) {
 					anchor = RB_FIND(pf_anchor_global,
-					    &t->rc.anchors, r->anchor);
+					    &t->pftcf_rc.anchors, r->anchor);
 					if (anchor == NULL)
 						panic(
 						    "%s dangling anchor %s",
@@ -1428,25 +1429,42 @@ pf_drop_unused_tables(struct pf_trans *t)
 	 * clean up non-persistent tables which are not used
 	 * (referred by rules).
 	 */
-	RB_FOREACH_SAFE(tkt, pfr_ktablehead, &t->rc.main_anchor.ktables, tktw) {
+	RB_FOREACH_SAFE(tkt, pfr_ktablehead, &t->pftcf_rc.main_anchor.ktables,
+	    tktw) {
 		if ((tkt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0) &&
 		    (tkt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
-			RB_REMOVE(pfr_ktablehead, &t->rc.main_anchor.ktables,
-			    tkt);
-			t->rc.main_anchor.tables--;
-			SLIST_INSERT_HEAD(&t->garbage, tkt, pfrkt_workq);
+			RB_REMOVE(pfr_ktablehead,
+			    &t->pftcf_rc.main_anchor.ktables, tkt);
+			t->pftcf_rc.main_anchor.tables--;
+			SLIST_INSERT_HEAD(&t->pftcf_garbage, tkt, pfrkt_workq);
 		}
 	}
-	RB_FOREACH(ta, pf_anchor_global, &t->rc.anchors) {
+	RB_FOREACH(ta, pf_anchor_global, &t->pftcf_rc.anchors) {
 		RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, tktw) {
 			if (tkt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0 &&
 			    (tkt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
 				RB_REMOVE(pfr_ktablehead, &ta->ktables, tkt);
 				ta->tables--;
-				SLIST_INSERT_HEAD(&t->garbage, tkt, pfrkt_workq);
+				SLIST_INSERT_HEAD(&t->pftcf_garbage, tkt,
+				    pfrkt_workq);
 			}
 		}
 	}
+}
+
+void
+pf_init_tconf(struct pf_trans *t)
+{
+	t->pft_type = PF_TRANS_CONFIG;
+
+	RB_INIT(&t->pftcf_rc.anchors);
+	TAILQ_INIT(&t->pftcf_anchor_list);
+	SLIST_INIT(&t->pftcf_garbage);
+	pf_init_ruleset(&t->pftcf_rc.main_anchor.ruleset);
+	t->pftcf_default_rule = pf_default_rule;
+	t->pftcf_default_vers = pf_default_vers;
+	t->pftcf_check_op = pf_ina_check;
+	t->pftcf_commit_op = pf_ina_commit;
 }
 
 int
@@ -1793,7 +1811,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		pr->anchor[sizeof(pr->anchor) - 1] = '\0';
-		ruleset = pf_find_ruleset(&t->rc, pr->anchor);
+		ruleset = pf_find_ruleset(&t->pftcf_rc, pr->anchor);
 		if (ruleset == NULL) {
 			error = EINVAL;
 			pf_rule_free(rule);
@@ -1815,12 +1833,13 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		rule->route.kif = pf_kif_setup(rule->route.kif);
 
 		if (rule->overload_tblname[0]) {
-			if ((rule->overload_tbl = pfr_attach_table(&t->rc,
+			if ((rule->overload_tbl = pfr_attach_table(&t->pftcf_rc,
 			    ruleset, rule->overload_tblname,
 			    PR_WAITOK)) == NULL)
 				error = EINVAL;
 			else
-				rule->overload_tbl->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+				rule->overload_tbl->pfrkt_flags |=
+				    PFR_TFLAG_ACTIVE;
 		}
 
 		if (pf_addr_setup(t, ruleset, &rule->src.addr, rule->af))
@@ -1833,7 +1852,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			error = EINVAL;
 		if (pf_addr_setup(t, ruleset, &rule->route.addr, rule->af))
 			error = EINVAL;
-		if (pf_anchor_setup(&t->rc, rule, ruleset, pr->anchor_call))
+		if (pf_anchor_setup(&t->pftcf_rc, rule, ruleset,
+		    pr->anchor_call))
 			error = EINVAL;
 
 		if (error) {
@@ -2039,8 +2059,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 			if (newrule->overload_tblname[0]) {
 				newrule->overload_tbl = pfr_attach_table(
-				    &t->rc, ruleset, newrule->overload_tblname,
-				    PR_WAITOK);
+				    &t->pftcf_rc, ruleset,
+				    newrule->overload_tblname, PR_WAITOK);
 				if (newrule->overload_tbl == NULL)
 					error = EINVAL;
 				else
@@ -2343,7 +2363,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_find_trans(io->ticket);
-		if (t == NULL || t->pid != p->p_p->ps_pid) {
+		if (t == NULL || t->pft_pid != p->p_p->ps_pid) {
 			error = ENXIO;
 			goto fail;
 		}
@@ -2353,9 +2373,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		strlcpy(t->trans_set.statusif, pi.pfiio_name, IFNAMSIZ);
-		t->trans_set.mask |= PF_TSET_STATUSIF;
-		t->modify_defaults = 1;
+		strlcpy(t->pftcf_opts.statusif, pi.pfiio_name, IFNAMSIZ);
+		t->pftcf_opts.mask |= PF_TSET_STATUSIF;
+		t->pftcf_modify_defaults = 1;
 
 		break;
 	}
@@ -2461,7 +2481,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_find_trans(io->ticket);
-		if ((t == NULL) || (t->pid != p->p_p->ps_pid)) {
+		if ((t == NULL) || (t->pft_pid != p->p_p->ps_pid)) {
 			error = ENXIO;
 			goto fail;
 		}
@@ -2478,8 +2498,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 		if (pt.timeout == PFTM_INTERVAL && pt.seconds == 0)
 			pt.seconds = 1;
-		t->default_rule.timeout[pt.timeout] = pt.seconds;
-		t->modify_defaults = 1;
+		t->pftcf_default_rule.timeout[pt.timeout] = pt.seconds;
+		t->pftcf_modify_defaults = 1;
 
 		pt.seconds = pf_default_rule.timeout[pt.timeout];
 
@@ -2528,7 +2548,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_find_trans(io->ticket);
-		if (t == NULL || t->pid != p->p_p->ps_pid) {
+		if (t == NULL || t->pft_pid != p->p_p->ps_pid) {
 			log(LOG_DEBUG,
 			    "%s DIOCSETLIMIT no transaction for %llu\n",
 			    __func__, io->ticket);
@@ -2565,8 +2585,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t->pool_limits[pl.index] = pl.limit;
-		t->modify_defaults = 1;
+		t->pftcf_pool_limits[pl.index] = pl.limit;
+		t->pftcf_modify_defaults = 1;
 		pl.limit = pf_pool_limits[pl.index].limit;
 		PF_UNLOCK();
 		NET_UNLOCK();
@@ -2585,7 +2605,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_find_trans(io->ticket);
-		if (t == NULL || t->pid != p->p_p->ps_pid) {
+		if (t == NULL || t->pft_pid != p->p_p->ps_pid) {
 			error = ENXIO;
 			goto fail;
 		}
@@ -2595,9 +2615,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t->trans_set.debug = level;
-		t->trans_set.mask |= PF_TSET_DEBUG;
-		t->modify_defaults = 1;
+		t->pftcf_opts.debug = level;
+		t->pftcf_opts.mask |= PF_TSET_DEBUG;
+		t->pftcf_modify_defaults = 1;
 
 		break;
 	}
@@ -3117,7 +3137,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_find_trans(io->ticket);
-		if ((t == NULL) || (t->pid != p->p_p->ps_pid)) {
+		if ((t == NULL) || (t->pft_pid != p->p_p->ps_pid)) {
 			error = ENXIO;
 			goto fail;
 		}
@@ -3173,20 +3193,17 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pf_trans		*t = NULL;
 
 		t = pf_open_trans(p->p_p->ps_pid);
-		t->default_rule = pf_default_rule;
-		t->default_vers = pf_default_vers;
-		t->check_op = pf_ina_check;
-		t->commit_op = pf_ina_commit;
+		pf_init_tconf(t);
 
 		if (io->array != NULL)
-			error = copyinstr(io->array, t->anchor_path,
-			    sizeof(t->anchor_path), NULL);
+			error = copyinstr(io->array, t->pftcf_anchor_path,
+			    sizeof(t->pftcf_anchor_path), NULL);
 
 		log(LOG_DEBUG, "%s transaction: %llu on %s\n", __func__,
-		    t->ticket, t->anchor_path);
+		    t->pft_ticket, t->pftcf_anchor_path);
 
 		if (error == 0)
-			io->ticket = t->ticket;
+			io->ticket = t->pft_ticket;
 		break;
 	}
 
@@ -3242,6 +3259,10 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
+		if (t->pft_type != PF_TRANS_CONFIG) {
+			error = EINVAL;
+			goto fail;
+		}
 
 		NET_LOCK();
 		PF_LOCK();
@@ -3400,7 +3421,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_find_trans(io->ticket);
-		if (t == NULL || t->pid != p->p_p->ps_pid) {
+		if (t == NULL || t->pft_pid != p->p_p->ps_pid) {
 			error = ENXIO;
 			goto fail;
 		}
@@ -3411,12 +3432,12 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		if (hostid == 0)
-			t->trans_set.hostid = arc4random();
+			t->pftcf_opts.hostid = arc4random();
 		else
-			t->trans_set.hostid = hostid;
+			t->pftcf_opts.hostid = hostid;
 
-		t->trans_set.mask |= PF_TSET_HOSTID;
-		t->modify_defaults = 1;
+		t->pftcf_opts.mask |= PF_TSET_HOSTID;
+		t->pftcf_modify_defaults = 1;
 
 		break;
 	}
@@ -3497,7 +3518,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_find_trans(io->ticket);
-		if (t == NULL || t->pid != p->p_p->ps_pid) {
+		if (t == NULL || t->pft_pid != p->p_p->ps_pid) {
 			error = ENXIO;
 			goto fail;
 		}
@@ -3507,9 +3528,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t->trans_set.reass = reass;
-		t->trans_set.mask |= PF_TSET_REASS;
-		t->modify_defaults = 1;
+		t->pftcf_opts.reass = reass;
+		t->pftcf_opts.mask |= PF_TSET_REASS;
+		t->pftcf_modify_defaults = 1;
 
 		break;
 	}
@@ -3563,7 +3584,7 @@ fail:
 }
 
 void
-pf_trans_set_commit(struct pf_trans_set *status)
+pf_trans_set_commit(struct pf_opts *status)
 {
 	if (status->mask & PF_TSET_STATUSIF) {
 		memset(pf_status.ifname, 0, IFNAMSIZ);
@@ -3788,15 +3809,11 @@ pf_open_trans(pid_t pid)
 	rw_assert_wrlock(&pfioctl_rw);
 
 	t = malloc(sizeof(*t), M_TEMP, M_WAITOK);
-	t->pid = pid;
-	t->ticket = ticket++;
-	RB_INIT(&t->rc.anchors);
-	TAILQ_INIT(&t->anchor_list);
-	SLIST_INIT(&t->garbage);
-	pf_init_ruleset(&t->rc.main_anchor.ruleset);
-	memset(t->anchor_path, 0, sizeof(t->anchor_path));
+	memset(t, 0, sizeof(struct pf_trans));
+	t->pft_pid = pid;
+	t->pft_ticket = ticket++;
 
-	LIST_INSERT_HEAD(&pf_ioctl_trans, t, entry);
+	LIST_INSERT_HEAD(&pf_ioctl_trans, t, pft_entry);
 
 	return (t);
 }
@@ -3808,8 +3825,8 @@ pf_find_trans(uint64_t ticket)
 
 	rw_assert_anylock(&pfioctl_rw);
 
-	LIST_FOREACH(t, &pf_ioctl_trans, entry) {
-		if (t->ticket == ticket)
+	LIST_FOREACH(t, &pf_ioctl_trans, pft_entry) {
+		if (t->pft_ticket == ticket)
 			break;
 	}
 
@@ -3933,21 +3950,22 @@ pf_trans_in_conflict(struct pf_trans *t, const char *iocmdname)
 	struct pf_anchor	*ta, *a;
 	struct pool		*pp;
 
-	if ((t->anchor_path[0] == '\0') &&
-	    (t->rc.main_anchor.ruleset.rules.version != 0))
-		conflict = t->check_op(&t->rc.main_anchor, &pf_main_anchor);
+	if ((t->pftcf_anchor_path[0] == '\0') &&
+	    (t->pftcf_rc.main_anchor.ruleset.rules.version != 0))
+		conflict = t->pftcf_check_op(&t->pftcf_rc.main_anchor,
+		    &pf_main_anchor);
 	
 	/* check if defaults can be modified/updated */
-	if (conflict == 0 && t->modify_defaults) {
-		conflict = (t->default_vers != pf_default_vers);
+	if (conflict == 0 && t->pftcf_modify_defaults) {
+		conflict = (t->pftcf_default_vers != pf_default_vers);
 		for (i = 0; i < PF_LIMIT_MAX && conflict == 0; i++) {
 			pp = (struct pool *)pf_pool_limits[i].pp;
-			if (t->pool_limits[i] > 0 &&
-			    pp->pr_nout > t->pool_limits[i]) {
+			if (t->pftcf_pool_limits[i] > 0 &&
+			    pp->pr_nout > t->pftcf_pool_limits[i]) {
 				log(LOG_WARNING, "pr_nout (%u) exceeds new "
 				    "limit (%u) for %s\n",
 				    pp->pr_nout,
-				    t->pool_limits[i],
+				    t->pftcf_pool_limits[i],
 				    pp->pr_wchan);
 				conflict = 1;
 			}
@@ -3962,9 +3980,9 @@ pf_trans_in_conflict(struct pf_trans *t, const char *iocmdname)
 	 * global table.
 	 */
 	if (conflict == 0) {
-		RB_FOREACH(ta, pf_anchor_global, &t->rc.anchors) {
+		RB_FOREACH(ta, pf_anchor_global, &t->pftcf_rc.anchors) {
 			a = RB_FIND(pf_anchor_global, &pf_global.anchors, ta);
-			conflict = t->check_op(ta, a);
+			conflict = t->pftcf_check_op(ta, a);
 			if (conflict != 0)
 				break;
 		}
@@ -4008,7 +4026,7 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 			return;
 		}
 
-		RB_REMOVE(pf_anchor_global, &t->rc.anchors, ta);
+		RB_REMOVE(pf_anchor_global, &t->pftcf_rc.anchors, ta);
 		exists = RB_INSERT(pf_anchor_global, &pf_anchors, ta);
 		KASSERT(exists == NULL);
 		if (ta->parent != NULL) {
@@ -4051,7 +4069,8 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 		/*
 		 * swap anchors for transaction root and its descendants only.
 		 */
-		if (pf_match_root_path(a->path, t->anchor_path) == a->path)
+		if (pf_match_root_path(a->path, t->pftcf_anchor_path) ==
+		    a->path)
 			pf_swap_anchors_ina(t, ta, a);
 		else
 			log(LOG_DEBUG, "%s skipping %s\n",
@@ -4065,7 +4084,7 @@ pf_ina_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
 	struct pf_anchor	*anchor, *anchorw;
 	int			 i;
 
-	if (t->modify_defaults) {
+	if (t->pftcf_modify_defaults) {
 		/*
 		 * too late to derail transaction here.  I think
 		 * warning we failed to update limit is sufficient
@@ -4075,38 +4094,38 @@ pf_ina_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
 			struct pool *pp;
 
 			pp = (struct pool *)pf_pool_limits[i].pp;
-			if (pp->pr_nout > t->pool_limits[i]) {
+			if (pp->pr_nout > t->pftcf_pool_limits[i]) {
 				log(LOG_WARNING,
 				    "pr_nout (%u) exceeds new "
 				    "limit (%u) for %s at commit\n",
 				    pp->pr_nout,
-				    t->pool_limits[i],
+				    t->pftcf_pool_limits[i],
 				    pp->pr_wchan);
-			} else if (t->pool_limits[i] !=
+			} else if (t->pftcf_pool_limits[i] !=
 			    pf_pool_limits[i].limit &&
-			    pool_sethardlimit(pp, t->pool_limits[i],
+			    pool_sethardlimit(pp, t->pftcf_pool_limits[i],
 			    NULL, 0) != 0) {
 				log(LOG_WARNING,
 				    "setting limit to %u failed "
 				    "for %s at commit\n",
-				    t->pool_limits[i],
+				    t->pftcf_pool_limits[i],
 				    pp->pr_wchan);
 			} else {
 				pf_pool_limits[i].limit =
-				    t->pool_limits[i];
+				    t->pftcf_pool_limits[i];
 			}
 		}
 
 		/*
 		 * is there a better way to modify default rule?
 		 */
-		pf_default_rule = t->default_rule;
+		pf_default_rule = t->pftcf_default_rule;
 
 		for (i = 0; i < PFTM_MAX; i++) {
 			int old = pf_default_rule.timeout[i];
 
 			pf_default_rule.timeout[i] =
-			    t->default_rule.timeout[i];
+			    t->pftcf_default_rule.timeout[i];
 
 			if (i == PFTM_INTERVAL &&
 			    pf_default_rule.timeout[i] < old)
@@ -4123,7 +4142,8 @@ pf_ina_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
 	 * pf_ina_commit_anchor() may move anchor from transaction
 	 * to pf_anchors.
 	 */
-	RB_FOREACH_SAFE(anchor, pf_anchor_global, &t->rc.anchors, anchorw) {
+	RB_FOREACH_SAFE(anchor, pf_anchor_global, &t->pftcf_rc.anchors,
+	    anchorw) {
 		pf_ina_commit_anchor(t, anchor, RB_FIND(pf_anchor_global,
 		    &pf_anchors, anchor));
 	}
@@ -4141,7 +4161,7 @@ pf_ina_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
 	/*
 	 * next iterations pf_commit_trans() will continue with tables.
 	 */
-	t->commit_op = pfr_ina_commit_table;
+	t->pftcf_commit_op = pfr_ina_commit_table;
 }
 
 void
@@ -4170,27 +4190,31 @@ pf_commit_trans(struct pf_trans *t)
 	 */
 
 	/* commit main ruleset first if transaction updates it */
-	if (t->rc.main_anchor.ruleset.rules.version != 0)
-		t->commit_op(t, &t->rc.main_anchor, &pf_main_anchor);
+	if (t->pftcf_rc.main_anchor.ruleset.rules.version != 0)
+		t->pftcf_commit_op(t, &t->pftcf_rc.main_anchor,
+		    &pf_main_anchor);
 
-	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->rc.anchors, wa) {
-		t->commit_op(t, ta, RB_FIND(pf_anchor_global,
+	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pftcf_rc.anchors, wa) {
+		t->pftcf_commit_op(t, ta, RB_FIND(pf_anchor_global,
 		    &pf_anchors, ta));
 	}
 
-	pf_trans_set_commit(&t->trans_set);
+	pf_trans_set_commit(&t->pftcf_opts);
 	pf_remove_orphans(t);
 }
 
 void
-pf_free_trans(struct pf_trans *t)
+pf_cleanup_tconf(struct pf_trans *t)
 {
 	struct pf_anchor *ta, *tw;
 	struct pfr_ktable *tkt, *tktw;
 	struct pf_rule *r;
+	struct pf_ruleset *rs;
 
-	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->rc.anchors, tw) {
-		RB_REMOVE(pf_anchor_global, &t->rc.anchors, ta);
+	KASSERT(t->pft_type == PF_TRANS_CONFIG);
+
+	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pftcf_rc.anchors, tw) {
+		RB_REMOVE(pf_anchor_global, &t->pftcf_rc.anchors, ta);
 		while ((r = TAILQ_FIRST(ta->ruleset.rules.ptr)) != NULL) {
 			pf_rm_rule(&ta->ruleset.rules.queue, r);
 			ta->ruleset.rules.rcount--;
@@ -4203,26 +4227,27 @@ pf_free_trans(struct pf_trans *t)
 		/*
 		 * Unlike pf_remove_if_empty_ruleset() we don't need to deal
 		 * with parents, because all parents are part of transaction
-		 * (are found in t->rc.anchors).
+		 * (are found in t->pftcf_rc.anchors).
 		 */
 
 		pool_put(&pf_anchor_pl, ta);
 	}
 
-	while ((r = TAILQ_FIRST(t->rc.main_anchor.ruleset.rules.ptr)) != NULL) {
-		pf_rm_rule(&t->rc.main_anchor.ruleset.rules.queue, r);
-		t->rc.main_anchor.ruleset.rules.rcount--;
+	rs = &t->pftcf_rc.main_anchor.ruleset;
+	while ((r = TAILQ_FIRST(rs->rules.ptr)) != NULL) {
+		pf_rm_rule(&rs->rules.queue, r);
+		rs->rules.rcount--;
 
 		RB_FOREACH_SAFE(tkt, pfr_ktablehead,
-		    &t->rc.main_anchor.ktables, tktw) {
-			RB_REMOVE(pfr_ktablehead, &t->rc.main_anchor.ktables,
-			    tkt);
+		    &t->pftcf_rc.main_anchor.ktables, tktw) {
+			RB_REMOVE(pfr_ktablehead,
+			    &t->pftcf_rc.main_anchor.ktables, tkt);
 			pfr_destroy_ktable(tkt, 1);
 		}
 	}
 
-	while ((ta = TAILQ_FIRST(&t->anchor_list)) != NULL) {
-		TAILQ_REMOVE(&t->anchor_list, ta, workq);
+	while ((ta = TAILQ_FIRST(&t->pftcf_anchor_list)) != NULL) {
+		TAILQ_REMOVE(&t->pftcf_anchor_list, ta, workq);
 		KASSERT(ta->refcnt == 0);
 		KASSERT(ta->tables == 0);
 		KASSERT(RB_EMPTY(&ta->children));
@@ -4231,11 +4256,23 @@ pf_free_trans(struct pf_trans *t)
 		pool_put(&pf_anchor_pl, ta);
 	}
 
-	while ((tkt = SLIST_FIRST(&t->garbage)) != NULL) {
-		SLIST_REMOVE_HEAD(&t->garbage, pfrkt_workq);
+	while ((tkt = SLIST_FIRST(&t->pftcf_garbage)) != NULL) {
+		SLIST_REMOVE_HEAD(&t->pftcf_garbage, pfrkt_workq);
 		pfr_destroy_ktable(tkt, 1);
 	}
+}
 
+void
+pf_free_trans(struct pf_trans *t)
+{
+	switch (t->pft_type) {
+	case PF_TRANS_CONFIG:
+		pf_cleanup_tconf(t);
+		break;
+	default:
+		log(LOG_ERR, "%s unknown transaction type: %d\n",
+		    __func__, t->pft_type);
+	}
 	free(t, M_TEMP, sizeof(*t));
 }
 
@@ -4244,14 +4281,7 @@ pf_rollback_trans(struct pf_trans *t)
 {
 	if (t != NULL) {
 		rw_assert_wrlock(&pfioctl_rw);
-		LIST_REMOVE(t, entry);
+		LIST_REMOVE(t, pft_entry);
 		pf_free_trans(t);
 	}
 }
-
-int
-pf_copyin_trans(struct pf_trans *t, struct pfioc_trans *io)
-{
-	return (0);
-}
-

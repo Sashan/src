@@ -1901,7 +1901,7 @@ pf_tbladdr_setup(struct pf_trans *t, struct pf_ruleset *rs,
 {
 	if (aw->type != PF_ADDR_TABLE)
 		return (0);
-	if ((aw->p.tbl = pfr_attach_table(&t->rc, rs, aw->v.tblname,
+	if ((aw->p.tbl = pfr_attach_table(&t->pftcf_rc, rs, aw->v.tblname,
 	    wait)) == NULL)
 		return (1);
 	return (0);
@@ -4185,8 +4185,8 @@ enter_ruleset:
 			if (r->anchor_wildcard) {
 				RB_FOREACH(child, pf_anchor_node,
 				    &r->anchor->children) {
-					if (pf_anchor_stack_push(ruleset, r, child,
-					    PF_NEXT_CHILD) != 0)
+					if (pf_anchor_stack_push(ruleset, r,
+					    child, PF_NEXT_CHILD) != 0)
 						return (PF_TEST_FAIL);
 
 					ruleset = &child->ruleset;
