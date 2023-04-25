@@ -119,13 +119,12 @@ int			 pf_states_get(struct pfioc_states *);
 
 struct pf_trans 	*pf_open_trans(pid_t);
 struct pf_trans		*pf_find_trans(uint64_t);
-int			 pf_begin_table_trans(struct pf_trans *,
-			    struct pfr_table *, u_int32_t *);
-int			 pf_begin_ruleset_trans(struct pf_trans *,
-			    const char *, u_int32_t *);
-void			 pf_commit_trans(struct pf_trans *);
 void			 pf_free_trans(struct pf_trans *);
 void			 pf_rollback_trans(struct pf_trans *);
+void			 pf_commit_trans(struct pf_trans *);
+
+void			 pf_init_tconf(struct pf_trans *);
+void			 pf_cleanup_tconf(struct pf_trans *);
 void			 pf_swap_anchors(struct pf_trans *, struct pf_anchor *,
 			    struct pf_anchor *);
 int			 pf_trans_in_conflict(struct pf_trans *, const char *);
@@ -1450,21 +1449,6 @@ pf_drop_unused_tables(struct pf_trans *t)
 			}
 		}
 	}
-}
-
-void
-pf_init_tconf(struct pf_trans *t)
-{
-	t->pft_type = PF_TRANS_CONFIG;
-
-	RB_INIT(&t->pftcf_rc.anchors);
-	TAILQ_INIT(&t->pftcf_anchor_list);
-	SLIST_INIT(&t->pftcf_garbage);
-	pf_init_ruleset(&t->pftcf_rc.main_anchor.ruleset);
-	t->pftcf_default_rule = pf_default_rule;
-	t->pftcf_default_vers = pf_default_vers;
-	t->pftcf_check_op = pf_ina_check;
-	t->pftcf_commit_op = pf_ina_commit;
 }
 
 int
@@ -4279,6 +4263,21 @@ pf_cleanup_tconf(struct pf_trans *t)
 		SLIST_REMOVE_HEAD(&t->pftcf_garbage, pfrkt_workq);
 		pfr_destroy_ktable(tkt, 1);
 	}
+}
+
+void
+pf_init_tconf(struct pf_trans *t)
+{
+	t->pft_type = PF_TRANS_CONFIG;
+
+	RB_INIT(&t->pftcf_rc.anchors);
+	TAILQ_INIT(&t->pftcf_anchor_list);
+	SLIST_INIT(&t->pftcf_garbage);
+	pf_init_ruleset(&t->pftcf_rc.main_anchor.ruleset);
+	t->pftcf_default_rule = pf_default_rule;
+	t->pftcf_default_vers = pf_default_vers;
+	t->pftcf_check_op = pf_ina_check;
+	t->pftcf_commit_op = pf_ina_commit;
 }
 
 void
