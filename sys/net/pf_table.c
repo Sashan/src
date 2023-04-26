@@ -2222,6 +2222,35 @@ pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 		kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
 		if (kt == NULL) {
 			if (tkt->pfrkt_version != 0)
+				/*
+				 * we are currently hitting a panic when reloading
+				 * the same ruleset. Consider simple pf.conf
+				 * as follows:
+				 *	pass from any to <foo>
+				 *
+				 * table <foo> becomes defined 'implicitly'.
+				 * it means 'pfctl -sT' does not report it,
+				 * bit table is there just to be safely
+				 * dereferenced when packet matches rule.
+				 * the table is empty hence it can not match
+				 * any packet.
+				 *
+				 * now we reload the same file. We get version
+				 * for ruleset (2) and version for table (1).
+				 * on commit we check versions they match so
+				 * we proceed to update.
+				 *
+				 * The update operation swaps object between
+				 * anchor and transaction anchor. We start
+				 * swapping the rules. As we move rule
+				 * from anchor we drop reference to table <foo>
+				 * too. If we happen to drop the last reference
+				 * the table <foo> disappears.
+				 *
+				 * In the next we proceed to swapping tables
+				 * and here we are. <foo> is no longer found
+				 * in anchor.
+				 */
 				panic("%s %s@%s has %d, but should have 0 "
 				    "[ %s | %s ]",
 				    __func__,
