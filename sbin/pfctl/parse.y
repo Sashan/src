@@ -906,7 +906,7 @@ anchorrule	: ANCHOR anchorname dir quick interface af proto fromto
 					    r.anchor->path);
 					mv_rules(&pf->alast->ruleset,
 					    &r.anchor->ruleset);
-					mv_tables(pf, &pf->alast->ktables, pf->anchor);
+					mv_tables(pf, &pf->alast->ktables, r.anchor);
 				}
 				pf_remove_if_empty_ruleset(&pf_global,
 				    &pf->alast->ruleset);
