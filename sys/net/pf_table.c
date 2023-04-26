@@ -2128,10 +2128,16 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 	 * /dev/pf
 	 */
 	for (i = 0; i < size; i++) {
-		if (COPYIN(addr+i, &ad, sizeof(ad), flags))
+		if (COPYIN(addr+i, &ad, sizeof(ad), flags)) {
+			log(LOG_DEBUG,
+			    "%s copyin(addr + %d...\n", __func__, i);
 			senderr(EFAULT);
-		if (pfr_validate_addr(&ad))
+		}
+		if (pfr_validate_addr(&ad)) {
+			log(LOG_DEBUG, "%s pfr_validate_addr(%d)\n",
+			    __func__, i);
 			senderr(EINVAL);
+		}
 		if (pfr_lookup_addr(kt, &ad, 1) != NULL)
 			continue;
 		p = pfr_create_kentry(&ad, PR_WAITOK);
