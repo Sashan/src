@@ -544,6 +544,14 @@ pfctl_define_table(char *name, int flags, int addrs, const char *anchor,
 	tbl->pfrt_flags = flags;
 	fprintf(stderr, "%s %s@%s\n", __func__, tbl->pfrt_name, tbl->pfrt_anchor);
 
+	/*
+	 * non-root anchors processed by parse.y are loaded to kernel later.
+	 * Here we load tables, which are either created for root anchor
+	 * are by 'pfctl -t ... -T ...' command.
+	 */
+	if (ukt == NULL)
+		return (0);
+
 	return pfr_ina_define(tbl, ab->pfrb_caddr, ab->pfrb_size, NULL,
 	    NULL, ticket, addrs ? PFR_FLAG_ADDRSTOO : 0);
 }
