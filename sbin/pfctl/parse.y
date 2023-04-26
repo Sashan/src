@@ -864,7 +864,6 @@ pfa_anchor	: '{'
 			pf->alast = pf->anchor;
 			pf->asd--;
 			pf->anchor = pf->astack[pf->asd];
-			mv_tables(pf, &pf->alast->ktables, pf->anchor);
 		}
 		| /* empty */
 		;
@@ -907,6 +906,7 @@ anchorrule	: ANCHOR anchorname dir quick interface af proto fromto
 					    r.anchor->path);
 					mv_rules(&pf->alast->ruleset,
 					    &r.anchor->ruleset);
+					mv_tables(pf, &pf->alast->ktables, pf->anchor);
 				}
 				pf_remove_if_empty_ruleset(&pf_global,
 				    &pf->alast->ruleset);
@@ -4043,7 +4043,7 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 		}
 
 		if (ukt != NULL) {
-			if (RB_INSERT(pfr_ktablehead, &pf->alast->ktables,
+			if (RB_INSERT(pfr_ktablehead, &pf->anchor->ktables,
 			    &ukt->pfrukt_kt) != NULL) {
 				/*
 				 * I think this should not happen, because
@@ -4053,12 +4053,12 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 				fprintf(stderr,
 				    "%s:%d table %s already exists in %s\n",
 				    file->name, yylval.lineno,
-				    ukt->pfrukt_name, pf->alast->path);
+				    ukt->pfrukt_name, pf->anchor->path);
 				free(ukt);
 				goto _error;
 			}
 			fprintf(stderr, "%s %s@%s inserted to tree\n",
-			    __func__, ukt->pfrukt_name, pf->alast->path);
+			    __func__, ukt->pfrukt_name, pf->anchor->path);
 
 		} else
 			fprintf(stderr, "%s ukt is null\n", __func__);
@@ -5633,8 +5633,8 @@ mv_tables(struct pfctl *pf, struct pfr_ktablehead *ktables,
 		    ukt->pfrukt_addrs.pfrb_size, NULL, NULL, pf->trans->ticket,
 		    (ukt->pfrukt_addrs.pfrb_size != 0) ? PFR_FLAG_ADDRSTOO : 0);
 		if (ina_err != 0)
-			errx(1, "%s error on %s@%s", __func__, kt->pfrkt_name,
-			    kt->pfrkt_anchor);
+			errx(1, "%s error on %s@%s [ %s ]", __func__,
+			    kt->pfrkt_name, kt->pfrkt_anchor, strerror(errno));
 		pfr_buf_clear(&ukt->pfrukt_addrs);
 		free(kt);
 	}
