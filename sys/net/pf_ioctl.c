@@ -4016,10 +4016,18 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 		 * Do not create empty rulesets.
 		 */
 		if (TAILQ_EMPTY(ta->ruleset.rules.ptr) &&
-		    ta->tables == 0 &&
-		    RB_EMPTY(&ta->children)) {
+		    ta->tables == 0 && RB_EMPTY(&ta->children)) {
 			log(LOG_DEBUG, "%s will not create empty anchor %s\n",
 			    __func__, ta->path);
+			/*
+			 * removing ourselves from our direct parent is
+			 * sufficient the rulesets (RB-tree) is walked from
+			 * left to right (MIN -> MAX, parent is always grater
+			 * than child).
+			 */
+			if (ta->parent != NULL)
+				RB_REMOVE(pf_anchor_node,
+				    &ta->parent->children, ta);
 			return;
 		}
 
