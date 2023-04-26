@@ -2091,7 +2091,6 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		kt_insert = pfr_create_ktable(NULL, tbl, 0, PR_WAITOK);
 		kt_insert->pfrkt_rs = trs;
 		kt_insert->pfrkt_version = pfr_get_ktable_version(kt_insert);
-		xadd++;
 		kt_insert->pfrkt_flags |= PFR_TFLAG_REFDANCHOR;
 		/* ina means inactive */
 		kt_insert->pfrkt_flags |= PFR_TFLAG_INACTIVE;
@@ -2223,10 +2222,12 @@ pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 		kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
 		if (kt == NULL) {
 			if (tkt->pfrkt_version != 0)
-				panic("%s %s@%s has %d, but should have 0",
+				panic("%s %s@%s has %d, but should have 0 "
+				    "[ %s | %s ]",
 				    __func__,
 				    tkt->pfrkt_name,
-				    a->path, tkt->pfrkt_version);
+				    ta->path, tkt->pfrkt_version,
+				    ta->path, a->path);
 			KASSERT(tkt->pfrkt_version == 0);
 			RB_REMOVE(pfr_ktablehead, &ta->ktables, tkt);
 			ta->tables--;
@@ -3051,8 +3052,8 @@ pfr_get_ktable_version(struct pfr_ktable *ktt)
 		version = 0;
 	PF_UNLOCK();
 	NET_UNLOCK();
-	log(LOG_ERR, "%s @ %d found %p for %s, version: %d\n",
-	    __func__, __LINE__, kt, ktt->pfrkt_name, version);
+	log(LOG_ERR, "%s found for %s@%s, version: %d\n",
+	    __func__, ktt->pfrkt_name, ktt->pfrkt_anchor, version);
 
 	return (version);
 }
