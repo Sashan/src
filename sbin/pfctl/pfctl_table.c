@@ -524,16 +524,15 @@ pfctl_define_table(char *name, int flags, int addrs, const char *anchor,
 			 * copy IP addresses which come with table from
 			 * temporal buffer to buffer attached to table.
 			 */
-			ukt->pfrukt_addrs.pfrb_caddr = malloc(ab->pfrb_size);
+			ukt->pfrukt_addrs = *ab;
+			ukt->pfrukt_addrs.pfrb_caddr = malloc(ab->pfrb_msize);
 			if (ukt->pfrukt_addrs.pfrb_caddr == NULL)
 				errx(1, "%s: malloc", __func__);
-			ukt->pfrukt_addrs.pfrb_size = ab->pfrb_size;
 			memcpy(ukt->pfrukt_addrs.pfrb_caddr, ab->pfrb_caddr,
-			    ab->pfrb_size);
-		} else {
-			ukt->pfrukt_addrs.pfrb_size = 0;
-			ukt->pfrukt_addrs.pfrb_caddr = NULL;
-		}
+			    ab->pfrb_msize);
+		} else
+			memset(&ukt->pfrukt_addrs, 0,
+			    sizeof(struct pfr_buffer));
 
 		tbl = &ukt->pfrukt_t;
 	}
