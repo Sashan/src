@@ -1930,6 +1930,13 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			    r->nr, ta->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    src_kt->pfrkt_name, src_kt->pfrkt_anchor);
+		} else if (r->src.addr.p.tbl != NULL) {
+			log(LOG_DEBUG, "%s %u@%s src %s@%s != %s@%s\n",
+			    __func__,
+			    r->nr, ta->path,
+			    kt->pfrkt_name, kt->pfrkt_anchor,
+			    r->src.addr.p.tbl->pfrkt_name,
+			    r->src.addr.p.tbl->pfrkt_anchor);
 		}
 		if (r->dst.addr.p.tbl != kt &&
 		    PF_MATCH_KTABLE(&r->dst.addr, kt)) {
@@ -1949,6 +1956,13 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			    r->nr, ta->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    dst_kt->pfrkt_name, dst_kt->pfrkt_anchor);
+		} if (r->dst.addr.p.tbl != NULL) {
+			log(LOG_DEBUG, "%s %u@%s dst %s@%s <-> %s@%s\n",
+			    __func__,
+			    r->nr, ta->path,
+			    kt->pfrkt_name, kt->pfrkt_anchor,
+			    r->dst.addr.p.tbl->pfrkt_name,
+			    r->dst.addr.p.tbl->pfrkt_anchor);
 		}
 		if (r->rdr.addr.p.tbl != kt &&
 		    PF_MATCH_KTABLE(&r->rdr.addr, kt)) {
@@ -1968,6 +1982,13 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			    r->nr, ta->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    rdr_kt->pfrkt_name, rdr_kt->pfrkt_anchor);
+		} else if (r->rdr.addr.p.tbl != NULL) {
+			log(LOG_DEBUG, "%s %u@%s rdr %s@%s <-> %s@%s\n",
+			    __func__,
+			    r->nr, ta->path,
+			    kt->pfrkt_name, kt->pfrkt_anchor,
+			    r->rdr.addr.p.tbl->pfrkt_name,
+			    r->rdr.addr.p.tbl->pfrkt_anchor);
 		}
 		if (r->nat.addr.p.tbl != kt &&
 		    PF_MATCH_KTABLE(&r->nat.addr, kt)) {
@@ -1987,6 +2008,13 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			    r->nr, ta->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    nat_kt->pfrkt_name, nat_kt->pfrkt_anchor);
+		} else if (r->nat.addr.p.tbl != NULL) {
+			log(LOG_DEBUG, "%s %u@%s nat %s@%s <-> %s@%s\n",
+			    __func__,
+			    r->nr, ta->path,
+			    kt->pfrkt_name, kt->pfrkt_anchor,
+			    r->nat.addr.p.tbl->pfrkt_name,
+			    r->nat.addr.p.tbl->pfrkt_anchor);
 		}
 		if (r->route.addr.p.tbl != kt &&
 		    PF_MATCH_KTABLE(&r->route.addr, kt)) {
@@ -2006,6 +2034,13 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			    r->nr, ta->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    route_kt->pfrkt_name, route_kt->pfrkt_anchor);
+		} else if (r->route.addr.p.tbl != NULL) {
+			log(LOG_DEBUG, "%s %u@%s route %s@%s <-> %s@%s\n",
+			    __func__,
+			    r->nr, ta->path,
+			    kt->pfrkt_name, kt->pfrkt_anchor,
+			    r->route.addr.p.tbl->pfrkt_name,
+			    r->route.addr.p.tbl->pfrkt_anchor);
 		}
 	}
 }
@@ -2026,6 +2061,7 @@ pfr_update_table_refs(struct pf_anchor *ta, struct pfr_ktable *kt)
 	TAILQ_INIT(&recursive_l);
 	TAILQ_INIT(&aux);
 
+	log(LOG_DEBUG, "%s %s\n", __func__, ta->path);
 	RB_FOREACH(aux_a, pf_anchor_node, &ta->children) {
 		TAILQ_INSERT_HEAD(&recursive_l, aux_a, workq);
 	}
@@ -2036,6 +2072,8 @@ pfr_update_table_refs(struct pf_anchor *ta, struct pfr_ktable *kt)
 			    &recursive_a->children) {
 				TAILQ_INSERT_HEAD(&aux, aux_a, workq);
 			}
+			log(LOG_DEBUG, "%s %s%s\n", __func__,
+			    kt->pfrkt_name, recursive_a->path);
 			pfr_update_tablerefs_anchor(recursive_a, kt);
 		}
 		/*
@@ -2184,8 +2222,10 @@ pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 	 * nothing to be done when the whole anchor got moved
 	 * from transaction to pf_anchors
 	 */
-	if (ta == a)
+	if (ta == a) {
+		log(LOG_DEBUG, "%s nothing to be done\n", __func__);
 		return;
+	}
 
 	if (a == NULL) {
 		/*
@@ -2193,25 +2233,8 @@ pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 		 * anchors are moved to global tree earlier in pf_ina_commit().
 		 */
 		KASSERT(ta->tables == 0);
+		log(LOG_DEBUG, "%s a is NULL\n", __func__);
 		return;
-	}
-
-	/*
-	 * remove unused tables from global anchor `a` first.
-	 */
-	RB_FOREACH_SAFE(tkt, pfr_ktablehead, &a->ktables, ktw) {
-		kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
-		/*
-		 * TODO: we should also identify tables created
-		 * by pfctl -t ... -T ... those tables must also
-		 * stay around.
-		 */
-		if (kt != NULL && kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0 &&
-		    (kt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
-			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
-			SLIST_INSERT_HEAD(&t->pftcf_garbage, kt, pfrkt_workq);
-			a->tables--;
-		}
 	}
 
 	/*
@@ -2220,37 +2243,12 @@ pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 	 */
 	RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, ktw) {
 		kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
+		log(LOG_DEBUG, "%s committing %s@%s\n", __func__,
+		    tkt->pfrkt_name, ta->path);
 		if (kt == NULL) {
+			log(LOG_DEBUG, "%s %s@%s not found in\n", __func__,
+			    tkt->pfrkt_name, a->path);
 			if (tkt->pfrkt_version != 0)
-				/*
-				 * we are currently hitting a panic when reloading
-				 * the same ruleset. Consider simple pf.conf
-				 * as follows:
-				 *	pass from any to <foo>
-				 *
-				 * table <foo> becomes defined 'implicitly'.
-				 * it means 'pfctl -sT' does not report it,
-				 * bit table is there just to be safely
-				 * dereferenced when packet matches rule.
-				 * the table is empty hence it can not match
-				 * any packet.
-				 *
-				 * now we reload the same file. We get version
-				 * for ruleset (2) and version for table (1).
-				 * on commit we check versions they match so
-				 * we proceed to update.
-				 *
-				 * The update operation swaps object between
-				 * anchor and transaction anchor. We start
-				 * swapping the rules. As we move rule
-				 * from anchor we drop reference to table <foo>
-				 * too. If we happen to drop the last reference
-				 * the table <foo> disappears.
-				 *
-				 * In the next we proceed to swapping tables
-				 * and here we are. <foo> is no longer found
-				 * in anchor.
-				 */
 				panic("%s %s@%s has %d, but should have 0 "
 				    "[ %s | %s ]",
 				    __func__,
@@ -2265,9 +2263,32 @@ pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 			pfr_update_table_refs(a, tkt);
 			tkt->pfrkt_version++;
 		} else {
+			log(LOG_DEBUG, "%s merging %s@%s\n", __func__,
+			    kt->pfrkt_name, a->path);
 			KASSERT(kt->pfrkt_version == tkt->pfrkt_version);
 			pfr_merge_ktables(tkt, kt, gettime());
+			pfr_update_table_refs(a, kt);
 			kt->pfrkt_version++;
+		}
+	}
+
+	/*
+	 * remove unused tables from global anchor `a`.
+	 */
+	RB_FOREACH_SAFE(tkt, pfr_ktablehead, &a->ktables, ktw) {
+		kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
+		/*
+		 * TODO: we should also identify tables created
+		 * by pfctl -t ... -T ... those tables must also
+		 * stay around.
+		 */
+		if (kt != NULL && kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0 &&
+		    (kt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
+			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
+			log(LOG_DEBUG, "%s removing %s@%s\n",
+			    __func__, kt->pfrkt_name, a->path);
+			SLIST_INSERT_HEAD(&t->pftcf_garbage, kt, pfrkt_workq);
+			a->tables--;
 		}
 	}
 }
