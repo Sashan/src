@@ -4081,13 +4081,34 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 		ta->ruleset.rules.version++;
 	} else {
 		if (pf_match_root_path(a->path, t->pftcf_anchor_path) ==
-		    a->path) {
+		    a->path)
 			pf_swap_anchors_ina(t, ta, a);
-			if (ta->parent != NULL)
-				pf_update_parent(a, ta);
-		} else
+		else
 			log(LOG_DEBUG, "%s skipping %s\n",
 			    __func__, a->path);
+	}
+}
+
+void
+pf_fix_main_children(void)
+{
+	struct pf_anchor *a, *aw;
+	struct pf_rule *r;
+
+	/*
+	 * main ruleset is kind of special. We need to walk all rules to
+	 * populate children tree with anchor rules.
+	 *
+	 * We start with flushing all stale entries.
+	 */
+
+	RB_FOREACH_SAFE(a, pf_anchor_node, &pf_main_anchor.children, aw)
+		RB_REMOVE(pf_anchor_node, &pf_main_anchor.children, a);
+
+	TAILQ_FOREACH(r, pf_main_anchor.ruleset.rules.ptr, entries) {
+		if (r->anchor)
+			RB_INSERT(pf_anchor_node, &pf_main_anchor.children,
+			    r->anchor);
 	}
 }
 
@@ -4148,8 +4169,10 @@ pf_ina_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
 		pf_default_vers++;
 	}
 
-	if (a == &pf_main_anchor)
+	if (a == &pf_main_anchor) {
 		pf_ina_commit_anchor(t, ta, a);
+		pf_fix_main_children();
+	}
 
 	/*
 	 * pf_ina_commit_anchor() may move anchor from transaction
