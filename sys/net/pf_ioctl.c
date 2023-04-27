@@ -4006,10 +4006,52 @@ pf_match_root_path(const char *a, const char *b)
 }
 
 void
+pf_update_parent(struct pf_anchor *a, struct pf_anchor *ta)
+{
+	struct pf_anchor *parent, *exists;
+
+	if (ta->parent == NULL)
+		return;
+
+	parent = RB_FIND(pf_anchor_global, &pf_anchors, ta->parent);
+	/*
+	 * It's granted the matching parent in global tree
+	 * will exist, because we process from root (parents)
+	 * towards leaf.
+	 *
+	 * We only must make sure we refer to parent found
+	 * pf_anchors and not in t->anchors.
+	 */
+	KASSERT(parent != NULL);
+	if (parent != ta->parent) {
+		/*
+		 * The parent in global tree is different
+		 */
+		log(LOG_DEBUG, "%s parent (%s) found for %s in global tree\n",
+		    __func__,
+		    PF_ANCHOR_PATH(ta),
+		    ta->path);
+		RB_REMOVE(pf_anchor_node, &ta->parent->children, ta);
+		exists = RB_INSERT(pf_anchor_node, &parent->children, ta);
+		KASSERT(exists == NULL);
+	} else {
+		/*
+		 * anchor must be present in parent's children already
+		 */
+		KASSERT(
+		    RB_FIND(pf_anchor_node, &parent->children, ta) != NULL);
+		log(LOG_DEBUG,
+		    "%s parent (%s) found in pf_anchors, we are good\n",
+		    __func__,
+		    PF_ANCHOR_PATH(parent));
+	}
+}
+
+void
 pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
     struct pf_anchor *a)
 {
-	struct pf_anchor *exists, *parent;
+	struct pf_anchor *exists;
 
 	if (a == NULL) {
 		/*
@@ -4034,50 +4076,16 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 		RB_REMOVE(pf_anchor_global, &t->pftcf_rc.anchors, ta);
 		exists = RB_INSERT(pf_anchor_global, &pf_anchors, ta);
 		KASSERT(exists == NULL);
-		if (ta->parent != NULL) {
-			parent = RB_FIND(pf_anchor_global, &pf_anchors,
-			    ta->parent);
-			/*
-			 * It's granted the matching parent in global tree
-			 * will exist, because we process from root (parents)
-			 * towards leaf.
-			 *
-			 * We only must make sure we refer to parent found
-			 * pf_anchors and not in t->anchors.
-			 */
-			KASSERT(parent != NULL);
-			if (parent != ta->parent) {
-				/*
-				 * The parent in global tree is different
-				 * 
-				 */
-				log(LOG_DEBUG,
-				    "%s parent (%s) found for %s in global "
-				    "tree\n", __func__,
-				    PF_ANCHOR_PATH(ta),
-				    ta->path);
-				RB_REMOVE(pf_anchor_node,
-				    &ta->parent->children, ta);
-				exists = RB_INSERT(pf_anchor_node,
-				    &parent->children, ta);
-				KASSERT(exists == NULL);
-			} else {
-				log(LOG_DEBUG,
-				    "%s parent (%s) found in pf_anchors, "
-				    "we are good\n",
-				    __func__,
-				    PF_ANCHOR_PATH(parent));
-			}
-		}
+		if (ta->parent != NULL)
+			pf_update_parent(a, ta);
 		ta->ruleset.rules.version++;
 	} else {
-		/*
-		 * swap anchors for transaction root and its descendants only.
-		 */
 		if (pf_match_root_path(a->path, t->pftcf_anchor_path) ==
-		    a->path)
+		    a->path) {
 			pf_swap_anchors_ina(t, ta, a);
-		else
+			if (ta->parent != NULL)
+				pf_update_parent(a, ta);
+		} else
 			log(LOG_DEBUG, "%s skipping %s\n",
 			    __func__, a->path);
 	}
