@@ -1484,6 +1484,13 @@ pfctl_check_qassignments(struct pf_ruleset *rs)
 }
 
 int
+pfctl_load_tables(struct pfctl *pf, char *path, struct pf_anchor *a)
+{
+	fprintf(stderr, "%s create\n");
+	return (0);
+}
+
+int
 pfctl_load_ruleset(struct pfctl *pf, char *path, struct pf_ruleset *rs,
     int depth)
 {
@@ -1526,6 +1533,8 @@ pfctl_load_ruleset(struct pfctl *pf, char *path, struct pf_ruleset *rs,
 		if (r->anchor) {
 			if ((error = pfctl_load_ruleset(pf, path,
 			    &r->anchor->ruleset, depth + 1)))
+				goto error;
+			if ((error = pfctl_load_tables(pf, path, r->anchor)))
 				goto error;
 		} else if (pf->opts & PF_OPT_VERBOSE)
 			printf("\n");
