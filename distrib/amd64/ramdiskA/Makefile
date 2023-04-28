@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.16 2021/07/26 12:47:44 kn Exp $
+#	$OpenBSD: Makefile,v 1.18 2023/04/28 08:45:25 krw Exp $
 
 FS=		floppy${OSrev}.img
 FSSIZE=		2880
@@ -18,7 +18,7 @@ ${FS}: bsd.gz
 	dd if=/dev/zero of=${FS} bs=512 count=${FSSIZE}
 	vnconfig -v ${FS} > vnd
 	disklabel -w `cat vnd` ${FSDISKTYPE}
-	newfs -O 1 -m 0 -o space -i 524288 -c ${FSSIZE} /dev/r`cat vnd`a
+	newfs -O 1 -m 0 -o space -i 524288 -c ${FSSIZE} -b 4096 -f 512 /dev/r`cat vnd`a
 	mount /dev/`cat vnd`a ${MOUNT_POINT}
 	objcopy -S -R .comment ${DESTDIR}/usr/mdec/fdboot ${.OBJDIR}/boot
 	installboot -v -r ${MOUNT_POINT} `cat vnd` \
@@ -38,7 +38,7 @@ bsd.gz: bsd.rd
 	    bsd.rd bsd.strip
 	gzip -9cn bsd.strip > bsd.gz
 
-bsd.rd: mr.fs bsd
+bsd.rd: mr.fs
 	cp bsd bsd.rd
 	rdsetroot bsd.rd mr.fs
 
@@ -47,7 +47,7 @@ bsd:
 	    su ${BUILDUSER} -c '${MAKE} config && ${MAKE} clean && exec ${MAKE} ${MFLAGS}'
 	cp -p ${.CURDIR}/../../../sys/arch/${MACHINE}/compile/${RAMDISK}/obj/bsd bsd
 
-mr.fs: instbin
+mr.fs: instbin bsd
 	rm -rf $@.d
 	install -d -o root -g wheel $@.d
 	mtree -def ${MTREE} -p $@.d -u

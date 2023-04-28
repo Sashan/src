@@ -160,6 +160,7 @@
 ./etc/firmware/udl_huffman
 ./etc/firmware/urtwn-license
 ./etc/firmware/urtwn-rtl8188eu
+./etc/firmware/urtwn-rtl8188ftv
 ./etc/firmware/urtwn-rtl8192cT
 ./etc/firmware/urtwn-rtl8192cU
 ./etc/firmware/urtwn-rtl8192eu
@@ -743,7 +744,7 @@
 ./usr/lib/libagentx.so.1.1
 ./usr/lib/libc.so.97.0
 ./usr/lib/libcbor.so.2.0
-./usr/lib/libcrypto.so.50.2
+./usr/lib/libcrypto.so.51.0
 ./usr/lib/libcurses.so.14.0
 ./usr/lib/libedit.so.5.2
 ./usr/lib/libelf.so.3.0
@@ -772,10 +773,10 @@
 ./usr/lib/librpcsvc.so.3.0
 ./usr/lib/libskey.so.6.0
 ./usr/lib/libsndio.so.7.2
-./usr/lib/libssl.so.53.2
+./usr/lib/libssl.so.54.0
 ./usr/lib/libtermcap.so.14.0
 ./usr/lib/libtermlib.so.14.0
-./usr/lib/libtls.so.26.2
+./usr/lib/libtls.so.27.0
 ./usr/lib/libusbhid.so.7.1
 ./usr/lib/libutil.so.16.0
 ./usr/lib/libz.so.7.0
@@ -3005,7 +3006,7 @@
 ./usr/share/relink/usr
 ./usr/share/relink/usr/lib
 ./usr/share/relink/usr/lib/libc.so.97.0.a
-./usr/share/relink/usr/lib/libcrypto.so.50.2.a
+./usr/share/relink/usr/lib/libcrypto.so.51.0.a
 ./usr/share/relink/usr/libexec
 ./usr/share/relink/usr/libexec/ld.so.a
 ./usr/share/relink/usr/sbin

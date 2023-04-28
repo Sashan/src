@@ -1,4 +1,4 @@
-/*	$Id: test-mft.c,v 1.22 2022/08/26 06:32:03 tb Exp $ */
+/*	$Id: test-mft.c,v 1.24 2023/04/27 08:37:53 beck Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -35,6 +35,8 @@
 
 int outformats;
 int verbose;
+
+int64_t evaluation_time;
 
 int
 main(int argc, char *argv[])

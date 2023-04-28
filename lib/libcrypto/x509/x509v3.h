@@ -1,4 +1,4 @@
-/* $OpenBSD: x509v3.h,v 1.19 2023/04/16 08:21:13 tb Exp $ */
+/* $OpenBSD: x509v3.h,v 1.24 2023/04/25 19:01:01 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 1999.
  */
@@ -190,7 +190,7 @@ typedef struct GENERAL_NAME_st {
 		OTHERNAME *otherName; /* otherName */
 		ASN1_IA5STRING *rfc822Name;
 		ASN1_IA5STRING *dNSName;
-		ASN1_TYPE *x400Address;
+		ASN1_STRING *x400Address;
 		X509_NAME *directoryName;
 		EDIPARTYNAME *ediPartyName;
 		ASN1_IA5STRING *uniformResourceIdentifier;
@@ -202,7 +202,6 @@ typedef struct GENERAL_NAME_st {
 		X509_NAME *dirn;		/* dirn */
 		ASN1_IA5STRING *ia5; /* rfc822Name, dNSName, uniformResourceIdentifier */
 		ASN1_OBJECT *rid; /* registeredID */
-		ASN1_TYPE *other; /* x400Address */
 	} d;
 } GENERAL_NAME;
 
@@ -263,20 +262,6 @@ struct AUTHORITY_KEYID_st {
 	ASN1_INTEGER *serial;
 };
 
-/* Strong extranet structures */
-
-typedef struct SXNET_ID_st {
-	ASN1_INTEGER *zone;
-	ASN1_OCTET_STRING *user;
-} SXNETID;
-
-DECLARE_STACK_OF(SXNETID)
-
-typedef struct SXNET_st {
-	ASN1_INTEGER *version;
-	STACK_OF(SXNETID) *ids;
-} SXNET;
-
 typedef struct NOTICEREF_st {
 	ASN1_STRING *organization;
 	STACK_OF(ASN1_INTEGER) *noticenos;
@@ -333,30 +318,6 @@ typedef struct POLICY_CONSTRAINTS_st {
 	ASN1_INTEGER *requireExplicitPolicy;
 	ASN1_INTEGER *inhibitPolicyMapping;
 } POLICY_CONSTRAINTS;
-
-#if !defined(LIBRESSL_NEXT_API) || defined(LIBRESSL_INTERNAL)
-/* Proxy certificate structures, see RFC 3820 */
-typedef struct PROXY_POLICY_st {
-	ASN1_OBJECT *policyLanguage;
-	ASN1_OCTET_STRING *policy;
-} PROXY_POLICY;
-
-typedef struct PROXY_CERT_INFO_EXTENSION_st {
-	ASN1_INTEGER *pcPathLengthConstraint;
-	PROXY_POLICY *proxyPolicy;
-} PROXY_CERT_INFO_EXTENSION;
-
-PROXY_POLICY *PROXY_POLICY_new(void);
-void PROXY_POLICY_free(PROXY_POLICY *a);
-PROXY_POLICY *d2i_PROXY_POLICY(PROXY_POLICY **a, const unsigned char **in, long len);
-int i2d_PROXY_POLICY(PROXY_POLICY *a, unsigned char **out);
-extern const ASN1_ITEM PROXY_POLICY_it;
-PROXY_CERT_INFO_EXTENSION *PROXY_CERT_INFO_EXTENSION_new(void);
-void PROXY_CERT_INFO_EXTENSION_free(PROXY_CERT_INFO_EXTENSION *a);
-PROXY_CERT_INFO_EXTENSION *d2i_PROXY_CERT_INFO_EXTENSION(PROXY_CERT_INFO_EXTENSION **a, const unsigned char **in, long len);
-int i2d_PROXY_CERT_INFO_EXTENSION(PROXY_CERT_INFO_EXTENSION *a, unsigned char **out);
-extern const ASN1_ITEM PROXY_CERT_INFO_EXTENSION_it;
-#endif /* !LIBRESSL_NEXT_API || LIBRESSL_INTERNAL */
 
 struct ISSUING_DIST_POINT_st {
 	DIST_POINT_NAME *distpoint;
@@ -515,28 +476,6 @@ void BASIC_CONSTRAINTS_free(BASIC_CONSTRAINTS *a);
 BASIC_CONSTRAINTS *d2i_BASIC_CONSTRAINTS(BASIC_CONSTRAINTS **a, const unsigned char **in, long len);
 int i2d_BASIC_CONSTRAINTS(BASIC_CONSTRAINTS *a, unsigned char **out);
 extern const ASN1_ITEM BASIC_CONSTRAINTS_it;
-
-SXNET *SXNET_new(void);
-void SXNET_free(SXNET *a);
-SXNET *d2i_SXNET(SXNET **a, const unsigned char **in, long len);
-int i2d_SXNET(SXNET *a, unsigned char **out);
-extern const ASN1_ITEM SXNET_it;
-SXNETID *SXNETID_new(void);
-void SXNETID_free(SXNETID *a);
-SXNETID *d2i_SXNETID(SXNETID **a, const unsigned char **in, long len);
-int i2d_SXNETID(SXNETID *a, unsigned char **out);
-extern const ASN1_ITEM SXNETID_it;
-
-int SXNET_add_id_asc(SXNET **psx, const char *zone, const char *user,
-    int userlen);
-int SXNET_add_id_ulong(SXNET **psx, unsigned long lzone, const char *user,
-    int userlen);
-int SXNET_add_id_INTEGER(SXNET **psx, ASN1_INTEGER *izone, const char *user,
-    int userlen);
-
-ASN1_OCTET_STRING *SXNET_get_id_asc(SXNET *sx, const char *zone);
-ASN1_OCTET_STRING *SXNET_get_id_ulong(SXNET *sx, unsigned long lzone);
-ASN1_OCTET_STRING *SXNET_get_id_INTEGER(SXNET *sx, ASN1_INTEGER *zone);
 
 AUTHORITY_KEYID *AUTHORITY_KEYID_new(void);
 void AUTHORITY_KEYID_free(AUTHORITY_KEYID *a);
@@ -843,12 +782,6 @@ ASN1_OCTET_STRING *a2i_IPADDRESS_NC(const char *ipasc);
 int a2i_ipadd(unsigned char *ipout, const char *ipasc);
 int X509V3_NAME_from_section(X509_NAME *nm, STACK_OF(CONF_VALUE)*dn_sk,
 						unsigned long chtype);
-
-/* Move to pcy_int.h. */
-#if !defined(LIBRESSL_NEXT_API) || defined(LIBRESSL_INTERNAL)
-void X509_POLICY_NODE_print(BIO *out, X509_POLICY_NODE *node, int indent);
-DECLARE_STACK_OF(X509_POLICY_NODE)
-#endif
 
 #ifndef OPENSSL_NO_RFC3779
 typedef struct ASRange_st {

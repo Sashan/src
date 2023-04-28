@@ -1,4 +1,4 @@
-/* $OpenBSD: evp.h,v 1.116 2023/04/16 17:06:19 jsing Exp $ */
+/* $OpenBSD: evp.h,v 1.118 2023/04/25 18:39:12 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -183,7 +183,6 @@ extern "C" {
  */
 #define EVP_MD_CTX_FLAG_PAD_MASK	0xF0	/* RSA mode to use */
 #define EVP_MD_CTX_FLAG_PAD_PKCS1	0x00	/* PKCS#1 v1.5 mode */
-#define EVP_MD_CTX_FLAG_PAD_X931	0x10	/* X9.31 mode */
 #define EVP_MD_CTX_FLAG_PAD_PSS		0x20	/* PSS mode */
 
 #define EVP_MD_CTX_FLAG_NO_INIT		0x0100 /* Don't initialize md_data */
@@ -621,18 +620,14 @@ const EVP_MD *EVP_sha256(void);
 #ifndef OPENSSL_NO_SHA512
 const EVP_MD *EVP_sha384(void);
 const EVP_MD *EVP_sha512(void);
-#if defined(LIBRESSL_INTERNAL) || defined(LIBRESSL_NEXT_API)
 const EVP_MD *EVP_sha512_224(void);
 const EVP_MD *EVP_sha512_256(void);
 #endif
-#endif
 #ifndef OPENSSL_NO_SHA3
-#if defined(LIBRESSL_INTERNAL) || defined(LIBRESSL_NEXT_API)
 const EVP_MD *EVP_sha3_224(void);
 const EVP_MD *EVP_sha3_256(void);
 const EVP_MD *EVP_sha3_384(void);
 const EVP_MD *EVP_sha3_512(void);
-#endif
 #endif
 #ifndef OPENSSL_NO_SM3
 const EVP_MD *EVP_sm3(void);

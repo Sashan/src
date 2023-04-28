@@ -1,4 +1,4 @@
-/*	$OpenBSD: mft.c,v 1.89 2023/03/13 19:54:36 job Exp $ */
+/*	$OpenBSD: mft.c,v 1.91 2023/04/26 16:32:41 claudio Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -470,6 +470,7 @@ mft_buffer(struct ibuf *b, const struct mft *p)
 
 	io_simple_buffer(b, &p->stale, sizeof(p->stale));
 	io_simple_buffer(b, &p->repoid, sizeof(p->repoid));
+	io_simple_buffer(b, &p->talid, sizeof(p->talid));
 	io_str_buffer(b, p->path);
 
 	io_str_buffer(b, p->aia);
@@ -502,6 +503,7 @@ mft_read(struct ibuf *b)
 
 	io_read_buf(b, &p->stale, sizeof(p->stale));
 	io_read_buf(b, &p->repoid, sizeof(p->repoid));
+	io_read_buf(b, &p->talid, sizeof(p->talid));
 	io_read_str(b, &p->path);
 
 	io_read_str(b, &p->aia);
@@ -545,7 +547,7 @@ mft_compare(const struct mft *a, const struct mft *b)
 		return 0;
 
 	r = strcmp(a->seqnum, b->seqnum);
-	if (r >= 0)	/* a is greater or equal, prefer a */
+	if (r > 0)	/* a is greater, prefer a */
 		return 1;
 	return 0;
 }

@@ -1,4 +1,4 @@
-/*	$Id: test-tal.c,v 1.9 2022/04/20 17:26:53 tb Exp $ */
+/*	$Id: test-tal.c,v 1.11 2023/04/27 08:37:53 beck Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -31,6 +31,8 @@
 
 int outformats;
 int verbose;
+
+int64_t evaluation_time;
 
 int
 main(int argc, char *argv[])

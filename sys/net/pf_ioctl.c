@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf_ioctl.c,v 1.397 2023/01/06 17:44:34 sashan Exp $ */
+/*	$OpenBSD: pf_ioctl.c,v 1.399 2023/04/27 12:10:30 kn Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -518,14 +518,10 @@ pf_rtlabel_remove(struct pf_addr_wrap *a)
 void
 pf_rtlabel_copyout(struct pf_addr_wrap *a)
 {
-	const char	*name;
-
 	if (a->type == PF_ADDR_RTLABEL && a->v.rtlabel) {
-		if ((name = rtlabel_id2name(a->v.rtlabel)) == NULL)
+		if (rtlabel_id2name(a->v.rtlabel, a->v.rtlabelname,
+		    sizeof(a->v.rtlabelname)) == NULL)
 			strlcpy(a->v.rtlabelname, "?",
-			    sizeof(a->v.rtlabelname));
-		else
-			strlcpy(a->v.rtlabelname, name,
 			    sizeof(a->v.rtlabelname));
 	}
 }
@@ -2497,11 +2493,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			error = EINVAL;
 			goto fail;
 		}
-		NET_LOCK();
 		PF_LOCK();
 		pt->seconds = pf_default_rule.timeout[pt->timeout];
 		PF_UNLOCK();
-		NET_UNLOCK();
 		break;
 	}
 

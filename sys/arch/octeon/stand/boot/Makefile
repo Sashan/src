@@ -1,9 +1,12 @@
-#	$OpenBSD: Makefile,v 1.9 2022/01/07 10:48:59 visa Exp $
+#	$OpenBSD: Makefile,v 1.11 2023/04/28 08:45:26 krw Exp $
 
 NOMAN=
 #MAN=		boot.8
 
 RDBOOT=		${.CURDIR}/../rdboot/obj/rdboot
+
+MRDISKTYPE= rdroot
+MRMAKEFSARGS= -o disklabel=${MRDISKTYPE},minfree=0,density=1024
 
 .if ${MACHINE} == "octeon"
 all: bsd rdboot
@@ -17,16 +20,16 @@ rdboot: ${RDBOOT}
 	cp -p ${RDBOOT} rdboot
 	strip rdboot
 
-mr.fs: rdboot
+mr.fs: rdboot bsd
 	rm -rf $@.d
 	install -d -o root -g wheel $@.d/dev
 	install -d -o root -g wheel $@.d/mnt
 	install -d -o root -g wheel $@.d/sbin
 	install -o ${BINOWN} -g ${BINGRP} -m 555 rdboot $@.d/sbin/init
 	cd $@.d/dev && sh ${DESTDIR}/dev/MAKEDEV boot
-	makefs -o disklabel=rdboot,minfree=0,density=1024 $@ $@.d
+	makefs ${MRMAKEFSARGS} $@ $@.d
 
-boot: bsd mr.fs
+boot: mr.fs
 	cp bsd boot
 	rdsetroot boot mr.fs
 

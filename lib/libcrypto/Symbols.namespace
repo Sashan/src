@@ -76,7 +76,6 @@ _libre_PKCS7_new
 _libre_PKCS7_free
 _libre_d2i_PKCS7
 _libre_i2d_PKCS7
-_libre_i2d_PKCS7_NDEF
 _libre_PKCS7_print_ctx
 _libre_PKCS7_ctrl
 _libre_PKCS7_set_type
@@ -525,8 +524,6 @@ _libre_X509_OBJECT_get0_X509_CRL
 _libre_X509_STORE_new
 _libre_X509_STORE_free
 _libre_X509_STORE_up_ref
-_libre_X509_STORE_get1_certs
-_libre_X509_STORE_get1_crls
 _libre_X509_STORE_get0_objects
 _libre_X509_STORE_get_ex_data
 _libre_X509_STORE_set_ex_data
@@ -546,6 +543,8 @@ _libre_X509_STORE_CTX_get0_chain
 _libre_X509_STORE_CTX_get0_store
 _libre_X509_STORE_CTX_get0_untrusted
 _libre_X509_STORE_CTX_set0_untrusted
+_libre_X509_STORE_CTX_get1_certs
+_libre_X509_STORE_CTX_get1_crls
 _libre_X509_STORE_CTX_trusted_stack
 _libre_X509_STORE_CTX_set0_trusted_stack
 _libre_X509_STORE_CTX_cleanup
@@ -601,8 +600,6 @@ _libre_X509_STORE_CTX_get_verify_cb
 _libre_X509_STORE_CTX_set_verify_cb
 _libre_X509_STORE_set_verify
 _libre_X509_STORE_get_verify
-_libre_X509_STORE_CTX_get0_policy_tree
-_libre_X509_STORE_CTX_get_explicit_policy
 _libre_X509_STORE_CTX_get_num_untrusted
 _libre_X509_STORE_CTX_get0_param
 _libre_X509_STORE_CTX_set0_param
@@ -660,20 +657,6 @@ _libre_BASIC_CONSTRAINTS_new
 _libre_BASIC_CONSTRAINTS_free
 _libre_d2i_BASIC_CONSTRAINTS
 _libre_i2d_BASIC_CONSTRAINTS
-_libre_SXNET_new
-_libre_SXNET_free
-_libre_d2i_SXNET
-_libre_i2d_SXNET
-_libre_SXNETID_new
-_libre_SXNETID_free
-_libre_d2i_SXNETID
-_libre_i2d_SXNETID
-_libre_SXNET_add_id_asc
-_libre_SXNET_add_id_ulong
-_libre_SXNET_add_id_INTEGER
-_libre_SXNET_get_id_asc
-_libre_SXNET_get_id_ulong
-_libre_SXNET_get_id_INTEGER
 _libre_AUTHORITY_KEYID_new
 _libre_AUTHORITY_KEYID_free
 _libre_d2i_AUTHORITY_KEYID
@@ -854,7 +837,6 @@ _libre_a2i_IPADDRESS
 _libre_a2i_IPADDRESS_NC
 _libre_a2i_ipadd
 _libre_X509V3_NAME_from_section
-_libre_X509_POLICY_NODE_print
 _libre_ASRange_new
 _libre_ASRange_free
 _libre_d2i_ASRange

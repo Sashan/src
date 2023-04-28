@@ -1,4 +1,4 @@
-/* $OpenBSD: cms_io.c,v 1.17 2023/04/21 20:36:07 tb Exp $ */
+/* $OpenBSD: cms_io.c,v 1.19 2023/04/26 14:23:18 tb Exp $ */
 /*
  * Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project.
@@ -58,6 +58,7 @@
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 
+#include "asn1_local.h"
 #include "cms_local.h"
 
 int
@@ -131,7 +132,8 @@ BIO_new_CMS(BIO *out, CMS_ContentInfo *cms)
 
 /* CMS wrappers round generalised stream and MIME routines */
 
-int i2d_CMS_bio_stream(BIO *out, CMS_ContentInfo *cms, BIO *in, int flags)
+int
+i2d_CMS_bio_stream(BIO *out, CMS_ContentInfo *cms, BIO *in, int flags)
 {
 	return i2d_ASN1_bio_stream(out, (ASN1_VALUE *)cms, in, flags,
 	    &CMS_ContentInfo_it);

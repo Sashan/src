@@ -1,4 +1,4 @@
-/*	$OpenBSD: bn_mod_exp.c,v 1.35 2023/04/06 07:08:41 tb Exp $ */
+/*	$OpenBSD: bn_mod_exp.c,v 1.37 2023/04/25 17:17:21 tb Exp $ */
 
 /*
  * Copyright (c) 2022,2023 Theo Buehler <tb@openbsd.org>

@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.27 2022/03/26 14:26:44 deraadt Exp $
+#	$OpenBSD: Makefile,v 1.30 2023/04/28 08:45:25 krw Exp $
 
 FS=		miniroot${OSrev}.img
 FSSIZE=		8448
@@ -11,18 +11,14 @@ RAMDISK=	RAMDISK_CD
 LISTS=		${.CURDIR}/list
 UTILS=		${.CURDIR}/../../miniroot
 
-LBA=1
-
 all: ${FS} ${CDROM}
 
 ${FS}: bsd.gz
 	dd if=/dev/zero of=${FS} bs=512 count=${FSSIZE}
 	vnconfig -v ${FS} > vnd
-.ifdef LBA
 	fdisk -yi -l ${FSSIZE} -f ${DESTDIR}/usr/mdec/mbr `cat vnd`
-.endif
 	disklabel -w `cat vnd` ${FSDISKTYPE}
-	newfs -O 1 -m 0 -o space -i 524288 -c ${FSSIZE} /dev/r`cat vnd`a
+	newfs -O 1 -m 0 -o space -i 524288 -c ${FSSIZE} -b 8192 -f 1024 /dev/r`cat vnd`a
 	mount /dev/`cat vnd`a ${MOUNT_POINT}
 	objcopy -S -R .comment ${DESTDIR}/usr/mdec/boot ${.OBJDIR}/boot
 	installboot -v -r ${MOUNT_POINT} `cat vnd` \
@@ -58,7 +54,7 @@ bsd.gz: bsd.rd
 	    bsd.rd bsd.strip
 	gzip -9cn bsd.strip > bsd.gz
 
-bsd.rd: mr.fs bsd
+bsd.rd: mr.fs
 	cp bsd bsd.rd
 	rdsetroot bsd.rd mr.fs
 
@@ -67,7 +63,7 @@ bsd:
 	    su ${BUILDUSER} -c '${MAKE} config && ${MAKE} clean && exec ${MAKE} ${MFLAGS}'
 	cp -p ${.CURDIR}/../../../sys/arch/${MACHINE}/compile/${RAMDISK}/obj/bsd bsd
 
-mr.fs: instbin
+mr.fs: instbin bsd
 	rm -rf $@.d
 	install -d -o root -g wheel $@.d
 	mtree -def ${MTREE} -p $@.d -u

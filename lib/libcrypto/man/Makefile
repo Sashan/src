@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.244 2023/04/20 16:19:43 tb Exp $
+# $OpenBSD: Makefile,v 1.248 2023/04/27 09:43:55 tb Exp $
 
 .include <bsd.own.mk>
 
@@ -75,15 +75,11 @@ MAN=	\
 	BN_cmp.3 \
 	BN_copy.3 \
 	BN_generate_prime.3 \
-	BN_get0_nist_prime_521.3 \
-	BN_GF2m_add.3 \
 	BN_kronecker.3 \
 	BN_mod_inverse.3 \
 	BN_mod_mul_montgomery.3 \
-	BN_mod_mul_reciprocal.3 \
 	BN_mod_sqrt.3 \
 	BN_new.3 \
-	BN_nist_mod_521.3 \
 	BN_num_bytes.3 \
 	BN_rand.3 \
 	BN_set_bit.3 \
@@ -304,7 +300,6 @@ MAN=	\
 	SMIME_write_CMS.3 \
 	SMIME_write_PKCS7.3 \
 	STACK_OF.3 \
-	SXNET_new.3 \
 	TS_REQ_new.3 \
 	UI_UTIL_read_pw.3 \
 	UI_create_method.3 \

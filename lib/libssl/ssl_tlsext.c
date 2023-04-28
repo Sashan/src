@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_tlsext.c,v 1.133 2023/04/24 15:32:31 tb Exp $ */
+/* $OpenBSD: ssl_tlsext.c,v 1.136 2023/04/27 10:50:37 tb Exp $ */
 /*
  * Copyright (c) 2016, 2017, 2019 Joel Sing <jsing@openbsd.org>
  * Copyright (c) 2017 Doug Hogan <doug@openbsd.org>
@@ -2207,6 +2207,12 @@ static const struct tls_extension tls_extensions[] = {
 /* Ensure that extensions fit in a uint32_t bitmask. */
 CTASSERT(N_TLS_EXTENSIONS <= (sizeof(uint32_t) * 8));
 
+uint16_t
+tls_extension_type(const struct tls_extension *extension)
+{
+	return extension->type;
+}
+
 const struct tls_extension *
 tls_extension_find(uint16_t type, size_t *tls_extensions_idx)
 {
@@ -2247,9 +2253,13 @@ tlsext_randomize_build_order(SSL *s)
 	size_t idx, new_idx, psk_idx;
 	size_t alpn_idx, sni_idx;
 
+	free(s->tlsext_build_order);
+	s->tlsext_build_order_len = 0;
+
 	if ((s->tlsext_build_order = calloc(sizeof(*s->tlsext_build_order),
 	    N_TLS_EXTENSIONS)) == NULL)
 		return 0;
+	s->tlsext_build_order_len = N_TLS_EXTENSIONS;
 
 	/* RFC 8446, section 4.2: PSK must be the last extension in the CH. */
 	psk_idx = N_TLS_EXTENSIONS - 1;
@@ -2291,6 +2301,14 @@ int
 tlsext_linearize_build_order(SSL *s)
 {
 	size_t idx;
+
+	free(s->tlsext_build_order);
+	s->tlsext_build_order_len = 0;
+
+	if ((s->tlsext_build_order = calloc(sizeof(*s->tlsext_build_order),
+	    N_TLS_EXTENSIONS)) == NULL)
+		return 0;
+	s->tlsext_build_order_len = N_TLS_EXTENSIONS;
 
 	for (idx = 0; idx < N_TLS_EXTENSIONS; idx++)
 		s->tlsext_build_order[idx] = &tls_extensions[idx];

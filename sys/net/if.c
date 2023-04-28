@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.c,v 1.692 2023/04/22 04:39:46 dlg Exp $	*/
+/*	$OpenBSD: if.c,v 1.694 2023/04/26 19:54:35 mvs Exp $	*/
 /*	$NetBSD: if.c,v 1.35 1996/05/07 05:26:04 thorpej Exp $	*/
 
 /*
@@ -94,6 +94,11 @@
 #include <net/if_types.h>
 #include <net/route.h>
 #include <net/netisr.h>
+
+#include "vlan.h"
+#if NVLAN > 0
+#include <net/if_vlan_var.h>
+#endif
 
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
@@ -2383,7 +2388,6 @@ ifioctl_get(u_long cmd, caddr_t data)
 	char ifrtlabelbuf[RTLABEL_LEN];
 	int error = 0;
 	size_t bytesdone;
-	const char *label;
 
 	switch(cmd) {
 	case SIOCGIFCONF:
@@ -2458,9 +2462,8 @@ ifioctl_get(u_long cmd, caddr_t data)
 		break;
 
 	case SIOCGIFRTLABEL:
-		if (ifp->if_rtlabelid &&
-		    (label = rtlabel_id2name(ifp->if_rtlabelid)) != NULL) {
-			strlcpy(ifrtlabelbuf, label, RTLABEL_LEN);
+		if (ifp->if_rtlabelid && rtlabel_id2name(ifp->if_rtlabelid,
+		    ifrtlabelbuf, RTLABEL_LEN) != NULL) {
 			error = copyoutstr(ifrtlabelbuf, ifr->ifr_data,
 			    RTLABEL_LEN, &bytesdone);
 		} else
@@ -3149,6 +3152,12 @@ ifsettso(struct ifnet *ifp, int on)
 	else
 		goto out;
 
+#if NVLAN > 0
+	/* Change TSO flag also on attached vlan(4) interfaces. */
+	vlan_flags_from_parent(ifp, IFXF_TSO);
+#endif
+
+	/* restart interface */
 	if (ISSET(ifp->if_flags, IFF_UP)) {
 		/* go down for a moment... */
 		CLR(ifp->if_flags, IFF_UP);
