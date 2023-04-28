@@ -1483,10 +1483,27 @@ pfctl_check_qassignments(struct pf_ruleset *rs)
 	return (errs);
 }
 
-int
+static int
 pfctl_load_tables(struct pfctl *pf, char *path, struct pf_anchor *a)
 {
-	fprintf(stderr, "%s create\n");
+	struct pfr_ktable *kt, *ktw;
+	struct pfr_uktable *ukt;
+	int e;
+
+	RB_FOREACH_SAFE(kt, pfr_ktablehead, &a->ktables, ktw) {
+		snprintf(kt->pfrkt_anchor, PF_ANCHOR_MAXPATH, "%s/%s",
+		    path, a->name);
+		ukt = (struct pfr_uktable *) kt;
+		e = pfr_ina_define(&ukt->pfrukt_t, ukt->pfrukt_addrs.pfrb_caddr,
+		    ukt->pfrukt_addrs.pfrb_size, NULL, NULL, pf->trans->ticket,
+		    ukt->pfrukt_init_addr ? PFR_FLAG_ADDRSTOO : 0);
+		if (e != 0)
+			err(1, "%s pfr_ina_define()", __func__);
+		RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
+		pfr_buf_clear(&ukt->pfrukt_addrs);
+		free(ukt);
+	}
+
 	return (0);
 }
 

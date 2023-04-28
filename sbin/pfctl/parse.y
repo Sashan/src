@@ -4043,6 +4043,7 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 		}
 
 		if (ukt != NULL) {
+			ukt->pfrukt_init_addr = opts->init_addr;
 			if (RB_INSERT(pfr_ktablehead, &pf->anchor->ktables,
 			    &ukt->pfrukt_kt) != NULL) {
 				/*
@@ -5609,35 +5610,14 @@ void
 mv_tables(struct pfctl *pf, struct pfr_ktablehead *ktables,
     struct pf_anchor *a)
 {
-	struct pfr_ktable *kt, *ktw;
-	struct pfr_uktable *ukt;
-	int ina_err;
-
 	a->ktables.rbh_root = ktables->rbh_root;
 	ktables->rbh_root = NULL;
 
-	fprintf(stderr, "%s moving to %s\n", __func__, a->path);
-
 	/*
-	 * add tables to transaction again. This time with correct/final anchor
-	 * path. Think of we replace temporal anchor let's say _4 to final/anchor.
+	 * Tables bound to regular anchors are inserted to to kernel later
+	 * with rulesets. Tables bound to main_anchor were sent to kernel
+	 * already in process_tabledef() function invoked by yyparse()
 	 */
-	RB_FOREACH_SAFE(kt, pfr_ktablehead, &a->ktables, ktw) {
-		RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
-		ukt = (struct pfr_uktable *)kt;
-		fprintf(stderr, "%s updating %s@%s to %s@%s\n", __func__,
-		    kt->pfrkt_name, kt->pfrkt_anchor,
-		    kt->pfrkt_name, a->path);
-		strlcpy(kt->pfrkt_anchor, a->path, sizeof(kt->pfrkt_anchor));
-		ina_err = pfr_ina_define(&kt->pfrkt_t, ukt->pfrukt_addrs.pfrb_caddr,
-		    ukt->pfrukt_addrs.pfrb_size, NULL, NULL, pf->trans->ticket,
-		    (ukt->pfrukt_addrs.pfrb_size != 0) ? PFR_FLAG_ADDRSTOO : 0);
-		if (ina_err != 0)
-			errx(1, "%s error on %s@%s [ %s ]", __func__,
-			    kt->pfrkt_name, kt->pfrkt_anchor, strerror(errno));
-		pfr_buf_clear(&ukt->pfrukt_addrs);
-		free(kt);
-	}
 }
 
 void

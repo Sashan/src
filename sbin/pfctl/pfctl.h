@@ -57,6 +57,7 @@ struct pfr_anchoritem {
 struct pfr_uktable {
 	struct pfr_ktable	pfrukt_kt;
 	struct pfr_buffer	pfrukt_addrs;
+	int			pfrukt_init_addr;
 };
 
 #define pfrukt_t	pfrukt_kt.pfrkt_ts.pfrts_t

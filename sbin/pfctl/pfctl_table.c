@@ -549,7 +549,7 @@ pfctl_define_table(char *name, int flags, int addrs, const char *anchor,
 	 * Here we load tables, which are either created for root anchor
 	 * are by 'pfctl -t ... -T ...' command.
 	 */
-	if (ukt == NULL)
+	if (ukt != NULL)
 		return (0);
 
 	return pfr_ina_define(tbl, ab->pfrb_caddr, ab->pfrb_size, NULL,
