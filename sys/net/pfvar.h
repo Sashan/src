@@ -1033,6 +1033,7 @@ struct pf_anchor {
 	int			 refcnt;	/* anchor rules */
 	int			 match;
 	struct pfr_ktablehead	 ktables;
+	struct refcnt		 ref;		/* for transactions */
 	u_int32_t		 tables;
 };
 RB_PROTOTYPE(pf_anchor_global, pf_anchor, entry_global, pf_anchor_compare)

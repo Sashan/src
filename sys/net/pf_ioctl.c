@@ -1749,7 +1749,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pf_rule		*rule, *tail;
 		struct pf_trans		*t;
 
-		t = pf_find_trans(pr->ticket);
+		t = pf_find_trans(minor(dev), pr->ticket);
 		if (t == NULL) {
 			error = EBUSY;
 			goto fail;
@@ -1864,14 +1864,14 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			NET_UNLOCK();
 			goto fail;
 		}
-		tail = TAILQ_LAST(ruleset->rules.ptr, pf_rulequeue);
-		if (tail)
-			pr->nr = tail->nr + 1;
+		rule = TAILQ_LAST(ruleset->rules.ptr, pf_rulequeue);
+		if (rule)
+			pr->nr = rule->nr + 1;
 		else
 			pr->nr = 0;
-		pr->ticket = ruleset->rules.version;
+		ruleset_version = ruleset->rules.version;
 		pf_anchor_take(ruleset->anchor);
-		rule = TAILQ_FIRST(ruleset->rules.active.ptr);
+		rule = TAILQ_FIRST(ruleset->rules.ptr);
 		PF_UNLOCK();
 		NET_UNLOCK();
 
@@ -1900,7 +1900,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		PF_LOCK();
 		KASSERT(t->pftgr_anchor != NULL);
 		ruleset = &t->pftgr_anchor->ruleset;
-		if (t->pftgr_version != ruleset->rules.active.version) {
+		if (t->pftgr_version != ruleset->rules.version) {
 			error = EBUSY;
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -2356,8 +2356,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t = pf_find_trans(io->ticket);
-		if (t == NULL || t->pft_pid != p->p_p->ps_pid) {
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t == NULL) {
 			error = ENXIO;
 			goto fail;
 		}
@@ -2474,8 +2474,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t = pf_find_trans(io->ticket);
-		if ((t == NULL) || (t->pft_pid != p->p_p->ps_pid)) {
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t == NULL) {
 			error = ENXIO;
 			goto fail;
 		}
@@ -2539,8 +2539,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t = pf_find_trans(io->ticket);
-		if (t == NULL || t->pft_pid != p->p_p->ps_pid) {
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t == NULL) {
 			log(LOG_DEBUG,
 			    "%s DIOCSETLIMIT no transaction for %llu\n",
 			    __func__, io->ticket);
@@ -2596,8 +2596,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t = pf_find_trans(io->ticket);
-		if (t == NULL || t->pft_pid != p->p_p->ps_pid) {
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t == NULL) {
 			error = ENXIO;
 			goto fail;
 		}
@@ -3091,7 +3091,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t = pf_find_trans(io->pfrio_ticket);
+		t = pf_find_trans(minor(dev), io->pfrio_ticket);
 		if (t == NULL) {
 			error = ENXIO;
 			goto fail;
@@ -3129,8 +3129,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t = pf_find_trans(io->ticket);
-		if ((t == NULL) || (t->pft_pid != p->p_p->ps_pid)) {
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t == NULL) {
 			error = ENXIO;
 			goto fail;
 		}
@@ -3204,7 +3204,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pf_trans		*t;
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 
-		t = pf_find_trans(io->ticket);
+		t = pf_find_trans(minor(dev), io->ticket);
 		if (t != NULL)
 			pf_rollback_trans(t);
 		else
@@ -3246,28 +3246,16 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		 * will be changing rules. if we will be changing table
 		 * bound to ruleset then ruleset version can be ignored.
 		 */
-		t = pf_find_trans(io->ticket);
+		t = pf_find_trans(minor(dev), io->ticket);
 		if (t == NULL) {
 			error = ENXIO;
 			goto fail;
 		}
-=======
-		}
 
-		NET_LOCK();
-		PF_LOCK();
-
-		if (pf_trans_in_conflict(t, "DIOCXCOMMIT"))
-			error = EBUSY;
-		else {
-			pf_drop_unused_tables(t);
-			pf_commit_trans(t);
-			pfi_xcommit();
 		if (t->pft_type != PF_TRANS_CONFIG) {
 			error = EINVAL;
 			goto fail;
 		}
-
 
 		NET_LOCK();
 		PF_LOCK();
@@ -3425,8 +3413,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t = pf_find_trans(io->ticket);
-		if (t == NULL || t->pft_pid != p->p_p->ps_pid) {
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t == NULL) {
 			error = ENXIO;
 			goto fail;
 		}
@@ -3522,8 +3510,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t = pf_find_trans(io->ticket);
-		if (t == NULL || t->pft_pid != p->p_p->ps_pid) {
+		t = pf_find_trans(minor(dev), io->ticket);
+		if (t == NULL) {
 			error = ENXIO;
 			goto fail;
 		}
