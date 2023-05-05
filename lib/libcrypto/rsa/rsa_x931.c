@@ -1,9 +1,9 @@
-/* $OpenBSD: pcy_lib.c,v 1.4 2023/04/26 19:11:33 beck Exp $ */
+/* $OpenBSD: rsa_x931.c,v 1.12 2023/05/05 12:19:37 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
- * project 2004.
+ * project 2005.
  */
 /* ====================================================================
- * Copyright (c) 2004 The OpenSSL Project.  All rights reserved.
+ * Copyright (c) 2005 The OpenSSL Project.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -56,115 +56,109 @@
  *
  */
 
-#include <openssl/x509.h>
-#include <openssl/x509v3.h>
+#include <stdio.h>
+#include <string.h>
 
-#ifndef LIBRESSL_HAS_POLICY_DAG
-
-#include "pcy_int.h"
-
-/* accessor functions */
-
-/* X509_POLICY_TREE stuff */
+#include <openssl/bn.h>
+#include <openssl/err.h>
+#include <openssl/objects.h>
+#include <openssl/rsa.h>
 
 int
-X509_policy_tree_level_count(const X509_POLICY_TREE *tree)
+RSA_padding_add_X931(unsigned char *to, int tlen, const unsigned char *from,
+    int flen)
 {
-	if (!tree)
-		return 0;
-	return tree->nlevel;
-}
-LCRYPTO_ALIAS(X509_policy_tree_level_count);
+	int j;
+	unsigned char *p;
 
-X509_POLICY_LEVEL *
-X509_policy_tree_get0_level(const X509_POLICY_TREE *tree, int i)
-{
-	if (!tree || (i < 0) || (i >= tree->nlevel))
-		return NULL;
-	return tree->levels + i;
-}
-LCRYPTO_ALIAS(X509_policy_tree_get0_level);
+	/*
+	 * Absolute minimum amount of padding is 1 header nibble, 1 padding
+	 * nibble and 2 trailer bytes: but 1 hash if is already in 'from'.
+	 */
+	j = tlen - flen - 2;
 
-STACK_OF(X509_POLICY_NODE) *
-X509_policy_tree_get0_policies(const X509_POLICY_TREE *tree)
-{
-	if (!tree)
-		return NULL;
-	return tree->auth_policies;
-}
-LCRYPTO_ALIAS(X509_policy_tree_get0_policies);
-
-STACK_OF(X509_POLICY_NODE) *
-X509_policy_tree_get0_user_policies(const X509_POLICY_TREE *tree)
-{
-	if (!tree)
-		return NULL;
-	if (tree->flags & POLICY_FLAG_ANY_POLICY)
-		return tree->auth_policies;
-	else
-		return tree->user_policies;
-}
-LCRYPTO_ALIAS(X509_policy_tree_get0_user_policies);
-
-/* X509_POLICY_LEVEL stuff */
-
-int
-X509_policy_level_node_count(X509_POLICY_LEVEL *level)
-{
-	int n;
-	if (!level)
-		return 0;
-	if (level->anyPolicy)
-		n = 1;
-	else
-		n = 0;
-	if (level->nodes)
-		n += sk_X509_POLICY_NODE_num(level->nodes);
-	return n;
-}
-LCRYPTO_ALIAS(X509_policy_level_node_count);
-
-X509_POLICY_NODE *
-X509_policy_level_get0_node(X509_POLICY_LEVEL *level, int i)
-{
-	if (!level)
-		return NULL;
-	if (level->anyPolicy) {
-		if (i == 0)
-			return level->anyPolicy;
-		i--;
+	if (j < 0) {
+		RSAerror(RSA_R_DATA_TOO_LARGE_FOR_KEY_SIZE);
+		return -1;
 	}
-	return sk_X509_POLICY_NODE_value(level->nodes, i);
+
+	p = (unsigned char *)to;
+
+	/* If no padding start and end nibbles are in one byte */
+	if (j == 0)
+		*p++ = 0x6A;
+	else {
+		*p++ = 0x6B;
+		if (j > 1) {
+			memset(p, 0xBB, j - 1);
+			p += j - 1;
+		}
+		*p++ = 0xBA;
+	}
+	memcpy(p, from, flen);
+	p += flen;
+	*p = 0xCC;
+	return 1;
 }
-LCRYPTO_ALIAS(X509_policy_level_get0_node);
 
-/* X509_POLICY_NODE stuff */
-
-const ASN1_OBJECT *
-X509_policy_node_get0_policy(const X509_POLICY_NODE *node)
+int
+RSA_padding_check_X931(unsigned char *to, int tlen, const unsigned char *from,
+    int flen, int num)
 {
-	if (!node)
-		return NULL;
-	return node->data->valid_policy;
-}
-LCRYPTO_ALIAS(X509_policy_node_get0_policy);
+	int i = 0, j;
+	const unsigned char *p = from;
 
-STACK_OF(POLICYQUALINFO) *
-X509_policy_node_get0_qualifiers(const X509_POLICY_NODE *node)
+	if (num != flen || (*p != 0x6A && *p != 0x6B)) {
+		RSAerror(RSA_R_INVALID_HEADER);
+		return -1;
+	}
+
+	if (*p++ == 0x6B) {
+		j = flen - 3;
+		for (i = 0; i < j; i++) {
+			unsigned char c = *p++;
+			if (c == 0xBA)
+				break;
+			if (c != 0xBB) {
+				RSAerror(RSA_R_INVALID_PADDING);
+				return -1;
+			}
+		}
+
+		if (i == 0) {
+			RSAerror(RSA_R_INVALID_PADDING);
+			return -1;
+		}
+
+		j -= i;
+	} else
+		j = flen - 2;
+
+	if (j < 0 || p[j] != 0xCC) {
+		RSAerror(RSA_R_INVALID_TRAILER);
+		return -1;
+	}
+
+	memcpy(to, p, j);
+
+	return j;
+}
+
+/* Translate between X931 hash ids and NIDs */
+
+int
+RSA_X931_hash_id(int nid)
 {
-	if (!node)
-		return NULL;
-	return node->data->qualifier_set;
-}
-LCRYPTO_ALIAS(X509_policy_node_get0_qualifiers);
+	switch (nid) {
+	case NID_sha1:
+		return 0x33;
+	case NID_sha256:
+		return 0x34;
+	case NID_sha384:
+		return 0x36;
+	case NID_sha512:
+		return 0x35;
+	}
 
-const X509_POLICY_NODE *
-X509_policy_node_get0_parent(const X509_POLICY_NODE *node)
-{
-	if (!node)
-		return NULL;
-	return node->parent;
+	return -1;
 }
-LCRYPTO_ALIAS(X509_policy_node_get0_parent);
-
-#endif /* LIBRESSL_HAS_POLICY_DAG */

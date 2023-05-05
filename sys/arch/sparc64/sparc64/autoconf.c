@@ -1,4 +1,4 @@
-/*	$OpenBSD: autoconf.c,v 1.142 2023/03/08 04:43:07 guenther Exp $	*/
+/*	$OpenBSD: autoconf.c,v 1.144 2023/04/29 12:10:08 miod Exp $	*/
 /*	$NetBSD: autoconf.c,v 1.51 2001/07/24 19:32:11 eeh Exp $ */
 
 /*
@@ -77,7 +77,6 @@
 #include <machine/pmap.h>
 #include <machine/trap.h>
 #include <sparc64/sparc64/cache.h>
-#include <sparc64/sparc64/timerreg.h>
 #include <sparc64/dev/vbusvar.h>
 #include <sparc64/dev/cbusvar.h>
 
@@ -932,6 +931,7 @@ extern bus_space_tag_t mainbus_space_tag;
 		"options",
 		"packages",
 		"chosen",
+		"counter-timer",
 		NULL
 	};
 

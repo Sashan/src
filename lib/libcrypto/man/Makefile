@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.248 2023/04/27 09:43:55 tb Exp $
+# $OpenBSD: Makefile,v 1.251 2023/05/01 07:28:11 tb Exp $
 
 .include <bsd.own.mk>
 
@@ -51,7 +51,6 @@ MAN=	\
 	BIO_meth_new.3 \
 	BIO_new.3 \
 	BIO_new_CMS.3 \
-	BIO_new_NDEF.3 \
 	BIO_printf.3 \
 	BIO_push.3 \
 	BIO_read.3 \
@@ -239,7 +238,6 @@ MAN=	\
 	PEM_bytes_read_bio.3 \
 	PEM_read.3 \
 	PEM_read_bio_PrivateKey.3 \
-	PEM_write_bio_ASN1_stream.3 \
 	PEM_write_bio_CMS_stream.3 \
 	PEM_write_bio_PKCS7_stream.3 \
 	PKCS12_SAFEBAG_new.3 \
@@ -265,7 +263,6 @@ MAN=	\
 	PKCS8_pkey_set0.3 \
 	PKEY_USAGE_PERIOD_new.3 \
 	POLICYINFO_new.3 \
-	PROXY_POLICY_new.3 \
 	RAND_add.3 \
 	RAND_bytes.3 \
 	RAND_load_file.3 \
@@ -377,9 +374,6 @@ MAN=	\
 	X509_load_cert_file.3 \
 	X509_new.3 \
 	X509_ocspid_print.3 \
-	X509_policy_check.3 \
-	X509_policy_tree_get0_policies.3 \
-	X509_policy_tree_level_count.3 \
 	X509_print_ex.3 \
 	X509_sign.3 \
 	X509_signature_dump.3 \
@@ -410,7 +404,6 @@ MAN=	\
 	d2i_PKCS8_PRIV_KEY_INFO.3 \
 	d2i_PKEY_USAGE_PERIOD.3 \
 	d2i_POLICYINFO.3 \
-	d2i_PROXY_POLICY.3 \
 	d2i_PrivateKey.3 \
 	d2i_RSAPublicKey.3 \
 	d2i_TS_REQ.3 \
@@ -426,7 +419,6 @@ MAN=	\
 	evp.3 \
 	get_rfc3526_prime_8192.3 \
 	i2a_ASN1_STRING.3 \
-	i2d_ASN1_bio_stream.3 \
 	i2d_CMS_bio_stream.3 \
 	i2d_PKCS7_bio_stream.3 \
 	lh_new.3 \

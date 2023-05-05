@@ -2,7 +2,7 @@
  * THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
  *
  * generated from:
- *	OpenBSD: pcidevs,v 1.2032 2023/04/25 21:57:29 kettenis Exp 
+ *	OpenBSD: pcidevs,v 1.2035 2023/05/04 05:38:17 kevlo Exp 
  */
 
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
@@ -3258,6 +3258,10 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_ATI, PCI_PRODUCT_ATI_MENDOCINO,
 	    "Mendocino",
+	},
+	{
+	    PCI_VENDOR_ATI, PCI_PRODUCT_ATI_PHOENIX,
+	    "Phoenix",
 	},
 	{
 	    PCI_VENDOR_ATI, PCI_PRODUCT_ATI_PICASSO,
@@ -15132,6 +15136,10 @@ static const struct pci_known_product pci_known_products[] = {
 	    "Braswell SMBus",
 	},
 	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_BSW_SDIO,
+	    "Braswell SDIO",
+	},
+	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_BSW_TXE,
 	    "Braswell TXE",
 	},
@@ -25497,6 +25505,10 @@ static const struct pci_known_product pci_known_products[] = {
 	},
 	{
 	    PCI_VENDOR_LENOVO, PCI_PRODUCT_LENOVO_NVME,
+	    "NVMe",
+	},
+	{
+	    PCI_VENDOR_LENOVO, PCI_PRODUCT_LENOVO_NVME_2,
 	    "NVMe",
 	},
 	{

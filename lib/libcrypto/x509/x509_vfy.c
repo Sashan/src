@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_vfy.c,v 1.116 2023/04/26 19:11:33 beck Exp $ */
+/* $OpenBSD: x509_vfy.c,v 1.120 2023/04/30 14:59:52 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -155,14 +155,6 @@ null_callback(int ok, X509_STORE_CTX *e)
 {
 	return ok;
 }
-
-#if 0
-static int
-x509_subject_cmp(X509 **a, X509 **b)
-{
-	return X509_subject_name_cmp(*a, *b);
-}
-#endif
 
 /* Return 1 if a certificate is self signed */
 static int
@@ -586,7 +578,7 @@ X509_verify_cert_legacy(X509_STORE_CTX *ctx)
 		goto end;
 
 	/* If we get this far evaluate policies */
-	if (!bad_chain && (ctx->param->flags & X509_V_FLAG_POLICY_CHECK))
+	if (!bad_chain)
 		ok = ctx->check_policy(ctx);
 
  end:
@@ -1743,8 +1735,6 @@ cert_crl(X509_STORE_CTX *ctx, X509_CRL *crl, X509 *x)
 	return 1;
 }
 
-
-#ifdef LIBRESSL_HAS_POLICY_DAG
 int
 x509_vfy_check_policy(X509_STORE_CTX *ctx)
 {
@@ -1779,59 +1769,6 @@ x509_vfy_check_policy(X509_STORE_CTX *ctx)
 
 	return 1;
 }
-#else
-int
-x509_vfy_check_policy(X509_STORE_CTX *ctx)
-{
-	int ret;
-
-	if (ctx->parent)
-		return 1;
-
-	/* X509_policy_check always allocates a new tree. */
-	X509_policy_tree_free(ctx->tree);
-	ctx->tree = NULL;
-
-	ret = X509_policy_check(&ctx->tree, &ctx->explicit_policy, ctx->chain,
-	    ctx->param->policies, ctx->param->flags);
-	if (ret == 0) {
-		X509error(ERR_R_MALLOC_FAILURE);
-		return 0;
-	}
-	/* Invalid or inconsistent extensions */
-	if (ret == -1) {
-		/* Locate certificates with bad extensions and notify
-		 * callback.
-		 */
-		X509 *x;
-		int i;
-		for (i = 1; i < sk_X509_num(ctx->chain); i++) {
-			x = sk_X509_value(ctx->chain, i);
-			if (!(x->ex_flags & EXFLAG_INVALID_POLICY))
-				continue;
-			ctx->current_cert = x;
-			ctx->error = X509_V_ERR_INVALID_POLICY_EXTENSION;
-			if (!ctx->verify_cb(0, ctx))
-				return 0;
-		}
-		return 1;
-	}
-	if (ret == -2) {
-		ctx->current_cert = NULL;
-		ctx->error = X509_V_ERR_NO_EXPLICIT_POLICY;
-		return ctx->verify_cb(0, ctx);
-	}
-
-	if (ctx->param->flags & X509_V_FLAG_NOTIFY_POLICY) {
-		ctx->current_cert = NULL;
-		ctx->error = X509_V_OK;
-		if (!ctx->verify_cb(2, ctx))
-			return 0;
-	}
-
-	return 1;
-}
-#endif
 
 static int
 check_policy(X509_STORE_CTX *ctx)
@@ -2524,12 +2461,6 @@ X509_STORE_CTX_cleanup(X509_STORE_CTX *ctx)
 			X509_VERIFY_PARAM_free(ctx->param);
 		ctx->param = NULL;
 	}
-#ifndef LIBRESSL_HAS_POLICY_DAG
-	if (ctx->tree != NULL) {
-		X509_policy_tree_free(ctx->tree);
-		ctx->tree = NULL;
-	}
-#endif
 	if (ctx->chain != NULL) {
 		sk_X509_pop_free(ctx->chain, X509_free);
 		ctx->chain = NULL;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: x509_policy.c,v 1.16 2023/04/28 09:56:09 tb Exp $ */
+/*	$OpenBSD: x509_policy.c,v 1.25 2023/04/28 16:30:14 tb Exp $ */
 /*
  * Copyright (c) 2022, Google Inc.
  *
@@ -15,20 +15,16 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include <openssl/x509.h>
-
-#include <assert.h>
 #include <string.h>
 
 #include <openssl/err.h>
 #include <openssl/objects.h>
 #include <openssl/stack.h>
+#include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
 #include "x509_internal.h"
 #include "x509_local.h"
-
-#ifdef LIBRESSL_HAS_POLICY_DAG
 
 /* XXX move to proper place */
 #define X509_R_INVALID_POLICY_EXTENSION 201
@@ -164,7 +160,7 @@ DECLARE_STACK_OF(X509_POLICY_LEVEL)
 /*
  * Don't look Ethel, but you would really not want to look if we did
  * this the OpenSSL way either, and we are not using this boringsslism
- * anywhere else.
+ * anywhere else. Callers should ensure that the stack in data is sorted.
  */
 void
 sk_X509_POLICY_NODE_delete_if(STACK_OF(X509_POLICY_NODE) *nodes,
@@ -203,9 +199,10 @@ x509_policy_node_free(X509_POLICY_NODE *node)
 static X509_POLICY_NODE *
 x509_policy_node_new(const ASN1_OBJECT *policy)
 {
-	assert(!is_any_policy(policy));
-	X509_POLICY_NODE *node;
+	X509_POLICY_NODE *node = NULL;
 
+	if (is_any_policy(policy))
+		goto err;
 	if ((node = calloc(1, sizeof(*node))) == NULL)
 		goto err;
 	if ((node->policy = OBJ_dup(policy)) == NULL)
@@ -280,16 +277,16 @@ x509_policy_level_clear(X509_POLICY_LEVEL *level)
 
 /*
  * x509_policy_level_find returns the node in |level| corresponding to |policy|,
- * or NULL if none exists.
+ * or NULL if none exists. Callers should ensure that level->nodes is sorted
+ * to avoid the cost of sorting it in sk_find().
  */
 static X509_POLICY_NODE *
-x509_policy_level_find(X509_POLICY_LEVEL *level,
-    const ASN1_OBJECT *policy)
+x509_policy_level_find(X509_POLICY_LEVEL *level, const ASN1_OBJECT *policy)
 {
-	assert(sk_X509_POLICY_NODE_is_sorted(level->nodes));
 	X509_POLICY_NODE node;
 	node.policy = (ASN1_OBJECT *)policy;
 	int idx;
+
 	if ((idx = sk_X509_POLICY_NODE_find(level->nodes, &node)) < 0)
 		return NULL;
 	return sk_X509_POLICY_NODE_value(level->nodes, idx);
@@ -318,15 +315,6 @@ x509_policy_level_add_nodes(X509_POLICY_LEVEL *level,
 	}
 	sk_X509_POLICY_NODE_sort(level->nodes);
 
-#if !defined(NDEBUG)
-	/* There should be no duplicate nodes. */
-	for (i = 1; i < sk_X509_POLICY_NODE_num(level->nodes); i++) {
-		assert(
-		    OBJ_cmp(
-		    sk_X509_POLICY_NODE_value(level->nodes, i - 1)->policy,
-		    sk_X509_POLICY_NODE_value(level->nodes, i)->policy) != 0);
-	}
-#endif
 	return 1;
 }
 
@@ -341,9 +329,9 @@ static int
 delete_if_not_in_policies(X509_POLICY_NODE *node, void *data)
 {
 	const CERTIFICATEPOLICIES *policies = data;
-	assert(sk_POLICYINFO_is_sorted(policies));
 	POLICYINFO info;
 	info.policyid = node->policy;
+
 	if (sk_POLICYINFO_find(policies, &info) >= 0)
 		return 0;
 	x509_policy_node_free(node);
@@ -390,7 +378,7 @@ process_certificate_policies(const X509 *x509, X509_POLICY_LEVEL *level,
 		goto err;
 	}
 
-	sk_POLICYINFO_set_cmp_func(policies, policyinfo_cmp);
+	(void)sk_POLICYINFO_set_cmp_func(policies, policyinfo_cmp);
 	sk_POLICYINFO_sort(policies);
 	cert_has_any_policy = 0;
 	for (i = 0; i < sk_POLICYINFO_num(policies); i++) {
@@ -423,6 +411,8 @@ process_certificate_policies(const X509 *x509, X509_POLICY_LEVEL *level,
 	 * anyPolicy if it is inhibited.
 	 */
 	if (!cert_has_any_policy || !any_policy_allowed) {
+		if (!sk_POLICYINFO_is_sorted(policies))
+			goto err;
 		sk_X509_POLICY_NODE_delete_if(level->nodes,
 		    delete_if_not_in_policies, policies);
 		level->has_any_policy = 0;
@@ -443,15 +433,17 @@ process_certificate_policies(const X509 *x509, X509_POLICY_LEVEL *level,
 			 * is in |level| if and only if it would have been a
 			 * match in step (d.1.ii).
 			 */
-			if (!is_any_policy(policy->policyid) &&
-			    x509_policy_level_find(level, policy->policyid) ==
-			    NULL) {
-				node = x509_policy_node_new(policy->policyid);
-				if (node == NULL ||
-				    !sk_X509_POLICY_NODE_push(new_nodes, node)) {
-					x509_policy_node_free(node);
-					goto err;
-				}
+			if (is_any_policy(policy->policyid))
+				continue;
+			if (!sk_X509_POLICY_NODE_is_sorted(level->nodes))
+				goto err;
+			if (x509_policy_level_find(level, policy->policyid) != NULL)
+				continue;
+			node = x509_policy_node_new(policy->policyid);
+			if (node == NULL ||
+			    !sk_X509_POLICY_NODE_push(new_nodes, node)) {
+				x509_policy_node_free(node);
+				goto err;
 			}
 		}
 		if (!x509_policy_level_add_nodes(level, new_nodes))
@@ -484,8 +476,6 @@ static int
 delete_if_mapped(X509_POLICY_NODE *node, void *data)
 {
 	const POLICY_MAPPINGS *mappings = data;
-	/* |mappings| must have been sorted by |compare_issuer_policy|. */
-	assert(sk_POLICY_MAPPING_is_sorted(mappings));
 	POLICY_MAPPING mapping;
 	mapping.issuerDomainPolicy = node->policy;
 	if (sk_POLICY_MAPPING_find(mappings, &mapping) < 0)
@@ -552,7 +542,8 @@ process_policy_mappings(const X509 *cert,
 		}
 
 		/* Sort to group by issuerDomainPolicy. */
-		sk_POLICY_MAPPING_set_cmp_func(mappings, compare_issuer_policy);
+		(void)sk_POLICY_MAPPING_set_cmp_func(mappings,
+		    compare_issuer_policy);
 		sk_POLICY_MAPPING_sort(mappings);
 
 		if (mapping_allowed) {
@@ -577,6 +568,8 @@ process_policy_mappings(const X509 *cert,
 					continue;
 				last_policy = mapping->issuerDomainPolicy;
 
+				if (!sk_X509_POLICY_NODE_is_sorted(level->nodes))
+					goto err;
 				node = x509_policy_level_find(level,
 				    mapping->issuerDomainPolicy);
 				if (node == NULL) {
@@ -600,6 +593,8 @@ process_policy_mappings(const X509 *cert,
 			 * RFC 5280, section 6.1.4, step (b.2). If mapping is
 			 * inhibited, delete all mapped nodes.
 			 */
+			if (!sk_POLICY_MAPPING_is_sorted(mappings))
+				goto err;
 			sk_X509_POLICY_NODE_delete_if(level->nodes,
 			    delete_if_mapped, mappings);
 			sk_POLICY_MAPPING_pop_free(mappings,
@@ -635,7 +630,7 @@ process_policy_mappings(const X509 *cert,
 	}
 
 	/* Sort to group by subjectDomainPolicy. */
-	sk_POLICY_MAPPING_set_cmp_func(mappings, compare_subject_policy);
+	(void)sk_POLICY_MAPPING_set_cmp_func(mappings, compare_subject_policy);
 	sk_POLICY_MAPPING_sort(mappings);
 
 	/* Convert |mappings| to our "expected_policy_set" representation. */
@@ -651,10 +646,13 @@ process_policy_mappings(const X509 *cert,
 		 * Skip mappings where |issuerDomainPolicy| does not appear in
 		 * the graph.
 		 */
-		if (!level->has_any_policy &&
-		    x509_policy_level_find(level,
-		    mapping->issuerDomainPolicy) == NULL)
-			continue;
+		if (!level->has_any_policy) {
+			if (!sk_X509_POLICY_NODE_is_sorted(level->nodes))
+				goto err;
+			if (x509_policy_level_find(level,
+			    mapping->issuerDomainPolicy) == NULL)
+				continue;
+		}
 
 		if (last_node == NULL ||
 		    OBJ_cmp(last_node->policy, mapping->subjectDomainPolicy) !=
@@ -777,8 +775,9 @@ has_explicit_policy(STACK_OF(X509_POLICY_LEVEL) *levels,
 	X509_POLICY_NODE *node, *parent;
 	int num_levels, user_has_any_policy;
 	int i, j, k;
-	assert(user_policies == NULL ||
-	    sk_ASN1_OBJECT_is_sorted(user_policies));
+
+	if (!sk_ASN1_OBJECT_is_sorted(user_policies))
+		return 0;
 
 	/* Step (g.i). If the policy graph is empty, the intersection is empty. */
 	num_levels = sk_X509_POLICY_LEVEL_num(levels);
@@ -849,6 +848,8 @@ has_explicit_policy(STACK_OF(X509_POLICY_LEVEL) *levels,
 				 */
 				prev = sk_X509_POLICY_LEVEL_value(levels, i - 1);
 				for (k = 0; k < num_parent_policies; k++) {
+					if (!sk_X509_POLICY_NODE_is_sorted(prev->nodes))
+						return 0;
 					parent = x509_policy_level_find(prev,
 					    sk_ASN1_OBJECT_value(node->parent_policies,
 					    k));
@@ -907,7 +908,8 @@ X509_policy_check(const STACK_OF(X509) *certs,
 		is_self_issued = (cert->ex_flags & EXFLAG_SI) != 0;
 
 		if (level == NULL) {
-			assert(i == num_certs - 2);
+			if (i != num_certs - 2)
+				goto err;
 			level = x509_policy_level_new();
 			if (level == NULL)
 				goto err;
@@ -992,7 +994,7 @@ X509_policy_check(const STACK_OF(X509) *certs,
 			    user_policies);
 			if (user_policies_sorted == NULL)
 				goto err;
-			sk_ASN1_OBJECT_set_cmp_func(user_policies_sorted,
+			(void)sk_ASN1_OBJECT_set_cmp_func(user_policies_sorted,
 			    asn1_object_cmp);
 			sk_ASN1_OBJECT_sort(user_policies_sorted);
 		}
@@ -1015,5 +1017,3 @@ err:
 	sk_X509_POLICY_LEVEL_pop_free(levels, x509_policy_level_free);
 	return ret;
 }
-
-#endif /* LIBRESSL_HAS_POLICY_DAG */

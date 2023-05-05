@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfvar_priv.h,v 1.30 2023/01/06 17:44:34 sashan Exp $	*/
+/*	$OpenBSD: pfvar_priv.h,v 1.31 2023/04/28 14:08:38 sashan Exp $	*/
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -342,16 +342,22 @@ struct pf_opts {
 
 enum pf_trans_type {
 	PF_TRANS_NONE,
+	PF_TRANS_GETRULE,
 	PF_TRANS_CONFIG,
 	PF_TRANS_MAX
 };
 
 struct pf_trans {
 	LIST_ENTRY(pf_trans)	pft_entry;
-	pid_t			pft_pid;		/* process id */
+	uint32_t		pft_unit;		/* process id */
 	uint64_t		pft_ticket;
 	enum pf_trans_type	pft_type;
 	union {
+		struct {
+			u_int32_t		 gr_version;
+			struct pf_anchor	*gr_anchor;
+			struct pf_rule		*gr_rule;
+		} u_getrule;
 		struct {
 			TAILQ_HEAD(, pf_anchor)	cf_anchor_list;
 			struct pfr_ktableworkq	cf_garbage;
@@ -370,6 +376,10 @@ struct pf_trans {
 		} u_conf;
 	} u;
 };
+
+#define pftgr_version	u.u_getrule.gr_version
+#define pftgr_anchor	u.u_getrule.gr_anchor
+#define pftgr_rule	u.u_getrule.gr_rule
 
 #define pftcf_anchor_list	u.u_conf.cf_anchor_list
 #define pftcf_garbage		u.u_conf.cf_garbage

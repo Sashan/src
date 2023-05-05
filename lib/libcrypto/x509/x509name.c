@@ -1,4 +1,4 @@
-/* $OpenBSD: x509name.c,v 1.31 2023/02/16 08:38:17 tb Exp $ */
+/* $OpenBSD: x509name.c,v 1.34 2023/05/03 08:10:23 beck Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *

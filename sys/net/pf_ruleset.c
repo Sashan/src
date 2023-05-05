@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf_ruleset.c,v 1.19 2022/07/20 09:33:11 mbuhl Exp $ */
+/*	$OpenBSD: pf_ruleset.c,v 1.20 2023/04/28 14:08:38 sashan Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -240,6 +240,9 @@ pf_create_anchor(struct pf_rules_container *rc, struct pf_anchor *parent,
 	pf_init_ruleset(&anchor->ruleset);
 	anchor->ruleset.anchor = anchor;
 	anchor->ruleset.rules.version = pf_get_ruleset_version(anchor->path);
+#ifdef	_KERNEL
+	refcnt_init(&anchor->ref);
+#endif
 
 	return (anchor);
 }
@@ -352,7 +355,7 @@ pf_remove_if_empty_ruleset(struct pf_rules_container *rc,
 		if ((parent = ruleset->anchor->parent) != NULL)
 			RB_REMOVE(pf_anchor_node, &parent->children,
 			    ruleset->anchor);
-		rs_pool_put_anchor(ruleset->anchor);
+		pf_anchor_rele(ruleset->anchor);
 		if (parent == NULL)
 			return;
 		ruleset = &parent->ruleset;
@@ -480,4 +483,28 @@ pf_remove_anchor(struct pf_rule *r)
 	else if (!--r->anchor->refcnt)
 		pf_remove_if_empty_ruleset(&pf_global, &r->anchor->ruleset);
 	r->anchor = NULL;
+}
+
+void
+pf_anchor_rele(struct pf_anchor *anchor)
+{
+	if ((anchor == NULL) || (anchor == &pf_main_anchor))
+		return;
+
+#ifdef	_KERNEL
+	if (refcnt_rele(&anchor->ref))
+		rs_pool_put_anchor(anchor);
+#else
+	rs_pool_put_anchor(anchor);
+#endif
+}
+
+struct pf_anchor *
+pf_anchor_take(struct pf_anchor *anchor)
+{
+#ifdef	_KERNEL
+	if (anchor != NULL && anchor != &pf_main_anchor)
+		refcnt_take(&anchor->ref);
+#endif
+	return (anchor);
 }

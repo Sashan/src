@@ -1800,7 +1800,6 @@
 ./usr/share/man/man3/BIO_meth_new.3
 ./usr/share/man/man3/BIO_new.3
 ./usr/share/man/man3/BIO_new_CMS.3
-./usr/share/man/man3/BIO_new_NDEF.3
 ./usr/share/man/man3/BIO_printf.3
 ./usr/share/man/man3/BIO_push.3
 ./usr/share/man/man3/BIO_read.3
@@ -1993,7 +1992,6 @@
 ./usr/share/man/man3/PEM_read.3
 ./usr/share/man/man3/PEM_read_SSL_SESSION.3
 ./usr/share/man/man3/PEM_read_bio_PrivateKey.3
-./usr/share/man/man3/PEM_write_bio_ASN1_stream.3
 ./usr/share/man/man3/PEM_write_bio_CMS_stream.3
 ./usr/share/man/man3/PEM_write_bio_PKCS7_stream.3
 ./usr/share/man/man3/PKCS12_SAFEBAG_new.3
@@ -2019,7 +2017,6 @@
 ./usr/share/man/man3/PKCS8_pkey_set0.3
 ./usr/share/man/man3/PKEY_USAGE_PERIOD_new.3
 ./usr/share/man/man3/POLICYINFO_new.3
-./usr/share/man/man3/PROXY_POLICY_new.3
 ./usr/share/man/man3/RAND_add.3
 ./usr/share/man/man3/RAND_bytes.3
 ./usr/share/man/man3/RAND_load_file.3
@@ -2253,9 +2250,6 @@
 ./usr/share/man/man3/X509_load_cert_file.3
 ./usr/share/man/man3/X509_new.3
 ./usr/share/man/man3/X509_ocspid_print.3
-./usr/share/man/man3/X509_policy_check.3
-./usr/share/man/man3/X509_policy_tree_get0_policies.3
-./usr/share/man/man3/X509_policy_tree_level_count.3
 ./usr/share/man/man3/X509_print_ex.3
 ./usr/share/man/man3/X509_sign.3
 ./usr/share/man/man3/X509_signature_dump.3
@@ -2416,7 +2410,6 @@
 ./usr/share/man/man3/d2i_PKCS8_PRIV_KEY_INFO.3
 ./usr/share/man/man3/d2i_PKEY_USAGE_PERIOD.3
 ./usr/share/man/man3/d2i_POLICYINFO.3
-./usr/share/man/man3/d2i_PROXY_POLICY.3
 ./usr/share/man/man3/d2i_PrivateKey.3
 ./usr/share/man/man3/d2i_RSAPublicKey.3
 ./usr/share/man/man3/d2i_SSL_SESSION.3
@@ -2650,7 +2643,6 @@
 ./usr/share/man/man3/htonl.3
 ./usr/share/man/man3/hypot.3
 ./usr/share/man/man3/i2a_ASN1_STRING.3
-./usr/share/man/man3/i2d_ASN1_bio_stream.3
 ./usr/share/man/man3/i2d_CMS_bio_stream.3
 ./usr/share/man/man3/i2d_PKCS7_bio_stream.3
 ./usr/share/man/man3/if_indextoname.3

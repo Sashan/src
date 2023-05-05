@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.19 2023/04/28 08:45:25 krw Exp $
+#	$OpenBSD: Makefile,v 1.21 2023/04/28 18:14:59 krw Exp $
 
 FS=		floppy${OSrev}.img
 FSSIZE=		2880

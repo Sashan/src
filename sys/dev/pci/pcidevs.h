@@ -2,7 +2,7 @@
  * THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
  *
  * generated from:
- *	OpenBSD: pcidevs,v 1.2032 2023/04/25 21:57:29 kettenis Exp 
+ *	OpenBSD: pcidevs,v 1.2035 2023/05/04 05:38:17 kevlo Exp 
  */
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
 
@@ -1283,6 +1283,7 @@
 #define	PCI_PRODUCT_ATI_PPB_1	0x1478		/* PCIE */
 #define	PCI_PRODUCT_ATI_PPB_2	0x1479		/* PCIE */
 #define	PCI_PRODUCT_ATI_MENDOCINO	0x1506		/* Mendocino */
+#define	PCI_PRODUCT_ATI_PHOENIX	0x15bf		/* Phoenix */
 #define	PCI_PRODUCT_ATI_PICASSO	0x15d8		/* Picasso */
 #define	PCI_PRODUCT_ATI_RAVEN_VEGA	0x15dd		/* Radeon Vega */
 #define	PCI_PRODUCT_ATI_RAVEN_VEGA_HDA	0x15de		/* Radeon Vega HD Audio */
@@ -4444,6 +4445,7 @@
 #define	PCI_PRODUCT_INTEL_BSW_SIO_HSUART_1	0x228a		/* Braswell Serial */
 #define	PCI_PRODUCT_INTEL_BSW_SIO_HSUART_2	0x228c		/* Braswell Serial */
 #define	PCI_PRODUCT_INTEL_BRASWELL_SMB	0x2292		/* Braswell SMBus */
+#define	PCI_PRODUCT_INTEL_BSW_SDIO	0x2295		/* Braswell SDIO */
 #define	PCI_PRODUCT_INTEL_BSW_TXE	0x2298		/* Braswell TXE */
 #define	PCI_PRODUCT_INTEL_BSW_PCU_LPC	0x229c		/* Braswell PCU LPC */
 #define	PCI_PRODUCT_INTEL_BSW_AHCI	0x22a3		/* Braswell AHCI */
@@ -7066,6 +7068,7 @@
 
 /* Lenovo products */
 #define	PCI_PRODUCT_LENOVO_NVME	0x0003		/* NVMe */
+#define	PCI_PRODUCT_LENOVO_NVME_2	0x0006		/* NVMe */
 
 /* Level 1 (Intel) */
 #define	PCI_PRODUCT_LEVEL1_LXT1001	0x0001		/* LXT1001 */

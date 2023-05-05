@@ -1,4 +1,4 @@
-/* $OpenBSD: pk7_mime.c,v 1.17 2023/04/26 14:25:58 tb Exp $ */
+/* $OpenBSD: pk7_mime.c,v 1.19 2023/05/02 09:56:12 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project.
  */
@@ -71,8 +71,7 @@ LCRYPTO_ALIAS(BIO_new_PKCS7);
 int
 i2d_PKCS7_bio_stream(BIO *out, PKCS7 *p7, BIO *in, int flags)
 {
-	return i2d_ASN1_bio_stream(out, (ASN1_VALUE *)p7, in, flags,
-	    &PKCS7_it);
+	return i2d_ASN1_bio_stream(out, (ASN1_VALUE *)p7, in, flags, &PKCS7_it);
 }
 LCRYPTO_ALIAS(i2d_PKCS7_bio_stream);
 
@@ -87,15 +86,13 @@ LCRYPTO_ALIAS(PEM_write_bio_PKCS7_stream);
 int
 SMIME_write_PKCS7(BIO *bio, PKCS7 *p7, BIO *data, int flags)
 {
-	STACK_OF(X509_ALGOR) *mdalgs;
-	int ctype_nid = OBJ_obj2nid(p7->type);
-	if (ctype_nid == NID_pkcs7_signed)
+	STACK_OF(X509_ALGOR) *mdalgs = NULL;
+	int ctype_nid;
+
+	if ((ctype_nid = OBJ_obj2nid(p7->type)) == NID_pkcs7_signed)
 		mdalgs = p7->d.sign->md_algs;
-	else
-		mdalgs = NULL;
 
 	flags ^= SMIME_OLDMIME;
-
 
 	return SMIME_write_ASN1(bio, (ASN1_VALUE *)p7, data, flags,
 	    ctype_nid, NID_undef, mdalgs, &PKCS7_it);

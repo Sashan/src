@@ -1,4 +1,4 @@
-/*	$OpenBSD: nd6_nbr.c,v 1.145 2023/04/25 15:41:17 phessler Exp $	*/
+/*	$OpenBSD: nd6_nbr.c,v 1.148 2023/05/04 06:56:56 bluhm Exp $	*/
 /*	$KAME: nd6_nbr.c,v 1.61 2001/02/10 16:06:14 jinmei Exp $	*/
 
 /*
@@ -360,7 +360,7 @@ nd6_ns_input(struct mbuf *m, int off, int icmp6len)
  */
 void
 nd6_ns_output(struct ifnet *ifp, const struct in6_addr *daddr6,
-    const struct in6_addr *taddr6, const struct llinfo_nd6 *ln, int dad)
+    const struct in6_addr *taddr6, const struct in6_addr *saddr6, int dad)
 {
 	struct mbuf *m;
 	struct ip6_hdr *ip6;
@@ -423,7 +423,7 @@ nd6_ns_output(struct ifnet *ifp, const struct in6_addr *daddr6,
 	bzero(&dst_sa, sizeof(dst_sa));
 	src_sa.sin6_family = dst_sa.sin6_family = AF_INET6;
 	src_sa.sin6_len = dst_sa.sin6_len = sizeof(struct sockaddr_in6);
-	if (daddr6)
+	if (daddr6 != NULL)
 		dst_sa.sin6_addr = *daddr6;
 	else {
 		dst_sa.sin6_addr.s6_addr16[0] = __IPV6_ADDR_INT16_MLL;
@@ -451,14 +451,13 @@ nd6_ns_output(struct ifnet *ifp, const struct in6_addr *daddr6,
 		 * - if taddr is link local saddr6 must be link local as well
 		 * Otherwise, we perform the source address selection as usual.
 		 */
-		if (ln != NULL)
-			src_sa.sin6_addr = ln->ln_saddr6;
+		if (saddr6 != NULL)
+			src_sa.sin6_addr = *saddr6;
 
 		if (!IN6_IS_ADDR_LINKLOCAL(taddr6) ||
 		    IN6_IS_ADDR_UNSPECIFIED(&src_sa.sin6_addr) ||
 		    IN6_IS_ADDR_LINKLOCAL(&src_sa.sin6_addr) ||
 		    !in6ifa_ifpwithaddr(ifp, &src_sa.sin6_addr)) {
-
 			struct rtentry *rt;
 
 			rt = rtalloc(sin6tosa(&dst_sa), RT_RESOLVE,
@@ -568,7 +567,7 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 	struct nd_opts ndopts;
 	char addr[INET6_ADDRSTRLEN], addr0[INET6_ADDRSTRLEN];
 
-	NET_ASSERT_LOCKED();
+	NET_ASSERT_LOCKED_EXCLUSIVE();
 
 	ifp = if_get(m->m_pkthdr.ph_ifidx);
 	if (ifp == NULL)
@@ -678,11 +677,40 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 		goto bad;
 	}
 
+	/* Check if we already have this neighbor in our cache. */
+	rt = nd6_lookup(&taddr6, 0, ifp, ifp->if_rdomain);
+
 	/*
+	 * If we are a router, we may create new stale cache entries upon
+	 * receiving Unsolicited Neighbor Advertisements.
+	 */
+	if (rt == NULL && ip6_forwarding == 1) {
+		rt = nd6_lookup(&taddr6, 1, ifp, ifp->if_rdomain);
+		if (rt == NULL || lladdr == NULL ||
+		    ((sdl = satosdl(rt->rt_gateway)) == NULL))
+			goto freeit;
+
+		ln = (struct llinfo_nd6 *)rt->rt_llinfo;
+		sdl->sdl_alen = ifp->if_addrlen;
+		bcopy(lladdr, LLADDR(sdl), ifp->if_addrlen);
+
+		/*
+		 * RFC9131 6.1.1
+		 *
+		 * Routers SHOULD create a new entry for the target address
+		 * with the reachability state set to STALE.
+		 */
+		ln->ln_state = ND6_LLINFO_STALE;
+		nd6_llinfo_settimer(ln, nd6_gctimer);
+
+		goto freeit;
+	}
+
+	/*
+	 * Host:
 	 * If no neighbor cache entry is found, NA SHOULD silently be
 	 * discarded.
 	 */
-	rt = nd6_lookup(&taddr6, 0, ifp, ifp->if_rdomain);
 	if ((rt == NULL) ||
 	   ((ln = (struct llinfo_nd6 *)rt->rt_llinfo) == NULL) ||
 	   ((sdl = satosdl(rt->rt_gateway)) == NULL))

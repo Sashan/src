@@ -27,8 +27,8 @@ my %internal = (
     bn => [qw(
 	BN_BITS BN_BITS4 BN_BYTES
 	BN_DEC_CONV BN_DEC_FMT1 BN_DEC_FMT2 BN_DEC_NUM BN_LLONG BN_LONG
-	BN_MASK2 BN_MASK2h BN_MASK2h1 BN_MASK2l BN_MUL_COMBA
-	BN_RECURSION BN_SQR_COMBA BN_TBIT BN_ULLONG
+	BN_MASK2 BN_MASK2h BN_MASK2h1 BN_MASK2l
+	BN_TBIT BN_ULLONG
     )],
     objects => [qw(
 	OBJ_bsearch OBJ_bsearch_ OBJ_bsearch_ex OBJ_bsearch_ex_
@@ -50,15 +50,16 @@ my %obsolete = (
 	X509_algor_st
     )],
     bio => [qw(
+	BIO_C_GET_PROXY_PARAM BIO_C_GET_SOCKS
+	BIO_C_SET_PROXY_PARAM BIO_C_SET_SOCKS
 	BIO_get_no_connect_return BIO_get_proxies
 	BIO_get_proxy_header BIO_get_url
 	BIO_set_filter_bio BIO_set_no_connect_return BIO_set_proxies
 	BIO_set_proxy_cb BIO_set_proxy_header BIO_set_url
     )],
     bn => [qw(
-	BN_FLG_EXP_CONSTTIME BN_FLG_FREE BN_get_params
 	BN_HEX_FMT1 BN_HEX_FMT2 BN_MASK
-	BN_options BN_prime_checks BN_set_params
+	BN_options BN_prime_checks
     )],
     objects => [qw(
 	_DECLARE_OBJ_BSEARCH_CMP_FN
@@ -271,7 +272,7 @@ try_again:
 			print "D- $line\n" if $verbose;
 			next;
 		}
-		if ($id =~ /^(?:ASN1|BN|X509(?:V3)?)_[FR]_\w+$/) {
+		if ($id =~ /^(?:ASN1|BIO|BN|X509(?:V3)?)_[FR]_\w+$/) {
 			print "D- $line\n" if $verbose;
 			next;
 		}

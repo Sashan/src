@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf_ioctl.c,v 1.399 2023/04/27 12:10:30 kn Exp $ */
+/*	$OpenBSD: pf_ioctl.c,v 1.403 2023/05/03 10:32:48 kn Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -117,11 +117,27 @@ void			 pf_qid_unref(u_int16_t);
 int			 pf_states_clr(struct pfioc_state_kill *);
 int			 pf_states_get(struct pfioc_states *);
 
-struct pf_trans 	*pf_open_trans(pid_t);
-struct pf_trans		*pf_find_trans(uint64_t);
+struct pf_trans		*pf_open_trans(uint32_t);
+struct pf_trans		*pf_find_trans(uint32_t, uint64_t);
 void			 pf_free_trans(struct pf_trans *);
 void			 pf_rollback_trans(struct pf_trans *);
 void			 pf_commit_trans(struct pf_trans *);
+
+void			 pf_init_tgetrule(struct pf_trans *,
+			    struct pf_anchor *, uint32_t, struct pf_rule *);
+void			 pf_cleanup_tgetrule(struct pf_trans *t);
+
+void			 pf_init_tconf(struct pf_trans *);
+void			 pf_cleanup_tconf(struct pf_trans *);
+void			 pf_swap_anchors(struct pf_trans *, struct pf_anchor *,
+			    struct pf_anchor *);
+int			 pf_trans_in_conflict(struct pf_trans *, const char *);
+int			 pf_ina_check(struct pf_anchor *, struct pf_anchor *);
+void			 pf_ina_commit(struct pf_trans *, struct pf_anchor *,
+			    struct pf_anchor *);
+
+struct pf_rule		 pf_default_rule, pf_default_rule_new;
+
 
 void			 pf_init_tconf(struct pf_trans *);
 void			 pf_cleanup_tconf(struct pf_trans *);
@@ -299,25 +315,21 @@ pfclose(dev_t dev, int flags, int fmt, struct proc *p)
 {
 	struct pf_trans *w, *s;
 	LIST_HEAD(, pf_trans)	tmp_list;
+	uint32_t unit = minor(dev);
 
-	if (minor(dev) >= 1)
-		return (ENXIO);
-
-	if (flags & FWRITE) {
-		LIST_INIT(&tmp_list);
-		rw_enter_write(&pfioctl_rw);
-		LIST_FOREACH_SAFE(w, &pf_ioctl_trans, pft_entry, s) {
-			if (w->pft_pid == p->p_p->ps_pid) {
-				LIST_REMOVE(w, pft_entry);
-				LIST_INSERT_HEAD(&tmp_list, w, pft_entry);
-			}
-		}
-		rw_exit_write(&pfioctl_rw);
-
-		while ((w = LIST_FIRST(&tmp_list)) != NULL) {
+	LIST_INIT(&tmp_list);
+	rw_enter_write(&pfioctl_rw);
+	LIST_FOREACH_SAFE(w, &pf_ioctl_trans, pft_entry, s) {
+		if (w->pft_unit == unit) {
 			LIST_REMOVE(w, pft_entry);
-			pf_free_trans(w);
+			LIST_INSERT_HEAD(&tmp_list, w, pft_entry);
 		}
+	}
+	rw_exit_write(&pfioctl_rw);
+
+	while ((w = LIST_FIRST(&tmp_list)) != NULL) {
+		LIST_REMOVE(w, pft_entry);
+		pf_free_trans(w);
 	}
 
 	return (0);
@@ -564,7 +576,7 @@ pf_begin_rules(struct pf_trans *t, const char *anchor)
 }
 
 void
-pf_rollback_rules(u_int32_t ticket, char *anchor)
+pf_rollback_rules(u_int32_t version, char *anchor)
 {
 	/* queue defs only in the main ruleset */
 	if (anchor[0])
@@ -837,7 +849,7 @@ pf_hash_rule(MD5_CTX *ctx, struct pf_rule *rule)
 }
 
 int
-pf_commit_rules(u_int32_t ticket, char *anchor)
+pf_commit_rules(u_int32_t version, char *anchor)
 {
 #if 0
 	struct pf_ruleset	*rs;
@@ -1550,10 +1562,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			return (EACCES);
 		}
 
-	if (flags & FWRITE)
-		rw_enter_write(&pfioctl_rw);
-	else
-		rw_enter_read(&pfioctl_rw);
+	rw_enter_write(&pfioctl_rw);
 
 	switch (cmd) {
 
@@ -1597,7 +1606,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pf_queuespec	*qs;
 		u_int32_t		 nr = 0;
 
-		NET_LOCK();
 		PF_LOCK();
 		pq->ticket = pf_main_ruleset.rules.version;
 
@@ -1609,7 +1617,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 		pq->nr = nr;
 		PF_UNLOCK();
-		NET_UNLOCK();
 		break;
 	}
 
@@ -1618,12 +1625,10 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pf_queuespec	*qs;
 		u_int32_t		 nr = 0;
 
-		NET_LOCK();
 		PF_LOCK();
 		if (pq->ticket != pf_main_ruleset.rules.version) {
 			error = EBUSY;
 			PF_UNLOCK();
-			NET_UNLOCK();
 			goto fail;
 		}
 
@@ -1634,12 +1639,10 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		if (qs == NULL) {
 			error = EBUSY;
 			PF_UNLOCK();
-			NET_UNLOCK();
 			goto fail;
 		}
 		memcpy(&pq->queue, qs, sizeof(pq->queue));
 		PF_UNLOCK();
-		NET_UNLOCK();
 		break;
 	}
 
@@ -1847,7 +1850,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCGETRULES: {
 		struct pfioc_rule	*pr = (struct pfioc_rule *)addr;
 		struct pf_ruleset	*ruleset;
-		struct pf_rule		*tail;
+		struct pf_rule		*rule;
+		struct pf_trans		*t;
+		u_int32_t		 ruleset_version;
 
 		NET_LOCK();
 		PF_LOCK();
@@ -1865,8 +1870,15 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		else
 			pr->nr = 0;
 		pr->ticket = ruleset->rules.version;
+		pf_anchor_take(ruleset->anchor);
+		rule = TAILQ_FIRST(ruleset->rules.active.ptr);
 		PF_UNLOCK();
 		NET_UNLOCK();
+
+		t = pf_open_trans(minor(dev));
+		pf_init_tgetrule(t, ruleset->anchor, ruleset_version, rule);
+		pr->ticket = t->pft_ticket;
+
 		break;
 	}
 
@@ -1874,29 +1886,29 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pfioc_rule	*pr = (struct pfioc_rule *)addr;
 		struct pf_ruleset	*ruleset;
 		struct pf_rule		*rule;
+		struct pf_trans		*t;
 		int			 i;
+
+		t = pf_find_trans(minor(dev), pr->ticket);
+		if (t == NULL)
+			return (ENXIO);
+		KASSERT(t->pft_unit == minor(dev));
+		if (t->pft_type != PF_TRANS_GETRULE)
+			return (EINVAL);
 
 		NET_LOCK();
 		PF_LOCK();
-		pr->anchor[sizeof(pr->anchor) - 1] = '\0';
-		ruleset = pf_find_ruleset(&pf_global, pr->anchor);
-		if (ruleset == NULL) {
-			error = EINVAL;
-			PF_UNLOCK();
-			NET_UNLOCK();
-			goto fail;
-		}
-		if (pr->ticket != ruleset->rules.version) {
+		KASSERT(t->pftgr_anchor != NULL);
+		ruleset = &t->pftgr_anchor->ruleset;
+		if (t->pftgr_version != ruleset->rules.active.version) {
 			error = EBUSY;
 			PF_UNLOCK();
 			NET_UNLOCK();
 			goto fail;
 		}
-		rule = TAILQ_FIRST(ruleset->rules.ptr);
-		while ((rule != NULL) && (rule->nr != pr->nr))
-			rule = TAILQ_NEXT(rule, entries);
+		rule = t->pftgr_rule;
 		if (rule == NULL) {
-			error = EBUSY;
+			error = ENOENT;
 			PF_UNLOCK();
 			NET_UNLOCK();
 			goto fail;
@@ -1935,6 +1947,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			rule->bytes[0] = rule->bytes[1] = 0;
 			rule->states_tot = 0;
 		}
+		pr->nr = rule->nr;
+		t->pftgr_rule = TAILQ_NEXT(rule, entries);
 		PF_UNLOCK();
 		NET_UNLOCK();
 		break;
@@ -2605,13 +2619,11 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pf_ruleset	*ruleset;
 		struct pf_anchor	*anchor;
 
-		NET_LOCK();
 		PF_LOCK();
 		pr->path[sizeof(pr->path) - 1] = '\0';
 		if ((ruleset = pf_find_ruleset(&pf_global, pr->path)) == NULL) {
 			error = EINVAL;
 			PF_UNLOCK();
-			NET_UNLOCK();
 			goto fail;
 		}
 		pr->nr = 0;
@@ -2626,7 +2638,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				pr->nr++;
 		}
 		PF_UNLOCK();
-		NET_UNLOCK();
 		break;
 	}
 
@@ -2636,13 +2647,11 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pf_anchor	*anchor;
 		u_int32_t		 nr = 0;
 
-		NET_LOCK();
 		PF_LOCK();
 		pr->path[sizeof(pr->path) - 1] = '\0';
 		if ((ruleset = pf_find_ruleset(&pf_global, pr->path)) == NULL) {
 			error = EINVAL;
 			PF_UNLOCK();
-			NET_UNLOCK();
 			goto fail;
 		}
 		pr->name[0] = '\0';
@@ -2664,7 +2673,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				}
 		}
 		PF_UNLOCK();
-		NET_UNLOCK();
 		if (!pr->name[0])
 			error = EBUSY;
 		break;
@@ -3243,11 +3251,23 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			error = ENXIO;
 			goto fail;
 		}
+=======
+		}
 
+		NET_LOCK();
+		PF_LOCK();
+
+		if (pf_trans_in_conflict(t, "DIOCXCOMMIT"))
+			error = EBUSY;
+		else {
+			pf_drop_unused_tables(t);
+			pf_commit_trans(t);
+			pfi_xcommit();
 		if (t->pft_type != PF_TRANS_CONFIG) {
 			error = EINVAL;
 			goto fail;
 		}
+
 
 		NET_LOCK();
 		PF_LOCK();
@@ -3560,10 +3580,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		break;
 	}
 fail:
-	if (flags & FWRITE)
-		rw_exit_write(&pfioctl_rw);
-	else
-		rw_exit_read(&pfioctl_rw);
+	rw_exit_write(&pfioctl_rw);
 
 	return (error);
 }
@@ -3786,16 +3803,16 @@ pf_sysctl(void *oldp, size_t *oldlenp, void *newp, size_t newlen)
 }
 
 struct pf_trans *
-pf_open_trans(pid_t pid)
+pf_open_trans(uint32_t unit)
 {
 	static uint64_t ticket = 1;
 	struct pf_trans *t;
 
 	rw_assert_wrlock(&pfioctl_rw);
 
-	t = malloc(sizeof(*t), M_TEMP, M_WAITOK);
-	memset(t, 0, sizeof(struct pf_trans));
-	t->pft_pid = pid;
+	t = malloc(sizeof(*t), M_TEMP, M_WAITOK|M_ZERO);
+	t->pft_unit = unit;
+	t->pft_ticket = ticket++;
 	t->pft_ticket = ticket++;
 
 	LIST_INSERT_HEAD(&pf_ioctl_trans, t, pft_entry);
@@ -3804,18 +3821,39 @@ pf_open_trans(pid_t pid)
 }
 
 struct pf_trans *
-pf_find_trans(uint64_t ticket)
+pf_find_trans(uint32_t unit, uint64_t ticket)
 {
 	struct pf_trans	*t;
 
 	rw_assert_anylock(&pfioctl_rw);
 
 	LIST_FOREACH(t, &pf_ioctl_trans, pft_entry) {
-		if (t->pft_ticket == ticket)
+		if (t->pft_ticket == ticket && t->pft_unit == unit)
 			break;
 	}
 
 	return (t);
+}
+
+void
+pf_init_tgetrule(struct pf_trans *t, struct pf_anchor *a,
+    uint32_t rs_version, struct pf_rule *r)
+{
+	t->pft_type = PF_TRANS_GETRULE;
+	if (a == NULL)
+		t->pftgr_anchor = &pf_main_anchor;
+	else
+		t->pftgr_anchor = a;
+
+	t->pftgr_version = rs_version;
+	t->pftgr_rule = r;
+}
+
+void
+pf_cleanup_tgetrule(struct pf_trans *t)
+{
+	KASSERT(t->pft_type == PF_TRANS_GETRULE);
+	pf_anchor_rele(t->pftgr_anchor);
 }
 
 int
@@ -4313,10 +4351,14 @@ pf_init_tconf(struct pf_trans *t)
 	t->pftcf_commit_op = pf_ina_commit;
 }
 
+
 void
 pf_free_trans(struct pf_trans *t)
 {
 	switch (t->pft_type) {
+	case PF_TRANS_GETRULE:
+		pf_cleanup_tgetrule(t);
+		break;
 	case PF_TRANS_CONFIG:
 		pf_cleanup_tconf(t);
 		break;

@@ -1,4 +1,4 @@
-/* $OpenBSD: crypto.h,v 1.58 2022/12/26 07:18:50 jmc Exp $ */
+/* $OpenBSD: crypto.h,v 1.60 2023/04/30 17:07:46 tb Exp $ */
 /* ====================================================================
  * Copyright (c) 1998-2006 The OpenSSL Project.  All rights reserved.
  *
