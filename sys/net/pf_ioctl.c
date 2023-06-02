@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf_ioctl.c,v 1.403 2023/05/03 10:32:48 kn Exp $ */
+/*	$OpenBSD: pf_ioctl.c,v 1.405 2023/05/26 12:13:26 kn Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -2520,11 +2520,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			error = EINVAL;
 			goto fail;
 		}
-		NET_LOCK();
 		PF_LOCK();
 		pl->limit = pf_pool_limits[pl->index].limit;
 		PF_UNLOCK();
-		NET_UNLOCK();
 		break;
 	}
 
@@ -2553,27 +2551,22 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		NET_LOCK();
 		PF_LOCK();
-		if (pl.index < 0 || pl.index >= PF_LIMIT_MAX ||
-		    pf_pool_limits[pl.index].pp == NULL) {
+		if (pl->index < 0 || pl->index >= PF_LIMIT_MAX) {
 			error = EINVAL;
 			PF_UNLOCK();
-			NET_UNLOCK();
 			goto fail;
 		}
 		if (((struct pool *)pf_pool_limits[pl.index].pp)->pr_nout >
 		    pl.limit) {
 			error = EBUSY;
 			PF_UNLOCK();
-			NET_UNLOCK();
 			goto fail;
 		}
 		/* Fragments reference mbuf clusters. */
 		if (pl.index == PF_LIMIT_FRAGS && pl.limit > nmbclust) {
 			error = EINVAL;
 			PF_UNLOCK();
-			NET_UNLOCK();
 			goto fail;
 		}
 
@@ -2581,7 +2574,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t->pftcf_modify_defaults = 1;
 		pl.limit = pf_pool_limits[pl.index].limit;
 		PF_UNLOCK();
-		NET_UNLOCK();
 		break;
 	}
 

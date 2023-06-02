@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.89 2023/04/29 08:50:53 kettenis Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.92 2023/05/30 08:30:00 jsg Exp $	*/
 
 /*
  * Copyright (c) 2016 Dale Rahn <drahn@dalerahn.com>
@@ -79,6 +79,9 @@
 #define CPU_PART_CORTEX_A715	0xd4d
 #define CPU_PART_CORTEX_X3	0xd4e
 #define CPU_PART_NEOVERSE_V2	0xd4f
+#define CPU_PART_CORTEX_A520	0xd80
+#define CPU_PART_CORTEX_A720	0xd81
+#define CPU_PART_CORTEX_X4	0xd82
 
 /* Cavium */
 #define CPU_PART_THUNDERX_T88	0x0a1
@@ -139,12 +142,15 @@ struct cpu_cores cpu_cores_arm[] = {
 	{ CPU_PART_CORTEX_A78AE, "Cortex-A78AE" },
 	{ CPU_PART_CORTEX_A78C, "Cortex-A78C" },
 	{ CPU_PART_CORTEX_A510, "Cortex-A510" },
+	{ CPU_PART_CORTEX_A520, "Cortex-A520" },
 	{ CPU_PART_CORTEX_A710, "Cortex-A710" },
 	{ CPU_PART_CORTEX_A715, "Cortex-A715" },
+	{ CPU_PART_CORTEX_A720, "Cortex-A720" },
 	{ CPU_PART_CORTEX_X1, "Cortex-X1" },
 	{ CPU_PART_CORTEX_X1C, "Cortex-X1C" },
 	{ CPU_PART_CORTEX_X2, "Cortex-X2" },
 	{ CPU_PART_CORTEX_X3, "Cortex-X3" },
+	{ CPU_PART_CORTEX_X4, "Cortex-X4" },
 	{ CPU_PART_NEOVERSE_E1, "Neoverse E1" },
 	{ CPU_PART_NEOVERSE_N1, "Neoverse N1" },
 	{ CPU_PART_NEOVERSE_N2, "Neoverse N2" },
@@ -477,7 +483,16 @@ cpu_identify(struct cpu_info *ci)
 		printf("\n%s: mismatched ID_AA64ISAR2_EL1",
 		    ci->ci_dev->dv_xname);
 	}
-	if (READ_SPECIALREG(id_aa64pfr0_el1) != cpu_id_aa64pfr0) {
+	id = READ_SPECIALREG(id_aa64pfr0_el1);
+	/* Allow CSV2/CVS3 to be different. */
+	id &= ~ID_AA64PFR0_CSV2_MASK;
+	id &= ~ID_AA64PFR0_CSV3_MASK;
+	/* Ignore 32-bit support in all exception levels. */
+	id &= ~ID_AA64PFR0_EL0_MASK;
+	id &= ~ID_AA64PFR0_EL1_MASK;
+	id &= ~ID_AA64PFR0_EL2_MASK;
+	id &= ~ID_AA64PFR0_EL3_MASK;
+	if (id != cpu_id_aa64pfr0) {
 		printf("\n%s: mismatched ID_AA64PFR0_EL1",
 		    ci->ci_dev->dv_xname);
 	}
@@ -883,6 +898,25 @@ cpu_attach(struct device *parent, struct device *dev, void *aux)
 		cpu_id_aa64isar2 = READ_SPECIALREG(id_aa64isar2_el1);
 		cpu_id_aa64pfr0 = READ_SPECIALREG(id_aa64pfr0_el1);
 		cpu_id_aa64pfr1 = READ_SPECIALREG(id_aa64pfr1_el1);
+
+		/*
+		 * The CSV2/CSV3 "features" are handled on a
+		 * per-processor basis.  So it is fine if these fields
+		 * differ between CPU cores.  Mask off these fields to
+		 * prevent exporting these to userland.
+		 */
+		cpu_id_aa64pfr0 &= ~ID_AA64PFR0_CSV2_MASK;
+		cpu_id_aa64pfr0 &= ~ID_AA64PFR0_CSV3_MASK;
+
+		/*
+		 * We only support 64-bit mode, so we don't care about
+		 * differences in support for 32-bit mode between
+		 * cores.  Mask off these fields as well.
+		 */
+		cpu_id_aa64pfr0 &= ~ID_AA64PFR0_EL0_MASK;
+		cpu_id_aa64pfr0 &= ~ID_AA64PFR0_EL1_MASK;
+		cpu_id_aa64pfr0 &= ~ID_AA64PFR0_EL2_MASK;
+		cpu_id_aa64pfr0 &= ~ID_AA64PFR0_EL3_MASK;
 
 		cpu_identify(ci);
 
@@ -1666,7 +1700,7 @@ cpu_psci_init(struct cpu_info *ci)
 	int idx, len, node;
 
 	/*
-	 * Hunt for the deppest idle state for this CPU.  This is
+	 * Hunt for the deepest idle state for this CPU.  This is
 	 * fairly complicated as it requires traversing quite a few
 	 * nodes in the device tree.  The first step is to look up the
 	 * "psci" power domain for this CPU.

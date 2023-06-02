@@ -1,4 +1,4 @@
-/* $OpenBSD: bn_convert.c,v 1.6 2023/04/19 11:14:04 jsing Exp $ */
+/* $OpenBSD: bn_convert.c,v 1.9 2023/05/28 10:34:17 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -68,6 +68,10 @@
 #include <openssl/err.h>
 
 #include "bn_local.h"
+#include "bytestring.h"
+
+static int bn_dec2bn_cbs(BIGNUM **bnp, CBS *cbs);
+static int bn_hex2bn_cbs(BIGNUM **bnp, CBS *cbs);
 
 static const char hex_digits[] = "0123456789ABCDEF";
 
@@ -252,284 +256,389 @@ BN_lebin2bn(const unsigned char *s, int len, BIGNUM *ret)
 }
 
 int
-BN_asc2bn(BIGNUM **bn, const char *a)
+BN_asc2bn(BIGNUM **bnp, const char *s)
 {
-	const char *p = a;
-	if (*p == '-')
-		p++;
+	CBS cbs, cbs_hex;
+	size_t s_len;
+	uint8_t v;
+	int neg;
 
-	if (p[0] == '0' && (p[1] == 'X' || p[1] == 'x')) {
-		if (!BN_hex2bn(bn, p + 2))
-			return 0;
-	} else {
-		if (!BN_dec2bn(bn, p))
+	if (bnp != NULL && *bnp != NULL)
+		BN_zero(*bnp);
+
+	if (s == NULL)
+		return 0;
+	if ((s_len = strlen(s)) == 0)
+		return 0;
+
+	CBS_init(&cbs, s, s_len);
+
+	/* Handle negative sign. */
+	if (!CBS_peek_u8(&cbs, &v))
+		return 0;
+	if ((neg = (v == '-'))) {
+		if (!CBS_skip(&cbs, 1))
 			return 0;
 	}
-	if (*a == '-')
-		BN_set_negative(*bn, 1);
+
+	/* Try parsing as hexidecimal with a 0x prefix. */
+	CBS_dup(&cbs, &cbs_hex);
+	if (!CBS_get_u8(&cbs_hex, &v))
+		goto decimal;
+	if (v != '0')
+		goto decimal;
+	if (!CBS_get_u8(&cbs_hex, &v))
+		goto decimal;
+	if (v != 'X' && v != 'x')
+		goto decimal;
+	if (!bn_hex2bn_cbs(bnp, &cbs_hex))
+		return 0;
+
+	goto done;
+
+ decimal:
+	if (!bn_dec2bn_cbs(bnp, &cbs))
+		return 0;
+
+ done:
+	BN_set_negative(*bnp, neg);
+
 	return 1;
 }
 
-/* Must 'free' the returned data */
 char *
-BN_bn2dec(const BIGNUM *a)
+BN_bn2dec(const BIGNUM *bn)
 {
-	int i = 0, num, bn_data_num, ok = 0;
-	char *buf = NULL;
-	char *p;
-	BIGNUM *t = NULL;
-	BN_ULONG *bn_data = NULL, *lp;
+	int started = 0;
+	BIGNUM *tmp = NULL;
+	uint8_t *data = NULL;
+	size_t data_len = 0;
+	uint8_t *s = NULL;
+	size_t s_len;
+	BN_ULONG v, w;
+	uint8_t c;
+	CBB cbb;
+	CBS cbs;
+	int i;
 
-	if (BN_is_zero(a)) {
-		buf = malloc(BN_is_negative(a) + 2);
-		if (buf == NULL) {
-			BNerror(ERR_R_MALLOC_FAILURE);
-			goto err;
-		}
-		p = buf;
-		if (BN_is_negative(a))
-			*p++ = '-';
-		*p++ = '0';
-		*p++ = '\0';
-		return (buf);
-	}
+	if (!CBB_init(&cbb, 0))
+		goto err;
 
-	/* get an upper bound for the length of the decimal integer
-	 * num <= (BN_num_bits(a) + 1) * log(2)
-	 *     <= 3 * BN_num_bits(a) * 0.1001 + log(2) + 1     (rounding error)
-	 *     <= BN_num_bits(a)/10 + BN_num_bits/1000 + 1 + 1
+	if ((tmp = BN_dup(bn)) == NULL)
+		goto err;
+
+	/*
+	 * Divide the BIGNUM by a large multiple of 10, then break the remainder
+	 * into decimal digits. This produces a reversed string of digits,
+	 * potentially with leading zeroes.
 	 */
-	i = BN_num_bits(a) * 3;
-	num = (i / 10 + i / 1000 + 1) + 1;
-	bn_data_num = num / BN_DEC_NUM + 1;
-	bn_data = reallocarray(NULL, bn_data_num, sizeof(BN_ULONG));
-	buf = malloc(num + 3);
-	if ((buf == NULL) || (bn_data == NULL)) {
-		BNerror(ERR_R_MALLOC_FAILURE);
-		goto err;
-	}
-	if ((t = BN_dup(a)) == NULL)
-		goto err;
-
-#define BUF_REMAIN (num+3 - (size_t)(p - buf))
-	p = buf;
-	lp = bn_data;
-	if (BN_is_negative(t))
-		*p++ = '-';
-
-	while (!BN_is_zero(t)) {
-		if (lp - bn_data >= bn_data_num)
+	while (!BN_is_zero(tmp)) {
+		if ((w = BN_div_word(tmp, BN_DEC_CONV)) == -1)
 			goto err;
-		*lp = BN_div_word(t, BN_DEC_CONV);
-		if (*lp == (BN_ULONG)-1)
+		for (i = 0; i < BN_DEC_NUM; i++) {
+			v = w % 10;
+			if (!CBB_add_u8(&cbb, '0' + v))
+				goto err;
+			w /= 10;
+		}
+	}
+	if (!CBB_finish(&cbb, &data, &data_len))
+		goto err;
+
+	if (data_len > SIZE_MAX - 3)
+		goto err;
+	if (!CBB_init(&cbb, data_len + 3))
+		goto err;
+
+	if (BN_is_negative(bn)) {
+		if (!CBB_add_u8(&cbb, '-'))
 			goto err;
-		lp++;
-	}
-	lp--;
-	/* We now have a series of blocks, BN_DEC_NUM chars
-	 * in length, where the last one needs truncation.
-	 * The blocks need to be reversed in order. */
-	snprintf(p, BUF_REMAIN, BN_DEC_FMT1, *lp);
-	while (*p)
-		p++;
-	while (lp != bn_data) {
-		lp--;
-		snprintf(p, BUF_REMAIN, BN_DEC_FMT2, *lp);
-		while (*p)
-			p++;
-	}
-	ok = 1;
-
-err:
-	free(bn_data);
-	BN_free(t);
-	if (!ok && buf) {
-		free(buf);
-		buf = NULL;
 	}
 
-	return (buf);
+	/* Reverse digits and trim leading zeroes. */
+	CBS_init(&cbs, data, data_len);
+	while (CBS_len(&cbs) > 0) {
+		if (!CBS_get_last_u8(&cbs, &c))
+			goto err;
+		if (!started && c == '0')
+			continue;
+		if (!CBB_add_u8(&cbb, c))
+			goto err;
+		started = 1;
+	}
+
+	if (!started) {
+		if (!CBB_add_u8(&cbb, '0'))
+			goto err;
+	}
+	if (!CBB_add_u8(&cbb, '\0'))
+		goto err;
+	if (!CBB_finish(&cbb, &s, &s_len))
+		goto err;
+
+ err:
+	BN_free(tmp);
+	CBB_cleanup(&cbb);
+	freezero(data, data_len);
+
+	return s;
 }
 
-int
-BN_dec2bn(BIGNUM **bn, const char *a)
+static int
+bn_dec2bn_cbs(BIGNUM **bnp, CBS *cbs)
 {
-	BIGNUM *ret = NULL;
-	BN_ULONG l = 0;
-	int neg = 0, i, j;
-	int num;
+	CBS cbs_digits;
+	BIGNUM *bn = NULL;
+	int d, neg, num;
+	size_t digits = 0;
+	BN_ULONG w;
+	uint8_t v;
 
-	if ((a == NULL) || (*a == '\0'))
-		return (0);
-	if (*a == '-') {
-		neg = 1;
-		a++;
+	/* Handle negative sign. */
+	if (!CBS_peek_u8(cbs, &v))
+		goto err;
+	if ((neg = (v == '-'))) {
+		if (!CBS_skip(cbs, 1))
+			goto err;
 	}
 
-	for (i = 0; i <= (INT_MAX / 4) && isdigit((unsigned char)a[i]); i++)
-		;
-	if (i > INT_MAX / 4)
-		return (0);
-
-	num = i + neg;
-	if (bn == NULL)
-		return (num);
-
-	/* a is the start of the digits, and it is 'i' long.
-	 * We chop it into BN_DEC_NUM digits at a time */
-	if (*bn == NULL) {
-		if ((ret = BN_new()) == NULL)
-			return (0);
-	} else {
-		ret = *bn;
-		BN_zero(ret);
+	/* Scan to find last decimal digit. */
+	CBS_dup(cbs, &cbs_digits);
+	while (CBS_len(&cbs_digits) > 0) {
+		if (!CBS_get_u8(&cbs_digits, &v))
+			goto err;
+		if (!isdigit(v))
+			break;
+		digits++;
 	}
-
-	/* i is the number of digits, a bit of an over expand */
-	if (!bn_expand(ret, i * 4))
+	if (digits > INT_MAX / 4)
 		goto err;
 
-	j = BN_DEC_NUM - (i % BN_DEC_NUM);
-	if (j == BN_DEC_NUM)
-		j = 0;
-	l = 0;
-	while (*a) {
-		l *= 10;
-		l += *a - '0';
-		a++;
-		if (++j == BN_DEC_NUM) {
-			if (!BN_mul_word(ret, BN_DEC_CONV))
+	num = digits + neg;
+
+	if (bnp == NULL)
+		return num;
+
+	if ((bn = *bnp) == NULL)
+		bn = BN_new();
+	if (bn == NULL)
+		goto err;
+	if (!bn_expand(bn, digits * 4))
+		goto err;
+
+	if ((d = digits % BN_DEC_NUM) == 0)
+		d = BN_DEC_NUM;
+
+	w = 0;
+
+	/* Work forwards from most significant digit. */
+	while (digits-- > 0) {
+		if (!CBS_get_u8(cbs, &v))
+			goto err;
+
+		if (v < '0' || v > '9')
+			goto err;
+
+		v -= '0';
+		w = w * 10 + v;
+		d--;
+
+		if (d == 0) {
+			if (!BN_mul_word(bn, BN_DEC_CONV))
 				goto err;
-			if (!BN_add_word(ret, l))
+			if (!BN_add_word(bn, w))
 				goto err;
-			l = 0;
-			j = 0;
+
+			d = BN_DEC_NUM;
+			w = 0;
 		}
 	}
 
-	bn_correct_top(ret);
+	bn_correct_top(bn);
 
-	BN_set_negative(ret, neg);
+	BN_set_negative(bn, neg);
 
-	*bn = ret;
-	return (num);
+	*bnp = bn;
 
-err:
-	if (*bn == NULL)
-		BN_free(ret);
-	return (0);
+	return num;
+
+ err:
+	if (bnp != NULL && *bnp == NULL)
+		BN_free(bn);
+
+	return 0;
 }
 
-/* Must 'free' the returned data */
+int
+BN_dec2bn(BIGNUM **bnp, const char *s)
+{
+	size_t s_len;
+	CBS cbs;
+
+	if (bnp != NULL && *bnp != NULL)
+		BN_zero(*bnp);
+
+	if (s == NULL)
+		return 0;
+	if ((s_len = strlen(s)) == 0)
+		return 0;
+
+	CBS_init(&cbs, s, s_len);
+
+	return bn_dec2bn_cbs(bnp, &cbs);
+}
+
 char *
-BN_bn2hex(const BIGNUM *a)
+BN_bn2hex(const BIGNUM *bn)
 {
-	int i, j, v, z = 0;
-	char *buf;
-	char *p;
+	int started = 0;
+	uint8_t *s = NULL;
+	size_t s_len;
+	BN_ULONG v, w;
+	int i, j;
+	CBB cbb;
 
-	buf = malloc(BN_is_negative(a) + a->top * BN_BYTES * 2 + 2);
-	if (buf == NULL) {
-		BNerror(ERR_R_MALLOC_FAILURE);
+	if (!CBB_init(&cbb, 0))
 		goto err;
+
+	if (BN_is_negative(bn)) {
+		if (!CBB_add_u8(&cbb, '-'))
+			goto err;
 	}
-	p = buf;
-	if (BN_is_negative(a))
-		*p++ = '-';
-	if (BN_is_zero(a))
-		*p++ = '0';
-	for (i = a->top - 1; i >=0; i--) {
+	if (BN_is_zero(bn)) {
+		if (!CBB_add_u8(&cbb, '0'))
+			goto err;
+	}
+	for (i = bn->top - 1; i >= 0; i--) {
+		w = bn->d[i];
 		for (j = BN_BITS2 - 8; j >= 0; j -= 8) {
-			/* strip leading zeros */
-			v = ((int)(a->d[i] >> (long)j)) & 0xff;
-			if (z || (v != 0)) {
-				*p++ = hex_digits[v >> 4];
-				*p++ = hex_digits[v & 0x0f];
-				z = 1;
-			}
+			v = (w >> j) & 0xff;
+			if (!started && v == 0)
+				continue;
+			if (!CBB_add_u8(&cbb, hex_digits[v >> 4]))
+				goto err;
+			if (!CBB_add_u8(&cbb, hex_digits[v & 0xf]))
+				goto err;
+			started = 1;
 		}
 	}
-	*p = '\0';
+	if (!CBB_add_u8(&cbb, '\0'))
+		goto err;
+	if (!CBB_finish(&cbb, &s, &s_len))
+		goto err;
 
-err:
-	return (buf);
+ err:
+	CBB_cleanup(&cbb);
+
+	return s;
+}
+
+static int
+bn_hex2bn_cbs(BIGNUM **bnp, CBS *cbs)
+{
+	CBS cbs_digits;
+	BIGNUM *bn = NULL;
+	int b, i, neg, num;
+	size_t digits = 0;
+	BN_ULONG w;
+	uint8_t v;
+
+	/* Handle negative sign. */
+	if (!CBS_peek_u8(cbs, &v))
+		goto err;
+	if ((neg = (v == '-'))) {
+		if (!CBS_skip(cbs, 1))
+			goto err;
+	}
+
+	/* Scan to find last hexadecimal digit. */
+	CBS_dup(cbs, &cbs_digits);
+	while (CBS_len(&cbs_digits) > 0) {
+		if (!CBS_get_u8(&cbs_digits, &v))
+			goto err;
+		if (!isxdigit(v))
+			break;
+		digits++;
+	}
+	if (digits > INT_MAX / 4)
+		goto err;
+
+	num = digits + neg;
+
+	if (bnp == NULL)
+		return num;
+
+	if ((bn = *bnp) == NULL)
+		bn = BN_new();
+	if (bn == NULL)
+		goto err;
+	if (!bn_expand(bn, digits * 4))
+		goto err;
+
+	if (!CBS_get_bytes(cbs, cbs, digits))
+		goto err;
+
+	b = BN_BITS2;
+	i = 0;
+	w = 0;
+
+	/* Work backwards from least significant digit. */
+	while (digits-- > 0) {
+		if (!CBS_get_last_u8(cbs, &v))
+			goto err;
+
+		if (v >= '0' && v <= '9')
+			v -= '0';
+		else if (v >= 'a' && v <= 'f')
+			v -= 'a' - 10;
+		else if (v >= 'A' && v <= 'F')
+			v -= 'A' - 10;
+		else
+			goto err;
+
+		w |= (BN_ULONG)v << (BN_BITS2 - b);
+		b -= 4;
+
+		if (b == 0 || digits == 0) {
+			b = BN_BITS2;
+			bn->d[i++] = w;
+			w = 0;
+		}
+	}
+
+	bn->top = i;
+	bn_correct_top(bn);
+
+	BN_set_negative(bn, neg);
+
+	*bnp = bn;
+
+	return num;
+
+ err:
+	if (bnp != NULL && *bnp == NULL)
+		BN_free(bn);
+
+	return 0;
 }
 
 int
-BN_hex2bn(BIGNUM **bn, const char *a)
+BN_hex2bn(BIGNUM **bnp, const char *s)
 {
-	BIGNUM *ret = NULL;
-	BN_ULONG l = 0;
-	int neg = 0, h, m, i,j, k, c;
-	int num;
+	size_t s_len;
+	CBS cbs;
 
-	if ((a == NULL) || (*a == '\0'))
-		return (0);
+	if (bnp != NULL && *bnp != NULL)
+		BN_zero(*bnp);
 
-	if (*a == '-') {
-		neg = 1;
-		a++;
-	}
+	if (s == NULL)
+		return 0;
+	if ((s_len = strlen(s)) == 0)
+		return 0;
 
-	for (i = 0; i <= (INT_MAX / 4) && isxdigit((unsigned char)a[i]); i++)
-		;
-	if (i > INT_MAX / 4)
-		return (0);
+	CBS_init(&cbs, s, s_len);
 
-	num = i + neg;
-	if (bn == NULL)
-		return (num);
-
-	/* a is the start of the hex digits, and it is 'i' long */
-	if (*bn == NULL) {
-		if ((ret = BN_new()) == NULL)
-			return (0);
-	} else {
-		ret = *bn;
-		BN_zero(ret);
-	}
-
-	/* i is the number of hex digits */
-	if (!bn_expand(ret, i * 4))
-		goto err;
-
-	j = i; /* least significant 'hex' */
-	m = 0;
-	h = 0;
-	while (j > 0) {
-		m = ((BN_BYTES * 2) <= j) ? (BN_BYTES * 2) : j;
-		l = 0;
-		for (;;) {
-			c = a[j - m];
-			if ((c >= '0') && (c <= '9'))
-				k = c - '0';
-			else if ((c >= 'a') && (c <= 'f'))
-				k = c - 'a' + 10;
-			else if ((c >= 'A') && (c <= 'F'))
-				k = c - 'A' + 10;
-			else
-				k = 0; /* paranoia */
-			l = (l << 4) | k;
-
-			if (--m <= 0) {
-				ret->d[h++] = l;
-				break;
-			}
-		}
-		j -= (BN_BYTES * 2);
-	}
-	ret->top = h;
-	bn_correct_top(ret);
-
-	BN_set_negative(ret, neg);
-
-	*bn = ret;
-	return (num);
-
-err:
-	if (*bn == NULL)
-		BN_free(ret);
-	return (0);
+	return bn_hex2bn_cbs(bnp, &cbs);
 }
 
 int

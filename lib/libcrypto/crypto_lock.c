@@ -1,4 +1,4 @@
-/* $OpenBSD: crypto_lock.c,v 1.2 2018/11/28 15:51:32 jsing Exp $ */
+/* $OpenBSD: crypto_lock.c,v 1.4 2023/05/19 00:54:27 deraadt Exp $ */
 /*
  * Copyright (c) 2018 Brent Cook <bcook@openbsd.org>
  *

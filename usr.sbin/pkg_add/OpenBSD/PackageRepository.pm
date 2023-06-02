@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: PackageRepository.pm,v 1.172 2022/05/08 13:21:04 espie Exp $
+# $OpenBSD: PackageRepository.pm,v 1.175 2023/05/27 10:02:38 espie Exp $
 #
 # Copyright (c) 2003-2010 Marc Espie <espie@openbsd.org>
 #
@@ -101,12 +101,12 @@ sub dont_cleanup
 {
 }
 
-sub ftp() { 'OpenBSD::PackageRepository::FTP' }
-sub http() { 'OpenBSD::PackageRepository::HTTP' }
-sub https() { 'OpenBSD::PackageRepository::HTTPS' }
-sub scp() { 'OpenBSD::PackageRepository::SCP' }
-sub file() { 'OpenBSD::PackageRepository::Local' }
-sub installed() { 'OpenBSD::PackageRepository::Installed' }
+sub ftp { 'OpenBSD::PackageRepository::FTP' }
+sub http { 'OpenBSD::PackageRepository::HTTP' }
+sub https { 'OpenBSD::PackageRepository::HTTPS' }
+sub scp { 'OpenBSD::PackageRepository::SCP' }
+sub file { 'OpenBSD::PackageRepository::Local' }
+sub installed { 'OpenBSD::PackageRepository::Installed' }
 
 sub parse
 {
@@ -272,10 +272,10 @@ sub find
 
 sub grabPlist
 {
-	my ($repository, $name, $code) = @_;
+	my ($repository, $name, @code) = @_;
 	my $self = $repository->new_location($name);
 
-	return $self->grabPlist($code);
+	return $self->grabPlist(@code);
 }
 
 sub parse_problems
@@ -1009,11 +1009,10 @@ sub setup_session
 
 	require OpenBSD::Temp;
 	$self->{count} = 0;
-	local ($>, $));
+	local $>;
 	my ($uid, $gid, $user) = $self->fetch_id;
 	if (defined $uid) {
 		$> = $uid;
-		$) = "$gid $gid";
 	}
 	my ($fh, undef) = OpenBSD::Temp::fh_file("session",
 		sub { unlink(shift); });

@@ -2,7 +2,7 @@
  * THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
  *
  * generated from:
- *	OpenBSD: pcidevs,v 1.2035 2023/05/04 05:38:17 kevlo Exp 
+ *	OpenBSD: pcidevs,v 1.2037 2023/05/22 13:23:56 denis Exp 
  */
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
 
@@ -762,6 +762,7 @@
 #define	PCI_PRODUCT_AMD_17_PCIE_3	0x1454		/* 17h PCIE */
 #define	PCI_PRODUCT_AMD_17_CCP_1	0x1456		/* 17h Crypto */
 #define	PCI_PRODUCT_AMD_17_HDA	0x1457		/* 17h HD Audio */
+#define	PCI_PRODUCT_AMD_EPYC_TENGB	0x1458		/* EPYC Embedded 3000 10GbE */
 #define	PCI_PRODUCT_AMD_17_XHCI_1	0x145c		/* 17h xHCI */
 #define	PCI_PRODUCT_AMD_17_XHCI_2	0x145f		/* 17h xHCI */
 #define	PCI_PRODUCT_AMD_17_DF_1	0x1460		/* 17h Data Fabric */
@@ -5897,16 +5898,15 @@
 #define	PCI_PRODUCT_INTEL_DG2_G11_3	0x5695		/* Graphics */
 #define	PCI_PRODUCT_INTEL_DG2_G12_1	0x5696		/* Graphics */
 #define	PCI_PRODUCT_INTEL_DG2_G12_2	0x5697		/* Graphics */
-#define	PCI_PRODUCT_INTEL_DG2_G11_4	0x5698		/* Graphics */
 #define	PCI_PRODUCT_INTEL_DG2_G10_4	0x56a0		/* Arc A770 */
 #define	PCI_PRODUCT_INTEL_DG2_G10_5	0x56a1		/* Arc A750 */
 #define	PCI_PRODUCT_INTEL_DG2_G10_6	0x56a2		/* Arc A580 */
 #define	PCI_PRODUCT_INTEL_DG2_G12_3	0x56a3		/* Graphics */
 #define	PCI_PRODUCT_INTEL_DG2_G12_4	0x56a4		/* Graphics */
-#define	PCI_PRODUCT_INTEL_DG2_G11_5	0x56a5		/* Arc A380 */
-#define	PCI_PRODUCT_INTEL_DG2_G11_6	0x56a6		/* Arc A310 */
-#define	PCI_PRODUCT_INTEL_DG2_G11_7	0x56b0		/* Arc Pro A30M */
-#define	PCI_PRODUCT_INTEL_DG2_G11_8	0x56b1		/* Arc Pro A40/A50 */
+#define	PCI_PRODUCT_INTEL_DG2_G11_4	0x56a5		/* Arc A380 */
+#define	PCI_PRODUCT_INTEL_DG2_G11_5	0x56a6		/* Arc A310 */
+#define	PCI_PRODUCT_INTEL_DG2_G11_6	0x56b0		/* Arc Pro A30M */
+#define	PCI_PRODUCT_INTEL_DG2_G11_7	0x56b1		/* Arc Pro A40/A50 */
 #define	PCI_PRODUCT_INTEL_DG2_G12_5	0x56b2		/* Graphics */
 #define	PCI_PRODUCT_INTEL_DG2_G12_6	0x56b3		/* Graphics */
 #define	PCI_PRODUCT_INTEL_ATS_M150	0x56c0		/* Flex 170 */

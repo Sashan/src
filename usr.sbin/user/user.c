@@ -1,4 +1,4 @@
-/* $OpenBSD: user.c,v 1.128 2019/10/17 21:54:29 millert Exp $ */
+/* $OpenBSD: user.c,v 1.131 2023/05/18 18:29:28 millert Exp $ */
 /* $NetBSD: user.c,v 1.69 2003/04/14 17:40:07 agc Exp $ */
 
 /*
@@ -31,6 +31,7 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 
 #include <ctype.h>
 #include <dirent.h>
@@ -42,7 +43,6 @@
 #include <login_cap.h>
 #include <paths.h>
 #include <pwd.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -101,6 +101,12 @@ enum {
 	F_SETSECGROUP	= 0x4000,
 	F_ACCTLOCK	= 0x8000,
 	F_ACCTUNLOCK	= 0x10000
+};
+
+/* flags for runas() */
+enum {
+	RUNAS_DUP_DEVNULL	= 0x01,
+	RUNAS_IGNORE_EXITVAL	= 0x02
 };
 
 #define CONFFILE		"/etc/usermgmt.conf"
@@ -171,7 +177,7 @@ enum {
 #define MKDIR		"/bin/mkdir"
 #define MV		"/bin/mv"
 #define NOLOGIN		"/sbin/nologin"
-#define PAX		"/bin/pax"
+#define CP		"/bin/cp"
 #define RM		"/bin/rm"
 
 #define UNSET_INACTIVE	"Null (unset)"
@@ -179,8 +185,6 @@ enum {
 
 static int adduser(char *, user_t *);
 static int append_group(char *, int, const char **);
-static int asystem(const char *, ...)
-	__attribute__((__format__(__printf__, 1, 2)));
 static int copydotfiles(char *, char *);
 static int creategid(char *, gid_t, const char *);
 static int getnextgid(uid_t *, uid_t, uid_t);
@@ -200,46 +204,93 @@ static size_t expand_len(const char *, const char *);
 static struct group *find_group_info(const char *);
 static struct passwd *find_user_info(const char *);
 static void checkeuid(void);
-static void memsave(char **, const char *, size_t);
+static void strsave(char **, const char *);
 static void read_defaults(user_t *);
 
 static int	verbose;
 
-/* if *cpp is non-null, free it, then assign `n' chars of `s' to it */
+/* free *cpp, then store a copy of `s' in it */
 static void
-memsave(char **cpp, const char *s, size_t n)
+strsave(char **cpp, const char *s)
 {
 	free(*cpp);
-	if ((*cpp = calloc (n + 1, sizeof(char))) == NULL)
+	if ((*cpp = strdup(s)) == NULL)
 		err(1, NULL);
-	memcpy(*cpp, s, n);
-	(*cpp)[n] = '\0';
 }
 
-/* a replacement for system(3) */
+/* run the given command with optional arguments as the specified uid */
 static int
-asystem(const char *fmt, ...)
+runas(const char *path, const char *const argv[], uid_t uid, int flags)
 {
-	va_list	vp;
-	char	buf[MaxCommandLen];
-	int	ret;
+	int argc, status, ret = 0;
+	char buf[MaxCommandLen];
+	pid_t child;
 
-	va_start(vp, fmt);
-	(void) vsnprintf(buf, sizeof(buf), fmt, vp);
-	va_end(vp);
-	if (verbose) {
+	strlcpy(buf, path, sizeof(buf));
+	for (argc = 1; argv[argc] != NULL; argc++) {
+		strlcat(buf, " ", sizeof(buf));
+		strlcat(buf, argv[argc], sizeof(buf));
+	}
+	if (verbose)
 		printf("Command: %s\n", buf);
+
+	child = fork();
+	switch (child) {
+	case -1:
+		err(EXIT_FAILURE, "fork");
+	case 0:
+		if (flags & RUNAS_DUP_DEVNULL) {
+			/* Redirect output to /dev/null if possible. */
+			int dev_null = open(_PATH_DEVNULL, O_RDWR);
+			if (dev_null != -1) {
+				dup2(dev_null, STDOUT_FILENO);
+				dup2(dev_null, STDERR_FILENO);
+				if (dev_null > STDERR_FILENO)
+					close(dev_null);
+			} else {
+				warn("%s", _PATH_DEVNULL);
+			}
+		}
+		if (uid != -1) {
+			if (setresuid(uid, uid, uid) == -1)
+				warn("setresuid(%u, %u, %u)", uid, uid, uid);
+		}
+		execv(path, (char **)argv);
+		warn("%s", buf);
+		_exit(EXIT_FAILURE);
+	default:
+		while (waitpid(child, &status, 0) == -1) {
+			if (errno != EINTR)
+				err(EXIT_FAILURE, "waitpid");
+		}
+		if (WIFSIGNALED(status)) {
+			ret = WTERMSIG(status);
+			warnx("[Warning] `%s' killed by signal %d", buf, ret);
+			ret |= 128;
+		} else {
+			if (!(flags & RUNAS_IGNORE_EXITVAL))
+				ret = WEXITSTATUS(status);
+			if (ret != 0) {
+				warnx("[Warning] `%s' failed with status %d",
+				    buf, ret);
+			}
+		}
+		return ret;
 	}
-	if ((ret = system(buf)) != 0) {
-		warnx("[Warning] can't system `%s'", buf);
-	}
-	return ret;
+}
+
+/* run the given command with optional arguments */
+static int
+run(const char *path, const char *const argv[])
+{
+	return runas(path, argv, -1, 0);
 }
 
 /* remove a users home directory, returning 1 for success (ie, no problems encountered) */
 static int
 removehomedir(const char *user, uid_t uid, const char *dir)
 {
+	const char *rm_argv[] = { "rm", "-rf", dir, NULL };
 	struct stat st;
 
 	/* userid not root? */
@@ -265,11 +316,9 @@ removehomedir(const char *user, uid_t uid, const char *dir)
 		return 0;
 	}
 
-	(void) seteuid(uid);
-	/* we add the "|| true" to keep asystem() quiet if there is a non-zero exit status. */
-	(void) asystem("%s -rf %s > /dev/null 2>&1 || true", RM, dir);
-	(void) seteuid(0);
-	if (rmdir(dir) == -1) {
+	/* run "rm -rf dir 2>&1/dev/null" as user, not root */
+	(void) runas(RM, rm_argv, uid, RUNAS_DUP_DEVNULL|RUNAS_IGNORE_EXITVAL);
+	if (rmdir(dir) == -1 && errno != ENOENT) {
 		warnx("Unable to remove all files in `%s'", dir);
 		return 0;
 	}
@@ -290,11 +339,12 @@ checkeuid(void)
 
 /* copy any dot files into the user's home directory */
 static int
-copydotfiles(char *skeldir, char *dir)
+copydotfiles(char *skeldir, char *dst)
 {
+	char		src[MaxFileNameLen];
 	struct dirent	*dp;
 	DIR		*dirp;
-	int		n;
+	int		len, n;
 
 	if (*skeldir == '\0')
 		return 0;
@@ -313,8 +363,16 @@ copydotfiles(char *skeldir, char *dir)
 	if (n == 0) {
 		warnx("No \"dot\" initialisation files found");
 	} else {
-		(void) asystem("cd %s && %s -rw -pe %s . %s",
-				skeldir, PAX, (verbose) ? "-v" : "", dir);
+		len = snprintf(src, sizeof(src), "%s/.", skeldir);
+		if (len < 0 || len >= sizeof(src)) {
+			warnx("skeleton directory `%s' too long", skeldir);
+			n = 0;
+		} else {
+			const char *cp_argv[] = { "cp", "-a", src, dst, NULL };
+			if (verbose)
+				cp_argv[1] = "-av";
+			run(CP, cp_argv);
+		}
 	}
 	return n;
 }
@@ -788,12 +846,12 @@ read_defaults(user_t *up)
 	unsigned char	*cp;
 	unsigned char	*s;
 
-	memsave(&up->u_primgrp, DEF_GROUP, strlen(DEF_GROUP));
-	memsave(&up->u_basedir, DEF_BASEDIR, strlen(DEF_BASEDIR));
-	memsave(&up->u_skeldir, DEF_SKELDIR, strlen(DEF_SKELDIR));
-	memsave(&up->u_shell, DEF_SHELL, strlen(DEF_SHELL));
-	memsave(&up->u_comment, DEF_COMMENT, strlen(DEF_COMMENT));
-	memsave(&up->u_class, DEF_CLASS, strlen(DEF_CLASS));
+	strsave(&up->u_primgrp, DEF_GROUP);
+	strsave(&up->u_basedir, DEF_BASEDIR);
+	strsave(&up->u_skeldir, DEF_SKELDIR);
+	strsave(&up->u_shell, DEF_SHELL);
+	strsave(&up->u_comment, DEF_COMMENT);
+	strsave(&up->u_class, DEF_CLASS);
 	up->u_rsize = 16;
 	up->u_defrc = 0;
 	if ((up->u_rv = calloc(up->u_rsize, sizeof(range_t))) == NULL)
@@ -811,27 +869,27 @@ read_defaults(user_t *up)
 			if (strncmp(s, "group", 5) == 0) {
 				for (cp = s + 5 ; isspace((unsigned char)*cp); cp++) {
 				}
-				memsave(&up->u_primgrp, cp, strlen(cp));
+				strsave(&up->u_primgrp, cp);
 			} else if (strncmp(s, "base_dir", 8) == 0) {
 				for (cp = s + 8 ; isspace((unsigned char)*cp); cp++) {
 				}
-				memsave(&up->u_basedir, cp, strlen(cp));
+				strsave(&up->u_basedir, cp);
 			} else if (strncmp(s, "skel_dir", 8) == 0) {
 				for (cp = s + 8 ; isspace((unsigned char)*cp); cp++) {
 				}
-				memsave(&up->u_skeldir, cp, strlen(cp));
+				strsave(&up->u_skeldir, cp);
 			} else if (strncmp(s, "shell", 5) == 0) {
 				for (cp = s + 5 ; isspace((unsigned char)*cp); cp++) {
 				}
-				memsave(&up->u_shell, cp, strlen(cp));
+				strsave(&up->u_shell, cp);
 			} else if (strncmp(s, "password", 8) == 0) {
 				for (cp = s + 8 ; isspace((unsigned char)*cp); cp++) {
 				}
-				memsave(&up->u_password, cp, strlen(cp));
+				strsave(&up->u_password, cp);
 			} else if (strncmp(s, "class", 5) == 0) {
 				for (cp = s + 5 ; isspace((unsigned char)*cp); cp++) {
 				}
-				memsave(&up->u_class, cp, strlen(cp));
+				strsave(&up->u_class, cp);
 			} else if (strncmp(s, "inactive", 8) == 0) {
 				for (cp = s + 8 ; isspace((unsigned char)*cp); cp++) {
 				}
@@ -839,7 +897,7 @@ read_defaults(user_t *up)
 					free(up->u_inactive);
 					up->u_inactive = NULL;
 				} else {
-					memsave(&up->u_inactive, cp, strlen(cp));
+					strsave(&up->u_inactive, cp);
 				}
 			} else if (strncmp(s, "range", 5) == 0) {
 				for (cp = s + 5 ; isspace((unsigned char)*cp); cp++) {
@@ -858,7 +916,7 @@ read_defaults(user_t *up)
 					free(up->u_expire);
 					up->u_expire = NULL;
 				} else {
-					memsave(&up->u_expire, cp, strlen(cp));
+					strsave(&up->u_expire, cp);
 				}
 			}
 			free(s);
@@ -1205,7 +1263,15 @@ adduser(char *login_name, user_t *up)
 			errx(EXIT_FAILURE, "home directory `%s' already exists",
 			    home);
 		} else {
-			if (asystem("%s -p %s", MKDIR, home) != 0) {
+			char idstr[64];
+			const char *mkdir_argv[] =
+			    { "mkdir", "-p", home, NULL };
+			const char *chown_argv[] =
+			    { "chown", "-RP", idstr, home, NULL };
+			const char *chmod_argv[] =
+			    { "chmod", "-R", "u+w", home, NULL };
+
+			if (run(MKDIR, mkdir_argv) != 0) {
 				int saved_errno = errno;
 				close(ptmpfd);
 				pw_abort();
@@ -1213,9 +1279,10 @@ adduser(char *login_name, user_t *up)
 				    "can't mkdir `%s'", home);
 			}
 			(void) copydotfiles(up->u_skeldir, home);
-			(void) asystem("%s -R -P %u:%u %s", CHOWN, up->u_uid,
-			    gid, home);
-			(void) asystem("%s -R u+w %s", CHMOD, home);
+			(void) snprintf(idstr, sizeof(idstr), "%u:%u",
+			    up->u_uid, gid);
+			(void) run(CHOWN, chown_argv);
+			(void) run(CHMOD, chmod_argv);
 		}
 	}
 	if (strcmp(up->u_primgrp, "=uid") == 0 && !group_exists(login_name) &&
@@ -1411,8 +1478,7 @@ moduser(char *login_name, char *newlogin, user_t *up)
 		if ((*pwp->pw_passwd != '\0') &&
 		    (up->u_flags & F_PASSWORD) == 0) {
 			up->u_flags |= F_PASSWORD;
-			memsave(&up->u_password, pwp->pw_passwd,
-			    strlen(pwp->pw_passwd));
+			strsave(&up->u_password, pwp->pw_passwd);
 			explicit_bzero(pwp->pw_passwd, strlen(pwp->pw_passwd));
 		}
 	}
@@ -1660,8 +1726,9 @@ moduser(char *login_name, char *newlogin, user_t *up)
 		}
 	}
 	if (up != NULL) {
+		const char *mv_argv[] = { "mv", homedir, pwp->pw_dir, NULL };
 		if ((up->u_flags & F_MKDIR) &&
-		    asystem("%s %s %s", MV, homedir, pwp->pw_dir) != 0) {
+		    run(MV, mv_argv) != 0) {
 			int saved_errno = errno;
 			close(ptmpfd);
 			pw_abort();
@@ -1807,34 +1874,34 @@ useradd(int argc, char **argv)
 			break;
 		case 'b':
 			defaultfield = 1;
-			memsave(&u.u_basedir, optarg, strlen(optarg));
+			strsave(&u.u_basedir, optarg);
 			break;
 		case 'c':
-			memsave(&u.u_comment, optarg, strlen(optarg));
+			strsave(&u.u_comment, optarg);
 			break;
 		case 'd':
-			memsave(&u.u_home, optarg, strlen(optarg));
+			strsave(&u.u_home, optarg);
 			u.u_flags |= F_HOMEDIR;
 			break;
 		case 'e':
 			defaultfield = 1;
-			memsave(&u.u_expire, optarg, strlen(optarg));
+			strsave(&u.u_expire, optarg);
 			break;
 		case 'f':
 			defaultfield = 1;
-			memsave(&u.u_inactive, optarg, strlen(optarg));
+			strsave(&u.u_inactive, optarg);
 			break;
 		case 'g':
 			defaultfield = 1;
-			memsave(&u.u_primgrp, optarg, strlen(optarg));
+			strsave(&u.u_primgrp, optarg);
 			break;
 		case 'k':
 			defaultfield = 1;
-			memsave(&u.u_skeldir, optarg, strlen(optarg));
+			strsave(&u.u_skeldir, optarg);
 			break;
 		case 'L':
 			defaultfield = 1;
-			memsave(&u.u_class, optarg, strlen(optarg));
+			strsave(&u.u_class, optarg);
 			break;
 		case 'm':
 			u.u_flags |= F_MKDIR;
@@ -1843,7 +1910,7 @@ useradd(int argc, char **argv)
 			u.u_flags |= F_DUPUID;
 			break;
 		case 'p':
-			memsave(&u.u_password, optarg, strlen(optarg));
+			strsave(&u.u_password, optarg);
 			explicit_bzero(optarg, strlen(optarg));
 			break;
 		case 'r':
@@ -1853,7 +1920,7 @@ useradd(int argc, char **argv)
 			break;
 		case 's':
 			defaultfield = 1;
-			memsave(&u.u_shell, optarg, strlen(optarg));
+			strsave(&u.u_shell, optarg);
 			break;
 		case 'u':
 			u.u_uid = strtonum(optarg, -1, UID_MAX, &errstr);
@@ -1947,23 +2014,23 @@ usermod(int argc, char **argv)
 			u.u_flags |= F_ACCTLOCK;
 			break;
 		case 'c':
-			memsave(&u.u_comment, optarg, strlen(optarg));
+			strsave(&u.u_comment, optarg);
 			u.u_flags |= F_COMMENT;
 			break;
 		case 'd':
-			memsave(&u.u_home, optarg, strlen(optarg));
+			strsave(&u.u_home, optarg);
 			u.u_flags |= F_HOMEDIR;
 			break;
 		case 'e':
-			memsave(&u.u_expire, optarg, strlen(optarg));
+			strsave(&u.u_expire, optarg);
 			u.u_flags |= F_EXPIRE;
 			break;
 		case 'f':
-			memsave(&u.u_inactive, optarg, strlen(optarg));
+			strsave(&u.u_inactive, optarg);
 			u.u_flags |= F_INACTIVE;
 			break;
 		case 'g':
-			memsave(&u.u_primgrp, optarg, strlen(optarg));
+			strsave(&u.u_primgrp, optarg);
 			u.u_flags |= F_GROUP;
 			break;
 		case 'l':
@@ -1975,7 +2042,7 @@ usermod(int argc, char **argv)
 			u.u_flags |= F_USERNAME;
 			break;
 		case 'L':
-			memsave(&u.u_class, optarg, strlen(optarg));
+			strsave(&u.u_class, optarg);
 			u.u_flags |= F_CLASS;
 			break;
 		case 'm':
@@ -1985,12 +2052,12 @@ usermod(int argc, char **argv)
 			u.u_flags |= F_DUPUID;
 			break;
 		case 'p':
-			memsave(&u.u_password, optarg, strlen(optarg));
+			strsave(&u.u_password, optarg);
 			explicit_bzero(optarg, strlen(optarg));
 			u.u_flags |= F_PASSWORD;
 			break;
 		case 's':
-			memsave(&u.u_shell, optarg, strlen(optarg));
+			strsave(&u.u_shell, optarg);
 			u.u_flags |= F_SHELL;
 			break;
 		case 'u':
@@ -2091,8 +2158,8 @@ userdel(int argc, char **argv)
 		(void)removehomedir(pwp->pw_name, pwp->pw_uid, pwp->pw_dir);
 	if (u.u_preserve) {
 		u.u_flags |= F_SHELL;
-		memsave(&u.u_shell, NOLOGIN, strlen(NOLOGIN));
-		memsave(&u.u_password, "*", strlen("*"));
+		strsave(&u.u_shell, NOLOGIN);
+		strsave(&u.u_password, "*");
 		u.u_flags |= F_PASSWORD;
 		openlog("userdel", LOG_PID, LOG_USER);
 		return moduser(*argv, *argv, &u) ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -2225,7 +2292,7 @@ groupmod(int argc, char **argv)
 			dupgid = 1;
 			break;
 		case 'n':
-			memsave(&newname, optarg, strlen(optarg));
+			strsave(&newname, optarg);
 			break;
 		case 'v':
 			verbose = 1;

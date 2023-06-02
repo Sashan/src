@@ -1,5 +1,5 @@
 # ex:ts=8 sw=4:
-# $OpenBSD: State.pm,v 1.71 2022/02/12 09:46:19 espie Exp $
+# $OpenBSD: State.pm,v 1.73 2023/05/21 16:07:35 espie Exp $
 #
 # Copyright (c) 2007-2014 Marc Espie <espie@openbsd.org>
 #
@@ -164,6 +164,13 @@ OpenBSD::Auto::cache(installpath,
 		}
 	});
 
+OpenBSD::Auto::cache(shlibs,
+	sub {
+		my $self = shift;
+		require OpenBSD::SharedLibs;
+		return $self->{shlibs} //= OpenBSD::SharedLibs->new($self);
+	});
+
 sub usage_is
 {
 	my ($self, @usage) = @_;
@@ -242,7 +249,7 @@ sub handle_options
 		push(@EXPORT, "\$opt_$k");
 	}
 	local $Exporter::ExportLevel = $state->{export_level};
-	import OpenBSD::State;
+	OpenBSD::State->import;
 }
 
 sub defines

@@ -1,4 +1,4 @@
-/*	$OpenBSD: repo.c,v 1.44 2023/04/26 16:32:41 claudio Exp $ */
+/*	$OpenBSD: repo.c,v 1.47 2023/05/30 16:02:28 job Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -119,6 +119,7 @@ static void		 remove_contents(char *);
 struct filepath {
 	RB_ENTRY(filepath)	entry;
 	char			*file;
+	time_t			 mtime;
 };
 
 static inline int
@@ -133,12 +134,13 @@ RB_PROTOTYPE(filepath_tree, filepath, entry, filepathcmp);
  * Functions to lookup which files have been accessed during computation.
  */
 int
-filepath_add(struct filepath_tree *tree, char *file)
+filepath_add(struct filepath_tree *tree, char *file, time_t mtime)
 {
 	struct filepath *fp;
 
 	if ((fp = malloc(sizeof(*fp))) == NULL)
 		err(1, NULL);
+	fp->mtime = mtime;
 	if ((fp->file = strdup(file)) == NULL)
 		err(1, NULL);
 
@@ -806,6 +808,7 @@ rrdp_handle_file(unsigned int id, enum publish_type pt, char *uri,
 	ssize_t s;
 	char *fn = NULL;
 	int fd = -1, try = 0;
+	int flags;
 
 	rr = rrdp_find(id);
 	if (rr == NULL)
@@ -837,7 +840,7 @@ rrdp_handle_file(unsigned int id, enum publish_type pt, char *uri,
 
 	/* write new content or mark uri as deleted. */
 	if (pt == PUB_DEL) {
-		filepath_add(&rr->deleted, uri);
+		filepath_add(&rr->deleted, uri, 0);
 	} else {
 		fp = filepath_find(&rr->deleted, uri);
 		if (fp != NULL)
@@ -850,8 +853,17 @@ rrdp_handle_file(unsigned int id, enum publish_type pt, char *uri,
 		if (repo_mkpath(AT_FDCWD, fn) == -1)
 			goto fail;
 
-		fd = open(fn, O_WRONLY|O_CREAT|O_TRUNC, 0644);
+		flags = O_WRONLY|O_CREAT|O_TRUNC;
+		if (pt == PUB_ADD)
+			flags |= O_EXCL;
+		fd = open(fn, flags, 0644);
 		if (fd == -1) {
+			if (errno == EEXIST) {
+				warnx("%s: duplicate publish element for %s",
+				    rr->notifyuri, fn);
+				free(fn);
+				return 0;
+			}
 			warn("open %s", fn);
 			goto fail;
 		}
@@ -1526,6 +1538,28 @@ repo_move_valid(struct filepath_tree *tree)
 			base = strchr(fp->file + rrdpsz, '/');
 			assert(base != NULL);
 			fn = base + 1;
+
+			/*
+			 * Adjust file last modification time in order to
+			 * minimize RSYNC synchronization load after transport
+			 * failover.
+			 * While serializing RRDP datastructures to disk, set
+			 * the last modified timestamp to the CMS signing-time,
+			 * the X.509 notBefore, or CRL lastUpdate timestamp.
+			 */
+			if (fp->mtime != 0) {
+				int ret;
+				struct timespec ts[2];
+
+				ts[0].tv_nsec = UTIME_OMIT;
+				ts[1].tv_sec = fp->mtime;
+				ts[1].tv_nsec = 0;
+				ret = utimensat(AT_FDCWD, fp->file, ts, 0);
+				if (ret == -1) {
+					warn("utimensat %s", fp->file);
+					continue;
+				}
+			}
 		}
 
 		if (repo_mkpath(AT_FDCWD, fn) == -1)
@@ -1630,7 +1664,7 @@ repo_cleanup_entry(FTSENT *e, struct filepath_tree *tree, int cachefd)
 			} else if (fts_state.type == RSYNC_DIR) {
 				/* no need to keep rsync files */
 				if (verbose > 1)
-					logx("superfluous %s", path);
+					logx("deleted superfluous %s", path);
 				if (fts_state.rp != NULL)
 					fts_state.rp->repostats.del_extra_files++;
 				else 
@@ -1649,27 +1683,31 @@ repo_cleanup_entry(FTSENT *e, struct filepath_tree *tree, int cachefd)
 		if (e->fts_level == FTS_ROOTLEVEL)
 			fts_state.type = BASE_DIR;
 		if (e->fts_level == 1) {
+			/* rpki.example.org or .rrdp / .rsync */
 			if (strcmp(".rsync", e->fts_name) == 0) {
 				fts_state.type = RSYNC_DIR;
 				fts_state.rp = NULL;
 			} else if (strcmp(".rrdp", e->fts_name) == 0) {
 				fts_state.type = RRDP_DIR;
 				fts_state.rp = NULL;
-			} else {
-				fts_state.type = BASE_DIR;
-				fts_state.rp = repo_bypath(path);
 			}
 		}
 		if (e->fts_level == 2) {
-			if (fts_state.type == RSYNC_DIR)
+			/* rpki.example.org/repository or .rrdp/hashdir */
+			if (fts_state.type == BASE_DIR)
 				fts_state.rp = repo_bypath(path);
 			/*
 			 * special handling for rrdp directories,
 			 * clear them if they are not used anymore but
 			 * only if rrdp is active.
+			 * Look them up just using the hash.
 			 */
 			if (fts_state.type == RRDP_DIR)
 				fts_state.rp = repo_rrdp_bypath(path);
+		}
+		if (e->fts_level == 3 && fts_state.type == RSYNC_DIR) {
+			/* .rsync/rpki.example.org/repository */
+			fts_state.rp = repo_bypath(path + strlen(".rsync/"));
 		}
 		break;
 	case FTS_DP:

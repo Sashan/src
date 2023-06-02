@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sysexits.h>
+#include <time.h>
 #include <unistd.h>
 
 #define	MAILADDR_ESCAPE		"!#$%&'*/?^`{|}~"
@@ -170,7 +171,7 @@ maildir_engine(const char *dirname, int junk)
 		(void)strlcpy(hostname, "localhost", sizeof hostname);
 
 	(void)snprintf(filename, sizeof filename, "%lld.%08x.%s",
-	    (long long int) time(NULL),
+	    (long long)time(NULL),
 	    arc4random(),
 	    hostname);
 

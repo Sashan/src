@@ -1,6 +1,6 @@
 #! /usr/bin/perl
 # ex:ts=8 sw=4:
-# $OpenBSD: PkgCreate.pm,v 1.185 2023/01/25 13:25:07 espie Exp $
+# $OpenBSD: PkgCreate.pm,v 1.190 2023/05/23 10:02:46 espie Exp $
 #
 # Copyright (c) 2003-2014 Marc Espie <espie@openbsd.org>
 #
@@ -21,7 +21,6 @@ use warnings;
 
 use OpenBSD::AddCreateDelete;
 use OpenBSD::Dependencies::SolverBase;
-use OpenBSD::SharedLibs;
 use OpenBSD::Signer;
 
 package OpenBSD::PkgCreate::State;
@@ -250,7 +249,7 @@ sub register_forbidden
 	}
 }
 
-sub is_forbidden() { 0 }
+sub is_forbidden { 0 }
 sub resolve_link
 {
 	my ($filename, $base, $level) = @_;
@@ -434,7 +433,7 @@ sub set_destdir
 {
 	my ($self, $state) = @_;
 	if ($self->name =~ m/^\//) {
-		$state->{archive}->destdir($state->{base});
+		$state->{archive}->set_destdir($state->{base});
 	} else {
 		$self->SUPER::set_destdir($state);
 	}
@@ -507,7 +506,7 @@ sub prepare_for_archival
 	return $o;
 }
 
-sub forbidden() { 1 }
+sub forbidden { 1 }
 
 sub register_for_archival
 {
@@ -585,7 +584,7 @@ sub set_destdir
 {
 	my ($self, $state) = @_;
 
-	$state->{archive}->destdir($state->{base}."/".$self->cwd);
+	$state->{archive}->set_destdir($state->{base}."/".$self->cwd);
 }
 
 sub archive
@@ -842,31 +841,31 @@ sub check_version
 }
 
 package OpenBSD::PackingElement::DigitalSignature;
-sub is_forbidden() { 1 }
+sub is_forbidden { 1 }
 
 package OpenBSD::PackingElement::Signer;
-sub is_forbidden() { 1 }
+sub is_forbidden { 1 }
 
 package OpenBSD::PackingElement::ExtraInfo;
-sub is_forbidden() { 1 }
+sub is_forbidden { 1 }
 
 package OpenBSD::PackingElement::ManualInstallation;
-sub is_forbidden() { 1 }
+sub is_forbidden { 1 }
 
 package OpenBSD::PackingElement::Firmware;
-sub is_forbidden() { 1 }
+sub is_forbidden { 1 }
 
 package OpenBSD::PackingElement::Url;
-sub is_forbidden() { 1 }
+sub is_forbidden { 1 }
 
 package OpenBSD::PackingElement::Arch;
-sub is_forbidden() { 1 }
+sub is_forbidden { 1 }
 
 package OpenBSD::PackingElement::LocalBase;
-sub is_forbidden() { 1 }
+sub is_forbidden { 1 }
 
 package OpenBSD::PackingElement::Version;
-sub is_forbidden() { 1 }
+sub is_forbidden { 1 }
 
 # put together file and filename, in order to handle fragments simply
 package MyFile;
@@ -964,8 +963,7 @@ sub solve_wantlibs
 		    $solver->{to_register}{$h}, $state,
 		    $lib->spec);
 		$okay = 0;
-		OpenBSD::SharedLibs::report_problem($state,
-		    $lib->spec) if $final;
+		$state->shlibs->report_problem($lib->spec) if $final;
 	}
 	if (!$okay && $final) {
 		$solver->dump($state);
@@ -1104,7 +1102,7 @@ sub really_solve_from_ports
 			$self->to_cache($plist, $diskcache);
 		}
 	}
-	OpenBSD::SharedLibs::add_libs_from_plist($plist, $state);
+	$state->shlibs->add_libs_from_plist($plist);
 	$self->{tag_finder}->find_in_plist($plist, $dep->{pkgpath});
 	$self->add_dep($plist);
 	return $plist->pkgname;
@@ -1532,7 +1530,7 @@ sub create_package
 	local $SIG{'TERM'} = $h;
 	$state->{archive} = $state->create_archive($wname, $plist->infodir);
 	$state->set_status("archiving");
-	my $p = $state->progress->new_sizer($plist, $state);
+	my $p = $state->progress->new_sizer($plist);
 	for my $e (@$ordered) {
 		$e->create_package($state);
 		$p->advance($e);
@@ -1824,9 +1822,6 @@ sub run_command
 sub parse_and_run
 {
 	my ($self, $cmd) = @_;
-
-	my $sign_only = 0;
-	my $rc = 0;
 
 	my $state = OpenBSD::PkgCreate::State->new($cmd);
 	$state->handle_options;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip6_output.c,v 1.272 2022/11/12 02:50:59 kn Exp $	*/
+/*	$OpenBSD: ip6_output.c,v 1.277 2023/05/22 16:08:34 bluhm Exp $	*/
 /*	$KAME: ip6_output.c,v 1.172 2001/03/25 09:55:56 itojun Exp $	*/
 
 /*
@@ -165,7 +165,7 @@ ip6_output(struct mbuf *m, struct ip6_pktopts *opt, struct route_in6 *ro,
 {
 	struct ip6_hdr *ip6;
 	struct ifnet *ifp = NULL;
-	struct mbuf_list fml;
+	struct mbuf_list ml;
 	int hlen, tlen;
 	struct route_in6 ip6route;
 	struct rtentry *rt = NULL;
@@ -664,8 +664,6 @@ reroute:
 			ip6->ip6_dst.s6_addr16[1] = dst_scope;
 	}
 
-	in6_proto_cksum_out(m, ifp);
-
 	/*
 	 * Send the packet to the outgoing interface.
 	 * If necessary, do IPv6 fragmentation before sending.
@@ -688,7 +686,9 @@ reroute:
 		dontfrag = 1;
 	else
 		dontfrag = 0;
-	if (dontfrag && tlen > ifp->if_mtu) {	/* case 2-b */
+	if (dontfrag &&					/* case 2-b */
+	    (ISSET(m->m_pkthdr.csum_flags, M_TCP_TSO) ?
+	    m->m_pkthdr.csum_flags : tlen) > ifp->if_mtu) {
 #ifdef IPSEC
 		if (ip_mtudisc)
 			ipsec_adjust_mtu(m, mtu);
@@ -700,10 +700,16 @@ reroute:
 	/*
 	 * transmit packet without fragmentation
 	 */
-	if (dontfrag || (tlen <= mtu)) {	/* case 1-a and 2-a */
+	if (dontfrag || tlen <= mtu) {			/* case 1-a and 2-a */
+		in6_proto_cksum_out(m, ifp);
 		error = ifp->if_output(ifp, m, sin6tosa(dst), ro->ro_rt);
 		goto done;
 	}
+
+	error = tcp_if_output_tso(ifp, &m, sin6tosa(dst), ro->ro_rt,
+	    IFCAP_TSOv6, mtu);
+	if (error || m == NULL)
+		goto done;
 
 	/*
 	 * try to fragment the packet.  case 1-b
@@ -751,19 +757,10 @@ reroute:
 		ip6->ip6_nxt = IPPROTO_FRAGMENT;
 	}
 
-	error = ip6_fragment(m, &fml, hlen, nextproto, mtu);
-	if (error)
+	if ((error = ip6_fragment(m, &ml, hlen, nextproto, mtu)) ||
+	    (error = if_output_ml(ifp, &ml, sin6tosa(dst), ro->ro_rt)))
 		goto done;
-
-	while ((m = ml_dequeue(&fml)) != NULL) {
-		error = ifp->if_output(ifp, m, sin6tosa(dst), ro->ro_rt);
-		if (error)
-			break;
-	}
-	if (error)
-		ml_purge(&fml);
-	else
-		ip6stat_inc(ip6s_fragmented);
+	ip6stat_inc(ip6s_fragmented);
 
 done:
 	if (ro == &ip6route && ro->ro_rt) {
@@ -789,16 +786,15 @@ bad:
 }
 
 int
-ip6_fragment(struct mbuf *m0, struct mbuf_list *fml, int hlen,
-    u_char nextproto, u_long mtu)
+ip6_fragment(struct mbuf *m0, struct mbuf_list *ml, int hlen, u_char nextproto,
+    u_long mtu)
 {
-	struct mbuf *m;
 	struct ip6_hdr *ip6;
 	u_int32_t id;
 	int tlen, len, off;
 	int error;
 
-	ml_init(fml);
+	ml_init(ml);
 
 	ip6 = mtod(m0, struct ip6_hdr *);
 	tlen = m0->m_pkthdr.len;
@@ -810,10 +806,11 @@ ip6_fragment(struct mbuf *m0, struct mbuf_list *fml, int hlen,
 	id = htonl(ip6_randomid());
 
 	/*
-	 * Loop through length of segment,
+	 * Loop through length of payload,
 	 * make new header and copy data of each part and link onto chain.
 	 */
 	for (off = hlen; off < tlen; off += len) {
+		struct mbuf *m;
 		struct mbuf *mlast;
 		struct ip6_hdr *mhip6;
 		struct ip6_frag *ip6f;
@@ -823,8 +820,7 @@ ip6_fragment(struct mbuf *m0, struct mbuf_list *fml, int hlen,
 			error = ENOBUFS;
 			goto bad;
 		}
-		ml_enqueue(fml, m);
-
+		ml_enqueue(ml, m);
 		if ((error = m_dup_pkthdr(m, m0, M_DONTWAIT)) != 0)
 			goto bad;
 		m->m_data += max_linkhdr;
@@ -856,13 +852,13 @@ ip6_fragment(struct mbuf *m0, struct mbuf_list *fml, int hlen,
 		ip6f->ip6f_nxt = nextproto;
 	}
 
-	ip6stat_add(ip6s_ofragments, ml_len(fml));
+	ip6stat_add(ip6s_ofragments, ml_len(ml));
 	m_freem(m0);
 	return (0);
 
 bad:
 	ip6stat_inc(ip6s_odropped);
-	ml_purge(fml);
+	ml_purge(ml);
 	m_freem(m0);
 	return (error);
 }
@@ -2714,8 +2710,14 @@ in6_proto_cksum_out(struct mbuf *m, struct ifnet *ifp)
 		u_int16_t csum;
 
 		offset = ip6_lasthdr(m, 0, IPPROTO_IPV6, &nxt);
-		csum = in6_cksum_phdr(&ip6->ip6_src, &ip6->ip6_dst,
-		    htonl(m->m_pkthdr.len - offset), htonl(nxt));
+		if (ISSET(m->m_pkthdr.csum_flags, M_TCP_TSO) &&
+		    in_ifcap_cksum(m, ifp, IFCAP_TSOv6)) {
+			csum = in6_cksum_phdr(&ip6->ip6_src, &ip6->ip6_dst,
+			    htonl(0), htonl(nxt));
+		} else {
+			csum = in6_cksum_phdr(&ip6->ip6_src, &ip6->ip6_dst,
+			    htonl(m->m_pkthdr.len - offset), htonl(nxt));
+		}
 		if (nxt == IPPROTO_TCP)
 			offset += offsetof(struct tcphdr, th_sum);
 		else if (nxt == IPPROTO_UDP)
@@ -2840,12 +2842,12 @@ int
 ip6_output_ipsec_send(struct tdb *tdb, struct mbuf *m, struct route_in6 *ro,
     int tunalready, int fwd)
 {
-#if NPF > 0
-	struct ifnet *encif;
-#endif
+	struct mbuf_list ml;
+	struct ifnet *encif = NULL;
 	struct ip6_hdr *ip6;
 	struct in6_addr dst;
-	int error, ifidx, rtableid;
+	u_int len;
+	int error, ifidx, rtableid, tso = 0;
 
 #if NPF > 0
 	/*
@@ -2865,17 +2867,23 @@ ip6_output_ipsec_send(struct tdb *tdb, struct mbuf *m, struct route_in6 *ro,
 	 * Until now the change was not reconsidered.
 	 * What's the behaviour?
 	 */
-	in6_proto_cksum_out(m, encif);
 #endif
 
-	/* Check if we are allowed to fragment */
+	/* Check if we can chop the TCP packet */
 	ip6 = mtod(m, struct ip6_hdr *);
+	if (ISSET(m->m_pkthdr.csum_flags, M_TCP_TSO) &&
+	    m->m_pkthdr.ph_mss <= tdb->tdb_mtu) {
+		tso = 1;
+		len = m->m_pkthdr.ph_mss;
+	} else
+		len = sizeof(struct ip6_hdr) + ntohs(ip6->ip6_plen);
+
+	/* Check if we are allowed to fragment */
 	dst = ip6->ip6_dst;
 	ifidx = m->m_pkthdr.ph_ifidx;
 	rtableid = m->m_pkthdr.ph_rtableid;
 	if (ip_mtudisc && tdb->tdb_mtu &&
-	    sizeof(struct ip6_hdr) + ntohs(ip6->ip6_plen) > tdb->tdb_mtu &&
-	    tdb->tdb_mtutimeout > gettime()) {
+	    len > tdb->tdb_mtu && tdb->tdb_mtutimeout > gettime()) {
 		int transportmode;
 
 		transportmode = (tdb->tdb_dst.sa.sa_family == AF_INET6) &&
@@ -2902,14 +2910,33 @@ ip6_output_ipsec_send(struct tdb *tdb, struct mbuf *m, struct route_in6 *ro,
 	 */
 	m->m_flags &= ~(M_BCAST | M_MCAST);
 
-	/* Callee frees mbuf */
+	if (tso) {
+		error = tcp_chopper(m, &ml, encif, len);
+		if (error)
+			goto done;
+	} else {
+		CLR(m->m_pkthdr.csum_flags, M_TCP_TSO);
+		in6_proto_cksum_out(m, encif);
+		ml_init(&ml);
+		ml_enqueue(&ml, m);
+	}
+
 	KERNEL_LOCK();
-	error = ipsp_process_packet(m, tdb, AF_INET6, tunalready);
+	while ((m = ml_dequeue(&ml)) != NULL) {
+		/* Callee frees mbuf */
+		error = ipsp_process_packet(m, tdb, AF_INET6, tunalready);
+		if (error)
+			break;
+	}
 	KERNEL_UNLOCK();
+ done:
 	if (error) {
+		ml_purge(&ml);
 		ipsecstat_inc(ipsec_odrops);
 		tdbstat_inc(tdb, tdb_odrops);
 	}
+	if (!error && tso)
+		tcpstat_inc(tcps_outswtso);
 	if (ip_mtudisc && error == EMSGSIZE)
 		ip6_output_ipsec_pmtu_update(tdb, ro, &dst, ifidx, rtableid, 0);
 	return error;

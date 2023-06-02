@@ -1,4 +1,4 @@
-/*	$OpenBSD: stat.h,v 1.2 2015/09/14 10:11:54 guenther Exp $	*/
+/*	$OpenBSD: stat.h,v 1.3 2023/05/18 16:11:09 guenther Exp $	*/
 /*
  * Copyright (c) 2015 Philip Guenther <guenther@openbsd.org>
  *
@@ -21,6 +21,7 @@
 #include_next <sys/stat.h>
 
 PROTO_NORMAL(chflags);
+PROTO_NORMAL(chflagsat);
 PROTO_NORMAL(chmod);
 PROTO_NORMAL(fchflags);
 PROTO_NORMAL(fchmod);

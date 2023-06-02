@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfvar_priv.h,v 1.31 2023/04/28 14:08:38 sashan Exp $	*/
+/*	$OpenBSD: pfvar_priv.h,v 1.33 2023/05/10 22:42:51 sashan Exp $	*/
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -137,7 +137,6 @@ RBT_PROTOTYPE(pf_state_tree_id, pf_state, entry_id, pf_state_compare_id);
 extern struct pf_state_tree_id tree_id;
 
 /*
- *
  * states are linked into a global list to support the following
  * functionality:
  *
@@ -150,7 +149,7 @@ extern struct pf_state_tree_id tree_id;
  * been successfully added to the various trees that make up the state
  * table. states are only removed from the pf_state_list by the garbage
  * collection process.
-
+ *
  * the pf_state_list head and tail pointers (ie, the pfs_list TAILQ_HEAD
  * structure) and the pointers between the entries on the pf_state_list
  * are locked separately. at a high level, this allows for insertion
@@ -453,6 +452,9 @@ void			 pf_state_peer_hton(const struct pf_state_peer *,
 			    struct pfsync_state_peer *);
 void			 pf_state_peer_ntoh(const struct pfsync_state_peer *,
 			    struct pf_state_peer *);
+u_int16_t		pf_pkt_hash(sa_family_t, uint8_t,
+			    const struct pf_addr *, const struct pf_addr *,
+			    uint16_t, uint16_t);
 extern void		 pf_purge_timeout(void *);
 extern void		 pf_purge(void *);
 extern void		 pfr_destroy_ktable(struct pfr_ktable *, int);

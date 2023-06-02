@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmd.c,v 1.146 2023/04/28 19:46:42 dv Exp $	*/
+/*	$OpenBSD: vmd.c,v 1.149 2023/05/13 23:15:28 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -113,25 +113,39 @@ vmd_dispatch_control(int fd, struct privsep_proc *p, struct imsg *imsg)
 		memcpy(&vmc, imsg->data, sizeof(vmc));
 		vmc.vmc_kernel = imsg->fd;
 
-		ret = vm_register(ps, &vmc, &vm, 0, vmc.vmc_owner.uid);
-		if (vmc.vmc_flags == 0 || vmc.vmc_flags == VMOP_CREATE_KERNEL) {
-			/* start an existing VM with pre-configured options */
-			if (!(ret == -1 && errno == EALREADY &&
-			    !(vm->vm_state & VM_STATE_RUNNING))) {
-				res = errno;
-				cmd = IMSG_VMDOP_START_VM_RESPONSE;
-			}
-		} else if (ret != 0) {
+		/* Try registering our VM in our list of known VMs. */
+		if (vm_register(ps, &vmc, &vm, 0, vmc.vmc_owner.uid)) {
 			res = errno;
-			cmd = IMSG_VMDOP_START_VM_RESPONSE;
+
+			/* Did we have a failure during lookup of a parent? */
+			if (vm == NULL) {
+				cmd = IMSG_VMDOP_START_VM_RESPONSE;
+				break;
+			}
+
+			/* Does the VM already exist? */
+			if (res == EALREADY) {
+				/* Is it already running? */
+				if (vm->vm_state & VM_STATE_RUNNING) {
+					cmd = IMSG_VMDOP_START_VM_RESPONSE;
+					break;
+				}
+
+				/* If not running, are our flags ok? */
+				if (vmc.vmc_flags &&
+				    vmc.vmc_flags != VMOP_CREATE_KERNEL) {
+					cmd = IMSG_VMDOP_START_VM_RESPONSE;
+					break;
+				}
+			}
+			res = 0;
 		}
 
-		if (res == 0) {
-			res = config_setvm(ps, vm, imsg->hdr.peerid,
-			    vm->vm_params.vmc_owner.uid);
-			if (res)
-				cmd = IMSG_VMDOP_START_VM_RESPONSE;
-		}
+		/* Try to start the launch of the VM. */
+		res = config_setvm(ps, vm, imsg->hdr.peerid,
+		    vm->vm_params.vmc_owner.uid);
+		if (res)
+			cmd = IMSG_VMDOP_START_VM_RESPONSE;
 		break;
 	case IMSG_VMDOP_WAIT_VM_REQUEST:
 	case IMSG_VMDOP_TERMINATE_VM_REQUEST:
@@ -774,7 +788,8 @@ main(int argc, char **argv)
 	struct privsep		*ps;
 	int			 ch;
 	enum privsep_procid	 proc_id = PROC_PARENT;
-	int			 proc_instance = 0, vm_launch = 0, vm_fd = -1;
+	int			 proc_instance = 0, vm_launch = 0;
+	int			 vmm_fd = -1, vm_fd = -1;
 	const char		*errp, *title = NULL;
 	int			 argc0 = argc;
 	char			 dev_type = '\0';
@@ -784,7 +799,7 @@ main(int argc, char **argv)
 	if ((env = calloc(1, sizeof(*env))) == NULL)
 		fatal("calloc: env");
 
-	while ((ch = getopt(argc, argv, "D:P:I:V:X:df:nt:v")) != -1) {
+	while ((ch = getopt(argc, argv, "D:P:I:V:X:df:i:nt:v")) != -1) {
 		switch (ch) {
 		case 'D':
 			if (cmdline_symset(optarg) < 0)
@@ -838,6 +853,11 @@ main(int argc, char **argv)
 			default: fatalx("invalid device type");
 			}
 			break;
+		case 'i':
+			vmm_fd = strtonum(optarg, 0, 128, &errp);
+			if (errp)
+				fatalx("invalid vmm fd");
+			break;
 		default:
 			usage();
 		}
@@ -866,7 +886,7 @@ main(int argc, char **argv)
 
 	ps = &env->vmd_ps;
 	ps->ps_env = env;
-	env->vmd_fd = -1;
+	env->vmd_fd = vmm_fd;
 
 	if (config_init(env) == -1)
 		fatal("failed to initialize configuration");
@@ -882,14 +902,14 @@ main(int argc, char **argv)
 	 * If we're launching a new vm or its device, we short out here.
 	 */
 	if (vm_launch == VMD_LAUNCH_VM) {
-		vm_main(vm_fd);
+		vm_main(vm_fd, vmm_fd);
 		/* NOTREACHED */
 	} else if (vm_launch == VMD_LAUNCH_DEV) {
 		if (dev_type == VMD_DEVTYPE_NET) {
-			vionet_main(vm_fd);
+			vionet_main(vm_fd, vmm_fd);
 			/* NOTREACHED */
 		} else if (dev_type == VMD_DEVTYPE_DISK) {
-			vioblk_main(vm_fd);
+			vioblk_main(vm_fd, vmm_fd);
 			/* NOTREACHED */
 		}
 		fatalx("unsupported device type '%c'", dev_type);
@@ -1488,7 +1508,6 @@ vm_instance(struct privsep *ps, struct vmd_vm **vm_parent,
 	struct vm_create_params	*vcp = &vmc->vmc_params;
 	struct vmop_create_params *vmcp;
 	struct vm_create_params	*vcpp;
-	struct vmd_vm		*vm = NULL;
 	unsigned int		 i, j;
 
 	/* return without error if the parent is NULL (nothing to inherit) */
@@ -1512,8 +1531,8 @@ vm_instance(struct privsep *ps, struct vmd_vm **vm_parent,
 
 	name = vcp->vcp_name;
 
-	if ((vm = vm_getbyname(vcp->vcp_name)) != NULL ||
-	    (vm = vm_getbyvmid(vcp->vcp_id)) != NULL) {
+	if (vm_getbyname(vcp->vcp_name) != NULL ||
+	    vm_getbyvmid(vcp->vcp_id) != NULL) {
 		return (EPROCLIM);
 	}
 
@@ -1602,8 +1621,8 @@ vm_instance(struct privsep *ps, struct vmd_vm **vm_parent,
 	}
 
 	/* kernel */
-	if (vmc->vmc_kernel > -1 || (vm->vm_kernel_path != NULL &&
-		strnlen(vm->vm_kernel_path, PATH_MAX) < PATH_MAX)) {
+	if (vmc->vmc_kernel > -1 || ((*vm_parent)->vm_kernel_path != NULL &&
+		strnlen((*vm_parent)->vm_kernel_path, PATH_MAX) < PATH_MAX)) {
 		if (vm_checkinsflag(vmcp, VMOP_CREATE_KERNEL, uid) != 0) {
 			log_warnx("vm \"%s\" no permission to set boot image",
 			    name);

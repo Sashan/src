@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.c,v 1.694 2023/04/26 19:54:35 mvs Exp $	*/
+/*	$OpenBSD: if.c,v 1.698 2023/05/30 23:55:42 dlg Exp $	*/
 /*	$NetBSD: if.c,v 1.35 1996/05/07 05:26:04 thorpej Exp $	*/
 
 /*
@@ -243,8 +243,13 @@ int	ifq_congestion;
 
 int		 netisr;
 
+struct softnet {
+	char		 sn_name[16];
+	struct taskq	*sn_taskq;
+};
+
 #define	NET_TASKQ	4
-struct taskq	*nettqmp[NET_TASKQ];
+struct softnet	softnets[NET_TASKQ];
 
 struct task if_input_task_locked = TASK_INITIALIZER(if_netisr, NULL);
 
@@ -269,8 +274,11 @@ ifinit(void)
 	if_idxmap_init(8); /* 8 is a nice power of 2 for malloc */
 
 	for (i = 0; i < NET_TASKQ; i++) {
-		nettqmp[i] = taskq_create("softnet", 1, IPL_NET, TASKQ_MPSAFE);
-		if (nettqmp[i] == NULL)
+		struct softnet *sn = &softnets[i];
+		snprintf(sn->sn_name, sizeof(sn->sn_name), "softnet%u", i);
+		sn->sn_taskq = taskq_create(sn->sn_name, 1, IPL_NET,
+		    TASKQ_MPSAFE);
+		if (sn->sn_taskq == NULL)
 			panic("unable to create network taskq %d", i);
 	}
 }
@@ -762,27 +770,6 @@ if_enqueue_ifq(struct ifnet *ifp, struct mbuf *m)
 }
 
 void
-if_mqoutput(struct ifnet *ifp, struct mbuf_queue *mq, unsigned int *total,
-    struct sockaddr *dst, struct rtentry *rt)
-{
-	struct mbuf_list ml;
-	struct mbuf *m;
-	unsigned int len;
-
-	mq_delist(mq, &ml);
-	len = ml_len(&ml);
-	while ((m = ml_dequeue(&ml)) != NULL)
-		ifp->if_output(ifp, m, rt_key(rt), rt);
-
-	/* XXXSMP we also discard if other CPU enqueues */
-	if (mq_len(mq) > 0) {
-		/* mbuf is back in queue. Discard. */
-		atomic_sub_int(total, len + mq_purge(mq));
-	} else
-		atomic_sub_int(total, len);
-}
-
-void
 if_input(struct ifnet *ifp, struct mbuf_list *ml)
 {
 	ifiq_input(&ifp->if_rcv, ml);
@@ -841,6 +828,46 @@ if_input_local(struct ifnet *ifp, struct mbuf *m, sa_family_t af)
 	}
 
 	return (0);
+}
+
+int
+if_output_ml(struct ifnet *ifp, struct mbuf_list *ml,
+    struct sockaddr *dst, struct rtentry *rt)
+{
+	struct mbuf *m;
+	int error = 0;
+
+	while ((m = ml_dequeue(ml)) != NULL) {
+		error = ifp->if_output(ifp, m, dst, rt);
+		if (error)
+			break;
+	}
+	if (error)
+		ml_purge(ml);
+
+	return error;
+}
+
+int
+if_output_mq(struct ifnet *ifp, struct mbuf_queue *mq, unsigned int *total,
+    struct sockaddr *dst, struct rtentry *rt)
+{
+	struct mbuf_list ml;
+	unsigned int len;
+	int error;
+
+	mq_delist(mq, &ml);
+	len = ml_len(&ml);
+	error = if_output_ml(ifp, &ml, dst, rt);
+
+	/* XXXSMP we also discard if other CPU enqueues */
+	if (mq_len(mq) > 0) {
+		/* mbuf is back in queue. Discard. */
+		atomic_sub_int(total, len + mq_purge(mq));
+	} else
+		atomic_sub_int(total, len);
+
+	return error;
 }
 
 int
@@ -2082,10 +2109,9 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 			error = ENOTSUP;
 		}
 #endif
-
-		if (ISSET(ifr->ifr_flags, IFXF_TSO) !=
-		    ISSET(ifp->if_xflags, IFXF_TSO))
-			error = ifsettso(ifp, ISSET(ifr->ifr_flags, IFXF_TSO));
+		if (ISSET(ifr->ifr_flags, IFXF_LRO) !=
+		    ISSET(ifp->if_xflags, IFXF_LRO))
+			error = ifsetlro(ifp, ISSET(ifr->ifr_flags, IFXF_LRO));
 
 		if (error == 0)
 			ifp->if_xflags = (ifp->if_xflags & IFXF_CANTCHANGE) |
@@ -3126,36 +3152,32 @@ ifpromisc(struct ifnet *ifp, int pswitch)
 	return (error);
 }
 
-/* Set/clear TSO flag and restart interface if needed. */
+/* Set/clear LRO flag and restart interface if needed. */
 int
-ifsettso(struct ifnet *ifp, int on)
+ifsetlro(struct ifnet *ifp, int on)
 {
 	struct ifreq ifrq;
 	int error = 0;
 	int s = splnet();
 
+	if (!ISSET(ifp->if_capabilities, IFCAP_LRO)) {
+		error = ENOTSUP;
+		goto out;
+	}
+
 	NET_ASSERT_LOCKED();	/* for ioctl */
 	KERNEL_ASSERT_LOCKED();	/* for if_flags */
 
-	if (on && !ISSET(ifp->if_xflags, IFXF_TSO)) {
-		if (!ISSET(ifp->if_capabilities, IFCAP_TSO)) {
-			error = ENOTSUP;
-			goto out;
-		}
+	if (on && !ISSET(ifp->if_xflags, IFXF_LRO)) {
 		if (ether_brport_isset(ifp)) {
 			error = EBUSY;
 			goto out;
 		}
-		SET(ifp->if_xflags, IFXF_TSO);
-	} else if (!on && ISSET(ifp->if_xflags, IFXF_TSO))
-		CLR(ifp->if_xflags, IFXF_TSO);
+		SET(ifp->if_xflags, IFXF_LRO);
+	} else if (!on && ISSET(ifp->if_xflags, IFXF_LRO))
+		CLR(ifp->if_xflags, IFXF_LRO);
 	else
 		goto out;
-
-#if NVLAN > 0
-	/* Change TSO flag also on attached vlan(4) interfaces. */
-	vlan_flags_from_parent(ifp, IFXF_TSO);
-#endif
 
 	/* restart interface */
 	if (ISSET(ifp->if_flags, IFF_UP)) {
@@ -3444,13 +3466,29 @@ unhandled_af(int af)
 struct taskq *
 net_tq(unsigned int ifindex)
 {
-	struct taskq *t = NULL;
+	struct softnet *sn;
 	static int nettaskqs;
 
 	if (nettaskqs == 0)
 		nettaskqs = min(NET_TASKQ, ncpus);
 
-	t = nettqmp[ifindex % nettaskqs];
+	sn = &softnets[ifindex % nettaskqs];
 
-	return (t);
+	return (sn->sn_taskq);
+}
+
+void
+net_tq_barriers(const char *wmesg)
+{
+	struct task barriers[NET_TASKQ];
+	struct refcnt r = REFCNT_INITIALIZER();
+	int i;
+
+	for (i = 0; i < nitems(barriers); i++) {
+		task_set(&barriers[i], (void (*)(void *))refcnt_rele_wake, &r);
+		refcnt_take(&r);
+		task_add(softnets[i].sn_taskq, &barriers[i]);
+	}
+ 
+	refcnt_finalize(&r, wmesg);
 }
