@@ -2552,7 +2552,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		PF_LOCK();
-		if (pl->index < 0 || pl->index >= PF_LIMIT_MAX) {
+		if (pl.index < 0 || pl.index >= PF_LIMIT_MAX) {
 			error = EINVAL;
 			PF_UNLOCK();
 			goto fail;
