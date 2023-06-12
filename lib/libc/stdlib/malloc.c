@@ -1,4 +1,4 @@
-/*	$OpenBSD: malloc.c,v 1.284 2023/05/27 04:33:00 otto Exp $	*/
+/*	$OpenBSD: malloc.c,v 1.286 2023/06/07 12:56:22 aoyama Exp $	*/
 /*
  * Copyright (c) 2008, 2010, 2011, 2016, 2023 Otto Moerbeek <otto@drijf.net>
  * Copyright (c) 2012 Matthew Dempsky <matthew@openbsd.org>
@@ -977,6 +977,10 @@ omalloc_make_chunks(struct dir_info *d, u_int bucket, u_int listnum)
 	    NULL))
 		goto err;
 	LIST_INSERT_HEAD(&d->chunk_dir[bucket][listnum], bp, entries);
+
+	if (bucket > 0 && d->malloc_junk != 0)
+		memset(pp, SOME_FREEJUNK, MALLOC_PAGESIZE);
+
 	return bp;
 
 err:
@@ -984,12 +988,32 @@ err:
 	return NULL;
 }
 
+#if defined(__GNUC__) && __GNUC__ < 4
+static inline unsigned int
+lb(u_int x)
+{
+#if defined(__m88k__)
+	__asm__ __volatile__ ("ff1 %0, %0" : "=r" (x) : "0" (x));
+	return x;
+#else
+	/* portable version */
+	unsigned int count = 0;
+	while ((x & (1U << (sizeof(int) * CHAR_BIT - 1))) == 0) {
+		count++;
+		x <<= 1;
+	}
+	return (sizeof(int) * CHAR_BIT - 1) - count;
+#endif
+}
+#else
+/* using built-in function version */
 static inline unsigned int
 lb(u_int x)
 {
 	/* I need an extension just for integer-length (: */
 	return (sizeof(int) * CHAR_BIT - 1) - __builtin_clz(x);
 }
+#endif
 
 /* https://pvk.ca/Blog/2015/06/27/linear-log-bucketing-fast-versatile-simple/
    via Tony Finch */
@@ -1113,9 +1137,8 @@ found:
 
 	p = (char *)bp->page + k;
 	if (bp->bucket > 0) {
-		if (d->malloc_junk == 2)
-			memset(p, SOME_JUNK, B2SIZE(bp->bucket));
-		else if (mopts.chunk_canaries)
+		validate_junk(d, p, B2SIZE(bp->bucket));
+		if (mopts.chunk_canaries)
 			fill_canary(p, size, B2SIZE(bp->bucket));
 	}
 	return p;
@@ -1134,7 +1157,7 @@ validate_canary(struct dir_info *d, u_char *ptr, size_t sz, size_t allocated)
 
 	while (p < q) {
 		if (*p != (u_char)mopts.chunk_canaries && *p != SOME_JUNK) {
-			wrterror(d, "chunk canary corrupted %p %#tx@%#zx%s",
+			wrterror(d, "canary corrupted %p %#tx@%#zx%s",
 			    ptr, p - ptr, sz,
 			    *p == SOME_FREEJUNK ? " (double free?)" : "");
 		}
@@ -1157,7 +1180,7 @@ find_chunknum(struct dir_info *d, struct chunk_info *info, void *ptr, int check)
 		wrterror(d, "modified chunk-pointer %p", ptr);
 	if (info->bits[chunknum / MALLOC_BITS] &
 	    (1U << (chunknum % MALLOC_BITS)))
-		wrterror(d, "chunk is already free %p", ptr);
+		wrterror(d, "double free %p", ptr);
 	if (check && info->bucket > 0) {
 		validate_canary(d, ptr, info->bits[info->offset + chunknum],
 		    B2SIZE(info->bucket));
@@ -1924,13 +1947,22 @@ orecallocarray(struct dir_info **argpool, void *p, size_t oldsize,
 			uint32_t chunknum = find_chunknum(pool, info, p, 0);
 
 			if (info->bits[info->offset + chunknum] != oldsize)
-				wrterror(pool, "recorded old size %hu != %zu",
+				wrterror(pool, "recorded size %hu != %zu",
 				    info->bits[info->offset + chunknum],
 				    oldsize);
+		} else {
+			if (sz < oldsize)
+				wrterror(pool, "chunk size %zu < %zu",
+				    sz, oldsize);
 		}
-	} else if (oldsize < (sz - mopts.malloc_guard) / 2)
-		wrterror(pool, "recorded old size %zu != %zu",
-		    sz - mopts.malloc_guard, oldsize);
+	} else {
+		if (sz - mopts.malloc_guard < oldsize)
+			wrterror(pool, "recorded size %zu < %zu",
+			    sz - mopts.malloc_guard, oldsize);
+		if (oldsize < (sz - mopts.malloc_guard) / 2)
+			wrterror(pool, "recorded size %zu inconsistent with %zu",
+			    sz - mopts.malloc_guard, oldsize);
+	}
 
 	newptr = omalloc(pool, newsize, 0, f);
 	if (newptr == NULL)
