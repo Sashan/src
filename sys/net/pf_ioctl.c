@@ -2697,7 +2697,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t = pf_open_trans(p->p_p->ps_pid);
+		t = pf_open_trans(minor(dev));
 		pf_init_tconf(t);
 
 		error = pfr_add_tables(t, io->pfrio_buffer, io->pfrio_size,
@@ -2742,7 +2742,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t = pf_open_trans(p->p_p->ps_pid);
+		t = pf_open_trans(minor(dev));
 		pf_init_tconf(t);
 
 		error = pfr_del_tables(t, io->pfrio_buffer, io->pfrio_size,
@@ -2820,7 +2820,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t = pf_open_trans(p->p_p->ps_pid);
+		t = pf_open_trans(minor(dev));
 		pf_init_tconf(t);
 
 		error = pfr_clr_tstats(t, io->pfrio_buffer, io->pfrio_size,
@@ -2854,7 +2854,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t = pf_open_trans(p->p_p->ps_pid);
+		t = pf_open_trans(minor(dev));
 		pf_init_tconf(t);
 
 		error = pfr_set_tflags(t, io->pfrio_buffer, io->pfrio_size,
@@ -2912,7 +2912,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t = pf_open_trans(p->p_p->ps_pid);
+		t = pf_open_trans(minor(dev));
 		pf_init_tconf(t);
 		error = pfr_add_addrs(t, &io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size, &io->pfrio_nadd, io->pfrio_flags |
@@ -2946,7 +2946,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t = pf_open_trans(p->p_p->ps_pid);
+		t = pf_open_trans(minor(dev));
 		pf_init_tconf(t);
 
 		error = pfr_del_addrs(t, &io->pfrio_table, io->pfrio_buffer,
@@ -2980,7 +2980,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		t = pf_open_trans(p->p_p->ps_pid);
+		t = pf_open_trans(minor(dev));
 		pf_init_tconf(t);
 
 		error = pfr_set_addrs_ioc(t, &io->pfrio_table, io->pfrio_buffer,
@@ -3177,7 +3177,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pf_trans		*t = NULL;
 
-		t = pf_open_trans(p->p_p->ps_pid);
+		t = pf_open_trans(minor(dev));
 		pf_init_tconf(t);
 
 		if (io->array != NULL)
@@ -3792,7 +3792,6 @@ pf_open_trans(uint32_t unit)
 
 	t = malloc(sizeof(*t), M_TEMP, M_WAITOK|M_ZERO);
 	t->pft_unit = unit;
-	t->pft_ticket = ticket++;
 	t->pft_ticket = ticket++;
 
 	LIST_INSERT_HEAD(&pf_ioctl_trans, t, pft_entry);
