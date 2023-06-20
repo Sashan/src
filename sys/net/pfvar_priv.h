@@ -342,7 +342,8 @@ struct pf_opts {
 enum pf_trans_type {
 	PF_TRANS_NONE,
 	PF_TRANS_GETRULE,
-	PF_TRANS_CONFIG,
+	PF_TRANS_INA,
+	PF_TRANS_TAB,
 	PF_TRANS_MAX
 };
 
@@ -373,6 +374,17 @@ struct pf_trans {
 			uint32_t		ina_default_vers;
 			char			ina_modify_defaults;
 		} u_ina;
+		struct {
+			TAILQ_HEAD(, pf_anchor)	tab_anchor_list;
+			struct pfr_ktableworkq	tab_garbage;
+			struct pf_rules_container
+						tab_rc;
+			char			tab_anchor_path[PATH_MAX];
+			int (*tab_check_op)(struct pf_anchor *,
+			    struct pf_anchor *);
+			void (*tab_commit_op)(struct pf_trans *,
+			    struct pf_anchor *, struct pf_anchor *);
+		} u_tab;
 	} u;
 };
 
@@ -391,6 +403,13 @@ struct pf_trans {
 #define	pftina_commit_op	u.u_ina.ina_commit_op
 #define pftina_default_vers	u.u_ina.ina_default_vers
 #define	pftina_modify_defaults	u.u_ina.ina_modify_defaults
+
+#define pfttab_anchor_list	u.u_tab.tab_anchor_list
+#define pfttab_garbage		u.u_tab.tab_garbage
+#define pfttab_rc		u.u_tab.tab_rc
+#define pfttab_anchor_path	u.u_tab.tab_anchor_path
+#define pfttab_check_op		u.u_tab.tab_check_op
+#define pfttab_commit_op	u.u_tab.tab_commit_op
 
 extern struct task	pf_purge_task;
 extern struct timeout	pf_purge_to;

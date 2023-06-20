@@ -321,8 +321,8 @@ int
 pfr_add_addrs(struct pf_trans *t, struct pfr_table *tbl, struct pfr_addr *addr,
     int size, int *nadd, int flags)
 {
-	if (t->pft_type != PF_TRANS_CONFIG) {
-		log(LOG_ERR, "%s expects PF_TRANS_CONFIG only\n", __func__);
+	if (t->pft_type != PF_TRANS_INA) {
+		log(LOG_ERR, "%s expects PF_TRANS_INA only\n", __func__);
 		return (EINVAL);
 	}
 #if 0
@@ -460,8 +460,8 @@ pfr_del_addrs(struct pf_trans *t, struct pfr_table *tbl,
 	int			 i, rv, xdel = 0, lg = 1;
 	struct pf_ruleset	*rs;
 
-	if (t->pft_type != PF_TRANS_CONFIG) {
-		log(LOG_ERR, "%s expects PF_TRANS_CONFIG only\n", __func__);
+	if (t->pft_type != PF_TRANS_INA) {
+		log(LOG_ERR, "%s expects PF_TRANS_INA only\n", __func__);
 		return (EINVAL);
 	}
 
@@ -1576,8 +1576,8 @@ pfr_add_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *nadd,
 	time_t			 tzero = gettime();
 	int			 i;
 
-	if (t->pft_type != PF_TRANS_CONFIG) {
-		log(LOG_ERR, "%s expects PF_TRANS_CONFIG only\n", __func__);
+	if (t->pft_type != PF_TRANS_INA) {
+		log(LOG_ERR, "%s expects PF_TRANS_INA only\n", __func__);
 		return (EINVAL);
 	}
 
@@ -1594,7 +1594,7 @@ pfr_add_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *nadd,
 		 * flag being set.
 		 */
 		key.pfrkt_flags |= PFR_TFLAG_ACTIVE;
-		kt = pfr_create_ktable(&t->pftina_rc, &key.pfrkt_t, tzero,
+		kt = pfr_create_ktable(&t->pfttab_rc, &key.pfrkt_t, tzero,
 		    PR_WAITOK);
 		if (kt == NULL)
 			return (ENOMEM);
@@ -1616,8 +1616,8 @@ pfr_del_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *ndel,
 	int			 i;
 	time_t			 tzero = gettime();
 
-	if (t->pft_type != PF_TRANS_CONFIG) {
-		log(LOG_ERR, "%s expects PF_TRANS_CONFIG only\n", __func__);
+	if (t->pft_type != PF_TRANS_INA) {
+		log(LOG_ERR, "%s expects PF_TRANS_INA only\n", __func__);
 		return (EINVAL);
 	}
 	/* pre-allocate all memory outside of locks */
@@ -1634,7 +1634,7 @@ pfr_del_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *ndel,
 		key.pfrkt_flags |= PFR_TFLAG_FLUSH_ON_COMMIT;
 		 */
 		key.pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
-		kt = pfr_create_ktable(&t->pftina_rc, &key.pfrkt_t, tzero,
+		kt = pfr_create_ktable(&t->pfttab_rc, &key.pfrkt_t, tzero,
 		    PR_WAITOK);
 		kt->pfrkt_version = pfr_get_ktable_version(kt);
 		if (kt == NULL)
@@ -1809,8 +1809,8 @@ pfr_clr_tstats(struct pf_trans *t, struct pfr_table *tbl, int size, int *nzero,
 	int			 i, xzero = 0;
 	time_t			 tzero = gettime();
 
-	if (t->pft_type != PF_TRANS_CONFIG) {
-		log(LOG_ERR, "%s expects PF_TRANS_CONFIG only\n", __func__);
+	if (t->pft_type != PF_TRANS_INA) {
+		log(LOG_ERR, "%s expects PF_TRANS_INA only\n", __func__);
 		return (EINVAL);
 	}
 
@@ -1821,7 +1821,7 @@ pfr_clr_tstats(struct pf_trans *t, struct pfr_table *tbl, int size, int *nzero,
 			return (EFAULT);
 		if (pfr_validate_table(&key.pfrkt_t, 0, 0))
 			return (EINVAL);
-		p = pfr_create_ktable(&t->pftina_rc, &key.pfrkt_t, tzero,
+		p = pfr_create_ktable(&t->pfttab_rc, &key.pfrkt_t, tzero,
 		    PR_WAITOK);
 		/*
 		 * TODO: assign a dedicated flag to tell commit operation to
@@ -1852,8 +1852,8 @@ int
 pfr_set_tflags(struct pf_trans *t, struct pfr_table *tbl, int size, int setflag,
 	int clrflag, int *nchange, int *ndel, int flags)
 {
-	if (t->pft_type != PF_TRANS_CONFIG) {
-		log(LOG_ERR, "%s expects PF_TRANS_CONFIG only\n", __func__);
+	if (t->pft_type != PF_TRANS_INA) {
+		log(LOG_ERR, "%s expects PF_TRANS_INA only\n", __func__);
 		return (EINVAL);
 	}
 
@@ -2213,7 +2213,7 @@ _bad:
 }
 
 void
-pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
+pfr_commit_table(struct pf_trans *t, struct pf_anchor *ta,
     struct pf_anchor *a)
 {
 	struct pfr_ktable *kt, *tkt, *ktw;
