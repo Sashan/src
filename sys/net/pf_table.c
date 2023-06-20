@@ -1594,7 +1594,7 @@ pfr_add_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *nadd,
 		 * flag being set.
 		 */
 		key.pfrkt_flags |= PFR_TFLAG_ACTIVE;
-		kt = pfr_create_ktable(&t->pftcf_rc, &key.pfrkt_t, tzero,
+		kt = pfr_create_ktable(&t->pftina_rc, &key.pfrkt_t, tzero,
 		    PR_WAITOK);
 		if (kt == NULL)
 			return (ENOMEM);
@@ -1634,7 +1634,7 @@ pfr_del_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *ndel,
 		key.pfrkt_flags |= PFR_TFLAG_FLUSH_ON_COMMIT;
 		 */
 		key.pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
-		kt = pfr_create_ktable(&t->pftcf_rc, &key.pfrkt_t, tzero,
+		kt = pfr_create_ktable(&t->pftina_rc, &key.pfrkt_t, tzero,
 		    PR_WAITOK);
 		kt->pfrkt_version = pfr_get_ktable_version(kt);
 		if (kt == NULL)
@@ -1821,7 +1821,7 @@ pfr_clr_tstats(struct pf_trans *t, struct pfr_table *tbl, int size, int *nzero,
 			return (EFAULT);
 		if (pfr_validate_table(&key.pfrkt_t, 0, 0))
 			return (EINVAL);
-		p = pfr_create_ktable(&t->pftcf_rc, &key.pfrkt_t, tzero,
+		p = pfr_create_ktable(&t->pftina_rc, &key.pfrkt_t, tzero,
 		    PR_WAITOK);
 		/*
 		 * TODO: assign a dedicated flag to tell commit operation to
@@ -2110,13 +2110,13 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		    __func__);
 		return (EINVAL);
 	}
-	trs = pf_find_or_create_ruleset(&t->pftcf_rc, tbl->pfrt_anchor);
+	trs = pf_find_or_create_ruleset(&t->pftina_rc, tbl->pfrt_anchor);
 	if (trs == NULL) {
 		log(LOG_DEBUG, "%s trs is NULL\n", __func__);
 		return (EBUSY);
 	}
 	if (trs->anchor == NULL)
-		ta = &t->pftcf_rc.main_anchor;
+		ta = &t->pftina_rc.main_anchor;
 	else
 		ta = trs->anchor;
 
@@ -2287,7 +2287,7 @@ pfr_ina_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
 			log(LOG_DEBUG, "%s removing %s@%s\n",
 			    __func__, kt->pfrkt_name, a->path);
-			SLIST_INSERT_HEAD(&t->pftcf_garbage, kt, pfrkt_workq);
+			SLIST_INSERT_HEAD(&t->pftina_garbage, kt, pfrkt_workq);
 			a->tables--;
 		}
 	}

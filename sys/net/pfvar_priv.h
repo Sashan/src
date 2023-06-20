@@ -358,21 +358,21 @@ struct pf_trans {
 			struct pf_rule		*gr_rule;
 		} u_getrule;
 		struct {
-			TAILQ_HEAD(, pf_anchor)	cf_anchor_list;
-			struct pfr_ktableworkq	cf_garbage;
+			TAILQ_HEAD(, pf_anchor)	ina_anchor_list;
+			struct pfr_ktableworkq	ina_garbage;
 			struct pf_rules_container
-						cf_rc;
-			unsigned		cf_pool_limits[PF_LIMIT_MAX];
-			struct pf_rule		cf_default_rule;
-			struct pf_opts		cf_opts;
-			char			cf_anchor_path[PATH_MAX];
-			int (*cf_check_op)(struct pf_anchor *,
+						ina_rc;
+			unsigned		ina_pool_limits[PF_LIMIT_MAX];
+			struct pf_rule		ina_default_rule;
+			struct pf_opts		ina_opts;
+			char			ina_anchor_path[PATH_MAX];
+			int (*ina_check_op)(struct pf_anchor *,
 			    struct pf_anchor *);
-			void (*cf_commit_op)(struct pf_trans *,
+			void (*ina_commit_op)(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
-			uint32_t		cf_default_vers;
-			char			cf_modify_defaults;
-		} u_conf;
+			uint32_t		ina_default_vers;
+			char			ina_modify_defaults;
+		} u_ina;
 	} u;
 };
 
@@ -380,17 +380,17 @@ struct pf_trans {
 #define pftgr_anchor	u.u_getrule.gr_anchor
 #define pftgr_rule	u.u_getrule.gr_rule
 
-#define pftcf_anchor_list	u.u_conf.cf_anchor_list
-#define pftcf_garbage		u.u_conf.cf_garbage
-#define pftcf_rc		u.u_conf.cf_rc
-#define	pftcf_pool_limits	u.u_conf.cf_pool_limits
-#define pftcf_default_rule	u.u_conf.cf_default_rule
-#define pftcf_opts		u.u_conf.cf_opts
-#define pftcf_anchor_path	u.u_conf.cf_anchor_path
-#define pftcf_check_op		u.u_conf.cf_check_op
-#define	pftcf_commit_op		u.u_conf.cf_commit_op
-#define pftcf_default_vers	u.u_conf.cf_default_vers
-#define	pftcf_modify_defaults	u.u_conf.cf_modify_defaults
+#define pftina_anchor_list	u.u_ina.ina_anchor_list
+#define pftina_garbage		u.u_ina.ina_garbage
+#define pftina_rc		u.u_ina.ina_rc
+#define	pftina_pool_limits	u.u_ina.ina_pool_limits
+#define pftina_default_rule	u.u_ina.ina_default_rule
+#define pftina_opts		u.u_ina.ina_opts
+#define pftina_anchor_path	u.u_ina.ina_anchor_path
+#define pftina_check_op		u.u_ina.ina_check_op
+#define	pftina_commit_op	u.u_ina.ina_commit_op
+#define pftina_default_vers	u.u_ina.ina_default_vers
+#define	pftina_modify_defaults	u.u_ina.ina_modify_defaults
 
 extern struct task	pf_purge_task;
 extern struct timeout	pf_purge_to;

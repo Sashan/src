@@ -1906,7 +1906,7 @@ pf_tbladdr_setup(struct pf_trans *t, struct pf_ruleset *rs,
 {
 	if (aw->type != PF_ADDR_TABLE)
 		return (0);
-	if ((aw->p.tbl = pfr_attach_table(&t->pftcf_rc, rs, aw->v.tblname,
+	if ((aw->p.tbl = pfr_attach_table(&t->pftina_rc, rs, aw->v.tblname,
 	    wait)) == NULL)
 		return (1);
 	return (0);
