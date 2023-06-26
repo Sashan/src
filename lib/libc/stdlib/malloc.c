@@ -1,4 +1,4 @@
-/*	$OpenBSD: malloc.c,v 1.286 2023/06/07 12:56:22 aoyama Exp $	*/
+/*	$OpenBSD: malloc.c,v 1.288 2023/06/23 05:26:45 otto Exp $	*/
 /*
  * Copyright (c) 2008, 2010, 2011, 2016, 2023 Otto Moerbeek <otto@drijf.net>
  * Copyright (c) 2012 Matthew Dempsky <matthew@openbsd.org>

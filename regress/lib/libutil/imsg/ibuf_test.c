@@ -1,5 +1,4 @@
-/* $OpenBSD: ibuf_test.c,v 1.2 2023/05/23 09:32:37 claudio Exp $
-*/
+/* $OpenBSD: ibuf_test.c,v 1.4 2023/06/19 17:22:46 claudio Exp $ */
 /*
  * Copyright (c) Tobias Stoeckmann <tobias@openbsd.org>
  *
@@ -26,7 +25,8 @@
 #include <stdio.h>
 
 int
-test_ibuf_open(void) {
+test_ibuf_open(void)
+{
 	struct ibuf *buf;
 
 	if ((buf = ibuf_open(1)) == NULL)
@@ -37,7 +37,8 @@ test_ibuf_open(void) {
 }
 
 int
-test_ibuf_dynamic(void) {
+test_ibuf_dynamic(void)
+{
 	struct ibuf *buf;
 
 	if (ibuf_dynamic(100, 0) != NULL)
@@ -51,7 +52,8 @@ test_ibuf_dynamic(void) {
 }
 
 int
-test_ibuf_reserve(void) {
+test_ibuf_reserve(void)
+{
 	struct ibuf *buf;
 	int ret;
 
@@ -76,7 +78,8 @@ test_ibuf_reserve(void) {
 }
 
 int
-test_ibuf_seek(void) {
+test_ibuf_seek(void)
+{
 	struct ibuf *buf;
 	int ret;
 
@@ -87,43 +90,6 @@ test_ibuf_seek(void) {
 
 	ibuf_free(buf);
 	return ret;
-}
-
-int
-test_msgbuf_drain(void) {
-	struct msgbuf msgbuf;
-	struct ibuf *buf;
-
-	msgbuf_init(&msgbuf);
-
-	if ((buf = ibuf_open(4)) == NULL)
-		return 1;
-	if (ibuf_add(buf, "test", 4) != 0) {
-		ibuf_free(buf);
-		return 1;
-	}
-	ibuf_close(&msgbuf, buf);
-
-	if (msgbuf.queued != 1) {
-		ibuf_free(buf);
-		return 1;
-	}
-
-	msgbuf_drain(&msgbuf, 1);
-
-	if (msgbuf.queued != 1) {
-		ibuf_free(buf);
-		return 1;
-	}
-
-	msgbuf_drain(&msgbuf, SIZE_MAX);
-
-	if (msgbuf.queued != 0) {
-		ibuf_free(buf);
-		return 1;
-	}
-
-	return 0;
 }
 
 int
@@ -156,12 +122,6 @@ main(void)
 		ret = 1;
 	} else
 		printf("SUCCESS: test_ibuf_seek\n");
-
-	if (test_msgbuf_drain() != 0) {
-		printf("FAILED: test_msgbuf_drain\n");
-		ret = 1;
-	} else
-		printf("SUCCESS: test_msgbuf_drain\n");
 
 	if (ret != 0) {
 		printf("FAILED: %s\n", __progname);

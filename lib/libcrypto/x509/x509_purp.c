@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_purp.c,v 1.25 2023/04/23 21:49:15 job Exp $ */
+/* $OpenBSD: x509_purp.c,v 1.27 2023/06/25 13:52:27 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2001.
  */
@@ -441,6 +441,47 @@ setup_crldp(X509 *x)
 		setup_dp(x, sk_DIST_POINT_value(x->crldp, i));
 }
 
+static int
+x509_extension_oid_cmp(const X509_EXTENSION *const *a,
+    const X509_EXTENSION *const *b)
+{
+	return OBJ_cmp((*a)->object, (*b)->object);
+}
+
+static int
+x509_extension_oids_are_unique(X509 *x509)
+{
+	STACK_OF(X509_EXTENSION) *exts = NULL;
+	const X509_EXTENSION *prev_ext, *curr_ext;
+	int i;
+	int ret = 0;
+
+	if (X509_get_ext_count(x509) <= 1)
+		goto done;
+
+	if ((exts = sk_X509_EXTENSION_dup(x509->cert_info->extensions)) == NULL)
+		goto err;
+
+	(void)sk_X509_EXTENSION_set_cmp_func(exts, x509_extension_oid_cmp);
+	sk_X509_EXTENSION_sort(exts);
+
+	prev_ext = sk_X509_EXTENSION_value(exts, 0);
+	for (i = 1; i < sk_X509_EXTENSION_num(exts); i++) {
+		curr_ext = sk_X509_EXTENSION_value(exts, i);
+		if (x509_extension_oid_cmp(&prev_ext, &curr_ext) == 0)
+			goto err;
+		prev_ext = curr_ext;
+	}
+
+ done:
+	ret = 1;
+
+ err:
+	sk_X509_EXTENSION_free(exts);
+
+	return ret;
+}
+
 static void
 x509v3_cache_extensions_internal(X509 *x)
 {
@@ -449,6 +490,7 @@ x509v3_cache_extensions_internal(X509 *x)
 	ASN1_BIT_STRING *ns;
 	EXTENDED_KEY_USAGE *extusage;
 	X509_EXTENSION *ex;
+	long version;
 	int i;
 
 	if (x->ex_flags & EXFLAG_SET)
@@ -456,12 +498,18 @@ x509v3_cache_extensions_internal(X509 *x)
 
 	X509_digest(x, X509_CERT_HASH_EVP, x->hash, NULL);
 
-	/* V1 should mean no extensions ... */
-	if (X509_get_version(x) == 0) {
+	version = X509_get_version(x);
+	if (version < 0 || version > 2)
+		x->ex_flags |= EXFLAG_INVALID;
+	if (version == 0) {
 		x->ex_flags |= EXFLAG_V1;
-		if (X509_get_ext_count(x) != 0)
+		/* UIDs may only appear in v2 or v3 certs */
+		if (x->cert_info->issuerUID != NULL ||
+		    x->cert_info->subjectUID != NULL)
 			x->ex_flags |= EXFLAG_INVALID;
 	}
+	if (version != 2 && X509_get_ext_count(x) != 0)
+		x->ex_flags |= EXFLAG_INVALID;
 
 	/* Handle basic constraints */
 	if ((bs = X509_get_ext_d2i(x, NID_basic_constraints, &i, NULL))) {
@@ -604,6 +652,9 @@ x509v3_cache_extensions_internal(X509 *x)
 			break;
 		}
 	}
+
+	if (!x509_extension_oids_are_unique(x))
+		x->ex_flags |= EXFLAG_INVALID;
 
 	x509_verify_cert_info_populate(x);
 

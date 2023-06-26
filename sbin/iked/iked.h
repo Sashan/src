@@ -1,4 +1,4 @@
-/*	$OpenBSD: iked.h,v 1.214 2023/05/30 08:41:15 claudio Exp $	*/
+/*	$OpenBSD: iked.h,v 1.219 2023/06/25 08:07:04 op Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -1178,7 +1178,6 @@ int	 ca_setauth(struct iked *, struct iked_sa *,
 void	 ca_getkey(struct privsep *, struct iked_id *, enum imsg_type);
 int	 ca_privkey_serialize(EVP_PKEY *, struct iked_id *);
 int	 ca_pubkey_serialize(EVP_PKEY *, struct iked_id *);
-void	 ca_sslinit(void);
 void	 ca_sslerror(const char *);
 char	*ca_asn1_name(uint8_t *, size_t);
 void	*ca_x509_name_parse(char *);
@@ -1251,7 +1250,7 @@ struct in6_addr *
 uint32_t
 	 prefixlen2mask(uint8_t);
 const char *
-	 print_host(struct sockaddr *, char *, size_t);
+	 print_addr(void *);
 char	*get_string(uint8_t *, size_t);
 const char *
 	 print_proto(uint8_t);
@@ -1270,8 +1269,6 @@ struct ibuf *
 int	 ibuf_cat(struct ibuf *, struct ibuf *);
 size_t	 ibuf_length(struct ibuf *);
 int	 ibuf_setsize(struct ibuf *, size_t);
-uint8_t *
-	 ibuf_data(struct ibuf *);
 void	*ibuf_getdata(struct ibuf *, size_t);
 struct ibuf *
 	 ibuf_get(struct ibuf *, size_t);
@@ -1279,8 +1276,6 @@ struct ibuf *
 	 ibuf_dup(struct ibuf *);
 struct ibuf *
 	 ibuf_random(size_t);
-int	 ibuf_strcat(struct ibuf **, const char *);
-int	 ibuf_strlen(struct ibuf *);
 
 /* log.c */
 void	log_init(int, int);

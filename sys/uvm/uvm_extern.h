@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_extern.h,v 1.168 2023/05/30 08:30:01 jsg Exp $	*/
+/*	$OpenBSD: uvm_extern.h,v 1.170 2023/06/21 21:16:21 cheloha Exp $	*/
 /*	$NetBSD: uvm_extern.h,v 1.57 2001/03/09 01:02:12 chs Exp $	*/
 
 /*

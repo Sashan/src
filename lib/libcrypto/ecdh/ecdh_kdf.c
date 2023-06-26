@@ -1,3 +1,4 @@
+/*	$OpenBSD: ecdh_kdf.c,v 1.9 2023/06/25 19:43:28 tb Exp $ */
 /*
  * Written by Stephen Henson for the OpenSSL project.
  */
@@ -52,10 +53,11 @@
 
 #include <string.h>
 
+#include <openssl/ecdh.h>
 #include <openssl/ec.h>
 #include <openssl/evp.h>
 
-#include "ech_local.h"
+#include "ec_local.h"
 
 /*
  * Key derivation function from X9.63/SECG.

@@ -1,4 +1,4 @@
-/*	$OpenBSD: editor.c,v 1.407 2023/05/23 13:20:31 krw Exp $	*/
+/*	$OpenBSD: editor.c,v 1.411 2023/06/21 12:50:09 krw Exp $	*/
 
 /*
  * Copyright (c) 1997-2000 Todd C. Miller <millert@openbsd.org>
@@ -44,6 +44,7 @@
 
 #define	ROUNDUP(_s, _a)		((((_s) + (_a) - 1) / (_a)) * (_a))
 #define	ROUNDDOWN(_s, _a)	(((_s) / (_a)) * (_a))
+#define	CHUNKSZ(_c)		((_c)->stop - (_c)->start)
 
 /* flags for getuint64() */
 #define	DO_CONVERSIONS	0x00000001
@@ -197,7 +198,7 @@ editor(int f)
 	if (!(omountpoints = calloc(MAXPARTITIONS, sizeof(char *))) ||
 	    !(origmountpoints = calloc(MAXPARTITIONS, sizeof(char *))) ||
 	    !(tmpmountpoints = calloc(MAXPARTITIONS, sizeof(char *))))
-		errx(4, "out of memory");
+		err(1, NULL);
 
 	/* How big is the OpenBSD portion of the disk?  */
 	find_bounds(&newlab);
@@ -404,11 +405,11 @@ editor(int f)
 			/* Display free space. */
 			chunk = free_chunks(&newlab, -1);
 			for (; chunk->start != 0 || chunk->stop != 0; chunk++) {
-				total += chunk->stop - chunk->start;
+				total += CHUNKSZ(chunk);
 				fprintf(stderr, "Free sectors: %16llu - %16llu "
 				    "(%16llu)\n",
 				    chunk->start, chunk->stop - 1,
-				    chunk->stop - chunk->start);
+				    CHUNKSZ(chunk));
 			}
 			fprintf(stderr, "Total free sectors: %llu.\n", total);
 			break;
@@ -500,9 +501,9 @@ editor(int f)
 		}
 	}
 done:
-	mpfree(omountpoints);
-	mpfree(origmountpoints);
-	mpfree(tmpmountpoints);
+	mpfree(omountpoints, DISCARD);
+	mpfree(origmountpoints, DISCARD);
+	mpfree(tmpmountpoints, DISCARD);
 	return (error);
 }
 
@@ -555,10 +556,7 @@ again:
 	if (index >= alloc_table_nitems)
 		return 1;
 	lp = &label;
-	for (i = 0; i < MAXPARTITIONS; i++) {
-		free(mountpoints[i]);
-		mountpoints[i] = NULL;
-	}
+	mpfree(mountpoints, KEEP);
 	memcpy(lp, lp_org, sizeof(struct disklabel));
 	lp->d_npartitions = MAXPARTITIONS;
 	lastalloc = alloc_table[index].sz;
@@ -566,7 +564,7 @@ again:
 		goto again;
 	alloc = reallocarray(NULL, lastalloc, sizeof(struct space_allocation));
 	if (alloc == NULL)
-		errx(4, "out of memory");
+		err(1, NULL);
 	memcpy(alloc, alloc_table[index].table,
 	    lastalloc * sizeof(struct space_allocation));
 
@@ -674,7 +672,7 @@ again:
 			}
 			free(*partmp);
 			if ((*partmp = strdup(ap->mp)) == NULL)
-				errx(4, "out of memory");
+				err(1, NULL);
 		}
 	}
 
@@ -788,8 +786,8 @@ editor_add(struct disklabel *lp, const char *p)
 	chunk = free_chunks(lp, -1);
 	new_size = new_offset = 0;
 	for (; chunk->start != 0 || chunk->stop != 0; chunk++) {
-		if (chunk->stop - chunk->start > new_size) {
-			new_size = chunk->stop - chunk->start;
+		if (CHUNKSZ(chunk) > new_size) {
+			new_size = CHUNKSZ(chunk);
 			new_offset = chunk->start;
 		}
 	}
@@ -1413,7 +1411,7 @@ editor_countfree(const struct disklabel *lp)
 	chunk = free_chunks(lp, -1);
 
 	for (; chunk->start != 0 || chunk->stop != 0; chunk++)
-		freesectors += chunk->stop - chunk->start;
+		freesectors += CHUNKSZ(chunk);
 
 	return (freesectors);
 }
@@ -1454,7 +1452,7 @@ mpcopy(char **to, char **from)
 		if (from[i] != NULL) {
 			to[i] = strdup(from[i]);
 			if (to[i] == NULL)
-				errx(4, "out of memory");
+				err(1, NULL);
 		}
 	}
 }
@@ -1540,17 +1538,22 @@ mpsave(const struct disklabel *lp)
 }
 
 void
-mpfree(char **mp)
+mpfree(char **mp, int action)
 {
 	int part;
 
 	if (mp == NULL)
 		return;
 
-	for (part = 0; part < MAXPARTITIONS; part++)
+	for (part = 0; part < MAXPARTITIONS; part++) {
 		free(mp[part]);
+		mp[part] = NULL;
+	}
 
-	free(mp);
+	if (action == DISCARD) {
+		free(mp);
+		mp = NULL;
+	}
 }
 
 int
@@ -1752,7 +1755,7 @@ get_mp(const struct disklabel *lp, int partno)
 			/* XXX - might as well realloc */
 			free(mountpoints[partno]);
 			if ((mountpoints[partno] = strdup(p)) == NULL)
-				errx(4, "out of memory");
+				err(1, NULL);
 			break;
 		}
 		fputs("Mount points must start with '/'\n", stderr);
@@ -1783,13 +1786,10 @@ zero_partitions(struct disklabel *lp)
 {
 	int i;
 
-	for (i = 0; i < MAXPARTITIONS; i++) {
-		memset(&lp->d_partitions[i], 0, sizeof(struct partition));
-		free(mountpoints[i]);
-		mountpoints[i] = NULL;
-	}
-
+	memset(lp->d_partitions, 0, sizeof(lp->d_partitions));
 	DL_SETPSIZE(&lp->d_partitions[RAW_PART], DL_GETDSIZE(lp));
+
+	mpfree(mountpoints, KEEP);
 }
 
 u_int64_t
@@ -1979,7 +1979,7 @@ parse_sizerange(char *buf, u_int64_t *min, u_int64_t *max)
 		return (-1);
 	if (p != NULL && p[0] != '\0') {
 		if (p[0] == '*')
-			*max = -1;
+			*max = UINT64_MAX;
 		else
 			if (parse_sizespec(p, &val2, &unit2) == -1)
 				return (-1);

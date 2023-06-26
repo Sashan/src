@@ -1,4 +1,4 @@
-/*	$OpenBSD: cert.c,v 1.108 2023/05/09 10:34:32 tb Exp $ */
+/*	$OpenBSD: cert.c,v 1.113 2023/06/24 04:15:14 tb Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Job Snijders <job@openbsd.org>
@@ -204,6 +204,11 @@ sbgp_assysnum(struct parse *p, X509_EXTENSION *ext)
 		goto out;
 	}
 
+	if (asz == 0) {
+		warnx("%s: RFC 6487 section 4.8.11: empty asIdsOrRanges",
+		    p->fn);
+		goto out;
+	}
 	if (asz >= MAX_AS_SIZE) {
 		warnx("%s: too many AS number entries: limit %d",
 		    p->fn, MAX_AS_SIZE);
@@ -371,6 +376,11 @@ sbgp_ipaddrblk(struct parse *p, X509_EXTENSION *ext)
 			    p->fn, af->ipAddressChoice->type);
 			goto out;
 		}
+		if (ipsz == p->res->ipsz) {
+			warnx("%s: RFC 6487 section 4.8.10: "
+			    "empty ipAddressesOrRanges", p->fn);
+			goto out;
+		}
 
 		if (ipsz >= MAX_IP_SIZE)
 			goto out;
@@ -410,6 +420,11 @@ sbgp_ipaddrblk(struct parse *p, X509_EXTENSION *ext)
 				goto out;
 			}
 		}
+	}
+
+	if (p->res->ipsz == 0) {
+		warnx("%s: RFC 6487 section 4.8.10: empty ipAddrBlock", p->fn);
+		goto out;
 	}
 
 	rc = 1;
@@ -596,6 +611,11 @@ cert_parse_ee_cert(const char *fn, X509 *x)
 	if ((p.res = calloc(1, sizeof(struct cert))) == NULL)
 		err(1, NULL);
 
+	if (X509_get_version(x) != 2) {
+		warnx("%s: RFC 6487 4.1: X.509 version must be v3", fn);
+		goto out;
+	}
+
 	if (X509_get_key_usage(x) != KU_DIGITAL_SIGNATURE) {
 		warnx("%s: RFC 6487 section 4.8.4: KU must be digitalSignature",
 		    fn);
@@ -643,7 +663,6 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 {
 	const unsigned char	*oder;
 	int			 extsz;
-	int			 sia_present = 0;
 	size_t			 i;
 	X509			*x = NULL;
 	X509_EXTENSION		*ext = NULL;
@@ -653,7 +672,10 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 	ASN1_OBJECT		*obj;
 	EVP_PKEY		*pkey;
 	struct parse		 p;
-	int			 nid;
+	int			 nid, ip, as, sia, cp, crldp, aia, aki, ski,
+				 eku, bc, ku;
+
+	nid = ip = as = sia = cp = crldp = aia = aki = ski = eku = bc = ku = 0;
 
 	/* just fail for empty buffers, the warning was printed elsewhere */
 	if (der == NULL)
@@ -677,6 +699,11 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 	/* Cache X509v3 extensions, see X509_check_ca(3). */
 	if (X509_check_purpose(x, -1, -1) <= 0) {
 		cryptowarnx("%s: could not cache X509v3 extensions", p.fn);
+		goto out;
+	}
+
+	if (X509_get_version(x) != 2) {
+		warnx("%s: RFC 6487 4.1: X.509 version must be v3", fn);
 		goto out;
 	}
 
@@ -711,38 +738,58 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 		obj = X509_EXTENSION_get_object(ext);
 		assert(obj != NULL);
 
-		switch (OBJ_obj2nid(obj)) {
+		switch (nid = OBJ_obj2nid(obj)) {
 		case NID_sbgp_ipAddrBlock:
+			if (ip++ > 0)
+				goto dup;
 			if (!sbgp_ipaddrblk(&p, ext))
 				goto out;
 			break;
 		case NID_sbgp_autonomousSysNum:
+			if (as++ > 0)
+				goto dup;
 			if (!sbgp_assysnum(&p, ext))
 				goto out;
 			break;
 		case NID_sinfo_access:
-			sia_present = 1;
+			if (sia++ > 0)
+				goto dup;
 			if (!sbgp_sia(&p, ext))
 				goto out;
 			break;
 		case NID_certificate_policies:
+			if (cp++ > 0)
+				goto dup;
 			if (!certificate_policies(&p, ext))
 				goto out;
 			break;
 		case NID_crl_distribution_points:
-			/* ignored here, handled later */
+			if (crldp++ > 0)
+				goto dup;
 			break;
 		case NID_info_access:
+			if (aia++ > 0)
+				goto dup;
 			break;
 		case NID_authority_key_identifier:
+			if (aki++ > 0)
+				goto dup;
 			break;
 		case NID_subject_key_identifier:
+			if (ski++ > 0)
+				goto dup;
 			break;
 		case NID_ext_key_usage:
+			if (eku++ > 0)
+				goto dup;
 			break;
 		case NID_basic_constraints:
+			if (bc++ > 0)
+				goto dup;
 			break;
 		case NID_key_usage:
+			if (ku++ > 0)
+				goto dup;
 			break;
 		default:
 			/* unexpected extensions warrant investigation */
@@ -821,7 +868,7 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 				goto out;
 			}
 		}
-		if (sia_present) {
+		if (sia) {
 			warnx("%s: unexpected SIA extension in BGPsec cert",
 			    p.fn);
 			goto out;
@@ -840,7 +887,10 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 	p.res->x509 = x;
 	return p.res;
 
-out:
+ dup:
+	warnx("%s: RFC 5280 section 4.2: duplicate %s extension", fn,
+	    OBJ_nid2sn(nid));
+ out:
 	cert_free(p.res);
 	X509_free(x);
 	return NULL;

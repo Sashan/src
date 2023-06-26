@@ -1,4 +1,4 @@
-/* $OpenBSD: ech_lib.c,v 1.16 2023/04/25 19:26:45 tb Exp $ */
+/* $OpenBSD: ech_lib.c,v 1.22 2023/06/25 19:17:43 tb Exp $ */
 /* ====================================================================
  * Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
  *
@@ -77,13 +77,27 @@
 #include <openssl/err.h>
 
 #include "ec_local.h"
-#include "ech_local.h"
+
+struct ecdh_method {
+	const char *name;
+	int (*compute_key)(void *key, size_t outlen, const EC_POINT *pub_key, EC_KEY *ecdh,
+	    void *(*KDF)(const void *in, size_t inlen, void *out, size_t *outlen));
+	int flags;
+	char *app_data;
+};
 
 static const ECDH_METHOD *default_ECDH_method = NULL;
 
-static void *ecdh_data_new(void);
-static void *ecdh_data_dup(void *);
-static void  ecdh_data_free(void *);
+static const ECDH_METHOD openssl_ecdh_meth = {
+	.name = "OpenSSL ECDH method",
+	.compute_key = ossl_ecdh_compute_key,
+};
+
+const ECDH_METHOD *
+ECDH_OpenSSL(void)
+{
+	return &openssl_ecdh_meth;
+}
 
 void
 ECDH_set_default_method(const ECDH_METHOD *meth)
@@ -103,142 +117,24 @@ ECDH_get_default_method(void)
 int
 ECDH_set_method(EC_KEY *eckey, const ECDH_METHOD *meth)
 {
-	ECDH_DATA *ecdh;
-
-	ecdh = ecdh_check(eckey);
-
-	if (ecdh == NULL)
-		return 0;
-
-#ifndef OPENSSL_NO_ENGINE
-	ENGINE_finish(ecdh->engine);
-	ecdh->engine = NULL;
-#endif
-	ecdh->meth = meth;
-	return 1;
-}
-
-static ECDH_DATA *
-ECDH_DATA_new_method(ENGINE *engine)
-{
-	ECDH_DATA *ret;
-
-	ret = malloc(sizeof(ECDH_DATA));
-	if (ret == NULL) {
-		ECDHerror(ERR_R_MALLOC_FAILURE);
-		return (NULL);
-	}
-
-	ret->init = NULL;
-
-	ret->meth = ECDH_get_default_method();
-	ret->engine = engine;
-#ifndef OPENSSL_NO_ENGINE
-	if (!ret->engine)
-		ret->engine = ENGINE_get_default_ECDH();
-	if (ret->engine) {
-		ret->meth = ENGINE_get_ECDH(ret->engine);
-		if (ret->meth == NULL) {
-			ECDHerror(ERR_R_ENGINE_LIB);
-			ENGINE_finish(ret->engine);
-			free(ret);
-			return NULL;
-		}
-	}
-#endif
-
-	ret->flags = ret->meth->flags;
-	CRYPTO_new_ex_data(CRYPTO_EX_INDEX_ECDH, ret, &ret->ex_data);
-	return (ret);
-}
-
-static void *
-ecdh_data_new(void)
-{
-	return (void *)ECDH_DATA_new_method(NULL);
-}
-
-static void *
-ecdh_data_dup(void *data)
-{
-	ECDH_DATA *r = (ECDH_DATA *)data;
-
-	/* XXX: dummy operation */
-	if (r == NULL)
-		return NULL;
-
-	return (void *)ecdh_data_new();
-}
-
-void
-ecdh_data_free(void *data)
-{
-	ECDH_DATA *r = (ECDH_DATA *)data;
-
-#ifndef OPENSSL_NO_ENGINE
-	ENGINE_finish(r->engine);
-#endif
-
-	CRYPTO_free_ex_data(CRYPTO_EX_INDEX_ECDH, r, &r->ex_data);
-
-	freezero(r, sizeof(ECDH_DATA));
-}
-
-ECDH_DATA *
-ecdh_check(EC_KEY *key)
-{
-	ECDH_DATA *ecdh_data;
-
-	void *data = EC_KEY_get_key_method_data(key, ecdh_data_dup,
-	    ecdh_data_free, ecdh_data_free);
-	if (data == NULL) {
-		ecdh_data = (ECDH_DATA *)ecdh_data_new();
-		if (ecdh_data == NULL)
-			return NULL;
-		data = EC_KEY_insert_key_method_data(key, (void *)ecdh_data,
-		    ecdh_data_dup, ecdh_data_free, ecdh_data_free);
-		if (data != NULL) {
-			/* Another thread raced us to install the key_method
-			 * data and won. */
-			ecdh_data_free(ecdh_data);
-			ecdh_data = (ECDH_DATA *)data;
-		}
-	} else
-		ecdh_data = (ECDH_DATA *)data;
-
-	return ecdh_data;
+	return 0;
 }
 
 int
 ECDH_get_ex_new_index(long argl, void *argp, CRYPTO_EX_new *new_func,
     CRYPTO_EX_dup *dup_func, CRYPTO_EX_free *free_func)
 {
-	return CRYPTO_get_ex_new_index(CRYPTO_EX_INDEX_ECDH, argl, argp,
-	    new_func, dup_func, free_func);
+	return -1;
 }
 
 int
 ECDH_set_ex_data(EC_KEY *d, int idx, void *arg)
 {
-	ECDH_DATA *ecdh;
-	ecdh = ecdh_check(d);
-	if (ecdh == NULL)
-		return 0;
-	return (CRYPTO_set_ex_data(&ecdh->ex_data, idx, arg));
+	return 0;
 }
 
 void *
 ECDH_get_ex_data(EC_KEY *d, int idx)
 {
-	ECDH_DATA *ecdh;
-	ecdh = ecdh_check(d);
-	if (ecdh == NULL)
-		return NULL;
-	return (CRYPTO_get_ex_data(&ecdh->ex_data, idx));
-}
-
-int
-ECDH_size(const EC_KEY *d)
-{
-	return ((EC_GROUP_get_degree(EC_KEY_get0_group(d)) + 7) / 8);
+	return NULL;
 }

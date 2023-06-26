@@ -1,4 +1,4 @@
-/*	$OpenBSD: cms.c,v 1.34 2023/05/30 11:09:08 tb Exp $ */
+/*	$OpenBSD: cms.c,v 1.37 2023/06/20 02:46:18 job Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -225,6 +225,9 @@ cms_parse_validate_internal(X509 **xp, const char *fn, const unsigned char *der,
 	if (has_bst)
 		warnx("%s: unsupported CMS signing-time attribute", fn);
 
+	if (!has_st)
+		warnx("%s: missing CMS signing-time attribute", fn);
+
 	if (CMS_unsigned_get_attr_count(si) != -1) {
 		cryptowarnx("%s: RFC 6488: CMS has unsignedAttrs", fn);
 		goto out;
@@ -273,7 +276,7 @@ cms_parse_validate_internal(X509 **xp, const char *fn, const unsigned char *der,
 	assert(octype != NULL);
 	if (OBJ_cmp(obj, octype) != 0) {
 		OBJ_obj2txt(buf, sizeof(buf), obj, 1);
-		OBJ_obj2txt(obuf, sizeof(obuf), oid, 1);
+		OBJ_obj2txt(obuf, sizeof(obuf), octype, 1);
 		warnx("%s: RFC 6488: eContentType does not match Content-Type "
 		    "OID: %s, want %s", fn, buf, obuf);
 		goto out;
@@ -315,11 +318,9 @@ cms_parse_validate_internal(X509 **xp, const char *fn, const unsigned char *der,
 
 	if (!x509_get_notafter(*xp, fn, &notafter))
 		goto out;
-	if (*signtime > notafter) {
+	if (*signtime > notafter)
 		warnx("%s: dating issue: CMS signing-time after X.509 notAfter",
 		    fn);
-		goto out;
-	}
 
 	if (CMS_SignerInfo_get0_signer_id(si, &kid, NULL, NULL) != 1 ||
 	    kid == NULL) {

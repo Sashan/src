@@ -1,4 +1,4 @@
-/* $OpenBSD: ecs_lib.c,v 1.17 2023/04/25 19:26:45 tb Exp $ */
+/* $OpenBSD: ecs_lib.c,v 1.22 2023/06/25 19:33:39 tb Exp $ */
 /* ====================================================================
  * Copyright (c) 1998-2005 The OpenSSL Project.  All rights reserved.
  *
@@ -68,9 +68,18 @@
 
 static const ECDSA_METHOD *default_ECDSA_method = NULL;
 
-static void *ecdsa_data_new(void);
-static void *ecdsa_data_dup(void *);
-static void  ecdsa_data_free(void *);
+static const ECDSA_METHOD openssl_ecdsa_meth = {
+	.name = "OpenSSL ECDSA method",
+	.ecdsa_do_sign = ossl_ecdsa_sign_sig,
+	.ecdsa_sign_setup = ossl_ecdsa_sign_setup,
+	.ecdsa_do_verify = ossl_ecdsa_verify_sig,
+};
+
+const ECDSA_METHOD *
+ECDSA_OpenSSL(void)
+{
+	return &openssl_ecdsa_meth;
+}
 
 void
 ECDSA_set_default_method(const ECDSA_METHOD *meth)
@@ -90,168 +99,24 @@ ECDSA_get_default_method(void)
 int
 ECDSA_set_method(EC_KEY *eckey, const ECDSA_METHOD *meth)
 {
-	ECDSA_DATA *ecdsa;
-
-	ecdsa = ecdsa_check(eckey);
-
-	if (ecdsa == NULL)
-		return 0;
-
-#ifndef OPENSSL_NO_ENGINE
-	ENGINE_finish(ecdsa->engine);
-	ecdsa->engine = NULL;
-#endif
-	ecdsa->meth = meth;
-
-	return 1;
-}
-
-static ECDSA_DATA *
-ECDSA_DATA_new_method(ENGINE *engine)
-{
-	ECDSA_DATA *ret;
-
-	ret = malloc(sizeof(ECDSA_DATA));
-	if (ret == NULL) {
-		ECDSAerror(ERR_R_MALLOC_FAILURE);
-		return (NULL);
-	}
-
-	ret->init = NULL;
-
-	ret->meth = ECDSA_get_default_method();
-	ret->engine = engine;
-#ifndef OPENSSL_NO_ENGINE
-	if (!ret->engine)
-		ret->engine = ENGINE_get_default_ECDSA();
-	if (ret->engine) {
-		ret->meth = ENGINE_get_ECDSA(ret->engine);
-		if (ret->meth == NULL) {
-			ECDSAerror(ERR_R_ENGINE_LIB);
-			ENGINE_finish(ret->engine);
-			free(ret);
-			return NULL;
-		}
-	}
-#endif
-
-	ret->flags = ret->meth->flags;
-	CRYPTO_new_ex_data(CRYPTO_EX_INDEX_ECDSA, ret, &ret->ex_data);
-	return (ret);
-}
-
-static void *
-ecdsa_data_new(void)
-{
-	return (void *)ECDSA_DATA_new_method(NULL);
-}
-
-static void *
-ecdsa_data_dup(void *data)
-{
-	ECDSA_DATA *r = (ECDSA_DATA *)data;
-
-	/* XXX: dummy operation */
-	if (r == NULL)
-		return NULL;
-
-	return ecdsa_data_new();
-}
-
-static void
-ecdsa_data_free(void *data)
-{
-	ECDSA_DATA *r = (ECDSA_DATA *)data;
-
-#ifndef OPENSSL_NO_ENGINE
-	ENGINE_finish(r->engine);
-#endif
-	CRYPTO_free_ex_data(CRYPTO_EX_INDEX_ECDSA, r, &r->ex_data);
-
-	freezero(r, sizeof(ECDSA_DATA));
-}
-
-ECDSA_DATA *
-ecdsa_check(EC_KEY *key)
-{
-	ECDSA_DATA *ecdsa_data;
-
-	void *data = EC_KEY_get_key_method_data(key, ecdsa_data_dup,
-	    ecdsa_data_free, ecdsa_data_free);
-	if (data == NULL) {
-		ecdsa_data = (ECDSA_DATA *)ecdsa_data_new();
-		if (ecdsa_data == NULL)
-			return NULL;
-		data = EC_KEY_insert_key_method_data(key, (void *)ecdsa_data,
-		    ecdsa_data_dup, ecdsa_data_free, ecdsa_data_free);
-		if (data != NULL) {
-			/* Another thread raced us to install the key_method
-			 * data and won. */
-			ecdsa_data_free(ecdsa_data);
-			ecdsa_data = (ECDSA_DATA *)data;
-		}
-	} else
-		ecdsa_data = (ECDSA_DATA *)data;
-
-	return ecdsa_data;
-}
-
-int
-ECDSA_size(const EC_KEY *r)
-{
-	BIGNUM *order = NULL;
-	const EC_GROUP *group;
-	ECDSA_SIG signature;
-	int ret = 0;
-
-	if (r == NULL)
-		goto err;
-
-	if ((group = EC_KEY_get0_group(r)) == NULL)
-		goto err;
-
-	if ((order = BN_new()) == NULL)
-		goto err;
-
-	if (!EC_GROUP_get_order(group, order, NULL))
-		goto err;
-
-	signature.r = order;
-	signature.s = order;
-
-	if ((ret = i2d_ECDSA_SIG(&signature, NULL)) < 0)
-		ret = 0;
-
- err:
-	BN_free(order);
-
-	return ret;
+	return 0;
 }
 
 int
 ECDSA_get_ex_new_index(long argl, void *argp, CRYPTO_EX_new *new_func,
     CRYPTO_EX_dup *dup_func, CRYPTO_EX_free *free_func)
 {
-	return CRYPTO_get_ex_new_index(CRYPTO_EX_INDEX_ECDSA, argl, argp,
-	    new_func, dup_func, free_func);
+	return -1;
 }
 
 int
 ECDSA_set_ex_data(EC_KEY *d, int idx, void *arg)
 {
-	ECDSA_DATA *ecdsa;
-	ecdsa = ecdsa_check(d);
-	if (ecdsa == NULL)
-		return 0;
-	return (CRYPTO_set_ex_data(&ecdsa->ex_data, idx, arg));
+	return 0;
 }
 
 void *
 ECDSA_get_ex_data(EC_KEY *d, int idx)
 {
-	ECDSA_DATA *ecdsa;
-	ecdsa = ecdsa_check(d);
-	if (ecdsa == NULL)
-		return NULL;
-	return (CRYPTO_get_ex_data(&ecdsa->ex_data, idx));
+	return NULL;
 }

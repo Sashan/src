@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.241 2023/05/30 16:02:28 job Exp $ */
+/*	$OpenBSD: main.c,v 1.243 2023/06/23 11:36:24 claudio Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -280,9 +280,8 @@ rrdp_fetch(unsigned int id, const char *uri, const char *local,
 	io_simple_buffer(b, &id, sizeof(id));
 	io_str_buffer(b, local);
 	io_str_buffer(b, uri);
-	io_str_buffer(b, s->session_id);
-	io_simple_buffer(b, &s->serial, sizeof(s->serial));
-	io_str_buffer(b, s->last_mod);
+
+	rrdp_session_buffer(b, s);
 	io_close_buffer(&rrdpq, b);
 }
 
@@ -341,7 +340,7 @@ http_fetch(unsigned int id, const char *uri, const char *last_mod, int fd)
 	io_str_buffer(b, uri);
 	io_str_buffer(b, last_mod);
 	/* pass file as fd */
-	b->fd = fd;
+	ibuf_fd_set(b, fd);
 	io_close_buffer(&httpq, b);
 }
 
@@ -362,7 +361,7 @@ rrdp_http_fetch(unsigned int id, const char *uri, const char *last_mod)
 	b = io_new_buffer();
 	io_simple_buffer(b, &type, sizeof(type));
 	io_simple_buffer(b, &id, sizeof(id));
-	b->fd = pi[0];
+	ibuf_fd_set(b, pi[0]);
 	io_close_buffer(&rrdpq, b);
 
 	http_fetch(id, uri, last_mod, pi[1]);
@@ -679,7 +678,7 @@ rrdp_process(struct ibuf *b)
 {
 	enum rrdp_msg type;
 	enum publish_type pt;
-	struct rrdp_session s;
+	struct rrdp_session *s;
 	char *uri, *last_mod, *data;
 	char hash[SHA256_DIGEST_LENGTH];
 	size_t dsz;
@@ -700,12 +699,9 @@ rrdp_process(struct ibuf *b)
 		rrdp_http_fetch(id, uri, last_mod);
 		break;
 	case RRDP_SESSION:
-		io_read_str(b, &s.session_id);
-		io_read_buf(b, &s.serial, sizeof(s.serial));
-		io_read_str(b, &s.last_mod);
-		rrdp_save_state(id, &s);
-		free(s.session_id);
-		free(s.last_mod);
+		s = rrdp_session_read(b);
+		rrdp_session_save(id, s);
+		rrdp_session_free(s);
 		break;
 	case RRDP_FILE:
 		io_read_buf(b, &pt, sizeof(pt));

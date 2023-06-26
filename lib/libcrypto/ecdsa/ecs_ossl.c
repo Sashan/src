@@ -1,4 +1,4 @@
-/* $OpenBSD: ecs_ossl.c,v 1.33 2023/04/13 15:00:24 tb Exp $ */
+/* $OpenBSD: ecs_ossl.c,v 1.37 2023/06/25 19:33:39 tb Exp $ */
 /*
  * Written by Nils Larsch for the OpenSSL project
  */
@@ -71,25 +71,6 @@
 
 static int ecdsa_prepare_digest(const unsigned char *dgst, int dgst_len,
     BIGNUM *order, BIGNUM *ret);
-static ECDSA_SIG *ecdsa_do_sign(const unsigned char *dgst, int dgst_len,
-    const BIGNUM *, const BIGNUM *, EC_KEY *eckey);
-static int ecdsa_sign_setup(EC_KEY *eckey, BN_CTX *ctx_in, BIGNUM **kinvp,
-    BIGNUM **rp);
-static int ecdsa_do_verify(const unsigned char *dgst, int dgst_len,
-    const ECDSA_SIG *sig, EC_KEY *eckey);
-
-static ECDSA_METHOD openssl_ecdsa_meth = {
-	.name = "OpenSSL ECDSA method",
-	.ecdsa_do_sign = ecdsa_do_sign,
-	.ecdsa_sign_setup = ecdsa_sign_setup,
-	.ecdsa_do_verify = ecdsa_do_verify
-};
-
-const ECDSA_METHOD *
-ECDSA_OpenSSL(void)
-{
-	return &openssl_ecdsa_meth;
-}
 
 static int
 ecdsa_prepare_digest(const unsigned char *dgst, int dgst_len, BIGNUM *order,
@@ -139,8 +120,8 @@ ossl_ecdsa_sign(int type, const unsigned char *dgst, int dlen, unsigned char *si
 	return ret;
 }
 
-static int
-ecdsa_sign_setup(EC_KEY *eckey, BN_CTX *ctx_in, BIGNUM **kinvp, BIGNUM **rp)
+int
+ossl_ecdsa_sign_setup(EC_KEY *eckey, BN_CTX *ctx_in, BIGNUM **kinvp, BIGNUM **rp)
 {
 	BN_CTX *ctx = ctx_in;
 	BIGNUM *k = NULL, *r = NULL, *order = NULL, *X = NULL;
@@ -260,18 +241,6 @@ ecdsa_sign_setup(EC_KEY *eckey, BN_CTX *ctx_in, BIGNUM **kinvp, BIGNUM **rp)
 	return (ret);
 }
 
-/* replace w/ ecdsa_sign_setup() when ECDSA_METHOD gets removed */
-int
-ossl_ecdsa_sign_setup(EC_KEY *eckey, BN_CTX *ctx_in, BIGNUM **kinvp, BIGNUM **rp)
-{
-	ECDSA_DATA *ecdsa;
-
-	if ((ecdsa = ecdsa_check(eckey)) == NULL)
-		return 0;
-	return ecdsa->meth->ecdsa_sign_setup(eckey, ctx_in, kinvp, rp);
-}
-
-
 /*
  * It is too expensive to check curve parameters on every sign operation.
  * Instead, cap the number of retries. A single retry is very unlikely, so
@@ -279,8 +248,8 @@ ossl_ecdsa_sign_setup(EC_KEY *eckey, BN_CTX *ctx_in, BIGNUM **kinvp, BIGNUM **rp
  */
 #define ECDSA_MAX_SIGN_ITERATIONS		32
 
-static ECDSA_SIG *
-ecdsa_do_sign(const unsigned char *dgst, int dgst_len,
+ECDSA_SIG *
+ossl_ecdsa_sign_sig(const unsigned char *dgst, int dgst_len,
     const BIGNUM *in_kinv, const BIGNUM *in_r, EC_KEY *eckey)
 {
 	BIGNUM *b = NULL, *binv = NULL, *bm = NULL, *bxr = NULL;
@@ -289,15 +258,13 @@ ecdsa_do_sign(const unsigned char *dgst, int dgst_len,
 	BN_CTX *ctx = NULL;
 	const EC_GROUP *group;
 	ECDSA_SIG  *ret;
-	ECDSA_DATA *ecdsa;
 	int attempts = 0;
 	int ok = 0;
 
-	ecdsa = ecdsa_check(eckey);
 	group = EC_KEY_get0_group(eckey);
 	priv_key = EC_KEY_get0_private_key(eckey);
 
-	if (group == NULL || priv_key == NULL || ecdsa == NULL) {
+	if (group == NULL || priv_key == NULL) {
 		ECDSAerror(ERR_R_PASSED_NULL_PARAMETER);
 		return NULL;
 	}
@@ -434,18 +401,6 @@ ecdsa_do_sign(const unsigned char *dgst, int dgst_len,
 	return ret;
 }
 
-/* replace w/ ecdsa_do_sign() when ECDSA_METHOD gets removed */
-ECDSA_SIG *
-ossl_ecdsa_sign_sig(const unsigned char *dgst, int dgst_len,
-    const BIGNUM *in_kinv, const BIGNUM *in_r, EC_KEY *eckey)
-{
-	ECDSA_DATA *ecdsa;
-
-	if ((ecdsa = ecdsa_check(eckey)) == NULL)
-		return NULL;
-	return ecdsa->meth->ecdsa_do_sign(dgst, dgst_len, in_kinv, in_r, eckey);
-}
-
 int
 ossl_ecdsa_verify(int type, const unsigned char *dgst, int dgst_len,
     const unsigned char *sigbuf, int sig_len, EC_KEY *eckey)
@@ -472,8 +427,8 @@ ossl_ecdsa_verify(int type, const unsigned char *dgst, int dgst_len,
 	return (ret);
 }
 
-static int
-ecdsa_do_verify(const unsigned char *dgst, int dgst_len, const ECDSA_SIG *sig,
+int
+ossl_ecdsa_verify_sig(const unsigned char *dgst, int dgst_len, const ECDSA_SIG *sig,
     EC_KEY *eckey)
 {
 	BN_CTX *ctx;
@@ -563,18 +518,6 @@ ecdsa_do_verify(const unsigned char *dgst, int dgst_len, const ECDSA_SIG *sig,
 	return ret;
 }
 
-/* replace w/ ecdsa_do_verify() when ECDSA_METHOD gets removed */
-int
-ossl_ecdsa_verify_sig(const unsigned char *dgst, int dgst_len,
-    const ECDSA_SIG *sig, EC_KEY *eckey)
-{
-	ECDSA_DATA *ecdsa;
-
-	if ((ecdsa = ecdsa_check(eckey)) == NULL)
-		return 0;
-	return ecdsa->meth->ecdsa_do_verify(dgst, dgst_len, sig, eckey);
-}
-
 ECDSA_SIG *
 ECDSA_do_sign(const unsigned char *dgst, int dlen, EC_KEY *eckey)
 {
@@ -636,4 +579,36 @@ ECDSA_verify(int type, const unsigned char *dgst, int dgst_len,
 		    sigbuf, sig_len, eckey);
 	ECDSAerror(EVP_R_METHOD_NOT_SUPPORTED);
 	return 0;
+}
+
+int
+ECDSA_size(const EC_KEY *r)
+{
+	BIGNUM *order = NULL;
+	const EC_GROUP *group;
+	ECDSA_SIG signature;
+	int ret = 0;
+
+	if (r == NULL)
+		goto err;
+
+	if ((group = EC_KEY_get0_group(r)) == NULL)
+		goto err;
+
+	if ((order = BN_new()) == NULL)
+		goto err;
+
+	if (!EC_GROUP_get_order(group, order, NULL))
+		goto err;
+
+	signature.r = order;
+	signature.s = order;
+
+	if ((ret = i2d_ECDSA_SIG(&signature, NULL)) < 0)
+		ret = 0;
+
+ err:
+	BN_free(order);
+
+	return ret;
 }

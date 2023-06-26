@@ -1,4 +1,4 @@
-/*	$OpenBSD: rkpinctrl.c,v 1.11 2023/03/04 22:51:12 kettenis Exp $	*/
+/*	$OpenBSD: rkpinctrl.c,v 1.13 2023/06/21 01:10:17 jsg Exp $	*/
 /*
  * Copyright (c) 2017, 2018 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -550,8 +550,8 @@ rk3328_pinctrl(uint32_t phandle, void *cookie)
 		bank = pins[i];
 		idx = pins[i + 1];
 		mux = pins[i + 2];
-		pull = rk3288_pull(bank, idx, pins[i + 3]);
-		strength = rk3288_strength(bank, idx, pins[i + 3]);
+		pull = rk3328_pull(bank, idx, pins[i + 3]);
+		strength = rk3328_strength(bank, idx, pins[i + 3]);
 
 		if (bank > 3 || idx > 32 || mux > 3)
 			continue;
@@ -1174,9 +1174,9 @@ rk3588_pinctrl(uint32_t phandle, void *cookie)
 		bank = pins[i];
 		idx = pins[i + 1];
 		mux = pins[i + 2];
-		pull = rk3568_pull(bank, idx, pins[i + 3]);
-		strength = rk3568_strength(bank, idx, pins[i + 3]);
-		schmitt = rk3568_schmitt(bank, idx, pins[i + 3]);
+		pull = rk3588_pull(bank, idx, pins[i + 3]);
+		strength = rk3588_strength(bank, idx, pins[i + 3]);
+		schmitt = rk3588_schmitt(bank, idx, pins[i + 3]);
 
 		if (bank > 5 || idx > 32 || mux > 15)
 			continue;
@@ -1237,7 +1237,7 @@ rk3588_pinctrl(uint32_t phandle, void *cookie)
 		if (strength >= 0) {
 			off = bank * 0x20 + (idx / 4) * 0x04;
 			mask = (0xf << ((idx % 4) * 4));
-			bits = ((1 << (strength + 1)) - 1) << ((idx % 4) * 4);
+			bits = (strength << ((idx % 4) * 4));
 			regmap_write_4(rm, ds_base + off, mask << 16 | bits);
 		}
 
@@ -1245,7 +1245,7 @@ rk3588_pinctrl(uint32_t phandle, void *cookie)
 		if (schmitt >= 0) {
 			off = bank * 0x10 + (idx / 8) * 0x04;
 			mask = (0x1 << (idx % 8));
-			bits = schmitt << (idx % 8);
+			bits = (schmitt << (idx % 8));
 			regmap_write_4(rm, smt_base + off, mask << 16 | bits);
 		}
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: gpt.c,v 1.91 2023/05/17 12:59:37 krw Exp $	*/
+/*	$OpenBSD: gpt.c,v 1.93 2023/06/20 11:52:08 krw Exp $	*/
 /*
  * Copyright (c) 2015 Markus Muller <mmu@grummel.net>
  * Copyright (c) 2015 Kenneth R Westerback <krw@openbsd.org>
@@ -77,10 +77,9 @@ name_to_string(const unsigned int pn)
 	static char		name[GPTPARTNAMESIZE + 1];
 	unsigned int		i;
 
-	memset(name, 0, sizeof(name));
-
-	for (i = 0; i < sizeof(name) && gp[pn].gp_name[i] != 0; i++)
+	for (i = 0; i < GPTPARTNAMESIZE && gp[pn].gp_name[i] != 0; i++)
 		name[i] = letoh16(gp[pn].gp_name[i]) & 0x7F;
+	name[i] = '\0';
 
 	return name;
 }
@@ -455,7 +454,7 @@ GPT_print_part(const unsigned int pn, const char *units, const int verbosity)
 			printf("      <invalid partition guid>             ");
 		else
 			printf("      %-36s ", guidstr);
-		printf("%-36s\n", name_to_string(pn));
+		printf("%s\n", name_to_string(pn));
 		free(guidstr);
 		attrs = gp[pn].gp_attrs;
 		if (attrs) {

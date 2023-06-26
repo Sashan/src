@@ -1,4 +1,4 @@
-/* $OpenBSD: ech_key.c,v 1.14 2022/11/26 16:08:52 tb Exp $ */
+/* $OpenBSD: ech_key.c,v 1.19 2023/06/25 19:35:56 tb Exp $ */
 /* ====================================================================
  * Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
  *
@@ -73,17 +73,12 @@
 #include <openssl/opensslconf.h>
 
 #include <openssl/bn.h>
+#include <openssl/ecdh.h>
 #include <openssl/err.h>
 #include <openssl/objects.h>
 #include <openssl/sha.h>
 
-#include "bn_local.h"
-#include "ech_local.h"
 #include "ec_local.h"
-
-static int ecdh_compute_key(void *out, size_t len, const EC_POINT *pub_key,
-    EC_KEY *ecdh,
-    void *(*KDF)(const void *in, size_t inlen, void *out, size_t *outlen));
 
 /*
  * This implementation is based on the following primitives in the IEEE 1363
@@ -92,8 +87,8 @@ static int ecdh_compute_key(void *out, size_t len, const EC_POINT *pub_key,
  *  - ECSVDP-DH
  * Finally an optional KDF is applied.
  */
-static int
-ecdh_compute_key(void *out, size_t outlen, const EC_POINT *pub_key,
+int
+ossl_ecdh_compute_key(void *out, size_t outlen, const EC_POINT *pub_key,
     EC_KEY *ecdh,
     void *(*KDF)(const void *in, size_t inlen, void *out, size_t *outlen))
 {
@@ -184,37 +179,12 @@ ecdh_compute_key(void *out, size_t outlen, const EC_POINT *pub_key,
 		ret = outlen;
 	}
 
-err:
+ err:
 	EC_POINT_free(tmp);
-	if (ctx)
-		BN_CTX_end(ctx);
+	BN_CTX_end(ctx);
 	BN_CTX_free(ctx);
 	free(buf);
 	return (ret);
-}
-
-static ECDH_METHOD openssl_ecdh_meth = {
-	.name = "OpenSSL ECDH method",
-	.compute_key = ecdh_compute_key
-};
-
-const ECDH_METHOD *
-ECDH_OpenSSL(void)
-{
-	return &openssl_ecdh_meth;
-}
-
-/* replace w/ ecdh_compute_key() when ECDH_METHOD gets removed */
-int
-ossl_ecdh_compute_key(void *out, size_t outlen, const EC_POINT *pub_key,
-    EC_KEY *eckey,
-    void *(*KDF)(const void *in, size_t inlen, void *out, size_t *outlen))
-{
-	ECDH_DATA *ecdh;
-
-	if ((ecdh = ecdh_check(eckey)) == NULL)
-		return 0;
-	return ecdh->meth->compute_key(out, outlen, pub_key, eckey, KDF);
 }
 
 int
@@ -226,4 +196,10 @@ ECDH_compute_key(void *out, size_t outlen, const EC_POINT *pub_key,
 		return eckey->meth->compute_key(out, outlen, pub_key, eckey, KDF);
 	ECerror(EC_R_NOT_IMPLEMENTED);
 	return 0;
+}
+
+int
+ECDH_size(const EC_KEY *d)
+{
+	return ((EC_GROUP_get_degree(EC_KEY_get0_group(d)) + 7) / 8);
 }

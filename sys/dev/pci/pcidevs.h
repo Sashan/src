@@ -2,7 +2,7 @@
  * THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
  *
  * generated from:
- *	OpenBSD: pcidevs,v 1.2037 2023/05/22 13:23:56 denis Exp 
+ *	OpenBSD: pcidevs,v 1.2039 2023/06/13 02:43:39 jcs Exp 
  */
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
 
@@ -2102,7 +2102,9 @@
 #define	PCI_PRODUCT_ATI_BEIGE_GOBY_4	0x7423		/* Navi 24 */
 #define	PCI_PRODUCT_ATI_BEIGE_GOBY_5	0x7424		/* Navi 24 */
 #define	PCI_PRODUCT_ATI_BEIGE_GOBY_6	0x743f		/* Navi 24 */
+#define	PCI_PRODUCT_ATI_NAVI31_2	0x7448		/* Navi 31 */
 #define	PCI_PRODUCT_ATI_NAVI31_1	0x744c		/* Navi 31 */
+#define	PCI_PRODUCT_ATI_NAVI31_3	0x745e		/* Navi 31 */
 #define	PCI_PRODUCT_ATI_NAVI33_1	0x7480		/* Navi 33 */
 #define	PCI_PRODUCT_ATI_NAVI33_2	0x7483		/* Navi 33 */
 #define	PCI_PRODUCT_ATI_RADEON_9000IGP	0x7834		/* Radeon 9000/9100 IGP */
@@ -8635,6 +8637,7 @@
 #define	PCI_PRODUCT_SANDISK_WDSXXXG3X0C	0x5006		/* WD Black NVMe */
 #define	PCI_PRODUCT_SANDISK_PCSN530	0x5008		/* PC SN530 */
 #define	PCI_PRODUCT_SANDISK_SN850	0x5011		/* SN850 */
+#define	PCI_PRODUCT_SANDISK_PCSN740	0x5015		/* PC SN740 */
 
 /* Sangoma products */
 #define	PCI_PRODUCT_SANGOMA_A10X	0x0300		/* A10x */

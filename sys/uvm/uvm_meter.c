@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_meter.c,v 1.42 2020/12/28 14:01:23 mpi Exp $	*/
+/*	$OpenBSD: uvm_meter.c,v 1.44 2023/06/21 21:16:21 cheloha Exp $	*/
 /*	$NetBSD: uvm_meter.c,v 1.21 2001/07/14 06:36:03 matt Exp $	*/
 
 /*
