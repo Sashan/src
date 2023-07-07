@@ -1,4 +1,4 @@
-/* $OpenBSD: acpi_x86.c,v 1.15 2022/03/06 15:12:00 deraadt Exp $ */
+/* $OpenBSD: acpi_x86.c,v 1.17 2023/07/06 06:58:07 deraadt Exp $ */
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  * Copyright (c) 2005 Jordan Hargrave <jordan@openbsd.org>

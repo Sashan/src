@@ -1,4 +1,4 @@
-#	$OpenBSD: files.fdt,v 1.193 2023/06/10 18:31:38 patrick Exp $
+#	$OpenBSD: files.fdt,v 1.195 2023/07/01 16:34:30 drahn Exp $
 #
 # Config file and device description for machine-independent FDT code.
 # Included by ports that need it.
@@ -669,6 +669,11 @@ device	qcaoss
 attach	qcaoss at fdt
 file	dev/fdt/qcaoss.c		qcaoss
 
+# Qualcomm CPU Clock
+device	qccpu
+attach	qccpu at fdt
+file	dev/fdt/qccpu.c		qccpu
+
 device	qcdwusb: fdt
 attach	qcdwusb at fdt
 file	dev/fdt/qcdwusb.c		qcdwusb
@@ -720,6 +725,11 @@ file	dev/fdt/qcspmi.c		qcspmi
 device	qcpdc
 attach	qcpdc at fdt
 file	dev/fdt/qcpdc.c			qcpdc
+
+# Qualcomm Temperature Sensor
+device	qctsens
+attach	qctsens at fdt
+file	dev/fdt/qctsens.c		qctsens
 
 # Qualcomm PMIC
 device	qcpmic: spmi

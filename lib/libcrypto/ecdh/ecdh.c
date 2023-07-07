@@ -1,4 +1,4 @@
-/* $OpenBSD: ech_key.c,v 1.19 2023/06/25 19:35:56 tb Exp $ */
+/* $OpenBSD: ecdh.c,v 1.3 2023/07/05 17:10:10 tb Exp $ */
 /* ====================================================================
  * Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
  *
@@ -68,123 +68,189 @@
  */
 
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <openssl/opensslconf.h>
 
 #include <openssl/bn.h>
+#include <openssl/ec.h>
 #include <openssl/ecdh.h>
 #include <openssl/err.h>
-#include <openssl/objects.h>
-#include <openssl/sha.h>
+#include <openssl/evp.h>
 
 #include "ec_local.h"
 
 /*
- * This implementation is based on the following primitives in the IEEE 1363
- * standard:
- *  - ECKAS-DH1
- *  - ECSVDP-DH
- * Finally an optional KDF is applied.
+ * Key derivation function from X9.63/SECG.
  */
+
+/* Way more than we will ever need */
+#define ECDH_KDF_MAX	(1 << 30)
+
 int
-ossl_ecdh_compute_key(void *out, size_t outlen, const EC_POINT *pub_key,
-    EC_KEY *ecdh,
+ecdh_KDF_X9_63(unsigned char *out, size_t outlen, const unsigned char *Z,
+    size_t Zlen, const unsigned char *sinfo, size_t sinfolen, const EVP_MD *md)
+{
+	EVP_MD_CTX *mctx = NULL;
+	unsigned int i;
+	size_t mdlen;
+	unsigned char ctr[4];
+	int rv = 0;
+
+	if (sinfolen > ECDH_KDF_MAX || outlen > ECDH_KDF_MAX ||
+	    Zlen > ECDH_KDF_MAX)
+		return 0;
+	mctx = EVP_MD_CTX_new();
+	if (mctx == NULL)
+		return 0;
+	mdlen = EVP_MD_size(md);
+	for (i = 1;; i++) {
+		unsigned char mtmp[EVP_MAX_MD_SIZE];
+		if (!EVP_DigestInit_ex(mctx, md, NULL))
+			goto err;
+		ctr[3] = i & 0xFF;
+		ctr[2] = (i >> 8) & 0xFF;
+		ctr[1] = (i >> 16) & 0xFF;
+		ctr[0] = (i >> 24) & 0xFF;
+		if (!EVP_DigestUpdate(mctx, Z, Zlen))
+			goto err;
+		if (!EVP_DigestUpdate(mctx, ctr, sizeof(ctr)))
+			goto err;
+		if (!EVP_DigestUpdate(mctx, sinfo, sinfolen))
+			goto err;
+		if (outlen >= mdlen) {
+			if (!EVP_DigestFinal(mctx, out, NULL))
+				goto err;
+			outlen -= mdlen;
+			if (outlen == 0)
+				break;
+			out += mdlen;
+		} else {
+			if (!EVP_DigestFinal(mctx, mtmp, NULL))
+				goto err;
+			memcpy(out, mtmp, outlen);
+			explicit_bzero(mtmp, mdlen);
+			break;
+		}
+	}
+	rv = 1;
+
+ err:
+	EVP_MD_CTX_free(mctx);
+
+	return rv;
+}
+
+/*
+ * Based on the ECKAS-DH1 and ECSVDP-DH primitives in the IEEE 1363 standard.
+ */
+/* XXX - KDF handling moved to ECDH_compute_key().  See OpenSSL e2285d87. */
+int
+ecdh_compute_key(void *out, size_t outlen, const EC_POINT *pub_key, EC_KEY *ecdh,
     void *(*KDF)(const void *in, size_t inlen, void *out, size_t *outlen))
 {
 	BN_CTX *ctx;
-	EC_POINT *tmp = NULL;
-	BIGNUM *x = NULL, *y = NULL;
+	BIGNUM *cofactor, *x;
 	const BIGNUM *priv_key;
-	const EC_GROUP* group;
-	int ret = -1;
-	size_t buflen, len;
+	const EC_GROUP *group;
+	EC_POINT *point = NULL;
 	unsigned char *buf = NULL;
+	int buflen;
+	int ret = -1;
 
 	if (outlen > INT_MAX) {
 		/* Sort of, anyway. */
-		ECDHerror(ERR_R_MALLOC_FAILURE);
+		ECerror(ERR_R_MALLOC_FAILURE);
 		return -1;
 	}
 
 	if ((ctx = BN_CTX_new()) == NULL)
 		goto err;
+
 	BN_CTX_start(ctx);
+
 	if ((x = BN_CTX_get(ctx)) == NULL)
 		goto err;
-	if ((y = BN_CTX_get(ctx)) == NULL)
+	if ((cofactor = BN_CTX_get(ctx)) == NULL)
 		goto err;
 
-	priv_key = EC_KEY_get0_private_key(ecdh);
-	if (priv_key == NULL) {
-		ECDHerror(ECDH_R_NO_PRIVATE_VALUE);
+	if ((group = EC_KEY_get0_group(ecdh)) == NULL)
 		goto err;
-	}
-
-	group = EC_KEY_get0_group(ecdh);
 
 	if (!EC_POINT_is_on_curve(group, pub_key, ctx))
 		goto err;
 
-	if ((tmp = EC_POINT_new(group)) == NULL) {
-		ECDHerror(ERR_R_MALLOC_FAILURE);
+	if ((point = EC_POINT_new(group)) == NULL) {
+		ECerror(ERR_R_MALLOC_FAILURE);
 		goto err;
 	}
 
-	if (!EC_POINT_mul(group, tmp, NULL, pub_key, priv_key, ctx)) {
-		ECDHerror(ECDH_R_POINT_ARITHMETIC_FAILURE);
+	if ((priv_key = EC_KEY_get0_private_key(ecdh)) == NULL) {
+		ECerror(EC_R_MISSING_PRIVATE_KEY);
 		goto err;
 	}
 
-	if (!EC_POINT_get_affine_coordinates(group, tmp, x, y, ctx)) {
-		ECDHerror(ECDH_R_POINT_ARITHMETIC_FAILURE);
+	if ((EC_KEY_get_flags(ecdh) & EC_FLAG_COFACTOR_ECDH) != 0) {
+		if (!EC_GROUP_get_cofactor(group, cofactor, NULL)) {
+			ECerror(ERR_R_EC_LIB);
+			goto err;
+		}
+		if (!BN_mul(cofactor, cofactor, priv_key, ctx)) {
+			ECerror(ERR_R_BN_LIB);
+			goto err;
+		}
+		priv_key = cofactor;
+	}
+
+	if (!EC_POINT_mul(group, point, NULL, pub_key, priv_key, ctx)) {
+		ECerror(EC_R_POINT_ARITHMETIC_FAILURE);
 		goto err;
 	}
 
-	buflen = ECDH_size(ecdh);
-	len = BN_num_bytes(x);
-	if (len > buflen) {
-		ECDHerror(ERR_R_INTERNAL_ERROR);
+	if (!EC_POINT_get_affine_coordinates(group, point, x, NULL, ctx)) {
+		ECerror(EC_R_POINT_ARITHMETIC_FAILURE);
+		goto err;
+	}
+
+	if ((buflen = ECDH_size(ecdh)) < BN_num_bytes(x)) {
+		ECerror(ERR_R_INTERNAL_ERROR);
 		goto err;
 	}
 	if (KDF == NULL && outlen < buflen) {
 		/* The resulting key would be truncated. */
-		ECDHerror(ECDH_R_KEY_TRUNCATION);
+		ECerror(EC_R_KEY_TRUNCATION);
 		goto err;
 	}
 	if ((buf = malloc(buflen)) == NULL) {
-		ECDHerror(ERR_R_MALLOC_FAILURE);
+		ECerror(ERR_R_MALLOC_FAILURE);
 		goto err;
 	}
-
-	memset(buf, 0, buflen - len);
-	if (len != (size_t)BN_bn2bin(x, buf + buflen - len)) {
-		ECDHerror(ERR_R_BN_LIB);
+	if (BN_bn2binpad(x, buf, buflen) != buflen) {
+		ECerror(ERR_R_BN_LIB);
 		goto err;
 	}
 
 	if (KDF != NULL) {
 		if (KDF(buf, buflen, out, &outlen) == NULL) {
-			ECDHerror(ECDH_R_KDF_FAILED);
+			ECerror(EC_R_KDF_FAILED);
 			goto err;
 		}
-		ret = outlen;
 	} else {
-		/* No KDF, just copy out the key and zero the rest. */
-		if (outlen > buflen) {
-			memset((void *)((uintptr_t)out + buflen), 0, outlen - buflen);
+		memset(out, 0, outlen);
+		if (outlen > buflen)
 			outlen = buflen;
-		}
 		memcpy(out, buf, outlen);
-		ret = outlen;
 	}
 
+	ret = outlen;
  err:
-	EC_POINT_free(tmp);
+	EC_POINT_free(point);
 	BN_CTX_end(ctx);
 	BN_CTX_free(ctx);
 	free(buf);
-	return (ret);
+
+	return ret;
 }
 
 int
@@ -192,14 +258,15 @@ ECDH_compute_key(void *out, size_t outlen, const EC_POINT *pub_key,
     EC_KEY *eckey,
     void *(*KDF)(const void *in, size_t inlen, void *out, size_t *outlen))
 {
-	if (eckey->meth->compute_key != NULL)
-		return eckey->meth->compute_key(out, outlen, pub_key, eckey, KDF);
-	ECerror(EC_R_NOT_IMPLEMENTED);
-	return 0;
+	if (eckey->meth->compute_key == NULL) {
+		ECerror(EC_R_NOT_IMPLEMENTED);
+		return 0;
+	}
+	return eckey->meth->compute_key(out, outlen, pub_key, eckey, KDF);
 }
 
 int
 ECDH_size(const EC_KEY *d)
 {
-	return ((EC_GROUP_get_degree(EC_KEY_get0_group(d)) + 7) / 8);
+	return (EC_GROUP_get_degree(EC_KEY_get0_group(d)) + 7) / 8;
 }

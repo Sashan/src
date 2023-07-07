@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.185 2023/06/23 11:36:24 claudio Exp $ */
+/*	$OpenBSD: extern.h,v 1.188 2023/06/29 14:33:35 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -351,11 +351,6 @@ struct gbr {
 	int		 talid; /* TAL the GBR is chained up to */
 };
 
-struct aspa_provider {
-	uint32_t	 as;
-	enum afi	 afi;
-};
-
 /*
  * A single ASPA record
  */
@@ -367,7 +362,7 @@ struct aspa {
 	char			*sia; /* SIA signedObject */
 	char			*ski; /* SKI */
 	uint32_t		 custasid; /* the customerASID */
-	struct aspa_provider	*providers; /* the providers */
+	uint32_t		*providers; /* the providers */
 	size_t			 providersz; /* number of providers */
 	time_t			 signtime; /* CMS signing-time attribute */
 	time_t		 	 notbefore; /* EE cert's Not Before */
@@ -382,7 +377,7 @@ struct aspa {
 struct vap {
 	RB_ENTRY(vap)		 entry;
 	uint32_t		 custasid;
-	struct aspa_provider	*providers;
+	uint32_t		*providers;
 	size_t			 providersz;
 	time_t			 expires;
 	int			 talid;
@@ -535,9 +530,7 @@ enum stype {
 	STYPE_TOTAL,
 	STYPE_UNIQUE,
 	STYPE_DEC_UNIQUE,
-	STYPE_BOTH,
-	STYPE_ONLY_IPV4,
-	STYPE_ONLY_IPV6,
+	STYPE_PROVIDERS,
 };
 
 struct repo;
@@ -567,8 +560,6 @@ struct repotalstats {
 	uint32_t	 vaps; /* total number of Validated ASPA Payloads */
 	uint32_t	 vaps_uniqs; /* total number of unique VAPs */
 	uint32_t	 vaps_pas; /* total number of providers */
-	uint32_t	 vaps_pas4; /* total number of IPv4 only providers */
-	uint32_t	 vaps_pas6; /* total number of IPv6 only providers */
 	uint32_t	 vrps; /* total number of Validated ROA Payloads */
 	uint32_t	 vrps_uniqs; /* number of unique vrps */
 };
@@ -803,14 +794,6 @@ void		 rrdp_fetch(unsigned int, const char *, const char *,
 		    struct rrdp_session *);
 void		 rrdp_abort(unsigned int);
 void		 rrdp_http_done(unsigned int, enum http_result, const char *);
-
-/* Logging (though really used for OpenSSL errors). */
-
-void		 cryptowarnx(const char *, ...)
-			__attribute__((format(printf, 1, 2)));
-void		 cryptoerrx(const char *, ...)
-			__attribute__((format(printf, 1, 2)))
-			__attribute__((noreturn));
 
 /* Encoding functions for hex and base64. */
 

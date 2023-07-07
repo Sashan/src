@@ -1,4 +1,4 @@
-/* $OpenBSD: ec_ameth.c,v 1.38 2023/03/07 07:01:35 tb Exp $ */
+/* $OpenBSD: ec_ameth.c,v 1.41 2023/07/07 06:59:18 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2006.
  */
@@ -367,23 +367,12 @@ int_ec_size(const EVP_PKEY *pkey)
 static int
 ec_bits(const EVP_PKEY *pkey)
 {
-	BIGNUM *order = BN_new();
 	const EC_GROUP *group;
-	int ret;
 
-	if (!order) {
-		ERR_clear_error();
+	if ((group = EC_KEY_get0_group(pkey->pkey.ec)) == NULL)
 		return 0;
-	}
-	group = EC_KEY_get0_group(pkey->pkey.ec);
-	if (!EC_GROUP_get_order(group, order, NULL)) {
-		BN_free(order);
-		ERR_clear_error();
-		return 0;
-	}
-	ret = BN_num_bits(order);
-	BN_free(order);
-	return ret;
+
+	return EC_GROUP_order_bits(group);
 }
 
 static int
@@ -438,11 +427,9 @@ int_ec_free(EVP_PKEY *pkey)
 static int
 do_EC_KEY_print(BIO *bp, const EC_KEY *x, int off, int ktype)
 {
-	unsigned char *buffer = NULL;
 	const char *ecstr;
-	size_t buf_len = 0, i;
 	int ret = 0, reason = ERR_R_BIO_LIB;
-	BIGNUM *pub_key = NULL, *order = NULL;
+	BIGNUM *pub_key = NULL;
 	BN_CTX *ctx = NULL;
 	const EC_GROUP *group;
 	const EC_POINT *public_key;
@@ -465,24 +452,13 @@ do_EC_KEY_print(BIO *bp, const EC_KEY *x, int off, int ktype)
 				reason = ERR_R_EC_LIB;
 				goto err;
 			}
-			if (pub_key)
-				buf_len = (size_t) BN_num_bytes(pub_key);
 		}
 	}
 	if (ktype == 2) {
 		priv_key = EC_KEY_get0_private_key(x);
-		if (priv_key && (i = (size_t) BN_num_bytes(priv_key)) > buf_len)
-			buf_len = i;
 	} else
 		priv_key = NULL;
 
-	if (ktype > 0) {
-		buf_len += 10;
-		if ((buffer = malloc(buf_len)) == NULL) {
-			reason = ERR_R_MALLOC_FAILURE;
-			goto err;
-		}
-	}
 	if (ktype == 2)
 		ecstr = "Private-Key";
 	else if (ktype == 1)
@@ -492,30 +468,25 @@ do_EC_KEY_print(BIO *bp, const EC_KEY *x, int off, int ktype)
 
 	if (!BIO_indent(bp, off, 128))
 		goto err;
-	if ((order = BN_new()) == NULL)
-		goto err;
-	if (!EC_GROUP_get_order(group, order, NULL))
-		goto err;
 	if (BIO_printf(bp, "%s: (%d bit)\n", ecstr,
-		BN_num_bits(order)) <= 0)
+	    EC_GROUP_order_bits(group)) <= 0)
 		goto err;
 
-	if ((priv_key != NULL) && !ASN1_bn_print(bp, "priv:", priv_key,
-		buffer, off))
+	if (!bn_printf(bp, priv_key, off, "priv:"))
 		goto err;
-	if ((pub_key != NULL) && !ASN1_bn_print(bp, "pub: ", pub_key,
-		buffer, off))
+	if (!bn_printf(bp, pub_key, off, "pub: "))
 		goto err;
 	if (!ECPKParameters_print(bp, group, off))
 		goto err;
+
 	ret = 1;
+
  err:
 	if (!ret)
 		ECerror(reason);
 	BN_free(pub_key);
-	BN_free(order);
 	BN_CTX_free(ctx);
-	free(buffer);
+
 	return (ret);
 }
 

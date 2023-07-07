@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.c,v 1.700 2023/06/12 21:19:54 mvs Exp $	*/
+/*	$OpenBSD: if.c,v 1.704 2023/07/06 04:55:04 dlg Exp $	*/
 /*	$NetBSD: if.c,v 1.35 1996/05/07 05:26:04 thorpej Exp $	*/
 
 /*
@@ -106,6 +106,9 @@
 #ifdef MROUTING
 #include <netinet/ip_mroute.h>
 #endif
+#include <netinet/tcp.h>
+#include <netinet/tcp_timer.h>
+#include <netinet/tcp_var.h>
 
 #ifdef INET6
 #include <netinet6/in6_var.h>
@@ -802,12 +805,29 @@ if_input_local(struct ifnet *ifp, struct mbuf *m, sa_family_t af)
 	 * is now incorrect, will be calculated before sending.
 	 */
 	keepcksum = m->m_pkthdr.csum_flags & (M_IPV4_CSUM_OUT |
-	    M_TCP_CSUM_OUT | M_UDP_CSUM_OUT | M_ICMP_CSUM_OUT);
+	    M_TCP_CSUM_OUT | M_UDP_CSUM_OUT | M_ICMP_CSUM_OUT |
+	    M_TCP_TSO);
 	m_resethdr(m);
 	m->m_flags |= M_LOOP | keepflags;
 	m->m_pkthdr.csum_flags = keepcksum;
 	m->m_pkthdr.ph_ifidx = ifp->if_index;
 	m->m_pkthdr.ph_rtableid = ifp->if_rdomain;
+
+	if (ISSET(keepcksum, M_TCP_TSO) && m->m_pkthdr.len > ifp->if_mtu) {
+		if (ifp->if_mtu > 0 &&
+		    ((af == AF_INET &&
+		    ISSET(ifp->if_capabilities, IFCAP_TSOv4)) ||
+		    (af == AF_INET6 &&
+		    ISSET(ifp->if_capabilities, IFCAP_TSOv6)))) {
+			tcpstat_inc(tcps_inswlro);
+			tcpstat_add(tcps_inpktlro,
+			    (m->m_pkthdr.len + ifp->if_mtu - 1) / ifp->if_mtu);
+		} else {
+			tcpstat_inc(tcps_inbadlro);
+			m_freem(m);
+			return (EPROTONOSUPPORT);
+		}
+	}
 
 	if (ISSET(keepcksum, M_TCP_CSUM_OUT))
 		m->m_pkthdr.csum_flags |= M_TCP_CSUM_IN_OK;
@@ -1013,14 +1033,6 @@ if_netisr(void *unused)
 #endif
 		t |= n;
 	}
-
-#if NPFSYNC > 0
-	if (t & (1 << NETISR_PFSYNC)) {
-		KERNEL_LOCK();
-		pfsyncintr();
-		KERNEL_UNLOCK();
-	}
-#endif
 
 	NET_UNLOCK();
 }
@@ -2784,7 +2796,7 @@ if_creategroup(const char *groupname)
 {
 	struct ifg_group	*ifg;
 
-	if ((ifg = malloc(sizeof(*ifg), M_TEMP, M_NOWAIT)) == NULL)
+	if ((ifg = malloc(sizeof(*ifg), M_IFGROUP, M_NOWAIT)) == NULL)
 		return (NULL);
 
 	strlcpy(ifg->ifg_group, groupname, sizeof(ifg->ifg_group));
@@ -2819,11 +2831,11 @@ if_addgroup(struct ifnet *ifp, const char *groupname)
 		if (!strcmp(ifgl->ifgl_group->ifg_group, groupname))
 			return (EEXIST);
 
-	if ((ifgl = malloc(sizeof(*ifgl), M_TEMP, M_NOWAIT)) == NULL)
+	if ((ifgl = malloc(sizeof(*ifgl), M_IFGROUP, M_NOWAIT)) == NULL)
 		return (ENOMEM);
 
-	if ((ifgm = malloc(sizeof(*ifgm), M_TEMP, M_NOWAIT)) == NULL) {
-		free(ifgl, M_TEMP, sizeof(*ifgl));
+	if ((ifgm = malloc(sizeof(*ifgm), M_IFGROUP, M_NOWAIT)) == NULL) {
+		free(ifgl, M_IFGROUP, sizeof(*ifgl));
 		return (ENOMEM);
 	}
 
@@ -2834,8 +2846,8 @@ if_addgroup(struct ifnet *ifp, const char *groupname)
 	if (ifg == NULL) {
 		ifg = if_creategroup(groupname);
 		if (ifg == NULL) {
-			free(ifgl, M_TEMP, sizeof(*ifgl));
-			free(ifgm, M_TEMP, sizeof(*ifgm));
+			free(ifgl, M_IFGROUP, sizeof(*ifgl));
+			free(ifgm, M_IFGROUP, sizeof(*ifgm));
 			return (ENOMEM);
 		}
 	} else
@@ -2878,7 +2890,7 @@ if_delgroup(struct ifnet *ifp, const char *groupname)
 
 	if (ifgm != NULL) {
 		TAILQ_REMOVE(&ifgl->ifgl_group->ifg_members, ifgm, ifgm_next);
-		free(ifgm, M_TEMP, sizeof(*ifgm));
+		free(ifgm, M_IFGROUP, sizeof(*ifgm));
 	}
 
 #if NPF > 0
@@ -2891,10 +2903,10 @@ if_delgroup(struct ifnet *ifp, const char *groupname)
 #if NPF > 0
 		pfi_detach_ifgroup(ifgl->ifgl_group);
 #endif
-		free(ifgl->ifgl_group, M_TEMP, sizeof(*ifgl->ifgl_group));
+		free(ifgl->ifgl_group, M_IFGROUP, sizeof(*ifgl->ifgl_group));
 	}
 
-	free(ifgl, M_TEMP, sizeof(*ifgl));
+	free(ifgl, M_IFGROUP, sizeof(*ifgl));
 
 	return (0);
 }
@@ -3186,7 +3198,7 @@ ifsetlro(struct ifnet *ifp, int on)
 	KERNEL_ASSERT_LOCKED();	/* for if_flags */
 
 	if (on && !ISSET(ifp->if_xflags, IFXF_LRO)) {
-		if (ether_brport_isset(ifp)) {
+		if (ifp->if_type == IFT_ETHER && ether_brport_isset(ifp)) {
 			error = EBUSY;
 			goto out;
 		}

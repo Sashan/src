@@ -1,4 +1,4 @@
-/* $OpenBSD: crypto.h,v 1.60 2023/04/30 17:07:46 tb Exp $ */
+/* $OpenBSD: crypto.h,v 1.62 2023/07/05 13:06:06 bcook Exp $ */
 /* ====================================================================
  * Copyright (c) 1998-2006 The OpenSSL Project.  All rights reserved.
  *
@@ -487,7 +487,15 @@ int CRYPTO_mem_leaks(struct bio_st *bio);
 typedef int *CRYPTO_MEM_LEAK_CB(unsigned long, const char *, int, int, void *);
 int CRYPTO_mem_leaks_cb(CRYPTO_MEM_LEAK_CB *cb);
 
-/* die if we have to */
+/*
+ * Because this is a public header, use a portable method of indicating the
+ * function does not return, rather than __dead.
+ */
+#ifdef _MSC_VER
+__declspec(noreturn)
+#else
+__attribute__((__noreturn__))
+#endif
 void OpenSSLDie(const char *file, int line, const char *assertion);
 #define OPENSSL_assert(e)       (void)((e) ? 0 : (OpenSSLDie(__FILE__, __LINE__, #e),1))
 
@@ -508,26 +516,6 @@ void OPENSSL_init(void);
  * non-zero. */
 int CRYPTO_memcmp(const void *a, const void *b, size_t len);
 #endif
-
-void ERR_load_CRYPTO_strings(void);
-
-/* Error codes for the CRYPTO functions. */
-
-/* Function codes. */
-#define CRYPTO_F_CRYPTO_GET_EX_NEW_INDEX		 100
-#define CRYPTO_F_CRYPTO_GET_NEW_DYNLOCKID		 103
-#define CRYPTO_F_CRYPTO_GET_NEW_LOCKID			 101
-#define CRYPTO_F_CRYPTO_SET_EX_DATA			 102
-#define CRYPTO_F_DEF_ADD_INDEX				 104
-#define CRYPTO_F_DEF_GET_CLASS				 105
-#define CRYPTO_F_FIPS_MODE_SET				 109
-#define CRYPTO_F_INT_DUP_EX_DATA			 106
-#define CRYPTO_F_INT_FREE_EX_DATA			 107
-#define CRYPTO_F_INT_NEW_EX_DATA			 108
-
-/* Reason codes. */
-#define CRYPTO_R_FIPS_MODE_NOT_SUPPORTED		 101
-#define CRYPTO_R_NO_DYNLOCK_CREATE_CALLBACK		 100
 
 /*
  * OpenSSL compatible OPENSSL_INIT options.
@@ -563,6 +551,26 @@ void ERR_load_CRYPTO_strings(void);
 
 int OPENSSL_init_crypto(uint64_t opts, const void *settings);
 void OPENSSL_cleanup(void);
+
+void ERR_load_CRYPTO_strings(void);
+
+/* Error codes for the CRYPTO functions. */
+
+/* Function codes. */
+#define CRYPTO_F_CRYPTO_GET_EX_NEW_INDEX		 100
+#define CRYPTO_F_CRYPTO_GET_NEW_DYNLOCKID		 103
+#define CRYPTO_F_CRYPTO_GET_NEW_LOCKID			 101
+#define CRYPTO_F_CRYPTO_SET_EX_DATA			 102
+#define CRYPTO_F_DEF_ADD_INDEX				 104
+#define CRYPTO_F_DEF_GET_CLASS				 105
+#define CRYPTO_F_FIPS_MODE_SET				 109
+#define CRYPTO_F_INT_DUP_EX_DATA			 106
+#define CRYPTO_F_INT_FREE_EX_DATA			 107
+#define CRYPTO_F_INT_NEW_EX_DATA			 108
+
+/* Reason codes. */
+#define CRYPTO_R_FIPS_MODE_NOT_SUPPORTED		 101
+#define CRYPTO_R_NO_DYNLOCK_CREATE_CALLBACK		 100
 
 #ifdef  __cplusplus
 }

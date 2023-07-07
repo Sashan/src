@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfvar.h,v 1.531 2023/05/26 12:13:26 kn Exp $ */
+/*	$OpenBSD: pfvar.h,v 1.533 2023/07/06 04:55:05 dlg Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -1577,7 +1577,8 @@ struct pfioc_synflwats {
 #define DIOCSETSYNFLWATS	_IOWR('D', 97, struct pfioc_synflwats)
 #define DIOCSETSYNCOOKIES	_IOWR('D', 98, u_int8_t)
 #define DIOCGETSYNFLWATS	_IOWR('D', 99, struct pfioc_synflwats)
-#define DIOCXRULESET	_IOW('D', 100, struct pfioc_trans)
+#define DIOCXEND	_IOWR('D', 100, u_int32_t)
+#define DIOCXRULESET	_IOW('D', 101, struct pfioc_trans)
 
 struct pf_rules_container {
 	struct pf_anchor_global	 anchors;
@@ -1620,15 +1621,10 @@ extern void			 pf_tbladdr_remove(struct pf_addr_wrap *);
 extern void			 pf_tbladdr_copyout(struct pf_addr_wrap *);
 extern void			 pf_calc_skip_steps(struct pf_rulequeue *);
 extern void			 pf_purge_expired_src_nodes(void);
-extern void			 pf_purge_expired_states(u_int32_t);
 extern void			 pf_purge_expired_rules(void);
 extern void			 pf_remove_state(struct pf_state *);
 extern void			 pf_remove_divert_state(struct pf_state_key *);
 extern void			 pf_free_state(struct pf_state *);
-extern int			 pf_state_insert(struct pfi_kif *,
-				    struct pf_state_key **,
-				    struct pf_state_key **,
-				    struct pf_state *);
 int				 pf_insert_src_node(struct pf_src_node **,
 				    struct pf_rule *, enum pf_sn_types,
 				    sa_family_t, struct pf_addr *,
@@ -1691,6 +1687,10 @@ int	pf_match(u_int8_t, u_int32_t, u_int32_t, u_int32_t);
 int	pf_match_port(u_int8_t, u_int16_t, u_int16_t, u_int16_t);
 int	pf_match_uid(u_int8_t, uid_t, uid_t, uid_t);
 int	pf_match_gid(u_int8_t, gid_t, gid_t, gid_t);
+
+struct pf_state_scrub *
+	pf_state_scrub_get(void);
+void	pf_state_scrub_put(struct pf_state_scrub *);
 
 int	pf_refragment6(struct mbuf **, struct m_tag *mtag,
 	    struct sockaddr_in6 *, struct ifnet *, struct rtentry *);

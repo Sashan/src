@@ -1,4 +1,4 @@
-/* $OpenBSD: ec_local.h,v 1.21 2023/06/25 19:22:21 tb Exp $ */
+/* $OpenBSD: ec_local.h,v 1.24 2023/07/05 08:39:40 tb Exp $ */
 /*
  * Originally written by Bodo Moeller for the OpenSSL project.
  */
@@ -206,21 +206,8 @@ struct ec_group_st {
 	BIGNUM field;
 
 	/*
-	 * Field specification for GF(2^m). The irreducible polynomial  is
-	 *	f(t) = t^poly[0] + t^poly[1] + ... + t^poly[k],
-	 * where
-	 *	m = poly[0] > poly[1] > ... > poly[k] = 0,
-	 * and the array is terminated with poly[k+1] = -1. All elliptic curve
-	 * irreducibles have at most 5 non-zero terms.
-	 */
-	int poly[6];
-
-	/*
 	 * Curve coefficients. In characteristic > 3, the curve is defined by a
-	 * Weierstrass equation of the form
-	 *	y^2 = x^3 + a*x + b.
-	 * For characteristic 2, the curve is defined by an equation of the form
-	 *	y^2 + x*y = x^3 + a*x^2 + b.
+	 * Weierstrass equation of the form y^2 = x^3 + a*x + b.
 	 */
 	BIGNUM a, b;
 
@@ -354,12 +341,12 @@ struct ec_key_method_st {
 
 #define EC_KEY_METHOD_DYNAMIC   1
 
-int ossl_ec_key_gen(EC_KEY *eckey);
-int ossl_ecdh_compute_key(void *out, size_t outlen, const EC_POINT *pub_key, EC_KEY *ecdh,
+int ec_key_gen(EC_KEY *eckey);
+int ecdh_compute_key(void *out, size_t outlen, const EC_POINT *pub_key, EC_KEY *ecdh,
     void *(*KDF) (const void *in, size_t inlen, void *out, size_t *outlen));
-int ossl_ecdsa_verify(int type, const unsigned char *dgst, int dgst_len,
+int ecdsa_verify(int type, const unsigned char *dgst, int dgst_len,
     const unsigned char *sigbuf, int sig_len, EC_KEY *eckey);
-int ossl_ecdsa_verify_sig(const unsigned char *dgst, int dgst_len,
+int ecdsa_verify_sig(const unsigned char *dgst, int dgst_len,
     const ECDSA_SIG *sig, EC_KEY *eckey);
 
 /*
@@ -372,5 +359,8 @@ int EC_POINT_set_Jprojective_coordinates(const EC_GROUP *group, EC_POINT *p,
     const BIGNUM *x, const BIGNUM *y, const BIGNUM *z, BN_CTX *ctx);
 int EC_POINT_get_Jprojective_coordinates(const EC_GROUP *group,
     const EC_POINT *p, BIGNUM *x, BIGNUM *y, BIGNUM *z, BN_CTX *ctx);
+
+/* Public API in OpenSSL */
+const BIGNUM *EC_GROUP_get0_order(const EC_GROUP *group);
 
 __END_HIDDEN_DECLS

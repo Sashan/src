@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfvar_priv.h,v 1.33 2023/05/10 22:42:51 sashan Exp $	*/
+/*	$OpenBSD: pfvar_priv.h,v 1.34 2023/07/06 04:55:05 dlg Exp $	*/
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -43,6 +43,12 @@
 #include <sys/queue.h>
 #include <net/pfvar.h>
 
+struct pfsync_deferral;
+
+/*
+ * pf state items - links from pf_state_key to pf_states
+ */
+
 struct pf_state_item {
 	TAILQ_ENTRY(pf_state_item)
 				 si_entry;
@@ -50,6 +56,10 @@ struct pf_state_item {
 };
 
 TAILQ_HEAD(pf_statelisthead, pf_state_item);
+
+/*
+ * pf state keys - look up states by address
+ */
 
 struct pf_state_key {
 	struct pf_addr	 addr[2];
@@ -75,11 +85,13 @@ RBT_PROTOTYPE(pf_state_tree, pf_state_key, sk_entry, pf_state_compare_key);
 	 (key[PF_SK_WIRE]->af != (family)))
 
 /*
+ * pf state
+ *
  * Protection/ownership of pf_state members:
  *	I	immutable after pf_state_insert()
  *	M	pf_state mtx
  *	P	PF_STATE_LOCK
- *	S	pfsync mutex
+ *	S	pfsync
  *	L	pf_state_list
  *	g	pf_purge gc
  */
@@ -91,7 +103,7 @@ struct pf_state {
 	u_int8_t		 pad[3];
 
 	TAILQ_ENTRY(pf_state)	 sync_list;	/* [S] */
-	TAILQ_ENTRY(pf_state)	 sync_snap;	/* [S] */
+	struct pfsync_deferral	*sync_defer;	/* [S] */
 	TAILQ_ENTRY(pf_state)	 entry_list;	/* [L] */
 	SLIST_ENTRY(pf_state)	 gc_list;	/* [g] */
 	RB_ENTRY(pf_state)	 entry_id;	/* [P] */
@@ -103,7 +115,7 @@ struct pf_state {
 	union pf_rule_ptr	 natrule;	/* [I] */
 	struct pf_addr		 rt_addr;	/* [I] */
 	struct pf_sn_head	 src_nodes;	/* [I] */
-	struct pf_state_key	*key[2];	/* [I] stack and wire  */
+	struct pf_state_key	*key[2];	/* [I] stack and wire */
 	struct pfi_kif		*kif;		/* [I] */
 	struct mutex		 mtx;
 	pf_refcnt_t		 refcnt;
@@ -111,16 +123,16 @@ struct pf_state {
 	u_int64_t		 bytes[2];
 	int32_t			 creation;	/* [I] */
 	int32_t			 expire;
-	int32_t			 pfsync_time;
-	int			 rtableid[2];	/* [I] rtables stack and wire */
+	int32_t			 pfsync_time;	/* [S] */
+	int			 rtableid[2];	/* [I] stack and wire */
 	u_int16_t		 qid;		/* [I] */
 	u_int16_t		 pqid;		/* [I] */
 	u_int16_t		 tag;		/* [I] */
-	u_int16_t		 state_flags;
+	u_int16_t		 state_flags;	/* [M] */
 	u_int8_t		 log;		/* [I] */
 	u_int8_t		 timeout;
-	u_int8_t		 sync_state;	/* PFSYNC_S_x */
-	u_int8_t		 sync_updates;
+	u_int8_t		 sync_state;	/* [S] PFSYNC_S_x */
+	u_int8_t		 sync_updates;	/* [S] */
 	u_int8_t		 min_ttl;	/* [I] */
 	u_int8_t		 set_tos;	/* [I] */
 	u_int8_t		 set_prio[2];	/* [I] */
@@ -129,7 +141,6 @@ struct pf_state {
 	u_int16_t		 if_index_out;	/* [I] */
 	u_int16_t		 delay;		/* [I] */
 	u_int8_t		 rt;		/* [I] */
-	u_int8_t		 snapped;	/* [S] */
 };
 
 RBT_HEAD(pf_state_tree_id, pf_state);
@@ -411,6 +422,7 @@ struct pf_trans {
 #define pfttab_check_op		u.u_tab.tab_check_op
 #define pfttab_commit_op	u.u_tab.tab_commit_op
 
+extern struct timeout	pf_purge_states_to;
 extern struct task	pf_purge_task;
 extern struct timeout	pf_purge_to;
 
@@ -462,9 +474,6 @@ extern struct rwlock	pf_state_lock;
 			splassert_fail(RW_WRITE,	\
 			    rw_status(&pf_state_lock), __func__);\
 	} while (0)
-
-extern void			 pf_purge_timeout(void *);
-extern void			 pf_purge(void *);
 
 /* for copies to/from network byte order */
 void			 pf_state_peer_hton(const struct pf_state_peer *,

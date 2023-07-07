@@ -1,4 +1,4 @@
-.\"	$OpenBSD: pkg_create.1,v 1.128 2023/01/25 13:25:07 espie Exp $
+.\"	$OpenBSD: pkg_create.1,v 1.131 2023/07/05 01:21:51 jsg Exp $
 .\"
 .\" Documentation and design originally from FreeBSD. All the code has
 .\" been rewritten since. We keep the documentation's notice:
@@ -21,7 +21,7 @@
 .\" [jkh] Took John's changes back and made some additional extensions for
 .\" better integration with FreeBSD's new ports collection.
 .\"
-.Dd $Mdocdate: January 25 2023 $
+.Dd $Mdocdate: July 5 2023 $
 .Dt PKG_CREATE 1
 .Os
 .Sh NAME
@@ -161,6 +161,11 @@ If set, disable the
 annotations in the generated package, rely on the normal
 .Xr tar 1
 timestamps instead.
+(Mostly used to create firmware "packages" since
+.Xr fw_update 8
+only handles a very small subset of the
+.Xr package 5
+format.)
 .It Cm USE_GROFF
 Set to 1 to have groff format manpages behind the scenes during
 package creation.
@@ -325,7 +330,7 @@ The
 .Dq packing-list
 format (see
 .Fl f )
-is fairly simple, being basically a list of filenames and directory names
+is fairly straightforward: basically a list of filenames and directory names
 to include in the package.
 .Pp
 Substitution of variables and inclusion of fragments is documented in the

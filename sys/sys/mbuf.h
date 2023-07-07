@@ -1,4 +1,4 @@
-/*	$OpenBSD: mbuf.h,v 1.257 2023/05/10 12:07:17 bluhm Exp $	*/
+/*	$OpenBSD: mbuf.h,v 1.259 2023/07/04 09:47:51 jsg Exp $	*/
 /*	$NetBSD: mbuf.h,v 1.19 1996/02/09 18:25:14 christos Exp $	*/
 
 /*
@@ -400,8 +400,6 @@ struct mbuf_queue {
 struct pool;
 
 extern	long nmbclust;			/* limit on the # of clusters */
-extern	int mblowat;			/* mbuf low water mark */
-extern	int mcllowat;			/* mbuf cluster low water mark */
 extern	int max_linkhdr;		/* largest link-level header */
 extern	int max_protohdr;		/* largest protocol header */
 extern	int max_hdr;			/* largest link+protocol header */
@@ -437,7 +435,6 @@ void	m_adj(struct mbuf *, int);
 int	m_copyback(struct mbuf *, int, int, const void *, int);
 struct mbuf *m_freem(struct mbuf *);
 void	m_purge(struct mbuf *);
-void	m_reclaim(void *, int);
 void	m_copydata(struct mbuf *, int, int, void *);
 void	m_cat(struct mbuf *, struct mbuf *);
 struct mbuf *m_devget(char *, int, int);

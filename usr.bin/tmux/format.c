@@ -1,4 +1,4 @@
-/* $OpenBSD: format.c,v 1.313 2023/05/19 07:46:34 nicm Exp $ */
+/* $OpenBSD: format.c,v 1.315 2023/07/03 10:48:26 nicm Exp $ */
 
 /*
  * Copyright (c) 2011 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -3664,7 +3664,9 @@ format_skip(const char *s, const char *end)
 	for (; *s != '\0'; s++) {
 		if (*s == '#' && s[1] == '{')
 			brackets++;
-		if (*s == '#' && strchr(",#{}:", s[1]) != NULL) {
+		if (*s == '#' &&
+		    s[1] != '\0' &&
+		    strchr(",#{}:", s[1]) != NULL) {
 			s++;
 			continue;
 		}
@@ -3813,7 +3815,7 @@ format_build_modifiers(struct format_expand_state *es, const char **s,
 		argc = 0;
 
 		/* Single argument with no wrapper character. */
-		if (!ispunct(cp[1]) || cp[1] == '-') {
+		if (!ispunct((u_char)cp[1]) || cp[1] == '-') {
 			end = format_skip(cp + 1, ":;");
 			if (end == NULL)
 				break;

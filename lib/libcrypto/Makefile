@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.132 2023/06/25 19:29:30 tb Exp $
+# $OpenBSD: Makefile,v 1.137 2023/07/07 06:10:14 jsing Exp $
 
 LIB=	crypto
 LIBREBUILD=y
@@ -18,7 +18,7 @@ CFLAGS+= -Wall -Wundef
 .if ${COMPILER_VERSION:L} == "clang"
 CFLAGS+= -Werror -Wshadow
 .endif
-CFLAGS+= -DLIBRESSL_INTERNAL -DLIBRESSL_CRYPTO_INTERNAL
+CFLAGS+= -DLIBRESSL_INTERNAL
 .ifdef NAMESPACE
 CFLAGS+= -DLIBRESSL_NAMESPACE -DLIBRESSL_CRYPTO_NAMESPACE
 .endif
@@ -195,6 +195,7 @@ SRCS+= bn_mont.c
 SRCS+= bn_mul.c
 SRCS+= bn_prime.c
 SRCS+= bn_primitives.c
+SRCS+= bn_print.c
 SRCS+= bn_rand.c
 SRCS+= bn_recp.c
 SRCS+= bn_shift.c
@@ -351,16 +352,14 @@ SRCS+= ecp_smpl.c
 SRCS+= ecx_methods.c
 
 # ecdh/
-SRCS+= ecdh_kdf.c
+SRCS+= ecdh.c
 SRCS+= ech_err.c
-SRCS+= ech_key.c
 SRCS+= ech_lib.c
 
 # ecdsa/
-SRCS+= ecs_asn1.c
 SRCS+= ecs_err.c
 SRCS+= ecs_lib.c
-SRCS+= ecs_ossl.c
+SRCS+= ecdsa.c
 
 # engine/
 SRCS+= eng_all.c
@@ -880,11 +879,16 @@ obj_dat.h: obj_mac.h ${SSL_OBJECTS}/obj_dat.pl
 .include "${.CURDIR}/arch/${MACHINE_CPU}/Makefile.inc"
 .else
 CFLAGS+=-DOPENSSL_NO_ASM
-SRCS+= aes_core.c aes_cbc.c
+SRCS+= aes_core.c
+SRCS+= aes_cbc.c
 SRCS+= bf_enc.c
-SRCS+= camellia.c cmll_cbc.c cmll_misc.c
-SRCS+= des_enc.c fcrypt_b.c
-SRCS+= rc4_enc.c rc4_skey.c
+SRCS+= camellia.c
+SRCS+= cmll_cbc.c
+SRCS+= cmll_misc.c
+SRCS+= des_enc.c
+SRCS+= fcrypt_b.c
+SRCS+= rc4_enc.c
+SRCS+= rc4_skey.c
 SRCS+= wp_block.c
 .endif
 

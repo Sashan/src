@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_usrreq.c,v 1.219 2023/05/23 09:16:16 jan Exp $	*/
+/*	$OpenBSD: tcp_usrreq.c,v 1.221 2023/07/06 09:15:24 bluhm Exp $	*/
 /*	$NetBSD: tcp_usrreq.c,v 1.20 1996/02/13 23:44:16 christos Exp $	*/
 
 /*
@@ -211,7 +211,7 @@ tcp_fill_info(struct tcpcb *tp, struct socket *so, struct mbuf *m)
 	struct proc *p = curproc;
 	struct tcp_info *ti;
 	u_int t = 1000;		/* msec => usec */
-	uint32_t now;
+	uint64_t now;
 
 	if (sizeof(*ti) > MLEN) {
 		MCLGETL(m, M_WAITOK, sizeof(*ti));
@@ -1340,6 +1340,7 @@ tcp_sysctl_tcpstat(void *oldp, size_t *oldlenp, void *newp)
 	ASSIGN(tcps_outhwtso);
 	ASSIGN(tcps_outpkttso);
 	ASSIGN(tcps_outbadtso);
+	ASSIGN(tcps_inswlro);
 	ASSIGN(tcps_inhwlro);
 	ASSIGN(tcps_inpktlro);
 	ASSIGN(tcps_inbadlro);

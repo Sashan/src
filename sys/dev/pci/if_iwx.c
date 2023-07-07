@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwx.c,v 1.172 2023/06/21 23:24:10 mlarkin Exp $	*/
+/*	$OpenBSD: if_iwx.c,v 1.175 2023/07/05 15:07:28 stsp Exp $	*/
 
 /*
  * Copyright (c) 2014, 2016 genua gmbh <info@genua.de>
@@ -2925,7 +2925,7 @@ iwx_disable_txq(struct iwx_softc *sc, int sta_id, int qid, uint8_t tid)
 		cmd_v0.cb_size = htole32(0);
 		cmd_v0.byte_cnt_addr = htole64(0);
 		cmd_v0.tfdq_addr = htole64(0);
-		hcmd.id = IWX_SCD_QUEUE_CFG,
+		hcmd.id = IWX_SCD_QUEUE_CFG;
 		hcmd.data[0] = &cmd_v0;
 		hcmd.len[0] = sizeof(cmd_v0);
 	} else if (cmd_ver == 3) {
@@ -7607,7 +7607,7 @@ iwx_bgscan_done(struct ieee80211com *ic,
 	free(sc->bgscan_unref_arg, M_DEVBUF, sc->bgscan_unref_arg_size);
 	sc->bgscan_unref_arg = arg;
 	sc->bgscan_unref_arg_size = arg_size;
-	iwx_add_task(sc, sc->sc_nswq, &sc->bgscan_done_task);
+	iwx_add_task(sc, systq, &sc->bgscan_done_task);
 }
 
 void
@@ -8048,7 +8048,7 @@ iwx_phy_send_rlc(struct iwx_softc *sc, struct iwx_phy_ctxt *phyctxt,
 	idle_cnt = chains_static;
 	active_cnt = chains_dynamic;
 
-	cmd.phy_id = htole32(phyctxt->id),
+	cmd.phy_id = htole32(phyctxt->id);
 	cmd.rlc.rx_chain_info = htole32(iwx_fw_valid_rx_ant(sc) <<
 	    IWX_PHY_RX_CHAIN_VALID_POS);
 	cmd.rlc.rx_chain_info |= htole32(idle_cnt << IWX_PHY_RX_CHAIN_CNT_POS);
@@ -10430,6 +10430,7 @@ static const struct pci_matchid iwx_devices[] = {
 	/* _14 is an MA device, not yet supported */
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_WL_22500_15,},
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_WL_22500_16,},
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_WL_22500_17,},
 };
 
 
@@ -10520,6 +10521,8 @@ static const struct iwx_dev_info iwx_dev_info_table[] = {
 	IWX_DEV_INFO(0x2725, 0x1674, iwx_2ax_cfg_ty_gf_a0), /* killer_1675x */
 	IWX_DEV_INFO(0x51f0, 0x1691, iwx_2ax_cfg_so_gf4_a0), /* killer_1690s */
 	IWX_DEV_INFO(0x51f0, 0x1692, iwx_2ax_cfg_so_gf4_a0), /* killer_1690i */
+	IWX_DEV_INFO(0x51f1, 0x1691, iwx_2ax_cfg_so_gf4_a0),
+	IWX_DEV_INFO(0x51f1, 0x1692, iwx_2ax_cfg_so_gf4_a0),
 	IWX_DEV_INFO(0x54f0, 0x1691, iwx_2ax_cfg_so_gf4_a0), /* killer_1690s */
 	IWX_DEV_INFO(0x54f0, 0x1692, iwx_2ax_cfg_so_gf4_a0), /* killer_1690i */
 	IWX_DEV_INFO(0x7a70, 0x0090, iwx_2ax_cfg_so_gf_a0_long),
@@ -11122,7 +11125,6 @@ iwx_attach(struct device *parent, struct device *self, void *aux)
 	case PCI_PRODUCT_INTEL_WL_22500_9:
 	case PCI_PRODUCT_INTEL_WL_22500_10:
 	case PCI_PRODUCT_INTEL_WL_22500_11:
-	case PCI_PRODUCT_INTEL_WL_22500_12:
 	case PCI_PRODUCT_INTEL_WL_22500_13:
 	/* _14 is an MA device, not yet supported */
 	case PCI_PRODUCT_INTEL_WL_22500_15:
@@ -11136,6 +11138,19 @@ iwx_attach(struct device *parent, struct device *self, void *aux)
 		sc->sc_xtal_latency = 0;
 		sc->sc_tx_with_siso_diversity = 0;
 		sc->sc_uhb_supported = 1;
+		break;
+	case PCI_PRODUCT_INTEL_WL_22500_12:
+	case PCI_PRODUCT_INTEL_WL_22500_17:
+		sc->sc_fwname = IWX_SO_A_GF_A_FW;
+		sc->sc_pnvm_name = IWX_SO_A_GF_A_PNVM;
+		sc->sc_device_family = IWX_DEVICE_FAMILY_AX210;
+		sc->sc_integrated = 1;
+		sc->sc_ltr_delay = IWX_SOC_FLAGS_LTR_APPLY_DELAY_2500;
+		sc->sc_low_latency_xtal = 1;
+		sc->sc_xtal_latency = 12000;
+		sc->sc_tx_with_siso_diversity = 0;
+		sc->sc_uhb_supported = 0;
+		sc->sc_imr_enabled = 1;
 		break;
 	default:
 		printf("%s: unknown adapter type\n", DEVNAME(sc));
