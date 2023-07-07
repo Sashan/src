@@ -378,10 +378,6 @@ struct pf_trans {
 			struct pf_rule		ina_default_rule;
 			struct pf_opts		ina_opts;
 			char			ina_anchor_path[PATH_MAX];
-			int (*ina_check_op)(struct pf_anchor *,
-			    struct pf_anchor *);
-			void (*ina_commit_op)(struct pf_trans *,
-			    struct pf_anchor *, struct pf_anchor *);
 			uint32_t		ina_default_vers;
 			char			ina_modify_defaults;
 		} u_ina;
@@ -391,10 +387,6 @@ struct pf_trans {
 			struct pf_rules_container
 						tab_rc;
 			char			tab_anchor_path[PATH_MAX];
-			int (*tab_check_op)(struct pf_anchor *,
-			    struct pf_anchor *);
-			void (*tab_commit_op)(struct pf_trans *,
-			    struct pf_anchor *, struct pf_anchor *);
 		} u_tab;
 	} u;
 };
@@ -410,8 +402,6 @@ struct pf_trans {
 #define pftina_default_rule	u.u_ina.ina_default_rule
 #define pftina_opts		u.u_ina.ina_opts
 #define pftina_anchor_path	u.u_ina.ina_anchor_path
-#define pftina_check_op		u.u_ina.ina_check_op
-#define	pftina_commit_op	u.u_ina.ina_commit_op
 #define pftina_default_vers	u.u_ina.ina_default_vers
 #define	pftina_modify_defaults	u.u_ina.ina_modify_defaults
 
@@ -419,8 +409,6 @@ struct pf_trans {
 #define pfttab_garbage		u.u_tab.tab_garbage
 #define pfttab_rc		u.u_tab.tab_rc
 #define pfttab_anchor_path	u.u_tab.tab_anchor_path
-#define pfttab_check_op		u.u_tab.tab_check_op
-#define pfttab_commit_op	u.u_tab.tab_commit_op
 
 extern struct timeout	pf_purge_states_to;
 extern struct task	pf_purge_task;

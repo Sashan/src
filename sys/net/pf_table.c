@@ -321,8 +321,8 @@ int
 pfr_add_addrs(struct pf_trans *t, struct pfr_table *tbl, struct pfr_addr *addr,
     int size, int *nadd, int flags)
 {
-	if (t->pft_type != PF_TRANS_INA) {
-		log(LOG_ERR, "%s expects PF_TRANS_INA only\n", __func__);
+	if (t->pft_type != PF_TRANS_TAB) {
+		log(LOG_ERR, "%s expects PF_TRANS_TAB only\n", __func__);
 		return (EINVAL);
 	}
 #if 0
@@ -460,8 +460,8 @@ pfr_del_addrs(struct pf_trans *t, struct pfr_table *tbl,
 	int			 i, rv, xdel = 0, lg = 1;
 	struct pf_ruleset	*rs;
 
-	if (t->pft_type != PF_TRANS_INA) {
-		log(LOG_ERR, "%s expects PF_TRANS_INA only\n", __func__);
+	if (t->pft_type != PF_TRANS_TAB) {
+		log(LOG_ERR, "%s expects PF_TRANS_TAB only\n", __func__);
 		return (EINVAL);
 	}
 
@@ -1576,8 +1576,8 @@ pfr_add_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *nadd,
 	time_t			 tzero = gettime();
 	int			 i;
 
-	if (t->pft_type != PF_TRANS_INA) {
-		log(LOG_ERR, "%s expects PF_TRANS_INA only\n", __func__);
+	if (t->pft_type != PF_TRANS_TAB) {
+		log(LOG_ERR, "%s expects PF_TRANS_TAB only\n", __func__);
 		return (EINVAL);
 	}
 
@@ -1616,8 +1616,8 @@ pfr_del_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *ndel,
 	int			 i;
 	time_t			 tzero = gettime();
 
-	if (t->pft_type != PF_TRANS_INA) {
-		log(LOG_ERR, "%s expects PF_TRANS_INA only\n", __func__);
+	if (t->pft_type != PF_TRANS_TAB) {
+		log(LOG_ERR, "%s expects PF_TRANS_TAB only\n", __func__);
 		return (EINVAL);
 	}
 	/* pre-allocate all memory outside of locks */
@@ -1809,8 +1809,8 @@ pfr_clr_tstats(struct pf_trans *t, struct pfr_table *tbl, int size, int *nzero,
 	int			 i, xzero = 0;
 	time_t			 tzero = gettime();
 
-	if (t->pft_type != PF_TRANS_INA) {
-		log(LOG_ERR, "%s expects PF_TRANS_INA only\n", __func__);
+	if (t->pft_type != PF_TRANS_TAB) {
+		log(LOG_ERR, "%s expects PF_TRANS_TAB only\n", __func__);
 		return (EINVAL);
 	}
 
@@ -1852,8 +1852,8 @@ int
 pfr_set_tflags(struct pf_trans *t, struct pfr_table *tbl, int size, int setflag,
 	int clrflag, int *nchange, int *ndel, int flags)
 {
-	if (t->pft_type != PF_TRANS_INA) {
-		log(LOG_ERR, "%s expects PF_TRANS_INA only\n", __func__);
+	if (t->pft_type != PF_TRANS_TAB) {
+		log(LOG_ERR, "%s expects PF_TRANS_TAB only\n", __func__);
 		return (EINVAL);
 	}
 
@@ -1924,7 +1924,15 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 
 			r->src.addr.p.tbl = kt;
 			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+
+			/*
+			 * If rule refers the table, then table should become
+			 * active.
+			 */
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+			kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
+
 			log(LOG_DEBUG, "%s %u@%s src %s@%s <-> %s@%s\n",
 			    __func__,
 			    r->nr, ta->path,
@@ -1950,7 +1958,11 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 
 			r->dst.addr.p.tbl = kt;
 			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+			kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
+
 			log(LOG_DEBUG, "%s %u@%s dst %s@%s <-> %s@%s\n",
 			    __func__,
 			    r->nr, ta->path,
@@ -1976,7 +1988,11 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 
 			r->rdr.addr.p.tbl = kt;
 			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+			kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
+
 			log(LOG_DEBUG, "%s %u@%s rdr %s@%s <-> %s@%s\n",
 			    __func__,
 			    r->nr, ta->path,
@@ -2002,7 +2018,11 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 
 			r->nat.addr.p.tbl = kt;
 			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+			kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
+
 			log(LOG_DEBUG, "%s %u@%s nat %s@%s <-> %s@%s\n",
 			    __func__,
 			    r->nr, ta->path,
@@ -2028,7 +2048,11 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 
 			r->route.addr.p.tbl = kt;
 			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+			kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
+
 			log(LOG_DEBUG, "%s %u@%s route %s@%s <-> %s@%s\n",
 			    __func__,
 			    r->nr, ta->path,
@@ -2261,6 +2285,14 @@ pfr_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 			RB_INSERT(pfr_ktablehead, &a->ktables, tkt);
 			a->tables++;
 			pfr_update_table_refs(a, tkt);
+			/*
+			 * persistent tables are also active, so 'pfctl -sT'
+			 * can report them.
+			 */
+			if (tkt->pfrkt_flags & PFR_TFLAG_PERSIST) {
+				tkt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+				tkt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
+			}
 			tkt->pfrkt_version++;
 		} else {
 			log(LOG_DEBUG, "%s merging %s@%s\n", __func__,
@@ -2268,6 +2300,14 @@ pfr_commit_table(struct pf_trans *t, struct pf_anchor *ta,
 			KASSERT(kt->pfrkt_version == tkt->pfrkt_version);
 			pfr_merge_ktables(tkt, kt, gettime());
 			pfr_update_table_refs(a, kt);
+			/*
+			 * persistent tables are also active, so 'pfctl -sT'
+			 * can report them.
+			 */
+			if (tkt->pfrkt_flags & PFR_TFLAG_PERSIST) {
+				tkt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+				tkt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
+			}
 			kt->pfrkt_version++;
 		}
 	}

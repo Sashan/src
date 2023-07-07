@@ -121,8 +121,7 @@ struct pf_trans		*pf_open_trans(uint32_t);
 struct pf_trans		*pf_find_trans(uint32_t, uint64_t);
 void			 pf_free_trans(struct pf_trans *);
 void			 pf_rollback_trans(struct pf_trans *);
-void			 pf_commit_trans_ina(struct pf_trans *);
-void			 pf_commit_trans_tab(struct pf_trans *);
+void			 pf_commit_trans(struct pf_trans *);
 
 void			 pf_init_tgetrule(struct pf_trans *,
 			    struct pf_anchor *, uint32_t, struct pf_rule *);
@@ -137,13 +136,12 @@ void			 pf_swap_anchors(struct pf_trans *, struct pf_anchor *,
 			    struct pf_anchor *);
 int			 pf_trans_in_conflict(struct pf_trans *, const char *);
 int			 pf_ina_check(struct pf_anchor *, struct pf_anchor *);
-void			 pf_ina_commit(struct pf_trans *, struct pf_anchor *,
-			    struct pf_anchor *);
+void			 pf_ina_commit(struct pf_trans *);
 
 void			 pf_init_ttab(struct pf_trans *);
+int			 pf_tab_check(struct pf_anchor *, struct pf_anchor *);
 void			 pf_cleanup_ttab(struct pf_trans *);
-void			 pf_tab_commit(struct pf_trans *, struct pf_anchor *,
-			    struct pf_anchor *);
+void			 pf_tab_commit(struct pf_trans *);
 
 struct pf_rule		 pf_default_rule;
 uint32_t		 pf_default_vers = 1;
@@ -2735,7 +2733,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		pf_commit_trans_tab(t);
+		pf_commit_trans(t);
 
 		PF_UNLOCK();
 		NET_UNLOCK();
@@ -2779,7 +2777,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		pf_commit_trans_tab(t);
+		pf_commit_trans(t);
 
 		PF_UNLOCK();
 		NET_UNLOCK();
@@ -2845,7 +2843,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			if (pf_trans_in_conflict(t, "DIOCRCLRTSTATS"))
 				error = EBUSY;
 			else
-				pf_commit_trans_tab(t);
+				pf_commit_trans(t);
 
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -2880,7 +2878,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			if (pf_trans_in_conflict(t, "DIOCRSETTFLAGS"))
 				error = EBUSY;
 			else
-				pf_commit_trans_tab(t);
+				pf_commit_trans(t);
 
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -2937,7 +2935,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			if (pf_trans_in_conflict(t, "DIOCRADDADDRS"))
 				error = EBUSY;
 			else
-				pf_commit_trans_tab(t);
+				pf_commit_trans(t);
 
 			NET_UNLOCK();
 			PF_UNLOCK();
@@ -2972,7 +2970,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			if (pf_trans_in_conflict(t, "DIOCRDELADDRS"))
 				error = EBUSY;
 			else
-				pf_commit_trans_tab(t);
+				pf_commit_trans(t);
 
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -3007,7 +3005,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			if (pf_trans_in_conflict(t, "DIOCRSETADDRS"))
 				error = EBUSY;
 			else
-				pf_commit_trans_tab(t);
+				pf_commit_trans(t);
 
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -3266,7 +3264,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			error = EBUSY;
 		else {
 			pf_drop_unused_tables(t);
-			pf_commit_trans_ina(t);
+			pf_commit_trans(t);
 			pfi_xcommit();
 		}
 
@@ -3916,16 +3914,26 @@ pf_ina_check(struct pf_anchor *ta, struct pf_anchor *a)
 }
 
 int
-pf_table_check(struct pf_anchor *ta, struct pf_anchor *a)
+pf_tab_check(struct pf_anchor *ta, struct pf_anchor *a)
 {
-	int conflict;
+	int conflict = 0;
 	struct pfr_ktable *kt, *tkt;
 
-	/*
-	 * we skip version check for rules, because
-	 * we are going to update tables only.
-	 */
-	if (a != NULL) {
+	if (a == NULL) {
+		RB_FOREACH(tkt, pfr_ktablehead, &ta->ktables) {
+			if (tkt->pfrkt_version != 0) {
+				log(LOG_DEBUG,
+				    "%s table (%s@%s) version mismatch "
+				    "(%u vs. 0)\n",
+				    __func__,
+				    tkt->pfrkt_name,
+				    PF_ANCHOR_PATH(a),
+				    tkt->pfrkt_version);
+				conflict = 1;
+				break;
+			}
+		}
+	} else {
 		RB_FOREACH(tkt, pfr_ktablehead, &ta->ktables) {
 			kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
 			if (kt == NULL)
@@ -3946,44 +3954,21 @@ pf_table_check(struct pf_anchor *ta, struct pf_anchor *a)
 				break;
 			}
 		}
-	} else {
-		log(LOG_DEBUG, "%s transaction creates new anchor (%s)\n",
-		    __func__,
-		    ta->path);
-		conflict = (ta->ruleset.rules.version != 0);
-		RB_FOREACH(tkt, pfr_ktablehead, &ta->ktables) {
-			if (conflict)
-				break;
-			conflict = (tkt->pfrkt_version != 0);
-		}
-		if (conflict != 0)
-			log(LOG_DEBUG,
-			    "%s conflict detected, table: %s @ %s (%u)\n",
-			    __func__,
-			    (tkt == NULL) ? "" : tkt->pfrkt_name,
-			    ta->path,
-			    ta->ruleset.rules.version);
 	}
 
 	return (conflict);
 }
 
 int
-pf_trans_in_conflict(struct pf_trans *t, const char *iocmdname)
+pf_trans_chk_ina(struct pf_trans *t, const char *iocmdname)
 {
 	int			 i, conflict = 0;
 	struct pf_anchor	*ta, *a;
 	struct pool		*pp;
 
-	if (t->pft_type != PF_TRANS_INA) {
-		log(LOG_ERR, "%s version check is available to "
-		    "PF_TRANS_INA only\n", __func__);
-		return (1);
-	}
-
 	if ((t->pftina_anchor_path[0] == '\0') &&
 	    (t->pftina_rc.main_anchor.ruleset.rules.version != 0))
-		conflict = t->pftina_check_op(&t->pftina_rc.main_anchor,
+		conflict = pf_ina_check(&t->pftina_rc.main_anchor,
 		    &pf_main_anchor);
 	
 	/* check if defaults can be modified/updated */
@@ -4013,12 +3998,50 @@ pf_trans_in_conflict(struct pf_trans *t, const char *iocmdname)
 	if (conflict == 0) {
 		RB_FOREACH(ta, pf_anchor_global, &t->pftina_rc.anchors) {
 			a = RB_FIND(pf_anchor_global, &pf_global.anchors, ta);
-			conflict = t->pftina_check_op(ta, a);
+			conflict = pf_ina_check(ta, a);
 			if (conflict != 0)
 				break;
 		}
 	}
 
+	return (conflict);
+}
+
+int
+pf_trans_chk_tab(struct pf_trans *t, const char *iocmdname)
+{
+	int	conflict = 0;
+	struct pf_anchor	*ta, *a;
+
+	conflict = pf_tab_check(&t->pfttab_rc.main_anchor, &pf_main_anchor);
+
+	if (conflict == 0) {
+		RB_FOREACH(ta, pf_anchor_global, &t->pfttab_rc.anchors) {
+			a = RB_FIND(pf_anchor_global, &pf_global.anchors, ta);
+			conflict = pf_tab_check(ta, a);
+			if (conflict != 0)
+				break;
+		}
+	}
+
+	return (conflict);
+}
+
+int
+pf_trans_in_conflict(struct pf_trans *t, const char *iocmdname)
+{
+	int	conflict = 1;
+
+	switch (t->pft_type) {
+	case PF_TRANS_INA:
+		conflict = pf_trans_chk_ina(t, iocmdname);
+		break;
+	case PF_TRANS_TAB:
+		conflict = pf_trans_chk_tab(t, iocmdname);
+		break;
+	default:
+		panic("%s unknown transaction type %d", __func__ , t->pft_type);
+	}
 	return (conflict);
 }
 
@@ -4147,9 +4170,9 @@ pf_fix_main_children(void)
 }
 
 void
-pf_ina_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
+pf_ina_commit(struct pf_trans *t)
 {
-	struct pf_anchor	*anchor, *anchorw;
+	struct pf_anchor	*ta, *taw;
 	int			 i;
 
 	if (t->pftina_modify_defaults) {
@@ -4203,78 +4226,83 @@ pf_ina_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
 		pf_default_vers++;
 	}
 
-	if (a == &pf_main_anchor) {
-		pf_ina_commit_anchor(t, ta, a);
+	/*
+	 * Commit main ruleset first.
+	 */
+	if (t->pftina_rc.main_anchor.ruleset.rules.version != 0) {
+		pf_ina_commit_anchor(t, &t->pftina_rc.main_anchor,
+		    &pf_main_anchor);
 		pf_fix_main_children();
 	}
 
 	/*
-	 * pf_ina_commit_anchor() may move anchor from transaction
-	 * to pf_anchors.
+	 * Then commit rulesets, note we use _SAFE because
+	 * ruleset may also get just moved from transaction
+	 * to pf_anchors tree.
 	 */
-	RB_FOREACH_SAFE(anchor, pf_anchor_global, &t->pftina_rc.anchors,
-	    anchorw) {
-		pf_ina_commit_anchor(t, anchor, RB_FIND(pf_anchor_global,
-		    &pf_anchors, anchor));
-	}
+	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pftina_rc.anchors, taw)
+		pf_ina_commit_anchor(t, ta, RB_FIND(pf_anchor_global,
+		    &pf_anchors, ta));
 
 	/*
-	 * We do RB_FIND() because `ta` could get inserted
-	 * to pf_global. 
+	 * We are done with rulesets, it's time to commit tables,
+	 * we start with tables bound to main anchor first.
 	 */
-	if (a == &pf_main_anchor) {
-		pfr_commit_table(t, ta, &pf_main_anchor);
-	} else {
-		pfr_commit_table(t, ta,
-		    RB_FIND(pf_anchor_global, &pf_anchors, ta));
-	}
+	if (t->pftina_rc.main_anchor.ruleset.rules.version != 0)
+		pfr_commit_table(t, &t->pftina_rc.main_anchor, &pf_main_anchor);
+
 	/*
-	 * next iterations pf_commit_trans() will continue with tables.
+	 * Commit remainig tables.
 	 */
-	t->pftina_commit_op = pfr_commit_table;
+	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pftina_rc.anchors, taw)
+		pfr_commit_table(t, ta, RB_FIND(pf_anchor_global,
+		    &pf_anchors, taw));
 }
 
 void
-pf_commit_trans_ina(struct pf_trans *t)
+pf_tab_commit(struct pf_trans *t)
 {
-	struct pf_anchor	*ta, *wa;
+	struct pf_anchor *ta, *taw;
 
-	if (t->pft_type != PF_TRANS_INA) {
-		log(LOG_ERR, "%s commit operation is allowed for "
-		    "PF_TRANS_INA only\n", __func__);
-		return;
-	}
-		
-	/*
-	 * All commits except pf_ina_commit() require just single pass through
-	 * anchors. pf_ina_commit() requires two passes:
-	 *	the first pass updates rulesets
-	 *	the second pass updates tables
-	 *
-	 * In order to fit under the hood of pf_commit_trans() here
-	 * pf_ina_commit() implements kind of hack.
-	 *
-	 * as soon as it is done with the first passs (anchors are moved it
-	 * calls pf_ina_commit_table() to apply commit tables found in the
-	 * first anchor. Then it sets ->commit_op() to pf_ina_commit_table()
-	 * so pf_commit_trans() can iterate through remaining anchors in
-	 * transaction.
-	 *
-	 * This hack requires pf_commit_trans() to use RB_FOREACH_SAFE()
-	 * because pf_ina_commit() may move anchor from transaction to
-	 * pf_anchors.
-	 */
-
-	/* commit main ruleset first if transaction updates it */
-	if (t->pftina_rc.main_anchor.ruleset.rules.version != 0)
-		t->pftina_commit_op(t, &t->pftina_rc.main_anchor,
+	if (!RB_EMPTY(&t->pfttab_rc.main_anchor.ktables))
+		pfr_commit_table(t, &t->pfttab_rc.main_anchor,
 		    &pf_main_anchor);
 
-	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pftina_rc.anchors, wa) {
-		t->pftina_commit_op(t, ta, RB_FIND(pf_anchor_global,
+	/*
+	 * Move anchors which may get defined by transaction to global anchor
+	 * tree.
+	 */
+	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pfttab_rc.anchors, taw) {
+		/*
+		 * rules are not exepcted when we modify tables only
+		 */
+		KASSERT(TAILQ_EMPTY(ta->ruleset.rules.ptr));
+		pf_ina_commit_anchor(t, ta, RB_FIND(pf_anchor_global,
 		    &pf_anchors, ta));
 	}
 
+	/*
+	 * Commit tables to anchors which exist already in global tree
+	 */
+	RB_FOREACH(ta, pf_anchor_global, &t->pfttab_rc.anchors)
+		pfr_commit_table(t, ta, RB_FIND(pf_anchor_global,
+		    &pf_anchors, ta));
+}
+
+void
+pf_commit_trans(struct pf_trans *t)
+{
+	switch (t->pft_type) {
+	case PF_TRANS_INA:
+		pf_ina_commit(t);
+		break;
+	case PF_TRANS_TAB:
+		pf_tab_commit(t);
+		break;
+	default:
+		panic("%s unknown transaction type (%d)", __func__, t->pft_type);
+	}
+		
 	pf_trans_set_commit(&t->pftina_opts);
 	pf_remove_orphans(t);
 }
@@ -4349,8 +4377,6 @@ pf_init_tina(struct pf_trans *t)
 	pf_init_ruleset(&t->pftina_rc.main_anchor.ruleset);
 	t->pftina_default_rule = pf_default_rule;
 	t->pftina_default_vers = pf_default_vers;
-	t->pftina_check_op = pf_ina_check;
-	t->pftina_commit_op = pf_ina_commit;
 }
 
 void
@@ -4405,9 +4431,6 @@ pf_init_ttab(struct pf_trans *t)
 	RB_INIT(&t->pfttab_rc.anchors);
 	TAILQ_INIT(&t->pfttab_anchor_list);
 	SLIST_INIT(&t->pfttab_garbage);
-
-	t->pfttab_check_op = pf_ina_check;
-	t->pfttab_commit_op = pfr_commit_table;
 }
 
 void
