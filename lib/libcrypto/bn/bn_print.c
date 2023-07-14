@@ -1,4 +1,4 @@
-/*	$OpenBSD: bn_print.c,v 1.42 2023/07/07 07:04:24 tb Exp $ */
+/*	$OpenBSD: bn_print.c,v 1.45 2023/07/10 02:29:28 tb Exp $ */
 
 /*
  * Copyright (c) 2023 Theo Buehler <tb@openbsd.org>
@@ -19,13 +19,14 @@
 #include <ctype.h>
 #include <limits.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include <openssl/bio.h>
 #include <openssl/bn.h>
 
+#include "bn_local.h"
 #include "bytestring.h"
 
 static int
@@ -80,16 +81,13 @@ bn_print_bignum(BIO *bio, const BIGNUM *bn, int indent)
 	if (indent < 0)
 		indent = 0;
 
-	if ((hex = BN_bn2hex(bn)) == NULL)
+	if (!bn_bn2hex_nosign(bn, &hex, &hex_len))
 		goto err;
-	hex_len = strlen(hex);
 
 	CBS_init(&cbs, hex, hex_len);
 
 	if (BN_is_negative(bn)) {
 		if (BIO_printf(bio, " (Negative)") <= 0)
-			goto err;
-		if (!CBS_skip(&cbs, 1))
 			goto err;
 	}
 
@@ -151,3 +149,45 @@ bn_printf(BIO *bio, const BIGNUM *bn, int indent, const char *fmt, ...)
 
 	return bn_print_bignum(bio, bn, indent);
 }
+
+int
+BN_print(BIO *bio, const BIGNUM *bn)
+{
+	char *hex = NULL;
+	size_t hex_len = 0;
+	int ret = 0;
+
+	if (!bn_bn2hex_nibbles(bn, &hex, &hex_len))
+		goto err;
+	if (BIO_printf(bio, "%s", hex) <= 0)
+		goto err;
+
+	ret = 1;
+
+ err:
+	freezero(hex, hex_len);
+
+	return ret;
+}
+LCRYPTO_ALIAS(BN_print);
+
+int
+BN_print_fp(FILE *fp, const BIGNUM *bn)
+{
+	char *hex = NULL;
+	size_t hex_len = 0;
+	int ret = 0;
+
+	if (!bn_bn2hex_nibbles(bn, &hex, &hex_len))
+		goto err;
+	if (fprintf(fp, "%s", hex) < 0)
+		goto err;
+
+	ret = 1;
+
+ err:
+	freezero(hex, hex_len);
+
+	return ret;
+}
+LCRYPTO_ALIAS(BN_print_fp);

@@ -1,4 +1,4 @@
-/* $OpenBSD: ec_asn1.c,v 1.46 2023/06/27 07:28:57 tb Exp $ */
+/* $OpenBSD: ec_asn1.c,v 1.48 2023/07/07 19:37:53 beck Exp $ */
 /*
  * Written by Nils Larsch for the OpenSSL project.
  */
@@ -72,6 +72,7 @@ EC_GROUP_get_basis_type(const EC_GROUP *group)
 {
 	return 0;
 }
+LCRYPTO_ALIAS(EC_GROUP_get_basis_type);
 
 /* some structures needed for the asn1 encoding */
 typedef struct x9_62_pentanomial_st {
@@ -1101,6 +1102,7 @@ d2i_ECPKParameters(EC_GROUP **a, const unsigned char **in, long len)
 	ECPKPARAMETERS_free(params);
 	return (group);
 }
+LCRYPTO_ALIAS(d2i_ECPKParameters);
 
 int
 i2d_ECPKParameters(const EC_GROUP *a, unsigned char **out)
@@ -1119,6 +1121,7 @@ i2d_ECPKParameters(const EC_GROUP *a, unsigned char **out)
 	ECPKPARAMETERS_free(tmp);
 	return (ret);
 }
+LCRYPTO_ALIAS(i2d_ECPKParameters);
 
 /* some EC_KEY functions */
 
@@ -1213,6 +1216,7 @@ d2i_ECPrivateKey(EC_KEY **a, const unsigned char **in, long len)
 
 	return (NULL);
 }
+LCRYPTO_ALIAS(d2i_ECPrivateKey);
 
 int
 i2d_ECPrivateKey(EC_KEY *a, unsigned char **out)
@@ -1297,6 +1301,7 @@ i2d_ECPrivateKey(EC_KEY *a, unsigned char **out)
 		EC_PRIVATEKEY_free(priv_key);
 	return (ok ? ret : 0);
 }
+LCRYPTO_ALIAS(i2d_ECPrivateKey);
 
 int
 i2d_ECParameters(EC_KEY *a, unsigned char **out)
@@ -1307,6 +1312,7 @@ i2d_ECParameters(EC_KEY *a, unsigned char **out)
 	}
 	return i2d_ECPKParameters(a->group, out);
 }
+LCRYPTO_ALIAS(i2d_ECParameters);
 
 EC_KEY *
 d2i_ECParameters(EC_KEY **a, const unsigned char **in, long len)
@@ -1336,6 +1342,7 @@ d2i_ECParameters(EC_KEY **a, const unsigned char **in, long len)
 		*a = ret;
 	return ret;
 }
+LCRYPTO_ALIAS(d2i_ECParameters);
 
 EC_KEY *
 o2i_ECPublicKey(EC_KEY **a, const unsigned char **in, long len)
@@ -1362,6 +1369,7 @@ o2i_ECPublicKey(EC_KEY **a, const unsigned char **in, long len)
 	*in += len;
 	return ret;
 }
+LCRYPTO_ALIAS(o2i_ECPublicKey);
 
 int
 i2o_ECPublicKey(const EC_KEY *a, unsigned char **out)
@@ -1400,3 +1408,4 @@ i2o_ECPublicKey(const EC_KEY *a, unsigned char **out)
 		*out += buf_len;
 	return buf_len;
 }
+LCRYPTO_ALIAS(i2o_ECPublicKey);

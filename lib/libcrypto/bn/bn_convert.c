@@ -1,4 +1,4 @@
-/* $OpenBSD: bn_convert.c,v 1.12 2023/06/23 10:48:40 tb Exp $ */
+/* $OpenBSD: bn_convert.c,v 1.15 2023/07/09 18:37:58 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -142,6 +142,7 @@ BN_bn2bin(const BIGNUM *a, unsigned char *to)
 {
 	return bn2binpad(a, to, -1, big);
 }
+LCRYPTO_ALIAS(BN_bn2bin);
 
 int
 BN_bn2binpad(const BIGNUM *a, unsigned char *to, int tolen)
@@ -150,6 +151,7 @@ BN_bn2binpad(const BIGNUM *a, unsigned char *to, int tolen)
 		return -1;
 	return bn2binpad(a, to, tolen, big);
 }
+LCRYPTO_ALIAS(BN_bn2binpad);
 
 BIGNUM *
 BN_bin2bn(const unsigned char *s, int len, BIGNUM *ret)
@@ -192,6 +194,7 @@ BN_bin2bn(const unsigned char *s, int len, BIGNUM *ret)
 	bn_correct_top(ret);
 	return (ret);
 }
+LCRYPTO_ALIAS(BN_bin2bn);
 
 int
 BN_bn2lebinpad(const BIGNUM *a, unsigned char *to, int tolen)
@@ -201,6 +204,7 @@ BN_bn2lebinpad(const BIGNUM *a, unsigned char *to, int tolen)
 
 	return bn2binpad(a, to, tolen, little);
 }
+LCRYPTO_ALIAS(BN_bn2lebinpad);
 
 BIGNUM *
 BN_lebin2bn(const unsigned char *s, int len, BIGNUM *ret)
@@ -254,6 +258,7 @@ BN_lebin2bn(const unsigned char *s, int len, BIGNUM *ret)
 
 	return ret;
 }
+LCRYPTO_ALIAS(BN_lebin2bn);
 
 int
 BN_asc2bn(BIGNUM **bnp, const char *s)
@@ -306,6 +311,7 @@ BN_asc2bn(BIGNUM **bnp, const char *s)
 
 	return 1;
 }
+LCRYPTO_ALIAS(BN_asc2bn);
 
 char *
 BN_bn2dec(const BIGNUM *bn)
@@ -384,6 +390,7 @@ BN_bn2dec(const BIGNUM *bn)
 
 	return s;
 }
+LCRYPTO_ALIAS(BN_bn2dec);
 
 static int
 bn_dec2bn_cbs(BIGNUM **bnp, CBS *cbs)
@@ -488,21 +495,29 @@ BN_dec2bn(BIGNUM **bnp, const char *s)
 
 	return bn_dec2bn_cbs(bnp, &cbs);
 }
+LCRYPTO_ALIAS(BN_dec2bn);
 
-char *
-BN_bn2hex(const BIGNUM *bn)
+static int
+bn_bn2hex_internal(const BIGNUM *bn, int include_sign, int nibbles_only,
+    char **out, size_t *out_len)
 {
 	int started = 0;
 	uint8_t *s = NULL;
-	size_t s_len;
+	size_t s_len = 0;
 	BN_ULONG v, w;
 	int i, j;
 	CBB cbb;
+	CBS cbs;
+	uint8_t nul;
+	int ret = 0;
+
+	*out = NULL;
+	*out_len = 0;
 
 	if (!CBB_init(&cbb, 0))
 		goto err;
 
-	if (BN_is_negative(bn)) {
+	if (BN_is_negative(bn) && include_sign) {
 		if (!CBB_add_u8(&cbb, '-'))
 			goto err;
 	}
@@ -516,8 +531,10 @@ BN_bn2hex(const BIGNUM *bn)
 			v = (w >> j) & 0xff;
 			if (!started && v == 0)
 				continue;
-			if (!CBB_add_u8(&cbb, hex_digits[v >> 4]))
-				goto err;
+			if (started || !nibbles_only || (v >> 4) != 0) {
+				if (!CBB_add_u8(&cbb, hex_digits[v >> 4]))
+					goto err;
+			}
 			if (!CBB_add_u8(&cbb, hex_digits[v & 0xf]))
 				goto err;
 			started = 1;
@@ -528,11 +545,49 @@ BN_bn2hex(const BIGNUM *bn)
 	if (!CBB_finish(&cbb, &s, &s_len))
 		goto err;
 
+	/* The length of a C string does not include the terminating NUL. */
+	CBS_init(&cbs, s, s_len);
+	if (!CBS_get_last_u8(&cbs, &nul))
+		goto err;
+
+	*out = (char *)CBS_data(&cbs);
+	*out_len = CBS_len(&cbs);
+	s = NULL;
+	s_len = 0;
+
+	ret = 1;
+
  err:
 	CBB_cleanup(&cbb);
+	freezero(s, s_len);
+
+	return ret;
+}
+
+int
+bn_bn2hex_nosign(const BIGNUM *bn, char **out, size_t *out_len)
+{
+	return bn_bn2hex_internal(bn, 0, 0, out, out_len);
+}
+
+int
+bn_bn2hex_nibbles(const BIGNUM *bn, char **out, size_t *out_len)
+{
+	return bn_bn2hex_internal(bn, 1, 1, out, out_len);
+}
+
+char *
+BN_bn2hex(const BIGNUM *bn)
+{
+	char *s;
+	size_t s_len;
+
+	if (!bn_bn2hex_internal(bn, 1, 0, &s, &s_len))
+		return NULL;
 
 	return s;
 }
+LCRYPTO_ALIAS(BN_bn2hex);
 
 static int
 bn_hex2bn_cbs(BIGNUM **bnp, CBS *cbs)
@@ -641,6 +696,7 @@ BN_hex2bn(BIGNUM **bnp, const char *s)
 
 	return bn_hex2bn_cbs(bnp, &cbs);
 }
+LCRYPTO_ALIAS(BN_hex2bn);
 
 int
 BN_bn2mpi(const BIGNUM *a, unsigned char *d)
@@ -670,6 +726,7 @@ BN_bn2mpi(const BIGNUM *a, unsigned char *d)
 		d[4] |= 0x80;
 	return (num + 4 + ext);
 }
+LCRYPTO_ALIAS(BN_bn2mpi);
 
 BIGNUM *
 BN_mpi2bn(const unsigned char *d, int n, BIGNUM *ain)
@@ -713,46 +770,4 @@ BN_mpi2bn(const unsigned char *d, int n, BIGNUM *ain)
 	}
 	return (a);
 }
-
-#ifndef OPENSSL_NO_BIO
-int
-BN_print_fp(FILE *fp, const BIGNUM *a)
-{
-	BIO *b;
-	int ret;
-
-	if ((b = BIO_new(BIO_s_file())) == NULL)
-		return (0);
-	BIO_set_fp(b, fp, BIO_NOCLOSE);
-	ret = BN_print(b, a);
-	BIO_free(b);
-	return (ret);
-}
-
-int
-BN_print(BIO *bp, const BIGNUM *a)
-{
-	int i, j, v, z = 0;
-	int ret = 0;
-
-	if ((a->neg) && (BIO_write(bp, "-", 1) != 1))
-		goto end;
-	if (BN_is_zero(a) && (BIO_write(bp, "0", 1) != 1))
-		goto end;
-	for (i = a->top - 1; i >= 0; i--) {
-		for (j = BN_BITS2 - 4; j >= 0; j -= 4) {
-			/* strip leading zeros */
-			v = ((int)(a->d[i] >> (long)j)) & 0x0f;
-			if (z || (v != 0)) {
-				if (BIO_write(bp, &hex_digits[v], 1) != 1)
-					goto end;
-				z = 1;
-			}
-		}
-	}
-	ret = 1;
-
-end:
-	return (ret);
-}
-#endif
+LCRYPTO_ALIAS(BN_mpi2bn);

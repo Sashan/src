@@ -1,4 +1,4 @@
-/* $OpenBSD: e_aes.c,v 1.51 2023/03/01 11:16:06 tb Exp $ */
+/* $OpenBSD: e_aes.c,v 1.53 2023/07/07 19:37:53 beck Exp $ */
 /* ====================================================================
  * Copyright (c) 2001-2011 The OpenSSL Project.  All rights reserved.
  *

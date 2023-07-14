@@ -1,4 +1,4 @@
-/* $OpenBSD: names.c,v 1.17 2023/06/29 06:11:33 tb Exp $ */
+/* $OpenBSD: names.c,v 1.19 2023/07/07 19:37:54 beck Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *

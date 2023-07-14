@@ -1,4 +1,4 @@
-/* $OpenBSD: bio_lib.c,v 1.45 2023/07/05 21:23:37 beck Exp $ */
+/* $OpenBSD: bio_lib.c,v 1.47 2023/07/10 02:33:33 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -548,11 +548,10 @@ BIO_indent(BIO *b, int indent, int max)
 {
 	if (indent > max)
 		indent = max;
-	if (indent < 0)
-		indent = 0;
-	while (indent--)
-		if (BIO_puts(b, " ") != 1)
-			return 0;
+	if (indent <= 0)
+		return 1;
+	if (BIO_printf(b, "%*s", indent, "") <= 0)
+		return 0;
 	return 1;
 }
 LCRYPTO_ALIAS(BIO_indent);
@@ -873,7 +872,6 @@ BIO_get_ex_new_index(long argl, void *argp, CRYPTO_EX_new *new_func,
 	return CRYPTO_get_ex_new_index(CRYPTO_EX_INDEX_BIO, argl, argp,
 	    new_func, dup_func, free_func);
 }
-LCRYPTO_ALIAS(BIO_get_ex_new_index);
 
 int
 BIO_set_ex_data(BIO *bio, int idx, void *data)

@@ -1,4 +1,4 @@
-/* $OpenBSD: evp_enc.c,v 1.50 2023/03/01 11:16:06 tb Exp $ */
+/* $OpenBSD: evp_enc.c,v 1.52 2023/07/07 19:37:53 beck Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *

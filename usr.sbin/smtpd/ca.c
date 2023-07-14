@@ -1,4 +1,4 @@
-/*	$OpenBSD: ca.c,v 1.45 2023/06/18 19:08:52 op Exp $	*/
+/*	$OpenBSD: ca.c,v 1.47 2023/07/11 16:40:22 op Exp $	*/
 
 /*
  * Copyright (c) 2014 Reyk Floeter <reyk@openbsd.org>
@@ -19,7 +19,6 @@
 
 #include <openssl/err.h>
 #include <openssl/pem.h>
-#include <openssl/engine.h>
 #include <pwd.h>
 #include <signal.h>
 #include <string.h>
@@ -31,34 +30,12 @@
 
 static int	 rsae_send_imsg(int, const unsigned char *, unsigned char *,
 		    RSA *, int, unsigned int);
-static int	 rsae_pub_enc(int, const unsigned char *, unsigned char *,
-		    RSA *, int);
-static int	 rsae_pub_dec(int,const unsigned char *, unsigned char *,
-		    RSA *, int);
 static int	 rsae_priv_enc(int, const unsigned char *, unsigned char *,
 		    RSA *, int);
 static int	 rsae_priv_dec(int, const unsigned char *, unsigned char *,
 		    RSA *, int);
-static int	 rsae_mod_exp(BIGNUM *, const BIGNUM *, RSA *, BN_CTX *);
-static int	 rsae_bn_mod_exp(BIGNUM *, const BIGNUM *, const BIGNUM *,
-		    const BIGNUM *, BN_CTX *, BN_MONT_CTX *);
-static int	 rsae_init(RSA *);
-static int	 rsae_finish(RSA *);
-static int	 rsae_keygen(RSA *, int, BIGNUM *, BN_GENCB *);
-static int	 ecdsae_keygen(EC_KEY *);
-static int	 ecdsae_compute_key(void *, size_t, const EC_POINT *, EC_KEY *,
-		    void *(*)(const void *, size_t, void *, size_t *));
-static int	 ecdsae_sign(int, const unsigned char *, int, unsigned char *,
-		    unsigned int *, const BIGNUM *, const BIGNUM *, EC_KEY *);
-
 static ECDSA_SIG *ecdsae_do_sign(const unsigned char *, int, const BIGNUM *,
     const BIGNUM *, EC_KEY *);
-static int ecdsae_sign_setup(EC_KEY *, BN_CTX *, BIGNUM **, BIGNUM **);
-static int ecdsae_verify(int, const unsigned char *, int, const unsigned char *,
-    int, EC_KEY *);
-static int ecdsae_do_verify(const unsigned char *, int, const ECDSA_SIG *,
-    EC_KEY *);
-
 
 static struct dict pkeys;
 static uint64_t	 reqid = 0;
@@ -392,22 +369,6 @@ rsae_send_imsg(int flen, const unsigned char *from, unsigned char *to,
 }
 
 static int
-rsae_pub_enc(int flen,const unsigned char *from, unsigned char *to, RSA *rsa,
-    int padding)
-{
-	log_debug("debug: %s: %s", proc_name(smtpd_process), __func__);
-	return (RSA_meth_get_pub_enc(rsa_default)(flen, from, to, rsa, padding));
-}
-
-static int
-rsae_pub_dec(int flen,const unsigned char *from, unsigned char *to, RSA *rsa,
-    int padding)
-{
-	log_debug("debug: %s: %s", proc_name(smtpd_process), __func__);
-	return (RSA_meth_get_pub_dec(rsa_default)(flen, from, to, rsa, padding));
-}
-
-static int
 rsae_priv_enc(int flen, const unsigned char *from, unsigned char *to, RSA *rsa,
     int padding)
 {
@@ -429,47 +390,6 @@ rsae_priv_dec(int flen, const unsigned char *from, unsigned char *to, RSA *rsa,
 
 	return (RSA_meth_get_priv_dec(rsa_default)(flen, from, to, rsa, padding));
 }
-
-static int
-rsae_mod_exp(BIGNUM *r0, const BIGNUM *I, RSA *rsa, BN_CTX *ctx)
-{
-	log_debug("debug: %s: %s", proc_name(smtpd_process), __func__);
-	return (RSA_meth_get_mod_exp(rsa_default)(r0, I, rsa, ctx));
-}
-
-static int
-rsae_bn_mod_exp(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
-    const BIGNUM *m, BN_CTX *ctx, BN_MONT_CTX *m_ctx)
-{
-	log_debug("debug: %s: %s", proc_name(smtpd_process), __func__);
-	return (RSA_meth_get_bn_mod_exp(rsa_default)(r, a, p, m, ctx, m_ctx));
-}
-
-static int
-rsae_init(RSA *rsa)
-{
-	log_debug("debug: %s: %s", proc_name(smtpd_process), __func__);
-	if (RSA_meth_get_init(rsa_default) == NULL)
-		return (1);
-	return (RSA_meth_get_init(rsa_default)(rsa));
-}
-
-static int
-rsae_finish(RSA *rsa)
-{
-	log_debug("debug: %s: %s", proc_name(smtpd_process), __func__);
-	if (RSA_meth_get_finish(rsa_default) == NULL)
-		return (1);
-	return (RSA_meth_get_finish(rsa_default)(rsa));
-}
-
-static int
-rsae_keygen(RSA *rsa, int bits, BIGNUM *e, BN_GENCB *cb)
-{
-	log_debug("debug: %s: %s", proc_name(smtpd_process), __func__);
-	return (RSA_meth_get_keygen(rsa_default)(rsa, bits, e, cb));
-}
-
 
 /*
  * ECDSA privsep engine (called from unprivileged processes)
@@ -553,40 +473,6 @@ ecdsae_send_enc_imsg(const unsigned char *dgst, int dgst_len,
 	return (sig);
 }
 
-static int
-ecdsae_keygen(EC_KEY *eckey)
-{
-	int (*keygen)(EC_KEY *);
-
-	log_debug("debug: %s: %s", proc_name(smtpd_process), __func__);
-	EC_KEY_METHOD_get_keygen(ecdsa_default, &keygen);
-	return (keygen(eckey));
-}
-
-static int
-ecdsae_compute_key(void *out, size_t outlen, const EC_POINT *pub_key,
-    EC_KEY *ecdh, void *(*kdf)(const void *, size_t, void *, size_t *))
-{
-	int (*ckey)(void *, size_t, const EC_POINT *, EC_KEY *,
-	    void *(*)(const void *, size_t, void *, size_t *));
-
-	log_debug("debug: %s: %s", proc_name(smtpd_process), __func__);
-	EC_KEY_METHOD_get_compute_key(ecdsa_default, &ckey);
-	return (ckey(out, outlen, pub_key, ecdh, kdf));
-}
-
-static int
-ecdsae_sign(int type, const unsigned char *dgst, int dlen, unsigned char *sig,
-    unsigned int *siglen, const BIGNUM *kinv, const BIGNUM *r, EC_KEY *eckey)
-{
-	int (*sign)(int, const unsigned char *, int, unsigned char *,
-	    unsigned int *, const BIGNUM *, const BIGNUM *, EC_KEY *);
-
-	log_debug("debug: %s: %s", proc_name(smtpd_process), __func__);
-	EC_KEY_METHOD_get_sign(ecdsa_default, &sign, NULL, NULL);
-	return (sign(type, dgst, dlen, sig, siglen, kinv, r, eckey));
-}
-
 static ECDSA_SIG *
 ecdsae_do_sign(const unsigned char *dgst, int dgst_len, const BIGNUM *inv,
     const BIGNUM *rp, EC_KEY *eckey)
@@ -601,104 +487,30 @@ ecdsae_do_sign(const unsigned char *dgst, int dgst_len, const BIGNUM *inv,
 	return (psign_sig(dgst, dgst_len, inv, rp, eckey));
 }
 
-static int
-ecdsae_sign_setup(EC_KEY *eckey, BN_CTX *ctx, BIGNUM **kinv, BIGNUM **r)
-{
-	int (*psign_setup)(EC_KEY *, BN_CTX *, BIGNUM **, BIGNUM **);
-
-	log_debug("debug: %s: %s", proc_name(smtpd_process), __func__);
-	EC_KEY_METHOD_get_sign(ecdsa_default, NULL, &psign_setup, NULL);
-	return (psign_setup(eckey, ctx, kinv, r));
-}
-
-static int
-ecdsae_verify(int type, const unsigned char *dgst, int dgst_len,
-    const unsigned char *sigbuf, int sig_len, EC_KEY *eckey)
-{
-	int (*verify)(int, const unsigned char *, int, const unsigned char *,
-	    int, EC_KEY *);
-
-	log_debug("debug: %s: %s", proc_name(smtpd_process), __func__);
-	EC_KEY_METHOD_get_verify(ecdsa_default, &verify, NULL);
-	return (verify(type, dgst, dgst_len, sigbuf, sig_len, eckey));
-}
-
-static int
-ecdsae_do_verify(const unsigned char *dgst, int dgst_len,
-    const ECDSA_SIG *sig, EC_KEY *eckey)
-{
-	int (*pverify_sig)(const unsigned char *, int, const ECDSA_SIG *,
-	    EC_KEY *);
-
-	log_debug("debug: %s: %s", proc_name(smtpd_process), __func__);
-	EC_KEY_METHOD_get_verify(ecdsa_default, NULL, &pverify_sig);
-	return (pverify_sig(dgst, dgst_len, sig, eckey));
-}
-
-
 static void
 rsa_engine_init(void)
 {
-	ENGINE		*e;
-	const char	*errstr, *name;
+	const char	*errstr;
 
-	if ((rsae_method = RSA_meth_new("RSA privsep engine", 0)) == NULL) {
-		errstr = "RSA_meth_new";
+	if ((rsa_default = RSA_get_default_method()) == NULL) {
+		errstr = "RSA_get_default_method";
 		goto fail;
 	}
 
-	RSA_meth_set_pub_enc(rsae_method, rsae_pub_enc);
-	RSA_meth_set_pub_dec(rsae_method, rsae_pub_dec);
+	if ((rsae_method = RSA_meth_dup(rsa_default)) == NULL) {
+		errstr = "RSA_meth_dup";
+		goto fail;
+	}
+
 	RSA_meth_set_priv_enc(rsae_method, rsae_priv_enc);
 	RSA_meth_set_priv_dec(rsae_method, rsae_priv_dec);
-	RSA_meth_set_mod_exp(rsae_method, rsae_mod_exp);
-	RSA_meth_set_bn_mod_exp(rsae_method, rsae_bn_mod_exp);
-	RSA_meth_set_init(rsae_method, rsae_init);
-	RSA_meth_set_finish(rsae_method, rsae_finish);
-	RSA_meth_set_keygen(rsae_method, rsae_keygen);
 
-	if ((e = ENGINE_get_default_RSA()) == NULL) {
-		if ((e = ENGINE_new()) == NULL) {
-			errstr = "ENGINE_new";
-			goto fail;
-		}
-		if (!ENGINE_set_name(e, RSA_meth_get0_name(rsae_method))) {
-			errstr = "ENGINE_set_name";
-			goto fail;
-		}
-		if ((rsa_default = RSA_get_default_method()) == NULL) {
-			errstr = "RSA_get_default_method";
-			goto fail;
-		}
-	} else if ((rsa_default = ENGINE_get_RSA(e)) == NULL) {
-		errstr = "ENGINE_get_RSA";
-		goto fail;
-	}
-
-	if ((name = ENGINE_get_name(e)) == NULL)
-		name = "unknown RSA engine";
-
-	log_debug("debug: %s: using %s", __func__, name);
-
-	if (RSA_meth_get_mod_exp(rsa_default) == NULL)
-		RSA_meth_set_mod_exp(rsae_method, NULL);
-	if (RSA_meth_get_bn_mod_exp(rsa_default) == NULL)
-		RSA_meth_set_bn_mod_exp(rsae_method, NULL);
-	if (RSA_meth_get_keygen(rsa_default) == NULL)
-		RSA_meth_set_keygen(rsae_method, NULL);
 	RSA_meth_set_flags(rsae_method,
 		RSA_meth_get_flags(rsa_default) | RSA_METHOD_FLAG_NO_CHECK);
 	RSA_meth_set0_app_data(rsae_method,
 		RSA_meth_get0_app_data(rsa_default));
 
-	if (!ENGINE_set_RSA(e, rsae_method)) {
-		errstr = "ENGINE_set_RSA";
-		goto fail;
-	}
-	if (!ENGINE_set_default_RSA(e)) {
-		errstr = "ENGINE_set_default_RSA";
-		goto fail;
-	}
+	RSA_set_default_method(rsae_method);
 
 	return;
 
@@ -710,52 +522,26 @@ rsa_engine_init(void)
 static void
 ecdsa_engine_init(void)
 {
-	ENGINE		*e;
-	const char	*errstr, *name;
+	int (*sign)(int, const unsigned char *, int, unsigned char *,
+	    unsigned int *, const BIGNUM *, const BIGNUM *, EC_KEY *);
+	int (*sign_setup)(EC_KEY *, BN_CTX *, BIGNUM **, BIGNUM **);
+	const char *errstr;
 
-	if ((ecdsae_method = EC_KEY_METHOD_new(NULL)) == NULL) {
+	if ((ecdsa_default = EC_KEY_get_default_method()) == NULL) {
+		errstr = "EC_KEY_get_default_method";
+		goto fail;
+	}
+
+	if ((ecdsae_method = EC_KEY_METHOD_new(ecdsa_default)) == NULL) {
 		errstr = "EC_KEY_METHOD_new";
 		goto fail;
 	}
 
-	EC_KEY_METHOD_set_keygen(ecdsae_method, ecdsae_keygen);
-	EC_KEY_METHOD_set_compute_key(ecdsae_method, ecdsae_compute_key);
-	EC_KEY_METHOD_set_sign(ecdsae_method, ecdsae_sign, ecdsae_sign_setup,
+	EC_KEY_METHOD_get_sign(ecdsa_default, &sign, &sign_setup, NULL);
+	EC_KEY_METHOD_set_sign(ecdsae_method, sign, sign_setup,
 	    ecdsae_do_sign);
-	EC_KEY_METHOD_set_verify(ecdsae_method, ecdsae_verify,
-	    ecdsae_do_verify);
 
-	if ((e = ENGINE_get_default_EC()) == NULL) {
-		if ((e = ENGINE_new()) == NULL) {
-			errstr = "ENGINE_new";
-			goto fail;
-		}
-		if (!ENGINE_set_name(e, "ECDSA privsep engine")) {
-			errstr = "ENGINE_set_name";
-			goto fail;
-		}
-		if ((ecdsa_default = EC_KEY_get_default_method()) == NULL) {
-			errstr = "EC_KEY_get_default_method";
-			goto fail;
-		}
-	} else if ((ecdsa_default = ENGINE_get_EC(e)) == NULL) {
-		errstr = "ENGINE_get_EC";
-		goto fail;
-	}
-
-	if ((name = ENGINE_get_name(e)) == NULL)
-		name = "unknown ECDSA engine";
-
-	log_debug("debug: %s: using %s", __func__, name);
-
-	if (!ENGINE_set_EC(e, ecdsae_method)) {
-		errstr = "ENGINE_set_EC";
-		goto fail;
-	}
-	if (!ENGINE_set_default_EC(e)) {
-		errstr = "ENGINE_set_default_EC";
-		goto fail;
-	}
+	EC_KEY_set_default_method(ecdsae_method);
 
 	return;
 

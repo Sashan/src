@@ -1,4 +1,4 @@
-/*	$OpenBSD: rkclock.c,v 1.77 2023/06/19 09:54:15 kettenis Exp $	*/
+/*	$OpenBSD: rkclock.c,v 1.82 2023/07/09 16:33:49 patrick Exp $	*/
 /*
  * Copyright (c) 2017, 2018 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -3840,6 +3840,46 @@ const struct rkclock rk3588_clocks[] = {
 		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
 	},
 	{
+		RK3588_CLK_I2C1, RK3588_CRU_CLKSEL_CON(38),
+		SEL(6, 6), 0,
+		{ RK3588_CLK_200M_SRC , RK3588_CLK_100M_SRC },
+	},
+	{
+		RK3588_CLK_I2C2, RK3588_CRU_CLKSEL_CON(38),
+		SEL(7, 7), 0,
+		{ RK3588_CLK_200M_SRC , RK3588_CLK_100M_SRC },
+	},
+	{
+		RK3588_CLK_I2C3, RK3588_CRU_CLKSEL_CON(38),
+		SEL(8, 8), 0,
+		{ RK3588_CLK_200M_SRC , RK3588_CLK_100M_SRC },
+	},
+	{
+		RK3588_CLK_I2C4, RK3588_CRU_CLKSEL_CON(38),
+		SEL(9, 9), 0,
+		{ RK3588_CLK_200M_SRC , RK3588_CLK_100M_SRC },
+	},
+	{
+		RK3588_CLK_I2C5, RK3588_CRU_CLKSEL_CON(38),
+		SEL(10, 10), 0,
+		{ RK3588_CLK_200M_SRC , RK3588_CLK_100M_SRC },
+	},
+	{
+		RK3588_CLK_I2C6, RK3588_CRU_CLKSEL_CON(38),
+		SEL(11, 11), 0,
+		{ RK3588_CLK_200M_SRC , RK3588_CLK_100M_SRC },
+	},
+	{
+		RK3588_CLK_I2C7, RK3588_CRU_CLKSEL_CON(38),
+		SEL(12, 12), 0,
+		{ RK3588_CLK_200M_SRC , RK3588_CLK_100M_SRC },
+	},
+	{
+		RK3588_CLK_I2C8, RK3588_CRU_CLKSEL_CON(38),
+		SEL(13, 13), 0,
+		{ RK3588_CLK_200M_SRC , RK3588_CLK_100M_SRC },
+	},
+	{
 		RK3588_CLK_UART1_SRC, RK3588_CRU_CLKSEL_CON(41),
 		SEL(14, 14), DIV(13, 9),
 		{ RK3588_PLL_GPLL, RK3588_PLL_CPLL }
@@ -4067,6 +4107,11 @@ const struct rkclock rk3588_clocks[] = {
 		SET_PARENT
 	},
 	{
+		RK3588_CLK_I2C0, RK3588_CRU_CLKSEL_CON(3),
+		SEL(6, 6), 0,
+		{ RK3588_CLK_PMU1_200M_SRC, RK3588_CLK_PMU1_100M_SRC },
+	},
+	{
 		RK3588_CLK_PMU1_50M_SRC, RK3588_PMUCRU_CLKSEL_CON(0),
 		0, DIV(3, 0),
 		{ RK3588_CLK_PMU1_400M_SRC }
@@ -4104,6 +4149,12 @@ const struct rkclock rk3588_clocks[] = {
 		  RK3588_CLK_PMU1_100M_SRC, RK3588_XIN24M }
 	},
 	{
+		RK3588_CLK_PMU1PWM, RK3588_PMUCRU_CLKSEL_CON(2),
+		SEL(10, 9), 0,
+		{ RK3588_CLK_PMU1_100M_SRC, RK3588_CLK_PMU1_50M_SRC,
+		  RK3588_XIN24M }
+	},
+	{
 		RK3588_CLK_UART0_SRC, RK3588_PMUCRU_CLKSEL_CON(3),
 		0, DIV(11, 7),
 		{ RK3588_PLL_CPLL }
@@ -4122,7 +4173,25 @@ const struct rkclock rk3588_clocks[] = {
 		{ RK3588_XIN24M }
 	},
 	{
+		RK3588_CLK_REF_PIPE_PHY1_OSC_SRC, 0, 0, 0,
+		{ RK3588_XIN24M }
+	},
+	{
+		RK3588_CLK_REF_PIPE_PHY2_OSC_SRC, 0, 0, 0,
+		{ RK3588_XIN24M }
+	},
+	{
 		RK3588_CLK_REF_PIPE_PHY0_PLL_SRC, RK3588_CRU_CLKSEL_CON(176),
+		0, DIV(5, 0),
+		{ RK3588_PLL_PPLL }
+	},
+	{
+		RK3588_CLK_REF_PIPE_PHY1_PLL_SRC, RK3588_CRU_CLKSEL_CON(176),
+		0, DIV(11, 6),
+		{ RK3588_PLL_PPLL }
+	},
+	{
+		RK3588_CLK_REF_PIPE_PHY2_PLL_SRC, RK3588_CRU_CLKSEL_CON(177),
 		0, DIV(5, 0),
 		{ RK3588_PLL_PPLL }
 	},
@@ -4131,6 +4200,18 @@ const struct rkclock rk3588_clocks[] = {
 		SEL(6, 6), 0,
 		{ RK3588_CLK_REF_PIPE_PHY0_OSC_SRC,
 		  RK3588_CLK_REF_PIPE_PHY0_PLL_SRC },
+	},
+	{
+		RK3588_CLK_REF_PIPE_PHY1, RK3588_CRU_CLKSEL_CON(177),
+		SEL(7, 7), 0,
+		{ RK3588_CLK_REF_PIPE_PHY1_OSC_SRC,
+		  RK3588_CLK_REF_PIPE_PHY1_PLL_SRC },
+	},
+	{
+		RK3588_CLK_REF_PIPE_PHY2, RK3588_CRU_CLKSEL_CON(177),
+		SEL(8, 8), 0,
+		{ RK3588_CLK_REF_PIPE_PHY2_OSC_SRC,
+		  RK3588_CLK_REF_PIPE_PHY2_PLL_SRC },
 	},
 	{
 		/* Sentinel */
@@ -4337,21 +4418,81 @@ rk3588_reset(void *cookie, uint32_t *cells, int on)
 	uint32_t bit, mask, reg;
 
 	switch (idx) {
+	case RK3588_SRST_PCIE0_POWER_UP:
+		reg = RK3588_CRU_SOFTRST_CON(32);
+		bit = 13;
+		break;
+	case RK3588_SRST_PCIE1_POWER_UP:
+		reg = RK3588_CRU_SOFTRST_CON(32);
+		bit = 14;
+		break;
+	case RK3588_SRST_PCIE2_POWER_UP:
+		reg = RK3588_CRU_SOFTRST_CON(32);
+		bit = 15;
+		break;
+	case RK3588_SRST_PCIE3_POWER_UP:
+		reg = RK3588_CRU_SOFTRST_CON(33);
+		bit = 0;
+		break;
 	case RK3588_SRST_PCIE4_POWER_UP:
 		reg = RK3588_CRU_SOFTRST_CON(33);
 		bit = 1;
+		break;
+	case RK3588_SRST_P_PCIE0:
+		reg = RK3588_CRU_SOFTRST_CON(33);
+		bit = 12;
+		break;
+	case RK3588_SRST_P_PCIE1:
+		reg = RK3588_CRU_SOFTRST_CON(33);
+		bit = 13;
+		break;
+	case RK3588_SRST_P_PCIE2:
+		reg = RK3588_CRU_SOFTRST_CON(33);
+		bit = 14;
+		break;
+	case RK3588_SRST_P_PCIE3:
+		reg = RK3588_CRU_SOFTRST_CON(33);
+		bit = 15;
 		break;
 	case RK3588_SRST_P_PCIE4:
 		reg = RK3588_CRU_SOFTRST_CON(34);
 		bit = 0;
 		break;
+	case RK3588_SRST_A_USB3OTG0:
+		reg = RK3588_CRU_SOFTRST_CON(42);
+		bit = 4;
+		break;
+	case RK3588_SRST_A_USB3OTG1:
+		reg = RK3588_CRU_SOFTRST_CON(42);
+		bit = 7;
+		break;
 	case RK3588_SRST_REF_PIPE_PHY0:
 		reg = RK3588_CRU_SOFTRST_CON(77);
 		bit = 6;
 		break;
+	case RK3588_SRST_REF_PIPE_PHY1:
+		reg = RK3588_CRU_SOFTRST_CON(77);
+		bit = 7;
+		break;
+	case RK3588_SRST_REF_PIPE_PHY2:
+		reg = RK3588_CRU_SOFTRST_CON(77);
+		bit = 8;
+		break;
 	case RK3588_SRST_P_PCIE2_PHY0:
 		reg = RK3588_PHPTOPCRU_SOFTRST_CON(0);
 		bit = 5;
+		break;
+	case RK3588_SRST_P_PCIE2_PHY1:
+		reg = RK3588_PHPTOPCRU_SOFTRST_CON(0);
+		bit = 6;
+		break;
+	case RK3588_SRST_P_PCIE2_PHY2:
+		reg = RK3588_PHPTOPCRU_SOFTRST_CON(0);
+		bit = 7;
+		break;
+	case RK3588_SRST_PCIE30_PHY:
+		reg = RK3588_PHPTOPCRU_SOFTRST_CON(0);
+		bit = 10;
 		break;
 	default:
 		printf("%s: 0x%08x\n", __func__, idx);

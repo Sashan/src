@@ -1,4 +1,4 @@
-/* $OpenBSD: e_chacha.c,v 1.10 2022/11/26 16:08:52 tb Exp $ */
+/* $OpenBSD: e_chacha.c,v 1.12 2023/07/07 19:37:53 beck Exp $ */
 /*
  * Copyright (c) 2014 Joel Sing <jsing@openbsd.org>
  *

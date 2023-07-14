@@ -1,4 +1,4 @@
-/* $OpenBSD: m_md5_sha1.c,v 1.5 2022/11/26 16:08:52 tb Exp $ */
+/* $OpenBSD: m_md5_sha1.c,v 1.7 2023/07/07 19:37:53 beck Exp $ */
 /*
  * Copyright (c) 2017 Joel Sing <jsing@openbsd.org>
  *

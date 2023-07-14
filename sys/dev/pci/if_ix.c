@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ix.c,v 1.197 2023/06/01 09:05:33 jan Exp $	*/
+/*	$OpenBSD: if_ix.c,v 1.199 2023/07/10 19:36:54 jan Exp $	*/
 
 /******************************************************************************
 
@@ -36,6 +36,12 @@
 
 #include <dev/pci/if_ix.h>
 #include <dev/pci/ixgbe_type.h>
+
+/*
+ * Our TCP/IP Stack could not handle packets greater than MAXMCLBYTES.
+ * This interface could not handle packets greater than IXGBE_TSO_SIZE.
+ */
+CTASSERT(MAXMCLBYTES <= IXGBE_TSO_SIZE);
 
 /*********************************************************************
  *  Driver version
@@ -2263,7 +2269,7 @@ ixgbe_allocate_transmit_buffers(struct tx_ring *txr)
 	/* Create the descriptor buffer dma maps */
 	for (i = 0; i < sc->num_tx_desc; i++) {
 		txbuf = &txr->tx_buffers[i];
-		error = bus_dmamap_create(txr->txdma.dma_tag, IXGBE_TSO_SIZE,
+		error = bus_dmamap_create(txr->txdma.dma_tag, MAXMCLBYTES,
 			    sc->num_segs, PAGE_SIZE, 0,
 			    BUS_DMA_NOWAIT, &txbuf->map);
 
@@ -3094,8 +3100,11 @@ ixgbe_free_receive_buffers(struct rx_ring *rxr)
 				m_freem(rxbuf->buf);
 				rxbuf->buf = NULL;
 			}
-			bus_dmamap_destroy(rxr->rxdma.dma_tag, rxbuf->map);
-			rxbuf->map = NULL;
+			if (rxbuf->map != NULL) {
+				bus_dmamap_destroy(rxr->rxdma.dma_tag,
+				    rxbuf->map);
+				rxbuf->map = NULL;
+			}
 		}
 		free(rxr->rx_buffers, M_DEVBUF,
 		    sc->num_rx_desc * sizeof(struct ixgbe_rx_buf));
