@@ -1,4 +1,4 @@
-/* $OpenBSD: bn_blind.c,v 1.24 2023/07/28 10:05:16 tb Exp $ */
+/* $OpenBSD: bn_blind.c,v 1.32 2023/08/02 09:25:36 tb Exp $ */
 /* ====================================================================
  * Copyright (c) 1998-2006 The OpenSSL Project.  All rights reserved.
  *
@@ -123,27 +123,25 @@ struct bn_blinding_st {
 	BIGNUM *A;
 	BIGNUM *Ai;
 	BIGNUM *e;
-	BIGNUM *mod; /* just a reference */
+	BIGNUM *mod;
 	CRYPTO_THREADID tid;
 	int counter;
-	unsigned long flags;
 	BN_MONT_CTX *m_ctx;
 	int (*bn_mod_exp)(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
 	    const BIGNUM *m, BN_CTX *ctx, BN_MONT_CTX *m_ctx);
 };
 
-BN_BLINDING *
+static BN_BLINDING *
 BN_BLINDING_new(const BIGNUM *A, const BIGNUM *Ai, BIGNUM *mod)
 {
 	BN_BLINDING *ret = NULL;
 
-
 	if ((ret = calloc(1, sizeof(BN_BLINDING))) == NULL) {
 		BNerror(ERR_R_MALLOC_FAILURE);
-		return (NULL);
+		return NULL;
 	}
 	if (A != NULL) {
-		if ((ret->A = BN_dup(A))  == NULL)
+		if ((ret->A = BN_dup(A)) == NULL)
 			goto err;
 	}
 	if (Ai != NULL) {
@@ -164,10 +162,11 @@ BN_BLINDING_new(const BIGNUM *A, const BIGNUM *Ai, BIGNUM *mod)
 	CRYPTO_THREADID_current(&ret->tid);
 	return (ret);
 
-err:
+ err:
 	if (ret != NULL)
 		BN_BLINDING_free(ret);
-	return (NULL);
+
+	return NULL;
 }
 
 void
@@ -183,12 +182,12 @@ BN_BLINDING_free(BN_BLINDING *r)
 	free(r);
 }
 
-int
+static int
 BN_BLINDING_update(BN_BLINDING *b, BN_CTX *ctx)
 {
 	int ret = 0;
 
-	if ((b->A == NULL) || (b->Ai == NULL)) {
+	if (b->A == NULL || b->Ai == NULL) {
 		BNerror(BN_R_NOT_INITIALIZED);
 		goto err;
 	}
@@ -196,12 +195,11 @@ BN_BLINDING_update(BN_BLINDING *b, BN_CTX *ctx)
 	if (b->counter == -1)
 		b->counter = 0;
 
-	if (++b->counter == BN_BLINDING_COUNTER && b->e != NULL &&
-	    !(b->flags & BN_BLINDING_NO_RECREATE)) {
+	if (++b->counter == BN_BLINDING_COUNTER && b->e != NULL) {
 		/* re-create blinding parameters */
 		if (!BN_BLINDING_create_param(b, NULL, NULL, ctx, NULL, NULL))
 			goto err;
-	} else if (!(b->flags & BN_BLINDING_NO_UPDATE)) {
+	} else {
 		if (!BN_mod_mul(b->A, b->A, b->A, b->mod, ctx))
 			goto err;
 		if (!BN_mod_mul(b->Ai, b->Ai, b->Ai, b->mod, ctx))
@@ -210,57 +208,44 @@ BN_BLINDING_update(BN_BLINDING *b, BN_CTX *ctx)
 
 	ret = 1;
 
-err:
+ err:
 	if (b->counter == BN_BLINDING_COUNTER)
 		b->counter = 0;
-	return (ret);
+
+	return ret;
 }
 
 int
-BN_BLINDING_convert(BIGNUM *n, BN_BLINDING *b, BN_CTX *ctx)
-{
-	return BN_BLINDING_convert_ex(n, NULL, b, ctx);
-}
-
-int
-BN_BLINDING_convert_ex(BIGNUM *n, BIGNUM *r, BN_BLINDING *b, BN_CTX *ctx)
+BN_BLINDING_convert(BIGNUM *n, BIGNUM *r, BN_BLINDING *b, BN_CTX *ctx)
 {
 	int ret = 1;
 
-
-	if ((b->A == NULL) || (b->Ai == NULL)) {
+	if (b->A == NULL || b->Ai == NULL) {
 		BNerror(BN_R_NOT_INITIALIZED);
-		return (0);
+		return 0;
 	}
 
 	if (b->counter == -1)
 		/* Fresh blinding, doesn't need updating. */
 		b->counter = 0;
 	else if (!BN_BLINDING_update(b, ctx))
-		return (0);
+		return 0;
 
 	if (r != NULL) {
 		if (!bn_copy(r, b->Ai))
 			ret = 0;
 	}
 
-	if (!BN_mod_mul(n, n,b->A, b->mod, ctx))
+	if (!BN_mod_mul(n, n, b->A, b->mod, ctx))
 		ret = 0;
 
 	return ret;
 }
 
 int
-BN_BLINDING_invert(BIGNUM *n, BN_BLINDING *b, BN_CTX *ctx)
-{
-	return BN_BLINDING_invert_ex(n, NULL, b, ctx);
-}
-
-int
-BN_BLINDING_invert_ex(BIGNUM *n, const BIGNUM *r, BN_BLINDING *b, BN_CTX *ctx)
+BN_BLINDING_invert(BIGNUM *n, const BIGNUM *r, BN_BLINDING *b, BN_CTX *ctx)
 {
 	int ret;
-
 
 	if (r != NULL)
 		ret = BN_mod_mul(n, n, r, b->mod, ctx);
@@ -272,7 +257,7 @@ BN_BLINDING_invert_ex(BIGNUM *n, const BIGNUM *r, BN_BLINDING *b, BN_CTX *ctx)
 		ret = BN_mod_mul(n, n, b->Ai, b->mod, ctx);
 	}
 
-	return (ret);
+	return ret;
 }
 
 CRYPTO_THREADID *
@@ -281,25 +266,13 @@ BN_BLINDING_thread_id(BN_BLINDING *b)
 	return &b->tid;
 }
 
-unsigned long
-BN_BLINDING_get_flags(const BN_BLINDING *b)
-{
-	return b->flags;
-}
-
-void
-BN_BLINDING_set_flags(BN_BLINDING *b, unsigned long flags)
-{
-	b->flags = flags;
-}
-
 BN_BLINDING *
-BN_BLINDING_create_param(BN_BLINDING *b, const BIGNUM *e, BIGNUM *m,
-    BN_CTX *ctx, int (*bn_mod_exp)(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
-    const BIGNUM *m, BN_CTX *ctx, BN_MONT_CTX *m_ctx), BN_MONT_CTX *m_ctx)
+BN_BLINDING_create_param(BN_BLINDING *b, const BIGNUM *e, BIGNUM *m, BN_CTX *ctx,
+    int (*bn_mod_exp)(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
+	const BIGNUM *m, BN_CTX *ctx, BN_MONT_CTX *m_ctx), BN_MONT_CTX *m_ctx)
 {
-	int    retry_counter = 32;
 	BN_BLINDING *ret = NULL;
+	int retry_counter = 32;
 
 	if (b == NULL)
 		ret = BN_BLINDING_new(NULL, NULL, m);
@@ -309,7 +282,7 @@ BN_BLINDING_create_param(BN_BLINDING *b, const BIGNUM *e, BIGNUM *m,
 	if (ret == NULL)
 		goto err;
 
-	if (ret->A  == NULL && (ret->A = BN_new()) == NULL)
+	if (ret->A == NULL && (ret->A = BN_new()) == NULL)
 		goto err;
 	if (ret->Ai == NULL && (ret->Ai = BN_new()) == NULL)
 		goto err;
@@ -355,7 +328,7 @@ BN_BLINDING_create_param(BN_BLINDING *b, const BIGNUM *e, BIGNUM *m,
 
 	return ret;
 
-err:
+ err:
 	if (b == NULL && ret != NULL) {
 		BN_BLINDING_free(ret);
 		ret = NULL;
