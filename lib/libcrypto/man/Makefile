@@ -1,11 +1,10 @@
-# $OpenBSD: Makefile,v 1.253 2023/07/09 06:45:03 tb Exp $
+# $OpenBSD: Makefile,v 1.259 2023/07/28 05:48:33 tb Exp $
 
 .include <bsd.own.mk>
 
 MAN=	\
 	ACCESS_DESCRIPTION_new.3 \
 	AES_encrypt.3 \
-	ASN1_BIT_STRING_num_asc.3 \
 	ASN1_BIT_STRING_set.3 \
 	ASN1_INTEGER_get.3 \
 	ASN1_NULL_new.3 \
@@ -18,7 +17,6 @@ MAN=	\
 	ASN1_TIME_set.3 \
 	ASN1_TYPE_get.3 \
 	ASN1_UNIVERSALSTRING_to_string.3 \
-	ASN1_buf_print.3 \
 	ASN1_generate_nconf.3 \
 	ASN1_get_object.3 \
 	ASN1_item_d2i.3 \
@@ -38,7 +36,6 @@ MAN=	\
 	BIO_ctrl.3 \
 	BIO_dump.3 \
 	BIO_dup_chain.3 \
-	BIO_f_asn1.3 \
 	BIO_f_base64.3 \
 	BIO_f_buffer.3 \
 	BIO_f_cipher.3 \
@@ -64,7 +61,6 @@ MAN=	\
 	BIO_s_socket.3 \
 	BIO_set_callback.3 \
 	BIO_should_retry.3 \
-	BN_BLINDING_new.3 \
 	BN_CTX_new.3 \
 	BN_CTX_start.3 \
 	BN_add.3 \
@@ -73,6 +69,7 @@ MAN=	\
 	BN_cmp.3 \
 	BN_copy.3 \
 	BN_generate_prime.3 \
+	BN_get_rfc3526_prime_8192.3 \
 	BN_kronecker.3 \
 	BN_mod_inverse.3 \
 	BN_mod_mul_montgomery.3 \
@@ -214,8 +211,8 @@ MAN=	\
 	MD5.3 \
 	NAME_CONSTRAINTS_new.3 \
 	OBJ_NAME_add.3 \
-	OBJ_add_sigid.3 \
 	OBJ_create.3 \
+	OBJ_find_sigid_algs.3 \
 	OBJ_nid2obj.3 \
 	OCSP_CRLID_new.3 \
 	OCSP_REQUEST_new.3 \
@@ -417,7 +414,6 @@ MAN=	\
 	d2i_X509_SIG.3 \
 	des_read_pw.3 \
 	evp.3 \
-	get_rfc3526_prime_8192.3 \
 	i2a_ASN1_STRING.3 \
 	i2d_CMS_bio_stream.3 \
 	i2d_PKCS7_bio_stream.3 \

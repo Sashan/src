@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.170 2023/07/10 03:32:10 guenther Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.175 2023/07/31 04:01:07 guenther Exp $	*/
 /* $NetBSD: cpu.c,v 1.1 2003/04/26 18:39:26 fvdl Exp $ */
 
 /*-
@@ -187,11 +187,7 @@ replacemeltdown(void)
 {
 	static int replacedone = 0;
 	struct cpu_info *ci = &cpu_info_primary;
-	int swapgs_vuln = 0, s;
-
-	if (replacedone)
-		return;
-	replacedone = 1;
+	int swapgs_vuln = 0, ibrs = 0, s;
 
 	if (strcmp(cpu_vendor, "GenuineIntel") == 0) {
 		int family = ci->ci_family;
@@ -208,9 +204,39 @@ replacemeltdown(void)
 			/* KnightsLanding */
 			swapgs_vuln = 0;
 		}
+		if ((ci->ci_feature_sefflags_edx & SEFF0EDX_ARCH_CAP) &&
+		    (rdmsr(MSR_ARCH_CAPABILITIES) & ARCH_CAP_IBRS_ALL)) {
+			ibrs = 2;
+		} else if (ci->ci_feature_sefflags_edx & SEFF0EDX_IBRS) {
+			ibrs = 1;
+		}
+        } else if (strcmp(cpu_vendor, "AuthenticAMD") == 0 &&
+            ci->ci_pnfeatset >= 0x80000008) {
+		if (ci->ci_feature_amdspec_ebx & CPUIDEBX_IBRS_ALWAYSON) {
+			ibrs = 2;
+		} else if ((ci->ci_feature_amdspec_ebx & CPUIDEBX_IBRS) &&
+		    (ci->ci_feature_amdspec_ebx & CPUIDEBX_IBRS_PREF)) {
+			ibrs = 1;
+		}
 	}
 
+	/* Enhanced IBRS: turn it on once on each CPU and don't touch again */
+	if (ibrs == 2)
+		wrmsr(MSR_SPEC_CTRL, SPEC_CTRL_IBRS);
+
+	if (replacedone)
+		return;
+	replacedone = 1;
+
 	s = splhigh();
+	if (ibrs == 2 || (ci->ci_feature_sefflags_edx & SEFF0EDX_IBT)) {
+		extern const char _jmprax, _jmpr11, _jmpr13;
+		extern const short _jmprax_len, _jmpr11_len, _jmpr13_len;
+		codepatch_replace(CPTAG_RETPOLINE_RAX, &_jmprax, _jmprax_len);
+		codepatch_replace(CPTAG_RETPOLINE_R11, &_jmpr11, _jmpr11_len);
+		codepatch_replace(CPTAG_RETPOLINE_R13, &_jmpr13, _jmpr13_len);
+	}
+
 	if (!cpu_meltdown)
 		codepatch_nop(CPTAG_MELTDOWN_NOP);
 	else {
@@ -222,7 +248,7 @@ replacemeltdown(void)
 		/* enable reuse of PCID for U-K page tables */
 		if (pmap_use_pcid) {
 			extern long _pcid_set_reuse;
-			DPRINTF("%s: codepatching PCID use", __func__);
+			DPRINTF("%s: codepatching PCID use\n", __func__);
 			codepatch_replace(CPTAG_PCID_SET_REUSE,
 			    &_pcid_set_reuse, PCID_SET_REUSE_SIZE);
 		}
@@ -273,7 +299,7 @@ replacemds(void)
 
 	if (strcmp(cpu_vendor, "GenuineIntel") != 0 ||
 	    ((ci->ci_feature_sefflags_edx & SEFF0EDX_ARCH_CAP) &&
-	     (rdmsr(MSR_ARCH_CAPABILITIES) & ARCH_CAPABILITIES_MDS_NO))) {
+	     (rdmsr(MSR_ARCH_CAPABILITIES) & ARCH_CAP_MDS_NO))) {
 		/* Unaffected, nop out the handling code */
 		has_verw = 0;
 	} else if (ci->ci_feature_sefflags_edx & SEFF0EDX_MD_CLEAR) {
@@ -1168,7 +1194,7 @@ void
 cpu_fix_msrs(struct cpu_info *ci)
 {
 	int family = ci->ci_family;
-	uint64_t msr;
+	uint64_t msr, nmsr;
 
 	if (!strcmp(cpu_vendor, "GenuineIntel")) {
 		if ((family > 6 || (family == 6 && ci->ci_model >= 0xd)) &&
@@ -1211,11 +1237,17 @@ cpu_fix_msrs(struct cpu_info *ci)
 		 * where LFENCE is always serializing.
 		 */
 		if (family >= 0x10 && family != 0x11) {
-			msr = rdmsr(MSR_DE_CFG);
-			if ((msr & DE_CFG_SERIALIZE_LFENCE) == 0) {
-				msr |= DE_CFG_SERIALIZE_LFENCE;
-				wrmsr(MSR_DE_CFG, msr);
-			}
+			nmsr = msr = rdmsr(MSR_DE_CFG);
+			nmsr |= DE_CFG_SERIALIZE_LFENCE;
+			if (msr != nmsr)
+				wrmsr(MSR_DE_CFG, nmsr);
+		}
+		if (family == 0x17 && ci->ci_model >= 0x31 &&
+		    (cpu_ecxfeature & CPUIDECX_HV) == 0) {
+			nmsr = msr = rdmsr(MSR_DE_CFG);
+			nmsr |= DE_CFG_SERIALIZE_9;
+			if (msr != nmsr)
+				wrmsr(MSR_DE_CFG, nmsr);
 		}
 	}
 
@@ -1242,7 +1274,7 @@ cpu_tsx_disable(struct cpu_info *ci)
 	if (strcmp(cpu_vendor, "GenuineIntel") == 0 &&
 	    (sefflags_edx & SEFF0EDX_ARCH_CAP)) {
 		msr = rdmsr(MSR_ARCH_CAPABILITIES);
-		if (msr & ARCH_CAPABILITIES_TSX_CTRL) {
+		if (msr & ARCH_CAP_TSX_CTRL) {
 			msr = rdmsr(MSR_TSX_CTRL);
 			msr |= TSX_CTRL_RTM_DISABLE | TSX_CTRL_TSX_CPUID_CLEAR;
 			wrmsr(MSR_TSX_CTRL, msr);

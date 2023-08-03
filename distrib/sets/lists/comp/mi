@@ -1120,7 +1120,6 @@
 ./usr/include/openssl/des.h
 ./usr/include/openssl/dh.h
 ./usr/include/openssl/dsa.h
-./usr/include/openssl/dso.h
 ./usr/include/openssl/dtls1.h
 ./usr/include/openssl/ec.h
 ./usr/include/openssl/ecdh.h
@@ -1754,7 +1753,6 @@
 ./usr/share/man/man2/ypconnect.2
 ./usr/share/man/man3/ACCESS_DESCRIPTION_new.3
 ./usr/share/man/man3/AES_encrypt.3
-./usr/share/man/man3/ASN1_BIT_STRING_num_asc.3
 ./usr/share/man/man3/ASN1_BIT_STRING_set.3
 ./usr/share/man/man3/ASN1_INTEGER_get.3
 ./usr/share/man/man3/ASN1_NULL_new.3
@@ -1767,7 +1765,6 @@
 ./usr/share/man/man3/ASN1_TIME_set.3
 ./usr/share/man/man3/ASN1_TYPE_get.3
 ./usr/share/man/man3/ASN1_UNIVERSALSTRING_to_string.3
-./usr/share/man/man3/ASN1_buf_print.3
 ./usr/share/man/man3/ASN1_generate_nconf.3
 ./usr/share/man/man3/ASN1_get_object.3
 ./usr/share/man/man3/ASN1_item_d2i.3
@@ -1787,7 +1784,6 @@
 ./usr/share/man/man3/BIO_ctrl.3
 ./usr/share/man/man3/BIO_dump.3
 ./usr/share/man/man3/BIO_dup_chain.3
-./usr/share/man/man3/BIO_f_asn1.3
 ./usr/share/man/man3/BIO_f_base64.3
 ./usr/share/man/man3/BIO_f_buffer.3
 ./usr/share/man/man3/BIO_f_cipher.3
@@ -1814,7 +1810,6 @@
 ./usr/share/man/man3/BIO_s_socket.3
 ./usr/share/man/man3/BIO_set_callback.3
 ./usr/share/man/man3/BIO_should_retry.3
-./usr/share/man/man3/BN_BLINDING_new.3
 ./usr/share/man/man3/BN_CTX_new.3
 ./usr/share/man/man3/BN_CTX_start.3
 ./usr/share/man/man3/BN_add.3
@@ -1823,6 +1818,7 @@
 ./usr/share/man/man3/BN_cmp.3
 ./usr/share/man/man3/BN_copy.3
 ./usr/share/man/man3/BN_generate_prime.3
+./usr/share/man/man3/BN_get_rfc3526_prime_8192.3
 ./usr/share/man/man3/BN_kronecker.3
 ./usr/share/man/man3/BN_mod_inverse.3
 ./usr/share/man/man3/BN_mod_mul_montgomery.3
@@ -1967,8 +1963,8 @@
 ./usr/share/man/man3/MD5Init.3
 ./usr/share/man/man3/NAME_CONSTRAINTS_new.3
 ./usr/share/man/man3/OBJ_NAME_add.3
-./usr/share/man/man3/OBJ_add_sigid.3
 ./usr/share/man/man3/OBJ_create.3
+./usr/share/man/man3/OBJ_find_sigid_algs.3
 ./usr/share/man/man3/OBJ_nid2obj.3
 ./usr/share/man/man3/OCSP_CRLID_new.3
 ./usr/share/man/man3/OCSP_REQUEST_new.3
@@ -2595,7 +2591,6 @@
 ./usr/share/man/man3/gelf_newphdr.3
 ./usr/share/man/man3/gelf_update_ehdr.3
 ./usr/share/man/man3/gelf_xlatetof.3
-./usr/share/man/man3/get_rfc3526_prime_8192.3
 ./usr/share/man/man3/getaddrinfo.3
 ./usr/share/man/man3/getbsize.3
 ./usr/share/man/man3/getc.3

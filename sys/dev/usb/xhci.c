@@ -1,4 +1,4 @@
-/* $OpenBSD: xhci.c,v 1.128 2023/01/01 21:45:40 kettenis Exp $ */
+/* $OpenBSD: xhci.c,v 1.130 2023/07/20 09:43:00 claudio Exp $ */
 
 /*
  * Copyright (c) 2014-2015 Martin Pieuchot

@@ -285,29 +285,6 @@ L\$2nd
 	.EXIT
 	nop
 	.PROCEND
-
-	.EXPORT	RC4_options,ENTRY
-	.ALIGN	8
-RC4_options
-	.PROC
-	.CALLINFO	NO_CALLS
-	.ENTRY
-#ifdef __PIC__
-	addil	LT'L\$opts, %r19
-	ldw	RT'L\$opts(%r1), %r28
-#else
-	ldil	L'L\$opts, %t1
-	ldo	R'L\$opts(%t1), %r28
-#endif
-	bv	(%r2)
-	.EXIT
-	nop
-	.PROCEND
-
-	.section .rodata
-	.ALIGN	8
-L\$opts
-	.STRINGZ "rc4(4x,`$SZ==1?"char":"int"`)"
 ___
 $code =~ s/\`([^\`]*)\`/eval $1/gem;
 $code =~ s/cmpib,\*/comib,/gm	if ($SIZE_T==4);

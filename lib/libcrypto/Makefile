@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.137 2023/07/07 06:10:14 jsing Exp $
+# $OpenBSD: Makefile,v 1.153 2023/07/29 06:46:20 tb Exp $
 
 LIB=	crypto
 LIBREBUILD=y
@@ -22,14 +22,7 @@ CFLAGS+= -DLIBRESSL_INTERNAL
 .ifdef NAMESPACE
 CFLAGS+= -DLIBRESSL_NAMESPACE -DLIBRESSL_CRYPTO_NAMESPACE
 .endif
-
-
-.if !defined(NOPIC)
-CFLAGS+= -DDSO_DLFCN -DHAVE_DLFCN_H -DHAVE_FUNOPEN
-.endif
-
-# Hardware engines
-CFLAGS+= -DOPENSSL_NO_HW_PADLOCK # XXX enable this?
+CFLAGS+= -DHAVE_FUNOPEN
 
 CFLAGS+= -I${LCRYPTO_SRC}
 CFLAGS+= -I${LCRYPTO_SRC}/arch/${MACHINE_CPU}
@@ -78,7 +71,6 @@ SRCS+= aes_cfb.c
 SRCS+= aes_ctr.c
 SRCS+= aes_ecb.c
 SRCS+= aes_ige.c
-SRCS+= aes_misc.c
 SRCS+= aes_ofb.c
 SRCS+= aes_wrap.c
 
@@ -117,7 +109,6 @@ SRCS+= p5_pbe.c
 SRCS+= p5_pbev2.c
 SRCS+= p8_pkey.c
 SRCS+= t_crl.c
-SRCS+= t_pkey.c
 SRCS+= t_req.c
 SRCS+= t_spki.c
 SRCS+= t_x509.c
@@ -205,7 +196,6 @@ SRCS+= bn_word.c
 
 # buffer/
 SRCS+= buf_err.c
-SRCS+= buf_str.c
 SRCS+= buffer.c
 
 # bytestring/
@@ -248,12 +238,6 @@ SRCS+= cms_lib.c
 SRCS+= cms_pwri.c
 SRCS+= cms_sd.c
 SRCS+= cms_smime.c
-
-# comp/
-SRCS+= c_rle.c
-SRCS+= c_zlib.c
-SRCS+= comp_err.c
-SRCS+= comp_lib.c
 
 # conf/
 SRCS+= conf_api.c
@@ -324,13 +308,6 @@ SRCS+= dsa_ossl.c
 SRCS+= dsa_pmeth.c
 SRCS+= dsa_prn.c
 
-# dso/
-SRCS+= dso_dlfcn.c
-SRCS+= dso_err.c
-SRCS+= dso_lib.c
-SRCS+= dso_null.c
-SRCS+= dso_openssl.c
-
 # ec/
 SRCS+= ec_ameth.c
 SRCS+= ec_asn1.c
@@ -353,41 +330,12 @@ SRCS+= ecx_methods.c
 
 # ecdh/
 SRCS+= ecdh.c
-SRCS+= ech_err.c
-SRCS+= ech_lib.c
 
 # ecdsa/
-SRCS+= ecs_err.c
-SRCS+= ecs_lib.c
 SRCS+= ecdsa.c
 
 # engine/
-SRCS+= eng_all.c
-SRCS+= eng_cnf.c
-SRCS+= eng_ctrl.c
-SRCS+= eng_dyn.c
-SRCS+= eng_err.c
-SRCS+= eng_fat.c
-SRCS+= eng_init.c
-SRCS+= eng_lib.c
-SRCS+= eng_list.c
-SRCS+= eng_openssl.c
-SRCS+= eng_pkey.c
-SRCS+= eng_table.c
-SRCS+= tb_asnmth.c
-SRCS+= tb_cipher.c
-SRCS+= tb_dh.c
-SRCS+= tb_digest.c
-SRCS+= tb_dsa.c
-SRCS+= tb_ecdh.c
-SRCS+= tb_ecdsa.c
-SRCS+= tb_eckey.c
-SRCS+= tb_pkmeth.c
-SRCS+= tb_rand.c
-SRCS+= tb_rsa.c
-SRCS+= tb_store.c
-# XXX unnecessary? handled in EVP now...
-# SRCS+= eng_aesni.c # local addition
+SRCS+= engine_stubs.c
 
 # err/
 SRCS+= err.c
@@ -493,12 +441,10 @@ SRCS+= lh_stats.c
 SRCS+= lhash.c
 
 # md4/
-SRCS+= md4_dgst.c
-SRCS+= md4_one.c
+SRCS+= md4.c
 
 # md5/
-SRCS+= md5_dgst.c
-SRCS+= md5_one.c
+SRCS+= md5.c
 
 # modes/
 SRCS+= cbc128.c
@@ -583,8 +529,7 @@ SRCS+= rc2cfb64.c
 SRCS+= rc2ofb64.c
 
 # ripemd/
-SRCS+= rmd_dgst.c
-SRCS+= rmd_one.c
+SRCS+= ripemd.c
 
 # rsa/
 SRCS+= rsa_ameth.c
@@ -726,7 +671,6 @@ SRCS+= x_all.c
 	${LCRYPTO_SRC}/des \
 	${LCRYPTO_SRC}/dh \
 	${LCRYPTO_SRC}/dsa \
-	${LCRYPTO_SRC}/dso \
 	${LCRYPTO_SRC}/ec \
 	${LCRYPTO_SRC}/ecdh \
 	${LCRYPTO_SRC}/ecdsa \
@@ -787,7 +731,6 @@ HDRS=\
 	${LCRYPTO_SRC}/des/des.h \
 	${LCRYPTO_SRC}/dh/dh.h \
 	${LCRYPTO_SRC}/dsa/dsa.h \
-	${LCRYPTO_SRC}/dso/dso.h \
 	${LCRYPTO_SRC}/ec/ec.h \
 	${LCRYPTO_SRC}/ecdh/ecdh.h \
 	${LCRYPTO_SRC}/ecdsa/ecdsa.h \

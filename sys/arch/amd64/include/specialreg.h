@@ -1,4 +1,4 @@
-/*	$OpenBSD: specialreg.h,v 1.103 2023/07/10 03:32:10 guenther Exp $	*/
+/*	$OpenBSD: specialreg.h,v 1.107 2023/07/27 16:33:56 guenther Exp $	*/
 /*	$NetBSD: specialreg.h,v 1.1 2003/04/26 18:39:48 fvdl Exp $	*/
 /*	$NetBSD: x86/specialreg.h,v 1.2 2003/04/25 21:54:30 fvdl Exp $	*/
 
@@ -237,7 +237,7 @@
 #define SEFF0ECX_AVX512VBMI	0x00000002 /* AVX-512 vector bit inst */
 #define SEFF0ECX_UMIP		0x00000004 /* UMIP support */
 #define SEFF0ECX_PKU		0x00000008 /* Page prot keys for user mode */
-#define SEFF0ECX_WAITPKG	0x00000010 /* UMONITOR/UMWAIT/TPAUSE insns */
+#define SEFF0ECX_WAITPKG	0x00000020 /* UMONITOR/UMWAIT/TPAUSE insns */
 #define SEFF0ECX_PKS		0x80000000 /* Page prot keys for sup mode */
 /* SEFF EDX bits */
 #define SEFF0EDX_AVX512_4FNNIW	0x00000004 /* AVX-512 neural network insns */
@@ -334,12 +334,14 @@
 /*
  * AMD CPUID function 0x80000008 EBX bits
  */
+#define CPUIDEBX_INVLPGB	(1ULL <<  3)	/* INVLPG w/broadcast */
 #define CPUIDEBX_IBPB		(1ULL << 12)	/* Speculation Control IBPB */
 #define CPUIDEBX_IBRS		(1ULL << 14)	/* Speculation Control IBRS */
 #define CPUIDEBX_STIBP		(1ULL << 15)	/* Speculation Control STIBP */
 #define CPUIDEBX_IBRS_ALWAYSON	(1ULL << 16)	/* IBRS always on mode */
 #define CPUIDEBX_STIBP_ALWAYSON	(1ULL << 17)	/* STIBP always on mode */
 #define CPUIDEBX_IBRS_PREF	(1ULL << 18)	/* IBRS preferred */
+#define CPUIDEBX_IBRS_SAME_MODE	(1ULL << 19)	/* IBRS not mode-specific */
 #define CPUIDEBX_SSBD		(1ULL << 24)	/* Speculation Control SSBD */
 #define CPUIDEBX_VIRT_SSBD	(1ULL << 25)	/* Virt Spec Control SSBD */
 #define CPUIDEBX_SSBD_NOTREQ	(1ULL << 26)	/* SSBD not required */
@@ -400,15 +402,29 @@
 #define MTRRcap_WC		0x400	/* bit 10 - WC type supported */
 #define MTRRcap_SMRR		0x800	/* bit 11 - SMM range reg supported */
 #define MSR_ARCH_CAPABILITIES	0x10a
-#define ARCH_CAPABILITIES_RDCL_NO	(1 << 0)	/* Meltdown safe */
-#define ARCH_CAPABILITIES_IBRS_ALL	(1 << 1)	/* enhanced IBRS */
-#define ARCH_CAPABILITIES_RSBA		(1 << 2)	/* RSB Alternate */
-#define ARCH_CAPABILITIES_SKIP_L1DFL_VMENTRY	(1 << 3)
-#define ARCH_CAPABILITIES_SSB_NO	(1 << 4)	/* Spec St Byp safe */
-#define ARCH_CAPABILITIES_MDS_NO	(1 << 5) /* microarch data-sampling */
-#define ARCH_CAPABILITIES_IF_PSCHANGE_MC_NO	(1 << 6) /* PS MCE safe */
-#define ARCH_CAPABILITIES_TSX_CTRL	(1 << 7)	/* has TSX_CTRL MSR */
-#define ARCH_CAPABILITIES_TAA_NO	(1 << 8)	/* TSX AA safe */
+#define ARCH_CAP_RDCL_NO		(1 <<  0) /* Meltdown safe */
+#define ARCH_CAP_IBRS_ALL		(1 <<  1) /* enhanced IBRS */
+#define ARCH_CAP_RSBA			(1 <<  2) /* RSB Alternate */
+#define ARCH_CAP_SKIP_L1DFL_VMENTRY	(1 <<  3)
+#define ARCH_CAP_SSB_NO			(1 <<  4) /* Spec St Byp safe */
+#define ARCH_CAP_MDS_NO			(1 <<  5) /* microarch data-sampling */
+#define ARCH_CAP_IF_PSCHANGE_MC_NO	(1 <<  6) /* PS MCE safe */
+#define ARCH_CAP_TSX_CTRL		(1 <<  7) /* has TSX_CTRL MSR */
+#define ARCH_CAP_TAA_NO			(1 <<  8) /* TSX AA safe */
+#define ARCH_CAP_MCU_CONTROL		(1 <<  9) /* has MCU_CTRL MSR */
+#define ARCH_CAP_MISC_PACKAGE_CTLS	(1 << 10) /* has MISC_PKG_CTLS MSR */
+#define ARCH_CAP_ENERGY_FILTERING_CTL	(1 << 11) /* r/w energy fltring bit */
+#define ARCH_CAP_DOITM			(1 << 12) /* Data oprnd indpdnt tmng */
+#define ARCH_CAP_SBDR_SSDP_NO		(1 << 13) /* SBDR/SSDP safe */
+#define ARCH_CAP_FBSDP_NO		(1 << 14) /* FBSDP safe */
+#define ARCH_CAP_PSDP_NO		(1 << 15) /* PSDP safe */
+#define ARCH_CAP_FB_CLEAR		(1 << 17) /* MD_CLEAR covers FB */
+#define ARCH_CAP_FB_CLEAR_CTRL		(1 << 18)
+#define ARCH_CAP_RRSBA			(1 << 19) /* has RRSBA if not dis */
+#define ARCH_CAP_BHI_NO			(1 << 20) /* BHI safe */
+#define ARCH_CAP_XAPIC_DISABLE_STATUS	(1 << 21) /* can disable xAPIC */
+#define ARCH_CAP_OVERCLOCKING_STATUS	(1 << 23) /* has OVRCLCKNG_STAT MSR */
+#define ARCH_CAP_PBRSB_NO		(1 << 24) /* PBSR safe */
 #define MSR_FLUSH_CMD		0x10b
 #define FLUSH_CMD_L1D_FLUSH	0x1	/* (1ULL << 0) */
 #define	MSR_BBL_CR_ADDR		0x116	/* PII+ only */
@@ -576,6 +592,7 @@
 #define MSR_DE_CFG	0xc0011029	/* Decode Configuration */
 #define	DE_CFG_721	0x00000001	/* errata 721 */
 #define DE_CFG_SERIALIZE_LFENCE	(1 << 1)	/* Enable serializing lfence */
+#define DE_CFG_SERIALIZE_9 (1 << 9)	/* Zenbleed chickenbit */
 
 #define IPM_C1E_CMP_HLT	0x10000000
 #define IPM_SMI_CMP_HLT	0x08000000

@@ -1,4 +1,4 @@
-/* $OpenBSD: bn.h,v 1.1 2023/07/08 12:21:58 beck Exp $ */
+/* $OpenBSD: bn.h,v 1.4 2023/07/29 03:13:38 tb Exp $ */
 /*
  * Copyright (c) 2023 Bob Beck <beck@openbsd.org>
  *
@@ -42,7 +42,6 @@ LCRYPTO_USED(BN_is_odd);
 LCRYPTO_USED(BN_zero);
 LCRYPTO_USED(BN_one);
 LCRYPTO_USED(BN_value_one);
-LCRYPTO_USED(BN_options);
 LCRYPTO_USED(BN_CTX_new);
 LCRYPTO_USED(BN_CTX_free);
 LCRYPTO_USED(BN_CTX_start);
@@ -131,27 +130,8 @@ LCRYPTO_USED(BN_MONT_CTX_free);
 LCRYPTO_USED(BN_MONT_CTX_set);
 LCRYPTO_USED(BN_MONT_CTX_copy);
 LCRYPTO_USED(BN_MONT_CTX_set_locked);
-LCRYPTO_USED(BN_BLINDING_new);
-LCRYPTO_USED(BN_BLINDING_free);
-LCRYPTO_USED(BN_BLINDING_update);
-LCRYPTO_USED(BN_BLINDING_convert);
-LCRYPTO_USED(BN_BLINDING_invert);
-LCRYPTO_USED(BN_BLINDING_convert_ex);
-LCRYPTO_USED(BN_BLINDING_invert_ex);
-LCRYPTO_USED(BN_BLINDING_thread_id);
-LCRYPTO_USED(BN_BLINDING_get_flags);
-LCRYPTO_USED(BN_BLINDING_set_flags);
-LCRYPTO_USED(BN_BLINDING_create_param);
-LCRYPTO_USED(get_rfc2409_prime_768);
-LCRYPTO_USED(get_rfc2409_prime_1024);
 LCRYPTO_USED(BN_get_rfc2409_prime_768);
 LCRYPTO_USED(BN_get_rfc2409_prime_1024);
-LCRYPTO_USED(get_rfc3526_prime_1536);
-LCRYPTO_USED(get_rfc3526_prime_2048);
-LCRYPTO_USED(get_rfc3526_prime_3072);
-LCRYPTO_USED(get_rfc3526_prime_4096);
-LCRYPTO_USED(get_rfc3526_prime_6144);
-LCRYPTO_USED(get_rfc3526_prime_8192);
 LCRYPTO_USED(BN_get_rfc3526_prime_1536);
 LCRYPTO_USED(BN_get_rfc3526_prime_2048);
 LCRYPTO_USED(BN_get_rfc3526_prime_3072);

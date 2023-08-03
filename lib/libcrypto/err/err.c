@@ -1,4 +1,4 @@
-/* $OpenBSD: err.c,v 1.54 2023/07/07 19:37:53 beck Exp $ */
+/* $OpenBSD: err.c,v 1.56 2023/07/28 10:23:19 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -124,6 +124,8 @@
 
 DECLARE_LHASH_OF(ERR_STRING_DATA);
 DECLARE_LHASH_OF(ERR_STATE);
+
+typedef struct st_ERR_FNS ERR_FNS;
 
 static void err_load_strings(int lib, ERR_STRING_DATA *str);
 
@@ -299,33 +301,6 @@ err_fns_check(void)
 		err_fns = &err_defaults;
 	CRYPTO_w_unlock(CRYPTO_LOCK_ERR);
 }
-
-/* API functions to get or set the underlying ERR functions. */
-
-const ERR_FNS *
-ERR_get_implementation(void)
-{
-	err_fns_check();
-	return err_fns;
-}
-LCRYPTO_ALIAS(ERR_get_implementation);
-
-int
-ERR_set_implementation(const ERR_FNS *fns)
-{
-	int ret = 0;
-
-	CRYPTO_w_lock(CRYPTO_LOCK_ERR);
-	/* It's too late if 'err_fns' is non-NULL. BTW: not much point setting
-	 * an error is there?! */
-	if (!err_fns) {
-		err_fns = fns;
-		ret = 1;
-	}
-	CRYPTO_w_unlock(CRYPTO_LOCK_ERR);
-	return ret;
-}
-LCRYPTO_ALIAS(ERR_set_implementation);
 
 /* These are the callbacks provided to "lh_new()" when creating the LHASH tables
  * internal to the "err_defaults" implementation. */
@@ -976,28 +951,6 @@ ERR_error_string(unsigned long e, char *ret)
 	return ret;
 }
 LCRYPTO_ALIAS(ERR_error_string);
-
-LHASH_OF(ERR_STRING_DATA) *ERR_get_string_table(void)
-{
-	err_fns_check();
-	return ERRFN(err_get)(0);
-}
-LCRYPTO_ALIAS(ERR_get_string_table);
-
-LHASH_OF(ERR_STATE) *ERR_get_err_state_table(void)
-{
-	err_fns_check();
-	return ERRFN(thread_get)(0);
-}
-LCRYPTO_ALIAS(ERR_get_err_state_table);
-
-void
-ERR_release_err_state_table(LHASH_OF(ERR_STATE) **hash)
-{
-	err_fns_check();
-	ERRFN(thread_release)(hash);
-}
-LCRYPTO_ALIAS(ERR_release_err_state_table);
 
 const char *
 ERR_lib_error_string(unsigned long e)

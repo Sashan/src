@@ -1,4 +1,4 @@
-/* $OpenBSD: pckbd.c,v 1.48 2023/03/08 04:43:08 guenther Exp $ */
+/* $OpenBSD: pckbd.c,v 1.50 2023/07/25 10:00:44 miod Exp $ */
 /* $NetBSD: pckbd.c,v 1.24 2000/06/05 22:20:57 sommerfeld Exp $ */
 
 /*-
@@ -81,6 +81,7 @@
 #include <dev/pckbc/pmsreg.h>
 
 #include <dev/wscons/wsconsio.h>
+#include <dev/wscons/wskbdraw.h>
 #include <dev/wscons/wskbdvar.h>
 #include <dev/wscons/wsksymdef.h>
 #include <dev/wscons/wsksymvar.h>
@@ -92,8 +93,8 @@ struct pckbd_internal {
 	pckbc_tag_t t_kbctag;
 	pckbc_slot_t t_kbcslot;
 
-	int t_translating;
-	int t_table;
+	int t_translating;	/* nonzero if hardware performs translation */
+	int t_table;		/* scan code set in use */
 
 	int t_lastchar;
 	int t_extended;
@@ -214,11 +215,22 @@ int
 pckbd_set_xtscancode(pckbc_tag_t kbctag, pckbc_slot_t kbcslot,
     struct pckbd_internal *id)
 {
-	int table = 3;
+	int table = 0;
 
-	if (pckbc_xt_translation(kbctag)) {
+	if (pckbc_xt_translation(kbctag, &table)) {
 #ifdef DEBUG
 		printf("pckbd: enabling of translation failed\n");
+#endif
+#ifdef __sparc64__ /* only pckbc@ebus on sparc64 uses this */
+		/*
+		 * If hardware lacks translation capability, stick to the
+		 * table it is using.
+		 */
+		if (table != 0) {
+			id->t_translating = 0;
+			id->t_table = table;
+			return 0;
+		}
 #endif
 		/*
 		 * Since the keyboard controller can not translate scan
@@ -233,6 +245,7 @@ pckbd_set_xtscancode(pckbc_tag_t kbctag, pckbc_slot_t kbcslot,
 		if (id != NULL)
 			id->t_translating = 0;
 	} else {
+		table = 3;
 		if (id != NULL) {
 			id->t_translating = 1;
 			if (id->t_table == 0) {
@@ -493,107 +506,111 @@ pckbd_enable(void *v, int on)
 	return (0);
 }
 
-const u_int8_t pckbd_xtbl[] = {
+/*
+ * Scan code set #2 translation tables
+ */
+
+const u_int8_t pckbd_xtbl2[] = {
 /* 0x00 */
 	0,
-	0x43,		/* F9 */
+	RAWKEY_f9,
 	0,
-	0x3f,		/* F5 */
-	0x3d,		/* F3 */
-	0x3b,		/* F1 */
-	0x3c,		/* F2 */
-	0x58,		/* F12 */
-	0x40,		/* F6 according to documentation */
-	0x44,		/* F10 */
-	0x42,		/* F8 */
-	0x40,		/* F6 according to experimentation */
-	0x3e,		/* F4 */
-	0x0f,		/* Tab */
-	0x29,		/* ` ~ */
+	RAWKEY_f5,
+	RAWKEY_f3,
+	RAWKEY_f1,
+	RAWKEY_f2,
+	RAWKEY_f12,
+	RAWKEY_f6,	/* F6 according to documentation */
+	RAWKEY_f10,
+	RAWKEY_f8,
+	RAWKEY_f6,	/* F6 according to experimentation */
+	RAWKEY_f4,
+	RAWKEY_Tab,
+	RAWKEY_grave,
 	0,
 /* 0x10 */
 	0,
-	0x38,		/* Left Alt */
-	0x2a,		/* Left Shift */
+	RAWKEY_Alt_L,
+	RAWKEY_Shift_L,
 	0,
-	0x1d,		/* Left Ctrl */
-	0x10,		/* q */
-	0x02,		/* 1 ! */
+	RAWKEY_Control_L,
+	RAWKEY_q,
+	RAWKEY_1,
 	0,
 	0,
 	0,
-	0x2c,		/* z */
-	0x1f,		/* s */
-	0x1e,		/* a */
-	0x11,		/* w */
-	0x03,		/* 2 @ */
-	0,
+	RAWKEY_z,
+	RAWKEY_s,
+	RAWKEY_a,
+	RAWKEY_w,
+	RAWKEY_2,
+	RAWKEY_Meta_L,
 /* 0x20 */	
 	0,
-	0x2e,		/* c */
-	0x2d,		/* x */
-	0x20,		/* d */
-	0x12,		/* e */
-	0x05,		/* 4 $ */
-	0x04,		/* 3 # */
+	RAWKEY_c,
+	RAWKEY_x,
+	RAWKEY_d,
+	RAWKEY_e,
+	RAWKEY_4,
+	RAWKEY_3,
 	0,
-	0,
-	0x39,		/* Space */
-	0x2f,		/* v */
-	0x21,		/* f */
-	0x14,		/* t */
-	0x13,		/* r */
-	0x06,		/* 5 % */
+	RAWKEY_Meta_R,
+	RAWKEY_space,
+	RAWKEY_v,
+	RAWKEY_f,
+	RAWKEY_t,
+	RAWKEY_r,
+	RAWKEY_5,
 	0,
 /* 0x30 */
 	0,
-	0x31,		/* n */
-	0x30,		/* b */
-	0x23,		/* h */
-	0x22,		/* g */
-	0x15,		/* y */
-	0x07,		/* 6 ^ */
+	RAWKEY_n,
+	RAWKEY_b,
+	RAWKEY_h,
+	RAWKEY_g,
+	RAWKEY_y,
+	RAWKEY_6,
 	0,
 	0,
 	0,
-	0x32,		/* m */
-	0x24,		/* j */
-	0x16,		/* u */
-	0x08,		/* 7 & */
-	0x09,		/* 8 * */
+	RAWKEY_m,
+	RAWKEY_j,
+	RAWKEY_u,
+	RAWKEY_7,
+	RAWKEY_8,
 	0,
 /* 0x40 */
 	0,
-	0x33,		/* , < */
-	0x25,		/* k */
-	0x17,		/* i */
-	0x18,		/* o */
-	0x0b,		/* 0 ) */
-	0x0a,		/* 9 ( */
+	RAWKEY_comma,
+	RAWKEY_k,
+	RAWKEY_i,
+	RAWKEY_o,
+	RAWKEY_0,
+	RAWKEY_9,
 	0,
 	0,
-	0x34,		/* . > */
-	0x35,		/* / ? */
-	0x26,		/* l */
-	0x27,		/* ; : */
-	0x19,		/* p */
-	0x0c,		/* - _ */
+	RAWKEY_period,
+	RAWKEY_slash,
+	RAWKEY_l,
+	RAWKEY_semicolon,
+	RAWKEY_p,
+	RAWKEY_minus,
 	0,
 /* 0x50 */
 	0,
 	0,
-	0x28,		/* ' " */
+	RAWKEY_apostrophe,
 	0,
-	0x1a,		/* [ { */
-	0x0d,		/* = + */
+	RAWKEY_bracketleft,
+	RAWKEY_equal,
 	0,
 	0,
-	0x3a,		/* Caps Lock */
-	0x36,		/* Right Shift */
-	0x1c,		/* Return */
-	0x1b,		/* ] } */
+	RAWKEY_Caps_Lock,
+	RAWKEY_Shift_R,
+	RAWKEY_Return,
+	RAWKEY_bracketright,
 	0,
-	0x2b,		/* \ | */
+	RAWKEY_backslash,
 	0,
 	0,
 /* 0x60 */
@@ -603,42 +620,42 @@ const u_int8_t pckbd_xtbl[] = {
 	0,
 	0,
 	0,
-	0x0e,		/* Back Space */
+	RAWKEY_BackSpace,
 	0,
 	0,
-	0x4f,		/* KP 1 */
+	RAWKEY_KP_End,
 	0,
-	0x4b,		/* KP 4 */
-	0x47,		/* KP 7 */
+	RAWKEY_KP_Left,
+	RAWKEY_KP_Home,
 	0,
 	0,
 	0,
 /* 0x70 */
-	0x52,		/* KP 0 */
-	0x53,		/* KP . */
-	0x50,		/* KP 2 */
-	0x4c,		/* KP 5 */
-	0x4d,		/* KP 6 */
-	0x48,		/* KP 8 */
-	0x01,		/* Escape */
-	0x45,		/* Num Lock */
-	0x57,		/* F11 */
-	0x4e,		/* KP + */
-	0x51,		/* KP 3 */
-	0x4a,		/* KP - */
-	0x37,		/* KP * */
-	0x49,		/* KP 9 */
-	0x46,		/* Scroll Lock */
+	RAWKEY_KP_Insert,
+	RAWKEY_KP_Delete,
+	RAWKEY_KP_Down,
+	RAWKEY_KP_Begin,
+	RAWKEY_KP_Right,
+	RAWKEY_KP_Up,
+	RAWKEY_Escape,
+	RAWKEY_Num_Lock,
+	RAWKEY_f11,
+	RAWKEY_KP_Add,
+	RAWKEY_KP_Next,
+	RAWKEY_KP_Subtract,
+	RAWKEY_KP_Multiply,
+	RAWKEY_KP_Prior,
+	RAWKEY_Hold_Screen,
 	0,
 /* 0x80 */
 	0,
 	0,
 	0,
-	0x41,		/* F7 (produced as an actual 8 bit code) */
+	RAWKEY_f7,
 	0		/* Alt-Print Screen */
 };
 
-const u_int8_t pckbd_xtbl_ext[] = {
+const u_int8_t pckbd_xtbl2_ext[] = {
 /* 0x00 */
 	0,
 	0,
@@ -657,10 +674,10 @@ const u_int8_t pckbd_xtbl_ext[] = {
 	0,
 /* 0x10 */
 	0,
-	0x38,		/* Right Alt */
+	RAWKEY_Alt_R,
 	0,		/* E0 12, to be ignored */
 	0,
-	0x1d,		/* Right Ctrl */
+	RAWKEY_Control_R,
 	0,
 	0,
 	0,
@@ -717,7 +734,7 @@ const u_int8_t pckbd_xtbl_ext[] = {
 	0,
 	0,
 	0,
-	0x55,		/* KP / */
+	RAWKEY_KP_Divide,
 	0,
 	0,
 	0,
@@ -734,7 +751,7 @@ const u_int8_t pckbd_xtbl_ext[] = {
 	0,
 	0,
 	0,
-	0x1c,		/* KP Return */
+	RAWKEY_KP_Enter,
 	0,
 	0,
 	0,
@@ -750,34 +767,195 @@ const u_int8_t pckbd_xtbl_ext[] = {
 	0,
 	0,
 	0,
-	0x4f,		/* End */
+	RAWKEY_End,
 	0,
-	0x4b,		/* Left */
-	0x47,		/* Home */
+	RAWKEY_Left,
+	RAWKEY_Home,
 	0,
 	0,
 	0,
 /* 0x70 */
-	0x52,		/* Insert */
-	0x53,		/* Delete */
-	0x50,		/* Down */
+	RAWKEY_Insert,
+	RAWKEY_Delete,
+	RAWKEY_Down,
 	0,
-	0x4d,		/* Right */
-	0x48,		/* Up */
-	0,
-	0,
+	RAWKEY_Right,
+	RAWKEY_Up,
 	0,
 	0,
-	0x51,		/* Page Down */
 	0,
-	0x37,		/* Print Screen */
-	0x49,		/* Page Up */
-	0x46,		/* Ctrl-Break */
+	0,
+	RAWKEY_Next,
+	0,
+	RAWKEY_Print_Screen,
+	RAWKEY_Prior,
+	0xc6,		/* Ctrl-Break */
 	0
 };
 
+#ifdef __sparc64__ /* only pckbc@ebus on sparc64 uses this */
+
 /*
- * Translate scan codes from set 2 to set 1
+ * Scan code set #3 translation table
+ */
+
+const u_int8_t pckbd_xtbl3[] = {
+/* 0x00 */
+	0,
+	RAWKEY_L5,	/* Front */
+	RAWKEY_L1,	/* Stop */
+	RAWKEY_L3,	/* Props */
+	0,
+	RAWKEY_L7,	/* Open */
+	RAWKEY_L9,	/* Find */
+	RAWKEY_f1,
+	RAWKEY_Escape,
+	RAWKEY_L10,	/* Cut */
+	0,
+	0,
+	0,
+	RAWKEY_Tab,
+	RAWKEY_grave,
+	RAWKEY_f2,
+/* 0x10 */
+	RAWKEY_Help,
+	RAWKEY_Control_L,
+	RAWKEY_Shift_L,
+	0,
+	RAWKEY_Caps_Lock,
+	RAWKEY_q,
+	RAWKEY_1,
+	RAWKEY_f3,
+	0,
+	RAWKEY_Alt_L,
+	RAWKEY_z,
+	RAWKEY_s,
+	RAWKEY_a,
+	RAWKEY_w,
+	RAWKEY_2,
+	RAWKEY_f4,
+/* 0x20 */	
+	0,
+	RAWKEY_c,
+	RAWKEY_x,
+	RAWKEY_d,
+	RAWKEY_e,
+	RAWKEY_4,
+	RAWKEY_3,
+	RAWKEY_f5,
+	RAWKEY_L4,	/* Undo */
+	RAWKEY_space,
+	RAWKEY_v,
+	RAWKEY_f,
+	RAWKEY_t,
+	RAWKEY_r,
+	RAWKEY_5,
+	RAWKEY_f6,
+/* 0x30 */
+	RAWKEY_L2,	/* Again */
+	RAWKEY_n,
+	RAWKEY_b,
+	RAWKEY_h,
+	RAWKEY_g,
+	RAWKEY_y,
+	RAWKEY_6,
+	RAWKEY_f7,
+	0,
+	RAWKEY_Alt_R,
+	RAWKEY_m,
+	RAWKEY_j,
+	RAWKEY_u,
+	RAWKEY_7,
+	RAWKEY_8,
+	RAWKEY_f8,
+/* 0x40 */
+	0,
+	RAWKEY_comma,
+	RAWKEY_k,
+	RAWKEY_i,
+	RAWKEY_o,
+	RAWKEY_0,
+	RAWKEY_9,
+	RAWKEY_f9,
+	RAWKEY_L6,	/* Copy */
+	RAWKEY_period,
+	RAWKEY_slash,
+	RAWKEY_l,
+	RAWKEY_semicolon,
+	RAWKEY_p,
+	RAWKEY_minus,
+	RAWKEY_f10,
+/* 0x50 */
+	0,
+	0,
+	RAWKEY_apostrophe,
+	0,
+	RAWKEY_bracketleft,
+	RAWKEY_equal,
+	RAWKEY_f11,
+	RAWKEY_Print_Screen,
+	RAWKEY_Control_R,
+	RAWKEY_Shift_R,
+	RAWKEY_Return,
+	RAWKEY_bracketright,
+	RAWKEY_backslash,
+	0,
+	RAWKEY_f12,
+	RAWKEY_Hold_Screen,
+/* 0x60 */
+	RAWKEY_Down,
+	RAWKEY_Left,
+	RAWKEY_Pause,
+	RAWKEY_Up,
+	RAWKEY_Delete,
+	RAWKEY_End,
+	RAWKEY_BackSpace,
+	RAWKEY_Insert,
+	RAWKEY_L8,	/* Paste */
+	RAWKEY_KP_End,
+	RAWKEY_Right,
+	RAWKEY_KP_Left,
+	RAWKEY_KP_Home,
+	RAWKEY_Next,
+	RAWKEY_Home,
+	RAWKEY_Prior,
+/* 0x70 */
+	RAWKEY_KP_Insert,
+	RAWKEY_KP_Delete,
+	RAWKEY_KP_Down,
+	RAWKEY_KP_Begin,
+	RAWKEY_KP_Right,
+	RAWKEY_KP_Up,
+	RAWKEY_Num_Lock,
+	RAWKEY_KP_Divide,
+	0,
+	RAWKEY_KP_Enter,
+	RAWKEY_KP_Next,
+	0,
+	RAWKEY_KP_Add,
+	RAWKEY_KP_Prior,
+	RAWKEY_KP_Multiply,
+	0,
+/* 0x80 */
+	0,
+	0,
+	0,
+	0,
+	RAWKEY_KP_Subtract,
+	0,
+	0,
+	0,
+	0,
+	0,
+	0,
+	RAWKEY_Meta_L,
+	RAWKEY_Meta_R
+};
+
+#endif
+
+/*
+ * Translate scan codes from set 2 or 3 to set 1
  */
 int
 pckbd_scancode_translate(struct pckbd_internal *id, int datain)
@@ -790,24 +968,38 @@ pckbd_scancode_translate(struct pckbd_internal *id, int datain)
 		return 0;	/* consume scancode */
 	}
 
-	/*
-	 * Convert BREAK sequence (14 77 -> 1D 45)
-	 */
-	if (id->t_extended1 == 2 && datain == 0x14)
-		return 0x1d | id->t_releasing;
-	else if (id->t_extended1 == 1 && datain == 0x77)
-		return 0x45 | id->t_releasing;
+	switch (id->t_table) {
+	case 2:
+		/*
+	 	* Convert BREAK sequence (14 77 -> 1D 45)
+	 	*/
+		if (id->t_extended1 == 2 && datain == 0x14)
+			return 0x1d | id->t_releasing;
+		else if (id->t_extended1 == 1 && datain == 0x77)
+			return 0x45 | id->t_releasing;
 
-	if (id->t_extended != 0) {
-		if (datain >= sizeof pckbd_xtbl_ext)
+		if (id->t_extended != 0) {
+			if (datain >= sizeof pckbd_xtbl2_ext)
+				datain = 0;
+			else
+				datain = pckbd_xtbl2_ext[datain];
+			/* xtbl2_ext already has the upper bit set */
+			id->t_extended = 0;
+		} else {
+			if (datain >= sizeof pckbd_xtbl2)
+				datain = 0;
+			else
+				datain = pckbd_xtbl2[datain] & ~0x80;
+		}
+		break;
+#ifdef __sparc64__ /* only pckbc@ebus on sparc64 uses this */
+	case 3:
+		if (datain >= sizeof pckbd_xtbl3)
 			datain = 0;
 		else
-			datain = pckbd_xtbl_ext[datain];
-	} else {
-		if (datain >= sizeof pckbd_xtbl)
-			datain = 0;
-		else
-			datain = pckbd_xtbl[datain];
+			datain = pckbd_xtbl3[datain] & ~0x80;
+		break;
+#endif
 	}
 
 	if (datain == 0) {
@@ -1021,11 +1213,8 @@ pckbd_hookup_bell(void (*fn)(void *, u_int, u_int, u_int, int), void *arg)
 int
 pckbd_cnattach(pckbc_tag_t kbctag)
 {
-
 	pckbd_init(&pckbd_consdata, kbctag, PCKBC_KBD_SLOT, 1);
-
 	wskbd_cnattach(&pckbd_consops, &pckbd_consdata, &pckbd_keymapdata);
-
 	return (0);
 }
 

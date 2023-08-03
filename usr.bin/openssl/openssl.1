@@ -1,4 +1,4 @@
-.\" $OpenBSD: openssl.1,v 1.150 2023/07/03 08:37:22 jmc Exp $
+.\" $OpenBSD: openssl.1,v 1.152 2023/07/27 07:01:50 tb Exp $
 .\" ====================================================================
 .\" Copyright (c) 1998-2002 The OpenSSL Project.  All rights reserved.
 .\"
@@ -110,7 +110,7 @@
 .\" copied and put under another distribution licence
 .\" [including the GNU Public Licence.]
 .\"
-.Dd $Mdocdate: July 3 2023 $
+.Dd $Mdocdate: July 27 2023 $
 .Dt OPENSSL 1
 .Os
 .Sh NAME
@@ -2300,7 +2300,6 @@ Print extra details about the processing.
 .Tg errstr
 .Sh ERRSTR
 .Nm openssl errstr
-.Op Fl stats
 .Ar errno ...
 .Pp
 The
@@ -2322,12 +2321,6 @@ The remaining fields
 and
 .Bq reason string
 are all ASCII text.
-.Pp
-The options are as follows:
-.Bl -tag -width Ds
-.It Fl stats
-Print debugging statistics about various aspects of the hash table.
-.El
 .Tg gendsa
 .Sh GENDSA
 .Bl -hang -width "openssl gendsa"
@@ -6056,7 +6049,7 @@ itself, then 1 for the CA that signed the certificate and so on.
 .Tg version
 .Sh VERSION
 .Nm openssl version
-.Op Fl abdfopv
+.Op Fl abdfpv
 .Pp
 The
 .Nm version
@@ -6076,8 +6069,6 @@ was built.
 setting.
 .It Fl f
 Compilation flags.
-.It Fl o
-Option information: various options set when the library was built.
 .It Fl p
 Platform setting.
 .It Fl v

@@ -1,4 +1,4 @@
-/*	$OpenBSD: locore.S,v 1.136 2023/07/10 03:32:10 guenther Exp $	*/
+/*	$OpenBSD: locore.S,v 1.140 2023/07/31 04:01:07 guenther Exp $	*/
 /*	$NetBSD: locore.S,v 1.13 2004/03/25 18:33:17 drochner Exp $	*/
 
 /*
@@ -473,31 +473,26 @@ bogus_proc_pmap:
 #endif /* DIAGNOSTIC */
 END(cpu_switchto)
 
-ENTRY(cpu_idle_enter)
-	ret
-	lfence
-END(cpu_idle_enter)
-
-ENTRY(cpu_idle_leave)
-	ret
-	lfence
-END(cpu_idle_leave)
-
-/* placed here for correct static branch prediction in cpu_idle_* */
 NENTRY(retpoline_rax)
+	CODEPATCH_START
 	JMP_RETPOLINE(rax)
+	CODEPATCH_END(CPTAG_RETPOLINE_RAX)
+END(retpoline_rax)
 
-ENTRY(cpu_idle_cycle)
-	RETGUARD_SETUP(cpu_idle_cycle, r11)
-	movq	cpu_idle_cycle_fcn,%rax
-	cmpq	$0,%rax
-	jne	retpoline_rax
+NENTRY(__x86_indirect_thunk_r11)
+	CODEPATCH_START
+	JMP_RETPOLINE(r11)
+	CODEPATCH_END(CPTAG_RETPOLINE_R11)
+END(__x86_indirect_thunk_r11)
+
+ENTRY(cpu_idle_cycle_hlt)
+	RETGUARD_SETUP(cpu_idle_cycle_hlt, r11)
 	sti
 	hlt
-	RETGUARD_CHECK(cpu_idle_cycle, r11)
+	RETGUARD_CHECK(cpu_idle_cycle_hlt, r11)
 	ret
 	lfence
-END(cpu_idle_cycle)
+END(cpu_idle_cycle_hlt)
 
 /*
  * savectx(struct pcb *pcb);
@@ -1098,30 +1093,16 @@ NENTRY(xsetbv_resume)
 	lfence
 END(xsetbv_user)
 
-	.section .rodata
-	.globl	_xrstor
-_xrstor:
-	xrstor64	(%rdi)
-
-	.globl	_xrstors
-_xrstors:
-	xrstors64	(%rdi)
-
-	.globl	_xsave
-_xsave:
-	xsave64		(%rdi)
-
-	.globl	_xsaves
-_xsaves:
-	xsaves64	(%rdi)
-
-	.globl	_xsaveopt
-_xsaveopt:
-	xsaveopt64	(%rdi)
-
-	.globl	_pcid_set_reuse
-_pcid_set_reuse:
-	orl	$(CR3_REUSE_PCID >> 32),CPUVAR(USER_CR3 + 4)
+CODEPATCH_CODE(_xrstor,		xrstor64 (%rdi))
+CODEPATCH_CODE(_xrstors,	xrstors64 (%rdi))
+CODEPATCH_CODE(_xsave,		xsave64 (%rdi))
+CODEPATCH_CODE(_xsaves,		xsaves64 (%rdi))
+CODEPATCH_CODE(_xsaveopt,	xsaveopt64 (%rdi))
+CODEPATCH_CODE(_pcid_set_reuse,
+		orl	$(CR3_REUSE_PCID >> 32),CPUVAR(USER_CR3 + 4))
+CODEPATCH_CODE_LEN(_jmprax,	jmp *%rax; int3)
+CODEPATCH_CODE_LEN(_jmpr11,	jmp *%r11; int3)
+CODEPATCH_CODE_LEN(_jmpr13,	jmp *%r13; int3)
 
 ENTRY(pagezero)
 	RETGUARD_SETUP(pagezero, r11)

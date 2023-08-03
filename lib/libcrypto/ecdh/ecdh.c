@@ -1,4 +1,4 @@
-/* $OpenBSD: ecdh.c,v 1.5 2023/07/12 08:54:18 tb Exp $ */
+/* $OpenBSD: ecdh.c,v 1.10 2023/07/28 09:31:21 tb Exp $ */
 /* ====================================================================
  * Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
  *
@@ -71,11 +71,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <openssl/opensslconf.h>
-
 #include <openssl/bn.h>
 #include <openssl/ec.h>
-#include <openssl/ecdh.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 
@@ -145,10 +142,9 @@ ecdh_KDF_X9_63(unsigned char *out, size_t outlen, const unsigned char *Z,
 /*
  * Based on the ECKAS-DH1 and ECSVDP-DH primitives in the IEEE 1363 standard.
  */
-/* XXX - KDF handling moved to ECDH_compute_key().  See OpenSSL e2285d87. */
 int
-ecdh_compute_key(void *out, size_t outlen, const EC_POINT *pub_key, EC_KEY *ecdh,
-    void *(*KDF)(const void *in, size_t inlen, void *out, size_t *outlen))
+ecdh_compute_key(unsigned char **out, size_t *out_len, const EC_POINT *pub_key,
+    const EC_KEY *ecdh)
 {
 	BN_CTX *ctx;
 	BIGNUM *x;
@@ -156,14 +152,11 @@ ecdh_compute_key(void *out, size_t outlen, const EC_POINT *pub_key, EC_KEY *ecdh
 	const EC_GROUP *group;
 	EC_POINT *point = NULL;
 	unsigned char *buf = NULL;
-	int buflen;
-	int ret = -1;
+	int buf_len = 0;
+	int ret = 0;
 
-	if (outlen > INT_MAX) {
-		/* Sort of, anyway. */
-		ECerror(ERR_R_MALLOC_FAILURE);
-		return -1;
-	}
+	*out = NULL;
+	*out_len = 0;
 
 	if ((ctx = BN_CTX_new()) == NULL)
 		goto err;
@@ -176,7 +169,7 @@ ecdh_compute_key(void *out, size_t outlen, const EC_POINT *pub_key, EC_KEY *ecdh
 	if ((group = EC_KEY_get0_group(ecdh)) == NULL)
 		goto err;
 
-	if (!EC_POINT_is_on_curve(group, pub_key, ctx))
+	if (EC_POINT_is_on_curve(group, pub_key, ctx) <= 0)
 		goto err;
 
 	if ((point = EC_POINT_new(group)) == NULL) {
@@ -199,56 +192,84 @@ ecdh_compute_key(void *out, size_t outlen, const EC_POINT *pub_key, EC_KEY *ecdh
 		goto err;
 	}
 
-	if ((buflen = ECDH_size(ecdh)) < BN_num_bytes(x)) {
+	if ((buf_len = ECDH_size(ecdh)) < BN_num_bytes(x)) {
 		ECerror(ERR_R_INTERNAL_ERROR);
 		goto err;
 	}
-	if (KDF == NULL && outlen < buflen) {
-		/* The resulting key would be truncated. */
-		ECerror(EC_R_KEY_TRUNCATION);
-		goto err;
-	}
-	if ((buf = malloc(buflen)) == NULL) {
+	if ((buf = calloc(1, buf_len)) == NULL) {
 		ECerror(ERR_R_MALLOC_FAILURE);
 		goto err;
 	}
-	if (BN_bn2binpad(x, buf, buflen) != buflen) {
+	if (BN_bn2binpad(x, buf, buf_len) != buf_len) {
 		ECerror(ERR_R_BN_LIB);
 		goto err;
 	}
 
-	if (KDF != NULL) {
-		if (KDF(buf, buflen, out, &outlen) == NULL) {
-			ECerror(EC_R_KDF_FAILED);
-			goto err;
-		}
-	} else {
-		memset(out, 0, outlen);
-		if (outlen > buflen)
-			outlen = buflen;
-		memcpy(out, buf, outlen);
-	}
+	*out = buf;
+	*out_len = buf_len;
+	buf = NULL;
+	buf_len = 0;
 
-	ret = outlen;
+	ret = 1;
+
  err:
 	EC_POINT_free(point);
 	BN_CTX_end(ctx);
 	BN_CTX_free(ctx);
-	free(buf);
+	freezero(buf, buf_len);
 
 	return ret;
 }
 
 int
-ECDH_compute_key(void *out, size_t outlen, const EC_POINT *pub_key,
+ECDH_compute_key(void *out, size_t out_len, const EC_POINT *pub_key,
     EC_KEY *eckey,
-    void *(*KDF)(const void *in, size_t inlen, void *out, size_t *outlen))
+    void *(*KDF)(const void *in, size_t inlen, void *out, size_t *out_len))
 {
+	unsigned char *secret = NULL;
+	size_t secret_len = 0;
+	int ret = 0;
+
 	if (eckey->meth->compute_key == NULL) {
 		ECerror(EC_R_NOT_IMPLEMENTED);
-		return 0;
+		goto err;
 	}
-	return eckey->meth->compute_key(out, outlen, pub_key, eckey, KDF);
+
+	if (out_len > INT_MAX) {
+		ECerror(EC_R_INVALID_OUTPUT_LENGTH);
+		goto err;
+	}
+
+	if (!eckey->meth->compute_key(&secret, &secret_len, pub_key, eckey))
+		goto err;
+
+	memset(out, 0, out_len);
+	if (KDF != NULL) {
+		if (KDF(secret, secret_len, out, &out_len) == NULL) {
+			ECerror(EC_R_KDF_FAILED);
+			goto err;
+		}
+	} else {
+		if (out_len < secret_len) {
+			/* The resulting key would be truncated. */
+			ECerror(EC_R_KEY_TRUNCATION);
+			goto err;
+		}
+		out_len = secret_len;
+		memcpy(out, secret, out_len);
+	}
+
+	if (out_len > INT_MAX) {
+		ECerror(EC_R_INVALID_OUTPUT_LENGTH);
+		goto err;
+	}
+
+	ret = out_len;
+
+ err:
+	freezero(secret, secret_len);
+
+	return ret;
 }
 LCRYPTO_ALIAS(ECDH_compute_key);
 

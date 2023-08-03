@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.275 2023/07/01 16:34:29 drahn Exp $
+# $OpenBSD: GENERIC,v 1.277 2023/07/22 22:43:53 patrick Exp $
 #
 # GENERIC machine description file
 #
@@ -174,7 +174,7 @@ nvme*		at aplns?
 aplpcie*	at fdt?
 pci*		at aplpcie?
 aplpinctrl*	at fdt? early 1
-aplpmgr*	at fdt? early 1
+aplpmgr*	at fdt? early 2
 aplpwm*		at fdt?
 aplrtk*		at fdt?
 aplsart*	at fdt?
@@ -343,6 +343,7 @@ qcpon*		at qcpmic?
 qcpwm*		at qcpmic?
 qcrng*		at fdt?
 qcrtc*		at qcpmic?
+qcsdam*		at qcpmic?
 
 # Sunxi SoCs
 sxipio*		at fdt? early 1	# GPIO pins for leds & PHYs

@@ -1,4 +1,4 @@
-/*	$OpenBSD: iked.h,v 1.220 2023/06/28 14:10:24 tobhe Exp $	*/
+/*	$OpenBSD: iked.h,v 1.223 2023/07/28 11:23:03 claudio Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -1242,6 +1242,7 @@ const char *
 void	 lc_idtype(char *);
 void	 print_hex(const uint8_t *, off_t, size_t);
 void	 print_hexval(const uint8_t *, off_t, size_t);
+void	 print_hexbuf(struct ibuf *);
 const char *
 	 print_bits(unsigned short, unsigned char *);
 int	 sockaddr_cmp(struct sockaddr *, struct sockaddr *, int);
@@ -1268,12 +1269,10 @@ struct ibuf *
 	 ibuf_new(const void *, size_t);
 struct ibuf *
 	 ibuf_static(void);
-int	 ibuf_cat(struct ibuf *, struct ibuf *);
 size_t	 ibuf_length(struct ibuf *);
 int	 ibuf_setsize(struct ibuf *, size_t);
-void	*ibuf_getdata(struct ibuf *, size_t);
 struct ibuf *
-	 ibuf_get(struct ibuf *, size_t);
+	 ibuf_getdata(struct ibuf *, size_t);
 struct ibuf *
 	 ibuf_dup(struct ibuf *);
 struct ibuf *

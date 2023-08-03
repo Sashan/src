@@ -1,4 +1,4 @@
-# $OpenBSD: freenull.awk,v 1.1 2018/07/10 20:53:30 tb Exp $
+# $OpenBSD: freenull.awk,v 1.3 2023/07/28 18:29:26 tb Exp $
 # Copyright (c) 2018 Theo Buehler <tb@openbsd.org>
 #
 # Permission to use, copy, modify, and distribute this software for any
@@ -23,14 +23,10 @@
 # Skip *_free functions that take more than one or no argument.
 /^ASN1_item_ex_free$/				||
 /^ASN1_item_free$/				||
-/^ASN1_primitive_free$/				||
-/^ASN1_template_free$/				||
 /^CONF_modules_free$/				||
 /^EVP_PKEY_asn1_set_free$/			||
-/^OBJ_sigid_free$/				||
 /^X509V3_section_free$/				||
 /^X509V3_string_free$/				||
-/^asn1_enc_free$/				||
 /^sk_pop_free$/ {
 	next
 }
@@ -41,8 +37,6 @@
 /^EC_PRIVATEKEY_free$/				||
 /^ECPARAMETERS_free$/				||
 /^ECPKPARAMETERS_free$/				||
-/^NETSCAPE_ENCRYPTED_PKEY_free$/		||
-/^NETSCAPE_PKEY_free$/				||
 /^X9_62_CHARACTERISTIC_TWO_free$/		||
 /^X9_62_PENTANOMIAL_free$/ {
 	next
