@@ -1636,9 +1636,9 @@ pfr_del_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *ndel,
 		key.pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
 		kt = pfr_create_ktable(&t->pfttab_rc, &key.pfrkt_t, tzero,
 		    PR_WAITOK);
-		kt->pfrkt_version = pfr_get_ktable_version(kt);
 		if (kt == NULL)
 			return (ENOMEM);
+		kt->pfrkt_version = pfr_get_ktable_version(kt);
 	}
 
 	if (ndel != NULL)
@@ -2516,7 +2516,7 @@ pfr_create_ktable(struct pf_rules_container *rc, struct pfr_table *tbl,
 
 	if (rc != NULL) {
 		rs = pf_find_or_create_ruleset(rc, tbl->pfrt_anchor);
-		if (!rs) {
+		if (rs == NULL) {
 			pfr_destroy_ktable(kt, 0);
 			return (NULL);
 		}

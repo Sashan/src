@@ -4256,7 +4256,7 @@ pf_ina_commit(struct pf_trans *t)
 	 */
 	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pftina_rc.anchors, taw)
 		pfr_commit_table(t, ta, RB_FIND(pf_anchor_global,
-		    &pf_anchors, taw));
+		    &pf_anchors, ta));
 }
 
 void
@@ -4431,6 +4431,7 @@ pf_init_ttab(struct pf_trans *t)
 	RB_INIT(&t->pfttab_rc.anchors);
 	TAILQ_INIT(&t->pfttab_anchor_list);
 	SLIST_INIT(&t->pfttab_garbage);
+	pf_init_ruleset(&t->pftina_rc.main_anchor.ruleset);
 }
 
 void
