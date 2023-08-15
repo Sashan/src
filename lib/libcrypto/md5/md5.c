@@ -1,4 +1,4 @@
-/* $OpenBSD: md5.c,v 1.6 2023/07/28 11:06:28 jsing Exp $ */
+/* $OpenBSD: md5.c,v 1.15 2023/08/14 15:48:16 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -57,9 +57,6 @@
  */
 
 #include <stdio.h>
-#include <openssl/opensslv.h>
-#include <openssl/crypto.h>
-
 #include <stdlib.h>
 #include <string.h>
 
@@ -78,7 +75,7 @@
 
 __BEGIN_HIDDEN_DECLS
 
-void md5_block_data_order (MD5_CTX *c, const void *p, size_t num);
+void md5_block_data_order(MD5_CTX *c, const void *p, size_t num);
 
 __END_HIDDEN_DECLS
 
@@ -90,19 +87,13 @@ __END_HIDDEN_DECLS
 #define HASH_UPDATE		MD5_Update
 #define HASH_TRANSFORM		MD5_Transform
 #define HASH_FINAL		MD5_Final
-#define	HASH_MAKE_STRING(c,s)	do {	\
-	unsigned long ll;		\
-	ll=(c)->A; HOST_l2c(ll,(s));	\
-	ll=(c)->B; HOST_l2c(ll,(s));	\
-	ll=(c)->C; HOST_l2c(ll,(s));	\
-	ll=(c)->D; HOST_l2c(ll,(s));	\
-	} while (0)
 #define	HASH_BLOCK_DATA_ORDER	md5_block_data_order
 
+#define HASH_NO_UPDATE
+#define HASH_NO_TRANSFORM
+#define HASH_NO_FINAL
+
 #include "md32_common.h"
-LCRYPTO_ALIAS(MD5_Update);
-LCRYPTO_ALIAS(MD5_Transform);
-LCRYPTO_ALIAS(MD5_Final);
 
 /*
 #define	F(x,y,z)	(((x) & (y))  |  ((~(x)) & (z)))
@@ -141,33 +132,13 @@ LCRYPTO_ALIAS(MD5_Final);
 /* Implemented from RFC1321 The MD5 Message-Digest Algorithm
  */
 
-#define INIT_DATA_A (unsigned long)0x67452301L
-#define INIT_DATA_B (unsigned long)0xefcdab89L
-#define INIT_DATA_C (unsigned long)0x98badcfeL
-#define INIT_DATA_D (unsigned long)0x10325476L
-
-int
-MD5_Init(MD5_CTX *c)
-{
-	memset (c, 0, sizeof(*c));
-	c->A = INIT_DATA_A;
-	c->B = INIT_DATA_B;
-	c->C = INIT_DATA_C;
-	c->D = INIT_DATA_D;
-	return 1;
-}
-LCRYPTO_ALIAS(MD5_Init);
-
 #ifndef md5_block_data_order
-#ifdef X
-#undef X
-#endif
 void
 md5_block_data_order(MD5_CTX *c, const void *data_, size_t num)
 {
 	const unsigned char *data = data_;
-	unsigned MD32_REG_T A, B, C, D, l;
-	unsigned MD32_REG_T X0, X1, X2, X3, X4, X5, X6, X7,
+	unsigned int A, B, C, D, l;
+	unsigned int X0, X1, X2, X3, X4, X5, X6, X7,
 	    X8, X9, X10, X11, X12, X13, X14, X15;
 
 	A = c->A;
@@ -284,6 +255,125 @@ md5_block_data_order(MD5_CTX *c, const void *data_, size_t num)
 	}
 }
 #endif
+
+int
+MD5_Init(MD5_CTX *c)
+{
+	memset(c, 0, sizeof(*c));
+
+	c->A = 0x67452301UL;
+	c->B = 0xefcdab89UL;
+	c->C = 0x98badcfeUL;
+	c->D = 0x10325476UL;
+
+	return 1;
+}
+LCRYPTO_ALIAS(MD5_Init);
+
+int
+MD5_Update(MD5_CTX *c, const void *data_, size_t len)
+{
+	const unsigned char *data = data_;
+	unsigned char *p;
+	MD5_LONG l;
+	size_t n;
+
+	if (len == 0)
+		return 1;
+
+	l = (c->Nl + (((MD5_LONG)len) << 3))&0xffffffffUL;
+	/* 95-05-24 eay Fixed a bug with the overflow handling, thanks to
+	 * Wei Dai <weidai@eskimo.com> for pointing it out. */
+	if (l < c->Nl) /* overflow */
+		c->Nh++;
+	c->Nh+=(MD5_LONG)(len>>29);	/* might cause compiler warning on 16-bit */
+	c->Nl = l;
+
+	n = c->num;
+	if (n != 0) {
+		p = (unsigned char *)c->data;
+
+		if (len >= MD5_CBLOCK || len + n >= MD5_CBLOCK) {
+			memcpy(p + n, data, MD5_CBLOCK - n);
+			md5_block_data_order(c, p, 1);
+			n = MD5_CBLOCK - n;
+			data += n;
+			len -= n;
+			c->num = 0;
+			memset(p, 0, MD5_CBLOCK);	/* keep it zeroed */
+		} else {
+			memcpy(p + n, data, len);
+			c->num += (unsigned int)len;
+			return 1;
+		}
+	}
+
+	n = len/MD5_CBLOCK;
+	if (n > 0) {
+		md5_block_data_order(c, data, n);
+		n *= MD5_CBLOCK;
+		data += n;
+		len -= n;
+	}
+
+	if (len != 0) {
+		p = (unsigned char *)c->data;
+		c->num = (unsigned int)len;
+		memcpy(p, data, len);
+	}
+	return 1;
+}
+LCRYPTO_ALIAS(MD5_Update);
+
+void
+MD5_Transform(MD5_CTX *c, const unsigned char *data)
+{
+	md5_block_data_order(c, data, 1);
+}
+LCRYPTO_ALIAS(MD5_Transform);
+
+int
+MD5_Final(unsigned char *md, MD5_CTX *c)
+{
+	unsigned char *p = (unsigned char *)c->data;
+	unsigned long ll;
+	size_t n = c->num;
+
+	p[n] = 0x80; /* there is always room for one */
+	n++;
+
+	if (n > (MD5_CBLOCK - 8)) {
+		memset(p + n, 0, MD5_CBLOCK - n);
+		n = 0;
+		md5_block_data_order(c, p, 1);
+	}
+	memset(p + n, 0, MD5_CBLOCK - 8 - n);
+
+	p += MD5_CBLOCK - 8;
+#if   defined(DATA_ORDER_IS_BIG_ENDIAN)
+	HOST_l2c(c->Nh, p);
+	HOST_l2c(c->Nl, p);
+#elif defined(DATA_ORDER_IS_LITTLE_ENDIAN)
+	HOST_l2c(c->Nl, p);
+	HOST_l2c(c->Nh, p);
+#endif
+	p -= MD5_CBLOCK;
+	md5_block_data_order(c, p, 1);
+	c->num = 0;
+	memset(p, 0, MD5_CBLOCK);
+
+	ll = c->A;
+	HOST_l2c(ll, md);
+	ll = c->B;
+	HOST_l2c(ll, md);
+	ll = c->C;
+	HOST_l2c(ll, md);
+	ll = c->D;
+	HOST_l2c(ll, md);
+
+	return 1;
+}
+LCRYPTO_ALIAS(MD5_Final);
 
 unsigned char *
 MD5(const unsigned char *d, size_t n, unsigned char *md)

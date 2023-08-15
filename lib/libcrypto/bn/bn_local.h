@@ -1,4 +1,4 @@
-/* $OpenBSD: bn_local.h,v 1.32 2023/08/02 08:44:38 tb Exp $ */
+/* $OpenBSD: bn_local.h,v 1.38 2023/08/09 09:23:03 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -274,7 +274,8 @@ void bn_div_rem_words(BN_ULONG h, BN_ULONG l, BN_ULONG d, BN_ULONG *out_q,
     BN_ULONG *out_r);
 
 int BN_bntest_rand(BIGNUM *rnd, int bits, int top, int bottom);
-int bn_rand_interval(BIGNUM *rnd, const BIGNUM *lower_inc, const BIGNUM *upper_exc);
+int bn_rand_in_range(BIGNUM *rnd, const BIGNUM *lower_inc, const BIGNUM *upper_exc);
+int bn_rand_interval(BIGNUM *rnd, BN_ULONG lower_word, const BIGNUM *upper_exc);
 
 void	BN_init(BIGNUM *);
 
@@ -290,17 +291,6 @@ int	BN_mod_exp_recp(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
     const BIGNUM *m, BN_CTX *ctx);
 int	BN_div_recp(BIGNUM *dv, BIGNUM *rem, const BIGNUM *m,
     BN_RECP_CTX *recp, BN_CTX *ctx);
-
-void BN_BLINDING_free(BN_BLINDING *b);
-int BN_BLINDING_convert(BIGNUM *n, BIGNUM *r, BN_BLINDING *b, BN_CTX *);
-int BN_BLINDING_invert(BIGNUM *n, const BIGNUM *r, BN_BLINDING *b, BN_CTX *);
-
-CRYPTO_THREADID *BN_BLINDING_thread_id(BN_BLINDING *);
-BN_BLINDING *BN_BLINDING_create_param(BN_BLINDING *b,
-    const BIGNUM *e, BIGNUM *m, BN_CTX *ctx,
-    int (*bn_mod_exp)(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
-    const BIGNUM *m, BN_CTX *ctx, BN_MONT_CTX *m_ctx),
-    BN_MONT_CTX *m_ctx);
 
 /* Explicitly const time / non-const time versions for internal use */
 int BN_mod_exp_ct(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,

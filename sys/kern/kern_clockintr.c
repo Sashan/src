@@ -1,4 +1,4 @@
-/* $OpenBSD: kern_clockintr.c,v 1.29 2023/07/27 17:52:53 cheloha Exp $ */
+/* $OpenBSD: kern_clockintr.c,v 1.31 2023/08/11 22:02:50 cheloha Exp $ */
 /*
  * Copyright (c) 2003 Dale Rahn <drahn@openbsd.org>
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -69,6 +69,7 @@ clockintr_init(u_int flags)
 
 	KASSERT(hz > 0 && hz <= 1000000000);
 	hardclock_period = 1000000000 / hz;
+	roundrobin_period = hardclock_period * 10;
 
 	KASSERT(stathz >= 1 && stathz <= 1000000000);
 
@@ -196,10 +197,19 @@ clockintr_cpu_init(const struct intrclock *ic)
 	 * XXX Need to find a better place to do this.  We can't do it in
 	 * sched_init_cpu() because initclocks() runs after it.
 	 */
+	if (spc->spc_itimer->cl_expiration == 0) {
+		clockintr_stagger(spc->spc_itimer, hardclock_period,
+		    multiplier, MAXCPUS);
+	}
 	if (spc->spc_profclock->cl_expiration == 0) {
 		clockintr_stagger(spc->spc_profclock, profclock_period,
 		    multiplier, MAXCPUS);
 	}
+	if (spc->spc_roundrobin->cl_expiration == 0) {
+		clockintr_stagger(spc->spc_roundrobin, hardclock_period,
+		    multiplier, MAXCPUS);
+	}
+	clockintr_advance(spc->spc_roundrobin, roundrobin_period);
 
 	if (reset_cq_intrclock)
 		SET(cq->cq_flags, CQ_INTRCLOCK);

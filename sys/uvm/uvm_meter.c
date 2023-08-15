@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_meter.c,v 1.46 2023/08/02 13:54:45 cheloha Exp $	*/
+/*	$OpenBSD: uvm_meter.c,v 1.48 2023/08/03 16:12:08 claudio Exp $	*/
 /*	$NetBSD: uvm_meter.c,v 1.21 2001/07/14 06:36:03 matt Exp $	*/
 
 /*
@@ -70,7 +70,7 @@ struct loadavg averunnable;
  * 5 second intervals.
  */
 
-static fixpt_t cexp[3] = {
+static const fixpt_t cexp[3] = {
 	0.9200444146293232 * FSCALE,	/* exp(-1/12) */
 	0.9834714538216174 * FSCALE,	/* exp(-1/60) */
 	0.9944598480048967 * FSCALE,	/* exp(-1/180) */
@@ -98,27 +98,16 @@ uvm_meter(void)
 static void
 uvm_loadav(struct loadavg *avg)
 {
+	extern struct cpuset sched_idle_cpus;
 	CPU_INFO_ITERATOR cii;
 	struct cpu_info *ci;
-	struct schedstate_percpu *spc;
-	u_int i, nrun = 0, nrun_cpu;
-	int s;
+	u_int i, nrun = 0;
 
-
-	SCHED_LOCK(s);
 	CPU_INFO_FOREACH(cii, ci) {
-		spc = &ci->ci_schedstate;
-		nrun_cpu = spc->spc_nrun;
-		if (ci->ci_curproc != spc->spc_idleproc)
-			nrun_cpu++;
-		if (nrun_cpu == 0)
-			continue;
-		spc->spc_ldavg = (cexp[0] * spc->spc_ldavg +
-		    nrun_cpu * FSCALE *
-		    (FSCALE - cexp[0])) >> FSHIFT;
-		nrun += nrun_cpu;
+		if (!cpuset_isset(&sched_idle_cpus, ci))
+			nrun++;
+		nrun += ci->ci_schedstate.spc_nrun;
 	}
-	SCHED_UNLOCK(s);
 
 	for (i = 0; i < 3; i++) {
 		avg->ldavg[i] = (cexp[i] * avg->ldavg[i] +

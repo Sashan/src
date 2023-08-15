@@ -1,4 +1,4 @@
-/* $OpenBSD: ecdsa.c,v 1.16 2023/07/28 09:18:10 tb Exp $ */
+/* $OpenBSD: ecdsa.c,v 1.18 2023/08/08 13:09:28 tb Exp $ */
 /* ====================================================================
  * Copyright (c) 2000-2002 The OpenSSL Project.  All rights reserved.
  *
@@ -338,29 +338,8 @@ ecdsa_sign_setup(EC_KEY *key, BN_CTX *in_ctx, BIGNUM **out_kinv, BIGNUM **out_r)
 	/* Step 11: repeat until r != 0. */
 	do {
 		/* Step 3: generate random k. */
-		if (!bn_rand_interval(k, BN_value_one(), order))
+		if (!bn_rand_interval(k, 1, order))
 			goto err;
-
-		/*
-		 * We do not want timing information to leak the length of k,
-		 * so we compute G * k using an equivalent scalar of fixed
-		 * bit-length.
-		 *
-		 * We unconditionally perform both of these additions to prevent
-		 * a small timing information leakage.  We then choose the sum
-		 * that is one bit longer than the order.  This guarantees the
-		 * code path used in the constant time implementations
-		 * elsewhere.
-		 *
-		 * TODO: revisit the bn_copy aiming for a memory access agnostic
-		 * conditional copy.
-		 */
-		if (!BN_add(r, k, order) ||
-		    !BN_add(x, r, order) ||
-		    !bn_copy(k, BN_num_bits(r) > order_bits ? r : x))
-			goto err;
-
-		BN_set_flags(k, BN_FLG_CONSTTIME);
 
 		/* Step 5: P = k * G. */
 		if (!EC_POINT_mul(group, point, k, NULL, NULL, ctx)) {
@@ -472,7 +451,7 @@ ecdsa_compute_s(BIGNUM **out_s, const BIGNUM *e, const BIGNUM *kinv,
 		goto err;
 	}
 
-	if (!bn_rand_interval(b, BN_value_one(), order)) {
+	if (!bn_rand_interval(b, 1, order)) {
 		ECerror(ERR_R_BN_LIB);
 		goto err;
 	}

@@ -1,4 +1,4 @@
-#   $OpenBSD: tlsfuzzer.py,v 1.50 2023/07/02 17:21:33 beck Exp $
+#   $OpenBSD: tlsfuzzer.py,v 1.52 2023/08/14 18:10:42 tb Exp $
 #
 # Copyright (c) 2020 Theo Buehler <tb@openbsd.org>
 #
@@ -370,7 +370,6 @@ tls12_tests = TestGroup("TLSv1.2 tests", [
     Test("test-message-skipping.py"),
     Test("test-no-heartbeat.py"),
     Test("test-record-layer-fragmentation.py"),
-    Test("test-sessionID-resumption.py"),
     Test("test-sslv2-connection.py"),
     Test("test-truncating-of-finished.py"),
     Test("test-truncating-of-kRSA-client-key-exchange.py"),
@@ -383,6 +382,12 @@ tls12_tests = TestGroup("TLSv1.2 tests", [
         "test-atypical-padding.py", [
             "-e", "sanity - encrypt then MAC",
             "-e", "2^14 bytes of AppData with 256 bytes of padding (SHA1 + Encrypt then MAC)",
+        ]
+    ),
+    Test(
+        "test-ccs.py", [
+            "-x", "two bytes long CCS",
+            "-X", substitute_alert("unexpected_message", "decode_error"),
         ]
     ),
     Test(
@@ -431,6 +436,11 @@ tls12_tests = TestGroup("TLSv1.2 tests", [
     # extension, we don't notice that it was dropped.
     Test("test-renegotiation-changed-clienthello.py", [
         "-e", "drop extended_master_secret in renegotiation",
+    ]),
+
+    Test("test-sessionID-resumption.py", [
+        "-x", "Client Hello too long session ID",
+        "-X", substitute_alert("decode_error", "illegal_parameter"),
     ]),
 
     # Without --sig-algs-drop-ok, two tests fail since we do not currently
@@ -551,6 +561,12 @@ tls12_failing_tests = TestGroup("failing TLSv1.2 tests", [
     # 'resumption of safe session with NULL cipher'
     # 'resumption with cipher from old CH but not selected by server'
     Test("test-resumption-with-wrong-ciphers.py"),
+
+    # 'session resumption with empty session_id'
+    # 'session resumption with random session_id'
+    # 'session resumption with renegotiation'
+    # AssertionError: Server did not send extension(s): session_ticket
+    Test("test-session-ticket-resumption.py"),
 
     # 5 failures:
     #   'empty sigalgs'

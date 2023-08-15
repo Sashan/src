@@ -1,4 +1,4 @@
-$OpenBSD: pcidevs,v 1.2043 2023/07/08 09:11:51 kettenis Exp $
+$OpenBSD: pcidevs,v 1.2045 2023/08/09 21:27:47 kmos Exp $
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
 
 /*
@@ -386,6 +386,7 @@ vendor	ATRONICS	0x907f	Atronics
 vendor	NETMOS		0x9710	NetMos
 vendor	3COM2		0xa727	3Com
 vendor	PARALLELS	0xaaaa	Parallels
+vendor	CRUCIAL		0xc0a9	Crucial
 vendor	TIGERJET	0xe159	TigerJet Network
 vendor	ENDACE		0xeace	Endace
 vendor	BELKIN		0xec80	Belkin Components
@@ -2103,6 +2104,7 @@ product ATI NAVI31_1		0x744c	Navi 31
 product ATI NAVI31_3		0x745e	Navi 31
 product ATI NAVI33_1		0x7480	Navi 33
 product ATI NAVI33_2		0x7483	Navi 33
+product ATI NAVI33_3		0x7489	Navi 33
 product ATI RADEON_9000IGP	0x7834	Radeon 9000/9100 IGP
 product ATI RADEON_RS350IGP	0x7835	Radeon RS350IGP
 product ATI RS690_HB		0x7910	RS690 Host
@@ -2873,6 +2875,9 @@ product CREATIVELABS SBJOY2	0x7004	PCI Gameport Joystick
 product CREATIVELABS SBJOY3	0x7005	PCI Gameport Joystick
 product CREATIVELABS PPB	0x7006	PCIE-PCI
 product CREATIVELABS EV1938	0x8938	Ectiva 1938
+
+/* Crucial products */
+product CRUCIAL P5PLUS		0x5407	P5 Plus
 
 /* Cyclades products */
 product CYCLADES CYCLOMY_1	0x0100	Cyclom-Y below 1M

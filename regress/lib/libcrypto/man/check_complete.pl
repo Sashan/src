@@ -30,9 +30,12 @@ my %internal = (
 	BN_MASK2 BN_MASK2h BN_MASK2h1 BN_MASK2l
 	BN_TBIT BN_ULLONG
     )],
+    evp => [qw(
+        EVP_MD_CTRL_ALG_CTRL
+        EVP_MD_CTX_FLAG_CLEANED EVP_MD_CTX_FLAG_REUSE
+    )],
     objects => [qw(
-	OBJ_bsearch OBJ_bsearch_ OBJ_bsearch_ex OBJ_bsearch_ex_
-	USE_OBJ_MAC
+	OBJ_bsearch_ OBJ_bsearch_ex_
     )],
     x509_vfy => [qw(
 	X509_VERIFY_PARAM_ID
@@ -45,11 +48,13 @@ my %obsolete = (
 	ASN1_i2d_bio ASN1_i2d_bio_of ASN1_i2d_bio_of_const
 	ASN1_i2d_fp ASN1_i2d_fp_of ASN1_i2d_fp_of_const
 	ASN1_LONG_UNDEF
+	BIT_STRING_BITNAME
 	ub_title
 	V_ASN1_PRIMATIVE_TAG
 	X509_algor_st
     )],
     bio => [qw(
+	asn1_ps_func
 	BIO_C_GET_PROXY_PARAM BIO_C_GET_SOCKS
 	BIO_C_SET_PROXY_PARAM BIO_C_SET_SOCKS
 	BIO_get_no_connect_return BIO_get_proxies
@@ -59,12 +64,11 @@ my %obsolete = (
     )],
     bn => [qw(
 	BN_HEX_FMT1 BN_HEX_FMT2 BN_MASK
-	BN_options BN_prime_checks
     )],
-    objects => [qw(
-	_DECLARE_OBJ_BSEARCH_CMP_FN
-	DECLARE_OBJ_BSEARCH_CMP_FN DECLARE_OBJ_BSEARCH_GLOBAL_CMP_FN
-	IMPLEMENT_OBJ_BSEARCH_CMP_FN IMPLEMENT_OBJ_BSEARCH_GLOBAL_CMP_FN
+    evp => [qw(
+        EVP_MD_CTRL_DIGALGID
+        EVP_MD_CTX_FLAG_NON_FIPS_ALLOW EVP_MD_CTX_FLAG_PAD_MASK
+        EVP_MD_CTX_FLAG_PAD_PKCS1 EVP_MD_CTX_FLAG_PAD_PSS
     )],
 );
 
@@ -272,7 +276,7 @@ try_again:
 			print "D- $line\n" if $verbose;
 			next;
 		}
-		if ($id =~ /^(?:ASN1|BIO|BN|X509(?:V3)?)_[FR]_\w+$/) {
+		if ($id =~ /^(?:ASN1|BIO|BN|EVP|X509(?:V3)?)_[FR]_\w+$/) {
 			print "D- $line\n" if $verbose;
 			next;
 		}
@@ -445,6 +449,15 @@ try_again:
 	if (/ \*$/) {
 		$_ .= <$in_fh>;
 		goto try_again;
+	}
+	# The name of the function return type is so long
+	# that it requires a line break afterwards.
+	if (/^\w{30,}$/) {
+		my $next_line = <$in_fh>;
+		if ($next_line =~ /^ {4}\w/) {
+			$_ .= $next_line;
+			goto try_again;
+		}
 	}
 	die "parse error: $_";
 }

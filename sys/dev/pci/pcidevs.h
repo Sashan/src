@@ -2,7 +2,7 @@
  * THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
  *
  * generated from:
- *	OpenBSD: pcidevs,v 1.2043 2023/07/08 09:11:51 kettenis Exp 
+ *	OpenBSD: pcidevs,v 1.2045 2023/08/09 21:27:47 kmos Exp 
  */
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
 
@@ -391,6 +391,7 @@
 #define	PCI_VENDOR_NETMOS	0x9710		/* NetMos */
 #define	PCI_VENDOR_3COM2	0xa727		/* 3Com */
 #define	PCI_VENDOR_PARALLELS	0xaaaa		/* Parallels */
+#define	PCI_VENDOR_CRUCIAL	0xc0a9		/* Crucial */
 #define	PCI_VENDOR_TIGERJET	0xe159		/* TigerJet Network */
 #define	PCI_VENDOR_ENDACE	0xeace		/* Endace */
 #define	PCI_VENDOR_BELKIN	0xec80		/* Belkin Components */
@@ -2108,6 +2109,7 @@
 #define	PCI_PRODUCT_ATI_NAVI31_3	0x745e		/* Navi 31 */
 #define	PCI_PRODUCT_ATI_NAVI33_1	0x7480		/* Navi 33 */
 #define	PCI_PRODUCT_ATI_NAVI33_2	0x7483		/* Navi 33 */
+#define	PCI_PRODUCT_ATI_NAVI33_3	0x7489		/* Navi 33 */
 #define	PCI_PRODUCT_ATI_RADEON_9000IGP	0x7834		/* Radeon 9000/9100 IGP */
 #define	PCI_PRODUCT_ATI_RADEON_RS350IGP	0x7835		/* Radeon RS350IGP */
 #define	PCI_PRODUCT_ATI_RS690_HB	0x7910		/* RS690 Host */
@@ -2878,6 +2880,9 @@
 #define	PCI_PRODUCT_CREATIVELABS_SBJOY3	0x7005		/* PCI Gameport Joystick */
 #define	PCI_PRODUCT_CREATIVELABS_PPB	0x7006		/* PCIE-PCI */
 #define	PCI_PRODUCT_CREATIVELABS_EV1938	0x8938		/* Ectiva 1938 */
+
+/* Crucial products */
+#define	PCI_PRODUCT_CRUCIAL_P5PLUS	0x5407		/* P5 Plus */
 
 /* Cyclades products */
 #define	PCI_PRODUCT_CYCLADES_CYCLOMY_1	0x0100		/* Cyclom-Y below 1M */

@@ -1,4 +1,4 @@
-/*	$OpenBSD: stat.c,v 1.23 2018/09/18 15:14:06 tb Exp $ */
+/*	$OpenBSD: stat.c,v 1.25 2023/08/06 19:36:13 guenther Exp $ */
 /*	$NetBSD: stat.c,v 1.19 2004/06/20 22:20:16 jmc Exp $ */
 
 /*
@@ -611,31 +611,30 @@ format1(const struct stat *st,
 	case SHOW_st_atime:
 		gottime = 1;
 		secs = st->st_atime;
-		nsecs = st->st_atimensec;
+		nsecs = st->st_atim.tv_nsec;
 		/* FALLTHROUGH */
 	case SHOW_st_mtime:
 		if (!gottime) {
 			gottime = 1;
 			secs = st->st_mtime;
-			nsecs = st->st_mtimensec;
+			nsecs = st->st_mtim.tv_nsec;
 		}
 		/* FALLTHROUGH */
 	case SHOW_st_ctime:
 		if (!gottime) {
 			gottime = 1;
 			secs = st->st_ctime;
-			nsecs = st->st_ctimensec;
+			nsecs = st->st_ctim.tv_nsec;
 		}
 		/* FALLTHROUGH */
 	case SHOW_st_btime:
 		if (!gottime) {
 			gottime = 1;
-			secs = st->__st_birthtimespec.tv_sec;
-			nsecs = st->__st_birthtimespec.tv_nsec;
+			secs = st->__st_birthtime;
+			nsecs = st->__st_birthtim.tv_nsec;
 		}
 		small = (sizeof(secs) == 4);
 		data = secs;
-		small = 1;
 		tm = localtime(&secs);
 		(void)strftime(path, sizeof(path), timefmt, tm);
 		sdata = path;
@@ -817,8 +816,8 @@ format1(const struct stat *st,
 				(void)snprintf(tmp, sizeof(tmp), "%d", size);
 				(void)strlcat(lfmt, tmp, sizeof(lfmt));
 			}
-			(void)strlcat(lfmt, "d", sizeof(lfmt));
-			n = snprintf(buf, blen, lfmt, secs);
+			(void)strlcat(lfmt, "lld", sizeof(lfmt));
+			n = snprintf(buf, blen, lfmt, (long long)secs);
 			return (n >= blen ? blen : n);
 		}
 
@@ -842,7 +841,7 @@ format1(const struct stat *st,
 			(void)snprintf(tmp, sizeof(tmp), "%d", size);
 			(void)strlcat(lfmt, tmp, sizeof(lfmt));
 		}
-		(void)strlcat(lfmt, "d", sizeof(lfmt));
+		(void)strlcat(lfmt, "lld", sizeof(lfmt));
 
 		/*
 		 * The stuff after the decimal point always needs zero
@@ -854,7 +853,7 @@ format1(const struct stat *st,
 		 * We can "print" at most nine digits of precision.  The
 		 * rest we will pad on at the end.
 		 */
-		(void)snprintf(tmp, sizeof(tmp), "%dd", prec > 9 ? 9 : prec);
+		(void)snprintf(tmp, sizeof(tmp), "%dld", prec > 9 ? 9 : prec);
 		(void)strlcat(lfmt, tmp, sizeof(lfmt));
 
 		/*
@@ -868,7 +867,7 @@ format1(const struct stat *st,
 		 * Use the format, and then tack on any zeroes that
 		 * might be required to make up the requested precision.
 		 */
-		l = snprintf(buf, blen, lfmt, secs, nsecs);
+		l = snprintf(buf, blen, lfmt, (long long)secs, nsecs);
 		if (l >= blen)
 			return (l);
 		for (; prec > 9 && l < blen; prec--, l++)

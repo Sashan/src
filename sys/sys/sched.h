@@ -1,4 +1,4 @@
-/*	$OpenBSD: sched.h,v 1.58 2023/07/25 18:16:19 cheloha Exp $	*/
+/*	$OpenBSD: sched.h,v 1.61 2023/08/11 22:02:50 cheloha Exp $	*/
 /* $NetBSD: sched.h,v 1.2 1999/02/28 18:14:58 ross Exp $ */
 
 /*-
@@ -105,12 +105,12 @@ struct schedstate_percpu {
 	u_int spc_schedticks;		/* ticks for schedclock() */
 	u_int64_t spc_cp_time[CPUSTATES]; /* CPU state statistics */
 	u_char spc_curpriority;		/* usrpri of curproc */
-	int spc_rrticks;		/* ticks until roundrobin() */
 
+	struct clockintr *spc_itimer;	/* [o] itimer_update handle */
 	struct clockintr *spc_profclock; /* [o] profclock handle */
+	struct clockintr *spc_roundrobin; /* [o] roundrobin handle */
 
 	u_int spc_nrun;			/* procs on the run queues */
-	fixpt_t spc_ldavg;		/* shortest load avg. for this cpu */
 
 	volatile uint32_t spc_whichqs;
 	volatile u_int spc_spinning;	/* this cpu is currently spinning */
@@ -139,21 +139,22 @@ struct cpustats {
 #define SPCF_SHOULDHALT		0x0004	/* CPU should be vacated */
 #define SPCF_HALTED		0x0008	/* CPU has been halted */
 #define SPCF_PROFCLOCK		0x0010	/* profclock() was started */
+#define SPCF_ITIMER		0x0020	/* itimer_update() was started */
 
 #define	SCHED_PPQ	(128 / SCHED_NQS)	/* priorities per queue */
 #define NICE_WEIGHT 2			/* priorities per nice level */
 #define	ESTCPULIM(e) min((e), NICE_WEIGHT * PRIO_MAX - SCHED_PPQ)
 
+extern uint32_t roundrobin_period;
 extern int schedhz;			/* ideally: 16 */
-extern int rrticks_init;		/* ticks per roundrobin() */
 
 struct proc;
 void schedclock(struct proc *);
-struct cpu_info;
-void roundrobin(struct cpu_info *);
+void roundrobin(struct clockintr *, void *);
 void scheduler_start(void);
 void userret(struct proc *p);
 
+struct cpu_info;
 void sched_init_cpu(struct cpu_info *);
 void sched_idle(void *);
 void sched_exit(struct proc *);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhtest.c,v 1.8 2023/07/28 13:05:59 tb Exp $	*/
+/*	$OpenBSD: dhtest.c,v 1.12 2023/08/12 06:30:43 tb Exp $	*/
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -96,62 +96,69 @@ int
 main(int argc, char *argv[])
 {
 	BN_GENCB *_cb;
-	DH *a = NULL;
-	unsigned char *abuf = NULL;
-	int i, alen, aout;
+	DH *dh = NULL;
+	unsigned char *buf = NULL;
+	int i, buf_len, secret_len;
 	int ret = 1;
 
 	if ((_cb = BN_GENCB_new()) == NULL)
 		err(1, "BN_GENCB_new");
 
 	BN_GENCB_set(_cb, &cb, NULL);
-	if ((a = DH_new()) == NULL)
+	if ((dh = DH_new()) == NULL)
 		goto err;
 
-	if (!DH_generate_parameters_ex(a, 64, DH_GENERATOR_5, _cb))
+#ifdef OPENSSL_NO_ENGINE
+	if (DH_get0_engine(dh) != NULL) {
+		fprintf(stderr, "ENGINE was not NULL\n");
+		goto err;
+	}
+#endif
+
+	if (!DH_generate_parameters_ex(dh, 64, DH_GENERATOR_5, _cb))
 		goto err;
 
-	if (!DH_check(a, &i))
+	if (!DH_check(dh, &i))
 		goto err;
 	if (i & DH_CHECK_P_NOT_PRIME)
-		puts("p value is not prime\n");
+		printf("p value is not prime\n");
 	if (i & DH_CHECK_P_NOT_SAFE_PRIME)
-		puts("p value is not a safe prime\n");
+		printf("p value is not a safe prime\n");
 	if (i & DH_UNABLE_TO_CHECK_GENERATOR)
-		puts("unable to check the generator value\n");
+		printf("unable to check the generator value\n");
 	if (i & DH_NOT_SUITABLE_GENERATOR)
-		puts("the g value is not a generator\n");
+		printf("the g value is not a generator\n");
 
 	printf("\np    = ");
-	if (!BN_print_fp(stdout, DH_get0_p(a)))
+	if (!BN_print_fp(stdout, DH_get0_p(dh)))
 		goto err;
 	printf("\ng    = ");
-	if (!BN_print_fp(stdout, DH_get0_g(a)))
+	if (!BN_print_fp(stdout, DH_get0_g(dh)))
 		goto err;
 	printf("\n");
 
-	if (!DH_generate_key(a))
+	if (!DH_generate_key(dh))
 		goto err;
 	printf("pri1 = ");
-	if (!BN_print_fp(stdout, DH_get0_priv_key(a)))
+	if (!BN_print_fp(stdout, DH_get0_priv_key(dh)))
 		goto err;
 	printf("\npub1 = ");
-	if (!BN_print_fp(stdout, DH_get0_pub_key(a)))
+	if (!BN_print_fp(stdout, DH_get0_pub_key(dh)))
 		goto err;
 	printf("\n");
 
-	alen = DH_size(a);
-	if ((abuf = malloc(alen)) == NULL)
+	buf_len = DH_size(dh);
+	if ((buf = malloc(buf_len)) == NULL)
 		err(1, "malloc");
-	aout = DH_compute_key(abuf, DH_get0_pub_key(a), a);
+	secret_len = DH_compute_key(buf, DH_get0_pub_key(dh), dh);
 
 	printf("key1 = ");
-	for (i = 0; i < aout; i++) {
-		printf("%02X", abuf[i]);
+	for (i = 0; i < secret_len; i++) {
+		printf("%02X", buf[i]);
 	}
 	printf("\n");
 
-	if (aout < 4) {
+	if (secret_len < 4) {
 		fprintf(stderr, "Error in DH routines\n");
 		goto err;
 	}
@@ -160,8 +167,8 @@ main(int argc, char *argv[])
 err:
 	ERR_print_errors_fp(stderr);
 
-	free(abuf);
-	DH_free(a);
+	free(buf);
+	DH_free(dh);
 	BN_GENCB_free(_cb);
 
 	return (ret);

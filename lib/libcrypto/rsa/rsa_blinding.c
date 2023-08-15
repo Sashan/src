@@ -1,4 +1,4 @@
-/* $OpenBSD: bn_blind.c,v 1.32 2023/08/02 09:25:36 tb Exp $ */
+/* $OpenBSD: rsa_blinding.c,v 1.3 2023/08/09 12:09:06 tb Exp $ */
 /* ====================================================================
  * Copyright (c) 1998-2006 The OpenSSL Project.  All rights reserved.
  *
@@ -109,13 +109,16 @@
  * [including the GNU Public Licence.]
  */
 
+#include <pthread.h>
 #include <stdio.h>
 
 #include <openssl/opensslconf.h>
 
 #include <openssl/err.h>
+#include <openssl/rsa.h>
 
 #include "bn_local.h"
+#include "rsa_local.h"
 
 #define BN_BLINDING_COUNTER	32
 
@@ -124,47 +127,48 @@ struct bn_blinding_st {
 	BIGNUM *Ai;
 	BIGNUM *e;
 	BIGNUM *mod;
-	CRYPTO_THREADID tid;
+	pthread_t tid;
 	int counter;
 	BN_MONT_CTX *m_ctx;
 	int (*bn_mod_exp)(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
 	    const BIGNUM *m, BN_CTX *ctx, BN_MONT_CTX *m_ctx);
 };
 
-static BN_BLINDING *
-BN_BLINDING_new(const BIGNUM *A, const BIGNUM *Ai, BIGNUM *mod)
+BN_BLINDING *
+BN_BLINDING_new(const BIGNUM *e, const BIGNUM *mod, BN_CTX *ctx,
+    int (*bn_mod_exp)(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
+	const BIGNUM *m, BN_CTX *ctx, BN_MONT_CTX *m_ctx), BN_MONT_CTX *m_ctx)
 {
 	BN_BLINDING *ret = NULL;
 
 	if ((ret = calloc(1, sizeof(BN_BLINDING))) == NULL) {
 		BNerror(ERR_R_MALLOC_FAILURE);
-		return NULL;
+		goto err;
 	}
-	if (A != NULL) {
-		if ((ret->A = BN_dup(A)) == NULL)
-			goto err;
-	}
-	if (Ai != NULL) {
-		if ((ret->Ai = BN_dup(Ai)) == NULL)
-			goto err;
-	}
-
-	/* save a copy of mod in the BN_BLINDING structure */
+	if ((ret->A = BN_new()) == NULL)
+		goto err;
+	if ((ret->Ai = BN_new()) == NULL)
+		goto err;
+	if ((ret->e = BN_dup(e)) == NULL)
+		goto err;
 	if ((ret->mod = BN_dup(mod)) == NULL)
 		goto err;
 	if (BN_get_flags(mod, BN_FLG_CONSTTIME) != 0)
 		BN_set_flags(ret->mod, BN_FLG_CONSTTIME);
 
-	/* Set the counter to the special value -1
-	 * to indicate that this is never-used fresh blinding
-	 * that does not need updating before first use. */
-	ret->counter = -1;
-	CRYPTO_THREADID_current(&ret->tid);
-	return (ret);
+	/* Update on first use. */
+	ret->counter = BN_BLINDING_COUNTER - 1;
+	ret->tid = pthread_self();
+
+	if (bn_mod_exp != NULL)
+		ret->bn_mod_exp = bn_mod_exp;
+	if (m_ctx != NULL)
+		ret->m_ctx = m_ctx;
+
+	return ret;
 
  err:
-	if (ret != NULL)
-		BN_BLINDING_free(ret);
+	BN_BLINDING_free(ret);
 
 	return NULL;
 }
@@ -183,156 +187,175 @@ BN_BLINDING_free(BN_BLINDING *r)
 }
 
 static int
+BN_BLINDING_setup(BN_BLINDING *b, BN_CTX *ctx)
+{
+	if (!bn_rand_interval(b->A, 1, b->mod))
+		return 0;
+	if (BN_mod_inverse_ct(b->Ai, b->A, b->mod, ctx) == NULL)
+		return 0;
+
+	if (b->bn_mod_exp != NULL && b->m_ctx != NULL) {
+		if (!b->bn_mod_exp(b->A, b->A, b->e, b->mod, ctx, b->m_ctx))
+			return 0;
+	} else {
+		if (!BN_mod_exp_ct(b->A, b->A, b->e, b->mod, ctx))
+			return 0;
+	}
+
+	return 1;
+}
+
+static int
 BN_BLINDING_update(BN_BLINDING *b, BN_CTX *ctx)
 {
 	int ret = 0;
 
-	if (b->A == NULL || b->Ai == NULL) {
-		BNerror(BN_R_NOT_INITIALIZED);
-		goto err;
-	}
-
-	if (b->counter == -1)
+	if (++b->counter >= BN_BLINDING_COUNTER) {
+		if (!BN_BLINDING_setup(b, ctx))
+			goto err;
 		b->counter = 0;
-
-	if (++b->counter == BN_BLINDING_COUNTER && b->e != NULL) {
-		/* re-create blinding parameters */
-		if (!BN_BLINDING_create_param(b, NULL, NULL, ctx, NULL, NULL))
-			goto err;
 	} else {
-		if (!BN_mod_mul(b->A, b->A, b->A, b->mod, ctx))
+		if (!BN_mod_sqr(b->A, b->A, b->mod, ctx))
 			goto err;
-		if (!BN_mod_mul(b->Ai, b->Ai, b->Ai, b->mod, ctx))
+		if (!BN_mod_sqr(b->Ai, b->Ai, b->mod, ctx))
 			goto err;
 	}
 
 	ret = 1;
 
  err:
-	if (b->counter == BN_BLINDING_COUNTER)
-		b->counter = 0;
-
 	return ret;
 }
 
 int
-BN_BLINDING_convert(BIGNUM *n, BIGNUM *r, BN_BLINDING *b, BN_CTX *ctx)
+BN_BLINDING_convert(BIGNUM *n, BIGNUM *inv, BN_BLINDING *b, BN_CTX *ctx)
 {
-	int ret = 1;
+	int ret = 0;
 
-	if (b->A == NULL || b->Ai == NULL) {
-		BNerror(BN_R_NOT_INITIALIZED);
-		return 0;
+	if (!BN_BLINDING_update(b, ctx))
+		goto err;
+
+	if (inv != NULL) {
+		if (!bn_copy(inv, b->Ai))
+			goto err;
 	}
 
-	if (b->counter == -1)
-		/* Fresh blinding, doesn't need updating. */
-		b->counter = 0;
-	else if (!BN_BLINDING_update(b, ctx))
-		return 0;
+	ret = BN_mod_mul(n, n, b->A, b->mod, ctx);
 
-	if (r != NULL) {
-		if (!bn_copy(r, b->Ai))
-			ret = 0;
-	}
-
-	if (!BN_mod_mul(n, n, b->A, b->mod, ctx))
-		ret = 0;
-
+ err:
 	return ret;
 }
 
 int
-BN_BLINDING_invert(BIGNUM *n, const BIGNUM *r, BN_BLINDING *b, BN_CTX *ctx)
+BN_BLINDING_invert(BIGNUM *n, const BIGNUM *inv, BN_BLINDING *b, BN_CTX *ctx)
 {
-	int ret;
+	if (inv == NULL)
+		inv = b->Ai;
 
-	if (r != NULL)
-		ret = BN_mod_mul(n, n, r, b->mod, ctx);
-	else {
-		if (b->Ai == NULL) {
-			BNerror(BN_R_NOT_INITIALIZED);
-			return (0);
-		}
-		ret = BN_mod_mul(n, n, b->Ai, b->mod, ctx);
-	}
-
-	return ret;
+	return BN_mod_mul(n, n, inv, b->mod, ctx);
 }
 
-CRYPTO_THREADID *
-BN_BLINDING_thread_id(BN_BLINDING *b)
+int
+BN_BLINDING_is_local(BN_BLINDING *b)
 {
-	return &b->tid;
+	return pthread_equal(pthread_self(), b->tid) != 0;
+}
+
+static BIGNUM *
+rsa_get_public_exp(const BIGNUM *d, const BIGNUM *p, const BIGNUM *q,
+    BN_CTX *ctx)
+{
+	BIGNUM *ret = NULL, *r0, *r1, *r2;
+
+	if (d == NULL || p == NULL || q == NULL)
+		return NULL;
+
+	BN_CTX_start(ctx);
+	if ((r0 = BN_CTX_get(ctx)) == NULL)
+		goto err;
+	if ((r1 = BN_CTX_get(ctx)) == NULL)
+		goto err;
+	if ((r2 = BN_CTX_get(ctx)) == NULL)
+		goto err;
+
+	if (!BN_sub(r1, p, BN_value_one()))
+		goto err;
+	if (!BN_sub(r2, q, BN_value_one()))
+		goto err;
+	if (!BN_mul(r0, r1, r2, ctx))
+		goto err;
+
+	ret = BN_mod_inverse_ct(NULL, d, r0, ctx);
+err:
+	BN_CTX_end(ctx);
+	return ret;
 }
 
 BN_BLINDING *
-BN_BLINDING_create_param(BN_BLINDING *b, const BIGNUM *e, BIGNUM *m, BN_CTX *ctx,
-    int (*bn_mod_exp)(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
-	const BIGNUM *m, BN_CTX *ctx, BN_MONT_CTX *m_ctx), BN_MONT_CTX *m_ctx)
+RSA_setup_blinding(RSA *rsa, BN_CTX *in_ctx)
 {
+	BIGNUM *e = NULL;
+	BIGNUM n;
+	BN_CTX *ctx = NULL;
 	BN_BLINDING *ret = NULL;
-	int retry_counter = 32;
 
-	if (b == NULL)
-		ret = BN_BLINDING_new(NULL, NULL, m);
-	else
-		ret = b;
-
-	if (ret == NULL)
+	if ((ctx = in_ctx) == NULL)
+		ctx = BN_CTX_new();
+	if (ctx == NULL)
 		goto err;
 
-	if (ret->A == NULL && (ret->A = BN_new()) == NULL)
+	BN_CTX_start(ctx);
+
+	if ((e = rsa->e) == NULL)
+		e = rsa_get_public_exp(rsa->d, rsa->p, rsa->q, ctx);
+	if (e == NULL) {
+		RSAerror(RSA_R_NO_PUBLIC_EXPONENT);
 		goto err;
-	if (ret->Ai == NULL && (ret->Ai = BN_new()) == NULL)
-		goto err;
-
-	if (e != NULL) {
-		BN_free(ret->e);
-		ret->e = BN_dup(e);
-	}
-	if (ret->e == NULL)
-		goto err;
-
-	if (bn_mod_exp != NULL)
-		ret->bn_mod_exp = bn_mod_exp;
-	if (m_ctx != NULL)
-		ret->m_ctx = m_ctx;
-
-	do {
-		if (!BN_rand_range(ret->A, ret->mod))
-			goto err;
-		if (BN_mod_inverse_ct(ret->Ai, ret->A, ret->mod, ctx) == NULL) {
-			/* this should almost never happen for good RSA keys */
-			unsigned long error = ERR_peek_last_error();
-			if (ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
-				if (retry_counter-- == 0) {
-					BNerror(BN_R_TOO_MANY_ITERATIONS);
-					goto err;
-				}
-				ERR_clear_error();
-			} else
-				goto err;
-		} else
-			break;
-	} while (1);
-
-	if (ret->bn_mod_exp != NULL && ret->m_ctx != NULL) {
-		if (!ret->bn_mod_exp(ret->A, ret->A, ret->e, ret->mod,
-		    ctx, ret->m_ctx))
-			goto err;
-	} else {
-		if (!BN_mod_exp_ct(ret->A, ret->A, ret->e, ret->mod, ctx))
-			goto err;
 	}
 
-	return ret;
+	BN_init(&n);
+	BN_with_flags(&n, rsa->n, BN_FLG_CONSTTIME);
+
+	if ((ret = BN_BLINDING_new(e, &n, ctx, rsa->meth->bn_mod_exp,
+	    rsa->_method_mod_n)) == NULL) {
+		RSAerror(ERR_R_BN_LIB);
+		goto err;
+	}
 
  err:
-	if (b == NULL && ret != NULL) {
-		BN_BLINDING_free(ret);
-		ret = NULL;
-	}
+	BN_CTX_end(ctx);
+	if (ctx != in_ctx)
+		BN_CTX_free(ctx);
+	if (e != rsa->e)
+		BN_free(e);
 
 	return ret;
 }
+
+void
+RSA_blinding_off(RSA *rsa)
+{
+	BN_BLINDING_free(rsa->blinding);
+	rsa->blinding = NULL;
+	rsa->flags |= RSA_FLAG_NO_BLINDING;
+}
+LCRYPTO_ALIAS(RSA_blinding_off);
+
+int
+RSA_blinding_on(RSA *rsa, BN_CTX *ctx)
+{
+	int ret = 0;
+
+	if (rsa->blinding != NULL)
+		RSA_blinding_off(rsa);
+
+	rsa->blinding = RSA_setup_blinding(rsa, ctx);
+	if (rsa->blinding == NULL)
+		goto err;
+
+	rsa->flags &= ~RSA_FLAG_NO_BLINDING;
+	ret = 1;
+err:
+	return (ret);
+}
+LCRYPTO_ALIAS(RSA_blinding_on);

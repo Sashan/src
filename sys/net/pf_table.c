@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf_table.c,v 1.144 2023/01/05 10:06:58 sashan Exp $	*/
+/*	$OpenBSD: pf_table.c,v 1.145 2023/08/10 16:44:04 sashan Exp $	*/
 
 /*
  * Copyright (c) 2002 Cedric Berger

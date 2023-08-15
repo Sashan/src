@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.30 2022/12/06 00:11:23 jca Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.32 2023/08/14 13:49:42 miod Exp $	*/
 
 /*
  * Copyright (c) 2014 Patrick Wildt <patrick@blueri.se>
@@ -195,22 +195,12 @@ consinit(void)
 }
 
 void
-cpu_idle_enter(void)
-{
-}
-
-void
 cpu_idle_cycle(void)
 {
 	// Enable interrupts
 	intr_enable();
 	// XXX Data Sync Barrier? (Maybe SFENCE???)
 	__asm volatile("wfi");
-}
-
-void
-cpu_idle_leave(void)
-{
 }
 
 /* Dummy trapframe for proc0. */
@@ -881,7 +871,7 @@ process_kernel_args(void)
 		if (*cp++ == '\0')
 			return;
 
-	while (*cp != 0) {
+	while (*++cp != 0) {
 		switch (*cp) {
 		case 'a':
 			boothowto |= RB_ASKNAME;
@@ -899,7 +889,6 @@ process_kernel_args(void)
 			printf("unknown option `%c'\n", *cp);
 			break;
 		}
-		cp++;
 	}
 }
 

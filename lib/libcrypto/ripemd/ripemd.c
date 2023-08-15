@@ -1,4 +1,4 @@
-/* $OpenBSD: ripemd.c,v 1.1 2023/07/28 11:08:01 jsing Exp $ */
+/* $OpenBSD: ripemd.c,v 1.7 2023/08/10 12:27:35 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -125,30 +125,40 @@ __END_HIDDEN_DECLS
 #define RIPEMD160_D	0x10325476L
 #define RIPEMD160_E	0xC3D2E1F0L
 
-#include "rmdconst.h"
+#define KL0 0x00000000L
+#define KL1 0x5A827999L
+#define KL2 0x6ED9EBA1L
+#define KL3 0x8F1BBCDCL
+#define KL4 0xA953FD4EL
+
+#define KR0 0x50A28BE6L
+#define KR1 0x5C4DD124L
+#define KR2 0x6D703EF3L
+#define KR3 0x7A6D76E9L
+#define KR4 0x00000000L
 
 #define RIP1(a,b,c,d,e,w,s) { \
-	a+=F1(b,c,d)+X(w); \
+	a+=F1(b,c,d)+w; \
         a=ROTATE(a,s)+e; \
         c=ROTATE(c,10); }
 
 #define RIP2(a,b,c,d,e,w,s,K) { \
-	a+=F2(b,c,d)+X(w)+K; \
+	a+=F2(b,c,d)+w+K; \
         a=ROTATE(a,s)+e; \
         c=ROTATE(c,10); }
 
 #define RIP3(a,b,c,d,e,w,s,K) { \
-	a+=F3(b,c,d)+X(w)+K; \
+	a+=F3(b,c,d)+w+K; \
         a=ROTATE(a,s)+e; \
         c=ROTATE(c,10); }
 
 #define RIP4(a,b,c,d,e,w,s,K) { \
-	a+=F4(b,c,d)+X(w)+K; \
+	a+=F4(b,c,d)+w+K; \
         a=ROTATE(a,s)+e; \
         c=ROTATE(c,10); }
 
 #define RIP5(a,b,c,d,e,w,s,K) { \
-	a+=F5(b,c,d)+X(w)+K; \
+	a+=F5(b,c,d)+w+K; \
         a=ROTATE(a,s)+e; \
         c=ROTATE(c,10); }
 
@@ -172,24 +182,14 @@ RIPEMD160_Init(RIPEMD160_CTX *c)
 }
 
 #ifndef ripemd160_block_data_order
-#ifdef X
-#undef X
-#endif
 void
 ripemd160_block_data_order(RIPEMD160_CTX *ctx, const void *p, size_t num)
 {
 	const unsigned char *data = p;
-	unsigned MD32_REG_T A, B,C, D, E;
-	unsigned MD32_REG_T a, b,c, d,e, l;
-#ifndef MD32_XARRAY
-	/* See comment in crypto/sha/sha_locl.h for details. */
-	unsigned MD32_REG_T	XX0, XX1, XX2, XX3, XX4, XX5, XX6, XX7,
-	    XX8, XX9, XX10, XX11, XX12, XX13, XX14, XX15;
-# define X(i)	XX##i
-#else
-	RIPEMD160_LONG	XX[16];
-# define X(i)	XX[i]
-#endif
+	unsigned int A, B, C, D, E;
+	unsigned int a, b, c, d, e, l;
+	unsigned int X0, X1, X2, X3, X4, X5, X6, X7,
+	    X8, X9, X10, X11, X12, X13, X14, X15;
 
 	for (; num--; ) {
 
@@ -200,120 +200,121 @@ ripemd160_block_data_order(RIPEMD160_CTX *ctx, const void *p, size_t num)
 		E = ctx->E;
 
 		HOST_c2l(data, l);
-		X( 0) = l;HOST_c2l(data, l);
-		X( 1) = l;
-		RIP1(A, B,C, D,E, WL00, SL00);
+		X0 = l;
 		HOST_c2l(data, l);
-		X( 2) = l;
-		RIP1(E, A,B, C,D, WL01, SL01);
+		X1 = l;
+		RIP1(A, B, C, D, E, X0, 11);
 		HOST_c2l(data, l);
-		X( 3) = l;
-		RIP1(D, E,A, B,C, WL02, SL02);
+		X2 = l;
+		RIP1(E, A, B, C, D, X1, 14);
 		HOST_c2l(data, l);
-		X( 4) = l;
-		RIP1(C, D,E, A,B, WL03, SL03);
+		X3 = l;
+		RIP1(D, E, A, B, C, X2, 15);
 		HOST_c2l(data, l);
-		X( 5) = l;
-		RIP1(B, C,D, E,A, WL04, SL04);
+		X4 = l;
+		RIP1(C, D, E, A, B, X3, 12);
 		HOST_c2l(data, l);
-		X( 6) = l;
-		RIP1(A, B,C, D,E, WL05, SL05);
+		X5 = l;
+		RIP1(B, C, D, E, A, X4, 5);
 		HOST_c2l(data, l);
-		X( 7) = l;
-		RIP1(E, A,B, C,D, WL06, SL06);
+		X6 = l;
+		RIP1(A, B, C, D, E, X5, 8);
 		HOST_c2l(data, l);
-		X( 8) = l;
-		RIP1(D, E,A, B,C, WL07, SL07);
+		X7 = l;
+		RIP1(E, A, B, C, D, X6, 7);
 		HOST_c2l(data, l);
-		X( 9) = l;
-		RIP1(C, D,E, A,B, WL08, SL08);
+		X8 = l;
+		RIP1(D, E, A, B, C, X7, 9);
 		HOST_c2l(data, l);
-		X(10) = l;
-		RIP1(B, C,D, E,A, WL09, SL09);
+		X9 = l;
+		RIP1(C, D, E, A, B, X8, 11);
 		HOST_c2l(data, l);
-		X(11) = l;
-		RIP1(A, B,C, D,E, WL10, SL10);
+		X10 = l;
+		RIP1(B, C, D, E, A, X9, 13);
 		HOST_c2l(data, l);
-		X(12) = l;
-		RIP1(E, A,B, C,D, WL11, SL11);
+		X11 = l;
+		RIP1(A, B, C, D, E, X10, 14);
 		HOST_c2l(data, l);
-		X(13) = l;
-		RIP1(D, E,A, B,C, WL12, SL12);
+		X12 = l;
+		RIP1(E, A, B, C, D, X11, 15);
 		HOST_c2l(data, l);
-		X(14) = l;
-		RIP1(C, D,E, A,B, WL13, SL13);
+		X13 = l;
+		RIP1(D, E, A, B, C, X12, 6);
 		HOST_c2l(data, l);
-		X(15) = l;
-		RIP1(B, C,D, E,A, WL14, SL14);
-		RIP1(A, B,C, D,E, WL15, SL15);
+		X14 = l;
+		RIP1(C, D, E, A, B, X13, 7);
+		HOST_c2l(data, l);
+		X15 = l;
+		RIP1(B, C, D, E, A, X14, 9);
+		RIP1(A, B, C, D, E, X15, 8);
 
-		RIP2(E, A,B, C,D, WL16, SL16, KL1);
-		RIP2(D, E,A, B,C, WL17, SL17, KL1);
-		RIP2(C, D,E, A,B, WL18, SL18, KL1);
-		RIP2(B, C,D, E,A, WL19, SL19, KL1);
-		RIP2(A, B,C, D,E, WL20, SL20, KL1);
-		RIP2(E, A,B, C,D, WL21, SL21, KL1);
-		RIP2(D, E,A, B,C, WL22, SL22, KL1);
-		RIP2(C, D,E, A,B, WL23, SL23, KL1);
-		RIP2(B, C,D, E,A, WL24, SL24, KL1);
-		RIP2(A, B,C, D,E, WL25, SL25, KL1);
-		RIP2(E, A,B, C,D, WL26, SL26, KL1);
-		RIP2(D, E,A, B,C, WL27, SL27, KL1);
-		RIP2(C, D,E, A,B, WL28, SL28, KL1);
-		RIP2(B, C,D, E,A, WL29, SL29, KL1);
-		RIP2(A, B,C, D,E, WL30, SL30, KL1);
-		RIP2(E, A,B, C,D, WL31, SL31, KL1);
+		RIP2(E, A, B, C, D, X7, 7, KL1);
+		RIP2(D, E, A, B, C, X4, 6, KL1);
+		RIP2(C, D, E, A, B, X13, 8, KL1);
+		RIP2(B, C, D, E, A, X1, 13, KL1);
+		RIP2(A, B, C, D, E, X10, 11, KL1);
+		RIP2(E, A, B, C, D, X6, 9, KL1);
+		RIP2(D, E, A, B, C, X15, 7, KL1);
+		RIP2(C, D, E, A, B, X3, 15, KL1);
+		RIP2(B, C, D, E, A, X12, 7, KL1);
+		RIP2(A, B, C, D, E, X0, 12, KL1);
+		RIP2(E, A, B, C, D, X9, 15, KL1);
+		RIP2(D, E, A, B, C, X5, 9, KL1);
+		RIP2(C, D, E, A, B, X2, 11, KL1);
+		RIP2(B, C, D, E, A, X14, 7, KL1);
+		RIP2(A, B, C, D, E, X11, 13, KL1);
+		RIP2(E, A, B, C, D, X8, 12, KL1);
 
-		RIP3(D, E,A, B,C, WL32, SL32, KL2);
-		RIP3(C, D,E, A,B, WL33, SL33, KL2);
-		RIP3(B, C,D, E,A, WL34, SL34, KL2);
-		RIP3(A, B,C, D,E, WL35, SL35, KL2);
-		RIP3(E, A,B, C,D, WL36, SL36, KL2);
-		RIP3(D, E,A, B,C, WL37, SL37, KL2);
-		RIP3(C, D,E, A,B, WL38, SL38, KL2);
-		RIP3(B, C,D, E,A, WL39, SL39, KL2);
-		RIP3(A, B,C, D,E, WL40, SL40, KL2);
-		RIP3(E, A,B, C,D, WL41, SL41, KL2);
-		RIP3(D, E,A, B,C, WL42, SL42, KL2);
-		RIP3(C, D,E, A,B, WL43, SL43, KL2);
-		RIP3(B, C,D, E,A, WL44, SL44, KL2);
-		RIP3(A, B,C, D,E, WL45, SL45, KL2);
-		RIP3(E, A,B, C,D, WL46, SL46, KL2);
-		RIP3(D, E,A, B,C, WL47, SL47, KL2);
+		RIP3(D, E, A, B, C, X3, 11, KL2);
+		RIP3(C, D, E, A, B, X10, 13, KL2);
+		RIP3(B, C, D, E, A, X14, 6, KL2);
+		RIP3(A, B, C, D, E, X4, 7, KL2);
+		RIP3(E, A, B, C, D, X9, 14, KL2);
+		RIP3(D, E, A, B, C, X15, 9, KL2);
+		RIP3(C, D, E, A, B, X8, 13, KL2);
+		RIP3(B, C, D, E, A, X1, 15, KL2);
+		RIP3(A, B, C, D, E, X2, 14, KL2);
+		RIP3(E, A, B, C, D, X7, 8, KL2);
+		RIP3(D, E, A, B, C, X0, 13, KL2);
+		RIP3(C, D, E, A, B, X6, 6, KL2);
+		RIP3(B, C, D, E, A, X13, 5, KL2);
+		RIP3(A, B, C, D, E, X11, 12, KL2);
+		RIP3(E, A, B, C, D, X5, 7, KL2);
+		RIP3(D, E, A, B, C, X12, 5, KL2);
 
-		RIP4(C, D,E, A,B, WL48, SL48, KL3);
-		RIP4(B, C,D, E,A, WL49, SL49, KL3);
-		RIP4(A, B,C, D,E, WL50, SL50, KL3);
-		RIP4(E, A,B, C,D, WL51, SL51, KL3);
-		RIP4(D, E,A, B,C, WL52, SL52, KL3);
-		RIP4(C, D,E, A,B, WL53, SL53, KL3);
-		RIP4(B, C,D, E,A, WL54, SL54, KL3);
-		RIP4(A, B,C, D,E, WL55, SL55, KL3);
-		RIP4(E, A,B, C,D, WL56, SL56, KL3);
-		RIP4(D, E,A, B,C, WL57, SL57, KL3);
-		RIP4(C, D,E, A,B, WL58, SL58, KL3);
-		RIP4(B, C,D, E,A, WL59, SL59, KL3);
-		RIP4(A, B,C, D,E, WL60, SL60, KL3);
-		RIP4(E, A,B, C,D, WL61, SL61, KL3);
-		RIP4(D, E,A, B,C, WL62, SL62, KL3);
-		RIP4(C, D,E, A,B, WL63, SL63, KL3);
+		RIP4(C, D, E, A, B, X1, 11, KL3);
+		RIP4(B, C, D, E, A, X9, 12, KL3);
+		RIP4(A, B, C, D, E, X11, 14, KL3);
+		RIP4(E, A, B, C, D, X10, 15, KL3);
+		RIP4(D, E, A, B, C, X0, 14, KL3);
+		RIP4(C, D, E, A, B, X8, 15, KL3);
+		RIP4(B, C, D, E, A, X12, 9, KL3);
+		RIP4(A, B, C, D, E, X4, 8, KL3);
+		RIP4(E, A, B, C, D, X13, 9, KL3);
+		RIP4(D, E, A, B, C, X3, 14, KL3);
+		RIP4(C, D, E, A, B, X7, 5, KL3);
+		RIP4(B, C, D, E, A, X15, 6, KL3);
+		RIP4(A, B, C, D, E, X14, 8, KL3);
+		RIP4(E, A, B, C, D, X5, 6, KL3);
+		RIP4(D, E, A, B, C, X6, 5, KL3);
+		RIP4(C, D, E, A, B, X2, 12, KL3);
 
-		RIP5(B, C,D, E,A, WL64, SL64, KL4);
-		RIP5(A, B,C, D,E, WL65, SL65, KL4);
-		RIP5(E, A,B, C,D, WL66, SL66, KL4);
-		RIP5(D, E,A, B,C, WL67, SL67, KL4);
-		RIP5(C, D,E, A,B, WL68, SL68, KL4);
-		RIP5(B, C,D, E,A, WL69, SL69, KL4);
-		RIP5(A, B,C, D,E, WL70, SL70, KL4);
-		RIP5(E, A,B, C,D, WL71, SL71, KL4);
-		RIP5(D, E,A, B,C, WL72, SL72, KL4);
-		RIP5(C, D,E, A,B, WL73, SL73, KL4);
-		RIP5(B, C,D, E,A, WL74, SL74, KL4);
-		RIP5(A, B,C, D,E, WL75, SL75, KL4);
-		RIP5(E, A,B, C,D, WL76, SL76, KL4);
-		RIP5(D, E,A, B,C, WL77, SL77, KL4);
-		RIP5(C, D,E, A,B, WL78, SL78, KL4);
-		RIP5(B, C,D, E,A, WL79, SL79, KL4);
+		RIP5(B, C, D, E, A, X4, 9, KL4);
+		RIP5(A, B, C, D, E, X0, 15, KL4);
+		RIP5(E, A, B, C, D, X5, 5, KL4);
+		RIP5(D, E, A, B, C, X9, 11, KL4);
+		RIP5(C, D, E, A, B, X7, 6, KL4);
+		RIP5(B, C, D, E, A, X12, 8, KL4);
+		RIP5(A, B, C, D, E, X2, 13, KL4);
+		RIP5(E, A, B, C, D, X10, 12, KL4);
+		RIP5(D, E, A, B, C, X14, 5, KL4);
+		RIP5(C, D, E, A, B, X1, 12, KL4);
+		RIP5(B, C, D, E, A, X3, 13, KL4);
+		RIP5(A, B, C, D, E, X8, 14, KL4);
+		RIP5(E, A, B, C, D, X11, 11, KL4);
+		RIP5(D, E, A, B, C, X6, 8, KL4);
+		RIP5(C, D, E, A, B, X15, 5, KL4);
+		RIP5(B, C, D, E, A, X13, 6, KL4);
 
 		a = A;
 		b = B;
@@ -327,90 +328,90 @@ ripemd160_block_data_order(RIPEMD160_CTX *ctx, const void *p, size_t num)
 		D = ctx->D;
 		E = ctx->E;
 
-		RIP5(A, B,C, D,E, WR00, SR00, KR0);
-		RIP5(E, A,B, C,D, WR01, SR01, KR0);
-		RIP5(D, E,A, B,C, WR02, SR02, KR0);
-		RIP5(C, D,E, A,B, WR03, SR03, KR0);
-		RIP5(B, C,D, E,A, WR04, SR04, KR0);
-		RIP5(A, B,C, D,E, WR05, SR05, KR0);
-		RIP5(E, A,B, C,D, WR06, SR06, KR0);
-		RIP5(D, E,A, B,C, WR07, SR07, KR0);
-		RIP5(C, D,E, A,B, WR08, SR08, KR0);
-		RIP5(B, C,D, E,A, WR09, SR09, KR0);
-		RIP5(A, B,C, D,E, WR10, SR10, KR0);
-		RIP5(E, A,B, C,D, WR11, SR11, KR0);
-		RIP5(D, E,A, B,C, WR12, SR12, KR0);
-		RIP5(C, D,E, A,B, WR13, SR13, KR0);
-		RIP5(B, C,D, E,A, WR14, SR14, KR0);
-		RIP5(A, B,C, D,E, WR15, SR15, KR0);
+		RIP5(A, B, C, D, E, X5, 8, KR0);
+		RIP5(E, A, B, C, D, X14, 9, KR0);
+		RIP5(D, E, A, B, C, X7, 9, KR0);
+		RIP5(C, D, E, A, B, X0, 11, KR0);
+		RIP5(B, C, D, E, A, X9, 13, KR0);
+		RIP5(A, B, C, D, E, X2, 15, KR0);
+		RIP5(E, A, B, C, D, X11, 15, KR0);
+		RIP5(D, E, A, B, C, X4, 5, KR0);
+		RIP5(C, D, E, A, B, X13, 7, KR0);
+		RIP5(B, C, D, E, A, X6, 7, KR0);
+		RIP5(A, B, C, D, E, X15, 8, KR0);
+		RIP5(E, A, B, C, D, X8, 11, KR0);
+		RIP5(D, E, A, B, C, X1, 14, KR0);
+		RIP5(C, D, E, A, B, X10, 14, KR0);
+		RIP5(B, C, D, E, A, X3, 12, KR0);
+		RIP5(A, B, C, D, E, X12, 6, KR0);
 
-		RIP4(E, A,B, C,D, WR16, SR16, KR1);
-		RIP4(D, E,A, B,C, WR17, SR17, KR1);
-		RIP4(C, D,E, A,B, WR18, SR18, KR1);
-		RIP4(B, C,D, E,A, WR19, SR19, KR1);
-		RIP4(A, B,C, D,E, WR20, SR20, KR1);
-		RIP4(E, A,B, C,D, WR21, SR21, KR1);
-		RIP4(D, E,A, B,C, WR22, SR22, KR1);
-		RIP4(C, D,E, A,B, WR23, SR23, KR1);
-		RIP4(B, C,D, E,A, WR24, SR24, KR1);
-		RIP4(A, B,C, D,E, WR25, SR25, KR1);
-		RIP4(E, A,B, C,D, WR26, SR26, KR1);
-		RIP4(D, E,A, B,C, WR27, SR27, KR1);
-		RIP4(C, D,E, A,B, WR28, SR28, KR1);
-		RIP4(B, C,D, E,A, WR29, SR29, KR1);
-		RIP4(A, B,C, D,E, WR30, SR30, KR1);
-		RIP4(E, A,B, C,D, WR31, SR31, KR1);
+		RIP4(E, A, B, C, D, X6, 9, KR1);
+		RIP4(D, E, A, B, C, X11, 13, KR1);
+		RIP4(C, D, E, A, B, X3, 15, KR1);
+		RIP4(B, C, D, E, A, X7, 7, KR1);
+		RIP4(A, B, C, D, E, X0, 12, KR1);
+		RIP4(E, A, B, C, D, X13, 8, KR1);
+		RIP4(D, E, A, B, C, X5, 9, KR1);
+		RIP4(C, D, E, A, B, X10, 11, KR1);
+		RIP4(B, C, D, E, A, X14, 7, KR1);
+		RIP4(A, B, C, D, E, X15, 7, KR1);
+		RIP4(E, A, B, C, D, X8, 12, KR1);
+		RIP4(D, E, A, B, C, X12, 7, KR1);
+		RIP4(C, D, E, A, B, X4, 6, KR1);
+		RIP4(B, C, D, E, A, X9, 15, KR1);
+		RIP4(A, B, C, D, E, X1, 13, KR1);
+		RIP4(E, A, B, C, D, X2, 11, KR1);
 
-		RIP3(D, E,A, B,C, WR32, SR32, KR2);
-		RIP3(C, D,E, A,B, WR33, SR33, KR2);
-		RIP3(B, C,D, E,A, WR34, SR34, KR2);
-		RIP3(A, B,C, D,E, WR35, SR35, KR2);
-		RIP3(E, A,B, C,D, WR36, SR36, KR2);
-		RIP3(D, E,A, B,C, WR37, SR37, KR2);
-		RIP3(C, D,E, A,B, WR38, SR38, KR2);
-		RIP3(B, C,D, E,A, WR39, SR39, KR2);
-		RIP3(A, B,C, D,E, WR40, SR40, KR2);
-		RIP3(E, A,B, C,D, WR41, SR41, KR2);
-		RIP3(D, E,A, B,C, WR42, SR42, KR2);
-		RIP3(C, D,E, A,B, WR43, SR43, KR2);
-		RIP3(B, C,D, E,A, WR44, SR44, KR2);
-		RIP3(A, B,C, D,E, WR45, SR45, KR2);
-		RIP3(E, A,B, C,D, WR46, SR46, KR2);
-		RIP3(D, E,A, B,C, WR47, SR47, KR2);
+		RIP3(D, E, A, B, C, X15, 9, KR2);
+		RIP3(C, D, E, A, B, X5, 7, KR2);
+		RIP3(B, C, D, E, A, X1, 15, KR2);
+		RIP3(A, B, C, D, E, X3, 11, KR2);
+		RIP3(E, A, B, C, D, X7, 8, KR2);
+		RIP3(D, E, A, B, C, X14, 6, KR2);
+		RIP3(C, D, E, A, B, X6, 6, KR2);
+		RIP3(B, C, D, E, A, X9, 14, KR2);
+		RIP3(A, B, C, D, E, X11, 12, KR2);
+		RIP3(E, A, B, C, D, X8, 13, KR2);
+		RIP3(D, E, A, B, C, X12, 5, KR2);
+		RIP3(C, D, E, A, B, X2, 14, KR2);
+		RIP3(B, C, D, E, A, X10, 13, KR2);
+		RIP3(A, B, C, D, E, X0, 13, KR2);
+		RIP3(E, A, B, C, D, X4, 7, KR2);
+		RIP3(D, E, A, B, C, X13, 5, KR2);
 
-		RIP2(C, D,E, A,B, WR48, SR48, KR3);
-		RIP2(B, C,D, E,A, WR49, SR49, KR3);
-		RIP2(A, B,C, D,E, WR50, SR50, KR3);
-		RIP2(E, A,B, C,D, WR51, SR51, KR3);
-		RIP2(D, E,A, B,C, WR52, SR52, KR3);
-		RIP2(C, D,E, A,B, WR53, SR53, KR3);
-		RIP2(B, C,D, E,A, WR54, SR54, KR3);
-		RIP2(A, B,C, D,E, WR55, SR55, KR3);
-		RIP2(E, A,B, C,D, WR56, SR56, KR3);
-		RIP2(D, E,A, B,C, WR57, SR57, KR3);
-		RIP2(C, D,E, A,B, WR58, SR58, KR3);
-		RIP2(B, C,D, E,A, WR59, SR59, KR3);
-		RIP2(A, B,C, D,E, WR60, SR60, KR3);
-		RIP2(E, A,B, C,D, WR61, SR61, KR3);
-		RIP2(D, E,A, B,C, WR62, SR62, KR3);
-		RIP2(C, D,E, A,B, WR63, SR63, KR3);
+		RIP2(C, D, E, A, B, X8, 15, KR3);
+		RIP2(B, C, D, E, A, X6, 5, KR3);
+		RIP2(A, B, C, D, E, X4, 8, KR3);
+		RIP2(E, A, B, C, D, X1, 11, KR3);
+		RIP2(D, E, A, B, C, X3, 14, KR3);
+		RIP2(C, D, E, A, B, X11, 14, KR3);
+		RIP2(B, C, D, E, A, X15, 6, KR3);
+		RIP2(A, B, C, D, E, X0, 14, KR3);
+		RIP2(E, A, B, C, D, X5, 6, KR3);
+		RIP2(D, E, A, B, C, X12, 9, KR3);
+		RIP2(C, D, E, A, B, X2, 12, KR3);
+		RIP2(B, C, D, E, A, X13, 9, KR3);
+		RIP2(A, B, C, D, E, X9, 12, KR3);
+		RIP2(E, A, B, C, D, X7, 5, KR3);
+		RIP2(D, E, A, B, C, X10, 15, KR3);
+		RIP2(C, D, E, A, B, X14, 8, KR3);
 
-		RIP1(B, C,D, E,A, WR64, SR64);
-		RIP1(A, B,C, D,E, WR65, SR65);
-		RIP1(E, A,B, C,D, WR66, SR66);
-		RIP1(D, E,A, B,C, WR67, SR67);
-		RIP1(C, D,E, A,B, WR68, SR68);
-		RIP1(B, C,D, E,A, WR69, SR69);
-		RIP1(A, B,C, D,E, WR70, SR70);
-		RIP1(E, A,B, C,D, WR71, SR71);
-		RIP1(D, E,A, B,C, WR72, SR72);
-		RIP1(C, D,E, A,B, WR73, SR73);
-		RIP1(B, C,D, E,A, WR74, SR74);
-		RIP1(A, B,C, D,E, WR75, SR75);
-		RIP1(E, A,B, C,D, WR76, SR76);
-		RIP1(D, E,A, B,C, WR77, SR77);
-		RIP1(C, D,E, A,B, WR78, SR78);
-		RIP1(B, C,D, E,A, WR79, SR79);
+		RIP1(B, C, D, E, A, X12, 8);
+		RIP1(A, B, C, D, E, X15, 5);
+		RIP1(E, A, B, C, D, X10, 12);
+		RIP1(D, E, A, B, C, X4, 9);
+		RIP1(C, D, E, A, B, X1, 12);
+		RIP1(B, C, D, E, A, X5, 5);
+		RIP1(A, B, C, D, E, X8, 14);
+		RIP1(E, A, B, C, D, X7, 6);
+		RIP1(D, E, A, B, C, X6, 8);
+		RIP1(C, D, E, A, B, X2, 13);
+		RIP1(B, C, D, E, A, X13, 6);
+		RIP1(A, B, C, D, E, X14, 5);
+		RIP1(E, A, B, C, D, X0, 15);
+		RIP1(D, E, A, B, C, X3, 13);
+		RIP1(C, D, E, A, B, X9, 11);
+		RIP1(B, C, D, E, A, X11, 11);
 
 		D = ctx->B + c + D;
 		ctx->B = ctx->C + d + E;
