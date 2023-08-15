@@ -1448,13 +1448,18 @@ pf_drop_unused_tables(struct pf_trans *t)
 	}
 	RB_FOREACH(ta, pf_anchor_global, &t->pftina_rc.anchors) {
 		RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, tktw) {
+			log(LOG_DEBUG, "%s %s@%s [%d] ", __func__,
+			    tkt->pfrkt_name, ta->path,
+			    tkt->pfrkt_refcnt[PFR_REFCNT_RULE]);
 			if (tkt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0 &&
 			    (tkt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
+				log(LOG_DEBUG, "removed");
 				RB_REMOVE(pfr_ktablehead, &ta->ktables, tkt);
 				ta->tables--;
 				SLIST_INSERT_HEAD(&t->pftina_garbage, tkt,
 				    pfrkt_workq);
 			}
+			log(LOG_DEBUG, "\n");
 		}
 	}
 }
@@ -3171,6 +3176,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			default:
 				free(table, M_PF, sizeof(*table));
 				free(ioe, M_PF, sizeof(*ioe));
+				log(LOG_DEBUG, "%s [i] unknown type\n", __func__);
 				error = EINVAL;
 				pf_rollback_trans(t);
 				goto fail;

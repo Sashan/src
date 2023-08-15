@@ -1932,7 +1932,6 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
 			kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
-
 			log(LOG_DEBUG, "%s %u@%s src %s@%s <-> %s@%s\n",
 			    __func__,
 			    r->nr, ta->path,
@@ -1962,7 +1961,6 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
 			kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
-
 			log(LOG_DEBUG, "%s %u@%s dst %s@%s <-> %s@%s\n",
 			    __func__,
 			    r->nr, ta->path,
@@ -2740,8 +2738,13 @@ pfr_attach_table(struct pf_rules_container *rc, struct pf_ruleset *rs,
 	struct pfr_table	 tbl;
 	struct pf_anchor	*a = rs->anchor;
 
+	log(LOG_DEBUG, "%s %s@%s\n", __func__, name,
+	    rs->anchor == NULL ? "" : rs->anchor->path);
 	bzero(&tbl, sizeof(tbl));
 	strlcpy(tbl.pfrt_name, name, sizeof(tbl.pfrt_name));
+	strlcpy(tbl.pfrt_anchor,
+	    rs->anchor == NULL ? "" : rs->anchor->path,
+	    sizeof (tbl.pfrt_anchor));
 
 	/*
 	 * try to find desired table in anchor and its ancestors
