@@ -1907,11 +1907,50 @@ _skip:
 }
 
 void
-pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
+pfr_walk_anchor_subtree(struct pf_anchor *sub_tree, struct pfr_ktable *kt,
+    void(*f)(struct pf_anchor *, struct pfr_ktable *))
+{
+	struct pf_anchor *recursive_a, *aux_a;
+	TAILQ_HEAD(, pf_anchor) recursive_l, aux;
+
+	f(sub_tree, kt);
+
+	/*
+	 * unwind recursion into lists so we can descent to leaf child without
+	 * risking stack overflow.
+	 */
+	TAILQ_INIT(&recursive_l);
+	TAILQ_INIT(&aux);
+
+	log(LOG_DEBUG, "%s %s\n", __func__, sub_tree->path);
+	RB_FOREACH(aux_a, pf_anchor_node, &sub_tree->children) {
+		TAILQ_INSERT_HEAD(&recursive_l, aux_a, workq);
+	}
+
+	while (!TAILQ_EMPTY(&recursive_l)) {
+		TAILQ_FOREACH(recursive_a, &recursive_l, workq) {
+			RB_FOREACH(aux_a, pf_anchor_node,
+			    &recursive_a->children) {
+				TAILQ_INSERT_HEAD(&aux, aux_a, workq);
+			}
+			log(LOG_DEBUG, "%s %s%s\n", __func__,
+			    kt->pfrkt_name, recursive_a->path);
+			f(recursive_a, kt);
+		}
+		/*
+		 * move to the next level twoards leaf in anchor tree.
+		 */
+		TAILQ_INIT(&recursive_l);
+		TAILQ_CONCAT(&recursive_l, &aux, workq);
+	}
+}
+
+void
+pfr_update_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 {
 	struct pf_rule *r;
 
-	TAILQ_FOREACH(r, ta->ruleset.rules.ptr, entries) {
+	TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
 		if (r->src.addr.p.tbl != kt &&
 		    PF_MATCH_KTABLE(&r->src.addr, kt)) {
 			struct pfr_ktable *src_kt;
@@ -1925,22 +1964,16 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			r->src.addr.p.tbl = kt;
 			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
 
-			/*
-			 * If rule refers the table, then table should become
-			 * active.
-			 */
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
-			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
-			kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
 			log(LOG_DEBUG, "%s %u@%s src %s@%s <-> %s@%s\n",
 			    __func__,
-			    r->nr, ta->path,
+			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    src_kt->pfrkt_name, src_kt->pfrkt_anchor);
 		} else if (r->src.addr.p.tbl != NULL) {
 			log(LOG_DEBUG, "%s %u@%s src %s@%s != %s@%s\n",
 			    __func__,
-			    r->nr, ta->path,
+			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    r->src.addr.p.tbl->pfrkt_name,
 			    r->src.addr.p.tbl->pfrkt_anchor);
@@ -1959,17 +1992,15 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
 
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
-			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
-			kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
 			log(LOG_DEBUG, "%s %u@%s dst %s@%s <-> %s@%s\n",
 			    __func__,
-			    r->nr, ta->path,
+			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    dst_kt->pfrkt_name, dst_kt->pfrkt_anchor);
 		} if (r->dst.addr.p.tbl != NULL) {
 			log(LOG_DEBUG, "%s %u@%s dst %s@%s <-> %s@%s\n",
 			    __func__,
-			    r->nr, ta->path,
+			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    r->dst.addr.p.tbl->pfrkt_name,
 			    r->dst.addr.p.tbl->pfrkt_anchor);
@@ -1988,18 +2019,16 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
 
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
-			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
-			kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
 
 			log(LOG_DEBUG, "%s %u@%s rdr %s@%s <-> %s@%s\n",
 			    __func__,
-			    r->nr, ta->path,
+			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    rdr_kt->pfrkt_name, rdr_kt->pfrkt_anchor);
 		} else if (r->rdr.addr.p.tbl != NULL) {
 			log(LOG_DEBUG, "%s %u@%s rdr %s@%s <-> %s@%s\n",
 			    __func__,
-			    r->nr, ta->path,
+			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    r->rdr.addr.p.tbl->pfrkt_name,
 			    r->rdr.addr.p.tbl->pfrkt_anchor);
@@ -2018,18 +2047,16 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
 
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
-			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
-			kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
 
 			log(LOG_DEBUG, "%s %u@%s nat %s@%s <-> %s@%s\n",
 			    __func__,
-			    r->nr, ta->path,
+			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    nat_kt->pfrkt_name, nat_kt->pfrkt_anchor);
 		} else if (r->nat.addr.p.tbl != NULL) {
 			log(LOG_DEBUG, "%s %u@%s nat %s@%s <-> %s@%s\n",
 			    __func__,
-			    r->nr, ta->path,
+			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    r->nat.addr.p.tbl->pfrkt_name,
 			    r->nat.addr.p.tbl->pfrkt_anchor);
@@ -2048,18 +2075,16 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
 
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
-			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
-			kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
 
 			log(LOG_DEBUG, "%s %u@%s route %s@%s <-> %s@%s\n",
 			    __func__,
-			    r->nr, ta->path,
+			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    route_kt->pfrkt_name, route_kt->pfrkt_anchor);
 		} else if (r->route.addr.p.tbl != NULL) {
 			log(LOG_DEBUG, "%s %u@%s route %s@%s <-> %s@%s\n",
 			    __func__,
-			    r->nr, ta->path,
+			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    r->route.addr.p.tbl->pfrkt_name,
 			    r->route.addr.p.tbl->pfrkt_anchor);
@@ -2068,43 +2093,165 @@ pfr_update_tablerefs_anchor(struct pf_anchor *ta, struct pfr_ktable *kt)
 }
 
 void
-pfr_update_table_refs(struct pf_anchor *ta, struct pfr_ktable *kt)
+pfr_update_table_refs(struct pf_anchor *a, struct pfr_ktable *kt)
 {
-	struct pf_anchor *recursive_a, *aux_a;
-	TAILQ_HEAD(, pf_anchor) recursive_l, aux;
+	pfr_walk_anchor_subtree(a, kt, pfr_update_tablerefs_anchor);
+}
 
-	pfr_update_tablerefs_anchor(ta, kt);
+struct pfr_ktable *
+pfr_find_parent_kt(struct pf_anchor *a, struct pfr_ktable *kt_key)
+{
+	struct pf_anchor *parent;
+	struct pfr_ktable *kt = NULL;
 
-	/*
-	 * unwind recursion into lists so
-	 * we can descent to leaf child without
-	 * risking stack overflow.
-	 */
-	TAILQ_INIT(&recursive_l);
-	TAILQ_INIT(&aux);
+	parent = a->parent;
 
-	log(LOG_DEBUG, "%s %s\n", __func__, ta->path);
-	RB_FOREACH(aux_a, pf_anchor_node, &ta->children) {
-		TAILQ_INSERT_HEAD(&recursive_l, aux_a, workq);
+	while ((parent != NULL) && (kt == NULL)) {
+		kt = RB_FIND(pfr_ktablehead, &parent->ktables, kt_key);
+		parent = parent->parent;
 	}
 
-	while (!TAILQ_EMPTY(&recursive_l)) {
-		TAILQ_FOREACH(recursive_a, &recursive_l, workq) {
-			RB_FOREACH(aux_a, pf_anchor_node,
-			    &recursive_a->children) {
-				TAILQ_INSERT_HEAD(&aux, aux_a, workq);
+	return (kt);
+}
+
+void
+pfr_drop_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
+{
+	struct pf_rule *r;
+	struct pfr_ktable *parent_kt = NULL;
+	struct pfr_ktable *kt_ref;
+
+	TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
+		if (r->src.addr.p.tbl == kt) {
+			parent_kt = pfr_find_parent_kt(a, kt);
+			if (parent_kt == NULL) {
+				kt_ref = RB_FIND(pfr_ktablehead,
+				    &a->ktables, kt);
+			} else {
+				kt_ref = parent_kt;
 			}
-			log(LOG_DEBUG, "%s %s%s\n", __func__,
-			    kt->pfrkt_name, recursive_a->path);
-			pfr_update_tablerefs_anchor(recursive_a, kt);
-		}
-		/*
-		 * move to the next level twoards leaf in anchor tree.
-		 */
-		TAILQ_INIT(&recursive_l);
-		TAILQ_CONCAT(&recursive_l, &aux, workq);
-	}
 
+			KASSERT(kt_ref != NULL);
+			log(LOG_DEBUG, "%s linking src to %s@%s\n", __func__,
+			    kt_ref->pfrkt_name, kt_ref->pfrkt_anchor);
+
+			kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			KASSERT(kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
+			if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+				kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+
+			r->src.addr.p.tbl = kt_ref;
+			kt_ref->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			kt_ref->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+
+		}
+
+		if (r->dst.addr.p.tbl == kt) {
+			if (parent_kt == NULL)
+				parent_kt = pfr_find_parent_kt(a, kt);
+			if (parent_kt == NULL)
+				kt_ref = RB_FIND(pfr_ktablehead,
+				    &a->ktables, kt);
+			else
+				kt_ref = parent_kt;
+
+			KASSERT(kt_ref != NULL);
+			log(LOG_DEBUG, "%s linking dst to %s@%s\n", __func__,
+			    kt_ref->pfrkt_name, kt_ref->pfrkt_anchor);
+
+			kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			KASSERT(kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
+			if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+				kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+
+			r->dst.addr.p.tbl = kt_ref;
+			kt_ref->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			kt_ref->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+		}
+
+		if (r->rdr.addr.p.tbl == kt) {
+			if (parent_kt == NULL)
+				parent_kt = pfr_find_parent_kt(a, kt);
+			if (parent_kt == NULL)
+				kt_ref = RB_FIND(pfr_ktablehead,
+				    &a->ktables, kt);
+			else
+				kt_ref = parent_kt;
+
+			KASSERT(kt_ref != NULL);
+			log(LOG_DEBUG, "%s linking rdr to %s@%s\n", __func__,
+			    kt_ref->pfrkt_name, kt_ref->pfrkt_anchor);
+
+			kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			KASSERT(kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
+			if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+				kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+
+			r->rdr.addr.p.tbl = kt_ref;
+			kt_ref->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			kt_ref->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+		}
+
+		if (r->nat.addr.p.tbl == kt) {
+			if (parent_kt == NULL)
+				parent_kt = pfr_find_parent_kt(a, kt);
+			if (parent_kt == NULL)
+				kt_ref = RB_FIND(pfr_ktablehead,
+				    &a->ktables, kt);
+			else
+				kt_ref = parent_kt;
+
+			KASSERT(kt_ref != NULL);
+			log(LOG_DEBUG, "%s linking nat to %s@%s\n", __func__,
+			    kt_ref->pfrkt_name, kt_ref->pfrkt_anchor);
+
+			kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			KASSERT(kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
+			if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+				kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+
+			r->nat.addr.p.tbl = kt_ref;
+			kt_ref->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			kt_ref->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+		}
+
+		if (r->route.addr.p.tbl == kt) {
+			if (parent_kt == NULL)
+				parent_kt = pfr_find_parent_kt(a, kt);
+			if (parent_kt == NULL)
+				kt_ref = RB_FIND(pfr_ktablehead,
+				    &a->ktables, kt);
+			else
+				kt_ref = parent_kt;
+
+			KASSERT(kt_ref != NULL);
+			log(LOG_DEBUG, "%s linking route to %s@%s\n", __func__,
+			    kt_ref->pfrkt_name, kt_ref->pfrkt_anchor);
+
+			kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+			KASSERT(kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
+			if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+				kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+
+			r->route.addr.p.tbl = kt_ref;
+			kt_ref->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			kt_ref->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+		}
+	}
+}
+
+void
+pfr_drop_table_refs(struct pf_anchor *a, struct pf_anchor *ta)
+{
+	struct pfr_ktable *kt;
+	struct pf_anchor *ca;
+
+	RB_FOREACH(kt, pfr_ktablehead, &ta->ktables) {
+		RB_FOREACH(ca, pf_anchor_node, &a->children) {
+			pfr_walk_anchor_subtree(a, kt,
+			    pfr_drop_tablerefs_anchor);
+		}
+	}
 }
 
 int
@@ -2746,32 +2893,15 @@ pfr_attach_table(struct pf_rules_container *rc, struct pf_ruleset *rs,
 	    rs->anchor == NULL ? "" : rs->anchor->path,
 	    sizeof (tbl.pfrt_anchor));
 
-	/*
-	 * try to find desired table in anchor and its ancestors
-	 * up to the root (main anchor)
-	 */
-	kt = NULL;
-	while ((kt == NULL) && (a != NULL)) {
+	if (rs->anchor != NULL)
 		kt = pfr_lookup_table(a, &tbl);
-		a = a->parent;
-	}
-	if (kt == NULL)
+	else
 		kt = pfr_lookup_table(&rc->main_anchor, &tbl);
 
 	if (kt == NULL) {
 		/*
-		 * Tables created on behalf of pfr_attach_table() must always
-		 * go to root anchor, because those tables are not created
-		 * eexplicitly either by table definition in pf.conf or by
-		 * command line 'pfctl -t ... -T ...'.  Implicit tables are
-		 * typically created by DIOCADDRULE when rule refers table
-		 * which does not exist yet.  Another case for implicit table
-		 * are so called dynamic tables (interface etc...).
-		 */
-		KASSERT(a == NULL);
-		/*
-		 * main ruleset/anchor is always attached, no need to ask
-		 * pfr_create_ktable() to do so.
+		 * Tables created on behalf of pfr_attach_table() are always
+		 * kept in anchors where they are defined.
 		 */
 		kt = pfr_create_ktable(rc, &tbl, gettime(), wait);
 		if (kt == NULL)

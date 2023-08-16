@@ -477,6 +477,9 @@ extern void		 pfr_destroy_ktable(struct pfr_ktable *, int);
 extern struct pfr_ktable
 			*pfr_lookup_table(struct pf_anchor *,
 			    struct pfr_table *);
+extern void		pfr_drop_table_refs(struct pf_anchor *,
+			    struct pf_anchor *);
+
 RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 #endif /* _KERNEL */
 

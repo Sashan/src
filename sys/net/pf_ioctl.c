@@ -1267,6 +1267,71 @@ pf_swap_tables_ina(struct pf_trans *t, struct pf_anchor *ta,
 }
 #endif
 
+void
+pf_detach_rule(struct pf_rule *r)
+{
+	struct pfr_ktable *tmp_kt;
+
+	if (r->anchor != NULL) {
+		r->anchor->refcnt--;
+		log(LOG_DEBUG, "%s droping reference to %s\n",
+		    __func__,
+		    r->anchor->path);
+		KASSERT(r->anchor->refcnt >= 0);
+		r->anchor = NULL;
+	}
+	if (r->src.addr.type == PF_ADDR_TABLE) {
+		tmp_kt = r->src.addr.p.tbl;
+		r->src.addr.p.tbl = NULL;
+		r->src.addr.type = PF_ADDR_NONE;
+
+		tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+		KASSERT(tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
+		if (tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+			tmp_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+	}
+	if (r->dst.addr.type == PF_ADDR_TABLE) {
+		tmp_kt = r->dst.addr.p.tbl;
+		r->dst.addr.p.tbl = NULL;
+		r->dst.addr.type = PF_ADDR_NONE;
+
+		tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+		KASSERT(tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
+		if (tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+			tmp_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+	}
+	if (r->rdr.addr.type == PF_ADDR_TABLE) {
+		tmp_kt = r->rdr.addr.p.tbl;
+		r->rdr.addr.p.tbl = NULL;
+		r->rdr.addr.type = PF_ADDR_NONE;
+
+		tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+		KASSERT(tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
+		if (tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+			tmp_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+	}
+	if (r->nat.addr.type == PF_ADDR_TABLE) {
+		tmp_kt = r->nat.addr.p.tbl;
+		r->nat.addr.p.tbl = NULL;
+		r->nat.addr.type = PF_ADDR_NONE;
+
+		tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+		KASSERT(tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
+		if (tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+			tmp_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+	}
+	if (r->route.addr.type == PF_ADDR_TABLE) {
+		tmp_kt = r->route.addr.p.tbl;
+		r->route.addr.p.tbl = NULL;
+		r->route.addr.type = PF_ADDR_NONE;
+
+		tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+		KASSERT(tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
+		if (tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+			tmp_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+	}
+}
+
 /*
  * Function swaps rules and tables between global anchor 'a' and
  * transaction anchor 'ta'.
@@ -1275,17 +1340,25 @@ void
 pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
     struct pf_anchor *a)
 {
-	struct pf_ruleset tmp;
+	struct pf_ruleset tmp_rs;
 	struct pf_ruleset *trs, *grs;
 	struct pf_rule *r;
+	struct pfr_ktablehead tmp_ktables;
 
 	trs = &ta->ruleset;
 	grs = &a->ruleset;
 	KASSERT(grs->rules.version == trs->rules.version);
 
-	pf_init_ruleset(&tmp);
-	tmp.rules.rcount = trs->rules.rcount;
-	TAILQ_CONCAT(tmp.rules.ptr, trs->rules.ptr, entries);
+	pf_init_ruleset(&tmp_rs);
+	tmp_rs.rules.rcount = trs->rules.rcount;
+	TAILQ_CONCAT(tmp_rs.rules.ptr, trs->rules.ptr, entries);
+
+	/*
+	 * swap tables between global and transaction anchor.
+	 */
+	tmp_ktables = ta->ktables;
+	ta->ktables = a->ktables;
+	a->ktables = tmp_ktables;
 
 	/*
 	 * We move rules from global anchor to transaction anchor, we also must
@@ -1294,91 +1367,17 @@ pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
 	trs->rules.rcount = grs->rules.rcount;
 	TAILQ_CONCAT(trs->rules.ptr, grs->rules.ptr, entries);
 	/*
-	 * Detach anchor and tables from rules which are moved to transaction
-	 * anchor..
+	 * Detach anchor rules and tables from rules which are moved to
+	 * transaction anchor..
 	 */
-	TAILQ_FOREACH(r, trs->rules.ptr, entries) {
-		if (r->anchor != NULL) {
-			r->anchor->refcnt--;
-			log(LOG_DEBUG, "%s droping reference to %s\n",
-			    __func__,
-			    r->anchor->path);
-			KASSERT(r->anchor->refcnt >= 0);
-			r->anchor = NULL;
-			/*
-			 * Attempt to remove anchor referred by
-			 * happens in pf_remove_orphans() which
-			 * we call after update to rules is finished.
-			 */
-		}
-		if (r->src.addr.type == PF_ADDR_TABLE) {
-			struct pfr_ktable *src_kt;
+	TAILQ_FOREACH(r, trs->rules.ptr, entries)
+		pf_detach_rule(r);
 
-			src_kt = r->src.addr.p.tbl;
-			r->src.addr.p.tbl = NULL;
-			r->src.addr.type = PF_ADDR_NONE;
-
-			src_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			KASSERT(src_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-			if (src_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
-				src_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-		}
-		if (r->dst.addr.type == PF_ADDR_TABLE) {
-			struct pfr_ktable *dst_kt;
-
-			dst_kt = r->dst.addr.p.tbl;
-			r->dst.addr.p.tbl = NULL;
-			r->dst.addr.type = PF_ADDR_NONE;
-
-			dst_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			KASSERT(dst_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-			if (dst_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
-				dst_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-		}
-		if (r->rdr.addr.type == PF_ADDR_TABLE) {
-			struct pfr_ktable *rdr_kt;
-
-			rdr_kt = r->rdr.addr.p.tbl;
-			r->rdr.addr.p.tbl = NULL;
-			r->rdr.addr.type = PF_ADDR_NONE;
-
-			rdr_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			KASSERT(rdr_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-			if (rdr_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
-				rdr_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-		}
-		if (r->nat.addr.type == PF_ADDR_TABLE) {
-			struct pfr_ktable *nat_kt;
-
-			nat_kt = r->nat.addr.p.tbl;
-			r->nat.addr.p.tbl = NULL;
-			r->nat.addr.type = PF_ADDR_NONE;
-
-			nat_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			KASSERT(nat_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-			if (nat_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
-				nat_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-		}
-		if (r->route.addr.type == PF_ADDR_TABLE) {
-			struct pfr_ktable *route_kt;
-
-			route_kt = r->route.addr.p.tbl;
-			r->route.addr.p.tbl = NULL;
-			r->route.addr.type = PF_ADDR_NONE;
-
-			route_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			KASSERT(route_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-			if (route_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
-				route_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-		}
-	}
-
-	grs->rules.rcount = tmp.rules.rcount;
-	TAILQ_CONCAT(grs->rules.ptr, tmp.rules.ptr, entries);
+	grs->rules.rcount = tmp_rs.rules.rcount;
+	TAILQ_CONCAT(grs->rules.ptr, tmp_rs.rules.ptr, entries);
 	
 	/*
-	 * Here we fix references to anchors. References to tables
-	 * are fixed after all anchors/rulesets are committed.
+	 * Fix references to anchors
 	 */
 	TAILQ_FOREACH(r, grs->rules.ptr, entries) {
 		if (r->anchor != NULL) {
@@ -1422,6 +1421,11 @@ pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
 			
 		}
 	}
+
+	/*
+	 * Drop references to tables we are going to remove by transaction.
+	 */
+	pfr_drop_table_refs(a, ta);
 
 	grs->rules.version++;
 }
