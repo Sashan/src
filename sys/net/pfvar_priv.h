@@ -370,23 +370,31 @@ struct pf_trans {
 			struct pf_rule		*gr_rule;
 		} u_getrule;
 		struct {
-			TAILQ_HEAD(, pf_anchor)	ina_anchor_list;
-			struct pfr_ktableworkq	ina_garbage;
+			TAILQ_HEAD(, pf_anchor)	 ina_anchor_list;
+			struct pfr_ktableworkq	 ina_garbage;
 			struct pf_rules_container
-						ina_rc;
-			unsigned		ina_pool_limits[PF_LIMIT_MAX];
-			struct pf_rule		ina_default_rule;
-			struct pf_opts		ina_opts;
-			char			ina_anchor_path[PATH_MAX];
-			uint32_t		ina_default_vers;
-			char			ina_modify_defaults;
+						 ina_rc;
+			unsigned		 ina_pool_limits[PF_LIMIT_MAX];
+			struct pf_rule		 ina_default_rule;
+			struct pf_opts		 ina_opts;
+			char			 ina_anchor_path[PATH_MAX];
+			uint32_t		 ina_default_vers;
+			char			 ina_modify_defaults;
 		} u_ina;
 		struct {
-			TAILQ_HEAD(, pf_anchor)	tab_anchor_list;
-			struct pfr_ktableworkq	tab_garbage;
+			unsigned long		 tab_iocmd;
+			int			 tab_ioflags;
+			TAILQ_HEAD(, pf_anchor)	 tab_anchor_list;
+			struct pfr_ktableworkq	 tab_garbage;
 			struct pf_rules_container
-						tab_rc;
-			char			tab_anchor_path[PATH_MAX];
+						 tab_rc;
+			char			 tab_anchor_path[PATH_MAX];
+			char			*tab_kbuf;
+			uint32_t		 tab_kbuf_sz;
+			uint32_t		 tab_size;
+			uint32_t		 tab_nadd;
+			uint32_t		 tab_ndel;
+			uint32_t		 tab_nchg;
 		} u_tab;
 	} u;
 };
@@ -405,10 +413,18 @@ struct pf_trans {
 #define pftina_default_vers	u.u_ina.ina_default_vers
 #define	pftina_modify_defaults	u.u_ina.ina_modify_defaults
 
+#define pfttab_iocmd		u.u_tab.tab_iocmd
+#define pfttab_ioflags		u.u_tab.tab_ioflags
 #define pfttab_anchor_list	u.u_tab.tab_anchor_list
 #define pfttab_garbage		u.u_tab.tab_garbage
 #define pfttab_rc		u.u_tab.tab_rc
 #define pfttab_anchor_path	u.u_tab.tab_anchor_path
+#define pfttab_kbuf		u.u_tab.tab_kbuf
+#define pfttab_kbuf_sz		u.u_tab.tab_kbuf_sz
+#define pfttab_size		u.u_tab.tab_size
+#define pfttab_nadd		u.u_tab.tab_nadd
+#define pfttab_ndel		u.u_tab.tab_ndel
+#define pfttab_nchg		u.u_tab.tab_nchg
 
 extern struct timeout	pf_purge_states_to;
 extern struct task	pf_purge_task;
@@ -477,8 +493,27 @@ extern void		 pfr_destroy_ktable(struct pfr_ktable *, int);
 extern struct pfr_ktable
 			*pfr_lookup_table(struct pf_anchor *,
 			    struct pfr_table *);
+extern void		pfr_update_table_refs(struct pf_anchor *);
 extern void		pfr_drop_table_refs(struct pf_anchor *,
 			    struct pf_anchor *);
+extern int		pfr_copyin_tables(struct pf_trans *,
+			    struct pfr_table *, int);
+extern void		pfr_addtables_commit(struct pf_trans *,
+			    struct pf_anchor *, struct pf_anchor *);
+extern void		pfr_deltables_commit(struct pf_trans *,
+			    struct pf_anchor *, struct pf_anchor *);
+extern void		pfr_clrtstats_commit(struct pf_trans *,
+			    struct pf_anchor *, struct pf_anchor *);
+extern void		pfr_gettstats_commit(struct pf_trans *,
+			    struct pf_anchor *, struct pf_anchor *);
+extern void		pfr_settflags_commit(struct pf_trans *,
+			    struct pf_anchor *, struct pf_anchor *);
+extern void		pfr_setaddrs_commit(struct pf_trans *,
+			    struct pf_anchor *, struct pf_anchor *);
+extern void		pfr_deladdrs_commit(struct pf_trans *,
+			    struct pf_anchor *, struct pf_anchor *);
+extern void		pfr_setaddrs_commit(struct pf_trans *,
+			    struct pf_anchor *, struct pf_anchor *);
 
 RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 #endif /* _KERNEL */

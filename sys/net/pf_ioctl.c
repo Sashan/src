@@ -1344,6 +1344,7 @@ pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
 	struct pf_ruleset *trs, *grs;
 	struct pf_rule *r;
 	struct pfr_ktablehead tmp_ktables;
+	u_int32_t tables;
 
 	trs = &ta->ruleset;
 	grs = &a->ruleset;
@@ -1357,8 +1358,11 @@ pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
 	 * swap tables between global and transaction anchor.
 	 */
 	tmp_ktables = ta->ktables;
+	tables = ta->tables;
 	ta->ktables = a->ktables;
+	ta->tables = a->tables;
 	a->ktables = tmp_ktables;
+	a->tables = tables;
 
 	/*
 	 * We move rules from global anchor to transaction anchor, we also must
@@ -1368,17 +1372,19 @@ pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
 	TAILQ_CONCAT(trs->rules.ptr, grs->rules.ptr, entries);
 	/*
 	 * Detach anchor rules and tables from rules which are moved to
-	 * transaction anchor..
+	 * transaction anchor (read: replaced by commit operation).
 	 */
 	TAILQ_FOREACH(r, trs->rules.ptr, entries)
 		pf_detach_rule(r);
+	/*
+	 * Drop references to tables we are going to remove by transaction.
+	 * Tables to remove are kept in 'ta' anchor.
+	 */
+	pfr_drop_table_refs(a, ta);
 
 	grs->rules.rcount = tmp_rs.rules.rcount;
 	TAILQ_CONCAT(grs->rules.ptr, tmp_rs.rules.ptr, entries);
 	
-	/*
-	 * Fix references to anchors
-	 */
 	TAILQ_FOREACH(r, grs->rules.ptr, entries) {
 		if (r->anchor != NULL) {
 			struct pf_anchor *anchor;
@@ -1422,10 +1428,7 @@ pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
 		}
 	}
 
-	/*
-	 * Drop references to tables we are going to remove by transaction.
-	 */
-	pfr_drop_table_refs(a, ta);
+	pfr_update_table_refs(a);
 
 	grs->rules.version++;
 }
@@ -2718,10 +2721,10 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		t = pf_open_trans(minor(dev));
 		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pfttab_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
 
-		error = pfr_add_tables(t, io->pfrio_buffer, io->pfrio_size,
-		    &io->pfrio_nadd, io->pfrio_flags | PFR_FLAG_USERIOCTL);
-
+		error = pfr_copyin_tables(t, io->pfrio_buffer, io->pfrio_size);
 		if (error != 0) {
 			log(LOG_DEBUG, "%s DIOCRADDTABLES error in "
 			    "pfr_add_tables\n", __func__);
@@ -2747,6 +2750,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		PF_UNLOCK();
 		NET_UNLOCK();
 
+		io->pfrio_nadd = t->pfttab_nadd;
+
 		pf_rollback_trans(t);
 		break;
 	}
@@ -2763,10 +2768,10 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		t = pf_open_trans(minor(dev));
 		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pfttab_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
 
-		error = pfr_del_tables(t, io->pfrio_buffer, io->pfrio_size,
-		    &io->pfrio_ndel, io->pfrio_flags | PFR_FLAG_USERIOCTL);
-
+		error = pfr_copyin_tables(t, io->pfrio_buffer, io->pfrio_size);
 		if (error != 0) {
 			log(LOG_DEBUG, "%s DIOCRDELTABLES error in "
 			    "pfr_del_tables\n", __func__);
@@ -2791,41 +2796,83 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		PF_UNLOCK();
 		NET_UNLOCK();
 
+		io->pfrio_ndel = t->pfttab_ndel;
+
 		pf_rollback_trans(t);
 		break;
 	}
 
 	case DIOCRGETTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
 			log(LOG_DEBUG, "%s DIOCRGETTABLES\n", __func__);
 			goto fail;
 		}
+
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pfttab_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+		t->pfttab_size = io->pfrio_size;
+		if (io->pfrio_size != 0) {
+			t->pfttab_kbuf_sz =
+			    io->pfrio_size * sizeof(struct pfr_table);
+			t->pfttab_kbuf = malloc(t->pfttab_kbuf_sz, M_PF,
+			    M_WAITOK);
+		}
+
 		NET_LOCK();
 		PF_LOCK();
-		error = pfr_get_tables(&io->pfrio_table, io->pfrio_buffer,
-		    &io->pfrio_size, io->pfrio_flags | PFR_FLAG_USERIOCTL);
+		error = pfr_get_tables(t, &io->pfrio_table);
 		PF_UNLOCK();
 		NET_UNLOCK();
+
+		if ((error == 0) && (t->pfttab_size <= io->pfrio_size)) {
+			KASSERT(io->pfrio_size <= t->pfttab_size);
+			error = copyout(t->pfttab_kbuf, io->pfrio_buffer,
+			    io->pfrio_size * sizeof(struct pfr_table));
+		}
+
+		io->pfrio_size = t->pfttab_size;
+
+		pf_rollback_trans(t);
 		break;
 	}
 
 	case DIOCRGETTSTATS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_tstats)) {
 			error = ENODEV;
 			log(LOG_DEBUG, "%s DIOCRGETTSTATS\n", __func__);
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
-		error = pfr_get_tstats(&io->pfrio_table, io->pfrio_buffer,
-		    &io->pfrio_size, io->pfrio_flags | PFR_FLAG_USERIOCTL);
-		PF_UNLOCK();
-		NET_UNLOCK();
+
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pfttab_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+		t->pfttab_size = io->pfrio_size;
+		if (io->pfrio_size != 0) {
+			t->pfttab_kbuf_sz =
+			    io->pfrio_size * sizeof(struct pfr_tstats);
+			t->pfttab_kbuf = malloc(t->pfttab_kbuf_sz, M_PF,
+			    M_WAITOK);
+		}
+
+		if ((error != 0) && ((io->pfrio_flags & PFR_FLAG_DUMMY) == 0)) {
+			NET_LOCK();
+			PF_LOCK();
+
+			error = pfr_get_tstats(t, &io->pfrio_table);
+
+			PF_UNLOCK();
+			NET_UNLOCK();
+		}
 		break;
 	}
 
@@ -2840,7 +2887,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_open_trans(minor(dev));
-		pf_init_tina(t);
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pfttab_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
 
 		error = pfr_clr_tstats(t, io->pfrio_buffer, io->pfrio_size,
 		    &io->pfrio_nzero, io->pfrio_flags | PFR_FLAG_USERIOCTL);
@@ -2874,7 +2923,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_open_trans(minor(dev));
-		pf_init_tina(t);
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
 
 		error = pfr_set_tflags(t, io->pfrio_buffer, io->pfrio_size,
 		    io->pfrio_setflag, io->pfrio_clrflag, &io->pfrio_nchange,
@@ -2932,7 +2982,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_open_trans(minor(dev));
-		pf_init_tina(t);
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+
 		error = pfr_add_addrs(t, &io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size, &io->pfrio_nadd, io->pfrio_flags |
 		    PFR_FLAG_USERIOCTL);
@@ -2966,7 +3018,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_open_trans(minor(dev));
-		pf_init_tina(t);
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
 
 		error = pfr_del_addrs(t, &io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size, &io->pfrio_ndel, io->pfrio_flags |
@@ -3000,7 +3053,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t = pf_open_trans(minor(dev));
-		pf_init_tina(t);
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
 
 		error = pfr_set_addrs_ioc(t, &io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size, &io->pfrio_size2, &io->pfrio_nadd,
@@ -4169,6 +4223,15 @@ pf_fix_main_children(void)
 	 * We start with flushing all stale entries.
 	 */
 
+		/*
+		 * pf_fix_main_children() seems not quite right. 
+		 * I'm afraid we need to find a better way to populate
+		 * 'children'. It should be based on anchor path:
+		 *	foo/lame
+		 *	bar/tender
+		 * anchors foo and bar should be inserted to
+		 * main (root) anchor list of children.
+		 */
 	RB_FOREACH_SAFE(a, pf_anchor_node, &pf_main_anchor.children, aw)
 		RB_REMOVE(pf_anchor_node, &pf_main_anchor.children, a);
 
@@ -4237,66 +4300,87 @@ pf_ina_commit(struct pf_trans *t)
 	}
 
 	/*
-	 * Commit main ruleset first.
+	 * Commit non-global rulesets first, so main ruleset
+	 * main ruleset can easily refer to children anchors.
 	 */
+	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pftina_rc.anchors, taw) {
+		pf_ina_commit_anchor(t, ta, RB_FIND(pf_anchor_global,
+		    &pf_anchors, ta));
+	}
+
 	if (t->pftina_rc.main_anchor.ruleset.rules.version != 0) {
 		pf_ina_commit_anchor(t, &t->pftina_rc.main_anchor,
 		    &pf_main_anchor);
-		pf_fix_main_children();
 	}
+}
 
-	/*
-	 * Then commit rulesets, note we use _SAFE because
-	 * ruleset may also get just moved from transaction
-	 * to pf_anchors tree.
-	 */
-	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pftina_rc.anchors, taw)
-		pf_ina_commit_anchor(t, ta, RB_FIND(pf_anchor_global,
-		    &pf_anchors, ta));
-
-	/*
-	 * We are done with rulesets, it's time to commit tables,
-	 * we start with tables bound to main anchor first.
-	 */
-	if (t->pftina_rc.main_anchor.ruleset.rules.version != 0)
-		pfr_commit_table(t, &t->pftina_rc.main_anchor, &pf_main_anchor);
-
-	/*
-	 * Commit remainig tables.
-	 */
-	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pftina_rc.anchors, taw)
-		pfr_commit_table(t, ta, RB_FIND(pf_anchor_global,
-		    &pf_anchors, ta));
+void
+pf_tab_do_commit_op(struct pf_trans *t, struct pf_anchor *ta,
+    struct pf_anchor *a)
+{
+	switch (t->pfttab_iocmd) {
+	case DIOCRADDTABLES:
+		pfr_addtables_commit(t, ta, a);
+		break;
+	case DIOCRDELTABLES:
+		pfr_deltables_commit(t, ta, a);
+		break;
+	case DIOCRCLRTSTATS:
+		pfr_clrtstats_commit(t, ta, a);
+		break;
+	case DIOCRSETTFLAGS:
+		pfr_settflags_commit(t, ta, a);
+		break;
+	case DIOCRADDADDRS:
+		pfr_setaddrs_commit(t, ta, a);
+		break;
+	case DIOCRDELADDRS:
+		pfr_deladdrs_commit(t, ta, a);
+		break;
+	case DIOCRSETADDRS:
+		pfr_setaddrs_commit(t, ta, a);
+		break;
+	default:
+		panic("%s unexpected iocmd for transaction on /",
+		    __func__);
+	}
 }
 
 void
 pf_tab_commit(struct pf_trans *t)
 {
-	struct pf_anchor *ta, *taw;
+	struct pf_anchor *ta, *taw, *a, *exists;
 
 	if (!RB_EMPTY(&t->pfttab_rc.main_anchor.ktables))
-		pfr_commit_table(t, &t->pfttab_rc.main_anchor,
+		pf_tab_do_commit_op(t, &t->pfttab_rc.main_anchor,
 		    &pf_main_anchor);
 
-	/*
-	 * Move anchors which may get defined by transaction to global anchor
-	 * tree.
-	 */
 	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pfttab_rc.anchors, taw) {
-		/*
-		 * rules are not exepcted when we modify tables only
-		 */
 		KASSERT(TAILQ_EMPTY(ta->ruleset.rules.ptr));
-		pf_ina_commit_anchor(t, ta, RB_FIND(pf_anchor_global,
-		    &pf_anchors, ta));
+		a = RB_FIND(pf_anchor_global, &pf_anchors, ta);
+		if (a == NULL) {
+			if (t->pfttab_iocmd == DIOCRADDTABLES) {
+				/*
+				 * move table from transaction anchor to global
+				 * anchor, if table does not exists in global
+				 * anchor.
+				 */
+				RB_REMOVE(pf_anchor_global,
+				    &t->pfttab_rc.anchors, ta);
+				exists = RB_INSERT(pf_anchor_global,
+				    &pf_anchors, ta);
+				KASSERT(exists == NULL);
+				if (ta->parent != NULL)
+					pf_update_parent(a, ta);
+				pfr_update_table_refs(a);
+			} else {
+				panic("%s ruleset %s to modify does not exists",
+				    __func__, ta->path);
+			}
+		} else if (pf_match_root_path(a->path,
+		    t->pfttab_anchor_path) == a->path)
+			pf_tab_do_commit_op(t, ta, a);
 	}
-
-	/*
-	 * Commit tables to anchors which exist already in global tree
-	 */
-	RB_FOREACH(ta, pf_anchor_global, &t->pfttab_rc.anchors)
-		pfr_commit_table(t, ta, RB_FIND(pf_anchor_global,
-		    &pf_anchors, ta));
 }
 
 void
@@ -4431,6 +4515,9 @@ pf_cleanup_ttab(struct pf_trans *t)
 		SLIST_REMOVE_HEAD(&t->pfttab_garbage, pfrkt_workq);
 		pfr_destroy_ktable(tkt, 1);
 	}
+
+	if (t->pfttab_kbuf_sz != 0)
+		free(t->pfttab_kbuf, M_PF, t->pfttab_kbuf_sz);
 }
 
 void
@@ -4441,7 +4528,7 @@ pf_init_ttab(struct pf_trans *t)
 	RB_INIT(&t->pfttab_rc.anchors);
 	TAILQ_INIT(&t->pfttab_anchor_list);
 	SLIST_INIT(&t->pfttab_garbage);
-	pf_init_ruleset(&t->pftina_rc.main_anchor.ruleset);
+	pf_init_ruleset(&t->pfttab_rc.main_anchor.ruleset);
 }
 
 void

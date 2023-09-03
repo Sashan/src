@@ -1745,8 +1745,8 @@ void	pfr_detach_table(struct pfr_ktable *);
 int	pfr_clr_tables(struct pfr_table *, int *, int);
 int	pfr_add_tables(struct pf_trans *, struct pfr_table *, int, int *, int);
 int	pfr_del_tables(struct pf_trans *, struct pfr_table *, int, int *, int);
-int	pfr_get_tables(struct pfr_table *, struct pfr_table *, int *, int);
-int	pfr_get_tstats(struct pfr_table *, struct pfr_tstats *, int *, int);
+int	pfr_get_tables(struct pf_trans *, struct pfr_table *);
+int	pfr_get_tstats(struct pf_trans *, struct pfr_table *);
 int	pfr_clr_tstats(struct pf_trans *, struct pfr_table *, int, int *, int);
 int	pfr_set_tflags(struct pf_trans *, struct pfr_table *, int, int, int,
 	    int *, int *, int);
