@@ -1,4 +1,4 @@
-/* $OpenBSD: kern_clockintr.c,v 1.31 2023/08/11 22:02:50 cheloha Exp $ */
+/* $OpenBSD: kern_clockintr.c,v 1.33 2023/08/26 22:21:00 cheloha Exp $ */
 /*
  * Copyright (c) 2003 Dale Rahn <drahn@openbsd.org>
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -38,7 +38,6 @@
  */
 u_int clockintr_flags;			/* [I] global state + behavior flags */
 uint32_t hardclock_period;		/* [I] hardclock period (ns) */
-uint32_t schedclock_period;		/* [I] schedclock period (ns) */
 uint32_t statclock_avg;			/* [I] average statclock period (ns) */
 uint32_t statclock_min;			/* [I] minimum statclock period (ns) */
 uint32_t statclock_mask;		/* [I] set of allowed offsets */
@@ -47,10 +46,11 @@ void clockintr_cancel_locked(struct clockintr *);
 uint64_t clockintr_expiration(const struct clockintr *);
 void clockintr_hardclock(struct clockintr *, void *);
 uint64_t clockintr_nsecuptime(const struct clockintr *);
-void clockintr_schedclock(struct clockintr *, void *);
 void clockintr_schedule(struct clockintr *, uint64_t);
 void clockintr_schedule_locked(struct clockintr *, uint64_t);
 void clockintr_statclock(struct clockintr *, void *);
+void clockqueue_intrclock_install(struct clockintr_queue *,
+    const struct intrclock *);
 uint64_t clockqueue_next(const struct clockintr_queue *);
 void clockqueue_reset_intrclock(struct clockintr_queue *);
 uint64_t nsec_advance(uint64_t *, uint64_t, uint64_t);
@@ -89,10 +89,6 @@ clockintr_init(u_int flags)
 	statclock_min = statclock_avg - (var / 2);
 	statclock_mask = var - 1;
 
-	KASSERT(schedhz >= 0 && schedhz <= 1000000000);
-	if (schedhz != 0)
-		schedclock_period = 1000000000 / schedhz;
-
 	SET(clockintr_flags, flags | CL_INIT);
 }
 
@@ -112,10 +108,8 @@ clockintr_cpu_init(const struct intrclock *ic)
 
 	KASSERT(ISSET(clockintr_flags, CL_INIT));
 
-	if (ic != NULL && !ISSET(cq->cq_flags, CQ_INTRCLOCK)) {
-		cq->cq_intrclock = *ic;
-		SET(cq->cq_flags, CQ_INTRCLOCK);
-	}
+	if (ic != NULL)
+		clockqueue_intrclock_install(cq, ic);
 
 	/* TODO: Remove these from struct clockintr_queue. */
 	if (cq->cq_hardclock == NULL) {
@@ -127,12 +121,6 @@ clockintr_cpu_init(const struct intrclock *ic)
 		cq->cq_statclock = clockintr_establish(cq, clockintr_statclock);
 		if (cq->cq_statclock == NULL)
 			panic("%s: failed to establish statclock", __func__);
-	}
-	if (schedhz != 0 && cq->cq_schedclock == NULL) {
-		cq->cq_schedclock = clockintr_establish(cq,
-		    clockintr_schedclock);
-		if (cq->cq_schedclock == NULL)
-			panic("%s: failed to establish schedclock", __func__);
 	}
 
 	/*
@@ -175,8 +163,8 @@ clockintr_cpu_init(const struct intrclock *ic)
 	}
 
 	/*
-	 * We can always advance the statclock and schedclock.
-	 * There is no reason to stagger a randomized statclock.
+	 * We can always advance the statclock.  There is no reason to
+	 * stagger a randomized statclock.
 	 */
 	if (!ISSET(clockintr_flags, CL_RNDSTAT)) {
 		if (cq->cq_statclock->cl_expiration == 0) {
@@ -185,13 +173,6 @@ clockintr_cpu_init(const struct intrclock *ic)
 		}
 	}
 	clockintr_advance(cq->cq_statclock, statclock_avg);
-	if (schedhz != 0) {
-		if (cq->cq_schedclock->cl_expiration == 0) {
-			clockintr_stagger(cq->cq_schedclock, schedclock_period,
-			    multiplier, MAXCPUS);
-		}
-		clockintr_advance(cq->cq_schedclock, schedclock_period);
-	}
 
 	/*
 	 * XXX Need to find a better place to do this.  We can't do it in
@@ -515,19 +496,6 @@ clockintr_hardclock(struct clockintr *cl, void *frame)
 }
 
 void
-clockintr_schedclock(struct clockintr *cl, void *unused)
-{
-	uint64_t count, i;
-	struct proc *p = curproc;
-
-	count = clockintr_advance(cl, schedclock_period);
-	if (p != NULL) {
-		for (i = 0; i < count; i++)
-			schedclock(p);
-	}
-}
-
-void
 clockintr_statclock(struct clockintr *cl, void *frame)
 {
 	uint64_t count, expiration, i, uptime;
@@ -563,6 +531,18 @@ clockqueue_init(struct clockintr_queue *cq)
 	TAILQ_INIT(&cq->cq_pend);
 	cq->cq_gen = 1;
 	SET(cq->cq_flags, CQ_INIT);
+}
+
+void
+clockqueue_intrclock_install(struct clockintr_queue *cq,
+    const struct intrclock *ic)
+{
+	mtx_enter(&cq->cq_mtx);
+	if (!ISSET(cq->cq_flags, CQ_INTRCLOCK)) {
+		cq->cq_intrclock = *ic;
+		SET(cq->cq_flags, CQ_INTRCLOCK);
+	}
+	mtx_leave(&cq->cq_mtx);
 }
 
 uint64_t

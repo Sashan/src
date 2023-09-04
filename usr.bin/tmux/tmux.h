@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.1204 2023/08/08 08:21:30 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.1209 2023/09/02 20:03:10 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -536,6 +536,7 @@ enum tty_code_code {
 	TTYC_SETRGBB,
 	TTYC_SETRGBF,
 	TTYC_SETULC,
+	TTYC_SETULC1,
 	TTYC_SGR0,
 	TTYC_SITM,
 	TTYC_SMACS,
@@ -616,6 +617,15 @@ enum utf8_state {
 	UTF8_MORE,
 	UTF8_DONE,
 	UTF8_ERROR
+};
+
+/* UTF-8 combine state. */
+enum utf8_combine_state {
+	UTF8_DISCARD_NOW,	   /* discard immediately */
+	UTF8_WRITE_NOW,            /* do not combine, write immediately */
+	UTF8_COMBINE_NOW,          /* combine immediately */
+	UTF8_WRITE_MAYBE_COMBINE,  /* write but try to combine the next */
+	UTF8_DISCARD_MAYBE_COMBINE /* discard but try to combine the next */
 };
 
 /* Colour flags. */
@@ -795,11 +805,15 @@ enum style_range_type {
 	STYLE_RANGE_NONE,
 	STYLE_RANGE_LEFT,
 	STYLE_RANGE_RIGHT,
-	STYLE_RANGE_WINDOW
+	STYLE_RANGE_PANE,
+	STYLE_RANGE_WINDOW,
+	STYLE_RANGE_SESSION,
+	STYLE_RANGE_USER
 };
 struct style_range {
 	enum style_range_type	 type;
 	u_int			 argument;
+	char			 string[16];
 
 	u_int			 start;
 	u_int			 end; /* not included */
@@ -826,6 +840,7 @@ struct style {
 
 	enum style_range_type	range_type;
 	u_int			range_argument;
+	char			range_string[16];
 
 	enum style_default_type	default_type;
 };
@@ -885,7 +900,7 @@ struct screen_write_ctx {
 
 	int				 flags;
 #define SCREEN_WRITE_SYNC 0x1
-#define SCREEN_WRITE_ZWJ 0x2
+#define SCREEN_WRITE_COMBINE 0x2
 
 	screen_write_init_ctx_cb	 init_ctx_cb;
 	void				*arg;
@@ -893,6 +908,7 @@ struct screen_write_ctx {
 	struct screen_write_citem	*item;
 	u_int				 scrolled;
 	u_int				 bg;
+	struct utf8_data		 previous;
 };
 
 /* Box border lines option. */
@@ -1370,6 +1386,7 @@ struct tty {
 	struct client	*client;
 	struct event	 start_timer;
 	struct event	 clipboard_timer;
+	time_t		 last_requests;
 
 	u_int		 sx;
 	u_int		 sy;
@@ -1421,10 +1438,8 @@ struct tty {
 #define TTY_HAVEXDA 0x200
 #define TTY_SYNCING 0x400
 #define TTY_HAVEDA2 0x800 /* Secondary DA. */
-#define TTY_HAVEFG 0x1000
-#define TTY_HAVEBG 0x2000
 #define TTY_ALL_REQUEST_FLAGS \
-	(TTY_HAVEDA|TTY_HAVEDA2|TTY_HAVEXDA|TTY_HAVEFG|TTY_HAVEBG)
+	(TTY_HAVEDA|TTY_HAVEDA2|TTY_HAVEXDA)
 	int		 flags;
 
 	struct tty_term	*term;
@@ -2317,6 +2332,7 @@ void	tty_resize(struct tty *);
 void	tty_set_size(struct tty *, u_int, u_int, u_int, u_int);
 void	tty_start_tty(struct tty *);
 void	tty_send_requests(struct tty *);
+void	tty_repeat_requests(struct tty *);
 void	tty_stop_tty(struct tty *);
 void	tty_set_title(struct tty *, const char *);
 void	tty_set_path(struct tty *, const char *);
@@ -3280,6 +3296,12 @@ char		*utf8_padcstr(const char *, u_int);
 char		*utf8_rpadcstr(const char *, u_int);
 int		 utf8_cstrhas(const char *, const struct utf8_data *);
 
+/* utf8-combined.c */
+void		 utf8_build_combined(void);
+int		 utf8_try_combined(const struct utf8_data *,
+		     const struct utf8_data *, const struct utf8_data **,
+		     u_int *width);
+
 /* procname.c */
 char   *get_proc_name(int, char *);
 char   *get_proc_cwd(int);
@@ -3308,12 +3330,12 @@ void		 menu_add_item(struct menu *, const struct menu_item *,
 void		 menu_free(struct menu *);
 struct menu_data *menu_prepare(struct menu *, int, int, struct cmdq_item *,
 		    u_int, u_int, struct client *, enum box_lines, const char *,
-		    const char *, struct cmd_find_state *, menu_choice_cb,
-		    void *);
+		    const char *, const char *, struct cmd_find_state *,
+		    menu_choice_cb, void *);
 int		 menu_display(struct menu *, int, int, struct cmdq_item *,
 		    u_int, u_int, struct client *, enum box_lines, const char *,
-		    const char *, struct cmd_find_state *, menu_choice_cb,
-		    void *);
+		    const char *, const char *, struct cmd_find_state *,
+		    menu_choice_cb, void *);
 struct screen	*menu_mode_cb(struct client *, void *, u_int *, u_int *);
 void		 menu_check_cb(struct client *, void *, u_int, u_int, u_int,
 		    struct overlay_ranges *);

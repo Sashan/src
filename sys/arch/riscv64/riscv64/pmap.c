@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.30 2023/04/13 15:23:22 miod Exp $	*/
+/*	$OpenBSD: pmap.c,v 1.33 2023/09/03 00:23:25 jca Exp $	*/
 
 /*
  * Copyright (c) 2019-2020 Brian Bamsch <bbamsch@google.com>
@@ -431,23 +431,19 @@ pmap_vp_page_free(struct pool *pp, void *v)
 	km_free(v, pp->pr_pgsize, &kv_any, &kp_dirty);
 }
 
-u_int32_t PTED_MANAGED(struct pte_desc *pted);
-u_int32_t PTED_WIRED(struct pte_desc *pted);
-u_int32_t PTED_VALID(struct pte_desc *pted);
-
-u_int32_t
+static inline u_int32_t
 PTED_MANAGED(struct pte_desc *pted)
 {
 	return (pted->pted_va & PTED_VA_MANAGED_M);
 }
 
-u_int32_t
+static inline u_int32_t
 PTED_WIRED(struct pte_desc *pted)
 {
 	return (pted->pted_va & PTED_VA_WIRED_M);
 }
 
-u_int32_t
+static inline u_int32_t
 PTED_VALID(struct pte_desc *pted)
 {
 	return (pted->pted_pte != 0);
@@ -581,9 +577,8 @@ pmap_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, int flags)
 	 */
 	if (flags & (PROT_READ|PROT_WRITE|PROT_EXEC|PMAP_WIRED)) {
 		pmap_pte_insert(pted);
+		tlb_flush_page(pm, va & ~PAGE_MASK);
 	}
-
-	tlb_flush_page(pm, va & ~PAGE_MASK);
 
 	error = 0;
 out:
@@ -608,7 +603,7 @@ pmap_remove(pmap_t pm, vaddr_t sva, vaddr_t eva)
 		if (pted == NULL)
 			continue;
 
-		if (pted->pted_va & PTED_VA_WIRED_M) {
+		if (PTED_WIRED(pted)) {
 			pm->pm_stats.wired_count--;
 			pted->pted_va &= ~PTED_VA_WIRED_M;
 		}
@@ -627,13 +622,12 @@ pmap_remove_pted(pmap_t pm, struct pte_desc *pted)
 {
 	pm->pm_stats.resident_count--;
 
-	if (pted->pted_va & PTED_VA_WIRED_M) {
+	if (PTED_WIRED(pted)) {
 		pm->pm_stats.wired_count--;
 		pted->pted_va &= ~PTED_VA_WIRED_M;
 	}
 
 	pmap_pte_remove(pted, pm != pmap_kernel());
-
 	tlb_flush_page(pm, pted->pted_va & ~PAGE_MASK);
 
 	if (pted->pted_va & PTED_VA_EXEC_M) {
@@ -690,7 +684,6 @@ _pmap_kenter_pa(vaddr_t va, paddr_t pa, vm_prot_t prot, int flags, int cache)
 	 * so map the page!
 	 */
 	pmap_pte_insert(pted);
-
 	tlb_flush_page(pm, va & ~PAGE_MASK);
 
 	pg = PHYS_TO_VM_PAGE(pa);
@@ -738,7 +731,6 @@ pmap_kremove_pg(vaddr_t va)
 	 * or that the mapping is not present in the hash table.
 	 */
 	pmap_pte_remove(pted, 0);
-
 	tlb_flush_page(pm, pted->pted_va & ~PAGE_MASK);
 
 	if (pted->pted_va & PTED_VA_EXEC_M)
@@ -747,7 +739,7 @@ pmap_kremove_pg(vaddr_t va)
 	if (PTED_MANAGED(pted))
 		pmap_remove_pv(pted);
 
-	if (pted->pted_va & PTED_VA_WIRED_M)
+	if (PTED_WIRED(pted))
 		pm->pm_stats.wired_count--;
 
 	/* invalidate pted; */
@@ -1499,10 +1491,7 @@ pmap_page_ro(pmap_t pm, vaddr_t va, vm_prot_t prot)
 		pted->pted_pte &= ~PROT_EXEC;
 	}
 	pmap_pte_update(pted, pl3);
-
 	tlb_flush_page(pm, pted->pted_va & ~PAGE_MASK);
-
-	return;
 }
 
 /*
@@ -1523,6 +1512,7 @@ pmap_page_protect(struct vm_page *pg, vm_prot_t prot)
 			pmap_page_ro(pted->pted_pmap, pted->pted_va, prot);
 		}
 		mtx_leave(&pg->mdpage.pv_mtx);
+		return;
 	}
 
 	mtx_enter(&pg->mdpage.pv_mtx);
@@ -1658,8 +1648,6 @@ pmap_pte_remove(struct pte_desc *pted, int remove_pted)
 	vp3->l3[VP_IDX3(pted->pted_va)] = 0;
 	if (remove_pted)
 		vp3->vp[VP_IDX3(pted->pted_va)] = NULL;
-
-	tlb_flush_page(pm, pted->pted_va);
 }
 
 /*
@@ -1761,8 +1749,6 @@ pmap_fault_fixup(pmap_t pm, vaddr_t va, vm_prot_t ftype)
 
 	/* We actually made a change, so flush it and sync. */
 	pmap_pte_update(pted, pl3);
-
-	/* Flush tlb. */
 	tlb_flush_page(pm, va & ~PAGE_MASK);
 
 	retcode = 1;
@@ -1868,7 +1854,7 @@ pmap_unwire(pmap_t pm, vaddr_t va)
 
 	pmap_lock(pm);
 	pted = pmap_vp_lookup(pm, va, NULL);
-	if ((pted != NULL) && (pted->pted_va & PTED_VA_WIRED_M)) {
+	if (pted != NULL && PTED_WIRED(pted)) {
 		pm->pm_stats.wired_count--;
 		pted->pted_va &= ~PTED_VA_WIRED_M;
 	}

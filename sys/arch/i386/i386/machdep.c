@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.666 2023/08/09 00:01:44 jsg Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.669 2023/08/23 01:55:46 cheloha Exp $	*/
 /*	$NetBSD: machdep.c,v 1.214 1996/11/10 03:16:17 thorpej Exp $	*/
 
 /*-
@@ -233,6 +233,7 @@ void (*cpusensors_setup)(struct cpu_info *);
 
 void (*delay_func)(int) = i8254_delay;
 void (*initclock_func)(void) = i8254_initclocks;
+void (*startclock_func)(void) = i8254_start_both_clocks;
 
 /*
  * Extent maps to manage I/O and ISA memory hole space.  Allocate
@@ -1863,9 +1864,11 @@ identifycpu(struct cpu_info *ci)
 		uint64_t level = 0;
 		uint32_t dummy;
 
-		if (strcmp(cpu_vendor, "AuthenticAMD") == 0) {
+		if (strcmp(cpu_vendor, "AuthenticAMD") == 0 &&
+		    ci->ci_family >= 0x0f) {
 			level = rdmsr(MSR_PATCH_LEVEL);
-		} else if (strcmp(cpu_vendor, "GenuineIntel") == 0) {
+		} else if (strcmp(cpu_vendor, "GenuineIntel") == 0 &&
+		    ci->ci_family >= 6) {
 			wrmsr(MSR_BIOS_SIGN, 0);
 			CPUID(1, dummy, dummy, dummy, dummy);
 			level = rdmsr(MSR_BIOS_SIGN) >> 32;
@@ -3434,6 +3437,12 @@ void
 cpu_initclocks(void)
 {
 	(*initclock_func)();		/* lapic or i8254 */
+}
+
+void
+cpu_startclock(void)
+{
+	(*startclock_func)();
 }
 
 void

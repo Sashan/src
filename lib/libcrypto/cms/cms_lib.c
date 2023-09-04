@@ -1,4 +1,4 @@
-/* $OpenBSD: cms_lib.c,v 1.19 2023/07/28 10:28:02 tb Exp $ */
+/* $OpenBSD: cms_lib.c,v 1.24 2023/08/24 04:56:36 tb Exp $ */
 /*
  * Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project.
@@ -121,70 +121,67 @@ cms_Data_create(void)
 	return cms;
 }
 
-BIO *
+static BIO *
 cms_content_bio(CMS_ContentInfo *cms)
 {
-	ASN1_OCTET_STRING **pos = CMS_get0_content(cms);
+	ASN1_OCTET_STRING **pos;
 
-	if (!pos)
+	if ((pos = CMS_get0_content(cms)) == NULL)
 		return NULL;
-	/* If content detached data goes nowhere: create NULL BIO */
-	if (!*pos)
+
+	/* If content is detached, data goes nowhere: create null BIO. */
+	if (*pos == NULL)
 		return BIO_new(BIO_s_null());
-	/*
-	 * If content not detached and created return memory BIO
-	 */
-	if (!*pos || ((*pos)->flags == ASN1_STRING_FLAG_CONT))
+
+	/* If content is not detached and was created, return memory BIO. */
+	if ((*pos)->flags == ASN1_STRING_FLAG_CONT)
 		return BIO_new(BIO_s_mem());
 
-	/* Else content was read in: return read only BIO for it */
+	/* Else content was read in: return read-only BIO for it. */
 	return BIO_new_mem_buf((*pos)->data, (*pos)->length);
 }
 
 BIO *
-CMS_dataInit(CMS_ContentInfo *cms, BIO *icont)
+CMS_dataInit(CMS_ContentInfo *cms, BIO *in_content_bio)
 {
-	BIO *cmsbio, *cont;
+	BIO *cms_bio = NULL, *content_bio = NULL;
 
-	if (icont)
-		cont = icont;
-	else
-		cont = cms_content_bio(cms);
-	if (!cont) {
+	if ((content_bio = in_content_bio) == NULL)
+		content_bio = cms_content_bio(cms);
+	if (content_bio == NULL) {
 		CMSerror(CMS_R_NO_CONTENT);
-		return NULL;
+		goto err;
 	}
+
 	switch (OBJ_obj2nid(cms->contentType)) {
-
 	case NID_pkcs7_data:
-		return cont;
-
+		return content_bio;
 	case NID_pkcs7_signed:
-		cmsbio = cms_SignedData_init_bio(cms);
+		if ((cms_bio = cms_SignedData_init_bio(cms)) == NULL)
+			goto err;
 		break;
-
 	case NID_pkcs7_digest:
-		cmsbio = cms_DigestedData_init_bio(cms);
+		if ((cms_bio = cms_DigestedData_init_bio(cms)) == NULL)
+			goto err;
 		break;
-
 	case NID_pkcs7_encrypted:
-		cmsbio = cms_EncryptedData_init_bio(cms);
+		if ((cms_bio = cms_EncryptedData_init_bio(cms)) == NULL)
+			goto err;
 		break;
-
 	case NID_pkcs7_enveloped:
-		cmsbio = cms_EnvelopedData_init_bio(cms);
+		if ((cms_bio = cms_EnvelopedData_init_bio(cms)) == NULL)
+			goto err;
 		break;
-
 	default:
 		CMSerror(CMS_R_UNSUPPORTED_TYPE);
-		return NULL;
+		goto err;
 	}
 
-	if (cmsbio)
-		return BIO_push(cmsbio, cont);
+	return BIO_push(cms_bio, content_bio);
 
-	if (!icont)
-		BIO_free(cont);
+ err:
+	if (content_bio != in_content_bio)
+		BIO_free(content_bio);
 
 	return NULL;
 }

@@ -1,4 +1,4 @@
-/* $OpenBSD: session.c,v 1.94 2023/07/19 13:03:36 nicm Exp $ */
+/* $OpenBSD: session.c,v 1.96 2023/09/02 08:38:37 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -367,11 +367,9 @@ session_detach(struct session *s, struct winlink *wl)
 
 	session_group_synchronize_from(s);
 
-	if (RB_EMPTY(&s->windows)) {
-		session_destroy(s, 1, __func__);
+	if (RB_EMPTY(&s->windows))
 		return (1);
-	}
-	return (0);
+       	return (0);
 }
 
 /* Return if session has window. */
@@ -689,8 +687,10 @@ session_group_synchronize1(struct session *target, struct session *s)
 	TAILQ_INIT(&s->lastw);
 	TAILQ_FOREACH(wl, &old_lastw, sentry) {
 		wl2 = winlink_find_by_index(&s->windows, wl->idx);
-		if (wl2 != NULL)
+		if (wl2 != NULL) {
 			TAILQ_INSERT_TAIL(&s->lastw, wl2, sentry);
+			wl2->flags |= WINLINK_VISITED;
+		}
 	}
 
 	/* Then free the old winlinks list. */

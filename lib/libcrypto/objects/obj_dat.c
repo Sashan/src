@@ -1,4 +1,4 @@
-/* $OpenBSD: obj_dat.c,v 1.54 2023/07/08 12:27:51 beck Exp $ */
+/* $OpenBSD: obj_dat.c,v 1.60 2023/08/17 09:28:43 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -166,7 +166,6 @@ added_obj_hash(const ADDED_OBJ *ca)
 		ret = a->nid;
 		break;
 	default:
-		/* abort(); */
 		return 0;
 	}
 	ret &= 0x3fffffffL;
@@ -178,38 +177,32 @@ static IMPLEMENT_LHASH_HASH_FN(added_obj, ADDED_OBJ)
 static int
 added_obj_cmp(const ADDED_OBJ *ca, const ADDED_OBJ *cb)
 {
-	ASN1_OBJECT *a, *b;
-	int i;
+	const ASN1_OBJECT *a, *b;
+	int cmp;
 
-	i = ca->type - cb->type;
-	if (i)
-		return (i);
+	if ((cmp = ca->type - cb->type) != 0)
+		return cmp;
+
 	a = ca->obj;
 	b = cb->obj;
 	switch (ca->type) {
 	case ADDED_DATA:
-		i = (a->length - b->length);
-		if (i)
-			return (i);
-		return (memcmp(a->data, b->data, (size_t)a->length));
+		return OBJ_cmp(a, b);
 	case ADDED_SNAME:
 		if (a->sn == NULL)
-			return (-1);
-		else if (b->sn == NULL)
-			return (1);
-		else
-			return (strcmp(a->sn, b->sn));
+			return -1;
+		if (b->sn == NULL)
+			return 1;
+		return strcmp(a->sn, b->sn);
 	case ADDED_LNAME:
 		if (a->ln == NULL)
-			return (-1);
-		else if (b->ln == NULL)
-			return (1);
-		else
-			return (strcmp(a->ln, b->ln));
+			return -1;
+		if (b->ln == NULL)
+			return 1;
+		return strcmp(a->ln, b->ln);
 	case ADDED_NID:
-		return (a->nid - b->nid);
+		return a->nid - b->nid;
 	default:
-		/* abort(); */
 		return 0;
 	}
 }
@@ -432,16 +425,11 @@ LCRYPTO_ALIAS(OBJ_nid2ln);
 static int
 obj_cmp(const ASN1_OBJECT * const *ap, const unsigned int *bp)
 {
-	int j;
-	const ASN1_OBJECT *a= *ap;
+	const ASN1_OBJECT *a = *ap;
 	const ASN1_OBJECT *b = &nid_objs[*bp];
 
-	j = (a->length - b->length);
-	if (j)
-		return (j);
-	return (memcmp(a->data, b->data, a->length));
+	return OBJ_cmp(a, b);
 }
-
 
 static int
 obj_cmp_BSEARCH_CMP_FN(const void *a_, const void *b_)

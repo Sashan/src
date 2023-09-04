@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.33 2022/11/29 01:04:44 cheloha Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.35 2023/08/23 01:55:47 cheloha Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -153,7 +153,6 @@ curcpu(void)
 void	cpu_kick(struct cpu_info *);
 void	cpu_unidle(struct cpu_info *);
 void	cpu_boot_secondary_processors(void);
-void	cpu_startclock(void);
 
 extern void (*ul_setperf)(int);
 void	mp_setperf(int);
@@ -184,6 +183,8 @@ extern uint32_t cpu_features2;
 void cpu_init_features(void);
 void cpu_init(void);
 
+#define	cpu_idle_enter()	do { /* nothing */ } while (0)
+#define	cpu_idle_leave()	do { /* nothing */ } while (0)
 extern uint64_t cpu_idle_state_psscr;
 extern void (*cpu_idle_cycle_fcn)(void);
 

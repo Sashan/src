@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.475 2023/04/20 15:44:45 claudio Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.477 2023/08/30 08:16:28 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -642,7 +642,6 @@ enum imsg_type {
 	IMSG_RECONF_ROA_ITEM,
 	IMSG_RECONF_ASPA,
 	IMSG_RECONF_ASPA_TAS,
-	IMSG_RECONF_ASPA_TAS_AID,
 	IMSG_RECONF_ASPA_DONE,
 	IMSG_RECONF_ASPA_PREP,
 	IMSG_RECONF_RTR_CONFIG,
@@ -692,7 +691,8 @@ enum ctl_results {
 	CTL_RES_NOMEM,
 	CTL_RES_BADPEER,
 	CTL_RES_BADSTATE,
-	CTL_RES_NOSUCHRIB
+	CTL_RES_NOSUCHRIB,
+	CTL_RES_OPNOTSUPP,
 };
 
 /* needed for session.h parse prototype */
@@ -1270,10 +1270,8 @@ struct aspa_set {
 	uint32_t			 as;
 	uint32_t			 num;
 	uint32_t			 *tas;
-	uint8_t				 *tas_aid;
 	RB_ENTRY(aspa_set)		 entry;
 };
-#define TAS_AID_SIZE(n)	(((n) + 15) / 16 * sizeof(uint32_t))
 
 struct aspa_prep {
 	size_t				datasize;
@@ -1712,7 +1710,8 @@ static const char * const ctl_res_strerror[] = {
 	"out of memory",
 	"not a cloned peer",
 	"peer still active, down peer first",
-	"no such RIB"
+	"no such RIB",
+	"operation not supported",
 };
 
 static const char * const timernames[] = {

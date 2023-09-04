@@ -1,4 +1,4 @@
-.\" $OpenBSD: tmux.1,v 1.926 2023/08/08 08:21:30 nicm Exp $
+.\" $OpenBSD: tmux.1,v 1.931 2023/09/02 09:17:23 nicm Exp $
 .\"
 .\" Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
 .\"
@@ -14,7 +14,7 @@
 .\" IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING
 .\" OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: August 8 2023 $
+.Dd $Mdocdate: September 2 2023 $
 .Dt TMUX 1
 .Os
 .Sh NAME
@@ -4039,16 +4039,25 @@ The default is 80x24.
 If enabled and the session is no longer attached to any clients, it is
 destroyed.
 .It Xo Ic detach-on-destroy
-.Op Ic off | on | no-detached
+.Op Ic off | on | no-detached | previous | next
 .Xc
-If on (the default), the client is detached when the session it is attached to
+If
+.Ic on
+(the default), the client is detached when the session it is attached to
 is destroyed.
-If off, the client is switched to the most recently active of the remaining
+If
+.Ic off ,
+the client is switched to the most recently active of the remaining
 sessions.
 If
 .Ic no-detached ,
 the client is detached only if there are no detached sessions; if detached
 sessions exist, the client is switched to the most recently active.
+If
+.Ic previous
+or
+.Ic next ,
+the client is switched to the previous or next session in alphabetical order.
 .It Ic display-panes-active-colour Ar colour
 Set the colour used by the
 .Ic display-panes
@@ -4096,6 +4105,13 @@ See the
 section on how to specify
 .Ar style .
 Attributes are ignored.
+.It Ic menu-selected-style Ar style
+Set the selected menu item style.
+See the
+.Sx STYLES
+section on how to specify
+.Ar style .
+Attributes are ignored.
 .It Ic menu-border-style Ar style
 Set the menu border style.
 See the
@@ -4108,7 +4124,7 @@ Set the type of characters used for drawing menu borders.
 See
 .Ic popup-border-lines
 for possible values for
-.Ar type .
+.Ar border-lines .
 .It Ic message-command-style Ar style
 Set status line message command style.
 This is used for the command prompt with
@@ -5436,6 +5452,8 @@ The following variables are available, where appropriate:
 .It Li "mouse_line" Ta "" Ta "Line under mouse, if any"
 .It Li "mouse_sgr_flag" Ta "" Ta "Pane mouse SGR flag"
 .It Li "mouse_standard_flag" Ta "" Ta "Pane mouse standard flag"
+.It Li "mouse_status_line" Ta "" Ta "Status line on which mouse event took place"
+.It Li "mouse_status_range" Ta "" Ta "Range type or argument of mouse event on status line"
 .It Li "mouse_utf8_flag" Ta "" Ta "Pane mouse UTF-8 flag"
 .It Li "mouse_word" Ta "" Ta "Word under mouse, if any"
 .It Li "mouse_x" Ta "" Ta "Mouse X position, if any"
@@ -5674,26 +5692,56 @@ Only one default may be pushed (each
 replaces the previous saved default).
 .It Xo Ic range=left ,
 .Ic range=right ,
+.Ic range=session|X ,
 .Ic range=window|X ,
+.Ic range=pane|X ,
+.Ic range=user|X ,
 .Ic norange
 .Xc
-Mark a range in the
+Mark a range for mouse events in the
 .Ic status-format
 option.
+When a mouse event occurs in the
 .Ic range=left
-and
+or
 .Ic range=right
-are the text used for the
+range, the
 .Ql StatusLeft
 and
 .Ql StatusRight
-mouse keys.
+key bindings are triggered.
+.Pp
+.Ic range=session|X ,
 .Ic range=window|X
-is the range for a window passed to the
+and
+.Ic range=pane|X
+are ranges for a session, window or pane.
+These trigger the
 .Ql Status
-mouse key, where
+mouse key with the target session, window or pane given by the
 .Ql X
-is a window index.
+argument.
+.Ql X
+is a session ID, window index in the current session or a pane ID.
+For these, the
+.Ic mouse_status_range
+format variable will be set to
+.Ql session ,
+.Ql window
+or
+.Ql pane .
+.Pp
+.Ic range=user|X
+is a user-defined range; it triggers the
+.Ql Status
+mouse key.
+The argument
+.Ql X
+will be available in the
+.Ic mouse_status_range
+format variable.
+.Ql X
+must be at most 15 bytes in length.
 .El
 .Pp
 Examples are:
@@ -6064,10 +6112,11 @@ the default is
 .Op Fl O
 .Op Fl b Ar border-lines
 .Op Fl c Ar target-client
+.Op Fl C Ar starting-choice
+.Op Fl H Ar selected-style
 .Op Fl s Ar style
 .Op Fl S Ar border-style
 .Op Fl t Ar target-pane
-.Op Fl C Ar starting-choice
 .Op Fl T Ar title
 .Op Fl x Ar position
 .Op Fl y Ar position
@@ -6100,6 +6149,10 @@ See
 .Ic popup-border-lines
 for possible values for
 .Ar border-lines .
+.Pp
+.Fl H
+sets the style for the selected menu item (see
+.Sx STYLES ) .
 .Pp
 .Fl s
 sets the style for the menu and
@@ -6595,6 +6648,7 @@ option.
 .Tg run
 .It Xo Ic run-shell
 .Op Fl bC
+.Op Fl c Ar start-directory
 .Op Fl d Ar delay
 .Op Fl t Ar target-pane
 .Op Ar shell-command
@@ -6621,6 +6675,10 @@ the command is run in the background.
 waits for
 .Ar delay
 seconds before starting the command.
+If
+.Fl c
+is given, the current working directory is set to
+.Ar start-directory .
 If
 .Fl C
 is not given, any output to stdout is displayed in view mode (in the pane
@@ -6744,9 +6802,15 @@ Set a styled underscore.
 The single parameter is one of: 0 for no underscore, 1 for normal
 underscore, 2 for double underscore, 3 for curly underscore, 4 for dotted
 underscore and 5 for dashed underscore.
-.It Em \&Setulc , \&ol
+.It Em \&Setulc , \&Setulc1, \&ol
 Set the underscore colour or reset to the default.
-The argument is (red * 65536) + (green * 256) + blue where each is between 0
+.Em Setulc
+is for RGB colours and
+.Em Setulc1
+for ANSI or 256 colours.
+The
+.Em Setulc
+argument is (red * 65536) + (green * 256) + blue where each is between 0
 and 255.
 .It Em \&Ss , Se
 Set or reset the cursor style.

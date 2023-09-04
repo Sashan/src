@@ -1,5 +1,5 @@
 #!/bin/ksh
-#	$OpenBSD: install.sub,v 1.1253 2023/08/10 17:09:34 kn Exp $
+#	$OpenBSD: install.sub,v 1.1255 2023/08/21 14:33:55 kn Exp $
 #
 # Copyright (c) 1997-2015 Todd Miller, Theo de Raadt, Ken Westerback
 # Copyright (c) 2015, Robert Peichaer <rpe@openbsd.org>
@@ -3075,7 +3075,7 @@ do_autoinstall() {
 }
 
 encrypt_root() {
-	local _chunk _tries=0
+	local _chunk=$ROOTDISK
 
 	[[ $MDBOOTSR == y ]] || return
 
@@ -3090,17 +3090,11 @@ encrypt_root() {
 
 	ask_yn 'Encrypt the root disk with a passphrase?' || return
 
-	_chunk=$ROOTDISK
 	echo "\nConfiguring the crypto chunk $_chunk...\n"
-
-	make_dev $_chunk
 	md_prep_fdisk $_chunk
 	echo 'RAID *' | disklabel -w -A -T- $_chunk
 
-	until bioctl -Cforce -cC -l${_chunk}a softraid0 >/dev/null; do
-		# Most likely botched passphrases, silently retry twice.
-		((++_tries < 3)) || exit
-	done
+	bioctl -Cforce -cC -l${_chunk}a softraid0 >/dev/null
 
 	# No volumes existed before asking, but we just created one.
 	ROOTDISK=$(get_softraid_volumes)

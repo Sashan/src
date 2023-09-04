@@ -1,4 +1,4 @@
-/* $OpenBSD: tty.c,v 1.432 2023/07/13 06:03:48 nicm Exp $ */
+/* $OpenBSD: tty.c,v 1.434 2023/09/02 20:03:10 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -82,6 +82,7 @@ static void	tty_check_overlay_range(struct tty *, u_int, u_int, u_int,
 #define TTY_BLOCK_STOP(tty) (1 + ((tty)->sx * (tty)->sy) / 8)
 
 #define TTY_QUERY_TIMEOUT 5
+#define TTY_REQUEST_LIMIT 30
 
 void
 tty_create_log(void)
@@ -369,12 +370,29 @@ tty_send_requests(struct tty *tty)
 			tty_puts(tty, "\033[>c");
 		if (~tty->flags & TTY_HAVEXDA)
 			tty_puts(tty, "\033[>q");
-		if (~tty->flags & TTY_HAVEFG)
-			tty_puts(tty, "\033]10;?\033\\");
-		if (~tty->flags & TTY_HAVEBG)
-			tty_puts(tty, "\033]11;?\033\\");
+		tty_puts(tty, "\033]10;?\033\\");
+		tty_puts(tty, "\033]11;?\033\\");
 	} else
 		tty->flags |= TTY_ALL_REQUEST_FLAGS;
+	tty->last_requests = time (NULL);
+}
+
+void
+tty_repeat_requests(struct tty *tty)
+{
+	time_t	t = time (NULL);
+
+	if (~tty->flags & TTY_STARTED)
+		return;
+
+	if (t - tty->last_requests <= TTY_REQUEST_LIMIT)
+		return;
+	tty->last_requests = t;
+
+	if (tty->term->flags & TERM_VT100LIKE) {
+		tty_puts(tty, "\033]10;?\033\\");
+		tty_puts(tty, "\033]11;?\033\\");
+	}
 }
 
 void
@@ -2814,11 +2832,13 @@ tty_check_us(__unused struct tty *tty, struct colour_palette *palette,
 			gc->us = c;
 	}
 
-	/* Underscore colour is set as RGB so convert. */
-	if ((c = colour_force_rgb (gc->us)) == -1)
-		gc->us = 8;
-	else
-		gc->us = c;
+	/* Convert underscore colour if only RGB can be supported. */
+	if (!tty_term_has(tty->term, TTYC_SETULC1)) {
+		    if ((c = colour_force_rgb (gc->us)) == -1)
+			    gc->us = 8;
+		    else
+			    gc->us = c;
+	}
 }
 
 static void
@@ -2898,9 +2918,17 @@ tty_colours_us(struct tty *tty, const struct grid_cell *gc)
 		goto save;
 	}
 
-	/* Must be an RGB colour - this should never happen. */
-	if (~gc->us & COLOUR_FLAG_RGB)
+	/*
+	 * If this is not an RGB colour, use Setulc1 if it exists, otherwise
+	 * convert.
+	 */
+	if (~gc->us & COLOUR_FLAG_RGB) {
+		c = gc->us;
+		if ((~c & COLOUR_FLAG_256) && (c >= 90 && c <= 97))
+			c -= 82;
+		tty_putcode_i(tty, TTYC_SETULC1, c & ~COLOUR_FLAG_256);
 		return;
+	}
 
 	/*
 	 * Setulc and setal follows the ncurses(3) one argument "direct colour"
