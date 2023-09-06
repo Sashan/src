@@ -3484,7 +3484,30 @@ pfr_settflags_commit(struct pf_trans *t, struct pf_anchor *ta,
 	RB_FOREACH(kt_ta, pfr_ktablehead, &ta->ktables) {
 		kt_a = RB_FIND(pfr_ktablehead, &a->ktables, kt_ta);
 		KASSERT(kt_a != NULL);
-		pfr_clstats_ktable(kt_a, tzero,
-		    t->pfttab_ioflags & PFR_FLAG_ADDRSTOO);
+		kt_a->pfrkt_flags &= ~(PFR_TFLAG_PERSIST|PFR_TFLAG_CONST);
+		kt_a->pfrkt_flags |= (kt_ta->pfrkt_flags &
+		    (PFR_TFLAG_CONST | PFR_TFLAG_PERSIST));
+		/*
+		 * If table lost its persistent flag, then we must check
+		 * if it is still referred. If no rule refers to table,
+		 * then we must move it garbage list in transaction.
+		 *
+		 * TODO: check all references
+		 */
+		if (((kt_a->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) &&
+		    (kt_a->pfrkt_refcnt == 0)) {
+			RB_REMOVE(pfr_ktablehead, &a->ktables, kt_a);
+			SLIST_INSERT_HEAD(&t->pfttab_garbage, kt_a, pfrkt_workq);
+		}
 	}
+}
+
+void
+pfr_deladdrs_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
+{
+}
+
+void
+pfr_setaddrs_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
+{
 }
