@@ -362,6 +362,7 @@ struct pf_trans {
 	LIST_ENTRY(pf_trans)	pft_entry;
 	uint32_t		pft_unit;		/* process id */
 	uint64_t		pft_ticket;
+	int			pft_ioflags;
 	enum pf_trans_type	pft_type;
 	union {
 		struct {
@@ -383,13 +384,15 @@ struct pf_trans {
 		} u_ina;
 		struct {
 			unsigned long		 tab_iocmd;
-			int			 tab_ioflags;
 			TAILQ_HEAD(, pf_anchor)	 tab_anchor_list;
-			struct pfr_ktableworkq	 tab_garbage;
+			struct pfr_kentryworkq   tab_ke_ioq;
+			struct pfr_ktableworkq	 tab_kt_garbage;
+			struct pfr_kentryworkq	 tab_kt_garbage;
 			struct pf_rules_container
 						 tab_rc;
 			char			 tab_anchor_path[PATH_MAX];
 			char			*tab_kbuf;
+			uint32_t		 tab_ke_ioq_len;
 			uint32_t		 tab_kbuf_sz;
 			uint32_t		 tab_size;
 			uint32_t		 tab_nadd;
@@ -414,13 +417,15 @@ struct pf_trans {
 #define	pftina_modify_defaults	u.u_ina.ina_modify_defaults
 
 #define pfttab_iocmd		u.u_tab.tab_iocmd
-#define pfttab_ioflags		u.u_tab.tab_ioflags
 #define pfttab_anchor_list	u.u_tab.tab_anchor_list
-#define pfttab_garbage		u.u_tab.tab_garbage
+#define pfttab_ke_ioq		u.u_tab.tab_ke_ioq
+#define pfttab_kt_garbage	u.u_tab.tab_kt_garbage
+#define pfttab_ke_garbage	u.u_tab.tab_ke_garbage
 #define pfttab_rc		u.u_tab.tab_rc
 #define pfttab_anchor_path	u.u_tab.tab_anchor_path
 #define pfttab_kbuf		u.u_tab.tab_kbuf
 #define pfttab_kbuf_sz		u.u_tab.tab_kbuf_sz
+#define pfttab_ioq_ke_len	u.u_tab.tab_ioq_ke_len
 #define pfttab_size		u.u_tab.tab_size
 #define pfttab_nadd		u.u_tab.tab_nadd
 #define pfttab_ndel		u.u_tab.tab_ndel
@@ -479,6 +484,9 @@ extern struct rwlock	pf_state_lock;
 			    rw_status(&pf_state_lock), __func__);\
 	} while (0)
 
+#define PFR_IOQ_ONLY	0
+#define PFR_GARBAGE_TOO	1
+
 /* for copies to/from network byte order */
 void			 pf_state_peer_hton(const struct pf_state_peer *,
 			    struct pfsync_state_peer *);
@@ -498,6 +506,10 @@ extern void		pfr_drop_table_refs(struct pf_anchor *,
 			    struct pf_anchor *);
 extern int		pfr_copyin_tables(struct pf_trans *,
 			    struct pfr_table *, int);
+extern int		pfr_copyin_addrs(struct pf_trans *, struct pfr_table *,
+			    struct pfr_addr *, int);
+extern int		pfr_addrs_feedback(struct pf_trans *,
+			    struct pfr_addr *, int, int);
 extern void		pfr_addtables_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
 extern void		pfr_deltables_commit(struct pf_trans *,
@@ -514,6 +526,9 @@ extern void		pfr_deladdrs_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
 extern void		pfr_setaddrs_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
+extern void		pfr_addaddrs_commit(struct pf_trans *,
+			    struct pf_anchor *, struct pf_anchor *);
+extern void		pfr_destroy_kentry(struct pfr_kentry *);
 
 RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 #endif /* _KERNEL */

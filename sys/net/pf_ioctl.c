@@ -2722,7 +2722,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t = pf_open_trans(minor(dev));
 		pf_init_ttab(t);
 		t->pfttab_iocmd = cmd;
-		t->pfttab_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
 
 		error = pfr_copyin_tables(t, io->pfrio_buffer, io->pfrio_size);
 		if (error != 0) {
@@ -2769,7 +2769,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t = pf_open_trans(minor(dev));
 		pf_init_ttab(t);
 		t->pfttab_iocmd = cmd;
-		t->pfttab_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
 
 		error = pfr_copyin_tables(t, io->pfrio_buffer, io->pfrio_size);
 		if (error != 0) {
@@ -2815,7 +2815,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t = pf_open_trans(minor(dev));
 		pf_init_ttab(t);
 		t->pfttab_iocmd = cmd;
-		t->pfttab_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
 		t->pfttab_size = io->pfrio_size;
 		if (io->pfrio_size != 0) {
 			t->pfttab_kbuf_sz =
@@ -2855,7 +2855,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t = pf_open_trans(minor(dev));
 		pf_init_ttab(t);
 		t->pfttab_iocmd = cmd;
-		t->pfttab_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
 		t->pfttab_size = io->pfrio_size;
 		if (io->pfrio_size != 0) {
 			t->pfttab_kbuf_sz =
@@ -2889,7 +2889,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t = pf_open_trans(minor(dev));
 		pf_init_ttab(t);
 		t->pfttab_iocmd = cmd;
-		t->pfttab_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
 
 		error = pfr_clr_tstats(t, io->pfrio_buffer, io->pfrio_size,
 		    &io->pfrio_nzero, io->pfrio_flags | PFR_FLAG_USERIOCTL);
@@ -2984,12 +2984,12 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t = pf_open_trans(minor(dev));
 		pf_init_ttab(t);
 		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
 
-		error = pfr_add_addrs(t, &io->pfrio_table, io->pfrio_buffer,
-		    io->pfrio_size, &io->pfrio_nadd, io->pfrio_flags |
-		    PFR_FLAG_USERIOCTL);
+		error = pfr_copyin_addrs(t, &io->pfrio_table, io->pfrio_buffer,
+		    io->pfrio_size);
 
-		if ((error != 0) && ((io->pfrio_flags & PFR_FLAG_DUMMY)) == 0) {
+		if (error != 0) {
 			NET_LOCK();
 			PF_LOCK();
 
@@ -3000,6 +3000,10 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 			NET_UNLOCK();
 			PF_UNLOCK();
+
+			error = pfr_addrs_feedback(t, &io->pfrio_buffer,
+			    io->pfrio_size, PFR_IOQ_ONLY);
+			io->pfrio_nadd = t->pfttab_nadd;
 		}
 
 		pf_rollback_trans(t);
@@ -3020,12 +3024,12 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t = pf_open_trans(minor(dev));
 		pf_init_ttab(t);
 		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
 
-		error = pfr_del_addrs(t, &io->pfrio_table, io->pfrio_buffer,
-		    io->pfrio_size, &io->pfrio_ndel, io->pfrio_flags |
-		    PFR_FLAG_USERIOCTL);
+		error = pfr_copyin_addrs(t, &io->pfrio_table, io->pfrio_buffer,
+		    io->pfrio_size);
 
-		if ((error != 0) && ((io->pfrio_flags & PFR_FLAG_DUMMY)) == 0) {
+		if (error != 0) {
 			NET_LOCK();
 			PF_LOCK();
 
@@ -3036,6 +3040,10 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 			PF_UNLOCK();
 			NET_UNLOCK();
+
+			error = pfr_addrs_feedback(t, &io->pfrio_buffer,
+			    io->pfrio_size, PFR_IOQ_ONLY);
+			io->pfrio_ndel = t->pfttab_ndel;
 		}
 
 		pf_rollback_trans(t);
@@ -3055,13 +3063,12 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t = pf_open_trans(minor(dev));
 		pf_init_ttab(t);
 		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
 
-		error = pfr_set_addrs_ioc(t, &io->pfrio_table, io->pfrio_buffer,
-		    io->pfrio_size, &io->pfrio_size2, &io->pfrio_nadd,
-		    &io->pfrio_ndel, &io->pfrio_nchange, io->pfrio_flags |
-		    PFR_FLAG_USERIOCTL, 0);
+		error = pfr_copyin_addrs(t, &io->pfrio_table, io->pfrio_buffer,
+		    io->pfrio_size);
 
-		if ((error != 0) && ((io->pfrio_flags & PFR_FLAG_DUMMY)) == 0) {
+		if (error != 0) {
 			NET_LOCK();
 			PF_LOCK();
 
@@ -3072,7 +3079,23 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 			PF_UNLOCK();
 			NET_UNLOCK();
+
+			pfr_addrs_feedback(t, &io->pfrio_buffer, io->pfrio_size,
+			    PFR_GARBAGE_TOO);
+			io->pfrio_nadd = t->pfttab_nadd;
+			io->pfrio_ndel = t->pfttab_ndel;
+			io->pfrio_nchange = t->pfttab_nchg;
+
+			/*
+			 * forget deleted addresses, so pf_rollback_trans()
+			 * won't purge them
+			 */
+			if (io->pfrio_flags & PFR_FLAG_DUMMY)
+				SLIST_INIT(&t->pfttab_ke_garbage);
 		}
+
+		pf_rollback_trans(t);
+
 		break;
 	}
 
@@ -4332,7 +4355,7 @@ pf_tab_do_commit_op(struct pf_trans *t, struct pf_anchor *ta,
 		pfr_settflags_commit(t, ta, a);
 		break;
 	case DIOCRADDADDRS:
-		pfr_setaddrs_commit(t, ta, a);
+		pfr_addaddrs_commit(t, ta, a);
 		break;
 	case DIOCRDELADDRS:
 		pfr_deladdrs_commit(t, ta, a);
@@ -4478,6 +4501,7 @@ pf_cleanup_ttab(struct pf_trans *t)
 {
 	struct pf_anchor *ta, *tw;
 	struct pfr_ktable *tkt, *tktw;
+	struct pfr_kentry *ke;
 
 	KASSERT(t->pft_type == PF_TRANS_TAB);
 
@@ -4511,9 +4535,24 @@ pf_cleanup_ttab(struct pf_trans *t)
 		pool_put(&pf_anchor_pl, ta);
 	}
 
-	while ((tkt = SLIST_FIRST(&t->pfttab_garbage)) != NULL) {
-		SLIST_REMOVE_HEAD(&t->pfttab_garbage, pfrkt_workq);
+	while ((tkt = SLIST_FIRST(&t->pfttab_kt_garbage)) != NULL) {
+		SLIST_REMOVE_HEAD(&t->pfttab_kt_garbage, pfrkt_workq);
 		pfr_destroy_ktable(tkt, 1);
+	}
+
+	while ((ke = SLIST_FIRST(&t->pfttab_ke_ioq)) != NULL) {
+		SLIST_REMOVE_HEAD(&t->pfttab_ke_ioq, pfrke_workq);
+		switch (ke->pfrke_fb) {
+		case PFR_FB_ADDED:
+			break;
+		default:
+			pfr_destroy_kentry(ke);
+		}
+	}
+
+	while ((ke = SLIST_FIRST(&t->pfttab_ke_garbage)) != NULL) {
+		SLIST_REMOVE_HEAD(&t->pfttab_ke_garbage, pfrke_workq);
+		pfr_destroy_kentry(ke);
 	}
 
 	if (t->pfttab_kbuf_sz != 0)
@@ -4527,7 +4566,9 @@ pf_init_ttab(struct pf_trans *t)
 
 	RB_INIT(&t->pfttab_rc.anchors);
 	TAILQ_INIT(&t->pfttab_anchor_list);
-	SLIST_INIT(&t->pfttab_garbage);
+	SLIST_INIT(&t->pfttab_ke_ioq);
+	SLIST_INIT(&t->pfttab_kt_garbage);
+	SLIST_INIT(&t->pfttab_ke_garbage);
 	pf_init_ruleset(&t->pfttab_rc.main_anchor.ruleset);
 }
 

@@ -991,7 +991,6 @@ struct pfr_ktable {
 #define pfrkt_t		pfrkt_ts.pfrts_t
 #define pfrkt_name	pfrkt_t.pfrt_name
 #define pfrkt_anchor	pfrkt_t.pfrt_anchor
-#define pfrkt_ruleset	pfrkt_t.pfrt_ruleset
 #define pfrkt_flags	pfrkt_t.pfrt_flags
 #define pfrkt_cnt	pfrkt_ts.pfrts_cnt
 #define pfrkt_refcnt	pfrkt_ts.pfrts_refcnt
@@ -1752,12 +1751,6 @@ int	pfr_set_tflags(struct pf_trans *, struct pfr_table *, int, int, int,
 	    int *, int *, int);
 int	pfr_clr_addrs(struct pfr_table *, int *, int);
 int	pfr_insert_kentry(struct pfr_ktable *, struct pfr_addr *, time_t);
-int	pfr_add_addrs(struct pf_trans *, struct pfr_table *, struct pfr_addr *,
-	    int, int *, int);
-int	pfr_del_addrs(struct pf_trans *, struct pfr_table *, struct pfr_addr *,
-	    int, int *, int);
-int	pfr_set_addrs(struct pfr_table *, struct pfr_addr *, int, int *, int *,
-	    int *, int *, int, u_int32_t);
 int	pfr_set_addrs_ioc(struct pf_trans *, struct pfr_table *,
 	    struct pfr_addr *, int, int *, int *, int *, int *, int, u_int32_t);
 int	pfr_get_addrs(struct pfr_table *, struct pfr_addr *, int *, int);
