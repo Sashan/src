@@ -2,7 +2,7 @@
  * THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
  *
  * generated from:
- *	OpenBSD: pcidevs,v 1.2046 2023/08/30 07:11:48 kevlo Exp 
+ *	OpenBSD: pcidevs,v 1.2051 2023/09/25 15:37:36 deraadt Exp 
  */
 
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
@@ -6546,6 +6546,10 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_ATI, PCI_PRODUCT_ATI_NAVI31_3,
 	    "Navi 31",
+	},
+	{
+	    PCI_VENDOR_ATI, PCI_PRODUCT_ATI_NAVI32_1,
+	    "Navi 32",
 	},
 	{
 	    PCI_VENDOR_ATI, PCI_PRODUCT_ATI_NAVI33_1,
@@ -15622,6 +15626,10 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_OPTANE,
 	    "Optane",
+	},
+	{
+	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_P1600X,
+	    "P1600X",
 	},
 	{
 	    PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_WL_9260_1,
@@ -26348,6 +26356,10 @@ static const struct pci_known_product pci_known_products[] = {
 	    "PEX511",
 	},
 	{
+	    PCI_VENDOR_MEINBERG, PCI_PRODUCT_MEINBERG_PZF180PEX,
+	    "PZF180PEX",
+	},
+	{
 	    PCI_VENDOR_MEINBERG, PCI_PRODUCT_MEINBERG_GPS170PCI,
 	    "GPS170PCI",
 	},
@@ -26394,6 +26406,10 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_MELLANOX, PCI_PRODUCT_MELLANOX_MT2892,
 	    "ConnectX-6 Dx",
+	},
+	{
+	    PCI_VENDOR_MELLANOX, PCI_PRODUCT_MELLANOX_MT2894,
+	    "ConnectX-6 Lx",
 	},
 	{
 	    PCI_VENDOR_MELLANOX, PCI_PRODUCT_MELLANOX_CONNECTX_EN,
@@ -30734,6 +30750,10 @@ static const struct pci_known_product pci_known_products[] = {
 	{
 	    PCI_VENDOR_REALTEK, PCI_PRODUCT_REALTEK_RTL8821AE,
 	    "8821AE",
+	},
+	{
+	    PCI_VENDOR_REALTEK, PCI_PRODUCT_REALTEK_RTL8852AE,
+	    "8852AE",
 	},
 	{
 	    PCI_VENDOR_REALTEK, PCI_PRODUCT_REALTEK_RTL8723BE,

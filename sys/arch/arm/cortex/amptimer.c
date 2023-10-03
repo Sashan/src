@@ -1,4 +1,4 @@
-/* $OpenBSD: amptimer.c,v 1.18 2023/08/23 01:55:46 cheloha Exp $ */
+/* $OpenBSD: amptimer.c,v 1.20 2023/09/17 14:50:51 cheloha Exp $ */
 /*
  * Copyright (c) 2011 Dale Rahn <drahn@openbsd.org>
  *
@@ -287,7 +287,7 @@ amptimer_cpu_initclocks(void)
 
 	stathz = hz;
 	profhz = hz * 10;
-	clockintr_init(CL_RNDSTAT);
+	statclock_is_randomized = 1;
 
 	if (sc->sc_ticks_per_second != amptimer_frequency) {
 		amptimer_set_clockrate(amptimer_frequency);

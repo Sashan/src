@@ -1,4 +1,4 @@
-/*	$OpenBSD: clock.c,v 1.37 2023/08/23 01:55:46 cheloha Exp $	*/
+/*	$OpenBSD: clock.c,v 1.39 2023/09/17 14:50:51 cheloha Exp $	*/
 
 /*
  * Copyright (c) 1998-2003 Michael Shalayeff
@@ -116,7 +116,7 @@ cpu_initclocks(void)
 
 	stathz = hz;
 	profhz = stathz * 10;
-	clockintr_init(CL_RNDSTAT);
+	statclock_is_randomized = 1;
 
 	itmr_nsec_cycle_ratio = itmr_freq * (1ULL << 32) / 1000000000;
 	itmr_nsec_max = UINT64_MAX / itmr_nsec_cycle_ratio;

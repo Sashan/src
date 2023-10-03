@@ -1,4 +1,4 @@
-/*	$OpenBSD: mft.c,v 1.96 2023/06/29 10:28:25 tb Exp $ */
+/*	$OpenBSD: mft.c,v 1.98 2023/09/25 11:08:45 tb Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -233,6 +233,7 @@ mft_parse_filehash(struct parse *p, const FileAndHash *fh)
 	int			 rc = 0;
 	struct mftfile		*fent;
 	enum rtype		 type;
+	size_t			 new_idx = 0;
 
 	if (!valid_mft_filename(fh->file->data, fh->file->length)) {
 		warnx("%s: RFC 6486 section 4.2.2: bad filename", p->fn);
@@ -256,8 +257,15 @@ mft_parse_filehash(struct parse *p, const FileAndHash *fh)
 		p->found_crl = 1;
 	}
 
-	/* Insert the filename and hash value. */
-	fent = &p->res->files[p->res->filesz++];
+	if (filemode)
+		fent = &p->res->files[p->res->filesz++];
+	else {
+		/* Fisher-Yates shuffle */
+		new_idx = arc4random_uniform(p->res->filesz + 1);
+		p->res->files[p->res->filesz++] = p->res->files[new_idx];
+		fent = &p->res->files[new_idx];
+	}
+
 	fent->type = type;
 	fent->file = fn;
 	fn = NULL;
@@ -350,7 +358,8 @@ mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p)
  * The MFT content is otherwise returned.
  */
 struct mft *
-mft_parse(X509 **x509, const char *fn, const unsigned char *der, size_t len)
+mft_parse(X509 **x509, const char *fn, int talid, const unsigned char *der,
+    size_t len)
 {
 	struct parse	 p;
 	struct cert	*cert = NULL;

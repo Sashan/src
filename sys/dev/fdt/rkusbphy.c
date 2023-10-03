@@ -1,4 +1,4 @@
-/*	$OpenBSD: rkusbphy.c,v 1.2 2023/04/03 01:21:31 dlg Exp $ */
+/*	$OpenBSD: rkusbphy.c,v 1.4 2023/09/29 17:30:35 kettenis Exp $ */
 
 /*
  * Copyright (c) 2023 David Gwynne <dlg@openbsd.org>

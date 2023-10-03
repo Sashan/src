@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sched.c,v 1.88 2023/08/31 19:29:51 cheloha Exp $	*/
+/*	$OpenBSD: kern_sched.c,v 1.92 2023/09/19 11:31:51 claudio Exp $	*/
 /*
  * Copyright (c) 2007, 2008 Artur Grabowski <art@openbsd.org>
  *
@@ -88,15 +88,18 @@ sched_init_cpu(struct cpu_info *ci)
 
 	spc->spc_idleproc = NULL;
 
-	spc->spc_itimer = clockintr_establish(&ci->ci_queue, itimer_update);
+	spc->spc_itimer = clockintr_establish(ci, itimer_update, NULL);
 	if (spc->spc_itimer == NULL)
 		panic("%s: clockintr_establish itimer_update", __func__);
-	spc->spc_profclock = clockintr_establish(&ci->ci_queue, profclock);
+	spc->spc_profclock = clockintr_establish(ci, profclock, NULL);
 	if (spc->spc_profclock == NULL)
 		panic("%s: clockintr_establish profclock", __func__);
-	spc->spc_roundrobin = clockintr_establish(&ci->ci_queue, roundrobin);
+	spc->spc_roundrobin = clockintr_establish(ci, roundrobin, NULL);
 	if (spc->spc_roundrobin == NULL)
 		panic("%s: clockintr_establish roundrobin", __func__);
+	spc->spc_statclock = clockintr_establish(ci, statclock, NULL);
+	if (spc->spc_statclock == NULL)
+		panic("%s: clockintr_establish statclock", __func__);
 
 	kthread_create_deferred(sched_kthreads_create, ci);
 
@@ -265,6 +268,7 @@ setrunqueue(struct cpu_info *ci, struct proc *p, uint8_t prio)
 
 	KASSERT(ci != NULL);
 	SCHED_ASSERT_LOCKED();
+	KASSERT(p->p_wchan == NULL);
 
 	p->p_cpu = ci;
 	p->p_stat = SRUN;

@@ -1,4 +1,4 @@
-/* $OpenBSD: clientloop.c,v 1.394 2023/08/28 04:06:52 djm Exp $ */
+/* $OpenBSD: clientloop.c,v 1.398 2023/09/10 03:51:55 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -108,6 +108,9 @@
 
 /* Permitted RSA signature algorithms for UpdateHostkeys proofs */
 #define HOSTKEY_PROOF_RSA_ALGS	"rsa-sha2-512,rsa-sha2-256"
+
+/* Uncertainty (in percent) of keystroke timing intervals */
+#define SSH_KEYSTROKE_TIMING_FUZZ 10
 
 /* import options */
 extern Options options;
@@ -519,12 +522,50 @@ send_chaff(struct ssh *ssh)
 	return 1;
 }
 
+/* Sets the next interval to send a keystroke or chaff packet */
+static void
+set_next_interval(const struct timespec *now, struct timespec *next_interval,
+    u_int interval_ms, int starting)
+{
+	struct timespec tmp;
+	long long interval_ns, fuzz_ns;
+	static long long rate_fuzz;
+
+	interval_ns = interval_ms * (1000LL * 1000);
+	fuzz_ns = (interval_ns * SSH_KEYSTROKE_TIMING_FUZZ) / 100;
+	/* Center fuzz around requested interval */
+	if (fuzz_ns > INT_MAX)
+		fuzz_ns = INT_MAX;
+	if (fuzz_ns > interval_ns) {
+		/* Shouldn't happen */
+		fatal_f("internal error: fuzz %u%% %lldns > interval %lldns",
+		    SSH_KEYSTROKE_TIMING_FUZZ, fuzz_ns, interval_ns);
+	}
+	/*
+	 * Randomise the keystroke/chaff intervals in two ways:
+	 * 1. Each interval has some random jitter applied to make the
+	 *    interval-to-interval time unpredictable.
+	 * 2. The overall interval rate is also randomly perturbed for each
+	 *    chaffing session to make the average rate unpredictable.
+	 */
+	if (starting)
+		rate_fuzz = arc4random_uniform(fuzz_ns);
+	interval_ns -= fuzz_ns;
+	interval_ns += arc4random_uniform(fuzz_ns) + rate_fuzz;
+
+	tmp.tv_sec = interval_ns / (1000 * 1000 * 1000);
+	tmp.tv_nsec = interval_ns % (1000 * 1000 * 1000);
+
+	timespecadd(now, &tmp, next_interval);
+}
+
 /*
  * Performs keystroke timing obfuscation. Returns non-zero if the
  * output fd should be polled.
  */
 static int
-obfuscate_keystroke_timing(struct ssh *ssh, struct timespec *timeout)
+obfuscate_keystroke_timing(struct ssh *ssh, struct timespec *timeout,
+    int channel_did_enqueue)
 {
 	static int active;
 	static struct timespec next_interval, chaff_until;
@@ -549,7 +590,8 @@ obfuscate_keystroke_timing(struct ssh *ssh, struct timespec *timeout)
 	    ssh_packet_have_data_to_write(ssh)) {
 		/* Stop if the output buffer has more than a few keystrokes */
 		stop_reason = "output buffer filling";
-	} else if (active && ssh_packet_have_data_to_write(ssh)) {
+	} else if (active && channel_did_enqueue &&
+	    ssh_packet_have_data_to_write(ssh)) {
 		/* Still in active mode and have a keystroke queued. */
 		had_keystroke = 1;
 	} else if (active) {
@@ -564,9 +606,11 @@ obfuscate_keystroke_timing(struct ssh *ssh, struct timespec *timeout)
 	}
 
 	if (stop_reason != NULL) {
-		active = 0;
-		debug3_f("stopping: %s (%llu chaff packets sent)",
-		    stop_reason, nchaff);
+		if (active) {
+			debug3_f("stopping: %s (%llu chaff packets sent)",
+			    stop_reason, nchaff);
+			active = 0;
+		}
 		return 1;
 	}
 
@@ -576,13 +620,14 @@ obfuscate_keystroke_timing(struct ssh *ssh, struct timespec *timeout)
 	 * interactively. In this case, start quantising outbound packets to
 	 * fixed time intervals to hide inter-keystroke timing.
 	 */
-	if (!active && ssh_packet_interactive_data_to_write(ssh)) {
-		debug3_f("starting: interval %d",
+	if (!active && ssh_packet_interactive_data_to_write(ssh) &&
+	    channel_did_enqueue && ssh_packet_have_data_to_write(ssh)) {
+		debug3_f("starting: interval ~%dms",
 		    options.obscure_keystroke_timing_interval);
 		just_started = had_keystroke = active = 1;
 		nchaff = 0;
-		ms_to_timespec(&tmp, options.obscure_keystroke_timing_interval);
-		timespecadd(&now, &tmp, &next_interval);
+		set_next_interval(&now, &next_interval,
+		    options.obscure_keystroke_timing_interval, 1);
 	}
 
 	/* Don't hold off if obfuscation inactive */
@@ -615,8 +660,8 @@ obfuscate_keystroke_timing(struct ssh *ssh, struct timespec *timeout)
 	n = (n < 0) ? 1 : n + 1;
 
 	/* Advance to the next interval */
-	ms_to_timespec(&tmp, options.obscure_keystroke_timing_interval * n);
-	timespecadd(&now, &tmp, &next_interval);
+	set_next_interval(&now, &next_interval,
+	    options.obscure_keystroke_timing_interval * n, 0);
 	return 1;
 }
 
@@ -626,7 +671,7 @@ obfuscate_keystroke_timing(struct ssh *ssh, struct timespec *timeout)
  */
 static void
 client_wait_until_can_do_something(struct ssh *ssh, struct pollfd **pfdp,
-    u_int *npfd_allocp, u_int *npfd_activep, int rekeying,
+    u_int *npfd_allocp, u_int *npfd_activep, int channel_did_enqueue,
     int *conn_in_readyp, int *conn_out_readyp)
 {
 	struct timespec timeout;
@@ -650,7 +695,7 @@ client_wait_until_can_do_something(struct ssh *ssh, struct pollfd **pfdp,
 		return;
 	}
 
-	oready = obfuscate_keystroke_timing(ssh, &timeout);
+	oready = obfuscate_keystroke_timing(ssh, &timeout, channel_did_enqueue);
 
 	/* Monitor server connection on reserved pollfd entries */
 	(*pfdp)[0].fd = connection_in;
@@ -669,7 +714,7 @@ client_wait_until_can_do_something(struct ssh *ssh, struct pollfd **pfdp,
 		ptimeout_deadline_monotime(&timeout, control_persist_exit_time);
 	if (options.server_alive_interval > 0)
 		ptimeout_deadline_monotime(&timeout, server_alive_time);
-	if (options.rekey_interval > 0 && !rekeying) {
+	if (options.rekey_interval > 0 && !ssh_packet_is_rekeying(ssh)) {
 		ptimeout_deadline_sec(&timeout,
 		    ssh_packet_get_rekey_timeout(ssh));
 	}
@@ -1391,7 +1436,7 @@ client_loop(struct ssh *ssh, int have_pty, int escape_char_arg,
 	struct pollfd *pfd = NULL;
 	u_int npfd_alloc = 0, npfd_active = 0;
 	double start_time, total_time;
-	int r, len;
+	int channel_did_enqueue = 0, r, len;
 	u_int64_t ibytes, obytes;
 	int conn_in_ready, conn_out_ready;
 
@@ -1481,6 +1526,7 @@ client_loop(struct ssh *ssh, int have_pty, int escape_char_arg,
 
 	/* Main loop of the client for the interactive session mode. */
 	while (!quit_pending) {
+		channel_did_enqueue = 0;
 
 		/* Process buffered packets sent by the server. */
 		client_process_buffered_input_packets(ssh);
@@ -1502,7 +1548,7 @@ client_loop(struct ssh *ssh, int have_pty, int escape_char_arg,
 			 * enqueue them for sending to the server.
 			 */
 			if (ssh_packet_not_very_much_data_to_write(ssh))
-				channel_output_poll(ssh);
+				channel_did_enqueue = channel_output_poll(ssh);
 
 			/*
 			 * Check if the window size has changed, and buffer a
@@ -1518,7 +1564,7 @@ client_loop(struct ssh *ssh, int have_pty, int escape_char_arg,
 		 * available on one of the descriptors).
 		 */
 		client_wait_until_can_do_something(ssh, &pfd, &npfd_alloc,
-		    &npfd_active, ssh_packet_is_rekeying(ssh),
+		    &npfd_active, channel_did_enqueue,
 		    &conn_in_ready, &conn_out_ready);
 
 		if (quit_pending)

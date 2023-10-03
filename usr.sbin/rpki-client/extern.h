@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.188 2023/06/29 14:33:35 tb Exp $ */
+/*	$OpenBSD: extern.h,v 1.192 2023/09/25 14:56:20 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -624,33 +624,33 @@ void		 cert_insert_brks(struct brk_tree *, struct cert *);
 enum rtype	 rtype_from_file_extension(const char *);
 void		 mft_buffer(struct ibuf *, const struct mft *);
 void		 mft_free(struct mft *);
-struct mft	*mft_parse(X509 **, const char *, const unsigned char *,
+struct mft	*mft_parse(X509 **, const char *, int, const unsigned char *,
 		    size_t);
 struct mft	*mft_read(struct ibuf *);
 int		 mft_compare(const struct mft *, const struct mft *);
 
 void		 roa_buffer(struct ibuf *, const struct roa *);
 void		 roa_free(struct roa *);
-struct roa	*roa_parse(X509 **, const char *, const unsigned char *,
+struct roa	*roa_parse(X509 **, const char *, int, const unsigned char *,
 		    size_t);
 struct roa	*roa_read(struct ibuf *);
 void		 roa_insert_vrps(struct vrp_tree *, struct roa *,
 		    struct repo *);
 
 void		 gbr_free(struct gbr *);
-struct gbr	*gbr_parse(X509 **, const char *, const unsigned char *,
+struct gbr	*gbr_parse(X509 **, const char *, int, const unsigned char *,
 		    size_t);
 
 void		 geofeed_free(struct geofeed *);
-struct geofeed	*geofeed_parse(X509 **, const char *, char *, size_t);
+struct geofeed	*geofeed_parse(X509 **, const char *, int, char *, size_t);
 
 void		 rsc_free(struct rsc *);
-struct rsc	*rsc_parse(X509 **, const char *, const unsigned char *,
+struct rsc	*rsc_parse(X509 **, const char *, int, const unsigned char *,
 		    size_t);
 
 void		 takey_free(struct takey *);
 void		 tak_free(struct tak *);
-struct tak	*tak_parse(X509 **, const char *, const unsigned char *,
+struct tak	*tak_parse(X509 **, const char *, int, const unsigned char *,
 		    size_t);
 struct tak	*tak_read(struct ibuf *);
 
@@ -658,7 +658,7 @@ void		 aspa_buffer(struct ibuf *, const struct aspa *);
 void		 aspa_free(struct aspa *);
 void		 aspa_insert_vaps(struct vap_tree *, struct aspa *,
 		    struct repo *);
-struct aspa	*aspa_parse(X509 **, const char *, const unsigned char *,
+struct aspa	*aspa_parse(X509 **, const char *, int, const unsigned char *,
 		    size_t);
 struct aspa	*aspa_read(struct ibuf *);
 
@@ -708,6 +708,8 @@ int		 ip_addr_parse(const ASN1_BIT_STRING *,
 			enum afi, const char *, struct ip_addr *);
 void		 ip_addr_print(const struct ip_addr *, enum afi, char *,
 			size_t);
+void		 ip_addr_range_print(const struct ip_addr_range *, enum afi,
+			char *, size_t);
 int		 ip_addr_cmp(const struct ip_addr *, const struct ip_addr *);
 int		 ip_addr_check_overlap(const struct cert_ip *,
 			const char *, const struct cert_ip *, size_t);
@@ -721,6 +723,9 @@ int		 sbgp_addr(const char *, struct cert_ip *, size_t *,
 int		 sbgp_addr_range(const char *, struct cert_ip *, size_t *,
 		    enum afi, const IPAddressRange *);
 
+int		 sbgp_parse_ipaddrblk(const char *, const IPAddrBlocks *,
+		    struct cert_ip **, size_t *);
+
 /* Work with RFC 3779 AS numbers, ranges. */
 
 int		 as_id_parse(const ASN1_INTEGER *, uint32_t *);
@@ -733,6 +738,9 @@ int		 sbgp_as_id(const char *, struct cert_as *, size_t *,
 		    const ASN1_INTEGER *);
 int		 sbgp_as_range(const char *, struct cert_as *, size_t *,
 		    const ASRange *);
+
+int		 sbgp_parse_assysnum(const char *, const ASIdentifiers *,
+		    struct cert_as **, size_t *);
 
 /* Parser-specific */
 void		 entity_free(struct entity *);
@@ -839,6 +847,7 @@ int		 x509_location(const char *, const char *, const char *,
 		    GENERAL_NAME *, char **);
 int		 x509_inherits(X509 *);
 int		 x509_any_inherits(X509 *);
+int		 x509_valid_subject(const char *, const X509 *);
 time_t		 x509_find_expires(time_t, struct auth *, struct crl_tree *);
 
 /* printers */

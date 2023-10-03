@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.125 2023/05/17 05:52:01 djm Exp $
+#	$OpenBSD: Makefile,v 1.127 2023/09/24 08:14:13 claudio Exp $
 
 OPENSSL?=	yes
 
@@ -9,8 +9,6 @@ SUBDIR=		unittests
 SUBDIR+=	misc
 
 REGRESS_SETUP_ONCE=misc	# For sk-dummy.so
-
-REGRESS_FAIL_EARLY?=	yes
 
 # Key conversion operations are not supported when built w/out OpenSSL.
 .if !defined(LTESTS_FROM) && ${OPENSSL:L} != no
@@ -101,7 +99,8 @@ LTESTS= 	connect \
 		agent-restrict \
 		hostbased \
 		channel-timeout \
-		connection-timeout
+		connection-timeout \
+		match-subsystem
 
 INTEROP_TESTS=	putty-transfer putty-ciphers putty-kex conch-ciphers
 #INTEROP_TESTS+=ssh-com ssh-com-client ssh-com-keygen ssh-com-sftp

@@ -1,4 +1,4 @@
-/*	$OpenBSD: stfclock.c,v 1.10 2023/08/30 19:07:23 kettenis Exp $	*/
+/*	$OpenBSD: stfclock.c,v 1.12 2023/09/23 18:29:55 kettenis Exp $	*/
 /*
  * Copyright (c) 2022 Mark Kettenis <kettenis@openbsd.org>
  * Copyright (c) 2023 Joel Sing <jsing@openbsd.org>
@@ -85,6 +85,8 @@
 #define JH7110_STGCLK_PCIE1_AXI_MST0	11
 #define JH7110_STGCLK_PCIE1_APB		12
 #define JH7110_STGCLK_PCIE1_TL		13
+#define JH7110_STGCLK_SEC_AHB		15
+#define JH7110_STGCLK_SEC_MISC_AHB	16
 
 #define JH7110_STGCLK_ASSERT_OFFSET	0x74
 #define JH7110_STGCLK_STATUS_OFFSET	0x78
@@ -810,6 +812,8 @@ stfclock_enable_jh7110_stg(void *cookie, uint32_t *cells, int on)
 	case JH7110_STGCLK_PCIE1_AXI_MST0:
 	case JH7110_STGCLK_PCIE1_APB:
 	case JH7110_STGCLK_PCIE1_TL:
+	case JH7110_STGCLK_SEC_AHB:
+	case JH7110_STGCLK_SEC_MISC_AHB:
 		if (on)
 			HSET4(sc, idx * 4, 1U << 31);
 		else
@@ -966,13 +970,29 @@ stfclock_set_frequency_jh7110_sys(void *cookie, uint32_t *cells, uint32_t freq)
 	uint32_t reg, div, mux;
 
 	switch (idx) {
-	case JH7110_SYSCLK_CPU_ROOT:
-		return clock_set_frequency(sc->sc_node, "pll0_out", freq);
-	case JH7110_SYSCLK_CPU_CORE:
-		parent = JH7110_SYSCLK_CPU_ROOT;
-		return stfclock_set_frequency_jh7110_sys(sc, &parent, freq);
 	case JH7110_SYSCLK_GMAC1_RMII_REFIN:
 		return clock_set_frequency(sc->sc_node, "gmac1_rmii_refin", freq);
+	}
+
+	/*
+	 * Firmware on the VisionFive 2 initializes PLL0 to 1 GHz and
+	 * runs the CPU cores at this frequency.  But there is no
+	 * operating point in the device tree with this frequency and
+	 * it means we can't run at the supported maximum frequency of
+	 * 1.5 GHz.
+	 *
+	 * So if we're switching away from the 1 GHz boot frequency,
+	 * bump the PLL0 frequency up to 1.5 GHz.  But set the divider
+	 * for the CPU clock to 2 to make sure we don't run at a
+	 * frequency that is too high for the default CPU voltage.
+	 */
+	if (idx == JH7110_SYSCLK_CPU_CORE && freq != 1000000000 &&
+	    stfclock_get_frequency_jh7110_sys(sc, &idx) == 1000000000) {
+		reg = HREAD4(sc, idx * 4);
+		reg &= ~CLKDIV_MASK;
+		reg |= (2 << CLKDIV_SHIFT);
+		HWRITE4(sc, idx * 4, reg);
+		clock_set_frequency(sc->sc_node, "pll0_out", 1500000000);
 	}
 
 	reg = HREAD4(sc, idx * 4);
@@ -989,6 +1009,9 @@ stfclock_set_frequency_jh7110_sys(void *cookie, uint32_t *cells, uint32_t freq)
 	}
 
 	switch (idx) {
+	case JH7110_SYSCLK_CPU_CORE:
+		parent = JH7110_SYSCLK_CPU_ROOT;
+		break;
 	case JH7110_SYSCLK_GMAC1_GTXCLK:
 		parent = JH7110_SYSCLK_PLL0_OUT;
 		break;

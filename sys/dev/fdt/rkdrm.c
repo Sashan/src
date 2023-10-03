@@ -1,4 +1,4 @@
-/* $OpenBSD: rkdrm.c,v 1.15 2023/01/01 01:34:33 jsg Exp $ */
+/* $OpenBSD: rkdrm.c,v 1.17 2023/09/11 04:51:24 jsg Exp $ */
 /* $NetBSD: rk_drm.c,v 1.3 2019/12/15 01:00:58 mrg Exp $ */
 /*-
  * Copyright (c) 2019 Jared D. McNeill <jmcneill@invisible.ca>
@@ -46,9 +46,6 @@
 
 #define	RK_DRM_MAX_WIDTH	3840
 #define	RK_DRM_MAX_HEIGHT	2160
-
-TAILQ_HEAD(, rkdrm_ports) rkdrm_ports =
-    TAILQ_HEAD_INITIALIZER(rkdrm_ports);
 
 int	rkdrm_match(struct device *, void *, void *);
 void	rkdrm_attach(struct device *, struct device *, void *);
@@ -282,6 +279,9 @@ rkdrm_wsioctl(void *v, u_long cmd, caddr_t data, int flag, struct proc *p)
 		return 0;
 	case WSDISPLAYIO_LINEBYTES:
 		*(u_int *)data = ri->ri_stride;
+		return 0;
+	case WSDISPLAYIO_SVIDEO:
+	case WSDISPLAYIO_GVIDEO:
 		return 0;
 	}
 

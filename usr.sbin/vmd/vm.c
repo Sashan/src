@@ -1,4 +1,4 @@
-/*	$OpenBSD: vm.c,v 1.90 2023/07/13 18:31:59 dv Exp $	*/
+/*	$OpenBSD: vm.c,v 1.94 2023/09/26 01:53:54 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -257,7 +257,7 @@ vm_main(int fd, int vmm_fd)
 	/* Update process with the vm name. */
 	vcp = &vm.vm_params.vmc_params;
 	setproctitle("%s", vcp->vcp_name);
-	log_procinit(vcp->vcp_name);
+	log_procinit("vm/%s", vcp->vcp_name);
 
 	/* Receive the local prefix settings. */
 	sz = atomicio(read, fd, &env->vmd_cfg.cfg_localprefix,
@@ -565,6 +565,8 @@ vm_dispatch_vmm(int fd, short event, void *arg)
 			IMSG_SIZE_CHECK(&imsg, &verbose);
 			memcpy(&verbose, imsg.data, sizeof(verbose));
 			log_setverbose(verbose);
+			virtio_broadcast_imsg(vm, IMSG_CTL_VERBOSE, &verbose,
+			    sizeof(verbose));
 			break;
 		case IMSG_VMDOP_VM_SHUTDOWN:
 			if (vmmci_ctl(VMMCI_SHUTDOWN) == -1)
@@ -1565,6 +1567,8 @@ vcpu_run_loop(void *arg)
 				return ((void *)ret);
 			}
 
+			/* i8259 may be firing as we pause, release run mtx. */
+			mutex_unlock(&vcpu_run_mtx[n]);
 			ret = pthread_cond_wait(&vcpu_unpause_cond[n],
 			    &vcpu_unpause_mtx[n]);
 			if (ret) {
@@ -1573,6 +1577,8 @@ vcpu_run_loop(void *arg)
 				    __func__, (int)ret);
 				break;
 			}
+			mutex_lock(&vcpu_run_mtx[n]);
+
 			ret = pthread_mutex_unlock(&vcpu_unpause_mtx[n]);
 			if (ret) {
 				log_warnx("%s: can't unlock unpause mtx (%d)",
@@ -1610,28 +1616,14 @@ vcpu_run_loop(void *arg)
 		} else
 			vrp->vrp_irq = 0xFFFF;
 
-		/* Still more pending? */
-		if (i8259_is_pending()) {
-			/*
-			 * XXX can probably avoid ioctls here by providing intr
-			 * in vrp
-			 */
-			if (vcpu_pic_intr(vrp->vrp_vm_id,
-			    vrp->vrp_vcpu_id, 1)) {
-				fatal("can't set INTR");
-			}
-		} else {
-			if (vcpu_pic_intr(vrp->vrp_vm_id,
-			    vrp->vrp_vcpu_id, 0)) {
-				fatal("can't clear INTR");
-			}
-		}
+		/* Still more interrupts pending? */
+		vrp->vrp_intr_pending = i8259_is_pending();
 
 		if (ioctl(env->vmd_fd, VMM_IOC_RUN, vrp) == -1) {
 			/* If run ioctl failed, exit */
 			ret = errno;
 			log_warn("%s: vm %d / vcpu %d run ioctl failed",
-			    __func__, vrp->vrp_vm_id, n);
+			    __func__, current_vm->vm_vmid, n);
 			break;
 		}
 
@@ -2150,18 +2142,12 @@ vcpu_assert_pic_irq(uint32_t vm_id, uint32_t vcpu_id, int irq)
 	if (i8259_is_pending()) {
 		if (vcpu_pic_intr(vm_id, vcpu_id, 1))
 			fatalx("%s: can't assert INTR", __func__);
-
-		ret = pthread_mutex_lock(&vcpu_run_mtx[vcpu_id]);
-		if (ret)
-			fatalx("%s: can't lock vcpu mtx (%d)", __func__, ret);
-
+		mutex_lock(&vcpu_run_mtx[vcpu_id]);
 		vcpu_hlt[vcpu_id] = 0;
 		ret = pthread_cond_signal(&vcpu_run_cond[vcpu_id]);
 		if (ret)
 			fatalx("%s: can't signal (%d)", __func__, ret);
-		ret = pthread_mutex_unlock(&vcpu_run_mtx[vcpu_id]);
-		if (ret)
-			fatalx("%s: can't unlock vcpu mtx (%d)", __func__, ret);
+		mutex_unlock(&vcpu_run_mtx[vcpu_id]);
 	}
 }
 

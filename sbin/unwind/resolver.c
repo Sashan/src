@@ -1,4 +1,4 @@
-/*	$OpenBSD: resolver.c,v 1.160 2023/04/18 09:57:51 florian Exp $	*/
+/*	$OpenBSD: resolver.c,v 1.162 2023/09/12 15:38:32 tb Exp $	*/
 
 
 /*

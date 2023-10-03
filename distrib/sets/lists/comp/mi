@@ -1755,6 +1755,7 @@
 ./usr/share/man/man2/ypconnect.2
 ./usr/share/man/man3/ACCESS_DESCRIPTION_new.3
 ./usr/share/man/man3/AES_encrypt.3
+./usr/share/man/man3/ASIdentifiers_new.3
 ./usr/share/man/man3/ASN1_BIT_STRING_set.3
 ./usr/share/man/man3/ASN1_INTEGER_get.3
 ./usr/share/man/man3/ASN1_NULL_new.3
@@ -1779,6 +1780,7 @@
 ./usr/share/man/man3/ASN1_parse_dump.3
 ./usr/share/man/man3/ASN1_put_object.3
 ./usr/share/man/man3/ASN1_time_parse.3
+./usr/share/man/man3/ASRange_new.3
 ./usr/share/man/man3/AUTHORITY_KEYID_new.3
 ./usr/share/man/man3/BASIC_CONSTRAINTS_new.3
 ./usr/share/man/man3/BF_set_key.3
@@ -1928,10 +1930,13 @@
 ./usr/share/man/man3/EVP_DigestVerifyInit.3
 ./usr/share/man/man3/EVP_EncodeInit.3
 ./usr/share/man/man3/EVP_EncryptInit.3
+./usr/share/man/man3/EVP_MD_CTX_ctrl.3
 ./usr/share/man/man3/EVP_MD_meth_new.3
+./usr/share/man/man3/EVP_MD_nid.3
 ./usr/share/man/man3/EVP_OpenInit.3
 ./usr/share/man/man3/EVP_PKCS82PKEY.3
 ./usr/share/man/man3/EVP_PKEY_CTX_ctrl.3
+./usr/share/man/man3/EVP_PKEY_CTX_get_operation.3
 ./usr/share/man/man3/EVP_PKEY_CTX_new.3
 ./usr/share/man/man3/EVP_PKEY_CTX_set_hkdf_md.3
 ./usr/share/man/man3/EVP_PKEY_add1_attr.3
@@ -1970,6 +1975,7 @@
 ./usr/share/man/man3/EXTENDED_KEY_USAGE_new.3
 ./usr/share/man/man3/GENERAL_NAME_new.3
 ./usr/share/man/man3/HMAC.3
+./usr/share/man/man3/IPAddressRange_new.3
 ./usr/share/man/man3/MB_CUR_MAX.3
 ./usr/share/man/man3/MD5.3
 ./usr/share/man/man3/MD5Init.3
@@ -2265,6 +2271,12 @@
 ./usr/share/man/man3/X509_verify_cert.3
 ./usr/share/man/man3/X509at_add1_attr.3
 ./usr/share/man/man3/X509at_get_attr.3
+./usr/share/man/man3/X509v3_addr_add_inherit.3
+./usr/share/man/man3/X509v3_addr_get_range.3
+./usr/share/man/man3/X509v3_addr_inherits.3
+./usr/share/man/man3/X509v3_addr_subset.3
+./usr/share/man/man3/X509v3_addr_validate_path.3
+./usr/share/man/man3/X509v3_asid_add_id_or_range.3
 ./usr/share/man/man3/X509v3_get_ext_by_NID.3
 ./usr/share/man/man3/__tfork_thread.3
 ./usr/share/man/man3/a2d_ASN1_OBJECT.3

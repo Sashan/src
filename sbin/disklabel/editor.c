@@ -1,4 +1,4 @@
-/*	$OpenBSD: editor.c,v 1.415 2023/07/05 07:28:10 krw Exp $	*/
+/*	$OpenBSD: editor.c,v 1.417 2023/09/06 12:45:19 robert Exp $	*/
 
 /*
  * Copyright (c) 1997-2000 Todd C. Miller <millert@openbsd.org>
@@ -1799,8 +1799,6 @@ micmp(const void *a1, const void *a2)
 void
 zero_partitions(struct disklabel *lp)
 {
-	int i;
-
 	memset(lp->d_partitions, 0, sizeof(lp->d_partitions));
 	DL_SETPSIZE(&lp->d_partitions[RAW_PART], DL_GETDSIZE(lp));
 
@@ -1953,7 +1951,7 @@ apply_unit(double val, u_char unit, u_int64_t *n)
 	}
 
 	val *= factor / DEV_BSIZE;
-	if (val > ULLONG_MAX)
+	if (val > (double)ULLONG_MAX)
 		return -1;
 	*n = val;
 	return 0;
@@ -1964,7 +1962,7 @@ parse_sizespec(const char *buf, double *val, char **unit)
 {
 	errno = 0;
 	*val = strtod(buf, unit);
-	if (errno == ERANGE || *val < 0 || *val > ULLONG_MAX)
+	if (errno == ERANGE || *val < 0 || *val > (double)ULLONG_MAX)
 		return -1;	/* too big/small */
 	if (*val == 0 && *unit == buf)
 		return -1;	/* No conversion performed. */

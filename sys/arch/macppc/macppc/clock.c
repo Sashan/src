@@ -1,4 +1,4 @@
-/*	$OpenBSD: clock.c,v 1.56 2023/08/23 01:55:47 cheloha Exp $	*/
+/*	$OpenBSD: clock.c,v 1.58 2023/09/17 14:50:51 cheloha Exp $	*/
 /*	$NetBSD: clock.c,v 1.1 1996/09/30 16:34:40 ws Exp $	*/
 
 /*
@@ -195,7 +195,7 @@ cpu_initclocks(void)
 
 	stathz = hz;
 	profhz = stathz * 10;
-	clockintr_init(CL_RNDSTAT);
+	statclock_is_randomized = 1;
 
 	dec_nsec_cycle_ratio = ticks_per_sec * (1ULL << 32) / 1000000000;
 	dec_nsec_max = UINT64_MAX / dec_nsec_cycle_ratio;

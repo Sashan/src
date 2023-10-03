@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.56 2022/09/21 01:42:58 millert Exp $	*/
+/*	$OpenBSD: main.c,v 1.62 2023/09/20 16:57:12 millert Exp $	*/
 /****************************************************************
 Copyright (C) Lucent Technologies 1997
 All Rights Reserved
@@ -23,7 +23,7 @@ ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 ****************************************************************/
 
-const char	*version = "version 20220912";
+const char	*version = "version 20230913";
 
 #define DEBUG
 #include <stdio.h>
@@ -52,8 +52,11 @@ static size_t	maxpfile;	/* max program filename */
 static size_t	npfile;		/* number of filenames */
 static size_t	curpfile;	/* current filename */
 
+bool	CSV = false;		/* true for csv input */
 bool	safe = false;		/* true => "safe" mode */
 bool	do_posix = false;	/* true => POSIX mode */
+
+size_t	awk_mb_cur_max = 1;
 
 static noreturn void fpecatch(int n
 #ifdef SA_SIGINFO
@@ -134,6 +137,7 @@ int main(int argc, char *argv[])
 
 	setlocale(LC_CTYPE, "");
 	setlocale(LC_NUMERIC, "C"); /* for parsing cmdline & prog */
+	awk_mb_cur_max = MB_CUR_MAX;
 
 	cmdname = __progname;
 	if (pledge("stdio rpath wpath cpath proc exec", NULL) == -1) {
@@ -143,8 +147,9 @@ int main(int argc, char *argv[])
 	}
 
 	if (argc == 1) {
-		fprintf(stderr, "usage: %s [-safe] [-V] [-d[n]] [-F fs] "
-		    "[-v var=value] [prog | -f progfile]\n\tfile ...\n",
+		fprintf(stderr, "usage: %s [-safe] [-V] [-d[n]] "
+		    "[-f fs | --csv] [-v var=value]\n"
+		    "\t   [prog | -f progfile] file ...\n",
 		    cmdname);
 		exit(1);
 	}
@@ -165,10 +170,20 @@ int main(int argc, char *argv[])
 	yyin = NULL;
 	symtab = makesymtab(NSYMTAB);
 	while (argc > 1 && argv[1][0] == '-' && argv[1][1] != '\0') {
+		if (strcmp(argv[1], "--version") == 0) {
+			printf("awk %s\n", version);
+			return 0;
+		}
 		if (strcmp(argv[1], "--") == 0) {	/* explicit end of args */
 			argc--;
 			argv++;
 			break;
+		}
+		if (strcmp(argv[1], "--csv") == 0) {	/* turn on csv input processing */
+			CSV = true;
+			argc--;
+			argv++;
+			continue;
 		}
 		switch (argv[1][1]) {
 		case 's':
@@ -179,7 +194,7 @@ int main(int argc, char *argv[])
 			fn = getarg(&argc, &argv, "no program filename");
 			if (npfile >= maxpfile) {
 				maxpfile += 20;
-				pfile = (char **) realloc(pfile, maxpfile * sizeof(*pfile));
+				pfile = (char **) reallocarray(pfile, maxpfile, sizeof(*pfile));
 				if (pfile == NULL)
 					FATAL("error allocating space for -f options");
  			}
@@ -203,8 +218,7 @@ int main(int argc, char *argv[])
 			break;
 		case 'V':	/* added for exptools "standard" */
 			printf("awk %s\n", version);
-			exit(0);
-			break;
+			return 0;
 		default:
 			WARNING("unknown option %s ignored", argv[1]);
 			break;

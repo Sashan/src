@@ -1,4 +1,4 @@
-.\" $OpenBSD: bsd.port.mk.5,v 1.583 2023/09/02 17:19:57 espie Exp $
+.\" $OpenBSD: bsd.port.mk.5,v 1.636 2023/09/27 12:24:22 espie Exp $
 .\"
 .\" Copyright (c) 2000-2008 Marc Espie
 .\"
@@ -24,7 +24,7 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.Dd $Mdocdate: September 2 2023 $
+.Dd $Mdocdate: September 27 2023 $
 .Dt BSD.PORT.MK 5
 .Os
 .Sh NAME
@@ -41,15 +41,31 @@ tree
 framework, in the form of documented public targets,
 variables and paths.
 .Pp
+The actual
+.Nm
+file lives under
+.Pa ${PORTSDIR}/infrastructure/mk ,
+with
+.Xr make 1 Ns 's
+system include file redirecting to it.
+.Pp
+Optional parts of this framework have been moved to
+.Xr port-modules 5
+in an effort to shrink the main file
+.Po
+see also
+.Ev MODULES
+.Pc .
+.Pp
 Identifiers beginning with an underscore
 are internal-use only and likely to change without
 notice.
 .Pp
 This documentation contains sections covering targets, variables,
 diagnostics, and filenames, ordered in alphabetic order, followed
-by a section covering the fake framework, a section
-explaining flavors and multi-packages, and a section covering
-the generation of package information.
+by a section covering the fake framework, a section covering debug
+packages generation, a section explaining flavors and multi-packages,
+and a section covering the generation of package information.
 .Pp
 It ends with sections covering some obsolete targets, variables and files,
 outlining conversion
@@ -84,6 +100,13 @@ run it, or to run regression tests.
 The output is formatted as package specification pairs, in a form suitable
 for
 .Xr tsort 1 .
+.Pp
+Note that it is possible to obtain reverse dependency information by
+using the
+.Nm show-reverse-deps
+script from the
+.Pa sqlports
+package.
 .It Cm full-{build,run,all,test}-depends
 Print all dependencies a package depends upon for building, running,
 or both, as a list of package names, sorted by dependency order with
@@ -235,6 +258,14 @@ for details.
 .It Cm dump-vars
 Dump the values of all relevant variables in a port, prepended with the
 port's FULLPKGPATH.
+.Pp
+Can be limited to some specific information by setting
+.Ev DPB
+to nothing or
+.Sq fetch .
+Mostly used by
+.Xr dpb 1
+for obtaining vital information from the ports tree.
 .It Cm extract
 Extract the distribution files under
 .Pa ${WRKDIR}
@@ -252,15 +283,16 @@ and
 .Cm do-extract
 hooks.
 .It Cm fake
-Do a fake port installation, that is, simulate the port installation under
-${WRKINST}.
+Do a fake port installation, that is, simulate the port installation into
+the staging area ${WRKINST}.
 There is no
 .Cm do-fake
 and
 .Cm post-fake
-hooks.
+hooks:
+instead
 .Cm fake
-actually uses
+runs
 .Cm pre-fake ,
 .Cm pre-install ,
 .Cm do-install
@@ -272,9 +304,20 @@ Override
 or
 .Cm post-install
 to change behavior.
-Do not touch
+.Pp
+There are only a handful of ports that use
+.Cm pre-fake :
+that hook can be used to finish setting up a
+.Pa fake
+directory before starting the installation proper.
+Stuff run during
 .Cm pre-fake
-unless you really know what you are doing.
+will not register with
+.Cm update-plist ,
+whereas stuff run during
+.Cm pre-install
+will be considered part of the installation process.
+.Pp
 See
 .Sx THE FAKE FRAMEWORK
 section below.
@@ -291,29 +334,18 @@ and
 .Ev PATCHFILES*
 using ${FETCH_CMD}.
 Files are normally retrieved from the list of sites in
-.Ev MASTER_SITES* .
+.Ev SITES* .
 .Pp
-Appending
-.Sq :0
-to
-.Sq :9
-to an entry will let
-${FETCH_CMD} retrieve from
-.Ev MASTER_SITES0
-to
-.Ev MASTER_SITES9
-instead.
-.Pp
-Preferably, adding a suffix to
+Adding a suffix to
 .Ev DISTFILES ,
 .Ev PATCHFILES ,
 .Ev SUPDISTFILES
 will switch the site entry to the corresponding
-.Ev MASTER_SITES
+.Ev SITES
 variable, e.g.,
 .Bd -literal -offset indent
 DISTFILES.go = ...
-MASTER_SITES.go = ...
+SITES.go = ...
 .Ed
 .Pp
 If the rest of the entry parses as
@@ -327,6 +359,14 @@ Transfers in progress are stored as
 .Ar filenamesufx.part
 and moved after completion.
 .Pp
+The actual filesystem paths to all distfiles (resp. patchfiles) after
+url/filename substitution, including suffixed sources, is conveniently
+stored as
+.Ev ALL_DISTFILES
+.Po
+resp.
+.Ev ALL_PATCHFILES
+.Pc .
 The ports framework uses
 .Pa ${DISTDIR}/${DIST_SUBDIR}
 (aliased to
@@ -338,11 +378,15 @@ all files relevant to a port,
 .Cm dpb Fl F
 is more efficient.
 .Pp
-Use of
+There are no
 .Cm {pre,do,post}-fetch
-hooks is forbidden, as this would make mirroring of distfiles very complicated.
+hooks, as this would break
+.Xr dpb 1 .
 .Pp
 See
+.Ev ALL_DISTFILES ,
+.Ev ALL_PATCHFILES ,
+.Ev ALL_SUPDISTFILES ,
 .Ev CHECKSUMFILES ,
 .Ev DISTDIR ,
 .Ev DISTFILES* ,
@@ -351,18 +395,16 @@ See
 .Ev FETCH_MANUALLY ,
 .Ev FULLDISTDIR ,
 .Ev MAKESUMFILES ,
-.Ev MASTER_SITES* ,
-.Ev MASTER_SITES0 , ... ,
-.Ev MASTER_SITES9 ,
 .Ev PATCHFILES* ,
 .Ev SUPDISTFILES* ,
 .Ev REFETCH .
+.Ev SITES* ,
 .It Cm fetch-all
 Like
 .Cm fetch ,
 but also fetches
 .Ev SUPDISTFILES* ,
-for use with e.g.,
+for use by e.g.,
 .Cm makesum .
 .It Cm fix-permissions
 Ensure permissions are correct when using
@@ -415,9 +457,6 @@ and before
 or
 .Cm update-plist .
 Always rerun, as it is cheap enough.
-.It Cm index
-Top-level target, see
-.Xr ports 7 .
 .It Cm install-depends
 Before package installation, install and verify dependencies constructed from
 .Ev RUN_DEPENDS , LIB_DEPENDS ,
@@ -446,17 +485,18 @@ Verify that the
 .Ev LIB_DEPENDS
 and
 .Ev WANTLIB
-are accurate for the port.
+recorded in the port's packages are accurate.
 See
 .Cm port-lib-depends-check ,
-which is quicker.
+which checks files under the fake staging directory instead,
+and thus has faster turn-around.
 .It Cm license-check
 Check that
 .Ev PERMIT_PACKAGE
 settings match:
 if any dependency has a more restrictive setting, warn about it.
-This warning is advisory, because the automated license checking cannot
-figure out which ports were used only for building and did not taint
+This warning is advisory, because automated license checking cannot
+know that some ports were only used for building and did not taint
 the current port.
 .It Cm lock
 Manually obtain a lock on a given directory.
@@ -467,14 +507,18 @@ Seldom used, see
 .Xr ports 7
 for details.
 .It Cm makesum
-Run
+Uses
+.Cm fetch-all
+to fetch missing ${MAKESUMFILES}
+without verifying their digest, then run
 .Xr sha256 1
-on ${MAKESUMFILES}
-that is, files listed in ${DISTFILES*}, ${SUPDISTFILES*} and ${PATCHFILES*},
-and store the result in ${CHECKSUM_FILE}, normally
+on them that is,
+files listed in ${DISTFILES*}, ${SUPDISTFILES*} and ${PATCHFILES*}.
+The result is stored in ${CHECKSUM_FILE}, normally
 .Pa distinfo .
 Also store the lengths of all files for a quick check during
-.Cm fetch .
+.Cm fetch ,
+.Cm fetch-all .
 .It Cm no-lib-depends-args
 Degenerate form of
 .Cm lib-depends-args
@@ -501,9 +545,18 @@ for each package in the
 .Ev MULTI_PACKAGES
 list.
 If the repository already contains up-to-date packages, they are not rebuilt.
-If PLIST_REPOSITORY is set, the resulting packaging information is compared
-with existing stuff, and saved if new, with loud complaints if it changed
-without a REVISION bump.
+If PLIST_REPOSITORY is set (the default), the resulting packaging
+information is compared with existing stuff, and saved if new,
+with loud complaints if it changed without a
+.Ev REVISION
+bump.
+.Pp
+if
+.Ev DEBUG_PACKAGES
+is set, some debug information may also be set aside and saved
+in
+.Pa debug-*
+packages transparently.
 .Pp
 Also note that
 .Pa ${PLIST_REPOSITORY}/${MACHINE_ARCH}/history
@@ -559,7 +612,7 @@ will be applied under
 .Ev WRKDIST .
 .It Cm peek-ftp
 Connect to the first site in
-.Ev MASTER_SITES ,
+.Ev SITES ,
 in the right directory, and leaves user at
 .Xr ftp 1 Ns 's
 prompt.
@@ -682,6 +735,10 @@ See
 Generate and print the list of static and dynamic libraries present in the port.
 See
 .Xr pkg_create 1 .
+.It Cm print-plist-all-libs
+Iterate over
+.Cm print-plist-libs
+for all subpackages in a given port.
 .It Cm print-plist-libs-with-depends
 Like
 .Cm print-plist-libs ,
@@ -777,7 +834,12 @@ Print the list of
 .Xr pkgpath 7
 for all ports that will be affected by the
 current port changing.
-Works by walking the list of dependencies, in reverse.
+Works by walking the full list of all dependencies of all ports, in reverse.
+.Pp
+Very slow, prefer installing the
+.Pa sqlports
+package and using
+.Nm show-reverse-deps .
 .It Cm show-run-depends
 Print all running dependencies for a port, one per-line, without duplicates.
 .It Cm subpackage
@@ -926,6 +988,7 @@ setting, after applying the
 conversion, occasionally useful for setting
 .Ev EXTRACT_ONLY
 manually.
+Read-only.
 .It Ev ALL_FAKE_FLAGS
 Flags passed to ${MAKE} invocations during the fake process.
 Equals
@@ -937,6 +1000,14 @@ List of all actual files coming from every
 setting, after applying the
 .Sq Ar filename Ns { Ns Ar url Ns } Ns Ar sufx
 conversion.
+Read-only.
+.It Ev ALL_SUPDISTFILES
+List of all actual files coming from every
+.Ev SUPDISTFILES*
+setting, after applying the
+.Sq Ar filename Ns { Ns Ar url Ns } Ns Ar sufx
+conversion.
+Read-only.
 .It Ev ALL_TEST_ENV
 Environment passed to test.
 Equals
@@ -981,9 +1052,7 @@ Automatically set as soon as
 .Ev CONFIGURE_STYLE
 is gnu or higher.
 .It Ev AUTOCONF_VERSION
-Starting with
-.Ox 3.3 ,
-several versions of autoconf may coexist peacefully.
+Several versions of autoconf may coexist peacefully.
 The main autoconf script is a shell wrapper in the
 .Pa devel/metaauto
 package, and similarly for automake.
@@ -1259,7 +1328,13 @@ This is essentially the same as running
 after each package build.
 Defaults to
 .Sq \&No ,
-as this can be a big performance hit.
+as this can be a big performance hit, and also because
+.Ev lib-depends-check
+doesn't know about library subdirectories or dynamic loading through
+.Xr dlopen 3 .
+.It Ev CHECK_LIB_DEPENDS_ARGS
+List of extra arguments for
+.Xr check-lib-depends 1 .
 .It Ev CHECKSUMFILES
 List of all files that need to be retrieved by
 .Cm fetch ,
@@ -1272,8 +1347,9 @@ See also
 .It Ev CHECKSUM_FILE
 Location for this port's checksums, used by
 .Cm checksum ,
+.Cm makesum ,
 and
-.Cm makesum .
+.Xr dpb 1 .
 Defaults to
 .Pa distinfo .
 .It Ev CHECKSUM_PACKAGES
@@ -1552,6 +1628,12 @@ below for details.
 .It Ev DEBUGINFO_ARCHS
 List of archs for which debug information may be provided as extra packages.
 Normally only amd64 for performance reasons.
+.It Ev DESCR
+Location of description file for the package, defaults to
+.Pa ${PKGDIR}/DESCR
+(or
+.Pa ${PKGDIR}/DESCR${SUBPACKAGE}
+for multi-packages).
 .It Ev DESTDIR
 See
 .Ev DESTDIRNAME .
@@ -1562,6 +1644,40 @@ To be used in the rare cases where a port heeds DESTDIR in a few
 directories and needs to be configured with
 .Sq gnu dest ,
 so that those few directories do not get in the way.
+.It Ev DIST_TUPLE
+List of distfile templates to use, each consisting of five entries:
+.Ar name account project tagname/commithash targetdir .
+The template
+.Ar name
+should be one of
+.Sq github ,
+.Sq gitlab ,
+or
+.Sq srht
+at the moment
+.Po see
+.Pa ${PORTSDIR}/infrastructure/db/dist-tuple.pattern ,
+additional
+.Ev TEMPLATE_DISTFILES.<name>
+and
+.Ev TEMPLATE_HOMEPAGE.<name>
+entries can be added as needed
+.Pc .
+The components are used to build
+.Ev SITES.name
+.Ev DISTFILES.name
+and (optionally)
+.Ev HOMEPAGE .
+.Pp
+At the end of
+.Cm post-extract ,
+the files are moved to
+.Pa ${WRKDIST}/<targetdir> .
+Using
+.Sq \&.
+for
+.Ar targetdir
+will disable the move.
 .It Ev DISTDIR
 User settings.
 Directory where all ports distribution files and patchfiles are stashed.
@@ -1576,7 +1692,7 @@ into account.
 .It Ev DISTFILES*
 The main port's distribution files (the actual software source, except
 for binary-only ports).
-Will be retrieved from the corresponding MASTER_SITES* (see
+Will be retrieved from the corresponding SITES* (see
 .Cm fetch ) ,
 checksummed and extracted (see
 .Cm checksum ,
@@ -1587,16 +1703,16 @@ normally holds a list of files, possibly with
 to
 .Sq :9
 appended to select a different
-.Ev MASTER_SITES .
+.Ev SITES .
 .Pp
 Preferably, adding a suffix to
 .Ev DISTFILES ,
 will switch the site entry to the corresponding
-.Ev MASTER_SITES
+.Ev SITES
 variable, e.g.,
 .Bd -literal -offset indent
 DISTFILES.go = ...
-MASTER_SITES.go = ...
+SITES.go = ...
 .Ed
 .Pp
 Each entry may optionally be of the form
@@ -1623,8 +1739,17 @@ If ${DISTFILES*} varies depending on
 or architecture, use
 .Ev SUPDISTFILES*
 to ensure distfiles mirroring and
-.Cm makesum
+.Cm makesum Ns 's
 proper operation.
+.Pp
+If no
+.Ev DISTFILES*
+is set and if
+.Ev SITES
+is not null, then
+.Ev DISTFILES
+will be set to
+.Pa ${DISTNAME}${EXTRACT_SUFX} .
 .It Ev DISTNAME
 Name used to identify the port.
 See
@@ -1678,9 +1803,13 @@ If defined,
 .Nm
 will provide dummy values for variables mandatory for a minimally functional
 port.
-Used by various pieces of the ports tree to perform introspection and get to
+Used by the
+.Pa sqlports
+package and
+.Xr dpb 1
+to perform introspection and obtain
 .Nm Ns 's
-variables.
+default values for variables without needing to access any specific port.
 .It Ev ECHO_MSG
 User settings.
 Used to display
@@ -1736,16 +1865,32 @@ for instance to flag erroneous combinations of
 and
 .Ev BROKEN
 for other common issues).
+.Pp
+Note that setting fatal errors defeats all introspection mechanisms and breaks
+the
+.Pa sqlports
+package.
+.Pp
+Tip: if you need to debug a fatal error, you can always override
+.Ev ERRORS
+on the command line, e.g.,
+.Bd -literal -offset indent
+make ERRORS= show=<var>
+.Ed
 .It Ev EXTRACT_CASES
-In the normal extraction stage (when
+The extraction stage runs a loop under
+.Pa ${WRKDIR}
+with
+.Ev archive
+(shell variable) set to each element of
 .Ev EXTRACT_ONLY
-is not empty), this is the contents of a
-.Xr sh 1
-.Em case conditional ,
-used to extract files.
-Fragments are automatically appended to extract the following archives and
-add the relevant compression tool to
-.Ev BUILD_DEPENDS :
+in order, which is then processed by a case switch: ${EXTRACT_CASES}.
+.Pp
+.Nm
+detects extensions in ${CHECKSUMFILES}
+and automatically adds
+.Ev BUILD_DEPENDS
+and fragments to handle the following archives:
 .Pp
 .Bl -tag -width archivers/lzip/lunzip -offset indent -compact
 .It gzip
@@ -1767,7 +1912,7 @@ rpm
 Other cases not supported directly in
 .Nm
 can be added, and existing cases can be overridden.
-For example the following example sets extra conversion flags to unzip,
+For example the following snippet sets extra conversion flags to unzip,
 and adds support for rar:
 .Bd -literal
 	*.zip) ${UNZIP} -Laq ${FULLDISTDIR}/$$archive -d ${WRKDIR};; \\
@@ -1778,18 +1923,26 @@ Set to the list of distfiles to actually extract if some distfiles
 should not be extracted during the
 .Cm do-extract
 stage.
-Defaults to all distfiles, can even be set to empty.
+Defaults to ${ALL_DISTFILES}, can even be set to empty.
 .It Ev EXTRACT_SUFX
-Used to set DISTFILES default value to ${DISTNAME}${EXTRACT_SUFX}.
-The decompression tool needed will be automatically added as
-.Ev BUILD_DEPENDS .
-Default value is .tar.gz.
+Used to set
+.Ev DISTFILES
+default value to ${DISTNAME}${EXTRACT_SUFX}.
+Default value is
+.Pa .tar.gz .
 .Pp
 Note that
 .Ev DISTFILES
 will only be set in the absence of
 .Ev DISTFILES.sufx
-as well.
+as well, or if
+.Ev SITES
+is not empty.
+.It Ev EXTRACT_SUFX.<name>
+The
+.Ev EXTRACT_SUFX
+value for a template defined through
+.Ev DIST_TUPLE .
 .It Ev EXTRACT_FILES
 Set to the list of files to actually extract from distfiles.
 Its content is subject to shell evaluation as part of
@@ -1823,7 +1976,7 @@ Target built by ${MAKE_PROGRAM} on fake invocation.
 Defaults to ${INSTALL_TARGET}.
 .It Ev FAKEOBJDIR
 User settings.
-If non empty, used as a base for the fake area.
+If non empty, used as a base for the fake staging area.
 The real fake directory ${WRKINST} is created there.
 Can be set on a per-${PKGPATH} basis.
 For instance, setting FAKEOBJDIR_www/mozilla-firefox=/tmp/obj
@@ -1970,12 +2123,16 @@ including flavors and subpackages.
 See
 .Xr pkgpath 7 .
 .It Ev GH_*
-Support for GitHub-hosted projects.
+Simple support for GitHub-hosted projects.
 Leave empty for non hosted projects.
 Yields a suitable default for
-.Ev MASTER_SITES_GITHUB
+.Ev SITES_GITHUB
 and
 .Ev DISTNAME .
+.Pp
+Use
+.Ev DIST_TUPLE
+for more complicated situations.
 .It Ev GH_ACCOUNT
 Account name of the GitHub user hosting the project.
 .It Ev GH_COMMIT
@@ -2055,12 +2212,17 @@ to simplify bulk-package builds.
 Set to
 .Sq Yes
 if port needs human interaction to build.
-Porters should strive to minimize
+.Pp
+Note that
 .Ev IS_INTERACTIVE
-ports, by using
-.Ev FLAVORS
-for multiple choice ports, and by postponing human intervention
-to package installation time.
+ports won't be built as official packages,
+so avoid at all cost.
+.Pp
+Human intervention should be moved to binary package
+installation and/or post-installation configuration instead.
+.Pp
+Discrete Yes/No choices are better modelled as
+.Ev FLAVORS .
 .It Ev LE_ARCHS
 Set to the list of little-endian architectures.
 Read-only.
@@ -2126,7 +2288,9 @@ Seldom used, as it is only needed to link binary data without using the
 compiler.
 .It Ev LLVM_ARCHS
 Set to the list of architectures where LLVM/Clang could be used,
-e.g., via lang/clang port module, see
+e.g., via
+.Sq lang/clang
+port module, see
 .Xr port-modules 5 .
 Read-only.
 Use with
@@ -2151,6 +2315,7 @@ Defaults to
 If set, points to a local directory common for all instances of
 concurrent ports builds.
 .It Ev LOCK_CMD
+User settings.
 Expands to a command that will acquire a lock, namely
 .Xr portlock 1 .
 See also
@@ -2221,45 +2386,6 @@ prepended and with master site selection extension removed.
 Read-only.
 See also
 .Ev CHECKSUMFILES .
-.It Ev MASTER_SITE_BACKUP
-User settings.
-List of sites to try after normal master sites.
-Normally includes ${MASTER_SITE_OPENBSD} and ${MASTER_SITE_FREEBSD}.
-.It Ev MASTER_SITE_*
-Lists of standard sites to retrieve files from, refer to
-.Pa ${PORTSDIR}/infrastructure/db/network.conf
-for a complete list.
-.Pp
-Generally used with the standard
-.Xr make 1 Ns 's
-.Li ${VARIABLE:=subdir/}
-construct to append the relevant subdir at the end of each entry, e.g.,
-.Dl MASTER_SITES = ${MASTER_SITE_GNU:=cgicc/}
-.It Ev MASTER_SITES
-List of primary locations from which distribution files and patchfiles are
-retrieved.
-See the
-.Cm fetch
-target for details.
-Defaults to ${MASTER_SITES_GITHUB} for GitHub-hosted projects,
-see
-.Ev GH_* .
-See
-.Xr ports 7
-for user configuration.
-.It Ev MASTER_SITES*
-List of alternate locations from which ${DISTFILES*}, ${PATCHFILES*},
-${SUPDISTFILES*} are retrieved.
-See
-.Cm fetch
-for details.
-Suffix should start with
-.Sq \&.
-for consistency.
-.Pp
-.It Ev MASTER_SITES0 , ... , MASTER_SITES9
-Supplementary locations from which distribution files and patchfiles are
-retrieved.
 .It Ev MESSAGE
 File recorded in the package and displayed during installation.
 Defaults to ${PKGDIR}/MESSAGE if this file exists.
@@ -2272,15 +2398,6 @@ is set,
 will contain the list of missing distfiles or patchfiles that need to
 be fetched manually.
 Read-only.
-.It Ev MTREE_FILE
-.Xr mtree 8
-specification used during
-.Ar fake .
-Replaced by direct use of
-.Xr mkdir 1
-now that
-.Ar fake
-no longer happens as root.
 .It Ev MODGNU_CONFIG_GUESS_DIRS
 If a port uses config.guess outside WRKSRC, the directories
 containing the other copies must be set here.
@@ -2353,7 +2470,7 @@ below.
 Especially read the part about
 .Ev ONLY_FOR_ARCHS
 when some of the packages only exist for some architectures.
-.It NO_ARCH
+.It Ev NO_ARCH
 Location for arch-independent packages.
 Defaults to
 .Sq no-arch .
@@ -2430,9 +2547,9 @@ User settings.
 Location for built packages.
 Defaults to
 .Pa ${PORTSDIR}/packages .
-See
+See the
 .Cm package
-for details.
+target for details.
 .It Ev PARALLEL_MAKE_FLAGS
 Used when
 .Ev DPB_PROPERTIES
@@ -2488,7 +2605,7 @@ shell fragment:
 .Bd -literal
 set -e
 cd ${FULLDISTDIR}
-for patchfile in ${_LIST_PATCHFILES}
+for patchfile in ${ALL_PATCHFILES}
 do
     case $$patchfile in
 	*.bz2)
@@ -2530,13 +2647,6 @@ Don't touch unless the default
 target needs to be redefined.
 Ideally, user-defined patch subtargets ought to test checkpatch.
 In practice, they don't.
-.It Ev PATCH_DEBUG
-If set to
-.Sq Yes ,
-the
-.Cm patch
-stage will output extra debug information.
-This is the default.
 .It Ev PATCH_DIST_ARGS
 Full list of options used while applying distribution patches.
 .It Ev PATCH_DIST_STRIP
@@ -2554,6 +2664,10 @@ ports:
 .Bd -literal
 PATCH_LIST=${PORTSDIR}/x11/kde/libs2/patches/p-* patch-*
 .Ed
+.Pp
+But beware that minor variations will result in
+.Cm update-patches
+creating useless churn !
 .It Ev PATCH_STRIP
 Patch option used to strip directory levels while applying port's patches.
 Defaults to -p0.
@@ -2600,8 +2714,6 @@ see also
 Special arguments to pass to
 .Xr pkg_create 1 ,
 in addition to the default ones.
-For mips64 and pic libraries, see
-.Sx THE GENERATION OF PACKAGE INFORMATION .
 .It Ev PKG_CREATE
 User settings.
 Path to
@@ -2654,7 +2766,9 @@ as per default.
 Setting of env variable
 .Ev HOME
 for most shell invocations.
-Default will trip ports that try to write into $HOME while building.
+Default will trip ports that try to write into $HOME while building:
+non-existent
+.Pa /${PKGPATH}_writes_to_HOME/ .
 .It Ev PORTPATH
 Path used by most shell invocations.
 Don't override unless really needed.
@@ -2808,6 +2922,10 @@ derived from the
 Do not override without very good reasons,
 namely software that coexist as different incompatible versions with the
 same stem, e.g., already a mess.
+Also See the description of
+.Fl P
+in
+.Xr pkg_create 1
 .It Ev PKGSTEM
 Base for the package name without any version number.
 Used in
@@ -2815,6 +2933,13 @@ Used in
 file names and actual contents, can be overridden for ports
 with branches, like php, e.g.,
 .Li PKGSTEM-main = php-5.6
+.It Ev PLIST
+Location of package packing-list.
+Defaults to
+.Pa ${PKGDIR}/PLIST ,
+or to
+.Pa ${PKGDIR}/PLIST${SUBPACKAGE}
+for multi-packages.
 .It Ev PLIST_DB
 Deprecated, see
 .Ev PLIST_REPOSITORY .
@@ -2840,17 +2965,11 @@ plists actually get saved into
 .Pa ${PLIST_REPOSITORY}/${MACHINE_ARCH}
 .Pc .
 If set to empty, will not register anything: very much unsafe.
-.It Ev PORTS_BUILD_XENOCARA_TOO
-EXPERIMENTAL.
-Set to
-.Sq Yes
-to build xenocara through ports.
-This is highly experimental and not recommended.
 .It Ev PORTROACH
 Controls the behavior of
 .Pa misc/portroach
 as documented in detail at
-.Lk http://jasperla.github.io/portroach/docs/portroach-portconfig.txt .
+.Lk https://jasperla.github.io/portroach/docs/portroach-portconfig.txt
 .It Ev PREFIX
 Base directory for the current port installation.
 Usually ${LOCALBASE}, though some ports may elect a location under
@@ -2878,8 +2997,8 @@ and
 .Xr pkg_create 1
 to use their progress-meter even in the absence of a terminal.
 .It Ev PROPERTIES
-List of properties specific to a given machine architecture.
-Most often obtained through
+List of properties specific to a given machine architecture,
+obtained through the inclusion of
 .Xr bsd.port.arch.mk 5 .
 These can be checked like this
 .Bd -literal -offset indent
@@ -3019,6 +3138,18 @@ as
 .Sq p${REVISION}
 to form a full package-name conforming to
 .Xr packages-specs 7 .
+.It Ev ROACH_SITES
+Selects the correct list of sites corresponding to
+.Ev ROACH_URL ,
+in order to help portroach.
+.It Ev ROACH_URL
+The canonical url corresponding to the current port.
+Gets deduced from ${DISTFILES} by default, using the first value
+or the first entry in ${DISTFILES.sufx} if there's only one suffix.
+Conversion rules for
+.Ev DISTFILES
+are applied to yield only the url part of the distfile.
+Set manually if the automatic rules don't find the right one.
 .It Ev RUN_DEPENDS
 Specification of ports this port needs installed to be functional.
 Same format as
@@ -3066,7 +3197,53 @@ port.
 Porters of software using libtool should make sure
 .Ev MAKE_FLAGS
 get propagated to the libtool invocations.
-This should be enough in most cases.
+.Pp
+Most common build systems in the ports tree have been modified
+to handle this mechanism correctly.
+.It Ev SITE_BACKUP
+User settings.
+List of sites to try after normal master sites.
+Normally includes ${SITE_OPENBSD} and ${SITE_FREEBSD}.
+.Po
+For now the ports tree is transitioning from
+.Ev MASTER_SITES*
+to
+.Ev SITES*
+which means that
+.Ev MASTER_SITE_BACKUP
+should be set instead until the transition is complete.
+.Pc
+.It Ev SITE_*
+Lists of standard sites to retrieve files from, refer to
+.Pa ${PORTSDIR}/infrastructure/db/network.conf
+for a complete list.
+.Pp
+Generally used with the standard
+.Xr make 1 Ns 's
+.Li ${VARIABLE:=subdir/}
+construct to append the relevant subdir at the end of each entry, e.g.,
+.Dl SITES = ${SITE_GNU:=cgicc/}
+.It Ev SITES
+List of primary locations from which distribution files and patchfiles are
+retrieved.
+See the
+.Cm fetch
+target for details.
+Defaults to ${SITES_GITHUB} for GitHub-hosted projects,
+see
+.Ev GH_* .
+See
+.Xr ports 7
+for user configuration.
+.It Ev SITES*
+List of alternate locations from which ${DISTFILES*}, ${PATCHFILES*},
+${SUPDISTFILES*} are retrieved.
+See
+.Cm fetch
+for details.
+Suffix should start with
+.Sq \&.
+and be all lowercase for consistency.
 .It Ev SKIPDIR
 See
 .Xr ports 7 .
@@ -3203,14 +3380,13 @@ in
 the ports tree will only invoke root's privileges for the parts that
 really require it.
 .It Ev SUPDISTFILES*
-Supplementary files that need to be retrieved under some specific
-circumstances.
-For instance, a port might need architecture-specific files.
+Supplementary distribution files for mirroring and creating checksums with
+.Cm makesum .
+For instance, a port might need architecture-specific files, or have
+some flavor that requires more code.
 .Ev SUPDISTFILES*
-should hold a list of all distribution files and patchfiles that are not
-always needed, so that a mirror will be able to grab all files, or that
-.Cm makesum
-will work.
+should hold a list of all those distribution files and patchfiles
+that are not always needed.
 Having an overlap between
 .Ev SUPDISTFILES*
 and
@@ -3237,14 +3413,50 @@ Set to the list of special targets for a port
 .Cm {pre,do,post}-*
 and module hooks
 .Pc .
-Used by introspection tools such as the sqlports package.
-.It Ev TEMPLATES
-Base location for the templates used in the
-.Cm readmes
-target.
-User settings.
-Defaults to
-.Pa ${PORTSDIR}/infrastructure/templates .
+Used by introspection tools such as the
+.Pa sqlports
+package.
+.It Ev TEMPLATE_DISTFILES.<name>
+Template used to construct
+.Ev DISTFILES.name
+based on a
+.Ev DIST_TUPLE
+entry by filling in placeholder strings.
+For instance,
+.Ev TEMPLATE_DISTFILES.github
+defaults to
+.Bd -literal
+<account>-<project>-{<account>/<project>/archive/<subdir>}<id>.tar.gz
+.Ed
+.Pp
+with
+.Li DIST_TUPLE += github foo bar baz qux.
+We end up with the following
+.Ev DISTFILES.github
+entry:
+.Bd -literal -offset indent
+foo-bar-{foo/bar/archive/ref/tags}baz.tar.gz
+.Ed
+.Pp
+Placeholders
+.Sq account ,
+.Sq project ,
+.Sq id
+are self-explanatory.
+.Sq subdir
+is set automatically by figuring out whether
+.Ar id
+is a
+.Ar tagname
+or a
+.Ar hash .
+.It Ev TEMPLATE_HOMEPAGE.<name>
+Template for automatically generated
+.Ev HOMEPAGE
+when using
+.Ev DIST_TUPLE .
+Very similar to
+.Ev TEMPLATE_DISTFILES.<name> .
 .It Ev TEST_DEPENDS
 See
 .Ev BUILD_DEPENDS
@@ -3370,9 +3582,10 @@ instead just set
 .Li BUILD_DEPENDS = devel/libtool .
 .It Ev USE_LLD
 Set to
-.Sq Yes
-or
+.Sq Yes ,
 .Sq \&No
+or
+.Sq ports
 to force the use of
 .Xr ld.lld 1
 .Po
@@ -3380,6 +3593,11 @@ as opposed to
 bfd's
 .Xr ld 1
 .Pc .
+.Sq ports
+force the use of
+.Xr ld.lld 1
+from lang/clang module.
+.Pc
 Defaults to the appropriate value for the current architecture
 .Po
 see
@@ -3399,10 +3617,28 @@ and not intended to be a user setting.
 See
 .Ev WRKOBJDIR_MFS
 for configuration.
+.It Ev USE_NOBTCFI
+If set to
+.Sq Yes ,
+writes a wrapper script to
+.Pa ${WRKDIR}/bin/ld
+in
+.Cm patch
+to request that the linker adds a
+.Dv PT_OPENBSD_NOBTCFI
+ELF section.
+Use when a port does not work with the default strict enforcement of
+indirect branch targets.
+.Pp
+Applies to all architectures; set
+.Ev USE_NOBTCFI-${MACHINE_ARCH}
+to apply to only a specific architecture.
 .It Ev USE_NOEXECONLY
 If set to
 .Sq Yes ,
-writes a wrapper script to ${WRKDIR}/bin/ld in
+writes a wrapper script to
+.Pa ${WRKDIR}/bin/ld
+in
 .Cm patch
 adding
 .Fl -no-execute-only .
@@ -3411,9 +3647,11 @@ which are used by default by the linker on some architectures.
 .It Ev USE_WXNEEDED
 If set to
 .Sq Yes ,
-writes a wrapper script to ${WRKDIR}/bin/ld in
+writes a wrapper script to
+.Pa ${WRKDIR}/bin/ld
+in
 .Cm patch
-to request that the linker adds an
+to request that the linker adds a
 .Dv PT_OPENBSD_WXNEEDED
 ELF section.
 Use when a port requires memory mappings that are both executable
@@ -3486,10 +3724,6 @@ During ports building,
 .Pa ${WRKDIR}/bin
 is put at the front of the
 .Ev PATH .
-.It Ev WRKDIR_LINKNAME
-Name of a symbolic link to create within the port directory which will
-point to the port's ${WRKDIR}.
-Deprecated.
 .It Ev WRKDIST
 Subdirectory of ${WRKDIR} in which the distribution files normally unpack.
 Base for all patches.
@@ -3501,7 +3735,8 @@ Subdirectory of ${WRKDIR} where the actual source is.
 Base for configuration (default: ${WRKDIST}).
 Note that WRKSRC may be a symbolic link, if set to ${WRKDIR}.
 .It Ev WRKINST
-Subdirectory of ${WRKDIR} where port normally installs (see the
+Subdirectory of ${WRKDIR} used as a staging area for installing the port.
+(See
 .Cm fake
 target).
 .It Ev WRKOBJDIR
@@ -3549,14 +3784,16 @@ Set to bison if needed.
 .Sh THE FAKE FRAMEWORK
 The
 .Cm fake
-target is used to install the port in a private directory first, ready for
+target is used to install the port under a staging directory first, ready for
 packaging by the
 .Cm package
-target, so that the actual installation will use the package.
+target, so that the actual
+.Cm install
+target will use the binary package instead.
 .Pp
 Essentially,
 .Cm fake
-invokes a real install process after tweaking a few variables.
+invokes the install process after tweaking a few variables.
 .Pp
 .Cm fake
 first creates a skeleton tree under ${WRKINST}, using
@@ -3568,6 +3805,10 @@ A
 target may be used to complete that skeleton tree.
 For instance, a few ports may need supplementary stuff to be present (as
 it would be installed if the port's dependencies were present).
+.Pp
+In most cases,
+.Cm pre-install
+is preferred.
 .Pp
 If
 .Cm {pre,do,post}-install
@@ -3987,21 +4228,6 @@ or
 to
 .Ev PKG_ARGS .
 .Pp
-If libraries are built using
-.Pa bsd.lib.mk ,
-special care should be taken for mips64* architectures,
-which do not ever build
-.Pa *pic.a
-files (all mips code is pic already).
-.Nm
-automatically adds
-.Li "-Dno_mips64=1"
-or
-.Li "-Dno_mips64=0"
-to
-.Ev PKG_ARGS ,
-and the porter only needs to provide the appropriate fragment.
-.Pp
 .Xr pkg_add 1
 now calls
 .Xr ldconfig 8
@@ -4105,6 +4331,13 @@ Old location for scripts related to the current port.
 There is no reason for the semantic distinction, use
 .Ev FILESDIR
 for those.
+.It Ev SITES0 , ... , SITES9
+Supplementary locations from which distribution files and patchfiles were
+retrieved, superseded by the more generic
+.Ev SITES.sufx
+matching
+.Ev DISTFILES.sufx
+construct.
 .It Ev USE_BZIP2
 The framework will automatically detect the presence of
 .Pa .tar.bz2
@@ -4126,8 +4359,6 @@ and
 .Bl -tag -width Ds
 .It Pa ../Makefile.inc
 Common Makefile fragment for a set of ports, included automatically.
-.It Pa /cdrom/distfiles
-Default path to a CD-ROM (or other media) full of distribution files.
 .It Pa ${PORTSDIR}/distfiles
 Default setup of ${DISTDIR}.
 .It Pa ${DISTDIR}
@@ -4229,6 +4460,10 @@ Note that some of these messages are actually emitted by some other external
 commands, but grouped here for convenience: easier to look for in
 .Xr dpb 1 Ns 's
 logs.
+.Pp
+See
+.Ev ERRORS
+for more details about internal diagnostics.
 .Bl -diag
 .It "/bin/sh: cd .../pkg - No such file or directory"
 Emitted during
@@ -4299,7 +4534,7 @@ resulting in a double inclusion.
 This would lead to weird results, such as
 .Ev PKG_ARGS
 being defined twice.
-.It "Fatal: MASTER_SITES* is not defined but referenced by <file> in <DISTFILES*/PATCHFILES*/SUPDISTFILES*>"
+.It "Fatal: SITES* is not defined but referenced by <file> in <DISTFILES*/PATCHFILES*/SUPDISTFILES*>"
 Pretty much self-explanatory.
 .It "Fatal: SUBPACKAGES should always begin with -: <offending list>"
 That is the only way to differentiate between
@@ -4313,8 +4548,10 @@ specifications.
 All file sets of the base OS, including xenocara, must be installed
 before building ports.
 .It "Fatal: /usr/local/lib/X11/app-defaults should exist and be a symlink"
-/usr/local/lib/X11/app-defaults is distributed as a symlink in the
-xshare*.tgz file set.
+.Pa /usr/local/lib/X11/app-defaults
+is distributed as a symlink in the
+.Pa xshare*.tgz
+file set.
 If xenocara was not fully installed before packages were added, it may
 have been created as a directory instead.
 .It "Fatal: the licensing info for <pkgname> is incomplete..."
@@ -4383,6 +4620,10 @@ somewhere, or it runs strips during fake anyway.
 It can also occur if
 .Ev DEBUG_PACKAGES
 includes subpackages with no files holding debug info.
+.It "Warning: old style distfiles <files>... found"
+See
+.Cm fetch
+for the newer way.
 .It "Warning: symlink(s) point to non existent file."
 Warning message comes from
 .Xr pkg_create 1 .

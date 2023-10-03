@@ -1,10 +1,11 @@
-# $OpenBSD: Makefile,v 1.266 2023/08/31 17:27:41 schwarze Exp $
+# $OpenBSD: Makefile,v 1.276 2023/09/29 08:57:49 tb Exp $
 
 .include <bsd.own.mk>
 
 MAN=	\
 	ACCESS_DESCRIPTION_new.3 \
 	AES_encrypt.3 \
+	ASIdentifiers_new.3 \
 	ASN1_BIT_STRING_set.3 \
 	ASN1_INTEGER_get.3 \
 	ASN1_NULL_new.3 \
@@ -29,6 +30,7 @@ MAN=	\
 	ASN1_parse_dump.3 \
 	ASN1_put_object.3 \
 	ASN1_time_parse.3 \
+	ASRange_new.3 \
 	AUTHORITY_KEYID_new.3 \
 	BASIC_CONSTRAINTS_new.3 \
 	BF_set_key.3 \
@@ -175,10 +177,13 @@ MAN=	\
 	EVP_DigestVerifyInit.3 \
 	EVP_EncodeInit.3 \
 	EVP_EncryptInit.3 \
+	EVP_MD_CTX_ctrl.3 \
 	EVP_MD_meth_new.3 \
+	EVP_MD_nid.3 \
 	EVP_OpenInit.3 \
 	EVP_PKCS82PKEY.3 \
 	EVP_PKEY_CTX_ctrl.3 \
+	EVP_PKEY_CTX_get_operation.3 \
 	EVP_PKEY_CTX_new.3 \
 	EVP_PKEY_CTX_set_hkdf_md.3 \
 	EVP_PKEY_add1_attr.3 \
@@ -217,6 +222,7 @@ MAN=	\
 	EXTENDED_KEY_USAGE_new.3 \
 	GENERAL_NAME_new.3 \
 	HMAC.3 \
+	IPAddressRange_new.3 \
 	MD5.3 \
 	NAME_CONSTRAINTS_new.3 \
 	OBJ_NAME_add.3 \
@@ -386,6 +392,13 @@ MAN=	\
 	X509_verify_cert.3 \
 	X509at_add1_attr.3 \
 	X509at_get_attr.3 \
+	X509v3_addr_add_inherit.3 \
+	X509v3_addr_get_range.3 \
+	X509v3_addr_inherits.3 \
+	X509v3_addr_subset.3 \
+	X509v3_addr_validate_path.3 \
+	X509v3_asid_add_id_or_range.3 \
+	X509v3_asid_add_id_or_range.3 \
 	X509v3_get_ext_by_NID.3 \
 	a2d_ASN1_OBJECT.3 \
 	crypto.3 \
@@ -428,8 +441,8 @@ MAN=	\
 	i2d_PKCS7_bio_stream.3 \
 	lh_new.3 \
 	lh_stats.3 \
-	s2i_ASN1_INTEGER.3 \
 	openssl.cnf.5 \
+	s2i_ASN1_INTEGER.3 \
 	x509v3.cnf.5
 
 all clean cleandir depend includes obj tags:
