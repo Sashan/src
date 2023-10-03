@@ -334,6 +334,8 @@ enum {
 
 extern struct cpumem *pf_anchor_stack;
 
+extern struct pfr_table pfr_nulltable;
+
 struct pf_opts {
 	char		statusif[IFNAMSIZ];
 	u_int32_t	debug;
@@ -387,7 +389,7 @@ struct pf_trans {
 			TAILQ_HEAD(, pf_anchor)	 tab_anchor_list;
 			struct pfr_kentryworkq   tab_ke_ioq;
 			struct pfr_ktableworkq	 tab_kt_garbage;
-			struct pfr_kentryworkq	 tab_kt_garbage;
+			struct pfr_kentryworkq	 tab_ke_garbage;
 			struct pf_rules_container
 						 tab_rc;
 			char			 tab_anchor_path[PATH_MAX];
@@ -425,7 +427,7 @@ struct pf_trans {
 #define pfttab_anchor_path	u.u_tab.tab_anchor_path
 #define pfttab_kbuf		u.u_tab.tab_kbuf
 #define pfttab_kbuf_sz		u.u_tab.tab_kbuf_sz
-#define pfttab_ioq_ke_len	u.u_tab.tab_ioq_ke_len
+#define pfttab_ke_ioq_len	u.u_tab.tab_ke_ioq_len
 #define pfttab_size		u.u_tab.tab_size
 #define pfttab_nadd		u.u_tab.tab_nadd
 #define pfttab_ndel		u.u_tab.tab_ndel
@@ -492,43 +494,55 @@ void			 pf_state_peer_hton(const struct pf_state_peer *,
 			    struct pfsync_state_peer *);
 void			 pf_state_peer_ntoh(const struct pfsync_state_peer *,
 			    struct pf_state_peer *);
-u_int16_t		pf_pkt_hash(sa_family_t, uint8_t,
+u_int16_t		 pf_pkt_hash(sa_family_t, uint8_t,
 			    const struct pf_addr *, const struct pf_addr *,
 			    uint16_t, uint16_t);
 extern void		 pf_purge_timeout(void *);
 extern void		 pf_purge(void *);
+extern void		 pf_init_ttab(struct pf_trans *);
+extern void		 pf_free_trans(struct pf_trans *);
+extern struct pfr_ktable
+			*pfr_create_ktable(struct pf_rules_container *,
+			    struct pfr_table *, time_t, int);
 extern void		 pfr_destroy_ktable(struct pfr_ktable *, int);
 extern struct pfr_ktable
 			*pfr_lookup_table(struct pf_anchor *,
 			    struct pfr_table *);
-extern void		pfr_update_table_refs(struct pf_anchor *);
-extern void		pfr_drop_table_refs(struct pf_anchor *,
+extern struct pfr_kentry
+			*pfr_lookup_kentry(struct pfr_ktable *,
+			    struct pfr_kentry *, int);
+extern int		 pfr_route_kentry(struct pfr_ktable *,
+			    struct pfr_kentry *);
+extern struct pfr_kentry
+			*pfr_create_kentry(struct pfr_addr *, int);
+extern void		 pfr_update_table_refs(struct pf_anchor *);
+extern void		 pfr_drop_table_refs(struct pf_anchor *,
 			    struct pf_anchor *);
-extern int		pfr_copyin_tables(struct pf_trans *,
+extern int		 pfr_copyin_tables(struct pf_trans *,
 			    struct pfr_table *, int);
-extern int		pfr_copyin_addrs(struct pf_trans *, struct pfr_table *,
+extern int		 pfr_copyin_addrs(struct pf_trans *, struct pfr_table *,
 			    struct pfr_addr *, int);
-extern int		pfr_addrs_feedback(struct pf_trans *,
+extern int		 pfr_addrs_feedback(struct pf_trans *,
 			    struct pfr_addr *, int, int);
-extern void		pfr_addtables_commit(struct pf_trans *,
+extern void		 pfr_addtables_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
-extern void		pfr_deltables_commit(struct pf_trans *,
+extern void		 pfr_deltables_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
-extern void		pfr_clrtstats_commit(struct pf_trans *,
+extern void		 pfr_clrtstats_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
-extern void		pfr_gettstats_commit(struct pf_trans *,
+extern void		 pfr_gettstats_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
-extern void		pfr_settflags_commit(struct pf_trans *,
+extern void		 pfr_settflags_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
-extern void		pfr_setaddrs_commit(struct pf_trans *,
+extern void		 pfr_setaddrs_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
-extern void		pfr_deladdrs_commit(struct pf_trans *,
+extern void		 pfr_deladdrs_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
-extern void		pfr_setaddrs_commit(struct pf_trans *,
+extern void		 pfr_setaddrs_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
-extern void		pfr_addaddrs_commit(struct pf_trans *,
+extern void		 pfr_addaddrs_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
-extern void		pfr_destroy_kentry(struct pfr_kentry *);
+extern void		 pfr_destroy_kentry(struct pfr_kentry *);
 
 RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 #endif /* _KERNEL */

@@ -3001,7 +3001,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			NET_UNLOCK();
 			PF_UNLOCK();
 
-			error = pfr_addrs_feedback(t, &io->pfrio_buffer,
+			error = pfr_addrs_feedback(t, io->pfrio_buffer,
 			    io->pfrio_size, PFR_IOQ_ONLY);
 			io->pfrio_nadd = t->pfttab_nadd;
 		}
@@ -3041,7 +3041,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			PF_UNLOCK();
 			NET_UNLOCK();
 
-			error = pfr_addrs_feedback(t, &io->pfrio_buffer,
+			error = pfr_addrs_feedback(t, io->pfrio_buffer,
 			    io->pfrio_size, PFR_IOQ_ONLY);
 			io->pfrio_ndel = t->pfttab_ndel;
 		}
@@ -3080,7 +3080,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			PF_UNLOCK();
 			NET_UNLOCK();
 
-			pfr_addrs_feedback(t, &io->pfrio_buffer, io->pfrio_size,
+			pfr_addrs_feedback(t, io->pfrio_buffer, io->pfrio_size,
 			    PFR_GARBAGE_TOO);
 			io->pfrio_nadd = t->pfttab_nadd;
 			io->pfrio_ndel = t->pfttab_ndel;

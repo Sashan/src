@@ -72,17 +72,16 @@ struct pfi_kif		 *pfi_all = NULL;
 struct pool		  pfi_addr_pl;
 struct pfi_ifhead	  pfi_ifs;
 long			  pfi_update = 1;
-struct pfr_addr		 *pfi_buffer;
-int			  pfi_buffer_cnt;
-int			  pfi_buffer_max;
 
 void		 pfi_kif_update(struct pfi_kif *);
 void		 pfi_dynaddr_update(struct pfi_dynaddr *dyn);
 void		 pfi_table_update(struct pfr_ktable *, struct pfi_kif *,
 		    u_int8_t, int);
 void		 pfi_kifaddr_update(void *);
-void		 pfi_instance_add(struct ifnet *, u_int8_t, int);
-void		 pfi_address_add(struct sockaddr *, sa_family_t, u_int8_t);
+void		 pfi_instance_add(struct pf_trans *, struct ifnet *, u_int8_t,
+		    int);
+void		 pfi_address_add(struct pf_trans *, struct sockaddr *,
+		    sa_family_t, u_int8_t);
 int		 pfi_if_compare(struct pfi_kif *, struct pfi_kif *);
 int		 pfi_skip_if(const char *, struct pfi_kif *);
 int		 pfi_unmask(void *);
@@ -142,9 +141,6 @@ pfi_initialize(void)
 
 	pool_init(&pfi_addr_pl, sizeof(struct pfi_dynaddr), 0, IPL_SOFTNET, 0,
 	    "pfiaddrpl", NULL);
-	pfi_buffer_max = 64;
-	pfi_buffer = mallocarray(pfi_buffer_max, sizeof(*pfi_buffer),
-	    PFI_MTYPE, M_WAITOK);
 
 	pfi_all = pfi_kif_alloc(IFG_ALL, M_WAITOK);
 
@@ -559,26 +555,57 @@ pfi_dynaddr_update(struct pfi_dynaddr *dyn)
 void
 pfi_table_update(struct pfr_ktable *kt, struct pfi_kif *kif, u_int8_t net, int flags)
 {
-	int			 e, size2 = 0;
 	struct ifg_member	*ifgm;
+	struct pf_trans		*t;
+	struct pfr_ktable	*ktt;
+	struct pfr_ktable	*tmpkt;
+	struct pfr_kentry	*ke, *ked;
 
-	pfi_buffer_cnt = 0;
+	/*
+	 * We create a fake transaction so we can call pfr_setaddrs_commit().
+	 */
+	t = malloc(sizeof(struct pf_trans), M_PF, M_NOWAIT);
+	if (t == NULL)
+		return;
+	pf_init_ttab(t);
+
+	ktt = pfr_create_ktable(&t->pfttab_rc, &kt->pfrkt_t, gettime(),
+	    M_NOWAIT);
+	if (ktt == NULL) {
+		pf_free_trans(t);
+		return;
+	}
+
+	tmpkt = pfr_create_ktable(NULL, &pfr_nulltable, 0, PR_NOWAIT);
+	if (tmpkt == NULL) {
+		pf_free_trans(t);
+		return;
+	}
 
 	if (kif->pfik_ifp != NULL)
-		pfi_instance_add(kif->pfik_ifp, net, flags);
+		pfi_instance_add(t, kif->pfik_ifp, net, flags);
 	else if (kif->pfik_group != NULL)
 		TAILQ_FOREACH(ifgm, &kif->pfik_group->ifg_members, ifgm_next)
-			pfi_instance_add(ifgm->ifgm_ifp, net, flags);
+			pfi_instance_add(t, ifgm->ifgm_ifp, net, flags);
 
-	if ((e = pfr_set_addrs(&kt->pfrkt_t, pfi_buffer, pfi_buffer_cnt, &size2,
-	    NULL, NULL, NULL, 0, PFR_TFLAG_ALLMASK)))
-		DPFPRINTF(LOG_ERR,
-		    "pfi_table_update: cannot set %d new addresses "
-		    "into table %s: %d", pfi_buffer_cnt, kt->pfrkt_name, e);
+	ktt->pfrkt_version = kt->pfrkt_version;
+	SLIST_FOREACH(ke, &t->pfttab_ke_ioq, pfrke_workq) {
+		ked = pfr_lookup_kentry(tmpkt, ke, 1);
+		if (ked == NULL) {
+			pfr_route_kentry(tmpkt, ke);
+			t->pfttab_ke_ioq_len++;
+		} else
+			ke->pfrke_fb = PFR_FB_DUPLICATE;
+	}
+	pfr_setaddrs_commit(t, &t->pfttab_rc.main_anchor, &pf_main_anchor);
+
+	pfr_destroy_ktable(tmpkt, 0);
+
+	pf_free_trans(t);
 }
 
 void
-pfi_instance_add(struct ifnet *ifp, u_int8_t net, int flags)
+pfi_instance_add(struct pf_trans *t, struct ifnet *ifp, u_int8_t net, int flags)
 {
 	struct ifaddr	*ifa;
 	int		 got4 = 0, got6 = 0;
@@ -626,61 +653,43 @@ pfi_instance_add(struct ifnet *ifp, u_int8_t net, int flags)
 		if (af == AF_INET && net2 > 32)
 			net2 = 32;
 		if (flags & PFI_AFLAG_BROADCAST)
-			pfi_address_add(ifa->ifa_broadaddr, af, net2);
+			pfi_address_add(t, ifa->ifa_broadaddr, af, net2);
 		else if (flags & PFI_AFLAG_PEER)
-			pfi_address_add(ifa->ifa_dstaddr, af, net2);
+			pfi_address_add(t, ifa->ifa_dstaddr, af, net2);
 		else
-			pfi_address_add(ifa->ifa_addr, af, net2);
+			pfi_address_add(t, ifa->ifa_addr, af, net2);
 	}
 }
 
 void
-pfi_address_add(struct sockaddr *sa, sa_family_t af, u_int8_t net)
+pfi_address_add(struct pf_trans *t, struct sockaddr *sa, sa_family_t af,
+    u_int8_t net)
 {
-	struct pfr_addr	*p;
-	int		 i;
+	struct pfr_kentry	*ke;
+	struct pfr_addr	 	 p;
+	int		 	 i;
 
-	if (pfi_buffer_cnt >= pfi_buffer_max) {
-		int		 new_max = pfi_buffer_max * 2;
-
-		if (new_max > PFI_BUFFER_MAX) {
-			DPFPRINTF(LOG_ERR,
-			    "pfi_address_add: address buffer full (%d/%d)",
-			    pfi_buffer_cnt, PFI_BUFFER_MAX);
-			return;
-		}
-		p = mallocarray(new_max, sizeof(*pfi_buffer), PFI_MTYPE,
-		    M_DONTWAIT);
-		if (p == NULL) {
-			DPFPRINTF(LOG_ERR,
-			    "pfi_address_add: no memory to grow buffer "
-			    "(%d/%d)", pfi_buffer_cnt, PFI_BUFFER_MAX);
-			return;
-		}
-		memcpy(p, pfi_buffer, pfi_buffer_max * sizeof(*pfi_buffer));
-		/* no need to zero buffer */
-		free(pfi_buffer, PFI_MTYPE, pfi_buffer_max * sizeof(*pfi_buffer));
-		pfi_buffer = p;
-		pfi_buffer_max = new_max;
-	}
-	if (af == AF_INET && net > 32)
-		net = 128;
-	p = pfi_buffer + pfi_buffer_cnt++;
-	memset(p, 0, sizeof(*p));
-	p->pfra_af = af;
-	p->pfra_net = net;
+	memset(&p, 0, sizeof(p));
+	p.pfra_af = af;
+	p.pfra_net = net;
 	if (af == AF_INET)
-		p->pfra_ip4addr = ((struct sockaddr_in *)sa)->sin_addr;
+		p.pfra_ip4addr = ((struct sockaddr_in *)sa)->sin_addr;
 	else if (af == AF_INET6) {
-		p->pfra_ip6addr = ((struct sockaddr_in6 *)sa)->sin6_addr;
-		if (IN6_IS_SCOPE_EMBED(&p->pfra_ip6addr))
-			p->pfra_ip6addr.s6_addr16[1] = 0;
+		p.pfra_ip6addr = ((struct sockaddr_in6 *)sa)->sin6_addr;
+		if (IN6_IS_SCOPE_EMBED(&p.pfra_ip6addr))
+			p.pfra_ip6addr.s6_addr16[1] = 0;
 	}
 	/* mask network address bits */
 	if (net < 128)
-		((caddr_t)p)[p->pfra_net/8] &= ~(0xFF >> (p->pfra_net%8));
-	for (i = (p->pfra_net+7)/8; i < sizeof(p->pfra_u); i++)
-		((caddr_t)p)[i] = 0;
+		((caddr_t)&p)[p.pfra_net/8] &= ~(0xFF >> (p.pfra_net%8));
+	for (i = (p.pfra_net+7)/8; i < sizeof(p.pfra_u); i++)
+		((caddr_t)&p)[i] = 0;
+
+	ke = pfr_create_kentry(&p, M_NOWAIT); 
+	if (ke != NULL) {
+		SLIST_INSERT_HEAD(&t->pfttab_ke_ioq, ke, pfrke_workq);
+		t->pfttab_ke_ioq_len++;
+	}
 }
 
 void

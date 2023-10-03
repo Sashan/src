@@ -326,7 +326,7 @@ pfr_copyin_addrs(struct pf_trans *t, struct pfr_table *tbl,
     struct pfr_addr *addr, int size)
 {
 	struct pfr_ktable	*ktt, *tmpkt;
-	struct pfr_kentryworkq	 ioq;
+	struct pfr_kentry	*ke;
 	struct pfr_addr		 ad;
 	int			 i;
 	time_t			 tzero = gettime();
@@ -397,16 +397,15 @@ void
 pfr_addaddrs_commit(struct pf_trans *t, struct pf_anchor *ta,
     struct pf_anchor *a)
 {
-	struct pf_ruleset *rs;
-	struct pfr_ktable *ktt; *kt;
+	struct pfr_ktable *ktt, *kt;
 	struct pfr_kentry *ke, *exists;
 
 	KASSERT(ta->tables == 1);
-	ktt = RB_HEAD(&ta->ktables);
+	ktt = RB_ROOT(&ta->ktables);
 
 	kt = RB_FIND(pfr_ktablehead, &a->ktables, ktt);
 	KASSERT(kt != NULL);
-	KASSERT(kt->version == ktt->version);
+	KASSERT(kt->pfrkt_version == ktt->pfrkt_version);
 
 	SLIST_FOREACH(ke, &t->pfttab_ke_ioq, pfrke_workq) {
 		if (ke->pfrke_fb == PFR_FB_DUPLICATE)
@@ -414,6 +413,7 @@ pfr_addaddrs_commit(struct pf_trans *t, struct pf_anchor *ta,
 
 		exists = pfr_lookup_kentry(kt, ke, 1);
 		if (exists == NULL) {
+			pfr_kentry_kif_ref(ke);
 			if (t->pft_ioflags & PFR_FLAG_DUMMY) {
 				ke->pfrke_fb = PFR_FB_ADDED;
 				t->pfttab_nadd++;
@@ -431,7 +431,7 @@ pfr_addaddrs_commit(struct pf_trans *t, struct pf_anchor *ta,
 		}
 	}
 
-	if ((t->pfttab_nadd != 0) && ((t->pft_ioflags & PFR_FLAG_DUMMY) == 0)
+	if ((t->pfttab_nadd != 0) && ((t->pft_ioflags & PFR_FLAG_DUMMY) == 0))
 		kt->pfrkt_version++;
 }
 
@@ -459,7 +459,7 @@ pfr_addrs_feedback(struct pf_trans *t, struct pfr_addr *addr, int size,
 		SLIST_FOREACH(ke, &t->pfttab_ke_garbage, pfrke_workq) {
 			YIELD(1);
 			old_fb = ke->pfrke_fb;
-			ke->prke_fb = PFR_FB_DELETED;
+			ke->pfrke_fb = PFR_FB_DELETED;
 			pfr_fill_feedback((struct pfr_kentry_all *)ke, &ad);
 			ke->pfrke_fb = old_fb;
 			if (COPYOUT(&ad, addr+i, sizeof(ad), t->pft_ioflags))
@@ -3258,16 +3258,16 @@ pfr_settflags_commit(struct pf_trans *t, struct pf_anchor *ta,
 void
 pfr_deladdrs_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
 {
-	struct pfr_ktable *ktt; *kt;
-	struct pfr_kentry *ket, *exists;
+	struct pfr_ktable *ktt, *kt;
+	struct pfr_kentry *ket, *ke;
 	int i, lg;
 
 	KASSERT(ta->tables == 1);
-	ktt = RB_HEAD(&ta->ktables);
+	ktt = RB_ROOT(&ta->ktables);
 
 	kt = RB_FIND(pfr_ktablehead, &a->ktables, ktt);
 	KASSERT(kt != NULL);
-	KASSERT(kt->version == ktt->version);
+	KASSERT(kt->pfrkt_version == ktt->pfrkt_version);
 
 	/*
 	 * there are two algorithms to choose from here.
@@ -3302,13 +3302,13 @@ pfr_deladdrs_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *
 		if (ket->pfrke_fb == PFR_FB_DUPLICATE)
 			continue;
 
-		ke = pfr_lookup_kentry(kt, ket, 1)
+		ke = pfr_lookup_kentry(kt, ket, 1);
 		if (ke == NULL)
 			ket->pfrke_fb = PFR_FB_NONE;
 		else if ((ke->pfrke_flags & PFRKE_FLAG_NOT) !=
 		    (ket->pfrke_flags & PFRKE_FLAG_NOT))
 			ket->pfrke_fb = PFR_FB_CONFLICT;
-		else if (t->pft_ioflags & PFR_FLAG_DUMMY)
+		else if (t->pft_ioflags & PFR_FLAG_DUMMY) {
 			ket->pfrke_fb = PFR_FB_DELETED;
 			t->pfttab_ndel++;
 		} else {
@@ -3321,26 +3321,25 @@ pfr_deladdrs_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *
 		}
 	}
 
-	if ((t->pfttab_ndel != 0) && ((t->pft_ioflags & PFR_FLAG_DUMMY) == 0)
+	if ((t->pfttab_ndel != 0) && ((t->pft_ioflags & PFR_FLAG_DUMMY) == 0))
 		kt->pfrkt_version++;
 }
 
 void
 pfr_setaddrs_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *a)
 {
-	struct pfr_ktable *ktt; *kt;
+	struct pfr_ktable *ktt, *kt;
 	struct pfr_kentry *ket, *exists;
 	struct pfr_kentryworkq changeq, addrq;
 	time_t tzero = gettime();
-	int cnt;
 	int e;
 
 	KASSERT(ta->tables == 1);
-	ktt = RB_HEAD(&ta->ktables);
+	ktt = RB_ROOT(&ta->ktables);
 
 	kt = RB_FIND(pfr_ktablehead, &a->ktables, ktt);
 	KASSERT(kt != NULL);
-	KASSERT(kt->version == ktt->version);
+	KASSERT(kt->pfrkt_version == ktt->pfrkt_version);
 
 	SLIST_INIT(&changeq);
 	SLIST_INIT(&addrq);
@@ -3354,14 +3353,15 @@ pfr_setaddrs_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *
 		exists = pfr_lookup_kentry(kt, ket, 1);
 		if (exists != NULL) {
 			exists->pfrke_flags |= PFRKE_FLAG_MARK;
-			if (exists->pfrke_flags & PFRKE_FLAG_NOT) !=
-			    (ket->pfrkt_flags & PFRKE_FLAG_NOT) {
+			if ((exists->pfrke_flags & PFRKE_FLAG_NOT) !=
+			    (ket->pfrke_flags & PFRKE_FLAG_NOT)) {
 				ket->pfrke_fb = PFR_FB_CHANGED;
 				t->pfttab_nchg++;
 				SLIST_INSERT_HEAD(&changeq, exists,
 				    pfrke_workq);
 			}
 		} else {
+			pfr_kentry_kif_ref(ket);
 			ket->pfrke_fb = PFR_FB_ADDED;
 			t->pfttab_nadd++;
 		}
@@ -3370,7 +3370,7 @@ pfr_setaddrs_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *
 	pfr_enqueue_addrs(kt, &t->pfttab_ke_garbage, &t->pfttab_ndel,
 	    ENQUEUE_UNMARKED_ONLY);
 
-	if ((flags & PFR_FLAG_DUMMY) == 0) {
+	if ((t->pft_ioflags & PFR_FLAG_DUMMY) == 0) {
 		/* add kentries */
 		SLIST_FOREACH(ket, &t->pfttab_ke_ioq, pfrke_workq) {
 			if (ket->pfrke_fb != PFR_FB_ADDED)
@@ -3385,10 +3385,10 @@ pfr_setaddrs_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *
 				    __func__, e);
 			} else {
 				kt->pfrkt_cnt++;
-				if (p->pfrke_type == PFRKE_COST)
+				if (ket->pfrke_type == PFRKE_COST)
 					kt->pfrkt_refcntcost++;
 				pfr_ktable_winfo_update(kt, ket);
-				ket->pfrkt_tzero = tzero;
+				kt->pfrkt_tzero = tzero;
 			}
 		}
 
@@ -3404,8 +3404,8 @@ pfr_setaddrs_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *
 			kt->pfrkt_gcdweight = 0;
 			kt->pfrkt_maxweight = 1;
 			pfr_enqueue_addrs(kt, &addrq, NULL, 0);
-			SLIST_FOREACH(p, &addrq, pfrke_workq)
-				pfr_ktable_winfo_update(kt, p);
+			SLIST_FOREACH(ket, &addrq, pfrke_workq)
+				pfr_ktable_winfo_update(kt, ket);
 		}
 
 		/* change kentries */
@@ -3415,7 +3415,7 @@ pfr_setaddrs_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *
 				pool_put(&pfr_kcounters_pl, ket->pfrke_counters);
 				ket->pfrke_counters = NULL;
 			}
-			ket->pfrkt_tzero = tzero;
+			kt->pfrkt_tzero = tzero;
 		}
 	}
 }
