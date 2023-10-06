@@ -522,6 +522,7 @@ extern int		 pfr_copyin_tables(struct pf_trans *,
 			    struct pfr_table *, int);
 extern int		 pfr_copyin_addrs(struct pf_trans *, struct pfr_table *,
 			    struct pfr_addr *, int);
+extern int		 pfr_copyout_addrs(struct pf_trans *, void *iobuf);
 extern int		 pfr_addrs_feedback(struct pf_trans *,
 			    struct pfr_addr *, int, int);
 extern void		 pfr_addtables_commit(struct pf_trans *,

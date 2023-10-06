@@ -2830,11 +2830,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		PF_UNLOCK();
 		NET_UNLOCK();
 
-		if ((error == 0) && (t->pfttab_size <= io->pfrio_size)) {
-			KASSERT(io->pfrio_size <= t->pfttab_size);
+		if ((error == 0) && (t->pfttab_size <= io->pfrio_size))
 			error = copyout(t->pfttab_kbuf, io->pfrio_buffer,
 			    io->pfrio_size * sizeof(struct pfr_table));
-		}
 
 		io->pfrio_size = t->pfttab_size;
 
@@ -2989,7 +2987,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		error = pfr_copyin_addrs(t, &io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size);
 
-		if (error != 0) {
+		if (error == 0) {
 			NET_LOCK();
 			PF_LOCK();
 
@@ -3029,7 +3027,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		error = pfr_copyin_addrs(t, &io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size);
 
-		if (error != 0) {
+		if (error == 0) {
 			NET_LOCK();
 			PF_LOCK();
 
@@ -3068,7 +3066,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		error = pfr_copyin_addrs(t, &io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size);
 
-		if (error != 0) {
+		if (error == 0) {
 			NET_LOCK();
 			PF_LOCK();
 
@@ -3101,35 +3099,61 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCRGETADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
 			log(LOG_DEBUG, "%s DIOCRGETADDRS\n", __func__);
 			goto fail;
 		}
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pft_ioflags = io->pfrio_flags;
+		t->pfttab_iocmd = cmd;
 		NET_LOCK();
 		PF_LOCK();
-		error = pfr_get_addrs(&io->pfrio_table, io->pfrio_buffer,
-		    &io->pfrio_size, io->pfrio_flags | PFR_FLAG_USERIOCTL);
+		error = pfr_get_addrs(t, &io->pfrio_table, &io->pfrio_size);
 		PF_UNLOCK();
 		NET_UNLOCK();
+
+		if (error == 0)
+			error = pfr_copyout_addrs(t, io->pfrio_buffer);
+		/*
+		 * forget entries we copied out so pf_rollback_trans() won't
+		 * attempt to free them.
+		 */
+		SLIST_INIT(&t->pfttab_ke_ioq);
+		pf_rollback_trans(t);
 		break;
 	}
 
 	case DIOCRGETASTATS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_astats)) {
 			error = ENODEV;
 			log(LOG_DEBUG, "%s DIOCRGETASTATS\n", __func__);
 			goto fail;
 		}
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pft_ioflags = io->pfrio_flags;
+		t->pfttab_iocmd = DIOCRGETASTATS;
 		NET_LOCK();
 		PF_LOCK();
-		error = pfr_get_astats(&io->pfrio_table, io->pfrio_buffer,
-		    &io->pfrio_size, io->pfrio_flags | PFR_FLAG_USERIOCTL);
+		error = pfr_get_astats(t, &io->pfrio_table, &io->pfrio_size);
 		PF_UNLOCK();
 		NET_UNLOCK();
+
+		if (error == 0)
+			error = pfr_copyout_addrs(t, io->pfrio_buffer);
+		/*
+		 * forget entries we copied out so pf_rollback_trans() won't
+		 * attempt to free them.
+		 */
+		SLIST_INIT(&t->pfttab_ke_ioq);
+		pf_rollback_trans(t);
 		break;
 	}
 
@@ -4541,7 +4565,7 @@ pf_cleanup_ttab(struct pf_trans *t)
 	}
 
 	while ((ke = SLIST_FIRST(&t->pfttab_ke_ioq)) != NULL) {
-		SLIST_REMOVE_HEAD(&t->pfttab_ke_ioq, pfrke_workq);
+		SLIST_REMOVE_HEAD(&t->pfttab_ke_ioq, pfrke_ioq);
 		switch (ke->pfrke_fb) {
 		case PFR_FB_ADDED:
 			break;

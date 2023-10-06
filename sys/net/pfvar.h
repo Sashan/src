@@ -1753,8 +1753,8 @@ int	pfr_clr_addrs(struct pfr_table *, int *, int);
 int	pfr_insert_kentry(struct pfr_ktable *, struct pfr_addr *, time_t);
 int	pfr_set_addrs_ioc(struct pf_trans *, struct pfr_table *,
 	    struct pfr_addr *, int, int *, int *, int *, int *, int, u_int32_t);
-int	pfr_get_addrs(struct pfr_table *, struct pfr_addr *, int *, int);
-int	pfr_get_astats(struct pfr_table *, struct pfr_astats *, int *, int);
+int	pfr_get_addrs(struct pf_trans *, struct pfr_table *, int *);
+int	pfr_get_astats(struct pf_trans *, struct pfr_table *, int *);
 int	pfr_clr_astats(struct pfr_table *, struct pfr_addr *, int, int *,
 	    int);
 int	pfr_tst_addrs(struct pfr_table *, struct pfr_addr *, int, int *,
