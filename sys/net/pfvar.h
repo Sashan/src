@@ -1741,7 +1741,7 @@ struct pfr_ktable *
 	pfr_attach_table(struct pf_rules_container *, struct pf_ruleset *,
 	    char *, int);
 void	pfr_detach_table(struct pfr_ktable *);
-int	pfr_clr_tables(struct pfr_table *, int *, int);
+int	pfr_clr_tables(struct pf_trans *);
 int	pfr_add_tables(struct pf_trans *, struct pfr_table *, int, int *, int);
 int	pfr_del_tables(struct pf_trans *, struct pfr_table *, int, int *, int);
 int	pfr_get_tables(struct pf_trans *, struct pfr_table *);

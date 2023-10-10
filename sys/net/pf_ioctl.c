@@ -2694,18 +2694,38 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCRCLRTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
+		struct pfr_ktable *kt;
 
 		if (io->pfrio_esize != 0) {
 			error = ENODEV;
 			log(LOG_DEBUG, "%s DIOCRCLRTABLES\n", __func__);
 			goto fail;
 		}
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+		kt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
+		    gettime(), PR_WAITOK);
+		if (kt == NULL) {
+			log(LOG_DEBUG, "%s DIOCRCLRTABLES kt == NULL\n",
+			    __func__);
+			error = ENOMEM;
+			pf_rollback_trans(t);
+			goto fail;
+		}
+
 		NET_LOCK();
 		PF_LOCK();
-		error = pfr_clr_tables(&io->pfrio_table, &io->pfrio_ndel,
-		    io->pfrio_flags | PFR_FLAG_USERIOCTL);
+		error = pfr_clr_tables(t);
 		PF_UNLOCK();
 		NET_UNLOCK();
+
+		if (error == 0)
+			io->pfrio_ndel = t->pfttab_ndel;
+
+		pf_rollback_trans(t);
 		break;
 	}
 
@@ -2920,13 +2940,21 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
+		if ((io->pfrio_setflag & ~PFR_TFLAG_USRMASK) ||
+		    (io->pfrio_clrflag & ~PFR_TFLAG_USRMASK) ||
+		    (io->pfrio_setflag & io->pfrio_clrflag)) {
+			error = EINVAL;
+			goto fail;
+		}
+
 		t = pf_open_trans(minor(dev));
 		pf_init_ttab(t);
 		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags;
 
-		error = pfr_set_tflags(t, io->pfrio_buffer, io->pfrio_size,
-		    io->pfrio_setflag, io->pfrio_clrflag, &io->pfrio_nchange,
-		    &io->pfrio_ndel, io->pfrio_flags | PFR_FLAG_USERIOCTL);
+		t->pfttab_setf = io->pfrio_setflag;
+		t->pfttab_clrf = io->pfrio_clrflag;
+		error = pfr_copyin_tables(t, io->pfrio_buffer, io->pfrio_size);
 
 		if ((error != 0) && ((io->pfrio_flags & PFR_FLAG_DUMMY) == 0)) {
 			NET_LOCK();
@@ -2939,6 +2967,11 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 			PF_UNLOCK();
 			NET_UNLOCK();
+		}
+
+		if (error == 0) {
+			pfrio->pfrio_ndel = t->pfttab_ndel;
+			pfrio->pfrio_nchange = t->pfttab_nchg;
 		}
 
 		pf_rollback_trans(t);
@@ -2954,6 +2987,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
+		/*
+		 * needs transaction too!
+		 */
 
 		if ((io->pfrio_flags & PFR_FLAG_DUMMY) == 0) {
 			NET_LOCK();

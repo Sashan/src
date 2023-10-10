@@ -186,8 +186,6 @@ void			 pfr_insert_ktables(struct pf_rules_container *,
 			    struct pfr_ktableworkq *);
 void			 pfr_insert_ktable(struct pf_rules_container *,
 			    struct pfr_ktable *);
-void			 pfr_clstats_ktables(struct pfr_ktableworkq *, time_t,
-			    int);
 void			 pfr_clstats_ktable(struct pfr_ktable *, time_t, int);
 struct pfr_ktable	*pfr_create_ktable(struct pf_rules_container *,
 			    struct pfr_table *, time_t, int);
@@ -1356,38 +1354,144 @@ pfr_walktree(struct radix_node *rn, void *arg, u_int id)
 	return (0);
 }
 
+struct pfr_ktable *
+pfr_remove_table(struct pf_anchor *a, struct pfr_ktable *kt)
+{
+	struct pf_anchor	*parent = a->parent;
+	struct pfr_ktable	*ktp, *exists;
+
+	/*
+	 * Find parent table which can be used in 'a' and
+	 * and 'a's chiildren.
+	 */
+	while (parent != NULL) {
+		ktp = RB_FIND(pfr_ktablehead, &parent->ktables, kt);
+		if (ktp != NULL)
+			break;
+		parent = parent->parent;
+	}
+
+	/*
+	 * If no parent table was found, then premote 'kt' to root table.
+	 * In this case we don't need to update references, References
+	 * from rules are still up-to-date.
+	 *
+	 * If parent table/anchor was found, then update table references in
+	 * subtree.
+	 */
+	exists = NULL;
+	if (ktp == NULL) {
+		exists = RB_INSERT(pfr_ktablehead, &pf_main_anchor.ktables, kt);
+		KASSERT(exists == NULL);
+		kt = NULL;
+	} else
+		pfr_update_table_refs(parent);
+
+	KASSERT(exists == NULL);
+
+	return (kt);
+}
+
 int
-pfr_clr_tables(struct pfr_table *filter, int *ndel, int flags)
+pfr_clr_tables(struct pf_trans *t)
 {
 	struct pfr_ktableworkq	 workq;
-	/* struct pfr_ktable	*p; */
+	struct pfr_ktable	*kt, *ktt;
 	int			 xdel = 0;
+	struct pf_anchor	*a, *ta;
 
-	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY | PFR_FLAG_ALLRSETS);
-	if (pfr_fix_anchor(filter->pfrt_anchor))
-		return (EINVAL);
-	if (pfr_table_count(filter, flags) < 0)
-		return (ENOENT);
+	ACCEPT_FLAGS(t->pft_ioflags, PFR_FLAG_DUMMY | PFR_FLAG_ALLRSETS);
 
 	SLIST_INIT(&workq);
-#if 0
-	RB_FOREACH(p, pfr_ktablehead, &pfr_ktables) {
-		if (pfr_skip_table(filter, p, flags))
-			continue;
-		if (!strcmp(p->pfrkt_anchor, PF_RESERVED_ANCHOR))
-			continue;
-		if (!(p->pfrkt_flags & PFR_TFLAG_ACTIVE))
-			continue;
-		p->pfrkt_nflags = p->pfrkt_flags & ~PFR_TFLAG_ACTIVE;
-		SLIST_INSERT_HEAD(&workq, p, pfrkt_workq);
-		xdel++;
+
+	if (t->pft_ioflags & PFR_FLAG_ALLRSETS) {
+		RB_FOREACH(kt, pfr_ktablehead, &pf_main_anchor.ktables) {
+			if (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) {
+				kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
+				kt->pfrkt_flags |= ~PFR_TFLAG_INACTIVE;
+				xdel++;
+			}
+
+			if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0) {
+				RB_REMOVE(pfr_ktablehead,
+				    &pf_main_anchor.ktables, kt);
+				SLIST_INSERT_HEAD(&t->pfttab_kt_garbage, kt,
+				    pfrkt_workq);
+			}
+			/*
+			 * no further action needed for root tables.
+			 */
+		}
+
+		RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
+			RB_FOREACH(kt, pfr_ktablehead, &a->ktables) {
+				if (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) {
+					SLIST_INSERT_HEAD(&workq, kt,
+					    pfrkt_workq);
+					kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
+					kt->pfrkt_flags |= ~PFR_TFLAG_INACTIVE;
+					xdel++;
+					RB_REMOVE(pfr_ktablehead,
+					    &a->ktables, kt);
+					kt = pfr_remove_table(a, kt);
+					if (kt != NULL) {
+						SLIST_INSERT_HEAD(
+						    &t->pfttab_kt_garbage, kt,
+						    pfrkt_workq);
+					}
+				}
+			}
+		}
+	} else {
+		RB_FOREACH(ktt, pfr_ktablehead,
+		    &t->pfttab_rc.main_anchor.ktables) {
+			kt = RB_FIND(pfr_ktablehead, &pf_main_anchor.ktables,
+			    ktt);
+			if (kt != NULL && kt->pfrkt_flags & PFR_TFLAG_ACTIVE) {
+				kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
+				kt->pfrkt_flags |= ~PFR_TFLAG_INACTIVE;
+				xdel++;
+			}
+			if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0) {
+				RB_REMOVE(pfr_ktablehead,
+				    &pf_main_anchor.ktables, kt);
+				SLIST_INSERT_HEAD(&t->pfttab_kt_garbage, kt,
+				    pfrkt_workq);
+			}
+			/*
+			 * no further action needed for root tables.
+			 */
+
+		}
+		RB_FOREACH(ta, pf_anchor_global, &t->pfttab_rc.anchors) {
+			a = RB_FIND(pf_anchor_global, &pf_anchors, ta);
+			if (a == NULL)
+				return (ENOENT);
+			RB_FOREACH(ktt, pfr_ktablehead, &ta->ktables) {
+				kt = RB_FIND(pfr_ktablehead, &a->ktables, ktt);
+				if (kt == NULL)
+					return (ENOMEM);
+				if (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) {
+					SLIST_INSERT_HEAD(&workq, kt,
+					    pfrkt_workq);
+					xdel++;
+					kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
+					kt->pfrkt_flags |= ~PFR_TFLAG_INACTIVE;
+					RB_REMOVE(pfr_ktablehead,
+					    &a->ktables, kt);
+					kt = pfr_remove_table(a, kt);
+					if (kt != NULL) {
+						SLIST_INSERT_HEAD(
+						    &t->pfttab_kt_garbage, kt,
+						    pfrkt_workq);
+					}
+				}
+			}
+		}
 	}
-	if (!(flags & PFR_FLAG_DUMMY)) {
-		pfr_setflags_ktables(&workq);
-	}
-#endif
-	if (ndel != NULL)
-		*ndel = xdel;
+
+	t->pfttab_ndel = xdel;
+
 	return (0);
 }
 
@@ -1725,64 +1829,6 @@ pfr_clr_tstats(struct pf_trans *t, struct pfr_table *tbl, int size, int *nzero,
 	if (nzero != NULL)
 		*nzero = xzero;
 
-	return (0);
-}
-
-int
-pfr_set_tflags(struct pf_trans *t, struct pfr_table *tbl, int size, int setflag,
-	int clrflag, int *nchange, int *ndel, int flags)
-{
-	if (t->pft_type != PF_TRANS_TAB) {
-		log(LOG_ERR, "%s expects PF_TRANS_TAB only\n", __func__);
-		return (EINVAL);
-	}
-
-#if 0
-	struct pfr_ktableworkq	 workq;
-	struct pfr_ktable	*p, *q, key;
-	int			 i, xchange = 0, xdel = 0;
-
-	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
-	if ((setflag & ~PFR_TFLAG_USRMASK) ||
-	    (clrflag & ~PFR_TFLAG_USRMASK) ||
-	    (setflag & clrflag))
-		return (EINVAL);
-	SLIST_INIT(&workq);
-	for (i = 0; i < size; i++) {
-		YIELD(flags & PFR_FLAG_USERIOCTL);
-		if (COPYIN(tbl+i, &key.pfrkt_t, sizeof(key.pfrkt_t), flags))
-			return (EFAULT);
-		if (pfr_validate_table(&key.pfrkt_t, 0,
-		    flags & PFR_FLAG_USERIOCTL))
-			return (EINVAL);
-		p = RB_FIND(pfr_ktablehead, &pfr_ktables, &key);
-		if (p != NULL && (p->pfrkt_flags & PFR_TFLAG_ACTIVE)) {
-			p->pfrkt_nflags = (p->pfrkt_flags | setflag) &
-			    ~clrflag;
-			if (p->pfrkt_nflags == p->pfrkt_flags)
-				goto _skip;
-			SLIST_FOREACH(q, &workq, pfrkt_workq)
-				if (!pfr_ktable_compare(p, q))
-					goto _skip;
-			SLIST_INSERT_HEAD(&workq, p, pfrkt_workq);
-			if ((p->pfrkt_flags & PFR_TFLAG_PERSIST) &&
-			    (clrflag & PFR_TFLAG_PERSIST) &&
-			    !(p->pfrkt_flags & PFR_TFLAG_REFERENCED))
-				xdel++;
-			else
-				xchange++;
-		}
-_skip:
-	;
-	}
-	if (!(flags & PFR_FLAG_DUMMY)) {
-		pfr_setflags_ktables(&workq);
-	}
-	if (nchange != NULL)
-		*nchange = xchange;
-	if (ndel != NULL)
-		*ndel = xdel;
-#endif
 	return (0);
 }
 
@@ -2285,107 +2331,6 @@ _bad:
 	return (rv);
 }
 
-#if 0
-void
-pfr_commit_table(struct pf_trans *t, struct pf_anchor *ta,
-    struct pf_anchor *a)
-{
-	struct pfr_ktable *kt, *tkt, *ktw;
-
-	/*
-	 * nothing to be done when the whole anchor got moved
-	 * from transaction to pf_anchors
-	 */
-	if (ta == a) {
-		log(LOG_DEBUG, "%s nothing to be done\n", __func__);
-		return;
-	}
-
-	if (a == NULL) {
-		/*
-		 * `a` can't be NULL if ta has tables to commit. All non-empty
-		 * anchors are moved to global tree earlier in pf_ina_commit().
-		 */
-		KASSERT(ta->tables == 0);
-		log(LOG_DEBUG, "%s a is NULL\n", __func__);
-		return;
-	}
-
-	/*
-	 * Move tables from transaction to global anchor or merge tables in
-	 * case the table with the same name exists in global anchor.
-	 */
-	RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, ktw) {
-		kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
-		log(LOG_DEBUG, "%s committing %s@%s\n", __func__,
-		    tkt->pfrkt_name, ta->path);
-		if (kt == NULL) {
-			log(LOG_DEBUG, "%s %s@%s not found in\n", __func__,
-			    tkt->pfrkt_name, a->path);
-			if (tkt->pfrkt_version != 0)
-				panic("%s %s@%s has %d, but should have 0 "
-				    "[ %s | %s ]",
-				    __func__,
-				    tkt->pfrkt_name,
-				    ta->path, tkt->pfrkt_version,
-				    ta->path, a->path);
-			KASSERT(tkt->pfrkt_version == 0);
-			RB_REMOVE(pfr_ktablehead, &ta->ktables, tkt);
-			ta->tables--;
-			RB_INSERT(pfr_ktablehead, &a->ktables, tkt);
-			a->tables++;
-			pfr_walk_anchor_subtree(a, tkt,
-			    pfr_update_tablerefs_anchor);
-			/*
-			 * persistent tables are also active, so 'pfctl -sT'
-			 * can report them.
-			 */
-			if (tkt->pfrkt_flags & PFR_TFLAG_PERSIST) {
-				tkt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
-				tkt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
-			}
-			tkt->pfrkt_version++;
-		} else {
-			log(LOG_DEBUG, "%s merging %s@%s\n", __func__,
-			    kt->pfrkt_name, a->path);
-			KASSERT(kt->pfrkt_version == tkt->pfrkt_version);
-			pfr_merge_ktables(tkt, kt, gettime());
-			pfr_walk_anchor_subtree(a, kt,
-			    pfr_update_tablerefs_anchor);
-			/*
-			 * persistent tables are also active, so 'pfctl -sT'
-			 * can report them.
-			 */
-			if (tkt->pfrkt_flags & PFR_TFLAG_PERSIST) {
-				tkt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
-				tkt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
-			}
-			kt->pfrkt_version++;
-		}
-	}
-
-	/*
-	 * remove unused tables from global anchor `a`.
-	 */
-	RB_FOREACH_SAFE(tkt, pfr_ktablehead, &a->ktables, ktw) {
-		kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
-		/*
-		 * TODO: we should also identify tables created
-		 * by pfctl -t ... -T ... those tables must also
-		 * stay around.
-		 */
-		if (kt != NULL && kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0 &&
-		    (kt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
-			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
-			log(LOG_DEBUG, "%s removing %s@%s\n",
-			    __func__, kt->pfrkt_name, a->path);
-			SLIST_INSERT_HEAD(&t->pftina_garbage, kt, pfrkt_workq);
-			a->tables--;
-		}
-	}
-}
-#endif
-
 int
 pfr_validate_table(struct pfr_table *tbl, int allowedflags, int no_reserved)
 {
@@ -2519,18 +2464,6 @@ pfr_insert_ktable(struct pf_rules_container *rc, struct pfr_ktable *kt)
 	rs = pf_find_ruleset(rc, kt->pfrkt_anchor);
 	RB_INSERT(pfr_ktablehead, &rs->anchor->ktables, kt);
 	/* we should bump counter with commit */
-}
-
-void
-pfr_setflags_ktables(struct pfr_ktableworkq *workq)
-{
-	struct pfr_ktable	*p, *q;
-
-	SLIST_FOREACH_SAFE(p, workq, pfrkt_workq, q) {
-#if 0
-		pfr_setflags_ktable(p, p->pfrkt_nflags);
-#endif
-	}
 }
 
 void
@@ -3269,6 +3202,8 @@ pfr_settflags_commit(struct pf_trans *t, struct pf_anchor *ta,
 	struct pfr_ktable *kt_ta, *kt_a;
 	int current_flags;
 	int flags_ktta, flags_kta;
+
+	ACCEPT_FLAGS(t->pft_ioflags, PFR_FLAG_DUMMY);
 
 	RB_FOREACH(kt_ta, pfr_ktablehead, &ta->ktables) {
 		kt_a = RB_FIND(pfr_ktablehead, &a->ktables, kt_ta);

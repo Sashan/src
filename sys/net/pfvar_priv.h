@@ -394,6 +394,8 @@ struct pf_trans {
 						 tab_rc;
 			char			 tab_anchor_path[PATH_MAX];
 			char			*tab_kbuf;
+			int			 tab_clrf;
+			int			 tab_setf;
 			uint32_t		 tab_ke_ioq_len;
 			uint32_t		 tab_kbuf_sz;
 			uint32_t		 tab_size;
@@ -427,6 +429,8 @@ struct pf_trans {
 #define pfttab_anchor_path	u.u_tab.tab_anchor_path
 #define pfttab_kbuf		u.u_tab.tab_kbuf
 #define pfttab_kbuf_sz		u.u_tab.tab_kbuf_sz
+#define pfttab_clrf		u.u_tab.tab_clrf
+#define pfttab_setf		u.u_tab.tab_setf
 #define pfttab_ke_ioq_len	u.u_tab.tab_ke_ioq_len
 #define pfttab_size		u.u_tab.tab_size
 #define pfttab_nadd		u.u_tab.tab_nadd
