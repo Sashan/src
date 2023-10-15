@@ -402,6 +402,7 @@ struct pf_trans {
 			uint32_t		 tab_nadd;
 			uint32_t		 tab_ndel;
 			uint32_t		 tab_nchg;
+			uint32_t		 tab_nzero;
 		} u_tab;
 	} u;
 };
@@ -436,6 +437,7 @@ struct pf_trans {
 #define pfttab_nadd		u.u_tab.tab_nadd
 #define pfttab_ndel		u.u_tab.tab_ndel
 #define pfttab_nchg		u.u_tab.tab_nchg
+#define pfttab_nzero		u.u_tab.tab_nzero
 
 extern struct timeout	pf_purge_states_to;
 extern struct task	pf_purge_task;
@@ -546,6 +548,8 @@ extern void		 pfr_deladdrs_commit(struct pf_trans *,
 extern void		 pfr_setaddrs_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
 extern void		 pfr_addaddrs_commit(struct pf_trans *,
+			    struct pf_anchor *, struct pf_anchor *);
+extern void		 pfr_clraddrs_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
 extern void		 pfr_destroy_kentry(struct pfr_kentry *);
 

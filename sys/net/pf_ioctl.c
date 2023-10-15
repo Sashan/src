@@ -2642,7 +2642,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 		pr->nr = 0;
 		if (ruleset == &pf_main_ruleset) {
-			/* XXX kludge for pf_main_ruleset */
 			RB_FOREACH(anchor, pf_anchor_global, &pf_anchors)
 				if (anchor->parent == NULL)
 					pr->nr++;
@@ -2670,7 +2669,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 		pr->name[0] = '\0';
 		if (ruleset == &pf_main_ruleset) {
-			/* XXX kludge for pf_main_ruleset */
 			RB_FOREACH(anchor, pf_anchor_global, &pf_anchors)
 				if (anchor->parent == NULL && nr++ == pr->nr) {
 					strlcpy(pr->name, anchor->name,
@@ -2706,14 +2704,17 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		pf_init_ttab(t);
 		t->pfttab_iocmd = cmd;
 		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
-		kt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
-		    gettime(), PR_WAITOK);
-		if (kt == NULL) {
-			log(LOG_DEBUG, "%s DIOCRCLRTABLES kt == NULL\n",
-			    __func__);
-			error = ENOMEM;
-			pf_rollback_trans(t);
-			goto fail;
+		if ((t->pft_ioflags & PFR_FLAG_ALLRSETS) == 0) {
+			kt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
+			    gettime(), PR_WAITOK);
+			if (kt == NULL) {
+				error = ENOMEM;
+				goto fail;
+			}
+			if (kt->pfrkt_version == 0) {
+				error = ESRCH;
+				goto fail;
+			}
 		}
 
 		NET_LOCK();
@@ -2844,9 +2845,24 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			    M_WAITOK);
 		}
 
+		if ((t->pft_ioflags & PFR_FLAG_ALLRSETS) == 0) {
+			kt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
+			    gettime(), PR_WAITOK);
+			if (kt == NULL) {
+				error = ENOMEM;
+				goto fail;
+			}
+			if (kt->pfrkt_version == 0) {
+				error = ESRCH;
+				goto fail;
+			}
+		}
+
 		NET_LOCK();
 		PF_LOCK();
-		error = pfr_get_tables(t, &io->pfrio_table);
+
+		error = pfr_get_tables(t);
+
 		PF_UNLOCK();
 		NET_UNLOCK();
 
@@ -2882,15 +2898,19 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			    M_WAITOK);
 		}
 
-		if ((error != 0) && ((io->pfrio_flags & PFR_FLAG_DUMMY) == 0)) {
-			NET_LOCK();
-			PF_LOCK();
+		NET_LOCK();
+		PF_LOCK();
 
-			error = pfr_get_tstats(t, &io->pfrio_table);
+		error = pfr_get_tstats(t);
 
-			PF_UNLOCK();
-			NET_UNLOCK();
-		}
+		PF_UNLOCK();
+		NET_UNLOCK();
+
+		error = copyout(t->pfttab_kbuf, io->pfrio_buffer,
+		    io->pfrio_size * sizeof(struct pfr_tstats));
+
+		pf_rollback_trans(t);
+
 		break;
 	}
 
@@ -2909,10 +2929,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t->pfttab_iocmd = cmd;
 		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
 
-		error = pfr_clr_tstats(t, io->pfrio_buffer, io->pfrio_size,
-		    &io->pfrio_nzero, io->pfrio_flags | PFR_FLAG_USERIOCTL);
+		error = pfr_copyin_tables(t, io->pfrio_buffer, io->pfrio_size);
 
-		if ((error != 0) && ((io->pfrio_flags & PFR_FLAG_DUMMY) == 0)) {
+		if (error == 0) {
 			NET_LOCK();
 			PF_LOCK();
 
@@ -2924,6 +2943,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			PF_UNLOCK();
 			NET_UNLOCK();
 		}
+
+		if (error == 0)
+			io->pfrio_nzero = t->pfttab_nzero;
 
 		pf_rollback_trans(t);
 
@@ -2956,7 +2978,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t->pfttab_clrf = io->pfrio_clrflag;
 		error = pfr_copyin_tables(t, io->pfrio_buffer, io->pfrio_size);
 
-		if ((error != 0) && ((io->pfrio_flags & PFR_FLAG_DUMMY) == 0)) {
+		if (error == 0) {
 			NET_LOCK();
 			PF_LOCK();
 
@@ -2970,8 +2992,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		if (error == 0) {
-			pfrio->pfrio_ndel = t->pfttab_ndel;
-			pfrio->pfrio_nchange = t->pfttab_nchg;
+			io->pfrio_ndel = t->pfttab_ndel;
+			io->pfrio_nchange = t->pfttab_nchg;
 		}
 
 		pf_rollback_trans(t);
@@ -2980,6 +3002,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCRCLRADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
+		struct pfr_ktable *kt;
 
 		if (io->pfrio_esize != 0) {
 			error = ENODEV;
@@ -2987,16 +3011,29 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			goto fail;
 		}
 
-		/*
-		 * needs transaction too!
-		 */
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags;
+		kt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
+		    gettime(), PR_WAITOK);
+		if (kt == NULL) {
+			error = EINVAL;
+			goto fail;
+		}
+		if (kt->pfrkt_version == 0) {
+			error = ESRCH;
+			goto fail;
+		}
 
 		if ((io->pfrio_flags & PFR_FLAG_DUMMY) == 0) {
 			NET_LOCK();
 			PF_LOCK();
 
-			error = pfr_clr_addrs(&io->pfrio_table, &io->pfrio_ndel,
-			    io->pfrio_flags | PFR_FLAG_USERIOCTL);
+			if (pf_trans_in_conflict(t, "DIOCRCLRADDRS"))
+				error = EBUSY;
+			else
+				pf_commit_trans(t);
 
 			PF_UNLOCK();
 			NET_UNLOCK();
@@ -4422,6 +4459,9 @@ pf_tab_do_commit_op(struct pf_trans *t, struct pf_anchor *ta,
 		break;
 	case DIOCRSETADDRS:
 		pfr_setaddrs_commit(t, ta, a);
+		break;
+	case DIOCRCLRADDRS:
+		pfr_clraddrs_commit(t, ta, a);
 		break;
 	default:
 		panic("%s unexpected iocmd for transaction on /",

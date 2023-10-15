@@ -197,7 +197,7 @@ void			 pfr_ktable_winfo_update(struct pfr_ktable *,
 			    struct pfr_kentry *);
 void			 pfr_clean_node_mask(struct pfr_ktable *,
 			    struct pfr_kentryworkq *);
-int			 pfr_table_count(struct pfr_table *, int);
+int			 pfr_table_count(void);
 int			 pfr_skip_table(struct pfr_table *,
 			    struct pfr_ktable *, int);
 struct pfr_kentry	*pfr_kentry_byidx(struct pfr_ktable *, int, int);
@@ -243,46 +243,6 @@ pfr_initialize(void)
 	    0, IPL_SOFTNET, 0, "pfrkcounters", NULL);
 
 	memset(&pfr_ffaddr, 0xff, sizeof(pfr_ffaddr));
-}
-
-int
-pfr_clr_addrs(struct pfr_table *tbl, int *ndel, int flags)
-{
-	struct pfr_ktable	*kt;
-	struct pfr_kentryworkq	 workq;
-	struct pf_ruleset *rs;
-	struct pf_anchor *a;
-
-	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY);
-	if (pfr_validate_table(tbl, 0, flags & PFR_FLAG_USERIOCTL))
-		return (EINVAL);
-	PF_ASSERT_LOCKED();
-	/* XXX can not use pf_find_ruleset() under PF_LOCK() */
-	rs = pf_find_ruleset(&pf_global, tbl->pfrt_anchor);
-	if (rs == NULL)
-		return (ESRCH);
-	if ((a = rs->anchor) == NULL)
-		a = &pf_main_anchor;
-	kt = pfr_lookup_table(a, tbl);
-	if (kt == NULL || !(kt->pfrkt_flags & PFR_TFLAG_ACTIVE))
-		return (ESRCH);
-	if (kt->pfrkt_flags & PFR_TFLAG_CONST)
-		return (EPERM);
-	pfr_enqueue_addrs(kt, &workq, ndel, 0);
-
-	if (!(flags & PFR_FLAG_DUMMY)) {
-		pfr_remove_kentries(kt, &workq);
-		if (kt->pfrkt_cnt) {
-			DPFPRINTF(LOG_NOTICE,
-			    "pfr_clr_addrs: corruption detected (%d).",
-			    kt->pfrkt_cnt);
-			kt->pfrkt_cnt = 0;
-		}
-
-		kt->pfrkt_version++;
-	}
-
-	return (0);
 }
 
 void
@@ -479,10 +439,8 @@ pfr_addaddrs_commit(struct pf_trans *t, struct pf_anchor *ta,
 	}
 
 	if ((t->pfttab_nadd != 0) &&
-	    ((t->pft_ioflags & PFR_FLAG_DUMMY) == 0)) {
-		kt->pfrkt_version++;
+	    ((t->pft_ioflags & PFR_FLAG_DUMMY) == 0))
 		kt->pfrkt_cnt += t->pfttab_nadd;		
-	}
 }
 
 int
@@ -708,10 +666,8 @@ pfr_clr_astats(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 		}
 	}
 
-	if (!(flags & PFR_FLAG_DUMMY)) {
+	if (!(flags & PFR_FLAG_DUMMY))
 		pfr_clstats_kentries(&workq, gettime(), 0);
-		kt->pfrkt_version++;
-	}
 	if (nzero != NULL)
 		*nzero = xzero;
 	return (0);
@@ -1599,28 +1555,45 @@ pfr_verify_tables(struct pf_anchor *a)
 }
 #endif
 
+struct pf_anchor *
+pfr_select_anchor(struct pf_trans *t)
+{
+	struct pf_anchor *a, *ta;
+	/*
+	 * this is currently really awkward. In order to find desired
+	 * anchor in globals, we must walk all anchor tree in
+	 * transaction to find a lookup key `ta` first. The lookup
+	 * key is the anchor, where table exists.
+	 */
+	if (t->pfttab_rc.main_anchor.tables != 0) {
+		a = &pf_main_anchor;
+	} else {
+		RB_FOREACH(ta, pf_anchor_global, &t->pfttab_rc.anchors) {
+			if (ta->tables != 0)
+				break;
+		}
+		KASSERT(ta != NULL);
+		a = RB_FIND(pf_anchor_global, &pf_anchors, ta);
+	}
+
+	return (a);
+}
+
 int
-pfr_get_tables(struct pf_trans *t, struct pfr_table *filter)
+pfr_get_tables(struct pf_trans *t)
 {
 	struct pfr_ktable	*p;
 	int			 n, nn;
 	struct pf_ruleset	*rs;
-	struct pf_anchor	*a;
-	struct pfr_table	*tbl = (struct pfr_table *)t->pfttab_kbuf;
+	struct pf_anchor	*a, *ta;
 
 	ACCEPT_FLAGS(t->pft_ioflags, PFR_FLAG_ALLRSETS);
-	if (pfr_fix_anchor(filter->pfrt_anchor))
-		return (EINVAL);
 
 	if ((t->pft_ioflags & PFR_FLAG_ALLRSETS) == 0) {
-		/*
-		 * retrieve single anchor
-		 */
-		rs = pf_find_ruleset(&pf_global, filter->pfrt_anchor);
-		if (rs == NULL)
+		a = pfr_select_anchor(t);
+		if (a == NULL)
 			return (ENOENT);
-		if ((a = rs->anchor) == NULL)
-			a = &pf_main_anchor;
+
 		n = a->tables;
 		nn = n;
 		if (n > t->pfttab_size) {
@@ -1638,7 +1611,7 @@ pfr_get_tables(struct pf_trans *t, struct pfr_table *filter)
 			memcpy(tbl++, &p->pfrkt_t, sizeof(*tbl));
 		}
 	} else {
-		n = pfr_table_count(filter, t->pft_ioflags);
+		n = pfr_table_count();
 		if (n > t->pfttab_size) {
 			t->pfttab_size = n;
 			return (0);
@@ -1722,24 +1695,23 @@ pfr_get_tstats(struct pf_trans *t, struct pfr_table *filter)
 	time_t			 tzero = gettime();
 	struct pfr_tstats	*tstats;
 	struct pf_anchor	*a;
-	struct pf_ruleset	*rs;
 	int			 addrstoo =
 	    t->pft_ioflags & PFR_FLAG_ADDRSTOO;
 
 	/* XXX PFR_FLAG_CLSTATS disabled */
 	ACCEPT_FLAGS(t->pft_ioflags, PFR_FLAG_ALLRSETS);
-	if (pfr_fix_anchor(filter->pfrt_anchor))
-		return (EINVAL);
-	n = nn = pfr_table_count(filter, t->pft_ioflags);
-	if (n < 0)
-		return (ENOENT);
-	if (n > t->pfttab_size) {
-		t->pfttab_size = n;
-		return (0);
-	}
 
 	tstats = (struct pfr_tstats *)t->pfttab_kbuf;
 	if (t->pft_ioflags & PFR_FLAG_ALLRSETS) {
+
+		n = nn = pfr_table_count();
+		if (n == 0)
+			return (ENOENT);
+		if (n > t->pfttab_size) {
+			t->pfttab_size = n;
+			return (0);
+		}
+
 		RB_FOREACH(kt, pfr_ktablehead, &pf_main_anchor.ktables) {
 			if (n-- <= 0)
 				continue;
@@ -1759,11 +1731,18 @@ pfr_get_tstats(struct pf_trans *t, struct pfr_table *filter)
 			}
 		}
 	} else {
-		rs = pf_find_ruleset(&pf_global, filter->pfrt_anchor);
-		if (rs == NULL)
+		a = pfr_select_anchor(t);
+		if (a == NULL)
 			return (ESRCH);
-		if ((a = rs->anchor) == NULL)
-			a = rs->anchor;
+
+		n = nn = a->table;
+		if (n == 0)
+			return (ENOENT);
+		if (n > t->pfttab_size) {
+			t->pfttab_size = n;
+			return (0);
+		}
+
 		RB_FOREACH(kt, pfr_ktablehead, &a->ktables) {
 			if (n-- <= 0)
 				continue;
@@ -1781,53 +1760,6 @@ pfr_get_tstats(struct pf_trans *t, struct pfr_table *filter)
 	}
 
 	t->pfttab_size = nn;
-
-	return (0);
-}
-
-int
-pfr_clr_tstats(struct pf_trans *t, struct pfr_table *tbl, int size, int *nzero,
-    int flags)
-{
-	struct pfr_ktable	*p, key;
-	int			 i, xzero = 0;
-	time_t			 tzero = gettime();
-
-	if (t->pft_type != PF_TRANS_TAB) {
-		log(LOG_ERR, "%s expects PF_TRANS_TAB only\n", __func__);
-		return (EINVAL);
-	}
-
-	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY | PFR_FLAG_ADDRSTOO);
-	for (i = 0; i < size; i++) {
-		YIELD(flags & PFR_FLAG_USERIOCTL);
-		if (COPYIN(tbl+i, &key.pfrkt_t, sizeof(key.pfrkt_t), flags))
-			return (EFAULT);
-		if (pfr_validate_table(&key.pfrkt_t, 0, 0))
-			return (EINVAL);
-		p = pfr_create_ktable(&t->pfttab_rc, &key.pfrkt_t, tzero,
-		    PR_WAITOK);
-		/*
-		 * TODO: assign a dedicated flag to tell commit operation to
-		 * clear table stats.
-		 */
-		if (p != NULL) {
-			p->pfrkt_flags = flags;
-
-			p->pfrkt_version = pfr_get_ktable_version(p);
-			if (p->pfrkt_version == 0) {
-				p->pfrkt_rs->anchor->tables--;
-				RB_REMOVE(pfr_ktablehead,
-				    &p->pfrkt_rs->anchor->ktables, p);
-				pfr_destroy_ktable(p, 0);
-			}
-			else
-				xzero++;
-		}
-	}
-
-	if (nzero != NULL)
-		*nzero = xzero;
 
 	return (0);
 }
@@ -2399,52 +2331,24 @@ pfr_fix_anchor(char *anchor)
 }
 
 int
-pfr_table_count(struct pfr_table *filter, int flags)
+pfr_table_count(void)
 {
 	struct pf_ruleset *rs;
 	int table_cnt;
 	struct pf_anchor *a;
 
-	if (flags & PFR_FLAG_ALLRSETS) {
-#ifdef DIAGNOSTIC
-		pfr_verify_tables(&pf_main_anchor);
-#endif
-		table_cnt = pf_main_anchor.tables;
-		RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
-#ifdef DIAGNOSTIC
-			pfr_verify_tables(a);
-#endif
-			table_cnt += a->tables;
-		}
-		return (table_cnt);
-	}
-	if (filter->pfrt_anchor[0]) {
-		/*
-		 * XXX: can not use pf_find_ruleset() here because it
-		 * does rs_malloc();
-		 */
-		rs = pf_find_ruleset(&pf_global, filter->pfrt_anchor);
-#ifdef DIAGNOSTIC
-		if ((rs != NULL) && (rs->anchor != NULL))
-			pfr_verify_tables(rs->anchor);
-#endif
-		return ((rs != NULL) ? rs->anchor->tables : -1);
-	}
-
 #ifdef DIAGNOSTIC
 	pfr_verify_tables(&pf_main_anchor);
 #endif
-	return (pf_main_anchor.tables);
-}
+	table_cnt = pf_main_anchor.tables;
+	RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
+#ifdef DIAGNOSTIC
+		pfr_verify_tables(a);
+#endif
+		table_cnt += a->tables;
+	}
 
-int
-pfr_skip_table(struct pfr_table *filter, struct pfr_ktable *kt, int flags)
-{
-	if (flags & PFR_FLAG_ALLRSETS)
-		return (0);
-	if (strcmp(filter->pfrt_anchor, kt->pfrkt_anchor))
-		return (1);
-	return (0);
+	return (table_cnt);
 }
 
 void
@@ -2763,13 +2667,14 @@ pfr_attach_table(struct pf_rules_container *rc, struct pf_ruleset *rs,
 void
 pfr_detach_table(struct pfr_ktable *kt)
 {
-#if 0
-	if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] <= 0)
-		DPFPRINTF(LOG_NOTICE, "pfr_detach_table: refcount = %d.",
-		    kt->pfrkt_refcnt[PFR_REFCNT_RULE]);
-	else if (!--kt->pfrkt_refcnt[PFR_REFCNT_RULE])
-		pfr_setflags_ktable(kt, kt->pfrkt_flags&~PFR_TFLAG_REFERENCED);
-#endif
+	/*
+	 * Table will be purged with ioctl(). We can not afford
+	 * to do expensive lookup for anchor which holds the table.
+	 */
+	PF_ASSERT_LOCKED();
+	KASSERT(kt->pfrkt_refcnt[PFR_REFCNT_RULE] > 0);
+	if (!--kt->pfrkt_refcnt[PFR_REFCNT_RULE])
+		kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 }
 
 int
@@ -3174,6 +3079,7 @@ pfr_deltables_commit(struct pf_trans *t, struct pf_anchor *ta,
 	RB_FOREACH(kt_ta, pfr_ktablehead, &ta->ktables) {
 		kt_a = RB_FIND(pfr_ktablehead, &a->ktables, kt_ta);
 		KASSERT(kt_a != NULL);
+		/* XXX this is not right we must check refcount */
 		RB_REMOVE(pfr_ktablehead, &a->ktables, kt_a);
 		a->tables--;
 		SLIST_INSERT_HEAD(&t->pfttab_kt_garbage, kt_a, pfrkt_workq);
@@ -3188,10 +3094,14 @@ pfr_clrtstats_commit(struct pf_trans *t, struct pf_anchor *ta,
 	time_t tzero = gettime();
 
 	RB_FOREACH(kt_ta, pfr_ktablehead, &ta->ktables) {
+		if (kt_ta->pfrkt_version == 0)
+			continue;
 		kt_a = RB_FIND(pfr_ktablehead, &a->ktables, kt_ta);
 		KASSERT(kt_a != NULL);
-		pfr_clstats_ktable(kt_a, tzero,
-		    t->pft_ioflags & PFR_FLAG_ADDRSTOO);
+		if ((t->pft_ioflags & PFR_FLAG_DUMMY) == 0)
+			pfr_clstats_ktable(kt_a, tzero,
+			    t->pft_ioflags & PFR_FLAG_ADDRSTOO);
+		t->pfttab_nzero++;
 	}
 }
 
@@ -3200,45 +3110,37 @@ pfr_settflags_commit(struct pf_trans *t, struct pf_anchor *ta,
     struct pf_anchor *a)
 {
 	struct pfr_ktable *kt_ta, *kt_a;
-	int current_flags;
-	int flags_ktta, flags_kta;
-
-	ACCEPT_FLAGS(t->pft_ioflags, PFR_FLAG_DUMMY);
+	int current_flags, new_flags;
 
 	RB_FOREACH(kt_ta, pfr_ktablehead, &ta->ktables) {
+		if (kt_ta->pfrkt_version == 0)
+			continue;
 		kt_a = RB_FIND(pfr_ktablehead, &a->ktables, kt_ta);
 		KASSERT(kt_a != NULL);
 		current_flags = kt_a->pfrkt_flags;
+		new_flags = (kt_a->pfrkt_flags | t->pfttab_setf);
+		new_flags &= ~t->pfttab_clrf;
 
-		if (t->pft_ioflags & PFR_FLAG_DUMMY) {
-			flags_ktta = kt_ta->pfrkt_flags &
-			    (PFR_TFLAG_CONST | PFR_TFLAG_PERSIST);
-			flags_kta = kt_a->pfrkt_flags &
-			    (PFR_TFLAG_CONST | PFR_TFLAG_PERSIST);
-			if (((kt_a->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) &&
-			    (kt_a->pfrkt_refcnt[PFR_REFCNT_RULE] == 0))
-				t->pfttab_ndel++;
-			else if (flags_ktta != flags_kta)
-				t->pfttab_nchg++;
-			continue;
-		}
-
-		kt_a->pfrkt_flags &= ~(PFR_TFLAG_PERSIST|PFR_TFLAG_CONST);
-		kt_a->pfrkt_flags |= (kt_ta->pfrkt_flags &
-		    (PFR_TFLAG_CONST | PFR_TFLAG_PERSIST));
-		/*
-		 * If table lost its persistent flag, then we must check
-		 * if it is still referred. If no rule refers to table,
-		 * then we must move it garbage list in transaction.
-		 */
-		if (((kt_a->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) &&
-		    (kt_a->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)) {
-			RB_REMOVE(pfr_ktablehead, &a->ktables, kt_a);
-			SLIST_INSERT_HEAD(&t->pfttab_kt_garbage, kt_a,
-			    pfrkt_workq);
+		if ((current_flags & PFR_TFLAG_PERSIST) == 0 &&
+		    (new_flags & PFR_TFLAG_PERSIST)  == 0 &&
+		    (new_flags & PFR_TFLAG_REFERENCED) == 0)
 			t->pfttab_ndel++;
-		} else if (kt_a->pfrkt_flags != current_flags)
+		else
 			t->pfttab_nchg++;
+
+		if (t->pft_ioflags & PFR_FLAG_DUMMY)
+			continue;
+
+		kt_a->pfrkt_flags = new_flags;
+		kt_a->pfrkt_version++;
+		if (kt_a->pfrkt_flags &
+		    (PFR_TFLAG_PERSIST|PFR_TFLAG_CONST|PFR_TFLAG_REFERENCED))
+			continue;
+
+		KASSERT(kt_a->pfrkt_refcnt[PFR_REFCNT_RULE] == 0);
+
+		RB_REMOVE(pfr_ktablehead, &a->ktables, kt_a);
+		SLIST_INSERT_HEAD(&t->pfttab_kt_garbage, kt_a, pfrkt_workq);
 	}
 }
 
@@ -3403,6 +3305,37 @@ pfr_setaddrs_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *
 				ket->pfrke_counters = NULL;
 			}
 			kt->pfrkt_tzero = tzero;
+		}
+	}
+}
+
+void
+pfr_clraddrs_commit(struct pf_trans *t, struct pf_anchor *ta,
+    struct pf_anchor *a)
+{
+	struct pfr_ktable	*kt, *ktt;
+	struct pfr_kentryworkq	 workq;
+
+	KASSERT(ta->tables == 1);
+	ktt = RB_ROOT(&ta->ktables);
+	if (ktt->pfrkt_version == 0)
+		return;
+
+	kt = RB_FIND(pfr_ktablehead, &a->ktables, ktt);
+	if (kt == NULL)
+		return;
+
+	KASSERT(kt->pfrkt_version == ktt->pfrkt_version);
+
+	pfr_enqueue_addrs(kt, &workq, &t->pfttab_ndel, 0);
+
+	if ((t->pft_ioflags & PFR_FLAG_DUMMY) == 0) {
+		pfr_remove_kentries(kt, &workq);
+		if (kt->pfrkt_cnt) {
+			DPFPRINTF(LOG_NOTICE,
+			    "pfr_clr_addrs: corruption detected (%d).",
+			    kt->pfrkt_cnt);
+			kt->pfrkt_cnt = 0;
 		}
 	}
 }
