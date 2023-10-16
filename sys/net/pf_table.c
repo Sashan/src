@@ -1311,7 +1311,7 @@ pfr_walktree(struct radix_node *rn, void *arg, u_int id)
 }
 
 struct pfr_ktable *
-pfr_remove_table(struct pf_anchor *a, struct pfr_ktable *kt)
+pfr_promote_table(struct pf_anchor *a, struct pfr_ktable *kt)
 {
 	struct pf_anchor	*parent = a->parent;
 	struct pfr_ktable	*ktp, *exists;
@@ -1320,6 +1320,7 @@ pfr_remove_table(struct pf_anchor *a, struct pfr_ktable *kt)
 	 * Find parent table which can be used in 'a' and
 	 * and 'a's chiildren.
 	 */
+	ktp = NULL;
 	while (parent != NULL) {
 		ktp = RB_FIND(pfr_ktablehead, &parent->ktables, kt);
 		if (ktp != NULL)
@@ -1327,34 +1328,60 @@ pfr_remove_table(struct pf_anchor *a, struct pfr_ktable *kt)
 		parent = parent->parent;
 	}
 
-	/*
-	 * If no parent table was found, then premote 'kt' to root table.
-	 * In this case we don't need to update references, References
-	 * from rules are still up-to-date.
-	 *
-	 * If parent table/anchor was found, then update table references in
-	 * subtree.
-	 */
-	exists = NULL;
-	if (ktp == NULL) {
-		exists = RB_INSERT(pfr_ktablehead, &pf_main_anchor.ktables, kt);
-		KASSERT(exists == NULL);
-		kt = NULL;
-	} else
-		pfr_update_table_refs(parent);
 
-	KASSERT(exists == NULL);
+	/*
+	 * if no parent was found we start with update from root (main anchor)
+	 */
+	if (parent == NULL)
+		parent = &pf_main_anchor;
+	
+	/*
+	 * insert table to parent tree.
+	 */
+	if (ktp == NULL) {
+		exists = RB_INSERT(pfr_ktablehead, &parent->ktables, kt);
+		KASSERT(exists == NULL);
+		/*  table is still in use, tell caller not to free it */
+		kt = NULL;
+	}
+	pfr_update_table_refs(parent);
 
 	return (kt);
 }
 
+struct pf_anchor *
+pfr_select_anchor(struct pf_trans *t)
+{
+	struct pf_anchor *a, *ta;
+	/*
+	 * this is currently really awkward. In order to find desired
+	 * anchor in globals, we must walk all anchor tree in
+	 * transaction to find a lookup key `ta` first. The lookup
+	 * key is the anchor, where table exists.
+	 */
+	if (t->pfttab_rc.main_anchor.tables != 0) {
+		KASSERT(t->pfttab_rc.main_anchor.tables == 1);
+		a = &pf_main_anchor;
+	} else {
+		RB_FOREACH(ta, pf_anchor_global, &t->pfttab_rc.anchors) {
+			if (ta->tables != 0) {
+				KASSERT(ta->tables == 1);
+				break;
+			}
+		}
+		KASSERT(ta != NULL);
+		a = RB_FIND(pf_anchor_global, &pf_anchors, ta);
+	}
+
+	return (a);
+}
+
 int
-pfr_clr_tables(struct pf_trans *t)
+pfr_clr_tables(struct pf_trans *t, struct pfr_ktable *ktt)
 {
 	struct pfr_ktableworkq	 workq;
-	struct pfr_ktable	*kt, *ktt;
-	int			 xdel = 0;
-	struct pf_anchor	*a, *ta;
+	struct pfr_ktable	*kt;
+	struct pf_anchor	*a;
 
 	ACCEPT_FLAGS(t->pft_ioflags, PFR_FLAG_DUMMY | PFR_FLAG_ALLRSETS);
 
@@ -1362,18 +1389,21 @@ pfr_clr_tables(struct pf_trans *t)
 
 	if (t->pft_ioflags & PFR_FLAG_ALLRSETS) {
 		RB_FOREACH(kt, pfr_ktablehead, &pf_main_anchor.ktables) {
-			if (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) {
+			if ((kt->pfrkt_flags & PFR_TFLAG_ACTIVE) == 0)
+				continue;
+			if ((t->pft_ioflags & PFR_FLAG_DUMMY) == 0) {
 				kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
 				kt->pfrkt_flags |= ~PFR_TFLAG_INACTIVE;
-				xdel++;
+				if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0) {
+					RB_REMOVE(pfr_ktablehead,
+					    &pf_main_anchor.ktables, kt);
+					SLIST_INSERT_HEAD(&t->pfttab_kt_garbage,
+					    kt, pfrkt_workq);
+					KASSERT(pf_main_anchor.tables > 0);
+					pf_main_anchor.tables--;
+				}
 			}
-
-			if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0) {
-				RB_REMOVE(pfr_ktablehead,
-				    &pf_main_anchor.ktables, kt);
-				SLIST_INSERT_HEAD(&t->pfttab_kt_garbage, kt,
-				    pfrkt_workq);
-			}
+			t->pfttab_ndel++;
 			/*
 			 * no further action needed for root tables.
 			 */
@@ -1381,72 +1411,77 @@ pfr_clr_tables(struct pf_trans *t)
 
 		RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
 			RB_FOREACH(kt, pfr_ktablehead, &a->ktables) {
-				if (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) {
-					SLIST_INSERT_HEAD(&workq, kt,
-					    pfrkt_workq);
+				if ((kt->pfrkt_flags & PFR_TFLAG_ACTIVE) == 0)
+					continue;
+
+				if ((t->pft_ioflags & PFR_FLAG_DUMMY) == 0) {
 					kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
 					kt->pfrkt_flags |= ~PFR_TFLAG_INACTIVE;
-					xdel++;
-					RB_REMOVE(pfr_ktablehead,
-					    &a->ktables, kt);
-					kt = pfr_remove_table(a, kt);
+					/*
+					 * Detach kt from current anchor and
+					 * try to promote table from current
+					 * anchor to parent tree. If promotion
+					 * fails (kt != NULL) then the table
+					 * with the same name already exists in
+					 * parent tree and kt can be destroyed.
+					 */
+					RB_REMOVE(pfr_ktablehead, &a->ktables,
+					    kt);
+					KASSERT(a->tables > 0);
+					a->tables--;
+					kt = pfr_promote_table(a, kt);
 					if (kt != NULL) {
 						SLIST_INSERT_HEAD(
 						    &t->pfttab_kt_garbage, kt,
 						    pfrkt_workq);
 					}
 				}
+				t->pfttab_ndel++;
 			}
 		}
 	} else {
-		RB_FOREACH(ktt, pfr_ktablehead,
-		    &t->pfttab_rc.main_anchor.ktables) {
-			kt = RB_FIND(pfr_ktablehead, &pf_main_anchor.ktables,
-			    ktt);
-			if (kt != NULL && kt->pfrkt_flags & PFR_TFLAG_ACTIVE) {
-				kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
-				kt->pfrkt_flags |= ~PFR_TFLAG_INACTIVE;
-				xdel++;
-			}
-			if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0) {
-				RB_REMOVE(pfr_ktablehead,
-				    &pf_main_anchor.ktables, kt);
+		KASSERT(ktt != NULL);
+		a = pfr_select_anchor(t);
+		/*
+		 * anchors can be removed by ioctl only. All ioctl operations
+		 * are muttually exclusive. No other ioctl except us can alter
+		 * rules (anchors). anchor must exist if we are here.
+		 */
+		KASSERT(a != NULL);
+		kt = RB_FIND(pfr_ktablehead, &a->ktables, ktt);
+		if (kt == NULL)
+			return (ESRCH);
+		if (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) {
+			t->pfttab_ndel++;
+			if ((t->pft_ioflags & PFR_FLAG_DUMMY) != 0)
+				return (0);
+			
+			kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
+			kt->pfrkt_flags |= ~PFR_TFLAG_INACTIVE;
+
+			if (a != &pf_main_anchor) {
+				/*
+				 * Detach table from anchor and try to promote
+				 * it to parent tree.
+				 */
+				RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
+				KASSERT(a->tables > 0);
+				a->tables--;
+				kt = pfr_promote_table(a, kt);
+				if (kt != NULL) {
+					SLIST_INSERT_HEAD(
+					    &t->pfttab_kt_garbage, kt,
+						    pfrkt_workq);
+				}
+			} else if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0) {
+				RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
+				KASSERT(a->tables > 0);
+				a->tables--;
 				SLIST_INSERT_HEAD(&t->pfttab_kt_garbage, kt,
 				    pfrkt_workq);
 			}
-			/*
-			 * no further action needed for root tables.
-			 */
-
-		}
-		RB_FOREACH(ta, pf_anchor_global, &t->pfttab_rc.anchors) {
-			a = RB_FIND(pf_anchor_global, &pf_anchors, ta);
-			if (a == NULL)
-				return (ENOENT);
-			RB_FOREACH(ktt, pfr_ktablehead, &ta->ktables) {
-				kt = RB_FIND(pfr_ktablehead, &a->ktables, ktt);
-				if (kt == NULL)
-					return (ENOMEM);
-				if (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) {
-					SLIST_INSERT_HEAD(&workq, kt,
-					    pfrkt_workq);
-					xdel++;
-					kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
-					kt->pfrkt_flags |= ~PFR_TFLAG_INACTIVE;
-					RB_REMOVE(pfr_ktablehead,
-					    &a->ktables, kt);
-					kt = pfr_remove_table(a, kt);
-					if (kt != NULL) {
-						SLIST_INSERT_HEAD(
-						    &t->pfttab_kt_garbage, kt,
-						    pfrkt_workq);
-					}
-				}
-			}
 		}
 	}
-
-	t->pfttab_ndel = xdel;
 
 	return (0);
 }
@@ -1555,37 +1590,13 @@ pfr_verify_tables(struct pf_anchor *a)
 }
 #endif
 
-struct pf_anchor *
-pfr_select_anchor(struct pf_trans *t)
-{
-	struct pf_anchor *a, *ta;
-	/*
-	 * this is currently really awkward. In order to find desired
-	 * anchor in globals, we must walk all anchor tree in
-	 * transaction to find a lookup key `ta` first. The lookup
-	 * key is the anchor, where table exists.
-	 */
-	if (t->pfttab_rc.main_anchor.tables != 0) {
-		a = &pf_main_anchor;
-	} else {
-		RB_FOREACH(ta, pf_anchor_global, &t->pfttab_rc.anchors) {
-			if (ta->tables != 0)
-				break;
-		}
-		KASSERT(ta != NULL);
-		a = RB_FIND(pf_anchor_global, &pf_anchors, ta);
-	}
-
-	return (a);
-}
-
 int
 pfr_get_tables(struct pf_trans *t)
 {
 	struct pfr_ktable	*p;
 	int			 n, nn;
-	struct pf_ruleset	*rs;
-	struct pf_anchor	*a, *ta;
+	struct pf_anchor	*a;
+	struct pfr_table	*tbl = (struct pfr_table *)t->pfttab_kbuf;
 
 	ACCEPT_FLAGS(t->pft_ioflags, PFR_FLAG_ALLRSETS);
 
@@ -1688,7 +1699,7 @@ pfr_copyin_tables(struct pf_trans *t, struct pfr_table *tbl, int size)
 }
 
 int
-pfr_get_tstats(struct pf_trans *t, struct pfr_table *filter)
+pfr_get_tstats(struct pf_trans *t, struct pfr_ktable *filter)
 {
 	struct pfr_ktable	*kt;
 	int			 n, nn;
@@ -1735,7 +1746,7 @@ pfr_get_tstats(struct pf_trans *t, struct pfr_table *filter)
 		if (a == NULL)
 			return (ESRCH);
 
-		n = nn = a->table;
+		n = nn = a->tables;
 		if (n == 0)
 			return (ENOENT);
 		if (n > t->pfttab_size) {
@@ -2333,7 +2344,6 @@ pfr_fix_anchor(char *anchor)
 int
 pfr_table_count(void)
 {
-	struct pf_ruleset *rs;
 	int table_cnt;
 	struct pf_anchor *a;
 
@@ -3040,33 +3050,32 @@ pfr_addtables_commit(struct pf_trans *t, struct pf_anchor *ta,
 	RB_FOREACH_SAFE(kt, pfr_ktablehead, &ta->ktables, ktw) {
 		RB_REMOVE(pfr_ktablehead, &ta->ktables, kt);
 		ta->tables--;
-		exists = RB_INSERT(pfr_ktablehead, &a->ktables, kt);
+		if (t->pft_ioflags & PFR_FLAG_DUMMY) {
+			exists = RB_FIND(pfr_ktablehead, &a->ktables, kt);
+			if (exists == NULL)
+				t->pfttab_nadd++;
+			/*
+			 * force kt to be always moved to garbage qieie
+			 * when running in dry/dummy mode.
+			 */
+			exists = kt;
+		} else {
+			exists = RB_INSERT(pfr_ktablehead, &a->ktables, kt);
+			if (exists == NULL) {
+				t->pfttab_nadd++;
+				a->tables++;
+			}
+		}
+
 		if (exists == NULL) {
 			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
 			KASSERT(kt->pfrkt_version == 0);
-			a->tables++;
 			pfr_walk_anchor_subtree(a, kt,
 			    pfr_update_tablerefs_anchor);
 			kt->pfrkt_version++;
-			t->pfttab_nadd++;
-		} else {
-			/*
-			 * pfctl -t table_name -T add ....'
-			 * command above is handled by two ioctls:
-			 *	DIOCRADDTABLES which always tries to
-			 *		create empty table.
-			 *	DIOCRADDADDRS which populates table
-			 *		with addresses
-			 * Here DIOCRADDTABLES command finds out table
-			 * exists already, thus we do some paranoid checks
-			 * to see version matches and is non-zero (means
-			 * table exists already).
-			 */
-			KASSERT(kt->pfrkt_version > 0);
-			KASSERT(exists->pfrkt_version == kt->pfrkt_version);
+		} else
 			SLIST_INSERT_HEAD(&t->pfttab_kt_garbage, kt,
 			    pfrkt_workq);
-		}
 	}
 }
 
@@ -3079,10 +3088,33 @@ pfr_deltables_commit(struct pf_trans *t, struct pf_anchor *ta,
 	RB_FOREACH(kt_ta, pfr_ktablehead, &ta->ktables) {
 		kt_a = RB_FIND(pfr_ktablehead, &a->ktables, kt_ta);
 		KASSERT(kt_a != NULL);
-		/* XXX this is not right we must check refcount */
-		RB_REMOVE(pfr_ktablehead, &a->ktables, kt_a);
-		a->tables--;
-		SLIST_INSERT_HEAD(&t->pfttab_kt_garbage, kt_a, pfrkt_workq);
+
+		if (kt_a->pfrkt_flags & PFR_TFLAG_ACTIVE)
+			t->pfttab_ndel++;
+
+		if (t->pft_ioflags & PFR_FLAG_DUMMY)
+			continue;
+
+		kt_a->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
+		kt_a->pfrkt_flags |= PFR_TFLAG_INACTIVE;
+
+		if (a == &pf_main_anchor) {
+			if (kt_a->pfrkt_refcnt[PFR_REFCNT_RULE] == 0) {
+				RB_REMOVE(pfr_ktablehead, &a->ktables, kt_a);
+				SLIST_INSERT_HEAD(&t->pfttab_kt_garbage, kt_a,
+				    pfrkt_workq);
+				KASSERT(a->tables > 0);
+				a->tables--;
+			}
+		} else {
+			RB_REMOVE(pfr_ktablehead, &a->ktables, kt_a);
+			KASSERT(a->tables > 0);
+			a->tables--;
+			kt_a = pfr_promote_table(a, kt_a);
+			if (kt_a != NULL)
+				SLIST_INSERT_HEAD(&t->pfttab_kt_garbage, kt_a,
+				    pfrkt_workq);
+		}
 	}
 }
 

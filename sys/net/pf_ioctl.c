@@ -2693,7 +2693,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCRCLRTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
 		struct pf_trans *t;
-		struct pfr_ktable *kt;
+		struct pfr_ktable *ktt = NULL;
 
 		if (io->pfrio_esize != 0) {
 			error = ENODEV;
@@ -2705,13 +2705,13 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t->pfttab_iocmd = cmd;
 		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
 		if ((t->pft_ioflags & PFR_FLAG_ALLRSETS) == 0) {
-			kt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
+			ktt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
 			    gettime(), PR_WAITOK);
-			if (kt == NULL) {
+			if (ktt == NULL) {
 				error = ENOMEM;
 				goto fail;
 			}
-			if (kt->pfrkt_version == 0) {
+			if (ktt->pfrkt_version == 0) {
 				error = ESRCH;
 				goto fail;
 			}
@@ -2719,7 +2719,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		NET_LOCK();
 		PF_LOCK();
-		error = pfr_clr_tables(t);
+
+		error = pfr_clr_tables(t, ktt);
+
 		PF_UNLOCK();
 		NET_UNLOCK();
 
@@ -2826,6 +2828,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCRGETTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
 		struct pf_trans *t;
+		struct pfr_ktable *ktt = NULL;
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
@@ -2846,13 +2849,13 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		if ((t->pft_ioflags & PFR_FLAG_ALLRSETS) == 0) {
-			kt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
+			ktt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
 			    gettime(), PR_WAITOK);
-			if (kt == NULL) {
+			if (ktt == NULL) {
 				error = ENOMEM;
 				goto fail;
 			}
-			if (kt->pfrkt_version == 0) {
+			if (ktt->pfrkt_version == 0) {
 				error = ESRCH;
 				goto fail;
 			}
@@ -2879,6 +2882,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCRGETTSTATS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
 		struct pf_trans *t;
+		struct pfr_ktable *ktt = NULL;
 
 		if (io->pfrio_esize != sizeof(struct pfr_tstats)) {
 			error = ENODEV;
@@ -2898,10 +2902,23 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			    M_WAITOK);
 		}
 
+		if ((io->pfrio_flags & PFR_FLAG_ALLRSETS) == 0) {
+			ktt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
+			    gettime(), PR_WAITOK);
+			if (ktt == NULL) {
+				error = ENOMEM;
+				goto fail;
+			}
+			if (ktt->pfrkt_version == 0) {
+				error = ESRCH;
+				goto fail;
+			}
+		}
+
 		NET_LOCK();
 		PF_LOCK();
 
-		error = pfr_get_tstats(t);
+		error = pfr_get_tstats(t, ktt);
 
 		PF_UNLOCK();
 		NET_UNLOCK();
@@ -3003,7 +3020,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCRCLRADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
 		struct pf_trans *t;
-		struct pfr_ktable *kt;
+		struct pfr_ktable *ktt;
 
 		if (io->pfrio_esize != 0) {
 			error = ENODEV;
@@ -3015,13 +3032,13 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		pf_init_ttab(t);
 		t->pfttab_iocmd = cmd;
 		t->pft_ioflags = io->pfrio_flags;
-		kt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
+		ktt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
 		    gettime(), PR_WAITOK);
-		if (kt == NULL) {
+		if (ktt == NULL) {
 			error = EINVAL;
 			goto fail;
 		}
-		if (kt->pfrkt_version == 0) {
+		if (ktt->pfrkt_version == 0) {
 			error = ESRCH;
 			goto fail;
 		}
