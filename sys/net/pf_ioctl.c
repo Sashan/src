@@ -2693,7 +2693,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCRCLRTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
 		struct pf_trans *t;
-		struct pfr_ktable *ktt = NULL;
+		char *path;
 
 		if (io->pfrio_esize != 0) {
 			error = ENODEV;
@@ -2705,22 +2705,17 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		t->pfttab_iocmd = cmd;
 		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
 		if ((t->pft_ioflags & PFR_FLAG_ALLRSETS) == 0) {
-			ktt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
-			    gettime(), PR_WAITOK);
-			if (ktt == NULL) {
-				error = ENOMEM;
-				goto fail;
-			}
-			if (ktt->pfrkt_version == 0) {
-				error = ESRCH;
-				goto fail;
-			}
+			path = io->pfrio_table.pfrt_anchor;
+			while (*path == '/')
+				path++;
+			strlcpy(t->pfttab_anchor_key.path, path,
+			    sizeof(t->pfttab_anchor_key.path));
 		}
 
 		NET_LOCK();
 		PF_LOCK();
 
-		error = pfr_clr_tables(t, ktt);
+		error = pfr_clr_tables(t);
 
 		PF_UNLOCK();
 		NET_UNLOCK();
@@ -2828,7 +2823,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCRGETTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
 		struct pf_trans *t;
-		struct pfr_ktable *ktt = NULL;
+		char *path;
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
@@ -2849,16 +2844,11 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		if ((t->pft_ioflags & PFR_FLAG_ALLRSETS) == 0) {
-			ktt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
-			    gettime(), PR_WAITOK);
-			if (ktt == NULL) {
-				error = ENOMEM;
-				goto fail;
-			}
-			if (ktt->pfrkt_version == 0) {
-				error = ESRCH;
-				goto fail;
-			}
+			path = io->pfrio_table.pfrt_anchor;
+			while (*path == '/')
+				path++;
+			strlcpy(t->pfttab_anchor_key.path, path,
+			    sizeof(t->pfttab_anchor_key.path));
 		}
 
 		NET_LOCK();
@@ -2882,7 +2872,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCRGETTSTATS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
 		struct pf_trans *t;
-		struct pfr_ktable *ktt = NULL;
+		char *path;
 
 		if (io->pfrio_esize != sizeof(struct pfr_tstats)) {
 			error = ENODEV;
@@ -2903,22 +2893,17 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		if ((io->pfrio_flags & PFR_FLAG_ALLRSETS) == 0) {
-			ktt = pfr_create_ktable(&t->pfttab_rc, &io->pfrio_table,
-			    gettime(), PR_WAITOK);
-			if (ktt == NULL) {
-				error = ENOMEM;
-				goto fail;
-			}
-			if (ktt->pfrkt_version == 0) {
-				error = ESRCH;
-				goto fail;
-			}
+			path = io->pfrio_table.pfrt_anchor;
+			while (*path == '/')
+				path++;
+			strlcpy(t->pfttab_anchor_key.path, path,
+			    sizeof(t->pfttab_anchor_key.path));
 		}
 
 		NET_LOCK();
 		PF_LOCK();
 
-		error = pfr_get_tstats(t, ktt);
+		error = pfr_get_tstats(t);
 
 		PF_UNLOCK();
 		NET_UNLOCK();
@@ -4264,7 +4249,7 @@ pf_match_root_path(const char *a, const char *b)
 }
 
 void
-pf_update_parent(struct pf_anchor *a, struct pf_anchor *ta)
+pf_update_parent(struct pf_anchor *ta)
 {
 	struct pf_anchor *parent, *exists;
 
@@ -4335,7 +4320,7 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 		exists = RB_INSERT(pf_anchor_global, &pf_anchors, ta);
 		KASSERT(exists == NULL);
 		if (ta->parent != NULL)
-			pf_update_parent(a, ta);
+			pf_update_parent(ta);
 		ta->ruleset.rules.version++;
 	} else {
 		if (pf_match_root_path(a->path, t->pftina_anchor_path) ==
@@ -4490,6 +4475,7 @@ void
 pf_tab_commit(struct pf_trans *t)
 {
 	struct pf_anchor *ta, *taw, *a, *exists;
+	struct pfr_ktable *kt;
 
 	if (!RB_EMPTY(&t->pfttab_rc.main_anchor.ktables))
 		pf_tab_do_commit_op(t, &t->pfttab_rc.main_anchor,
@@ -4511,8 +4497,10 @@ pf_tab_commit(struct pf_trans *t)
 				    &pf_anchors, ta);
 				KASSERT(exists == NULL);
 				if (ta->parent != NULL)
-					pf_update_parent(a, ta);
-				pfr_update_table_refs(a);
+					pf_update_parent(ta);
+				RB_FOREACH(kt, pfr_ktablehead, &ta->ktables)
+					kt->pfrkt_version++;
+				pfr_update_table_refs(ta);
 			} else {
 				panic("%s ruleset %s to modify does not exists",
 				    __func__, ta->path);

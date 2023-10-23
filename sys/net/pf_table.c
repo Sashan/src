@@ -1377,7 +1377,7 @@ pfr_select_anchor(struct pf_trans *t)
 }
 
 int
-pfr_clr_tables(struct pf_trans *t, struct pfr_ktable *ktt)
+pfr_clr_tables(struct pf_trans *t)
 {
 	struct pfr_ktableworkq	 workq;
 	struct pfr_ktable	*kt;
@@ -1440,29 +1440,23 @@ pfr_clr_tables(struct pf_trans *t, struct pfr_ktable *ktt)
 			}
 		}
 	} else {
-		KASSERT(ktt != NULL);
-		a = pfr_select_anchor(t);
-		/*
-		 * anchors can be removed by ioctl only. All ioctl operations
-		 * are muttually exclusive. No other ioctl except us can alter
-		 * rules (anchors). anchor must exist if we are here.
-		 */
-		KASSERT(a != NULL);
-		kt = RB_FIND(pfr_ktablehead, &a->ktables, ktt);
-		if (kt == NULL)
+		a = pf_lookup_anchor(&t->pfttab_anchor_key);
+		if (a == NULL)
 			return (ESRCH);
-		if (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) {
-			t->pfttab_ndel++;
-			if ((t->pft_ioflags & PFR_FLAG_DUMMY) != 0)
-				return (0);
+		RB_FOREACH(kt, pfr_ktablehead, &a->ktables) {
+			if (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) {
+				t->pfttab_ndel++;
+				if ((t->pft_ioflags & PFR_FLAG_DUMMY) != 0)
+					continue;
 			
-			kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
-			kt->pfrkt_flags |= ~PFR_TFLAG_INACTIVE;
+				kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
+				kt->pfrkt_flags |= ~PFR_TFLAG_INACTIVE;
+			}
 
 			if (a != &pf_main_anchor) {
 				/*
-				 * Detach table from anchor and try to promote
-				 * it to parent tree.
+				 * Detach table from anchor and try to
+				 * promote it to parent tree.
 				 */
 				RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
 				KASSERT(a->tables > 0);
@@ -1483,85 +1477,6 @@ pfr_clr_tables(struct pf_trans *t, struct pfr_ktable *ktt)
 		}
 	}
 
-	return (0);
-}
-
-int
-pfr_add_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *nadd,
-    int flags)
-{
-	struct pfr_ktable	*kt, key;
-	int			 xadd = 0;
-	time_t			 tzero = gettime();
-	int			 i;
-
-	if (t->pft_type != PF_TRANS_TAB) {
-		log(LOG_ERR, "%s expects PF_TRANS_TAB only\n", __func__);
-		return (EINVAL);
-	}
-
-	/* pre-allocate all memory outside of locks */
-	for (i = 0; i < size; i++) {
-		YIELD(1);
-		if (COPYIN(&tbl[i], &key.pfrkt_t, sizeof(key.pfrkt_t), flags))
-			return (EFAULT);
-		if (pfr_validate_table(&key.pfrkt_t, PFR_TFLAG_USRMASK,
-		    flags & PFR_FLAG_USERIOCTL))
-			return (EINVAL);
-		/*
-		 * Unlike pfr_ina_define() we create tables with explcit ACTIVE
-		 * flag being set.
-		 */
-		key.pfrkt_flags |= PFR_TFLAG_ACTIVE;
-		kt = pfr_create_ktable(&t->pfttab_rc, &key.pfrkt_t, tzero,
-		    PR_WAITOK);
-		if (kt == NULL)
-			return (ENOMEM);
-		kt->pfrkt_version = pfr_get_ktable_version(kt); 
-	}
-
-	if (nadd != NULL)
-		*nadd = xadd;
-
-	return (0);
-}
-
-int
-pfr_del_tables(struct pf_trans *t, struct pfr_table *tbl, int size, int *ndel,
-    int flags)
-{
-	struct pfr_ktable	*kt, key;
-	int			 xdel = 0;
-	int			 i;
-	time_t			 tzero = gettime();
-
-	if (t->pft_type != PF_TRANS_TAB) {
-		log(LOG_ERR, "%s expects PF_TRANS_TAB only\n", __func__);
-		return (EINVAL);
-	}
-	/* pre-allocate all memory outside of locks */
-	for (i = 0; i < size; i++) {
-		YIELD(1);
-		if (COPYIN(tbl+i, &key.pfrkt_t, sizeof(key.pfrkt_t), flags))
-			return (EFAULT);
-		if (pfr_validate_table(&key.pfrkt_t, PFR_TFLAG_USRMASK,
-		    flags & PFR_FLAG_USERIOCTL))
-			return (EINVAL);
-		/*
-		 * TODO: we should assign a dedicated flag to mark table
-		 * as 'to be deleted' by transaction.
-		key.pfrkt_flags |= PFR_TFLAG_FLUSH_ON_COMMIT;
-		 */
-		key.pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
-		kt = pfr_create_ktable(&t->pfttab_rc, &key.pfrkt_t, tzero,
-		    PR_WAITOK);
-		if (kt == NULL)
-			return (ENOMEM);
-		kt->pfrkt_version = pfr_get_ktable_version(kt);
-	}
-
-	if (ndel != NULL)
-		*ndel = xdel;
 	return (0);
 }
 
@@ -1601,7 +1516,7 @@ pfr_get_tables(struct pf_trans *t)
 	ACCEPT_FLAGS(t->pft_ioflags, PFR_FLAG_ALLRSETS);
 
 	if ((t->pft_ioflags & PFR_FLAG_ALLRSETS) == 0) {
-		a = pfr_select_anchor(t);
+		a = pf_lookup_anchor(&t->pfttab_anchor_key);
 		if (a == NULL)
 			return (ENOENT);
 
@@ -1699,7 +1614,7 @@ pfr_copyin_tables(struct pf_trans *t, struct pfr_table *tbl, int size)
 }
 
 int
-pfr_get_tstats(struct pf_trans *t, struct pfr_ktable *filter)
+pfr_get_tstats(struct pf_trans *t)
 {
 	struct pfr_ktable	*kt;
 	int			 n, nn;
@@ -1742,7 +1657,7 @@ pfr_get_tstats(struct pf_trans *t, struct pfr_ktable *filter)
 			}
 		}
 	} else {
-		a = pfr_select_anchor(t);
+		a = pf_lookup_anchor(&t->pfttab_anchor_key);
 		if (a == NULL)
 			return (ESRCH);
 

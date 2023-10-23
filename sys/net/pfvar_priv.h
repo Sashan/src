@@ -392,6 +392,11 @@ struct pf_trans {
 			struct pfr_kentryworkq	 tab_ke_garbage;
 			struct pf_rules_container
 						 tab_rc;
+			union {
+				char			u_anchor_path[PATH_MAX];
+				struct pf_anchor 	u_anchor_key;
+			}			 tab_u;
+			struct pf_anchor	 tab_anchor_key;
 			char			 tab_anchor_path[PATH_MAX];
 			char			*tab_kbuf;
 			int			 tab_clrf;
@@ -427,7 +432,8 @@ struct pf_trans {
 #define pfttab_kt_garbage	u.u_tab.tab_kt_garbage
 #define pfttab_ke_garbage	u.u_tab.tab_ke_garbage
 #define pfttab_rc		u.u_tab.tab_rc
-#define pfttab_anchor_path	u.u_tab.tab_anchor_path
+#define pfttab_anchor_path	u.u_tab.tab_u.u_anchor_path
+#define pfttab_anchor_key	u.u_tab.tab_u.u_anchor_key
 #define pfttab_kbuf		u.u_tab.tab_kbuf
 #define pfttab_kbuf_sz		u.u_tab.tab_kbuf_sz
 #define pfttab_clrf		u.u_tab.tab_clrf
@@ -507,6 +513,7 @@ extern void		 pf_purge_timeout(void *);
 extern void		 pf_purge(void *);
 extern void		 pf_init_ttab(struct pf_trans *);
 extern void		 pf_free_trans(struct pf_trans *);
+extern struct pf_anchor	*pf_lookup_anchor(struct pf_anchor *);
 extern struct pfr_ktable
 			*pfr_create_ktable(struct pf_rules_container *,
 			    struct pfr_table *, time_t, int);
