@@ -1,8 +1,9 @@
-# $OpenBSD: Makefile,v 1.21 2023/07/12 15:34:59 claudio Exp $
+# $OpenBSD: Makefile,v 1.23 2023/10/16 10:26:51 claudio Exp $
 
-REGRESS_TARGETS	= 	network_statement md5 ovs mrt pftable \
-			maxprefix maxprefixout maxcomm \
-			as0 med eval_all policy l3vpn attr
+REGRESS_TARGETS	= 	network_statement md5 ovs policy pftable \
+			mrt maxprefix maxprefixout maxcomm l3vpn \
+			ixp lladdr \
+			as0 med eval_all attr
 
 BGPD ?=			/usr/sbin/bgpd
 
@@ -40,6 +41,12 @@ maxcomm:
 
 l3vpn:
 	${SUDO} ksh ${.CURDIR}/$@.sh ${BGPD} ${.CURDIR} 11 12 pair11 pair12 13 14
+
+ixp:
+	${SUDO} ksh ${.CURDIR}/$@.sh ${BGPD} ${.CURDIR} 11 12 pair11 pair12
+
+lladdr:
+	${SUDO} ksh ${.CURDIR}/$@.sh ${BGPD} ${.CURDIR} 11 12 pair11 pair12
 
 .if ! exists(/usr/local/bin/exabgp)
 as0:

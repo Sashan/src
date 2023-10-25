@@ -1,6 +1,6 @@
 #! /usr/bin/perl
 # ex:ts=8 sw=4:
-# $OpenBSD: PkgCreate.pm,v 1.195 2023/07/20 17:56:37 espie Exp $
+# $OpenBSD: PkgCreate.pm,v 1.197 2023/10/11 13:54:43 espie Exp $
 #
 # Copyright (c) 2003-2014 Marc Espie <espie@openbsd.org>
 #
@@ -1632,7 +1632,7 @@ sub run_command($self, $state)
 	unless (defined $state->opt('q') && defined $state->opt('n')) {
 		$state->set_status("checking dependencies");
 		$self->check_dependencies($plist, $state);
-		if ($state->defines("stub")) {
+		if ($state->{regression}{stub}) {
 			$plist->stub_digest($ordered);
 		} else {
 			$state->set_status("checksumming");
@@ -1684,7 +1684,7 @@ sub run_command($self, $state)
 	}
 	$state->{stash} = {};
 
-	if ($state->{bad} && !$state->defines('REGRESSION_TESTING')) {
+	if ($state->{bad} && !$state->{regression}{plist_checks}) {
 		$state->fatal("can't continue");
 	}
 	$state->{bad} = 0;

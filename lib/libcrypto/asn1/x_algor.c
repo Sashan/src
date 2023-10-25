@@ -1,4 +1,4 @@
-/* $OpenBSD: x_algor.c,v 1.25 2023/07/07 19:37:52 beck Exp $ */
+/* $OpenBSD: x_algor.c,v 1.31 2023/10/11 13:22:11 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2000.
  */
@@ -57,9 +57,12 @@
  */
 
 #include <stddef.h>
-#include <openssl/x509.h>
+
 #include <openssl/asn1.h>
 #include <openssl/asn1t.h>
+#include <openssl/x509.h>
+
+#include "x509_local.h"
 
 static const ASN1_TEMPLATE X509_ALGOR_seq_tt[] = {
 	{
@@ -101,7 +104,6 @@ const ASN1_ITEM X509_ALGORS_it = {
 	.size = 0,
 	.sname = "X509_ALGORS",
 };
-
 
 X509_ALGOR *
 d2i_X509_ALGOR(X509_ALGOR **a, const unsigned char **in, long len)
@@ -150,71 +152,85 @@ X509_ALGOR_dup(X509_ALGOR *x)
 int
 X509_ALGOR_set0(X509_ALGOR *alg, ASN1_OBJECT *aobj, int ptype, void *pval)
 {
-	if (!alg)
+	if (alg == NULL)
 		return 0;
-	if (ptype != V_ASN1_UNDEF) {
+
+	if (ptype == V_ASN1_UNDEF) {
+		ASN1_TYPE_free(alg->parameter);
+		alg->parameter = NULL;
+	} else {
 		if (alg->parameter == NULL)
 			alg->parameter = ASN1_TYPE_new();
 		if (alg->parameter == NULL)
 			return 0;
+		if (ptype != 0)
+			ASN1_TYPE_set(alg->parameter, ptype, pval);
 	}
-	if (alg) {
-		if (alg->algorithm)
-			ASN1_OBJECT_free(alg->algorithm);
-		alg->algorithm = aobj;
-	}
-	if (ptype == 0)
-		return 1;
-	if (ptype == V_ASN1_UNDEF) {
-		if (alg->parameter) {
-			ASN1_TYPE_free(alg->parameter);
-			alg->parameter = NULL;
-		}
-	} else
-		ASN1_TYPE_set(alg->parameter, ptype, pval);
+
+	ASN1_OBJECT_free(alg->algorithm);
+	alg->algorithm = aobj;
+
 	return 1;
 }
 
 void
-X509_ALGOR_get0(const ASN1_OBJECT **paobj, int *pptype, const void **ppval,
-    const X509_ALGOR *algor)
+X509_ALGOR_get0(const ASN1_OBJECT **out_aobj, int *out_type,
+    const void **out_value, const X509_ALGOR *alg)
 {
-	if (paobj)
-		*paobj = algor->algorithm;
-	if (pptype) {
-		if (algor->parameter == NULL) {
-			*pptype = V_ASN1_UNDEF;
-			return;
-		} else
-			*pptype = algor->parameter->type;
-		if (ppval)
-			*ppval = algor->parameter->value.ptr;
+	int type = V_ASN1_UNDEF;
+	const void *value = NULL;
+
+	if (out_aobj != NULL)
+		*out_aobj = alg->algorithm;
+
+	/* Ensure out_value is not left uninitialized if out_type is NULL. */
+	if (out_value != NULL)
+		*out_value = NULL;
+
+	if (out_type == NULL)
+		return;
+
+	if (alg->parameter != NULL) {
+		type = alg->parameter->type;
+		value = alg->parameter->value.ptr;
 	}
+
+	*out_type = type;
+	if (out_value != NULL)
+		*out_value = value;
 }
 
-/* Set up an X509_ALGOR DigestAlgorithmIdentifier from an EVP_MD */
-
-void
-X509_ALGOR_set_md(X509_ALGOR *alg, const EVP_MD *md)
+int
+X509_ALGOR_set_evp_md(X509_ALGOR *alg, const EVP_MD *md)
 {
+	ASN1_OBJECT *aobj;
 	int param_type = V_ASN1_NULL;
 
 	if ((EVP_MD_flags(md) & EVP_MD_FLAG_DIGALGID_ABSENT) != 0)
 		param_type = V_ASN1_UNDEF;
 
-	X509_ALGOR_set0(alg, OBJ_nid2obj(EVP_MD_type(md)), param_type, NULL);
+	if ((aobj = OBJ_nid2obj(EVP_MD_type(md))) == NULL)
+		return 0;
+
+	return X509_ALGOR_set0(alg, aobj, param_type, NULL);
 }
 
-/* Returns 0 if they are equal, != 0 otherwise. */
+void
+X509_ALGOR_set_md(X509_ALGOR *alg, const EVP_MD *md)
+{
+	(void)X509_ALGOR_set_evp_md(alg, md);
+}
+
 int
 X509_ALGOR_cmp(const X509_ALGOR *a, const X509_ALGOR *b)
 {
-	int rv = OBJ_cmp(a->algorithm, b->algorithm);
-	if (!rv) {
-		if (!a->parameter && !b->parameter)
-			rv = 0;
-		else
-			rv = ASN1_TYPE_cmp(a->parameter, b->parameter);
-	}
-	return(rv);
+	int cmp;
+
+	if ((cmp = OBJ_cmp(a->algorithm, b->algorithm)) != 0)
+		return cmp;
+
+	if (a->parameter == NULL && b->parameter == NULL)
+		return 0;
+
+	return ASN1_TYPE_cmp(a->parameter, b->parameter);
 }

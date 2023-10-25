@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_clock.c,v 1.119 2023/09/14 22:27:09 cheloha Exp $	*/
+/*	$OpenBSD: kern_clock.c,v 1.121 2023/10/17 00:04:02 cheloha Exp $	*/
 /*	$NetBSD: kern_clock.c,v 1.34 1996/06/09 04:51:03 briggs Exp $	*/
 
 /*-
@@ -87,9 +87,9 @@ int	ticks = INT_MAX - (15 * 60 * HZ);
 /* Don't force early wrap around, triggers bug in inteldrm */
 volatile unsigned long jiffies;
 
-uint32_t hardclock_period;	/* [I] hardclock period (ns) */
-uint32_t statclock_avg;		/* [I] average statclock period (ns) */
-uint32_t statclock_min;		/* [I] minimum statclock period (ns) */
+uint64_t hardclock_period;	/* [I] hardclock period (ns) */
+uint64_t statclock_avg;		/* [I] average statclock period (ns) */
+uint64_t statclock_min;		/* [I] minimum statclock period (ns) */
 uint32_t statclock_mask;	/* [I] set of allowed offsets */
 int statclock_is_randomized;	/* [I] fixed or pseudorandom period? */
 
@@ -99,7 +99,8 @@ int statclock_is_randomized;	/* [I] fixed or pseudorandom period? */
 void
 initclocks(void)
 {
-	uint32_t half_avg, var;
+	uint64_t half_avg;
+	uint32_t var;
 
 	/*
 	 * Let the machine-specific code do its bit.
@@ -114,7 +115,7 @@ initclocks(void)
 
 	/*
 	 * Compute the average statclock() period.  Then find var, the
-	 * largest power of two such that var <= statclock_avg / 2.
+	 * largest 32-bit power of two such that var <= statclock_avg / 2.
 	 */
 	statclock_avg = 1000000000 / stathz;
 	half_avg = statclock_avg / 2;
@@ -276,7 +277,7 @@ stopprofclock(struct process *pr)
  * do process and kernel statistics.
  */
 void
-statclock(struct clockintr *cl, void *cf, void *arg)
+statclock(struct clockrequest *cr, void *cf, void *arg)
 {
 	uint64_t count, i;
 	struct clockframe *frame = cf;
@@ -286,10 +287,10 @@ statclock(struct clockintr *cl, void *cf, void *arg)
 	struct process *pr;
 
 	if (statclock_is_randomized) {
-		count = clockintr_advance_random(cl, statclock_min,
+		count = clockrequest_advance_random(cr, statclock_min,
 		    statclock_mask);
 	} else {
-		count = clockintr_advance(cl, statclock_avg);
+		count = clockrequest_advance(cr, statclock_avg);
 	}
 
 	if (CLKF_USERMODE(frame)) {

@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.h,v 1.162 2023/03/28 12:15:23 claudio Exp $ */
+/*	$OpenBSD: session.h,v 1.164 2023/10/19 07:02:46 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -123,21 +123,6 @@ struct bgp_msg {
 	uint16_t	 len;
 };
 
-struct msg_header {
-	u_char		 marker[MSGSIZE_HEADER_MARKER];
-	uint16_t	 len;
-	uint8_t		 type;
-};
-
-struct msg_open {
-	struct msg_header	 header;
-	uint32_t		 bgpid;
-	uint16_t		 myas;
-	uint16_t		 holdtime;
-	uint8_t			 version;
-	uint8_t			 optparamlen;
-};
-
 struct bgpd_sysdep {
 	uint8_t			no_pfkey;
 	uint8_t			no_md5sig;
@@ -240,6 +225,7 @@ struct peer {
 	int			 lasterr;
 	u_int			 errcnt;
 	u_int			 IdleHoldTime;
+	unsigned int		 if_scope;	/* interface scope for IPv6 */
 	uint32_t		 remote_bgpid;
 	enum session_state	 state;
 	enum session_state	 prev_state;

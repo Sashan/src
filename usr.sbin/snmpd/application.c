@@ -1,4 +1,4 @@
-/*	$OpenBSD: application.c,v 1.17 2022/12/20 20:04:55 martijn Exp $	*/
+/*	$OpenBSD: application.c,v 1.24 2023/10/24 14:21:58 martijn Exp $	*/
 
 /*
  * Copyright (c) 2021 Martijn van Duren <martijn@openbsd.org>
@@ -99,6 +99,7 @@ struct appl_varbind_internal {
 	enum appl_varbind_state avi_state;
 	struct appl_varbind avi_varbind;
 	struct appl_region *avi_region;
+	struct ber_oid avi_origid;
 	int16_t avi_index;
 	struct appl_request_upstream *avi_request_upstream;
 	struct appl_request_downstream *avi_request_downstream;
@@ -115,6 +116,8 @@ struct snmp_target_mib {
 enum appl_error appl_region(struct appl_context *, uint32_t, uint8_t,
     struct ber_oid *, int, int, struct appl_backend *);
 void appl_region_free(struct appl_context *, struct appl_region *);
+enum appl_error appl_region_unregister_match(struct appl_context *, uint8_t,
+    struct ber_oid *, char *, struct appl_backend *, int);
 struct appl_region *appl_region_find(struct appl_context *,
     const struct ber_oid *);
 struct appl_region *appl_region_next(struct appl_context *,
@@ -125,8 +128,9 @@ void appl_request_upstream_resolve(struct appl_request_upstream *);
 void appl_request_downstream_send(struct appl_request_downstream *);
 void appl_request_downstream_timeout(int, short, void *);
 void appl_request_upstream_reply(struct appl_request_upstream *);
-int appl_varbind_valid(struct appl_varbind *, struct appl_varbind *, int, int,
-    int, const char **);
+int appl_varbind_valid(struct appl_varbind *, struct appl_varbind_internal *,
+    int, int, int, const char **);
+int appl_error_valid(enum appl_error, enum snmp_pdutype);
 int appl_varbind_backend(struct appl_varbind_internal *);
 void appl_varbind_error(struct appl_varbind_internal *, enum appl_error);
 void appl_report(struct snmp_message *, int32_t, struct ber_oid *,
@@ -175,7 +179,7 @@ appl_shutdown(void)
 	}
 }
 
-static struct appl_context *
+struct appl_context *
 appl_context(const char *name, int create)
 {
 	struct appl_context *ctx;
@@ -347,28 +351,29 @@ appl_register(const char *ctxname, uint32_t timeout, uint8_t priority,
 		    backend->ab_name, oidbuf);
 		return APPL_ERROR_PARSEERROR;
 	}
-	if (range_subid > oid->bo_n) {
-		log_warnx("%s: Can't register %s: range_subid too large",
-		    backend->ab_name, oidbuf);
-		return APPL_ERROR_PARSEERROR;
-	}
-	if (range_subid != 0 && oid->bo_id[range_subid] >= upper_bound) {
-		log_warnx("%s: Can't register %s: upper bound smaller or equal "
-		    "to range_subid", backend->ab_name, oidbuf);
-		return APPL_ERROR_PARSEERROR;
-	}
-	if (range_subid != 0)
-		lower_bound = oid->bo_id[range_subid];
 
 	if (range_subid == 0)
 		return appl_region(ctx, timeout, priority, oid, instance,
 		    subtree, backend);
 
+	range_subid--;
+	if (range_subid >= oid->bo_n) {
+		log_warnx("%s: Can't register %s: range_subid too large",
+		    backend->ab_name, oidbuf);
+		return APPL_ERROR_PARSEERROR;
+	}
+	if (oid->bo_id[range_subid] > upper_bound) {
+		log_warnx("%s: Can't register %s: upper bound smaller than "
+		    "range_subid", backend->ab_name, oidbuf);
+		return APPL_ERROR_PARSEERROR;
+	}
+
+	lower_bound = oid->bo_id[range_subid];
 	do {
 		if ((error = appl_region(ctx, timeout, priority, oid, instance,
 		    subtree, backend)) != APPL_ERROR_NOERROR)
 			goto fail;
-	} while (oid->bo_id[range_subid] != upper_bound);
+	} while (oid->bo_id[range_subid]++ != upper_bound);
 	if ((error = appl_region(ctx, timeout, priority, oid, instance, subtree,
 	    backend)) != APPL_ERROR_NOERROR)
 		goto fail;
@@ -399,9 +404,10 @@ enum appl_error
 appl_unregister(const char *ctxname, uint8_t priority, struct ber_oid *oid,
     uint8_t range_subid, uint32_t upper_bound, struct appl_backend *backend)
 {
-	struct appl_region *region, search;
 	struct appl_context *ctx;
 	char oidbuf[1024], subidbuf[11];
+	enum appl_error error;
+	uint32_t lower_bound;
 	size_t i;
 
 	oidbuf[0] = '\0';
@@ -443,34 +449,45 @@ appl_unregister(const char *ctxname, uint8_t priority, struct ber_oid *oid,
 		return APPL_ERROR_PARSEERROR;
 	}
 
-	if (range_subid > oid->bo_n) {
+	if (range_subid == 0)
+		return appl_region_unregister_match(ctx, priority, oid, oidbuf,
+		    backend, 1);
+
+	range_subid--;
+	if (range_subid >= oid->bo_n) {
 		log_warnx("%s: Can't unregiser %s: range_subid too large",
 		    backend->ab_name, oidbuf);
 		return APPL_ERROR_PARSEERROR;
 	}
-	if (range_subid != 0 && oid->bo_id[range_subid] >= upper_bound) {
-		log_warnx("%s: Can't unregister %s: upper bound smaller or "
-		    "equal to range_subid", backend->ab_name, oidbuf);
+	if (oid->bo_id[range_subid] > upper_bound) {
+		log_warnx("%s: Can't unregister %s: upper bound smaller than "
+		    "range_subid", backend->ab_name, oidbuf);
 		return APPL_ERROR_PARSEERROR;
 	}
 
+	lower_bound = oid->bo_id[range_subid];
+	do {
+		if ((error = appl_region_unregister_match(ctx, priority, oid,
+		    oidbuf, backend, 0)) != APPL_ERROR_NOERROR)
+			return error;
+	} while (oid->bo_id[range_subid]++ != upper_bound);
+
+	oid->bo_id[range_subid] = lower_bound;
+	do {
+		(void)appl_region_unregister_match(ctx, priority, oid, oidbuf,
+		    backend, 1);
+	} while (oid->bo_id[range_subid]++ != upper_bound);
+
+	return APPL_ERROR_NOERROR;
+}
+
+enum appl_error
+appl_region_unregister_match(struct appl_context *ctx, uint8_t priority,
+    struct ber_oid *oid, char *oidbuf, struct appl_backend *backend, int dofree)
+{
+	struct appl_region *region, search;
+
 	search.ar_oid = *oid;
-	while (range_subid != 0 &&
-	    search.ar_oid.bo_id[range_subid] != upper_bound) {
-		region = RB_FIND(appl_regions, &(ctx->ac_regions), &search);
-		while (region != NULL && region->ar_priority < priority)
-			region = region->ar_next;
-		if (region == NULL || region->ar_priority != priority) {
-			log_warnx("%s: Can't unregister %s: region not found",
-			    backend->ab_name, oidbuf);
-			return APPL_ERROR_UNKNOWNREGISTRATION;
-		}
-		if (region->ar_backend != backend) {
-			log_warnx("%s: Can't unregister %s: region not owned "
-			    "by backend", backend->ab_name, oidbuf);
-			return APPL_ERROR_UNKNOWNREGISTRATION;
-		}
-	}
 	region = RB_FIND(appl_regions, &(ctx->ac_regions), &search);
 	while (region != NULL && region->ar_priority < priority)
 		region = region->ar_next;
@@ -484,20 +501,8 @@ appl_unregister(const char *ctxname, uint8_t priority, struct ber_oid *oid,
 		    "by backend", backend->ab_name, oidbuf);
 		return APPL_ERROR_UNKNOWNREGISTRATION;
 	}
-
-	search.ar_oid = *oid;
-	while (range_subid != 0 &&
-	    search.ar_oid.bo_id[range_subid] != upper_bound) {
-		region = RB_FIND(appl_regions, &(ctx->ac_regions), &search);
-		while (region != NULL && region->ar_priority != priority)
-			region = region->ar_next;
+	if (dofree)
 		appl_region_free(ctx, region);
-	}
-	region = RB_FIND(appl_regions, &(ctx->ac_regions), &search);
-	while (region != NULL && region->ar_priority != priority)
-		region = region->ar_next;
-	appl_region_free(ctx, region);
-
 	return APPL_ERROR_NOERROR;
 }
 
@@ -676,6 +681,8 @@ appl_processpdu(struct snmp_message *statereference, const char *ctxname,
 		}
 		ober_get_oid(varbind->be_sub,
 		    &(ureq->aru_vblist[i].avi_varbind.av_oid));
+		ureq->aru_vblist[i].avi_origid =
+		    ureq->aru_vblist[i].avi_varbind.av_oid;
 		if (i + 1 < ureq->aru_varbindlen) {
 			ureq->aru_vblist[i].avi_next =
 			    &(ureq->aru_vblist[i + 1]);
@@ -1005,6 +1012,10 @@ appl_request_upstream_reply(struct appl_request_upstream *ureq)
 		vb = &(ureq->aru_vblist[i]);
 		vb->avi_varbind.av_next =
 		    &(ureq->aru_vblist[i + 1].avi_varbind);
+		value = vb->avi_varbind.av_value;
+		if (value->be_class == BER_CLASS_CONTEXT &&
+		    value->be_type == APPL_EXC_ENDOFMIBVIEW)
+			vb->avi_varbind.av_oid = vb->avi_origid;
 	}
 
 	ureq->aru_vblist[i - 1].avi_varbind.av_next = NULL;
@@ -1059,13 +1070,17 @@ appl_response(struct appl_backend *backend, int32_t requestid,
 		next = pdutype == SNMP_C_GETNEXTREQ ||
 		    pdutype == SNMP_C_GETBULKREQ;
 		origvb = dreq->ard_vblist;
+		if (!appl_error_valid(error, dreq->ard_requesttype)) {
+			log_warnx("%s: %"PRIu32" Invalid error",
+			    backend->ab_name, requestid);
+			invalid = 1;
+		}
 	}
 
 	vb = vblist;
 	for (i = 1; vb != NULL; vb = vb->av_next, i++) {
-                if (!appl_varbind_valid(vb, origvb == NULL ?
-		    NULL : &(origvb->avi_varbind), next,
-                    error != APPL_ERROR_NOERROR, backend->ab_range, &errstr)) {
+		if (!appl_varbind_valid(vb, origvb, next,
+		    error != APPL_ERROR_NOERROR, backend->ab_range, &errstr)) {
 			smi_oid2string(&(vb->av_oid), oidbuf,
 			    sizeof(oidbuf), 0);
 			log_warnx("%s: %"PRIu32" %s: %s",
@@ -1163,11 +1178,15 @@ appl_response(struct appl_backend *backend, int32_t requestid,
 }
 
 int
-appl_varbind_valid(struct appl_varbind *varbind, struct appl_varbind *request,
-    int next, int null, int range, const char **errstr)
+appl_varbind_valid(struct appl_varbind *varbind,
+    struct appl_varbind_internal *request, int next, int null, int range,
+    const char **errstr)
 {
 	int cmp;
 	int eomv = 0;
+
+	if (null)
+		next = 0;
 
 	if (varbind->av_value == NULL) {
 		if (!null) {
@@ -1249,23 +1268,31 @@ appl_varbind_valid(struct appl_varbind *varbind, struct appl_varbind *request,
 	if (request == NULL)
 		return 1;
 
-	cmp = ober_oid_cmp(&(request->av_oid), &(varbind->av_oid));
-	if (next && !eomv) {
-		if (request->av_include) {
-			if (cmp > 0) {
-				*errstr = "oid not incrementing";
-				return 0;
-			}
-		} else {
-			if (cmp >= 0) {
-				*errstr = "oid not incrementing";
-				return 0;
-			}
-		}
-		if (range && ober_oid_cmp(&(varbind->av_oid),
-		    &(request->av_oid_end)) > 0) {
-			*errstr = "end oid not honoured";
+	cmp = ober_oid_cmp(&(request->avi_varbind.av_oid), &(varbind->av_oid));
+	if (next) {
+		if (request->avi_region->ar_instance &&
+		    ober_oid_cmp(&(request->avi_region->ar_oid),
+		    &(varbind->av_oid)) != 0) {
+			*errstr = "oid below instance";
 			return 0;
+		}
+		if (!eomv) {
+			if (request->avi_varbind.av_include) {
+				if (cmp > 0) {
+					*errstr = "oid not incrementing";
+					return 0;
+				}
+			} else {
+				if (cmp >= 0) {
+					*errstr = "oid not incrementing";
+					return 0;
+				}
+			}
+			if (range && ober_oid_cmp(&(varbind->av_oid),
+			    &(request->avi_varbind.av_oid_end)) > 0) {
+				*errstr = "end oid not honoured";
+				return 0;
+			}
 		}
 	} else {
 		if (cmp != 0) {
@@ -1274,6 +1301,37 @@ appl_varbind_valid(struct appl_varbind *varbind, struct appl_varbind *request,
 		}
 	}
 	return 1;
+}
+
+int
+appl_error_valid(enum appl_error error, enum snmp_pdutype type)
+{
+	switch (error) {
+	case APPL_ERROR_NOERROR:
+	case APPL_ERROR_TOOBIG:
+	case APPL_ERROR_NOSUCHNAME:
+	case APPL_ERROR_GENERR:
+		return 1;
+	case APPL_ERROR_BADVALUE:
+	case APPL_ERROR_READONLY:
+	case APPL_ERROR_NOACCESS:
+	case APPL_ERROR_WRONGTYPE:
+	case APPL_ERROR_WRONGLENGTH:
+	case APPL_ERROR_WRONGENCODING:
+	case APPL_ERROR_WRONGVALUE:
+	case APPL_ERROR_NOCREATION:
+	case APPL_ERROR_INCONSISTENTVALUE:
+	case APPL_ERROR_RESOURCEUNAVAILABLE:
+	case APPL_ERROR_COMMITFAILED:
+	case APPL_ERROR_UNDOFAILED:
+	case APPL_ERROR_NOTWRITABLE:
+	case APPL_ERROR_INCONSISTENTNAME:
+		return type == SNMP_C_SETREQ;
+	case APPL_ERROR_AUTHORIZATIONERROR:
+		return type == SNMP_C_GETREQ || type == SNMP_C_SETREQ;
+	default:
+		return 0;
+	}
 }
 
 int
