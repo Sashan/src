@@ -4491,6 +4491,14 @@ pf_tab_commit(struct pf_trans *t)
 				 * anchor, if table does not exists in global
 				 * anchor.
 				 */
+				if ((t->pft_ioflags & PFR_FLAG_DUMMY) != 0) {
+					RB_FOREACH(kt, pfr_ktablehead,
+					    &ta->ktables) {
+						t->pfttab_nadd++;
+					}
+					continue;	/* RB_FOREACH_SAFE() */
+				}
+
 				RB_REMOVE(pf_anchor_global,
 				    &t->pfttab_rc.anchors, ta);
 				exists = RB_INSERT(pf_anchor_global,
@@ -4498,8 +4506,12 @@ pf_tab_commit(struct pf_trans *t)
 				KASSERT(exists == NULL);
 				if (ta->parent != NULL)
 					pf_update_parent(ta);
-				RB_FOREACH(kt, pfr_ktablehead, &ta->ktables)
+				RB_FOREACH(kt, pfr_ktablehead, &ta->ktables) {
 					kt->pfrkt_version++;
+					kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+					kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
+					t->pfttab_nadd++;
+				}
 				pfr_update_table_refs(ta);
 			} else {
 				panic("%s ruleset %s to modify does not exists",

@@ -834,6 +834,7 @@ TAILQ_HEAD(pf_rulequeue, pf_rule);
 struct pfr_table {
 	char			 pfrt_anchor[PATH_MAX];
 	char			 pfrt_name[PF_TABLE_NAME_SIZE];
+	u_int32_t		 pfrt_version;
 	u_int32_t		 pfrt_flags;
 	u_int8_t		 pfrt_fback;
 };
@@ -986,12 +987,12 @@ struct pfr_ktable {
 	u_int64_t		 pfrkt_refcntcost;
 	u_int16_t		 pfrkt_gcdweight;
 	u_int16_t		 pfrkt_maxweight;
-	u_int32_t		 pfrkt_version;
 };
 #define pfrkt_t		pfrkt_ts.pfrts_t
 #define pfrkt_name	pfrkt_t.pfrt_name
 #define pfrkt_anchor	pfrkt_t.pfrt_anchor
 #define pfrkt_flags	pfrkt_t.pfrt_flags
+#define pfrkt_version	pfrkt_t.pfrt_version
 #define pfrkt_cnt	pfrkt_ts.pfrts_cnt
 #define pfrkt_refcnt	pfrkt_ts.pfrts_refcnt
 #define pfrkt_packets	pfrkt_ts.pfrts_packets

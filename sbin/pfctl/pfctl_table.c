@@ -370,7 +370,7 @@ print_table(struct pfr_table *ta, int verbose, int debug)
 	if (!debug && !(ta->pfrt_flags & PFR_TFLAG_ACTIVE))
 		return;
 	if (verbose) {
-		printf("%c%c%c%c%c%c%c\t%s",
+		printf("%c%c%c%c%c%c%c\t%s\t%u",
 		    (ta->pfrt_flags & PFR_TFLAG_CONST) ? 'c' : '-',
 		    (ta->pfrt_flags & PFR_TFLAG_PERSIST) ? 'p' : '-',
 		    (ta->pfrt_flags & PFR_TFLAG_ACTIVE) ? 'a' : '-',
@@ -378,7 +378,7 @@ print_table(struct pfr_table *ta, int verbose, int debug)
 		    (ta->pfrt_flags & PFR_TFLAG_REFERENCED) ? 'r' : '-',
 		    (ta->pfrt_flags & PFR_TFLAG_REFDANCHOR) ? 'h' : '-',
 		    (ta->pfrt_flags & PFR_TFLAG_COUNTERS) ? 'C' : '-',
-		    ta->pfrt_name);
+		    ta->pfrt_name, ta->pfrt_version);
 		if (ta->pfrt_anchor[0])
 			printf("\t%s", ta->pfrt_anchor);
 		puts("");

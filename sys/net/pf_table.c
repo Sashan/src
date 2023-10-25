@@ -2984,6 +2984,7 @@ pfr_addtables_commit(struct pf_trans *t, struct pf_anchor *ta,
 
 		if (exists == NULL) {
 			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+			kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
 			KASSERT(kt->pfrkt_version == 0);
 			pfr_walk_anchor_subtree(a, kt,
 			    pfr_update_tablerefs_anchor);
