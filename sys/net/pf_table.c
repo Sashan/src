@@ -2105,7 +2105,6 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		kt_insert = pfr_create_ktable(NULL, tbl, 0, PR_WAITOK);
 		kt_insert->pfrkt_rs = trs;
 		kt_insert->pfrkt_version = pfr_get_ktable_version(kt_insert);
-		kt_insert->pfrkt_flags |= PFR_TFLAG_REFDANCHOR;
 		/* ina means inactive */
 		kt_insert->pfrkt_flags |= PFR_TFLAG_INACTIVE;
 		kt = kt_insert;
@@ -2342,7 +2341,6 @@ pfr_create_ktable(struct pf_rules_container *rc, struct pfr_table *tbl,
 		}
 		a = (rs->anchor == NULL) ? &rc->main_anchor : rs->anchor;
 		kt->pfrkt_rs = rs;
-		kt->pfrkt_flags |= PFR_TFLAG_REFDANCHOR;
 		kt_exists = RB_INSERT(pfr_ktablehead, &a->ktables, kt);
 		if (kt_exists != NULL) {
 			pfr_destroy_ktable(kt, 0);
