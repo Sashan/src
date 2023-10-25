@@ -1394,7 +1394,7 @@ pfr_clr_tables(struct pf_trans *t)
 			if ((t->pft_ioflags & PFR_FLAG_DUMMY) == 0) {
 				kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
 				kt->pfrkt_flags |= ~PFR_TFLAG_INACTIVE;
-				if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0) {
+				if (kt->pfrkt_refcnt == 0) {
 					RB_REMOVE(pfr_ktablehead,
 					    &pf_main_anchor.ktables, kt);
 					SLIST_INSERT_HEAD(&t->pfttab_kt_garbage,
@@ -1467,7 +1467,7 @@ pfr_clr_tables(struct pf_trans *t)
 					    &t->pfttab_kt_garbage, kt,
 						    pfrkt_workq);
 				}
-			} else if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0) {
+			} else if (kt->pfrkt_refcnt == 0) {
 				RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
 				KASSERT(a->tables > 0);
 				a->tables--;
@@ -1741,13 +1741,13 @@ pfr_update_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 			struct pfr_ktable *src_kt;
 
 			src_kt = r->src.addr.p.tbl;
-			src_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			KASSERT(src_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-			if (src_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+			src_kt->pfrkt_refcnt--;
+			KASSERT(src_kt->pfrkt_refcnt >= 0);
+			if (src_kt->pfrkt_refcnt == 0)
 				src_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 
 			r->src.addr.p.tbl = kt;
-			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			kt->pfrkt_refcnt++;
 
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 			log(LOG_DEBUG, "%s %u@%s src %s@%s <-> %s@%s\n",
@@ -1771,13 +1771,13 @@ pfr_update_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 			struct pfr_ktable *dst_kt;
 
 			dst_kt = r->dst.addr.p.tbl;
-			dst_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			KASSERT(dst_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-			if (dst_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+			dst_kt->pfrkt_refcnt--;
+			KASSERT(dst_kt->pfrkt_refcnt >= 0);
+			if (dst_kt->pfrkt_refcnt == 0)
 				dst_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 
 			r->dst.addr.p.tbl = kt;
-			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			kt->pfrkt_refcnt++;
 
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 			log(LOG_DEBUG, "%s %u@%s dst %s@%s <-> %s@%s\n",
@@ -1801,13 +1801,13 @@ pfr_update_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 			struct pfr_ktable *rdr_kt;
 
 			rdr_kt = r->rdr.addr.p.tbl;
-			rdr_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			KASSERT(rdr_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-			if (rdr_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+			rdr_kt->pfrkt_refcnt--;
+			KASSERT(rdr_kt->pfrkt_refcnt >= 0);
+			if (rdr_kt->pfrkt_refcnt == 0)
 				rdr_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 
 			r->rdr.addr.p.tbl = kt;
-			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			kt->pfrkt_refcnt++;
 
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 
@@ -1832,13 +1832,13 @@ pfr_update_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 			struct pfr_ktable *nat_kt;
 
 			nat_kt = r->nat.addr.p.tbl;
-			nat_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			KASSERT(nat_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-			if (nat_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+			nat_kt->pfrkt_refcnt--;
+			KASSERT(nat_kt->pfrkt_refcnt >= 0);
+			if (nat_kt->pfrkt_refcnt == 0)
 				nat_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 
 			r->nat.addr.p.tbl = kt;
-			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			kt->pfrkt_refcnt++;
 
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 
@@ -1863,13 +1863,13 @@ pfr_update_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 			struct pfr_ktable *route_kt;
 
 			route_kt = r->route.addr.p.tbl;
-			route_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			KASSERT(route_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-			if (route_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+			route_kt->pfrkt_refcnt--;
+			KASSERT(route_kt->pfrkt_refcnt >= 0);
+			if (route_kt->pfrkt_refcnt == 0)
 				route_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 
 			r->route.addr.p.tbl = kt;
-			kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			kt->pfrkt_refcnt++;
 
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 
@@ -1942,13 +1942,13 @@ pfr_drop_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 			log(LOG_DEBUG, "%s linking src to %s@%s\n", __func__,
 			    kt_ref->pfrkt_name, kt_ref->pfrkt_anchor);
 
-			kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			KASSERT(kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-			if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+			kt->pfrkt_refcnt--;
+			KASSERT(kt->pfrkt_refcnt >= 0);
+			if (kt->pfrkt_refcnt == 0)
 				kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 
 			r->src.addr.p.tbl = kt_ref;
-			kt_ref->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			kt_ref->pfrkt_refcnt++;
 			kt_ref->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 
 		}
@@ -1966,13 +1966,13 @@ pfr_drop_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 			log(LOG_DEBUG, "%s linking dst to %s@%s\n", __func__,
 			    kt_ref->pfrkt_name, kt_ref->pfrkt_anchor);
 
-			kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			KASSERT(kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-			if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+			kt->pfrkt_refcnt--;
+			KASSERT(kt->pfrkt_refcnt >= 0);
+			if (kt->pfrkt_refcnt == 0)
 				kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 
 			r->dst.addr.p.tbl = kt_ref;
-			kt_ref->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			kt_ref->pfrkt_refcnt++;
 			kt_ref->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 		}
 
@@ -1989,13 +1989,13 @@ pfr_drop_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 			log(LOG_DEBUG, "%s linking rdr to %s@%s\n", __func__,
 			    kt_ref->pfrkt_name, kt_ref->pfrkt_anchor);
 
-			kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			KASSERT(kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-			if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+			kt->pfrkt_refcnt--;
+			KASSERT(kt->pfrkt_refcnt >= 0);
+			if (kt->pfrkt_refcnt == 0)
 				kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 
 			r->rdr.addr.p.tbl = kt_ref;
-			kt_ref->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			kt_ref->pfrkt_refcnt++;
 			kt_ref->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 		}
 
@@ -2012,13 +2012,13 @@ pfr_drop_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 			log(LOG_DEBUG, "%s linking nat to %s@%s\n", __func__,
 			    kt_ref->pfrkt_name, kt_ref->pfrkt_anchor);
 
-			kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			KASSERT(kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-			if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+			kt->pfrkt_refcnt--;
+			KASSERT(kt->pfrkt_refcnt >= 0);
+			if (kt->pfrkt_refcnt == 0)
 				kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 
 			r->nat.addr.p.tbl = kt_ref;
-			kt_ref->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			kt_ref->pfrkt_refcnt++;
 			kt_ref->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 		}
 
@@ -2035,13 +2035,13 @@ pfr_drop_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 			log(LOG_DEBUG, "%s linking route to %s@%s\n", __func__,
 			    kt_ref->pfrkt_name, kt_ref->pfrkt_anchor);
 
-			kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-			KASSERT(kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-			if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+			kt->pfrkt_refcnt--;
+			KASSERT(kt->pfrkt_refcnt >= 0);
+			if (kt->pfrkt_refcnt == 0)
 				kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 
 			r->route.addr.p.tbl = kt_ref;
-			kt_ref->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+			kt_ref->pfrkt_refcnt++;
 			kt_ref->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 		}
 	}
@@ -2584,7 +2584,7 @@ pfr_attach_table(struct pf_rules_container *rc, struct pf_ruleset *rs,
 		kt->pfrkt_version = pfr_get_ktable_version(kt);
 	}
 
-	kt->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+	kt->pfrkt_refcnt++;
 
 	return (kt);
 }
@@ -2597,8 +2597,8 @@ pfr_detach_table(struct pfr_ktable *kt)
 	 * to do expensive lookup for anchor which holds the table.
 	 */
 	PF_ASSERT_LOCKED();
-	KASSERT(kt->pfrkt_refcnt[PFR_REFCNT_RULE] > 0);
-	if (!--kt->pfrkt_refcnt[PFR_REFCNT_RULE])
+	KASSERT(kt->pfrkt_refcnt > 0);
+	if (!--kt->pfrkt_refcnt)
 		kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 }
 
@@ -3015,7 +3015,7 @@ pfr_deltables_commit(struct pf_trans *t, struct pf_anchor *ta,
 		kt_a->pfrkt_flags |= PFR_TFLAG_INACTIVE;
 
 		if (a == &pf_main_anchor) {
-			if (kt_a->pfrkt_refcnt[PFR_REFCNT_RULE] == 0) {
+			if (kt_a->pfrkt_refcnt == 0) {
 				RB_REMOVE(pfr_ktablehead, &a->ktables, kt_a);
 				SLIST_INSERT_HEAD(&t->pfttab_kt_garbage, kt_a,
 				    pfrkt_workq);
@@ -3085,7 +3085,7 @@ pfr_settflags_commit(struct pf_trans *t, struct pf_anchor *ta,
 		    (PFR_TFLAG_PERSIST|PFR_TFLAG_CONST|PFR_TFLAG_REFERENCED))
 			continue;
 
-		KASSERT(kt_a->pfrkt_refcnt[PFR_REFCNT_RULE] == 0);
+		KASSERT(kt_a->pfrkt_refcnt == 0);
 
 		RB_REMOVE(pfr_ktablehead, &a->ktables, kt_a);
 		SLIST_INSERT_HEAD(&t->pfttab_kt_garbage, kt_a, pfrkt_workq);

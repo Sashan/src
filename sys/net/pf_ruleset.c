@@ -115,17 +115,6 @@ pf_init_ruleset(struct pf_ruleset *ruleset)
 }
 
 struct pf_anchor *
-pf_lookup_anchor(struct pf_anchor *key)
-{
-	PF_ASSERT_LOCKED();
-
-	if (key->path[0] == '\0')
-		return (&pf_main_anchor);
-
-	return (RB_FIND(pf_anchor_global, &pf_anchors, key));
-}
-
-struct pf_anchor *
 pf_find_anchor(struct pf_rules_container *rc, const char *path)
 {
 	struct pf_anchor	*key, *found;
@@ -321,6 +310,17 @@ pf_find_or_create_ruleset(struct pf_rules_container *rc, const char *path)
 }
 
 #ifdef _KERNEL
+struct pf_anchor *
+pf_lookup_anchor(struct pf_anchor *key)
+{
+	PF_ASSERT_LOCKED();
+
+	if (key->path[0] == '\0')
+		return (&pf_main_anchor);
+
+	return (RB_FIND(pf_anchor_global, &pf_anchors, key));
+}
+
 u_int32_t
 pf_get_ruleset_version(const char *path)
 {

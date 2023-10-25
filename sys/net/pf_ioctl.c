@@ -961,13 +961,13 @@ pf_addr_update(struct pf_trans *t, struct pf_ruleset *grs,
 	 * we must update table reference in rule.
 	 */
 	if (kt != addr->p.tbl) {
-		addr->p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]--;
+		addr->p.tbl->pfrkt_refcnt--;
 		/*
 		 * p.tbl reference can be safely overwritten here.  the table
 		 * will be destroed with transaction.
 		 */
 		addr->p.tbl = kt;
-		addr->p.tbl->pfrkt_refcnt[PFR_REFCNT_RULE]++;
+		addr->p.tbl->pfrkt_refcnt++;
 	}
 }
 
@@ -1184,7 +1184,7 @@ test
  * pf-tab.,conf does not define table test, the table is left intact because it
  * got defined by 'pfctl -t test -T add ...'
  *
- * table biano did not survive commit operation because there is no rule
+ * table bianco did not survive commit operation because there is no rule
  * using it (PFR_REFCNT_RULE is zero).
  *
  * table dup is left intact, because it got defined by 'pfctl -t test -T add'
@@ -1206,66 +1206,6 @@ test
  *
  * table <dup> did not survive commit, because it got redefined by rulest.
  */
-#if 0
-void
-pf_swap_tables_ina(struct pf_trans *t, struct pf_anchor *ta,
-    struct pf_anchor *a)
-{
-	struct pfr_ktablehead tmp_tables;
-	u_int32_t tmp_tables_cnt = 0;
-	struct pfr_ktable *kt, *tkt, *tktw;
-
-	RB_INIT(&tmp_tables);
-
-	/*
-	 * Drop all tables which were defined on behalf
-	 * of ina and transaction does not define them
-	 */
-	RB_FOREACH(kt, pfr_ktablehead, &ta->ktables) {
-		tkt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
-		if (kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0) {
-			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
-			a->tables--;
-			RB_INSERT(pfr_ktablehead, &tmp_tables, kt);
-			tmp_tables_cnt++;
-			pfr_ktable_cnt--;
-		} else {
-			log(LOG_DEBUG, "%s flushing table %s@%s, "
-			    "still referred by %u rules\n",
-			    __func__,
-			    kt->pfrkt_name,
-			    PF_ANCHOR_PATH(kt->pfrkt_anchor),
-			    kt->pfrkt_refcnt[PFR_REFCNT_RULE]);
-			pfr_flush_table(kt);
-			kt->pfrkt_flags |= PFR_TFLAG_INACTIVE;
-			kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
-		}
-	}
-
-	RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, tktw) {
-		RB_REMOVE(pfr_ktablehead, &ta->ktables, tkt);
-		kt = RB_FIND(pfr_ktablehead, &a->ktables, tkt);
-		if (kt != NULL) {
-			/*
-			 * should be updating table with persistent flags.
-			 */
-			KASSERT(kt->pfrkt_flags & PFR_TFLAG_PERSIST);
-			KASSERT(kt->pfrkt_version == tkt->pfrkt_version);
-			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
-			RB_INSERT(pfr_ktablehead, &tmp_tables, kt);
-			kt->pfrkt_flags |= PFR_TFLAG_DETACHED;
-			RB_INSERT(pfr_ktablehead, &a->ktables, tkt);
-			tmp_tables_cnt++;
-		} else {
-			RB_INSERT(pfr_ktablehead, &a->ktables, tkt);
-			a->tables++;
-		}
-	}
-
-	ta->ktables = tmp_tables;
-	ta->tables = tmp_tables_cnt;
-}
-#endif
 
 void
 pf_detach_rule(struct pf_rule *r)
@@ -1285,9 +1225,9 @@ pf_detach_rule(struct pf_rule *r)
 		r->src.addr.p.tbl = NULL;
 		r->src.addr.type = PF_ADDR_NONE;
 
-		tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-		KASSERT(tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-		if (tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+		tmp_kt->pfrkt_refcnt--;
+		KASSERT(tmp_kt->pfrkt_refcnt >= 0);
+		if (tmp_kt->pfrkt_refcnt == 0)
 			tmp_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 	}
 	if (r->dst.addr.type == PF_ADDR_TABLE) {
@@ -1295,9 +1235,9 @@ pf_detach_rule(struct pf_rule *r)
 		r->dst.addr.p.tbl = NULL;
 		r->dst.addr.type = PF_ADDR_NONE;
 
-		tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-		KASSERT(tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-		if (tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+		tmp_kt->pfrkt_refcnt--;
+		KASSERT(tmp_kt->pfrkt_refcnt >= 0);
+		if (tmp_kt->pfrkt_refcnt == 0)
 			tmp_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 	}
 	if (r->rdr.addr.type == PF_ADDR_TABLE) {
@@ -1305,9 +1245,9 @@ pf_detach_rule(struct pf_rule *r)
 		r->rdr.addr.p.tbl = NULL;
 		r->rdr.addr.type = PF_ADDR_NONE;
 
-		tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-		KASSERT(tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-		if (tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+		tmp_kt->pfrkt_refcnt--;
+		KASSERT(tmp_kt->pfrkt_refcnt >= 0);
+		if (tmp_kt->pfrkt_refcnt == 0)
 			tmp_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 	}
 	if (r->nat.addr.type == PF_ADDR_TABLE) {
@@ -1315,9 +1255,9 @@ pf_detach_rule(struct pf_rule *r)
 		r->nat.addr.p.tbl = NULL;
 		r->nat.addr.type = PF_ADDR_NONE;
 
-		tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-		KASSERT(tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-		if (tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+		tmp_kt->pfrkt_refcnt--;
+		KASSERT(tmp_kt->pfrkt_refcnt >= 0);
+		if (tmp_kt->pfrkt_refcnt == 0)
 			tmp_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 	}
 	if (r->route.addr.type == PF_ADDR_TABLE) {
@@ -1325,9 +1265,9 @@ pf_detach_rule(struct pf_rule *r)
 		r->route.addr.p.tbl = NULL;
 		r->route.addr.type = PF_ADDR_NONE;
 
-		tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE]--;
-		KASSERT(tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] >= 0);
-		if (tmp_kt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0)
+		tmp_kt->pfrkt_refcnt--;
+		KASSERT(tmp_kt->pfrkt_refcnt >= 0);
+		if (tmp_kt->pfrkt_refcnt == 0)
 			tmp_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 	}
 }
@@ -1445,7 +1385,7 @@ pf_drop_unused_tables(struct pf_trans *t)
 	 */
 	RB_FOREACH_SAFE(tkt, pfr_ktablehead, &t->pftina_rc.main_anchor.ktables,
 	    tktw) {
-		if ((tkt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0) &&
+		if ((tkt->pfrkt_refcnt == 0) &&
 		    (tkt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
 			RB_REMOVE(pfr_ktablehead,
 			    &t->pftina_rc.main_anchor.ktables, tkt);
@@ -1457,8 +1397,8 @@ pf_drop_unused_tables(struct pf_trans *t)
 		RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, tktw) {
 			log(LOG_DEBUG, "%s %s@%s [%d] ", __func__,
 			    tkt->pfrkt_name, ta->path,
-			    tkt->pfrkt_refcnt[PFR_REFCNT_RULE]);
-			if (tkt->pfrkt_refcnt[PFR_REFCNT_RULE] == 0 &&
+			    tkt->pfrkt_refcnt);
+			if (tkt->pfrkt_refcnt == 0 &&
 			    (tkt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
 				log(LOG_DEBUG, "removed");
 				RB_REMOVE(pfr_ktablehead, &ta->ktables, tkt);

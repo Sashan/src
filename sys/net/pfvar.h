@@ -873,8 +873,6 @@ struct pfr_astats {
 	time_t		 pfras_tzero;
 };
 
-enum { PFR_REFCNT_RULE, PFR_REFCNT_ANCHOR, PFR_REFCNT_MAX };
-
 struct pfr_tstats {
 	struct pfr_table pfrts_t;
 	u_int64_t	 pfrts_packets[PFR_DIR_MAX][PFR_OP_TABLE_MAX];
@@ -883,7 +881,7 @@ struct pfr_tstats {
 	u_int64_t	 pfrts_nomatch;
 	time_t		 pfrts_tzero;
 	int		 pfrts_cnt;
-	int		 pfrts_refcnt[PFR_REFCNT_MAX];
+	int		 pfrts_refcnt;
 };
 #define	pfrts_name	pfrts_t.pfrt_name
 #define pfrts_flags	pfrts_t.pfrt_flags

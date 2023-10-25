@@ -397,9 +397,7 @@ print_tstats(struct pfr_tstats *ts, int debug)
 	print_table(&ts->pfrts_t, 1, debug);
 	printf("\tAddresses:   %d\n", ts->pfrts_cnt);
 	printf("\tCleared:     %s", ctime(&time));
-	printf("\tReferences:  [ Anchors: %-18d Rules: %-18d ]\n",
-	    ts->pfrts_refcnt[PFR_REFCNT_ANCHOR],
-	    ts->pfrts_refcnt[PFR_REFCNT_RULE]);
+	printf("\tReferences:  %-18d\n", ts->pfrts_refcnt);
 	printf("\tEvaluations: [ NoMatch: %-18llu Match: %-18llu ]\n",
 	    (unsigned long long)ts->pfrts_nomatch,
 	    (unsigned long long)ts->pfrts_match);
