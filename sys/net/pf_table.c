@@ -1317,6 +1317,19 @@ pfr_promote_table(struct pf_anchor *a, struct pfr_ktable *kt)
 	struct pfr_ktable	*ktp, *exists;
 
 	/*
+	 * Tables which are not referred by rules can be
+	 * disposed right away. Tell caller to dispose the
+	 * table.
+	 */
+	if (kt->pfrkt_refcnt == 0)
+		return (kt);
+
+	/*
+	 * TODO: flush all addresses, table which is going to
+	 * be promoted should be empty.
+	 */
+
+	/*
 	 * Find parent table which can be used in 'a' and
 	 * and 'a's chiildren.
 	 */
@@ -1380,7 +1393,7 @@ int
 pfr_clr_tables(struct pf_trans *t)
 {
 	struct pfr_ktableworkq	 workq;
-	struct pfr_ktable	*kt;
+	struct pfr_ktable	*kt, *ktw;
 	struct pf_anchor	*a;
 
 	ACCEPT_FLAGS(t->pft_ioflags, PFR_FLAG_DUMMY | PFR_FLAG_ALLRSETS);
@@ -1388,7 +1401,8 @@ pfr_clr_tables(struct pf_trans *t)
 	SLIST_INIT(&workq);
 
 	if (t->pft_ioflags & PFR_FLAG_ALLRSETS) {
-		RB_FOREACH(kt, pfr_ktablehead, &pf_main_anchor.ktables) {
+		RB_FOREACH_SAFE(kt, pfr_ktablehead,
+		    &pf_main_anchor.ktables, ktw) {
 			if ((kt->pfrkt_flags & PFR_TFLAG_ACTIVE) == 0)
 				continue;
 			if ((t->pft_ioflags & PFR_FLAG_DUMMY) == 0) {
@@ -1410,7 +1424,7 @@ pfr_clr_tables(struct pf_trans *t)
 		}
 
 		RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
-			RB_FOREACH(kt, pfr_ktablehead, &a->ktables) {
+			RB_FOREACH_SAFE(kt, pfr_ktablehead, &a->ktables, ktw) {
 				if ((kt->pfrkt_flags & PFR_TFLAG_ACTIVE) == 0)
 					continue;
 
@@ -1443,7 +1457,7 @@ pfr_clr_tables(struct pf_trans *t)
 		a = pf_lookup_anchor(&t->pfttab_anchor_key);
 		if (a == NULL)
 			return (ESRCH);
-		RB_FOREACH(kt, pfr_ktablehead, &a->ktables) {
+		RB_FOREACH_SAFE(kt, pfr_ktablehead, &a->ktables, ktw) {
 			if (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) {
 				t->pfttab_ndel++;
 				if ((t->pft_ioflags & PFR_FLAG_DUMMY) != 0)
