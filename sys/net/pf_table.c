@@ -1058,16 +1058,6 @@ pfr_remove_kentries(struct pfr_ktable *kt,
 }
 
 void
-pfr_flush_table(struct pfr_ktable *kt)
-{
-	struct pfr_kentryworkq	 workq;
-
-	PF_ASSERT_LOCKED();
-	pfr_enqueue_addrs(kt, &workq, NULL, 0);
-	pfr_remove_kentries(kt, &workq);
-}
-
-void
 pfr_clean_node_mask(struct pfr_ktable *kt,
     struct pfr_kentryworkq *workq)
 {
@@ -1315,6 +1305,7 @@ pfr_promote_table(struct pf_anchor *a, struct pfr_ktable *kt)
 {
 	struct pf_anchor	*parent = a->parent;
 	struct pfr_ktable	*ktp, *exists;
+	struct pfr_kentryworkq	 workq;
 
 	/*
 	 * Tables which are not referred by rules can be
@@ -1325,9 +1316,12 @@ pfr_promote_table(struct pf_anchor *a, struct pfr_ktable *kt)
 		return (kt);
 
 	/*
-	 * TODO: flush all addresses, table which is going to
+	 * Flush all addresses, table which is going to
 	 * be promoted should be empty.
 	 */
+	SLIST_INIT(&workq);
+	pfr_enqueue_addrs(kt, &workq, NULL, 0);
+	pfr_remove_kentries(kt, &workq);
 
 	/*
 	 * Find parent table which can be used in 'a' and
@@ -3287,6 +3281,7 @@ pfr_clraddrs_commit(struct pf_trans *t, struct pf_anchor *ta,
 
 	KASSERT(kt->pfrkt_version == ktt->pfrkt_version);
 
+	SLIST_INIT(&workq);
 	pfr_enqueue_addrs(kt, &workq, &t->pfttab_ndel, 0);
 
 	if ((t->pft_ioflags & PFR_FLAG_DUMMY) == 0) {
