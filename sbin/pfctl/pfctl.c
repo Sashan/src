@@ -378,6 +378,7 @@ pfctl_clear_interface_flags(int dev, int opts)
 int
 pfctl_clear_rules(int dev, int opts, char *anchorname)
 {
+	struct pfioc_trans	t;
 	struct pfioc_trans_e	e;
 
 	memset(&t, 0, sizeof(t));
