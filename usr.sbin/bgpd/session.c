@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.c,v 1.451 2023/10/19 07:02:45 claudio Exp $ */
+/*	$OpenBSD: session.c,v 1.455 2023/11/07 11:18:35 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004, 2005 Henning Brauer <henning@openbsd.org>
@@ -1471,8 +1471,9 @@ session_open(struct peer *p)
 {
 	struct bgp_msg		*buf;
 	struct ibuf		*opb;
-	uint16_t		 len, optparamlen = 0, holdtime;
-	uint8_t			 i, op_type;
+	size_t			 len, optparamlen;
+	uint16_t		 holdtime;
+	uint8_t			 i;
 	int			 errs = 0, extlen = 0;
 	int			 mpcapa = 0;
 
@@ -1552,29 +1553,38 @@ session_open(struct peer *p)
 	if (p->capa.ann.enhanced_rr)	/* no data */
 		errs += session_capa_add(opb, CAPA_ENHANCED_RR, 0);
 
+	if (errs) {
+		ibuf_free(opb);
+		bgp_fsm(p, EVNT_CON_FATAL);
+		return;
+	}
+
 	optparamlen = ibuf_size(opb);
+	len = MSGSIZE_OPEN_MIN + optparamlen;
 	if (optparamlen == 0) {
 		/* nothing */
 	} else if (optparamlen + 2 >= 255) {
-		/* RFC9072: 2 byte length instead of 1 + 3 byte extra header */
-		optparamlen += sizeof(op_type) + 2 + 3;
+		/* RFC9072: use 255 as magic size and request extra header */
 		optparamlen = 255;
 		extlen = 1;
+		/* 3 byte OPT_PARAM_EXT_LEN and OPT_PARAM_CAPABILITIES */
+		len += 2 * 3;
 	} else {
-		optparamlen += sizeof(op_type) + 1;
+		/* regular capabilities header */
+		optparamlen += 2;
+		len += 2;
 	}
 
-	len = MSGSIZE_OPEN_MIN + optparamlen;
-	if (errs || (buf = session_newmsg(OPEN, len)) == NULL) {
+	if ((buf = session_newmsg(OPEN, len)) == NULL) {
 		ibuf_free(opb);
 		bgp_fsm(p, EVNT_CON_FATAL);
 		return;
 	}
 
 	if (p->conf.holdtime)
-		holdtime = htons(p->conf.holdtime);
+		holdtime = p->conf.holdtime;
 	else
-		holdtime = htons(conf->holdtime);
+		holdtime = conf->holdtime;
 
 	errs += ibuf_add_n8(buf->buf, 4);
 	errs += ibuf_add_n16(buf->buf, p->conf.local_short_as);
@@ -1584,20 +1594,19 @@ session_open(struct peer *p)
 	errs += ibuf_add_n8(buf->buf, optparamlen);
 
 	if (extlen) {
-		/* write RFC9072 extra header */
+		/* RFC9072 extra header which spans over the capabilities hdr */
 		errs += ibuf_add_n8(buf->buf, OPT_PARAM_EXT_LEN);
-		errs += ibuf_add_n16(buf->buf, optparamlen - 3);
+		errs += ibuf_add_n16(buf->buf, ibuf_size(opb) + 1 + 2);
 	}
 
 	if (optparamlen) {
 		errs += ibuf_add_n8(buf->buf, OPT_PARAM_CAPABILITIES);
 
-		optparamlen = ibuf_size(opb);
 		if (extlen) {
 			/* RFC9072: 2-byte extended length */
-			errs += ibuf_add_n16(buf->buf, optparamlen);
+			errs += ibuf_add_n16(buf->buf, ibuf_size(opb));
 		} else {
-			errs += ibuf_add_n8(buf->buf, optparamlen);
+			errs += ibuf_add_n8(buf->buf, ibuf_size(opb));
 		}
 		errs += ibuf_add_buf(buf->buf, opb);
 	}
@@ -2941,7 +2950,7 @@ capa_neg_calc(struct peer *p, uint8_t *suberr)
 }
 
 void
-session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
+session_dispatch_imsg(struct imsgbuf *imsgbuf, int idx, u_int *listener_cnt)
 {
 	struct imsg		 imsg;
 	struct mrt		 xmrt;
@@ -2956,8 +2965,8 @@ session_dispatch_imsg(struct imsgbuf *ibuf, int idx, u_int *listener_cnt)
 	uint16_t		 t;
 	uint8_t			 aid, errcode, subcode;
 
-	while (ibuf) {
-		if ((n = imsg_get(ibuf, &imsg)) == -1)
+	while (imsgbuf) {
+		if ((n = imsg_get(imsgbuf, &imsg)) == -1)
 			fatal("session_dispatch_imsg: imsg_get error");
 
 		if (n == 0)

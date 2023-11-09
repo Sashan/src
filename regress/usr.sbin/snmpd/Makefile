@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.5 2023/10/24 14:34:40 martijn Exp $
+# $OpenBSD: Makefile,v 1.8 2023/10/29 11:26:12 martijn Exp $
 # Regress tests for snmpd
 
 PROG =				snmpd_regress
@@ -51,6 +51,7 @@ AGENTX_TARGETS+=		agentx_ping_new_index
 AGENTX_TARGETS+=		agentx_ping_any_index
 AGENTX_TARGETS+=		agentx_ping_nbo_nnbo
 AGENTX_TARGETS+=		agentx_ping_nnbo_nbo
+AGENTX_TARGETS+=		agentx_ping_invalid_version_close
 AGENTX_TARGETS+=		agentx_close_notopen
 AGENTX_TARGETS+=		agentx_close_reasonother
 AGENTX_TARGETS+=		agentx_close_reasonparseerror
@@ -169,6 +170,10 @@ BACKEND_TARGETS+=		backend_getnext_stale
 BACKEND_TARGETS+=		backend_getnext_inclusive_backwards
 BACKEND_TARGETS+=		backend_getnext_toofew
 BACKEND_TARGETS+=		backend_getnext_toomany
+BACKEND_TARGETS+=		backend_getnext_response_equal_end
+BACKEND_TARGETS+=		backend_getnext_instance_below_region_before_instance
+BACKEND_TARGETS+=		backend_getnext_instance_below_region_on_instance
+BACKEND_TARGETS+=		backend_getnext_instance_below_region_below_instance
 BACKEND_TARGETS+=		backend_getbulk_nonrep_zero_maxrep_one
 BACKEND_TARGETS+=		backend_getbulk_nonrep_zero_maxrep_two
 BACKEND_TARGETS+=		backend_getbulk_nonrep_one_maxrep_one

@@ -1,4 +1,4 @@
-/*	$OpenBSD: application_agentx.c,v 1.12 2023/10/24 14:11:14 martijn Exp $ */
+/*	$OpenBSD: application_agentx.c,v 1.14 2023/11/06 11:04:41 martijn Exp $ */
 /*
  * Copyright (c) 2022 Martijn van Duren <martijn@openbsd.org>
  *
@@ -89,6 +89,8 @@ void appl_agentx_get(struct appl_backend *, int32_t, int32_t, const char *,
     struct appl_varbind *);
 void appl_agentx_getnext(struct appl_backend *, int32_t, int32_t, const char *,
     struct appl_varbind *);
+void appl_agentx_addagentcaps(struct appl_agentx_session *, struct ax_pdu *);
+void appl_agentx_removeagentcaps(struct appl_agentx_session *, struct ax_pdu *);
 void appl_agentx_response(struct appl_agentx_session *, struct ax_pdu *);
 void appl_agentx_send(int, short, void *);
 struct ber_oid *appl_agentx_oid2ber_oid(struct ax_oid *, struct ber_oid *);
@@ -254,9 +256,6 @@ appl_agentx_free(struct appl_agentx_connection *conn,
 {
 	struct appl_agentx_session *session;
 
-	event_del(&(conn->conn_rev));
-	event_del(&(conn->conn_wev));
-
 	while ((session = TAILQ_FIRST(&(conn->conn_sessions))) != NULL) {
 		if (conn->conn_ax == NULL)
 			appl_agentx_session_free(session);
@@ -265,7 +264,12 @@ appl_agentx_free(struct appl_agentx_connection *conn,
 			    reason);
 	}
 
+	event_del(&(conn->conn_rev));
+	event_del(&(conn->conn_wev));
+
 	RB_REMOVE(appl_agentx_conns, &appl_agentx_conns, conn);
+	if (conn->conn_ax != NULL)
+		(void)ax_send(conn->conn_ax);
 	ax_free(conn->conn_ax);
 	if (conn->conn_backend)
 		fatalx("AgentX(%"PRIu32"): disappeared unexpected",
@@ -419,7 +423,7 @@ appl_agentx_recv(int fd, short event, void *cookie)
 		    pdu->ap_header.aph_transactionid,
 		    pdu->ap_header.aph_packetid, smi_getticks(),
 		    APPL_ERROR_NOERROR, 0, NULL, 0);
-		appl_agentx_send(-1, EV_WRITE, conn);
+		event_add(&(conn->conn_wev), NULL);
 		break;
 	case AX_PDU_TYPE_INDEXALLOCATE:
 	case AX_PDU_TYPE_INDEXDEALLOCATE:
@@ -431,14 +435,14 @@ appl_agentx_recv(int fd, short event, void *cookie)
 		    APPL_ERROR_PROCESSINGERROR, 1,
 		    pdu->ap_payload.ap_vbl.ap_varbind,
 		    pdu->ap_payload.ap_vbl.ap_nvarbind);
-		appl_agentx_send(-1, EV_WRITE, conn);
+		event_add(&(conn->conn_wev), NULL);
 		break;
 	case AX_PDU_TYPE_ADDAGENTCAPS:
+		appl_agentx_addagentcaps(session, pdu);
+		break;
 	case AX_PDU_TYPE_REMOVEAGENTCAPS:
-		log_warnx("%s: %s: not supported", name,
-		    ax_pdutype2string(pdu->ap_header.aph_type));
-		error = APPL_ERROR_PROCESSINGERROR;
-		goto fail;
+		appl_agentx_removeagentcaps(session, pdu);
+		break;
 	case AX_PDU_TYPE_RESPONSE:
 		appl_agentx_response(session, pdu);
 		break;
@@ -451,7 +455,7 @@ appl_agentx_recv(int fd, short event, void *cookie)
 	    pdu->ap_header.aph_transactionid,
 	    pdu->ap_header.aph_packetid, smi_getticks(),
 	    error, 0, NULL, 0);
-	appl_agentx_send(-1, EV_WRITE, conn);
+	event_add(&(conn->conn_wev), NULL);
 	ax_pdu_free(pdu);
 
 	if (session == NULL || error != APPL_ERROR_PARSEERROR)
@@ -560,13 +564,13 @@ appl_agentx_open(struct appl_agentx_connection *conn, struct ax_pdu *pdu)
 	ax_response(conn->conn_ax, session->sess_id,
 	    pdu->ap_header.aph_transactionid, pdu->ap_header.aph_packetid,
 	    smi_getticks(), APPL_ERROR_NOERROR, 0, NULL, 0);
-	appl_agentx_send(-1, EV_WRITE, conn);
+	event_add(&(conn->conn_wev), NULL);
 
 	return;
  fail:
 	ax_response(conn->conn_ax, 0, pdu->ap_header.aph_transactionid,
 	    pdu->ap_header.aph_packetid, 0, error, 0, NULL, 0);
-	appl_agentx_send(-1, EV_WRITE, conn);
+	event_add(&(conn->conn_wev), NULL);
 	if (session != NULL)
 		free(session->sess_descr.aos_string);
 	free(session);
@@ -592,7 +596,7 @@ appl_agentx_close(struct appl_agentx_session *session, struct ax_pdu *pdu)
 	ax_response(conn->conn_ax, pdu->ap_header.aph_sessionid,
 	    pdu->ap_header.aph_transactionid, pdu->ap_header.aph_packetid,
 	    smi_getticks(), error, 0, NULL, 0);
-	appl_agentx_send(-1, EV_WRITE, conn);
+	event_add(&(conn->conn_wev), NULL);
 	if (error == APPL_ERROR_NOERROR)
 		return;
 
@@ -612,7 +616,7 @@ appl_agentx_forceclose(struct appl_backend *backend,
 	session->sess_conn->conn_ax->ax_byteorder = session->sess_byteorder;
 	ax_close(session->sess_conn->conn_ax, session->sess_id,
 	    (enum ax_close_reason) reason);
-	appl_agentx_send(-1, EV_WRITE, session->sess_conn);
+	event_add(&(session->sess_conn->conn_wev), NULL);
 
 	strlcpy(name, session->sess_backend.ab_name, sizeof(name));
 	appl_agentx_session_free(session);
@@ -671,7 +675,7 @@ appl_agentx_register(struct appl_agentx_session *session, struct ax_pdu *pdu)
 	ax_response(session->sess_conn->conn_ax, session->sess_id,
 	    pdu->ap_header.aph_transactionid, pdu->ap_header.aph_packetid,
 	    smi_getticks(), error, 0, NULL, 0);
-	appl_agentx_send(-1, EV_WRITE, session->sess_conn);
+	event_add(&(session->sess_conn->conn_wev), NULL);
 }
 
 void
@@ -698,7 +702,7 @@ appl_agentx_unregister(struct appl_agentx_session *session, struct ax_pdu *pdu)
 	ax_response(session->sess_conn->conn_ax, session->sess_id,
 	    pdu->ap_header.aph_transactionid, pdu->ap_header.aph_packetid,
 	    smi_getticks(), error, 0, NULL, 0);
-	appl_agentx_send(-1, EV_WRITE, session->sess_conn);
+	event_add(&(session->sess_conn->conn_wev), NULL);
 }
 
 #define AX_PDU_FLAG_INDEX (AX_PDU_FLAG_NEW_INDEX | AX_PDU_FLAG_ANY_INDEX)
@@ -748,7 +752,7 @@ appl_agentx_get(struct appl_backend *backend, int32_t transactionid,
 	    requestid, context, srl, nsr) == -1)
 		appl_response(backend, requestid, APPL_ERROR_GENERR, 1, vblist);
 	else
-		appl_agentx_send(-1, EV_WRITE, session->sess_conn);
+		event_add(&(session->sess_conn->conn_wev), NULL);
 	free(srl);
 	if (context != NULL)
 		free(context->aos_string);
@@ -801,10 +805,61 @@ appl_agentx_getnext(struct appl_backend *backend, int32_t transactionid,
 	    requestid, context, srl, nsr) == -1)
 		appl_response(backend, requestid, APPL_ERROR_GENERR, 1, vblist);
 	else
-		appl_agentx_send(-1, EV_WRITE, session->sess_conn);
+		event_add(&(session->sess_conn->conn_wev), NULL);
 	free(srl);
 	if (context != NULL)
 		free(context->aos_string);
+}
+
+void
+appl_agentx_addagentcaps(struct appl_agentx_session *session,
+    struct ax_pdu *pdu)
+{
+	struct ber_oid oid;
+	enum appl_error error;
+
+	if (appl_agentx_oid2ber_oid(&(pdu->ap_payload.ap_addagentcaps.ap_oid),
+	    &oid) == NULL) {
+		log_warnx("%s: Failed to add agent capabilities: oid too small",
+		    session->sess_backend.ab_name);
+		error = APPL_ERROR_PARSEERROR;
+		goto fail;
+	}
+
+	error = appl_addagentcaps(pdu->ap_context.aos_string, &oid,
+	    pdu->ap_payload.ap_addagentcaps.ap_descr.aos_string,
+	    &(session->sess_backend));
+
+ fail:
+	ax_response(session->sess_conn->conn_ax, session->sess_id,
+	    pdu->ap_header.aph_transactionid, pdu->ap_header.aph_packetid,
+	    smi_getticks(), error, 0, NULL, 0);
+	event_add(&(session->sess_conn->conn_wev), NULL);
+}
+
+void
+appl_agentx_removeagentcaps(struct appl_agentx_session *session,
+    struct ax_pdu *pdu)
+{
+	struct ber_oid oid;
+	enum appl_error error;
+
+	if (appl_agentx_oid2ber_oid(&(pdu->ap_payload.ap_addagentcaps.ap_oid),
+	    &oid) == NULL) {
+		log_warnx("%s: Failed to remove agent capabilities: "
+		    "oid too small", session->sess_backend.ab_name);
+		error = APPL_ERROR_PARSEERROR;
+		goto fail;
+	}
+
+	error = appl_removeagentcaps(pdu->ap_context.aos_string, &oid,
+	    &(session->sess_backend));
+
+ fail:
+	ax_response(session->sess_conn->conn_ax, session->sess_id,
+	    pdu->ap_header.aph_transactionid, pdu->ap_header.aph_packetid,
+	    smi_getticks(), error, 0, NULL, 0);
+	event_add(&(session->sess_conn->conn_wev), NULL);
 }
 
 void

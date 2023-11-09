@@ -1,4 +1,4 @@
-/*	$OpenBSD: application.c,v 1.24 2023/10/24 14:21:58 martijn Exp $	*/
+/*	$OpenBSD: application.c,v 1.32 2023/11/08 19:54:52 martijn Exp $	*/
 
 /*
  * Copyright (c) 2021 Martijn van Duren <martijn@openbsd.org>
@@ -34,12 +34,29 @@
 #include "snmpe.h"
 #include "mib.h"
 
+#define OID(...)		(struct ber_oid){ { __VA_ARGS__ },	\
+    (sizeof((uint32_t []) { __VA_ARGS__ }) / sizeof(uint32_t)) }
+
 TAILQ_HEAD(, appl_context) contexts = TAILQ_HEAD_INITIALIZER(contexts);
+
+struct appl_agentcap {
+	struct appl_backend *aa_backend;
+	struct appl_context *aa_context;
+	uint32_t aa_index;
+	struct ber_oid aa_oid;
+	char aa_descr[256];
+	int aa_uptime;
+
+	TAILQ_ENTRY(appl_agentcap) aa_entry;
+};
 
 struct appl_context {
 	char ac_name[APPL_CONTEXTNAME_MAX + 1];
 
 	RB_HEAD(appl_regions, appl_region) ac_regions;
+	TAILQ_HEAD(, appl_agentcap) ac_agentcaps;
+	int ac_agentcap_lastid;
+	int ac_agentcap_lastchange;
 
 	TAILQ_ENTRY(appl_context) ac_entries;
 };
@@ -59,6 +76,7 @@ struct appl_region {
 struct appl_request_upstream {
 	struct appl_context *aru_ctx;
 	struct snmp_message *aru_statereference;
+	enum snmp_pdutype aru_requesttype;
 	int32_t aru_requestid; /* upstream requestid */
 	int32_t aru_transactionid; /* RFC 2741 section 6.1 */
 	uint16_t aru_nonrepeaters;
@@ -113,6 +131,7 @@ struct snmp_target_mib {
 	uint32_t		snmp_unknowncontexts;
 } snmp_target_mib;
 
+void appl_agentcap_free(struct appl_agentcap *);
 enum appl_error appl_region(struct appl_context *, uint32_t, uint8_t,
     struct ber_oid *, int, int, struct appl_backend *);
 void appl_region_free(struct appl_context *, struct appl_region *);
@@ -159,6 +178,7 @@ void
 appl_init(void)
 {
 	appl_blocklist_init();
+	appl_internal_init();
 	appl_legacy_init();
 	appl_agentx_init();
 }
@@ -169,11 +189,13 @@ appl_shutdown(void)
 	struct appl_context *ctx, *tctx;
 
 	appl_blocklist_shutdown();
+	appl_internal_shutdown();
 	appl_legacy_shutdown();
 	appl_agentx_shutdown();
 
 	TAILQ_FOREACH_SAFE(ctx, &contexts, ac_entries, tctx) {
 		assert(RB_EMPTY(&(ctx->ac_regions)));
+		assert(TAILQ_EMPTY(&(ctx->ac_agentcaps)));
 		TAILQ_REMOVE(&contexts, ctx, ac_entries);
 		free(ctx);
 	}
@@ -208,9 +230,223 @@ appl_context(const char *name, int create)
 
 	strlcpy(ctx->ac_name, name, sizeof(ctx->ac_name));
 	RB_INIT(&(ctx->ac_regions));
+	TAILQ_INIT(&(ctx->ac_agentcaps));
+	ctx->ac_agentcap_lastid = 0;
+	ctx->ac_agentcap_lastchange = 0;
 
 	TAILQ_INSERT_TAIL(&contexts, ctx, ac_entries);
 	return ctx;
+}
+
+/* Name from RFC 2741 section 6.2.14 */
+enum appl_error
+appl_addagentcaps(const char *ctxname, struct ber_oid *oid, const char *descr,
+    struct appl_backend *backend)
+{
+	struct appl_context *ctx;
+	struct appl_agentcap *cap;
+	char oidbuf[1024];
+
+	if (ctxname == NULL)
+		ctxname = "";
+
+	(void)smi_oid2string(oid, oidbuf, sizeof(oidbuf), 0);
+	log_info("%s: Adding agent capabilities %s context(%s)",
+		backend->ab_name, oidbuf, ctxname);
+
+	if ((ctx = appl_context(ctxname, 0)) == NULL) {
+		log_info("%s: Can't add agent capabilities %s: "
+		    "Unsupported context \"%s\"", backend->ab_name, oidbuf,
+		    ctxname);
+		return APPL_ERROR_UNSUPPORTEDCONTEXT;
+	}
+
+	if ((cap = malloc(sizeof(*ctx))) == NULL) {
+		log_warn("%s: Can't add agent capabilities %s",
+		    backend->ab_name, oidbuf);
+		return APPL_ERROR_PROCESSINGERROR;
+	}
+
+	cap->aa_backend = backend;
+	cap->aa_context = ctx;
+	cap->aa_index = ++ctx->ac_agentcap_lastid;
+	cap->aa_oid = *oid;
+	cap->aa_uptime = smi_getticks();
+	if (strlcpy(cap->aa_descr, descr,
+	    sizeof(cap->aa_descr)) >= sizeof(cap->aa_descr)) {
+		log_info("%s: Can't add agent capabilities %s: "
+		    "Invalid description", backend->ab_name, oidbuf);
+		free(cap);
+		return APPL_ERROR_PARSEERROR;
+	}
+
+	TAILQ_INSERT_TAIL(&(ctx->ac_agentcaps), cap, aa_entry);
+	ctx->ac_agentcap_lastchange = cap->aa_uptime;
+
+	return APPL_ERROR_NOERROR;
+}
+
+/* Name from RFC2741 section 6.2.15 */
+enum appl_error
+appl_removeagentcaps(const char *ctxname, struct ber_oid *oid,
+    struct appl_backend *backend)
+{
+	struct appl_context *ctx;
+	struct appl_agentcap *cap, *tmp;
+	char oidbuf[1024];
+	int found = 0;
+
+	if (ctxname == NULL)
+		ctxname = "";
+
+	(void)smi_oid2string(oid, oidbuf, sizeof(oidbuf), 0);
+	log_info("%s: Removing agent capabilities %s context(%s)",
+	    backend->ab_name, oidbuf, ctxname);
+
+	if ((ctx = appl_context(ctxname, 0)) == NULL) {
+		log_info("%s: Can't remove agent capabilities %s: "
+		    "Unsupported context \"%s\"", backend->ab_name, oidbuf,
+		    ctxname);
+		return APPL_ERROR_UNSUPPORTEDCONTEXT;
+	}
+
+	TAILQ_FOREACH_SAFE(cap, &(ctx->ac_agentcaps), aa_entry, tmp) {
+		/* No duplicate oid check, just continue */
+		if (cap->aa_backend != backend ||
+		    ober_oid_cmp(oid, &(cap->aa_oid)) != 0)
+			continue;
+		found = 1;
+		appl_agentcap_free(cap);
+	}
+
+	if (found)
+		return APPL_ERROR_NOERROR;
+
+	log_info("%s: Can't remove agent capabilities %s: not found",
+	    backend->ab_name, oidbuf);
+	return APPL_ERROR_UNKNOWNAGENTCAPS;
+}
+
+void
+appl_agentcap_free(struct appl_agentcap *cap)
+{
+	TAILQ_REMOVE(&(cap->aa_context->ac_agentcaps), cap, aa_entry);
+	cap->aa_context->ac_agentcap_lastchange = smi_getticks();
+	free(cap);
+}
+
+struct ber_element *
+appl_sysorlastchange(struct ber_oid *oid)
+{
+	struct appl_context *ctx;
+	struct ber_element *value;
+
+	ctx = appl_context(NULL, 0);
+	value = ober_add_integer(NULL, ctx->ac_agentcap_lastchange);
+	if (value != NULL)
+		ober_set_header(value, BER_CLASS_APPLICATION, SNMP_T_TIMETICKS);
+	else
+		log_warn("ober_add_integer");
+
+	return value;
+}
+
+#define SYSORIDX_POS 10
+struct ber_element *
+appl_sysortable(struct ber_oid *oid)
+{
+	struct appl_context *ctx;
+	struct appl_agentcap *cap;
+	struct ber_element *value = NULL;
+
+	if (oid->bo_n != SYSORIDX_POS + 1)
+		goto notfound;
+
+	ctx = appl_context(NULL, 0);
+	TAILQ_FOREACH(cap, &(ctx->ac_agentcaps), aa_entry) {
+		if (cap->aa_index == oid->bo_id[SYSORIDX_POS])
+			break;
+	}
+	if (cap == NULL)
+		goto notfound;
+
+	if (ober_oid_cmp(&OID(MIB_sysORID), oid) == -2)
+		value = ober_add_oid(NULL, &(cap->aa_oid));
+	else if (ober_oid_cmp(&OID(MIB_sysORDescr), oid) == -2)
+		value = ober_add_string(NULL, cap->aa_descr);
+	else if (ober_oid_cmp(&OID(MIB_sysORUpTime), oid) == -2) {
+		if ((value = ober_add_integer(NULL, cap->aa_uptime)) != NULL)
+			ober_set_header(value,
+			    BER_CLASS_APPLICATION, SNMP_T_TIMETICKS);
+	}
+	if (value == NULL)
+		log_warn("ober_add_*");
+	return value;
+
+ notfound:
+	if ((value = appl_exception(APPL_EXC_NOSUCHINSTANCE)) == NULL)
+		log_warn("appl_exception");
+	return value;
+}
+
+struct ber_element *
+appl_sysortable_getnext(int8_t include, struct ber_oid *oid)
+{
+	struct appl_context *ctx;
+	struct appl_agentcap *cap;
+	struct ber_element *value = NULL;
+
+	if (oid->bo_n < SYSORIDX_POS + 1) {
+		include = 1;
+		oid->bo_id[SYSORIDX_POS] = 0;
+	} else if (oid->bo_n < SYSORIDX_POS + 1)
+		include = 0;
+
+	ctx = appl_context(NULL, 0);
+	TAILQ_FOREACH(cap, &(ctx->ac_agentcaps), aa_entry) {
+		if (cap->aa_index > oid->bo_id[SYSORIDX_POS])
+			break;
+		if (cap->aa_index == oid->bo_id[SYSORIDX_POS] && include)
+			break;
+	}
+	if (cap == NULL) {
+		value = appl_exception(APPL_EXC_NOSUCHINSTANCE);
+		goto done;
+	}
+
+	oid->bo_id[SYSORIDX_POS] = cap->aa_index;
+	oid->bo_n = SYSORIDX_POS + 1;
+
+	if (ober_oid_cmp(&OID(MIB_sysORID), oid) == -2)
+		value = ober_add_oid(NULL, &(cap->aa_oid));
+	else if (ober_oid_cmp(&OID(MIB_sysORDescr), oid) == -2)
+		value = ober_add_string(NULL, cap->aa_descr);
+	else if (ober_oid_cmp(&OID(MIB_sysORUpTime), oid) == -2) {
+		if ((value = ober_add_integer(NULL, cap->aa_uptime)) != NULL)
+			ober_set_header(value,
+			    BER_CLASS_APPLICATION, SNMP_T_TIMETICKS);
+	}
+ done:
+	if (value == NULL)
+		log_warn("ober_add_*");
+	return value;
+}
+
+struct ber_element *
+appl_targetmib(struct ber_oid *oid)
+{
+	struct ber_element *value = NULL;
+
+	if (ober_oid_cmp(oid, &OID(MIB_snmpUnavailableContexts, 0)) == 0)
+		value = ober_add_integer(NULL,
+		    snmp_target_mib.snmp_unavailablecontexts);
+	else if (ober_oid_cmp(oid, &OID(MIB_snmpUnknownContexts, 0)) == 0)
+		value = ober_add_integer(NULL,
+		    snmp_target_mib.snmp_unknowncontexts);
+
+	if (value != NULL)
+		ober_set_header(value, BER_CLASS_APPLICATION, SNMP_T_COUNTER32);
+	return value;
 }
 
 enum appl_error
@@ -532,10 +768,15 @@ void
 appl_close(struct appl_backend *backend)
 {
 	struct appl_context *ctx;
+	struct appl_agentcap *cap, *tcap;
 	struct appl_region *region, *tregion, *nregion;
 	struct appl_request_downstream *request, *trequest;
 
 	TAILQ_FOREACH(ctx, &contexts, ac_entries) {
+		TAILQ_FOREACH_SAFE(cap, &(ctx->ac_agentcaps), aa_entry, tcap) {
+			if (cap->aa_backend == backend)
+				appl_agentcap_free(cap);
+		}
 		RB_FOREACH_SAFE(region, appl_regions,
 		    &(ctx->ac_regions), tregion) {
 			while (region != NULL) {
@@ -642,6 +883,7 @@ appl_processpdu(struct snmp_message *statereference, const char *ctxname,
 	ureq->aru_ctx = ctx;
 	ureq->aru_statereference = statereference;
 	ureq->aru_transactionid = transactionid++;
+	ureq->aru_requesttype = pdu->be_type;
 	ureq->aru_requestid = requestid;
 	ureq->aru_error = APPL_ERROR_NOERROR;
 	ureq->aru_index = 0;
@@ -710,6 +952,7 @@ appl_request_upstream_free(struct appl_request_upstream *ureq)
 	if (ureq == NULL)
 		return;
 
+	ureq->aru_locked = 1;
 	for (i = 0; i < ureq->aru_varbindlen && ureq->aru_vblist != NULL; i++) {
 		vb = &(ureq->aru_vblist[i]);
 		ober_free_elements(vb->avi_varbind.av_value);
@@ -726,7 +969,6 @@ void
 appl_request_downstream_free(struct appl_request_downstream *dreq)
 {
 	struct appl_varbind_internal *vb;
-	int retry = 0;
 
 	if (dreq == NULL)
 		return;
@@ -736,14 +978,11 @@ appl_request_downstream_free(struct appl_request_downstream *dreq)
 
 	for (vb = dreq->ard_vblist; vb != NULL; vb = vb->avi_next) {
 		vb->avi_request_downstream = NULL;
-		if (vb->avi_state == APPL_VBSTATE_PENDING) {
+		if (vb->avi_state == APPL_VBSTATE_PENDING)
 			vb->avi_state = APPL_VBSTATE_NEW;
-			retry = 1;
-		}
 	}
 
-	if (retry)
-		appl_request_upstream_resolve(dreq->ard_request);
+	appl_request_upstream_resolve(dreq->ard_request);
 	free(dreq);
 }
 
@@ -763,7 +1002,7 @@ appl_request_upstream_resolve(struct appl_request_upstream *ureq)
 		return;
 	ureq->aru_locked = 1;
 
-	if (ureq->aru_pdu->be_type == SNMP_C_SETREQ) {
+	if (ureq->aru_requesttype == SNMP_C_SETREQ) {
 		ureq->aru_error = APPL_ERROR_NOTWRITABLE;
 		ureq->aru_index = 1;
 		appl_request_upstream_reply(ureq);
@@ -824,7 +1063,7 @@ appl_request_upstream_resolve(struct appl_request_upstream *ureq)
 			dreq->ard_vblist = vb;
 			dreq->ard_backend = vb->avi_region->ar_backend;
 			dreq->ard_retries = dreq->ard_backend->ab_retries;
-			dreq->ard_requesttype = ureq->aru_pdu->be_type;
+			dreq->ard_requesttype = ureq->aru_requesttype;
 			/*
 			 * We don't yet fully handle bulkrequest responses.
 			 * It's completely valid to map onto getrequest.
@@ -987,7 +1226,7 @@ appl_request_upstream_reply(struct appl_request_upstream *ureq)
 			vb->avi_varbind.av_value = ober_add_null(NULL);;
 		}
 	/* RFC 3416 section 4.2.3: Strip excessive EOMV */
-	} else if (ureq->aru_pdu->be_type == SNMP_C_GETBULKREQ) {
+	} else if (ureq->aru_requesttype == SNMP_C_GETBULKREQ) {
 		repvarbinds = (ureq->aru_varbindlen - ureq->aru_nonrepeaters) /
 		    ureq->aru_maxrepetitions;
 		for (i = ureq->aru_nonrepeaters;
@@ -1049,7 +1288,6 @@ appl_response(struct appl_backend *backend, int32_t requestid,
 	struct appl_request_upstream *ureq = NULL;
 	const char *errstr;
 	char oidbuf[1024];
-	enum snmp_pdutype pdutype;
 	struct appl_varbind *vb;
 	struct appl_varbind_internal *origvb = NULL;
 	int invalid = 0;
@@ -1066,9 +1304,8 @@ appl_response(struct appl_backend *backend, int32_t requestid,
 		/* Continue to verify validity */
 	} else {
 		ureq = dreq->ard_request;
-		pdutype = ureq->aru_pdu->be_type;
-		next = pdutype == SNMP_C_GETNEXTREQ ||
-		    pdutype == SNMP_C_GETBULKREQ;
+		next = ureq->aru_requesttype == SNMP_C_GETNEXTREQ ||
+		    ureq->aru_requesttype == SNMP_C_GETBULKREQ;
 		origvb = dreq->ard_vblist;
 		if (!appl_error_valid(error, dreq->ard_requesttype)) {
 			log_warnx("%s: %"PRIu32" Invalid error",
@@ -1103,7 +1340,7 @@ appl_response(struct appl_backend *backend, int32_t requestid,
 			 */
 			eomv |= !backend->ab_range && next &&
 			    ober_oid_cmp(&(vb->av_oid),
-			    &(origvb->avi_varbind.av_oid_end)) > 0;
+			    &(origvb->avi_varbind.av_oid_end)) >= 0;
 			/* RFC 3584 section 4.2.2.1 */
 			if (ureq->aru_pduversion == SNMP_V1 &&
 			    vb->av_value != NULL &&
@@ -1172,9 +1409,6 @@ appl_response(struct appl_backend *backend, int32_t requestid,
 		    backend->ab_name);
 		backend->ab_fn->ab_close(backend, APPL_CLOSE_REASONPARSEERROR);
 	}
-
-	if (ureq != NULL)
-		appl_request_upstream_resolve(ureq);
 }
 
 int
@@ -1289,7 +1523,7 @@ appl_varbind_valid(struct appl_varbind *varbind,
 				}
 			}
 			if (range && ober_oid_cmp(&(varbind->av_oid),
-			    &(request->avi_varbind.av_oid_end)) > 0) {
+			    &(request->avi_varbind.av_oid_end)) >= 0) {
 				*errstr = "end oid not honoured";
 				return 0;
 			}
@@ -1343,8 +1577,8 @@ appl_varbind_backend(struct appl_varbind_internal *ivb)
 	struct ber_oid oid, nextsibling;
 	int next, cmp;
 
-	next = ureq->aru_pdu->be_type == SNMP_C_GETNEXTREQ ||
-	    ureq->aru_pdu->be_type == SNMP_C_GETBULKREQ;
+	next = ureq->aru_requesttype == SNMP_C_GETNEXTREQ ||
+	    ureq->aru_requesttype == SNMP_C_GETBULKREQ;
 
 	region = appl_region_find(ureq->aru_ctx, &(vb->av_oid));
 	if (region == NULL) {
@@ -1374,19 +1608,17 @@ appl_varbind_backend(struct appl_varbind_internal *ivb)
 					return -1;
 				return 0;
 			}
-			if ((region = appl_region_next(ureq->aru_ctx,
-			    &(vb->av_oid), region)) == NULL)
-				goto eomv;
 			vb->av_oid = region->ar_oid;
+			ober_oid_nextsibling(&(vb->av_oid));
 			vb->av_include = 1;
+			return appl_varbind_backend(ivb);
 		}
 	} else if (cmp == 0) {
 		if (region->ar_instance && next && !vb->av_include) {
-			if ((region = appl_region_next(ureq->aru_ctx,
-			    &(vb->av_oid), region)) == NULL)
-				goto eomv;
 			vb->av_oid = region->ar_oid;
+			ober_oid_nextsibling(&(vb->av_oid));
 			vb->av_include = 1;
+			return appl_varbind_backend(ivb);
 		}
 	}
 	ivb->avi_region = region;

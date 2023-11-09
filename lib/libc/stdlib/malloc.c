@@ -1,4 +1,4 @@
-/*	$OpenBSD: malloc.c,v 1.291 2023/10/22 12:19:26 otto Exp $	*/
+/*	$OpenBSD: malloc.c,v 1.293 2023/11/04 11:02:35 otto Exp $	*/
 /*
  * Copyright (c) 2008, 2010, 2011, 2016, 2023 Otto Moerbeek <otto@drijf.net>
  * Copyright (c) 2012 Matthew Dempsky <matthew@openbsd.org>
@@ -169,16 +169,12 @@ struct dir_info {
 	void *caller;
 	size_t inserts;
 	size_t insert_collisions;
-	size_t finds;
-	size_t find_collisions;
 	size_t deletes;
 	size_t delete_moves;
 	size_t cheap_realloc_tries;
 	size_t cheap_reallocs;
 	size_t malloc_used;		/* bytes allocated */
 	size_t malloc_guarded;		/* bytes used for guards */
-	size_t pool_searches;		/* searches for pool */
-	size_t other_pool;		/* searches in other pool */
 #define STATS_ADD(x,y)	((x) += (y))
 #define STATS_SUB(x,y)	((x) -= (y))
 #define STATS_INC(x)	((x)++)
@@ -209,15 +205,18 @@ static void unmap(struct dir_info *d, void *p, size_t sz, size_t clear);
 struct chunk_info {
 	LIST_ENTRY(chunk_info) entries;
 	void *page;			/* pointer to the page */
+	/* number of shorts should add up to 8, check alloc_chunk_info() */
 	u_short canary;
 	u_short bucket;
 	u_short free;			/* how many free chunks */
 	u_short total;			/* how many chunks */
 	u_short offset;			/* requested size table offset */
-	u_short bits[1];		/* which chunks are free */
+#define CHUNK_INFO_TAIL			3
+	u_short bits[CHUNK_INFO_TAIL];	/* which chunks are free */
 };
 
-#define CHUNK_FREE(i, n)	((i)->bits[(n) / MALLOC_BITS] & (1U << ((n) % MALLOC_BITS)))
+#define CHUNK_FREE(i, n) ((i)->bits[(n) / MALLOC_BITS] & \
+    (1U << ((n) % MALLOC_BITS)))
 
 struct malloc_readonly {
 					/* Main bookkeeping information */
@@ -234,7 +233,7 @@ struct malloc_readonly {
 	u_int	junk_loc;		/* variation in location of junk */
 	size_t	malloc_guard;		/* use guard pages after allocations? */
 #ifdef MALLOC_STATS
-	int	malloc_stats;		/* save callers, dump leak report at end */
+	int	malloc_stats;		/* save callers, dump leak report */
 	int	malloc_verbose;		/* dump verbose statistics at end */
 #define	DO_STATS	mopts.malloc_stats
 #else
@@ -544,7 +543,7 @@ omalloc_init(void)
 static void
 omalloc_poolinit(struct dir_info *d, int mmap_flag)
 {
-	int i, j;
+	u_int i, j;
 
 	d->r = NULL;
 	d->rbytesused = sizeof(d->rbytes);
@@ -599,7 +598,8 @@ omalloc_grow(struct dir_info *d)
 	}
 
 	if (d->regions_total > 0) {
-		oldpsz = PAGEROUND(d->regions_total * sizeof(struct region_info));
+		oldpsz = PAGEROUND(d->regions_total *
+		    sizeof(struct region_info));
 		/* clear to avoid meta info ending up in the cache */
 		unmap(d, d->r, oldpsz, oldpsz);
 	}
@@ -656,12 +656,10 @@ find(struct dir_info *d, void *p)
 	index = hash(p) & mask;
 	r = d->r[index].p;
 	q = MASK_POINTER(r);
-	STATS_INC(d->finds);
 	while (q != p && r != NULL) {
 		index = (index - 1) & mask;
 		r = d->r[index].p;
 		q = MASK_POINTER(r);
-		STATS_INC(d->find_collisions);
 	}
 	return (q == p && r != NULL) ? &d->r[index] : NULL;
 }
@@ -949,7 +947,7 @@ init_chunk_info(struct dir_info *d, struct chunk_info *p, u_int bucket)
 
 	p->bucket = bucket;
 	p->total = p->free = MALLOC_PAGESIZE / B2ALLOC(bucket);
-	p->offset = bucket == 0 ? 0xdead : howmany(p->total, MALLOC_BITS);
+	p->offset = howmany(p->total, MALLOC_BITS);
 	p->canary = (u_short)d->canary1;
 
 	/* set all valid bits in the bitmap */
@@ -971,8 +969,13 @@ alloc_chunk_info(struct dir_info *d, u_int bucket)
 		count = MALLOC_PAGESIZE / B2ALLOC(bucket);
 
 		size = howmany(count, MALLOC_BITS);
-		size = sizeof(struct chunk_info) + (size - 1) * sizeof(u_short);
-		if (mopts.chunk_canaries)
+		/* see declaration of struct chunk_info */
+		if (size <= CHUNK_INFO_TAIL)
+			size = 0;
+		else
+			size -= CHUNK_INFO_TAIL;
+		size = sizeof(struct chunk_info) + size * sizeof(u_short);
+		if (mopts.chunk_canaries && bucket > 0)
 			size += count * sizeof(u_short);
 		size = _ALIGN(size);
 		count = MALLOC_PAGESIZE / size;
@@ -994,7 +997,8 @@ alloc_chunk_info(struct dir_info *d, u_int bucket)
 
 		for (i = 0; i < count; i++, q += size) {
 			p = (struct chunk_info *)q;
-			LIST_INSERT_HEAD(&d->chunk_info_list[bucket], p, entries);
+			LIST_INSERT_HEAD(&d->chunk_info_list[bucket], p,
+			    entries);
 		}
 	}
 	p = LIST_FIRST(&d->chunk_info_list[bucket]);
@@ -1022,7 +1026,8 @@ omalloc_make_chunks(struct dir_info *d, u_int bucket, u_int listnum)
 		ff = map(d, MALLOC_PAGESIZE, 0);
 		if (ff == MAP_FAILED)
 			goto err;
-		memset(ff, 0, sizeof(void *) * MALLOC_PAGESIZE / B2ALLOC(bucket));
+		memset(ff, 0, sizeof(void *) * MALLOC_PAGESIZE /
+		    B2ALLOC(bucket));
 	}
 
 	/* memory protect the page allocated in the malloc(0) case */
@@ -1129,8 +1134,7 @@ fill_canary(char *ptr, size_t sz, size_t allocated)
 static void *
 malloc_bytes(struct dir_info *d, size_t size)
 {
-	u_int i, r, bucket, listnum;
-	size_t k;
+	u_int i, k, r, bucket, listnum;
 	u_short	*lp;
 	struct chunk_info *bp;
 	void *p;
@@ -1170,7 +1174,7 @@ malloc_bytes(struct dir_info *d, size_t size)
 	/* no bit halfway, go to next full short */
 	i /= MALLOC_BITS;
 	for (;;) {
-		if (++i >= howmany(bp->total, MALLOC_BITS))
+		if (++i >= bp->offset)
 			i = 0;
 		lp = &bp->bits[i];
 		if (*lp) {
@@ -1228,7 +1232,7 @@ validate_canary(struct dir_info *d, u_char *ptr, size_t sz, size_t allocated)
 	}
 }
 
-static uint32_t
+static inline uint32_t
 find_chunknum(struct dir_info *d, struct chunk_info *info, void *ptr, int check)
 {
 	uint32_t chunknum;
@@ -1405,14 +1409,14 @@ _malloc_init(int from_rthreads)
 		sz = mopts.malloc_mutexes * sizeof(*d) + 2 * MALLOC_PAGESIZE;
 		if ((p = MMAPNONE(sz, 0)) == MAP_FAILED)
 			wrterror(NULL, "malloc_init mmap1 failed");
-		if (mprotect(p + MALLOC_PAGESIZE, mopts.malloc_mutexes * sizeof(*d),
-		    PROT_READ | PROT_WRITE))
+		if (mprotect(p + MALLOC_PAGESIZE, mopts.malloc_mutexes *
+		    sizeof(*d), PROT_READ | PROT_WRITE))
 			wrterror(NULL, "malloc_init mprotect1 failed");
 		if (mimmutable(p, sz))
 			wrterror(NULL, "malloc_init mimmutable1 failed");
-		d_avail = (((mopts.malloc_mutexes * sizeof(*d) + MALLOC_PAGEMASK) &
-		    ~MALLOC_PAGEMASK) - (mopts.malloc_mutexes * sizeof(*d))) >>
-		    MALLOC_MINSHIFT;
+		d_avail = (((mopts.malloc_mutexes * sizeof(*d) +
+		    MALLOC_PAGEMASK) & ~MALLOC_PAGEMASK) -
+		    (mopts.malloc_mutexes * sizeof(*d))) >> MALLOC_MINSHIFT;
 		d = (struct dir_info *)(p + MALLOC_PAGESIZE +
 		    (arc4random_uniform(d_avail) << MALLOC_MINSHIFT));
 		STATS_ADD(d[1].malloc_used, sz);
@@ -1422,9 +1426,12 @@ _malloc_init(int from_rthreads)
 		if (((uintptr_t)&malloc_readonly & MALLOC_PAGEMASK) == 0) {
 			if (mprotect(&malloc_readonly, sizeof(malloc_readonly),
 			    PROT_READ))
-				wrterror(NULL, "malloc_init mprotect r/o failed");
-			if (mimmutable(&malloc_readonly, sizeof(malloc_readonly)))
-				wrterror(NULL, "malloc_init mimmutable r/o failed");
+				wrterror(NULL,
+				    "malloc_init mprotect r/o failed");
+			if (mimmutable(&malloc_readonly,
+			    sizeof(malloc_readonly)))
+				wrterror(NULL,
+				    "malloc_init mimmutable r/o failed");
 		}
 	}
 
@@ -1458,7 +1465,8 @@ _malloc_init(int from_rthreads)
 					wrterror(NULL,
 					    "malloc_init mmap2 failed");
 				if (mimmutable(p, sz))
-					wrterror(NULL, "malloc_init mimmutable2 failed");
+					wrterror(NULL,
+					    "malloc_init mimmutable2 failed");
 				for (j = 0; j < MAX_SMALLCACHEABLE_SIZE; j++) {
 					d->smallcache[j].pages = p;
 					p = (char *)p + d->smallcache[j].max *
@@ -1532,12 +1540,11 @@ findpool(void *p, struct dir_info *argpool, struct dir_info **foundpool,
 	struct dir_info *pool = argpool;
 	struct region_info *r = find(pool, p);
 
-	STATS_INC(pool->pool_searches);
 	if (r == NULL) {
 		u_int i, nmutexes;
 
-		nmutexes = mopts.malloc_pool[1]->malloc_mt ? mopts.malloc_mutexes : 2;
-		STATS_INC(pool->other_pool);
+		nmutexes = mopts.malloc_pool[1]->malloc_mt ?
+		    mopts.malloc_mutexes : 2;
 		for (i = 1; i < nmutexes; i++) {
 			u_int j = (argpool->mutex + i) & (nmutexes - 1);
 
@@ -1815,7 +1822,8 @@ orealloc(struct dir_info **argpool, void *p, size_t newsz)
 				size_t needed = rnewsz - roldsz;
 
 				STATS_INC(pool->cheap_realloc_tries);
-				q = MMAPA(hint, needed, MAP_FIXED | __MAP_NOREPLACE | pool->mmap_flag);
+				q = MMAPA(hint, needed, MAP_FIXED |
+				    __MAP_NOREPLACE | pool->mmap_flag);
 				if (q == hint) {
 					STATS_ADD(pool->malloc_used, needed);
 					if (pool->malloc_junk == 2)
@@ -2032,7 +2040,8 @@ orecallocarray(struct dir_info **argpool, void *p, size_t oldsize,
 			wrterror(pool, "recorded size %zu < %zu",
 			    sz - mopts.malloc_guard, oldsize);
 		if (oldsize < (sz - mopts.malloc_guard) / 2)
-			wrterror(pool, "recorded size %zu inconsistent with %zu",
+			wrterror(pool,
+			    "recorded size %zu inconsistent with %zu",
 			    sz - mopts.malloc_guard, oldsize);
 	}
 
@@ -2385,7 +2394,7 @@ ulog(const char *format, ...)
 	va_end(ap);
 	if (len < 0)
 		return;
-	if (len > KTR_USER_MAXLEN - filled)
+	if ((size_t)len > KTR_USER_MAXLEN - filled)
 		len = KTR_USER_MAXLEN - filled;
 	filled += len;
 	if (filled > 0) {
@@ -2518,7 +2527,7 @@ dump_chunk(struct leaktree* leaks, struct chunk_info *p, void **f,
 static void
 dump_free_chunk_info(struct dir_info *d, struct leaktree *leaks)
 {
-	int i, j, count;
+	u_int i, j, count;
 	struct chunk_info *p;
 
 	ulog("Free chunk structs:\n");
@@ -2581,13 +2590,10 @@ malloc_dump1(int poolno, struct dir_info *d, struct leaktree *leaks)
 		    d->mmap_flag);
 		ulog("Region slots free %zu/%zu\n",
 			d->regions_free, d->regions_total);
-		ulog("Finds %zu/%zu\n", d->finds, d->find_collisions);
 		ulog("Inserts %zu/%zu\n", d->inserts, d->insert_collisions);
 		ulog("Deletes %zu/%zu\n", d->deletes, d->delete_moves);
 		ulog("Cheap reallocs %zu/%zu\n",
 		    d->cheap_reallocs, d->cheap_realloc_tries);
-		ulog("Other pool searches %zu/%zu\n",
-		    d->other_pool, d->pool_searches);
 		ulog("In use %zu\n", d->malloc_used);
 		ulog("Guarded %zu\n", d->malloc_guarded);
 		dump_free_chunk_info(d, leaks);
@@ -2644,7 +2650,7 @@ malloc_dump0(int poolno, struct dir_info *pool, struct leaktree *leaks)
 void
 malloc_dump(void)
 {
-	int i;
+	u_int i;
 	int saved_errno = errno;
 
 	/* XXX leak when run multiple times */

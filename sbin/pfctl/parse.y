@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.713 2023/02/07 17:58:43 sashan Exp $	*/
+/*	$OpenBSD: parse.y,v 1.715 2023/11/02 20:47:31 sthen Exp $	*/
 
 /*
  * Copyright (c) 2001 Markus Friedl.  All rights reserved.
@@ -223,8 +223,8 @@ struct divertspec {
 };
 
 struct redirspec {
-	struct redirection      *rdr;
-	struct pool_opts         pool_opts;
+	struct redirection	*rdr;
+	struct pool_opts	 pool_opts;
 	int			 binat;
 	int			 af;
 };
@@ -763,7 +763,7 @@ string		: STRING string				{
 		| STRING
 		;
 
-varstring	: numberstring varstring 		{
+varstring	: numberstring varstring		{
 			if (asprintf(&$$, "%s %s", $1, $2) == -1)
 				err(1, "string: asprintf");
 			free($1);
@@ -880,7 +880,7 @@ anchorrule	: ANCHOR anchorname dir quick interface af proto fromto
 				if ($2 && strchr($2, '/') != NULL) {
 					free($2);
 					yyerror("anchor paths containing '/' "
-				    	    "cannot be used for inline anchors.");
+					    "cannot be used for inline anchors.");
 					YYERROR;
 				}
 
@@ -2535,7 +2535,7 @@ xos		: STRING {
 		}
 		;
 
-os_list		: xos optnl 			{ $$ = $1; }
+os_list		: xos optnl			{ $$ = $1; }
 		| os_list comma xos optnl	{
 			$1->tail->next = $3;
 			$1->tail = $3;
@@ -2630,7 +2630,7 @@ xhost		: not host			{
 			$$->tail = $$;
 		}
 		;
-		
+
 optweight	: WEIGHT NUMBER			{
 			if ($2 < 1 || $2 > USHRT_MAX) {
 				yyerror("weight out of range");
@@ -3533,7 +3533,7 @@ portstar	: numberstring			{
 		}
 		;
 
-redirspec	: host optweight		{ 
+redirspec	: host optweight		{
 			if ($2 > 0) {
 				struct node_host	*n;
 				for (n = $1; n != NULL; n = n->next)
@@ -4523,7 +4523,7 @@ collapse_redirspec(struct pf_pool *rpool, struct pf_rule *r,
 	}
 	if (tbl) {
 		if ((pf->opts & PF_OPT_NOACTION) == 0 &&
-		     pf_opt_create_table(pf, tbl))
+		    pf_opt_create_table(pf, tbl))
 				return (1);
 
 		pf->tdirty = 1;
@@ -5187,7 +5187,7 @@ lgetc(int quotec)
 			c = igetc();
 		}
 	}
-	
+
 	return (c);
 }
 
@@ -5443,7 +5443,7 @@ pushfile(const char *name, int secret)
 			free(nfile);
 			return (NULL);
 		}
-	} else if ((nfile->stream = fopen(nfile->name, "r")) == NULL) {
+	} else if ((nfile->stream = pfctl_fopen(nfile->name, "r")) == NULL) {
 		warn("%s: %s", __func__, nfile->name);
 		free(nfile->name);
 		free(nfile);

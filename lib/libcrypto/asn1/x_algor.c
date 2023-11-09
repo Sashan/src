@@ -1,4 +1,4 @@
-/* $OpenBSD: x_algor.c,v 1.31 2023/10/11 13:22:11 tb Exp $ */
+/* $OpenBSD: x_algor.c,v 1.38 2023/11/01 20:41:12 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2000.
  */
@@ -149,26 +149,79 @@ X509_ALGOR_dup(X509_ALGOR *x)
 	return ASN1_item_dup(&X509_ALGOR_it, x);
 }
 
+static int
+X509_ALGOR_set0_obj(X509_ALGOR *alg, ASN1_OBJECT *aobj)
+{
+	ASN1_OBJECT_free(alg->algorithm);
+	alg->algorithm = aobj;
+
+	return 1;
+}
+
+static int
+X509_ALGOR_set_obj_by_nid(X509_ALGOR *alg, int nid)
+{
+	ASN1_OBJECT *aobj;
+
+	if ((aobj = OBJ_nid2obj(nid)) == NULL)
+		return 0;
+	if (!X509_ALGOR_set0_obj(alg, aobj))
+		return 0;
+
+	return 1;
+}
+
+static int
+X509_ALGOR_set0_parameter(X509_ALGOR *alg, int parameter_type,
+    void *parameter_value)
+{
+	if (parameter_type == V_ASN1_UNDEF) {
+		ASN1_TYPE_free(alg->parameter);
+		alg->parameter = NULL;
+
+		return 1;
+	}
+
+	if (alg->parameter == NULL)
+		alg->parameter = ASN1_TYPE_new();
+	if (alg->parameter == NULL)
+		return 0;
+
+	if (parameter_type != 0)
+		ASN1_TYPE_set(alg->parameter, parameter_type, parameter_value);
+
+	return 1;
+}
+
 int
-X509_ALGOR_set0(X509_ALGOR *alg, ASN1_OBJECT *aobj, int ptype, void *pval)
+X509_ALGOR_set0_by_nid(X509_ALGOR *alg, int nid, int parameter_type,
+    void *parameter_value)
 {
 	if (alg == NULL)
 		return 0;
 
-	if (ptype == V_ASN1_UNDEF) {
-		ASN1_TYPE_free(alg->parameter);
-		alg->parameter = NULL;
-	} else {
-		if (alg->parameter == NULL)
-			alg->parameter = ASN1_TYPE_new();
-		if (alg->parameter == NULL)
-			return 0;
-		if (ptype != 0)
-			ASN1_TYPE_set(alg->parameter, ptype, pval);
-	}
+	if (!X509_ALGOR_set_obj_by_nid(alg, nid))
+		return 0;
 
-	ASN1_OBJECT_free(alg->algorithm);
-	alg->algorithm = aobj;
+	if (!X509_ALGOR_set0_parameter(alg, parameter_type, parameter_value))
+		return 0;
+
+	return 1;
+}
+
+int
+X509_ALGOR_set0(X509_ALGOR *alg, ASN1_OBJECT *aobj, int parameter_type,
+    void *parameter_value)
+{
+	if (alg == NULL)
+		return 0;
+
+	/* Set parameter first to preserve public API behavior on failure. */
+	if (!X509_ALGOR_set0_parameter(alg, parameter_type, parameter_value))
+		return 0;
+
+	if (!X509_ALGOR_set0_obj(alg, aobj))
+		return 0;
 
 	return 1;
 }
@@ -203,16 +256,16 @@ X509_ALGOR_get0(const ASN1_OBJECT **out_aobj, int *out_type,
 int
 X509_ALGOR_set_evp_md(X509_ALGOR *alg, const EVP_MD *md)
 {
-	ASN1_OBJECT *aobj;
-	int param_type = V_ASN1_NULL;
+	int parameter_type = V_ASN1_NULL;
+	int nid = EVP_MD_type(md);
 
 	if ((EVP_MD_flags(md) & EVP_MD_FLAG_DIGALGID_ABSENT) != 0)
-		param_type = V_ASN1_UNDEF;
+		parameter_type = V_ASN1_UNDEF;
 
-	if ((aobj = OBJ_nid2obj(EVP_MD_type(md))) == NULL)
+	if (!X509_ALGOR_set0_by_nid(alg, nid, parameter_type, NULL))
 		return 0;
 
-	return X509_ALGOR_set0(alg, aobj, param_type, NULL);
+	return 1;
 }
 
 void

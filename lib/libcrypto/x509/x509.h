@@ -1,4 +1,4 @@
-/* $OpenBSD: x509.h,v 1.101 2023/07/28 15:50:33 tb Exp $ */
+/* $OpenBSD: x509.h,v 1.103 2023/11/02 20:25:48 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -527,7 +527,9 @@ X509_ALGOR *X509_ALGOR_dup(X509_ALGOR *xn);
 int X509_ALGOR_set0(X509_ALGOR *alg, ASN1_OBJECT *aobj, int ptype, void *pval);
 void X509_ALGOR_get0(const ASN1_OBJECT **paobj, int *pptype, const void **ppval,
     const X509_ALGOR *algor);
+#ifndef LIBRESSL_INTERNAL
 void X509_ALGOR_set_md(X509_ALGOR *alg, const EVP_MD *md);
+#endif
 int X509_ALGOR_cmp(const X509_ALGOR *a, const X509_ALGOR *b);
 
 X509_NAME *X509_NAME_dup(X509_NAME *xn);
@@ -1081,13 +1083,10 @@ const STACK_OF(X509_ATTRIBUTE) *PKCS8_pkey_get0_attrs(const PKCS8_PRIV_KEY_INFO 
 int PKCS8_pkey_add1_attr_by_NID(PKCS8_PRIV_KEY_INFO *p8, int nid, int type,
     const unsigned char *bytes, int len);
 
-int X509_PUBKEY_set0_param(X509_PUBKEY *pub, ASN1_OBJECT *aobj,
-					int ptype, void *pval,
-					unsigned char *penc, int penclen);
-int X509_PUBKEY_get0_param(ASN1_OBJECT **ppkalg,
-		const unsigned char **pk, int *ppklen,
-		X509_ALGOR **pa,
-		X509_PUBKEY *pub);
+int X509_PUBKEY_set0_param(X509_PUBKEY *pub, ASN1_OBJECT *aobj, int ptype,
+    void *pval, unsigned char *penc, int penclen);
+int X509_PUBKEY_get0_param(ASN1_OBJECT **ppkalg, const unsigned char **pk,
+    int *ppklen, X509_ALGOR **pa, X509_PUBKEY *pub);
 
 int X509_check_trust(X509 *x, int id, int flags);
 int X509_TRUST_get_count(void);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: application.h,v 1.6 2023/10/24 13:28:11 martijn Exp $	*/
+/*	$OpenBSD: application.h,v 1.10 2023/11/08 19:46:28 martijn Exp $	*/
 
 /*
  * Copyright (c) 2021 Martijn van Duren <martijn@openbsd.org>
@@ -123,6 +123,14 @@ void appl(void);
 void appl_init(void);
 void appl_shutdown(void);
 struct appl_context *appl_context(const char *, int);
+enum appl_error appl_addagentcaps(const char *, struct ber_oid *, const char *,
+    struct appl_backend *);
+enum appl_error appl_removeagentcaps(const char *, struct ber_oid *,
+    struct appl_backend *);
+struct ber_element *appl_sysorlastchange(struct ber_oid *);
+struct ber_element *appl_sysortable(struct ber_oid *);
+struct ber_element *appl_sysortable_getnext(int8_t, struct ber_oid *);
+struct ber_element *appl_targetmib(struct ber_oid *);
 enum appl_error appl_register(const char *, uint32_t, uint8_t, struct ber_oid *,
     int, int, uint8_t, uint32_t, struct appl_backend *);
 enum appl_error appl_unregister(const char *, uint8_t, struct ber_oid *,
@@ -147,3 +155,7 @@ void	 appl_agentx_backend(int);
 /* application_blocklist.c */
 void	 appl_blocklist_init(void);
 void	 appl_blocklist_shutdown(void);
+
+/* application_internal.c */
+void	 appl_internal_init(void);
+void	 appl_internal_shutdown(void);

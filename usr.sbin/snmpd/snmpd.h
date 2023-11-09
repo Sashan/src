@@ -1,4 +1,4 @@
-/*	$OpenBSD: snmpd.h,v 1.106 2022/10/06 14:41:08 martijn Exp $	*/
+/*	$OpenBSD: snmpd.h,v 1.108 2023/11/04 09:38:47 martijn Exp $	*/
 
 /*
  * Copyright (c) 2007, 2008, 2012 Reyk Floeter <reyk@openbsd.org>
@@ -215,7 +215,8 @@ struct oid {
 	(((_oid)->o_flags & OID_IFSET) &&				\
 	((_oid)->o_data == NULL) && ((_oid)->o_val == 0))
 
-#define OID(...)		{ { __VA_ARGS__ } }
+#define OID(...)		(struct ber_oid){ { __VA_ARGS__ },	\
+    (sizeof((uint32_t []) { __VA_ARGS__ }) / sizeof(uint32_t)) }
 #define MIBDECL(...)		{ { MIB_##__VA_ARGS__ } }, #__VA_ARGS__
 #define MIB(...)		{ { MIB_##__VA_ARGS__ } }, NULL
 #define MIBEND			{ { 0 } }, NULL
@@ -427,6 +428,15 @@ struct usmuser {
 	SLIST_ENTRY(usmuser)	 uu_next;
 };
 
+struct snmp_system {
+	char			 sys_descr[256];
+	struct ber_oid		 sys_oid;
+	char			 sys_contact[256];
+	char			 sys_name[256];
+	char			 sys_location[256];
+	int8_t			 sys_services;
+};
+
 struct snmpd {
 	u_int8_t		 sc_flags;
 #define SNMPD_F_VERBOSE		 0x01
@@ -447,6 +457,7 @@ struct snmpd {
 	size_t			 sc_engineid_len;
 
 	struct snmp_stats	 sc_stats;
+	struct snmp_system	 sc_system;
 
 	struct trap_addresslist	 sc_trapreceivers;
 
