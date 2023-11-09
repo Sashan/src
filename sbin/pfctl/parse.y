@@ -4021,7 +4021,7 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 		/*
 		 * pf->alast is NULL when we deal with main anchor (ruleset
 		 * root). In this case we don't need to do extra stuff
-		 * w.r.t. to tables and anchors because root anchor
+		 * w.r.t. tables and anchors because root anchor
 		 * is always there.
 		 */
 		if (pf->alast != NULL) {
