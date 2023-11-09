@@ -1272,6 +1272,191 @@ pf_detach_rule(struct pf_rule *r)
 	}
 }
 
+void
+pf_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
+{
+	void **tables = (void **)arg;
+	struct pfr_ktable *current = tables[0];
+	struct pfr_ktable *new = tables[1];
+	struct pf_rule *r;
+
+	TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
+		if (r->src.addr.type == PF_ADDR_TABLE &&
+		    r->src.addr.p.tbl == current) {
+			current->pfrkt_refcnt--;
+			KASSERT(current->pfrkt_refcnt >= 0);
+			if (current->pfrkt_refcnt == 0)
+				current->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+
+			r->src.addr.p.tbl = new;
+			new->pfrkt_refcnt++;
+			new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+
+			log(LOG_DEBUG, "%s %u@%s src %s@%s\n",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor);
+		} else if (r->src.addr.type == PF_ADDR_TABLE &&
+		    r->src.addr.p.tbl != NULL) {
+			log(LOG_DEBUG, "%s %u@%s src %s@%s != %s@%s\n",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor,
+			    r->src.addr.p.tbl->pfrkt_name,
+			    r->src.addr.p.tbl->pfrkt_anchor);
+		}
+
+		if (r->dst.addr.type == PF_ADDR_TABLE &&
+		    r->dst.addr.p.tbl == current) {
+			current->pfrkt_refcnt--;
+			KASSERT(current->pfrkt_refcnt >= 0);
+			if (current->pfrkt_refcnt == 0)
+				current->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+
+			r->dst.addr.p.tbl = new;
+			new->pfrkt_refcnt++;
+			new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+
+			log(LOG_DEBUG, "%s %u@%s dst %s@%s\n",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor);
+		} else if (r->dst.addr.type == PF_ADDR_TABLE &&
+		    r->dst.addr.p.tbl != NULL) {
+			log(LOG_DEBUG, "%s %u@%s dst %s@%s != %s@%s\n",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor,
+			    r->dst.addr.p.tbl->pfrkt_name,
+			    r->dst.addr.p.tbl->pfrkt_anchor);
+		}
+
+		if (r->rdr.addr.type == PF_ADDR_TABLE &&
+		    r->rdr.addr.p.tbl == current) {
+			current->pfrkt_refcnt--;
+			KASSERT(current->pfrkt_refcnt >= 0);
+			if (current->pfrkt_refcnt == 0)
+				current->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+
+			r->rdr.addr.p.tbl = new;
+			new->pfrkt_refcnt++;
+			new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+
+			log(LOG_DEBUG, "%s %u@%s rdr %s@%s\n",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor);
+		} else if (r->rdr.addr.type == PF_ADDR_TABLE &&
+		    r->rdr.addr.p.tbl != NULL) {
+			log(LOG_DEBUG, "%s %u@%s rdr %s@%s <-> %s@%s\n",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor,
+			    r->rdr.addr.p.tbl->pfrkt_name,
+			    r->rdr.addr.p.tbl->pfrkt_anchor);
+		}
+
+		if (r->nat.addr.type == PF_ADDR_TABLE &&
+		    r->nat.addr.p.tbl == current) {
+			current->pfrkt_refcnt--;
+			KASSERT(current->pfrkt_refcnt >= 0);
+			if (current->pfrkt_refcnt == 0)
+				current->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+
+			r->nat.addr.p.tbl = new;
+			new->pfrkt_refcnt++;
+			new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+
+			log(LOG_DEBUG, "%s %u@%s nat %s@%s\n",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor);
+		} else if (r->nat.addr.type == PF_ADDR_TABLE &&
+		    r->nat.addr.p.tbl != NULL) {
+			log(LOG_DEBUG, "%s %u@%s nat %s@%s <-> %s@%s\n",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor,
+			    r->nat.addr.p.tbl->pfrkt_name,
+			    r->nat.addr.p.tbl->pfrkt_anchor);
+		}
+
+		if (r->route.addr.type == PF_ADDR_TABLE &&
+		    r->route.addr.p.tbl == current) {
+			current->pfrkt_refcnt--;
+			KASSERT(current->pfrkt_refcnt >= 0);
+			if (current->pfrkt_refcnt == 0)
+				current->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+
+			r->route.addr.p.tbl = new;
+			new->pfrkt_refcnt++;
+			new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+
+			log(LOG_DEBUG, "%s %u@%s route  %s@%s\n",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor);
+		} else if (r->route.addr.type == PF_ADDR_TABLE &&
+		    r->route.addr.p.tbl != NULL) {
+			log(LOG_DEBUG, "%s %u@%s route %s@%s <-> %s@%s\n",
+			    __func__,
+			    r->nr, a->path,
+			    new->pfrkt_name, new->pfrkt_anchor,
+			    r->route.addr.p.tbl->pfrkt_name,
+			    r->route.addr.p.tbl->pfrkt_anchor);
+		}
+	}
+}
+
+void
+pf_swap_tables(struct pf_trans *t, struct pf_anchor *ta,
+    struct pf_anchor *a)
+{
+	struct pfr_ktable *kt, *ktw, *exists;
+	struct pfr_kentryworkq workq;
+	void *tables[2];
+
+	/*
+	 * We flush all existing tables and mark them as inactive.
+	 */
+	SLIST_INIT(&workq);
+	RB_FOREACH(kt, pfr_ktablehead, &a->ktables) {
+		log(LOG_DEBUG, "%s flushing %s@%s[%s]\n", __func__,
+		    kt->pfrkt_name, kt->pfrkt_anchor, PF_ANCHOR_PATH(a));
+		pfr_enqueue_addrs(kt, &workq, NULL, 0);
+		pfr_remove_kentries(kt, &workq);
+		kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
+		kt->pfrkt_flags |= PFR_TFLAG_INACTIVE;
+		/* update version, because we changed flags */
+		kt->pfrkt_version++;
+	}
+
+	/*
+	 * move tables from transaction anchor to anchor
+	 */
+	RB_FOREACH_SAFE(kt, pfr_ktablehead, &ta->ktables, ktw) {
+		ta->tables--;
+		RB_REMOVE(pfr_ktablehead, &ta->ktables, kt);
+		log(LOG_DEBUG, "%s moving %s\n", __func__, kt->pfrkt_name);
+		exists = RB_INSERT(pfr_ktablehead, &a->ktables, kt);
+		if (exists != NULL) {
+			log(LOG_DEBUG, "%s %s exists already\n", __func__, kt->pfrkt_name);
+			RB_REMOVE(pfr_ktablehead, &a->ktables, exists);
+			RB_INSERT(pfr_ktablehead, &a->ktables, kt);
+			SLIST_INSERT_HEAD(&t->pftina_garbage, exists,
+			    pfrkt_workq);
+
+			if (exists->pfrkt_refcnt != 0) {
+				tables[0] = exists;
+				tables[1] = kt;
+				pfr_walk_anchor_subtree(a, (void *)tables,
+				    pf_update_tablerefs_anchor);
+			}
+		} else
+			a->tables++;
+	}
+}
+
 /*
  * Function swaps rules and tables between global anchor 'a' and
  * transaction anchor 'ta'.
@@ -1283,8 +1468,8 @@ pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
 	struct pf_ruleset tmp_rs;
 	struct pf_ruleset *trs, *grs;
 	struct pf_rule *r;
-	struct pfr_ktablehead tmp_ktables;
-	u_int32_t tables;
+
+	log(LOG_DEBUG, "%s, swapping %s\n", __func__, PF_ANCHOR_PATH(a));
 
 	trs = &ta->ruleset;
 	grs = &a->ruleset;
@@ -1293,16 +1478,6 @@ pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
 	pf_init_ruleset(&tmp_rs);
 	tmp_rs.rules.rcount = trs->rules.rcount;
 	TAILQ_CONCAT(tmp_rs.rules.ptr, trs->rules.ptr, entries);
-
-	/*
-	 * swap tables between global and transaction anchor.
-	 */
-	tmp_ktables = ta->ktables;
-	tables = ta->tables;
-	ta->ktables = a->ktables;
-	ta->tables = a->tables;
-	a->ktables = tmp_ktables;
-	a->tables = tables;
 
 	/*
 	 * We move rules from global anchor to transaction anchor, we also must
@@ -1316,11 +1491,8 @@ pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
 	 */
 	TAILQ_FOREACH(r, trs->rules.ptr, entries)
 		pf_detach_rule(r);
-	/*
-	 * Drop references to tables we are going to remove by transaction.
-	 * Tables to remove are kept in 'ta' anchor.
-	 */
-	pfr_drop_table_refs(a, ta);
+
+	pf_swap_tables(t, ta, a);
 
 	grs->rules.rcount = tmp_rs.rules.rcount;
 	TAILQ_CONCAT(grs->rules.ptr, tmp_rs.rules.ptr, entries);
@@ -1368,47 +1540,7 @@ pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
 		}
 	}
 
-	pfr_update_table_refs(a);
-
 	grs->rules.version++;
-}
-
-void
-pf_drop_unused_tables(struct pf_trans *t)
-{
-	struct pf_anchor	*ta;
-	struct pfr_ktable	*tkt, *tktw;
-
-	/*
-	 * clean up non-persistent tables which are not used
-	 * (referred by rules).
-	 */
-	RB_FOREACH_SAFE(tkt, pfr_ktablehead, &t->pftina_rc.main_anchor.ktables,
-	    tktw) {
-		if ((tkt->pfrkt_refcnt == 0) &&
-		    (tkt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
-			RB_REMOVE(pfr_ktablehead,
-			    &t->pftina_rc.main_anchor.ktables, tkt);
-			t->pftina_rc.main_anchor.tables--;
-			SLIST_INSERT_HEAD(&t->pftina_garbage, tkt, pfrkt_workq);
-		}
-	}
-	RB_FOREACH(ta, pf_anchor_global, &t->pftina_rc.anchors) {
-		RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, tktw) {
-			log(LOG_DEBUG, "%s %s@%s [%d] ", __func__,
-			    tkt->pfrkt_name, ta->path,
-			    tkt->pfrkt_refcnt);
-			if (tkt->pfrkt_refcnt == 0 &&
-			    (tkt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0) {
-				log(LOG_DEBUG, "removed");
-				RB_REMOVE(pfr_ktablehead, &ta->ktables, tkt);
-				ta->tables--;
-				SLIST_INSERT_HEAD(&t->pftina_garbage, tkt,
-				    pfrkt_workq);
-			}
-			log(LOG_DEBUG, "\n");
-		}
-	}
 }
 
 int
@@ -3389,7 +3521,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		if (pf_trans_in_conflict(t, "DIOCXCOMMIT"))
 			error = EBUSY;
 		else {
-			pf_drop_unused_tables(t);
 			pf_commit_trans(t);
 			pfi_xcommit();
 		}
@@ -4256,6 +4387,7 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 			return;
 		}
 
+		log(LOG_DEBUG, "%s moving %s\n", __func__, PF_ANCHOR_PATH(a));
 		RB_REMOVE(pf_anchor_global, &t->pftina_rc.anchors, ta);
 		exists = RB_INSERT(pf_anchor_global, &pf_anchors, ta);
 		KASSERT(exists == NULL);
@@ -4272,6 +4404,7 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 	}
 }
 
+#if 0
 void
 pf_fix_main_children(void)
 {
@@ -4303,6 +4436,7 @@ pf_fix_main_children(void)
 			    r->anchor);
 	}
 }
+#endif
 
 void
 pf_ina_commit(struct pf_trans *t)
@@ -4492,6 +4626,8 @@ pf_cleanup_tina(struct pf_trans *t)
 	KASSERT(t->pft_type == PF_TRANS_INA);
 
 	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pftina_rc.anchors, tw) {
+		log(LOG_DEBUG, "%s removing %s\n",
+		    __func__, PF_ANCHOR_PATH(ta));
 		RB_REMOVE(pf_anchor_global, &t->pftina_rc.anchors, ta);
 		while ((r = TAILQ_FIRST(ta->ruleset.rules.ptr)) != NULL) {
 			pf_rm_rule(&ta->ruleset.rules.queue, r);

@@ -529,8 +529,6 @@ extern int		 pfr_route_kentry(struct pfr_ktable *,
 extern struct pfr_kentry
 			*pfr_create_kentry(struct pfr_addr *, int);
 extern void		 pfr_update_table_refs(struct pf_anchor *);
-extern void		 pfr_drop_table_refs(struct pf_anchor *,
-			    struct pf_anchor *);
 extern int		 pfr_copyin_tables(struct pf_trans *,
 			    struct pfr_table *, int);
 extern int		 pfr_copyin_addrs(struct pf_trans *, struct pfr_table *,
@@ -559,6 +557,13 @@ extern void		 pfr_addaddrs_commit(struct pf_trans *,
 extern void		 pfr_clraddrs_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
 extern void		 pfr_destroy_kentry(struct pfr_kentry *);
+extern void		 pfr_walk_anchor_subtree(struct pf_anchor *,
+			    struct pfr_ktable *,
+			    void(*f)(struct pf_anchor *, void *));
+void			 pfr_enqueue_addrs(struct pfr_ktable *,
+			    struct pfr_kentryworkq *, int *, int);
+void			 pfr_remove_kentries(struct pfr_ktable *,
+			    struct pfr_kentryworkq *);
 
 RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 #endif /* _KERNEL */

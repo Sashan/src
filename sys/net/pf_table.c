@@ -152,8 +152,6 @@ int			 pfr_gcd(int, int);
 void			 pfr_copyout_addr(struct pfr_addr *,
 			    struct pfr_kentry *ke);
 int			 pfr_validate_addr(struct pfr_addr *);
-void			 pfr_enqueue_addrs(struct pfr_ktable *,
-			    struct pfr_kentryworkq *, int *, int);
 void			 pfr_mark_addrs(struct pfr_ktable *);
 struct pfr_kentry	*pfr_lookup_addr(struct pfr_ktable *,
 			    struct pfr_addr *, int);
@@ -167,8 +165,6 @@ void			 pfr_destroy_ioq(struct pfr_kentryworkq *, int);
 void			 pfr_destroy_kentry(struct pfr_kentry *);
 void			 pfr_insert_kentries(struct pfr_ktable *,
 			    struct pfr_kentryworkq *, time_t);
-void			 pfr_remove_kentries(struct pfr_ktable *,
-			    struct pfr_kentryworkq *);
 void			 pfr_clstats_kentries(struct pfr_kentryworkq *, time_t,
 			    int);
 void			 pfr_reset_feedback(struct pfr_addr *, int, int);
@@ -203,11 +199,8 @@ int			 pfr_skip_table(struct pfr_table *,
 struct pfr_kentry	*pfr_kentry_byidx(struct pfr_ktable *, int, int);
 int			 pfr_islinklocal(sa_family_t, struct pf_addr *);
 u_int32_t		 pfr_get_ktable_version(struct pfr_ktable *);
-void			 pfr_walk_anchor_subtree(struct pf_anchor *,
-			    struct pfr_ktable *,
-			    void(*)(struct pf_anchor *, struct pfr_ktable *));
 void			 pfr_update_tablerefs_anchor(struct pf_anchor *,
-			    struct pfr_ktable *);
+			    void *);
 RB_GENERATE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 
 struct pfr_ktablehead	 pfr_ktables;
@@ -684,30 +677,52 @@ pfr_validate_addr(struct pfr_addr *ad)
 
 	switch (ad->pfra_af) {
 	case AF_INET:
-		if (ad->pfra_net > 32)
+		if (ad->pfra_net > 32) {
+			log(LOG_DEBUG,
+			    "%s invalid mask length %d for AF_INET\n",
+			    __func__, ad->pfra_net);
 			return (-1);
+		}
 		break;
 #ifdef INET6
 	case AF_INET6:
-		if (ad->pfra_net > 128)
+		if (ad->pfra_net > 128) {
+			log(LOG_DEBUG,
+			    "%s invalid mask length %d for AF_INET6\n",
+			    __func__, ad->pfra_net);
 			return (-1);
+		}
 		break;
 #endif /* INET6 */
 	default:
+		log(LOG_DEBUG, "%s unknown AF\n", __func__);
 		return (-1);
 	}
 	if (ad->pfra_net < 128 &&
-		(((caddr_t)ad)[ad->pfra_net/8] & (0xFF >> (ad->pfra_net%8))))
+	    (((caddr_t)ad)[ad->pfra_net/8] & (0xFF >> (ad->pfra_net%8)))) {
+		log(LOG_DEBUG, "%s, non-zero mask %x\n", __func__,
+		    (((caddr_t)ad)[ad->pfra_net/8] & (0xFF >> (ad->pfra_net%8))));
+		return (-1);
+	}
+	for (i = (ad->pfra_net+7)/8; i < sizeof(ad->pfra_u); i++) {
+		if (((caddr_t)ad)[i]) {
+			log(LOG_DEBUG, "%s invalid mask %d\n", __func__, i);
 			return (-1);
-	for (i = (ad->pfra_net+7)/8; i < sizeof(ad->pfra_u); i++)
-		if (((caddr_t)ad)[i])
-			return (-1);
-	if (ad->pfra_not && ad->pfra_not != 1)
+		}
+	}
+	if (ad->pfra_not && ad->pfra_not != 1) {
+		log(LOG_DEBUG, "%s pfra_not must be either 0 or 1 (%d)\n",
+		    __func__, ad->pfra_not);
 		return (-1);
-	if (ad->pfra_fback != PFR_FB_NONE)
+	}
+	if (ad->pfra_fback != PFR_FB_NONE) {
+		log(LOG_DEBUG, "%s pfra_fback != PFR_FB_NONE\n", __func__);
 		return (-1);
-	if (ad->pfra_type >= PFRKE_MAX)
+	}
+	if (ad->pfra_type >= PFRKE_MAX) {
+		log(LOG_DEBUG, "%s invalid type\n", __func__);
 		return (-1);
+	}
 	return (0);
 }
 
@@ -1700,7 +1715,7 @@ pfr_get_tstats(struct pf_trans *t)
 
 void
 pfr_walk_anchor_subtree(struct pf_anchor *sub_tree, struct pfr_ktable *kt,
-    void(*f)(struct pf_anchor *, struct pfr_ktable *))
+    void(*f)(struct pf_anchor *, void *))
 {
 	struct pf_anchor *recursive_a, *aux_a;
 	TAILQ_HEAD(, pf_anchor) recursive_l, aux;
@@ -1738,8 +1753,9 @@ pfr_walk_anchor_subtree(struct pf_anchor *sub_tree, struct pfr_ktable *kt,
 }
 
 void
-pfr_update_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
+pfr_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 {
+	struct pfr_ktable *kt = arg;
 	struct pf_rule *r;
 
 	TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
@@ -2055,20 +2071,6 @@ pfr_drop_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 	}
 }
 
-void
-pfr_drop_table_refs(struct pf_anchor *a, struct pf_anchor *ta)
-{
-	struct pfr_ktable *kt;
-	struct pf_anchor *ca;
-
-	RB_FOREACH(kt, pfr_ktablehead, &ta->ktables) {
-		RB_FOREACH(ca, pf_anchor_node, &a->children) {
-			pfr_walk_anchor_subtree(a, kt,
-			    pfr_drop_tablerefs_anchor);
-		}
-	}
-}
-
 int
 pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
     struct pfr_addr *addr, int size, int *nadd, int *naddr, int flags)
@@ -2111,12 +2113,20 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		 * so we will attach table ourselves.
 		 */
 		kt_insert = pfr_create_ktable(NULL, tbl, 0, PR_WAITOK);
+		if (kt_insert == NULL)
+			return (ENOMEM);
+
+		log(LOG_DEBUG, "%s creating %s@%s\n", __func__,
+		    tbl->pfrt_name, tbl->pfrt_anchor);
 		kt_insert->pfrkt_rs = trs;
 		kt_insert->pfrkt_version = pfr_get_ktable_version(kt_insert);
 		/* ina means inactive */
 		kt_insert->pfrkt_flags |= PFR_TFLAG_INACTIVE;
 		kt = kt_insert;
 	} else {
+		log(LOG_DEBUG, "%s found table %s@%s\n", __func__,
+		    tbl->pfrt_name, tbl->pfrt_anchor);
+		kt_insert = NULL;
 		/*
 		 * Note 1:
 		 * former code was using shadow/pfrkt_shadow here. table
@@ -2191,8 +2201,11 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		*naddr = xaddr;
 	return (0);
 _bad:
-	if (kt_insert != NULL)
+	if (kt_insert != NULL) {
+		log(LOG_DEBUG, "%s destroy on error (%s@%s(\n", __func__,
+		    kt_insert->pfrkt_name, kt_insert->pfrkt_anchor);
 		pfr_destroy_ktable(kt_insert, 1);
+	}
 	return (rv);
 }
 
@@ -2335,8 +2348,11 @@ pfr_create_ktable(struct pf_rules_container *rc, struct pfr_table *tbl,
 	struct pf_anchor	*a;
 
 	kt = pool_get(&pfr_ktable_pl, wait|PR_ZERO|PR_LIMITFAIL);
-	if (kt == NULL)
+	if (kt == NULL) {
+		log(LOG_DEBUG, "%s alloc failed for %s@%s\n", __func__,
+		    tbl->pfrt_name, tbl->pfrt_anchor);
 		return (NULL);
+	}
 	kt->pfrkt_t = *tbl;
 
 	kt_exists = NULL;
@@ -2402,6 +2418,8 @@ pfr_destroy_ktable(struct pfr_ktable *kt, int flushaddr)
 {
 	struct pfr_kentryworkq	 addrq;
 
+	log(LOG_DEBUG, "%s destroying %s@%s\n", __func__, kt->pfrkt_name,
+	    kt->pfrkt_anchor);
 	if (flushaddr) {
 		pfr_enqueue_addrs(kt, &addrq, NULL, 0);
 		pfr_clean_node_mask(kt, &addrq);
@@ -2602,7 +2620,6 @@ pfr_detach_table(struct pfr_ktable *kt)
 	 * Table will be purged with ioctl(). We can not afford
 	 * to do expensive lookup for anchor which holds the table.
 	 */
-	PF_ASSERT_LOCKED();
 	KASSERT(kt->pfrkt_refcnt > 0);
 	if (!--kt->pfrkt_refcnt)
 		kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
