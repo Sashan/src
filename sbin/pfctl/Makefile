@@ -6,6 +6,8 @@ SRCS+=	pfctl_osfp.c pfctl_radix.c pfctl_table.c
 SRCS+=	pfctl_optimize.c pf_ruleset.c pfctl_queue.c
 CFLAGS+= -Wall -Wmissing-prototypes -Wno-uninitialized -g
 CFLAGS+= -Wstrict-prototypes -I${.CURDIR}
+CFLAGS+= -g
+CFLAGS+= -I/home/sashan/src.sashan/sys
 YFLAGS=
 MAN=	pfctl.8
 
