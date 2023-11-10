@@ -363,7 +363,8 @@ pf_remove_if_empty_ruleset(struct pf_rules_container *rc,
 		if (!TAILQ_EMPTY(ruleset->rules.ptr))
 			return;
 		RB_REMOVE(pf_anchor_global, &rc->anchors, ruleset->anchor);
-		if ((parent = ruleset->anchor->parent) != NULL)
+		if ((ruleset->anchor != NULL) &&
+		    ((parent = ruleset->anchor->parent) != NULL))
 			RB_REMOVE(pf_anchor_node, &parent->children,
 			    ruleset->anchor);
 		pf_anchor_rele(ruleset->anchor);

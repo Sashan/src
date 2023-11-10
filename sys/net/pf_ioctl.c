@@ -4301,6 +4301,7 @@ pf_update_parent(struct pf_anchor *ta)
 		RB_REMOVE(pf_anchor_node, &ta->parent->children, ta);
 		exists = RB_INSERT(pf_anchor_node, &parent->children, ta);
 		KASSERT(exists == NULL);
+		ta->parent = parent;
 	} else {
 		/*
 		 * anchor must be present in parent's children already
