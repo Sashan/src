@@ -1714,45 +1714,6 @@ pfr_get_tstats(struct pf_trans *t)
 }
 
 void
-pfr_walk_anchor_subtree(struct pf_anchor *sub_tree, struct pfr_ktable *kt,
-    void(*f)(struct pf_anchor *, void *))
-{
-	struct pf_anchor *recursive_a, *aux_a;
-	TAILQ_HEAD(, pf_anchor) recursive_l, aux;
-
-	f(sub_tree, kt);
-
-	/*
-	 * unwind recursion into lists so we can descent to leaf child without
-	 * risking stack overflow.
-	 */
-	TAILQ_INIT(&recursive_l);
-	TAILQ_INIT(&aux);
-
-	log(LOG_DEBUG, "%s %s\n", __func__, sub_tree->path);
-	RB_FOREACH(aux_a, pf_anchor_node, &sub_tree->children) {
-		TAILQ_INSERT_HEAD(&recursive_l, aux_a, workq);
-	}
-
-	while (!TAILQ_EMPTY(&recursive_l)) {
-		TAILQ_FOREACH(recursive_a, &recursive_l, workq) {
-			RB_FOREACH(aux_a, pf_anchor_node,
-			    &recursive_a->children) {
-				TAILQ_INSERT_HEAD(&aux, aux_a, workq);
-			}
-			log(LOG_DEBUG, "%s %s%s\n", __func__,
-			    kt->pfrkt_name, recursive_a->path);
-			f(recursive_a, kt);
-		}
-		/*
-		 * move to the next level twoards leaf in anchor tree.
-		 */
-		TAILQ_INIT(&recursive_l);
-		TAILQ_CONCAT(&recursive_l, &aux, workq);
-	}
-}
-
-void
 pfr_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 {
 	struct pfr_ktable *kt = arg;
@@ -1920,7 +1881,7 @@ pfr_update_table_refs(struct pf_anchor *a)
 	struct pfr_ktable *kt;
 
 	RB_FOREACH(kt, pfr_ktablehead, &a->ktables) {
-		pfr_walk_anchor_subtree(a, kt, pfr_update_tablerefs_anchor);
+		pf_walk_anchor_subtree(a, kt, pfr_update_tablerefs_anchor);
 	}
 }
 
@@ -2120,8 +2081,12 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		    tbl->pfrt_name, tbl->pfrt_anchor);
 		kt_insert->pfrkt_rs = trs;
 		kt_insert->pfrkt_version = pfr_get_ktable_version(kt_insert);
-		/* ina means inactive */
-		kt_insert->pfrkt_flags |= PFR_TFLAG_INACTIVE;
+		/*
+		 * Tables which are created on behalf of 'table' keyword
+		 * are marked as active. so they can be reported by
+		 * pfctl -sT
+		 */
+		kt_insert->pfrkt_flags |= PFR_TFLAG_ACTIVE;
 		kt = kt_insert;
 	} else {
 		log(LOG_DEBUG, "%s found table %s@%s\n", __func__,
@@ -2144,7 +2109,11 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		pfr_enqueue_addrs(kt, &addrq, NULL, 0);
 		pfr_clean_node_mask(kt, &addrq);
 		pfr_destroy_kentries(&addrq);
-		kt->pfrkt_flags |= PFR_TFLAG_INACTIVE;
+		/*
+		 * Make sure existing table gets ACTIVE flag set, because table
+		 * is now instantiated by 'table' keyword.
+		 */
+		kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
 		kt->pfrkt_version = pfr_get_ktable_version(kt);
 	}
 
@@ -2163,6 +2132,8 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 			    "%s copyin(addr + %d...\n", __func__, i);
 			senderr(EFAULT);
 		}
+		log(LOG_DEBUG, "%s (%d) %x\n", __func__, ad.pfra_af,
+		    ad.pfra_ip4addr.s_addr);
 		if (pfr_validate_addr(&ad)) {
 			log(LOG_DEBUG, "%s pfr_validate_addr(%d)\n",
 			    __func__, i);
@@ -2189,7 +2160,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		KASSERT(kt == NULL);
 		ta->tables++;
 
-		pfr_walk_anchor_subtree(ta, kt_insert,
+		pf_walk_anchor_subtree(ta, kt_insert,
 		    pfr_update_tablerefs_anchor);
 
 		xadd++;
@@ -2582,6 +2553,7 @@ pfr_attach_table(struct pf_rules_container *rc, struct pf_ruleset *rs,
 {
 	struct pfr_ktable	*kt;
 	struct pfr_table	 tbl;
+	struct pf_anchor	*a;
 
 	log(LOG_DEBUG, "%s %s@%s\n", __func__, name,
 	    rs->anchor == NULL ? "" : rs->anchor->path);
@@ -2591,9 +2563,13 @@ pfr_attach_table(struct pf_rules_container *rc, struct pf_ruleset *rs,
 	    rs->anchor == NULL ? "" : rs->anchor->path,
 	    sizeof (tbl.pfrt_anchor));
 
-	if (rs->anchor != NULL)
-		kt = pfr_lookup_table(rs->anchor, &tbl);
-	else
+	if (rs->anchor != NULL) {
+		a = rs->anchor;
+		do {
+			kt = pfr_lookup_table(a, &tbl);
+			a = a->parent;
+		} while ((a != NULL) && (kt == NULL));
+	} else
 		kt = pfr_lookup_table(&rc->main_anchor, &tbl);
 
 	if (kt == NULL) {
@@ -2604,7 +2580,12 @@ pfr_attach_table(struct pf_rules_container *rc, struct pf_ruleset *rs,
 		kt = pfr_create_ktable(rc, &tbl, gettime(), wait);
 		if (kt == NULL)
 			return (NULL);
+		/*
+		 * We mark table as inactive if it is created on behalf of
+		 * rule.
+		 */
 		kt->pfrkt_flags = PFR_TFLAG_REFERENCED;
+		kt->pfrkt_flags = PFR_TFLAG_INACTIVE;
 		kt->pfrkt_version = pfr_get_ktable_version(kt);
 	}
 
@@ -3009,7 +2990,7 @@ pfr_addtables_commit(struct pf_trans *t, struct pf_anchor *ta,
 			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
 			kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
 			KASSERT(kt->pfrkt_version == 0);
-			pfr_walk_anchor_subtree(a, kt,
+			pf_walk_anchor_subtree(a, (void *)kt,
 			    pfr_update_tablerefs_anchor);
 			kt->pfrkt_version++;
 		} else

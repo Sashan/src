@@ -514,6 +514,8 @@ extern void		 pf_purge(void *);
 extern void		 pf_init_ttab(struct pf_trans *);
 extern void		 pf_free_trans(struct pf_trans *);
 extern struct pf_anchor	*pf_lookup_anchor(struct pf_anchor *);
+extern void		 pf_walk_anchor_subtree(struct pf_anchor *, void *,
+			    void(*f)(struct pf_anchor *, void *));
 extern struct pfr_ktable
 			*pfr_create_ktable(struct pf_rules_container *,
 			    struct pfr_table *, time_t, int);
@@ -557,9 +559,6 @@ extern void		 pfr_addaddrs_commit(struct pf_trans *,
 extern void		 pfr_clraddrs_commit(struct pf_trans *,
 			    struct pf_anchor *, struct pf_anchor *);
 extern void		 pfr_destroy_kentry(struct pfr_kentry *);
-extern void		 pfr_walk_anchor_subtree(struct pf_anchor *,
-			    struct pfr_ktable *,
-			    void(*f)(struct pf_anchor *, void *));
 void			 pfr_enqueue_addrs(struct pfr_ktable *,
 			    struct pfr_kentryworkq *, int *, int);
 void			 pfr_remove_kentries(struct pfr_ktable *,

@@ -280,7 +280,7 @@ pf_find_or_create_ruleset(struct pf_rules_container *rc, const char *path)
 	strlcpy(p, path, MAXPATHLEN);
 
 	ruleset = pf_get_leaf_ruleset(rc, p, &aname);
-	anchor = ruleset->anchor;
+	anchor = (ruleset->anchor == NULL) ? &rc->main_anchor : ruleset->anchor;
 
 	while (*aname == '/')
 		aname++;

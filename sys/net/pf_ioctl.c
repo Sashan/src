@@ -101,7 +101,6 @@ void			 pf_free_queues(struct pf_queuehead *);
 void			 pf_calc_chksum(struct pf_ruleset *);
 void			 pf_hash_rule(MD5_CTX *, struct pf_rule *);
 void			 pf_hash_rule_addr(MD5_CTX *, struct pf_rule_addr *);
-int			 pf_commit_rules(u_int32_t, char *);
 int			 pf_addr_setup(struct pf_trans *t, struct pf_ruleset *,
 			    struct pf_addr_wrap *, sa_family_t);
 struct pfi_kif		*pf_kif_setup(struct pfi_kif *);
@@ -847,52 +846,6 @@ pf_hash_rule(MD5_CTX *ctx, struct pf_rule *rule)
 	PF_MD5_UPD(rule, tos);
 }
 
-int
-pf_commit_rules(u_int32_t version, char *anchor)
-{
-#if 0
-	struct pf_ruleset	*rs;
-	struct pf_rule		*rule;
-	struct pf_rulequeue	*old_rules;
-	u_int32_t		 old_rcount;
-
-	rs = pf_find_ruleset(&pf_global, anchor);
-
-	if (rs == NULL || !rs->rules.inactive.open ||
-	    ticket != rs->rules.inactive.version)
-		return (EBUSY);
-
-	if (rs == &pf_main_ruleset)
-		pf_calc_chksum(rs);
-
-	/* Swap rules, keep the old. */
-	old_rules = rs->rules.active.ptr;
-	old_rcount = rs->rules.active.rcount;
-
-	rs->rules.active.ptr = rs->rules.inactive.ptr;
-	rs->rules.active.rcount = rs->rules.inactive.rcount;
-	rs->rules.inactive.ptr = old_rules;
-	rs->rules.inactive.rcount = old_rcount;
-
-	rs->rules.active.version = rs->rules.inactive.version;
-	pf_calc_skip_steps(rs->rules.active.ptr);
-
-
-	/* Purge the old rule list. */
-	while ((rule = TAILQ_FIRST(old_rules)) != NULL)
-		pf_rm_rule(old_rules, rule);
-	rs->rules.inactive.rcount = 0;
-	rs->rules.inactive.open = 0;
-	pf_remove_if_empty_ruleset(&pf_global, rs);
-
-	/* queue defs only in the main ruleset */
-	if (anchor[0])
-		return (0);
-	return (pf_commit_queues());
-#endif
-	return (0);
-}
-
 void
 pf_calc_chksum(struct pf_ruleset *rs)
 {
@@ -1449,7 +1402,7 @@ pf_swap_tables(struct pf_trans *t, struct pf_anchor *ta,
 			if (exists->pfrkt_refcnt != 0) {
 				tables[0] = exists;
 				tables[1] = kt;
-				pfr_walk_anchor_subtree(a, (void *)tables,
+				pf_walk_anchor_subtree(a, (void *)tables,
 				    pf_update_tablerefs_anchor);
 			}
 		} else
@@ -4387,7 +4340,7 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 			return;
 		}
 
-		log(LOG_DEBUG, "%s moving %s\n", __func__, PF_ANCHOR_PATH(a));
+		log(LOG_DEBUG, "%s moving %s\n", __func__, PF_ANCHOR_PATH(ta));
 		RB_REMOVE(pf_anchor_global, &t->pftina_rc.anchors, ta);
 		exists = RB_INSERT(pf_anchor_global, &pf_anchors, ta);
 		KASSERT(exists == NULL);
@@ -4404,44 +4357,95 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 	}
 }
 
-#if 0
 void
-pf_fix_main_children(void)
+pf_walk_anchor_subtree(struct pf_anchor *root, void *arg,
+    void(*f)(struct pf_anchor *, void *))
 {
-	struct pf_anchor *a, *aw;
-	struct pf_rule *r;
+	struct pf_anchor *recursive_a, *aux_a;
+	TAILQ_HEAD(, pf_anchor) recursive_l, aux;
+
+	if (root == NULL)
+		return;
+
+	log(LOG_DEBUG, "%s root: %s\n", __func__, PF_ANCHOR_PATH(root));
+	f(root, arg);
 
 	/*
-	 * main ruleset is kind of special. We need to walk all rules to
-	 * populate children tree with anchor rules.
-	 *
-	 * We start with flushing all stale entries.
+	 * unwind recursion into lists so we can descent to leaf child without
+	 * risking stack overflow.
 	 */
+	TAILQ_INIT(&recursive_l);
+	TAILQ_INIT(&aux);
 
+	RB_FOREACH(aux_a, pf_anchor_node, &root->children) {
+		TAILQ_INSERT_HEAD(&recursive_l, aux_a, workq);
+	}
+
+	while (!TAILQ_EMPTY(&recursive_l)) {
+		TAILQ_FOREACH(recursive_a, &recursive_l, workq) {
+			RB_FOREACH(aux_a, pf_anchor_node,
+			    &recursive_a->children) {
+				TAILQ_INSERT_HEAD(&aux, aux_a, workq);
+			}
+			log(LOG_DEBUG, "%s node: %s\n", __func__,
+			    PF_ANCHOR_PATH(recursive_a));
+			f(recursive_a, arg);
+		}
 		/*
-		 * pf_fix_main_children() seems not quite right. 
-		 * I'm afraid we need to find a better way to populate
-		 * 'children'. It should be based on anchor path:
-		 *	foo/lame
-		 *	bar/tender
-		 * anchors foo and bar should be inserted to
-		 * main (root) anchor list of children.
+		 * move to the next level towards a leaf in anchor tree.
 		 */
-	RB_FOREACH_SAFE(a, pf_anchor_node, &pf_main_anchor.children, aw)
-		RB_REMOVE(pf_anchor_node, &pf_main_anchor.children, a);
-
-	TAILQ_FOREACH(r, pf_main_anchor.ruleset.rules.ptr, entries) {
-		if (r->anchor)
-			RB_INSERT(pf_anchor_node, &pf_main_anchor.children,
-			    r->anchor);
+		TAILQ_INIT(&recursive_l);
+		TAILQ_CONCAT(&recursive_l, &aux, workq);
 	}
 }
-#endif
+
+void
+pf_kill_unused_tables(struct pf_trans *t, struct pf_anchor *a)
+{
+	struct pfr_ktable	*kt, *ktw, *kt_parent;
+	struct pf_anchor	*parent;
+	struct pfr_ktable	*call_arg[2];
+
+	RB_FOREACH_SAFE(kt, pfr_ktablehead, &a->ktables, ktw) {
+		if ((kt->pfrkt_refcnt == 0) &&
+		    ((kt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0)) {
+			log(LOG_DEBUG, "%s removing %s@%s\n", __func__,
+			    kt->pfrkt_name, PF_ANCHOR_PATH(a));
+			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
+			SLIST_INSERT_HEAD(&t->pftina_garbage, kt, pfrkt_workq);
+			a->tables--;
+		}
+
+		if (kt->pfrkt_flags & PFR_TFLAG_INACTIVE) {
+			log(LOG_DEBUG,
+			    "%s try to find active parent for %s@%s\n",
+			    __func__, kt->pfrkt_name, PF_ANCHOR_PATH(a));
+			parent = a->parent;
+			while (parent != NULL) {
+				kt_parent = RB_FIND(pfr_ktablehead,
+				    &parent->ktables, kt);
+				if (kt_parent != NULL)
+					break;
+				parent = parent->parent;
+			}
+
+			if (kt_parent != NULL) {
+				log(LOG_DEBUG, "%s found parent: %s@%s\n",
+				    __func__, kt->pfrkt_name,
+				    PF_ANCHOR_PATH(parent));
+				call_arg[0] = kt;
+				call_arg[1] = kt_parent;
+				pf_update_tablerefs_anchor(a, (void *)call_arg);
+			}
+		}
+	}
+}
 
 void
 pf_ina_commit(struct pf_trans *t)
 {
-	struct pf_anchor	*ta, *taw;
+	struct pf_anchor	*ta, *taw, *a;
+	struct pfr_ktable	*kt, *ktw;
 	int			 i;
 
 	if (t->pftina_modify_defaults) {
@@ -4507,6 +4511,24 @@ pf_ina_commit(struct pf_trans *t)
 	if (t->pftina_rc.main_anchor.ruleset.rules.version != 0) {
 		pf_ina_commit_anchor(t, &t->pftina_rc.main_anchor,
 		    &pf_main_anchor);
+	}
+
+	/*
+	 * remove tables with no references unless they are persistent
+	 */
+	RB_FOREACH(a, pf_anchor_global, &pf_anchors) {
+		pf_kill_unused_tables(t, a);
+	}
+
+	RB_FOREACH_SAFE(kt, pfr_ktablehead, &pf_main_anchor.ktables, ktw) {
+		if ((kt->pfrkt_refcnt == 0) &&
+		    ((kt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0)) {
+			log(LOG_DEBUG, "%s removing %s\n", __func__,
+			    kt->pfrkt_name);
+			RB_REMOVE(pfr_ktablehead, &pf_main_anchor.ktables, kt);
+			SLIST_INSERT_HEAD(&t->pftina_garbage, kt, pfrkt_workq);
+			pf_main_anchor.tables--;
+		}
 	}
 }
 
