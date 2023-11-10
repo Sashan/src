@@ -4273,7 +4273,7 @@ pf_match_root_path(const char *a, const char *b)
 }
 
 void
-pf_update_parent(struct pf_anchor *ta)
+pf_update_parent(struct pf_trans *t, struct pf_anchor *ta)
 {
 	struct pf_anchor *parent, *exists;
 
@@ -4281,15 +4281,18 @@ pf_update_parent(struct pf_anchor *ta)
 		return;
 
 	parent = RB_FIND(pf_anchor_global, &pf_anchors, ta->parent);
-	/*
-	 * It's granted the matching parent in global tree
-	 * will exist, because we process from root (parents)
-	 * towards leaf.
-	 *
-	 * We only must make sure we refer to parent found
-	 * pf_anchors and not in t->anchors.
-	 */
-	KASSERT(parent != NULL);
+	if (parent == NULL) {
+		/*
+		 * It's granted the matching parent in global tree
+		 * will exist, because we process from root (parents)
+		 * towards leaf.
+		 *
+		 * If we could not find parent in global tree, then
+		 * our parent must be main anchor.
+		 */
+		KASSERT(ta->parent == &t->pftina_rc.main_anchor);
+		parent = &pf_main_anchor;
+	}
 	if (parent != ta->parent) {
 		/*
 		 * The parent in global tree is different
@@ -4345,8 +4348,9 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 		RB_REMOVE(pf_anchor_global, &t->pftina_rc.anchors, ta);
 		exists = RB_INSERT(pf_anchor_global, &pf_anchors, ta);
 		KASSERT(exists == NULL);
-		if (ta->parent != NULL)
-			pf_update_parent(ta);
+		if (ta->parent != NULL) {
+			pf_update_parent(t, ta);
+		}
 		ta->ruleset.rules.version++;
 	} else {
 		if (pf_match_root_path(a->path, t->pftina_anchor_path) ==
@@ -4602,7 +4606,7 @@ pf_tab_commit(struct pf_trans *t)
 				    &pf_anchors, ta);
 				KASSERT(exists == NULL);
 				if (ta->parent != NULL)
-					pf_update_parent(ta);
+					pf_update_parent(t, ta);
 				RB_FOREACH(kt, pfr_ktablehead, &ta->ktables) {
 					kt->pfrkt_version++;
 					kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
@@ -4653,7 +4657,14 @@ pf_cleanup_tina(struct pf_trans *t)
 		    __func__, PF_ANCHOR_PATH(ta));
 		RB_REMOVE(pf_anchor_global, &t->pftina_rc.anchors, ta);
 		while ((r = TAILQ_FIRST(ta->ruleset.rules.ptr)) != NULL) {
-			pf_rm_rule(&ta->ruleset.rules.queue, r);
+			/*
+			 * Note we did call RB_REMOVE() already on anchor `ta`,
+			 * therefore we pass NULL here to avoid calling
+			 * pf_remove_if_empty_ruleset() which would attempt to
+			 * remove anchor removed already.
+			 */
+			TAILQ_REMOVE(ta->ruleset.rules.ptr, r, entries);
+			pf_rm_rule(NULL, r);
 			ta->ruleset.rules.rcount--;
 		}
 
@@ -4672,7 +4683,8 @@ pf_cleanup_tina(struct pf_trans *t)
 
 	rs = &t->pftina_rc.main_anchor.ruleset;
 	while ((r = TAILQ_FIRST(rs->rules.ptr)) != NULL) {
-		pf_rm_rule(&rs->rules.queue, r);
+		TAILQ_REMOVE(rs->rules.ptr, r, entries);
+		pf_rm_rule(NULL, r);
 		rs->rules.rcount--;
 	}
 

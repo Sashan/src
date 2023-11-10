@@ -124,6 +124,7 @@ pf_find_anchor(struct pf_rules_container *rc, const char *path)
 		return (NULL);
 	strlcpy(key->path, path, sizeof(key->path));
 	found = RB_FIND(pf_anchor_global, &rc->anchors, key);
+	log(LOG_DEBUG, "%s %s was %s found\n", __func__, key->path, (found == NULL) ? "not" : "");
 	rs_free(key, sizeof(*key));
 	return (found);
 }
@@ -137,6 +138,7 @@ pf_find_ruleset(struct pf_rules_container *rc, const char *path)
 		path++;
 	if (!*path)
 		return (&rc->main_anchor.ruleset);
+
 	anchor = pf_find_anchor(rc, path);
 	if (anchor == NULL)
 		return (NULL);
@@ -194,6 +196,8 @@ pf_create_anchor(struct pf_rules_container *rc, struct pf_anchor *parent,
 {
 	struct pf_anchor	*anchor, *dup;
 
+	log(LOG_DEBUG, "%s creating %s in %s\n", __func__, aname, parent->path);
+
 	if (!*aname || (strlen(aname) >= PF_ANCHOR_NAME_SIZE) ||
 	    ((parent != NULL) && (strlen(parent->path) >= PF_ANCHOR_MAXPATH)))
 		return (NULL);
@@ -204,7 +208,7 @@ pf_create_anchor(struct pf_rules_container *rc, struct pf_anchor *parent,
 
 	RB_INIT(&anchor->children);
 	strlcpy(anchor->name, aname, sizeof(anchor->name));
-	if (parent != NULL) {
+	if (parent != &rc->main_anchor) {
 		/*
 		 * Make sure path for levels 2, 3, ... is terminated by '/':
 		 *	1/2/3/...
@@ -273,6 +277,8 @@ pf_find_or_create_ruleset(struct pf_rules_container *rc, const char *path)
 	if (rc == &pf_global)
 		return (NULL);
 #endif
+
+	log(LOG_DEBUG, "%s creating %s\n", __func__, path);
 
 	p = rs_malloc(MAXPATHLEN);
 	if (p == NULL)
@@ -353,7 +359,7 @@ void
 pf_remove_if_empty_ruleset(struct pf_rules_container *rc,
     struct pf_ruleset *ruleset)
 {
-	struct pf_anchor	*parent;
+	struct pf_anchor	*parent = NULL;
 
 	while (ruleset != NULL) {
 		if (ruleset == &rc->main_anchor.ruleset ||
@@ -362,11 +368,16 @@ pf_remove_if_empty_ruleset(struct pf_rules_container *rc,
 			return;
 		if (!TAILQ_EMPTY(ruleset->rules.ptr))
 			return;
+		log(LOG_DEBUG, "%s removed %s\n", __func__, ruleset->anchor->path);
 		RB_REMOVE(pf_anchor_global, &rc->anchors, ruleset->anchor);
 		if ((ruleset->anchor != NULL) &&
-		    ((parent = ruleset->anchor->parent) != NULL))
+		    ((parent = ruleset->anchor->parent) != NULL)) {
+			log(LOG_DEBUG, "%s removing %s from parent %s\n",
+			    __func__, ruleset->anchor->path,
+			    (parent == &rc->main_anchor) ? "__main__" : parent->path);
 			RB_REMOVE(pf_anchor_node, &parent->children,
 			    ruleset->anchor);
+		}
 		pf_anchor_rele(ruleset->anchor);
 		if (parent == NULL)
 			return;
