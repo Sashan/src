@@ -1370,10 +1370,14 @@ pf_swap_tables(struct pf_trans *t, struct pf_anchor *ta,
 	void *tables[2];
 
 	/*
-	 * We flush all existing tables and mark them as inactive.
+	 * We flush all existing tables (except persistent ones) and mark them
+	 * as inactive.
 	 */
 	SLIST_INIT(&workq);
 	RB_FOREACH(kt, pfr_ktablehead, &a->ktables) {
+		if (kt->pfrkt_flags & PFR_TFLAG_PERSIST)
+			continue;
+
 		log(LOG_DEBUG, "%s flushing %s@%s[%s]\n", __func__,
 		    kt->pfrkt_name, kt->pfrkt_anchor, PF_ANCHOR_PATH(a));
 		pfr_enqueue_addrs(kt, &workq, NULL, 0);
@@ -1396,6 +1400,7 @@ pf_swap_tables(struct pf_trans *t, struct pf_anchor *ta,
 			log(LOG_DEBUG, "%s %s exists already\n", __func__, kt->pfrkt_name);
 			RB_REMOVE(pfr_ktablehead, &a->ktables, exists);
 			RB_INSERT(pfr_ktablehead, &a->ktables, kt);
+			kt->pfrkt_version = exists->pfrkt_version++;
 			SLIST_INSERT_HEAD(&t->pftina_garbage, exists,
 			    pfrkt_workq);
 
@@ -2668,7 +2673,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		pr->nr = 0;
 		if (ruleset == &pf_main_ruleset) {
 			RB_FOREACH(anchor, pf_anchor_global, &pf_anchors)
-				if (anchor->parent == NULL)
+				if (anchor->parent == &pf_main_anchor)
 					pr->nr++;
 		} else {
 			RB_FOREACH(anchor, pf_anchor_node,
@@ -2695,7 +2700,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		pr->name[0] = '\0';
 		if (ruleset == &pf_main_ruleset) {
 			RB_FOREACH(anchor, pf_anchor_global, &pf_anchors)
-				if (anchor->parent == NULL && nr++ == pr->nr) {
+				if (anchor->parent == &pf_main_anchor &&
+				    nr++ == pr->nr) {
 					strlcpy(pr->name, anchor->name,
 					    sizeof(pr->name));
 					break;
@@ -4412,15 +4418,6 @@ pf_kill_unused_tables(struct pf_trans *t, struct pf_anchor *a)
 	struct pfr_ktable	*call_arg[2];
 
 	RB_FOREACH_SAFE(kt, pfr_ktablehead, &a->ktables, ktw) {
-		if ((kt->pfrkt_refcnt == 0) &&
-		    ((kt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0)) {
-			log(LOG_DEBUG, "%s removing %s@%s\n", __func__,
-			    kt->pfrkt_name, PF_ANCHOR_PATH(a));
-			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
-			SLIST_INSERT_HEAD(&t->pftina_garbage, kt, pfrkt_workq);
-			a->tables--;
-		}
-
 		if (kt->pfrkt_flags & PFR_TFLAG_INACTIVE) {
 			log(LOG_DEBUG,
 			    "%s try to find active parent for %s@%s\n",
@@ -4442,6 +4439,15 @@ pf_kill_unused_tables(struct pf_trans *t, struct pf_anchor *a)
 				call_arg[1] = kt_parent;
 				pf_update_tablerefs_anchor(a, (void *)call_arg);
 			}
+		}
+
+		if ((kt->pfrkt_refcnt == 0) &&
+		    ((kt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0)) {
+			log(LOG_DEBUG, "%s removing %s@%s\n", __func__,
+			    kt->pfrkt_name, PF_ANCHOR_PATH(a));
+			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
+			SLIST_INSERT_HEAD(&t->pftina_garbage, kt, pfrkt_workq);
+			a->tables--;
 		}
 	}
 }
@@ -4664,8 +4670,13 @@ pf_cleanup_tina(struct pf_trans *t)
 			 * remove anchor removed already.
 			 */
 			TAILQ_REMOVE(ta->ruleset.rules.ptr, r, entries);
-			pf_rm_rule(NULL, r);
+			/*
+			 * set .prev to NULL to tell pf_rm_rule() to proceed
+			 * with rule destroy
+			 */
+			r->entries.tqe_prev = NULL;
 			ta->ruleset.rules.rcount--;
+			pf_rm_rule(NULL, r);
 		}
 
 		RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, tktw) {
@@ -4684,6 +4695,11 @@ pf_cleanup_tina(struct pf_trans *t)
 	rs = &t->pftina_rc.main_anchor.ruleset;
 	while ((r = TAILQ_FIRST(rs->rules.ptr)) != NULL) {
 		TAILQ_REMOVE(rs->rules.ptr, r, entries);
+		/*
+		 * set .prev to NULL to tell pf_rm_rule() to proceed with rule
+		 * destroy
+		 */
+		r->entries.tqe_prev = NULL;
 		pf_rm_rule(NULL, r);
 		rs->rules.rcount--;
 	}

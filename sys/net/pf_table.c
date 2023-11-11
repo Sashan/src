@@ -1365,6 +1365,7 @@ pfr_promote_table(struct pf_anchor *a, struct pfr_ktable *kt)
 		KASSERT(exists == NULL);
 		/*  table is still in use, tell caller not to free it */
 		kt = NULL;
+		parent->tables++;
 	}
 	pfr_update_table_refs(parent);
 
