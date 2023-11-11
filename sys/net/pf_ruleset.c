@@ -124,7 +124,8 @@ pf_find_anchor(struct pf_rules_container *rc, const char *path)
 		return (NULL);
 	strlcpy(key->path, path, sizeof(key->path));
 	found = RB_FIND(pf_anchor_global, &rc->anchors, key);
-	log(LOG_DEBUG, "%s %s was %s found\n", __func__, key->path, (found == NULL) ? "not" : "");
+	DPFPRINTF(LOG_DEBUG, "%s %s was %s found\n",
+	    __func__, key->path, (found == NULL) ? "not" : "");
 	rs_free(key, sizeof(*key));
 	return (found);
 }
@@ -196,7 +197,8 @@ pf_create_anchor(struct pf_rules_container *rc, struct pf_anchor *parent,
 {
 	struct pf_anchor	*anchor, *dup;
 
-	log(LOG_DEBUG, "%s creating %s in %s\n", __func__, aname, parent->path);
+	DPFPRINTF(LOG_DEBUG, "%s creating %s in %s\n",
+	    __func__, aname, parent->path);
 
 	if (!*aname || (strlen(aname) >= PF_ANCHOR_NAME_SIZE) ||
 	    ((parent != NULL) && (strlen(parent->path) >= PF_ANCHOR_MAXPATH)))
@@ -278,7 +280,7 @@ pf_find_or_create_ruleset(struct pf_rules_container *rc, const char *path)
 		return (NULL);
 #endif
 
-	log(LOG_DEBUG, "%s creating %s\n", __func__, path);
+	DPFPRINTF(LOG_DEBUG, "%s creating %s\n", __func__, path);
 
 	p = rs_malloc(MAXPATHLEN);
 	if (p == NULL)
@@ -368,13 +370,15 @@ pf_remove_if_empty_ruleset(struct pf_rules_container *rc,
 			return;
 		if (!TAILQ_EMPTY(ruleset->rules.ptr))
 			return;
-		log(LOG_DEBUG, "%s removed %s\n", __func__, ruleset->anchor->path);
+		DPFPRINTF(LOG_DEBUG, "%s removed %s\n",
+		    __func__, ruleset->anchor->path);
 		RB_REMOVE(pf_anchor_global, &rc->anchors, ruleset->anchor);
 		if ((ruleset->anchor != NULL) &&
 		    ((parent = ruleset->anchor->parent) != NULL)) {
-			log(LOG_DEBUG, "%s removing %s from parent %s\n",
+			DPFPRINTF(LOG_DEBUG, "%s removing %s from parent %s\n",
 			    __func__, ruleset->anchor->path,
-			    (parent == &rc->main_anchor) ? "__main__" : parent->path);
+			    (parent == &rc->main_anchor) ?
+			    "__main__" : parent->path);
 			RB_REMOVE(pf_anchor_node, &parent->children,
 			    ruleset->anchor);
 		}
@@ -441,10 +445,8 @@ pf_anchor_setup(struct pf_rules_container *rc, struct pf_rule *r,
 	r->anchor = ruleset->anchor;
 	r->anchor->refcnt++;
 #ifdef _KERNEL
-	log(LOG_DEBUG, "%s %s->refcnt: %u\n",
-	    __func__,
-	    r->anchor->path,
-	    r->anchor->refcnt);
+	DPFPRINTF(LOG_DEBUG, "%s %s->refcnt: %u\n",
+	    __func__, r->anchor->path, r->anchor->refcnt);
 #endif
 	return (0);
 }
