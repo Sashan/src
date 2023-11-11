@@ -2963,8 +2963,12 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		PF_UNLOCK();
 		NET_UNLOCK();
 
-		error = copyout(t->pfttab_kbuf, io->pfrio_buffer,
-		    io->pfrio_size * sizeof(struct pfr_tstats));
+		if (error == 0) {
+			io->pfrio_size = t->pfttab_size;
+			error = copyout(t->pfttab_kbuf, io->pfrio_buffer,
+			    io->pfrio_size * sizeof(struct pfr_tstats));
+		} else
+			io->pfrio_size = 0;
 
 		pf_rollback_trans(t);
 
@@ -4452,6 +4456,7 @@ pf_kill_unused_tables(struct pf_trans *t, struct pf_anchor *a)
 			    "%s try to find active parent for %s@%s\n",
 			    __func__, kt->pfrkt_name, PF_ANCHOR_PATH(a));
 			parent = a->parent;
+			kt_parent = NULL;
 			while (parent != NULL) {
 				kt_parent = RB_FIND(pfr_ktablehead,
 				    &parent->ktables, kt);
@@ -4462,8 +4467,8 @@ pf_kill_unused_tables(struct pf_trans *t, struct pf_anchor *a)
 
 			if (kt_parent != NULL) {
 				DPFPRINTF(LOG_DEBUG, "%s found parent: %s@%s\n",
-				    __func__, kt->pfrkt_name,
-				    PF_ANCHOR_PATH(parent));
+				    __func__, kt_parent->pfrkt_name,
+				    kt_parent->pfrkt_anchor);
 				call_arg[0] = kt;
 				call_arg[1] = kt_parent;
 				pf_update_tablerefs_anchor(a, (void *)call_arg);
