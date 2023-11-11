@@ -1164,7 +1164,7 @@ void
 pf_print_table(const char *hdr, struct pf_anchor *a, struct pfr_ktable *kt)
 {
 	DPFPRINTF(LOG_DEBUG, "%s, %s@%s [%s] (%c%c%c%c%c%c)\n",
-	    f, kt->pfrkt_name, kt->pfrkt_anchor, PF_ANCHOR_PATH(a),
+	    hdr, kt->pfrkt_name, kt->pfrkt_anchor, PF_ANCHOR_PATH(a),
 	    (kt->pfrkt_flags & PFR_TFLAG_CONST) ? 'c' : '-',
 	    (kt->pfrkt_flags & PFR_TFLAG_PERSIST) ? 'p' : '-',
 	    (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) ? 'a' : '-',
