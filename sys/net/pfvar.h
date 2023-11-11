@@ -835,7 +835,6 @@ struct pfr_table {
 	char			 pfrt_anchor[PATH_MAX];
 	char			 pfrt_name[PF_TABLE_NAME_SIZE];
 	u_int32_t		 pfrt_version;
-	int			 pfrt_refcnt;
 	u_int32_t		 pfrt_flags;
 	u_int8_t		 pfrt_fback;
 };
@@ -882,6 +881,7 @@ struct pfr_tstats {
 	u_int64_t	 pfrts_nomatch;
 	time_t		 pfrts_tzero;
 	int		 pfrts_cnt;
+	int		 pfrts_refcnt;
 };
 #define	pfrts_name	pfrts_t.pfrt_name
 #define pfrts_flags	pfrts_t.pfrt_flags
@@ -992,7 +992,7 @@ struct pfr_ktable {
 #define pfrkt_flags	pfrkt_t.pfrt_flags
 #define pfrkt_version	pfrkt_t.pfrt_version
 #define pfrkt_cnt	pfrkt_ts.pfrts_cnt
-#define pfrkt_refcnt	pfrkt_ts.pfrts_t.pfrt_refcnt
+#define pfrkt_refcnt	pfrkt_ts.pfrts_refcnt
 #define pfrkt_packets	pfrkt_ts.pfrts_packets
 #define pfrkt_bytes	pfrkt_ts.pfrts_bytes
 #define pfrkt_match	pfrkt_ts.pfrts_match
