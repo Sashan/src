@@ -2352,10 +2352,19 @@ int
 pfctl_walk_show(int opts, struct pfioc_ruleset *pr, void *warg)
 {
 	if (pr->path[0]) {
-		if (pr->path[0] != '_' || (opts & PF_OPT_VERBOSE))
-			printf("  %s/%s\n", pr->path, pr->name);
-	} else if (pr->name[0] != '_' || (opts & PF_OPT_VERBOSE))
-		printf("  %s\n", pr->name);
+		if (pr->path[0] != '_' || (opts & PF_OPT_VERBOSE)) {
+			if (opts & PF_OPT_VERBOSE)
+				printf("  %s/%s\t%d\n", pr->path, pr->name,
+				    pr->refcnt);
+			else
+				printf("  %s/%s\n", pr->path, pr->name);
+		}
+	} else if (pr->name[0] != '_' || (opts & PF_OPT_VERBOSE)) {
+		if (opts & PF_OPT_VERBOSE)
+			printf("  %s\t%d\n", pr->name, pr->refcnt);
+		else
+			printf("  %s\n", pr->name);
+	}
 
 	return (0);
 }
