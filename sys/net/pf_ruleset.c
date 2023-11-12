@@ -124,7 +124,7 @@ pf_find_anchor(struct pf_rules_container *rc, const char *path)
 		return (NULL);
 	strlcpy(key->path, path, sizeof(key->path));
 	found = RB_FIND(pf_anchor_global, &rc->anchors, key);
-	DPFPRINTF(LOG_DEBUG, "%s %s was %s found\n",
+	DPFPRINTF(LOG_DEBUG, "%s %s was %s found",
 	    __func__, key->path, (found == NULL) ? "not" : "");
 	rs_free(key, sizeof(*key));
 	return (found);
@@ -197,7 +197,7 @@ pf_create_anchor(struct pf_rules_container *rc, struct pf_anchor *parent,
 {
 	struct pf_anchor	*anchor, *dup;
 
-	DPFPRINTF(LOG_DEBUG, "%s creating %s in %s\n",
+	DPFPRINTF(LOG_DEBUG, "%s creating %s in %s",
 	    __func__, aname, parent->path);
 
 	if (!*aname || (strlen(aname) >= PF_ANCHOR_NAME_SIZE) ||
@@ -280,7 +280,7 @@ pf_find_or_create_ruleset(struct pf_rules_container *rc, const char *path)
 		return (NULL);
 #endif
 
-	DPFPRINTF(LOG_DEBUG, "%s creating %s\n", __func__, path);
+	DPFPRINTF(LOG_DEBUG, "%s creating %s", __func__, path);
 
 	p = rs_malloc(MAXPATHLEN);
 	if (p == NULL)
@@ -344,7 +344,7 @@ pf_get_ruleset_version(const char *path)
 		version = 0;
 	PF_UNLOCK();
 	NET_UNLOCK();
-	log(LOG_ERR, "%s found %p for %s, version: %d\n",
+	DPFPRINTF(LOG_DEBUG, "%s found %p for %s, version: %d",
 	    __func__, rs, path, version);
 
 	return (version);
@@ -370,12 +370,12 @@ pf_remove_if_empty_ruleset(struct pf_rules_container *rc,
 			return;
 		if (!TAILQ_EMPTY(ruleset->rules.ptr))
 			return;
-		DPFPRINTF(LOG_DEBUG, "%s removed %s\n",
+		DPFPRINTF(LOG_DEBUG, "%s removed %s",
 		    __func__, ruleset->anchor->path);
 		RB_REMOVE(pf_anchor_global, &rc->anchors, ruleset->anchor);
 		if ((ruleset->anchor != NULL) &&
 		    ((parent = ruleset->anchor->parent) != NULL)) {
-			DPFPRINTF(LOG_DEBUG, "%s removing %s from parent %s\n",
+			DPFPRINTF(LOG_DEBUG, "%s removing %s from parent %s",
 			    __func__, ruleset->anchor->path,
 			    (parent == &rc->main_anchor) ?
 			    "__main__" : parent->path);
@@ -445,7 +445,7 @@ pf_anchor_setup(struct pf_rules_container *rc, struct pf_rule *r,
 	r->anchor = ruleset->anchor;
 	r->anchor->refcnt++;
 #ifdef _KERNEL
-	DPFPRINTF(LOG_DEBUG, "%s %s->refcnt: %u\n",
+	DPFPRINTF(LOG_DEBUG, "%s %s->refcnt: %u",
 	    __func__, r->anchor->path, r->anchor->refcnt);
 #endif
 	return (0);
