@@ -298,7 +298,7 @@ pfr_copyin_addrs(struct pf_trans *t, struct pfr_table *tbl,
 	ktt = pfr_create_ktable(&t->pfttab_rc, tbl, tzero, PR_WAITOK);
 	ktt->pfrkt_version = pfr_get_ktable_version(ktt);
 	if (ktt->pfrkt_version == 0) {
-		DPFPRINTF(LOG_DEBUG, "%s %s@%s does not exist\n",
+		DPFPRINTF(LOG_DEBUG, "%s %s@%s does not exist",
 		    __func__, ktt->pfrkt_name, 
 		    (ktt->pfrkt_rs->anchor == NULL) ?
 		    "" : ktt->pfrkt_rs->anchor->path);
@@ -334,10 +334,10 @@ pfr_copyin_addrs(struct pf_trans *t, struct pfr_table *tbl,
 		ke->pfrke_fb = PFR_FB_NONE;
 		if (pfr_lookup_kentry(tmpkt, ke, 1) != NULL) {
 			ke->pfrke_fb = PFR_FB_DUPLICATE;
-			DPFPRINTF(LOG_DEBUG, "%s duplicate %d\n", __func__, i);
+			DPFPRINTF(LOG_DEBUG, "%s duplicate %d", __func__, i);
 		} else {
 			pfr_route_kentry(tmpkt, ke);
-			DPFPRINTF(LOG_DEBUG, "%s got it %d\n", __func__, i);
+			DPFPRINTF(LOG_DEBUG, "%s got it %d", __func__, i);
 			t->pfttab_ke_ioq_len++;
 		}
 
@@ -400,7 +400,17 @@ pfr_addaddrs_commit(struct pf_trans *t, struct pf_anchor *ta,
 	struct pfr_ktable *ktt, *kt;
 	struct pfr_kentry *ke, *exists;
 
+	/*
+	 * remember commit operation  traverse a anchor tree/path in
+	 * transaction
+	 *	test/foo/bar
+	 * we expect to find exactly 1 table at leaf node 'bar'
+	 */
+	if (ta->tables == 0)
+		return;
+	KASSERT(RB_NEXT(pf_anchor_global, NULL, ta) == NULL);
 	KASSERT(ta->tables == 1);
+
 	ktt = RB_ROOT(&ta->ktables);
 
 	kt = RB_FIND(pfr_ktablehead, &a->ktables, ktt);
@@ -1493,7 +1503,7 @@ pfr_verify_tables(struct pf_anchor *a)
 		got++;
 	}
 
-	DPFPRINTF(LOG_DEBUG, "%s checking %s (%d)\n", __func__, a->path, got);
+	DPFPRINTF(LOG_DEBUG, "%s checking %s (%d)", __func__, a->path, got);
 
 	if (a->tables != got)
 		panic(
@@ -1544,11 +1554,11 @@ pfr_get_tables(struct pf_trans *t)
 
 		RB_FOREACH(p, pfr_ktablehead, &pf_main_anchor.ktables) {
 			if (n-- <= 0) {
-				DPFPRINTF(LOG_DEBUG, "%s (/) n: %d: %s\n",
+				DPFPRINTF(LOG_DEBUG, "%s (/) n: %d: %s",
 				    __func__, n, p->pfrkt_name);
 				continue;
 			} else
-				DPFPRINTF(LOG_DEBUG, "%s (/) n: %d: %s\n",
+				DPFPRINTF(LOG_DEBUG, "%s (/) n: %d: %s",
 				    __func__, n, p->pfrkt_name);
 			memcpy(tbl++, &p->pfrkt_t, sizeof(*tbl));
 		}
@@ -1556,13 +1566,13 @@ pfr_get_tables(struct pf_trans *t)
 			RB_FOREACH(p, pfr_ktablehead, &a->ktables) {
 				if (n-- <=0) {
 					DPFPRINTF(LOG_DEBUG,
-					    "%s (%s) n: %d: %s\n",
+					    "%s (%s) n: %d: %s",
 					    __func__, a->path, n,
 					    p->pfrkt_name);
 					continue;
 				} else
 					DPFPRINTF(LOG_DEBUG,
-					    "%s (%s) n: %d: %s\n",
+					    "%s (%s) n: %d: %s",
 					    __func__, a->path, n,
 					    p->pfrkt_name);
 				memcpy(tbl++, &p->pfrkt_t, sizeof(*tbl));
@@ -1711,14 +1721,14 @@ pfr_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 			kt->pfrkt_refcnt++;
 
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s src %s@%s <-> %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s src %s@%s <-> %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    src_kt->pfrkt_name, src_kt->pfrkt_anchor);
 		} else if (r->src.addr.type == PF_ADDR_TABLE &&
 		    r->src.addr.p.tbl != NULL) {
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s src %s@%s != %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s src %s@%s != %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
@@ -1741,14 +1751,14 @@ pfr_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 			kt->pfrkt_refcnt++;
 
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s dst %s@%s <-> %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s dst %s@%s <-> %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    dst_kt->pfrkt_name, dst_kt->pfrkt_anchor);
 		} else if (r->dst.addr.type == PF_ADDR_TABLE &&
 		    r->dst.addr.p.tbl != NULL) {
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s dst %s@%s <-> %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s dst %s@%s <-> %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
@@ -1772,14 +1782,14 @@ pfr_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s rdr %s@%s <-> %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s rdr %s@%s <-> %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    rdr_kt->pfrkt_name, rdr_kt->pfrkt_anchor);
 		} else if (r->rdr.addr.type == PF_ADDR_TABLE &&
 		    r->rdr.addr.p.tbl != NULL) {
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s rdr %s@%s <-> %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s rdr %s@%s <-> %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
@@ -1803,14 +1813,14 @@ pfr_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s nat %s@%s <-> %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s nat %s@%s <-> %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    nat_kt->pfrkt_name, nat_kt->pfrkt_anchor);
 		} else if (r->nat.addr.type == PF_ADDR_TABLE &&
 		    r->nat.addr.p.tbl != NULL) {
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s nat %s@%s <-> %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s nat %s@%s <-> %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
@@ -1834,14 +1844,14 @@ pfr_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 
 			kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s route %s@%s <-> %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s route %s@%s <-> %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
 			    route_kt->pfrkt_name, route_kt->pfrkt_anchor);
 		} else if (r->route.addr.type == PF_ADDR_TABLE &&
 		    r->route.addr.p.tbl != NULL) {
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s route %s@%s <-> %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s route %s@%s <-> %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    kt->pfrkt_name, kt->pfrkt_anchor,
@@ -1900,7 +1910,7 @@ pfr_drop_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 			}
 
 			KASSERT(kt_ref != NULL);
-			DPFPRINTF(LOG_DEBUG, "%s linking src to %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s linking src to %s@%s",
 			    __func__, kt_ref->pfrkt_name, kt_ref->pfrkt_anchor);
 
 			kt->pfrkt_refcnt--;
@@ -1924,7 +1934,7 @@ pfr_drop_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 				kt_ref = parent_kt;
 
 			KASSERT(kt_ref != NULL);
-			DPFPRINTF(LOG_DEBUG, "%s linking dst to %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s linking dst to %s@%s",
 			    __func__, kt_ref->pfrkt_name, kt_ref->pfrkt_anchor);
 
 			kt->pfrkt_refcnt--;
@@ -1947,7 +1957,7 @@ pfr_drop_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 				kt_ref = parent_kt;
 
 			KASSERT(kt_ref != NULL);
-			DPFPRINTF(LOG_DEBUG, "%s linking rdr to %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s linking rdr to %s@%s",
 			    __func__, kt_ref->pfrkt_name, kt_ref->pfrkt_anchor);
 
 			kt->pfrkt_refcnt--;
@@ -1970,7 +1980,7 @@ pfr_drop_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 				kt_ref = parent_kt;
 
 			KASSERT(kt_ref != NULL);
-			DPFPRINTF(LOG_DEBUG, "%s linking nat to %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s linking nat to %s@%s",
 			    __func__, kt_ref->pfrkt_name, kt_ref->pfrkt_anchor);
 
 			kt->pfrkt_refcnt--;
@@ -1993,7 +2003,7 @@ pfr_drop_tablerefs_anchor(struct pf_anchor *a, struct pfr_ktable *kt)
 				kt_ref = parent_kt;
 
 			KASSERT(kt_ref != NULL);
-			DPFPRINTF(LOG_DEBUG, "%s linking route to %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s linking route to %s@%s",
 			    __func__, kt_ref->pfrkt_name, kt_ref->pfrkt_anchor);
 
 			kt->pfrkt_refcnt--;
@@ -2022,20 +2032,20 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 
 	ACCEPT_FLAGS(flags, PFR_FLAG_DUMMY | PFR_FLAG_ADDRSTOO);
 	if (size && !(flags & PFR_FLAG_ADDRSTOO)) {
-		DPFPRINTF(LOG_DEBUG, "%s %s@%s %d %sPFR_FLAG_ADDRSTOO\n",
+		DPFPRINTF(LOG_DEBUG, "%s %s@%s %d %sPFR_FLAG_ADDRSTOO",
 		    __func__, tbl->pfrt_name, tbl->pfrt_anchor,
 		    size, (flags & PFR_FLAG_ADDRSTOO) ? "" : "!");
 		return (EINVAL);
 	}
 	if (pfr_validate_table(tbl, PFR_TFLAG_USRMASK,
 	    flags & PFR_FLAG_USERIOCTL)) {
-		DPFPRINTF(LOG_DEBUG, "%s pfr_validate_table() error\n",
+		DPFPRINTF(LOG_DEBUG, "%s pfr_validate_table() error",
 		    __func__);
 		return (EINVAL);
 	}
 	trs = pf_find_or_create_ruleset(&t->pftina_rc, tbl->pfrt_anchor);
 	if (trs == NULL) {
-		DPFPRINTF(LOG_DEBUG, "%s trs is NULL\n", __func__);
+		DPFPRINTF(LOG_DEBUG, "%s trs is NULL", __func__);
 		return (EBUSY);
 	}
 	if (trs->anchor == NULL)
@@ -2053,7 +2063,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		if (kt_insert == NULL)
 			return (ENOMEM);
 
-		DPFPRINTF(LOG_DEBUG, "%s creating %s@%s\n", __func__,
+		DPFPRINTF(LOG_DEBUG, "%s creating %s@%s", __func__,
 		    tbl->pfrt_name, tbl->pfrt_anchor);
 		kt_insert->pfrkt_rs = trs;
 		kt_insert->pfrkt_version = pfr_get_ktable_version(kt_insert);
@@ -2065,7 +2075,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		kt_insert->pfrkt_flags |= PFR_TFLAG_ACTIVE;
 		kt = kt_insert;
 	} else {
-		DPFPRINTF(LOG_DEBUG, "%s found table %s@%s\n", __func__,
+		DPFPRINTF(LOG_DEBUG, "%s found table %s@%s", __func__,
 		    tbl->pfrt_name, tbl->pfrt_anchor);
 		kt_insert = NULL;
 		/*
@@ -2105,13 +2115,13 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 	for (i = 0; i < size; i++) {
 		if (COPYIN(addr+i, &ad, sizeof(ad), flags)) {
 			DPFPRINTF(LOG_DEBUG,
-			    "%s copyin(addr + %d...\n", __func__, i);
+			    "%s copyin(addr + %d...", __func__, i);
 			senderr(EFAULT);
 		}
-		DPFPRINTF(LOG_DEBUG, "%s (%d) %x\n", __func__, ad.pfra_af,
+		DPFPRINTF(LOG_DEBUG, "%s (%d) %x", __func__, ad.pfra_af,
 		    ad.pfra_ip4addr.s_addr);
 		if (pfr_validate_addr(&ad)) {
-			DPFPRINTF(LOG_DEBUG, "%s pfr_validate_addr(%d)\n",
+			DPFPRINTF(LOG_DEBUG, "%s pfr_validate_addr(%d)",
 			    __func__, i);
 			senderr(EINVAL);
 		}
@@ -2149,7 +2159,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 	return (0);
 _bad:
 	if (kt_insert != NULL) {
-		DPFPRINTF(LOG_DEBUG, "%s destroy on error (%s@%s(\n", __func__,
+		DPFPRINTF(LOG_DEBUG, "%s destroy on error (%s@%s)", __func__,
 		    kt_insert->pfrkt_name, kt_insert->pfrkt_anchor);
 		pfr_destroy_ktable(kt_insert, 1);
 	}
@@ -2162,31 +2172,31 @@ pfr_validate_table(struct pfr_table *tbl, int allowedflags, int no_reserved)
 	int i;
 
 	if (!tbl->pfrt_name[0]) {
-		DPFPRINTF(LOG_DEBUG, "%s empty name\n", __func__);
+		DPFPRINTF(LOG_DEBUG, "%s empty name", __func__);
 		return (-1);
 	}
 	if (no_reserved && !strcmp(tbl->pfrt_anchor, PF_RESERVED_ANCHOR)) {
-		DPFPRINTF(LOG_DEBUG, "%s reserved anchor %s\n",
+		DPFPRINTF(LOG_DEBUG, "%s reserved anchor %s",
 		    __func__, tbl->pfrt_anchor);
 		return (-1);
 	}
 	if (tbl->pfrt_name[PF_TABLE_NAME_SIZE-1]) {
-		DPFPRINTF(LOG_DEBUG, "%s table name too long\n", __func__);
+		DPFPRINTF(LOG_DEBUG, "%s table name too long", __func__);
 		return (-1);
 	}
 	for (i = strlen(tbl->pfrt_name); i < PF_TABLE_NAME_SIZE; i++)
 		if (tbl->pfrt_name[i]) {
-			DPFPRINTF(LOG_DEBUG, "%s non-zero padding in %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s non-zero padding in %s@%s",
 			    __func__, tbl->pfrt_name, tbl->pfrt_anchor);
 			return (-1);
 		}
 	if (pfr_fix_anchor(tbl->pfrt_anchor)) {
-		DPFPRINTF(LOG_DEBUG, "%s pfr_fix_anchor() error for %s\n",
+		DPFPRINTF(LOG_DEBUG, "%s pfr_fix_anchor() error for %s",
 		    __func__, tbl->pfrt_anchor);
 		return (-1);
 	}
 	if (tbl->pfrt_flags & ~allowedflags) {
-		DPFPRINTF(LOG_DEBUG, "%s illegal flags in %s@%s %x\n",
+		DPFPRINTF(LOG_DEBUG, "%s illegal flags in %s@%s %x",
 		    __func__, tbl->pfrt_name, tbl->pfrt_anchor,
 		    tbl->pfrt_flags & ~allowedflags);
 		return (-1);
@@ -2296,7 +2306,7 @@ pfr_create_ktable(struct pf_rules_container *rc, struct pfr_table *tbl,
 
 	kt = pool_get(&pfr_ktable_pl, wait|PR_ZERO|PR_LIMITFAIL);
 	if (kt == NULL) {
-		DPFPRINTF(LOG_DEBUG, "%s alloc failed for %s@%s\n", __func__,
+		DPFPRINTF(LOG_DEBUG, "%s alloc failed for %s@%s", __func__,
 		    tbl->pfrt_name, tbl->pfrt_anchor);
 		return (NULL);
 	}
@@ -2365,7 +2375,7 @@ pfr_destroy_ktable(struct pfr_ktable *kt, int flushaddr)
 {
 	struct pfr_kentryworkq	 addrq;
 
-	DPFPRINTF(LOG_DEBUG, "%s destroying %s@%s\n", __func__, kt->pfrkt_name,
+	DPFPRINTF(LOG_DEBUG, "%s destroying %s@%s", __func__, kt->pfrkt_name,
 	    kt->pfrkt_anchor);
 	if (flushaddr) {
 		pfr_enqueue_addrs(kt, &addrq, NULL, 0);
@@ -2531,7 +2541,7 @@ pfr_attach_table(struct pf_rules_container *rc, struct pf_ruleset *rs,
 	struct pfr_table	 tbl;
 	struct pf_anchor	*a;
 
-	DPFPRINTF(LOG_DEBUG, "%s %s@%s\n", __func__, name,
+	DPFPRINTF(LOG_DEBUG, "%s %s@%s", __func__, name,
 	    rs->anchor == NULL ? "" : rs->anchor->path);
 	bzero(&tbl, sizeof(tbl));
 	strlcpy(tbl.pfrt_name, name, sizeof(tbl.pfrt_name));
@@ -2930,7 +2940,7 @@ pfr_get_ktable_version(struct pfr_ktable *ktt)
 		version = 0;
 	PF_UNLOCK();
 	NET_UNLOCK();
-	log(LOG_ERR, "%s found for %s@%s, version: %d\n",
+	DPFPRINTF(LOG_DEBUG, "%s found for %s@%s, version: %d",
 	    __func__, ktt->pfrkt_name, ktt->pfrkt_anchor, version);
 
 	return (version);
@@ -3079,7 +3089,17 @@ pfr_deladdrs_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *
 	struct pfr_kentry *ket, *ke;
 	int i, lg;
 
+	/*
+	 * remember commit operation  traverse a anchor tree/path in
+	 * transaction
+	 *	test/foo/bar
+	 * we expect to find exactly 1 table at leaf node 'bar'
+	 */
+	if (ta->tables == 0)
+		return;
+	KASSERT(RB_NEXT(pf_anchor_global, NULL, ta) == NULL);
 	KASSERT(ta->tables == 1);
+
 	ktt = RB_ROOT(&ta->ktables);
 
 	kt = RB_FIND(pfr_ktablehead, &a->ktables, ktt);
@@ -3151,7 +3171,17 @@ pfr_setaddrs_commit(struct pf_trans *t, struct pf_anchor *ta, struct pf_anchor *
 	time_t tzero = gettime();
 	int e;
 
+	/*
+	 * remember commit operation  traverse a anchor tree/path in
+	 * transaction
+	 *	test/foo/bar
+	 * we expect to find exactly 1 table at leaf node 'bar'
+	 */
+	if (ta->tables == 0)
+		return;
+	KASSERT(RB_NEXT(pf_anchor_global, NULL, ta) == NULL);
 	KASSERT(ta->tables == 1);
+
 	ktt = RB_ROOT(&ta->ktables);
 
 	kt = RB_FIND(pfr_ktablehead, &a->ktables, ktt);
@@ -3244,7 +3274,17 @@ pfr_clraddrs_commit(struct pf_trans *t, struct pf_anchor *ta,
 	struct pfr_ktable	*kt, *ktt;
 	struct pfr_kentryworkq	 workq;
 
+	/*
+	 * remember commit operation  traverse a anchor tree/path in
+	 * transaction
+	 *	test/foo/bar
+	 * we expect to find exactly 1 table at leaf node 'bar'
+	 */
+	if (ta->tables == 0)
+		return;
+	KASSERT(RB_NEXT(pf_anchor_global, NULL, ta) == NULL);
 	KASSERT(ta->tables == 1);
+
 	ktt = RB_ROOT(&ta->ktables);
 	if (ktt->pfrkt_version == 0)
 		return;

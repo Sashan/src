@@ -567,7 +567,7 @@ pf_begin_rules(struct pf_trans *t, const char *anchor)
 
 	rs->rules.version = pf_get_ruleset_version(
 	    (rs == &t->pftina_rc.main_anchor.ruleset) ? "" : rs->anchor->path);
-	DPFPRINTF(LOG_DEBUG, "%s %s version: %d\n", __func__, anchor,
+	DPFPRINTF(LOG_DEBUG, "%s %s version: %d", __func__, anchor,
 	    rs->rules.version);
 
 	return (0);
@@ -1094,7 +1094,7 @@ pf_remove_orphans(struct pf_trans *t)
 	RB_FOREACH_REVERSE_SAFE(a, pf_anchor_global, &pf_anchors, aw) {
 		DPFPRINTF(LOG_DEBUG,
 		    "%s trying to remove %s (refcnt: %d, rules are "
-		    "%s empty, children are %s empty, tables: %d\n",
+		    "%s empty, children are %s empty, tables: %d",
 		    __func__, a->path, a->refcnt,
 		    TAILQ_EMPTY(a->ruleset.rules.ptr) ?
 			"" : "not",
@@ -1106,10 +1106,10 @@ pf_remove_orphans(struct pf_trans *t)
 				RB_REMOVE(pf_anchor_node, &a->parent->children,
 				    a);
 			TAILQ_INSERT_TAIL(&t->pftina_anchor_list, a, workq);
-			DPFPRINTF(LOG_DEBUG, "%s %s will be removed\n",
+			DPFPRINTF(LOG_DEBUG, "%s %s will be removed",
 			    __func__, a->path);
 		} else
-			DPFPRINTF(LOG_DEBUG, "%s %s will not be removed\n",
+			DPFPRINTF(LOG_DEBUG, "%s %s will not be removed",
 			    __func__, a->path);
 	}
 }
@@ -1163,7 +1163,7 @@ test
 void
 pf_print_table(const char *hdr, struct pf_anchor *a, struct pfr_ktable *kt)
 {
-	DPFPRINTF(LOG_DEBUG, "%s, %s@%s [%s] (%c%c%c%c%c%c)\n",
+	DPFPRINTF(LOG_DEBUG, "%s, %s@%s [%s] (%c%c%c%c%c%c)",
 	    hdr, kt->pfrkt_name, kt->pfrkt_anchor, PF_ANCHOR_PATH(a),
 	    (kt->pfrkt_flags & PFR_TFLAG_CONST) ? 'c' : '-',
 	    (kt->pfrkt_flags & PFR_TFLAG_PERSIST) ? 'p' : '-',
@@ -1189,7 +1189,7 @@ pf_detach_rule(struct pf_rule *r)
 
 	if (r->anchor != NULL) {
 		r->anchor->refcnt--;
-		DPFPRINTF(LOG_DEBUG, "%s droping reference to %s\n",
+		DPFPRINTF(LOG_DEBUG, "%s droping reference to %s",
 		    __func__,
 		    r->anchor->path);
 		KASSERT(r->anchor->refcnt >= 0);
@@ -1267,13 +1267,13 @@ pf_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 			new->pfrkt_refcnt++;
 			new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s src %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s src %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    new->pfrkt_name, new->pfrkt_anchor);
 		} else if (r->src.addr.type == PF_ADDR_TABLE &&
 		    r->src.addr.p.tbl != NULL) {
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s src %s@%s != %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s src %s@%s != %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    new->pfrkt_name, new->pfrkt_anchor,
@@ -1292,13 +1292,13 @@ pf_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 			new->pfrkt_refcnt++;
 			new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s dst %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s dst %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    new->pfrkt_name, new->pfrkt_anchor);
 		} else if (r->dst.addr.type == PF_ADDR_TABLE &&
 		    r->dst.addr.p.tbl != NULL) {
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s dst %s@%s != %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s dst %s@%s != %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    new->pfrkt_name, new->pfrkt_anchor,
@@ -1317,13 +1317,13 @@ pf_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 			new->pfrkt_refcnt++;
 			new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s rdr %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s rdr %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    new->pfrkt_name, new->pfrkt_anchor);
 		} else if (r->rdr.addr.type == PF_ADDR_TABLE &&
 		    r->rdr.addr.p.tbl != NULL) {
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s rdr %s@%s <-> %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s rdr %s@%s <-> %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    new->pfrkt_name, new->pfrkt_anchor,
@@ -1342,13 +1342,13 @@ pf_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 			new->pfrkt_refcnt++;
 			new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s nat %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s nat %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    new->pfrkt_name, new->pfrkt_anchor);
 		} else if (r->nat.addr.type == PF_ADDR_TABLE &&
 		    r->nat.addr.p.tbl != NULL) {
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s nat %s@%s <-> %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s nat %s@%s <-> %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    new->pfrkt_name, new->pfrkt_anchor,
@@ -1367,13 +1367,13 @@ pf_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 			new->pfrkt_refcnt++;
 			new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s route  %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s route  %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    new->pfrkt_name, new->pfrkt_anchor);
 		} else if (r->route.addr.type == PF_ADDR_TABLE &&
 		    r->route.addr.p.tbl != NULL) {
-			DPFPRINTF(LOG_DEBUG, "%s %u@%s route %s@%s <-> %s@%s\n",
+			DPFPRINTF(LOG_DEBUG, "%s %u@%s route %s@%s <-> %s@%s",
 			    __func__,
 			    r->nr, a->path,
 			    new->pfrkt_name, new->pfrkt_anchor,
@@ -1415,11 +1415,11 @@ pf_swap_tables(struct pf_trans *t, struct pf_anchor *ta,
 	RB_FOREACH_SAFE(kt, pfr_ktablehead, &ta->ktables, ktw) {
 		ta->tables--;
 		RB_REMOVE(pfr_ktablehead, &ta->ktables, kt);
-		DPFPRINTF(LOG_DEBUG, "%s moving %s\n",
+		DPFPRINTF(LOG_DEBUG, "%s moving %s",
 		    __func__, kt->pfrkt_name);
 		exists = RB_INSERT(pfr_ktablehead, &a->ktables, kt);
 		if (exists != NULL) {
-			DPFPRINTF(LOG_DEBUG, "%s %s exists already\n",
+			DPFPRINTF(LOG_DEBUG, "%s %s exists already",
 			    __func__, kt->pfrkt_name);
 			RB_REMOVE(pfr_ktablehead, &a->ktables, exists);
 			RB_INSERT(pfr_ktablehead, &a->ktables, kt);
@@ -1450,7 +1450,7 @@ pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
 	struct pf_ruleset *trs, *grs;
 	struct pf_rule *r;
 
-	DPFPRINTF(LOG_DEBUG, "%s, swapping %s\n", __func__, PF_ANCHOR_PATH(a));
+	DPFPRINTF(LOG_DEBUG, "%s, swapping %s", __func__, PF_ANCHOR_PATH(a));
 
 	trs = &ta->ruleset;
 	grs = &a->ruleset;
@@ -1512,7 +1512,7 @@ pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
 					r->anchor = anchor;
 					r->anchor->refcnt++;
 					DPFPRINTF(LOG_DEBUG,
-					    "%s %s->refcnt: %u\n",
+					    "%s %s->refcnt: %u",
 					    __func__,
 					    r->anchor->path,
 					    r->anchor->refcnt);
@@ -2546,7 +2546,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if ((io->esize != sizeof(pt)) || (io->size != 1)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCSETTIMEOUT\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCSETTIMEOUT", __func__);
 			goto fail;
 		}
 
@@ -2609,14 +2609,14 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->esize != sizeof(pl) || io->size != 1) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCSETLIMIT\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCSETLIMIT", __func__);
 			goto fail;
 		}
 
 		t = pf_find_trans(minor(dev), io->ticket);
 		if (t == NULL) {
 			DPFPRINTF(LOG_DEBUG,
-			    "%s DIOCSETLIMIT no transaction for %llu\n",
+			    "%s DIOCSETLIMIT no transaction for %llu",
 			    __func__, io->ticket);
 			error = ENXIO;
 			goto fail;
@@ -2660,7 +2660,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->esize != sizeof(level) || io->size != 1) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCSETDEBUG\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCSETDEBUG", __func__);
 			goto fail;
 		}
 
@@ -2752,7 +2752,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != 0) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRCLRTABLES\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRCLRTABLES", __func__);
 			goto fail;
 		}
 		t = pf_open_trans(minor(dev));
@@ -2788,7 +2788,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRADDTABLES\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRADDTABLES", __func__);
 			goto fail;
 		}
 
@@ -2800,7 +2800,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		error = pfr_copyin_tables(t, io->pfrio_buffer, io->pfrio_size);
 		if (error != 0) {
 			DPFPRINTF(LOG_DEBUG, "%s DIOCRADDTABLES error in "
-			    "pfr_add_tables\n", __func__);
+			    "pfr_add_tables", __func__);
 			pf_rollback_trans(t);
 			goto fail;
 		}
@@ -2811,7 +2811,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		if (pf_trans_in_conflict(t, "DIOCRADDTABLES") != 0) {
 			PF_UNLOCK();
 			NET_UNLOCK();
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRADDTABLES conflict\n",
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRADDTABLES conflict",
 			    __func__);
 			error = EBUSY;
 			pf_rollback_trans(t);
@@ -2835,7 +2835,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRDELTABLES\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRDELTABLES", __func__);
 			goto fail;
 		}
 
@@ -2847,7 +2847,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		error = pfr_copyin_tables(t, io->pfrio_buffer, io->pfrio_size);
 		if (error != 0) {
 			DPFPRINTF(LOG_DEBUG, "%s DIOCRDELTABLES error in "
-			    "pfr_del_tables\n", __func__);
+			    "pfr_del_tables", __func__);
 			pf_rollback_trans(t);
 			goto fail;
 		}
@@ -2858,7 +2858,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		if (pf_trans_in_conflict(t, "DIOCRDELTABLES") != 0) {
 			PF_UNLOCK();
 			NET_UNLOCK();
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRDELTABLES conflict\n",
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRDELTABLES conflict",
 			    __func__);
 			pf_rollback_trans(t);
 			goto fail;
@@ -2882,7 +2882,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRGETTABLES\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRGETTABLES", __func__);
 			goto fail;
 		}
 
@@ -2931,7 +2931,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_tstats)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRGETTSTATS\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRGETTSTATS", __func__);
 			goto fail;
 		}
 
@@ -2981,7 +2981,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRCLRTSTATS\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRCLRTSTATS", __func__);
 			goto fail;
 		}
 
@@ -3019,7 +3019,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRSETTFLAGS\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRSETTFLAGS", __func__);
 			goto fail;
 		}
 
@@ -3068,7 +3068,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != 0) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRCLRADDRS\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRCLRADDRS", __func__);
 			goto fail;
 		}
 
@@ -3109,7 +3109,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRADDADDRS\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRADDADDRS", __func__);
 			goto fail;
 		}
 
@@ -3149,7 +3149,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRDELADDRS\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRDELADDRS", __func__);
 			goto fail;
 		}
 
@@ -3188,7 +3188,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRSETADDRS\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRSETADDRS", __func__);
 			goto fail;
 		}
 
@@ -3237,7 +3237,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRGETADDRS\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRGETADDRS", __func__);
 			goto fail;
 		}
 		t = pf_open_trans(minor(dev));
@@ -3267,7 +3267,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_astats)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRGETASTATS\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRGETASTATS", __func__);
 			goto fail;
 		}
 		t = pf_open_trans(minor(dev));
@@ -3296,7 +3296,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRCLRASTATS\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRCLRASTATS", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -3314,7 +3314,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRTSTADDRS\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRTSTADDRS", __func__);
 			goto fail;
 		}
 		NET_LOCK();
@@ -3333,7 +3333,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRINADEFINE\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRINADEFINE", __func__);
 			goto fail;
 		}
 
@@ -3370,7 +3370,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->esize != sizeof(*ioe)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCRULESET %d != %lu\n",
+			DPFPRINTF(LOG_DEBUG, "%s DIOCRULESET %d != %lu",
 			    __func__, io->esize, sizeof(*ioe));
 			goto fail;
 		}
@@ -3415,7 +3415,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			default:
 				free(table, M_PF, sizeof(*table));
 				free(ioe, M_PF, sizeof(*ioe));
-				DPFPRINTF(LOG_DEBUG, "%s [i] unknown type\n",
+				DPFPRINTF(LOG_DEBUG, "%s [i] unknown type",
 				    __func__);
 				error = EINVAL;
 				pf_rollback_trans(t);
@@ -3424,7 +3424,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 		free(table, M_PF, sizeof(*table));
 		free(ioe, M_PF, sizeof(*ioe));
-		DPFPRINTF(LOG_DEBUG, "%s DIOCXRULESET is done\n", __func__);
+		DPFPRINTF(LOG_DEBUG, "%s DIOCXRULESET is done", __func__);
 
 		break;
 	}
@@ -3440,7 +3440,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			error = copyinstr(io->array, t->pftina_anchor_path,
 			    sizeof(t->pftina_anchor_path), NULL);
 
-		DPFPRINTF(LOG_DEBUG, "%s transaction: %llu on %s\n", __func__,
+		DPFPRINTF(LOG_DEBUG, "%s transaction: %llu on %s", __func__,
 		    t->pft_ticket, t->pftina_anchor_path);
 
 		if (error == 0)
@@ -3666,7 +3666,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->esize != sizeof(hostid) || io->size != 1) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCSETHOSTID\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCSETHOSTID", __func__);
 			goto fail;
 		}
 
@@ -3703,7 +3703,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 		if (io->pfiio_esize != sizeof(struct pfi_kif)) {
 			error = ENODEV;
-			DPFPRINTF(LOG_DEBUG, "%s DIOCIGETIFACES\n", __func__);
+			DPFPRINTF(LOG_DEBUG, "%s DIOCIGETIFACES", __func__);
 			goto fail;
 		}
 
@@ -3816,7 +3816,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	default:
 		error = ENODEV;
-		DPFPRINTF(LOG_DEBUG, "%s default unknown iocmd (%lx) ]\n",
+		DPFPRINTF(LOG_DEBUG, "%s default unknown iocmd (%lx) ]",
 		    __func__, cmd);
 		break;
 	}
@@ -4137,7 +4137,7 @@ pf_ina_check(struct pf_anchor *ta, struct pf_anchor *a)
 			if (conflict) {
 				DPFPRINTF(LOG_DEBUG,
 				    "%s table (%s@%s) version mismatch "
-				    "(%u vs. %u)\n",
+				    "(%u vs. %u)",
 				    __func__,
 				    tkt->pfrkt_name,
 				    PF_ANCHOR_PATH(a),
@@ -4148,7 +4148,7 @@ pf_ina_check(struct pf_anchor *ta, struct pf_anchor *a)
 		}
 	} else {
 		DPFPRINTF(LOG_DEBUG,
-		    "%s ruleset (%s) version match (%u vs. %u)\n",
+		    "%s ruleset (%s) version match (%u vs. %u)",
 		    __func__,
 		    PF_ANCHOR_PATH(ta),
 		    ta->ruleset.rules.version,
@@ -4169,7 +4169,7 @@ pf_tab_check(struct pf_anchor *ta, struct pf_anchor *a)
 			if (tkt->pfrkt_version != 0) {
 				DPFPRINTF(LOG_DEBUG,
 				    "%s table (%s@%s) version mismatch "
-				    "(%u vs. 0)\n",
+				    "(%u vs. 0)",
 				    __func__,
 				    tkt->pfrkt_name,
 				    PF_ANCHOR_PATH(a),
@@ -4190,7 +4190,7 @@ pf_tab_check(struct pf_anchor *ta, struct pf_anchor *a)
 			if (conflict) {
 				DPFPRINTF(LOG_DEBUG,
 				    "%s table (%s@%s) version mismatch "
-				    "(%u vs. %u)\n",
+				    "(%u vs. %u)",
 				    __func__,
 				    tkt->pfrkt_name,
 				    PF_ANCHOR_PATH(a),
@@ -4233,7 +4233,7 @@ pf_trans_chk_ina(struct pf_trans *t, const char *iocmdname)
 		}
 	}
 
-	DPFPRINTF(LOG_DEBUG, "%s:%s (defaults) conflict == %d\n", __func__,
+	DPFPRINTF(LOG_DEBUG, "%s:%s (defaults) conflict == %d", __func__,
 	    iocmdname, conflict);
 
 	/*
@@ -4333,7 +4333,7 @@ pf_update_parent(struct pf_trans *t, struct pf_anchor *ta)
 		 * The parent in global tree is different
 		 */
 		DPFPRINTF(LOG_DEBUG,
-		    "%s parent (%s) found for %s in global tree\n",
+		    "%s parent (%s) found for %s in global tree",
 		    __func__,
 		    PF_ANCHOR_PATH(ta),
 		    ta->path);
@@ -4348,7 +4348,7 @@ pf_update_parent(struct pf_trans *t, struct pf_anchor *ta)
 		KASSERT(
 		    RB_FIND(pf_anchor_node, &parent->children, ta) != NULL);
 		DPFPRINTF(LOG_DEBUG,
-		    "%s parent (%s) found in pf_anchors, we are good\n",
+		    "%s parent (%s) found in pf_anchors, we are good",
 		    __func__,
 		    PF_ANCHOR_PATH(parent));
 	}
@@ -4367,7 +4367,7 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 		if (TAILQ_EMPTY(ta->ruleset.rules.ptr) &&
 		    ta->tables == 0 && RB_EMPTY(&ta->children)) {
 			DPFPRINTF(LOG_DEBUG,
-			    "%s will not create empty anchor %s\n",
+			    "%s will not create empty anchor %s",
 			    __func__, ta->path);
 			/*
 			 * removing ourselves from our direct parent is
@@ -4381,7 +4381,7 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 			return;
 		}
 
-		DPFPRINTF(LOG_DEBUG, "%s moving %s\n", __func__,
+		DPFPRINTF(LOG_DEBUG, "%s moving %s", __func__,
 		    PF_ANCHOR_PATH(ta));
 		RB_REMOVE(pf_anchor_global, &t->pftina_rc.anchors, ta);
 		exists = RB_INSERT(pf_anchor_global, &pf_anchors, ta);
@@ -4395,7 +4395,7 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 		    a->path)
 			pf_swap_anchors_ina(t, ta, a);
 		else
-			DPFPRINTF(LOG_DEBUG, "%s skipping %s\n",
+			DPFPRINTF(LOG_DEBUG, "%s skipping %s",
 			    __func__, a->path);
 	}
 }
@@ -4410,7 +4410,7 @@ pf_walk_anchor_subtree(struct pf_anchor *root, void *arg,
 	if (root == NULL)
 		return;
 
-	DPFPRINTF(LOG_DEBUG, "%s root: %s\n", __func__, PF_ANCHOR_PATH(root));
+	DPFPRINTF(LOG_DEBUG, "%s root: %s", __func__, PF_ANCHOR_PATH(root));
 	f(root, arg);
 
 	/*
@@ -4430,7 +4430,7 @@ pf_walk_anchor_subtree(struct pf_anchor *root, void *arg,
 			    &recursive_a->children) {
 				TAILQ_INSERT_HEAD(&aux, aux_a, workq);
 			}
-			DPFPRINTF(LOG_DEBUG, "%s node: %s\n", __func__,
+			DPFPRINTF(LOG_DEBUG, "%s node: %s", __func__,
 			    PF_ANCHOR_PATH(recursive_a));
 			f(recursive_a, arg);
 		}
@@ -4453,7 +4453,7 @@ pf_kill_unused_tables(struct pf_trans *t, struct pf_anchor *a)
 		pf_print_table("pf_kill_unused_tables ", a, kt);
 		if (kt->pfrkt_flags & PFR_TFLAG_INACTIVE) {
 			DPFPRINTF(LOG_DEBUG,
-			    "%s try to find active parent for %s@%s\n",
+			    "%s try to find active parent for %s@%s",
 			    __func__, kt->pfrkt_name, PF_ANCHOR_PATH(a));
 			parent = a->parent;
 			kt_parent = NULL;
@@ -4466,7 +4466,7 @@ pf_kill_unused_tables(struct pf_trans *t, struct pf_anchor *a)
 			}
 
 			if (kt_parent != NULL) {
-				DPFPRINTF(LOG_DEBUG, "%s found parent: %s@%s\n",
+				DPFPRINTF(LOG_DEBUG, "%s found parent: %s@%s",
 				    __func__, kt_parent->pfrkt_name,
 				    kt_parent->pfrkt_anchor);
 				call_arg[0] = kt;
@@ -4477,7 +4477,7 @@ pf_kill_unused_tables(struct pf_trans *t, struct pf_anchor *a)
 
 		if ((kt->pfrkt_refcnt == 0) &&
 		    ((kt->pfrkt_flags & PFR_TFLAG_PERSIST) == 0)) {
-			DPFPRINTF(LOG_DEBUG, "%s removing %s@%s\n", __func__,
+			DPFPRINTF(LOG_DEBUG, "%s removing %s@%s", __func__,
 			    kt->pfrkt_name, PF_ANCHOR_PATH(a));
 			RB_REMOVE(pfr_ktablehead, &a->ktables, kt);
 			SLIST_INSERT_HEAD(&t->pftina_garbage, kt, pfrkt_workq);
@@ -4684,7 +4684,7 @@ pf_cleanup_tina(struct pf_trans *t)
 	KASSERT(t->pft_type == PF_TRANS_INA);
 
 	RB_FOREACH_SAFE(ta, pf_anchor_global, &t->pftina_rc.anchors, tw) {
-		DPFPRINTF(LOG_DEBUG, "%s removing %s\n",
+		DPFPRINTF(LOG_DEBUG, "%s removing %s",
 		    __func__, PF_ANCHOR_PATH(ta));
 		RB_REMOVE(pf_anchor_global, &t->pftina_rc.anchors, ta);
 		while ((r = TAILQ_FIRST(ta->ruleset.rules.ptr)) != NULL) {
