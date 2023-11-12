@@ -501,6 +501,9 @@ extern struct rwlock	pf_state_lock;
 #define PFR_IOQ_ONLY	0
 #define PFR_GARBAGE_TOO	1
 
+#define PF_ANCHOR_PATH(_a_)	\
+	(((_a_)->path[0] == '\0') ? "/" : (_a_)->path)
+
 /* for copies to/from network byte order */
 void			 pf_state_peer_hton(const struct pf_state_peer *,
 			    struct pfsync_state_peer *);
@@ -563,6 +566,8 @@ void			 pfr_enqueue_addrs(struct pfr_ktable *,
 			    struct pfr_kentryworkq *, int *, int);
 void			 pfr_remove_kentries(struct pfr_ktable *,
 			    struct pfr_kentryworkq *);
+void			 pfr_print_table(const char *, struct pf_anchor *,
+			    struct pfr_ktable *);
 
 RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 #endif /* _KERNEL */

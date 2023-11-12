@@ -1427,6 +1427,7 @@ struct pfioc_limit {
 
 struct pfioc_ruleset {
 	u_int32_t	 nr;
+	int		 refcnt;
 	char		 path[PATH_MAX];
 	char		 name[PF_ANCHOR_NAME_SIZE];
 };

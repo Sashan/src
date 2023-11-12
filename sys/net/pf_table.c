@@ -198,7 +198,8 @@ int			 pfr_skip_table(struct pfr_table *,
 			    struct pfr_ktable *, int);
 struct pfr_kentry	*pfr_kentry_byidx(struct pfr_ktable *, int, int);
 int			 pfr_islinklocal(sa_family_t, struct pf_addr *);
-u_int32_t		 pfr_get_ktable_version(struct pfr_ktable *);
+u_int32_t		 pfr_get_ktable_version(struct pfr_ktable *,
+			    u_int32_t *);
 void			 pfr_update_tablerefs_anchor(struct pf_anchor *,
 			    void *);
 RB_GENERATE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
@@ -284,6 +285,7 @@ pfr_copyin_addrs(struct pf_trans *t, struct pfr_table *tbl,
 	struct pfr_addr		 ad;
 	int			 i;
 	time_t			 tzero = gettime();
+	u_int32_t		 ktflags = 0;
 
 	if (t->pft_type != PF_TRANS_TAB) {
 		log(LOG_ERR, "%s expects PF_TRANS_TAB only\n", __func__);
@@ -296,13 +298,21 @@ pfr_copyin_addrs(struct pf_trans *t, struct pfr_table *tbl,
 		return (EINVAL);
 
 	ktt = pfr_create_ktable(&t->pfttab_rc, tbl, tzero, PR_WAITOK);
-	ktt->pfrkt_version = pfr_get_ktable_version(ktt);
+	ktt->pfrkt_version = pfr_get_ktable_version(ktt, &ktflags);
 	if (ktt->pfrkt_version == 0) {
 		DPFPRINTF(LOG_DEBUG, "%s %s@%s does not exist",
 		    __func__, ktt->pfrkt_name, 
 		    (ktt->pfrkt_rs->anchor == NULL) ?
 		    "" : ktt->pfrkt_rs->anchor->path);
 		return (ESRCH);
+	}
+
+	if (ktflags & PFR_TFLAG_CONST) {
+		DPFPRINTF(LOG_DEBUG, "%s %s@%s trying to modify const table\n",
+		    __func__, ktt->pfrkt_name,
+		    (ktt->pfrkt_rs->anchor == NULL) ?
+		    "" : PF_ANCHOR_PATH(ktt->pfrkt_rs->anchor));
+		return (EPERM);
 	}
 
 	/*
@@ -606,6 +616,7 @@ pfr_get_astats(struct pf_trans *t, struct pfr_table *tbl, int *size)
 	bzero(&w, sizeof(w));
 	w.pfrw_op = PFRW_GET_ASTATS;
 	w.pfrw_free = kt->pfrkt_cnt;
+	w.pfrw_io_workq = &t->pfttab_ke_ioq;
 	rv = rn_walktree(kt->pfrkt_ip4, pfr_walktree, &w);
 	if (!rv)
 		rv = rn_walktree(kt->pfrkt_ip6, pfr_walktree, &w);
@@ -1611,12 +1622,12 @@ pfr_copyin_tables(struct pf_trans *t, struct pfr_table *tbl, int size)
 		if (pfr_validate_table(&key.pfrkt_t, PFR_TFLAG_USRMASK,
 		    t->pft_ioflags & PFR_FLAG_USERIOCTL))
 			return (EINVAL);
-		key.pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
+		key.pfrkt_flags &= PFR_TFLAG_USRMASK;
 		kt = pfr_create_ktable(&t->pfttab_rc, &key.pfrkt_t, tzero,
 		    PR_WAITOK);
 		if (kt == NULL)
 			return (ENOMEM); /* when hitting a pool limit */
-		kt->pfrkt_version = pfr_get_ktable_version(kt);
+		kt->pfrkt_version = pfr_get_ktable_version(kt, NULL);
 	}
 
 	return (0);
@@ -2066,7 +2077,8 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		DPFPRINTF(LOG_DEBUG, "%s creating %s@%s", __func__,
 		    tbl->pfrt_name, tbl->pfrt_anchor);
 		kt_insert->pfrkt_rs = trs;
-		kt_insert->pfrkt_version = pfr_get_ktable_version(kt_insert);
+		kt_insert->pfrkt_version = pfr_get_ktable_version(kt_insert,
+		    NULL);
 		/*
 		 * Tables which are created on behalf of 'table' keyword
 		 * are marked as active. so they can be reported by
@@ -2100,7 +2112,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		 * is now instantiated by 'table' keyword.
 		 */
 		kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
-		kt->pfrkt_version = pfr_get_ktable_version(kt);
+		kt->pfrkt_version = pfr_get_ktable_version(kt, NULL);
 	}
 
 	/*
@@ -2572,7 +2584,7 @@ pfr_attach_table(struct pf_rules_container *rc, struct pf_ruleset *rs,
 		 */
 		kt->pfrkt_flags = PFR_TFLAG_REFERENCED;
 		kt->pfrkt_flags |= PFR_TFLAG_INACTIVE;
-		kt->pfrkt_version = pfr_get_ktable_version(kt);
+		kt->pfrkt_version = pfr_get_ktable_version(kt, NULL);
 	}
 
 	kt->pfrkt_refcnt++;
@@ -2898,6 +2910,19 @@ pfr_ktable_winfo_update(struct pfr_ktable *kt, struct pfr_kentry *p) {
 	}
 }
 
+void
+pfr_print_table(const char *hdr, struct pf_anchor *a, struct pfr_ktable *kt)
+{
+	DPFPRINTF(LOG_DEBUG, "%s, %s@%s [%s] (%c%c%c%c%c%c)",
+	    hdr, kt->pfrkt_name, kt->pfrkt_anchor, PF_ANCHOR_PATH(a),
+	    (kt->pfrkt_flags & PFR_TFLAG_CONST) ? 'c' : '-',
+	    (kt->pfrkt_flags & PFR_TFLAG_PERSIST) ? 'p' : '-',
+	    (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) ? 'a' : '-',
+	    (kt->pfrkt_flags & PFR_TFLAG_INACTIVE) ? 'i' : '-',
+	    (kt->pfrkt_flags & PFR_TFLAG_REFERENCED) ? 'r' : '-',
+	    (kt->pfrkt_flags & PFR_TFLAG_COUNTERS) ? 'C' : '-');
+}
+
 struct pfr_ktable *
 pfr_ktable_select_active(struct pfr_ktable *kt)
 {
@@ -2907,8 +2932,13 @@ pfr_ktable_select_active(struct pfr_ktable *kt)
 	return (kt);
 }
 
+/*
+ * pfr_add_addrs() function needs to check pfrkt_flags (flags)
+ * to make sure 'pfctl -t ... -T add' does not attempt to
+ * modify const table.
+ */
 u_int32_t
-pfr_get_ktable_version(struct pfr_ktable *ktt)
+pfr_get_ktable_version(struct pfr_ktable *ktt, u_int32_t *flags)
 {
 	struct pfr_ktable	*kt;
 	u_int32_t		 version;
@@ -2934,9 +2964,11 @@ pfr_get_ktable_version(struct pfr_ktable *ktt)
 		a = rs->anchor;
 
 	kt = pfr_lookup_table(a, (struct pfr_table *)ktt);
-	if (kt != NULL)
+	if (kt != NULL) {
 		version = kt->pfrkt_version;
-	else
+		if (flags != NULL)
+			*flags = kt->pfrkt_flags;
+	} else
 		version = 0;
 	PF_UNLOCK();
 	NET_UNLOCK();
@@ -2951,6 +2983,7 @@ pfr_addtables_commit(struct pf_trans *t, struct pf_anchor *ta,
     struct pf_anchor *a)
 {
 	struct pfr_ktable *kt, *ktw, *exists;
+	u_int32_t current_flags, new_flags;
 
 	RB_FOREACH_SAFE(kt, pfr_ktablehead, &ta->ktables, ktw) {
 		RB_REMOVE(pfr_ktablehead, &ta->ktables, kt);
@@ -2974,14 +3007,35 @@ pfr_addtables_commit(struct pf_trans *t, struct pf_anchor *ta,
 
 		if (exists == NULL) {
 			kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
-			kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
+			kt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
 			KASSERT(kt->pfrkt_version == 0);
 			pf_walk_anchor_subtree(a, (void *)kt,
 			    pfr_update_tablerefs_anchor);
 			kt->pfrkt_version++;
-		} else
+		} else {
 			SLIST_INSERT_HEAD(&t->pfttab_kt_garbage, kt,
 			    pfrkt_workq);
+			/*
+			 * update flags if table exists already, force
+			 * active flags for persistent tables.
+			 */
+			current_flags = exists->pfrkt_flags & PFR_TFLAG_USRMASK;
+			new_flags = kt->pfrkt_flags & PFR_TFLAG_USRMASK;
+			/*
+			 * const tables can not be changed, they can be
+			 * destroyed only, thus make sure const flag is kept.
+			 */
+			new_flags &= ~PFR_TFLAG_CONST;
+			if (current_flags != new_flags) {
+				if (new_flags & PFR_TFLAG_PERSIST) {
+					new_flags |= PFR_TFLAG_ACTIVE;
+					exists->pfrkt_flags &=
+					    ~PFR_TFLAG_INACTIVE;
+				}
+				exists->pfrkt_flags |= new_flags;
+				exists->pfrkt_version++;
+			}
+		}
 	}
 }
 

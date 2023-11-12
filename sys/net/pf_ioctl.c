@@ -180,9 +180,6 @@ void			 pf_rtlabel_copyout(struct pf_addr_wrap *);
 
 LIST_HEAD(, pf_trans)	pf_ioctl_trans = LIST_HEAD_INITIALIZER(pf_trans);
 
-#define PF_ANCHOR_PATH(_a_)	\
-	(((_a_)->path[0] == '\0') ? "/" : (_a_)->path)
-
 /* counts transactions opened by a device */
 unsigned int pf_tcount[CLONE_MAPSZ * NBBY];
 #define pf_unit2idx(_unit_)	((_unit_) >> CLONE_SHIFT)
@@ -1161,25 +1158,12 @@ test
  */
 
 void
-pf_print_table(const char *hdr, struct pf_anchor *a, struct pfr_ktable *kt)
-{
-	DPFPRINTF(LOG_DEBUG, "%s, %s@%s [%s] (%c%c%c%c%c%c)",
-	    hdr, kt->pfrkt_name, kt->pfrkt_anchor, PF_ANCHOR_PATH(a),
-	    (kt->pfrkt_flags & PFR_TFLAG_CONST) ? 'c' : '-',
-	    (kt->pfrkt_flags & PFR_TFLAG_PERSIST) ? 'p' : '-',
-	    (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) ? 'a' : '-',
-	    (kt->pfrkt_flags & PFR_TFLAG_INACTIVE) ? 'i' : '-',
-	    (kt->pfrkt_flags & PFR_TFLAG_REFERENCED) ? 'r' : '-',
-	    (kt->pfrkt_flags & PFR_TFLAG_COUNTERS) ? 'C' : '-');
-}
-
-void
 pf_print_tables(const char *hdr, struct pf_anchor *a)
 {
 	struct pfr_ktable *kt;
 
 	RB_FOREACH(kt, pfr_ktablehead, &a->ktables)
-		pf_print_table(hdr, a, kt);
+		pfr_print_table(hdr, a, kt);
 }
 
 void
@@ -1399,7 +1383,7 @@ pf_swap_tables(struct pf_trans *t, struct pf_anchor *ta,
 		if (kt->pfrkt_flags & PFR_TFLAG_PERSIST)
 			continue;
 
-		pf_print_table("pf_swap_tables flushing ", a, kt);
+		pfr_print_table("pf_swap_tables flushing ", a, kt);
 		SLIST_INIT(&workq);
 		pfr_enqueue_addrs(kt, &workq, NULL, 0);
 		pfr_remove_kentries(kt, &workq);
@@ -2728,6 +2712,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				    nr++ == pr->nr) {
 					strlcpy(pr->name, anchor->name,
 					    sizeof(pr->name));
+					pr->refcnt = anchor->refcnt;
 					break;
 				}
 		} else {
@@ -2736,6 +2721,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				if (nr++ == pr->nr) {
 					strlcpy(pr->name, anchor->name,
 					    sizeof(pr->name));
+					pr->refcnt = anchor->refcnt;
 					break;
 				}
 		}
@@ -4315,19 +4301,11 @@ pf_update_parent(struct pf_trans *t, struct pf_anchor *ta)
 	if (ta->parent == NULL)
 		return;
 
-	parent = RB_FIND(pf_anchor_global, &pf_anchors, ta->parent);
-	if (parent == NULL) {
-		/*
-		 * It's granted the matching parent in global tree
-		 * will exist, because we process from root (parents)
-		 * towards leaf.
-		 *
-		 * If we could not find parent in global tree, then
-		 * our parent must be main anchor.
-		 */
-		KASSERT(ta->parent == &t->pftina_rc.main_anchor);
+	if (ta->parent == &t->pftina_rc.main_anchor)
 		parent = &pf_main_anchor;
-	}
+	else
+		parent = RB_FIND(pf_anchor_global, &pf_anchors, ta->parent);
+
 	if (parent != ta->parent) {
 		/*
 		 * The parent in global tree is different
@@ -4335,7 +4313,7 @@ pf_update_parent(struct pf_trans *t, struct pf_anchor *ta)
 		DPFPRINTF(LOG_DEBUG,
 		    "%s parent (%s) found for %s in global tree",
 		    __func__,
-		    PF_ANCHOR_PATH(ta),
+		    PF_ANCHOR_PATH(parent),
 		    ta->path);
 		RB_REMOVE(pf_anchor_node, &ta->parent->children, ta);
 		exists = RB_INSERT(pf_anchor_node, &parent->children, ta);
@@ -4348,8 +4326,9 @@ pf_update_parent(struct pf_trans *t, struct pf_anchor *ta)
 		KASSERT(
 		    RB_FIND(pf_anchor_node, &parent->children, ta) != NULL);
 		DPFPRINTF(LOG_DEBUG,
-		    "%s parent (%s) found in pf_anchors, we are good",
+		    "%s %s found in %s:children, we are good",
 		    __func__,
+		    PF_ANCHOR_PATH(ta),
 		    PF_ANCHOR_PATH(parent));
 	}
 }
@@ -4365,7 +4344,8 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 		 * Do not create empty rulesets.
 		 */
 		if (TAILQ_EMPTY(ta->ruleset.rules.ptr) &&
-		    ta->tables == 0 && RB_EMPTY(&ta->children)) {
+		    ta->tables == 0 && RB_EMPTY(&ta->children) &&
+		    ta->refcnt == 0) {
 			DPFPRINTF(LOG_DEBUG,
 			    "%s will not create empty anchor %s",
 			    __func__, ta->path);
@@ -4450,7 +4430,7 @@ pf_kill_unused_tables(struct pf_trans *t, struct pf_anchor *a)
 	struct pfr_ktable	*call_arg[2];
 
 	RB_FOREACH_SAFE(kt, pfr_ktablehead, &a->ktables, ktw) {
-		pf_print_table("pf_kill_unused_tables ", a, kt);
+		pfr_print_table("pf_kill_unused_tables ", a, kt);
 		if (kt->pfrkt_flags & PFR_TFLAG_INACTIVE) {
 			DPFPRINTF(LOG_DEBUG,
 			    "%s try to find active parent for %s@%s",
