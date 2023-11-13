@@ -69,7 +69,6 @@
 #define isalpha(c)	(isupper(c)||islower(c))
 
 struct pfi_kif		 *pfi_all = NULL;
-struct pool		  pfi_addr_pl;
 struct pfi_ifhead	  pfi_ifs;
 long			  pfi_update = 1;
 
@@ -138,9 +137,6 @@ pfi_initialize(void)
 	 */
 	if (pfi_all != NULL)	/* already initialized */
 		return;
-
-	pool_init(&pfi_addr_pl, sizeof(struct pfi_dynaddr), 0, IPL_SOFTNET, 0,
-	    "pfiaddrpl", NULL);
 
 	pfi_all = pfi_kif_alloc(IFG_ALL, M_WAITOK);
 
@@ -445,76 +441,6 @@ pfi_match_addr(struct pfi_dynaddr *dyn, struct pf_addr *a, sa_family_t af)
 	}
 }
 
-int
-pfi_dynaddr_setup(struct pf_addr_wrap *aw, sa_family_t af, int wait)
-{
-	struct pfi_dynaddr	*dyn;
-	char			 tblname[PF_TABLE_NAME_SIZE];
-	struct pf_ruleset	*ruleset = NULL;
-	int			 rv = 0;
-
-	if (aw->type != PF_ADDR_DYNIFTL)
-		return (0);
-	if ((dyn = pool_get(&pfi_addr_pl, wait|PR_LIMITFAIL|PR_ZERO)) == NULL)
-		return (1);
-
-	if (!strcmp(aw->v.ifname, "self"))
-		dyn->pfid_kif = pfi_kif_get(IFG_ALL, NULL);
-	else
-		dyn->pfid_kif = pfi_kif_get(aw->v.ifname, NULL);
-	if (dyn->pfid_kif == NULL) {
-		rv = 1;
-		goto _bad;
-	}
-	pfi_kif_ref(dyn->pfid_kif, PFI_KIF_REF_RULE);
-
-	dyn->pfid_net = pfi_unmask(&aw->v.a.mask);
-	if (af == AF_INET && dyn->pfid_net == 32)
-		dyn->pfid_net = 128;
-	strlcpy(tblname, aw->v.ifname, sizeof(tblname));
-	if (aw->iflags & PFI_AFLAG_NETWORK)
-		strlcat(tblname, ":network", sizeof(tblname));
-	if (aw->iflags & PFI_AFLAG_BROADCAST)
-		strlcat(tblname, ":broadcast", sizeof(tblname));
-	if (aw->iflags & PFI_AFLAG_PEER)
-		strlcat(tblname, ":peer", sizeof(tblname));
-	if (aw->iflags & PFI_AFLAG_NOALIAS)
-		strlcat(tblname, ":0", sizeof(tblname));
-	if (dyn->pfid_net != 128)
-		snprintf(tblname + strlen(tblname),
-		    sizeof(tblname) - strlen(tblname), "/%d", dyn->pfid_net);
-	ruleset = pf_find_or_create_ruleset(&pf_global, PF_RESERVED_ANCHOR);
-	if (ruleset == NULL) {
-		rv = 1;
-		goto _bad;
-	}
-
-	if ((dyn->pfid_kt = pfr_attach_table(&pf_global, ruleset, tblname,
-	    wait)) == NULL) {
-		rv = 1;
-		goto _bad;
-	}
-
-	dyn->pfid_kt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
-	dyn->pfid_iflags = aw->iflags;
-	dyn->pfid_af = af;
-
-	TAILQ_INSERT_TAIL(&dyn->pfid_kif->pfik_dynaddrs, dyn, entry);
-	aw->p.dyn = dyn;
-	pfi_kif_update(dyn->pfid_kif);
-	return (0);
-
-_bad:
-	if (dyn->pfid_kt != NULL)
-		pfr_detach_table(dyn->pfid_kt);
-	if (ruleset != NULL)
-		pf_remove_if_empty_ruleset(&pf_global, ruleset);
-	if (dyn->pfid_kif != NULL)
-		pfi_kif_unref(dyn->pfid_kif, PFI_KIF_REF_RULE);
-	pool_put(&pfi_addr_pl, dyn);
-	return (rv);
-}
-
 void
 pfi_kif_update(struct pfi_kif *kif)
 {
@@ -690,22 +616,6 @@ pfi_address_add(struct pf_trans *t, struct sockaddr *sa, sa_family_t af,
 		SLIST_INSERT_HEAD(&t->pfttab_ke_ioq, ke, pfrke_workq);
 		t->pfttab_ke_ioq_len++;
 	}
-}
-
-void
-pfi_dynaddr_remove(struct pf_addr_wrap *aw)
-{
-	if (aw->type != PF_ADDR_DYNIFTL || aw->p.dyn == NULL ||
-	    aw->p.dyn->pfid_kif == NULL || aw->p.dyn->pfid_kt == NULL)
-		return;
-
-	TAILQ_REMOVE(&aw->p.dyn->pfid_kif->pfik_dynaddrs, aw->p.dyn, entry);
-	pfi_kif_unref(aw->p.dyn->pfid_kif, PFI_KIF_REF_RULE);
-	aw->p.dyn->pfid_kif = NULL;
-	pfr_detach_table(aw->p.dyn->pfid_kt);
-	aw->p.dyn->pfid_kt = NULL;
-	pool_put(&pfi_addr_pl, aw->p.dyn);
-	aw->p.dyn = NULL;
 }
 
 void

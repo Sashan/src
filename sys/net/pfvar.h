@@ -1777,8 +1777,6 @@ void		 pfi_group_addmember(const char *);
 void		 pfi_group_delmember(const char *);
 int		 pfi_match_addr(struct pfi_dynaddr *, struct pf_addr *,
 		    sa_family_t);
-int		 pfi_dynaddr_setup(struct pf_addr_wrap *, sa_family_t, int);
-void		 pfi_dynaddr_remove(struct pf_addr_wrap *);
 void		 pfi_dynaddr_copyout(struct pf_addr_wrap *);
 void		 pfi_update_status(const char *, struct pf_status *);
 void		 pfi_get_ifaces(const char *, struct pfi_kif *, int *);

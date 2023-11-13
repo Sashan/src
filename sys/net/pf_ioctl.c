@@ -87,6 +87,7 @@
 #endif /* NPFSYNC > 0 */
 
 struct pool		 pf_tag_pl;
+struct pool		 pf_addr_pl;
 
 void			 pfattach(int);
 void			 pf_thread_create(void *);
@@ -144,6 +145,8 @@ void			 pf_tab_commit(struct pf_trans *);
 
 struct pf_rule		 pf_default_rule;
 uint32_t		 pf_default_vers = 1;
+
+void			 pf_dynaddr_remove(struct pf_addr_wrap *);
 
 #define	TAGID_MAX	 50000
 TAILQ_HEAD(pf_tags, pf_tagname)	pf_tags = TAILQ_HEAD_INITIALIZER(pf_tags),
@@ -213,6 +216,8 @@ pfattach(int num)
 	    IPL_SOFTNET, 0, "pfpktdelay", NULL);
 	pool_init(&pf_anchor_pl, sizeof(struct pf_anchor), 0,
 	    IPL_SOFTNET, 0, "pfanchor", NULL);
+	pool_init(&pf_addr_pl, sizeof(struct pfi_dynaddr), 0,
+	    IPL_SOFTNET, 0, "pfiaddrpl", NULL);
 
 	hfsc_initialize();
 	pfr_initialize();
@@ -354,11 +359,11 @@ pf_destroy_rule(struct pf_rule *rule)
 	pf_tag_unref(rule->match_tag);
 	pf_rtlabel_remove(&rule->src.addr);
 	pf_rtlabel_remove(&rule->dst.addr);
-	pfi_dynaddr_remove(&rule->src.addr);
-	pfi_dynaddr_remove(&rule->dst.addr);
-	pfi_dynaddr_remove(&rule->rdr.addr);
-	pfi_dynaddr_remove(&rule->nat.addr);
-	pfi_dynaddr_remove(&rule->route.addr);
+	pf_dynaddr_remove(&rule->src.addr);
+	pf_dynaddr_remove(&rule->dst.addr);
+	pf_dynaddr_remove(&rule->rdr.addr);
+	pf_dynaddr_remove(&rule->nat.addr);
+	pf_dynaddr_remove(&rule->route.addr);
 	pf_tbladdr_remove(&rule->src.addr);
 	pf_tbladdr_remove(&rule->dst.addr);
 	pf_tbladdr_remove(&rule->rdr.addr);
@@ -415,11 +420,11 @@ pf_rm_rule(struct pf_rulequeue *rulequeue, struct pf_rule *rule)
 	pf_tag_unref(rule->match_tag);
 	pf_rtlabel_remove(&rule->src.addr);
 	pf_rtlabel_remove(&rule->dst.addr);
-	pfi_dynaddr_remove(&rule->src.addr);
-	pfi_dynaddr_remove(&rule->dst.addr);
-	pfi_dynaddr_remove(&rule->rdr.addr);
-	pfi_dynaddr_remove(&rule->nat.addr);
-	pfi_dynaddr_remove(&rule->route.addr);
+	pf_dynaddr_remove(&rule->src.addr);
+	pf_dynaddr_remove(&rule->dst.addr);
+	pf_dynaddr_remove(&rule->rdr.addr);
+	pf_dynaddr_remove(&rule->nat.addr);
+	pf_dynaddr_remove(&rule->route.addr);
 	if (rulequeue == NULL) {
 		pf_tbladdr_remove(&rule->src.addr);
 		pf_tbladdr_remove(&rule->dst.addr);
@@ -902,11 +907,91 @@ pf_calc_chksum(struct pf_ruleset *rs)
 	memcpy(pf_status.pf_chksum, digest, sizeof(pf_status.pf_chksum));
 }
 
+void
+pf_dynaddr_remove(struct pf_addr_wrap *aw)
+{
+	if (aw->type != PF_ADDR_DYNIFTL || aw->p.dyn == NULL ||
+	    aw->p.dyn->pfid_kif == NULL || aw->p.dyn->pfid_kt == NULL)
+		return;
+
+	TAILQ_REMOVE(&aw->p.dyn->pfid_kif->pfik_dynaddrs, aw->p.dyn, entry);
+	pfi_kif_unref(aw->p.dyn->pfid_kif, PFI_KIF_REF_RULE);
+	aw->p.dyn->pfid_kif = NULL;
+	pfr_detach_table(aw->p.dyn->pfid_kt);
+	aw->p.dyn->pfid_kt = NULL;
+	pool_put(&pf_addr_pl, aw->p.dyn);
+	aw->p.dyn = NULL;
+}
+
+int
+pf_dynaddr_setup(struct pf_trans *t, struct pf_addr_wrap *aw, sa_family_t af)
+{
+	struct pfi_dynaddr	*dyn;
+	char			 tblname[PF_TABLE_NAME_SIZE];
+	struct pf_ruleset	*ruleset = NULL;
+	int			 rv = 0;
+
+	if (aw->type != PF_ADDR_DYNIFTL)
+		return (0);
+	dyn = pool_get(&pf_addr_pl, PR_WAITOK|PR_LIMITFAIL|PR_ZERO);
+	if (dyn == NULL)
+		return (1);
+
+	if (!strcmp(aw->v.ifname, "self"))
+		dyn->pfid_kif = pfi_kif_alloc(IFG_ALL, M_WAITOK);
+	else
+		dyn->pfid_kif = pfi_kif_alloc(aw->v.ifname, M_WAITOK);
+
+	dyn->pfid_net = pfi_unmask(&aw->v.a.mask);
+	if (af == AF_INET && dyn->pfid_net == 32)
+		dyn->pfid_net = 128;
+	strlcpy(tblname, aw->v.ifname, sizeof(tblname));
+	if (aw->iflags & PFI_AFLAG_NETWORK)
+		strlcat(tblname, ":network", sizeof(tblname));
+	if (aw->iflags & PFI_AFLAG_BROADCAST)
+		strlcat(tblname, ":broadcast", sizeof(tblname));
+	if (aw->iflags & PFI_AFLAG_PEER)
+		strlcat(tblname, ":peer", sizeof(tblname));
+	if (aw->iflags & PFI_AFLAG_NOALIAS)
+		strlcat(tblname, ":0", sizeof(tblname));
+	if (dyn->pfid_net != 128)
+		snprintf(tblname + strlen(tblname),
+		    sizeof(tblname) - strlen(tblname), "/%d", dyn->pfid_net);
+	ruleset = pf_find_or_create_ruleset(&t->pftina_rc, PF_RESERVED_ANCHOR);
+	if (ruleset == NULL) {
+		rv = 1;
+		goto _bad;
+	}
+
+	dyn->pfid_kt = pfr_attach_table(&t->pftina_rc, ruleset, tblname,
+	    PR_WAITOK);
+	if (dyn->pfid_kt == NULL) {
+		rv = 1;
+		goto _bad;
+	}
+
+	/*
+	 * we mark table as active, when doing commit
+	 */
+	dyn->pfid_iflags = aw->iflags;
+	dyn->pfid_af = af;
+	aw->p.dyn = dyn;
+
+	return (0);
+
+_bad:
+	if (dyn->pfid_kt != NULL)
+		pfr_detach_table(dyn->pfid_kt);
+	pfi_kif_free(dyn->pfid_kif);
+	pool_put(&pf_addr_pl, dyn);
+	return (rv);
+}
+
 int
 pf_addr_setup(struct pf_trans *t, struct pf_ruleset *ruleset,
     struct pf_addr_wrap *addr, sa_family_t af)
 {
-	if (pfi_dynaddr_setup(addr, af, PR_WAITOK) ||
+	if (pf_dynaddr_setup(t, addr, af) ||
 	    pf_tbladdr_setup(t, ruleset, addr, PR_WAITOK) ||
 	    pf_rtlabel_add(addr))
 		return (EINVAL);
@@ -1462,47 +1547,60 @@ pf_swap_tables(struct pf_trans *t, struct pf_anchor *ta,
 	}
 }
 
-/*
- * Function swaps rules and tables between global anchor 'a' and
- * transaction anchor 'ta'.
- */
 void
-pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
-    struct pf_anchor *a)
+pf_refresh_addr(struct pf_trans *t, struct pf_addr_wrap *aw)
 {
-	struct pf_ruleset tmp_rs;
-	struct pf_ruleset *trs, *grs;
+	struct pfi_kif		*kif_buf;
+	struct pfi_dynaddr	*dyn;
+	struct pfr_ktable	*kt, *ktchk;
+
+	if (aw->type != PF_ADDR_DYNIFTL)
+		return;
+	if (t->pftina_reserved_anchor == NULL)
+		panic("%s PF_RESERVED_ANCHOR (_pf) is NULL)", __func__);
+
+	dyn = aw->p.dyn;
+	kif_buf = dyn->pfid_kif;
+
+	dyn->pfid_kif = pfi_kif_get(kif_buf->pfik_name, &kif_buf);
+	pfi_kif_ref(dyn->pfid_kif, PFI_KIF_REF_RULE);
+
+	kt = pfr_lookup_table(t->pftina_reserved_anchor,
+	    (struct pfr_table *)dyn->pfid_kt);
+	if (kt == NULL)
+		panic("%s table for %s was not found", __func__,
+		    dyn->pfid_kt->pfrkt_name);
+
+	if (kt != dyn->pfid_kt) {
+		/*
+		 * update dynamic interface table up-to-date
+		 */
+		kt->pfrkt_refcnt++;
+		dyn->pfid_kt->pfrkt_refcnt--;
+		ktchk = dyn->pfid_kt;
+		dyn->pfid_kt = kt;
+		SLIST_FOREACH(kt, &t->pftina_garbage, pfrkt_workq) {
+			if (kt == ktchk)
+				break;
+		}
+
+		if (kt == NULL)
+			panic("%s %s is not found on garbage queue",
+			    __func__, ktchk->pfrkt_name);
+	}
+
+	/*
+	 * add ourselves to dynaddrs list at kif
+	 */
+	TAILQ_INSERT_HEAD(&dyn->pfid_kif->pfik_dynaddrs, dyn, entry);
+}
+
+void
+pf_refresh_rules(struct pf_trans *t, struct pf_anchor *a)
+{
 	struct pf_rule *r;
 
-	DPFPRINTF(LOG_DEBUG, "%s, swapping %s", __func__, PF_ANCHOR_PATH(a));
-
-	trs = &ta->ruleset;
-	grs = &a->ruleset;
-	KASSERT(grs->rules.version == trs->rules.version);
-
-	pf_init_ruleset(&tmp_rs);
-	tmp_rs.rules.rcount = trs->rules.rcount;
-	TAILQ_CONCAT(tmp_rs.rules.ptr, trs->rules.ptr, entries);
-
-	/*
-	 * We move rules from global anchor to transaction anchor, we also must
-	 * drop references to global objects referred by rule.
-	 */
-	trs->rules.rcount = grs->rules.rcount;
-	TAILQ_CONCAT(trs->rules.ptr, grs->rules.ptr, entries);
-	/*
-	 * Detach anchor rules and tables from rules which are moved to
-	 * transaction anchor (read: replaced by commit operation).
-	 */
-	TAILQ_FOREACH(r, trs->rules.ptr, entries)
-		pf_detach_rule(r);
-
-	pf_swap_tables(t, ta, a);
-
-	grs->rules.rcount = tmp_rs.rules.rcount;
-	TAILQ_CONCAT(grs->rules.ptr, tmp_rs.rules.ptr, entries);
-	
-	TAILQ_FOREACH(r, grs->rules.ptr, entries) {
+	TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
 		if (r->anchor != NULL) {
 			struct pf_anchor *anchor;
 			/*
@@ -1542,9 +1640,56 @@ pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
 					    r->anchor->refcnt);
 				}
 			}
-			
 		}
+		pf_refresh_addr(t, &r->src.addr);
+		pf_refresh_addr(t, &r->dst.addr);
+		pf_refresh_addr(t, &r->rdr.addr);
+		pf_refresh_addr(t, &r->nat.addr);
+		pf_refresh_addr(t, &r->route.addr);
 	}
+}
+
+/*
+ * Function swaps rules and tables between global anchor 'a' and
+ * transaction anchor 'ta'.
+ */
+void
+pf_swap_anchors_ina(struct pf_trans *t, struct pf_anchor *ta,
+    struct pf_anchor *a)
+{
+	struct pf_ruleset tmp_rs;
+	struct pf_ruleset *trs, *grs;
+	struct pf_rule *r;
+
+	DPFPRINTF(LOG_DEBUG, "%s, swapping %s", __func__, PF_ANCHOR_PATH(a));
+
+	trs = &ta->ruleset;
+	grs = &a->ruleset;
+	KASSERT(grs->rules.version == trs->rules.version);
+
+	pf_init_ruleset(&tmp_rs);
+	tmp_rs.rules.rcount = trs->rules.rcount;
+	TAILQ_CONCAT(tmp_rs.rules.ptr, trs->rules.ptr, entries);
+
+	/*
+	 * We move rules from global anchor to transaction anchor, we also must
+	 * drop references to global objects referred by rule.
+	 */
+	trs->rules.rcount = grs->rules.rcount;
+	TAILQ_CONCAT(trs->rules.ptr, grs->rules.ptr, entries);
+	/*
+	 * Detach anchor rules and tables from rules which are moved to
+	 * transaction anchor (read: replaced by commit operation).
+	 */
+	TAILQ_FOREACH(r, trs->rules.ptr, entries)
+		pf_detach_rule(r);
+
+	pf_swap_tables(t, ta, a);
+
+	grs->rules.rcount = tmp_rs.rules.rcount;
+	TAILQ_CONCAT(grs->rules.ptr, tmp_rs.rules.ptr, entries);
+
+	pf_refresh_rules(t, a);
 
 	grs->rules.version++;
 }
@@ -4374,6 +4519,59 @@ pf_update_parent(struct pf_trans *t, struct pf_anchor *ta)
 }
 
 void
+pf_ina_commit_reserved_anchor(struct pf_trans *t)
+{
+	/*
+	 * We must always try to commit PF_RESERVED_ANCHOR.
+	 * Think of situation someone does:
+	 *	echo 'pass in from any to (self)|pfctl -a foo/bar -f -
+	 * to keep things to work we must commit _pf anchor which holds tables
+	 * which support self and interface names.  a.k.a.  dynamic addresses.
+	 * Reserved anchor must go in as first.
+	 */
+	struct pf_anchor *a, *ta;
+	struct pfr_ktable *ktt, *ktw, *exists;
+
+	/*
+	 * poor man's solution. We can not use RB_FIND(), because
+	 * rb-tree look up requires us to allocate a pf_anchor as a key.
+	 * we don't want to allocate memory when doing commit.
+	 */
+	RB_FOREACH(ta, pf_anchor_global, &t->pftina_rc.anchors) {
+		if (strcmp(ta->name, PF_RESERVED_ANCHOR) == 0)
+			break;
+	}
+
+	if (ta == NULL)
+		return;
+
+	RB_REMOVE(pf_anchor_global, &t->pftina_rc.anchors, ta);
+	a = RB_FIND(pf_anchor_global, &pf_anchors, ta);
+	if (a == NULL) {
+		RB_INSERT(pf_anchor_global, &pf_anchors, ta);
+		ta->ruleset.rules.version++;
+		t->pftina_reserved_anchor = ta;
+		return;
+	}
+	t->pftina_reserved_anchor = a;
+
+	RB_FOREACH_SAFE(ktt, pfr_ktablehead, &ta->ktables, ktw) {
+		RB_REMOVE(pfr_ktablehead, &ta->ktables, ktt);
+		exists = RB_INSERT(pfr_ktablehead, &a->ktables, ktt);
+		if (exists != NULL) {
+			SLIST_INSERT_HEAD(&t->pftina_garbage, ktt,
+			    pfrkt_workq);
+		} else {
+			ktt->pfrkt_flags |= PFR_TFLAG_ACTIVE;
+			ktt->pfrkt_flags &= ~PFR_TFLAG_INACTIVE;
+			ktt->pfrkt_version++;
+		}
+	}
+
+	TAILQ_INSERT_HEAD(&t->pftina_anchor_list, ta, workq);
+}
+
+void
 pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
     struct pf_anchor *a)
 {
@@ -4409,6 +4607,7 @@ pf_ina_commit_anchor(struct pf_trans *t, struct pf_anchor *ta,
 		if (ta->parent != NULL) {
 			pf_update_parent(t, ta);
 		}
+		pf_refresh_rules(t, ta);
 		ta->ruleset.rules.version++;
 	} else {
 		if (pf_match_root_path(a->path, t->pftina_anchor_path) ==
@@ -4563,6 +4762,8 @@ pf_ina_commit(struct pf_trans *t)
 		pf_default_vers++;
 	}
 
+	pf_ina_commit_reserved_anchor(t);
+
 	/*
 	 * Commit non-global rulesets first, so main ruleset
 	 * main ruleset can easily refer to children anchors.
@@ -4677,6 +4878,8 @@ pf_tab_commit(struct pf_trans *t)
 void
 pf_commit_trans(struct pf_trans *t)
 {
+	pf_trans_set_commit(&t->pftina_opts);
+
 	switch (t->pft_type) {
 	case PF_TRANS_INA:
 		pf_ina_commit(t);
@@ -4689,7 +4892,6 @@ pf_commit_trans(struct pf_trans *t)
 		    __func__, t->pft_type);
 	}
 		
-	pf_trans_set_commit(&t->pftina_opts);
 	pf_remove_orphans(t);
 }
 

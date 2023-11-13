@@ -377,6 +377,7 @@ struct pf_trans {
 			struct pfr_ktableworkq	 ina_garbage;
 			struct pf_rules_container
 						 ina_rc;
+			struct pf_anchor	*ina_reserved_anchor;
 			unsigned		 ina_pool_limits[PF_LIMIT_MAX];
 			struct pf_rule		 ina_default_rule;
 			struct pf_opts		 ina_opts;
@@ -419,6 +420,7 @@ struct pf_trans {
 #define pftina_anchor_list	u.u_ina.ina_anchor_list
 #define pftina_garbage		u.u_ina.ina_garbage
 #define pftina_rc		u.u_ina.ina_rc
+#define pftina_reserved_anchor	u.u_ina.ina_reserved_anchor
 #define	pftina_pool_limits	u.u_ina.ina_pool_limits
 #define pftina_default_rule	u.u_ina.ina_default_rule
 #define pftina_opts		u.u_ina.ina_opts
@@ -568,6 +570,8 @@ void			 pfr_remove_kentries(struct pfr_ktable *,
 			    struct pfr_kentryworkq *);
 void			 pfr_print_table(const char *, struct pf_anchor *,
 			    struct pfr_ktable *);
+
+int			 pfi_unmask(void *);
 
 RB_PROTOTYPE(pfr_ktablehead, pfr_ktable, pfrkt_tree, pfr_ktable_compare);
 #endif /* _KERNEL */
