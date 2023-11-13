@@ -346,6 +346,46 @@ pf_rule_free(struct pf_rule *rule)
 }
 
 void
+pf_destroy_rule(struct pf_rule *rule)
+{
+	if (rule->states_cur > 0 || rule->src_nodes > 0)
+		return;
+	pf_tag_unref(rule->tag);
+	pf_tag_unref(rule->match_tag);
+	pf_rtlabel_remove(&rule->src.addr);
+	pf_rtlabel_remove(&rule->dst.addr);
+	pfi_dynaddr_remove(&rule->src.addr);
+	pfi_dynaddr_remove(&rule->dst.addr);
+	pfi_dynaddr_remove(&rule->rdr.addr);
+	pfi_dynaddr_remove(&rule->nat.addr);
+	pfi_dynaddr_remove(&rule->route.addr);
+	pf_tbladdr_remove(&rule->src.addr);
+	pf_tbladdr_remove(&rule->dst.addr);
+	pf_tbladdr_remove(&rule->rdr.addr);
+	pf_tbladdr_remove(&rule->nat.addr);
+	pf_tbladdr_remove(&rule->route.addr);
+	if (rule->overload_tbl)
+		pfr_detach_table(rule->overload_tbl);
+	pfi_kif_unref(rule->rcv_kif, PFI_KIF_REF_RULE);
+	pfi_kif_unref(rule->kif, PFI_KIF_REF_RULE);
+	pfi_kif_unref(rule->rdr.kif, PFI_KIF_REF_RULE);
+	pfi_kif_unref(rule->nat.kif, PFI_KIF_REF_RULE);
+	pfi_kif_unref(rule->route.kif, PFI_KIF_REF_RULE);
+	/*
+	 * destroy rule is being called by transaction cleanup only.
+	 * transaction cleanup removed the anchor from tree already,
+	 * just make sure the refcount is still sane.
+	 */
+	if (rule->anchor != NULL) {
+		if (rule->anchor->refcnt <= 0)
+			panic("%s broken refcnt at %s\n", __func__,
+			    PF_ANCHOR_PATH(rule->anchor));
+		rule->anchor->refcnt--;
+	}
+	pool_put(&pf_rule_pl, rule);
+}
+
+void
 pf_rm_rule(struct pf_rulequeue *rulequeue, struct pf_rule *rule)
 {
 	if (rulequeue != NULL) {
@@ -4675,14 +4715,14 @@ pf_cleanup_tina(struct pf_trans *t)
 			 * remove anchor removed already.
 			 */
 			TAILQ_REMOVE(ta->ruleset.rules.ptr, r, entries);
-			/*
-			 * set .prev to NULL to tell pf_rm_rule() to proceed
-			 * with rule destroy
-			 */
-			r->entries.tqe_prev = NULL;
 			ta->ruleset.rules.rcount--;
-			pf_rm_rule(NULL, r);
+			pf_destroy_rule( r);
 		}
+		/*
+		 * bump version number so any racing GETRULES ioctl()
+		 * knows world has changed.
+		 */
+		ta->ruleset.rules.version++;
 
 		RB_FOREACH_SAFE(tkt, pfr_ktablehead, &ta->ktables, tktw) {
 			RB_REMOVE(pfr_ktablehead, &ta->ktables, tkt);
@@ -4693,19 +4733,13 @@ pf_cleanup_tina(struct pf_trans *t)
 		 * with parents, because all parents are part of transaction
 		 * (are found in t->pftina_rc.anchors).
 		 */
-
-		pool_put(&pf_anchor_pl, ta);
+		pf_anchor_rele(ta);
 	}
 
 	rs = &t->pftina_rc.main_anchor.ruleset;
 	while ((r = TAILQ_FIRST(rs->rules.ptr)) != NULL) {
 		TAILQ_REMOVE(rs->rules.ptr, r, entries);
-		/*
-		 * set .prev to NULL to tell pf_rm_rule() to proceed with rule
-		 * destroy
-		 */
-		r->entries.tqe_prev = NULL;
-		pf_rm_rule(NULL, r);
+		pf_destroy_rule(r);
 		rs->rules.rcount--;
 	}
 
@@ -4723,7 +4757,12 @@ pf_cleanup_tina(struct pf_trans *t)
 		KASSERT(RB_EMPTY(&ta->children));
 		KASSERT(RB_EMPTY(&ta->ktables));
 		KASSERT(TAILQ_EMPTY(ta->ruleset.rules.ptr));
-		pool_put(&pf_anchor_pl, ta);
+		/*
+		 * bump version number so any racing GETRULES ioctl()
+		 * knows world has changed.
+		 */
+		ta->ruleset.rules.version++;
+		pf_anchor_rele(ta);
 	}
 
 	while ((tkt = SLIST_FIRST(&t->pftina_garbage)) != NULL) {
@@ -4762,7 +4801,11 @@ pf_cleanup_ttab(struct pf_trans *t)
 			RB_REMOVE(pfr_ktablehead, &ta->ktables, tkt);
 			pfr_destroy_ktable(tkt, 1);
 		}
-		pool_put(&pf_anchor_pl, ta);
+		/*
+		 * Let concurrent GETRULES ioctl() know world has changed
+		 */
+		ta->ruleset.rules.version++;
+		pf_anchor_rele(ta);
 	}
 
 	KASSERT(TAILQ_EMPTY(t->pfttab_rc.main_anchor.ruleset.rules.ptr));
@@ -4781,7 +4824,10 @@ pf_cleanup_ttab(struct pf_trans *t)
 		KASSERT(RB_EMPTY(&ta->children));
 		KASSERT(RB_EMPTY(&ta->ktables));
 		KASSERT(TAILQ_EMPTY(ta->ruleset.rules.ptr));
-		pool_put(&pf_anchor_pl, ta);
+		/*
+		 * Let concurrent GETRULES ioctl() know world has changed
+		 */
+		pf_anchor_rele(ta);
 	}
 
 	while ((tkt = SLIST_FIRST(&t->pfttab_kt_garbage)) != NULL) {
