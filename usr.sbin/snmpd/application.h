@@ -1,4 +1,4 @@
-/*	$OpenBSD: application.h,v 1.10 2023/11/08 19:46:28 martijn Exp $	*/
+/*	$OpenBSD: application.h,v 1.13 2023/11/12 16:07:34 martijn Exp $	*/
 
 /*
  * Copyright (c) 2021 Martijn van Duren <martijn@openbsd.org>
@@ -140,11 +140,8 @@ void appl_processpdu(struct snmp_message *, const char *,
     enum snmp_version , struct ber_element *);
 void appl_response(struct appl_backend *, int32_t, enum appl_error, int16_t,
     struct appl_varbind *);
+void appl_report(struct snmp_message *, int32_t, struct ber_oid *);
 struct ber_element *appl_exception(enum appl_exception);
-
-/* application_legacy.c */
-void	 appl_legacy_init(void);
-void	 appl_legacy_shutdown(void);
 
 /* application_agentx.c */
 void	 appl_agentx(void);
@@ -159,3 +156,5 @@ void	 appl_blocklist_shutdown(void);
 /* application_internal.c */
 void	 appl_internal_init(void);
 void	 appl_internal_shutdown(void);
+const char *appl_internal_object_int(struct ber_oid *, int32_t);
+const char *appl_internal_object_string(struct ber_oid *, char *);

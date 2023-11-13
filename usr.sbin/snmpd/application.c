@@ -1,4 +1,4 @@
-/*	$OpenBSD: application.c,v 1.32 2023/11/08 19:54:52 martijn Exp $	*/
+/*	$OpenBSD: application.c,v 1.37 2023/11/13 10:14:29 martijn Exp $	*/
 
 /*
  * Copyright (c) 2021 Martijn van Duren <martijn@openbsd.org>
@@ -77,6 +77,7 @@ struct appl_request_upstream {
 	struct appl_context *aru_ctx;
 	struct snmp_message *aru_statereference;
 	enum snmp_pdutype aru_requesttype;
+	enum snmp_pdutype aru_responsetype;
 	int32_t aru_requestid; /* upstream requestid */
 	int32_t aru_transactionid; /* RFC 2741 section 6.1 */
 	uint16_t aru_nonrepeaters;
@@ -88,7 +89,6 @@ struct appl_request_upstream {
 	int aru_locked; /* Prevent recursion through appl_request_send */
 
 	enum snmp_version aru_pduversion;
-	struct ber_element *aru_pdu; /* Original requested pdu */
 };
 
 struct appl_request_downstream {
@@ -152,8 +152,6 @@ int appl_varbind_valid(struct appl_varbind *, struct appl_varbind_internal *,
 int appl_error_valid(enum appl_error, enum snmp_pdutype);
 int appl_varbind_backend(struct appl_varbind_internal *);
 void appl_varbind_error(struct appl_varbind_internal *, enum appl_error);
-void appl_report(struct snmp_message *, int32_t, struct ber_oid *,
-    struct ber_element *);
 void appl_pdu_log(struct appl_backend *, enum snmp_pdutype, int32_t, uint16_t,
     uint16_t, struct appl_varbind *);
 void ober_oid_nextsibling(struct ber_oid *);
@@ -179,7 +177,6 @@ appl_init(void)
 {
 	appl_blocklist_init();
 	appl_internal_init();
-	appl_legacy_init();
 	appl_agentx_init();
 }
 
@@ -190,7 +187,6 @@ appl_shutdown(void)
 
 	appl_blocklist_shutdown();
 	appl_internal_shutdown();
-	appl_legacy_shutdown();
 	appl_agentx_shutdown();
 
 	TAILQ_FOREACH_SAFE(ctx, &contexts, ac_entries, tctx) {
@@ -855,8 +851,7 @@ appl_processpdu(struct snmp_message *statereference, const char *ctxname,
 {
 	struct appl_context *ctx;
 	struct appl_request_upstream *ureq;
-	struct ber_oid oid;
-	struct ber_element *value, *varbind, *varbindlist;
+	struct ber_element *varbind, *varbindlist;
 	long long nonrepeaters, maxrepetitions;
 	static uint32_t transactionid;
 	int32_t requestid;
@@ -868,12 +863,9 @@ appl_processpdu(struct snmp_message *statereference, const char *ctxname,
 
 	/* RFC 3413, section 3.2, processPDU, item 5, final bullet */
 	if ((ctx = appl_context(ctxname, 0)) == NULL) {
-		oid = BER_OID(MIB_snmpUnknownContexts, 0);
 		snmp_target_mib.snmp_unknowncontexts++;
-		if ((value = ober_add_integer(NULL,
-		    snmp_target_mib.snmp_unknowncontexts)) == NULL)
-			fatal("ober_add_integer");
-		appl_report(statereference, requestid, &oid, value);
+		appl_report(statereference, requestid,
+		    &OID(MIB_snmpUnknownContexts, 0));
 		return;
 	}
 
@@ -884,6 +876,7 @@ appl_processpdu(struct snmp_message *statereference, const char *ctxname,
 	ureq->aru_statereference = statereference;
 	ureq->aru_transactionid = transactionid++;
 	ureq->aru_requesttype = pdu->be_type;
+	ureq->aru_responsetype = SNMP_C_RESPONSE;
 	ureq->aru_requestid = requestid;
 	ureq->aru_error = APPL_ERROR_NOERROR;
 	ureq->aru_index = 0;
@@ -892,7 +885,6 @@ appl_processpdu(struct snmp_message *statereference, const char *ctxname,
 	ureq->aru_varbindlen = 0;
 	ureq->aru_locked = 0;
 	ureq->aru_pduversion = pduversion;
-	ureq->aru_pdu = pdu;
 
 	varbind = varbindlist->be_sub;
 	for (; varbind != NULL; varbind = varbind->be_next)
@@ -919,6 +911,8 @@ appl_processpdu(struct snmp_message *statereference, const char *ctxname,
 			ureq->aru_vblist[i - repeaterlen].avi_sub =
 			    &(ureq->aru_vblist[i]);
 			ureq->aru_vblist[i].avi_state = APPL_VBSTATE_MUSTFILL;
+			ureq->aru_vblist[i].avi_index =
+			    ureq->aru_vblist[i - repeaterlen].avi_index;
 			continue;
 		}
 		ober_get_oid(varbind->be_sub,
@@ -1216,14 +1210,15 @@ appl_request_upstream_reply(struct appl_request_upstream *ureq)
 	}
 	/* RFC 3416 section 4.2.{1,2,3} reset original varbinds */
 	if (ureq->aru_error != APPL_ERROR_NOERROR) {
-		ober_scanf_elements(ureq->aru_pdu, "{SSS{e", &varbind);
-		for (varbindlen = 0; varbind != NULL;
-		    varbindlen++, varbind = varbind->be_next) {
-			vb = &(ureq->aru_vblist[varbindlen]);
-			ober_get_oid(varbind->be_sub,
-			    &(vb->avi_varbind.av_oid));
+		if (ureq->aru_requesttype == SNMP_C_GETBULKREQ)
+			varbindlen =
+			    (ureq->aru_varbindlen - ureq->aru_nonrepeaters) /
+			    ureq->aru_maxrepetitions;
+		for (i = 0; i < varbindlen; i++) {
+			vb = &(ureq->aru_vblist[i]);
+			vb->avi_varbind.av_oid = vb->avi_origid;
 			ober_free_elements(vb->avi_varbind.av_value);
-			vb->avi_varbind.av_value = ober_add_null(NULL);;
+			vb->avi_varbind.av_value = ober_add_null(NULL);
 		}
 	/* RFC 3416 section 4.2.3: Strip excessive EOMV */
 	} else if (ureq->aru_requesttype == SNMP_C_GETBULKREQ) {
@@ -1258,7 +1253,7 @@ appl_request_upstream_reply(struct appl_request_upstream *ureq)
 	}
 
 	ureq->aru_vblist[i - 1].avi_varbind.av_next = NULL;
-	appl_pdu_log(NULL, SNMP_C_RESPONSE, ureq->aru_requestid,
+	appl_pdu_log(NULL, ureq->aru_responsetype, ureq->aru_requestid,
 	    ureq->aru_error, ureq->aru_index,
 	    &(ureq->aru_vblist[0].avi_varbind));
 
@@ -1273,7 +1268,7 @@ appl_request_upstream_reply(struct appl_request_upstream *ureq)
 			varbindlist = varbind;
 	}
 
-	snmpe_send(ureq->aru_statereference, SNMP_C_RESPONSE,
+	snmpe_send(ureq->aru_statereference, ureq->aru_responsetype,
 	    ureq->aru_requestid, ureq->aru_error, ureq->aru_index, varbindlist);
 	ureq->aru_statereference = NULL;
 	appl_request_upstream_free(ureq);
@@ -1691,20 +1686,41 @@ appl_varbind_error(struct appl_varbind_internal *avi, enum appl_error error)
 }
 
 void
-appl_report(struct snmp_message *msg, int32_t requestid, struct ber_oid *oid,
-    struct ber_element *value)
+appl_report(struct snmp_message *statereference, int32_t requestid,
+    struct ber_oid *oid)
 {
-	struct ber_element *varbind;
+	struct appl_request_upstream *ureq;
 
-	varbind = ober_printf_elements(NULL, "{Oe}", oid, value);
-	if (varbind == NULL) {
-		log_warn("%"PRId32": ober_printf_elements", requestid);
-		ober_free_elements(value);
-		snmp_msgfree(msg);
-		return;
-	}
+	if ((ureq = calloc(1, sizeof(*ureq))) == NULL)
+		fatal("malloc");
+	ureq->aru_ctx = appl_context(NULL, 0);
+	ureq->aru_statereference = statereference;
+	ureq->aru_requesttype = SNMP_C_GETREQ;
+	ureq->aru_responsetype = SNMP_C_REPORT;
+	ureq->aru_requestid = requestid;
+	ureq->aru_transactionid = 0;
+	ureq->aru_nonrepeaters = 0;
+	ureq->aru_maxrepetitions = 0;
+	if ((ureq->aru_vblist = calloc(1, sizeof(*ureq->aru_vblist))) == NULL)
+		fatal("malloc");
+	ureq->aru_varbindlen = 1;
+	ureq->aru_error = APPL_ERROR_NOERROR;
+	ureq->aru_index = 0;
+	ureq->aru_locked = 0;
+	ureq->aru_pduversion = SNMP_V3;
 
-	snmpe_send(msg, SNMP_C_REPORT, requestid, 0, 0, varbind);
+	ureq->aru_vblist[0].avi_state = APPL_VBSTATE_NEW;
+	ureq->aru_vblist[0].avi_varbind.av_oid = *oid;
+	ureq->aru_vblist[0].avi_varbind.av_value = NULL;
+	ureq->aru_vblist[0].avi_varbind.av_next = NULL;
+	ureq->aru_vblist[0].avi_origid = *oid;
+	ureq->aru_vblist[0].avi_index = 1;
+	ureq->aru_vblist[0].avi_request_upstream = ureq;
+	ureq->aru_vblist[0].avi_request_downstream = NULL;
+	ureq->aru_vblist[0].avi_next = NULL;
+	ureq->aru_vblist[0].avi_sub = NULL;
+	
+	appl_request_upstream_resolve(ureq);
 }
 
 struct ber_element *

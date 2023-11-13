@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.80 2023/11/04 09:38:47 martijn Exp $	*/
+/*	$OpenBSD: parse.y,v 1.82 2023/11/12 20:04:35 martijn Exp $	*/
 
 /*
  * Copyright (c) 2007, 2008, 2012 Reyk Floeter <reyk@openbsd.org>
@@ -54,6 +54,7 @@
 #include <string.h>
 #include <syslog.h>
 
+#include "application.h"
 #include "snmpd.h"
 #include "mib.h"
 
@@ -98,6 +99,7 @@ char		*symget(const char *);
 struct snmpd			*conf = NULL;
 static int			 errors = 0;
 static struct usmuser		*user = NULL;
+static struct ber_oid		*smi_object;
 
 static uint8_t			 engineid[SNMPD_MAXENGINEIDLEN];
 static int32_t			 enginepen;
@@ -148,7 +150,7 @@ typedef struct {
 %type	<v.number>	listenproto listenflag listenflags
 %type	<v.string>	srcaddr port
 %type	<v.number>	optwrite yesno seclevel
-%type	<v.data>	objtype cmd hostauth hostauthv3 usmauthopts usmauthopt
+%type	<v.data>	cmd hostauth hostauthv3 usmauthopts usmauthopt
 %type	<v.oid>		oid hostoid trapoid
 %type	<v.auth>	auth
 %type	<v.enc>		enc
@@ -162,7 +164,7 @@ grammar		: /* empty */
 		| grammar varset '\n'
 		| grammar main '\n'
 		| grammar system '\n'
-		| grammar mib '\n'
+		| grammar object '\n'
 		| grammar error '\n'		{ file->errors++; }
 		;
 
@@ -845,50 +847,49 @@ sysmib		: CONTACT STRING		{
 		}
 		;
 
-mib		: OBJECTID oid NAME STRING optwrite objtype	{
-			struct oid	*oid;
-			if ((oid = (struct oid *)
-			    calloc(1, sizeof(*oid))) == NULL) {
-				yyerror("calloc");
+object		: OBJECTID oid NAME STRING optwrite 	{
+			const char *error;
+
+			smi_object = $2;
+			error = smi_insert($2, $4);
+			free($4);
+			if (error != NULL) {
+				yyerror("%s", error);
 				free($2);
-				free($6.data);
 				YYERROR;
 			}
-
-			smi_oidlen($2);
-			bcopy($2, &oid->o_id, sizeof(struct ber_oid));
-			free($2);
-			oid->o_name = $4;
-			oid->o_data = $6.data;
-			oid->o_val = $6.value;
-			switch ($6.type) {
-			case 1:
-				oid->o_get = mps_getint;
-				break;
-			case 2:
-				oid->o_get = mps_getstr;
-				break;
-			}
-			oid->o_flags = OID_RD|OID_DYNAMIC;
-
-			if (smi_insert(oid) == -1) {
-				yyerror("duplicate oid");
-				free(oid->o_name);
-				free(oid->o_data);
-				YYERROR;
-			}
+		} objectvalue {
+			free(smi_object);
 		}
 		;
 
-objtype		: INTEGER NUMBER			{
-			$$.type = 1;
-			$$.data = NULL;
-			$$.value = $2;
+objectvalue	: INTEGER NUMBER			{
+			const char *error;
+
+			if ($2 < INT32_MIN) {
+				yyerror("number too small");
+				YYERROR;
+			}
+			if ($2 > INT32_MAX) {
+				yyerror("number too large");
+				YYERROR;
+			}
+			error = appl_internal_object_int(smi_object, $2);
+			if (error != NULL) {
+				yyerror("%s", error);
+				YYERROR;
+			}
 		}
 		| OCTETSTRING STRING			{
-			$$.type = 2;
-			$$.data = $2;
-			$$.value = strlen($2);
+			const char *error;
+
+			error = appl_internal_object_string(smi_object, $2);
+			if (error != NULL) {
+				yyerror("%s", error);
+				free($2);
+				YYERROR;
+			}
+			
 		}
 		;
 

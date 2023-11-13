@@ -1,4 +1,4 @@
-.\" $OpenBSD: bsd.port.mk.5,v 1.638 2023/11/02 16:14:46 paco Exp $
+.\" $OpenBSD: bsd.port.mk.5,v 1.644 2023/11/11 10:46:37 espie Exp $
 .\"
 .\" Copyright (c) 2000-2008 Marc Espie
 .\"
@@ -24,7 +24,7 @@
 .\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 .\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 .\"
-.Dd $Mdocdate: November 2 2023 $
+.Dd $Mdocdate: November 11 2023 $
 .Dt BSD.PORT.MK 5
 .Os
 .Sh NAME
@@ -1231,6 +1231,12 @@ Define only for broken ports, set to reason the port is broken.
 See also
 .Ev NO_IGNORE ,
 .Ev TRY_BROKEN .
+.It Ev BUILD_UNLINKED
+User settings.
+List of tags that shouldn't be
+.Ev IGNORE Ns d
+even though the ports are currently
+.Ev UNLINKED .
 .It Ev BUILD_USER
 User to switch to when using
 .Ev PORTS_PRIVSEP ,
@@ -1317,6 +1323,20 @@ Many ports ignore it.
 See also
 .Ev COPTS ,
 .Ev CDIAGFLAGS .
+.It Ev CFLAGS_${CHOSEN_COMPILER}
+Additional flags that will be appended to
+.Ev CFLAGS
+depending on the value of
+.Ev CHOSEN_COMPILER .
+Common usage pattern:
+.Bd -literal -offset indent
+CFLAGS_base-clang =      -Wno-error=unused-but-set-variable
+.Ed
+.Pp
+See also
+.Ev COMPILER , COMPILER_LANGS
+and
+.Ev CHOSEN_COMPILER .
 .It Ev CHECK_LIB_DEPENDS
 User settings.
 If set to
@@ -1608,6 +1628,16 @@ is set.
 .It Ev CXXFLAGS
 Default flags passed to the C++ compiler for building.
 Many ports ignore it.
+.It Ev CXXFLAGS_${CHOSEN_COMPILER}
+Additional flags that will be appended to
+.Ev CXXFLAGS
+depending on the
+value of
+.Ev CHOSEN_COMPILER .
+See also
+.Ev COMPILER , COMPILER_LANGS
+and
+.Ev CHOSEN_COMPILER .
 .It Ev CXXOPTS
 User settings.
 Supplementary options appended to ${CXXFLAGS} for building.
@@ -1653,6 +1683,7 @@ should be one of
 .Sq codeberg ,
 .Sq github ,
 .Sq gitlab ,
+.Sq gnome ,
 .Sq kde ,
 or
 .Sq srht
@@ -2169,6 +2200,7 @@ If non-empty, most common targets that do something (e.g.,
 will be ignored.
 See also
 .Ev BATCH ,
+.Ev BUILD_UNLINKED ,
 .Ev BROKEN ,
 .Ev FETCH_MANUALLY ,
 .Ev IGNORE_IS_FATAL ,
@@ -2177,7 +2209,8 @@ See also
 .Ev IS_INTERACTIVE ,
 .Ev NOT_FOR_ARCHS ,
 .Ev NO_IGNORE ,
-.Ev ONLY_FOR_ARCHS .
+.Ev ONLY_FOR_ARCHS ,
+.Ev UNLINKED .
 .It Ev IGNORE_IS_FATAL
 User settings.
 If set to
@@ -2523,6 +2556,13 @@ See also
 .Ev IGNORE
 and
 .Ev TRY_BROKEN .
+.It Ev NO_SCCACHE
+Set to
+.Sq Yes
+to prevent sccache from being used when building a certain port,
+even when
+.Ev USE_SCCACHE
+is set.
 .It Ev NO_TEST
 Port does not have any regression tests.
 Only set to
@@ -3171,6 +3211,15 @@ The corresponding packages will be built right before the
 stage, and
 .Xr pkg_add 1
 will take care of installing them.
+.It Ev SCCACHE_DIR
+Sets the cache directory used when
+.Ev USE_SCCACHE
+is set to yes.
+Defaults to ${WRKOBJDIR}/.sccache.
+.It Ev SCCACHE_ENV
+Sets additional environment variables when
+.Ev USE_SCCACHE
+is set to yes.
 .It Ev SEPARATE_BUILD
 Many GNU configure ports can be built in a directory distinct from the
 place they were unpacked.
@@ -3529,6 +3578,22 @@ User settings.
 If set, expands to a command that will release a lock.
 This lock will reside in
 .Pa ${LOCKDIR} .
+.It Ev UNLINKED
+Some ports should not be built by default for various reasons:
+not fully integrated into the system yet, bootstrap-specific
+ports, flavors that conflict badly with the default installation,
+but these ports should still be indexed by tools like
+.Pa sqlports
+for consistency.
+Instead, set
+.Ev UNLINKED
+to a
+.Sq tag
+that will make the port
+.Ev IGNORE Ns d
+unless
+.Ev BUILD_UNLINKED
+contains that specific tag.
 .It Ev UNMESSAGE
 File recorded in the package and displayed during deinstallation.
 Defaults to ${PKGDIR}/UNMESSAGE if this file exists.
@@ -3656,6 +3721,11 @@ adding
 .Fl -no-execute-only .
 Use when a port does not work with execute-only (unreadable) code sections
 which are used by default by the linker on some architectures.
+.It Ev USE_SCCACHE
+User settings.
+Set to
+.Sq Yes
+to use sccache when building Rust ports.
 .It Ev USE_WXNEEDED
 If set to
 .Sq Yes ,
@@ -4614,6 +4684,9 @@ a given build dependency (and corresponding WANTLIB for a given SUBPACKAGE).
 See
 .Cm print-package-args Pq Cm lib-depends-args
 for details.
+.It "Not built because unlinked (<tag>)"
+See
+.Ev UNLINKED .
 .It "Warning: FULLPKGNAME-sub defined but not FULLPKGPATH-sub"
 .Ev FULLPKGNAME-sub
 has been explicitly defined by the port, instead of relying on the default,
