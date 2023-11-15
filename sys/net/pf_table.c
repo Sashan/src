@@ -2598,6 +2598,8 @@ pfr_detach_table(struct pfr_ktable *kt)
 	/*
 	 * Table will be purged with ioctl(). We can not afford
 	 * to do expensive lookup for anchor which holds the table.
+	 * pf_remove_orphans() will find table with no references
+	 * and will remove it.
 	 */
 	KASSERT(kt->pfrkt_refcnt > 0);
 	if (!--kt->pfrkt_refcnt)

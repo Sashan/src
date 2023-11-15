@@ -147,6 +147,7 @@ struct pf_rule		 pf_default_rule;
 uint32_t		 pf_default_vers = 1;
 
 void			 pf_dynaddr_remove(struct pf_addr_wrap *);
+void			 pfi_dynaddr_remove(struct pf_addr_wrap *);
 
 #define	TAGID_MAX	 50000
 TAILQ_HEAD(pf_tags, pf_tagname)	pf_tags = TAILQ_HEAD_INITIALIZER(pf_tags),
@@ -351,6 +352,18 @@ pf_rule_free(struct pf_rule *rule)
 }
 
 void
+pf_dynaddr_destroy(struct pf_addr_wrap *aw)
+{
+	if (aw->type != PF_ADDR_DYNIFTL)
+		return;
+
+	KASSERT(aw->p.dyn->pfid_kif == NULL);
+	KASSERT(aw->p.dyn->pfid_kif == NULL);
+	pool_put(&pf_addr_pl, aw->p.dyn);
+	aw->p.dyn = NULL;
+}
+
+void
 pf_destroy_rule(struct pf_rule *rule)
 {
 	if (rule->states_cur > 0 || rule->src_nodes > 0)
@@ -359,11 +372,11 @@ pf_destroy_rule(struct pf_rule *rule)
 	pf_tag_unref(rule->match_tag);
 	pf_rtlabel_remove(&rule->src.addr);
 	pf_rtlabel_remove(&rule->dst.addr);
-	pf_dynaddr_remove(&rule->src.addr);
-	pf_dynaddr_remove(&rule->dst.addr);
-	pf_dynaddr_remove(&rule->rdr.addr);
-	pf_dynaddr_remove(&rule->nat.addr);
-	pf_dynaddr_remove(&rule->route.addr);
+	pf_dynaddr_destroy(&rule->src.addr);
+	pf_dynaddr_destroy(&rule->dst.addr);
+	pf_dynaddr_destroy(&rule->rdr.addr);
+	pf_dynaddr_destroy(&rule->nat.addr);
+	pf_dynaddr_destroy(&rule->route.addr);
 	pf_tbladdr_remove(&rule->src.addr);
 	pf_tbladdr_remove(&rule->dst.addr);
 	pf_tbladdr_remove(&rule->rdr.addr);
@@ -420,11 +433,11 @@ pf_rm_rule(struct pf_rulequeue *rulequeue, struct pf_rule *rule)
 	pf_tag_unref(rule->match_tag);
 	pf_rtlabel_remove(&rule->src.addr);
 	pf_rtlabel_remove(&rule->dst.addr);
-	pf_dynaddr_remove(&rule->src.addr);
-	pf_dynaddr_remove(&rule->dst.addr);
-	pf_dynaddr_remove(&rule->rdr.addr);
-	pf_dynaddr_remove(&rule->nat.addr);
-	pf_dynaddr_remove(&rule->route.addr);
+	pfi_dynaddr_remove(&rule->src.addr);
+	pfi_dynaddr_remove(&rule->dst.addr);
+	pfi_dynaddr_remove(&rule->rdr.addr);
+	pfi_dynaddr_remove(&rule->nat.addr);
+	pfi_dynaddr_remove(&rule->route.addr);
 	if (rulequeue == NULL) {
 		pf_tbladdr_remove(&rule->src.addr);
 		pf_tbladdr_remove(&rule->dst.addr);
@@ -908,7 +921,7 @@ pf_calc_chksum(struct pf_ruleset *rs)
 }
 
 void
-pf_dynaddr_remove(struct pf_addr_wrap *aw)
+pfi_dynaddr_remove(struct pf_addr_wrap *aw)
 {
 	if (aw->type != PF_ADDR_DYNIFTL || aw->p.dyn == NULL ||
 	    aw->p.dyn->pfid_kif == NULL || aw->p.dyn->pfid_kt == NULL)
@@ -1292,10 +1305,31 @@ pf_print_tables(const char *hdr, struct pf_anchor *a)
 }
 
 void
+pf_detach_addr(struct pf_addr_wrap *aw)
+{
+	switch (aw->type) {
+	case PF_ADDR_TABLE:
+		aw->p.tbl->pfrkt_refcnt--;
+		KASSERT(aw->p.tbl->pfrkt_refcnt >= 0);
+		if (aw->p.tbl->pfrkt_refcnt == 0)
+			aw->p.tbl->pfrkt_flags &= PFR_TFLAG_REFERENCED;
+		break;
+	case PF_ADDR_DYNIFTL:
+		/* remove ourselves from kif */
+		TAILQ_REMOVE(&aw->p.dyn->pfid_kif->pfik_dynaddrs, aw->p.dyn,
+		    entry);
+		pfi_kif_unref(aw->p.dyn->pfid_kif, PFI_KIF_REF_RULE);
+		aw->p.dyn->pfid_kif = NULL;
+		pfr_detach_table(aw->p.dyn->pfid_kt);
+		aw->p.dyn->pfid_kt = NULL;
+		break;
+	default:;
+	}
+}
+
+void
 pf_detach_rule(struct pf_rule *r)
 {
-	struct pfr_ktable *tmp_kt;
-
 	if (r->anchor != NULL) {
 		r->anchor->refcnt--;
 		DPFPRINTF(LOG_DEBUG, "%s droping reference to %s",
@@ -1304,56 +1338,36 @@ pf_detach_rule(struct pf_rule *r)
 		KASSERT(r->anchor->refcnt >= 0);
 		r->anchor = NULL;
 	}
-	if (r->src.addr.type == PF_ADDR_TABLE) {
-		tmp_kt = r->src.addr.p.tbl;
-		r->src.addr.p.tbl = NULL;
-		r->src.addr.type = PF_ADDR_NONE;
+	pf_detach_addr(&r->src.addr);
+	pf_detach_addr(&r->dst.addr);
+	pf_detach_addr(&r->rdr.addr);
+	pf_detach_addr(&r->nat.addr);
+	pf_detach_addr(&r->route.addr);
+}
 
-		tmp_kt->pfrkt_refcnt--;
-		KASSERT(tmp_kt->pfrkt_refcnt >= 0);
-		if (tmp_kt->pfrkt_refcnt == 0)
-			tmp_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-	}
-	if (r->dst.addr.type == PF_ADDR_TABLE) {
-		tmp_kt = r->dst.addr.p.tbl;
-		r->dst.addr.p.tbl = NULL;
-		r->dst.addr.type = PF_ADDR_NONE;
+int
+pf_update_tablerefs_rule(struct pf_addr_wrap *aw, struct pfr_ktable *cur,
+    struct pfr_ktable *new)
+{
+	int	rv;
 
-		tmp_kt->pfrkt_refcnt--;
-		KASSERT(tmp_kt->pfrkt_refcnt >= 0);
-		if (tmp_kt->pfrkt_refcnt == 0)
-			tmp_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-	}
-	if (r->rdr.addr.type == PF_ADDR_TABLE) {
-		tmp_kt = r->rdr.addr.p.tbl;
-		r->rdr.addr.p.tbl = NULL;
-		r->rdr.addr.type = PF_ADDR_NONE;
+	if (aw->type != PF_ADDR_TABLE)
+		return (0);
 
-		tmp_kt->pfrkt_refcnt--;
-		KASSERT(tmp_kt->pfrkt_refcnt >= 0);
-		if (tmp_kt->pfrkt_refcnt == 0)
-			tmp_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-	}
-	if (r->nat.addr.type == PF_ADDR_TABLE) {
-		tmp_kt = r->nat.addr.p.tbl;
-		r->nat.addr.p.tbl = NULL;
-		r->nat.addr.type = PF_ADDR_NONE;
+	if (aw->p.tbl == cur) {
+		cur->pfrkt_refcnt--;
+		KASSERT(cur->pfrkt_refcnt >= 0);
+		if (cur->pfrkt_refcnt == 0)
+			cur->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
 
-		tmp_kt->pfrkt_refcnt--;
-		KASSERT(tmp_kt->pfrkt_refcnt >= 0);
-		if (tmp_kt->pfrkt_refcnt == 0)
-			tmp_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-	}
-	if (r->route.addr.type == PF_ADDR_TABLE) {
-		tmp_kt = r->route.addr.p.tbl;
-		r->route.addr.p.tbl = NULL;
-		r->route.addr.type = PF_ADDR_NONE;
+		aw->p.tbl = new;
+		new->pfrkt_refcnt++;
+		new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
+		rv = 1;
+	} else
+		rv = 0;
 
-		tmp_kt->pfrkt_refcnt--;
-		KASSERT(tmp_kt->pfrkt_refcnt >= 0);
-		if (tmp_kt->pfrkt_refcnt == 0)
-			tmp_kt->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-	}
+	return (rv);
 }
 
 void
@@ -1363,22 +1377,13 @@ pf_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 	struct pfr_ktable *current = tables[0];
 	struct pfr_ktable *new = tables[1];
 	struct pf_rule *r;
+	int updated;
 
 	TAILQ_FOREACH(r, a->ruleset.rules.ptr, entries) {
-		if (r->src.addr.type == PF_ADDR_TABLE &&
-		    r->src.addr.p.tbl == current) {
-			current->pfrkt_refcnt--;
-			KASSERT(current->pfrkt_refcnt >= 0);
-			if (current->pfrkt_refcnt == 0)
-				current->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-
-			r->src.addr.p.tbl = new;
-			new->pfrkt_refcnt++;
-			new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
-
+		updated = pf_update_tablerefs_rule(&r->src.addr, current, new);
+		if (updated) {
 			DPFPRINTF(LOG_DEBUG, "%s %u@%s src %s@%s",
-			    __func__,
-			    r->nr, a->path,
+			    __func__, r->nr, PF_ANCHOR_PATH(a),
 			    new->pfrkt_name, new->pfrkt_anchor);
 		} else if (r->src.addr.type == PF_ADDR_TABLE &&
 		    r->src.addr.p.tbl != NULL) {
@@ -1390,17 +1395,8 @@ pf_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 			    r->src.addr.p.tbl->pfrkt_anchor);
 		}
 
-		if (r->dst.addr.type == PF_ADDR_TABLE &&
-		    r->dst.addr.p.tbl == current) {
-			current->pfrkt_refcnt--;
-			KASSERT(current->pfrkt_refcnt >= 0);
-			if (current->pfrkt_refcnt == 0)
-				current->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-
-			r->dst.addr.p.tbl = new;
-			new->pfrkt_refcnt++;
-			new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
-
+		updated = pf_update_tablerefs_rule(&r->dst.addr, current, new);
+		if (updated) {
 			DPFPRINTF(LOG_DEBUG, "%s %u@%s dst %s@%s",
 			    __func__,
 			    r->nr, a->path,
@@ -1415,17 +1411,8 @@ pf_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 			    r->dst.addr.p.tbl->pfrkt_anchor);
 		}
 
-		if (r->rdr.addr.type == PF_ADDR_TABLE &&
-		    r->rdr.addr.p.tbl == current) {
-			current->pfrkt_refcnt--;
-			KASSERT(current->pfrkt_refcnt >= 0);
-			if (current->pfrkt_refcnt == 0)
-				current->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-
-			r->rdr.addr.p.tbl = new;
-			new->pfrkt_refcnt++;
-			new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
-
+		updated = pf_update_tablerefs_rule(&r->rdr.addr, current, new);
+		if (updated) {
 			DPFPRINTF(LOG_DEBUG, "%s %u@%s rdr %s@%s",
 			    __func__,
 			    r->nr, a->path,
@@ -1440,17 +1427,9 @@ pf_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 			    r->rdr.addr.p.tbl->pfrkt_anchor);
 		}
 
+		updated = pf_update_tablerefs_rule(&r->nat.addr, current, new);
 		if (r->nat.addr.type == PF_ADDR_TABLE &&
 		    r->nat.addr.p.tbl == current) {
-			current->pfrkt_refcnt--;
-			KASSERT(current->pfrkt_refcnt >= 0);
-			if (current->pfrkt_refcnt == 0)
-				current->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-
-			r->nat.addr.p.tbl = new;
-			new->pfrkt_refcnt++;
-			new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
-
 			DPFPRINTF(LOG_DEBUG, "%s %u@%s nat %s@%s",
 			    __func__,
 			    r->nr, a->path,
@@ -1465,17 +1444,9 @@ pf_update_tablerefs_anchor(struct pf_anchor *a, void *arg)
 			    r->nat.addr.p.tbl->pfrkt_anchor);
 		}
 
+		updated = pf_update_tablerefs_rule(&r->route.addr, current, new);
 		if (r->route.addr.type == PF_ADDR_TABLE &&
 		    r->route.addr.p.tbl == current) {
-			current->pfrkt_refcnt--;
-			KASSERT(current->pfrkt_refcnt >= 0);
-			if (current->pfrkt_refcnt == 0)
-				current->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
-
-			r->route.addr.p.tbl = new;
-			new->pfrkt_refcnt++;
-			new->pfrkt_flags |= PFR_TFLAG_REFERENCED;
-
 			DPFPRINTF(LOG_DEBUG, "%s %u@%s route  %s@%s",
 			    __func__,
 			    r->nr, a->path,
@@ -1590,7 +1561,12 @@ pf_refresh_addr(struct pf_trans *t, struct pf_addr_wrap *aw)
 	}
 
 	/*
-	 * add ourselves to dynaddrs list at kif
+	 * add ourselves to dynaddrs list at kif.  The code here preserves
+	 * behavior of former pfi_dynaddr_setup(). Each address field in rule
+	 * indeed has an entry in pfik_dynaddrs list. This is surprising,
+	 * because I would expect we would an entry per table. If update
+	 * happens and there is 10 rules which refer to interface we get 10
+	 * update calls to table. We can make it better at some point.
 	 */
 	TAILQ_INSERT_HEAD(&dyn->pfid_kif->pfik_dynaddrs, dyn, entry);
 }
