@@ -1,4 +1,4 @@
-/* $OpenBSD: kstat.c,v 1.11 2022/07/10 19:51:37 kn Exp $ */
+/* $OpenBSD: kstat.c,v 1.13 2023/11/16 03:17:34 dlg Exp $ */
 
 /*
  * Copyright (c) 2020 David Gwynne <dlg@openbsd.org>
@@ -51,6 +51,29 @@
 #ifndef SET
 #define SET(_i, _m)		((_i) |= (_m))
 #endif
+
+struct fmt_result {
+	uint64_t		val;
+	unsigned int		frac;
+	unsigned int		exp;
+};
+
+static void
+fmt_thing(struct fmt_result *fr, uint64_t val, uint64_t chunk)
+{
+	unsigned int exp = 0;
+	uint64_t rem = 0;
+
+	while (val > chunk) {
+		rem = val % chunk;
+		val /= chunk;
+		exp++;
+	}
+
+	fr->val = val;
+	fr->exp = exp;
+	fr->frac = (rem * 1000) / chunk;
+}
 
 #define str_is_empty(_str)	(*(_str) == '\0')
 
@@ -170,6 +193,7 @@ main(int argc, char *argv[])
 		err(1, "kstat version");
 
 	kstat_list(&kt, fd, version, &kfs);
+	kstat_read(&kt, fd);
 	kstat_print(&kt);
 
 	if (wait == 0)
@@ -351,6 +375,11 @@ strdumpnl(const void *s, size_t len)
 	printf("\n");
 }
 
+static const char *si_prefixes[] = { "", "k", "M", "G", "T", "P", "E" };
+#ifdef notyet
+static const char *iec_prefixes[] = { "", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei" };
+#endif
+
 static void
 kstat_kv(const void *d, ssize_t len)
 {
@@ -359,6 +388,7 @@ kstat_kv(const void *d, ssize_t len)
 	ssize_t blen;
 	void (*trailer)(const void *, size_t);
 	double f;
+	struct fmt_result fr;
 
 	if (len < (ssize_t)sizeof(*kv)) {
 		warn("short kv (len %zu < size %zu)", len, sizeof(*kv));
@@ -425,6 +455,24 @@ kstat_kv(const void *d, ssize_t len)
 			printf("%.2f degC", (f - 273150000.0) / 1000000.0);
 			break;
 
+		case KSTAT_KV_T_FREQ:
+			fmt_thing(&fr, kstat_kv_freq(kv), 1000);
+			printf("%llu", fr.val);
+			if (fr.frac > 10)
+				printf(".%02u", fr.frac / 10);
+			printf(" %sHz", si_prefixes[fr.exp]);
+			break;
+
+		case KSTAT_KV_T_VOLTS_DC: /* uV */
+			f = kstat_kv_volts(kv);
+			printf("%.2f VDC", f / 1000000.0);
+			break;
+
+		case KSTAT_KV_T_VOLTS_AC: /* uV */
+			f = kstat_kv_volts(kv);
+			printf("%.2f VAC", f / 1000000.0);
+			break;
+
 		default:
 			printf("unknown type %u, stopping\n", kv->kv_type);
 			return;
@@ -469,7 +517,6 @@ kstat_list(struct kstat_tree *kt, int fd, unsigned int version,
 {
 	struct kstat_entry *kse;
 	struct kstat_req *ksreq;
-	size_t len;
 	uint64_t id = 0;
 
 	for (;;) {
@@ -482,19 +529,12 @@ kstat_list(struct kstat_tree *kt, int fd, unsigned int version,
 		ksreq->ks_version = version;
 		ksreq->ks_id = ++id;
 
-		ksreq->ks_datalen = len = 64; /* magic */
-		ksreq->ks_data = malloc(len);
-		if (ksreq->ks_data == NULL)
-			err(1, "data alloc");
-
 		if (ioctl(fd, KSTATIOC_NFIND_ID, ksreq) == -1) {
 			if (errno == ENOENT) {
 				free(ksreq->ks_data);
 				free(kse);
 				break;
 			}
-
-			kse->serrno = errno;
 		} else
 			id = ksreq->ks_id;
 
@@ -507,18 +547,9 @@ kstat_list(struct kstat_tree *kt, int fd, unsigned int version,
 		if (RBT_INSERT(kstat_tree, kt, kse) != NULL)
 			errx(1, "duplicate kstat entry");
 
-		if (kse->serrno != 0)
-			continue;
-
-		while (ksreq->ks_datalen > len) {
-			len = ksreq->ks_datalen;
-			ksreq->ks_data = realloc(ksreq->ks_data, len);
-			if (ksreq->ks_data == NULL)
-				err(1, "data resize (%zu)", len);
-
-			if (ioctl(fd, KSTATIOC_FIND_ID, ksreq) == -1)
-				err(1, "find id %llu", ksreq->ks_id);
-		}
+		ksreq->ks_data = malloc(ksreq->ks_datalen);
+		if (ksreq->ks_data == NULL)
+			err(1, "kstat data alloc");
 	}
 }
 
@@ -534,7 +565,8 @@ kstat_print(struct kstat_tree *kt)
 		    ksreq->ks_provider, ksreq->ks_instance,
 		    ksreq->ks_name, ksreq->ks_unit);
 		if (kse->serrno != 0) {
-			printf("\t%s\n", strerror(kse->serrno));
+			printf("\tkstat read error: %s\n",
+			    strerror(kse->serrno));
 			continue;
 		}
 		switch (ksreq->ks_type) {
@@ -560,9 +592,10 @@ kstat_read(struct kstat_tree *kt, int fd)
 	struct kstat_req *ksreq;
 
 	RBT_FOREACH(kse, kstat_tree, kt) {
+		kse->serrno = 0;
 		ksreq = &kse->kstat;
 		if (ioctl(fd, KSTATIOC_FIND_ID, ksreq) == -1)
-			err(1, "update id %llu", ksreq->ks_id);
+			kse->serrno = errno;
 	}
 }
 

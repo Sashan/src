@@ -1,5 +1,5 @@
 #!/bin/ksh
-#	$OpenBSD: fw_update.sh,v 1.51 2023/10/14 18:10:47 afresh1 Exp $
+#	$OpenBSD: fw_update.sh,v 1.55 2023/11/15 02:07:43 afresh1 Exp $
 #
 # Copyright (c) 2021,2023 Andrew Hewus Fresh <afresh1@openbsd.org>
 #
@@ -60,7 +60,8 @@ cleanup() {
 
 	if [ -d "$FD_DIR" ]; then
 		echo "" >&"$STATUS_FD"
-		exec 4>&-
+		((STATUS_FD == 3)) && exec 3>&-
+		((WARN_FD   == 4)) && exec 4>&-
 
 		[ -s "$FD_DIR/status" ] && cat "$FD_DIR/status"
 		[ -s "$FD_DIR/warn"   ] && cat "$FD_DIR/warn" >&2
@@ -107,21 +108,24 @@ spin() {
 
 fetch() {
 	local _src="${FWURL}/${1##*/}" _dst=$1 _user=_file _exit _error=''
+	local _ftp_errors="$FD_DIR/ftp_errors"
+	rm -f "$_ftp_errors"
 
 	# The installer uses a limited doas(1) as a tiny su(1)
 	set -o monitor # make sure ftp gets its own process group
 	(
 	_flags=-vm
 	case "$VERBOSE" in
-		0|1) _flags=-VM ;;
+		0|1) _flags=-VM ; exec 2>"$_ftp_errors" ;;
 		  2) _flags=-Vm ;;
 	esac
+
 	if [ -x /usr/bin/su ]; then
 		exec /usr/bin/su -s /bin/ksh "$_user" -c \
-		    "/usr/bin/ftp -N '${0##/}' -D 'Get/Verify' $_flags -o- '$_src'" > "$_dst"
+		    "/usr/bin/ftp -N error -D 'Get/Verify' $_flags -o- '$_src'" > "$_dst"
 	else
 		exec /usr/bin/doas -u "$_user" \
-		    /usr/bin/ftp -N "${0##/}" -D 'Get/Verify' $_flags -o- "$_src" > "$_dst"
+		    /usr/bin/ftp -N error -D 'Get/Verify' $_flags -o- "$_src" > "$_dst"
 	fi
 	) & FTPPID=$!
 	set +o monitor
@@ -151,13 +155,34 @@ fetch() {
 
 	unset FTPPID
 
-	if [ "$_exit" -ne 0 ]; then
+	if ((_exit != 0)); then
 		rm -f "$_dst"
+
+		# ftp doesn't provide useful exit codes
+		# so we have to grep its STDERR.
+		# _exit=2 means don't keep trying
+		_exit=2
+
+		# If it was 404, we might succeed at another file
+		if [ -s "$_ftp_errors" ] && \
+		    grep -q "404 Not Found" "$_ftp_errors"; then
+			_exit=1
+			_error=" (404 Not Found)"
+			rm -f "$_ftp_errors"
+		fi
+
 		warn "Cannot fetch $_src$_error"
-		return 1
 	fi
 
-	return 0
+	# If we have ftp errors, print them out,
+	# removing any cntrl characters (like 0x0d),
+	# and any leading blank lines.
+	if [ -s "$_ftp_errors" ]; then
+		sed -e 's/[[:cntrl:]]//g' \
+		    -e '/./,$!d' "$_ftp_errors" >&"$WARN_FD"
+	fi
+
+	return "$_exit"
 }
 
 # If we fail to fetch the CFILE, we don't want to try again
@@ -165,12 +190,12 @@ fetch() {
 # a blank file indicating failure.
 check_cfile() {
 	if [ -e "$CFILE" ]; then
-		[ -s "$CFILE" ] || return 1
+		[ -s "$CFILE" ] || return 2
 		return 0
 	fi
 	if ! fetch_cfile; then
 		echo -n > "$CFILE"
-		return 1
+		return 2
 	fi
 	return 0
 }
@@ -180,9 +205,12 @@ fetch_cfile() {
 		set +o noclobber # we want to get the latest CFILE
 		fetch "$CFILE" || return 1
 		set -o noclobber
-		! signify -qVep "$FWPUB_KEY" -x "$CFILE" -m /dev/null &&
-		    warn "Signature check of SHA256.sig failed" &&
-		    rm -f "$CFILE" && return 1
+		signify -qVep "$FWPUB_KEY" -x "$CFILE" -m /dev/null \
+		    2>&"$WARN_FD" || {
+		        warn "Signature check of SHA256.sig failed"
+		        rm -f "$CFILE"
+			return 1
+		    }
 	elif [ ! -e "$CFILE" ]; then
 		warn "${0##*/}: $CFILE: No such file or directory"
 		return 1
@@ -192,7 +220,7 @@ fetch_cfile() {
 }
 
 verify() {
-	check_cfile || return 1
+	check_cfile || return $?
 	# The installer sha256 lacks -C, do it by hand
 	if ! grep -Fqx "SHA256 (${1##*/}) = $( /bin/sha256 -qb "$1" )" "$CFILE"
 	then
@@ -207,7 +235,7 @@ verify() {
 # if VERBOSE is 0, don't show the checksum failure of an existing file.
 verify_existing() {
 	local _v=$VERBOSE
-	check_cfile || return 1
+	check_cfile || return $?
 
 	((_v == 0)) && "$DOWNLOAD" && _v=1
 	( VERBOSE=$_v verify "$@" )
@@ -242,7 +270,7 @@ firmware_in_dmesg() {
 }
 
 firmware_filename() {
-	check_cfile || return 1
+	check_cfile || return $?
 	sed -n "s/.*(\($1-firmware-.*\.tgz\)).*/\1/p" "$CFILE" | sed '$!d'
 }
 
@@ -253,6 +281,7 @@ firmware_devicename() {
 }
 
 lock_db() {
+	local _waited
 	[ "${LOCKPID:-}" ] && return 0
 
 	# The installer doesn't have perl, so we can't lock there
@@ -267,9 +296,22 @@ lock_db() {
 		$|=1;
 
 		$0 = "fw_update: lock_db";
-		lock_db(0);
+		my $waited = 0;
+		package OpenBSD::FwUpdateState {
+			use parent 'OpenBSD::BaseState';
+			sub errprint ($self, @p) {
+				if ($p[0] && $p[0] =~ /already locked/) {
+					$waited++;
+					$p[0] = " " . $p[0]
+					    if !$ENV{VERBOSE};
+				}
+				$self->SUPER::errprint(@p);
+			}
 
-		say $$;
+		}
+		lock_db(0, 'OpenBSD::FwUpdateState');
+
+		say "$$ $waited";
 
 		# Wait for STDOUT to be readable, which won't happen
 		# but if our parent exits unexpectedly it will close.
@@ -279,7 +321,11 @@ lock_db() {
 EOL
 	set +o monitor
 
-	read -rp LOCKPID
+	read -rp LOCKPID _waited
+
+	if ((_waited)); then
+		! ((VERBOSE)) && status "${0##*/}:"
+	fi
 
 	return 0
 }
@@ -334,8 +380,11 @@ add_firmware () {
 		    -s ",^firmware,${DESTDIR}/etc/firmware," \
 		    -C / -zxphf - "+*" "firmware/*"
 
-	_pkg="$( sed -n '/^@name /{s///p;q;}' "${FWPKGTMP}/+CONTENTS" )"
-	if [ ! "$_pkg" ]; then
+
+	[ -s "${FWPKGTMP}/+CONTENTS" ] &&
+	    _pkg="$( sed -n '/^@name /{s///p;q;}' "${FWPKGTMP}/+CONTENTS" )"
+
+	if [ ! "${_pkg:-}" ]; then
 		warn "Failed to extract name from $1, partial install"
 		rm -rf "$FWPKGTMP"
 		unset FWPKGTMP
@@ -500,23 +549,17 @@ fi
 
 set -sA devices -- "$@"
 
-# In the normal case, we output the status line piecemeal
-# so we save warnings to output at the end to not disrupt
-# the single line status.
-# Actual errors from things like ftp will stil interrupt,
-# but it's impossible to know if it's a message people need
-# to see now or something that can wait.
-# In the verbose case, we instead print out single lines
-# or progress bars for each thing we are doing,
-# so instead we save up the final status line for the end.
 FD_DIR="$( tmpdir "${DESTDIR}/tmp/${0##*/}-fd" )"
+# When being verbose, save the status line for the end.
 if ((VERBOSE)); then
-	exec 4>"${FD_DIR}/status"
-	STATUS_FD=4
-else
-	exec 4>"${FD_DIR}/warn"
-	WARN_FD=4
+	exec 3>"${FD_DIR}/status"
+	STATUS_FD=3
 fi
+# Control "warning" messages to avoid the middle of a line.
+# Things that we don't expect to send to STDERR
+# still go there so the output, while it may be ugly, isn't lost
+exec 4>"${FD_DIR}/warn"
+WARN_FD=4
 
 status "${0##*/}:"
 
@@ -560,7 +603,10 @@ if "$DELETE"; then
 			if "$DRYRUN"; then
 				((VERBOSE)) && echo "Delete $fw"
 			else
-				delete_firmware "$fw" || continue
+				delete_firmware "$fw" || {
+					status " ($fw failed)"
+					continue
+				}
 			fi
 		done
 	fi
@@ -599,7 +645,18 @@ if [ "${devices[*]:-}" ]; then
 
 		verify_existing=true
 		if [ "$f" = "$d" ]; then
-			f=$( firmware_filename "$d" ) || continue
+			f=$( firmware_filename "$d" ) || {
+				# Fetching the CFILE here is often the
+				# first attempt to talk to FWURL
+				# If it fails, no point in continuing.
+				if (($? > 1)); then
+					status " failed."
+					exit 1
+				fi
+
+				# otherwise we can try the next firmware
+				continue
+			}
 			if [ ! "$f" ]; then
 				if "$INSTALL" && unregister_firmware "$d"; then
 					unregister="$unregister,$d"
@@ -717,11 +774,20 @@ for f in "${add[@]}" _update_ "${update[@]}"; do
 			fi
 			fetch  "$f" &&
 			verify "$f" || {
-				if "$pending_status"; then
-					echo " failed."
-				elif ! ((VERBOSE)); then
-					status " failed (${f##*/})"
+				integer e=$?
+
+				"$pending_status" && echo " failed."
+				status " failed (${f##*/})"
+
+				if ((VERBOSE)) && [ -s "$FD_DIR/warn" ]; then
+					cat "$FD_DIR/warn" >&2
+					rm -f "$FD_DIR/warn"
 				fi
+
+				# Fetch or verify exited > 1
+				# which means we don't keep trying.
+				((e > 1)) && exit 1
+
 				continue
 			}
 		fi
@@ -740,22 +806,19 @@ for f in "${add[@]}" _update_ "${update[@]}"; do
 			for i in $( installed_firmware '' "$d-firmware-" '*' )
 			do
 				delete_firmware "$i" || {
-					if "$pending_status"; then
-						echo " failed."
-					elif ! ((VERBOSE)); then
-						status " failed ($i)"
-					fi
+					"$pending_status" &&
+					    echo -n " (remove $i failed)"
+					status " (remove $i failed)"
+
 					continue
 				}
+				#status " (removed $i)"
 			done
 		fi
 
 		add_firmware "$f" "$action" || {
-			if "$pending_status"; then
-				echo " failed."
-			elif ! ((VERBOSE)); then
-				status " failed (${f##*/})"
-			fi
+			"$pending_status" && echo " failed."
+			status " failed (${f##*/})"
 			continue
 		}
 	fi

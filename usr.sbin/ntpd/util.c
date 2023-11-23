@@ -1,4 +1,4 @@
-/*	$OpenBSD: util.c,v 1.25 2020/01/30 15:55:41 otto Exp $ */
+/*	$OpenBSD: util.c,v 1.27 2023/11/19 10:41:25 claudio Exp $ */
 
 /*
  * Copyright (c) 2004 Alexander Guy <alexander.guy@andern.org>
@@ -18,6 +18,7 @@
 
 #include <fcntl.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -96,7 +97,7 @@ lfp_to_d(struct l_fixedpt lfp)
 	if (lfp.int_partl <= INT32_MAX)
 		base++; 
 	ret = base * SECS_IN_ERA;
-	ret += (double)(lfp.int_partl) + ((double)lfp.fractionl / UINT_MAX);
+	ret += (double)(lfp.int_partl) + ((double)lfp.fractionl / L_DENOMINATOR);
 
 	return (ret);
 }
@@ -109,7 +110,7 @@ d_to_lfp(double d)
 	while (d > SECS_IN_ERA)
 		d -= SECS_IN_ERA;
 	lfp.int_partl = htonl((u_int32_t)d);
-	lfp.fractionl = htonl((u_int32_t)((d - (u_int32_t)d) * UINT_MAX));
+	lfp.fractionl = htonl((u_int32_t)((d - (u_int32_t)d) * L_DENOMINATOR));
 
 	return (lfp);
 }
@@ -122,7 +123,7 @@ sfp_to_d(struct s_fixedpt sfp)
 	sfp.int_parts = ntohs(sfp.int_parts);
 	sfp.fractions = ntohs(sfp.fractions);
 
-	ret = (double)(sfp.int_parts) + ((double)sfp.fractions / USHRT_MAX);
+	ret = (double)(sfp.int_parts) + ((double)sfp.fractions / S_DENOMINATOR);
 
 	return (ret);
 }
@@ -133,7 +134,7 @@ d_to_sfp(double d)
 	struct s_fixedpt	sfp;
 
 	sfp.int_parts = htons((u_int16_t)d);
-	sfp.fractions = htons((u_int16_t)((d - (u_int16_t)d) * USHRT_MAX));
+	sfp.fractions = htons((u_int16_t)((d - (u_int16_t)d) * S_DENOMINATOR));
 
 	return (sfp);
 }

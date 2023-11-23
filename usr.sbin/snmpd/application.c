@@ -1,4 +1,4 @@
-/*	$OpenBSD: application.c,v 1.37 2023/11/13 10:14:29 martijn Exp $	*/
+/*	$OpenBSD: application.c,v 1.40 2023/11/16 14:35:25 martijn Exp $	*/
 
 /*
  * Copyright (c) 2021 Martijn van Duren <martijn@openbsd.org>
@@ -257,7 +257,7 @@ appl_addagentcaps(const char *ctxname, struct ber_oid *oid, const char *descr,
 		return APPL_ERROR_UNSUPPORTEDCONTEXT;
 	}
 
-	if ((cap = malloc(sizeof(*ctx))) == NULL) {
+	if ((cap = malloc(sizeof(*cap))) == NULL) {
 		log_warn("%s: Can't add agent capabilities %s",
 		    backend->ab_name, oidbuf);
 		return APPL_ERROR_PROCESSINGERROR;
@@ -919,15 +919,11 @@ appl_processpdu(struct snmp_message *statereference, const char *ctxname,
 		    &(ureq->aru_vblist[i].avi_varbind.av_oid));
 		ureq->aru_vblist[i].avi_origid =
 		    ureq->aru_vblist[i].avi_varbind.av_oid;
-		if (i + 1 < ureq->aru_varbindlen) {
-			ureq->aru_vblist[i].avi_next =
-			    &(ureq->aru_vblist[i + 1]);
+		if (i + 1 < varbindlen)
 			ureq->aru_vblist[i].avi_varbind.av_next =
 			    &(ureq->aru_vblist[i + 1].avi_varbind);
-		} else {
-			ureq->aru_vblist[i].avi_next = NULL;
+		else
 			ureq->aru_vblist[i].avi_varbind.av_next = NULL;
-		}
 		varbind = varbind->be_next;
 	}
 
@@ -1368,6 +1364,8 @@ appl_response(struct appl_backend *backend, int32_t requestid,
 			    origvb->avi_state == APPL_VBSTATE_DONE) {
 				origvb->avi_sub->avi_varbind.av_oid =
 				    origvb->avi_varbind.av_oid;
+				origvb->avi_sub->avi_origid =
+				    origvb->avi_varbind.av_oid;
 				origvb->avi_sub->avi_state = APPL_VBSTATE_NEW;
 			}
 			origvb = origvb->avi_next;
@@ -1663,9 +1661,11 @@ appl_varbind_backend(struct appl_varbind_internal *ivb)
 		ivb->avi_state = APPL_VBSTATE_DONE;
 		if (ivb->avi_varbind.av_value == NULL)
 			return -1;
-		if (ivb->avi_sub != NULL)
+		if (ivb->avi_sub != NULL) {
 			ivb->avi_sub->avi_varbind.av_oid =
 			    ivb->avi_varbind.av_oid;
+			ivb->avi_sub->avi_origid = ivb->avi_origid;
+		}
 		ivb = ivb->avi_sub;
 	} while (ivb != NULL);
 

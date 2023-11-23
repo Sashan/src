@@ -1,8 +1,9 @@
-# $OpenBSD: Makefile,v 1.10 2023/11/13 10:16:51 martijn Exp $
+# $OpenBSD: Makefile,v 1.12 2023/11/20 10:34:21 martijn Exp $
 # Regress tests for snmpd
 
 PROG =				snmpd_regress
 SRCS =				snmpd_regress.c agentx.c backend.c snmp.c
+SRCS+=				transport.c
 
 LDADD=				-lutil
 DPADD=				${LIBUTIL}
@@ -180,6 +181,9 @@ BACKEND_TARGETS+=		backend_getbulk_nonrep_one_maxrep_one
 BACKEND_TARGETS+=		backend_getbulk_nonrep_one_maxrep_two
 BACKEND_TARGETS+=		backend_getbulk_nonrep_two_maxrep_two
 BACKEND_TARGETS+=		backend_getbulk_nonrep_negative
+BACKEND_TARGETS+=		backend_getbulk_endofmibview
+BACKEND_TARGETS+=		backend_getbulk_endofmibview_second_rep
+BACKEND_TARGETS+=		backend_getbulk_endofmibview_two_varbinds
 BACKEND_TARGETS+=		backend_error_get_toobig
 BACKEND_TARGETS+=		backend_error_get_nosuchname
 BACKEND_TARGETS+=		backend_error_get_badvalue
@@ -246,7 +250,14 @@ SNMP_TARGETS+=			snmp_v3_usm_noauthpriv
 REGRESS_TARGETS+=		${SNMP_TARGETS}
 snmp: ${SNMP_TARGETS}
 
-.PHONY:				agentx backend
+TRANSPORT_TARGETS+=		transport_tcp_get
+TRANSPORT_TARGETS+=		transport_tcp_disconnect
+TRANSPORT_TARGETS+=		transport_tcp_double_get_disconnect
+
+REGRESS_TARGETS+=		${TRANSPORT_TARGETS}
+transport: ${TRANSPORT_TARGETS}
+
+.PHONY:				agentx backend snmp transport
 
 ${REGRESS_TARGETS}: snmpd_regress
 # Always start snmpd if it's not running

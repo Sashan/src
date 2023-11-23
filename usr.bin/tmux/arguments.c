@@ -1,4 +1,4 @@
-/* $OpenBSD: arguments.c,v 1.60 2023/06/30 21:55:08 nicm Exp $ */
+/* $OpenBSD: arguments.c,v 1.62 2023/11/14 20:01:11 nicm Exp $ */
 
 /*
  * Copyright (c) 2010 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -761,6 +761,7 @@ args_make_commands_prepare(struct cmd *self, struct cmdq_item *item, u_int idx,
 	struct args_value		*value;
 	struct args_command_state	*state;
 	const char			*cmd;
+	const char			*file;
 
 	state = xcalloc(1, sizeof *state);
 
@@ -787,7 +788,9 @@ args_make_commands_prepare(struct cmd *self, struct cmdq_item *item, u_int idx,
 
 	if (wait)
 		state->pi.item = item;
-	cmd_get_source(self, &state->pi.file, &state->pi.line);
+	cmd_get_source(self, &file, &state->pi.line);
+	if (file != NULL)
+		state->pi.file = xstrdup(file);
 	state->pi.c = tc;
 	if (state->pi.c != NULL)
 		state->pi.c->references++;
@@ -842,6 +845,7 @@ args_make_commands_free(struct args_command_state *state)
 		cmd_list_free(state->cmdlist);
 	if (state->pi.c != NULL)
 		server_client_unref(state->pi.c);
+	free((void *)state->pi.file);
 	free(state->cmd);
 	free(state);
 }
