@@ -2582,12 +2582,12 @@ pfr_attach_table(struct pf_rules_container *rc, struct pf_ruleset *rs,
 		 * We mark table as inactive if it is created on behalf of
 		 * rule.
 		 */
-		kt->pfrkt_flags = PFR_TFLAG_REFERENCED;
 		kt->pfrkt_flags |= PFR_TFLAG_INACTIVE;
 		kt->pfrkt_version = pfr_get_ktable_version(kt, NULL);
 	}
 
 	kt->pfrkt_refcnt++;
+	kt->pfrkt_flags |= PFR_TFLAG_REFERENCED;
 
 	return (kt);
 }
@@ -2915,14 +2915,15 @@ pfr_ktable_winfo_update(struct pfr_ktable *kt, struct pfr_kentry *p) {
 void
 pfr_print_table(const char *hdr, struct pf_anchor *a, struct pfr_ktable *kt)
 {
-	DPFPRINTF(LOG_DEBUG, "%s, %s@%s [%s] (%c%c%c%c%c%c)",
+	DPFPRINTF(LOG_DEBUG, "%s %s@%s [%s] (%c%c%c%c%c%c) {%d}",
 	    hdr, kt->pfrkt_name, kt->pfrkt_anchor, PF_ANCHOR_PATH(a),
 	    (kt->pfrkt_flags & PFR_TFLAG_CONST) ? 'c' : '-',
 	    (kt->pfrkt_flags & PFR_TFLAG_PERSIST) ? 'p' : '-',
 	    (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) ? 'a' : '-',
 	    (kt->pfrkt_flags & PFR_TFLAG_INACTIVE) ? 'i' : '-',
 	    (kt->pfrkt_flags & PFR_TFLAG_REFERENCED) ? 'r' : '-',
-	    (kt->pfrkt_flags & PFR_TFLAG_COUNTERS) ? 'C' : '-');
+	    (kt->pfrkt_flags & PFR_TFLAG_COUNTERS) ? 'C' : '-',
+	    kt->pfrkt_refcnt);
 }
 
 struct pfr_ktable *
