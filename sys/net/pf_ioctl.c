@@ -1312,7 +1312,9 @@ pf_detach_addr(struct pf_addr_wrap *aw)
 		aw->p.tbl->pfrkt_refcnt--;
 		KASSERT(aw->p.tbl->pfrkt_refcnt >= 0);
 		if (aw->p.tbl->pfrkt_refcnt == 0)
-			aw->p.tbl->pfrkt_flags &= PFR_TFLAG_REFERENCED;
+			aw->p.tbl->pfrkt_flags &= ~PFR_TFLAG_REFERENCED;
+		aw->p.tbl = NULL;
+		aw->type = PF_ADDR_NONE;
 		break;
 	case PF_ADDR_DYNIFTL:
 		/* remove ourselves from kif */
@@ -4645,7 +4647,7 @@ pf_kill_unused_tables(struct pf_trans *t, struct pf_anchor *a)
 	struct pfr_ktable	*call_arg[2];
 
 	RB_FOREACH_SAFE(kt, pfr_ktablehead, &a->ktables, ktw) {
-		pfr_print_table("pf_kill_unused_tables ", a, kt);
+		pfr_print_table("pf_kill_unused_tables", a, kt);
 		if (kt->pfrkt_flags & PFR_TFLAG_INACTIVE) {
 			DPFPRINTF(LOG_DEBUG,
 			    "%s try to find active parent for %s@%s",
