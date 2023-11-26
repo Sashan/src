@@ -4019,12 +4019,10 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 
 	if (!(pf->opts & PF_OPT_NOACTION)) {
 		/*
-		 * pf->alast is NULL when we deal with main anchor (ruleset
-		 * root). In this case we don't need to do extra stuff
-		 * w.r.t. tables and anchors because root anchor
-		 * is always there.
+		 * postpone definition of non-root tables to moment
+		 * when path is fully resolved.
 		 */
-		if (pf->alast != NULL) {
+		if (pf->asd > 0) {
 			ukt = calloc(1, sizeof(struct pfr_uktable));
 			if (ukt == NULL) {
 				fprintf(stderr,
@@ -5610,8 +5608,15 @@ void
 mv_tables(struct pfctl *pf, struct pfr_ktablehead *ktables,
     struct pf_anchor *a)
 {
+	struct pfr_ktable *kt;
+
 	a->ktables.rbh_root = ktables->rbh_root;
 	ktables->rbh_root = NULL;
+
+	RB_FOREACH(kt, pfr_ktablehead, &a->ktables) {
+		fprintf(stderr, "%s %s -> %s\n", __func__, a->name, kt->pfrkt_anchor);
+		strlcpy(kt->pfrkt_anchor, a->name, sizeof(kt->pfrkt_anchor));
+	}
 
 	/*
 	 * Tables bound to regular anchors are inserted to to kernel later
