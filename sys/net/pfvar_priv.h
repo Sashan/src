@@ -384,6 +384,7 @@ struct pf_trans {
 			char			 ina_anchor_path[PATH_MAX];
 			uint32_t		 ina_default_vers;
 			char			 ina_modify_defaults;
+			char			 ina_set_limit;
 		} u_ina;
 		struct {
 			unsigned long		 tab_iocmd;
@@ -427,6 +428,7 @@ struct pf_trans {
 #define pftina_anchor_path	u.u_ina.ina_anchor_path
 #define pftina_default_vers	u.u_ina.ina_default_vers
 #define	pftina_modify_defaults	u.u_ina.ina_modify_defaults
+#define	pftina_set_limit	u.u_ina.ina_set_limit
 
 #define pfttab_iocmd		u.u_tab.tab_iocmd
 #define pfttab_anchor_list	u.u_tab.tab_anchor_list

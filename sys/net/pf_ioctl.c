@@ -2794,6 +2794,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		t->pftina_pool_limits[pl.index] = pl.limit;
+		t->pftina_modify_defaults |= (1 << pl.index);
 		t->pftina_modify_defaults = 1;
 		pl.limit = pf_pool_limits[pl.index].limit;
 		PF_UNLOCK();
@@ -4697,6 +4698,9 @@ pf_ina_commit(struct pf_trans *t)
 		 */
 		for (i = 0; i < PF_LIMIT_MAX; i++) {
 			struct pool *pp;
+
+			if ((t->pftina_modify_defaults & (1 << i)) == 0)
+				continue;
 
 			pp = (struct pool *)pf_pool_limits[i].pp;
 			if (pp->pr_nout > t->pftina_pool_limits[i]) {
