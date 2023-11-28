@@ -1,7 +1,7 @@
 #! /usr/bin/perl
 
 # ex:ts=8 sw=4:
-# $OpenBSD: PkgAdd.pm,v 1.146 2023/11/08 09:51:13 caspar Exp $
+# $OpenBSD: PkgAdd.pm,v 1.148 2023/11/25 17:43:39 espie Exp $
 #
 # Copyright (c) 2003-2014 Marc Espie <espie@openbsd.org>
 #
@@ -307,7 +307,6 @@ sub check_security($set, $state, $plist, $h)
 	my ($error, $bad);
 	$state->run_quirks(
 		sub($quirks) {
-			return unless $quirks->can("check_security");
 			$bad = $quirks->check_security($plist->fullpkgpath);
 			if (defined $bad) {
 				require OpenBSD::PkgSpec;
@@ -360,7 +359,7 @@ sub find_kept_handle($set, $n, $state)
 		}
 	}
 	$set->check_security($state, $plist, $o);
-	if ($set->{quirks}) {
+	if ($set->{quirks} || $plist->has('updatedb')) {
 		# The installed package has inst: for a location, we want
 		# the newer one (which is identical)
 		$n->location->{repository}->setup_cache($state->{setlist});
@@ -844,7 +843,7 @@ sub really_add($set, $state)
 		add_installed($pkgname);
 		delete $handle->{partial};
 		OpenBSD::PkgCfl::register($handle, $state);
-		if ($set->{quirks}) {
+		if ($set->{quirks} || $plist->has('updatedb')) {
 			$handle->location->{repository}->setup_cache($state->{setlist});
 		}
 	}

@@ -1,4 +1,4 @@
-/*	$OpenBSD: udp_usrreq.c,v 1.306 2023/09/16 09:33:27 mpi Exp $	*/
+/*	$OpenBSD: udp_usrreq.c,v 1.309 2023/11/28 13:23:20 bluhm Exp $	*/
 /*	$NetBSD: udp_usrreq.c,v 1.28 1996/03/16 23:54:03 christos Exp $	*/
 
 /*
@@ -543,7 +543,7 @@ udp_input(struct mbuf **mp, int *offp, int proto, int af)
 		} else
 			tdb = NULL;
 		error = ipsp_spd_lookup(m, af, iphlen, IPSP_DIRECTION_IN,
-		    tdb, inp, NULL, NULL);
+		    tdb, inp ? inp->inp_seclevel : NULL, NULL, NULL);
 		if (error) {
 			udpstat_inc(udps_nosec);
 			tdb_unref(tdb);
@@ -751,7 +751,7 @@ udp6_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *d)
 		cmdarg = NULL;
 		/* XXX: translate addresses into internal form */
 		sa6 = *satosin6(sa);
-		if (in6_embedscope(&sa6.sin6_addr, &sa6, NULL)) {
+		if (in6_embedscope(&sa6.sin6_addr, &sa6, NULL, NULL)) {
 			/* should be impossible */
 			return;
 		}
@@ -765,14 +765,14 @@ udp6_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *d)
 		/* XXX: assuming M is valid in this case */
 		sa6.sin6_scope_id = in6_addr2scopeid(m->m_pkthdr.ph_ifidx,
 		    ip6cp->ip6c_finaldst);
-		if (in6_embedscope(ip6cp->ip6c_finaldst, &sa6, NULL)) {
+		if (in6_embedscope(ip6cp->ip6c_finaldst, &sa6, NULL, NULL)) {
 			/* should be impossible */
 			return;
 		}
 	} else {
 		/* XXX: translate addresses into internal form */
 		sa6 = *satosin6(sa);
-		if (in6_embedscope(&sa6.sin6_addr, &sa6, NULL)) {
+		if (in6_embedscope(&sa6.sin6_addr, &sa6, NULL, NULL)) {
 			/* should be impossible */
 			return;
 		}
@@ -798,7 +798,7 @@ udp6_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *d)
 		sa6_src.sin6_addr = ip6->ip6_src;
 		sa6_src.sin6_scope_id = in6_addr2scopeid(m->m_pkthdr.ph_ifidx,
 		    &ip6->ip6_src);
-		if (in6_embedscope(&sa6_src.sin6_addr, &sa6_src, NULL)) {
+		if (in6_embedscope(&sa6_src.sin6_addr, &sa6_src, NULL, NULL)) {
 			/* should be impossible */
 			return;
 		}
@@ -1065,7 +1065,7 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct mbuf *addr,
 
 	error = ip_output(m, inp->inp_options, &inp->inp_route,
 	    (inp->inp_socket->so_options & SO_BROADCAST), inp->inp_moptions,
-	    inp, ipsecflowinfo);
+	    inp->inp_seclevel, ipsecflowinfo);
 
 bail:
 	m_freem(control);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: fargs.c,v 1.24 2023/04/28 10:24:38 claudio Exp $ */
+/*	$OpenBSD: fargs.c,v 1.26 2023/11/27 11:30:49 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -140,6 +140,10 @@ fargs_cmdline(struct sess *sess, const struct fargs *f, size_t *skip)
 
 	/* extra options for the receiver (local is sender) */
 	if (f->mode == FARGS_SENDER) {
+		if (sess->opts->ignore_dir_times)
+			addargs(&args, "-O");
+		if (sess->opts->ignore_link_times)
+			addargs(&args, "-J");
 		if (sess->opts->size_only)
 			addargs(&args, "--size-only");
 
