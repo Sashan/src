@@ -537,7 +537,7 @@ pfctl_define_table(char *name, int flags, int addrs, const char *anchor,
 	    sizeof(tbl->pfrt_anchor)) >= sizeof(tbl->pfrt_anchor))
 		errx(1, "%s: strlcpy", __func__);
 	tbl->pfrt_flags = flags;
-	fprintf(stderr, "%s %s@%s\n", __func__, tbl->pfrt_name, tbl->pfrt_anchor);
+	DBGPRINT("%s %s@%s\n", __func__, tbl->pfrt_name, tbl->pfrt_anchor);
 
 	/*
 	 * non-root anchors processed by parse.y are loaded to kernel later.

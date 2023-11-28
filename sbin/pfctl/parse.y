@@ -900,9 +900,9 @@ anchorrule	: ANCHOR anchorname dir quick interface af proto fromto
 						    r.anchor->name);
 						YYERROR;
 					}
-					fprintf(stderr, "%s %s -> %s\n",
-					    __func__,
-					    (pf->alast != NULL) ? pf->alast->path : "/",
+					DBGPRINT("%s %s -> %s\n", __func__,
+					    (pf->alast != NULL) ?
+					    pf->alast->path : "/",
 					    r.anchor->path);
 					mv_rules(&pf->alast->ruleset,
 					    &r.anchor->ruleset);
@@ -4025,7 +4025,7 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 		if (pf->asd > 0) {
 			ukt = calloc(1, sizeof(struct pfr_uktable));
 			if (ukt == NULL) {
-				fprintf(stderr,
+				DBGPRINT(
 				    "%s:%d: not enough memory for <%s>\n",
 				    file->name, yylval.lineno, name);
 				goto _error;
@@ -4049,18 +4049,18 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 				 * pfctl_define_table() above  does the same
 				 * check effectively.
 				 */
-				fprintf(stderr,
+				DBGPRINT(
 				    "%s:%d table %s already exists in %s\n",
 				    file->name, yylval.lineno,
 				    ukt->pfrukt_name, pf->anchor->path);
 				free(ukt);
 				goto _error;
 			}
-			fprintf(stderr, "%s %s@%s inserted to tree\n",
+			DBGPRINT("%s %s@%s inserted to tree\n",
 			    __func__, ukt->pfrukt_name, pf->anchor->path);
 
 		} else
-			fprintf(stderr, "%s ukt is null\n", __func__);
+			DBGPRINT("%s ukt is null\n", __func__);
 	}
 
 	pf->tdirty = 1;
@@ -5614,7 +5614,7 @@ mv_tables(struct pfctl *pf, struct pfr_ktablehead *ktables,
 	ktables->rbh_root = NULL;
 
 	RB_FOREACH(kt, pfr_ktablehead, &a->ktables) {
-		fprintf(stderr, "%s %s -> %s\n", __func__, a->name, kt->pfrkt_anchor);
+		DBGPRINT("%s %s -> %s\n", __func__, a->name, kt->pfrkt_anchor);
 		strlcpy(kt->pfrkt_anchor, a->name, sizeof(kt->pfrkt_anchor));
 	}
 

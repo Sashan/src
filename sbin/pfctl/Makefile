@@ -8,6 +8,7 @@ CFLAGS+= -Wall -Wmissing-prototypes -Wno-uninitialized -g
 CFLAGS+= -Wstrict-prototypes -I${.CURDIR}
 CFLAGS+= -g
 CFLAGS+= -I/home/sashan/src.sashan/sys
+#CFLAGS+= -DPFCTL_DEBUG
 YFLAGS=
 MAN=	pfctl.8
 

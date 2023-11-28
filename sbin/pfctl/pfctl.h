@@ -33,6 +33,12 @@
 #ifndef _PFCTL_H_
 #define _PFCTL_H_
 
+#ifdef PFCTL_DEBUG
+#define DBGPRINT(...)	fprintf(stderr, __VA_ARGS__)
+#else
+#define DBGPRINT(...)	(void)(0)
+#endif
+
 enum pfctl_show { PFCTL_SHOW_RULES, PFCTL_SHOW_LABELS, PFCTL_SHOW_NOTHING };
 
 enum {	PFRB_TABLES = 1, PFRB_TSTATS, PFRB_ADDRS, PFRB_ASTATS,

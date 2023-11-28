@@ -359,7 +359,7 @@ pfr_ina_define(struct pfr_table *tbl, struct pfr_addr *addr, int size,
 	struct pfioc_table io;
 
 	if (tbl == NULL || size < 0 || (size && addr == NULL)) {
-		fprintf(stderr, "%s %p %d %p\n", __func__, tbl, size, addr);
+		DBGPRINT("%s %p %d %p\n", __func__, tbl, size, addr);
 		errno = EINVAL;
 		return (-1);
 	}
