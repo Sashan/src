@@ -1026,7 +1026,7 @@ pf_addr_update(struct pf_trans *t, struct pf_ruleset *grs,
 
 	/*
 	 * Similar to pfr_attach_table(), we just want to find desired table in
-	 * ancestor anchor. The difference is the anchor must 
+	 * ancestor anchor. The difference is the anchor must
 	 */
 	kt = NULL;
 	while ((kt == NULL) && (a != NULL)) {
@@ -1277,7 +1277,7 @@ test
  *
  * table dup is left intact, because it got defined by 'pfctl -t test -T add'
  *
- * let's modify pf-tab.conf so <dup> becomes defined by ruleset. However 
+ * let's modify pf-tab.conf so <dup> becomes defined by ruleset. However
  * it is still unused:
  *
 netlock# cat pf-tab.conf
@@ -4365,7 +4365,7 @@ pf_trans_chk_ina(struct pf_trans *t, const char *iocmdname)
 	    (t->pftina_rc.main_anchor.ruleset.rules.version != 0))
 		conflict = pf_ina_check(&t->pftina_rc.main_anchor,
 		    &pf_main_anchor);
-	
+
 	/* check if defaults can be modified/updated */
 	if (conflict == 0 && t->pftina_modify_defaults) {
 		conflict = (t->pftina_default_vers != pf_default_vers);
@@ -4873,7 +4873,7 @@ pf_commit_trans(struct pf_trans *t)
 		panic("%s unknown transaction type (%d)",
 		    __func__, t->pft_type);
 	}
-		
+
 	pf_remove_orphans(t);
 }
 

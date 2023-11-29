@@ -611,7 +611,7 @@ pfi_address_add(struct pf_trans *t, struct sockaddr *sa, sa_family_t af,
 	for (i = (p.pfra_net+7)/8; i < sizeof(p.pfra_u); i++)
 		((caddr_t)&p)[i] = 0;
 
-	ke = pfr_create_kentry(&p, M_NOWAIT); 
+	ke = pfr_create_kentry(&p, M_NOWAIT);
 	if (ke != NULL) {
 		SLIST_INSERT_HEAD(&t->pfttab_ke_ioq, ke, pfrke_workq);
 		t->pfttab_ke_ioq_len++;

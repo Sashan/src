@@ -301,7 +301,7 @@ pfr_copyin_addrs(struct pf_trans *t, struct pfr_table *tbl,
 	ktt->pfrkt_version = pfr_get_ktable_version(ktt, &ktflags);
 	if (ktt->pfrkt_version == 0) {
 		DPFPRINTF(LOG_DEBUG, "%s %s@%s does not exist",
-		    __func__, ktt->pfrkt_name, 
+		    __func__, ktt->pfrkt_name,
 		    (ktt->pfrkt_rs->anchor == NULL) ?
 		    "" : ktt->pfrkt_rs->anchor->path);
 		return (ESRCH);
@@ -453,7 +453,7 @@ pfr_addaddrs_commit(struct pf_trans *t, struct pf_anchor *ta,
 
 	if ((t->pfttab_nadd != 0) &&
 	    ((t->pft_ioflags & PFR_FLAG_DUMMY) == 0))
-		kt->pfrkt_cnt += t->pfttab_nadd;		
+		kt->pfrkt_cnt += t->pfttab_nadd;
 }
 
 int
@@ -1349,13 +1349,12 @@ pfr_promote_table(struct pf_anchor *a, struct pfr_ktable *kt)
 		parent = parent->parent;
 	}
 
-
 	/*
 	 * if no parent was found we start with update from root (main anchor)
 	 */
 	if (parent == NULL)
 		parent = &pf_main_anchor;
-	
+
 	/*
 	 * insert table to parent tree.
 	 */
@@ -1471,7 +1470,7 @@ pfr_clr_tables(struct pf_trans *t)
 				t->pfttab_ndel++;
 				if ((t->pft_ioflags & PFR_FLAG_DUMMY) != 0)
 					continue;
-			
+
 				kt->pfrkt_flags &= ~PFR_TFLAG_ACTIVE;
 				kt->pfrkt_flags |= PFR_TFLAG_INACTIVE;
 			}
@@ -2099,7 +2098,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 		 * consider file snippet as follows:
 		 *	table <dup> { 1.2.3.4, 1.2.3.5 }
 		 *	table <dup> { 1.2.3.6, 1.2.3.7 }
-		 * loading pf.conf with definitions as above above will result 
+		 * loading pf.conf with definitions as above above will result
 		 * to table dup with addresses .6 and .7. This is how current
 		 * (7.2) behaves.  To achieve the same behavior we just flush
 		 * table here.
@@ -2121,7 +2120,7 @@ pfr_ina_define(struct pf_trans *t, struct pfr_table *tbl,
 	 * we do 'COMMIT', so if pfctl runs in dummy mode we just
 	 * avoid a commit operation and that's it.
 	 *
-	 * the transaction will be cleaned up with close on 
+	 * the transaction will be cleaned up with close on
 	 * /dev/pf
 	 */
 	for (i = 0; i < size; i++) {
