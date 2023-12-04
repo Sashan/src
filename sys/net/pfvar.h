@@ -1468,6 +1468,7 @@ struct pfioc_qstats {
 #define PFR_FLAG_ALLMASK	0x0000007F
 #ifdef _KERNEL
 #define PFR_FLAG_USERIOCTL	0x10000000
+#define PFR_FLAG_DUPOK		0x20000000
 #endif
 
 struct pfioc_table {

@@ -292,7 +292,8 @@ pfr_copyin_addrs(struct pf_trans *t, struct pfr_table *tbl,
 		return (EINVAL);
 	}
 
-	ACCEPT_FLAGS(t->pft_ioflags, PFR_FLAG_DUMMY | PFR_FLAG_FEEDBACK);
+	ACCEPT_FLAGS(t->pft_ioflags,
+	    PFR_FLAG_DUMMY | PFR_FLAG_FEEDBACK | PFR_FLAG_DUPOK);
 
 	if (pfr_validate_table(tbl, 0, t->pft_ioflags & PFR_FLAG_USERIOCTL))
 		return (EINVAL);
@@ -323,7 +324,10 @@ pfr_copyin_addrs(struct pf_trans *t, struct pfr_table *tbl,
 	 * ktt is just placeholder/key which allows commit operation
 	 * to find table to update.
 	 */
-	tmpkt = pfr_create_ktable(NULL, &pfr_nulltable, 0, PR_WAITOK);
+	if ((t->pft_ioflags & PFR_FLAG_DUPOK) == 0)
+		tmpkt = pfr_create_ktable(NULL, &pfr_nulltable, 0, PR_WAITOK);
+	else
+		tmpkt = NULL;
 
 	for (i = 0; i < size; i++) {
 		YIELD(1);
@@ -342,14 +346,20 @@ pfr_copyin_addrs(struct pf_trans *t, struct pfr_table *tbl,
 			return (ENOMEM);
 		}
 		ke->pfrke_fb = PFR_FB_NONE;
-		if (pfr_lookup_kentry(tmpkt, ke, 1) != NULL) {
-			ke->pfrke_fb = PFR_FB_DUPLICATE;
-			DPFPRINTF(LOG_DEBUG, "%s duplicate %d", __func__, i);
-		} else {
-			pfr_route_kentry(tmpkt, ke);
-			DPFPRINTF(LOG_DEBUG, "%s got it %d", __func__, i);
+
+		if (tmpkt != NULL) {
+			if (pfr_lookup_kentry(tmpkt, ke, 1) != NULL) {
+				ke->pfrke_fb = PFR_FB_DUPLICATE;
+				DPFPRINTF(LOG_DEBUG, "%s duplicate %d",
+				    __func__, i);
+			} else {
+				pfr_route_kentry(tmpkt, ke);
+				DPFPRINTF(LOG_DEBUG, "%s got it %d",
+				    __func__, i);
+				t->pfttab_ke_ioq_len++;
+			}
+		} else
 			t->pfttab_ke_ioq_len++;
-		}
 
 		SLIST_INSERT_HEAD(&t->pfttab_ke_ioq, ke, pfrke_ioq);
 	}
@@ -493,36 +503,42 @@ pfr_addrs_feedback(struct pf_trans *t, struct pfr_addr *addr, int size,
 	return (0);
 }
 
-int
-pfr_tst_addrs(struct pfr_table *tbl, struct pfr_addr *addr, int size,
-	int *nmatch, int flags)
+void
+pfr_tst_addrs(struct pf_trans *t, struct pf_anchor *ta,
+    struct pf_anchor *a)
 {
 	struct pfr_ktable	*kt;
-	struct pfr_kentry	*p;
-	struct pfr_addr		 ad;
-	int			 i, xmatch = 0;
-	struct pf_ruleset	*rs;
-	struct pf_anchor	*a;
+	struct pfr_kentry	*ke, *p;
+	int			 xmatch = 0;
 
-	ACCEPT_FLAGS(flags, PFR_FLAG_REPLACE);
-	if (pfr_validate_table(tbl, 0, 0))
-		return (EINVAL);
+	ACCEPT_FLAGS(t->pft_ioflags, PFR_FLAG_REPLACE);
 	PF_ASSERT_LOCKED();
-	rs = pf_find_ruleset(&pf_global, tbl->pfrt_anchor);
-	if (rs == NULL)
-		return (ESRCH);
-	if ((a = rs->anchor) == NULL)
-		a = &pf_main_anchor;
-	kt = pfr_lookup_table(a, tbl);
-	if (kt == NULL || !(kt->pfrkt_flags & PFR_TFLAG_ACTIVE))
-		return (ESRCH);
 
+	if (ta->tables != 1) {
+		t->pftt_error = ESRCH;
+		return;
+	}
+
+	kt = RB_FIND(&a->ktables, pfr_ktablehead, RB_ROOT(&ta->ktables));
+	if (kt == NULL || (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) == 0) {
+		t->pftt_error = ESRCH;
+		return;
+	}
+
+	SLIST_FOREACH(ke, &t->pfttab_ke_ioq, pfrke_workq) {
+		if (KENTRY_NETWORK(ke)) {
+			t->pftt_error = EINVAL;
+			return;
+		}
+
+		p = pfr_lookup_kentry(kt, ke, 0);
+		if (t->pft_ioflags & PFR_FLAG_REPLACE)
+			pfr_copy_:w
+
+
+		
+	}
 	for (i = 0; i < size; i++) {
-		YIELD(flags & PFR_FLAG_USERIOCTL);
-		if (COPYIN(addr+i, &ad, sizeof(ad), flags))
-			return (EFAULT);
-		if (pfr_validate_addr(&ad))
-			return (EINVAL);
 		if (ADDR_NETWORK(&ad))
 			return (EINVAL);
 		p = pfr_lookup_addr(kt, &ad, 0);

@@ -3461,19 +3461,41 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCRTSTADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		struct pf_trans *t;
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
 			DPFPRINTF(LOG_DEBUG, "%s DIOCRTSTADDRS", __func__);
 			goto fail;
 		}
-		NET_LOCK();
-		PF_LOCK();
+
+		t = pf_open_trans(minor(dev));
+		pf_init_ttab(t);
+		t->pfttab_iocmd = cmd;
+		t->pft_ioflags = io->pfrio_flags | PFR_FLAG_USERIOCTL;
+
+		t->pft_ioflags |= PFR_FLAG_DUPOK;
+		error = pfr_copyin_addrs(t, &io->pfrio_table, io->pfrio_buffer,
+		    io->pfrio_size);
+
+		if (error == 0) {
+			NET_LOCK();
+			PF_LOCK();
+
+			error = pfr_tst_addrs()
+			NET_UNLOCK();
+			PF_UNLOCK();
+
+/* XXX todo */
+			error = pfr_addrs_feedback(t, io->pfrio_buffer,
+			    io->pfrio_size, PFR_IOQ_ONLY);
+			io->pfrio_nadd = t->pfttab_nadd;
+		}
+
+		pf_rollback_trans(t);
 		error = pfr_tst_addrs(&io->pfrio_table, io->pfrio_buffer,
 		    io->pfrio_size, &io->pfrio_nmatch, io->pfrio_flags |
 		    PFR_FLAG_USERIOCTL);
-		PF_UNLOCK();
-		NET_UNLOCK();
 		break;
 	}
 
@@ -4798,6 +4820,9 @@ pf_tab_do_commit_op(struct pf_trans *t, struct pf_anchor *ta,
 		break;
 	case DIOCRCLRADDRS:
 		pfr_clraddrs_commit(t, ta, a);
+		break;
+	case DIOCRTSTADDRS:
+		pfr_tstaddrs_commit(t, ta, a);
 		break;
 	default:
 		panic("%s unexpected iocmd for transaction on /",
