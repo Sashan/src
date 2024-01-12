@@ -1,4 +1,4 @@
-#	$OpenBSD: files,v 1.726 2023/11/21 14:00:13 bluhm Exp $
+#	$OpenBSD: files,v 1.729 2024/01/01 18:25:50 kettenis Exp $
 #	$NetBSD: files,v 1.87 1996/05/19 17:17:50 jonathan Exp $
 
 #	@(#)files.newconf	7.5 (Berkeley) 5/10/93
@@ -22,6 +22,7 @@ define	gpiobus {}
 define	onewirebus {}
 define	video {}
 define	intrmap {}
+define	fdt {[early = 0]}
 
 # filesystem firmware loading attribute
 define firmload
@@ -423,6 +424,10 @@ file	dev/ic/malo.c			malo
 # Broadcom AirForce
 device	bwi: ether, ifnet, ifmedia, firmload, wlan
 file	dev/ic/bwi.c			bwi
+
+# Qualcomm 802.11ax
+device	qwx: ether, ifnet, ifmedia, firmload, wlan
+file	dev/ic/qwx.c			qwx
 
 # Intel OnChip System Fabric
 device	iosf
@@ -1075,6 +1080,7 @@ file lib/libkern/arch/${MACHINE_ARCH}/strlen.S | lib/libkern/strlen.c
 file lib/libkern/arch/${MACHINE_ARCH}/strncmp.S | lib/libkern/strncmp.c
 file lib/libkern/arch/${MACHINE_ARCH}/strncpy.S | lib/libkern/strncpy.c
 file lib/libkern/arch/${MACHINE_ARCH}/strnlen.S | lib/libkern/strnlen.c
+file lib/libkern/arch/${MACHINE_ARCH}/strnstr.S | lib/libkern/strnstr.c
 file lib/libkern/arch/${MACHINE_ARCH}/scanc.S | lib/libkern/scanc.c
 file lib/libkern/arch/${MACHINE_ARCH}/skpc.S | lib/libkern/skpc.c
 file lib/libkern/arch/${MACHINE_ARCH}/htonl.S | lib/libkern/htonl.c

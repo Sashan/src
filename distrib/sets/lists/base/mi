@@ -746,7 +746,7 @@
 ./usr/lib/crtendS.o
 ./usr/lib/gcrt0.o
 ./usr/lib/libagentx.so.1.1
-./usr/lib/libc.so.97.1
+./usr/lib/libc.so.98.0
 ./usr/lib/libcbor.so.2.0
 ./usr/lib/libcrypto.so.52.0
 ./usr/lib/libcurses.so.15.0
@@ -782,7 +782,7 @@
 ./usr/lib/libtermlib.so.15.0
 ./usr/lib/libtls.so.28.0
 ./usr/lib/libusbhid.so.7.1
-./usr/lib/libutil.so.17.0
+./usr/lib/libutil.so.18.0
 ./usr/lib/libz.so.7.0
 ./usr/lib/locate
 ./usr/lib/locate/src.db
@@ -1671,8 +1671,12 @@
 ./usr/libdata/perl5/pod/perl5321delta.pod
 ./usr/libdata/perl5/pod/perl5340delta.pod
 ./usr/libdata/perl5/pod/perl5341delta.pod
+./usr/libdata/perl5/pod/perl5342delta.pod
+./usr/libdata/perl5/pod/perl5343delta.pod
 ./usr/libdata/perl5/pod/perl5360delta.pod
 ./usr/libdata/perl5/pod/perl5361delta.pod
+./usr/libdata/perl5/pod/perl5362delta.pod
+./usr/libdata/perl5/pod/perl5363delta.pod
 ./usr/libdata/perl5/pod/perl561delta.pod
 ./usr/libdata/perl5/pod/perl56delta.pod
 ./usr/libdata/perl5/pod/perl581delta.pod
@@ -2975,7 +2979,7 @@
 ./usr/share/relink/kernel.tgz
 ./usr/share/relink/usr
 ./usr/share/relink/usr/lib
-./usr/share/relink/usr/lib/libc.so.97.1.a
+./usr/share/relink/usr/lib/libc.so.98.0.a
 ./usr/share/relink/usr/lib/libcrypto.so.52.0.a
 ./usr/share/relink/usr/libexec
 ./usr/share/relink/usr/libexec/ld.so.a

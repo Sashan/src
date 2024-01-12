@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_lib.c,v 1.316 2023/11/25 12:05:08 tb Exp $ */
+/* $OpenBSD: ssl_lib.c,v 1.318 2023/12/29 12:24:33 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -2933,8 +2933,6 @@ SSL_dup(SSL *s)
 
 	SSL_set_info_callback(ret, SSL_get_info_callback(s));
 
-	ret->debug = s->debug;
-
 	/* copy app data, a little dangerous perhaps */
 	if (!CRYPTO_dup_ex_data(CRYPTO_EX_INDEX_SSL,
 	    &ret->ex_data, &s->ex_data))
@@ -3488,7 +3486,7 @@ LSSL_ALIAS(SSL_set_msg_callback);
 void
 SSL_set_debug(SSL *s, int debug)
 {
-	s->debug = debug;
+	SSLerror(s, ERR_R_DISABLED);
 }
 LSSL_ALIAS(SSL_set_debug);
 
@@ -3638,30 +3636,3 @@ SSL_set_quic_use_legacy_codepoint(SSL *ssl, int use_legacy)
 	/* Not supported. */
 }
 LSSL_ALIAS(SSL_set_quic_use_legacy_codepoint);
-
-static int
-ssl_cipher_id_cmp(const SSL_CIPHER *a, const SSL_CIPHER *b)
-{
-	long	l;
-
-	l = a->id - b->id;
-	if (l == 0L)
-		return (0);
-	else
-		return ((l > 0) ? 1:-1);
-}
-
-static int
-ssl_cipher_id_cmp_BSEARCH_CMP_FN(const void *a_, const void *b_)
-{
-	SSL_CIPHER const *a = a_;
-	SSL_CIPHER const *b = b_;
-	return ssl_cipher_id_cmp(a, b);
-}
-
-SSL_CIPHER *
-OBJ_bsearch_ssl_cipher_id(SSL_CIPHER *key, SSL_CIPHER const *base, int num)
-{
-	return (SSL_CIPHER *)OBJ_bsearch_(key, base, num, sizeof(SSL_CIPHER),
-	    ssl_cipher_id_cmp_BSEARCH_CMP_FN);
-}

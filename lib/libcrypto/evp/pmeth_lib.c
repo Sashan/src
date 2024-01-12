@@ -1,4 +1,4 @@
-/* $OpenBSD: pmeth_lib.c,v 1.34 2023/11/19 15:43:52 tb Exp $ */
+/* $OpenBSD: pmeth_lib.c,v 1.36 2024/01/04 20:15:01 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2006.
  */
@@ -71,9 +71,6 @@
 #include "asn1_local.h"
 #include "evp_local.h"
 
-DECLARE_STACK_OF(EVP_PKEY_METHOD)
-STACK_OF(EVP_PKEY_METHOD) *pkey_app_methods = NULL;
-
 extern const EVP_PKEY_METHOD cmac_pkey_meth;
 extern const EVP_PKEY_METHOD dh_pkey_meth;
 extern const EVP_PKEY_METHOD dsa_pkey_meth;
@@ -102,43 +99,15 @@ static const EVP_PKEY_METHOD *pkey_methods[] = {
 	&x25519_pkey_meth,
 };
 
-static const size_t pkey_methods_count =
-    sizeof(pkey_methods) / sizeof(pkey_methods[0]);
-
-int
-evp_pkey_meth_get_count(void)
-{
-	int num = pkey_methods_count;
-
-	if (pkey_app_methods != NULL)
-		num += sk_EVP_PKEY_METHOD_num(pkey_app_methods);
-
-	return num;
-}
-
-const EVP_PKEY_METHOD *
-evp_pkey_meth_get0(int idx)
-{
-	int num = pkey_methods_count;
-
-	if (idx < 0)
-		return NULL;
-	if (idx < num)
-		return pkey_methods[idx];
-
-	idx -= num;
-
-	return sk_EVP_PKEY_METHOD_value(pkey_app_methods, idx);
-}
+#define N_PKEY_METHODS (sizeof(pkey_methods) / sizeof(pkey_methods[0]))
 
 const EVP_PKEY_METHOD *
 EVP_PKEY_meth_find(int type)
 {
-	const EVP_PKEY_METHOD *pmeth;
-	int i;
+	size_t i;
 
-	for (i = evp_pkey_meth_get_count() - 1; i >= 0; i--) {
-		pmeth = evp_pkey_meth_get0(i);
+	for (i = 0; i < N_PKEY_METHODS; i++) {
+		const EVP_PKEY_METHOD *pmeth = pkey_methods[i];
 		if (pmeth->pkey_id == type)
 			return pmeth;
 	}
@@ -147,7 +116,7 @@ EVP_PKEY_meth_find(int type)
 }
 
 static EVP_PKEY_CTX *
-evp_pkey_ctx_new(EVP_PKEY *pkey, ENGINE *engine, int id)
+evp_pkey_ctx_new(EVP_PKEY *pkey, int id)
 {
 	EVP_PKEY_CTX *pkey_ctx = NULL;
 	const EVP_PKEY_METHOD *pmeth;
@@ -167,8 +136,6 @@ evp_pkey_ctx_new(EVP_PKEY *pkey, ENGINE *engine, int id)
 		EVPerror(ERR_R_MALLOC_FAILURE);
 		goto err;
 	}
-	pkey_ctx->engine = engine;
-	engine = NULL;
 	pkey_ctx->pmeth = pmeth;
 	pkey_ctx->operation = EVP_PKEY_OP_UNDEFINED;
 	if ((pkey_ctx->pkey = pkey) != NULL)
@@ -234,13 +201,13 @@ EVP_PKEY_meth_free(EVP_PKEY_METHOD *pmeth)
 EVP_PKEY_CTX *
 EVP_PKEY_CTX_new(EVP_PKEY *pkey, ENGINE *engine)
 {
-	return evp_pkey_ctx_new(pkey, engine, -1);
+	return evp_pkey_ctx_new(pkey, -1);
 }
 
 EVP_PKEY_CTX *
 EVP_PKEY_CTX_new_id(int id, ENGINE *engine)
 {
-	return evp_pkey_ctx_new(NULL, engine, id);
+	return evp_pkey_ctx_new(NULL, id);
 }
 
 EVP_PKEY_CTX *
@@ -277,16 +244,8 @@ EVP_PKEY_CTX_dup(EVP_PKEY_CTX *pctx)
 int
 EVP_PKEY_meth_add0(const EVP_PKEY_METHOD *pmeth)
 {
-	if (pkey_app_methods == NULL) {
-		pkey_app_methods = sk_EVP_PKEY_METHOD_new(NULL);
-		if (pkey_app_methods == NULL)
-			return 0;
-	}
-
-	if (!sk_EVP_PKEY_METHOD_push(pkey_app_methods, pmeth))
-		return 0;
-
-	return 1;
+	EVPerror(ERR_R_DISABLED);
+	return 0;
 }
 
 void

@@ -1,4 +1,4 @@
-/* $OpenBSD: gostr341001_ameth.c,v 1.20 2022/11/26 16:08:53 tb Exp $ */
+/* $OpenBSD: gostr341001_ameth.c,v 1.24 2024/01/04 17:01:26 tb Exp $ */
 /*
  * Copyright (c) 2014 Dmitry Eremin-Solenikov <dbaryshkov@gmail.com>
  * Copyright (c) 2005-2006 Cryptocom LTD
@@ -101,8 +101,10 @@ decode_gost01_algor_params(EVP_PKEY *pkey, const unsigned char **p, int len)
 			GOSTerror(ERR_R_MALLOC_FAILURE);
 			return 0;
 		}
-		if (EVP_PKEY_assign_GOST(pkey, ec) == 0)
+		if (EVP_PKEY_assign_GOST(pkey, ec) == 0) {
+			GOST_KEY_free(ec);
 			return 0;
+		}
 	}
 
 	group = EC_GROUP_new_by_curve_name(param_nid);
@@ -205,7 +207,9 @@ pub_decode_gost01(EVP_PKEY *pk, X509_PUBKEY *pub)
 	if (X509_PUBKEY_get0_param(&palgobj, &pubkey_buf, &pub_len, &palg, pub)
 	    == 0)
 		return 0;
-	(void)EVP_PKEY_assign_GOST(pk, NULL);
+	/* Called for the side effect of freeing pk->pkey. */
+	if (!EVP_PKEY_set_type(pk, EVP_PKEY_GOSTR01))
+		return 0;
 	X509_ALGOR_get0(NULL, &ptype, (const void **)&pval, palg);
 	if (ptype != V_ASN1_SEQUENCE) {
 		GOSTerror(GOST_R_BAD_KEY_PARAMETERS_FORMAT);
@@ -418,7 +422,9 @@ priv_decode_gost01(EVP_PKEY *pk, const PKCS8_PRIV_KEY_INFO *p8inf)
 		GOSTerror(GOST_R_BAD_KEY_PARAMETERS_FORMAT);
 		return 0;
 	}
-	(void)EVP_PKEY_assign_GOST(pk, NULL);
+	/* Called for the side effect of freeing pk->pkey. */
+	if (!EVP_PKEY_set_type(pk, EVP_PKEY_GOSTR01))
+		return 0;
 	X509_ALGOR_get0(NULL, &ptype, (const void **)&pval, palg);
 	if (ptype != V_ASN1_SEQUENCE) {
 		GOSTerror(GOST_R_BAD_KEY_PARAMETERS_FORMAT);
@@ -676,46 +682,46 @@ pkey_ctrl_gost01(EVP_PKEY *pkey, int op, long arg1, void *arg2)
 	return 1;
 }
 
-const EVP_PKEY_ASN1_METHOD gostr01_asn1_meths[] = {
-	{
-		.pkey_id = EVP_PKEY_GOSTR01,
-		.pkey_base_id = EVP_PKEY_GOSTR01,
-		.pkey_flags = ASN1_PKEY_SIGPARAM_NULL,
+const EVP_PKEY_ASN1_METHOD gostr01_asn1_meth = {
+	.base_method = &gostr01_asn1_meth,
+	.pkey_id = EVP_PKEY_GOSTR01,
+	.pkey_flags = ASN1_PKEY_SIGPARAM_NULL,
 
-		.pem_str = "GOST2001",
-		.info = "GOST R 34.10-2001",
+	.pem_str = "GOST2001",
+	.info = "GOST R 34.10-2001",
 
-		.pkey_free = pkey_free_gost01,
-		.pkey_ctrl = pkey_ctrl_gost01,
+	.pkey_free = pkey_free_gost01,
+	.pkey_ctrl = pkey_ctrl_gost01,
 
-		.priv_decode = priv_decode_gost01,
-		.priv_encode = priv_encode_gost01,
-		.priv_print = priv_print_gost01,
+	.priv_decode = priv_decode_gost01,
+	.priv_encode = priv_encode_gost01,
+	.priv_print = priv_print_gost01,
 
-		.param_decode = param_decode_gost01,
-		.param_encode = param_encode_gost01,
-		.param_missing = param_missing_gost01,
-		.param_copy = param_copy_gost01,
-		.param_cmp = param_cmp_gost01,
-		.param_print = param_print_gost01,
+	.param_decode = param_decode_gost01,
+	.param_encode = param_encode_gost01,
+	.param_missing = param_missing_gost01,
+	.param_copy = param_copy_gost01,
+	.param_cmp = param_cmp_gost01,
+	.param_print = param_print_gost01,
 
-		.pub_decode = pub_decode_gost01,
-		.pub_encode = pub_encode_gost01,
-		.pub_cmp = pub_cmp_gost01,
-		.pub_print = pub_print_gost01,
-		.pkey_size = pkey_size_gost01,
-		.pkey_bits = pkey_bits_gost01,
-	},
-	{
-		.pkey_id = EVP_PKEY_GOSTR12_256,
-		.pkey_base_id = EVP_PKEY_GOSTR01,
-		.pkey_flags = ASN1_PKEY_ALIAS
-	},
-	{
-		.pkey_id = EVP_PKEY_GOSTR12_512,
-		.pkey_base_id = EVP_PKEY_GOSTR01,
-		.pkey_flags = ASN1_PKEY_ALIAS
-	},
+	.pub_decode = pub_decode_gost01,
+	.pub_encode = pub_encode_gost01,
+	.pub_cmp = pub_cmp_gost01,
+	.pub_print = pub_print_gost01,
+	.pkey_size = pkey_size_gost01,
+	.pkey_bits = pkey_bits_gost01,
+};
+
+const EVP_PKEY_ASN1_METHOD gostr12_256_asn1_meth = {
+	.base_method = &gostr01_asn1_meth,
+	.pkey_id = EVP_PKEY_GOSTR12_256,
+	.pkey_flags = ASN1_PKEY_ALIAS,
+};
+
+const EVP_PKEY_ASN1_METHOD gostr12_512_asn1_meth = {
+	.base_method = &gostr01_asn1_meth,
+	.pkey_id = EVP_PKEY_GOSTR12_512,
+	.pkey_flags = ASN1_PKEY_ALIAS,
 };
 
 #endif

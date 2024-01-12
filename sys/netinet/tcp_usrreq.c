@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_usrreq.c,v 1.224 2023/11/28 13:23:20 bluhm Exp $	*/
+/*	$OpenBSD: tcp_usrreq.c,v 1.228 2024/01/11 13:49:49 bluhm Exp $	*/
 /*	$NetBSD: tcp_usrreq.c,v 1.20 1996/02/13 23:44:16 christos Exp $	*/
 
 /*
@@ -175,7 +175,7 @@ int	tcp_fill_info(struct tcpcb *, struct socket *, struct mbuf *);
 int	tcp_ident(void *, size_t *, void *, size_t, int);
 
 static inline int tcp_sogetpcb(struct socket *, struct inpcb **,
-                      struct tcpcb **);
+		    struct tcpcb **);
 
 static inline int
 tcp_sogetpcb(struct socket *so, struct inpcb **rinp, struct tcpcb **rtp)
@@ -312,19 +312,12 @@ tcp_ctloutput(int op, struct socket *so, int level, int optname,
 	if (inp == NULL)
 		return (ECONNRESET);
 	if (level != IPPROTO_TCP) {
-		switch (so->so_proto->pr_domain->dom_family) {
 #ifdef INET6
-		case PF_INET6:
+		if (ISSET(inp->inp_flags, INP_IPV6))
 			error = ip6_ctloutput(op, so, level, optname, m);
-			break;
+		else
 #endif /* INET6 */
-		case PF_INET:
 			error = ip_ctloutput(op, so, level, optname, m);
-			break;
-		default:
-			error = EAFNOSUPPORT;	/*?*/
-			break;
-		}
 		return (error);
 	}
 	tp = intotcpcb(inp);
@@ -586,7 +579,7 @@ tcp_listen(struct socket *so)
 	if (inp->inp_lport == 0)
 		if ((error = in_pcbbind(inp, NULL, curproc)))
 			goto out;
-	
+
 	/*
 	 * If the in_pcbbind() above is called, the tp->pf
 	 * should still be whatever it was before.
@@ -635,7 +628,6 @@ tcp_connect(struct socket *so, struct mbuf *nam)
 			error = EINVAL;
 			goto out;
 		}
-		error = in6_pcbconnect(inp, nam);
 	} else
 #endif /* INET6 */
 	{
@@ -650,13 +642,14 @@ tcp_connect(struct socket *so, struct mbuf *nam)
 			error = EINVAL;
 			goto out;
 		}
-		error = in_pcbconnect(inp, nam);
 	}
+	error = in_pcbconnect(inp, nam);
 	if (error)
 		goto out;
 
 	tp->t_template = tcp_template(tp);
 	if (tp->t_template == 0) {
+		in_pcbunset_faddr(inp);
 		in_pcbdisconnect(inp);
 		error = ENOBUFS;
 		goto out;

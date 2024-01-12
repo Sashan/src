@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.83 2023/11/21 08:47:04 martijn Exp $	*/
+/*	$OpenBSD: parse.y,v 1.86 2023/12/21 12:43:31 martijn Exp $	*/
 
 /*
  * Copyright (c) 2007, 2008, 2012 Reyk Floeter <reyk@openbsd.org>
@@ -23,40 +23,41 @@
  */
 
 %{
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/queue.h>
-#include <sys/tree.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/un.h>
 #include <sys/utsname.h>
-
-#include <netinet/in.h>
-#include <net/if.h>
 
 #include <arpa/inet.h>
 
+#include <netinet/in.h>
+
 #include <openssl/sha.h>
 
+#include <ber.h>
 #include <ctype.h>
-#include <unistd.h>
 #include <err.h>
 #include <errno.h>
-#include <event.h>
 #include <grp.h>
 #include <inttypes.h>
 #include <limits.h>
-#include <stdint.h>
-#include <stdarg.h>
-#include <stdlib.h>
-#include <stdio.h>
 #include <netdb.h>
 #include <pwd.h>
-#include <string.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <strings.h>
 #include <syslog.h>
+#include <unistd.h>
 
 #include "application.h"
-#include "snmpd.h"
+#include "log.h"
 #include "mib.h"
+#include "snmpd.h"
+#include "snmp.h"
 
 TAILQ_HEAD(files, file)		 files = TAILQ_HEAD_INITIALIZER(files);
 static struct file {
@@ -105,7 +106,7 @@ static uint8_t			 engineid[SNMPD_MAXENGINEIDLEN];
 static int32_t			 enginepen;
 static size_t			 engineidlen;
 
-int		 host(const char *, const char *, int,
+int		 host(const char *, const char *, int, int,
 		    struct sockaddr_storage *, int);
 int		 listen_add(struct sockaddr_storage *, int, int);
 
@@ -395,8 +396,8 @@ listen_udptcp	: listenproto STRING port listenflags	{
 			}
 
 			for (i = 0; i < addresslen; i++) {
-				nhosts = host(address[i], port, $1, ss, nitems(ss));
-				if (nhosts < 1) {
+				if ((nhosts = host(address[i], port, AF_UNSPEC,
+				    $1, ss, nitems(ss))) < 1) {
 					yyerror("invalid address: %s", $2);
 					free($2);
 					free($3);
@@ -1021,7 +1022,8 @@ hostdef		: STRING hostoid hostauth srcaddr	{
 				YYERROR;
 			}
 
-			if (host($1, SNMPTRAP_PORT, SOCK_DGRAM, &ss, 1) <= 0) {
+			if (host($1, SNMPTRAP_PORT, AF_UNSPEC, SOCK_DGRAM,
+			    &ss, 1) <= 0) {
 				yyerror("invalid host: %s", $1);
 				free($1);
 				free($2);
@@ -1033,8 +1035,10 @@ hostdef		: STRING hostoid hostauth srcaddr	{
 			free($1);
 			memcpy(&(tr->ta_ss), &ss, sizeof(ss));
 			if ($4 != NULL) {
-				if (host($1, "0", SOCK_DGRAM, &ss, 1) <= 0) {
-					yyerror("invalid host: %s", $1);
+				if (host($4, "0", ss.ss_family, SOCK_DGRAM,
+				    &ss, 1) <= 0) {
+					yyerror("invalid source-address: %s",
+					    $4);
 					free($2);
 					free($3.data);
 					free($4);
@@ -1702,11 +1706,12 @@ parse_config(const char *filename, u_int flags)
 
 	/* Setup default listen addresses */
 	if (TAILQ_EMPTY(&conf->sc_addresses)) {
-		if (host("0.0.0.0", SNMP_PORT, SOCK_DGRAM, &ss, 1) != 1)
+		if (host("0.0.0.0", SNMP_PORT, AF_INET, SOCK_DGRAM,
+		    &ss, 1) != 1)
 			fatal("Unexpected resolving of 0.0.0.0");
 		if (listen_add(&ss, SOCK_DGRAM, 0) == -1)
 			fatal("calloc");
-		if (host("::", SNMP_PORT, SOCK_DGRAM, &ss, 1) != 1)
+		if (host("::", SNMP_PORT, AF_INET6, SOCK_DGRAM, &ss, 1) != 1)
 			fatal("Unexpected resolving of ::");
 		if (listen_add(&ss, SOCK_DGRAM, 0) == -1)
 			fatal("calloc");
@@ -1843,14 +1848,14 @@ symget(const char *nam)
 }
 
 int
-host(const char *s, const char *port, int type, struct sockaddr_storage *ss,
-    int max)
+host(const char *s, const char *port, int family, int type,
+    struct sockaddr_storage *ss, int max)
 {
 	struct addrinfo		 hints, *res0, *res;
 	int			 error, i;
 
 	bzero(&hints, sizeof(hints));
-	hints.ai_family = PF_UNSPEC;
+	hints.ai_family = family;
 	hints.ai_socktype = type;
 	/*
 	 * Without AI_NUMERICHOST getaddrinfo might not resolve ip addresses

@@ -1,4 +1,4 @@
-/*	$OpenBSD: x509_local.h,v 1.11 2023/11/01 20:37:42 tb Exp $ */
+/*	$OpenBSD: x509_local.h,v 1.18 2024/01/06 17:37:23 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2013.
  */
@@ -224,8 +224,6 @@ struct X509_crl_st {
 	ASN1_INTEGER *base_crl_number;
 	unsigned char hash[X509_CRL_HASH_LEN];
 	STACK_OF(GENERAL_NAMES) *issuers;
-	const X509_CRL_METHOD *meth;
-	void *meth_data;
 } /* X509_CRL */;
 
 struct pkcs8_priv_key_info_st {
@@ -248,18 +246,10 @@ struct x509_lookup_method_st {
 	const char *name;
 	int (*new_item)(X509_LOOKUP *ctx);
 	void (*free)(X509_LOOKUP *ctx);
-	int (*init)(X509_LOOKUP *ctx);
-	int (*shutdown)(X509_LOOKUP *ctx);
 	int (*ctrl)(X509_LOOKUP *ctx, int cmd, const char *argc, long argl,
 	    char **ret);
 	int (*get_by_subject)(X509_LOOKUP *ctx, int type, X509_NAME *name,
 	    X509_OBJECT *ret);
-	int (*get_by_issuer_serial)(X509_LOOKUP *ctx, int type, X509_NAME *name,
-	    ASN1_INTEGER *serial,X509_OBJECT *ret);
-	int (*get_by_fingerprint)(X509_LOOKUP *ctx, int type,
-	    const unsigned char *bytes, int len, X509_OBJECT *ret);
-	int (*get_by_alias)(X509_LOOKUP *ctx, int type, const char *str,
-	    int len, X509_OBJECT *ret);
 } /* X509_LOOKUP_METHOD */;
 
 struct X509_VERIFY_PARAM_st {
@@ -299,15 +289,7 @@ struct x509_store_st {
 	/* Callbacks for various operations */
 	int (*verify)(X509_STORE_CTX *ctx);	/* called to verify a certificate */
 	int (*verify_cb)(int ok,X509_STORE_CTX *ctx);	/* error callback */
-	int (*get_issuer)(X509 **issuer, X509_STORE_CTX *ctx, X509 *x);	/* get issuers cert from ctx */
 	int (*check_issued)(X509_STORE_CTX *ctx, X509 *x, X509 *issuer); /* check issued */
-	int (*check_revocation)(X509_STORE_CTX *ctx); /* Check revocation status of chain */
-	int (*get_crl)(X509_STORE_CTX *ctx, X509_CRL **crl, X509 *x); /* retrieve CRL */
-	int (*check_crl)(X509_STORE_CTX *ctx, X509_CRL *crl); /* Check CRL validity */
-	int (*cert_crl)(X509_STORE_CTX *ctx, X509_CRL *crl, X509 *x); /* Check certificate against CRL */
-	STACK_OF(X509) * (*lookup_certs)(X509_STORE_CTX *ctx, X509_NAME *nm);
-	STACK_OF(X509_CRL) * (*lookup_crls)(X509_STORE_CTX *ctx, X509_NAME *nm);
-	int (*cleanup)(X509_STORE_CTX *ctx);
 
 	CRYPTO_EX_DATA ex_data;
 	int references;
@@ -315,9 +297,8 @@ struct x509_store_st {
 
 /* This is the functions plus an instance of the local variables. */
 struct x509_lookup_st {
-	int init;			/* have we been started */
 	X509_LOOKUP_METHOD *method;	/* the functions */
-	char *method_data;		/* method data */
+	void *method_data;		/* method data */
 
 	X509_STORE *store_ctx;	/* who owns us */
 } /* X509_LOOKUP */;
@@ -344,14 +325,6 @@ struct x509_store_ctx_st {
 	int (*verify_cb)(int ok,X509_STORE_CTX *ctx);		/* error callback */
 	int (*get_issuer)(X509 **issuer, X509_STORE_CTX *ctx, X509 *x);	/* get issuers cert from ctx */
 	int (*check_issued)(X509_STORE_CTX *ctx, X509 *x, X509 *issuer); /* check issued */
-	int (*check_revocation)(X509_STORE_CTX *ctx); /* Check revocation status of chain */
-	int (*get_crl)(X509_STORE_CTX *ctx, X509_CRL **crl, X509 *x); /* retrieve CRL */
-	int (*check_crl)(X509_STORE_CTX *ctx, X509_CRL *crl); /* Check CRL validity */
-	int (*cert_crl)(X509_STORE_CTX *ctx, X509_CRL *crl, X509 *x); /* Check certificate against CRL */
-	int (*check_policy)(X509_STORE_CTX *ctx);
-	STACK_OF(X509) * (*lookup_certs)(X509_STORE_CTX *ctx, X509_NAME *nm);
-	STACK_OF(X509_CRL) * (*lookup_crls)(X509_STORE_CTX *ctx, X509_NAME *nm);
-	int (*cleanup)(X509_STORE_CTX *ctx);
 
 	/* The following is built up */
 	int valid;		/* if 0, rebuild chain */

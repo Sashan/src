@@ -775,29 +775,37 @@ static int devm_drm_dev_init(struct device *parent,
 					devm_drm_dev_init_release, dev);
 }
 
+#endif
+
 void *__devm_drm_dev_alloc(struct device *parent,
 			   const struct drm_driver *driver,
 			   size_t size, size_t offset)
 {
 	void *container;
 	struct drm_device *drm;
+#ifdef notyet
 	int ret;
+#endif
 
 	container = kzalloc(size, GFP_KERNEL);
 	if (!container)
 		return ERR_PTR(-ENOMEM);
 
 	drm = container + offset;
+#ifdef notyet
 	ret = devm_drm_dev_init(parent, drm, driver);
 	if (ret) {
 		kfree(container);
 		return ERR_PTR(ret);
 	}
 	drmm_add_final_kfree(drm, container);
+#endif
 
 	return container;
 }
 EXPORT_SYMBOL(__devm_drm_dev_alloc);
+
+#ifdef notyet
 
 /**
  * drm_dev_alloc - Allocate new DRM device
@@ -1556,9 +1564,6 @@ struct drm_device *
 drm_get_device_from_kdev(dev_t kdev)
 {
 	int unit = minor(kdev) & ((1 << CLONE_SHIFT) - 1);
-	/* control */
-	if (unit >= 64 && unit < 128)
-		unit -= 64;
 	/* render */
 	if (unit >= 128)
 		unit -= 128;
@@ -1701,12 +1706,18 @@ drmopen(dev_t kdev, int flags, int fmt, struct proc *p)
 	realminor =  dminor & ((1 << CLONE_SHIFT) - 1);
 	if (realminor < 64)
 		minor_type = DRM_MINOR_PRIMARY;
-	else if (realminor >= 64 && realminor < 128)
-		minor_type = DRM_MINOR_CONTROL;
-	else
+	else if (realminor >= 128 && realminor < 192)
 		minor_type = DRM_MINOR_RENDER;
+	else {
+		ret = ENXIO;
+		goto err;
+	}
 
 	dm = *drm_minor_get_slot(dev, minor_type);
+	if (dm == NULL) {
+		ret = ENXIO;
+		goto err;
+	}
 	dm->index = minor(kdev);
 
 	file_priv = drm_file_alloc(dm);

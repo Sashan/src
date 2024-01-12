@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_vxlan.c,v 1.96 2023/11/28 13:23:20 bluhm Exp $ */
+/*	$OpenBSD: if_vxlan.c,v 1.99 2023/12/23 10:52:54 bluhm Exp $ */
 
 /*
  * Copyright (c) 2021 David Gwynne <dlg@openbsd.org>
@@ -67,7 +67,6 @@
  * The protocol.
  */
 
-#define VXLANMTU		1492
 #define VXLAN_PORT		4789
 
 struct vxlan_header {

@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.141 2023/11/22 02:20:54 kn Exp $	*/
+/*	$OpenBSD: main.c,v 1.146 2023/12/23 23:03:00 kn Exp $	*/
 /*	$NetBSD: main.c,v 1.24 1997/08/18 10:20:26 lukem Exp $	*/
 
 /*
@@ -502,14 +502,8 @@ main(volatile int argc, char *argv[])
 
 		case 'o':
 			outfile = optarg;
-			if (*outfile == '\0') {
-				pipeout = 0;
-				outfile = NULL;
-				ttyout = stdout;
-			} else {
-				pipeout = strcmp(outfile, "-") == 0;
-				ttyout = pipeout ? stderr : stdout;
-			}
+			pipeout = strcmp(outfile, "-") == 0;
+			ttyout = pipeout ? stderr : stdout;
 			break;
 
 		case 'p':
@@ -616,19 +610,12 @@ main(volatile int argc, char *argv[])
 	if (argc > 0) {
 		if (isurl(argv[0])) {
 			if (pipeout) {
-#ifndef SMALL
-			    if (!resume) {
-				if (pledge("stdio rpath dns tty inet fattr",
-				    NULL) == -1)
-					err(1, "pledge");
-			    } else
-#endif /* !SMALL */
-				if (pledge("stdio rpath dns tty inet fattr",
+				if (pledge("stdio rpath dns tty inet",
 				    NULL) == -1)
 					err(1, "pledge");
 			} else {
 #ifndef SMALL
-			    if (!resume) {
+			    if (outfile == NULL) {
 				if (pledge("stdio rpath wpath cpath dns tty inet proc exec fattr",
 				    NULL) == -1)
 					err(1, "pledge");
@@ -640,7 +627,8 @@ main(volatile int argc, char *argv[])
 			}
 
 			rval = auto_fetch(argc, argv, outfile);
-			if (rval >= 0 || pipeout) /* -1 == connected and cd-ed */
+			/* -1 == connected and cd-ed */
+			if (rval >= 0 || outfile != NULL)
 				exit(rval);
 		} else {
 #ifndef SMALL

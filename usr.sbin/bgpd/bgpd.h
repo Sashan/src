@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.478 2023/10/16 10:25:45 claudio Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.481 2024/01/11 13:08:39 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -562,6 +562,7 @@ struct rtr_config {
 
 struct ctl_show_rtr {
 	char			descr[PEER_DESCR_LEN];
+	char			state[PEER_DESCR_LEN];
 	struct bgpd_addr	remote_addr;
 	struct bgpd_addr	local_addr;
 	uint32_t		serial;
@@ -972,6 +973,11 @@ struct ctl_show_rib_request {
 	uint8_t			validation_state;
 	uint8_t			prefixlen;
 	uint8_t			aid;
+};
+
+struct ctl_kroute_req {
+	int			flags;
+	sa_family_t		af;
 };
 
 enum filter_actions {
@@ -1536,6 +1542,8 @@ const char	*log_as(uint32_t);
 const char	*log_rd(uint64_t);
 const char	*log_ext_subtype(int, uint8_t);
 const char	*log_reason(const char *);
+const char	*log_roa(struct roa *);
+const char	*log_aspa(struct aspa_set *);
 const char	*log_rtr_error(enum rtr_error);
 const char	*log_policy(enum role);
 int		 aspath_snprint(char *, size_t, void *, uint16_t);

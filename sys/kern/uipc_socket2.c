@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_socket2.c,v 1.138 2023/10/30 13:27:53 bluhm Exp $	*/
+/*	$OpenBSD: uipc_socket2.c,v 1.140 2024/01/11 14:15:11 bluhm Exp $	*/
 /*	$NetBSD: uipc_socket2.c,v 1.11 1996/02/04 02:17:55 christos Exp $	*/
 
 /*
@@ -188,7 +188,7 @@ sonewconn(struct socket *head, int connstatus, int wait)
 		return (NULL);
 	if (head->so_qlen + head->so_q0len > head->so_qlimit * 3)
 		return (NULL);
-	so = soalloc(wait);
+	so = soalloc(head->so_proto->pr_domain, wait);
 	if (so == NULL)
 		return (NULL);
 	so->so_type = head->so_type;
@@ -368,7 +368,7 @@ solock_shared(struct socket *so)
 	case PF_INET6:
 		if (so->so_proto->pr_usrreqs->pru_lock != NULL) {
 			NET_LOCK_SHARED();
-			pru_lock(so);
+			rw_enter_write(&so->so_lock);
 		} else
 			NET_LOCK();
 		break;
@@ -427,7 +427,7 @@ sounlock_shared(struct socket *so)
 	case PF_INET:
 	case PF_INET6:
 		if (so->so_proto->pr_usrreqs->pru_unlock != NULL) {
-			pru_unlock(so);
+			rw_exit_write(&so->so_lock);
 			NET_UNLOCK_SHARED();
 		} else
 			NET_UNLOCK();
@@ -463,12 +463,12 @@ sosleep_nsec(struct socket *so, void *ident, int prio, const char *wmesg,
 	case PF_INET6:
 		if (so->so_proto->pr_usrreqs->pru_unlock != NULL &&
 		    rw_status(&netlock) == RW_READ) {
-			pru_unlock(so);
+			rw_exit_write(&so->so_lock);
 		}
 		ret = rwsleep_nsec(ident, &netlock, prio, wmesg, nsecs);
 		if (so->so_proto->pr_usrreqs->pru_lock != NULL &&
 		    rw_status(&netlock) == RW_READ) {
-			pru_lock(so);
+			rw_enter_write(&so->so_lock);
 		}
 		break;
 	default:

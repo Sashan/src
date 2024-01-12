@@ -1,7 +1,7 @@
 #! /usr/bin/perl
 
 # ex:ts=8 sw=4:
-# $OpenBSD: PkgAdd.pm,v 1.148 2023/11/25 17:43:39 espie Exp $
+# $OpenBSD: PkgAdd.pm,v 1.150 2024/01/02 10:25:48 espie Exp $
 #
 # Copyright (c) 2003-2014 Marc Espie <espie@openbsd.org>
 #
@@ -359,7 +359,7 @@ sub find_kept_handle($set, $n, $state)
 		}
 	}
 	$set->check_security($state, $plist, $o);
-	if ($set->{quirks} || $plist->has('updatedb')) {
+	if ($plist->has('updatedb')) {
 		# The installed package has inst: for a location, we want
 		# the newer one (which is identical)
 		$n->location->{repository}->setup_cache($state->{setlist});
@@ -843,7 +843,7 @@ sub really_add($set, $state)
 		add_installed($pkgname);
 		delete $handle->{partial};
 		OpenBSD::PkgCfl::register($handle, $state);
-		if ($set->{quirks} || $plist->has('updatedb')) {
+		if ($plist->has('updatedb')) {
 			$handle->location->{repository}->setup_cache($state->{setlist});
 		}
 	}
@@ -1164,10 +1164,16 @@ sub quirk_set($state)
 
 sub do_quirks($self, $state)
 {
-	my $set = quirk_set($state);
-	$self->process_set($set, $state);
+	my $list = [quirk_set($state)];
+	$state->tracker->todo(@$list);
+	while (my $set = shift @$list) {
+		$state->status->what->set($set);
+		$set = $set->real_set;
+		next if $set->{finished};
+		$state->progress->set_header('Checking packages');
+		unshift(@$list, $self->process_set($set, $state));
+	}
 }
-
 
 sub process_parameters($self, $state)
 {

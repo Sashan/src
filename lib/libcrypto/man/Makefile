@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.277 2023/11/19 10:36:14 tb Exp $
+# $OpenBSD: Makefile,v 1.280 2023/12/29 19:15:15 tb Exp $
 
 .include <bsd.own.mk>
 
@@ -11,7 +11,7 @@ MAN=	\
 	ASN1_NULL_new.3 \
 	ASN1_OBJECT_new.3 \
 	ASN1_PRINTABLE_type.3 \
-	ASN1_STRING_TABLE_add.3 \
+	ASN1_STRING_TABLE_get.3 \
 	ASN1_STRING_length.3 \
 	ASN1_STRING_new.3 \
 	ASN1_STRING_print_ex.3 \
@@ -123,7 +123,7 @@ MAN=	\
 	DSA_do_sign.3 \
 	DSA_dup_DH.3 \
 	DSA_generate_key.3 \
-	DSA_generate_parameters.3 \
+	DSA_generate_parameters_ex.3 \
 	DSA_get0_pqg.3 \
 	DSA_get_ex_new_index.3 \
 	DSA_meth_new.3 \
@@ -158,6 +158,7 @@ MAN=	\
 	EVP_BytesToKey.3 \
 	EVP_CIPHER_CTX_ctrl.3 \
 	EVP_CIPHER_CTX_get_cipher_data.3 \
+	EVP_CIPHER_CTX_init.3 \
 	EVP_CIPHER_CTX_set_flags.3 \
 	EVP_CIPHER_do_all.3 \
 	EVP_CIPHER_meth_new.3 \

@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_local.h,v 1.9 2023/11/25 12:05:08 tb Exp $ */
+/* $OpenBSD: ssl_local.h,v 1.12 2023/12/29 12:24:33 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -1074,9 +1074,6 @@ struct ssl_st {
 	/* for server side, keep the list of CA_dn we can use */
 	STACK_OF(X509_NAME) *client_CA;
 
-	/* set this flag to 1 and a sleep(1) is put into all SSL_read()
-	 * and SSL_write() calls, good for nbio debugging :-) */
-	int debug;
 	long max_cert_list;
 	int first_packet;
 
@@ -1304,8 +1301,6 @@ SSL_SESSION *ssl_session_dup(SSL_SESSION *src, int include_ticket);
 int ssl_get_new_session(SSL *s, int session);
 int ssl_get_prev_session(SSL *s, CBS *session_id, CBS *ext_block,
     int *alert);
-SSL_CIPHER *OBJ_bsearch_ssl_cipher_id(SSL_CIPHER *key, SSL_CIPHER const *base,
-    int num);
 int ssl_cipher_list_to_bytes(SSL *s, STACK_OF(SSL_CIPHER) *ciphers, CBB *cbb);
 STACK_OF(SSL_CIPHER) *ssl_bytes_to_cipher_list(SSL *s, CBS *cbs);
 STACK_OF(SSL_CIPHER) *ssl_create_cipher_list(const SSL_METHOD *meth,
@@ -1344,7 +1339,7 @@ int ssl3_get_req_cert_types(SSL *s, CBB *cbb);
 int ssl3_get_message(SSL *s, int st1, int stn, int mt, long max);
 int ssl3_num_ciphers(void);
 const SSL_CIPHER *ssl3_get_cipher(unsigned int u);
-const SSL_CIPHER *ssl3_get_cipher_by_id(unsigned int id);
+const SSL_CIPHER *ssl3_get_cipher_by_id(unsigned long id);
 const SSL_CIPHER *ssl3_get_cipher_by_value(uint16_t value);
 uint16_t ssl3_cipher_get_value(const SSL_CIPHER *c);
 int ssl3_renegotiate(SSL *ssl);

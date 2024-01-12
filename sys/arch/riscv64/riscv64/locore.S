@@ -1,4 +1,4 @@
-/*	$OpenBSD: locore.S,v 1.15 2022/12/02 12:27:08 jca Exp $	*/
+/*	$OpenBSD: locore.S,v 1.17 2023/12/12 07:37:21 deraadt Exp $	*/
 
 /*-
  * Copyright (c) 2015-2018 Ruslan Bukin <br@bsdpad.com>
@@ -236,6 +236,21 @@ initstack:
 	.space	USPACE
 initstack_end:
 
+	.text
+ENTRY(sigcode)
+	mv	a0, sp
+	addi	a0, a0, SF_SC
+	li	t0, SYS_sigreturn
+	.globl	sigcodecall
+sigcodecall:
+	ecall
+	.globl sigcoderet
+sigcoderet:
+	unimp
+END(sigcode)
+	.globl esigcode
+esigcode:
+
 	.globl	sigfill
 sigfill:
 	unimp
@@ -244,22 +259,6 @@ esigfill:
 sigfillsiz:
 	.data
 	.word	esigfill - sigfill
-
-	.text
-ENTRY(sigcode)
-	mv	a0, sp
-	addi	a0, a0, SF_SC
-	li	t0, SYS_sigreturn
-	ecall
-
-	.globl sigcoderet
-sigcoderet:
-	/* sigreturn failed, exit */
-	li	t0, SYS_exit
-	ecall
-END(sigcode)
-	.globl esigcode
-esigcode:
 
 	.data
 	.global esym

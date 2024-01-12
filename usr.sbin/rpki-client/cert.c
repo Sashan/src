@@ -1,4 +1,4 @@
-/*	$OpenBSD: cert.c,v 1.119 2023/10/19 17:05:54 job Exp $ */
+/*	$OpenBSD: cert.c,v 1.122 2024/01/11 11:55:14 job Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Job Snijders <job@openbsd.org>
@@ -362,11 +362,20 @@ sbgp_parse_ipaddrblk(const char *fn, const IPAddrBlocks *addrblk,
 	enum afi		 afi;
 	struct cert_ip		*ips = NULL;
 	size_t			 ipsz = 0, sz;
-	int			 i, j;
+	int			 ipv4_seen = 0, ipv6_seen = 0;
+	int			 i, j, ipaddrblocksz;
 
 	assert(*out_ips == NULL && *out_ipsz == 0);
 
-	for (i = 0; i < sk_IPAddressFamily_num(addrblk); i++) {
+	ipaddrblocksz = sk_IPAddressFamily_num(addrblk);
+	if (ipaddrblocksz != 1 && ipaddrblocksz != 2) {
+		warnx("%s: RFC 6487 section 4.8.10: unexpected number of "
+		    "ipAddrBlocks (got %d, expected 1 or 2)",
+		    fn, ipaddrblocksz);
+		goto out;
+	}
+
+	for (i = 0; i < ipaddrblocksz; i++) {
 		af = sk_IPAddressFamily_value(addrblk, i);
 
 		switch (af->ipAddressChoice->type) {
@@ -398,6 +407,23 @@ sbgp_parse_ipaddrblk(const char *fn, const IPAddrBlocks *addrblk,
 		if (!ip_addr_afi_parse(fn, af->addressFamily, &afi)) {
 			warnx("%s: RFC 3779: invalid AFI", fn);
 			goto out;
+		}
+
+		switch(afi) {
+		case AFI_IPV4:
+			if (ipv4_seen++ > 0) {
+				warnx("%s: RFC 6487 section 4.8.10: "
+				    "IPv4 appears twice", fn);
+				goto out;
+			}
+			break;
+		case AFI_IPV6:
+			if (ipv6_seen++ > 0) {
+				warnx("%s: RFC 6487 section 4.8.10: "
+				    "IPv6 appears twice", fn);
+				goto out;
+			}
+			break;
 		}
 
 		if (aors == NULL) {
@@ -765,7 +791,7 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 	nid = OBJ_obj2nid(cobj);
 	if (nid == NID_ecdsa_with_SHA256) {
 		if (verbose)
-			warn("%s: P-256 support is experimental", fn);
+			warnx("%s: P-256 support is experimental", fn);
 	} else if (nid != NID_sha256WithRSAEncryption) {
 		warnx("%s: RFC 7935: wrong signature algorithm %s, want %s",
 		    fn, OBJ_nid2ln(nid),
@@ -990,6 +1016,7 @@ ta_parse(const char *fn, struct cert *p, const unsigned char *pkey,
 {
 	ASN1_TIME	*notBefore, *notAfter;
 	EVP_PKEY	*pk, *opk;
+	time_t		 now = get_current_time();
 
 	if (p == NULL)
 		return NULL;
@@ -1018,11 +1045,11 @@ ta_parse(const char *fn, struct cert *p, const unsigned char *pkey,
 		warnx("%s: certificate has invalid notAfter", fn);
 		goto badcert;
 	}
-	if (X509_cmp_current_time(notBefore) != -1) {
+	if (X509_cmp_time(notBefore, &now) != -1) {
 		warnx("%s: certificate not yet valid", fn);
 		goto badcert;
 	}
-	if (X509_cmp_current_time(notAfter) != 1) {
+	if (X509_cmp_time(notAfter, &now) != 1) {
 		warnx("%s: certificate has expired", fn);
 		goto badcert;
 	}

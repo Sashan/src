@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_vlan.c,v 1.216 2023/10/27 20:56:47 jan Exp $	*/
+/*	$OpenBSD: if_vlan.c,v 1.218 2023/12/23 10:52:54 bluhm Exp $	*/
 
 /*
  * Copyright 1998 Massachusetts Institute of Technology

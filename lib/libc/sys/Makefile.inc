@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile.inc,v 1.174 2023/08/20 15:17:53 visa Exp $
+#	$OpenBSD: Makefile.inc,v 1.176 2023/12/12 15:30:55 deraadt Exp $
 #	$NetBSD: Makefile.inc,v 1.35 1995/10/16 23:49:07 jtc Exp $
 #	@(#)Makefile.inc	8.1 (Berkeley) 6/17/93
 
@@ -8,7 +8,7 @@
 # modules with non-default implementations on at least one architecture:
 SRCS+=	Ovfork.S brk.S ${CERROR} \
 	sbrk.S sigpending.S sigprocmask.S \
-	sigsuspend.S syscall.S tfork_thread.S
+	sigsuspend.S tfork_thread.S
 
 # glue to offer userland wrappers for some syscalls
 SRCS+=	posix_madvise.c pthread_sigmask.c \
@@ -208,15 +208,15 @@ MAN+=	__get_tcb.2 __thrsigdivert.2 __thrsleep.2 _exit.2 accept.2 \
 	mimmutable.2 minherit.2 mkdir.2 mkfifo.2 mknod.2 mlock.2 \
 	mlockall.2 mmap.2 mount.2 mprotect.2 mquery.2 msyscall.2 msgctl.2 \
 	msgget.2 msgrcv.2 msgsnd.2 msync.2 munmap.2 nanosleep.2 \
-	nfssvc.2 open.2 pathconf.2 pinsyscall.2 pipe.2 pledge.2 poll.2 \
-	profil.2 ptrace.2 quotactl.2 read.2 readlink.2 reboot.2 recv.2 \
+	nfssvc.2 open.2 pathconf.2 pinsyscall.2 pinsyscalls.2 pipe.2 pledge.2 \
+	poll.2 profil.2 ptrace.2 quotactl.2 read.2 readlink.2 reboot.2 recv.2 \
 	rename.2 revoke.2 rmdir.2 sched_yield.2 select.2 semctl.2 semget.2 \
 	semop.2 send.2 setgroups.2 setpgid.2 setregid.2 \
 	setresuid.2 setreuid.2 setsid.2 sendsyslog.2 setuid.2 shmat.2 \
 	shmctl.2 shmget.2 shutdown.2 sigaction.2 sigaltstack.2 sigpending.2 \
 	sigprocmask.2 sigreturn.2 sigsuspend.2 socket.2 \
 	socketpair.2 stat.2 statfs.2 swapctl.2 symlink.2 \
-	sync.2 sysarch.2 syscall.2 sysctl.2 thrkill.2 truncate.2 \
+	sync.2 sysarch.2 sysctl.2 thrkill.2 truncate.2 \
 	umask.2 unlink.2 unveil.2 utimes.2 utrace.2 vfork.2 \
 	wait.2 waitid.2 write.2 \
 	ypconnect.2

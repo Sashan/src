@@ -1,4 +1,4 @@
-/*	$OpenBSD: eephy.c,v 1.60 2022/04/06 18:59:29 naddy Exp $	*/
+/*	$OpenBSD: eephy.c,v 1.63 2023/12/28 14:03:21 uwe Exp $	*/
 /*
  * Principal Author: Parag Patel
  * Copyright (c) 2001
@@ -188,16 +188,28 @@ eephy_attach(struct device *parent, struct device *self, void *aux)
 		PHY_WRITE(sc, E1000_EADR, page);
 	}
 
-	/* Switch to SGMII-to-copper mode if necessary. */
-	if (sc->mii_model == MII_MODEL_MARVELL_E1512 &&
-	    sc->mii_flags & MIIF_SGMII) {
+	/*
+	 * GCR1 MII mode defaults to an invalid value on E1512/E1514
+	 * and must be programmed with the desired mode of operation.
+	 */
+	if (sc->mii_model == MII_MODEL_MARVELL_E1512) {
+		uint32_t mode;
+
 		page = PHY_READ(sc, E1000_EADR);
 		PHY_WRITE(sc, E1000_EADR, 18);
+
 		reg = PHY_READ(sc, E1000_GCR1);
+		mode = reg & E1000_GCR1_MODE_MASK;
+
+		if (mode == E1000_GCR1_MODE_UNSET)
+			mode = E1000_GCR1_MODE_RGMII;
+		if (sc->mii_flags & MIIF_SGMII)
+			mode = E1000_GCR1_MODE_SGMII;
+
 		reg &= ~E1000_GCR1_MODE_MASK;
-		reg |= E1000_GCR1_MODE_SGMII;
-		reg |= E1000_GCR1_RESET;
+		reg |= E1000_GCR1_RESET | mode;
 		PHY_WRITE(sc, E1000_GCR1, reg);
+
 		PHY_WRITE(sc, E1000_EADR, page);
 	}
 
@@ -276,10 +288,13 @@ eephy_reset(struct mii_softc *sc)
 
 	PHY_WRITE(sc, E1000_SCR, reg);
 
-	/* 25 MHz TX_CLK should always work. */
-	reg = PHY_READ(sc, E1000_ESCR);
-	reg |= E1000_ESCR_TX_CLK_25;
-	PHY_WRITE(sc, E1000_ESCR, reg);
+	if (sc->mii_model != MII_MODEL_MARVELL_E1512 &&
+	    sc->mii_model != MII_MODEL_MARVELL_E1545) {
+		/* 25 MHz TX_CLK should always work. */
+		reg = PHY_READ(sc, E1000_ESCR);
+		reg |= E1000_ESCR_TX_CLK_25;
+		PHY_WRITE(sc, E1000_ESCR, reg);
+	}
 
 	/* Configure LEDs if they were left unconfigured. */
 	if (sc->mii_model == MII_MODEL_MARVELL_E3016 &&
@@ -290,11 +305,8 @@ eephy_reset(struct mii_softc *sc)
 
 	/*
 	 * Do a software reset for these settings to take effect.
-	 * Disable autonegotiation, such that all capabilities get
-	 * advertised when it is switched back on.
 	 */
 	reg = PHY_READ(sc, E1000_CR);
-	reg &= ~E1000_CR_AUTO_NEG_ENABLE;
 	PHY_WRITE(sc, E1000_CR, reg | E1000_CR_RESET);
 }
 

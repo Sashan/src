@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_ktrace.c,v 1.112 2023/05/11 09:51:33 bluhm Exp $	*/
+/*	$OpenBSD: kern_ktrace.c,v 1.114 2023/12/15 15:12:08 deraadt Exp $	*/
 /*	$NetBSD: kern_ktrace.c,v 1.23 1996/02/09 18:59:36 christos Exp $	*/
 
 /*
@@ -160,7 +160,7 @@ ktrsyscall(struct proc *p, register_t code, size_t argsize, register_t args[])
 	u_int nargs = 0;
 	int i;
 
-	if ((code & KTRC_CODE_MASK) == SYS_sysctl) {
+	if (code == SYS_sysctl) {
 		/*
 		 * The sysctl encoding stores the mib[]
 		 * array because it is interesting.
@@ -394,6 +394,24 @@ ktrpledge(struct proc *p, int error, uint64_t code, int syscall)
 	kp.error = error;
 	kp.code = code;
 	kp.syscall = syscall;
+
+	KERNEL_LOCK();
+	ktrwrite(p, &kth, &kp, sizeof(kp));
+	KERNEL_UNLOCK();
+	atomic_clearbits_int(&p->p_flag, P_INKTR);
+}
+
+void
+ktrpinsyscall(struct proc *p, int error, int syscall, vaddr_t addr)
+{
+	struct ktr_header kth;
+	struct ktr_pinsyscall kp;
+
+	atomic_setbits_int(&p->p_flag, P_INKTR);
+	ktrinitheader(&kth, p, KTR_PINSYSCALL);
+	kp.error = error;
+	kp.syscall = syscall;
+	kp.addr = addr;
 
 	KERNEL_LOCK();
 	ktrwrite(p, &kth, &kp, sizeof(kp));

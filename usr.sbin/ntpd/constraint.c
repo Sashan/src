@@ -1,4 +1,4 @@
-/*	$OpenBSD: constraint.c,v 1.54 2022/11/27 13:19:00 otto Exp $	*/
+/*	$OpenBSD: constraint.c,v 1.56 2023/12/20 15:36:36 otto Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -469,8 +469,7 @@ priv_constraint_check_child(pid_t pid, int status)
 				    strsignal(sig) : "unknown";
 				log_warnx("constraint %s; "
 				    "terminated with signal %d (%s)",
-				    log_sockaddr((struct sockaddr *)
-				    &cstr->addr->ss), sig, signame);
+				    log_ntp_addr(cstr->addr), sig, signame);
 			}
 			fail = 1;
 		}
@@ -554,7 +553,6 @@ constraint_close(u_int32_t id)
 		return (1);
 	}
 
-	/* Go on and try the next resolved address for this constraint */
 	return (constraint_init(cstr));
 }
 
@@ -680,7 +678,7 @@ constraint_msg_result(u_int32_t id, u_int8_t *data, size_t len)
 	    gettime_from_timeval(&tv[1]);
 
 	log_info("constraint reply from %s: offset %f",
-	    log_sockaddr((struct sockaddr *)&cstr->addr->ss),
+	    log_ntp_addr(cstr->addr),
 	    offset);
 
 	cstr->state = STATE_REPLY_RECEIVED;
@@ -712,8 +710,8 @@ constraint_msg_close(u_int32_t id, u_int8_t *data, size_t len)
 	if (fail) {
 		log_debug("no constraint reply from %s"
 		    " received in time, next query %ds",
-		    log_sockaddr((struct sockaddr *)
-		    &cstr->addr->ss), CONSTRAINT_SCAN_INTERVAL);
+		    log_ntp_addr(cstr->addr),
+		    CONSTRAINT_SCAN_INTERVAL);
 		
 		cnt = 0;
 		TAILQ_FOREACH(tmp, &conf->constraints, entry)
@@ -927,7 +925,7 @@ httpsdate_init(const char *addr, const char *port, const char *hostname,
 	 * version is based on our wallclock, which may well be inaccurate...
 	 */
 	if (!synced) {
-		log_debug("constraints: skipping time in certificate validation");
+		log_debug("constraints: using received time in certificate validation");
 		tls_config_insecure_noverifytime(httpsdate->tls_config);
 	}
 

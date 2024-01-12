@@ -1,4 +1,4 @@
-/*	$OpenBSD: server_file.c,v 1.75 2022/08/15 09:40:14 op Exp $	*/
+/*	$OpenBSD: server_file.c,v 1.78 2024/01/06 11:29:00 espie Exp $	*/
 
 /*
  * Copyright (c) 2006 - 2017 Reyk Floeter <reyk@openbsd.org>
@@ -30,9 +30,12 @@
 #include <dirent.h>
 #include <time.h>
 #include <event.h>
+#include <util.h>
 
 #include "httpd.h"
 #include "http.h"
+#include "css.h"
+#include "js.h"
 
 #define MINIMUM(a, b)	(((a) < (b)) ? (a) : (b))
 #define MAXIMUM(a, b)	(((a) > (b)) ? (a) : (b))
@@ -49,6 +52,7 @@ int		 server_file_modified_since(struct http_descriptor *,
 int		 server_file_method(struct client *);
 int		 parse_range_spec(char *, size_t, struct range *);
 int		 parse_ranges(struct client *, char *, size_t);
+static int	 select_visible(const struct dirent *);
 
 int
 server_file_access(struct httpd *env, struct client *clt,
@@ -466,6 +470,17 @@ server_partial_file_request(struct httpd *env, struct client *clt, char *path,
 	return (-1);
 }
 
+/* ignore hidden files starting with a dot */
+static int 
+select_visible(const struct dirent *dp)
+{
+    if (dp->d_name[0] == '.' &&
+	!(dp->d_name[1] == '.' && dp->d_name[2] == '\0'))
+	    return 0;
+    else
+	    return 1;
+}
+
 int
 server_file_index(struct httpd *env, struct client *clt)
 {
@@ -474,15 +489,16 @@ server_file_index(struct httpd *env, struct client *clt)
 	struct http_descriptor	 *desc = clt->clt_descreq;
 	struct server_config	 *srv_conf = clt->clt_srv_conf;
 	struct dirent		**namelist, *dp;
-	int			  namesize, i, ret, fd = -1, namewidth, skip;
+	int			  namesize, i, ret, fd = -1, skip;
 	int			  code = 500;
 	struct evbuffer		 *evb = NULL;
 	struct media_type	 *media;
-	const char		 *stripped, *style;
+	const char		 *stripped;
 	char			 *escapeduri, *escapedhtml, *escapedpath;
 	struct tm		  tm;
 	struct stat		  st;
 	time_t			  t, dir_mtime;
+	char 			  human_size[FMT_SCALED_STRSIZE];
 
 	if ((ret = server_file_method(clt)) != 0) {
 		code = ret;
@@ -510,33 +526,30 @@ server_file_index(struct httpd *env, struct client *clt)
 	if ((escapedpath = escape_html(desc->http_path)) == NULL)
 		goto abort;
 
-	/* A CSS stylesheet allows minimal customization by the user */
-	style = "body { background-color: white; color: black; font-family: "
-	    "sans-serif; }\nhr { border: 0; border-bottom: 1px dashed; }\n"
-	    "@media (prefers-color-scheme: dark) {\n"
-	    "body { background-color: #1E1F21; color: #EEEFF1; }\n"
-	    "a { color: #BAD7FF; }\n}";
-
 	/* Generate simple HTML index document */
 	if (evbuffer_add_printf(evb,
 	    "<!DOCTYPE html>\n"
-	    "<html>\n"
+	    "<html lang=\"en\">\n"
 	    "<head>\n"
 	    "<meta charset=\"utf-8\">\n"
 	    "<title>Index of %s</title>\n"
-	    "<style type=\"text/css\"><!--\n%s\n--></style>\n"
+	    "<style><!--\n%s--></style>\n"
 	    "</head>\n"
 	    "<body>\n"
 	    "<h1>Index of %s</h1>\n"
-	    "<hr>\n<pre>\n",
-	    escapedpath, style, escapedpath) == -1) {
+	    "<table><thead>\n"
+	    "<tr class=\"sort\"><th class=\"sorted\">Name</th>\n"
+	    "    <th>Date</th><th>Size</th></tr>\n"
+	    "</thead><tbody>\n",
+	    escapedpath, css, escapedpath) == -1) {
 		free(escapedpath);
 		goto abort;
 	}
 
 	free(escapedpath);
 
-	if ((namesize = scandir(path, &namelist, NULL, alphasort)) == -1)
+	if ((namesize = scandir(path, &namelist, select_visible, 
+	    alphasort)) == -1)
 		goto abort;
 
 	/* Indicate failure but continue going through the list */
@@ -556,7 +569,6 @@ server_file_index(struct httpd *env, struct client *clt)
 		t = subst.st_mtime;
 		localtime_r(&t, &tm);
 		strftime(tmstr, sizeof(tmstr), "%d-%h-%Y %R", &tm);
-		namewidth = 51 - strlen(dp->d_name);
 
 		if ((escapeduri = url_encode(dp->d_name)) == NULL) {
 			skip = 1;
@@ -570,24 +582,25 @@ server_file_index(struct httpd *env, struct client *clt)
 			continue;
 		}
 
-		if (dp->d_name[0] == '.' &&
-		    !(dp->d_name[1] == '.' && dp->d_name[2] == '\0')) {
-			/* ignore hidden files starting with a dot */
-		} else if (S_ISDIR(subst.st_mode)) {
-			namewidth -= 1; /* trailing slash */
+		if (S_ISDIR(subst.st_mode)) {
 			if (evbuffer_add_printf(evb,
-			    "<a href=\"%s%s/\">%s/</a>%*s%s%20s\n",
+			    "<tr class=\"dir\">"
+			    "<td><a href=\"%s%s/\">%s/</a></td>\n"
+			    "    <td data-o=\"%lld\">%s</td><td>%s</td></tr>\n",
 			    strchr(escapeduri, ':') != NULL ? "./" : "",
-			    escapeduri, escapedhtml,
-			    MAXIMUM(namewidth, 0), " ", tmstr, "-") == -1)
+			    escapeduri, escapedhtml, 
+			    (long long)t, tmstr, "-") == -1)
 				skip = 1;
 		} else if (S_ISREG(subst.st_mode)) {
-			if (evbuffer_add_printf(evb,
-			    "<a href=\"%s%s\">%s</a>%*s%s%20llu\n",
+			if ((fmt_scaled(subst.st_size, human_size) != 0) ||
+			   (evbuffer_add_printf(evb,
+			    "<tr><td><a href=\"%s%s\">%s</a></td>\n"
+			    "    <td data-o=\"%lld\">%s</td>"
+			    "<td title=\"%llu\">%s</td></tr>\n",
 			    strchr(escapeduri, ':') != NULL ? "./" : "",
 			    escapeduri, escapedhtml,
-			    MAXIMUM(namewidth, 0), " ",
-			    tmstr, subst.st_size) == -1)
+			    (long long)t, tmstr, 
+			    subst.st_size, human_size) == -1))
 				skip = 1;
 		}
 		free(escapeduri);
@@ -598,7 +611,9 @@ server_file_index(struct httpd *env, struct client *clt)
 
 	if (skip ||
 	    evbuffer_add_printf(evb,
-	    "</pre>\n<hr>\n</body>\n</html>\n") == -1)
+	    "</tbody></table>\n<script>\n"
+	    "%s\n"
+	    "</script>\n</body>\n</html>\n", js) == -1)
 		goto abort;
 
 	close(fd);

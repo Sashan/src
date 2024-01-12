@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_aggr.c,v 1.40 2023/05/16 14:32:54 jan Exp $ */
+/*	$OpenBSD: if_aggr.c,v 1.42 2023/12/23 10:52:54 bluhm Exp $ */
 
 /*
  * Copyright (c) 2019 The University of Queensland

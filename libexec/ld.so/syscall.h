@@ -1,4 +1,4 @@
-/*	$OpenBSD: syscall.h,v 1.4 2023/02/18 01:22:50 deraadt Exp $ */
+/*	$OpenBSD: syscall.h,v 1.6 2023/12/20 14:54:29 deraadt Exp $ */
 
 /*
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
@@ -52,11 +52,12 @@ int	_dl_mprotect(const void *, size_t, int);
 void   *_dl_mquery(void *, size_t, int, int, int, off_t);
 int	_dl_msyscall(void *addr, size_t len);
 int	_dl_pinsyscall(int, void *addr, size_t len);
+int	_dl_pinsyscalls(void *base, size_t len, u_int *pin, int pinlen);
 int	_dl_munmap(const void *, size_t);
 int	_dl_mimmutable(const void *, size_t);
 int	_dl_open(const char *, int);
 int	_dl_pledge(const char *, const char **);
-ssize_t	_dl_read(int, const char *, size_t);
+ssize_t	_dl_read(int, void *, size_t);
 int	_dl_sendsyslog(const char *, size_t, int);
 void	_dl___set_tcb(void *);
 int	_dl_sysctl(const int *, u_int, void *, size_t *, void *, size_t);

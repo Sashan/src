@@ -1,4 +1,4 @@
-/*	$OpenBSD: application_internal.c,v 1.8 2023/11/12 16:03:41 martijn Exp $	*/
+/*	$OpenBSD: application_internal.c,v 1.11 2023/12/21 12:43:31 martijn Exp $	*/
 
 /*
  * Copyright (c) 2023 Martijn van Duren <martijn@openbsd.org>
@@ -17,17 +17,21 @@
  */
 
 #include <sys/tree.h>
+#include <sys/types.h>
 
+#include <stddef.h>
+
+#include <ber.h>
 #include <errno.h>
-#include <event.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "application.h"
 #include "log.h"
 #include "mib.h"
 #include "smi.h"
+#include "snmp.h"
 #include "snmpd.h"
 
 struct appl_internal_object {
@@ -130,8 +134,6 @@ appl_internal_init(void)
 	    NULL);
 	appl_internal_object(&OID(MIB_snmpInReadOnlys), appl_internal_snmp,
 	    NULL);
-	appl_internal_object(&OID(MIB_snmpInReadOnlys), appl_internal_snmp,
-	    NULL);
 	appl_internal_object(&OID(MIB_snmpInGenErrs), appl_internal_snmp, NULL);
 	appl_internal_object(&OID(MIB_snmpInTotalReqVars), appl_internal_snmp,
 	    NULL);
@@ -206,8 +208,7 @@ appl_internal_init(void)
 		oid.bo_id[oid.bo_n++] = 0;
 		if (appl_register(NULL, 150, 1, &oid,
 		    1, 1, 0, 0, &appl_config) != APPL_ERROR_NOERROR) {
-			if (obj->stringval != NULL)
-				free(obj->stringval);
+			free(obj->stringval);
 			free(obj);
 		} else
 			RB_INSERT(appl_internal_objects, &appl_internal_objects,
@@ -223,10 +224,12 @@ appl_internal_shutdown(void)
 	while ((object = RB_ROOT(&appl_internal_objects)) != NULL) {
 		RB_REMOVE(appl_internal_objects, &appl_internal_objects,
 		    object);
+		free(object->stringval);
 		free(object);
 	}
 
 	appl_close(&appl_internal);
+	appl_close(&appl_config);
 }
 
 void
@@ -252,14 +255,19 @@ appl_internal_object(struct ber_oid *oid,
     struct ber_element *(*getnext)(int8_t, struct ber_oid *))
 {
 	struct appl_internal_object *obj;
+	char buf[1024];
 
 	if ((obj = calloc(1, sizeof(*obj))) == NULL)
 		fatal(NULL);
 	obj->oid = *oid;
 	obj->get = get;
 	obj->getnext = getnext;
+	obj->stringval = NULL;
 
-	RB_INSERT(appl_internal_objects, &appl_internal_objects, obj);
+	if (RB_INSERT(appl_internal_objects,
+	    &appl_internal_objects, obj) != NULL)
+		fatalx("%s: %s already registered", __func__,
+		    smi_oid2string(oid, buf, sizeof(buf), 0));
 }
 
 const char *
@@ -349,6 +357,8 @@ appl_internal_get(struct appl_backend *backend, __unused int32_t transactionid,
 	resp[i - 1].av_next = NULL;
 
 	appl_response(backend, requestid, APPL_ERROR_NOERROR, 0, resp);
+
+	free(resp);
 	return;
 
  fail:
@@ -432,6 +442,8 @@ appl_internal_getnext(struct appl_backend *backend,
 	resp[i - 1].av_next = NULL;
 
 	appl_response(backend, requestid, APPL_ERROR_NOERROR, 0, resp);
+
+	free(resp);
 	return;
 
  fail:

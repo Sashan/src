@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.h,v 1.164 2023/10/19 07:02:46 claudio Exp $ */
+/*	$OpenBSD: session.h,v 1.166 2024/01/11 15:46:25 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -130,7 +130,7 @@ struct bgpd_sysdep {
 
 struct ctl_conn {
 	TAILQ_ENTRY(ctl_conn)	entry;
-	struct imsgbuf		ibuf;
+	struct imsgbuf		imsgbuf;
 	int			restricted;
 	int			throttled;
 	int			terminate;
@@ -339,8 +339,9 @@ struct peer	*getpeerbydesc(struct bgpd_config *, const char *);
 struct peer	*getpeerbyip(struct bgpd_config *, struct sockaddr *);
 struct peer	*getpeerbyid(struct bgpd_config *, uint32_t);
 int		 peer_matched(struct peer *, struct ctl_neighbor *);
-int		 imsg_ctl_parent(int, uint32_t, pid_t, void *, uint16_t);
-int		 imsg_ctl_rde(int, uint32_t, pid_t, void *, uint16_t);
+int		 imsg_ctl_parent(struct imsg *);
+int		 imsg_ctl_rde(struct imsg *);
+int		 imsg_ctl_rde_msg(int, uint32_t, pid_t);
 void		 session_stop(struct peer *, uint8_t);
 
 /* timer.c */

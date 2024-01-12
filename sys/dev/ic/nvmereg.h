@@ -1,4 +1,4 @@
-/*	$OpenBSD: nvmereg.h,v 1.11 2016/11/15 12:01:11 mpi Exp $ */
+/*	$OpenBSD: nvmereg.h,v 1.13 2023/12/20 13:37:25 krw Exp $ */
 
 /*
  * Copyright (c) 2014 David Gwynne <dlg@openbsd.org>
@@ -204,12 +204,12 @@ struct nvme_cqe {
 	u_int16_t	flags;
 #define NVME_CQE_DNR		(1 << 15)
 #define NVME_CQE_M		(1 << 14)
-#define NVME_CQE_SCT(_f)	((_f) & (0x07 << 8))
-#define  NVME_CQE_SCT_GENERIC		(0x00 << 8)
-#define  NVME_CQE_SCT_COMMAND		(0x01 << 8)
-#define  NVME_CQE_SCT_MEDIAERR		(0x02 << 8)
-#define  NVME_CQE_SCT_VENDOR		(0x07 << 8)
-#define NVME_CQE_SC(_f)		((_f) & (0x7f << 1))
+#define NVME_CQE_SCT(_f)	((_f) & (0x07 << 9))
+#define  NVME_CQE_SCT_GENERIC		(0x00 << 9)
+#define  NVME_CQE_SCT_COMMAND		(0x01 << 9)
+#define  NVME_CQE_SCT_MEDIAERR		(0x02 << 9)
+#define  NVME_CQE_SCT_VENDOR		(0x07 << 9)
+#define NVME_CQE_SC(_f)		((_f) & (0xff << 1))
 #define  NVME_CQE_SC_SUCCESS		(0x00 << 1)
 #define  NVME_CQE_SC_INVALID_OPCODE	(0x01 << 1)
 #define  NVME_CQE_SC_INVALID_FIELD	(0x02 << 1)
@@ -363,6 +363,7 @@ struct nvm_identify_namespace {
 	u_int64_t	nuse;		/* Namespace Utilization */
 
 	u_int8_t	nsfeat;		/* Namespace Features */
+#define	NVME_ID_NS_NSFEAT_THIN_PROV	(1 << 0)
 	u_int8_t	nlbaf;		/* Number of LBA Formats */
 	u_int8_t	flbas;		/* Formatted LBA Size */
 #define NVME_ID_NS_FLBAS(_f)			((_f) & 0x0f)

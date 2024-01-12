@@ -1,4 +1,4 @@
-/*	$OpenBSD: evp_test.c,v 1.9 2023/11/27 22:39:26 tb Exp $ */
+/*	$OpenBSD: evp_test.c,v 1.14 2024/01/11 16:45:26 tb Exp $ */
 /*
  * Copyright (c) 2022 Joel Sing <jsing@openbsd.org>
  * Copyright (c) 2023 Theo Buehler <tb@openbsd.org>
@@ -106,38 +106,156 @@ evp_asn1_method_test(void)
 	return failed;
 }
 
-static int
-evp_pkey_method_test(void)
+/* EVP_PKEY_asn1_find() by hand. Allows cross-checking and finding duplicates. */
+static const EVP_PKEY_ASN1_METHOD *
+evp_pkey_asn1_find(int nid, int skip_id)
 {
-	const EVP_PKEY_METHOD *method;
-	int pkey_id;
-	int failed = 1;
+	const EVP_PKEY_ASN1_METHOD *ameth;
+	int count, i, pkey_id;
 
-	if ((method = EVP_PKEY_meth_find(EVP_PKEY_RSA)) == NULL) {
-		fprintf(stderr, "FAIL: failed to find RSA method\n");
-		goto failure;
-	}
-	EVP_PKEY_meth_get0_info(&pkey_id, NULL, method);
-	if (pkey_id != EVP_PKEY_RSA) {
-		fprintf(stderr, "FAIL: method ID mismatch (%d != %d)\n",
-		    pkey_id, EVP_PKEY_RSA);
-		goto failure;
-	}
-
-	if ((method = EVP_PKEY_meth_find(EVP_PKEY_RSA_PSS)) == NULL) {
-		fprintf(stderr, "FAIL: failed to find RSA-PSS method\n");
-		goto failure;
-	}
-	EVP_PKEY_meth_get0_info(&pkey_id, NULL, method);
-	if (pkey_id != EVP_PKEY_RSA_PSS) {
-		fprintf(stderr, "FAIL: method ID mismatch (%d != %d)\n",
-		    pkey_id, EVP_PKEY_RSA_PSS);
-		goto failure;
+	count = EVP_PKEY_asn1_get_count();
+	for (i = 0; i < count; i++) {
+		if (i == skip_id)
+			continue;
+		if ((ameth = EVP_PKEY_asn1_get0(i)) == NULL)
+			return NULL;
+		if (!EVP_PKEY_asn1_get0_info(&pkey_id, NULL, NULL,
+		    NULL, NULL, ameth))
+			return NULL;
+		if (pkey_id == nid)
+			return ameth;
 	}
 
-	failed = 0;
+	return NULL;
+}
 
- failure:
+static int
+evp_asn1_method_aliases_test(void)
+{
+	const EVP_PKEY_ASN1_METHOD *ameth;
+	int id, base_id, flags;
+	const char *info, *pem_str;
+	int count, i;
+	int failed = 0;
+
+	if ((count = EVP_PKEY_asn1_get_count()) <= 0) {
+		fprintf(stderr, "FAIL: EVP_PKEY_asn1_get_count(): %d\n", count);
+		failed |= 1;
+	}
+	for (i = 0; i < count; i++) {
+		if ((ameth = EVP_PKEY_asn1_get0(i)) == NULL) {
+			fprintf(stderr, "FAIL: no ameth for index %d < %d\n",
+			    i, count);
+			failed |= 1;
+			continue;
+		}
+		if (!EVP_PKEY_asn1_get0_info(&id, &base_id, &flags,
+		    &info, &pem_str, ameth)) {
+			fprintf(stderr, "FAIL: no info for ameth %d\n", i);
+			failed |= 1;
+			continue;
+		}
+
+		/*
+		 * The following are all true or all false for any ameth:
+		 * 1. ASN1_PKEY_ALIAS is set	2. id != base_id
+		 * 3. info == NULL		4. pem_str == NULL
+		 */
+
+		if ((flags & ASN1_PKEY_ALIAS) == 0) {
+			size_t pem_str_len;
+
+			if (id != base_id) {
+				fprintf(stderr, "FAIL: non-alias with "
+				    "id %d != base_id %d\n", id, base_id);
+				failed |= 1;
+				continue;
+			}
+			if (info == NULL || strlen(info) == 0) {
+				fprintf(stderr, "FAIL: missing or empty info %d\n", id);
+				failed |= 1;
+				continue;
+			}
+			if (pem_str == NULL) {
+				fprintf(stderr, "FAIL: missing pem_str %d\n", id);
+				failed |= 1;
+				continue;
+			}
+			if ((pem_str_len = strlen(pem_str)) == 0) {
+				fprintf(stderr, "FAIL: empty pem_str %d\n", id);
+				failed |= 1;
+				continue;
+			}
+
+			if (evp_pkey_asn1_find(id, i) != NULL) {
+				fprintf(stderr, "FAIL: duplicate ameth %d\n", id);
+				failed |= 1;
+				continue;
+			}
+
+			if (ameth != EVP_PKEY_asn1_find(NULL, id)) {
+				fprintf(stderr, "FAIL: EVP_PKEY_asn1_find(%d) "
+				    "returned different ameth\n", id);
+				failed |= 1;
+				continue;
+			}
+			if (ameth != EVP_PKEY_asn1_find_str(NULL, pem_str, -1)) {
+				fprintf(stderr, "FAIL: EVP_PKEY_asn1_find_str(%s) "
+				    "returned different ameth\n", pem_str);
+				failed |= 1;
+				continue;
+			}
+			if (ameth != EVP_PKEY_asn1_find_str(NULL,
+			    pem_str, pem_str_len)) {
+				fprintf(stderr, "FAIL: EVP_PKEY_asn1_find_str(%s, %zu) "
+				    "returned different ameth\n", pem_str, pem_str_len);
+				failed |= 1;
+				continue;
+			}
+			if (EVP_PKEY_asn1_find_str(NULL, pem_str,
+			    pem_str_len - 1) != NULL) {
+				fprintf(stderr, "FAIL: EVP_PKEY_asn1_find_str(%s, %zu) "
+				    "returned an ameth\n", pem_str, pem_str_len - 1);
+				failed |= 1;
+				continue;
+			}
+			continue;
+		}
+
+		if (id == base_id) {
+			fprintf(stderr, "FAIL: alias with id %d == base_id %d\n",
+			    id, base_id);
+			failed |= 1;
+		}
+		if (info != NULL) {
+			fprintf(stderr, "FAIL: alias %d with info %s\n", id, info);
+			failed |= 1;
+		}
+		if (pem_str != NULL) {
+			fprintf(stderr, "FAIL: alias %d with pem_str %s\n",
+			    id, pem_str);
+			failed |= 1;
+		}
+
+		/* Check that ameth resolves to a non-alias. */
+		if ((ameth = evp_pkey_asn1_find(base_id, -1)) == NULL) {
+			fprintf(stderr, "FAIL: no ameth with pkey_id %d\n",
+			    base_id);
+			failed |= 1;
+			continue;
+		}
+		if (!EVP_PKEY_asn1_get0_info(NULL, NULL, &flags, NULL, NULL, ameth)) {
+			fprintf(stderr, "FAIL: no info for ameth with pkey_id %d\n",
+			    base_id);
+			failed |= 1;
+			continue;
+		}
+		if ((flags & ASN1_PKEY_ALIAS) != 0) {
+			fprintf(stderr, "FAIL: ameth with pkey_id %d "
+			    "resolves to another alias\n", base_id);
+			failed |= 1;
+		}
+	}
 
 	return failed;
 }
@@ -439,7 +557,6 @@ evp_do_all_cb_common(const char *descr, const void *ptr, const char *from,
 		fprintf(stderr, "FAIL: %ss %s and %s out of order\n", descr,
 		    previous, from);
 	}
-	arg->previous = from;
 }
 
 static void
@@ -533,16 +650,113 @@ evp_aliases_test(void)
 	return failure;
 }
 
+static void
+obj_name_cb(const OBJ_NAME *obj_name, void *do_all_arg)
+{
+	struct do_all_arg *arg = do_all_arg;
+	struct do_all_arg arg_copy = *arg;
+	const char *previous = arg->previous;
+	const char *descr = "OBJ_NAME unknown";
+
+	assert(obj_name->name != NULL);
+	arg->previous = obj_name->name;
+
+	if (obj_name->type == OBJ_NAME_TYPE_CIPHER_METH) {
+		descr = "OBJ_NAME cipher";
+
+		if (obj_name->alias == 0) {
+			const EVP_CIPHER *cipher;
+
+			if ((cipher = EVP_get_cipherbyname(obj_name->name)) !=
+			    (const EVP_CIPHER *)obj_name->data) {
+				arg->failure |= 1;
+				fprintf(stderr, "FAIL: %s by name %p != %p\n",
+				    descr, cipher, obj_name->data);
+			}
+
+			evp_do_all_cb_common(descr, obj_name->data,
+			    obj_name->name, NULL, &arg_copy);
+		} else if (obj_name->alias == OBJ_NAME_ALIAS) {
+			evp_cipher_aliases_cb(NULL, obj_name->name,
+			    obj_name->data, &arg_copy);
+		} else {
+			fprintf(stderr, "FAIL %s %s: unexpected alias value %d\n",
+			    descr, obj_name->name, obj_name->alias);
+			arg->failure |= 1;
+		}
+	} else if (obj_name->type == OBJ_NAME_TYPE_MD_METH) {
+		descr = "OBJ_NAME digest";
+
+		if (obj_name->alias == 0) {
+			const EVP_MD *evp_md;
+
+			if ((evp_md = EVP_get_digestbyname(obj_name->name)) !=
+			    (const EVP_MD *)obj_name->data) {
+				arg->failure |= 1;
+				fprintf(stderr, "FAIL: %s by name %p != %p\n",
+				    descr, evp_md, obj_name->data);
+			}
+
+			evp_do_all_cb_common(descr, obj_name->data,
+			    obj_name->name, NULL, &arg_copy);
+		} else if (obj_name->alias == OBJ_NAME_ALIAS) {
+			evp_digest_aliases_cb(NULL, obj_name->name,
+			    obj_name->data, &arg_copy);
+		} else {
+			fprintf(stderr, "FAIL: %s %s: unexpected alias value %d\n",
+			    descr, obj_name->name, obj_name->alias);
+			arg->failure |= 1;
+		}
+	} else {
+		fprintf(stderr, "FAIL: unexpected OBJ_NAME type %d\n",
+		    obj_name->type);
+		arg->failure |= 1;
+	}
+
+	if (previous != NULL && strcmp(previous, obj_name->name) >= 0) {
+		arg->failure |= 1;
+		fprintf(stderr, "FAIL: %ss %s and %s out of order\n", descr,
+		    previous, obj_name->name);
+	}
+
+	arg->failure |= arg_copy.failure;
+}
+
+static int
+obj_name_do_all_test(void)
+{
+	struct do_all_arg arg;
+	int failure = 0;
+
+	memset(&arg, 0, sizeof(arg));
+	/* XXX - replace with OBJ_NAME_do_all() after next bump. */
+	OBJ_NAME_do_all_sorted(OBJ_NAME_TYPE_CIPHER_METH, obj_name_cb, &arg);
+	failure |= arg.failure;
+
+	memset(&arg, 0, sizeof(arg));
+	/* XXX - replace with OBJ_NAME_do_all() after next bump. */
+	OBJ_NAME_do_all_sorted(OBJ_NAME_TYPE_MD_METH, obj_name_cb, &arg);
+	failure |= arg.failure;
+
+	memset(&arg, 0, sizeof(arg));
+	/* XXX - replace with OBJ_NAME_do_all() after next bump. */
+	OBJ_NAME_do_all_sorted(OBJ_NAME_TYPE_PKEY_METH, obj_name_cb, &arg);
+	failure |= arg.failure;
+
+	return failure;
+}
+
 int
 main(int argc, char **argv)
 {
 	int failed = 0;
 
 	failed |= evp_asn1_method_test();
-	failed |= evp_pkey_method_test();
+	failed |= evp_asn1_method_aliases_test();
 	failed |= evp_pkey_iv_len_test();
 	failed |= evp_do_all_test();
 	failed |= evp_aliases_test();
+	failed |= obj_name_do_all_test();
 
 	OPENSSL_cleanup();
 

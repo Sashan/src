@@ -2,7 +2,7 @@
  * THIS FILE AUTOMATICALLY GENERATED.  DO NOT EDIT.
  *
  * generated from:
- *	OpenBSD: pcidevs,v 1.2058 2023/11/29 06:46:29 jmatthew Exp 
+ *	OpenBSD: pcidevs,v 1.2060 2023/12/03 00:14:53 jsg Exp 
  */
 /*	$NetBSD: pcidevs,v 1.30 1997/06/24 06:20:24 thorpej Exp $	*/
 
@@ -823,6 +823,22 @@
 #define	PCI_PRODUCT_AMD_19_6X_DF_6	0x14e5		/* 19h/6xh Data Fabric */
 #define	PCI_PRODUCT_AMD_19_6X_DF_7	0x14e6		/* 19h/6xh Data Fabric */
 #define	PCI_PRODUCT_AMD_19_6X_DF_8	0x14e7		/* 19h/6xh Data Fabric */
+#define	PCI_PRODUCT_AMD_19_7X_RC	0x14e8		/* 19h/7xh Root Complex */
+#define	PCI_PRODUCT_AMD_19_7X_IOMMU	0x14e9		/* 19h/7xh IOMMU */
+#define	PCI_PRODUCT_AMD_19_7X_HB	0x14ea		/* 19h/7xh Host */
+#define	PCI_PRODUCT_AMD_19_7X_PCIE_1	0x14eb		/* 19h/7xh PCIE */
+#define	PCI_PRODUCT_AMD_19_7X_PCIE_2	0x14ed		/* 19h/7xh PCIE */
+#define	PCI_PRODUCT_AMD_19_7X_PCIE_3	0x14ee		/* 19h/7xh PCIE */
+#define	PCI_PRODUCT_AMD_19_7X_PCIE_4	0x14ef		/* 19h/7xh PCIE */
+#define	PCI_PRODUCT_AMD_19_7X_DF_1	0x14f0		/* 19h/7xh Data Fabric */
+#define	PCI_PRODUCT_AMD_19_7X_DF_2	0x14f1		/* 19h/7xh Data Fabric */
+#define	PCI_PRODUCT_AMD_19_7X_DF_3	0x14f2		/* 19h/7xh Data Fabric */
+#define	PCI_PRODUCT_AMD_19_7X_DF_4	0x14f3		/* 19h/7xh Data Fabric */
+#define	PCI_PRODUCT_AMD_19_7X_DF_5	0x14f4		/* 19h/7xh Data Fabric */
+#define	PCI_PRODUCT_AMD_19_7X_DF_6	0x14f5		/* 19h/7xh Data Fabric */
+#define	PCI_PRODUCT_AMD_19_7X_DF_7	0x14f6		/* 19h/7xh Data Fabric */
+#define	PCI_PRODUCT_AMD_19_7X_DF_8	0x14f7		/* 19h/7xh Data Fabric */
+#define	PCI_PRODUCT_AMD_19_7X_IPU	0x1502		/* 19h/7xh IPU */
 #define	PCI_PRODUCT_AMD_14_HB	0x1510		/* 14h Host */
 #define	PCI_PRODUCT_AMD_14_PCIE_1	0x1512		/* 14h PCIE */
 #define	PCI_PRODUCT_AMD_14_PCIE_2	0x1513		/* 14h PCIE */
@@ -860,6 +876,11 @@
 #define	PCI_PRODUCT_AMD_19_6X_XHCI_1	0x15b6		/* 19h/6xh xHCI */
 #define	PCI_PRODUCT_AMD_19_6X_XHCI_2	0x15b7		/* 19h/6xh xHCI */
 #define	PCI_PRODUCT_AMD_19_6X_XHCI_3	0x15b8		/* 19h/6xh xHCI */
+#define	PCI_PRODUCT_AMD_19_7X_XHCI_1	0x15b9		/* 19h/7xh xHCI */
+#define	PCI_PRODUCT_AMD_19_7X_XHCI_2	0x15ba		/* 19h/7xh xHCI */
+#define	PCI_PRODUCT_AMD_19_7X_XHCI_3	0x15c0		/* 19h/7xh xHCI */
+#define	PCI_PRODUCT_AMD_19_7X_XHCI_4	0x15c1		/* 19h/7xh xHCI */
+#define	PCI_PRODUCT_AMD_19_7X_PSP	0x15c7		/* 19h/7xh PSP */
 #define	PCI_PRODUCT_AMD_17_1X_RC	0x15d0		/* 17h/1xh Root Complex */
 #define	PCI_PRODUCT_AMD_17_1X_IOMMU	0x15d1		/* 17h/1xh IOMMU */
 #define	PCI_PRODUCT_AMD_17_1X_PCIE_1	0x15d3		/* 17h/1xh PCIE */
@@ -911,6 +932,8 @@
 #define	PCI_PRODUCT_AMD_17_90_DF_5	0x1665		/* 17h/90h Data Fabric */
 #define	PCI_PRODUCT_AMD_17_90_DF_6	0x1666		/* 17h/90h Data Fabric */
 #define	PCI_PRODUCT_AMD_17_90_DF_7	0x1667		/* 17h/90h Data Fabric */
+#define	PCI_PRODUCT_AMD_19_7X_USB4_1	0x1668		/* 19h/7xh USB4 */
+#define	PCI_PRODUCT_AMD_19_7X_USB4_2	0x1669		/* 19h/7xh USB4 */
 #define	PCI_PRODUCT_AMD_19_5X_DF_0	0x166a		/* 19h/5xh Data Fabric */
 #define	PCI_PRODUCT_AMD_19_5X_DF_1	0x166b		/* 19h/5xh Data Fabric */
 #define	PCI_PRODUCT_AMD_19_5X_DF_2	0x166c		/* 19h/5xh Data Fabric */
@@ -3741,6 +3764,10 @@
 #define	PCI_PRODUCT_INTEL_I219_LM12	0x0d53		/* I219-LM */
 #define	PCI_PRODUCT_INTEL_I219_V12	0x0d55		/* I219-V */
 #define	PCI_PRODUCT_INTEL_I225_IT	0x0d9f		/* I225-IT */
+#define	PCI_PRODUCT_INTEL_I219_LM23	0x0dc5		/* I219-LM */
+#define	PCI_PRODUCT_INTEL_I219_V23	0x0dc6		/* I219-V */
+#define	PCI_PRODUCT_INTEL_I219_LM22	0x0dc7		/* I219-LM */
+#define	PCI_PRODUCT_INTEL_I219_V22	0x0dc8		/* I219-V */
 #define	PCI_PRODUCT_INTEL_E5V2_HB	0x0e00		/* E5 v2 Host */
 #define	PCI_PRODUCT_INTEL_E5V2_PCIE_1	0x0e01		/* E5 v2 PCIE */
 #define	PCI_PRODUCT_INTEL_E5V2_PCIE_2	0x0e02		/* E5 v2 PCIE */
@@ -5972,6 +5999,10 @@
 #define	PCI_PRODUCT_INTEL_I219_V18	0x550b		/* I219-V */
 #define	PCI_PRODUCT_INTEL_I219_LM19	0x550c		/* I219-LM */
 #define	PCI_PRODUCT_INTEL_I219_V19	0x550d		/* I219-V */
+#define	PCI_PRODUCT_INTEL_I219_LM20	0x550e		/* I219-LM */
+#define	PCI_PRODUCT_INTEL_I219_V20	0x550f		/* I219-V */
+#define	PCI_PRODUCT_INTEL_I219_LM21	0x5510		/* I219-LM */
+#define	PCI_PRODUCT_INTEL_I219_V21	0x5511		/* I219-V */
 #define	PCI_PRODUCT_INTEL_DG2_G10_1	0x5690		/* Arc A770M */
 #define	PCI_PRODUCT_INTEL_DG2_G10_2	0x5691		/* Arc A730M */
 #define	PCI_PRODUCT_INTEL_DG2_G10_3	0x5692		/* Arc A550M */
@@ -5993,6 +6024,8 @@
 #define	PCI_PRODUCT_INTEL_DG2_G12_6	0x56b3		/* Graphics */
 #define	PCI_PRODUCT_INTEL_ATS_M150	0x56c0		/* Flex 170 */
 #define	PCI_PRODUCT_INTEL_ATS_M75	0x56c1		/* Flex 140 */
+#define	PCI_PRODUCT_INTEL_I219_LM24	0x57a0		/* I219-LM */
+#define	PCI_PRODUCT_INTEL_I219_V24	0x57a1		/* I219-V */
 #define	PCI_PRODUCT_INTEL_QEMU_NVME	0x5845		/* QEMU NVM Express Controller */
 #define	PCI_PRODUCT_INTEL_KBL_D_GT1	0x5902		/* HD Graphics 610 */
 #define	PCI_PRODUCT_INTEL_CORE7G_U_HB	0x5904		/* Core 7G Host */

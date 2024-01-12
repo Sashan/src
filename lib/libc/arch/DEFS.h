@@ -1,4 +1,4 @@
-/*	$OpenBSD: DEFS.h,v 1.1 2022/01/01 23:47:14 guenther Exp $	*/
+/*	$OpenBSD: DEFS.h,v 1.4 2023/12/11 22:24:15 kettenis Exp $	*/
 /*
  * Copyright (c) 2015,2018,2021 Philip Guenther <guenther@openbsd.org>
  *
@@ -20,8 +20,10 @@
 /* ARM just had to be different... */
 #ifndef __arm__
 # define _FUNC_TYPE	@function
+# define _PROGBITS	@progbits
 #else
 # define _FUNC_TYPE	#function
+# define _PROGBITS	%progbits
 #endif
 
 /*
@@ -67,3 +69,10 @@
 #endif
 
 #define _END(x)		.size x, . - x
+
+#define PINSYSCALL(sysno, label)					\
+	.pushsection .openbsd.syscalls,"",_PROGBITS;			\
+	.p2align 2;							\
+	.long label;							\
+	.long sysno;							\
+	.popsection;

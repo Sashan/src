@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.101 2023/07/05 12:58:55 kn Exp $	*/
+/*	$OpenBSD: trap.c,v 1.103 2024/01/11 19:16:26 miod Exp $	*/
 /*	$NetBSD: trap.c,v 1.2 2003/05/04 23:51:56 fvdl Exp $	*/
 
 /*-
@@ -550,12 +550,10 @@ ast(struct trapframe *frame)
 void
 syscall(struct trapframe *frame)
 {
-	caddr_t params;
 	const struct sysent *callp;
 	struct proc *p;
-	int error, indirect = -1;
-	size_t argsize, argoff;
-	register_t code, args[9], rval[2], *argp;
+	int error = ENOSYS;
+	register_t code, args[6], rval[2], *argp;
 
 	verify_smap(__func__);
 	uvmexp.syscalls++;
@@ -568,59 +566,29 @@ syscall(struct trapframe *frame)
 
 	code = frame->tf_rax;
 	argp = &args[0];
-	argoff = 0;
 
-	switch (code) {
-	case SYS_syscall:
-		/*
-		 * Code is first argument, followed by actual args.
-		 */
-		indirect = code;
-		code = frame->tf_rdi;
-		argp = &args[1];
-		argoff = 1;
-		break;
-	default:
-		break;
-	}
-
-	callp = sysent;
-	if (code < 0 || code >= SYS_MAXSYSCALL)
-		callp += SYS_syscall;
-	else
-		callp += code;
-
-	argsize = (callp->sy_argsize >> 3) + argoff;
-	if (argsize) {
-		switch (MIN(argsize, 6)) {
-		case 6:
-			args[5] = frame->tf_r9;
-		case 5:
-			args[4] = frame->tf_r8;
-		case 4:
-			args[3] = frame->tf_r10;
-		case 3:
-			args[2] = frame->tf_rdx;
-		case 2:
-			args[1] = frame->tf_rsi;
-		case 1:
-			args[0] = frame->tf_rdi;
-			break;
-		default:
-			panic("impossible syscall argsize");
-		}
-		if (argsize > 6) {
-			argsize -= 6;
-			params = (caddr_t)frame->tf_rsp + sizeof(register_t);
-			if ((error = copyin(params, &args[6], argsize << 3)))
-				goto bad;
-		}
+	if (code <= 0 || code >= SYS_MAXSYSCALL)
+		goto bad;
+	callp = sysent + code;
+	switch (callp->sy_narg) {
+	case 6:
+		args[5] = frame->tf_r9;
+	case 5:
+		args[4] = frame->tf_r8;
+	case 4:
+		args[3] = frame->tf_r10;
+	case 3:
+		args[2] = frame->tf_rdx;
+	case 2:
+		args[1] = frame->tf_rsi;
+	case 1:
+		args[0] = frame->tf_rdi;
 	}
 
 	rval[0] = 0;
 	rval[1] = 0;
 
-	error = mi_syscall(p, code, indirect, callp, argp, rval);
+	error = mi_syscall(p, code, callp, argp, rval);
 
 	switch (error) {
 	case 0:

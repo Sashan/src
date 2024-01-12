@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.h,v 1.86 2023/04/13 15:23:21 miod Exp $	*/
+/*	$OpenBSD: pmap.h,v 1.88 2023/12/29 13:23:28 jca Exp $	*/
 /*	$NetBSD: pmap.h,v 1.1 2003/04/26 18:39:46 fvdl Exp $	*/
 
 /*
@@ -385,6 +385,7 @@ extern const long nbpd[], nkptpmax[];
 
 void		map_tramps(void);	/* machdep.c */
 paddr_t		pmap_bootstrap(paddr_t, paddr_t);
+void		pmap_init_percpu(void);
 void		pmap_randomize(void);
 void		pmap_randomize_level(pd_entry_t *, int);
 int		pmap_clear_attrs(struct vm_page *, unsigned long);

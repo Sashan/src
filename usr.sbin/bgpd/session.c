@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.c,v 1.455 2023/11/07 11:18:35 claudio Exp $ */
+/*	$OpenBSD: session.c,v 1.458 2024/01/11 14:11:03 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004, 2005 Henning Brauer <henning@openbsd.org>
@@ -607,11 +607,6 @@ bgp_fsm(struct peer *peer, enum session_events event)
 
 			/* init write buffer */
 			msgbuf_init(&peer->wbuf);
-
-			peer->stats.last_sent_errcode = 0;
-			peer->stats.last_sent_suberr = 0;
-			peer->stats.last_rcvd_errcode = 0;
-			peer->stats.last_rcvd_suberr = 0;
 
 			if (!peer->depend_ok)
 				timer_stop(&peer->timers, Timer_ConnectRetry);
@@ -2977,7 +2972,7 @@ session_dispatch_imsg(struct imsgbuf *imsgbuf, int idx, u_int *listener_cnt)
 		case IMSG_SOCKET_CONN_CTL:
 			if (idx != PFD_PIPE_MAIN)
 				fatalx("reconf request not from parent");
-			if ((fd = imsg.fd) == -1) {
+			if ((fd = imsg_get_fd(&imsg)) == -1) {
 				log_warnx("expected to receive imsg fd to "
 				    "RDE but didn't receive any");
 				break;
@@ -3037,7 +3032,7 @@ session_dispatch_imsg(struct imsgbuf *imsgbuf, int idx, u_int *listener_cnt)
 					fatalx("king bula sez: "
 					    "expected REINIT");
 
-				if ((nla->fd = imsg.fd) == -1)
+				if ((nla->fd = imsg_get_fd(&imsg)) == -1)
 					log_warnx("expected to receive fd for "
 					    "%s but didn't receive any",
 					    log_sockaddr((struct sockaddr *)
@@ -3066,17 +3061,17 @@ session_dispatch_imsg(struct imsgbuf *imsgbuf, int idx, u_int *listener_cnt)
 			    sizeof(restricted))
 				fatalx("RECONF_CTRL imsg with wrong len");
 			memcpy(&restricted, imsg.data, sizeof(restricted));
-			if (imsg.fd == -1) {
+			if ((fd = imsg_get_fd(&imsg)) == -1) {
 				log_warnx("expected to receive fd for control "
 				    "socket but didn't receive any");
 				break;
 			}
 			if (restricted) {
 				control_shutdown(rcsock);
-				rcsock = imsg.fd;
+				rcsock = fd;
 			} else {
 				control_shutdown(csock);
-				csock = imsg.fd;
+				csock = fd;
 			}
 			break;
 		case IMSG_RECONF_DRAIN:
@@ -3166,7 +3161,7 @@ session_dispatch_imsg(struct imsgbuf *imsgbuf, int idx, u_int *listener_cnt)
 			}
 
 			memcpy(&xmrt, imsg.data, sizeof(struct mrt));
-			if ((xmrt.wbuf.fd = imsg.fd) == -1)
+			if ((xmrt.wbuf.fd = imsg_get_fd(&imsg)) == -1)
 				log_warnx("expected to receive fd for mrt dump "
 				    "but didn't receive any");
 
@@ -3553,6 +3548,13 @@ session_up(struct peer *p)
 {
 	struct session_up	 sup;
 
+	/* clear last errors, now that the session is up */
+	p->stats.last_sent_errcode = 0;
+	p->stats.last_sent_suberr = 0;
+	p->stats.last_rcvd_errcode = 0;
+	p->stats.last_rcvd_suberr = 0;
+	memset(p->stats.last_reason, 0, sizeof(p->stats.last_reason));
+
 	if (imsg_rde(IMSG_SESSION_ADD, p->conf.id,
 	    &p->conf, sizeof(p->conf)) == -1)
 		fatalx("imsg_compose error");
@@ -3576,14 +3578,25 @@ session_up(struct peer *p)
 }
 
 int
-imsg_ctl_parent(int type, uint32_t peerid, pid_t pid, void *data,
-    uint16_t datalen)
+imsg_ctl_parent(struct imsg *imsg)
 {
-	return imsg_compose(ibuf_main, type, peerid, pid, -1, data, datalen);
+	return imsg_forward(ibuf_main, imsg);
 }
 
 int
-imsg_ctl_rde(int type, uint32_t peerid, pid_t pid, void *data, uint16_t datalen)
+imsg_ctl_rde(struct imsg *imsg)
+{
+	if (ibuf_rde_ctl == NULL)
+		return (0);
+	/*
+	 * Use control socket to talk to RDE to bypass the queue of the
+	 * regular imsg socket.
+	 */
+	return imsg_forward(ibuf_rde_ctl, imsg);
+}
+
+int
+imsg_ctl_rde_msg(int type, uint32_t peerid, pid_t pid)
 {
 	if (ibuf_rde_ctl == NULL)
 		return (0);
@@ -3592,7 +3605,7 @@ imsg_ctl_rde(int type, uint32_t peerid, pid_t pid, void *data, uint16_t datalen)
 	 * Use control socket to talk to RDE to bypass the queue of the
 	 * regular imsg socket.
 	 */
-	return imsg_compose(ibuf_rde_ctl, type, peerid, pid, -1, data, datalen);
+	return imsg_compose(ibuf_rde_ctl, type, peerid, pid, -1, NULL, 0);
 }
 
 int

@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.131 2023/02/11 23:07:27 deraadt Exp $	*/
+/*	$OpenBSD: trap.c,v 1.134 2024/01/11 19:16:27 miod Exp $	*/
 /*	$NetBSD: trap.c,v 1.3 1996/10/13 03:31:37 christos Exp $	*/
 
 /*
@@ -61,10 +61,8 @@ static int fix_unaligned(struct proc *p, struct trapframe *frame);
 int badaddr(char *addr, u_int32_t len);
 void trap(struct trapframe *frame);
 
-/* These definitions should probably be somewhere else				XXX */
-#define	FIRSTARG	3		/* first argument is in reg 3 */
-#define	NARGREG		8		/* 8 args are in registers */
-#define	MOREARGS(sp)	((caddr_t)((int)(sp) + 8)) /* more args go here */
+/* XXX This definition should probably be somewhere else */
+#define	FIRSTARG	3		/* first syscall argument is in reg 3 */
 
 #ifdef ALTIVEC
 static int altivec_assist(struct proc *p, vaddr_t);
@@ -239,11 +237,9 @@ trap(struct trapframe *frame)
 	struct vm_map *map;
 	vaddr_t va;
 	int access_type;
-	const struct sysent *callp;
-	size_t argsize;
+	const struct sysent *callp = sysent;
 	register_t code, error;
-	register_t *params, rval[2], args[10];
-	int n, indirect = -1;
+	register_t *params, rval[2];
 
 	if (frame->srr1 & PSL_PR) {
 		type |= EXC_USER;
@@ -361,41 +357,19 @@ trap(struct trapframe *frame)
 		uvmexp.syscalls++;
 
 		code = frame->fixreg[0];
+	        if (code <= 0 || code >= SYS_MAXSYSCALL) {
+			error = ENOSYS;
+			goto bad;
+		}
+
+	        callp += code;
+
 		params = frame->fixreg + FIRSTARG;
-
-		switch (code) {
-		case SYS_syscall:
-			/*
-			 * code is first argument,
-			 * followed by actual args.
-			 */
-			indirect = code;
-			code = *params++;
-			break;
-		default:
-			break;
-		}
-
-		callp = sysent;
-		if (code < 0 || code >= SYS_MAXSYSCALL)
-			callp += SYS_syscall;
-		else
-			callp += code;
-		argsize = callp->sy_argsize;
-		n = NARGREG - (params - (frame->fixreg + FIRSTARG));
-		if (argsize > n * sizeof(register_t)) {
-			bcopy(params, args, n * sizeof(register_t));
-
-			if ((error = copyin(MOREARGS(frame->fixreg[1]),
-			   args + n, argsize - n * sizeof(register_t))))
-				goto bad;
-			params = args;
-		}
 
 		rval[0] = 0;
 		rval[1] = frame->fixreg[FIRSTARG + 1];
 
-		error = mi_syscall(p, code, indirect, callp, params, rval);
+		error = mi_syscall(p, code, callp, params, rval);
 
 		switch (error) {
 		case 0:

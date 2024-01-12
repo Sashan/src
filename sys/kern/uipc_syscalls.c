@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_syscalls.c,v 1.214 2023/09/23 09:17:21 jan Exp $	*/
+/*	$OpenBSD: uipc_syscalls.c,v 1.216 2024/01/03 11:07:04 bluhm Exp $	*/
 /*	$NetBSD: uipc_syscalls.c,v 1.19 1996/02/09 19:00:48 christos Exp $	*/
 
 /*
@@ -185,9 +185,9 @@ sys_bind(struct proc *p, void *v, register_t *retval)
 	if (KTRPOINT(p, KTR_STRUCT))
 		ktrsockaddr(p, mtod(nam, caddr_t), SCARG(uap, namelen));
 #endif
-	solock(so);
+	solock_shared(so);
 	error = sobind(so, nam, p);
-	sounlock(so);
+	sounlock_shared(so);
 	m_freem(nam);
 out:
 	FRELE(fp, p);
@@ -409,7 +409,7 @@ sys_connect(struct proc *p, void *v, register_t *retval)
 	if (KTRPOINT(p, KTR_STRUCT))
 		ktrsockaddr(p, mtod(nam, caddr_t), SCARG(uap, namelen));
 #endif
-	solock(so);
+	solock_shared(so);
 	if (isdnssocket(so)) {
 		error = dns_portcheck(p, so, mtod(nam, void *), nam->m_len);
 		if (error)
@@ -443,7 +443,7 @@ bad:
 	if (!interrupted)
 		so->so_state &= ~SS_ISCONNECTING;
 unlock:
-	sounlock(so);
+	sounlock_shared(so);
 	m_freem(nam);
 out:
 	FRELE(fp, p);

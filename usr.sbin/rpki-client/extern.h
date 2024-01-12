@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.195 2023/11/24 14:05:47 job Exp $ */
+/*	$OpenBSD: extern.h,v 1.198 2024/01/07 09:48:29 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -210,6 +210,7 @@ struct mft {
 	char		*sia; /* SIA signedObject */
 	char		*ski; /* SKI */
 	char		*crl; /* CRL file name */
+	unsigned char	 mfthash[SHA256_DIGEST_LENGTH];
 	unsigned char	 crlhash[SHA256_DIGEST_LENGTH];
 	time_t		 signtime; /* CMS signing-time attribute */
 	time_t		 thisupdate; /* from the eContent */
@@ -365,7 +366,7 @@ struct aspa {
 	uint32_t		*providers; /* the providers */
 	size_t			 providersz; /* number of providers */
 	time_t			 signtime; /* CMS signing-time attribute */
-	time_t		 	 notbefore; /* EE cert's Not Before */
+	time_t			 notbefore; /* EE cert's Not Before */
 	time_t			 notafter; /* notAfter of the ASPA EE cert */
 	time_t			 expires; /* when the signature path expires */
 };
@@ -709,8 +710,6 @@ int		 ip_addr_parse(const ASN1_BIT_STRING *,
 			enum afi, const char *, struct ip_addr *);
 void		 ip_addr_print(const struct ip_addr *, enum afi, char *,
 			size_t);
-void		 ip_addr_range_print(const struct ip_addr_range *, enum afi,
-			char *, size_t);
 int		 ip_addr_cmp(const struct ip_addr *, const struct ip_addr *);
 int		 ip_addr_check_overlap(const struct cert_ip *,
 			const char *, const struct cert_ip *, size_t, int);
@@ -718,7 +717,7 @@ int		 ip_addr_check_covered(enum afi, const unsigned char *,
 			const unsigned char *, const struct cert_ip *, size_t);
 int		 ip_cert_compose_ranges(struct cert_ip *);
 void		 ip_roa_compose_ranges(struct roa_ip *);
-void		 ip_warn(const char *, const struct cert_ip *, const char *);
+void		 ip_warn(const char *, const char *, const struct cert_ip *);
 
 int		 sbgp_addr(const char *, struct cert_ip *, size_t *,
 		    enum afi, const ASN1_BIT_STRING *);
@@ -735,7 +734,7 @@ int		 as_check_overlap(const struct cert_as *, const char *,
 			const struct cert_as *, size_t, int);
 int		 as_check_covered(uint32_t, uint32_t,
 			const struct cert_as *, size_t);
-void		 as_warn(const char *, const struct cert_as *, const char *);
+void		 as_warn(const char *, const char *, const struct cert_as *);
 
 int		 sbgp_as_id(const char *, struct cert_as *, size_t *,
 		    const ASN1_INTEGER *);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_vio.c,v 1.26 2023/11/10 15:51:24 bluhm Exp $	*/
+/*	$OpenBSD: if_vio.c,v 1.29 2023/12/20 09:51:06 jan Exp $	*/
 
 /*
  * Copyright (c) 2012 Stefan Fritsch, Alexander Fiveg.
@@ -47,6 +47,7 @@
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
 #include <netinet/ip.h>
+#include <netinet/ip6.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
 
@@ -145,6 +146,7 @@ struct virtio_net_hdr {
 } __packed;
 
 #define VIRTIO_NET_HDR_F_NEEDS_CSUM	1 /* flags */
+#define VIRTIO_NET_HDR_F_DATA_VALID	2 /* flags */
 #define VIRTIO_NET_HDR_GSO_NONE		0 /* gso_type */
 #define VIRTIO_NET_HDR_GSO_TCPV4	1 /* gso_type */
 #define VIRTIO_NET_HDR_GSO_UDP		3 /* gso_type */
@@ -533,7 +535,7 @@ vio_attach(struct device *parent, struct device *self, void *aux)
 	vsc->sc_driver_features = VIRTIO_NET_F_MAC | VIRTIO_NET_F_STATUS |
 	    VIRTIO_NET_F_CTRL_VQ | VIRTIO_NET_F_CTRL_RX |
 	    VIRTIO_NET_F_MRG_RXBUF | VIRTIO_NET_F_CSUM |
-	    VIRTIO_F_RING_EVENT_IDX;
+	    VIRTIO_F_RING_EVENT_IDX | VIRTIO_NET_F_GUEST_CSUM;
 
 	virtio_negotiate_features(vsc, virtio_net_feature_names);
 	if (virtio_has_feature(vsc, VIRTIO_NET_F_MAC)) {
@@ -591,7 +593,8 @@ vio_attach(struct device *parent, struct device *self, void *aux)
 	ifp->if_ioctl = vio_ioctl;
 	ifp->if_capabilities = IFCAP_VLAN_MTU;
 	if (virtio_has_feature(vsc, VIRTIO_NET_F_CSUM))
-		ifp->if_capabilities |= IFCAP_CSUM_TCPv4|IFCAP_CSUM_UDPv4;
+		ifp->if_capabilities |= IFCAP_CSUM_TCPv4|IFCAP_CSUM_UDPv4|
+		    IFCAP_CSUM_TCPv6|IFCAP_CSUM_UDPv6;
 	ifq_init_maxlen(&ifp->if_snd, vsc->sc_vqs[1].vq_num - 1);
 	ifmedia_init(&sc->sc_media, 0, vio_media_change, vio_media_status);
 	ifmedia_add(&sc->sc_media, IFM_ETHER | IFM_AUTO, 0, NULL);
@@ -748,27 +751,25 @@ again:
 		hdr = &sc->sc_tx_hdrs[slot];
 		memset(hdr, 0, sc->sc_hdr_size);
 		if (m->m_pkthdr.csum_flags & (M_TCP_CSUM_OUT|M_UDP_CSUM_OUT)) {
-			struct mbuf *mip;
-			struct ip *ip;
-			int ehdrlen = ETHER_HDR_LEN;
-			int ipoff;
+			struct ether_extracted ext;
+
+			ether_extract_headers(m, &ext);
+			hdr->csum_start = sizeof(*ext.eh);
 #if NVLAN > 0
-			struct ether_vlan_header *eh;
-
-			eh = mtod(m, struct ether_vlan_header *);
-			if (eh->evl_encap_proto == htons(ETHERTYPE_VLAN))
-				ehdrlen += ETHER_VLAN_ENCAP_LEN;
+			if (ext.evh)
+				hdr->csum_start = sizeof(*ext.evh);
 #endif
-
 			if (m->m_pkthdr.csum_flags & M_TCP_CSUM_OUT)
 				hdr->csum_offset = offsetof(struct tcphdr, th_sum);
 			else
 				hdr->csum_offset = offsetof(struct udphdr, uh_sum);
 
-			mip = m_getptr(m, ehdrlen, &ipoff);
-			KASSERT(mip != NULL && mip->m_len - ipoff >= sizeof(*ip));
-			ip = (struct ip *)(mip->m_data + ipoff);
-			hdr->csum_start = ehdrlen + (ip->ip_hl << 2);
+			if (ext.ip4)
+				hdr->csum_start += ext.ip4->ip_hl << 2;
+#ifdef INET6
+			else if (ext.ip6)
+				hdr->csum_start += sizeof(*ext.ip6);
+#endif
 			hdr->flags = VIRTIO_NET_HDR_F_NEEDS_CSUM;
 		}
 
@@ -986,6 +987,31 @@ vio_populate_rx_mbufs(struct vio_softc *sc)
 	timeout_add_sec(&sc->sc_rxtick, 1);
 }
 
+void
+vio_rx_offload(struct mbuf *m, struct virtio_net_hdr *hdr)
+{
+	struct ether_extracted ext;
+
+	if (!ISSET(hdr->flags, VIRTIO_NET_HDR_F_DATA_VALID) &&
+	    !ISSET(hdr->flags, VIRTIO_NET_HDR_F_NEEDS_CSUM))
+		return;
+
+	ether_extract_headers(m, &ext);
+
+	if (ext.ip4)
+		SET(m->m_pkthdr.csum_flags, M_IPV4_CSUM_IN_OK);
+
+	if (ext.tcp) {
+		SET(m->m_pkthdr.csum_flags, M_TCP_CSUM_IN_OK);
+		if (ISSET(hdr->flags, VIRTIO_NET_HDR_F_NEEDS_CSUM))
+			SET(m->m_pkthdr.csum_flags, M_TCP_CSUM_OUT);
+	} else if (ext.udp) {
+		SET(m->m_pkthdr.csum_flags, M_UDP_CSUM_IN_OK);
+		if (ISSET(hdr->flags, VIRTIO_NET_HDR_F_NEEDS_CSUM))
+			SET(m->m_pkthdr.csum_flags, M_UDP_CSUM_OUT);
+	}
+}
+
 /* dequeue received packets */
 int
 vio_rxeof(struct vio_softc *sc)
@@ -1019,6 +1045,8 @@ vio_rxeof(struct vio_softc *sc)
 				bufs_left = hdr->num_buffers - 1;
 			else
 				bufs_left = 0;
+			if (virtio_has_feature(vsc, VIRTIO_NET_F_GUEST_CSUM))
+				vio_rx_offload(m, hdr);
 		} else {
 			m->m_flags &= ~M_PKTHDR;
 			m0->m_pkthdr.len += m->m_len;

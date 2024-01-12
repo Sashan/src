@@ -1,4 +1,4 @@
-/*	$OpenBSD: in_pcb.h,v 1.139 2023/11/28 13:23:20 bluhm Exp $	*/
+/*	$OpenBSD: in_pcb.h,v 1.148 2024/01/09 19:57:00 bluhm Exp $	*/
 /*	$NetBSD: in_pcb.h,v 1.14 1996/02/13 23:42:00 christos Exp $	*/
 
 /*
@@ -82,6 +82,40 @@
  *	t	inpt_mtx		pcb table mutex
  *	y	inpt_notify		pcb table rwlock for notify
  *	p	inpcb_mtx		pcb mutex
+ *	L	pf_inp_mtx		link pf to inp mutex
+ *	s	so_lock			socket rwlock
+ */
+
+/*
+ * The pcb table mutex guarantees that all inpcb are consistent and
+ * that bind(2) and connect(2) create unique combinations of
+ * laddr/faddr/lport/fport/rtalbleid.  This mutex is used to protect
+ * both address consistency and inpcb lookup during protocol input.
+ * All writes to inp_[lf]addr take table mutex.  A per socket lock is
+ * needed, so that socket layer input have a consistent view at these
+ * values.
+ *
+ * In soconnect() and sosend() pcb mutex cannot be used.  They eventually
+ * can call IP output which takes pf lock which is a sleeping lock.
+ * Also connect(2) does a route lookup for source selection.  There
+ * route resolve happens, which creates a route, which sends a route
+ * message, which needs route lock, which is a rw-lock.
+ *
+ * On the other hand a mutex should be used in protocol input.  It
+ * does not make sense to do a process switch per packet.  Better spin
+ * until the packet can be processed.
+ *
+ * So there are three locks.  Table mutex is for writing inp_[lf]addr/port
+ * and lookup, socket rw-lock to separate sockets in system calls, and
+ * pcb mutex to protect socket receive buffer.  Changing inp_[lf]addr/port
+ * takes both per socket rw-lock and global table mutex.  Protocol
+ * input only reads inp_[lf]addr/port during lookup and is safe.  System
+ * call only reads when holding socket rw-lock and is safe.  The socket
+ * layer needs pcb mutex only in soreceive().
+ *
+ * Function pru_lock() grabs the pcb mutex and its existence indicates
+ * that a protocol is MP safe.  Otherwise the exclusive net lock is
+ * used.
  */
 
 struct pf_state_key;
@@ -107,15 +141,15 @@ struct inpcb {
 	TAILQ_ENTRY(inpcb) inp_queue;		/* [t] inet PCB queue */
 	SIMPLEQ_ENTRY(inpcb) inp_notify;	/* [y] notify or udp append */
 	struct	  inpcbtable *inp_table;	/* [I] inet queue/hash table */
-	union	  inpaddru inp_faddru;		/* Foreign address. */
-	union	  inpaddru inp_laddru;		/* Local address. */
+	union	  inpaddru inp_faddru;		/* [t] Foreign address. */
+	union	  inpaddru inp_laddru;		/* [t] Local address. */
 #define	inp_faddr	inp_faddru.iau_a4u.inaddr
 #define	inp_faddr6	inp_faddru.iau_addr6
 #define	inp_laddr	inp_laddru.iau_a4u.inaddr
 #define	inp_laddr6	inp_laddru.iau_addr6
-	u_int16_t inp_fport;		/* foreign port */
-	u_int16_t inp_lport;		/* local port */
-	struct	  socket *inp_socket;	/* back pointer to socket */
+	u_int16_t inp_fport;		/* [t] foreign port */
+	u_int16_t inp_lport;		/* [t] local port */
+	struct	  socket *inp_socket;	/* [I] back pointer to socket */
 	caddr_t	  inp_ppcb;		/* pointer to per-protocol pcb */
 	union {				/* Route (notice increased size). */
 		struct route ru_route;
@@ -155,13 +189,13 @@ struct inpcb {
 #define inp_csumoffset	inp_cksum6
 #endif
 	struct	icmp6_filter *inp_icmp6filt;
-	struct	pf_state_key *inp_pf_sk;
+	struct	pf_state_key *inp_pf_sk; /* [L] */
 	struct	mbuf *(*inp_upcall)(void *, struct mbuf *,
 		    struct ip *, struct ip6_hdr *, void *, int);
 	void	*inp_upcall_arg;
-	u_int	inp_rtableid;
+	u_int	inp_rtableid;		/* [t] */
 	int	inp_pipex;		/* pipex indication */
-	uint16_t inp_flowid;
+	uint16_t inp_flowid;		/* [s] */
 };
 
 LIST_HEAD(inpcbhead, inpcb);
@@ -205,7 +239,7 @@ struct inpcbtable {
  * These flags' values should be determined by either the transport
  * protocol at PRU_BIND, PRU_LISTEN, PRU_CONNECT, etc, or by in_pcb*().
  */
-#define	INP_IPV6	0x100	/* sotopf(inp->inp_socket) == PF_INET6 */
+#define INP_IPV6	0x100	/* socket, proto, domain, family is PF_INET6 */
 
 /*
  * Flags in inp_flags for IPV6
@@ -268,18 +302,20 @@ struct baddynamicports {
 
 #ifdef _KERNEL
 
+#define IN_PCBLOCK_HOLD	1
+#define IN_PCBLOCK_GRAB	2
+
 extern struct inpcbtable rawcbtable, rawin6pcbtable;
 extern struct baddynamicports baddynamicports;
 extern struct baddynamicports rootonlyports;
 extern int in_pcbnotifymiss;
 
-#define sotopf(so)  (so->so_proto->pr_domain->dom_family)
-
 void	 in_init(void);
 void	 in_losing(struct inpcb *);
 int	 in_pcballoc(struct socket *, struct inpcbtable *, int);
+int	 in_pcbbind_locked(struct inpcb *, struct mbuf *, struct proc *);
 int	 in_pcbbind(struct inpcb *, struct mbuf *, struct proc *);
-int	 in_pcbaddrisavail(struct inpcb *, struct sockaddr_in *, int,
+int	 in_pcbaddrisavail(const struct inpcb *, struct sockaddr_in *, int,
 	    struct proc *);
 int	 in_pcbconnect(struct inpcb *, struct mbuf *);
 void	 in_pcbdetach(struct inpcb *);
@@ -298,11 +334,13 @@ uint64_t in6_pcbhash(struct inpcbtable *, u_int, const struct in6_addr *,
 	    u_short, const struct in6_addr *, u_short);
 struct inpcb *
 	 in6_pcblookup(struct inpcbtable *, const struct in6_addr *,
-			       u_int, const struct in6_addr *, u_int, u_int);
+	    u_int, const struct in6_addr *, u_int, u_int);
 struct inpcb *
 	 in6_pcblookup_listen(struct inpcbtable *, struct in6_addr *, u_int,
 	    struct mbuf *, u_int);
-int	 in6_pcbaddrisavail(struct inpcb *, struct sockaddr_in6 *, int,
+int	 in6_pcbaddrisavail_lock(const struct inpcb *, struct sockaddr_in6 *,
+	    int, struct proc *, int);
+int	 in6_pcbaddrisavail(const struct inpcb *, struct sockaddr_in6 *, int,
 	    struct proc *);
 int	 in6_pcbconnect(struct inpcb *, struct mbuf *);
 void	 in6_setsockaddr(struct inpcb *, struct mbuf *);
@@ -312,8 +350,8 @@ int	 in6_peeraddr(struct socket *, struct mbuf *);
 #endif /* INET6 */
 void	 in_pcbinit(struct inpcbtable *, int);
 struct inpcb *
-	 in_pcblookup_local(struct inpcbtable *, const void *, u_int, int,
-	    u_int);
+	 in_pcblookup_local_lock(struct inpcbtable *, const void *, u_int, int,
+	    u_int, int);
 void	 in_pcbnotifyall(struct inpcbtable *, struct sockaddr *,
 	    u_int, int, void (*)(struct inpcb *, int));
 void	 in_pcbrehash(struct inpcb *);
@@ -332,8 +370,11 @@ struct rtentry *
 void	in6_pcbnotify(struct inpcbtable *, struct sockaddr_in6 *,
 	u_int, const struct sockaddr_in6 *, u_int, u_int, int, void *,
 	void (*)(struct inpcb *, int));
-int	in6_selecthlim(struct inpcb *);
-int	in_pcbpickport(u_int16_t *, const void *, int, const struct inpcb *,
-	    struct proc *);
+int	in6_selecthlim(const struct inpcb *);
+int	in_pcbset_rtableid(struct inpcb *, u_int);
+void	in_pcbset_laddr(struct inpcb *, const struct sockaddr *, u_int);
+void	in_pcbunset_faddr(struct inpcb *);
+void	in_pcbunset_laddr(struct inpcb *);
+
 #endif /* _KERNEL */
 #endif /* _NETINET_IN_PCB_H_ */

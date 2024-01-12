@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ixl.c,v 1.93 2023/11/10 15:51:20 bluhm Exp $ */
+/*	$OpenBSD: if_ixl.c,v 1.95 2024/01/07 21:01:45 bluhm Exp $ */
 
 /*
  * Copyright (c) 2013-2015, Intel Corporation
@@ -900,7 +900,7 @@ struct ixl_rx_wb_desc_32 {
 	uint64_t		qword3;
 } __packed __aligned(16);
 
-#define IXL_TX_PKT_DESCS		32
+#define IXL_TX_PKT_DESCS		8
 #define IXL_TX_QUEUE_ALIGN		128
 #define IXL_RX_QUEUE_ALIGN		128
 
@@ -1881,6 +1881,7 @@ ixl_attach(struct device *parent, struct device *self, void *aux)
 		goto free_hmc;
 	}
 
+	mtx_init(&sc->sc_link_state_mtx, IPL_NET);
 	if (ixl_get_link_status(sc) != 0) {
 		/* error printed by ixl_get_link_status */
 		goto free_hmc;
@@ -1987,7 +1988,6 @@ ixl_attach(struct device *parent, struct device *self, void *aux)
 	if_attach_queues(ifp, nqueues);
 	if_attach_iqueues(ifp, nqueues);
 
-	mtx_init(&sc->sc_link_state_mtx, IPL_NET);
 	task_set(&sc->sc_link_state_task, ixl_link_state_update, sc);
 	ixl_wr(sc, I40E_PFINT_ICR0_ENA,
 	    I40E_PFINT_ICR0_ENA_LINK_STAT_CHANGE_MASK |

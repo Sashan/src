@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_socket.c,v 1.309 2023/08/08 22:07:25 mvs Exp $	*/
+/*	$OpenBSD: uipc_socket.c,v 1.313 2024/01/11 14:15:11 bluhm Exp $	*/
 /*	$NetBSD: uipc_socket.c,v 1.21 1996/02/04 02:17:52 christos Exp $	*/
 
 /*
@@ -148,7 +148,7 @@ soinit(void)
 }
 
 struct socket *
-soalloc(int wait)
+soalloc(const struct domain *dp, int wait)
 {
 	struct socket *so;
 
@@ -156,7 +156,7 @@ soalloc(int wait)
 	    PR_ZERO);
 	if (so == NULL)
 		return (NULL);
-	rw_init_flags(&so->so_lock, "solock", RWL_DUPOK);
+	rw_init_flags(&so->so_lock, dp->dom_name, RWL_DUPOK);
 	refcnt_init(&so->so_refcnt);
 	klist_init(&so->so_rcv.sb_klist, &socket_klistops, so);
 	klist_init(&so->so_snd.sb_klist, &socket_klistops, so);
@@ -190,7 +190,7 @@ socreate(int dom, struct socket **aso, int type, int proto)
 		return (EPROTONOSUPPORT);
 	if (prp->pr_type != type)
 		return (EPROTOTYPE);
-	so = soalloc(M_WAIT);
+	so = soalloc(pffinddomain(dom), M_WAIT);
 	so->so_type = type;
 	if (suser(p) == 0)
 		so->so_state = SS_PRIV;
@@ -837,6 +837,7 @@ restart:
 		sounlock_shared(so);
 		return (error);
 	}
+	pru_lock(so);
 
 	m = so->so_rcv.sb_mb;
 #ifdef SOCKET_SPLICE
@@ -900,6 +901,7 @@ restart:
 		SBLASTRECORDCHK(&so->so_rcv, "soreceive sbwait 1");
 		SBLASTMBUFCHK(&so->so_rcv, "soreceive sbwait 1");
 		sbunlock(so, &so->so_rcv);
+		pru_unlock(so);
 		error = sbwait(so, &so->so_rcv);
 		if (error) {
 			sounlock_shared(so);
@@ -971,11 +973,13 @@ dontblock:
 			sbsync(&so->so_rcv, nextrecord);
 			if (controlp) {
 				if (pr->pr_domain->dom_externalize) {
+					pru_unlock(so);
 					sounlock_shared(so);
 					error =
 					    (*pr->pr_domain->dom_externalize)
 					    (cm, controllen, flags);
 					solock_shared(so);
+					pru_lock(so);
 				}
 				*controlp = cm;
 			} else {
@@ -1049,9 +1053,11 @@ dontblock:
 			SBLASTRECORDCHK(&so->so_rcv, "soreceive uiomove");
 			SBLASTMBUFCHK(&so->so_rcv, "soreceive uiomove");
 			resid = uio->uio_resid;
+			pru_unlock(so);
 			sounlock_shared(so);
 			uio_error = uiomove(mtod(m, caddr_t) + moff, len, uio);
 			solock_shared(so);
+			pru_lock(so);
 			if (uio_error)
 				uio->uio_resid = resid - len;
 		} else
@@ -1133,12 +1139,14 @@ dontblock:
 				break;
 			SBLASTRECORDCHK(&so->so_rcv, "soreceive sbwait 2");
 			SBLASTMBUFCHK(&so->so_rcv, "soreceive sbwait 2");
+			pru_unlock(so);
 			error = sbwait(so, &so->so_rcv);
 			if (error) {
 				sbunlock(so, &so->so_rcv);
 				sounlock_shared(so);
 				return (0);
 			}
+			pru_lock(so);
 			if ((m = so->so_rcv.sb_mb) != NULL)
 				nextrecord = m->m_nextpkt;
 		}
@@ -1172,6 +1180,7 @@ dontblock:
 	    (flags & MSG_EOR) == 0 &&
 	    (so->so_rcv.sb_state & SS_CANTRCVMORE) == 0) {
 		sbunlock(so, &so->so_rcv);
+		pru_unlock(so);
 		goto restart;
 	}
 
@@ -1182,6 +1191,7 @@ dontblock:
 		*flagsp |= flags;
 release:
 	sbunlock(so, &so->so_rcv);
+	pru_unlock(so);
 	sounlock_shared(so);
 	return (error);
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: output_json.c,v 1.36 2023/11/20 14:18:21 claudio Exp $ */
+/*	$OpenBSD: output_json.c,v 1.38 2024/01/11 13:09:41 claudio Exp $ */
 
 /*
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
@@ -1007,8 +1007,10 @@ json_rtr(struct ctl_show_rtr *rtr)
 	json_do_uint("remote_port", rtr->remote_port);
 	if (rtr->local_addr.aid != AID_UNSPEC)
 		json_do_string("local_addr", log_addr(&rtr->local_addr));
+	json_do_string("state", rtr->state);
 
 	if (rtr->session_id != -1) {
+		json_do_uint("version", rtr->version);
 		json_do_uint("session_id", rtr->session_id);
 		json_do_uint("serial", rtr->serial);
 	}

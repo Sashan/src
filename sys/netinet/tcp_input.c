@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_input.c,v 1.394 2023/11/27 20:37:15 bluhm Exp $	*/
+/*	$OpenBSD: tcp_input.c,v 1.398 2024/01/11 13:49:49 bluhm Exp $	*/
 /*	$NetBSD: tcp_input.c,v 1.23 1996/02/13 23:43:44 christos Exp $	*/
 
 /*
@@ -3360,7 +3360,7 @@ syn_cache_timer(void *arg)
 	 * than the keep alive timer would allow, expire it.
 	 */
 	sc->sc_rxttot += sc->sc_rxtcur;
-	if (sc->sc_rxttot >= tcptv_keep_init)
+	if (sc->sc_rxttot >= READ_ONCE(tcptv_keep_init))
 		goto dropit;
 
 	/* Advance the timer back-off. */
@@ -3489,6 +3489,7 @@ syn_cache_get(struct sockaddr *src, struct sockaddr *dst, struct tcphdr *th,
 	struct tcpcb *tp = NULL;
 	struct mbuf *am;
 	struct socket *oso;
+	u_int rtableid;
 
 	NET_ASSERT_LOCKED();
 
@@ -3553,37 +3554,25 @@ syn_cache_get(struct sockaddr *src, struct sockaddr *dst, struct tcphdr *th,
 #endif /* INET6 */
 	{
 		inp->inp_ip.ip_ttl = oldinp->inp_ip.ip_ttl;
+		inp->inp_options = ip_srcroute(m);
+		if (inp->inp_options == NULL) {
+			inp->inp_options = sc->sc_ipopts;
+			sc->sc_ipopts = NULL;
+		}
 	}
 
+	/* inherit rtable from listening socket */
+	rtableid = sc->sc_rtableid;
 #if NPF > 0
 	if (m->m_pkthdr.pf.flags & PF_TAG_DIVERTED) {
 		struct pf_divert *divert;
 
 		divert = pf_find_divert(m);
 		KASSERT(divert != NULL);
-		inp->inp_rtableid = divert->rdomain;
-	} else
-#endif
-	/* inherit rtable from listening socket */
-	inp->inp_rtableid = sc->sc_rtableid;
-
-	inp->inp_lport = th->th_dport;
-	switch (src->sa_family) {
-#ifdef INET6
-	case AF_INET6:
-		inp->inp_laddr6 = satosin6(dst)->sin6_addr;
-		break;
-#endif /* INET6 */
-	case AF_INET:
-		inp->inp_laddr = satosin(dst)->sin_addr;
-		inp->inp_options = ip_srcroute(m);
-		if (inp->inp_options == NULL) {
-			inp->inp_options = sc->sc_ipopts;
-			sc->sc_ipopts = NULL;
-		}
-		break;
+		rtableid = divert->rdomain;
 	}
-	in_pcbrehash(inp);
+#endif
+	in_pcbset_laddr(inp, dst, rtableid);
 
 	/*
 	 * Give the new socket our cached route reference.
@@ -3867,7 +3856,8 @@ syn_cache_add(struct sockaddr *src, struct sockaddr *dst, struct tcphdr *th,
 		return (-1);
 	}
 	refcnt_init_trace(&sc->sc_refcnt, DT_REFCNT_IDX_SYNCACHE);
-	timeout_set_proc(&sc->sc_timer, syn_cache_timer, sc);
+	timeout_set_flags(&sc->sc_timer, syn_cache_timer, sc,
+	    KCLOCK_NONE, TIMEOUT_PROC | TIMEOUT_MPSAFE);
 
 	/*
 	 * Fill in the cache, and put the necessary IP and TCP
@@ -3942,7 +3932,7 @@ syn_cache_add(struct sockaddr *src, struct sockaddr *dst, struct tcphdr *th,
 	if (syn_cache_respond(sc, m, now) == 0) {
 		mtx_enter(&syn_cache_mtx);
 		/*
-		 * XXXSMP Currently exclusive netlock prevents another insert 
+		 * XXXSMP Currently exclusive netlock prevents another insert
 		 * after our syn_cache_lookup() and before syn_cache_insert().
 		 * Double insert should be handled and not rely on netlock.
 		 */
@@ -4174,7 +4164,7 @@ syn_cache_respond(struct syn_cache *sc, struct mbuf *m, uint64_t now)
 		/* leave flowlabel = 0, it is legal and require no state mgmt */
 
 		error = ip6_output(m, NULL /*XXX*/, &sc->sc_route6, 0,
-		    NULL, NULL);
+		    NULL, inp ? inp->inp_seclevel : NULL);
 		break;
 #endif
 	}

@@ -1,4 +1,4 @@
-/*	$OpenBSD: kdump.c,v 1.159 2023/11/09 15:43:28 kn Exp $	*/
+/*	$OpenBSD: kdump.c,v 1.161 2023/12/15 15:12:08 deraadt Exp $	*/
 
 /*-
  * Copyright (c) 1988, 1993
@@ -133,6 +133,7 @@ static void ktrsysret(struct ktr_sysret *, size_t);
 static void ktruser(struct ktr_user *, size_t);
 static void ktrexec(const char*, size_t);
 static void ktrpledge(struct ktr_pledge *, size_t);
+static void ktrpinsyscall(struct ktr_pinsyscall *, size_t);
 static void usage(void);
 static void ioctldecode(int);
 static void ptracedecode(int);
@@ -309,6 +310,9 @@ main(int argc, char *argv[])
 		case KTR_PLEDGE:
 			ktrpledge(m, ktrlen);
 			break;
+		case KTR_PINSYSCALL:
+			ktrpinsyscall(m, ktrlen);
+			break;
 		default:
 			printf("\n");
 			break;
@@ -368,6 +372,9 @@ dumpheader(struct ktr_header *kth)
 		break;
 	case KTR_PLEDGE:
 		type = "PLDG";
+		break;
+	case KTR_PINSYSCALL:
+		type = "PINS";
 		break;
 	default:
 		/* htobe32() not guaranteed to work as case label */
@@ -933,9 +940,7 @@ ktrsyscall(struct ktr_syscall *ktr, size_t ktrlen)
 	narg = ktr->ktr_argsize / sizeof(register_t);
 	sep = '\0';
 
-	if (ktr->ktr_code & KTRC_CODE_SYSCALL)
-		(void)printf("(via syscall) ");
-	code = ktr->ktr_code & KTRC_CODE_MASK;
+	code = ktr->ktr_code;
 	if (code >= SYS_MAXSYSCALL || code < 0)
 		(void)printf("[%d]", code);
 	else
@@ -1488,6 +1493,27 @@ ktrpledge(struct ktr_pledge *pledge, size_t len)
 	(void)printf(", errno %d", pledge->error);
 	if (fancy)
 		(void)printf(" %s", strerror(pledge->error));
+	printf("\n");
+}
+
+static void
+ktrpinsyscall(struct ktr_pinsyscall *pinsyscall, size_t len)
+{
+	const char *name = "";
+	int i;
+
+	if (len < sizeof(struct ktr_pinsyscall))
+		errx(1, "invalid ktr pinsyscall length %zu", len);
+
+	if (pinsyscall->syscall >= SYS_MAXSYSCALL || pinsyscall->syscall < 0)
+		(void)printf("[%d]", pinsyscall->syscall);
+	else
+		(void)printf("%s", syscallnames[pinsyscall->syscall]);
+	(void)printf(", addr %lx, errno %d", pinsyscall->addr,
+	    pinsyscall->error);
+	(void)printf(", errno %d", pinsyscall->error);
+	if (fancy)
+		(void)printf(" %s", strerror(pinsyscall->error));
 	printf("\n");
 }
 

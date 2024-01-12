@@ -1,4 +1,4 @@
-/*	$OpenBSD: in6_src.c,v 1.87 2023/11/28 13:23:20 bluhm Exp $	*/
+/*	$OpenBSD: in6_src.c,v 1.91 2024/01/09 19:57:01 bluhm Exp $	*/
 /*	$KAME: in6_src.c,v 1.36 2001/02/06 04:08:17 itojun Exp $	*/
 
 /*
@@ -91,12 +91,12 @@ int in6_selectif(struct sockaddr_in6 *, struct ip6_pktopts *,
  * the values set at pcb level can be overridden via cmsg.
  */
 int
-in6_pcbselsrc(struct in6_addr **in6src, struct sockaddr_in6 *dstsock,
+in6_pcbselsrc(const struct in6_addr **in6src, struct sockaddr_in6 *dstsock,
     struct inpcb *inp, struct ip6_pktopts *opts)
 {
 	struct ip6_moptions *mopts = inp->inp_moptions6;
 	struct route_in6 *ro = &inp->inp_route6;
-	struct in6_addr *laddr = &inp->inp_laddr6;
+	const struct in6_addr *laddr = &inp->inp_laddr6;
 	u_int rtableid = inp->inp_rtableid;
 	struct ifnet *ifp = NULL;
 	struct sockaddr	*ip6_source = NULL;
@@ -249,7 +249,7 @@ in6_pcbselsrc(struct in6_addr **in6src, struct sockaddr_in6 *dstsock,
  * an entry to the caller for later use.
  */
 int
-in6_selectsrc(struct in6_addr **in6src, struct sockaddr_in6 *dstsock,
+in6_selectsrc(const struct in6_addr **in6src, struct sockaddr_in6 *dstsock,
     struct ip6_moptions *mopts, unsigned int rtableid)
 {
 	struct ifnet *ifp = NULL;
@@ -422,10 +422,10 @@ in6_selectif(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 }
 
 int
-in6_selecthlim(struct inpcb *in6p)
+in6_selecthlim(const struct inpcb *inp)
 {
-	if (in6p && in6p->inp_hops >= 0)
-		return (in6p->inp_hops);
+	if (inp && inp->inp_hops >= 0)
+		return (inp->inp_hops);
 
 	return (ip6_defhlim);
 }

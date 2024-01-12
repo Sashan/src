@@ -1,4 +1,4 @@
-/* $OpenBSD: locore.S,v 1.43 2023/01/26 13:09:18 kettenis Exp $ */
+/* $OpenBSD: locore.S,v 1.45 2023/12/12 07:37:20 deraadt Exp $ */
 /*-
  * Copyright (c) 2012-2014 Andrew Turner
  * All rights reserved.
@@ -365,21 +365,17 @@ sigcode:
 	add	x0, x0, #SF_SC
 
 	mov	x8, #SYS_sigreturn
+	.globl sigcodecall
+sigcodecall:
 	svc	0
 	dsb	nsh
 	isb
 	.globl  sigcoderet
 sigcoderet:
-
-	/* sigreturn failed, exit */
-	mov	x8, #SYS_exit
-	svc	0
-	dsb	nsh
-	isb
 END(sigcode)
 	.global esigcode
 esigcode:
-
+	/* FALLTHROUGH */
 	.globl	sigfill
 sigfill:
 	udf	#0

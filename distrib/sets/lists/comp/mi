@@ -354,6 +354,8 @@
 ./usr/include/dev/ic/qlavar.h
 ./usr/include/dev/ic/qlwreg.h
 ./usr/include/dev/ic/qlwvar.h
+./usr/include/dev/ic/qwxreg.h
+./usr/include/dev/ic/qwxvar.h
 ./usr/include/dev/ic/r92creg.h
 ./usr/include/dev/ic/ramdac.h
 ./usr/include/dev/ic/revar.h
@@ -1694,6 +1696,7 @@
 ./usr/share/man/man2/open.2
 ./usr/share/man/man2/pathconf.2
 ./usr/share/man/man2/pinsyscall.2
+./usr/share/man/man2/pinsyscalls.2
 ./usr/share/man/man2/pipe.2
 ./usr/share/man/man2/pledge.2
 ./usr/share/man/man2/poll.2
@@ -1739,7 +1742,6 @@
 ./usr/share/man/man2/symlink.2
 ./usr/share/man/man2/sync.2
 ./usr/share/man/man2/sysarch.2
-./usr/share/man/man2/syscall.2
 ./usr/share/man/man2/sysctl.2
 ./usr/share/man/man2/thrkill.2
 ./usr/share/man/man2/truncate.2
@@ -1761,7 +1763,7 @@
 ./usr/share/man/man3/ASN1_NULL_new.3
 ./usr/share/man/man3/ASN1_OBJECT_new.3
 ./usr/share/man/man3/ASN1_PRINTABLE_type.3
-./usr/share/man/man3/ASN1_STRING_TABLE_add.3
+./usr/share/man/man3/ASN1_STRING_TABLE_get.3
 ./usr/share/man/man3/ASN1_STRING_length.3
 ./usr/share/man/man3/ASN1_STRING_new.3
 ./usr/share/man/man3/ASN1_STRING_print_ex.3
@@ -1875,7 +1877,7 @@
 ./usr/share/man/man3/DSA_do_sign.3
 ./usr/share/man/man3/DSA_dup_DH.3
 ./usr/share/man/man3/DSA_generate_key.3
-./usr/share/man/man3/DSA_generate_parameters.3
+./usr/share/man/man3/DSA_generate_parameters_ex.3
 ./usr/share/man/man3/DSA_get0_pqg.3
 ./usr/share/man/man3/DSA_get_ex_new_index.3
 ./usr/share/man/man3/DSA_meth_new.3
@@ -1911,6 +1913,7 @@
 ./usr/share/man/man3/EVP_BytesToKey.3
 ./usr/share/man/man3/EVP_CIPHER_CTX_ctrl.3
 ./usr/share/man/man3/EVP_CIPHER_CTX_get_cipher_data.3
+./usr/share/man/man3/EVP_CIPHER_CTX_init.3
 ./usr/share/man/man3/EVP_CIPHER_CTX_set_flags.3
 ./usr/share/man/man3/EVP_CIPHER_do_all.3
 ./usr/share/man/man3/EVP_CIPHER_meth_new.3
@@ -2662,6 +2665,7 @@
 ./usr/share/man/man3/i2a_ASN1_STRING.3
 ./usr/share/man/man3/i2d_CMS_bio_stream.3
 ./usr/share/man/man3/i2d_PKCS7_bio_stream.3
+./usr/share/man/man3/ibuf_add.3
 ./usr/share/man/man3/if_indextoname.3
 ./usr/share/man/man3/ilogb.3
 ./usr/share/man/man3/imaxabs.3
@@ -3207,6 +3211,7 @@
 ./usr/share/man/man9/startuphook_establish.9
 ./usr/share/man/man9/stoeplitz_to_key.9
 ./usr/share/man/man9/strcmp.9
+./usr/share/man/man9/strnstr.9
 ./usr/share/man/man9/style.9
 ./usr/share/man/man9/syscall.9
 ./usr/share/man/man9/sysctl_int.9
