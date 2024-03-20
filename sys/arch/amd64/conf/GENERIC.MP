@@ -5,5 +5,8 @@ include "arch/amd64/conf/GENERIC"
 option	MULTIPROCESSOR
 #option	MP_LOCKDEBUG
 #option	WITNESS
+option	UVIDEO_DEBUG
+option	UVIDEO_DUMP
+option	XHCI_DEBUG
 
 cpu*		at mainbus?
