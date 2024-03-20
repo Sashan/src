@@ -316,7 +316,7 @@ usbd_transfer(struct usbd_xfer *xfer)
 
 	usb_tap(bus, xfer, USBTAP_DIR_OUT);
 
-	err = pipe->methods->transfer(xfer);
+	err = pipe->methods->transfer(xfer);	/* xhci_root_ctrl_transfer() */
 
 	if (err != USBD_IN_PROGRESS && err != USBD_NORMAL_COMPLETION) {
 		/* The transfer has not been queued, so free buffer. */

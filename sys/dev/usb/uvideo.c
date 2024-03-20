@@ -39,7 +39,7 @@
 #include <dev/video_if.h>
 
 #ifdef UVIDEO_DEBUG
-int uvideo_debug = 1;
+int uvideo_debug = 15;
 #define DPRINTF(l, x...) do { if ((l) <= uvideo_debug) printf(x); } while (0)
 #else
 #define DPRINTF(l, x...)
@@ -2184,7 +2184,7 @@ uvideo_vs_alloc_isoc(struct uvideo_softc *sc)
 	for (i = 0; i < UVIDEO_IXFERS; i++) {
 		sc->sc_vs_cur->ixfer[i].sc = sc;
 
-		sc->sc_vs_cur->ixfer[i].xfer = usbd_alloc_xfer(sc->sc_udev);	
+		sc->sc_vs_cur->ixfer[i].xfer = usbd_alloc_xfer(sc->sc_udev);	/* xhci_allocx() */
 		if (sc->sc_vs_cur->ixfer[i].xfer == NULL) {
 			printf("%s: could not allocate isoc VS xfer!\n",
 			    DEVNAME(sc));
@@ -2279,12 +2279,10 @@ uvideo_vs_open(struct uvideo_softc *sc)
 
 	DPRINTF(1, "%s: %s\n", DEVNAME(sc), __func__);
 
-	if (sc->sc_negotiated_flag == 0) {
 		/* do device negotiation with commit */
-		error = uvideo_vs_negotiation(sc, 1);
-		if (error != USBD_NORMAL_COMPLETION)
-			return (error);
-	}
+	error = uvideo_vs_negotiation(sc, 1);
+	if (error != USBD_NORMAL_COMPLETION)
+		return (error);
 
 	/* 2.4.3 the bulk endpoint only supports the alternative setting of 0 */
 	if (sc->sc_vs_cur->bulk_endpoint)
@@ -2559,7 +2557,6 @@ uvideo_vs_decode_stream_header(struct uvideo_softc *sc, uint8_t *frame,
 
 	if (sh->bLength > frame_size || sh->bLength < UVIDEO_SH_MIN_LEN)
 		/* invalid header size */
-		return;
 
 	DPRINTF(2, "%s: frame_size = %d\n", DEVNAME(sc), frame_size);
 
