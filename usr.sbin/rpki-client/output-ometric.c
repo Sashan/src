@@ -1,4 +1,4 @@
-/*	$OpenBSD: output-ometric.c,v 1.5 2023/06/29 14:33:35 tb Exp $ */
+/*	$OpenBSD: output-ometric.c,v 1.10 2024/04/08 14:02:13 tb Exp $ */
 /*
  * Copyright (c) 2022 Claudio Jeker <claudio@openbsd.org>
  *
@@ -47,8 +47,6 @@ set_common_stats(const struct repotalstats *in, struct ometric *metric,
 	    OKV("type", "state"), OKV("manifest", "valid"), ol);
 	ometric_set_int_with_labels(metric, in->mfts_fail,
 	    OKV("type", "state"), OKV("manifest", "failed parse"), ol);
-	ometric_set_int_with_labels(metric, in->mfts_stale,
-	    OKV("type", "state"), OKV("manifest", "stale"), ol);
 
 	ometric_set_int_with_labels(metric, in->roas,
 	    OKV("type", "state"), OKV("roa", "valid"), ol);
@@ -84,6 +82,20 @@ set_common_stats(const struct repotalstats *in, struct ometric *metric,
 	    OKV("type", "state"), OKV("vap", "unique"), ol);
 	ometric_set_int_with_labels(metric, in->vaps_pas,
 	    OKV("type", "state"), OKV("vap providers", "total"), ol);
+	ometric_set_int_with_labels(metric, in->vaps_overflowed,
+	    OKV("type", "state"), OKV("vap overflowed"), ol);
+
+	ometric_set_int_with_labels(metric, in->spls,
+	    OKV("type", "state"), OKV("spl", "valid"), ol);
+	ometric_set_int_with_labels(metric, in->spls_fail,
+	    OKV("type", "state"), OKV("spl", "failed parse"), ol);
+	ometric_set_int_with_labels(metric, in->spls_invalid,
+	    OKV("type", "state"), OKV("spl", "invalid"), ol);
+
+	ometric_set_int_with_labels(metric, in->vsps,
+	    OKV("type", "state"), OKV("vsp", "total"), ol);
+	ometric_set_int_with_labels(metric, in->vsps_uniqs,
+	    OKV("type", "state"), OKV("vsp", "unique"), ol);
 }
 
 static void
@@ -131,6 +143,8 @@ repo_stats(const struct repo *rp, const struct repostats *in, void *arg)
 	ol = olabels_new(keys, values);
 	ometric_set_timespec(rpki_repo_duration, &in->sync_time, ol);
 
+	ometric_set_int_with_labels(rpki_repo_obj, in->new_files,
+	    OKV("type", "state"), OKV("files", "new"), ol);
 	ometric_set_int_with_labels(rpki_repo_obj, in->del_files,
 	    OKV("type", "state"), OKV("files", "deleted"), ol);
 	ometric_set_int_with_labels(rpki_repo_obj, in->extra_files,
@@ -148,7 +162,7 @@ repo_stats(const struct repo *rp, const struct repostats *in, void *arg)
 
 int
 output_ometric(FILE *out, struct vrp_tree *vrps, struct brk_tree *brks,
-    struct vap_tree *vaps, struct stats *st)
+    struct vap_tree *vaps, struct vsp_tree *vsps, struct stats *st)
 {
 	struct olabels *ol;
 	const char *keys[4] = { "nodename", "domainname", "release", NULL };

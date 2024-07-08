@@ -1,4 +1,4 @@
-/*	$OpenBSD: run.c,v 1.83 2023/11/28 20:54:38 millert Exp $	*/
+/*	$OpenBSD: run.c,v 1.88 2024/06/04 14:40:46 millert Exp $	*/
 /****************************************************************
 Copyright (C) Lucent Technologies 1997
 All Rights Reserved
@@ -600,22 +600,20 @@ Cell *intest(Node **a, int n)	/* a[0] is index (list), a[1] is symtab */
 
 /* is s the beginning of a valid utf-8 string? */
 /* return length 1..4 if yes, 0 if no */
-int u8_isutf(const char *s)
+static int u8_isutf(const char *s)
 {
-	int n, ret;
+	int ret;
 	unsigned char c;
 
 	c = s[0];
-	if (c < 128 || awk_mb_cur_max == 1)
-		return 1; /* what if it's 0? */
-
-	n = strlen(s);
-	if (n >= 2 && ((c>>5) & 0x7) == 0x6 && (s[1] & 0xC0) == 0x80) {
+	if (c < 128 || awk_mb_cur_max == 1) {
+		ret = 1; /* what if it's 0? */
+	} else if (((c>>5) & 0x7) == 0x6 && (s[1] & 0xC0) == 0x80) {
 		ret = 2; /* 110xxxxx 10xxxxxx */
-	} else if (n >= 3 && ((c>>4) & 0xF) == 0xE && (s[1] & 0xC0) == 0x80
+	} else if (((c>>4) & 0xF) == 0xE && (s[1] & 0xC0) == 0x80
 			 && (s[2] & 0xC0) == 0x80) {
 		ret = 3; /* 1110xxxx 10xxxxxx 10xxxxxx */
-	} else if (n >= 4 && ((c>>3) & 0x1F) == 0x1E && (s[1] & 0xC0) == 0x80
+	} else if (((c>>3) & 0x1F) == 0x1E && (s[1] & 0xC0) == 0x80
 			 && (s[2] & 0xC0) == 0x80 && (s[3] & 0xC0) == 0x80) {
 		ret = 4; /* 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx */
 	} else {
@@ -671,7 +669,7 @@ int u8_nextlen(const char *s)
 }
 
 /* return number of utf characters or single non-utf bytes */
-int u8_strlen(const char *s)
+static int u8_strlen(const char *s)
 {
 	int i, len, n, totlen;
 	unsigned char c;
@@ -693,7 +691,7 @@ int u8_strlen(const char *s)
 }
 
 /* convert utf-8 char number in a string to its byte offset */
-int u8_char2byte(const char *s, int charnum)
+static int u8_char2byte(const char *s, int charnum)
 {
 	int n;
 	int bytenum = 0;
@@ -708,7 +706,7 @@ int u8_char2byte(const char *s, int charnum)
 }
 
 /* convert byte offset in s to utf-8 char number that starts there */
-int u8_byte2char(const char *s, int bytenum)
+static int u8_byte2char(const char *s, int bytenum)
 {
 	int i, len, b;
 	int charnum = 0; /* BUG: what origin? */
@@ -725,7 +723,7 @@ int u8_byte2char(const char *s, int bytenum)
 	return charnum;
 }
 
-/* runetochar() adapted from rune.c in the Plan 9 distributione */
+/* runetochar() adapted from rune.c in the Plan 9 distribution */
 
 enum
 {
@@ -796,7 +794,7 @@ int runetochar(char *str, int c)
 
 Cell *matchop(Node **a, int n)	/* ~ and match() */
 {
-	Cell *x, *y;
+	Cell *x, *y, *z;
 	char *s, *t;
 	int i;
 	int cstart, cpatlen, len;
@@ -818,7 +816,7 @@ Cell *matchop(Node **a, int n)	/* ~ and match() */
 		i = (*mf)(pfa, s);
 		tempfree(y);
 	}
-	tempfree(x);
+	z = x;
 	if (n == MATCHFCN) {
 		int start = patbeg - s + 1; /* origin 1 */
 		if (patlen < 0) {
@@ -840,11 +838,13 @@ Cell *matchop(Node **a, int n)	/* ~ and match() */
 		x = gettemp();
 		x->tval = NUM;
 		x->fval = start;
-		return x;
 	} else if ((n == MATCH && i == 1) || (n == NOTMATCH && i == 0))
-		return(True);
+		x = True;
 	else
-		return(False);
+		x = False;
+
+	tempfree(z);
+	return x;
 }
 
 
@@ -1016,7 +1016,7 @@ Cell *substr(Node **a, int nnn)		/* substr(a[0], a[1], a[2]) */
 	DPRINTF("substr: m=%d, n=%d, s=%s\n", m, n, s);
 	y = gettemp();
 	mb = u8_char2byte(s, m-1); /* byte offset of start char in s */
-	nb = u8_char2byte(s, m-1+n);  /* byte offset of end+1 char in s */
+	nb = mb + u8_char2byte(&s[mb], n);  /* byte offset of end+1 char in s */
 
 	temp = s[nb];	/* with thanks to John Linderman */
 	s[nb] = '\0';
@@ -1060,7 +1060,7 @@ Cell *sindex(Node **a, int nnn)		/* index(a[0], a[1]) */
 	return(z);
 }
 
-int has_utf8(char *s)	/* return 1 if s contains any utf-8 (2 bytes or more) character */
+static int has_utf8(char *s)	/* return 1 if s contains any utf-8 (2 bytes or more) character */
 {
 	int n;
 
@@ -1246,13 +1246,13 @@ int format(char **pbuf, int *pbufsize, const char *s, Node *a)	/* printf-like co
 			if (prec > u8_strlen(t))
 				prec = u8_strlen(t);
 			pad = wid>prec ? wid - prec : 0;  // has to be >= 0
-			int i, k, n;
+			int i, precb;
 			
 			if (ljust) { // print prec chars from t, then pad blanks
-				n = u8_char2byte(t, prec);
-				for (k = 0; k < n; k++) {
-					//putchar(t[k]);
-					*p++ = t[k];
+				precb = u8_char2byte(t, prec);
+				for (i = 0; i < precb; i++) {
+					//putchar(t[i]);
+					*p++ = t[i];
 				}
 				for (i = 0; i < pad; i++) {
 					//printf(" ");
@@ -1263,10 +1263,10 @@ int format(char **pbuf, int *pbufsize, const char *s, Node *a)	/* printf-like co
 					//printf(" ");
 					*p++ = ' ';
 				}
-				n = u8_char2byte(t, prec);
-				for (k = 0; k < n; k++) {
-					//putchar(t[k]);
-					*p++ = t[k];
+				precb = u8_char2byte(t, prec);
+				for (i = 0; i < precb; i++) {
+					//putchar(t[i]);
+					*p++ = t[i];
 				}
 			}
 			*p = 0;
@@ -1299,7 +1299,8 @@ int format(char **pbuf, int *pbufsize, const char *s, Node *a)	/* printf-like co
 
 						if (bs == NULL)	{ // invalid character
 							// use unicode invalid character, 0xFFFD
-							bs = "\357\277\275";
+							static char invalid_char[] = "\357\277\275";
+							bs = invalid_char;
 							count = 3;
 						}
 						t = bs;
@@ -1828,7 +1829,7 @@ Cell *split(Node **a, int nnn)	/* split(a[0], a[1], a[2]); a[3] is type */
 		for (;;) {
 			n++;
 			t = s;
-			while (*s != sep && *s != '\n' && *s != '\0')
+			while (*s != sep && *s != '\0')
 				s++;
 			temp = *s;
 			setptr(s, '\0');
@@ -1983,7 +1984,6 @@ static char *nawk_convert(const char *s, int (*fun_c)(int),
 	size_t n       = 0;
 	wchar_t wc;
 	const size_t sz = awk_mb_cur_max;
-	int unused;
 
 	if (sz == 1) {
 		buf = tostring(s);
@@ -1996,15 +1996,9 @@ static char *nawk_convert(const char *s, int (*fun_c)(int),
 		/* upper/lower character may be shorter/longer */
 		buf = tostringN(s, strlen(s) * sz + 1);
 
-		(void) mbtowc(NULL, NULL, 0);	/* reset internal state */
-		/*
-		 * Reset internal state here too.
-		 * Assign result to avoid a compiler warning. (Casting to void
-		 * doesn't work.)
-		 * Increment said variable to avoid a different warning.
-		 */
-		unused = wctomb(NULL, L'\0');
-		unused++;
+		/* reset internal state */
+		if (mbtowc(NULL, NULL, 0) == -1 || wctomb(NULL, L'\0') == -1)
+			FATAL("unable to reset character conversion state");
 
 		ps   = s;
 		pbuf = buf;
@@ -2060,7 +2054,7 @@ static char *nawk_tolower(const char *s)
 Cell *bltin(Node **a, int n)	/* builtin functions. a[0] is type, a[1] is arg list */
 {
 	Cell *x, *y;
-	Awkfloat u;
+	Awkfloat u = 0;
 	int t, sz;
 	Awkfloat tmp;
 	char *buf, *fmt;
@@ -2524,7 +2518,7 @@ void backsub(char **pb_ptr, const char **sptr_ptr);
 Cell *dosub(Node **a, int subop)        /* sub and gsub */
 {
 	fa *pfa;
-	int tempstat;
+	int tempstat = 0;
 	char *repl;
 	Cell *x;
 
@@ -2536,7 +2530,7 @@ Cell *dosub(Node **a, int subop)        /* sub and gsub */
 	const char *start;
 	const char *noempty = NULL;      /* empty match disallowed here */
 	size_t m = 0;                    /* match count */
-	size_t whichm;                   /* which match to select, 0 = global */
+	size_t whichm = 0;               /* which match to select, 0 = global */
 	int mtype;                       /* match type */
 
 	if (a[0] == NULL) {	/* 0 => a[1] is already-compiled regexpr */
@@ -2567,7 +2561,7 @@ Cell *dosub(Node **a, int subop)        /* sub and gsub */
 	start = getsval(x);
 	while (pmatch(pfa, start)) {
 		if (buf == NULL) {
-			if ((pb = buf = malloc(bufsz)) == NULL)
+			if ((pb = buf = (char *) malloc(bufsz)) == NULL)
 				FATAL("out of memory in dosub");
 			tempstat = pfa->initstat;
 			pfa->initstat = 2;
@@ -2672,7 +2666,7 @@ Cell *gensub(Node **a, int nnn)	/* global selective substitute */
 	int mflag, tempstat, num, whichm;
 	int bufsz = recsize;
 
-	if ((buf = malloc(bufsz)) == NULL)
+	if ((buf = (char *) malloc(bufsz)) == NULL)
 		FATAL("out of memory in gensub");
 	mflag = 0;	/* if mflag == 0, can replace empty string */
 	num = 0;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ufshcireg.h,v 1.4 2024/01/04 21:02:30 mglocker Exp $ */
+/*	$OpenBSD: ufshcireg.h,v 1.14 2024/06/15 18:26:25 mglocker Exp $ */
 
 /*
  * Copyright (c) 2022 Marcus Glocker <mglocker@openbsd.org>
@@ -21,9 +21,14 @@
  */
 #define UFSHCI_UCD_PRDT_MAX_SEGS	64
 #define UFSHCI_UCD_PRDT_MAX_XFER	(UFSHCI_UCD_PRDT_MAX_SEGS * PAGE_SIZE)
-#define UFSHCI_INTR_AGGR_COUNT		1 /* Max. allowed value = 31 */
-#define UFSHCI_INTR_AGGR_TIMEOUT	0x64 /* 4ms */
-#define UFSHCI_MAX_UNITS		32
+#define UFSHCI_INTR_AGGR_TIMEOUT	0x08 /* 320us (1 unit = 40us) */
+#define UFSHCI_INTR_AGGR_COUNT_MAX	31
+#define UFSHCI_SLOTS_MIN		1
+#define UFSHCI_SLOTS_MAX		32
+#define UFSHCI_TARGETS_MAX		1
+#define UFSHCI_LBS			4096 /* UFS Logical Block Size:
+						For UFS minimum size shall be
+					        4096 bytes */
 
 /*
  * Controller Capabilities Registers
@@ -52,6 +57,13 @@
 #define  UFSHCI_REG_HCMID_MIC(x)	((x >> 0) & 0x000000ff) /* RO */
 /* Auto-Hibernate Idle Timer */
 #define UFSHCI_REG_AHIT			0x18
+#define UFSHCI_REG_AHIT_TS(x)		(x << 10)
+#define  UFSHCI_REG_AHIT_TS_1US		0x00
+#define  UFSHCI_REG_AHIT_TS_10US	0x01
+#define  UFSHCI_REG_AHIT_TS_100US	0x02
+#define  UFSHCI_REG_AHIT_TS_1MS		0x03
+#define  UFSHCI_REG_AHIT_TS_10MS	0x04
+#define  UFSHCI_REG_AHIT_TS_100MS	0x05
 
 /*
  * Operation and Runtime Registers
@@ -95,10 +107,16 @@
 #define  UFSHCI_REG_IE_UTRCE		(1 <<  0) /* RW */
 /* Host Controller Status */
 #define UFSHCI_REG_HCS			0x30
-#define  UFSHCI_REG_HCS_TLUNUTPE(x)	((x << 24) & 0xff000000) /* RO */
-#define  UFSHCI_REG_HCS_TTAGUTPE(x)	((x << 16) & 0x00ff0000) /* RO */
-#define  UFSHCI_REG_HCS_UTPEC(x)	((x << 12) & 0x0000f000) /* RO */
-#define  UFSHCI_REG_HCS_UPMCRS(x)	((x <<  8) & 0x00000700) /* RO */
+#define  UFSHCI_REG_HCS_TLUNUTPE(x)	((x >> 24) & 0x000000ff) /* RO */
+#define  UFSHCI_REG_HCS_TTAGUTPE(x)	((x >> 16) & 0x000000ff) /* RO */
+#define  UFSHCI_REG_HCS_UTPEC(x)	((x >> 12) & 0x0000000f) /* RO */
+#define  UFSHCI_REG_HCS_UPMCRS(x)	((x >>  8) & 0x00000007) /* RO */
+#define   UFSHCI_REG_HCS_UPMCRS_PWR_OK		0x00
+#define   UFSHCI_REG_HCS_UPMCRS_PWR_LOCAL	0x01
+#define   UFSHCI_REG_HCS_UPMCRS_PWR_REMTOTE	0x02
+#define   UFSHCI_REG_HCS_UMPCRS_PWR_BUSY	0x03
+#define   UFSHCI_REG_HCS_UMPCRS_PWR_ERROR_CAP	0x04
+#define   UFSHCI_REG_HCS_UMPCRS_PWR_FATAL_ERROR	0x05
 #define  UFSHCI_REG_HCS_UCRDY		(1 << 3) /* RO */
 #define  UFSHCI_REG_HCS_UTMRLRDY	(1 << 2) /* RO */
 #define  UFSHCI_REG_HCS_UTRLRDY		(1 << 1) /* RO */
@@ -257,7 +275,7 @@ struct ufshci_utrd {
 	uint32_t dw5; /* UTP Cmd. Desc. Base Addr. Upper 32-bits (UCDBAU) */
 	uint32_t dw6; /* RUO, RUL */
 	uint32_t dw7; /* PRDTO, PRDTL */
-};
+} __packed;
 
 /*
  * UTP Command Descriptor, PRDT (Physical Region Description Table) Structure
@@ -274,7 +292,7 @@ struct ufshci_ucd_prdt {
 	uint32_t dw1; /* Data base Address Upper 32-bits (DBAU) */
 	uint32_t dw2; /* Reserved */
 	uint32_t dw3; /* Data Byte Count (DBC) */
-};
+} __packed;
 
 /*
  * UTP Task Management Request Descriptor Structure
@@ -306,7 +324,7 @@ struct ufshci_utmrd {
 	uint32_t dw3; /* Reserved */
 	uint8_t dw4_w11[32]; /* Task Management Request UPIU */
 	uint8_t dw12_dw19[32]; /* Task Management Response UPIU */
-};
+} __packed;
 
 /*
  * ****************************************************************************
@@ -336,7 +354,7 @@ struct upiu_hdr {
 	uint8_t tc;			/* Transaction Code */
 	uint8_t flags;
 	uint8_t lun;
-	uint8_t taskid;
+	uint8_t task_tag;
 	uint8_t cmd_set_type;
 	uint8_t query;
 	uint8_t response;
@@ -344,22 +362,22 @@ struct upiu_hdr {
 	uint8_t ehs_len;
 	uint8_t device_info;
 	uint16_t ds_len;		/* Data Segment Length */
-};
+} __packed;
 
 struct upiu_command {
 	struct upiu_hdr hdr;
 	uint32_t expected_xfer_len;
 	uint8_t cdb[16];
-};
+} __packed;
 
 struct upiu_response {
 	struct upiu_hdr hdr;
 	uint32_t residual_xfer_len;
 	uint8_t cdb[16];
-};
+} __packed;
 
 struct ufshci_ucd {
 	struct upiu_command cmd;
 	struct upiu_response rsp;
 	struct ufshci_ucd_prdt prdt[UFSHCI_UCD_PRDT_MAX_SEGS];
-};
+} __packed __aligned(128);

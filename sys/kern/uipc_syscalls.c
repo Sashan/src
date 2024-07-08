@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_syscalls.c,v 1.216 2024/01/03 11:07:04 bluhm Exp $	*/
+/*	$OpenBSD: uipc_syscalls.c,v 1.219 2024/04/25 17:32:53 bluhm Exp $	*/
 /*	$NetBSD: uipc_syscalls.c,v 1.19 1996/02/09 19:00:48 christos Exp $	*/
 
 /*
@@ -300,7 +300,7 @@ doaccept(struct proc *p, int sock, struct sockaddr *name, socklen_t *anamelen,
 			break;
 		}
 		error = sosleep_nsec(head, &head->so_timeo, PSOCK | PCATCH,
-		    "netcon", INFSLP);
+		    "netacc", INFSLP);
 		if (error)
 			goto out_unlock;
 	}
@@ -326,7 +326,7 @@ doaccept(struct proc *p, int sock, struct sockaddr *name, socklen_t *anamelen,
 	    : (flags & SOCK_NONBLOCK ? FNONBLOCK : 0);
 
 	/* connection has been removed from the listen queue */
-	knote_locked(&head->so_rcv.sb_klist, 0);
+	knote(&head->so_rcv.sb_klist, 0);
 
 	if (persocket)
 		sounlock(head);
@@ -428,7 +428,7 @@ sys_connect(struct proc *p, void *v, register_t *retval)
 	}
 	while ((so->so_state & SS_ISCONNECTING) && so->so_error == 0) {
 		error = sosleep_nsec(so, &so->so_timeo, PSOCK | PCATCH,
-		    "netcon2", INFSLP);
+		    "netcon", INFSLP);
 		if (error) {
 			if (error == EINTR || error == ERESTART)
 				interrupted = 1;
@@ -1560,12 +1560,12 @@ sys_ypconnect(struct proc *p, void *v, register_t *retval)
 
 	if (p->p_p->ps_flags & PS_CHROOT)
 		return EACCES;
+	KERNEL_LOCK();
 	name = pool_get(&namei_pool, PR_WAITOK);
 	snprintf(name, MAXPATHLEN, "/var/yp/binding/%s.2", domainname);
 	NDINIT(&nid, 0, NOFOLLOW|LOCKLEAF|KERNELPATH, UIO_SYSSPACE, name, p);
 	nid.ni_pledge = PLEDGE_RPATH;
 
-	KERNEL_LOCK();
 	error = namei(&nid);
 	pool_put(&namei_pool, name);
 	if (error)
@@ -1651,7 +1651,7 @@ out:
 	error = soconnect(so, nam);
 	while ((so->so_state & SS_ISCONNECTING) && so->so_error == 0) {
 		error = sosleep_nsec(so, &so->so_timeo, PSOCK | PCATCH,
-		    "netcon2", INFSLP);
+		    "ypcon", INFSLP);
 		if (error)
 			break;
 	}

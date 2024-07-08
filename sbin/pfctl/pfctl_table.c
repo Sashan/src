@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfctl_table.c,v 1.86 2023/10/26 16:26:01 deraadt Exp $ */
+/*	$OpenBSD: pfctl_table.c,v 1.88 2024/05/09 08:35:40 florian Exp $ */
 
 /*
  * Copyright (c) 2002 Cedric Berger
@@ -383,20 +383,27 @@ print_table(struct pfr_table *ta, int verbose, int debug)
 		puts("");
 	} else
 		puts(ta->pfrt_name);
+
+	printf("\n");
 }
 
 void
 print_tstats(struct pfr_tstats *ts, int debug)
 {
-	time_t	time = ts->pfrts_tzero;
-	int	dir, op;
+	time_t	 time = ts->pfrts_tzero;
+	int	 dir, op;
+	char	*ct;
 
 	if (!debug && !(ts->pfrts_flags & PFR_TFLAG_ACTIVE))
 		return;
+	ct = ctime(&time);
 	print_table(&ts->pfrts_t, 1, debug);
 	printf("\tAddresses:   %d\n", ts->pfrts_cnt);
-	printf("\tCleared:     %s", ctime(&time));
-	printf("\tReferences:  %-18d\n", ts->pfrts_refcnt);
+	if (ct)
+		printf("\tCleared:     %s", ct);
+	else
+		printf("\tCleared:     %lld\n", time);
+	printf("\tReferences:  [ Anchors: %-18d ]\n", ts->pfrts_refcnt);
 	printf("\tEvaluations: [ NoMatch: %-18llu Match: %-18llu ]\n",
 	    (unsigned long long)ts->pfrts_nomatch,
 	    (unsigned long long)ts->pfrts_match);
@@ -484,11 +491,16 @@ print_addrx(struct pfr_addr *ad, struct pfr_addr *rad, int dns)
 void
 print_astats(struct pfr_astats *as, int dns)
 {
-	time_t	time = as->pfras_tzero;
-	int	dir, op;
+	time_t	 time = as->pfras_tzero;
+	int	 dir, op;
+	char	*ct;
 
+	ct = ctime(&time);
 	print_addrx(&as->pfras_a, NULL, dns);
-	printf("\tCleared:     %s", ctime(&time));
+	if (ct)
+		printf("\tCleared:     %s", ctime(&time));
+	else
+		printf("\tCleared:     %lld\n", time);
 	if (as->pfras_a.pfra_states)
 		printf("\tActive States:      %d\n", as->pfras_a.pfra_states);
 	if (as->pfras_a.pfra_type == PFRKE_COST)
@@ -629,8 +641,9 @@ pfctl_show_ifaces(const char *filter, int opts)
 void
 print_iface(struct pfi_kif *p, int opts)
 {
-	time_t	tzero = p->pfik_tzero;
-	int	i, af, dir, act;
+	time_t	 tzero = p->pfik_tzero;
+	int	 i, af, dir, act;
+	char	*ct;
 
 	printf("%s", p->pfik_name);
 	if (opts & PF_OPT_VERBOSE) {
@@ -641,7 +654,12 @@ print_iface(struct pfi_kif *p, int opts)
 
 	if (!(opts & PF_OPT_VERBOSE2))
 		return;
-	printf("\tCleared:     %s", ctime(&tzero));
+
+	ct = ctime(&tzero);
+	if (ct)
+		printf("\tCleared:     %s", ct);
+	else
+		printf("\tCleared:     %lld\n", tzero);
 	printf("\tReferences:  [ States:  %-18d Rules: %-18d ]\n",
 	    p->pfik_states, p->pfik_rules);
 	for (i = 0; i < 8; i++) {

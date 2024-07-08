@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpufunc.h,v 1.39 2023/01/30 02:32:01 dv Exp $	*/
+/*	$OpenBSD: cpufunc.h,v 1.41 2024/05/14 01:46:24 guenther Exp $	*/
 /*	$NetBSD: cpufunc.h,v 1.3 2003/05/08 10:27:43 fvdl Exp $	*/
 
 /*-
@@ -42,8 +42,6 @@
 #include <machine/specialreg.h>
 
 #if defined(_KERNEL) && !defined (_STANDALONE)
-
-extern int cpu_feature;
 
 static __inline void 
 invlpg(u_int64_t addr)
@@ -241,10 +239,10 @@ rdpkru(u_int ecx)
 }
 
 static __inline void
-wrpkru(uint32_t pkru)
+wrpkru(u_int ecx, uint32_t pkru)
 {
-	uint32_t ecx = 0, edx = 0;
-	__asm volatile("wrpkru" : : "a" (pkru), "c" (ecx), "d" (edx));
+	uint32_t edx = 0;
+	asm volatile("wrpkru" : : "a" (pkru), "c" (ecx), "d" (edx));
 }
 
 static __inline void

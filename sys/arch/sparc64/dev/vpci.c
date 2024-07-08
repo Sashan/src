@@ -1,4 +1,4 @@
-/*	$OpenBSD: vpci.c,v 1.33 2020/10/27 21:01:33 kettenis Exp $	*/
+/*	$OpenBSD: vpci.c,v 1.36 2024/05/13 01:15:50 jsg Exp $	*/
 /*
  * Copyright (c) 2008 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -141,15 +141,6 @@ int vpci_msi_eq_intr(void *);
 
 int vpci_dmamap_create(bus_dma_tag_t, bus_dma_tag_t, bus_size_t, int,
     bus_size_t, bus_size_t, int, bus_dmamap_t *);
-void vpci_dmamap_destroy(bus_dma_tag_t, bus_dma_tag_t, bus_dmamap_t);
-int vpci_dmamap_load(bus_dma_tag_t, bus_dma_tag_t, bus_dmamap_t,
-    void *, bus_size_t, struct proc *, int);
-void vpci_dmamap_unload(bus_dma_tag_t, bus_dma_tag_t, bus_dmamap_t);
-int vpci_dmamem_alloc(bus_dma_tag_t, bus_dma_tag_t, bus_size_t,
-    bus_size_t, bus_size_t, bus_dma_segment_t *, int, int *, int);
-int vpci_dmamem_map(bus_dma_tag_t, bus_dma_tag_t, bus_dma_segment_t *,
-    int, size_t, caddr_t *, int);
-void vpci_dmamem_unmap(bus_dma_tag_t, bus_dma_tag_t, caddr_t, size_t);
 
 int
 vpci_match(struct device *parent, void *match, void *aux)
@@ -695,7 +686,7 @@ vpci_intr_establish_cpu(bus_space_tag_t t, bus_space_tag_t t0, int ihandle,
 		return (NULL);
 
 	ih->ih_cpu = cpu;
-	intr_establish(ih->ih_pil, ih);
+	intr_establish(ih);
 	ih->ih_ack = vpci_intr_ack;
 
 	err = sun4v_intr_settarget(devhandle, sysino, ih->ih_cpu->ci_upaid);
@@ -769,7 +760,7 @@ vpci_msi_eq_intr(void *arg)
 		if (err != H_EOK)
 			printf("%s: pci_msi_setstate: %d\n", __func__, err);
 
-		send_softint(-1, ih->ih_pil, ih);
+		send_softint(ih->ih_pil, ih);
 
 		head += sizeof(struct vpci_msi_msg);
 		head &= eq->eq_mask;

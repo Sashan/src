@@ -1,4 +1,4 @@
-/* $OpenBSD: server-fn.c,v 1.134 2023/09/01 13:48:54 nicm Exp $ */
+/* $OpenBSD: server-fn.c,v 1.137 2024/04/04 22:44:40 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -410,7 +410,7 @@ server_find_session(struct session *s,
 static int
 server_newer_session(struct session *s_loop, struct session *s_out)
 {
-	return (timercmp(&s_loop->activity_time, &s_out->activity_time, <));
+	return (timercmp(&s_loop->activity_time, &s_out->activity_time, >));
 }
 
 static int
@@ -454,7 +454,8 @@ server_destroy_session(struct session *s)
 void
 server_check_unattached(void)
 {
-	struct session	*s;
+	struct session		*s;
+	struct session_group	*sg;
 
 	/*
 	 * If any sessions are no longer attached and have destroy-unattached
@@ -463,14 +464,29 @@ server_check_unattached(void)
 	RB_FOREACH(s, sessions, &sessions) {
 		if (s->attached != 0)
 			continue;
-		if (options_get_number (s->options, "destroy-unattached"))
-			session_destroy(s, 1, __func__);
+		switch (options_get_number(s->options, "destroy-unattached")) {
+		case 0: /* off */
+			continue;
+		case 1: /* on */
+			break;
+		case 2: /* keep-last */
+			sg = session_group_contains(s);
+			if (sg == NULL || session_group_count(sg) <= 1)
+				continue;
+			break;
+		case 3: /* keep-group */
+			sg = session_group_contains(s);
+			if (sg != NULL && session_group_count(sg) == 1)
+				continue;
+			break;
+		}
+		session_destroy(s, 1, __func__);
 	}
 }
 
 void
 server_unzoom_window(struct window *w)
 {
-	if (window_unzoom(w) == 0)
+	if (window_unzoom(w, 1) == 0)
 		server_redraw_window(w);
 }

@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl.h,v 1.232 2023/11/22 15:43:42 tb Exp $ */
+/* $OpenBSD: ssl.h,v 1.237 2024/05/27 09:12:31 jsg Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -245,7 +245,6 @@ extern "C" {
 #define SSL_TXT_kECDH		"kECDH"
 #define SSL_TXT_kEECDH		"kEECDH"
 #define SSL_TXT_kPSK            "kPSK"
-#define SSL_TXT_kGOST		"kGOST"
 #define SSL_TXT_kSRP		"kSRP"
 
 #define	SSL_TXT_aRSA		"aRSA"
@@ -255,9 +254,6 @@ extern "C" {
 #define SSL_TXT_aKRB5     	"aKRB5"
 #define SSL_TXT_aECDSA		"aECDSA"
 #define SSL_TXT_aPSK            "aPSK"
-#define SSL_TXT_aGOST94		"aGOST94"
-#define SSL_TXT_aGOST01		"aGOST01"
-#define SSL_TXT_aGOST		"aGOST"
 
 #define	SSL_TXT_DSS		"DSS"
 #define SSL_TXT_DH		"DH"
@@ -293,12 +289,8 @@ extern "C" {
 #define SSL_TXT_MD5		"MD5"
 #define SSL_TXT_SHA1		"SHA1"
 #define SSL_TXT_SHA		"SHA" /* same as "SHA1" */
-#define SSL_TXT_GOST94		"GOST94"
-#define SSL_TXT_GOST89MAC		"GOST89MAC"
 #define SSL_TXT_SHA256		"SHA256"
 #define SSL_TXT_SHA384		"SHA384"
-#define SSL_TXT_STREEBOG256		"STREEBOG256"
-#define SSL_TXT_STREEBOG512		"STREEBOG512"
 
 #define SSL_TXT_DTLS1		"DTLSv1"
 #define SSL_TXT_DTLS1_2		"DTLSv1.2"
@@ -517,11 +509,6 @@ size_t SSL_get_num_tickets(const SSL *s);
 int SSL_CTX_set_num_tickets(SSL_CTX *ctx, size_t num_tickets);
 size_t SSL_CTX_get_num_tickets(const SSL_CTX *ctx);
 STACK_OF(X509) *SSL_get0_verified_chain(const SSL *s);
-
-#ifndef LIBRESSL_INTERNAL
-struct ssl_aead_ctx_st;
-typedef struct ssl_aead_ctx_st SSL_AEAD_CTX;
-#endif
 
 #define SSL_MAX_CERT_LIST_DEFAULT 1024*100 /* 100k max cert list :-) */
 
@@ -1066,10 +1053,6 @@ const SSL_METHOD *SSL_CTX_get_ssl_method(const SSL_CTX *ctx);
 	SSL_ctrl(s, SSL_CTRL_GET_PEER_SIGNATURE_NID, 0, pn)
 #define SSL_get_peer_tmp_key(s, pk) \
 	SSL_ctrl(s, SSL_CTRL_GET_PEER_TMP_KEY, 0, pk)
-
-int SSL_get_signature_type_nid(const SSL *ssl, int *nid);
-int SSL_get_peer_signature_type_nid(const SSL *ssl, int *nid);
-
 #endif /* LIBRESSL_HAS_TLS1_3 || LIBRESSL_INTERNAL */
 
 #ifndef LIBRESSL_INTERNAL
@@ -1134,8 +1117,6 @@ int	SSL_clear(SSL *s);
 void	SSL_CTX_flush_sessions(SSL_CTX *ctx, long tm);
 
 const SSL_CIPHER *SSL_get_current_cipher(const SSL *s);
-const SSL_CIPHER *SSL_CIPHER_get_by_id(unsigned int id);
-const SSL_CIPHER *SSL_CIPHER_get_by_value(uint16_t value);
 int	SSL_CIPHER_get_bits(const SSL_CIPHER *c, int *alg_bits);
 const char *	SSL_CIPHER_get_version(const SSL_CIPHER *c);
 const char *	SSL_CIPHER_get_name(const SSL_CIPHER *c);
@@ -1510,7 +1491,6 @@ int SSL_set_session_ticket_ext_cb(SSL *s,
 int SSL_set_session_secret_cb(SSL *s,
     tls_session_secret_cb_fn tls_session_secret_cb, void *arg);
 
-void SSL_set_debug(SSL *s, int debug);
 int SSL_cache_hit(SSL *s);
 
 /* What the "other" parameter contains in security callback */
@@ -2176,7 +2156,6 @@ void ERR_load_SSL_strings(void);
 #define SSL_R_NO_CLIENT_CERT_METHOD			 331
 #define SSL_R_NO_CLIENT_CERT_RECEIVED			 186
 #define SSL_R_NO_COMPRESSION_SPECIFIED			 187
-#define SSL_R_NO_GOST_CERTIFICATE_SENT_BY_PEER		 330
 #define SSL_R_NO_METHOD_SPECIFIED			 188
 #define SSL_R_NO_PRIVATEKEY				 189
 #define SSL_R_NO_PRIVATE_KEY_ASSIGNED			 190

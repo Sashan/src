@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.19 2023/09/19 19:20:33 kettenis Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.24 2024/06/11 16:02:35 jca Exp $	*/
 
 /*
  * Copyright (c) 2019 Mike Larkin <mlarkin@openbsd.org>
@@ -72,6 +72,7 @@
 #include <sys/device.h>
 #include <sys/sched.h>
 #include <sys/srp.h>
+#include <uvm/uvm_percpu.h>
 
 struct cpu_info {
 	struct device		*ci_dev; /* Device corresponding to this CPU */
@@ -90,7 +91,7 @@ struct cpu_info {
 	struct pcb		*ci_curpcb;
 	struct pcb		*ci_idle_pcb;
 
-	struct clockintr_queue	ci_queue;
+	struct clockqueue	ci_queue;
 	volatile int		ci_timer_deferred;
 
 	uint32_t		ci_cpl;
@@ -108,6 +109,8 @@ struct cpu_info {
 
 #ifdef MULTIPROCESSOR
 	struct srp_hazard	ci_srp_hazards[SRP_HAZARD_NUM];
+#define	__HAVE_UVM_PERCPU
+	struct uvm_pmr_cache	ci_uvm;
 	volatile int		ci_flags;
 	uint64_t		ci_satp;
 	vaddr_t			ci_initstack_end;
@@ -124,7 +127,7 @@ struct cpu_info {
 
 #ifdef GPROF
 	struct gmonparam	*ci_gmon;
-	struct clockintr	*ci_gmonclock;
+	struct clockintr	ci_gmonclock;
 #endif
 
 	char			ci_panicbuf[512];
@@ -228,16 +231,11 @@ void need_resched(struct cpu_info *);
 
 // asm code to start new kernel contexts.
 void	proc_trampoline(void);
-void	child_trampoline(void);
 
 /*
  * Random cruft
  */
 void	dumpconf(void);
-
-/* cpuswitch.S */
-struct pcb;
-void	savectx		(struct pcb *pcb);
 
 static inline void
 intr_enable(void)
@@ -266,6 +264,8 @@ intr_restore(u_long s)
 
 void	delay (unsigned);
 #define	DELAY(x)	delay(x)
+
+extern void (*cpu_startclock_fcn)(void);
 
 void fpu_save(struct proc *, struct trapframe *);
 void fpu_load(struct proc *);

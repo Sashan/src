@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_pfsync.c,v 1.324 2023/12/23 10:52:54 bluhm Exp $	*/
+/*	$OpenBSD: if_pfsync.c,v 1.326 2024/05/24 06:38:41 sashan Exp $	*/
 
 /*
  * Copyright (c) 2002 Michael Shalayeff
@@ -69,6 +69,7 @@
 #include <net/if_types.h>
 #include <net/bpf.h>
 #include <net/netisr.h>
+#include <net/route.h>
 
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
@@ -2891,7 +2892,7 @@ pfsync_upd_tcp(struct pf_state *st, const struct pfsync_state_peer *src,
 
 	if ((st->dst.state > dst->state) ||
 
-	    (st->dst.state >= TCPS_SYN_SENT &&
+	    (st->dst.state == dst->state &&
 	     SEQ_GT(st->dst.seqlo, ntohl(dst->seqlo))))
 		sync++;
 	else

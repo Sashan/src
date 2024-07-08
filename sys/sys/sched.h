@@ -1,4 +1,4 @@
-/*	$OpenBSD: sched.h,v 1.67 2023/10/24 13:20:11 claudio Exp $	*/
+/*	$OpenBSD: sched.h,v 1.72 2024/06/03 12:48:25 claudio Exp $	*/
 /* $NetBSD: sched.h,v 1.2 1999/02/28 18:14:58 ross Exp $ */
 
 /*-
@@ -69,8 +69,6 @@
 #ifndef	_SYS_SCHED_H_
 #define	_SYS_SCHED_H_
 
-#include <sys/queue.h>
-
 /*
  * Posix defines a <sched.h> which may want to include <sys/sched.h>
  */
@@ -88,9 +86,20 @@
 #define CP_IDLE		5
 #define CPUSTATES	6
 
+struct cpustats {
+	uint64_t	cs_time[CPUSTATES];	/* CPU state statistics */
+	uint64_t	cs_flags;		/* see below */
+};
+
+#define CPUSTATS_ONLINE		0x0001	/* CPU is schedulable */
+
+#ifdef	_KERNEL
+
+#include <sys/clockintr.h>
+#include <sys/queue.h>
+
 #define	SCHED_NQS	32			/* 32 run queues. */
 
-struct clockintr;
 struct smr_entry;
 
 /*
@@ -106,10 +115,10 @@ struct schedstate_percpu {
 	u_int64_t spc_cp_time[CPUSTATES]; /* CPU state statistics */
 	u_char spc_curpriority;		/* usrpri of curproc */
 
-	struct clockintr *spc_itimer;	/* [o] itimer_update handle */
-	struct clockintr *spc_profclock; /* [o] profclock handle */
-	struct clockintr *spc_roundrobin; /* [o] roundrobin handle */
-	struct clockintr *spc_statclock; /* [o] statclock handle */
+	struct clockintr spc_itimer;	/* [o] itimer_update handle */
+	struct clockintr spc_profclock;	/* [o] profclock handle */
+	struct clockintr spc_roundrobin;/* [o] roundrobin handle */
+	struct clockintr spc_statclock;	/* [o] statclock handle */
 
 	u_int spc_nrun;			/* procs on the run queues */
 
@@ -123,15 +132,6 @@ struct schedstate_percpu {
 					 * without delay */
 	u_char spc_smrgp;		/* this CPU's view of grace period */
 };
-
-struct cpustats {
-	uint64_t	cs_time[CPUSTATES];	/* CPU state statistics */
-	uint64_t	cs_flags;		/* see below */
-};
-
-#define CPUSTATS_ONLINE		0x0001	/* CPU is schedulable */
-
-#ifdef	_KERNEL
 
 /* spc_flags */
 #define SPCF_SEENRR             0x0001  /* process has seen roundrobin() */
@@ -199,52 +199,14 @@ void remrunqueue(struct proc *);
 		func();							\
 } while (0)
 
-#if defined(MULTIPROCESSOR)
-#include <sys/lock.h>
+extern struct mutex sched_lock;
 
-/*
- * XXX Instead of using struct lock for the kernel lock and thus requiring us
- * XXX to implement simplelocks, causing all sorts of fine-grained locks all
- * XXX over our tree to be activated, the sched_lock is a different kind of
- * XXX lock to avoid introducing locking protocol bugs.
- */
-extern struct __mp_lock sched_lock;
+#define	SCHED_ASSERT_LOCKED()	MUTEX_ASSERT_LOCKED(&sched_lock)
+#define	SCHED_ASSERT_UNLOCKED()	MUTEX_ASSERT_UNLOCKED(&sched_lock)
 
-#define	SCHED_ASSERT_LOCKED()						\
-do {									\
-	splassert(IPL_SCHED);						\
-	KASSERT(__mp_lock_held(&sched_lock, curcpu()));			\
-} while (0)
-#define	SCHED_ASSERT_UNLOCKED()						\
-do {									\
-	KASSERT(__mp_lock_held(&sched_lock, curcpu()) == 0);		\
-} while (0)
-
-#define	SCHED_LOCK_INIT()	__mp_lock_init(&sched_lock)
-
-#define	SCHED_LOCK(s)							\
-do {									\
-	s = splsched();							\
-	__mp_lock(&sched_lock);						\
-} while (/* CONSTCOND */ 0)
-
-#define	SCHED_UNLOCK(s)							\
-do {									\
-	__mp_unlock(&sched_lock);					\
-	splx(s);							\
-} while (/* CONSTCOND */ 0)
-
-#else /* ! MULTIPROCESSOR */
-
-#define	SCHED_ASSERT_LOCKED()		splassert(IPL_SCHED);
-#define	SCHED_ASSERT_UNLOCKED()		/* nothing */
-
-#define	SCHED_LOCK_INIT()		/* nothing */
-
-#define	SCHED_LOCK(s)			s = splsched()
-#define	SCHED_UNLOCK(s)			splx(s)
-
-#endif /* MULTIPROCESSOR */
+#define	SCHED_LOCK_INIT()	mtx_init(&sched_lock, IPL_SCHED)
+#define	SCHED_LOCK()		mtx_enter(&sched_lock)
+#define	SCHED_UNLOCK()		mtx_leave(&sched_lock)
 
 #endif	/* _KERNEL */
 #endif	/* _SYS_SCHED_H_ */

@@ -1,4 +1,4 @@
-/*	$OpenBSD: sxipio.c,v 1.17 2023/10/13 15:41:25 kettenis Exp $	*/
+/*	$OpenBSD: sxipio.c,v 1.19 2024/02/08 00:00:16 jsg Exp $	*/
 /*
  * Copyright (c) 2010 Miodrag Vallat.
  * Copyright (c) 2013 Artturi Alm
@@ -206,6 +206,14 @@ const struct sxipio_pins sxipio_pins[] = {
 		"allwinner,sun50i-h6-r-pinctrl",
 		sun50i_h6_r_pins, nitems(sun50i_h6_r_pins)
 	},
+	{
+		"allwinner,sun50i-h616-pinctrl",
+		sun50i_h616_pins, nitems(sun50i_h616_pins)
+	},
+	{
+		"allwinner,sun50i-h616-r-pinctrl",
+		sun50i_h616_r_pins, nitems(sun50i_h616_r_pins)
+	},
 };
 
 int
@@ -354,7 +362,7 @@ sxipio_pinctrl(uint32_t phandle, void *cookie)
 			if (strcmp(func, sc->sc_pins[i].funcs[j].name) == 0)
 				break;
 		}
-		if (j > nitems(sc->sc_pins[i].funcs))
+		if (j >= nitems(sc->sc_pins[i].funcs))
 			goto err;
 
 		group = sc->sc_pins[i].name[1] - 'A';

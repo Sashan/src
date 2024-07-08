@@ -1,4 +1,4 @@
-/*	$OpenBSD: dumpfs.c,v 1.37 2022/12/04 23:50:46 cheloha Exp $	*/
+/*	$OpenBSD: dumpfs.c,v 1.39 2024/05/09 08:35:40 florian Exp $	*/
 
 /*
  * Copyright (c) 2002 Networks Associates Technology, Inc.
@@ -163,13 +163,19 @@ dumpfs(int fd, const char *name)
 	off_t off;
 	int i, j;
 	u_int cg;
+	char *ct;
 
 	switch (afs.fs_magic) {
 	case FS_UFS2_MAGIC:
 		fssize = afs.fs_size;
 		fstime = afs.fs_time;
-		printf("magic\t%x (FFS2)\ttime\t%s",
-		    afs.fs_magic, ctime(&fstime));
+		ct = ctime(&fstime);
+		if (ct)
+			printf("magic\t%x (FFS2)\ttime\t%s",
+			    afs.fs_magic, ctime(&fstime));
+		else
+			printf("magic\t%x (FFS2)\ttime\t%lld\n",
+			    afs.fs_magic, fstime);
 		printf("superblock location\t%jd\tid\t[ %x %x ]\n",
 		    (intmax_t)afs.fs_sblockloc, afs.fs_id[0], afs.fs_id[1]);
 		printf("ncg\t%u\tsize\t%jd\tblocks\t%jd\n",
@@ -178,8 +184,13 @@ dumpfs(int fd, const char *name)
 	case FS_UFS1_MAGIC:
 		fssize = afs.fs_ffs1_size;
 		fstime = afs.fs_ffs1_time;
-		printf("magic\t%x (FFS1)\ttime\t%s",
-		    afs.fs_magic, ctime(&fstime));
+		ct = ctime(&fstime);
+		if (ct)
+			printf("magic\t%x (FFS1)\ttime\t%s",
+			    afs.fs_magic, ctime(&fstime));
+		else
+			printf("magic\t%x (FFS1)\ttime\t%lld\n",
+			    afs.fs_magic, fstime);
 		printf("id\t[ %x %x ]\n", afs.fs_id[0], afs.fs_id[1]);
 		i = 0;
 		if (afs.fs_postblformat != FS_42POSTBLFMT) {
@@ -273,12 +284,10 @@ dumpfs(int fd, const char *name)
 		printf("none");
 	if (fsflags & FS_UNCLEAN)
 		printf("unclean ");
-	if (fsflags & FS_DOSOFTDEP)
-		printf("soft-updates ");
 	if (fsflags & FS_FLAGS_UPDATED)
 		printf("updated ");
 #if 0
-	fsflags &= ~(FS_UNCLEAN | FS_DOSOFTDEP | FS_FLAGS_UPDATED);
+	fsflags &= ~(FS_UNCLEAN | FS_FLAGS_UPDATED);
 	if (fsflags != 0)
 		printf("unknown flags (%#x)", fsflags);
 #endif
@@ -327,6 +336,7 @@ dumpcg(const char *name, int fd, u_int c)
 	time_t cgtime;
 	off_t cur;
 	int i, j;
+	char *ct;
 
 	printf("\ncg %u:\n", c);
 	cur = (off_t)fsbtodb(&afs, cgtod(&afs, c)) * DEV_BSIZE;
@@ -337,18 +347,30 @@ dumpcg(const char *name, int fd, u_int c)
 	switch (afs.fs_magic) {
 	case FS_UFS2_MAGIC:
 		cgtime = acg.cg_ffs2_time;
-		printf("magic\t%x\ttell\t%jx\ttime\t%s",
-		    acg.cg_magic, (intmax_t)cur, ctime(&cgtime));
+		ct = ctime(&cgtime);
+		if (ct)
+			printf("magic\t%x\ttell\t%jx\ttime\t%s",
+			    acg.cg_magic, (intmax_t)cur, ct);
+		else
+			printf("magic\t%x\ttell\t%jx\ttime\t%lld\n",
+			    acg.cg_magic, (intmax_t)cur, cgtime);
 		printf("cgx\t%u\tndblk\t%u\tniblk\t%u\tinitiblk %u\n",
 		    acg.cg_cgx, acg.cg_ndblk, acg.cg_ffs2_niblk,
 		    acg.cg_initediblk);
 		break;
 	case FS_UFS1_MAGIC:
 		cgtime = acg.cg_time;
-		printf("magic\t%x\ttell\t%jx\ttime\t%s",
-		    afs.fs_postblformat == FS_42POSTBLFMT ?
-		    ((struct ocg *)&acg)->cg_magic : acg.cg_magic,
-		    (intmax_t)cur, ctime(&cgtime));
+		ct = ctime(&cgtime);
+		if (ct)
+			printf("magic\t%x\ttell\t%jx\ttime\t%s",
+			    afs.fs_postblformat == FS_42POSTBLFMT ?
+			    ((struct ocg *)&acg)->cg_magic : acg.cg_magic,
+			    (intmax_t)cur, ct);
+		else
+			printf("magic\t%x\ttell\t%jx\ttime\t%lld\n",
+			    afs.fs_postblformat == FS_42POSTBLFMT ?
+			    ((struct ocg *)&acg)->cg_magic : acg.cg_magic,
+			    (intmax_t)cur, cgtime);
 		printf("cgx\t%u\tncyl\t%d\tniblk\t%d\tndblk\t%u\n",
 		    acg.cg_cgx, acg.cg_ncyl, acg.cg_niblk, acg.cg_ndblk);
 		break;

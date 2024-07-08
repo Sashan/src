@@ -1,4 +1,4 @@
-/*	$OpenBSD: vm.c,v 1.95 2024/01/10 04:13:59 dv Exp $	*/
+/*	$OpenBSD: vm.c,v 1.101 2024/06/20 15:33:44 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -122,6 +122,8 @@ pthread_mutex_t vcpu_run_mtx[VMM_MAX_VCPUS_PER_VM];
 pthread_barrier_t vm_pause_barrier;
 pthread_cond_t vcpu_unpause_cond[VMM_MAX_VCPUS_PER_VM];
 pthread_mutex_t vcpu_unpause_mtx[VMM_MAX_VCPUS_PER_VM];
+
+pthread_mutex_t vm_mtx;
 uint8_t vcpu_hlt[VMM_MAX_VCPUS_PER_VM];
 uint8_t vcpu_done[VMM_MAX_VCPUS_PER_VM];
 
@@ -221,12 +223,17 @@ static const struct vcpu_reg_state vcpu_init_flat16 = {
  * fd_vmm: file descriptor for communicating with vmm(4) device
  */
 void
-vm_main(int fd, int vmm_fd)
+vm_main(int fd, int fd_vmm)
 {
 	struct vm_create_params	*vcp = NULL;
 	struct vmd_vm		 vm;
 	size_t			 sz = 0;
 	int			 ret = 0;
+
+	/*
+	 * The vm process relies on global state. Set the fd for /dev/vmm.
+	 */
+	env->vmd_fd = fd_vmm;
 
 	/*
 	 * We aren't root, so we can't chroot(2). Use unveil(2) instead.
@@ -276,11 +283,6 @@ vm_main(int fd, int vmm_fd)
 			log_warnx("%s: failed to receive boot fd",
 			    vcp->vcp_name);
 			_exit(EINVAL);
-		}
-		if (fcntl(vm.vm_kernel, F_SETFL, O_NONBLOCK) == -1) {
-			ret = errno;
-			log_warn("failed to set nonblocking mode on boot fd");
-			_exit(ret);
 		}
 	}
 
@@ -475,8 +477,15 @@ start_vm(struct vmd_vm *vm, int fd)
 		    "condition variable", __func__);
 		return (ret);
 	}
-	mutex_lock(&threadmutex);
+	ret = pthread_mutex_init(&vm_mtx, NULL);
+	if (ret) {
+		log_warn("%s: could not initialize vm state mutex",
+		    __func__);
+		return (ret);
+	}
 
+	/* Lock thread mutex now. It's unlocked when waiting on threadcond. */
+	mutex_lock(&threadmutex);
 
 	/*
 	 * Finalize our communication socket with the vmm process. From here
@@ -596,7 +605,7 @@ vm_dispatch_vmm(int fd, short event, void *arg)
 			break;
 		case IMSG_VMDOP_SEND_VM_REQUEST:
 			vmr.vmr_id = vm->vm_vmid;
-			vmr.vmr_result = send_vm(imsg.fd, vm);
+			vmr.vmr_result = send_vm(imsg_get_fd(&imsg), vm);
 			imsg_compose_event(&vm->vm_iev,
 			    IMSG_VMDOP_SEND_VM_RESPONSE,
 			    imsg.hdr.peerid, imsg.hdr.pid, -1, &vmr,
@@ -885,10 +894,14 @@ pause_vm(struct vmd_vm *vm)
 {
 	unsigned int n;
 	int ret;
-	if (vm->vm_state & VM_STATE_PAUSED)
-		return;
 
+	mutex_lock(&vm_mtx);
+	if (vm->vm_state & VM_STATE_PAUSED) {
+		mutex_unlock(&vm_mtx);
+		return;
+	}
 	current_vm->vm_state |= VM_STATE_PAUSED;
+	mutex_unlock(&vm_mtx);
 
 	ret = pthread_barrier_init(&vm_pause_barrier, NULL,
 	    vm->vm_params.vmc_params.vcp_ncpus + 1);
@@ -931,10 +944,15 @@ unpause_vm(struct vmd_vm *vm)
 {
 	unsigned int n;
 	int ret;
-	if (!(vm->vm_state & VM_STATE_PAUSED))
-		return;
 
+	mutex_lock(&vm_mtx);
+	if (!(vm->vm_state & VM_STATE_PAUSED)) {
+		mutex_unlock(&vm_mtx);
+		return;
+	}
 	current_vm->vm_state &= ~VM_STATE_PAUSED;
+	mutex_unlock(&vm_mtx);
+
 	for (n = 0; n < vm->vm_params.vmc_params.vcp_ncpus; n++) {
 		ret = pthread_cond_broadcast(&vcpu_unpause_cond[n]);
 		if (ret) {
@@ -1462,6 +1480,7 @@ run_vm(struct vmop_create_params *vmc, struct vcpu_reg_state *vrs)
 		/*
 		 * Did a VCPU thread exit with an error? => return the first one
 		 */
+		mutex_lock(&vm_mtx);
 		for (i = 0; i < vcp->vcp_ncpus; i++) {
 			if (vcpu_done[i] == 0)
 				continue;
@@ -1469,11 +1488,13 @@ run_vm(struct vmop_create_params *vmc, struct vcpu_reg_state *vrs)
 			if (pthread_join(tid[i], &exit_status)) {
 				log_warn("%s: failed to join thread %zd - "
 				    "exiting", __progname, i);
+				mutex_unlock(&vm_mtx);
 				return (EIO);
 			}
 
 			ret = (intptr_t)exit_status;
 		}
+		mutex_unlock(&vm_mtx);
 
 		/* Did the event thread exit? => return with an error */
 		if (evdone) {
@@ -1489,10 +1510,12 @@ run_vm(struct vmop_create_params *vmc, struct vcpu_reg_state *vrs)
 		}
 
 		/* Did all VCPU threads exit successfully? => return */
+		mutex_lock(&vm_mtx);
 		for (i = 0; i < vcp->vcp_ncpus; i++) {
 			if (vcpu_done[i] == 0)
 				break;
 		}
+		mutex_unlock(&vm_mtx);
 		if (i == vcp->vcp_ncpus)
 			return (ret);
 
@@ -1510,8 +1533,9 @@ event_thread(void *arg)
 
 	ret = event_dispatch();
 
-	mutex_lock(&threadmutex);
 	*donep = 1;
+
+	mutex_lock(&threadmutex);
 	pthread_cond_signal(&threadcond);
 	mutex_unlock(&threadmutex);
 
@@ -1536,11 +1560,8 @@ vcpu_run_loop(void *arg)
 {
 	struct vm_run_params *vrp = (struct vm_run_params *)arg;
 	intptr_t ret = 0;
-	int irq;
-	uint32_t n;
-
-	vrp->vrp_continue = 0;
-	n = vrp->vrp_vcpu_id;
+	uint32_t n = vrp->vrp_vcpu_id;
+	int paused = 0, halted = 0;
 
 	for (;;) {
 		ret = pthread_mutex_lock(&vcpu_run_mtx[n]);
@@ -1551,8 +1572,13 @@ vcpu_run_loop(void *arg)
 			return ((void *)ret);
 		}
 
+		mutex_lock(&vm_mtx);
+		paused = (current_vm->vm_state & VM_STATE_PAUSED) != 0;
+		halted = vcpu_hlt[n];
+		mutex_unlock(&vm_mtx);
+
 		/* If we are halted and need to pause, pause */
-		if (vcpu_hlt[n] && (current_vm->vm_state & VM_STATE_PAUSED)) {
+		if (halted && paused) {
 			ret = pthread_barrier_wait(&vm_pause_barrier);
 			if (ret != 0 && ret != PTHREAD_BARRIER_SERIAL_THREAD) {
 				log_warnx("%s: could not wait on pause barrier (%d)",
@@ -1588,7 +1614,7 @@ vcpu_run_loop(void *arg)
 		}
 
 		/* If we are halted and not paused, wait */
-		if (vcpu_hlt[n]) {
+		if (halted) {
 			ret = pthread_cond_wait(&vcpu_run_cond[n],
 			    &vcpu_run_mtx[n]);
 
@@ -1611,10 +1637,10 @@ vcpu_run_loop(void *arg)
 		}
 
 		if (vrp->vrp_irqready && i8259_is_pending()) {
-			irq = i8259_ack();
-			vrp->vrp_irq = irq;
+			vrp->vrp_inject.vie_vector = i8259_ack();
+			vrp->vrp_inject.vie_type = VCPU_INJECT_INTR;
 		} else
-			vrp->vrp_irq = 0xFFFF;
+			vrp->vrp_inject.vie_type = VCPU_INJECT_NONE;
 
 		/* Still more interrupts pending? */
 		vrp->vrp_intr_pending = i8259_is_pending();
@@ -1644,8 +1670,11 @@ vcpu_run_loop(void *arg)
 		}
 	}
 
-	mutex_lock(&threadmutex);
+	mutex_lock(&vm_mtx);
 	vcpu_done[n] = 1;
+	mutex_unlock(&vm_mtx);
+
+	mutex_lock(&threadmutex);
 	pthread_cond_signal(&threadcond);
 	mutex_unlock(&threadmutex);
 
@@ -1895,19 +1924,9 @@ vcpu_exit(struct vm_run_params *vrp)
 		break;
 	case VMX_EXIT_HLT:
 	case SVM_VMEXIT_HLT:
-		ret = pthread_mutex_lock(&vcpu_run_mtx[vrp->vrp_vcpu_id]);
-		if (ret) {
-			log_warnx("%s: can't lock vcpu mutex (%d)",
-			    __func__, ret);
-			return (ret);
-		}
+		mutex_lock(&vm_mtx);
 		vcpu_hlt[vrp->vrp_vcpu_id] = 1;
-		ret = pthread_mutex_unlock(&vcpu_run_mtx[vrp->vrp_vcpu_id]);
-		if (ret) {
-			log_warnx("%s: can't unlock vcpu mutex (%d)",
-			    __func__, ret);
-			return (ret);
-		}
+		mutex_unlock(&vm_mtx);
 		break;
 	case VMX_EXIT_TRIPLE_FAULT:
 	case SVM_VMEXIT_SHUTDOWN:
@@ -1917,8 +1936,6 @@ vcpu_exit(struct vm_run_params *vrp)
 		log_debug("%s: unknown exit reason 0x%x",
 		    __progname, vrp->vrp_exit_reason);
 	}
-
-	vrp->vrp_continue = 1;
 
 	return (0);
 }
@@ -2144,8 +2161,12 @@ vcpu_assert_pic_irq(uint32_t vm_id, uint32_t vcpu_id, int irq)
 	if (i8259_is_pending()) {
 		if (vcpu_pic_intr(vm_id, vcpu_id, 1))
 			fatalx("%s: can't assert INTR", __func__);
-		mutex_lock(&vcpu_run_mtx[vcpu_id]);
+
+		mutex_lock(&vm_mtx);
 		vcpu_hlt[vcpu_id] = 0;
+		mutex_unlock(&vm_mtx);
+
+		mutex_lock(&vcpu_run_mtx[vcpu_id]);
 		ret = pthread_cond_signal(&vcpu_run_cond[vcpu_id]);
 		if (ret)
 			fatalx("%s: can't signal (%d)", __func__, ret);
@@ -2436,38 +2457,46 @@ translate_gva(struct vm_exit* exit, uint64_t va, uint64_t* pa, int mode)
 	return (0);
 }
 
+void
+vm_pipe_init(struct vm_dev_pipe *p, void (*cb)(int, short, void *))
+{
+	vm_pipe_init2(p, cb, NULL);
+}
+
 /*
- * vm_pipe_init
+ * vm_pipe_init2
  *
  * Initialize a vm_dev_pipe, setting up its file descriptors and its
- * event structure with the given callback.
+ * event structure with the given callback and argument.
  *
  * Parameters:
  *  p: pointer to vm_dev_pipe struct to initizlize
  *  cb: callback to use for READ events on the read end of the pipe
+ *  arg: pointer to pass to the callback on event trigger
  */
 void
-vm_pipe_init(struct vm_dev_pipe *p, void (*cb)(int, short, void *))
+vm_pipe_init2(struct vm_dev_pipe *p, void (*cb)(int, short, void *), void *arg)
 {
 	int ret;
 	int fds[2];
 
 	memset(p, 0, sizeof(struct vm_dev_pipe));
 
-	ret = pipe(fds);
+	ret = pipe2(fds, O_CLOEXEC);
 	if (ret)
 		fatal("failed to create vm_dev_pipe pipe");
 
 	p->read = fds[0];
 	p->write = fds[1];
 
-	event_set(&p->read_ev, p->read, EV_READ | EV_PERSIST, cb, NULL);
+	event_set(&p->read_ev, p->read, EV_READ | EV_PERSIST, cb, arg);
 }
 
 /*
  * vm_pipe_send
  *
- * Send a message to an emulated device vie the provided vm_dev_pipe.
+ * Send a message to an emulated device vie the provided vm_dev_pipe. This
+ * relies on the fact sizeof(msg) < PIPE_BUF to ensure atomic writes.
  *
  * Parameters:
  *  p: pointer to initialized vm_dev_pipe
@@ -2486,7 +2515,8 @@ vm_pipe_send(struct vm_dev_pipe *p, enum pipe_msg_type msg)
  * vm_pipe_recv
  *
  * Receive a message for an emulated device via the provided vm_dev_pipe.
- * Returns the message value, otherwise will exit on failure.
+ * Returns the message value, otherwise will exit on failure. This relies on
+ * the fact sizeof(enum pipe_msg_type) < PIPE_BUF for atomic reads.
  *
  * Parameters:
  *  p: pointer to initialized vm_dev_pipe
@@ -2507,7 +2537,7 @@ vm_pipe_recv(struct vm_dev_pipe *p)
 }
 
 /*
- * Re-map the guest address space using the shared memory file descriptor.
+ * Re-map the guest address space using vmm(4)'s VMM_IOC_SHARE
  *
  * Returns 0 on success, non-zero in event of failure.
  */

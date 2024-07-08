@@ -1,4 +1,4 @@
-/*	$OpenBSD: proc.c,v 1.39 2023/06/28 12:31:19 gerhard Exp $	*/
+/*	$OpenBSD: proc.c,v 1.44 2024/04/09 15:48:01 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2010 - 2016 Reyk Floeter <reyk@openbsd.org>
@@ -39,7 +39,7 @@
 enum privsep_procid privsep_process;
 
 void	 proc_exec(struct privsep *, struct privsep_proc *, unsigned int, int,
-	    int, char **);
+	    char **);
 void	 proc_setup(struct privsep *, struct privsep_proc *, unsigned int);
 void	 proc_open(struct privsep *, int, int);
 void	 proc_accept(struct privsep *, int, enum privsep_procid,
@@ -70,7 +70,7 @@ proc_getid(struct privsep_proc *procs, unsigned int nproc,
 
 void
 proc_exec(struct privsep *ps, struct privsep_proc *procs, unsigned int nproc,
-    int debug, int argc, char **argv)
+    int argc, char **argv)
 {
 	unsigned int		 proc, nargc, i, proc_i;
 	char			**nargv;
@@ -119,10 +119,6 @@ proc_exec(struct privsep *ps, struct privsep_proc *procs, unsigned int nproc,
 				fatal("%s: fork", __func__);
 				break;
 			case 0:
-				/* First create a new session */
-				if (setsid() == -1)
-					fatal("setsid");
-
 				/* Prepare parent socket. */
 				if (fd != PROC_PARENT_SOCK_FILENO) {
 					if (dup2(fd, PROC_PARENT_SOCK_FILENO)
@@ -130,16 +126,6 @@ proc_exec(struct privsep *ps, struct privsep_proc *procs, unsigned int nproc,
 						fatal("dup2");
 				} else if (fcntl(fd, F_SETFD, 0) == -1)
 					fatal("fcntl");
-
-				/* Daemons detach from terminal. */
-				if (!debug && (fd =
-				    open(_PATH_DEVNULL, O_RDWR, 0)) != -1) {
-					(void)dup2(fd, STDIN_FILENO);
-					(void)dup2(fd, STDOUT_FILENO);
-					(void)dup2(fd, STDERR_FILENO);
-					if (fd > 2)
-						(void)close(fd);
-				}
 
 				execvp(argv[0], nargv);
 				fatal("%s: execvp", __func__);
@@ -155,14 +141,19 @@ proc_exec(struct privsep *ps, struct privsep_proc *procs, unsigned int nproc,
 }
 
 void
-proc_connect(struct privsep *ps)
+proc_connect(struct privsep *ps, void (*connected)(struct privsep *))
 {
 	struct imsgev		*iev;
 	unsigned int		 src, dst, inst;
 
 	/* Don't distribute any sockets if we are not really going to run. */
-	if (ps->ps_noaction)
+	if (ps->ps_noaction) {
+		if (connected == NULL)
+			fatalx("%s: missing callback", __func__);
+		connected(ps);
 		return;
+	}
+	ps->ps_connected = connected;
 
 	for (dst = 0; dst < PROC_MAX; dst++) {
 		/* We don't communicate with ourselves. */
@@ -187,6 +178,27 @@ proc_connect(struct privsep *ps)
 
 			proc_open(ps, src, dst);
 		}
+
+	/*
+	 * Finally, send a ready message to everyone:
+	 * When this message is processed by the receiver, it has
+	 * already processed all IMSG_CTL_PROCFD messages and all
+	 * pipes are ready.
+	 */
+	for (dst = 0; dst < PROC_MAX; dst++) {
+		if (dst == PROC_PARENT)
+			continue;
+		for (inst = 0; inst < ps->ps_instances[dst]; inst++) {
+			if (proc_compose_imsg(ps, dst, inst, IMSG_CTL_PROCREADY,
+			    -1, -1, NULL, 0) == -1)
+				fatal("%s: proc_compose_imsg", __func__);
+			ps->ps_connecting++;
+#if DEBUG
+			log_debug("%s: #%d %s %d", __func__,
+			    ps->ps_connecting, ps->ps_title[dst], inst + 1);
+#endif
+		}
+	}
 }
 
 void
@@ -205,9 +217,10 @@ proc_init(struct privsep *ps, struct privsep_proc *procs, unsigned int nproc,
 
 	if (proc_id == PROC_PARENT) {
 		privsep_process = PROC_PARENT;
+		proc_setup(ps, procs, nproc);
+
 		if (!debug && daemon(0, 0) == -1)
 			fatal("failed to daemonize");
-		proc_setup(ps, procs, nproc);
 
 		/*
 		 * Create the children sockets so we can use them
@@ -233,7 +246,7 @@ proc_init(struct privsep *ps, struct privsep_proc *procs, unsigned int nproc,
 		}
 
 		/* Engage! */
-		proc_exec(ps, procs, nproc, debug, argc, argv);
+		proc_exec(ps, procs, nproc, argc, argv);
 		return;
 	}
 
@@ -516,19 +529,12 @@ proc_run(struct privsep *ps, struct privsep_proc *p,
 {
 	struct passwd		*pw;
 	const char		*root;
-	struct control_sock	*rcs;
 
 	log_procinit(p->p_title);
-
-	/* Set the process group of the current process */
-	setpgid(0, 0);
 
 	if (p->p_id == PROC_CONTROL && ps->ps_instance == 0) {
 		if (control_init(ps, &ps->ps_csock) == -1)
 			fatalx("%s: control_init", __func__);
-		TAILQ_FOREACH(rcs, &ps->ps_rcsocks, cs_entry)
-			if (control_init(ps, rcs) == -1)
-				fatalx("%s: control_init", __func__);
 	}
 
 	/* Use non-standard user */
@@ -578,9 +584,6 @@ proc_run(struct privsep *ps, struct privsep_proc *p,
 	if (p->p_id == PROC_CONTROL && ps->ps_instance == 0) {
 		if (control_listen(&ps->ps_csock) == -1)
 			fatalx("%s: control_listen", __func__);
-		TAILQ_FOREACH(rcs, &ps->ps_rcsocks, cs_entry)
-			if (control_listen(rcs) == -1)
-				fatalx("%s: control_listen", __func__);
 	}
 
 #if DEBUG
@@ -667,8 +670,35 @@ proc_dispatch(int fd, short event, void *arg)
 		case IMSG_CTL_PROCFD:
 			IMSG_SIZE_CHECK(&imsg, &pf);
 			memcpy(&pf, imsg.data, sizeof(pf));
-			proc_accept(ps, imsg.fd, pf.pf_procid,
+			proc_accept(ps, imsg_get_fd(&imsg), pf.pf_procid,
 			    pf.pf_instance);
+			break;
+		case IMSG_CTL_PROCREADY:
+#if DEBUG
+			log_debug("%s: ready-%s: #%d %s %d -> %s %d", __func__,
+			    p->p_id == PROC_PARENT ? "req" : "ack",
+			    ps->ps_connecting, p->p_title, imsg.hdr.pid,
+			    title, ps->ps_instance + 1);
+#endif
+			if (p->p_id == PROC_PARENT) {
+				/* ack that we are ready */
+				if (proc_compose_imsg(ps, PROC_PARENT, 0,
+				    IMSG_CTL_PROCREADY, -1, -1, NULL, 0) == -1)
+					fatal("%s: proc_compose_imsg", __func__);
+			} else {
+				/* parent received ack */
+				if (ps->ps_connecting == 0)
+					fatalx("%s: wrong acks", __func__);
+				if (ps->ps_instance != 0)
+					fatalx("%s: wrong instance %d",
+					    __func__, ps->ps_instance);
+				if (ps->ps_connected == NULL)
+					fatalx("%s: missing callback", __func__);
+				if (--ps->ps_connecting == 0) {
+					log_debug("%s: all connected", __func__);
+					ps->ps_connected(ps);
+				}
+			}
 			break;
 		default:
 			fatalx("%s: %s %d got invalid imsg %d peerid %d "
@@ -798,7 +828,7 @@ proc_forward_imsg(struct privsep *ps, struct imsg *imsg,
     enum privsep_procid id, int n)
 {
 	return (proc_compose_imsg(ps, id, n, imsg->hdr.type,
-	    imsg->hdr.peerid, imsg->fd, imsg->data, IMSG_DATA_SIZE(imsg)));
+	    imsg->hdr.peerid, -1, imsg->data, IMSG_DATA_SIZE(imsg)));
 }
 
 struct imsgbuf *

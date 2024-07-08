@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.288 2023/09/08 20:47:22 kn Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.295 2024/06/26 01:40:49 jsg Exp $	*/
 /*	$NetBSD: machdep.c,v 1.3 2003/05/07 22:58:18 fvdl Exp $	*/
 
 /*-
@@ -162,6 +162,7 @@ char machine[] = MACHINE;
  */
 void cpu_idle_cycle_hlt(void);
 void (*cpu_idle_cycle_fcn)(void) = &cpu_idle_cycle_hlt;
+void (*cpu_suspend_cycle_fcn)(void);
 
 /* the following is used externally for concurrent handlers */
 int setperf_prio = 0;
@@ -178,10 +179,7 @@ int biosbasemem = 0;		/* base memory reported by BIOS */
 u_int bootapiver = 0;		/* /boot API version */
 
 int	physmem;
-u_int64_t	dumpmem_low;
-u_int64_t	dumpmem_high;
 extern int	boothowto;
-int	cpu_class;
 
 paddr_t	dumpmem_paddr;
 vaddr_t	dumpmem_vaddr;
@@ -486,6 +484,7 @@ bios_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 
 extern int tsc_is_invariant;
 extern int amd64_has_xcrypt;
+extern int need_retpoline;
 
 const struct sysctl_bounded_args cpuctl_vars[] = {
 	{ CPU_LIDACTION, &lid_action, 0, 2 },
@@ -494,6 +493,7 @@ const struct sysctl_bounded_args cpuctl_vars[] = {
 	{ CPU_CPUFEATURE, &cpu_feature, SYSCTL_INT_READONLY },
 	{ CPU_XCRYPT, &amd64_has_xcrypt, SYSCTL_INT_READONLY },
 	{ CPU_INVARIANTTSC, &tsc_is_invariant, SYSCTL_INT_READONLY },
+	{ CPU_RETPOLINE, &need_retpoline, SYSCTL_INT_READONLY },
 };
 
 /*
@@ -1294,7 +1294,8 @@ set_sys_segment(struct sys_segment_descriptor *sd, void *base, size_t limit,
 	sd->sd_hibase = (u_int64_t)base >> 24;
 }
 
-void cpu_init_idt(void)
+void
+cpu_init_idt(void)
 {
 	struct region_descriptor region;
 
@@ -1391,6 +1392,23 @@ map_tramps(void)
 #endif
 }
 
+void
+cpu_set_vendor(struct cpu_info *ci, int level, const char *vendor)
+{
+	ci->ci_cpuid_level = level;
+	cpuid_level = MIN(cpuid_level, level);
+
+	/* map the vendor string to an integer */
+	if (strcmp(vendor, "AuthenticAMD") == 0)
+		ci->ci_vendor = CPUV_AMD;
+	else if (strcmp(vendor, "GenuineIntel") == 0)
+		ci->ci_vendor = CPUV_INTEL;
+	else if (strcmp(vendor, "CentaurHauls") == 0)
+		ci->ci_vendor = CPUV_VIA;
+	else
+		ci->ci_vendor = CPUV_UNKNOWN;
+}
+
 #define	IDTVEC(name)	__CONCAT(X, name)
 typedef void (vector)(void);
 extern vector *IDTVEC(exceptions)[];
@@ -1414,6 +1432,7 @@ init_x86_64(paddr_t first_avail)
 	early_pte_pages = first_avail;
 	first_avail += 3 * NBPG;
 
+	cpu_set_vendor(&cpu_info_primary, cpuid_level, cpu_vendor);
 	cpu_init_msrs(&cpu_info_primary);
 
 	proc0.p_addr = proc0paddr;
@@ -1742,9 +1761,6 @@ init_x86_64(paddr_t first_avail)
 	set_mem_segment(GDT_ADDR_MEM(cpu_info_primary.ci_gdt, GDATA_SEL), 0,
 	    0xfffff, SDT_MEMRWA, SEL_KPL, 1, 0, 1);
 
-	set_mem_segment(GDT_ADDR_MEM(cpu_info_primary.ci_gdt, GUCODE32_SEL), 0,
-	    atop(VM_MAXUSER_ADDRESS32) - 1, SDT_MEMERA, SEL_UPL, 1, 1, 0);
-
 	set_mem_segment(GDT_ADDR_MEM(cpu_info_primary.ci_gdt, GUDATA_SEL), 0,
 	    atop(VM_MAXUSER_ADDRESS) - 1, SDT_MEMRWA, SEL_UPL, 1, 0, 1);
 
@@ -1912,6 +1928,29 @@ idt_vec_alloc(int low, int high)
 	for (vec = low; vec <= high; vec++) {
 		if (idt_allocmap[vec] == 0) {
 			idt_allocmap[vec] = 1;
+			return vec;
+		}
+	}
+	return 0;
+}
+
+int
+idt_vec_alloc_range(int low, int high, int num)
+{
+	int i, vec;
+
+	KASSERT(powerof2(num));
+	low = (low + num - 1) & ~(num - 1);
+	high = ((high + 1) & ~(num - 1)) - 1;
+
+	for (vec = low; vec <= high; vec += num) {
+		for (i = 0; i < num; i++) {
+			if (idt_allocmap[vec + i] != 0)
+				break;
+		}
+		if (i == num) {
+			for (i = 0; i < num; i++)
+				idt_allocmap[vec + i] = 1;
 			return vec;
 		}
 	}

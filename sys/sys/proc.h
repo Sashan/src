@@ -1,4 +1,4 @@
-/*	$OpenBSD: proc.h,v 1.352 2023/09/29 12:47:34 claudio Exp $	*/
+/*	$OpenBSD: proc.h,v 1.361 2024/05/20 10:32:20 claudio Exp $	*/
 /*	$NetBSD: proc.h,v 1.44 1996/04/22 01:23:21 christos Exp $	*/
 
 /*-
@@ -117,6 +117,13 @@ struct tslpentry;
 TAILQ_HEAD(tslpqueue, tslpentry);
 struct unveil;
 
+struct pinsyscall {
+	vaddr_t		pn_start;
+	vaddr_t		pn_end;
+	u_int		*pn_pins; /* array of offsets indexed by syscall# */
+	int		pn_npins; /* number of entries in table */
+};
+
 /*
  * Locks used to protect struct members in this file:
  *	I	immutable after creation
@@ -138,7 +145,7 @@ struct process {
 	struct	ucred *ps_ucred;	/* Process owner's identity. */
 
 	LIST_ENTRY(process) ps_list;	/* List of all processes. */
-	TAILQ_HEAD(,proc) ps_threads;	/* [K|S] Threads in this process. */
+	TAILQ_HEAD(,proc) ps_threads;	/* [K|m] Threads in this process. */
 
 	LIST_ENTRY(process) ps_pglist;	/* List of processes in pgrp. */
 	struct	process *ps_pptr; 	/* Pointer to parent process. */
@@ -173,8 +180,9 @@ struct process {
 	u_int	ps_flags;		/* [a] PS_* flags. */
 	int	ps_siglist;		/* Signals pending for the process. */
 
-	struct	proc *ps_single;	/* [S] Thread for single-threading. */
-	u_int	ps_singlecount;		/* [a] Not yet suspended threads. */
+	struct	proc *ps_single;	/* [m] Thread for single-threading. */
+	u_int	ps_singlecnt;		/* [m] Number of threads to suspend. */
+	u_int	ps_exitcnt;		/* [m] Number of threads in exit1. */
 
 	int	ps_traceflag;		/* Kernel trace points. */
 	struct	vnode *ps_tracevp;	/* Trace to vnode. */
@@ -240,9 +248,12 @@ struct process {
 /* an address that can't be in userspace or kernelspace */
 #define	BOGO_PC	(u_long)-1
 
+	struct pinsyscall ps_pin;	/* static or ld.so */
+	struct pinsyscall ps_libcpin;	/* libc.so, from pinsyscalls(2) */
+
 /* End area that is copied on creation. */
 #define ps_endcopy	ps_threadcnt
-	u_int	ps_threadcnt;		/* Number of threads. */
+	u_int	ps_threadcnt;		/* [m] Number of threads. */
 
 	struct	timespec ps_start;	/* starting uptime. */
 	struct	timeout ps_realit_to;	/* [m] ITIMER_REAL timeout */
@@ -283,6 +294,8 @@ struct process {
 #define	PS_CHROOT	0x01000000	/* Process is chrooted */
 #define	PS_NOBTCFI	0x02000000	/* No Branch Target CFI */
 #define	PS_ITIMER	0x04000000	/* Virtual interval timers running */
+#define	PS_PIN		0x08000000	/* ld.so or static syscall pin */
+#define	PS_LIBCPIN	0x10000000	/* libc.so syscall pin */
 
 #define	PS_BITS \
     ("\20" "\01CONTROLT" "\02EXEC" "\03INEXEC" "\04EXITING" "\05SUGID" \
@@ -309,14 +322,15 @@ struct p_inentry {
  *	S	scheduler lock
  *	U	uidinfolk
  *	l	read only reference, see lim_read_enter()
- *	o	owned (read/modified only) by this thread
+ *	o	owned (modified only) by this thread
+ *	m	this proc's' `p->p_p->ps_mtx'
  */
 struct proc {
 	TAILQ_ENTRY(proc) p_runq;	/* [S] current run/sleep queue */
 	LIST_ENTRY(proc) p_list;	/* List of all threads. */
 
 	struct	process *p_p;		/* [I] The process of this thread. */
-	TAILQ_ENTRY(proc) p_thr_link;	/* Threads in a process linkage. */
+	TAILQ_ENTRY(proc) p_thr_link;	/* [K|m] Threads in a process linkage. */
 
 	TAILQ_ENTRY(proc) p_fut_link;	/* Threads in a futex linkage. */
 	struct	futex	*p_futex;	/* Current sleeping futex. */
@@ -325,7 +339,6 @@ struct proc {
 	struct	filedesc *p_fd;		/* copy of p_p->ps_fd */
 	struct	vmspace *p_vmspace;	/* [I] copy of p_p->ps_vmspace */
 	struct	p_inentry p_spinentry;	/* [o] cache for SP check */
-	struct	p_inentry p_pcinentry;	/* [o] cache for PC check */
 
 	int	p_flag;			/* P_* flags. */
 	u_char	p_spare;		/* unused */
@@ -368,7 +381,7 @@ struct proc {
 
 /* The following fields are all copied upon creation in fork. */
 #define	p_startcopy	p_sigmask
-	sigset_t p_sigmask;		/* [a] Current signal mask */
+	sigset_t p_sigmask;		/* [o] Current signal mask */
 
 	char	p_name[_MAXCOMLEN];	/* thread name, incl NUL */
 	u_char	p_slppri;		/* [S] Sleeping priority */
@@ -387,7 +400,7 @@ struct proc {
 	struct	user *p_addr;	/* Kernel virtual addr of u-area */
 	struct	mdproc p_md;	/* Any machine-dependent fields. */
 
-	sigset_t p_oldmask;	/* Saved mask from before sigpause */
+	sigset_t p_oldmask;	/* [o] Saved mask from before sigpause */
 	int	p_sisig;	/* For core dump/debugger XXX */
 	union sigval p_sigval;	/* For core dump/debugger XXX */
 	long	p_sitrapno;	/* For core dump/debugger XXX */
@@ -424,7 +437,6 @@ struct proc {
 #define P_CONTINUED	0x00800000	/* Proc has continued from a stopped state. */
 #define	P_THREAD	0x04000000	/* Only a thread, not a real process */
 #define	P_SUSPSIG	0x08000000	/* Stopped from signal. */
-#define	P_SOFTDEP	0x10000000	/* Stuck processing softdep worklist */
 #define P_CPUPEG	0x40000000	/* Do not move to another cpu. */
 
 #define	P_BITS \
@@ -544,7 +556,7 @@ void	procinit(void);
 void	setpriority(struct proc *, uint32_t, uint8_t);
 void	setrunnable(struct proc *);
 void	endtsleep(void *);
-int	wakeup_proc(struct proc *, const volatile void *, int);
+int	wakeup_proc(struct proc *, int);
 void	unsleep(struct proc *);
 void	reaper(void *);
 __dead void exit1(struct proc *, int, int, int);
@@ -594,9 +606,7 @@ struct cond {
 
 #define COND_INITIALIZER()		{ .c_wait = 1 }
 
-#if defined(MULTIPROCESSOR)
-void	proc_trampoline_mp(void);	/* XXX */
-#endif
+void	proc_trampoline_mi(void);
 
 /*
  * functions to handle sets of cpus.

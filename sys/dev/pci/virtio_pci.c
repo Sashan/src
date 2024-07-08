@@ -1,4 +1,4 @@
-/*	$OpenBSD: virtio_pci.c,v 1.35 2023/07/07 10:23:39 patrick Exp $	*/
+/*	$OpenBSD: virtio_pci.c,v 1.38 2024/06/26 01:40:49 jsg Exp $	*/
 /*	$NetBSD: virtio.c,v 1.3 2011/11/02 23:05:52 njoly Exp $	*/
 
 /*
@@ -72,6 +72,7 @@ void		virtio_pci_write_device_config_4(struct virtio_softc *, int, uint32_t);
 void		virtio_pci_write_device_config_8(struct virtio_softc *, int, uint64_t);
 uint16_t	virtio_pci_read_queue_size(struct virtio_softc *, uint16_t);
 void		virtio_pci_setup_queue(struct virtio_softc *, struct virtqueue *, uint64_t);
+int		virtio_pci_get_status(struct virtio_softc *);
 void		virtio_pci_set_status(struct virtio_softc *, int);
 int		virtio_pci_negotiate_features(struct virtio_softc *, const struct virtio_feature_name *);
 int		virtio_pci_negotiate_features_10(struct virtio_softc *, const struct virtio_feature_name *);
@@ -155,13 +156,14 @@ struct virtio_ops virtio_pci_ops = {
 	virtio_pci_write_device_config_8,
 	virtio_pci_read_queue_size,
 	virtio_pci_setup_queue,
+	virtio_pci_get_status,
 	virtio_pci_set_status,
 	virtio_pci_negotiate_features,
 	virtio_pci_poll_intr,
 };
 
-static inline
-uint64_t _cread(struct virtio_pci_softc *sc, unsigned off, unsigned size)
+static inline uint64_t
+_cread(struct virtio_pci_softc *sc, unsigned off, unsigned size)
 {
 	uint64_t val;
 	switch (size) {
@@ -275,6 +277,18 @@ virtio_pci_setup_queue(struct virtio_softc *vsc, struct virtqueue *vq,
 	}
 }
 
+int
+virtio_pci_get_status(struct virtio_softc *vsc)
+{
+	struct virtio_pci_softc *sc = (struct virtio_pci_softc *)vsc;
+
+	if (sc->sc_sc.sc_version_1)
+		return CREAD(sc, device_status);
+	else
+		return bus_space_read_1(sc->sc_iot, sc->sc_ioh,
+		    VIRTIO_CONFIG_DEVICE_STATUS);
+}
+
 void
 virtio_pci_set_status(struct virtio_softc *vsc, int status)
 {
@@ -282,15 +296,29 @@ virtio_pci_set_status(struct virtio_softc *vsc, int status)
 	int old = 0;
 
 	if (sc->sc_sc.sc_version_1) {
-		if (status != 0)
+		if (status == 0) {
+			CWRITE(sc, device_status, 0);
+			while (CREAD(sc, device_status) != 0) {
+				CPU_BUSY_CYCLE();
+			}
+		} else {
 			old = CREAD(sc, device_status);
-		CWRITE(sc, device_status, status|old);
+			CWRITE(sc, device_status, status|old);
+		}
 	} else {
-		if (status != 0)
+		if (status == 0) {
+			bus_space_write_1(sc->sc_iot, sc->sc_ioh,
+			    VIRTIO_CONFIG_DEVICE_STATUS, status|old);
+			while (bus_space_read_1(sc->sc_iot, sc->sc_ioh,
+			    VIRTIO_CONFIG_DEVICE_STATUS) != 0) {
+				CPU_BUSY_CYCLE();
+			}
+		} else {
 			old = bus_space_read_1(sc->sc_iot, sc->sc_ioh,
 			    VIRTIO_CONFIG_DEVICE_STATUS);
-		bus_space_write_1(sc->sc_iot, sc->sc_ioh,
-		    VIRTIO_CONFIG_DEVICE_STATUS, status|old);
+			bus_space_write_1(sc->sc_iot, sc->sc_ioh,
+			    VIRTIO_CONFIG_DEVICE_STATUS, status|old);
+		}
 	}
 }
 

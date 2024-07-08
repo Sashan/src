@@ -1,4 +1,4 @@
-/*	$OpenBSD: route.c,v 1.426 2023/11/13 17:18:27 bluhm Exp $	*/
+/*	$OpenBSD: route.c,v 1.436 2024/03/31 15:53:12 bluhm Exp $	*/
 /*	$NetBSD: route.c,v 1.14 1996/02/13 22:00:46 christos Exp $	*/
 
 /*
@@ -140,6 +140,7 @@
 
 /*
  * Locks used to protect struct members:
+ *      a       atomic operations
  *      I       immutable after creation
  *      L       rtlabel_mtx
  *      T       rttimer_mtx
@@ -152,8 +153,9 @@ static uint32_t		rt_hashjitter;
 
 extern unsigned int	rtmap_limit;
 
-struct cpumem *		rtcounters;
-int			rttrash;	/* routes not in table but not freed */
+struct cpumem	*rtcounters;
+int		 rttrash;	/* [a] routes not in table but not freed */
+u_long		 rtgeneration;	/* [a] generation number, routes changed */
 
 struct pool	rtentry_pool;		/* pool for rtentry structures */
 struct pool	rttimer_pool;		/* pool for rttimer structures */
@@ -198,6 +200,116 @@ route_init(void)
 	bfdinit();
 #endif
 }
+
+int
+route_cache(struct route *ro, const struct in_addr *dst,
+    const struct in_addr *src, u_int rtableid)
+{
+	u_long gen;
+
+	gen = atomic_load_long(&rtgeneration);
+	membar_consumer();
+
+	if (rtisvalid(ro->ro_rt) &&
+	    ro->ro_generation == gen &&
+	    ro->ro_tableid == rtableid &&
+	    ro->ro_dstsa.sa_family == AF_INET &&
+	    ro->ro_dstsin.sin_addr.s_addr == dst->s_addr) {
+		if (src == NULL || !ipmultipath ||
+		    !ISSET(ro->ro_rt->rt_flags, RTF_MPATH) ||
+		    (ro->ro_srcin.s_addr != INADDR_ANY &&
+		    ro->ro_srcin.s_addr == src->s_addr)) {
+			ipstat_inc(ips_rtcachehit);
+			return (0);
+		}
+	}
+
+	ipstat_inc(ips_rtcachemiss);
+	rtfree(ro->ro_rt);
+	memset(ro, 0, sizeof(*ro));
+	ro->ro_generation = gen;
+	ro->ro_tableid = rtableid;
+
+	ro->ro_dstsin.sin_family = AF_INET;
+	ro->ro_dstsin.sin_len = sizeof(struct sockaddr_in);
+	ro->ro_dstsin.sin_addr = *dst;
+	if (src != NULL)
+		ro->ro_srcin = *src;
+
+	return (ESRCH);
+}
+
+/*
+ * Check cache for route, else allocate a new one, potentially using multipath
+ * to select the peer.  Update cache and return valid route or NULL.
+ */
+struct rtentry *
+route_mpath(struct route *ro, const struct in_addr *dst,
+    const struct in_addr *src, u_int rtableid)
+{
+	if (route_cache(ro, dst, src, rtableid)) {
+		uint32_t *s = NULL;
+
+		if (ro->ro_srcin.s_addr != INADDR_ANY)
+			s = &ro->ro_srcin.s_addr;
+		ro->ro_rt = rtalloc_mpath(&ro->ro_dstsa, s, ro->ro_tableid);
+	}
+	return (ro->ro_rt);
+}
+
+#ifdef INET6
+int
+route6_cache(struct route *ro, const struct in6_addr *dst,
+    const struct in6_addr *src, u_int rtableid)
+{
+	u_long gen;
+
+	gen = atomic_load_long(&rtgeneration);
+	membar_consumer();
+
+	if (rtisvalid(ro->ro_rt) &&
+	    ro->ro_generation == gen &&
+	    ro->ro_tableid == rtableid &&
+	    ro->ro_dstsa.sa_family == AF_INET6 &&
+	    IN6_ARE_ADDR_EQUAL(&ro->ro_dstsin6.sin6_addr, dst)) {
+		if (src == NULL || !ip6_multipath ||
+		    !ISSET(ro->ro_rt->rt_flags, RTF_MPATH) ||
+		    (!IN6_IS_ADDR_UNSPECIFIED(&ro->ro_srcin6) &&
+		    IN6_ARE_ADDR_EQUAL(&ro->ro_srcin6, src))) {
+			ip6stat_inc(ip6s_rtcachehit);
+			return (0);
+		}
+	}
+
+	ip6stat_inc(ip6s_rtcachemiss);
+	rtfree(ro->ro_rt);
+	memset(ro, 0, sizeof(*ro));
+	ro->ro_generation = gen;
+	ro->ro_tableid = rtableid;
+
+	ro->ro_dstsin6.sin6_family = AF_INET6;
+	ro->ro_dstsin6.sin6_len = sizeof(struct sockaddr_in6);
+	ro->ro_dstsin6.sin6_addr = *dst;
+	if (src != NULL)
+		ro->ro_srcin6 = *src;
+
+	return (ESRCH);
+}
+
+struct rtentry *
+route6_mpath(struct route *ro, const struct in6_addr *dst,
+    const struct in6_addr *src, u_int rtableid)
+{
+	if (route6_cache(ro, dst, src, rtableid)) {
+		uint32_t *s = NULL;
+
+		if (!IN6_IS_ADDR_UNSPECIFIED(&ro->ro_srcin6))
+			s = &ro->ro_srcin6.s6_addr32[0];
+		ro->ro_rt = rtalloc_mpath(&ro->ro_dstsa, s, ro->ro_tableid);
+	}
+	return (ro->ro_rt);
+}
+#endif
 
 /*
  * Returns 1 if the (cached) ``rt'' entry is still valid, 0 otherwise.
@@ -824,6 +936,9 @@ rtrequest_delete(struct rt_addrinfo *info, u_int8_t prio, struct ifnet *ifp,
 	else
 		rtfree(rt);
 
+	membar_producer();
+	atomic_inc_long(&rtgeneration);
+
 	return (0);
 }
 
@@ -992,6 +1107,10 @@ rtrequest(int req, struct rt_addrinfo *info, u_int8_t prio,
 			*ret_nrt = rt;
 		else
 			rtfree(rt);
+
+		membar_producer();
+		atomic_inc_long(&rtgeneration);
+
 		break;
 	}
 
@@ -1828,6 +1947,9 @@ rt_if_linkstate_change(struct rtentry *rt, void *arg, u_int id)
 		    rt->rt_priority | RTP_DOWN, rt);
 	}
 	if_group_routechange(rt_key(rt), rt_plen2mask(rt, &sa_mask));
+
+	membar_producer();
+	atomic_inc_long(&rtgeneration);
 
 	return (error);
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: init.c,v 1.19 2023/10/12 16:37:05 deraadt Exp $ */
+/*	$OpenBSD: init.c,v 1.22 2024/01/21 17:18:13 kettenis Exp $ */
 /*
  * Copyright (c) 2014,2015 Philip Guenther <guenther@openbsd.org>
  *
@@ -35,11 +35,6 @@
 
 #include "init.h"
 
-#if defined(APIWARN)
-__warn_references(syscall,
-    "syscall() may go away, please rewrite code to use direct calls");
-#endif
-
 #define MAX(a,b)	(((a)>(b))?(a):(b))
 
 #ifdef TIB_EXTRA_ALIGN
@@ -75,9 +70,6 @@ extern Elf_Ehdr __executable_start[] __attribute__((weak));
 
 /* provide definitions for these */
 const dl_cb *_dl_cb __relro = NULL;
-
-int	pinsyscall(int, void *, size_t);
-PROTO_NORMAL(pinsyscall);
 
 int	HIDDEN(execve)(const char *, char *const *, char *const *)
 	__attribute__((weak));
@@ -137,7 +129,6 @@ _libc_preinit(int argc, char **argv, char **envp, dl_cb_cb *cb)
 		 * Static non-PIE processes don't get an AUX vector,
 		 * so find the phdrs through the ELF header
 		 */
-		_static_phdr_info.dlpi_addr = (Elf_Addr)__executable_start;
 		phdr = (void *)((char *)__executable_start +
 		    __executable_start->e_phoff);
 		phnum = __executable_start->e_phnum;
@@ -146,22 +137,8 @@ _libc_preinit(int argc, char **argv, char **envp, dl_cb_cb *cb)
 	_static_phdr_info.dlpi_phnum = phnum;
 
 	/* static libc in a static link? */
-	if (cb == NULL) {
+	if (cb == NULL)
 		setup_static_tib(phdr, phnum);
-
-#if !defined(__hppa__)
-		if (&HIDDEN(execve)) {
-			extern const int _execve_size;
-
-			pinsyscall(SYS_execve, &HIDDEN(execve), _execve_size);
-		} else {
-			static const int not_syscall;
-
-			/* Static binary which does not use execve() */
-			pinsyscall(SYS_execve, (void *)&not_syscall, 1);
-		}
-#endif
-	}
 
 	/*
 	 * If a static binary has text relocations (DT_TEXT), then un-writeable

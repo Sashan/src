@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_sk.c,v 1.195 2023/11/10 15:51:20 bluhm Exp $	*/
+/*	$OpenBSD: if_sk.c,v 1.197 2024/06/26 01:40:49 jsg Exp $	*/
 
 /*
  * Copyright (c) 1997, 1998, 1999, 2000
@@ -93,8 +93,6 @@
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
 #include <sys/malloc.h>
-#include <sys/kernel.h>
-#include <sys/socket.h>
 #include <sys/timeout.h>
 #include <sys/device.h>
 #include <sys/queue.h>
@@ -2085,7 +2083,8 @@ sk_init_xmac(struct sk_if_softc	*sc_if)
 	sc_if->sk_link = 1;
 }
 
-void sk_init_yukon(struct sk_if_softc *sc_if)
+void
+sk_init_yukon(struct sk_if_softc *sc_if)
 {
 	u_int32_t		phy, v;
 	u_int16_t		reg;

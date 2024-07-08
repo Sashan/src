@@ -1,4 +1,4 @@
-/*	$OpenBSD: exec_elf.c,v 1.183 2023/07/12 19:34:14 jasper Exp $	*/
+/*	$OpenBSD: exec_elf.c,v 1.186 2024/04/02 08:39:16 deraadt Exp $	*/
 
 /*
  * Copyright (c) 1996 Per Fogelstrom
@@ -81,6 +81,7 @@
 #include <sys/ptrace.h>
 #include <sys/signalvar.h>
 #include <sys/pledge.h>
+#include <sys/syscall.h>
 
 #include <sys/mman.h>
 
@@ -97,6 +98,8 @@ void	elf_load_psection(struct exec_vmcmd_set *, struct vnode *,
 	    Elf_Phdr *, Elf_Addr *, Elf_Addr *, int *, int);
 int	elf_os_pt_note_name(Elf_Note *);
 int	elf_os_pt_note(struct proc *, struct exec_package *, Elf_Ehdr *, int *);
+int	elf_read_pintable(struct proc *p, struct vnode *vp, Elf_Phdr *pp,
+	    u_int **pinp, int is_ldso, size_t len);
 
 /* round up and down to page boundaries. */
 #define ELF_ROUND(a, b)		(((a) + (b) - 1) & ~((b) - 1))
@@ -266,6 +269,74 @@ elf_read_from(struct proc *p, struct vnode *vp, u_long off, void *buf,
 }
 
 /*
+ * rebase the pin offsets inside a base,len window for the text segment only.
+ */
+void
+elf_adjustpins(vaddr_t *basep, size_t *lenp, u_int *pins, int npins, u_int offset)
+{
+	int i;
+
+	/* Adjust offsets, base, len */
+	for (i = 0; i < npins; i++) {
+		if (pins[i] == -1 || pins[i] == 0)
+			continue;
+		pins[i] -= offset;
+	}
+	*basep += offset;
+	*lenp -= offset;
+}
+
+int
+elf_read_pintable(struct proc *p, struct vnode *vp, Elf_Phdr *pp,
+    u_int **pinp, int is_ldso, size_t len)
+{
+	struct pinsyscalls {
+		u_int offset;
+		u_int sysno;
+	} *syscalls = NULL;
+	int i, nsyscalls = 0, npins = 0;
+	u_int *pins = NULL;
+
+	if (pp->p_filesz > SYS_MAXSYSCALL * 2 * sizeof(*syscalls) ||
+	    pp->p_filesz % sizeof(*syscalls) != 0)
+		goto bad;
+	nsyscalls = pp->p_filesz / sizeof(*syscalls);
+	syscalls = malloc(pp->p_filesz, M_PINSYSCALL, M_WAITOK);
+	if (elf_read_from(p, vp, pp->p_offset, syscalls,
+	    pp->p_filesz) != 0)
+		goto bad;
+
+	/* Validate, and calculate pintable size */
+	for (i = 0; i < nsyscalls; i++) {
+		if (syscalls[i].sysno <= 0 ||
+		    syscalls[i].sysno >= SYS_MAXSYSCALL ||
+		    syscalls[i].offset > len)
+			goto bad;
+		npins = MAX(npins, syscalls[i].sysno);
+	}
+	if (is_ldso)
+		npins = MAX(npins, SYS_kbind);	/* XXX see ld.so/loader.c */
+	npins++;
+
+	/* Fill pintable: 0 = invalid, -1 = allowed, else offset from base */
+	pins = mallocarray(npins, sizeof(u_int), M_PINSYSCALL, M_WAITOK|M_ZERO);
+	for (i = 0; i < nsyscalls; i++) {
+		if (pins[syscalls[i].sysno])
+			pins[syscalls[i].sysno] = -1;	/* duplicated */
+		else
+			pins[syscalls[i].sysno] = syscalls[i].offset;
+	}
+	if (is_ldso)
+		pins[SYS_kbind] = -1;	/* XXX see ld.so/loader.c */
+	*pinp = pins;
+	pins = NULL;
+bad:
+	free(syscalls, M_PINSYSCALL, nsyscalls * sizeof(*syscalls));
+	free(pins, M_PINSYSCALL, npins * sizeof(u_int));
+	return npins;
+}
+
+/*
  * Load a file (interpreter/library) pointed to by path [stolen from
  * coff_load_shlib()]. Made slightly generic so it might be used externally.
  */
@@ -276,7 +347,7 @@ elf_load_file(struct proc *p, char *path, struct exec_package *epp,
 	int error, i;
 	struct nameidata nd;
 	Elf_Ehdr eh;
-	Elf_Phdr *ph = NULL;
+	Elf_Phdr *ph = NULL, *syscall_ph = NULL;
 	u_long phsize = 0;
 	Elf_Addr addr;
 	struct vnode *vp;
@@ -290,6 +361,7 @@ elf_load_file(struct proc *p, char *path, struct exec_package *epp,
 	int file_align;
 	int loop;
 	size_t randomizequota = ELF_RANDOMIZE_LIMIT;
+	vaddr_t text_start = -1, text_end = 0;
 
 	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE, path, p);
 	nd.ni_pledge = PLEDGE_RPATH;
@@ -422,15 +494,26 @@ elf_load_file(struct proc *p, char *path, struct exec_package *epp,
 				addr = ph[i].p_vaddr - base_ph->p_vaddr;
 			}
 			elf_load_psection(&epp->ep_vmcmds, nd.ni_vp,
-			    &ph[i], &addr, &size, &prot, flags | VMCMD_SYSCALL);
+			    &ph[i], &addr, &size, &prot, flags);
 			/* If entry is within this section it must be text */
 			if (eh.e_entry >= ph[i].p_vaddr &&
 			    eh.e_entry < (ph[i].p_vaddr + size)) {
+				/* LOAD containing e_entry may not be writable */
+				if (prot & PROT_WRITE) {
+					error = ENOEXEC;
+					goto bad1;
+				}
  				epp->ep_entry = addr + eh.e_entry -
 				    ELF_TRUNC(ph[i].p_vaddr,ph[i].p_align);
 				if (flags == VMCMD_RELATIVE)
 					epp->ep_entry += pos;
 				ap->arg_interp = pos;
+			}
+			if (prot & PROT_EXEC) {
+				if (addr < text_start)
+					text_start = addr;
+				if (addr+size >= text_end)
+					text_end = addr + size;
 			}
 			addr += size;
 			break;
@@ -461,9 +544,31 @@ elf_load_file(struct proc *p, char *path, struct exec_package *epp,
 			NEW_VMCMD(&epp->ep_vmcmds, vmcmd_mutable,
 			    ph[i].p_memsz, ph[i].p_vaddr + pos, NULLVP, 0, 0);
 			break;
-
+		case PT_OPENBSD_SYSCALLS:
+			syscall_ph = &ph[i];
+			break;
 		default:
 			break;
+		}
+	}
+
+	if (syscall_ph) {
+		struct process *pr = p->p_p;
+		vaddr_t base = pos;
+		size_t len = text_end;
+		u_int *pins;
+		int npins;
+
+		npins = elf_read_pintable(p, nd.ni_vp, syscall_ph,
+		    &pins, 1, len);
+		if (npins) {
+			elf_adjustpins(&base, &len, pins, npins,
+			    text_start);
+			pr->ps_pin.pn_start = base;
+			pr->ps_pin.pn_end = base + len;
+			pr->ps_pin.pn_pins = pins;
+			pr->ps_pin.pn_npins = npins;
+			pr->ps_flags |= PS_PIN;
 		}
 	}
 
@@ -491,8 +596,8 @@ int
 exec_elf_makecmds(struct proc *p, struct exec_package *epp)
 {
 	Elf_Ehdr *eh = epp->ep_hdr;
-	Elf_Phdr *ph, *pp, *base_ph = NULL;
-	Elf_Addr phdr = 0, exe_base = 0;
+	Elf_Phdr *ph, *pp, *base_ph = NULL, *syscall_ph = NULL;
+	Elf_Addr phdr = 0, exe_base = 0, exe_end = 0;
 	int error, i, has_phdr = 0, names = 0, textrel = 0;
 	char *interp = NULL;
 	u_long phsize;
@@ -615,7 +720,7 @@ exec_elf_makecmds(struct proc *p, struct exec_package *epp)
 	 */
 	for (i = 0, pp = ph; i < eh->e_phnum; i++, pp++) {
 		Elf_Addr addr, size = 0;
-		int prot = 0, syscall = 0;
+		int prot = 0;
 		int flags = 0;
 
 		switch (pp->p_type) {
@@ -631,14 +736,9 @@ exec_elf_makecmds(struct proc *p, struct exec_package *epp)
 			} else
 				addr = ELF_NO_ADDR;
 
-			/*
-			 * Permit system calls in main-text static binaries.
-			 * Also block the ld.so syscall-grant
-			 */
-			if (interp == NULL) {
-				syscall = VMCMD_SYSCALL;
-				p->p_vmspace->vm_map.flags |= VM_MAP_SYSCALL_ONCE;
-			}
+			/* Static binaries may not call pinsyscalls() */
+			if (interp == NULL)
+				p->p_vmspace->vm_map.flags |= VM_MAP_PINSYSCALL_ONCE;
 
 			/*
 			 * Calculates size of text and data segments
@@ -648,7 +748,7 @@ exec_elf_makecmds(struct proc *p, struct exec_package *epp)
 			 * for DATA_PLT, is fine for TEXT_PLT.
 			 */
 			elf_load_psection(&epp->ep_vmcmds, epp->ep_vp,
-			    pp, &addr, &size, &prot, flags | textrel | syscall);
+			    pp, &addr, &size, &prot, flags | textrel);
 
 			/*
 			 * Update exe_base in case alignment was off.
@@ -696,6 +796,9 @@ exec_elf_makecmds(struct proc *p, struct exec_package *epp)
 						epp->ep_tsize = addr+size -
 						    epp->ep_taddr;
 				}
+				if (interp == NULL)
+					exe_end = epp->ep_taddr +
+					    epp->ep_tsize;	/* end of TEXT */
 			}
 			break;
 
@@ -735,13 +838,35 @@ exec_elf_makecmds(struct proc *p, struct exec_package *epp)
 			NEW_VMCMD(&epp->ep_vmcmds, vmcmd_mutable,
 			    ph[i].p_memsz, ph[i].p_vaddr + exe_base, NULLVP, 0, 0);
 			break;
-
+		case PT_OPENBSD_SYSCALLS:
+			if (interp == NULL)
+				syscall_ph = &ph[i];
+			break;
 		default:
 			/*
 			 * Not fatal, we don't need to understand everything
 			 * :-)
 			 */
 			break;
+		}
+	}
+
+	if (syscall_ph) {
+		vaddr_t base = exe_base;
+		size_t len = exe_end - exe_base;
+		u_int *pins;
+		int npins;
+
+		npins = elf_read_pintable(p, epp->ep_vp, syscall_ph,
+		    &pins, 0, len);
+		if (npins) {
+			elf_adjustpins(&base, &len, pins, npins,
+			    epp->ep_taddr - exe_base);
+			epp->ep_pinstart = base;
+			epp->ep_pinend = base + len;
+			epp->ep_pins = pins;
+			epp->ep_npins = npins;
+			p->p_p->ps_flags |= PS_PIN;
 		}
 	}
 
@@ -1027,7 +1152,7 @@ coredump_elf(struct proc *p, void *cookie)
 		goto out;
 
 	error = coredump_write(cookie, UIO_SYSSPACE, ws.psections,
-	    ws.psectionslen);
+	    ws.psectionslen, 0);
 	if (error)
 		goto out;
 
@@ -1066,10 +1191,11 @@ coredump_elf(struct proc *p, void *cookie)
 		if (pent->p_vaddr == p->p_p->ps_sigcode &&
 		    pent->p_filesz == sigcode_sz) {
 			error = coredump_write(cookie, UIO_SYSSPACE,
-			    (void *)sigcode_va, sigcode_sz);
+			    (void *)sigcode_va, sigcode_sz, 0);
 		} else {
 			error = coredump_write(cookie, UIO_USERSPACE,
-			    (void *)(vaddr_t)pent->p_vaddr, pent->p_filesz);
+			    (void *)(vaddr_t)pent->p_vaddr, pent->p_filesz,
+			    (pent->p_flags & PF_ISVNODE));
 		}
 		if (error)
 			goto out;
@@ -1171,7 +1297,7 @@ coredump_setup_elf(int segment_count, void *cookie)
 	}
 
 	/* Write out the ELF header. */
-	error = coredump_write(ws->iocookie, UIO_SYSSPACE, &ehdr, sizeof(ehdr));
+	error = coredump_write(ws->iocookie, UIO_SYSSPACE, &ehdr, sizeof(ehdr), 0);
 	if (error)
 		return error;
 
@@ -1182,11 +1308,11 @@ coredump_setup_elf(int segment_count, void *cookie)
 	if (ehdr.e_shnum != 0) {
 		Elf_Shdr shdr = { .sh_info = ws->npsections };
 		error = coredump_write(ws->iocookie, UIO_SYSSPACE, &shdr,
-		    sizeof shdr);
+		    sizeof shdr, 0);
 		if (error)
 			return error;
 		error = coredump_write(ws->iocookie, UIO_SYSSPACE, &shstrtab,
-		    sizeof(shstrtab.shdr) + sizeof(shstrtab.shstrtab));
+		    sizeof(shstrtab.shdr) + sizeof(shstrtab.shstrtab), 0);
 		if (error)
 			return error;
 	}
@@ -1221,7 +1347,7 @@ coredump_setup_elf(int segment_count, void *cookie)
 
 int
 coredump_walk_elf(vaddr_t start, vaddr_t realend, vaddr_t end, vm_prot_t prot,
-    int nsegment, void *cookie)
+    int isvnode, int nsegment, void *cookie)
 {
 	struct writesegs_state *ws = cookie;
 	Elf_Phdr phdr;
@@ -1243,6 +1369,8 @@ coredump_walk_elf(vaddr_t start, vaddr_t realend, vaddr_t end, vm_prot_t prot,
 		phdr.p_flags |= PF_W;
 	if (prot & PROT_EXEC)
 		phdr.p_flags |= PF_X;
+	if (isvnode)
+		phdr.p_flags |= PF_ISVNODE;
 	phdr.p_align = PAGE_SIZE;
 
 	ws->secoff += phdr.p_filesz;
@@ -1319,17 +1447,17 @@ coredump_notes_elf(struct proc *p, void *iocookie, size_t *sizep)
 		nhdr.type = NT_OPENBSD_AUXV;
 
 		error = coredump_write(iocookie, UIO_SYSSPACE,
-		    &nhdr, sizeof(nhdr));
+		    &nhdr, sizeof(nhdr), 0);
 		if (error)
 			return (error);
 
 		error = coredump_write(iocookie, UIO_SYSSPACE,
-		    "OpenBSD", elfround(nhdr.namesz));
+		    "OpenBSD", elfround(nhdr.namesz), 0);
 		if (error)
 			return (error);
 
 		error = coredump_write(iocookie, UIO_USERSPACE,
-		    (caddr_t)pr->ps_auxinfo, nhdr.descsz);
+		    (caddr_t)pr->ps_auxinfo, nhdr.descsz, 0);
 		if (error)
 			return (error);
 	}
@@ -1469,15 +1597,15 @@ coredump_writenote_elf(struct proc *p, void *cookie, Elf_Note *nhdr,
 {
 	int error;
 
-	error = coredump_write(cookie, UIO_SYSSPACE, nhdr, sizeof(*nhdr));
+	error = coredump_write(cookie, UIO_SYSSPACE, nhdr, sizeof(*nhdr), 0);
 	if (error)
 		return error;
 
 	error = coredump_write(cookie, UIO_SYSSPACE, name,
-	    elfround(nhdr->namesz));
+	    elfround(nhdr->namesz), 0);
 	if (error)
 		return error;
 
-	return coredump_write(cookie, UIO_SYSSPACE, data, nhdr->descsz);
+	return coredump_write(cookie, UIO_SYSSPACE, data, nhdr->descsz, 0);
 }
 #endif /* !SMALL_KERNEL */

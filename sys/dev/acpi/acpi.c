@@ -1,4 +1,4 @@
-/* $OpenBSD: acpi.c,v 1.426 2024/01/08 19:52:29 kettenis Exp $ */
+/* $OpenBSD: acpi.c,v 1.433 2024/07/02 08:27:04 kettenis Exp $ */
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  * Copyright (c) 2005 Jordan Hargrave <jordan@openbsd.org>
@@ -26,6 +26,7 @@
 #include <sys/signalvar.h>
 #include <sys/proc.h>
 #include <sys/kthread.h>
+#include <sys/reboot.h>
 #include <sys/sched.h>
 
 #include <machine/conf.h>
@@ -106,8 +107,6 @@ void	acpi_create_thread(void *);
 void	acpi_init_pm(struct acpi_softc *);
 
 int	acpi_founddock(struct aml_node *, void *);
-int	acpi_foundpss(struct aml_node *, void *);
-int	acpi_foundtmp(struct aml_node *, void *);
 int	acpi_foundprw(struct aml_node *, void *);
 int	acpi_foundvideo(struct aml_node *, void *);
 int	acpi_foundsbs(struct aml_node *node, void *);
@@ -613,6 +612,10 @@ acpi_getpci(struct aml_node *node, void *arg)
 		aml_nodename(node));
 
 	/* Collect device power state information. */
+	if (aml_evalinteger(sc, node, "_S0W", 0, NULL, &val) == 0)
+		pci->_s0w = val;
+	else
+		pci->_s0w = -1;
 	if (aml_evalinteger(sc, node, "_S3D", 0, NULL, &val) == 0)
 		pci->_s3d = val;
 	else
@@ -723,6 +726,12 @@ acpi_pci_min_powerstate(pci_chipset_tag_t pc, pcitag_t tag)
 	TAILQ_FOREACH(pdev, &acpi_pcidevs, next) {
 		if (pdev->bus == bus && pdev->dev == dev && pdev->fun == fun) {
 			switch (acpi_softc->sc_state) {
+			case ACPI_STATE_S0:
+				if (boothowto & RB_POWERDOWN) {
+					defaultstate = PCI_PMCSR_STATE_D3;
+					state = pdev->_s0w;
+				}
+				break;
 			case ACPI_STATE_S3:
 				defaultstate = PCI_PMCSR_STATE_D3;
 				state = MAX(pdev->_s3d, pdev->_s3w);
@@ -1965,6 +1974,12 @@ acpi_sleep_task(void *arg0, int sleepmode)
 
 #endif /* SMALL_KERNEL */
 
+int
+acpi_resuming(struct acpi_softc *sc)
+{
+	return (getuptime() < sc->sc_resume_time + 10);
+}
+
 void
 acpi_reset(void)
 {
@@ -2031,6 +2046,10 @@ acpi_pbtn_task(void *arg0, int dummy)
 	    en | ACPI_PM1_PWRBTN_EN);
 	splx(s);
 
+	/* Ignore button events if we're resuming. */
+	if (acpi_resuming(sc))
+		return;
+
 	switch (pwr_action) {
 	case 0:
 		break;
@@ -2077,6 +2096,7 @@ acpi_powerdown_task(void *arg0, int dummy)
 int
 acpi_interrupt(void *arg)
 {
+	extern int cpu_suspended;
 	struct acpi_softc *sc = (struct acpi_softc *)arg;
 	uint32_t processed = 0, idx, jdx;
 	uint16_t sts, en;
@@ -2094,6 +2114,11 @@ acpi_interrupt(void *arg)
 			for (jdx = 0; jdx < 8; jdx++) {
 				if (!(en & sts & (1L << jdx)))
 					continue;
+
+				if (cpu_suspended) {
+					cpu_suspended = 0;
+					sc->sc_wakegpe = idx + jdx;
+				}
 
 				/* Signal this GPE */
 				gpe = idx + jdx;
@@ -2129,6 +2154,11 @@ acpi_interrupt(void *arg)
 			    ACPI_PM1_PWRBTN_STS);
 			sts &= ~ACPI_PM1_PWRBTN_STS;
 
+			if (cpu_suspended) {
+				cpu_suspended = 0;
+				sc->sc_wakegpe = -1;
+			}
+
 			acpi_addtask(sc, acpi_pbtn_task, sc, 0);
 		}
 		if (sts & ACPI_PM1_SLPBTN_STS) {
@@ -2138,6 +2168,11 @@ acpi_interrupt(void *arg)
 			acpi_write_pmreg(sc, ACPIREG_PM1_STS, 0,
 			    ACPI_PM1_SLPBTN_STS);
 			sts &= ~ACPI_PM1_SLPBTN_STS;
+
+			if (cpu_suspended) {
+				cpu_suspended = 0;
+				sc->sc_wakegpe = -2;
+			}
 
 			acpi_addtask(sc, acpi_sbtn_task, sc, 0);
 		}
@@ -2168,6 +2203,7 @@ acpi_add_device(struct aml_node *node, void *arg)
 	CPU_INFO_ITERATOR cii;
 	struct cpu_info *ci;
 	int proc_id = -1;
+	int64_t sta;
 
 	memset(&aaa, 0, sizeof(aaa));
 	aaa.aaa_node = node;
@@ -2198,6 +2234,10 @@ acpi_add_device(struct aml_node *node, void *arg)
 		aaa.aaa_name = "acpicpu";
 		break;
 	case AML_OBJTYPE_THERMZONE:
+		sta = acpi_getsta(sc, node);
+		if ((sta & STA_PRESENT) == 0)
+			return 0;
+
 		aaa.aaa_name = "acpitz";
 		break;
 	case AML_OBJTYPE_POWERRSRC:

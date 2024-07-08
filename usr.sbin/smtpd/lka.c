@@ -1,4 +1,4 @@
-/*	$OpenBSD: lka.c,v 1.247 2021/06/14 17:58:15 eric Exp $	*/
+/*	$OpenBSD: lka.c,v 1.250 2024/06/11 16:30:06 tb Exp $	*/
 
 /*
  * Copyright (c) 2008 Pierre-Yves Ritschard <pyr@openbsd.org>
@@ -47,7 +47,7 @@ static void
 lka_imsg(struct mproc *p, struct imsg *imsg)
 {
 	struct table		*table;
-	int			 ret;
+	int			 ret, fd;
 	struct sockaddr_storage	 ss;
 	struct userinfo		 userinfo;
 	struct addrname		 addrname;
@@ -294,7 +294,7 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 
 		/* revoke proc & exec */
 		if (pledge("stdio rpath inet dns getpw recvfd sendfd",
-			NULL) == -1)
+		    NULL) == -1)
 			fatal("pledge");
 
 		/* setup proc registering task */
@@ -305,7 +305,7 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 		return;
 
 	case IMSG_LKA_OPEN_FORWARD:
-		lka_session_forward_reply(imsg->data, imsg->fd);
+		lka_session_forward_reply(imsg->data, imsg_get_fd(imsg));
 		return;
 
 	case IMSG_LKA_AUTHENTICATE:
@@ -351,7 +351,7 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 		m_add_string(p, procname);
 		m_close(p);
 
-		lka_proc_forked(procname, subsystems, imsg->fd);
+		lka_proc_forked(procname, subsystems, imsg_get_fd(imsg));
 		return;
 
 	case IMSG_LKA_PROCESSOR_ERRFD:
@@ -359,8 +359,9 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 		m_get_string(&m, &procname);
 		m_end(&m);
 
-		lka_proc_errfd(procname, imsg->fd);
-		shutdown(imsg->fd, SHUT_WR);
+		fd = imsg_get_fd(imsg);
+		lka_proc_errfd(procname, fd);
+		shutdown(fd, SHUT_WR);
 		return;
 
 	case IMSG_REPORT_SMTP_LINK_CONNECT:
@@ -719,6 +720,7 @@ static int
 lka_authenticate(const char *tablename, const char *user, const char *password)
 {
 	struct table		*table;
+	char	       		 offloadkey[LINE_MAX];
 	union lookup		 lk;
 
 	log_debug("debug: lka: authenticating for %s:%s", tablename, user);
@@ -727,6 +729,26 @@ lka_authenticate(const char *tablename, const char *user, const char *password)
 		log_warnx("warn: could not find table %s needed for authentication",
 		    tablename);
 		return (LKA_TEMPFAIL);
+	}
+
+	/* table backend supports authentication offloading */
+	if (table_check_service(table, K_AUTH)) {
+		if (!bsnprintf(offloadkey, sizeof(offloadkey), "%s:%s",
+		    user, password)) {
+			log_warnx("warn: key serialization failed for %s:%s",
+			    tablename, user);
+			return (LKA_TEMPFAIL);
+		}
+		switch (table_match(table, K_AUTH, offloadkey)) {
+		case -1:
+			log_warnx("warn: user credentials lookup fail for %s:%s",
+			    tablename, user);
+			return (LKA_TEMPFAIL);
+		case 0:
+			return (LKA_PERMFAIL);
+		default:
+			return (LKA_OK);
+		}
 	}
 
 	switch (table_lookup(table, K_CREDENTIALS, user, &lk)) {

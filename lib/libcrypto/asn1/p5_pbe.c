@@ -1,4 +1,4 @@
-/* $OpenBSD: p5_pbe.c,v 1.25 2023/07/07 19:37:52 beck Exp $ */
+/* $OpenBSD: p5_pbe.c,v 1.27 2024/03/28 00:44:26 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 1999.
  */
@@ -64,6 +64,8 @@
 #include <openssl/err.h>
 #include <openssl/x509.h>
 
+#include "x509_local.h"
+
 /* PKCS#5 password based encryption structure */
 
 static const ASN1_TEMPLATE PBEPARAM_seq_tt[] = {
@@ -125,8 +127,7 @@ PKCS5_pbe_set0_algor(X509_ALGOR *algor, int alg, int iter,
 	ASN1_STRING *pbe_str = NULL;
 	unsigned char *sstr;
 
-	pbe = PBEPARAM_new();
-	if (!pbe) {
+	if ((pbe = PBEPARAM_new()) == NULL) {
 		ASN1error(ERR_R_MALLOC_FAILURE);
 		goto err;
 	}

@@ -32,18 +32,12 @@
  * documentation and/or software.
  */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 #define PERL_NO_GET_CONTEXT     /* we want efficiency */
 #include "EXTERN.h"
 #include "perl.h"
 #include "XSUB.h"
 #include <sys/types.h>
 #include <md5.h>
-#ifdef __cplusplus
-}
-#endif
 
 #ifndef PERL_UNUSED_VAR
 # define PERL_UNUSED_VAR(x) ((void)x)

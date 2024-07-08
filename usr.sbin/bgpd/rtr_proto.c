@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtr_proto.c,v 1.31 2024/01/11 15:38:05 claudio Exp $ */
+/*	$OpenBSD: rtr_proto.c,v 1.35 2024/04/09 12:09:20 claudio Exp $ */
 
 /*
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
@@ -36,7 +36,8 @@ struct rtr_header {
 } __packed;
 
 #define RTR_MAX_VERSION		2
-#define RTR_MAX_LEN		2048
+#define RTR_MAX_PDU_SIZE	49152	/* XXX < IBUF_READ_SIZE */
+#define RTR_MAX_PDU_ERROR_SIZE	256
 #define RTR_DEFAULT_REFRESH	3600
 #define RTR_DEFAULT_RETRY	600
 #define RTR_DEFAULT_EXPIRE	7200
@@ -272,7 +273,7 @@ rtr_newmsg(struct rtr_session *rs, enum rtr_pdu_type type, uint32_t len,
 	struct ibuf *buf;
 	int saved_errno;
 
-	if (len > RTR_MAX_LEN) {
+	if (len > RTR_MAX_PDU_SIZE) {
 		errno = ERANGE;
 		return NULL;
 	}
@@ -323,11 +324,16 @@ rtr_send_error(struct rtr_session *rs, struct ibuf *pdu, enum rtr_error err,
 	}
 
 	log_warnx("rtr %s: sending error: %s%s%s", log_rtr(rs),
-	    log_rtr_error(err), mlen > 0 ? ": " : "", rs->last_sent_msg); 
+	    log_rtr_error(err), mlen > 0 ? ": " : "", rs->last_sent_msg);
 
 	if (pdu != NULL) {
 		ibuf_rewind(pdu);
 		len = ibuf_size(pdu);
+		if (len > RTR_MAX_PDU_ERROR_SIZE) {
+			len = RTR_MAX_PDU_ERROR_SIZE;
+			/* truncate down can not fail */
+			ibuf_truncate(pdu, RTR_MAX_PDU_ERROR_SIZE);
+		}
 	}
 
 	buf = rtr_newmsg(rs, ERROR_REPORT, 2 * sizeof(uint32_t) + len + mlen,
@@ -419,13 +425,14 @@ rtr_parse_header(struct rtr_session *rs, struct ibuf *hdr,
 {
 	struct rtr_header rh;
 	size_t len;
+	uint16_t errcode;
 
 	if (ibuf_get(hdr, &rh, sizeof(rh)) == -1)
 		fatal("%s: ibuf_get", __func__);
 
 	len = ntohl(rh.length);
 
-	if (len > RTR_MAX_LEN) {
+	if (len > RTR_MAX_PDU_SIZE) {
 		rtr_send_error(rs, hdr, CORRUPT_DATA, "%s: too big: %zu bytes",
 		    log_rtr_type(rh.type), len);
 		return -1;
@@ -443,7 +450,14 @@ rtr_parse_header(struct rtr_session *rs, struct ibuf *hdr,
 			rtr_fsm(rs, RTR_EVNT_NEGOTIATION_DONE);
 			break;
 		case ERROR_REPORT:
-			/* version handled in rtr_parse_error() */
+			errcode = ntohs(rh.session_id);
+			if (errcode == UNSUPP_PROTOCOL_VERS ||
+			    errcode == NO_DATA_AVAILABLE) {
+				if (rh.version < rs->version) {
+					rs->prev_version = rs->version;
+					rs->version = rh.version;
+				}
+			}
 			break;
 		case SERIAL_NOTIFY:
 			/* ignore SERIAL_NOTIFY */
@@ -536,6 +550,10 @@ rtr_parse_notify(struct rtr_session *rs, struct ibuf *pdu)
 
 	if (ibuf_get(pdu, &notify, sizeof(notify)) == -1)
 		goto badlen;
+
+	/* set session_id if not yet happened */
+	if (rs->session_id == -1)
+		rs->session_id = ntohs(notify.hdr.session_id);
 
 	if (rtr_check_session_id(rs, rs->session_id, &notify.hdr, pdu) == -1)
 		return -1;
@@ -742,6 +760,22 @@ rtr_parse_aspa(struct rtr_session *rs, struct ibuf *pdu)
 		aspatree = &rs->aspa;
 	}
 
+	/* treat ASPA records with too many SPAS like a withdraw */
+	if (cnt > MAX_ASPA_SPAS_COUNT) {
+		struct aspa_set needle = { 0 };
+		needle.as = ntohl(rtr_aspa.cas);
+
+		log_warnx("rtr %s: oversized ASPA PDU: "
+		    "imlicit withdraw of customerAS %s",
+		    log_rtr(rs), log_as(needle.as));
+		a = RB_FIND(aspa_tree, aspatree, &needle);
+		if (a != NULL) {
+			RB_REMOVE(aspa_tree, aspatree, a);
+			free_aspa(a);
+		}
+		return 0;
+	}
+
 	/* create aspa_set entry from the rtr aspa pdu */
 	if ((aspa = calloc(1, sizeof(*aspa))) == NULL) {
 		rtr_send_error(rs, NULL, INTERNAL_ERROR, "out of memory");
@@ -903,22 +937,6 @@ rtr_parse_cache_reset(struct rtr_session *rs, struct ibuf *pdu)
 	return -1;
 }
 
-static char *
-ibuf_get_string(struct ibuf *buf, size_t len)
-{
-	char *str;
-
-	if (ibuf_size(buf) < len) {
-		errno = EBADMSG;
-		return (NULL);
-	}
-	str = strndup(ibuf_data(buf), len);
-	if (str == NULL)
-		return (NULL);
-	ibuf_skip(buf, len);
-	return (str);
-}
-
 /*
  * Parse an Error Response message. This function behaves a bit different
  * from other parse functions since on error the connection needs to be
@@ -960,10 +978,6 @@ rtr_parse_error(struct rtr_session *rs, struct ibuf *pdu)
 		rtr_fsm(rs, RTR_EVNT_NO_DATA);
 		rv = 0;
 	} else if (errcode == UNSUPP_PROTOCOL_VERS) {
-		if (rh.version < rs->version) {
-			rs->prev_version = rs->version;
-			rs->version = rh.version;
-		}
 		rtr_fsm(rs, RTR_EVNT_UNSUPP_PROTO_VERSION);
 		rv = 0;
 	} else
@@ -1126,6 +1140,11 @@ rtr_fsm(struct rtr_session *rs, enum rtr_event event)
 			timer_set(&rs->timers, Timer_Rtr_Retry, rs->retry);
 			rtr_imsg_compose(IMSG_SOCKET_CONN, rs->id, 0, NULL, 0);
 			break;
+		case RTR_STATE_ESTABLISHED:
+			if (rs->session_id == -1)
+				rtr_send_reset_query(rs);
+			else
+				rtr_send_serial_query(rs);
 		default:
 			break;
 		}

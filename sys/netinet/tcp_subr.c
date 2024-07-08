@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_subr.c,v 1.195 2024/01/11 13:49:49 bluhm Exp $	*/
+/*	$OpenBSD: tcp_subr.c,v 1.201 2024/04/17 20:48:51 bluhm Exp $	*/
 /*	$NetBSD: tcp_subr.c,v 1.22 1996/02/13 23:44:00 christos Exp $	*/
 
 /*
@@ -85,6 +85,7 @@
 #include <netinet/ip.h>
 #include <netinet/in_pcb.h>
 #include <netinet/ip_var.h>
+#include <netinet6/ip6_var.h>
 #include <netinet/ip_icmp.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_fsm.h>
@@ -158,6 +159,9 @@ tcp_init(void)
 	    "sackhl", NULL);
 	pool_sethardlimit(&sackhl_pool, tcp_sackhole_limit, NULL, 0);
 	in_pcbinit(&tcbtable, TCB_INITIAL_HASH_SIZE);
+#ifdef INET6
+	in_pcbinit(&tcb6table, TCB_INITIAL_HASH_SIZE);
+#endif
 	tcpcounters = counters_alloc(tcps_ncounters);
 
 	arc4random_buf(tcp_secret, sizeof(tcp_secret));
@@ -400,9 +404,9 @@ tcp_respond(struct tcpcb *tp, caddr_t template, struct tcphdr *th0,
 		ip6->ip6_plen = tlen - sizeof(struct ip6_hdr);
 		ip6->ip6_plen = htons(ip6->ip6_plen);
 		ip6_output(m, tp ? tp->t_inpcb->inp_outputopts6 : NULL,
-		    tp ? &tp->t_inpcb->inp_route6 : NULL,
+		    tp ? &tp->t_inpcb->inp_route : NULL,
 		    0, NULL,
-		    tp ? tp->t_inpcb->inp_seclevel : NULL);
+		    tp ? &tp->t_inpcb->inp_seclevel : NULL);
 		break;
 #endif /* INET6 */
 	case AF_INET:
@@ -412,7 +416,7 @@ tcp_respond(struct tcpcb *tp, caddr_t template, struct tcphdr *th0,
 		ip_output(m, NULL,
 		    tp ? &tp->t_inpcb->inp_route : NULL,
 		    ip_mtudisc ? IP_MTUDISC : 0, NULL,
-		    tp ? tp->t_inpcb->inp_seclevel : NULL, 0);
+		    tp ? &tp->t_inpcb->inp_seclevel : NULL, 0);
 		break;
 	}
 }
@@ -460,21 +464,15 @@ tcp_newtcpcb(struct inpcb *inp, int wait)
 	tp->t_pmtud_mss_acked = 0;
 
 #ifdef INET6
-	/* we disallow IPv4 mapped address completely. */
-	if ((inp->inp_flags & INP_IPV6) == 0)
-		tp->pf = PF_INET;
-	else
+	if (ISSET(inp->inp_flags, INP_IPV6)) {
 		tp->pf = PF_INET6;
-#else
-	tp->pf = PF_INET;
-#endif
-
-#ifdef INET6
-	if (inp->inp_flags & INP_IPV6)
 		inp->inp_ipv6.ip6_hlim = ip6_defhlim;
-	else
-#endif /* INET6 */
+	} else
+#endif
+	{
+		tp->pf = PF_INET;
 		inp->inp_ip.ip_ttl = ip_defttl;
+	}
 
 	inp->inp_ppcb = (caddr_t)tp;
 	return (tp);
@@ -674,7 +672,7 @@ tcp6_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *d)
 		 * corresponding to the address in the ICMPv6 message
 		 * payload.
 		 */
-		inp = in6_pcblookup(&tcbtable, &sa6->sin6_addr,
+		inp = in6_pcblookup(&tcb6table, &sa6->sin6_addr,
 		    th.th_dport, &sa6_src->sin6_addr, th.th_sport, rdomain);
 		if (cmd == PRC_MSGSIZE) {
 			/*
@@ -698,11 +696,11 @@ tcp6_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *d)
 		} else if (inet6ctlerrmap[cmd] == EHOSTUNREACH ||
 		    inet6ctlerrmap[cmd] == ENETUNREACH ||
 		    inet6ctlerrmap[cmd] == EHOSTDOWN)
-			syn_cache_unreach((struct sockaddr *)sa6_src,
-			    sa, &th, rdomain);
+			syn_cache_unreach(sin6tosa_const(sa6_src), sa, &th,
+			    rdomain);
 		in_pcbunref(inp);
 	} else {
-		in6_pcbnotify(&tcbtable, sa6, 0,
+		in6_pcbnotify(&tcb6table, sa6, 0,
 		    sa6_src, 0, rdomain, cmd, NULL, notify);
 	}
 }
@@ -833,7 +831,7 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 		}
 		in_pcbunref(inp);
 	} else
-		in_pcbnotifyall(&tcbtable, sa, rdomain, errno, notify);
+		in_pcbnotifyall(&tcbtable, satosin(sa), rdomain, errno, notify);
 }
 
 
@@ -844,7 +842,7 @@ tcp_ctlinput(int cmd, struct sockaddr *sa, u_int rdomain, void *v)
 void
 tcp6_mtudisc_callback(struct sockaddr_in6 *sin6, u_int rdomain)
 {
-	in6_pcbnotify(&tcbtable, sin6, 0,
+	in6_pcbnotify(&tcb6table, sin6, 0,
 	    &sa6_any, 0, rdomain, PRC_MSGSIZE, NULL, tcp_mtudisc);
 }
 #endif /* INET6 */

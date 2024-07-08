@@ -3,23 +3,18 @@
 # arm-specific libcrypto build rules
 
 # aes
-SRCS+= aes_cbc.c 
 CFLAGS+= -DAES_ASM
 SSLASM+= aes aes-armv4
-# bf
-SRCS+= bf_enc.c
+CFLAGS+= -DHAVE_AES_SET_ENCRYPT_KEY_INTERNAL
+CFLAGS+= -DHAVE_AES_SET_DECRYPT_KEY_INTERNAL
+CFLAGS+= -DHAVE_AES_ENCRYPT_INTERNAL
+CFLAGS+= -DHAVE_AES_DECRYPT_INTERNAL
 # bn
 CFLAGS+= -DOPENSSL_BN_ASM_MONT
 SSLASM+= bn armv4-mont
-# camellia
-SRCS+= camellia.c cmll_cbc.c cmll_misc.c
-# des
-SRCS+= des_enc.c fcrypt_b.c
 # modes
 CFLAGS+= -DGHASH_ASM
 SSLASM+= modes ghash-armv4
-# rc4
-SRCS+= rc4_enc.c rc4_skey.c
 # sha
 CFLAGS+= -DSHA1_ASM
 SSLASM+= sha sha1-armv4-large
@@ -27,8 +22,6 @@ CFLAGS+= -DSHA256_ASM
 SSLASM+= sha sha256-armv4
 CFLAGS+= -DSHA512_ASM
 SSLASM+= sha sha512-armv4
-# whrlpool
-SRCS+= wp_block.c
 
 .for dir f in ${SSLASM}
 SRCS+=	${f}.S

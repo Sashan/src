@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.144 2023/08/23 01:55:47 cheloha Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.147 2024/06/09 21:15:29 jca Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -180,7 +180,7 @@ struct cpu_info {
 	uint32_t	ci_softpending;		/* pending soft interrupts */
 	int		ci_clock_started;
 	volatile int	ci_clock_deferred;	/* clock interrupt postponed */
-	struct clockintr_queue
+	struct clockqueue
 			ci_queue;
 
 	struct pmap	*ci_curpmap;
@@ -200,7 +200,7 @@ struct cpu_info {
 #endif
 #ifdef GPROF
 	struct gmonparam *ci_gmon;
-	struct clockintr *ci_gmonclock;
+	struct clockintr ci_gmonclock;
 #endif
 	char		ci_panicbuf[512];
 };
@@ -258,7 +258,7 @@ void	smp_rendezvous_cpus(unsigned long, void (*)(void *), void *arg);
 #define get_cpu_info(i)			(&cpu_info_primary)
 #endif
 
-#define CPU_BUSY_CYCLE()	do {} while (0)
+#define CPU_BUSY_CYCLE()	__asm volatile ("" ::: "memory")
 
 extern void (*md_initclock)(void);
 extern void (*md_startclock)(struct cpu_info *);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: crypto_init.c,v 1.15 2024/01/07 19:59:32 tb Exp $ */
+/*	$OpenBSD: crypto_init.c,v 1.21 2024/04/10 14:51:02 beck Exp $ */
 /*
  * Copyright (c) 2018 Bob Beck <beck@openbsd.org>
  *
@@ -37,6 +37,12 @@ static pthread_once_t crypto_init_once = PTHREAD_ONCE_INIT;
 static pthread_t crypto_init_thread;
 static int crypto_init_cleaned_up;
 
+void
+OPENSSL_init(void)
+{
+}
+LCRYPTO_ALIAS(OPENSSL_init);
+
 static void
 OPENSSL_init_crypto_internal(void)
 {
@@ -44,8 +50,6 @@ OPENSSL_init_crypto_internal(void)
 
 	OPENSSL_cpuid_setup();
 	ERR_load_crypto_strings();
-	OpenSSL_add_all_ciphers();
-	OpenSSL_add_all_digests();
 }
 
 int
@@ -83,7 +87,6 @@ OPENSSL_cleanup(void)
 	CRYPTO_cleanup_all_ex_data();
 	EVP_cleanup();
 
-	X509V3_EXT_cleanup();
 	X509_VERIFY_PARAM_table_cleanup();
 
 	x509_issuer_cache_free();
@@ -91,3 +94,28 @@ OPENSSL_cleanup(void)
 	crypto_init_cleaned_up = 1;
 }
 LCRYPTO_ALIAS(OPENSSL_cleanup);
+
+void
+OpenSSL_add_all_ciphers(void)
+{
+}
+LCRYPTO_ALIAS(OpenSSL_add_all_ciphers);
+
+void
+OpenSSL_add_all_digests(void)
+{
+}
+LCRYPTO_ALIAS(OpenSSL_add_all_digests);
+
+void
+OPENSSL_add_all_algorithms_noconf(void)
+{
+}
+LCRYPTO_ALIAS(OPENSSL_add_all_algorithms_noconf);
+
+void
+OPENSSL_add_all_algorithms_conf(void)
+{
+	OPENSSL_config(NULL);
+}
+LCRYPTO_ALIAS(OPENSSL_add_all_algorithms_conf);

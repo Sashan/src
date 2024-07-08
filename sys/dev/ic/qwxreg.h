@@ -1,4 +1,4 @@
-/*	$OpenBSD: qwxreg.h,v 1.1 2023/12/28 17:36:29 stsp Exp $	*/
+/*	$OpenBSD: qwxreg.h,v 1.7 2024/02/21 14:40:50 kevlo Exp $	*/
 
 /*
  * Copyright (c) 2021-2022, Qualcomm Innovation Center, Inc.
@@ -37,6 +37,16 @@
 /*
  * core.h
  */
+
+#define ATH11K_TX_MGMT_NUM_PENDING_MAX	512
+
+#define ATH11K_TX_MGMT_TARGET_MAX_SUPPORT_WMI 64
+
+/* Pending management packets threshold for dropping probe responses */
+#define ATH11K_PRB_RSP_DROP_THRESHOLD ((ATH11K_TX_MGMT_TARGET_MAX_SUPPORT_WMI * 3) / 4)
+
+#define ATH11K_INVALID_HW_MAC_ID	0xFF
+#define ATH11K_CONNECTION_LOSS_HZ	(3 * HZ)
 
 enum ath11k_hw_rev {
 	ATH11K_HW_IPQ8074,
@@ -2911,7 +2921,7 @@ struct wmi_vdev_start_req_arg {
 };
 
 struct peer_create_params {
-	const uint8_t *peer_addr;
+	uint8_t *peer_addr;
 	uint32_t peer_type;
 	uint32_t vdev_id;
 };
@@ -3857,12 +3867,6 @@ struct wmi_scan_prob_req_oui_cmd {
 #define WMI_TX_PARAMS_DWORD1_FRAME_TYPE		BIT(20)
 #define WMI_TX_PARAMS_DWORD1_RSVD		GENMASK(31, 21)
 
-struct wmi_mgmt_send_params {
-	uint32_t tlv_header;
-	uint32_t tx_params_dword0;
-	uint32_t tx_params_dword1;
-};
-
 struct wmi_mgmt_send_cmd {
 	uint32_t tlv_header;
 	uint32_t vdev_id;
@@ -3874,9 +3878,13 @@ struct wmi_mgmt_send_cmd {
 	uint32_t buf_len;
 	uint32_t tx_params_valid;
 
-	/* This TLV is followed by struct wmi_mgmt_frame */
-
-	/* Followed by struct wmi_mgmt_send_params */
+	/*
+	 * Followed by struct wmi_tlv and buf_len bytes of frame data with
+	 * buf_len <= WMI_MGMT_SEND_DOWNLD_LEN, which may be exceeded by
+	 * frame_len. The full frame is mapped at paddr_lo/hi.
+	 * Presumably the idea is that small frames can skip the extra DMA
+	 * transfer of frame data after the command has been transferred.
+	 */
 } __packed;
 
 struct wmi_sta_powersave_mode_cmd {
@@ -6919,11 +6927,6 @@ enum ath11k_qmi_bdf_type {
 
 #define HAL_SHADOW_REG(sc, x) (HAL_SHADOW_BASE_ADDR(sc) + (4 * (x)))
 
-/* SRNG registers are split into two groups R0 and R2 */
-#define HAL_SRNG_REG_GRP_R0	0
-#define HAL_SRNG_REG_GRP_R2	1
-#define HAL_SRNG_NUM_REG_GRP    2
-
 enum hal_srng_ring_id {
 	HAL_SRNG_RING_ID_REO2SW1 = 0,
 	HAL_SRNG_RING_ID_REO2SW2,
@@ -8257,6 +8260,85 @@ struct hal_reo_cmd_hdr {
 	uint32_t info0;
 } __packed;
 
+
+#define HAL_SRNG_DESC_LOOP_CNT		0xf0000000
+
+#define HAL_REO_CMD_FLG_NEED_STATUS		BIT(0)
+#define HAL_REO_CMD_FLG_STATS_CLEAR		BIT(1)
+#define HAL_REO_CMD_FLG_FLUSH_BLOCK_LATER	BIT(2)
+#define HAL_REO_CMD_FLG_FLUSH_RELEASE_BLOCKING	BIT(3)
+#define HAL_REO_CMD_FLG_FLUSH_NO_INVAL		BIT(4)
+#define HAL_REO_CMD_FLG_FLUSH_FWD_ALL_MPDUS	BIT(5)
+#define HAL_REO_CMD_FLG_FLUSH_ALL		BIT(6)
+#define HAL_REO_CMD_FLG_UNBLK_RESOURCE		BIT(7)
+#define HAL_REO_CMD_FLG_UNBLK_CACHE		BIT(8)
+
+/* Should be matching with HAL_REO_UPD_RX_QUEUE_INFO0_UPD_* feilds */
+#define HAL_REO_CMD_UPD0_RX_QUEUE_NUM		BIT(8)
+#define HAL_REO_CMD_UPD0_VLD			BIT(9)
+#define HAL_REO_CMD_UPD0_ALDC			BIT(10)
+#define HAL_REO_CMD_UPD0_DIS_DUP_DETECTION	BIT(11)
+#define HAL_REO_CMD_UPD0_SOFT_REORDER_EN	BIT(12)
+#define HAL_REO_CMD_UPD0_AC			BIT(13)
+#define HAL_REO_CMD_UPD0_BAR			BIT(14)
+#define HAL_REO_CMD_UPD0_RETRY			BIT(15)
+#define HAL_REO_CMD_UPD0_CHECK_2K_MODE		BIT(16)
+#define HAL_REO_CMD_UPD0_OOR_MODE		BIT(17)
+#define HAL_REO_CMD_UPD0_BA_WINDOW_SIZE		BIT(18)
+#define HAL_REO_CMD_UPD0_PN_CHECK		BIT(19)
+#define HAL_REO_CMD_UPD0_EVEN_PN		BIT(20)
+#define HAL_REO_CMD_UPD0_UNEVEN_PN		BIT(21)
+#define HAL_REO_CMD_UPD0_PN_HANDLE_ENABLE	BIT(22)
+#define HAL_REO_CMD_UPD0_PN_SIZE		BIT(23)
+#define HAL_REO_CMD_UPD0_IGNORE_AMPDU_FLG	BIT(24)
+#define HAL_REO_CMD_UPD0_SVLD			BIT(25)
+#define HAL_REO_CMD_UPD0_SSN			BIT(26)
+#define HAL_REO_CMD_UPD0_SEQ_2K_ERR		BIT(27)
+#define HAL_REO_CMD_UPD0_PN_ERR			BIT(28)
+#define HAL_REO_CMD_UPD0_PN_VALID		BIT(29)
+#define HAL_REO_CMD_UPD0_PN			BIT(30)
+
+/* Should be matching with HAL_REO_UPD_RX_QUEUE_INFO1_* feilds */
+#define HAL_REO_CMD_UPD1_VLD			BIT(16)
+#define HAL_REO_CMD_UPD1_ALDC			GENMASK(18, 17)
+#define HAL_REO_CMD_UPD1_DIS_DUP_DETECTION	BIT(19)
+#define HAL_REO_CMD_UPD1_SOFT_REORDER_EN	BIT(20)
+#define HAL_REO_CMD_UPD1_AC			GENMASK(22, 21)
+#define HAL_REO_CMD_UPD1_BAR			BIT(23)
+#define HAL_REO_CMD_UPD1_RETRY			BIT(24)
+#define HAL_REO_CMD_UPD1_CHECK_2K_MODE		BIT(25)
+#define HAL_REO_CMD_UPD1_OOR_MODE		BIT(26)
+#define HAL_REO_CMD_UPD1_PN_CHECK		BIT(27)
+#define HAL_REO_CMD_UPD1_EVEN_PN		BIT(28)
+#define HAL_REO_CMD_UPD1_UNEVEN_PN		BIT(29)
+#define HAL_REO_CMD_UPD1_PN_HANDLE_ENABLE	BIT(30)
+#define HAL_REO_CMD_UPD1_IGNORE_AMPDU_FLG	BIT(31)
+
+/* Should be matching with HAL_REO_UPD_RX_QUEUE_INFO2_* feilds */
+#define HAL_REO_CMD_UPD2_SVLD			BIT(10)
+#define HAL_REO_CMD_UPD2_SSN			GENMASK(22, 11)
+#define HAL_REO_CMD_UPD2_SEQ_2K_ERR		BIT(23)
+#define HAL_REO_CMD_UPD2_PN_ERR			BIT(24)
+
+#define HAL_REO_DEST_RING_CTRL_HASH_RING_MAP	GENMASK(31, 8)
+
+struct ath11k_hal_reo_cmd {
+	uint32_t addr_lo;
+	uint32_t flag;
+	uint32_t upd0;
+	uint32_t upd1;
+	uint32_t upd2;
+	uint32_t pn[4];
+	uint16_t rx_queue_num;
+	uint16_t min_rel;
+	uint16_t min_fwd;
+	uint8_t addr_hi;
+	uint8_t ac_list;
+	uint8_t blocking_idx;
+	uint16_t ba_window_size;
+	uint8_t pn_size;
+};
+
 #define HAL_REO_GET_QUEUE_STATS_INFO0_QUEUE_ADDR_HI	GENMASK(7, 0)
 #define HAL_REO_GET_QUEUE_STATS_INFO0_CLEAR_STATS	BIT(8)
 
@@ -9516,6 +9598,14 @@ enum hal_reo_exec_status {
 #define HAL_REO_STATUS_HDR_INFO0_EXEC_TIME	GENMASK(25, 16)
 #define HAL_REO_STATUS_HDR_INFO0_EXEC_STATUS	GENMASK(27, 26)
 
+#define HAL_HASH_ROUTING_RING_TCL 0
+#define HAL_HASH_ROUTING_RING_SW1 1
+#define HAL_HASH_ROUTING_RING_SW2 2
+#define HAL_HASH_ROUTING_RING_SW3 3
+#define HAL_HASH_ROUTING_RING_SW4 4
+#define HAL_HASH_ROUTING_RING_REL 5
+#define HAL_HASH_ROUTING_RING_FW  6
+
 struct hal_reo_status_hdr {
 	uint32_t info0;
 	uint32_t timestamp;
@@ -9861,6 +9951,11 @@ struct hal_reo_desc_thresh_reached_status {
  *		A count value that indicates the number of times the producer of
  *		entries into this Ring has looped around the ring.
  */
+
+#define REO_QUEUE_DESC_MAGIC_DEBUG_PATTERN_0 0xDDBEEF
+#define REO_QUEUE_DESC_MAGIC_DEBUG_PATTERN_1 0xADBEEF
+#define REO_QUEUE_DESC_MAGIC_DEBUG_PATTERN_2 0xBDBEEF
+#define REO_QUEUE_DESC_MAGIC_DEBUG_PATTERN_3 0xCDBEEF
 
 #define HAL_TX_ADDRX_EN			1
 #define HAL_TX_ADDRY_EN			2
@@ -10324,6 +10419,24 @@ enum rx_desc_sw_frame_grp_id {
 	RX_DESC_SW_FRAME_GRP_ID_CTRL_1111,
 	RX_DESC_SW_FRAME_GRP_ID_UNSUPPORTED,
 	RX_DESC_SW_FRAME_GRP_ID_PHY_ERR,
+};
+
+#define DP_MAX_NWIFI_HDR_LEN	30
+
+#define DP_RX_MPDU_ERR_FCS			BIT(0)
+#define DP_RX_MPDU_ERR_DECRYPT			BIT(1)
+#define DP_RX_MPDU_ERR_TKIP_MIC			BIT(2)
+#define DP_RX_MPDU_ERR_AMSDU_ERR		BIT(3)
+#define DP_RX_MPDU_ERR_OVERFLOW			BIT(4)
+#define DP_RX_MPDU_ERR_MSDU_LEN			BIT(5)
+#define DP_RX_MPDU_ERR_MPDU_LEN			BIT(6)
+#define DP_RX_MPDU_ERR_UNENCRYPTED_FRAME	BIT(7)
+
+enum dp_rx_decap_type {
+	DP_RX_DECAP_TYPE_RAW,
+	DP_RX_DECAP_TYPE_NATIVE_WIFI,
+	DP_RX_DECAP_TYPE_ETHERNET2_DIX,
+	DP_RX_DECAP_TYPE_8023,
 };
 
 enum rx_desc_decap_type {

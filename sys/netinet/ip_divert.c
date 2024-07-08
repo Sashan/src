@@ -1,4 +1,4 @@
-/*      $OpenBSD: ip_divert.c,v 1.92 2023/09/16 09:33:27 mpi Exp $ */
+/*      $OpenBSD: ip_divert.c,v 1.95 2024/03/05 09:45:13 bluhm Exp $ */
 
 /*
  * Copyright (c) 2009 Michele Marchetto <michele@openbsd.org>
@@ -67,6 +67,7 @@ const struct pr_usrreqs divert_usrreqs = {
 	.pru_detach	= divert_detach,
 	.pru_lock	= divert_lock,
 	.pru_unlock	= divert_unlock,
+	.pru_locked	= divert_locked,
 	.pru_bind	= divert_bind,
 	.pru_shutdown	= divert_shutdown,
 	.pru_send	= divert_send,
@@ -99,21 +100,19 @@ divert_output(struct inpcb *inp, struct mbuf *m, struct mbuf *nam,
 	if ((error = in_nam2sin(nam, &sin)))
 		goto fail;
 
-	/* Do basic sanity checks. */
-	if (m->m_pkthdr.len < sizeof(struct ip))
+	if (m->m_pkthdr.len > IP_MAXPACKET) {
+		error = EMSGSIZE;
 		goto fail;
-	if ((m = m_pullup(m, sizeof(struct ip))) == NULL) {
-		/* m_pullup() has freed the mbuf, so just return. */
-		divstat_inc(divs_errors);
-		return (ENOBUFS);
 	}
+
+	m = rip_chkhdr(m, NULL);
+	if (m == NULL) {
+		error = EINVAL;
+		goto fail;
+	}
+
 	ip = mtod(m, struct ip *);
-	if (ip->ip_v != IPVERSION)
-		goto fail;
 	off = ip->ip_hl << 2;
-	if (off < sizeof(struct ip) || ntohs(ip->ip_len) < off ||
-	    m->m_pkthdr.len < ntohs(ip->ip_len))
-		goto fail;
 
 	dir = (sin->sin_addr.s_addr == INADDR_ANY ? PF_OUT : PF_IN);
 
@@ -134,8 +133,10 @@ divert_output(struct inpcb *inp, struct mbuf *m, struct mbuf *nam,
 		min_hdrlen = 0;
 		break;
 	}
-	if (min_hdrlen && m->m_pkthdr.len < off + min_hdrlen)
+	if (min_hdrlen && m->m_pkthdr.len < off + min_hdrlen) {
+		error = EINVAL;
 		goto fail;
+	}
 
 	m->m_pkthdr.pf.flags |= PF_TAG_DIVERTED_PACKET;
 
@@ -180,7 +181,7 @@ divert_output(struct inpcb *inp, struct mbuf *m, struct mbuf *nam,
 fail:
 	m_freem(m);
 	divstat_inc(divs_errors);
-	return (error ? error : EINVAL);
+	return (error);
 }
 
 void
@@ -240,14 +241,14 @@ divert_packet(struct mbuf *m, int dir, u_int16_t divert_port)
 		in_proto_cksum_out(m, NULL);
 	}
 
-	mtx_enter(&inp->inp_mtx);
 	so = inp->inp_socket;
+	mtx_enter(&so->so_rcv.sb_mtx);
 	if (sbappendaddr(so, &so->so_rcv, sintosa(&sin), m, NULL) == 0) {
-		mtx_leave(&inp->inp_mtx);
+		mtx_leave(&so->so_rcv.sb_mtx);
 		divstat_inc(divs_fullsock);
 		goto bad;
 	}
-	mtx_leave(&inp->inp_mtx);
+	mtx_leave(&so->so_rcv.sb_mtx);
 	sorwakeup(so);
 
 	in_pcbunref(inp);
@@ -311,6 +312,14 @@ divert_unlock(struct socket *so)
 
 	NET_ASSERT_LOCKED();
 	mtx_leave(&inp->inp_mtx);
+}
+
+int
+divert_locked(struct socket *so)
+{
+	struct inpcb *inp = sotoinpcb(so);
+
+	return mtx_owned(&inp->inp_mtx);
 }
 
 int

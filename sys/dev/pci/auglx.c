@@ -1,4 +1,4 @@
-/*      $OpenBSD: auglx.c,v 1.23 2022/10/26 20:19:08 kn Exp $	*/
+/*      $OpenBSD: auglx.c,v 1.25 2024/05/13 01:15:51 jsg Exp $	*/
 
 /*
  * Copyright (c) 2008 Marc Balmer <mbalmer@openbsd.org>
@@ -227,7 +227,6 @@ int auglx_trigger_output(void *, void *, void *, int, void (*)(void *),
     void *, struct audio_params *);
 int auglx_trigger_input(void *, void *, void *, int, void (*)(void *),
     void *, struct audio_params *);
-int auglx_alloc_cdata(struct auglx_softc *);
 int auglx_alloc_prd(struct auglx_softc *, size_t, struct auglx_ring *);
 void auglx_free_prd(struct auglx_softc *sc, struct auglx_ring *bm);
 int auglx_allocmem(struct auglx_softc *, size_t, size_t, struct auglx_dma *);
@@ -669,7 +668,8 @@ auglx_trigger_output(void *v, void *start, void *end, int blksize,
 	DPRINTF(AUGLX_DBG_DMA, ("%s: trigger_output, %p 0x%08x bytes, "
 	    "blksize 0x%04x\n", sc->sc_dev.dv_xname, start, size, blksize));
 
-	for (p = sc->sc_dmas; p && p->addr != start; p = p->next);
+	for (p = sc->sc_dmas; p && p->addr != start; p = p->next)
+		;
 	if (!p) {
 		DPRINTF(AUGLX_DBG_DMA, ("%s dma reg not found\n",
 		    sc->sc_dev.dv_xname));
@@ -730,7 +730,8 @@ auglx_trigger_input(void *v, void *start, void *end, int blksize,
 	DPRINTF(AUGLX_DBG_DMA, ("%s: trigger_input, %p 0x%08x bytes, "
 	    "blksize 0x%04x\n", sc->sc_dev.dv_xname, start, size, blksize));
 
-	for (p = sc->sc_dmas; p && p->addr != start; p = p->next);
+	for (p = sc->sc_dmas; p && p->addr != start; p = p->next)
+		;
 	if (!p) {
 		DPRINTF(AUGLX_DBG_DMA, ("%s dma reg not found\n",
 		    sc->sc_dev.dv_xname));

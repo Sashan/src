@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sig.c,v 1.320 2023/10/06 08:58:13 claudio Exp $	*/
+/*	$OpenBSD: kern_sig.c,v 1.330 2024/06/03 12:48:25 claudio Exp $	*/
 /*	$NetBSD: kern_sig.c,v 1.54 1996/04/22 01:38:32 christos Exp $	*/
 
 /*
@@ -472,10 +472,10 @@ sys_sigprocmask(struct proc *p, void *v, register_t *retval)
 
 	switch (SCARG(uap, how)) {
 	case SIG_BLOCK:
-		atomic_setbits_int(&p->p_sigmask, mask);
+		SET(p->p_sigmask, mask);
 		break;
 	case SIG_UNBLOCK:
-		atomic_clearbits_int(&p->p_sigmask, mask);
+		CLR(p->p_sigmask, mask);
 		break;
 	case SIG_SETMASK:
 		p->p_sigmask = mask;
@@ -504,8 +504,8 @@ dosigsuspend(struct proc *p, sigset_t newmask)
 	KASSERT(p == curproc);
 
 	p->p_oldmask = p->p_sigmask;
-	atomic_setbits_int(&p->p_flag, P_SIGSUSPEND);
 	p->p_sigmask = newmask;
+	atomic_setbits_int(&p->p_flag, P_SIGSUSPEND);
 }
 
 /*
@@ -770,7 +770,7 @@ void
 postsig_done(struct proc *p, int signum, sigset_t catchmask, int reset)
 {
 	p->p_ru.ru_nsignals++;
-	atomic_setbits_int(&p->p_sigmask, catchmask);
+	SET(p->p_sigmask, catchmask);
 	if (reset != 0) {
 		sigset_t mask = sigmask(signum);
 		struct sigacts *ps = p->p_p->ps_sigacts;
@@ -799,6 +799,11 @@ trapsignal(struct proc *p, int signum, u_long trapno, int code,
 
 	switch (signum) {
 	case SIGILL:
+		if (code == ILL_BTCFI) {
+			pr->ps_acflag |= ABTCFI;
+			break;
+		}
+		/* FALLTHROUGH */
 	case SIGBUS:
 	case SIGSEGV:
 		pr->ps_acflag |= ATRAP;
@@ -838,14 +843,12 @@ trapsignal(struct proc *p, int signum, u_long trapno, int code,
 		 */
 		if (((pr->ps_flags & (PS_TRACED | PS_PPWAIT)) == PS_TRACED) &&
 		    signum != SIGKILL && (p->p_sigmask & mask) != 0) {
-			int s;
-
 			single_thread_set(p, SINGLE_SUSPEND | SINGLE_NOWAIT);
 			pr->ps_xsig = signum;
 
-			SCHED_LOCK(s);
+			SCHED_LOCK();
 			proc_stop(p, 1);
-			SCHED_UNLOCK(s);
+			SCHED_UNLOCK();
 
 			signum = pr->ps_xsig;
 			single_thread_clear(p, 0);
@@ -915,9 +918,9 @@ psignal(struct proc *p, int signum)
 void
 ptsignal(struct proc *p, int signum, enum signal_type type)
 {
-	int s, prop;
-	sig_t action;
-	int mask;
+	int prop;
+	sig_t action, altaction = SIG_DFL;
+	sigset_t mask, sigmask;
 	int *siglist;
 	struct process *pr = p->p_p;
 	struct proc *q;
@@ -935,8 +938,11 @@ ptsignal(struct proc *p, int signum, enum signal_type type)
 		return;
 
 	mask = sigmask(signum);
+	sigmask = READ_ONCE(p->p_sigmask);
 
 	if (type == SPROCESS) {
+		sigset_t tmpmask;
+
 		/* Accept SIGKILL to coredumping processes */
 		if (pr->ps_flags & PS_COREDUMP && signum == SIGKILL) {
 			atomic_setbits_int(&pr->ps_siglist, mask);
@@ -948,10 +954,12 @@ ptsignal(struct proc *p, int signum, enum signal_type type)
 		 * immediately (it's unblocked) then have it take it.
 		 */
 		q = curproc;
-		if (q != NULL && q->p_p == pr && (q->p_flag & P_WEXIT) == 0 &&
-		    (q->p_sigmask & mask) == 0)
+		tmpmask = READ_ONCE(q->p_sigmask);
+		if (q->p_p == pr && (q->p_flag & P_WEXIT) == 0 &&
+		    (tmpmask & mask) == 0) {
 			p = q;
-		else {
+			sigmask = tmpmask;
+		} else {
 			/*
 			 * A process-wide signal can be diverted to a
 			 * different thread that's in sigwait() for this
@@ -962,16 +970,19 @@ ptsignal(struct proc *p, int signum, enum signal_type type)
 			 * main thread.
 			 */
 			TAILQ_FOREACH(q, &pr->ps_threads, p_thr_link) {
+
 				/* ignore exiting threads */
 				if (q->p_flag & P_WEXIT)
 					continue;
 
 				/* skip threads that have the signal blocked */
-				if ((q->p_sigmask & mask) != 0)
+				tmpmask = READ_ONCE(q->p_sigmask);
+				if ((tmpmask & mask) != 0)
 					continue;
 
 				/* okay, could send to this thread */
 				p = q;
+				sigmask = tmpmask;
 
 				/*
 				 * sigsuspend, sigwait, ppoll/pselect, etc?
@@ -1011,8 +1022,10 @@ ptsignal(struct proc *p, int signum, enum signal_type type)
 
 		if (sigignore & mask)
 			return;
-		if (p->p_sigmask & mask) {
+		if (sigmask & mask) {
 			action = SIG_HOLD;
+			if (sigcatch & mask)
+				altaction = SIG_CATCH;
 		} else if (sigcatch & mask) {
 			action = SIG_CATCH;
 		} else {
@@ -1037,15 +1050,8 @@ ptsignal(struct proc *p, int signum, enum signal_type type)
 	 * marked at thread level.
 	 */
 	siglist = (type == SPROCESS) ? &pr->ps_siglist : &p->p_siglist;
-	if (prop & SA_CONT) {
+	if (prop & (SA_CONT | SA_STOP))
 		siglist = &p->p_siglist;
-		atomic_clearbits_int(siglist, STOPSIGMASK);
-	}
-	if (prop & SA_STOP) {
-		siglist = &p->p_siglist;
-		atomic_clearbits_int(siglist, CONTSIGMASK);
-		atomic_clearbits_int(&p->p_flag, P_CONTINUED);
-	}
 
 	/*
 	 * XXX delay processing of SA_STOP signals unless action == SIG_DFL?
@@ -1055,17 +1061,7 @@ ptsignal(struct proc *p, int signum, enum signal_type type)
 			if (q != p)
 				ptsignal(q, signum, SPROPAGATED);
 
-	/*
-	 * Defer further processing for signals which are held,
-	 * except that stopped processes must be continued by SIGCONT.
-	 */
-	if (action == SIG_HOLD && ((prop & SA_CONT) == 0 ||
-	    p->p_stat != SSTOP)) {
-		atomic_setbits_int(siglist, mask);
-		return;
-	}
-
-	SCHED_LOCK(s);
+	SCHED_LOCK();
 
 	switch (p->p_stat) {
 
@@ -1085,6 +1081,36 @@ ptsignal(struct proc *p, int signum, enum signal_type type)
 		 */
 		if (pr->ps_flags & PS_TRACED)
 			goto run;
+
+		/*
+		 * Recheck sigmask before waking up the process,
+		 * there is a chance that while sending the signal
+		 * the process changed sigmask and went to sleep.
+		 */
+		sigmask = READ_ONCE(p->p_sigmask);
+		if (sigmask & mask)
+			goto out;
+		else if (action == SIG_HOLD) {
+			/* signal got unmasked, get proper action */
+			action = altaction;
+
+			if (action == SIG_DFL) {
+				if (prop & SA_KILL && pr->ps_nice > NZERO)
+					 pr->ps_nice = NZERO;
+
+				/*
+				 * Discard tty stop signals sent to an
+				 * orphaned process group, see above.
+				 */
+				if (prop & SA_TTYSTOP &&
+				    pr->ps_pgrp->pg_jobc == 0) {
+					mask = 0;
+					prop = 0;
+					goto out;
+				}
+			}
+		}
+
 		/*
 		 * If SIGCONT is default (or ignored) and process is
 		 * asleep, we are finished; the process should not
@@ -1148,7 +1174,7 @@ ptsignal(struct proc *p, int signum, enum signal_type type)
 			atomic_clearbits_int(&p->p_flag, P_SUSPSIG);
 			wakeparent = 1;
 			if (action == SIG_DFL)
-				atomic_clearbits_int(siglist, mask);
+				mask = 0;
 			if (action == SIG_CATCH)
 				goto runfast;
 			if (p->p_wchan == NULL)
@@ -1157,6 +1183,13 @@ ptsignal(struct proc *p, int signum, enum signal_type type)
 			p->p_stat = SSLEEP;
 			goto out;
 		}
+
+		/*
+		 * Defer further processing for signals which are held,
+		 * except that stopped processes must be continued by SIGCONT.
+		 */
+		if (action == SIG_HOLD)
+			goto out;
 
 		if (prop & SA_STOP) {
 			/*
@@ -1178,6 +1211,9 @@ ptsignal(struct proc *p, int signum, enum signal_type type)
 		goto out;
 
 	case SONPROC:
+		if (action == SIG_HOLD)
+			goto out;
+
 		/* set siglist before issuing the ast */
 		atomic_setbits_int(siglist, mask);
 		mask = 0;
@@ -1200,12 +1236,21 @@ runfast:
 	if (p->p_usrpri > PUSER)
 		p->p_usrpri = PUSER;
 run:
+	unsleep(p);
 	setrunnable(p);
 out:
 	/* finally adjust siglist */
 	if (mask)
 		atomic_setbits_int(siglist, mask);
-	SCHED_UNLOCK(s);
+	if (prop & SA_CONT) {
+		atomic_clearbits_int(siglist, STOPSIGMASK);
+	}
+	if (prop & SA_STOP) {
+		atomic_clearbits_int(siglist, CONTSIGMASK);
+		atomic_clearbits_int(&p->p_flag, P_CONTINUED);
+	}
+
+	SCHED_UNLOCK();
 	if (wakeparent)
 		wakeup(pr->ps_pptr);
 }
@@ -1252,7 +1297,6 @@ cursig(struct proc *p, struct sigctx *sctx)
 	struct process *pr = p->p_p;
 	int signum, mask, prop;
 	sigset_t ps_siglist;
-	int s;
 
 	KASSERT(p == curproc);
 
@@ -1293,9 +1337,9 @@ cursig(struct proc *p, struct sigctx *sctx)
 			single_thread_set(p, SINGLE_SUSPEND | SINGLE_NOWAIT);
 			pr->ps_xsig = signum;
 
-			SCHED_LOCK(s);
+			SCHED_LOCK();
 			proc_stop(p, 1);
-			SCHED_UNLOCK(s);
+			SCHED_UNLOCK();
 
 			/*
 			 * re-take the signal before releasing
@@ -1368,9 +1412,9 @@ cursig(struct proc *p, struct sigctx *sctx)
 				    prop & SA_TTYSTOP))
 					break;	/* == ignore */
 				pr->ps_xsig = signum;
-				SCHED_LOCK(s);
+				SCHED_LOCK();
 				proc_stop(p, 1);
-				SCHED_UNLOCK(s);
+				SCHED_UNLOCK();
 				break;
 			} else if (prop & SA_IGNORE) {
 				/*
@@ -1419,6 +1463,9 @@ proc_stop(struct proc *p, int sw)
 #ifdef MULTIPROCESSOR
 	SCHED_ASSERT_LOCKED();
 #endif
+	/* do not stop exiting procs */
+	if (ISSET(p->p_flag, P_WEXIT))
+		return;
 
 	p->p_stat = SSTOP;
 	atomic_clearbits_int(&pr->ps_flags, PS_WAITED);
@@ -1576,10 +1623,12 @@ sigabort(struct proc *p)
 {
 	struct sigaction sa;
 
+	KASSERT(p == curproc || panicstr || db_active);
+
 	memset(&sa, 0, sizeof sa);
 	sa.sa_handler = SIG_DFL;
 	setsigvec(p, SIGABRT, &sa);
-	atomic_clearbits_int(&p->p_sigmask, sigmask(SIGABRT));
+	CLR(p->p_sigmask, sigmask(SIGABRT));
 	psignal(p, SIGABRT);
 }
 
@@ -1592,6 +1641,8 @@ sigismasked(struct proc *p, int sig)
 {
 	struct process *pr = p->p_p;
 	int rv;
+
+	KASSERT(p == curproc);
 
 	mtx_enter(&pr->ps_mtx);
 	rv = (pr->ps_sigacts->ps_sigignore & sigmask(sig)) ||
@@ -1745,7 +1796,8 @@ out:
 
 #ifndef SMALL_KERNEL
 int
-coredump_write(void *cookie, enum uio_seg segflg, const void *data, size_t len)
+coredump_write(void *cookie, enum uio_seg segflg, const void *data, size_t len,
+    int isvnode)
 {
 	struct coredump_iostate *io = cookie;
 	off_t coffset = 0;
@@ -1766,7 +1818,7 @@ coredump_write(void *cookie, enum uio_seg segflg, const void *data, size_t len)
 		    (caddr_t)data + coffset, chunk,
 		    io->io_offset + coffset, segflg,
 		    IO_UNIT, io->io_cred, NULL, io->io_proc);
-		if (error) {
+		if (error && (error != EFAULT || !isvnode)) {
 			struct process *pr = io->io_proc->p_p;
 
 			if (error == ENOSPC)
@@ -1993,8 +2045,8 @@ userret(struct proc *p)
 	 * time for signals to post.
 	 */
 	if (p->p_flag & P_SIGSUSPEND) {
-		atomic_clearbits_int(&p->p_flag, P_SIGSUSPEND);
 		p->p_sigmask = p->p_oldmask;
+		atomic_clearbits_int(&p->p_flag, P_SIGSUSPEND);
 
 		while ((signum = cursig(p, &ctx)) != 0)
 			postsig(p, signum, &ctx);
@@ -2006,11 +2058,11 @@ userret(struct proc *p)
 }
 
 int
-single_thread_check_locked(struct proc *p, int deep, int s)
+single_thread_check_locked(struct proc *p, int deep)
 {
 	struct process *pr = p->p_p;
 
-	SCHED_ASSERT_LOCKED();
+	MUTEX_ASSERT_LOCKED(&pr->ps_mtx);
 
 	if (pr->ps_single == NULL || pr->ps_single == p)
 		return (0);
@@ -2024,19 +2076,24 @@ single_thread_check_locked(struct proc *p, int deep, int s)
 				return (EINTR);
 		}
 
-		if (atomic_dec_int_nv(&pr->ps_singlecount) == 0)
-			wakeup(&pr->ps_singlecount);
-
 		if (pr->ps_flags & PS_SINGLEEXIT) {
-			SCHED_UNLOCK(s);
+			mtx_leave(&pr->ps_mtx);
 			KERNEL_LOCK();
 			exit1(p, 0, 0, EXIT_THREAD_NOCHECK);
 			/* NOTREACHED */
 		}
 
+		if (--pr->ps_singlecnt == 0)
+			wakeup(&pr->ps_singlecnt);
+
 		/* not exiting and don't need to unwind, so suspend */
+		mtx_leave(&pr->ps_mtx);
+
+		SCHED_LOCK();
 		p->p_stat = SSTOP;
 		mi_switch();
+		SCHED_UNLOCK();
+		mtx_enter(&pr->ps_mtx);
 	} while (pr->ps_single != NULL);
 
 	return (0);
@@ -2045,11 +2102,11 @@ single_thread_check_locked(struct proc *p, int deep, int s)
 int
 single_thread_check(struct proc *p, int deep)
 {
-	int s, error;
+	int error;
 
-	SCHED_LOCK(s);
-	error = single_thread_check_locked(p, deep, s);
-	SCHED_UNLOCK(s);
+	mtx_enter(&p->p_p->ps_mtx);
+	error = single_thread_check_locked(p, deep);
+	mtx_leave(&p->p_p->ps_mtx);
 
 	return error;
 }
@@ -2068,14 +2125,14 @@ single_thread_set(struct proc *p, int flags)
 {
 	struct process *pr = p->p_p;
 	struct proc *q;
-	int error, s, mode = flags & SINGLE_MASK;
+	int error, mode = flags & SINGLE_MASK;
 
 	KASSERT(curproc == p);
 
-	SCHED_LOCK(s);
-	error = single_thread_check_locked(p, flags & SINGLE_DEEP, s);
+	mtx_enter(&pr->ps_mtx);
+	error = single_thread_check_locked(p, flags & SINGLE_DEEP);
 	if (error) {
-		SCHED_UNLOCK(s);
+		mtx_leave(&pr->ps_mtx);
 		return error;
 	}
 
@@ -2094,26 +2151,17 @@ single_thread_set(struct proc *p, int flags)
 		panic("single_thread_mode = %d", mode);
 #endif
 	}
-	pr->ps_singlecount = 0;
-	membar_producer();
 	pr->ps_single = p;
+	pr->ps_singlecnt = pr->ps_threadcnt;
+
 	TAILQ_FOREACH(q, &pr->ps_threads, p_thr_link) {
 		if (q == p)
 			continue;
-		if (q->p_flag & P_WEXIT) {
-			if (mode == SINGLE_EXIT) {
-				if (q->p_stat == SSTOP) {
-					setrunnable(q);
-					atomic_inc_int(&pr->ps_singlecount);
-				}
-			}
-			continue;
-		}
+		SCHED_LOCK();
 		atomic_setbits_int(&q->p_flag, P_SUSPSINGLE);
 		switch (q->p_stat) {
 		case SIDL:
-		case SRUN:
-			atomic_inc_int(&pr->ps_singlecount);
+		case SDEAD:
 			break;
 		case SSLEEP:
 			/* if it's not interruptible, then just have to wait */
@@ -2121,28 +2169,33 @@ single_thread_set(struct proc *p, int flags)
 				/* merely need to suspend?  just stop it */
 				if (mode == SINGLE_SUSPEND) {
 					q->p_stat = SSTOP;
+					--pr->ps_singlecnt;
 					break;
 				}
 				/* need to unwind or exit, so wake it */
+				unsleep(q);
 				setrunnable(q);
 			}
-			atomic_inc_int(&pr->ps_singlecount);
 			break;
 		case SSTOP:
 			if (mode == SINGLE_EXIT) {
+				unsleep(q);
 				setrunnable(q);
-				atomic_inc_int(&pr->ps_singlecount);
-			}
-			break;
-		case SDEAD:
+			} else
+				--pr->ps_singlecnt;
 			break;
 		case SONPROC:
-			atomic_inc_int(&pr->ps_singlecount);
 			signotify(q);
+			/* FALLTHROUGH */
+		case SRUN:
 			break;
 		}
+		SCHED_UNLOCK();
 	}
-	SCHED_UNLOCK(s);
+
+	/* count ourselfs out */
+	--pr->ps_singlecnt;
+	mtx_leave(&pr->ps_mtx);
 
 	if ((flags & SINGLE_NOWAIT) == 0)
 		single_thread_wait(pr, 1);
@@ -2161,14 +2214,14 @@ single_thread_wait(struct process *pr, int recheck)
 	int wait;
 
 	/* wait until they're all suspended */
-	wait = pr->ps_singlecount > 0;
-	while (wait) {
-		sleep_setup(&pr->ps_singlecount, PWAIT, "suspend");
-		wait = pr->ps_singlecount > 0;
-		sleep_finish(0, wait);
+	mtx_enter(&pr->ps_mtx);
+	while ((wait = pr->ps_singlecnt > 0)) {
+		msleep_nsec(&pr->ps_singlecnt, &pr->ps_mtx, PWAIT, "suspend",
+		    INFSLP);
 		if (!recheck)
 			break;
 	}
+	mtx_leave(&pr->ps_mtx);
 
 	return wait;
 }
@@ -2178,14 +2231,14 @@ single_thread_clear(struct proc *p, int flag)
 {
 	struct process *pr = p->p_p;
 	struct proc *q;
-	int s;
 
 	KASSERT(pr->ps_single == p);
 	KASSERT(curproc == p);
 
-	SCHED_LOCK(s);
+	mtx_enter(&pr->ps_mtx);
 	pr->ps_single = NULL;
 	atomic_clearbits_int(&pr->ps_flags, PS_SINGLEUNWIND | PS_SINGLEEXIT);
+
 	TAILQ_FOREACH(q, &pr->ps_threads, p_thr_link) {
 		if (q == p || (q->p_flag & P_SUSPSINGLE) == 0)
 			continue;
@@ -2196,6 +2249,7 @@ single_thread_clear(struct proc *p, int flag)
 		 * then clearing that either makes it runnable or puts
 		 * it back into some sleep queue
 		 */
+		SCHED_LOCK();
 		if (q->p_stat == SSTOP && (q->p_flag & flag) == 0) {
 			if (q->p_wchan == NULL)
 				setrunnable(q);
@@ -2204,8 +2258,9 @@ single_thread_clear(struct proc *p, int flag)
 				q->p_stat = SSLEEP;
 			}
 		}
+		SCHED_UNLOCK();
 	}
-	SCHED_UNLOCK(s);
+	mtx_leave(&pr->ps_mtx);
 }
 
 void

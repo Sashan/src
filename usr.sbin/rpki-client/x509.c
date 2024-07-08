@@ -1,4 +1,4 @@
-/*	$OpenBSD: x509.c,v 1.75 2023/11/16 11:10:59 tb Exp $ */
+/*	$OpenBSD: x509.c,v 1.99 2024/06/10 12:44:06 tb Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
@@ -17,6 +17,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <assert.h>
 #include <err.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,11 +40,11 @@ ASN1_OBJECT	*bgpsec_oid;	/* id-kp-bgpsec-router Key Purpose */
 ASN1_OBJECT	*cnt_type_oid;	/* pkcs-9 id-contentType */
 ASN1_OBJECT	*msg_dgst_oid;	/* pkcs-9 id-messageDigest */
 ASN1_OBJECT	*sign_time_oid;	/* pkcs-9 id-signingTime */
-ASN1_OBJECT	*bin_sign_time_oid;	/* pkcs-9 id-aa-binarySigningTime */
 ASN1_OBJECT	*rsc_oid;	/* id-ct-signedChecklist */
 ASN1_OBJECT	*aspa_oid;	/* id-ct-ASPA */
 ASN1_OBJECT	*tak_oid;	/* id-ct-SignedTAL */
 ASN1_OBJECT	*geofeed_oid;	/* id-ct-geofeedCSVwithCRLF */
+ASN1_OBJECT	*spl_oid;	/* id-ct-signedPrefixList */
 
 static const struct {
 	const char	 *oid;
@@ -98,10 +99,6 @@ static const struct {
 		.ptr = &sign_time_oid,
 	},
 	{
-		.oid = "1.2.840.113549.1.9.16.2.46",
-		.ptr = &bin_sign_time_oid,
-	},
-	{
 		.oid = "1.2.840.113549.1.9.16.1.47",
 		.ptr = &geofeed_oid,
 	},
@@ -117,6 +114,10 @@ static const struct {
 		.oid = "1.2.840.113549.1.9.16.1.50",
 		.ptr = &tak_oid,
 	},
+	{
+		.oid = "1.2.840.113549.1.9.16.1.51",
+		.ptr = &spl_oid,
+	},
 };
 
 void
@@ -129,6 +130,26 @@ x509_init_oid(void)
 		if (*oid_table[i].ptr == NULL)
 			errx(1, "OBJ_txt2obj for %s failed", oid_table[i].oid);
 	}
+}
+
+/*
+ * A number of critical OpenSSL API functions can't properly indicate failure
+ * and are unreliable if the extensions aren't already cached. An old trick is
+ * to cache the extensions using an error-checked call to X509_check_purpose()
+ * with a purpose of -1. This way functions such as X509_check_ca(), X509_cmp(),
+ * X509_get_key_usage(), X509_get_extended_key_usage() won't lie.
+ *
+ * Should be called right after deserialization and is essentially free to call
+ * multiple times.
+ */
+int
+x509_cache_extensions(X509 *x509, const char *fn)
+{
+	if (X509_check_purpose(x509, -1, 0) <= 0) {
+		warnx("%s: could not cache X509v3 extensions", fn);
+		return 0;
+	}
+	return 1;
 }
 
 /*
@@ -191,18 +212,18 @@ out:
 }
 
 /*
- * Parse X509v3 subject key identifier (SKI), RFC 6487 sec. 4.8.2.
- * The SKI must be the SHA1 hash of the Subject Public Key.
+ * Validate the X509v3 subject key identifier (SKI), RFC 6487 section 4.8.2:
+ * "The SKI is a SHA-1 hash of the value of the DER-encoded ASN.1 BIT STRING of
+ * the Subject Public Key, as described in Section 4.2.1.2 of RFC 5280."
  * Returns the SKI formatted as hex string, or NULL if it couldn't be parsed.
  */
 int
 x509_get_ski(X509 *x, const char *fn, char **ski)
 {
-	const unsigned char	*d, *spk;
 	ASN1_OCTET_STRING	*os;
-	X509_PUBKEY		*pubkey;
-	unsigned char		 spkd[SHA_DIGEST_LENGTH];
-	int			 crit, dsz, spkz, rc = 0;
+	unsigned char		 md[EVP_MAX_MD_SIZE];
+	unsigned int		 md_len = EVP_MAX_MD_SIZE;
+	int			 crit, rc = 0;
 
 	*ski = NULL;
 	os = X509_get_ext_d2i(x, NID_subject_key_identifier, &crit, NULL);
@@ -220,36 +241,24 @@ x509_get_ski(X509 *x, const char *fn, char **ski)
 		goto out;
 	}
 
-	d = os->data;
-	dsz = os->length;
+	if (!X509_pubkey_digest(x, EVP_sha1(), md, &md_len)) {
+		warnx("%s: X509_pubkey_digest", fn);
+		goto out;
+	}
 
-	if (dsz != SHA_DIGEST_LENGTH) {
+	if (os->length < 0 || md_len != (size_t)os->length) {
 		warnx("%s: RFC 6487 section 4.8.2: SKI: "
-		    "want %d bytes SHA1 hash, have %d bytes",
-		    fn, SHA_DIGEST_LENGTH, dsz);
+		    "want %u bytes SHA1 hash, have %d bytes",
+		    fn, md_len, os->length);
 		goto out;
 	}
 
-	if ((pubkey = X509_get_X509_PUBKEY(x)) == NULL) {
-		warnx("%s: X509_get_X509_PUBKEY", fn);
-		goto out;
-	}
-	if (!X509_PUBKEY_get0_param(NULL, &spk, &spkz, NULL, pubkey)) {
-		warnx("%s: X509_PUBKEY_get0_param", fn);
-		goto out;
-	}
-
-	if (!EVP_Digest(spk, spkz, spkd, NULL, EVP_sha1(), NULL)) {
-		warnx("%s: EVP_Digest failed", fn);
-		goto out;
-	}
-
-	if (memcmp(spkd, d, dsz) != 0) {
+	if (memcmp(os->data, md, md_len) != 0) {
 		warnx("%s: SKI does not match SHA1 hash of SPK", fn);
 		goto out;
 	}
 
-	*ski = hex_encode(d, dsz);
+	*ski = hex_encode(md, md_len);
 	rc = 1;
  out:
 	ASN1_OCTET_STRING_free(os);
@@ -257,18 +266,50 @@ x509_get_ski(X509 *x, const char *fn, char **ski)
 }
 
 /*
- * Check the certificate's purpose: CA or BGPsec Router.
- * Return a member of enum cert_purpose.
+ * Check the cert's purpose: the cA bit in basic constraints distinguishes
+ * between TA/CA and EE/BGPsec router and the key usage bits must match.
+ * TAs are self-signed, CAs not self-issued, EEs have no extended key usage,
+ * BGPsec router have id-kp-bgpsec-router OID.
  */
 enum cert_purpose
 x509_get_purpose(X509 *x, const char *fn)
 {
 	BASIC_CONSTRAINTS		*bc = NULL;
 	EXTENDED_KEY_USAGE		*eku = NULL;
-	int				 crit;
+	const X509_EXTENSION		*ku;
+	int				 crit, ext_flags, i, is_ca, ku_idx;
 	enum cert_purpose		 purpose = CERT_PURPOSE_INVALID;
 
-	if (X509_check_ca(x) == 1) {
+	if (!x509_cache_extensions(x, fn))
+		goto out;
+
+	ext_flags = X509_get_extension_flags(x);
+
+	/* Key usage must be present and critical. KU bits are checked below. */
+	if ((ku_idx = X509_get_ext_by_NID(x, NID_key_usage, -1)) < 0) {
+		warnx("%s: RFC 6487, section 4.8.4: missing KeyUsage", fn);
+		goto out;
+	}
+	if ((ku = X509_get_ext(x, ku_idx)) == NULL) {
+		warnx("%s: RFC 6487, section 4.8.4: missing KeyUsage", fn);
+		goto out;
+	}
+	if (!X509_EXTENSION_get_critical(ku)) {
+		warnx("%s: RFC 6487, section 4.8.4: KeyUsage not critical", fn);
+		goto out;
+	}
+
+	/* This weird API can return 0, 1, 2, 4, 5 but can't error... */
+	if ((is_ca = X509_check_ca(x)) > 1) {
+		if (is_ca == 4)
+			warnx("%s: RFC 6487: sections 4.8.1 and 4.8.4: "
+			    "no basic constraints, but keyCertSign set", fn);
+		else
+			warnx("%s: unexpected legacy certificate", fn);
+		goto out;
+	}
+
+	if (is_ca) {
 		bc = X509_get_ext_d2i(x, NID_basic_constraints, &crit, NULL);
 		if (bc == NULL) {
 			if (crit != -1)
@@ -289,36 +330,73 @@ x509_get_purpose(X509 *x, const char *fn)
 			    "Constraint must be absent", fn);
 			goto out;
 		}
-		purpose = CERT_PURPOSE_CA;
+
+		if (X509_get_key_usage(x) != (KU_KEY_CERT_SIGN | KU_CRL_SIGN)) {
+			warnx("%s: RFC 6487 section 4.8.4: key usage violation",
+			    fn);
+			goto out;
+		}
+
+		if (X509_get_extended_key_usage(x) != UINT32_MAX) {
+			warnx("%s: RFC 6487 section 4.8.5: EKU not allowed",
+			    fn);
+			goto out;
+		}
+
+		/*
+		 * EXFLAG_SI means that issuer and subject are identical.
+		 * EXFLAG_SS is SI plus the AKI is absent or matches the SKI.
+		 * Thus, exactly the trust anchors should have EXFLAG_SS set
+		 * and we should never see EXFLAG_SI without EXFLAG_SS.
+		 */
+		if ((ext_flags & EXFLAG_SS) != 0)
+			purpose = CERT_PURPOSE_TA;
+		else if ((ext_flags & EXFLAG_SI) == 0)
+			purpose = CERT_PURPOSE_CA;
+		else
+			warnx("%s: RFC 6487, section 4.8.3: "
+			    "self-issued cert with AKI-SKI mismatch", fn);
 		goto out;
 	}
 
-	if (X509_get_extension_flags(x) & EXFLAG_BCONS) {
+	if ((ext_flags & EXFLAG_BCONS) != 0) {
 		warnx("%s: Basic Constraints ext in non-CA cert", fn);
 		goto out;
 	}
 
+	if (X509_get_key_usage(x) != KU_DIGITAL_SIGNATURE) {
+		warnx("%s: RFC 6487 section 4.8.4: KU must be digitalSignature",
+		    fn);
+		goto out;
+	}
+
+	/*
+	 * EKU is only defined for BGPsec Router certs and must be absent from
+	 * EE certs.
+	 */
 	eku = X509_get_ext_d2i(x, NID_ext_key_usage, &crit, NULL);
 	if (eku == NULL) {
 		if (crit != -1)
 			warnx("%s: error parsing EKU", fn);
 		else
-			warnx("%s: EKU: extension missing", fn);
+			purpose = CERT_PURPOSE_EE; /* EKU absent */
 		goto out;
 	}
 	if (crit != 0) {
 		warnx("%s: EKU: extension must not be marked critical", fn);
 		goto out;
 	}
-	if (sk_ASN1_OBJECT_num(eku) != 1) {
-		warnx("%s: EKU: expected 1 purpose, have %d", fn,
-		    sk_ASN1_OBJECT_num(eku));
-		goto out;
-	}
 
-	if (OBJ_cmp(bgpsec_oid, sk_ASN1_OBJECT_value(eku, 0)) == 0) {
-		purpose = CERT_PURPOSE_BGPSEC_ROUTER;
-		goto out;
+	/*
+	 * Per RFC 8209, section 3.1.3.2 the id-kp-bgpsec-router OID must be
+	 * present and others are allowed, which we don't need to recognize.
+	 * This matches RFC 5280, section 4.2.1.12.
+	 */
+	for (i = 0; i < sk_ASN1_OBJECT_num(eku); i++) {
+		if (OBJ_cmp(bgpsec_oid, sk_ASN1_OBJECT_value(eku, i)) == 0) {
+			purpose = CERT_PURPOSE_BGPSEC_ROUTER;
+			break;
+		}
 	}
 
  out:
@@ -362,7 +440,7 @@ x509_get_pubkey(X509 *x, const char *fn)
 	nid = EC_GROUP_get_curve_name(EC_KEY_get0_group(eckey));
 	if (nid != NID_X9_62_prime256v1) {
 		if ((cname = EC_curve_nid2nist(nid)) == NULL)
-			cname = OBJ_nid2sn(nid);
+			cname = nid2str(nid);
 		warnx("%s: Expected P-256, got %s", fn, cname);
 		goto out;
 	}
@@ -387,19 +465,52 @@ x509_get_pubkey(X509 *x, const char *fn)
 }
 
 /*
+ * Compute the SKI of an RSA public key in an X509_PUBKEY using SHA-1.
+ * Returns allocated hex-encoded SKI on success, NULL on failure.
+ */
+char *
+x509_pubkey_get_ski(X509_PUBKEY *pubkey, const char *fn)
+{
+	ASN1_OBJECT		*obj;
+	const unsigned char	*der;
+	int			 der_len, nid;
+	unsigned char		 md[EVP_MAX_MD_SIZE];
+	unsigned int		 md_len = EVP_MAX_MD_SIZE;
+
+	if (!X509_PUBKEY_get0_param(&obj, &der, &der_len, NULL, pubkey)) {
+		warnx("%s: X509_PUBKEY_get0_param failed", fn);
+		return NULL;
+	}
+
+	if ((nid = OBJ_obj2nid(obj)) != NID_rsaEncryption) {
+		warnx("%s: RFC 7935: wrong signature algorithm %s, want %s",
+		    fn, nid2str(nid), LN_rsaEncryption);
+		return NULL;
+	}
+
+	if (!EVP_Digest(der, der_len, md, &md_len, EVP_sha1(), NULL)) {
+		warnx("%s: EVP_Digest failed", fn);
+		return NULL;
+	}
+
+	return hex_encode(md, md_len);
+}
+
+/*
  * Parse the Authority Information Access (AIA) extension
  * See RFC 6487, section 4.8.7 for details.
  * Returns NULL on failure, on success returns the AIA URI
  * (which has to be freed after use).
  */
 int
-x509_get_aia(X509 *x, const char *fn, char **aia)
+x509_get_aia(X509 *x, const char *fn, char **out_aia)
 {
 	ACCESS_DESCRIPTION		*ad;
 	AUTHORITY_INFO_ACCESS		*info;
 	int				 crit, rc = 0;
 
-	*aia = NULL;
+	assert(*out_aia == NULL);
+
 	info = X509_get_ext_d2i(x, NID_info_access, &crit, NULL);
 	if (info == NULL) {
 		if (crit != -1) {
@@ -436,31 +547,31 @@ x509_get_aia(X509 *x, const char *fn, char **aia)
 		goto out;
 	}
 
-	if (!x509_location(fn, "AIA: caIssuers", NULL, ad->location, aia))
+	if (!x509_location(fn, "AIA: caIssuers", ad->location, out_aia))
 		goto out;
 
 	rc = 1;
 
-out:
+ out:
 	AUTHORITY_INFO_ACCESS_free(info);
 	return rc;
 }
 
 /*
- * Parse the Subject Information Access (SIA) extension
- * See RFC 6487, section 4.8.8 for details.
+ * Parse the Subject Information Access (SIA) extension for an EE cert.
+ * See RFC 6487, section 4.8.8.2 for details.
  * Returns NULL on failure, on success returns the SIA signedObject URI
  * (which has to be freed after use).
  */
 int
-x509_get_sia(X509 *x, const char *fn, char **sia)
+x509_get_sia(X509 *x, const char *fn, char **out_sia)
 {
 	ACCESS_DESCRIPTION		*ad;
 	AUTHORITY_INFO_ACCESS		*info;
 	ASN1_OBJECT			*oid;
-	int				 i, crit, rsync_found = 0;
+	int				 i, crit, rc = 0;
 
-	*sia = NULL;
+	assert(*out_sia == NULL);
 
 	info = X509_get_ext_d2i(x, NID_sinfo_access, &crit, NULL);
 	if (info == NULL) {
@@ -478,6 +589,8 @@ x509_get_sia(X509 *x, const char *fn, char **sia)
 	}
 
 	for (i = 0; i < sk_ACCESS_DESCRIPTION_num(info); i++) {
+		char	*sia;
+
 		ad = sk_ACCESS_DESCRIPTION_value(info, i);
 		oid = ad->method;
 
@@ -502,37 +615,50 @@ x509_get_sia(X509 *x, const char *fn, char **sia)
 			goto out;
 		}
 
-		/* Don't fail on non-rsync URI, so check this afterward. */
-		if (!x509_location(fn, "SIA: signedObject", NULL, ad->location,
-		    sia))
+		sia = NULL;
+		if (!x509_location(fn, "SIA: signedObject", ad->location, &sia))
 			goto out;
 
-		if (rsync_found)
-			continue;
+		if (*out_sia == NULL && strncasecmp(sia, RSYNC_PROTO,
+		    RSYNC_PROTO_LEN) == 0) {
+			const char *p = sia + RSYNC_PROTO_LEN;
+			size_t fnlen, plen;
 
-		if (strncasecmp(*sia, "rsync://", 8) == 0) {
-			rsync_found = 1;
+			if (filemode) {
+				*out_sia = sia;
+				continue;
+			}
+
+			fnlen = strlen(fn);
+			plen = strlen(p);
+
+			if (fnlen < plen || strcmp(p, fn + fnlen - plen) != 0) {
+				warnx("%s: mismatch between pathname and SIA "
+				    "(%s)", fn, sia);
+				free(sia);
+				goto out;
+			}
+
+			*out_sia = sia;
 			continue;
 		}
-
-		free(*sia);
-		*sia = NULL;
+		if (verbose)
+			warnx("%s: RFC 6487 section 4.8.8: SIA: "
+			    "ignoring location %s", fn, sia);
+		free(sia);
 	}
 
-	if (!rsync_found) {
+	if (*out_sia == NULL) {
 		warnx("%s: RFC 6487 section 4.8.8.2: "
 		    "SIA without rsync accessLocation", fn);
 		goto out;
 	}
 
-	AUTHORITY_INFO_ACCESS_free(info);
-	return 1;
+	rc = 1;
 
  out:
-	free(*sia);
-	*sia = NULL;
 	AUTHORITY_INFO_ACCESS_free(info);
-	return 0;
+	return rc;
 }
 
 /*
@@ -664,15 +790,16 @@ x509_any_inherits(X509 *x)
  * after use.
  */
 int
-x509_get_crl(X509 *x, const char *fn, char **crl)
+x509_get_crl(X509 *x, const char *fn, char **out_crl)
 {
 	CRL_DIST_POINTS		*crldp;
 	DIST_POINT		*dp;
 	GENERAL_NAMES		*names;
 	GENERAL_NAME		*name;
-	int			 i, crit, rsync_found = 0;
+	int			 i, crit, rc = 0;
 
-	*crl = NULL;
+	assert(*out_crl == NULL);
+
 	crldp = X509_get_ext_d2i(x, NID_crl_distribution_points, &crit, NULL);
 	if (crldp == NULL) {
 		if (crit != -1) {
@@ -717,122 +844,44 @@ x509_get_crl(X509 *x, const char *fn, char **crl)
 		    " disallowed", fn);
 		goto out;
 	}
+	/* Need to hardcode the alternative 0 due to missing macros or enum. */
 	if (dp->distpoint->type != 0) {
-		warnx("%s: RFC 6487 section 4.8.6: CRL: "
-		    "expected GEN_OTHERNAME, have %d", fn, dp->distpoint->type);
+		warnx("%s: RFC 6487 section 4.8.6: CRL DistributionPointName:"
+		    " expected fullName, have %d", fn, dp->distpoint->type);
 		goto out;
 	}
 
 	names = dp->distpoint->name.fullname;
 	for (i = 0; i < sk_GENERAL_NAME_num(names); i++) {
+		char	*crl = NULL;
+
 		name = sk_GENERAL_NAME_value(names, i);
 
-		/* Don't fail on non-rsync URI, so check this afterward. */
-		if (!x509_location(fn, "CRL distribution point", NULL, name,
-		    crl))
+		if (!x509_location(fn, "CRL distribution point", name, &crl))
 			goto out;
 
-		if (strncasecmp(*crl, "rsync://", 8) == 0) {
-			rsync_found = 1;
-			goto out;
+		if (*out_crl == NULL && strncasecmp(crl, RSYNC_PROTO,
+		    RSYNC_PROTO_LEN) == 0) {
+			*out_crl = crl;
+			continue;
 		}
-
-		free(*crl);
-		*crl = NULL;
+		if (verbose)
+			warnx("%s: ignoring CRL distribution point %s",
+			    fn, crl);
+		free(crl);
 	}
 
-	warnx("%s: RFC 6487 section 4.8.6: no rsync URI "
-	    "in CRL distributionPoint", fn);
+	if (*out_crl == NULL) {
+		warnx("%s: RFC 6487 section 4.8.6: no rsync URI "
+		    "in CRL distributionPoint", fn);
+		goto out;
+	}
+
+	rc = 1;
 
  out:
 	CRL_DIST_POINTS_free(crldp);
-	return rsync_found;
-}
-
-/*
- * Parse X509v3 authority key identifier (AKI) from the CRL.
- * This is matched against the string from x509_get_ski() above.
- * Returns the AKI or NULL if it could not be parsed.
- * The AKI is formatted as a hex string.
- */
-char *
-x509_crl_get_aki(X509_CRL *crl, const char *fn)
-{
-	const unsigned char	*d;
-	AUTHORITY_KEYID		*akid;
-	ASN1_OCTET_STRING	*os;
-	int			 dsz, crit;
-	char			*res = NULL;
-
-	akid = X509_CRL_get_ext_d2i(crl, NID_authority_key_identifier, &crit,
-	    NULL);
-	if (akid == NULL) {
-		warnx("%s: RFC 6487 section 4.8.3: AKI: extension missing", fn);
-		return NULL;
-	}
-	if (crit != 0) {
-		warnx("%s: RFC 6487 section 4.8.3: "
-		    "AKI: extension not non-critical", fn);
-		goto out;
-	}
-	if (akid->issuer != NULL || akid->serial != NULL) {
-		warnx("%s: RFC 6487 section 4.8.3: AKI: "
-		    "authorityCertIssuer or authorityCertSerialNumber present",
-		    fn);
-		goto out;
-	}
-
-	os = akid->keyid;
-	if (os == NULL) {
-		warnx("%s: RFC 6487 section 4.8.3: AKI: "
-		    "Key Identifier missing", fn);
-		goto out;
-	}
-
-	d = os->data;
-	dsz = os->length;
-
-	if (dsz != SHA_DIGEST_LENGTH) {
-		warnx("%s: RFC 6487 section 4.8.2: AKI: "
-		    "want %d bytes SHA1 hash, have %d bytes",
-		    fn, SHA_DIGEST_LENGTH, dsz);
-		goto out;
-	}
-
-	res = hex_encode(d, dsz);
-out:
-	AUTHORITY_KEYID_free(akid);
-	return res;
-}
-
-/*
- * Retrieve CRL Number extension. Returns a printable hexadecimal representation
- * of the number which has to be freed after use.
- */
-char *
-x509_crl_get_number(X509_CRL *crl, const char *fn)
-{
-	ASN1_INTEGER		*aint;
-	int			 crit;
-	char			*res = NULL;
-
-	aint = X509_CRL_get_ext_d2i(crl, NID_crl_number, &crit, NULL);
-	if (aint == NULL) {
-		warnx("%s: RFC 6487 section 5: CRL Number missing", fn);
-		return NULL;
-	}
-	if (crit != 0) {
-		warnx("%s: RFC 5280, section 5.2.3: "
-		    "CRL Number not non-critical", fn);
-		goto out;
-	}
-
-	/* This checks that the number is non-negative and <= 20 bytes. */
-	res = x509_convert_seqnum(fn, aint);
-
- out:
-	ASN1_INTEGER_free(aint);
-	return res;
+	return rc;
 }
 
 /*
@@ -861,10 +910,12 @@ x509_get_time(const ASN1_TIME *at, time_t *t)
  * Returns 0 on failure and 1 on success.
  */
 int
-x509_location(const char *fn, const char *descr, const char *proto,
-    GENERAL_NAME *location, char **out)
+x509_location(const char *fn, const char *descr, GENERAL_NAME *location,
+    char **out)
 {
 	ASN1_IA5STRING	*uri;
+
+	assert(*out == NULL);
 
 	if (location->type != GEN_URI) {
 		warnx("%s: RFC 6487 section 4.8: %s not URI", fn, descr);
@@ -873,15 +924,9 @@ x509_location(const char *fn, const char *descr, const char *proto,
 
 	uri = location->d.uniformResourceIdentifier;
 
-	if (!valid_uri(uri->data, uri->length, proto)) {
+	if (!valid_uri(uri->data, uri->length, NULL)) {
 		warnx("%s: RFC 6487 section 4.8: %s bad location", fn, descr);
 		return 0;
-	}
-
-	if (*out != NULL) {
-		warnx("%s: RFC 6487 section 4.8: multiple %s specified, "
-		    "using the first one", fn, descr);
-		return 1;
 	}
 
 	if ((*out = strndup(uri->data, uri->length)) == NULL)
@@ -891,23 +936,17 @@ x509_location(const char *fn, const char *descr, const char *proto,
 }
 
 /*
- * Check that the subject only contains commonName and serialNumber.
+ * Check that subject or issuer only contain commonName and serialNumber.
  * Return 0 on failure.
  */
 int
-x509_valid_subject(const char *fn, const X509 *x)
+x509_valid_name(const char *fn, const char *descr, const X509_NAME *xn)
 {
-	const X509_NAME *xn;
 	const X509_NAME_ENTRY *ne;
 	const ASN1_OBJECT *ao;
 	const ASN1_STRING *as;
 	int cn = 0, sn = 0;
 	int i, nid;
-
-	if ((xn = X509_get_subject_name(x)) == NULL) {
-		warnx("%s: X509_get_subject_name", fn);
-		return 0;
-	}
 
 	for (i = 0; i < X509_NAME_entry_count(xn); i++) {
 		if ((ne = X509_NAME_get_entry(xn, i)) == NULL) {
@@ -923,8 +962,8 @@ x509_valid_subject(const char *fn, const X509 *x)
 		switch (nid) {
 		case NID_commonName:
 			if (cn++ > 0) {
-				warnx("%s: duplicate commonName in subject",
-				    fn);
+				warnx("%s: duplicate commonName in %s",
+				    fn, descr);
 				return 0;
 			}
 			if ((as = X509_NAME_ENTRY_get_data(ne)) == NULL) {
@@ -937,6 +976,10 @@ x509_valid_subject(const char *fn, const X509 *x)
  * https://lists.afrinic.net/pipermail/dbwg/2023-March/000436.html
  */
 #if 0
+			/*
+			 * XXX - For some reason RFC 8209, section 3.1.1 decided
+			 * to allow UTF8String for BGPsec Router Certificates.
+			 */
 			if (ASN1_STRING_type(as) != V_ASN1_PRINTABLESTRING) {
 				warnx("%s: RFC 6487 section 4.5: commonName is"
 				    " not PrintableString", fn);
@@ -946,8 +989,8 @@ x509_valid_subject(const char *fn, const X509 *x)
 			break;
 		case NID_serialNumber:
 			if (sn++ > 0) {
-				warnx("%s: duplicate serialNumber in subject",
-				    fn);
+				warnx("%s: duplicate serialNumber in %s",
+				    fn, descr);
 				return 0;
 			}
 			break;
@@ -955,15 +998,15 @@ x509_valid_subject(const char *fn, const X509 *x)
 			warnx("%s: OBJ_obj2nid failed", fn);
 			return 0;
 		default:
-			warnx("%s: RFC 6487 section 4.5: unexpected attribute "
-			    "%s", fn, OBJ_nid2sn(nid));
+			warnx("%s: RFC 6487 section 4.5: unexpected attribute"
+			    " %s in %s", fn, nid2str(nid), descr);
 			return 0;
 		}
 	}
 
 	if (cn == 0) {
-		warnx("%s: RFC 6487 section 4.5: subject missing commonName",
-		    fn);
+		warnx("%s: RFC 6487 section 4.5: %s missing commonName",
+		    fn, descr);
 		return 0;
 	}
 
@@ -971,7 +1014,8 @@ x509_valid_subject(const char *fn, const X509 *x)
 }
 
 /*
- * Convert an ASN1_INTEGER into a hexstring.
+ * Convert an ASN1_INTEGER into a hexstring, enforcing that it is non-negative
+ * and representable by at most 20 octets (RFC 5280, section 4.1.2.2).
  * Returned string needs to be freed by the caller.
  */
 char *
@@ -983,6 +1027,12 @@ x509_convert_seqnum(const char *fn, const ASN1_INTEGER *i)
 	if (i == NULL)
 		goto out;
 
+	if (ASN1_STRING_length(i) > 20) {
+		warnx("%s: %s: want 20 octets or fewer, have more.",
+		    __func__, fn);
+		goto out;
+	}
+
 	seqnum = ASN1_INTEGER_to_BN(i, NULL);
 	if (seqnum == NULL) {
 		warnx("%s: ASN1_INTEGER_to_BN error", fn);
@@ -991,12 +1041,6 @@ x509_convert_seqnum(const char *fn, const ASN1_INTEGER *i)
 
 	if (BN_is_negative(seqnum)) {
 		warnx("%s: %s: want positive integer, have negative.",
-		    __func__, fn);
-		goto out;
-	}
-
-	if (BN_num_bytes(seqnum) > 20) {
-		warnx("%s: %s: want 20 octets or fewer, have more.",
 		    __func__, fn);
 		goto out;
 	}
@@ -1021,7 +1065,7 @@ x509_find_expires(time_t notafter, struct auth *a, struct crl_tree *crlt)
 
 	expires = notafter;
 
-	for (; a != NULL; a = a->parent) {
+	for (; a != NULL; a = a->issuer) {
 		if (expires > a->cert->notafter)
 			expires = a->cert->notafter;
 		crl = crl_get(crlt, a);

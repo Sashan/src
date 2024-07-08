@@ -1,4 +1,4 @@
-/*	$OpenBSD: iked.c,v 1.66 2023/06/28 12:31:19 gerhard Exp $	*/
+/*	$OpenBSD: iked.c,v 1.70 2024/02/15 20:10:45 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -45,6 +45,7 @@ void	 parent_sig_handler(int, short, void *);
 int	 parent_dispatch_ca(int, struct privsep_proc *, struct imsg *);
 int	 parent_dispatch_control(int, struct privsep_proc *, struct imsg *);
 int	 parent_dispatch_ikev2(int, struct privsep_proc *, struct imsg *);
+void	 parent_connected(struct privsep *);
 int	 parent_configure(struct iked *);
 
 struct iked	*iked_env;
@@ -170,7 +171,6 @@ main(int argc, char *argv[])
 
 	ps = &env->sc_ps;
 	ps->ps_env = env;
-	TAILQ_INIT(&ps->ps_rcsocks);
 
 	if (strlcpy(env->sc_conffile, conffile, PATH_MAX) >= PATH_MAX)
 		errx(1, "config file exceeds PATH_MAX");
@@ -220,12 +220,9 @@ main(int argc, char *argv[])
 	signal_add(&ps->ps_evsigpipe, NULL);
 	signal_add(&ps->ps_evsigusr1, NULL);
 
-	proc_connect(ps);
-
 	vroute_init(env);
 
-	if (parent_configure(env) == -1)
-		fatalx("configuration failed");
+	proc_connect(ps, parent_connected);
 
 	event_dispatch();
 
@@ -233,6 +230,15 @@ main(int argc, char *argv[])
 	parent_shutdown(env);
 
 	return (0);
+}
+
+void
+parent_connected(struct privsep *ps)
+{
+	struct iked	*env = ps->ps_env;
+
+	if (parent_configure(env) == -1)
+		fatalx("configuration failed");
 }
 
 int
@@ -301,7 +307,6 @@ parent_configure(struct iked *env)
 	config_setstatic(env);
 	config_setcoupled(env, env->sc_decoupled ? 0 : 1);
 	config_setocsp(env);
-	config_setcertpartialchain(env);
 	/* Must be last */
 	config_setmode(env, env->sc_passive ? 1 : 0);
 
@@ -334,7 +339,6 @@ parent_reload(struct iked *env, int reset, const char *filename)
 		config_setstatic(env);
 		config_setcoupled(env, env->sc_decoupled ? 0 : 1);
 		config_setocsp(env);
-		config_setcertpartialchain(env);
 		/* Must be last */
 		config_setmode(env, env->sc_passive ? 1 : 0);
 	} else {
@@ -424,6 +428,10 @@ parent_dispatch_ca(int fd, struct privsep_proc *p, struct imsg *imsg)
 	struct iked	*env = iked_env;
 
 	switch (imsg->hdr.type) {
+	case IMSG_CTL_ACTIVE:
+	case IMSG_CTL_PASSIVE:
+		proc_forward_imsg(&env->sc_ps, imsg, PROC_IKEV2, -1);
+		break;
 	case IMSG_OCSP_FD:
 		ocsp_connect(env, imsg);
 		break;

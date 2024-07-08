@@ -1,4 +1,4 @@
-/* $OpenBSD: s3_lib.c,v 1.248 2023/11/29 13:39:34 tb Exp $ */
+/* $OpenBSD: s3_lib.c,v 1.252 2024/05/10 05:08:05 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -167,13 +167,6 @@
 #include "tls_content.h"
 
 #define SSL3_NUM_CIPHERS	(sizeof(ssl3_ciphers) / sizeof(SSL_CIPHER))
-
-/*
- * FIXED_NONCE_LEN is a macro that provides in the correct value to set the
- * fixed nonce length in algorithms2. It is the inverse of the
- * SSL_CIPHER_AEAD_FIXED_NONCE_LEN macro.
- */
-#define FIXED_NONCE_LEN(x) (((x / 2) & 0xf) << 24)
 
 /* list of available SSLv3 ciphers (sorted by id) */
 const SSL_CIPHER ssl3_ciphers[] = {
@@ -577,41 +570,6 @@ const SSL_CIPHER ssl3_ciphers[] = {
 		.alg_bits = 256,
 	},
 
-	/* GOST Ciphersuites */
-
-	/* Cipher 81 */
-	{
-		.valid = 1,
-		.name = "GOST2001-GOST89-GOST89",
-		.id = 0x3000081,
-		.algorithm_mkey = SSL_kGOST,
-		.algorithm_auth = SSL_aGOST01,
-		.algorithm_enc = SSL_eGOST2814789CNT,
-		.algorithm_mac = SSL_GOST89MAC,
-		.algorithm_ssl = SSL_TLSV1,
-		.algo_strength = SSL_HIGH,
-		.algorithm2 = SSL_HANDSHAKE_MAC_GOST94|TLS1_PRF_GOST94|
-		    TLS1_STREAM_MAC,
-		.strength_bits = 256,
-		.alg_bits = 256
-	},
-
-	/* Cipher 83 */
-	{
-		.valid = 1,
-		.name = "GOST2001-NULL-GOST94",
-		.id = 0x3000083,
-		.algorithm_mkey = SSL_kGOST,
-		.algorithm_auth = SSL_aGOST01,
-		.algorithm_enc = SSL_eNULL,
-		.algorithm_mac = SSL_GOST94,
-		.algorithm_ssl = SSL_TLSV1,
-		.algo_strength = SSL_STRONG_NONE,
-		.algorithm2 = SSL_HANDSHAKE_MAC_GOST94|TLS1_PRF_GOST94,
-		.strength_bits = 0,
-		.alg_bits = 0
-	},
-
 #ifndef OPENSSL_NO_CAMELLIA
 	/* Camellia ciphersuites from RFC4132 (256-bit portion) */
 
@@ -679,9 +637,7 @@ const SSL_CIPHER ssl3_ciphers[] = {
 		.algorithm_mac = SSL_AEAD,
 		.algorithm_ssl = SSL_TLSV1_2,
 		.algo_strength = SSL_HIGH,
-		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256|
-		    FIXED_NONCE_LEN(4)|
-		    SSL_CIPHER_ALGORITHM2_VARIABLE_NONCE_IN_RECORD,
+		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256,
 		.strength_bits = 128,
 		.alg_bits = 128,
 	},
@@ -697,9 +653,7 @@ const SSL_CIPHER ssl3_ciphers[] = {
 		.algorithm_mac = SSL_AEAD,
 		.algorithm_ssl = SSL_TLSV1_2,
 		.algo_strength = SSL_HIGH,
-		.algorithm2 = SSL_HANDSHAKE_MAC_SHA384|TLS1_PRF_SHA384|
-		    FIXED_NONCE_LEN(4)|
-		    SSL_CIPHER_ALGORITHM2_VARIABLE_NONCE_IN_RECORD,
+		.algorithm2 = SSL_HANDSHAKE_MAC_SHA384|TLS1_PRF_SHA384,
 		.strength_bits = 256,
 		.alg_bits = 256,
 	},
@@ -715,9 +669,7 @@ const SSL_CIPHER ssl3_ciphers[] = {
 		.algorithm_mac = SSL_AEAD,
 		.algorithm_ssl = SSL_TLSV1_2,
 		.algo_strength = SSL_HIGH,
-		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256|
-		    FIXED_NONCE_LEN(4)|
-		    SSL_CIPHER_ALGORITHM2_VARIABLE_NONCE_IN_RECORD,
+		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256,
 		.strength_bits = 128,
 		.alg_bits = 128,
 	},
@@ -733,9 +685,7 @@ const SSL_CIPHER ssl3_ciphers[] = {
 		.algorithm_mac = SSL_AEAD,
 		.algorithm_ssl = SSL_TLSV1_2,
 		.algo_strength = SSL_HIGH,
-		.algorithm2 = SSL_HANDSHAKE_MAC_SHA384|TLS1_PRF_SHA384|
-		    FIXED_NONCE_LEN(4)|
-		    SSL_CIPHER_ALGORITHM2_VARIABLE_NONCE_IN_RECORD,
+		.algorithm2 = SSL_HANDSHAKE_MAC_SHA384|TLS1_PRF_SHA384,
 		.strength_bits = 256,
 		.alg_bits = 256,
 	},
@@ -751,9 +701,7 @@ const SSL_CIPHER ssl3_ciphers[] = {
 		.algorithm_mac = SSL_AEAD,
 		.algorithm_ssl = SSL_TLSV1_2,
 		.algo_strength = SSL_HIGH,
-		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256|
-		    FIXED_NONCE_LEN(4)|
-		    SSL_CIPHER_ALGORITHM2_VARIABLE_NONCE_IN_RECORD,
+		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256,
 		.strength_bits = 128,
 		.alg_bits = 128,
 	},
@@ -769,9 +717,7 @@ const SSL_CIPHER ssl3_ciphers[] = {
 		.algorithm_mac = SSL_AEAD,
 		.algorithm_ssl = SSL_TLSV1_2,
 		.algo_strength = SSL_HIGH,
-		.algorithm2 = SSL_HANDSHAKE_MAC_SHA384|TLS1_PRF_SHA384|
-		    FIXED_NONCE_LEN(4)|
-		    SSL_CIPHER_ALGORITHM2_VARIABLE_NONCE_IN_RECORD,
+		.algorithm2 = SSL_HANDSHAKE_MAC_SHA384|TLS1_PRF_SHA384,
 		.strength_bits = 256,
 		.alg_bits = 256,
 	},
@@ -1250,9 +1196,7 @@ const SSL_CIPHER ssl3_ciphers[] = {
 		.algorithm_mac = SSL_AEAD,
 		.algorithm_ssl = SSL_TLSV1_2,
 		.algo_strength = SSL_HIGH,
-		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256|
-		    FIXED_NONCE_LEN(4)|
-		    SSL_CIPHER_ALGORITHM2_VARIABLE_NONCE_IN_RECORD,
+		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256,
 		.strength_bits = 128,
 		.alg_bits = 128,
 	},
@@ -1268,9 +1212,7 @@ const SSL_CIPHER ssl3_ciphers[] = {
 		.algorithm_mac = SSL_AEAD,
 		.algorithm_ssl = SSL_TLSV1_2,
 		.algo_strength = SSL_HIGH,
-		.algorithm2 = SSL_HANDSHAKE_MAC_SHA384|TLS1_PRF_SHA384|
-		    FIXED_NONCE_LEN(4)|
-		    SSL_CIPHER_ALGORITHM2_VARIABLE_NONCE_IN_RECORD,
+		.algorithm2 = SSL_HANDSHAKE_MAC_SHA384|TLS1_PRF_SHA384,
 		.strength_bits = 256,
 		.alg_bits = 256,
 	},
@@ -1286,9 +1228,7 @@ const SSL_CIPHER ssl3_ciphers[] = {
 		.algorithm_mac = SSL_AEAD,
 		.algorithm_ssl = SSL_TLSV1_2,
 		.algo_strength = SSL_HIGH,
-		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256|
-		    FIXED_NONCE_LEN(4)|
-		    SSL_CIPHER_ALGORITHM2_VARIABLE_NONCE_IN_RECORD,
+		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256,
 		.strength_bits = 128,
 		.alg_bits = 128,
 	},
@@ -1304,9 +1244,7 @@ const SSL_CIPHER ssl3_ciphers[] = {
 		.algorithm_mac = SSL_AEAD,
 		.algorithm_ssl = SSL_TLSV1_2,
 		.algo_strength = SSL_HIGH,
-		.algorithm2 = SSL_HANDSHAKE_MAC_SHA384|TLS1_PRF_SHA384|
-		    FIXED_NONCE_LEN(4)|
-		    SSL_CIPHER_ALGORITHM2_VARIABLE_NONCE_IN_RECORD,
+		.algorithm2 = SSL_HANDSHAKE_MAC_SHA384|TLS1_PRF_SHA384,
 		.strength_bits = 256,
 		.alg_bits = 256,
 	},
@@ -1322,8 +1260,7 @@ const SSL_CIPHER ssl3_ciphers[] = {
 		.algorithm_mac = SSL_AEAD,
 		.algorithm_ssl = SSL_TLSV1_2,
 		.algo_strength = SSL_HIGH,
-		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256|
-		    FIXED_NONCE_LEN(12),
+		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256,
 		.strength_bits = 256,
 		.alg_bits = 256,
 	},
@@ -1339,8 +1276,7 @@ const SSL_CIPHER ssl3_ciphers[] = {
 		.algorithm_mac = SSL_AEAD,
 		.algorithm_ssl = SSL_TLSV1_2,
 		.algo_strength = SSL_HIGH,
-		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256|
-		    FIXED_NONCE_LEN(12),
+		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256,
 		.strength_bits = 256,
 		.alg_bits = 256,
 	},
@@ -1356,45 +1292,10 @@ const SSL_CIPHER ssl3_ciphers[] = {
 		.algorithm_mac = SSL_AEAD,
 		.algorithm_ssl = SSL_TLSV1_2,
 		.algo_strength = SSL_HIGH,
-		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256|
-		    FIXED_NONCE_LEN(12),
+		.algorithm2 = SSL_HANDSHAKE_MAC_SHA256|TLS1_PRF_SHA256,
 		.strength_bits = 256,
 		.alg_bits = 256,
 	},
-
-	/* Cipher FF85 FIXME IANA */
-	{
-		.valid = 1,
-		.name = "GOST2012256-GOST89-GOST89",
-		.id = 0x300ff85, /* FIXME IANA */
-		.algorithm_mkey = SSL_kGOST,
-		.algorithm_auth = SSL_aGOST01,
-		.algorithm_enc = SSL_eGOST2814789CNT,
-		.algorithm_mac = SSL_GOST89MAC,
-		.algorithm_ssl = SSL_TLSV1,
-		.algo_strength = SSL_HIGH,
-		.algorithm2 = SSL_HANDSHAKE_MAC_STREEBOG256|TLS1_PRF_STREEBOG256|
-		    TLS1_STREAM_MAC,
-		.strength_bits = 256,
-		.alg_bits = 256
-	},
-
-	/* Cipher FF87 FIXME IANA */
-	{
-		.valid = 1,
-		.name = "GOST2012256-NULL-STREEBOG256",
-		.id = 0x300ff87, /* FIXME IANA */
-		.algorithm_mkey = SSL_kGOST,
-		.algorithm_auth = SSL_aGOST01,
-		.algorithm_enc = SSL_eNULL,
-		.algorithm_mac = SSL_STREEBOG256,
-		.algorithm_ssl = SSL_TLSV1,
-		.algo_strength = SSL_STRONG_NONE,
-		.algorithm2 = SSL_HANDSHAKE_MAC_STREEBOG256|TLS1_PRF_STREEBOG256,
-		.strength_bits = 0,
-		.alg_bits = 0
-	},
-
 
 	/* end of list */
 };
@@ -2039,6 +1940,7 @@ SSL_get_signature_type_nid(const SSL *s, int *nid)
 
 	return 1;
 }
+LSSL_ALIAS(SSL_get_signature_type_nid);
 
 int
 SSL_get_peer_signature_type_nid(const SSL *s, int *nid)
@@ -2055,6 +1957,7 @@ SSL_get_peer_signature_type_nid(const SSL *s, int *nid)
 
 	return 1;
 }
+LSSL_ALIAS(SSL_get_peer_signature_type_nid);
 
 long
 ssl3_ctrl(SSL *s, int cmd, long larg, void *parg)
@@ -2661,27 +2564,16 @@ ssl3_choose_cipher(SSL *s, STACK_OF(SSL_CIPHER) *clnt,
 	return (ret);
 }
 
+#define SSL3_CT_RSA_SIGN	1
+#define SSL3_CT_RSA_FIXED_DH	3
+#define SSL3_CT_ECDSA_SIGN	64
+
 int
 ssl3_get_req_cert_types(SSL *s, CBB *cbb)
 {
 	unsigned long alg_k;
 
 	alg_k = s->s3->hs.cipher->algorithm_mkey;
-
-#ifndef OPENSSL_NO_GOST
-	if ((alg_k & SSL_kGOST) != 0) {
-		if (!CBB_add_u8(cbb, TLS_CT_GOST01_SIGN))
-			return 0;
-		if (!CBB_add_u8(cbb, TLS_CT_GOST12_256_SIGN))
-			return 0;
-		if (!CBB_add_u8(cbb, TLS_CT_GOST12_512_SIGN))
-			return 0;
-		if (!CBB_add_u8(cbb, TLS_CT_GOST12_256_SIGN_COMPAT))
-			return 0;
-		if (!CBB_add_u8(cbb, TLS_CT_GOST12_512_SIGN_COMPAT))
-			return 0;
-	}
-#endif
 
 	if ((alg_k & SSL_kDHE) != 0) {
 		if (!CBB_add_u8(cbb, SSL3_CT_RSA_FIXED_DH))
@@ -2695,7 +2587,7 @@ ssl3_get_req_cert_types(SSL *s, CBB *cbb)
 	 * ECDSA certs can be used with RSA cipher suites as well
 	 * so we don't need to check for SSL_kECDH or SSL_kECDHE.
 	 */
-	if (!CBB_add_u8(cbb, TLS_CT_ECDSA_SIGN))
+	if (!CBB_add_u8(cbb, SSL3_CT_ECDSA_SIGN))
 		return 0;
 
 	return 1;

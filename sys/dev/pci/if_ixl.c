@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ixl.c,v 1.95 2024/01/07 21:01:45 bluhm Exp $ */
+/*	$OpenBSD: if_ixl.c,v 1.101 2024/05/24 06:02:53 jsg Exp $ */
 
 /*
  * Copyright (c) 2013-2015, Intel Corporation
@@ -55,7 +55,6 @@
 #include <sys/proc.h>
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
-#include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/device.h>
 #include <sys/pool.h>
@@ -69,7 +68,6 @@
 #include <machine/intr.h>
 
 #include <net/if.h>
-#include <net/if_dl.h>
 #include <net/if_media.h>
 #include <net/route.h>
 #include <net/toeplitz.h>
@@ -83,13 +81,11 @@
 #endif
 
 #include <netinet/in.h>
-#include <netinet/ip.h>
-#include <netinet/ip6.h>
+#include <netinet/if_ether.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_timer.h>
 #include <netinet/tcp_var.h>
 #include <netinet/udp.h>
-#include <netinet/if_ether.h>
 
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
@@ -2826,38 +2822,41 @@ ixl_tx_setup_offload(struct mbuf *m0, struct ixl_tx_ring *txr,
 		offload |= ISSET(m0->m_pkthdr.csum_flags, M_IPV4_CSUM_OUT) ?
 		    IXL_TX_DESC_CMD_IIPT_IPV4_CSUM :
 		    IXL_TX_DESC_CMD_IIPT_IPV4;
- 
-		hlen = ext.ip4->ip_hl << 2;
 #ifdef INET6
 	} else if (ext.ip6) {
 		offload |= IXL_TX_DESC_CMD_IIPT_IPV6;
-
-		hlen = sizeof(*ext.ip6);
 #endif
 	} else {
 		panic("CSUM_OUT set for non-IP packet");
 		/* NOTREACHED */
 	}
+	hlen = ext.iphlen;
 
 	offload |= (ETHER_HDR_LEN >> 1) << IXL_TX_DESC_MACLEN_SHIFT;
 	offload |= (hlen >> 2) << IXL_TX_DESC_IPLEN_SHIFT;
 
 	if (ext.tcp && ISSET(m0->m_pkthdr.csum_flags, M_TCP_CSUM_OUT)) {
 		offload |= IXL_TX_DESC_CMD_L4T_EOFT_TCP;
-		offload |= (uint64_t)ext.tcp->th_off << IXL_TX_DESC_L4LEN_SHIFT;
+		offload |= (uint64_t)(ext.tcphlen >> 2)
+		    << IXL_TX_DESC_L4LEN_SHIFT;
 	} else if (ext.udp && ISSET(m0->m_pkthdr.csum_flags, M_UDP_CSUM_OUT)) {
 		offload |= IXL_TX_DESC_CMD_L4T_EOFT_UDP;
-		offload |= (sizeof(*ext.udp) >> 2) << IXL_TX_DESC_L4LEN_SHIFT;
+		offload |= (uint64_t)(sizeof(*ext.udp) >> 2)
+		    << IXL_TX_DESC_L4LEN_SHIFT;
 	}
 
 	if (ISSET(m0->m_pkthdr.csum_flags, M_TCP_TSO)) {
-		if (ext.tcp) {
+		if (ext.tcp && m0->m_pkthdr.ph_mss > 0) {
 			struct ixl_tx_desc *ring, *txd;
 			uint64_t cmd = 0, paylen, outlen;
 
-			hlen += ext.tcp->th_off << 2;
+			hlen += ext.tcphlen;
 
-			outlen = m0->m_pkthdr.ph_mss;
+			/*
+			 * The MSS should not be set to a lower value than 64
+			 * or larger than 9668 bytes.
+			 */
+			outlen = MIN(9668, MAX(64, m0->m_pkthdr.ph_mss));
 			paylen = m0->m_pkthdr.len - ETHER_HDR_LEN - hlen;
 
 			ring = IXL_DMA_KVA(&txr->txr_mem);

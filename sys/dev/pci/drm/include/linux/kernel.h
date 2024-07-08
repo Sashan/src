@@ -3,7 +3,6 @@
 #ifndef _LINUX_KERNEL_H
 #define _LINUX_KERNEL_H
 
-#include <sys/stdint.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/stdarg.h>
@@ -17,23 +16,14 @@
 #include <linux/printk.h>
 #include <linux/typecheck.h>
 #include <linux/container_of.h>
+#include <linux/stddef.h>
+#include <linux/align.h>
+#include <linux/math.h>
+#include <linux/limits.h>
 #include <asm/byteorder.h>
 
 #define swap(a, b) \
 	do { __typeof(a) __tmp = (a); (a) = (b); (b) = __tmp; } while(0)
-
-#define offsetofend(s, e) (offsetof(s, e) + sizeof((((s *)0)->e)))
-
-#define S8_MAX		INT8_MAX
-#define S16_MAX		INT16_MAX
-#define S32_MAX		INT32_MAX
-#define S64_MAX		INT64_MAX
-
-#define U8_MAX		UINT8_MAX
-#define U16_MAX		UINT16_MAX
-#define U32_MAX		UINT32_MAX
-#define U64_C(x)	UINT64_C(x)
-#define U64_MAX		UINT64_MAX
 
 #define ARRAY_SIZE nitems
 
@@ -61,21 +51,7 @@
 #define min3(x, y, z) MIN(x, MIN(y, z))
 #define max3(x, y, z) MAX(x, MAX(y, z))
 
-#define mult_frac(x, n, d) (((x) * (n)) / (d))
-
-#define roundup2(x, y) (((x) + ((y) - 1)) & (~((__typeof(x))(y) - 1)))
-#define round_up(x, y) ((((x) + ((y) - 1)) / (y)) * (y))
-#define round_down(x, y) (((x) / (y)) * (y)) /* y is power of two */
-#define rounddown(x, y) (((x) / (y)) * (y)) /* arbitrary y */
-#define DIV_ROUND_UP(x, y)	(((x) + ((y) - 1)) / (y))
-#define DIV_ROUND_UP_ULL(x, y)	DIV_ROUND_UP(x, y)
-#define DIV_ROUND_DOWN(x, y)	((x) / (y))
-#define DIV_ROUND_DOWN_ULL(x, y)	DIV_ROUND_DOWN(x, y)
-#define DIV_ROUND_CLOSEST(x, y)	(((x) + ((y) / 2)) / (y))
-#define DIV_ROUND_CLOSEST_ULL(x, y)	DIV_ROUND_CLOSEST(x, y)
-
-#define IS_ALIGNED(x, y)	(((x) & ((y) - 1)) == 0)
-#define PTR_ALIGN(x, y)		((__typeof(x))roundup2((unsigned long)(x), (y)))
+#define min_not_zero(a, b) (a == 0) ? b : ((b == 0) ? a : min(a, b))
 
 static inline char *
 kvasprintf(int flags, const char *fmt, va_list ap)
@@ -121,17 +97,6 @@ vscnprintf(char *buf, size_t size, const char *fmt, va_list ap)
 		return nc;
 }
 
-static inline int
-_in_dbg_master(void)
-{
-#ifdef DDB
-	return (db_active);
-#endif
-	return (0);
-}
-
-#define oops_in_progress _in_dbg_master()
-
 #define might_sleep()		assertwaitok()
 #define might_sleep_if(x)	do {	\
 	if (x)				\
@@ -149,6 +114,6 @@ _in_dbg_master(void)
 
 #define STUB() do { printf("%s: stub\n", __func__); } while(0)
 
-#define CONCATENATE(x, y)	__CONCAT(x, y)
+#define PTR_IF(c, p)		((c) ? (p) : NULL)
 
 #endif

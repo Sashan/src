@@ -1,4 +1,4 @@
-/*	$OpenBSD: exf.c,v 1.48 2021/10/25 14:17:24 dv Exp $	*/
+/*	$OpenBSD: exf.c,v 1.50 2024/02/15 00:55:01 jsg Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993, 1994
@@ -207,6 +207,7 @@ file_init(SCR *sp, FREF *frp, char *rcv_name, int flags)
 		if ((frp->tname = strdup(tname)) == NULL ||
 		    (frp->name == NULL && (frp->name = strdup(tname)) == NULL)) {
 			free(frp->tname);
+			frp->tname = NULL;
 			msgq(sp, M_SYSERR, NULL);
 			(void)unlink(tname);
 			goto err;
@@ -666,6 +667,7 @@ file_end(SCR *sp, EXF *ep, int force)
 			TAILQ_REMOVE(&sp->gp->frefq, frp, q);
 			free(frp->name);
 			free(frp);
+			frp = NULL;
 		}
 		sp->frp = NULL;
 	}
@@ -676,7 +678,10 @@ file_end(SCR *sp, EXF *ep, int force)
 	 * Close the db structure.
 	 */
 	if (ep->db->close != NULL && ep->db->close(ep->db) && !force) {
-		msgq_str(sp, M_SYSERR, frp->name, "%s: close");
+		if (frp)
+			msgq_str(sp, M_SYSERR, frp->name, "%s: close");
+		else
+			msgq(sp, M_SYSERR, "close");
 		++ep->refcnt;
 		return (1);
 	}
@@ -848,8 +853,10 @@ file_write(SCR *sp, MARK *fm, MARK *tm, char *name, int flags)
 		from.lno = 1;
 		from.cno = 0;
 		fm = &from;
-		if (db_last(sp, &to.lno))
+		if (db_last(sp, &to.lno)) {
+			(void)fclose(fp);
 			return (1);
+		}
 		to.cno = 0;
 		tm = &to;
 	}
@@ -1012,8 +1019,10 @@ file_backup(SCR *sp, char *name, char *bname)
 		++bname;
 	} else
 		version = 0;
-	if (argv_exp2(sp, &cmd, bname, strlen(bname)))
+	if (argv_exp2(sp, &cmd, bname, strlen(bname))) {
+		(void)close(rfd);
 		return (1);
+	}
 
 	/*
 	 *  0 args: impossible.

@@ -1,4 +1,4 @@
-/*	$OpenBSD: i2s.c,v 1.37 2022/10/26 20:19:07 kn Exp $	*/
+/*	$OpenBSD: i2s.c,v 1.39 2024/05/22 05:51:49 jsg Exp $	*/
 /*	$NetBSD: i2s.c,v 1.1 2003/12/27 02:19:34 grant Exp $	*/
 
 /*-
@@ -55,7 +55,6 @@
 void	i2s_mute(u_int, int);
 int	i2s_cint(void *);
 u_int	i2s_gpio_offset(struct i2s_softc *, char *, int *);
-void	i2s_init(struct i2s_softc *, int);
 
 int	i2s_intr(void *);
 int	i2s_iintr(void *);
@@ -592,7 +591,8 @@ i2s_trigger_output(void *h, void *start, void *end, int bsize,
 
 	DPRINTF(("trigger_output %p %p 0x%x\n", start, end, bsize));
 
-	for (p = sc->sc_dmas; p && p->addr != start; p = p->next);
+	for (p = sc->sc_dmas; p && p->addr != start; p = p->next)
+		;
 	if (!p)
 		return -1;
 
@@ -633,7 +633,8 @@ i2s_trigger_input(void *h, void *start, void *end, int bsize,
 
 	DPRINTF(("trigger_input %p %p 0x%x\n", start, end, bsize));
 
-	for (p = sc->sc_dmas; p && p->addr != start; p = p->next);
+	for (p = sc->sc_dmas; p && p->addr != start; p = p->next)
+		;
 	if (!p)
 		return -1;
 

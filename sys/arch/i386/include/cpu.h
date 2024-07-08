@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.183 2023/08/23 01:55:46 cheloha Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.192 2024/06/18 12:37:29 jsg Exp $	*/
 /*	$NetBSD: cpu.h,v 1.35 1996/05/05 19:29:26 christos Exp $	*/
 
 /*-
@@ -69,6 +69,7 @@
 #include <sys/sched.h>
 #include <sys/sensors.h>
 #include <sys/srp.h>
+#include <uvm/uvm_percpu.h>
 
 struct intrsource;
 
@@ -99,6 +100,8 @@ struct cpu_info {
 
 #if defined(MULTIPROCESSOR)
 	struct srp_hazard ci_srp_hazards[SRP_HAZARD_NUM];
+#define __HAVE_UVM_PERCPU
+	struct uvm_pmr_cache	ci_uvm;
 #endif
 
 	/*
@@ -168,9 +171,9 @@ struct cpu_info {
 	struct ksensor		ci_sensor;
 #if defined(GPROF) || defined(DDBPROF)
 	struct gmonparam	*ci_gmon;
-	struct clockintr	*ci_gmonclock;
+	struct clockintr	ci_gmonclock;
 #endif
-	struct clockintr_queue	ci_queue;
+	struct clockqueue	ci_queue;
 	char			ci_panicbuf[512];
 };
 
@@ -259,7 +262,7 @@ void cpu_unidle(struct cpu_info *);
 #define cpu_kick(ci)
 #define cpu_unidle(ci)
 
-#define CPU_BUSY_CYCLE()	do {} while (0)
+#define CPU_BUSY_CYCLE()	__asm volatile ("" ::: "memory")
 
 #endif
 
@@ -372,6 +375,7 @@ extern const struct cpu_cpuid_nameclass i386_cpuid_cpus[];
 extern void (*cpu_idle_enter_fcn)(void);
 extern void (*cpu_idle_cycle_fcn)(void);
 extern void (*cpu_idle_leave_fcn)(void);
+extern void (*cpu_suspend_cycle_fcn)(void);
 
 extern int cpuspeed;
 
@@ -415,7 +419,6 @@ void	lgdt(struct region_descriptor *);
 
 struct pcb;
 void	savectx(struct pcb *);
-void	switch_exit(struct proc *);
 void	proc_trampoline(void);
 
 /* clock.c */
@@ -455,7 +458,6 @@ void k1x_setperf(int);
 #endif
 
 /* npx.c */
-void	npxdrop(struct proc *);
 void	npxsave_proc(struct proc *, int);
 void	npxsave_cpu(struct cpu_info *, int);
 

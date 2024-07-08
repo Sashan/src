@@ -1,4 +1,4 @@
-/* $OpenBSD: asn1_item.c,v 1.18 2023/11/09 11:36:39 tb Exp $ */
+/* $OpenBSD: asn1_item.c,v 1.21 2024/04/09 13:55:02 beck Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -139,6 +139,7 @@ ASN1_item_digest(const ASN1_ITEM *it, const EVP_MD *type, void *asn,
 	free(str);
 	return (1);
 }
+LCRYPTO_ALIAS(ASN1_item_digest);
 
 /*
  * ASN1_ITEM version of ASN1_dup(): follows the same model except there's no
@@ -222,14 +223,22 @@ int
 ASN1_item_sign(const ASN1_ITEM *it, X509_ALGOR *algor1, X509_ALGOR *algor2,
     ASN1_BIT_STRING *signature, void *asn, EVP_PKEY *pkey, const EVP_MD *type)
 {
-	EVP_MD_CTX ctx;
-	EVP_MD_CTX_init(&ctx);
-	if (!EVP_DigestSignInit(&ctx, NULL, type, NULL, pkey)) {
-		EVP_MD_CTX_cleanup(&ctx);
-		return 0;
-	}
-	return ASN1_item_sign_ctx(it, algor1, algor2, signature, asn, &ctx);
+	EVP_MD_CTX *md_ctx = NULL;
+	int ret = 0;
+
+	if ((md_ctx = EVP_MD_CTX_new()) == NULL)
+		goto err;
+	if (!EVP_DigestSignInit(md_ctx, NULL, type, NULL, pkey))
+		goto err;
+
+	ret = ASN1_item_sign_ctx(it, algor1, algor2, signature, asn, md_ctx);
+
+ err:
+	EVP_MD_CTX_free(md_ctx);
+
+	return ret;
 }
+LCRYPTO_ALIAS(ASN1_item_sign);
 
 static int
 asn1_item_set_algorithm_identifiers(EVP_MD_CTX *ctx, X509_ALGOR *algor1,
@@ -369,12 +378,13 @@ ASN1_item_sign_ctx(const ASN1_ITEM *it, X509_ALGOR *algor1, X509_ALGOR *algor2,
 
 	return ret;
 }
+LCRYPTO_ALIAS(ASN1_item_sign_ctx);
 
 int
 ASN1_item_verify(const ASN1_ITEM *it, X509_ALGOR *a,
     ASN1_BIT_STRING *signature, void *asn, EVP_PKEY *pkey)
 {
-	EVP_MD_CTX ctx;
+	EVP_MD_CTX *md_ctx = NULL;
 	unsigned char *in = NULL;
 	int mdnid, pknid;
 	int in_len = 0;
@@ -382,15 +392,16 @@ ASN1_item_verify(const ASN1_ITEM *it, X509_ALGOR *a,
 
 	if (pkey == NULL) {
 		ASN1error(ERR_R_PASSED_NULL_PARAMETER);
-		return -1;
+		goto err;
 	}
 
 	if (signature->type == V_ASN1_BIT_STRING && signature->flags & 0x7) {
 		ASN1error(ASN1_R_INVALID_BIT_STRING_BITS_LEFT);
-		return -1;
+		goto err;
 	}
 
-	EVP_MD_CTX_init(&ctx);
+	if ((md_ctx = EVP_MD_CTX_new()) == NULL)
+		goto err;
 
 	/* Convert signature OID into digest and public key OIDs */
 	if (!OBJ_find_sigid_algs(OBJ_obj2nid(a->algorithm), &mdnid, &pknid)) {
@@ -402,7 +413,7 @@ ASN1_item_verify(const ASN1_ITEM *it, X509_ALGOR *a,
 			ASN1error(ASN1_R_UNKNOWN_SIGNATURE_ALGORITHM);
 			goto err;
 		}
-		ret = pkey->ameth->item_verify(&ctx, it, asn, a,
+		ret = pkey->ameth->item_verify(md_ctx, it, asn, a,
 		    signature, pkey);
 		/* Return value of 2 means carry on, anything else means we
 		 * exit straight away: either a fatal error of the underlying
@@ -425,7 +436,7 @@ ASN1_item_verify(const ASN1_ITEM *it, X509_ALGOR *a,
 			goto err;
 		}
 
-		if (!EVP_DigestVerifyInit(&ctx, NULL, type, NULL, pkey)) {
+		if (!EVP_DigestVerifyInit(md_ctx, NULL, type, NULL, pkey)) {
 			ASN1error(ERR_R_EVP_LIB);
 			ret = 0;
 			goto err;
@@ -439,7 +450,7 @@ ASN1_item_verify(const ASN1_ITEM *it, X509_ALGOR *a,
 		goto err;
 	}
 
-	if (EVP_DigestVerify(&ctx, signature->data, signature->length,
+	if (EVP_DigestVerify(md_ctx, signature->data, signature->length,
 	    in, in_len) <= 0) {
 		ASN1error(ERR_R_EVP_LIB);
 		ret = 0;
@@ -449,11 +460,12 @@ ASN1_item_verify(const ASN1_ITEM *it, X509_ALGOR *a,
 	ret = 1;
 
  err:
-	EVP_MD_CTX_cleanup(&ctx);
+	EVP_MD_CTX_free(md_ctx);
 	freezero(in, in_len);
 
 	return ret;
 }
+LCRYPTO_ALIAS(ASN1_item_verify);
 
 #define HEADER_SIZE   8
 #define ASN1_CHUNK_INITIAL_SIZE (16 * 1024)

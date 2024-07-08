@@ -82,6 +82,8 @@ extern time_t MAX_TTL;
 extern time_t MIN_TTL;
 /** Maximum Negative TTL that is allowed */
 extern time_t MAX_NEG_TTL;
+/** Minimum Negative TTL that is allowed */
+extern time_t MIN_NEG_TTL;
 /** If we serve expired entries and prefetch them */
 extern int SERVE_EXPIRED;
 /** Time to serve records after expiration */
@@ -370,5 +372,23 @@ void msgparse_bucket_remove(struct msg_parse* msg, struct rrset_parse* rrset);
  */
 void log_edns_opt_list(enum verbosity_value level, const char* info_str,
 	struct edns_option* list);
+
+/**
+ * Remove RR from msgparse RRset.
+ * @param str: this string is used for logging if verbose. If NULL, there is
+ *	no logging of the remove.
+ * @param pkt: packet in buffer that is removed from. Used to log the name
+ * 	of the item removed.
+ * @param rrset: RRset that the RR is removed from.
+ * @param prev: previous RR in list, or NULL.
+ * @param rr: RR that is removed.
+ * @param addr: address used for logging, if verbose, or NULL then it is not
+ *	used.
+ * @param addrlen: length of addr, if that is not NULL.
+ * @return true if rrset is entirely bad, it would then need to be removed.
+ */
+int msgparse_rrset_remove_rr(const char* str, struct sldns_buffer* pkt,
+	struct rrset_parse* rrset, struct rr_parse* prev, struct rr_parse* rr,
+	struct sockaddr_storage* addr, socklen_t addrlen);
 
 #endif /* UTIL_DATA_MSGPARSE_H */

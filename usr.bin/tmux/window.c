@@ -1,4 +1,4 @@
-/* $OpenBSD: window.c,v 1.287 2023/10/23 08:12:00 nicm Exp $ */
+/* $OpenBSD: window.c,v 1.291 2024/06/24 08:30:50 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -340,7 +340,7 @@ window_destroy(struct window *w)
 {
 	log_debug("window @%u destroyed (%d references)", w->id, w->references);
 
-	window_unzoom(w);
+	window_unzoom(w, 0);
 	RB_REMOVE(windows, &windows, w);
 
 	if (w->layout_root != NULL)
@@ -474,7 +474,7 @@ window_pane_update_focus(struct window_pane *wp)
 	struct client	*c;
 	int		 focused = 0;
 
-	if (wp != NULL) {
+	if (wp != NULL && (~wp->flags & PANE_EXITED)) {
 		if (wp != wp->window->active)
 			focused = 0;
 		else {
@@ -666,7 +666,7 @@ window_zoom(struct window_pane *wp)
 }
 
 int
-window_unzoom(struct window *w)
+window_unzoom(struct window *w, int notify)
 {
 	struct window_pane	*wp;
 
@@ -683,7 +683,9 @@ window_unzoom(struct window *w)
 		wp->saved_layout_cell = NULL;
 	}
 	layout_fix_panes(w, NULL);
-	notify_window("window-layout-changed", w);
+
+	if (notify)
+		notify_window("window-layout-changed", w);
 
 	return (0);
 }
@@ -697,7 +699,7 @@ window_push_zoom(struct window *w, int always, int flag)
 		w->flags |= WINDOW_WASZOOMED;
 	else
 		w->flags &= ~WINDOW_WASZOOMED;
-	return (window_unzoom(w) == 0);
+	return (window_unzoom(w, 1) == 0);
 }
 
 int
@@ -934,6 +936,9 @@ window_pane_create(struct window *w, u_int sx, u_int sy, u_int hlimit)
 	wp->sy = sy;
 
 	wp->pipe_fd = -1;
+
+	wp->control_bg = -1;
+	wp->control_fg = -1;
 
 	colour_palette_init(&wp->palette);
 	colour_palette_from_option(&wp->palette, wp->options);
@@ -1202,6 +1207,12 @@ window_pane_visible(struct window_pane *wp)
 	if (~wp->window->flags & WINDOW_ZOOMED)
 		return (1);
 	return (wp == wp->window->active);
+}
+
+int
+window_pane_exited(struct window_pane *wp)
+{
+	return (wp->fd == -1 || (wp->flags & PANE_EXITED));
 }
 
 u_int

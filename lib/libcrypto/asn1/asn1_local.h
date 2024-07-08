@@ -1,4 +1,4 @@
-/* $OpenBSD: asn1_local.h,v 1.7 2024/01/06 20:47:01 tb Exp $ */
+/* $OpenBSD: asn1_local.h,v 1.10 2024/03/02 09:10:42 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2006.
  */
@@ -160,7 +160,7 @@ ASN1_BIT_STRING *c2i_ASN1_BIT_STRING(ASN1_BIT_STRING **a,
 int i2c_ASN1_INTEGER(ASN1_INTEGER *a, unsigned char **pp);
 ASN1_INTEGER *c2i_ASN1_INTEGER(ASN1_INTEGER **a, const unsigned char **pp,
     long length);
-int OPENSSL_gmtime_adj(struct tm *tm, int offset_day, long offset_sec);
+int OPENSSL_gmtime_adj(struct tm *tm, int offset_day, int64_t offset_sec);
 int OPENSSL_gmtime_diff(int *pday, int *psec, const struct tm *from,
     const struct tm *to);
 int asn1_time_time_t_to_tm(const time_t *time, struct tm *out_tm);
@@ -186,5 +186,8 @@ void ASN1_primitive_free(ASN1_VALUE **pval, const ASN1_ITEM *it);
 
 int ASN1_template_new(ASN1_VALUE **pval, const ASN1_TEMPLATE *tt);
 void ASN1_template_free(ASN1_VALUE **pval, const ASN1_TEMPLATE *tt);
+
+int ASN1_time_parse(const char *_bytes, size_t _len, struct tm *_tm, int _mode);
+int ASN1_time_tm_cmp(struct tm *_tm1, struct tm *_tm2);
 
 __END_HIDDEN_DECLS

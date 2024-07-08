@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile.inc,v 1.13 2023/04/15 18:23:54 tb Exp $
+# $OpenBSD: Makefile.inc,v 1.28 2024/06/04 15:14:45 deraadt Exp $
 
 # amd64-specific libcrypto build rules
 
@@ -13,9 +13,11 @@ SSLASM+= aes bsaes-x86_64
 CFLAGS+= -DVPAES_ASM
 SSLASM+= aes vpaes-x86_64
 SSLASM+= aes aesni-x86_64
-SSLASM+= aes aesni-sha1-x86_64
-# bf
-SRCS+= bf_enc.c
+CFLAGS+= -DHAVE_AES_CBC_ENCRYPT_INTERNAL
+CFLAGS+= -DHAVE_AES_SET_ENCRYPT_KEY_INTERNAL
+CFLAGS+= -DHAVE_AES_SET_DECRYPT_KEY_INTERNAL
+CFLAGS+= -DHAVE_AES_ENCRYPT_INTERNAL
+CFLAGS+= -DHAVE_AES_DECRYPT_INTERNAL
 # bn
 CFLAGS+= -DOPENSSL_IA32_SSE2
 CFLAGS+= -DRSA_ASM
@@ -39,11 +41,6 @@ SRCS += bignum_sqr_8_16_alt.S
 SRCS += bignum_sub.S
 SRCS += word_clz.S
 
-# camellia
-SRCS+=	cmll_misc.c
-SSLASM+= camellia cmll-x86_64
-# des
-SRCS+= des_enc.c fcrypt_b.c
 # md5
 CFLAGS+= -DMD5_ASM
 SSLASM+= md5 md5-x86_64
@@ -51,9 +48,9 @@ SSLASM+= md5 md5-x86_64
 CFLAGS+= -DGHASH_ASM
 SSLASM+= modes ghash-x86_64
 # rc4
-CFLAGS+= -DRC4_MD5_ASM
+CFLAGS+= -DHAVE_RC4_INTERNAL
+CFLAGS+= -DHAVE_RC4_SET_KEY_INTERNAL
 SSLASM+= rc4 rc4-x86_64
-SSLASM+= rc4 rc4-md5-x86_64
 # ripemd
 # sha
 CFLAGS+= -DSHA1_ASM
@@ -70,9 +67,6 @@ GENERATED+= sha512-x86_64.S
 sha512-x86_64.S: ${LCRYPTO_SRC}/sha/asm/sha512-x86_64.pl ${EXTRA_PL}
 	cd ${LCRYPTO_SRC}/sha/asm ; \
 		/usr/bin/perl ./sha512-x86_64.pl ${.OBJDIR}/${.TARGET}
-# whrlpool
-CFLAGS+= -DWHIRLPOOL_ASM
-SSLASM+= whrlpool wp-x86_64
 
 .for dir f in ${SSLASM}
 SRCS+=	${f}.S
@@ -89,3 +83,5 @@ GENERATED+=x86_64cpuid.S
 x86_64cpuid.S: ${LCRYPTO_SRC}/x86_64cpuid.pl ${EXTRA_PL}
 	(cd ${LCRYPTO_SRC}/${dir} ; \
 		/usr/bin/perl ./x86_64cpuid.pl) > ${.TARGET}
+
+CFLAGS+=-fret-clean

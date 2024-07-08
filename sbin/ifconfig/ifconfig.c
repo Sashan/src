@@ -1,4 +1,4 @@
-/*	$OpenBSD: ifconfig.c,v 1.470 2023/11/23 03:38:34 dlg Exp $	*/
+/*	$OpenBSD: ifconfig.c,v 1.474 2024/06/29 12:09:51 jsg Exp $	*/
 /*	$NetBSD: ifconfig.c,v 1.40 1997/10/01 02:19:43 enami Exp $	*/
 
 /*
@@ -125,7 +125,7 @@
 
 #define HWFEATURESBITS							\
 	"\024\1CSUM_IPv4\2CSUM_TCPv4\3CSUM_UDPv4"			\
-	"\5VLAN_MTU\6VLAN_HWTAGGING\10CSUM_TCPv6"			\
+	"\5VLAN_MTU\6VLAN_HWTAGGING\7VLAN_HWOFFLOAD\10CSUM_TCPv6"	\
 	"\11CSUM_UDPv6\15TSOv4\16TSOv6\17LRO\20WOL"
 
 struct ifencap {
@@ -710,8 +710,6 @@ void	init_current_media(void);
 void	process_join_commands(void);
 
 void	process_wg_commands(void);
-
-unsigned long get_ts_map(int, int, int);
 
 void	in_status(int);
 void	in_getaddr(const char *, int);
@@ -3211,10 +3209,6 @@ print_tunnel(const struct if_laddrreq *req)
 		printf(":%s", psrcport);
 
 	if (req->dstaddr.ss_family != AF_UNSPEC) {
-		in_port_t dstport = 0;
-		const struct sockaddr_in *sin;
-		const struct sockaddr_in6 *sin6;
-
 		if (getnameinfo((struct sockaddr *)&req->dstaddr,
 		    req->dstaddr.ss_len, pdstaddr, sizeof(pdstaddr),
 		    pdstport, sizeof(pdstport), niflag) != 0)
@@ -6313,7 +6307,7 @@ umb_pinop(int op, int is_puk, const char *pin, const char *newpin)
 	if (newpin) {
 		if ((mp.newpinlen = char_to_utf16(newpin, (uint16_t *)mp.newpin,
 		    sizeof (mp.newpin))) == -1)
-		errx(1, "new PIN too long");
+			errx(1, "new PIN too long");
 	}
 
 	if (ioctl(sock, SIOCSUMBPARAM, (caddr_t)&ifr) == -1)

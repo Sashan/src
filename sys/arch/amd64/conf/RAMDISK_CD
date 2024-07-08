@@ -1,4 +1,4 @@
-#	$OpenBSD: RAMDISK_CD,v 1.204 2023/12/28 17:36:28 stsp Exp $
+#	$OpenBSD: RAMDISK_CD,v 1.206 2024/05/09 17:05:22 mglocker Exp $
 
 machine		amd64
 maxusers	4
@@ -184,6 +184,7 @@ adw*		at pci?			# AdvanSys ULTRA WIDE SCSI
 pcscp*		at pci?			# AMD 53c974 PCscsi-PCI SCSI
 vmwpvs*		at pci?			# VMware ParaVirtual SCSI
 nvme*		at pci?			# NVMe controllers
+ufshci*		at pci?			# UFSHCI controllers
 softraid0	at root
 
 scsibus*	at scsi?
@@ -284,7 +285,7 @@ wpi*		at pci?			# Intel PRO/Wireless 3945ABG
 iwn*		at pci?			# Intel Wireless WiFi Link 4965AGN
 iwm*		at pci?			# Intel WiFi Link 7xxx
 iwx*		at pci?			# Intel WiFi Link 22xxx
-#qwx*		at pci?			# Qualcomm 802.11ax
+qwx*		at pci?			# Qualcomm 802.11ax
 ral*		at pci?			# Ralink RT2500/RT2501/RT2600
 ral*		at cardbus?		# Ralink RT2500/RT2501/RT2600
 rtw*		at pci?			# Realtek 8180

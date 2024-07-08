@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwn.c,v 1.260 2022/06/19 18:27:06 stsp Exp $	*/
+/*	$OpenBSD: if_iwn.c,v 1.263 2024/05/24 06:02:53 jsg Exp $	*/
 
 /*-
  * Copyright (c) 2007-2010 Damien Bergamini <damien.bergamini@free.fr>
@@ -26,12 +26,10 @@
 #include <sys/param.h>
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
-#include <sys/kernel.h>
 #include <sys/rwlock.h>
 #include <sys/socket.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
-#include <sys/conf.h>
 #include <sys/device.h>
 #include <sys/task.h>
 #include <sys/endian.h>
@@ -230,7 +228,6 @@ void		iwn_tune_sensitivity(struct iwn_softc *,
 		    const struct iwn_rx_stats *);
 int		iwn_send_sensitivity(struct iwn_softc *);
 int		iwn_set_pslevel(struct iwn_softc *, int, int, int);
-int		iwn_send_temperature_offset(struct iwn_softc *);
 int		iwn_send_btcoex(struct iwn_softc *);
 int		iwn_send_advanced_btcoex(struct iwn_softc *);
 int		iwn5000_runtime_calib(struct iwn_softc *);
@@ -5359,7 +5356,7 @@ iwn_scan(struct iwn_softc *sc, uint16_t flags, int bgscan)
 		 * The current mode might have been fixed during association.
 		 * Ensure all channels get scanned.
 		 */
-		if (IFM_MODE(ic->ic_media.ifm_cur->ifm_media) == IFM_AUTO)
+		if (IFM_SUBTYPE(ic->ic_media.ifm_cur->ifm_media) == IFM_AUTO)
 			ieee80211_setmode(ic, IEEE80211_MODE_AUTO);
 
 		sc->sc_flags |= IWN_FLAG_SCANNING;

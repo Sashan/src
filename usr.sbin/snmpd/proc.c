@@ -1,4 +1,4 @@
-/*	$OpenBSD: proc.c,v 1.29 2023/12/21 12:43:31 martijn Exp $	*/
+/*	$OpenBSD: proc.c,v 1.32 2024/04/09 15:48:01 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2010 - 2016 Reyk Floeter <reyk@openbsd.org>
@@ -37,7 +37,7 @@
 #include "snmpd.h"
 
 void	 proc_exec(struct privsep *, struct privsep_proc *, unsigned int, int,
-	    int, char **);
+	    char **);
 void	 proc_setup(struct privsep *, struct privsep_proc *, unsigned int);
 void	 proc_open(struct privsep *, int, int);
 void	 proc_accept(struct privsep *, int, enum privsep_procid,
@@ -68,7 +68,7 @@ proc_getid(struct privsep_proc *procs, unsigned int nproc,
 
 void
 proc_exec(struct privsep *ps, struct privsep_proc *procs, unsigned int nproc,
-    int debug, int argc, char **argv)
+    int argc, char **argv)
 {
 	unsigned int		 proc, nargc, i, proc_i;
 	char			**nargv;
@@ -117,10 +117,6 @@ proc_exec(struct privsep *ps, struct privsep_proc *procs, unsigned int nproc,
 				fatal("%s: fork", __func__);
 				break;
 			case 0:
-				/* First create a new session */
-				if (setsid() == -1)
-					fatal("setsid");
-
 				/* Prepare parent socket. */
 				if (fd != PROC_PARENT_SOCK_FILENO) {
 					if (dup2(fd, PROC_PARENT_SOCK_FILENO)
@@ -128,16 +124,6 @@ proc_exec(struct privsep *ps, struct privsep_proc *procs, unsigned int nproc,
 						fatal("dup2");
 				} else if (fcntl(fd, F_SETFD, 0) == -1)
 					fatal("fcntl");
-
-				/* Daemons detach from terminal. */
-				if (!debug && (fd =
-				    open(_PATH_DEVNULL, O_RDWR, 0)) != -1) {
-					(void)dup2(fd, STDIN_FILENO);
-					(void)dup2(fd, STDOUT_FILENO);
-					(void)dup2(fd, STDERR_FILENO);
-					if (fd > 2)
-						(void)close(fd);
-				}
 
 				execvp(argv[0], nargv);
 				fatal("%s: execvp", __func__);
@@ -205,6 +191,9 @@ proc_init(struct privsep *ps, struct privsep_proc *procs, unsigned int nproc,
 		privsep_process = PROC_PARENT;
 		proc_setup(ps, procs, nproc);
 
+		if (!debug && daemon(0, 0) == -1)
+			fatal("failed to daemonize");
+
 		/*
 		 * Create the children sockets so we can use them
 		 * to distribute the rest of the socketpair()s using
@@ -229,7 +218,7 @@ proc_init(struct privsep *ps, struct privsep_proc *procs, unsigned int nproc,
 		}
 
 		/* Engage! */
-		proc_exec(ps, procs, nproc, debug, argc, argv);
+		proc_exec(ps, procs, nproc, argc, argv);
 		return;
 	}
 
@@ -515,9 +504,6 @@ proc_run(struct privsep *ps, struct privsep_proc *p,
 
 	log_procinit(p->p_title);
 
-	/* Set the process group of the current process */
-	setpgid(0, 0);
-
 	/* Use non-standard user */
 	if (p->p_pw != NULL)
 		pw = p->p_pw;
@@ -644,7 +630,7 @@ proc_dispatch(int fd, short event, void *arg)
 		case IMSG_CTL_PROCFD:
 			IMSG_SIZE_CHECK(&imsg, &pf);
 			memcpy(&pf, imsg.data, sizeof(pf));
-			proc_accept(ps, imsg.fd, pf.pf_procid,
+			proc_accept(ps, imsg_get_fd(&imsg), pf.pf_procid,
 			    pf.pf_instance);
 			break;
 		default:
@@ -768,14 +754,6 @@ proc_composev(struct privsep *ps, enum privsep_procid id,
     uint16_t type, const struct iovec *iov, int iovcnt)
 {
 	return (proc_composev_imsg(ps, id, -1, type, -1, -1, iov, iovcnt));
-}
-
-int
-proc_forward_imsg(struct privsep *ps, struct imsg *imsg,
-    enum privsep_procid id, int n)
-{
-	return (proc_compose_imsg(ps, id, n, imsg->hdr.type,
-	    imsg->hdr.peerid, imsg->fd, imsg->data, IMSG_DATA_SIZE(imsg)));
 }
 
 struct imsgbuf *

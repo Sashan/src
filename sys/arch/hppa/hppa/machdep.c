@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.268 2023/01/06 19:10:18 miod Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.270 2024/05/22 14:25:47 jsg Exp $	*/
 
 /*
  * Copyright (c) 1999-2003 Michael Shalayeff
@@ -177,12 +177,6 @@ extern const u_int itlb_s[], itlbna_s[], dtlb_s[], dtlbna_s[], tlbd_s[];
 extern const u_int itlb_t[], itlbna_t[], dtlb_t[], dtlbna_t[], tlbd_t[];
 extern const u_int itlb_l[], itlbna_l[], dtlb_l[], dtlbna_l[], tlbd_l[];
 extern const u_int itlb_u[], itlbna_u[], dtlb_u[], dtlbna_u[], tlbd_u[];
-int iibtlb_s(int i, pa_space_t sp, vaddr_t va, paddr_t pa,
-    vsize_t sz, u_int prot);
-int idbtlb_s(int i, pa_space_t sp, vaddr_t va, paddr_t pa,
-    vsize_t sz, u_int prot);
-int ibtlb_t(int i, pa_space_t sp, vaddr_t va, paddr_t pa,
-    vsize_t sz, u_int prot);
 int ibtlb_l(int i, pa_space_t sp, vaddr_t va, paddr_t pa,
     vsize_t sz, u_int prot);
 int ibtlb_u(int i, pa_space_t sp, vaddr_t va, paddr_t pa,
@@ -508,7 +502,8 @@ cpuid()
 	}
 
 	if (cpu_type)
-		for (p = cpu_types; p->name[0] && p->cpuid != cpu_type; p++);
+		for (p = cpu_types; p->name[0] && p->cpuid != cpu_type; p++)
+			;
 	else
 		for (p = cpu_types;
 		    p->name[0] && p->features != cpu_features; p++);
@@ -831,7 +826,8 @@ btlb_insert(pa_space_t space, vaddr_t va, paddr_t pa, vsize_t *lenp, u_int prot)
 	}
 
 	/* align size */
-	for (len = pdc_btlb.min_size << PGSHIFT; len < *lenp; len <<= 1);
+	for (len = pdc_btlb.min_size << PGSHIFT; len < *lenp; len <<= 1)
+		;
 	len >>= PGSHIFT;
 	i = ffs(~mask) - 1;
 	if (len > pdc_btlb.max_size || i < 0 || i >= btlb_max) {

@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_swap.c,v 1.168 2023/12/05 15:50:45 claudio Exp $	*/
+/*	$OpenBSD: uvm_swap.c,v 1.170 2024/04/16 10:06:37 claudio Exp $	*/
 /*	$NetBSD: uvm_swap.c,v 1.40 2000/11/17 11:39:39 mrg Exp $	*/
 
 /*
@@ -1088,6 +1088,7 @@ swap_off(struct proc *p, struct swapdev *sdp)
 	 */
 	if (sdp->swd_vp->v_type == VREG) {
 		crfree(sdp->swd_cred);
+		bufq_destroy(&sdp->swd_bufq);
 	}
 	vrele(sdp->swd_vp);
 	if (sdp->swd_vp != rootvp) {
@@ -1277,7 +1278,6 @@ sw_reg_strategy(struct swapdev *sdp, struct buf *bp, int bn)
 		nbp->vb_buf.b_iodone   = sw_reg_iodone;
 		nbp->vb_buf.b_vp       = NULLVP;
 		nbp->vb_buf.b_vnbufs.le_next = NOLIST;
-		LIST_INIT(&nbp->vb_buf.b_dep);
 
 		/*
 		 * set b_dirtyoff/end and b_validoff/end.   this is
@@ -1863,7 +1863,6 @@ uvm_swap_io(struct vm_page **pps, int startslot, int npages, int flags)
 		bp->b_data = (caddr_t)kva;
 	bp->b_bq = NULL;
 	bp->b_blkno = startblk;
-	LIST_INIT(&bp->b_dep);
 	s = splbio();
 	bp->b_vp = NULL;
 	buf_replacevnode(bp, swapdev_vp);

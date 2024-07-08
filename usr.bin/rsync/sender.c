@@ -1,4 +1,4 @@
-/*	$OpenBSD: sender.c,v 1.30 2021/08/29 13:43:46 claudio Exp $ */
+/*	$OpenBSD: sender.c,v 1.33 2024/03/20 09:26:42 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -159,7 +159,7 @@ send_up_fsm(struct sess *sess, size_t *phase,
 		 * finished with the file.
 		 */
 
-		hash_file(up->stat.map, up->stat.mapsz, fmd, sess);
+		hash_file_final(&up->stat.ctx, fmd);
 		if (!io_lowbuffer_alloc(sess, wb, wbsz, wbmax, dsz)) {
 			ERRX1("io_lowbuffer_alloc");
 			return 0;
@@ -432,7 +432,7 @@ rsync_sender(struct sess *sess, int fdin,
 	 * poll events on demand.
 	 */
 
-	pfd[0].fd = fdin; /* from receiver */
+	pfd[0].fd = -1; /* from receiver */
 	pfd[0].events = POLLIN;
 	pfd[1].fd = -1; /* to receiver */
 	pfd[1].events = POLLOUT;
@@ -440,7 +440,11 @@ rsync_sender(struct sess *sess, int fdin,
 	pfd[2].events = POLLIN;
 
 	for (;;) {
-		assert(pfd[0].fd != -1);
+		/* disable recevier until all buffered data was sent */
+		if (pfd[1].fd != -1 && wbufsz > 0)
+			pfd[0].fd = -1;
+		else
+			pfd[0].fd = fdin;
 		if ((c = poll(pfd, 3, poll_timeout)) == -1) {
 			ERR("poll");
 			goto out;
@@ -584,7 +588,8 @@ rsync_sender(struct sess *sess, int fdin,
 			    &up, &wbuf, &wbufsz, &wbufmax, fl)) {
 				ERRX1("send_up_fsm");
 				goto out;
-			} else if (phase > 1)
+			}
+			if (phase > 1)
 				break;
 		}
 
@@ -615,6 +620,7 @@ rsync_sender(struct sess *sess, int fdin,
 
 			/* Hash our blocks. */
 
+			hash_file_start(&up.stat.ctx, sess);
 			blkhash_set(up.stat.blktab, up.cur->blks);
 
 			/*
@@ -659,7 +665,8 @@ rsync_sender(struct sess *sess, int fdin,
 	if (!io_read_int(sess, fdin, &idx)) {
 		ERRX1("io_read_int");
 		goto out;
-	} else if (idx != -1) {
+	}
+	if (idx != -1) {
 		ERRX("read incorrect update complete ack");
 		goto out;
 	}

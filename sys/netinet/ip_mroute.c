@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_mroute.c,v 1.140 2023/12/06 09:27:17 bluhm Exp $	*/
+/*	$OpenBSD: ip_mroute.c,v 1.143 2024/07/02 18:33:47 bluhm Exp $	*/
 /*	$NetBSD: ip_mroute.c,v 1.85 2004/04/26 01:31:57 matt Exp $	*/
 
 /*
@@ -122,7 +122,7 @@ int get_api_support(struct mbuf *);
 int get_api_config(struct mbuf *);
 int socket_send(struct socket *, struct mbuf *,
 			    struct sockaddr_in *);
-int ip_mdq(struct mbuf *, struct ifnet *, struct rtentry *);
+int ip_mdq(struct mbuf *, struct ifnet *, struct rtentry *, int);
 struct ifnet *if_lookupbyvif(vifi_t, unsigned int);
 struct rtentry *rt_mcast_add(struct ifnet *, struct sockaddr *,
     struct sockaddr *);
@@ -430,8 +430,9 @@ mrt_rtwalk_mfcsysctl(struct rtentry *rt, void *arg, unsigned int rtableid)
 	}
 
 	for (minfo = msa->msa_minfos;
-	     (uint8_t *)minfo < ((uint8_t *)msa->msa_minfos + msa->msa_len);
-	     minfo++) {
+	    (uint8_t *)(minfo + 1) <=
+	    (uint8_t *)msa->msa_minfos + msa->msa_len;
+	    minfo++) {
 		/* Find a new entry or update old entry. */
 		if (minfo->mfc_origin.s_addr !=
 		    satosin(rt->rt_gateway)->sin_addr.s_addr ||
@@ -471,13 +472,11 @@ mrt_sysctl_mfc(void *oldp, size_t *oldlenp)
 	if (oldp != NULL && *oldlenp > MAXPHYS)
 		return (EINVAL);
 
-	if (oldp != NULL)
+	memset(&msa, 0, sizeof(msa));
+	if (oldp != NULL && *oldlenp > 0) {
 		msa.msa_minfos = malloc(*oldlenp, M_TEMP, M_WAITOK | M_ZERO);
-	else
-		msa.msa_minfos = NULL;
-
-	msa.msa_len = *oldlenp;
-	msa.msa_needed = 0;
+		msa.msa_len = *oldlenp;
+	}
 
 	for (rtableid = 0; rtableid <= RT_TABLEID_MAX; rtableid++) {
 		rtable_walk(rtableid, AF_INET, NULL, mrt_rtwalk_mfcsysctl,
@@ -486,11 +485,11 @@ mrt_sysctl_mfc(void *oldp, size_t *oldlenp)
 
 	if (msa.msa_minfos != NULL && msa.msa_needed > 0 &&
 	    (error = copyout(msa.msa_minfos, oldp, msa.msa_needed)) != 0) {
-		free(msa.msa_minfos, M_TEMP, *oldlenp);
+		free(msa.msa_minfos, M_TEMP, msa.msa_len);
 		return (error);
 	}
 
-	free(msa.msa_minfos, M_TEMP, *oldlenp);
+	free(msa.msa_minfos, M_TEMP, msa.msa_len);
 	*oldlenp = msa.msa_needed;
 
 	return (0);
@@ -1051,12 +1050,11 @@ int
 socket_send(struct socket *so, struct mbuf *mm, struct sockaddr_in *src)
 {
 	if (so != NULL) {
-		struct inpcb *inp = sotoinpcb(so);
 		int ret;
 
-		mtx_enter(&inp->inp_mtx);
+		mtx_enter(&so->so_rcv.sb_mtx);
 		ret = sbappendaddr(so, &so->so_rcv, sintosa(src), mm, NULL);
-		mtx_leave(&inp->inp_mtx);
+		mtx_leave(&so->so_rcv.sb_mtx);
 
 		if (ret != 0) {
 			sorwakeup(so);
@@ -1082,7 +1080,7 @@ socket_send(struct socket *so, struct mbuf *mm, struct sockaddr_in *src)
 #define TUNNEL_LEN  12  /* # bytes of IP option for tunnel encapsulation  */
 
 int
-ip_mforward(struct mbuf *m, struct ifnet *ifp)
+ip_mforward(struct mbuf *m, struct ifnet *ifp, int flags)
 {
 	struct ip *ip = mtod(m, struct ip *);
 	struct vif *v;
@@ -1123,7 +1121,7 @@ ip_mforward(struct mbuf *m, struct ifnet *ifp)
 
 	/* Entry exists, so forward if necessary */
 	if (rt != NULL) {
-		return (ip_mdq(m, ifp, rt));
+		return (ip_mdq(m, ifp, rt, flags));
 	} else {
 		/*
 		 * If we don't have a route for packet's origin,
@@ -1185,7 +1183,7 @@ ip_mforward(struct mbuf *m, struct ifnet *ifp)
  * Packet forwarding routine once entry in the cache is made
  */
 int
-ip_mdq(struct mbuf *m, struct ifnet *ifp0, struct rtentry *rt)
+ip_mdq(struct mbuf *m, struct ifnet *ifp0, struct rtentry *rt, int flags)
 {
 	struct ip  *ip = mtod(m, struct ip *);
 	struct mfc *mfc = (struct mfc *)rt->rt_llinfo;
@@ -1283,7 +1281,7 @@ ip_mdq(struct mbuf *m, struct ifnet *ifp0, struct rtentry *rt)
 		imo.imo_ttl = ip->ip_ttl - IPTTLDEC;
 		imo.imo_loop = 1;
 
-		ip_output(mc, NULL, NULL, IP_FORWARDING, &imo, NULL, 0);
+		ip_output(mc, NULL, NULL, flags | IP_FORWARDING, &imo, NULL, 0);
 		if_put(ifp);
 	} while ((rt = rtable_iterate(rt)) != NULL);
 

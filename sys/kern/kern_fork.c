@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_fork.c,v 1.253 2023/10/24 13:20:11 claudio Exp $	*/
+/*	$OpenBSD: kern_fork.c,v 1.260 2024/06/03 12:48:25 claudio Exp $	*/
 /*	$NetBSD: kern_fork.c,v 1.29 1996/02/09 18:59:34 christos Exp $	*/
 
 /*
@@ -248,6 +248,21 @@ process_new(struct proc *p, struct process *parent, int flags)
 	if (parent->ps_session->s_ttyvp != NULL)
 		pr->ps_flags |= parent->ps_flags & PS_CONTROLT;
 
+	if (parent->ps_pin.pn_pins) {
+		pr->ps_pin.pn_pins = mallocarray(parent->ps_pin.pn_npins,
+		    sizeof(u_int), M_PINSYSCALL, M_WAITOK);
+		memcpy(pr->ps_pin.pn_pins, parent->ps_pin.pn_pins,
+		    parent->ps_pin.pn_npins * sizeof(u_int));
+		pr->ps_flags |= PS_PIN;
+	}
+	if (parent->ps_libcpin.pn_pins) {
+		pr->ps_libcpin.pn_pins = mallocarray(parent->ps_libcpin.pn_npins,
+		    sizeof(u_int), M_PINSYSCALL, M_WAITOK);
+		memcpy(pr->ps_libcpin.pn_pins, parent->ps_libcpin.pn_pins,
+		    parent->ps_libcpin.pn_npins * sizeof(u_int));
+		pr->ps_flags |= PS_LIBCPIN;
+	}
+
 	/*
 	 * Duplicate sub-structures as needed.
 	 * Increase reference counts on shared objects.
@@ -314,14 +329,13 @@ static inline void
 fork_thread_start(struct proc *p, struct proc *parent, int flags)
 {
 	struct cpu_info *ci;
-	int s;
 
-	SCHED_LOCK(s);
+	SCHED_LOCK();
 	ci = sched_choosecpu_fork(parent, flags);
 	TRACEPOINT(sched, fork, p->p_tid + THREAD_PID_OFFSET,
 	    p->p_p->ps_pid, CPU_INFO_UNIT(ci));
 	setrunqueue(ci, p, p->p_usrpri);
-	SCHED_UNLOCK(s);
+	SCHED_UNLOCK();
 }
 
 int
@@ -520,7 +534,7 @@ thread_fork(struct proc *curp, void *stack, void *tcb, pid_t *tidptr,
 	struct proc *p;
 	pid_t tid;
 	vaddr_t uaddr;
-	int s, error;
+	int error;
 
 	if (stack == NULL)
 		return EINVAL;
@@ -544,7 +558,6 @@ thread_fork(struct proc *curp, void *stack, void *tcb, pid_t *tidptr,
 
 	/* other links */
 	p->p_p = pr;
-	pr->ps_threadcnt++;
 
 	/* local copies */
 	p->p_fd		= pr->ps_fd;
@@ -563,18 +576,19 @@ thread_fork(struct proc *curp, void *stack, void *tcb, pid_t *tidptr,
 	LIST_INSERT_HEAD(&allproc, p, p_list);
 	LIST_INSERT_HEAD(TIDHASH(p->p_tid), p, p_hash);
 
-	SCHED_LOCK(s);
+	mtx_enter(&pr->ps_mtx);
 	TAILQ_INSERT_TAIL(&pr->ps_threads, p, p_thr_link);
+	pr->ps_threadcnt++;
 
 	/*
 	 * if somebody else wants to take us to single threaded mode,
 	 * count ourselves in.
 	 */
 	if (pr->ps_single) {
-		atomic_inc_int(&pr->ps_singlecount);
+		pr->ps_singlecnt++;
 		atomic_setbits_int(&p->p_flag, P_SUSPSINGLE);
 	}
-	SCHED_UNLOCK(s);
+	mtx_leave(&pr->ps_mtx);
 
 	/*
 	 * Return tid to parent thread and copy it out to userspace
@@ -673,12 +687,8 @@ proc_trampoline_mi(void)
 	struct proc *p = curproc;
 
 	SCHED_ASSERT_LOCKED();
-
 	clear_resched(curcpu());
-
-#if defined(MULTIPROCESSOR)
-	__mp_unlock(&sched_lock);
-#endif
+	mtx_leave(&sched_lock);
 	spl0();
 
 	SCHED_ASSERT_UNLOCKED();
@@ -689,11 +699,11 @@ proc_trampoline_mi(void)
 	/* Start any optional clock interrupts needed by the thread. */
 	if (ISSET(p->p_p->ps_flags, PS_ITIMER)) {
 		atomic_setbits_int(&spc->spc_schedflags, SPCF_ITIMER);
-		clockintr_advance(spc->spc_itimer, hardclock_period);
+		clockintr_advance(&spc->spc_itimer, hardclock_period);
 	}
 	if (ISSET(p->p_p->ps_flags, PS_PROFIL)) {
 		atomic_setbits_int(&spc->spc_schedflags, SPCF_PROFCLOCK);
-		clockintr_advance(spc->spc_profclock, profclock_period);
+		clockintr_advance(&spc->spc_profclock, profclock_period);
 	}
 
 	nanouptime(&spc->spc_runtime);

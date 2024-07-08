@@ -1,4 +1,4 @@
-/*      $OpenBSD: wdcvar.h,v 1.57 2022/01/09 05:42:42 jsg Exp $     */
+/*      $OpenBSD: wdcvar.h,v 1.59 2024/06/18 12:37:29 jsg Exp $     */
 /*	$NetBSD: wdcvar.h,v 1.17 1999/04/11 20:50:29 bouyer Exp $	*/
 
 /*-
@@ -287,9 +287,6 @@ void  wdccommandshort(struct channel_softc *, int, int);
 void  wdctimeout(void *arg);
 void  wdc_do_reset(struct channel_softc *);
 
-int   wdc_addref(struct channel_softc *);
-void  wdc_delref(struct channel_softc *);
-
 /*
  * ST506 spec says that if READY or SEEKCMPLT go off, then the read or write
  * command is aborted.
@@ -305,7 +302,6 @@ void  wdc_delref(struct channel_softc *);
 
 void wdc_disable_intr(struct channel_softc *);
 void wdc_enable_intr(struct channel_softc *);
-int wdc_select_drive(struct channel_softc *, int, int);
 void wdc_set_drive(struct channel_softc *, int drive);
 void wdc_output_bytes(struct ata_drive_datas *drvp, void *, unsigned int);
 void wdc_input_bytes(struct ata_drive_datas *drvp, void *, unsigned int);

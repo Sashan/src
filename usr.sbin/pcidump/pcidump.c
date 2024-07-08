@@ -1,4 +1,4 @@
-/*	$OpenBSD: pcidump.c,v 1.69 2023/04/16 17:26:14 kettenis Exp $	*/
+/*	$OpenBSD: pcidump.c,v 1.71 2024/04/23 13:34:51 jsg Exp $	*/
 
 /*
  * Copyright (c) 2006, 2007 David Gwynne <loki@animata.net>
@@ -337,11 +337,11 @@ probe(int bus, int dev, int func)
 
 	if (vendor != NULL) {
 		for (pkp = pci_known_products; pkp->productname != NULL; pkp++)
-		if (pkp->vendor == PCI_VENDOR(id_reg) &&
-		    pkp->product == PCI_PRODUCT(id_reg)) {
-			product = pkp->productname;
-			break;
-		}
+			if (pkp->vendor == PCI_VENDOR(id_reg) &&
+				pkp->product == PCI_PRODUCT(id_reg)) {
+				product = pkp->productname;
+				break;
+			}
 	}
 
 	printf(" %d:%d:%d: %s %s\n", bus, dev, func,
@@ -606,7 +606,10 @@ dump_msi(int bus, int dev, int func, u_int8_t ptr)
 	if (pci_read(bus, dev, func, ptr, &reg) != 0)
 		return;
 
-	printf("\t\tEnabled: %s\n", reg & PCI_MSI_MC_MSIE ? "yes" : "no");
+	printf("\t\tEnabled: %s; %d vectors (%d enabled)\n",
+	    reg & PCI_MSI_MC_MSIE ? "yes" : "no",
+	    (1 << ((reg & PCI_MSI_MC_MMC_MASK) >> PCI_MSI_MC_MMC_SHIFT)),
+	    (1 << ((reg & PCI_MSI_MC_MME_MASK) >> PCI_MSI_MC_MME_SHIFT)));
 }
 
 void

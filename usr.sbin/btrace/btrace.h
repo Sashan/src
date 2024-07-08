@@ -1,4 +1,4 @@
-/*	$OpenBSD: btrace.h,v 1.13 2023/09/11 19:01:26 mpi Exp $ */
+/*	$OpenBSD: btrace.h,v 1.15 2024/05/21 05:00:48 jsg Exp $ */
 
 /*
  * Copyright (c) 2019 - 2020 Martin Pieuchot <mpi@openbsd.org>
@@ -38,7 +38,6 @@ unsigned long		 dt_get_offset(pid_t);
 /* ksyms.c */
 struct syms;
 struct syms		*kelf_open(const char *);
-void			 kelf_offset(struct syms *, unsigned long);
 void			 kelf_close(struct syms *);
 int			 kelf_snprintsym(struct syms *, char *, size_t,
 			    unsigned long, unsigned long);
@@ -58,7 +57,7 @@ void			 hist_increment(struct hist *, const char *);
 void			 hist_print(struct hist *, const char *);
 
 #define KLEN	1024	/* # of characters in map key, contain a stack trace */
-#define STRLEN	64	/* maximum # of bytes to output via str() function */
+#define STRLEN	128	/* maximum # of bytes to output via str() function */
 
 /* printf.c */
 int			 stmt_printf(struct bt_stmt *, struct dt_evt *);

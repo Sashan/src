@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtp_session.c,v 1.439 2024/01/03 08:11:15 op Exp $	*/
+/*	$OpenBSD: smtp_session.c,v 1.442 2024/03/20 17:52:43 op Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -489,7 +489,7 @@ header_domain_append_callback(struct smtp_tx *tx, const char *hdr,
 				quote = !quote;
 			if (line[i] == ')' && !escape && !quote && comment)
 				comment--;
-			if (line[i] == '\\' && !escape && !comment && !quote)
+			if (line[i] == '\\' && !escape && !comment)
 				escape = 1;
 			else
 				escape = 0;
@@ -702,7 +702,7 @@ smtp_session_imsg(struct mproc *p, struct imsg *imsg)
 	const char			*line, *helo;
 	uint64_t			 reqid, evpid;
 	uint32_t			 msgid;
-	int				 status, success;
+	int				 status, success, fd;
 	int                              filter_response;
 	const char                      *filter_param;
 	uint8_t                          i;
@@ -802,19 +802,20 @@ smtp_session_imsg(struct mproc *p, struct imsg *imsg)
 		m_get_int(&m, &success);
 		m_end(&m);
 
+		fd = imsg_get_fd(imsg);
 		s = tree_xpop(&wait_queue_fd, reqid);
-		if (!success || imsg->fd == -1) {
-			if (imsg->fd != -1)
-				close(imsg->fd);
+		if (!success || fd == -1) {
+			if (fd != -1)
+				close(fd);
 			smtp_reply(s, "421 %s Temporary Error",
 			    esc_code(ESC_STATUS_TEMPFAIL, ESC_OTHER_MAIL_SYSTEM_STATUS));
 			smtp_enter_state(s, STATE_QUIT);
 			return;
 		}
 
-		log_debug("smtp: %p: fd %d from queue", s, imsg->fd);
+		log_debug("smtp: %p: fd %d from queue", s, fd);
 
-		if (smtp_message_fd(s->tx, imsg->fd)) {
+		if (smtp_message_fd(s->tx, fd)) {
 			if (!SESSION_DATA_FILTERED(s))
 				smtp_message_begin(s->tx);
 			else
@@ -828,19 +829,20 @@ smtp_session_imsg(struct mproc *p, struct imsg *imsg)
 		m_get_int(&m, &success);
 		m_end(&m);
 
+		fd = imsg_get_fd(imsg);
 		s = tree_xpop(&wait_filter_fd, reqid);
-		if (!success || imsg->fd == -1) {
-			if (imsg->fd != -1)
-				close(imsg->fd);
+		if (!success || fd == -1) {
+			if (fd != -1)
+				close(fd);
 			smtp_reply(s, "421 %s Temporary Error",
 			    esc_code(ESC_STATUS_TEMPFAIL, ESC_OTHER_MAIL_SYSTEM_STATUS));
 			smtp_enter_state(s, STATE_QUIT);
 			return;
 		}
 
-		log_debug("smtp: %p: fd %d from lka", s, imsg->fd);
+		log_debug("smtp: %p: fd %d from lka", s, fd);
 
-		smtp_filter_fd(s->tx, imsg->fd);
+		smtp_filter_fd(s->tx, fd);
 		smtp_message_begin(s->tx);
 		return;
 
@@ -2479,7 +2481,7 @@ smtp_tx_rcpt_to(struct smtp_tx *tx, const char *line)
 
 			if ((p = strchr(opt, ';')) == NULL ||
 			    !valid_xtext(p + 1) ||
-			    strlcpy(opt, tx->evp.dsn_orcpt, len) >= len) {
+			    strlcpy(tx->evp.dsn_orcpt, opt, len) >= len) {
 				smtp_reply(tx->session,
 				    "553 ORCPT address syntax error");
 				return;

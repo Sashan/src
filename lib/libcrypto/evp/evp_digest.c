@@ -1,4 +1,4 @@
-/* $OpenBSD: evp_digest.c,v 1.7 2023/12/29 07:22:47 tb Exp $ */
+/* $OpenBSD: evp_digest.c,v 1.14 2024/04/10 15:00:38 beck Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -123,9 +123,10 @@
 int
 EVP_DigestInit(EVP_MD_CTX *ctx, const EVP_MD *type)
 {
-	EVP_MD_CTX_init(ctx);
+	EVP_MD_CTX_legacy_clear(ctx);
 	return EVP_DigestInit_ex(ctx, type, NULL);
 }
+LCRYPTO_ALIAS(EVP_DigestInit);
 
 int
 EVP_DigestInit_ex(EVP_MD_CTX *ctx, const EVP_MD *type, ENGINE *impl)
@@ -161,12 +162,14 @@ EVP_DigestInit_ex(EVP_MD_CTX *ctx, const EVP_MD *type, ENGINE *impl)
 		return 1;
 	return ctx->digest->init(ctx);
 }
+LCRYPTO_ALIAS(EVP_DigestInit_ex);
 
 int
 EVP_DigestUpdate(EVP_MD_CTX *ctx, const void *data, size_t count)
 {
 	return ctx->update(ctx, data, count);
 }
+LCRYPTO_ALIAS(EVP_DigestUpdate);
 
 /* The caller can assume that this removes any secret data from the context */
 int
@@ -178,6 +181,7 @@ EVP_DigestFinal(EVP_MD_CTX *ctx, unsigned char *md, unsigned int *size)
 	EVP_MD_CTX_cleanup(ctx);
 	return ret;
 }
+LCRYPTO_ALIAS(EVP_DigestFinal);
 
 /* The caller can assume that this removes any secret data from the context */
 int
@@ -199,6 +203,7 @@ EVP_DigestFinal_ex(EVP_MD_CTX *ctx, unsigned char *md, unsigned int *size)
 	memset(ctx->md_data, 0, ctx->digest->ctx_size);
 	return ret;
 }
+LCRYPTO_ALIAS(EVP_DigestFinal_ex);
 
 int
 EVP_Digest(const void *data, size_t count,
@@ -207,7 +212,7 @@ EVP_Digest(const void *data, size_t count,
 	EVP_MD_CTX ctx;
 	int ret;
 
-	EVP_MD_CTX_init(&ctx);
+	EVP_MD_CTX_legacy_clear(&ctx);
 	EVP_MD_CTX_set_flags(&ctx, EVP_MD_CTX_FLAG_ONESHOT);
 	ret = EVP_DigestInit_ex(&ctx, type, NULL) &&
 	    EVP_DigestUpdate(&ctx, data, count) &&
@@ -216,12 +221,14 @@ EVP_Digest(const void *data, size_t count,
 
 	return ret;
 }
+LCRYPTO_ALIAS(EVP_Digest);
 
 EVP_MD_CTX *
 EVP_MD_CTX_new(void)
 {
 	return calloc(1, sizeof(EVP_MD_CTX));
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_new);
 
 void
 EVP_MD_CTX_free(EVP_MD_CTX *ctx)
@@ -233,35 +240,48 @@ EVP_MD_CTX_free(EVP_MD_CTX *ctx)
 
 	free(ctx);
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_free);
 
 EVP_MD_CTX *
 EVP_MD_CTX_create(void)
 {
 	return EVP_MD_CTX_new();
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_create);
 
 void
 EVP_MD_CTX_destroy(EVP_MD_CTX *ctx)
 {
 	EVP_MD_CTX_free(ctx);
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_destroy);
 
 void
-EVP_MD_CTX_init(EVP_MD_CTX *ctx)
+EVP_MD_CTX_legacy_clear(EVP_MD_CTX *ctx)
 {
 	memset(ctx, 0, sizeof(*ctx));
 }
+
+int
+EVP_MD_CTX_init(EVP_MD_CTX *ctx)
+{
+	return EVP_MD_CTX_cleanup(ctx);
+}
+LCRYPTO_ALIAS(EVP_MD_CTX_init);
 
 int
 EVP_MD_CTX_reset(EVP_MD_CTX *ctx)
 {
 	return EVP_MD_CTX_cleanup(ctx);
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_reset);
 
-/* This call frees resources associated with the context */
 int
 EVP_MD_CTX_cleanup(EVP_MD_CTX *ctx)
 {
+	if (ctx == NULL)
+		return 1;
+
 	/*
 	 * Don't assume ctx->md_data was cleaned in EVP_Digest_Final,
 	 * because sometimes only copies of the context are ever finalised.
@@ -282,13 +302,15 @@ EVP_MD_CTX_cleanup(EVP_MD_CTX *ctx)
 
 	return 1;
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_cleanup);
 
 int
 EVP_MD_CTX_copy(EVP_MD_CTX *out, const EVP_MD_CTX *in)
 {
-	EVP_MD_CTX_init(out);
+	EVP_MD_CTX_legacy_clear(out);
 	return EVP_MD_CTX_copy_ex(out, in);
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_copy);
 
 int
 EVP_MD_CTX_copy_ex(EVP_MD_CTX *out, const EVP_MD_CTX *in)
@@ -344,6 +366,7 @@ EVP_MD_CTX_copy_ex(EVP_MD_CTX *out, const EVP_MD_CTX *in)
 
 	return 1;
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_copy_ex);
 
 int
 EVP_MD_CTX_ctrl(EVP_MD_CTX *ctx, int type, int arg, void *ptr)
@@ -367,6 +390,7 @@ EVP_MD_CTX_ctrl(EVP_MD_CTX *ctx, int type, int arg, void *ptr)
 	}
 	return ret;
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_ctrl);
 
 const EVP_MD *
 EVP_MD_CTX_md(const EVP_MD_CTX *ctx)
@@ -375,36 +399,42 @@ EVP_MD_CTX_md(const EVP_MD_CTX *ctx)
 		return NULL;
 	return ctx->digest;
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_md);
 
 void
 EVP_MD_CTX_clear_flags(EVP_MD_CTX *ctx, int flags)
 {
 	ctx->flags &= ~flags;
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_clear_flags);
 
 void
 EVP_MD_CTX_set_flags(EVP_MD_CTX *ctx, int flags)
 {
 	ctx->flags |= flags;
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_set_flags);
 
 int
 EVP_MD_CTX_test_flags(const EVP_MD_CTX *ctx, int flags)
 {
 	return (ctx->flags & flags);
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_test_flags);
 
 void *
 EVP_MD_CTX_md_data(const EVP_MD_CTX *ctx)
 {
 	return ctx->md_data;
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_md_data);
 
 EVP_PKEY_CTX *
 EVP_MD_CTX_pkey_ctx(const EVP_MD_CTX *ctx)
 {
 	return ctx->pctx;
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_pkey_ctx);
 
 void
 EVP_MD_CTX_set_pkey_ctx(EVP_MD_CTX *ctx, EVP_PKEY_CTX *pctx)
@@ -428,18 +458,21 @@ EVP_MD_CTX_set_pkey_ctx(EVP_MD_CTX *ctx, EVP_PKEY_CTX *pctx)
 		EVP_MD_CTX_set_flags(ctx, EVP_MD_CTX_FLAG_KEEP_PKEY_CTX);
 	}
 }
+LCRYPTO_ALIAS(EVP_MD_CTX_set_pkey_ctx);
 
 int
 EVP_MD_type(const EVP_MD *md)
 {
 	return md->type;
 }
+LCRYPTO_ALIAS(EVP_MD_type);
 
 int
 EVP_MD_pkey_type(const EVP_MD *md)
 {
 	return md->pkey_type;
 }
+LCRYPTO_ALIAS(EVP_MD_pkey_type);
 
 int
 EVP_MD_size(const EVP_MD *md)
@@ -450,127 +483,18 @@ EVP_MD_size(const EVP_MD *md)
 	}
 	return md->md_size;
 }
+LCRYPTO_ALIAS(EVP_MD_size);
 
 unsigned long
 EVP_MD_flags(const EVP_MD *md)
 {
 	return md->flags;
 }
+LCRYPTO_ALIAS(EVP_MD_flags);
 
 int
 EVP_MD_block_size(const EVP_MD *md)
 {
 	return md->block_size;
 }
-
-/*
- * XXX - remove everything below in the next bump.
- */
-
-EVP_MD *
-EVP_MD_meth_new(int md_type, int pkey_type)
-{
-	EVP_MD *md;
-
-	if ((md = calloc(1, sizeof(*md))) == NULL)
-		return NULL;
-
-	md->type = md_type;
-	md->pkey_type = pkey_type;
-
-	return md;
-}
-
-EVP_MD *
-EVP_MD_meth_dup(const EVP_MD *md)
-{
-	EVP_MD *to;
-
-	if ((to = EVP_MD_meth_new(md->type, md->pkey_type)) == NULL)
-		return NULL;
-
-	memcpy(to, md, sizeof(*to));
-
-	return to;
-}
-
-void
-EVP_MD_meth_free(EVP_MD *md)
-{
-	freezero(md, sizeof(*md));
-}
-
-int
-EVP_MD_meth_set_input_blocksize(EVP_MD *md, int blocksize)
-{
-	md->block_size = blocksize;
-	return 1;
-}
-
-int
-EVP_MD_meth_set_result_size(EVP_MD *md, int result_size)
-{
-	md->md_size = result_size;
-	return 1;
-}
-
-int
-EVP_MD_meth_set_app_datasize(EVP_MD *md, int datasize)
-{
-	md->ctx_size = datasize;
-	return 1;
-}
-
-int
-EVP_MD_meth_set_flags(EVP_MD *md, unsigned long flags)
-{
-	md->flags = flags;
-	return 1;
-}
-
-int
-EVP_MD_meth_set_init(EVP_MD *md, int (*init)(EVP_MD_CTX *ctx))
-{
-	md->init = init;
-	return 1;
-}
-
-int
-EVP_MD_meth_set_update(EVP_MD *md,
-    int (*update)(EVP_MD_CTX *ctx, const void *data, size_t count))
-{
-	md->update = update;
-	return 1;
-}
-
-int
-EVP_MD_meth_set_final(EVP_MD *md,
-    int (*final)(EVP_MD_CTX *ctx, unsigned char *md))
-{
-	md->final = final;
-	return 1;
-}
-
-int
-EVP_MD_meth_set_copy(EVP_MD *md,
-    int (*copy)(EVP_MD_CTX *to, const EVP_MD_CTX *from))
-{
-	md->copy = copy;
-	return 1;
-}
-
-int
-EVP_MD_meth_set_cleanup(EVP_MD *md,
-    int (*cleanup)(EVP_MD_CTX *ctx))
-{
-	md->cleanup = cleanup;
-	return 1;
-}
-
-int
-EVP_MD_meth_set_ctrl(EVP_MD *md,
-    int (*ctrl)(EVP_MD_CTX *ctx, int cmd, int p1, void *p2))
-{
-	md->md_ctrl = ctrl;
-	return 1;
-}
+LCRYPTO_ALIAS(EVP_MD_block_size);

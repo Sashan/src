@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_var.h,v 1.174 2024/01/11 13:49:49 bluhm Exp $	*/
+/*	$OpenBSD: tcp_var.h,v 1.178 2024/05/13 01:15:53 jsg Exp $	*/
 /*	$NetBSD: tcp_var.h,v 1.17 1996/02/13 23:44:24 christos Exp $	*/
 
 /*
@@ -247,16 +247,7 @@ struct syn_cache {
 	TAILQ_ENTRY(syn_cache) sc_bucketq;	/* [S] link on bucket list */
 	struct refcnt sc_refcnt;		/* ref count list and timer */
 	struct timeout sc_timer;		/* rexmt timer */
-	union {					/* cached route */
-		struct route route4;
-#ifdef INET6
-		struct route_in6 route6;
-#endif
-	} sc_route_u;
-#define sc_route4	sc_route_u.route4	/* [N] */
-#ifdef INET6
-#define sc_route6	sc_route_u.route6	/* [N] */
-#endif
+	struct route sc_route;			/* [N] cached route */
 	long sc_win;				/* [I] advertised window */
 	struct syn_cache_head *sc_buckethead;	/* [S] our bucket index */
 	struct syn_cache_set *sc_set;		/* [S] our syn cache set */
@@ -685,7 +676,7 @@ extern	const struct pr_usrreqs tcp6_usrreqs;
 #endif
 
 extern	struct pool tcpcb_pool;
-extern	struct inpcbtable tcbtable;	/* head of queue of active tcpcb's */
+extern	struct inpcbtable tcbtable, tcb6table;	/* queue of active tcpcb's */
 extern	int tcp_do_rfc1323;	/* enabled/disabled? */
 extern	int tcptv_keep_init;	/* [N] time to keep alive initial SYN packet */
 extern	int tcp_mssdflt;	/* default maximum segment size */
@@ -733,7 +724,6 @@ u_int	 tcp_hdrsz(struct tcpcb *);
 void	 tcp_mtudisc(struct inpcb *, int);
 void	 tcp_mtudisc_increase(struct inpcb *, int);
 #ifdef INET6
-void	tcp6_mtudisc(struct inpcb *, int);
 void	tcp6_mtudisc_callback(struct sockaddr_in6 *, u_int);
 #endif
 struct tcpcb *
@@ -780,7 +770,6 @@ int	 tcp_rcvoob(struct socket *, struct mbuf *, int);
 int	 tcp_sendoob(struct socket *, struct mbuf *, struct mbuf *,
 	     struct mbuf *);
 void	 tcp_xmit_timer(struct tcpcb *, int32_t);
-void	 tcpdropoldhalfopen(struct tcpcb *, u_int16_t);
 void	 tcp_sack_option(struct tcpcb *,struct tcphdr *,u_char *,int);
 void	 tcp_update_sack_list(struct tcpcb *tp, tcp_seq, tcp_seq);
 void	 tcp_del_sackholes(struct tcpcb *, struct tcphdr *);
@@ -799,7 +788,7 @@ int	tcp_signature(struct tdb *, int, struct mbuf *, struct tcphdr *,
 #endif /* TCP_SIGNATURE */
 void     tcp_set_iss_tsm(struct tcpcb *);
 
-void	 syn_cache_unreach(struct sockaddr *, struct sockaddr *,
+void	 syn_cache_unreach(const struct sockaddr *, const struct sockaddr *,
 	   struct tcphdr *, u_int);
 void	 syn_cache_init(void);
 void	 syn_cache_cleanup(struct tcpcb *);

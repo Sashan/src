@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2_pld.c,v 1.133 2023/09/02 18:36:30 tobhe Exp $	*/
+/*	$OpenBSD: ikev2_pld.c,v 1.135 2024/04/02 19:58:28 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -2074,19 +2074,25 @@ ikev2_pld_eap(struct iked *env, struct ikev2_payload *pld,
 	struct eap_header		 hdr;
 	struct eap_message		*eap = NULL;
 	const struct iked_sa		*sa = msg->msg_sa;
-	size_t				 len;
+	size_t				 eap_len;
 
 	if (ikev2_validate_eap(msg, offset, left, &hdr))
 		return (-1);
-	len = betoh16(hdr.eap_length);
 
-	if (len < sizeof(*eap)) {
+	eap_len = betoh16(hdr.eap_length);
+	if (left != eap_len) {
+		log_info("%s: malformed payload: EAP length does not match"
+		    " payload length (%zu != %zu)", __func__, left, eap_len);
+		return (-1);
+	}
+
+	if (eap_len < sizeof(*eap)) {
 		log_info("%s: %s id %d length %d", SPI_SA(sa, __func__),
 		    print_map(hdr.eap_code, eap_code_map),
 		    hdr.eap_id, betoh16(hdr.eap_length));
 	} else {
 		/* Now try to get the indicated length */
-		if ((eap = ibuf_seek(msg->msg_data, offset, len)) == NULL) {
+		if ((eap = ibuf_seek(msg->msg_data, offset, eap_len)) == NULL) {
 			log_debug("%s: invalid EAP length", __func__);
 			return (-1);
 		}
@@ -2099,6 +2105,82 @@ ikev2_pld_eap(struct iked *env, struct ikev2_payload *pld,
 		if (eap_parse(env, sa, msg, eap, msg->msg_response) == -1)
 			return (-1);
 		msg->msg_parent->msg_eap.eam_found = 1;
+	}
+
+	return (0);
+}
+
+/* parser for the initial IKE_AUTH payload, does not require msg_sa */
+int
+ikev2_pld_parse_quick(struct iked *env, struct ike_header *hdr,
+    struct iked_message *msg, size_t offset)
+{
+	struct ikev2_payload	 pld;
+	struct ikev2_frag_payload frag;
+	uint8_t			*msgbuf = ibuf_data(msg->msg_data);
+	uint8_t			*buf;
+	size_t			 len, total, left;
+	size_t			 length;
+	unsigned int		 payload;
+
+	log_debug("%s: header ispi %s rspi %s"
+	    " nextpayload %s version 0x%02x exchange %s flags 0x%02x"
+	    " msgid %d length %u response %d", __func__,
+	    print_spi(betoh64(hdr->ike_ispi), 8),
+	    print_spi(betoh64(hdr->ike_rspi), 8),
+	    print_map(hdr->ike_nextpayload, ikev2_payload_map),
+	    hdr->ike_version,
+	    print_map(hdr->ike_exchange, ikev2_exchange_map),
+	    hdr->ike_flags,
+	    betoh32(hdr->ike_msgid),
+	    betoh32(hdr->ike_length),
+	    msg->msg_response);
+
+	length = betoh32(hdr->ike_length);
+
+	if (ibuf_size(msg->msg_data) < length) {
+		log_debug("%s: short message", __func__);
+		return (-1);
+	}
+
+	offset += sizeof(*hdr);
+
+	/* Bytes left in datagram. */
+	total = length - offset;
+
+	payload = hdr->ike_nextpayload;
+
+	while (payload != 0 && offset < length) {
+		if (ikev2_validate_pld(msg, offset, total, &pld))
+			return (-1);
+
+		log_debug("%s: %spayload %s"
+		    " nextpayload %s critical 0x%02x length %d",
+		    __func__, msg->msg_e ? "decrypted " : "",
+		    print_map(payload, ikev2_payload_map),
+		    print_map(pld.pld_nextpayload, ikev2_payload_map),
+		    pld.pld_reserved & IKEV2_CRITICAL_PAYLOAD,
+		    betoh16(pld.pld_length));
+
+		/* Skip over generic payload header. */
+		offset += sizeof(pld);
+		total -= sizeof(pld);
+		left = betoh16(pld.pld_length) - sizeof(pld);
+
+		switch (payload) {
+		case IKEV2_PAYLOAD_SKF:
+			len = left;
+			buf = msgbuf + offset;
+			if (len < sizeof(frag))
+				return (-1);
+			memcpy(&frag, buf, sizeof(frag));
+			msg->msg_frag_num = betoh16(frag.frag_num);
+			break;
+		}
+
+		payload = pld.pld_nextpayload;
+		offset += left;
+		total -= left;
 	}
 
 	return (0);

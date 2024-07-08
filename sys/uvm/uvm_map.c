@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_map.c,v 1.319 2023/08/02 09:19:47 mpi Exp $	*/
+/*	$OpenBSD: uvm_map.c,v 1.329 2024/06/02 15:31:57 deraadt Exp $	*/
 /*	$NetBSD: uvm_map.c,v 1.86 2000/11/27 08:40:03 chs Exp $	*/
 
 /*
@@ -871,12 +871,6 @@ uvm_mapanon(struct vm_map *map, vaddr_t *addr, vsize_t sz,
 	entry->inheritance = inherit;
 	entry->wired_count = 0;
 	entry->advice = advice;
-	if (prot & PROT_WRITE)
-		map->wserial++;
-	if (flags & UVM_FLAG_SYSCALL) {
-		entry->etype |= UVM_ET_SYSCALL;
-		map->wserial++;
-	}
 	if (flags & UVM_FLAG_STACK) {
 		entry->etype |= UVM_ET_STACK;
 		if (flags & (UVM_FLAG_FIXED | UVM_FLAG_UNMAP))
@@ -1146,12 +1140,6 @@ uvm_map(struct vm_map *map, vaddr_t *addr, vsize_t sz,
 	entry->inheritance = inherit;
 	entry->wired_count = 0;
 	entry->advice = advice;
-	if (prot & PROT_WRITE)
-		map->wserial++;
-	if (flags & UVM_FLAG_SYSCALL) {
-		entry->etype |= UVM_ET_SYSCALL;
-		map->wserial++;
-	}
 	if (flags & UVM_FLAG_STACK) {
 		entry->etype |= UVM_ET_STACK;
 		if (flags & UVM_FLAG_UNMAP)
@@ -1613,23 +1601,6 @@ uvm_map_inentry_sp(vm_map_entry_t entry)
 	return (1);
 }
 
-/*
- * The system call must not come from a writeable entry, W^X is violated.
- * (Would be nice if we can spot aliasing, which is also kind of bad)
- *
- * The system call must come from an syscall-labeled entry (which are
- * the text regions of the main program, sigtramp, ld.so, or libc).
- */
-int
-uvm_map_inentry_pc(vm_map_entry_t entry)
-{
-	if (entry->protection & PROT_WRITE)
-		return (0);	/* not permitted */
-	if ((entry->etype & UVM_ET_SYSCALL) == 0)
-		return (0);	/* not permitted */
-	return (1);
-}
-
 int
 uvm_map_inentry_recheck(u_long serial, vaddr_t addr, struct p_inentry *ie)
 {
@@ -1688,7 +1659,7 @@ uvm_map_inentry(struct proc *p, struct p_inentry *ie, vaddr_t addr,
 		ok = uvm_map_inentry_fix(p, ie, addr, fn, serial);
 		if (!ok) {
 			KERNEL_LOCK();
-			printf(fmt, p->p_p->ps_comm, p->p_p->ps_pid, p->p_tid,
+			uprintf(fmt, p->p_p->ps_comm, p->p_p->ps_pid, p->p_tid,
 			    addr, ie->ie_start, ie->ie_end-1);
 			p->p_p->ps_acflag |= AMAP;
 			sv.sival_ptr = (void *)PROC_PC(p);
@@ -1714,11 +1685,8 @@ uvm_map_is_stack_remappable(struct vm_map *map, vaddr_t addr, vaddr_t sz,
 
 	vm_map_assert_anylock(map);
 
-	if (!uvm_map_lookup_entry(map, addr, &first)) {
-		printf("map stack 0x%lx-0x%lx of map %p failed: no mapping\n",
-		    addr, end, map);
+	if (!uvm_map_lookup_entry(map, addr, &first))
 		return FALSE;
-	}
 
 	/*
 	 * Check that the address range exists and is contiguous.
@@ -1736,19 +1704,11 @@ uvm_map_is_stack_remappable(struct vm_map *map, vaddr_t addr, vaddr_t sz,
 		}
 #endif
 
-		if (prev != NULL && prev->end != iter->start) {
-			printf("map stack 0x%lx-0x%lx of map %p failed: "
-			    "hole in range\n", addr, end, map);
+		if (prev != NULL && prev->end != iter->start)
 			return FALSE;
-		}
-		if (iter->start == iter->end || UVM_ET_ISHOLE(iter)) {
-			printf("map stack 0x%lx-0x%lx of map %p failed: "
-			    "hole in range\n", addr, end, map);
+		if (iter->start == iter->end || UVM_ET_ISHOLE(iter))
 			return FALSE;
-		}
 		if (sigaltstack_check) {
-			if ((iter->etype & UVM_ET_SYSCALL))
-				return FALSE;
 			if (iter->protection != (PROT_READ | PROT_WRITE))
 				return FALSE;
 		}
@@ -1771,7 +1731,6 @@ uvm_map_remap_as_stack(struct proc *p, vaddr_t addr, vaddr_t sz)
 {
 	vm_map_t map = &p->p_vmspace->vm_map;
 	vaddr_t start, end;
-	int error;
 	int flags = UVM_MAPFLAG(PROT_READ | PROT_WRITE,
 	    PROT_READ | PROT_WRITE | PROT_EXEC,
 	    MAP_INHERIT_COPY, MADV_NORMAL,
@@ -1798,11 +1757,7 @@ uvm_map_remap_as_stack(struct proc *p, vaddr_t addr, vaddr_t sz)
 	 * placed upon the region, which prevents an attacker from pivoting
 	 * into pre-placed MAP_STACK space.
 	 */
-	error = uvm_mapanon(map, &start, end - start, 0, flags);
-	if (error != 0)
-		printf("map stack for pid %d failed\n", p->p_p->ps_pid);
-
-	return error;
+	return uvm_mapanon(map, &start, end - start, 0, flags);
 }
 
 /*
@@ -2937,13 +2892,12 @@ uvm_map_printit(struct vm_map *map, boolean_t full,
 		    (long long)entry->offset, entry->aref.ar_amap,
 		    entry->aref.ar_pageoff);
 		(*pr)("\tsubmap=%c, cow=%c, nc=%c, stack=%c, "
-		    "syscall=%c, prot(max)=%d/%d, inh=%d, "
+		    "prot(max)=%d/%d, inh=%d, "
 		    "wc=%d, adv=%d\n",
 		    (entry->etype & UVM_ET_SUBMAP) ? 'T' : 'F',
 		    (entry->etype & UVM_ET_COPYONWRITE) ? 'T' : 'F',
 		    (entry->etype & UVM_ET_NEEDSCOPY) ? 'T' : 'F',
 		    (entry->etype & UVM_ET_STACK) ? 'T' : 'F',
-		    (entry->etype & UVM_ET_SYSCALL) ? 'T' : 'F',
 		    entry->protection, entry->max_protection,
 		    entry->inheritance, entry->wired_count, entry->advice);
 
@@ -3144,16 +3098,9 @@ uvm_map_protect(struct vm_map *map, vaddr_t start, vaddr_t end,
 		if (iter->start == iter->end || UVM_ET_ISHOLE(iter))
 			continue;
 
-		if (checkimmutable &&
-		    (iter->etype & UVM_ET_IMMUTABLE)) {
-			if (iter->protection == (PROT_READ | PROT_WRITE) &&
-			    new_prot == PROT_READ) {
-				/* Permit RW to R as a data-locking mechanism */
-				;
-			} else {
-				error = EPERM;
-				goto out;
-			}
+		if (checkimmutable && (iter->etype & UVM_ET_IMMUTABLE)) {
+			error = EPERM;
+			goto out;
 		}
 		old_prot = iter->protection;
 		if (old_prot == PROT_NONE && new_prot != old_prot) {
@@ -3228,10 +3175,6 @@ uvm_map_protect(struct vm_map *map, vaddr_t start, vaddr_t end,
 		if (iter->protection != old_prot) {
 			mask = UVM_ET_ISCOPYONWRITE(iter) ?
 			    ~PROT_WRITE : PROT_MASK;
-
-			/* XXX should only wserial++ if no split occurs */
-			if (iter->protection & PROT_WRITE)
-				map->wserial++;
 
 			if (map->flags & VM_MAP_ISVMSPACE) {
 				if (old_prot == PROT_NONE) {
@@ -3407,7 +3350,8 @@ uvmspace_exec(struct proc *p, vaddr_t start, vaddr_t end)
 		 * when a process execs another program image.
 		 */
 		vm_map_lock(map);
-		vm_map_modflags(map, 0, VM_MAP_WIREFUTURE|VM_MAP_SYSCALL_ONCE);
+		vm_map_modflags(map, 0, VM_MAP_WIREFUTURE |
+		    VM_MAP_PINSYSCALL_ONCE);
 
 		/*
 		 * now unmap the old program
@@ -3944,7 +3888,7 @@ uvmspace_fork(struct process *pr)
 			    new_map, new_entry->start, new_entry->end);
 		}
 	}
-	new_map->flags |= old_map->flags & VM_MAP_SYSCALL_ONCE;
+	new_map->flags |= old_map->flags & VM_MAP_PINSYSCALL_ONCE;
 #ifdef PMAP_CHECK_COPYIN
 	if (PMAP_CHECK_COPYIN) {
 		memcpy(&new_map->check_copyin, &old_map->check_copyin,
@@ -4162,7 +4106,8 @@ int
 uvm_map_inherit(struct vm_map *map, vaddr_t start, vaddr_t end,
     vm_inherit_t new_inheritance)
 {
-	struct vm_map_entry *entry;
+	struct vm_map_entry *entry, *entry1;
+	int error = EPERM;
 
 	switch (new_inheritance) {
 	case MAP_INHERIT_NONE:
@@ -4189,14 +4134,27 @@ uvm_map_inherit(struct vm_map *map, vaddr_t start, vaddr_t end,
 	else
 		entry = RBT_NEXT(uvm_map_addr, entry);
 
+	/* First check for illegal operations */
+	entry1 = entry;
+	while (entry1 != NULL && entry1->start < end) {
+		if (entry1->etype & UVM_ET_IMMUTABLE)
+			goto out;
+		if (new_inheritance == MAP_INHERIT_ZERO &&
+		    (entry1->protection & PROT_WRITE) == 0)
+			goto out;
+		entry1 = RBT_NEXT(uvm_map_addr, entry1);
+	}
+
 	while (entry != NULL && entry->start < end) {
 		UVM_MAP_CLIP_END(map, entry, end);
 		entry->inheritance = new_inheritance;
 		entry = RBT_NEXT(uvm_map_addr, entry);
 	}
 
+	error = 0;
+out:
 	vm_map_unlock(map);
-	return (0);
+	return (error);
 }
 
 #ifdef PMAP_CHECK_COPYIN
@@ -4236,48 +4194,6 @@ uvm_map_check_copyin_add(struct vm_map *map, vaddr_t start, vaddr_t end)
 #endif /* PMAP_CHECK_COPYIN */
 
 /* 
- * uvm_map_syscall: permit system calls for range of addrs in map.
- *
- * => map must be unlocked
- */
-int
-uvm_map_syscall(struct vm_map *map, vaddr_t start, vaddr_t end)
-{
-	struct vm_map_entry *entry;
-
-	if (start > end)
-		return EINVAL;
-	start = MAX(start, map->min_offset);
-	end = MIN(end, map->max_offset);
-	if (start >= end)
-		return 0;
-	if (map->flags & VM_MAP_SYSCALL_ONCE)	/* only allowed once */
-		return (EPERM);
-
-	vm_map_lock(map);
-
-	entry = uvm_map_entrybyaddr(&map->addr, start);
-	if (entry->end > start)
-		UVM_MAP_CLIP_START(map, entry, start);
-	else
-		entry = RBT_NEXT(uvm_map_addr, entry);
-
-	while (entry != NULL && entry->start < end) {
-		UVM_MAP_CLIP_END(map, entry, end);
-		entry->etype |= UVM_ET_SYSCALL;
-		entry = RBT_NEXT(uvm_map_addr, entry);
-	}
-
-#ifdef PMAP_CHECK_COPYIN
-	check_copyin_add(map, start, end);	/* Add libc's text segment */
-#endif
-	map->wserial++;
-	map->flags |= VM_MAP_SYSCALL_ONCE;
-	vm_map_unlock(map);
-	return (0);
-}
-
-/* 
  * uvm_map_immutable: block mapping/mprotect for range of addrs in map.
  *
  * => map must be unlocked
@@ -4285,7 +4201,8 @@ uvm_map_syscall(struct vm_map *map, vaddr_t start, vaddr_t end)
 int
 uvm_map_immutable(struct vm_map *map, vaddr_t start, vaddr_t end, int imut)
 {
-	struct vm_map_entry *entry;
+	struct vm_map_entry *entry, *entry1;
+	int error = EPERM;
 
 	if (start > end)
 		return EINVAL;
@@ -4302,6 +4219,14 @@ uvm_map_immutable(struct vm_map *map, vaddr_t start, vaddr_t end, int imut)
 	else
 		entry = RBT_NEXT(uvm_map_addr, entry);
 
+	/* First check for illegal operations */
+	entry1 = entry;
+	while (entry1 != NULL && entry1->start < end) {
+		if (entry1->inheritance == MAP_INHERIT_ZERO)
+			goto out;
+		entry1 = RBT_NEXT(uvm_map_addr, entry1);
+	}
+	
 	while (entry != NULL && entry->start < end) {
 		UVM_MAP_CLIP_END(map, entry, end);
 		if (imut)
@@ -4310,8 +4235,8 @@ uvm_map_immutable(struct vm_map *map, vaddr_t start, vaddr_t end, int imut)
 			entry->etype &= ~UVM_ET_IMMUTABLE;
 		entry = RBT_NEXT(uvm_map_addr, entry);
 	}
-
-	map->wserial++;
+	error = 0;
+out:
 	vm_map_unlock(map);
 	return (0);
 }
@@ -4536,7 +4461,7 @@ uvm_map_clean(struct vm_map *map, vaddr_t start, vaddr_t end, int flags)
 	struct vm_page *pg;
 	struct uvm_object *uobj;
 	vaddr_t cp_start, cp_end;
-	int refs;
+	int refs, imut = 0;
 	int error;
 	boolean_t rv;
 
@@ -4549,9 +4474,11 @@ uvm_map_clean(struct vm_map *map, vaddr_t start, vaddr_t end, int flags)
 	vm_map_lock(map);
 	first = uvm_map_entrybyaddr(&map->addr, start);
 
-	/* Make a first pass to check for holes. */
+	/* Make a first pass to check for various conditions. */
 	for (entry = first; entry != NULL && entry->start < end;
 	    entry = RBT_NEXT(uvm_map_addr, entry)) {
+		if (entry->etype & UVM_ET_IMMUTABLE)
+			imut = 1;
 		if (UVM_ET_ISSUBMAP(entry)) {
 			vm_map_unlock(map);
 			return EINVAL;
@@ -4583,6 +4510,11 @@ uvm_map_clean(struct vm_map *map, vaddr_t start, vaddr_t end, int flags)
 		 */
 		if (amap == NULL || (flags & (PGO_DEACTIVATE|PGO_FREE)) == 0)
 			goto flush_object;
+
+		if (imut) {
+			vm_map_unbusy(map);
+			return EPERM;
+		}
 
 		cp_start = MAX(entry->start, start);
 		cp_end = MIN(entry->end, end);

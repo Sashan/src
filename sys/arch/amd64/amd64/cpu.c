@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.177 2023/11/22 18:50:10 bluhm Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.190 2024/06/07 16:53:35 kettenis Exp $	*/
 /* $NetBSD: cpu.c,v 1.1 2003/04/26 18:39:26 fvdl Exp $ */
 
 /*-
@@ -150,19 +150,16 @@ void	replacemds(void);
 extern long _stac;
 extern long _clac;
 
-int cpuid_level = 0;		/* cpuid(0).eax */
-char cpu_vendor[16] = { 0 };	/* cpuid(0).e[bdc]x, \0 */
+int cpuid_level = 0;		/* MIN cpuid(0).eax */
+char cpu_vendor[16] = { 0 };	/* CPU0's cpuid(0).e[bdc]x, \0 */
 int cpu_id = 0;			/* cpuid(1).eax */
 int cpu_ebxfeature = 0;		/* cpuid(1).ebx */
-int cpu_ecxfeature = 0;		/* cpuid(1).ecx */
+int cpu_ecxfeature = 0;		/* INTERSECTION(cpuid(1).ecx) */
 int cpu_feature = 0;		/* cpuid(1).edx */
-int cpu_perf_eax = 0;		/* cpuid(0xa).eax */
-int cpu_perf_ebx = 0;		/* cpuid(0xa).ebx */
-int cpu_perf_edx = 0;		/* cpuid(0xa).edx */
-int cpu_apmi_edx = 0;		/* cpuid(0x80000007).edx */
 int ecpu_ecxfeature = 0;	/* cpuid(0x80000001).ecx */
 int cpu_meltdown = 0;
 int cpu_use_xsaves = 0;
+int need_retpoline = 1;		/* most systems need retpoline */
 
 void
 replacesmap(void)
@@ -187,9 +184,9 @@ replacemeltdown(void)
 {
 	static int replacedone = 0;
 	struct cpu_info *ci = &cpu_info_primary;
-	int swapgs_vuln = 0, ibrs = 0, s;
+	int swapgs_vuln = 0, ibrs = 0, s, ibpb = 0;
 
-	if (strcmp(cpu_vendor, "GenuineIntel") == 0) {
+	if (ci->ci_vendor == CPUV_INTEL) {
 		int family = ci->ci_family;
 		int model = ci->ci_model;
 
@@ -210,7 +207,9 @@ replacemeltdown(void)
 		} else if (ci->ci_feature_sefflags_edx & SEFF0EDX_IBRS) {
 			ibrs = 1;
 		}
-        } else if (strcmp(cpu_vendor, "AuthenticAMD") == 0 &&
+		if (ci->ci_feature_sefflags_edx & SEFF0EDX_IBRS)
+			ibpb = 1;
+        } else if (ci->ci_vendor == CPUV_AMD &&
             ci->ci_pnfeatset >= 0x80000008) {
 		if (ci->ci_feature_amdspec_ebx & CPUIDEBX_IBRS_ALWAYSON) {
 			ibrs = 2;
@@ -218,6 +217,8 @@ replacemeltdown(void)
 		    (ci->ci_feature_amdspec_ebx & CPUIDEBX_IBRS_PREF)) {
 			ibrs = 1;
 		}
+		if (ci->ci_feature_amdspec_ebx & CPUIDEBX_IBPB)
+			ibpb = 1;
 	}
 
 	/* Enhanced IBRS: turn it on once on each CPU and don't touch again */
@@ -229,12 +230,19 @@ replacemeltdown(void)
 	replacedone = 1;
 
 	s = splhigh();
+
+	/* If we don't have IBRS/IBPB, then don't use IBPB */
+	if (ibpb == 0)
+		codepatch_nop(CPTAG_IBPB_NOP);
+
 	if (ibrs == 2 || (ci->ci_feature_sefflags_edx & SEFF0EDX_IBT)) {
 		extern const char _jmprax, _jmpr11, _jmpr13;
 		extern const short _jmprax_len, _jmpr11_len, _jmpr13_len;
+
 		codepatch_replace(CPTAG_RETPOLINE_RAX, &_jmprax, _jmprax_len);
 		codepatch_replace(CPTAG_RETPOLINE_R11, &_jmpr11, _jmpr11_len);
 		codepatch_replace(CPTAG_RETPOLINE_R13, &_jmpr13, _jmpr13_len);
+		need_retpoline = 0;
 	}
 
 	if (!cpu_meltdown)
@@ -282,35 +290,39 @@ replacemds(void)
 	static int replacedone = 0;
 	extern long mds_handler_bdw, mds_handler_ivb, mds_handler_skl;
 	extern long mds_handler_skl_sse, mds_handler_skl_avx;
+	extern long mds_handler_skl_avx512;
 	extern long mds_handler_silvermont, mds_handler_knights;
 	struct cpu_info *ci = &cpu_info_primary;
 	CPU_INFO_ITERATOR cii;
 	void *handler = NULL, *vmm_handler = NULL;
 	const char *type;
-	int has_verw, s;
+	int use_verw = 0, s;
+	uint32_t cap = 0;
 
-	/* ci_mds_tmp must be 32byte aligned for AVX instructions */
+	/* ci_mds_tmp must be 64-byte aligned for AVX-512 instructions */
 	CTASSERT((offsetof(struct cpu_info, ci_mds_tmp) -
-		  offsetof(struct cpu_info, ci_PAGEALIGN)) % 32 == 0);
+		  offsetof(struct cpu_info, ci_PAGEALIGN)) % 64 == 0);
 
 	if (replacedone)
 		return;
 	replacedone = 1;
 
-	if (strcmp(cpu_vendor, "GenuineIntel") != 0 ||
-	    ((ci->ci_feature_sefflags_edx & SEFF0EDX_ARCH_CAP) &&
-	     (rdmsr(MSR_ARCH_CAPABILITIES) & ARCH_CAP_MDS_NO))) {
+	if (ci->ci_vendor != CPUV_INTEL)
+		goto notintel;	/* VERW only needed on Intel */
+
+	if ((ci->ci_feature_sefflags_edx & SEFF0EDX_ARCH_CAP))
+		cap = rdmsr(MSR_ARCH_CAPABILITIES);
+
+	if (cap & ARCH_CAP_MDS_NO) {
 		/* Unaffected, nop out the handling code */
-		has_verw = 0;
 	} else if (ci->ci_feature_sefflags_edx & SEFF0EDX_MD_CLEAR) {
 		/* new firmware, use VERW */
-		has_verw = 1;
+		use_verw = 1;
 	} else {
 		int family = ci->ci_family;
 		int model = ci->ci_model;
 		int stepping = CPUID2STEPPING(ci->ci_signature);
 
-		has_verw = 0;
 		if (family == 0x6 &&
 		    (model == 0x2e || model == 0x1e || model == 0x1f ||
 		     model == 0x1a || model == 0x2f || model == 0x25 ||
@@ -343,8 +355,10 @@ replacemds(void)
 			 * Skylake, KabyLake, CoffeeLake, WhiskeyLake,
 			 * CascadeLake
 			 */
-			/* XXX mds_handler_skl_avx512 */
-			if (xgetbv(0) & XFEATURE_AVX) {
+			if (xgetbv(0) & XFEATURE_AVX512) {
+				handler = &mds_handler_skl_avx512;
+				type = "Skylake AVX-512";
+			} else if (xgetbv(0) & XFEATURE_AVX) {
 				handler = &mds_handler_skl_avx;
 				type = "Skylake AVX";
 			} else {
@@ -383,15 +397,24 @@ replacemds(void)
 		}
 	}
 
+	/* Register File Data Sampling (RFDS) also has a VERW workaround */
+	if ((cap & ARCH_CAP_RFDS_NO) == 0 && (cap & ARCH_CAP_RFDS_CLEAR))
+		use_verw = 1;
+
 	if (handler != NULL) {
 		printf("cpu0: using %s MDS workaround%s\n", type, "");
 		s = splhigh();
 		codepatch_call(CPTAG_MDS, handler);
 		codepatch_call(CPTAG_MDS_VMM, vmm_handler);
 		splx(s);
-	} else if (has_verw) {
-		/* The new firmware enhances L1D_FLUSH MSR to flush MDS too */
-		if (cpu_info_primary.ci_vmm_cap.vcc_vmx.vmx_has_l1_flush_msr == 1) {
+	} else if (use_verw) {
+		/*
+		 * The new firmware enhances L1D_FLUSH MSR to flush MDS too,
+		 * but keep the verw if affected by RFDS
+		 */
+		if ((cap & ARCH_CAP_RFDS_NO) == 0 && (cap & ARCH_CAP_RFDS_CLEAR)) {
+			type = "";
+		} else if (cpu_info_primary.ci_vmm_cap.vcc_vmx.vmx_has_l1_flush_msr == 1) {
 			s = splhigh();
 			codepatch_nop(CPTAG_MDS_VMM);
 			splx(s);
@@ -401,6 +424,7 @@ replacemds(void)
 		}
 		printf("cpu0: using %s MDS workaround%s\n", "VERW", type);
 	} else {
+notintel:
 		s = splhigh();
 		codepatch_nop(CPTAG_MDS);
 		codepatch_nop(CPTAG_MDS_VMM);
@@ -502,7 +526,7 @@ cpu_init_mwait(struct cpu_softc *sc, struct cpu_info *ci)
 {
 	unsigned int smallest, largest, extensions, c_substates;
 
-	if ((cpu_ecxfeature & CPUIDECX_MWAIT) == 0 || cpuid_level < 0x5)
+	if ((cpu_ecxfeature & CPUIDECX_MWAIT) == 0 || ci->ci_cpuid_level < 0x5)
 		return;
 
 	/* get the monitor granularity */
@@ -511,7 +535,7 @@ cpu_init_mwait(struct cpu_softc *sc, struct cpu_info *ci)
 	largest  &= 0xffff;
 
 	/* mask out states C6/C7 in 31:24 for CHT45 errata */
-	if (strcmp(cpu_vendor, "GenuineIntel") == 0 &&
+	if (ci->ci_vendor == CPUV_INTEL &&
 	    ci->ci_family == 0x06 && ci->ci_model == 0x4c)
 		cpu_mwait_states &= 0x00ffffff;
 
@@ -641,10 +665,6 @@ cpu_attach(struct device *parent, struct device *self, void *aux)
 		atomic_setbits_int(&ci->ci_flags,
 		    CPUF_PRESENT | CPUF_SP | CPUF_PRIMARY);
 		cpu_intr_init(ci);
-#ifndef SMALL_KERNEL
-		cpu_ucode_apply(ci);
-#endif
-		cpu_tsx_disable(ci);
 		identifycpu(ci);
 		cpu_fix_msrs(ci);
 #ifdef MTRR
@@ -768,7 +788,7 @@ cpu_init(struct cpu_info *ci)
 		cr4 |= CR4_SMAP;
 	if (ci->ci_feature_sefflags_ecx & SEFF0ECX_UMIP)
 		cr4 |= CR4_UMIP;
-	if ((cpu_ecxfeature & CPUIDECX_XSAVE) && cpuid_level >= 0xd)
+	if ((cpu_ecxfeature & CPUIDECX_XSAVE) && ci->ci_cpuid_level >= 0xd)
 		cr4 |= CR4_OSXSAVE;
 	if (pg_xo)
 		cr4 |= CR4_PKE;
@@ -776,12 +796,13 @@ cpu_init(struct cpu_info *ci)
 		cr4 |= CR4_PCIDE;
 	lcr4(cr4);
 
-	if ((cpu_ecxfeature & CPUIDECX_XSAVE) && cpuid_level >= 0xd) {
+	if ((cpu_ecxfeature & CPUIDECX_XSAVE) && ci->ci_cpuid_level >= 0xd) {
 		u_int32_t eax, ebx, ecx, edx;
 
 		xsave_mask = XFEATURE_X87 | XFEATURE_SSE;
 		CPUID_LEAF(0xd, 0, eax, ebx, ecx, edx);
 		xsave_mask |= eax & XFEATURE_AVX;
+		xsave_mask |= eax & XFEATURE_AVX512;
 		xsetbv(0, xsave_mask);
 		CPUID_LEAF(0xd, 0, eax, ebx, ecx, edx);
 		if (CPU_IS_PRIMARY(ci)) {
@@ -794,7 +815,7 @@ cpu_init(struct cpu_info *ci)
 		/* check for xsaves, xsaveopt, and supervisor features */
 		CPUID_LEAF(0xd, 1, eax, ebx, ecx, edx);
 		/* Disable XSAVES on AMD family 17h due to Erratum 1386 */
-		if (!strcmp(cpu_vendor, "AuthenticAMD") &&
+		if (ci->ci_vendor == CPUV_AMD &&
 		    ci->ci_family == 0x17) {
 			eax &= ~XSAVE_XSAVES;
 		}
@@ -1001,6 +1022,15 @@ cpu_hatch(void *v)
 	struct cpu_info *ci = (struct cpu_info *)v;
 	int s;
 
+	{
+		uint32_t vendor[4];
+		int level;
+
+		CPUID(0, level, vendor[0], vendor[2], vendor[1]);
+		vendor[3] = 0;
+		cpu_set_vendor(ci, level, (const char *)vendor);
+	}
+
 	cpu_init_msrs(ci);
 
 #ifdef DEBUG
@@ -1176,10 +1206,10 @@ cpu_init_msrs(struct cpu_info *ci)
 {
 	wrmsr(MSR_STAR,
 	    ((uint64_t)GSEL(GCODE_SEL, SEL_KPL) << 32) |
-	    ((uint64_t)GSEL(GUCODE32_SEL, SEL_UPL) << 48));
+	    ((uint64_t)GSEL(GUDATA_SEL-1, SEL_UPL) << 48));
 	wrmsr(MSR_LSTAR, cpu_meltdown ? (uint64_t)Xsyscall_meltdown :
 	    (uint64_t)Xsyscall);
-	wrmsr(MSR_CSTAR, (uint64_t)Xsyscall32);
+	wrmsr(MSR_CSTAR, 0);
 	wrmsr(MSR_SFMASK, PSL_NT|PSL_T|PSL_I|PSL_C|PSL_D|PSL_AC);
 
 	wrmsr(MSR_FSBASE, 0);
@@ -1194,7 +1224,7 @@ cpu_fix_msrs(struct cpu_info *ci)
 	int family = ci->ci_family;
 	uint64_t msr, nmsr;
 
-	if (!strcmp(cpu_vendor, "GenuineIntel")) {
+	if (ci->ci_vendor == CPUV_INTEL) {
 		if ((family > 6 || (family == 6 && ci->ci_model >= 0xd)) &&
 		    rdmsr_safe(MSR_MISC_ENABLE, &msr) == 0 &&
 		    (msr & MISC_ENABLE_FAST_STRINGS) == 0) {
@@ -1220,7 +1250,7 @@ cpu_fix_msrs(struct cpu_info *ci)
 		}
 	}
 
-	if (!strcmp(cpu_vendor, "AuthenticAMD")) {
+	if (ci->ci_vendor == CPUV_AMD) {
 		/* Apply AMD errata */
 		amd64_errata(ci);
 
@@ -1252,7 +1282,7 @@ cpu_fix_msrs(struct cpu_info *ci)
 #ifndef SMALL_KERNEL
 	if (ci->ci_feature_sefflags_edx & SEFF0EDX_IBT) {
 		msr = rdmsr(MSR_S_CET);
-		wrmsr(MSR_S_CET, msr | MSR_CET_ENDBR_EN);
+		wrmsr(MSR_S_CET, (msr & ~MSR_CET_NO_TRACK_EN) | MSR_CET_ENDBR_EN);
 		lcr4(rcr4() | CR4_CET);
 	}
 #endif
@@ -1265,11 +1295,11 @@ cpu_tsx_disable(struct cpu_info *ci)
 	uint32_t dummy, sefflags_edx;
 
 	/* this runs before identifycpu() populates ci_feature_sefflags_edx */
-	if (cpuid_level < 0x07)
+	if (ci->ci_cpuid_level < 0x07)
 		return;
 	CPUID_LEAF(0x7, 0, dummy, dummy, dummy, sefflags_edx);
 
-	if (strcmp(cpu_vendor, "GenuineIntel") == 0 &&
+	if (ci->ci_vendor == CPUV_INTEL &&
 	    (sefflags_edx & SEFF0EDX_ARCH_CAP)) {
 		msr = rdmsr(MSR_ARCH_CAPABILITIES);
 		if (msr & ARCH_CAP_TSX_CTRL) {
@@ -1430,4 +1460,56 @@ wbinvd_on_all_cpus(void)
 	wbinvd();
 	return 0;
 }
+#endif
+
+int cpu_suspended;
+
+#ifdef SUSPEND
+
+void
+cpu_suspend_cycle(void)
+{
+	if (cpu_suspend_cycle_fcn)
+		cpu_suspend_cycle_fcn();
+	else
+		cpu_idle_cycle_fcn();
+}
+
+int
+cpu_suspend_primary(void)
+{
+	struct cpu_info *ci = curcpu();
+	int count = 0;
+
+	printf("suspend\n");
+
+	/* Mask clock interrupts. */
+	local_pic.pic_hwmask(&local_pic, 0);
+
+	/*
+	 * All non-wakeup interrupts should be masked at this point;
+	 * re-enable interrupts such that wakeup interrupts actually
+	 * wake us up.  Set a flag such that drivers can tell we're
+	 * suspended and change their behaviour accordingly.  They can
+	 * wake us up by clearing the flag.
+	 */
+	cpu_suspended = 1;
+	ci->ci_ilevel = IPL_NONE;
+	intr_enable();
+
+	while (cpu_suspended) {
+		cpu_suspend_cycle();
+		count++;
+	}
+
+	intr_disable();
+	ci->ci_ilevel = IPL_HIGH;
+
+	/* Unmask clock interrupts. */
+	local_pic.pic_hwunmask(&local_pic, 0);
+
+	printf("resume %d\n", count);
+	return 0;
+}
+
 #endif

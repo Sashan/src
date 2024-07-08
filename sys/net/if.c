@@ -1,4 +1,4 @@
-/*	$OpenBSD: if.c,v 1.716 2024/01/06 11:42:11 bluhm Exp $	*/
+/*	$OpenBSD: if.c,v 1.719 2024/06/20 19:25:42 bluhm Exp $	*/
 /*	$NetBSD: if.c,v 1.35 1996/05/07 05:26:04 thorpej Exp $	*/
 
 /*
@@ -1788,8 +1788,10 @@ if_linkstate(struct ifnet *ifp)
 {
 	NET_ASSERT_LOCKED();
 
-	rtm_ifchg(ifp);
-	rt_if_track(ifp);
+	if (panicstr == NULL) {
+		rtm_ifchg(ifp);
+		rt_if_track(ifp);
+	}
 
 	if_hooks_run(&ifp->if_linkstatehooks);
 }
@@ -3376,7 +3378,7 @@ ifnewlladdr(struct ifnet *ifp)
 	 * Update the link-local address.  Don't do it if we're
 	 * a router to avoid confusing hosts on the network.
 	 */
-	if (!ip6_forwarding) {
+	if (ip6_forwarding == 0) {
 		ifa = &in6ifa_ifpforlinklocal(ifp, 0)->ia_ifa;
 		if (ifa) {
 			in6_purgeaddr(ifa);

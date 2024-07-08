@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ngbe.c,v 1.2 2023/11/10 15:51:20 bluhm Exp $	*/
+/*	$OpenBSD: if_ngbe.c,v 1.5 2024/05/24 06:02:56 jsg Exp $	*/
 
 /*
  * Copyright (c) 2015-2017 Beijing WangXun Technology Co., Ltd.
@@ -25,8 +25,6 @@
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
 #include <sys/malloc.h>
-#include <sys/kernel.h>
-#include <sys/socket.h>
 #include <sys/device.h>
 #include <sys/endian.h>
 #include <sys/intrmap.h>
@@ -37,8 +35,6 @@
 
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
-#include <netinet/ip.h>
-#include <netinet/ip6.h>
 
 #if NBPFILTER > 0
 #include <net/bpf.h>
@@ -2954,7 +2950,7 @@ ngbe_host_interface_command(struct ngbe_softc *sc, uint32_t *buffer,
 
 	if (length == 0 || length > NGBE_HI_MAX_BLOCK_BYTE_LENGTH) {
 		printf("%s: buffer length failure\n", DEVNAME(sc));
-			return EINVAL;
+		return EINVAL;
 	}
 
 	if (hw->mac.ops.acquire_swfw_sync(sc, NGBE_MNG_SWFW_SYNC_SW_MB))
@@ -3708,7 +3704,7 @@ ngbe_reset_hw(struct ngbe_softc *sc)
 	 * mng is using it.  If link is down or the flag to force full link
 	 * reset is set, then perform link reset.
 	 */
-	 if (hw->force_full_reset) {
+	if (hw->force_full_reset) {
 	 	rst_delay = (NGBE_READ_REG(hw, NGBE_MIS_RST_ST) &
 		    NGBE_MIS_RST_ST_RST_INIT) >> NGBE_MIS_RST_ST_RST_INI_SHIFT;
 		if (hw->reset_type == NGBE_SW_RESET) {
@@ -4530,9 +4526,9 @@ ngbe_update_mc_addr_list(struct ngbe_hw *hw, uint8_t *mc_addr_list,
 	if (clear)
 		memset(&hw->mac.mta_shadow, 0, sizeof(hw->mac.mta_shadow));
 
-	 /* Update mta_shadow */
-	 for (i = 0; i < mc_addr_count; i++)
-	 	ngbe_set_mta(hw, next(hw, &mc_addr_list, &vmdq));
+	/* Update mta_shadow */
+	for (i = 0; i < mc_addr_count; i++)
+		ngbe_set_mta(hw, next(hw, &mc_addr_list, &vmdq));
 
 	/* Enable mta */
 	for (i = 0; i < hw->mac.mcft_size; i++)

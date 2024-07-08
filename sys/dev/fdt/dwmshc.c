@@ -1,4 +1,4 @@
-/*	$OpenBSD: dwmshc.c,v 1.5 2023/06/20 09:26:36 kettenis Exp $ */
+/*	$OpenBSD: dwmshc.c,v 1.7 2024/05/26 22:04:52 kettenis Exp $ */
 
 /*
  * Copyright (c) 2023 David Gwynne <dlg@openbsd.org>

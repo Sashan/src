@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwx.c,v 1.180 2023/12/30 16:55:44 stsp Exp $	*/
+/*	$OpenBSD: if_iwx.c,v 1.187 2024/06/26 01:40:49 jsg Exp $	*/
 
 /*
  * Copyright (c) 2014, 2016 genua gmbh <info@genua.de>
@@ -96,12 +96,8 @@
 #include "bpfilter.h"
 
 #include <sys/param.h>
-#include <sys/conf.h>
-#include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
-#include <sys/mutex.h>
-#include <sys/proc.h>
 #include <sys/rwlock.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
@@ -121,7 +117,6 @@
 #include <net/bpf.h>
 #endif
 #include <net/if.h>
-#include <net/if_dl.h>
 #include <net/if_media.h>
 
 #include <netinet/in.h>
@@ -453,7 +448,6 @@ uint16_t iwx_rs_vht_rates(struct iwx_softc *, struct ieee80211_node *, int);
 int	iwx_rs_init_v3(struct iwx_softc *, struct iwx_node *);
 int	iwx_rs_init_v4(struct iwx_softc *, struct iwx_node *);
 int	iwx_rs_init(struct iwx_softc *, struct iwx_node *);
-int	iwx_enable_data_tx_queues(struct iwx_softc *);
 int	iwx_phy_send_rlc(struct iwx_softc *, struct iwx_phy_ctxt *,
 	    uint8_t, uint8_t);
 int	iwx_phy_ctxt_update(struct iwx_softc *, struct iwx_phy_ctxt *,
@@ -603,7 +597,8 @@ iwx_ctxt_info_alloc_dma(struct iwx_softc *sc,
 	return 0;
 }
 
-void iwx_ctxt_info_free_paging(struct iwx_softc *sc)
+void
+iwx_ctxt_info_free_paging(struct iwx_softc *sc)
 {
 	struct iwx_self_init_dram *dram = &sc->init_dram;
 	int i;
@@ -786,7 +781,7 @@ iwx_alloc_fw_monitor(struct iwx_softc *sc, uint8_t max_power)
 	}
 
 	if (max_power > 26) {
-		 DPRINTF(("%s: External buffer size for monitor is too big %d, "
+		DPRINTF(("%s: External buffer size for monitor is too big %d, "
 		     "check the FW TLV\n", DEVNAME(sc), max_power));
 		return 0;
 	}
@@ -6085,13 +6080,12 @@ iwx_tx_fill_cmd(struct iwx_softc *sc, struct iwx_node *in,
 	} else if (sc->sc_rate_n_flags_version >= 2)
 		rate_flags |= IWX_RATE_MCS_LEGACY_OFDM_MSK;
 
-	rval = (rs->rs_rates[ni->ni_txrate] & IEEE80211_RATE_VAL);
 	if (sc->sc_rate_n_flags_version >= 2) {
 		if (rate_flags & IWX_RATE_MCS_LEGACY_OFDM_MSK) {
-			rate_flags |= (iwx_fw_rateidx_ofdm(rval) &
+			rate_flags |= (iwx_fw_rateidx_ofdm(rinfo->rate) &
 			    IWX_RATE_LEGACY_RATE_MSK);
 		} else {
-			rate_flags |= (iwx_fw_rateidx_cck(rval) &
+			rate_flags |= (iwx_fw_rateidx_cck(rinfo->rate) &
 			    IWX_RATE_LEGACY_RATE_MSK);
 		}
 	} else
@@ -7212,7 +7206,7 @@ iwx_rval2ridx(int rval)
 			break;
 	}
 
-       return ridx;
+	return ridx;
 }
 
 void
@@ -7529,7 +7523,7 @@ iwx_scan(struct iwx_softc *sc)
 	 * The current mode might have been fixed during association.
 	 * Ensure all channels get scanned.
 	 */
-	if (IFM_MODE(ic->ic_media.ifm_cur->ifm_media) == IFM_AUTO)
+	if (IFM_SUBTYPE(ic->ic_media.ifm_cur->ifm_media) == IFM_AUTO)
 		ieee80211_setmode(ic, IEEE80211_MODE_AUTO);
 
 	sc->sc_flags |= IWX_FLAG_SCANNING;
@@ -8324,15 +8318,15 @@ iwx_run(struct iwx_softc *sc)
 		return err;
 	}
 #endif
+	if (ic->ic_opmode == IEEE80211_M_MONITOR)
+		return 0;
+
 	err = iwx_power_mac_update_mode(sc, in);
 	if (err) {
 		printf("%s: could not update MAC power (error %d)\n",
 		    DEVNAME(sc), err);
 		return err;
 	}
-
-	if (ic->ic_opmode == IEEE80211_M_MONITOR)
-		return 0;
 
 	/* Start at lowest available bit-rate. Firmware will raise. */
 	in->in_ni.ni_txrate = 0;
@@ -9832,7 +9826,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
 			 * For v5 and above, we can check the version, for older
 			 * versions we need to check the size.
 			 */
-			 if (iwx_lookup_notif_ver(sc, IWX_LEGACY_GROUP,
+			if (iwx_lookup_notif_ver(sc, IWX_LEGACY_GROUP,
 			    IWX_ALIVE) == 6) {
 				SYNC_RESP_STRUCT(resp6, pkt);
 				if (iwx_rx_packet_payload_len(pkt) !=
@@ -10881,7 +10875,7 @@ iwx_find_device_cfg(struct iwx_softc *sc)
 	cores = IWX_SUBDEVICE_CORES(sdev_id);
 
 	for (i = nitems(iwx_dev_info_table) - 1; i >= 0; i--) {
-		 const struct iwx_dev_info *dev_info = &iwx_dev_info_table[i];
+		const struct iwx_dev_info *dev_info = &iwx_dev_info_table[i];
 
 		if (dev_info->device != (uint16_t)IWX_CFG_ANY &&
 		    dev_info->device != sc->sc_pid)

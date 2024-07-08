@@ -315,6 +315,8 @@ struct config_file {
 	int min_ttl;
 	/** the number of seconds maximal negative TTL for SOA in auth */
 	int max_negative_ttl;
+	/** the number of seconds minimal negative TTL for SOA in auth */
+	int min_negative_ttl;
 	/** if prefetching of messages should be performed. */
 	int prefetch;
 	/** if prefetching of DNSKEYs should be performed. */
@@ -349,6 +351,8 @@ struct config_file {
 	int log_servfail;
 	/** log identity to report */
 	char* log_identity;
+	/** log dest addr for log_replies */
+	int log_destaddr;
 
 	/** do not report identity (id.server, hostname.bind) */
 	int hide_identity;
@@ -409,6 +413,8 @@ struct config_file {
 	int aggressive_nsec;
 	/** ignore the CD flag in incoming queries and refuse them bogus data */
 	int ignore_cd;
+	/** disable EDNS DO flag in outgoing requests */
+	int disable_edns_do;
 	/** serve expired entries and prefetch them */
 	int serve_expired;
 	/** serve expired entries until TTL after expiration */
@@ -530,6 +536,21 @@ struct config_file {
 
 	/* wait time for unknown server in msec */
 	int unknown_server_time_limit;
+
+	/** Wait time to drop recursion replies */
+	int discard_timeout;
+
+	/** Wait limit for number of replies per IP address */
+	int wait_limit;
+
+	/** Wait limit for number of replies per IP address with cookie */
+	int wait_limit_cookie;
+
+	/** wait limit per netblock */
+	struct config_str2list* wait_limit_netblock;
+
+	/** wait limit with cookie per netblock */
+	struct config_str2list* wait_limit_cookie_netblock;
 
 	/* maximum UDP response size */
 	size_t max_udp_size;
@@ -699,6 +720,10 @@ struct config_file {
 	char* cachedb_backend;
 	/** secret seed for hash key calculation */
 	char* cachedb_secret;
+	/** cachedb that does not store, but only reads from database, if on */
+	int cachedb_no_store;
+	/** cachedb check before serving serve-expired response */
+	int cachedb_check_when_serve_expired;
 #ifdef USE_REDIS
 	/** redis server's IP address or host name */
 	char* redis_server_host;
@@ -712,6 +737,8 @@ struct config_file {
 	int redis_timeout;
 	/** set timeout on redis records based on DNS response ttl */
 	int redis_expire_records;
+	/** set the redis logical database upon connection */
+	int redis_logical_db;
 #endif
 #endif
 	/** Downstream DNS Cookies */

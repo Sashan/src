@@ -759,7 +759,7 @@ static void radeon_vm_frag_ptes(struct radeon_device *rdev,
 	uint64_t frag_align = ((rdev->family == CHIP_CAYMAN) ||
 			       (rdev->family == CHIP_ARUBA)) ? 0x200 : 0x80;
 
-	uint64_t frag_start = roundup2(pe_start, frag_align);
+	uint64_t frag_start = ALIGN(pe_start, frag_align);
 	uint64_t frag_end = pe_end & ~(frag_align - 1);
 
 	unsigned count;
@@ -1204,13 +1204,17 @@ int radeon_vm_init(struct radeon_device *rdev, struct radeon_vm *vm)
 	r = radeon_bo_create(rdev, pd_size, align, true,
 			     RADEON_GEM_DOMAIN_VRAM, 0, NULL,
 			     NULL, &vm->page_directory);
-	if (r)
+	if (r) {
+		kfree(vm->page_tables);
+		vm->page_tables = NULL;
 		return r;
-
+	}
 	r = radeon_vm_clear_bo(rdev, vm->page_directory);
 	if (r) {
 		radeon_bo_unref(&vm->page_directory);
 		vm->page_directory = NULL;
+		kfree(vm->page_tables);
+		vm->page_tables = NULL;
 		return r;
 	}
 

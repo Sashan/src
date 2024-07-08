@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmd.c,v 1.152 2023/09/26 01:53:54 dv Exp $	*/
+/*	$OpenBSD: vmd.c,v 1.157 2024/05/18 06:45:00 jsg Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -53,7 +53,6 @@ int	 main(int, char **);
 int	 vmd_configure(void);
 void	 vmd_sighdlr(int sig, short event, void *arg);
 void	 vmd_shutdown(void);
-int	 vmd_control_run(void);
 int	 vmd_dispatch_control(int, struct privsep_proc *, struct imsg *);
 int	 vmd_dispatch_vmm(int, struct privsep_proc *, struct imsg *);
 int	 vmd_dispatch_agentx(int, struct privsep_proc *, struct imsg *);
@@ -97,6 +96,7 @@ vmd_dispatch_control(int fd, struct privsep_proc *p, struct imsg *imsg)
 {
 	struct privsep			*ps = p->p_ps;
 	int				 res = 0, ret = 0, cmd = 0, verbose;
+	int				 ifd;
 	unsigned int			 v = 0, flags;
 	struct vmop_create_params	 vmc;
 	struct vmop_id			 vid;
@@ -111,7 +111,7 @@ vmd_dispatch_control(int fd, struct privsep_proc *p, struct imsg *imsg)
 	case IMSG_VMDOP_START_VM_REQUEST:
 		IMSG_SIZE_CHECK(imsg, &vmc);
 		memcpy(&vmc, imsg->data, sizeof(vmc));
-		vmc.vmc_kernel = imsg->fd;
+		vmc.vmc_kernel = imsg_get_fd(imsg);
 
 		/* Try registering our VM in our list of known VMs. */
 		if (vm_register(ps, &vmc, &vm, 0, vmc.vmc_owner.uid)) {
@@ -257,11 +257,12 @@ vmd_dispatch_control(int fd, struct privsep_proc *p, struct imsg *imsg)
 		IMSG_SIZE_CHECK(imsg, &vid);
 		memcpy(&vid, imsg->data, sizeof(vid));
 		id = vid.vid_id;
+		ifd = imsg_get_fd(imsg);
 		if (vid.vid_id == 0) {
 			if ((vm = vm_getbyname(vid.vid_name)) == NULL) {
 				res = ENOENT;
 				cmd = IMSG_VMDOP_SEND_VM_RESPONSE;
-				close(imsg->fd);
+				close(ifd);
 				break;
 			} else {
 				vid.vid_id = vm->vm_vmid;
@@ -269,43 +270,42 @@ vmd_dispatch_control(int fd, struct privsep_proc *p, struct imsg *imsg)
 		} else if ((vm = vm_getbyvmid(vid.vid_id)) == NULL) {
 			res = ENOENT;
 			cmd = IMSG_VMDOP_SEND_VM_RESPONSE;
-			close(imsg->fd);
+			close(ifd);
 			break;
 		}
 		vmr.vmr_id = vid.vid_id;
 		log_debug("%s: sending fd to vmm", __func__);
 		proc_compose_imsg(ps, PROC_VMM, -1, imsg->hdr.type,
-		    imsg->hdr.peerid, imsg->fd, &vid, sizeof(vid));
+		    imsg->hdr.peerid, ifd, &vid, sizeof(vid));
 		break;
 	case IMSG_VMDOP_RECEIVE_VM_REQUEST:
 		IMSG_SIZE_CHECK(imsg, &vid);
 		memcpy(&vid, imsg->data, sizeof(vid));
-		if (imsg->fd == -1) {
+		ifd = imsg_get_fd(imsg);
+		if (ifd == -1) {
 			log_warnx("%s: invalid fd", __func__);
 			return (-1);
 		}
-		if (atomicio(read, imsg->fd, &vmh, sizeof(vmh)) !=
-		    sizeof(vmh)) {
+		if (atomicio(read, ifd, &vmh, sizeof(vmh)) != sizeof(vmh)) {
 			log_warnx("%s: error reading vmh from received vm",
 			    __func__);
 			res = EIO;
-			close(imsg->fd);
+			close(ifd);
 			cmd = IMSG_VMDOP_START_VM_RESPONSE;
 			break;
 		}
 
 		if (vmd_check_vmh(&vmh)) {
 			res = ENOENT;
-			close(imsg->fd);
+			close(ifd);
 			cmd = IMSG_VMDOP_START_VM_RESPONSE;
 			break;
 		}
-		if (atomicio(read, imsg->fd, &vmc, sizeof(vmc)) !=
-		    sizeof(vmc)) {
+		if (atomicio(read, ifd, &vmc, sizeof(vmc)) != sizeof(vmc)) {
 			log_warnx("%s: error reading vmc from received vm",
 			    __func__);
 			res = EIO;
-			close(imsg->fd);
+			close(ifd);
 			cmd = IMSG_VMDOP_START_VM_RESPONSE;
 			break;
 		}
@@ -317,14 +317,14 @@ vmd_dispatch_control(int fd, struct privsep_proc *p, struct imsg *imsg)
 		if (ret != 0) {
 			res = errno;
 			cmd = IMSG_VMDOP_START_VM_RESPONSE;
-			close(imsg->fd);
+			close(ifd);
 		} else {
 			vm->vm_state |= VM_STATE_RECEIVED;
 			config_setvm(ps, vm, imsg->hdr.peerid,
 			    vmc.vmc_owner.uid);
 			log_debug("%s: sending fd to vmm", __func__);
 			proc_compose_imsg(ps, PROC_VMM, -1,
-			    IMSG_VMDOP_RECEIVE_VM_END, vm->vm_vmid, imsg->fd,
+			    IMSG_VMDOP_RECEIVE_VM_END, vm->vm_vmid, ifd,
 			    NULL, 0);
 		}
 		break;
@@ -526,9 +526,8 @@ vmd_dispatch_vmm(int fd, struct privsep_proc *p, struct imsg *imsg)
 		    imsg->hdr.peerid == IMSG_AGENTX_PEERID ?
 		    PROC_AGENTX : PROC_CONTROL, -1, imsg->hdr.type,
 		    imsg->hdr.peerid, -1, &vir, sizeof(vir)) == -1) {
-			log_debug("%s: GET_INFO_VM failed for vm %d, removing",
-			    __func__, vm->vm_vmid);
-			vm_terminate(vm, __func__);
+			if (vm)
+				vm_terminate(vm, __func__);
 			return (-1);
 		}
 		break;
@@ -800,6 +799,8 @@ main(int argc, char **argv)
 
 	if ((env = calloc(1, sizeof(*env))) == NULL)
 		fatal("calloc: env");
+	env->vmd_fd = -1;
+	env->vmd_fd6 = -1;
 
 	while ((ch = getopt(argc, argv, "D:P:I:V:X:df:i:nt:vp:")) != -1) {
 		switch (ch) {
@@ -891,7 +892,6 @@ main(int argc, char **argv)
 
 	ps = &env->vmd_ps;
 	ps->ps_env = env;
-	env->vmd_fd = vmm_fd;
 
 	if (config_init(env) == -1)
 		fatal("failed to initialize configuration");
@@ -924,7 +924,7 @@ main(int argc, char **argv)
 
 	/* Open /dev/vmm early. */
 	if (env->vmd_noaction == 0 && proc_id == PROC_PARENT) {
-		env->vmd_fd = open(VMM_NODE, O_RDWR);
+		env->vmd_fd = open(VMM_NODE, O_RDWR | O_CLOEXEC);
 		if (env->vmd_fd == -1)
 			fatal("%s", VMM_NODE);
 	}
@@ -945,9 +945,6 @@ main(int argc, char **argv)
 	/* only the parent returns */
 	proc_init(ps, procs, nitems(procs), env->vmd_debug, argc0, argv,
 	    proc_id);
-
-	if (!env->vmd_debug && daemon(0, 0) == -1)
-		fatal("can't daemonize");
 
 	if (ps->ps_noaction == 0)
 		log_info("startup");
@@ -1014,9 +1011,6 @@ vmd_configure(void)
 	int ncpu_mib[] = {CTL_HW, HW_NCPUONLINE};
 	size_t ncpus_sz = sizeof(ncpus);
 
-	if ((env->vmd_ptmfd = open(PATH_PTMDEV, O_RDWR|O_CLOEXEC)) == -1)
-		fatal("open %s", PATH_PTMDEV);
-
 	/*
 	 * pledge in the parent process:
 	 * stdio - for malloc and basic I/O including events.
@@ -1033,6 +1027,9 @@ vmd_configure(void)
 	if (pledge("stdio rpath wpath proc tty recvfd sendfd getpw"
 	    " chown fattr flock", NULL) == -1)
 		fatal("pledge");
+
+	if ((env->vmd_ptmfd = getptmfd()) == -1)
+		fatal("getptmfd %s", PATH_PTMDEV);
 
 	if (parse_config(env->vmd_conffile) == -1) {
 		proc_kill(&env->vmd_ps);
@@ -1846,32 +1843,29 @@ vm_checkaccess(int fd, unsigned int uflag, uid_t uid, int amode)
 int
 vm_opentty(struct vmd_vm *vm)
 {
-	struct ptmget		 ptm;
 	struct stat		 st;
 	struct group		*gr;
 	uid_t			 uid;
 	gid_t			 gid;
 	mode_t			 mode;
-	int			 on;
+	int			 on = 1, tty_slave;
 
 	/*
 	 * Open tty with pre-opened PTM fd
 	 */
-	if ((ioctl(env->vmd_ptmfd, PTMGET, &ptm) == -1))
+	if (fdopenpty(env->vmd_ptmfd, &vm->vm_tty, &tty_slave, vm->vm_ttyname,
+	    NULL, NULL) == -1) {
+		log_warn("fdopenpty");
 		return (-1);
+	}
+	close(tty_slave);
 
 	/*
 	 * We use user ioctl(2) mode to pass break commands.
 	 */
-	on = 1;
-	if (ioctl(ptm.cfd, TIOCUCNTL, &on) == -1)
-		fatal("could not enable user ioctl mode");
-
-	vm->vm_tty = ptm.cfd;
-	close(ptm.sfd);
-	if (strlcpy(vm->vm_ttyname, ptm.sn, sizeof(vm->vm_ttyname))
-	    >= sizeof(vm->vm_ttyname)) {
-		log_warnx("%s: truncated ttyname", __func__);
+	if (ioctl(vm->vm_tty, TIOCUCNTL, &on) == -1) {
+		log_warn("could not enable user ioctl mode on %s",
+		    vm->vm_ttyname);
 		goto fail;
 	}
 
@@ -1896,8 +1890,10 @@ vm_opentty(struct vmd_vm *vm)
 	 * Change ownership and mode of the tty as required.
 	 * Loosely based on the implementation of sshpty.c
 	 */
-	if (stat(vm->vm_ttyname, &st) == -1)
+	if (fstat(vm->vm_tty, &st) == -1) {
+		log_warn("fstat failed for %s", vm->vm_ttyname);
 		goto fail;
+	}
 
 	if (st.st_uid != uid || st.st_gid != gid) {
 		if (chown(vm->vm_ttyname, uid, gid) == -1) {

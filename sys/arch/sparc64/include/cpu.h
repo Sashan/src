@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.102 2023/07/25 18:16:21 cheloha Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.108 2024/06/13 06:47:13 claudio Exp $	*/
 /*	$NetBSD: cpu.h,v 1.28 2001/06/14 22:56:58 thorpej Exp $ */
 
 /*
@@ -81,6 +81,7 @@
 #include <sys/clockintr.h>
 #include <sys/sched.h>
 #include <sys/srp.h>
+#include <uvm/uvm_percpu.h>
 
 /*
  * The cpu_info structure is part of a 64KB structure mapped both the kernel
@@ -113,6 +114,7 @@ struct cpu_info {
 	/* Most important fields first */
 	struct proc		*ci_curproc;
 	struct pcb		*ci_cpcb;	/* also initial stack */
+	paddr_t			ci_cpcbpaddr;
 	struct cpu_info		*ci_next;
 
 	struct proc		*ci_fpproc;
@@ -122,6 +124,8 @@ struct cpu_info {
 #ifdef MULTIPROCESSOR
 	int			ci_itid;
 	struct srp_hazard	ci_srp_hazards[SRP_HAZARD_NUM];
+#define __HAVE_UVM_PERCPU
+	struct uvm_pmr_cache	ci_uvm;		/* [o] page cache */
 #endif
 	int			ci_node;
 	u_int32_t 		ci_randseed;
@@ -130,7 +134,7 @@ struct cpu_info {
 	int			ci_want_resched;
 	int			ci_handled_intr_level;
 	void			*ci_intrpending[16][8];
-	struct clockintr_queue	ci_queue;
+	struct clockqueue	ci_queue;
 	struct intrhand		ci_tickintr;
 
 	volatile int		ci_ddb_paused;
@@ -165,7 +169,7 @@ struct cpu_info {
 #endif
 #ifdef GPROF
 	struct gmonparam *ci_gmon;
-	struct clockintr *ci_gmonclock;
+	struct clockintr ci_gmonclock;
 #endif
 	char			ci_panicbuf[512];
 };
@@ -269,9 +273,8 @@ do {									\
 } while (0)
 
 /*
- * Arguments to hardclock, softclock and gatherstats encapsulate the
- * previous machine state in an opaque clockframe.  The ipl is here
- * as well for strayintr (see locore.s:interrupt and intr.c:strayintr).
+ * Arguments to clockintr_dispatch encapsulate the
+ * previous machine state in an opaque clockframe.
  */
 struct clockframe {
 	struct trapframe t;
@@ -311,13 +314,11 @@ void signotify(struct proc *);
 /* cpu.c */
 int	cpu_myid(void);
 /* machdep.c */
-int	ldcontrolb(caddr_t);
 void	dumpconf(void);
 caddr_t	reserve_dumppages(caddr_t);
 /* clock.c */
 struct timeval;
 int	clockintr(void *);/* level 10 (clock) interrupt code */
-int	statintr(void *);	/* level 14 (statclock) interrupt code */
 /* locore.s */
 struct fpstate;
 void	savefpstate(struct fpstate *);
@@ -330,10 +331,6 @@ void 	proc_trampoline(void);
 struct pcb;
 void	snapshot(struct pcb *);
 struct frame *getfp(void);
-int	xldcontrolb(caddr_t, struct pcb *);
-void	copywords(const void *, void *, size_t);
-void	qcopy(const void *, void *, size_t);
-void	qzero(void *, size_t);
 void	switchtoctx(int);
 /* trap.c */
 void	pmap_unuse_final(struct proc *);
@@ -341,10 +338,6 @@ int	rwindow_save(struct proc *);
 /* vm_machdep.c */
 void	fpusave_cpu(struct cpu_info *, int);
 void	fpusave_proc(struct proc *, int);
-/* cons.c */
-int	cnrom(void);
-/* zs.c */
-void zsconsole(struct tty *, int, int, void (**)(struct tty *, int));
 /* fb.c */
 void	fb_unblank(void);
 /* ltc.c */
@@ -373,9 +366,6 @@ struct trapvec {
 	int	tv_instr[8];		/* the eight instructions */
 };
 extern struct trapvec trapbase[];	/* the 256 vectors */
-
-extern void wzero(void *, u_int);
-extern void wcopy(const void *, void *, u_int);
 
 struct blink_led {
 	void (*bl_func)(void *, int);

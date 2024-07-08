@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.63 2022/12/28 21:30:16 jmc Exp $	*/
+/*	$OpenBSD: config.c,v 1.65 2024/01/17 08:22:40 claudio Exp $	*/
 
 /*
  * Copyright (c) 2011 - 2015 Reyk Floeter <reyk@openbsd.org>
@@ -626,6 +626,7 @@ config_getserver(struct httpd *env, struct imsg *imsg)
 	struct server_config	 srv_conf;
 	uint8_t			*p = imsg->data;
 	size_t			 s;
+	int			 fd;
 
 	IMSG_SIZE_CHECK(imsg, &srv_conf);
 	memcpy(&srv_conf, p, sizeof(srv_conf));
@@ -633,6 +634,8 @@ config_getserver(struct httpd *env, struct imsg *imsg)
 
 	/* Reset these variables to avoid free'ing invalid pointers */
 	serverconfig_reset(&srv_conf);
+
+	fd = imsg_get_fd(imsg);
 
 	if ((IMSG_DATA_SIZE(imsg) - s) < (size_t)srv_conf.return_uri_len) {
 		log_debug("%s: invalid message length", __func__);
@@ -643,11 +646,11 @@ config_getserver(struct httpd *env, struct imsg *imsg)
 	if ((srv = server_byaddr((struct sockaddr *)
 	    &srv_conf.ss, srv_conf.port)) != NULL) {
 		/* Add "host" to existing listening server */
-		if (imsg->fd != -1) {
+		if (fd != -1) {
 			if (srv->srv_s == -1)
-				srv->srv_s = imsg->fd;
+				srv->srv_s = fd;
 			else
-				close(imsg->fd);
+				close(fd);
 		}
 		return (config_getserver_config(env, srv, imsg));
 	}
@@ -660,21 +663,13 @@ config_getserver(struct httpd *env, struct imsg *imsg)
 		goto fail;
 
 	memcpy(&srv->srv_conf, &srv_conf, sizeof(srv->srv_conf));
-	srv->srv_s = imsg->fd;
+	srv->srv_s = fd;
 
 	if (config_getserver_auth(env, &srv->srv_conf) != 0)
 		goto fail;
 
 	SPLAY_INIT(&srv->srv_clients);
 	TAILQ_INIT(&srv->srv_hosts);
-
-	TAILQ_INSERT_TAIL(&srv->srv_hosts, &srv->srv_conf, entry);
-	TAILQ_INSERT_TAIL(env->sc_servers, srv, srv_entry);
-
-	DPRINTF("%s: %s %d configuration \"%s[%u]\", flags: %s", __func__,
-	    ps->ps_title[privsep_process], ps->ps_instance,
-	    srv->srv_conf.name, srv->srv_conf.id,
-	    printb_flags(srv->srv_conf.flags, SRVFLAG_BITS));
 
 	/*
 	 * Get all variable-length values for the parent server.
@@ -685,11 +680,19 @@ config_getserver(struct httpd *env, struct imsg *imsg)
 			goto fail;
 	}
 
+	TAILQ_INSERT_TAIL(&srv->srv_hosts, &srv->srv_conf, entry);
+	TAILQ_INSERT_TAIL(env->sc_servers, srv, srv_entry);
+
+	DPRINTF("%s: %s %d configuration \"%s[%u]\", flags: %s", __func__,
+	    ps->ps_title[privsep_process], ps->ps_instance,
+	    srv->srv_conf.name, srv->srv_conf.id,
+	    printb_flags(srv->srv_conf.flags, SRVFLAG_BITS));
+
 	return (0);
 
  fail:
-	if (imsg->fd != -1)
-		close(imsg->fd);
+	if (fd != -1)
+		close(fd);
 	if (srv != NULL)
 		serverconfig_free(&srv->srv_conf);
 	free(srv);

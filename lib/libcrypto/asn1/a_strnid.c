@@ -1,4 +1,4 @@
-/* $OpenBSD: a_strnid.c,v 1.29 2023/12/16 12:56:20 tb Exp $ */
+/* $OpenBSD: a_strnid.c,v 1.31 2024/03/02 08:54:02 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 1999.
  */
@@ -141,7 +141,7 @@ ASN1_STRING *
 ASN1_STRING_set_by_NID(ASN1_STRING **out, const unsigned char *in, int inlen,
     int inform, int nid)
 {
-	ASN1_STRING_TABLE *tbl;
+	const ASN1_STRING_TABLE *tbl;
 	ASN1_STRING *str = NULL;
 	unsigned long mask;
 	int ret;
@@ -313,8 +313,7 @@ static const ASN1_STRING_TABLE tbl_standard[] = {
 
 #define N_STRING_TABLE_ENTRIES (sizeof(tbl_standard) / sizeof(tbl_standard[0]))
 
-/* XXX - const */
-ASN1_STRING_TABLE *
+const ASN1_STRING_TABLE *
 ASN1_STRING_TABLE_get(int nid)
 {
 	size_t i;
@@ -322,25 +321,9 @@ ASN1_STRING_TABLE_get(int nid)
 	for (i = 0; i < N_STRING_TABLE_ENTRIES; i++) {
 		const ASN1_STRING_TABLE *entry = &tbl_standard[i];
 		if (entry->nid == nid)
-			return (ASN1_STRING_TABLE *)entry;
+			return entry;
 	}
 
 	return NULL;
 }
 LCRYPTO_ALIAS(ASN1_STRING_TABLE_get);
-
-int
-ASN1_STRING_TABLE_add(int nid, long minsize, long maxsize, unsigned long mask,
-    unsigned long flags)
-{
-	ASN1error(ERR_R_DISABLED);
-	return 0;
-}
-LCRYPTO_ALIAS(ASN1_STRING_TABLE_add);
-
-void
-ASN1_STRING_TABLE_cleanup(void)
-{
-	ASN1error(ERR_R_DISABLED);
-}
-LCRYPTO_ALIAS(ASN1_STRING_TABLE_cleanup);

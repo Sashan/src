@@ -1,4 +1,4 @@
-/*	$OpenBSD: dwqereg.h,v 1.5 2023/11/11 16:32:56 stsp Exp $	*/
+/*	$OpenBSD: dwqereg.h,v 1.10 2024/06/05 10:19:55 stsp Exp $	*/
 /*
  * Copyright (c) 2008, 2019 Mark Kettenis <kettenis@openbsd.org>
  * Copyright (c) 2017, 2022 Patrick Wildt <patrick@blueri.se>
@@ -17,6 +17,7 @@
  */
 
 #define GMAC_MAC_CONF		0x0000
+#define  GMAC_MAC_CONF_IPC		(1 << 27)
 #define  GMAC_MAC_CONF_CST		(1 << 21)
 #define  GMAC_MAC_CONF_ACS		(1 << 20)
 #define  GMAC_MAC_CONF_BE		(1 << 18)
@@ -43,6 +44,19 @@
 #define  GMAC_INT_MASK_LPIIM		(1 << 10)
 #define  GMAC_INT_MASK_PIM		(1 << 3)
 #define  GMAC_INT_MASK_RIM		(1 << 0)
+#define GMAC_VLAN_TAG_CTRL	0x0050
+#define  GMAC_VLAN_TAG_CTRL_EVLRXS		(1 << 24)
+#define  GMAC_VLAN_TAG_CTRL_STRIP_ALWAYS	((1 << 21) | (1 << 22))	
+#define GMAC_VLAN_TAG_DATA	0x0054
+#define GMAC_VLAN_TAG_INCL	0x0060
+#define  GMAC_VLAN_TAG_INCL_VLTI	(1 << 20)
+#define  GMAC_VLAN_TAG_INCL_CSVL	(1 << 19)
+#define  GMAC_VLAN_TAG_INCL_DELETE	0x10000
+#define  GMAC_VLAN_TAG_INCL_INSERT	0x20000
+#define  GMAC_VLAN_TAG_INCL_REPLACE	0x30000
+#define  GMAC_VLAN_TAG_INCL_VLT		0x0ffff
+#define  GMAC_VLAN_TAG_INCL_RDWR	(1U << 30)
+#define  GMAC_VLAN_TAG_INCL_BUSY	(1U << 31)
 #define GMAC_QX_TX_FLOW_CTRL(x)	(0x0070 + (x) * 4)
 #define  GMAC_QX_TX_FLOW_CTRL_PT_SHIFT	16
 #define  GMAC_QX_TX_FLOW_CTRL_TFE	(1 << 0)
@@ -61,6 +75,9 @@
 #define GMAC_VERSION		0x0110
 #define  GMAC_VERSION_SNPS_MASK		0xff
 #define GMAC_MAC_HW_FEATURE(x)	(0x011c + (x) * 0x4)
+#define  GMAC_MAC_HW_FEATURE0_TXCOESEL	(1 << 14)
+#define  GMAC_MAC_HW_FEATURE0_RXCOESEL	(1 << 16)
+#define  GMAC_MAC_HW_FEATURE0_SAVLANINS	(1 << 27)
 #define  GMAC_MAC_HW_FEATURE1_TXFIFOSIZE(x) (((x) >> 6) & 0x1f)
 #define  GMAC_MAC_HW_FEATURE1_RXFIFOSIZE(x) (((x) >> 0) & 0x1f)
 #define GMAC_MAC_MDIO_ADDR	0x0200
@@ -83,6 +100,8 @@
 #define GMAC_MAC_MDIO_DATA	0x0204
 #define GMAC_MAC_ADDR0_HI	0x0300
 #define GMAC_MAC_ADDR0_LO	0x0304
+#define GMAC_MMC_RX_INT_MASK	0x070c
+#define GMAC_MMC_TX_INT_MASK	0x0710
 
 #define GMAC_MTL_OPERATION_MODE	0x0c00
 #define  GMAC_MTL_FRPE			(1 << 15)
@@ -225,22 +244,88 @@ struct dwqe_desc {
 	uint32_t sd_tdes3;
 };
 
-/* Tx bits */
+/* Tx context descriptor bits (host to device); precedes regular descriptor */
+#define TDES3_CTXT		(1 << 30)
+#define TDES3_VLAN_TAG_VALID	(1 << 16)
+#define TDES3_VLAN_TAG		0xffff	
+/* Bit 31 is the OWN bit, as in regular Tx descriptor. */
+
+/* Tx bits (read format; host to device) */
+#define TDES2_HDR_LEN		0x000003ff	/* if TSO is enabled */
+#define TDES2_BUF1_LEN		0x00003fff	/* if TSO is disabled */
+#define TDES2_VLAN_TIR		0x0000c000
+#define   TDES2_NO_VLAN_TAGGING		(0x0 << 14)
+#define   TDES2_VLAN_TAG_STRIP		(0x1 << 14)
+#define   TDES2_VLAN_TAG_INSERT		(0x2 << 14)
+#define   TDES2_VLAN_TAG_REPLACE	(0x3 << 14)
+#define TDES2_BUF2_LEN		0x3fff0000
+#define TDES2_TX_TIMESTAMP_EN	(1 << 30)	/* if TSO is disabled */
+#define TDES2_TSO_EXTMEM_DIS	(1 << 30)	/* if TSO is enabled */
 #define TDES2_IC		(1U << 31)
-#define TDES3_ES		(1 << 15)
-#define TDES3_DE		(1 << 23)
+#define TDES3_TCP_PAYLOAD_LEN	0x0003ffff	/* if TSO is enabled */
+#define TDES3_FRAME_LEN		0x00007fff	/* if TSO is disabled */
+#define TDES3_CIC		0x00030000	/* if TSO is disabled */
+#define   TDES3_CSUM_DISABLE			(0x0 << 16)
+#define   TDES3_CSUM_IPHDR			(0x1 << 16)
+#define   TDES3_CSUM_IPHDR_PAYLOAD		(0x2 << 16)
+#define   TDES3_CSUM_IPHDR_PAYLOAD_PSEUDOHDR	(0x3 << 16)
+#define TDES3_TSO_EN		(1 << 18)
+#define TDES3_CPC		((1 << 26) | (1 << 27)) /* if TSO is disabled */
+#define   TDES3_CPC_CRC_AND_PAD		(0x0 << 26)
+#define   TDES3_CPC_CRC_NO_PAD		(0x1 << 26)
+#define   TDES3_CPC_DISABLE		(0x2 << 26)
+#define   TDES3_CPC_CRC_REPLACE		(0x3 << 26)
 #define TDES3_LS		(1 << 28)
 #define TDES3_FS		(1 << 29)
 #define TDES3_OWN		(1U << 31)
 
-/* Rx bits */
+/* Tx bits (writeback format; device to host) */
+#define TDES3_ES		(1 << 15)
+#define TDES3_DE		(1 << 23)
+/* Bit 28 is the LS bit, as in "read" format. */
+/* Bit 29 is the FS bit, as in "read" format. */
+/* Bit 31 is the OWN bit, as in "read" format. */
+
+/* Rx bits (read format; host to device) */
+#define RDES3_BUF1V		(1 << 24)
+#define RDES3_BUF2V		(1 << 25)
+#define RDES3_IC		(1 << 30)
+#define RDES3_OWN		(1U << 31)
+
+/* Rx bits (writeback format; device to host) */
+#define RDES0_IVT		0xffff0000
+#define RDES0_OVT		0x0000ffff
+#define RDES1_IP_PAYLOAD_TYPE	0x7
+#define   RDES1_IP_PAYLOAD_UNKNOWN	0x0
+#define   RDES1_IP_PAYLOAD_UDP		0x1
+#define   RDES1_IP_PAYLOAD_TCP		0x2
+#define   RDES1_IP_PAYLOAD_ICMP		0x3
+#define RDES1_IP_HDR_ERROR	(1 << 3)
+#define RDES1_IPV4_HDR		(1 << 4)
+#define RDES1_IPV6_HDR		(1 << 5)
+#define RDES1_IP_CSUM_BYPASS	(1 << 6)
+#define RDES1_IP_PAYLOAD_ERROR	(1 << 7)
+#define RDES3_LENGTH		(0x7fff << 0)
 #define RDES3_ES		(1 << 15)
+#define RDES3_LENTYPE		0x70000
+#define   RDES3_LENTYPE_LENGTH	(0x0 << 16)
+#define   RDES3_LENTYPE_TYPE	(0x1 << 16)
+				/* 0x2 is reserved */
+#define   RDES3_LENTYPE_ARP	(0x3 << 16)
+#define   RDES3_LENTYPE_VLAN	(0x4 << 16)
+#define   RDES3_LENTYPE_2VLAN	(0x5 << 16)
+#define   RDES3_LENTYPE_MACCTL	(0x6 << 16)
+#define   RDES3_LENTYPE_OAM	(0x7 << 16)
 #define RDES3_DE		(1 << 19)
 #define RDES3_RE		(1 << 20)
 #define RDES3_OE		(1 << 21)
 #define RDES3_RWT		(1 << 22)
+#define RDES3_GP		(1 << 23)
 #define RDES3_CE		(1 << 24)
-#define RDES3_BUF1V		(1 << 24)
-#define RDES3_IC		(1 << 30)
-#define RDES3_OWN		(1U << 31)
-#define RDES3_LENGTH		(0x7fff << 0)
+#define RDES3_RDES0_VALID	(1 << 25)
+#define RDES3_RDES1_VALID	(1 << 26)
+#define RDES3_RDES2_VALID	(1 << 27)
+#define RDES3_LD		(1 << 28)
+#define RDES3_FD		(1 << 29)
+#define RDES3_CTXT		(1 << 30)
+/* Bit 31 is the OWN bit, as in "read" format. */

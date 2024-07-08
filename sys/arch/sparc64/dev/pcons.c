@@ -1,4 +1,4 @@
-/*	$OpenBSD: pcons.c,v 1.27 2022/10/16 01:22:39 jsg Exp $	*/
+/*	$OpenBSD: pcons.c,v 1.29 2024/05/14 08:26:13 jsg Exp $	*/
 /*	$NetBSD: pcons.c,v 1.7 2001/05/02 10:32:20 scw Exp $	*/
 
 /*-
@@ -183,8 +183,8 @@ pconsattach(struct device *parent, struct device *self, void *aux)
 	else {
 		if (OF_getprop(OF_instance_to_package(stdin), "compatible",
 		    buffer, sizeof(buffer)) != -1 &&
-		   strncmp("usb", buffer, 3) == 0)
-		sc->sc_wsdisplay = 1;
+		    strncmp("usb", buffer, 3) == 0)
+			sc->sc_wsdisplay = 1;
 	}
 
 	if (sc->sc_wsdisplay != 0) {
@@ -522,7 +522,6 @@ cn_get_magic(char *magic, int maglen) {
 
 int	pcons_alloc_screen(void *, const struct wsscreen_descr *, void **,
 	    int *, int *, uint32_t *);
-void	pcons_cursor(void *, int, int, int);
 void	pcons_free_screen(void *, void *);
 int	pcons_ioctl(void *, u_long, caddr_t, int, struct proc *);
 int	pcons_mapchar(void *, int, unsigned int *);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: x509_asid.c,v 1.41 2023/11/11 09:35:21 tb Exp $ */
+/*	$OpenBSD: x509_asid.c,v 1.43 2024/02/20 14:58:16 tb Exp $ */
 /*
  * Contributed to the OpenSSL Project by the American Registry for
  * Internet Numbers ("ARIN").
@@ -558,6 +558,8 @@ extract_min_max(ASIdOrRange *aor, ASN1_INTEGER **min, ASN1_INTEGER **max)
 		*max = aor->u.range->max;
 		return 1;
 	}
+	*min = NULL;
+	*max = NULL;
 
 	return 0;
 }
@@ -568,6 +570,8 @@ extract_min_max(ASIdOrRange *aor, ASN1_INTEGER **min, ASN1_INTEGER **max)
 static int
 ASIdentifierChoice_is_canonical(ASIdentifierChoice *choice)
 {
+	ASIdOrRange *a, *b;
+	ASN1_INTEGER *a_min = NULL, *a_max = NULL, *b_min = NULL, *b_max = NULL;
 	ASN1_INTEGER *a_max_plus_one = NULL;
 	ASN1_INTEGER *orig;
 	BIGNUM *bn = NULL;
@@ -590,15 +594,8 @@ ASIdentifierChoice_is_canonical(ASIdentifierChoice *choice)
 	 * It's a list, check it.
 	 */
 	for (i = 0; i < sk_ASIdOrRange_num(choice->u.asIdsOrRanges) - 1; i++) {
-		ASIdOrRange *a = sk_ASIdOrRange_value(choice->u.asIdsOrRanges,
-		    i);
-		ASIdOrRange *b = sk_ASIdOrRange_value(choice->u.asIdsOrRanges,
-		    i + 1);
-		ASN1_INTEGER *a_min = NULL,
-		*a_max = NULL,
-		*b_min = NULL,
-		*b_max =
-		    NULL;
+		a = sk_ASIdOrRange_value(choice->u.asIdsOrRanges, i);
+		b = sk_ASIdOrRange_value(choice->u.asIdsOrRanges, i + 1);
 
 		if (!extract_min_max(a, &a_min, &a_max) ||
 		    !extract_min_max(b, &b_min, &b_max))
@@ -640,15 +637,11 @@ ASIdentifierChoice_is_canonical(ASIdentifierChoice *choice)
 	 * Check for inverted range.
 	 */
 	i = sk_ASIdOrRange_num(choice->u.asIdsOrRanges) - 1;
-	{
-		ASIdOrRange *a = sk_ASIdOrRange_value(choice->u.asIdsOrRanges,
-		    i);
-		ASN1_INTEGER *a_min, *a_max;
-		if (a != NULL && a->type == ASIdOrRange_range) {
-			if (!extract_min_max(a, &a_min, &a_max) ||
-			    ASN1_INTEGER_cmp(a_min, a_max) > 0)
-				goto done;
-		}
+	a = sk_ASIdOrRange_value(choice->u.asIdsOrRanges, i);
+	if (a != NULL && a->type == ASIdOrRange_range) {
+		if (!extract_min_max(a, &a_min, &a_max) ||
+		    ASN1_INTEGER_cmp(a_min, a_max) > 0)
+			goto done;
 	}
 
 	ret = 1;
@@ -677,6 +670,8 @@ LCRYPTO_ALIAS(X509v3_asid_is_canonical);
 static int
 ASIdentifierChoice_canonize(ASIdentifierChoice *choice)
 {
+	ASIdOrRange *a, *b;
+	ASN1_INTEGER *a_min = NULL, *a_max = NULL, *b_min = NULL, *b_max = NULL;
 	ASN1_INTEGER *a_max_plus_one = NULL;
 	ASN1_INTEGER *orig;
 	BIGNUM *bn = NULL;
@@ -707,15 +702,8 @@ ASIdentifierChoice_canonize(ASIdentifierChoice *choice)
 	 * former and fixing the latter.
 	 */
 	for (i = 0; i < sk_ASIdOrRange_num(choice->u.asIdsOrRanges) - 1; i++) {
-		ASIdOrRange *a = sk_ASIdOrRange_value(choice->u.asIdsOrRanges,
-		    i);
-		ASIdOrRange *b = sk_ASIdOrRange_value(choice->u.asIdsOrRanges,
-		    i + 1);
-		ASN1_INTEGER *a_min = NULL,
-		*a_max = NULL,
-		*b_min = NULL,
-		*b_max =
-		    NULL;
+		a = sk_ASIdOrRange_value(choice->u.asIdsOrRanges, i);
+		b = sk_ASIdOrRange_value(choice->u.asIdsOrRanges, i + 1);
 
 		if (!extract_min_max(a, &a_min, &a_max) ||
 		    !extract_min_max(b, &b_min, &b_max))
@@ -800,15 +788,11 @@ ASIdentifierChoice_canonize(ASIdentifierChoice *choice)
 	 * Check for final inverted range.
 	 */
 	i = sk_ASIdOrRange_num(choice->u.asIdsOrRanges) - 1;
-	{
-		ASIdOrRange *a = sk_ASIdOrRange_value(choice->u.asIdsOrRanges,
-		    i);
-		ASN1_INTEGER *a_min, *a_max;
-		if (a != NULL && a->type == ASIdOrRange_range) {
-			if (!extract_min_max(a, &a_min, &a_max) ||
-			    ASN1_INTEGER_cmp(a_min, a_max) > 0)
-				goto done;
-		}
+	a = sk_ASIdOrRange_value(choice->u.asIdsOrRanges, i);
+	if (a != NULL && a->type == ASIdOrRange_range) {
+		if (!extract_min_max(a, &a_min, &a_max) ||
+		    ASN1_INTEGER_cmp(a_min, a_max) > 0)
+			goto done;
 	}
 
 	/* Paranoia */

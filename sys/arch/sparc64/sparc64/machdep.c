@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.207 2023/03/08 04:43:07 guenther Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.218 2024/05/22 05:51:49 jsg Exp $	*/
 /*	$NetBSD: machdep.c,v 1.108 2001/07/24 19:30:14 eeh Exp $ */
 
 /*-
@@ -72,7 +72,6 @@
  */
 
 #include <sys/param.h>
-#include <sys/extent.h>
 #include <sys/signal.h>
 #include <sys/signalvar.h>
 #include <sys/proc.h>
@@ -86,26 +85,21 @@
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/mount.h>
-#include <sys/msgbuf.h>
 #include <sys/syscallargs.h>
 #include <sys/exec.h>
 
 #include <net/if.h>
-#include <uvm/uvm.h>
 
 #include <sys/sysctl.h>
 #include <sys/exec_elf.h>
 
 #define _SPARC_BUS_DMA_PRIVATE
-#include <machine/autoconf.h>
 #include <machine/bus.h>
 #include <machine/frame.h>
 #include <machine/cpu.h>
 #include <machine/pmap.h>
 #include <machine/openfirm.h>
 #include <machine/sparc64.h>
-
-#include <sparc64/sparc64/cache.h>
 
 #include "pckbc.h"
 #include "pckbd.h"
@@ -145,11 +139,6 @@ void    _bus_dmamem_unmap(bus_dma_tag_t tag, bus_dma_tag_t, caddr_t kva,
 paddr_t _bus_dmamem_mmap(bus_dma_tag_t tag, bus_dma_tag_t,
 	    bus_dma_segment_t *segs, int nsegs, off_t off, int prot, int flags);
 
-int     _bus_dmamem_alloc_range(bus_dma_tag_t tag, bus_dma_tag_t,
-	    bus_size_t size, bus_size_t alignment, bus_size_t boundary,
-            bus_dma_segment_t *segs, int nsegs, int *rsegs, int flags,
-            vaddr_t low, vaddr_t high);
-
 /*
  * The "bus_space_debug" flags used by macros elsewhere.
  * A good set of flags to use when first debugging something is:
@@ -164,7 +153,6 @@ struct uvm_constraint_range  dma_constraint = { 0x0, (paddr_t)-1 };
 struct uvm_constraint_range *uvm_md_constraints[] = { NULL };
 
 int	physmem;
-extern	caddr_t msgbufaddr;
 
 int sparc_led_blink = 1;
 
@@ -211,12 +199,13 @@ cpu_startup(void)
 #endif
 
 	proc0.p_addr = proc0paddr;
+	(void)pmap_extract(pmap_kernel(), (vaddr_t)proc0paddr,
+	    &proc0.p_md.md_pcbpaddr);
 
 	/*
 	 * Good {morning,afternoon,evening,night}.
 	 */
 	printf("%s", version);
-	/*identifycpu();*/
 	printf("real mem = %lu (%luMB)\n", ptoa((psize_t)physmem),
 	    ptoa((psize_t)physmem)/1024/1024);
 
@@ -821,34 +810,6 @@ printf("starting dump, blkno %lld\n", (long long)blkno);
 	}
 }
 
-void trapdump(struct trapframe *);
-/*
- * dump out a trapframe.
- */
-void
-trapdump(struct trapframe *tf)
-{
-	printf("TRAPFRAME: tstate=%llx pc=%llx npc=%llx y=%x\n",
-	       (unsigned long long)tf->tf_tstate, (unsigned long long)tf->tf_pc,
-	       (unsigned long long)tf->tf_npc, (unsigned)tf->tf_y);
-	printf("%%g1-7: %llx %llx %llx %llx %llx %llx %llx\n",
-	       (unsigned long long)tf->tf_global[1],
-	       (unsigned long long)tf->tf_global[2],
-	       (unsigned long long)tf->tf_global[3], 
-	       (unsigned long long)tf->tf_global[4],
-	       (unsigned long long)tf->tf_global[5],
-	       (unsigned long long)tf->tf_global[6], 
-	       (unsigned long long)tf->tf_global[7]);
-	printf("%%o0-7: %llx %llx %llx %llx\n %llx %llx %llx %llx\n",
-	       (unsigned long long)tf->tf_out[0],
-	       (unsigned long long)tf->tf_out[1],
-	       (unsigned long long)tf->tf_out[2],
-	       (unsigned long long)tf->tf_out[3], 
-	       (unsigned long long)tf->tf_out[4],
-	       (unsigned long long)tf->tf_out[5],
-	       (unsigned long long)tf->tf_out[6],
-	       (unsigned long long)tf->tf_out[7]);
-}
 /*
  * get the fp and dump the stack as best we can.  don't leave the
  * current stack page
@@ -862,7 +823,7 @@ stackdump(void)
 	printf("Frame pointer is at %p\n", fp64);
 	printf("Call traceback:\n");
 	while (fp64 && ((u_long)fp64 >> PGSHIFT) == ((u_long)sfp >> PGSHIFT)) {
-		printf("%llx(%llx, %llx, %llx, %llx, %llx, %llx, %llx) "
+		printf("%llx(%llx, %llx, %llx, %llx, %llx, %llx) "
 		    "fp = %llx\n",
 		       (unsigned long long)fp64->fr_pc,
 		       (unsigned long long)fp64->fr_arg[0],
@@ -871,7 +832,6 @@ stackdump(void)
 		       (unsigned long long)fp64->fr_arg[3],
 		       (unsigned long long)fp64->fr_arg[4],
 		       (unsigned long long)fp64->fr_arg[5],	
-		       (unsigned long long)fp64->fr_arg[6],
 		       (unsigned long long)fp64->fr_fp);
 		fp64 = v9next_frame(fp64);
 	}
@@ -1015,7 +975,8 @@ _bus_dmamap_load_mbuf(bus_dma_tag_t t, bus_dma_tag_t t0, bus_dmamap_t map,
 			paddr_t pa;
 			long incr;
 
-			incr = min(buflen, NBPG);
+			incr = min(buflen,
+			    PAGE_SIZE - ((u_long)vaddr & PGOFSET));
 
 			if (pmap_extract(pmap_kernel(), vaddr, &pa) == FALSE) {
 #ifdef DIAGNOSTIC
@@ -1101,7 +1062,9 @@ _bus_dmamap_load_uio(bus_dma_tag_t t, bus_dma_tag_t t0, bus_dmamap_t map,
 			paddr_t pa;
 			long incr;
 
-			incr = min(buflen, NBPG);
+			incr = min(buflen,
+			    PAGE_SIZE - ((u_long)vaddr & PGOFSET));
+
 			(void) pmap_extract(pmap_kernel(), vaddr, &pa);
 			buflen -= incr;
 			vaddr += incr;
@@ -1630,9 +1593,6 @@ sparc_bus_protect(bus_space_tag_t t, bus_space_tag_t t0, bus_space_handle_t h,
         for (sva = trunc_page((vaddr_t)addr); sva < eva; sva += PAGE_SIZE) {
                 /*
                  * Extract physical address for the page.
-                 * We use a cheezy hack to differentiate physical
-                 * page 0 from an invalid mapping, not that it
-                 * really matters...
                  */
                 if (pmap_extract(pmap_kernel(), sva, &pa) == FALSE)
                         panic("bus_space_protect(): invalid page");
@@ -1710,11 +1670,13 @@ bus_intr_allocate(bus_space_tag_t t, int (*handler)(void *), void *arg,
 	return (ih);
 }
 
+#ifdef notyet
 void
 bus_intr_free(void *arg)
 {
 	free(arg, M_DEVBUF, 0);
 }
+#endif
 
 void *
 sparc_mainbus_intr_establish(bus_space_tag_t t, bus_space_tag_t t0, int number,
@@ -1726,7 +1688,7 @@ sparc_mainbus_intr_establish(bus_space_tag_t t, bus_space_tag_t t0, int number,
 	if (ih == NULL)
 		return (NULL);
 
-	intr_establish(ih->ih_pil, ih);
+	intr_establish(ih);
 
 	return (ih);
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ca.c,v 1.97 2023/09/02 18:16:02 tobhe Exp $	*/
+/*	$OpenBSD: ca.c,v 1.102 2024/06/18 05:08:41 tb Exp $	*/
 
 /*
  * Copyright (c) 2010-2013 Reyk Floeter <reyk@openbsd.org>
@@ -46,7 +46,7 @@
 
 void	 ca_run(struct privsep *, struct privsep_proc *, void *);
 void	 ca_shutdown(void);
-void	 ca_reset(struct privsep *);
+void	 ca_reset(struct iked *);
 int	 ca_reload(struct iked *);
 
 int	 ca_cert_local(struct iked *, X509 *);
@@ -76,7 +76,7 @@ int	 ca_x509_subjectaltname_get(X509 *cert, struct iked_id *);
 int	 ca_dispatch_parent(int, struct privsep_proc *, struct imsg *);
 int	 ca_dispatch_ikev2(int, struct privsep_proc *, struct imsg *);
 int	 ca_dispatch_control(int, struct privsep_proc *, struct imsg *);
-void	 ca_store_info(struct iked *, const char *, X509_STORE *);
+void	 ca_store_info(struct iked *, struct imsg *, const char *, X509_STORE *);
 
 static struct privsep_proc procs[] = {
 	{ "parent",	PROC_PARENT,	ca_dispatch_parent },
@@ -175,9 +175,8 @@ ca_getkey(struct privsep *ps, struct iked_id *key, enum imsg_type type)
 }
 
 void
-ca_reset(struct privsep *ps)
+ca_reset(struct iked *env)
 {
-	struct iked	*env = iked_env;
 	struct ca_store	*store = env->sc_priv;
 
 	if (store->ca_privkey.id_type == IKEV2_ID_NONE ||
@@ -333,12 +332,20 @@ ca_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 	unsigned int		 mode;
 
 	switch (imsg->hdr.type) {
+	case IMSG_CTL_ACTIVE:
+	case IMSG_CTL_PASSIVE:
+		/*
+		 * send back to indicate we have processed
+		 * all messages from parent.
+		 */
+		proc_compose(&env->sc_ps, PROC_PARENT, imsg->hdr.type, NULL, 0);
+		break;
 	case IMSG_CTL_RESET:
 		IMSG_SIZE_CHECK(imsg, &mode);
 		memcpy(&mode, imsg->data, sizeof(mode));
 		if (mode == RESET_ALL || mode == RESET_CA) {
 			log_debug("%s: config reset", __func__);
-			ca_reset(&env->sc_ps);
+			ca_reset(env);
 		}
 		break;
 	case IMSG_OCSP_FD:
@@ -351,8 +358,8 @@ ca_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 	case IMSG_PUBKEY:
 		config_getkey(env, imsg);
 		break;
-	case IMSG_CERT_PARTIAL_CHAIN:
-		config_getcertpartialchain(env, imsg);
+	case IMSG_CTL_STATIC:
+		config_getstatic(env, imsg);
 		break;
 	default:
 		return (-1);
@@ -391,11 +398,12 @@ ca_dispatch_control(int fd, struct privsep_proc *p, struct imsg *imsg)
 
 	switch (imsg->hdr.type) {
 	case IMSG_CTL_SHOW_CERTSTORE:
-		ca_store_info(env, "CA", store->ca_cas);
-		ca_store_info(env, "CERT", store->ca_certs);
+		ca_store_info(env, imsg, "CA", store->ca_cas);
+		ca_store_info(env, imsg, "CERT", store->ca_certs);
 		/* Send empty reply to indicate end of information. */
-		proc_compose(&env->sc_ps, PROC_CONTROL, IMSG_CTL_SHOW_CERTSTORE,
-		    NULL, 0);
+		proc_compose_imsg(&env->sc_ps, PROC_CONTROL, -1,
+		    IMSG_CTL_SHOW_CERTSTORE, imsg->hdr.peerid,
+		    -1, NULL, 0);
 		break;
 	default:
 		return (-1);
@@ -1333,7 +1341,7 @@ ca_subjectpubkey_digest(X509 *x509, uint8_t *md, unsigned int *size)
 }
 
 void
-ca_store_info(struct iked *env, const char *msg, X509_STORE *ctx)
+ca_store_info(struct iked *env, struct imsg *imsg, const char *msg, X509_STORE *ctx)
 {
 	STACK_OF(X509_OBJECT)	*h;
 	X509_OBJECT		*xo;
@@ -1357,8 +1365,9 @@ ca_store_info(struct iked *env, const char *msg, X509_STORE *ctx)
 		OPENSSL_free(name);
 		if (buflen == -1)
 			continue;
-		proc_compose(&env->sc_ps, PROC_CONTROL, IMSG_CTL_SHOW_CERTSTORE,
-		    buf, buflen + 1);
+		proc_compose_imsg(&env->sc_ps, PROC_CONTROL, -1,
+		    IMSG_CTL_SHOW_CERTSTORE, imsg->hdr.peerid,
+		    -1, buf, buflen + 1);
 		free(buf);
 	}
 }
@@ -1976,13 +1985,13 @@ ca_x509_subjectaltname_do(X509 *cert, int mode, const char *logmsg,
 	GENERAL_NAME *entry;
 	ASN1_STRING *cstr;
 	char idstr[IKED_ID_SIZE];
-	int idx, ret, i, type, len;
+	int crit, ret, i, type, len;
 	const uint8_t *data;
 
 	ret = -1;
-	idx = -1;
-	while ((stack = X509_get_ext_d2i(cert, NID_subject_alt_name,
-	    NULL, &idx)) != NULL) {
+	crit = -1;
+	if ((stack = X509_get_ext_d2i(cert, NID_subject_alt_name,
+	    &crit, NULL)) != NULL) {
 		for (i = 0; i < sk_GENERAL_NAME_num(stack); i++) {
 			entry = sk_GENERAL_NAME_value(stack, i);
 			switch (entry->type) {
@@ -2062,12 +2071,14 @@ ca_x509_subjectaltname_do(X509 *cert, int mode, const char *logmsg,
 			}
 		}
 		sk_GENERAL_NAME_pop_free(stack, GENERAL_NAME_free);
-		if (ret != -1)
-			break;
-	}
-	if (idx == -1)
+	} else if (crit == -2)
+		log_info("%s: multiple subjectAltName extensions are invalid",
+		    __func__);
+	else if (crit == -1)
 		log_debug("%s: did not find subjectAltName in certificate",
 		    __func__);
+	else
+		log_debug("%s: failed to decode subjectAltName", __func__);
 	return ret;
 }
 

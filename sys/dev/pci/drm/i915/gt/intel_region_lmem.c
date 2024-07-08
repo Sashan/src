@@ -62,6 +62,7 @@ static void i915_resize_lmem_bar(struct drm_i915_private *i915, resource_size_t 
 	struct resource *root_res;
 	resource_size_t rebar_size;
 	resource_size_t current_size;
+	intel_wakeref_t wakeref;
 	u32 pci_cmd;
 	int i;
 
@@ -110,15 +111,25 @@ static void i915_resize_lmem_bar(struct drm_i915_private *i915, resource_size_t 
 		return;
 	}
 
-	/* First disable PCI memory decoding references */
-	pci_read_config_dword(pdev, PCI_COMMAND, &pci_cmd);
-	pci_write_config_dword(pdev, PCI_COMMAND,
-			       pci_cmd & ~PCI_COMMAND_MEMORY);
+	/*
+	 * Releasing forcewake during BAR resizing results in later forcewake
+	 * ack timeouts and former can happen any time - it is asynchronous.
+	 * Grabbing all forcewakes prevents it.
+	 */
+	with_intel_runtime_pm(i915->uncore.rpm, wakeref) {
+		intel_uncore_forcewake_get(&i915->uncore, FORCEWAKE_ALL);
 
-	_resize_bar(i915, GEN12_LMEM_BAR, rebar_size);
+		/* First disable PCI memory decoding references */
+		pci_read_config_dword(pdev, PCI_COMMAND, &pci_cmd);
+		pci_write_config_dword(pdev, PCI_COMMAND,
+				       pci_cmd & ~PCI_COMMAND_MEMORY);
 
-	pci_assign_unassigned_bus_resources(pdev->bus);
-	pci_write_config_dword(pdev, PCI_COMMAND, pci_cmd);
+		_resize_bar(i915, GEN12_LMEM_BAR, rebar_size);
+
+		pci_assign_unassigned_bus_resources(pdev->bus);
+		pci_write_config_dword(pdev, PCI_COMMAND, pci_cmd);
+		intel_uncore_forcewake_put(&i915->uncore, FORCEWAKE_ALL);
+	}
 #endif
 }
 #else
@@ -142,15 +153,36 @@ region_lmem_release(struct intel_memory_region *mem)
 static int
 region_lmem_init(struct intel_memory_region *mem)
 {
-	STUB();
-	return -ENOSYS;
-#ifdef notyet
 	int ret;
 
+#ifdef __linux__
 	if (!io_mapping_init_wc(&mem->iomap,
 				mem->io_start,
 				mem->io_size))
 		return -EIO;
+#else
+	struct drm_i915_private *i915 = mem->i915;
+	paddr_t start, end;
+	struct vm_page *pgs;
+	int i;
+	bus_space_handle_t bsh;
+
+	start = atop(mem->io_start);
+	end = start + atop(mem->io_size);
+	uvm_page_physload(start, end, start, end, PHYSLOAD_DEVICE);
+
+	pgs = PHYS_TO_VM_PAGE(mem->io_start);
+	for (i = 0; i < atop(mem->io_size); i++)
+		atomic_setbits_int(&(pgs[i].pg_flags), PG_PMAP_WC);
+
+	if (bus_space_map(i915->bst, mem->io_start, mem->io_size,
+	    BUS_SPACE_MAP_LINEAR | BUS_SPACE_MAP_PREFETCHABLE, &bsh))
+		panic("can't map lmem");
+
+	mem->iomap.base = mem->io_start;
+	mem->iomap.size = mem->io_size;
+	mem->iomap.iomem = bus_space_vaddr(i915->bst, bsh);
+#endif
 
 	ret = intel_region_ttm_init(mem);
 	if (ret)
@@ -159,10 +191,11 @@ region_lmem_init(struct intel_memory_region *mem)
 	return 0;
 
 out_no_buddy:
+#ifdef __linux__
 	io_mapping_fini(&mem->iomap);
+#endif
 
 	return ret;
-#endif
 }
 
 static const struct intel_memory_region_ops intel_region_lmem_ops = {
@@ -174,7 +207,7 @@ static const struct intel_memory_region_ops intel_region_lmem_ops = {
 static bool get_legacy_lowmem_region(struct intel_uncore *uncore,
 				     u64 *start, u32 *size)
 {
-	if (!IS_DG1_GRAPHICS_STEP(uncore->i915, STEP_A0, STEP_C0))
+	if (!IS_DG1(uncore->i915))
 		return false;
 
 	*start = 0;
@@ -227,7 +260,7 @@ static struct intel_memory_region *setup_lmem(struct intel_gt *gt)
 		resource_size_t lmem_range;
 		u64 tile_stolen, flat_ccs_base;
 
-		lmem_range = intel_gt_mcr_read_any(&i915->gt0, XEHP_TILE0_ADDR_RANGE) & 0xFFFF;
+		lmem_range = intel_gt_mcr_read_any(to_gt(i915), XEHP_TILE0_ADDR_RANGE) & 0xFFFF;
 		lmem_size = lmem_range >> XEHP_TILE_LMEM_RANGE_SHIFT;
 		lmem_size *= SZ_1G;
 

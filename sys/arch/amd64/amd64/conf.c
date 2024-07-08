@@ -1,4 +1,4 @@
-/*	$OpenBSD: conf.c,v 1.78 2023/03/06 17:20:05 miod Exp $	*/
+/*	$OpenBSD: conf.c,v 1.81 2024/06/12 12:54:54 bluhm Exp $	*/
 
 /*
  * Copyright (c) 1994, 1995 Charles M. Hannum.  All rights reserved.
@@ -98,6 +98,15 @@ int	nblkdev = nitems(bdevsw);
 	(dev_type_stop((*))) enodev, 0, \
 	(dev_type_mmap((*))) enodev, 0, 0, seltrue_kqfilter }
 
+/* open, close, ioctl */
+#define cdev_psp_init(c,n) { \
+	dev_init(c,n,open), dev_init(c,n,close), \
+	(dev_type_read((*))) enodev, \
+	(dev_type_write((*))) enodev, \
+	 dev_init(c,n,ioctl), \
+	(dev_type_stop((*))) enodev, 0, \
+	(dev_type_mmap((*))) enodev, 0, 0, seltrue_kqfilter }
+
 #define	mmread	mmrw
 #define	mmwrite	mmrw
 cdev_decl(mm);
@@ -117,14 +126,6 @@ cdev_decl(pcmcia);
 #endif
 #include "spkr.h"
 cdev_decl(spkr);
-#if 0 /* old (non-wsmouse) drivers */
-#include "mms.h"
-cdev_decl(mms);
-#include "lms.h"
-cdev_decl(lms);
-#include "opms.h"
-cdev_decl(pms);
-#endif
 #include "cy.h"
 cdev_decl(cy);
 #include "tun.h"
@@ -149,9 +150,10 @@ cdev_decl(cztty);
 #include "nvram.h"
 cdev_decl(nvram);
 #include "drm.h"
-cdev_decl(drm);
 #include "viocon.h"
 cdev_decl(viocon);
+#include "ccp.h"
+cdev_decl(psp);
 
 #include "wsdisplay.h"
 #include "wskbd.h"
@@ -290,6 +292,7 @@ struct cdevsw	cdevsw[] =
 	cdev_fido_init(NFIDO,fido),	/* 98: FIDO/U2F security keys */
 	cdev_pppx_init(NPPPX,pppac),	/* 99: PPP Access Concentrator */
 	cdev_ujoy_init(NUJOY,ujoy),	/* 100: USB joystick/gamecontroller */
+	cdev_psp_init(NCCP,psp),		/* 101: PSP */
 };
 int	nchrdev = nitems(cdevsw);
 

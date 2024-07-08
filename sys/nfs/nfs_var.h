@@ -1,4 +1,4 @@
-/*	$OpenBSD: nfs_var.h,v 1.63 2017/02/22 11:42:46 mpi Exp $	*/
+/*	$OpenBSD: nfs_var.h,v 1.65 2024/05/04 11:25:24 jsg Exp $	*/
 /*	$NetBSD: nfs_var.h,v 1.3 1996/02/18 11:53:54 fvdl Exp $	*/
 
 /*
@@ -66,8 +66,6 @@ int nfs_readlinkrpc(struct vnode *, struct uio *, struct ucred *);
 int nfs_readrpc(struct vnode *, struct uio *);
 int nfs_writerpc(struct vnode *, struct uio *, int *, int *);
 int nfs_removeit(struct sillyrename *);
-int nfs_mmap(void *);
-int nfs_blkatoff(void *);
 int nfs_writebp(struct buf *, int);
 
 #define	nfs_ioctl	((int (*)(void *))enoioctl)
@@ -152,9 +150,7 @@ int nfsm_mbuftouio(struct mbuf **, struct uio *, int, caddr_t *);
 void nfsm_uiotombuf(struct mbuf **, struct uio *, size_t);
 void nfsm_strtombuf(struct mbuf **, void *, size_t);
 void nfsm_buftombuf(struct mbuf **, void *, size_t);
-int nfsm_disct(struct mbuf **, caddr_t *, int, int, caddr_t *);
 int nfs_adv(struct mbuf **, caddr_t *, int, int);
-int nfsm_strtmbuf(struct mbuf **, char **, char *, long);
 int nfs_vfs_init(struct vfsconf *);
 int nfs_attrtimeo(struct nfsnode *);
 int nfs_loadattrcache(struct vnode **, struct mbuf **, caddr_t *,
@@ -164,6 +160,7 @@ int nfs_namei(struct nameidata *, fhandle_t *, int, struct nfssvc_sock *,
 		   struct mbuf *, struct mbuf **, caddr_t *, struct vnode **,
 		   struct proc *);
 void nfsm_v3attrbuild(struct mbuf **, struct vattr *, int);
+int nfsm_disct(struct mbuf **, caddr_t *, int, int, caddr_t *);
 void nfsm_adj(struct mbuf *, int, int);
 void nfsm_srvwcc(struct nfsrv_descript *, int, struct vattr *, int,
 		      struct vattr *, struct nfsm_info *);
@@ -190,7 +187,6 @@ void nfsm_srvfhtom(struct mbuf **, fhandle_t *, int);
 /* nfs_syscalls.c */
 int sys_nfssvc(struct proc *, void *, register_t *);
 void nfsrv_init(int);
-void start_nfsio(void *);
 void nfs_getset_niothreads(int);
 
 /* nfs_kq.c */

@@ -268,6 +268,7 @@ id-smime-ct 47		: id-ct-geofeedCSVwithCRLF
 id-smime-ct 48		: id-ct-signedChecklist
 id-smime-ct 49		: id-ct-ASPA
 id-smime-ct 50		: id-ct-signedTAL
+id-smime-ct 51		: id-ct-rpkiSignedPrefixList
 
 # S/MIME Attributes
 id-smime-aa 1		: id-smime-aa-receiptRequest
@@ -490,6 +491,7 @@ id-pe 14		: proxyCertInfo		: Proxy Certificate Information
 id-pe 24		: tlsfeature		: TLS Feature
 id-pe 28		: sbgp-ipAddrBlockv2
 id-pe 29		: sbgp-autonomousSysNumv2
+id-pe 31		: acmeIdentifier	: ACME Identifier
 
 # PKIX policyQualifiers for Internet policy qualifiers
 id-qt 1			: id-qt-cps		: Policy Qualifier CPS

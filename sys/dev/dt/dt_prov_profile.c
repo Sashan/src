@@ -1,4 +1,4 @@
-/*	$OpenBSD: dt_prov_profile.c,v 1.5 2023/04/26 16:53:59 claudio Exp $ */
+/*	$OpenBSD: dt_prov_profile.c,v 1.8 2024/04/06 11:18:02 mpi Exp $ */
 
 /*
  * Copyright (c) 2019 Martin Pieuchot <mpi@openbsd.org>
@@ -20,6 +20,7 @@
 #include <sys/systm.h>
 #include <sys/param.h>
 #include <sys/atomic.h>
+#include <sys/clockintr.h>
 
 #include <dev/dt/dtvar.h>
 
@@ -31,13 +32,11 @@ struct dt_probe	*dtpp_interval;		/* global periodic probe */
 
 int	dt_prov_profile_alloc(struct dt_probe *, struct dt_softc *,
 	    struct dt_pcb_list *, struct dtioc_req *);
-int	dt_prov_profile_enter(struct dt_provider *, ...);
-int	dt_prov_interval_enter(struct dt_provider *, ...);
 
 struct dt_provider dt_prov_profile = {
 	.dtpv_name	= "profile",
 	.dtpv_alloc	= dt_prov_profile_alloc,
-	.dtpv_enter	= dt_prov_profile_enter,
+	.dtpv_enter	= NULL,
 	.dtpv_leave	= NULL,
 	.dtpv_dealloc	= NULL,
 };
@@ -45,7 +44,7 @@ struct dt_provider dt_prov_profile = {
 struct dt_provider dt_prov_interval = {
 	.dtpv_name	= "interval",
 	.dtpv_alloc	= dt_prov_profile_alloc,
-	.dtpv_enter	= dt_prov_interval_enter,
+	.dtpv_enter	= NULL,
 	.dtpv_leave	= NULL,
 	.dtpv_dealloc	= NULL,
 };
@@ -54,13 +53,13 @@ int
 dt_prov_profile_init(void)
 {
 	dtpp_profile = dt_dev_alloc_probe("hz", "97", &dt_prov_profile);
-	dt_dev_register_probe(dtpp_profile);
 	if (dtpp_profile == NULL)
 		return 0;
+	dt_dev_register_probe(dtpp_profile);
 	dtpp_interval = dt_dev_alloc_probe("hz", "1", &dt_prov_interval);
-	dt_dev_register_probe(dtpp_interval);
 	if (dtpp_interval == NULL)
 		return 1;
+	dt_dev_register_probe(dtpp_interval);
 	return 2;
 }
 
@@ -73,7 +72,6 @@ dt_prov_profile_alloc(struct dt_probe *dtp, struct dt_softc *sc,
 	CPU_INFO_ITERATOR cii;
 	extern int hz;
 
-	KASSERT(dtioc_req_isvalid(dtrq));
 	KASSERT(TAILQ_EMPTY(plist));
 	KASSERT(dtp == dtpp_profile || dtp == dtpp_interval);
 
@@ -90,10 +88,9 @@ dt_prov_profile_alloc(struct dt_probe *dtp, struct dt_softc *sc,
 			return ENOMEM;
 		}
 
-		dp->dp_maxtick = hz / dtrq->dtrq_rate;
-		dp->dp_cpuid = ci->ci_cpuid;
+		dp->dp_nsecs = SEC_TO_NSEC(1) / dtrq->dtrq_rate;
+		dp->dp_cpu = ci;
 
-		dp->dp_filter = dtrq->dtrq_filter;
 		dp->dp_evtflags = dtrq->dtrq_evtflags & DTEVT_PROV_PROFILE;
 		TAILQ_INSERT_HEAD(plist, dp, dp_snext);
 	}
@@ -101,51 +98,18 @@ dt_prov_profile_alloc(struct dt_probe *dtp, struct dt_softc *sc,
 	return 0;
 }
 
-static inline void
-dt_prov_profile_fire(struct dt_pcb *dp)
+void
+dt_clock(struct clockrequest *cr, void *cf, void *arg)
 {
+	uint64_t count, i;
 	struct dt_evt *dtev;
+	struct dt_pcb *dp = arg;
 
-	if (++dp->dp_nticks < dp->dp_maxtick)
-		return;
-
-	dtev = dt_pcb_ring_get(dp, 1);
-	if (dtev == NULL)
-		return;
-	dt_pcb_ring_consume(dp, dtev);
-	dp->dp_nticks = 0;
-}
-
-int
-dt_prov_profile_enter(struct dt_provider *dtpv, ...)
-{
-	struct cpu_info *ci = curcpu();
-	struct dt_pcb *dp;
-
-	KASSERT(dtpv == &dt_prov_profile);
-
-	smr_read_enter();
-	SMR_SLIST_FOREACH(dp, &dtpp_profile->dtp_pcbs, dp_pnext) {
-		if (dp->dp_cpuid != ci->ci_cpuid)
-			continue;
-
-		dt_prov_profile_fire(dp);
+	count = clockrequest_advance(cr, dp->dp_nsecs);
+	for (i = 0; i < count; i++) {
+		dtev = dt_pcb_ring_get(dp, 1);
+		if (dtev == NULL)
+			return;
+		dt_pcb_ring_consume(dp, dtev);
 	}
-	smr_read_leave();
-	return 0;
-}
-
-int
-dt_prov_interval_enter(struct dt_provider *dtpv, ...)
-{
-	struct dt_pcb *dp;
-
-	KASSERT(dtpv == &dt_prov_interval);
-
-	smr_read_enter();
-	SMR_SLIST_FOREACH(dp, &dtpp_interval->dtp_pcbs, dp_pnext) {
-		dt_prov_profile_fire(dp);
-	}
-	smr_read_leave();
-	return 0;
 }

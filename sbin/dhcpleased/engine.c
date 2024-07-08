@@ -1,4 +1,4 @@
-/*	$OpenBSD: engine.c,v 1.41 2023/12/14 09:58:37 claudio Exp $	*/
+/*	$OpenBSD: engine.c,v 1.45 2024/06/03 17:58:33 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2017, 2021 Florian Obser <florian@openbsd.org>
@@ -24,6 +24,7 @@
 #include <sys/socket.h>
 #include <sys/syslog.h>
 #include <sys/uio.h>
+#include <sys/mbuf.h>
 
 #include <net/if.h>
 #include <net/route.h>
@@ -788,7 +789,8 @@ parse_dhcp(struct dhcpleased_iface *iface, struct imsg_dhcp *dhcp)
 	if (rem < (size_t)ip->ip_hl << 2)
 		goto too_short;
 
-	if (wrapsum(checksum((uint8_t *)ip, ip->ip_hl << 2, 0)) != 0) {
+	if ((dhcp->csumflags & M_IPV4_CSUM_IN_OK) == 0 &&
+	    wrapsum(checksum((uint8_t *)ip, ip->ip_hl << 2, 0)) != 0) {
 		log_warnx("%s: bad IP checksum", __func__);
 		return;
 	}
@@ -834,16 +836,19 @@ parse_dhcp(struct dhcpleased_iface *iface, struct imsg_dhcp *dhcp)
 	p += sizeof(*udp);
 	rem -= sizeof(*udp);
 
-	usum = udp->uh_sum;
-	udp->uh_sum = 0;
+	if ((dhcp->csumflags & M_UDP_CSUM_IN_OK) == 0) {
+		usum = udp->uh_sum;
+		udp->uh_sum = 0;
 
-	sum = wrapsum(checksum((uint8_t *)udp, sizeof(*udp), checksum(p, rem,
-	    checksum((uint8_t *)&ip->ip_src, 2 * sizeof(ip->ip_src),
-	    IPPROTO_UDP + ntohs(udp->uh_ulen)))));
+		sum = wrapsum(checksum((uint8_t *)udp, sizeof(*udp),
+		    checksum(p, rem,
+		    checksum((uint8_t *)&ip->ip_src, 2 * sizeof(ip->ip_src),
+		    IPPROTO_UDP + ntohs(udp->uh_ulen)))));
 
-	if (usum != 0 && usum != sum) {
-		log_warnx("%s: bad UDP checksum", __func__);
-		return;
+		if (usum != 0 && usum != sum) {
+			log_warnx("%s: bad UDP checksum", __func__);
+			return;
+		}
 	}
 
 	if (log_getverbose() > 1) {
@@ -1380,8 +1385,6 @@ state_transition(struct dhcpleased_iface *iface, enum if_state new_state)
 	char		 ifnamebuf[IF_NAMESIZE], *if_name;
 
 	iface->state = new_state;
-	if (new_state != old_state)
-		iface->xid = arc4random();
 
 	switch (new_state) {
 	case IF_DOWN:
@@ -1421,6 +1424,7 @@ state_transition(struct dhcpleased_iface *iface, enum if_state new_state)
 		case IF_DOWN:
 		case IF_IPV6_ONLY:
 			iface->timo.tv_sec = START_EXP_BACKOFF;
+			iface->xid = arc4random();
 			break;
 		case IF_BOUND:
 			fatal("invalid transition Bound -> Init");
@@ -1431,8 +1435,10 @@ state_transition(struct dhcpleased_iface *iface, enum if_state new_state)
 	case IF_REBOOTING:
 		if (old_state == IF_REBOOTING)
 			iface->timo.tv_sec *= 2;
-		else
+		else {
 			iface->timo.tv_sec = START_EXP_BACKOFF;
+			iface->xid = arc4random();
+		}
 		request_dhcp_request(iface);
 		break;
 	case IF_REQUESTING:
@@ -1453,6 +1459,7 @@ state_transition(struct dhcpleased_iface *iface, enum if_state new_state)
 		if (old_state == IF_BOUND) {
 			iface->timo.tv_sec = (iface->rebinding_time -
 			    iface->renewal_time) / 2; /* RFC 2131 4.4.5 */
+			iface->xid = arc4random();
 		} else
 			iface->timo.tv_sec /= 2;
 
@@ -1537,7 +1544,7 @@ iface_timeout(int fd, short events, void *arg)
 		timespecsub(&now, &iface->request_time, &res);
 		log_debug("%s: res.tv_sec: %lld, rebinding_time: %u", __func__,
 		    res.tv_sec, iface->rebinding_time);
-		if (res.tv_sec > iface->rebinding_time)
+		if (res.tv_sec >= iface->rebinding_time)
 			state_transition(iface, IF_REBINDING);
 		else
 			state_transition(iface, IF_RENEWING);
@@ -1812,7 +1819,7 @@ send_rdns_proposal(struct dhcpleased_iface *iface)
 	imsg.rdomain = iface->rdomain;
 	for (imsg.rdns_count = 0; imsg.rdns_count < MAX_RDNS_COUNT &&
 		 iface->nameservers[imsg.rdns_count].s_addr != INADDR_ANY;
-	     imsg.rdns_count++)
+	    imsg.rdns_count++)
 		;
 	memcpy(imsg.rdns, iface->nameservers, sizeof(imsg.rdns));
 	engine_imsg_compose_main(IMSG_PROPOSE_RDNS, 0, &imsg, sizeof(imsg));

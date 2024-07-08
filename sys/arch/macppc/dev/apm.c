@@ -1,4 +1,4 @@
-/*	$OpenBSD: apm.c,v 1.35 2023/07/08 14:44:43 tobhe Exp $	*/
+/*	$OpenBSD: apm.c,v 1.37 2024/05/29 06:39:13 jsg Exp $	*/
 
 /*-
  * Copyright (c) 2001 Alexander Guy.  All rights reserved.
@@ -250,7 +250,7 @@ apmioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 		}
 		break;
 	case APM_IOC_GETPOWER:
-	        power = (struct apm_power_info *)data;
+		power = (struct apm_power_info *)data;
 
 		pm_battery_info(0, &batt);
 
@@ -372,11 +372,6 @@ int
 sleep_setstate(void *v)
 {
 	return 0;
-}
-
-void
-sleep_abort(void *v)
-{
 }
 
 int

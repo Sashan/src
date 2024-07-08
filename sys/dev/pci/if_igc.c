@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_igc.c,v 1.14 2023/11/10 15:51:20 bluhm Exp $	*/
+/*	$OpenBSD: if_igc.c,v 1.25 2024/05/24 06:02:53 jsg Exp $	*/
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
@@ -30,26 +30,29 @@
 
 #include "bpfilter.h"
 #include "vlan.h"
+#include "kstat.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
 #include <sys/malloc.h>
-#include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/device.h>
 #include <sys/endian.h>
 #include <sys/intrmap.h>
+#include <sys/kstat.h>
 
 #include <net/if.h>
 #include <net/if_media.h>
+#include <net/route.h>
 #include <net/toeplitz.h>
 
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
-#include <netinet/ip.h>
-#include <netinet/ip6.h>
+#include <netinet/tcp.h>
+#include <netinet/tcp_timer.h>
+#include <netinet/tcp_var.h>
 
 #if NBPFILTER > 0
 #include <net/bpf.h>
@@ -103,21 +106,22 @@ void	igc_setup_interface(struct igc_softc *);
 
 void	igc_init(void *);
 void	igc_start(struct ifqueue *);
-int	igc_txeof(struct tx_ring *);
+int	igc_txeof(struct igc_txring *);
 void	igc_stop(struct igc_softc *);
 int	igc_ioctl(struct ifnet *, u_long, caddr_t);
 int	igc_rxrinfo(struct igc_softc *, struct if_rxrinfo *);
-int	igc_rxfill(struct rx_ring *);
+int	igc_rxfill(struct igc_rxring *);
 void	igc_rxrefill(void *);
-int	igc_rxeof(struct rx_ring *);
+int	igc_rxeof(struct igc_rxring *);
 void	igc_rx_checksum(uint32_t, struct mbuf *, uint32_t);
 void	igc_watchdog(struct ifnet *);
 void	igc_media_status(struct ifnet *, struct ifmediareq *);
 int	igc_media_change(struct ifnet *);
 void	igc_iff(struct igc_softc *);
 void	igc_update_link_status(struct igc_softc *);
-int	igc_get_buf(struct rx_ring *, int);
-int	igc_tx_ctx_setup(struct tx_ring *, struct mbuf *, int, uint32_t *);
+int	igc_get_buf(struct igc_rxring *, int);
+int	igc_tx_ctx_setup(struct igc_txring *, struct mbuf *, int, uint32_t *,
+	    uint32_t *);
 
 void	igc_configure_queues(struct igc_softc *);
 void	igc_set_queues(struct igc_softc *, uint32_t, uint32_t, int);
@@ -127,23 +131,27 @@ void	igc_disable_intr(struct igc_softc *);
 int	igc_intr_link(void *);
 int	igc_intr_queue(void *);
 
-int	igc_allocate_transmit_buffers(struct tx_ring *);
+int	igc_allocate_transmit_buffers(struct igc_txring *);
 int	igc_setup_transmit_structures(struct igc_softc *);
-int	igc_setup_transmit_ring(struct tx_ring *);
+int	igc_setup_transmit_ring(struct igc_txring *);
 void	igc_initialize_transmit_unit(struct igc_softc *);
 void	igc_free_transmit_structures(struct igc_softc *);
-void	igc_free_transmit_buffers(struct tx_ring *);
-int	igc_allocate_receive_buffers(struct rx_ring *);
+void	igc_free_transmit_buffers(struct igc_txring *);
+int	igc_allocate_receive_buffers(struct igc_rxring *);
 int	igc_setup_receive_structures(struct igc_softc *);
-int	igc_setup_receive_ring(struct rx_ring *);
+int	igc_setup_receive_ring(struct igc_rxring *);
 void	igc_initialize_receive_unit(struct igc_softc *);
 void	igc_free_receive_structures(struct igc_softc *);
-void	igc_free_receive_buffers(struct rx_ring *);
+void	igc_free_receive_buffers(struct igc_rxring *);
 void	igc_initialize_rss_mapping(struct igc_softc *);
 
 void	igc_get_hw_control(struct igc_softc *);
 void	igc_release_hw_control(struct igc_softc *);
 int	igc_is_valid_ether_addr(uint8_t *);
+
+#if NKSTAT > 0
+void	igc_kstat_attach(struct igc_softc *);
+#endif
 
 /*********************************************************************
  *  OpenBSD Device Interface Entry Points
@@ -279,6 +287,10 @@ igc_attach(struct device *parent, struct device *self, void *aux)
 	igc_get_hw_control(sc);
 
 	printf(", address %s\n", ether_sprintf(sc->hw.mac.addr));
+
+#if NKSTAT > 0
+	igc_kstat_attach(sc);
+#endif
 	return;
 
 err_late:
@@ -361,8 +373,8 @@ int
 igc_allocate_queues(struct igc_softc *sc)
 {
 	struct igc_queue *iq;
-	struct tx_ring *txr;
-	struct rx_ring *rxr;
+	struct igc_txring *txr;
+	struct igc_rxring *rxr;
 	int i, rsize, rxconf, tsize, txconf;
 
 	/* Allocate the top level queue structs. */
@@ -374,7 +386,7 @@ igc_allocate_queues(struct igc_softc *sc)
 	}
 
 	/* Allocate the TX ring. */
-	sc->tx_rings = mallocarray(sc->sc_nqueues, sizeof(struct tx_ring),
+	sc->tx_rings = mallocarray(sc->sc_nqueues, sizeof(struct igc_txring),
 	    M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (sc->tx_rings == NULL) {
 		printf("%s: unable to allocate TX ring\n", DEVNAME(sc));
@@ -382,7 +394,7 @@ igc_allocate_queues(struct igc_softc *sc)
 	}
 	
 	/* Allocate the RX ring. */
-	sc->rx_rings = mallocarray(sc->sc_nqueues, sizeof(struct rx_ring),
+	sc->rx_rings = mallocarray(sc->sc_nqueues, sizeof(struct igc_rxring),
 	    M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (sc->rx_rings == NULL) {
 		printf("%s: unable to allocate RX ring\n", DEVNAME(sc));
@@ -443,10 +455,12 @@ err_rx_desc:
 err_tx_desc:
 	for (txr = sc->tx_rings; txconf > 0; txr++, txconf--)
 		igc_dma_free(sc, &txr->txdma);
-	free(sc->rx_rings, M_DEVBUF, sc->sc_nqueues * sizeof(struct rx_ring));
+	free(sc->rx_rings, M_DEVBUF,
+	    sc->sc_nqueues * sizeof(struct igc_rxring));
 	sc->rx_rings = NULL;
 rx_fail:
-	free(sc->tx_rings, M_DEVBUF, sc->sc_nqueues * sizeof(struct tx_ring));
+	free(sc->tx_rings, M_DEVBUF,
+	    sc->sc_nqueues * sizeof(struct igc_txring));
 	sc->tx_rings = NULL;
 fail:
 	return ENOMEM;
@@ -790,15 +804,14 @@ igc_setup_interface(struct igc_softc *sc)
 
 	ifp->if_capabilities = IFCAP_VLAN_MTU;
 
-#ifdef notyet
 #if NVLAN > 0
 	ifp->if_capabilities |= IFCAP_VLAN_HWTAGGING;
-#endif
 #endif
 
 	ifp->if_capabilities |= IFCAP_CSUM_IPv4;
 	ifp->if_capabilities |= IFCAP_CSUM_TCPv4 | IFCAP_CSUM_UDPv4;
 	ifp->if_capabilities |= IFCAP_CSUM_TCPv6 | IFCAP_CSUM_UDPv6;
+	ifp->if_capabilities |= IFCAP_TSOv4 | IFCAP_TSOv6;
 
 	/* Initialize ifmedia structures. */
 	ifmedia_init(&sc->media, IFM_IMASK, igc_media_change, igc_media_status);
@@ -821,8 +834,8 @@ igc_setup_interface(struct igc_softc *sc)
 	for (i = 0; i < sc->sc_nqueues; i++) {
 		struct ifqueue *ifq = ifp->if_ifqs[i];
 		struct ifiqueue *ifiq = ifp->if_iqs[i];
-		struct tx_ring *txr = &sc->tx_rings[i];
-		struct rx_ring *rxr = &sc->rx_rings[i];
+		struct igc_txring *txr = &sc->tx_rings[i];
+		struct igc_rxring *rxr = &sc->rx_rings[i];
 
 		ifq->ifq_softc = txr;
 		txr->ifq = ifq;
@@ -837,7 +850,7 @@ igc_init(void *arg)
 {
 	struct igc_softc *sc = (struct igc_softc *)arg;
 	struct ifnet *ifp = &sc->sc_ac.ac_if;
-	struct rx_ring *rxr;
+	struct igc_rxring *rxr;
 	uint32_t ctrl = 0;
 	int i, s;
 
@@ -947,7 +960,7 @@ igc_start(struct ifqueue *ifq)
 {
 	struct ifnet *ifp = ifq->ifq_if;
 	struct igc_softc *sc = ifp->if_softc;
-	struct tx_ring *txr = ifq->ifq_softc;
+	struct igc_txring *txr = ifq->ifq_softc;
 	union igc_adv_tx_desc *txdesc;
 	struct igc_tx_buf *txbuf;
 	bus_dmamap_t map;
@@ -1001,7 +1014,11 @@ igc_start(struct ifqueue *ifq)
 		bus_dmamap_sync(txr->txdma.dma_tag, map, 0,
 		    map->dm_mapsize, BUS_DMASYNC_PREWRITE);
 
-		if (igc_tx_ctx_setup(txr, m, prod, &olinfo_status)) {
+		cmd_type_len = IGC_ADVTXD_DCMD_IFCS | IGC_ADVTXD_DTYP_DATA |
+		    IGC_ADVTXD_DCMD_DEXT;
+
+		if (igc_tx_ctx_setup(txr, m, prod, &cmd_type_len,
+		    &olinfo_status)) {
 			/* Consume the first descriptor */
 			prod++;
 			prod &= mask;
@@ -1011,13 +1028,14 @@ igc_start(struct ifqueue *ifq)
 		for (i = 0; i < map->dm_nsegs; i++) {
 			txdesc = &txr->tx_base[prod];
 
-			cmd_type_len = IGC_ADVTXD_DCMD_IFCS | IGC_ADVTXD_DTYP_DATA |
-			    IGC_ADVTXD_DCMD_DEXT | map->dm_segs[i].ds_len;
+			CLR(cmd_type_len, IGC_ADVTXD_DTALEN_MASK);
+			cmd_type_len |= map->dm_segs[i].ds_len;
 			if (i == map->dm_nsegs - 1)
 				cmd_type_len |= IGC_ADVTXD_DCMD_EOP |
 				    IGC_ADVTXD_DCMD_RS;
 
-			htolem64(&txdesc->read.buffer_addr, map->dm_segs[i].ds_addr);
+			htolem64(&txdesc->read.buffer_addr,
+			    map->dm_segs[i].ds_addr);
 			htolem32(&txdesc->read.cmd_type_len, cmd_type_len);
 			htolem32(&txdesc->read.olinfo_status, olinfo_status);
 
@@ -1050,7 +1068,7 @@ igc_start(struct ifqueue *ifq)
 }
 
 int
-igc_txeof(struct tx_ring *txr)
+igc_txeof(struct igc_txring *txr)
 {
 	struct igc_softc *sc = txr->sc;
 	struct ifqueue *ifq = txr->ifq;
@@ -1206,7 +1224,7 @@ int
 igc_rxrinfo(struct igc_softc *sc, struct if_rxrinfo *ifri)
 {
 	struct if_rxring_info *ifr;
-	struct rx_ring *rxr;
+	struct igc_rxring *rxr;
 	int error, i, n = 0;
 
 	ifr = mallocarray(sc->sc_nqueues, sizeof(*ifr), M_DEVBUF,
@@ -1227,7 +1245,7 @@ igc_rxrinfo(struct igc_softc *sc, struct if_rxrinfo *ifri)
 }
 
 int
-igc_rxfill(struct rx_ring *rxr)
+igc_rxfill(struct igc_rxring *rxr)
 {
 	struct igc_softc *sc = rxr->sc;
 	int i, post = 0;
@@ -1260,7 +1278,7 @@ igc_rxfill(struct rx_ring *rxr)
 void
 igc_rxrefill(void *xrxr)
 {
-	struct rx_ring *rxr = xrxr;
+	struct igc_rxring *rxr = xrxr;
 	struct igc_softc *sc = rxr->sc;
 
 	if (igc_rxfill(rxr)) {
@@ -1279,7 +1297,7 @@ igc_rxrefill(void *xrxr)
  *
  *********************************************************************/
 int
-igc_rxeof(struct rx_ring *rxr)
+igc_rxeof(struct igc_rxring *rxr)
 {
 	struct igc_softc *sc = rxr->sc;
 	struct ifnet *ifp = &sc->sc_ac.ac_if;
@@ -1491,6 +1509,23 @@ igc_media_status(struct ifnet *ifp, struct ifmediareq *ifmr)
 		ifmr->ifm_active |= IFM_FDX;
 	else
 		ifmr->ifm_active |= IFM_HDX;
+
+	switch (sc->hw.fc.current_mode) {
+	case igc_fc_tx_pause:
+		ifmr->ifm_active |= IFM_FLOW | IFM_ETH_TXPAUSE;
+		break;
+	case igc_fc_rx_pause:
+		ifmr->ifm_active |= IFM_FLOW | IFM_ETH_RXPAUSE;
+		break;
+	case igc_fc_full:
+		ifmr->ifm_active |= IFM_FLOW | IFM_ETH_RXPAUSE |
+		    IFM_ETH_TXPAUSE;
+		break;
+	default:
+		ifmr->ifm_active &= ~(IFM_FLOW | IFM_ETH_RXPAUSE |
+		    IFM_ETH_TXPAUSE);
+		break;
+	}
 }
 
 /*********************************************************************
@@ -1523,16 +1558,16 @@ igc_media_change(struct ifnet *ifp)
 		sc->hw.phy.autoneg_advertised = ADVERTISE_1000_FULL;
 		break;
 	case IFM_100_TX:
-		if ((ifm->ifm_media & IFM_GMASK) == IFM_HDX)
-			sc->hw.phy.autoneg_advertised = ADVERTISE_100_HALF;
-		else
+		if ((ifm->ifm_media & IFM_GMASK) == IFM_FDX)
 			sc->hw.phy.autoneg_advertised = ADVERTISE_100_FULL;
+		else
+			sc->hw.phy.autoneg_advertised = ADVERTISE_100_HALF;
 		break;
 	case IFM_10_T:
-		if ((ifm->ifm_media & IFM_GMASK) == IFM_HDX)
-			sc->hw.phy.autoneg_advertised = ADVERTISE_10_HALF;
-		else
+		if ((ifm->ifm_media & IFM_GMASK) == IFM_FDX)
 			sc->hw.phy.autoneg_advertised = ADVERTISE_10_FULL;
+		else
+			sc->hw.phy.autoneg_advertised = ADVERTISE_10_HALF;
 		break;
 	default:
 		return EINVAL;
@@ -1591,6 +1626,9 @@ igc_update_link_status(struct igc_softc *sc)
 	struct igc_hw *hw = &sc->hw;
 	int link_state;
 
+	if (hw->mac.get_link_status == true)
+		igc_check_for_link(hw);
+
 	if (IGC_READ_REG(&sc->hw, IGC_STATUS) & IGC_STATUS_LU) {
 		if (sc->link_active == 0) {
 			igc_get_speed_and_duplex(hw, &sc->link_speed,
@@ -1620,7 +1658,7 @@ igc_update_link_status(struct igc_softc *sc)
  *
  **********************************************************************/
 int
-igc_get_buf(struct rx_ring *rxr, int i)
+igc_get_buf(struct igc_rxring *rxr, int i)
 {
 	struct igc_softc *sc = rxr->sc;
 	struct igc_rx_buf *rxbuf;
@@ -1775,8 +1813,8 @@ igc_intr_queue(void *arg)
 	struct igc_queue *iq = arg;
 	struct igc_softc *sc = iq->sc;
 	struct ifnet *ifp = &sc->sc_ac.ac_if;
-	struct rx_ring *rxr = iq->rxr;
-	struct tx_ring *txr = iq->txr;
+	struct igc_rxring *rxr = iq->rxr;
+	struct igc_txring *txr = iq->txr;
 
 	if (ifp->if_flags & IFF_RUNNING) {
 		igc_txeof(txr);
@@ -1796,7 +1834,7 @@ igc_intr_queue(void *arg)
  *
  **********************************************************************/
 int
-igc_allocate_transmit_buffers(struct tx_ring *txr)
+igc_allocate_transmit_buffers(struct igc_txring *txr)
 {
 	struct igc_softc *sc = txr->sc;
 	struct igc_tx_buf *txbuf;
@@ -1838,7 +1876,7 @@ fail:
 int
 igc_setup_transmit_structures(struct igc_softc *sc)
 {
-	struct tx_ring *txr = sc->tx_rings;
+	struct igc_txring *txr = sc->tx_rings;
 	int i;
 
 	for (i = 0; i < sc->sc_nqueues; i++, txr++) {
@@ -1858,7 +1896,7 @@ fail:
  *
  **********************************************************************/
 int
-igc_setup_transmit_ring(struct tx_ring *txr)
+igc_setup_transmit_ring(struct igc_txring *txr)
 {
 	struct igc_softc *sc = txr->sc;
 
@@ -1890,7 +1928,7 @@ void
 igc_initialize_transmit_unit(struct igc_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_ac.ac_if;
-	struct tx_ring *txr;
+	struct igc_txring *txr;
 	struct igc_hw *hw = &sc->hw;
 	uint64_t bus_addr;
 	uint32_t tctl, txdctl = 0;
@@ -1944,7 +1982,7 @@ igc_initialize_transmit_unit(struct igc_softc *sc)
 void
 igc_free_transmit_structures(struct igc_softc *sc)
 {
-	struct tx_ring *txr = sc->tx_rings;
+	struct igc_txring *txr = sc->tx_rings;
 	int i;
 
 	for (i = 0; i < sc->sc_nqueues; i++, txr++)
@@ -1957,7 +1995,7 @@ igc_free_transmit_structures(struct igc_softc *sc)
  *
  **********************************************************************/
 void
-igc_free_transmit_buffers(struct tx_ring *txr)
+igc_free_transmit_buffers(struct igc_txring *txr)
 {
 	struct igc_softc *sc = txr->sc;
 	struct igc_tx_buf *txbuf;
@@ -1998,38 +2036,35 @@ igc_free_transmit_buffers(struct tx_ring *txr)
  **********************************************************************/
 
 int
-igc_tx_ctx_setup(struct tx_ring *txr, struct mbuf *mp, int prod,
-    uint32_t *olinfo_status)
+igc_tx_ctx_setup(struct igc_txring *txr, struct mbuf *mp, int prod,
+    uint32_t *cmd_type_len, uint32_t *olinfo_status)
 {
 	struct ether_extracted ext;
 	struct igc_adv_tx_context_desc *txdesc;
+	uint32_t mss_l4len_idx = 0;
 	uint32_t type_tucmd_mlhl = 0;
 	uint32_t vlan_macip_lens = 0;
-	uint32_t iphlen;
 	int off = 0;
-
-	vlan_macip_lens |= (sizeof(*ext.eh) << IGC_ADVTXD_MACLEN_SHIFT);
 
 	/*
 	 * In advanced descriptors the vlan tag must
 	 * be placed into the context descriptor. Hence
 	 * we need to make one even if not doing offloads.
 	 */
-#ifdef notyet
 #if NVLAN > 0
 	if (ISSET(mp->m_flags, M_VLANTAG)) {
 		uint32_t vtag = mp->m_pkthdr.ether_vtag;
 		vlan_macip_lens |= (vtag << IGC_ADVTXD_VLAN_SHIFT);
+		*cmd_type_len |= IGC_ADVTXD_DCMD_VLE;
 		off = 1;
 	}
-#endif
 #endif
 
 	ether_extract_headers(mp, &ext);
 
-	if (ext.ip4) {
-		iphlen = ext.ip4->ip_hl << 2;
+	vlan_macip_lens |= (sizeof(*ext.eh) << IGC_ADVTXD_MACLEN_SHIFT);
 
+	if (ext.ip4) {
 		type_tucmd_mlhl |= IGC_ADVTXD_TUCMD_IPV4;
 		if (ISSET(mp->m_pkthdr.csum_flags, M_IPV4_CSUM_OUT)) {
 			*olinfo_status |= IGC_TXD_POPTS_IXSM << 8;
@@ -2037,15 +2072,11 @@ igc_tx_ctx_setup(struct tx_ring *txr, struct mbuf *mp, int prod,
 		}
 #ifdef INET6
 	} else if (ext.ip6) {
-		iphlen = sizeof(*ext.ip6);
-
 		type_tucmd_mlhl |= IGC_ADVTXD_TUCMD_IPV6;
 #endif
-	} else {
-		return 0;
 	}
 
-	vlan_macip_lens |= iphlen;
+	vlan_macip_lens |= ext.iphlen;
 	type_tucmd_mlhl |= IGC_ADVTXD_DCMD_DEXT | IGC_ADVTXD_DTYP_CTXT;
 
 	if (ext.tcp) {
@@ -2062,6 +2093,30 @@ igc_tx_ctx_setup(struct tx_ring *txr, struct mbuf *mp, int prod,
 		}
 	}
 
+	if (ISSET(mp->m_pkthdr.csum_flags, M_TCP_TSO)) {
+		if (ext.tcp && mp->m_pkthdr.ph_mss > 0) {
+			uint32_t hdrlen, thlen, paylen, outlen;
+
+			thlen = ext.tcphlen;
+
+			outlen = mp->m_pkthdr.ph_mss;
+			mss_l4len_idx |= outlen << IGC_ADVTXD_MSS_SHIFT;
+			mss_l4len_idx |= thlen << IGC_ADVTXD_L4LEN_SHIFT;
+
+			hdrlen = sizeof(*ext.eh) + ext.iphlen + thlen;
+			paylen = mp->m_pkthdr.len - hdrlen;
+			CLR(*olinfo_status, IGC_ADVTXD_PAYLEN_MASK);
+			*olinfo_status |= paylen << IGC_ADVTXD_PAYLEN_SHIFT;
+
+			*cmd_type_len |= IGC_ADVTXD_DCMD_TSE;
+			off = 1;
+
+			tcpstat_add(tcps_outpkttso,
+			    (paylen + outlen - 1) / outlen);
+		} else
+			tcpstat_inc(tcps_outbadtso);
+	}
+
 	if (off == 0)
 		return 0;
 
@@ -2072,7 +2127,7 @@ igc_tx_ctx_setup(struct tx_ring *txr, struct mbuf *mp, int prod,
 	htolem32(&txdesc->vlan_macip_lens, vlan_macip_lens);
 	htolem32(&txdesc->type_tucmd_mlhl, type_tucmd_mlhl);
 	htolem32(&txdesc->seqnum_seed, 0);
-	htolem32(&txdesc->mss_l4len_idx, 0);
+	htolem32(&txdesc->mss_l4len_idx, mss_l4len_idx);
 
 	return 1;
 }
@@ -2086,7 +2141,7 @@ igc_tx_ctx_setup(struct tx_ring *txr, struct mbuf *mp, int prod,
  *
  **********************************************************************/
 int
-igc_allocate_receive_buffers(struct rx_ring *rxr)
+igc_allocate_receive_buffers(struct igc_rxring *rxr)
 {
 	struct igc_softc *sc = rxr->sc;
 	struct igc_rx_buf *rxbuf;
@@ -2129,7 +2184,7 @@ fail:
 int
 igc_setup_receive_structures(struct igc_softc *sc)
 {
-	struct rx_ring *rxr = sc->rx_rings;
+	struct igc_rxring *rxr = sc->rx_rings;
 	int i;
 
 	for (i = 0; i < sc->sc_nqueues; i++, rxr++) {
@@ -2149,7 +2204,7 @@ fail:
  *
  **********************************************************************/
 int
-igc_setup_receive_ring(struct rx_ring *rxr)
+igc_setup_receive_ring(struct igc_rxring *rxr)
 {
 	struct igc_softc *sc = rxr->sc;
 	struct ifnet *ifp = &sc->sc_ac.ac_if;
@@ -2179,10 +2234,12 @@ igc_setup_receive_ring(struct rx_ring *rxr)
  *  Enable receive unit.
  *
  **********************************************************************/
+#define BSIZEPKT_ROUNDUP	((1 << IGC_SRRCTL_BSIZEPKT_SHIFT) - 1)
+
 void
 igc_initialize_receive_unit(struct igc_softc *sc)
 {
-        struct rx_ring *rxr = sc->rx_rings;
+        struct igc_rxring *rxr = sc->rx_rings;
         struct igc_hw *hw = &sc->hw;
 	uint32_t rctl, rxcsum, srrctl = 0;
 	int i;
@@ -2226,12 +2283,10 @@ igc_initialize_receive_unit(struct igc_softc *sc)
 	if (sc->sc_nqueues > 1)
 		igc_initialize_rss_mapping(sc);
 
-#if 0
-	srrctl |= 4096 >> IGC_SRRCTL_BSIZEPKT_SHIFT;
-	rctl |= IGC_RCTL_SZ_4096 | IGC_RCTL_BSEX;
-#endif
-
-	srrctl |= 2048 >> IGC_SRRCTL_BSIZEPKT_SHIFT;
+	/* Set maximum packet buffer len */
+	srrctl |= (sc->rx_mbuf_sz + BSIZEPKT_ROUNDUP) >>
+	    IGC_SRRCTL_BSIZEPKT_SHIFT;
+	/* srrctl above overrides this but set the register to a sane value */
 	rctl |= IGC_RCTL_SZ_2048;
 
 	/*
@@ -2288,7 +2343,7 @@ igc_initialize_receive_unit(struct igc_softc *sc)
 void
 igc_free_receive_structures(struct igc_softc *sc)
 {
-	struct rx_ring *rxr;
+	struct igc_rxring *rxr;
 	int i;
 
 	for (i = 0, rxr = sc->rx_rings; i < sc->sc_nqueues; i++, rxr++)
@@ -2304,7 +2359,7 @@ igc_free_receive_structures(struct igc_softc *sc)
  *
  **********************************************************************/
 void
-igc_free_receive_buffers(struct rx_ring *rxr)
+igc_free_receive_buffers(struct igc_rxring *rxr)
 {
 	struct igc_softc *sc = rxr->sc;
 	struct igc_rx_buf *rxbuf;
@@ -2438,3 +2493,328 @@ igc_is_valid_ether_addr(uint8_t *addr)
 
 	return 1;
 }
+
+#if NKSTAT > 0
+
+/*
+ * the below are read to clear, so they need to be accumulated for
+ * userland to see counters. periodically fetch the counters from a
+ * timeout to avoid a 32 roll-over between kstat reads.
+ */
+
+enum igc_stat {
+	igc_stat_crcerrs,
+	igc_stat_algnerrc,
+	igc_stat_rxerrc,
+	igc_stat_mpc,
+	igc_stat_scc,
+	igc_stat_ecol,
+	igc_stat_mcc,
+	igc_stat_latecol,
+	igc_stat_colc,
+	igc_stat_rerc,
+	igc_stat_dc,
+	igc_stat_tncrs,
+	igc_stat_htdpmc,
+	igc_stat_rlec,
+	igc_stat_xonrxc,
+	igc_stat_xontxc,
+	igc_stat_xoffrxc,
+	igc_stat_xofftxc,
+	igc_stat_fcruc,
+	igc_stat_prc64,
+	igc_stat_prc127,
+	igc_stat_prc255,
+	igc_stat_prc511,
+	igc_stat_prc1023,
+	igc_stat_prc1522,
+	igc_stat_gprc,
+	igc_stat_bprc,
+	igc_stat_mprc,
+	igc_stat_gptc,
+	igc_stat_gorc,
+	igc_stat_gotc,
+	igc_stat_rnbc,
+	igc_stat_ruc,
+	igc_stat_rfc,
+	igc_stat_roc,
+	igc_stat_rjc,
+	igc_stat_mgtprc,
+	igc_stat_mgtpdc,
+	igc_stat_mgtptc,
+	igc_stat_tor,
+	igc_stat_tot,
+	igc_stat_tpr,
+	igc_stat_tpt,
+	igc_stat_ptc64,
+	igc_stat_ptc127,
+	igc_stat_ptc255,
+	igc_stat_ptc511,
+	igc_stat_ptc1023,
+	igc_stat_ptc1522,
+	igc_stat_mptc,
+	igc_stat_bptc,
+	igc_stat_tsctc,
+
+	igc_stat_iac,
+	igc_stat_rpthc,
+	igc_stat_tlpic,
+	igc_stat_rlpic,
+	igc_stat_hgptc,
+	igc_stat_rxdmtc,
+	igc_stat_hgorc,
+	igc_stat_hgotc,
+	igc_stat_lenerrs,
+
+	igc_stat_count
+};
+
+struct igc_counter {
+	const char		*name;
+	enum kstat_kv_unit	 unit;
+	uint32_t		 reg;
+};
+
+static const struct igc_counter igc_counters[igc_stat_count] = {
+	[igc_stat_crcerrs] =
+	    { "crc errs",		KSTAT_KV_U_NONE,	IGC_CRCERRS },
+	[igc_stat_algnerrc] =
+	    { "alignment errs",		KSTAT_KV_U_NONE,	IGC_ALGNERRC },
+	[igc_stat_rxerrc] =
+	    { "rx errs",		KSTAT_KV_U_NONE,	IGC_RXERRC },
+	[igc_stat_mpc] =
+	    { "missed pkts",		KSTAT_KV_U_NONE,	IGC_MPC },
+	[igc_stat_scc] =
+	    { "single colls",		KSTAT_KV_U_NONE,	IGC_SCC },
+	[igc_stat_ecol] =
+	    { "excessive colls",	KSTAT_KV_U_NONE,	IGC_ECOL },
+	[igc_stat_mcc] =
+	    { "multiple colls",		KSTAT_KV_U_NONE,	IGC_MCC },
+	[igc_stat_latecol] =
+	    { "late colls",		KSTAT_KV_U_NONE,	IGC_LATECOL },
+	[igc_stat_colc] =
+	    { "collisions",		KSTAT_KV_U_NONE, 	IGC_COLC },
+	[igc_stat_rerc] =
+	    { "recv errs",		KSTAT_KV_U_NONE,	IGC_RERC },
+	[igc_stat_dc] =
+	    { "defers",			KSTAT_KV_U_NONE,	IGC_DC },
+	[igc_stat_tncrs] =
+	    { "tx no crs",		KSTAT_KV_U_NONE,	IGC_TNCRS},
+	[igc_stat_htdpmc] =
+	    { "host tx discards",	KSTAT_KV_U_NONE,	IGC_HTDPMC },
+	[igc_stat_rlec] =
+	    { "recv len errs",		KSTAT_KV_U_NONE,	IGC_RLEC },
+	[igc_stat_xonrxc] =
+	    { "xon rx",			KSTAT_KV_U_NONE,	IGC_XONRXC },
+	[igc_stat_xontxc] =
+	    { "xon tx",			KSTAT_KV_U_NONE,	IGC_XONTXC },
+	[igc_stat_xoffrxc] =
+	    { "xoff rx",		KSTAT_KV_U_NONE,	IGC_XOFFRXC },
+	[igc_stat_xofftxc] =
+	    { "xoff tx",		KSTAT_KV_U_NONE,	IGC_XOFFTXC },
+	[igc_stat_fcruc] =
+	    { "fc rx unsupp",		KSTAT_KV_U_NONE,	IGC_FCRUC },
+	[igc_stat_prc64] =
+	    { "rx 64B",			KSTAT_KV_U_PACKETS,	IGC_PRC64 },
+	[igc_stat_prc127] =
+	    { "rx 65-127B",		KSTAT_KV_U_PACKETS,	IGC_PRC127 },
+	[igc_stat_prc255] =
+	    { "rx 128-255B",		KSTAT_KV_U_PACKETS,	IGC_PRC255 },
+	[igc_stat_prc511] =
+	    { "rx 256-511B",		KSTAT_KV_U_PACKETS,	IGC_PRC511 },
+	[igc_stat_prc1023] =
+	    { "rx 512-1023B",		KSTAT_KV_U_PACKETS,	IGC_PRC1023 },
+	[igc_stat_prc1522] =
+	    { "rx 1024-maxB",		KSTAT_KV_U_PACKETS,	IGC_PRC1522 },
+	[igc_stat_gprc] =
+	    { "rx good",		KSTAT_KV_U_PACKETS,	IGC_GPRC },
+	[igc_stat_bprc] =
+	    { "rx bcast",		KSTAT_KV_U_PACKETS,	IGC_BPRC },
+	[igc_stat_mprc] =
+	    { "rx mcast",		KSTAT_KV_U_PACKETS,	IGC_MPRC },
+	[igc_stat_gptc] =
+	    { "tx good",		KSTAT_KV_U_PACKETS,	IGC_GPTC },
+	[igc_stat_gorc] =
+	    { "rx good bytes",		KSTAT_KV_U_BYTES,	0 },
+	[igc_stat_gotc] =
+	    { "tx good bytes",		KSTAT_KV_U_BYTES,	0 },
+	[igc_stat_rnbc] =
+	    { "rx no bufs",		KSTAT_KV_U_NONE,	IGC_RNBC },
+	[igc_stat_ruc] =
+	    { "rx undersize",		KSTAT_KV_U_NONE,	IGC_RUC },
+	[igc_stat_rfc] =
+	    { "rx frags",		KSTAT_KV_U_NONE,	IGC_RFC },
+	[igc_stat_roc] =
+	    { "rx oversize",		KSTAT_KV_U_NONE,	IGC_ROC },
+	[igc_stat_rjc] =
+	    { "rx jabbers",		KSTAT_KV_U_NONE,	IGC_RJC },
+	[igc_stat_mgtprc] =
+	    { "rx mgmt",		KSTAT_KV_U_PACKETS,	IGC_MGTPRC },
+	[igc_stat_mgtpdc] =
+	    { "rx mgmt drops",		KSTAT_KV_U_PACKETS,	IGC_MGTPDC },
+	[igc_stat_mgtptc] =
+	    { "tx mgmt",		KSTAT_KV_U_PACKETS,	IGC_MGTPTC },
+	[igc_stat_tor] =
+	    { "rx total bytes",		KSTAT_KV_U_BYTES,	0 },
+	[igc_stat_tot] =
+	    { "tx total bytes",		KSTAT_KV_U_BYTES,	0 },
+	[igc_stat_tpr] =
+	    { "rx total",		KSTAT_KV_U_PACKETS,	IGC_TPR },
+	[igc_stat_tpt] =
+	    { "tx total",		KSTAT_KV_U_PACKETS,	IGC_TPT },
+	[igc_stat_ptc64] =
+	    { "tx 64B",			KSTAT_KV_U_PACKETS,	IGC_PTC64 },
+	[igc_stat_ptc127] =
+	    { "tx 65-127B",		KSTAT_KV_U_PACKETS,	IGC_PTC127 },
+	[igc_stat_ptc255] =
+	    { "tx 128-255B",		KSTAT_KV_U_PACKETS,	IGC_PTC255 },
+	[igc_stat_ptc511] =
+	    { "tx 256-511B",		KSTAT_KV_U_PACKETS,	IGC_PTC511 },
+	[igc_stat_ptc1023] =
+	    { "tx 512-1023B",		KSTAT_KV_U_PACKETS,	IGC_PTC1023 },
+	[igc_stat_ptc1522] =
+	    { "tx 1024-maxB",		KSTAT_KV_U_PACKETS,	IGC_PTC1522 },
+	[igc_stat_mptc] =
+	    { "tx mcast",		KSTAT_KV_U_PACKETS,	IGC_MPTC },
+	[igc_stat_bptc] =
+	    { "tx bcast",		KSTAT_KV_U_PACKETS,	IGC_BPTC },
+	[igc_stat_tsctc] =
+	    { "tx tso ctx",		KSTAT_KV_U_NONE,	IGC_TSCTC },
+
+	[igc_stat_iac] =
+	    { "interrupts",		KSTAT_KV_U_NONE,	IGC_IAC },
+	[igc_stat_rpthc] =
+	    { "rx to host",		KSTAT_KV_U_PACKETS,	IGC_RPTHC },
+	[igc_stat_tlpic] =
+	    { "eee tx lpi",		KSTAT_KV_U_NONE,	IGC_TLPIC },
+	[igc_stat_rlpic] =
+	    { "eee rx lpi",		KSTAT_KV_U_NONE,	IGC_RLPIC },
+	[igc_stat_hgptc] =
+	    { "host rx",		KSTAT_KV_U_PACKETS,	IGC_HGPTC },
+	[igc_stat_rxdmtc] =
+	    { "rxd min thresh",		KSTAT_KV_U_NONE,	IGC_RXDMTC },
+	[igc_stat_hgorc] =
+	    { "host good rx",		KSTAT_KV_U_BYTES,	0 },
+	[igc_stat_hgotc] =
+	    { "host good tx",		KSTAT_KV_U_BYTES,	0 },
+	[igc_stat_lenerrs] =
+	    { "len errs",		KSTAT_KV_U_NONE,	IGC_LENERRS },
+};
+
+static void
+igc_stat_read(struct igc_softc *sc)
+{
+	struct igc_hw *hw = &sc->hw;
+	struct kstat *ks = sc->ks;
+	struct kstat_kv *kvs = ks->ks_data;
+	uint32_t hi, lo;
+	unsigned int i;
+
+	for (i = 0; i < nitems(igc_counters); i++) {
+		const struct igc_counter *c = &igc_counters[i];
+		if (c->reg == 0)
+			continue;
+
+		kstat_kv_u64(&kvs[i]) += IGC_READ_REG(hw, c->reg);
+	}
+
+	lo = IGC_READ_REG(hw, IGC_GORCL);
+	hi = IGC_READ_REG(hw, IGC_GORCH);
+	kstat_kv_u64(&kvs[igc_stat_gorc]) +=
+	    ((uint64_t)hi << 32) | ((uint64_t)lo << 0);
+
+	lo = IGC_READ_REG(hw, IGC_GOTCL);
+	hi = IGC_READ_REG(hw, IGC_GOTCH);
+	kstat_kv_u64(&kvs[igc_stat_gotc]) +=
+	    ((uint64_t)hi << 32) | ((uint64_t)lo << 0);
+
+	lo = IGC_READ_REG(hw, IGC_TORL);
+	hi = IGC_READ_REG(hw, IGC_TORH);
+	kstat_kv_u64(&kvs[igc_stat_tor]) +=
+	    ((uint64_t)hi << 32) | ((uint64_t)lo << 0);
+
+	lo = IGC_READ_REG(hw, IGC_TOTL);
+	hi = IGC_READ_REG(hw, IGC_TOTH);
+	kstat_kv_u64(&kvs[igc_stat_tot]) +=
+	    ((uint64_t)hi << 32) | ((uint64_t)lo << 0);
+
+	lo = IGC_READ_REG(hw, IGC_HGORCL);
+	hi = IGC_READ_REG(hw, IGC_HGORCH);
+	kstat_kv_u64(&kvs[igc_stat_hgorc]) +=
+	    ((uint64_t)hi << 32) | ((uint64_t)lo << 0);
+
+	lo = IGC_READ_REG(hw, IGC_HGOTCL);
+	hi = IGC_READ_REG(hw, IGC_HGOTCH);
+	kstat_kv_u64(&kvs[igc_stat_hgotc]) +=
+	    ((uint64_t)hi << 32) | ((uint64_t)lo << 0);
+}
+
+static void
+igc_kstat_tick(void *arg)
+{
+	struct igc_softc *sc = arg;
+
+	if (mtx_enter_try(&sc->ks_mtx)) {
+		igc_stat_read(sc);
+		mtx_leave(&sc->ks_mtx);
+	}
+
+	timeout_add_sec(&sc->ks_tmo, 4);
+}
+
+static int
+igc_kstat_read(struct kstat *ks)
+{
+	struct igc_softc *sc = ks->ks_softc;
+
+	igc_stat_read(sc);
+	nanouptime(&ks->ks_updated);
+
+	return (0);
+}
+
+void
+igc_kstat_attach(struct igc_softc *sc)
+{
+	struct kstat *ks;
+	struct kstat_kv *kvs;
+	size_t len;
+	unsigned int i;
+
+	mtx_init(&sc->ks_mtx, IPL_SOFTCLOCK);
+	timeout_set(&sc->ks_tmo, igc_kstat_tick, sc);
+
+	kvs = mallocarray(sizeof(*kvs), nitems(igc_counters), M_DEVBUF,
+	    M_WAITOK|M_ZERO|M_CANFAIL);
+	if (kvs == NULL) {
+		printf("%s: unable to allocate igc kstats\n", DEVNAME(sc));
+		return;
+	}
+	len = sizeof(*kvs) * nitems(igc_counters);
+
+	ks = kstat_create(DEVNAME(sc), 0, "igc-stats", 0, KSTAT_T_KV, 0);
+	if (ks == NULL) {
+		printf("%s: unable to create igc kstats\n", DEVNAME(sc));
+		free(kvs, M_DEVBUF, len);
+		return;
+	}
+
+	for (i = 0; i < nitems(igc_counters); i++) {
+		const struct igc_counter *c = &igc_counters[i];
+		kstat_kv_unit_init(&kvs[i], c->name,
+		    KSTAT_KV_T_COUNTER64, c->unit);
+	}
+
+	ks->ks_softc = sc;
+	ks->ks_data = kvs;
+	ks->ks_datalen = len;
+	ks->ks_read = igc_kstat_read;
+	kstat_set_mutex(ks, &sc->ks_mtx);
+
+	kstat_install(ks);
+
+	sc->ks = ks;
+
+	igc_kstat_tick(sc); /* let's gooo */
+}
+#endif /* NKSTAT > 0 */

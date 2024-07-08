@@ -1,4 +1,4 @@
-/* $OpenBSD: umt.c,v 1.5 2021/11/15 15:36:24 anton Exp $ */
+/* $OpenBSD: umt.c,v 1.8 2024/05/26 20:06:27 mglocker Exp $ */
 /*
  * USB multitouch touchpad driver for devices conforming to
  * Windows Precision Touchpad standard
@@ -22,15 +22,12 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/kernel.h>
 #include <sys/device.h>
-#include <sys/ioctl.h>
 
 #include <dev/usb/usb.h>
 #include <dev/usb/usbhid.h>
 #include <dev/usb/usbdi.h>
 #include <dev/usb/usbdi_util.h>
-#include <dev/usb/usbdevs.h>
 #include <dev/usb/usb_quirks.h>
 #include <dev/usb/uhidev.h>
 
@@ -52,7 +49,6 @@ struct umt_softc {
 };
 
 int	umt_enable(void *);
-int	umt_open(struct uhidev *);
 void	umt_intr(struct uhidev *, void *, u_int);
 void	umt_disable(void *);
 int	umt_ioctl(void *, u_long, caddr_t, int, struct proc *);
@@ -185,14 +181,14 @@ umt_attach(struct device *parent, struct device *self, void *aux)
 	if (hidmt_setup(self, mt, desc, size) != 0)
 		return;
 
-	hidmt_attach(mt, &umt_accessops);
-
 	if (sc->sc_quirks & UQ_ALWAYS_OPEN) {
 		/* open uhidev and keep it open */
 		umt_enable(sc);
 		/* but mark the hidmt not in use */
 		umt_disable(sc);
 	}
+
+	hidmt_attach(mt, &umt_accessops);
 }
 
 int

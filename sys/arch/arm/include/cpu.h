@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.64 2023/08/23 01:55:46 cheloha Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.67 2024/06/09 21:15:29 jca Exp $	*/
 /*	$NetBSD: cpu.h,v 1.34 2003/06/23 11:01:08 martin Exp $	*/
 
 /*
@@ -198,9 +198,9 @@ struct cpu_info {
 
 #ifdef GPROF
 	struct gmonparam *ci_gmon;
-	struct clockintr *ci_gmonclock;
+	struct clockintr ci_gmonclock;
 #endif
-	struct clockintr_queue	ci_queue;
+	struct clockqueue	ci_queue;
 	char			ci_panicbuf[512];
 };
 
@@ -251,7 +251,7 @@ extern struct cpu_info *cpu_info[MAXCPUS];
 void cpu_boot_secondary_processors(void);
 #endif /* !MULTIPROCESSOR */
 
-#define CPU_BUSY_CYCLE()	do {} while (0)
+#define CPU_BUSY_CYCLE()	__asm volatile ("" ::: "memory")
 
 #define curpcb		curcpu()->ci_curpcb
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: pyro.c,v 1.36 2020/10/01 05:14:10 jsg Exp $	*/
+/*	$OpenBSD: pyro.c,v 1.38 2024/03/29 21:29:33 miod Exp $	*/
 
 /*
  * Copyright (c) 2002 Jason L. Wright (jason@thought.net)
@@ -786,7 +786,7 @@ pyro_intr_establish_cpu(bus_space_tag_t t, bus_space_tag_t t0, int ihandle,
 	if (flags & BUS_INTR_ESTABLISH_MPSAFE)
 		ih->ih_mpsafe = 1;
 
-	intr_establish(ih->ih_pil, ih);
+	intr_establish(ih);
 
 	if (intrmapptr != NULL) {
 		u_int64_t intrmap;
@@ -849,7 +849,7 @@ pyro_msi_eq_intr(void *arg)
 		bus_space_write_8(sc->sc_bust, sc->sc_csrh,
 		    FIRE_MSI_CLEAR(msinum), FIRE_MSI_CLEAR_EQWR_N);
 
-		send_softint(-1, ih->ih_pil, ih);
+		send_softint(ih->ih_pil, ih);
 
 		head += 1;
 		head &= eq->eq_mask;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.47 2023/11/27 11:30:49 claudio Exp $ */
+/*	$OpenBSD: extern.h,v 1.49 2024/05/21 05:00:48 jsg Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -16,6 +16,8 @@
  */
 #ifndef EXTERN_H
 #define EXTERN_H
+
+#include <openssl/md4.h>
 
 /*
  * This is the rsync protocol version that we support.
@@ -214,6 +216,7 @@ struct	blkstat {
 	struct blktab	*blktab; /* hashtable of blocks */
 	uint32_t	 s1; /* partial sum for computing fast hash */
 	uint32_t	 s2; /* partial sum for computing fast hash */
+	MD4_CTX		 ctx; /* context for hash_file */
 };
 
 /*
@@ -298,8 +301,6 @@ extern int verbose;
 
 void	rsync_log(int, const char *, ...)
 			__attribute__((format(printf, 2, 3)));
-void	rsync_warnx1(const char *, ...)
-			__attribute__((format(printf, 1, 2)));
 void	rsync_warn(int, const char *, ...)
 			__attribute__((format(printf, 2, 3)));
 void	rsync_warnx(const char *, ...)
@@ -313,7 +314,6 @@ void	rsync_errx1(const char *, ...)
 
 int	flist_del(struct sess *, int, const struct flist *, size_t);
 int	flist_gen(struct sess *, size_t, char **, struct flist **, size_t *);
-int	flist_gen_local(struct sess *, const char *, struct flist **, size_t *);
 void	flist_free(struct flist *, size_t);
 int	flist_recv(struct sess *, int, struct flist **, size_t *);
 int	flist_send(struct sess *, int, int, const struct flist *, size_t);
@@ -388,8 +388,10 @@ int		 blk_send_ack(struct sess *, int, struct blkset *);
 uint32_t	 hash_fast(const void *, size_t);
 void		 hash_slow(const void *, size_t, unsigned char *,
 		    const struct sess *);
-void		 hash_file(const void *, size_t, unsigned char *,
-		    const struct sess *);
+
+void		 hash_file_start(MD4_CTX *, const struct sess *);
+void		 hash_file_buf(MD4_CTX *, const void *, size_t);
+void		 hash_file_final(MD4_CTX *, unsigned char *);
 
 void		 copy_file(int, const char *, const struct flist *);
 

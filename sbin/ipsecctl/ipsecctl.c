@@ -1,4 +1,4 @@
-/*	$OpenBSD: ipsecctl.c,v 1.86 2023/10/09 15:32:14 tobhe Exp $	*/
+/*	$OpenBSD: ipsecctl.c,v 1.88 2024/02/06 05:39:28 yasuoka Exp $	*/
 /*
  * Copyright (c) 2004, 2005 Hans-Joerg Hoexer <hshoexer@openbsd.org>
  *
@@ -706,7 +706,7 @@ ipsecctl_show(int opts)
 		}
 	}
 
-	if (pledge("stdio", NULL) == -1)
+	if (pledge("stdio dns", NULL) == -1)
 		err(1, "pledge");
 
 	if (rbuf != NULL) {
@@ -746,6 +746,9 @@ ipsecctl_show(int opts)
 		if (opts & IPSECCTL_OPT_SHOWALL)
 			printf("No flows\n");
 	}
+
+	if (pledge("stdio", NULL) == -1)
+		err(1, "pledge");
 
 	if (sbuf != NULL) {
 		if (opts & IPSECCTL_OPT_SHOWALL)

@@ -141,10 +141,6 @@ static const struct pci_matchid amdgpu_devices[] = {
 	{0x1002, 0x73AF },
 	{0x1002, 0x73BF },
 
-	/* Van Gogh */
-	{0x1002, 0x1435 },	/* Custom GPU 0932 */
-	{0x1002, 0x163F },	/* Custom GPU 0405 */
-
 	/* Yellow Carp */
 	{0x1002, 0x164D },
 	{0x1002, 0x1681 },
@@ -197,6 +193,14 @@ static const struct pci_matchid amdgpu_devices[] = {
 	 * display/dc/core/dc_resource.c resource_parse_asic_id()
 	 */
 
+	/* GC 9.4.3, APU/dGPU, "Aqua Vanjaram" */
+	{0x1002, 0x74a0 },	/* Instinct MI300A APU */
+	{0x1002, 0x74a1 },	/* Instinct MI300X dGPU */
+
+	/* GC 10.3.1, DCN 3.0.1, APU, "Van Gogh" */
+	{0x1002, 0x1435 },	/* Custom GPU 0932 */
+	{0x1002, 0x163f },	/* Custom GPU 0405 */
+
 	/* GC 10.3.6, DCN 3.1.5, APU, Ryzen 7000 "Raphael" */
 	{0x1002, 0x164e },	/* Radeon 610M */
 
@@ -211,9 +215,12 @@ static const struct pci_matchid amdgpu_devices[] = {
 	/* GC 11.0.1, DCN 3.1.4, APU, Ryzen 7040 "Phoenix" */
 	{0x1002, 0x15bf },	/* Radeon 740M / 760M / 780M */
 
+	/* GC 11.0.1, DCN 3.1.4, APU, Ryzen 8040 "Hawk Point" */
+	{0x1002, 0x1900 },	/* Radeon 760M / 780M */
+
 	/* GC 11.0.2, DCN 3.2.1, dGPU, "Navi 33" */
 	{0x1002, 0x7480 },	/* Radeon RX 7600S, 7700S, 7600M XT,
-				   7600, Pro W7600 */
+				   7600, 7600 XT, Pro W7600 */
 	{0x1002, 0x7483 },	/* Radeon RX 7600M */
 	{0x1002, 0x7489 },	/* Radeon Pro W7500 */
 
@@ -221,8 +228,15 @@ static const struct pci_matchid amdgpu_devices[] = {
 	{0x1002, 0x7470 },	/* Radeon Pro W7700 */
 	{0x1002, 0x747e },	/* Radeon RX 7700 XT, 7800 XT */
 
-	/* GC 11.0.4, DCN 3.1.4, APU, "Phoenix 2" */
+	/* GC 11.0.4, DCN 3.1.4, APU, Ryzen 7040, "Phoenix" */
 	{0x1002, 0x15c8 },	/* Radeon 740M */
 
+	/* GC 11.0.4, DCN 3.1.4, APU, Ryzen 8040, "Hawk Point" */
+	{0x1002, 0x1901 },	/* Radeon 740M */
+
 	/* GC 11.5.0, DCN 3.5.0, APU, linux >= 6.7 */
+	/* GC 11.5.1, DCN 3.5.1, APU, linux >= 6.9 */
+
+	/* GC 12.0.0, DCN 4.0.1, dGPU, linux ?, amd-staging-drm-next */
+	/* GC 12.0.1, DCN 4.0.1, dGPU, linux ?, amd-staging-drm-next */
 };

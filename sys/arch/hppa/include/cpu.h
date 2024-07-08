@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.102 2023/11/05 16:33:50 miod Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.105 2024/06/09 21:15:29 jca Exp $	*/
 
 /*
  * Copyright (c) 2000-2004 Michael Shalayeff
@@ -113,9 +113,9 @@ struct cpu_info {
 #endif
 #ifdef GPROF
 	struct gmonparam *ci_gmon;
-	struct clockintr *ci_gmonclock;
+	struct clockintr ci_gmonclock;
 #endif
-	struct clockintr_queue ci_queue;
+	struct clockqueue ci_queue;
 	char		ci_panicbuf[512];
 } __attribute__((__aligned__(64)));
 
@@ -165,7 +165,7 @@ curcpu(void)
 #define CPU_INFO_FOREACH(cii, ci) \
 	for (cii = 0, ci = &cpu_info[0]; cii < ncpus; cii++, ci++)
 
-#define CPU_BUSY_CYCLE()	do {} while (0)
+#define CPU_BUSY_CYCLE()	__asm volatile ("" ::: "memory")
 
 /* types */
 enum hppa_cpu_type {

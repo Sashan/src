@@ -83,7 +83,6 @@ while(<IN>) {
 #define sk_${type_thing}_push(st, val) SKM_sk_push($type_thing, (st), (val))
 #define sk_${type_thing}_unshift(st, val) SKM_sk_unshift($type_thing, (st), (val))
 #define sk_${type_thing}_find(st, val) SKM_sk_find($type_thing, (st), (val))
-#define sk_${type_thing}_find_ex(st, val) SKM_sk_find_ex($type_thing, (st), (val))
 #define sk_${type_thing}_delete(st, i) SKM_sk_delete($type_thing, (st), (i))
 #define sk_${type_thing}_delete_ptr(st, ptr) SKM_sk_delete_ptr($type_thing, (st), (ptr))
 #define sk_${type_thing}_insert(st, val, i) SKM_sk_insert($type_thing, (st), (val), (i))
@@ -114,7 +113,6 @@ EOF
 #define sk_${t1}_set(st, i, val) sk_set(CHECKED_STACK_OF($t1, st), i, CHECKED_PTR_OF($t2, val))
 #define sk_${t1}_zero(st) SKM_sk_zero($t1, (st))
 #define sk_${t1}_unshift(st, val) sk_unshift(CHECKED_STACK_OF($t1, st), CHECKED_PTR_OF($t2, val))
-#define sk_${t1}_find_ex(st, val) sk_find_ex((_STACK *)CHECKED_CONST_PTR_OF(STACK_OF($t1), st), CHECKED_CONST_PTR_OF($t2, val))
 #define sk_${t1}_delete(st, i) SKM_sk_delete($t1, (st), (i))
 #define sk_${t1}_delete_ptr(st, ptr) ($t1 *)sk_delete_ptr(CHECKED_STACK_OF($t1, st), CHECKED_PTR_OF($t2, ptr))
 #define sk_${t1}_set_cmp_func(st, cmp)  \\
@@ -151,12 +149,6 @@ EOF
 #define lh_${type_thing}_error(lh) LHM_lh_error(${type_thing},lh)
 #define lh_${type_thing}_num_items(lh) LHM_lh_num_items(${type_thing},lh)
 #define lh_${type_thing}_down_load(lh) LHM_lh_down_load(${type_thing},lh)
-#define lh_${type_thing}_node_stats_bio(lh,out) \\
-  LHM_lh_node_stats_bio(${type_thing},lh,out)
-#define lh_${type_thing}_node_usage_stats_bio(lh,out) \\
-  LHM_lh_node_usage_stats_bio(${type_thing},lh,out)
-#define lh_${type_thing}_stats_bio(lh,out) \\
-  LHM_lh_stats_bio(${type_thing},lh,out)
 #define lh_${type_thing}_free(lh) LHM_lh_free(${type_thing},lh)
 EOF
 	}

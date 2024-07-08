@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_re_pci.c,v 1.56 2022/03/11 18:00:48 mpi Exp $	*/
+/*	$OpenBSD: if_re_pci.c,v 1.58 2024/05/24 06:02:56 jsg Exp $	*/
 
 /*
  * Copyright (c) 2005 Peter Valchev <pvalchev@openbsd.org>
@@ -21,15 +21,9 @@
  */
 
 #include <sys/param.h>
-#include <sys/endian.h>
 #include <sys/systm.h>
-#include <sys/sockio.h>
-#include <sys/mbuf.h>
-#include <sys/malloc.h>
-#include <sys/kernel.h>
 #include <sys/device.h>
 #include <sys/timeout.h>
-#include <sys/socket.h>
 
 #include <net/if.h>
 #include <net/if_media.h>
@@ -223,19 +217,8 @@ re_pci_detach(struct device *self, int flags)
 {
 	struct re_pci_softc	*psc = (struct re_pci_softc *)self;
 	struct rl_softc		*sc = &psc->sc_rl;
-	struct ifnet		*ifp = &sc->sc_arpcom.ac_if;
 
-	/* Remove timeout handler */
-	timeout_del(&sc->timer_handle);
-
-	/* Detach PHY */
-	if (LIST_FIRST(&sc->sc_mii.mii_phys) != NULL)
-		mii_detach(&sc->sc_mii, MII_PHY_ANY, MII_OFFSET_ANY);
-
-	/* Delete media stuff */
-	ifmedia_delete_instance(&sc->sc_mii.mii_media, IFM_INST_ANY);
-	ether_ifdetach(ifp);
-	if_detach(ifp);
+	re_detach(sc);
 
 	/* Disable interrupts */
 	if (sc->sc_ih != NULL)

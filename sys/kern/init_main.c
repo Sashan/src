@@ -1,4 +1,4 @@
-/*	$OpenBSD: init_main.c,v 1.324 2024/01/01 07:00:18 jsg Exp $	*/
+/*	$OpenBSD: init_main.c,v 1.326 2024/04/02 08:39:16 deraadt Exp $	*/
 /*	$NetBSD: init_main.c,v 1.84.4.1 1996/06/02 09:08:06 mrg Exp $	*/
 
 /*
@@ -536,7 +536,7 @@ main(void *framep)
 	/*
 	 * Start the idle pool page garbage collector
 	 */
-#if !(defined(__m88k__) && defined(MULTIPROCESSOR))	/* XXX */
+#if defined(MULTIPROCESSOR)
 	pool_gc_pages(NULL);
 #endif
 
@@ -626,7 +626,7 @@ start_init(void *arg)
 	    NULL, UVM_UNKNOWN_OFFSET, 0,
 	    UVM_MAPFLAG(PROT_READ | PROT_WRITE, PROT_MASK, MAP_INHERIT_COPY,
 	    MADV_NORMAL,
-	    UVM_FLAG_FIXED|UVM_FLAG_OVERLAY|UVM_FLAG_COPYONW|UVM_FLAG_STACK|UVM_FLAG_SYSCALL)))
+	    UVM_FLAG_FIXED|UVM_FLAG_OVERLAY|UVM_FLAG_COPYONW|UVM_FLAG_STACK)))
 		panic("init: couldn't allocate argument space");
 
 	for (pathp = &initpaths[0]; (path = *pathp) != NULL; pathp++) {

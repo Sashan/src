@@ -1,4 +1,4 @@
-/*	$OpenBSD: softraid.c,v 1.5 2022/08/12 20:17:46 stsp Exp $	*/
+/*	$OpenBSD: softraid.c,v 1.7 2024/04/25 18:31:49 kn Exp $	*/
 
 /*
  * Copyright (c) 2012 Joel Sing <jsing@openbsd.org>
@@ -63,7 +63,7 @@ void
 sr_clear_keys(void)
 {
 	struct sr_boot_volume *bv;
-	struct sr_boot_keydisk *kd;
+	struct sr_boot_keydisk *kd, *nkd;
 
 	SLIST_FOREACH(bv, &sr_volumes, sbv_link) {
 		if (bv->sbv_level != 'C' && bv->sbv_level != 0x1C)
@@ -79,7 +79,7 @@ sr_clear_keys(void)
 			bv->sbv_maskkey = NULL;
 		}
 	}
-	SLIST_FOREACH(kd, &sr_keydisks, kd_link) {
+	SLIST_FOREACH_SAFE(kd, &sr_keydisks, kd_link, nkd) {
 		explicit_bzero(kd, sizeof(*kd));
 		free(kd, sizeof(*kd));
 	}
@@ -150,6 +150,10 @@ sr_crypto_passphrase_decrypt(struct sr_meta_crypto *cm,
 
 	for (;;) {
 		printf("Passphrase: ");
+#ifdef IDLE_POWEROFF
+extern int idle_poweroff(void);
+		idle_poweroff();
+#endif /* IDLE_POWEROFF */
 		for (i = 0; i < PASSPHRASE_LENGTH - 1; i++) {
 			c = cngetc();
 			if (c == '\r' || c == '\n') {

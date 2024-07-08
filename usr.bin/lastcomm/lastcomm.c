@@ -1,4 +1,4 @@
-/*	$OpenBSD: lastcomm.c,v 1.34 2023/12/11 00:40:31 deraadt Exp $	*/
+/*	$OpenBSD: lastcomm.c,v 1.36 2024/02/25 00:07:13 deraadt Exp $	*/
 /*	$NetBSD: lastcomm.c,v 1.9 1995/10/22 01:43:42 ghudson Exp $	*/
 
 /*
@@ -177,8 +177,8 @@ flagbits(int f)
 	BIT(APLEDGE, 'P');
 	BIT(ATRAP, 'T');
 	BIT(AUNVEIL, 'U');
-	BIT(AEXECVE, 'E');
 	BIT(APINSYS, 'S');
+	BIT(ABTCFI, 'B');
 	*p = '\0';
 	return (flags);
 }

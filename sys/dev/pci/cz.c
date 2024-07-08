@@ -1,4 +1,4 @@
-/*	$OpenBSD: cz.c,v 1.27 2022/03/11 18:00:45 mpi Exp $ */
+/*	$OpenBSD: cz.c,v 1.29 2024/05/24 06:02:53 jsg Exp $ */
 /*	$NetBSD: cz.c,v 1.15 2001/01/20 19:10:36 thorpej Exp $	*/
 
 /*-
@@ -81,8 +81,6 @@
 #include <sys/tty.h>
 #include <sys/conf.h>
 #include <sys/time.h>
-#include <sys/kernel.h>
-#include <sys/fcntl.h>
 #include <sys/syslog.h>
 
 #include <dev/pci/pcireg.h>
@@ -268,9 +266,7 @@ do {									\
  *	Determine if the given PCI device is a Cyclades-Z board.
  */
 int
-cz_match(parent, match, aux)
-	struct device *parent;
-	void *match, *aux;
+cz_match(struct device *parent, void *match, void *aux)
 {
 	struct pci_attach_args *pa = aux;
 
@@ -286,9 +282,7 @@ cz_match(parent, match, aux)
  *	A Cyclades-Z board was found; attach it.
  */
 void
-cz_attach(parent, self, aux)
-	struct device *parent, *self;
-	void *aux;
+cz_attach(struct device *parent, struct device *self, void *aux)
 {
 	struct cz_softc *cz = (void *) self;
 	struct pci_attach_args *pa = aux;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.182 2023/02/21 04:49:43 gkoehler Exp $ */
+/*	$OpenBSD: pmap.c,v 1.184 2024/05/22 05:51:49 jsg Exp $ */
 
 /*
  * Copyright (c) 2015 Martin Pieuchot
@@ -155,8 +155,6 @@ void pmap_fill_pte32(pmap_t, vaddr_t, paddr_t, struct pte_desc *, vm_prot_t,
 
 void pmap_syncicache_user_virt(pmap_t pm, vaddr_t va);
 
-void _pmap_kenter_pa(vaddr_t va, paddr_t pa, vm_prot_t prot, int flags,
-    int cache);
 void pmap_remove_pted(pmap_t, struct pte_desc *);
 
 /* setup/initialization functions */
@@ -186,9 +184,7 @@ int physmem;
 int physmaxaddr;
 
 #ifdef MULTIPROCESSOR
-struct __ppc_lock pmap_hash_lock;
-
-#define	PMAP_HASH_LOCK_INIT()		__ppc_lock_init(&pmap_hash_lock)
+struct __ppc_lock pmap_hash_lock = PPC_LOCK_INITIALIZER;
 
 #define	PMAP_HASH_LOCK(s)						\
 do {									\
@@ -224,7 +220,6 @@ do {									\
 
 #else /* ! MULTIPROCESSOR */
 
-#define	PMAP_HASH_LOCK_INIT()		/* nothing */
 #define	PMAP_HASH_LOCK(s)		(void)s
 #define	PMAP_HASH_UNLOCK(s)		/* nothing */
 
@@ -2206,8 +2201,6 @@ pmap_init()
 	pool_init(&pmap_pted_pool, sizeof(struct pte_desc), 0, IPL_VM, 0,
 	    "pted", NULL);
 	pool_setlowat(&pmap_pted_pool, 20);
-
-	PMAP_HASH_LOCK_INIT();
 
 	pmap_initialized = 1;
 }

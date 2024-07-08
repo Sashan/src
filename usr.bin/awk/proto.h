@@ -1,4 +1,4 @@
-/*	$OpenBSD: proto.h,v 1.23 2023/11/22 01:01:21 millert Exp $	*/
+/*	$OpenBSD: proto.h,v 1.25 2024/06/03 00:58:04 millert Exp $	*/
 /****************************************************************
 Copyright (C) Lucent Technologies 1997
 All Rights Reserved
@@ -35,9 +35,6 @@ extern	void	startreg(void);
 extern	int	input(void);
 extern	void	unput(int);
 extern	void	unputstr(const char *);
-extern	int	yylook(void);
-extern	int	yyback(int *, int);
-extern	int	yyinput(void);
 
 extern	fa	*makedfa(const char *, bool);
 extern	fa	*mkdfa(const char *, bool);
@@ -170,7 +167,6 @@ extern	Cell	*boolop(Node **, int);
 extern	Cell	*relop(Node **, int);
 extern	void	tfree(Cell *);
 extern	Cell	*gettemp(void);
-extern	Cell	*field(Node **, int);
 extern	Cell	*indirect(Node **, int);
 extern	Cell	*substr(Node **, int);
 extern	Cell	*sindex(Node **, int);
@@ -204,5 +200,9 @@ extern	Cell	*gensub(Node **, int);
 
 extern	FILE	*popen(const char *, const char *);
 extern	int	pclose(FILE *);
+
+extern	int	u8_nextlen(const char *s);
+extern	int	u8_rune(int *, const char *);
+extern	int	runetochar(char *str, int c);
 
 extern  const char	*flags2str(int flags);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: btrace.c,v 1.81 2023/11/10 18:56:21 jasper Exp $ */
+/*	$OpenBSD: btrace.c,v 1.91 2024/05/21 05:00:48 jsg Exp $ */
 
 /*
  * Copyright (c) 2019 - 2023 Martin Pieuchot <mpi@openbsd.org>
@@ -80,7 +80,6 @@ void			 rule_printmaps(struct bt_rule *);
  * Language builtins & functions.
  */
 uint64_t		 builtin_nsecs(struct dt_evt *);
-const char		*builtin_kstack(struct dt_evt *);
 const char		*builtin_arg(struct dt_evt *, enum bt_argtype);
 struct bt_arg		*fn_str(struct bt_arg *, struct dt_evt *, char *);
 int			 stmt_eval(struct bt_stmt *, struct dt_evt *);
@@ -450,9 +449,9 @@ rules_do(int fd)
 		if (ioctl(fd, DTIOCGSTATS, &dtst))
 			warn("DTIOCGSTATS");
 
-		printf("%llu events read\n", dtst.dtst_readevt);
-		printf("%llu events dropped\n", dtst.dtst_dropevt);
-		printf("%llu events filtered\n", bt_filtered);
+		fprintf(stderr, "%llu events read\n", dtst.dtst_readevt);
+		fprintf(stderr, "%llu events dropped\n", dtst.dtst_dropevt);
+		fprintf(stderr, "%llu events filtered\n", bt_filtered);
 	}
 }
 
@@ -460,6 +459,7 @@ static uint64_t
 rules_action_scan(struct bt_stmt *bs)
 {
 	struct bt_arg *ba;
+	struct bt_cond *bc;
 	uint64_t evtflags = 0;
 
 	while (bs != NULL) {
@@ -474,8 +474,9 @@ rules_action_scan(struct bt_stmt *bs)
 			evtflags |= ba2dtflags(ba);
 			break;
 		case B_AC_TEST:
-			evtflags |= rules_action_scan(
-			    (struct bt_stmt *)bs->bs_var);
+			bc = (struct bt_cond *)bs->bs_var;
+			evtflags |= rules_action_scan(bc->bc_condbs);
+			evtflags |= rules_action_scan(bc->bc_elsebs);
 			break;
 		default:
 			break;
@@ -669,18 +670,6 @@ rule_eval(struct bt_rule *r, struct dt_evt *dtev)
 	}
 
 	SLIST_FOREACH(bs, &r->br_action, bs_next) {
-		if ((bs->bs_act == B_AC_TEST) && stmt_test(bs, dtev) == true) {
-			struct bt_stmt *bbs = (struct bt_stmt *)bs->bs_var;
-
-			while (bbs != NULL) {
-				if (stmt_eval(bbs, dtev))
-					return 1;
-				bbs = SLIST_NEXT(bbs, bs_next);
-			}
-
-			continue;
-		}
-
 		if (stmt_eval(bs, dtev))
 			return 1;
 	}
@@ -797,13 +786,18 @@ const char *
 builtin_arg(struct dt_evt *dtev, enum bt_argtype dat)
 {
 	static char buf[sizeof("18446744073709551615")]; /* UINT64_MAX */
-	unsigned int argn;
+	struct dtioc_probe_info *dtpi;
 	struct dtioc_arg_info *dtai;
 	const char *argtype, *fmt;
+	unsigned int argn;
 	long value;
 
-	dtai = dt_args[dtev->dtev_pbn - 1];
 	argn = dat - B_AT_BI_ARG0;
+	dtpi = &dt_dtpis[dtev->dtev_pbn - 1];
+	if (dtpi == NULL || argn >= dtpi->dtpi_nargs)
+		return "0";
+
+	dtai = dt_args[dtev->dtev_pbn - 1];
 	argtype = dtai[argn].dtai_argtype;
 
 	if (strncmp(argtype, "int", DTNAMESIZE) == 0) {
@@ -825,6 +819,8 @@ builtin_arg(struct dt_evt *dtev, enum bt_argtype dat)
 int
 stmt_eval(struct bt_stmt *bs, struct dt_evt *dtev)
 {
+	struct bt_stmt *bbs;
+	struct bt_cond *bc;
 	int halt = 0;
 
 	switch (bs->bs_act) {
@@ -853,7 +849,17 @@ stmt_eval(struct bt_stmt *bs, struct dt_evt *dtev)
 		stmt_store(bs, dtev);
 		break;
 	case B_AC_TEST:
-		/* done before */
+		bc = (struct bt_cond *)bs->bs_var;
+		if (stmt_test(bs, dtev) == true)
+			bbs = bc->bc_condbs;
+		else
+			bbs = bc->bc_elsebs;
+
+		while (bbs != NULL) {
+			if (stmt_eval(bbs, dtev))
+				return 1;
+			bbs = SLIST_NEXT(bbs, bs_next);
+		}
 		break;
 	case B_AC_TIME:
 		stmt_time(bs, dtev);
@@ -1084,6 +1090,7 @@ stmt_store(struct bt_stmt *bs, struct dt_evt *dtev)
 {
 	struct bt_arg *ba = SLIST_FIRST(&bs->bs_args);
 	struct bt_var *bvar, *bv = bs->bs_var;
+	struct map *map;
 
 	assert(SLIST_NEXT(ba, ba_next) == NULL);
 
@@ -1101,18 +1108,34 @@ stmt_store(struct bt_stmt *bs, struct dt_evt *dtev)
 		bv->bv_type = bvar->bv_type;
 		bv->bv_value = bvar->bv_value;
 		break;
+	case B_AT_MAP:
+		bvar = ba->ba_value;
+		map = (struct map *)bvar->bv_value;
+		/* Uninitialized map */
+		if (map == NULL)
+			bv->bv_value = 0;
+		else
+			bv->bv_value = map_get(map, ba2hash(ba->ba_key, dtev));
+		bv->bv_type = B_VT_LONG; /* XXX should we type map? */
+		break;
 	case B_AT_TUPLE:
 		bv->bv_value = baeval(ba, dtev);
 		bv->bv_type = B_VT_TUPLE;
 		break;
 	case B_AT_BI_PID:
 	case B_AT_BI_TID:
+	case B_AT_BI_CPU:
 	case B_AT_BI_NSECS:
+	case B_AT_BI_RETVAL:
 	case B_AT_BI_ARG0 ... B_AT_BI_ARG9:
 	case B_AT_OP_PLUS ... B_AT_OP_LOR:
 		bv->bv_value = baeval(ba, dtev);
 		bv->bv_type = B_VT_LONG;
 		break;
+	case B_AT_BI_COMM:
+	case B_AT_BI_KSTACK:
+	case B_AT_BI_USTACK:
+	case B_AT_BI_PROBE:
 	case B_AT_FN_STR:
 		bv->bv_value = baeval(ba, dtev);
 		bv->bv_type = B_VT_STR;
@@ -1618,6 +1641,9 @@ ba2long(struct bt_arg *ba, struct dt_evt *dtev)
 	long val;
 
 	switch (ba->ba_type) {
+	case B_AT_STR:
+		val = (*ba2str(ba, dtev) == '\0') ? 0 : 1;
+		break;
 	case B_AT_LONG:
 		val = (long)ba->ba_value;
 		break;
@@ -1631,7 +1657,7 @@ ba2long(struct bt_arg *ba, struct dt_evt *dtev)
 		if (bv->bv_value == NULL)
 			return 0;
 		val = ba2long(map_get((struct map *)bv->bv_value,
-		    ba2str(ba->ba_key, dtev)), dtev);
+		    ba2hash(ba->ba_key, dtev)), dtev);
 		break;
 	case B_AT_NIL:
 		val = 0L;
@@ -1767,7 +1793,7 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 			break;
 		}
 		str = ba2str(map_get((struct map *)bv->bv_value,
-		    ba2str(ba->ba_key, dtev)), dtev);
+		    ba2hash(ba->ba_key, dtev)), dtev);
 		break;
 	case B_AT_VAR:
 		str = ba2str(ba_read(ba), dtev);
@@ -1792,6 +1818,58 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 	return str;
 }
 
+int
+ba2flags(struct bt_arg *ba)
+{
+	int flags = 0;
+
+	assert(ba->ba_type != B_AT_MAP);
+	assert(ba->ba_type != B_AT_TUPLE);
+
+	switch (ba->ba_type) {
+	case B_AT_STR:
+	case B_AT_LONG:
+	case B_AT_TMEMBER:
+	case B_AT_VAR:
+	case B_AT_HIST:
+	case B_AT_NIL:
+		break;
+	case B_AT_BI_KSTACK:
+		flags |= DTEVT_KSTACK;
+		break;
+	case B_AT_BI_USTACK:
+		flags |= DTEVT_USTACK;
+		break;
+	case B_AT_BI_COMM:
+		flags |= DTEVT_EXECNAME;
+		break;
+	case B_AT_BI_CPU:
+	case B_AT_BI_PID:
+	case B_AT_BI_TID:
+	case B_AT_BI_NSECS:
+		break;
+	case B_AT_BI_ARG0 ... B_AT_BI_ARG9:
+		flags |= DTEVT_FUNCARGS;
+		break;
+	case B_AT_BI_RETVAL:
+	case B_AT_BI_PROBE:
+		break;
+	case B_AT_MF_COUNT:
+	case B_AT_MF_MAX:
+	case B_AT_MF_MIN:
+	case B_AT_MF_SUM:
+	case B_AT_FN_STR:
+		break;
+	case B_AT_OP_PLUS ... B_AT_OP_LOR:
+		flags |= ba2dtflags(ba->ba_value);
+		break;
+	default:
+		xabort("invalid argument type %d", ba->ba_type);
+	}
+
+	return flags;
+}
+
 /*
  * Return dt(4) flags indicating which data should be recorded by the
  * kernel, if any, for a given `ba'.
@@ -1808,51 +1886,15 @@ ba2dtflags(struct bt_arg *ba)
 
 	do {
 		if (ba->ba_type == B_AT_MAP)
-			bval = ba->ba_key;
-		else
-			bval = ba;
+			flags |= ba2flags(ba->ba_key);
+		else if (ba->ba_type == B_AT_TUPLE) {
+			bval = ba->ba_value;
+			do {
+				flags |= ba2flags(bval);
+			} while ((bval = SLIST_NEXT(bval, ba_next)) != NULL);
+		} else
+			flags |= ba2flags(ba);
 
-		switch (bval->ba_type) {
-		case B_AT_STR:
-		case B_AT_LONG:
-		case B_AT_TUPLE:
-		case B_AT_TMEMBER:
-		case B_AT_VAR:
-	    	case B_AT_HIST:
-		case B_AT_NIL:
-			break;
-		case B_AT_BI_KSTACK:
-			flags |= DTEVT_KSTACK;
-			break;
-		case B_AT_BI_USTACK:
-			flags |= DTEVT_USTACK;
-			break;
-		case B_AT_BI_COMM:
-			flags |= DTEVT_EXECNAME;
-			break;
-		case B_AT_BI_CPU:
-		case B_AT_BI_PID:
-		case B_AT_BI_TID:
-		case B_AT_BI_NSECS:
-			break;
-		case B_AT_BI_ARG0 ... B_AT_BI_ARG9:
-			flags |= DTEVT_FUNCARGS;
-			break;
-		case B_AT_BI_RETVAL:
-		case B_AT_BI_PROBE:
-			break;
-		case B_AT_MF_COUNT:
-		case B_AT_MF_MAX:
-		case B_AT_MF_MIN:
-		case B_AT_MF_SUM:
-		case B_AT_FN_STR:
-			break;
-		case B_AT_OP_PLUS ... B_AT_OP_LOR:
-			flags |= ba2dtflags(bval->ba_value);
-			break;
-		default:
-			xabort("invalid argument type %d", bval->ba_type);
-		}
 	} while ((ba = SLIST_NEXT(ba, ba_next)) != NULL);
 
 	--recursions;
@@ -1863,6 +1905,7 @@ ba2dtflags(struct bt_arg *ba)
 long
 bacmp(struct bt_arg *a, struct bt_arg *b)
 {
+	char astr[STRLEN];
 	long val;
 
 	if (a->ba_type != b->ba_type)
@@ -1872,9 +1915,12 @@ bacmp(struct bt_arg *a, struct bt_arg *b)
 	case B_AT_LONG:
 		return ba2long(a, NULL) - ba2long(b, NULL);
 	case B_AT_STR:
-		return strcmp(ba2str(a, NULL), ba2str(b, NULL));
+		strlcpy(astr, ba2str(a, NULL), sizeof(astr));
+		return strcmp(astr, ba2str(b, NULL));
 	case B_AT_TUPLE:
 		/* Compare two lists of arguments one by one. */
+		a = a->ba_value;
+		b = b->ba_value;
 		do {
 			val = bacmp(a, b);
 			if (val != 0)

@@ -1158,8 +1158,8 @@ sub enclast()
 	&data_word(0x00000000, 0x00000000, 0x00000000, 0x00000000);
 	&previous();
 
-# void AES_encrypt (const void *inp,void *out,const AES_KEY *key);
-&function_begin("AES_encrypt");
+# void aes_encrypt_internal(const void *inp, void *out, const AES_KEY *key);
+&function_begin("aes_encrypt_internal");
 	&mov	($acc,&wparam(0));		# load inp
 	&mov	($key,&wparam(2));		# load key
 
@@ -1213,7 +1213,7 @@ sub enclast()
 	&mov	(&DWP(4,$acc),$s1);
 	&mov	(&DWP(8,$acc),$s2);
 	&mov	(&DWP(12,$acc),$s3);
-&function_end("AES_encrypt");
+&function_end("aes_encrypt_internal");
 
 #--------------------------------------------------------------------#
 
@@ -1947,8 +1947,8 @@ sub declast()
 	&data_byte(0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d);
 	&previous();
 
-# void AES_decrypt (const void *inp,void *out,const AES_KEY *key);
-&function_begin("AES_decrypt");
+# void aes_decrypt_internal(const void *inp, void *out, const AES_KEY *key);
+&function_begin("aes_decrypt_internal");
 	&mov	($acc,&wparam(0));		# load inp
 	&mov	($key,&wparam(2));		# load key
 
@@ -2002,11 +2002,10 @@ sub declast()
 	&mov	(&DWP(4,$acc),$s1);
 	&mov	(&DWP(8,$acc),$s2);
 	&mov	(&DWP(12,$acc),$s3);
-&function_end("AES_decrypt");
+&function_end("aes_decrypt_internal");
 
-# void AES_cbc_encrypt (const void char *inp, unsigned char *out,
-#			size_t length, const AES_KEY *key,
-#			unsigned char *ivp,const int enc);
+# void aes_cbc_encrypt_internal(const void char *inp, unsigned char *out,
+#     size_t length, const AES_KEY *key, unsigned char *ivp,const int enc);
 {
 # stack frame layout
 #             -4(%esp)		# return address	 0(%esp)
@@ -2029,7 +2028,7 @@ my $ivec=&DWP(60,"esp");	# ivec[16]
 my $aes_key=&DWP(76,"esp");	# copy of aes_key
 my $mark=&DWP(76+240,"esp");	# copy of aes_key->rounds
 
-&function_begin("AES_cbc_encrypt");
+&function_begin("aes_cbc_encrypt_internal");
 	&mov	($s2 eq "ecx"? $s2 : "",&wparam(2));	# load len
 	&cmp	($s2,0);
 	&je	(&label("drop_out"));
@@ -2617,7 +2616,7 @@ my $mark=&DWP(76+240,"esp");	# copy of aes_key->rounds
 
 	&mov	("esp",$_esp);
 	&popf	();
-&function_end("AES_cbc_encrypt");
+&function_end("aes_cbc_encrypt_internal");
 }
 
 #------------------------------------------------------------------#
@@ -2850,12 +2849,12 @@ sub enckey()
     &set_label("exit");
 &function_end("_x86_AES_set_encrypt_key");
 
-# int AES_set_encrypt_key(const unsigned char *userKey, const int bits,
-#                        AES_KEY *key)
-&function_begin_B("AES_set_encrypt_key");
+# int aes_set_encrypt_key_internal(const unsigned char *userKey, const int bits,
+#      AES_KEY *key)
+&function_begin_B("aes_set_encrypt_key_internal");
 	&call	("_x86_AES_set_encrypt_key");
 	&ret	();
-&function_end_B("AES_set_encrypt_key");
+&function_end_B("aes_set_encrypt_key_internal");
 
 sub deckey()
 { my ($i,$key,$tp1,$tp2,$tp4,$tp8) = @_;
@@ -2912,9 +2911,9 @@ sub deckey()
 	&mov	(&DWP(4*$i,$key),$tp1);
 }
 
-# int AES_set_decrypt_key(const unsigned char *userKey, const int bits,
-#                        AES_KEY *key)
-&function_begin_B("AES_set_decrypt_key");
+# int aes_set_decrypt_key_internal(const unsigned char *userKey, const int bits,
+#     AES_KEY *key)
+&function_begin_B("aes_set_decrypt_key_internal");
 	&call	("_x86_AES_set_encrypt_key");
 	&cmp	("eax",0);
 	&je	(&label("proceed"));
@@ -2970,6 +2969,6 @@ sub deckey()
 	&jb	(&label("permute"));
 
 	&xor	("eax","eax");			# return success
-&function_end("AES_set_decrypt_key");
+&function_end("aes_set_decrypt_key_internal");
 
 &asm_finish();

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_input.c,v 1.387 2023/09/16 09:33:27 mpi Exp $	*/
+/*	$OpenBSD: ip_input.c,v 1.397 2024/07/02 18:33:47 bluhm Exp $	*/
 /*	$NetBSD: ip_input.c,v 1.30 1996/03/16 23:53:58 christos Exp $	*/
 
 /*
@@ -84,10 +84,10 @@
 #endif
 
 /* values controllable via sysctl */
-int	ipforwarding = 0;
+int	ip_forwarding = 0;
 int	ipmforwarding = 0;
 int	ipmultipath = 0;
-int	ipsendredirects = 1;
+int	ip_sendredirects = 1;
 int	ip_dosourceroute = 0;
 int	ip_defttl = IPDEFTTL;
 int	ip_mtudisc = 1;
@@ -108,8 +108,8 @@ const struct sysctl_bounded_args ipctl_vars[] = {
 #ifdef MROUTING
 	{ IPCTL_MRTPROTO, &ip_mrtproto, SYSCTL_INT_READONLY },
 #endif
-	{ IPCTL_FORWARDING, &ipforwarding, 0, 2 },
-	{ IPCTL_SENDREDIRECTS, &ipsendredirects, 0, 1 },
+	{ IPCTL_FORWARDING, &ip_forwarding, 0, 2 },
+	{ IPCTL_SENDREDIRECTS, &ip_sendredirects, 0, 1 },
 	{ IPCTL_DEFTTL, &ip_defttl, 0, 255 },
 	{ IPCTL_DIRECTEDBCAST, &ip_directedbcast, 0, 1 },
 	{ IPCTL_IPPORT_FIRSTAUTO, &ipport_firstauto, 0, 65535 },
@@ -118,7 +118,6 @@ const struct sysctl_bounded_args ipctl_vars[] = {
 	{ IPCTL_IPPORT_HILASTAUTO, &ipport_hilastauto, 0, 65535 },
 	{ IPCTL_IPPORT_MAXQUEUE, &ip_maxqueue, 0, 10000 },
 	{ IPCTL_MFORWARDING, &ipmforwarding, 0, 1 },
-	{ IPCTL_MULTIPATH, &ipmultipath, 0, 1 },
 	{ IPCTL_ARPTIMEOUT, &arpt_keep, 0, INT_MAX },
 	{ IPCTL_ARPDOWN, &arpt_down, 0, INT_MAX },
 };
@@ -138,8 +137,8 @@ static struct mbuf_queue	ipsendraw_mq;
 extern struct niqueue		arpinq;
 
 int	ip_ours(struct mbuf **, int *, int, int);
-int	ip_dooptions(struct mbuf *, struct ifnet *);
-int	in_ouraddr(struct mbuf *, struct ifnet *, struct rtentry **);
+int	ip_dooptions(struct mbuf *, struct ifnet *, int);
+int	in_ouraddr(struct mbuf *, struct ifnet *, struct route *, int);
 
 int		ip_fragcheck(struct mbuf **, int *);
 struct mbuf *	ip_reass(struct ipqent *, struct ipq *);
@@ -246,6 +245,30 @@ ip_ours(struct mbuf **mp, int *offp, int nxt, int af)
 	if (af != AF_UNSPEC)
 		return nxt;
 
+	nxt = ip_deliver(mp, offp, nxt, AF_INET, 1);
+	if (nxt == IPPROTO_DONE)
+		return IPPROTO_DONE;
+
+	/* save values for later, use after dequeue */
+	if (*offp != sizeof(struct ip)) {
+		struct m_tag *mtag;
+		struct ipoffnxt *ion;
+
+		/* mbuf tags are expensive, but only used for header options */
+		mtag = m_tag_get(PACKET_TAG_IP_OFFNXT, sizeof(*ion),
+		    M_NOWAIT);
+		if (mtag == NULL) {
+			ipstat_inc(ips_idropped);
+			m_freemp(mp);
+			return IPPROTO_DONE;
+		}
+		ion = (struct ipoffnxt *)(mtag + 1);
+		ion->ion_off = *offp;
+		ion->ion_nxt = nxt;
+
+		m_tag_prepend(*mp, mtag);
+	}
+
 	niq_enqueue(&ipintrq, *mp);
 	*mp = NULL;
 	return IPPROTO_DONE;
@@ -261,18 +284,31 @@ ipintr(void)
 	struct mbuf *m;
 
 	while ((m = niq_dequeue(&ipintrq)) != NULL) {
-		struct ip *ip;
+		struct m_tag *mtag;
 		int off, nxt;
 
 #ifdef DIAGNOSTIC
 		if ((m->m_flags & M_PKTHDR) == 0)
 			panic("ipintr no HDR");
 #endif
-		ip = mtod(m, struct ip *);
-		off = ip->ip_hl << 2;
-		nxt = ip->ip_p;
+		mtag = m_tag_find(m, PACKET_TAG_IP_OFFNXT, NULL);
+		if (mtag != NULL) {
+			struct ipoffnxt *ion;
 
-		nxt = ip_deliver(&m, &off, nxt, AF_INET);
+			ion = (struct ipoffnxt *)(mtag + 1);
+			off = ion->ion_off;
+			nxt = ion->ion_nxt;
+
+			m_tag_delete(m, mtag);
+		} else {
+			struct ip *ip;
+
+			ip = mtod(m, struct ip *);
+			off = ip->ip_hl << 2;
+			nxt = ip->ip_p;
+		}
+
+		nxt = ip_deliver(&m, &off, nxt, AF_INET, 0);
 		KASSERT(nxt == IPPROTO_DONE);
 	}
 }
@@ -388,14 +424,18 @@ bad:
 int
 ip_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 {
-	struct mbuf	*m;
-	struct rtentry	*rt = NULL;
-	struct ip	*ip;
+	struct route ro;
+	struct mbuf *m;
+	struct ip *ip;
 	int hlen;
-	in_addr_t pfrdr = 0;
+#if NPF > 0
+	struct in_addr odst;
+#endif
+	int flags = 0;
 
 	KASSERT(*offp == 0);
 
+	ro.ro_rt = NULL;
 	ipstat_inc(ips_total);
 	m = *mp = ipv4_check(ifp, *mp);
 	if (m == NULL)
@@ -413,7 +453,7 @@ ip_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 	/*
 	 * Packet filter
 	 */
-	pfrdr = ip->ip_dst.s_addr;
+	odst = ip->ip_dst;
 	if (pf_test(AF_INET, PF_IN, ifp, mp) != PF_PASS)
 		goto bad;
 	m = *mp;
@@ -421,8 +461,20 @@ ip_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 		goto bad;
 
 	ip = mtod(m, struct ip *);
-	pfrdr = (pfrdr != ip->ip_dst.s_addr);
+	if (odst.s_addr != ip->ip_dst.s_addr)
+		SET(flags, IP_REDIRECT);
 #endif
+
+	switch (ip_forwarding) {
+	case 2:
+		SET(flags, IP_FORWARDING_IPSEC);
+		/* FALLTHROUGH */
+	case 1:
+		SET(flags, IP_FORWARDING);
+		break;
+	}
+	if (ip_directedbcast)
+		SET(flags, IP_ALLOWBROADCAST);
 
 	hlen = ip->ip_hl << 2;
 
@@ -432,7 +484,7 @@ ip_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 	 * error was detected (causing an icmp message
 	 * to be sent and the original packet to be freed).
 	 */
-	if (hlen > sizeof (struct ip) && ip_dooptions(m, ifp)) {
+	if (hlen > sizeof (struct ip) && ip_dooptions(m, ifp, flags)) {
 		m = *mp = NULL;
 		goto bad;
 	}
@@ -443,7 +495,7 @@ ip_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 		goto out;
 	}
 
-	switch(in_ouraddr(m, ifp, &rt)) {
+	switch(in_ouraddr(m, ifp, &ro, flags)) {
 	case 2:
 		goto bad;
 	case 1:
@@ -483,7 +535,7 @@ ip_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 			 * ip_output().)
 			 */
 			KERNEL_LOCK();
-			error = ip_mforward(m, ifp);
+			error = ip_mforward(m, ifp, flags);
 			KERNEL_UNLOCK();
 			if (error) {
 				ipstat_inc(ips_cantforward);
@@ -525,7 +577,7 @@ ip_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 	/*
 	 * Not for us; forward if possible and desirable.
 	 */
-	if (ipforwarding == 0) {
+	if (!ISSET(flags, IP_FORWARDING)) {
 		ipstat_inc(ips_cantforward);
 		goto bad;
 	}
@@ -545,14 +597,15 @@ ip_input_if(struct mbuf **mp, int *offp, int nxt, int af, struct ifnet *ifp)
 	}
 #endif /* IPSEC */
 
-	ip_forward(m, ifp, rt, pfrdr);
+	ip_forward(m, ifp, &ro, flags);
 	*mp = NULL;
+	rtfree(ro.ro_rt);
 	return IPPROTO_DONE;
  bad:
 	nxt = IPPROTO_DONE;
 	m_freemp(mp);
  out:
-	rtfree(rt);
+	rtfree(ro.ro_rt);
 	return nxt;
 }
 
@@ -673,15 +726,11 @@ ip_fragcheck(struct mbuf **mp, int *offp)
 #endif
 
 int
-ip_deliver(struct mbuf **mp, int *offp, int nxt, int af)
+ip_deliver(struct mbuf **mp, int *offp, int nxt, int af, int shared)
 {
-	const struct protosw *psw;
-	int naf = af;
 #ifdef INET6
 	int nest = 0;
-#endif /* INET6 */
-
-	NET_ASSERT_LOCKED_EXCLUSIVE();
+#endif
 
 	/*
 	 * Tell launch routine the next header
@@ -689,13 +738,41 @@ ip_deliver(struct mbuf **mp, int *offp, int nxt, int af)
 	IPSTAT_INC(delivered);
 
 	while (nxt != IPPROTO_DONE) {
+		const struct protosw *psw;
+		int naf;
+
+		switch (af) {
+		case AF_INET:
+			psw = &inetsw[ip_protox[nxt]];
+			break;
+#ifdef INET6
+		case AF_INET6:
+			psw = &inet6sw[ip6_protox[nxt]];
+			break;
+#endif
+		}
+		if (shared && !ISSET(psw->pr_flags, PR_MPINPUT)) {
+			/* delivery not finished, decrement counter, queue */
+			switch (af) {
+			case AF_INET:
+				counters_dec(ipcounters, ips_delivered);
+				break;
+#ifdef INET6
+			case AF_INET6:
+				counters_dec(ip6counters, ip6s_delivered);
+				break;
+#endif
+			}
+			break;
+		}
+
 #ifdef INET6
 		if (af == AF_INET6 &&
 		    ip6_hdrnestlimit && (++nest > ip6_hdrnestlimit)) {
 			ip6stat_inc(ip6s_toomanyhdr);
 			goto bad;
 		}
-#endif /* INET6 */
+#endif
 
 		/*
 		 * protection against faulty packet - there should be
@@ -714,7 +791,7 @@ ip_deliver(struct mbuf **mp, int *offp, int nxt, int af)
 			}
 		}
 		/* Otherwise, just fall through and deliver the packet */
-#endif /* IPSEC */
+#endif
 
 		switch (nxt) {
 		case IPPROTO_IPV4:
@@ -726,17 +803,10 @@ ip_deliver(struct mbuf **mp, int *offp, int nxt, int af)
 			naf = AF_INET6;
 			ip6stat_inc(ip6s_delivered);
 			break;
-#endif /* INET6 */
-		}
-		switch (af) {
-		case AF_INET:
-			psw = &inetsw[ip_protox[nxt]];
+#endif
+		default:
+			naf = af;
 			break;
-#ifdef INET6
-		case AF_INET6:
-			psw = &inet6sw[ip6_protox[nxt]];
-			break;
-#endif /* INET6 */
 		}
 		nxt = (*psw->pr_input)(mp, offp, nxt, af);
 		af = naf;
@@ -749,11 +819,10 @@ ip_deliver(struct mbuf **mp, int *offp, int nxt, int af)
 #undef IPSTAT_INC
 
 int
-in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
+in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct route *ro, int flags)
 {
 	struct rtentry		*rt;
 	struct ip		*ip;
-	struct sockaddr_in	 sin;
 	int			 match = 0;
 
 #if NPF > 0
@@ -770,13 +839,8 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 
 	ip = mtod(m, struct ip *);
 
-	memset(&sin, 0, sizeof(sin));
-	sin.sin_len = sizeof(sin);
-	sin.sin_family = AF_INET;
-	sin.sin_addr = ip->ip_dst;
-	rt = rtalloc_mpath(sintosa(&sin), &ip->ip_src.s_addr,
-	    m->m_pkthdr.ph_rtableid);
-	if (rtisvalid(rt)) {
+	rt = route_mpath(ro, &ip->ip_dst, &ip->ip_src, m->m_pkthdr.ph_rtableid);
+	if (rt != NULL) {
 		if (ISSET(rt->rt_flags, RTF_LOCAL))
 			match = 1;
 
@@ -785,14 +849,14 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 		 * if it is received on the interface with that address.
 		 */
 		if (ISSET(rt->rt_flags, RTF_BROADCAST) &&
-		    (!ip_directedbcast || rt->rt_ifidx == ifp->if_index)) {
+		    (!ISSET(flags, IP_ALLOWBROADCAST) ||
+		    rt->rt_ifidx == ifp->if_index)) {
 			match = 1;
 
 			/* Make sure M_BCAST is set */
 			m->m_flags |= M_BCAST;
 		}
 	}
-	*prt = rt;
 
 	if (!match) {
 		struct ifaddr *ifa;
@@ -825,7 +889,8 @@ in_ouraddr(struct mbuf *m, struct ifnet *ifp, struct rtentry **prt)
 				break;
 			}
 		}
-	} else if (ipforwarding == 0 && rt->rt_ifidx != ifp->if_index &&
+	} else if (!ISSET(flags, IP_FORWARDING) &&
+	    rt->rt_ifidx != ifp->if_index &&
 	    !((ifp->if_flags & IFF_LOOPBACK) || (ifp->if_type == IFT_ENC) ||
 	    (m->m_pkthdr.pf.flags & PF_TAG_TRANSLATE_LOCALHOST))) {
 		/* received on wrong interface. */
@@ -1099,7 +1164,7 @@ ip_flush(void)
  * 0 if the packet should be processed further.
  */
 int
-ip_dooptions(struct mbuf *m, struct ifnet *ifp)
+ip_dooptions(struct mbuf *m, struct ifnet *ifp, int flags)
 {
 	struct ip *ip = mtod(m, struct ip *);
 	unsigned int rtableid = m->m_pkthdr.ph_rtableid;
@@ -1320,8 +1385,8 @@ ip_dooptions(struct mbuf *m, struct ifnet *ifp)
 		}
 	}
 	KERNEL_UNLOCK();
-	if (forward && ipforwarding > 0) {
-		ip_forward(m, ifp, NULL, 1);
+	if (forward && ISSET(flags, IP_FORWARDING)) {
+		ip_forward(m, ifp, NULL, flags | IP_REDIRECT);
 		return (1);
 	}
 	return (0);
@@ -1463,7 +1528,7 @@ const u_char inetctlerrmap[PRC_NCMDS] = {
  * of codes and types.
  *
  * If not forwarding, just drop the packet.  This could be confusing
- * if ipforwarding was zero but some routing protocol was advancing
+ * if ip_forwarding was zero but some routing protocol was advancing
  * us as a gateway to somewhere.  However, we must let the routing
  * protocol deal with that.
  *
@@ -1471,62 +1536,52 @@ const u_char inetctlerrmap[PRC_NCMDS] = {
  * via a source route.
  */
 void
-ip_forward(struct mbuf *m, struct ifnet *ifp, struct rtentry *rt, int srcrt)
+ip_forward(struct mbuf *m, struct ifnet *ifp, struct route *ro, int flags)
 {
-	struct mbuf mfake, *mcopy = NULL;
 	struct ip *ip = mtod(m, struct ip *);
-	struct sockaddr_in *sin;
-	struct route ro;
-	int error = 0, type = 0, code = 0, destmtu = 0, fake = 0, len;
+	struct route iproute;
+	struct rtentry *rt;
+	u_int rtableid = m->m_pkthdr.ph_rtableid;
+	u_int8_t loopcnt = m->m_pkthdr.ph_loopcnt;
+	u_int icmp_len;
+	char icmp_buf[68];
+	CTASSERT(sizeof(icmp_buf) <= MHLEN);
+	u_short mflags, pfflags;
+	struct mbuf *mcopy;
+	int error = 0, type = 0, code = 0, destmtu = 0;
 	u_int32_t dest;
 
 	dest = 0;
 	if (m->m_flags & (M_BCAST|M_MCAST) || in_canforward(ip->ip_dst) == 0) {
 		ipstat_inc(ips_cantforward);
 		m_freem(m);
-		goto freecopy;
+		goto done;
 	}
 	if (ip->ip_ttl <= IPTTLDEC) {
 		icmp_error(m, ICMP_TIMXCEED, ICMP_TIMXCEED_INTRANS, dest, 0);
-		goto freecopy;
+		goto done;
 	}
 
-	memset(&ro, 0, sizeof(ro));
-	sin = satosin(&ro.ro_dst);
-	sin->sin_family = AF_INET;
-	sin->sin_len = sizeof(*sin);
-	sin->sin_addr = ip->ip_dst;
-
-	if (!rtisvalid(rt)) {
-		rtfree(rt);
-		rt = rtalloc_mpath(sintosa(sin), &ip->ip_src.s_addr,
-		    m->m_pkthdr.ph_rtableid);
-		if (rt == NULL) {
-			ipstat_inc(ips_noroute);
-			icmp_error(m, ICMP_UNREACH, ICMP_UNREACH_HOST, dest, 0);
-			return;
-		}
+	if (ro == NULL) {
+		ro = &iproute;
+		ro->ro_rt = NULL;
+	}
+	rt = route_mpath(ro, &ip->ip_dst, &ip->ip_src, rtableid);
+	if (rt == NULL) {
+		ipstat_inc(ips_noroute);
+		icmp_error(m, ICMP_UNREACH, ICMP_UNREACH_HOST, dest, 0);
+		goto done;
 	}
 
 	/*
-	 * Save at most 68 bytes of the packet in case
-	 * we need to generate an ICMP message to the src.
-	 * The data is saved in the mbuf on the stack that
-	 * acts as a temporary storage not intended to be
-	 * passed down the IP stack or to the mfree.
+	 * Save at most 68 bytes of the packet in case we need to generate
+	 * an ICMP message to the src.  The data is saved on the stack.
+	 * A new mbuf is only allocated when ICMP is actually created.
 	 */
-	memset(&mfake.m_hdr, 0, sizeof(mfake.m_hdr));
-	mfake.m_type = m->m_type;
-	if (m_dup_pkthdr(&mfake, m, M_DONTWAIT) == 0) {
-		mfake.m_data = mfake.m_pktdat;
-		len = min(ntohs(ip->ip_len), 68);
-		m_copydata(m, 0, len, mfake.m_pktdat);
-		mfake.m_pkthdr.len = mfake.m_len = len;
-#if NPF > 0
-		pf_pkt_addr_changed(&mfake);
-#endif	/* NPF > 0 */
-		fake = 1;
-	}
+	icmp_len = min(sizeof(icmp_buf), ntohs(ip->ip_len));
+	mflags = m->m_flags;
+	pfflags = m->m_pkthdr.pf.flags;
+	m_copydata(m, 0, icmp_len, icmp_buf);
 
 	ip->ip_ttl -= IPTTLDEC;
 
@@ -1543,8 +1598,8 @@ ip_forward(struct mbuf *m, struct ifnet *ifp, struct rtentry *rt, int srcrt)
 	if ((rt->rt_ifidx == ifp->if_index) &&
 	    (rt->rt_flags & (RTF_DYNAMIC|RTF_MODIFIED)) == 0 &&
 	    satosin(rt_key(rt))->sin_addr.s_addr != 0 &&
-	    ipsendredirects && !srcrt &&
-	    !arpproxy(satosin(rt_key(rt))->sin_addr, m->m_pkthdr.ph_rtableid)) {
+	    ip_sendredirects && !ISSET(flags, IP_REDIRECT) &&
+	    !arpproxy(satosin(rt_key(rt))->sin_addr, rtableid)) {
 		if ((ip->ip_src.s_addr & ifatoia(rt->rt_ifa)->ia_netmask) ==
 		    ifatoia(rt->rt_ifa)->ia_net) {
 		    if (rt->rt_flags & RTF_GATEWAY)
@@ -1557,12 +1612,8 @@ ip_forward(struct mbuf *m, struct ifnet *ifp, struct rtentry *rt, int srcrt)
 		}
 	}
 
-	ro.ro_rt = rt;
-	ro.ro_tableid = m->m_pkthdr.ph_rtableid;
-	error = ip_output(m, NULL, &ro,
-	    (IP_FORWARDING | (ip_directedbcast ? IP_ALLOWBROADCAST : 0)),
-	    NULL, NULL, 0);
-	rt = ro.ro_rt;
+	error = ip_output(m, NULL, ro, flags | IP_FORWARDING, NULL, NULL, 0);
+	rt = ro->ro_rt;
 	if (error)
 		ipstat_inc(ips_cantforward);
 	else {
@@ -1570,11 +1621,8 @@ ip_forward(struct mbuf *m, struct ifnet *ifp, struct rtentry *rt, int srcrt)
 		if (type)
 			ipstat_inc(ips_redirectsent);
 		else
-			goto freecopy;
+			goto done;
 	}
-	if (!fake)
-		goto freecopy;
-
 	switch (error) {
 	case 0:				/* forwarded, but need redirect */
 		/* type, code set above */
@@ -1597,7 +1645,7 @@ ip_forward(struct mbuf *m, struct ifnet *ifp, struct rtentry *rt, int srcrt)
 		}
 		ipstat_inc(ips_cantfrag);
 		if (destmtu == 0)
-			goto freecopy;
+			goto done;
 		break;
 
 	case EACCES:
@@ -1605,7 +1653,7 @@ ip_forward(struct mbuf *m, struct ifnet *ifp, struct rtentry *rt, int srcrt)
 		 * pf(4) blocked the packet. There is no need to send an ICMP
 		 * packet back since pf(4) takes care of it.
 		 */
-		goto freecopy;
+		goto done;
 
 	case ENOBUFS:
 		/*
@@ -1614,7 +1662,7 @@ ip_forward(struct mbuf *m, struct ifnet *ifp, struct rtentry *rt, int srcrt)
 		 * source quench could be a big problem under DoS attacks,
 		 * or the underlying interface is rate-limited.
 		 */
-		goto freecopy;
+		goto done;
 
 	case ENETUNREACH:		/* shouldn't happen, checked above */
 	case EHOSTUNREACH:
@@ -1625,24 +1673,32 @@ ip_forward(struct mbuf *m, struct ifnet *ifp, struct rtentry *rt, int srcrt)
 		code = ICMP_UNREACH_HOST;
 		break;
 	}
-	mcopy = m_copym(&mfake, 0, len, M_DONTWAIT);
-	if (mcopy)
-		icmp_error(mcopy, type, code, dest, destmtu);
 
-freecopy:
-	if (fake)
-		m_tag_delete_chain(&mfake);
-	rtfree(rt);
+	mcopy = m_gethdr(M_DONTWAIT, MT_DATA);
+	if (mcopy == NULL)
+		goto done;
+	mcopy->m_len = mcopy->m_pkthdr.len = icmp_len;
+	mcopy->m_flags |= (mflags & M_COPYFLAGS);
+	mcopy->m_pkthdr.ph_rtableid = rtableid;
+	mcopy->m_pkthdr.ph_ifidx = ifp->if_index;
+	mcopy->m_pkthdr.ph_loopcnt = loopcnt;
+	mcopy->m_pkthdr.pf.flags |= (pfflags & PF_TAG_GENERATED);
+	memcpy(mcopy->m_data, icmp_buf, icmp_len);
+	icmp_error(mcopy, type, code, dest, destmtu);
+
+ done:
+	if (ro == &iproute)
+		rtfree(ro->ro_rt);
 }
 
 int
 ip_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
     size_t newlen)
 {
-	int error;
 #ifdef MROUTING
 	extern struct mrtstat mrtstat;
 #endif
+	int oldval, error;
 
 	/* Almost all sysctl names at this level are terminal. */
 	if (namelen != 1 && name[0] != IPCTL_IFQUEUE &&
@@ -1727,6 +1783,15 @@ ip_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	case IPCTL_MRTVIF:
 		return (EOPNOTSUPP);
 #endif
+	case IPCTL_MULTIPATH:
+		NET_LOCK();
+		oldval = ipmultipath;
+		error = sysctl_int_bounded(oldp, oldlenp, newp, newlen,
+		    &ipmultipath, 0, 1);
+		if (oldval != ipmultipath)
+			atomic_inc_long(&rtgeneration);
+		NET_UNLOCK();
+		return (error);
 	default:
 		NET_LOCK();
 		error = sysctl_bounded_arr(ipctl_vars, nitems(ipctl_vars),

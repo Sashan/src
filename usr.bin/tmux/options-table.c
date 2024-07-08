@@ -1,4 +1,4 @@
-/* $OpenBSD: options-table.c,v 1.168 2023/09/01 13:48:54 nicm Exp $ */
+/* $OpenBSD: options-table.c,v 1.174 2024/05/14 09:32:37 nicm Exp $ */
 
 /*
  * Copyright (c) 2011 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -84,6 +84,9 @@ static const char *options_table_window_size_list[] = {
 };
 static const char *options_table_remain_on_exit_list[] = {
 	"off", "on", "failed", NULL
+};
+static const char *options_table_destroy_unattached_list[] = {
+	"off", "on", "keep-last", "keep-group", NULL
 };
 static const char *options_table_detach_on_destroy_list[] = {
 	"off", "on", "no-detached", "previous", "next", NULL
@@ -283,7 +286,7 @@ const struct options_table_entry options_table[] = {
 	  .scope = OPTIONS_TABLE_SERVER,
 	  .minimum = 0,
 	  .maximum = INT_MAX,
-	  .default_num = 500,
+	  .default_num = 10,
 	  .unit = "milliseconds",
 	  .text = "Time to wait before assuming a key is Escape."
 	},
@@ -484,11 +487,12 @@ const struct options_table_entry options_table[] = {
 	},
 
 	{ .name = "destroy-unattached",
-	  .type = OPTIONS_TABLE_FLAG,
+	  .type = OPTIONS_TABLE_CHOICE,
 	  .scope = OPTIONS_TABLE_SESSION,
+	  .choices = options_table_destroy_unattached_list,
 	  .default_num = 0,
 	  .text = "Whether to destroy sessions when they have no attached "
-		  "clients."
+		  "clients, or keep the last session whether in the group."
 	},
 
 	{ .name = "detach-on-destroy",
@@ -870,6 +874,14 @@ const struct options_table_entry options_table[] = {
 	  .default_num = 0,
 	  .text = "Whether applications are allowed to use the escape sequence "
 		  "to rename windows."
+	},
+
+	{ .name = "allow-set-title",
+	  .type = OPTIONS_TABLE_FLAG,
+	  .scope = OPTIONS_TABLE_WINDOW|OPTIONS_TABLE_PANE,
+	  .default_num = 1,
+	  .text = "Whether applications are allowed to use the escape sequence "
+		  "to set the pane title."
 	},
 
 	{ .name = "alternate-screen",
@@ -1314,6 +1326,7 @@ const struct options_table_entry options_table[] = {
 	OPTIONS_TABLE_HOOK("client-focus-out", ""),
 	OPTIONS_TABLE_HOOK("client-resized", ""),
 	OPTIONS_TABLE_HOOK("client-session-changed", ""),
+	OPTIONS_TABLE_HOOK("command-error", ""),
 	OPTIONS_TABLE_PANE_HOOK("pane-died", ""),
 	OPTIONS_TABLE_PANE_HOOK("pane-exited", ""),
 	OPTIONS_TABLE_PANE_HOOK("pane-focus-in", ""),

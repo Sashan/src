@@ -1,4 +1,4 @@
-/*	$OpenBSD: exec.h,v 1.52 2023/04/19 15:37:36 kettenis Exp $	*/
+/*	$OpenBSD: exec.h,v 1.54 2024/04/02 08:39:16 deraadt Exp $	*/
 /*	$NetBSD: exec.h,v 1.59 1996/02/09 18:25:09 christos Exp $	*/
 
 /*-
@@ -92,7 +92,6 @@ struct exec_vmcmd {
 #define VMCMD_RELATIVE  0x0001  /* ev_addr is relative to base entry */
 #define VMCMD_BASE      0x0002  /* marks a base entry */
 #define VMCMD_STACK     0x0004  /* create with UVM_FLAG_STACK */
-#define VMCMD_SYSCALL   0x0008  /* create with UVM_FLAG_SYSCALL */
 #define VMCMD_IMMUTABLE	0x0010  /* create with UVM_ET_IMMUTABLE */
 #define VMCMD_TEXTREL	0x0020  /* terrible binary contains terrible textrel */
 };
@@ -131,6 +130,9 @@ struct exec_package {
 	struct	elf_args *ep_args;	/* ELF info */
 	void	*ep_auxinfo;		/* userspace auxinfo address */
 	char	*ep_interp;		/* name of interpreter if any */
+	vaddr_t	ep_pinstart, ep_pinend;	/* executable region */
+	u_int	*ep_pins;		/* array of system call offsets */
+	int	ep_npins;		/* entries in array */
 };
 #define	EXEC_INDIR	0x0001		/* script handling already done */
 #define	EXEC_HASFD	0x0002		/* holding a shell script */

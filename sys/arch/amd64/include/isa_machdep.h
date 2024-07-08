@@ -1,4 +1,4 @@
-/*	$OpenBSD: isa_machdep.h,v 1.9 2008/12/11 17:07:14 oga Exp $	*/
+/*	$OpenBSD: isa_machdep.h,v 1.11 2024/05/22 05:51:49 jsg Exp $	*/
 /*	$NetBSD: isa_machdep.h,v 1.2 2003/05/09 23:51:28 fvdl Exp $	*/
 
 /*-
@@ -107,17 +107,8 @@ int	isa_intr_alloc(isa_chipset_tag_t, int, int, int *);
 void	*isa_intr_establish(isa_chipset_tag_t ic, int irq, int type,
 	    int level, int (*ih_fun)(void *), void *ih_arg, char *);
 void	isa_intr_disestablish(isa_chipset_tag_t ic, void *handler);
-int	isa_mem_alloc(bus_space_tag_t, bus_size_t, bus_size_t,
-	    bus_addr_t, int, bus_addr_t *, bus_space_handle_t *);
-void	isa_mem_free(bus_space_tag_t, bus_space_handle_t, bus_size_t);
 
 int isa_intr_check(isa_chipset_tag_t, int, int);
-
-/*
- * for ACPI code
- */
-
-void	isa_reinit_irq(void);
 
 /*
  * ALL OF THE FOLLOWING ARE MACHINE-DEPENDENT, AND SHOULD NOT BE USED
@@ -148,36 +139,6 @@ struct isa_dma_cookie {
 #define	ID_MIGHT_NEED_BOUNCE	0x01	/* map could need bounce buffers */
 #define	ID_HAS_BOUNCE		0x02	/* map currently has bounce buffers */
 #define	ID_IS_BOUNCING		0x04	/* map is bouncing current xfer */
-
-
-
-/*
- * XXX Various seemingly PC-specific constants, some of which may be
- * unnecessary anyway.
- */
-
-/*
- * RAM Physical Address Space (ignoring the above mentioned "hole")
- */
-#define	RAM_BEGIN	0x0000000	/* Start of RAM Memory */
-#define	RAM_END		0x1000000	/* End of RAM Memory */
-#define	RAM_SIZE	(RAM_END - RAM_BEGIN)
-
-/*
- * Oddball Physical Memory Addresses
- */
-#define	COMPAQ_RAMRELOC	0x80c00000	/* Compaq RAM relocation/diag */
-#define	COMPAQ_RAMSETUP	0x80c00002	/* Compaq RAM setup */
-#define	WEITEK_FPU	0xC0000000	/* WTL 2167 */
-#define	CYRIX_EMC	0xC0000000	/* Cyrix EMC */
-
-/*
- * stuff that used to be in pccons.c
- */
-#define	MONO_BASE	0x3B4
-#define	MONO_BUF	0xB0000
-#define	CGA_BASE	0x3D4
-#define	CGA_BUF		0xB8000
 
 /*
  * Variables and macros to deal with the ISA I/O hole.

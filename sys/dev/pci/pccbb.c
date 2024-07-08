@@ -1,4 +1,4 @@
-/*	$OpenBSD: pccbb.c,v 1.103 2022/03/11 18:00:51 mpi Exp $	*/
+/*	$OpenBSD: pccbb.c,v 1.105 2024/05/24 06:02:58 jsg Exp $	*/
 /*	$NetBSD: pccbb.c,v 1.96 2004/03/28 09:49:31 nakayama Exp $	*/
 
 /*
@@ -40,10 +40,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/kernel.h>
 #include <sys/evcount.h>
-#include <sys/ioctl.h>
-#include <sys/syslog.h>
 #include <sys/device.h>
 #include <sys/malloc.h>
 #include <sys/task.h>
@@ -106,7 +103,6 @@ void	pccbb_pcmcia_attach_setup(struct pccbb_softc *,
 #if 0
 void	pccbb_pcmcia_attach_card(struct pcic_handle *);
 void	pccbb_pcmcia_detach_card(struct pcic_handle *, int);
-void	pccbb_pcmcia_deactivate_card(struct pcic_handle *);
 #endif
 
 int	pccbb_ctrl(cardbus_chipset_tag_t, int);
@@ -166,7 +162,6 @@ int	pccbb_winlist_delete(struct pccbb_win_chain_head *,
     bus_space_handle_t, bus_size_t);
 void	pccbb_winset(bus_addr_t align, struct pccbb_softc *,
     bus_space_tag_t);
-void	pccbb_winlist_show(struct pccbb_win_chain *);
 
 /* for config_defer */
 void	pccbb_pci_callback(struct device *);

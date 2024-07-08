@@ -1,4 +1,4 @@
-/*	$OpenBSD: cn30xxsmi.c,v 1.11 2022/12/28 01:39:21 yasuoka Exp $	*/
+/*	$OpenBSD: cn30xxsmi.c,v 1.13 2024/07/06 06:15:17 landry Exp $	*/
 
 /*
  * Copyright (c) 2007 Internet Initiative Japan, Inc.
@@ -41,8 +41,6 @@
 
 int	cn30xxsmi_match(struct device *, void *, void *);
 void	cn30xxsmi_attach(struct device *, struct device *, void *);
-
-void	cn30xxsmi_enable(struct cn30xxsmi_softc *);
 
 const struct cfattach octsmi_ca = {
 	sizeof(struct cn30xxsmi_softc), cn30xxsmi_match, cn30xxsmi_attach
@@ -199,6 +197,10 @@ cn30xxsmi_get_phy(int phandle, int port, struct cn30xxsmi_softc **psmi,
 			reg = nutm25_phys[port];
 			break;
 		case BOARD_UBIQUITI_E100:
+			/* XXX Skip the switch port on ERPoe-5.
+			 * XXX There is no driver for it. */
+			if (port > 1 && octeon_boot_info->board_rev_major == 1)
+				return ENOENT;
 		case BOARD_UBIQUITI_E120:
 			if (port > 2)
 				return ENOENT;

@@ -165,6 +165,7 @@ $code=<<___;
 .type	gcm_gmult_4bit,\@function,2
 .align	16
 gcm_gmult_4bit:
+	_CET_ENDBR
 	push	%rbx
 	push	%rbp		# %rbp and %r12 are pushed exclusively in
 	push	%r12		# order to reuse Win64 exception handler...
@@ -195,6 +196,7 @@ $code.=<<___;
 .type	gcm_ghash_4bit,\@function,4
 .align	16
 gcm_ghash_4bit:
+	_CET_ENDBR
 	push	%rbx
 	push	%rbp
 	push	%r12
@@ -285,7 +287,7 @@ $code.=".align	16\n.Louter_loop:\n";
 	    &shr	($Zlo,8);
 
 	    &movz	($rem[0],&LB($rem[0]));
-	    &mov	($dat,"$j($Xi)")			if (--$j%4==0);
+	    &mov	($dat,"$j($Xi)")			if (--$j%4==0 && $j>=0);
 	    &shr	($Zhi,8);
 
 	    &xor	($Zlo,"-128($Hshr4,$nhi[0],8)");
@@ -412,7 +414,7 @@ $code.=<<___;
 .type	gcm_init_clmul,\@abi-omnipotent
 .align	16
 gcm_init_clmul:
-	endbr64
+	_CET_ENDBR
 	movdqu		($Xip),$Hkey
 	pshufd		\$0b01001110,$Hkey,$Hkey	# dword swap
 
@@ -450,7 +452,7 @@ $code.=<<___;
 .type	gcm_gmult_clmul,\@abi-omnipotent
 .align	16
 gcm_gmult_clmul:
-	endbr64
+	_CET_ENDBR
 	movdqu		($Xip),$Xi
 	movdqa		.Lbswap_mask(%rip),$T3
 	movdqu		($Htbl),$Hkey
@@ -478,7 +480,7 @@ $code.=<<___;
 .type	gcm_ghash_clmul,\@abi-omnipotent
 .align	16
 gcm_ghash_clmul:
-	endbr64
+	_CET_ENDBR
 ___
 $code.=<<___ if ($win64);
 .LSEH_begin_gcm_ghash_clmul:
@@ -689,7 +691,7 @@ $code.=<<___;
 .type	se_handler,\@abi-omnipotent
 .align	16
 se_handler:
-	endbr64
+	_CET_ENDBR
 	push	%rsi
 	push	%rdi
 	push	%rbx

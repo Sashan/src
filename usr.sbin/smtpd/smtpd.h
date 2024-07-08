@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtpd.h,v 1.680 2024/01/03 08:11:15 op Exp $	*/
+/*	$OpenBSD: smtpd.h,v 1.686 2024/06/02 23:26:39 jsg Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -55,7 +55,7 @@
 #define SMTPD_QUEUE_EXPIRY	 (4 * 24 * 60 * 60)
 #define SMTPD_SOCKET		 "/var/run/smtpd.sock"
 #define	SMTPD_NAME		 "OpenSMTPD"
-#define	SMTPD_VERSION		 "7.4.0"
+#define	SMTPD_VERSION		 "7.5.0"
 #define SMTPD_SESSION_TIMEOUT	 300
 #define SMTPD_BACKLOG		 5
 
@@ -356,6 +356,7 @@ struct table {
 	enum table_type			 t_type;
 	char				 t_config[PATH_MAX];
 
+	unsigned int			 t_services;
 	void				*t_handle;
 	struct table_backend		*t_backend;
 };
@@ -428,6 +429,7 @@ struct expandnode {
 	enum expand_type	type;
 	int			sameuser;
 	int			realuser;
+	uid_t			realuser_uid;
 	int			forwarded;
 	struct rule	       *rule;
 	struct expandnode      *parent;
@@ -1259,11 +1261,6 @@ struct rule {
 /* aliases.c */
 int aliases_get(struct expand *, const char *);
 int aliases_virtual_get(struct expand *, const struct mailaddr *);
-int alias_parse(struct expandnode *, const char *);
-
-
-/* auth.c */
-struct auth_backend *auth_backend_lookup(enum auth_type);
 
 
 /* bounce.c */
@@ -1400,7 +1397,6 @@ void lka_filter_end(uint64_t);
 void lka_filter_protocol(uint64_t, enum filter_phase, const char *);
 void lka_filter_data_begin(uint64_t);
 void lka_filter_data_end(uint64_t);
-int lka_filter_response(uint64_t, const char *, const char *);
 
 
 /* lka_session.c */
@@ -1607,19 +1603,13 @@ int smtp_session(struct listener *, int, const struct sockaddr_storage *,
 void smtp_session_imsg(struct mproc *, struct imsg *);
 
 
-/* smtpf_session.c */
-int smtpf_session(struct listener *, int, const struct sockaddr_storage *,
-    const char *);
-void smtpf_session_imsg(struct mproc *, struct imsg *);
-
-
 /* smtpd.c */
 void imsg_dispatch(struct mproc *, struct imsg *);
 const char *proc_name(enum smtp_proc_type);
 const char *proc_title(enum smtp_proc_type);
 const char *imsg_to_str(int);
 void log_imsg(int, int, struct imsg *);
-int fork_proc_backend(const char *, const char *, const char *);
+int fork_proc_backend(const char *, const char *, const char *, int);
 
 
 /* srs.c */
@@ -1639,6 +1629,8 @@ struct stat_value *stat_timespec(struct timespec *);
 
 
 /* table.c */
+const char *table_service_name(enum table_service);
+int table_service_from_name(const char *);
 struct table *table_find(struct smtpd *, const char *);
 struct table *table_create(struct smtpd *, const char *, const char *,
     const char *);
@@ -1666,7 +1658,6 @@ void	table_close_all(struct smtpd *);
 
 
 /* to.c */
-int email_to_mailaddr(struct mailaddr *, char *);
 int text_to_netaddr(struct netaddr *, const char *);
 int text_to_mailaddr(struct mailaddr *, const char *);
 int text_to_relayhost(struct relayhost *, const char *);
@@ -1710,7 +1701,6 @@ int  lowercase(char *, const char *, size_t);
 void xlowercase(char *, const char *, size_t);
 int  uppercase(char *, const char *, size_t);
 uint64_t generate_uid(void);
-int availdesc(void);
 int ckdir(const char *, mode_t, uid_t, gid_t, int);
 int rmtree(char *, int);
 int mvpurge(char *, char *);
@@ -1726,8 +1716,6 @@ char *strip(char *);
 int io_xprint(struct io *, const char *);
 int io_xprintf(struct io *, const char *, ...)
     __attribute__((__format__ (printf, 2, 3)));
-void log_envelope(const struct envelope *, const char *, const char *,
-    const char *);
 int session_socket_error(int);
 int getmailname(char *, size_t);
 int base64_encode(unsigned char const *, size_t, char *, size_t);
@@ -1739,6 +1727,9 @@ void log_trace_verbose(int);
 void log_trace0(const char *, ...)
     __attribute__((format (printf, 1, 2)));
 #define log_trace(m, ...)  do { if (tracing & (m)) log_trace0(__VA_ARGS__); } while (0)
+
+int parse_table_line(FILE *, char **, size_t *, int *,
+    char **, char **, int *);
 
 /* waitq.c */
 int  waitq_wait(void *, void (*)(void *, void *, void *), void *);

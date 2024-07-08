@@ -1,4 +1,4 @@
-#	$OpenBSD: files,v 1.729 2024/01/01 18:25:50 kettenis Exp $
+#	$OpenBSD: files,v 1.733 2024/06/12 12:54:54 bluhm Exp $
 #	$NetBSD: files,v 1.87 1996/05/19 17:17:50 jonathan Exp $
 
 #	@(#)files.newconf	7.5 (Berkeley) 5/10/93
@@ -467,7 +467,7 @@ file	dev/usb/xhci.c			xhci	needs-flag
 
 # AMD Cryptographic Co-processor
 device	ccp
-file	dev/ic/ccp.c			ccp
+file	dev/ic/ccp.c			ccp	needs-flag
 
 # SDHC SD/MMC controller
 define	sdhc
@@ -551,8 +551,7 @@ device	qciic: i2cbus
 
 # UFS HC
 device	ufshci: scsi
-#device	ufshci
-file	dev/ic/ufshci.c			ufshci
+file	dev/ic/ufshci.c			ufshci needs-flag
 
 # legitimate pseudo-devices
 pseudo-device vnd: disk
@@ -960,11 +959,9 @@ file ufs/ffs/ffs_alloc.c		ffs | mfs
 file ufs/ffs/ffs_balloc.c		ffs | mfs
 file ufs/ffs/ffs_inode.c		ffs | mfs
 file ufs/ffs/ffs_subr.c			ffs | mfs
-file ufs/ffs/ffs_softdep_stub.c		ffs | mfs
 file ufs/ffs/ffs_tables.c		ffs | mfs
 file ufs/ffs/ffs_vfsops.c		ffs | mfs
 file ufs/ffs/ffs_vnops.c		ffs | mfs
-file ufs/ffs/ffs_softdep.c		ffs_softupdates
 file ufs/mfs/mfs_vfsops.c		mfs
 file ufs/mfs/mfs_vnops.c		mfs
 file ufs/ufs/ufs_bmap.c			ffs | mfs | ext2fs
@@ -1083,8 +1080,6 @@ file lib/libkern/arch/${MACHINE_ARCH}/strnlen.S | lib/libkern/strnlen.c
 file lib/libkern/arch/${MACHINE_ARCH}/strnstr.S | lib/libkern/strnstr.c
 file lib/libkern/arch/${MACHINE_ARCH}/scanc.S | lib/libkern/scanc.c
 file lib/libkern/arch/${MACHINE_ARCH}/skpc.S | lib/libkern/skpc.c
-file lib/libkern/arch/${MACHINE_ARCH}/htonl.S | lib/libkern/htonl.c
-file lib/libkern/arch/${MACHINE_ARCH}/htons.S | lib/libkern/htons.c
 file lib/libkern/arch/${MACHINE_ARCH}/strncasecmp.S | lib/libkern/strncasecmp.c
 
 file lib/libz/adler32.c			ppp_deflate | ipsec | crypto | ddb |

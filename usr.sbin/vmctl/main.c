@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.75 2023/04/28 19:46:41 dv Exp $	*/
+/*	$OpenBSD: main.c,v 1.78 2024/05/18 06:45:00 jsg Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -45,11 +45,10 @@
 static const char	*socket_name = SOCKET_NAME;
 static int		 ctl_sock = -1;
 static int		 tty_autoconnect = 0;
+int			 stat_rflag;
 
 __dead void	 usage(void);
 __dead void	 ctl_usage(struct ctl_command *);
-
-int		 vmm_action(struct parse_result *);
 
 int		 ctl_console(struct parse_result *, int, char *[]);
 int		 ctl_convert(const char *, const char *, int, size_t);
@@ -82,7 +81,7 @@ struct ctl_command ctl_commands[] = {
 	{ "start",	CMD_START,	ctl_start,
 	    "[-cL] [-B device] [-b path] [-d disk] [-i count]\n"
 	    "\t\t[-m size] [-n switch] [-r path] [-t name] id | name",	1},
-	{ "status",	CMD_STATUS,	ctl_status,	"[id]" },
+	{ "status",	CMD_STATUS,	ctl_status,	"[-r] [id]" },
 	{ "stop",	CMD_STOP,	ctl_stop,	"[-fw] [id | -a]" },
 	{ "unpause",	CMD_UNPAUSE,	ctl_unpause,	"id" },
 	{ "wait",	CMD_WAITFOR,	ctl_waitfor,	"id" },
@@ -648,8 +647,6 @@ ctl_convert(const char *srcfile, const char *dstfile, int dsttype, size_t dstsiz
 
 	if (dstsize == 0)
 		dstsize = src.size;
-	else
-		dstsize *= 1048576;
 	if (dstsize < (size_t)src.size) {
 		errstr = "size cannot be smaller than input disk size";
 		goto done;
@@ -746,10 +743,25 @@ ctl_convert(const char *srcfile, const char *dstfile, int dsttype, size_t dstsiz
 int
 ctl_status(struct parse_result *res, int argc, char *argv[])
 {
-	if (argc == 2) {
-		if (parse_vmid(res, argv[1], 0) == -1)
-			errx(1, "invalid id: %s", argv[1]);
-	} else if (argc > 2)
+	char ch;
+
+	while ((ch = getopt(argc, argv, "r")) != -1) {
+		switch (ch) {
+		case 'r':
+			stat_rflag = 1;
+			break;
+		default:
+			ctl_usage(res->ctl);
+			/* NOTREACHED */
+		}
+	}
+	argc -= optind;
+	argv += optind;
+
+	if (argc == 1) {
+		if (parse_vmid(res, argv[0], 0) == -1)
+			errx(1, "invalid id: %s", argv[0]);
+	} else if (argc > 1)
 		ctl_usage(res->ctl);
 
 	return (vmmaction(res));

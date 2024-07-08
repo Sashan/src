@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_usrreq.c,v 1.228 2024/01/11 13:49:49 bluhm Exp $	*/
+/*	$OpenBSD: tcp_usrreq.c,v 1.231 2024/04/12 16:07:09 bluhm Exp $	*/
 /*	$NetBSD: tcp_usrreq.c,v 1.20 1996/02/13 23:44:16 christos Exp $	*/
 
 /*
@@ -90,6 +90,7 @@
 #include <netinet/ip.h>
 #include <netinet/in_pcb.h>
 #include <netinet/ip_var.h>
+#include <netinet6/ip6_var.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_fsm.h>
 #include <netinet/tcp_seq.h>
@@ -170,6 +171,9 @@ const struct sysctl_bounded_args tcpctl_vars[] = {
 };
 
 struct	inpcbtable tcbtable;
+#ifdef INET6
+struct	inpcbtable tcb6table;
+#endif
 
 int	tcp_fill_info(struct tcpcb *, struct socket *, struct mbuf *);
 int	tcp_ident(void *, size_t *, void *, size_t, int);
@@ -316,7 +320,7 @@ tcp_ctloutput(int op, struct socket *so, int level, int optname,
 		if (ISSET(inp->inp_flags, INP_IPV6))
 			error = ip6_ctloutput(op, so, level, optname, m);
 		else
-#endif /* INET6 */
+#endif
 			error = ip_ctloutput(op, so, level, optname, m);
 		return (error);
 	}
@@ -451,6 +455,7 @@ tcp_ctloutput(int op, struct socket *so, int level, int optname,
 int
 tcp_attach(struct socket *so, int proto, int wait)
 {
+	struct inpcbtable *table;
 	struct tcpcb *tp;
 	struct inpcb *inp;
 	int error;
@@ -466,7 +471,13 @@ tcp_attach(struct socket *so, int proto, int wait)
 	}
 
 	NET_ASSERT_LOCKED();
-	error = in_pcballoc(so, &tcbtable, wait);
+#ifdef INET6
+	if (so->so_proto->pr_domain->dom_family == PF_INET6)
+		table = &tcb6table;
+	else
+#endif
+		table = &tcbtable;
+	error = in_pcballoc(so, table, wait);
 	if (error)
 		return (error);
 	inp = sotoinpcb(so);
@@ -481,14 +492,11 @@ tcp_attach(struct socket *so, int proto, int wait)
 	}
 	tp->t_state = TCPS_CLOSED;
 #ifdef INET6
-	/* we disallow IPv4 mapped address completely. */
-	if (inp->inp_flags & INP_IPV6)
+	if (ISSET(inp->inp_flags, INP_IPV6))
 		tp->pf = PF_INET6;
 	else
-		tp->pf = PF_INET;
-#else
-	tp->pf = PF_INET;
 #endif
+		tp->pf = PF_INET;
 	if ((so->so_options & SO_LINGER) && so->so_linger == 0)
 		so->so_linger = TCP_LINGERTIME;
 
@@ -502,7 +510,7 @@ tcp_detach(struct socket *so)
 {
 	struct inpcb *inp;
 	struct tcpcb *otp = NULL, *tp;
-	int error = 0;
+	int error;
 	short ostate;
 
 	soassertlocked(so);
@@ -526,7 +534,7 @@ tcp_detach(struct socket *so)
 
 	if (otp)
 		tcp_trace(TA_USER, ostate, tp, otp, NULL, PRU_DETACH, 0);
-	return (error);
+	return (0);
 }
 
 /*
@@ -618,7 +626,7 @@ tcp_connect(struct socket *so, struct mbuf *nam)
 	}
 
 #ifdef INET6
-	if (inp->inp_flags & INP_IPV6) {
+	if (ISSET(inp->inp_flags, INP_IPV6)) {
 		struct sockaddr_in6 *sin6;
 
 		if ((error = in6_nam2sin6(nam, &sin6)))
@@ -629,7 +637,7 @@ tcp_connect(struct socket *so, struct mbuf *nam)
 			goto out;
 		}
 	} else
-#endif /* INET6 */
+#endif
 	{
 		struct sockaddr_in *sin;
 
@@ -685,26 +693,17 @@ tcp_accept(struct socket *so, struct mbuf *nam)
 	struct inpcb *inp;
 	struct tcpcb *tp;
 	int error;
-	short ostate;
 
 	soassertlocked(so);
 
 	if ((error = tcp_sogetpcb(so, &inp, &tp)))
 		return (error);
 
-	if (so->so_options & SO_DEBUG)
-		ostate = tp->t_state;
-
-#ifdef INET6
-	if (inp->inp_flags & INP_IPV6)
-		in6_setpeeraddr(inp, nam);
-	else
-#endif
-		in_setpeeraddr(inp, nam);
+	in_setpeeraddr(inp, nam);
 
 	if (so->so_options & SO_DEBUG)
-		tcp_trace(TA_USER, ostate, tp, tp, NULL, PRU_ACCEPT, 0);
-	return (error);
+		tcp_trace(TA_USER, tp->t_state, tp, tp, NULL, PRU_ACCEPT, 0);
+	return (0);
 }
 
 /*
@@ -994,12 +993,7 @@ tcp_sockaddr(struct socket *so, struct mbuf *nam)
 	if ((error = tcp_sogetpcb(so, &inp, &tp)))
 		return (error);
 
-#ifdef INET6
-	if (inp->inp_flags & INP_IPV6)
-		in6_setsockaddr(inp, nam);
-	else
-#endif
-		in_setsockaddr(inp, nam);
+	in_setsockaddr(inp, nam);
 
 	if (so->so_options & SO_DEBUG)
 		tcp_trace(TA_USER, tp->t_state, tp, tp, NULL,
@@ -1019,16 +1013,10 @@ tcp_peeraddr(struct socket *so, struct mbuf *nam)
 	if ((error = tcp_sogetpcb(so, &inp, &tp)))
 		return (error);
 
-#ifdef INET6
-	if (inp->inp_flags & INP_IPV6)
-		in6_setpeeraddr(inp, nam);
-	else
-#endif
-		in_setpeeraddr(inp, nam);
+	in_setpeeraddr(inp, nam);
 
 	if (so->so_options & SO_DEBUG)
-		tcp_trace(TA_USER, tp->t_state, tp, tp, NULL,
-		    PRU_PEERADDR, 0);
+		tcp_trace(TA_USER, tp->t_state, tp, tp, NULL, PRU_PEERADDR, 0);
 	return (0);
 }
 
@@ -1167,7 +1155,7 @@ tcp_ident(void *oldp, size_t *oldlenp, void *newp, size_t newlen, int dodrop)
 	switch (tir.faddr.ss_family) {
 #ifdef INET6
 	case AF_INET6:
-		inp = in6_pcblookup(&tcbtable, &f6,
+		inp = in6_pcblookup(&tcb6table, &f6,
 		    fin6->sin6_port, &l6, lin6->sin6_port, tir.rdomain);
 		break;
 #endif
@@ -1194,7 +1182,7 @@ tcp_ident(void *oldp, size_t *oldlenp, void *newp, size_t newlen, int dodrop)
 		switch (tir.faddr.ss_family) {
 #ifdef INET6
 		case AF_INET6:
-			inp = in6_pcblookup_listen(&tcbtable,
+			inp = in6_pcblookup_listen(&tcb6table,
 			    &l6, lin6->sin6_port, NULL, tir.rdomain);
 			break;
 #endif

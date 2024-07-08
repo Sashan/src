@@ -1,10 +1,13 @@
-#	$OpenBSD: Makefile.inc,v 1.89 2024/01/11 01:45:36 djm Exp $
+#	$OpenBSD: Makefile.inc,v 1.94 2024/06/17 08:30:29 djm Exp $
 
 .include <bsd.own.mk>
 
 CFLAGS+=	-I${.CURDIR}/..
 .if ${MACHINE} != "hppa"
 CFLAGS+=	-fstack-protector-all
+.endif
+.if ${MACHINE} == "amd64"
+CFLAGS+=	-fret-clean
 .endif
 
 CDIAGFLAGS=	-Wall
@@ -23,9 +26,9 @@ CDIAGFLAGS+=	-Widiomatic-parentheses -Wparentheses
 .if ${COMPILER_VERSION:L} != "gcc3"
 CDIAGFLAGS+=	-Wstrict-aliasing=2
 CDIAGFLAGS+=	-Wold-style-definition
+CDIAGFLAGS+=	-Werror
 .endif
 
-#CDIAGFLAGS+=	-Werror
 #CDIAGFLAGS+=	-fno-common
 #DEBUG=-g
 #INSTALL_STRIP=
@@ -34,7 +37,7 @@ WARNINGS=yes
 
 OPENSSL?=	yes
 ZLIB?=		yes
-DSAKEY?=	yes
+DSAKEY?=	no
 
 .if (${OPENSSL:L} == "yes")
 CFLAGS+=	-DWITH_OPENSSL
@@ -111,14 +114,17 @@ SRCS_KEYP+=	atomicio.c
 SRCS_KRL+=	bitmap.c
 SRCS_KRL+=	krl.c
 
+SRCS_MAC+=	mac.c
+SRCS_MAC+=	hmac.c
+SRCS_MAC+=	umac.c
+SRCS_MAC+=	umac128.c
+
 SRCS_PKT+=	canohost.c
 SRCS_PKT+=	dispatch.c
-SRCS_PKT+=	hmac.c
 SRCS_PKT+=	kex.c
-SRCS_PKT+=	mac.c
+SRCS_PKT+=	kex-names.c
 SRCS_PKT+=	packet.c
-SRCS_PKT+=	umac.c
-SRCS_PKT+=	umac128.c
+SRCS_PKT+=	${SRCS_MAC}
 
 SRCS_PROT+=	channels.c
 SRCS_PROT+=	monitor_fdpass.c

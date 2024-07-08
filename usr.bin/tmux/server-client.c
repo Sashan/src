@@ -1,4 +1,4 @@
-/* $OpenBSD: server-client.c,v 1.403 2023/12/27 20:23:59 nicm Exp $ */
+/* $OpenBSD: server-client.c,v 1.405 2024/04/10 07:29:15 nicm Exp $ */
 
 /*
  * Copyright (c) 2009 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -626,6 +626,8 @@ server_client_check_mouse(struct client *c, struct key_event *event)
 	} else if (MOUSE_RELEASE(m->b)) {
 		type = UP;
 		x = m->x, y = m->y, b = m->lb;
+		if (m->sgr_type == 'm')
+			b = m->sgr_b;
 		log_debug("up at %u,%u", x, y);
 	} else {
 		if (c->flags & CLIENT_DOUBLECLICK) {
@@ -646,7 +648,10 @@ server_client_check_mouse(struct client *c, struct key_event *event)
 				log_debug("triple-click at %u,%u", x, y);
 				goto have_event;
 			}
-		} else {
+		}
+
+		/* DOWN is the only remaining event type. */
+		if (type == NOTYPE) {
 			type = DOWN;
 			x = m->x, y = m->y, b = m->b;
 			log_debug("down at %u,%u", x, y);
@@ -3002,14 +3007,14 @@ server_client_dispatch_identify(struct client *c, struct imsg *imsg)
 	case MSG_IDENTIFY_STDIN:
 		if (datalen != 0)
 			fatalx("bad MSG_IDENTIFY_STDIN size");
-		c->fd = imsg->fd;
-		log_debug("client %p IDENTIFY_STDIN %d", c, imsg->fd);
+		c->fd = imsg_get_fd(imsg);
+		log_debug("client %p IDENTIFY_STDIN %d", c, c->fd);
 		break;
 	case MSG_IDENTIFY_STDOUT:
 		if (datalen != 0)
 			fatalx("bad MSG_IDENTIFY_STDOUT size");
-		c->out_fd = imsg->fd;
-		log_debug("client %p IDENTIFY_STDOUT %d", c, imsg->fd);
+		c->out_fd = imsg_get_fd(imsg);
+		log_debug("client %p IDENTIFY_STDOUT %d", c, c->out_fd);
 		break;
 	case MSG_IDENTIFY_ENVIRON:
 		if (datalen == 0 || data[datalen - 1] != '\0')

@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.73 2023/07/25 18:16:20 cheloha Exp $ */
+/*	$OpenBSD: cpu.h,v 1.80 2024/06/20 10:46:11 aoyama Exp $ */
 /*
  * Copyright (c) 1996 Nivas Madhur
  * Copyright (c) 1992, 1993
@@ -64,6 +64,7 @@
 #include <sys/queue.h>
 #include <sys/sched.h>
 #include <sys/srp.h>
+#include <uvm/uvm_percpu.h>
 
 #if defined(MULTIPROCESSOR)
 #if !defined(MAX_CPUS) || MAX_CPUS > 4
@@ -171,15 +172,17 @@ struct cpu_info {
 
 #if defined(MULTIPROCESSOR)
 	struct srp_hazard ci_srp_hazards[SRP_HAZARD_NUM];
+#define	__HAVE_UVM_PERCPU
+	struct uvm_pmr_cache ci_uvm;		/* [o] page cache */
 #endif
 #ifdef DIAGNOSTIC
 	int	ci_mutex_level;
 #endif
 #ifdef GPROF
 	struct gmonparam *ci_gmon;
-	struct clockintr *ci_gmonclock;
+	struct clockintr ci_gmonclock;
 #endif
-	struct clockintr_queue ci_queue;
+	struct clockqueue ci_queue;
 	char		 ci_panicbuf[512];
 };
 
@@ -208,7 +211,6 @@ curcpu(void)
 #define	CPU_IS_RUNNING(ci)	((ci)->ci_flags & CIF_ALIVE)
 
 void	cpu_boot_secondary_processors(void);
-__dead void cpu_emergency_disable(void);
 void	cpu_unidle(struct cpu_info *);
 void	m88k_send_ipi(int, cpuid_t);
 void	m88k_broadcast_ipi(int);
@@ -222,7 +224,7 @@ void	m88k_broadcast_ipi(int);
 
 #endif	/* MULTIPROCESSOR */
 
-#define CPU_BUSY_CYCLE()	do {} while (0)
+#define CPU_BUSY_CYCLE()	__asm volatile ("" ::: "memory")
 
 struct cpu_info *set_cpu_number(cpuid_t);
 
@@ -243,7 +245,6 @@ unsigned int cpu_rnd_messybits(void);
  * definitions of cpu-dependent requirements
  * referenced in generic code
  */
-#define	cpu_exec(p)		do { /* nothing */ } while (0)
 
 #define	cpu_idle_enter()	do { /* nothing */ } while (0)
 #define	cpu_idle_cycle()	do { /* nothing */ } while (0)
@@ -254,7 +255,7 @@ unsigned int cpu_rnd_messybits(void);
 #endif
 
 /*
- * Arguments to hardclock and gatherstats encapsulate the previous
+ * Arguments to clockintr_dispatch encapsulate the previous
  * machine state in an opaque clockframe. CLKF_INTR is only valid
  * if the process is in kernel mode. Clockframe is really trapframe,
  * so pointer to clockframe can be safely cast into a pointer to

@@ -1,4 +1,4 @@
-/*	$OpenBSD: growfs.c,v 1.55 2022/12/04 23:50:46 cheloha Exp $	*/
+/*	$OpenBSD: growfs.c,v 1.57 2024/04/23 13:34:50 jsg Exp $	*/
 /*
  * Copyright (c) 2000 Christoph Herrmann, Thomas-Henning von Kamptz
  * Copyright (c) 1980, 1989, 1993 The Regents of the University of California.
@@ -202,8 +202,6 @@ growfs(int fsi, int fso, unsigned int Nflag)
 	printf("\tusing %u cylinder groups of %.2fMB, %d blks, %u inodes.\n",
 	    sblock.fs_ncg, (float)sblock.fs_fpg * sblock.fs_fsize * B2MBFACTOR,
 	    sblock.fs_fpg / sblock.fs_frag, sblock.fs_ipg);
-	if (sblock.fs_flags & FS_DOSOFTDEP)
-		printf("\twith soft updates\n");
 #undef B2MBFACTOR
 
 	/*
@@ -282,9 +280,6 @@ growfs(int fsi, int fso, unsigned int Nflag)
 	sblock.fs_cgrotor = 0;
 	sblock.fs_state = 0;
 	memset(&sblock.fs_fsmnt, 0, sizeof(sblock.fs_fsmnt));
-	sblock.fs_flags &= FS_DOSOFTDEP;
-	if (sblock.fs_magic == FS_UFS1_MAGIC)
-		sblock.fs_ffs1_flags &= FS_DOSOFTDEP;
 
 	/*
 	 * XXX
@@ -989,7 +984,7 @@ updcsloc(time_t utime, int fsi, int fso, unsigned int Nflag)
 			    (d % sblock.fs_fpg) / sblock.fs_frag);
 			acg.cg_cs.cs_nbfree++;
 			sblock.fs_cstotal.cs_nbfree++;
-			 if (sblock.fs_contigsumsize > 0) {
+			if (sblock.fs_contigsumsize > 0) {
 				setbit(cg_clustersfree(&acg),
 				    (d % sblock.fs_fpg) / sblock.fs_frag);
 				/*
@@ -1901,7 +1896,7 @@ main(int argc, char **argv)
 		sblock.fs_ncyl = sblock.fs_size * NSPF(&sblock) / sblock.fs_spc;
 		if (sblock.fs_size * NSPF(&sblock) >
 		    sblock.fs_ncyl * sblock.fs_spc)
-		sblock.fs_ncyl++;
+			sblock.fs_ncyl++;
 	}
 	sblock.fs_ncg = howmany(sblock.fs_size, sblock.fs_fpg);
 	if ((ino_t)sblock.fs_ncg * sblock.fs_ipg > UINT_MAX)

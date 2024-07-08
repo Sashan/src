@@ -1,4 +1,4 @@
-/*	$OpenBSD: stdlib.h,v 1.18 2023/05/27 04:33:00 otto Exp $	*/
+/*	$OpenBSD: stdlib.h,v 1.20 2024/03/01 21:30:40 millert Exp $	*/
 /*	$NetBSD: stdlib.h,v 1.25 1995/12/27 21:19:08 jtc Exp $	*/
 
 /*-
@@ -38,6 +38,7 @@
 #include_next <stdlib.h>
 
 __BEGIN_HIDDEN_DECLS
+int	__mktemp4(char *, int, int, int (*)(const char *, int));
 char	*__findenv(const char *, int, int *);
 void	__atexit_register_cleanup(void (*)(void));
 __END_HIDDEN_DECLS
@@ -115,6 +116,7 @@ PROTO_STD_DEPRECATED(mbstowcs);
 PROTO_STD_DEPRECATED(mbtowc);
 PROTO_DEPRECATED(mergesort);
 PROTO_DEPRECATED(mkdtemp);
+PROTO_DEPRECATED(mkdtemps);
 PROTO_NORMAL(mkostemp);
 PROTO_DEPRECATED(mkostemps);
 PROTO_NORMAL(mkstemp);

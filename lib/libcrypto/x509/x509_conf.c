@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_conf.c,v 1.5 2023/02/16 08:38:17 tb Exp $ */
+/* $OpenBSD: x509_conf.c,v 1.18 2024/06/24 06:32:04 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 1999.
  */
@@ -70,7 +70,7 @@
 
 static int v3_check_critical(const char **value);
 static int v3_check_generic(const char **value);
-static X509_EXTENSION *do_ext_nconf(CONF *conf, X509V3_CTX *ctx, int ext_nid,
+static X509_EXTENSION *do_ext_nconf(CONF *conf, X509V3_CTX *ctx, int nid,
     int crit, const char *value);
 static X509_EXTENSION *v3_generic_extension(const char *ext, const char *value,
     int crit, int type, X509V3_CTX *ctx);
@@ -78,8 +78,8 @@ static char *conf_lhash_get_string(void *db, const char *section,
     const char *value);
 static STACK_OF(CONF_VALUE) *conf_lhash_get_section(void *db,
     const char *section);
-static X509_EXTENSION *do_ext_i2d(const X509V3_EXT_METHOD *method, int ext_nid,
-    int crit, void *ext_struc);
+static X509_EXTENSION *do_ext_i2d(const X509V3_EXT_METHOD *method, int nid,
+    int crit, void *ext_struct);
 static unsigned char *generic_asn1(const char *value, X509V3_CTX *ctx,
     long *ext_len);
 
@@ -109,7 +109,7 @@ LCRYPTO_ALIAS(X509V3_EXT_nconf);
 /* CONF *conf:  Config file    */
 /* char *value:  Value    */
 X509_EXTENSION *
-X509V3_EXT_nconf_nid(CONF *conf, X509V3_CTX *ctx, int ext_nid,
+X509V3_EXT_nconf_nid(CONF *conf, X509V3_CTX *ctx, int nid,
     const char *value)
 {
 	int crit;
@@ -117,27 +117,27 @@ X509V3_EXT_nconf_nid(CONF *conf, X509V3_CTX *ctx, int ext_nid,
 
 	crit = v3_check_critical(&value);
 	if ((ext_type = v3_check_generic(&value)))
-		return v3_generic_extension(OBJ_nid2sn(ext_nid),
+		return v3_generic_extension(OBJ_nid2sn(nid),
 		    value, crit, ext_type, ctx);
-	return do_ext_nconf(conf, ctx, ext_nid, crit, value);
+	return do_ext_nconf(conf, ctx, nid, crit, value);
 }
 LCRYPTO_ALIAS(X509V3_EXT_nconf_nid);
 
 /* CONF *conf:  Config file    */
 /* char *value:  Value    */
 static X509_EXTENSION *
-do_ext_nconf(CONF *conf, X509V3_CTX *ctx, int ext_nid, int crit,
+do_ext_nconf(CONF *conf, X509V3_CTX *ctx, int nid, int crit,
     const char *value)
 {
 	const X509V3_EXT_METHOD *method;
 	X509_EXTENSION *ext;
-	void *ext_struc;
+	void *ext_struct;
 
-	if (ext_nid == NID_undef) {
+	if (nid == NID_undef) {
 		X509V3error(X509V3_R_UNKNOWN_EXTENSION_NAME);
 		return NULL;
 	}
-	if (!(method = X509V3_EXT_get_nid(ext_nid))) {
+	if (!(method = X509V3_EXT_get_nid(nid))) {
 		X509V3error(X509V3_R_UNKNOWN_EXTENSION);
 		return NULL;
 	}
@@ -152,93 +152,97 @@ do_ext_nconf(CONF *conf, X509V3_CTX *ctx, int ext_nid, int crit,
 		if (sk_CONF_VALUE_num(nval) <= 0) {
 			X509V3error(X509V3_R_INVALID_EXTENSION_STRING);
 			ERR_asprintf_error_data("name=%s,section=%s",
-			    OBJ_nid2sn(ext_nid), value);
+			    OBJ_nid2sn(nid), value);
 			if (*value != '@')
 				sk_CONF_VALUE_pop_free(nval, X509V3_conf_free);
 			return NULL;
 		}
-		ext_struc = method->v2i(method, ctx, nval);
+		ext_struct = method->v2i(method, ctx, nval);
 		if (*value != '@')
 			sk_CONF_VALUE_pop_free(nval, X509V3_conf_free);
 	} else if (method->s2i) {
-		ext_struc = method->s2i(method, ctx, value);
+		ext_struct = method->s2i(method, ctx, value);
 	} else if (method->r2i) {
 		if (!ctx->db || !ctx->db_meth) {
 			X509V3error(X509V3_R_NO_CONFIG_DATABASE);
 			return NULL;
 		}
-		ext_struc = method->r2i(method, ctx, value);
+		ext_struct = method->r2i(method, ctx, value);
 	} else {
 		X509V3error(X509V3_R_EXTENSION_SETTING_NOT_SUPPORTED);
-		ERR_asprintf_error_data("name=%s", OBJ_nid2sn(ext_nid));
+		ERR_asprintf_error_data("name=%s", OBJ_nid2sn(nid));
 		return NULL;
 	}
-	if (ext_struc == NULL)
+	if (ext_struct == NULL)
 		return NULL;
 
-	ext = do_ext_i2d(method, ext_nid, crit, ext_struc);
+	ext = do_ext_i2d(method, nid, crit, ext_struct);
 	if (method->it)
-		ASN1_item_free(ext_struc, method->it);
+		ASN1_item_free(ext_struct, method->it);
 	else
-		method->ext_free(ext_struc);
+		method->ext_free(ext_struct);
 	return ext;
 }
 
 static X509_EXTENSION *
-do_ext_i2d(const X509V3_EXT_METHOD *method, int ext_nid, int crit,
-    void *ext_struc)
+do_ext_i2d(const X509V3_EXT_METHOD *method, int nid, int crit,
+    void *ext_struct)
 {
-	unsigned char *ext_der;
+	unsigned char *ext_der = NULL;
 	int ext_len;
 	ASN1_OCTET_STRING *ext_oct = NULL;
 	X509_EXTENSION *ext;
 
 	/* Convert internal representation to DER */
-	if (method->it) {
+	if (method->it != NULL) {
 		ext_der = NULL;
-		ext_len = ASN1_item_i2d(ext_struc, &ext_der,
-		    method->it);
+		ext_len = ASN1_item_i2d(ext_struct, &ext_der, method->it);
 		if (ext_len < 0)
-			goto merr;
+			goto err;
 	} else {
 		unsigned char *p;
-		ext_len = method->i2d(ext_struc, NULL);
-		if (!(ext_der = malloc(ext_len)))
-			goto merr;
-		p = ext_der;
-		method->i2d(ext_struc, &p);
-	}
-	if (!(ext_oct = ASN1_OCTET_STRING_new()))
-		goto merr;
-	ext_oct->data = ext_der;
-	ext_oct->length = ext_len;
 
-	ext = X509_EXTENSION_create_by_NID(NULL, ext_nid, crit, ext_oct);
-	if (!ext)
-		goto merr;
+		if ((ext_len = method->i2d(ext_struct, NULL)) <= 0)
+			goto err;
+		if ((ext_der = calloc(1, ext_len)) == NULL)
+			goto err;
+		p = ext_der;
+		if (method->i2d(ext_struct, &p) != ext_len)
+			goto err;
+	}
+	if ((ext_oct = ASN1_OCTET_STRING_new()) == NULL)
+		goto err;
+	ASN1_STRING_set0(ext_oct, ext_der, ext_len);
+	ext_der = NULL;
+	ext_len = 0;
+
+	ext = X509_EXTENSION_create_by_NID(NULL, nid, crit, ext_oct);
+	if (ext == NULL)
+		goto err;
 	ASN1_OCTET_STRING_free(ext_oct);
 
 	return ext;
 
-merr:
+ err:
+	free(ext_der);
 	ASN1_OCTET_STRING_free(ext_oct);
 	X509V3error(ERR_R_MALLOC_FAILURE);
-	return NULL;
 
+	return NULL;
 }
 
 /* Given an internal structure, nid and critical flag create an extension */
 
 X509_EXTENSION *
-X509V3_EXT_i2d(int ext_nid, int crit, void *ext_struc)
+X509V3_EXT_i2d(int nid, int crit, void *ext_struct)
 {
 	const X509V3_EXT_METHOD *method;
 
-	if (!(method = X509V3_EXT_get_nid(ext_nid))) {
+	if (!(method = X509V3_EXT_get_nid(nid))) {
 		X509V3error(X509V3_R_UNKNOWN_EXTENSION);
 		return NULL;
 	}
-	return do_ext_i2d(method, ext_nid, crit, ext_struc);
+	return do_ext_i2d(method, nid, crit, ext_struct);
 }
 LCRYPTO_ALIAS(X509V3_EXT_i2d);
 
@@ -280,18 +284,18 @@ v3_check_generic(const char **value)
 
 /* Create a generic extension: for now just handle DER type */
 static X509_EXTENSION *
-v3_generic_extension(const char *ext, const char *value, int crit, int gen_type,
+v3_generic_extension(const char *name, const char *value, int crit, int gen_type,
     X509V3_CTX *ctx)
 {
 	unsigned char *ext_der = NULL;
 	long ext_len = 0;
 	ASN1_OBJECT *obj = NULL;
 	ASN1_OCTET_STRING *oct = NULL;
-	X509_EXTENSION *extension = NULL;
+	X509_EXTENSION *ext = NULL;
 
-	if (!(obj = OBJ_txt2obj(ext, 0))) {
+	if ((obj = OBJ_txt2obj(name, 0)) == NULL) {
 		X509V3error(X509V3_R_EXTENSION_NAME_ERROR);
-		ERR_asprintf_error_data("name=%s", ext);
+		ERR_asprintf_error_data("name=%s", name);
 		goto err;
 	}
 
@@ -310,22 +314,23 @@ v3_generic_extension(const char *ext, const char *value, int crit, int gen_type,
 		goto err;
 	}
 
-	if (!(oct = ASN1_OCTET_STRING_new())) {
+	if ((oct = ASN1_OCTET_STRING_new()) == NULL) {
 		X509V3error(ERR_R_MALLOC_FAILURE);
 		goto err;
 	}
 
-	oct->data = ext_der;
-	oct->length = ext_len;
+	ASN1_STRING_set0(oct, ext_der, ext_len);
 	ext_der = NULL;
+	ext_len = 0;
 
-	extension = X509_EXTENSION_create_by_OBJ(NULL, obj, crit, oct);
+	ext = X509_EXTENSION_create_by_OBJ(NULL, obj, crit, oct);
 
-err:
+ err:
 	ASN1_OBJECT_free(obj);
 	ASN1_OCTET_STRING_free(oct);
 	free(ext_der);
-	return extension;
+
+	return ext;
 }
 
 static unsigned char *
@@ -516,13 +521,13 @@ LCRYPTO_ALIAS(X509V3_EXT_conf);
 /* LHASH *conf:  Config file    */
 /* char *value:  Value    */
 X509_EXTENSION *
-X509V3_EXT_conf_nid(LHASH_OF(CONF_VALUE) *conf, X509V3_CTX *ctx, int ext_nid,
+X509V3_EXT_conf_nid(LHASH_OF(CONF_VALUE) *conf, X509V3_CTX *ctx, int nid,
     const char *value)
 {
 	CONF ctmp;
 
 	CONF_set_nconf(&ctmp, conf);
-	return X509V3_EXT_nconf_nid(&ctmp, ctx, ext_nid, value);
+	return X509V3_EXT_nconf_nid(&ctmp, ctx, nid, value);
 }
 LCRYPTO_ALIAS(X509V3_EXT_conf_nid);
 

@@ -31,31 +31,20 @@
 
 *******************************************************************************/
 
-/* $OpenBSD: if_em_hw.c,v 1.119 2023/12/03 00:19:25 jsg Exp $ */
+/* $OpenBSD: if_em_hw.c,v 1.122 2024/06/26 01:40:49 jsg Exp $ */
 /*
  * if_em_hw.c Shared functions for accessing and configuring the MAC
  */
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/sockio.h>
-#include <sys/mbuf.h>
-#include <sys/malloc.h>
-#include <sys/kernel.h>
 #include <sys/device.h>
-#include <sys/socket.h>
-#include <sys/kstat.h>
 
 #include <net/if.h>
 #include <net/if_media.h>
 
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
-
-#include <uvm/uvm_extern.h>
-
-#include <dev/pci/pcireg.h>
-#include <dev/pci/pcivar.h>
 
 #include <dev/pci/if_em.h>
 #include <dev/pci/if_em_hw.h>
@@ -5526,7 +5515,8 @@ em_write_kmrn_reg(struct em_hw *hw, uint32_t reg_addr, uint16_t data)
  *  Called to determine if the I2C pins are being used for I2C or as an
  *  external MDIO interface since the two options are mutually exclusive.
  **/
-int em_sgmii_uses_mdio_82575(struct em_hw *hw)
+int
+em_sgmii_uses_mdio_82575(struct em_hw *hw)
 {
 	uint32_t reg = 0;
 	int ext_mdio = 0;
@@ -5560,7 +5550,8 @@ int em_sgmii_uses_mdio_82575(struct em_hw *hw)
  *  Reads the PHY register at offset using the i2c interface and stores the
  *  retrieved information in data.
  **/
-int32_t em_read_phy_reg_i2c(struct em_hw *hw, uint32_t offset, uint16_t *data)
+int32_t
+em_read_phy_reg_i2c(struct em_hw *hw, uint32_t offset, uint16_t *data)
 {
 	uint32_t i, i2ccmd = 0;
 
@@ -5606,7 +5597,8 @@ int32_t em_read_phy_reg_i2c(struct em_hw *hw, uint32_t offset, uint16_t *data)
  *
  *  Writes the data to PHY register at the offset using the i2c interface.
  **/
-int32_t em_write_phy_reg_i2c(struct em_hw *hw, uint32_t offset, uint16_t data)
+int32_t
+em_write_phy_reg_i2c(struct em_hw *hw, uint32_t offset, uint16_t data)
 {
 	uint32_t i, i2ccmd = 0;
 	uint16_t phy_data_swapped;
@@ -5666,7 +5658,8 @@ int32_t em_write_phy_reg_i2c(struct em_hw *hw, uint32_t offset, uint16_t data)
  *  E1000_I2CCMD_SFP_DIAG_ADDR(<byte offset>) for SFP diagnostics parameters
  *  access
  **/
-int32_t em_read_sfp_data_byte(struct em_hw *hw, uint16_t offset, uint8_t *data)
+int32_t
+em_read_sfp_data_byte(struct em_hw *hw, uint16_t offset, uint8_t *data)
 {
 	uint32_t i = 0;
 	uint32_t i2ccmd = 0;
@@ -6432,9 +6425,9 @@ em_init_eeprom_params(struct em_hw *hw)
 	case em_pch2lan:
 	case em_pch_lpt:
 		{
-		int32_t         i = 0;
-		uint32_t        flash_size = 
-		    E1000_READ_ICH_FLASH_REG(hw, ICH_FLASH_GFPREG);
+			int32_t		i = 0;
+			uint32_t	flash_size = 
+			    E1000_READ_ICH_FLASH_REG(hw, ICH_FLASH_GFPREG);
 			eeprom->type = em_eeprom_ich8;
 			eeprom->use_eerd = FALSE;
 			eeprom->use_eewr = FALSE;

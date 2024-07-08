@@ -73,7 +73,7 @@ true)
 		esac
 		;;
 	cygwin*)
-		shrpldflags="$shrpldflags -Wl,--out-implib=libperl.dll.a -Wl,--image-base,0x52000000"
+		shrpldflags="$shrpldflags -Wl,--out-implib=libperl.dll.a"
 		linklibperl="-L. -lperl"
 		;;
 	sunos*)
@@ -531,17 +531,19 @@ unidatadirs = lib/unicore/To lib/unicore/lib
 
 h1 = EXTERN.h INTERN.h XSUB.h av.h $(CONFIGH) cop.h cv.h dosish.h
 h2 = embed.h form.h gv.h handy.h hv.h hv_func.h keywords.h mg.h op.h opcode.h
-h3 = pad.h patchlevel.h perl.h perlapi.h perly.h pp.h proto.h regcomp.h
+h3 = pad.h patchlevel.h perl.h perlapi.h perly.h pp.h proto.h regcomp.h regcomp_internal.h
 h4 = regexp.h scope.h sv.h unixish.h util.h iperlsys.h thread.h
 h5 = utf8.h warnings.h mydtrace.h op_reg_common.h l1_char_class_tab.h
 h6 = charclass_invlists.h
 h = $(h1) $(h2) $(h3) $(h4) $(h5) $(h6)
 
-c1 = av.c scope.c op.c doop.c doio.c dump.c gv.c hv.c mg.c reentr.c mro_core.c perl.c
-c2 = perly.c pp.c pp_hot.c pp_ctl.c pp_sys.c regcomp.c regexec.c utf8.c sv.c
-c3 = taint.c toke.c util.c deb.c run.c builtin.c universal.c pad.c globals.c keywords.c
+c1 = av.c scope.c op.c peep.c doop.c doio.c dump.c gv.c hv.c mg.c reentr.c mro_core.c perl.c
+c2 = perly.c pp.c pp_hot.c pp_ctl.c pp_sys.c utf8.c sv.c
+c3 = taint.c toke.c util.c deb.c run.c builtin.c universal.c class.c pad.c globals.c keywords.c
 c4 = perlio.c numeric.c mathoms.c locale.c pp_pack.c pp_sort.c caretx.c dquote.c time64.c
+c5 = regcomp.c regcomp_debug.c regcomp_invlist.c regcomp_study.c regcomp_trie.c regexec.c
 c5 = $(mallocsrc) syscall_emulator.c
+c_base  = $(c1) $(c2) $(c3) $(c4) $(c5) $(c6)
 
 !NO!SUBS!
 
@@ -553,17 +555,24 @@ main_only_objs =$main_only_objs
 
 $spitshell >>$Makefile <<'!NO!SUBS!'
 
-c = $(c1) $(c2) $(c3) $(c4) $(c5) miniperlmain.c $(mini_only_src)
+c = $(c_base) miniperlmain.c $(mini_only_src)
 
-obj1 = $(mallocobj) gv$(OBJ_EXT) toke$(OBJ_EXT) perly$(OBJ_EXT) pad$(OBJ_EXT) regcomp$(OBJ_EXT) dump$(OBJ_EXT) util$(OBJ_EXT) mg$(OBJ_EXT) reentr$(OBJ_EXT) mro_core$(OBJ_EXT) keywords$(OBJ_EXT) builtin$(OBJ_EXT)
-obj2 = hv$(OBJ_EXT) av$(OBJ_EXT) run$(OBJ_EXT) pp_hot$(OBJ_EXT) sv$(OBJ_EXT) pp$(OBJ_EXT) scope$(OBJ_EXT) pp_ctl$(OBJ_EXT) pp_sys$(OBJ_EXT)
-obj3 = doop$(OBJ_EXT) doio$(OBJ_EXT) regexec$(OBJ_EXT) utf8$(OBJ_EXT) taint$(OBJ_EXT) deb$(OBJ_EXT) globals$(OBJ_EXT) perlio$(OBJ_EXT) numeric$(OBJ_EXT) mathoms$(OBJ_EXT) locale$(OBJ_EXT) pp_pack$(OBJ_EXT) pp_sort$(OBJ_EXT) caretx$(OBJ_EXT) dquote$(OBJ_EXT) time64$(OBJ_EXT) syscall_emulator$(OBJ_EXT)
+obj1  = $(mallocobj) gv$(OBJ_EXT) toke$(OBJ_EXT) perly$(OBJ_EXT) pad$(OBJ_EXT)
+obj2  = regcomp$(OBJ_EXT) regcomp_debug$(OBJ_EXT) regcomp_invlist$(OBJ_EXT) regcomp_study$(OBJ_EXT) regcomp_trie$(OBJ_EXT)
+obj3  = regexec$(OBJ_EXT) dump$(OBJ_EXT) util$(OBJ_EXT) mg$(OBJ_EXT) reentr$(OBJ_EXT) mro_core$(OBJ_EXT)
+obj4  = keywords$(OBJ_EXT) builtin$(OBJ_EXT) class$(OBJ_EXT)
+obj5  = hv$(OBJ_EXT) av$(OBJ_EXT) run$(OBJ_EXT) pp_hot$(OBJ_EXT) sv$(OBJ_EXT) pp$(OBJ_EXT)
+obj6  = scope$(OBJ_EXT) pp_ctl$(OBJ_EXT) pp_sys$(OBJ_EXT) peep$(OBJ_EXT)
+obj7  = doop$(OBJ_EXT) doio$(OBJ_EXT) utf8$(OBJ_EXT) taint$(OBJ_EXT)
+obj8  = deb$(OBJ_EXT) globals$(OBJ_EXT) perlio$(OBJ_EXT) numeric$(OBJ_EXT) mathoms$(OBJ_EXT)
+obj9  = locale$(OBJ_EXT) pp_pack$(OBJ_EXT) pp_sort$(OBJ_EXT) caretx$(OBJ_EXT) dquote$(OBJ_EXT)
+obj10 = time64$(OBJ_EXT) syscall_emulator$(OBJ_EXT)
 
 # split the objects into 3 exclusive sets: those used by both miniperl and
 # perl, and those used by just one or the other. Doesn't include the
 # actual perl(mini)main.o, nor any dtrace objects.
 
-common_objs    = $(obj1) $(obj2) $(obj3) $(ARCHOBJS)
+common_objs    = $(obj1) $(obj2) $(obj3) $(obj4) $(obj5) $(obj6) $(obj7) $(obj8) $(obj9) $(obj10) $(ARCHOBJS)
 
 miniperl_objs_nodt = $(mini_only_objs) $(common_objs) miniperlmain$(OBJ_EXT)
 perllib_objs_nodt  = $(main_only_objs) $(common_objs)
@@ -614,7 +623,7 @@ esac
 
 $spitshell >>$Makefile <<'!NO!SUBS!'
 
-perltoc_pod_prereqs = extra.pods pod/perl5363delta.pod pod/perlapi.pod pod/perlintern.pod pod/perlmodlib.pod
+perltoc_pod_prereqs = extra.pods pod/perl5382delta.pod pod/perlapi.pod pod/perlintern.pod pod/perlmodlib.pod
 generated_pods = pod/perltoc.pod $(perltoc_pod_prereqs)
 generated_headers = uudmap.h bitcount.h mg_data.h
 
@@ -654,11 +663,11 @@ lintflags = \
 	@echo `$(CCCMD)` $(PLDLFLAGS) $*.c
 	@`$(CCCMD)` $(PLDLFLAGS) $*.c
 
-.c.i:	perl.h config.h
+.c.i:
 	@echo `$(CCCMDSRC)` -E $*.c \> $*.i
 	@`$(CCCMDSRC)` -E $*.c > $*.i
 
-.c.s:	perl.h config.h
+.c.s:
 	@echo `$(CCCMDSRC)` -S $*.c
 	@`$(CCCMDSRC)` -S $*.c
 
@@ -1129,9 +1138,9 @@ pod/perlintern.pod: $(MINIPERL_EXE) autodoc.pl embed.fnc
 pod/perlmodlib.pod: $(MINIPERL_EXE) pod/perlmodlib.PL MANIFEST
 	$(MINIPERL) pod/perlmodlib.PL -q
 
-pod/perl5363delta.pod: pod/perldelta.pod
-	$(RMS) pod/perl5363delta.pod
-	$(LNS) perldelta.pod pod/perl5363delta.pod
+pod/perl5382delta.pod: pod/perldelta.pod
+	$(RMS) pod/perl5382delta.pod
+	$(LNS) perldelta.pod pod/perl5382delta.pod
 
 extra.pods: $(MINIPERL_EXE)
 	-@test ! -f extra.pods || rm -f `cat extra.pods`
@@ -1632,7 +1641,7 @@ $spitshell >>$Makefile <<'!NO!SUBS!'
 
 # minitest can't depend on lib/Config.pm because that might be where miniperl
 # is crashing.
-minitest_prep:
+minitest_prep: $(MINIPERL_EXE)
 	-@test -f lib/Config.pm || $(MAKE) lib/Config.pm $(unidatafiles)
 	@echo " "
 	@echo "You may see some irrelevant test failures if you have been unable"
@@ -1642,10 +1651,10 @@ minitest_prep:
 
 MINITEST_TESTS = base/*.t comp/*.t cmd/*.t run/*.t io/*.t re/*.t opbasic/*.t op/*.t uni/*.t perf/*.t
 
-minitest: $(MINIPERL_EXE) minitest_prep
+minitest: minitest_prep
 	cd t && $(RUN_PERL) TEST $(MINITEST_TESTS) <$(devtty)
 
-minitest-notty minitest_notty: $(MINIPERL_EXE) minitest_prep
+minitest-notty minitest_notty: minitest_prep
 	cd t && PERL_SKIP_TTY_TEST=1 $(RUN_PERL) TEST $(MINITEST_TESTS)
 
 # Test via harness
@@ -1657,7 +1666,7 @@ test_harness_notty: test_prep
 	HARNESS_NOTTY=1 TESTFILE=harness $(RUN_TESTS) choose
 
 test_reonly test-reonly: test_prep_reonly
-	TEST_ARGS='re/*.t ext/re/t/*.t' TESTFILE=harness $(RUN_TESTS) choose
+	TEST_ARGS='re/*.t ../ext/re/t/*.t' PERL_TEST_HARNESS_ASAP=1 TESTFILE=harness $(RUN_TESTS) choose
 
 
 # Porting tests (well-formedness of pod, manifest, etc)
@@ -1721,8 +1730,8 @@ distcheck: FORCE
 
 .PHONY: ctags
 
-TAGS: $(c1) $(c2) $(c3) $(c4) $(c5) $(h)
-	etags $(c1) $(c2) $(c3) $(c4) $(c5) $(h)
+TAGS: $(c_base) $(h)
+	etags $(c_base) $(h)
 !NO!SUBS!
 
 $spitshell >>$Makefile <<!GROK!THIS!

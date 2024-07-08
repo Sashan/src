@@ -5,6 +5,7 @@
 
 #include <linux/bsearch.h>
 
+#include "gem/i915_gem_lmem.h"
 #include "gt/intel_engine_regs.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_mcr.h"
@@ -14,6 +15,7 @@
 #include "intel_guc_ads.h"
 #include "intel_guc_capture.h"
 #include "intel_guc_fwif.h"
+#include "intel_guc_print.h"
 #include "intel_uc.h"
 #include "i915_drv.h"
 
@@ -139,8 +141,6 @@ static u32 guc_ads_blob_size(struct intel_guc *guc)
 
 static void guc_policies_init(struct intel_guc *guc)
 {
-	STUB();
-#ifdef notyet
 	struct intel_gt *gt = guc_to_gt(guc);
 	struct drm_i915_private *i915 = gt->i915;
 	u32 global_flags = 0;
@@ -155,14 +155,11 @@ static void guc_policies_init(struct intel_guc *guc)
 
 	ads_blob_write(guc, policies.global_flags, global_flags);
 	ads_blob_write(guc, policies.is_valid, 1);
-#endif
 }
 
 void intel_guc_ads_print_policy_info(struct intel_guc *guc,
 				     struct drm_printer *dp)
 {
-	STUB();
-#ifdef notyet
 	if (unlikely(iosys_map_is_null(&guc->ads_map)))
 		return;
 
@@ -173,7 +170,6 @@ void intel_guc_ads_print_policy_info(struct intel_guc *guc,
 		   ads_blob_read(guc, policies.max_num_work_items));
 	drm_printf(dp, "  Flags              = %u\n",
 		   ads_blob_read(guc, policies.global_flags));
-#endif
 }
 
 static int guc_action_policies_update(struct intel_guc *guc, u32 policy_offset)
@@ -188,9 +184,6 @@ static int guc_action_policies_update(struct intel_guc *guc, u32 policy_offset)
 
 int intel_guc_global_policies_update(struct intel_guc *guc)
 {
-	STUB();
-	return -ENOSYS;
-#ifdef notyet
 	struct intel_gt *gt = guc_to_gt(guc);
 	u32 scheduler_policies;
 	intel_wakeref_t wakeref;
@@ -211,14 +204,11 @@ int intel_guc_global_policies_update(struct intel_guc *guc)
 		ret = guc_action_policies_update(guc, scheduler_policies);
 
 	return ret;
-#endif
 }
 
 static void guc_mapping_table_init(struct intel_gt *gt,
 				   struct iosys_map *info_map)
 {
-	STUB();
-#ifdef notyet
 	unsigned int i, j;
 	struct intel_engine_cs *engine;
 	enum intel_engine_id id;
@@ -235,7 +225,6 @@ static void guc_mapping_table_init(struct intel_gt *gt,
 		info_map_write(info_map, mapping_table[guc_class][ilog2(engine->logical_mask)],
 			       engine->instance);
 	}
-#endif
 }
 
 /*
@@ -265,14 +254,12 @@ static int guc_mmio_reg_cmp(const void *a, const void *b)
 static struct guc_mmio_reg * __must_check
 __mmio_reg_add(struct temp_regset *regset, struct guc_mmio_reg *reg)
 {
-	STUB();
-	return ERR_PTR(-ENOSYS);
-#ifdef notyet
 	u32 pos = regset->storage_used;
 	struct guc_mmio_reg *slot;
 
 	if (pos >= regset->storage_max) {
-		size_t size = roundup2((pos + 1) * sizeof(*slot), PAGE_SIZE);
+		size_t size = ALIGN((pos + 1) * sizeof(*slot), PAGE_SIZE);
+#ifdef ___linux__
 		struct guc_mmio_reg *r = krealloc(regset->storage,
 						  size, GFP_KERNEL);
 		if (!r) {
@@ -280,6 +267,17 @@ __mmio_reg_add(struct temp_regset *regset, struct guc_mmio_reg *reg)
 				  -ENOMEM);
 			return ERR_PTR(-ENOMEM);
 		}
+#else
+		struct guc_mmio_reg *r = kmalloc(size, GFP_KERNEL);
+		if (!r) {
+			WARN_ONCE(1, "Incomplete regset list: can't add register (%d)\n",
+				  -ENOMEM);
+			return ERR_PTR(-ENOMEM);
+		}
+		memcpy(r, regset->storage,
+		    ALIGN((pos) * sizeof(*slot), PAGE_SIZE));
+		kfree(regset->storage);
+#endif
 
 		regset->registers = r + (regset->registers - regset->storage);
 		regset->storage = r;
@@ -291,27 +289,18 @@ __mmio_reg_add(struct temp_regset *regset, struct guc_mmio_reg *reg)
 	*slot = *reg;
 
 	return slot;
-#endif
 }
-
-#define GUC_REGSET_STEERING(group, instance) ( \
-	FIELD_PREP(GUC_REGSET_STEERING_GROUP, (group)) | \
-	FIELD_PREP(GUC_REGSET_STEERING_INSTANCE, (instance)) | \
-	GUC_REGSET_NEEDS_STEERING \
-)
 
 static long __must_check guc_mmio_reg_add(struct intel_gt *gt,
 					  struct temp_regset *regset,
-					  i915_reg_t reg, u32 flags)
+					  u32 offset, u32 flags)
 {
 	u32 count = regset->storage_used - (regset->registers - regset->storage);
-	u32 offset = i915_mmio_reg_offset(reg);
 	struct guc_mmio_reg entry = {
 		.offset = offset,
 		.flags = flags,
 	};
 	struct guc_mmio_reg *slot;
-	u8 group, inst;
 
 	/*
 	 * The mmio list is built using separate lists within the driver.
@@ -322,17 +311,6 @@ static long __must_check guc_mmio_reg_add(struct intel_gt *gt,
 	if (bsearch(&entry, regset->registers, count,
 		    sizeof(entry), guc_mmio_reg_cmp))
 		return 0;
-
-	/*
-	 * The GuC doesn't have a default steering, so we need to explicitly
-	 * steer all registers that need steering. However, we do not keep track
-	 * of all the steering ranges, only of those that have a chance of using
-	 * a non-default steering from the i915 pov. Instead of adding such
-	 * tracking, it is easier to just program the default steering for all
-	 * regs that don't need a non-default one.
-	 */
-	intel_gt_mcr_get_nonterminated_steering(gt, reg, &group, &inst);
-	entry.flags |= GUC_REGSET_STEERING(group, inst);
 
 	slot = __mmio_reg_add(regset, &entry);
 	if (IS_ERR(slot))
@@ -351,6 +329,38 @@ static long __must_check guc_mmio_reg_add(struct intel_gt *gt,
 
 #define GUC_MMIO_REG_ADD(gt, regset, reg, masked) \
 	guc_mmio_reg_add(gt, \
+			 regset, \
+			 i915_mmio_reg_offset(reg), \
+			 (masked) ? GUC_REGSET_MASKED : 0)
+
+#define GUC_REGSET_STEERING(group, instance) ( \
+	FIELD_PREP(GUC_REGSET_STEERING_GROUP, (group)) | \
+	FIELD_PREP(GUC_REGSET_STEERING_INSTANCE, (instance)) | \
+	GUC_REGSET_NEEDS_STEERING \
+)
+
+static long __must_check guc_mcr_reg_add(struct intel_gt *gt,
+					 struct temp_regset *regset,
+					 i915_mcr_reg_t reg, u32 flags)
+{
+	u8 group, inst;
+
+	/*
+	 * The GuC doesn't have a default steering, so we need to explicitly
+	 * steer all registers that need steering. However, we do not keep track
+	 * of all the steering ranges, only of those that have a chance of using
+	 * a non-default steering from the i915 pov. Instead of adding such
+	 * tracking, it is easier to just program the default steering for all
+	 * regs that don't need a non-default one.
+	 */
+	intel_gt_mcr_get_nonterminated_steering(gt, reg, &group, &inst);
+	flags |= GUC_REGSET_STEERING(group, inst);
+
+	return guc_mmio_reg_add(gt, regset, i915_mmio_reg_offset(reg), flags);
+}
+
+#define GUC_MCR_REG_ADD(gt, regset, reg, masked) \
+	guc_mcr_reg_add(gt, \
 			 regset, \
 			 (reg), \
 			 (masked) ? GUC_REGSET_MASKED : 0)
@@ -389,8 +399,21 @@ static int guc_mmio_regset_init(struct temp_regset *regset,
 					false);
 
 	/* add in local MOCS registers */
-	for (i = 0; i < GEN9_LNCFCMOCS_REG_COUNT; i++)
-		ret |= GUC_MMIO_REG_ADD(gt, regset, GEN9_LNCFCMOCS(i), false);
+	for (i = 0; i < LNCFCMOCS_REG_COUNT; i++)
+		if (GRAPHICS_VER_FULL(engine->i915) >= IP_VER(12, 50))
+			ret |= GUC_MCR_REG_ADD(gt, regset, XEHP_LNCFCMOCS(i), false);
+		else
+			ret |= GUC_MMIO_REG_ADD(gt, regset, GEN9_LNCFCMOCS(i), false);
+
+	if (GRAPHICS_VER(engine->i915) >= 12) {
+		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL0, false);
+		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL1, false);
+		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL2, false);
+		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL3, false);
+		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL4, false);
+		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL5, false);
+		ret |= GUC_MMIO_REG_ADD(gt, regset, EU_PERF_CNTL6, false);
+	}
 
 	return ret ? -1 : 0;
 }
@@ -417,7 +440,7 @@ static long guc_mmio_reg_state_create(struct intel_guc *guc)
 
 	guc->ads_regset = temp_set.storage;
 
-	drm_dbg(&guc_to_gt(guc)->i915->drm, "Used %zu KB for temporary ADS regset\n",
+	guc_dbg(guc, "Used %zu KB for temporary ADS regset\n",
 		(temp_set.storage_max * sizeof(struct guc_mmio_reg)) >> 10);
 
 	return total * sizeof(struct guc_mmio_reg);
@@ -429,8 +452,6 @@ fail_regset_init:
 
 static void guc_mmio_reg_state_init(struct intel_guc *guc)
 {
-	STUB();
-#ifdef notyet
 	struct intel_gt *gt = guc_to_gt(guc);
 	struct intel_engine_cs *engine;
 	enum intel_engine_id id;
@@ -470,20 +491,21 @@ static void guc_mmio_reg_state_init(struct intel_guc *guc)
 
 		addr_ggtt += count * sizeof(struct guc_mmio_reg);
 	}
-#endif
 }
 
 static void fill_engine_enable_masks(struct intel_gt *gt,
 				     struct iosys_map *info_map)
 {
-	STUB();
-#ifdef notyet
 	info_map_write(info_map, engine_enabled_masks[GUC_RENDER_CLASS], RCS_MASK(gt));
 	info_map_write(info_map, engine_enabled_masks[GUC_COMPUTE_CLASS], CCS_MASK(gt));
 	info_map_write(info_map, engine_enabled_masks[GUC_BLITTER_CLASS], BCS_MASK(gt));
 	info_map_write(info_map, engine_enabled_masks[GUC_VIDEO_CLASS], VDBOX_MASK(gt));
 	info_map_write(info_map, engine_enabled_masks[GUC_VIDEOENHANCE_CLASS], VEBOX_MASK(gt));
-#endif
+
+	/* The GSC engine is an instance (6) of OTHER_CLASS */
+	if (gt->engine[GSC0])
+		info_map_write(info_map, engine_enabled_masks[GUC_GSC_OTHER_CLASS],
+			       BIT(gt->engine[GSC0]->instance));
 }
 
 #define LR_HW_CONTEXT_SIZE (80 * sizeof(u32))
@@ -494,9 +516,6 @@ static void fill_engine_enable_masks(struct intel_gt *gt,
 #define LRC_SKIP_SIZE(i915) (LRC_PPHWSP_SZ * PAGE_SIZE + LR_HW_CONTEXT_SZ(i915))
 static int guc_prep_golden_context(struct intel_guc *guc)
 {
-	STUB();
-	return -ENOSYS;
-#ifdef notyet
 	struct intel_gt *gt = guc_to_gt(guc);
 	u32 addr_ggtt, offset;
 	u32 total_size = 0, alloc_size, real_size;
@@ -528,9 +547,6 @@ static int guc_prep_golden_context(struct intel_guc *guc)
 	}
 
 	for (engine_class = 0; engine_class <= MAX_ENGINE_CLASS; ++engine_class) {
-		if (engine_class == OTHER_CLASS)
-			continue;
-
 		guc_class = engine_class_to_guc_class(engine_class);
 
 		if (!info_map_read(&info_map, engine_enabled_masks[guc_class]))
@@ -567,7 +583,6 @@ static int guc_prep_golden_context(struct intel_guc *guc)
 		GEM_BUG_ON(guc->ads_golden_ctxt_size != total_size);
 
 	return total_size;
-#endif
 }
 
 static struct intel_engine_cs *find_engine_state(struct intel_gt *gt, u8 engine_class)
@@ -599,10 +614,6 @@ static void guc_init_golden_context(struct intel_guc *guc)
 	if (!intel_uc_uses_guc_submission(&gt->uc))
 		return;
 
-	STUB();
-	return;
-#ifdef notyet
-
 	GEM_BUG_ON(iosys_map_is_null(&guc->ads_map));
 
 	/*
@@ -613,9 +624,6 @@ static void guc_init_golden_context(struct intel_guc *guc)
 	addr_ggtt = intel_guc_ggtt_offset(guc, guc->ads_vma) + offset;
 
 	for (engine_class = 0; engine_class <= MAX_ENGINE_CLASS; ++engine_class) {
-		if (engine_class == OTHER_CLASS)
-			continue;
-
 		guc_class = engine_class_to_guc_class(engine_class);
 		if (!ads_blob_read(guc, system_info.engine_enabled_masks[guc_class]))
 			continue;
@@ -626,7 +634,7 @@ static void guc_init_golden_context(struct intel_guc *guc)
 
 		engine = find_engine_state(gt, engine_class);
 		if (!engine) {
-			drm_err(&gt->i915->drm, "No engine state recorded for class %d!\n",
+			guc_err(guc, "No engine state recorded for class %d!\n",
 				engine_class);
 			ads_blob_write(guc, ads.eng_state_size[guc_class], 0);
 			ads_blob_write(guc, ads.golden_context_lrca[guc_class], 0);
@@ -639,23 +647,51 @@ static void guc_init_golden_context(struct intel_guc *guc)
 
 		addr_ggtt += alloc_size;
 
-		shmem_read_to_iosys_map(engine->default_state, 0, &guc->ads_map,
+		uao_read_to_iosys_map(engine->default_state, 0, &guc->ads_map,
 					offset, real_size);
 		offset += alloc_size;
 	}
 
 	GEM_BUG_ON(guc->ads_golden_ctxt_size != total_size);
-#endif
+}
+
+static u32 guc_get_capture_engine_mask(struct iosys_map *info_map, u32 capture_class)
+{
+	u32 mask;
+
+	switch (capture_class) {
+	case GUC_CAPTURE_LIST_CLASS_RENDER_COMPUTE:
+		mask = info_map_read(info_map, engine_enabled_masks[GUC_RENDER_CLASS]);
+		mask |= info_map_read(info_map, engine_enabled_masks[GUC_COMPUTE_CLASS]);
+		break;
+
+	case GUC_CAPTURE_LIST_CLASS_VIDEO:
+		mask = info_map_read(info_map, engine_enabled_masks[GUC_VIDEO_CLASS]);
+		break;
+
+	case GUC_CAPTURE_LIST_CLASS_VIDEOENHANCE:
+		mask = info_map_read(info_map, engine_enabled_masks[GUC_VIDEOENHANCE_CLASS]);
+		break;
+
+	case GUC_CAPTURE_LIST_CLASS_BLITTER:
+		mask = info_map_read(info_map, engine_enabled_masks[GUC_BLITTER_CLASS]);
+		break;
+
+	case GUC_CAPTURE_LIST_CLASS_GSC_OTHER:
+		mask = info_map_read(info_map, engine_enabled_masks[GUC_GSC_OTHER_CLASS]);
+		break;
+
+	default:
+		mask = 0;
+	}
+
+	return mask;
 }
 
 static int
 guc_capture_prep_lists(struct intel_guc *guc)
 {
-	STUB();
-	return -ENOSYS;
-#ifdef notyet
 	struct intel_gt *gt = guc_to_gt(guc);
-	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
 	u32 ads_ggtt, capture_offset, null_ggtt, total_size = 0;
 	struct guc_gt_system_info local_info;
 	struct iosys_map info_map;
@@ -687,9 +723,10 @@ guc_capture_prep_lists(struct intel_guc *guc)
 
 	for (i = 0; i < GUC_CAPTURE_LIST_INDEX_MAX; i++) {
 		for (j = 0; j < GUC_MAX_ENGINE_CLASSES; j++) {
+			u32 engine_mask = guc_get_capture_engine_mask(&info_map, j);
 
 			/* null list if we dont have said engine or list */
-			if (!info_map_read(&info_map, engine_enabled_masks[j])) {
+			if (!engine_mask) {
 				if (ads_is_mapped) {
 					ads_blob_write(guc, ads.capture_class[i][j], null_ggtt);
 					ads_blob_write(guc, ads.capture_instance[i][j], null_ggtt);
@@ -760,17 +797,14 @@ engine_instance_list:
 	}
 
 	if (guc->ads_capture_size && guc->ads_capture_size != PAGE_ALIGN(total_size))
-		drm_warn(&i915->drm, "GuC->ADS->Capture alloc size changed from %d to %d\n",
+		guc_warn(guc, "ADS capture alloc size changed from %d to %d\n",
 			 guc->ads_capture_size, PAGE_ALIGN(total_size));
 
 	return PAGE_ALIGN(total_size);
-#endif
 }
 
 static void __guc_ads_init(struct intel_guc *guc)
 {
-	STUB();
-#ifdef notyet
 	struct intel_gt *gt = guc_to_gt(guc);
 	struct drm_i915_private *i915 = gt->i915;
 	struct iosys_map info_map = IOSYS_MAP_INIT_OFFSET(&guc->ads_map,
@@ -821,7 +855,6 @@ static void __guc_ads_init(struct intel_guc *guc)
 		       guc_ads_private_data_offset(guc));
 
 	i915_gem_object_flush_map(guc->ads_vma->obj);
-#endif
 }
 
 /**
@@ -899,8 +932,6 @@ void intel_guc_ads_destroy(struct intel_guc *guc)
 
 static void guc_ads_private_data_reset(struct intel_guc *guc)
 {
-	STUB();
-#ifdef notyet
 	u32 size;
 
 	size = guc_ads_private_data_size(guc);
@@ -909,7 +940,6 @@ static void guc_ads_private_data_reset(struct intel_guc *guc)
 
 	iosys_map_memset(&guc->ads_map, guc_ads_private_data_offset(guc),
 			 0, size);
-#endif
 }
 
 /**
@@ -938,15 +968,10 @@ u32 intel_guc_engine_usage_offset(struct intel_guc *guc)
 
 struct iosys_map intel_guc_engine_usage_record_map(struct intel_engine_cs *engine)
 {
-	STUB();
-	struct iosys_map x = {};
-	return x;
-#ifdef notyet
 	struct intel_guc *guc = &engine->gt->uc.guc;
 	u8 guc_class = engine_class_to_guc_class(engine->class);
 	size_t offset = offsetof(struct __guc_ads_blob,
 				 engine_usage.engines[guc_class][ilog2(engine->logical_mask)]);
 
 	return IOSYS_MAP_INIT_OFFSET(&guc->ads_map, offset);
-#endif
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfctl_parser.c,v 1.349 2023/10/26 16:26:01 deraadt Exp $ */
+/*	$OpenBSD: pfctl_parser.c,v 1.351 2024/04/22 13:30:22 bluhm Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -519,7 +519,8 @@ print_pool(struct pf_pool *pool, u_int16_t p1, u_int16_t p2,
 const char	*pf_reasons[PFRES_MAX+1] = PFRES_NAMES;
 const char	*pf_lcounters[LCNT_MAX+1] = LCNT_NAMES;
 const char	*pf_fcounters[FCNT_MAX+1] = FCNT_NAMES;
-const char	*pf_scounters[FCNT_MAX+1] = FCNT_NAMES;
+const char	*pf_scounters[SCNT_MAX+1] = FCNT_NAMES;
+const char	*pf_ncounters[NCNT_MAX+1] = FCNT_NAMES;
 
 void
 print_status(struct pf_status *s, struct pfctl_watermarks *synflwats, int opts)
@@ -613,6 +614,20 @@ print_status(struct pf_status *s, struct pfctl_watermarks *synflwats, int opts)
 			if (runtime > 0)
 				printf("%14.1f/s\n",
 				    (double)s->scounters[i] / (double)runtime);
+			else
+				printf("%14s\n", "");
+		}
+	}
+	if (opts & PF_OPT_VERBOSE) {
+		printf("Fragments\n");
+		printf("  %-25s %14u %14s\n", "current entries",
+		    s->fragments, "");
+		for (i = 0; i < NCNT_MAX; i++) {
+			printf("  %-25s %14lld ", pf_ncounters[i],
+				    s->ncounters[i]);
+			if (runtime > 0)
+				printf("%14.1f/s\n",
+				    (double)s->ncounters[i] / (double)runtime);
 			else
 				printf("%14s\n", "");
 		}
@@ -720,17 +735,23 @@ print_rule(struct pf_rule *r, const char *anchor_call, int opts)
 	if (verbose)
 		printf("@%d ", r->nr);
 
-	if (r->action > PF_MATCH)
-		printf("action(%d)", r->action);
-	else if (anchor_call[0]) {
-		p = strrchr(anchor_call, '/');
-		if (p ? p[1] == '_' : anchor_call[0] == '_')
-			printf("%s", anchortypes[r->action]);
+	if (anchor_call[0]) {
+		if (r->action >= nitems(anchortypes)) {
+			printf("anchor(%d)", r->action);
+		} else {
+			p = strrchr(anchor_call, '/');
+			if (p ? p[1] == '_' : anchor_call[0] == '_')
+				printf("%s", anchortypes[r->action]);
+			else
+				printf("%s \"%s\"", anchortypes[r->action],
+				    anchor_call);
+		}
+	} else {
+		if (r->action >= nitems(actiontypes))
+			printf("action(%d)", r->action);
 		else
-			printf("%s \"%s\"", anchortypes[r->action],
-			    anchor_call);
-	} else
-		printf("%s", actiontypes[r->action]);
+			printf("%s", actiontypes[r->action]);
+	}
 	if (r->action == PF_DROP) {
 		if (r->rule_flag & PFRULE_RETURN)
 			printf(" return");

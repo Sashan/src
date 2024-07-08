@@ -1,4 +1,4 @@
-/*	$OpenBSD: in6_src.c,v 1.91 2024/01/09 19:57:01 bluhm Exp $	*/
+/*	$OpenBSD: in6_src.c,v 1.99 2024/04/21 17:32:11 florian Exp $	*/
 /*	$KAME: in6_src.c,v 1.36 2001/02/06 04:08:17 itojun Exp $	*/
 
 /*
@@ -82,8 +82,8 @@
 #include <netinet6/ip6_var.h>
 #include <netinet6/nd6.h>
 
-int in6_selectif(struct sockaddr_in6 *, struct ip6_pktopts *,
-    struct ip6_moptions *, struct route_in6 *, struct ifnet **, u_int);
+int in6_selectif(const struct in6_addr *, struct ip6_pktopts *,
+    struct ip6_moptions *, struct route *, struct ifnet **, u_int);
 
 /*
  * Return an IPv6 address, which is the most appropriate for a given
@@ -95,7 +95,7 @@ in6_pcbselsrc(const struct in6_addr **in6src, struct sockaddr_in6 *dstsock,
     struct inpcb *inp, struct ip6_pktopts *opts)
 {
 	struct ip6_moptions *mopts = inp->inp_moptions6;
-	struct route_in6 *ro = &inp->inp_route6;
+	struct rtentry *rt;
 	const struct in6_addr *laddr = &inp->inp_laddr6;
 	u_int rtableid = inp->inp_rtableid;
 	struct ifnet *ifp = NULL;
@@ -118,7 +118,8 @@ in6_pcbselsrc(const struct in6_addr **in6src, struct sockaddr_in6 *dstsock,
 		struct sockaddr_in6 sa6;
 
 		/* get the outgoing interface */
-		error = in6_selectif(dstsock, opts, mopts, ro, &ifp, rtableid);
+		error = in6_selectif(dst, opts, mopts, &inp->inp_route, &ifp,
+		    rtableid);
 		if (error)
 			return (error);
 
@@ -161,7 +162,7 @@ in6_pcbselsrc(const struct in6_addr **in6src, struct sockaddr_in6 *dstsock,
 		if (ifp == NULL)
 			return (ENXIO); /* XXX: better error? */
 
-		ia6 = in6_ifawithscope(ifp, dst, rtableid);
+		ia6 = in6_ifawithscope(ifp, dst, rtableid, NULL);
 		if_put(ifp);
 
 		if (ia6 == NULL)
@@ -179,25 +180,7 @@ in6_pcbselsrc(const struct in6_addr **in6src, struct sockaddr_in6 *dstsock,
 	 * If route is known or can be allocated now,
 	 * our src addr is taken from the i/f, else punt.
 	 */
-	if (!rtisvalid(ro->ro_rt) || (ro->ro_tableid != rtableid) ||
-	    !IN6_ARE_ADDR_EQUAL(&ro->ro_dst.sin6_addr, dst)) {
-		rtfree(ro->ro_rt);
-		ro->ro_rt = NULL;
-	}
-	if (ro->ro_rt == NULL) {
-		struct sockaddr_in6 *sa6;
-
-		/* No route yet, so try to acquire one */
-		bzero(&ro->ro_dst, sizeof(struct sockaddr_in6));
-		ro->ro_tableid = rtableid;
-		sa6 = &ro->ro_dst;
-		sa6->sin6_family = AF_INET6;
-		sa6->sin6_len = sizeof(struct sockaddr_in6);
-		sa6->sin6_addr = *dst;
-		sa6->sin6_scope_id = dstsock->sin6_scope_id;
-		ro->ro_rt = rtalloc(sin6tosa(&ro->ro_dst),
-		    RT_RESOLVE, ro->ro_tableid);
-	}
+	rt = route6_mpath(&inp->inp_route, dst, NULL, rtableid);
 
 	/*
 	 * in_pcbconnect() checks out IFF_LOOPBACK to skip using
@@ -206,14 +189,14 @@ in6_pcbselsrc(const struct in6_addr **in6src, struct sockaddr_in6 *dstsock,
 	 * so doesn't check out IFF_LOOPBACK.
 	 */
 
-	if (ro->ro_rt) {
-		ifp = if_get(ro->ro_rt->rt_ifidx);
+	if (rt != NULL) {
+		ifp = if_get(rt->rt_ifidx);
 		if (ifp != NULL) {
-			ia6 = in6_ifawithscope(ifp, dst, rtableid);
+			ia6 = in6_ifawithscope(ifp, dst, rtableid, rt);
 			if_put(ifp);
 		}
 		if (ia6 == NULL) /* xxx scope error ?*/
-			ia6 = ifatoia6(ro->ro_rt->rt_ifa);
+			ia6 = ifatoia6(rt->rt_ifa);
 	}
 
 	/*
@@ -222,8 +205,8 @@ in6_pcbselsrc(const struct in6_addr **in6src, struct sockaddr_in6 *dstsock,
 	 * - preferred source address is set
 	 * - output interface is UP
 	 */
-	if (ro->ro_rt && !(ro->ro_rt->rt_flags & RTF_LLINFO) &&
-	    !(ro->ro_rt->rt_flags & RTF_HOST)) {
+	if (rt != NULL && !(rt->rt_flags & RTF_LLINFO) &&
+	    !(rt->rt_flags & RTF_HOST)) {
 		ip6_source = rtable_getsource(rtableid, AF_INET6);
 		if (ip6_source != NULL) {
 			struct ifaddr *ifa;
@@ -273,7 +256,7 @@ in6_selectsrc(const struct in6_addr **in6src, struct sockaddr_in6 *dstsock,
 		if (ifp == NULL)
 			return (ENXIO); /* XXX: better error? */
 
-		ia6 = in6_ifawithscope(ifp, dst, rtableid);
+		ia6 = in6_ifawithscope(ifp, dst, rtableid, NULL);
 		if_put(ifp);
 
 		if (ia6 == NULL)
@@ -297,7 +280,7 @@ in6_selectsrc(const struct in6_addr **in6src, struct sockaddr_in6 *dstsock,
 			ifp = if_get(htons(dstsock->sin6_scope_id));
 
 		if (ifp) {
-			ia6 = in6_ifawithscope(ifp, dst, rtableid);
+			ia6 = in6_ifawithscope(ifp, dst, rtableid, NULL);
 			if_put(ifp);
 
 			if (ia6 == NULL)
@@ -312,38 +295,17 @@ in6_selectsrc(const struct in6_addr **in6src, struct sockaddr_in6 *dstsock,
 }
 
 struct rtentry *
-in6_selectroute(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
-    struct route_in6 *ro, unsigned int rtableid)
+in6_selectroute(const struct in6_addr *dst, struct ip6_pktopts *opts,
+    struct route *ro, unsigned int rtableid)
 {
-	struct in6_addr *dst;
-
-	dst = &dstsock->sin6_addr;
-
 	/*
 	 * Use a cached route if it exists and is valid, else try to allocate
 	 * a new one.
 	 */
 	if (ro) {
-		if (rtisvalid(ro->ro_rt))
-			KASSERT(sin6tosa(&ro->ro_dst)->sa_family == AF_INET6);
-		if (!rtisvalid(ro->ro_rt) ||
-		    !IN6_ARE_ADDR_EQUAL(&ro->ro_dst.sin6_addr, dst)) {
-			rtfree(ro->ro_rt);
-			ro->ro_rt = NULL;
-		}
-		if (ro->ro_rt == NULL) {
-			struct sockaddr_in6 *sa6;
+		struct rtentry *rt;
 
-			/* No route yet, so try to acquire one */
-			bzero(&ro->ro_dst, sizeof(struct sockaddr_in6));
-			ro->ro_tableid = rtableid;
-			sa6 = &ro->ro_dst;
-			*sa6 = *dstsock;
-			sa6->sin6_scope_id = 0;
-			ro->ro_tableid = rtableid;
-			ro->ro_rt = rtalloc_mpath(sin6tosa(&ro->ro_dst),
-			    NULL, ro->ro_tableid);
-		}
+		rt = route6_mpath(ro, dst, NULL, rtableid);
 
 		/*
 		 * Check if the outgoing interface conflicts with
@@ -354,26 +316,24 @@ in6_selectroute(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 		 */
 		if (opts && opts->ip6po_pktinfo &&
 		    opts->ip6po_pktinfo->ipi6_ifindex) {
-			if (ro->ro_rt != NULL &&
-			    !ISSET(ro->ro_rt->rt_flags, RTF_LOCAL) &&
-			    ro->ro_rt->rt_ifidx !=
-			    opts->ip6po_pktinfo->ipi6_ifindex) {
+			if (rt != NULL && !ISSET(rt->rt_flags, RTF_LOCAL) &&
+			    rt->rt_ifidx != opts->ip6po_pktinfo->ipi6_ifindex) {
 			    	return (NULL);
 			}
 		}
 
-		return (ro->ro_rt);
+		return (rt);
 	}
 
 	return (NULL);
 }
 
 int
-in6_selectif(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
-    struct ip6_moptions *mopts, struct route_in6 *ro, struct ifnet **retifp,
+in6_selectif(const struct in6_addr *dst, struct ip6_pktopts *opts,
+    struct ip6_moptions *mopts, struct route *ro, struct ifnet **retifp,
     u_int rtableid)
 {
-	struct rtentry *rt = NULL;
+	struct rtentry *rt;
 	struct in6_pktinfo *pi = NULL;
 
 	/* If the caller specify the outgoing interface explicitly, use it. */
@@ -387,11 +347,11 @@ in6_selectif(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 	 * If the destination address is a multicast address and the outgoing
 	 * interface for the address is specified by the caller, use it.
 	 */
-	if (IN6_IS_ADDR_MULTICAST(&dstsock->sin6_addr) &&
+	if (IN6_IS_ADDR_MULTICAST(dst) &&
 	    mopts != NULL && (*retifp = if_get(mopts->im6o_ifidx)) != NULL)
 	    	return (0);
 
-	rt = in6_selectroute(dstsock, opts, ro, rtableid);
+	rt = in6_selectroute(dst, opts, ro, rtableid);
 	if (rt == NULL)
 		return (EHOSTUNREACH);
 
@@ -412,11 +372,10 @@ in6_selectif(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 	 * Although this may not be very harmful, it should still be confusing.
 	 * We thus reject the case here.
 	 */
-	if (rt && (rt->rt_flags & (RTF_REJECT | RTF_BLACKHOLE)))
+	if (ISSET(rt->rt_flags, RTF_REJECT | RTF_BLACKHOLE))
 		return (rt->rt_flags & RTF_HOST ? EHOSTUNREACH : ENETUNREACH);
 
-	if (rt != NULL)
-		*retifp = if_get(rt->rt_ifidx);
+	*retifp = if_get(rt->rt_ifidx);
 
 	return (0);
 }

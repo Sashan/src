@@ -1,4 +1,4 @@
-/* $OpenBSD: obj_dat.c,v 1.82 2023/12/15 01:51:23 tb Exp $ */
+/* $OpenBSD: obj_dat.c,v 1.90 2024/05/08 16:35:05 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -71,6 +71,7 @@
 #include <openssl/objects.h>
 
 #include "asn1_local.h"
+#include "lhash_local.h"
 
 /* obj_dat.h is generated from objects.h by obj_dat.pl */
 #include "obj_dat.h"
@@ -166,7 +167,8 @@ cleanup1_doall(ADDED_OBJ *a)
 	    ASN1_OBJECT_FLAG_DYNAMIC_DATA;
 }
 
-static void cleanup2_doall(ADDED_OBJ *a)
+static void
+cleanup2_doall(ADDED_OBJ *a)
 {
 	a->obj->nid++;
 }
@@ -183,30 +185,12 @@ static IMPLEMENT_LHASH_DOALL_FN(cleanup1, ADDED_OBJ)
 static IMPLEMENT_LHASH_DOALL_FN(cleanup2, ADDED_OBJ)
 static IMPLEMENT_LHASH_DOALL_FN(cleanup3, ADDED_OBJ)
 
-/* The purpose of obj_cleanup_defer is to avoid EVP_cleanup() attempting
- * to use freed up OIDs. If necessary the actual freeing up of OIDs is
- * delayed.
- */
-
-int obj_cleanup_defer = 0;
-
-void
-check_defer(int nid)
-{
-	if (!obj_cleanup_defer && nid >= NUM_NID)
-		obj_cleanup_defer = 1;
-}
-
 void
 OBJ_cleanup(void)
 {
-	if (obj_cleanup_defer) {
-		obj_cleanup_defer = 2;
-		return;
-	}
 	if (added == NULL)
 		return;
-	lh_ADDED_OBJ_down_load(added) = 0;
+
 	lh_ADDED_OBJ_doall(added, LHASH_DOALL_FN(cleanup1)); /* zero counters */
 	lh_ADDED_OBJ_doall(added, LHASH_DOALL_FN(cleanup2)); /* set counters */
 	lh_ADDED_OBJ_doall(added, LHASH_DOALL_FN(cleanup3)); /* free objects */
@@ -226,7 +210,7 @@ OBJ_new_nid(int num)
 }
 LCRYPTO_ALIAS(OBJ_new_nid);
 
-int
+static int
 OBJ_add_object(const ASN1_OBJECT *obj)
 {
 	ASN1_OBJECT *o = NULL;
@@ -276,7 +260,6 @@ OBJ_add_object(const ASN1_OBJECT *obj)
 	ASN1_OBJECT_free(o);
 	return (NID_undef);
 }
-LCRYPTO_ALIAS(OBJ_add_object);
 
 ASN1_OBJECT *
 OBJ_nid2obj(int nid)
@@ -453,47 +436,6 @@ OBJ_ln2nid(const char *ln)
 	return NID_undef;
 }
 LCRYPTO_ALIAS(OBJ_ln2nid);
-
-const void *
-OBJ_bsearch_(const void *key, const void *base, int num, int size,
-    int (*cmp)(const void *, const void *))
-{
-	return OBJ_bsearch_ex_(key, base, num, size, cmp, 0);
-}
-LCRYPTO_ALIAS(OBJ_bsearch_);
-
-const void *
-OBJ_bsearch_ex_(const void *key, const void *base_, int num, int size,
-    int (*cmp)(const void *, const void *), int flags)
-{
-	const char *base = base_;
-	int l, h, i = 0, c = 0;
-	const char *p = NULL;
-
-	if (num == 0)
-		return (NULL);
-	l = 0;
-	h = num;
-	while (l < h) {
-		i = (l + h) / 2;
-		p = &(base[i * size]);
-		c = (*cmp)(key, p);
-		if (c < 0)
-			h = i;
-		else if (c > 0)
-			l = i + 1;
-		else
-			break;
-	}
-	if (c != 0 && !(flags & OBJ_BSEARCH_VALUE_ON_NOMATCH))
-		p = NULL;
-	else if (c == 0 && (flags & OBJ_BSEARCH_FIRST_VALUE_ON_MATCH)) {
-		while (i > 0 && (*cmp)(key, &(base[(i - 1) * size])) == 0)
-			i--;
-		p = &(base[i * size]);
-	}
-	return (p);
-}
 
 /* Convert an object name into an ASN1_OBJECT
  * if "noname" is not set then search for short and long names first.

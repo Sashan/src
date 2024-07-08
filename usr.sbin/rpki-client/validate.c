@@ -1,4 +1,4 @@
-/*	$OpenBSD: validate.c,v 1.70 2024/01/07 09:48:03 tb Exp $ */
+/*	$OpenBSD: validate.c,v 1.76 2024/06/17 18:52:50 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -50,7 +50,7 @@ valid_as(struct auth *a, uint32_t min, uint32_t max)
 		return 0;
 
 	/* If it inherits, walk up the chain. */
-	return valid_as(a->parent, min, max);
+	return valid_as(a->issuer, min, max);
 }
 
 /*
@@ -76,53 +76,7 @@ valid_ip(struct auth *a, enum afi afi,
 		return 0;
 
 	/* If it inherits, walk up the chain. */
-	return valid_ip(a->parent, afi, min, max);
-}
-
-/*
- * Make sure the AKI is the same as the AKI listed on the Manifest,
- * and that the SKI doesn't already exist.
- * Return the parent by its AKI, or NULL on failure.
- */
-struct auth *
-valid_ski_aki(const char *fn, struct auth_tree *auths,
-    const char *ski, const char *aki, const char *mftaki)
-{
-	struct auth *a;
-
-	if (mftaki != NULL) {
-		if (strcmp(aki, mftaki) != 0) {
-			warnx("%s: AKI doesn't match Manifest AKI", fn);
-			return NULL;
-		}
-	}
-
-	if (auth_find(auths, ski) != NULL) {
-		warnx("%s: RFC 6487: duplicate SKI", fn);
-		return NULL;
-	}
-
-	a = auth_find(auths, aki);
-	if (a == NULL)
-		warnx("%s: RFC 6487: unknown AKI", fn);
-
-	return a;
-}
-
-/*
- * Validate a trust anchor by making sure that the SKI is unique.
- * Returns 1 if valid, 0 otherwise.
- */
-int
-valid_ta(const char *fn, struct auth_tree *auths, const struct cert *cert)
-{
-	/* SKI must not be a dupe. */
-	if (auth_find(auths, cert->ski) != NULL) {
-		warnx("%s: RFC 6487: duplicate SKI", fn);
-		return 0;
-	}
-
-	return 1;
+	return valid_ip(a->issuer, afi, min, max);
 }
 
 /*
@@ -192,6 +146,22 @@ valid_roa(const char *fn, struct cert *cert, struct roa *roa)
 	}
 
 	return 1;
+}
+
+/*
+ * Validate our SPL: check that the asID is contained in the end-entity
+ * certificate's resources.
+ * Returns 1 if valid, 0 otherwise.
+ */
+int
+valid_spl(const char *fn, struct cert *cert, struct spl *spl)
+{
+	if (as_check_covered(spl->asid, spl->asid, cert->as, cert->asz) > 0)
+		return 1;
+
+	warnx("%s: SPL: uncovered ASID: %u", fn, spl->asid);
+
+	return 0;
 }
 
 /*
@@ -334,6 +304,7 @@ build_chain(const struct auth *a, STACK_OF(X509) **intermediates,
 	*intermediates = NULL;
 	*root = NULL;
 
+	/* XXX - this should be removed, but filemode relies on it. */
 	if (a == NULL)
 		return;
 
@@ -341,7 +312,7 @@ build_chain(const struct auth *a, STACK_OF(X509) **intermediates,
 		err(1, "sk_X509_new_null");
 	if ((*root = sk_X509_new_null()) == NULL)
 		err(1, "sk_X509_new_null");
-	for (; a != NULL; a = a->parent) {
+	for (; a != NULL; a = a->issuer) {
 		assert(a->cert->x509 != NULL);
 		if (!a->any_inherits) {
 			if (!sk_X509_push(*root, a->cert->x509))
@@ -665,7 +636,7 @@ valid_ca_pkey_ec(const char *fn, EVP_PKEY *pkey)
 	nid = EC_GROUP_get_curve_name(group);
 	if (nid != NID_X9_62_prime256v1) {
 		if ((cname = EC_curve_nid2nist(nid)) == NULL)
-			cname = OBJ_nid2sn(nid);
+			cname = nid2str(nid);
 		warnx("%s: Expected P-256, got %s", fn, cname);
 		return 0;
 	}

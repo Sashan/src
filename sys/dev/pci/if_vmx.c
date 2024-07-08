@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_vmx.c,v 1.79 2023/11/10 15:51:24 bluhm Exp $	*/
+/*	$OpenBSD: if_vmx.c,v 1.88 2024/06/17 11:13:43 bluhm Exp $	*/
 
 /*
  * Copyright (c) 2013 Tsubai Masanari
@@ -18,6 +18,7 @@
 
 #include "bpfilter.h"
 #include "kstat.h"
+#include "vlan.h"
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -33,11 +34,14 @@
 #include <net/if.h>
 #include <net/toeplitz.h>
 #include <net/if_media.h>
+#include <net/route.h>
 
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
+#include <netinet/tcp_timer.h>
+#include <netinet/tcp_var.h>
 #include <netinet/udp.h>
 
 #include <machine/bus.h>
@@ -110,6 +114,8 @@ struct vmxnet3_comp_ring {
 	};
 	u_int next;
 	u_int32_t gen;
+	struct mbuf *sendmp;
+	struct mbuf *lastmp;
 };
 
 struct vmxnet3_txqueue {
@@ -156,6 +162,7 @@ struct vmxnet3_softc {
 	struct vmxnet3_queue *sc_q;
 	struct intrmap *sc_intrmap;
 
+	u_int sc_vrrs;
 	struct vmxnet3_driver_shared *sc_ds;
 	u_int8_t *sc_mcast;
 	struct vmxnet3_upt1_rss_conf *sc_rss;
@@ -166,7 +173,7 @@ struct vmxnet3_softc {
 #endif
 };
 
-#define JUMBO_LEN (1024 * 9)
+#define JUMBO_LEN ((16 * 1024) - 1)
 #define DMAADDR(map) ((map)->dm_segs[0].ds_addr)
 
 #define READ_BAR0(sc, reg) bus_space_read_4((sc)->sc_iot0, (sc)->sc_ioh0, reg)
@@ -199,14 +206,12 @@ void vmxnet3_rxintr(struct vmxnet3_softc *, struct vmxnet3_rxqueue *);
 void vmxnet3_rxfill_tick(void *);
 void vmxnet3_rxfill(struct vmxnet3_rxring *);
 void vmxnet3_iff(struct vmxnet3_softc *);
-void vmxnet3_rx_csum(struct vmxnet3_rxcompdesc *, struct mbuf *);
+void vmxnet3_rx_offload(struct vmxnet3_rxcompdesc *, struct mbuf *);
 void vmxnet3_stop(struct ifnet *);
 void vmxnet3_reset(struct vmxnet3_softc *);
 int vmxnet3_init(struct vmxnet3_softc *);
 int vmxnet3_ioctl(struct ifnet *, u_long, caddr_t);
 void vmxnet3_start(struct ifqueue *);
-int vmxnet3_load_mbuf(struct vmxnet3_softc *, struct vmxnet3_txring *,
-    struct mbuf **);
 void vmxnet3_watchdog(struct ifnet *);
 void vmxnet3_media_status(struct ifnet *, struct ifmediareq *);
 int vmxnet3_media_change(struct ifnet *);
@@ -271,15 +276,21 @@ vmxnet3_attach(struct device *parent, struct device *self, void *aux)
 		return;
 	}
 
+	/* Vmxnet3 Revision Report and Selection */
 	ver = READ_BAR1(sc, VMXNET3_BAR1_VRRS);
-	if ((ver & 0x1) == 0) {
+	if (ISSET(ver, 0x2)) {
+		sc->sc_vrrs = 2;
+	} else if (ISSET(ver, 0x1)) {
+		sc->sc_vrrs = 1;
+	} else {
 		printf(": unsupported hardware version 0x%x\n", ver);
 		return;
 	}
-	WRITE_BAR1(sc, VMXNET3_BAR1_VRRS, 1);
+	WRITE_BAR1(sc, VMXNET3_BAR1_VRRS, sc->sc_vrrs);
 
+	/* UPT Version Report and Selection */
 	ver = READ_BAR1(sc, VMXNET3_BAR1_UVRS);
-	if ((ver & 0x1) == 0) {
+	if (!ISSET(ver, 0x1)) {
 		printf(": incompatible UPT version 0x%x\n", ver);
 		return;
 	}
@@ -400,12 +411,23 @@ vmxnet3_attach(struct device *parent, struct device *self, void *aux)
 	ifp->if_watchdog = vmxnet3_watchdog;
 	ifp->if_hardmtu = VMXNET3_MAX_MTU;
 	ifp->if_capabilities = IFCAP_VLAN_MTU;
-#if 0
-	if (sc->sc_ds->upt_features & UPT1_F_CSUM)
+
+	if (sc->sc_ds->upt_features & UPT1_F_CSUM) {
 		ifp->if_capabilities |= IFCAP_CSUM_TCPv4 | IFCAP_CSUM_UDPv4;
-#endif
+		ifp->if_capabilities |= IFCAP_CSUM_TCPv6 | IFCAP_CSUM_UDPv6;
+	}
+
+	ifp->if_capabilities |= IFCAP_TSOv4 | IFCAP_TSOv6;
+
+	if (sc->sc_vrrs == 2) {
+		ifp->if_xflags |= IFXF_LRO;
+		ifp->if_capabilities |= IFCAP_LRO;
+	}
+
+#if NVLAN > 0
 	if (sc->sc_ds->upt_features & UPT1_F_VLAN)
 		ifp->if_capabilities |= IFCAP_VLAN_HWTAGGING;
+#endif
 
 	ifq_init_maxlen(&ifp->if_snd, NTXDESC);
 
@@ -503,7 +525,10 @@ vmxnet3_dma_init(struct vmxnet3_softc *sc)
 #endif
 	ds->vmxnet3_revision = 1;
 	ds->upt_version = 1;
-	ds->upt_features = UPT1_F_CSUM | UPT1_F_VLAN;
+	ds->upt_features = UPT1_F_CSUM;
+#if NVLAN > 0
+	ds->upt_features |= UPT1_F_VLAN;
+#endif
 	ds->driver_data = ~0ULL;
 	ds->driver_data_len = 0;
 	ds->queue_shared = qs_pa;
@@ -571,8 +596,8 @@ vmxnet3_alloc_txring(struct vmxnet3_softc *sc, int queue, int intr)
 	comp_ring->txcd = VMX_DMA_KVA(&comp_ring->dmamem);
 
 	for (idx = 0; idx < NTXDESC; idx++) {
-		if (bus_dmamap_create(sc->sc_dmat, JUMBO_LEN, NTXSEGS,
-		    VMXNET3_TX_LEN_M + 1, 0, BUS_DMA_NOWAIT, &ring->dmap[idx]))
+		if (bus_dmamap_create(sc->sc_dmat, MAXMCLBYTES, NTXSEGS,
+		    VMXNET3_TX_LEN_M, 0, BUS_DMA_NOWAIT, &ring->dmap[idx]))
 			return -1;
 	}
 
@@ -693,6 +718,10 @@ vmxnet3_rxfill(struct vmxnet3_rxring *ring)
 	uint32_t rgen;
 	uint32_t type = htole32(VMXNET3_BTYPE_HEAD << VMXNET3_RX_BTYPE_S);
 
+	/* Second ring just contains packet bodies. */
+	if (ring->rid == 1)
+		type = htole32(VMXNET3_BTYPE_BODY << VMXNET3_RX_BTYPE_S);
+
 	MUTEX_ASSERT_LOCKED(&ring->mtx);
 
 	slots = if_rxr_get(&ring->rxr, NRXDESC);
@@ -770,17 +799,17 @@ vmxnet3_rxinit(struct vmxnet3_softc *sc, struct vmxnet3_rxqueue *rq)
 		    VMX_DMA_LEN(&ring->dmamem));
 		bus_dmamap_sync(sc->sc_dmat, VMX_DMA_MAP(&ring->dmamem),
 		    0, VMX_DMA_LEN(&ring->dmamem), BUS_DMASYNC_PREWRITE);
-	}
 
-	/* XXX only fill ring 0 */
-	ring = &rq->cmd_ring[0];
-	mtx_enter(&ring->mtx);
-	vmxnet3_rxfill(ring);
-	mtx_leave(&ring->mtx);
+		mtx_enter(&ring->mtx);
+		vmxnet3_rxfill(ring);
+		mtx_leave(&ring->mtx);
+	}
 
 	comp_ring = &rq->comp_ring;
 	comp_ring->next = 0;
 	comp_ring->gen = VMX_RXC_GEN;
+	comp_ring->sendmp = NULL;
+	comp_ring->lastmp = NULL;
 
 	memset(VMX_DMA_KVA(&comp_ring->dmamem), 0,
 	    VMX_DMA_LEN(&comp_ring->dmamem));
@@ -1063,9 +1092,9 @@ vmxnet3_rxintr(struct vmxnet3_softc *sc, struct vmxnet3_rxqueue *rq)
 	struct mbuf_list ml = MBUF_LIST_INITIALIZER();
 	struct mbuf *m;
 	bus_dmamap_t map;
-	unsigned int idx, len;
+	unsigned int idx;
 	unsigned int next, rgen;
-	unsigned int done = 0;
+	unsigned int rid, done[2] = {0, 0};
 
 	next = comp_ring->next;
 	rgen = comp_ring->gen;
@@ -1085,11 +1114,14 @@ vmxnet3_rxintr(struct vmxnet3_softc *sc, struct vmxnet3_rxqueue *rq)
 
 		idx = letoh32((rxcd->rxc_word0 >> VMXNET3_RXC_IDX_S) &
 		    VMXNET3_RXC_IDX_M);
+
 		if (letoh32((rxcd->rxc_word0 >> VMXNET3_RXC_QID_S) &
 		    VMXNET3_RXC_QID_M) < sc->sc_nqueues)
-			ring = &rq->cmd_ring[0];
+			rid = 0;
 		else
-			ring = &rq->cmd_ring[1];
+			rid = 1;
+
+		ring = &rq->cmd_ring[rid];
 
 		m = ring->m[idx];
 		KASSERT(m != NULL);
@@ -1100,35 +1132,62 @@ vmxnet3_rxintr(struct vmxnet3_softc *sc, struct vmxnet3_rxqueue *rq)
 		    BUS_DMASYNC_POSTREAD);
 		bus_dmamap_unload(sc->sc_dmat, map);
 
-		done++;
+		done[rid]++;
+
+		/*
+		 * A receive descriptor of type 4 which is flaged as start of
+		 * packet, contains the number of TCP segment of an LRO packet.
+		 */
+		if (letoh32((rxcd->rxc_word3 & VMXNET3_RXC_TYPE_M) >>
+		    VMXNET3_RXC_TYPE_S) == 4 &&
+		    ISSET(rxcd->rxc_word0, VMXNET3_RXC_SOP)) {
+			m->m_pkthdr.ph_mss = letoh32(rxcd->rxc_word1 &
+			    VMXNET3_RXC_SEG_CNT_M);
+		}
+
+		m->m_len = letoh32((rxcd->rxc_word2 >> VMXNET3_RXC_LEN_S) &
+		    VMXNET3_RXC_LEN_M);
+
+		if (comp_ring->sendmp == NULL) {
+			comp_ring->sendmp = comp_ring->lastmp = m;
+			comp_ring->sendmp->m_pkthdr.len = 0;
+		} else {
+			CLR(m->m_flags, M_PKTHDR);
+			comp_ring->lastmp->m_next = m;
+			comp_ring->lastmp = m;
+		}
+		comp_ring->sendmp->m_pkthdr.len += m->m_len;
+
+		if (!ISSET(rxcd->rxc_word0, VMXNET3_RXC_EOP))
+			continue;
+
+		/*
+		 * End of Packet
+		 */
 
 		if (letoh32(rxcd->rxc_word2 & VMXNET3_RXC_ERROR)) {
 			ifp->if_ierrors++;
-			m_freem(m);
+			m_freem(comp_ring->sendmp);
+			comp_ring->sendmp = comp_ring->lastmp = NULL;
 			continue;
 		}
 
-		len = letoh32((rxcd->rxc_word2 >> VMXNET3_RXC_LEN_S) &
-		    VMXNET3_RXC_LEN_M);
-		if (len < VMXNET3_MIN_MTU) {
-			m_freem(m);
+		if (comp_ring->sendmp->m_pkthdr.len < VMXNET3_MIN_MTU) {
+			m_freem(comp_ring->sendmp);
+			comp_ring->sendmp = comp_ring->lastmp = NULL;
 			continue;
 		}
-		m->m_pkthdr.len = m->m_len = len;
 
-		vmxnet3_rx_csum(rxcd, m);
-		if (letoh32(rxcd->rxc_word2 & VMXNET3_RXC_VLAN)) {
-			m->m_flags |= M_VLANTAG;
-			m->m_pkthdr.ether_vtag = letoh32((rxcd->rxc_word2 >>
-			    VMXNET3_RXC_VLANTAG_S) & VMXNET3_RXC_VLANTAG_M);
-		}
 		if (((letoh32(rxcd->rxc_word0) >> VMXNET3_RXC_RSSTYPE_S) &
 		    VMXNET3_RXC_RSSTYPE_M) != VMXNET3_RXC_RSSTYPE_NONE) {
-			m->m_pkthdr.ph_flowid = letoh32(rxcd->rxc_word1);
-			SET(m->m_pkthdr.csum_flags, M_FLOWID);
+			comp_ring->sendmp->m_pkthdr.ph_flowid =
+			    letoh32(rxcd->rxc_word1);
+			SET(comp_ring->sendmp->m_pkthdr.csum_flags, M_FLOWID);
 		}
 
-		ml_enqueue(&ml, m);
+		vmxnet3_rx_offload(rxcd, comp_ring->sendmp);
+		ml_enqueue(&ml, comp_ring->sendmp);
+		comp_ring->sendmp = comp_ring->lastmp = NULL;
 	}
 
 	bus_dmamap_sync(sc->sc_dmat, VMX_DMA_MAP(&comp_ring->dmamem),
@@ -1137,19 +1196,20 @@ vmxnet3_rxintr(struct vmxnet3_softc *sc, struct vmxnet3_rxqueue *rq)
 	comp_ring->next = next;
 	comp_ring->gen = rgen;
 
-	if (done == 0)
-		return;
+	for (int i = 0; i < 2; i++) {
+		if (done[i] == 0)
+			continue;
 
-	ring = &rq->cmd_ring[0];
+		ring = &rq->cmd_ring[i];
 
-	if (ifiq_input(rq->ifiq, &ml))
-		if_rxr_livelocked(&ring->rxr);
+		if (ifiq_input(rq->ifiq, &ml))
+			if_rxr_livelocked(&ring->rxr);
 
-	/* XXX Should we (try to) allocate buffers for ring 2 too? */
-	mtx_enter(&ring->mtx);
-	if_rxr_put(&ring->rxr, done);
-	vmxnet3_rxfill(ring);
-	mtx_leave(&ring->mtx);
+		mtx_enter(&ring->mtx);
+		if_rxr_put(&ring->rxr, done[i]);
+		vmxnet3_rxfill(ring);
+		mtx_leave(&ring->mtx);
+	}
 }
 
 void
@@ -1202,22 +1262,80 @@ vmxnet3_iff(struct vmxnet3_softc *sc)
 
 
 void
-vmxnet3_rx_csum(struct vmxnet3_rxcompdesc *rxcd, struct mbuf *m)
+vmxnet3_rx_offload(struct vmxnet3_rxcompdesc *rxcd, struct mbuf *m)
 {
-	if (letoh32(rxcd->rxc_word0 & VMXNET3_RXC_NOCSUM))
+	uint32_t pkts;
+
+	/*
+	 * VLAN Offload
+	 */
+
+#if NVLAN > 0
+	if (ISSET(rxcd->rxc_word2, VMXNET3_RXC_VLAN)) {
+		SET(m->m_flags, M_VLANTAG);
+		m->m_pkthdr.ether_vtag = letoh32((rxcd->rxc_word2 >>
+		    VMXNET3_RXC_VLANTAG_S) & VMXNET3_RXC_VLANTAG_M);
+	}
+#endif
+
+	/*
+	 * Checksum Offload
+	 */
+
+	if (ISSET(rxcd->rxc_word0, VMXNET3_RXC_NOCSUM))
 		return;
 
-	if ((rxcd->rxc_word3 & (VMXNET3_RXC_IPV4 | VMXNET3_RXC_IPSUM_OK)) ==
-	    (VMXNET3_RXC_IPV4 | VMXNET3_RXC_IPSUM_OK))
-		m->m_pkthdr.csum_flags |= M_IPV4_CSUM_IN_OK;
+	if (ISSET(rxcd->rxc_word3, VMXNET3_RXC_IPV4) &&
+	    ISSET(rxcd->rxc_word3, VMXNET3_RXC_IPSUM_OK))
+		SET(m->m_pkthdr.csum_flags, M_IPV4_CSUM_IN_OK);
 
-	if (rxcd->rxc_word3 & VMXNET3_RXC_FRAGMENT)
+	if (ISSET(rxcd->rxc_word3, VMXNET3_RXC_FRAGMENT))
 		return;
 
-	if (rxcd->rxc_word3 & (VMXNET3_RXC_TCP | VMXNET3_RXC_UDP)) {
-		if (rxcd->rxc_word3 & VMXNET3_RXC_CSUM_OK)
-			m->m_pkthdr.csum_flags |=
-			    M_TCP_CSUM_IN_OK | M_UDP_CSUM_IN_OK;
+	if (ISSET(rxcd->rxc_word3, VMXNET3_RXC_CSUM_OK)) {
+		if (ISSET(rxcd->rxc_word3, VMXNET3_RXC_TCP))
+			SET(m->m_pkthdr.csum_flags, M_TCP_CSUM_IN_OK);
+		else if (ISSET(rxcd->rxc_word3, VMXNET3_RXC_UDP))
+			SET(m->m_pkthdr.csum_flags, M_UDP_CSUM_IN_OK);
+	}
+
+	/*
+	 * TCP Large Receive Offload
+	 */
+
+	pkts = m->m_pkthdr.ph_mss;
+	m->m_pkthdr.ph_mss = 0;
+
+	if (pkts > 1) {
+		struct ether_extracted ext;
+		uint32_t paylen;
+
+		ether_extract_headers(m, &ext);
+
+		paylen = ext.iplen;
+		if (ext.ip4 || ext.ip6)
+			paylen -= ext.iphlen;
+
+		if (ext.tcp) {
+			paylen -= ext.tcphlen;
+			tcpstat_inc(tcps_inhwlro);
+			tcpstat_add(tcps_inpktlro, pkts);
+		} else {
+			tcpstat_inc(tcps_inbadlro);
+		}
+
+		/*
+		 * If we gonna forward this packet, we have to mark it as TSO,
+		 * set a correct mss, and recalculate the TCP checksum.
+		 */
+		if (ext.tcp && paylen >= pkts) {
+			SET(m->m_pkthdr.csum_flags, M_TCP_TSO);
+			m->m_pkthdr.ph_mss = paylen / pkts;
+		}
+		if (ext.tcp &&
+		    ISSET(m->m_pkthdr.csum_flags, M_TCP_CSUM_IN_OK)) {
+			SET(m->m_pkthdr.csum_flags, M_TCP_CSUM_OUT);
+		}
 	}
 }
 
@@ -1284,6 +1402,13 @@ vmxnet3_init(struct vmxnet3_softc *sc)
 		vmxnet3_stop(ifp);
 		return EIO;
 	}
+
+	/* TCP Large Receive Offload */
+	if (ISSET(ifp->if_xflags, IFXF_LRO))
+		SET(sc->sc_ds->upt_features, UPT1_F_LRO);
+	else
+		CLR(sc->sc_ds->upt_features, UPT1_F_LRO);
+	WRITE_CMD(sc, VMXNET3_CMD_SET_FEATURE);
 
 	/* Program promiscuous mode and multicast filters. */
 	vmxnet3_iff(sc);
@@ -1391,6 +1516,83 @@ vmx_load_mbuf(bus_dma_tag_t dmat, bus_dmamap_t map, struct mbuf *m)
 }
 
 void
+vmxnet3_tx_offload(struct vmxnet3_txdesc *sop, struct mbuf *m)
+{
+	struct ether_extracted ext;
+	uint32_t offset = 0;
+	uint32_t hdrlen;
+
+	/*
+	 * VLAN Offload
+	 */
+
+#if NVLAN > 0
+	if (ISSET(m->m_flags, M_VLANTAG)) {
+		sop->tx_word3 |= htole32(VMXNET3_TX_VTAG_MODE);
+		sop->tx_word3 |= htole32((m->m_pkthdr.ether_vtag &
+		    VMXNET3_TX_VLANTAG_M) << VMXNET3_TX_VLANTAG_S);
+	}
+#endif
+
+	/*
+	 * Checksum Offload
+	 */
+
+	if (!ISSET(m->m_pkthdr.csum_flags, M_TCP_CSUM_OUT) &&
+	    !ISSET(m->m_pkthdr.csum_flags, M_UDP_CSUM_OUT))
+		return;
+
+	ether_extract_headers(m, &ext);
+
+	hdrlen = sizeof(*ext.eh);
+	if (ext.evh)
+		hdrlen = sizeof(*ext.evh);
+
+	if (ext.ip4 || ext.ip6)
+		hdrlen += ext.iphlen;
+
+	if (ext.tcp)
+		offset = hdrlen + offsetof(struct tcphdr, th_sum);
+	else if (ext.udp)
+		offset = hdrlen + offsetof(struct udphdr, uh_sum);
+	else
+		return;
+
+	if (!ISSET(m->m_pkthdr.csum_flags, M_TCP_TSO)) {
+		hdrlen &= VMXNET3_TX_HLEN_M;
+		offset &= VMXNET3_TX_OP_M;
+
+		sop->tx_word3 |= htole32(VMXNET3_OM_CSUM << VMXNET3_TX_OM_S);
+		sop->tx_word3 |= htole32(hdrlen << VMXNET3_TX_HLEN_S);
+		sop->tx_word2 |= htole32(offset << VMXNET3_TX_OP_S);
+
+		return;
+	}
+
+	/*
+	 * TCP Segmentation Offload
+	 */
+
+	if (ext.tcp == NULL || m->m_pkthdr.ph_mss == 0) {
+		tcpstat_inc(tcps_outbadtso);
+		return;
+	}
+
+	if (ext.ip4)
+		ext.ip4->ip_sum = 0;
+
+	hdrlen += ext.tcphlen;
+	hdrlen &= VMXNET3_TX_HLEN_M;
+
+	sop->tx_word3 |= htole32(VMXNET3_OM_TSO << VMXNET3_TX_OM_S);
+	sop->tx_word3 |= htole32(hdrlen << VMXNET3_TX_HLEN_S);
+	sop->tx_word2 |= htole32(m->m_pkthdr.ph_mss << VMXNET3_TX_OP_S);
+
+	tcpstat_add(tcps_outpkttso, (m->m_pkthdr.len - hdrlen +
+	    m->m_pkthdr.ph_mss - 1) / m->m_pkthdr.ph_mss);
+}
+
+void
 vmxnet3_start(struct ifqueue *ifq)
 {
 	struct ifnet *ifp = ifq->ifq_if;
@@ -1417,6 +1619,8 @@ vmxnet3_start(struct ifqueue *ifq)
 	rgen = ring->gen;
 
 	for (;;) {
+		int hdrlen;
+
 		if (free <= NTXSEGS) {
 			ifq_set_oactive(ifq);
 			break;
@@ -1425,6 +1629,30 @@ vmxnet3_start(struct ifqueue *ifq)
 		m = ifq_dequeue(ifq);
 		if (m == NULL)
 			break;
+
+		/*
+		 * Headers for Ether, IP, TCP including options must lay in
+		 * first mbuf to support TSO.  Usually our stack gets that
+		 * right. To avoid packet parsing here, make a rough estimate
+		 * for simple IPv4.  Cases seen in the wild contain only ether 
+		 * header in separate mbuf.  To support IPv6 with TCP options,
+		 * move as much as possible into first mbuf.  Realloc mbuf
+		 * before bus dma load.
+		 */
+		hdrlen = sizeof(struct ether_header) + sizeof(struct ip) +
+		    sizeof(struct tcphdr);
+		if (ISSET(m->m_pkthdr.csum_flags, M_TCP_TSO) &&
+		    m->m_len < hdrlen && hdrlen <= m->m_pkthdr.len) {
+			hdrlen = MHLEN;
+			/* m_pullup preserves alignment, reserve space */
+			hdrlen -= mtod(m, unsigned long) & (sizeof(long) - 1);
+			if (hdrlen > m->m_pkthdr.len)
+				hdrlen = m->m_pkthdr.len;
+			if ((m = m_pullup(m, hdrlen)) == NULL) {
+				ifq->ifq_errors++;
+				continue;
+			}
+		}
 
 		map = ring->dmap[prod];
 
@@ -1462,11 +1690,7 @@ vmxnet3_start(struct ifqueue *ifq)
 		}
 		txd->tx_word3 = htole32(VMXNET3_TX_EOP | VMXNET3_TX_COMPREQ);
 
-		if (ISSET(m->m_flags, M_VLANTAG)) {
-			sop->tx_word3 |= htole32(VMXNET3_TX_VTAG_MODE);
-			sop->tx_word3 |= htole32((m->m_pkthdr.ether_vtag &
-			    VMXNET3_TX_VLANTAG_M) << VMXNET3_TX_VLANTAG_S);
-		}
+		vmxnet3_tx_offload(sop, m);
 
 		ring->prod = prod;
 		/* Change the ownership by flipping the "generation" bit */

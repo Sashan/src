@@ -1,4 +1,4 @@
-/*	$OpenBSD: pciide.c,v 1.363 2022/03/11 18:00:51 mpi Exp $	*/
+/*	$OpenBSD: pciide.c,v 1.366 2024/05/15 07:46:25 jsg Exp $	*/
 /*	$NetBSD: pciide.c,v 1.127 2001/08/03 01:31:08 tsutsui Exp $	*/
 
 /*
@@ -113,7 +113,6 @@ int wdcdebug_pciide_mask = WDCDEBUG_PCIIDE_MASK;
 #include <dev/pci/pciide_sis_reg.h>
 #include <dev/pci/pciide_acer_reg.h>
 #include <dev/pci/pciide_pdc202xx_reg.h>
-#include <dev/pci/pciide_opti_reg.h>
 #include <dev/pci/pciide_hpt_reg.h>
 #include <dev/pci/pciide_acard_reg.h>
 #include <dev/pci/pciide_natsemi_reg.h>
@@ -239,9 +238,6 @@ int  pdc203xx_dma_finish(void *, int, int, int);
 int  pdc205xx_pci_intr(void *);
 void pdc205xx_do_reset(struct channel_softc *);
 void pdc205xx_drv_probe(struct channel_softc *);
-
-void opti_chip_map(struct pciide_softc *, struct pci_attach_args *);
-void opti_setup_channel(struct channel_softc *);
 
 void hpt_chip_map(struct pciide_softc *, struct pci_attach_args *);
 void hpt_setup_channel(struct channel_softc *);
@@ -2939,8 +2935,8 @@ piix_setup_channel(struct channel_softc *chp)
 	    (drvp[1].drive_flags & DRIVE_DMA)) {
 		mode[0] = mode[1] =
 		    min(drvp[0].DMA_mode, drvp[1].DMA_mode);
-		    drvp[0].DMA_mode = mode[0];
-		    drvp[1].DMA_mode = mode[1];
+		drvp[0].DMA_mode = mode[0];
+		drvp[1].DMA_mode = mode[1];
 		goto ok;
 	}
 	/*
@@ -4127,7 +4123,7 @@ cmd680_channel_map(struct pci_attach_args *pa, struct pciide_softc *sc,
 		printf("%s %s: "
 		    "cannot allocate channel queue",
 		    sc->sc_wdcdev.sc_dev.dv_xname, cp->name);
-		    return;
+		return;
 	}
 
 	/* XXX */
@@ -7972,9 +7968,9 @@ acard_setup_channel(struct channel_softc *chp)
 				    acard_act_pio[drvp->PIO_mode],
 				    acard_rec_pio[drvp->PIO_mode]);
 			}
-		pci_conf_write(sc->sc_pc, sc->sc_tag, ATP8x0_CTRL,
-		    pci_conf_read(sc->sc_pc, sc->sc_tag, ATP8x0_CTRL)
-		    | ATP8x0_CTRL_EN(channel));
+			pci_conf_write(sc->sc_pc, sc->sc_tag, ATP8x0_CTRL,
+			    pci_conf_read(sc->sc_pc, sc->sc_tag, ATP8x0_CTRL) |
+			    ATP8x0_CTRL_EN(channel));
 		}
 	}
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: ffs_extern.h,v 1.45 2020/01/20 23:21:56 claudio Exp $	*/
+/*	$OpenBSD: ffs_extern.h,v 1.50 2024/05/13 01:15:53 jsg Exp $	*/
 /*	$NetBSD: ffs_extern.h,v 1.4 1996/02/09 22:22:22 christos Exp $	*/
 
 /*
@@ -59,18 +59,18 @@
 	{ 0, 0 }, \
 	{ 0, 0 }, \
 	{ 0, 0 }, \
-	{ "max_softdeps", CTLTYPE_INT }, \
-	{ "sd_tickdelay", CTLTYPE_INT }, \
-	{ "sd_worklist_push", CTLTYPE_INT }, \
-	{ "sd_blk_limit_push", CTLTYPE_INT }, \
-	{ "sd_ino_limit_push", CTLTYPE_INT }, \
-	{ "sd_blk_limit_hit", CTLTYPE_INT }, \
-	{ "sd_ino_limit_hit", CTLTYPE_INT }, \
-	{ "sd_sync_limit_hit", CTLTYPE_INT }, \
-	{ "sd_indir_blk_ptrs", CTLTYPE_INT }, \
-	{ "sd_inode_bitmap", CTLTYPE_INT }, \
-	{ "sd_direct_blk_ptrs", CTLTYPE_INT }, \
-	{ "sd_dir_entry", CTLTYPE_INT }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
 	{ "dirhash_dirsize", CTLTYPE_INT }, \
 	{ "dirhash_maxmem", CTLTYPE_INT }, \
 	{ "dirhash_mem", CTLTYPE_INT }, \
@@ -151,7 +151,6 @@ int ffs_vptofh(struct vnode *, struct fid *);
 int ffs_sysctl(int *, u_int, void *, size_t *, void *, size_t,
 		    struct proc *);
 int ffs_sbupdate(struct ufsmount *, int);
-int ffs_cgupdate(struct ufsmount *, int);
 
 /* ffs_vnops.c */
 int ffs_read(void *);
@@ -166,28 +165,6 @@ int ffsfifo_reclaim(void *);
 
 struct vop_vfree_args;
 struct vop_fsync_args;
-
-void  softdep_initialize(void);
-int   softdep_process_worklist(struct mount *);
-int   softdep_mount(struct vnode *, struct mount *, struct fs *,
-          struct ucred *);
-int   softdep_flushworklist(struct mount *, int *, struct proc *);
-int   softdep_flushfiles(struct mount *, int, struct proc *);
-void  softdep_update_inodeblock(struct inode *, struct buf *, int);
-void  softdep_load_inodeblock(struct inode *);
-void  softdep_freefile(struct vnode *, ufsino_t, mode_t);
-void  softdep_setup_freeblocks(struct inode *, off_t);
-void  softdep_setup_inomapdep(struct buf *, struct inode *, ufsino_t);
-void  softdep_setup_blkmapdep(struct buf *, struct fs *, daddr_t);
-void  softdep_setup_allocdirect(struct inode *, daddr_t, daddr_t,
-            daddr_t, long, long, struct buf *);
-void  softdep_setup_allocindir_meta(struct buf *, struct inode *,
-            struct buf *, int, daddr_t);
-void  softdep_setup_allocindir_page(struct inode *, daddr_t,
-            struct buf *, int, daddr_t, daddr_t, struct buf *);
-void  softdep_fsync_mountdev(struct vnode *, int);
-int   softdep_sync_metadata(struct vop_fsync_args *);
-int   softdep_fsync(struct vnode *);
 
 extern struct pool ffs_ino_pool;	/* memory pool for inodes */
 extern struct pool ffs_dinode1_pool;	/* memory pool for UFS1 dinodes */

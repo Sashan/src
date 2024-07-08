@@ -1,4 +1,4 @@
-/*	$OpenBSD: drm_linux.c,v 1.106 2024/01/06 09:33:08 kettenis Exp $	*/
+/*	$OpenBSD: drm_linux.c,v 1.114 2024/06/13 18:05:54 kettenis Exp $	*/
 /*
  * Copyright (c) 2013 Jonathan Gray <jsg@openbsd.org>
  * Copyright (c) 2015, 2016 Mark Kettenis <kettenis@openbsd.org>
@@ -114,14 +114,13 @@ void
 __set_current_state(int state)
 {
 	struct proc *p = curproc;
-	int s;
 
 	KASSERT(state == TASK_RUNNING);
-	SCHED_LOCK(s);
+	SCHED_LOCK();
 	unsleep(p);
 	p->p_stat = SONPROC;
 	atomic_clearbits_int(&p->p_flag, P_WSLEEP);
-	SCHED_UNLOCK(s);
+	SCHED_UNLOCK();
 }
 
 void
@@ -159,11 +158,11 @@ schedule_timeout_uninterruptible(long timeout)
 int
 wake_up_process(struct proc *p)
 {
-	int s, rv;
+	int rv;
 
-	SCHED_LOCK(s);
-	rv = wakeup_proc(p, NULL, 0);
-	SCHED_UNLOCK(s);
+	SCHED_LOCK();
+	rv = wakeup_proc(p, 0);
+	SCHED_UNLOCK();
 	return rv;
 }
 
@@ -664,6 +663,28 @@ vmap(struct vm_page **pages, unsigned int npages, unsigned long flags,
 		return NULL;
 	for (i = 0; i < npages; i++) {
 		pa = VM_PAGE_TO_PHYS(pages[i]) | prot;
+		pmap_enter(pmap_kernel(), va + (i * PAGE_SIZE), pa,
+		    PROT_READ | PROT_WRITE,
+		    PROT_READ | PROT_WRITE | PMAP_WIRED);
+		pmap_update(pmap_kernel());
+	}
+
+	return (void *)va;
+}
+
+void *
+vmap_pfn(unsigned long *pfns, unsigned int npfn, pgprot_t prot)
+{
+	vaddr_t va;
+	paddr_t pa;
+	int i;
+
+	va = (vaddr_t)km_alloc(PAGE_SIZE * npfn, &kv_any, &kp_none,
+	    &kd_nowait);
+	if (va == 0)
+		return NULL;
+	for (i = 0; i < npfn; i++) {
+		pa = round_page(pfns[i]) | prot;
 		pmap_enter(pmap_kernel(), va + (i * PAGE_SIZE), pa,
 		    PROT_READ | PROT_WRITE,
 		    PROT_READ | PROT_WRITE | PMAP_WIRED);
@@ -1302,7 +1323,8 @@ vga_disable_bridge(struct pci_attach_args *pa)
 void
 vga_get_uninterruptible(struct pci_dev *pdev, int rsrc)
 {
-	KASSERT(pdev->pci->sc_bridgetag == NULL);
+	if (pdev->pci->sc_bridgetag != NULL)
+		return;
 	pci_enumerate_bus(pdev->pci, vga_disable_bridge, NULL);
 }
 
@@ -1499,6 +1521,12 @@ acpi_format_exception(acpi_status status)
 	}
 }
 
+int
+acpi_target_system_state(void)
+{
+	return acpi_softc->sc_state;
+}
+
 #endif
 
 SLIST_HEAD(,backlight_device) backlight_device_list =
@@ -1634,6 +1662,13 @@ drm_sysfs_connector_hotplug_event(struct drm_connector *connector)
 
 void
 drm_sysfs_connector_status_event(struct drm_connector *connector,
+    struct drm_property *property)
+{
+	STUB();
+}
+
+void
+drm_sysfs_connector_property_event(struct drm_connector *connector,
     struct drm_property *property)
 {
 	STUB();
@@ -2042,6 +2077,15 @@ cb_cleanup:
 		dma_fence_remove_callback(fences[i], &cb[i].base);
 	free(cb, M_DRM, count * sizeof(*cb));
 	return ret;
+}
+
+void
+dma_fence_set_deadline(struct dma_fence *f, ktime_t t)
+{
+	if (f->ops->set_deadline == NULL)
+		return;
+	if (dma_fence_is_signaled(f) == false)
+		f->ops->set_deadline(f, t);
 }
 
 static struct dma_fence dma_fence_stub;
@@ -3360,38 +3404,86 @@ iommu_attach_device(struct iommu_domain *domain, struct device *dev)
 
 #include <linux/component.h>
 
-struct component_match {
+struct component {
 	struct device *dev;
+	struct device *adev;
+	const struct component_ops *ops;
+	SLIST_ENTRY(component) next;
 };
 
+SLIST_HEAD(,component) component_list = SLIST_HEAD_INITIALIZER(component_list);
+
 int
-component_compare_of(struct device *dev, void *data)
+component_add(struct device *dev, const struct component_ops *ops)
 {
-	STUB();
+	struct component *component;
+
+	component = malloc(sizeof(*component), M_DEVBUF, M_WAITOK | M_ZERO);
+	component->dev = dev;
+	component->ops = ops;
+	SLIST_INSERT_HEAD(&component_list, component, next);
 	return 0;
 }
 
-void
-drm_of_component_match_add(struct device *master,
-			   struct component_match **matchptr,
-			   int (*compare)(struct device *, void *),
-			   struct device_node *np)
+int
+component_add_typed(struct device *dev, const struct component_ops *ops,
+	int type)
 {
-	struct component_match *match;
-
-	if (*matchptr == NULL) {
-		match = malloc(sizeof(struct component_match),
-		    M_DEVBUF, M_WAITOK | M_ZERO);
-		match->dev = master;
-		*matchptr = match;
-	}
+	return component_add(dev, ops);
 }
+
+int
+component_bind_all(struct device *dev, void *data)
+{
+	struct component *component;
+	int ret = 0;
+
+	SLIST_FOREACH(component, &component_list, next) {
+		if (component->adev == dev) {
+			ret = component->ops->bind(component->dev, NULL, data);
+			if (ret)
+				break;
+		}
+	}
+
+	return ret;
+}
+
+struct component_match_entry {
+	int (*compare)(struct device *, void *);
+	void *data;
+};
+
+struct component_match {
+	struct component_match_entry match[4];
+	int nmatches;
+};
 
 int
 component_master_add_with_match(struct device *dev,
     const struct component_master_ops *ops, struct component_match *match)
 {
-	ops->bind(match->dev);
+	struct component *component;
+	int found = 0;
+	int i, ret;
+
+	SLIST_FOREACH(component, &component_list, next) {
+		for (i = 0; i < match->nmatches; i++) {
+			struct component_match_entry *m = &match->match[i];
+			if (m->compare(component->dev, m->data)) {
+				component->adev = dev;
+				found = 1;
+				break;
+			}
+		}
+	}
+
+	if (found) {
+		ret = ops->bind(dev);
+		if (ret)
+			return ret;
+	}
+
 	return 0;
 }
 
@@ -3407,10 +3499,22 @@ LIST_HEAD(, platform_device) pdev_list = LIST_HEAD_INITIALIZER(pdev_list);
 void
 platform_device_register(struct platform_device *pdev)
 {
+	int i;
+
 	pdev->num_resources = pdev->faa->fa_nreg;
+	if (pdev->faa->fa_nreg > 0) {
+		pdev->resource = mallocarray(pdev->faa->fa_nreg,
+		    sizeof(*pdev->resource), M_DEVBUF, M_WAITOK | M_ZERO);
+		for (i = 0; i < pdev->faa->fa_nreg; i++) {
+			pdev->resource[i].start = pdev->faa->fa_reg[i].addr;
+			pdev->resource[i].end = pdev->faa->fa_reg[i].addr +
+			    pdev->faa->fa_reg[i].size - 1;
+		}
+	}
 
 	pdev->parent = pdev->dev.dv_parent;
 	pdev->node = pdev->faa->fa_node;
+	pdev->iot = pdev->faa->fa_iot;
 	pdev->dmat = pdev->faa->fa_dmat;
 	LIST_INSERT_HEAD(&pdev_list, pdev, next);
 }
@@ -3419,17 +3523,7 @@ platform_device_register(struct platform_device *pdev)
 struct resource *
 platform_get_resource(struct platform_device *pdev, u_int type, u_int num)
 {
-	struct fdt_attach_args *faa = pdev->faa;
-
-	if (pdev->resource == NULL) {
-		pdev->resource = mallocarray(pdev->num_resources,
-		    sizeof(*pdev->resource), M_DEVBUF, M_WAITOK | M_ZERO);
-	}
-
-	pdev->resource[num].start = faa->fa_reg[num].addr;
-	pdev->resource[num].end = faa->fa_reg[num].addr +
-	    faa->fa_reg[num].size - 1;
-
+	KASSERT(num < pdev->num_resources);
 	return &pdev->resource[num];
 }
 
@@ -3437,20 +3531,20 @@ void __iomem *
 devm_platform_ioremap_resource_byname(struct platform_device *pdev,
 				      const char *name)
 {
-	struct fdt_attach_args *faa = pdev->faa;
 	bus_space_handle_t ioh;
 	int err, idx;
 
-	idx = OF_getindex(faa->fa_node, name, "reg-names");
-	if (idx == -1 || idx >= faa->fa_nreg)
+	idx = OF_getindex(pdev->node, name, "reg-names");
+	if (idx == -1 || idx >= pdev->num_resources)
 		return ERR_PTR(-EINVAL);
 
-	err = bus_space_map(faa->fa_iot, faa->fa_reg[idx].addr,
-	    faa->fa_reg[idx].size, BUS_SPACE_MAP_LINEAR, &ioh);
+	err = bus_space_map(pdev->iot, pdev->resource[idx].start,
+	    pdev->resource[idx].end - pdev->resource[idx].start + 1,
+	    BUS_SPACE_MAP_LINEAR, &ioh);
 	if (err)
 		return ERR_PTR(-err);
 
-	return bus_space_vaddr(faa->fa_iot, ioh);
+	return bus_space_vaddr(pdev->iot, ioh);
 }
 
 #include <dev/ofw/ofw_clock.h>
@@ -3810,6 +3904,34 @@ __of_get_child_by_name(void *p, const char *name)
 	if (child == 0)
 		return NULL;
 	return (struct device_node *)(uintptr_t)child;
+}
+
+int
+component_compare_of(struct device *dev, void *data)
+{
+	struct platform_device *pdev = (struct platform_device *)dev;
+
+	return (pdev->node == (intptr_t)data);
+}
+
+void
+drm_of_component_match_add(struct device *master,
+			   struct component_match **matchptr,
+			   int (*compare)(struct device *, void *),
+			   struct device_node *np)
+{
+	struct component_match *match = *matchptr;
+
+	if (match == NULL) {
+		match = malloc(sizeof(struct component_match),
+		    M_DEVBUF, M_WAITOK | M_ZERO);
+		*matchptr = match;
+	}
+
+	KASSERT(match->nmatches < nitems(match->match));
+	match->match[match->nmatches].compare = compare;
+	match->match[match->nmatches].data = np;
+	match->nmatches++;
 }
 
 #endif

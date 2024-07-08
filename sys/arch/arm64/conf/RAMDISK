@@ -1,4 +1,4 @@
-# $OpenBSD: RAMDISK,v 1.212 2023/12/28 17:36:29 stsp Exp $
+# $OpenBSD: RAMDISK,v 1.216 2024/03/25 17:24:03 patrick Exp $
 
 machine		arm64
 maxusers	4
@@ -180,6 +180,7 @@ bse*		at fdt?
 bse*		at acpi?
 dwctwo*		at fdt?
 usb*		at dwctwo?
+rpigpio*	at fdt? early 1
 
 # Amlogic SoCs
 amlclock*	at fdt? early 1
@@ -239,6 +240,8 @@ rkpcie*		at fdt?
 pci*		at rkpcie?
 rkpwm*		at fdt?
 rkrng*		at fdt?
+rkspi*		at fdt?
+rkpmic*		at spi?
 rkdwusb*	at fdt?
 dwmmc*		at fdt?
 sdmmc*		at dwmmc?
@@ -287,6 +290,7 @@ iic*		at sxitwi?	# I2C bus
 dwxe*		at fdt?
 
 # Xilinx Zynq UltraScale+ SoCs
+cad*		at fdt?			# Ethernet controller
 cduart*		at fdt?
 
 # PCI
@@ -312,7 +316,7 @@ vmx*		at pci?			# VMware VMXNET3 virtual interface
 athn*		at pci?			# Atheros AR9k (802.11a/g/n)
 bwfm*		at pci?			# Broadcom FullMAC
 iwx*		at pci?			# Intel WiFi Link 22xxx
-#qwx*		at pci?			# Qualcomm 802.11ax
+qwx*		at pci?			# Qualcomm 802.11ax
 
 # PCI SCSI
 ahci*		at pci? flags 0x0000	# AHCI SATA controllers

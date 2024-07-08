@@ -1,4 +1,4 @@
-/*	$OpenBSD: db_interface.c,v 1.28 2022/04/14 19:47:11 naddy Exp $	*/
+/*	$OpenBSD: db_interface.c,v 1.30 2024/05/22 14:25:47 jsg Exp $	*/
 /*
  * Mach Operating System
  * Copyright (c) 1993-1991 Carnegie Mellon University
@@ -68,8 +68,6 @@ void	m88k_db_print_frame(db_expr_t, int, db_expr_t, char *);
 void	m88k_db_registers(db_expr_t, int, db_expr_t, char *);
 void	m88k_db_where(db_expr_t, int, db_expr_t, char *);
 void	m88k_db_frame_search(db_expr_t, int, db_expr_t, char *);
-void	m88k_db_translate(db_expr_t, int, db_expr_t, char *);
-void	m88k_db_cmmucfg(db_expr_t, int, db_expr_t, char *);
 
 db_regs_t ddb_regs;
 
@@ -487,9 +485,9 @@ ddb_entry_trap(level, eframe)
  * Read bytes from kernel address space for debugger.
  */
 void
-db_read_bytes(vaddr_t addr, size_t size, char *data)
+db_read_bytes(vaddr_t addr, size_t size, void *datap)
 {
-	char *src;
+	char *data = datap, *src;
 
 	src = (char *)addr;
 
@@ -502,10 +500,10 @@ db_read_bytes(vaddr_t addr, size_t size, char *data)
  * Write bytes to kernel address space for debugger.
  */
 void
-db_write_bytes(vaddr_t addr, size_t size, char *data)
+db_write_bytes(vaddr_t addr, size_t size, void *datap)
 {
 	extern pt_entry_t *pmap_pte(pmap_t, vaddr_t);
-	char *dst = (char *)addr;
+	char *data = datap, *dst = (char *)addr;
 	vaddr_t va;
 	paddr_t pa;
 	pt_entry_t *pte, opte, npte;

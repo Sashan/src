@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_wb.c,v 1.75 2023/11/10 15:51:24 bluhm Exp $	*/
+/*	$OpenBSD: if_wb.c,v 1.77 2024/05/24 06:02:57 jsg Exp $	*/
 
 /*
  * Copyright (c) 1997, 1998
@@ -91,9 +91,6 @@
 #include <sys/systm.h>
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
-#include <sys/kernel.h>
-#include <sys/socket.h>
 #include <sys/device.h>
 #include <sys/queue.h>
 #include <sys/timeout.h>
@@ -112,7 +109,6 @@
 #include <uvm/uvm_extern.h>		/* for vtophys */
 #define	VTOPHYS(v)	vtophys((vaddr_t)(v))
 
-#include <dev/mii/mii.h>
 #include <dev/mii/miivar.h>
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
@@ -127,7 +123,6 @@
 int wb_probe(struct device *, void *, void *);
 void wb_attach(struct device *, struct device *, void *);
 
-void wb_bfree(caddr_t, u_int, void *);
 void wb_newbuf(struct wb_softc *, struct wb_chain_onefrag *);
 int wb_encap(struct wb_softc *, struct wb_chain *, struct mbuf *);
 

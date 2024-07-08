@@ -1,4 +1,4 @@
-/*	$OpenBSD: dwpcie.c,v 1.50 2023/09/21 19:39:41 patrick Exp $	*/
+/*	$OpenBSD: dwpcie.c,v 1.55 2024/07/05 22:52:25 patrick Exp $	*/
 /*
  * Copyright (c) 2018 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -314,6 +314,7 @@ dwpcie_match(struct device *parent, void *match, void *aux)
 	    OF_is_compatible(faa->fa_node, "fsl,imx8mq-pcie") ||
 	    OF_is_compatible(faa->fa_node, "marvell,armada8k-pcie") ||
 	    OF_is_compatible(faa->fa_node, "qcom,pcie-sc8280xp") ||
+	    OF_is_compatible(faa->fa_node, "qcom,pcie-x1e80100") ||
 	    OF_is_compatible(faa->fa_node, "rockchip,rk3568-pcie") ||
 	    OF_is_compatible(faa->fa_node, "rockchip,rk3588-pcie") ||
 	    OF_is_compatible(faa->fa_node, "sifive,fu740-pcie"));
@@ -533,7 +534,8 @@ dwpcie_attach_deferred(struct device *self)
 	if (OF_is_compatible(sc->sc_node, "fsl,imx8mm-pcie") ||
 	    OF_is_compatible(sc->sc_node, "fsl,imx8mq-pcie"))
 		error = dwpcie_imx8mq_init(sc);
-	if (OF_is_compatible(sc->sc_node, "qcom,pcie-sc8280xp"))
+	if (OF_is_compatible(sc->sc_node, "qcom,pcie-sc8280xp") ||
+	    OF_is_compatible(sc->sc_node, "qcom,pcie-x1e80100"))
 		error = dwpcie_sc8280xp_init(sc);
 	if (OF_is_compatible(sc->sc_node, "rockchip,rk3568-pcie") ||
 	    OF_is_compatible(sc->sc_node, "rockchip,rk3588-pcie"))
@@ -676,7 +678,7 @@ dwpcie_attach_deferred(struct device *self)
 		pmembase = sc->sc_pmem_bus_addr;
 		pmemlimit = pmembase + sc->sc_pmem_size - 1;
 		blr = pmemlimit & PPB_MEM_MASK;
-		blr |= (pmembase >> PPB_MEM_SHIFT);
+		blr |= ((pmembase & PPB_MEM_MASK) >> PPB_MEM_SHIFT);
 		HWRITE4(sc, PPB_REG_PREFMEM, blr);
 		HWRITE4(sc, PPB_REG_PREFBASE_HI32, pmembase >> 32);
 		HWRITE4(sc, PPB_REG_PREFLIM_HI32, pmemlimit >> 32);
@@ -711,6 +713,7 @@ dwpcie_attach_deferred(struct device *self)
 	sc->sc_pc.pc_intr_v = sc;
 	sc->sc_pc.pc_intr_map = dwpcie_intr_map;
 	sc->sc_pc.pc_intr_map_msi = _pci_intr_map_msi;
+	sc->sc_pc.pc_intr_map_msivec = _pci_intr_map_msivec;
 	sc->sc_pc.pc_intr_map_msix = _pci_intr_map_msix;
 	sc->sc_pc.pc_intr_string = dwpcie_intr_string;
 	sc->sc_pc.pc_intr_establish = dwpcie_intr_establish;
@@ -729,10 +732,8 @@ dwpcie_attach_deferred(struct device *self)
 	    OF_getproplen(sc->sc_node, "msi-map") > 0 ||
 	    sc->sc_msi_addr)
 		pba.pba_flags |= PCI_FLAGS_MSI_ENABLED;
-
-	/* XXX No working MSI on RK3588 yet. */
-	if (OF_is_compatible(sc->sc_node, "rockchip,rk3588-pcie"))
-		pba.pba_flags &= ~PCI_FLAGS_MSI_ENABLED;
+	if (OF_getproplen(sc->sc_node, "msi-map") > 0)
+		pba.pba_flags |= PCI_FLAGS_MSIVEC_ENABLED;
 
 	pci_dopm = 1;
 
@@ -1504,6 +1505,9 @@ dwpcie_sc8280xp_init(struct dwpcie_softc *sc)
 {
 	sc->sc_num_viewport = 8;
 
+	if (OF_getproplen(sc->sc_node, "msi-map") <= 0)
+		return dwpcie_msi_init(sc);
+
 	return 0;
 }
 
@@ -1835,6 +1839,8 @@ dwpcie_intr_establish(void *v, pci_intr_handle_t ih, int level,
 		uint64_t addr, data;
 
 		if (sc->sc_msi_addr) {
+			if (ih.ih_type == PCI_MSI && ih.ih_intrpin > 0)
+				return NULL;
 			dm = dwpcie_msi_establish(sc, level, func, arg, name);
 			if (dm == NULL)
 				return NULL;
@@ -1845,6 +1851,7 @@ dwpcie_intr_establish(void *v, pci_intr_handle_t ih, int level,
 			 * Assume hardware passes Requester ID as
 			 * sideband data.
 			 */
+			addr = ih.ih_intrpin;
 			data = pci_requester_id(ih.ih_pc, ih.ih_tag);
 			cookie = fdt_intr_establish_msi_cpu(sc->sc_node, &addr,
 			    &data, level, ci, func, arg, (void *)name);

@@ -2152,6 +2152,16 @@ auth_zones_cfg(struct auth_zones* az, struct config_auth* c)
 		if(az->rpz_first)
 			az->rpz_first->rpz_az_prev = z;
 		az->rpz_first = z;
+	} else if(c->isrpz && z->rpz) {
+		if(!rpz_config(z->rpz, c)) {
+			log_err("Could not change rpz config");
+			if(x) {
+				lock_basic_unlock(&x->lock);
+			}
+			lock_rw_unlock(&z->lock);
+			lock_rw_unlock(&az->rpz_lock);
+			return 0;
+		}
 	}
 	if(c->isrpz) {
 		lock_rw_unlock(&az->rpz_lock);
@@ -2475,6 +2485,7 @@ az_find_ce(struct auth_zone* z, struct query_info* qinfo,
 	struct auth_rrset** rrset)
 {
 	struct auth_data* n = node;
+	struct auth_rrset* lookrrset;
 	*ce = NULL;
 	*rrset = NULL;
 	if(!node_exact) {
@@ -2497,21 +2508,23 @@ az_find_ce(struct auth_zone* z, struct query_info* qinfo,
 		/* see if the current candidate has issues */
 		/* not zone apex and has type NS */
 		if(n->namelen != z->namelen &&
-			(*rrset=az_domain_rrset(n, LDNS_RR_TYPE_NS)) &&
+			(lookrrset=az_domain_rrset(n, LDNS_RR_TYPE_NS)) &&
 			/* delegate here, but DS at exact the dp has notype */
 			(qinfo->qtype != LDNS_RR_TYPE_DS || 
 			n->namelen != qinfo->qname_len)) {
 			/* referral */
 			/* this is ce and the lowernode is nonexisting */
 			*ce = n;
-			return 0;
+			*rrset = lookrrset;
+			node_exact = 0;
 		}
 		/* not equal to qname and has type DNAME */
 		if(n->namelen != qinfo->qname_len &&
-			(*rrset=az_domain_rrset(n, LDNS_RR_TYPE_DNAME))) {
+			(lookrrset=az_domain_rrset(n, LDNS_RR_TYPE_DNAME))) {
 			/* this is ce and the lowernode is nonexisting */
 			*ce = n;
-			return 0;
+			*rrset = lookrrset;
+			node_exact = 0;
 		}
 
 		if(*ce == NULL && !domain_has_only_nsec3(n)) {
@@ -2699,7 +2712,7 @@ create_synth_cname(uint8_t* qname, size_t qname_len, struct regional* region,
 	if(!d)
 		return 0; /* out of memory */
 	(*cname)->entry.data = d;
-	d->ttl = 0; /* 0 for synthesized CNAME TTL */
+	d->ttl = dname->data->ttl; /* RFC6672: synth CNAME TTL == DNAME TTL */
 	d->count = 1;
 	d->rrsig_count = 0;
 	d->trust = rrset_trust_ans_noAA;
@@ -7771,6 +7784,7 @@ static int zonemd_dnssec_verify_rrset(struct auth_zone* z,
 	enum sec_status sec;
 	struct val_env* ve;
 	int m;
+	int verified = 0;
 	m = modstack_find(mods, "validator");
 	if(m == -1) {
 		auth_zone_log(z->name, VERB_ALGO, "zonemd dnssec verify: have "
@@ -7794,7 +7808,7 @@ static int zonemd_dnssec_verify_rrset(struct auth_zone* z,
 			"zonemd: verify %s RRset with DNSKEY", typestr);
 	}
 	sec = dnskeyset_verify_rrset(env, ve, &pk, dnskey, sigalg, why_bogus, NULL,
-		LDNS_SECTION_ANSWER, NULL);
+		LDNS_SECTION_ANSWER, NULL, &verified);
 	if(sec == sec_status_secure) {
 		return 1;
 	}

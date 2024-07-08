@@ -1,4 +1,4 @@
-/* $OpenBSD: machdep.c,v 1.85 2023/12/04 15:00:09 claudio Exp $ */
+/* $OpenBSD: machdep.c,v 1.90 2024/07/03 21:04:04 kettenis Exp $ */
 /*
  * Copyright (c) 2014 Patrick Wildt <patrick@blueri.se>
  * Copyright (c) 2021 Mark Kettenis <kettenis@openbsd.org>
@@ -366,7 +366,8 @@ cpu_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return sysctl_rdquad(oldp, oldlenp, newp, value);
 	case CPU_ID_AA64PFR1:
 		value = 0;
-		value |= cpu_id_aa64pfr1 & ID_AA64PFR1_SBSS_MASK;
+		value |= cpu_id_aa64pfr1 & ID_AA64PFR1_BT_MASK;
+		value |= cpu_id_aa64pfr1 & ID_AA64PFR1_SSBS_MASK;
 		return sysctl_rdquad(oldp, oldlenp, newp, value);
 	case CPU_ID_AA64ISAR2:
 	case CPU_ID_AA64MMFR0:
@@ -618,11 +619,6 @@ dumpsys(void)
 	void *va;
 	int (*dump)(dev_t, daddr_t, caddr_t, size_t);
 	int error;
-
-#if 0
-	/* Save registers. */
-	savectx(&dumppcb);
-#endif
 
 	if (dumpdev == NODEV)
 		return;
@@ -1053,6 +1049,22 @@ initarm(struct arm64_bootparams *abp)
 		}
 	}
 
+	/* Remove reserved memory. */
+	node = fdt_find_node("/reserved-memory");
+	if (node) {
+		for (node = fdt_child_node(node); node;
+		    node = fdt_next_node(node)) {
+			char *no_map;
+			if (fdt_node_property(node, "no-map", &no_map) < 0)
+				continue;
+			if (fdt_get_reg(node, 0, &reg))
+				continue;
+			if (reg.size == 0)
+				continue;
+			memreg_remove(&reg);
+		}
+	}
+
 	/* Remove the initial 64MB block. */
 	reg.addr = memstart;
 	reg.size = memend - memstart;
@@ -1158,6 +1170,10 @@ pmap_bootstrap_bs_map(bus_space_tag_t t, bus_addr_t bpa, bus_size_t size,
 {
 	u_long startpa, pa, endpa;
 	vaddr_t va;
+	int cache = PMAP_CACHE_DEV_NGNRNE;
+
+	if (flags & BUS_SPACE_MAP_PREFETCHABLE)
+		cache = PMAP_CACHE_CI;
 
 	va = virtual_avail;	/* steal memory from virtual avail. */
 
@@ -1167,8 +1183,7 @@ pmap_bootstrap_bs_map(bus_space_tag_t t, bus_addr_t bpa, bus_size_t size,
 	*bshp = (bus_space_handle_t)(va + (bpa - startpa));
 
 	for (pa = startpa; pa < endpa; pa += PAGE_SIZE, va += PAGE_SIZE)
-		pmap_kenter_cache(va, pa, PROT_READ | PROT_WRITE,
-		    PMAP_CACHE_DEV_NGNRNE);
+		pmap_kenter_cache(va, pa, PROT_READ | PROT_WRITE, cache);
 
 	virtual_avail = va;
 

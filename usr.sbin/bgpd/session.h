@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.h,v 1.166 2024/01/11 15:46:25 claudio Exp $ */
+/*	$OpenBSD: session.h,v 1.170 2024/05/18 11:17:30 jsg Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -104,17 +104,6 @@ enum opt_params {
 	OPT_PARAM_AUTH,
 	OPT_PARAM_CAPABILITIES,
 	OPT_PARAM_EXT_LEN=255,
-};
-
-enum capa_codes {
-	CAPA_NONE = 0,
-	CAPA_MP = 1,
-	CAPA_REFRESH = 2,
-	CAPA_ROLE = 9,
-	CAPA_RESTART = 64,
-	CAPA_AS4BYTE = 65,
-	CAPA_ADD_PATH = 69,
-	CAPA_ENHANCED_RR = 70,
 };
 
 struct bgp_msg {
@@ -273,7 +262,7 @@ char	*log_fmt_peer(const struct peer_config *);
 void	 log_statechange(struct peer *, enum session_state,
 	    enum session_events);
 void	 log_notification(const struct peer *, uint8_t, uint8_t,
-	    u_char *, uint16_t, const char *);
+	    const struct ibuf *, const char *);
 void	 log_conn_attempt(const struct peer *, struct sockaddr *,
 	    socklen_t);
 
@@ -311,7 +300,6 @@ struct rtr_session	*rtr_new(uint32_t, char *);
 struct rtr_session	*rtr_get(uint32_t);
 void			 rtr_free(struct rtr_session *);
 void			 rtr_open(struct rtr_session *, int);
-struct roa_tree		*rtr_get_roa(struct rtr_session *);
 void			 rtr_config_prep(void);
 void			 rtr_config_merge(void);
 void			 rtr_config_keep(struct rtr_session *);
@@ -342,7 +330,7 @@ int		 peer_matched(struct peer *, struct ctl_neighbor *);
 int		 imsg_ctl_parent(struct imsg *);
 int		 imsg_ctl_rde(struct imsg *);
 int		 imsg_ctl_rde_msg(int, uint32_t, pid_t);
-void		 session_stop(struct peer *, uint8_t);
+void		 session_stop(struct peer *, uint8_t, const char *);
 
 /* timer.c */
 struct timer	*timer_get(struct timer_head *, enum Timer);

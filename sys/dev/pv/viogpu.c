@@ -1,4 +1,4 @@
-/*	$OpenBSD: viogpu.c,v 1.3 2023/05/29 08:13:35 sf Exp $ */
+/*	$OpenBSD: viogpu.c,v 1.6 2024/05/24 10:05:55 jsg Exp $ */
 
 /*
  * Copyright (c) 2021-2023 joshua stein <jcs@openbsd.org>
@@ -18,7 +18,6 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/kernel.h>
 #include <sys/device.h>
 #include <sys/timeout.h>
 
@@ -60,10 +59,6 @@ int	viogpu_wsioctl(void *, u_long, caddr_t, int, struct proc *);
 paddr_t	viogpu_wsmmap(void *, off_t, int);
 int	viogpu_alloc_screen(void *, const struct wsscreen_descr *, void **,
 	    int *, int *, uint32_t *);
-int	viogpu_show_screen(void *, void *, int, void (*)(void *, int, int),
-	    void *);
-void	viogpu_enter_ddb(void *, void *);
-void	viogpu_doswitch(void *);
 
 #define VIOGPU_HEIGHT		160
 #define VIOGPU_WIDTH		160

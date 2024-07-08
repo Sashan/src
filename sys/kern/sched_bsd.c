@@ -1,4 +1,4 @@
-/*	$OpenBSD: sched_bsd.c,v 1.89 2023/10/17 00:04:02 cheloha Exp $	*/
+/*	$OpenBSD: sched_bsd.c,v 1.93 2024/06/03 12:48:25 claudio Exp $	*/
 /*	$NetBSD: kern_synch.c,v 1.37 1996/04/22 01:38:37 christos Exp $	*/
 
 /*-
@@ -57,9 +57,7 @@
 uint64_t roundrobin_period;	/* [I] roundrobin period (ns) */
 int	lbolt;			/* once a second sleep address */
 
-#ifdef MULTIPROCESSOR
-struct __mp_lock sched_lock;
-#endif
+struct mutex sched_lock;
 
 void			update_loadavg(void *);
 void			schedcpu(void *);
@@ -232,7 +230,6 @@ schedcpu(void *unused)
 	static struct timeout to = TIMEOUT_INITIALIZER(schedcpu, NULL);
 	fixpt_t loadfac = loadfactor(averunnable.ldavg[0]);
 	struct proc *p;
-	int s;
 	unsigned int newcpu;
 
 	LIST_FOREACH(p, &allproc, p_list) {
@@ -255,7 +252,7 @@ schedcpu(void *unused)
 		 */
 		if (p->p_slptime > 1)
 			continue;
-		SCHED_LOCK(s);
+		SCHED_LOCK();
 		/*
 		 * p_pctcpu is only for diagnostic tools such as ps.
 		 */
@@ -277,7 +274,7 @@ schedcpu(void *unused)
 			remrunqueue(p);
 			setrunqueue(p->p_cpu, p, p->p_usrpri);
 		}
-		SCHED_UNLOCK(s);
+		SCHED_UNLOCK();
 	}
 	wakeup(&lbolt);
 	timeout_add_sec(&to, 1);
@@ -315,13 +312,12 @@ void
 yield(void)
 {
 	struct proc *p = curproc;
-	int s;
 
-	SCHED_LOCK(s);
+	SCHED_LOCK();
 	setrunqueue(p->p_cpu, p, p->p_usrpri);
 	p->p_ru.ru_nvcsw++;
 	mi_switch();
-	SCHED_UNLOCK(s);
+	SCHED_UNLOCK();
 }
 
 /*
@@ -334,13 +330,12 @@ void
 preempt(void)
 {
 	struct proc *p = curproc;
-	int s;
 
-	SCHED_LOCK(s);
+	SCHED_LOCK();
 	setrunqueue(p->p_cpu, p, p->p_usrpri);
 	p->p_ru.ru_nivcsw++;
 	mi_switch();
-	SCHED_UNLOCK(s);
+	SCHED_UNLOCK();
 }
 
 void
@@ -351,12 +346,11 @@ mi_switch(void)
 	struct proc *nextproc;
 	struct process *pr = p->p_p;
 	struct timespec ts;
+	int oldipl;
 #ifdef MULTIPROCESSOR
 	int hold_count;
-	int sched_count;
 #endif
 
-	assertwaitok();
 	KASSERT(p->p_stat != SONPROC);
 
 	SCHED_ASSERT_LOCKED();
@@ -365,7 +359,6 @@ mi_switch(void)
 	/*
 	 * Release the kernel_lock, as we are about to yield the CPU.
 	 */
-	sched_count = __mp_release_all_but_one(&sched_lock);
 	if (_kernel_lock_held())
 		hold_count = __mp_release_all(&kernel_lock);
 	else
@@ -396,11 +389,11 @@ mi_switch(void)
 	/* Stop any optional clock interrupts. */
 	if (ISSET(spc->spc_schedflags, SPCF_ITIMER)) {
 		atomic_clearbits_int(&spc->spc_schedflags, SPCF_ITIMER);
-		clockintr_cancel(spc->spc_itimer);
+		clockintr_cancel(&spc->spc_itimer);
 	}
 	if (ISSET(spc->spc_schedflags, SPCF_PROFCLOCK)) {
 		atomic_clearbits_int(&spc->spc_schedflags, SPCF_PROFCLOCK);
-		clockintr_cancel(spc->spc_profclock);
+		clockintr_cancel(&spc->spc_profclock);
 	}
 
 	/*
@@ -410,6 +403,9 @@ mi_switch(void)
 	atomic_clearbits_int(&spc->spc_schedflags, SPCF_SWITCHCLEAR);
 
 	nextproc = sched_chooseproc();
+
+	/* preserve old IPL level so we can switch back to that */
+	oldipl = MUTEX_OLDIPL(&sched_lock);
 
 	if (p != nextproc) {
 		uvmexp.swtch++;
@@ -426,18 +422,13 @@ mi_switch(void)
 
 	SCHED_ASSERT_LOCKED();
 
-	/*
-	 * To preserve lock ordering, we need to release the sched lock
-	 * and grab it after we grab the big lock.
-	 * In the future, when the sched lock isn't recursive, we'll
-	 * just release it here.
-	 */
-#ifdef MULTIPROCESSOR
-	__mp_unlock(&sched_lock);
-#endif
+	/* Restore proc's IPL. */
+	MUTEX_OLDIPL(&sched_lock) = oldipl;
+	SCHED_UNLOCK();
 
 	SCHED_ASSERT_UNLOCKED();
 
+	assertwaitok();
 	smr_idle();
 
 	/*
@@ -451,11 +442,11 @@ mi_switch(void)
 	/* Start any optional clock interrupts needed by the thread. */
 	if (ISSET(p->p_p->ps_flags, PS_ITIMER)) {
 		atomic_setbits_int(&spc->spc_schedflags, SPCF_ITIMER);
-		clockintr_advance(spc->spc_itimer, hardclock_period);
+		clockintr_advance(&spc->spc_itimer, hardclock_period);
 	}
 	if (ISSET(p->p_p->ps_flags, PS_PROFIL)) {
 		atomic_setbits_int(&spc->spc_schedflags, SPCF_PROFCLOCK);
-		clockintr_advance(spc->spc_profclock, profclock_period);
+		clockintr_advance(&spc->spc_profclock, profclock_period);
 	}
 
 	nanouptime(&spc->spc_runtime);
@@ -468,8 +459,8 @@ mi_switch(void)
 	 */
 	if (hold_count)
 		__mp_acquire_count(&kernel_lock, hold_count);
-	__mp_acquire_count(&sched_lock, sched_count + 1);
 #endif
+	SCHED_LOCK();
 }
 
 /*
@@ -500,12 +491,10 @@ setrunnable(struct proc *p)
 		if ((pr->ps_flags & PS_TRACED) != 0 && pr->ps_xsig != 0)
 			atomic_setbits_int(&p->p_siglist, sigmask(pr->ps_xsig));
 		prio = p->p_usrpri;
-		unsleep(p);
 		setrunqueue(NULL, p, prio);
 		break;
 	case SSLEEP:
 		prio = p->p_slppri;
-		unsleep(p);		/* e.g. when sending signals */
 
 		/* if not yet asleep, don't add to runqueue */
 		if (ISSET(p->p_flag, P_WSLEEP))
@@ -559,15 +548,14 @@ schedclock(struct proc *p)
 	struct cpu_info *ci = curcpu();
 	struct schedstate_percpu *spc = &ci->ci_schedstate;
 	uint32_t newcpu;
-	int s;
 
 	if (p == spc->spc_idleproc || spc->spc_spinning)
 		return;
 
-	SCHED_LOCK(s);
+	SCHED_LOCK();
 	newcpu = ESTCPULIM(p->p_estcpu + 1);
 	setpriority(p, newcpu, p->p_p->ps_nice);
-	SCHED_UNLOCK(s);
+	SCHED_UNLOCK();
 }
 
 void (*cpu_setperf)(int);

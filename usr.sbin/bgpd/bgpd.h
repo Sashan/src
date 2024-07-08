@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.481 2024/01/11 13:08:39 claudio Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.493 2024/05/18 11:17:30 jsg Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -37,7 +37,7 @@
 #define	RTR_PORT			323
 #define	CONFFILE			"/etc/bgpd.conf"
 #define	BGPD_USER			"_bgpd"
-#define	PEER_DESCR_LEN			32
+#define	PEER_DESCR_LEN			64
 #define	REASON_LEN			256	/* includes NUL terminator */
 #define	PFTABLE_LEN			32
 #define	ROUTELABEL_LEN			32
@@ -53,6 +53,7 @@
 #define	RT_BUF_SIZE			16384
 #define	MAX_RTSOCK_BUF			(2 * 1024 * 1024)
 #define	MAX_COMM_MATCH			3
+#define	MAX_ASPA_SPAS_COUNT		10000
 
 #define	BGPD_OPT_VERBOSE		0x0001
 #define	BGPD_OPT_VERBOSE2		0x0002
@@ -197,14 +198,12 @@ struct bgpd_addr {
 		struct in_addr		v4;
 		struct in6_addr		v6;
 		/* maximum size for a prefix is 256 bits */
-	} ba;		    /* 128-bit address */
+	};		    /* 128-bit address */
 	uint64_t	rd;		/* route distinguisher for VPN addrs */
 	uint32_t	scope_id;	/* iface scope id for v6 */
 	uint8_t		aid;
 	uint8_t		labellen;	/* size of the labelstack */
 	uint8_t		labelstack[18];	/* max that makes sense */
-#define	v4	ba.v4
-#define	v6	ba.v6
 };
 
 #define	DEFAULT_LISTENER	0x01
@@ -410,6 +409,17 @@ struct capabilities {
 	int8_t	policy;			/* Open Policy, RFC 9234, 2 = enforce */
 };
 
+enum capa_codes {
+	CAPA_NONE = 0,
+	CAPA_MP = 1,
+	CAPA_REFRESH = 2,
+	CAPA_ROLE = 9,
+	CAPA_RESTART = 64,
+	CAPA_AS4BYTE = 65,
+	CAPA_ADD_PATH = 69,
+	CAPA_ENHANCED_RR = 70,
+};
+
 /* flags for RFC 4724 - graceful restart */
 #define	CAPA_GR_PRESENT		0x01
 #define	CAPA_GR_RESTART		0x02
@@ -423,6 +433,9 @@ struct capabilities {
 #define	CAPA_AP_RECV		0x01
 #define	CAPA_AP_SEND		0x02
 #define	CAPA_AP_BIDIR		0x03
+#define	CAPA_AP_MASK		0x0f
+#define	CAPA_AP_RECV_ENFORCE	0x10	/* internal only */
+#define	CAPA_AP_SEND_ENFORCE	0x20	/* internal only */
 
 /* values for RFC 9234 - BGP Open Policy */
 #define CAPA_ROLE_PROVIDER	0x00
@@ -466,7 +479,6 @@ struct peer_config {
 	uint8_t			 distance;	/* 1 = direct, >1 = multihop */
 	uint8_t			 passive;
 	uint8_t			 down;
-	uint8_t			 announce_capa;
 	uint8_t			 reflector_client;
 	uint8_t			 ttlsec;	/* TTL security hack */
 	uint8_t			 flags;
@@ -707,7 +719,8 @@ enum err_codes {
 	ERR_HOLDTIMEREXPIRED,
 	ERR_FSM,
 	ERR_CEASE,
-	ERR_RREFRESH
+	ERR_RREFRESH,
+	ERR_SENDHOLDTIMEREXPIRED,
 };
 
 enum suberr_update {
@@ -1153,9 +1166,9 @@ extern const struct ext_comm_pairs iana_ext_comms[];
 #define FLOWSPEC_TYPE_FLOW		13
 #define FLOWSPEC_TYPE_MAX		14
 
-#define FLOWSPEC_TCP_FLAG_STRING 	"FSRPAUEW"
-#define FLOWSPEC_FRAG_STRING4 		"DIFL"
-#define FLOWSPEC_FRAG_STRING6 		" IFL"
+#define FLOWSPEC_TCP_FLAG_STRING	"FSRPAUEW"
+#define FLOWSPEC_FRAG_STRING4		"DIFL"
+#define FLOWSPEC_FRAG_STRING6		" IFL"
 
 struct filter_prefix {
 	struct bgpd_addr	addr;
@@ -1457,7 +1470,6 @@ void		 log_peer_warnx(const struct peer_config *, const char *, ...)
 			__attribute__((__format__ (printf, 2, 3)));
 
 /* mrt.c */
-void		 mrt_clear_seq(void);
 void		 mrt_write(struct mrt *);
 void		 mrt_clean(struct mrt *);
 void		 mrt_init(struct imsgbuf *, struct imsgbuf *);
@@ -1468,10 +1480,6 @@ struct mrt	*mrt_get(struct mrt_head *, struct mrt *);
 void		 mrt_mergeconfig(struct mrt_head *, struct mrt_head *);
 
 /* name2id.c */
-uint16_t	 rib_name2id(const char *);
-const char	*rib_id2name(uint16_t);
-void		 rib_unref(uint16_t);
-void		 rib_ref(uint16_t);
 uint16_t	 rtlabel_name2id(const char *);
 const char	*rtlabel_id2name(uint16_t);
 void		 rtlabel_unref(uint16_t);
@@ -1535,6 +1543,7 @@ int	trie_equal(struct trie_head *, struct trie_head *);
 time_t			 getmonotime(void);
 
 /* util.c */
+char		*ibuf_get_string(struct ibuf *, size_t);
 const char	*log_addr(const struct bgpd_addr *);
 const char	*log_in6addr(const struct in6_addr *);
 const char	*log_sockaddr(struct sockaddr *, socklen_t);
@@ -1542,29 +1551,27 @@ const char	*log_as(uint32_t);
 const char	*log_rd(uint64_t);
 const char	*log_ext_subtype(int, uint8_t);
 const char	*log_reason(const char *);
+const char	*log_aspath_error(int);
 const char	*log_roa(struct roa *);
 const char	*log_aspa(struct aspa_set *);
 const char	*log_rtr_error(enum rtr_error);
 const char	*log_policy(enum role);
-int		 aspath_snprint(char *, size_t, void *, uint16_t);
-int		 aspath_asprint(char **, void *, uint16_t);
-size_t		 aspath_strlen(void *, uint16_t);
+const char	*log_capability(uint8_t);
+int		 aspath_asprint(char **, struct ibuf *);
 uint32_t	 aspath_extract(const void *, int);
-int		 aspath_verify(void *, uint16_t, int, int);
+int		 aspath_verify(struct ibuf *, int, int);
 #define		 AS_ERR_LEN	-1
 #define		 AS_ERR_TYPE	-2
 #define		 AS_ERR_BAD	-3
 #define		 AS_ERR_SOFT	-4
-u_char		*aspath_inflate(void *, uint16_t, uint16_t *);
+struct ibuf	*aspath_inflate(struct ibuf *);
 int		 extract_prefix(const u_char *, int, void *, uint8_t, uint8_t);
-int		 nlri_get_prefix(u_char *, uint16_t, struct bgpd_addr *,
-		    uint8_t *);
-int		 nlri_get_prefix6(u_char *, uint16_t, struct bgpd_addr *,
-		    uint8_t *);
-int		 nlri_get_vpn4(u_char *, uint16_t, struct bgpd_addr *,
-		    uint8_t *, int);
-int		 nlri_get_vpn6(u_char *, uint16_t, struct bgpd_addr *,
-		    uint8_t *, int);
+int		 nlri_get_prefix(struct ibuf *, struct bgpd_addr *, uint8_t *);
+int		 nlri_get_prefix6(struct ibuf *, struct bgpd_addr *, uint8_t *);
+int		 nlri_get_vpn4(struct ibuf *, struct bgpd_addr *, uint8_t *,
+		    int);
+int		 nlri_get_vpn6(struct ibuf *, struct bgpd_addr *, uint8_t *,
+		    int);
 int		 prefix_compare(const struct bgpd_addr *,
 		    const struct bgpd_addr *, int);
 void		 inet4applymask(struct in_addr *, const struct in_addr *, int);

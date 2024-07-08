@@ -1,4 +1,4 @@
-/*	$OpenBSD: specialreg.h,v 1.109 2023/09/03 09:30:43 mlarkin Exp $	*/
+/*	$OpenBSD: specialreg.h,v 1.113 2024/06/24 21:22:14 bluhm Exp $	*/
 /*	$NetBSD: specialreg.h,v 1.1 2003/04/26 18:39:48 fvdl Exp $	*/
 /*	$NetBSD: x86/specialreg.h,v 1.2 2003/04/25 21:54:30 fvdl Exp $	*/
 
@@ -116,7 +116,7 @@
 #define	XFEATURE_HWP		0x00010000	/* HW P-states */
 #define	XFEATURE_TILECFG	0x00020000	/* AMX state */
 #define	XFEATURE_TILEDATA	0x00040000	/* AMX state */
-#define	XFEATURE_AMX		(XFEATURE_TILEDATA | XFEATURE_TILEDATA)
+#define	XFEATURE_AMX		(XFEATURE_TILECFG | XFEATURE_TILEDATA)
 
 /* valid only in xcomp_bv field: */
 #define XFEATURE_COMPRESSED	(1ULL << 63)	/* compressed format */
@@ -166,6 +166,12 @@
 #define	CPUID_TM	0x20000000	/* thermal monitor (TCC) */
 #define	CPUID_B30	0x40000000	/* reserved */
 #define	CPUID_PBE	0x80000000	/* Pending Break Enabled restarts clock */
+#define CPUID_EDX_BITS \
+    ("\20" "\01FPU" "\02VME" "\03DE" "\04PSE" "\05TSC" "\06MSR" "\07PAE" \
+     "\010MCE" "\011CX8" "\012APIC" "\014SEP" "\015MTRR" "\016PGE" "\017MCA" \
+     "\020CMOV" "\021PAT" "\022PSE36" "\023PSN" "\024CFLUSH" "\026DS" \
+     "\027ACPI" "\030MMX" "\031FXSR" "\032SSE" "\033SSE2" "\034SS" "\035HTT" \
+     "\036TM" "\040PBE" )
 
 #define	CPUIDECX_SSE3	0x00000001	/* streaming SIMD extensions #3 */
 #define	CPUIDECX_PCLMUL	0x00000002	/* Carryless Multiplication */
@@ -198,6 +204,13 @@
 #define	CPUIDECX_F16C	0x20000000	/* 16bit fp conversion  */
 #define	CPUIDECX_RDRAND	0x40000000	/* RDRAND instruction  */
 #define	CPUIDECX_HV	0x80000000	/* Running on hypervisor */
+#define CPUID_ECX_BITS \
+    ("\20" "\01SSE3" "\02PCLMUL" "\03DTES64" "\04MWAIT" "\05DS-CPL" "\06VMX" \
+     "\07SMX" "\010EST" "\011TM2" "\012SSSE3" "\013CNXT-ID" "\014SDBG" \
+     "\015FMA3" "\016CX16" "\017xTPR" "\020PDCM" "\022PCID" "\023DCA" \
+     "\024SSE4.1" "\025SSE4.2" "\026x2APIC" "\027MOVBE" "\030POPCNT" \
+     "\031DEADLINE" "\032AES" "\033XSAVE" "\034OSXSAVE" "\035AVX" "\036F16C" \
+     "\037RDRAND" "\040HV" )
 
 /*
  * "Structured Extended Feature Flags Parameters" (CPUID function 0x7, leaf 0)
@@ -232,13 +245,26 @@
 #define	SEFF0EBX_SHA		0x20000000 /* SHA Extensions */
 #define	SEFF0EBX_AVX512BW	0x40000000 /* AVX-512 byte/word inst */
 #define	SEFF0EBX_AVX512VL	0x80000000 /* AVX-512 vector len inst */
+#define SEFF0_EBX_BITS \
+    ("\20" "\01FSGSBASE" "\02TSC_ADJUST" "\03SGX" "\04BMI1" "\05HLE" \
+     "\06AVX2" "\010SMEP" "\011BMI2" "\012ERMS" "\013INVPCID" "\014RTM" \
+     "\015PQM" "\017MPX" "\021AVX512F" "\022AVX512DQ" "\023RDSEED" "\024ADX" \
+     "\025SMAP" "\026AVX512IFMA" "\027PCOMMIT" "\030CLFLUSHOPT" "\031CLWB" \
+     "\032PT" "\033AVX512PF" "\034AVX512ER" "\035AVX512CD" "\036SHA" \
+     "\037AVX512BW" "\040AVX512VL" )
+
 /* SEFF ECX bits */
 #define SEFF0ECX_PREFETCHWT1	0x00000001 /* PREFETCHWT1 instruction */
 #define SEFF0ECX_AVX512VBMI	0x00000002 /* AVX-512 vector bit inst */
 #define SEFF0ECX_UMIP		0x00000004 /* UMIP support */
 #define SEFF0ECX_PKU		0x00000008 /* Page prot keys for user mode */
+#define SEFF0ECX_OSPKE		0x00000010 /* OS enabled RD/WRPKRU */
 #define SEFF0ECX_WAITPKG	0x00000020 /* UMONITOR/UMWAIT/TPAUSE insns */
 #define SEFF0ECX_PKS		0x80000000 /* Page prot keys for sup mode */
+#define SEFF0_ECX_BITS \
+    ("\20" "\01PREFETCHWT1" "\02AVX512VBMI" "\03UMIP" "\04PKU" "\06WAITPKG" \
+     "\040PKS" )
+
 /* SEFF EDX bits */
 #define SEFF0EDX_AVX512_4FNNIW	0x00000004 /* AVX-512 neural network insns */
 #define SEFF0EDX_AVX512_4FMAPS	0x00000008 /* AVX-512 mult accum single prec */
@@ -251,14 +277,21 @@
 #define SEFF0EDX_L1DF		0x10000000 /* L1D_FLUSH */
 #define SEFF0EDX_ARCH_CAP	0x20000000 /* Has IA32_ARCH_CAPABILITIES MSR */
 #define SEFF0EDX_SSBD		0x80000000 /* Spec Store Bypass Disable */
+#define SEFF0_EDX_BITS \
+    ("\20" "\03AVX512FNNIW" "\04AVX512FMAPS" "\012SRBDS_CTRL" "\013MD_CLEAR" \
+     "\016TSXFA" "\025IBT" "\033IBRS,IBPB" "\034STIBP" "\035L1DF" "\040SSBD" )
 
 /*
  * Thermal and Power Management (CPUID function 0x6) EAX bits
  */
 #define	TPM_SENSOR	0x00000001	 /* Digital temp sensor */
 #define	TPM_ARAT	0x00000004	 /* APIC Timer Always Running */
+#define TPM_EAX_BITS \
+    ("\20" "\01SENSOR" "\03ARAT" )
 /* Thermal and Power Management (CPUID function 0x6) ECX bits */
 #define	TPM_EFFFREQ	0x00000001	 /* APERF & MPERF MSR present */
+#define TPM_ECX_BITS \
+    ("\20" "\01EFFFREQ" )
 
  /*
   * "Architectural Performance Monitoring" bits (CPUID function 0x0a):
@@ -295,6 +328,9 @@
 #define	CPUID_LONG	0x20000000	/* long mode */
 #define	CPUID_3DNOW2	0x40000000	/* 3DNow! Instruction Extension */
 #define	CPUID_3DNOW	0x80000000	/* 3DNow! Instructions */
+#define CPUIDE_EDX_BITS \
+    ("\20" "\024MPC" "\025NXE" "\027MMXX" "\032FFXSR" "\033PAGE1GB" \
+     "\034RDTSCP" "\036LONG" "\0373DNOW2" "\0403DNOW" )
 
 #define	CPUIDECX_LAHF		0x00000001 /* LAHF and SAHF instructions */
 #define	CPUIDECX_CMPLEG		0x00000002 /* Core MP legacy mode */
@@ -324,6 +360,12 @@
 #define	CPUIDECX_PERFTSC	0x08000000 /* performance time-stamp counter */
 #define	CPUIDECX_PCTRL3		0x10000000 /* L3 performance counter ext */
 #define	CPUIDECX_MWAITX		0x20000000 /* MWAITX/MONITORX */
+#define CPUIDE_ECX_BITS \
+    ("\20" "\01LAHF" "\02CMPLEG" "\03SVM" "\04EAPICSP" "\05AMCR8" "\06ABM" \
+     "\07SSE4A" "\010MASSE" "\0113DNOWP" "\012OSVW" "\013IBS" "\014XOP" \
+     "\015SKINIT" "\020WDT" "\021FMA4" "\022TCE" "\024NODEID" "\026TBM" \
+     "\027TOPEXT" "\030CPCTR" "\033DBKP" "\034PERFTSC" "\035PCTRL3" \
+     "\036MWAITX" )
 
 /*
  * "Advanced Power Management Information" bits (CPUID function 0x80000007):
@@ -331,6 +373,8 @@
  */
 #define CPUIDEDX_HWPSTATE	(1 << 7)	/* Hardware P State Control */
 #define CPUIDEDX_ITSC		(1 << 8)	/* Invariant TSC */
+#define CPUID_APMI_EDX_BITS \
+    ("\20" "\010HWPSTATE" "\011ITSC" )
 
 /*
  * AMD CPUID function 0x80000008 EBX bits
@@ -346,6 +390,51 @@
 #define CPUIDEBX_SSBD		(1ULL << 24)	/* Speculation Control SSBD */
 #define CPUIDEBX_VIRT_SSBD	(1ULL << 25)	/* Virt Spec Control SSBD */
 #define CPUIDEBX_SSBD_NOTREQ	(1ULL << 26)	/* SSBD not required */
+#define CPUID_AMDSPEC_EBX_BITS \
+    ("\20" "\04INVLPGB" "\015IBPB" "\017IBRS" "\020STIBP" "\021IBRS_ALL" \
+     "\022STIBP_ALL" "\023IBRS_PREF" "\024IBRS_SM" "\031SSBD" "\032VIRTSSBD" \
+     "\033SSBDNR" )
+
+/*
+ * AMD CPUID function 0x8000001F EAX bits
+ */
+#define CPUIDEAX_SME		(1ULL << 0)  /* SME */
+#define CPUIDEAX_SEV		(1ULL << 1)  /* SEV */
+#define CPUIDEAX_PFLUSH_MSR	(1ULL << 2)  /* Page Flush MSR */
+#define CPUIDEAX_SEVES		(1ULL << 3)  /* SEV-ES */
+#define CPUIDEAX_SEVSNP		(1ULL << 4)  /* SEV-SNP */
+#define CPUIDEAX_VMPL		(1ULL << 5)  /* VM Permission Levels */
+#define CPUIDEAX_RMPQUERY	(1ULL << 6)  /* RMPQUERY */
+#define CPUIDEAX_VMPLSSS	(1ULL << 7)  /* VMPL Supservisor Shadow Stack */
+#define CPUIDEAX_SECTSC		(1ULL << 8)  /* Secure TSC */
+#define CPUIDEAX_TSCAUXVIRT	(1ULL << 9)  /* TSC Aux Virtualization */
+#define CPUIDEAX_HWECACHECOH	(1ULL << 10) /* Coherency Across Enc. Domains */
+#define CPUIDEAX_64BITHOST	(1ULL << 11) /* SEV guest requires 64bit host */
+#define CPUIDEAX_RESTINJ	(1ULL << 12) /* Restricted Injection */
+#define CPUIDEAX_ALTINJ		(1ULL << 13) /* Alternate Injection */
+#define CPUIDEAX_DBGSTSW	(1ULL << 14) /* Full debug state swap */
+#define CPUIDEAX_IBSDISALLOW	(1ULL << 15) /* Disallowing IBS use by host */
+#define CPUIDEAX_VTE		(1ULL << 16) /* Virt. Transparent Encryption */
+#define CPUIDEAX_VMGEXITPARAM	(1ULL << 17) /* VMGEXIT Parameter */
+#define CPUIDEAX_VTOMMSR	(1ULL << 18) /* Virtual TOM MSR */
+#define CPUIDEAX_IBSVIRT	(1ULL << 19) /* IBS Virtualization for SEV-ES */
+#define CPUIDEAX_VMSARPROT	(1ULL << 24) /* VMSA Register Protection */
+#define CPUIDEAX_SMTPROT	(1ULL << 25) /* SMT Protection */
+#define CPUIDEAX_SVSMPAGEMSR	(1ULL << 28) /* SVSM Communication Page MSR */
+#define CPUIDEAX_NVSMSR		(1ULL << 29) /* NestedVirtSnpMsr */
+#define CPUID_AMDSEV_EAX_BITS \
+    ("\20" "\01SME" "\02SEV" "\03PFLUSH_MSR" "\04SEVES" "\05SEVSNP" "\06VMPL" \
+     "\07RMPQUERY" "\010VMPLSSS" "\011SECTSC" "\012TSCAUXVIRT" \
+     "\013HWECACHECOH" "\014REQ64BITHOST" "\015RESTINJ" "\016ALTINJ" \
+     "\017DBGSTSW" "\020IBSDISALLOW" "\021VTE" "\022VMGEXITPARAM" \
+     "\023VTOMMSR" "\024IBSVIRT" "\031VMSARPROT" "\032SMTPROT" \
+     "\035SVSMPAGEMSR" "\036NVSMSR" )
+
+/* Number of encrypted guests */
+#define CPUID_AMDSEV_ECX_BITS ("\20")
+
+/* Minimum ASID for SEV enabled, SEV-ES disabled guest. */
+#define CPUID_AMDSEV_EDX_BITS ("\20")
 
 #define	CPUID2FAMILY(cpuid)	(((cpuid) >> 8) & 15)
 #define	CPUID2MODEL(cpuid)	(((cpuid) >> 4) & 15)
@@ -428,6 +517,16 @@
 #define ARCH_CAP_PBRSB_NO		(1 << 24) /* PBSR safe */
 #define ARCH_CAP_GDS_CTRL		(1 << 25) /* has GDS_MITG_DIS/LOCK */
 #define ARCH_CAP_GDS_NO			(1 << 26) /* GDS safe */
+#define ARCH_CAP_RFDS_NO		(1 << 27) /* RFDS safe */
+#define ARCH_CAP_RFDS_CLEAR		(1 << 28) /* use VERW for RFDS */
+#define ARCH_CAP_MSR_BITS \
+    ("\20" "\02IBRS_ALL" "\03RSBA" "\04SKIP_L1DFL" "\05SSB_NO" "\06MDS_NO" \
+     "\07IF_PSCHANGE" "\010TSX_CTRL" "\011TAA_NO" "\012MCU_CONTROL" \
+     "\013MISC_PKG_CT" "\014ENERGY_FILT" "\015DOITM" "\016SBDR_SSDP_N" \
+     "\017FBSDP_NO" "\020PSDP_NO" "\022FB_CLEAR" "\023FB_CLEAR_CT" \
+     "\024RRSBA" "\025BHI_NO" "\026XAPIC_DIS" "\030OVERCLOCK" "\031PBRSB_NO" \
+     "\032GDS_CTRL" "\033GDS_NO" "\034RFDS_NO" "\035RFDS_CLEAR" )
+
 #define MSR_FLUSH_CMD		0x10b
 #define FLUSH_CMD_L1D_FLUSH	0x1	/* (1ULL << 0) */
 #define	MSR_BBL_CR_ADDR		0x116	/* PII+ only */
@@ -1490,6 +1589,13 @@
 #define SVM_INTERCEPT_CR15_WRITE_POST	(1UL << 31)
 
 /*
+ * SME and SEV
+ */
+#define CPUID_AMD_SEV_CAP		0x8000001F
+#define AMD_SME_CAP			(1UL << 0)
+#define AMD_SEV_CAP			(1UL << 1)
+
+/*
  * PAT
  */
 #define PATENTRY(n, type)       (type << ((n) * 8))
@@ -1508,6 +1614,8 @@
 #define XSAVE_XGETBV1		0x04UL
 #define XSAVE_XSAVES		0x08UL
 #define XSAVE_XFD		0x10UL
+#define XSAVE_BITS \
+    ("\20" "\01XSAVEOPT" "\02XSAVEC" "\03XGETBV1" "\04XSAVES" "\05XFD" )
 
 /*
  * Default cr0 and cr4 flags.

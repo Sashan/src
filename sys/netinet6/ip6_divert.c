@@ -1,4 +1,4 @@
-/*      $OpenBSD: ip6_divert.c,v 1.91 2024/01/01 18:52:09 bluhm Exp $ */
+/*      $OpenBSD: ip6_divert.c,v 1.95 2024/02/13 12:22:09 bluhm Exp $ */
 
 /*
  * Copyright (c) 2009 Michele Marchetto <michele@openbsd.org>
@@ -30,12 +30,13 @@
 #include <net/netisr.h>
 
 #include <netinet/in.h>
+#include <netinet6/in6_var.h>
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
+#include <netinet/ip6.h>
+#include <netinet6/ip6_var.h>
 #include <netinet/in_pcb.h>
 #include <netinet/ip_divert.h>
-#include <netinet/ip6.h>
-#include <netinet6/in6_var.h>
 #include <netinet6/ip6_divert.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
@@ -69,6 +70,7 @@ const struct pr_usrreqs divert6_usrreqs = {
 	.pru_detach	= divert_detach,
 	.pru_lock	= divert_lock,
 	.pru_unlock	= divert_unlock,
+	.pru_locked	= divert_locked,
 	.pru_bind	= divert_bind,
 	.pru_shutdown	= divert_shutdown,
 	.pru_send	= divert6_send,
@@ -178,7 +180,7 @@ divert6_output(struct inpcb *inp, struct mbuf *m, struct mbuf *nam,
 	} else {
 		m->m_pkthdr.ph_rtableid = inp->inp_rtableid;
 
-		error = ip6_output(m, NULL, &inp->inp_route6,
+		error = ip6_output(m, NULL, &inp->inp_route,
 		    IP_ALLOWBROADCAST | IP_RAWOUTPUT, NULL, NULL);
 	}
 
@@ -247,14 +249,14 @@ divert6_packet(struct mbuf *m, int dir, u_int16_t divert_port)
 		in6_proto_cksum_out(m, NULL);
 	}
 
-	mtx_enter(&inp->inp_mtx);
 	so = inp->inp_socket;
+	mtx_enter(&so->so_rcv.sb_mtx);
 	if (sbappendaddr(so, &so->so_rcv, sin6tosa(&sin6), m, NULL) == 0) {
-		mtx_leave(&inp->inp_mtx);
+		mtx_leave(&so->so_rcv.sb_mtx);
 		div6stat_inc(div6s_fullsock);
 		goto bad;
 	}
-	mtx_leave(&inp->inp_mtx);
+	mtx_leave(&so->so_rcv.sb_mtx);
 	sorwakeup(so);
 
 	in_pcbunref(inp);

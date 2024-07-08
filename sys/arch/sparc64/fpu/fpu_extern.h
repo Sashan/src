@@ -1,4 +1,4 @@
-/*	$OpenBSD: fpu_extern.h,v 1.7 2022/10/21 18:55:42 miod Exp $	*/
+/*	$OpenBSD: fpu_extern.h,v 1.10 2024/05/13 01:15:50 jsg Exp $	*/
 /*	$NetBSD: fpu_extern.h,v 1.4 2000/08/03 18:32:08 eeh Exp $	*/
 
 /*-
@@ -36,10 +36,10 @@ struct trapframe;
 union instr;
 struct fpemu;
 struct fpn;
+union sigval;
 
 /* fpu.c */
-void fpu_cleanup(struct proc *, struct fpstate *);
-int fpu_emulate(struct proc *, struct trapframe *, struct fpstate *);
+void fpu_cleanup(struct proc *, struct fpstate *, union instr, union sigval);
 int fpu_execute(struct proc *, struct fpemu *, union instr);
 
 /* fpu_add.c */
@@ -73,6 +73,6 @@ struct fpn *fpu_mul(struct fpemu *);
 struct fpn *fpu_sqrt(struct fpemu *);
 
 /* fpu_subr.c */
-int fpu_shr(register struct fpn *, register int);
-void fpu_norm(register struct fpn *);
-struct fpn *fpu_newnan(register struct fpemu *);
+int fpu_shr(struct fpn *, int);
+void fpu_norm(struct fpn *);
+struct fpn *fpu_newnan(struct fpemu *);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_bridge.c,v 1.368 2023/05/16 14:32:54 jan Exp $	*/
+/*	$OpenBSD: if_bridge.c,v 1.370 2024/04/14 20:46:27 bluhm Exp $	*/
 
 /*
  * Copyright (c) 1999, 2000 Jason L. Wright (jason@thought.net)
@@ -48,6 +48,7 @@
 #include <net/if_types.h>
 #include <net/if_llc.h>
 #include <net/netisr.h>
+#include <net/route.h>
 
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -1599,7 +1600,7 @@ bridge_ipsec(struct ifnet *ifp, struct ether_header *eh, int hassnap,
 			    off);
 			tdb_unref(tdb);
 			if (prot != IPPROTO_DONE)
-				ip_deliver(&m, &hlen, prot, af);
+				ip_deliver(&m, &hlen, prot, af, 0);
 			return (1);
 		} else {
 			tdb_unref(tdb);

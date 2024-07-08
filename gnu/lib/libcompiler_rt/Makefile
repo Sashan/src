@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.6 2021/12/28 15:45:17 patrick Exp $
+# $OpenBSD: Makefile,v 1.8 2024/02/06 05:07:28 jca Exp $
 
 .include <bsd.own.mk>
 
@@ -21,6 +21,8 @@ CPPFLAGS+=	-DVISIBILITY_HIDDEN
 RTARCH=	x86_64
 .elif ${MACHINE_ARCH} == "powerpc"
 RTARCH=	ppc
+.elif ${MACHINE_ARCH} == "riscv64"
+RTARCH=	riscv
 .else
 RTARCH=	${MACHINE_ARCH}
 .endif
@@ -301,7 +303,7 @@ SRCS+=	comparetf2.c \
 SRCS+=	atomic_lock_free.c
 .endif
 
-.if ${RTARCH} == "riscv64"
+.if ${RTARCH} == "riscv"
 SRCS+=	comparetf2.c \
 	extenddftf2.c \
 	extendsftf2.c \
@@ -318,6 +320,8 @@ SRCS+=	comparetf2.c \
 	floatunsitf.c \
 	floatuntitf.c \
 	multc3.c \
+	restore.S \
+	save.S \
 	trunctfdf2.c \
 	trunctfsf2.c
 .endif

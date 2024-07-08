@@ -1,4 +1,4 @@
-/*	$OpenBSD: radius.h,v 1.2 2023/07/08 08:53:26 yasuoka Exp $ */
+/*	$OpenBSD: radius.h,v 1.7 2024/06/29 11:50:31 yasuoka Exp $ */
 
 /*-
  * Copyright (c) 2009 Internet Initiative Japan Inc.
@@ -31,6 +31,7 @@
 
 #define RADIUS_DEFAULT_PORT		1812
 #define RADIUS_ACCT_DEFAULT_PORT	1813
+#define RADIUS_DAE_DEFAULT_PORT		3799
 
 /* RADIUS codes */
 #define RADIUS_CODE_ACCESS_REQUEST             1
@@ -42,6 +43,12 @@
 #define RADIUS_CODE_STATUS_SERVER             12
 #define RADIUS_CODE_STATUS_CLIENT             13
 
+#define RADIUS_CODE_DISCONNECT_REQUEST        40
+#define RADIUS_CODE_DISCONNECT_ACK            41
+#define RADIUS_CODE_DISCONNECT_NAK            42
+#define RADIUS_CODE_COA_REQUEST               43
+#define RADIUS_CODE_COA_ACK                   44
+#define RADIUS_CODE_COA_NAK                   45
 
 /* RADIUS attributes */
 #define RADIUS_TYPE_USER_NAME                  1
@@ -141,7 +148,17 @@
 #define RADIUS_TYPE_FRAMED_IPV6_PREFIX        97
 #define RADIUS_TYPE_LOGIN_IPV6_HOST           98
 #define RADIUS_TYPE_FRAMED_IPV6_ROUTE         99
-#define RADIUS_TYPE_FRAMED_IPV6_POOL          100
+#define RADIUS_TYPE_FRAMED_IPV6_POOL         100
+
+/* RFC 5176 3.5. Error-Cause */
+#define RADIUS_TYPE_ERROR_CAUSE              101
+
+/* RFC 6911 3. Attributes */
+#define RADIUS_TYPE_FRAMED_IPV6_ADDRESS      168
+#define RADIUS_TYPE_DNS_SERVER_IPV6_ADDRESS  169
+#define RADIUS_TYPE_ROUTE_IPV6_INFORMATION   170
+#define RADIUS_TYPE_DELEGATED_IPV6_PREFIX_POOL 171
+#define RADIUS_TYPE_STATEFUL_IPV6_ADDRESS_POOL 172
 
 
 /* RFC 2865 5.7. Framed-Protocol */
@@ -166,7 +183,7 @@
 #define RADIUS_SERVICE_TYPE_ADMINISTRATIVE    6
 #define RADIUS_SERVICE_TYPE_NAS_PROMPT        7
 #define RADIUS_SERVICE_TYPE_AUTHENTICAT_ONLY  8
-#define RADIUS_SERVICE_TYPE_CB_NAS_PROMPTi    9
+#define RADIUS_SERVICE_TYPE_CB_NAS_PROMPT     9
 #define RADIUS_SERVICE_TYPE_CALL_CHECK        10
 #define RADIUS_SERVICE_TYPE_CB_ADMINISTRATIVE 11
 
@@ -313,6 +330,42 @@
 #define RADIUS_TUNNEL_MEDIUM_TYPE_E163		7	/* E.163 (POTS) */
 #define RADIUS_TUNNEL_MEDIUM_TYPE_E164		8	/* E.164 (SMDS, Frame
 							 * Relay, ATM) */
+/* RFC 5167 3.5. Error-Cause */
+/* Residual Session Context Removed */
+#define RADIUS_ERROR_CAUSE_RESIDUAL_SESSION_REMOVED	201
+/* Invalid EAP Packet (Ignored) */
+#define RADIUS_ERROR_CAUSE_INVALID_EAP_PACKET		202
+/* Unsupported Attribute */
+#define RADIUS_ERROR_CAUSE_UNSUPPORTED_ATTRIBUTE	401
+/* Missing Attribute */
+#define RADIUS_ERROR_CAUSE_MISSING_ATTRIBUTE		402
+/* NAS Identification Mismatch */
+#define RADIUS_ERROR_CAUSE_NAS_IDENTIFICATION_MISMATCH	403
+/* Invalid Request */
+#define RADIUS_ERROR_CAUSE_INVALID_REQUEST		404
+/* Unsupported Service */
+#define RADIUS_ERROR_CAUSE_UNSUPPORTED_SERVICE		405
+/* Unsupported Extension */
+#define RADIUS_ERROR_CAUSE_UNSUPPORTED_EXTENSION	406
+/* Invalid Attribute Valu */
+#define RADIUS_ERROR_CAUSE_INVALID_ATTRIBUTE_VALUE	407
+/* Administratively Prohibited */
+#define RADIUS_ERROR_CAUSE_ADMINISTRATIVELY_PROHIBITED	501
+/* Request Not Routable (Proxy) */
+#define RADIUS_ERROR_CAUSE_REQUEST_NOT_ROUTABLE		502
+/* Session Context Not Found */
+#define RADIUS_ERROR_CAUSE_SESSION_NOT_FOUND		503
+/* Session Context Not Removable */
+#define RADIUS_ERROR_CAUSE_SESSION_NOT_REMOVABLE 	504
+/* Other Proxy Processing Error */
+#define RADIUS_ERROR_CAUSE_OTHER_PROXY_PROCESSING_ERROR	505
+/* Resources Unavailable */
+#define RADIUS_ERROR_CAUSE_RESOURCES_UNAVAILABLE	506
+/* Request Initiated */
+#define RADIUS_ERROR_CAUSE_REQUEST_INITIATED		507
+/* Multiple Session Selection Unsupported */
+#define RADIUS_ERROR_CAUSE_MULTI_SELECTION_UNSUPPORTED	508
+
 #include <sys/socket.h>
 #include <sys/cdefs.h>
 

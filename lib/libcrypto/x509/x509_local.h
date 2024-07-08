@@ -1,4 +1,4 @@
-/*	$OpenBSD: x509_local.h,v 1.18 2024/01/06 17:37:23 tb Exp $ */
+/*	$OpenBSD: x509_local.h,v 1.24 2024/04/08 23:46:21 beck Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2013.
  */
@@ -58,6 +58,8 @@
 
 #ifndef HEADER_X509_LOCAL_H
 #define HEADER_X509_LOCAL_H
+
+#include <openssl/x509v3.h>
 
 __BEGIN_HIDDEN_DECLS
 
@@ -133,13 +135,20 @@ struct X509_req_st {
  * useful in certificate stores and databases. When used this is tagged onto
  * the end of the certificate itself.
  */
-struct x509_cert_aux_st {
+typedef struct x509_cert_aux_st {
 	STACK_OF(ASN1_OBJECT) *trust;		/* trusted uses */
 	STACK_OF(ASN1_OBJECT) *reject;		/* rejected uses */
 	ASN1_UTF8STRING *alias;			/* "friendly name" */
 	ASN1_OCTET_STRING *keyid;		/* key id of private key */
 	STACK_OF(X509_ALGOR) *other;		/* other unspecified info */
-} /* X509_CERT_AUX */;
+} X509_CERT_AUX;
+
+X509_CERT_AUX *X509_CERT_AUX_new(void);
+void X509_CERT_AUX_free(X509_CERT_AUX *a);
+X509_CERT_AUX *d2i_X509_CERT_AUX(X509_CERT_AUX **a, const unsigned char **in, long len);
+int i2d_X509_CERT_AUX(X509_CERT_AUX *a, unsigned char **out);
+extern const ASN1_ITEM X509_CERT_AUX_it;
+int X509_CERT_AUX_print(BIO *bp,X509_CERT_AUX *x, int indent);
 
 struct x509_cinf_st {
 	ASN1_INTEGER *version;		/* [ 0 ] default of v1 */
@@ -179,8 +188,6 @@ struct x509_st {
 	struct ASIdentifiers_st *rfc3779_asid;
 #endif
 	unsigned char hash[X509_CERT_HASH_LEN];
-	time_t not_before;
-	time_t not_after;
 	X509_CERT_AUX *aux;
 } /* X509 */;
 
@@ -359,6 +366,49 @@ int X509_ALGOR_set0_by_nid(X509_ALGOR *alg, int nid, int parameter_type,
 int X509_policy_check(const STACK_OF(X509) *certs,
     const STACK_OF(ASN1_OBJECT) *user_policies, unsigned long flags,
     X509 **out_current_cert);
+
+PBEPARAM *PBEPARAM_new(void);
+void PBEPARAM_free(PBEPARAM *a);
+PBEPARAM *d2i_PBEPARAM(PBEPARAM **a, const unsigned char **in, long len);
+int i2d_PBEPARAM(PBEPARAM *a, unsigned char **out);
+
+/* Password based encryption V2 structures */
+typedef struct PBE2PARAM_st {
+	X509_ALGOR *keyfunc;
+	X509_ALGOR *encryption;
+} PBE2PARAM;
+
+PBE2PARAM *PBE2PARAM_new(void);
+void PBE2PARAM_free(PBE2PARAM *a);
+PBE2PARAM *d2i_PBE2PARAM(PBE2PARAM **a, const unsigned char **in, long len);
+int i2d_PBE2PARAM(PBE2PARAM *a, unsigned char **out);
+extern const ASN1_ITEM PBE2PARAM_it;
+
+typedef struct PBKDF2PARAM_st {
+	/* Usually OCTET STRING but could be anything */
+	ASN1_TYPE *salt;
+	ASN1_INTEGER *iter;
+	ASN1_INTEGER *keylength;
+	X509_ALGOR *prf;
+} PBKDF2PARAM;
+
+PBKDF2PARAM *PBKDF2PARAM_new(void);
+void PBKDF2PARAM_free(PBKDF2PARAM *a);
+PBKDF2PARAM *d2i_PBKDF2PARAM(PBKDF2PARAM **a, const unsigned char **in, long len);
+int i2d_PBKDF2PARAM(PBKDF2PARAM *a, unsigned char **out);
+extern const ASN1_ITEM PBKDF2PARAM_it;
+
+int PKCS5_pbe_set0_algor(X509_ALGOR *algor, int alg, int iter,
+    const unsigned char *salt, int saltlen);
+X509_ALGOR *PKCS5_pbe2_set(const EVP_CIPHER *cipher, int iter,
+    unsigned char *salt, int saltlen);
+X509_ALGOR *PKCS5_pbe_set(int alg, int iter, const unsigned char *salt,
+    int saltlen);
+X509_ALGOR *PKCS5_pbkdf2_set(int iter, unsigned char *salt, int saltlen,
+    int prf_nid, int keylen);
+
+int X509_PURPOSE_get_by_id(int id);
+int X509_PURPOSE_get_trust(const X509_PURPOSE *xp);
 
 __END_HIDDEN_DECLS
 

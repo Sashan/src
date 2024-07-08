@@ -1,4 +1,4 @@
-/*	$OpenBSD: in.h,v 1.145 2023/11/10 20:05:22 bluhm Exp $	*/
+/*	$OpenBSD: in.h,v 1.148 2024/02/13 12:22:09 bluhm Exp $	*/
 /*	$NetBSD: in.h,v 1.20 1996/02/13 23:41:47 christos Exp $	*/
 
 /*
@@ -770,6 +770,7 @@ struct sockaddr;
 struct sockaddr_in;
 struct ifaddr;
 struct in_ifaddr;
+struct route;
 
 void	   ipv4_input(struct ifnet *, struct mbuf *);
 struct mbuf *

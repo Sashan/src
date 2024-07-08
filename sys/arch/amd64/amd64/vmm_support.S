@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmm_support.S,v 1.24 2023/11/28 00:17:48 dv Exp $	*/
+/*	$OpenBSD: vmm_support.S,v 1.27 2024/04/01 05:11:49 guenther Exp $	*/
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -177,65 +177,6 @@ ENTRY(vmx_enter_guest)
 	vmwrite %rax, %rdi	/* Host RIP */
 
 skip_init:
-	/*
-	 * XXX use msr list here for restore instead of all this
-	 * stack jiggery-pokery
-	 */
-
-	pushfq
-	popq	%rax
-	andq	$(~PSL_I), %rax
-	pushq	%rax
-
-	/*
-	 * Save (possibly) lazy-switched selectors
-	 */
-	movw	%es, %ax
-	pushw	%ax
-	movw	%ds, %ax
-	pushw	%ax
-	movw	%ss, %ax
-	pushw	%ax
-
-	movq	$MSR_FSBASE, %rcx
-	rdmsr
-	pushq	%rax
-	pushq	%rdx
-	pushw	%fs
-	movq	$MSR_GSBASE, %rcx
-	rdmsr
-	pushq	%rax
-	pushq	%rdx
-	pushw	%gs
-	movq	$MSR_KERNELGSBASE, %rcx
-	rdmsr
-	pushq	%rax
-	pushq	%rdx
-
-	/*
-	 * Save various MSRs
-	 */
-	movq	$MSR_STAR, %rcx
-	rdmsr
-	pushq	%rax
-	pushq	%rdx
-
-	movq	$MSR_LSTAR, %rcx
-	rdmsr
-	pushq	%rax
-	pushq	%rdx
-
-	/* XXX - unused? */
-	movq	$MSR_CSTAR, %rcx
-	rdmsr
-	pushq	%rax
-	pushq	%rdx
-
-	movq	$MSR_SFMASK, %rcx
-	rdmsr
-	pushq	%rax
-	pushq	%rdx
-
 	RETGUARD_PUSH(r11)
 
 	/* Preserve callee-preserved registers as per AMD64 ABI */
@@ -253,6 +194,23 @@ skip_init:
 	 * XXX information yet to make the correct choices.
 	 */
 	CODEPATCH_START
+	xorl	%eax,%eax
+	xorl	%ebx,%ebx
+	xorl	%ecx,%ecx
+	xorl	%edx,%edx
+	xorl	%esi,%esi
+	xorl	%edi,%edi
+	xorl	%ebp,%ebp
+	/*
+	 * r8 is a boolean flagging launch or resume
+	 * r9 is 0-2 about the CPU
+	 */
+	xorl	%r10d,%r10d
+	xorl	%r11d,%r11d
+	xorl	%r12d,%r12d
+	xorl	%r13d,%r13d
+	xorl	%r14d,%r14d
+	xorl	%r15d,%r15d
 	subq	$8, %rsp
 	movw	%ds, (%rsp)
 	verw	(%rsp)
@@ -475,61 +433,6 @@ restore_host:
 
 	RETGUARD_POP(r11)
 
-	/*
-	 * Restore saved MSRs
-	 */
-	popq	%rdx
-	popq	%rax
-	movq	$MSR_SFMASK, %rcx
-	wrmsr
-
-	/* XXX - unused? */
-	popq	%rdx
-	popq	%rax
-	movq	$MSR_CSTAR, %rcx
-	wrmsr
-
-	popq	%rdx
-	popq	%rax
-	movq	$MSR_LSTAR, %rcx
-	wrmsr
-
-	popq	%rdx
-	popq	%rax
-	movq	$MSR_STAR, %rcx
-	wrmsr
-
-	/*
-	 * popw %gs will reset gsbase to 0, so preserve it
-	 * first. This is to accommodate possibly lazy-switched
-	 * selectors from above
-	 */
-	popq	%rdx
-	popq	%rax
-	movq	$MSR_KERNELGSBASE, %rcx
-	wrmsr
-
-	popw	%gs
-	popq	%rdx
-	popq	%rax
-	movq	$MSR_GSBASE, %rcx
-	wrmsr
-
-	popw	%fs
-	popq	%rdx
-	popq	%rax
-	movq	$MSR_FSBASE, %rcx
-	wrmsr
-
-	popw	%ax
-	movw	%ax, %ss
-	popw	%ax
-	movw	%ax, %ds
-	popw	%ax
-	movw	%ax, %es
-
-	popfq
-
 	movq	%rdi, %rax
 	RETGUARD_CHECK(vmx_enter_guest, r11)
 	ret
@@ -580,12 +483,6 @@ ENTRY(svm_enter_guest)
 	pushq	%rdx
 
 	movq	$MSR_LSTAR, %rcx
-	rdmsr
-	pushq	%rax
-	pushq	%rdx
-
-	/* XXX - unused? */
-	movq	$MSR_CSTAR, %rcx
 	rdmsr
 	pushq	%rax
 	pushq	%rdx
@@ -696,9 +593,9 @@ restore_host_svm:
 	movq	$MSR_SFMASK, %rcx
 	wrmsr
 
-	/* XXX - unused? */
-	popq	%rdx
-	popq	%rax
+	/* make sure guest doesn't bleed into host */
+	xorl	%edx, %edx
+	xorl	%eax, %eax
 	movq	$MSR_CSTAR, %rcx
 	wrmsr
 

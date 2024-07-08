@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmm.c,v 1.116 2024/01/03 22:34:39 dv Exp $	*/
+/*	$OpenBSD: vmm.c,v 1.119 2024/02/05 21:58:09 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -52,6 +52,7 @@
 #include "vmd.h"
 #include "vmm.h"
 #include "atomicio.h"
+#include "proc.h"
 
 void	vmm_sighdlr(int, short, void *);
 int	vmm_start_vm(struct imsg *, uint32_t *, pid_t *);
@@ -252,7 +253,7 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 		}
 		imsg_compose_event(&vm->vm_iev,
 		    imsg->hdr.type, imsg->hdr.peerid, imsg->hdr.pid,
-		    imsg->fd, &vid, sizeof(vid));
+		    imsg_get_fd(imsg), &vid, sizeof(vid));
 		break;
 	case IMSG_VMDOP_UNPAUSE_VM:
 		IMSG_SIZE_CHECK(imsg, &vid);
@@ -265,7 +266,7 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 		}
 		imsg_compose_event(&vm->vm_iev,
 		    imsg->hdr.type, imsg->hdr.peerid, imsg->hdr.pid,
-		    imsg->fd, &vid, sizeof(vid));
+		    imsg_get_fd(imsg), &vid, sizeof(vid));
 		break;
 	case IMSG_VMDOP_SEND_VM_REQUEST:
 		IMSG_SIZE_CHECK(imsg, &vid);
@@ -273,13 +274,13 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 		id = vid.vid_id;
 		if ((vm = vm_getbyvmid(id)) == NULL) {
 			res = ENOENT;
-			close(imsg->fd);
+			close(imsg_get_fd(imsg));	/* XXX */
 			cmd = IMSG_VMDOP_START_VM_RESPONSE;
 			break;
 		}
 		imsg_compose_event(&vm->vm_iev,
 		    imsg->hdr.type, imsg->hdr.peerid, imsg->hdr.pid,
-		    imsg->fd, &vid, sizeof(vid));
+		    imsg_get_fd(imsg), &vid, sizeof(vid));
 		break;
 	case IMSG_VMDOP_RECEIVE_VM_REQUEST:
 		IMSG_SIZE_CHECK(imsg, &vmc);
@@ -290,18 +291,18 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 			cmd = IMSG_VMDOP_START_VM_RESPONSE;
 			break;
 		}
-		vm->vm_tty = imsg->fd;
+		vm->vm_tty = imsg_get_fd(imsg);
 		vm->vm_state |= VM_STATE_RECEIVED;
 		vm->vm_state |= VM_STATE_PAUSED;
 		break;
 	case IMSG_VMDOP_RECEIVE_VM_END:
 		if ((vm = vm_getbyvmid(imsg->hdr.peerid)) == NULL) {
 			res = ENOENT;
-			close(imsg->fd);
+			close(imsg_get_fd(imsg));	/* XXX */
 			cmd = IMSG_VMDOP_START_VM_RESPONSE;
 			break;
 		}
-		vm->vm_receive_fd = imsg->fd;
+		vm->vm_receive_fd = imsg_get_fd(imsg);
 		res = vmm_start_vm(imsg, &id, &pid);
 		/* Check if the ID can be mapped correctly */
 		if ((id = vm_id2vmid(id, NULL)) == 0)
@@ -318,12 +319,12 @@ vmm_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 		/* Forward hardware address details to the guest vm */
 		imsg_compose_event(&vm->vm_iev,
 		    imsg->hdr.type, imsg->hdr.peerid, imsg->hdr.pid,
-		    imsg->fd, &var, sizeof(var));
+		    imsg_get_fd(imsg), &var, sizeof(var));
 		break;
 	case IMSG_VMDOP_RECEIVE_VMM_FD:
 		if (env->vmd_fd > -1)
 			fatalx("already received vmm fd");
-		env->vmd_fd = imsg->fd;
+		env->vmd_fd = imsg_get_fd(imsg);
 
 		/* Get and terminate all running VMs */
 		get_info_vm(ps, NULL, 1);
@@ -467,8 +468,14 @@ vmm_pipe(struct vmd_vm *vm, int fd, void (*cb)(int, short, void *))
 {
 	struct imsgev	*iev = &vm->vm_iev;
 
-	if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
-		log_warn("failed to set nonblocking mode on vm pipe");
+	/*
+	 * Set to close-on-exec as vmm_pipe is used after fork+exec to
+	 * establish async ipc between vm and vmd's vmm process. This
+	 * prevents future vm processes or virtio subprocesses from
+	 * inheriting this control channel.
+	 */
+	if (fcntl(fd, F_SETFD, FD_CLOEXEC) == -1) {
+		log_warn("failed to set close-on-exec for vmm ipc channel");
 		return (-1);
 	}
 
@@ -650,27 +657,20 @@ vmm_start_vm(struct imsg *imsg, uint32_t *id, pid_t *pid)
 
 	if ((vm = vm_getbyvmid(imsg->hdr.peerid)) == NULL) {
 		log_warnx("%s: can't find vm", __func__);
-		ret = ENOENT;
-		goto err;
+		return (ENOENT);
 	}
 	vcp = &vm->vm_params.vmc_params;
 
 	if (!(vm->vm_state & VM_STATE_RECEIVED)) {
-		if ((vm->vm_tty = imsg->fd) == -1) {
+		if ((vm->vm_tty = imsg_get_fd(imsg)) == -1) {
 			log_warnx("%s: can't get tty", __func__);
 			goto err;
 		}
 	}
 
-	if (socketpair(AF_UNIX, SOCK_STREAM, PF_UNSPEC, fds) == -1)
+	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, PF_UNSPEC, fds)
+	    == -1)
 		fatal("socketpair");
-
-	/* Keep our channel open after exec. */
-	if (fcntl(fds[1], F_SETFD, 0)) {
-		ret = errno;
-		log_warn("%s: fcntl", __func__);
-		goto err;
-	}
 
 	/* Start child vmd for this VM (fork, chroot, drop privs) */
 	vm_pid = fork();
@@ -746,8 +746,6 @@ vmm_start_vm(struct imsg *imsg, uint32_t *id, pid_t *pid)
 		/* Wire up our pipe into the event handling. */
 		if (vmm_pipe(vm, fds[0], vmm_dispatch_vm) == -1)
 			fatal("setup vm pipe");
-
-		return (0);
 	} else {
 		/* Child. Create a new session. */
 		if (setsid() == -1)
@@ -765,21 +763,6 @@ vmm_start_vm(struct imsg *imsg, uint32_t *id, pid_t *pid)
 			if (fd > 2)
 				close(fd);
 		}
-
-		/* Toggle all fds to not close on exec. */
-		for (i = 0 ; i < vm->vm_params.vmc_ndisks; i++)
-			for (j = 0; j < VM_MAX_BASE_PER_DISK; j++)
-				if (vm->vm_disks[i][j] != -1)
-					fcntl(vm->vm_disks[i][j], F_SETFD, 0);
-		for (i = 0 ; i < vm->vm_params.vmc_nnics; i++)
-			fcntl(vm->vm_ifs[i].vif_fd, F_SETFD, 0);
-		if (vm->vm_kernel != -1)
-			fcntl(vm->vm_kernel, F_SETFD, 0);
-		if (vm->vm_cdrom != -1)
-			fcntl(vm->vm_cdrom, F_SETFD, 0);
-		if (vm->vm_tty != -1)
-			fcntl(vm->vm_tty, F_SETFD, 0);
-		fcntl(env->vmd_fd, F_SETFD, 0);	/* vmm device fd */
 
 		/*
 		 * Prepare our new argv for execvp(2) with the fd of our open

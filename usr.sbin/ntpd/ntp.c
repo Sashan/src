@@ -1,4 +1,4 @@
-/*	$OpenBSD: ntp.c,v 1.172 2023/12/20 15:36:36 otto Exp $ */
+/*	$OpenBSD: ntp.c,v 1.174 2024/02/21 03:31:28 deraadt Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -534,7 +534,7 @@ inpool(struct sockaddr_storage *a,
 				return 1;
 		} else if (memcmp(&((struct sockaddr_in6 *)a)->sin6_addr,
 		    &((struct sockaddr_in6 *)&old[i])->sin6_addr,
-		    sizeof(struct sockaddr_in6)) == 0) {
+		    sizeof(struct in6_addr)) == 0) {
 			return 1;
 		}
 	}
@@ -596,7 +596,7 @@ ntp_dispatch_imsg_dns(void)
 
 			dlen = imsg.hdr.len - IMSG_HEADER_SIZE;
 			if (dlen == 0) {	/* no data -> temp error */
-				log_warnx("DNS lookup tempfail");
+				log_debug("DNS lookup tempfail");
 				peer->state = STATE_DNS_TEMPFAIL;
 				if (conf->tmpfail++ == TRIES_AUTO_DNSFAIL)
 					priv_settime(0, "of dns failures");

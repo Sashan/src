@@ -1,4 +1,4 @@
-/*	$OpenBSD: frontend.c,v 1.65 2023/12/14 09:58:59 claudio Exp $	*/
+/*	$OpenBSD: frontend.c,v 1.67 2024/06/03 17:58:33 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2017 Florian Obser <florian@openbsd.org>
@@ -37,7 +37,6 @@
 #include <netinet6/nd6.h>
 #include <netinet6/in6_var.h>
 #include <netinet/ip6.h>
-#include <netinet6/ip6_var.h>
 #include <netinet/icmp6.h>
 
 #include <errno.h>
@@ -508,7 +507,7 @@ update_iface(uint32_t if_index, char* if_name)
 	if (!(xflags & (IFXF_AUTOCONF6 | IFXF_AUTOCONF6TEMP)))
 		return;
 
-	if((ifrdomain = get_ifrdomain(if_name)) == -1)
+	if ((ifrdomain = get_ifrdomain(if_name)) == -1)
 		return;
 
 	iface = get_iface_by_id(if_index);

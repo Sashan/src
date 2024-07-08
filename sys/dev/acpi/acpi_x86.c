@@ -1,4 +1,4 @@
-/* $OpenBSD: acpi_x86.c,v 1.17 2023/07/06 06:58:07 deraadt Exp $ */
+/* $OpenBSD: acpi_x86.c,v 1.22 2024/06/25 11:57:10 kettenis Exp $ */
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  * Copyright (c) 2005 Jordan Hargrave <jordan@openbsd.org>
@@ -31,13 +31,18 @@ int
 sleep_showstate(void *v, int sleepmode)
 {
 	struct acpi_softc *sc = v;
+	int fallback_state = -1;
 
 	switch (sleepmode) {
 	case SLEEP_SUSPEND:
 		sc->sc_state = ACPI_STATE_S3;
+#ifdef __amd64__
+		fallback_state = ACPI_STATE_S0; /* No S3, use S0 */
+#endif
 		break;
 	case SLEEP_HIBERNATE:
 		sc->sc_state = ACPI_STATE_S4;
+		fallback_state = ACPI_STATE_S5; /* No S4, use S5 */
 		break;
 	default:
 		return (EOPNOTSUPP);
@@ -45,10 +50,10 @@ sleep_showstate(void *v, int sleepmode)
 
 	if (sc->sc_sleeptype[sc->sc_state].slp_typa == -1 ||
 	    sc->sc_sleeptype[sc->sc_state].slp_typb == -1) {
-		if (sc->sc_state == ACPI_STATE_S4) {
-			sc->sc_state = ACPI_STATE_S5;	/* No S4, use S5 */
-			printf("%s: S4 unavailable, using S5\n",
-			    sc->sc_dev.dv_xname);
+		if (fallback_state != -1) {
+			printf("%s: S%d unavailable, using S%d\n",
+			    sc->sc_dev.dv_xname, sc->sc_state, fallback_state);
+			sc->sc_state = fallback_state;
 		} else {
 			printf("%s: state S%d unavailable\n",
 			    sc->sc_dev.dv_xname, sc->sc_state);
@@ -57,8 +62,10 @@ sleep_showstate(void *v, int sleepmode)
 	}
 
 	/* 1st suspend AML step: _TTS(tostate) */
-	if (aml_node_setval(sc, sc->sc_tts, sc->sc_state) != 0)
-		return (EINVAL);
+	if (sc->sc_state != ACPI_STATE_S0) {
+		if (aml_node_setval(sc, sc->sc_tts, sc->sc_state) != 0)
+			return (EINVAL);
+	}
 	acpi_indicator(sc, ACPI_SST_WAKING);    /* blink */
 	return 0;
 }
@@ -69,8 +76,10 @@ sleep_setstate(void *v)
 	struct acpi_softc *sc = v;
 
 	/* 2nd suspend AML step: _PTS(tostate) */
-	if (aml_node_setval(sc, sc->sc_pts, sc->sc_state) != 0)
-		return (EINVAL);
+	if (sc->sc_state != ACPI_STATE_S0) {
+		if (aml_node_setval(sc, sc->sc_pts, sc->sc_state) != 0)
+			return (EINVAL);
+	}
 	acpi_indicator(sc, ACPI_SST_WAKING);    /* blink */
 	return 0;
 }
@@ -85,7 +94,8 @@ gosleep(void *v)
 	acpi_indicator(sc, ACPI_SST_SLEEPING);
 
 	/* 3rd suspend AML step: _GTS(tostate) */
-	aml_node_setval(sc, sc->sc_gts, sc->sc_state);
+	if (sc->sc_state != ACPI_STATE_S0)
+		aml_node_setval(sc, sc->sc_gts, sc->sc_state);
 
 	/* Clear fixed event status */
 	acpi_write_pmreg(sc, ACPIREG_PM1_STS, 0, ACPI_PM1_ALL_STS);
@@ -96,17 +106,8 @@ gosleep(void *v)
 
 	ret = acpi_sleep_cpu(sc, sc->sc_state);
 	acpi_resume_cpu(sc, sc->sc_state);
-	sc->sc_state = ACPI_STATE_S0;
 
 	return ret;
-}
-
-void
-sleep_abort(void *v)
-{
-	struct acpi_softc *sc = v;
-
-	sc->sc_state = ACPI_STATE_S0;
 }
 
 int
@@ -114,11 +115,15 @@ sleep_resume(void *v)
 {
 	struct acpi_softc *sc = v;
 
+	sc->sc_resume_time = getuptime();
+
 	acpibtn_disable_psw();		/* disable _LID for wakeup */
 
 	/* 3rd resume AML step: _TTS(runstate) */
-	if (aml_node_setval(sc, sc->sc_tts, sc->sc_state) != 0)
-		return (EINVAL);
+	if (sc->sc_state != ACPI_STATE_S0) {
+		if (aml_node_setval(sc, sc->sc_tts, ACPI_STATE_S0) != 0)
+			return (EINVAL);
+	}
 	acpi_indicator(sc, ACPI_SST_WAKING);    /* blink */
 	return 0;
 }
@@ -142,8 +147,23 @@ suspend_finish(void *v)
 {
 	struct acpi_softc *sc = v;
 
+	printf("wakeup event: ");
+	switch (sc->sc_wakegpe) {
+	case -1:
+		printf("PWRBTN\n");
+		break;
+	case -2:
+		printf("SLPTN\n");
+		break;
+	default:
+		printf("GPE 0x%x\n", sc->sc_wakegpe);
+		break;
+	}
+
 	acpi_record_event(sc, APM_NORMAL_RESUME);
 	acpi_indicator(sc, ACPI_SST_WORKING);
+
+	sc->sc_state = ACPI_STATE_S0;
 
 	/* If we woke up but all the lids are closed, go back to sleep */
 	return checklids(sc);

@@ -56,10 +56,12 @@ struct acpi_table_header;
 
 #define ACPI_SUCCESS(x) ((x) == 0)
 #define ACPI_FAILURE(x) ((x) != 0)
+#define return_ACPI_STATUS(x)	return(x)
 
 #define AE_ERROR		1
 #define AE_NOT_FOUND		2
 #define AE_BAD_PARAMETER	3
+#define AE_NOT_EXIST		4
 
 acpi_status acpi_evaluate_object(acpi_handle, const char *,
 	struct acpi_object_list *, struct acpi_buffer *);
@@ -83,5 +85,7 @@ struct notifier_block;
 
 int register_acpi_notifier(struct notifier_block *);
 int unregister_acpi_notifier(struct notifier_block *);
+
+int acpi_target_system_state(void);
 
 #endif

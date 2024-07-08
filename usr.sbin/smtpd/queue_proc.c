@@ -1,4 +1,4 @@
-/*	$OpenBSD: queue_proc.c,v 1.9 2021/06/14 17:58:16 eric Exp $	*/
+/*	$OpenBSD: queue_proc.c,v 1.11 2024/05/07 12:10:06 op Exp $	*/
 
 /*
  * Copyright (c) 2013 Eric Faurot <eric@openbsd.org>
@@ -170,7 +170,7 @@ queue_proc_message_fd_r(uint32_t msgid)
 	queue_proc_call();
 	queue_proc_end();
 
-	return (imsg.fd);
+	return (imsg_get_fd(&imsg));
 }
 
 static int
@@ -287,7 +287,7 @@ queue_proc_init(struct passwd *pw, int server, const char *conf)
 	uint32_t	version;
 	int		fd;
 
-	fd = fork_proc_backend("queue", conf, "queue-proc");
+	fd = fork_proc_backend("queue", conf, "queue-proc", 0);
 	if (fd == -1)
 		fatalx("queue-proc: exiting");
 

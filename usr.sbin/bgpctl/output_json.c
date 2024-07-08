@@ -1,4 +1,4 @@
-/*	$OpenBSD: output_json.c,v 1.38 2024/01/11 13:09:41 claudio Exp $ */
+/*	$OpenBSD: output_json.c,v 1.44 2024/05/22 08:42:34 claudio Exp $ */
 
 /*
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
@@ -250,7 +250,6 @@ json_neighbor_full(struct peer *p)
 		json_do_string("role", log_policy(p->conf.role));
 
 	/* capabilities */
-	json_do_bool("announce_capabilities", p->conf.announce_capa);
 	json_neighbor_capabilities(&p->conf.capabilities);
 
 	json_do_end();
@@ -325,7 +324,7 @@ json_neighbor(struct peer *p, struct parse_result *res)
 		    log_addr(&p->conf.remote_addr), p->conf.remote_masklen);
 	if (p->state == STATE_ESTABLISHED) {
 		struct in_addr ina;
-		ina.s_addr = p->remote_bgpid;
+		ina.s_addr = htonl(p->remote_bgpid);
 		json_do_string("bgpid", inet_ntoa(ina));
 	}
 	json_do_string("state", statenames[p->state]);
@@ -465,19 +464,17 @@ json_interface(struct ctl_show_interface *iface)
 }
 
 static void
-json_communities(u_char *data, size_t len, struct parse_result *res)
+json_communities(struct ibuf *data, struct parse_result *res)
 {
 	struct community c;
-	size_t  i;
 	uint64_t ext;
 
-	if (len % sizeof(c)) {
-		warnx("communities: bad size");
-		return;
-	}
 
-	for (i = 0; i < len; i += sizeof(c)) {
-		memcpy(&c, data + i, sizeof(c));
+	while (ibuf_size(data) != 0) {
+		if (ibuf_get(data, &c, sizeof(c)) == -1) {
+			warn("communities");
+			return;
+		}
 
 		switch (c.flags) {
 		case COMMUNITY_TYPE_BASIC:
@@ -505,33 +502,27 @@ json_communities(u_char *data, size_t len, struct parse_result *res)
 				ext |= (uint64_t)c.data2 & 0xffff;
 				break;
 			}
-			ext = htobe64(ext);
 
 			json_do_array("extended_communities");
-			json_do_string("community",
-			    fmt_ext_community((void *)&ext));
+			json_do_string("community", fmt_ext_community(ext));
 			break;
 		}
 	}
 }
 
 static void
-json_do_community(u_char *data, uint16_t len)
+json_do_community(struct ibuf *buf)
 {
-	uint16_t a, v, i;
-
-	if (len & 0x3) {
-		json_do_string("error", "bad length");
-		return;
-	}
+	uint16_t a, v;
 
 	json_do_array("communities");
 
-	for (i = 0; i < len; i += 4) {
-		memcpy(&a, data + i, sizeof(a));
-		memcpy(&v, data + i + 2, sizeof(v));
-		a = ntohs(a);
-		v = ntohs(v);
+	while (ibuf_size(buf) > 0) {
+		if (ibuf_get_n16(buf, &a) == -1 ||
+		    ibuf_get_n16(buf, &v) == -1) {
+			json_do_string("error", "bad length");
+			return;
+		}
 		json_do_string("community", fmt_community(a, v));
 	}
 
@@ -539,196 +530,166 @@ json_do_community(u_char *data, uint16_t len)
 }
 
 static void
-json_do_large_community(u_char *data, uint16_t len)
+json_do_large_community(struct ibuf *buf)
 {
 	uint32_t a, l1, l2;
-	uint16_t i;
-
-	if (len % 12) {
-		json_do_string("error", "bad length");
-		return;
-	}
 
 	json_do_array("large_communities");
 
-	for (i = 0; i < len; i += 12) {
-		memcpy(&a, data + i, sizeof(a));
-		memcpy(&l1, data + i + 4, sizeof(l1));
-		memcpy(&l2, data + i + 8, sizeof(l2));
-		a = ntohl(a);
-		l1 = ntohl(l1);
-		l2 = ntohl(l2);
-
-		json_do_string("community",
-		    fmt_large_community(a, l1, l2));
+	while (ibuf_size(buf) > 0) {
+		if (ibuf_get_n32(buf, &a) == -1 ||
+		    ibuf_get_n32(buf, &l1) == -1 ||
+		    ibuf_get_n32(buf, &l2) == -1) {
+			json_do_string("error", "bad length");
+			return;
+		}
+		json_do_string("community", fmt_large_community(a, l1, l2));
 	}
 
 	json_do_end();
 }
 
 static void
-json_do_ext_community(u_char *data, uint16_t len)
+json_do_ext_community(struct ibuf *buf)
 {
-	uint16_t i;
-
-	if (len & 0x7) {
-		json_do_string("error", "bad length");
-		return;
-	}
-
+	uint64_t ext;
 	json_do_array("extended_communities");
 
-	for (i = 0; i < len; i += 8)
-		json_do_string("community", fmt_ext_community(data + i));
+	while (ibuf_size(buf) > 0) {
+		if (ibuf_get_n64(buf, &ext) == -1) {
+			json_do_string("error", "bad length");
+			return;
+		}
+		json_do_string("community", fmt_ext_community(ext));
+	}
 
 	json_do_end();
 }
 
 static void
-json_attr(u_char *data, size_t len, int reqflags, int addpath)
+json_attr(struct ibuf *buf, int reqflags, int addpath)
 {
 	struct bgpd_addr prefix;
 	struct in_addr id;
+	struct ibuf asbuf, *path = NULL;
 	char *aspath;
-	u_char *path;
-	uint32_t as, pathid;
-	uint16_t alen, afi, off, short_as;
-	uint8_t flags, type, safi, aid, prefixlen;
-	int e4, e2, pos;
-
-	if (len < 3) {
-		warnx("Too short BGP attribute");
-		return;
-	}
-
-	flags = data[0];
-	type = data[1];
-	if (flags & ATTR_EXTLEN) {
-		if (len < 4) {
-			warnx("Too short BGP attribute");
-			return;
-		}
-		memcpy(&alen, data+2, sizeof(uint16_t));
-		alen = ntohs(alen);
-		data += 4;
-		len -= 4;
-	} else {
-		alen = data[2];
-		data += 3;
-		len -= 3;
-	}
-
-	/* bad imsg len how can that happen!? */
-	if (alen > len) {
-		warnx("Bad BGP attribute length");
-		return;
-	}
+	uint32_t as, pathid, val;
+	uint16_t alen, afi, short_as;
+	uint8_t flags, type, safi, aid, prefixlen, origin;
+	int e4, e2;
 
 	json_do_array("attributes");
-
 	json_do_object("attribute", 0);
+
+	if (ibuf_get_n8(buf, &flags) == -1 ||
+	    ibuf_get_n8(buf, &type) == -1)
+		goto bad_len;
+
 	json_do_string("type", fmt_attr(type, -1));
-	json_do_uint("length", alen);
 	json_do_object("flags", 1);
 	json_do_bool("partial", flags & ATTR_PARTIAL);
 	json_do_bool("transitive", flags & ATTR_TRANSITIVE);
 	json_do_bool("optional", flags & ATTR_OPTIONAL);
 	json_do_end();
 
+	if (flags & ATTR_EXTLEN) {
+		uint16_t attr_len;
+		if (ibuf_get_n16(buf, &attr_len) == -1)
+			goto bad_len;
+		alen = attr_len;
+	} else {
+		uint8_t attr_len;
+		if (ibuf_get_n8(buf, &attr_len) == -1)
+			goto bad_len;
+		alen = attr_len;
+	}
+
+	json_do_uint("length", alen);
+
+	/* bad imsg len how can that happen!? */
+	if (alen > ibuf_size(buf))
+		goto bad_len;
+
 	switch (type) {
 	case ATTR_ORIGIN:
-		if (alen == 1)
-			json_do_string("origin", fmt_origin(*data, 0));
-		else
-			json_do_string("error", "bad length");
+		if (alen != 1 || ibuf_get_n8(buf, &origin) == -1)
+			goto bad_len;
+		json_do_string("origin", fmt_origin(origin, 0));
 		break;
 	case ATTR_ASPATH:
 	case ATTR_AS4_PATH:
 		/* prefer 4-byte AS here */
-		e4 = aspath_verify(data, alen, 1, 0);
-		e2 = aspath_verify(data, alen, 0, 0);
+		e4 = aspath_verify(buf, 1, 0);
+		e2 = aspath_verify(buf, 0, 0);
 		if (e4 == 0 || e4 == AS_ERR_SOFT) {
-			path = data;
+			ibuf_from_ibuf(&asbuf, buf);
 		} else if (e2 == 0 || e2 == AS_ERR_SOFT) {
-			path = aspath_inflate(data, alen, &alen);
-			if (path == NULL)
-				errx(1, "aspath_inflate failed");
+			if ((path = aspath_inflate(buf)) == NULL) {
+				json_do_string("error",
+				    "aspath_inflate failed");
+				break;
+			}
+			ibuf_from_ibuf(&asbuf, path);
 		} else {
 			json_do_string("error", "bad AS-Path");
 			break;
 		}
-		if (aspath_asprint(&aspath, path, alen) == -1)
+		if (aspath_asprint(&aspath, &asbuf) == -1)
 			err(1, NULL);
 		json_do_string("aspath", aspath);
 		free(aspath);
-		if (path != data)
-			free(path);
+		ibuf_free(path);
 		break;
 	case ATTR_NEXTHOP:
-		if (alen == 4) {
-			memcpy(&id, data, sizeof(id));
-			json_do_string("nexthop", inet_ntoa(id));
-		} else
-			json_do_string("error", "bad length");
+		if (alen != 4 || ibuf_get(buf, &id, sizeof(id)) == -1)
+			goto bad_len;
+		json_do_string("nexthop", inet_ntoa(id));
 		break;
 	case ATTR_MED:
 	case ATTR_LOCALPREF:
-		if (alen == 4) {
-			uint32_t val;
-			memcpy(&val, data, sizeof(val));
-			json_do_uint("metric", ntohl(val));
-		} else
-			json_do_string("error", "bad length");
+		if (alen != 4 || ibuf_get_n32(buf, &val) == -1)
+			goto bad_len;
+		json_do_uint("metric", val);
 		break;
 	case ATTR_AGGREGATOR:
 	case ATTR_AS4_AGGREGATOR:
 		if (alen == 8) {
-			memcpy(&as, data, sizeof(as));
-			memcpy(&id, data + sizeof(as), sizeof(id));
-			as = ntohl(as);
+			if (ibuf_get_n32(buf, &as) == -1 ||
+			    ibuf_get(buf, &id, sizeof(id)) == -1)
+				goto bad_len;
 		} else if (alen == 6) {
-			memcpy(&short_as, data, sizeof(short_as));
-			memcpy(&id, data + sizeof(short_as), sizeof(id));
-			as = ntohs(short_as);
+			if (ibuf_get_n16(buf, &short_as) == -1 ||
+			    ibuf_get(buf, &id, sizeof(id)) == -1)
+				goto bad_len;
+			as = short_as;
 		} else {
-			json_do_string("error", "bad AS-Path");
-			break;
+			goto bad_len;
 		}
 		json_do_uint("AS", as);
 		json_do_string("router_id", inet_ntoa(id));
 		break;
 	case ATTR_COMMUNITIES:
-		json_do_community(data, alen);
+		json_do_community(buf);
 		break;
 	case ATTR_ORIGINATOR_ID:
-		if (alen == 4) {
-			memcpy(&id, data, sizeof(id));
-			json_do_string("originator", inet_ntoa(id));
-		} else
-			json_do_string("error", "bad length");
+		if (alen != 4 || ibuf_get(buf, &id, sizeof(id)) == -1)
+			goto bad_len;
+		json_do_string("originator", inet_ntoa(id));
 		break;
 	case ATTR_CLUSTER_LIST:
 		json_do_array("cluster_list");
-		for (off = 0; off + sizeof(id) <= alen;
-		    off += sizeof(id)) {
-			memcpy(&id, data + off, sizeof(id));
+		while (ibuf_size(buf) > 0) {
+			if (ibuf_get(buf, &id, sizeof(id)) == -1)
+				goto bad_len;
 			json_do_string("cluster_id", inet_ntoa(id));
 		}
 		json_do_end();
 		break;
 	case ATTR_MP_REACH_NLRI:
 	case ATTR_MP_UNREACH_NLRI:
-		if (alen < 3) {
-bad_len:
-			json_do_string("error", "bad length");
-			break;
-		}
-		memcpy(&afi, data, 2);
-		data += 2;
-		alen -= 2;
-		afi = ntohs(afi);
-		safi = *data++;
-		alen--;
+		if (ibuf_get_n16(buf, &afi) == -1 ||
+		    ibuf_get_n8(buf, &safi) == -1)
+			goto bad_len;
 
 		if (afi2aid(afi, safi, &aid) == -1) {
 			json_do_printf("error", "bad AFI/SAFI pair: %d/%d",
@@ -740,11 +701,7 @@ bad_len:
 		if (type == ATTR_MP_REACH_NLRI) {
 			struct bgpd_addr nexthop;
 			uint8_t nhlen;
-			if (len == 0)
-				goto bad_len;
-			nhlen = *data++;
-			alen--;
-			if (nhlen > len)
+			if (ibuf_get_n8(buf, &nhlen) == -1)
 				goto bad_len;
 			memset(&nexthop, 0, sizeof(nexthop));
 			switch (aid) {
@@ -752,21 +709,27 @@ bad_len:
 				nexthop.aid = aid;
 				if (nhlen != 16 && nhlen != 32)
 					goto bad_len;
-				memcpy(&nexthop.v6.s6_addr, data, 16);
+				if (ibuf_get(buf, &nexthop.v6,
+				    sizeof(nexthop.v6)) == -1)
+					goto bad_len;
 				break;
 			case AID_VPN_IPv4:
 				if (nhlen != 12)
 					goto bad_len;
 				nexthop.aid = AID_INET;
-				memcpy(&nexthop.v4, data + sizeof(uint64_t),
-				    sizeof(nexthop.v4));
+				if (ibuf_skip(buf, sizeof(uint64_t)) == -1 ||
+				    ibuf_get(buf, &nexthop.v4,
+				    sizeof(nexthop.v4)) == -1)
+					goto bad_len;
 				break;
 			case AID_VPN_IPv6:
 				if (nhlen != 24)
 					goto bad_len;
 				nexthop.aid = AID_INET6;
-				memcpy(&nexthop.v6, data + sizeof(uint64_t),
-				    sizeof(nexthop.v6));
+				if (ibuf_skip(buf, sizeof(uint64_t)) == -1 ||
+				    ibuf_get(buf, &nexthop.v6,
+				    sizeof(nexthop.v6)) == -1)
+					goto bad_len;
 				break;
 			default:
 				json_do_printf("error", "unhandled AID: %d",
@@ -774,83 +737,72 @@ bad_len:
 				return;
 			}
 			/* ignore reserved (old SNPA) field as per RFC4760 */
-			data += nhlen + 1;
-			alen -= nhlen + 1;
+			if (ibuf_skip(buf, 1) == -1)
+				goto bad_len;
 
 			json_do_string("nexthop", log_addr(&nexthop));
 		}
 
 		json_do_array("NLRI");
-		while (alen > 0) {
+		while (ibuf_size(buf) > 0) {
 			json_do_object("prefix", 1);
-			if (addpath) {
-				if (alen <= sizeof(pathid)) {
-					json_do_string("error", "bad path-id");
-					break;
-				}
-				memcpy(&pathid, data, sizeof(pathid));
-				pathid = ntohl(pathid);
-				data += sizeof(pathid);
-				alen -= sizeof(pathid);
-			}
+			if (addpath)
+				if (ibuf_get_n32(buf, &pathid) == -1)
+					goto bad_len;
 			switch (aid) {
 			case AID_INET6:
-				pos = nlri_get_prefix6(data, alen, &prefix,
-				    &prefixlen);
+				if (nlri_get_prefix6(buf, &prefix,
+				    &prefixlen) == -1)
+					goto bad_len;
 				break;
 			case AID_VPN_IPv4:
-				 pos = nlri_get_vpn4(data, alen, &prefix,
-				     &prefixlen, 1);
-				 break;
+				if (nlri_get_vpn4(buf, &prefix,
+				    &prefixlen, 1) == -1)
+					goto bad_len;
+				break;
 			case AID_VPN_IPv6:
-				 pos = nlri_get_vpn6(data, alen, &prefix,
-				     &prefixlen, 1);
-				 break;
+				if (nlri_get_vpn6(buf, &prefix,
+				    &prefixlen, 1) == -1)
+					goto bad_len;
+				break;
 			default:
 				json_do_printf("error", "unhandled AID: %d",
 				    aid);
 				return;
 			}
-			if (pos == -1) {
-				json_do_printf("error", "bad %s prefix",
-				    aid2str(aid));
-				break;
-			}
 			json_do_printf("prefix", "%s/%u", log_addr(&prefix),
 			    prefixlen);
 			if (addpath)
 				 json_do_uint("path_id", pathid);
-			data += pos;
-			alen -= pos;
 			json_do_end();
 		}
 		json_do_end();
 		break;
 	case ATTR_EXT_COMMUNITIES:
-		json_do_ext_community(data, alen);
+		json_do_ext_community(buf);
 		break;
 	case ATTR_LARGE_COMMUNITIES:
-		json_do_large_community(data, alen);
+		json_do_large_community(buf);
 		break;
 	case ATTR_OTC:
-		if (alen == 4) {
-			memcpy(&as, data, sizeof(as));
-			as = ntohl(as);
-			json_do_uint("as", as);
-		} else
-			json_do_string("error", "bad length");
+		if (alen != 4 || ibuf_get_n32(buf, &as) == -1)
+			goto bad_len;
+		json_do_uint("as", as);
 		break;
 	case ATTR_ATOMIC_AGGREGATE:
 	default:
 		if (alen)
-			json_do_hexdump("data", data, alen);
+			json_do_hexdump("data", ibuf_data(buf), ibuf_size(buf));
 		break;
 	}
+	return;
+
+ bad_len:
+	json_do_string("error", "bad length");
 }
 
 static void
-json_rib(struct ctl_show_rib *r, u_char *asdata, size_t aslen,
-    struct parse_result *res)
+json_rib(struct ctl_show_rib *r, struct ibuf *asbuf, struct parse_result *res)
 {
 	struct in_addr id;
 	char *aspath;
@@ -861,7 +813,7 @@ json_rib(struct ctl_show_rib *r, u_char *asdata, size_t aslen,
 
 	json_do_printf("prefix", "%s/%u", log_addr(&r->prefix), r->prefixlen);
 
-	if (aspath_asprint(&aspath, asdata, aslen) == -1)
+	if (aspath_asprint(&aspath, asbuf) == -1)
 		err(1, NULL);
 	json_do_string("aspath", aspath);
 	free(aspath);

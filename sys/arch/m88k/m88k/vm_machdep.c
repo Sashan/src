@@ -1,4 +1,4 @@
-/*	$OpenBSD: vm_machdep.c,v 1.28 2023/04/11 00:45:07 jsg Exp $	*/
+/*	$OpenBSD: vm_machdep.c,v 1.30 2024/06/05 19:22:04 miod Exp $	*/
 
 /*
  * Copyright (c) 1998 Steve Murphree, Jr.
@@ -60,7 +60,6 @@
 #include <machine/trap.h>
 
 extern void savectx(struct pcb *);
-extern void switch_exit(struct proc *);
 
 /*
  * Finish a fork operation, with process p2 nearly set up.
@@ -73,11 +72,8 @@ void
 cpu_fork(struct proc *p1, struct proc *p2, void *stack, void *tcb,
     void (*func)(void *), void *arg)
 {
-	struct ksigframe {
-		void (*func)(void *);
-		void *arg;
-	} *ksfp;
 	extern void proc_trampoline(void);
+	struct m88100_pcb *mdpcb = &p2->p_addr->u_pcb.kernel_state;
 
 	/* Copy pcb from p1 to p2. */
 	if (p1 == curproc) {
@@ -100,19 +96,16 @@ cpu_fork(struct proc *p1, struct proc *p2, void *stack, void *tcb,
 	if (tcb != NULL)
 		USER_REGS(p2)->r[27] = (u_int)tcb;
 
-	ksfp = (struct ksigframe *)((char *)p2->p_addr + USPACE) - 1;
-	ksfp->func = func;
-	ksfp->arg = arg;
-
 	/*
-	 * When this process resumes, r31 will be ksfp and
-	 * the process will be at the beginning of proc_trampoline().
-	 * proc_trampoline will execute the function func, pop off
-	 * ksfp frame, and resume to userland.
+	 * When this process resumes, the process will be at the beginning
+	 * of proc_trampoline(). proc_trampoline will execute the function
+	 * func and resume to userland.
 	 */
 
-	p2->p_addr->u_pcb.kernel_state.pcb_sp = (u_int)ksfp;
-	p2->p_addr->u_pcb.kernel_state.pcb_pc = (u_int)proc_trampoline;
+	mdpcb->pcb_r14 = (u_int)func;
+	mdpcb->pcb_r15 = (u_int)arg;
+	mdpcb->pcb_sp = (u_int)((char *)p2->p_addr + USPACE);
+	mdpcb->pcb_pc = (u_int)proc_trampoline;
 }
 
 /*

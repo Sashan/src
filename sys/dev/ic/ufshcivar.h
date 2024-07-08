@@ -1,4 +1,4 @@
-/*	$OpenBSD: ufshcivar.h,v 1.1 2023/02/04 23:11:59 mglocker Exp $ */
+/*	$OpenBSD: ufshcivar.h,v 1.9 2024/05/29 00:48:15 jsg Exp $ */
 
 /*
  * Copyright (c) 2022 Marcus Glocker <mglocker@openbsd.org>
@@ -40,6 +40,10 @@ struct ufshci_ccb {
 	bus_dmamap_t			 ccb_dmamap;
 	void				*ccb_cookie;
 	int				 ccb_slot;
+#define CCB_STATUS_FREE		0
+#define CCB_STATUS_INPROGRESS	1
+#define CCB_STATUS_READY2FREE	2
+	int				 ccb_status;
 	void				 (*ccb_done)(struct ufshci_softc *,
 					     struct ufshci_ccb *);
 };
@@ -53,8 +57,11 @@ struct ufshci_softc {
 	bus_size_t		 sc_ios;
 	bus_dma_tag_t		 sc_dmat;
 
-	uint8_t			 sc_intraggr_enabled;
+	uint8_t			 sc_iacth;
+	struct mutex		 sc_cmd_mtx;
 
+#define UFSHCI_FLAGS_AGGR_INTR	 1
+	uint8_t			 sc_flags;
 	uint32_t		 sc_ver;
 	uint32_t		 sc_cap;
 	uint32_t		 sc_hcpid;
@@ -62,7 +69,6 @@ struct ufshci_softc {
 	uint8_t			 sc_nutmrs;
 	uint8_t			 sc_rtt;
 	uint8_t			 sc_nutrs;
-	uint8_t			 sc_taskid;
 
 	struct ufshci_dmamem	*sc_dmamem_utmrd;
 	struct ufshci_dmamem	*sc_dmamem_utrd;
@@ -76,5 +82,5 @@ struct ufshci_softc {
 };
 
 int	ufshci_intr(void *);
-void	ufshci_attach_hook(struct device *);	/* XXX: Only for testing */
 int	ufshci_attach(struct ufshci_softc *);
+int	ufshci_activate(struct ufshci_softc *, int);

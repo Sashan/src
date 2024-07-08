@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_re_cardbus.c,v 1.30 2022/04/06 18:59:28 naddy Exp $	*/
+/*	$OpenBSD: if_re_cardbus.c,v 1.32 2024/05/24 06:26:47 jsg Exp $	*/
 
 /*
  * Copyright (c) 2005 Peter Valchev <pvalchev@openbsd.org>
@@ -21,15 +21,10 @@
  */
 
 #include <sys/param.h>
-#include <sys/endian.h>
 #include <sys/systm.h>
-#include <sys/sockio.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
-#include <sys/kernel.h>
 #include <sys/device.h>
 #include <sys/timeout.h>
-#include <sys/socket.h>
 
 #include <net/if.h>
 #include <net/if_media.h>
@@ -232,19 +227,8 @@ re_cardbus_detach(struct device *self, int flags)
 	struct re_cardbus_softc *csc = (void *)self;
 	struct rl_softc *sc = &csc->sc_rl;
 	struct cardbus_devfunc *ct = csc->ct;
-	struct ifnet *ifp = &sc->sc_arpcom.ac_if;
 
-	/* Remove timeout handler */
-	timeout_del(&sc->timer_handle);
-
-	/* Detach PHY */
-	if (LIST_FIRST(&sc->sc_mii.mii_phys) != NULL)
-		mii_detach(&sc->sc_mii, MII_PHY_ANY, MII_OFFSET_ANY);
-
-	/* Delete media stuff */
-	ifmedia_delete_instance(&sc->sc_mii.mii_media, IFM_INST_ANY);
-	ether_ifdetach(ifp);
-	if_detach(ifp);
+	re_detach(sc);
 
 	/* Disable interrupts */
 	if (sc->sc_ih != NULL)

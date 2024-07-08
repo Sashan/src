@@ -1,4 +1,4 @@
-/*	$OpenBSD: acpivar.h,v 1.125 2023/11/29 03:41:31 jsg Exp $	*/
+/*	$OpenBSD: acpivar.h,v 1.131 2024/06/30 00:29:36 jsg Exp $	*/
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  *
@@ -153,12 +153,6 @@ typedef SIMPLEQ_HEAD(, acpi_wakeq) acpi_wakeqhead_t;
 #define ACPI_SST_SLEEPING	3
 #define ACPI_SST_SLEEP_CONTEXT	4
 
-struct acpi_parsestate {
-	uint8_t			*start;
-	uint8_t			*end;
-	uint8_t			*pos;
-};
-
 struct acpi_reg_map {
 	bus_space_handle_t	ioh;
 	int			addr;
@@ -253,6 +247,7 @@ struct acpi_softc {
 		int slp_typb;
 	}			sc_sleeptype[6];
 	int			sc_lastgpe;
+	int			sc_wakegpe;
 
 	struct gpe_block	*gpe_table;
 
@@ -269,6 +264,7 @@ struct acpi_softc {
 	struct aml_node		*sc_sst;
 	struct aml_node		*sc_wak;
 	int			sc_state;
+	time_t			sc_resume_time;
 	struct acpiec_softc	*sc_ec;		/* XXX assume single EC */
 
 	struct acpi_ac_head	sc_ac;
@@ -298,22 +294,6 @@ extern struct acpi_softc *acpi_softc;
 #define GPE_LEVEL	0x01
 #define GPE_EDGE	0x02
 
-struct acpi_table {
-	int	offset;
-	size_t	size;
-	void	*table;
-};
-
-struct acpi_dev_rank {
-	struct device	*dev;
-	int		rank;
-	TAILQ_ENTRY(acpi_dev_rank) link;
-};
-
-#define	ACPI_IOC_GETFACS	_IOR('A', 0, struct acpi_facs)
-#define	ACPI_IOC_GETTABLE	_IOWR('A', 1, struct acpi_table)
-#define ACPI_IOC_SETSLEEPSTATE	_IOW('A', 2, int)
-
 #if defined(_KERNEL)
 
 struct   acpi_gas;
@@ -340,7 +320,7 @@ int	 acpi_sleep_cpu(struct acpi_softc *, int);
 void	 acpi_sleep_pm(struct acpi_softc *, int);
 void	 acpi_resume_pm(struct acpi_softc *, int);
 void	 acpi_resume_cpu(struct acpi_softc *, int);
-void	 acpi_sleep_walk(struct acpi_softc *, int);
+int	 acpi_resuming(struct acpi_softc *);
 
 #define ACPI_IOREAD 0
 #define ACPI_IOWRITE 1
@@ -354,12 +334,9 @@ void	acpi_register_gsb(struct acpi_softc *, struct aml_node *);
 
 int	acpi_set_gpehandler(struct acpi_softc *, int,
 	    int (*)(struct acpi_softc *, int, void *), void *, int);
-void	acpi_enable_gpe(struct acpi_softc *, uint32_t);
 
-int	acpiec_intr(struct acpiec_softc *);
 void	acpiec_read(struct acpiec_softc *, uint8_t, int, uint8_t *);
 void	acpiec_write(struct acpiec_softc *, uint8_t, int, uint8_t *);
-void	acpiec_handle_events(struct acpiec_softc *);
 
 #if NACPIPWRRES > 0
 int	acpipwrres_ref_incr(struct acpipwrres_softc *, struct aml_node *);

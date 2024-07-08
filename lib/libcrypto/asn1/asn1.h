@@ -1,4 +1,4 @@
-/* $OpenBSD: asn1.h,v 1.82 2023/12/16 12:25:02 tb Exp $ */
+/* $OpenBSD: asn1.h,v 1.92 2024/04/10 14:55:12 beck Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -216,20 +216,6 @@ typedef struct asn1_string_table_st {
 	unsigned long mask;
 	unsigned long flags;
 } ASN1_STRING_TABLE;
-
-/* XXX - unused. Remove in next major bump. */
-DECLARE_STACK_OF(ASN1_STRING_TABLE)
-
-/* size limits: this stuff is taken straight from RFC2459 */
-/* XXX - unused macros. A more complete version is in a_strnid.c. Remove? */
-#define ub_name				32768
-#define ub_common_name			64
-#define ub_locality_name		128
-#define ub_state_name			128
-#define ub_organization_name		64
-#define ub_organization_unit_name	64
-#define ub_title			64
-#define ub_email_address		128
 
 /* Declarations for template structures: for full definitions
  * see asn1t.h
@@ -519,19 +505,6 @@ typedef struct BIT_STRING_BITNAME_st {
 			B_ASN1_BMPSTRING|\
 			B_ASN1_UTF8STRING
 
-#ifndef LIBRESSL_INTERNAL
-#define M_ASN1_IA5STRING_new ASN1_IA5STRING_new
-
-#define M_ASN1_INTEGER_free ASN1_INTEGER_free
-#define M_ASN1_ENUMERATED_free ASN1_ENUMERATED_free
-#define M_ASN1_OCTET_STRING_free ASN1_OCTET_STRING_free
-
-#define M_ASN1_OCTET_STRING_print ASN1_STRING_print
-
-#define M_ASN1_STRING_data ASN1_STRING_data
-#define M_ASN1_STRING_length ASN1_STRING_length
-#endif
-
 ASN1_TYPE *ASN1_TYPE_new(void);
 void ASN1_TYPE_free(ASN1_TYPE *a);
 ASN1_TYPE *d2i_ASN1_TYPE(ASN1_TYPE **a, const unsigned char **in, long len);
@@ -600,9 +573,7 @@ ASN1_UTCTIME *ASN1_UTCTIME_adj(ASN1_UTCTIME *s, time_t t,
     int offset_day, long offset_sec);
 int ASN1_UTCTIME_set_string(ASN1_UTCTIME *s, const char *str);
 
-#ifndef LIBRESSL_INTERNAL
 int ASN1_UTCTIME_cmp_time_t(const ASN1_UTCTIME *s, time_t t);
-#endif /* !LIBRESSL_INTERNAL */
 
 int ASN1_GENERALIZEDTIME_check(const ASN1_GENERALIZEDTIME *a);
 ASN1_GENERALIZEDTIME *ASN1_GENERALIZEDTIME_set(ASN1_GENERALIZEDTIME *s,
@@ -711,7 +682,6 @@ int ASN1_TIME_diff(int *pday, int *psec, const ASN1_TIME *from,
 extern const ASN1_ITEM ASN1_OCTET_STRING_NDEF_it;
 
 ASN1_TIME *ASN1_TIME_set(ASN1_TIME *s, time_t t);
-ASN1_TIME *ASN1_TIME_set_tm(ASN1_TIME *s, struct tm *tm);
 ASN1_TIME *ASN1_TIME_adj(ASN1_TIME *s, time_t t, int offset_day,
     long offset_sec);
 int ASN1_TIME_check(const ASN1_TIME *t);
@@ -764,11 +734,7 @@ int ASN1_object_size(int constructed, int length, int tag);
 
 void *ASN1_item_dup(const ASN1_ITEM *it, void *x);
 
-#ifndef LIBRESSL_INTERNAL
-
 void *ASN1_dup(i2d_of_void *i2d, d2i_of_void *d2i, void *x);
-
-#endif /* !LIBRESSL_INTERNAL */
 
 void *ASN1_d2i_fp(void *(*xnew)(void), d2i_of_void *d2i, FILE *in, void **x);
 
@@ -856,9 +822,7 @@ int ASN1_mbstring_ncopy(ASN1_STRING **out, const unsigned char *in, int len,
 
 ASN1_STRING *ASN1_STRING_set_by_NID(ASN1_STRING **out,
     const unsigned char *in, int inlen, int inform, int nid);
-ASN1_STRING_TABLE *ASN1_STRING_TABLE_get(int nid);
-int ASN1_STRING_TABLE_add(int, long, long, unsigned long, unsigned long);
-void ASN1_STRING_TABLE_cleanup(void);
+const ASN1_STRING_TABLE *ASN1_STRING_TABLE_get(int nid);
 
 /* ASN1 template functions */
 
@@ -868,8 +832,6 @@ void ASN1_item_free(ASN1_VALUE *val, const ASN1_ITEM *it);
 ASN1_VALUE *ASN1_item_d2i(ASN1_VALUE **val, const unsigned char **in,
     long len, const ASN1_ITEM *it);
 int ASN1_item_i2d(ASN1_VALUE *val, unsigned char **out, const ASN1_ITEM *it);
-
-void ASN1_add_oid_module(void);
 
 ASN1_TYPE *ASN1_generate_nconf(const char *str, CONF *nconf);
 ASN1_TYPE *ASN1_generate_v3(const char *str, X509V3_CTX *cnf);
@@ -897,28 +859,11 @@ ASN1_TYPE *ASN1_generate_v3(const char *str, X509V3_CTX *cnf);
 
 int ASN1_item_print(BIO *out, ASN1_VALUE *ifld, int indent,
     const ASN1_ITEM *it, const ASN1_PCTX *pctx);
-ASN1_PCTX *ASN1_PCTX_new(void);
-void ASN1_PCTX_free(ASN1_PCTX *p);
-unsigned long ASN1_PCTX_get_flags(const ASN1_PCTX *p);
-void ASN1_PCTX_set_flags(ASN1_PCTX *p, unsigned long flags);
-unsigned long ASN1_PCTX_get_nm_flags(const ASN1_PCTX *p);
-void ASN1_PCTX_set_nm_flags(ASN1_PCTX *p, unsigned long flags);
-unsigned long ASN1_PCTX_get_cert_flags(const ASN1_PCTX *p);
-void ASN1_PCTX_set_cert_flags(ASN1_PCTX *p, unsigned long flags);
-unsigned long ASN1_PCTX_get_oid_flags(const ASN1_PCTX *p);
-void ASN1_PCTX_set_oid_flags(ASN1_PCTX *p, unsigned long flags);
-unsigned long ASN1_PCTX_get_str_flags(const ASN1_PCTX *p);
-void ASN1_PCTX_set_str_flags(ASN1_PCTX *p, unsigned long flags);
 
 int SMIME_crlf_copy(BIO *in, BIO *out, int flags);
 int SMIME_text(BIO *in, BIO *out);
 
 void ERR_load_ASN1_strings(void);
-
-#if defined(LIBRESSL_INTERNAL) || defined(LIBRESSL_NEXT_API)
-int OPENSSL_timegm(const struct tm *tm, time_t *out);
-struct tm *OPENSSL_gmtime(const time_t *time, struct tm *out_tm);
-#endif
 
 /* Error codes for the ASN1 functions. */
 
@@ -1173,8 +1118,6 @@ struct tm *OPENSSL_gmtime(const time_t *time, struct tm *out_tm);
 #define ASN1_R_WRONG_TAG				 168
 #define ASN1_R_WRONG_TYPE				 169
 
-int ASN1_time_parse(const char *_bytes, size_t _len, struct tm *_tm, int _mode);
-int ASN1_time_tm_cmp(struct tm *_tm1, struct tm *_tm2);
 #ifdef  __cplusplus
 }
 #endif

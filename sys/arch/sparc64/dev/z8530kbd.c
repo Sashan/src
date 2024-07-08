@@ -1,4 +1,4 @@
-/*	$OpenBSD: z8530kbd.c,v 1.30 2021/10/24 17:05:04 mpi Exp $	*/
+/*	$OpenBSD: z8530kbd.c,v 1.32 2024/05/13 01:15:50 jsg Exp $	*/
 /*	$NetBSD: z8530tty.c,v 1.77 2001/05/30 15:24:24 lukem Exp $	*/
 
 /*-
@@ -220,7 +220,6 @@ static void zskbd_diag(void *);
 
 int zskbd_init(struct zskbd_softc *);
 void zskbd_putc(struct zskbd_softc *, u_int8_t);
-void zskbd_raw(struct zskbd_softc *, u_int8_t);
 
 /* wskbd glue */
 void zskbd_cngetc(void *, u_int *, int *);
@@ -1032,12 +1031,6 @@ struct zsops zsops_kbd = {
 void
 zskbd_cnpollc(void *v, int on)
 {
-	extern int swallow_zsintrs;
-
-	if (on)
-		swallow_zsintrs++;
-	else
-		swallow_zsintrs--;
 }
 
 void

@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_mbuf.c,v 1.288 2023/10/20 16:25:15 bluhm Exp $	*/
+/*	$OpenBSD: uipc_mbuf.c,v 1.290 2024/03/05 18:52:41 bluhm Exp $	*/
 /*	$NetBSD: uipc_mbuf.c,v 1.15.4.1 1996/06/13 17:11:44 cgd Exp $	*/
 
 /*
@@ -545,6 +545,7 @@ m_purge(struct mbuf *m)
  * mbuf chain defragmenter. This function uses some evil tricks to defragment
  * an mbuf chain into a single buffer without changing the mbuf pointer.
  * This needs to know a lot of the mbuf internals to make this work.
+ * The resulting mbuf is not aligned to IP header to assist DMA transfers.
  */
 int
 m_defrag(struct mbuf *m, int how)

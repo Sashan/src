@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.c,v 1.15 2022/12/26 18:43:49 jmc Exp $ */
+/*	$OpenBSD: parse.c,v 1.20 2024/02/22 13:17:18 claudio Exp $ */
 
 /*
  * Copyright (c) 2016-2017 Martin Pieuchot
@@ -50,7 +50,11 @@ struct pool it_pool, im_pool, ir_pool;
 #define nitems(_a)	(sizeof((_a)) / sizeof((_a)[0]))
 #endif
 
-#define DPRINTF(x...)	do { /*printf(x)*/ } while (0)
+#ifdef DEBUG
+#define DPRINTF(x...)	do { printf(x); } while (0)
+#else
+#define DPRINTF(x...)	do { ; } while (0)
+#endif
 
 #define VOID_OFFSET	1	/* Fake offset for generating "void" type. */
 
@@ -319,15 +323,30 @@ it_free(struct itype *it)
 int
 it_cmp(struct itype *a, struct itype *b)
 {
-	int diff;
+	if (a->it_type > b->it_type)
+		return 1;
+	if (a->it_type < b->it_type)
+		return -1;
 
-	if ((diff = (a->it_type - b->it_type)) != 0)
-		return diff;
+	/* Basic types need to have the same encoding and size. */
+	if ((a->it_type == CTF_K_INTEGER || a->it_type == CTF_K_FLOAT)) {
+		if (a->it_enc > b->it_enc)
+			return 1;
+		if (a->it_enc < b->it_enc)
+			return -1;
+		if (a->it_size > b->it_size)
+			return 1;
+		if (a->it_size < b->it_size)
+			return -1;
+	}
 
-	/* Basic types need to have the same size. */
-	if ((a->it_type == CTF_K_INTEGER || a->it_type == CTF_K_FLOAT) &&
-	    (diff = (a->it_size - b->it_size) != 0))
-		return diff;
+	/* Arrays need to have same number of elements */
+	if (a->it_type == CTF_K_ARRAY) {
+		if (a->it_nelems > b->it_nelems)
+			return 1;
+		if (a->it_nelems < b->it_nelems)
+			return -1;
+	}
 
 	/* Match by name */
 	if (!(a->it_flags & ITF_ANON) && !(b->it_flags & ITF_ANON))
@@ -340,8 +359,12 @@ it_cmp(struct itype *a, struct itype *b)
 	/* Match by reference */
 	if ((a->it_refp != NULL) && (b->it_refp != NULL))
 		return it_cmp(a->it_refp, b->it_refp);
+	if (a->it_refp == NULL)
+		return -1;
+	if (b->it_refp == NULL)
+		return 1;
 
-	return 1;
+	return 0;
 }
 
 int
@@ -833,7 +856,7 @@ parse_refers(struct dwdie *die, size_t psz, int type)
 
 	if (it->it_ref == 0 && (it->it_size == sizeof(void *) ||
 	    type == CTF_K_CONST || type == CTF_K_VOLATILE ||
-	    type == CTF_K_POINTER)) {
+	    type == CTF_K_POINTER || type == CTF_K_TYPEDEF)) {
 		/* Work around GCC/clang not emiting a type for void */
 		it->it_flags &= ~ITF_UNRES;
 		it->it_ref = VOID_OFFSET;
@@ -1345,6 +1368,8 @@ dav2val(struct dwaval *dav, size_t psz)
 	case DW_FORM_sdata:
 	case DW_FORM_data8:
 	case DW_FORM_ref8:
+	case DW_FORM_udata:
+	case DW_FORM_ref_udata:
 		val = dav->dav_u64;
 		break;
 	case DW_FORM_strp:

@@ -1,5 +1,5 @@
 #!/bin/ksh
-#	$OpenBSD: install.sub,v 1.1257 2023/10/24 18:03:53 naddy Exp $
+#	$OpenBSD: install.sub,v 1.1265 2024/06/15 15:05:15 florian Exp $
 #
 # Copyright (c) 1997-2015 Todd Miller, Theo de Raadt, Ken Westerback
 # Copyright (c) 2015, Robert Peichaer <rpe@openbsd.org>
@@ -917,7 +917,7 @@ ask_password() {
 }
 
 # Ask for a passphrase once showing prompt $1. Ensure input is not empty
-# save it in $_passphrase.
+# and save it in $_passphrase.
 ask_passphrase() {
 	local _q=$1
 
@@ -1664,7 +1664,8 @@ install_files() {
 	_get_sets=$resp
 
 	# Reorder $_get_sets.
-	_get_sets=$(for s in $ALLSETS; do isin "$s" $_get_sets && echo $s; done)
+	_get_sets=$(for s in $ALLSETS; do isin "$s" $_get_sets && echo $s; done;
+	    isin "BUILDINFO" $_files && echo "BUILDINFO")
 
 	# Note which sets didn't verify ok.
 	_unver=$_get_sets
@@ -1777,13 +1778,15 @@ install_files() {
 	if [[ $MODE == upgrade ]]; then
 		if isin base$VERSION.tgz $_get_sets; then
 			rm -f /mnt/usr/share/relink/usr/lib/*
-			rm -rf /mnt/usr/lib/libLLVM.so.[0-6].0
+			rm -rf /mnt/usr/lib/libLLVM.so.[0-7].0
 			rm -rf /mnt/usr/libdata/perl5
 		fi
 		if isin comp$VERSION.tgz $_get_sets; then
 			rm -rf /mnt/usr/lib/{gcc-lib,clang}
 			rm -rf /mnt/usr/bin/{gcc,g++}
 			rm -rf /mnt/usr/include/g++
+			# file changed to dir in libc++
+			rm -rf /mnt/usr/include/c++/v1
 		fi
 		rm -rf /mnt/var/syspatch/*
 	fi
@@ -1805,6 +1808,9 @@ install_files() {
 				file:///mnt/var/sysmerge/${_f%%base*}etc.tgz |
 				tar -zxphf - -C /mnt
 			fi
+			;;
+		*BUILDINFO) $_unpriv ftp -D Installing -Vmo - "$_fsrc" \
+			    > "/mnt/var/db/installed.$_f"
 			;;
 		*)	# Make a backup of the existing ramdisk kernel in the
 			# bsd.rd only download/verify/install case.
@@ -3009,7 +3015,11 @@ if ((${#_KERNV[*]} == 1)); then
 fi
 __EOT
 
-	[ -x /mnt/usr/sbin/fw_update ] && DESTDIR=/mnt /mnt/usr/sbin/fw_update
+	if [[ -x /mnt/usr/sbin/fw_update ]]; then
+		DESTDIR=/mnt /mnt/usr/sbin/fw_update
+		# Rerun installboot(8) to pick up just fetched boot firmware.
+		typeset -f md_fw >/dev/null && md_fw $ROOTDISK apple-boot
+	fi
 
 	if [[ -f $_kernel_dir.tgz ]]; then
 		echo -n "Relinking to create unique kernel..."
@@ -3104,9 +3114,6 @@ encrypt_root() {
 
 	[[ $MDBOOTSR == y ]] || return
 
-	# The interactive bioctl(8) passphrase prompt requires a TTY.
-	$AI && return
-
 	[[ -x /sbin/bioctl ]] || return
 
 	# Do not even try if softraid is in use already,
@@ -3122,8 +3129,10 @@ encrypt_root() {
 			_args=-k$KEYDISK
 			break
 			;;
-		# Do nothing, bioctl(8) will handle the passphrase.
-		[pP]*)	break
+		[pP]*)  $AI || break
+			ask_passphrase 'New passphrase?'
+			_args=-s
+			break
 			;;
 		[nN]*)	return
 			;;
@@ -3136,7 +3145,10 @@ encrypt_root() {
 	md_prep_fdisk $_chunk
 	echo 'RAID *' | disklabel -w -A -T- $_chunk
 
-	bioctl -Cforce -cC -l${_chunk}a $_args softraid0 >/dev/null
+	# Standard input is ignored in interactive mode.
+	print -r -- "$_passphrase" |
+		bioctl -Cforce -cC -l${_chunk}a $_args softraid0 >/dev/null
+	unset _passphrase
 
 	# No volumes existed before asking, but we just created one.
 	ROOTDISK=$(get_softraid_volumes)
@@ -3580,6 +3592,7 @@ umount -af >/dev/null 2>&1
 #	md_consoleinfo()	  - set CDEV, CTTY, CSPEED, CPROM
 #
 # The following functions can be provided if required:
+#	md_fw()                   - device specific firmware quirks
 #	md_prep_fdisk()           - put a partition table on the disk
 #
 # The following variables can be provided if required:

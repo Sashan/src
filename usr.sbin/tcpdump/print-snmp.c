@@ -1,4 +1,4 @@
-/*	$OpenBSD: print-snmp.c,v 1.28 2021/10/23 10:47:50 martijn Exp $	*/
+/*	$OpenBSD: print-snmp.c,v 1.30 2024/04/23 13:34:51 jsg Exp $	*/
 
 /*
  * Copyright (c) 1990, 1991, 1993, 1994, 1995, 1996, 1997
@@ -662,7 +662,7 @@ asn1_print(struct be *elem)
 	case BE_NULL:
 		break;
 	case BE_OID: {
-	int o = 0, first = -1, i = asnlen;
+		int o = 0, first = -1, i = asnlen;
 
 		if (!nflag && asnlen > 2) {
 			struct obj_abrev *a = &obj_abrev_list[0];
@@ -746,7 +746,7 @@ asn1_print(struct be *elem)
 			Class[CONTEXT].Id[elem->id], elem->asnlen);
 		break;
 	case BE_VB:
-		if (elem->id > sizeof(ContextVarbind)/sizeof(ContextVarbind[0]))
+		if (elem->id >= sizeof(ContextVarbind)/sizeof(ContextVarbind[0]))
 			break;
 		printf("%s", ContextVarbind[elem->id]);
 		break;

@@ -1,4 +1,4 @@
-/* $OpenBSD: agintc.c,v 1.54 2023/09/22 01:10:43 jsg Exp $ */
+/* $OpenBSD: agintc.c,v 1.59 2024/07/03 22:37:00 patrick Exp $ */
 /*
  * Copyright (c) 2007, 2009, 2011, 2017 Dale Rahn <drahn@dalerahn.com>
  * Copyright (c) 2018 Mark Kettenis <kettenis@openbsd.org>
@@ -255,9 +255,7 @@ void		agintc_route(struct agintc_softc *, int, int,
 		    struct cpu_info *);
 void		agintc_route_irq(void *, int, struct cpu_info *);
 void		agintc_intr_barrier(void *);
-void		agintc_wait_rwp(struct agintc_softc *sc);
 void		agintc_r_wait_rwp(struct agintc_softc *sc);
-uint32_t	agintc_r_ictlr(void);
 
 int		agintc_ipi_ddb(void *v);
 int		agintc_ipi_halt(void *v);
@@ -314,6 +312,7 @@ agintc_attach(struct device *parent, struct device *self, void *aux)
 	uint32_t		 pmr, oldpmr;
 	uint32_t		 ctrl, bits;
 	uint32_t		 affinity;
+	uint64_t		 redist_stride;
 	int			 i, nbits, nintr;
 	int			 offset, nredist;
 #ifdef MULTIPROCESSOR
@@ -436,15 +435,20 @@ agintc_attach(struct device *parent, struct device *self, void *aux)
 
 	/* find the redistributors. */
 	offset = 0;
+	redist_stride = OF_getpropint64(faa->fa_node, "redistributor-stride", 0);
 	for (nredist = 0; ; nredist++) {
-		int32_t sz = (64 * 1024 * 2);
 		uint64_t typer;
+		int32_t sz;
 
 		typer = bus_space_read_8(sc->sc_iot, sc->sc_redist_base,
 		    offset + GICR_TYPER);
 
-		if (typer & GICR_TYPER_VLPIS)
-			sz += (64 * 1024 * 2);
+		if (redist_stride == 0) {
+			sz = (64 * 1024 * 2);
+			if (typer & GICR_TYPER_VLPIS)
+				sz += (64 * 1024 * 2);
+		} else
+			sz = redist_stride;
 
 #ifdef DEBUG_AGINTC
 		printf("probing redistributor %d %x\n", nredist, offset);
@@ -468,14 +472,18 @@ agintc_attach(struct device *parent, struct device *self, void *aux)
 	/* submap and configure the redistributors. */
 	offset = 0;
 	for (nredist = 0; nredist < sc->sc_num_redist; nredist++) {
-		int32_t sz = (64 * 1024 * 2);
 		uint64_t typer;
+		int32_t sz;
 
 		typer = bus_space_read_8(sc->sc_iot, sc->sc_redist_base,
 		    offset + GICR_TYPER);
 
-		if (typer & GICR_TYPER_VLPIS)
-			sz += (64 * 1024 * 2);
+		if (redist_stride == 0) {
+			sz = (64 * 1024 * 2);
+			if (typer & GICR_TYPER_VLPIS)
+				sz += (64 * 1024 * 2);
+		} else
+			sz = redist_stride;
 
 		affinity = bus_space_read_8(sc->sc_iot,
 		    sc->sc_redist_base, offset + GICR_TYPER) >> 32;
@@ -1508,6 +1516,7 @@ agintc_send_ipi(struct cpu_info *ci, int id)
 #define  GITS_BASER_PGSZ_4K	(0ULL << 8)
 #define  GITS_BASER_PGSZ_16K	(1ULL << 8)
 #define  GITS_BASER_PGSZ_64K	(2ULL << 8)
+#define  GITS_BASER_SZ_MASK	(0xffULL)
 #define  GITS_BASER_PA_MASK	0x7ffffffff000ULL
 #define GITS_TRANSLATER		0x10040
 
@@ -1540,7 +1549,7 @@ struct agintc_msi_device {
 	LIST_ENTRY(agintc_msi_device) md_list;
 
 	uint32_t		md_deviceid;
-	uint32_t		md_eventid;
+	uint32_t		md_events;
 	struct agintc_dmamem	*md_itt;
 };
 
@@ -1564,6 +1573,7 @@ struct agintc_msi_softc {
 	uint16_t			sc_cmdidx;
 
 	int				sc_devbits;
+	uint32_t			sc_deviceid_max;
 	struct agintc_dmamem		*sc_dtt;
 	size_t				sc_dtt_pgsz;
 	uint8_t				sc_dte_sz;
@@ -1694,6 +1704,20 @@ agintc_msi_attach(struct device *parent, struct device *self, void *aux)
 		sc->sc_dte_sz = GITS_BASER_TTE_SZ(baser) + 1;
 		size = (1ULL << sc->sc_devbits) * sc->sc_dte_sz;
 		size = roundup(size, sc->sc_dtt_pgsz);
+
+		/* FIXME: For now, skip registering MSI controller */
+		if (size / sc->sc_dtt_pgsz > GITS_BASER_SZ_MASK + 1) {
+			printf(": cannot support %u devbits on %lu pgsz\n",
+			    sc->sc_devbits, sc->sc_dtt_pgsz);
+			return;
+		}
+
+		/* Clamp down to maximum configurable num pages */
+		if (size / sc->sc_dtt_pgsz > GITS_BASER_SZ_MASK + 1)
+			size = (GITS_BASER_SZ_MASK + 1) * sc->sc_dtt_pgsz;
+
+		/* Calculate max deviceid based off configured size */
+		sc->sc_deviceid_max = (size / sc->sc_dte_sz) - 1;
 
 		/* Allocate table. */
 		sc->sc_dtt = agintc_dmamem_alloc(sc->sc_dmat,
@@ -1850,6 +1874,9 @@ agintc_msi_create_device(struct agintc_msi_softc *sc, uint32_t deviceid)
 	struct agintc_msi_device *md;
 	struct gits_cmd cmd;
 
+	if (deviceid > sc->sc_deviceid_max)
+		return NULL;
+
 	md = malloc(sizeof(*md), M_DEVBUF, M_ZERO | M_WAITOK);
 	md->md_deviceid = deviceid;
 	md->md_itt = agintc_dmamem_alloc(sc->sc_dmat,
@@ -1949,7 +1976,15 @@ agintc_intr_establish_msi(void *self, uint64_t *addr, uint64_t *data,
 	if (md == NULL)
 		return NULL;
 
-	eventid = md->md_eventid++;
+	eventid = *addr;
+	if (eventid > 0 && (md->md_events & (1U << eventid)))
+		return NULL;
+	for (; eventid < 32; eventid++) {
+		if ((md->md_events & (1U << eventid)) == 0) {
+			md->md_events |= (1U << eventid);
+			break;
+		}
+	}
 	if (eventid >= 32)
 		return NULL;
 

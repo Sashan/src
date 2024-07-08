@@ -1,4 +1,4 @@
-/*	$OpenBSD: exec.c,v 1.16 2020/05/17 14:32:12 kettenis Exp $	*/
+/*	$OpenBSD: exec.c,v 1.18 2024/03/10 15:37:54 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2006, 2016 Mark Kettenis
@@ -182,10 +182,10 @@ run_loadfile(uint64_t *marks, int howto)
 
 	efi_cleanup();
 
-	dcache_disable();
 	dcache_wbinv_all();
-	icache_disable();
+	dcache_disable();
 	icache_inv_all();
+	icache_disable();
 	mmu_disable();
 
 	(*(startfuncp)(marks[MARK_ENTRY]))((void *)esym, NULL, fdt);

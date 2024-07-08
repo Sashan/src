@@ -1,4 +1,4 @@
-/*	$OpenBSD: nfs_syscalls.c,v 1.119 2023/08/03 09:49:09 mvs Exp $	*/
+/*	$OpenBSD: nfs_syscalls.c,v 1.127 2024/06/26 01:40:49 jsg Exp $	*/
 /*	$NetBSD: nfs_syscalls.c,v 1.19 1996/02/18 11:53:52 fvdl Exp $	*/
 
 /*
@@ -37,14 +37,10 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/kernel.h>
 #include <sys/file.h>
-#include <sys/stat.h>
 #include <sys/vnode.h>
 #include <sys/mount.h>
 #include <sys/pool.h>
-#include <sys/proc.h>
-#include <sys/uio.h>
 #include <sys/malloc.h>
 #include <sys/buf.h>
 #include <sys/mbuf.h>
@@ -52,8 +48,6 @@
 #include <sys/socketvar.h>
 #include <sys/domain.h>
 #include <sys/protosw.h>
-#include <sys/namei.h>
-#include <sys/syslog.h>
 #include <sys/filedesc.h>
 #include <sys/signalvar.h>
 #include <sys/kthread.h>
@@ -63,12 +57,9 @@
 
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <nfs/xdr_subs.h>
-#include <nfs/rpcv2.h>
 #include <nfs/nfsproto.h>
 #include <nfs/nfs.h>
 #include <nfs/nfsrvcache.h>
-#include <nfs/nfsmount.h>
 #include <nfs/nfsnode.h>
 #include <nfs/nfs_var.h>
 
@@ -84,7 +75,7 @@ struct pool nfsrv_descript_pl;
 int nfsrv_getslp(struct nfsd *nfsd);
 
 static int nfs_numnfsd = 0;
-int (*nfsrv3_procs[NFS_NPROCS])(struct nfsrv_descript *,
+static int (*const nfsrv3_procs[NFS_NPROCS])(struct nfsrv_descript *,
     struct nfssvc_sock *, struct proc *, struct mbuf **) = {
 	nfsrv_null,
 	nfsrv_getattr,
@@ -243,6 +234,15 @@ nfssvc_addsock(struct file *fp, struct mbuf *mynam)
 			return (EPERM);
 		}
 	}
+	/*
+	 * Allow only IPv4 UDP and TCP sockets.
+	 */
+	if ((so->so_type != SOCK_STREAM && so->so_type != SOCK_DGRAM) || 
+	    so->so_proto->pr_domain->dom_family != AF_INET) {
+		m_freem(mynam);
+		return (EINVAL);
+	}
+
 	if (so->so_type == SOCK_STREAM)
 		siz = NFS_MAXPACKET + sizeof (u_long);
 	else
@@ -276,10 +276,14 @@ nfssvc_addsock(struct file *fp, struct mbuf *mynam)
 		m_freem(m);
 	}
 	solock(so);
+	mtx_enter(&so->so_rcv.sb_mtx);
 	so->so_rcv.sb_flags &= ~SB_NOINTR;
 	so->so_rcv.sb_timeo_nsecs = INFSLP;
+	mtx_leave(&so->so_rcv.sb_mtx);
+	mtx_enter(&so->so_snd.sb_mtx);
 	so->so_snd.sb_flags &= ~SB_NOINTR;
 	so->so_snd.sb_timeo_nsecs = INFSLP;
+	mtx_leave(&so->so_snd.sb_mtx);
 	sounlock(so);
 	if (tslp)
 		slp = tslp;
@@ -296,6 +300,19 @@ nfssvc_addsock(struct file *fp, struct mbuf *mynam)
 	slp->ns_flag = (SLP_VALID | SLP_NEEDQ);
 	nfsrv_wakenfsd(slp);
 	return (0);
+}
+
+static inline int
+nfssvc_checknam(struct mbuf *nam)
+{
+	struct sockaddr_in *sin;
+
+	if (nam == NULL ||
+	    in_nam2sin(nam, &sin) != 0 ||
+	    ntohs(sin->sin_port) >= IPPORT_RESERVED) {
+		return -1;
+	}
+	return 0;
 }
 
 /*
@@ -331,14 +348,15 @@ loop:
 		slp = nfsd->nfsd_slp;
 
 		if (ISSET(slp->ns_flag, SLP_VALID)) {
-			if (ISSET(slp->ns_flag, SLP_DISCONN)) {
-				nfsrv_zapsock(slp);
-			} else if (ISSET(slp->ns_flag, SLP_NEEDQ)) {
+			if ((slp->ns_flag & (SLP_DISCONN | SLP_NEEDQ)) ==
+			    SLP_NEEDQ) {
 				CLR(slp->ns_flag, SLP_NEEDQ);
 				nfs_sndlock(&slp->ns_solock, NULL);
 				nfsrv_rcv(slp->ns_so, (caddr_t)slp, M_WAIT);
 				nfs_sndunlock(&slp->ns_solock);
 			}
+			if (ISSET(slp->ns_flag, SLP_DISCONN))
+				nfsrv_zapsock(slp);
 
 			error = nfsrv_dorec(slp, nfsd, &nd);
 			SET(nfsd->nfsd_flag, NFSD_REQINPROG);
@@ -376,6 +394,16 @@ loop:
 	cacherep = nfsrv_getcache(nd, slp, &mreq);
 	switch (cacherep) {
 	case RC_DOIT:
+		/*
+		 * Unless this is a null request (server ping), make
+		 * sure that the client is using a reserved source port.
+		 */
+		if (nd->nd_procnum != 0 && nfssvc_checknam(nd->nd_nam) == -1) {
+			/* drop it */
+			m_freem(nd->nd_mrep);
+			m_freem(nd->nd_nam2);
+			break;
+		}
 		error = (*(nfsrv3_procs[nd->nd_procnum]))(nd, slp, nfsd->nfsd_procp, &mreq);
 		if (mreq == NULL) {
 			if (nd != NULL) {

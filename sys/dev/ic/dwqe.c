@@ -1,4 +1,4 @@
-/*	$OpenBSD: dwqe.c,v 1.16 2023/12/28 14:30:28 uwe Exp $	*/
+/*	$OpenBSD: dwqe.c,v 1.22 2024/06/05 10:19:55 stsp Exp $	*/
 /*
  * Copyright (c) 2008, 2019 Mark Kettenis <kettenis@openbsd.org>
  * Copyright (c) 2017, 2022 Patrick Wildt <patrick@blueri.se>
@@ -21,6 +21,7 @@
  */
 
 #include "bpfilter.h"
+#include "vlan.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -94,6 +95,59 @@ struct mbuf *dwqe_alloc_mbuf(struct dwqe_softc *, bus_dmamap_t);
 void	dwqe_fill_rx_ring(struct dwqe_softc *);
 
 int
+dwqe_have_tx_csum_offload(struct dwqe_softc *sc)
+{
+	return (sc->sc_hw_feature[0] & GMAC_MAC_HW_FEATURE0_TXCOESEL);
+}
+
+int
+dwqe_have_tx_vlan_offload(struct dwqe_softc *sc)
+{
+#if NVLAN > 0
+	return (sc->sc_hw_feature[0] & GMAC_MAC_HW_FEATURE0_SAVLANINS);
+#else
+	return 0;
+#endif
+}
+
+void
+dwqe_set_vlan_rx_mode(struct dwqe_softc *sc)
+{
+#if NVLAN > 0
+	uint32_t reg;
+
+	/* Enable outer VLAN tag stripping on Rx. */
+	reg = dwqe_read(sc, GMAC_VLAN_TAG_CTRL);
+	reg |= GMAC_VLAN_TAG_CTRL_EVLRXS | GMAC_VLAN_TAG_CTRL_STRIP_ALWAYS;
+	dwqe_write(sc, GMAC_VLAN_TAG_CTRL, reg);
+#endif
+}
+
+void
+dwqe_set_vlan_tx_mode(struct dwqe_softc *sc)
+{
+#if NVLAN > 0
+	uint32_t reg;
+
+	reg = dwqe_read(sc, GMAC_VLAN_TAG_INCL);
+
+	/* Enable insertion of outer VLAN tag. */
+	reg |= GMAC_VLAN_TAG_INCL_INSERT;
+
+	/*
+	 * Generate C-VLAN tags (type 0x8100, 802.1Q). Setting this
+	 * bit would result in S-VLAN tags (type 0x88A8, 802.1ad).
+	 */
+	reg &= ~GMAC_VLAN_TAG_INCL_CSVL;
+
+	/* Use VLAN tags provided in Tx context descriptors. */
+	reg |= GMAC_VLAN_TAG_INCL_VLTI;
+
+	dwqe_write(sc, GMAC_VLAN_TAG_INCL, reg);
+#endif
+}
+
+int
 dwqe_attach(struct dwqe_softc *sc)
 {
 	struct ifnet *ifp;
@@ -121,6 +175,13 @@ dwqe_attach(struct dwqe_softc *sc)
 	bcopy(sc->sc_dev.dv_xname, ifp->if_xname, IFNAMSIZ);
 
 	ifp->if_capabilities = IFCAP_VLAN_MTU;
+	if (dwqe_have_tx_vlan_offload(sc))
+		ifp->if_capabilities |= IFCAP_VLAN_HWTAGGING;
+	if (dwqe_have_tx_csum_offload(sc)) {
+		ifp->if_capabilities |= (IFCAP_CSUM_IPv4 |
+		    IFCAP_CSUM_TCPv4 | IFCAP_CSUM_UDPv4 |
+		    IFCAP_CSUM_TCPv6 | IFCAP_CSUM_UDPv6);
+	}
 
 	sc->sc_mii.mii_ifp = ifp;
 	sc->sc_mii.mii_readreg = dwqe_mii_readreg;
@@ -207,12 +268,22 @@ dwqe_attach(struct dwqe_softc *sc)
 	if (!sc->sc_fixed_link)
 		dwqe_mii_attach(sc);
 
+	/*
+	 * All devices support VLAN tag stripping on Rx but inserting
+	 * VLAN tags during Tx is an optional feature.
+	 */
+	dwqe_set_vlan_rx_mode(sc);
+	if (ifp->if_capabilities & IFCAP_VLAN_HWTAGGING)
+		dwqe_set_vlan_tx_mode(sc);
+
 	if_attach(ifp);
 	ether_ifattach(ifp);
 
 	/* Disable interrupts. */
 	dwqe_write(sc, GMAC_INT_EN, 0);
 	dwqe_write(sc, GMAC_CHAN_INTR_ENA(0), 0);
+	dwqe_write(sc, GMAC_MMC_RX_INT_MASK, 0xffffffff); 
+	dwqe_write(sc, GMAC_MMC_TX_INT_MASK, 0xffffffff); 
 
 	return 0;
 }
@@ -316,7 +387,8 @@ dwqe_start(struct ifqueue *ifq)
 	used = 0;
 
 	for (;;) {
-		if (used + DWQE_NTXSEGS + 1 > left) {
+		/* VLAN tags require an extra Tx context descriptor. */
+		if (used + DWQE_NTXSEGS + 2 > left) {
 			ifq_set_oactive(ifq);
 			break;
 		}
@@ -593,6 +665,9 @@ dwqe_tx_proc(struct dwqe_softc *sc)
 	struct dwqe_buf *txb;
 	int idx, txfree;
 
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
+		return;
+
 	bus_dmamap_sync(sc->sc_dmat, DWQE_DMA_MAP(sc->sc_txring), 0,
 	    DWQE_DMA_LEN(sc->sc_txring),
 	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
@@ -636,6 +711,81 @@ dwqe_tx_proc(struct dwqe_softc *sc)
 		if (ifq_is_oactive(&ifp->if_snd))
 			ifq_restart(&ifp->if_snd);
 	}
+}
+
+int
+dwqe_have_rx_csum_offload(struct dwqe_softc *sc)
+{
+	return (sc->sc_hw_feature[0] & GMAC_MAC_HW_FEATURE0_RXCOESEL);
+}
+
+void
+dwqe_rx_csum(struct dwqe_softc *sc, struct mbuf *m, struct dwqe_desc *rxd)
+{
+	uint16_t csum_flags = 0;
+
+	/*
+	 * Checksum offload must be supported, the Last-Descriptor bit
+	 * must be set, RDES1 must be valid, and checksumming must not
+	 * have been bypassed (happens for unknown packet types), and
+	 * an IP header must have been detected.
+	 */
+	if (!dwqe_have_rx_csum_offload(sc) ||
+	    (rxd->sd_tdes3 & RDES3_LD) == 0 ||
+	    (rxd->sd_tdes3 & RDES3_RDES1_VALID) == 0 ||
+	    (rxd->sd_tdes1 & RDES1_IP_CSUM_BYPASS) ||
+	    (rxd->sd_tdes1 & (RDES1_IPV4_HDR | RDES1_IPV6_HDR)) == 0)
+		return;
+
+	/* If the IP header checksum is invalid then the payload is ignored. */
+	if (rxd->sd_tdes1 & RDES1_IP_HDR_ERROR) {
+		if (rxd->sd_tdes1 & RDES1_IPV4_HDR)
+			csum_flags |= M_IPV4_CSUM_IN_BAD;
+	} else {
+		if (rxd->sd_tdes1 & RDES1_IPV4_HDR)
+			csum_flags |= M_IPV4_CSUM_IN_OK;
+
+		/* Detect payload type and corresponding checksum errors. */
+		switch (rxd->sd_tdes1 & RDES1_IP_PAYLOAD_TYPE) {
+		case RDES1_IP_PAYLOAD_UDP:
+			if (rxd->sd_tdes1 & RDES1_IP_PAYLOAD_ERROR)
+				csum_flags |= M_UDP_CSUM_IN_BAD;
+			else
+				csum_flags |= M_UDP_CSUM_IN_OK;
+			break;
+		case RDES1_IP_PAYLOAD_TCP:
+			if (rxd->sd_tdes1 & RDES1_IP_PAYLOAD_ERROR)
+				csum_flags |= M_TCP_CSUM_IN_BAD;
+			else
+				csum_flags |= M_TCP_CSUM_IN_OK;
+			break;
+		case RDES1_IP_PAYLOAD_ICMP:
+			if (rxd->sd_tdes1 & RDES1_IP_PAYLOAD_ERROR)
+				csum_flags |= M_ICMP_CSUM_IN_BAD;
+			else
+				csum_flags |= M_ICMP_CSUM_IN_OK;
+			break;
+		default:
+			break;
+		}
+	}
+
+	m->m_pkthdr.csum_flags |= csum_flags;
+}
+
+void
+dwqe_vlan_strip(struct dwqe_softc *sc, struct mbuf *m, struct dwqe_desc *rxd)
+{
+#if NVLAN > 0
+	uint16_t tag;
+
+	if ((rxd->sd_tdes3 & RDES3_RDES0_VALID) &&
+	    (rxd->sd_tdes3 & RDES3_LD)) {
+		tag = rxd->sd_tdes0 & RDES0_OVT;
+		m->m_pkthdr.ether_vtag = le16toh(tag);
+		m->m_flags |= M_VLANTAG;
+	}
+#endif
 }
 
 void
@@ -686,6 +836,8 @@ dwqe_rx_proc(struct dwqe_softc *sc)
 
 			m->m_pkthdr.len = m->m_len = len;
 
+			dwqe_rx_csum(sc, m, rxd);
+			dwqe_vlan_strip(sc, m, rxd);
 			ml_enqueue(&ml, m);
 		}
 
@@ -754,7 +906,7 @@ dwqe_up(struct dwqe_softc *sc)
 		rxb->tb_m = NULL;
 	}
 
-	if_rxr_init(&sc->sc_rx_ring, 2, DWQE_NRXDESC);
+	if_rxr_init(&sc->sc_rx_ring, 2, DWQE_NRXDESC - 1);
 
 	dwqe_write(sc, GMAC_CHAN_RX_BASE_ADDR_HI(0), DWQE_DMA_DVA(sc->sc_rxring) >> 32);
 	dwqe_write(sc, GMAC_CHAN_RX_BASE_ADDR(0), DWQE_DMA_DVA(sc->sc_rxring));
@@ -861,6 +1013,12 @@ dwqe_up(struct dwqe_softc *sc)
 
 	if (!sc->sc_fixed_link)
 		timeout_add_sec(&sc->sc_phy_tick, 1);
+
+	if (dwqe_have_rx_csum_offload(sc)) {
+		reg = dwqe_read(sc, GMAC_MAC_CONF);
+		reg |= GMAC_MAC_CONF_IPC;
+		dwqe_write(sc, GMAC_MAC_CONF, reg);
+	}
 }
 
 void
@@ -1005,12 +1163,53 @@ dwqe_iff(struct dwqe_softc *sc)
 	dwqe_write(sc, GMAC_MAC_PACKET_FILTER, reg);
 }
 
+void
+dwqe_tx_csum(struct dwqe_softc *sc, struct mbuf *m, struct dwqe_desc *txd)
+{
+	if (!dwqe_have_tx_csum_offload(sc))
+		return;
+
+	/* Checksum flags are valid only on first descriptor. */
+	if ((txd->sd_tdes3 & TDES3_FS) == 0)
+		return;
+
+	/* TSO and Tx checksum offloading are incompatible. */
+	if (txd->sd_tdes3 & TDES3_TSO_EN)
+		return;
+
+	if (m->m_pkthdr.csum_flags & (M_IPV4_CSUM_OUT |
+	    M_TCP_CSUM_OUT | M_UDP_CSUM_OUT))
+		txd->sd_tdes3 |= TDES3_CSUM_IPHDR_PAYLOAD_PSEUDOHDR;
+}
+
+uint16_t
+dwqe_set_tx_context_desc(struct dwqe_softc *sc, struct mbuf *m, int idx)
+{
+	uint16_t tag = 0;
+#if NVLAN > 0
+	struct dwqe_desc *ctxt_txd;
+
+	if ((m->m_flags & M_VLANTAG) == 0)
+		return 0;
+
+	tag = m->m_pkthdr.ether_vtag;
+	if (tag) {
+		ctxt_txd = &sc->sc_txdesc[idx];
+		ctxt_txd->sd_tdes3 |= (htole16(tag) & TDES3_VLAN_TAG);
+		ctxt_txd->sd_tdes3 |= TDES3_VLAN_TAG_VALID;
+		ctxt_txd->sd_tdes3 |= (TDES3_CTXT | TDES3_OWN);
+	}
+#endif
+	return tag;
+}
+
 int
 dwqe_encap(struct dwqe_softc *sc, struct mbuf *m, int *idx, int *used)
 {
 	struct dwqe_desc *txd, *txd_start;
 	bus_dmamap_t map;
 	int cur, frag, i;
+	uint16_t vlan_tag = 0;
 
 	cur = frag = *idx;
 	map = sc->sc_txbuf[cur].tb_map;
@@ -1026,6 +1225,17 @@ dwqe_encap(struct dwqe_softc *sc, struct mbuf *m, int *idx, int *used)
 	bus_dmamap_sync(sc->sc_dmat, map, 0, map->dm_mapsize,
 	    BUS_DMASYNC_PREWRITE);
 
+	if (dwqe_have_tx_vlan_offload(sc)) {
+		vlan_tag = dwqe_set_tx_context_desc(sc, m, frag);
+		if (vlan_tag) {
+			(*used)++;
+			if (frag == (DWQE_NTXDESC - 1))
+				frag = 0;
+			else
+				frag++;
+		}
+	}
+
 	txd = txd_start = &sc->sc_txdesc[frag];
 	for (i = 0; i < map->dm_nsegs; i++) {
 		/* TODO: check for 32-bit vs 64-bit support */
@@ -1035,8 +1245,12 @@ dwqe_encap(struct dwqe_softc *sc, struct mbuf *m, int *idx, int *used)
 		txd->sd_tdes1 = (uint32_t)(map->dm_segs[i].ds_addr >> 32);
 		txd->sd_tdes2 = map->dm_segs[i].ds_len;
 		txd->sd_tdes3 = m->m_pkthdr.len;
-		if (i == 0)
+		if (i == 0) {
 			txd->sd_tdes3 |= TDES3_FS;
+			dwqe_tx_csum(sc, m, txd);
+			if (vlan_tag)
+				txd->sd_tdes2 |= TDES2_VLAN_TAG_INSERT;
+		}
 		if (i == (map->dm_nsegs - 1)) {
 			txd->sd_tdes2 |= TDES2_IC;
 			txd->sd_tdes3 |= TDES3_LS;

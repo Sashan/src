@@ -1,4 +1,4 @@
-/*	$OpenBSD: cfxga.c,v 1.33 2022/07/15 17:57:26 kettenis Exp $	*/
+/*	$OpenBSD: cfxga.c,v 1.35 2024/05/26 08:46:28 jsg Exp $	*/
 
 /*
  * Copyright (c) 2005, 2006, Matthieu Herrb and Miodrag Vallat
@@ -31,11 +31,9 @@
  */
 
 #include <sys/param.h>
-#include <sys/kernel.h>
 #include <sys/device.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
-#include <sys/conf.h>
 
 #include <dev/pcmcia/pcmciavar.h>
 #include <dev/pcmcia/pcmciareg.h>
@@ -324,7 +322,7 @@ cfxga_activate(struct device *dev, int act)
 		pcmcia_function_disable(sc->sc_pf);
 		break;
 	default:
-		rv = config_activate_children(self, act);
+		rv = config_activate_children(dev, act);
 		break;
 	}
 	return (rv);

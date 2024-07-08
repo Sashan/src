@@ -1,4 +1,4 @@
-/* $OpenBSD: channels.c,v 1.436 2024/01/09 22:19:00 djm Exp $ */
+/* $OpenBSD: channels.c,v 1.438 2024/05/17 00:30:23 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -84,13 +84,6 @@
 
 /* -- agent forwarding */
 #define	NUM_SOCKS	10
-
-/* -- tcp forwarding */
-/* special-case port number meaning allow any port */
-#define FWD_PERMIT_ANY_PORT	0
-
-/* special-case wildcard meaning allow any host */
-#define FWD_PERMIT_ANY_HOST	"*"
 
 /* -- X11 forwarding */
 /* Maximum number of fake X11 displays to try. */
@@ -3203,9 +3196,8 @@ channel_proxy_downstream(struct ssh *ssh, Channel *downstream)
 			goto out;
 		}
 		/* Record that connection to this host/port is permitted. */
-		permission_set_add(ssh, FORWARD_USER, FORWARD_LOCAL, "<mux>", -1,
-		    listen_host, NULL, (int)listen_port, downstream);
-		listen_host = NULL;
+		permission_set_add(ssh, FORWARD_USER, FORWARD_LOCAL, "<mux>",
+		    -1, listen_host, NULL, (int)listen_port, downstream);
 		break;
 	case SSH2_MSG_CHANNEL_CLOSE:
 		if (have < 4)
@@ -4529,19 +4521,6 @@ channel_update_permission(struct ssh *ssh, int idx, int newport)
 		pset->permitted_user[idx].listen_port =
 		    (ssh->compat & SSH_BUG_DYNAMIC_RPORT) ? 0 : newport;
 	}
-}
-
-/* returns port number, FWD_PERMIT_ANY_PORT or -1 on error */
-int
-permitopen_port(const char *p)
-{
-	int port;
-
-	if (strcmp(p, "*") == 0)
-		return FWD_PERMIT_ANY_PORT;
-	if ((port = a2port(p)) > 0)
-		return port;
-	return -1;
 }
 
 /* Try to start non-blocking connect to next host in cctx list */

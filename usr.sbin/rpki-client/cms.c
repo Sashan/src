@@ -1,4 +1,4 @@
-/*	$OpenBSD: cms.c,v 1.41 2023/12/10 14:18:23 job Exp $ */
+/*	$OpenBSD: cms.c,v 1.48 2024/06/11 13:09:02 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -15,7 +15,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include <assert.h>
 #include <err.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -30,7 +29,6 @@
 extern ASN1_OBJECT	*cnt_type_oid;
 extern ASN1_OBJECT	*msg_dgst_oid;
 extern ASN1_OBJECT	*sign_time_oid;
-extern ASN1_OBJECT	*bin_sign_time_oid;
 
 static int
 cms_extract_econtent(const char *fn, CMS_ContentInfo *cms, unsigned char **res,
@@ -108,8 +106,7 @@ cms_parse_validate_internal(X509 **xp, const char *fn, const unsigned char *der,
 	EVP_PKEY			*pkey;
 	X509_ALGOR			*pdig, *psig;
 	int				 i, nattrs, nid;
-	int				 has_ct = 0, has_md = 0, has_st = 0,
-					 has_bst = 0;
+	int				 has_ct = 0, has_md = 0, has_st = 0;
 	time_t				 notafter;
 	int				 rc = 0;
 
@@ -218,12 +215,6 @@ cms_parse_validate_internal(X509 **xp, const char *fn, const unsigned char *der,
 			}
 			if (!cms_get_signtime(fn, attr, signtime))
 				goto out;
-		} else if (OBJ_cmp(obj, bin_sign_time_oid) == 0) {
-			if (has_bst++ != 0) {
-				warnx("%s: RFC 6488: duplicate "
-				    "signed attribute", fn);
-				goto out;
-			}
 		} else {
 			OBJ_obj2txt(buf, sizeof(buf), obj, 1);
 			warnx("%s: RFC 6488: "
@@ -234,16 +225,17 @@ cms_parse_validate_internal(X509 **xp, const char *fn, const unsigned char *der,
 	}
 
 	if (!has_ct || !has_md) {
+		/* RFC 9589, section 4 */
 		warnx("%s: RFC 6488: CMS missing required "
 		    "signed attribute", fn);
 		goto out;
 	}
 
-	if (has_bst)
-		warnx("%s: unsupported CMS signing-time attribute", fn);
-
-	if (!has_st)
+	if (!has_st) {
+		/* RFC 9589, section 4 */
 		warnx("%s: missing CMS signing-time attribute", fn);
+		goto out;
+	}
 
 	if (CMS_unsigned_get_attr_count(si) != -1) {
 		warnx("%s: RFC 6488: CMS has unsignedAttrs", fn);
@@ -259,19 +251,19 @@ cms_parse_validate_internal(X509 **xp, const char *fn, const unsigned char *der,
 	nid = OBJ_obj2nid(obj);
 	if (nid != NID_sha256) {
 		warnx("%s: RFC 6488: wrong digest %s, want %s", fn,
-		    OBJ_nid2ln(nid), OBJ_nid2ln(NID_sha256));
+		    nid2str(nid), LN_sha256);
 		goto out;
 	}
 	X509_ALGOR_get0(&obj, NULL, NULL, psig);
 	nid = OBJ_obj2nid(obj);
 	/* RFC7935 last paragraph of section 2 specifies the allowed psig */
-	if (nid == NID_ecdsa_with_SHA256) {
+	if (experimental && nid == NID_ecdsa_with_SHA256) {
 		if (verbose)
 			warnx("%s: P-256 support is experimental", fn);
 	} else if (nid != NID_rsaEncryption &&
 	    nid != NID_sha256WithRSAEncryption) {
 		warnx("%s: RFC 6488: wrong signature algorithm %s, want %s",
-		    fn, OBJ_nid2ln(nid), OBJ_nid2ln(NID_rsaEncryption));
+		    fn, nid2str(nid), LN_rsaEncryption);
 		goto out;
 	}
 
@@ -294,7 +286,21 @@ cms_parse_validate_internal(X509 **xp, const char *fn, const unsigned char *der,
 	/* Compare content-type with eContentType */
 	octype = CMS_signed_get0_data_by_OBJ(si, cnt_type_oid,
 	    -3, V_ASN1_OBJECT);
-	assert(octype != NULL);
+	/*
+	 * Since lastpos == -3, octype can be NULL for 4 reasons:
+	 * 1. requested attribute OID is missing
+	 * 2. signedAttrs contains multiple attributes with requested OID
+	 * 3. attribute with requested OID has multiple values (malformed)
+	 * 4. X509_ATTRIBUTE_get0_data() returned NULL. This is also malformed,
+	 *    but libcrypto will create, sign, and verify such objects.
+	 * Reasons 1 and 2 are excluded because has_ct == 1. We don't know which
+	 * one of 3 or 4 we hit. Doesn't matter, drop the garbage on the floor.
+	 */
+	if (octype == NULL) {
+		warnx("%s: RFC 6488, section 2.1.6.4.1: malformed value "
+		    "for content-type attribute", fn);
+		goto out;
+	}
 	if (OBJ_cmp(obj, octype) != 0) {
 		OBJ_obj2txt(buf, sizeof(buf), obj, 1);
 		OBJ_obj2txt(obuf, sizeof(obuf), octype, 1);
@@ -331,11 +337,8 @@ cms_parse_validate_internal(X509 **xp, const char *fn, const unsigned char *der,
 		goto out;
 	}
 
-	/* Cache X509v3 extensions, see X509_check_ca(3). */
-	if (X509_check_purpose(*xp, -1, -1) <= 0) {
-		warnx("%s: could not cache X509v3 extensions", fn);
+	if (!x509_cache_extensions(*xp, fn))
 		goto out;
-	}
 
 	if (!x509_get_notafter(*xp, fn, &notafter))
 		goto out;

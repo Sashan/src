@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip6_var.h,v 1.109 2023/12/03 20:36:24 bluhm Exp $	*/
+/*	$OpenBSD: ip6_var.h,v 1.119 2024/07/04 12:50:08 bluhm Exp $	*/
 /*	$KAME: ip6_var.h,v 1.33 2000/06/11 14:59:20 jinmei Exp $	*/
 
 /*
@@ -64,82 +64,6 @@
 #ifndef _NETINET6_IP6_VAR_H_
 #define _NETINET6_IP6_VAR_H_
 
-/*
- * IP6 reassembly queue structure.  Each fragment
- * being reassembled is attached to one of these structures.
- */
-struct	ip6q {
-	TAILQ_ENTRY(ip6q) ip6q_queue;
-	LIST_HEAD(ip6asfrag_list, ip6asfrag) ip6q_asfrag;
-	struct in6_addr	ip6q_src, ip6q_dst;
-	int		ip6q_unfrglen;	/* len of unfragmentable part */
-	int		ip6q_nfrag;	/* # of fragments */
-	u_int32_t	ip6q_ident;	/* fragment identification */
-	u_int8_t	ip6q_nxt;	/* ip6f_nxt in first fragment */
-	u_int8_t	ip6q_ecn;
-	u_int8_t	ip6q_ttl;	/* time to live in slowtimo units */
-};
-
-struct	ip6asfrag {
-	LIST_ENTRY(ip6asfrag) ip6af_list;
-	struct mbuf	*ip6af_m;
-	int		ip6af_offset;	/* offset in ip6af_m to next header */
-	int		ip6af_frglen;	/* fragmentable part length */
-	int		ip6af_off;	/* fragment offset */
-	u_int16_t	ip6af_mff;	/* more fragment bit in frag off */
-};
-
-struct	ip6_moptions {
-	LIST_HEAD(, in6_multi_mship) im6o_memberships;
-	unsigned short im6o_ifidx;	/* ifp index for outgoing multicasts */
-	u_char	im6o_hlim;	/* hoplimit for outgoing multicasts */
-	u_char	im6o_loop;	/* 1 >= hear sends if a member */
-};
-
-/*
- * Control options for outgoing packets
- */
-
-/* Routing header related info */
-struct	ip6po_rhinfo {
-	struct	ip6_rthdr *ip6po_rhi_rthdr; /* Routing header */
-	struct	route_in6 ip6po_rhi_route; /* Route to the 1st hop */
-};
-#define ip6po_rthdr	ip6po_rhinfo.ip6po_rhi_rthdr
-#define ip6po_route	ip6po_rhinfo.ip6po_rhi_route
-
-struct	ip6_pktopts {
-	/* Hoplimit for outgoing packets */
-	int	ip6po_hlim;
-
-	/* Outgoing IF/address information */
-	struct in6_pktinfo *ip6po_pktinfo;
-
-	/* Hop-by-Hop options header */
-	struct	ip6_hbh *ip6po_hbh;
-
-	/* Destination options header (before a routing header) */
-	struct	ip6_dest *ip6po_dest1;
-
-	/* Routing header related info. */
-	struct	ip6po_rhinfo ip6po_rhinfo;
-
-	/* Destination options header (after a routing header) */
-	struct	ip6_dest *ip6po_dest2;
-
-	/* traffic class */
-	int	ip6po_tclass;
-
-	/* fragment vs PMTU discovery policy */
-	int	ip6po_minmtu;
-#define IP6PO_MINMTU_MCASTONLY	-1 /* default: send at min MTU for multicast */
-#define IP6PO_MINMTU_DISABLE	0  /* always perform pmtu disc */
-#define IP6PO_MINMTU_ALL	1  /* always send at min MTU */
-
-	int	ip6po_flags;
-#define	IP6PO_DONTFRAG	0x04	/* disable fragmentation (IPV6_DONTFRAG) */
-};
-
 struct	ip6stat {
 	u_int64_t ip6s_total;		/* total packets received */
 	u_int64_t ip6s_tooshort;	/* packet too short */
@@ -196,13 +120,89 @@ struct	ip6stat {
 	/* number of times that an deprecated address is chosen */
 	u_int64_t ip6s_sources_deprecated[16];
 
-	u_int64_t ip6s_forward_cachehit;
-	u_int64_t ip6s_forward_cachemiss;
+	u_int64_t ip6s_rtcachehit;	/* valid route found in cache */
+	u_int64_t ip6s_rtcachemiss;	/* route cache with new destination */
 	u_int64_t ip6s_wrongif;		/* packet received on wrong interface */
 	u_int64_t ip6s_idropped;	/* lost input due to nobufs, etc. */
 };
 
 #ifdef _KERNEL
+
+/*
+ * IP6 reassembly queue structure.  Each fragment
+ * being reassembled is attached to one of these structures.
+ */
+struct	ip6q {
+	TAILQ_ENTRY(ip6q) ip6q_queue;
+	LIST_HEAD(ip6asfrag_list, ip6asfrag) ip6q_asfrag;
+	struct in6_addr	ip6q_src, ip6q_dst;
+	int		ip6q_unfrglen;	/* len of unfragmentable part */
+	int		ip6q_nfrag;	/* # of fragments */
+	u_int32_t	ip6q_ident;	/* fragment identification */
+	u_int8_t	ip6q_nxt;	/* ip6f_nxt in first fragment */
+	u_int8_t	ip6q_ecn;
+	u_int8_t	ip6q_ttl;	/* time to live in slowtimo units */
+};
+
+struct	ip6asfrag {
+	LIST_ENTRY(ip6asfrag) ip6af_list;
+	struct mbuf	*ip6af_m;
+	int		ip6af_offset;	/* offset in ip6af_m to next header */
+	int		ip6af_frglen;	/* fragmentable part length */
+	int		ip6af_off;	/* fragment offset */
+	u_int16_t	ip6af_mff;	/* more fragment bit in frag off */
+};
+
+struct	ip6_moptions {
+	LIST_HEAD(, in6_multi_mship) im6o_memberships;
+	unsigned short im6o_ifidx;	/* ifp index for outgoing multicasts */
+	u_char	im6o_hlim;	/* hoplimit for outgoing multicasts */
+	u_char	im6o_loop;	/* 1 >= hear sends if a member */
+};
+
+/*
+ * Control options for outgoing packets
+ */
+
+/* Routing header related info */
+struct	ip6po_rhinfo {
+	struct	ip6_rthdr *ip6po_rhi_rthdr; /* Routing header */
+	struct	route ip6po_rhi_route; /* Route to the 1st hop */
+};
+#define ip6po_rthdr	ip6po_rhinfo.ip6po_rhi_rthdr
+#define ip6po_route	ip6po_rhinfo.ip6po_rhi_route
+
+struct	ip6_pktopts {
+	/* Hoplimit for outgoing packets */
+	int	ip6po_hlim;
+
+	/* Outgoing IF/address information */
+	struct in6_pktinfo *ip6po_pktinfo;
+
+	/* Hop-by-Hop options header */
+	struct	ip6_hbh *ip6po_hbh;
+
+	/* Destination options header (before a routing header) */
+	struct	ip6_dest *ip6po_dest1;
+
+	/* Routing header related info. */
+	struct	ip6po_rhinfo ip6po_rhinfo;
+
+	/* Destination options header (after a routing header) */
+	struct	ip6_dest *ip6po_dest2;
+
+	/* traffic class */
+	int	ip6po_tclass;
+
+	/* fragment vs PMTU discovery policy */
+	int	ip6po_minmtu;
+#define IP6PO_MINMTU_MCASTONLY	-1 /* default: send at min MTU for multicast */
+#define IP6PO_MINMTU_DISABLE	0  /* always perform pmtu disc */
+#define IP6PO_MINMTU_ALL	1  /* always send at min MTU */
+
+	int	ip6po_flags;
+#define	IP6PO_DONTFRAG	0x04	/* disable fragmentation (IPV6_DONTFRAG) */
+};
 
 #include <sys/percpu.h>
 
@@ -243,8 +243,8 @@ enum ip6stat_counters {
 	ip6s_sources_samescope = ip6s_sources_otherif + 16,
 	ip6s_sources_otherscope = ip6s_sources_samescope + 16,
 	ip6s_sources_deprecated = ip6s_sources_otherscope + 16,
-	ip6s_forward_cachehit = ip6s_sources_deprecated + 16,
-	ip6s_forward_cachemiss,
+	ip6s_rtcachehit = ip6s_sources_deprecated + 16,
+	ip6s_rtcachemiss,
 	ip6s_wrongif,
 	ip6s_idropped,
 
@@ -265,10 +265,12 @@ ip6stat_add(enum ip6stat_counters c, uint64_t v)
 	counters_add(ip6counters, c, v);
 }
 
-/* flags passed to ip6_output as last parameter */
-#define	IPV6_UNSPECSRC		0x01	/* allow :: as the source address */
-#define	IPV6_FORWARDING		0x02	/* most of IPv6 header exists */
-#define	IPV6_MINMTU		0x04	/* use minimum MTU (IPV6_USE_MIN_MTU) */
+/* flags passed to ip6_output or ip6_forward as last parameter */
+#define IPV6_UNSPECSRC		0x01	/* allow :: as the source address */
+#define IPV6_FORWARDING		0x02	/* most of IPv6 header exists */
+#define IPV6_MINMTU		0x04	/* use minimum MTU (IPV6_USE_MIN_MTU) */
+#define IPV6_REDIRECT		0x08	/* redirected by pf */
+#define IPV6_FORWARDING_IPSEC	0x10	/* only packets processed by IPsec */
 
 extern int ip6_mtudisc_timeout;		/* mtu discovery */
 extern struct rttimer_queue icmp6_mtudisc_timeout_q;
@@ -302,6 +304,7 @@ extern uint8_t	ip6_soiikey[IP6_SOIIKEY_LEN];
 extern const struct pr_usrreqs rip6_usrreqs;
 
 struct inpcb;
+struct ipsec_level;
 
 int	icmp6_ctloutput(int, struct socket *, int, int, struct mbuf *);
 
@@ -314,17 +317,17 @@ int	ip6_unknown_opt(struct mbuf **, u_int8_t *, int);
 int	ip6_get_prevhdr(struct mbuf *, int);
 int	ip6_nexthdr(struct mbuf *, int, int, int *);
 int	ip6_lasthdr(struct mbuf *, int, int, int *);
-int	ip6_mforward(struct ip6_hdr *, struct ifnet *, struct mbuf *);
+int	ip6_mforward(struct ip6_hdr *, struct ifnet *, struct mbuf *, int);
 int	ip6_process_hopopts(struct mbuf **, u_int8_t *, int, u_int32_t *,
 	     u_int32_t *);
 void	ip6_savecontrol(struct inpcb *, struct mbuf *, struct mbuf **);
 int	ip6_sysctl(int *, u_int, void *, size_t *, void *, size_t);
 
-void	ip6_forward(struct mbuf *, struct rtentry *, int);
+void	ip6_forward(struct mbuf *, struct route *, int);
 
 void	ip6_mloopback(struct ifnet *, struct mbuf *, struct sockaddr_in6 *);
-int	ip6_output(struct mbuf *, struct ip6_pktopts *, struct route_in6 *, int,
-	    struct ip6_moptions *, const u_char[]);
+int	ip6_output(struct mbuf *, struct ip6_pktopts *, struct route *, int,
+	    struct ip6_moptions *, const struct ipsec_level *);
 int	ip6_fragment(struct mbuf *, struct mbuf_list *, int, u_char, u_long);
 int	ip6_ctloutput(int, struct socket *, int, int, struct mbuf *);
 int	ip6_raw_ctloutput(int, struct socket *, int, int, struct mbuf *);
@@ -353,6 +356,7 @@ int	rip6_attach(struct socket *, int, int);
 int	rip6_detach(struct socket *);
 void	rip6_lock(struct socket *);
 void	rip6_unlock(struct socket *);
+int	rip6_locked(struct socket *);
 int	rip6_bind(struct socket *, struct mbuf *, struct proc *);
 int	rip6_connect(struct socket *, struct mbuf *);
 int	rip6_disconnect(struct socket *);
@@ -362,21 +366,21 @@ int	rip6_send(struct socket *, struct mbuf *, struct mbuf *,
 int	rip6_sysctl(int *, u_int, void *, size_t *, void *, size_t);
 
 int	dest6_input(struct mbuf **, int *, int, int);
-int	none_input(struct mbuf **, int *, int);
 
 int	in6_pcbselsrc(const struct in6_addr **, struct sockaddr_in6 *,
 	    struct inpcb *, struct ip6_pktopts *);
 int	in6_selectsrc(const struct in6_addr **, struct sockaddr_in6 *,
 	    struct ip6_moptions *, unsigned int);
-struct rtentry *in6_selectroute(struct sockaddr_in6 *, struct ip6_pktopts *,
-	    struct route_in6 *, unsigned int rtableid);
+struct rtentry *in6_selectroute(const struct in6_addr *, struct ip6_pktopts *,
+	    struct route *, unsigned int rtableid);
 
 u_int32_t ip6_randomflowlabel(void);
 
 #ifdef IPSEC
 struct tdb;
-int	ip6_output_ipsec_lookup(struct mbuf *, const u_char[], struct tdb **);
-int	ip6_output_ipsec_send(struct tdb *, struct mbuf *, struct route_in6 *,
+int	ip6_output_ipsec_lookup(struct mbuf *, const struct ipsec_level *,
+	    struct tdb **);
+int	ip6_output_ipsec_send(struct tdb *, struct mbuf *, struct route *,
 	    int, int);
 #endif /* IPSEC */
 

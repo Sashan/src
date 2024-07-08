@@ -1,4 +1,4 @@
-/*       $OpenBSD: vfs_sync.c,v 1.69 2023/05/25 07:45:33 claudio Exp $  */
+/*       $OpenBSD: vfs_sync.c,v 1.72 2024/05/13 11:17:40 semarie Exp $  */
 
 /*
  *  Portions of this code are:
@@ -50,10 +50,6 @@
 #include <sys/malloc.h>
 #include <sys/time.h>
 
-#ifdef FFS_SOFTUPDATES
-int   softdep_process_worklist(struct mount *);
-#endif
-
 /*
  * The workitem queue.
  */
@@ -61,9 +57,6 @@ int   softdep_process_worklist(struct mount *);
 #define SYNCER_DEFAULT 30		/* default sync delay time */
 int syncer_maxdelay = SYNCER_MAXDELAY;	/* maximum delay time */
 int syncdelay = SYNCER_DEFAULT;		/* time to delay syncing vnodes */
-
-int rushjob = 0;			/* number of slots to run ASAP */
-int stat_rush_requests = 0;		/* number of rush requests */
 
 int syncer_delayno = 0;
 long syncer_mask;
@@ -198,28 +191,6 @@ syncer_thread(void *arg)
 
 		splx(s);
 
-#ifdef FFS_SOFTUPDATES
-		/*
-		 * Do soft update processing.
-		 */
-		softdep_process_worklist(NULL);
-#endif
-
-		/*
-		 * The variable rushjob allows the kernel to speed up the
-		 * processing of the filesystem syncer process. A rushjob
-		 * value of N tells the filesystem syncer to process the next
-		 * N seconds worth of work on its queue ASAP. Currently rushjob
-		 * is used by the soft update code to speed up the filesystem
-		 * syncer process when the incore state is getting so far
-		 * ahead of the disk that the kernel memory pool is being
-		 * threatened with exhaustion.
-		 */
-		if (rushjob > 0) {
-			rushjob -= 1;
-			continue;
-		}
-
 		/*
 		 * If it has taken us less than a second to process the
 		 * current work, then wait. Otherwise start right over
@@ -236,24 +207,6 @@ syncer_thread(void *arg)
 	}
 }
 
-/*
- * Request the syncer daemon to speed up its work.
- * We never push it to speed up more than half of its
- * normal turn time, otherwise it could take over the cpu.
- */
-int
-speedup_syncer(void)
-{
-	if (syncerproc)
-		wakeup_one(&syncer_chan);
-	if (rushjob < syncdelay / 2) {
-		rushjob += 1;
-		stat_rush_requests += 1;
-		return 1;
-	}
-	return 0;
-}
-
 /* Routine to create and manage a filesystem syncer vnode. */
 int   sync_fsync(void *);
 int   sync_inactive(void *);
@@ -267,7 +220,34 @@ const struct vops sync_vops = {
 	.vop_lock	= nullop,
 	.vop_unlock	= nullop,
 	.vop_islocked	= nullop,
-	.vop_print	= sync_print
+	.vop_print	= sync_print,
+
+	.vop_abortop	= NULL,
+	.vop_access	= NULL,
+	.vop_advlock	= NULL,
+	.vop_bmap	= NULL,
+	.vop_bwrite	= NULL,
+	.vop_create	= NULL,
+	.vop_getattr	= NULL,
+	.vop_ioctl	= NULL,
+	.vop_link	= NULL,
+	.vop_lookup	= NULL,
+	.vop_mknod	= NULL,
+	.vop_open	= NULL,
+	.vop_pathconf	= NULL,
+	.vop_read	= NULL,
+	.vop_readdir	= NULL,
+	.vop_readlink	= NULL,
+	.vop_remove	= eopnotsupp,
+	.vop_rename	= NULL,
+	.vop_revoke	= NULL,
+	.vop_mkdir	= NULL,
+	.vop_rmdir	= NULL,
+	.vop_setattr	= NULL,
+	.vop_strategy	= NULL,
+	.vop_symlink	= NULL,
+	.vop_write	= NULL,
+	.vop_kqfilter	= NULL
 };
 
 /*

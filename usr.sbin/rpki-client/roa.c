@@ -1,4 +1,4 @@
-/*	$OpenBSD: roa.c,v 1.72 2023/12/14 07:52:53 tb Exp $ */
+/*	$OpenBSD: roa.c,v 1.78 2024/05/24 12:57:20 tb Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -31,19 +31,15 @@
 
 #include "extern.h"
 
-/*
- * Parse results and data of the manifest file.
- */
-struct	parse {
-	const char	 *fn; /* manifest file name */
-	struct roa	 *res; /* results */
-};
-
 extern ASN1_OBJECT	*roa_oid;
 
 /*
  * Types and templates for the ROA eContent, RFC 6482, section 3.
  */
+
+ASN1_ITEM_EXP ROAIPAddress_it;
+ASN1_ITEM_EXP ROAIPAddressFamily_it;
+ASN1_ITEM_EXP RouteOriginAttestation_it;
 
 typedef struct {
 	ASN1_BIT_STRING		*address;
@@ -99,9 +95,11 @@ IMPLEMENT_ASN1_FUNCTIONS(RouteOriginAttestation);
  * Returns zero on failure, non-zero on success.
  */
 static int
-roa_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p)
+roa_parse_econtent(const char *fn, struct roa *roa, const unsigned char *d,
+    size_t dsz)
 {
-	RouteOriginAttestation		*roa;
+	const unsigned char		*oder;
+	RouteOriginAttestation		*roa_asn1;
 	const ROAIPAddressFamily	*addrfam;
 	const STACK_OF(ROAIPAddress)	*addrs;
 	int				 addrsz, ipv4_seen = 0, ipv6_seen = 0;
@@ -113,79 +111,85 @@ roa_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p)
 	int				 ipaddrblocksz;
 	int				 i, j, rc = 0;
 
-	if ((roa = d2i_RouteOriginAttestation(NULL, &d, dsz)) == NULL) {
+	oder = d;
+	if ((roa_asn1 = d2i_RouteOriginAttestation(NULL, &d, dsz)) == NULL) {
 		warnx("%s: RFC 6482 section 3: failed to parse "
-		    "RouteOriginAttestation", p->fn);
+		    "RouteOriginAttestation", fn);
+		goto out;
+	}
+	if (d != oder + dsz) {
+		warnx("%s: %td bytes trailing garbage in eContent", fn,
+		    oder + dsz - d);
 		goto out;
 	}
 
-	if (!valid_econtent_version(p->fn, roa->version, 0))
+	if (!valid_econtent_version(fn, roa_asn1->version, 0))
 		goto out;
 
-	if (!as_id_parse(roa->asid, &p->res->asid)) {
+	if (!as_id_parse(roa_asn1->asid, &roa->asid)) {
 		warnx("%s: RFC 6482 section 3.2: asID: "
-		    "malformed AS identifier", p->fn);
+		    "malformed AS identifier", fn);
 		goto out;
 	}
 
-	ipaddrblocksz = sk_ROAIPAddressFamily_num(roa->ipAddrBlocks);
+	ipaddrblocksz = sk_ROAIPAddressFamily_num(roa_asn1->ipAddrBlocks);
 	if (ipaddrblocksz != 1 && ipaddrblocksz != 2) {
-		warnx("%s: draft-rfc6482bis: unexpected number of ipAddrBlocks "
-		    "(got %d, expected 1 or 2)", p->fn, ipaddrblocksz);
+		warnx("%s: RFC 9582: unexpected number of ipAddrBlocks "
+		    "(got %d, expected 1 or 2)", fn, ipaddrblocksz);
 		goto out;
 	}
 
 	for (i = 0; i < ipaddrblocksz; i++) {
-		addrfam = sk_ROAIPAddressFamily_value(roa->ipAddrBlocks, i);
+		addrfam = sk_ROAIPAddressFamily_value(roa_asn1->ipAddrBlocks,
+		    i);
 		addrs = addrfam->addresses;
 		addrsz = sk_ROAIPAddress_num(addrs);
 
-		if (!ip_addr_afi_parse(p->fn, addrfam->addressFamily, &afi)) {
+		if (!ip_addr_afi_parse(fn, addrfam->addressFamily, &afi)) {
 			warnx("%s: RFC 6482 section 3.3: addressFamily: "
-			    "invalid", p->fn);
+			    "invalid", fn);
 			goto out;
 		}
 
-		switch(afi) {
+		switch (afi) {
 		case AFI_IPV4:
 			if (ipv4_seen++ > 0) {
-				warnx("%s: RFC 6482bis section 4.3.2: "
-				    "IPv4 appears twice", p->fn);
+				warnx("%s: RFC 9582 section 4.3.2: "
+				    "IPv4 appears twice", fn);
 				goto out;
 			}
 			break;
 		case AFI_IPV6:
 			if (ipv6_seen++ > 0) {
-				warnx("%s: RFC 6482bis section 4.3.2: "
-				    "IPv6 appears twice", p->fn);
+				warnx("%s: RFC 9582 section 4.3.2: "
+				    "IPv6 appears twice", fn);
 				goto out;
 			}
 			break;
 		}
 
 		if (addrsz == 0) {
-			warnx("%s: RFC 6482bis, section 4.3.2: "
-			    "empty ROAIPAddressFamily", p->fn);
+			warnx("%s: RFC 9582, section 4.3.2: "
+			    "empty ROAIPAddressFamily", fn);
 			goto out;
 		}
 
-		if (p->res->ipsz + addrsz >= MAX_IP_SIZE) {
+		if (roa->ipsz + addrsz >= MAX_IP_SIZE) {
 			warnx("%s: too many ROAIPAddress entries: limit %d",
-			    p->fn, MAX_IP_SIZE);
+			    fn, MAX_IP_SIZE);
 			goto out;
 		}
-		p->res->ips = recallocarray(p->res->ips, p->res->ipsz,
-		    p->res->ipsz + addrsz, sizeof(struct roa_ip));
-		if (p->res->ips == NULL)
+		roa->ips = recallocarray(roa->ips, roa->ipsz,
+		    roa->ipsz + addrsz, sizeof(struct roa_ip));
+		if (roa->ips == NULL)
 			err(1, NULL);
 
 		for (j = 0; j < addrsz; j++) {
 			addr = sk_ROAIPAddress_value(addrs, j);
 
-			if (!ip_addr_parse(addr->address, afi, p->fn,
-			    &ipaddr)) {
+			if (!ip_addr_parse(addr->address, afi, fn, &ipaddr)) {
 				warnx("%s: RFC 6482 section 3.3: address: "
-				    "invalid IP address", p->fn);
+				    "invalid IP address", fn);
 				goto out;
 			}
 			maxlen = ipaddr.prefixlen;
@@ -195,24 +199,24 @@ roa_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p)
 				    addr->maxLength)) {
 					warnx("%s: RFC 6482 section 3.2: "
 					    "ASN1_INTEGER_get_uint64 failed",
-					    p->fn);
+					    fn);
 					goto out;
 				}
 				if (ipaddr.prefixlen > maxlen) {
 					warnx("%s: prefixlen (%d) larger than "
-					    "maxLength (%llu)", p->fn,
+					    "maxLength (%llu)", fn,
 					    ipaddr.prefixlen,
 					    (unsigned long long)maxlen);
 					goto out;
 				}
 				if (maxlen > ((afi == AFI_IPV4) ? 32 : 128)) {
 					warnx("%s: maxLength (%llu) too large",
-					    p->fn, (unsigned long long)maxlen);
+					    fn, (unsigned long long)maxlen);
 					goto out;
 				}
 			}
 
-			res = &p->res->ips[p->res->ipsz++];
+			res = &roa->ips[roa->ipsz++];
 			res->addr = ipaddr;
 			res->afi = afi;
 			res->maxlength = maxlen;
@@ -222,7 +226,7 @@ roa_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p)
 
 	rc = 1;
  out:
-	RouteOriginAttestation_free(roa);
+	RouteOriginAttestation_free(roa_asn1);
 	return rc;
 }
 
@@ -234,45 +238,42 @@ struct roa *
 roa_parse(X509 **x509, const char *fn, int talid, const unsigned char *der,
     size_t len)
 {
-	struct parse	 p;
+	struct roa	*roa;
 	size_t		 cmsz;
 	unsigned char	*cms;
 	struct cert	*cert = NULL;
 	time_t		 signtime = 0;
 	int		 rc = 0;
 
-	memset(&p, 0, sizeof(struct parse));
-	p.fn = fn;
-
 	cms = cms_parse_validate(x509, fn, der, len, roa_oid, &cmsz, &signtime);
 	if (cms == NULL)
 		return NULL;
 
-	if ((p.res = calloc(1, sizeof(struct roa))) == NULL)
+	if ((roa = calloc(1, sizeof(struct roa))) == NULL)
 		err(1, NULL);
-	p.res->signtime = signtime;
+	roa->signtime = signtime;
 
-	if (!x509_get_aia(*x509, fn, &p.res->aia))
+	if (!x509_get_aia(*x509, fn, &roa->aia))
 		goto out;
-	if (!x509_get_aki(*x509, fn, &p.res->aki))
+	if (!x509_get_aki(*x509, fn, &roa->aki))
 		goto out;
-	if (!x509_get_sia(*x509, fn, &p.res->sia))
+	if (!x509_get_sia(*x509, fn, &roa->sia))
 		goto out;
-	if (!x509_get_ski(*x509, fn, &p.res->ski))
+	if (!x509_get_ski(*x509, fn, &roa->ski))
 		goto out;
-	if (p.res->aia == NULL || p.res->aki == NULL || p.res->sia == NULL ||
-	    p.res->ski == NULL) {
+	if (roa->aia == NULL || roa->aki == NULL || roa->sia == NULL ||
+	    roa->ski == NULL) {
 		warnx("%s: RFC 6487 section 4.8: "
 		    "missing AIA, AKI, SIA, or SKI X509 extension", fn);
 		goto out;
 	}
 
-	if (!x509_get_notbefore(*x509, fn, &p.res->notbefore))
+	if (!x509_get_notbefore(*x509, fn, &roa->notbefore))
 		goto out;
-	if (!x509_get_notafter(*x509, fn, &p.res->notafter))
+	if (!x509_get_notafter(*x509, fn, &roa->notafter))
 		goto out;
 
-	if (!roa_parse_econtent(cms, cmsz, &p))
+	if (!roa_parse_econtent(fn, roa, cms, cmsz))
 		goto out;
 
 	if (x509_any_inherits(*x509)) {
@@ -292,19 +293,19 @@ roa_parse(X509 **x509, const char *fn, int talid, const unsigned char *der,
 	 * If the ROA isn't valid, we accept it anyway and depend upon
 	 * the code around roa_read() to check the "valid" field itself.
 	 */
-	p.res->valid = valid_roa(fn, cert, p.res);
+	roa->valid = valid_roa(fn, cert, roa);
 
 	rc = 1;
 out:
 	if (rc == 0) {
-		roa_free(p.res);
-		p.res = NULL;
+		roa_free(roa);
+		roa = NULL;
 		X509_free(*x509);
 		*x509 = NULL;
 	}
 	cert_free(cert);
 	free(cms);
-	return p.res;
+	return roa;
 }
 
 /*

@@ -1,4 +1,4 @@
-/*	$OpenBSD: efiboot.c,v 1.6 2023/07/05 09:25:55 kettenis Exp $	*/
+/*	$OpenBSD: efiboot.c,v 1.11 2024/06/23 13:11:51 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2015 YASUOKA Masahiko <yasuoka@yasuoka.net>
@@ -41,12 +41,16 @@
 
 #include "efidev.h"
 #include "efiboot.h"
+#include "efidt.h"
 #include "fdt.h"
 
 EFI_SYSTEM_TABLE	*ST;
 EFI_BOOT_SERVICES	*BS;
 EFI_RUNTIME_SERVICES	*RS;
 EFI_HANDLE		 IH, efi_bootdp;
+void			*fdt_sys = NULL;
+void			*fdt_override = NULL;
+size_t			 fdt_override_size;
 
 EFI_PHYSICAL_ADDRESS	 heap;
 UINTN			 heapsiz = 1 * 1024 * 1024;
@@ -60,6 +64,10 @@ static EFI_GUID		 imgp_guid = LOADED_IMAGE_PROTOCOL;
 static EFI_GUID		 blkio_guid = BLOCK_IO_PROTOCOL;
 static EFI_GUID		 devp_guid = DEVICE_PATH_PROTOCOL;
 static EFI_GUID		 gop_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
+static EFI_GUID		 fdt_guid = FDT_TABLE_GUID;
+static EFI_GUID		 dt_fixup_guid = EFI_DT_FIXUP_PROTOCOL_GUID;
+
+#define efi_guidcmp(_a, _b)	memcmp((_a), (_b), sizeof(EFI_GUID))
 
 int efi_device_path_depth(EFI_DEVICE_PATH *dp, int);
 int efi_device_path_ncmp(EFI_DEVICE_PATH *, EFI_DEVICE_PATH *, int);
@@ -68,6 +76,8 @@ static void efi_memprobe_internal(void);
 static void efi_timer_init(void);
 static void efi_timer_cleanup(void);
 static EFI_STATUS efi_memprobe_find(UINTN, UINTN, EFI_PHYSICAL_ADDRESS *);
+void *efi_fdt(void);
+int fdt_load_override(char *);
 
 EFI_STATUS
 efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab)
@@ -76,6 +86,7 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab)
 	EFI_LOADED_IMAGE	*imgp;
 	EFI_DEVICE_PATH		*dp = NULL;
 	EFI_STATUS		 status;
+	int			 i;
 
 	ST = systab;
 	BS = ST->BootServices;
@@ -85,13 +96,19 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab)
 	/* disable reset by watchdog after 5 minutes */
 	BS->SetWatchdogTimer(0, 0, 0, NULL);
 
-	status = BS->HandleProtocol(image, &imgp_guid,
-	    (void **)&imgp);
+	status = BS->HandleProtocol(image, &imgp_guid, (void **)&imgp);
 	if (status == EFI_SUCCESS)
 		status = BS->HandleProtocol(imgp->DeviceHandle, &devp_guid,
 		    (void **)&dp);
 	if (status == EFI_SUCCESS)
 		efi_bootdp = dp;
+
+	for (i = 0; i < ST->NumberOfTableEntries; i++) {
+		if (efi_guidcmp(&fdt_guid,
+		    &ST->ConfigurationTable[i].VendorGuid) == 0)
+			fdt_sys = ST->ConfigurationTable[i].VendorTable;
+	}
+	fdt_init(fdt_sys);
 
 	progname = "BOOTRISCV64";
 
@@ -478,11 +495,7 @@ efi_dma_constraint(void)
 	    dma_constraint, sizeof(dma_constraint));
 }
 
-void *fdt = NULL;
 char *bootmac = NULL;
-static EFI_GUID fdt_guid = FDT_TABLE_GUID;
-
-#define	efi_guidcmp(_a, _b)	memcmp((_a), (_b), sizeof(EFI_GUID))
 
 void *
 efi_makebootargs(char *bootargs, int howto)
@@ -492,18 +505,14 @@ efi_makebootargs(char *bootargs, int howto)
 	u_char zero[8] = { 0 };
 	uint64_t uefi_system_table = htobe64((uintptr_t)ST);
 	uint32_t boothowto = htobe32(howto);
+	int32_t hartid;
 	EFI_PHYSICAL_ADDRESS addr;
-	void *node;
+	void *node, *fdt;
 	size_t len;
-	int i;
 
-	if (fdt == NULL) {
-		for (i = 0; i < ST->NumberOfTableEntries; i++) {
-			if (efi_guidcmp(&fdt_guid,
-			    &ST->ConfigurationTable[i].VendorGuid) == 0)
-				fdt = ST->ConfigurationTable[i].VendorTable;
-		}
-	}
+	fdt = efi_fdt();
+	if (fdt == NULL)
+		return NULL;
 
 	if (!fdt_get_size(fdt))
 		return NULL;
@@ -519,9 +528,20 @@ efi_makebootargs(char *bootargs, int howto)
 	if (!fdt_init(fdt))
 		return NULL;
 
+	/* Create common nodes which might not exist when using mach dtb */
+	node = fdt_find_node("/aliases");
+	if (node == NULL)
+		fdt_node_add_node(fdt_find_node("/"), "aliases", &node);
 	node = fdt_find_node("/chosen");
-	if (!node)
-		return NULL;
+	if (node == NULL)
+		fdt_node_add_node(fdt_find_node("/"), "chosen", &node);
+
+	node = fdt_find_node("/chosen");
+	hartid = efi_get_boot_hart_id();
+	if (hartid >= 0) {
+		hartid = htobe32(hartid);
+		fdt_node_add_property(node, "boot-hartid", &hartid, 4);
+	}
 
 	len = strlen(bootargs) + 1;
 	fdt_node_add_property(node, "bootargs", bootargs, len);
@@ -953,6 +973,87 @@ efi_memprobe_find(UINTN pages, UINTN align, EFI_PHYSICAL_ADDRESS *addr)
 	return EFI_OUT_OF_RESOURCES;
 }
 
+void *
+efi_fdt(void)
+{
+	/* 'mach dtb' has precedence */
+	if (fdt_override != NULL)
+		return fdt_override;
+
+	return fdt_sys;
+}
+
+int
+fdt_load_override(char *file)
+{
+	EFI_DT_FIXUP_PROTOCOL *dt_fixup;
+	EFI_PHYSICAL_ADDRESS addr;
+	char path[MAXPATHLEN];
+	EFI_STATUS status;
+	struct stat sb;
+	size_t dt_size;
+	UINTN sz;
+	int fd;
+
+	if (file == NULL && fdt_override) {
+		BS->FreePages((uint64_t)fdt_override,
+		    EFI_SIZE_TO_PAGES(fdt_override_size));
+		fdt_override = NULL;
+		fdt_init(fdt_sys);
+		return 0;
+	}
+
+	snprintf(path, sizeof(path), "%s:%s", cmd.bootdev, file);
+
+	fd = open(path, O_RDONLY);
+	if (fd < 0 || fstat(fd, &sb) == -1) {
+		printf("cannot open %s\n", path);
+		return 0;
+	}
+	dt_size = sb.st_size;
+retry:
+	if (efi_memprobe_find(EFI_SIZE_TO_PAGES(dt_size),
+	    PAGE_SIZE, &addr) != EFI_SUCCESS) {
+		printf("cannot allocate memory for %s\n", path);
+		return 0;
+	}
+	if (read(fd, (void *)addr, sb.st_size) != sb.st_size) {
+		printf("cannot read from %s\n", path);
+		return 0;
+	}
+
+	status = BS->LocateProtocol(&dt_fixup_guid, NULL, (void **)&dt_fixup);
+	if (status == EFI_SUCCESS) {
+		sz = dt_size;
+		status = dt_fixup->Fixup(dt_fixup, (void *)addr, &sz,
+		    EFI_DT_APPLY_FIXUPS | EFI_DT_RESERVE_MEMORY);
+		if (status == EFI_BUFFER_TOO_SMALL) {
+			BS->FreePages(addr, EFI_SIZE_TO_PAGES(dt_size));
+			lseek(fd, 0, SEEK_SET);
+			dt_size = sz;
+			goto retry;
+		}
+		if (status != EFI_SUCCESS)
+			panic("DT fixup failed: 0x%lx", status);
+	}
+
+	if (!fdt_init((void *)addr)) {
+		printf("invalid device tree\n");
+		BS->FreePages(addr, EFI_SIZE_TO_PAGES(dt_size));
+		return 0;
+	}
+
+	if (fdt_override) {
+		BS->FreePages((uint64_t)fdt_override,
+		    EFI_SIZE_TO_PAGES(fdt_override_size));
+		fdt_override = NULL;
+	}
+
+	fdt_override = (void *)addr;
+	fdt_override_size = dt_size;
+	return 0;
+}
+
 /*
  * Commands
  */
@@ -971,35 +1072,17 @@ const struct cmd_table cmd_machine[] = {
 int
 Xdtb_efi(void)
 {
-	EFI_PHYSICAL_ADDRESS addr;
-	char path[MAXPATHLEN];
-	struct stat sb;
-	int fd;
+	if (cmd.argc == 1) {
+		fdt_load_override(NULL);
+		return (0);
+	}
 
 	if (cmd.argc != 2) {
 		printf("dtb file\n");
 		return (0);
 	}
 
-	snprintf(path, sizeof(path), "%s:%s", cmd.bootdev, cmd.argv[1]);
-
-	fd = open(path, O_RDONLY);
-	if (fd < 0 || fstat(fd, &sb) == -1) {
-		printf("cannot open %s\n", path);
-		return (0);
-	}
-	if (efi_memprobe_find(EFI_SIZE_TO_PAGES(sb.st_size),
-	    0x1000, &addr) != EFI_SUCCESS) {
-		printf("cannot allocate memory for %s\n", path);
-		return (0);
-	}
-	if (read(fd, (void *)addr, sb.st_size) != sb.st_size) {
-		printf("cannot read from %s\n", path);
-		return (0);
-	}
-
-	fdt = (void *)addr;
-	return (0);
+	return fdt_load_override(cmd.argv[1]);
 }
 
 int

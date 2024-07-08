@@ -1,4 +1,4 @@
-/*	$OpenBSD: qwxvar.h,v 1.1 2023/12/28 17:36:29 stsp Exp $	*/
+/*	$OpenBSD: qwxvar.h,v 1.26 2024/05/28 08:34:52 stsp Exp $	*/
 
 /*
  * Copyright (c) 2018-2019 The Linux Foundation.
@@ -69,12 +69,12 @@ struct ath11k_hw_ring_mask {
 #define ATH11K_FW_DIR			"qwx"
 
 #define ATH11K_BOARD_MAGIC		"QCA-ATH11K-BOARD"
-#define ATH11K_BOARD_API2_FILE		"board-2.bin"
-#define ATH11K_DEFAULT_BOARD_FILE	"board.bin"
-#define ATH11K_DEFAULT_CAL_FILE		"caldata.bin"
-#define ATH11K_AMSS_FILE		"amss.bin"
-#define ATH11K_M3_FILE			"m3.bin"
-#define ATH11K_REGDB_FILE		"regdb.bin"
+#define ATH11K_BOARD_API2_FILE		"board-2"
+#define ATH11K_DEFAULT_BOARD_FILE	"board"
+#define ATH11K_DEFAULT_CAL_FILE		"caldata"
+#define ATH11K_AMSS_FILE		"amss"
+#define ATH11K_M3_FILE			"m3"
+#define ATH11K_REGDB_FILE		"regdb"
 
 #define QWX_FW_BUILD_ID_MASK "QC_IMAGE_VERSION_STRING="
 
@@ -111,6 +111,53 @@ enum hal_rx_buf_return_buf_manager {
 struct ath11k_hw_hal_params {
 	enum hal_rx_buf_return_buf_manager rx_buf_rbm;
 	const struct ath11k_hw_tcl2wbm_rbm_map *tcl2wbm_rbm_map;
+};
+
+struct hal_tx_info {
+	uint16_t meta_data_flags; /* %HAL_TCL_DATA_CMD_INFO0_META_ */
+	uint8_t ring_id;
+	uint32_t desc_id;
+	enum hal_tcl_desc_type type;
+	enum hal_tcl_encap_type encap_type;
+	uint64_t paddr;
+	uint32_t data_len;
+	uint32_t pkt_offset;
+	enum hal_encrypt_type encrypt_type;
+	uint32_t flags0; /* %HAL_TCL_DATA_CMD_INFO1_ */
+	uint32_t flags1; /* %HAL_TCL_DATA_CMD_INFO2_ */
+	uint16_t addr_search_flags; /* %HAL_TCL_DATA_CMD_INFO0_ADDR(X/Y)_ */
+	uint16_t bss_ast_hash;
+	uint16_t bss_ast_idx;
+	uint8_t tid;
+	uint8_t search_type; /* %HAL_TX_ADDR_SEARCH_ */
+	uint8_t lmac_id;
+	uint8_t dscp_tid_tbl_idx;
+	bool enable_mesh;
+	uint8_t rbm_id;
+};
+
+/* TODO: Check if the actual desc macros can be used instead */
+#define HAL_TX_STATUS_FLAGS_FIRST_MSDU		BIT(0)
+#define HAL_TX_STATUS_FLAGS_LAST_MSDU		BIT(1)
+#define HAL_TX_STATUS_FLAGS_MSDU_IN_AMSDU	BIT(2)
+#define HAL_TX_STATUS_FLAGS_RATE_STATS_VALID	BIT(3)
+#define HAL_TX_STATUS_FLAGS_RATE_LDPC		BIT(4)
+#define HAL_TX_STATUS_FLAGS_RATE_STBC		BIT(5)
+#define HAL_TX_STATUS_FLAGS_OFDMA		BIT(6)
+
+#define HAL_TX_STATUS_DESC_LEN		sizeof(struct hal_wbm_release_ring)
+
+/* Tx status parsed from srng desc */
+struct hal_tx_status {
+	enum hal_wbm_rel_src_module buf_rel_source;
+	enum hal_wbm_tqm_rel_reason status;
+	uint8_t ack_rssi;
+	uint32_t flags; /* %HAL_TX_STATUS_FLAGS_ */
+	uint32_t ppdu_id;
+	uint8_t try_cnt;
+	uint8_t tid;
+	uint16_t peer_id;
+	uint32_t rate_stats;
 };
 
 struct ath11k_hw_params {
@@ -209,33 +256,39 @@ struct ath11k_hw_params {
 };
 
 struct ath11k_hw_ops {
-#if notyet
 	uint8_t (*get_hw_mac_from_pdev_id)(int pdev_id);
-#endif
 	void (*wmi_init_config)(struct qwx_softc *sc,
 	    struct target_resource_config *config);
-#if notyet
 	int (*mac_id_to_pdev_id)(struct ath11k_hw_params *hw, int mac_id);
 	int (*mac_id_to_srng_id)(struct ath11k_hw_params *hw, int mac_id);
+#if notyet
 	void (*tx_mesh_enable)(struct ath11k_base *ab,
 			       struct hal_tcl_data_cmd *tcl_cmd);
-	bool (*rx_desc_get_first_msdu)(struct hal_rx_desc *desc);
+#endif
+	int (*rx_desc_get_first_msdu)(struct hal_rx_desc *desc);
+#if notyet
 	bool (*rx_desc_get_last_msdu)(struct hal_rx_desc *desc);
+#endif
 	uint8_t (*rx_desc_get_l3_pad_bytes)(struct hal_rx_desc *desc);
 	uint8_t *(*rx_desc_get_hdr_status)(struct hal_rx_desc *desc);
-	bool (*rx_desc_encrypt_valid)(struct hal_rx_desc *desc);
+	int (*rx_desc_encrypt_valid)(struct hal_rx_desc *desc);
 	uint32_t (*rx_desc_get_encrypt_type)(struct hal_rx_desc *desc);
 	uint8_t (*rx_desc_get_decap_type)(struct hal_rx_desc *desc);
+#ifdef notyet
 	uint8_t (*rx_desc_get_mesh_ctl)(struct hal_rx_desc *desc);
 	bool (*rx_desc_get_ldpc_support)(struct hal_rx_desc *desc);
 	bool (*rx_desc_get_mpdu_seq_ctl_vld)(struct hal_rx_desc *desc);
 	bool (*rx_desc_get_mpdu_fc_valid)(struct hal_rx_desc *desc);
 	uint16_t (*rx_desc_get_mpdu_start_seq_no)(struct hal_rx_desc *desc);
+#endif
 	uint16_t (*rx_desc_get_msdu_len)(struct hal_rx_desc *desc);
+#ifdef notyet
 	uint8_t (*rx_desc_get_msdu_sgi)(struct hal_rx_desc *desc);
 	uint8_t (*rx_desc_get_msdu_rate_mcs)(struct hal_rx_desc *desc);
 	uint8_t (*rx_desc_get_msdu_rx_bw)(struct hal_rx_desc *desc);
+#endif
 	uint32_t (*rx_desc_get_msdu_freq)(struct hal_rx_desc *desc);
+#ifdef notyet
 	uint8_t (*rx_desc_get_msdu_pkt_type)(struct hal_rx_desc *desc);
 	uint8_t (*rx_desc_get_msdu_nss)(struct hal_rx_desc *desc);
 	uint8_t (*rx_desc_get_mpdu_tid)(struct hal_rx_desc *desc);
@@ -245,9 +298,13 @@ struct ath11k_hw_ops {
 	uint32_t (*rx_desc_get_mpdu_start_tag)(struct hal_rx_desc *desc);
 	uint32_t (*rx_desc_get_mpdu_ppdu_id)(struct hal_rx_desc *desc);
 	void (*rx_desc_set_msdu_len)(struct hal_rx_desc *desc, uint16_t len);
+#endif
 	struct rx_attention *(*rx_desc_get_attention)(struct hal_rx_desc *desc);
+#ifdef notyet
 	uint8_t *(*rx_desc_get_msdu_payload)(struct hal_rx_desc *desc);
-	void (*reo_setup)(struct ath11k_base *ab);
+#endif
+	void (*reo_setup)(struct qwx_softc *);
+#ifdef notyet
 	uint16_t (*mpdu_info_get_peerid)(uint8_t *tlv_data);
 	bool (*rx_desc_mac_addr2_valid)(struct hal_rx_desc *desc);
 	uint8_t* (*rx_desc_mpdu_start_addr2)(struct hal_rx_desc *desc);
@@ -607,6 +664,100 @@ struct hal_srng_config {
 
 #define QWX_NUM_SRNG_CFG	21
 
+struct hal_reo_status_header {
+	uint16_t cmd_num;
+	enum hal_reo_cmd_status cmd_status;
+	uint16_t cmd_exe_time;
+	uint32_t timestamp;
+};
+
+struct hal_reo_status_queue_stats {
+	uint16_t ssn;
+	uint16_t curr_idx;
+	uint32_t pn[4];
+	uint32_t last_rx_queue_ts;
+	uint32_t last_rx_dequeue_ts;
+	uint32_t rx_bitmap[8]; /* Bitmap from 0-255 */
+	uint32_t curr_mpdu_cnt;
+	uint32_t curr_msdu_cnt;
+	uint16_t fwd_due_to_bar_cnt;
+	uint16_t dup_cnt;
+	uint32_t frames_in_order_cnt;
+	uint32_t num_mpdu_processed_cnt;
+	uint32_t num_msdu_processed_cnt;
+	uint32_t total_num_processed_byte_cnt;
+	uint32_t late_rx_mpdu_cnt;
+	uint32_t reorder_hole_cnt;
+	uint8_t timeout_cnt;
+	uint8_t bar_rx_cnt;
+	uint8_t num_window_2k_jump_cnt;
+};
+
+struct hal_reo_status_flush_queue {
+	bool err_detected;
+};
+
+enum hal_reo_status_flush_cache_err_code {
+	HAL_REO_STATUS_FLUSH_CACHE_ERR_CODE_SUCCESS,
+	HAL_REO_STATUS_FLUSH_CACHE_ERR_CODE_IN_USE,
+	HAL_REO_STATUS_FLUSH_CACHE_ERR_CODE_NOT_FOUND,
+};
+
+struct hal_reo_status_flush_cache {
+	bool err_detected;
+	enum hal_reo_status_flush_cache_err_code err_code;
+	bool cache_controller_flush_status_hit;
+	uint8_t cache_controller_flush_status_desc_type;
+	uint8_t cache_controller_flush_status_client_id;
+	uint8_t cache_controller_flush_status_err;
+	uint8_t cache_controller_flush_status_cnt;
+};
+
+enum hal_reo_status_unblock_cache_type {
+	HAL_REO_STATUS_UNBLOCK_BLOCKING_RESOURCE,
+	HAL_REO_STATUS_UNBLOCK_ENTIRE_CACHE_USAGE,
+};
+
+struct hal_reo_status_unblock_cache {
+	bool err_detected;
+	enum hal_reo_status_unblock_cache_type unblock_type;
+};
+
+struct hal_reo_status_flush_timeout_list {
+	bool err_detected;
+	bool list_empty;
+	uint16_t release_desc_cnt;
+	uint16_t fwd_buf_cnt;
+};
+
+enum hal_reo_threshold_idx {
+	HAL_REO_THRESHOLD_IDX_DESC_COUNTER0,
+	HAL_REO_THRESHOLD_IDX_DESC_COUNTER1,
+	HAL_REO_THRESHOLD_IDX_DESC_COUNTER2,
+	HAL_REO_THRESHOLD_IDX_DESC_COUNTER_SUM,
+};
+
+struct hal_reo_status_desc_thresh_reached {
+	enum hal_reo_threshold_idx threshold_idx;
+	uint32_t link_desc_counter0;
+	uint32_t link_desc_counter1;
+	uint32_t link_desc_counter2;
+	uint32_t link_desc_counter_sum;
+};
+
+struct hal_reo_status {
+	struct hal_reo_status_header uniform_hdr;
+	uint8_t loop_cnt;
+	union {
+		struct hal_reo_status_queue_stats queue_stats;
+		struct hal_reo_status_flush_queue flush_queue;
+		struct hal_reo_status_flush_cache flush_cache;
+		struct hal_reo_status_unblock_cache unblock_cache;
+		struct hal_reo_status_flush_timeout_list timeout_list;
+		struct hal_reo_status_desc_thresh_reached desc_thresh_reached;
+	} u;
+};
+
 /* HAL context to be used to access SRNG APIs (currently used by data path
  * and transport (CE) modules)
  */
@@ -645,13 +796,18 @@ struct ath11k_hal {
 #endif
 };
 
+enum hal_pn_type {
+	HAL_PN_TYPE_NONE,
+	HAL_PN_TYPE_WPA,
+	HAL_PN_TYPE_WAPI_EVEN,
+	HAL_PN_TYPE_WAPI_UNEVEN,
+};
+
 enum hal_ce_desc {
 	HAL_CE_DESC_SRC,
 	HAL_CE_DESC_DST,
 	HAL_CE_DESC_DST_STATUS,
 };
-
-void qwx_ce_byte_swap(void *mem, uint32_t len);
 
 struct ce_ie_addr {
 	uint32_t ie1_reg_addr;
@@ -686,9 +842,10 @@ struct ce_attr {
 
 #define CE_DESC_RING_ALIGN 8
 
-struct qwx_rx_data {
-	struct mbuf	*m;
-	bus_dmamap_t	map;
+struct qwx_rx_msdu {
+	TAILQ_ENTRY(qwx_rx_msdu) entry;
+	struct mbuf *m;
+	struct ieee80211_rxinfo rxi;
 	int is_first_msdu;
 	int is_last_msdu;
 	int is_continuation;
@@ -705,13 +862,22 @@ struct qwx_rx_data {
 	uint16_t seq_no;
 };
 
+TAILQ_HEAD(qwx_rx_msdu_list, qwx_rx_msdu);
+
+struct qwx_rx_data {
+	struct mbuf	*m;
+	bus_dmamap_t	map;
+	struct qwx_rx_msdu rx_msdu;
+};
+
 struct qwx_tx_data {
+	struct ieee80211_node *ni;
 	struct mbuf	*m;
 	bus_dmamap_t	map;
 	uint8_t eid;
 	uint8_t flags;
 	uint32_t cipher;
-} __packed;
+};
 
 struct qwx_ce_ring {
 	/* Number of entries in this ring; must be power of 2 */
@@ -770,6 +936,13 @@ void qwx_htc_rx_completion_handler(struct qwx_softc *, struct mbuf *);
 void qwx_dp_htt_htc_t2h_msg_handler(struct qwx_softc *, struct mbuf *);
 
 struct qwx_dp;
+
+struct qwx_dp_htt_wbm_tx_status {
+	uint32_t msdu_id;
+	int acked;
+	int ack_rssi;
+	uint16_t peer_id;
+};
 
 #define DP_NUM_CLIENTS_MAX 64
 #define DP_AVG_TIDS_PER_CLIENT 2
@@ -839,8 +1012,9 @@ struct qwx_hp_update_timer {
 
 struct dp_rx_tid {
 	uint8_t tid;
+	struct qwx_dmamem *mem;
 	uint32_t *vaddr;
-	bus_addr_t paddr;
+	uint64_t paddr;
 	uint32_t size;
 	uint32_t ba_win_sz;
 	int active;
@@ -867,7 +1041,7 @@ struct dp_rx_tid {
 struct dp_reo_cache_flush_elem {
 	TAILQ_ENTRY(dp_reo_cache_flush_elem) entry;
 	struct dp_rx_tid data;
-	unsigned long ts;
+	uint64_t ts;
 };
 
 TAILQ_HEAD(dp_reo_cmd_cache_flush_head, dp_reo_cache_flush_elem);
@@ -895,11 +1069,9 @@ struct dp_tx_ring {
 	uint8_t tcl_data_ring_id;
 	struct dp_srng tcl_data_ring;
 	struct dp_srng tcl_comp_ring;
-#if 0
-	struct idr txbuf_idr;
-	/* Protects txbuf_idr and num_pending */
-	spinlock_t tx_idr_lock;
-#endif
+	int cur;
+	int queued;
+	struct qwx_tx_data *data;
 	struct hal_wbm_release_ring *tx_status;
 	int tx_status_head;
 	int tx_status_tail;
@@ -1263,9 +1435,189 @@ struct dp_rxdma_ring {
 #else
 	struct qwx_rx_data *rx_data;
 #endif
-	int cur;
 	int bufs_max;
+	uint8_t freemap[howmany(DP_RXDMA_BUF_RING_SIZE, 8)];
 };
+
+enum hal_rx_mon_status {
+	HAL_RX_MON_STATUS_PPDU_NOT_DONE,
+	HAL_RX_MON_STATUS_PPDU_DONE,
+	HAL_RX_MON_STATUS_BUF_DONE,
+};
+
+struct hal_rx_user_status {
+	uint32_t mcs:4,
+	nss:3,
+	ofdma_info_valid:1,
+	dl_ofdma_ru_start_index:7,
+	dl_ofdma_ru_width:7,
+	dl_ofdma_ru_size:8;
+	uint32_t ul_ofdma_user_v0_word0;
+	uint32_t ul_ofdma_user_v0_word1;
+	uint32_t ast_index;
+	uint32_t tid;
+	uint16_t tcp_msdu_count;
+	uint16_t udp_msdu_count;
+	uint16_t other_msdu_count;
+	uint16_t frame_control;
+	uint8_t frame_control_info_valid;
+	uint8_t data_sequence_control_info_valid;
+	uint16_t first_data_seq_ctrl;
+	uint32_t preamble_type;
+	uint16_t ht_flags;
+	uint16_t vht_flags;
+	uint16_t he_flags;
+	uint8_t rs_flags;
+	uint32_t mpdu_cnt_fcs_ok;
+	uint32_t mpdu_cnt_fcs_err;
+	uint32_t mpdu_fcs_ok_bitmap[8];
+	uint32_t mpdu_ok_byte_count;
+	uint32_t mpdu_err_byte_count;
+};
+
+struct hal_rx_wbm_rel_info {
+	uint32_t cookie;
+	enum hal_wbm_rel_src_module err_rel_src;
+	enum hal_reo_dest_ring_push_reason push_reason;
+	uint32_t err_code;
+	int first_msdu;
+	int last_msdu;
+};
+
+#define HAL_INVALID_PEERID 0xffff
+#define VHT_SIG_SU_NSS_MASK 0x7
+
+#define HAL_RX_MAX_MCS 12
+#define HAL_RX_MAX_NSS 8
+
+#define HAL_TLV_STATUS_PPDU_NOT_DONE    HAL_RX_MON_STATUS_PPDU_NOT_DONE
+#define HAL_TLV_STATUS_PPDU_DONE        HAL_RX_MON_STATUS_PPDU_DONE
+#define HAL_TLV_STATUS_BUF_DONE         HAL_RX_MON_STATUS_BUF_DONE
+
+struct hal_rx_mon_ppdu_info {
+	uint32_t ppdu_id;
+	uint32_t ppdu_ts;
+	uint32_t num_mpdu_fcs_ok;
+	uint32_t num_mpdu_fcs_err;
+	uint32_t preamble_type;
+	uint16_t chan_num;
+	uint16_t tcp_msdu_count;
+	uint16_t tcp_ack_msdu_count;
+	uint16_t udp_msdu_count;
+	uint16_t other_msdu_count;
+	uint16_t peer_id;
+	uint8_t rate;
+	uint8_t mcs;
+	uint8_t nss;
+	uint8_t bw;
+	uint8_t vht_flag_values1;
+	uint8_t vht_flag_values2;
+	uint8_t vht_flag_values3[4];
+	uint8_t vht_flag_values4;
+	uint8_t vht_flag_values5;
+	uint16_t vht_flag_values6;
+	uint8_t is_stbc;
+	uint8_t gi;
+	uint8_t ldpc;
+	uint8_t beamformed;
+	uint8_t rssi_comb;
+	uint8_t rssi_chain_pri20[HAL_RX_MAX_NSS];
+	uint8_t tid;
+	uint16_t ht_flags;
+	uint16_t vht_flags;
+	uint16_t he_flags;
+	uint16_t he_mu_flags;
+	uint8_t dcm;
+	uint8_t ru_alloc;
+	uint8_t reception_type;
+	uint64_t tsft;
+	uint64_t rx_duration;
+	uint16_t frame_control;
+	uint32_t ast_index;
+	uint8_t rs_fcs_err;
+	uint8_t rs_flags;
+	uint8_t cck_flag;
+	uint8_t ofdm_flag;
+	uint8_t ulofdma_flag;
+	uint8_t frame_control_info_valid;
+	uint16_t he_per_user_1;
+	uint16_t he_per_user_2;
+	uint8_t he_per_user_position;
+	uint8_t he_per_user_known;
+	uint16_t he_flags1;
+	uint16_t he_flags2;
+	uint8_t he_RU[4];
+	uint16_t he_data1;
+	uint16_t he_data2;
+	uint16_t he_data3;
+	uint16_t he_data4;
+	uint16_t he_data5;
+	uint16_t he_data6;
+	uint32_t ppdu_len;
+	uint32_t prev_ppdu_id;
+	uint32_t device_id;
+	uint16_t first_data_seq_ctrl;
+	uint8_t monitor_direct_used;
+	uint8_t data_sequence_control_info_valid;
+	uint8_t ltf_size;
+	uint8_t rxpcu_filter_pass;
+	char rssi_chain[8][8];
+	struct hal_rx_user_status userstats;
+};
+
+enum dp_mon_status_buf_state {
+	/* PPDU id matches in dst ring and status ring */
+	DP_MON_STATUS_MATCH,
+	/* status ring dma is not done */
+	DP_MON_STATUS_NO_DMA,
+	/* status ring is lagging, reap status ring */
+	DP_MON_STATUS_LAG,
+	/* status ring is leading, reap dst ring and drop */
+	DP_MON_STATUS_LEAD,
+	/* replinish monitor status ring */
+	DP_MON_STATUS_REPLINISH,
+};
+
+struct qwx_pdev_mon_stats {
+	uint32_t status_ppdu_state;
+	uint32_t status_ppdu_start;
+	uint32_t status_ppdu_end;
+	uint32_t status_ppdu_compl;
+	uint32_t status_ppdu_start_mis;
+	uint32_t status_ppdu_end_mis;
+	uint32_t status_ppdu_done;
+	uint32_t dest_ppdu_done;
+	uint32_t dest_mpdu_done;
+	uint32_t dest_mpdu_drop;
+	uint32_t dup_mon_linkdesc_cnt;
+	uint32_t dup_mon_buf_cnt;
+	uint32_t dest_mon_stuck;
+	uint32_t dest_mon_not_reaped;
+};
+
+struct qwx_mon_data {
+	struct dp_link_desc_bank link_desc_banks[DP_LINK_DESC_BANKS_MAX];
+	struct hal_rx_mon_ppdu_info mon_ppdu_info;
+
+	uint32_t mon_ppdu_status;
+	uint32_t mon_last_buf_cookie;
+	uint64_t mon_last_linkdesc_paddr;
+	uint16_t chan_noise_floor;
+	bool hold_mon_dst_ring;
+	enum dp_mon_status_buf_state buf_state;
+	bus_addr_t mon_status_paddr;
+	struct dp_full_mon_mpdu *mon_mpdu;
+#ifdef notyet
+	struct hal_sw_mon_ring_entries sw_mon_entries;
+#endif
+	struct qwx_pdev_mon_stats rx_mon_stats;
+#ifdef notyet
+	/* lock for monitor data */
+	spinlock_t mon_lock;
+	struct sk_buff_head rx_status_q;
+#endif
+};
+
 
 #define MAX_RXDMA_PER_PDEV     2
 
@@ -1285,8 +1637,14 @@ struct qwx_pdev_dp {
 	struct dp_rxdma_ring rx_mon_status_refill_ring[MAX_RXDMA_PER_PDEV];
 #if 0
 	struct ieee80211_rx_status rx_status;
-	struct ath11k_mon_data mon_data;
 #endif
+	struct qwx_mon_data mon_data;
+};
+
+struct qwx_txmgmt_queue {
+	struct qwx_tx_data data[8];
+	int cur;
+	int queued;
 };
 
 struct qwx_vif {
@@ -1341,14 +1699,16 @@ struct qwx_vif {
 	bool wpaie_present;
 	bool bcca_zero_sent;
 	bool do_not_send_tmpl;
+	struct ieee80211_channel *chan;
 #if 0
-	struct ieee80211_chanctx_conf chanctx;
 	struct ath11k_arp_ns_offload arp_ns_offload;
 	struct ath11k_rekey_data rekey_data;
 #endif
 #ifdef CONFIG_ATH11K_DEBUGFS
 	struct dentry *debugfs_twt;
 #endif /* CONFIG_ATH11K_DEBUGFS */
+
+	struct qwx_txmgmt_queue txmgmt;
 };
 
 TAILQ_HEAD(qwx_vif_list, qwx_vif);
@@ -1359,10 +1719,47 @@ struct qwx_survey_info {
 	uint64_t time_busy;
 };
 
+#define ATH11K_IRQ_NUM_MAX 52
+#define ATH11K_EXT_IRQ_NUM_MAX	16
+
+struct qwx_ext_irq_grp {
+	struct qwx_softc *sc;
+	uint32_t irqs[ATH11K_EXT_IRQ_NUM_MAX];
+	uint32_t num_irq;
+	uint32_t grp_id;
+	uint64_t timestamp;
+#if 0
+	bool napi_enabled;
+	struct napi_struct napi;
+	struct net_device napi_ndev;
+#endif
+};
+
+struct qwx_rx_radiotap_header {
+	struct ieee80211_radiotap_header wr_ihdr;
+} __packed;
+
+#define IWX_RX_RADIOTAP_PRESENT	0 /* TODO add more information */
+
+struct qwx_tx_radiotap_header {
+	struct ieee80211_radiotap_header wt_ihdr;
+} __packed;
+
+#define IWX_TX_RADIOTAP_PRESENT	0 /* TODO add more information */
+
+struct qwx_setkey_task_arg {
+	struct ieee80211_node *ni;
+	struct ieee80211_key *k;
+	int cmd;
+#define QWX_ADD_KEY	1
+#define QWX_DEL_KEY	2
+};
+
 struct qwx_softc {
 	struct device			sc_dev;
 	struct ieee80211com		sc_ic;
 	uint32_t			sc_flags;
+	int				sc_node;
 
 	int (*sc_newstate)(struct ieee80211com *, enum ieee80211_state, int);
 
@@ -1374,6 +1771,23 @@ struct qwx_softc {
 	struct task		newstate_task;
 	enum ieee80211_state	ns_nstate;
 	int			ns_arg;
+
+	/* Task for setting encryption keys and its arguments. */
+	struct task		setkey_task;
+	/*
+	 * At present we need to process at most two keys at once:
+	 * Our pairwise key and a group key.
+	 * When hostap mode is implemented this array needs to grow or
+	 * it might become a bottleneck for associations that occur at
+	 * roughly the same time.
+	 */
+	struct qwx_setkey_task_arg setkey_arg[2];
+	int setkey_cur;
+	int setkey_tail;
+	int setkey_nkeys;
+
+	int install_key_done;
+	int install_key_status;
 
 	enum ath11k_11d_state	state_11d;
 	int			completed_11d_scan;
@@ -1393,9 +1807,18 @@ struct qwx_softc {
 	struct qwx_survey_info	survey[IEEE80211_CHAN_MAX];
 
 	int			attached;
-	int			have_firmware;
+	struct {
+		u_char *data;
+		size_t size;
+	} fw_img[4];
+#define QWX_FW_AMSS	0
+#define QWX_FW_BOARD	1
+#define QWX_FW_M3	2
+#define QWX_FW_REGDB	3
 
 	int			sc_tx_timer;
+	uint32_t		qfullmsk;
+#define	QWX_MGMT_QUEUE_ID	31
 
 	bus_addr_t			mem;
 	struct ath11k_hw_params		hw_params;
@@ -1409,6 +1832,8 @@ struct qwx_softc {
 	enum ath11k_firmware_mode	fw_mode;
 	enum ath11k_crypt_mode		crypto_mode;
 	enum ath11k_hw_txrx_mode	frame_mode;
+
+	struct qwx_ext_irq_grp		ext_irq_grp[ATH11K_EXT_IRQ_GRP_NUM_MAX];
 
 	uint16_t			qmi_txn_id;
 	int				qmi_cal_done;
@@ -1426,6 +1851,10 @@ struct qwx_softc {
 	uint32_t			allocated_vdev_map;
 	uint32_t			free_vdev_map;
 	int				num_peers;
+	int				peer_mapped;
+	int				peer_delete_done;
+	int				vdev_setup_done;
+	int				peer_assoc_done;
 
 	struct qwx_dbring_cap	*db_caps;
 	uint32_t		 num_db_cap;
@@ -1443,7 +1872,7 @@ struct qwx_softc {
 		uint32_t pdev_id;
 	} target_pdev_ids[MAX_RADIOS];
 	uint8_t target_pdev_count;
-	struct qwx_pdev *pdevs_active[MAX_RADIOS];
+	uint32_t pdevs_active;
 	int pdevs_macaddr_valid;
 	struct ath11k_hal_reg_capabilities_ext hal_reg_cap[MAX_RADIOS];
 
@@ -1457,6 +1886,7 @@ struct qwx_softc {
 	struct qmi_response_type_v01	qmi_resp;
 
 	struct qwx_dmamem		*fwmem;
+	int				 expect_fwmem_req;
 	int				 fwmem_ready;
 	int				 fw_init_done;
 
@@ -1464,25 +1894,49 @@ struct qwx_softc {
 
 	struct qwx_dmamem		*m3_mem;
 
+	struct timeout			 mon_reap_timer;
+#define ATH11K_MON_TIMER_INTERVAL	10
+
 	/* Provided by attachment driver: */
 	struct qwx_ops			ops;
 	bus_dma_tag_t			sc_dmat;
 	enum ath11k_hw_rev		sc_hw_rev;
 	struct qwx_device_id		id;
 	char				sc_bus_str[4]; /* "pci" or "ahb" */
+	int				num_msivec;
 	uint32_t			msi_addr_lo;
 	uint32_t			msi_addr_hi;
 	uint32_t			msi_data_start;
 	const struct qwx_msi_config	*msi_cfg;
+	uint32_t			msi_ce_irqmask;
 
 	struct qmi_wlanfw_request_mem_ind_msg_v01 *sc_req_mem_ind;
+
+	caddr_t			sc_drvbpf;
+
+	union {
+		struct qwx_rx_radiotap_header th;
+		uint8_t	pad[IEEE80211_RADIOTAP_HDRLEN];
+	} sc_rxtapu;
+#define sc_rxtap	sc_rxtapu.th
+	int			sc_rxtap_len;
+
+	union {
+		struct qwx_tx_radiotap_header th;
+		uint8_t	pad[IEEE80211_RADIOTAP_HDRLEN];
+	} sc_txtapu;
+#define sc_txtap	sc_txtapu.th
+	int			sc_txtap_len;
 };
 
-int	qwx_intr(struct qwx_softc *);
+int	qwx_ce_intr(void *);
+int	qwx_ext_intr(void *);
+int	qwx_dp_service_srng(struct qwx_softc *, int);
 
 int	qwx_init_hw_params(struct qwx_softc *);
 int	qwx_attach(struct qwx_softc *);
 void	qwx_detach(struct qwx_softc *);
+int	qwx_activate(struct device *, int);
 
 void	qwx_core_deinit(struct qwx_softc *);
 void	qwx_ce_cleanup_pipes(struct qwx_softc *);
@@ -1495,17 +1949,63 @@ void	qwx_init_task(void *);
 int	qwx_newstate(struct ieee80211com *, enum ieee80211_state, int);
 void	qwx_newstate_task(void *);
 
+struct ath11k_peer {
+#if 0
+	struct list_head list;
+	struct ieee80211_sta *sta;
+#endif
+	int vdev_id;
+#if 0
+	u8 addr[ETH_ALEN];
+#endif
+	int peer_id;
+	uint16_t ast_hash;
+	uint8_t pdev_id;
+	uint16_t hw_peer_id;
+#if 0
+	/* protected by ab->data_lock */
+	struct ieee80211_key_conf *keys[WMI_MAX_KEY_INDEX + 1];
+#endif
+	struct dp_rx_tid rx_tid[IEEE80211_NUM_TID + 1];
+#if 0
+	/* peer id based rhashtable list pointer */
+	struct rhash_head rhash_id;
+	/* peer addr based rhashtable list pointer */
+	struct rhash_head rhash_addr;
+
+	/* Info used in MMIC verification of
+	 * RX fragments
+	 */
+	struct crypto_shash *tfm_mmic;
+	u8 mcast_keyidx;
+	u8 ucast_keyidx;
+	u16 sec_type;
+	u16 sec_type_grp;
+	bool is_authorized;
+	bool dp_setup_done;
+#endif
+};
+
 struct qwx_node {
 	struct ieee80211_node ni;
+	struct ath11k_peer peer;
+	unsigned int flags;
+#define QWX_NODE_FLAG_HAVE_PAIRWISE_KEY	0x01
+#define QWX_NODE_FLAG_HAVE_GROUP_KEY	0x02
 };
 
 struct ieee80211_node *qwx_node_alloc(struct ieee80211com *);
+int	qwx_set_key(struct ieee80211com *, struct ieee80211_node *,
+    struct ieee80211_key *);
+void	qwx_delete_key(struct ieee80211com *, struct ieee80211_node *,
+    struct ieee80211_key *);
 
 void	qwx_qrtr_recv_msg(struct qwx_softc *, struct mbuf *);
 
 int	qwx_hal_srng_init(struct qwx_softc *);
 
 int	qwx_ce_alloc_pipes(struct qwx_softc *);
+void	qwx_ce_free_pipes(struct qwx_softc *);
 void	qwx_ce_rx_post_buf(struct qwx_softc *);
 void	qwx_ce_get_shadow_config(struct qwx_softc *, uint32_t **, uint32_t *);
 
@@ -1520,4 +2020,12 @@ qwx_ce_get_attr_flags(struct qwx_softc *sc, int ce_id)
 {
 	KASSERT(ce_id < sc->hw_params.ce_count);
 	return sc->hw_params.host_ce_config[ce_id].flags;
+}
+
+static inline enum ieee80211_edca_ac qwx_tid_to_ac(uint32_t tid)
+{
+	return (((tid == 0) || (tid == 3)) ? EDCA_AC_BE :
+		((tid == 1) || (tid == 2)) ? EDCA_AC_BK :
+		((tid == 4) || (tid == 5)) ? EDCA_AC_VI :
+		EDCA_AC_VO);
 }

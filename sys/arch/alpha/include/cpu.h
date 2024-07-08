@@ -1,4 +1,4 @@
-/* $OpenBSD: cpu.h,v 1.70 2023/07/25 18:16:19 cheloha Exp $ */
+/* $OpenBSD: cpu.h,v 1.75 2024/06/09 21:15:29 jca Exp $ */
 /* $NetBSD: cpu.h,v 1.45 2000/08/21 02:03:12 thorpej Exp $ */
 
 /*-
@@ -145,7 +145,6 @@ void	proc_trampoline(void);					/* MAGIC */
 void	regdump(struct trapframe *);
 void	regtoframe(struct reg *, struct trapframe *);
 void	savectx(struct pcb *);
-void    switch_exit(struct proc *);				/* MAGIC */
 void	syscall(u_int64_t, struct trapframe *);
 void	trap(unsigned long, unsigned long, unsigned long, unsigned long,
 	    struct trapframe *);
@@ -212,9 +211,9 @@ struct cpu_info {
 #endif
 #ifdef GPROF
 	struct gmonparam *ci_gmon;
-	struct clockintr *ci_gmonclock;
+	struct clockintr ci_gmonclock;
 #endif
-	struct clockintr_queue ci_queue;
+	struct clockqueue ci_queue;
 	char ci_panicbuf[512];
 };
 
@@ -265,6 +264,8 @@ do {									\
 	struct cpu_info *__ci = curcpu();				\
 	int __s;							\
 									\
+	__asm volatile ("" ::: "memory");				\
+									\
 	if (__ci->ci_ipis != 0) {					\
 		__s = splipi();						\
 		alpha_ipi_process_with_frame(__ci);			\
@@ -278,7 +279,7 @@ do {									\
 #define	CPU_IS_PRIMARY(ci)		1
 #define	CPU_IS_RUNNING(ci)		1
 #define cpu_unidle(ci)			do { /* nothing */ } while (0)
-#define CPU_BUSY_CYCLE()		do {} while (0)
+#define CPU_BUSY_CYCLE()		__asm volatile ("" ::: "memory")
 
 #endif /* MULTIPROCESSOR */
 
@@ -300,7 +301,7 @@ cpu_rnd_messybits(void)
 }
 
 /*
- * Arguments to hardclock and gatherstats encapsulate the previous
+ * Arguments to clockintr_dispatch encapsulate the previous
  * machine state in an opaque clockframe.  On the Alpha, we use
  * what we push on an interrupt (a trapframe).
  */

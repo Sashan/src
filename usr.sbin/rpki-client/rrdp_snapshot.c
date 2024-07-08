@@ -1,4 +1,4 @@
-/*	$OpenBSD: rrdp_snapshot.c,v 1.8 2023/12/27 07:17:39 tb Exp $ */
+/*	$OpenBSD: rrdp_snapshot.c,v 1.10 2024/05/30 09:54:59 job Exp $ */
 /*
  * Copyright (c) 2020 Nils Fisher <nils_fisher@hotmail.com>
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
@@ -119,7 +119,7 @@ start_publish_elem(struct snapshot_xml *sxml, const char **attr)
 	for (i = 0; attr[i]; i += 2) {
 		if (strcmp("uri", attr[i]) == 0 && hasUri++ == 0) {
 			if (valid_uri(attr[i + 1], strlen(attr[i + 1]),
-			    "rsync://")) {
+			    RSYNC_PROTO)) {
 				uri = xstrdup(attr[i + 1]);
 				continue;
 			}
@@ -200,7 +200,8 @@ snapshot_content_handler(void *data, const char *content, int length)
 
 	if (sxml->scope == SNAPSHOT_SCOPE_PUBLISH)
 		if (publish_add_content(sxml->pxml, content, length) == -1)
-			PARSE_FAIL(p, "parse failed - content too big");
+			PARSE_FAIL(p, "parse failed, snapshot element for %s "
+			    "too big", sxml->pxml->uri);
 }
 
 static void

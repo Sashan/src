@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.37 2023/12/13 18:26:41 jca Exp $	*/
+/*	$OpenBSD: pmap.c,v 1.41 2024/04/29 10:07:37 jsg Exp $	*/
 
 /*
  * Copyright (c) 2019-2020 Brian Bamsch <bbamsch@google.com>
@@ -216,6 +216,8 @@ vaddr_t zero_page;
 vaddr_t copy_src_page;
 vaddr_t copy_dst_page;
 
+#define CPU_VENDOR_THEAD	0x5b7
+
 struct pool pmap_pmap_pool;
 struct pool pmap_pted_pool;
 struct pool pmap_vp_pool;
@@ -299,6 +301,11 @@ const pt_entry_t ap_bits_kern[8] = {
 	[PROT_EXEC|PROT_WRITE|PROT_READ]	= PTE_A|PTE_X|PTE_R|PTE_D|PTE_W,
 };
 
+/* PBMT encodings for the Svpmbt modes. */
+uint64_t pmap_pma;
+uint64_t pmap_nc;
+uint64_t pmap_io;
+
 /*
  * This is used for pmap_kernel() mappings, they are not to be removed
  * from the vp table because they were statically initialized at the
@@ -335,36 +342,6 @@ pmap_vp_lookup(pmap_t pm, vaddr_t va, pt_entry_t **pl3entry)
 
 	return pted;
 }
-
-/*
- * Remove, and return, pted at specified address, NULL if not present
- */
-struct pte_desc *
-pmap_vp_remove(pmap_t pm, vaddr_t va)
-{
-	struct pmapvp1 *vp1;
-	struct pmapvp2 *vp2;
-	struct pmapvp3 *vp3;
-	struct pte_desc *pted;
-
-	vp1 = pm->pm_vp.l1;
-
-	vp2 = vp1->vp[VP_IDX1(va)];
-	if (vp2 == NULL) {
-		return NULL;
-	}
-
-	vp3 = vp2->vp[VP_IDX2(va)];
-	if (vp3 == NULL) {
-		return NULL;
-	}
-
-	pted = vp3->vp[VP_IDX3(va)];
-	vp3->vp[VP_IDX3(va)] = NULL;
-
-	return pted;
-}
-
 
 /*
  * Create a V -> P mapping for the given pmap and virtual address
@@ -769,8 +746,6 @@ pmap_fill_pte(pmap_t pm, vaddr_t va, paddr_t pa, struct pte_desc *pted,
 	switch (cache) {
 	case PMAP_CACHE_WB:
 		break;
-	case PMAP_CACHE_WT:
-		break;
 	case PMAP_CACHE_CI:
 		if (pa >= pmap_cached_start && pa <= pmap_cached_end)
 			pa += (pmap_uncached_start - pmap_cached_start);
@@ -778,7 +753,7 @@ pmap_fill_pte(pmap_t pm, vaddr_t va, paddr_t pa, struct pte_desc *pted,
 	case PMAP_CACHE_DEV:
 		break;
 	default:
-		panic("pmap_fill_pte:invalid cache mode");
+		panic("%s: invalid cache mode", __func__);
 	}
 	pted->pted_va |= cache;
 
@@ -844,15 +819,9 @@ pmap_pinit(pmap_t pm)
 	/* Fill kernel PTEs. */
 	kvp1 = pmap_kernel()->pm_vp.l1;
 	memcpy(&vp1->l1[L1_KERN_BASE], &kvp1->l1[L1_KERN_BASE],
-			L1_KERN_ENTRIES * sizeof(pt_entry_t));
+	    L1_KERN_ENTRIES * sizeof(pt_entry_t));
 	memcpy(&vp1->vp[L1_KERN_BASE], &kvp1->vp[L1_KERN_BASE],
-			L1_KERN_ENTRIES * sizeof(struct pmapvp2 *));
-
-	/* Fill DMAP PTEs. */
-	memcpy(&vp1->l1[L1_DMAP_BASE], &kvp1->l1[L1_DMAP_BASE],
-			L1_DMAP_ENTRIES * sizeof(pt_entry_t));
-	memcpy(&vp1->vp[L1_DMAP_BASE], &kvp1->vp[L1_DMAP_BASE],
-			L1_DMAP_ENTRIES * sizeof(struct pmapvp2 *));
+	    L1_KERN_ENTRIES * sizeof(struct pmapvp2 *));
 
 	pmap_extract(pmap_kernel(), l1va, (paddr_t *)&l1pa);
 	pm->pm_satp |= SATP_FORMAT_PPN(PPN(l1pa));
@@ -1177,9 +1146,9 @@ pmap_bootstrap_dmap(vaddr_t kern_l1, paddr_t min_pa, paddr_t max_pa)
 
 		/* gigapages */
 		pn = (pa / PAGE_SIZE);
-		entry = PTE_KERN;
+		entry = PTE_KERN | pmap_pma;
 		entry |= (pn << PTE_PPN0_S);
-		atomic_store_64(&l1[l1_slot], entry);
+		l1[l1_slot] = entry;
 	}
 
 	sfence_vma();
@@ -1187,7 +1156,7 @@ pmap_bootstrap_dmap(vaddr_t kern_l1, paddr_t min_pa, paddr_t max_pa)
 
 vaddr_t
 pmap_bootstrap(long kvo, vaddr_t l1pt, vaddr_t kernelstart, vaddr_t kernelend,
-    paddr_t memstart, paddr_t memend, paddr_t ramstart, paddr_t ramend)
+    paddr_t memstart, paddr_t memend)
 {
 	void  *va;
 	paddr_t pa, pt1pa;
@@ -1198,14 +1167,24 @@ pmap_bootstrap(long kvo, vaddr_t l1pt, vaddr_t kernelstart, vaddr_t kernelend,
 	vaddr_t vstart;
 	int i, j, k;
 	int lb_idx2, ub_idx2;
-	void *node;
+	uint64_t marchid, mimpid;
+	uint32_t mvendorid;
 
-	node = fdt_find_node("/");
-	if (fdt_is_compatible(node, "starfive,jh7100")) {
-		pmap_cached_start = 0x0080000000ULL;
-		pmap_cached_end = 0x087fffffffULL;
-		pmap_uncached_start = 0x1000000000ULL;
-		pmap_uncached_end = 0x17ffffffffULL;
+	mvendorid = sbi_get_mvendorid();
+	marchid = sbi_get_marchid();
+	mimpid = sbi_get_mimpid();
+
+	/*
+	 * The T-Head cores implement a page attributes extension that
+	 * violates the RISC-V privileged architecture specification.
+	 * Work around this as best as we can by adding the
+	 * appropriate page attributes in a way that is mostly
+	 * compatible with the Svpbmt extension.
+	 */
+	if (mvendorid == CPU_VENDOR_THEAD && marchid == 0 && mimpid == 0) {
+		pmap_pma = PTE_THEAD_C | PTE_THEAD_B | PTE_THEAD_SH;
+		pmap_nc = PTE_THEAD_B | PTE_THEAD_SH;
+		pmap_io = PTE_THEAD_SO | PTE_THEAD_SH;
 	}
 
 	pmap_setup_avail(memstart, memend, kvo);
@@ -1218,8 +1197,8 @@ pmap_bootstrap(long kvo, vaddr_t l1pt, vaddr_t kernelstart, vaddr_t kernelend,
 	 * via physical pointers
 	 */
 
-	// Map the entire Physical Address Space to Direct Mapped Region
-	pmap_bootstrap_dmap(l1pt, ramstart, ramend);
+	/* Map the initial 64MB block to the Direct Mapped Region. */
+	pmap_bootstrap_dmap(l1pt, memstart, memend);
 
 	pt1pa = pmap_steal_avail(2 * sizeof(struct pmapvp1), Lx_TABLE_ALIGN,
 	    &va);
@@ -1236,7 +1215,7 @@ pmap_bootstrap(long kvo, vaddr_t l1pt, vaddr_t kernelstart, vaddr_t kernelend,
 		mappings_allocated++;
 		pa = pmap_steal_avail(sizeof(struct pmapvp2), Lx_TABLE_ALIGN,
 		    &va);
-		vp2 = (struct pmapvp2 *) PHYS_TO_DMAP(pa);
+		vp2 = (struct pmapvp2 *)PHYS_TO_DMAP(pa);
 		vp1->vp[i] = va;
 		vp1->l1[i] = VP_Lx(pa);
 
@@ -1254,7 +1233,7 @@ pmap_bootstrap(long kvo, vaddr_t l1pt, vaddr_t kernelstart, vaddr_t kernelend,
 			mappings_allocated++;
 			pa = pmap_steal_avail(sizeof(struct pmapvp3),
 			    Lx_TABLE_ALIGN, &va);
-			vp3 = (struct pmapvp3 *) PHYS_TO_DMAP(pa);
+			vp3 = (struct pmapvp3 *)PHYS_TO_DMAP(pa);
 			vp2->vp[j] = va;
 			vp2->l2[j] = VP_Lx(pa);
 		}
@@ -1263,7 +1242,7 @@ pmap_bootstrap(long kvo, vaddr_t l1pt, vaddr_t kernelstart, vaddr_t kernelend,
 	for (i = VP_IDX1(VM_MIN_KERNEL_ADDRESS);
 	    i <= VP_IDX1(pmap_maxkvaddr - 1);
 	    i++) {
-		vp2 = (void *) PHYS_TO_DMAP((long)vp1->vp[i] + kvo);
+		vp2 = (void *)PHYS_TO_DMAP((long)vp1->vp[i] + kvo);
 
 		if (i == VP_IDX1(VM_MIN_KERNEL_ADDRESS)) {
 			lb_idx2 = VP_IDX2(VM_MIN_KERNEL_ADDRESS);
@@ -1276,7 +1255,7 @@ pmap_bootstrap(long kvo, vaddr_t l1pt, vaddr_t kernelstart, vaddr_t kernelend,
 			ub_idx2 = VP_IDX2_CNT - 1;
 		}
 		for (j = lb_idx2; j <= ub_idx2; j++) {
-			vp3 = (void *) PHYS_TO_DMAP((long)vp2->vp[j] + kvo);
+			vp3 = (void *)PHYS_TO_DMAP((long)vp2->vp[j] + kvo);
 
 			for (k = 0; k <= VP_IDX3_CNT - 1; k++) {
 				pted_allocated++;
@@ -1287,46 +1266,6 @@ pmap_bootstrap(long kvo, vaddr_t l1pt, vaddr_t kernelstart, vaddr_t kernelend,
 			}
 		}
 	}
-
-	/* now that we have mapping-space for everything, lets map it */
-	/* all of these mappings are ram -> kernel va */
-
-#if 0	// XXX This block does not appear to do anything useful?
-	/*
-	 * enable mappings for existing 'allocated' mapping in the bootstrap
-	 * page tables
-	 */
-	extern pt_entry_t *pagetable_l2;
-	extern char _end[];
-	vp2 = (void *) PHYS_TO_DMAP((long)&pagetable_l2 + kvo);
-	struct mem_region *mp;
-	ssize_t size;
-	for (mp = pmap_allocated; mp->size != 0; mp++) {
-		/* bounds may be kinda messed up */
-		for (pa = mp->start, size = mp->size & ~(PAGE_SIZE-1);
-		    size > 0;
-		    pa+= L2_SIZE, size -= L2_SIZE)
-		{
-			paddr_t mappa = pa & ~(L2_SIZE-1);
-			vaddr_t mapva = mappa - kvo;
-			int prot = PROT_READ | PROT_WRITE;
-
-			if (mapva < (vaddr_t)_end)
-				continue;
-
-			if (mapva >= (vaddr_t)__text_start &&
-			    mapva < (vaddr_t)_etext)
-				prot = PROT_READ | PROT_EXEC;
-			else if (mapva >= (vaddr_t)__rodata_start &&
-			    mapva < (vaddr_t)_erodata)
-				prot = PROT_READ;
-
-			// XXX What does ATTR_nG in arm64 mean?
-			vp2->l2[VP_IDX2(mapva)] = VP_Lx(mappa) |
-			    ap_bits_kern[prot];
-		}
-	}
-#endif
 
 	pmap_avail_fixup();
 
@@ -1339,16 +1278,17 @@ pmap_bootstrap(long kvo, vaddr_t l1pt, vaddr_t kernelstart, vaddr_t kernelend,
 	 */
 	vstart = pmap_map_stolen(kernelstart);
 
-	// Include the Direct Map in Kernel PMAP
-	// as gigapages, only populated the pmapvp1->l1 field,
-	// pmap->va field is not used
-	pmap_bootstrap_dmap((vaddr_t) pmap_kernel()->pm_vp.l1, ramstart, ramend);
+	/*
+	 * Temporarily add the Direct Map Area into the kernel pmap
+	 * such that we can continue to access stolen memory by
+	 * physical address.
+	 */
+	pmap_bootstrap_dmap((vaddr_t)pmap_kernel()->pm_vp.l1, memstart, memend);
 
-	//switching to new page table
+	/* Switch to the new page tables. */
 	uint64_t satp = pmap_kernel()->pm_satp;
 	__asm volatile("csrw satp, %0" :: "r" (satp) : "memory");
-
-	printf("all mapped\n");
+	sfence_vma();
 
 	curcpu()->ci_curpm = pmap_kernel();
 
@@ -1566,6 +1506,25 @@ pmap_protect(pmap_t pm, vaddr_t sva, vaddr_t eva, vm_prot_t prot)
 void
 pmap_init(void)
 {
+	struct pmapvp1 *kvp1;
+	void *node;
+
+	node = fdt_find_node("/");
+	if (fdt_is_compatible(node, "starfive,jh7100")) {
+		pmap_cached_start = 0x0080000000ULL;
+		pmap_cached_end = 0x087fffffffULL;
+		pmap_uncached_start = 0x1000000000ULL;
+		pmap_uncached_end = 0x17ffffffffULL;
+	}
+
+	/* Clear DMAP PTEs. */
+	kvp1 = pmap_kernel()->pm_vp.l1;
+	memset(&kvp1->l1[L1_DMAP_BASE], 0,
+	    L1_DMAP_ENTRIES * sizeof(pt_entry_t));
+	memset(&kvp1->vp[L1_DMAP_BASE], 0,
+	    L1_DMAP_ENTRIES * sizeof(struct pmapvp2 *));
+	sfence_vma();
+
 	pool_init(&pmap_pmap_pool, sizeof(struct pmap), 0, IPL_NONE, 0,
 	    "pmap", NULL);
 	pool_setlowat(&pmap_pmap_pool, 2);
@@ -1604,15 +1563,30 @@ pmap_pte_insert(struct pte_desc *pted)
 void
 pmap_pte_update(struct pte_desc *pted, uint64_t *pl3)
 {
-	pt_entry_t pte, access_bits;
+	uint64_t pte, access_bits;
 	pmap_t pm = pted->pted_pmap;
+	uint64_t attr = 0;
+
+	switch (pted->pted_va & PMAP_CACHE_BITS) {
+	case PMAP_CACHE_WB:
+		attr |= pmap_pma;
+		break;
+	case PMAP_CACHE_CI:
+		attr |= pmap_nc;
+		break;
+	case PMAP_CACHE_DEV:
+		attr |= pmap_io;
+		break;
+	default:
+		panic("%s: invalid cache mode", __func__);
+	}
 
 	if (pm->pm_privileged)
 		access_bits = ap_bits_kern[pted->pted_pte & PROT_MASK];
 	else
 		access_bits = ap_bits_user[pted->pted_pte & PROT_MASK];
 
-	pte = VP_Lx(pted->pted_pte) | access_bits | PTE_V;
+	pte = VP_Lx(pted->pted_pte) | attr | access_bits | PTE_V;
 	*pl3 = access_bits ? pte : 0;
 }
 

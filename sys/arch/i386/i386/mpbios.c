@@ -1,4 +1,4 @@
-/*	$OpenBSD: mpbios.c,v 1.45 2023/01/30 10:49:05 jsg Exp $	*/
+/*	$OpenBSD: mpbios.c,v 1.47 2024/06/07 23:19:18 jsg Exp $	*/
 /*	$NetBSD: mpbios.c,v 1.2 2002/10/01 12:56:57 fvdl Exp $	*/
 
 /*-
@@ -152,7 +152,6 @@ struct mp_map
 
 int	mp_print(void *, const char *);
 int	mp_match(struct device *, void *, void *);
-int	mpbios_cpu_start(struct cpu_info *);
 const void *mpbios_search(struct device *, paddr_t, int, struct mp_map *);
 static __inline int mpbios_cksum(const void *, int);
 
@@ -925,14 +924,6 @@ mp_print_eisa_intr(int intr)
 {
 	printf(" EISA irq %d", intr);
 }
-
-
-
-#define TAB_UNIT	4
-#define TAB_ROUND(a)	_TAB_ROUND(a, TAB_UNIT)
-
-#define _TAB_ROUND(a,u)	(((a) + (u - 1)) & ~(u - 1))
-#define EXTEND_TAB(a,u)	(!(_TAB_ROUND(a, u) == _TAB_ROUND((a + 1), u)))
 
 void
 mpbios_bus(const u_int8_t *ent, struct device *self)

@@ -1,4 +1,4 @@
-/*	$OpenBSD: tar.c,v 1.78 2023/12/27 08:29:41 jca Exp $	*/
+/*	$OpenBSD: tar.c,v 1.85 2024/04/17 18:12:12 jca Exp $	*/
 /*	$NetBSD: tar.c,v 1.5 1995/03/21 09:07:49 cgd Exp $	*/
 
 /*-
@@ -61,9 +61,6 @@ struct xheader_record {
 
 /* shortest possible extended record: "5 a=\n" */
 #define MINXHDRSZ	5
-
-/* longest record we'll accept */
-#define MAXXHDRSZ	BLKMULT
 
 /*
  * Routines for reading, writing and header identify of various versions of tar
@@ -984,13 +981,28 @@ xheader_add_ts(struct xheader *xhdr, const char *keyword,
 {
 	struct xheader_record *rec;
 	int reclen, tmplen;
+	char frac[sizeof(".111222333")] = "";
 	char *s;
+
+	/* Only write subsecond part if non-zero */
+	if (value->tv_nsec != 0) {
+		int n;
+
+		n = snprintf(frac, sizeof(frac), ".%09ld",
+		    (long)value->tv_nsec);
+		if (n <= 0)
+			return -1;
+
+		/* Zap trailing zeros */
+		for (n--; n > 1 && frac[n] == '0'; n--)
+			frac[n] = '\0';
+	}
 
 	tmplen = MINXHDRSZ;
 	do {
 		reclen = tmplen;
-		tmplen = snprintf(NULL, 0, "%d %s=%lld.%09ld\n", reclen,
-		    keyword, (long long)value->tv_sec, (long)value->tv_nsec);
+		tmplen = snprintf(NULL, 0, "%d %s=%lld%s\n", reclen,
+		    keyword, (long long)value->tv_sec, frac);
 	} while (tmplen >= 0 && tmplen != reclen);
 	if (tmplen < 0)
 		return -1;
@@ -999,8 +1011,8 @@ xheader_add_ts(struct xheader *xhdr, const char *keyword,
 	if (rec == NULL)
 		return -1;
 	rec->reclen = reclen;
-	if (asprintf(&s, "%d %s=%lld.%09ld\n", reclen, keyword,
-	    (long long)value->tv_sec, (long)value->tv_nsec) < 0) {
+	if (asprintf(&s, "%d %s=%lld%s\n", reclen, keyword,
+	    (long long)value->tv_sec, frac) < 0) {
 		free(rec);
 		return -1;
 	}
@@ -1120,7 +1132,7 @@ wr_ustar_or_pax(ARCHD *arcn, int ustar)
 			return(1);
 		}
 #ifndef SMALL
-		else if (xheader_add(&xhdr, "linkpath", arcn->name) == -1) {
+		else if (xheader_add(&xhdr, "linkpath", arcn->ln_name) == -1) {
 			paxwarn(1, "Link name too long for pax %s",
 			    arcn->ln_name);
 			xheader_free(&xhdr);
@@ -1377,6 +1389,46 @@ ustar_wr(ARCHD *arcn)
 }
 
 /*
+ * pax_id()
+ *	determine if a block given to us is a valid pax header.
+ * Return:
+ *	0 if a pax header, -1 otherwise
+ */
+#ifndef SMALL
+int
+pax_id(char *blk, int size)
+{
+	HD_USTAR *hd;
+
+	if (size < BLKMULT)
+		return(-1);
+	hd = (HD_USTAR *)blk;
+
+	/*
+	 * check for block of zero's first, a simple and fast test then check
+	 * ustar magic cookie. We should use TMAGLEN, but some USTAR archive
+	 * programs are fouled up and create archives missing the \0. Last we
+	 * check the checksum and the type flag. If ok we have to assume it is
+	 * a valid pax header.
+	 */
+	if (hd->prefix[0] == '\0' && hd->name[0] == '\0')
+		return(-1);
+	if (strncmp(hd->magic, TMAGIC, TMAGLEN - 1) != 0)
+		return(-1);
+	if (asc_ul(hd->chksum,sizeof(hd->chksum),OCT) != tar_chksm(blk,BLKMULT))
+		return(-1);
+	/*
+	 * It is valid for a pax formatted archive not to start with
+	 * a global header nor with an extended header. In that case
+	 * we'll fall back to ustar in append mode.
+	 */
+	if (hd->typeflag == XHDRTYPE || hd->typeflag == GHDRTYPE)
+		return(0);
+	return (-1);
+}
+#endif
+
+/*
  * pax_wr()
  *	Write out a pax format archive.
  *	Have to check for file types that cannot be stored.  Be careful of the
@@ -1392,6 +1444,29 @@ int
 pax_wr(ARCHD *arcn)
 {
 	return wr_ustar_or_pax(arcn, 0);
+}
+#endif
+
+/*
+ * pax_opt()
+ *	handle pax format specific -o options
+ * Return:
+ *	0 if ok -1 otherwise
+ */
+#ifndef SMALL
+int
+pax_opt(void)
+{
+	OPLIST *opt;
+
+	while ((opt = opt_next()) != NULL) {
+		if (1) {
+			paxwarn(1, "Unknown pax format -o option/value pair %s=%s",
+			    opt->name, opt->value);
+			return(-1);
+		}
+	}
+	return 0;
 }
 #endif
 
@@ -1533,7 +1608,11 @@ rd_size(off_t *size, const char *keyword, char *p)
 static int
 rd_xheader(ARCHD *arcn, int global, off_t size)
 {
-	char buf[MAXXHDRSZ];
+	/*
+	 * The pax format supposedly supports arbitrarily sized extended
+	 * record headers, this implementation doesn't.
+	 */
+	char buf[sizeof("30xx linkpath=") - 1 + PAXPATHLEN + sizeof("\n")];
 	long len;
 	char *delim, *keyword;
 	char *nextp, *p, *end;

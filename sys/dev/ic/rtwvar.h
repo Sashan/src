@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtwvar.h,v 1.31 2015/11/04 12:11:59 dlg Exp $	*/
+/*	$OpenBSD: rtwvar.h,v 1.33 2024/05/13 01:15:50 jsg Exp $	*/
 /*	$NetBSD: rtwvar.h,v 1.10 2004/12/26 22:37:57 mycroft Exp $	*/
 
 /*-
@@ -432,8 +432,6 @@ struct rtw_softc {
 #define sc_rxtap	sc_rxtapu.tap
 #define sc_txtap	sc_txtapu.tap
 
-extern int rtw_host_rfio;
-
 void rtw_txdac_enable(struct rtw_softc *, int);
 void rtw_anaparm_enable(struct rtw_regs *, int);
 void rtw_config0123_enable(struct rtw_regs *, int);
@@ -448,7 +446,6 @@ void rtw_disable(struct rtw_softc *);
 int rtw_enable(struct rtw_softc *);
 
 int rtw_activate(struct device *, int);
-void rtw_shutdown(void *);
 
 const char *rtw_pwrstate_string(enum rtw_pwrstate);
 

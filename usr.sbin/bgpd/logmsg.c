@@ -1,4 +1,4 @@
-/*	$OpenBSD: logmsg.c,v 1.10 2023/10/14 09:46:14 claudio Exp $ */
+/*	$OpenBSD: logmsg.c,v 1.14 2024/05/20 10:00:00 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -133,11 +133,17 @@ log_statechange(struct peer *peer, enum session_state nstate,
 
 void
 log_notification(const struct peer *peer, uint8_t errcode, uint8_t subcode,
-    u_char *data, uint16_t datalen, const char *dir)
+    const struct ibuf *data, const char *dir)
 {
+	struct ibuf	 ibuf;
 	char		*p;
 	const char	*suberrname = NULL;
 	int		 uk = 0;
+
+	if (data != NULL)
+		ibuf_from_ibuf(&ibuf, data);
+	else
+		ibuf_from_buffer(&ibuf, NULL, 0);
 
 	p = log_fmt_peer(&peer->conf);
 	switch (errcode) {
@@ -154,6 +160,18 @@ log_notification(const struct peer *peer, uint8_t errcode, uint8_t subcode,
 			uk = 1;
 		else
 			suberrname = suberr_open_names[subcode];
+		if (errcode == ERR_OPEN && subcode == ERR_OPEN_CAPA) {
+			uint8_t capa_code;
+
+			if (ibuf_get_n8(&ibuf, &capa_code) == -1)
+				break;
+
+			logit(LOG_ERR, "%s: %s notification: %s, %s: %s",
+			    p, dir, errnames[errcode], suberrname,
+			    log_capability(capa_code));
+			free(p);
+			return;
+		}
 		break;
 	case ERR_UPDATE:
 		if (subcode >= sizeof(suberr_update_names) / sizeof(char *) ||
@@ -168,6 +186,24 @@ log_notification(const struct peer *peer, uint8_t errcode, uint8_t subcode,
 			uk = 1;
 		else
 			suberrname = suberr_cease_names[subcode];
+
+		if (subcode == ERR_CEASE_ADMIN_DOWN ||
+		    subcode == ERR_CEASE_ADMIN_RESET) {
+			uint8_t len;
+			/* check if shutdown reason is included */
+			if (ibuf_get_n8(&ibuf, &len) != -1 && len != 0) {
+				char *s;
+				if ((s = ibuf_get_string(&ibuf, len)) != NULL) {
+					logit(LOG_ERR, "%s: %s notification: "
+					    "%s, %s: reason \"%s\"", p, dir,
+					    errnames[errcode], suberrname,
+					    log_reason(s));
+					free(s);
+					free(p);
+					return;
+				}
+			}
+		}
 		break;
 	case ERR_HOLDTIMEREXPIRED:
 		if (subcode != 0)

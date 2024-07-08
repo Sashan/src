@@ -1,4 +1,4 @@
-/*	$OpenBSD: snmpe.c,v 1.93 2023/12/21 12:43:31 martijn Exp $	*/
+/*	$OpenBSD: snmpe.c,v 1.95 2024/05/21 05:00:48 jsg Exp $	*/
 
 /*
  * Copyright (c) 2007, 2008, 2012 Reyk Floeter <reyk@openbsd.org>
@@ -48,7 +48,6 @@ int	 snmpe_dispatch_parent(int, struct privsep_proc *, struct imsg *);
 int	 snmpe_parse(struct snmp_message *);
 void	 snmpe_tryparse(int, struct snmp_message *);
 int	 snmpe_parsevarbinds(struct snmp_message *);
-void	 snmpe_sig_handler(int sig, short, void *);
 int	 snmpe_bind(struct address *);
 void	 snmpe_recvmsg(int fd, short, void *);
 void	 snmpe_readcb(int fd, short, void *);
@@ -138,7 +137,7 @@ snmpe_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 {
 	switch (imsg->hdr.type) {
 	case IMSG_AX_FD:
-		appl_agentx_backend(imsg->fd);
+		appl_agentx_backend(imsg_get_fd(imsg));
 		return 0;
 	default:
 		return -1;

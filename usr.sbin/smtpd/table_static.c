@@ -1,4 +1,4 @@
-/*	$OpenBSD: table_static.c,v 1.33 2021/06/14 17:58:16 eric Exp $	*/
+/*	$OpenBSD: table_static.c,v 1.35 2024/05/14 13:28:08 op Exp $	*/
 
 /*
  * Copyright (c) 2013 Eric Faurot <eric@openbsd.org>
@@ -43,18 +43,18 @@ static int table_static_fetch(struct table *, enum table_service, char **);
 static void table_static_close(struct table *);
 
 struct table_backend table_backend_static = {
-	"static",
-	K_ALIAS|K_CREDENTIALS|K_DOMAIN|K_NETADDR|K_USERINFO|
+	.name = "static",
+	.services = K_ALIAS|K_CREDENTIALS|K_DOMAIN|K_NETADDR|K_USERINFO|
 	K_SOURCE|K_MAILADDR|K_ADDRNAME|K_MAILADDRMAP|K_RELAYHOST|
 	K_STRING|K_REGEX,
-	table_static_config,
-	table_static_add,
-	table_static_dump,
-	table_static_open,
-	table_static_update,
-	table_static_close,
-	table_static_lookup,
-	table_static_fetch
+	.config = table_static_config,
+	.add = table_static_add,
+	.dump = table_static_dump,
+	.open = table_static_open,
+	.update = table_static_update,
+	.close = table_static_close,
+	.lookup = table_static_lookup,
+	.fetch = table_static_fetch
 };
 
 static struct keycmp {
@@ -111,80 +111,28 @@ static int
 table_static_priv_load(struct table_static_priv *priv, const char *path)
 {
 	FILE	*fp;
-	char	*buf = NULL, *p;
+	char	*line = NULL;
 	int	 lineno = 0;
-	size_t	 sz = 0;
-	ssize_t	 flen;
+	size_t	 linesize = 0;
 	char	*keyp;
 	char	*valp;
-	int	 ret = 0;
+	int	 malformed, ret = 0;
 
 	if ((fp = fopen(path, "r")) == NULL) {
 		log_warn("%s: fopen", path);
 		return 0;
 	}
 
-	while ((flen = getline(&buf, &sz, fp)) != -1) {
+	while (parse_table_line(fp, &line, &linesize, &priv->type,
+	    &keyp, &valp, &malformed) != -1) {
 		lineno++;
-		if (buf[flen - 1] == '\n')
-			buf[--flen] = '\0';
-
-		keyp = buf;
-		while (isspace((unsigned char)*keyp)) {
-			++keyp;
-			--flen;
-		}
-		if (*keyp == '\0')
-			continue;
-		while (isspace((unsigned char)keyp[flen - 1]))
-			keyp[--flen] = '\0';
-		if (*keyp == '#') {
-			if (priv->type == T_NONE) {
-				keyp++;
-				while (isspace((unsigned char)*keyp))
-					++keyp;
-				if (!strcmp(keyp, "@list"))
-					priv->type = T_LIST;
-			}
-			continue;
-		}
-
-		if (priv->type == T_NONE) {
-			for (p = keyp; *p; p++) {
-				if (*p == ' ' || *p == '\t' || *p == ':') {
-					priv->type = T_HASH;
-					break;
-				}
-			}
-			if (priv->type == T_NONE)
-				priv->type = T_LIST;
-		}
-
-		if (priv->type == T_LIST) {
-			table_static_priv_add(priv, keyp, NULL);
-			continue;
-		}
-
-		/* T_HASH */
-		valp = keyp;
-		strsep(&valp, " \t:");
-		if (valp) {
-			while (*valp) {
-				if (!isspace((unsigned char)*valp) &&
-				    !(*valp == ':' &&
-				    isspace((unsigned char)*(valp + 1))))
-					break;
-				++valp;
-			}
-			if (*valp == '\0')
-				valp = NULL;
-		}
-		if (valp == NULL) {
-			log_warnx("%s: invalid map entry line %d",
+		if (malformed) {
+			log_warnx("%s:%d invalid map entry",
 			    path, lineno);
 			goto end;
 		}
-
+		if (keyp == NULL)
+			continue;
 		table_static_priv_add(priv, keyp, valp);
 	}
 
@@ -199,7 +147,7 @@ table_static_priv_load(struct table_static_priv *priv, const char *path)
 
 	ret = 1;
 end:
-	free(buf);
+	free(line);
 	fclose(fp);
 	return ret;
 }

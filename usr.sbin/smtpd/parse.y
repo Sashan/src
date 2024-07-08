@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.296 2023/12/03 11:52:16 op Exp $	*/
+/*	$OpenBSD: parse.y,v 1.299 2024/02/19 21:00:19 gilles Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -670,7 +670,6 @@ dispatcher_local_option dispatcher_local_options
 dispatcher_local:
 MBOX {
 	dsp->u.local.is_mbox = 1;
-	asprintf(&dsp->u.local.command, "/usr/libexec/mail.local -f %%{mbox.from} -- %%{user.username}");
 } dispatcher_local_options
 | MAILDIR {
 	asprintf(&dsp->u.local.command, "/usr/libexec/mail.maildir");
@@ -697,12 +696,10 @@ MBOX {
 | LMTP STRING {
 	asprintf(&dsp->u.local.command,
 	    "/usr/libexec/mail.lmtp -d %s -u", $2);
-	dsp->u.local.user = SMTPD_USER;
 } dispatcher_local_options
 | LMTP STRING RCPT_TO {
 	asprintf(&dsp->u.local.command,
 	    "/usr/libexec/mail.lmtp -d %s -r", $2);
-	dsp->u.local.user = SMTPD_USER;
 } dispatcher_local_options
 | MDA STRING {
 	asprintf(&dsp->u.local.command,
@@ -781,7 +778,7 @@ HELO STRING {
 		YYERROR;
 	}
 
-	if (!table_check_use(t, T_DYNAMIC|T_LIST, K_SOURCE)) {
+	if (!table_check_use(t, T_DYNAMIC|T_LIST|T_HASH, K_SOURCE)) {
 		yyerror("table \"%s\" may not be used for source lookups",
 		    t->t_name);
 		YYERROR;
@@ -1105,7 +1102,7 @@ negation TAG REGEX tables {
 		YYERROR;
 	}
 
-       	if (!table_check_use(t, T_DYNAMIC|T_LIST, K_STRING|K_CREDENTIALS)) {
+	if (!table_check_use(t, T_DYNAMIC|T_LIST|T_HASH, K_STRING|K_CREDENTIALS)) {
 		yyerror("table \"%s\" may not be used for auth lookups",
 		    t->t_name);
 		YYERROR;
@@ -1140,7 +1137,7 @@ negation TAG REGEX tables {
 		YYERROR;
 	}
 
-	if (!table_check_use(t, T_DYNAMIC|T_LIST, K_MAILADDR)) {
+	if (!table_check_use(t, T_DYNAMIC|T_LIST|T_HASH, K_MAILADDR)) {
 		yyerror("table \"%s\" may not be used for mail-from lookups",
 		    t->t_name);
 		YYERROR;
@@ -1175,7 +1172,7 @@ negation TAG REGEX tables {
 		YYERROR;
 	}
 
-	if (!table_check_use(t, T_DYNAMIC|T_LIST, K_MAILADDR)) {
+	if (!table_check_use(t, T_DYNAMIC|T_LIST|T_HASH, K_MAILADDR)) {
 		yyerror("table \"%s\" may not be used for rcpt-to lookups",
 		    t->t_name);
 		YYERROR;
@@ -1333,7 +1330,7 @@ negation TAG REGEX tables {
 		YYERROR;
 	}
 
-       	if (!table_check_use(t, T_DYNAMIC|T_LIST, K_STRING|K_CREDENTIALS)) {
+	if (!table_check_use(t, T_DYNAMIC|T_LIST, K_STRING|K_CREDENTIALS)) {
 		yyerror("table \"%s\" may not be used for from lookups",
 		    t->t_name);
 		YYERROR;
@@ -1375,7 +1372,7 @@ negation TAG REGEX tables {
 		YYERROR;
 	}
 
-	if (!table_check_use(t, T_DYNAMIC|T_LIST, K_MAILADDR)) {
+	if (!table_check_use(t, T_DYNAMIC|T_LIST|T_HASH, K_MAILADDR)) {
 		yyerror("table \"%s\" may not be used for from lookups",
 		    t->t_name);
 		YYERROR;
@@ -1472,7 +1469,7 @@ negation TAG REGEX tables {
 		YYERROR;
 	}
 
-	if (!table_check_use(t, T_DYNAMIC|T_LIST, K_MAILADDR)) {
+	if (!table_check_use(t, T_DYNAMIC|T_LIST|T_HASH, K_MAILADDR)) {
 		yyerror("table \"%s\" may not be used for for lookups",
 		    t->t_name);
 		YYERROR;

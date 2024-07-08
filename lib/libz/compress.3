@@ -1,4 +1,4 @@
-.\"	$OpenBSD: compress.3,v 1.25 2023/08/18 06:08:19 tb Exp $
+.\"	$OpenBSD: compress.3,v 1.29 2024/06/29 16:10:08 tb Exp $
 .\"
 .\"  Copyright (C) 1995-2017 Jean-loup Gailly and Mark Adler
 .\"
@@ -21,9 +21,7 @@
 .\" Converted to mdoc format for the OpenBSD project
 .\" by Jason McIntyre <jmc@openbsd.org>
 .\"
-.\" This page corresponds to zlib version 1.2.3
-.\"
-.Dd $Mdocdate: August 18 2023 $
+.Dd $Mdocdate: June 29 2024 $
 .Dt COMPRESS 3
 .Os
 .Sh NAME
@@ -95,7 +93,9 @@
 .Nm adler32_combine ,
 .Nm crc32 ,
 .Nm crc32_z ,
-.Nm crc32_combine
+.Nm crc32_combine ,
+.Nm crc32_combine_gen ,
+.Nm crc32_combine_op
 .Nd zlib general purpose compression library
 .Sh SYNOPSIS
 .In zlib.h
@@ -251,11 +251,9 @@ Checksum functions
 .Fn crc32_z "uLong adler" "const Bytef *buf" "z_size_t len"
 .Ft uLong
 .Fn crc32_combine "uLong crc1" "uLong crc2" "z_off_t len2"
+.Fn crc32_combine_gen "z_off_t len2"
+.Fn crc32_combine_op "uLong crc1" "uLong crc2" "uLong op"
 .Sh DESCRIPTION
-This manual page describes the
-.Nm zlib
-general purpose compression library, version 1.2.11.
-.Pp
 The
 .Nm zlib
 compression library provides in-memory compression and decompression functions,
@@ -1123,33 +1121,41 @@ for normal data;
 .Dv Z_FILTERED
 for data produced by a filter
 .Pq or predictor ;
-.Dv Z_HUFFMAN_ONLY
-to force Huffman encoding only
-.Pq no string match ,
-or
 .Dv Z_RLE
 to limit match distances to one
-.Pq run-length encoding .
+.Pq run-length encoding ,
+or
+.Dv Z_HUFFMAN_ONLY
+to force Huffman encoding only
+.Pq no string match .
 Filtered data consists mostly of small values with a
-somewhat random distribution.
+somewhat random distribution,
+as produced by the PNG filters.
 In this case, the compression algorithm is tuned to compress them better.
 The effect of
 .Dv Z_FILTERED
-is to force more Huffman coding and less string matching;
-it is somewhat intermediate between
+is to force more Huffman coding and less string matching than the default;
+it is intermediate between
 .Dv Z_DEFAULT_STRATEGY
 and
 .Dv Z_HUFFMAN_ONLY .
 .Dv Z_RLE
-is designed to be almost as fast as
+is almost as fast as
 .Dv Z_HUFFMAN_ONLY ,
-but gives better compression for PNG image data.
+but should give better compression for PNG image data than Huffman only.
+The degree of string matching from most to none is:
+.Dv Z_DEFAULT_STRATEGY ,
+.Dv Z_FILTERED ,
+.Dv Z_RLE ,
+then
+.Dv Z_HUFFMAN_ONLY .
 The
 .Fa strategy
-parameter only affects the compression ratio but not the correctness of the
-compressed output, even if it is not set appropriately.
+parameter affects the compression ratio but never the correctness of the
+compressed output, even if it is not set optimally for the given data.
 .Dv Z_FIXED
-prevents the use of dynamic Huffman codes,
+uses the default string matching,
+but prevents the use of dynamic Huffman codes,
 allowing for a simpler decoder for special applications.
 .Pp
 .Fn deflateInit2
@@ -3433,6 +3439,33 @@ CRC-32 check values are calculated for each, crc1 and crc2.
 .Fn crc32_combine
 returns the CRC-32 check value of seq1 and seq2 concatenated,
 requiring only crc1, crc2, and len2.
+len2 must be non-negative.
+.It Xo
+.Fa uLong
+.Fn crc32_combine_gen "z_off_t len2" ;
+.Xc
+.Pp
+The
+.Fn crc32_combine_gen
+function returns the operator corresponding to the length len2,
+to be used with
+.Fn crc32_combine_op .
+len2 must be non-negative.
+.It Xo
+.Fa uLong
+.Fn crc32_combine_op "uLong crc1" "uLong crc2" "uLong op" ;
+.Xc
+.Pp
+The
+.Fn crc32_combine_op
+function gives the same result as
+.Fn crc32_combine ,
+using op in place of len2.
+op is generated from len2 by
+.Fn crc32_combine_gen .
+This is faster than
+.Fn crc32_combine
+if the generated op is used more than once.
 .El
 .Sh STRUCTURES
 .Bd -unfilled

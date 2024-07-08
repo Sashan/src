@@ -1,4 +1,4 @@
-/*	$OpenBSD: in_pcb.c,v 1.284 2024/01/09 19:57:00 bluhm Exp $	*/
+/*	$OpenBSD: in_pcb.c,v 1.302 2024/04/19 10:13:58 bluhm Exp $	*/
 /*	$NetBSD: in_pcb.c,v 1.25 1996/02/13 23:41:53 christos Exp $	*/
 
 /*
@@ -90,6 +90,7 @@
 #include <netinet/in_var.h>
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
+#include <netinet6/ip6_var.h>
 #include <netinet/in_pcb.h>
 #ifdef IPSEC
 #include <netinet/ip_esp.h>
@@ -101,11 +102,7 @@
 #endif
 
 const struct in_addr zeroin_addr;
-
-const union {
-	struct in_addr	za_in;
-	struct in6_addr	za_in6;
-} zeroin46_addr;
+const union inpaddru zeroin46_addr;
 
 /*
  * These configure the range of local port addresses assigned to
@@ -243,10 +240,10 @@ in_pcballoc(struct socket *so, struct inpcbtable *table, int wait)
 	inp->inp_socket = so;
 	refcnt_init_trace(&inp->inp_refcnt, DT_REFCNT_IDX_INPCB);
 	mtx_init(&inp->inp_mtx, IPL_SOFTNET);
-	inp->inp_seclevel[SL_AUTH] = IPSEC_AUTH_LEVEL_DEFAULT;
-	inp->inp_seclevel[SL_ESP_TRANS] = IPSEC_ESP_TRANS_LEVEL_DEFAULT;
-	inp->inp_seclevel[SL_ESP_NETWORK] = IPSEC_ESP_NETWORK_LEVEL_DEFAULT;
-	inp->inp_seclevel[SL_IPCOMP] = IPSEC_IPCOMP_LEVEL_DEFAULT;
+	inp->inp_seclevel.sl_auth = IPSEC_AUTH_LEVEL_DEFAULT;
+	inp->inp_seclevel.sl_esp_trans = IPSEC_ESP_TRANS_LEVEL_DEFAULT;
+	inp->inp_seclevel.sl_esp_network = IPSEC_ESP_NETWORK_LEVEL_DEFAULT;
+	inp->inp_seclevel.sl_ipcomp = IPSEC_IPCOMP_LEVEL_DEFAULT;
 	inp->inp_rtableid = curproc->p_p->ps_rtableid;
 	inp->inp_hops = -1;
 #ifdef INET6
@@ -276,12 +273,12 @@ in_pcballoc(struct socket *so, struct inpcbtable *table, int wait)
 }
 
 int
-in_pcbbind_locked(struct inpcb *inp, struct mbuf *nam, struct proc *p)
+in_pcbbind_locked(struct inpcb *inp, struct mbuf *nam, const void *laddr,
+    struct proc *p)
 {
 	struct socket *so = inp->inp_socket;
 	u_int16_t lport = 0;
 	int wild = 0;
-	const void *laddr = &zeroin46_addr;
 	int error;
 
 	if (inp->inp_lport)
@@ -358,7 +355,7 @@ in_pcbbind(struct inpcb *inp, struct mbuf *nam, struct proc *p)
 
 	/* keep lookup, modification, and rehash in sync */
 	mtx_enter(&table->inpt_mtx);
-	error = in_pcbbind_locked(inp, nam, p);
+	error = in_pcbbind_locked(inp, nam, &zeroin46_addr, p);
 	mtx_leave(&table->inpt_mtx);
 
 	return error;
@@ -517,7 +514,7 @@ in_pcbconnect(struct inpcb *inp, struct mbuf *nam)
 #ifdef INET6
 	if (ISSET(inp->inp_flags, INP_IPV6))
 		return (in6_pcbconnect(inp, nam));
-#endif /* INET6 */
+#endif
 
 	if ((error = in_nam2sin(nam, &sin)))
 		return (error);
@@ -541,7 +538,7 @@ in_pcbconnect(struct inpcb *inp, struct mbuf *nam)
 
 	if (inp->inp_laddr.s_addr == INADDR_ANY) {
 		if (inp->inp_lport == 0) {
-			error = in_pcbbind_locked(inp, NULL, curproc);
+			error = in_pcbbind_locked(inp, NULL, &ina, curproc);
 			if (error) {
 				mtx_leave(&table->inpt_mtx);
 				return (error);
@@ -595,7 +592,6 @@ in_pcbdetach(struct inpcb *inp)
 	 * points.
 	 */
 	sofree(so, 1);
-	m_freem(inp->inp_options);
 	if (inp->inp_route.ro_rt) {
 		rtfree(inp->inp_route.ro_rt);
 		inp->inp_route.ro_rt = NULL;
@@ -606,8 +602,10 @@ in_pcbdetach(struct inpcb *inp)
 		ip6_freemoptions(inp->inp_moptions6);
 	} else
 #endif
+	{
+		m_freem(inp->inp_options);
 		ip_freemoptions(inp->inp_moptions);
-
+	}
 #if NPF > 0
 	pf_remove_divert_state(inp);
 	pf_inp_unlink(inp);
@@ -652,6 +650,13 @@ in_setsockaddr(struct inpcb *inp, struct mbuf *nam)
 {
 	struct sockaddr_in *sin;
 
+#ifdef INET6
+	if (ISSET(inp->inp_flags, INP_IPV6)) {
+		in6_setsockaddr(inp, nam);
+		return;
+	}
+#endif
+
 	nam->m_len = sizeof(*sin);
 	sin = mtod(nam, struct sockaddr_in *);
 	memset(sin, 0, sizeof(*sin));
@@ -671,7 +676,7 @@ in_setpeeraddr(struct inpcb *inp, struct mbuf *nam)
 		in6_setpeeraddr(inp, nam);
 		return;
 	}
-#endif /* INET6 */
+#endif
 
 	nam->m_len = sizeof(*sin);
 	sin = mtod(nam, struct sockaddr_in *);
@@ -713,18 +718,14 @@ in_peeraddr(struct socket *so, struct mbuf *nam)
  * any errors for each matching socket.
  */
 void
-in_pcbnotifyall(struct inpcbtable *table, struct sockaddr *dst, u_int rtable,
-    int errno, void (*notify)(struct inpcb *, int))
+in_pcbnotifyall(struct inpcbtable *table, const struct sockaddr_in *dst,
+    u_int rtable, int errno, void (*notify)(struct inpcb *, int))
 {
 	SIMPLEQ_HEAD(, inpcb) inpcblist;
 	struct inpcb *inp;
-	struct in_addr faddr;
 	u_int rdomain;
 
-	if (dst->sa_family != AF_INET)
-		return;
-	faddr = satosin(dst)->sin_addr;
-	if (faddr.s_addr == INADDR_ANY)
+	if (dst->sin_addr.s_addr == INADDR_ANY)
 		return;
 	if (notify == NULL)
 		return;
@@ -743,11 +744,9 @@ in_pcbnotifyall(struct inpcbtable *table, struct sockaddr *dst, u_int rtable,
 	rw_enter_write(&table->inpt_notify);
 	mtx_enter(&table->inpt_mtx);
 	TAILQ_FOREACH(inp, &table->inpt_queue, inp_queue) {
-#ifdef INET6
-		if (ISSET(inp->inp_flags, INP_IPV6))
-			continue;
-#endif
-		if (inp->inp_faddr.s_addr != faddr.s_addr ||
+		KASSERT(!ISSET(inp->inp_flags, INP_IPV6));
+
+		if (inp->inp_faddr.s_addr != dst->sin_addr.s_addr ||
 		    rtable_l2(inp->inp_rtableid) != rdomain) {
 			continue;
 		}
@@ -852,8 +851,7 @@ in_pcblookup_local_lock(struct inpcbtable *table, const void *laddrp,
 		wildcard = 0;
 #ifdef INET6
 		if (ISSET(flags, INPLOOKUP_IPV6)) {
-			if (!ISSET(inp->inp_flags, INP_IPV6))
-				continue;
+			KASSERT(ISSET(inp->inp_flags, INP_IPV6));
 
 			if (!IN6_IS_ADDR_UNSPECIFIED(&inp->inp_faddr6))
 				wildcard++;
@@ -869,10 +867,7 @@ in_pcblookup_local_lock(struct inpcbtable *table, const void *laddrp,
 		} else
 #endif /* INET6 */
 		{
-#ifdef INET6
-			if (ISSET(inp->inp_flags, INP_IPV6))
-				continue;
-#endif /* INET6 */
+			KASSERT(!ISSET(inp->inp_flags, INP_IPV6));
 
 			if (inp->inp_faddr.s_addr != INADDR_ANY)
 				wildcard++;
@@ -904,50 +899,15 @@ in_pcblookup_local_lock(struct inpcbtable *table, const void *laddrp,
 struct rtentry *
 in_pcbrtentry(struct inpcb *inp)
 {
-	struct route *ro;
-
-	ro = &inp->inp_route;
-
-	/* check if route is still valid */
-	if (!rtisvalid(ro->ro_rt)) {
-		rtfree(ro->ro_rt);
-		ro->ro_rt = NULL;
-	}
-
-	/*
-	 * No route yet, so try to acquire one.
-	 */
-	if (ro->ro_rt == NULL) {
 #ifdef INET6
-		memset(ro, 0, sizeof(struct route_in6));
-#else
-		memset(ro, 0, sizeof(struct route));
+	if (ISSET(inp->inp_flags, INP_IPV6))
+		return in6_pcbrtentry(inp);
 #endif
 
-#ifdef INET6
-		if (ISSET(inp->inp_flags, INP_IPV6)) {
-			if (IN6_IS_ADDR_UNSPECIFIED(&inp->inp_faddr6))
-				return (NULL);
-			ro->ro_dst.sa_family = AF_INET6;
-			ro->ro_dst.sa_len = sizeof(struct sockaddr_in6);
-			satosin6(&ro->ro_dst)->sin6_addr = inp->inp_faddr6;
-			ro->ro_tableid = inp->inp_rtableid;
-			ro->ro_rt = rtalloc_mpath(&ro->ro_dst,
-			    &inp->inp_laddr6.s6_addr32[0], ro->ro_tableid);
-		} else
-#endif /* INET6 */
-		{
-			if (inp->inp_faddr.s_addr == INADDR_ANY)
-				return (NULL);
-			ro->ro_dst.sa_family = AF_INET;
-			ro->ro_dst.sa_len = sizeof(struct sockaddr_in);
-			satosin(&ro->ro_dst)->sin_addr = inp->inp_faddr;
-			ro->ro_tableid = inp->inp_rtableid;
-			ro->ro_rt = rtalloc_mpath(&ro->ro_dst,
-			    &inp->inp_laddr.s_addr, ro->ro_tableid);
-		}
-	}
-	return (ro->ro_rt);
+	if (inp->inp_faddr.s_addr == INADDR_ANY)
+		return (NULL);
+	return (route_mpath(&inp->inp_route, &inp->inp_faddr, &inp->inp_laddr,
+	    inp->inp_rtableid));
 }
 
 /*
@@ -961,12 +921,10 @@ in_pcbselsrc(struct in_addr *insrc, struct sockaddr_in *sin,
     struct inpcb *inp)
 {
 	struct ip_moptions *mopts = inp->inp_moptions;
-	struct route *ro = &inp->inp_route;
+	struct rtentry *rt;
 	const struct in_addr *laddr = &inp->inp_laddr;
 	u_int rtableid = inp->inp_rtableid;
 	struct sockaddr	*ip4_source = NULL;
-
-	struct sockaddr_in *sin2;
 	struct in_ifaddr *ia = NULL;
 
 	/*
@@ -1008,33 +966,14 @@ in_pcbselsrc(struct in_addr *insrc, struct sockaddr_in *sin,
 	 * If route is known or can be allocated now,
 	 * our src addr is taken from the i/f, else punt.
 	 */
-	if (!rtisvalid(ro->ro_rt) || (ro->ro_tableid != rtableid) ||
-	    (satosin(&ro->ro_dst)->sin_addr.s_addr != sin->sin_addr.s_addr)) {
-		rtfree(ro->ro_rt);
-		ro->ro_rt = NULL;
-	}
-	if (ro->ro_rt == NULL) {
-		/* No route yet, so try to acquire one */
-		ro->ro_dst.sa_family = AF_INET;
-		ro->ro_dst.sa_len = sizeof(struct sockaddr_in);
-		satosin(&ro->ro_dst)->sin_addr = sin->sin_addr;
-		ro->ro_tableid = rtableid;
-		ro->ro_rt = rtalloc_mpath(&ro->ro_dst, NULL, ro->ro_tableid);
-
-		/*
-		 * It is important to zero out the rest of the
-		 * struct sockaddr_in when mixing v6 & v4!
-		 */
-		sin2 = satosin(&ro->ro_dst);
-		memset(sin2->sin_zero, 0, sizeof(sin2->sin_zero));
-	}
+	rt = route_mpath(&inp->inp_route, &sin->sin_addr, NULL, rtableid);
 
 	/*
 	 * If we found a route, use the address
 	 * corresponding to the outgoing interface.
 	 */
-	if (ro->ro_rt != NULL)
-		ia = ifatoia(ro->ro_rt->rt_ifa);
+	if (rt != NULL)
+		ia = ifatoia(rt->rt_ifa);
 
 	/*
 	 * Use preferred source address if :
@@ -1042,8 +981,8 @@ in_pcbselsrc(struct in_addr *insrc, struct sockaddr_in *sin,
 	 * - preferred source address is set
 	 * - output interface is UP
 	 */
-	if (ro->ro_rt && !(ro->ro_rt->rt_flags & RTF_LLINFO) &&
-	    !(ro->ro_rt->rt_flags & RTF_HOST)) {
+	if (rt != NULL && !(rt->rt_flags & RTF_LLINFO) &&
+	    !(rt->rt_flags & RTF_HOST)) {
 		ip4_source = rtable_getsource(rtableid, AF_INET);
 		if (ip4_source != NULL) {
 			struct ifaddr *ifa;
@@ -1088,7 +1027,7 @@ in_pcbhash_insert(struct inpcb *inp)
 		    &inp->inp_faddr6, inp->inp_fport,
 		    &inp->inp_laddr6, inp->inp_lport);
 	else
-#endif /* INET6 */
+#endif
 		hash = in_pcbhash(table, rtable_l2(inp->inp_rtableid),
 		    &inp->inp_faddr, inp->inp_fport,
 		    &inp->inp_laddr, inp->inp_lport);
@@ -1108,10 +1047,8 @@ in_pcbhash_lookup(struct inpcbtable *table, uint64_t hash, u_int rdomain,
 
 	head = &table->inpt_hashtbl[hash & table->inpt_mask];
 	LIST_FOREACH(inp, head, inp_hash) {
-#ifdef INET6
-		if (ISSET(inp->inp_flags, INP_IPV6))
-			continue;
-#endif
+		KASSERT(!ISSET(inp->inp_flags, INP_IPV6));
+
 		if (inp->inp_fport == fport && inp->inp_lport == lport &&
 		    inp->inp_faddr.s_addr == faddr->s_addr &&
 		    inp->inp_laddr.s_addr == laddr->s_addr &&
@@ -1305,6 +1242,10 @@ int
 in_pcbset_rtableid(struct inpcb *inp, u_int rtableid)
 {
 	struct inpcbtable *table = inp->inp_table;
+
+	/* table must exist */
+	if (!rtable_exists(rtableid))
+		return (EINVAL);
 
 	mtx_enter(&table->inpt_mtx);
 	if (inp->inp_lport) {

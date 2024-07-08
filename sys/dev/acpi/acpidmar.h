@@ -230,12 +230,15 @@
 #define IQA_QS_32K	7	/* 32768 */
 
 /* Read-Modify-Write helpers */
-static inline void iommu_rmw32(void *ov, uint32_t mask, uint32_t shift, uint32_t nv)
+static inline void
+iommu_rmw32(void *ov, uint32_t mask, uint32_t shift, uint32_t nv)
 {
 	*(uint32_t *)ov &= ~(mask << shift);
 	*(uint32_t *)ov |= (nv & mask) << shift;
 }
-static inline void iommu_rmw64(void *ov, uint32_t mask, uint32_t shift, uint64_t nv)
+
+static inline void
+iommu_rmw64(void *ov, uint32_t mask, uint32_t shift, uint64_t nv)
 {
 	*(uint64_t *)ov &= ~(mask << shift);
 	*(uint64_t *)ov |= (nv & mask) << shift;
@@ -531,6 +534,5 @@ enum {
 
 void	acpidmar_pci_hook(pci_chipset_tag_t, struct pci_attach_args *);
 void	dmar_ptmap(bus_dma_tag_t, bus_addr_t);
-void	acpidmar_sw(int);
 
 #define __EXTRACT(v,m) (((v) >> m##_SHIFT) & m##_MASK)

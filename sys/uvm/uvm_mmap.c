@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_mmap.c,v 1.183 2023/12/07 13:59:05 deraadt Exp $	*/
+/*	$OpenBSD: uvm_mmap.c,v 1.191 2024/04/05 14:16:05 deraadt Exp $	*/
 /*	$NetBSD: uvm_mmap.c,v 1.49 2001/02/18 21:19:08 chs Exp $	*/
 
 /*
@@ -587,70 +587,73 @@ sys_mprotect(struct proc *p, void *v, register_t *retval)
 }
 
 /*
- * sys_msyscall: the msyscall system call
- */
-int
-sys_msyscall(struct proc *p, void *v, register_t *retval)
-{
-	struct sys_msyscall_args /* {
-		syscallarg(void *) addr;
-		syscallarg(size_t) len;
-	} */ *uap = v;
-	vaddr_t addr;
-	vsize_t size, pageoff;
-
-	addr = (vaddr_t)SCARG(uap, addr);
-	size = (vsize_t)SCARG(uap, len);
-
-	/*
-	 * align the address to a page boundary, and adjust the size accordingly
-	 */
-	ALIGN_ADDR(addr, size, pageoff);
-	if (addr > SIZE_MAX - size)
-		return EINVAL;		/* disallow wrap-around. */
-
-	return uvm_map_syscall(&p->p_vmspace->vm_map, addr, addr+size);
-}
-
-/*
- * sys_pinsyscall
- */
-int
-sys_pinsyscall(struct proc *p, void *v, register_t *retval)
-{
-	struct sys_pinsyscall_args /* {
-		syscallarg(int) syscall;
-		syscallarg(void *) addr;
-		syscallarg(size_t) len;
-	} */ *uap = v;
-	struct vmspace *vm = p->p_vmspace;
-	vm_map_t map = &p->p_vmspace->vm_map;
-	vaddr_t start, end;
-
-	if (SCARG(uap, syscall) != SYS_execve)
-		return (EINVAL);
-	start = (vaddr_t)SCARG(uap, addr);
-	end = start + (vsize_t)SCARG(uap, len);
-	if (start >= end || start < map->min_offset || end > map->max_offset)
-		return (EFAULT);
-	vm_map_lock(map);
-	if (vm->vm_execve) {
-		vm_map_unlock(map);
-		return (EPERM);
-	}
-	vm->vm_execve = start;
-	vm->vm_execve_end = end;
-	vm_map_unlock(map);
-	return (0);
-}
-
- /*
- * sys_pinsyscalls
+ * sys_pinsyscalls.  The caller is required to normalize base,len
+ * to the minimum .text region, and adjust pintable offsets relative
+ * to that base.
  */
 int
 sys_pinsyscalls(struct proc *p, void *v, register_t *retval)
 {
-	/* STUB until other parts are ready */
+	struct sys_pinsyscalls_args /* {
+		syscallarg(void *) base;
+		syscallarg(size_t) len;
+		syscallarg(u_int *) pins;
+		syscallarg(int) npins;
+	} */ *uap = v;
+	struct process *pr = p->p_p;
+	struct vm_map *map = &p->p_vmspace->vm_map;
+	int npins, error = 0, i;
+	vaddr_t base;
+	size_t len;
+	u_int *pins;
+
+	if (pr->ps_libcpin.pn_start ||
+	    (pr->ps_vmspace->vm_map.flags & VM_MAP_PINSYSCALL_ONCE))
+		return (EPERM);
+	base = (vaddr_t)SCARG(uap, base);
+	len = (vsize_t)SCARG(uap, len);
+	if (base > SIZE_MAX - len)
+		return (EINVAL);	/* disallow wrap-around. */
+	if (base < map->min_offset || base+len > map->max_offset)
+		return (EINVAL);
+
+	/* XXX MP unlock */
+
+	npins = SCARG(uap, npins);
+	if (npins < 1 || npins > SYS_MAXSYSCALL)
+		return (E2BIG);
+	pins = malloc(npins * sizeof(u_int), M_PINSYSCALL, M_WAITOK|M_ZERO);
+	if (pins == NULL)
+		return (ENOMEM);
+	error = copyin(SCARG(uap, pins), pins, npins * sizeof(u_int));
+	if (error)
+		goto err;
+
+	/* Range-check pintable offsets */
+	for (i = 0; i < npins; i++) {
+		if (pins[i] == (u_int)-1 || pins[i] == 0)
+			continue;
+		if (pins[i] > SCARG(uap, len)) {
+			error = ERANGE;
+			break;
+		}
+	}
+	if (error) {
+err:
+		free(pins, M_PINSYSCALL, npins * sizeof(u_int));
+		return (error);
+	}
+	pr->ps_libcpin.pn_start = base;
+	pr->ps_libcpin.pn_end = base + len;
+	pr->ps_libcpin.pn_pins = pins;
+	pr->ps_libcpin.pn_npins = npins;
+	pr->ps_flags |= PS_LIBCPIN;
+
+#ifdef PMAP_CHECK_COPYIN
+	/* Assume (and insist) on libc.so text being execute-only */
+	if (PMAP_CHECK_COPYIN)
+		uvm_map_check_copyin_add(map, base, base+len);
+#endif
 	return (0);
 }
 
@@ -1241,7 +1244,6 @@ sys_kbind(struct proc *p, void *v, register_t *retval)
 	last_baseva = VM_MAXUSER_ADDRESS;
 	kva = 0;
 	TAILQ_INIT(&dead_entries);
-	KERNEL_LOCK();
 	for (i = 0; i < count; i++) {
 		baseva = (vaddr_t)paramp[i].kb_addr;
 		s = paramp[i].kb_size;
@@ -1292,7 +1294,6 @@ redo:
 		vm_map_unlock(kernel_map);
 	}
 	uvm_unmap_detach(&dead_entries, AMAP_REFALL);
-	KERNEL_UNLOCK();
 
 	return error;
 }

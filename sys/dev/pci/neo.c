@@ -1,4 +1,4 @@
-/*      $OpenBSD: neo.c,v 1.40 2022/10/26 20:19:08 kn Exp $       */
+/*      $OpenBSD: neo.c,v 1.42 2024/05/24 06:02:58 jsg Exp $       */
 
 /*
  * Copyright (c) 1999 Cameron Grant <gandalf@vilnya.demon.co.uk>
@@ -34,8 +34,6 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/device.h>
 
 #include <dev/pci/pcidevs.h>
@@ -199,7 +197,6 @@ int	neo_query_devinfo(void *, mixer_devinfo_t *);
 void   *neo_malloc(void *, int, size_t, int, int);
 void	neo_free(void *, void *, int);
 size_t	neo_round_buffersize(void *, int, size_t);
-void	neo_set_mixer(struct neo_softc *sc, int a, int d);
 
 struct cfdriver neo_cd = {
 	NULL, "neo", DV_DULL

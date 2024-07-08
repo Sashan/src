@@ -1,4 +1,4 @@
-/* $Id: npppd_radius.c,v 1.8 2015/07/23 09:04:06 yasuoka Exp $ */
+/* $Id: npppd_radius.c,v 1.11 2024/07/01 07:09:07 yasuoka Exp $ */
 /*-
  * Copyright (c) 2009 Internet Initiative Japan Inc.
  * All rights reserved.
@@ -38,6 +38,7 @@
 #include <sys/syslog.h>
 #include <netinet/in.h>
 #include <net/if_dl.h>
+#include <arpa/inet.h>
 #include <stdio.h>
 #include <netdb.h>
 #include <stdint.h>
@@ -62,6 +63,7 @@
 static int l2tp_put_tunnel_attributes(RADIUS_PACKET *, void *);
 static int pptp_put_tunnel_attributes(RADIUS_PACKET *, void *);
 static int radius_acct_request(npppd *, npppd_ppp *, int );
+static void radius_acct_on_cb(void *, RADIUS_PACKET *, int, RADIUS_REQUEST_CTX);
 static void npppd_ppp_radius_acct_reqcb(void *, RADIUS_PACKET *, int, RADIUS_REQUEST_CTX);
 
 /***********************************************************************
@@ -72,9 +74,11 @@ static void npppd_ppp_radius_acct_reqcb(void *, RADIUS_PACKET *, int, RADIUS_REQ
  * the given RADIUS packet and set them as the fields of ppp context.
  */ 
 void
-ppp_proccess_radius_framed_ip(npppd_ppp *_this, RADIUS_PACKET *pkt)
+ppp_process_radius_attrs(npppd_ppp *_this, RADIUS_PACKET *pkt)
 {
-	struct in_addr ip4;
+	struct in_addr	 ip4;
+	int		 got_pri, got_sec;
+	char		 buf0[40], buf1[40];
 	
 	if (radius_get_ipv4_attr(pkt, RADIUS_TYPE_FRAMED_IP_ADDRESS, &ip4)
 	    == 0)
@@ -86,6 +90,53 @@ ppp_proccess_radius_framed_ip(npppd_ppp *_this, RADIUS_PACKET *pkt)
 	    == 0)
 		_this->realm_framed_ip_netmask = ip4;
 #endif
+
+	if (!ppp_ipcp(_this)->dns_configured) {
+		got_pri = got_sec = 0;
+		if (radius_get_vs_ipv4_attr(pkt, RADIUS_VENDOR_MICROSOFT,
+		    RADIUS_VTYPE_MS_PRIMARY_DNS_SERVER, &ip4) == 0) {
+			got_pri = 1;
+			_this->ipcp.dns_pri = ip4;
+		}
+		if (radius_get_vs_ipv4_attr(pkt, RADIUS_VENDOR_MICROSOFT,
+		    RADIUS_VTYPE_MS_SECONDARY_DNS_SERVER, &ip4) == 0) {
+			got_sec = 1;
+			_this->ipcp.dns_sec = ip4;
+		}
+		if (got_pri || got_sec)
+			ppp_log(_this, LOG_INFO, "DNS server address%s "
+			    "(%s%s%s) %s configured by RADIUS server",
+			    ((got_pri + got_sec) > 1)? "es" : "",
+			    (got_pri)? inet_ntop(AF_INET, &_this->ipcp.dns_pri,
+			    buf0, sizeof(buf0)) : "",
+			    (got_pri != 0 && got_sec != 0)? "," : "",
+			    (got_sec)? inet_ntop(AF_INET, &_this->ipcp.dns_sec,
+			    buf1, sizeof(buf1)) : "",
+			    ((got_pri + got_sec) > 1)? "are" : "is");
+	}
+	if (!ppp_ipcp(_this)->nbns_configured) {
+		got_pri = got_sec = 0;
+		if (radius_get_vs_ipv4_attr(pkt, RADIUS_VENDOR_MICROSOFT,
+		    RADIUS_VTYPE_MS_PRIMARY_NBNS_SERVER, &ip4) == 0) {
+			got_pri = 1;
+			_this->ipcp.nbns_pri = ip4;
+		}
+		if (radius_get_vs_ipv4_attr(pkt, RADIUS_VENDOR_MICROSOFT,
+		    RADIUS_VTYPE_MS_SECONDARY_NBNS_SERVER, &ip4) == 0) {
+			got_sec = 1;
+			_this->ipcp.nbns_sec = ip4;
+		}
+		if (got_pri || got_sec)
+			ppp_log(_this, LOG_INFO, "NBNS server address%s "
+			    "(%s%s%s) %s configured by RADIUS server",
+			    ((got_pri + got_sec) > 1)? "es" : "",
+			    (got_pri)? inet_ntop(AF_INET, &_this->ipcp.nbns_pri,
+			    buf0, sizeof(buf0)) : "",
+			    (got_pri != 0 && got_sec != 0)? "," : "",
+			    (got_sec)? inet_ntop(AF_INET, &_this->ipcp.nbns_sec,
+			    buf1, sizeof(buf1)) : "",
+			    ((got_pri + got_sec) > 1)? "are" : "is");
+	}
 }
 
 /***********************************************************************
@@ -217,6 +268,9 @@ radius_acct_request(npppd *pppd, npppd_ppp *ppp, int stop)
 	ATTR_INT32(RADIUS_TYPE_NAS_PORT, ppp->id);
 	    /* npppd has no physical / virtual ports in design. */
 
+	/* RFC 2865  5.32. NAS-Identifier */
+	ATTR_STR(RADIUS_TYPE_NAS_IDENTIFIER, "npppd");
+
 	/* RFC 2865 5.31. Calling-Station-Id */
 	if (ppp->calling_number[0] != '\0')
 		ATTR_STR(RADIUS_TYPE_CALLING_STATION_ID, ppp->calling_number);
@@ -301,9 +355,6 @@ radius_acct_request(npppd *pppd, npppd_ppp *ppp, int stop)
 		    ppp->obytes >> 32);
 	}
 
-	radius_set_accounting_request_authenticator(radpkt,
-	    radius_get_server_secret(radctx));
-
 	/* Send the request */
 	radius_request(radctx, radpkt);
 
@@ -318,6 +369,54 @@ fail:
 		radius_delete_packet(radpkt);
 
 	return -1;
+}
+
+void
+radius_acct_on(npppd *pppd, radius_req_setting *rad_setting)
+{
+	RADIUS_REQUEST_CTX radctx = NULL;
+	RADIUS_PACKET *radpkt = NULL;
+
+	if (!radius_req_setting_has_server(rad_setting))
+		return;
+	if ((radpkt = radius_new_request_packet(RADIUS_CODE_ACCOUNTING_REQUEST))
+	    == NULL)
+		goto fail;
+
+	if (radius_prepare(rad_setting, NULL, &radctx, radius_acct_on_cb) != 0)
+		goto fail;
+
+	/*
+	 * RFC 2865 "5.4.  NAS-IP-Address" or RFC 3162 "2.1. NAS-IPv6-Address"
+	 */
+	if (radius_prepare_nas_address(rad_setting, radpkt) != 0)
+		goto fail;
+
+	/* RFC 2865 "5.41. NAS-Port-Type" */
+	ATTR_INT32(RADIUS_TYPE_NAS_PORT_TYPE, RADIUS_NAS_PORT_TYPE_VIRTUAL);
+
+	/* RFC 2866  5.1. Acct-Status-Type */
+	ATTR_INT32(RADIUS_TYPE_ACCT_STATUS_TYPE, RADIUS_ACCT_STATUS_TYPE_ACCT_ON);
+	/* RFC 2865  5.32. NAS-Identifier */
+	ATTR_STR(RADIUS_TYPE_NAS_IDENTIFIER, "npppd");
+
+	/* Send the request */
+	radius_request(radctx, radpkt);
+
+	return;
+ fail:
+	if (radctx != NULL)
+		radius_cancel_request(radctx);
+	if (radpkt != NULL)
+		radius_delete_packet(radpkt);
+}
+
+static void
+radius_acct_on_cb(void *context, RADIUS_PACKET *pkt, int flags,
+    RADIUS_REQUEST_CTX ctx)
+{
+	if ((flags & (RADIUS_REQUEST_TIMEOUT | RADIUS_REQUEST_ERROR)) != 0)
+		radius_request_failover(ctx);
 }
 
 #ifdef USE_NPPPD_PPTP
@@ -429,5 +528,37 @@ l2tp_put_tunnel_attributes(RADIUS_PACKET *radpkt, void *call0)
 	return 0;
 fail:
 #endif
+	return 1;
+}
+
+/**
+ * Set RADIUS attributes for RADIUS authentication request.
+ * Return 0 on success.
+ */
+int
+ppp_set_radius_attrs_for_authreq(npppd_ppp *_this,
+    radius_req_setting *rad_setting, RADIUS_PACKET *radpkt)
+{
+	/* RFC 2865 "5.4 NAS-IP-Address" or RFC3162 "2.1. NAS-IPv6-Address" */
+	if (radius_prepare_nas_address(rad_setting, radpkt) != 0)
+		goto fail;
+
+	/* RFC 2865 "5.6. Service-Type" */
+	if (radius_put_uint32_attr(radpkt, RADIUS_TYPE_SERVICE_TYPE,
+	    RADIUS_SERVICE_TYPE_FRAMED) != 0)
+		goto fail;
+
+	/* RFC 2865 "5.7. Framed-Protocol" */
+	if (radius_put_uint32_attr(radpkt, RADIUS_TYPE_FRAMED_PROTOCOL,
+	    RADIUS_FRAMED_PROTOCOL_PPP) != 0)
+		goto fail;
+
+	if (_this->calling_number[0] != '\0') {
+		if (radius_put_string_attr(radpkt,
+		    RADIUS_TYPE_CALLING_STATION_ID, _this->calling_number) != 0)
+			return 1;
+	}
+	return 0;
+fail:
 	return 1;
 }

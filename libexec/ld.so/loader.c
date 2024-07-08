@@ -1,4 +1,4 @@
-/*	$OpenBSD: loader.c,v 1.218 2023/12/19 16:13:22 deraadt Exp $ */
+/*	$OpenBSD: loader.c,v 1.223 2024/01/22 02:08:31 deraadt Exp $ */
 
 /*
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
@@ -70,6 +70,7 @@ int _dl_trust __relro = 0;
 char **_dl_libpath __relro = NULL;
 const char **_dl_argv __relro = NULL;
 int _dl_argc __relro = 0;
+const char *_dl_libcname;
 
 char *_dl_preload __boot_data = NULL;
 char *_dl_tracefmt1 __boot_data = NULL;
@@ -156,7 +157,7 @@ _dl_run_all_dtors(void)
 		}
 		for (node = _dl_objects;
 		    node != NULL;
-		    node = node->next ) {
+		    node = node->next) {
 			if ((node->dyn.fini || node->dyn.fini_array) &&
 			    (OBJECT_REF_CNT(node) == 0) &&
 			    (node->status & STAT_INIT_DONE) &&
@@ -173,7 +174,7 @@ _dl_run_all_dtors(void)
 
 		for (node = _dl_objects;
 		    node != NULL;
-		    node = node->next ) {
+		    node = node->next) {
 			if (node->status & STAT_FINI_READY) {
 				fini_complete = 0;
 				node->status |= STAT_FINI_DONE;
@@ -316,7 +317,7 @@ _dl_setup_env(const char *argv0, char **envp)
 int
 _dl_load_dep_libs(elf_object_t *object, int flags, int booting)
 {
-	elf_object_t *dynobj, *obj;
+	elf_object_t *dynobj;
 	Elf_Dyn *dynp;
 	unsigned int loop;
 	int libcount;
@@ -338,7 +339,7 @@ _dl_load_dep_libs(elf_object_t *object, int flags, int booting)
 			}
 		}
 
-		if ( libcount != 0) {
+		if (libcount != 0) {
 			struct listent {
 				Elf_Dyn *dynp;
 				elf_object_t *depobj;
@@ -357,6 +358,31 @@ _dl_load_dep_libs(elf_object_t *object, int flags, int booting)
 			    dynp++)
 				if (dynp->d_tag == DT_NEEDED)
 					liblist[loop++].dynp = dynp;
+
+			/*
+			 * We can't support multiple versions of libc
+			 * in a single process.  So remember the first
+			 * libc SONAME we encounter as a dependency
+			 * and use it in further loads of libc.  In
+			 * practice this means we will always use the
+			 * libc version that the binary was linked
+			 * against.  This isn't entirely correct, but
+			 * it will keep most binaries running when
+			 * transitioning over a libc major bump.
+			 */
+			if (_dl_libcname == NULL) {
+				for (loop = 0; loop < libcount; loop++) {
+					const char *libname;
+					libname = dynobj->dyn.strtab;
+					libname +=
+					    liblist[loop].dynp->d_un.d_val;
+					if (_dl_strncmp(libname,
+					    "libc.so.", 8) == 0) {
+						_dl_libcname = libname;
+						break;
+					}
+				}
+			}
 
 			/* Randomize these */
 			for (loop = 0; loop < libcount; loop++)
@@ -380,6 +406,10 @@ _dl_load_dep_libs(elf_object_t *object, int flags, int booting)
 				    liblist[randomlist[loop]].dynp->d_un.d_val;
 				DL_DEB(("loading: %s required by %s\n", libname,
 				    dynobj->load_name));
+				if (_dl_strncmp(libname, "libc.so.", 8) == 0) {
+					if (_dl_libcname)
+						libname = _dl_libcname;
+				}
 				depobj = _dl_load_shlib(libname, dynobj,
 				    OBJTYPE_LIB, depflags, nodelete);
 				if (depobj == 0) {
@@ -409,22 +439,6 @@ _dl_load_dep_libs(elf_object_t *object, int flags, int booting)
 	}
 
 	_dl_cache_grpsym_list_setup(object);
-
-	for (obj = _dl_objects; booting && obj != NULL; obj = obj->next) {
-		char *soname = (char *)obj->Dyn.info[DT_SONAME];
-		struct sym_res sr;
-
-		if (!soname || _dl_strncmp(soname, "libc.so.", 8))
-			continue;
-		sr = _dl_find_symbol("execve",
-		    SYM_SEARCH_SELF|SYM_PLT|SYM_WARNNOTFOUND, NULL, obj);
-		if (sr.sym)
-			_dl_pinsyscall(SYS_execve,
-			    (void *)sr.obj->obj_base + sr.sym->st_value,
-			    sr.sym->st_size);
-		_dl_memset(&sr, 0, sizeof sr);
-		break;
-	}
 	return(0);
 }
 

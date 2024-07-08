@@ -32,7 +32,7 @@ POSSIBILITY OF SUCH DAMAGE.
 ***************************************************************************/
 
 /* $FreeBSD: if_em.h,v 1.26 2004/09/01 23:22:41 pdeuskar Exp $ */
-/* $OpenBSD: if_em.h,v 1.81 2023/12/31 08:42:33 mglocker Exp $ */
+/* $OpenBSD: if_em.h,v 1.83 2024/02/16 22:30:54 mglocker Exp $ */
 
 #ifndef _EM_H_DEFINED_
 #define _EM_H_DEFINED_

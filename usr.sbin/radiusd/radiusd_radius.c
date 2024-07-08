@@ -1,4 +1,4 @@
-/*	$OpenBSD: radiusd_radius.c,v 1.19 2023/09/04 10:49:20 yasuoka Exp $	*/
+/*	$OpenBSD: radiusd_radius.c,v 1.21 2024/07/01 03:17:00 yasuoka Exp $	*/
 
 /*
  * Copyright (c) 2013 Internet Initiative Japan Inc.
@@ -125,7 +125,7 @@ main(int argc, char *argv[])
 	if ((module_radius.base = module_create(
 	    STDIN_FILENO, &module_radius, &module_radius_handlers)) == NULL)
 		err(1, "Could not create a module instance");
-	module_drop_privilege(module_radius.base);
+	module_drop_privilege(module_radius.base, 0);
 	setproctitle("[main]");
 
 	module_load(module_radius.base);
@@ -613,8 +613,7 @@ module_radius_req_reset_msgauth(struct module_radius_req *req)
 	if (radius_has_attr(req->q_pkt, RADIUS_TYPE_MESSAGE_AUTHENTICATOR))
 		radius_del_attr_all(req->q_pkt,
 		    RADIUS_TYPE_MESSAGE_AUTHENTICATOR);
-	radius_put_message_authenticator(req->q_pkt,
-	    req->module->secret);
+	radius_put_message_authenticator(req->q_pkt, req->module->secret);
 }
 
 static void

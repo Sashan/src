@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.73 2024/01/03 22:34:39 dv Exp $	*/
+/*	$OpenBSD: config.c,v 1.75 2024/02/05 21:58:09 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -284,7 +284,7 @@ config_setvm(struct privsep *ps, struct vmd_vm *vm, uint32_t peerid, uid_t uid)
 	if (!(vm->vm_state & VM_STATE_RECEIVED) && vm->vm_kernel == -1) {
 		if (vm->vm_kernel_path != NULL) {
 			/* Open external kernel for child */
-			kernfd = open(vm->vm_kernel_path, O_RDONLY);
+			kernfd = open(vm->vm_kernel_path, O_RDONLY | O_CLOEXEC);
 			if (kernfd == -1) {
 				ret = errno;
 				log_warn("%s: can't open kernel or BIOS "
@@ -301,7 +301,8 @@ config_setvm(struct privsep *ps, struct vmd_vm *vm, uint32_t peerid, uid_t uid)
 		 * license.
 		 */
 		if (kernfd == -1) {
-			if ((kernfd = open(VM_DEFAULT_BIOS, O_RDONLY)) == -1) {
+			if ((kernfd = open(VM_DEFAULT_BIOS,
+			    O_RDONLY | O_CLOEXEC)) == -1) {
 				log_warn("can't open %s", VM_DEFAULT_BIOS);
 				ret = VMD_BIOS_MISSING;
 				goto fail;
@@ -341,14 +342,17 @@ config_setvm(struct privsep *ps, struct vmd_vm *vm, uint32_t peerid, uid_t uid)
 		}
 	}
 
-	/* Open disk images for child */
+	/*
+	 * Open disk images for child. Don't set O_CLOEXEC as these must be
+	 * explicitly closed by the vm process during virtio subprocess launch.
+	 */
 	for (i = 0 ; i < vmc->vmc_ndisks; i++) {
 		if (strlcpy(path, vmc->vmc_disks[i], sizeof(path))
 		   >= sizeof(path))
 			log_warnx("disk path %s too long", vmc->vmc_disks[i]);
 		memset(vmc->vmc_diskbases, 0, sizeof(vmc->vmc_diskbases));
-		oflags = O_RDWR|O_EXLOCK|O_NONBLOCK;
-		aflags = R_OK|W_OK;
+		oflags = O_RDWR | O_EXLOCK | O_NONBLOCK;
+		aflags = R_OK | W_OK;
 		for (j = 0; j < VM_MAX_BASE_PER_DISK; j++) {
 			/* Stat disk[i] to ensure it is a regular file */
 			if ((diskfds[i][j] = open(path, oflags)) == -1) {
@@ -372,7 +376,7 @@ config_setvm(struct privsep *ps, struct vmd_vm *vm, uint32_t peerid, uid_t uid)
 			 * All writes should go to the top image, allowing them
 			 * to be shared.
 			 */
-			oflags = O_RDONLY|O_NONBLOCK;
+			oflags = O_RDONLY | O_NONBLOCK;
 			aflags = R_OK;
 			n = virtio_get_base(diskfds[i][j], base, sizeof(base),
 			    vmc->vmc_disktypes[i], path);
@@ -407,7 +411,9 @@ config_setvm(struct privsep *ps, struct vmd_vm *vm, uint32_t peerid, uid_t uid)
 
 		/*
 		 * Either open the requested tap(4) device or get
-		 * the next available one.
+		 * the next available one. Don't set O_CLOEXEC as these
+		 * should be closed by the vm process during virtio device
+		 * launch.
 		 */
 		if (s != NULL) {
 			snprintf(path, PATH_MAX, "/dev/%s", s);
@@ -454,7 +460,10 @@ config_setvm(struct privsep *ps, struct vmd_vm *vm, uint32_t peerid, uid_t uid)
 		    vmc->vmc_ifflags[i] & (VMIFF_UP|VMIFF_OPTMASK);
 	}
 
-	/* Open TTY */
+	/*
+	 * Open TTY. Duplicate the fd before sending so the privileged parent
+	 * process can perform permissions cleanup of the pty on vm termination.
+	 */
 	if (vm->vm_ttyname[0] == '\0') {
 		if (vm_opentty(vm) == -1) {
 			log_warn("%s: can't open tty %s", __func__,
@@ -552,10 +561,12 @@ config_getvm(struct privsep *ps, struct imsg *imsg)
 {
 	struct vmop_create_params	 vmc;
 	struct vmd_vm			*vm = NULL;
+	int				 fd;
 
 	IMSG_SIZE_CHECK(imsg, &vmc);
 	memcpy(&vmc, imsg->data, sizeof(vmc));
-	vmc.vmc_kernel = imsg->fd;
+	fd = imsg_get_fd(imsg);
+	vmc.vmc_kernel = fd;
 
 	errno = 0;
 	if (vm_register(ps, &vmc, &vm, imsg->hdr.peerid, 0) == -1)
@@ -563,14 +574,12 @@ config_getvm(struct privsep *ps, struct imsg *imsg)
 
 	vm->vm_state |= VM_STATE_RUNNING;
 	vm->vm_peerid = (uint32_t)-1;
-	vm->vm_kernel = imsg->fd;
+	vm->vm_kernel = fd;
 	return (0);
 
  fail:
-	if (imsg->fd != -1) {
-		close(imsg->fd);
-		imsg->fd = -1;
-	}
+	if (fd != -1)
+		close(fd);
 
 	vm_remove(vm, __func__);
 	if (errno == 0)
@@ -584,6 +593,7 @@ config_getdisk(struct privsep *ps, struct imsg *imsg)
 {
 	struct vmd_vm	*vm;
 	unsigned int	 n, idx;
+	int		 fd;
 
 	errno = 0;
 	if ((vm = vm_getbyvmid(imsg->hdr.peerid)) == NULL) {
@@ -593,8 +603,9 @@ config_getdisk(struct privsep *ps, struct imsg *imsg)
 
 	IMSG_SIZE_CHECK(imsg, &n);
 	memcpy(&n, imsg->data, sizeof(n));
+	fd = imsg_get_fd(imsg);
 
-	if (n >= vm->vm_params.vmc_ndisks || imsg->fd == -1) {
+	if (n >= vm->vm_params.vmc_ndisks || fd == -1) {
 		log_warnx("invalid disk id");
 		errno = EINVAL;
 		return (-1);
@@ -605,7 +616,7 @@ config_getdisk(struct privsep *ps, struct imsg *imsg)
 		errno = EINVAL;
 		return (-1);
 	}
-	vm->vm_disks[n][idx] = imsg->fd;
+	vm->vm_disks[n][idx] = fd;
 	return (0);
 }
 
@@ -614,6 +625,7 @@ config_getif(struct privsep *ps, struct imsg *imsg)
 {
 	struct vmd_vm	*vm;
 	unsigned int	 n;
+	int		 fd;
 
 	errno = 0;
 	if ((vm = vm_getbyvmid(imsg->hdr.peerid)) == NULL) {
@@ -623,16 +635,18 @@ config_getif(struct privsep *ps, struct imsg *imsg)
 
 	IMSG_SIZE_CHECK(imsg, &n);
 	memcpy(&n, imsg->data, sizeof(n));
+	fd = imsg_get_fd(imsg);
+
 	if (n >= vm->vm_params.vmc_nnics ||
-	    vm->vm_ifs[n].vif_fd != -1 || imsg->fd == -1) {
+	    vm->vm_ifs[n].vif_fd != -1 || fd == -1) {
 		log_warnx("invalid interface id");
 		goto fail;
 	}
-	vm->vm_ifs[n].vif_fd = imsg->fd;
+	vm->vm_ifs[n].vif_fd = fd;
 	return (0);
  fail:
-	if (imsg->fd != -1)
-		close(imsg->fd);
+	if (fd != -1)
+		close(fd);
 	errno = EINVAL;
 	return (-1);
 }
@@ -641,6 +655,7 @@ int
 config_getcdrom(struct privsep *ps, struct imsg *imsg)
 {
 	struct vmd_vm	*vm;
+	int		 fd;
 
 	errno = 0;
 	if ((vm = vm_getbyvmid(imsg->hdr.peerid)) == NULL) {
@@ -648,16 +663,15 @@ config_getcdrom(struct privsep *ps, struct imsg *imsg)
 		return (-1);
 	}
 
-	if (imsg->fd == -1) {
+	fd = imsg_get_fd(imsg);
+	if (fd == -1) {
 		log_warnx("invalid cdrom id");
 		goto fail;
 	}
 
-	vm->vm_cdrom = imsg->fd;
+	vm->vm_cdrom = fd;
 	return (0);
  fail:
-	if (imsg->fd != -1)
-		close(imsg->fd);
 	errno = EINVAL;
 	return (-1);
 }

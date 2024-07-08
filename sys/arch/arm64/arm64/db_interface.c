@@ -1,4 +1,4 @@
-/*	$OpenBSD: db_interface.c,v 1.14 2022/11/07 09:43:04 mpi Exp $	*/
+/*	$OpenBSD: db_interface.c,v 1.16 2024/05/22 05:51:49 jsg Exp $	*/
 /*	$NetBSD: db_interface.c,v 1.34 2003/10/26 23:11:15 chris Exp $	*/
 
 /*
@@ -55,12 +55,6 @@
 #include <ddb/db_output.h>
 #include <ddb/db_run.h>
 #include <ddb/db_variables.h>
-
-
-int db_access_und_sp (struct db_variable *, db_expr_t *, int);
-int db_access_abt_sp (struct db_variable *, db_expr_t *, int);
-int db_access_irq_sp (struct db_variable *, db_expr_t *, int);
-u_int db_fetch_reg (int, db_regs_t *);
 
 int db_trapper (vaddr_t, u_int, trapframe_t *, int);
 
@@ -197,9 +191,9 @@ db_validate_address(vaddr_t addr)
  * Read bytes from kernel address space for debugger.
  */
 void
-db_read_bytes(vaddr_t addr, size_t size, char *data)
+db_read_bytes(vaddr_t addr, size_t size, void *datap)
 {
-	char	*src = (char *)addr;
+	char *data = datap, *src = (char *)addr;
 
 	if (db_validate_address((vaddr_t)src)) {
 		db_printf("address %p is invalid\n", src);
@@ -277,10 +271,10 @@ db_write_text(vaddr_t addr, size_t size, char *data)
  * Write bytes to kernel address space for debugger.
  */
 void
-db_write_bytes(vaddr_t addr, size_t size, char *data)
+db_write_bytes(vaddr_t addr, size_t size, void *datap)
 {
 	extern char etext[];
-	char *dst;
+	char *data = datap, *dst;
 	size_t loop;
 
 	/* If any part is in kernel text, use db_write_text() */

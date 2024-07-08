@@ -31,13 +31,11 @@ POSSIBILITY OF SUCH DAMAGE.
 
 ***************************************************************************/
 
-/* $OpenBSD: if_em.c,v 1.370 2023/12/31 08:42:33 mglocker Exp $ */
+/* $OpenBSD: if_em.c,v 1.377 2024/05/24 06:02:53 jsg Exp $ */
 /* $FreeBSD: if_em.c,v 1.46 2004/09/29 18:28:28 mlaier Exp $ */
 
 #include <dev/pci/if_em.h>
 #include <dev/pci/if_em_soc.h>
-
-#include <netinet/ip6.h>
 
 /*********************************************************************
  *  Driver version
@@ -277,7 +275,6 @@ void em_enable_intr(struct em_softc *);
 void em_disable_intr(struct em_softc *);
 void em_free_transmit_structures(struct em_softc *);
 void em_free_receive_structures(struct em_softc *);
-void em_update_stats_counters(struct em_softc *);
 void em_disable_aspm(struct em_softc *);
 void em_txeof(struct em_queue *);
 int  em_allocate_receive_structures(struct em_softc *);
@@ -2438,8 +2435,6 @@ em_tso_setup(struct em_queue *que, struct mbuf *mp, u_int head,
 	struct ether_extracted ext;
 	struct e1000_adv_tx_context_desc *TD;
 	uint32_t vlan_macip_lens = 0, type_tucmd_mlhl = 0, mss_l4len_idx = 0;
-	uint32_t paylen = 0;
-	uint8_t iphlen = 0;
 
 	*olinfo_status = 0;
 	*cmd_type_len = 0;
@@ -2454,20 +2449,16 @@ em_tso_setup(struct em_queue *que, struct mbuf *mp, u_int head,
 #endif
 
 	ether_extract_headers(mp, &ext);
-	if (ext.tcp == NULL)
+	if (ext.tcp == NULL || mp->m_pkthdr.ph_mss == 0)
 		goto out;
 
 	vlan_macip_lens |= (sizeof(*ext.eh) << E1000_ADVTXD_MACLEN_SHIFT);
 
 	if (ext.ip4) {
-		iphlen = ext.ip4->ip_hl << 2;
-
 		type_tucmd_mlhl |= E1000_ADVTXD_TUCMD_IPV4;
 		*olinfo_status |= E1000_TXD_POPTS_IXSM << 8;
 #ifdef INET6
 	} else if (ext.ip6) {
-		iphlen = sizeof(*ext.ip6);
-
 		type_tucmd_mlhl |= E1000_ADVTXD_TUCMD_IPV6;
 #endif
 	} else {
@@ -2476,17 +2467,15 @@ em_tso_setup(struct em_queue *que, struct mbuf *mp, u_int head,
 
 	*cmd_type_len |= E1000_ADVTXD_DTYP_DATA | E1000_ADVTXD_DCMD_IFCS;
 	*cmd_type_len |= E1000_ADVTXD_DCMD_DEXT | E1000_ADVTXD_DCMD_TSE;
-	paylen = mp->m_pkthdr.len - sizeof(*ext.eh) - iphlen -
-	    (ext.tcp->th_off << 2);
-	*olinfo_status |= paylen << E1000_ADVTXD_PAYLEN_SHIFT;
-	vlan_macip_lens |= iphlen;
+	*olinfo_status |= ext.paylen << E1000_ADVTXD_PAYLEN_SHIFT;
+	vlan_macip_lens |= ext.iphlen;
 	type_tucmd_mlhl |= E1000_ADVTXD_DCMD_DEXT | E1000_ADVTXD_DTYP_CTXT;
 
 	type_tucmd_mlhl |= E1000_ADVTXD_TUCMD_L4T_TCP;
 	*olinfo_status |= E1000_TXD_POPTS_TXSM << 8;
 
 	mss_l4len_idx |= mp->m_pkthdr.ph_mss << E1000_ADVTXD_MSS_SHIFT;
-	mss_l4len_idx |= (ext.tcp->th_off << 2) << E1000_ADVTXD_L4LEN_SHIFT;
+	mss_l4len_idx |= ext.tcphlen << E1000_ADVTXD_L4LEN_SHIFT;
 	/* 82575 needs the queue index added */
 	if (que->sc->hw.mac_type == em_82575)
 		mss_l4len_idx |= (que->me & 0xff) << 4;
@@ -2496,7 +2485,7 @@ em_tso_setup(struct em_queue *que, struct mbuf *mp, u_int head,
 	htolem32(&TD->u.seqnum_seed, 0);
 	htolem32(&TD->mss_l4len_idx, mss_l4len_idx);
 
-	tcpstat_add(tcps_outpkttso, (paylen + mp->m_pkthdr.ph_mss - 1) /
+	tcpstat_add(tcps_outpkttso, (ext.paylen + mp->m_pkthdr.ph_mss - 1) /
 	    mp->m_pkthdr.ph_mss);
 
 	return 1;
@@ -2514,7 +2503,6 @@ em_tx_ctx_setup(struct em_queue *que, struct mbuf *mp, u_int head,
 	struct e1000_adv_tx_context_desc *TD;
 	uint32_t vlan_macip_lens = 0, type_tucmd_mlhl = 0, mss_l4len_idx = 0;
 	int off = 0;
-	uint8_t iphlen;
 
 	*olinfo_status = 0;
 	*cmd_type_len = 0;
@@ -2534,8 +2522,6 @@ em_tx_ctx_setup(struct em_queue *que, struct mbuf *mp, u_int head,
 	vlan_macip_lens |= (sizeof(*ext.eh) << E1000_ADVTXD_MACLEN_SHIFT);
 
 	if (ext.ip4) {
-		iphlen = ext.ip4->ip_hl << 2;
-
 		type_tucmd_mlhl |= E1000_ADVTXD_TUCMD_IPV4;
 		if (ISSET(mp->m_pkthdr.csum_flags, M_IPV4_CSUM_OUT)) {
 			*olinfo_status |= E1000_TXD_POPTS_IXSM << 8;
@@ -2543,18 +2529,14 @@ em_tx_ctx_setup(struct em_queue *que, struct mbuf *mp, u_int head,
 		}
 #ifdef INET6
 	} else if (ext.ip6) {
-		iphlen = sizeof(*ext.ip6);
-
 		type_tucmd_mlhl |= E1000_ADVTXD_TUCMD_IPV6;
 #endif
-	} else {
-		iphlen = 0;
 	}
 
 	*cmd_type_len |= E1000_ADVTXD_DTYP_DATA | E1000_ADVTXD_DCMD_IFCS;
 	*cmd_type_len |= E1000_ADVTXD_DCMD_DEXT;
 	*olinfo_status |= mp->m_pkthdr.len << E1000_ADVTXD_PAYLEN_SHIFT;
-	vlan_macip_lens |= iphlen;
+	vlan_macip_lens |= ext.iphlen;
 	type_tucmd_mlhl |= E1000_ADVTXD_DCMD_DEXT | E1000_ADVTXD_DTYP_CTXT;
 
 	if (ext.tcp) {

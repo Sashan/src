@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmmvar.h,v 1.97 2024/01/10 04:13:59 dv Exp $	*/
+/*	$OpenBSD: vmmvar.h,v 1.101 2024/04/29 14:47:05 dv Exp $	*/
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -28,7 +28,7 @@
 #define VMM_MAX_NAME_LEN	64
 #define VMM_MAX_VCPUS		512
 #define VMM_MAX_VCPUS_PER_VM	64
-#define VMM_MAX_VM_MEM_SIZE	32L * 1024 * 1024 * 1024	/* 32 GiB */
+#define VMM_MAX_VM_MEM_SIZE	128L * 1024 * 1024 * 1024
 #define VMM_MAX_NICS_PER_VM	4
 
 #define VMM_PCI_MMIO_BAR_BASE	0xF0000000ULL
@@ -340,6 +340,7 @@ struct vm_exit_inout {
 	uint32_t		vei_data;	/* data */
 	uint8_t			vei_insn_len;	/* Count of instruction bytes */
 };
+
 /*
  *  vm_exit_eptviolation	: describes an EPT VIOLATION exit
  */
@@ -350,6 +351,19 @@ struct vm_exit_eptviolation {
 #define VEE_BYTES_VALID		0x2		/* vee_insn_bytes is valid */
 	uint8_t		vee_insn_len;		/* [VMX] instruction length */
 	uint8_t		vee_insn_bytes[15];	/* [SVM] bytes at {R,E,}IP */
+};
+
+/*
+ * struct vcpu_inject_event	: describes an exception or interrupt to inject.
+ */
+struct vcpu_inject_event {
+	uint8_t		vie_vector;	/* Exception or interrupt vector. */
+	uint32_t	vie_errorcode;	/* Optional error code. */
+	uint8_t		vie_type;
+#define VCPU_INJECT_NONE	0
+#define VCPU_INJECT_INTR	1	/* External hardware interrupt. */
+#define VCPU_INJECT_EX		2	/* HW or SW Exception */
+#define VCPU_INJECT_NMI		3	/* Non-maskable Interrupt */
 };
 
 /*
@@ -435,6 +449,15 @@ struct vcpu_reg_state {
 	struct vcpu_segment_info	vrs_idtr;
 };
 
+#define VCPU_HOST_REGS_EFER   		0
+#define VCPU_HOST_REGS_STAR   		1
+#define VCPU_HOST_REGS_LSTAR  		2
+#define VCPU_HOST_REGS_CSTAR  		3
+#define VCPU_HOST_REGS_SFMASK 		4
+#define VCPU_HOST_REGS_KGSBASE		5
+#define VCPU_HOST_REGS_MISC_ENABLE	6
+#define VCPU_HOST_REGS_NMSRS		(VCPU_HOST_REGS_MISC_ENABLE + 1)
+
 /*
  * struct vm_exit
  *
@@ -455,8 +478,7 @@ struct vm_run_params {
 	/* Input parameters to VMM_IOC_RUN */
 	uint32_t	vrp_vm_id;
 	uint32_t	vrp_vcpu_id;
-	uint8_t		vrp_continue;		/* Continuing from an exit */
-	uint16_t	vrp_irq;		/* IRQ to inject */
+	struct vcpu_inject_event	vrp_inject;
 	uint8_t		vrp_intr_pending;	/* Additional intrs pending? */
 
 	/* Input/output parameter to VMM_IOC_RUN */
@@ -616,8 +638,6 @@ struct vm_mprotect_ept_params {
 #define VMX_FAIL_LAUNCH_UNKNOWN 	1
 #define VMX_FAIL_LAUNCH_INVALID_VMCS	2
 #define VMX_FAIL_LAUNCH_VALID_VMCS	3
-
-#define VMX_NUM_MSR_STORE		7
 
 /* MSR bitmap manipulation macros */
 #define VMX_MSRIDX(m)			((m) / 8)
@@ -866,8 +886,7 @@ struct vcpu {
 	uint64_t vc_h_xcr0;			/* [v] */
 
 	struct vcpu_gueststate vc_gueststate;	/* [v] */
-
-	uint8_t vc_event;
+	struct vcpu_inject_event vc_inject;	/* [v] */
 
 	uint32_t vc_pvclock_version;		/* [v] */
 	paddr_t vc_pvclock_system_gpa;		/* [v] */
@@ -894,8 +913,10 @@ struct vcpu {
 	paddr_t vc_vmx_msr_exit_save_pa;
 	vaddr_t vc_vmx_msr_exit_load_va;
 	paddr_t vc_vmx_msr_exit_load_pa;
+#if 0	/* XXX currently use msr_exit_save for msr_entry_load too */
 	vaddr_t vc_vmx_msr_entry_load_va;
 	paddr_t vc_vmx_msr_entry_load_pa;
+#endif
 	uint8_t vc_vmx_vpid_enabled;
 	uint64_t vc_vmx_cr0_fixed1;
 	uint64_t vc_vmx_cr0_fixed0;

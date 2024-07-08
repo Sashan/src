@@ -1,4 +1,4 @@
-/* $OpenBSD: tty-keys.c,v 1.172 2023/09/08 07:05:06 nicm Exp $ */
+/* $OpenBSD: tty-keys.c,v 1.174 2024/06/24 08:30:50 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -59,7 +59,6 @@ static int	tty_keys_device_attributes2(struct tty *, const char *, size_t,
 		    size_t *);
 static int	tty_keys_extended_device_attributes(struct tty *, const char *,
 		    size_t, size_t *);
-static int	tty_keys_colours(struct tty *, const char *, size_t, size_t *);
 
 /* A key tree entry. */
 struct tty_key {
@@ -721,7 +720,7 @@ tty_keys_next(struct tty *tty)
 	}
 
 	/* Is this a colours response? */
-	switch (tty_keys_colours(tty, buf, len, &size)) {
+	switch (tty_keys_colours(tty, buf, len, &size, &tty->fg, &tty->bg)) {
 	case 0:		/* yes */
 		key = KEYC_UNKNOWN;
 		goto complete_key;
@@ -1314,26 +1313,21 @@ tty_keys_device_attributes(struct tty *tty, const char *buf, size_t len,
 			break;
 	}
 
-	/*
-	 * Add terminal features. Hardware level 5 does not offer SIXEL but
-	 * some terminal emulators report it anyway and it does not harm
-	 * to check it here.
-	 *
-	 * DECSLRM and DECFRA should be supported by level 5 as well as level
-	 * 4, but VTE has rather ruined it by advertising level 5 despite not
-	 * supporting them.
-	 */
+	/* Add terminal features. */
 	switch (p[0]) {
-	case 64: /* level 4 */
-		tty_add_features(features, "margins,rectfill", ",");
-		/* FALLTHROUGH */
+	case 61: /* level 1 */
 	case 62: /* level 2 */
 	case 63: /* level 3 */
+	case 64: /* level 4 */
 	case 65: /* level 5 */
 		for (i = 1; i < n; i++) {
 			log_debug("%s: DA feature: %d", c->name, p[i]);
 			if (p[i] == 4)
 				tty_add_features(features, "sixel", ",");
+			if (p[i] == 21)
+				tty_add_features(features, "margins", ",");
+			if (p[i] == 28)
+				tty_add_features(features, "rectfill", ",");
 		}
 		break;
 	}
@@ -1405,11 +1399,6 @@ tty_keys_device_attributes2(struct tty *tty, const char *buf, size_t len,
 	 * we can't use level 5 from DA because of VTE.
 	 */
 	switch (p[0]) {
-	case 41: /* VT420 */
-	case 61: /* VT510 */
-	case 64: /* VT520 */
-		tty_add_features(features, "margins,rectfill", ",");
-		break;
 	case 'M': /* mintty */
 		tty_default_features(features, "mintty", 0);
 		break;
@@ -1500,8 +1489,9 @@ tty_keys_extended_device_attributes(struct tty *tty, const char *buf,
  * Handle foreground or background input. Returns 0 for success, -1 for
  * failure, 1 for partial.
  */
-static int
-tty_keys_colours(struct tty *tty, const char *buf, size_t len, size_t *size)
+int
+tty_keys_colours(struct tty *tty, const char *buf, size_t len, size_t *size,
+    int *fg, int *bg)
 {
 	struct client	*c = tty->client;
 	u_int		 i;
@@ -1552,11 +1542,17 @@ tty_keys_colours(struct tty *tty, const char *buf, size_t len, size_t *size)
 
 	n = colour_parseX11(tmp);
 	if (n != -1 && buf[3] == '0') {
-		log_debug("%s: foreground is %s", c->name, colour_tostring(n));
-		tty->fg = n;
+		if (c != NULL)
+			log_debug("%s fg is %s", c->name, colour_tostring(n));
+		else
+			log_debug("fg is %s", colour_tostring(n));
+		*fg = n;
 	} else if (n != -1) {
-		log_debug("%s: background is %s", c->name, colour_tostring(n));
-		tty->bg = n;
+		if (c != NULL)
+			log_debug("%s bg is %s", c->name, colour_tostring(n));
+		else
+			log_debug("bg is %s", colour_tostring(n));
+		*bg = n;
 	}
 
 	return (0);

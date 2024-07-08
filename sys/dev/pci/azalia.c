@@ -1,4 +1,4 @@
-/*	$OpenBSD: azalia.c,v 1.285 2023/11/23 14:24:06 jsg Exp $	*/
+/*	$OpenBSD: azalia.c,v 1.287 2024/05/17 19:43:45 kettenis Exp $	*/
 /*	$NetBSD: azalia.c,v 1.20 2006/05/07 08:31:44 kent Exp $	*/
 
 /*-
@@ -176,6 +176,7 @@ typedef struct azalia_t {
 	int nistreams, nostreams, nbstreams;
 	stream_t pstream;
 	stream_t rstream;
+	uint32_t intctl;
 } azalia_t;
 #define XNAME(sc)		((sc)->dev.dv_xname)
 #define AZ_READ_1(z, r)		bus_space_read_1((z)->iot, (z)->ioh, HDA_##r)
@@ -476,6 +477,7 @@ azalia_configure_pci(azalia_t *az)
 	case PCI_PRODUCT_INTEL_JSL_HDA:
 	case PCI_PRODUCT_INTEL_EHL_HDA:
 	case PCI_PRODUCT_INTEL_ADL_N_HDA:
+	case PCI_PRODUCT_INTEL_MTL_HDA:
 		reg = azalia_pci_read(az->pc, az->tag,
 		    INTEL_PCIE_NOSNOOP_REG);
 		reg &= INTEL_PCIE_NOSNOOP_MASK;
@@ -500,6 +502,7 @@ const struct pci_matchid azalia_pci_devices[] = {
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_JSL_HDA },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_EHL_HDA },
 	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_ADL_N_HDA },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_MTL_HDA },
 };
 
 int
@@ -552,16 +555,6 @@ azalia_pci_attach(struct device *parent, struct device *self, void *aux)
 		reg = azalia_pci_read(sc->pc, sc->tag, ICH_PCI_MMC);
 		reg &= ~(ICH_PCI_MMC_ME);
 		azalia_pci_write(sc->pc, sc->tag, ICH_PCI_MMC, reg);
-	}
-
-	/* disable MSI for AMD Summit Ridge/Raven Ridge HD Audio */
-	if (PCI_VENDOR(sc->pciid) == PCI_VENDOR_AMD) {
-		switch (PCI_PRODUCT(sc->pciid)) {
-		case PCI_PRODUCT_AMD_17_HDA:
-		case PCI_PRODUCT_AMD_17_1X_HDA:
-		case PCI_PRODUCT_AMD_HUDSON2_HDA:
-			pa->pa_flags &= ~PCI_FLAGS_MSI_ENABLED;
-		}
 	}
 
 	/* interrupt */
@@ -682,7 +675,6 @@ azalia_pci_detach(struct device *self, int flags)
 		AZ_WRITE_4(az, INTCTL, 0);
 
 		DPRINTF(("%s: clear interrupts\n", __func__));
-		AZ_WRITE_4(az, INTSTS, HDA_INTSTS_CIS | HDA_INTSTS_GIS);
 		AZ_WRITE_2(az, STATESTS, HDA_STATESTS_SDIWAKE);
 		AZ_WRITE_1(az, RIRBSTS, HDA_RIRBSTS_RINTFL | HDA_RIRBSTS_RIRBOIS);
 	}
@@ -709,29 +701,27 @@ azalia_intr(void *v)
 	int ret = 0;
 
 	mtx_enter(&audio_lock);
-	intsts = AZ_READ_4(az, INTSTS);
-	if (intsts == 0 || intsts == 0xffffffff) {
-		mtx_leave(&audio_lock);
-		return (ret);
-	}
+	for (;;) {
+		intsts = AZ_READ_4(az, INTSTS);
+		if ((intsts & az->intctl) == 0 || intsts == 0xffffffff)
+			break;
 
-	AZ_WRITE_4(az, INTSTS, intsts);
+		if (intsts & az->pstream.intr_bit) {
+			azalia_stream_intr(&az->pstream);
+			ret = 1;
+		}
 
-	if (intsts & az->pstream.intr_bit) {
-		azalia_stream_intr(&az->pstream);
-		ret = 1;
-	}
+		if (intsts & az->rstream.intr_bit) {
+			azalia_stream_intr(&az->rstream);
+			ret = 1;
+		}
 
-	if (intsts & az->rstream.intr_bit) {
-		azalia_stream_intr(&az->rstream);
-		ret = 1;
-	}
-
-	if ((intsts & HDA_INTSTS_CIS) &&
-	    (AZ_READ_1(az, RIRBCTL) & HDA_RIRBCTL_RINTCTL) &&
-	    (AZ_READ_1(az, RIRBSTS) & HDA_RIRBSTS_RINTFL)) {
-		azalia_rirb_intr(az);
-		ret = 1;
+		if ((intsts & HDA_INTSTS_CIS) &&
+		    (AZ_READ_1(az, RIRBCTL) & HDA_RIRBCTL_RINTCTL) &&
+		    (AZ_READ_1(az, RIRBSTS) & HDA_RIRBSTS_RINTFL)) {
+			azalia_rirb_intr(az);
+			ret = 1;
+		}
 	}
 	mtx_leave(&audio_lock);
 	return (ret);
@@ -916,7 +906,6 @@ azalia_init(azalia_t *az, int resuming)
 	/* clear interrupt status */
 	AZ_WRITE_2(az, STATESTS, HDA_STATESTS_SDIWAKE);
 	AZ_WRITE_1(az, RIRBSTS, HDA_RIRBSTS_RINTFL | HDA_RIRBSTS_RIRBOIS);
-	AZ_WRITE_4(az, INTSTS, HDA_INTSTS_CIS | HDA_INTSTS_GIS);
 	AZ_WRITE_4(az, DPLBASE, 0);
 	AZ_WRITE_4(az, DPUBASE, 0);
 
@@ -930,8 +919,8 @@ azalia_init(azalia_t *az, int resuming)
 	if (err)
 		return(err);
 
-	AZ_WRITE_4(az, INTCTL,
-	    AZ_READ_4(az, INTCTL) | HDA_INTCTL_CIE | HDA_INTCTL_GIE);
+	az->intctl = HDA_INTCTL_CIE | HDA_INTCTL_GIE;
+	AZ_WRITE_4(az, INTCTL, az->intctl);
 
 	return(0);
 }
@@ -1419,7 +1408,6 @@ azalia_suspend(azalia_t *az)
 
 	/* stop interrupts and clear status registers */
 	AZ_WRITE_4(az, INTCTL, 0);
-	AZ_WRITE_4(az, INTSTS, HDA_INTSTS_CIS | HDA_INTSTS_GIS);
 	AZ_WRITE_2(az, STATESTS, HDA_STATESTS_SDIWAKE);
 	AZ_WRITE_1(az, RIRBSTS, HDA_RIRBSTS_RINTFL | HDA_RIRBSTS_RIRBOIS);
 
@@ -3721,7 +3709,6 @@ azalia_stream_start(stream_t *this)
 	bdlist_entry_t *bdlist;
 	bus_addr_t dmaaddr, dmaend;
 	int err, index;
-	uint32_t intctl;
 	uint8_t ctl2;
 
 	err = azalia_stream_reset(this);
@@ -3766,9 +3753,8 @@ azalia_stream_start(stream_t *this)
 	if (err)
 		return EINVAL;
 
-	intctl = AZ_READ_4(this->az, INTCTL);
-	intctl |= this->intr_bit;
-	AZ_WRITE_4(this->az, INTCTL, intctl);
+	this->az->intctl |= this->intr_bit;
+	AZ_WRITE_4(this->az, INTCTL, this->az->intctl);
 
 	STR_WRITE_1(this, CTL, STR_READ_1(this, CTL) |
 	    HDA_SD_CTL_DEIE | HDA_SD_CTL_FEIE | HDA_SD_CTL_IOCE |
@@ -3784,8 +3770,8 @@ azalia_stream_halt(stream_t *this)
 	ctl = STR_READ_2(this, CTL);
 	ctl &= ~(HDA_SD_CTL_DEIE | HDA_SD_CTL_FEIE | HDA_SD_CTL_IOCE | HDA_SD_CTL_RUN);
 	STR_WRITE_2(this, CTL, ctl);
-	AZ_WRITE_4(this->az, INTCTL,
-	    AZ_READ_4(this->az, INTCTL) & ~this->intr_bit);
+	this->az->intctl &= ~this->intr_bit;
+	AZ_WRITE_4(this->az, INTCTL, this->az->intctl);
 	azalia_codec_disconnect_stream(this);
 
 	return (0);

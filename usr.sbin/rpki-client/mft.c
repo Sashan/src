@@ -1,4 +1,4 @@
-/*	$OpenBSD: mft.c,v 1.100 2023/12/11 15:50:23 job Exp $ */
+/*	$OpenBSD: mft.c,v 1.117 2024/06/11 10:38:40 tb Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -34,20 +34,14 @@
 
 #include "extern.h"
 
-/*
- * Parse results and data of the manifest file.
- */
-struct	parse {
-	const char	*fn; /* manifest file name */
-	struct mft	*res; /* result object */
-	int		 found_crl;
-};
-
 extern ASN1_OBJECT	*mft_oid;
 
 /*
  * Types and templates for the Manifest eContent, RFC 6486, section 4.2.
  */
+
+ASN1_ITEM_EXP FileAndHash_it;
+ASN1_ITEM_EXP Manifest_it;
 
 typedef struct {
 	ASN1_IA5STRING	*file;
@@ -57,8 +51,13 @@ typedef struct {
 DECLARE_STACK_OF(FileAndHash);
 
 #ifndef DEFINE_STACK_OF
+#define sk_FileAndHash_dup(sk)		SKM_sk_dup(FileAndHash, (sk))
+#define sk_FileAndHash_free(sk)		SKM_sk_free(FileAndHash, (sk))
 #define sk_FileAndHash_num(sk)		SKM_sk_num(FileAndHash, (sk))
 #define sk_FileAndHash_value(sk, i)	SKM_sk_value(FileAndHash, (sk), (i))
+#define sk_FileAndHash_sort(sk)		SKM_sk_sort(FileAndHash, (sk))
+#define sk_FileAndHash_set_cmp_func(sk, cmp) \
+    SKM_sk_set_cmp_func(FileAndHash, (sk), (cmp))
 #endif
 
 typedef struct {
@@ -88,58 +87,6 @@ DECLARE_ASN1_FUNCTIONS(Manifest);
 IMPLEMENT_ASN1_FUNCTIONS(Manifest);
 
 #define GENTIME_LENGTH 15
-
-/*
- * Convert an ASN1_GENERALIZEDTIME to a struct tm.
- * Returns 1 on success, 0 on failure.
- */
-static int
-generalizedtime_to_tm(const ASN1_GENERALIZEDTIME *gtime, struct tm *tm)
-{
-	/*
-	 * ASN1_GENERALIZEDTIME is another name for ASN1_STRING. Check type and
-	 * length, so we don't accidentally accept a UTCTime. Punt on checking
-	 * Zulu time for OpenSSL: we don't want to mess about with silly flags.
-	 */
-	if (ASN1_STRING_type(gtime) != V_ASN1_GENERALIZEDTIME)
-		return 0;
-	if (ASN1_STRING_length(gtime) != GENTIME_LENGTH)
-		return 0;
-
-	memset(tm, 0, sizeof(*tm));
-	return ASN1_TIME_to_tm(gtime, tm);
-}
-
-/*
- * Validate and verify the time validity of the mft.
- * Returns 1 if all is good and for any other case 0.
- */
-static int
-mft_parse_time(const ASN1_GENERALIZEDTIME *from,
-    const ASN1_GENERALIZEDTIME *until, struct parse *p)
-{
-	struct tm tm_from, tm_until;
-
-	if (!generalizedtime_to_tm(from, &tm_from)) {
-		warnx("%s: embedded from time format invalid", p->fn);
-		return 0;
-	}
-	if (!generalizedtime_to_tm(until, &tm_until)) {
-		warnx("%s: embedded until time format invalid", p->fn);
-		return 0;
-	}
-
-	if ((p->res->thisupdate = timegm(&tm_from)) == -1 ||
-	    (p->res->nextupdate = timegm(&tm_until)) == -1)
-		errx(1, "%s: timegm failed", p->fn);
-
-	if (p->res->thisupdate > p->res->nextupdate) {
-		warnx("%s: bad update interval", p->fn);
-		return 0;
-	}
-
-	return 1;
-}
 
 /*
  * Determine rtype corresponding to file extension. Returns RTYPE_INVALID
@@ -174,13 +121,15 @@ rtype_from_file_extension(const char *fn)
 		return RTYPE_TAK;
 	if (strcasecmp(fn + sz - 4, ".csv") == 0)
 		return RTYPE_GEOFEED;
+	if (strcasecmp(fn + sz - 4, ".spl") == 0)
+		return RTYPE_SPL;
 
 	return RTYPE_INVALID;
 }
 
 /*
  * Validate that a filename listed on a Manifest only contains characters
- * permitted in draft-ietf-sidrops-6486bis section 4.2.2
+ * permitted in RFC 9286 section 4.2.2.
  * Also ensure that there is exactly one '.'.
  */
 static int
@@ -215,6 +164,7 @@ rtype_from_mftfile(const char *fn)
 	case RTYPE_GBR:
 	case RTYPE_ROA:
 	case RTYPE_ASPA:
+	case RTYPE_SPL:
 	case RTYPE_TAK:
 		return type;
 	default:
@@ -227,54 +177,133 @@ rtype_from_mftfile(const char *fn)
  * Return zero on failure, non-zero on success.
  */
 static int
-mft_parse_filehash(struct parse *p, const FileAndHash *fh)
+mft_parse_filehash(const char *fn, struct mft *mft, const FileAndHash *fh,
+    int *found_crl)
 {
-	char			*fn = NULL;
+	char			*file = NULL;
 	int			 rc = 0;
 	struct mftfile		*fent;
 	enum rtype		 type;
 	size_t			 new_idx = 0;
 
 	if (!valid_mft_filename(fh->file->data, fh->file->length)) {
-		warnx("%s: RFC 6486 section 4.2.2: bad filename", p->fn);
+		warnx("%s: RFC 6486 section 4.2.2: bad filename", fn);
 		goto out;
 	}
-	fn = strndup(fh->file->data, fh->file->length);
-	if (fn == NULL)
+	file = strndup(fh->file->data, fh->file->length);
+	if (file == NULL)
 		err(1, NULL);
 
 	if (fh->hash->length != SHA256_DIGEST_LENGTH) {
 		warnx("%s: RFC 6486 section 4.2.1: hash: "
-		    "invalid SHA256 length, have %d",
-		    p->fn, fh->hash->length);
+		    "invalid SHA256 length, have %d", fn, fh->hash->length);
 		goto out;
 	}
 
-	type = rtype_from_mftfile(fn);
-	/* remember the filehash for the CRL in struct mft */
-	if (type == RTYPE_CRL && strcmp(fn, p->res->crl) == 0) {
-		memcpy(p->res->crlhash, fh->hash->data, SHA256_DIGEST_LENGTH);
-		p->found_crl = 1;
+	type = rtype_from_mftfile(file);
+	if (type == RTYPE_CRL) {
+		if (*found_crl == 1) {
+			warnx("%s: RFC 6487: too many CRLs listed on MFT", fn);
+			goto out;
+		}
+		if (strcmp(file, mft->crl) != 0) {
+			warnx("%s: RFC 6487: name (%s) doesn't match CRLDP "
+			    "(%s)", fn, file, mft->crl);
+			goto out;
+		}
+		/* remember the filehash for the CRL in struct mft */
+		memcpy(mft->crlhash, fh->hash->data, SHA256_DIGEST_LENGTH);
+		*found_crl = 1;
 	}
 
 	if (filemode)
-		fent = &p->res->files[p->res->filesz++];
+		fent = &mft->files[mft->filesz++];
 	else {
 		/* Fisher-Yates shuffle */
-		new_idx = arc4random_uniform(p->res->filesz + 1);
-		p->res->files[p->res->filesz++] = p->res->files[new_idx];
-		fent = &p->res->files[new_idx];
+		new_idx = arc4random_uniform(mft->filesz + 1);
+		mft->files[mft->filesz++] = mft->files[new_idx];
+		fent = &mft->files[new_idx];
 	}
 
 	fent->type = type;
-	fent->file = fn;
-	fn = NULL;
+	fent->file = file;
+	file = NULL;
 	memcpy(fent->hash, fh->hash->data, SHA256_DIGEST_LENGTH);
 
 	rc = 1;
  out:
-	free(fn);
+	free(file);
 	return rc;
+}
+
+static int
+mft_fh_cmp_name(const FileAndHash *const *a, const FileAndHash *const *b)
+{
+	if ((*a)->file->length < (*b)->file->length)
+		return -1;
+	if ((*a)->file->length > (*b)->file->length)
+		return 1;
+
+	return memcmp((*a)->file->data, (*b)->file->data, (*b)->file->length);
+}
+
+static int
+mft_fh_cmp_hash(const FileAndHash *const *a, const FileAndHash *const *b)
+{
+	assert((*a)->hash->length == SHA256_DIGEST_LENGTH);
+	assert((*b)->hash->length == SHA256_DIGEST_LENGTH);
+
+	return memcmp((*a)->hash->data, (*b)->hash->data, (*b)->hash->length);
+}
+
+/*
+ * Assuming that the hash lengths are validated, this checks that all file names
+ * and hashes in a manifest are unique. Returns 1 on success, 0 on failure.
+ */
+static int
+mft_has_unique_names_and_hashes(const char *fn, const Manifest *mft)
+{
+	STACK_OF(FileAndHash)	*fhs;
+	int			 i, ret = 0;
+
+	if ((fhs = sk_FileAndHash_dup(mft->fileList)) == NULL)
+		err(1, NULL);
+
+	(void)sk_FileAndHash_set_cmp_func(fhs, mft_fh_cmp_name);
+	sk_FileAndHash_sort(fhs);
+
+	for (i = 0; i < sk_FileAndHash_num(fhs) - 1; i++) {
+		const FileAndHash *curr = sk_FileAndHash_value(fhs, i);
+		const FileAndHash *next = sk_FileAndHash_value(fhs, i + 1);
+
+		if (mft_fh_cmp_name(&curr, &next) == 0) {
+			warnx("%s: duplicate name: %.*s", fn,
+			    curr->file->length, curr->file->data);
+			goto err;
+		}
+	}
+
+	(void)sk_FileAndHash_set_cmp_func(fhs, mft_fh_cmp_hash);
+	sk_FileAndHash_sort(fhs);
+
+	for (i = 0; i < sk_FileAndHash_num(fhs) - 1; i++) {
+		const FileAndHash *curr = sk_FileAndHash_value(fhs, i);
+		const FileAndHash *next = sk_FileAndHash_value(fhs, i + 1);
+
+		if (mft_fh_cmp_hash(&curr, &next) == 0) {
+			warnx("%s: duplicate hash for %.*s and %.*s", fn,
+			    curr->file->length, curr->file->data,
+			    next->file->length, next->file->data);
+			goto err;
+		}
+	}
+
+	ret = 1;
+
+ err:
+	sk_FileAndHash_free(fhs);
+
+	return ret;
 }
 
 /*
@@ -282,86 +311,108 @@ mft_parse_filehash(struct parse *p, const FileAndHash *fh)
  * Returns 0 on failure and 1 on success.
  */
 static int
-mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p)
+mft_parse_econtent(const char *fn, struct mft *mft, const unsigned char *d,
+    size_t dsz)
 {
-	Manifest		*mft;
+	const unsigned char	*oder;
+	Manifest		*mft_asn1;
 	FileAndHash		*fh;
-	int			 i, rc = 0;
+	int			 found_crl, i, rc = 0;
 
-	if ((mft = d2i_Manifest(NULL, &d, dsz)) == NULL) {
-		warnx("%s: RFC 6486 section 4: failed to parse Manifest",
-		    p->fn);
+	oder = d;
+	if ((mft_asn1 = d2i_Manifest(NULL, &d, dsz)) == NULL) {
+		warnx("%s: RFC 6486 section 4: failed to parse Manifest", fn);
+		goto out;
+	}
+	if (d != oder + dsz) {
+		warnx("%s: %td bytes trailing garbage in eContent", fn,
+		    oder + dsz - d);
 		goto out;
 	}
 
-	if (!valid_econtent_version(p->fn, mft->version, 0))
+	if (!valid_econtent_version(fn, mft_asn1->version, 0))
 		goto out;
 
-	p->res->seqnum = x509_convert_seqnum(p->fn, mft->manifestNumber);
-	if (p->res->seqnum == NULL)
+	mft->seqnum = x509_convert_seqnum(fn, mft_asn1->manifestNumber);
+	if (mft->seqnum == NULL)
 		goto out;
 
 	/*
-	 * Timestamps: this and next update time.
-	 * Validate that the current date falls into this interval.
-	 * This is required by section 4.4, (3).
-	 * If we're after the given date, then the MFT is stale.
-	 * This is made super complicated because it uses OpenSSL's
-	 * ASN1_GENERALIZEDTIME instead of ASN1_TIME, which we could
-	 * compare against the current time trivially.
+	 * OpenSSL's DER decoder implementation will accept a GeneralizedTime
+	 * which doesn't conform to RFC 5280. So, double check.
 	 */
-
-	if (!mft_parse_time(mft->thisUpdate, mft->nextUpdate, p))
+	if (ASN1_STRING_length(mft_asn1->thisUpdate) != GENTIME_LENGTH) {
+		warnx("%s: embedded from time format invalid", fn);
 		goto out;
+	}
+	if (ASN1_STRING_length(mft_asn1->nextUpdate) != GENTIME_LENGTH) {
+		warnx("%s: embedded until time format invalid", fn);
+		goto out;
+	}
 
-	if (OBJ_obj2nid(mft->fileHashAlg) != NID_sha256) {
+	if (!x509_get_time(mft_asn1->thisUpdate, &mft->thisupdate)) {
+		warn("%s: parsing manifest thisUpdate failed", fn);
+		goto out;
+	}
+	if (!x509_get_time(mft_asn1->nextUpdate, &mft->nextupdate)) {
+		warn("%s: parsing manifest nextUpdate failed", fn);
+		goto out;
+	}
+
+	if (mft->thisupdate > mft->nextupdate) {
+		warnx("%s: bad update interval", fn);
+		goto out;
+	}
+
+	if (OBJ_obj2nid(mft_asn1->fileHashAlg) != NID_sha256) {
 		warnx("%s: RFC 6486 section 4.2.1: fileHashAlg: "
-		    "want SHA256 object, have %s (NID %d)", p->fn,
-		    ASN1_tag2str(OBJ_obj2nid(mft->fileHashAlg)),
-		    OBJ_obj2nid(mft->fileHashAlg));
+		    "want SHA256 object, have %s", fn,
+		    nid2str(OBJ_obj2nid(mft_asn1->fileHashAlg)));
 		goto out;
 	}
 
-	if (sk_FileAndHash_num(mft->fileList) >= MAX_MANIFEST_ENTRIES) {
-		warnx("%s: %d exceeds manifest entry limit (%d)", p->fn,
-		    sk_FileAndHash_num(mft->fileList), MAX_MANIFEST_ENTRIES);
+	if (sk_FileAndHash_num(mft_asn1->fileList) >= MAX_MANIFEST_ENTRIES) {
+		warnx("%s: %d exceeds manifest entry limit (%d)", fn,
+		    sk_FileAndHash_num(mft_asn1->fileList),
+		    MAX_MANIFEST_ENTRIES);
 		goto out;
 	}
 
-	p->res->files = calloc(sk_FileAndHash_num(mft->fileList),
+	mft->files = calloc(sk_FileAndHash_num(mft_asn1->fileList),
 	    sizeof(struct mftfile));
-	if (p->res->files == NULL)
+	if (mft->files == NULL)
 		err(1, NULL);
 
-	for (i = 0; i < sk_FileAndHash_num(mft->fileList); i++) {
-		fh = sk_FileAndHash_value(mft->fileList, i);
-		if (!mft_parse_filehash(p, fh))
+	found_crl = 0;
+	for (i = 0; i < sk_FileAndHash_num(mft_asn1->fileList); i++) {
+		fh = sk_FileAndHash_value(mft_asn1->fileList, i);
+		if (!mft_parse_filehash(fn, mft, fh, &found_crl))
 			goto out;
 	}
 
-	if (!p->found_crl) {
-		warnx("%s: CRL not part of MFT fileList", p->fn);
+	if (!found_crl) {
+		warnx("%s: CRL not part of MFT fileList", fn);
 		goto out;
 	}
 
+	if (!mft_has_unique_names_and_hashes(fn, mft_asn1))
+		goto out;
+
 	rc = 1;
  out:
-	Manifest_free(mft);
+	Manifest_free(mft_asn1);
 	return rc;
 }
 
 /*
  * Parse the objects that have been published in the manifest.
- * This conforms to RFC 6486.
- * Note that if the MFT is stale, all referenced objects are stripped
- * from the parsed content.
- * The MFT content is otherwise returned.
+ * Return mft if it conforms to RFC 6486, otherwise NULL.
  */
 struct mft *
 mft_parse(X509 **x509, const char *fn, int talid, const unsigned char *der,
     size_t len)
 {
-	struct parse	 p;
+	struct mft	*mft;
 	struct cert	*cert = NULL;
 	int		 rc = 0;
 	size_t		 cmsz;
@@ -369,28 +420,25 @@ mft_parse(X509 **x509, const char *fn, int talid, const unsigned char *der,
 	char		*crldp = NULL, *crlfile;
 	time_t		 signtime = 0;
 
-	memset(&p, 0, sizeof(struct parse));
-	p.fn = fn;
-
 	cms = cms_parse_validate(x509, fn, der, len, mft_oid, &cmsz, &signtime);
 	if (cms == NULL)
 		return NULL;
 	assert(*x509 != NULL);
 
-	if ((p.res = calloc(1, sizeof(struct mft))) == NULL)
+	if ((mft = calloc(1, sizeof(*mft))) == NULL)
 		err(1, NULL);
-	p.res->signtime = signtime;
+	mft->signtime = signtime;
 
-	if (!x509_get_aia(*x509, fn, &p.res->aia))
+	if (!x509_get_aia(*x509, fn, &mft->aia))
 		goto out;
-	if (!x509_get_aki(*x509, fn, &p.res->aki))
+	if (!x509_get_aki(*x509, fn, &mft->aki))
 		goto out;
-	if (!x509_get_sia(*x509, fn, &p.res->sia))
+	if (!x509_get_sia(*x509, fn, &mft->sia))
 		goto out;
-	if (!x509_get_ski(*x509, fn, &p.res->ski))
+	if (!x509_get_ski(*x509, fn, &mft->ski))
 		goto out;
-	if (p.res->aia == NULL || p.res->aki == NULL || p.res->sia == NULL ||
-	    p.res->ski == NULL) {
+	if (mft->aia == NULL || mft->aki == NULL || mft->sia == NULL ||
+	    mft->ski == NULL) {
 		warnx("%s: RFC 6487 section 4.8: "
 		    "missing AIA, AKI, SIA, or SKI X509 extension", fn);
 		goto out;
@@ -422,16 +470,16 @@ mft_parse(X509 **x509, const char *fn, int talid, const unsigned char *der,
 		    "bad CRL distribution point extension", fn);
 		goto out;
 	}
-	if ((p.res->crl = strdup(crlfile)) == NULL)
+	if ((mft->crl = strdup(crlfile)) == NULL)
 		err(1, NULL);
 
-	if (mft_parse_econtent(cms, cmsz, &p) == 0)
+	if (mft_parse_econtent(fn, mft, cms, cmsz) == 0)
 		goto out;
 
 	if ((cert = cert_parse_ee_cert(fn, talid, *x509)) == NULL)
 		goto out;
 
-	if (p.res->signtime > p.res->nextupdate) {
+	if (mft->signtime > mft->nextupdate) {
 		warnx("%s: dating issue: CMS signing-time after MFT nextUpdate",
 		    fn);
 		goto out;
@@ -440,15 +488,15 @@ mft_parse(X509 **x509, const char *fn, int talid, const unsigned char *der,
 	rc = 1;
 out:
 	if (rc == 0) {
-		mft_free(p.res);
-		p.res = NULL;
+		mft_free(mft);
+		mft = NULL;
 		X509_free(*x509);
 		*x509 = NULL;
 	}
 	free(crldp);
 	cert_free(cert);
 	free(cms);
-	return p.res;
+	return mft;
 }
 
 /*
@@ -463,17 +511,17 @@ mft_free(struct mft *p)
 	if (p == NULL)
 		return;
 
-	if (p->files != NULL)
-		for (i = 0; i < p->filesz; i++)
-			free(p->files[i].file);
+	for (i = 0; i < p->filesz; i++)
+		free(p->files[i].file);
 
+	free(p->path);
+	free(p->files);
+	free(p->seqnum);
 	free(p->aia);
 	free(p->aki);
 	free(p->sia);
 	free(p->ski);
-	free(p->path);
-	free(p->files);
-	free(p->seqnum);
+	free(p->crl);
 	free(p);
 }
 
@@ -486,9 +534,9 @@ mft_buffer(struct ibuf *b, const struct mft *p)
 {
 	size_t		 i;
 
-	io_simple_buffer(b, &p->stale, sizeof(p->stale));
 	io_simple_buffer(b, &p->repoid, sizeof(p->repoid));
 	io_simple_buffer(b, &p->talid, sizeof(p->talid));
+	io_simple_buffer(b, &p->certid, sizeof(p->certid));
 	io_str_buffer(b, p->path);
 
 	io_str_buffer(b, p->aia);
@@ -519,9 +567,9 @@ mft_read(struct ibuf *b)
 	if ((p = calloc(1, sizeof(struct mft))) == NULL)
 		err(1, NULL);
 
-	io_read_buf(b, &p->stale, sizeof(p->stale));
 	io_read_buf(b, &p->repoid, sizeof(p->repoid));
 	io_read_buf(b, &p->talid, sizeof(p->talid));
+	io_read_buf(b, &p->certid, sizeof(p->certid));
 	io_read_str(b, &p->path);
 
 	io_read_str(b, &p->aia);
@@ -545,19 +593,25 @@ mft_read(struct ibuf *b)
 }
 
 /*
- * Compare the manifestNumber of two MFT files.
- * Returns 1 if first MFT should be used, 0 if both are equal, and -1 if the
- * second MFT should be used.
+ * Compare the thisupdate time of two mft files.
  */
 int
-mft_compare(const struct mft *a, const struct mft *b)
+mft_compare_issued(const struct mft *a, const struct mft *b)
+{
+	if (a->thisupdate > b->thisupdate)
+		return 1;
+	if (a->thisupdate < b->thisupdate)
+		return -1;
+	return 0;
+}
+
+/*
+ * Compare the manifestNumber of two mft files.
+ */
+int
+mft_compare_seqnum(const struct mft *a, const struct mft *b)
 {
 	int r;
-
-	if (b == NULL)
-		return 1;
-	if (a == NULL)
-		return -1;
 
 	r = strlen(a->seqnum) - strlen(b->seqnum);
 	if (r > 0)	/* seqnum in a is longer -> higher */

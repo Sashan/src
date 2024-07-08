@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_purp.c,v 1.35 2024/01/07 16:22:46 tb Exp $ */
+/* $OpenBSD: x509_purp.c,v 1.42 2024/05/15 18:10:03 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2001.
  */
@@ -68,6 +68,16 @@
 #include "x509_internal.h"
 #include "x509_local.h"
 
+struct x509_purpose_st {
+	int purpose;
+	int trust;		/* Default trust ID */
+	int flags;
+	int (*check_purpose)(const struct x509_purpose_st *, const X509 *, int);
+	char *name;
+	char *sname;
+	void *usr_data;
+} /* X509_PURPOSE */;
+
 #define V1_ROOT (EXFLAG_V1|EXFLAG_SS)
 #define ku_reject(x, usage) \
 	(((x)->ex_flags & EXFLAG_KUSAGE) && !((x)->ex_kusage & (usage)))
@@ -95,7 +105,7 @@ static int check_purpose_timestamp_sign(const X509_PURPOSE *xp, const X509 *x,
 static int no_check(const X509_PURPOSE *xp, const X509 *x, int ca);
 static int ocsp_helper(const X509_PURPOSE *xp, const X509 *x, int ca);
 
-static X509_PURPOSE xstandard[] = {
+static const X509_PURPOSE xstandard[] = {
 	{
 		.purpose = X509_PURPOSE_SSL_CLIENT,
 		.trust = X509_TRUST_SSL_CLIENT,
@@ -177,25 +187,15 @@ X509_check_purpose(X509 *x, int id, int ca)
 
 	if (id == -1)
 		return 1;
-	idx = X509_PURPOSE_get_by_id(id);
-	if (idx == -1)
+
+	if ((idx = X509_PURPOSE_get_by_id(id)) == -1)
 		return -1;
-	pt = X509_PURPOSE_get0(idx);
+	if ((pt = X509_PURPOSE_get0(idx)) == NULL)
+		return -1;
+
 	return pt->check_purpose(pt, x, ca);
 }
 LCRYPTO_ALIAS(X509_check_purpose);
-
-int
-X509_PURPOSE_set(int *p, int purpose)
-{
-	if (X509_PURPOSE_get_by_id(purpose) == -1) {
-		X509V3error(X509V3_R_INVALID_PURPOSE);
-		return 0;
-	}
-	*p = purpose;
-	return 1;
-}
-LCRYPTO_ALIAS(X509_PURPOSE_set);
 
 int
 X509_PURPOSE_get_count(void)
@@ -204,7 +204,7 @@ X509_PURPOSE_get_count(void)
 }
 LCRYPTO_ALIAS(X509_PURPOSE_get_count);
 
-X509_PURPOSE *
+const X509_PURPOSE *
 X509_PURPOSE_get0(int idx)
 {
 	if (idx < 0 || (size_t)idx >= X509_PURPOSE_COUNT)
@@ -218,7 +218,7 @@ int
 X509_PURPOSE_get_by_sname(const char *sname)
 {
 	int i;
-	X509_PURPOSE *xptmp;
+	const X509_PURPOSE *xptmp;
 
 	for (i = 0; i < X509_PURPOSE_get_count(); i++) {
 		xptmp = X509_PURPOSE_get0(i);
@@ -241,23 +241,6 @@ X509_PURPOSE_get_by_id(int purpose)
 
 	return purpose - X509_PURPOSE_MIN;
 }
-LCRYPTO_ALIAS(X509_PURPOSE_get_by_id);
-
-int
-X509_PURPOSE_add(int id, int trust, int flags,
-    int (*ck)(const X509_PURPOSE *, const X509 *, int), const char *name,
-    const char *sname, void *arg)
-{
-	X509error(ERR_R_DISABLED);
-	return 0;
-}
-LCRYPTO_ALIAS(X509_PURPOSE_add);
-
-void
-X509_PURPOSE_cleanup(void)
-{
-}
-LCRYPTO_ALIAS(X509_PURPOSE_cleanup);
 
 int
 X509_PURPOSE_get_id(const X509_PURPOSE *xp)
@@ -266,14 +249,14 @@ X509_PURPOSE_get_id(const X509_PURPOSE *xp)
 }
 LCRYPTO_ALIAS(X509_PURPOSE_get_id);
 
-char *
+const char *
 X509_PURPOSE_get0_name(const X509_PURPOSE *xp)
 {
 	return xp->name;
 }
 LCRYPTO_ALIAS(X509_PURPOSE_get0_name);
 
-char *
+const char *
 X509_PURPOSE_get0_sname(const X509_PURPOSE *xp)
 {
 	return xp->sname;
@@ -285,7 +268,6 @@ X509_PURPOSE_get_trust(const X509_PURPOSE *xp)
 {
 	return xp->trust;
 }
-LCRYPTO_ALIAS(X509_PURPOSE_get_trust);
 
 /*
  * List of NIDs of extensions supported by the verifier. If an extension
@@ -415,6 +397,13 @@ x509v3_cache_extensions_internal(X509 *x)
 
 	if (x->ex_flags & EXFLAG_SET)
 		return;
+
+	/*
+	 * XXX - this should really only set EXFLAG_INVALID if extensions are
+	 * invalid. However, the X509_digest() failure matches OpenSSL/BoringSSL
+	 * behavior and the version checks are at least vaguely related to
+	 * extensions.
+	 */
 
 	if (!X509_digest(x, X509_CERT_HASH_EVP, x->hash, NULL))
 		x->ex_flags |= EXFLAG_INVALID;
@@ -575,9 +564,6 @@ x509v3_cache_extensions_internal(X509 *x)
 	}
 
 	if (!x509_extension_oids_are_unique(x))
-		x->ex_flags |= EXFLAG_INVALID;
-
-	if (!x509_verify_cert_info_populate(x))
 		x->ex_flags |= EXFLAG_INVALID;
 
 	x->ex_flags |= EXFLAG_SET;
@@ -872,7 +858,7 @@ X509_check_akid(X509 *issuer, AUTHORITY_KEYID *akid)
 
 	/* Check key ids (if present) */
 	if (akid->keyid && issuer->skid &&
-	    ASN1_OCTET_STRING_cmp(akid->keyid, issuer->skid) )
+	    ASN1_OCTET_STRING_cmp(akid->keyid, issuer->skid))
 		return X509_V_ERR_AKID_SKID_MISMATCH;
 	/* Check serial number */
 	if (akid->serial &&

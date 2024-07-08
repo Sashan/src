@@ -1,4 +1,4 @@
-/*	$OpenBSD: locore.S,v 1.144 2023/12/12 15:30:55 deraadt Exp $	*/
+/*	$OpenBSD: locore.S,v 1.147 2024/03/17 05:49:41 guenther Exp $	*/
 /*	$NetBSD: locore.S,v 1.13 2004/03/25 18:33:17 drochner Exp $	*/
 
 /*
@@ -507,11 +507,6 @@ ENTRY(savectx)
 	lfence
 END(savectx)
 
-// XXX this should not behave like a nop
-IDTVEC(syscall32)
-	sysret		/* go away please */
-END(Xsyscall32)
-
 /*
  * syscall insn entry.
  * Enter here with interrupts blocked; %rcx contains the caller's
@@ -595,6 +590,22 @@ GENTRY(Xsyscall)
 	jz	.Lsyscall_restore_fsbase
 
 .Lsyscall_restore_registers:
+	/*
+	 * If the pmap we're now on isn't the same as the one we
+	 * were on last time we were in userspace, then use IBPB
+	 * to prevent cross-process branch-target injection.
+	 */
+	CODEPATCH_START
+	movq	CPUVAR(PROC_PMAP),%rbx
+	cmpq	CPUVAR(USER_PMAP),%rbx
+	je	1f
+	xorl	%edx,%edx
+	movl	$PRED_CMD_IBPB,%eax
+	movl	$MSR_PRED_CMD,%ecx
+	wrmsr
+	movq	%rbx,CPUVAR(USER_PMAP)
+1:
+	CODEPATCH_END(CPTAG_IBPB_NOP)
 	call	pku_xonly
 	RET_STACK_REFILL_WITH_RCX
 
@@ -605,8 +616,15 @@ GENTRY(Xsyscall)
 	movq	TF_R13(%rsp),%r13
 	movq	TF_R14(%rsp),%r14
 	movq	TF_R15(%rsp),%r15
+	movq	TF_RBX(%rsp),%rbx
+	movq	TF_RDX(%rsp),%rdx
 
 	CODEPATCH_START
+	xorl	%edi,%edi
+	xorl	%esi,%esi
+	xorl	%r11d,%r11d
+	xorl	%eax,%eax
+	xorl	%ecx,%ecx
 	movw	%ds,TF_R8(%rsp)
 	verw	TF_R8(%rsp)
 	CODEPATCH_END(CPTAG_MDS)
@@ -614,7 +632,6 @@ GENTRY(Xsyscall)
 	movq	TF_RDI(%rsp),%rdi
 	movq	TF_RSI(%rsp),%rsi
 	movq	TF_RBP(%rsp),%rbp
-	movq	TF_RBX(%rsp),%rbx
 
 	/*
 	 * We need to finish reading from the trapframe, then switch
@@ -624,7 +641,6 @@ GENTRY(Xsyscall)
 	 * user page tables, so save it in CPUVAR(SCRATCH) across
 	 * the switch.
 	 */
-	movq	TF_RDX(%rsp),%rdx
 	movq	TF_RAX(%rsp),%rax
 	movq	TF_RIP(%rsp),%rcx
 	movq	TF_RFLAGS(%rsp),%r11
@@ -758,17 +774,33 @@ intr_user_exit_post_ast:
 	testl	$CPUPF_USERXSTATE,CPUVAR(PFLAGS)
 	jz	.Lintr_restore_xstate
 
+	/* Restore FS.base if it's not already in the CPU */
+	testl	$CPUPF_USERSEGS,CPUVAR(PFLAGS)
+	jz	.Lintr_restore_fsbase
+
+.Lintr_restore_registers:
 #ifdef DIAGNOSTIC
 	/* no more C calls after this, so check the SPL */
 	cmpl	$0,CPUVAR(ILEVEL)
 	jne	.Luser_spl_not_lowered
 #endif /* DIAGNOSTIC */
 
-	/* Restore FS.base if it's not already in the CPU */
-	testl	$CPUPF_USERSEGS,CPUVAR(PFLAGS)
-	jz	.Lintr_restore_fsbase
-
-.Lintr_restore_registers:
+	/*
+	 * If the pmap we're now on isn't the same as the one we
+	 * were on last time we were in userspace, then use IBPB
+	 * to prevent cross-process branch-target injection.
+	 */
+	CODEPATCH_START
+	movq	CPUVAR(PROC_PMAP),%rbx
+	cmpq	CPUVAR(USER_PMAP),%rbx
+	je	1f
+	xorl	%edx,%edx
+	movl	$PRED_CMD_IBPB,%eax
+	movl	$MSR_PRED_CMD,%ecx
+	wrmsr
+	movq	%rbx,CPUVAR(USER_PMAP)
+1:
+	CODEPATCH_END(CPTAG_IBPB_NOP)
 	call	pku_xonly
 	RET_STACK_REFILL_WITH_RCX
 
@@ -779,8 +811,15 @@ intr_user_exit_post_ast:
 	movq	TF_R13(%rsp),%r13
 	movq	TF_R14(%rsp),%r14
 	movq	TF_R15(%rsp),%r15
+	movq	TF_RBX(%rsp),%rbx
 
 	CODEPATCH_START
+	xorl	%edi,%edi
+	xorl	%esi,%esi
+	xorl	%r11d,%r11d
+	xorl	%eax,%eax
+	xorl	%edx,%edx
+	xorl	%ecx,%ecx
 	movw	%ds,TF_R8(%rsp)
 	verw	TF_R8(%rsp)
 	CODEPATCH_END(CPTAG_MDS)
@@ -788,7 +827,6 @@ intr_user_exit_post_ast:
 	movq	TF_RDI(%rsp),%rdi
 	movq	TF_RSI(%rsp),%rsi
 	movq	TF_RBP(%rsp),%rbp
-	movq	TF_RBX(%rsp),%rbx
 
 	/*
 	 * To get the final value for the register that was used

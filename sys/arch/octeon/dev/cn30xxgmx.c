@@ -1,4 +1,4 @@
-/*	$OpenBSD: cn30xxgmx.c,v 1.53 2022/12/28 01:39:21 yasuoka Exp $	*/
+/*	$OpenBSD: cn30xxgmx.c,v 1.55 2024/07/08 08:07:45 landry Exp $	*/
 
 /*
  * Copyright (c) 2007 Internet Initiative Japan, Inc.
@@ -87,7 +87,6 @@ struct cn30xxgmx_port_ops {
 int	cn30xxgmx_match(struct device *, void *, void *);
 void	cn30xxgmx_attach(struct device *, struct device *, void *);
 int	cn30xxgmx_print(void *, const char *);
-int	cn30xxgmx_port_phy_addr(int);
 void	cn30xxgmx_init(struct cn30xxgmx_softc *);
 int	cn30xxgmx_rx_frm_ctl_xable(struct cn30xxgmx_port_softc *,
 	    uint64_t, int);
@@ -992,7 +991,8 @@ cn30xxgmx_rgmii_speed(struct cn30xxgmx_port_softc *sc)
 		baudrate = IF_Gbps(1);
 		break;
 	default:
-		baudrate = 0/* XXX */;
+		/* Assume 1Gbps for now */
+		baudrate = IF_Gbps(1); /* XXX */
 		break;
 	}
 	ifp->if_baudrate = baudrate;
@@ -1203,7 +1203,7 @@ cn30xxgmx_rgmii_speed_speed(struct cn30xxgmx_port_softc *sc)
 		SET(prt_cfg, PRTN_CFG_SPEED);
 		break;
 	default:
-		/* NOT REACHED! */
+		/* THEORETICALLY NOT REACHED! */
 		/* Following configuration is default value of system.
 		*/
 		tx_clk = 1;

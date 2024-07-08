@@ -1,4 +1,4 @@
-/*	$OpenBSD: inet.c,v 1.179 2023/09/04 23:00:36 bluhm Exp $	*/
+/*	$OpenBSD: inet.c,v 1.182 2024/04/17 20:48:51 bluhm Exp $	*/
 /*	$NetBSD: inet.c,v 1.14 1995/10/03 21:42:37 thorpej Exp $	*/
 
 /*
@@ -621,6 +621,8 @@ ip_stats(char *name)
 	p(ips_inswcsum, "\t%lu input datagram%s software-checksummed\n");
 	p(ips_outswcsum, "\t%lu output datagram%s software-checksummed\n");
 	p(ips_notmember, "\t%lu multicast packet%s which we don't join\n");
+	p1(ips_rtcachehit, "\t%lu route cache hit\n");
+	p1(ips_rtcachemiss, "\t%lu route cache miss\n");
 	p(ips_wrongif, "\t%lu packet%s received on wrong interface\n");
 	p(ips_idropped, "\t%lu input packet%s dropped due to no bufs, etc.\n");
 #undef p
@@ -1459,14 +1461,14 @@ inpcb_dump(u_long off, short protocol, int af)
 	case AF_INET:
 		inet_ntop(af, &inp.inp_faddr, faddr, sizeof(faddr));
 		inet_ntop(af, &inp.inp_laddr, laddr, sizeof(laddr));
-		inet_ntop(af, &((struct sockaddr_in *)
-		    (&inp.inp_route.ro_dst))->sin_addr, raddr, sizeof(raddr));
+		inet_ntop(af, &inp.inp_route.ro_dstsin.sin_addr, raddr,
+		    sizeof(raddr));
 		break;
 	case AF_INET6:
 		inet_ntop(af, &inp.inp_faddr6, faddr, sizeof(faddr));
 		inet_ntop(af, &inp.inp_laddr6, laddr, sizeof(laddr));
-		inet_ntop(af, &inp.inp_route6.ro_dst.sin6_addr,
-		    raddr, sizeof(raddr));
+		inet_ntop(af, &inp.inp_route.ro_dstsin6.sin6_addr, raddr,
+		    sizeof(raddr));
 		break;
 	default:
 		faddr[0] = laddr[0] = '\0';
@@ -1487,10 +1489,10 @@ inpcb_dump(u_long off, short protocol, int af)
 	printf("ro_dst %s\n ", raddr);
 	p("%#.8x", inp_flags, "\n ");
 	p("%d", inp_hops, "\n ");
-	p("%u", inp_seclevel[0], ", ");
-	p("%u", inp_seclevel[1], ", ");
-	p("%u", inp_seclevel[2], ", ");
-	p("%u", inp_seclevel[3], "\n ");
+	p("%u", inp_seclevel.sl_auth, ", ");
+	p("%u", inp_seclevel.sl_esp_trans, ", ");
+	p("%u", inp_seclevel.sl_esp_network, ", ");
+	p("%u", inp_seclevel.sl_ipcomp, "\n ");
 	p("%u", inp_ip_minttl, "\n ");
 	p("%d", inp_cksum6, "\n ");
 	pp("%p", inp_icmp6filt, "\n ");

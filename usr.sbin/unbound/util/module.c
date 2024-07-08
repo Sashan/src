@@ -129,7 +129,7 @@ void errinf_origin(struct module_qstate* qstate, struct sock_list *origin)
 	}
 }
 
-char* errinf_to_str_bogus(struct module_qstate* qstate)
+char* errinf_to_str_bogus(struct module_qstate* qstate, struct regional* region)
 {
 	char buf[20480];
 	char* p = buf;
@@ -148,7 +148,10 @@ char* errinf_to_str_bogus(struct module_qstate* qstate)
 		snprintf(p, left, " %s", s->str);
 		left -= strlen(p); p += strlen(p);
 	}
-	p = strdup(buf);
+	if(region)
+		p = regional_strdup(region, buf);
+	else
+		p = strdup(buf);
 	if(!p)
 		log_err("malloc failure in errinf_to_str");
 	return p;
@@ -188,7 +191,25 @@ char* errinf_to_str_servfail(struct module_qstate* qstate)
 		snprintf(p, left, " %s", s->str);
 		left -= strlen(p); p += strlen(p);
 	}
-	p = strdup(buf);
+	p = regional_strdup(qstate->region, buf);
+	if(!p)
+		log_err("malloc failure in errinf_to_str");
+	return p;
+}
+
+char* errinf_to_str_misc(struct module_qstate* qstate)
+{
+	char buf[20480];
+	char* p = buf;
+	size_t left = sizeof(buf);
+	struct errinf_strlist* s;
+	if(!qstate->errinf)
+		snprintf(p, left, "misc failure");
+	else for(s=qstate->errinf; s; s=s->next) {
+		snprintf(p, left, "%s%s", (s==qstate->errinf?"":" "), s->str);
+		left -= strlen(p); p += strlen(p);
+	}
+	p = regional_strdup(qstate->region, buf);
 	if(!p)
 		log_err("malloc failure in errinf_to_str");
 	return p;
