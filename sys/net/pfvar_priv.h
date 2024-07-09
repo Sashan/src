@@ -416,6 +416,8 @@ struct pf_trans {
 			uint32_t		 tab_ndel;
 			uint32_t		 tab_nchg;
 			uint32_t		 tab_nzero;
+			uint32_t		 tab_nmatch;
+			uint32_t		 tab_error;
 		} u_tab;
 	} u;
 };
@@ -454,6 +456,8 @@ struct pf_trans {
 #define pfttab_ndel		u.u_tab.tab_ndel
 #define pfttab_nchg		u.u_tab.tab_nchg
 #define pfttab_nzero		u.u_tab.tab_nzero
+#define pfttab_nmatch		u.u_tab.tab_nmatch
+#define pfttab_error		u.u_tab.tab_error
 
 extern struct timeout	pf_purge_states_to;
 extern struct task	pf_purge_task;
