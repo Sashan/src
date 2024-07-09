@@ -509,52 +509,55 @@ pfr_tst_addrs(struct pf_trans *t, struct pf_anchor *ta,
 {
 	struct pfr_ktable	*kt;
 	struct pfr_kentry	*ke, *p;
+	struct pfr_addr		*addr;
+	uint32_t		 addr_limit;
+	unsigned int		 i = 0;
 	int			 xmatch = 0;
 
-	ACCEPT_FLAGS(t->pft_ioflags, PFR_FLAG_REPLACE);
+	/* ACCEPT_FLAGS() for void() function variant */
+	if ((t->pft_ioflags & ~PFR_FLAG_REPLACE) & PFR_FLAG_ALLMASK) {
+		t->pfttab_error = EINVAL;
+		return;
+	}
+
 	PF_ASSERT_LOCKED();
 
 	if (ta->tables != 1) {
-		t->pftt_error = ESRCH;
+		t->pfttab_error = ESRCH;
 		return;
 	}
 
-	kt = RB_FIND(&a->ktables, pfr_ktablehead, RB_ROOT(&ta->ktables));
+	kt = RB_FIND(pfr_ktablehead, &a->ktables, RB_ROOT(&ta->ktables));
 	if (kt == NULL || (kt->pfrkt_flags & PFR_TFLAG_ACTIVE) == 0) {
-		t->pftt_error = ESRCH;
+		t->pfttab_error = ESRCH;
 		return;
 	}
 
+	addr = (struct pfr_addr *)t->pfttab_kbuf;
+	addr_limit = t->pfttab_kbuf_sz / sizeof(struct pfr_addr);
 	SLIST_FOREACH(ke, &t->pfttab_ke_ioq, pfrke_workq) {
+		if (i >= addr_limit)
+			break;
 		if (KENTRY_NETWORK(ke)) {
-			t->pftt_error = EINVAL;
+			t->pfttab_error = EINVAL;
 			return;
 		}
 
 		p = pfr_lookup_kentry(kt, ke, 0);
 		if (t->pft_ioflags & PFR_FLAG_REPLACE)
-			pfr_copy_:w
-
-
-		
-	}
-	for (i = 0; i < size; i++) {
-		if (ADDR_NETWORK(&ad))
-			return (EINVAL);
-		p = pfr_lookup_addr(kt, &ad, 0);
-		if (flags & PFR_FLAG_REPLACE)
-			pfr_copyout_addr(&ad, p);
-		ad.pfra_fback = (p == NULL) ? PFR_FB_NONE :
+			pfr_copyout_addr(addr, ke);
+		addr->pfra_fback = (p == NULL) ? PFR_FB_NONE :
 		    ((p->pfrke_flags & PFRKE_FLAG_NOT) ?
 		    PFR_FB_NOTMATCH : PFR_FB_MATCH);
 		if (p != NULL && !(p->pfrke_flags & PFRKE_FLAG_NOT))
 			xmatch++;
-		if (COPYOUT(&ad, addr+i, sizeof(ad), flags))
-			return (EFAULT);
+		i++;
 	}
-	if (nmatch != NULL)
-		*nmatch = xmatch;
-	return (0);
+
+	t->pfttab_nmatch = xmatch;
+	t->pfttab_size = i;
+
+	return;
 }
 
 int

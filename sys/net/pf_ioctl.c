@@ -3466,6 +3466,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCRTSTADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
 		struct pf_trans *t;
+		struct pf_anchor *ta, *a;
 
 		if (io->pfrio_esize != sizeof(struct pfr_addr)) {
 			error = ENODEV;
@@ -3483,23 +3484,51 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		    io->pfrio_size);
 
 		if (error == 0) {
-			NET_LOCK();
-			PF_LOCK();
+			/*
+			 * pfr_copyin_addrs()  earlier called
+			 * pf_find_or_create_ruleset() which breaks path
+			 * to table (table@foo/bar/leaf) to three tree nodes:
+			 * foo, bar, leaf. The table is found at leaf anchor.
+			 * No tables are expected at foo and bar anchors.
+			 * One day some day we must find more efficient way
+			 * to deal with this.
+			 */
+			RB_FOREACH(ta, pf_anchor_global, &t->pfttab_rc.anchors) {
+				if (!RB_EMPTY(&ta->ktables))
+					break;
+			}
+			if (ta == NULL) {
+				/*
+				 * call to pfr_copyin_addrs() should have
+				 * failed, something is wrong if are here
+				 */
+				panic("%s(DIOCRTSTADDRS) no table found"
+				     "in transaction", __func__);
+			} else {
 
-			error = pfr_tst_addrs()
-			NET_UNLOCK();
-			PF_UNLOCK();
+				NET_LOCK();
+				PF_LOCK();
 
-/* XXX todo */
+				a = RB_FIND(pf_anchor_global, &pf_anchors, ta);
+				if (a != NULL)
+					pfr_tst_addrs(t, a, ta);
+
+				NET_UNLOCK();
+				PF_UNLOCK();
+
+				if (a == NULL) {
+					error = ESRCH;
+					goto fail;
+				}
+			}
+
 			error = pfr_addrs_feedback(t, io->pfrio_buffer,
 			    io->pfrio_size, PFR_IOQ_ONLY);
 			io->pfrio_nadd = t->pfttab_nadd;
 		}
 
 		pf_rollback_trans(t);
-		error = pfr_tst_addrs(&io->pfrio_table, io->pfrio_buffer,
-		    io->pfrio_size, &io->pfrio_nmatch, io->pfrio_flags |
-		    PFR_FLAG_USERIOCTL);
+
 		break;
 	}
 
@@ -4826,9 +4855,6 @@ pf_tab_do_commit_op(struct pf_trans *t, struct pf_anchor *ta,
 		break;
 	case DIOCRCLRADDRS:
 		pfr_clraddrs_commit(t, ta, a);
-		break;
-	case DIOCRTSTADDRS:
-		pfr_tstaddrs_commit(t, ta, a);
 		break;
 	default:
 		panic("%s unexpected iocmd for transaction on /",

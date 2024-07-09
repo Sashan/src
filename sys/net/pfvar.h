@@ -1751,8 +1751,8 @@ int	pfr_get_addrs(struct pf_trans *, struct pfr_table *, int *);
 int	pfr_get_astats(struct pf_trans *, struct pfr_table *, int *);
 int	pfr_clr_astats(struct pfr_table *, struct pfr_addr *, int, int *,
 	    int);
-int	pfr_tst_addrs(struct pfr_table *, struct pfr_addr *, int, int *,
-	    int);
+void	pfr_tst_addrs(struct pf_trans *, struct pf_anchor *,
+	    struct pf_anchor *);
 int	pfr_ina_begin(struct pf_trans *, u_int32_t *, const char *);
 int	pfr_ina_commit(struct pfr_table *, u_int32_t, int *, int *, int);
 int	pfr_ina_define(struct pf_trans *, struct pfr_table *,
