@@ -1,4 +1,4 @@
-/*	$OpenBSD: hibernate_machdep.c,v 1.50 2023/04/24 09:04:03 dv Exp $	*/
+/*	$OpenBSD: hibernate_machdep.c,v 1.52 2024/06/19 13:27:26 jsg Exp $	*/
 
 /*
  * Copyright (c) 2012 Mike Larkin <mlarkin@openbsd.org>
@@ -51,6 +51,7 @@
 #include "sd.h"
 #include "nvme.h"
 #include "sdmmc.h"
+#include "ufshci.h"
 
 /* Hibernate support */
 void    hibernate_enter_resume_4k_pte(vaddr_t, paddr_t);
@@ -60,7 +61,6 @@ extern	caddr_t start, end;
 extern	int mem_cluster_cnt;
 extern  phys_ram_seg_t mem_clusters[];
 extern	bios_memmap_t *bios_memmap;
-extern	struct hibernate_state *hibernate_state;
 
 /*
  * amd64 MD Hibernate functions
@@ -97,6 +97,8 @@ get_hibernate_io_function(dev_t dev)
 		    vaddr_t addr, size_t size, int op, void *page);
 		extern int sdmmc_scsi_hibernate_io(dev_t dev, daddr_t blkno,
 		    vaddr_t addr, size_t size, int op, void *page);
+		extern int ufshci_hibernate_io(dev_t dev, daddr_t blkno,
+		    vaddr_t addr, size_t size, int op, void *page);
 		struct device *dv = disk_lookup(&sd_cd, DISKUNIT(dev));
 		struct {
 			const char *driver;
@@ -113,6 +115,9 @@ get_hibernate_io_function(dev_t dev)
 #endif
 #if NSDMMC > 0
 			{ "sdmmc", sdmmc_scsi_hibernate_io },
+#endif
+#if NUFSHCI > 0
+			{ "ufshci", ufshci_hibernate_io },
 #endif
 		};
 

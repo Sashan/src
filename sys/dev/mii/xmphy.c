@@ -1,4 +1,4 @@
-/*	$OpenBSD: xmphy.c,v 1.24 2022/04/06 18:59:29 naddy Exp $	*/
+/*	$OpenBSD: xmphy.c,v 1.26 2024/06/26 01:40:49 jsg Exp $	*/
 
 /*
  * Copyright (c) 2000
@@ -54,8 +54,6 @@
 #include <dev/mii/miivar.h>
 #include <dev/mii/miidevs.h>
 
-#include <dev/mii/xmphyreg.h>
-
 int xmphy_probe(struct device *, void *, void *);
 void xmphy_attach(struct device *, struct device *, void *);
 
@@ -87,7 +85,8 @@ static const struct mii_phydesc xmphys[] = {
 	  NULL },
 };
 
-int xmphy_probe(struct device *parent, void *match, void *aux)
+int
+xmphy_probe(struct device *parent, void *match, void *aux)
 {
 	struct mii_attach_args *ma = aux;
 

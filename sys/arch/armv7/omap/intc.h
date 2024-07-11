@@ -1,4 +1,4 @@
-/*	$OpenBSD: intc.h,v 1.4 2020/07/14 15:34:15 patrick Exp $ */
+/*	$OpenBSD: intc.h,v 1.8 2024/04/29 12:46:22 jsg Exp $ */
 /*
  * Copyright (c) 2007,2009 Dale Rahn <drahn@openbsd.org>
  *
@@ -25,42 +25,11 @@
 #include <machine/intr.h>
 #include <arm/softintr.h>
 
-extern volatile int current_spl_level;
-extern volatile int softint_pending;
-void intc_do_pending(void);
-
 #define SI_TO_IRQBIT(si)  (1U<<(si))
 void intc_setipl(int new);
 void intc_splx(int new);
 int intc_splraise(int ipl);
 int intc_spllower(int ipl);
-void intc_setsoftintr(int si);
-
-/*
- * An useful function for interrupt handlers.
- * XXX: This shouldn't be here.
- */
-static __inline int
-find_first_bit( uint32_t bits )
-{
-	int count;
-
-	/* since CLZ is available only on ARMv5, this isn't portable
-	 * to all ARM CPUs.  This file is for OMAPINTC processor.
-	 */
-	asm( "clz %0, %1" : "=r" (count) : "r" (bits) );
-	return 31-count;
-}
-
-
-/*
- * This function *MUST* be called very early on in a port's
- * initarm() function, before ANY spl*() functions are called.
- *
- * The parameter is the virtual address of the OMAPINTC's Interrupt
- * Controller registers.
- */
-void intc_intr_bootstrap(vaddr_t);
 
 void intc_irq_handler(void *);
 void *intc_intr_establish(int irqno, int level, struct cpu_info *ci,

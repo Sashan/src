@@ -1,4 +1,4 @@
-$OpenBSD: usbdevs,v 1.760 2023/11/27 20:03:50 miod Exp $
+$OpenBSD: usbdevs,v 1.766 2024/05/29 06:48:43 jsg Exp $
 /* $NetBSD: usbdevs,v 1.322 2003/05/10 17:47:14 hamajima Exp $ */
 
 /*
@@ -1004,8 +1004,8 @@ product APPLE WELLSPRING9_JIS	0x0274	Keyboard/Trackpad
 product APPLE WELLSPRING8_ANSI	0x0290	Keyboard/Trackpad
 product APPLE WELLSPRING8_ISO	0x0291	Keyboard/Trackpad
 product APPLE WELLSPRING8_JIS	0x0292	Keyboard/Trackpad
-product APPLE WELLSPRINGM1_J293	0x0341	Keyboard/Trackpad	
 product APPLE OPTMOUSE		0x0302	Optical mouse
+product APPLE WELLSPRINGM1_J293	0x0341	Keyboard/Trackpad	
 product APPLE BLUETOOTH_HCI	0x1000	HID-proxy
 product APPLE SPEAKERS		0x1101	Speakers
 product APPLE IPHONE		0x1290	iPhone
@@ -1023,6 +1023,7 @@ product APPLE IPHONE_4S		0x12a0	iPhone 4S
 product APPLE IPHONE_6		0x12a8	iPhone 6
 product APPLE ETHERNET		0x1402	Ethernet A1277
 product APPLE BLUETOOTH2	0x8205	Bluetooth
+product APPLE BLUETOOTH3	0x8207	Bluetooth
 product APPLE BLUETOOTH		0x8300	Bluetooth
 product APPLE ISIGHT_1		0x8501	iSight
 product APPLE ISIGHT		0x8502	iSight
@@ -3726,6 +3727,7 @@ product QUECTEL EG91		0x0191	EG91
 product QUECTEL EG95		0x0195	EG95
 product QUECTEL BG96		0x0296	BG96
 product QUECTEL EG06		0x0306	EG06/EP06/EM06
+product QUECTEL EM060K		0x030b	EM060K
 product QUECTEL AG15		0x0415	AG15
 product QUECTEL AG35		0x0435	AG35
 product QUECTEL AG520R		0x0452	AG520R
@@ -3808,6 +3810,7 @@ product REALTEK RTL8187		0x8187	RTL8187
 product REALTEK RTL8187B_0	0x8189	RTL8187B
 product REALTEK RTL8188CUS	0x818a	RTL8188CUS
 product REALTEK RTL8192EU	0x818b	RTL8192EU
+product REALTEK RTL8192EU_2	0x818c	RTL8192EU
 product REALTEK RTL8188CU_3	0x8191	RTL8188CU
 product REALTEK RTL8192U	0x8192	RTL8192U
 product REALTEK RTL8187B_1	0x8197	RTL8187B
@@ -4652,6 +4655,8 @@ product WAVESENSE JAZZ		0xaaaa	Jazz blood glucose meter
 /* WCH/QinHeng Electronics */
 product WCH CH341		0x5523	CH341 serial/parallel
 product WCH2 CH341A		0x5523	CH341A serial/parallel
+product WCH2 CH343		0x55d3	CH343 serial/parallel
+product WCH2 CH9102		0x55d4	CH9102 serial/parallel
 product WCH2 CH340		0x7523	CH340 serial/parallel
 product	WCH2 TEMPER		0xe025	TEMPer sensor
 

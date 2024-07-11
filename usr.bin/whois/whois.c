@@ -1,4 +1,4 @@
-/*      $OpenBSD: whois.c,v 1.59 2024/03/05 16:06:32 millert Exp $   */
+/*      $OpenBSD: whois.c,v 1.64 2024/03/25 19:11:52 op Exp $   */
 
 /*
  * Copyright (c) 1980, 1993
@@ -46,7 +46,6 @@
 
 #define	NICHOST		"whois.crsnic.net"
 #define	INICHOST	"whois.internic.net"
-#define	CNICHOST	"whois.corenic.net"
 #define	DNICHOST	"whois.nic.mil"
 #define	GNICHOST	"whois.nic.gov"
 #define	ANICHOST	"whois.arin.net"
@@ -64,8 +63,11 @@
 #define	WHOIS_PORT	"whois"
 #define	WHOIS_SERVER_ID	"Registrar WHOIS Server:"
 
-#define WHOIS_RECURSE		0x01
-#define WHOIS_QUICK		0x02
+#define WHOIS_RECURSE	0x01
+#define WHOIS_QUICK	0x02
+#define WHOIS_SPAM_ME	0x04
+
+#define CHOPSPAM	">>> Last update of WHOIS database:"
 
 const char *port_whois = WHOIS_PORT;
 const char *ip_whois[] = { LNICHOST, RNICHOST, PNICHOST, BNICHOST,
@@ -83,7 +85,7 @@ main(int argc, char *argv[])
 
 	country = host = NULL;
 	flags = rval = 0;
-	while ((ch = getopt(argc, argv, "aAc:dgh:iIlmp:PqQrR")) != -1)
+	while ((ch = getopt(argc, argv, "aAc:dgh:iIlmp:PqQrRS")) != -1)
 		switch (ch) {
 		case 'a':
 			host = ANICHOST;
@@ -133,6 +135,9 @@ main(int argc, char *argv[])
 		case 'R':
 			host = RUNICHOST;
 			break;
+		case 'S':
+			flags |= WHOIS_SPAM_ME;
+			break;
 		default:
 			usage();
 		}
@@ -161,8 +166,8 @@ int
 whois(const char *query, const char *server, const char *port, int flags)
 {
 	FILE *fp;
-	char *buf, *p, *nhost, *nbuf = NULL;
-	size_t len;
+	char *p, *nhost, *buf = NULL;
+	size_t len, bufsize = 0;
 	int i, s, error;
 	const char *reason = NULL, *fmt;
 	struct addrinfo hints, *res, *ai;
@@ -206,11 +211,13 @@ whois(const char *query, const char *server, const char *port, int flags)
 		return (1);
 	}
 
-	if (strcmp(server, "whois.denic.de") == 0 ||
-	    strcmp(server, "de" QNICHOST_TAIL) == 0)
+	if (!(flags & WHOIS_SPAM_ME) &&
+	    (strcmp(server, "whois.denic.de") == 0 ||
+	    strcmp(server, "de" QNICHOST_TAIL) == 0))
 		fmt = "-T dn,ace -C ISO-8859-1 %s\r\n";
-	else if (strcmp(server, "whois.dk-hostmaster.dk") == 0 ||
-	    strcmp(server, "dk" QNICHOST_TAIL) == 0)
+	else if (!(flags & WHOIS_SPAM_ME) &&
+	    (strcmp(server, "whois.dk-hostmaster.dk") == 0 ||
+	    strcmp(server, "dk" QNICHOST_TAIL) == 0))
 		fmt = "--show-handles %s\r\n";
 	else
 		fmt = "%s\r\n";
@@ -221,49 +228,50 @@ whois(const char *query, const char *server, const char *port, int flags)
 	fprintf(fp, fmt, query);
 	fflush(fp);
 	nhost = NULL;
-	while ((buf = fgetln(fp, &len)) != NULL) {
+	while ((len = getline(&buf, &bufsize, fp)) != (size_t)-1) {
+		/* Nominet */
+		if (!(flags & WHOIS_SPAM_ME) &&
+		    len == 5 && strncmp(buf, "-- \r\n", 5) == 0)
+			break;
+
 		p = buf + len - 1;
-		if (isspace((unsigned char)*p)) {
-			do
-				*p = '\0';
-			while (p > buf && isspace((unsigned char)*--p));
-		} else {
-			if ((nbuf = malloc(len + 1)) == NULL)
-				err(1, "malloc");
-			memcpy(nbuf, buf, len);
-			nbuf[len] = '\0';
-			buf = nbuf;
-		}
+		while (p > buf && isspace((unsigned char)*p))
+			*p-- = '\0';
 		puts(buf);
 
-		if (nhost != NULL || !(flags & WHOIS_RECURSE))
-			continue;
-
-		if ((p = strstr(buf, WHOIS_SERVER_ID))) {
-			p += sizeof(WHOIS_SERVER_ID) - 1;
-			while (isblank((unsigned char)*p))
-				p++;
-			if ((len = strcspn(p, " \t\n\r"))) {
-				if ((nhost = malloc(len + 1)) == NULL)
-					err(1, "malloc");
-				memcpy(nhost, p, len);
-				nhost[len] = '\0';
-			}
-		} else if (strcmp(server, ANICHOST) == 0) {
-			for (p = buf; *p != '\0'; p++)
-				*p = tolower((unsigned char)*p);
-			for (i = 0; ip_whois[i] != NULL; i++) {
-				if (strstr(buf, ip_whois[i]) != NULL) {
-					nhost = strdup(ip_whois[i]);
-					if (nhost == NULL)
-						err(1, "strdup");
-					break;
+		if (nhost == NULL && (flags & WHOIS_RECURSE)) {
+			if ((p = strstr(buf, WHOIS_SERVER_ID))) {
+				p += sizeof(WHOIS_SERVER_ID) - 1;
+				while (isblank((unsigned char)*p))
+					p++;
+				if ((len = strcspn(p, " \t\n\r"))) {
+					if ((nhost = strndup(p, len)) == NULL)
+						err(1, "strndup");
+				}
+			} else if (strcmp(server, ANICHOST) == 0) {
+				for (p = buf; *p != '\0'; p++)
+					*p = tolower((unsigned char)*p);
+				for (i = 0; ip_whois[i] != NULL; i++) {
+					if (strstr(buf, ip_whois[i]) != NULL) {
+						nhost = strdup(ip_whois[i]);
+						if (nhost == NULL)
+							err(1, "strdup");
+						break;
+					}
 				}
 			}
 		}
+
+		/* Verisign etc. */
+		if (!(flags & WHOIS_SPAM_ME) &&
+		    (strncasecmp(buf, CHOPSPAM, sizeof(CHOPSPAM)-1) == 0 ||
+		     strncasecmp(buf, &CHOPSPAM[4], sizeof(CHOPSPAM)-5) == 0)) {
+			printf("\n");
+			break;
+		}
 	}
 	fclose(fp);
-	free(nbuf);
+	free(buf);
 
 	if (nhost != NULL) {
 		error = whois(query, nhost, port, 0);
@@ -276,10 +284,9 @@ whois(const char *query, const char *server, const char *port, int flags)
 /*
  * If no country is specified determine the top level domain from the query.
  * If the TLD is a number, query ARIN, otherwise, use TLD.whois-server.net.
- * If the domain does not contain '.', check to see if it is an NSI handle
- * (starts with '!') or a CORE handle (COCO-[0-9]+ or COHO-[0-9]+) or an
- * ASN (starts with AS) or IPv6 address (contains ':'). Fall back to
- * NICHOST for the non-handle and non-IPv6 case.
+ * If the domain does not contain '.', check to see if it is an ASN (starts
+ * with AS) or IPv6 address (contains ':').
+ * Fall back to NICHOST for the non-handle and non-IPv6 case.
  */
 char *
 choose_server(const char *name, const char *country, char **tofree)
@@ -297,13 +304,7 @@ choose_server(const char *name, const char *country, char **tofree)
 	if (country != NULL)
 		qhead = country;
 	else if ((qhead = strrchr(name, '.')) == NULL) {
-		if (*name == '!')
-			return (INICHOST);
-		else if ((strncasecmp(name, "COCO-", 5) == 0 ||
-		    strncasecmp(name, "COHO-", 5) == 0) &&
-		    strtol(name + 5, &ep, 10) > 0 && *ep == '\0')
-			return (CNICHOST);
-		else if ((strncasecmp(name, "AS", 2) == 0) &&
+		if ((strncasecmp(name, "AS", 2) == 0) &&
 		    strtol(name + 2, &ep, 10) > 0 && *ep == '\0')
 			return (MNICHOST);
 		else if (strchr(name, ':') != NULL) /* IPv6 address */
@@ -352,7 +353,7 @@ usage(void)
 	extern char *__progname;
 
 	fprintf(stderr,
-	    "usage: %s [-AadgIilmPQRr] [-c country-code | -h host] "
+	    "usage: %s [-AadgIilmPQRrS] [-c country-code | -h host] "
 		"[-p port] name ...\n", __progname);
 	exit(1);
 }

@@ -7,6 +7,11 @@ DDEESSCCRRIIPPTTIIOONN
      BEGINTEST
      ��   <control> NULL
      ��   <control> START OF HEADING
+     ��   <control> START OF TEXT
+     ��   <control> END OF TEXT
+     ��   <control> END OF TRANSMISSION
+     ��   <control> ENQUIRY
+     ��   <control> ACKNOWLEDGE
      ��   <control> BELL
      ��   <control> BACKSPACE
                     <control> CHARACTER TABULATION
@@ -14,12 +19,76 @@ DDEESSCCRRIIPPTTIIOONN
      ��   <control> LINE TABULATION
      ��   <control> FORM FEED
      ��   <control> CARRIAGE RETURN
+     ��   <control> SHIFT OUT
+     ��   <control> SHIFT IN
+     ��   <control> DATA LINK ESCAPE
+     ��   <control> DEVICE CONTROL ONE
+     ��   <control> DEVICE CONTROL TWO
+     ��   <control> DEVICE CONTROL THREE
+     ��   <control> DEVICE CONTROL FOUR
+     ��   <control> NEGATIVE ACKNOWLEDGE
+     ��   <control> SYNCHRONOUS IDLE
+     ��   <control> END OF TRANSMISSION BLOCK
+     ��   <control> CANCEL
+     ��   <control> END OF MEDIUM
+     ��   <control> SUBSTITUTE
      ��   <control> ESCAPE
+     ��   <control> INFORMATION SEPARATOR FOUR
+     ��   <control> INFORMATION SEPARATOR THREE
+     ��   <control> INFORMATION SEPARATOR TWO
+     ��   <control> INFORMATION SEPARATOR INE
+     !!   EXCLAMATION MARK
+     %%   PERCENT SIGN
+     &&   AMPERSAND
+     ((   LEFT PARENTHESIS
+     ))   RIGHT PARENTHESIS
+     **   ASTERISK
+     ,,   COMMA
+     --   HYPHEN-MINUS
+     ..   FULL STOP
+     00   DIGIT ZERO
+     11   DIGIT ONE
+     99   DIGIT NINE
+     ::   COLON
+     ;;   SEMICOLON
+     <<   LESS-THAN SIGN
+     >>   GREATER-THAN SIGN
+     ??   QUESTION MARK
+     AA   LATIN CAPITAL LETTER A
+     ZZ   LATIN CAPITAL LETTER Z
+     aa   LATIN SMALL LETTER A
+     zz   LATIN SMALL LETTER Z
      ��   <control> DELETE
      ��   <control> 0x80
      ��   <control> 0x81
      ��   <control> BREAK PERMITTED HERE
      ��   <control> NO BREAK HERE
+     ��   <control> 0x84
+     ��   <control> NEXT LINE (NEL)
+     ��   <control> START OF SELECTED AREA
+     ��   <control> END OF SELECTED AREA
+     ��   <control> CHARACTER TABULATION SET
+     ��   <control> CHARACTER TABULATION WITH JUSTIFICATION
+     ��   <control> LINE TABULATION SET
+     ��   <control> PARTIAL LINE FORWARD
+     ��   <control> PARTIAL LINE BACKWARD
+     ��   <control> REVERSE LINE FEED
+     ��   <control> SINGLE SHIFT TWO
+     ��   <control> SINGLE SHIFT THREE
+     ��   <control> DEVICE CONTROL STRING
+     ��   <control> PRIVATE USE ONE
+     ��   <control> PRIVATE USE TWO
+     ��   <control> SET TRANSMIT STATE
+     ��   <control> CANCEL CHARACTER
+     ��   <control> MESSAGE WAITING
+     ��   <control> START OF GUARDED AREA
+     ��   <control> END OF GUARDED AREA
+     ��   <control> START OF STRING
+     ��   <control> 0x99
+     ��   <control> SINGLE CHARACTER INTRODUCER
+     ��   <control> CONTROL SEQUENCE INTRODUCER
+     ��   <control> STRING TERMINATOR
+     ��   <control> OPERATING SYSTEM COMMAND
      ��   <control> PRIVACY MESSAGE
      ��   <control> APPLICATION PROGRAM COMMAND
      ≪≪   MUCH LESS-THAN
@@ -50,4 +119,4 @@ DDEESSCCRRIIPPTTIIOONN
      􏿿     <undefined>
      ENDTEST
 
-OpenBSD                          June 2, 2021          CHAR-UNICODE-NOGROFF(1)
+OpenBSD                          May 16, 2024          CHAR-UNICODE-NOGROFF(1)

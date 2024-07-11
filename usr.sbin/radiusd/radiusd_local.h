@@ -1,4 +1,4 @@
-/*	$OpenBSD: radiusd_local.h,v 1.6 2023/09/08 05:56:22 yasuoka Exp $	*/
+/*	$OpenBSD: radiusd_local.h,v 1.11 2024/07/02 00:33:51 yasuoka Exp $	*/
 
 /*
  * Copyright (c) 2013 Internet Initiative Japan Inc.
@@ -44,6 +44,7 @@ struct radiusd_listen {
 	struct radiusd				*radiusd;
 	struct event				 ev;
 	int					 sock;
+	int					 accounting;
 	union {
 		struct sockaddr_in		 ipv4;
 		struct sockaddr_in6		 ipv6;
@@ -85,15 +86,24 @@ struct radiusd_module {
 
 struct radiusd_module_ref {
 	struct radiusd_module		*module;
+	unsigned int			 type;
 	TAILQ_ENTRY(radiusd_module_ref)	 next;
 };
 
 struct radiusd_authentication {
 	char					**username;
-	char					 *secret;
 	struct radiusd_module_ref		 *auth;
 	TAILQ_HEAD(,radiusd_module_ref)		  deco;
 	TAILQ_ENTRY(radiusd_authentication)	  next;
+};
+
+struct radiusd_accounting {
+	char					**username;
+	char					 *secret;
+	struct radiusd_module_ref		 *acct;
+	int					  quick;
+	TAILQ_HEAD(,radiusd_module_ref)		  deco;
+	TAILQ_ENTRY(radiusd_accounting)		  next;
 };
 
 struct radiusd {
@@ -104,8 +114,10 @@ struct radiusd {
 	struct event				 ev_sigchld;
 	TAILQ_HEAD(,radiusd_module)		 module;
 	TAILQ_HEAD(,radiusd_authentication)	 authen;
+	TAILQ_HEAD(,radiusd_accounting)		 account;
 	TAILQ_HEAD(,radiusd_client)		 client;
 	TAILQ_HEAD(,radius_query)		 query;
+	int					 error;
 };
 
 struct radius_query {
@@ -150,15 +162,15 @@ struct radius_query {
 #define	MODULE_DO_ACCSREQ(_m)					\
 	((_m)->fd >= 0 &&					\
 	    ((_m)->capabilities & RADIUSD_MODULE_CAP_ACCSREQ) != 0)
+#define	MODULE_DO_ACCTREQ(_m)					\
+	((_m)->fd >= 0 &&					\
+	    ((_m)->capabilities & RADIUSD_MODULE_CAP_ACCTREQ) != 0)
 #define	MODULE_DO_REQDECO(_m)					\
 	((_m)->fd >= 0 &&					\
 	    ((_m)->capabilities & RADIUSD_MODULE_CAP_REQDECO) != 0)
 #define	MODULE_DO_RESDECO(_m)					\
 	((_m)->fd >= 0 &&					\
 	    ((_m)->capabilities & RADIUSD_MODULE_CAP_RESDECO) != 0)
-
-extern struct radiusd_module mod_standard;
-extern struct radiusd_module mod_radius;
 
 int	 parse_config(const char *, struct radiusd *);
 void	 radiusd_conf_init(struct radiusd *);
@@ -169,7 +181,6 @@ struct radiusd_module	*radiusd_module_load(struct radiusd *, const char *,
 void			 radiusd_module_unload(struct radiusd_module *);
 
 void		 radiusd_access_request_answer(struct radius_query *);
-int		 radiusd_access_request_fixup(struct radius_query *);
 void		 radiusd_access_request_aborted(struct radius_query *);
 void		 radius_attr_hide(const char *, const char *, const u_char *,
 		    u_char *, int);

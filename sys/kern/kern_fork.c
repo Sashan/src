@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_fork.c,v 1.257 2024/01/24 19:23:38 cheloha Exp $	*/
+/*	$OpenBSD: kern_fork.c,v 1.260 2024/06/03 12:48:25 claudio Exp $	*/
 /*	$NetBSD: kern_fork.c,v 1.29 1996/02/09 18:59:34 christos Exp $	*/
 
 /*
@@ -329,14 +329,13 @@ static inline void
 fork_thread_start(struct proc *p, struct proc *parent, int flags)
 {
 	struct cpu_info *ci;
-	int s;
 
-	SCHED_LOCK(s);
+	SCHED_LOCK();
 	ci = sched_choosecpu_fork(parent, flags);
 	TRACEPOINT(sched, fork, p->p_tid + THREAD_PID_OFFSET,
 	    p->p_p->ps_pid, CPU_INFO_UNIT(ci));
 	setrunqueue(ci, p, p->p_usrpri);
-	SCHED_UNLOCK(s);
+	SCHED_UNLOCK();
 }
 
 int
@@ -535,7 +534,7 @@ thread_fork(struct proc *curp, void *stack, void *tcb, pid_t *tidptr,
 	struct proc *p;
 	pid_t tid;
 	vaddr_t uaddr;
-	int s, error;
+	int error;
 
 	if (stack == NULL)
 		return EINVAL;
@@ -559,7 +558,6 @@ thread_fork(struct proc *curp, void *stack, void *tcb, pid_t *tidptr,
 
 	/* other links */
 	p->p_p = pr;
-	pr->ps_threadcnt++;
 
 	/* local copies */
 	p->p_fd		= pr->ps_fd;
@@ -578,18 +576,19 @@ thread_fork(struct proc *curp, void *stack, void *tcb, pid_t *tidptr,
 	LIST_INSERT_HEAD(&allproc, p, p_list);
 	LIST_INSERT_HEAD(TIDHASH(p->p_tid), p, p_hash);
 
-	SCHED_LOCK(s);
+	mtx_enter(&pr->ps_mtx);
 	TAILQ_INSERT_TAIL(&pr->ps_threads, p, p_thr_link);
+	pr->ps_threadcnt++;
 
 	/*
 	 * if somebody else wants to take us to single threaded mode,
 	 * count ourselves in.
 	 */
 	if (pr->ps_single) {
-		atomic_inc_int(&pr->ps_singlecount);
+		pr->ps_singlecnt++;
 		atomic_setbits_int(&p->p_flag, P_SUSPSINGLE);
 	}
-	SCHED_UNLOCK(s);
+	mtx_leave(&pr->ps_mtx);
 
 	/*
 	 * Return tid to parent thread and copy it out to userspace
@@ -688,12 +687,8 @@ proc_trampoline_mi(void)
 	struct proc *p = curproc;
 
 	SCHED_ASSERT_LOCKED();
-
 	clear_resched(curcpu());
-
-#if defined(MULTIPROCESSOR)
-	__mp_unlock(&sched_lock);
-#endif
+	mtx_leave(&sched_lock);
 	spl0();
 
 	SCHED_ASSERT_UNLOCKED();

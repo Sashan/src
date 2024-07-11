@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_purp.c,v 1.39 2024/03/02 10:43:52 tb Exp $ */
+/* $OpenBSD: x509_purp.c,v 1.42 2024/05/15 18:10:03 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project 2001.
  */
@@ -398,6 +398,13 @@ x509v3_cache_extensions_internal(X509 *x)
 	if (x->ex_flags & EXFLAG_SET)
 		return;
 
+	/*
+	 * XXX - this should really only set EXFLAG_INVALID if extensions are
+	 * invalid. However, the X509_digest() failure matches OpenSSL/BoringSSL
+	 * behavior and the version checks are at least vaguely related to
+	 * extensions.
+	 */
+
 	if (!X509_digest(x, X509_CERT_HASH_EVP, x->hash, NULL))
 		x->ex_flags |= EXFLAG_INVALID;
 
@@ -557,9 +564,6 @@ x509v3_cache_extensions_internal(X509 *x)
 	}
 
 	if (!x509_extension_oids_are_unique(x))
-		x->ex_flags |= EXFLAG_INVALID;
-
-	if (!x509_verify_cert_info_populate(x))
 		x->ex_flags |= EXFLAG_INVALID;
 
 	x->ex_flags |= EXFLAG_SET;
@@ -854,7 +858,7 @@ X509_check_akid(X509 *issuer, AUTHORITY_KEYID *akid)
 
 	/* Check key ids (if present) */
 	if (akid->keyid && issuer->skid &&
-	    ASN1_OCTET_STRING_cmp(akid->keyid, issuer->skid) )
+	    ASN1_OCTET_STRING_cmp(akid->keyid, issuer->skid))
 		return X509_V_ERR_AKID_SKID_MISMATCH;
 	/* Check serial number */
 	if (akid->serial &&

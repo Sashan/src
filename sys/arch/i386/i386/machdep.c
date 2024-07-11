@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.669 2023/08/23 01:55:46 cheloha Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.673 2024/07/09 07:28:12 mlarkin Exp $	*/
 /*	$NetBSD: machdep.c,v 1.214 1996/11/10 03:16:17 thorpej Exp $	*/
 
 /*-
@@ -167,6 +167,7 @@ char machine[] = MACHINE;
 void (*cpu_idle_leave_fcn)(void) = NULL;
 void (*cpu_idle_cycle_fcn)(void) = NULL;
 void (*cpu_idle_enter_fcn)(void) = NULL;
+void (*cpu_suspend_cycle_fcn)(void);
 
 
 struct uvm_constraint_range  isa_constraint = { 0x0, 0x00ffffffUL };
@@ -191,9 +192,6 @@ int	dumpsize = 0;		/* pages */
 long	dumplo = 0;		/* blocks */
 
 int	cpu_class;
-int	i386_fpu_present;
-int	i386_fpu_exception;
-int	i386_fpu_fdivbug;
 
 int	i386_use_fxsave;
 int	i386_has_sse;
@@ -207,7 +205,6 @@ struct vm_map *exec_map = NULL;
 struct vm_map *phys_map = NULL;
 
 #if !defined(SMALL_KERNEL)
-int p4_model;
 int p3_early;
 void (*update_cpuspeed)(void) = NULL;
 void	via_update_sensor(void *args);
@@ -1122,7 +1119,7 @@ cyrix3_cpu_setup(struct cpu_info *ci)
 		/*
 		 * C3 Nehemiah & later: fall through.
 		 */
-	
+
 	case 10: /* C7-M Type A */
 	case 13: /* C7-M Type D */
 	case 15: /* Nano */
@@ -1547,7 +1544,6 @@ intel686_p4_cpu_setup(struct cpu_info *ci)
 	intel686_common_cpu_setup(ci);
 
 #if !defined(SMALL_KERNEL)
-	p4_model = (ci->ci_signature >> 4) & 15;
 	update_cpuspeed = p4_update_cpuspeed;
 #endif
 }
@@ -1772,7 +1768,7 @@ identifycpu(struct cpu_info *ci)
 		 * with eax 0x01
 		 */
 
-		cpuid(0x01, regs); 
+		cpuid(0x01, regs);
 		ci->ci_cflushsz = ((regs[1] >> 8) & 0xff) * 8;
 	}
 
@@ -2286,7 +2282,7 @@ p3_get_bus_clock(struct cpu_info *ci)
 			goto print_msr;
 		}
 		break;
-	default: 
+	default:
 		/* no FSB on modern Intel processors */
 		break;
 	}
@@ -3193,7 +3189,7 @@ init386(paddr_t first_avail)
 	if (bios_memmap == NULL)
 		panic("no BIOS memory map supplied");
 #endif
- 
+
 	/*
 	 * account all the memory passed in the map from /boot
 	 * calculate avail_end and count the physmem.
@@ -3970,6 +3966,20 @@ intr_barrier(void *ih)
 {
 	sched_barrier(NULL);
 }
+
+#ifdef SUSPEND
+
+void
+intr_enable_wakeup(void)
+{
+}
+
+void
+intr_disable_wakeup(void)
+{
+}
+
+#endif
 
 unsigned int
 cpu_rnd_messybits(void)

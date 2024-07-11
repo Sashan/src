@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.455 2023/08/16 08:26:35 claudio Exp $ */
+/*	$OpenBSD: parse.y,v 1.463 2024/05/22 08:41:14 claudio Exp $ */
 
 /*
  * Copyright (c) 2002, 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -246,7 +246,7 @@ typedef struct {
 %token	EBGP IBGP
 %token	FLOWSPEC PROTO FLAGS FRAGMENT TOS LENGTH ICMPTYPE CODE
 %token	LOCALAS REMOTEAS DESCR LOCALADDR MULTIHOP PASSIVE MAXPREFIX RESTART
-%token	ANNOUNCE CAPABILITIES REFRESH AS4BYTE CONNECTRETRY ENHANCED ADDPATH
+%token	ANNOUNCE REFRESH AS4BYTE CONNECTRETRY ENHANCED ADDPATH
 %token	SEND RECV PLUS POLICY ROLE
 %token	DEMOTE ENFORCE NEIGHBORAS ASOVERRIDE REFLECTOR DEPEND DOWN
 %token	DUMP IN OUT SOCKET RESTRICTED
@@ -272,7 +272,8 @@ typedef struct {
 %token	<v.number>		NUMBER
 %type	<v.number>		asnumber as4number as4number_any optnumber
 %type	<v.number>		espah af safi restart origincode nettype
-%type	<v.number>		yesno inout restricted expires enforce
+%type	<v.number>		yesno inout restricted expires
+%type	<v.number>		yesnoenforce enforce
 %type	<v.number>		validity aspa_validity
 %type	<v.number>		addpathextra addpathmax
 %type	<v.number>		port proto_item tos length flag icmptype
@@ -741,7 +742,7 @@ conf_main	: AS as4number		{
 				yyerror("router-id must be an IPv4 address");
 				YYERROR;
 			}
-			conf->bgpid = $2.v4.s_addr;
+			conf->bgpid = ntohl($2.v4.s_addr);
 		}
 		| HOLDTIME NUMBER	{
 			if ($2 < MIN_HOLDTIME || $2 > USHRT_MAX) {
@@ -1889,12 +1890,12 @@ peeropts	: REMOTEAS as4number	{
 			}
 			curpeer->conf.min_holdtime = $3;
 		}
-		| ANNOUNCE af safi {
+		| ANNOUNCE af safi enforce {
 			uint8_t		aid, safi;
 			uint16_t	afi;
 
 			if ($3 == SAFI_NONE) {
-				for (aid = 0; aid < AID_MAX; aid++) {
+				for (aid = AID_MIN; aid < AID_MAX; aid++) {
 					if (aid2afi(aid, &afi, &safi) == -1 ||
 					    afi != $2)
 						continue;
@@ -1905,49 +1906,50 @@ peeropts	: REMOTEAS as4number	{
 					yyerror("unknown AFI/SAFI pair");
 					YYERROR;
 				}
-				curpeer->conf.capabilities.mp[aid] = 1;
+				if ($4)
+					curpeer->conf.capabilities.mp[aid] = 2;
+				else
+					curpeer->conf.capabilities.mp[aid] = 1;
 			}
 		}
-		| ANNOUNCE CAPABILITIES yesno {
-			curpeer->conf.announce_capa = $3;
-		}
-		| ANNOUNCE REFRESH yesno {
+		| ANNOUNCE REFRESH yesnoenforce {
 			curpeer->conf.capabilities.refresh = $3;
 		}
-		| ANNOUNCE ENHANCED REFRESH yesno {
+		| ANNOUNCE ENHANCED REFRESH yesnoenforce {
 			curpeer->conf.capabilities.enhanced_rr = $4;
 		}
-		| ANNOUNCE RESTART yesno {
+		| ANNOUNCE RESTART yesnoenforce {
 			curpeer->conf.capabilities.grestart.restart = $3;
 		}
-		| ANNOUNCE AS4BYTE yesno {
+		| ANNOUNCE AS4BYTE yesnoenforce {
 			curpeer->conf.capabilities.as4byte = $3;
 		}
-		| ANNOUNCE ADDPATH RECV yesno {
+		| ANNOUNCE ADDPATH RECV yesnoenforce {
 			int8_t *ap = curpeer->conf.capabilities.add_path;
 			uint8_t i;
 
-			for (i = 0; i < AID_MAX; i++)
-				if ($4)
-					*ap++ |= CAPA_AP_RECV;
-				else
-					*ap++ &= ~CAPA_AP_RECV;
+			for (i = AID_MIN; i < AID_MAX; i++) {
+				if ($4) {
+					if ($4 == 2)
+						ap[i] |= CAPA_AP_RECV_ENFORCE;
+					ap[i] |= CAPA_AP_RECV;
+				} else
+					ap[i] &= ~CAPA_AP_RECV;
+			}
 		}
-		| ANNOUNCE ADDPATH SEND STRING addpathextra addpathmax {
+		| ANNOUNCE ADDPATH SEND STRING addpathextra addpathmax enforce {
 			int8_t *ap = curpeer->conf.capabilities.add_path;
 			enum addpath_mode mode;
 			u_int8_t i;
 
 			if (!strcmp($4, "no")) {
 				free($4);
-				if ($5 != 0 || $6 != 0) {
+				if ($5 != 0 || $6 != 0 || $7 != 0) {
 					yyerror("no additional option allowed "
 					    "for 'add-path send no'");
 					YYERROR;
 				}
-				for (i = 0; i < AID_MAX; i++)
-					*ap++ &= ~CAPA_AP_SEND;
-				break;
+				mode = ADDPATH_EVAL_NONE;
 			} else if (!strcmp($4, "all")) {
 				free($4);
 				if ($5 != 0 || $6 != 0) {
@@ -1971,13 +1973,19 @@ peeropts	: REMOTEAS as4number	{
 				free($4);
 				YYERROR;
 			}
-			for (i = 0; i < AID_MAX; i++)
-				*ap++ |= CAPA_AP_SEND;
+			for (i = AID_MIN; i < AID_MAX; i++) {
+				if (mode != ADDPATH_EVAL_NONE) {
+					if ($7)
+						ap[i] |= CAPA_AP_SEND_ENFORCE;
+					ap[i] |= CAPA_AP_SEND;
+				} else
+					ap[i] &= ~CAPA_AP_SEND;
+			}
 			curpeer->conf.eval.mode = mode;
 			curpeer->conf.eval.extrapaths = $5;
 			curpeer->conf.eval.maxpaths = $6;
 		}
-		| ANNOUNCE POLICY enforce {
+		| ANNOUNCE POLICY yesnoenforce {
 			curpeer->conf.capabilities.policy = $3;
 		}
 		| ROLE STRING {
@@ -2228,14 +2236,14 @@ peeropts	: REMOTEAS as4number	{
 				YYERROR;
 			}
 			if ((conf->flags & BGPD_FLAG_REFLECTOR) &&
-			    conf->clusterid != $2.v4.s_addr) {
+			    conf->clusterid != ntohl($2.v4.s_addr)) {
 				yyerror("only one route reflector "
 				    "cluster allowed");
 				YYERROR;
 			}
 			conf->flags |= BGPD_FLAG_REFLECTOR;
 			curpeer->conf.reflector_client = 1;
-			conf->clusterid = $2.v4.s_addr;
+			conf->clusterid = ntohl($2.v4.s_addr);
 		}
 		| DEPEND ON STRING	{
 			if (strlcpy(curpeer->conf.if_depend, $3,
@@ -3081,7 +3089,11 @@ delete		: /* empty */	{ $$ = 0; }
 		| DELETE	{ $$ = 1; }
 		;
 
-enforce		: yesno		{ $$ = $1; }
+enforce		: /* empty */	{ $$ = 0; }
+		| ENFORCE	{ $$ = 2; }
+		;
+
+yesnoenforce	: yesno		{ $$ = $1; }
 		| ENFORCE	{ $$ = 2; }
 		;
 
@@ -3507,7 +3519,6 @@ lookup(char *s)
 		{ "aspa-set",		ASPASET},
 		{ "avs",		AVS},
 		{ "blackhole",		BLACKHOLE},
-		{ "capabilities",	CAPABILITIES},
 		{ "community",		COMMUNITY},
 		{ "compare",		COMPARE},
 		{ "connect-retry",	CONNECTRETRY},
@@ -4611,7 +4622,6 @@ struct peer *
 alloc_peer(void)
 {
 	struct peer	*p;
-	uint8_t		 i;
 
 	if ((p = calloc(1, sizeof(struct peer))) == NULL)
 		fatal("new_peer");
@@ -4621,9 +4631,6 @@ alloc_peer(void)
 	p->reconf_action = RECONF_REINIT;
 	p->conf.distance = 1;
 	p->conf.export_type = EXPORT_UNSET;
-	p->conf.announce_capa = 1;
-	for (i = 0; i < AID_MAX; i++)
-		p->conf.capabilities.mp[i] = 0;
 	p->conf.capabilities.refresh = 1;
 	p->conf.capabilities.grestart.restart = 1;
 	p->conf.capabilities.as4byte = 1;
@@ -4986,11 +4993,23 @@ expand_rule(struct filter_rule *rule, struct filter_rib_l *rib,
 	return (0);
 }
 
+static int
+h2i(char c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	else if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	else if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	else
+		return -1;
+}
+
 int
 str2key(char *s, char *dest, size_t max_len)
 {
-	unsigned	i;
-	char		t[3];
+	size_t	i;
 
 	if (strlen(s) / 2 > max_len) {
 		yyerror("key too long");
@@ -5003,14 +5022,15 @@ str2key(char *s, char *dest, size_t max_len)
 	}
 
 	for (i = 0; i < strlen(s) / 2; i++) {
-		t[0] = s[2*i];
-		t[1] = s[2*i + 1];
-		t[2] = 0;
-		if (!isxdigit(t[0]) || !isxdigit(t[1])) {
+		int hi, lo;
+
+		hi = h2i(s[2 * i]);
+		lo = h2i(s[2 * i + 1]);
+		if (hi == -1 || lo == -1) {
 			yyerror("key must be specified in hex");
 			return (-1);
 		}
-		dest[i] = strtoul(t, NULL, 16);
+		dest[i] = (hi << 4) | lo;
 	}
 
 	return (0);
@@ -5457,8 +5477,8 @@ merge_aspa_set(uint32_t as, struct aspa_tas_l *tas, time_t expires)
 		RB_INSERT(aspa_tree, &conf->aspa, aspa);
 	}
 
-	if (UINT32_MAX - aspa->num <= tas->num) {
-		yyerror("aspa_set overflow");
+	if (MAX_ASPA_SPAS_COUNT - aspa->num <= tas->num) {
+		yyerror("too many providers for customer-as %u", as);
 		return -1;
 	}
 	num = aspa->num + tas->num;
@@ -5475,6 +5495,7 @@ merge_aspa_set(uint32_t as, struct aspa_tas_l *tas, time_t expires)
 
 	aspa->num = num;
 	aspa->tas = newtas;
+
 	/* take the longest expiry time, same logic as for ROA entries */
 	if (aspa->expires != 0 && expires != 0 && expires > aspa->expires)
 		aspa->expires = expires;

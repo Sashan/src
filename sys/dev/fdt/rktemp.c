@@ -1,4 +1,4 @@
-/*	$OpenBSD: rktemp.c,v 1.12 2023/03/05 09:57:32 kettenis Exp $	*/
+/*	$OpenBSD: rktemp.c,v 1.14 2024/06/27 09:40:15 kettenis Exp $	*/
 /*
  * Copyright (c) 2017 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -36,42 +36,40 @@
 #define  TSADC_USER_CON_INTER_PD_SOC_SHIFT	6
 #define TSADC_AUTO_CON			0x0004
 #define  TSADC_AUTO_CON_TSHUT_POLARITY	(1 << 8)
-#define  TSADC_AUTO_CON_SRC3_EN		(1 << 7)
-#define  TSADC_AUTO_CON_SRC2_EN		(1 << 6)
-#define  TSADC_AUTO_CON_SRC1_EN		(1 << 5)
-#define  TSADC_AUTO_CON_SRC0_EN		(1 << 4)
+#define  TSADC_AUTO_CON_SRC_EN(ch)	(1 << ((ch) + 4))
 #define  TSADC_AUTO_CON_TSADC_Q_SEL	(1 << 1)
 #define  TSADC_AUTO_CON_AUTO_EN		(1 << 0)
 #define TSADC_INT_EN			0x0008
-#define  TSADC_INT_EN_TSHUT_2CRU_EN_SRC3	(1 << 11)
-#define  TSADC_INT_EN_TSHUT_2CRU_EN_SRC2	(1 << 10)
-#define  TSADC_INT_EN_TSHUT_2CRU_EN_SRC1	(1 << 9)
-#define  TSADC_INT_EN_TSHUT_2CRU_EN_SRC0	(1 << 8)
-#define  TSADC_INT_EN_TSHUT_2GPIO_EN_SRC3	(1 << 7)
-#define  TSADC_INT_EN_TSHUT_2GPIO_EN_SRC2	(1 << 6)
-#define  TSADC_INT_EN_TSHUT_2GPIO_EN_SRC1	(1 << 5)
-#define  TSADC_INT_EN_TSHUT_2GPIO_EN_SRC0	(1 << 4)
+#define  TSADC_INT_EN_TSHUT_2CRU_EN_SRC(ch)	(1 << ((ch) + 8))
+#define  TSADC_INT_EN_TSHUT_2GPIO_EN_SRC(ch)	(1 << ((ch) + 4))
 #define TSADC_INT_PD			0x000c
-#define  TSADC_INT_PD_TSHUT_O_SRC0		(1 << 4)
-#define  TSADC_INT_PD_TSHUT_O_SRC1		(1 << 5)
-#define  TSADC_INT_PD_TSHUT_O_SRC2		(1 << 6)
-#define  TSADC_INT_PD_TSHUT_O_SRC3		(1 << 7)
-#define TSADC_DATA0			0x0020
-#define TSADC_DATA1			0x0024
-#define TSADC_DATA2			0x0028
-#define TSADC_DATA3			0x002c
-#define TSADC_COMP0_INT			0x0030
-#define TSADC_COMP1_INT			0x0034
-#define TSADC_COMP2_INT			0x0038
-#define TSADC_COMP3_INT			0x003c
-#define TSADC_COMP0_SHUT		0x0040
-#define TSADC_COMP1_SHUT		0x0044
-#define TSADC_COMP2_SHUT		0x0048
-#define TSADC_COMP3_SHUT		0x004c
+#define  TSADC_INT_PD_TSHUT_O_SRC(ch)		(1 << ((ch) + 4))
+#define TSADC_DATA(ch)			(0x0020 + (ch) * 4)
+#define TSADC_COMP_INT(ch)		(0x0030 + (ch) * 4)
+#define TSADC_COMP_SHUT(ch)		(0x0040 + (ch) * 4)
 #define TSADC_HIGHT_INT_DEBOUNCE	0x0060
 #define TSADC_HIGHT_TSHUT_DEBOUNCE	0x0064
 #define TSADC_AUTO_PERIOD		0x0068
 #define TSADC_AUTO_PERIOD_HT		0x006c
+
+/* RK3588 */
+#define TSADC_V3_AUTO_SRC		0x000c
+#define  TSADC_V3_AUTO_SRC_CH(ch)	(1 << (ch))
+#define TSADC_V3_HT_INT_EN		0x0014
+#define  TSADC_V3_HT_INT_EN_CH(ch)	(1 << (ch))
+#define TSADC_V3_GPIO_EN		0x0018
+#define  TSADC_V3_GPIO_EN_CH(ch)	(1 << (ch))
+#define TSADC_V3_CRU_EN			0x001c
+#define  TSADC_V3_CRU_EN_CH(ch)		(1 << (ch))
+#define TSADC_V3_HLT_INT_PD		0x0024
+#define  TSADC_V3_HT_INT_STATUS(ch)	(1 << (ch))
+#define TSADC_V3_DATA(ch)		(0x002c + (ch) * 4)
+#define TSADC_V3_COMP_INT(ch)		(0x006c + (ch) * 4)
+#define TSADC_V3_COMP_SHUT(ch)		(0x010c + (ch) * 4)
+#define TSADC_V3_HIGHT_INT_DEBOUNCE	0x014c
+#define TSADC_V3_HIGHT_TSHUT_DEBOUNCE	0x0150
+#define TSADC_V3_AUTO_PERIOD		0x0154
+#define TSADC_V3_AUTO_PERIOD_HT		0x0158
 
 /* RK3568 */
 #define RK3568_GRF_TSADC_CON		0x0600
@@ -248,16 +246,37 @@ const struct rktemp_entry rk3568_temps[] = {
 
 const char *const rk3568_names[] = { "CPU", "GPU" };
 
+/* RK3588 conversion table. */
+const struct rktemp_entry rk3588_temps[] = {
+	{ -40000, 215 },
+	{  25000, 285 },
+	{  85000, 350 },
+	{ 125000, 395 },
+};
+
+const char *const rk3588_names[] = {
+	"Top",
+	"CPU (big0)",
+	"CPU (big1)",
+	"CPU (little)",
+	"Center",
+	"GPU",
+	"NPU"
+};
+
 struct rktemp_softc {
 	struct device		sc_dev;
 	bus_space_tag_t		sc_iot;
 	bus_space_handle_t	sc_ioh;
 	int			sc_node;
+	void			*sc_ih;
+
+	bus_size_t		sc_data0;
 
 	const struct rktemp_entry *sc_temps;
 	int			sc_ntemps;
 
-	struct ksensor		sc_sensors[3];
+	struct ksensor		sc_sensors[7];
 	int			sc_nsensors;
 	struct ksensordev	sc_sensordev;
 
@@ -275,12 +294,14 @@ struct cfdriver rktemp_cd = {
 	NULL, "rktemp", DV_DULL
 };
 
+int	rktemp_intr(void *);
 void	rktemp_rk3568_init(struct rktemp_softc *);
 int32_t rktemp_calc_code(struct rktemp_softc *, int32_t);
 int32_t rktemp_calc_temp(struct rktemp_softc *, int32_t);
 int	rktemp_valid(struct rktemp_softc *, int32_t);
 void	rktemp_refresh_sensors(void *);
 int32_t	rktemp_get_temperature(void *, uint32_t *);
+int	rktemp_set_limit(void *, uint32_t *, uint32_t);
 
 int
 rktemp_match(struct device *parent, void *match, void *aux)
@@ -291,7 +312,8 @@ rktemp_match(struct device *parent, void *match, void *aux)
 	    OF_is_compatible(faa->fa_node, "rockchip,rk3308-tsadc") ||
 	    OF_is_compatible(faa->fa_node, "rockchip,rk3328-tsadc") ||
 	    OF_is_compatible(faa->fa_node, "rockchip,rk3399-tsadc") ||
-	    OF_is_compatible(faa->fa_node, "rockchip,rk3568-tsadc"));
+	    OF_is_compatible(faa->fa_node, "rockchip,rk3568-tsadc") ||
+	    OF_is_compatible(faa->fa_node, "rockchip,rk3588-tsadc"));
 }
 
 void
@@ -301,8 +323,7 @@ rktemp_attach(struct device *parent, struct device *self, void *aux)
 	struct fdt_attach_args *faa = aux;
 	const char *const *names;
 	uint32_t mode, polarity, temp;
-	uint32_t auto_con, int_en;
-	uint32_t inter_pd_soc;
+	uint32_t auto_con, inter_pd_soc;
 	int auto_period, auto_period_ht;
 	int i;
 
@@ -318,6 +339,15 @@ rktemp_attach(struct device *parent, struct device *self, void *aux)
 	    faa->fa_reg[0].size, 0, &sc->sc_ioh)) {
 		printf(": can't map registers\n");
 		return;
+	}
+
+	if (OF_is_compatible(sc->sc_node, "rockchip,rk3588-tsadc")) {
+		sc->sc_ih = fdt_intr_establish(faa->fa_node, IPL_SOFTCLOCK,
+		    rktemp_intr, sc, sc->sc_dev.dv_xname);
+		if (sc->sc_ih == NULL) {
+			printf(": can't establish interrupt\n");
+			return;
+		}
 	}
 
 	printf("\n");
@@ -354,7 +384,7 @@ rktemp_attach(struct device *parent, struct device *self, void *aux)
 		inter_pd_soc = 13;
 		auto_period = 1875;	/* 2.5 ms */
 		auto_period_ht = 1875;	/* 2.5 ms */
-	} else {
+	} else if (OF_is_compatible(sc->sc_node, "rockchip,rk3568-tsadc")) {
 		sc->sc_temps = rk3568_temps;
 		sc->sc_ntemps = nitems(rk3568_temps);
 		sc->sc_nsensors = 2;
@@ -362,6 +392,14 @@ rktemp_attach(struct device *parent, struct device *self, void *aux)
 		inter_pd_soc = 63;	/* 97 us */
 		auto_period = 1622;	/* 2.5 ms */
 		auto_period_ht = 1622;	/* 2.5 ms */
+	} else {
+		sc->sc_temps = rk3588_temps;
+		sc->sc_ntemps = nitems(rk3588_temps);
+		sc->sc_nsensors = 7;
+		names = rk3588_names;
+		inter_pd_soc = 0;
+		auto_period = 5000;	/* 2.5 ms */
+		auto_period_ht = 5000;	/* 2.5 ms */
 	}
 
 	pinctrl_byname(sc->sc_node, "init");
@@ -371,57 +409,110 @@ rktemp_attach(struct device *parent, struct device *self, void *aux)
 	clock_enable(sc->sc_node, "apb_pclk");
 
 	/* Reset the TS-ADC controller block. */
-	reset_assert(sc->sc_node, "tsadc-apb");
+	reset_assert_all(sc->sc_node);
 	delay(10);
-	reset_deassert(sc->sc_node, "tsadc-apb");
+	reset_deassert_all(sc->sc_node);
 
 	mode = OF_getpropint(sc->sc_node, "rockchip,hw-tshut-mode", 1);
 	polarity = OF_getpropint(sc->sc_node, "rockchip,hw-tshut-polarity", 0);
 	temp = OF_getpropint(sc->sc_node, "rockchip,hw-tshut-temp", 95000);
 
-	HWRITE4(sc, TSADC_USER_CON,
-	    inter_pd_soc << TSADC_USER_CON_INTER_PD_SOC_SHIFT);
-	HWRITE4(sc, TSADC_AUTO_PERIOD, auto_period);
-	HWRITE4(sc, TSADC_AUTO_PERIOD_HT, auto_period_ht);
-	HWRITE4(sc, TSADC_HIGHT_INT_DEBOUNCE, 4);
-	HWRITE4(sc, TSADC_HIGHT_TSHUT_DEBOUNCE, 4);
+	if (OF_is_compatible(sc->sc_node, "rockchip,rk3588-tsadc")) {
+		uint32_t gpio_en, cru_en;
 
-	if (OF_is_compatible(sc->sc_node, "rockchip,rk3568-tsadc"))
-		rktemp_rk3568_init(sc);
+		sc->sc_data0 = TSADC_V3_DATA(0);
+		
+		HWRITE4(sc, TSADC_V3_AUTO_PERIOD, auto_period);
+		HWRITE4(sc, TSADC_V3_AUTO_PERIOD_HT, auto_period_ht);
+		HWRITE4(sc, TSADC_V3_HIGHT_INT_DEBOUNCE, 4);
+		HWRITE4(sc, TSADC_V3_HIGHT_TSHUT_DEBOUNCE, 4);
 
-	auto_con = HREAD4(sc, TSADC_AUTO_CON);
-	auto_con |= TSADC_AUTO_CON_TSADC_Q_SEL;
-	if (polarity)
-		auto_con |= TSADC_AUTO_CON_TSHUT_POLARITY;
-	HWRITE4(sc, TSADC_AUTO_CON, auto_con);
+		auto_con = TSADC_AUTO_CON_TSHUT_POLARITY << 16;
+		if (polarity)
+			auto_con = TSADC_AUTO_CON_TSHUT_POLARITY;
+		HWRITE4(sc, TSADC_AUTO_CON, auto_con);
 
-	/* Set shutdown limit. */
-	for (i = 0; i < sc->sc_nsensors; i++) {
-		HWRITE4(sc, TSADC_COMP0_SHUT + i * 4,
-		    rktemp_calc_code(sc, temp));
-		auto_con |= (TSADC_AUTO_CON_SRC0_EN << i);
+		/* Set shutdown limit. */
+		for (i = 0; i < sc->sc_nsensors; i++) {
+			HWRITE4(sc, TSADC_V3_COMP_SHUT(i),
+			    rktemp_calc_code(sc, temp));
+			HWRITE4(sc, TSADC_V3_AUTO_SRC,
+			    TSADC_V3_AUTO_SRC_CH(i) << 16 |
+			    TSADC_V3_AUTO_SRC_CH(i));
+		}
+
+		/* Clear shutdown output status. */
+		for (i = 0; i < sc->sc_nsensors; i++) {
+			HWRITE4(sc, TSADC_V3_HLT_INT_PD,
+			    TSADC_V3_HT_INT_STATUS(i));
+		}
+
+		/* Configure mode. */
+		gpio_en = cru_en = 0;
+		for (i = 0; i < sc->sc_nsensors; i++) {
+			gpio_en |= TSADC_V3_GPIO_EN_CH(i) << 16;
+			cru_en |= TSADC_V3_CRU_EN_CH(i) << 16;
+			if (mode)
+				gpio_en |= TSADC_V3_GPIO_EN_CH(i);
+			else
+				cru_en |= TSADC_V3_CRU_EN_CH(i);
+		}
+		HWRITE4(sc, TSADC_V3_GPIO_EN, gpio_en);
+		HWRITE4(sc, TSADC_V3_CRU_EN, cru_en);
+	} else {
+		uint32_t int_en;
+
+		sc->sc_data0 = TSADC_DATA(0);
+
+		HWRITE4(sc, TSADC_USER_CON,
+		    inter_pd_soc << TSADC_USER_CON_INTER_PD_SOC_SHIFT);
+		HWRITE4(sc, TSADC_AUTO_PERIOD, auto_period);
+		HWRITE4(sc, TSADC_AUTO_PERIOD_HT, auto_period_ht);
+		HWRITE4(sc, TSADC_HIGHT_INT_DEBOUNCE, 4);
+		HWRITE4(sc, TSADC_HIGHT_TSHUT_DEBOUNCE, 4);
+
+		if (OF_is_compatible(sc->sc_node, "rockchip,rk3568-tsadc"))
+			rktemp_rk3568_init(sc);
+
+		auto_con = HREAD4(sc, TSADC_AUTO_CON);
+		auto_con |= TSADC_AUTO_CON_TSADC_Q_SEL;
+		if (polarity)
+			auto_con |= TSADC_AUTO_CON_TSHUT_POLARITY;
+		HWRITE4(sc, TSADC_AUTO_CON, auto_con);
+
+		/* Set shutdown limit. */
+		for (i = 0; i < sc->sc_nsensors; i++) {
+			HWRITE4(sc, TSADC_COMP_SHUT(i),
+			    rktemp_calc_code(sc, temp));
+			auto_con |= (TSADC_AUTO_CON_SRC_EN(i));
+		}
+		HWRITE4(sc, TSADC_AUTO_CON, auto_con);
+
+		/* Clear shutdown output status. */
+		for (i = 0; i < sc->sc_nsensors; i++)
+			HWRITE4(sc, TSADC_INT_PD, TSADC_INT_PD_TSHUT_O_SRC(i));
+
+		/* Configure mode. */
+		int_en = HREAD4(sc, TSADC_INT_EN);
+		for (i = 0; i < sc->sc_nsensors; i++) {
+			if (mode)
+				int_en |= TSADC_INT_EN_TSHUT_2GPIO_EN_SRC(i);
+			else
+				int_en |= TSADC_INT_EN_TSHUT_2CRU_EN_SRC(i);
+		}
+		HWRITE4(sc, TSADC_INT_EN, int_en);
 	}
-	HWRITE4(sc, TSADC_AUTO_CON, auto_con);
-
-	/* Clear shutdown output status. */
-	for (i = 0; i < sc->sc_nsensors; i++)
-		HWRITE4(sc, TSADC_INT_PD, (TSADC_INT_PD_TSHUT_O_SRC0 << i));
-
-	/* Configure mode. */
-	int_en = HREAD4(sc, TSADC_INT_EN);
-	for (i = 0; i < sc->sc_nsensors; i++) {
-		if (mode)
-			int_en |= (TSADC_INT_EN_TSHUT_2GPIO_EN_SRC0 << i);
-		else
-			int_en |= (TSADC_INT_EN_TSHUT_2CRU_EN_SRC0 << i);
-	}
-	HWRITE4(sc, TSADC_INT_EN, int_en);
 
 	pinctrl_byname(sc->sc_node, "default");
 
 	/* Finally turn on the ADC. */
-	auto_con |= TSADC_AUTO_CON_AUTO_EN;
-	HWRITE4(sc, TSADC_AUTO_CON, auto_con);
+	if (OF_is_compatible(sc->sc_node, "rockchip,rk3588-tsadc")) {
+		HWRITE4(sc, TSADC_AUTO_CON,
+		    TSADC_AUTO_CON_AUTO_EN << 16 | TSADC_AUTO_CON_AUTO_EN);
+	} else {
+		auto_con |= TSADC_AUTO_CON_AUTO_EN;
+		HWRITE4(sc, TSADC_AUTO_CON, auto_con);
+	}
 
 	/* Register sensors. */
 	strlcpy(sc->sc_sensordev.xname, sc->sc_dev.dv_xname,
@@ -439,7 +530,32 @@ rktemp_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_ts.ts_node = sc->sc_node;
 	sc->sc_ts.ts_cookie = sc;
 	sc->sc_ts.ts_get_temperature = rktemp_get_temperature;
+	if (OF_is_compatible(sc->sc_node, "rockchip,rk3588-tsadc"))
+		sc->sc_ts.ts_set_limit = rktemp_set_limit;
 	thermal_sensor_register(&sc->sc_ts);
+}
+
+int
+rktemp_intr(void *arg)
+{
+	struct rktemp_softc *sc = arg;
+	uint32_t stat, ch;
+
+	stat = HREAD4(sc, TSADC_V3_HLT_INT_PD);
+	stat &= HREAD4(sc, TSADC_V3_HT_INT_EN);
+	for (ch = 0; ch < sc->sc_nsensors; ch++) {
+		if (stat & TSADC_V3_HT_INT_STATUS(ch))
+			thermal_sensor_update(&sc->sc_ts, &ch);
+	}
+
+	/*
+	 * Disable and clear the active interrupts.  The thermal zone
+	 * code will set a new limit when necessary.
+	 */
+	HWRITE4(sc, TSADC_V3_HT_INT_EN, stat << 16);
+	HWRITE4(sc, TSADC_V3_HLT_INT_PD, stat);
+
+	return 1;
 }
 
 void
@@ -557,7 +673,7 @@ rktemp_refresh_sensors(void *arg)
 	int i;
 
 	for (i = 0; i < sc->sc_nsensors; i++) {
-		code = HREAD4(sc, TSADC_DATA0 + i * 4);
+		code = HREAD4(sc, sc->sc_data0 + (i * 4));
 		temp = rktemp_calc_temp(sc, code);
 		sc->sc_sensors[i].value = 273150000 + 1000 * temp;
 		if (rktemp_valid(sc, code))
@@ -571,15 +687,35 @@ int32_t
 rktemp_get_temperature(void *cookie, uint32_t *cells)
 {
 	struct rktemp_softc *sc = cookie;
-	uint32_t idx = cells[0];
+	uint32_t ch = cells[0];
 	int32_t code;
 
-	if (idx >= sc->sc_nsensors)
+	if (ch >= sc->sc_nsensors)
 		return THERMAL_SENSOR_MAX;
 
-	code = HREAD4(sc, TSADC_DATA0 + idx * 4);
+	code = HREAD4(sc, sc->sc_data0 + (ch * 4));
 	if (rktemp_valid(sc, code))
 		return rktemp_calc_temp(sc, code);
 	else
 		return THERMAL_SENSOR_MAX;
+}
+
+int
+rktemp_set_limit(void *cookie, uint32_t *cells, uint32_t temp)
+{
+	struct rktemp_softc *sc = cookie;
+	uint32_t ch = cells[0];
+
+	if (ch >= sc->sc_nsensors)
+		return ENXIO;
+
+	/* Set limit for this sensor. */
+	HWRITE4(sc, TSADC_V3_COMP_INT(ch), rktemp_calc_code(sc, temp));
+
+	/* Clear and enable the corresponding interrupt. */
+	HWRITE4(sc, TSADC_V3_HLT_INT_PD, TSADC_V3_HT_INT_STATUS(ch));
+	HWRITE4(sc, TSADC_V3_HT_INT_EN, TSADC_V3_HT_INT_EN_CH(ch) << 16 |
+	    TSADC_V3_HT_INT_EN_CH(ch));
+
+	return 0;
 }

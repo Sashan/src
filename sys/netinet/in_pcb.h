@@ -1,4 +1,4 @@
-/*	$OpenBSD: in_pcb.h,v 1.152 2024/02/13 12:22:09 bluhm Exp $	*/
+/*	$OpenBSD: in_pcb.h,v 1.157 2024/04/19 10:13:58 bluhm Exp $	*/
 /*	$NetBSD: in_pcb.h,v 1.14 1996/02/13 23:42:00 christos Exp $	*/
 
 /*
@@ -120,11 +120,8 @@
 struct pf_state_key;
 
 union inpaddru {
+	struct in_addr iau_addr;
 	struct in6_addr iau_addr6;
-	struct {
-		uint8_t pad[12];
-		struct in_addr inaddr;	/* easier transition */
-	} iau_a4u;
 };
 
 /*
@@ -142,9 +139,9 @@ struct inpcb {
 	struct	  inpcbtable *inp_table;	/* [I] inet queue/hash table */
 	union	  inpaddru inp_faddru;		/* [t] Foreign address. */
 	union	  inpaddru inp_laddru;		/* [t] Local address. */
-#define	inp_faddr	inp_faddru.iau_a4u.inaddr
+#define	inp_faddr	inp_faddru.iau_addr
 #define	inp_faddr6	inp_faddru.iau_addr6
-#define	inp_laddr	inp_laddru.iau_a4u.inaddr
+#define	inp_laddr	inp_laddru.iau_addr
 #define	inp_laddr6	inp_laddru.iau_addr6
 	u_int16_t inp_fport;		/* [t] foreign port */
 	u_int16_t inp_lport;		/* [t] local port */
@@ -160,8 +157,10 @@ struct inpcb {
 	} inp_hu;
 #define	inp_ip		inp_hu.hu_ip
 #define	inp_ipv6	inp_hu.hu_ipv6
-	struct	  mbuf *inp_options;	/* IP options */
-	struct ip6_pktopts *inp_outputopts6; /* IP6 options for outgoing packets */
+	union {
+		struct	mbuf *inp_options;		/* IPv4 options */
+		struct	ip6_pktopts *inp_outputopts6;	/* IPv6 options */
+	};
 	int inp_hops;
 	union {
 		struct ip_moptions *mou_mo;
@@ -169,19 +168,12 @@ struct inpcb {
 	} inp_mou;
 #define inp_moptions inp_mou.mou_mo	/* [N] IPv4 multicast options */
 #define inp_moptions6 inp_mou.mou_mo6	/* [N] IPv6 multicast options */
-	u_char	  inp_seclevel[4];	/* [N] IPsec level of socket */
-#define SL_AUTH           0             /* Authentication level */
-#define SL_ESP_TRANS      1             /* ESP transport level */
-#define SL_ESP_NETWORK    2             /* ESP network (encapsulation) level */
-#define SL_IPCOMP         3             /* Compression level */
+	struct	ipsec_level   inp_seclevel;	/* [N] IPsec level of socket */
 	u_char	inp_ip_minttl;		/* minimum TTL or drop */
 #define inp_ip6_minhlim inp_ip_minttl	/* minimum Hop Limit or drop */
 #define	inp_flowinfo	inp_hu.hu_ipv6.ip6_flow
 
 	int	inp_cksum6;
-#ifndef _KERNEL
-#define inp_csumoffset	inp_cksum6
-#endif
 	struct	icmp6_filter *inp_icmp6filt;
 	struct	pf_state_key *inp_pf_sk; /* [L] */
 	struct	mbuf *(*inp_upcall)(void *, struct mbuf *,
@@ -307,7 +299,8 @@ extern int in_pcbnotifymiss;
 void	 in_init(void);
 void	 in_losing(struct inpcb *);
 int	 in_pcballoc(struct socket *, struct inpcbtable *, int);
-int	 in_pcbbind_locked(struct inpcb *, struct mbuf *, struct proc *);
+int	 in_pcbbind_locked(struct inpcb *, struct mbuf *, const void *,
+	    struct proc *);
 int	 in_pcbbind(struct inpcb *, struct mbuf *, struct proc *);
 int	 in_pcbaddrisavail(const struct inpcb *, struct sockaddr_in *, int,
 	    struct proc *);

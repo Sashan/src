@@ -1,4 +1,4 @@
-/* $OpenBSD: window-copy.c,v 1.345 2023/11/02 10:38:14 nicm Exp $ */
+/* $OpenBSD: window-copy.c,v 1.350 2024/05/14 09:32:37 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -795,16 +795,24 @@ window_copy_formats(struct window_mode_entry *wme, struct format_tree *ft)
 	format_add(ft, "copy_cursor_x", "%d", data->cx);
 	format_add(ft, "copy_cursor_y", "%d", data->cy);
 
-	format_add(ft, "selection_present", "%d", data->screen.sel != NULL);
 	if (data->screen.sel != NULL) {
 		format_add(ft, "selection_start_x", "%d", data->selx);
 		format_add(ft, "selection_start_y", "%d", data->sely);
 		format_add(ft, "selection_end_x", "%d", data->endselx);
 		format_add(ft, "selection_end_y", "%d", data->endsely);
-		format_add(ft, "selection_active", "%d",
-		    data->cursordrag != CURSORDRAG_NONE);
-	} else
-		format_add(ft, "selection_active", "%d", 0);
+
+		if (data->cursordrag != CURSORDRAG_NONE)
+			format_add(ft, "selection_active", "1");
+		else
+			format_add(ft, "selection_active", "0");
+		if (data->endselx != data->selx || data->endsely != data->sely)
+			format_add(ft, "selection_present", "1");
+		else
+			format_add(ft, "selection_present", "0");
+	} else {
+		format_add(ft, "selection_active", "0");
+		format_add(ft, "selection_present", "0");
+	}
 
 	format_add(ft, "search_present", "%d", data->searchmark != NULL);
 	format_add_cb(ft, "search_match", window_copy_search_match_cb);
@@ -3606,11 +3614,10 @@ window_copy_search_jump(struct window_mode_entry *wme, struct grid *gd,
     struct grid *sgd, u_int fx, u_int fy, u_int endline, int cis, int wrap,
     int direction, int regex)
 {
-	u_int			 i, px, sx, ssize = 1;
-	int			 found = 0, cflags = REG_EXTENDED;
-	char			*sbuf;
-	regex_t			 reg;
-	struct grid_line	*gl;
+	u_int	 i, px, sx, ssize = 1;
+	int	 found = 0, cflags = REG_EXTENDED;
+	char	*sbuf;
+	regex_t	 reg;
 
 	if (regex) {
 		sbuf = xmalloc(ssize);
@@ -3627,9 +3634,6 @@ window_copy_search_jump(struct window_mode_entry *wme, struct grid *gd,
 
 	if (direction) {
 		for (i = fy; i <= endline; i++) {
-			gl = grid_get_line(gd, i);
-			if (i != endline && gl->flags & GRID_LINE_WRAPPED)
-				continue;
 			if (regex) {
 				found = window_copy_search_lr_regex(gd,
 				    &px, &sx, i, fx, gd->sx, &reg);
@@ -3643,9 +3647,6 @@ window_copy_search_jump(struct window_mode_entry *wme, struct grid *gd,
 		}
 	} else {
 		for (i = fy + 1; endline < i; i--) {
-			gl = grid_get_line(gd, i - 1);
-			if (i != endline && gl->flags & GRID_LINE_WRAPPED)
-				continue;
 			if (regex) {
 				found = window_copy_search_rl_regex(gd,
 				    &px, &sx, i - 1, 0, fx + 1, &reg);
@@ -4686,7 +4687,7 @@ window_copy_get_selection(struct window_mode_entry *wme, size_t *len)
 	if (keys == MODEKEY_EMACS || lastex <= ey_last) {
 		if (~grid_get_line(data->backing->grid, ey)->flags &
 		    GRID_LINE_WRAPPED || lastex != ey_last)
-		off -= 1;
+			off -= 1;
 	}
 	*len = off;
 	return (buf);

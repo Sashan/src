@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtable.c,v 1.85 2023/11/12 17:51:40 bluhm Exp $ */
+/*	$OpenBSD: rtable.c,v 1.87 2024/04/09 12:53:08 claudio Exp $ */
 
 /*
  * Copyright (c) 2014-2016 Martin Pieuchot
@@ -30,6 +30,7 @@
 
 #include <net/rtable.h>
 #include <net/route.h>
+#include <net/art.h>
 
 /*
  * Structures used by rtable_get() to retrieve the corresponding
@@ -875,7 +876,7 @@ an_match(struct art_node *an, const struct sockaddr *dst, int plen)
 		return (0);
 
 	rt = SRPL_FIRST(&sr, &an->an_rtlist);
-	match = (memcmp(rt->rt_dest, dst, dst->sa_len) == 0);
+	match = (rt != NULL && memcmp(rt->rt_dest, dst, dst->sa_len) == 0);
 	SRPL_LEAVE(&sr);
 
 	return (match);

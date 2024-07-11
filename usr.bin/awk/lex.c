@@ -1,4 +1,4 @@
-/*	$OpenBSD: lex.c,v 1.32 2023/11/25 16:31:33 millert Exp $	*/
+/*	$OpenBSD: lex.c,v 1.34 2024/06/03 00:58:04 millert Exp $	*/
 /****************************************************************
 Copyright (C) Lucent Technologies 1997
 All Rights Reserved
@@ -227,7 +227,7 @@ int yylex(void)
 				;
 			unput(c);
 			/*
-			 * Next line is a hack, itcompensates for
+			 * Next line is a hack, it compensates for
 			 * unput's treatment of \n.
 			 */
 			lineno++;
@@ -378,8 +378,6 @@ int yylex(void)
 		}
 	}
 }
-
-extern int runetochar(char *str, int c);
 
 int string(void)
 {

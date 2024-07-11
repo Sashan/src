@@ -1,4 +1,4 @@
-/*	$OpenBSD: ipifuncs.c,v 1.19 2019/08/06 18:06:32 kettenis Exp $	*/
+/*	$OpenBSD: ipifuncs.c,v 1.22 2024/04/14 19:08:09 miod Exp $	*/
 /*	$NetBSD: ipifuncs.c,v 1.8 2006/10/07 18:11:36 rjs Exp $ */
 
 /*-
@@ -36,12 +36,10 @@
 #include <machine/cpu.h>
 #include <machine/ctlreg.h>
 #include <machine/hypervisor.h>
-#include <machine/pmap.h>
+#include <machine/pte.h>
 #include <machine/sparc64.h>
 
 #define SPARC64_IPI_RETRIES	10000
-
-#define	sparc64_ipi_sleep()	delay(1000)
 
 void	sun4u_send_ipi(int, void (*)(void), u_int64_t, u_int64_t);
 void	sun4u_broadcast_ipi(void (*)(void), u_int64_t, u_int64_t);
@@ -213,9 +211,9 @@ sun4v_broadcast_ipi(void (*func)(void), u_int64_t arg0, u_int64_t arg1)
 }
 
 void
-smp_tlb_flush_pte(vaddr_t va, int ctx)
+smp_tlb_flush_pte(vaddr_t va, uint64_t ctx)
 {
-	sp_tlb_flush_pte(va, ctx);
+	(*sp_tlb_flush_pte)(va, ctx);
 
 	if (db_active)
 		return;
@@ -227,9 +225,9 @@ smp_tlb_flush_pte(vaddr_t va, int ctx)
 }
 
 void
-smp_tlb_flush_ctx(int ctx)
+smp_tlb_flush_ctx(uint64_t ctx)
 {
-	sp_tlb_flush_ctx(ctx);
+	(*sp_tlb_flush_ctx)(ctx);
 
 	if (db_active)
 		return;

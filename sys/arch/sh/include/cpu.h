@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.37 2024/02/25 19:15:50 cheloha Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.39 2024/06/09 21:15:29 jca Exp $	*/
 /*	$NetBSD: cpu.h,v 1.41 2006/01/21 04:24:12 uwe Exp $	*/
 
 /*-
@@ -90,11 +90,11 @@ extern struct cpu_info cpu_info_store;
 #define MAXCPUS	1
 #define cpu_unidle(ci)
 
-#define CPU_BUSY_CYCLE()	do {} while (0)
+#define CPU_BUSY_CYCLE()	__asm volatile ("" ::: "memory")
 
 
 /*
- * Arguments to hardclock and gatherstats encapsulate the previous
+ * Arguments to clockintr_dispatch encapsulate the previous
  * machine state in an opaque clockframe.
  */
 struct clockframe {

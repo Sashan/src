@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfvar_priv.h,v 1.35 2024/01/01 22:16:51 bluhm Exp $	*/
+/*	$OpenBSD: pfvar_priv.h,v 1.37 2024/06/21 12:51:29 sashan Exp $	*/
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -321,6 +321,7 @@ struct pf_pdesc {
 
 struct pf_anchor_stackframe {
 	struct pf_ruleset	*sf_rs;
+	struct pf_rule		*sf_anchor;
 	union {
 		struct pf_rule			*u_r;
 		struct pf_anchor_stackframe	*u_stack_top;
@@ -370,6 +371,7 @@ void			 pf_state_unref(struct pf_state *);
 
 extern struct rwlock	pf_lock;
 extern struct rwlock	pf_state_lock;
+extern struct mutex	pf_frag_mtx;
 extern struct mutex	pf_inp_mtx;
 
 #define PF_LOCK()		do {			\
@@ -414,6 +416,9 @@ extern struct mutex	pf_inp_mtx;
 			splassert_fail(RW_WRITE,	\
 			    rw_status(&pf_state_lock), __func__);\
 	} while (0)
+
+#define PF_FRAG_LOCK()		mtx_enter(&pf_frag_mtx)
+#define PF_FRAG_UNLOCK()	mtx_leave(&pf_frag_mtx)
 
 /* for copies to/from network byte order */
 void			pf_state_peer_hton(const struct pf_state_peer *,

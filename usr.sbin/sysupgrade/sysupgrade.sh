@@ -1,6 +1,6 @@
 #!/bin/ksh
 #
-# $OpenBSD: sysupgrade.sh,v 1.49 2023/10/12 12:31:15 kn Exp $
+# $OpenBSD: sysupgrade.sh,v 1.52 2024/06/19 05:22:33 otto Exp $
 #
 # Copyright (c) 1997-2015 Todd Miller, Theo de Raadt, Ken Westerback
 # Copyright (c) 2015 Robert Peichaer <rpe@openbsd.org>
@@ -139,16 +139,21 @@ unpriv -f SHA256.sig ftp -N sysupgrade -Vmo SHA256.sig ${URL}SHA256.sig
 _KEY=openbsd-${_KERNV[0]%.*}${_KERNV[0]#*.}-base.pub
 _NEXTKEY=openbsd-${NEXT_VERSION%.*}${NEXT_VERSION#*.}-base.pub
 
-read _LINE <SHA256.sig
-case ${_LINE} in
-*\ ${_KEY})	SIGNIFY_KEY=/etc/signify/${_KEY} ;;
-*\ ${_NEXTKEY})	SIGNIFY_KEY=/etc/signify/${_NEXTKEY} ;;
-*)		err "invalid signing key" ;;
-esac
+if $SNAP; then
+	unpriv -f SHA256 signify -Ve -x SHA256.sig -m SHA256
+else
+	read _LINE <SHA256.sig
+	case ${_LINE} in
+	*\ ${_KEY})	SIGNIFY_KEY=/etc/signify/${_KEY} ;;
+	*\ ${_NEXTKEY})	SIGNIFY_KEY=/etc/signify/${_NEXTKEY} ;;
+	*)		err "invalid signing key" ;;
+	esac
 
-[[ -f ${SIGNIFY_KEY} ]] || err "cannot find ${SIGNIFY_KEY}"
+	[[ -f ${SIGNIFY_KEY} ]] || err "cannot find ${SIGNIFY_KEY}"
 
-unpriv -f SHA256 signify -Ve -p "${SIGNIFY_KEY}" -x SHA256.sig -m SHA256
+	unpriv -f SHA256 signify -Ve -p "${SIGNIFY_KEY}" -x SHA256.sig -m SHA256
+fi
+
 rm SHA256.sig
 
 if cmp -s /var/db/installed.SHA256 SHA256 && ! $FORCE; then
@@ -156,9 +161,9 @@ if cmp -s /var/db/installed.SHA256 SHA256 && ! $FORCE; then
 	exit 0
 fi
 
-# INSTALL.*, bsd*, *.tgz
+# BUILDINFO INSTALL.*, bsd*, *.tgz
 SETS=$(sed -n -e 's/^SHA256 (\(.*\)) .*/\1/' \
-    -e '/^INSTALL\./p;/^bsd/p;/\.tgz$/p' SHA256)
+    -e '/^BUILDINFO$/p;/^INSTALL\./p;/^bsd/p;/\.tgz$/p' SHA256)
 
 OLD_FILES=$(ls)
 OLD_FILES=$(rmel SHA256 $OLD_FILES)
@@ -180,6 +185,15 @@ done
 if [[ -n ${DL} ]]; then
 	echo Verifying sets.
 	unpriv cksum -qC SHA256 ${DL}
+fi
+
+if [[ -e /var/db/installed.BUILDINFO && -e BUILDINFO ]]; then
+	installed_build_ts=$(cut -f3 -d' ' /var/db/installed.BUILDINFO)
+	build_ts=$(cut -f3 -d' ' BUILDINFO)
+	if (( $build_ts < $installed_build_ts )) && ! $FORCE; then
+		echo "Downloaded snapshot is older than installed snapshot. Use -f to force downgrade."
+		exit 1
+	fi
 fi
 
 cat <<__EOT >/auto_upgrade.conf

@@ -1,4 +1,4 @@
-/* $OpenBSD: dsdt.c,v 1.265 2024/01/08 19:52:29 kettenis Exp $ */
+/* $OpenBSD: dsdt.c,v 1.269 2024/06/26 01:40:49 jsg Exp $ */
 /*
  * Copyright (c) 2005 Jordan Hargrave <jordan@openbsd.org>
  *
@@ -56,8 +56,6 @@ struct aml_scope	*aml_load(struct acpi_softc *, struct aml_scope *,
 
 void			aml_copyvalue(struct aml_value *, struct aml_value *);
 
-void			aml_setvalue(struct aml_scope *, struct aml_value *,
-			    struct aml_value *, int64_t);
 void			aml_freevalue(struct aml_value *);
 struct aml_value	*aml_allocvalue(int, int64_t, const void *);
 struct aml_value	*_aml_setvalue(struct aml_value *, int, int64_t,
@@ -77,16 +75,6 @@ void			aml_delref(struct aml_value **, const char *);
 void			aml_bufcpy(void *, int, const void *, int, int);
 
 int			aml_pc(uint8_t *);
-
-struct aml_value	*aml_parseop(struct aml_scope *, struct aml_value *,int);
-struct aml_value	*aml_parsetarget(struct aml_scope *, struct aml_value *,
-			    struct aml_value **);
-struct aml_value	*aml_parseterm(struct aml_scope *, struct aml_value *);
-
-struct aml_value	*aml_evaltarget(struct aml_scope *scope,
-			    struct aml_value *res);
-int			aml_evalterm(struct aml_scope *scope,
-			    struct aml_value *raw, struct aml_value *dst);
 
 struct aml_opcode	*aml_findopcode(int);
 
@@ -263,7 +251,8 @@ struct aml_opcode aml_table[] = {
 	{ AMLOP_COPYOBJECT,	"CopyObject",	"tS",	},
 };
 
-int aml_pc(uint8_t *src)
+int
+aml_pc(uint8_t *src)
 {
 	return src - aml_root.start;
 }
@@ -1680,7 +1669,8 @@ aml_foreachpkg(struct aml_value *pkg, int start,
  */
 int aml_fixup_node(struct aml_node *, void *);
 
-int aml_fixup_node(struct aml_node *node, void *arg)
+int
+aml_fixup_node(struct aml_node *node, void *arg)
 {
 	struct aml_value *val = arg;
 	int i;
@@ -4249,7 +4239,7 @@ aml_parse(struct aml_scope *scope, int ret_type, const char *stype)
 		/* Name: Nt */
 		rv = opargs[0];
 		aml_freevalue(rv);
-			aml_copyvalue(rv, opargs[1]);
+		aml_copyvalue(rv, opargs[1]);
 		break;
 	case AMLOP_ALIAS:
 		/* Alias: nN */

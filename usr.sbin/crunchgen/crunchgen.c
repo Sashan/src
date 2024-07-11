@@ -1,4 +1,4 @@
-/* $OpenBSD: crunchgen.c,v 1.27 2023/09/14 16:39:00 jca Exp $	 */
+/* $OpenBSD: crunchgen.c,v 1.30 2024/06/02 18:47:17 deraadt Exp $	 */
 
 /*
  * Copyright (c) 1994 University of Maryland
@@ -897,6 +897,7 @@ top_makefile_rules(FILE * outmk)
 	fprintf(outmk, "CFLAGS+=-fno-unwind-tables\n");
 	fprintf(outmk, ".if ${MACHINE} == \"amd64\"\n");
 	fprintf(outmk, "CFLAGS+=-fcf-protection=none\n");
+	fprintf(outmk, "CFLAGS+=-fno-ret-clean\n");
 	fprintf(outmk, ".endif\n");
 	fprintf(outmk, ".if ${MACHINE} == \"arm64\"\n");
 	fprintf(outmk, "CFLAGS+=-mbranch-protection=none\n");

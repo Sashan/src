@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_err.c,v 1.47 2024/02/03 15:58:33 beck Exp $ */
+/* $OpenBSD: ssl_err.c,v 1.49 2024/06/24 06:50:07 tb Exp $ */
 /* ====================================================================
  * Copyright (c) 1999-2011 The OpenSSL Project.  All rights reserved.
  *
@@ -67,7 +67,7 @@
 #define ERR_REASON(reason) ERR_PACK(ERR_LIB_SSL,0,reason)
 
 /* See SSL_state_func_code below */
-static ERR_STRING_DATA SSL_str_functs[]= {
+static ERR_STRING_DATA SSL_str_functs[] = {
 	{ERR_FUNC(1),  "CONNECT_CW_FLUSH"},
 	{ERR_FUNC(2),  "CONNECT_CW_CLNT_HELLO"},
 	{ERR_FUNC(3),  "CONNECT_CW_CLNT_HELLO"},
@@ -136,19 +136,19 @@ static ERR_STRING_DATA SSL_str_functs[]= {
 	{ERR_FUNC(70),  "ACCEPT_SW_SESSION_TICKET"},
 	{ERR_FUNC(71),  "ACCEPT_SW_CERT_STATUS"},
 	{ERR_FUNC(72),  "ACCEPT_SW_CERT_STATUS"},
-	{ERR_FUNC(73), 	"ST_BEFORE"},
-	{ERR_FUNC(74), 	"ST_ACCEPT"},
-	{ERR_FUNC(75), 	"ST_CONNECT"},
-	{ERR_FUNC(76), 	"ST_OK"},
-	{ERR_FUNC(77), 	"ST_RENEGOTIATE"},
-	{ERR_FUNC(78), 	"ST_BEFORE_CONNECT"},
-	{ERR_FUNC(79), 	"ST_OK_CONNECT"},
-	{ERR_FUNC(80), 	"ST_BEFORE_ACCEPT"},
-	{ERR_FUNC(81), 	"ST_OK_ACCEPT"},
+	{ERR_FUNC(73),	"ST_BEFORE"},
+	{ERR_FUNC(74),	"ST_ACCEPT"},
+	{ERR_FUNC(75),	"ST_CONNECT"},
+	{ERR_FUNC(76),	"ST_OK"},
+	{ERR_FUNC(77),	"ST_RENEGOTIATE"},
+	{ERR_FUNC(78),	"ST_BEFORE_CONNECT"},
+	{ERR_FUNC(79),	"ST_OK_CONNECT"},
+	{ERR_FUNC(80),	"ST_BEFORE_ACCEPT"},
+	{ERR_FUNC(81),	"ST_OK_ACCEPT"},
 	{ERR_FUNC(83),  "DTLS1_ST_CR_HELLO_VERIFY_REQUEST"},
-	{ERR_FUNC(84), 	"DTLS1_ST_CR_HELLO_VERIFY_REQUEST"},
-	{ERR_FUNC(85), 	"DTLS1_ST_SW_HELLO_VERIFY_REQUEST"},
-	{ERR_FUNC(86), 	"DTLS1_ST_SW_HELLO_VERIFY_REQUEST"},
+	{ERR_FUNC(84),	"DTLS1_ST_CR_HELLO_VERIFY_REQUEST"},
+	{ERR_FUNC(85),	"DTLS1_ST_SW_HELLO_VERIFY_REQUEST"},
+	{ERR_FUNC(86),	"DTLS1_ST_SW_HELLO_VERIFY_REQUEST"},
 	{ERR_FUNC(0xfff),   "(UNKNOWN)SSL_internal"},
 	{0, NULL}
 };

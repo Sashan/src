@@ -1,4 +1,4 @@
-/*	$OpenBSD: proc.h,v 1.356 2024/02/03 18:51:58 beck Exp $	*/
+/*	$OpenBSD: proc.h,v 1.362 2024/07/08 13:17:12 claudio Exp $	*/
 /*	$NetBSD: proc.h,v 1.44 1996/04/22 01:23:21 christos Exp $	*/
 
 /*-
@@ -87,14 +87,19 @@ struct	pgrp {
 
 /*
  * time usage: accumulated times in ticks
- * Once a second, each thread's immediate counts (p_[usi]ticks) are
- * accumulated into these.
+ * Each thread is immediatly accumulated here. For processes only the
+ * time of exited threads is accumulated and to get the proper process
+ * time usage tuagg_get_process() needs to be called.
+ * Accounting of threads is done lockless by curproc using the tu_gen
+ * generation counter. Code should use tu_enter() and tu_leave() for this.
+ * The process ps_tu structure is locked by the ps_mtx.
  */
 struct tusage {
-	struct	timespec tu_runtime;	/* Realtime. */
+	uint64_t	tu_gen;		/* generation counter */
 	uint64_t	tu_uticks;	/* Statclock hits in user mode. */
 	uint64_t	tu_sticks;	/* Statclock hits in system mode. */
 	uint64_t	tu_iticks;	/* Statclock hits processing intr. */
+	struct	timespec tu_runtime;	/* Realtime. */
 };
 
 /*
@@ -145,7 +150,7 @@ struct process {
 	struct	ucred *ps_ucred;	/* Process owner's identity. */
 
 	LIST_ENTRY(process) ps_list;	/* List of all processes. */
-	TAILQ_HEAD(,proc) ps_threads;	/* [K|S] Threads in this process. */
+	TAILQ_HEAD(,proc) ps_threads;	/* [K|m] Threads in this process. */
 
 	LIST_ENTRY(process) ps_pglist;	/* List of processes in pgrp. */
 	struct	process *ps_pptr; 	/* Pointer to parent process. */
@@ -180,8 +185,9 @@ struct process {
 	u_int	ps_flags;		/* [a] PS_* flags. */
 	int	ps_siglist;		/* Signals pending for the process. */
 
-	struct	proc *ps_single;	/* [S] Thread for single-threading. */
-	u_int	ps_singlecount;		/* [a] Not yet suspended threads. */
+	struct	proc *ps_single;	/* [m] Thread for single-threading. */
+	u_int	ps_singlecnt;		/* [m] Number of threads to suspend. */
+	u_int	ps_exitcnt;		/* [m] Number of threads in exit1. */
 
 	int	ps_traceflag;		/* Kernel trace points. */
 	struct	vnode *ps_tracevp;	/* Trace to vnode. */
@@ -196,7 +202,7 @@ struct process {
 	struct	ptrace_state *ps_ptstat;/* Ptrace state */
 
 	struct	rusage *ps_ru;		/* sum of stats for dead threads. */
-	struct	tusage ps_tu;		/* accumulated times. */
+	struct	tusage ps_tu;		/* [m] accumul times of dead threads. */
 	struct	rusage ps_cru;		/* sum of stats for reaped children */
 	struct	itimerspec ps_timer[3];	/* [m] ITIMER_REAL timer */
 					/* [T] ITIMER_{VIRTUAL,PROF} timers */
@@ -252,7 +258,7 @@ struct process {
 
 /* End area that is copied on creation. */
 #define ps_endcopy	ps_threadcnt
-	u_int	ps_threadcnt;		/* Number of threads. */
+	u_int	ps_threadcnt;		/* [m] Number of threads. */
 
 	struct	timespec ps_start;	/* starting uptime. */
 	struct	timeout ps_realit_to;	/* [m] ITIMER_REAL timeout */
@@ -321,14 +327,15 @@ struct p_inentry {
  *	S	scheduler lock
  *	U	uidinfolk
  *	l	read only reference, see lim_read_enter()
- *	o	owned (read/modified only) by this thread
+ *	o	owned (modified only) by this thread
+ *	m	this proc's' `p->p_p->ps_mtx'
  */
 struct proc {
 	TAILQ_ENTRY(proc) p_runq;	/* [S] current run/sleep queue */
 	LIST_ENTRY(proc) p_list;	/* List of all threads. */
 
 	struct	process *p_p;		/* [I] The process of this thread. */
-	TAILQ_ENTRY(proc) p_thr_link;	/* Threads in a process linkage. */
+	TAILQ_ENTRY(proc) p_thr_link;	/* [K|m] Threads in a process linkage. */
 
 	TAILQ_ENTRY(proc) p_fut_link;	/* Threads in a futex linkage. */
 	struct	futex	*p_futex;	/* Current sleeping futex. */
@@ -337,7 +344,6 @@ struct proc {
 	struct	filedesc *p_fd;		/* copy of p_p->ps_fd */
 	struct	vmspace *p_vmspace;	/* [I] copy of p_p->ps_vmspace */
 	struct	p_inentry p_spinentry;	/* [o] cache for SP check */
-	struct	p_inentry p_pcinentry;	/* [o] cache for PC check */
 
 	int	p_flag;			/* P_* flags. */
 	u_char	p_spare;		/* unused */
@@ -359,13 +365,10 @@ struct proc {
 	const char *p_wmesg;		/* [S] Reason for sleep. */
 	fixpt_t	p_pctcpu;		/* [S] %cpu for this thread */
 	u_int	p_slptime;		/* [S] Time since last blocked. */
-	u_int	p_uticks;		/* Statclock hits in user mode. */
-	u_int	p_sticks;		/* Statclock hits in system mode. */
-	u_int	p_iticks;		/* Statclock hits processing intr. */
 	struct	cpu_info * volatile p_cpu; /* [S] CPU we're running on. */
 
 	struct	rusage p_ru;		/* Statistics */
-	struct	tusage p_tu;		/* accumulated times. */
+	struct	tusage p_tu;		/* [o] accumulated times. */
 
 	struct	plimit	*p_limit;	/* [l] read ref. of p_p->ps_limit */
 	struct	kcov_dev *p_kd;		/* kcov device handle */
@@ -380,7 +383,7 @@ struct proc {
 
 /* The following fields are all copied upon creation in fork. */
 #define	p_startcopy	p_sigmask
-	sigset_t p_sigmask;		/* [a] Current signal mask */
+	sigset_t p_sigmask;		/* [o] Current signal mask */
 
 	char	p_name[_MAXCOMLEN];	/* thread name, incl NUL */
 	u_char	p_slppri;		/* [S] Sleeping priority */
@@ -399,7 +402,7 @@ struct proc {
 	struct	user *p_addr;	/* Kernel virtual addr of u-area */
 	struct	mdproc p_md;	/* Any machine-dependent fields. */
 
-	sigset_t p_oldmask;	/* Saved mask from before sigpause */
+	sigset_t p_oldmask;	/* [o] Saved mask from before sigpause */
 	int	p_sisig;	/* For core dump/debugger XXX */
 	union sigval p_sigval;	/* For core dump/debugger XXX */
 	long	p_sitrapno;	/* For core dump/debugger XXX */
@@ -555,7 +558,7 @@ void	procinit(void);
 void	setpriority(struct proc *, uint32_t, uint8_t);
 void	setrunnable(struct proc *);
 void	endtsleep(void *);
-int	wakeup_proc(struct proc *, const volatile void *, int);
+int	wakeup_proc(struct proc *, int);
 void	unsleep(struct proc *);
 void	reaper(void *);
 __dead void exit1(struct proc *, int, int, int);
@@ -605,9 +608,7 @@ struct cond {
 
 #define COND_INITIALIZER()		{ .c_wait = 1 }
 
-#if defined(MULTIPROCESSOR)
-void	proc_trampoline_mp(void);	/* XXX */
-#endif
+void	proc_trampoline_mi(void);
 
 /*
  * functions to handle sets of cpus.
@@ -634,6 +635,20 @@ void cpuset_intersection(struct cpuset *t, struct cpuset *, struct cpuset *);
 void cpuset_complement(struct cpuset *, struct cpuset *, struct cpuset *);
 int cpuset_cardinality(struct cpuset *);
 struct cpu_info *cpuset_first(struct cpuset *);
+
+static inline void
+tu_enter(struct tusage *tu)
+{
+	++tu->tu_gen; /* make the generation number odd */
+	membar_producer();
+}
+
+static inline void
+tu_leave(struct tusage *tu)
+{
+	membar_producer();
+	++tu->tu_gen; /* make the generation number even again */
+}
 
 #endif	/* _KERNEL */
 #endif	/* !_SYS_PROC_H_ */

@@ -1,4 +1,4 @@
-/*	$OpenBSD: lka_filter.c,v 1.74 2023/11/03 13:38:28 op Exp $	*/
+/*	$OpenBSD: lka_filter.c,v 1.77 2024/05/14 13:38:54 op Exp $	*/
 
 /*
  * Copyright (c) 2018 Gilles Chehade <gilles@poolp.org>
@@ -192,6 +192,7 @@ static void
 lka_proc_config(struct processor_instance *pi)
 {
 	io_printf(pi->io, "config|smtpd-version|%s\n", SMTPD_VERSION);
+	io_printf(pi->io, "config|protocol|%s\n", PROTOCOL_VERSION);
 	io_printf(pi->io, "config|smtp-session-timeout|%d\n", SMTPD_SESSION_TIMEOUT);
 	if (pi->subsystems & FILTER_SUBSYSTEM_SMTP_IN)
 		io_printf(pi->io, "config|subsystem|smtp-in\n");
@@ -729,7 +730,7 @@ filter_protocol_internal(struct filter_session *fs, uint64_t *token, uint64_t re
 			    filter->name,
 			    param,
 			    filter->config->rewrite);
-			    filter_result_rewrite(reqid, filter->config->rewrite);
+			filter_result_rewrite(reqid, filter->config->rewrite);
 			return;
 		}
 		else if (filter->config->disconnect) {

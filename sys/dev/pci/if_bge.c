@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_bge.c,v 1.403 2024/02/11 06:40:46 jmc Exp $	*/
+/*	$OpenBSD: if_bge.c,v 1.405 2024/05/24 06:02:53 jsg Exp $	*/
 
 /*
  * Copyright (c) 2001 Wind River Systems
@@ -81,10 +81,8 @@
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
 #include <sys/malloc.h>
-#include <sys/kernel.h>
 #include <sys/device.h>
 #include <sys/timeout.h>
-#include <sys/socket.h>
 #include <sys/atomic.h>
 #include <sys/kstat.h>
 
@@ -108,7 +106,6 @@
 
 #include <dev/mii/mii.h>
 #include <dev/mii/miivar.h>
-#include <dev/mii/miidevs.h>
 #include <dev/mii/brgphyreg.h>
 
 #include <dev/pci/if_bgereg.h>
@@ -4079,7 +4076,8 @@ bge_cksum_pad(struct mbuf *m)
 		 * Walk packet chain to find last mbuf. We will either
 		 * pad there, or append a new mbuf and pad it.
 		 */
-		for (last = m; last->m_next != NULL; last = last->m_next);
+		for (last = m; last->m_next != NULL; last = last->m_next)
+			;
 		if (m_trailingspace(last) < padlen) {
 			/* Allocate new empty mbuf, pad it. Compact later. */
 			struct mbuf *n;

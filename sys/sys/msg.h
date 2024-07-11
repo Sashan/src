@@ -1,4 +1,4 @@
-/*	$OpenBSD: msg.h,v 1.20 2022/09/16 15:57:23 mbuhl Exp $	*/
+/*	$OpenBSD: msg.h,v 1.22 2024/06/10 04:10:25 jsg Exp $	*/
 /*	$NetBSD: msg.h,v 1.9 1996/02/09 18:25:18 christos Exp $	*/
 
 /*
@@ -32,13 +32,16 @@
 
 #define MSG_NOERROR	010000		/* don't complain about too long msgs */
 
+typedef unsigned long	 msgqnum_t;
+typedef unsigned long	 msglen_t;
+
 struct msqid_ds {
 	struct ipc_perm	msg_perm;	/* msg queue permission bits */
 	struct msg	*msg_first;	/* first message in the queue */
 	struct msg	*msg_last;	/* last message in the queue */
-	unsigned long	msg_cbytes;	/* number of bytes in use on the queue */
-	unsigned long	msg_qnum;	/* number of msgs in the queue */
-	unsigned long	msg_qbytes;	/* max # of bytes on the queue */
+	msglen_t	msg_cbytes;	/* number of bytes in use on the queue */
+	msgqnum_t	msg_qnum;	/* number of msgs in the queue */
+	msglen_t	msg_qbytes;	/* max # of bytes on the queue */
 	pid_t		msg_lspid;	/* pid of last msgsnd() */
 	pid_t		msg_lrpid;	/* pid of last msgrcv() */
 	time_t		msg_stime;	/* time of last msgsnd() */
@@ -82,25 +85,7 @@ struct que {
 	if (--(q)->que_references == 0 && (q)->que_flags & MSGQ_DYING)	\
 		wakeup_one(&(q)->que_references);			\
 } while (0)
-#endif
 
-/*
- * Structure describing a message.  The SVID doesn't suggest any
- * particular name for this structure.  There is a reference in the
- * msgop man page that reads "The structure mymsg is an example of what
- * this user defined buffer might look like, and includes the following
- * members:".  This sentence is followed by two lines equivalent
- * to the mtype and mtext field declarations below.  It isn't clear
- * if "mymsg" refers to the name of the structure type or the name of an
- * instance of the structure...
- */
-struct mymsg {
-	long	mtype;		/* message type (+ve integer) */
-	char	mtext[1];	/* message body */
-};
-
-
-#ifdef _KERNEL
 /*
  * Based on the configuration parameters described in an SVR2 (yes, two)
  * config(1m) man page.

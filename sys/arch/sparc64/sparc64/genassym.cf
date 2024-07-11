@@ -1,4 +1,4 @@
-#	$OpenBSD: genassym.cf,v 1.40 2023/01/11 19:57:17 miod Exp $
+#	$OpenBSD: genassym.cf,v 1.46 2024/04/11 18:58:44 miod Exp $
 #	$NetBSD: genassym.cf,v 1.23 2001/08/08 00:09:30 eeh Exp $
 
 #
@@ -72,33 +72,17 @@ include <sys/param.h>
 include <sys/buf.h>
 include <sys/proc.h>
 include <sys/mbuf.h>
-include <sys/msgbuf.h>
 include <sys/syscall.h>
 include <sys/user.h>
-include <sys/device.h>
-include <sys/disklabel.h>
-include <sys/disk.h>
 
 include <uvm/uvm_extern.h>
 
-ifdef DDB
-include <machine/db_machdep.h>
-endif
-include <machine/pmap.h>
 include <machine/cpu.h>
-include <machine/mutex.h>
+include <machine/pmap.h>
+include <machine/pte.h>
 
+include <machine/fsr.h>
 include <machine/reg.h>
-
-ifdef notyet
-include <sparc64/dev/zsreg.h>
-include <sparc64/dev/zsvar.h>
-endif
-
-ifdef notyet
-include <dev/ic/am7930reg.h>
-include <dev/ic/am7930var.h>
-endif
 
 # proc fields and values
 struct	proc
@@ -108,6 +92,7 @@ member	p_vmspace
 member	p_cpu
 member	P_FPSTATE	p_md.md_fpstate
 member	P_MD_ASTPENDING	p_md.md_astpending
+member	P_MD_PCBPADDR	p_md.md_pcbpaddr
 
 export	SONPROC
 
@@ -120,7 +105,6 @@ define	VM_PMAP		offsetof(struct vmspace, vm_map.pmap)
 # pmap structure fields
 struct	pmap
 member	pm_ctx
-member	pm_segs
 member	PM_PHYS		pm_physaddr
 
 # interrupt/fault metering
@@ -134,11 +118,8 @@ struct	cpu_info
 member	ci_self
 member	ci_curproc
 member	ci_cpcb
-member	ci_next
+member	ci_cpcbpaddr
 member	ci_fpproc
-member	ci_cpuid
-member	ci_upaid
-member	ci_want_resched
 member	ci_handled_intr_level
 member	ci_intrpending
 member	ci_tickintr
@@ -152,27 +133,18 @@ member	ci_mmfsa
 member	ci_cpumq
 member	ci_devmq
 endif
-ifdef DIAGNOSTIC
-member	ci_mutex_level
-endif
 
 # FPU state
 struct	fpstate
 member	fs_regs
 member	fs_fsr
 member	fs_gsr
-member	fs_qsize
-member	fs_queue
-define	FS_SIZE		sizeof(struct fpstate)
-export	FSR_QNE
 export	FPRS_FEF
 export	FPRS_DU
 export	FPRS_DL
 
 # system calls
 export	SYS_sigreturn
-export	SYS_execve
-export	SYS_exit
 
 # errno
 export	EFAULT
@@ -190,24 +162,17 @@ member	pcb_rwsp
 member	pcb_sp
 member	pcb_wcookie
 member	pcb_pc
-member	PCB_LASTCALL	lastcall
-define	PCB_SIZE	sizeof(struct pcb)
 
 # trapframe fields
 struct	trapframe
 member	tf_tstate
 member	tf_pc
 member	tf_npc
-member	tf_fault
-member	tf_kstack
 member	tf_y
 member	tf_pil
 member	tf_oldpil
 member	tf_tt
 member	tf_global
-member	tf_out
-member	tf_local
-member	tf_in
 # shortened versions
 member	TF_G		tf_global
 member	TF_O		tf_out
@@ -215,25 +180,10 @@ member	TF_L		tf_local
 member	TF_I		tf_in
 define	TF_SIZE		sizeof(struct trapframe)
 
-ifdef notyet
-# clockframe fields 
-struct	clockframe	CF_
-member	tstate
-member	pc
-member	npc
-member	pil
-member	oldpil
-member	fp
-endif
-
 # interrupt handler fields
 struct	intrhand
-member	ih_fun
-member	ih_arg
-member	ih_number
 member	ih_pil
 member	IH_PEND		ih_pending
-member	ih_next
 member	ih_ack
 member	IH_COUNT	ih_count.ec_count
 
@@ -242,26 +192,6 @@ struct	mbuf
 member	m_next
 member	m_data
 member	m_len
-
-ifdef notyet
-# db_regs structure so we can save all registers
-struct	db_regs
-member	dbr_traps
-member	dbr_y
-member	dbr_tl
-member	dbr_canrestore
-member	dbr_cansave
-member	dbr_cleanwin
-member	dbr_cwp
-member	dbr_wstate
-member	dbr_g
-member	dbr_ag
-member	dbr_ig
-member	dbr_mg
-member	dbr_out
-member	dbr_local
-member	dbr_in
-endif
 
 export	TSB_TAG_LOCKED
 
@@ -277,11 +207,6 @@ export	SUN4V_TLB_MODIFY
 export	SUN4V_TLB_REAL_W
 export	SUN4V_TLB_EXEC
 export	SUN4V_TLB_W
-
-struct	mutex
-member	mtx_wantipl
-member	mtx_oldipl
-member	mtx_owner
 
 export	CPU_SUN4U
 export	CPU_SUN4V

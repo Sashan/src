@@ -1,4 +1,4 @@
-/*	$OpenBSD: rad.h,v 1.25 2023/04/27 16:56:52 phessler Exp $	*/
+/*	$OpenBSD: rad.h,v 1.28 2024/05/31 16:10:42 florian Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -35,6 +35,8 @@
 #define	MIN_DELAY_BETWEEN_RAS	3	/* 3 seconds */
 #define	MAX_SEARCH		1025	/* MAXDNAME in arpa/nameser.h */
 #define	DEFAULT_RDNS_LIFETIME	600 * 1.5
+#define	PLTIME_DECAYING		1
+#define	VLTIME_DECAYING		2
 
 #define	IMSG_DATA_SIZE(imsg)	((imsg).hdr.len - IMSG_HEADER_SIZE)
 
@@ -93,9 +95,11 @@ struct ra_options_conf {
 	int		cur_hl;			/* current hop limit */
 	int		m_flag;			/* managed address conf flag */
 	int		o_flag;			/* other conf flag */
+	int		rtpref;			/* router preference */
 	int		router_lifetime;	/* default router lifetime */
 	uint32_t	reachable_time;
 	uint32_t	retrans_timer;
+	int		source_link_addr;	/* source link-layer address */
 	uint32_t	mtu;
 	uint32_t	rdns_lifetime;
 	SIMPLEQ_HEAD(, ra_rdnss_conf)		 ra_rdnss_list;
@@ -112,6 +116,7 @@ struct ra_prefix_conf {
 	int				 prefixlen;	/* prefix length */
 	uint32_t			 vltime;	/* valid lifetime */
 	uint32_t			 pltime;	/* preferred lifetime */
+	int				 ltime_decaying;
 	int				 lflag;		/* on-link flag*/
 	int				 aflag;		/* autonom. addr flag */
 };

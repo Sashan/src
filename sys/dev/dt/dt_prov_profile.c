@@ -1,4 +1,4 @@
-/*	$OpenBSD: dt_prov_profile.c,v 1.6 2024/02/09 17:42:18 cheloha Exp $ */
+/*	$OpenBSD: dt_prov_profile.c,v 1.8 2024/04/06 11:18:02 mpi Exp $ */
 
 /*
  * Copyright (c) 2019 Martin Pieuchot <mpi@openbsd.org>
@@ -53,13 +53,13 @@ int
 dt_prov_profile_init(void)
 {
 	dtpp_profile = dt_dev_alloc_probe("hz", "97", &dt_prov_profile);
-	dt_dev_register_probe(dtpp_profile);
 	if (dtpp_profile == NULL)
 		return 0;
+	dt_dev_register_probe(dtpp_profile);
 	dtpp_interval = dt_dev_alloc_probe("hz", "1", &dt_prov_interval);
-	dt_dev_register_probe(dtpp_interval);
 	if (dtpp_interval == NULL)
 		return 1;
+	dt_dev_register_probe(dtpp_interval);
 	return 2;
 }
 
@@ -72,7 +72,6 @@ dt_prov_profile_alloc(struct dt_probe *dtp, struct dt_softc *sc,
 	CPU_INFO_ITERATOR cii;
 	extern int hz;
 
-	KASSERT(dtioc_req_isvalid(dtrq));
 	KASSERT(TAILQ_EMPTY(plist));
 	KASSERT(dtp == dtpp_profile || dtp == dtpp_interval);
 
@@ -92,7 +91,6 @@ dt_prov_profile_alloc(struct dt_probe *dtp, struct dt_softc *sc,
 		dp->dp_nsecs = SEC_TO_NSEC(1) / dtrq->dtrq_rate;
 		dp->dp_cpu = ci;
 
-		dp->dp_filter = dtrq->dtrq_filter;
 		dp->dp_evtflags = dtrq->dtrq_evtflags & DTEVT_PROV_PROFILE;
 		TAILQ_INSERT_HEAD(plist, dp, dp_snext);
 	}

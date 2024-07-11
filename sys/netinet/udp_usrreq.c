@@ -1,4 +1,4 @@
-/*	$OpenBSD: udp_usrreq.c,v 1.318 2024/02/11 18:14:26 mvs Exp $	*/
+/*	$OpenBSD: udp_usrreq.c,v 1.320 2024/04/17 20:48:51 bluhm Exp $	*/
 /*	$NetBSD: udp_usrreq.c,v 1.28 1996/03/16 23:54:03 christos Exp $	*/
 
 /*
@@ -562,7 +562,7 @@ udp_input(struct mbuf **mp, int *offp, int proto, int af)
 		} else
 			tdb = NULL;
 		error = ipsp_spd_lookup(m, af, iphlen, IPSP_DIRECTION_IN,
-		    tdb, inp ? inp->inp_seclevel : NULL, NULL, NULL);
+		    tdb, inp ? &inp->inp_seclevel : NULL, NULL, NULL);
 		if (error) {
 			udpstat_inc(udps_nosec);
 			tdb_unref(tdb);
@@ -1084,7 +1084,7 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct mbuf *addr,
 
 	error = ip_output(m, inp->inp_options, &inp->inp_route,
 	    (inp->inp_socket->so_options & SO_BROADCAST), inp->inp_moptions,
-	    inp->inp_seclevel, ipsecflowinfo);
+	    &inp->inp_seclevel, ipsecflowinfo);
 
 bail:
 	m_freem(control);
@@ -1117,10 +1117,10 @@ udp_attach(struct socket *so, int proto, int wait)
 	if ((error = in_pcballoc(so, table, wait)))
 		return error;
 #ifdef INET6
-	if (sotoinpcb(so)->inp_flags & INP_IPV6)
+	if (ISSET(sotoinpcb(so)->inp_flags, INP_IPV6))
 		sotoinpcb(so)->inp_ipv6.ip6_hlim = ip6_defhlim;
 	else
-#endif /* INET6 */
+#endif
 		sotoinpcb(so)->inp_ip.ip_ttl = ip_defttl;
 	return 0;
 }
@@ -1184,11 +1184,11 @@ udp_connect(struct socket *so, struct mbuf *addr)
 	soassertlocked(so);
 
 #ifdef INET6
-	if (inp->inp_flags & INP_IPV6) {
+	if (ISSET(inp->inp_flags, INP_IPV6)) {
 		if (!IN6_IS_ADDR_UNSPECIFIED(&inp->inp_faddr6))
 			return (EISCONN);
 	} else
-#endif /* INET6 */
+#endif
 	{
 		if (inp->inp_faddr.s_addr != INADDR_ANY)
 			return (EISCONN);
@@ -1209,11 +1209,11 @@ udp_disconnect(struct socket *so)
 	soassertlocked(so);
 
 #ifdef INET6
-	if (inp->inp_flags & INP_IPV6) {
+	if (ISSET(inp->inp_flags, INP_IPV6)) {
 		if (IN6_IS_ADDR_UNSPECIFIED(&inp->inp_faddr6))
 			return (ENOTCONN);
 	} else
-#endif /* INET6 */
+#endif
 	{
 		if (inp->inp_faddr.s_addr == INADDR_ANY)
 			return (ENOTCONN);
@@ -1251,7 +1251,7 @@ udp_send(struct socket *so, struct mbuf *m, struct mbuf *addr,
 				mtod(addr, struct sockaddr *));
 		else
 #ifdef INET6
-		if (inp->inp_flags & INP_IPV6)
+		if (ISSET(inp->inp_flags, INP_IPV6))
 			session =
 			    pipex_l2tp_userland_lookup_session_ipv6(
 				m, inp->inp_faddr6);

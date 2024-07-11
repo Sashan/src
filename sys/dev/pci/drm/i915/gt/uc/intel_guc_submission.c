@@ -1214,8 +1214,6 @@ __extend_last_switch(struct intel_guc *guc, u64 *prev_start, u32 new_start)
 static void __get_engine_usage_record(struct intel_engine_cs *engine,
 				      u32 *last_in, u32 *id, u32 *total)
 {
-	STUB();
-#ifdef notyet
 	struct iosys_map rec_map = intel_guc_engine_usage_record_map(engine);
 	int i = 0;
 
@@ -1229,7 +1227,6 @@ static void __get_engine_usage_record(struct intel_engine_cs *engine,
 		    record_read(&rec_map, total_runtime) == *total)
 			break;
 	} while (++i < 6);
-#endif
 }
 
 static void guc_update_engine_gt_clks(struct intel_engine_cs *engine)
@@ -1693,9 +1690,7 @@ static void guc_engine_reset_prepare(struct intel_engine_cs *engine)
 	 * Wa_22011802037: In addition to stopping the cs, we need
 	 * to wait for any pending mi force wakeups
 	 */
-	if (IS_MTL_GRAPHICS_STEP(engine->i915, M, STEP_A0, STEP_B0) ||
-	    (GRAPHICS_VER(engine->i915) >= 11 &&
-	     GRAPHICS_VER_FULL(engine->i915) < IP_VER(12, 70))) {
+	if (intel_engine_reset_needs_wa_22011802037(engine->gt)) {
 		intel_engine_stop_cs(engine);
 		intel_engine_wait_for_pending_mi_fw(engine);
 	}
@@ -2068,9 +2063,6 @@ static void guc_submit_request(struct i915_request *rq)
 
 static int new_guc_id(struct intel_guc *guc, struct intel_context *ce)
 {
-	STUB();
-	return -ENOSYS;
-#ifdef notyet
 	int ret;
 
 	GEM_BUG_ON(intel_context_is_child(ce));
@@ -2094,13 +2086,10 @@ static int new_guc_id(struct intel_guc *guc, struct intel_context *ce)
 
 	ce->guc_id.id = ret;
 	return 0;
-#endif
 }
 
 static void __release_guc_id(struct intel_guc *guc, struct intel_context *ce)
 {
-	STUB();
-#ifdef notyet
 	GEM_BUG_ON(intel_context_is_child(ce));
 
 	if (!context_guc_id_invalid(ce)) {
@@ -2119,7 +2108,6 @@ static void __release_guc_id(struct intel_guc *guc, struct intel_context *ce)
 	}
 	if (!list_empty(&ce->guc_id.link))
 		list_del_init(&ce->guc_id.link);
-#endif
 }
 
 static void release_guc_id(struct intel_guc *guc, struct intel_context *ce)
@@ -4309,7 +4297,7 @@ static void guc_default_vfuncs(struct intel_engine_cs *engine)
 
 	/* Wa_14014475959:dg2 */
 	if (engine->class == COMPUTE_CLASS)
-		if (IS_MTL_GRAPHICS_STEP(engine->i915, M, STEP_A0, STEP_B0) ||
+		if (IS_GFX_GT_IP_STEP(engine->gt, IP_VER(12, 70), STEP_A0, STEP_B0) ||
 		    IS_DG2(engine->i915))
 			engine->flags |= I915_ENGINE_USES_WA_HOLD_CCS_SWITCHOUT;
 

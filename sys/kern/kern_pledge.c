@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_pledge.c,v 1.310 2023/12/12 17:43:10 deraadt Exp $	*/
+/*	$OpenBSD: kern_pledge.c,v 1.316 2024/06/03 03:41:47 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2015 Nicholas Marriott <nicm@openbsd.org>
@@ -105,14 +105,12 @@ const uint64_t pledge_syscalls[SYS_MAXSYSCALL] = {
 	 */
 	[SYS_exit] = PLEDGE_ALWAYS,
 	[SYS_kbind] = PLEDGE_ALWAYS,
-	[SYS_msyscall] = PLEDGE_ALWAYS,
 	[SYS___get_tcb] = PLEDGE_ALWAYS,
 	[SYS___set_tcb] = PLEDGE_ALWAYS,
 	[SYS_pledge] = PLEDGE_ALWAYS,
 	[SYS_sendsyslog] = PLEDGE_ALWAYS,	/* stack protector reporting */
 	[SYS_thrkill] = PLEDGE_ALWAYS,		/* raise, abort, stack pro */
 	[SYS_utrace] = PLEDGE_ALWAYS,		/* ltrace(1) from ld.so */
-	[SYS_pinsyscall] = PLEDGE_ALWAYS,
 	[SYS_pinsyscalls] = PLEDGE_ALWAYS,
 
 	/* "getting" information about self is considered safe */
@@ -342,6 +340,7 @@ const uint64_t pledge_syscalls[SYS_MAXSYSCALL] = {
 	[SYS_statfs] = PLEDGE_RPATH,
 	[SYS_fstatfs] = PLEDGE_RPATH,
 	[SYS_pathconf] = PLEDGE_RPATH,
+	[SYS_pathconfat] = PLEDGE_RPATH,
 
 	[SYS_utimes] = PLEDGE_FATTR,
 	[SYS_futimes] = PLEDGE_FATTR,
@@ -575,7 +574,7 @@ pledge_fail(struct proc *p, int error, uint64_t code)
 		return (ENOSYS);
 
 	KERNEL_LOCK();
-	log(LOG_ERR, "%s[%d]: pledge \"%s\", syscall %d\n",
+	uprintf("%s[%d]: pledge \"%s\", syscall %d\n",
 	    p->p_p->ps_comm, p->p_p->ps_pid, codes, p->p_pledge_syscall);
 	p->p_p->ps_acflag |= APLEDGE;
 
@@ -1003,10 +1002,10 @@ pledge_sysctl(struct proc *p, int miblen, int *mib, void *new)
 	snprintf(buf, sizeof(buf), "%s(%d): pledge sysctl %d:",
 	    p->p_p->ps_comm, p->p_p->ps_pid, miblen);
 	for (i = 0; i < miblen; i++) {
-		char *p = buf + strlen(buf);
-		snprintf(p, sizeof(buf) - (p - buf), " %d", mib[i]);
+		char *s = buf + strlen(buf);
+		snprintf(s, sizeof(buf) - (s - buf), " %d", mib[i]);
 	}
-	log(LOG_ERR, "%s\n", buf);
+	uprintf("%s\n", buf);
 
 	return pledge_fail(p, EINVAL, 0);
 }
@@ -1139,6 +1138,7 @@ pledge_ioctl(struct proc *p, long com, struct file *fp)
 #if NAUDIO > 0
 	if ((pledge & PLEDGE_AUDIO)) {
 		switch (com) {
+		case AUDIO_GETDEV:
 		case AUDIO_GETPOS:
 		case AUDIO_GETPAR:
 		case AUDIO_SETPAR:

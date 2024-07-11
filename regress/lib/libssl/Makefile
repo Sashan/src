@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.55 2024/01/19 08:29:26 jsing Exp $
+#	$OpenBSD: Makefile,v 1.57 2024/04/22 07:31:54 anton Exp $
 
 SUBDIR += api
 SUBDIR += asn1

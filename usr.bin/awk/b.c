@@ -1,4 +1,4 @@
-/*	$OpenBSD: b.c,v 1.50 2024/01/25 16:40:51 millert Exp $	*/
+/*	$OpenBSD: b.c,v 1.53 2024/06/03 00:55:05 millert Exp $	*/
 /****************************************************************
 Copyright (C) Lucent Technologies 1997
 All Rights Reserved
@@ -81,9 +81,6 @@ int	patlen;
 fa	*fatab[NFA];
 int	nfatab	= 0;	/* entries in fatab */
 
-extern int u8_nextlen(const char *s);
-
-
 /* utf-8 mechanism:
 
    For most of Awk, utf-8 strings just "work", since they look like
@@ -117,7 +114,6 @@ static int entry_cmp(const void *l, const void *r);
 static int get_gototab(fa*, int, int);
 static int set_gototab(fa*, int, int, int);
 static void clear_gototab(fa*, int);
-extern int u8_rune(int *, const char *);
 
 static int *
 intalloc(size_t n, const char *f)
@@ -347,7 +343,8 @@ void freetr(Node *p)	/* free parse tree */
 /* in the parsing of regular expressions, metacharacters like . have */
 /* to be seen literally;  \056 is not a metacharacter. */
 
-int hexstr(const uschar **pp, int max)	/* find and eval hex string at pp, return new p */
+static int
+hexstr(const uschar **pp, int max)	/* find and eval hex string at pp, return new p */
 {			/* only pick up one 8-bit byte (2 chars) */
 	const uschar *p;
 	int n = 0;
@@ -613,11 +610,11 @@ static void resize_gototab(fa *f, int state)
 	size_t orig_size = f->gototab[state].allocated;		// 2nd half of new mem is this size
 	memset(p + orig_size, 0, orig_size * sizeof(gtte));	// clean it out
 
-	f->gototab[state].allocated = new_size;			// update gotottab info
+	f->gototab[state].allocated = new_size;			// update gototab info
 	f->gototab[state].entries = p;
 }
 
-static int get_gototab(fa *f, int state, int ch) /* hide gototab inplementation */
+static int get_gototab(fa *f, int state, int ch) /* hide gototab implementation */
 {
 	gtte key;
 	gtte *item;
@@ -644,21 +641,21 @@ static int entry_cmp(const void *l, const void *r)
 	return left->ch - right->ch;
 }
 
-static int set_gototab(fa *f, int state, int ch, int val) /* hide gototab inplementation */
+static int set_gototab(fa *f, int state, int ch, int val) /* hide gototab implementation */
 {
 	if (f->gototab[state].inuse == 0) {
 		f->gototab[state].entries[0].ch = ch;
 		f->gototab[state].entries[0].state = val;
 		f->gototab[state].inuse++;
 		return val;
-	} else if (ch > f->gototab[state].entries[f->gototab[state].inuse-1].ch) {
+	} else if ((unsigned)ch > f->gototab[state].entries[f->gototab[state].inuse-1].ch) {
 		// not seen yet, insert and return
 		gtt *tab = & f->gototab[state];
 		if (tab->inuse + 1 >= tab->allocated)
 			resize_gototab(f, state);
 
-		f->gototab[state].entries[f->gototab[state].inuse-1].ch = ch;
-		f->gototab[state].entries[f->gototab[state].inuse-1].state = val;
+		f->gototab[state].entries[f->gototab[state].inuse].ch = ch;
+		f->gototab[state].entries[f->gototab[state].inuse].state = val;
 		f->gototab[state].inuse++;
 		return val;
 	} else {
@@ -683,9 +680,9 @@ static int set_gototab(fa *f, int state, int ch, int val) /* hide gototab inplem
 	gtt *tab = & f->gototab[state];
 	if (tab->inuse + 1 >= tab->allocated)
 		resize_gototab(f, state);
-	++tab->inuse;
 	f->gototab[state].entries[tab->inuse].ch = ch;
 	f->gototab[state].entries[tab->inuse].state = val;
+	++tab->inuse;
 
 	qsort(f->gototab[state].entries,
 		f->gototab[state].inuse, sizeof(gtte), entry_cmp);
@@ -836,8 +833,6 @@ int nematch(fa *f, const char *p0)	/* non-empty match, for sub */
 }
 
 
-#define MAX_UTF_BYTES	4	// UTF-8 is up to 4 bytes long
-
 /*
  * NAME
  *     fnematch
@@ -874,16 +869,28 @@ bool fnematch(fa *pfa, FILE *f, char **pbuf, int *pbufsize, int quantum)
 
 	do {
 		/*
-		 * Call u8_rune with at least MAX_UTF_BYTES ahead in
+		 * Call u8_rune with at least awk_mb_cur_max ahead in
 		 * the buffer until EOF interferes.
 		 */
-		if (k - j < MAX_UTF_BYTES) {
-			if (k + MAX_UTF_BYTES > buf + bufsize) {
+		if (k - j < (int)awk_mb_cur_max) {
+			if (k + awk_mb_cur_max > buf + bufsize) {
+				char *obuf = buf;
 				adjbuf(&buf, &bufsize,
-				    bufsize + MAX_UTF_BYTES,
+				    bufsize + awk_mb_cur_max,
 				    quantum, 0, "fnematch");
+
+				/* buf resized, maybe moved. update pointers */
+				*pbufsize = bufsize;
+				if (obuf != buf) {
+					i = buf + (i - obuf);
+					j = buf + (j - obuf);
+					k = buf + (k - obuf);
+					*pbuf = buf;
+					if (patlen)
+						patbeg = buf + (patbeg - obuf);
+				}
 			}
-			for (n = MAX_UTF_BYTES ; n > 0; n--) {
+			for (n = awk_mb_cur_max ; n > 0; n--) {
 				*k++ = (c = getc(f)) != EOF ? c : 0;
 				if (c == EOF) {
 					if (ferror(f))
@@ -919,10 +926,6 @@ bool fnematch(fa *pfa, FILE *f, char **pbuf, int *pbufsize, int quantum)
 		j = i;
 		s = 2;
 	} while (1);
-
-	/* adjbuf() may have relocated a resized buffer. Inform the world. */
-	*pbuf = buf;
-	*pbufsize = bufsize;
 
 	if (patlen) {
 		/*

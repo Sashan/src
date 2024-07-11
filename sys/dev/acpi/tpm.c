@@ -1,4 +1,4 @@
-/* $OpenBSD: tpm.c,v 1.18 2023/08/15 08:27:29 miod Exp $ */
+/* $OpenBSD: tpm.c,v 1.20 2024/05/29 12:21:33 kettenis Exp $ */
 
 /*
  * Minimal interface to Trusted Platform Module chips implementing the
@@ -218,8 +218,6 @@ int	tpm_request_locality_tis(struct tpm_softc *, int);
 int	tpm_request_locality_crb(struct tpm_softc *, int);
 void	tpm_release_locality_tis(struct tpm_softc *);
 void	tpm_release_locality_crb(struct tpm_softc *);
-int	tpm_getburst_tis(struct tpm_softc *);
-int	tpm_getburst_crb(struct tpm_softc *);
 uint8_t	tpm_status(struct tpm_softc *);
 
 uint32_t tpm2_start_method(struct acpi_softc *);
@@ -377,6 +375,9 @@ tpm_suspend(struct tpm_softc *sc)
 	};
 	uint8_t *command;
 	size_t commandlen;
+
+	if (sc->sc_acpi->sc_state == ACPI_STATE_S0)
+		return 0;
 
 	DPRINTF(("%s: saving state preparing for suspend\n",
 	    sc->sc_dev.dv_xname));

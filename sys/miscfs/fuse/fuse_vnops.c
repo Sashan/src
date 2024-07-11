@@ -1,4 +1,4 @@
-/* $OpenBSD: fuse_vnops.c,v 1.67 2023/09/08 20:00:28 mvs Exp $ */
+/* $OpenBSD: fuse_vnops.c,v 1.69 2024/05/13 11:17:40 semarie Exp $ */
 /*
  * Copyright (c) 2012-2013 Sylvestre Gallon <ccna.syl@gmail.com>
  *
@@ -644,16 +644,6 @@ fusefs_link(void *v)
 	if (fmp->undef_op & UNDEF_LINK) {
 		VOP_ABORTOP(dvp, cnp);
 		error = ENOSYS;
-		goto out2;
-	}
-	if (vp->v_type == VDIR) {
-		VOP_ABORTOP(dvp, cnp);
-		error = EPERM;
-		goto out2;
-	}
-	if (dvp->v_mount != vp->v_mount) {
-		VOP_ABORTOP(dvp, cnp);
-		error = EXDEV;
 		goto out2;
 	}
 	if (dvp != vp && (error = vn_lock(vp, LK_EXCLUSIVE))) {
@@ -1522,11 +1512,6 @@ fusefs_remove(void *v)
 	fb_delete(fbuf);
 out:
 	pool_put(&namei_pool, cnp->cn_pnbuf);
-	if (dvp == vp)
-		vrele(vp);
-	else
-		vput(vp);
-	vput(dvp);
 	return (error);
 }
 

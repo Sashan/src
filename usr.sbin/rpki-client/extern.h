@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.210 2024/02/26 15:40:33 job Exp $ */
+/*	$OpenBSD: extern.h,v 1.224 2024/06/08 13:30:35 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -24,17 +24,12 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
-/*
- * Enumeration for ASN.1 explicit tags in RSC eContent
- */
-enum rsc_resourceblock_tag {
-	RSRCBLK_TYPE_ASID,
-	RSRCBLK_TYPE_IPADDRBLK,
-};
+#define CTASSERT(x)	extern char  _ctassert[(x) ? 1 : -1 ] \
+			    __attribute__((__unused__))
 
 enum cert_as_type {
 	CERT_AS_ID, /* single identifier */
-	CERT_AS_INHERIT, /* inherit from parent */
+	CERT_AS_INHERIT, /* inherit from issuer */
 	CERT_AS_RANGE, /* range of identifiers */
 };
 
@@ -112,8 +107,10 @@ struct cert_ip {
 
 enum cert_purpose {
 	CERT_PURPOSE_INVALID,
+	CERT_PURPOSE_TA,
 	CERT_PURPOSE_CA,
-	CERT_PURPOSE_BGPSEC_ROUTER
+	CERT_PURPOSE_EE,
+	CERT_PURPOSE_BGPSEC_ROUTER,
 };
 
 /*
@@ -128,6 +125,7 @@ struct cert {
 	struct cert_as	*as; /* list of AS numbers and ranges */
 	size_t		 asz; /* length of "asz" */
 	int		 talid; /* cert is covered by which TAL */
+	int		 certid;
 	unsigned int	 repoid; /* repository of this cert file */
 	char		*repo; /* CA repository (rsync:// uri) */
 	char		*mft; /* manifest (rsync:// uri) */
@@ -220,6 +218,7 @@ struct mft {
 	size_t		 filesz; /* number of filenames */
 	unsigned int	 repoid;
 	int		 talid;
+	int		 certid;
 };
 
 /*
@@ -384,7 +383,7 @@ struct gbr {
  * A single ASPA record
  */
 struct aspa {
-	int			 valid; /* contained in parent auth */
+	int			 valid; /* contained in issuer auth */
 	int			 talid; /* TAL the ASPA is chained up to */
 	char			*aia; /* AIA */
 	char			*aki; /* AKI */
@@ -411,6 +410,7 @@ struct vap {
 	time_t			 expires;
 	int			 talid;
 	unsigned int		 repoid;
+	int			 overflowed;
 };
 
 /*
@@ -481,7 +481,7 @@ RB_PROTOTYPE(brk_tree, brk, entry, brkcmp);
 struct crl {
 	RB_ENTRY(crl)	 entry;
 	char		*aki;
-	char		*number;
+	char		*mftpath;
 	X509_CRL	*x509_crl;
 	time_t		 thisupdate;	/* do not use before */
 	time_t		 nextupdate;	/* do not use after */
@@ -499,16 +499,18 @@ RB_HEAD(crl_tree, crl);
 struct auth {
 	RB_ENTRY(auth)	 entry;
 	struct cert	*cert; /* owner information */
-	struct auth	*parent; /* pointer to parent or NULL for TA cert */
+	struct auth	*issuer; /* pointer to issuer or NULL for TA cert */
 	int		 any_inherits;
+	int		 depth;
 };
 /*
  * Tree of auth sorted by ski
  */
 RB_HEAD(auth_tree, auth);
 
-struct auth	*auth_find(struct auth_tree *, const char *);
-struct auth	*auth_insert(struct auth_tree *, struct cert *, struct auth *);
+struct auth	*auth_find(struct auth_tree *, int);
+struct auth	*auth_insert(const char *, struct auth_tree *, struct cert *,
+		    struct auth *);
 
 enum http_result {
 	HTTP_FAILED,	/* anything else */
@@ -566,6 +568,7 @@ struct entity {
 	size_t		 datasz;	/* length of optional data blob */
 	unsigned int	 repoid;	/* repository identifier */
 	int		 talid;		/* tal identifier */
+	int		 certid;
 	enum rtype	 type;		/* type of entity (not RTYPE_EOF) */
 	enum location	 location;	/* which directory the file lives in */
 };
@@ -580,6 +583,7 @@ enum stype {
 	STYPE_UNIQUE,
 	STYPE_DEC_UNIQUE,
 	STYPE_PROVIDERS,
+	STYPE_OVERFLOW,
 };
 
 struct repo;
@@ -608,6 +612,7 @@ struct repotalstats {
 	uint32_t	 vaps; /* total number of Validated ASPA Payloads */
 	uint32_t	 vaps_uniqs; /* total number of unique VAPs */
 	uint32_t	 vaps_pas; /* total number of providers */
+	uint32_t	 vaps_overflowed; /* VAPs with too many providers */
 	uint32_t	 vrps; /* total number of Validated ROA Payloads */
 	uint32_t	 vrps_uniqs; /* number of unique vrps */
 	uint32_t	 spls; /* signed prefix list */
@@ -649,8 +654,10 @@ struct msgbuf;
 
 /* global variables */
 extern int verbose;
+extern int noop;
 extern int filemode;
 extern int excludeaspa;
+extern int experimental;
 extern const char *tals[];
 extern const char *taldescs[];
 extern unsigned int talrepocnt[];
@@ -718,7 +725,7 @@ struct tak	*tak_parse(X509 **, const char *, int, const unsigned char *,
 
 void		 aspa_buffer(struct ibuf *, const struct aspa *);
 void		 aspa_free(struct aspa *);
-void		 aspa_insert_vaps(struct vap_tree *, struct aspa *,
+void		 aspa_insert_vaps(char *, struct vap_tree *, struct aspa *,
 		    struct repo *);
 struct aspa	*aspa_parse(X509 **, const char *, int, const unsigned char *,
 		    size_t);
@@ -733,10 +740,6 @@ void		 crl_tree_free(struct crl_tree *);
 
 /* Validation of our objects. */
 
-struct auth	*valid_ski_aki(const char *, struct auth_tree *,
-		    const char *, const char *, const char *);
-int		 valid_ta(const char *, struct auth_tree *,
-		    const struct cert *);
 int		 valid_cert(const char *, struct auth *, const struct cert *);
 int		 valid_roa(const char *, struct cert *, struct roa *);
 int		 valid_filehash(int, const char *, size_t);
@@ -828,7 +831,7 @@ void		 proc_http(char *, int) __attribute__((noreturn));
 void		 proc_rrdp(int) __attribute__((noreturn));
 
 /* Repository handling */
-int		 filepath_add(struct filepath_tree *, char *, time_t);
+int		 filepath_add(struct filepath_tree *, char *, int, time_t);
 void		 rrdp_clear(unsigned int);
 void		 rrdp_session_save(unsigned int, struct rrdp_session *);
 void		 rrdp_session_free(struct rrdp_session *);
@@ -900,6 +903,7 @@ struct ibuf	*io_buf_recvfd(int, struct ibuf **);
 /* X509 helpers. */
 
 void		 x509_init_oid(void);
+int		 x509_cache_extensions(X509 *, const char *);
 int		 x509_get_aia(X509 *, const char *, char **);
 int		 x509_get_aki(X509 *, const char *, char **);
 int		 x509_get_sia(X509 *, const char *, char **);
@@ -907,22 +911,21 @@ int		 x509_get_ski(X509 *, const char *, char **);
 int		 x509_get_notbefore(X509 *, const char *, time_t *);
 int		 x509_get_notafter(X509 *, const char *, time_t *);
 int		 x509_get_crl(X509 *, const char *, char **);
-char		*x509_crl_get_aki(X509_CRL *, const char *);
-char		*x509_crl_get_number(X509_CRL *, const char *);
 char		*x509_get_pubkey(X509 *, const char *);
 char		*x509_pubkey_get_ski(X509_PUBKEY *, const char *);
 enum cert_purpose	 x509_get_purpose(X509 *, const char *);
 int		 x509_get_time(const ASN1_TIME *, time_t *);
 char		*x509_convert_seqnum(const char *, const ASN1_INTEGER *);
-int		 x509_location(const char *, const char *, const char *,
-		    GENERAL_NAME *, char **);
+int		 x509_location(const char *, const char *, GENERAL_NAME *,
+		    char **);
 int		 x509_inherits(X509 *);
 int		 x509_any_inherits(X509 *);
-int		 x509_valid_subject(const char *, const X509 *);
+int		 x509_valid_name(const char *, const char *, const X509_NAME *);
 time_t		 x509_find_expires(time_t, struct auth *, struct crl_tree *);
 
 /* printers */
 char		*nid2str(int);
+const char	*purpose2str(enum cert_purpose);
 char		*time2str(time_t);
 void		 x509_print(const X509 *);
 void		 tal_print(const struct tal *);
@@ -983,6 +986,7 @@ int	mkpathat(int, const char *);
 
 /* Maximum number of TAL files we'll load. */
 #define	TALSZ_MAX		8
+#define	CERTID_MAX		1000000
 
 /*
  * Maximum number of elements in the sbgp-ipAddrBlock (IP) and
@@ -1022,5 +1026,12 @@ int	mkpathat(int, const char *);
 
 /* Maximum number of delegated hosting locations (repositories) for each TAL. */
 #define MAX_REPO_PER_TAL	1000
+
+#define HTTP_PROTO		"http://"
+#define HTTP_PROTO_LEN		(sizeof(HTTP_PROTO) - 1)
+#define HTTPS_PROTO		"https://"
+#define HTTPS_PROTO_LEN		(sizeof(HTTPS_PROTO) - 1)
+#define RSYNC_PROTO		"rsync://"
+#define RSYNC_PROTO_LEN		(sizeof(RSYNC_PROTO) - 1)
 
 #endif /* ! EXTERN_H */

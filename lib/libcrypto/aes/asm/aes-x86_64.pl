@@ -586,15 +586,15 @@ $code.=<<___;
 .size	_x86_64_AES_encrypt_compact,.-_x86_64_AES_encrypt_compact
 ___
 
-# void AES_encrypt (const void *inp,void *out,const AES_KEY *key);
+# void aes_encrypt_internal(const void *inp, void *out, const AES_KEY *key);
 $code.=<<___;
-.globl	AES_encrypt
-.type	AES_encrypt,\@function,3
+.globl	aes_encrypt_internal
+.type	aes_encrypt_internal,\@function,3
 .align	16
 .globl	asm_AES_encrypt
 .hidden	asm_AES_encrypt
 asm_AES_encrypt:
-AES_encrypt:
+aes_encrypt_internal:
 	_CET_ENDBR
 	push	%rbx
 	push	%rbp
@@ -655,7 +655,7 @@ AES_encrypt:
 	lea	48(%rsi),%rsp
 .Lenc_epilogue:
 	ret
-.size	AES_encrypt,.-AES_encrypt
+.size	aes_encrypt_internal,.-aes_encrypt_internal
 ___
 
 #------------------------------------------------------------------#
@@ -1188,15 +1188,15 @@ $code.=<<___;
 .size	_x86_64_AES_decrypt_compact,.-_x86_64_AES_decrypt_compact
 ___
 
-# void AES_decrypt (const void *inp,void *out,const AES_KEY *key);
+# void aes_decrypt_internal(const void *inp, void *out, const AES_KEY *key);
 $code.=<<___;
-.globl	AES_decrypt
-.type	AES_decrypt,\@function,3
+.globl	aes_decrypt_internal
+.type	aes_decrypt_internal,\@function,3
 .align	16
 .globl	asm_AES_decrypt
 .hidden	asm_AES_decrypt
 asm_AES_decrypt:
-AES_decrypt:
+aes_decrypt_internal:
 	_CET_ENDBR
 	push	%rbx
 	push	%rbp
@@ -1259,7 +1259,7 @@ AES_decrypt:
 	lea	48(%rsi),%rsp
 .Ldec_epilogue:
 	ret
-.size	AES_decrypt,.-AES_decrypt
+.size	aes_decrypt_internal,.-aes_decrypt_internal
 ___
 #------------------------------------------------------------------#
 
@@ -1290,13 +1290,13 @@ $code.=<<___;
 ___
 }
 
-# int AES_set_encrypt_key(const unsigned char *userKey, const int bits,
-#                        AES_KEY *key)
+# int aes_set_encrypt_key_internal(const unsigned char *userKey, const int bits,
+#     AES_KEY *key)
 $code.=<<___;
-.globl	AES_set_encrypt_key
-.type	AES_set_encrypt_key,\@function,3
+.globl	aes_set_encrypt_key_internal
+.type	aes_set_encrypt_key_internal,\@function,3
 .align	16
-AES_set_encrypt_key:
+aes_set_encrypt_key_internal:
 	_CET_ENDBR
 	push	%rbx
 	push	%rbp
@@ -1318,7 +1318,7 @@ AES_set_encrypt_key:
 	add	\$56,%rsp
 .Lenc_key_epilogue:
 	ret
-.size	AES_set_encrypt_key,.-AES_set_encrypt_key
+.size	aes_set_encrypt_key_internal,.-aes_set_encrypt_key_internal
 
 .type	_x86_64_AES_set_encrypt_key,\@abi-omnipotent
 .align	16
@@ -1562,13 +1562,13 @@ $code.=<<___;
 ___
 }
 
-# int AES_set_decrypt_key(const unsigned char *userKey, const int bits,
-#                        AES_KEY *key)
+# int aes_set_decrypt_key_internal(const unsigned char *userKey, const int bits,
+#     AES_KEY *key)
 $code.=<<___;
-.globl	AES_set_decrypt_key
-.type	AES_set_decrypt_key,\@function,3
+.globl	aes_set_decrypt_key_internal
+.type	aes_set_decrypt_key_internal,\@function,3
 .align	16
-AES_set_decrypt_key:
+aes_set_decrypt_key_internal:
 	_CET_ENDBR
 	push	%rbx
 	push	%rbp
@@ -1638,12 +1638,11 @@ $code.=<<___;
 	add	\$56,%rsp
 .Ldec_key_epilogue:
 	ret
-.size	AES_set_decrypt_key,.-AES_set_decrypt_key
+.size	aes_set_decrypt_key_internal,.-aes_set_decrypt_key_internal
 ___
 
-# void AES_cbc_encrypt (const void char *inp, unsigned char *out,
-#			size_t length, const AES_KEY *key,
-#			unsigned char *ivp,const int enc);
+# void aes_cbc_encrypt_internal(const void char *inp, unsigned char *out,
+#     size_t length, const AES_KEY *key, unsigned char *ivp,const int enc);
 {
 # stack frame layout
 # -8(%rsp)		return address
@@ -1660,15 +1659,15 @@ my $aes_key="80(%rsp)";		# copy of aes_key
 my $mark="80+240(%rsp)";	# copy of aes_key->rounds
 
 $code.=<<___;
-.globl	AES_cbc_encrypt
-.type	AES_cbc_encrypt,\@function,6
+.globl	aes_cbc_encrypt_internal
+.type	aes_cbc_encrypt_internal,\@function,6
 .align	16
 .extern	OPENSSL_ia32cap_P
 .hidden	OPENSSL_ia32cap_P
 .globl	asm_AES_cbc_encrypt
 .hidden	asm_AES_cbc_encrypt
 asm_AES_cbc_encrypt:
-AES_cbc_encrypt:
+aes_cbc_encrypt_internal:
 	_CET_ENDBR
 	cmp	\$0,%rdx	# check length
 	je	.Lcbc_epilogue
@@ -2118,7 +2117,7 @@ AES_cbc_encrypt:
 	popfq
 .Lcbc_epilogue:
 	ret
-.size	AES_cbc_encrypt,.-AES_cbc_encrypt
+.size	aes_cbc_encrypt_internal,.-aes_cbc_encrypt_internal
 ___
 }
 
@@ -2783,45 +2782,45 @@ cbc_se_handler:
 
 .section	.pdata
 .align	4
-	.rva	.LSEH_begin_AES_encrypt
-	.rva	.LSEH_end_AES_encrypt
-	.rva	.LSEH_info_AES_encrypt
+	.rva	.LSEH_begin_aes_encrypt_internal
+	.rva	.LSEH_end_aes_encrypt_internal
+	.rva	.LSEH_info_aes_encrypt_internal
 
-	.rva	.LSEH_begin_AES_decrypt
-	.rva	.LSEH_end_AES_decrypt
-	.rva	.LSEH_info_AES_decrypt
+	.rva	.LSEH_begin_aes_decrypt_internal
+	.rva	.LSEH_end_aes_decrypt_internal
+	.rva	.LSEH_info_aes_decrypt_internal
 
-	.rva	.LSEH_begin_AES_set_encrypt_key
-	.rva	.LSEH_end_AES_set_encrypt_key
-	.rva	.LSEH_info_AES_set_encrypt_key
+	.rva	.LSEH_begin_aes_set_encrypt_key_internal
+	.rva	.LSEH_end_aes_set_encrypt_key_internal
+	.rva	.LSEH_info_aes_set_encrypt_key_internal
 
-	.rva	.LSEH_begin_AES_set_decrypt_key
-	.rva	.LSEH_end_AES_set_decrypt_key
-	.rva	.LSEH_info_AES_set_decrypt_key
+	.rva	.LSEH_begin_aes_set_decrypt_key_internal
+	.rva	.LSEH_end_aes_set_decrypt_key_internal
+	.rva	.LSEH_info_aes_set_decrypt_key_internal
 
-	.rva	.LSEH_begin_AES_cbc_encrypt
-	.rva	.LSEH_end_AES_cbc_encrypt
-	.rva	.LSEH_info_AES_cbc_encrypt
+	.rva	.LSEH_begin_aes_cbc_encrypt_internal
+	.rva	.LSEH_end_aes_cbc_encrypt_internal
+	.rva	.LSEH_info_aes_cbc_encrypt_internal
 
 .section	.xdata
 .align	8
-.LSEH_info_AES_encrypt:
+.LSEH_info_aes_encrypt_internal:
 	.byte	9,0,0,0
 	.rva	block_se_handler
 	.rva	.Lenc_prologue,.Lenc_epilogue	# HandlerData[]
-.LSEH_info_AES_decrypt:
+.LSEH_info_aes_decrypt_internal:
 	.byte	9,0,0,0
 	.rva	block_se_handler
 	.rva	.Ldec_prologue,.Ldec_epilogue	# HandlerData[]
-.LSEH_info_AES_set_encrypt_key:
+.LSEH_info_aes_set_encrypt_key_internal:
 	.byte	9,0,0,0
 	.rva	key_se_handler
 	.rva	.Lenc_key_prologue,.Lenc_key_epilogue	# HandlerData[]
-.LSEH_info_AES_set_decrypt_key:
+.LSEH_info_aes_set_decrypt_key_internal:
 	.byte	9,0,0,0
 	.rva	key_se_handler
 	.rva	.Ldec_key_prologue,.Ldec_key_epilogue	# HandlerData[]
-.LSEH_info_AES_cbc_encrypt:
+.LSEH_info_aes_cbc_encrypt_internal:
 	.byte	9,0,0,0
 	.rva	cbc_se_handler
 ___

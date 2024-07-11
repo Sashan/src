@@ -1,4 +1,4 @@
-/*	$OpenBSD: drm_linux.c,v 1.109 2024/01/21 13:36:40 kettenis Exp $	*/
+/*	$OpenBSD: drm_linux.c,v 1.114 2024/06/13 18:05:54 kettenis Exp $	*/
 /*
  * Copyright (c) 2013 Jonathan Gray <jsg@openbsd.org>
  * Copyright (c) 2015, 2016 Mark Kettenis <kettenis@openbsd.org>
@@ -114,14 +114,13 @@ void
 __set_current_state(int state)
 {
 	struct proc *p = curproc;
-	int s;
 
 	KASSERT(state == TASK_RUNNING);
-	SCHED_LOCK(s);
+	SCHED_LOCK();
 	unsleep(p);
 	p->p_stat = SONPROC;
 	atomic_clearbits_int(&p->p_flag, P_WSLEEP);
-	SCHED_UNLOCK(s);
+	SCHED_UNLOCK();
 }
 
 void
@@ -159,11 +158,11 @@ schedule_timeout_uninterruptible(long timeout)
 int
 wake_up_process(struct proc *p)
 {
-	int s, rv;
+	int rv;
 
-	SCHED_LOCK(s);
-	rv = wakeup_proc(p, NULL, 0);
-	SCHED_UNLOCK(s);
+	SCHED_LOCK();
+	rv = wakeup_proc(p, 0);
+	SCHED_UNLOCK();
 	return rv;
 }
 
@@ -664,6 +663,28 @@ vmap(struct vm_page **pages, unsigned int npages, unsigned long flags,
 		return NULL;
 	for (i = 0; i < npages; i++) {
 		pa = VM_PAGE_TO_PHYS(pages[i]) | prot;
+		pmap_enter(pmap_kernel(), va + (i * PAGE_SIZE), pa,
+		    PROT_READ | PROT_WRITE,
+		    PROT_READ | PROT_WRITE | PMAP_WIRED);
+		pmap_update(pmap_kernel());
+	}
+
+	return (void *)va;
+}
+
+void *
+vmap_pfn(unsigned long *pfns, unsigned int npfn, pgprot_t prot)
+{
+	vaddr_t va;
+	paddr_t pa;
+	int i;
+
+	va = (vaddr_t)km_alloc(PAGE_SIZE * npfn, &kv_any, &kp_none,
+	    &kd_nowait);
+	if (va == 0)
+		return NULL;
+	for (i = 0; i < npfn; i++) {
+		pa = round_page(pfns[i]) | prot;
 		pmap_enter(pmap_kernel(), va + (i * PAGE_SIZE), pa,
 		    PROT_READ | PROT_WRITE,
 		    PROT_READ | PROT_WRITE | PMAP_WIRED);
@@ -1302,7 +1323,8 @@ vga_disable_bridge(struct pci_attach_args *pa)
 void
 vga_get_uninterruptible(struct pci_dev *pdev, int rsrc)
 {
-	KASSERT(pdev->pci->sc_bridgetag == NULL);
+	if (pdev->pci->sc_bridgetag != NULL)
+		return;
 	pci_enumerate_bus(pdev->pci, vga_disable_bridge, NULL);
 }
 
@@ -1497,6 +1519,12 @@ acpi_format_exception(acpi_status status)
 	default:
 		return "unknown";
 	}
+}
+
+int
+acpi_target_system_state(void)
+{
+	return acpi_softc->sc_state;
 }
 
 #endif

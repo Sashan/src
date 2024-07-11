@@ -1,4 +1,4 @@
-/*	$OpenBSD: frontend.c,v 1.33 2024/01/26 21:14:08 jan Exp $	*/
+/*	$OpenBSD: frontend.c,v 1.35 2024/06/27 14:53:06 florian Exp $	*/
 
 /*
  * Copyright (c) 2017, 2021 Florian Obser <florian@openbsd.org>
@@ -797,7 +797,7 @@ handle_route_message(struct rt_msghdr *rtm, struct sockaddr **rti_info)
 	case RTM_IFANNOUNCE:
 		ifan = (struct if_announcemsghdr *)rtm;
 		if_index = ifan->ifan_index;
-                if (ifan->ifan_what == IFAN_DEPARTURE) {
+		if (ifan->ifan_what == IFAN_DEPARTURE) {
 			frontend_imsg_compose_engine(IMSG_REMOVE_IF, 0, 0,
 			    &if_index, sizeof(if_index));
 			remove_iface(if_index);
@@ -809,18 +809,6 @@ handle_route_message(struct rt_msghdr *rtm, struct sockaddr **rti_info)
 			frontend_imsg_compose_engine(IMSG_REPROPOSE_RDNS,
 			    0, 0, NULL, 0);
 		}
-#ifndef SMALL
-		else if (rtm->rtm_flags & RTF_PROTO3) {
-			char		 ifnamebuf[IF_NAMESIZE], *if_name;
-
-			if_index = rtm->rtm_index;
-			if_name = if_indextoname(if_index, ifnamebuf);
-			log_warnx("\"dhclient %s\" ran, requesting new lease",
-			    if_name != NULL ? if_name : "(unknown)");
-			frontend_imsg_compose_engine(IMSG_REQUEST_REBOOT,
-			    0, 0, &if_index, sizeof(if_index));
-		}
-#endif /* SMALL */
 		break;
 	default:
 		log_debug("unexpected RTM: %d", rtm->rtm_type);

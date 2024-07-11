@@ -1,4 +1,4 @@
-.\"	$OpenBSD: compress.3,v 1.27 2024/02/07 20:51:38 tb Exp $
+.\"	$OpenBSD: compress.3,v 1.29 2024/06/29 16:10:08 tb Exp $
 .\"
 .\"  Copyright (C) 1995-2017 Jean-loup Gailly and Mark Adler
 .\"
@@ -21,9 +21,7 @@
 .\" Converted to mdoc format for the OpenBSD project
 .\" by Jason McIntyre <jmc@openbsd.org>
 .\"
-.\" This page corresponds to zlib version 1.2.3
-.\"
-.Dd $Mdocdate: February 7 2024 $
+.Dd $Mdocdate: June 29 2024 $
 .Dt COMPRESS 3
 .Os
 .Sh NAME
@@ -256,10 +254,6 @@ Checksum functions
 .Fn crc32_combine_gen "z_off_t len2"
 .Fn crc32_combine_op "uLong crc1" "uLong crc2" "uLong op"
 .Sh DESCRIPTION
-This manual page describes the
-.Nm zlib
-general purpose compression library, version 1.2.11.
-.Pp
 The
 .Nm zlib
 compression library provides in-memory compression and decompression functions,
@@ -1154,7 +1148,7 @@ The degree of string matching from most to none is:
 .Dv Z_FILTERED ,
 .Dv Z_RLE ,
 then
-.Dv Z_HUFFMAN .
+.Dv Z_HUFFMAN_ONLY .
 The
 .Fa strategy
 parameter affects the compression ratio but never the correctness of the

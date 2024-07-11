@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf.c,v 1.1193 2024/01/10 16:44:30 bluhm Exp $ */
+/*	$OpenBSD: pf.c,v 1.1201 2024/07/04 12:50:08 bluhm Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -237,9 +237,7 @@ int			 pf_find_state(struct pf_pdesc *,
 			    struct pf_state_key_cmp *, struct pf_state **);
 int			 pf_src_connlimit(struct pf_state **);
 int			 pf_match_rcvif(struct mbuf *, struct pf_rule *);
-int			 pf_step_into_anchor(struct pf_test_ctx *,
-			    struct pf_rule *);
-int			 pf_match_rule(struct pf_test_ctx *,
+enum pf_test_status	 pf_match_rule(struct pf_test_ctx *,
 			    struct pf_ruleset *);
 void			 pf_counters_inc(int, struct pf_pdesc *,
 			    struct pf_state *, struct pf_rule *,
@@ -3668,8 +3666,8 @@ pf_anchor_stack_top(void)
 }
 
 int
-pf_anchor_stack_push(struct pf_ruleset *rs, struct pf_rule *r,
-    struct pf_anchor *child, int jump_target)
+pf_anchor_stack_push(struct pf_ruleset *rs, struct pf_rule *anchor,
+    struct pf_rule *r, struct pf_anchor *child, int jump_target)
 {
 	struct pf_anchor_stackframe *stack;
 	struct pf_anchor_stackframe *top_sf = pf_anchor_stack_top();
@@ -3679,6 +3677,7 @@ pf_anchor_stack_push(struct pf_ruleset *rs, struct pf_rule *r,
 		return (-1);
 
 	top_sf->sf_rs = rs;
+	top_sf->sf_anchor = anchor;
 	top_sf->sf_r = r;
 	top_sf->sf_child = child;
 	top_sf->sf_jump_target = jump_target;
@@ -3695,8 +3694,8 @@ pf_anchor_stack_push(struct pf_ruleset *rs, struct pf_rule *r,
 }
 
 int
-pf_anchor_stack_pop(struct pf_ruleset **rs, struct pf_rule **r,
-    struct pf_anchor **child, int *jump_target)
+pf_anchor_stack_pop(struct pf_ruleset **rs, struct pf_rule **anchor,
+    struct pf_rule **r, struct pf_anchor **child, int *jump_target)
 {
 	struct pf_anchor_stackframe *top_sf = pf_anchor_stack_top();
 	struct pf_anchor_stackframe *stack;
@@ -3712,6 +3711,7 @@ pf_anchor_stack_pop(struct pf_ruleset **rs, struct pf_rule **r,
 			    __func__);
 
 		*rs = top_sf->sf_rs;
+		*anchor = top_sf->sf_anchor;
 		*r = top_sf->sf_r;
 		*child = top_sf->sf_child;
 		*jump_target = top_sf->sf_jump_target;
@@ -3788,7 +3788,7 @@ pf_socket_lookup(struct pf_pdesc *pd)
 {
 	struct pf_addr		*saddr, *daddr;
 	u_int16_t		 sport, dport;
-	struct inpcbtable	*tb;
+	struct inpcbtable	*table;
 	struct inpcb		*inp;
 
 	pd->lookup.uid = -1;
@@ -3800,14 +3800,14 @@ pf_socket_lookup(struct pf_pdesc *pd)
 		dport = pd->hdr.tcp.th_dport;
 		PF_ASSERT_LOCKED();
 		NET_ASSERT_LOCKED();
-		tb = &tcbtable;
+		table = &tcbtable;
 		break;
 	case IPPROTO_UDP:
 		sport = pd->hdr.udp.uh_sport;
 		dport = pd->hdr.udp.uh_dport;
 		PF_ASSERT_LOCKED();
 		NET_ASSERT_LOCKED();
-		tb = &udbtable;
+		table = &udbtable;
 		break;
 	default:
 		return (-1);
@@ -3830,10 +3830,10 @@ pf_socket_lookup(struct pf_pdesc *pd)
 		 * Fails when rtable is changed while evaluating the ruleset
 		 * The socket looked up will not match the one hit in the end.
 		 */
-		inp = in_pcblookup(tb, saddr->v4, sport, daddr->v4, dport,
+		inp = in_pcblookup(table, saddr->v4, sport, daddr->v4, dport,
 		    pd->rdomain);
 		if (inp == NULL) {
-			inp = in_pcblookup_listen(tb, daddr->v4, dport,
+			inp = in_pcblookup_listen(table, daddr->v4, dport,
 			    NULL, pd->rdomain);
 			if (inp == NULL)
 				return (-1);
@@ -3842,11 +3842,13 @@ pf_socket_lookup(struct pf_pdesc *pd)
 #ifdef INET6
 	case AF_INET6:
 		if (pd->virtual_proto == IPPROTO_UDP)
-			tb = &udb6table;
-		inp = in6_pcblookup(tb, &saddr->v6, sport, &daddr->v6,
+			table = &udb6table;
+		if (pd->virtual_proto == IPPROTO_TCP)
+			table = &tcb6table;
+		inp = in6_pcblookup(table, &saddr->v6, sport, &daddr->v6,
 		    dport, pd->rdomain);
 		if (inp == NULL) {
-			inp = in6_pcblookup_listen(tb, &daddr->v6, dport,
+			inp = in6_pcblookup_listen(table, &daddr->v6, dport,
 			    NULL, pd->rdomain);
 			if (inp == NULL)
 				return (-1);
@@ -4306,25 +4308,27 @@ enter_ruleset:
 			if (r->quick)
 				return (PF_TEST_QUICK);
 		} else {
-			ctx->a = r;
 			ctx->aruleset = &r->anchor->ruleset;
 			if (r->anchor_wildcard) {
 				RB_FOREACH(child, pf_anchor_node,
 				    &r->anchor->children) {
-					if (pf_anchor_stack_push(ruleset, r,
-					    child, PF_NEXT_CHILD) != 0)
+					if (pf_anchor_stack_push(ruleset,
+					    ctx->a, r, child,
+					    PF_NEXT_CHILD) != 0)
 						return (PF_TEST_FAIL);
 
+					ctx->a = r;
 					ruleset = &child->ruleset;
 					goto enter_ruleset;
 next_child:
 					continue;	/* with RB_FOREACH() */
 				}
 			} else {
-				if (pf_anchor_stack_push(ruleset, r, child,
-				    PF_NEXT_RULE) != 0)
+				if (pf_anchor_stack_push(ruleset, ctx->a,
+				    r, child, PF_NEXT_RULE) != 0)
 					return (PF_TEST_FAIL);
 
+				ctx->a = r;
 				ruleset = &r->anchor->ruleset;
 				child = NULL;
 				goto enter_ruleset;
@@ -4335,7 +4339,9 @@ next_rule:
 		r = TAILQ_NEXT(r, entries);
 	}
 
-	if (pf_anchor_stack_pop(&ruleset, &r, &child, &target) == 0) {
+	if (pf_anchor_stack_pop(&ruleset, &ctx->a, &r, &child,
+	    &target) == 0) {
+
 		/* stop if any rule matched within quick anchors. */
 		if (r->quick == PF_TEST_QUICK && *ctx->am == r)
 			return (PF_TEST_QUICK);
@@ -7952,37 +7958,55 @@ done:
 	case PF_AFRT:
 		if (pf_translate_af(&pd)) {
 			action = PF_DROP;
-			break;
+			goto out;
 		}
 		pd.m->m_pkthdr.pf.flags |= PF_TAG_GENERATED;
 		switch (pd.naf) {
 		case AF_INET:
 			if (pd.dir == PF_IN) {
-				if (ipforwarding == 0) {
+				int flags = IP_REDIRECT;
+
+				switch (ip_forwarding) {
+				case 2:
+					SET(flags, IP_FORWARDING_IPSEC);
+					/* FALLTHROUGH */
+				case 1:
+					SET(flags, IP_FORWARDING);
+					break;
+				default:
 					ipstat_inc(ips_cantforward);
 					action = PF_DROP;
-					break;
+					goto out;
 				}
-				ip_forward(pd.m, ifp, NULL, 1);
+				if (ip_directedbcast)
+					SET(flags, IP_ALLOWBROADCAST);
+				ip_forward(pd.m, ifp, NULL, flags);
 			} else
 				ip_output(pd.m, NULL, NULL, 0, NULL, NULL, 0);
 			break;
 		case AF_INET6:
 			if (pd.dir == PF_IN) {
-				if (ip6_forwarding == 0) {
+				int flags = IPV6_REDIRECT;
+
+				switch (ip6_forwarding) {
+				case 2:
+					SET(flags, IPV6_FORWARDING_IPSEC);
+					/* FALLTHROUGH */
+				case 1:
+					SET(flags, IPV6_FORWARDING);
+					break;
+				default:
 					ip6stat_inc(ip6s_cantforward);
 					action = PF_DROP;
-					break;
+					goto out;
 				}
-				ip6_forward(pd.m, NULL, 1);
+				ip6_forward(pd.m, NULL, flags);
 			} else
 				ip6_output(pd.m, NULL, NULL, 0, NULL, NULL);
 			break;
 		}
-		if (action != PF_DROP) {
-			pd.m = NULL;
-			action = PF_PASS;
-		}
+		pd.m = NULL;
+		action = PF_PASS;
 		break;
 #endif /* INET6 */
 	case PF_DROP:
@@ -8022,6 +8046,7 @@ done:
 			st->if_index_out = ifp->if_index;
 	}
 
+ out:
 	*m0 = pd.m;
 
 	pf_state_unref(st);

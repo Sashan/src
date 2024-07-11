@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sched.c,v 1.95 2024/02/28 13:43:44 mpi Exp $	*/
+/*	$OpenBSD: kern_sched.c,v 1.99 2024/07/08 16:15:42 mpi Exp $	*/
 /*
  * Copyright (c) 2007, 2008 Artur Grabowski <art@openbsd.org>
  *
@@ -137,7 +137,6 @@ sched_idle(void *v)
 	struct schedstate_percpu *spc;
 	struct proc *p = curproc;
 	struct cpu_info *ci = v;
-	int s;
 
 	KERNEL_UNLOCK();
 
@@ -147,14 +146,14 @@ sched_idle(void *v)
 	 * First time we enter here, we're not supposed to idle,
 	 * just go away for a while.
 	 */
-	SCHED_LOCK(s);
+	SCHED_LOCK();
 	cpuset_add(&sched_idle_cpus, ci);
 	p->p_stat = SSLEEP;
 	p->p_cpu = ci;
 	atomic_setbits_int(&p->p_flag, P_CPUPEG);
 	mi_switch();
 	cpuset_del(&sched_idle_cpus, ci);
-	SCHED_UNLOCK(s);
+	SCHED_UNLOCK();
 
 	KASSERT(ci == curcpu());
 	KASSERT(curproc == spc->spc_idleproc);
@@ -163,10 +162,10 @@ sched_idle(void *v)
 		while (!cpu_is_idle(curcpu())) {
 			struct proc *dead;
 
-			SCHED_LOCK(s);
+			SCHED_LOCK();
 			p->p_stat = SSLEEP;
 			mi_switch();
-			SCHED_UNLOCK(s);
+			SCHED_UNLOCK();
 
 			while ((dead = LIST_FIRST(&spc->spc_deadproc))) {
 				LIST_REMOVE(dead, p_hash);
@@ -185,10 +184,10 @@ sched_idle(void *v)
 			if (spc->spc_schedflags & SPCF_SHOULDHALT &&
 			    (spc->spc_schedflags & SPCF_HALTED) == 0) {
 				cpuset_del(&sched_idle_cpus, ci);
-				SCHED_LOCK(s);
+				SCHED_LOCK();
 				atomic_setbits_int(&spc->spc_schedflags,
 				    spc->spc_whichqs ? 0 : SPCF_HALTED);
-				SCHED_UNLOCK(s);
+				SCHED_UNLOCK();
 				wakeup(spc);
 			}
 #endif
@@ -214,8 +213,21 @@ void
 sched_exit(struct proc *p)
 {
 	struct schedstate_percpu *spc = &curcpu()->ci_schedstate;
+	struct timespec ts;
 
 	LIST_INSERT_HEAD(&spc->spc_deadproc, p, p_hash);
+
+	/* update the tu_runtime one last time */
+	nanouptime(&ts);
+	if (timespeccmp(&ts, &spc->spc_runtime, <))
+		timespecclear(&ts);
+	else
+		timespecsub(&ts, &spc->spc_runtime, &ts);
+
+	/* add the time counts for this thread */
+	tu_enter(&p->p_tu);
+	timespecadd(&p->p_tu.tu_runtime, &ts, &p->p_tu.tu_runtime);
+	tu_leave(&p->p_tu);
 
 	KERNEL_ASSERT_LOCKED();
 	sched_toidle();
@@ -226,7 +238,6 @@ sched_toidle(void)
 {
 	struct schedstate_percpu *spc = &curcpu()->ci_schedstate;
 	struct proc *idle;
-	int s;
 
 #ifdef MULTIPROCESSOR
 	/* This process no longer needs to hold the kernel lock. */
@@ -245,8 +256,7 @@ sched_toidle(void)
 
 	atomic_clearbits_int(&spc->spc_schedflags, SPCF_SWITCHCLEAR);
 
-	SCHED_LOCK(s);
-
+	SCHED_LOCK();
 	idle = spc->spc_idleproc;
 	idle->p_stat = SRUN;
 
@@ -627,14 +637,21 @@ void
 sched_peg_curproc(struct cpu_info *ci)
 {
 	struct proc *p = curproc;
-	int s;
 
-	SCHED_LOCK(s);
+	SCHED_LOCK();
 	atomic_setbits_int(&p->p_flag, P_CPUPEG);
 	setrunqueue(ci, p, p->p_usrpri);
 	p->p_ru.ru_nvcsw++;
 	mi_switch();
-	SCHED_UNLOCK(s);
+	SCHED_UNLOCK();
+}
+
+void
+sched_unpeg_curproc(void)
+{
+	struct proc *p = curproc;
+
+	atomic_clearbits_int(&p->p_flag, P_CPUPEG);
 }
 
 #ifdef MULTIPROCESSOR
@@ -703,7 +720,7 @@ sched_barrier_task(void *arg)
 
 	sched_peg_curproc(ci);
 	cond_signal(&sb->cond);
-	atomic_clearbits_int(&curproc->p_flag, P_CPUPEG);
+	sched_unpeg_curproc();
 }
 
 void

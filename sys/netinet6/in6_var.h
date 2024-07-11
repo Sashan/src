@@ -1,4 +1,4 @@
-/*	$OpenBSD: in6_var.h,v 1.78 2022/11/23 07:57:39 kn Exp $	*/
+/*	$OpenBSD: in6_var.h,v 1.80 2024/05/13 01:15:53 jsg Exp $	*/
 /*	$KAME: in6_var.h,v 1.55 2001/02/16 12:49:45 itojun Exp $	*/
 
 /*
@@ -93,6 +93,7 @@ struct	in6_ifaddr {
 #define	ia_flags	ia_ifa.ifa_flags
 
 	struct	sockaddr_in6 ia_addr;	/* interface address */
+	struct	sockaddr_in6 ia_gwaddr; /* router we learned address from */
 	struct	sockaddr_in6 ia_dstaddr; /* space for destination addr */
 	struct	sockaddr_in6 ia_prefixmask; /* prefix mask */
 	TAILQ_ENTRY(in6_ifaddr) ia_list;	/* list of IP6 addresses */
@@ -361,14 +362,11 @@ int	in6_update_ifa(struct ifnet *, struct in6_aliasreq *,
 	struct in6_ifaddr *);
 void	in6_purgeaddr(struct ifaddr *);
 int	in6if_do_dad(struct ifnet *);
-void	*in6_domifattach(struct ifnet *);
-void	in6_domifdetach(struct ifnet *, void *);
 struct in6_ifaddr *in6ifa_ifpforlinklocal(struct ifnet *, int);
 struct in6_ifaddr *in6ifa_ifpwithaddr(struct ifnet *, struct in6_addr *);
 int	in6_addr2scopeid(unsigned int, struct in6_addr *);
 int	in6_matchlen(struct in6_addr *, struct in6_addr *);
 void	in6_prefixlen2mask(struct in6_addr *, int);
-void	in6_purgeprefix(struct ifnet *);
 #endif /* _KERNEL */
 
 #endif /* _NETINET6_IN6_VAR_H_ */

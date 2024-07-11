@@ -1,4 +1,4 @@
-/*	$OpenBSD: in6_pcb.c,v 1.141 2024/02/29 12:01:59 naddy Exp $	*/
+/*	$OpenBSD: in6_pcb.c,v 1.144 2024/04/12 16:07:09 bluhm Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -313,7 +313,7 @@ in6_pcbconnect(struct inpcb *inp, struct mbuf *nam)
 
 	if (IN6_IS_ADDR_UNSPECIFIED(&inp->inp_laddr6)) {
 		if (inp->inp_lport == 0) {
-			error = in_pcbbind_locked(inp, NULL, curproc);
+			error = in_pcbbind_locked(inp, NULL, in6a, curproc);
 			if (error) {
 				mtx_leave(&table->inpt_mtx);
 				return (error);
@@ -479,8 +479,7 @@ in6_pcbnotify(struct inpcbtable *table, const struct sockaddr_in6 *dst,
 	rw_enter_write(&table->inpt_notify);
 	mtx_enter(&table->inpt_mtx);
 	TAILQ_FOREACH(inp, &table->inpt_queue, inp_queue) {
-		if (!ISSET(inp->inp_flags, INP_IPV6))
-			continue;
+		KASSERT(ISSET(inp->inp_flags, INP_IPV6));
 
 		/*
 		 * Under the following condition, notify of redirects
@@ -561,16 +560,10 @@ in6_pcbnotify(struct inpcbtable *table, const struct sockaddr_in6 *dst,
 struct rtentry *
 in6_pcbrtentry(struct inpcb *inp)
 {
-	struct route *ro = &inp->inp_route;
-
 	if (IN6_IS_ADDR_UNSPECIFIED(&inp->inp_faddr6))
 		return (NULL);
-	if (route6_cache(ro, &inp->inp_faddr6, &inp->inp_laddr6,
-	    inp->inp_rtableid)) {
-		ro->ro_rt = rtalloc_mpath(&ro->ro_dstsa,
-		    &inp->inp_laddr6.s6_addr32[0], ro->ro_tableid);
-	}
-	return (ro->ro_rt);
+	return (route6_mpath(&inp->inp_route, &inp->inp_faddr6,
+	    &inp->inp_laddr6, inp->inp_rtableid));
 }
 
 struct inpcb *
@@ -586,8 +579,8 @@ in6_pcbhash_lookup(struct inpcbtable *table, uint64_t hash, u_int rdomain,
 
 	head = &table->inpt_hashtbl[hash & table->inpt_mask];
 	LIST_FOREACH(inp, head, inp_hash) {
-		if (!ISSET(inp->inp_flags, INP_IPV6))
-			continue;
+		KASSERT(ISSET(inp->inp_flags, INP_IPV6));
+
 		if (inp->inp_fport == fport && inp->inp_lport == lport &&
 		    IN6_ARE_ADDR_EQUAL(&inp->inp_faddr6, faddr) &&
 		    IN6_ARE_ADDR_EQUAL(&inp->inp_laddr6, laddr) &&

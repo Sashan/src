@@ -1,4 +1,4 @@
-/*	$OpenBSD: ufs_vnops.c,v 1.160 2024/02/03 18:51:59 beck Exp $	*/
+/*	$OpenBSD: ufs_vnops.c,v 1.162 2024/05/13 11:17:41 semarie Exp $	*/
 /*	$NetBSD: ufs_vnops.c,v 1.18 1996/05/11 18:28:04 mycroft Exp $	*/
 
 /*
@@ -595,11 +595,6 @@ ufs_remove(void *v)
 	VN_KNOTE(vp, NOTE_DELETE);
 	VN_KNOTE(dvp, NOTE_WRITE);
  out:
-	if (dvp == vp)
-		vrele(vp);
-	else
-		vput(vp);
-	vput(dvp);
 	return (error);
 }
 
@@ -621,16 +616,6 @@ ufs_link(void *v)
 	if ((cnp->cn_flags & HASBUF) == 0)
 		panic("ufs_link: no name");
 #endif
-	if (vp->v_type == VDIR) {
-		VOP_ABORTOP(dvp, cnp);
-		error = EPERM;
-		goto out2;
-	}
-	if (dvp->v_mount != vp->v_mount) {
-		VOP_ABORTOP(dvp, cnp);
-		error = EXDEV;
-		goto out2;
-	}
 	if (dvp != vp && (error = vn_lock(vp, LK_EXCLUSIVE))) {
 		VOP_ABORTOP(dvp, cnp);
 		goto out2;

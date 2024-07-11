@@ -1,4 +1,4 @@
-/*	$OpenBSD: sched.h,v 1.70 2024/01/24 19:23:38 cheloha Exp $	*/
+/*	$OpenBSD: sched.h,v 1.73 2024/07/08 14:46:47 mpi Exp $	*/
 /* $NetBSD: sched.h,v 1.2 1999/02/28 18:14:58 ross Exp $ */
 
 /*-
@@ -169,6 +169,7 @@ void cpu_idle_enter(void);
 void cpu_idle_cycle(void);
 void cpu_idle_leave(void);
 void sched_peg_curproc(struct cpu_info *ci);
+void sched_unpeg_curproc(void);
 void sched_barrier(struct cpu_info *ci);
 
 int sysctl_hwsetperf(void *, size_t *, void *, size_t);
@@ -199,52 +200,14 @@ void remrunqueue(struct proc *);
 		func();							\
 } while (0)
 
-#if defined(MULTIPROCESSOR)
-#include <sys/lock.h>
+extern struct mutex sched_lock;
 
-/*
- * XXX Instead of using struct lock for the kernel lock and thus requiring us
- * XXX to implement simplelocks, causing all sorts of fine-grained locks all
- * XXX over our tree to be activated, the sched_lock is a different kind of
- * XXX lock to avoid introducing locking protocol bugs.
- */
-extern struct __mp_lock sched_lock;
+#define	SCHED_ASSERT_LOCKED()	MUTEX_ASSERT_LOCKED(&sched_lock)
+#define	SCHED_ASSERT_UNLOCKED()	MUTEX_ASSERT_UNLOCKED(&sched_lock)
 
-#define	SCHED_ASSERT_LOCKED()						\
-do {									\
-	splassert(IPL_SCHED);						\
-	KASSERT(__mp_lock_held(&sched_lock, curcpu()));			\
-} while (0)
-#define	SCHED_ASSERT_UNLOCKED()						\
-do {									\
-	KASSERT(__mp_lock_held(&sched_lock, curcpu()) == 0);		\
-} while (0)
-
-#define	SCHED_LOCK_INIT()	__mp_lock_init(&sched_lock)
-
-#define	SCHED_LOCK(s)							\
-do {									\
-	s = splsched();							\
-	__mp_lock(&sched_lock);						\
-} while (/* CONSTCOND */ 0)
-
-#define	SCHED_UNLOCK(s)							\
-do {									\
-	__mp_unlock(&sched_lock);					\
-	splx(s);							\
-} while (/* CONSTCOND */ 0)
-
-#else /* ! MULTIPROCESSOR */
-
-#define	SCHED_ASSERT_LOCKED()		splassert(IPL_SCHED);
-#define	SCHED_ASSERT_UNLOCKED()		/* nothing */
-
-#define	SCHED_LOCK_INIT()		/* nothing */
-
-#define	SCHED_LOCK(s)			s = splsched()
-#define	SCHED_UNLOCK(s)			splx(s)
-
-#endif /* MULTIPROCESSOR */
+#define	SCHED_LOCK_INIT()	mtx_init(&sched_lock, IPL_SCHED)
+#define	SCHED_LOCK()		mtx_enter(&sched_lock)
+#define	SCHED_UNLOCK()		mtx_leave(&sched_lock)
 
 #endif	/* _KERNEL */
 #endif	/* _SYS_SCHED_H_ */

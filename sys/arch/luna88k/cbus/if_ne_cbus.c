@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ne_cbus.c,v 1.3 2023/09/11 08:41:26 mvs Exp $	*/
+/*	$OpenBSD: if_ne_cbus.c,v 1.5 2024/06/01 00:48:16 aoyama Exp $	*/
 /*	$NetBSD: if_ne_isa.c,v 1.6 1998/07/05 06:49:13 jonathan Exp $	*/
 
 /*-
@@ -39,7 +39,7 @@
 /*
  * Supported boards:
  * - Allied Telesis  CentreCOM LA-98 series
- *   Available configuration: 
+ *   Available configuration:
  *   INT(IRQ): 0(3), 1(5), 2(6), 3(9), 4(10), 5(12), 6(13) (default: INT0)
  *   I/O address: 0xc8d0, 0xc2d0, 0xc4d0, 0xc460, 0xc9d0, 0xcad0, 0xcbd0
  *              (default 0xc8d0)
@@ -77,11 +77,9 @@
 #include <dev/ic/ne2000var.h>
 
 #include <dev/ic/rtl80x9reg.h>
-#include <dev/ic/rtl80x9var.h>          
+#include <dev/ic/rtl80x9var.h>
 
 #include <arch/luna88k/cbus/cbusvar.h>
-
-#define PCEXIO_BASE		PC_BASE + 0x1000000
 
 /* bus space tag for if_ne_cbus */
 struct luna88k_bus_space_tag ne_cbus_io_bst = {

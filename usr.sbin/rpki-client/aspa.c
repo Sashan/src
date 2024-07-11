@@ -1,4 +1,4 @@
-/*	$OpenBSD: aspa.c,v 1.28 2024/02/21 09:17:06 tb Exp $ */
+/*	$OpenBSD: aspa.c,v 1.30 2024/04/08 14:02:13 tb Exp $ */
 /*
  * Copyright (c) 2022 Job Snijders <job@fastly.com>
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
@@ -322,7 +322,8 @@ insert_vap(struct vap *v, uint32_t idx, uint32_t *p)
  * Duplicated entries are merged.
  */
 void
-aspa_insert_vaps(struct vap_tree *tree, struct aspa *aspa, struct repo *rp)
+aspa_insert_vaps(char *fn, struct vap_tree *tree, struct aspa *aspa,
+    struct repo *rp)
 {
 	struct vap	*v, *found;
 	size_t		 i, j;
@@ -338,6 +339,10 @@ aspa_insert_vaps(struct vap_tree *tree, struct aspa *aspa, struct repo *rp)
 	v->expires = aspa->expires;
 
 	if ((found = RB_INSERT(vap_tree, tree, v)) != NULL) {
+		if (found->overflowed) {
+			free(v);
+			return;
+		}
 		if (found->expires > v->expires) {
 			/* decrement found */
 			repo_stat_inc(repo_byid(found->repoid), found->talid,
@@ -377,6 +382,17 @@ aspa_insert_vaps(struct vap_tree *tree, struct aspa *aspa, struct repo *rp)
 
 		if (j < v->providersz)
 			j++;
+	}
+
+	if (v->providersz >= MAX_ASPA_PROVIDERS) {
+		v->overflowed = 1;
+		free(v->providers);
+		v->providers = NULL;
+		v->providersz = 0;
+		repo_stat_inc(rp, v->talid, RTYPE_ASPA, STYPE_OVERFLOW);
+		warnx("%s: too many providers for ASPA Customer ASID %u "
+		    "(more than %d)", fn, v->custasid, MAX_ASPA_PROVIDERS);
+		return;
 	}
 }
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: clock.c,v 1.82 2023/09/17 14:50:51 cheloha Exp $	*/
+/*	$OpenBSD: clock.c,v 1.87 2024/04/08 20:05:51 miod Exp $	*/
 /*	$NetBSD: clock.c,v 1.41 2001/07/24 19:29:25 eeh Exp $ */
 
 /*
@@ -66,14 +66,9 @@
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/device.h>
-#include <sys/proc.h>
-#include <sys/resourcevar.h>
 #include <sys/malloc.h>
 #include <sys/systm.h>
 #include <sys/clockintr.h>
-#ifdef GPROF
-#include <sys/gmon.h>
-#endif
 #include <sys/sched.h>
 #include <sys/stdint.h>
 #include <sys/timetc.h>
@@ -87,7 +82,6 @@
 #include <dev/clock_subr.h>
 #include <dev/ic/mk48txxreg.h>
 
-#include <sparc64/sparc64/intreg.h>
 #include <sparc64/dev/iommureg.h>
 #include <sparc64/dev/sbusreg.h>
 #include <dev/sbus/sbusvar.h>
@@ -177,7 +171,12 @@ const struct intrclock stick_intrclock = {
 
 void sparc64_raise_clockintr(void);
 
-static struct intrhand level0 = { tickintr };
+static struct intrhand level10 = {
+	.ih_fun = tickintr,
+	.ih_number = 1,
+	.ih_pil = 10,
+	.ih_name = "clock"
+};
 
 /*
  * clock (eeprom) attaches at the sbus or the ebus (PCI)
@@ -207,13 +206,8 @@ extern todr_chip_handle_t todr_handle;
 static struct idprom *idprom;
 
 int clock_bus_wenable(struct todr_chip_handle *, int);
-struct chiptime;
 void myetheraddr(u_char *);
 struct idprom *getidprom(void);
-int chiptotime(int, int, int, int, int, int);
-void timetochip(struct chiptime *);
-
-int timerblurb = 10; /* Guess a value; used before clock is attached */
 
 /*
  * The OPENPROM calls the clock the "eeprom", so we have to have our
@@ -476,21 +470,8 @@ myetheraddr(u_char *cp)
 void
 cpu_initclocks(void)
 {
-#ifdef DEBUG
-	extern int intrdebug;
-#endif
 	u_int sys_tick_rate;
 	int impl = 0;
-
-#ifdef DEBUG
-	/* Set a 1s clock */
-	if (intrdebug) {
-		hz = 1;
-		tick = 1000000 / hz;
-		tick_nsec = 1000000000 / hz;
-		printf("intrdebug set: 1Hz clock\n");
-	}
-#endif
 
 	if (1000000 % hz) {
 		printf("cannot get %d Hz clock; using 100 Hz\n", hz);
@@ -527,41 +508,36 @@ cpu_initclocks(void)
 
 	struct cpu_info *ci;
 
-	/* We don't have a counter-timer -- use %tick */
-	level0.ih_clr = 0;
-
 	/* 
 	 * Establish a level 10 interrupt handler 
 	 *
 	 * We will have a conflict with the softint handler,
 	 * so we set the ih_number to 1.
 	 */
-	level0.ih_number = 1;
-	strlcpy(level0.ih_name, "clock", sizeof(level0.ih_name));
-	intr_establish(10, &level0);
-	evcount_percpu(&level0.ih_count);
+	intr_establish(&level10);
+	evcount_percpu(&level10.ih_count);
 
 	if (sys_tick_rate > 0) {
 		sys_tick_nsec_cycle_ratio =
 		    sys_tick_rate * (1ULL << 32) / 1000000000;
 		sys_tick_nsec_max = UINT64_MAX / sys_tick_nsec_cycle_ratio;
 		if (impl == IMPL_HUMMINGBIRD) {
-			level0.ih_fun = stickintr;
+			level10.ih_fun = stickintr;
 			cpu_start_clock = stick_start;
 		} else {
-			level0.ih_fun = sys_tickintr;
+			level10.ih_fun = sys_tickintr;
 			cpu_start_clock = sys_tick_start;
 		}
 	} else {
 		tick_nsec_cycle_ratio =
 		    cpu_clockrate * (1ULL << 32) / 1000000000;
 		tick_nsec_max = UINT64_MAX / tick_nsec_cycle_ratio;
-		level0.ih_fun = tickintr;
+		level10.ih_fun = tickintr;
 		cpu_start_clock = tick_start;
 	}
 
 	for (ci = cpus; ci != NULL; ci = ci->ci_next)
-		memcpy(&ci->ci_tickintr, &level0, sizeof(level0));
+		memcpy(&ci->ci_tickintr, &level10, sizeof(level10));
 }
 
 void
@@ -587,7 +563,7 @@ int
 tickintr(void *cap)
 {
 	clockintr_dispatch(cap);
-	evcount_inc(&level0.ih_count);
+	evcount_inc(&level10.ih_count);
 	return (1);
 }
 
@@ -595,7 +571,7 @@ int
 sys_tickintr(void *cap)
 {
 	clockintr_dispatch(cap);
-	evcount_inc(&level0.ih_count);
+	evcount_inc(&level10.ih_count);
 	return (1);
 }
 
@@ -603,7 +579,7 @@ int
 stickintr(void *cap)
 {
 	clockintr_dispatch(cap);
-	evcount_inc(&level0.ih_count);
+	evcount_inc(&level10.ih_count);
 	return (1);
 }
 
@@ -732,5 +708,5 @@ sys_tick_get_timecount(struct timecounter *tc)
 void
 sparc64_raise_clockintr(void)
 {
-	send_softint(-1, PIL_CLOCK, &curcpu()->ci_tickintr);
+	send_softint(PIL_CLOCK, &curcpu()->ci_tickintr);
 }

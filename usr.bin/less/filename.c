@@ -26,7 +26,6 @@
 
 extern int force_open;
 extern int secure;
-extern int use_lessopen;
 extern int ctldisp;
 extern int utf_mode;
 extern IFILE curr_ifile;
@@ -107,6 +106,15 @@ metachar(char c)
 }
 
 /*
+ * Must use quotes rather than escape characters for this meta character.
+ */
+static int
+must_quote(char c)
+{
+	return (c == '\n');
+}
+
+/*
  * Insert a backslash before each metacharacter in a string.
  */
 char *
@@ -136,6 +144,9 @@ shell_quote(const char *s)
 				 * doesn't support escape chars.  Use quotes.
 				 */
 				use_quotes = 1;
+			} else if (must_quote(*p)) {
+				/* Opening quote + character + closing quote. */
+				len += 3;
 			} else {
 				/*
 				 * Allow space for the escape char.
@@ -155,14 +166,19 @@ shell_quote(const char *s)
 	} else {
 		newstr = r = ecalloc(len, sizeof (char));
 		while (*s != '\0') {
-			if (metachar(*s)) {
-				/*
-				 * Add the escape char.
-				 */
+			if (!metachar(*s)) {
+				*r++ = *s++;
+			} else if (must_quote(*s)) {
+				/* Surround the character with quotes. */
+				*r++ = openquote;
+				*r++ = *s++;
+				*r++ = closequote;
+			} else {
+				/* Escape the character. */
 				(void) strlcpy(r, esc, newstr + len - p);
 				r += esclen;
+				*r++ = *s++;
 			}
-			*r++ = *s++;
 		}
 		*r = '\0';
 	}
@@ -363,85 +379,6 @@ bin_file(int f)
 }
 
 /*
- * Read a string from a file.
- * Return a pointer to the string in memory.
- */
-static char *
-readfd(FILE *fd)
-{
-	int len;
-	int ch;
-	char *buf;
-	char *p;
-
-	/*
-	 * Make a guess about how many chars in the string
-	 * and allocate a buffer to hold it.
-	 */
-	len = 100;
-	buf = ecalloc(len, sizeof (char));
-	for (p = buf; ; p++) {
-		if ((ch = getc(fd)) == '\n' || ch == EOF)
-			break;
-		if (p >= buf + len-1) {
-			/*
-			 * The string is too big to fit in the buffer we have.
-			 * Allocate a new buffer, twice as big.
-			 */
-			len *= 2;
-			*p = '\0';
-			p = ecalloc(len, sizeof (char));
-			strlcpy(p, buf, len);
-			free(buf);
-			buf = p;
-			p = buf + strlen(buf);
-		}
-		*p = (char)ch;
-	}
-	*p = '\0';
-	return (buf);
-}
-
-/*
- * Execute a shell command.
- * Return a pointer to a pipe connected to the shell command's standard output.
- */
-static FILE *
-shellcmd(char *cmd)
-{
-	FILE *fd;
-
-	char *shell;
-
-	shell = lgetenv("SHELL");
-	if (shell != NULL && *shell != '\0') {
-		char *scmd;
-		char *esccmd;
-
-		/*
-		 * Read the output of <$SHELL -c cmd>.
-		 * Escape any metacharacters in the command.
-		 */
-		esccmd = shell_quote(cmd);
-		if (esccmd == NULL) {
-			fd = popen(cmd, "r");
-		} else {
-			scmd = easprintf("%s -c %s", shell, esccmd);
-			free(esccmd);
-			fd = popen(scmd, "r");
-			free(scmd);
-		}
-	} else {
-		fd = popen(cmd, "r");
-	}
-	/*
-	 * Redirection in `popen' might have messed with the
-	 * standard devices.  Restore binary input mode.
-	 */
-	return (fd);
-}
-
-/*
  * Expand a filename, doing any system-specific metacharacter substitutions.
  */
 char *
@@ -499,182 +436,6 @@ lglob(char *filename)
 	free(filename);
 	free(ofilename);
 	return (gfilename);
-}
-
-/*
- * Expand LESSOPEN or LESSCLOSE.  Returns a newly allocated string
- * on success, NULL otherwise.
- */
-static char *
-expand_pct_s(const char *fmt, ...)
-{
-	int		n;
-	int		len;
-	char		*r, *d;
-	const char	*f[3];		/* max expansions + 1 for NULL */
-	va_list		ap;
-
-	va_start(ap, fmt);
-	for (n = 0; n < ((sizeof (f)/sizeof (f[0])) - 1); n++) {
-		f[n] = (const char *)va_arg(ap, const char *);
-		if (f[n] == NULL) {
-			break;
-		}
-	}
-	va_end(ap);
-	f[n] = NULL;	/* terminate list */
-
-	len = strlen(fmt) + 1;
-	for (n = 0; f[n] != NULL; n++) {
-		len += strlen(f[n]);	/* technically could -2 for "%s" */
-	}
-	r = ecalloc(len, sizeof (char));
-
-	for (n = 0, d = r; *fmt != 0; ) {
-		if (*fmt != '%') {
-			*d++ = *fmt++;
-			continue;
-		}
-		fmt++;
-		/* Permit embedded "%%" */
-		switch (*fmt) {
-		case '%':
-			*d++ = '%';
-			fmt++;
-			break;
-		case 's':
-			if (f[n] == NULL) {
-				va_end(ap);
-				free(r);
-				return (NULL);
-			}
-			(void) strlcpy(d, f[n++], r + len - d);
-			fmt++;
-			d += strlen(d);
-			break;
-		default:
-			va_end(ap);
-			free(r);
-			return (NULL);
-		}
-	}
-	*d = '\0';
-	return (r);
-}
-
-/*
- * See if we should open a "replacement file"
- * instead of the file we're about to open.
- */
-char *
-open_altfile(char *filename, int *pf, void **pfd)
-{
-	char *lessopen;
-	char *cmd;
-	FILE *fd;
-	int returnfd = 0;
-
-	if (!use_lessopen || secure)
-		return (NULL);
-	ch_ungetchar(-1);
-	if ((lessopen = lgetenv("LESSOPEN")) == NULL)
-		return (NULL);
-	while (*lessopen == '|') {
-		/*
-		 * If LESSOPEN starts with a |, it indicates
-		 * a "pipe preprocessor".
-		 */
-		lessopen++;
-		returnfd++;
-	}
-	if (*lessopen == '-') {
-		/*
-		 * Lessopen preprocessor will accept "-" as a filename.
-		 */
-		lessopen++;
-	} else {
-		if (strcmp(filename, "-") == 0)
-			return (NULL);
-	}
-
-	if ((cmd = expand_pct_s(lessopen, filename, NULL)) == NULL) {
-		error("Invalid LESSOPEN variable", NULL);
-		return (NULL);
-	}
-	fd = shellcmd(cmd);
-	free(cmd);
-	if (fd == NULL) {
-		/*
-		 * Cannot create the pipe.
-		 */
-		return (NULL);
-	}
-	if (returnfd) {
-		int f;
-		char c;
-
-		/*
-		 * Read one char to see if the pipe will produce any data.
-		 * If it does, push the char back on the pipe.
-		 */
-		f = fileno(fd);
-		if (read(f, &c, 1) != 1) {
-			/*
-			 * Pipe is empty.
-			 * If more than 1 pipe char was specified,
-			 * the exit status tells whether the file itself
-			 * is empty, or if there is no alt file.
-			 * If only one pipe char, just assume no alt file.
-			 */
-			int status = pclose(fd);
-			if (returnfd > 1 && status == 0) {
-				*pfd = NULL;
-				*pf = -1;
-				return (estrdup(FAKE_EMPTYFILE));
-			}
-			return (NULL);
-		}
-		ch_ungetchar(c);
-		*pfd = (void *) fd;
-		*pf = f;
-		return (estrdup("-"));
-	}
-	cmd = readfd(fd);
-	pclose(fd);
-	if (*cmd == '\0')
-		/*
-		 * Pipe is empty.  This means there is no alt file.
-		 */
-		return (NULL);
-	return (cmd);
-}
-
-/*
- * Close a replacement file.
- */
-void
-close_altfile(char *altfilename, char *filename, void *pipefd)
-{
-	char *lessclose;
-	FILE *fd;
-	char *cmd;
-
-	if (secure)
-		return;
-	if (pipefd != NULL) {
-		pclose((FILE *)pipefd);
-	}
-	if ((lessclose = lgetenv("LESSCLOSE")) == NULL)
-		return;
-	cmd = expand_pct_s(lessclose, filename, altfilename, NULL);
-	if (cmd == NULL) {
-		error("Invalid LESSCLOSE variable", NULL);
-		return;
-	}
-	fd = shellcmd(cmd);
-	free(cmd);
-	if (fd != NULL)
-		(void) pclose(fd);
 }
 
 /*

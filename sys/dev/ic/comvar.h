@@ -1,4 +1,4 @@
-/*	$OpenBSD: comvar.h,v 1.59 2022/01/11 11:51:14 uaa Exp $	*/
+/*	$OpenBSD: comvar.h,v 1.61 2024/05/29 00:48:15 jsg Exp $	*/
 /*	$NetBSD: comvar.h,v 1.5 1996/05/05 19:50:47 christos Exp $	*/
 
 /*
@@ -147,7 +147,6 @@ void	com_resume(struct com_softc *);
 
 void	comdiag(void *);
 int	comspeed(long, long);
-u_char	com_cflag2lcr(tcflag_t); /* XXX undefined */
 int	comparam(struct tty *, struct termios *);
 void	comstart(struct tty *);
 void	comsoft(void *);
@@ -170,7 +169,6 @@ extern int comdefaultrate;
 extern int comconsrate;
 extern int comconsfreq;
 extern bus_addr_t comconsaddr;
-extern bus_addr_t comsiraddr;
 extern int comconsattached;
 extern bus_space_tag_t comconsiot;
 extern bus_space_handle_t comconsioh;

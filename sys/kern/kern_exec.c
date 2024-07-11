@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_exec.c,v 1.254 2024/01/17 18:56:13 deraadt Exp $	*/
+/*	$OpenBSD: kern_exec.c,v 1.256 2024/07/08 13:17:12 claudio Exp $	*/
 /*	$NetBSD: kern_exec.c,v 1.75 1996/02/09 18:59:28 christos Exp $	*/
 
 /*-
@@ -699,6 +699,7 @@ sys_execve(struct proc *p, void *v, register_t *retval)
 	/* reset CPU time usage for the thread, but not the process */
 	timespecclear(&p->p_tu.tu_runtime);
 	p->p_tu.tu_uticks = p->p_tu.tu_sticks = p->p_tu.tu_iticks = 0;
+	p->p_tu.tu_gen = 0;
 
 	memset(p->p_name, 0, sizeof p->p_name);
 
@@ -905,7 +906,7 @@ exec_sigcode_map(struct process *pr)
 	if (uvm_map(&pr->ps_vmspace->vm_map, &pr->ps_sigcode, round_page(sz),
 	    sigobject, 0, 0, UVM_MAPFLAG(PROT_EXEC,
 	    PROT_READ | PROT_WRITE | PROT_EXEC, MAP_INHERIT_COPY,
-	    MADV_RANDOM, UVM_FLAG_COPYONW | UVM_FLAG_SYSCALL))) {
+	    MADV_RANDOM, UVM_FLAG_COPYONW))) {
 		uao_detach(sigobject);
 		return (ENOMEM);
 	}

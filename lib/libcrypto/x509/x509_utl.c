@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_utl.c,v 1.17 2023/05/12 19:02:10 tb Exp $ */
+/* $OpenBSD: x509_utl.c,v 1.19 2024/07/08 06:57:37 jca Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project.
  */
@@ -210,7 +210,7 @@ LCRYPTO_ALIAS(i2s_ASN1_ENUMERATED);
 char *
 i2s_ASN1_ENUMERATED_TABLE(X509V3_EXT_METHOD *method, const ASN1_ENUMERATED *e)
 {
-	BIT_STRING_BITNAME *enam;
+	const BIT_STRING_BITNAME *enam;
 	long strval;
 
 	strval = ASN1_ENUMERATED_get(e);
@@ -1325,9 +1325,10 @@ ipv6_from_asc(unsigned char *v6, const char *in)
 	v6stat.zero_pos = -1;
 	v6stat.zero_cnt = 0;
 
-	/* Treat the IPv6 representation as a list of values
-	 * separated by ':'. The presence of a '::' will parse
-	 * as one, two or three zero length elements.
+	/*
+	 * Treat the IPv6 representation as a list of values separated by ':'.
+	 * The presence of a '::' will parse as one (e.g., "2001:db8::1"),
+	 * two (e.g., "2001:db8::") or three (e.g., "::") zero length elements.
 	 */
 	if (!CONF_parse_list(in, ':', 0, ipv6_cb, &v6stat))
 		return 0;

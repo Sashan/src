@@ -31,13 +31,11 @@ POSSIBILITY OF SUCH DAMAGE.
 
 ***************************************************************************/
 
-/* $OpenBSD: if_em.c,v 1.374 2024/02/16 22:30:54 mglocker Exp $ */
+/* $OpenBSD: if_em.c,v 1.377 2024/05/24 06:02:53 jsg Exp $ */
 /* $FreeBSD: if_em.c,v 1.46 2004/09/29 18:28:28 mlaier Exp $ */
 
 #include <dev/pci/if_em.h>
 #include <dev/pci/if_em_soc.h>
-
-#include <netinet/ip6.h>
 
 /*********************************************************************
  *  Driver version
@@ -277,7 +275,6 @@ void em_enable_intr(struct em_softc *);
 void em_disable_intr(struct em_softc *);
 void em_free_transmit_structures(struct em_softc *);
 void em_free_receive_structures(struct em_softc *);
-void em_update_stats_counters(struct em_softc *);
 void em_disable_aspm(struct em_softc *);
 void em_txeof(struct em_queue *);
 int  em_allocate_receive_structures(struct em_softc *);
@@ -2452,7 +2449,7 @@ em_tso_setup(struct em_queue *que, struct mbuf *mp, u_int head,
 #endif
 
 	ether_extract_headers(mp, &ext);
-	if (ext.tcp == NULL)
+	if (ext.tcp == NULL || mp->m_pkthdr.ph_mss == 0)
 		goto out;
 
 	vlan_macip_lens |= (sizeof(*ext.eh) << E1000_ADVTXD_MACLEN_SHIFT);

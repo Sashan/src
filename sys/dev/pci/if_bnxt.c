@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_bnxt.c,v 1.47 2024/02/14 22:41:48 bluhm Exp $	*/
+/*	$OpenBSD: if_bnxt.c,v 1.51 2024/06/26 01:40:49 jsg Exp $	*/
 /*-
  * Broadcom NetXtreme-C/E network driver.
  *
@@ -50,7 +50,6 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/mbuf.h>
-#include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/device.h>
 #include <sys/stdint.h>
@@ -60,7 +59,6 @@
 
 #include <machine/bus.h>
 
-#include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcidevs.h>
 
@@ -76,8 +74,6 @@
 #endif
 
 #include <netinet/in.h>
-#include <netinet/ip.h>
-#include <netinet/ip6.h>
 #include <netinet/if_ether.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_timer.h>
@@ -1429,7 +1425,7 @@ bnxt_start(struct ifqueue *ifq)
 			uint32_t paylen;
 
 			ether_extract_headers(m, &ext);
-			if (ext.tcp) {
+			if (ext.tcp && m->m_pkthdr.ph_mss > 0) {
 				lflags |= TX_BD_LONG_LFLAGS_LSO;
 				hdrsize = sizeof(*ext.eh);
 				if (ext.ip4 || ext.ip6)
@@ -3506,7 +3502,8 @@ _bnxt_hwrm_set_async_event_bit(struct hwrm_func_drv_rgtr_input *req, int bit)
 	req->async_event_fwd[bit/32] |= (1 << (bit % 32));
 }
 
-int bnxt_hwrm_func_rgtr_async_events(struct bnxt_softc *softc)
+int
+bnxt_hwrm_func_rgtr_async_events(struct bnxt_softc *softc)
 {
 	struct hwrm_func_drv_rgtr_input req = {0};
 	int events[] = {

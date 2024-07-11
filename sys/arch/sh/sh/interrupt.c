@@ -1,4 +1,4 @@
-/*	$OpenBSD: interrupt.c,v 1.17 2020/10/07 12:13:23 mpi Exp $	*/
+/*	$OpenBSD: interrupt.c,v 1.19 2024/06/26 01:40:49 jsg Exp $	*/
 /*	$NetBSD: interrupt.c,v 1.18 2006/01/25 00:02:57 uwe Exp $	*/
 
 /*-
@@ -53,7 +53,6 @@ void intpri_intr_enable(int);
 void intpri_intr_disable(int);
 #endif
 
-void netintr(void);
 void tmu1_oneshot(void);
 int tmu1_intr(void *);
 void setsoft(int);
@@ -664,7 +663,8 @@ softintr_disestablish(void *arg)
 }
 
 /* Schedule a software interrupt. */
-void softintr_schedule(void *arg)
+void
+softintr_schedule(void *arg)
 {
 	struct sh_soft_intrhand *sih = arg;
 	struct sh_soft_intr *si = sih->sih_intrhead;

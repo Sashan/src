@@ -1,4 +1,4 @@
-/*	$OpenBSD: cons.h,v 1.4 2017/04/30 13:04:49 mpi Exp $	*/
+/*	$OpenBSD: cons.h,v 1.6 2024/05/22 05:51:49 jsg Exp $	*/
 /*	$NetBSD: cons.h,v 1.3 2000/05/19 05:26:17 eeh Exp $	*/
 
 /*-
@@ -36,12 +36,5 @@ void pcons_cnpollc(dev_t dev, int on);
 struct consdev;
 struct zs_chanstate;
 
-extern void *zs_conschan;
-
-extern void nullcnprobe(struct consdev *);
-
 extern int  zs_getc(void *arg);
 extern void zs_putc(void *arg, int c);
-
-struct zschan *
-zs_get_chan_addr(int zsc_unit, int channel);

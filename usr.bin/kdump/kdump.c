@@ -1,4 +1,4 @@
-/*	$OpenBSD: kdump.c,v 1.161 2023/12/15 15:12:08 deraadt Exp $	*/
+/*	$OpenBSD: kdump.c,v 1.164 2024/06/29 11:32:35 jsg Exp $	*/
 
 /*-
  * Copyright (c) 1988, 1993
@@ -754,7 +754,6 @@ static const formatter scargs[][8] = {
     [SYS_access]	= { Ppath, Accessmodename },
     [SYS_chflags]	= { Ppath, Chflagsname },
     [SYS_fchflags]	= { Pfd, Chflagsname },
-    [SYS_msyscall]	= { Pptr, Pbigsize },
     [SYS_stat]		= { Ppath, Pptr },
     [SYS_lstat]		= { Ppath, Pptr },
     [SYS_dup]		= { Pfd },
@@ -867,6 +866,7 @@ static const formatter scargs[][8] = {
     [SYS_setgid]	= { Gidname },
     [SYS_setegid]	= { Gidname },
     [SYS_seteuid]	= { Uidname },
+    [SYS_pathconfat]	= { Atfd, Ppath, Pathconfname, Atflagsname },
     [SYS_pathconf]	= { Ppath, Pathconfname },
     [SYS_fpathconf]	= { Pfd, Pathconfname },
     [SYS_swapctl]	= { Swapctlname, Pptr, Pdecint },
@@ -1499,9 +1499,6 @@ ktrpledge(struct ktr_pledge *pledge, size_t len)
 static void
 ktrpinsyscall(struct ktr_pinsyscall *pinsyscall, size_t len)
 {
-	const char *name = "";
-	int i;
-
 	if (len < sizeof(struct ktr_pinsyscall))
 		errx(1, "invalid ktr pinsyscall length %zu", len);
 

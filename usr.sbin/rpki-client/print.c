@@ -1,4 +1,4 @@
-/*	$OpenBSD: print.c,v 1.52 2024/02/26 10:02:37 job Exp $ */
+/*	$OpenBSD: print.c,v 1.55 2024/06/08 13:30:35 tb Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -63,6 +63,25 @@ nid2str(int nid)
 	snprintf(buf, sizeof(buf), "nid %d (%s)", nid, name);
 
 	return buf;
+}
+
+const char *
+purpose2str(enum cert_purpose purpose)
+{
+	switch (purpose) {
+	case CERT_PURPOSE_INVALID:
+		return "invalid cert";
+	case CERT_PURPOSE_TA:
+		return "TA cert";
+	case CERT_PURPOSE_CA:
+		return "CA cert";
+	case CERT_PURPOSE_EE:
+		return "EE cert";
+	case CERT_PURPOSE_BGPSEC_ROUTER:
+		return "BGPsec Router cert";
+	default:
+		return "unknown certificate purpose";
+	}
 }
 
 char *
@@ -211,7 +230,6 @@ ip_resources_print(struct cert_ip *ips, size_t ipsz, size_t asz)
 	size_t i;
 	int sockt;
 
-
 	for (i = 0; i < ipsz; i++) {
 		if (outformats & FORMAT_JSON)
 			json_do_object("resource", 1);
@@ -324,6 +342,48 @@ cert_print(const struct cert *p)
 		json_do_end();
 }
 
+/*
+ * XXX - dedup with x509_convert_seqnum()?
+ */
+static char *
+crl_parse_number(const X509_CRL *x509_crl)
+{
+	ASN1_INTEGER	*aint = NULL;
+	int		 crit;
+	BIGNUM		*seqnum = NULL;
+	char		*s = NULL;
+
+	aint = X509_CRL_get_ext_d2i(x509_crl, NID_crl_number, &crit, NULL);
+	if (aint == NULL) {
+		if (crit != -1)
+			warnx("failed to parse CRL Number");
+		else
+			warnx("CRL Number missing");
+		goto out;
+	}
+
+	if (ASN1_STRING_length(aint) > 20)
+		warnx("CRL Number should fit in 20 octets");
+
+	seqnum = ASN1_INTEGER_to_BN(aint, NULL);
+	if (seqnum == NULL) {
+		warnx("CRL Number: ASN1_INTEGER_to_BN error");
+		goto out;
+	}
+
+	if (BN_is_negative(seqnum))
+		warnx("CRL Number should be positive");
+
+	s = BN_bn2hex(seqnum);
+	if (s == NULL)
+		warnx("CRL Number: BN_bn2hex error");
+
+ out:
+	ASN1_INTEGER_free(aint);
+	BN_free(seqnum);
+	return s;
+}
+
 void
 crl_print(const struct crl *p)
 {
@@ -342,13 +402,20 @@ crl_print(const struct crl *p)
 
 	xissuer = X509_CRL_get_issuer(p->x509_crl);
 	issuer = X509_NAME_oneline(xissuer, NULL, 0);
-	if (issuer != NULL && p->number != NULL) {
-		if (outformats & FORMAT_JSON) {
-			json_do_string("crl_issuer", issuer);
-			json_do_string("crl_serial", p->number);
-		} else {
-			printf("CRL issuer:               %s\n", issuer);
-			printf("CRL serial number:        %s\n", p->number);
+	if (issuer != NULL) {
+		char *number;
+
+		if ((number = crl_parse_number(p->x509_crl)) != NULL) {
+			if (outformats & FORMAT_JSON) {
+				json_do_string("crl_issuer", issuer);
+				json_do_string("crl_serial", number);
+			} else {
+				printf("CRL issuer:               %s\n",
+				    issuer);
+				printf("CRL serial number:        %s\n",
+				    number);
+			}
+			free(number);
 		}
 	}
 	free(issuer);

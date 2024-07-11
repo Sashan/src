@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfvar.h,v 1.535 2024/01/01 22:16:51 bluhm Exp $ */
+/*	$OpenBSD: pfvar.h,v 1.538 2024/05/13 01:15:53 jsg Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -1192,6 +1192,11 @@ enum pfi_kif_refs {
 #define SCNT_SRC_NODE_REMOVALS	2
 #define SCNT_MAX		3
 
+#define NCNT_FRAG_SEARCH	0
+#define NCNT_FRAG_INSERT	1
+#define NCNT_FRAG_REMOVALS	2
+#define NCNT_MAX		3
+
 #define REASON_SET(a, x) \
 	do { \
 		if ((void *)(a) != NULL) { \
@@ -1206,6 +1211,7 @@ struct pf_status {
 	u_int64_t	lcounters[LCNT_MAX];	/* limit counters */
 	u_int64_t	fcounters[FCNT_MAX];
 	u_int64_t	scounters[SCNT_MAX];
+	u_int64_t	ncounters[NCNT_MAX];
 	u_int64_t	pcounters[2][2][3];
 	u_int64_t	bcounters[2][2];
 	u_int64_t	stateid;
@@ -1215,6 +1221,7 @@ struct pf_status {
 	u_int32_t	states;
 	u_int32_t	states_halfopen;
 	u_int32_t	src_nodes;
+	u_int32_t	fragments;
 	u_int32_t	debug;
 	u_int32_t	hostid;
 	u_int32_t	reass;			/* reassembly */
@@ -1583,13 +1590,11 @@ TAILQ_HEAD(pf_queuehead, pf_queuespec);
 extern struct pf_queuehead		  pf_queues[2];
 extern struct pf_queuehead		 *pf_queues_active, *pf_queues_inactive;
 
-extern u_int32_t		 ticket_pabuf;
 extern struct pool		 pf_src_tree_pl, pf_sn_item_pl, pf_rule_pl;
 extern struct pool		 pf_state_pl, pf_state_key_pl, pf_state_item_pl,
 				    pf_rule_item_pl, pf_queue_pl,
 				    pf_pktdelay_pl, pf_anchor_pl;
 extern struct pool		 pf_state_scrub_pl;
-extern struct ifnet		*sync_ifp;
 extern struct pf_rule		 pf_default_rule;
 
 extern int			 pf_tbladdr_setup(struct pf_ruleset *,
@@ -1598,7 +1603,6 @@ extern void			 pf_tbladdr_remove(struct pf_addr_wrap *);
 extern void			 pf_tbladdr_copyout(struct pf_addr_wrap *);
 extern void			 pf_calc_skip_steps(struct pf_rulequeue *);
 extern void			 pf_purge_expired_src_nodes(void);
-extern void			 pf_purge_expired_rules(void);
 extern void			 pf_remove_state(struct pf_state *);
 extern void			 pf_remove_divert_state(struct inpcb *);
 extern void			 pf_free_state(struct pf_state *);
@@ -1631,7 +1635,6 @@ extern void			 pf_cksum_fixup(u_int16_t *, u_int16_t,
 				    u_int16_t, u_int8_t);
 void				 pf_rm_rule(struct pf_rulequeue *,
 				    struct pf_rule *);
-void				 pf_purge_rule(struct pf_rule *);
 struct pf_divert		*pf_find_divert(struct mbuf *);
 int				 pf_setup_pdesc(struct pf_pdesc *, sa_family_t,
 				    int, struct pfi_kif *, struct mbuf *,
@@ -1654,7 +1657,6 @@ int	pf_patch_32(struct pf_pdesc *, u_int32_t *, u_int32_t);
 int	pf_patch_32_unaligned(struct pf_pdesc *, void *, u_int32_t, bool);
 int	pflog_packet(struct pf_pdesc *, u_int8_t, struct pf_rule *,
 	    struct pf_rule *, struct pf_ruleset *, struct pf_rule *);
-void	pf_send_deferred_syn(struct pf_state *);
 int	pf_match_addr(u_int8_t, struct pf_addr *, struct pf_addr *,
 	    struct pf_addr *, sa_family_t);
 int	pf_match_addr_range(struct pf_addr *, struct pf_addr *,
@@ -1822,7 +1824,6 @@ struct pf_ruleset	*pf_find_ruleset(const char *);
 struct pf_ruleset 	*pf_get_leaf_ruleset(char *, char **);
 struct pf_anchor 	*pf_create_anchor(struct pf_anchor *, const char *);
 struct pf_ruleset	*pf_find_or_create_ruleset(const char *);
-void			 pf_rs_initialize(void);
 void			 pf_anchor_rele(struct pf_anchor *);
 struct pf_anchor	*pf_anchor_take(struct pf_anchor *);
 

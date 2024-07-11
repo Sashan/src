@@ -1,4 +1,4 @@
-/*	$OpenBSD: autoconf.c,v 1.145 2023/11/09 14:26:34 kn Exp $	*/
+/*	$OpenBSD: autoconf.c,v 1.151 2024/05/17 20:05:08 miod Exp $	*/
 /*	$NetBSD: autoconf.c,v 1.51 2001/07/24 19:32:11 eeh Exp $ */
 
 /*
@@ -123,7 +123,6 @@ static	int rootnode;
 
 static	char *str2hex(char *, long *);
 static	int mbprint(void *, const char *);
-void	sync_crash(void);
 int	mainbus_match(struct device *, void *, void *);
 static	void mainbus_attach(struct device *, struct device *, void *);
 int	get_ncpus(void);
@@ -138,8 +137,6 @@ void bootpath_nodes(struct bootpath *, int);
 
 struct openbsd_bootdata obd __attribute__((section(".openbsd.bootdata")));
 
-int bus_class(struct device *);
-int instance_match(struct device *, void *, struct bootpath *bp);
 void nail_bootdev(struct device *, struct bootpath *);
 
 /* Global interrupt mappings for all device types.  Match against the OBP
@@ -170,6 +167,16 @@ char sun4v_soft_state_running[] __align32 = "OpenBSD running";
 void	sun4v_interrupt_init(void);
 void	sun4v_sdio_init(void);
 #endif
+
+extern void us_tlb_flush_pte(vaddr_t, uint64_t);
+extern void us3_tlb_flush_pte(vaddr_t, uint64_t);
+extern void sun4v_tlb_flush_pte(vaddr_t, uint64_t);
+extern void us_tlb_flush_ctx(uint64_t);
+extern void us3_tlb_flush_ctx(uint64_t);
+extern void sun4v_tlb_flush_ctx(uint64_t);
+
+void (*sp_tlb_flush_pte)(vaddr_t, uint64_t) = us_tlb_flush_pte;
+void (*sp_tlb_flush_ctx)(uint64_t) = us_tlb_flush_ctx;
 
 #ifdef DEBUG
 #define ACDB_BOOTDEV	0x1
@@ -343,6 +350,8 @@ bootstrap(int nctx)
 		}
 
 		cacheinfo.c_dcache_flush_page = us3_dcache_flush_page;
+		sp_tlb_flush_pte = us3_tlb_flush_pte;
+		sp_tlb_flush_ctx = us3_tlb_flush_ctx;
 	}
 
 	if ((impl >= IMPL_ZEUS && impl <= IMPL_JUPITER) || CPU_ISSUN4V) {
@@ -376,22 +385,6 @@ bootstrap(int nctx)
 
 #ifdef SUN4V
 	if (CPU_ISSUN4V) {
-		u_int32_t insn;
-		int32_t disp;
-
-		disp = (vaddr_t)hv_mmu_demap_page - (vaddr_t)sp_tlb_flush_pte;
-		insn = 0x10800000 | disp >> 2;	/* ba hv_mmu_demap_page */
-		((u_int32_t *)sp_tlb_flush_pte)[0] = insn;
-		insn = 0x94102003; 		/* mov MAP_ITLB|MAP_DTLB, %o2 */
-		((u_int32_t *)sp_tlb_flush_pte)[1] = insn;
-
-		disp =  (vaddr_t)hv_mmu_demap_ctx - (vaddr_t)sp_tlb_flush_ctx;
-		insn = 0x10800000 | disp >> 2;	/* ba hv_mmu_demap_ctx */
-		((u_int32_t *)sp_tlb_flush_ctx)[0] = insn;
-		insn = 0x94102003; 		/* mov MAP_ITLB|MAP_DTLB, %o2 */
-		((u_int32_t *)sp_tlb_flush_ctx)[1] = insn;
-
-	{
 		struct sun4v_patch {
 			u_int32_t addr;
 			u_int32_t insn;
@@ -414,8 +407,9 @@ bootstrap(int nctx)
 			flush((void *)(vaddr_t)p->addr);
 		}
 #endif
-	}
 
+		sp_tlb_flush_pte = sun4v_tlb_flush_pte;
+		sp_tlb_flush_ctx = sun4v_tlb_flush_ctx;
 	}
 #endif
 
@@ -641,8 +635,7 @@ bootpath_store(int storep, struct bootpath *bp)
 /*
  * Determine mass storage and memory configuration for a machine.
  * We get the PROM's root device and make sure we understand it, then
- * attach it as `mainbus0'.  We also set up to handle the PROM `sync'
- * command.
+ * attach it as `mainbus0'.
  */
 void
 cpu_configure(void)
@@ -710,11 +703,6 @@ cpu_configure(void)
 		printf("kernel does not support -c; continuing..\n");
 #endif
 	}
-
-#if notyet
-        /* FIXME FIXME FIXME  This is probably *WRONG!!!**/
-        OF_set_callback(sync_crash);
-#endif
 
 	/* block clock interrupts and anything below */
 	splclock();
@@ -815,17 +803,6 @@ diskconf(void)
 
 	setroot(bootdv, bp->val[2], RB_USERREQ | RB_HALT);
 	dumpconf();
-}
-
-/*
- * Console `sync' command.  SunOS just does a `panic: zero' so I guess
- * no one really wants anything fancy...
- */
-void
-sync_crash(void)
-{
-
-	panic("PROM sync command");
 }
 
 char *
@@ -1303,9 +1280,9 @@ romgetcursoraddr(int **rowp, int **colp)
 	    2, &col, &row);
 
 	/*
-	 * We are running on a 64-bit machine, so these things point to
-	 * 64-bit values.  To convert them to pointers to interfaces, add
-	 * 4 to the address.
+	 * We are running on a 64-bit big-endian machine, so these things
+	 * point to 64-bit big-endian values.  To convert them to pointers
+	 * to int, add 4 to the address.
 	 */
 	if (row == 0 || col == 0)
 		return (-1);
@@ -1326,7 +1303,7 @@ callrom(void)
  * find a device matching "name" and unit number
  */
 struct device *
-getdevunit(char *name, int unit)
+getdevunit(const char *name, int unit)
 {
 	struct device *dev = TAILQ_FIRST(&alldevs);
 	char num[10], fullname[16];

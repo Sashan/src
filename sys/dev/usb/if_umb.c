@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_umb.c,v 1.56 2023/10/24 09:13:22 jmatthew Exp $ */
+/*	$OpenBSD: if_umb.c,v 1.58 2024/05/23 03:21:09 jsg Exp $ */
 
 /*
  * Copyright (c) 2016 genua mbH
@@ -29,7 +29,6 @@
 
 #include <sys/param.h>
 #include <sys/mbuf.h>
-#include <sys/socket.h>
 #include <sys/systm.h>
 #include <sys/syslog.h>
 #include <sys/kstat.h>
@@ -44,12 +43,9 @@
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
-#include <netinet/ip.h>
 
 #ifdef INET6
-#include <netinet/ip6.h>
 #include <netinet6/in6_var.h>
-#include <netinet6/ip6_var.h>
 #include <netinet6/in6_ifattach.h>
 #include <netinet6/nd6.h>
 #endif
@@ -3135,7 +3131,7 @@ umb_intr(struct usbd_xfer *xfer, void *priv, usbd_status status)
 	if (total_len < UCDC_NOTIFICATION_LENGTH) {
 		DPRINTF("%s: short notification (%d<%d)\n", DEVNAM(sc),
 		    total_len, UCDC_NOTIFICATION_LENGTH);
-		    return;
+		return;
 	}
 	if (sc->sc_intr_msg.bmRequestType != UCDC_NOTIFICATION) {
 		DPRINTF("%s: unexpected notification (type=0x%02x)\n",

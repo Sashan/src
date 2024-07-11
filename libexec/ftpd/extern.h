@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.23 2021/05/23 17:01:21 jan Exp $	*/
+/*	$OpenBSD: extern.h,v 1.25 2024/05/21 05:00:47 jsg Exp $	*/
 /*	$NetBSD: extern.h,v 1.2 1995/04/11 02:44:49 cgd Exp $	*/
 
 /*
@@ -61,8 +61,6 @@
  *	@(#)extern.h	8.2 (Berkeley) 4/4/94
  */
 
-void	blkfree(char **);
-char  **copyblk(char **);
 void	cwd(char *);
 void	delete(const char *);
 void	dologout(int);
@@ -92,7 +90,6 @@ void	reply_r(int, const char *, ...);
 enum ret_cmd { RET_FILE, RET_LIST };
 void	retrieve(enum ret_cmd, const char *);
 void	send_file_list(char *);
-void	setproctitle(const char *, ...);
 void	statcmd(void);
 void	statfilecmd(const char *);
 void	store(const char *, const char *, int);

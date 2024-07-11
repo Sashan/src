@@ -1,4 +1,4 @@
-/*	$OpenBSD: gus.c,v 1.55 2022/11/02 10:41:34 kn Exp $	*/
+/*	$OpenBSD: gus.c,v 1.57 2024/06/22 10:22:29 jsg Exp $	*/
 /*	$NetBSD: gus.c,v 1.51 1998/01/25 23:48:06 mycroft Exp $	*/
 
 /*-
@@ -115,7 +115,6 @@
 #include <dev/ic/ad1848reg.h>
 #include <dev/isa/ics2101var.h>
 #include <dev/isa/ad1848var.h>
-#include <dev/isa/cs4231var.h>
 #include "gusreg.h"
 #include "gusvar.h"
 
@@ -3367,7 +3366,7 @@ gus_subattach(struct gus_softc *sc, struct isa_attach_args *ia)
  */
 
 int
-gus_test_iobase (bus_space_tag_t iot, int iobase)
+gus_test_iobase(bus_space_tag_t iot, int iobase)
 {
 	bus_space_handle_t ioh1, ioh2, ioh3, ioh4;
 	u_char s1, s2;

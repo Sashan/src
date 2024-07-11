@@ -1,4 +1,4 @@
-/*	$OpenBSD: mib.c,v 1.7 2023/11/21 08:49:08 martijn Exp $	*/
+/*	$OpenBSD: mib.c,v 1.9 2024/05/22 08:44:02 martijn Exp $	*/
 
 /*
  * Copyright (c) 2022 Martijn van Duren <martijn@openbsd.org>
@@ -299,6 +299,11 @@ mib_hrsystemdate(struct agentx_varbind *vb)
 	(void)time(&now);
 	ptm = localtime(&now);
 
+	if (ptm == NULL) {
+		log_warnx("localtime");
+		agentx_varbind_error(vb);
+		return;
+	}
 	year = htons(ptm->tm_year + 1900);
 	memcpy(s, &year, 2);
 	s[2] = ptm->tm_mon + 1;
@@ -316,7 +321,6 @@ mib_hrsystemdate(struct agentx_varbind *vb)
 
 	s[9] = abs(tzoffset) / 3600;
 	s[10] = (abs(tzoffset) - (s[9] * 3600)) / 60;
-
 	agentx_varbind_nstring(vb, s, sizeof(s));
 }
 

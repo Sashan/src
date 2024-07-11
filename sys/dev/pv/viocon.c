@@ -1,4 +1,4 @@
-/*	$OpenBSD: viocon.c,v 1.10 2023/07/28 16:54:48 dv Exp $	*/
+/*	$OpenBSD: viocon.c,v 1.12 2024/06/26 01:40:49 jsg Exp $	*/
 
 /*
  * Copyright (c) 2013-2015 Stefan Fritsch <sf@sfritsch.de>
@@ -18,13 +18,11 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/kernel.h>
-#include <sys/timeout.h>
+#include <sys/malloc.h>
 #include <machine/bus.h>
 #include <sys/device.h>
 #include <sys/conf.h>
 #include <sys/tty.h>
-#include <dev/pci/pcivar.h>
 #include <dev/pv/virtioreg.h>
 #include <dev/pv/virtiovar.h>
 
@@ -161,7 +159,8 @@ dev2port(dev_t dev)
 	return dev2sc(dev)->sc_ports[VIOCONPORT(dev)];
 }
 
-int viocon_match(struct device *parent, void *match, void *aux)
+int
+viocon_match(struct device *parent, void *match, void *aux)
 {
 	struct virtio_softc *va = aux;
 	if (va->sc_childdevid == PCI_PRODUCT_VIRTIO_CONSOLE)

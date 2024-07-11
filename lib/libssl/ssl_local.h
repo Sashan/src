@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_local.h,v 1.13 2024/02/03 15:58:34 beck Exp $ */
+/* $OpenBSD: ssl_local.h,v 1.17 2024/06/25 14:10:45 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -167,8 +167,10 @@
 
 __BEGIN_HIDDEN_DECLS
 
+#ifndef CTASSERT
 #define CTASSERT(x)	extern char  _ctassert[(x) ? 1 : -1 ]   \
 			    __attribute__((__unused__))
+#endif
 
 #ifndef LIBRESSL_HAS_DTLS1_2
 #define LIBRESSL_HAS_DTLS1_2
@@ -261,20 +263,6 @@ __BEGIN_HIDDEN_DECLS
 #define TLS1_PRF_SHA256 (SSL_HANDSHAKE_MAC_SHA256 << TLS1_PRF_DGST_SHIFT)
 #define TLS1_PRF_SHA384 (SSL_HANDSHAKE_MAC_SHA384 << TLS1_PRF_DGST_SHIFT)
 #define TLS1_PRF (TLS1_PRF_MD5 | TLS1_PRF_SHA1)
-
-/*
- * SSL_CIPHER_ALGORITHM2_VARIABLE_NONCE_IN_RECORD is an algorithm2 flag that
- * indicates that the variable part of the nonce is included as a prefix of
- * the record (AES-GCM, for example, does this with an 8-byte variable nonce.)
- */
-#define SSL_CIPHER_ALGORITHM2_VARIABLE_NONCE_IN_RECORD (1 << 22)
-
-/*
- * SSL_CIPHER_AEAD_FIXED_NONCE_LEN returns the number of bytes of fixed nonce
- * for an SSL_CIPHER with an algorithm_mac of SSL_AEAD.
- */
-#define SSL_CIPHER_AEAD_FIXED_NONCE_LEN(ssl_cipher) \
-	(((ssl_cipher->algorithm2 >> 24) & 0xf) * 2)
 
 /*
  * Cipher strength information.
@@ -598,6 +586,9 @@ typedef struct ssl_handshake_st {
 
 	/* Extensions seen in this handshake. */
 	uint32_t extensions_seen;
+
+	/* Extensions processed in this handshake. */
+	uint32_t extensions_processed;
 
 	/* Signature algorithms selected for use (static pointers). */
 	const struct ssl_sigalg *our_sigalg;
@@ -1316,7 +1307,6 @@ int ssl_verify_alarm_type(long type);
 
 int SSL_SESSION_ticket(SSL_SESSION *ss, unsigned char **out, size_t *out_len);
 
-const SSL_CIPHER *ssl3_get_cipher_by_char(const unsigned char *p);
 int ssl3_do_write(SSL *s, int type);
 int ssl3_send_alert(SSL *s, int level, int desc);
 int ssl3_get_req_cert_types(SSL *s, CBB *cbb);

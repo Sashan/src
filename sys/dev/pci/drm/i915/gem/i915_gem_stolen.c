@@ -388,6 +388,27 @@ static void icl_get_stolen_reserved(struct drm_i915_private *i915,
 
 	drm_dbg(&i915->drm, "GEN6_STOLEN_RESERVED = 0x%016llx\n", reg_val);
 
+	/* Wa_14019821291 */
+	if (MEDIA_VER_FULL(i915) == IP_VER(13, 0)) {
+		/*
+		 * This workaround is primarily implemented by the BIOS.  We
+		 * just need to figure out whether the BIOS has applied the
+		 * workaround (meaning the programmed address falls within
+		 * the DSM) and, if so, reserve that part of the DSM to
+		 * prevent accidental reuse.  The DSM location should be just
+		 * below the WOPCM.
+		 */
+		u64 gscpsmi_base = intel_uncore_read64_2x32(uncore,
+							    MTL_GSCPSMI_BASEADDR_LSB,
+							    MTL_GSCPSMI_BASEADDR_MSB);
+		if (gscpsmi_base >= i915->dsm.stolen.start &&
+		    gscpsmi_base < i915->dsm.stolen.end) {
+			*base = gscpsmi_base;
+			*size = i915->dsm.stolen.end - gscpsmi_base;
+			return;
+		}
+	}
+
 	switch (reg_val & GEN8_STOLEN_RESERVED_SIZE_MASK) {
 	case GEN8_STOLEN_RESERVED_1M:
 		*size = 1024 * 1024;
@@ -821,19 +842,41 @@ static int init_stolen_lmem(struct intel_memory_region *mem)
 		return 0;
 	}
 
-	STUB();
-	return -ENOSYS;
-#ifdef notyet
+#ifdef __linux__
 	if (mem->io_size &&
 	    !io_mapping_init_wc(&mem->iomap, mem->io_start, mem->io_size))
 		goto err_cleanup;
+#else
+	if (mem->io_size) {
+		paddr_t start, end;
+		struct vm_page *pgs;
+		int i;
+		bus_space_handle_t bsh;
+
+		start = atop(mem->io_start);
+		end = start + atop(mem->io_size);
+		uvm_page_physload(start, end, start, end, PHYSLOAD_DEVICE);
+
+		pgs = PHYS_TO_VM_PAGE(mem->io_start);
+		for (i = 0; i < atop(mem->io_size); i++)
+			atomic_setbits_int(&(pgs[i].pg_flags), PG_PMAP_WC);
+
+		if (bus_space_map(i915->bst, mem->io_start, mem->io_size,
+		    BUS_SPACE_MAP_LINEAR | BUS_SPACE_MAP_PREFETCHABLE, &bsh))
+			panic("can't map stolen lmem");
+
+		mem->iomap.base = mem->io_start;
+		mem->iomap.size = mem->io_size;
+		mem->iomap.iomem = bus_space_vaddr(i915->bst, bsh);
+	}
+#endif
 
 	drm_dbg(&i915->drm, "Stolen Local memory IO start: %pa\n",
 		&mem->io_start);
 	drm_dbg(&i915->drm, "Stolen Local DSM base: %pa\n", &mem->region.start);
 
 	return 0;
-
+#ifdef __linux__
 err_cleanup:
 	i915_gem_cleanup_stolen(mem->i915);
 	return err;

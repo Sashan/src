@@ -1,4 +1,4 @@
-/*	$OpenBSD: fifo_vnops.c,v 1.103 2024/02/03 22:50:09 mvs Exp $	*/
+/*	$OpenBSD: fifo_vnops.c,v 1.106 2024/06/28 21:30:24 mvs Exp $	*/
 /*	$NetBSD: fifo_vnops.c,v 1.18 1996/03/16 23:52:42 christos Exp $	*/
 
 /*
@@ -174,9 +174,15 @@ fifo_open(void *v)
 			return (error);
 		}
 		fip->fi_readers = fip->fi_writers = 0;
+		/*
+		 * Should take both solock() and `sb_mtx' mutex for
+		 * SS_CANTSENDMORE flag modifications.
+		 */
 		solock(wso);
+		mtx_enter(&wso->so_snd.sb_mtx);
 		wso->so_snd.sb_state |= SS_CANTSENDMORE;
 		wso->so_snd.sb_lowat = PIPE_BUF;
+		mtx_leave(&wso->so_snd.sb_mtx);
 		sounlock(wso);
 	} else {
 		rso = fip->fi_readsock;
@@ -186,7 +192,9 @@ fifo_open(void *v)
 		fip->fi_readers++;
 		if (fip->fi_readers == 1) {
 			solock(wso);
+			mtx_enter(&wso->so_snd.sb_mtx);
 			wso->so_snd.sb_state &= ~SS_CANTSENDMORE;
+			mtx_leave(&wso->so_snd.sb_mtx);
 			sounlock(wso);
 			if (fip->fi_writers > 0)
 				wakeup(&fip->fi_writers);
@@ -201,7 +209,9 @@ fifo_open(void *v)
 		if (fip->fi_writers == 1) {
 			solock(rso);
 			rso->so_state &= ~SS_ISDISCONNECTED;
+			mtx_enter(&rso->so_rcv.sb_mtx);
 			rso->so_rcv.sb_state &= ~SS_CANTRCVMORE;
+			mtx_leave(&rso->so_rcv.sb_mtx);
 			sounlock(rso);
 			if (fip->fi_readers > 0)
 				wakeup(&fip->fi_readers);
@@ -518,7 +528,6 @@ filt_fiforead(struct knote *kn, long hint)
 	struct socket *so = kn->kn_hook;
 	int rv;
 
-	soassertlocked(so);
 	MUTEX_ASSERT_LOCKED(&so->so_rcv.sb_mtx);
 
 	kn->kn_data = so->so_rcv.sb_cc;
@@ -553,7 +562,6 @@ filt_fifowrite(struct knote *kn, long hint)
 	struct socket *so = kn->kn_hook;
 	int rv;
 
-	soassertlocked(so);
 	MUTEX_ASSERT_LOCKED(&so->so_snd.sb_mtx);
 
 	kn->kn_data = sbspace(so, &so->so_snd);
@@ -574,7 +582,6 @@ filt_fifoexcept(struct knote *kn, long hint)
 	struct socket *so = kn->kn_hook;
 	int rv = 0;
 
-	soassertlocked(so);
 	MUTEX_ASSERT_LOCKED(&so->so_rcv.sb_mtx);
 
 	if (kn->kn_flags & __EV_POLL) {
@@ -625,11 +632,9 @@ filt_fifowmodify(struct kevent *kev, struct knote *kn)
 	struct socket *so = kn->kn_hook;
 	int rv;
 
-	solock(so);
 	mtx_enter(&so->so_snd.sb_mtx);
 	rv = knote_modify(kev, kn);
 	mtx_leave(&so->so_snd.sb_mtx);
-	sounlock(so);
 
 	return (rv);
 }
@@ -640,11 +645,9 @@ filt_fifowprocess(struct knote *kn, struct kevent *kev)
 	struct socket *so = kn->kn_hook;
 	int rv;
 
-	solock(so);
 	mtx_enter(&so->so_snd.sb_mtx);
 	rv = knote_process(kn, kev);
 	mtx_leave(&so->so_snd.sb_mtx);
-	sounlock(so);
 
 	return (rv);
 }

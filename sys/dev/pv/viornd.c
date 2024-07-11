@@ -1,4 +1,4 @@
-/*	$OpenBSD: viornd.c,v 1.7 2023/07/28 16:54:48 dv Exp $	*/
+/*	$OpenBSD: viornd.c,v 1.9 2024/06/26 01:40:49 jsg Exp $	*/
 
 /*
  * Copyright (c) 2014 Stefan Fritsch <sf@sfritsch.de>
@@ -18,7 +18,6 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/kernel.h>
 #include <sys/timeout.h>
 #include <machine/bus.h>
 #include <sys/device.h>
@@ -70,8 +69,8 @@ struct cfdriver viornd_cd = {
 	NULL, "viornd", DV_DULL
 };
 
-
-int viornd_match(struct device *parent, void *match, void *aux)
+int
+viornd_match(struct device *parent, void *match, void *aux)
 {
 	struct virtio_softc *va = aux;
 	if (va->sc_childdevid == PCI_PRODUCT_VIRTIO_ENTROPY)

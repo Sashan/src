@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_mwx.c,v 1.2 2024/02/21 12:08:05 jsg Exp $ */
+/*	$OpenBSD: if_mwx.c,v 1.5 2024/05/22 16:24:59 martijn Exp $ */
 /*
  * Copyright (c) 2022 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2021 MediaTek Inc.
@@ -52,6 +52,7 @@
 static const struct pci_matchid mwx_devices[] = {
 	{ PCI_VENDOR_MEDIATEK, PCI_PRODUCT_MEDIATEK_MT7921 },
 	{ PCI_VENDOR_MEDIATEK, PCI_PRODUCT_MEDIATEK_MT7921K },
+	{ PCI_VENDOR_MEDIATEK, PCI_PRODUCT_MEDIATEK_MT7922 },
 };
 
 #define MWX_DEBUG	1
@@ -158,9 +159,16 @@ struct mwx_vif {
 	uint8_t			scan_seq_num;
 };
 
+enum mwx_hw_type {
+	MWX_HW_MT7921,
+	MWX_HW_MT7922,
+};
+
 struct mwx_softc {
 	struct device		sc_dev;
 	struct ieee80211com	sc_ic;
+
+	enum mwx_hw_type	sc_hwtype;
 
 	struct mwx_queue	sc_txq;
 	struct mwx_queue	sc_txmcuq;
@@ -375,6 +383,8 @@ int	mwx_mcu_wait_resp_msg(struct mwx_softc *, uint32_t, int,
 
 int		mt7921_dma_disable(struct mwx_softc *sc, int force);
 void		mt7921_dma_enable(struct mwx_softc *sc);
+int		mt7921_e_mcu_fw_pmctrl(struct mwx_softc *);
+int		mt7921_e_mcu_drv_pmctrl(struct mwx_softc *);
 int		mt7921_wfsys_reset(struct mwx_softc *sc);
 uint32_t	mt7921_reg_addr(struct mwx_softc *, uint32_t);
 int		mt7921_init_hardware(struct mwx_softc *);
@@ -1179,6 +1189,10 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_pc = pa->pa_pc;
 	sc->sc_tag = pa->pa_tag;
 	sc->sc_dmat = pa->pa_dmat;
+	if (PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_MEDIATEK_MT7922)
+		sc->sc_hwtype = MWX_HW_MT7922;
+	else
+		sc->sc_hwtype = MWX_HW_MT7921;
 
 	memtype = pci_mapreg_type(pa->pa_pc, pa->pa_tag, PCI_MAPREG_START);
 	if (pci_mapreg_map(pa, PCI_MAPREG_START, memtype, 0,
@@ -1206,6 +1220,10 @@ mwx_attach(struct device *parent, struct device *self, void *aux)
 
 	sc->sc_ih = pci_intr_establish(pa->pa_pc, ih, IPL_NET,
 	    mwx_intr, sc, DEVNAME(sc));
+
+	if (mt7921_e_mcu_fw_pmctrl(sc) != 0 ||
+	    mt7921_e_mcu_drv_pmctrl(sc) != 0)
+		goto fail;
 
 	if ((error = mwx_txwi_alloc(sc, MWX_TXWI_MAX)) != 0) {
 		printf("%s: failed to allocate DMA resources %d\n",
@@ -1426,7 +1444,7 @@ mwx_txwi_alloc(struct mwx_softc *sc, int count)
 		}
 	}
 
-	for (i = count; i >= MT_PACKET_ID_FIRST; i--)
+	for (i = count - 1; i >= MT_PACKET_ID_FIRST; i--)
 		LIST_INSERT_HEAD(&q->mt_freelist, &q->mt_data[i], mt_entry);
 
 	return 0;
@@ -2591,6 +2609,46 @@ mt7921_dma_enable(struct mwx_softc *sc)
 }
 
 int
+mt7921_e_mcu_fw_pmctrl(struct mwx_softc *sc)
+{
+	int i;
+
+	for (i = 0; i < MT7921_MCU_INIT_RETRY_COUNT; i++) {
+		mwx_write(sc, MT_CONN_ON_LPCTL, PCIE_LPCR_HOST_SET_OWN);
+		if (mwx_poll(sc, MT_CONN_ON_LPCTL, PCIE_LPCR_HOST_OWN_SYNC,
+		    4, 50) == 0)
+			break;
+	}
+
+	if (i == MT7921_MCU_INIT_RETRY_COUNT) {
+		printf("%s: firmware own failed\n", DEVNAME(sc));
+		return EIO;
+	}
+
+	return 0;
+}
+
+int
+mt7921_e_mcu_drv_pmctrl(struct mwx_softc *sc)
+{
+	int i;
+
+	for (i = 0; i < MT7921_MCU_INIT_RETRY_COUNT; i++) {
+		mwx_write(sc, MT_CONN_ON_LPCTL, PCIE_LPCR_HOST_CLR_OWN);
+		if (mwx_poll(sc, MT_CONN_ON_LPCTL, 0,
+		    PCIE_LPCR_HOST_OWN_SYNC, 50) == 0)
+			break;
+	}
+
+	if (i == MT7921_MCU_INIT_RETRY_COUNT) {
+		printf("%s: driver own failed\n", DEVNAME(sc));
+		return EIO;
+	}
+
+	return 0;
+}
+
+int
 mt7921_wfsys_reset(struct mwx_softc *sc)
 {
 	DPRINTF("%s: WFSYS reset\n", DEVNAME(sc));
@@ -2802,6 +2860,7 @@ mt7921_load_firmware(struct mwx_softc *sc)
 {
 	struct mt7921_patch_hdr *hdr;
 	struct mt7921_fw_trailer *fwhdr;
+	const char *rompatch, *fw;
 	u_char *buf, *fwbuf, *dl;
 	size_t buflen, fwlen, offset = 0;
 	uint32_t reg, override = 0, option = 0;
@@ -2813,8 +2872,18 @@ mt7921_load_firmware(struct mwx_softc *sc)
 		return 0;
 	}
 
-	if ((rv = loadfirmware(MT7921_ROM_PATCH, &buf, &buflen)) != 0 ||
-	    (rv = loadfirmware(MT7921_FIRMWARE_WM, &fwbuf, &fwlen)) != 0) {
+	switch (sc->sc_hwtype) {
+	case MWX_HW_MT7921:
+		rompatch = MT7921_ROM_PATCH;
+		fw = MT7921_FIRMWARE_WM;
+		break;
+	case MWX_HW_MT7922:
+		rompatch = MT7922_ROM_PATCH;
+		fw = MT7922_FIRMWARE_WM;
+		break;
+	}
+	if ((rv = loadfirmware(rompatch, &buf, &buflen)) != 0 ||
+	    (rv= loadfirmware(fw, &fwbuf, &fwlen)) != 0) {
 		printf("%s: loadfirmware error %d\n", DEVNAME(sc), rv);
 		return rv;
 	}

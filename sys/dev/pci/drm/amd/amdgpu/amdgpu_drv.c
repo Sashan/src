@@ -2393,8 +2393,9 @@ static int amdgpu_pmops_prepare(struct device *dev)
 	/* Return a positive number here so
 	 * DPM_FLAG_SMART_SUSPEND works properly
 	 */
-	if (amdgpu_device_supports_boco(drm_dev))
-		return pm_runtime_suspended(dev);
+	if (amdgpu_device_supports_boco(drm_dev) &&
+	    pm_runtime_suspended(dev))
+		return 1;
 
 	/* if we will not support s3 or s2i for the device
 	 *  then skip suspend
@@ -2403,7 +2404,7 @@ static int amdgpu_pmops_prepare(struct device *dev)
 	    !amdgpu_acpi_is_s3_active(adev))
 		return 1;
 
-	return 0;
+	return amdgpu_device_prepare(drm_dev);
 }
 
 static void amdgpu_pmops_complete(struct device *dev)
@@ -2605,6 +2606,9 @@ static int amdgpu_pmops_runtime_suspend(struct device *dev)
 	if (amdgpu_device_supports_boco(drm_dev))
 		adev->mp1_state = PP_MP1_STATE_UNLOAD;
 
+	ret = amdgpu_device_prepare(drm_dev);
+	if (ret)
+		return ret;
 	ret = amdgpu_device_suspend(drm_dev, false);
 	if (ret) {
 		adev->in_runpm = false;
@@ -3448,22 +3452,34 @@ amdgpu_init_backlight(struct amdgpu_device *adev)
 	struct backlight_device *bd = adev->dm.backlight_dev[0];
 	struct drm_connector_list_iter conn_iter;
 	struct drm_connector *connector;
+	struct amdgpu_dm_connector *aconnector;
 
 	if (bd == NULL)
 		return;
 		
 	drm_connector_list_iter_begin(dev, &conn_iter);
 	drm_for_each_connector_iter(connector, &conn_iter) {
-		if (connector->connector_type != DRM_MODE_CONNECTOR_LVDS &&
-		    connector->connector_type != DRM_MODE_CONNECTOR_eDP &&
-		    connector->connector_type != DRM_MODE_CONNECTOR_DSI)
+		aconnector = to_amdgpu_dm_connector(connector);
+
+		if (connector->registration_state != DRM_CONNECTOR_REGISTERED)
 			continue;
+
+		if (aconnector->bl_idx == -1)
+			continue;
+
+		dev->registered = false;
+		connector->registration_state = DRM_CONNECTOR_UNREGISTERED;
 
 		connector->backlight_device = bd;
 		connector->backlight_property = drm_property_create_range(dev,
 		    0, "Backlight", 0, bd->props.max_brightness);
 		drm_object_attach_property(&connector->base,
 		    connector->backlight_property, bd->props.brightness);
+
+		connector->registration_state = DRM_CONNECTOR_REGISTERED;
+		dev->registered = true;
+
+		break;
 	}
 	drm_connector_list_iter_end(&conn_iter);
 }
@@ -3491,15 +3507,14 @@ amdgpu_attachhook(struct device *self)
 	if (adev->mode_info.mode_config_initialized &&
 	    !list_empty(&adev_to_drm(adev)->mode_config.connector_list)) {
 
-		/* OpenBSD specific backlight property on connector */
-		amdgpu_init_backlight(adev);
-
 		/*
 		 * in linux via amdgpu_pci_probe -> drm_dev_register
-		 * must be after (local) backlight property added not before
-		 * and before drm_fbdev_generic_setup()
+		 * must be before drm_fbdev_generic_setup()
 		 */
 		drm_dev_register(dev, adev->flags);
+
+		/* OpenBSD specific backlight property on connector */
+		amdgpu_init_backlight(adev);
 
 		/* select 8 bpp console on low vram cards */
 		if (adev->gmc.real_vram_size <= (32*1024*1024))
@@ -3650,12 +3665,13 @@ amdgpu_activate(struct device *self, int act)
 	struct drm_device *dev = &adev->ddev;
 	int rv = 0;
 
-	if (dev->dev == NULL || amdgpu_fatal_error)
+	if (dev->dev == NULL || amdgpu_fatal_error || adev->shutdown)
 		return (0);
 
 	switch (act) {
 	case DVACT_QUIESCE:
 		rv = config_activate_children(self, act);
+		amdgpu_device_prepare(dev);
 		amdgpu_device_suspend(dev, true);
 		break;
 	case DVACT_SUSPEND:

@@ -1,4 +1,4 @@
-/*	$OpenBSD: btrace.c,v 1.89 2024/02/27 12:38:12 mpi Exp $ */
+/*	$OpenBSD: btrace.c,v 1.91 2024/05/21 05:00:48 jsg Exp $ */
 
 /*
  * Copyright (c) 2019 - 2023 Martin Pieuchot <mpi@openbsd.org>
@@ -80,7 +80,6 @@ void			 rule_printmaps(struct bt_rule *);
  * Language builtins & functions.
  */
 uint64_t		 builtin_nsecs(struct dt_evt *);
-const char		*builtin_kstack(struct dt_evt *);
 const char		*builtin_arg(struct dt_evt *, enum bt_argtype);
 struct bt_arg		*fn_str(struct bt_arg *, struct dt_evt *, char *);
 int			 stmt_eval(struct bt_stmt *, struct dt_evt *);
@@ -460,6 +459,7 @@ static uint64_t
 rules_action_scan(struct bt_stmt *bs)
 {
 	struct bt_arg *ba;
+	struct bt_cond *bc;
 	uint64_t evtflags = 0;
 
 	while (bs != NULL) {
@@ -474,8 +474,9 @@ rules_action_scan(struct bt_stmt *bs)
 			evtflags |= ba2dtflags(ba);
 			break;
 		case B_AC_TEST:
-			evtflags |= rules_action_scan(
-			    (struct bt_stmt *)bs->bs_var);
+			bc = (struct bt_cond *)bs->bs_var;
+			evtflags |= rules_action_scan(bc->bc_condbs);
+			evtflags |= rules_action_scan(bc->bc_elsebs);
 			break;
 		default:
 			break;
@@ -669,18 +670,6 @@ rule_eval(struct bt_rule *r, struct dt_evt *dtev)
 	}
 
 	SLIST_FOREACH(bs, &r->br_action, bs_next) {
-		if ((bs->bs_act == B_AC_TEST) && stmt_test(bs, dtev) == true) {
-			struct bt_stmt *bbs = (struct bt_stmt *)bs->bs_var;
-
-			while (bbs != NULL) {
-				if (stmt_eval(bbs, dtev))
-					return 1;
-				bbs = SLIST_NEXT(bbs, bs_next);
-			}
-
-			continue;
-		}
-
 		if (stmt_eval(bs, dtev))
 			return 1;
 	}
@@ -830,6 +819,8 @@ builtin_arg(struct dt_evt *dtev, enum bt_argtype dat)
 int
 stmt_eval(struct bt_stmt *bs, struct dt_evt *dtev)
 {
+	struct bt_stmt *bbs;
+	struct bt_cond *bc;
 	int halt = 0;
 
 	switch (bs->bs_act) {
@@ -858,7 +849,17 @@ stmt_eval(struct bt_stmt *bs, struct dt_evt *dtev)
 		stmt_store(bs, dtev);
 		break;
 	case B_AC_TEST:
-		/* done before */
+		bc = (struct bt_cond *)bs->bs_var;
+		if (stmt_test(bs, dtev) == true)
+			bbs = bc->bc_condbs;
+		else
+			bbs = bc->bc_elsebs;
+
+		while (bbs != NULL) {
+			if (stmt_eval(bbs, dtev))
+				return 1;
+			bbs = SLIST_NEXT(bbs, bs_next);
+		}
 		break;
 	case B_AC_TIME:
 		stmt_time(bs, dtev);

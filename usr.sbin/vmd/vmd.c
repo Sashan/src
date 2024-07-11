@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmd.c,v 1.155 2024/02/05 21:58:09 dv Exp $	*/
+/*	$OpenBSD: vmd.c,v 1.157 2024/05/18 06:45:00 jsg Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -53,7 +53,6 @@ int	 main(int, char **);
 int	 vmd_configure(void);
 void	 vmd_sighdlr(int sig, short event, void *arg);
 void	 vmd_shutdown(void);
-int	 vmd_control_run(void);
 int	 vmd_dispatch_control(int, struct privsep_proc *, struct imsg *);
 int	 vmd_dispatch_vmm(int, struct privsep_proc *, struct imsg *);
 int	 vmd_dispatch_agentx(int, struct privsep_proc *, struct imsg *);
@@ -946,9 +945,6 @@ main(int argc, char **argv)
 	/* only the parent returns */
 	proc_init(ps, procs, nitems(procs), env->vmd_debug, argc0, argv,
 	    proc_id);
-
-	if (!env->vmd_debug && daemon(0, 0) == -1)
-		fatal("can't daemonize");
 
 	if (ps->ps_noaction == 0)
 		log_info("startup");

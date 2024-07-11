@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sysctl.c,v 1.425 2024/02/10 15:28:16 deraadt Exp $	*/
+/*	$OpenBSD: kern_sysctl.c,v 1.428 2024/07/08 13:17:12 claudio Exp $	*/
 /*	$NetBSD: kern_sysctl.c,v 1.17 1996/05/20 17:49:05 mrg Exp $	*/
 
 /*-
@@ -666,13 +666,12 @@ int hw_power = 1;
 
 /* morally const values reported by sysctl_bounded_arr */
 static int byte_order = BYTE_ORDER;
-static int page_size = PAGE_SIZE;
 
 const struct sysctl_bounded_args hw_vars[] = {
 	{HW_NCPU, &ncpus, SYSCTL_INT_READONLY},
 	{HW_NCPUFOUND, &ncpusfound, SYSCTL_INT_READONLY},
 	{HW_BYTEORDER, &byte_order, SYSCTL_INT_READONLY},
-	{HW_PAGESIZE, &page_size, SYSCTL_INT_READONLY},
+	{HW_PAGESIZE, &uvmexp.pagesize, SYSCTL_INT_READONLY},
 	{HW_DISKCOUNT, &disk_count, SYSCTL_INT_READONLY},
 	{HW_POWER, &hw_power, SYSCTL_INT_READONLY},
 };
@@ -1483,6 +1482,12 @@ sysctl_file(int *name, u_int namelen, char *where, size_t *sizep,
 			TAILQ_FOREACH(inp, &tcbtable.inpt_queue, inp_queue)
 				FILLSO(inp->inp_socket);
 			mtx_leave(&tcbtable.inpt_mtx);
+#ifdef INET6
+			mtx_enter(&tcb6table.inpt_mtx);
+			TAILQ_FOREACH(inp, &tcb6table.inpt_queue, inp_queue)
+				FILLSO(inp->inp_socket);
+			mtx_leave(&tcb6table.inpt_mtx);
+#endif
 			mtx_enter(&udbtable.inpt_mtx);
 			TAILQ_FOREACH(inp, &udbtable.inpt_queue, inp_queue)
 				FILLSO(inp->inp_socket);
@@ -1768,14 +1773,18 @@ fill_kproc(struct process *pr, struct kinfo_proc *ki, struct proc *p,
 	struct tty *tp;
 	struct vmspace *vm = pr->ps_vmspace;
 	struct timespec booted, st, ut, utc;
+	struct tusage tu;
 	int isthread;
 
 	isthread = p != NULL;
-	if (!isthread)
+	if (!isthread) {
 		p = pr->ps_mainproc;		/* XXX */
+		tuagg_get_process(&tu, pr);
+	} else
+		tuagg_get_proc(&tu, p);
 
 	FILL_KPROC(ki, strlcpy, p, pr, pr->ps_ucred, pr->ps_pgrp,
-	    p, pr, s, vm, pr->ps_limit, pr->ps_sigacts, isthread,
+	    p, pr, s, vm, pr->ps_limit, pr->ps_sigacts, &tu, isthread,
 	    show_pointers);
 
 	/* stuff that's too painful to generalize into the macros */
@@ -1798,7 +1807,7 @@ fill_kproc(struct process *pr, struct kinfo_proc *ki, struct proc *p,
 	if ((pr->ps_flags & PS_ZOMBIE) == 0) {
 		if ((pr->ps_flags & PS_EMBRYO) == 0 && vm != NULL)
 			ki->p_vm_rssize = vm_resident_count(vm);
-		calctsru(isthread ? &p->p_tu : &pr->ps_tu, &ut, &st, NULL);
+		calctsru(&tu, &ut, &st, NULL);
 		ki->p_uutime_sec = ut.tv_sec;
 		ki->p_uutime_usec = ut.tv_nsec/1000;
 		ki->p_ustime_sec = st.tv_sec;

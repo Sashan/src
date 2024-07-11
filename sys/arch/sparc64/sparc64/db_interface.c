@@ -1,4 +1,4 @@
-/*	$OpenBSD: db_interface.c,v 1.62 2024/02/23 18:19:03 cheloha Exp $	*/
+/*	$OpenBSD: db_interface.c,v 1.66 2024/06/26 01:40:49 jsg Exp $	*/
 /*	$NetBSD: db_interface.c,v 1.61 2001/07/31 06:55:47 eeh Exp $ */
 
 /*
@@ -53,7 +53,7 @@
 #include <machine/cpu.h>
 #include <machine/openfirm.h>
 #include <machine/ctlreg.h>
-#include <machine/pmap.h>
+#include <machine/pte.h>
 
 #ifdef notyet
 #include "fb.h"
@@ -219,8 +219,6 @@ void db_pmap_kernel(db_expr_t, int, db_expr_t, char *);
 void db_pload_cmd(db_expr_t, int, db_expr_t, char *);
 void db_pmap_cmd(db_expr_t, int, db_expr_t, char *);
 void db_lock(db_expr_t, int, db_expr_t, char *);
-void db_dump_buf(db_expr_t, int, db_expr_t, char *);
-void db_dump_espcmd(db_expr_t, int, db_expr_t, char *);
 void db_watch(db_expr_t, int, db_expr_t, char *);
 void db_xir(db_expr_t, int, db_expr_t, char *);
 
@@ -583,7 +581,8 @@ db_get_itlb_data(int entry), db_get_itlb_tag(int entry);
 void db_print_itlb_entry(int entry, int i, int endc);
 void db_print_dtlb_entry(int entry, int i, int endc);
 
-extern __inline__ unsigned long db_get_dtlb_data(int entry)
+extern __inline__ unsigned long
+db_get_dtlb_data(int entry)
 {
 	unsigned long r;
 	__asm__ volatile("ldxa [%1] %2,%0"
@@ -591,7 +590,9 @@ extern __inline__ unsigned long db_get_dtlb_data(int entry)
 		: "r" (entry <<3), "i" (ASI_DMMU_TLB_DATA));
 	return r;
 }
-extern __inline__ unsigned long db_get_dtlb_tag(int entry)
+
+extern __inline__ unsigned long
+db_get_dtlb_tag(int entry)
 {
 	unsigned long r;
 	__asm__ volatile("ldxa [%1] %2,%0"
@@ -599,7 +600,9 @@ extern __inline__ unsigned long db_get_dtlb_tag(int entry)
 		: "r" (entry <<3), "i" (ASI_DMMU_TLB_TAG));
 	return r;
 }
-extern __inline__ unsigned long db_get_itlb_data(int entry)
+
+extern __inline__ unsigned long
+db_get_itlb_data(int entry)
 {
 	unsigned long r;
 	__asm__ volatile("ldxa [%1] %2,%0"
@@ -607,7 +610,9 @@ extern __inline__ unsigned long db_get_itlb_data(int entry)
 		: "r" (entry <<3), "i" (ASI_IMMU_TLB_DATA));
 	return r;
 }
-extern __inline__ unsigned long db_get_itlb_tag(int entry)
+
+extern __inline__ unsigned long
+db_get_itlb_tag(int entry)
 {
 	unsigned long r;
 	__asm__ volatile("ldxa [%1] %2,%0"
@@ -616,7 +621,8 @@ extern __inline__ unsigned long db_get_itlb_tag(int entry)
 	return r;
 }
 
-void db_print_dtlb_entry(int entry, int i, int endc)
+void
+db_print_dtlb_entry(int entry, int i, int endc)
 {
 	unsigned long tag, data;
 	tag = db_get_dtlb_tag(entry);
@@ -624,7 +630,8 @@ void db_print_dtlb_entry(int entry, int i, int endc)
 	db_printf("%2d:%16.16lx %16.16lx%c", i, tag, data, endc);
 }
 
-void db_print_itlb_entry(int entry, int i, int endc)
+void
+db_print_itlb_entry(int entry, int i, int endc)
 {
 	unsigned long tag, data;
 	tag = db_get_itlb_tag(entry);
@@ -1009,6 +1016,7 @@ db_setpcb(db_expr_t addr, int have_addr, db_expr_t count, char *modif)
 		if (p->p_stat && p->p_tid == addr) {
 			curproc = p;
 			curpcb = (struct pcb*)p->p_addr;
+			curcpu()->ci_cpcbpaddr = p->p_md.md_pcbpaddr;
 			if (p->p_vmspace->vm_map.pmap->pm_ctx) {
 				switchtoctx(p->p_vmspace->vm_map.pmap->pm_ctx);
 				return;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: util.c,v 1.82 2024/02/22 06:45:22 miod Exp $ */
+/*	$OpenBSD: util.c,v 1.87 2024/07/03 08:39:43 job Exp $ */
 
 /*
  * Copyright (c) 2006 Claudio Jeker <claudio@openbsd.org>
@@ -31,6 +31,22 @@
 #include "bgpd.h"
 #include "rde.h"
 #include "log.h"
+
+char *
+ibuf_get_string(struct ibuf *buf, size_t len)
+{
+	char *str;
+
+	if (ibuf_size(buf) < len) {
+		errno = EBADMSG;
+		return (NULL);
+	}
+	str = strndup(ibuf_data(buf), len);
+	if (str == NULL)
+		return (NULL);
+	ibuf_skip(buf, len);
+	return (str);
+}
 
 const char *
 log_addr(const struct bgpd_addr *addr)
@@ -82,13 +98,15 @@ log_in6addr(const struct in6_addr *addr)
 const char *
 log_sockaddr(struct sockaddr *sa, socklen_t len)
 {
-	static char	buf[NI_MAXHOST];
+	static char	buf[4][NI_MAXHOST];
+	static int	bufidx;
 
-	if (sa == NULL || getnameinfo(sa, len, buf, sizeof(buf), NULL, 0,
-	    NI_NUMERICHOST))
+	bufidx = (bufidx + 1) % 4;
+	if (sa == NULL || getnameinfo(sa, len, buf[bufidx], sizeof(buf[0]),
+	    NULL, 0, NI_NUMERICHOST))
 		return ("(unknown)");
 	else
-		return (buf);
+		return (buf[bufidx]);
 }
 
 const char *
@@ -245,7 +263,7 @@ log_aspath_error(int error)
 
 	switch (error) {
 	case AS_ERR_LEN:
-		return "inconsitent lenght";
+		return "inconsistent length";
 	case AS_ERR_TYPE:
 		return "unknown segment type";
 	case AS_ERR_BAD:
@@ -306,6 +324,32 @@ log_policy(enum role role)
 		return "peer";
 	default:
 		return "unknown";
+	}
+}
+
+const char *
+log_capability(uint8_t capa)
+{
+	static char buf[20];
+
+	switch (capa) {
+	case CAPA_MP:
+		return "Multiprotocol Extensions";
+	case CAPA_REFRESH:
+		return "Route Refresh";
+	case CAPA_ROLE:
+		return "BGP Role";
+	case CAPA_RESTART:
+		return "Graceful Restart";
+	case CAPA_AS4BYTE:
+		return "4-octet AS number";
+	case CAPA_ADD_PATH:
+		return "ADD-PATH";
+	case CAPA_ENHANCED_RR:
+		return "Enhanced Route Refresh";
+	default:
+		snprintf(buf, sizeof(buf), "unknown %u", capa);
+		return buf;
 	}
 }
 
@@ -922,7 +966,7 @@ aid2str(uint8_t aid)
 int
 aid2afi(uint8_t aid, uint16_t *afi, uint8_t *safi)
 {
-	if (aid < AID_MAX) {
+	if (aid != AID_UNSPEC && aid < AID_MAX) {
 		*afi = aid_vals[aid].afi;
 		*safi = aid_vals[aid].safi;
 		return (0);
@@ -935,7 +979,7 @@ afi2aid(uint16_t afi, uint8_t safi, uint8_t *aid)
 {
 	uint8_t i;
 
-	for (i = 0; i < AID_MAX; i++)
+	for (i = AID_MIN; i < AID_MAX; i++)
 		if (aid_vals[i].afi == afi && aid_vals[i].safi == safi) {
 			*aid = i;
 			return (0);
@@ -960,7 +1004,7 @@ af2aid(sa_family_t af, uint8_t safi, uint8_t *aid)
 	if (safi == 0) /* default to unicast subclass */
 		safi = SAFI_UNICAST;
 
-	for (i = 0; i < AID_MAX; i++)
+	for (i = AID_UNSPEC; i < AID_MAX; i++)
 		if (aid_vals[i].af == af && aid_vals[i].safi == safi) {
 			*aid = i;
 			return (0);

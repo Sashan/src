@@ -1,4 +1,4 @@
-/*	$OpenBSD: dwpcie.c,v 1.52 2024/02/26 21:41:24 kettenis Exp $	*/
+/*	$OpenBSD: dwpcie.c,v 1.55 2024/07/05 22:52:25 patrick Exp $	*/
 /*
  * Copyright (c) 2018 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -314,6 +314,7 @@ dwpcie_match(struct device *parent, void *match, void *aux)
 	    OF_is_compatible(faa->fa_node, "fsl,imx8mq-pcie") ||
 	    OF_is_compatible(faa->fa_node, "marvell,armada8k-pcie") ||
 	    OF_is_compatible(faa->fa_node, "qcom,pcie-sc8280xp") ||
+	    OF_is_compatible(faa->fa_node, "qcom,pcie-x1e80100") ||
 	    OF_is_compatible(faa->fa_node, "rockchip,rk3568-pcie") ||
 	    OF_is_compatible(faa->fa_node, "rockchip,rk3588-pcie") ||
 	    OF_is_compatible(faa->fa_node, "sifive,fu740-pcie"));
@@ -533,7 +534,8 @@ dwpcie_attach_deferred(struct device *self)
 	if (OF_is_compatible(sc->sc_node, "fsl,imx8mm-pcie") ||
 	    OF_is_compatible(sc->sc_node, "fsl,imx8mq-pcie"))
 		error = dwpcie_imx8mq_init(sc);
-	if (OF_is_compatible(sc->sc_node, "qcom,pcie-sc8280xp"))
+	if (OF_is_compatible(sc->sc_node, "qcom,pcie-sc8280xp") ||
+	    OF_is_compatible(sc->sc_node, "qcom,pcie-x1e80100"))
 		error = dwpcie_sc8280xp_init(sc);
 	if (OF_is_compatible(sc->sc_node, "rockchip,rk3568-pcie") ||
 	    OF_is_compatible(sc->sc_node, "rockchip,rk3588-pcie"))
@@ -676,7 +678,7 @@ dwpcie_attach_deferred(struct device *self)
 		pmembase = sc->sc_pmem_bus_addr;
 		pmemlimit = pmembase + sc->sc_pmem_size - 1;
 		blr = pmemlimit & PPB_MEM_MASK;
-		blr |= (pmembase >> PPB_MEM_SHIFT);
+		blr |= ((pmembase & PPB_MEM_MASK) >> PPB_MEM_SHIFT);
 		HWRITE4(sc, PPB_REG_PREFMEM, blr);
 		HWRITE4(sc, PPB_REG_PREFBASE_HI32, pmembase >> 32);
 		HWRITE4(sc, PPB_REG_PREFLIM_HI32, pmemlimit >> 32);
@@ -1502,6 +1504,9 @@ int
 dwpcie_sc8280xp_init(struct dwpcie_softc *sc)
 {
 	sc->sc_num_viewport = 8;
+
+	if (OF_getproplen(sc->sc_node, "msi-map") <= 0)
+		return dwpcie_msi_init(sc);
 
 	return 0;
 }

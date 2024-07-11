@@ -532,6 +532,9 @@ struct fb_info *drm_fb_helper_alloc_info(struct drm_fb_helper *fb_helper)
 	if (!info)
 		return ERR_PTR(-ENOMEM);
 
+	if (!drm_leak_fbdev_smem)
+		info->flags |= FBINFO_HIDE_SMEM_START;
+
 #ifdef __linux__
 	ret = fb_alloc_cmap(&info->cmap, 256, 0);
 	if (ret)
@@ -1517,9 +1520,7 @@ static uint32_t drm_fb_helper_find_color_mode_format(struct drm_fb_helper *fb_he
 						     const uint32_t *formats, size_t format_count,
 						     unsigned int color_mode)
 {
-#ifdef notyet
 	struct drm_device *dev = fb_helper->dev;
-#endif
 	uint32_t bpp, depth;
 
 	switch (color_mode) {
@@ -1926,9 +1927,6 @@ __drm_fb_helper_initial_config_and_unlock(struct drm_fb_helper *fb_helper)
 
 	info = fb_helper->info;
 	info->var.pixclock = 0;
-
-	if (!drm_leak_fbdev_smem)
-		info->flags |= FBINFO_HIDE_SMEM_START;
 
 	/* Need to drop locks to avoid recursive deadlock in
 	 * register_framebuffer. This is ok because the only thing left to do is

@@ -1,4 +1,4 @@
-/*	$OpenBSD: cert.c,v 1.127 2024/02/16 14:48:47 tb Exp $ */
+/*	$OpenBSD: cert.c,v 1.150 2024/07/08 15:31:58 tb Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Job Snijders <job@openbsd.org>
@@ -33,6 +33,8 @@ extern ASN1_OBJECT	*certpol_oid;	/* id-cp-ipAddr-asNumber cert policy */
 extern ASN1_OBJECT	*carepo_oid;	/* 1.3.6.1.5.5.7.48.5 (caRepository) */
 extern ASN1_OBJECT	*manifest_oid;	/* 1.3.6.1.5.5.7.48.10 (rpkiManifest) */
 extern ASN1_OBJECT	*notify_oid;	/* 1.3.6.1.5.5.7.48.13 (rpkiNotify) */
+
+int certid = TALSZ_MAX;
 
 /*
  * Append an IP address structure to our list of results.
@@ -493,7 +495,8 @@ sbgp_ipaddrblk(const char *fn, struct cert *cert, X509_EXTENSION *ext)
 }
 
 /*
- * Parse "Subject Information Access" extension, RFC 6487 4.8.8.
+ * Parse "Subject Information Access" extension for a CA cert,
+ * RFC 6487, section 4.8.8.1 and RFC 8182, section 3.2.
  * Returns zero on failure, non-zero on success.
  */
 static int
@@ -503,7 +506,10 @@ sbgp_sia(const char *fn, struct cert *cert, X509_EXTENSION *ext)
 	ACCESS_DESCRIPTION	*ad;
 	ASN1_OBJECT		*oid;
 	const char		*mftfilename;
+	char			*carepo = NULL, *rpkimft = NULL, *notify = NULL;
 	int			 i, rc = 0;
+
+	assert(cert->repo == NULL && cert->mft == NULL && cert->notify == NULL);
 
 	if (X509_EXTENSION_get_critical(ext)) {
 		warnx("%s: RFC 6487 section 4.8.8: SIA: "
@@ -524,16 +530,70 @@ sbgp_sia(const char *fn, struct cert *cert, X509_EXTENSION *ext)
 
 		if (OBJ_cmp(oid, carepo_oid) == 0) {
 			if (!x509_location(fn, "SIA: caRepository",
-			    "rsync://", ad->location, &cert->repo))
+			    ad->location, &carepo))
 				goto out;
+			if (cert->repo == NULL && strncasecmp(carepo,
+			    RSYNC_PROTO, RSYNC_PROTO_LEN) == 0) {
+				if (carepo[strlen(carepo) - 1] != '/') {
+					char *carepo_tmp;
+
+					if (asprintf(&carepo_tmp, "%s/",
+					    carepo) == -1)
+						errx(1, NULL);
+					free(carepo);
+					carepo = carepo_tmp;
+				}
+
+				cert->repo = carepo;
+				carepo = NULL;
+				continue;
+			}
+			if (verbose)
+				warnx("%s: RFC 6487 section 4.8.8: SIA: "
+				    "ignoring location %s", fn, carepo);
+			free(carepo);
+			carepo = NULL;
 		} else if (OBJ_cmp(oid, manifest_oid) == 0) {
 			if (!x509_location(fn, "SIA: rpkiManifest",
-			    "rsync://", ad->location, &cert->mft))
+			    ad->location, &rpkimft))
 				goto out;
+			if (cert->mft == NULL && strncasecmp(rpkimft,
+			    RSYNC_PROTO, RSYNC_PROTO_LEN) == 0) {
+				cert->mft = rpkimft;
+				rpkimft = NULL;
+				continue;
+			}
+			if (verbose)
+				warnx("%s: RFC 6487 section 4.8.8: SIA: "
+				    "ignoring location %s", fn, rpkimft);
+			free(rpkimft);
+			rpkimft = NULL;
 		} else if (OBJ_cmp(oid, notify_oid) == 0) {
 			if (!x509_location(fn, "SIA: rpkiNotify",
-			    "https://", ad->location, &cert->notify))
+			    ad->location, &notify))
 				goto out;
+			if (strncasecmp(notify, HTTPS_PROTO,
+			    HTTPS_PROTO_LEN) != 0) {
+				warnx("%s: non-https uri in rpkiNotify: %s",
+				    fn, cert->notify);
+				free(notify);
+				goto out;
+			}
+			if (cert->notify != NULL) {
+				warnx("%s: unexpected rpkiNotify accessMethod",
+				    fn);
+				free(notify);
+				goto out;
+			}
+			cert->notify = notify;
+			notify = NULL;
+		} else {
+			char buf[128];
+
+			OBJ_obj2txt(buf, sizeof(buf), oid, 0);
+			warnx("%s: RFC 6487 section 4.8.8.1: unexpected"
+			    " accessMethod: %s", fn, buf);
+			goto out;
 		}
 	}
 
@@ -555,7 +615,8 @@ sbgp_sia(const char *fn, struct cert *cert, X509_EXTENSION *ext)
 		goto out;
 	}
 
-	if (strstr(cert->mft, cert->repo) != cert->mft) {
+	if (strstr(cert->mft, cert->repo) != cert->mft ||
+	    cert->mft + strlen(cert->repo) != mftfilename) {
 		warnx("%s: RFC 6487 section 4.8.8: SIA: "
 		    "conflicting URIs for caRepository and rpkiManifest", fn);
 		goto out;
@@ -649,6 +710,28 @@ certificate_policies(const char *fn, struct cert *cert, X509_EXTENSION *ext)
 	return rc;
 }
 
+static int
+cert_check_subject_and_issuer(const char *fn, const X509 *x)
+{
+	const X509_NAME *name;
+
+	if ((name = X509_get_subject_name(x)) == NULL) {
+		warnx("%s: X509_get_subject_name", fn);
+		return 0;
+	}
+	if (!x509_valid_name(fn, "subject", name))
+		return 0;
+
+	if ((name = X509_get_issuer_name(x)) == NULL) {
+		warnx("%s: X509_get_issuer_name", fn);
+		return 0;
+	}
+	if (!x509_valid_name(fn, "issuer", name))
+		return 0;
+
+	return 1;
+}
+
 /*
  * Lightweight version of cert_parse_pre() for EE certs.
  * Parses the two RFC 3779 extensions, and performs some sanity checks.
@@ -669,18 +752,15 @@ cert_parse_ee_cert(const char *fn, int talid, X509 *x)
 		goto out;
 	}
 
-	if (!x509_valid_subject(fn, x))
+	if (!cert_check_subject_and_issuer(fn, x))
 		goto out;
 
-	if (X509_get_key_usage(x) != KU_DIGITAL_SIGNATURE) {
-		warnx("%s: RFC 6487 section 4.8.4: KU must be digitalSignature",
-		    fn);
+	if (!x509_cache_extensions(x, fn))
 		goto out;
-	}
 
-	/* EKU may be allowed for some purposes in the future. */
-	if (X509_get_extended_key_usage(x) != UINT32_MAX) {
-		warnx("%s: RFC 6487 section 4.8.5: EKU not allowed", fn);
+	if ((cert->purpose = x509_get_purpose(x, fn)) != CERT_PURPOSE_EE) {
+		warnx("%s: expected EE cert, got %s", fn,
+		    purpose2str(cert->purpose));
 		goto out;
 	}
 
@@ -728,9 +808,7 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 	int			 i, extsz;
 	X509			*x = NULL;
 	X509_EXTENSION		*ext = NULL;
-	const X509_ALGOR	*palg;
-	const ASN1_BIT_STRING	*piuid = NULL, *psuid = NULL;
-	const ASN1_OBJECT	*cobj;
+	const ASN1_BIT_STRING	*issuer_uid = NULL, *subject_uid = NULL;
 	ASN1_OBJECT		*obj;
 	EVP_PKEY		*pkey;
 	int			 nid, ip, as, sia, cp, crldp, aia, aki, ski,
@@ -755,25 +833,19 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 		goto out;
 	}
 
-	/* Cache X509v3 extensions, see X509_check_ca(3). */
-	if (X509_check_purpose(x, -1, -1) <= 0) {
-		warnx("%s: could not cache X509v3 extensions", fn);
+	if (!x509_cache_extensions(x, fn))
 		goto out;
-	}
 
 	if (X509_get_version(x) != 2) {
 		warnx("%s: RFC 6487 4.1: X.509 version must be v3", fn);
 		goto out;
 	}
 
-	X509_get0_signature(NULL, &palg, x);
-	if (palg == NULL) {
-		warnx("%s: X509_get0_signature", fn);
+	if ((nid = X509_get_signature_nid(x)) == NID_undef) {
+		warnx("%s: unknown signature type", fn);
 		goto out;
 	}
-	X509_ALGOR_get0(&cobj, NULL, NULL, palg);
-	nid = OBJ_obj2nid(cobj);
-	if (nid == NID_ecdsa_with_SHA256) {
+	if (experimental && nid == NID_ecdsa_with_SHA256) {
 		if (verbose)
 			warnx("%s: P-256 support is experimental", fn);
 	} else if (nid != NID_sha256WithRSAEncryption) {
@@ -782,14 +854,14 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 		goto out;
 	}
 
-	X509_get0_uids(x, &piuid, &psuid);
-	if (piuid != NULL || psuid != NULL) {
+	X509_get0_uids(x, &issuer_uid, &subject_uid);
+	if (issuer_uid != NULL || subject_uid != NULL) {
 		warnx("%s: issuer or subject unique identifiers not allowed",
 		    fn);
 		goto out;
 	}
 
-	if (!x509_valid_subject(fn, x))
+	if (!cert_check_subject_and_issuer(fn, x))
 		goto out;
 
 	/* Look for X509v3 extensions. */
@@ -820,6 +892,10 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 		case NID_sinfo_access:
 			if (sia++ > 0)
 				goto dup;
+			/*
+			 * This will fail for BGPsec certs, but they must omit
+			 * this extension anyway (RFC 8209, section 3.1.3.3).
+			 */
 			if (!sbgp_sia(fn, cert, ext))
 				goto out;
 			break;
@@ -881,11 +957,12 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 		goto out;
 	if (!x509_get_notafter(x, fn, &cert->notafter))
 		goto out;
-	cert->purpose = x509_get_purpose(x, fn);
 
 	/* Validation on required fields. */
-
+	cert->purpose = x509_get_purpose(x, fn);
 	switch (cert->purpose) {
+	case CERT_PURPOSE_TA:
+		/* XXX - caller should indicate if it expects TA or CA cert */
 	case CERT_PURPOSE_CA:
 		if ((pkey = X509_get0_pubkey(x)) == NULL) {
 			warnx("%s: X509_get0_pubkey failed", fn);
@@ -893,19 +970,6 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 		}
 		if (!valid_ca_pkey(fn, pkey))
 			goto out;
-
-		if (X509_get_key_usage(x) != (KU_KEY_CERT_SIGN | KU_CRL_SIGN)) {
-			warnx("%s: RFC 6487 section 4.8.4: key usage violation",
-			    fn);
-			goto out;
-		}
-
-		/* EKU may be allowed for some purposes in the future. */
-		if (X509_get_extended_key_usage(x) != UINT32_MAX) {
-			warnx("%s: RFC 6487 section 4.8.5: EKU not allowed",
-			    fn);
-			goto out;
-		}
 
 		if (cert->mft == NULL) {
 			warnx("%s: RFC 6487 section 4.8.8: missing SIA", fn);
@@ -939,6 +1003,9 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 			goto out;
 		}
 		break;
+	case CERT_PURPOSE_EE:
+		warn("%s: unexpected EE cert", fn);
+		goto out;
 	default:
 		warnx("%s: x509_get_purpose failed in %s", fn, __func__);
 		goto out;
@@ -997,7 +1064,6 @@ struct cert *
 ta_parse(const char *fn, struct cert *p, const unsigned char *pkey,
     size_t pkeysz)
 {
-	ASN1_TIME	*notBefore, *notAfter;
 	EVP_PKEY	*pk, *opk;
 	time_t		 now = get_current_time();
 
@@ -1019,40 +1085,40 @@ ta_parse(const char *fn, struct cert *p, const unsigned char *pkey,
 		    "pubkey does not match TAL pubkey", fn);
 		goto badcert;
 	}
-
-	if ((notBefore = X509_get_notBefore(p->x509)) == NULL) {
-		warnx("%s: certificate has invalid notBefore", fn);
-		goto badcert;
-	}
-	if ((notAfter = X509_get_notAfter(p->x509)) == NULL) {
-		warnx("%s: certificate has invalid notAfter", fn);
-		goto badcert;
-	}
-	if (X509_cmp_time(notBefore, &now) != -1) {
+	if (p->notbefore >= now) {
 		warnx("%s: certificate not yet valid", fn);
 		goto badcert;
 	}
-	if (X509_cmp_time(notAfter, &now) != 1) {
+	if (p->notafter <= now) {
 		warnx("%s: certificate has expired", fn);
 		goto badcert;
 	}
 	if (p->aki != NULL && strcmp(p->aki, p->ski)) {
-		warnx("%s: RFC 6487 section 8.4.2: "
+		warnx("%s: RFC 6487 section 4.8.3: "
 		    "trust anchor AKI, if specified, must match SKI", fn);
 		goto badcert;
 	}
 	if (p->aia != NULL) {
-		warnx("%s: RFC 6487 section 8.4.7: "
+		warnx("%s: RFC 6487 section 4.8.7: "
 		    "trust anchor must not have AIA", fn);
 		goto badcert;
 	}
 	if (p->crl != NULL) {
-		warnx("%s: RFC 6487 section 8.4.2: "
+		warnx("%s: RFC 6487 section 4.8.6: "
 		    "trust anchor may not specify CRL resource", fn);
 		goto badcert;
 	}
-	if (p->purpose == CERT_PURPOSE_BGPSEC_ROUTER) {
-		warnx("%s: BGPsec cert cannot be a trust anchor", fn);
+	if (p->purpose != CERT_PURPOSE_TA) {
+		warnx("%s: expected trust anchor purpose, got %s", fn,
+		    purpose2str(p->purpose));
+		goto badcert;
+	}
+	/*
+	 * Do not replace with a <= 0 check since OpenSSL 3 broke that:
+	 * https://github.com/openssl/openssl/issues/24575
+	 */
+	if (X509_verify(p->x509, pk) != 1) {
+		warnx("%s: failed to verify signature", fn);
 		goto badcert;
 	}
 	if (x509_any_inherits(p->x509)) {
@@ -1063,7 +1129,7 @@ ta_parse(const char *fn, struct cert *p, const unsigned char *pkey,
 	EVP_PKEY_free(pk);
 	return p;
 
-badcert:
+ badcert:
 	EVP_PKEY_free(pk);
 	cert_free(p);
 	return NULL;
@@ -1103,6 +1169,7 @@ cert_buffer(struct ibuf *b, const struct cert *p)
 	io_simple_buffer(b, &p->notafter, sizeof(p->notafter));
 	io_simple_buffer(b, &p->purpose, sizeof(p->purpose));
 	io_simple_buffer(b, &p->talid, sizeof(p->talid));
+	io_simple_buffer(b, &p->certid, sizeof(p->certid));
 	io_simple_buffer(b, &p->repoid, sizeof(p->repoid));
 	io_simple_buffer(b, &p->ipsz, sizeof(p->ipsz));
 	io_simple_buffer(b, &p->asz, sizeof(p->asz));
@@ -1136,6 +1203,7 @@ cert_read(struct ibuf *b)
 	io_read_buf(b, &p->notafter, sizeof(p->notafter));
 	io_read_buf(b, &p->purpose, sizeof(p->purpose));
 	io_read_buf(b, &p->talid, sizeof(p->talid));
+	io_read_buf(b, &p->certid, sizeof(p->certid));
 	io_read_buf(b, &p->repoid, sizeof(p->repoid));
 	io_read_buf(b, &p->ipsz, sizeof(p->ipsz));
 	io_read_buf(b, &p->asz, sizeof(p->asz));
@@ -1167,7 +1235,11 @@ cert_read(struct ibuf *b)
 static inline int
 authcmp(struct auth *a, struct auth *b)
 {
-	return strcmp(a->cert->ski, b->cert->ski);
+	if (a->cert->certid > b->cert->certid)
+		return 1;
+	if (a->cert->certid < b->cert->certid)
+		return -1;
+	return 0;
 }
 
 RB_GENERATE_STATIC(auth_tree, auth, entry, authcmp);
@@ -1185,33 +1257,52 @@ auth_tree_free(struct auth_tree *auths)
 }
 
 struct auth *
-auth_find(struct auth_tree *auths, const char *aki)
+auth_find(struct auth_tree *auths, int id)
 {
 	struct auth a;
 	struct cert c;
 
-	/* we look up the cert where the ski == aki */
-	c.ski = (char *)aki;
+	c.certid = id;
 	a.cert = &c;
 
 	return RB_FIND(auth_tree, auths, &a);
 }
 
 struct auth *
-auth_insert(struct auth_tree *auths, struct cert *cert, struct auth *parent)
+auth_insert(const char *fn, struct auth_tree *auths, struct cert *cert,
+    struct auth *issuer)
 {
 	struct auth *na;
 
-	na = malloc(sizeof(*na));
+	na = calloc(1, sizeof(*na));
 	if (na == NULL)
 		err(1, NULL);
 
-	na->parent = parent;
+	if (issuer == NULL) {
+		cert->certid = cert->talid;
+	} else {
+		cert->certid = ++certid;
+		if (certid > CERTID_MAX) {
+			if (certid == CERTID_MAX + 1)
+				warnx("%s: too many certificates in store", fn);
+			free(na);
+			return NULL;
+		}
+		na->depth = issuer->depth + 1;
+	}
+
+	if (na->depth >= MAX_CERT_DEPTH) {
+		warnx("%s: maximum certificate chain depth exhausted", fn);
+		free(na);
+		return NULL;
+	}
+
+	na->issuer = issuer;
 	na->cert = cert;
 	na->any_inherits = x509_any_inherits(cert->x509);
 
 	if (RB_INSERT(auth_tree, auths, na) != NULL)
-		err(1, "auth tree corrupted");
+		errx(1, "auth tree corrupted");
 
 	return na;
 }

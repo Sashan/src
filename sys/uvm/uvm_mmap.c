@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_mmap.c,v 1.185 2024/01/19 21:20:35 deraadt Exp $	*/
+/*	$OpenBSD: uvm_mmap.c,v 1.191 2024/04/05 14:16:05 deraadt Exp $	*/
 /*	$NetBSD: uvm_mmap.c,v 1.49 2001/02/18 21:19:08 chs Exp $	*/
 
 /*
@@ -587,41 +587,6 @@ sys_mprotect(struct proc *p, void *v, register_t *retval)
 }
 
 /*
- * sys_msyscall: the msyscall system call
- */
-int
-sys_msyscall(struct proc *p, void *v, register_t *retval)
-{
-	struct sys_msyscall_args /* {
-		syscallarg(void *) addr;
-		syscallarg(size_t) len;
-	} */ *uap = v;
-	vaddr_t addr;
-	vsize_t size, pageoff;
-
-	addr = (vaddr_t)SCARG(uap, addr);
-	size = (vsize_t)SCARG(uap, len);
-
-	/*
-	 * align the address to a page boundary, and adjust the size accordingly
-	 */
-	ALIGN_ADDR(addr, size, pageoff);
-	if (addr > SIZE_MAX - size)
-		return EINVAL;		/* disallow wrap-around. */
-
-	return uvm_map_syscall(&p->p_vmspace->vm_map, addr, addr+size);
-}
-
-/*
- * sys_pinsyscall
- */
-int
-sys_pinsyscall(struct proc *p, void *v, register_t *retval)
-{
-	return (0);
-}
-
-/*
  * sys_pinsyscalls.  The caller is required to normalize base,len
  * to the minimum .text region, and adjust pintable offsets relative
  * to that base.
@@ -636,6 +601,7 @@ sys_pinsyscalls(struct proc *p, void *v, register_t *retval)
 		syscallarg(int) npins;
 	} */ *uap = v;
 	struct process *pr = p->p_p;
+	struct vm_map *map = &p->p_vmspace->vm_map;
 	int npins, error = 0, i;
 	vaddr_t base;
 	size_t len;
@@ -648,6 +614,8 @@ sys_pinsyscalls(struct proc *p, void *v, register_t *retval)
 	len = (vsize_t)SCARG(uap, len);
 	if (base > SIZE_MAX - len)
 		return (EINVAL);	/* disallow wrap-around. */
+	if (base < map->min_offset || base+len > map->max_offset)
+		return (EINVAL);
 
 	/* XXX MP unlock */
 
@@ -680,6 +648,12 @@ err:
 	pr->ps_libcpin.pn_pins = pins;
 	pr->ps_libcpin.pn_npins = npins;
 	pr->ps_flags |= PS_LIBCPIN;
+
+#ifdef PMAP_CHECK_COPYIN
+	/* Assume (and insist) on libc.so text being execute-only */
+	if (PMAP_CHECK_COPYIN)
+		uvm_map_check_copyin_add(map, base, base+len);
+#endif
 	return (0);
 }
 
@@ -1270,7 +1244,6 @@ sys_kbind(struct proc *p, void *v, register_t *retval)
 	last_baseva = VM_MAXUSER_ADDRESS;
 	kva = 0;
 	TAILQ_INIT(&dead_entries);
-	KERNEL_LOCK();
 	for (i = 0; i < count; i++) {
 		baseva = (vaddr_t)paramp[i].kb_addr;
 		s = paramp[i].kb_size;
@@ -1321,7 +1294,6 @@ redo:
 		vm_map_unlock(kernel_map);
 	}
 	uvm_unmap_detach(&dead_entries, AMAP_REFALL);
-	KERNEL_UNLOCK();
 
 	return error;
 }

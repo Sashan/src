@@ -1,4 +1,4 @@
-/*	$OpenBSD: http.c,v 1.80 2024/01/30 11:15:05 claudio Exp $ */
+/*	$OpenBSD: http.c,v 1.85 2024/04/23 10:27:46 tb Exp $ */
 /*
  * Copyright (c) 2020 Nils Fisher <nils_fisher@hotmail.com>
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
@@ -412,7 +412,7 @@ proxy_parse_uri(char *uri)
 	if (uri == NULL)
 		return;
 
-	if (strncasecmp(uri, "http://", 7) != 0)
+	if (strncasecmp(uri, HTTP_PROTO, HTTP_PROTO_LEN) != 0)
 		errx(1, "%s: http_proxy not using http schema", http_info(uri));
 
 	host = uri + 7;
@@ -479,7 +479,7 @@ http_parse_uri(char *uri, char **ohost, char **oport, char **opath)
 	char *host, *port = NULL, *path;
 	char *hosttail;
 
-	if (strncasecmp(uri, "https://", 8) != 0) {
+	if (strncasecmp(uri, HTTPS_PROTO, HTTPS_PROTO_LEN) != 0) {
 		warnx("%s: not using https schema", http_info(uri));
 		return -1;
 	}
@@ -1162,7 +1162,8 @@ proxy_connect(struct http_connection *conn)
 	conn->bufpos = 0;
 	/* XXX handle auth */
 	if ((r = asprintf(&conn->buf, "CONNECT %s HTTP/1.1\r\n"
-	    "User-Agent: " HTTP_USER_AGENT "\r\n%s\r\n", host,
+	    "Host: %s\r\n"
+	    "User-Agent: " HTTP_USER_AGENT "\r\n%s\r\n", host, host,
 	    proxy.proxyauth)) == -1)
 		err(1, NULL);
 	conn->bufsz = r;
@@ -1221,6 +1222,7 @@ http_request(struct http_connection *conn)
 	if ((r = asprintf(&conn->buf,
 	    "GET /%s HTTP/1.1\r\n"
 	    "Host: %s\r\n"
+	    "Accept: */*\r\n"
 	    "Accept-Encoding: gzip, deflate\r\n"
 	    "User-Agent: " HTTP_USER_AGENT "\r\n"
 	    "%s\r\n",
@@ -1417,6 +1419,11 @@ http_parse_header(struct http_connection *conn, char *buf)
 		if (loctail != NULL)
 			*loctail = '\0';
 		conn->redir_uri = redirurl;
+		if (!valid_origin(redirurl, conn->req->uri)) {
+			warnx("%s: cross origin redirect to %s", conn->req->uri,
+			    http_info(redirurl));
+			return -1;
+		}
 	} else if (strncasecmp(cp, TRANSFER_ENCODING,
 	    sizeof(TRANSFER_ENCODING) - 1) == 0) {
 		cp += sizeof(TRANSFER_ENCODING) - 1;

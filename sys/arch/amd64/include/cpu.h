@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.163 2024/02/25 19:15:50 cheloha Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.174 2024/06/24 21:22:14 bluhm Exp $	*/
 /*	$NetBSD: cpu.h,v 1.1 2003/04/26 18:39:39 fvdl Exp $	*/
 
 /*-
@@ -53,6 +53,7 @@
 #include <sys/sched.h>
 #include <sys/sensors.h>
 #include <sys/srp.h>
+#include <uvm/uvm_percpu.h>
 
 #ifdef _KERNEL
 
@@ -91,6 +92,13 @@ union vmm_cpu_cap {
 	struct svm vcc_svm;
 };
 
+enum cpu_vendor {
+    CPUV_UNKNOWN,
+    CPUV_AMD,
+    CPUV_INTEL,
+    CPUV_VIA,
+};
+
 /*
  *  Locks used to protect struct members in this file:
  *	I	immutable after creation
@@ -125,7 +133,7 @@ struct cpu_info {
 	u_int64_t ci_user_cr3;		/* [o] U-K page table */
 
 	/* bits for mitigating Micro-architectural Data Sampling */
-	char		ci_mds_tmp[32];	/* [o] 32byte aligned */
+	char		ci_mds_tmp[64];	/* [o] 64-byte aligned */
 	void		*ci_mds_buf;	/* [I] */
 
 	struct proc *ci_curproc;	/* [o] */
@@ -154,12 +162,18 @@ struct cpu_info {
 	volatile u_int	ci_flags;	/* [a] */
 	u_int32_t	ci_ipis;	/* [a] */
 
+	enum cpu_vendor	ci_vendor;		/* [I] mapped from cpuid(0) */
+	u_int32_t       ci_cpuid_level;         /* [I] cpuid(0).eax */
 	u_int32_t	ci_feature_flags;	/* [I] */
 	u_int32_t	ci_feature_eflags;	/* [I] */
 	u_int32_t	ci_feature_sefflags_ebx;/* [I] */
 	u_int32_t	ci_feature_sefflags_ecx;/* [I] */
 	u_int32_t	ci_feature_sefflags_edx;/* [I] */
 	u_int32_t	ci_feature_amdspec_ebx;	/* [I] */
+	u_int32_t	ci_feature_amdsev_eax;	/* [I] */
+	u_int32_t	ci_feature_amdsev_ebx;	/* [I] */
+	u_int32_t	ci_feature_amdsev_ecx;	/* [I] */
+	u_int32_t	ci_feature_amdsev_edx;	/* [I] */
 	u_int32_t	ci_feature_tpmflags;	/* [I] */
 	u_int32_t	ci_pnfeatset;		/* [I] */
 	u_int32_t	ci_efeature_eax;	/* [I] */
@@ -201,6 +215,8 @@ struct cpu_info {
 
 #ifdef MULTIPROCESSOR
 	struct srp_hazard	ci_srp_hazards[SRP_HAZARD_NUM];
+#define __HAVE_UVM_PERCPU
+	struct uvm_pmr_cache	ci_uvm;		/* [o] page cache */
 #endif
 
 	struct ksensordev	ci_sensordev;
@@ -307,7 +323,7 @@ void cpu_unidle(struct cpu_info *);
 #define cpu_kick(ci)
 #define cpu_unidle(ci)
 
-#define CPU_BUSY_CYCLE()	do {} while (0)
+#define CPU_BUSY_CYCLE()	__asm volatile ("" ::: "memory")
 
 #endif
 
@@ -381,10 +397,6 @@ struct timeval;
 extern int cpu_feature;
 extern int cpu_ebxfeature;
 extern int cpu_ecxfeature;
-extern int cpu_perf_eax;
-extern int cpu_perf_ebx;
-extern int cpu_perf_edx;
-extern int cpu_apmi_edx;
 extern int ecpu_ecxfeature;
 extern int cpu_id;
 extern char cpu_vendor[];
@@ -392,6 +404,8 @@ extern int cpuid_level;
 extern int cpu_meltdown;
 extern u_int cpu_mwait_size;
 extern u_int cpu_mwait_states;
+
+int	cpu_suspend_primary(void);
 
 /* cacheinfo.c */
 void	x86_print_cacheinfo(struct cpu_info *);
@@ -403,12 +417,14 @@ extern int cpuspeed;
 
 /* machdep.c */
 void	dumpconf(void);
+void	cpu_set_vendor(struct cpu_info *, int _level, const char *_vendor);
 void	cpu_reset(void);
 void	x86_64_proc0_tss_ldt_init(void);
 void	cpu_proc_fork(struct proc *, struct proc *);
 int	amd64_pa_used(paddr_t);
 #define	cpu_idle_enter()	do { /* nothing */ } while (0)
 extern void (*cpu_idle_cycle_fcn)(void);
+extern void (*cpu_suspend_cycle_fcn)(void);
 #define	cpu_idle_cycle()	(*cpu_idle_cycle_fcn)()
 #define	cpu_idle_leave()	do { /* nothing */ } while (0)
 extern void (*initclock_func)(void);
@@ -419,7 +435,6 @@ void	lgdt(struct region_descriptor *);
 
 struct pcb;
 void	savectx(struct pcb *);
-void	switch_exit(struct proc *, void (*)(struct proc *));
 void	proc_trampoline(void);
 
 /* clock.c */

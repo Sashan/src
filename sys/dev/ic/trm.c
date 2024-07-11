@@ -1,4 +1,4 @@
-/*	$OpenBSD: trm.c,v 1.44 2022/01/09 05:42:42 jsg Exp $
+/*	$OpenBSD: trm.c,v 1.46 2024/06/22 10:22:29 jsg Exp $
  * ------------------------------------------------------------
  *   O.S       : OpenBSD
  *   File Name : trm.c
@@ -60,8 +60,6 @@
 #include <dev/ic/trm.h>
 
 /* #define TRM_DEBUG0 */
-
-void	trm_initSRB(struct trm_scsi_req_q *);
 
 void	trm_check_eeprom(struct trm_adapter_nvram *, bus_space_tag_t, bus_space_handle_t);
 void	trm_read_all    (struct trm_adapter_nvram *, bus_space_tag_t, bus_space_handle_t);
@@ -552,7 +550,7 @@ trm_RecoverSRB(struct trm_softc *sc)
  * ------------------------------------------------------------
  */
 void
-trm_reset (struct trm_softc *sc)
+trm_reset(struct trm_softc *sc)
 {
 	const bus_space_handle_t ioh = sc->sc_iohandle;
 	const bus_space_tag_t iot = sc->sc_iotag;

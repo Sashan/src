@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.111 2023/04/13 15:23:22 miod Exp $	*/
+/*	$OpenBSD: pmap.c,v 1.121 2024/06/26 01:40:49 jsg Exp $	*/
 /*	$NetBSD: pmap.c,v 1.107 2001/08/31 16:47:41 eeh Exp $	*/
 /*
  * 
@@ -28,7 +28,6 @@
 
 #include <sys/atomic.h>
 #include <sys/param.h>
-#include <sys/malloc.h>
 #include <sys/queue.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
@@ -46,21 +45,16 @@
 #include <machine/hypervisor.h>
 #include <machine/openfirm.h>
 #include <machine/kcore.h>
+#include <machine/pte.h>
 
-#include "cache.h"
+#include <sparc64/sparc64/cache.h>
 
 #ifdef DDB
 #include <machine/db_machdep.h>
-#include <ddb/db_command.h>
-#include <ddb/db_sym.h>
-#include <ddb/db_variables.h>
-#include <ddb/db_extern.h>
-#include <ddb/db_access.h>
 #include <ddb/db_output.h>
-#define db_enter()	__asm volatile("ta 1; nop");
+#define db_enter()	__asm volatile("ta 1; nop")
 #else
 #define db_enter()
-#define db_printf	printf
 #endif
 
 #define	MEG		(1<<20) /* 1MB */
@@ -116,7 +110,6 @@ void	pmap_page_cache(struct pmap *pm, paddr_t pa, int mode);
 
 void	pmap_bootstrap_cpu(paddr_t);
 
-void	pmap_pinit(struct pmap *);
 void	pmap_release(struct pmap *);
 pv_entry_t pa_to_pvh(paddr_t);
 
@@ -517,9 +510,9 @@ pmap_bootstrap(u_long kernelstart, u_long kernelend, u_int maxctx, u_int numcpus
 
 			/* And the rest of the virtual page. */
 			if (prom_claim_virt(newkv, szdiff) != newkv)
-			prom_printf("pmap_bootstrap: could not claim "
-				"virtual dseg extension "
-				"at size %lx\r\n", newkv, szdiff);
+				prom_printf("pmap_bootstrap: could not claim "
+				    "virtual dseg extension "
+				    "at size %lx\r\n", newkv, szdiff);
 
 			/* Make sure all 4MB are mapped */
 			prom_map_phys(newkp, szdiff, newkv, -1);
@@ -1105,7 +1098,7 @@ remap_data:
 	vmmap += NBPG;
 	{ 
 		extern vaddr_t u0[2];
-		extern struct pcb* proc0paddr;
+		extern struct pcb *proc0paddr;
 		extern void main(void);
 		paddr_t pa;
 
@@ -1183,6 +1176,8 @@ remap_data:
 		cpus->ci_next = NULL; /* Redundant, I know. */
 		cpus->ci_curproc = &proc0;
 		cpus->ci_cpcb = (struct pcb *)u0[0]; /* Need better source */
+		cpus->ci_cpcbpaddr = pseg_get(pmap_kernel(), u0[0]) &
+		    TLB_PA_MASK;
 		cpus->ci_upaid = cpu_myid();
 		cpus->ci_cpuid = 0;
 		cpus->ci_flags = CPUF_RUNNING;
@@ -1473,7 +1468,7 @@ pmap_destroy(struct pmap *pm)
 
 /*
  * Release any resources held by the given physical map.
- * Called when a pmap initialized by pmap_pinit is being released.
+ * Called when a pmap initialized by pmap_create is being released.
  */
 void
 pmap_release(struct pmap *pm)
@@ -2139,7 +2134,8 @@ pmap_dumpmmu(int (*dump)(dev_t, daddr_t, caddr_t, size_t), daddr_t blkno)
 /*
  * Determine (non)existence of physical page
  */
-int pmap_pa_exists(paddr_t pa)
+int
+pmap_pa_exists(paddr_t pa)
 {
 	struct mem_region *mp;
 
@@ -2622,7 +2618,7 @@ ctx_free(struct pmap *pm)
 	if (ctxbusy[oldctx] == 0)
 		printf("ctx_free: freeing free context %d\n", oldctx);
 	if (ctxbusy[oldctx] != pm->pm_physaddr) {
-		printf("ctx_free: freeing someone esle's context\n "
+		printf("ctx_free: freeing someone else's context\n "
 		       "ctxbusy[%d] = %p, pm(%p)->pm_ctx = %p\n", 
 		       oldctx, (void *)(u_long)ctxbusy[oldctx], pm,
 		       (void *)(u_long)pm->pm_physaddr);
@@ -2705,7 +2701,7 @@ pmap_remove_pv(struct pmap *pmap, vaddr_t va, paddr_t pa)
 	 * If it is the first entry on the list, it is actually
 	 * in the header and we must copy the following entry up
 	 * to the header.  Otherwise we must search the list for
-	 * the entry.  In either case we free the now unused entry.
+	 * the entry.
 	 */
 	if (pmap == pv->pv_pmap && PV_MATCH(pv, va)) {
 		/* Save modified/ref bits */

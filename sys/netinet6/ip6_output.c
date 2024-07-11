@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip6_output.c,v 1.288 2024/02/28 10:57:20 bluhm Exp $	*/
+/*	$OpenBSD: ip6_output.c,v 1.292 2024/07/04 12:50:08 bluhm Exp $	*/
 /*	$KAME: ip6_output.c,v 1.172 2001/03/25 09:55:56 itojun Exp $	*/
 
 /*
@@ -161,7 +161,7 @@ struct idgen32_ctx ip6_id_ctx;
  */
 int
 ip6_output(struct mbuf *m, struct ip6_pktopts *opt, struct route *ro,
-    int flags, struct ip6_moptions *im6o, const u_char seclevel[])
+    int flags, struct ip6_moptions *im6o, const struct ipsec_level *seclevel)
 {
 	struct ip6_hdr *ip6;
 	struct ifnet *ifp = NULL;
@@ -391,7 +391,7 @@ reroute:
 	/* initialize cached route */
 	if (ro == NULL) {
 		ro = &iproute;
-		bzero((caddr_t)ro, sizeof(*ro));
+		ro->ro_rt = NULL;
 	}
 	ro_pmtu = ro;
 	if (opt && opt->ip6po_rthdr)
@@ -533,7 +533,7 @@ reroute:
 			 */
 			if (ip6_mforwarding && ip6_mrouter[ifp->if_rdomain] &&
 			    (flags & IPV6_FORWARDING) == 0) {
-				if (ip6_mforward(ip6, ifp, m) != 0) {
+				if (ip6_mforward(ip6, ifp, m, flags) != 0) {
 					m_freem(m);
 					goto done;
 				}
@@ -635,10 +635,21 @@ reroute:
 		/* tag as generated to skip over pf_test on rerun */
 		m->m_pkthdr.pf.flags |= PF_TAG_GENERATED;
 		finaldst = ip6->ip6_dst;
+		if (ro == &iproute)
+			rtfree(ro->ro_rt);
 		ro = NULL;
 		if_put(ifp); /* drop reference since destination changed */
 		ifp = NULL;
 		goto reroute;
+	}
+#endif
+
+#ifdef IPSEC
+	if (ISSET(flags, IPV6_FORWARDING) &&
+	    ISSET(flags, IPV6_FORWARDING_IPSEC) &&
+	    !ISSET(m->m_pkthdr.ph_tagsset, PACKET_TAG_IPSEC_IN_DONE)) {
+		error = EHOSTUNREACH;
+		goto bad;
 	}
 #endif
 
@@ -758,11 +769,10 @@ reroute:
  bad:
 	m_freem(m);
  done:
-	if (ro == &iproute && ro->ro_rt) {
+	if (ro == &iproute)
 		rtfree(ro->ro_rt);
-	} else if (ro_pmtu == &iproute && ro_pmtu->ro_rt) {
+	else if (ro_pmtu == &iproute)
 		rtfree(ro_pmtu->ro_rt);
-	}
 	if_put(ifp);
 #ifdef IPSEC
 	tdb_unref(tdb);
@@ -1325,7 +1335,7 @@ do { \
 					error = EACCES;
 					break;
 				}
-				inp->inp_seclevel[SL_AUTH] = optval;
+				inp->inp_seclevel.sl_auth = optval;
 				break;
 
 			case IPV6_ESP_TRANS_LEVEL:
@@ -1334,7 +1344,7 @@ do { \
 					error = EACCES;
 					break;
 				}
-				inp->inp_seclevel[SL_ESP_TRANS] = optval;
+				inp->inp_seclevel.sl_esp_trans = optval;
 				break;
 
 			case IPV6_ESP_NETWORK_LEVEL:
@@ -1343,7 +1353,7 @@ do { \
 					error = EACCES;
 					break;
 				}
-				inp->inp_seclevel[SL_ESP_NETWORK] = optval;
+				inp->inp_seclevel.sl_esp_network = optval;
 				break;
 
 			case IPV6_IPCOMP_LEVEL:
@@ -1352,7 +1362,7 @@ do { \
 					error = EACCES;
 					break;
 				}
-				inp->inp_seclevel[SL_IPCOMP] = optval;
+				inp->inp_seclevel.sl_ipcomp = optval;
 				break;
 			}
 #endif
@@ -1547,21 +1557,21 @@ do { \
 			m->m_len = sizeof(int);
 			switch (optname) {
 			case IPV6_AUTH_LEVEL:
-				optval = inp->inp_seclevel[SL_AUTH];
+				optval = inp->inp_seclevel.sl_auth;
 				break;
 
 			case IPV6_ESP_TRANS_LEVEL:
 				optval =
-				    inp->inp_seclevel[SL_ESP_TRANS];
+				    inp->inp_seclevel.sl_esp_trans;
 				break;
 
 			case IPV6_ESP_NETWORK_LEVEL:
 				optval =
-				    inp->inp_seclevel[SL_ESP_NETWORK];
+				    inp->inp_seclevel.sl_esp_network;
 				break;
 
 			case IPV6_IPCOMP_LEVEL:
-				optval = inp->inp_seclevel[SL_IPCOMP];
+				optval = inp->inp_seclevel.sl_ipcomp;
 				break;
 			}
 			*mtod(m, int *) = optval;
@@ -2729,7 +2739,7 @@ in6_proto_cksum_out(struct mbuf *m, struct ifnet *ifp)
 
 #ifdef IPSEC
 int
-ip6_output_ipsec_lookup(struct mbuf *m, const u_char seclevel[],
+ip6_output_ipsec_lookup(struct mbuf *m, const struct ipsec_level *seclevel,
     struct tdb **tdbout)
 {
 	struct tdb *tdb;

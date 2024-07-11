@@ -1,4 +1,4 @@
-/* $OpenBSD: intc.c,v 1.12 2022/01/03 03:06:50 jsg Exp $ */
+/* $OpenBSD: intc.c,v 1.15 2024/06/26 01:40:49 jsg Exp $ */
 /*
  * Copyright (c) 2007,2009 Dale Rahn <drahn@openbsd.org>
  *
@@ -90,8 +90,6 @@ struct intrq {
 	int iq_levels;			/* IPL_*'s this IRQ has */
 	int iq_ist;			/* share type */
 };
-
-volatile int softint_pending;
 
 struct intrq intc_handler[INTC_MAX_IRQ];
 u_int32_t intc_smask[NIPL];
@@ -311,18 +309,6 @@ intc_setipl(int new)
 }
 
 void
-intc_intr_bootstrap(vaddr_t addr)
-{
-	int i, j;
-	extern struct bus_space armv7_bs_tag;
-	intc_iot = &armv7_bs_tag;
-	intc_ioh = addr;
-	for (i = 0; i < INTC_NUM_BANKS; i++)
-		for (j = 0; j < NIPL; j++)
-			intc_imask[i][j] = 0xffffffff;
-}
-
-void
 intc_irq_handler(void *frame)
 {
 	int irq, pri, s;
@@ -432,7 +418,8 @@ intc_tst(void *a)
 }
 
 void intc_test(void);
-void intc_test(void)
+void
+intc_test(void)
 {
 	void * ih;
 	printf("about to register handler\n");

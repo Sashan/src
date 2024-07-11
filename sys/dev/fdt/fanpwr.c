@@ -1,4 +1,4 @@
-/*	$OpenBSD: fanpwr.c,v 1.8 2023/11/12 12:41:43 patrick Exp $	*/
+/*	$OpenBSD: fanpwr.c,v 1.10 2024/05/26 22:04:52 kettenis Exp $	*/
 /*
  * Copyright (c) 2018 Mark Kettenis <kettenis@openbsd.org>
  *

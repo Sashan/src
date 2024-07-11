@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.h,v 1.299 2024/01/24 14:51:12 claudio Exp $ */
+/*	$OpenBSD: rde.h,v 1.303 2024/05/29 10:36:32 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Claudio Jeker <claudio@openbsd.org> and
@@ -90,7 +90,7 @@ struct rde_peer {
 	struct prefix_tree		 withdraws[AID_MAX];
 	struct filter_head		*out_rules;
 	time_t				 staletime[AID_MAX];
-	uint32_t			 remote_bgpid; /* host byte order! */
+	uint32_t			 remote_bgpid;
 	uint32_t			 path_id_tx;
 	unsigned int			 local_if_scope;
 	enum peer_state			 state;
@@ -381,8 +381,6 @@ void		 peer_imsg_flush(struct rde_peer *);
 RB_PROTOTYPE(peer_tree, rde_peer, entry, peer_cmp);
 
 /* rde_attr.c */
-int		 attr_write(void *, uint16_t, uint8_t, uint8_t, void *,
-		    uint16_t);
 int		 attr_writebuf(struct ibuf *, uint8_t, uint8_t, void *,
 		    uint16_t);
 void		 attr_shutdown(void);
@@ -564,7 +562,6 @@ re_rib(struct rib_entry *re)
 }
 
 void		 path_shutdown(void);
-uint32_t	 path_remove_stale(struct rde_aspath *, uint8_t, time_t);
 struct rde_aspath *path_copy(struct rde_aspath *, const struct rde_aspath *);
 struct rde_aspath *path_prep(struct rde_aspath *);
 struct rde_aspath *path_get(void);
@@ -581,7 +578,6 @@ struct prefix	*prefix_adjout_next(struct rde_peer *, struct prefix *);
 struct prefix	*prefix_adjout_lookup(struct rde_peer *, struct bgpd_addr *,
 		    int);
 struct prefix	*prefix_adjout_match(struct rde_peer *, struct bgpd_addr *);
-struct prefix	*prefix_match(struct rde_peer *, struct bgpd_addr *);
 int		 prefix_update(struct rib *, struct rde_peer *, uint32_t,
 		    uint32_t, struct filterstate *, struct bgpd_addr *, int);
 int		 prefix_withdraw(struct rib *, struct rde_peer *, uint32_t,
@@ -597,8 +593,6 @@ void		 prefix_adjout_update(struct prefix *, struct rde_peer *,
 		    struct filterstate *, struct pt_entry *, uint32_t);
 void		 prefix_adjout_withdraw(struct prefix *);
 void		 prefix_adjout_destroy(struct prefix *);
-void		 prefix_adjout_dump(struct rde_peer *, void *,
-		    void (*)(struct prefix *, void *));
 int		 prefix_dump_new(struct rde_peer *, uint8_t, unsigned int,
 		    void *, void (*)(struct prefix *, void *),
 		    void (*)(void *, uint8_t), int (*)(void *));
@@ -609,7 +603,6 @@ int		 prefix_dump_subtree(struct rde_peer *, struct bgpd_addr *,
 struct prefix	*prefix_bypeer(struct rib_entry *, struct rde_peer *,
 		    uint32_t);
 void		 prefix_destroy(struct prefix *);
-void		 prefix_relink(struct prefix *, struct rde_aspath *, int);
 
 RB_PROTOTYPE(prefix_tree, prefix, entry, prefix_cmp)
 
@@ -687,10 +680,8 @@ void		 nexthop_update(struct kroute_nexthop *);
 struct nexthop	*nexthop_get(struct bgpd_addr *);
 struct nexthop	*nexthop_ref(struct nexthop *);
 int		 nexthop_unref(struct nexthop *);
-int		 nexthop_compare(struct nexthop *, struct nexthop *);
 
 /* rde_update.c */
-void		 up_init(struct rde_peer *);
 void		 up_generate_updates(struct rde_peer *, struct rib_entry *);
 void		 up_generate_addpath(struct rde_peer *, struct rib_entry *);
 void		 up_generate_addpath_all(struct rde_peer *, struct rib_entry *,
@@ -713,6 +704,5 @@ int		 aspa_table_equal(const struct rde_aspa *,
 		    const struct rde_aspa *);
 void		 aspa_table_unchanged(struct rde_aspa *,
 		    const struct rde_aspa *);
-void		 aspa_table_set_generation(struct rde_aspa *, uint8_t);
 
 #endif /* __RDE_H__ */

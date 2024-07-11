@@ -1,4 +1,4 @@
-/*	$OpenBSD: rad.c,v 1.29 2023/04/19 12:58:16 jsg Exp $	*/
+/*	$OpenBSD: rad.c,v 1.31 2024/05/21 05:00:48 jsg Exp $	*/
 
 /*
  * Copyright (c) 2018 Florian Obser <florian@openbsd.org>
@@ -73,8 +73,6 @@ static int	main_imsg_send_config(struct rad_conf *);
 
 int	main_reload(void);
 int	main_sendboth(enum imsg_type, void *, uint16_t);
-
-void	in6_prefixlen2mask(struct in6_addr *, int len);
 
 struct rad_conf		*main_conf;
 static struct imsgev	*iev_frontend;
@@ -757,6 +755,7 @@ config_new_empty(void)
 	xconf->ra_options.router_lifetime = ADV_DEFAULT_LIFETIME;
 	xconf->ra_options.reachable_time = 0;
 	xconf->ra_options.retrans_timer = 0;
+	xconf->ra_options.source_link_addr = 1;
 	xconf->ra_options.mtu = 0;
 	xconf->ra_options.rdns_lifetime = DEFAULT_RDNS_LIFETIME;
 	SIMPLEQ_INIT(&xconf->ra_options.ra_rdnss_list);

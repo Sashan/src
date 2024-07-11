@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_qwx_pci.c,v 1.14 2024/02/22 09:15:34 stsp Exp $	*/
+/*	$OpenBSD: if_qwx_pci.c,v 1.22 2024/07/06 05:34:35 patrick Exp $	*/
 
 /*
  * Copyright 2023 Stefan Sperling <stsp@openbsd.org>
@@ -53,14 +53,11 @@
 #include "bpfilter.h"
 
 #include <sys/param.h>
-#include <sys/sockio.h>
 #include <sys/mbuf.h>
-#include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/socket.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
-#include <sys/conf.h>
 #include <sys/device.h>
 #include <sys/endian.h>
 
@@ -99,6 +96,7 @@
 #include <dev/ic/qwxreg.h>
 #include <dev/ic/qwxvar.h>
 
+#ifdef QWX_DEBUG 
 /* Headers needed for RDDM dump */
 #include <sys/namei.h>
 #include <sys/pledge.h>
@@ -106,6 +104,7 @@
 #include <sys/fcntl.h>
 #include <sys/stat.h>
 #include <sys/proc.h>
+#endif
 
 #define ATH11K_PCI_IRQ_CE0_OFFSET	3
 #define ATH11K_PCI_IRQ_DP_OFFSET	14
@@ -455,7 +454,9 @@ void	qwx_mhi_init_mmio(struct qwx_pci_softc *);
 int	qwx_mhi_fw_load_bhi(struct qwx_pci_softc *, uint8_t *, size_t);
 int	qwx_mhi_fw_load_bhie(struct qwx_pci_softc *, uint8_t *, size_t);
 void	qwx_rddm_prepare(struct qwx_pci_softc *);
+#ifdef QWX_DEBUG
 void	qwx_rddm_task(void *);
+#endif
 void *	qwx_pci_event_ring_get_elem(struct qwx_pci_event_ring *, uint64_t);
 void	qwx_pci_intr_ctrl_event_mhi(struct qwx_pci_softc *, uint32_t);
 void	qwx_pci_intr_ctrl_event_ee(struct qwx_pci_softc *, uint32_t);
@@ -1045,8 +1046,9 @@ unsupported_wcn6855_soc:
 		goto err_irq_affinity_cleanup;
 	}
 #endif
+#ifdef QWX_DEBUG
 	task_set(&psc->rddm_task, qwx_rddm_task, psc);
-
+#endif
 	ic->ic_phytype = IEEE80211_T_OFDM;	/* not only, but not used */
 	ic->ic_opmode = IEEE80211_M_STA;	/* default to BSS mode */
 	ic->ic_state = IEEE80211_S_INIT;
@@ -1089,6 +1091,8 @@ unsupported_wcn6855_soc:
 	/* Override 802.11 state transition machine. */
 	sc->sc_newstate = ic->ic_newstate;
 	ic->ic_newstate = qwx_newstate;
+	ic->ic_set_key = qwx_set_key;
+	ic->ic_delete_key = qwx_delete_key;
 #if 0
 	ic->ic_updatechan = qwx_updatechan;
 	ic->ic_updateprot = qwx_updateprot;
@@ -2901,7 +2905,7 @@ qwx_mhi_start(struct qwx_pci_softc *psc)
 #endif
 
 	/* Transition to primary runtime. */
-	 if (MHI_IN_PBL(ee)) {
+	if (MHI_IN_PBL(ee)) {
 		ret = qwx_mhi_fw_load_handler(psc);
 		if (ret)
 			return ret;
@@ -3469,6 +3473,7 @@ qwx_rddm_prepare(struct qwx_pci_softc *psc)
 	psc->rddm_vec = vec_adm;
 }
 
+#ifdef QWX_DEBUG
 void
 qwx_rddm_task(void *arg)
 {
@@ -3563,6 +3568,7 @@ done:
 	psc->rddm_vec = NULL;
 	DPRINTF("%s: done, error %d\n", __func__, error);
 }
+#endif
 
 void *
 qwx_pci_event_ring_get_elem(struct qwx_pci_event_ring *ring, uint64_t rp)
@@ -4074,11 +4080,25 @@ qwx_pci_intr(void *arg)
 	     sc->sc_dev.dv_xname, psc->bhi_ee, ee, psc->mhi_state, state);
 
 	if (ee == MHI_EE_RDDM) {
+		/* Firmware crash, e.g. due to invalid DMA memory access. */
 		psc->bhi_ee = ee;
+#ifdef QWX_DEBUG
 		if (!psc->rddm_triggered) {
+			/* Write fw memory dump to root's home directory. */
 			task_add(systq, &psc->rddm_task);
 			psc->rddm_triggered = 1;
 		}
+#else
+		printf("%s: fatal firmware error\n",
+		   sc->sc_dev.dv_xname);
+		if (!test_bit(ATH11K_FLAG_CRASH_FLUSH, sc->sc_flags) &&
+		    (sc->sc_ic.ic_if.if_flags & (IFF_UP | IFF_RUNNING)) ==
+		    (IFF_UP | IFF_RUNNING)) {
+			/* Try to reset the device. */
+			set_bit(ATH11K_FLAG_CRASH_FLUSH, sc->sc_flags);
+			task_add(systq, &sc->init_task);
+		}
+#endif
 		return 1;
 	} else if (psc->bhi_ee == MHI_EE_PBL || psc->bhi_ee == MHI_EE_SBL) {
 		int new_ee = -1, new_mhi_state = -1;
@@ -4110,9 +4130,11 @@ qwx_pci_intr(void *arg)
 				ret = 1;
 		}
 
-		for (i = 0; i < nitems(sc->ext_irq_grp); i++) {
-			if (qwx_dp_service_srng(sc, i))
-				ret = 1;
+		if (test_bit(ATH11K_FLAG_EXT_IRQ_ENABLED, sc->sc_flags)) {
+			for (i = 0; i < nitems(sc->ext_irq_grp); i++) {
+				if (qwx_dp_service_srng(sc, i))
+					ret = 1;
+			}
 		}
 	}
 

@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.488 2024/02/29 22:21:21 bluhm Exp $
+#	$OpenBSD: Makefile,v 1.490 2024/06/30 17:30:54 deraadt Exp $
 
 .include <bsd.own.mk>
 
@@ -45,7 +45,7 @@ MUTABLE=changelist daily etc.${MACHINE}/disktab \
 	pf.os protocols rc rc.conf rpc services shells syslog.conf weekly
 
 # -rw-r--r--
-EXAMPLES=acme-client.conf chio.conf dhclient.conf dhcpd.conf exports \
+EXAMPLES=acme-client.conf chio.conf dhcpd.conf exports \
 	httpd.conf ifstated.conf inetd.conf man.conf mixerctl.conf \
 	mrouted.conf ntpd.conf printcap rad.conf rbootd.conf \
 	remote sensorsd.conf wsconsctl.conf
@@ -58,12 +58,12 @@ EXAMPLES_600=bgpd.conf doas.conf dvmrpd.conf eigrpd.conf hostapd.conf \
 	snmpd.conf vm.conf ypldap.conf
 
 # -r-xr-xr-x
-RCDAEMONS=amd apmd bgpd bgplgd bootparamd cron dhcpd dhcpleased dhcrelay \
-	dhcrelay6 dvmrpd eigrpd ftpd ftpproxy ftpproxy6 hostapd hotplugd \
-	httpd identd ifstated iked inetd isakmpd iscsid ldapd ldattach ldomd \
-	ldpd lockd lpd mopd mountd mrouted nfsd npppd nsd ntpd ospf6d ospfd \
-	pflogd portmap rad radiusd rarpd rbootd relayd resolvd ripd route6d \
-	sasyncd sensorsd slowcgi slaacd smtpd sndiod snmpd spamd \
+RCDAEMONS=amd apmd bgpd bgplgd bootparamd cron dhcpd dhcpleased dhcp6leased \
+	dhcrelay dhcrelay6 dvmrpd eigrpd ftpd ftpproxy ftpproxy6 hostapd \
+	hotplugd httpd identd ifstated iked inetd isakmpd iscsid ldapd \
+	ldattach ldomd ldpd lockd lpd mopd mountd mrouted nfsd npppd nsd ntpd \
+	ospf6d ospfd pflogd portmap rad radiusd rarpd rbootd relayd resolvd \
+	ripd route6d sasyncd sensorsd slowcgi slaacd smtpd sndiod snmpd spamd \
 	spamlogd sshd statd syslogd tftpd tftpproxy unbound \
 	unwind vmd watchdogd wsmoused xenodm ypbind ypldap ypserv
 

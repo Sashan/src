@@ -1,4 +1,4 @@
-/*	$OpenBSD: mft.c,v 1.112 2024/02/22 12:49:42 job Exp $ */
+/*	$OpenBSD: mft.c,v 1.117 2024/06/11 10:38:40 tb Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -129,7 +129,7 @@ rtype_from_file_extension(const char *fn)
 
 /*
  * Validate that a filename listed on a Manifest only contains characters
- * permitted in draft-ietf-sidrops-6486bis section 4.2.2
+ * permitted in RFC 9286 section 4.2.2.
  * Also ensure that there is exactly one '.'.
  */
 static int
@@ -201,8 +201,17 @@ mft_parse_filehash(const char *fn, struct mft *mft, const FileAndHash *fh,
 	}
 
 	type = rtype_from_mftfile(file);
-	/* remember the filehash for the CRL in struct mft */
-	if (type == RTYPE_CRL && strcmp(file, mft->crl) == 0) {
+	if (type == RTYPE_CRL) {
+		if (*found_crl == 1) {
+			warnx("%s: RFC 6487: too many CRLs listed on MFT", fn);
+			goto out;
+		}
+		if (strcmp(file, mft->crl) != 0) {
+			warnx("%s: RFC 6487: name (%s) doesn't match CRLDP "
+			    "(%s)", fn, file, mft->crl);
+			goto out;
+		}
+		/* remember the filehash for the CRL in struct mft */
 		memcpy(mft->crlhash, fh->hash->data, SHA256_DIGEST_LENGTH);
 		*found_crl = 1;
 	}
@@ -357,9 +366,8 @@ mft_parse_econtent(const char *fn, struct mft *mft, const unsigned char *d,
 
 	if (OBJ_obj2nid(mft_asn1->fileHashAlg) != NID_sha256) {
 		warnx("%s: RFC 6486 section 4.2.1: fileHashAlg: "
-		    "want SHA256 object, have %s (NID %d)", fn,
-		    ASN1_tag2str(OBJ_obj2nid(mft_asn1->fileHashAlg)),
-		    OBJ_obj2nid(mft_asn1->fileHashAlg));
+		    "want SHA256 object, have %s", fn,
+		    nid2str(OBJ_obj2nid(mft_asn1->fileHashAlg)));
 		goto out;
 	}
 
@@ -503,17 +511,17 @@ mft_free(struct mft *p)
 	if (p == NULL)
 		return;
 
-	if (p->files != NULL)
-		for (i = 0; i < p->filesz; i++)
-			free(p->files[i].file);
+	for (i = 0; i < p->filesz; i++)
+		free(p->files[i].file);
 
+	free(p->path);
+	free(p->files);
+	free(p->seqnum);
 	free(p->aia);
 	free(p->aki);
 	free(p->sia);
 	free(p->ski);
-	free(p->path);
-	free(p->files);
-	free(p->seqnum);
+	free(p->crl);
 	free(p);
 }
 
@@ -528,6 +536,7 @@ mft_buffer(struct ibuf *b, const struct mft *p)
 
 	io_simple_buffer(b, &p->repoid, sizeof(p->repoid));
 	io_simple_buffer(b, &p->talid, sizeof(p->talid));
+	io_simple_buffer(b, &p->certid, sizeof(p->certid));
 	io_str_buffer(b, p->path);
 
 	io_str_buffer(b, p->aia);
@@ -560,6 +569,7 @@ mft_read(struct ibuf *b)
 
 	io_read_buf(b, &p->repoid, sizeof(p->repoid));
 	io_read_buf(b, &p->talid, sizeof(p->talid));
+	io_read_buf(b, &p->certid, sizeof(p->certid));
 	io_read_str(b, &p->path);
 
 	io_read_str(b, &p->aia);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: intr.h,v 1.22 2018/08/20 15:02:07 visa Exp $	*/
+/*	$OpenBSD: intr.h,v 1.25 2024/03/29 21:29:34 miod Exp $	*/
 /*	$NetBSD: intr.h,v 1.8 2001/01/14 23:50:30 thorpej Exp $ */
 
 /*-
@@ -63,7 +63,7 @@ struct intrhand {
 
 extern struct intrhand *intrlev[MAXINTNUM];
 
-void    intr_establish(int, struct intrhand *);
+void    intr_establish(struct intrhand *);
 
 /* XXX - arbitrary numbers; no interpretation is defined yet */
 #define	IPL_NONE	0		/* nothing */
@@ -109,5 +109,7 @@ void	 intr_barrier(void *);
 void	*softintr_establish(int, void (*)(void *), void *);
 void	 softintr_disestablish(void *);
 void	 softintr_schedule(void *);
+
+void	send_softint(int, struct intrhand *);
 
 #endif /* _MACHINE_INTR_H_ */

@@ -215,8 +215,8 @@ struct inteldrm_softc {
 #ifdef __OpenBSD__
 	struct device sc_dev;
 	bus_dma_tag_t dmat;
+	bus_space_tag_t iot;
 	bus_space_tag_t bst;
-	struct agp_map *agph;
 	bus_space_handle_t opregion_ioh;
 	bus_space_handle_t opregion_rvda_ioh;
 	bus_size_t opregion_rvda_size;
@@ -239,6 +239,7 @@ struct inteldrm_softc {
 	struct i915_dsm dsm;
 
 #ifdef __OpenBSD__
+	struct pci_attach_args *pa;
 	pci_chipset_tag_t pc;
 	pcitag_t tag;
 	struct extent *memex;
@@ -734,10 +735,6 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
 
 #define IS_XEHPSDV_GRAPHICS_STEP(__i915, since, until) \
 	(IS_XEHPSDV(__i915) && IS_GRAPHICS_STEP(__i915, since, until))
-
-#define IS_MTL_GRAPHICS_STEP(__i915, variant, since, until) \
-	(IS_SUBPLATFORM(__i915, INTEL_METEORLAKE, INTEL_SUBPLATFORM_##variant) && \
-	 IS_GRAPHICS_STEP(__i915, since, until))
 
 #define IS_MTL_DISPLAY_STEP(__i915, since, until) \
 	(IS_METEORLAKE(__i915) && \

@@ -1,4 +1,4 @@
-/*	$OpenBSD: relayd.h,v 1.271 2023/06/25 08:07:39 op Exp $	*/
+/*	$OpenBSD: relayd.h,v 1.273 2024/06/17 08:02:57 sashan Exp $	*/
 
 /*
  * Copyright (c) 2006 - 2016 Reyk Floeter <reyk@openbsd.org>
@@ -402,6 +402,7 @@ union hashkey {
 #define F_TLSINSPECT		0x04000000
 #define F_HASHKEY		0x08000000
 #define F_AGENTX_TRAPONLY	0x10000000
+#define F_PFLOG			0x20000000
 
 #define F_BITS								\
 	"\10\01DISABLE\02BACKUP\03USED\04DOWN\05ADD\06DEL\07CHANGED"	\
@@ -1210,7 +1211,6 @@ void	 hce_notify_done(struct host *, enum host_error);
 /* relay.c */
 void	 relay(struct privsep *, struct privsep_proc *);
 int	 relay_privinit(struct relay *);
-void	 relay_notify_done(struct host *, const char *);
 int	 relay_session_cmp(struct rsession *, struct rsession *);
 void	 relay_close(struct rsession *, const char *, int);
 int	 relay_reset_event(struct rsession *, struct ctl_relay_event *);
@@ -1246,8 +1246,6 @@ int	 relay_test(struct protocol *, struct ctl_relay_event *);
 void	 relay_calc_skip_steps(struct relay_rules *);
 void	 relay_match(struct kvlist *, struct kv *, struct kv *,
 	    struct kvtree *);
-void	 relay_session_insert(struct rsession *);
-void	 relay_session_remove(struct rsession *);
 void	 relay_session_publish(struct rsession *);
 void	 relay_session_unpublish(struct rsession *);
 

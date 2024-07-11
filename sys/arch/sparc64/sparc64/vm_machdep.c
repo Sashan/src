@@ -1,4 +1,4 @@
-/*	$OpenBSD: vm_machdep.c,v 1.43 2024/02/19 09:59:29 claudio Exp $	*/
+/*	$OpenBSD: vm_machdep.c,v 1.45 2024/03/29 21:27:53 miod Exp $	*/
 /*	$NetBSD: vm_machdep.c,v 1.38 2001/06/30 00:02:20 eeh Exp $ */
 
 /*
@@ -102,6 +102,13 @@ cpu_fork(struct proc *p1, struct proc *p2, void *stack, void *tcb,
 	struct rwindow *rp;
 	size_t pcbsz;
 	extern struct proc proc0;
+
+	/*
+	 * Cache the physical address of the pcb, to speed up window
+	 * spills in locore.
+	 */
+	(void)pmap_extract(pmap_kernel(), (vaddr_t)npcb,
+	    &p2->p_md.md_pcbpaddr);
 
 	/*
 	 * Save all user registers to p1's stack or, in the case of
@@ -252,7 +259,7 @@ fpusave_proc(struct proc *p, int save)
 			continue;
 		sparc64_send_ipi(ci->ci_itid,
 		    save ? ipi_save_fpstate : ipi_drop_fpstate, (vaddr_t)p, 0);
-		while(ci->ci_fpproc == p)
+		while (ci->ci_fpproc == p)
 			membar_sync();
 		break;
 	}
@@ -275,6 +282,7 @@ cpu_exit(struct proc *p)
 	if (p->p_md.md_fpstate != NULL) {
 		fpusave_proc(p, 0);
 		free(p->p_md.md_fpstate, M_SUBPROC, sizeof(struct fpstate));
+		p->p_md.md_fpstate = NULL;
 	}
 
 	pmap_deactivate(p);

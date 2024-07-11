@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip6_forward.c,v 1.116 2024/02/28 10:57:20 bluhm Exp $	*/
+/*	$OpenBSD: ip6_forward.c,v 1.120 2024/07/04 12:50:08 bluhm Exp $	*/
 /*	$KAME: ip6_forward.c,v 1.75 2001/06/29 12:42:13 jinmei Exp $	*/
 
 /*
@@ -75,18 +75,19 @@
  * of codes and types.
  *
  * If not forwarding, just drop the packet.  This could be confusing
- * if ipforwarding was zero but some routing protocol was advancing
+ * if ip6_forwarding was zero but some routing protocol was advancing
  * us as a gateway to somewhere.  However, we must let the routing
  * protocol deal with that.
  *
  */
 
 void
-ip6_forward(struct mbuf *m, struct rtentry *rt, int srcrt)
+ip6_forward(struct mbuf *m, struct route *ro, int flags)
 {
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
+	struct route iproute;
+	struct rtentry *rt;
 	struct sockaddr *dst;
-	struct route ro;
 	struct ifnet *ifp = NULL;
 	int error = 0, type = 0, code = 0, destmtu = 0;
 	struct mbuf *mcopy;
@@ -165,25 +166,22 @@ reroute:
 	}
 #endif /* IPSEC */
 
-	ro.ro_rt = NULL;
-	route6_cache(&ro, &ip6->ip6_dst, &ip6->ip6_src,
-	    m->m_pkthdr.ph_rtableid);
-	dst = &ro.ro_dstsa;
-	if (!rtisvalid(rt)) {
-		rtfree(rt);
-		rt = rtalloc_mpath(dst, &ip6->ip6_src.s6_addr32[0],
-		    m->m_pkthdr.ph_rtableid);
-		if (rt == NULL) {
-			ip6stat_inc(ip6s_noroute);
-			if (mcopy != NULL) {
-				icmp6_error(mcopy, ICMP6_DST_UNREACH,
-					    ICMP6_DST_UNREACH_NOROUTE, 0);
-			}
-			m_freem(m);
-			goto done;
-		}
+	if (ro == NULL) {
+		ro = &iproute;
+		ro->ro_rt = NULL;
 	}
-	ro.ro_rt = rt;
+	rt = route6_mpath(ro, &ip6->ip6_dst, &ip6->ip6_src,
+	    m->m_pkthdr.ph_rtableid);
+	if (rt == NULL) {
+		ip6stat_inc(ip6s_noroute);
+		if (mcopy != NULL) {
+			icmp6_error(mcopy, ICMP6_DST_UNREACH,
+				    ICMP6_DST_UNREACH_NOROUTE, 0);
+		}
+		m_freem(m);
+		goto done;
+	}
+	dst = &ro->ro_dstsa;
 
 	/*
 	 * Scope check: if a packet can't be delivered to its destination
@@ -225,8 +223,8 @@ reroute:
 	 */
 	if (tdb != NULL) {
 		/* Callee frees mbuf */
-		error = ip6_output_ipsec_send(tdb, m, &ro, 0, 1);
-		rt = ro.ro_rt;
+		error = ip6_output_ipsec_send(tdb, m, ro, 0, 1);
+		rt = ro->ro_rt;
 		if (error)
 			goto senderr;
 		goto freecopy;
@@ -250,11 +248,11 @@ reroute:
 		m_freem(m);
 		goto freecopy;
 	}
-	if (rt->rt_ifidx == m->m_pkthdr.ph_ifidx && !srcrt &&
-	    ip6_sendredirects &&
+	if (rt->rt_ifidx == m->m_pkthdr.ph_ifidx &&
+	    ip6_sendredirects && !ISSET(flags, IPV6_REDIRECT) &&
 	    (rt->rt_flags & (RTF_DYNAMIC|RTF_MODIFIED)) == 0) {
 		if ((ifp->if_flags & IFF_POINTOPOINT) &&
-		    nd6_is_addr_neighbor(&ro.ro_dstsin6, ifp)) {
+		    nd6_is_addr_neighbor(&ro->ro_dstsin6, ifp)) {
 			/*
 			 * If the incoming interface is equal to the outgoing
 			 * one, the link attached to the interface is
@@ -307,12 +305,22 @@ reroute:
 	} else if (m->m_pkthdr.pf.flags & PF_TAG_REROUTE) {
 		/* tag as generated to skip over pf_test on rerun */
 		m->m_pkthdr.pf.flags |= PF_TAG_GENERATED;
-		srcrt = 1;
-		rtfree(rt);
-		rt = NULL;
+		SET(flags, IPV6_REDIRECT);
+		if (ro == &iproute)
+			rtfree(ro->ro_rt);
+		ro = NULL;
 		if_put(ifp);
 		ifp = NULL;
 		goto reroute;
+	}
+#endif
+
+#ifdef IPSEC
+	if (ISSET(flags, IPV6_FORWARDING) &&
+	    ISSET(flags, IPV6_FORWARDING_IPSEC) &&
+	    !ISSET(m->m_pkthdr.ph_tagsset, PACKET_TAG_IPSEC_IN_DONE)) {
+		error = EHOSTUNREACH;
+		goto senderr;
 	}
 #endif
 
@@ -388,7 +396,8 @@ senderr:
  freecopy:
 	m_freem(mcopy);
  done:
-	rtfree(rt);
+	if (ro == &iproute)
+		rtfree(ro->ro_rt);
 	if_put(ifp);
 #ifdef IPSEC
 	tdb_unref(tdb);

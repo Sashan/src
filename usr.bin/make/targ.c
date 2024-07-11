@@ -1,4 +1,4 @@
-/*	$OpenBSD: targ.c,v 1.86 2023/09/04 11:35:11 espie Exp $ */
+/*	$OpenBSD: targ.c,v 1.88 2024/06/18 02:11:03 millert Exp $ */
 /*	$NetBSD: targ.c,v 1.11 1997/02/20 16:51:50 christos Exp $	*/
 
 /*
@@ -88,11 +88,6 @@
  *
  *	Targ_Precious		Return true if the target is precious and
  *				should not be removed if we are interrupted.
- *
- * Debugging:
- *	Targ_PrintGraph 	Print out the entire graphm all variables
- *				and statistics for the directory cache. Should
- *				print something for suffixes, too, but...
  */
 
 #include <limits.h>
@@ -342,7 +337,7 @@ status_to_string(GNode *gn)
 }
 
 struct ohash *
-targets_hash()
+targets_hash(void)
 {
 	return &targets;
 }

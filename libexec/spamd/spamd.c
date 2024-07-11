@@ -1,4 +1,4 @@
-/*	$OpenBSD: spamd.c,v 1.161 2023/09/05 16:01:58 jca Exp $	*/
+/*	$OpenBSD: spamd.c,v 1.163 2024/05/09 08:35:03 florian Exp $	*/
 
 /*
  * Copyright (c) 2015 Henning Brauer <henning@openbsd.org>
@@ -730,6 +730,7 @@ initcon(struct con *cp, int fd, struct sockaddr *sa)
 	    NI_NUMERICHOST);
 	if (error)
 		strlcpy(cp->addr, "<unknown>", sizeof(cp->addr));
+	memset(ctimebuf, 0, sizeof(ctimebuf));
 	ctime_r(&t, ctimebuf);
 	ctimebuf[sizeof(ctimebuf) - 2] = '\0'; /* nuke newline */
 	snprintf(cp->obuf, cp->osize, "220 %s ESMTP %s; %s\r\n",
@@ -845,6 +846,8 @@ nextstate(struct con *cp)
 				    match(cp->ibuf, "EHLO")) {
 					snprintf(cp->obuf, cp->osize,
 					    "250-%s\r\n"
+					    "250-8BITMIME\r\n"
+					    "250-SMTPUTF8\r\n"
 					    "250 STARTTLS\r\n",
 					    hostname);
 					nextstate = 7;

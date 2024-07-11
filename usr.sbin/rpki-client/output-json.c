@@ -1,4 +1,4 @@
-/*	$OpenBSD: output-json.c,v 1.46 2024/03/01 08:10:09 tb Exp $ */
+/*	$OpenBSD: output-json.c,v 1.49 2024/04/21 19:27:44 claudio Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  *
@@ -22,8 +22,6 @@
 
 #include "extern.h"
 #include "json.h"
-
-extern int experimental;
 
 static void
 outputheader_json(struct stats *st)
@@ -92,6 +90,9 @@ static void
 print_vap(struct vap *v)
 {
 	size_t i;
+
+	if (v->overflowed)
+		return;
 
 	json_do_object("aspa", 1);
 	json_do_int("customer_asid", v->custasid);

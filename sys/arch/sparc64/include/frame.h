@@ -1,4 +1,4 @@
-/*	$OpenBSD: frame.h,v 1.9 2023/11/14 10:12:24 claudio Exp $	*/
+/*	$OpenBSD: frame.h,v 1.11 2024/04/08 20:07:53 miod Exp $	*/
 /*	$NetBSD: frame.h,v 1.9 2001/03/04 09:28:35 mrg Exp $ */
 
 /*
@@ -45,6 +45,20 @@
 #define _MACHINE_FRAME_H_
 
 /*
+ * CC64FSZ (C Compiler 64-bit Frame SiZe) is the size of a stack frame used
+ * by the compiler in 64-bit mode.  It is (16)*8; space for 8 ins, 8 outs.
+ */
+#define CC64FSZ		176
+
+/*
+ * v9 stacks all have a bias of 2047 added to the %sp and %fp, so you can easily
+ * detect it by testing the register for an odd value.  Why 2K-1 I don't know.
+ */
+#define BIAS	(2048-1)
+
+#if defined(_KERNEL) && !defined(_LOCORE)
+
+/*
  * Sparc v9 stack frame format.
  *
  * Note that the contents of each stack frame may be held only in
@@ -55,7 +69,6 @@
  * V9 frames have an odd bias, so you can tell a v9 frame from
  * a v8 frame by testing the stack pointer's lsb.
  */
-#if !defined(_LOCORE) && !defined(_LIBC)
 struct frame {
 	int64_t	fr_local[8];	/* space to save locals (%l0..%l7) */
 	int64_t	fr_arg[6];	/* space to save arguments (%i0..%i5) */
@@ -69,34 +82,14 @@ struct frame {
 };
 
 #define v9next_frame(f)		((struct frame*)(f->fr_fp+BIAS))
-#endif
 
 /*
- * CC64FSZ (C Compiler 64-bit Frame SiZe) is the size of a stack frame used
- * by the compiler in 64-bit mode.  It is (16)*8; space for 8 ins, 8 outs.
- */
-#define CC64FSZ		176
-
-/*
- * v9 stacks all have a bias of 2047 added to the %sp and %fp, so you can easily
- * detect it by testing the register for an odd value.  Why 2K-1 I don't know.
- */
-#define BIAS	(2048-1)
-
-#ifndef _LOCORE
-/*
- * The v9 trapframe.  Since we don't get a free register window with
- * each trap we need some way to keep track of pending traps.  We use
- * tf_fault to save the faulting address for memory faults and tf_kstack
- * to thread trapframes on the kernel stack(s).  If tf_kstack == 0 then
- * this is the lowest level trap; we came from user mode.
+ * The v9 trapframe.
  */
 struct trapframe {
 	int64_t		tf_tstate;	/* tstate register */
 	int64_t		tf_pc;		/* return pc */
 	int64_t		tf_npc;		/* return npc */
-	int64_t		tf_fault;	/* faulting addr -- need somewhere to save it */
-	int64_t		tf_kstack;	/* kernel stack of prev tf */
 	int		tf_y;		/* %y register -- 32-bits */
 	short		tf_tt;		/* What type of trap this was */
 	char		tf_pil;		/* What IRQ we're handling */
@@ -106,6 +99,7 @@ struct trapframe {
 	int64_t		tf_local[8];	/* local registers in trap's caller */
 	int64_t		tf_in[8];	/* in registers in trap's caller (for debug) */
 };
-#endif
+
+#endif	/* _KERNEL && !_LOCORE */
 
 #endif /* _MACHINE_FRAME_H_ */

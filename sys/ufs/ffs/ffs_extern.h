@@ -1,4 +1,4 @@
-/*	$OpenBSD: ffs_extern.h,v 1.46 2024/02/03 18:51:58 beck Exp $	*/
+/*	$OpenBSD: ffs_extern.h,v 1.50 2024/05/13 01:15:53 jsg Exp $	*/
 /*	$NetBSD: ffs_extern.h,v 1.4 1996/02/09 22:22:22 christos Exp $	*/
 
 /*
@@ -36,6 +36,7 @@
 #define FFS_CLUSTERWRITE	2	/* cluster writing enabled */
 #define FFS_REALLOCBLKS		3	/* block reallocation enabled */
 #define FFS_ASYNCFREE		4	/* asynchronous block freeing enabled */
+#define	FFS_MAX_SOFTDEPS	5	/* maximum structs before slowdown */
 #define	FFS_SD_TICKDELAY	6	/* ticks to pause during slowdown */
 #define	FFS_SD_WORKLIST_PUSH	7	/* # of worklist cleanups */
 #define	FFS_SD_BLK_LIMIT_PUSH	8	/* # of times block limit neared */
@@ -58,17 +59,18 @@
 	{ 0, 0 }, \
 	{ 0, 0 }, \
 	{ 0, 0 }, \
-	{ "sd_tickdelay", CTLTYPE_INT }, \
-	{ "sd_worklist_push", CTLTYPE_INT }, \
-	{ "sd_blk_limit_push", CTLTYPE_INT }, \
-	{ "sd_ino_limit_push", CTLTYPE_INT }, \
-	{ "sd_blk_limit_hit", CTLTYPE_INT }, \
-	{ "sd_ino_limit_hit", CTLTYPE_INT }, \
-	{ "sd_sync_limit_hit", CTLTYPE_INT }, \
-	{ "sd_indir_blk_ptrs", CTLTYPE_INT }, \
-	{ "sd_inode_bitmap", CTLTYPE_INT }, \
-	{ "sd_direct_blk_ptrs", CTLTYPE_INT }, \
-	{ "sd_dir_entry", CTLTYPE_INT }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
+	{ 0, 0 }, \
 	{ "dirhash_dirsize", CTLTYPE_INT }, \
 	{ "dirhash_maxmem", CTLTYPE_INT }, \
 	{ "dirhash_mem", CTLTYPE_INT }, \
@@ -149,7 +151,6 @@ int ffs_vptofh(struct vnode *, struct fid *);
 int ffs_sysctl(int *, u_int, void *, size_t *, void *, size_t,
 		    struct proc *);
 int ffs_sbupdate(struct ufsmount *, int);
-int ffs_cgupdate(struct ufsmount *, int);
 
 /* ffs_vnops.c */
 int ffs_read(void *);

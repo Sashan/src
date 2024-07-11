@@ -1,4 +1,4 @@
-/*	$OpenBSD: output_json.c,v 1.42 2024/01/31 11:23:20 claudio Exp $ */
+/*	$OpenBSD: output_json.c,v 1.44 2024/05/22 08:42:34 claudio Exp $ */
 
 /*
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
@@ -250,7 +250,6 @@ json_neighbor_full(struct peer *p)
 		json_do_string("role", log_policy(p->conf.role));
 
 	/* capabilities */
-	json_do_bool("announce_capabilities", p->conf.announce_capa);
 	json_neighbor_capabilities(&p->conf.capabilities);
 
 	json_do_end();
@@ -325,7 +324,7 @@ json_neighbor(struct peer *p, struct parse_result *res)
 		    log_addr(&p->conf.remote_addr), p->conf.remote_masklen);
 	if (p->state == STATE_ESTABLISHED) {
 		struct in_addr ina;
-		ina.s_addr = p->remote_bgpid;
+		ina.s_addr = htonl(p->remote_bgpid);
 		json_do_string("bgpid", inet_ntoa(ina));
 	}
 	json_do_string("state", statenames[p->state]);

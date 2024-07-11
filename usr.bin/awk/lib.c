@@ -1,4 +1,4 @@
-/*	$OpenBSD: lib.c,v 1.55 2023/11/28 20:54:38 millert Exp $	*/
+/*	$OpenBSD: lib.c,v 1.58 2024/06/03 00:55:05 millert Exp $	*/
 /****************************************************************
 Copyright (C) Lucent Technologies 1997
 All Rights Reserved
@@ -34,8 +34,6 @@ THIS SOFTWARE.
 #include <limits.h>
 #include <math.h>
 #include "awk.h"
-
-extern int u8_nextlen(const char *s);
 
 char	EMPTY[] = { '\0' };
 FILE	*infile	= NULL;
@@ -332,14 +330,16 @@ int readcsvrec(char **pbuf, int *pbufsize, FILE *inf, bool newflag) /* csv can h
 
 char *getargv(int n)	/* get ARGV[n] */
 {
+	Array *ap;
 	Cell *x;
 	char *s, temp[50];
-	extern Array *ARGVtab;
+	extern Cell *ARGVcell;
 
+	ap = (Array *)ARGVcell->sval;
 	snprintf(temp, sizeof(temp), "%d", n);
-	if (lookup(temp, ARGVtab) == NULL)
+	if (lookup(temp, ap) == NULL)
 		return NULL;
-	x = setsymtab(temp, "", 0.0, STR, ARGVtab);
+	x = setsymtab(temp, "", 0.0, STR, ap);
 	s = getsval(x);
 	DPRINTF("getargv(%d) returns |%s|\n", n, s);
 	return s;
@@ -755,7 +755,7 @@ void WARNING(const char *fmt, ...)
 	error();
 }
 
-void error()
+void error(void)
 {
 	extern Node *curnode;
 
@@ -845,10 +845,10 @@ int isclvar(const char *s)	/* is s of form var=something ? */
 {
 	const char *os = s;
 
-	if (!isalpha((uschar) *s) && *s != '_')
+	if (!isalpha((uschar)*s) && *s != '_')
 		return 0;
 	for ( ; *s; s++)
-		if (!(isalnum((uschar) *s) || *s == '_'))
+		if (!(isalnum((uschar)*s) || *s == '_'))
 			break;
 	return *s == '=' && s > os;
 }

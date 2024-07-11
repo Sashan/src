@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.174 2024/03/02 13:39:28 tb Exp $
+# $OpenBSD: Makefile,v 1.197 2024/07/09 07:39:21 beck Exp $
 
 LIB=	crypto
 LIBREBUILD=y
@@ -19,9 +19,9 @@ CFLAGS+= -Wall -Wundef
 CFLAGS+= -Werror -Wshadow
 .endif
 CFLAGS+= -DLIBRESSL_INTERNAL
-.ifdef NAMESPACE
+
 CFLAGS+= -DLIBRESSL_NAMESPACE -DLIBRESSL_CRYPTO_NAMESPACE
-.endif
+
 CFLAGS+= -DHAVE_FUNOPEN
 
 CFLAGS+= -I${LCRYPTO_SRC}
@@ -36,6 +36,7 @@ CFLAGS+= -I${LCRYPTO_SRC}/dh
 CFLAGS+= -I${LCRYPTO_SRC}/dsa
 CFLAGS+= -I${LCRYPTO_SRC}/ec
 CFLAGS+= -I${LCRYPTO_SRC}/ecdsa
+CFLAGS+= -I${LCRYPTO_SRC}/err
 CFLAGS+= -I${LCRYPTO_SRC}/evp
 CFLAGS+= -I${LCRYPTO_SRC}/hidden
 CFLAGS+= -I${LCRYPTO_SRC}/hmac
@@ -69,16 +70,11 @@ SRCS+= malloc-wrapper.c
 SRCS+= mem_clr.c
 SRCS+= mem_dbg.c
 SRCS+= o_fips.c
-SRCS+= o_init.c
-SRCS+= o_str.c
 
 # aes/
-SRCS+= aes_cfb.c
-SRCS+= aes_ctr.c
-SRCS+= aes_ecb.c
+SRCS+= aes.c
+SRCS+= aes_core.c
 SRCS+= aes_ige.c
-SRCS+= aes_ofb.c
-SRCS+= aes_wrap.c
 
 # asn1/
 SRCS+= a_bitstr.c
@@ -143,10 +139,7 @@ SRCS+= x_x509.c
 SRCS+= x_x509a.c
 
 # bf/
-SRCS+= bf_cfb64.c
-SRCS+= bf_ecb.c
-SRCS+= bf_ofb64.c
-SRCS+= bf_skey.c
+SRCS+= blowfish.c
 
 # bio/
 SRCS+= b_dump.c
@@ -208,17 +201,10 @@ SRCS+= bs_cbb.c
 SRCS+= bs_cbs.c
 
 # camellia/
-SRCS+= cmll_cfb.c
-SRCS+= cmll_ctr.c
-SRCS+= cmll_ecb.c
-SRCS+= cmll_ofb.c
+SRCS+= camellia.c
 
 # cast/
-SRCS+= c_cfb64.c
-SRCS+= c_ecb.c
-SRCS+= c_enc.c
-SRCS+= c_ofb64.c
-SRCS+= c_skey.c
+SRCS+= cast.c
 
 # chacha/
 SRCS+= chacha.c
@@ -274,12 +260,13 @@ SRCS+= cbc_enc.c
 SRCS+= cfb64ede.c
 SRCS+= cfb64enc.c
 SRCS+= cfb_enc.c
+SRCS+= des_enc.c
 SRCS+= ecb3_enc.c
 SRCS+= ecb_enc.c
 SRCS+= ede_cbcm_enc.c
 SRCS+= enc_read.c
-SRCS+= enc_writ.c
 SRCS+= fcrypt.c
+SRCS+= fcrypt_b.c
 SRCS+= ofb64ede.c
 SRCS+= ofb64enc.c
 SRCS+= ofb_enc.c
@@ -399,11 +386,7 @@ SRCS+= hm_pmeth.c
 SRCS+= hmac.c
 
 # idea/
-SRCS+= i_cbc.c
-SRCS+= i_cfb64.c
-SRCS+= i_ecb.c
-SRCS+= i_ofb64.c
-SRCS+= i_skey.c
+SRCS+= idea.c
 
 # kdf/
 SRCS+= hkdf_evp.c
@@ -498,6 +481,9 @@ SRCS+= rc2_skey.c
 SRCS+= rc2cfb64.c
 SRCS+= rc2ofb64.c
 
+# rc4/
+SRCS+= rc4.c
+
 # ripemd/
 SRCS+= ripemd.c
 
@@ -560,7 +546,7 @@ SRCS+= ui_openssl.c
 SRCS+= ui_util.c
 
 # whrlpool/
-SRCS+= wp_dgst.c
+SRCS+= whirlpool.c
 
 # x509/
 SRCS+= by_dir.c
@@ -647,7 +633,6 @@ SRCS+= x_all.c
 	${LCRYPTO_SRC}/engine \
 	${LCRYPTO_SRC}/err \
 	${LCRYPTO_SRC}/evp \
-	${LCRYPTO_SRC}/gost \
 	${LCRYPTO_SRC}/hkdf \
 	${LCRYPTO_SRC}/hmac \
 	${LCRYPTO_SRC}/idea \
@@ -722,7 +707,6 @@ HDRS=\
 	${LCRYPTO_SRC}/opensslv.h \
 	${LCRYPTO_SRC}/ossl_typ.h \
 	${LCRYPTO_SRC}/pem/pem.h \
-	${LCRYPTO_SRC}/pem/pem2.h \
 	${LCRYPTO_SRC}/pkcs12/pkcs12.h \
 	${LCRYPTO_SRC}/pkcs7/pkcs7.h \
 	${LCRYPTO_SRC}/poly1305/poly1305.h \
@@ -792,17 +776,6 @@ obj_dat.h: obj_mac.h ${SSL_OBJECTS}/obj_dat.pl
 .include "${.CURDIR}/arch/${MACHINE_CPU}/Makefile.inc"
 .else
 CFLAGS+=-DOPENSSL_NO_ASM
-SRCS+= aes_core.c
-SRCS+= aes_cbc.c
-SRCS+= bf_enc.c
-SRCS+= camellia.c
-SRCS+= cmll_cbc.c
-SRCS+= cmll_misc.c
-SRCS+= des_enc.c
-SRCS+= fcrypt_b.c
-SRCS+= rc4_enc.c
-SRCS+= rc4_skey.c
-SRCS+= wp_block.c
 .endif
 
 BUILDFIRST = ${GENERATED}

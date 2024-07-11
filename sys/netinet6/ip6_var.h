@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip6_var.h,v 1.114 2024/02/14 13:18:21 claudio Exp $	*/
+/*	$OpenBSD: ip6_var.h,v 1.119 2024/07/04 12:50:08 bluhm Exp $	*/
 /*	$KAME: ip6_var.h,v 1.33 2000/06/11 14:59:20 jinmei Exp $	*/
 
 /*
@@ -265,10 +265,12 @@ ip6stat_add(enum ip6stat_counters c, uint64_t v)
 	counters_add(ip6counters, c, v);
 }
 
-/* flags passed to ip6_output as last parameter */
-#define	IPV6_UNSPECSRC		0x01	/* allow :: as the source address */
-#define	IPV6_FORWARDING		0x02	/* most of IPv6 header exists */
-#define	IPV6_MINMTU		0x04	/* use minimum MTU (IPV6_USE_MIN_MTU) */
+/* flags passed to ip6_output or ip6_forward as last parameter */
+#define IPV6_UNSPECSRC		0x01	/* allow :: as the source address */
+#define IPV6_FORWARDING		0x02	/* most of IPv6 header exists */
+#define IPV6_MINMTU		0x04	/* use minimum MTU (IPV6_USE_MIN_MTU) */
+#define IPV6_REDIRECT		0x08	/* redirected by pf */
+#define IPV6_FORWARDING_IPSEC	0x10	/* only packets processed by IPsec */
 
 extern int ip6_mtudisc_timeout;		/* mtu discovery */
 extern struct rttimer_queue icmp6_mtudisc_timeout_q;
@@ -302,6 +304,7 @@ extern uint8_t	ip6_soiikey[IP6_SOIIKEY_LEN];
 extern const struct pr_usrreqs rip6_usrreqs;
 
 struct inpcb;
+struct ipsec_level;
 
 int	icmp6_ctloutput(int, struct socket *, int, int, struct mbuf *);
 
@@ -314,17 +317,17 @@ int	ip6_unknown_opt(struct mbuf **, u_int8_t *, int);
 int	ip6_get_prevhdr(struct mbuf *, int);
 int	ip6_nexthdr(struct mbuf *, int, int, int *);
 int	ip6_lasthdr(struct mbuf *, int, int, int *);
-int	ip6_mforward(struct ip6_hdr *, struct ifnet *, struct mbuf *);
+int	ip6_mforward(struct ip6_hdr *, struct ifnet *, struct mbuf *, int);
 int	ip6_process_hopopts(struct mbuf **, u_int8_t *, int, u_int32_t *,
 	     u_int32_t *);
 void	ip6_savecontrol(struct inpcb *, struct mbuf *, struct mbuf **);
 int	ip6_sysctl(int *, u_int, void *, size_t *, void *, size_t);
 
-void	ip6_forward(struct mbuf *, struct rtentry *, int);
+void	ip6_forward(struct mbuf *, struct route *, int);
 
 void	ip6_mloopback(struct ifnet *, struct mbuf *, struct sockaddr_in6 *);
 int	ip6_output(struct mbuf *, struct ip6_pktopts *, struct route *, int,
-	    struct ip6_moptions *, const u_char[]);
+	    struct ip6_moptions *, const struct ipsec_level *);
 int	ip6_fragment(struct mbuf *, struct mbuf_list *, int, u_char, u_long);
 int	ip6_ctloutput(int, struct socket *, int, int, struct mbuf *);
 int	ip6_raw_ctloutput(int, struct socket *, int, int, struct mbuf *);
@@ -363,7 +366,6 @@ int	rip6_send(struct socket *, struct mbuf *, struct mbuf *,
 int	rip6_sysctl(int *, u_int, void *, size_t *, void *, size_t);
 
 int	dest6_input(struct mbuf **, int *, int, int);
-int	none_input(struct mbuf **, int *, int);
 
 int	in6_pcbselsrc(const struct in6_addr **, struct sockaddr_in6 *,
 	    struct inpcb *, struct ip6_pktopts *);
@@ -376,7 +378,8 @@ u_int32_t ip6_randomflowlabel(void);
 
 #ifdef IPSEC
 struct tdb;
-int	ip6_output_ipsec_lookup(struct mbuf *, const u_char[], struct tdb **);
+int	ip6_output_ipsec_lookup(struct mbuf *, const struct ipsec_level *,
+	    struct tdb **);
 int	ip6_output_ipsec_send(struct tdb *, struct mbuf *, struct route *,
 	    int, int);
 #endif /* IPSEC */

@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_pdaemon.c,v 1.109 2023/10/27 19:18:53 mpi Exp $	*/
+/*	$OpenBSD: uvm_pdaemon.c,v 1.114 2024/05/01 12:54:27 mpi Exp $	*/
 /*	$NetBSD: uvm_pdaemon.c,v 1.23 2000/08/20 10:24:14 bjh21 Exp $	*/
 
 /*
@@ -107,7 +107,7 @@ void		uvmpd_scan_inactive(struct uvm_pmalloc *,
 		    struct uvm_constraint_range *, struct pglist *);
 void		uvmpd_tune(void);
 void		uvmpd_drop(struct pglist *);
-void		uvmpd_dropswap(struct vm_page *);
+int		uvmpd_dropswap(struct vm_page *);
 
 /*
  * uvm_wait: wait (sleep) for the page daemon to free some pages
@@ -165,33 +165,27 @@ uvm_wait(const char *wmsg)
 
 /*
  * uvmpd_tune: tune paging parameters
- *
- * => called whenever memory is added to (or removed from?) the system
- * => caller must call with page queues locked
  */
-
 void
 uvmpd_tune(void)
 {
+	int val;
 
-	uvmexp.freemin = uvmexp.npages / 30;
+	val = uvmexp.npages / 30;
 
-	/* between 16k and 512k */
 	/* XXX:  what are these values good for? */
-	uvmexp.freemin = max(uvmexp.freemin, (16*1024) >> PAGE_SHIFT);
-#if 0
-	uvmexp.freemin = min(uvmexp.freemin, (512*1024) >> PAGE_SHIFT);
-#endif
+	val = max(val, (16*1024) >> PAGE_SHIFT);
 
 	/* Make sure there's always a user page free. */
-	if (uvmexp.freemin < uvmexp.reserve_kernel + 1)
-		uvmexp.freemin = uvmexp.reserve_kernel + 1;
+	if (val < uvmexp.reserve_kernel + 1)
+		val = uvmexp.reserve_kernel + 1;
+	uvmexp.freemin = val;
 
-	uvmexp.freetarg = (uvmexp.freemin * 4) / 3;
-	if (uvmexp.freetarg <= uvmexp.freemin)
-		uvmexp.freetarg = uvmexp.freemin + 1;
-
-	/* uvmexp.inactarg: computed in main daemon loop */
+	/* Calculate free target. */
+	val = (uvmexp.freemin * 4) / 3;
+	if (val <= uvmexp.freemin)
+		val = uvmexp.freemin + 1;
+	uvmexp.freetarg = val;
 
 	uvmexp.wiredmax = uvmexp.npages / 3;
 }
@@ -211,15 +205,12 @@ uvm_pageout(void *arg)
 {
 	struct uvm_constraint_range constraint;
 	struct uvm_pmalloc *pma;
-	int npages = 0;
+	int free;
 
 	/* ensure correct priority and set paging parameters... */
 	uvm.pagedaemon_proc = curproc;
 	(void) spl0();
-	uvm_lock_pageq();
-	npages = uvmexp.npages;
 	uvmpd_tune();
-	uvm_unlock_pageq();
 
 	for (;;) {
 		long size;
@@ -245,44 +236,40 @@ uvm_pageout(void *arg)
 			} else
 				constraint = no_constraint;
 		}
-
+		free = uvmexp.free - BUFPAGES_DEFICIT;
 		uvm_unlock_fpageq();
 
 		/*
 		 * now lock page queues and recompute inactive count
 		 */
 		uvm_lock_pageq();
-		if (npages != uvmexp.npages) {	/* check for new pages? */
-			npages = uvmexp.npages;
-			uvmpd_tune();
-		}
-
 		uvmexp.inactarg = (uvmexp.active + uvmexp.inactive) / 3;
 		if (uvmexp.inactarg <= uvmexp.freetarg) {
 			uvmexp.inactarg = uvmexp.freetarg + 1;
 		}
+		uvm_unlock_pageq();
 
 		/* Reclaim pages from the buffer cache if possible. */
 		size = 0;
 		if (pma != NULL)
 			size += pma->pm_size >> PAGE_SHIFT;
-		if (uvmexp.free - BUFPAGES_DEFICIT < uvmexp.freetarg)
-			size += uvmexp.freetarg - (uvmexp.free -
-			    BUFPAGES_DEFICIT);
+		if (free < uvmexp.freetarg)
+			size += uvmexp.freetarg - free;
 		if (size == 0)
 			size = 16; /* XXX */
-		uvm_unlock_pageq();
+
 		(void) bufbackoff(&constraint, size * 2);
 #if NDRM > 0
 		drmbackoff(size * 2);
 #endif
-		uvm_lock_pageq();
+		uvm_pmr_cache_drain();
 
 		/*
 		 * scan if needed
 		 */
-		if (pma != NULL ||
-		    ((uvmexp.free - BUFPAGES_DEFICIT) < uvmexp.freetarg) ||
+		uvm_lock_pageq();
+		free = uvmexp.free - BUFPAGES_DEFICIT;
+		if (pma != NULL || (free < uvmexp.freetarg) ||
 		    ((uvmexp.inactive + BUFPAGES_INACT) < uvmexp.inactarg)) {
 			uvmpd_scan(pma, &constraint);
 		}
@@ -397,23 +384,29 @@ uvmpd_trylockowner(struct vm_page *pg)
 	return slock;
 }
 
-
 /*
  * uvmpd_dropswap: free any swap allocated to this page.
  *
  * => called with owner locked.
+ * => return 1 if a page had an associated slot.
  */
-void
+int
 uvmpd_dropswap(struct vm_page *pg)
 {
 	struct vm_anon *anon = pg->uanon;
+	int slot, result = 0;
 
 	if ((pg->pg_flags & PQ_ANON) && anon->an_swslot) {
 		uvm_swap_free(anon->an_swslot, 1);
 		anon->an_swslot = 0;
+		result = 1;
 	} else if (pg->pg_flags & PQ_AOBJ) {
-		uao_dropswap(pg->uobject, pg->offset >> PAGE_SHIFT);
+		slot = uao_dropswap(pg->uobject, pg->offset >> PAGE_SHIFT);
+		if (slot)
+			result = 1;
 	}
+
+	return result;
 }
 
 /*
@@ -956,21 +949,9 @@ uvmpd_scan(struct uvm_pmalloc *pma, struct uvm_constraint_range *constraint)
 		 * to this page so that other pages can be paged out.
 		 */
 		if (swap_shortage > 0) {
-			if ((p->pg_flags & PQ_ANON) && p->uanon->an_swslot) {
-				uvm_swap_free(p->uanon->an_swslot, 1);
-				p->uanon->an_swslot = 0;
+			if (uvmpd_dropswap(p)) {
 				atomic_clearbits_int(&p->pg_flags, PG_CLEAN);
 				swap_shortage--;
-			}
-			if (p->pg_flags & PQ_AOBJ) {
-				int slot = uao_set_swslot(p->uobject,
-					p->offset >> PAGE_SHIFT, 0);
-				if (slot) {
-					uvm_swap_free(slot, 1);
-					atomic_clearbits_int(&p->pg_flags,
-					    PG_CLEAN);
-					swap_shortage--;
-				}
 			}
 		}
 

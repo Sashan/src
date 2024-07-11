@@ -1,4 +1,4 @@
-/*	$OpenBSD: intr.c,v 1.63 2022/10/21 18:55:42 miod Exp $	*/
+/*	$OpenBSD: intr.c,v 1.67 2024/03/29 21:29:34 miod Exp $	*/
 /*	$NetBSD: intr.c,v 1.39 2001/07/19 23:38:11 eeh Exp $ */
 
 /*
@@ -67,53 +67,9 @@ struct intrhand *intrlev[MAXINTNUM];
 
 #define INTR_DEVINO	0x8000
 
-void	strayintr(const struct trapframe *, int);
-int	softintr(void *);
 int	intr_handler(struct trapframe *, struct intrhand *);
 int	intr_list_handler(void *);
 void	intr_ack(struct intrhand *);
-
-/*
- * Stray interrupt handler.  Clear it if possible.
- * If not, and if we get 10 interrupts in 10 seconds, panic.
- */
-int ignore_stray = 1;
-int straycnt[16];
-
-void
-strayintr(const struct trapframe *fp, int vectored)
-{
-	static int straytime, nstray;
-	int timesince;
-#if 0
-	extern int swallow_zsintrs;
-#endif
-
-	if (fp->tf_pil < 16)
-		straycnt[(int)fp->tf_pil]++;
-
-	if (ignore_stray)
-		return;
-
-	/* If we're in polled mode ignore spurious interrupts */
-	if ((fp->tf_pil == PIL_SER) /* && swallow_zsintrs */) return;
-
-	printf("stray interrupt ipl %u pc=%llx npc=%llx pstate=%llb "
-	    "vectored=%d\n", fp->tf_pil, fp->tf_pc, fp->tf_npc,
-	    fp->tf_tstate >> TSTATE_PSTATE_SHIFT, PSTATE_BITS, vectored);
-
-	timesince = gettime() - straytime;
-	if (timesince <= 10) {
-		if (++nstray > 500)
-			panic("crazy interrupts");
-	} else {
-		straytime = gettime();
-		nstray = 1;
-	}
-#ifdef DDB
-	db_enter();
-#endif
-}
 
 int
 intr_handler(struct trapframe *tf, struct intrhand *ih)
@@ -137,13 +93,6 @@ intr_handler(struct trapframe *tf, struct intrhand *ih)
 #endif
 	return rc;
 }
-
-/*
- * Level 1 software interrupt (could also be SBus level 1 interrupt).
- * Three possible reasons:
- *	Network software interrupt
- *	Soft clock interrupt
- */
 
 /*
  * PCI devices can share interrupts so we need to have
@@ -183,11 +132,10 @@ intr_ack(struct intrhand *ih)
 }
 
 /*
- * Attach an interrupt handler to the vector chain for the given level.
- * This is not possible if it has been taken away as a fast vector.
+ * Attach an interrupt handler to the vector chain.
  */
 void
-intr_establish(int level, struct intrhand *ih)
+intr_establish(struct intrhand *ih)
 {
 	struct intrhand *q;
 	u_int64_t m, id;
@@ -195,12 +143,7 @@ intr_establish(int level, struct intrhand *ih)
 
 	s = splhigh();
 
-	/*
-	 * This is O(N^2) for long chains, but chains are never long
-	 * and we do want to preserve order.
-	 */
-	ih->ih_pil = level; /* XXXX caller should have done this before */
-	ih->ih_pending = 0; /* XXXX caller should have done this before */
+	ih->ih_pending = NULL;
 	ih->ih_next = NULL;
 	if (ih->ih_cpu == NULL)
 		ih->ih_cpu = curcpu();
@@ -346,7 +289,7 @@ softintr_establish(int level, void (*fun)(void *), void *arg)
 	ih->ih_fun = (int (*)(void *))fun;	/* XXX */
 	ih->ih_arg = arg;
 	ih->ih_pil = level;
-	ih->ih_pending = 0;
+	ih->ih_pending = NULL;
 	ih->ih_ack = NULL;
 	ih->ih_clr = NULL;
 	return (ih);
@@ -365,7 +308,7 @@ softintr_schedule(void *cookie)
 {
 	struct intrhand *ih = cookie;
 
-	send_softint(-1, ih->ih_pil, ih);
+	send_softint(ih->ih_pil, ih);
 }
 
 #ifdef DIAGNOSTIC

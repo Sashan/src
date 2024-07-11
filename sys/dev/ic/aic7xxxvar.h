@@ -1,4 +1,4 @@
-/*	$OpenBSD: aic7xxxvar.h,v 1.38 2022/10/21 17:45:40 kn Exp $	*/
+/*	$OpenBSD: aic7xxxvar.h,v 1.40 2024/05/29 01:11:53 jsg Exp $	*/
 /*
  * Core definitions and data structures shareable across OS platforms.
  *
@@ -38,7 +38,7 @@
  * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGES.
  *
- * $Id: aic7xxxvar.h,v 1.38 2022/10/21 17:45:40 kn Exp $
+ * $Id: aic7xxxvar.h,v 1.40 2024/05/29 01:11:53 jsg Exp $
  *
  * $FreeBSD: src/sys/dev/aic7xxx/aic7xxx.h,v 1.50 2003/12/17 00:02:09 gibbs Exp $
  */
@@ -1164,15 +1164,6 @@ struct ahc_pci_identity {
 extern const struct ahc_pci_identity ahc_pci_ident_table[];
 
 /***************************** VL/EISA Declarations ***************************/
-struct aic7770_identity {
-	uint32_t		 full_id;
-	uint32_t		 id_mask;
-	const char		*name;
-	ahc_device_setup_t	*setup;
-};
-extern struct aic7770_identity aic7770_ident_table[];
-extern const int ahc_num_aic7770_devs;
-
 #define AHC_EISA_SLOT_OFFSET	0xc00
 #define AHC_EISA_IOSIZE		0x100
 
@@ -1184,14 +1175,7 @@ void			ahc_busy_tcl(struct ahc_softc *, u_int, u_int);
 
 /***************************** PCI Front End *********************************/
 const struct ahc_pci_identity	*ahc_find_pci_device(pcireg_t, pcireg_t, u_int);
-int			 ahc_pci_config(struct ahc_softc *,
-			    struct ahc_pci_identity *);
 int			 ahc_pci_test_register_access(struct ahc_softc *);
-
-/*************************** EISA/VL Front End ********************************/
-struct aic7770_identity *aic7770_find_device(uint32_t);
-int			 aic7770_config(struct ahc_softc *,
-			    struct aic7770_identity *, u_int);
 
 /************************** SCB and SCB queue management **********************/
 int		ahc_probe_scbs(struct ahc_softc *);

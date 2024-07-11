@@ -1,4 +1,4 @@
-/*	$OpenBSD: options.c,v 1.107 2023/12/09 23:00:11 jca Exp $	*/
+/*	$OpenBSD: options.c,v 1.115 2024/05/10 20:28:31 millert Exp $	*/
 /*	$NetBSD: options.c,v 1.6 1996/03/26 23:54:18 mrg Exp $	*/
 
 /*-
@@ -228,24 +228,29 @@ FSUB fsub[] = {
 /* 9: gzip, to detect failure to use -z */
 	{NULL, 0, 4, 0, 0, 0, 0, gzip_id},
 /* 10: POSIX PAX */
-	{"pax", 5120, BLKMULT, 0, 1, BLKMULT, 0, ustar_id, no_op,
+	{"pax", 5120, BLKMULT, 0, 1, BLKMULT, 0, pax_id, no_op,
 	ustar_rd, tar_endrd, no_op, pax_wr, tar_endwr, tar_trail,
-	tar_opt},
+	pax_opt},
 #endif
 };
 #define	F_OCPIO	0	/* format when called as cpio -6 */
 #define	F_ACPIO	1	/* format when called as cpio -c */
 #define	F_CPIO	3	/* format when called as cpio */
 #define F_OTAR	4	/* format when called as tar -o */
-#define F_TAR	5	/* format when called as tar */
-#define DEFLT	5	/* default write format from list above */
+#ifdef SMALL
+# define F_TAR	5	/* default write format when called as tar: ustar */
+# define DEFLT	5	/* default write format when called as pax: ustar */
+#else
+# define F_TAR	10	/* default write format when called as tar: pax */
+# define DEFLT	10	/* default write format when called as pax: pax */
+#endif
 
 /*
  * ford is the archive search order used by get_arc() to determine what kind
  * of archive we are dealing with. This helps to properly id archive formats
  * some formats may be subsets of others....
  */
-int ford[] = {5, 4, 9, 8, 7, 6, 3, 2, 1, 0, -1};
+int ford[] = {10, 5, 4, 9, 8, 7, 6, 3, 2, 1, 0, -1};
 
 /*
  * Do we have -C anywhere and what is it?
@@ -272,21 +277,20 @@ options(int argc, char **argv)
 	if (strcmp(NM_TAR, argv0) == 0) {
 		op_mode = OP_TAR;
 		tar_options(argc, argv);
-		return;
-	}
 #ifndef NOCPIO
-	else if (strcmp(NM_CPIO, argv0) == 0) {
+	} else if (strcmp(NM_CPIO, argv0) == 0) {
 		op_mode = OP_CPIO;
 		cpio_options(argc, argv);
-		return;
-	}
 #endif /* !NOCPIO */
-	/*
-	 * assume pax as the default
-	 */
-	argv0 = NM_PAX;
-	op_mode = OP_PAX;
-	pax_options(argc, argv);
+	} else {
+		argv0 = NM_PAX;
+		op_mode = OP_PAX;
+		pax_options(argc, argv);
+	}
+
+	/* Line-buffer the file list output as needed. */
+	if (listf != stderr)
+		setvbuf(listf, NULL, _IOLBF, 0);
 }
 
 /*
@@ -721,9 +725,10 @@ static void
 tar_options(int argc, char **argv)
 {
 	int c;
-	int Oflag = 0;
 	int nincfiles = 0;
 	int incfiles_max = 0;
+	unsigned int i;
+	unsigned int format = F_TAR;
 	struct incfile {
 		char *file;
 		char *dir;
@@ -739,7 +744,7 @@ tar_options(int argc, char **argv)
 	 * process option flags
 	 */
 	while ((c = getoldopt(argc, argv,
-	    "b:cef:hjmopqruts:vwxzBC:HI:LNOPXZ014578")) != -1) {
+	    "b:cef:hjmopqruts:vwxzBC:F:HI:LNOPXZ014578")) != -1) {
 		switch (c) {
 		case 'b':
 			/*
@@ -788,10 +793,10 @@ tar_options(int argc, char **argv)
 			pmtime = 0;
 			break;
 		case 'O':
-			Oflag = 1;
+			format = F_OTAR;
 			break;
 		case 'o':
-			Oflag = 2;
+			format = F_OTAR;
 			tar_nodir = 1;
 			break;
 		case 'p':
@@ -863,6 +868,24 @@ tar_options(int argc, char **argv)
 		case 'C':
 			havechd++;
 			chdname = optarg;
+			break;
+		case 'F':
+			for (i = 0; i < sizeof(fsub)/sizeof(FSUB); ++i)
+				if (fsub[i].name != NULL &&
+				    strcmp(fsub[i].name, optarg) == 0)
+					break;
+			if (i < sizeof(fsub)/sizeof(FSUB)) {
+				format = i;
+				break;
+			}
+			paxwarn(1, "Unknown -F format: %s", optarg);
+			(void)fputs("tar: Known -F formats are:", stderr);
+			for (i = 0; i < (sizeof(fsub)/sizeof(FSUB)); ++i)
+				if (fsub[i].name != NULL)
+					(void)fprintf(stderr, " %s",
+					    fsub[i].name);
+			(void)fputs("\n\n", stderr);
+			tar_usage();
 			break;
 		case 'H':
 			/*
@@ -1038,7 +1061,7 @@ tar_options(int argc, char **argv)
 		break;
 	case ARCHIVE:
 	case APPND:
-		frmt = &(fsub[Oflag ? F_OTAR : F_TAR]);
+		frmt = &fsub[format];
 
 		if (chdname != NULL) {	/* initial chdir() */
 			if (ftree_add(chdname, 1) < 0)
@@ -1700,11 +1723,12 @@ void
 tar_usage(void)
 {
 	(void)fputs(
-	    "usage: tar {crtux}[014578befHhjLmNOoPpqsvwXZz]\n"
-	    "           [blocking-factor | archive | replstr] [-C directory] [-I file]\n"
-	    "           [file ...]\n"
+	    "usage: tar {crtux}[014578beFfHhjLmNOoPpqsvwXZz]\n"
+	    "           [blocking-factor | format | archive | replstr]\n"
+	    "           [-C directory] [-I file] [file ...]\n"
 	    "       tar {-crtux} [-014578eHhjLmNOoPpqvwXZz] [-b blocking-factor]\n"
-	    "           [-C directory] [-f archive] [-I file] [-s replstr] [file ...]\n",
+	    "           [-C directory] [-F format] [-f archive] [-I file]\n"
+	    "           [-s replstr] [file ...]\n",
 	    stderr);
 	exit(1);
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: dsp.c,v 1.18 2021/07/05 08:29:59 ratchov Exp $	*/
+/*	$OpenBSD: dsp.c,v 1.21 2024/04/22 14:11:35 ratchov Exp $	*/
 /*
  * Copyright (c) 2008-2012 Alexandre Ratchov <alex@caoua.org>
  *
@@ -19,23 +19,38 @@
 #include "utils.h"
 
 const int aparams_ctltovol[128] = {
-	    0,
-	  256,	  266,	  276,	  287,	  299,	  310,	  323,	  335,
-	  348,	  362,	  376,	  391,	  406,	  422,	  439,	  456,
-	  474,	  493,	  512,	  532,	  553,	  575,	  597,	  621,
-	  645,	  670,	  697,	  724,	  753,	  782,	  813,	  845,
-	  878,	  912,	  948,	  985,	 1024,	 1064,	 1106,	 1149,
-	 1195,	 1241,	 1290,	 1341,	 1393,	 1448,	 1505,	 1564,
-	 1625,	 1689,	 1756,	 1825,	 1896,	 1971,	 2048,	 2128,
-	 2212,	 2299,	 2389,	 2483,	 2580,	 2682,	 2787,	 2896,
-	 3010,	 3128,	 3251,	 3379,	 3511,	 3649,	 3792,	 3941,
-	 4096,	 4257,	 4424,	 4598,	 4778,	 4966,	 5161,	 5363,
-	 5574,	 5793,	 6020,	 6256,	 6502,	 6757,	 7023,	 7298,
-	 7585,	 7883,	 8192,	 8514,	 8848,	 9195,	 9556,	 9931,
-	10321,	10726,	11148,	11585,	12040,	12513,	13004,	13515,
-	14045,	14596,	15170,	15765,	16384,	17027,	17696,	18390,
-	19112,	19863,	20643,	21453,	22295,	23170,	24080,	25025,
-	26008,	27029,	28090,	29193,	30339,	31530,	32768
+	        0,     65536,     68109,     70783,
+	    73562,     76450,     79451,     82570,
+	    85812,     89181,     92682,     96321,
+	   100102,    104032,    108116,    112361,
+	   116772,    121356,    126121,    131072,
+	   136218,    141566,    147123,    152899,
+	   158902,    165140,    171624,    178361,
+	   185364,    192641,    200204,    208064,
+	   216232,    224721,    233544,    242713,
+	   252241,    262144,    272436,    283131,
+	   294247,    305799,    317804,    330281,
+	   343247,    356723,    370728,    385282,
+	   400408,    416128,    432465,    449443,
+	   467088,    485425,    504482,    524288,
+	   544871,    566262,    588493,    611597,
+	   635608,    660561,    686495,    713446,
+	   741455,    770564,    800816,    832255,
+	   864929,    898885,    934175,    970850,
+	  1008965,   1048576,   1089742,   1132525,
+	  1176987,   1223194,   1271216,   1321123,
+	  1372989,   1426892,   1482910,   1541128,
+	  1601632,   1664511,   1729858,   1797771,
+	  1868350,   1941700,   2017930,   2097152,
+	  2179485,   2265049,   2353974,   2446389,
+	  2542432,   2642246,   2745978,   2853783,
+	  2965821,   3082257,   3203264,   3329021,
+	  3459716,   3595542,   3736700,   3883400,
+	  4035859,   4194304,   4358969,   4530099,
+	  4707947,   4892777,   5084864,   5284492,
+	  5491957,   5707567,   5931642,   6164513,
+	  6406527,   6658043,   6919432,   7191084,
+	  7473400,   7766800,   8071719,   8388608
 };
 
 const int resamp_filt[RESAMP_LENGTH / RESAMP_STEP + 1] = {
@@ -269,29 +284,49 @@ aparams_native(struct aparams *par)
 }
 
 /*
- * resample the given number of frames
+ * Return the number of input and output frame that would be consumed
+ * by resamp_do(p, *icnt, *ocnt).
  */
 void
-resamp_do(struct resamp *p, adata_t *in, adata_t *out, int todo)
+resamp_getcnt(struct resamp *p, int *icnt, int *ocnt)
+{
+	long long idiff, odiff;
+	int cdiff;
+
+	cdiff = p->oblksz - p->diff;
+	idiff = (long long)*icnt * p->oblksz;
+	odiff = (long long)*ocnt * p->iblksz;
+	if (odiff - idiff >= cdiff)
+		*ocnt = (idiff + cdiff + p->iblksz - 1) / p->iblksz;
+	else
+		*icnt = (odiff + p->diff) / p->oblksz;
+}
+
+/*
+ * Resample the given number of frames. The number of output frames
+ * must match the corresponding number of input frames. Either always
+ * use icnt and ocnt such that:
+ *
+ *	 icnt * oblksz = ocnt * iblksz
+ *
+ * or use resamp_getcnt() to calculate the proper numbers.
+ */
+void
+resamp_do(struct resamp *p, adata_t *in, adata_t *out, int icnt, int ocnt)
 {
 	unsigned int nch;
 	adata_t *idata;
 	unsigned int oblksz;
+	unsigned int ifr;
 	int s, ds, diff;
 	adata_t *odata;
 	unsigned int iblksz;
+	unsigned int ofr;
 	unsigned int c;
 	int64_t f[NCHAN_MAX];
 	adata_t *ctxbuf, *ctx;
 	unsigned int ctx_start;
 	int q, qi, qf, n;
-
-#ifdef DEBUG
-	if (todo % p->iblksz != 0) {
-		log_puts("resamp_do: partial blocks not supported\n");
-		panic();
-	}
-#endif
 
 	/*
 	 * Partially copy structures into local variables, to avoid
@@ -300,16 +335,32 @@ resamp_do(struct resamp *p, adata_t *in, adata_t *out, int todo)
 	 */
 	idata = in;
 	odata = out;
-	diff = p->oblksz;
+	diff = p->diff;
 	iblksz = p->iblksz;
 	oblksz = p->oblksz;
 	ctxbuf = p->ctx;
 	ctx_start = p->ctx_start;
 	nch = p->nch;
+	ifr = icnt;
+	ofr = ocnt;
 
+	/*
+	 * Start conversion.
+	 */
+#ifdef DEBUG
+	if (log_level >= 4) {
+		log_puts("resamp: copying ");
+		log_puti(ifr);
+		log_puts(" -> ");
+		log_putu(ofr);
+		log_puts(" frames, diff = ");
+		log_puti(diff);
+		log_puts("\n");
+	}
+#endif
 	for (;;) {
 		if (diff >= oblksz) {
-			if (todo == 0)
+			if (ifr == 0)
 				break;
 			ctx_start = (ctx_start - 1) & (RESAMP_NCTX - 1);
 			ctx = ctxbuf + ctx_start;
@@ -318,8 +369,10 @@ resamp_do(struct resamp *p, adata_t *in, adata_t *out, int todo)
 				ctx += RESAMP_NCTX;
 			}
 			diff -= oblksz;
-			todo--;
+			ifr--;
 		} else {
+			if (ofr == 0)
+				break;
 
 			for (c = 0; c < nch; c++)
 				f[c] = 0;
@@ -361,11 +414,40 @@ resamp_do(struct resamp *p, adata_t *in, adata_t *out, int todo)
 #endif
 				*odata++ = s;
 			}
+
 			diff += iblksz;
+			ofr--;
 		}
 	}
-
+	p->diff = diff;
 	p->ctx_start = ctx_start;
+#ifdef DEBUG
+	if (ifr != 0) {
+		log_puts("resamp_do: ");
+		log_puti(ifr);
+		log_puts(": too many input frames\n");
+		panic();
+	}
+	if (ofr != 0) {
+		log_puts("resamp_do: ");
+		log_puti(ofr);
+		log_puts(": too many output frames\n");
+		panic();
+	}
+#endif
+}
+
+static unsigned int
+uint_gcd(unsigned int a, unsigned int b)
+{
+	unsigned int r;
+
+	while (b > 0) {
+		r = a % b;
+		a = b;
+		b = r;
+	}
+	return a;
 }
 
 /*
@@ -375,8 +457,26 @@ void
 resamp_init(struct resamp *p, unsigned int iblksz,
     unsigned int oblksz, int nch)
 {
+	unsigned int g;
+
+	/*
+	 * reduce iblksz/oblksz fraction
+	 */
+	g = uint_gcd(iblksz, oblksz);
+	iblksz /= g;
+	oblksz /= g;
+
+	/*
+	 * ensure weird rates don't cause integer overflow
+	 */
+	while (iblksz > ADATA_UNIT || oblksz > ADATA_UNIT) {
+		iblksz >>= 1;
+		oblksz >>= 1;
+	}
+
 	p->iblksz = iblksz;
 	p->oblksz = oblksz;
+	p->diff = 0;
 	p->nch = nch;
 	p->ctx_start = 0;
 	memset(p->ctx, 0, sizeof(p->ctx));
@@ -734,33 +834,35 @@ cmap_init(struct cmap *p,
     int imin, int imax, int isubmin, int isubmax,
     int omin, int omax, int osubmin, int osubmax)
 {
-	int cmin, cmax;
+	int inch, onch, nch;
 
-	cmin = -NCHAN_MAX;
-	if (osubmin > cmin)
-		cmin = osubmin;
-	if (omin > cmin)
-		cmin = omin;
-	if (isubmin > cmin)
-		cmin = isubmin;
-	if (imin > cmin)
-		cmin = imin;
+	/*
+	 * Ignore channels outside of the available sets
+	 */
+	if (isubmin < imin)
+		isubmin = imin;
+	if (isubmax > imax)
+		isubmax = imax;
+	if (osubmin < omin)
+		osubmin = omin;
+	if (osubmax > omax)
+		osubmax = omax;
 
-	cmax = NCHAN_MAX;
-	if (osubmax < cmax)
-		cmax = osubmax;
-	if (omax < cmax)
-		cmax = omax;
-	if (isubmax < cmax)
-		cmax = isubmax;
-	if (imax < cmax)
-		cmax = imax;
+	/*
+	 * Shrink the input or the output subset to make both subsets of
+	 * the same size
+	 */
+	inch = isubmax - isubmin + 1;
+	onch = osubmax - osubmin + 1;
+	nch = (inch < onch) ? inch : onch;
+	isubmax = isubmin + nch - 1;
+	osubmax = osubmin + nch - 1;
 
-	p->ostart = cmin - omin;
-	p->onext = omax - cmax;
-	p->istart = cmin - imin;
-	p->inext = imax - cmax;
-	p->nch = cmax - cmin + 1;
+	p->ostart = osubmin - omin;
+	p->onext = omax - osubmax;
+	p->istart = isubmin - imin;
+	p->inext = imax - isubmax;
+	p->nch = nch;
 #ifdef DEBUG
 	if (log_level >= 3) {
 		log_puts("cmap: nch = ");
