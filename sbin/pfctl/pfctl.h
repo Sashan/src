@@ -68,10 +68,6 @@ struct pfr_uktable {
 				pfrukt_entry;
 };
 
-#define pfrukt_t	pfrukt_kt.pfrkt_ts.pfrts_t
-#define pfrukt_name	pfrukt_kt.pfrkt_t.pfrt_name
-#define pfrukt_anchor	pfrukt_kt.pfrkt_t.pfrt_anchor
-
 extern struct pfr_ktablehead pfr_ktables;
 
 SLIST_HEAD(pfr_anchors, pfr_anchoritem);

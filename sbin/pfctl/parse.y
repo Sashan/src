@@ -4016,27 +4016,50 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 		fprintf(stderr, "%s:%d: skipping duplicate table checks"
 		    " for <%s>\n", file->name, yylval.lineno, name);
 
-	/*
-	 * postpone definition of non-root tables to moment
-	 * when path is fully resolved.
-	 */
-	if (pf->asd > 0) {
-		ukt = calloc(1, sizeof(struct pfr_uktable));
-		if (ukt == NULL) {
-			DBGPRINT(
-			    "%s:%d: not enough memory for <%s>\n", file->name,
-			    yylval.lineno, name);
+	if (!(pf->opts & PF_OPT_NOACTION)) {
+		/*
+		 * postpone definition of non-root tables to moment
+		 * when path is fully resolved.
+		 */
+		if (pf->asd > 0) {
+			ukt = calloc(1, sizeof(struct pfr_uktable));
+			if (ukt == NULL) {
+				DBGPRINT(
+				    "%s:%d: not enough memory for <%s>\n",
+				    file->name, yylval.lineno, name);
+				goto _error;
+			}
+		} else
+			ukt = NULL;
+
+		if (pfctl_define_table(name, opts->flags, opts->init_addr,
+		    pf->anchor->path, &ab, pf->anchor->ruleset.tticket, ukt)) {
+			yyerror("cannot define table %s: %s", name,
+			pf_strerror(errno));
 			goto _error;
 		}
-	} else
-		ukt = NULL;
 
-	if (!(pf->opts & PF_OPT_NOACTION) &&
-	    pfctl_define_table(name, opts->flags, opts->init_addr,
-	    pf->anchor->path, &ab, pf->anchor->ruleset.tticket, ukt)) {
-		yyerror("cannot define table %s: %s", name,
-		    pf_strerror(errno));
-		goto _error;
+		if (ukt != NULL) {
+			ukt->pfrukt_init_addr = opts->init_addr;
+			if (RB_INSERT(pfr_ktablehead, &pfr_ktables,
+			    &ukt->pfrukt_kt) != NULL) {
+				/*
+				 * I think this should not happen, because
+				 * pfctl_define_table() above  does the same
+				 * check effectively.
+				 */
+				DBGPRINT(
+				    "%s:%d table %s already exists in %s\n",
+				    file->name, yylval.lineno,
+				    ukt->pfrukt_name, pf->anchor->path);
+				free(ukt);
+				goto _error;
+			}
+			DBGPRINT("%s %s@%s inserted to tree\n",
+			    __func__, ukt->pfrukt_name, pf->anchor->path);
+
+		} else
+			DBGPRINT("%s ukt is null\n", __func__);
 	}
 
 	if (ukt != NULL) {

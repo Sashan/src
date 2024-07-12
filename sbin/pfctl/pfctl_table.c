@@ -542,7 +542,7 @@ pfctl_define_table(char *name, int flags, int addrs, const char *anchor,
 		bzero(&tbl_buf, sizeof(tbl_buf));
 		tbl = &tbl_buf;
 	} else {
-		if (ab->pfrb_size != 0) {
+		 if (ab->pfrb_size != 0) {
 			/*
 			 * copy IP addresses which come with table from
 			 * temporal buffer to buffer attached to table.
