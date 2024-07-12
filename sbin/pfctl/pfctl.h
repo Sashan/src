@@ -33,6 +33,12 @@
 #ifndef _PFCTL_H_
 #define _PFCTL_H_
 
+#ifdef PFCTL_DEBUG
+#define DBGPRINT(...)	fprintf(stderr, __VA_ARGS__)
+#else
+#define DBGPRINT(...)	(void)(0)
+#endif
+
 enum pfctl_show { PFCTL_SHOW_RULES, PFCTL_SHOW_LABELS, PFCTL_SHOW_NOTHING };
 
 enum {	PFRB_TABLES = 1, PFRB_TSTATS, PFRB_ADDRS, PFRB_ASTATS,
@@ -53,6 +59,16 @@ struct pfr_anchoritem {
 	SLIST_ENTRY(pfr_anchoritem)	pfra_sle;
 	char	*pfra_anchorname;
 };
+
+struct pfr_uktable {
+	struct pfr_ktable	pfrukt_kt;
+	struct pfr_buffer	pfrukt_addrs;
+	int			pfrukt_init_addr;
+};
+
+#define pfrukt_t	pfrukt_kt.pfrkt_ts.pfrts_t
+
+extern struct pfr_ktablehead pfr_ktables;
 
 SLIST_HEAD(pfr_anchors, pfr_anchoritem);
 

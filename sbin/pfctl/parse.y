@@ -379,6 +379,8 @@ int	 getservice(char *);
 int	 rule_label(struct pf_rule *, char *);
 
 void	 mv_rules(struct pf_ruleset *, struct pf_ruleset *);
+void	 mv_tables(struct pfctl *, struct pfr_ktablehead *,
+		    struct pf_anchor *);
 void	 decide_address_family(struct node_host *, sa_family_t *);
 int	 invalid_redirect(struct node_host *, sa_family_t);
 u_int16_t parseicmpspec(char *, sa_family_t);
@@ -827,6 +829,7 @@ anchorname	: STRING			{
 
 pfa_anchorlist	: /* empty */
 		| pfa_anchorlist '\n'
+		| pfa_anchorlist tabledef '\n'
 		| pfa_anchorlist pfrule '\n'
 		| pfa_anchorlist anchorrule '\n'
 		| pfa_anchorlist include '\n'
@@ -853,7 +856,7 @@ pfa_anchor	: '{'
 			snprintf(ta, PF_ANCHOR_NAME_SIZE, "_%d", pf->bn);
 			rs = pf_find_or_create_ruleset(ta);
 			if (rs == NULL)
-				err(1, "pfa_anchor: pf_find_or_create_ruleset");
+				err(1, "pfa_anchor: pf_find_or_create_ruleset (%s)", ta);
 			pf->astack[pf->asd] = rs->anchor;
 			pf->anchor = rs->anchor;
 		} '\n' pfa_anchorlist '}'
@@ -3976,6 +3979,7 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 {
 	struct pfr_buffer	 ab;
 	struct node_tinit	*ti;
+	struct pfr_uktable	*ukt;
 
 	bzero(&ab, sizeof(ab));
 	ab.pfrb_type = PFRB_ADDRS;
@@ -4006,12 +4010,51 @@ process_tabledef(char *name, struct table_opts *opts, int popts)
 	else if (pf->opts & PF_OPT_VERBOSE)
 		fprintf(stderr, "%s:%d: skipping duplicate table checks"
 		    " for <%s>\n", file->name, yylval.lineno, name);
-	if (!(pf->opts & PF_OPT_NOACTION) &&
-	    pfctl_define_table(name, opts->flags, opts->init_addr,
-	    pf->anchor->path, &ab, pf->anchor->ruleset.tticket)) {
-		yyerror("cannot define table %s: %s", name,
-		    pf_strerror(errno));
-		goto _error;
+
+	if (!(pf->opts & PF_OPT_NOACTION)) {
+		/*
+		 * postpone definition of non-root tables to moment
+		 * when path is fully resolved.
+		 */
+		if (pf->asd > 0) {
+			ukt = calloc(1, sizeof(struct pfr_uktable));
+			if (ukt == NULL) {
+				DBGPRINT(
+				    "%s:%d: not enough memory for <%s>\n",
+				    file->name, yylval.lineno, name);
+				goto _error;
+			}
+		} else
+			ukt = NULL;
+
+		if (pfctl_define_table(name, opts->flags, opts->init_addr,
+		    pf->anchor->path, &ab, pf->anchor->ruleset.tticket, ukt)) {
+			yyerror("cannot define table %s: %s", name,
+			pf_strerror(errno));
+			goto _error;
+		}
+
+		if (ukt != NULL) {
+			ukt->pfrukt_init_addr = opts->init_addr;
+			if (RB_INSERT(pfr_ktablehead, &pfr_ktables,
+			    &ukt->pfrukt_kt) != NULL) {
+				/*
+				 * I think this should not happen, because
+				 * pfctl_define_table() above  does the same
+				 * check effectively.
+				 */
+				DBGPRINT(
+				    "%s:%d table %s already exists in %s\n",
+				    file->name, yylval.lineno,
+				    ukt->pfrukt_name, pf->anchor->path);
+				free(ukt);
+				goto _error;
+			}
+			DBGPRINT("%s %s@%s inserted to tree\n",
+			    __func__, ukt->pfrukt_name, pf->anchor->path);
+
+		} else
+			DBGPRINT("%s ukt is null\n", __func__);
 	}
 	pf->tdirty = 1;
 	pfr_buf_clear(&ab);
@@ -5711,7 +5754,7 @@ parseport(char *port, struct range *r, int extensions)
 }
 
 int
-pfctl_load_anchors(int dev, struct pfctl *pf, struct pfr_buffer *trans)
+pfctl_load_anchors(int dev, struct pfctl *pf)
 {
 	struct loadanchors	*la;
 
@@ -5720,7 +5763,7 @@ pfctl_load_anchors(int dev, struct pfctl *pf, struct pfr_buffer *trans)
 			fprintf(stderr, "\nLoading anchor %s from %s\n",
 			    la->anchorname, la->filename);
 		if (pfctl_rules(dev, la->filename, pf->opts, pf->optimize,
-		    la->anchorname, trans) == -1)
+		    la->anchorname, pf->trans) == -1)
 			return (-1);
 	}
 
