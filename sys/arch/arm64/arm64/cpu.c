@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.123 2024/07/02 19:59:54 kettenis Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.125 2024/07/11 12:07:39 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2016 Dale Rahn <drahn@dalerahn.com>
@@ -245,6 +245,7 @@ uint64_t cpu_id_aa64pfr0;
 uint64_t cpu_id_aa64pfr1;
 
 int arm64_has_lse;
+int arm64_has_rng;
 #ifdef CRYPTO
 int arm64_has_aes;
 #endif
@@ -273,8 +274,12 @@ struct cfdriver cpu_cd = {
 	NULL, "cpu", DV_DULL
 };
 
+struct timeout cpu_rng_to;
+void	cpu_rng(void *);
+
 void	cpu_opp_init(struct cpu_info *, uint32_t);
 void	cpu_psci_init(struct cpu_info *);
+void	cpu_psci_idle_cycle(void);
 
 void	cpu_flush_bp_noop(void);
 void	cpu_flush_bp_psci(void);
@@ -284,6 +289,25 @@ void	cpu_serror_apple(void);
 void	cpu_kstat_attach(struct cpu_info *ci);
 void	cpu_opp_kstat_attach(struct cpu_info *ci);
 #endif
+
+void
+cpu_rng(void *arg)
+{
+	struct timeout *to = arg;
+	uint64_t rndr;
+	int ret;
+
+	ret = __builtin_arm_rndrrs(&rndr);
+	if (ret)
+		ret = __builtin_arm_rndr(&rndr);
+	if (ret == 0) {
+		enqueue_randomness(rndr & 0xffffffff);
+		enqueue_randomness(rndr >> 32);
+	}
+
+	if (to)
+		timeout_add_msec(to, 1000);
+}
 
 /*
  * Enable mitigation for Spectre-V2 branch target injection
@@ -666,6 +690,7 @@ cpu_identify(struct cpu_info *ci)
 	if (ID_AA64ISAR0_RNDR(id) >= ID_AA64ISAR0_RNDR_IMPL) {
 		printf("%sRNDR", sep);
 		sep = ",";
+		arm64_has_rng = 1;
 	}
 
 	if (ID_AA64ISAR0_TLB(id) >= ID_AA64ISAR0_TLB_IOS) {
@@ -1138,6 +1163,11 @@ cpu_attach(struct device *parent, struct device *dev, void *aux)
 		}
 
 		cpu_init();
+
+		if (arm64_has_rng) {
+			timeout_set(&cpu_rng_to, cpu_rng, &cpu_rng_to);
+			cpu_rng(&cpu_rng_to);
+		}
 #ifdef MULTIPROCESSOR
 	}
 #endif
@@ -1956,6 +1986,51 @@ cpu_psci_init(struct cpu_info *ci)
 	int idx, len, node;
 
 	/*
+	 * Find the shallowest (for now) idle state for this CPU.
+	 * This should be the first one that is listed.  We'll use it
+	 * in the idle loop.
+	 */
+
+	len = OF_getproplen(ci->ci_node, "cpu-idle-states");
+	if (len < (int)sizeof(uint32_t))
+		return;
+
+	states = malloc(len, M_TEMP, M_WAITOK);
+	OF_getpropintarray(ci->ci_node, "cpu-idle-states", states, len);
+	node = OF_getnodebyphandle(states[0]);
+	free(states, M_TEMP, len);
+	if (node) {
+		uint32_t entry, exit, residency, param;
+		int32_t features;
+
+		param = OF_getpropint(node, "arm,psci-suspend-param", 0);
+		entry = OF_getpropint(node, "entry-latency-us", 0);
+		exit = OF_getpropint(node, "exit-latency-us", 0);
+		residency = OF_getpropint(node, "min-residency-us", 0);
+		ci->ci_psci_idle_latency += entry + exit + 2 * residency;
+
+		/* Skip states that stop the local timer. */
+		if (OF_getpropbool(node, "local-timer-stop"))
+			ci->ci_psci_idle_param = 0;
+
+		/* Skip powerdown states. */
+		features = psci_features(CPU_SUSPEND);
+		if (features == PSCI_NOT_SUPPORTED ||
+		    (features & PSCI_FEATURE_POWER_STATE_EXT) == 0) {
+			if (param & PSCI_POWER_STATE_POWERDOWN)
+				param = 0;
+		} else {
+			if (param & PSCI_POWER_STATE_EXT_POWERDOWN)
+				param = 0;
+		}
+
+		if (param) {
+			ci->ci_psci_idle_param = param;
+			cpu_idle_cycle_fcn = cpu_psci_idle_cycle;
+		}
+	}
+
+	/*
 	 * Hunt for the deepest idle state for this CPU.  This is
 	 * fairly complicated as it requires traversing quite a few
 	 * nodes in the device tree.  The first step is to look up the
@@ -2050,6 +2125,30 @@ cpu_psci_init(struct cpu_info *ci)
 
 	ci->ci_psci_suspend_param =
 		OF_getpropint(node, "arm,psci-suspend-param", 0);
+}
+
+void
+cpu_psci_idle_cycle(void)
+{
+	struct cpu_info *ci = curcpu();
+	struct timeval start, stop;
+	u_long itime;
+
+	microuptime(&start);
+
+	if (ci->ci_prev_sleep > ci->ci_psci_idle_latency)
+		psci_cpu_suspend(ci->ci_psci_idle_param, 0, 0);
+	else
+		cpu_wfi();
+
+	microuptime(&stop);
+	timersub(&stop, &start, &stop);
+	itime = stop.tv_sec * 1000000 + stop.tv_usec;
+
+	ci->ci_last_itime = itime;
+	itime >>= 1;
+	ci->ci_prev_sleep = (ci->ci_prev_sleep + (ci->ci_prev_sleep >> 1)
+	    + itime) >> 1;
 }
 
 #if NKSTAT > 0

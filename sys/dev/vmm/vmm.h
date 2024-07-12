@@ -1,4 +1,4 @@
-/* $OpenBSD: vmm.h,v 1.4 2024/01/11 17:13:48 jan Exp $ */
+/* $OpenBSD: vmm.h,v 1.6 2024/07/10 10:41:19 dv Exp $ */
 /*
  * Copyright (c) 2014-2023 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -20,8 +20,18 @@
 
 #include <uvm/uvm_extern.h>
 
+#include <machine/vmmvar.h>
+
 #ifndef DEV_VMM_H
 #define DEV_VMM_H
+
+#define VMM_MAX_MEM_RANGES	16
+#define VMM_MAX_DISKS_PER_VM	4
+#define VMM_MAX_NAME_LEN	64
+#define VMM_MAX_VCPUS		512
+#define VMM_MAX_VCPUS_PER_VM	64
+#define VMM_MAX_VM_MEM_SIZE	128L * 1024 * 1024 * 1024
+#define VMM_MAX_NICS_PER_VM	4
 
 struct vm_mem_range {
 	paddr_t vmr_gpa;
@@ -81,6 +91,35 @@ struct vm_sharemem_params {
 	uint32_t		vsp_vm_id;
 	size_t			vsp_nmemranges;
 	struct vm_mem_range	vsp_memranges[VMM_MAX_MEM_RANGES];
+};
+
+struct vm_run_params {
+	/* Input parameters to VMM_IOC_RUN */
+	uint32_t	vrp_vm_id;
+	uint32_t	vrp_vcpu_id;
+	struct vcpu_inject_event	vrp_inject;
+	uint8_t		vrp_intr_pending;	/* Additional intrs pending? */
+
+	/* Input/output parameter to VMM_IOC_RUN */
+	struct vm_exit	*vrp_exit;		/* updated exit data */
+
+	/* Output parameter from VMM_IOC_RUN */
+	uint16_t	vrp_exit_reason;	/* exit reason */
+	uint8_t		vrp_irqready;		/* ready for IRQ on entry */
+};
+
+#define VM_RWVMPARAMS_PVCLOCK_SYSTEM_GPA 0x1	/* read/write pvclock gpa */
+#define VM_RWVMPARAMS_PVCLOCK_VERSION	 0x2	/* read/write pvclock version */
+#define VM_RWVMPARAMS_ALL	(VM_RWVMPARAMS_PVCLOCK_SYSTEM_GPA | \
+    VM_RWVMPARAMS_PVCLOCK_VERSION)
+
+struct vm_rwvmparams_params {
+	/* Input parameters to VMM_IOC_READVMPARAMS/VMM_IOC_WRITEVMPARAMS */
+	uint32_t		vpp_vm_id;
+	uint32_t		vpp_vcpu_id;
+	uint32_t		vpp_mask;
+	paddr_t			vpp_pvclock_system_gpa;
+	uint32_t		vpp_pvclock_version;
 };
 
 /* IOCTL definitions */
@@ -200,8 +239,10 @@ void vm_teardown(struct vm **);
 int vm_get_info(struct vm_info_params *);
 int vm_terminate(struct vm_terminate_params *);
 int vm_resetcpu(struct vm_resetcpu_params *);
+int vm_rwvmparams(struct vm_rwvmparams_params *, int);
 int vcpu_must_stop(struct vcpu *);
 int vm_share_mem(struct vm_sharemem_params *, struct proc *);
+int vm_run(struct vm_run_params *);
 
 #ifdef VMM_DEBUG
 void dump_vcpu(struct vcpu *);
