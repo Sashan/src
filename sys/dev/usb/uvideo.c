@@ -39,7 +39,7 @@
 #include <dev/video_if.h>
 
 #ifdef UVIDEO_DEBUG
-int uvideo_debug = 15;
+int uvideo_debug = 1;
 #define DPRINTF(l, x...) do { if ((l) <= uvideo_debug) printf(x); } while (0)
 #else
 #define DPRINTF(l, x...)
@@ -1779,7 +1779,7 @@ uvideo_vs_alloc_isoc(struct uvideo_softc *sc)
 	for (i = 0; i < UVIDEO_IXFERS; i++) {
 		sc->sc_vs_cur->ixfer[i].sc = sc;
 
-		sc->sc_vs_cur->ixfer[i].xfer = usbd_alloc_xfer(sc->sc_udev);	/* xhci_allocx() */
+		sc->sc_vs_cur->ixfer[i].xfer = usbd_alloc_xfer(sc->sc_udev);	
 		if (sc->sc_vs_cur->ixfer[i].xfer == NULL) {
 			printf("%s: could not allocate isoc VS xfer!\n",
 			    DEVNAME(sc));
@@ -1874,10 +1874,12 @@ uvideo_vs_open(struct uvideo_softc *sc)
 
 	DPRINTF(1, "%s: %s\n", DEVNAME(sc), __func__);
 
+	if (sc->sc_negotiated_flag == 0) {
 		/* do device negotiation with commit */
-	error = uvideo_vs_negotiation(sc, 1);
-	if (error != USBD_NORMAL_COMPLETION)
-		return (error);
+		error = uvideo_vs_negotiation(sc, 1);
+		if (error != USBD_NORMAL_COMPLETION)
+			return (error);
+	}
 
 	error = uvideo_vs_set_alt(sc, sc->sc_vs_cur->ifaceh,
 	    UGETDW(sc->sc_desc_probe.dwMaxPayloadTransferSize));
@@ -2137,7 +2139,6 @@ uvideo_vs_decode_stream_header(struct uvideo_softc *sc, uint8_t *frame,
 		return (USBD_INVAL);
 	if (sh->bLength == frame_size && !(sh->bFlags & UVIDEO_SH_FLAG_EOF)) {
 		/* stream header without payload and no EOF */
-		DPRINTF(2, "%s: frame_size %d flags: 0x%x\n", DEVNAME(sc), frame_size, sh->bFlags);
 		return (USBD_INVAL);
 	}
 	if (sh->bFlags & UVIDEO_SH_FLAG_ERR) {
