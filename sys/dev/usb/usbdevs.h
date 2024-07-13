@@ -583,7 +583,6 @@
 #define	USB_VENDOR_AXESSTEL	0x1726		/* Axesstel */
 #define	USB_VENDOR_LINKSYS4	0x1737		/* Linksys */
 #define	USB_VENDOR_SENAO	0x1740		/* Senao */
-#define	USB_VENDOR_DMAX		0x174f		/* D-MAX */
 #define	USB_VENDOR_ASUS2	0x1761		/* ASUS */
 #define	USB_VENDOR_STRAWBERRYLINUX	0x1774		/* Strawberry linux Co., Ltd. */
 #define	USB_VENDOR_SWEEX2	0x177f		/* Sweex */
@@ -1582,8 +1581,6 @@
 
 /* Diamond products */
 #define	USB_PRODUCT_DIAMOND_RIO500USB	0x0001		/* Rio 500 */
-
-#define	USB_PRODUCT_DMAX_CAMERA		0x11a8		/* integrated camera */
 
 /* Supra products */
 #define	USB_PRODUCT_DIAMOND2_SUPRAEXPRESS56K	0x07da		/* Supra Express 56K */
