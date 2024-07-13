@@ -1481,6 +1481,7 @@ pfctl_load_tables(struct pfctl *pf, char *path, struct pf_anchor *a)
 		ukt = (struct pfr_uktable *) kt;
 		ticket = pfctl_get_ticket(pf->trans, PF_TRANS_TABLE, path);
 		e = pfr_ina_define(&ukt->pfrukt_t, ukt->pfrukt_addrs.pfrb_caddr,
+		    ukt->pfrukt_addrs.pfrb_size, NULL, NULL, ticket,
 		    ukt->pfrukt_init_addr ? PFR_FLAG_ADDRSTOO : 0);
 		if (e != 0)
 			err(1, "%s pfr_ina_define() %s@%s", __func__,
