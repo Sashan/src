@@ -67,6 +67,7 @@ struct pfr_uktable {
 };
 
 #define pfrukt_t	pfrukt_kt.pfrkt_ts.pfrts_t
+#define pfrukt_name	pfrukt_kt.pfrkt_t.pfrt_name
 
 extern struct pfr_ktablehead pfr_ktables;
 

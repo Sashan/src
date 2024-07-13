@@ -1429,14 +1429,23 @@ pfctl_load_tables(struct pfctl *pf, char *path, struct pf_anchor *a)
 {
 	struct pfr_ktable *kt, *ktw;
 	struct pfr_uktable *ukt;
+	uint32_t ticket = pfctl_get_ticket(pf->trans, PF_TRANS_TABLE, path);
+	char anchor_path[PF_ANCHOR_MAXPATH];
 	int e;
 
 	RB_FOREACH_SAFE(kt, pfr_ktablehead, &pfr_ktables, ktw) {
-		snprintf(kt->pfrkt_anchor, PF_ANCHOR_MAXPATH, "%s/%s",
-		    path, a->name);
+		if (strcmp(kt->pfrkt_anchor, a->path) != 0)
+			continue;
+
+		if (path != NULL && *path) {
+			strlcpy(anchor_path, kt->pfrkt_anchor,
+			    sizeof (anchor_path));
+			snprintf(kt->pfrkt_anchor, PF_ANCHOR_MAXPATH, "%s/%s",
+			    path, anchor_path);
+		}
 		ukt = (struct pfr_uktable *) kt;
 		e = pfr_ina_define(&ukt->pfrukt_t, ukt->pfrukt_addrs.pfrb_caddr,
-		    ukt->pfrukt_addrs.pfrb_size, NULL, NULL, a->ruleset.tticket,
+		    ukt->pfrukt_addrs.pfrb_size, NULL, NULL, ticket,
 		    ukt->pfrukt_init_addr ? PFR_FLAG_ADDRSTOO : 0);
 		if (e != 0)
 			err(1, "%s pfr_ina_define() %s@%s", __func__,
@@ -1586,6 +1595,7 @@ pfctl_rules(int dev, char *filename, int opts, int optimize,
 		bzero(&buf, sizeof(buf));
 		buf.pfrb_type = PFRB_TRANS;
 		pf.trans = &buf;
+		t = &buf;
 		osize = 0;
 	} else {
 		t = trans;
