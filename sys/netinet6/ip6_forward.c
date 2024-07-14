@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip6_forward.c,v 1.121 2024/07/09 09:33:13 bluhm Exp $	*/
+/*	$OpenBSD: ip6_forward.c,v 1.123 2024/07/13 10:09:40 bluhm Exp $	*/
 /*	$KAME: ip6_forward.c,v 1.75 2001/06/29 12:42:13 jinmei Exp $	*/
 
 /*
@@ -45,6 +45,9 @@
 #include <net/if_var.h>
 #include <net/if_enc.h>
 #include <net/route.h>
+#if NPF > 0
+#include <net/pfvar.h>
+#endif
 
 #include <netinet/in.h>
 #include <netinet/ip_var.h>
@@ -53,20 +56,15 @@
 #include <netinet6/ip6_var.h>
 #include <netinet/icmp6.h>
 #include <netinet6/nd6.h>
-
-#if NPF > 0
-#include <net/pfvar.h>
-#endif
-
+#include <netinet/udp.h>
+#include <netinet/tcp.h>
+#include <netinet/tcp_timer.h>
+#include <netinet/tcp_var.h>
 #ifdef IPSEC
 #include <netinet/ip_ipsp.h>
 #include <netinet/ip_ah.h>
 #include <netinet/ip_esp.h>
-#include <netinet/udp.h>
 #endif
-#include <netinet/tcp.h>
-#include <netinet/tcp_timer.h>
-#include <netinet/tcp_var.h>
 
 /*
  * Forward a packet.  If some error occurs return the sender
@@ -145,10 +143,33 @@ ip6_forward(struct mbuf *m, struct route *ro, int flags)
 	 * Thanks to M_EXT, in most cases copy will not occur.
 	 * For small packets copy original onto stack instead of mbuf.
 	 *
+	 * For final protocol header like TCP or UDP, full header chain in
+	 * ICMP6 packet is not necessary.  In this case only copy small
+	 * part of original packet and save it on stack instead of mbuf.
+	 * Although this violates RFC 4443 2.4. (c), it avoids additional
+	 * mbuf allocations.  Also pf nat and rdr do not affect the shared
+	 * mbuf cluster.
+	 *
 	 * It is important to save it before IPsec processing as IPsec
 	 * processing may modify the mbuf.
 	 */
-	icmp_len = min(m->m_pkthdr.len, ICMPV6_PLD_MAXLEN);
+	switch (ip6->ip6_nxt) {
+	case IPPROTO_TCP:
+		icmp_len = sizeof(struct ip6_hdr) + sizeof(struct tcphdr) +
+		    MAX_TCPOPTLEN;
+		break;
+	case IPPROTO_UDP:
+		icmp_len = sizeof(struct ip6_hdr) + sizeof(struct udphdr);
+		break;
+	case IPPROTO_ESP:
+		icmp_len = sizeof(struct ip6_hdr) + 2 * sizeof(u_int32_t);
+		break;
+	default:
+		icmp_len = ICMPV6_PLD_MAXLEN;
+		break;
+	}
+	if (icmp_len > m->m_pkthdr.len)
+		icmp_len = m->m_pkthdr.len;
 	if (icmp_len <= sizeof(icmp_buf)) {
 		mflags = m->m_flags;
 		pfflags = m->m_pkthdr.pf.flags;

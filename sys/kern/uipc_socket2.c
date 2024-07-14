@@ -1,4 +1,4 @@
-/*	$OpenBSD: uipc_socket2.c,v 1.156 2024/06/28 21:30:24 mvs Exp $	*/
+/*	$OpenBSD: uipc_socket2.c,v 1.158 2024/07/12 19:50:35 bluhm Exp $	*/
 /*	$NetBSD: uipc_socket2.c,v 1.11 1996/02/04 02:17:55 christos Exp $	*/
 
 /*
@@ -365,7 +365,7 @@ solock_shared(struct socket *so)
 	switch (so->so_proto->pr_domain->dom_family) {
 	case PF_INET:
 	case PF_INET6:
-		if (so->so_proto->pr_usrreqs->pru_lock != NULL) {
+		if (ISSET(so->so_proto->pr_flags, PR_MPSOCKET)) {
 			NET_LOCK_SHARED();
 			rw_enter_write(&so->so_lock);
 		} else
@@ -425,7 +425,7 @@ sounlock_shared(struct socket *so)
 	switch (so->so_proto->pr_domain->dom_family) {
 	case PF_INET:
 	case PF_INET6:
-		if (so->so_proto->pr_usrreqs->pru_unlock != NULL) {
+		if (ISSET(so->so_proto->pr_flags, PR_MPSOCKET)) {
 			rw_exit_write(&so->so_lock);
 			NET_UNLOCK_SHARED();
 		} else
@@ -460,7 +460,7 @@ soassertlocked(struct socket *so)
 		if (rw_status(&netlock) == RW_READ) {
 			NET_ASSERT_LOCKED();
 
-			if (splassert_ctl > 0 && pru_locked(so) == 0 &&
+			if (splassert_ctl > 0 &&
 			    rw_status(&so->so_lock) != RW_WRITE)
 				splassert_fail(0, RW_WRITE, __func__);
 		} else
@@ -481,12 +481,12 @@ sosleep_nsec(struct socket *so, void *ident, int prio, const char *wmesg,
 	switch (so->so_proto->pr_domain->dom_family) {
 	case PF_INET:
 	case PF_INET6:
-		if (so->so_proto->pr_usrreqs->pru_unlock != NULL &&
+		if (ISSET(so->so_proto->pr_flags, PR_MPSOCKET) &&
 		    rw_status(&netlock) == RW_READ) {
 			rw_exit_write(&so->so_lock);
 		}
 		ret = rwsleep_nsec(ident, &netlock, prio, wmesg, nsecs);
-		if (so->so_proto->pr_usrreqs->pru_lock != NULL &&
+		if (ISSET(so->so_proto->pr_flags, PR_MPSOCKET) &&
 		    rw_status(&netlock) == RW_READ) {
 			rw_enter_write(&so->so_lock);
 		}
@@ -926,7 +926,7 @@ sbappendaddr(struct socket *so, struct sockbuf *sb, const struct sockaddr *asa,
 		if (n->m_next == NULL)	/* keep pointer to last control buf */
 			break;
 	}
-	if (space > sbspace(so, sb))
+	if (space > sbspace_locked(so, sb))
 		return (0);
 	if (asa->sa_len > MLEN)
 		return (0);
@@ -984,7 +984,7 @@ sbappendcontrol(struct socket *so, struct sockbuf *sb, struct mbuf *m0,
 				m->m_flags &= ~M_EOR;
 		}
 	}
-	if (space > sbspace(so, sb))
+	if (space > sbspace_locked(so, sb))
 		return (0);
 	n->m_next = m0;			/* concatenate data to control */
 
