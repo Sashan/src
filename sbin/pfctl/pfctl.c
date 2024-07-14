@@ -1429,7 +1429,7 @@ pfctl_load_tables(struct pfctl *pf, char *path, struct pf_anchor *a)
 {
 	struct pfr_ktable *kt, *ktw;
 	struct pfr_uktable *ukt;
-	uint32_t ticket = pfctl_get_ticket(pf->trans, PF_TRANS_TABLE, path);
+	uint32_t ticket;
 	char anchor_path[PF_ANCHOR_MAXPATH];
 	int e;
 
@@ -1444,6 +1444,7 @@ pfctl_load_tables(struct pfctl *pf, char *path, struct pf_anchor *a)
 			    path, anchor_path);
 		}
 		ukt = (struct pfr_uktable *) kt;
+		ticket = pfctl_get_ticket(pf->trans, PF_TRANS_TABLE, path);
 		e = pfr_ina_define(&ukt->pfrukt_t, ukt->pfrukt_addrs.pfrb_caddr,
 		    ukt->pfrukt_addrs.pfrb_size, NULL, NULL, ticket,
 		    ukt->pfrukt_init_addr ? PFR_FLAG_ADDRSTOO : 0);
