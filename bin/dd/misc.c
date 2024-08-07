@@ -1,4 +1,4 @@
-/*	$OpenBSD: misc.c,v 1.23 2018/04/07 18:52:39 cheloha Exp $	*/
+/*	$OpenBSD: misc.c,v 1.26 2024/07/12 19:11:25 florian Exp $	*/
 /*	$NetBSD: misc.c,v 1.4 1995/03/21 09:04:10 cgd Exp $	*/
 
 /*-
@@ -45,20 +45,32 @@
 #include "dd.h"
 #include "extern.h"
 
+/* SIGINFO handler */
 void
-summary(void)
+sig_summary(int notused)
 {
+	int save_errno = errno;
 	struct timespec elapsed, now;
-	double nanosecs;
+	unsigned long long bps, msec;
 
 	if (ddflags & C_NOINFO)
 		return;
 
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	timespecsub(&now, &st.start, &elapsed);
-	nanosecs = ((double)elapsed.tv_sec * 1000000000) + elapsed.tv_nsec;
-	if (nanosecs == 0)
-		nanosecs = 1;
+
+	if (elapsed.tv_sec > 600)
+		bps = st.bytes / elapsed.tv_sec;
+	else if (elapsed.tv_sec > 0) {
+		/* will overflow at ~ 30 exabytes / second */
+		msec = elapsed.tv_sec * 1000 + elapsed.tv_nsec / 1000000;
+		if (msec == 0)
+			msec = 1;
+		bps = st.bytes * 1000 / msec;
+	} else if (elapsed.tv_nsec > 0)
+		bps = st.bytes * 1000000000 / elapsed.tv_nsec;
+	else
+		bps = st.bytes;
 
 	/* Be async safe: use dprintf(3). */
 	dprintf(STDERR_FILENO, "%zu+%zu records in\n%zu+%zu records out\n",
@@ -75,24 +87,23 @@ summary(void)
 	if (!(ddflags & C_NOXFER)) {
 		dprintf(STDERR_FILENO,
 		    "%lld bytes transferred in %lld.%03ld secs "
-		    "(%0.0f bytes/sec)\n", (long long)st.bytes,
-		    (long long)elapsed.tv_sec, elapsed.tv_nsec / 1000000,
-		    ((double)st.bytes * 1000000000) / nanosecs);
+		    "(%llu bytes/sec)\n", (long long)st.bytes,
+		    (long long)elapsed.tv_sec, elapsed.tv_nsec / 1000000, bps);
 	}
-}
-
-void
-summaryx(int notused)
-{
-	int save_errno = errno;
-
-	summary();
 	errno = save_errno;
 }
 
+/* SIGINT handler */
 void
-terminate(int signo)
+sig_terminate(int signo)
 {
-	summary();
+	sig_summary(0);
 	_exit(128 + signo);
+}
+
+/* atexit variation to summarize */
+void
+exit_summary(void)
+{
+	sig_summary(0);
 }

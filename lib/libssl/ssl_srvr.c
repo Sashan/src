@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_srvr.c,v 1.161 2024/06/25 14:10:45 jsing Exp $ */
+/* $OpenBSD: ssl_srvr.c,v 1.165 2024/07/22 14:47:15 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -651,7 +651,7 @@ ssl3_accept(SSL *s)
 				goto end;
 			s->s3->hs.state = SSL3_ST_SW_FINISHED_A;
 			s->init_num = 0;
-			s->session->cipher = s->s3->hs.cipher;
+			s->session->cipher_value = s->s3->hs.cipher->value;
 
 			if (!tls1_setup_key_block(s)) {
 				ret = -1;
@@ -781,7 +781,6 @@ ssl3_get_client_hello(SSL *s)
 	uint8_t comp_method;
 	int comp_null;
 	int i, j, al, ret, cookie_valid = 0;
-	unsigned long id;
 	SSL_CIPHER *c;
 	STACK_OF(SSL_CIPHER) *ciphers = NULL;
 	const SSL_METHOD *method;
@@ -978,11 +977,10 @@ ssl3_get_client_hello(SSL *s)
 	/* XXX - CBS_len(&cipher_suites) will always be zero here... */
 	if (s->hit && CBS_len(&cipher_suites) > 0) {
 		j = 0;
-		id = s->session->cipher->id;
 
 		for (i = 0; i < sk_SSL_CIPHER_num(ciphers); i++) {
 			c = sk_SSL_CIPHER_value(ciphers, i);
-			if (c->id == id) {
+			if (c->value == s->session->cipher_value) {
 				j = 1;
 				break;
 			}
@@ -1078,23 +1076,31 @@ ssl3_get_client_hello(SSL *s)
 		s->hit = 1;
 		s->session->verify_result = X509_V_OK;
 
-		sk_SSL_CIPHER_free(s->session->ciphers);
-		s->session->ciphers = ciphers;
+		sk_SSL_CIPHER_free(s->s3->hs.client_ciphers);
+		s->s3->hs.client_ciphers = ciphers;
 		ciphers = NULL;
+
+		/*
+		 * XXX - this allows the callback to use any client cipher and
+		 * completely ignore the server cipher list. We should ensure
+		 * that the pref_cipher is in both the client list and the
+		 * server list.
+		 */
 
 		/* Check if some cipher was preferred by the callback. */
 		if (pref_cipher == NULL)
-			pref_cipher = ssl3_choose_cipher(s, s->session->ciphers,
+			pref_cipher = ssl3_choose_cipher(s, s->s3->hs.client_ciphers,
 			    SSL_get_ciphers(s));
 		if (pref_cipher == NULL) {
 			al = SSL_AD_HANDSHAKE_FAILURE;
 			SSLerror(s, SSL_R_NO_SHARED_CIPHER);
 			goto fatal_err;
 		}
-		s->session->cipher = pref_cipher;
+		s->s3->hs.cipher = pref_cipher;
 
+		/* XXX - why? */
 		sk_SSL_CIPHER_free(s->cipher_list);
-		s->cipher_list = sk_SSL_CIPHER_dup(s->session->ciphers);
+		s->cipher_list = sk_SSL_CIPHER_dup(s->s3->hs.client_ciphers);
 	}
 
 	/*
@@ -1108,19 +1114,22 @@ ssl3_get_client_hello(SSL *s)
 			SSLerror(s, SSL_R_NO_CIPHERS_PASSED);
 			goto fatal_err;
 		}
-		sk_SSL_CIPHER_free(s->session->ciphers);
-		s->session->ciphers = ciphers;
+		sk_SSL_CIPHER_free(s->s3->hs.client_ciphers);
+		s->s3->hs.client_ciphers = ciphers;
 		ciphers = NULL;
 
-		if ((c = ssl3_choose_cipher(s, s->session->ciphers,
+		if ((c = ssl3_choose_cipher(s, s->s3->hs.client_ciphers,
 		    SSL_get_ciphers(s))) == NULL) {
 			al = SSL_AD_HANDSHAKE_FAILURE;
 			SSLerror(s, SSL_R_NO_SHARED_CIPHER);
 			goto fatal_err;
 		}
 		s->s3->hs.cipher = c;
+		s->session->cipher_value = s->s3->hs.cipher->value;
 	} else {
-		s->s3->hs.cipher = s->session->cipher;
+		s->s3->hs.cipher = ssl3_get_cipher_by_value(s->session->cipher_value);
+		if (s->s3->hs.cipher == NULL)
+			goto fatal_err;
 	}
 
 	if (!tls1_transcript_hash_init(s))
@@ -1258,8 +1267,7 @@ ssl3_send_server_hello(SSL *s)
 			goto err;
 
 		/* Cipher suite. */
-		if (!CBB_add_u16(&server_hello,
-		    ssl3_cipher_get_value(s->s3->hs.cipher)))
+		if (!CBB_add_u16(&server_hello, s->s3->hs.cipher->value))
 			goto err;
 
 		/* Compression method (null). */

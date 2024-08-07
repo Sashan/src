@@ -1,4 +1,4 @@
-/*	$OpenBSD: raddauth.c,v 1.31 2023/03/02 16:13:57 millert Exp $	*/
+/*	$OpenBSD: raddauth.c,v 1.33 2024/07/18 02:45:31 yasuoka Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997 Berkeley Software Design, Inc. All rights reserved.
@@ -84,8 +84,9 @@
 #include <syslog.h>
 #include <time.h>
 #include <unistd.h>
-#include <md5.h>
 #include <readpassphrase.h>
+#include <openssl/hmac.h>
+#include <openssl/md5.h>
 #include "login_radius.h"
 
 
@@ -95,6 +96,7 @@
 #define AUTH_VECTOR_LEN			16
 #define AUTH_HDR_LEN			20
 #define	AUTH_PASS_LEN			(256 - 16)
+#define AUTH_MSGAUTH_LEN		16
 #define	PW_AUTHENTICATION_REQUEST	1
 #define	PW_AUTHENTICATION_ACK		2
 #define	PW_AUTHENTICATION_REJECT	3
@@ -105,6 +107,7 @@
 #define	PW_CLIENT_PORT_ID		5
 #define PW_PORT_MESSAGE			18
 #define PW_STATE			24
+#define PW_MSG_AUTH			80
 
 #ifndef	RADIUS_DIR
 #define RADIUS_DIR		"/etc/raddb"
@@ -347,7 +350,7 @@ rad_request(u_char id, char *name, char *password, int port, char *vector,
 	int i, len, secretlen, total_length, p;
 	struct sockaddr_in sin;
 	u_char md5buf[MAXSECRETLEN+AUTH_VECTOR_LEN], digest[AUTH_VECTOR_LEN],
-	    pass_buf[AUTH_PASS_LEN], *pw, *ptr;
+	    pass_buf[AUTH_PASS_LEN], *pw, *ptr, *ma;
 	u_int length;
 	in_addr_t ipaddr;
 	MD5_CTX context;
@@ -358,6 +361,15 @@ rad_request(u_char id, char *name, char *password, int port, char *vector,
 	memcpy(auth.vector, vector, AUTH_VECTOR_LEN);
 	total_length = AUTH_HDR_LEN;
 	ptr = auth.data;
+
+	/* Preserve space for msgauth */
+	*ptr++ = PW_MSG_AUTH;
+	length = 16;
+	*ptr++ = length + 2;
+	ma = ptr;
+	memset(ma, 0, 16);
+	ptr += length;
+	total_length += length + 2;
 
 	/* User name */
 	*ptr++ = PW_USER_NAME;
@@ -391,9 +403,9 @@ rad_request(u_char id, char *name, char *password, int port, char *vector,
 	/* XOR the password into the md5 digest */
 	pw = pass_buf;
 	while (p-- > 0) {
-		MD5Init(&context);
-		MD5Update(&context, md5buf, secretlen + AUTH_VECTOR_LEN);
-		MD5Final(digest, &context);
+		MD5_Init(&context);
+		MD5_Update(&context, md5buf, secretlen + AUTH_VECTOR_LEN);
+		MD5_Final(digest, &context);
 		for (i = 0; i < AUTH_VECTOR_LEN; ++i) {
 			*ptr = digest[i] ^ *pw;
 			md5buf[secretlen+i] = *ptr++;
@@ -430,6 +442,11 @@ rad_request(u_char id, char *name, char *password, int port, char *vector,
 	}
 
 	auth.length = htons(total_length);
+
+	/* Calc msgauth */
+	if (HMAC(EVP_md5(), auth_secret, secretlen, (unsigned char *)&auth,
+	    total_length, ma, NULL) == NULL)
+		errx(1, "HMAC() failed");
 
 	memset(&sin, 0, sizeof (sin));
 	sin.sin_family = AF_INET;
@@ -473,10 +490,10 @@ rad_recv(char *state, char *challenge, u_char *req_vector)
 	/* verify server's shared secret */
 	memcpy(recv_vector, auth.vector, AUTH_VECTOR_LEN);
 	memcpy(auth.vector, req_vector, AUTH_VECTOR_LEN);
-	MD5Init(&context);
-	MD5Update(&context, (u_char *)&auth, ntohs(auth.length));
-	MD5Update(&context, auth_secret, strlen(auth_secret));
-	MD5Final(test_vector, &context);
+	MD5_Init(&context);
+	MD5_Update(&context, (u_char *)&auth, ntohs(auth.length));
+	MD5_Update(&context, auth_secret, strlen(auth_secret));
+	MD5_Final(test_vector, &context);
 	if (memcmp(recv_vector, test_vector, AUTH_VECTOR_LEN) != 0)
 		errx(1, "shared secret incorrect");
 

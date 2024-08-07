@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmmvar.h,v 1.101 2024/04/29 14:47:05 dv Exp $	*/
+/*	$OpenBSD: vmmvar.h,v 1.104 2024/07/14 07:57:42 dv Exp $	*/
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -22,14 +22,6 @@
 #define _MACHINE_VMMVAR_H_
 
 #define VMM_HV_SIGNATURE 	"OpenBSDVMM58"
-
-#define VMM_MAX_MEM_RANGES	16
-#define VMM_MAX_DISKS_PER_VM	4
-#define VMM_MAX_NAME_LEN	64
-#define VMM_MAX_VCPUS		512
-#define VMM_MAX_VCPUS_PER_VM	64
-#define VMM_MAX_VM_MEM_SIZE	128L * 1024 * 1024 * 1024
-#define VMM_MAX_NICS_PER_VM	4
 
 #define VMM_PCI_MMIO_BAR_BASE	0xF0000000ULL
 #define VMM_PCI_MMIO_BAR_END	0xFFDFFFFFULL		/* 2 MiB below 4 GiB */
@@ -96,14 +88,14 @@
 #define VMX_EXIT_XSAVES				63
 #define VMX_EXIT_XRSTORS			64
 
+#define VM_EXIT_TERMINATED			0xFFFE
+#define VM_EXIT_NONE				0xFFFF
+
 /*
  * VMX: Misc defines
  */
 #define VMX_MAX_CR3_TARGETS			256
 #define VMX_VMCS_PA_CLEAR			0xFFFFFFFFFFFFFFFFUL
-
-#define VM_EXIT_TERMINATED			0xFFFE
-#define VM_EXIT_NONE				0xFFFF
 
 /*
  * SVM: Intercept codes (exit reasons)
@@ -474,40 +466,11 @@ struct vm_exit {
 	int				cpl;
 };
 
-struct vm_run_params {
-	/* Input parameters to VMM_IOC_RUN */
-	uint32_t	vrp_vm_id;
-	uint32_t	vrp_vcpu_id;
-	struct vcpu_inject_event	vrp_inject;
-	uint8_t		vrp_intr_pending;	/* Additional intrs pending? */
-
-	/* Input/output parameter to VMM_IOC_RUN */
-	struct vm_exit	*vrp_exit;		/* updated exit data */
-
-	/* Output parameter from VMM_IOC_RUN */
-	uint16_t	vrp_exit_reason;	/* exit reason */
-	uint8_t		vrp_irqready;		/* ready for IRQ on entry */
-};
-
 struct vm_intr_params {
 	/* Input parameters to VMM_IOC_INTR */
 	uint32_t		vip_vm_id;
 	uint32_t		vip_vcpu_id;
 	uint16_t		vip_intr;
-};
-
-#define VM_RWVMPARAMS_PVCLOCK_SYSTEM_GPA 0x1	/* read/write pvclock gpa */
-#define VM_RWVMPARAMS_PVCLOCK_VERSION	 0x2	/* read/write pvclock version */
-#define VM_RWVMPARAMS_ALL	(VM_RWVMPARAMS_PVCLOCK_SYSTEM_GPA | \
-    VM_RWVMPARAMS_PVCLOCK_VERSION)
-
-struct vm_rwvmparams_params {
-	/* Input parameters to VMM_IOC_READVMPARAMS/VMM_IOC_WRITEVMPARAMS */
-	uint32_t		vpp_vm_id;
-	uint32_t		vpp_vcpu_id;
-	uint32_t		vpp_mask;
-	paddr_t			vpp_pvclock_system_gpa;
-	uint32_t		vpp_pvclock_version;
 };
 
 #define VM_RWREGS_GPRS	0x1	/* read/write GPRs */
@@ -923,6 +886,7 @@ struct vcpu {
 	uint32_t vc_vmx_vmcs_state;		/* [a] */
 #define VMCS_CLEARED	0
 #define VMCS_LAUNCHED	1
+	uint64_t vc_vmx_invept_op;
 
 	/* SVM only (all requiring [v]) */
 	vaddr_t vc_svm_hsa_va;
@@ -959,9 +923,7 @@ int	vm_impl_init(struct vm *, struct proc *);
 void	vm_impl_deinit(struct vm *);
 int	vcpu_init(struct vcpu *);
 void	vcpu_deinit(struct vcpu *);
-int	vm_rwvmparams(struct vm_rwvmparams_params *, int);
 int	vm_rwregs(struct vm_rwregs_params *, int);
-int	vm_run(struct vm_run_params *);
 int	vcpu_reset_regs(struct vcpu *, struct vcpu_reg_state *);
 
 #endif /* _KERNEL */

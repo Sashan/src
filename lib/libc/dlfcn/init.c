@@ -1,4 +1,4 @@
-/*	$OpenBSD: init.c,v 1.22 2024/01/21 17:18:13 kettenis Exp $ */
+/*	$OpenBSD: init.c,v 1.24 2024/07/22 22:06:27 kettenis Exp $ */
 /*
  * Copyright (c) 2014,2015 Philip Guenther <guenther@openbsd.org>
  *
@@ -49,6 +49,8 @@ char	***_csu_finish(char **_argv, char **_envp, void (*_cleanup)(void));
 /* provide definitions for these */
 int	_pagesize = 0;
 struct timekeep	*_timekeep;
+unsigned long	_hwcap, _hwcap2;
+int	_hwcap_avail, _hwcap2_avail;
 
 /*
  * In dynamically linked binaries environ and __progname are overridden by
@@ -96,6 +98,14 @@ _libc_preinit(int argc, char **argv, char **envp, dl_cb_cb *cb)
 		;
 	for (aux = (void *)envp; aux->au_id != AUX_null; aux++) {
 		switch (aux->au_id) {
+		case AUX_hwcap:
+			_hwcap = aux->au_v;
+			_hwcap_avail = 1;
+			break;
+		case AUX_hwcap2:
+			_hwcap2 = aux->au_v;
+			_hwcap2_avail = 1;
+			break;
 		case AUX_pagesz:
 			_pagesize = aux->au_v;
 			break;
@@ -179,14 +189,16 @@ _libc_preinit(int argc, char **argv, char **envp, dl_cb_cb *cb)
 # endif
 #endif
 
-#define ADD_TO_ARRAY(func, which) \
-	__asm(	" .section ."#which",\"a\","TYPE#which"\n " \
-	VALUE_ALIGN"\n "VALUE_DIRECTIVE" "#func"\n .previous")
-
 #ifdef PIC
-ADD_TO_ARRAY(_libc_preinit, init_array);
+/*
+ * Set a priority so _libc_preinit gets called before the constructor
+ * on libcompiler_rt that may use elf_aux_info(3).
+ */
+__asm(" .section .init_array.50,\"a\","TYPE"init_array\n " \
+	VALUE_ALIGN"\n "VALUE_DIRECTIVE" _libc_preinit\n .previous");
 #else
-ADD_TO_ARRAY(_libc_preinit, preinit_array);
+__asm(" .section .preinit_array,\"a\","TYPE"preinit_array\n " \
+	VALUE_ALIGN"\n "VALUE_DIRECTIVE" _libc_preinit\n .previous");
 #endif
 
 /*

@@ -1,4 +1,4 @@
-/* $OpenBSD: cpu.h,v 1.47 2024/05/01 12:54:27 mpi Exp $ */
+/* $OpenBSD: cpu.h,v 1.50 2024/07/24 21:24:18 kettenis Exp $ */
 /*
  * Copyright (c) 2016 Dale Rahn <drahn@dalerahn.com>
  *
@@ -63,8 +63,14 @@
 
 extern uint64_t cpu_id_aa64isar0;
 extern uint64_t cpu_id_aa64isar1;
+extern uint64_t cpu_id_aa64isar2;
+extern uint64_t cpu_id_aa64mmfr0;
+extern uint64_t cpu_id_aa64mmfr1;
+extern uint64_t cpu_id_aa64mmfr2;
 extern uint64_t cpu_id_aa64pfr0;
 extern uint64_t cpu_id_aa64pfr1;
+
+void cpu_identify_cleanup(void);
 
 #include <machine/intr.h>
 #include <machine/frame.h>
@@ -146,6 +152,8 @@ struct cpu_info {
 	uint64_t		ci_ttbr1;
 	vaddr_t			ci_el1_stkend;
 
+	uint32_t		ci_psci_idle_latency;
+	uint32_t		ci_psci_idle_param;
 	uint32_t		ci_psci_suspend_param;
 
 	struct opp_table	*ci_opp_table;

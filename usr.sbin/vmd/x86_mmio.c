@@ -1,5 +1,4 @@
-/*	$OpenBSD: mmio.c,v 1.3 2024/02/10 12:31:16 dv Exp $	*/
-
+/*	$OpenBSD: x86_mmio.c,v 1.1 2024/07/10 10:41:19 dv Exp $	*/
 /*
  * Copyright (c) 2022 Dave Voutila <dv@openbsd.org>
  *

@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl.h,v 1.6 2024/03/02 11:48:55 tb Exp $ */
+/* $OpenBSD: ssl.h,v 1.8 2024/08/03 04:50:27 tb Exp $ */
 /*
  * Copyright (c) 2023 Bob Beck <beck@openbsd.org>
  *
@@ -105,6 +105,7 @@ LSSL_USED(SSL_CTX_set_timeout);
 LSSL_USED(SSL_CTX_get_timeout);
 LSSL_USED(SSL_CTX_get_cert_store);
 LSSL_USED(SSL_CTX_set_cert_store);
+LSSL_USED(SSL_CTX_set1_cert_store);
 LSSL_USED(SSL_CTX_get0_certificate);
 LSSL_USED(SSL_CTX_get0_privatekey);
 LSSL_USED(SSL_want);
@@ -377,5 +378,6 @@ LSSL_USED(SSL_get_peer_quic_transport_params);
 LSSL_USED(SSL_set_quic_use_legacy_codepoint);
 LSSL_USED(ERR_load_SSL_strings);
 LSSL_USED(OPENSSL_init_ssl);
+LSSL_USED(SSL_CIPHER_get_handshake_digest);
 
 #endif /* _LIBSSL_SSL_H */

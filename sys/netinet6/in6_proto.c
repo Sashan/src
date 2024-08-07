@@ -1,4 +1,4 @@
-/*	$OpenBSD: in6_proto.c,v 1.114 2024/04/16 12:40:40 bluhm Exp $	*/
+/*	$OpenBSD: in6_proto.c,v 1.117 2024/07/26 14:38:20 bluhm Exp $	*/
 /*	$KAME: in6_proto.c,v 1.66 2000/10/10 15:35:47 itojun Exp $	*/
 
 /*
@@ -136,7 +136,7 @@ const struct protosw inet6sw[] = {
   .pr_type	= SOCK_DGRAM,
   .pr_domain	= &inet6domain,
   .pr_protocol	= IPPROTO_UDP,
-  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_SPLICE,
+  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_SPLICE|PR_MPINPUT|PR_MPSOCKET,
   .pr_input	= udp_input,
   .pr_ctlinput	= udp6_ctlinput,
   .pr_ctloutput	= ip6_ctloutput,
@@ -158,7 +158,7 @@ const struct protosw inet6sw[] = {
   .pr_type	= SOCK_RAW,
   .pr_domain	= &inet6domain,
   .pr_protocol	= IPPROTO_RAW,
-  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPINPUT,
+  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPINPUT|PR_MPSOCKET,
   .pr_input	= rip6_input,
   .pr_ctlinput	= rip6_ctlinput,
   .pr_ctloutput	= rip6_ctloutput,
@@ -169,7 +169,7 @@ const struct protosw inet6sw[] = {
   .pr_type	= SOCK_RAW,
   .pr_domain	= &inet6domain,
   .pr_protocol	= IPPROTO_ICMPV6,
-  .pr_flags	= PR_ATOMIC|PR_ADDR,
+  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPSOCKET,
   .pr_input	= icmp6_input,
   .pr_ctlinput	= rip6_ctlinput,
   .pr_ctloutput	= rip6_ctloutput,
@@ -204,7 +204,7 @@ const struct protosw inet6sw[] = {
   .pr_type	= SOCK_RAW,
   .pr_domain	= &inet6domain,
   .pr_protocol	= IPPROTO_AH,
-  .pr_flags	= PR_ATOMIC|PR_ADDR,
+  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPSOCKET,
   .pr_input	= ah46_input,
   .pr_ctloutput	= rip6_ctloutput,
   .pr_usrreqs	= &rip6_usrreqs,
@@ -214,7 +214,7 @@ const struct protosw inet6sw[] = {
   .pr_type	= SOCK_RAW,
   .pr_domain	= &inet6domain,
   .pr_protocol	= IPPROTO_ESP,
-  .pr_flags	= PR_ATOMIC|PR_ADDR,
+  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPSOCKET,
   .pr_input	= esp46_input,
   .pr_ctloutput	= rip6_ctloutput,
   .pr_usrreqs	= &rip6_usrreqs,
@@ -224,7 +224,7 @@ const struct protosw inet6sw[] = {
   .pr_type	= SOCK_RAW,
   .pr_domain	= &inet6domain,
   .pr_protocol	= IPPROTO_IPCOMP,
-  .pr_flags	= PR_ATOMIC|PR_ADDR,
+  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPSOCKET,
   .pr_input	= ipcomp46_input,
   .pr_ctloutput	= rip6_ctloutput,
   .pr_usrreqs	= &rip6_usrreqs,
@@ -235,7 +235,7 @@ const struct protosw inet6sw[] = {
   .pr_type	= SOCK_RAW,
   .pr_domain	= &inet6domain,
   .pr_protocol	= IPPROTO_IPV4,
-  .pr_flags	= PR_ATOMIC|PR_ADDR,
+  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPSOCKET,
 #if NGIF > 0
   .pr_input	= in6_gif_input,
 #else
@@ -248,7 +248,7 @@ const struct protosw inet6sw[] = {
   .pr_type	= SOCK_RAW,
   .pr_domain	= &inet6domain,
   .pr_protocol	= IPPROTO_IPV6,
-  .pr_flags	= PR_ATOMIC|PR_ADDR,
+  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPSOCKET,
 #if NGIF > 0
   .pr_input	= in6_gif_input,
 #else
@@ -262,7 +262,7 @@ const struct protosw inet6sw[] = {
   .pr_type	= SOCK_RAW,
   .pr_domain	= &inet6domain,
   .pr_protocol	= IPPROTO_MPLS,
-  .pr_flags	= PR_ATOMIC|PR_ADDR,
+  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPSOCKET,
 #if NGIF > 0
   .pr_input	= in6_gif_input,
 #else
@@ -277,7 +277,7 @@ const struct protosw inet6sw[] = {
   .pr_type	= SOCK_RAW,
   .pr_domain	= &inet6domain,
   .pr_protocol	= IPPROTO_CARP,
-  .pr_flags	= PR_ATOMIC|PR_ADDR,
+  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPSOCKET,
   .pr_input	= carp6_proto_input,
   .pr_ctloutput = rip6_ctloutput,
   .pr_usrreqs	= &rip6_usrreqs,
@@ -289,7 +289,7 @@ const struct protosw inet6sw[] = {
   .pr_type	= SOCK_RAW,
   .pr_domain	= &inet6domain,
   .pr_protocol	= IPPROTO_DIVERT,
-  .pr_flags	= PR_ATOMIC|PR_ADDR,
+  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPSOCKET,
   .pr_ctloutput	= rip6_ctloutput,
   .pr_usrreqs	= &divert6_usrreqs,
   .pr_init	= divert6_init,
@@ -301,7 +301,7 @@ const struct protosw inet6sw[] = {
   .pr_type	= SOCK_RAW,
   .pr_domain	= &inet6domain,
   .pr_protocol	= IPPROTO_ETHERIP,
-  .pr_flags	= PR_ATOMIC|PR_ADDR,
+  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPSOCKET,
   .pr_input	= ip6_etherip_input,
   .pr_ctloutput	= rip6_ctloutput,
   .pr_usrreqs	= &rip6_usrreqs,
@@ -312,7 +312,7 @@ const struct protosw inet6sw[] = {
   .pr_type	= SOCK_RAW,
   .pr_domain	= &inet6domain,
   .pr_protocol	= IPPROTO_GRE,
-  .pr_flags	= PR_ATOMIC|PR_ADDR,
+  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPSOCKET,
   .pr_input	= gre_input6,
   .pr_ctloutput	= rip6_ctloutput,
   .pr_usrreqs	= &rip6_usrreqs,
@@ -322,7 +322,7 @@ const struct protosw inet6sw[] = {
   /* raw wildcard */
   .pr_type	= SOCK_RAW,
   .pr_domain	= &inet6domain,
-  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPINPUT,
+  .pr_flags	= PR_ATOMIC|PR_ADDR|PR_MPINPUT|PR_MPSOCKET,
   .pr_input	= rip6_input,
   .pr_ctloutput	= rip6_ctloutput,
   .pr_usrreqs	= &rip6_usrreqs,
@@ -343,10 +343,10 @@ const struct domain inet6domain = {
 /*
  * Internet configuration info
  */
-int	ip6_forwarding = 0;	/* no forwarding unless sysctl'd to enable */
+int	ip6_forwarding = 0;	/* [a] no forwarding unless sysctl to enable */
 int	ip6_mforwarding = 0;	/* no multicast forwarding unless ... */
 int	ip6_multipath = 0;	/* no using multipath routes unless ... */
-int	ip6_sendredirects = 1;
+int	ip6_sendredirects = 1;	/* [a] */
 int	ip6_defhlim = IPV6_DEFHLIM;
 int	ip6_defmcasthlim = IPV6_DEFAULT_MULTICAST_HOPS;
 int	ip6_maxfragpackets = 200;

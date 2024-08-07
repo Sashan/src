@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.197 2024/07/09 07:39:21 beck Exp $
+# $OpenBSD: Makefile,v 1.201 2024/08/02 10:48:54 jsing Exp $
 
 LIB=	crypto
 LIBREBUILD=y
@@ -53,7 +53,6 @@ CFLAGS+= -I${LCRYPTO_SRC}/x509
 
 VERSION_SCRIPT=	Symbols.map
 SYMBOL_LIST=	${.CURDIR}/Symbols.list
-SYMBOL_NAMESPACE=	${.CURDIR}/Symbols.namespace
 
 .if (${MACHINE_CPU} == "amd64") || (${MACHINE_CPU} == "i386")
 SYMBOL_LIST+=	${.CURDIR}/arch/${MACHINE_CPU}/Symbols.list
@@ -62,10 +61,10 @@ SYMBOL_LIST+=	${.CURDIR}/arch/${MACHINE_CPU}/Symbols.list
 # crypto/
 SRCS+= cpt_err.c
 SRCS+= cryptlib.c
+SRCS+= crypto_ex_data.c
 SRCS+= crypto_init.c
 SRCS+= crypto_lock.c
 SRCS+= cversion.c
-SRCS+= ex_data.c
 SRCS+= malloc-wrapper.c
 SRCS+= mem_clr.c
 SRCS+= mem_dbg.c
@@ -391,6 +390,7 @@ SRCS+= idea.c
 # kdf/
 SRCS+= hkdf_evp.c
 SRCS+= kdf_err.c
+SRCS+= tls1_prf.c
 
 # lhash/
 SRCS+= lhash.c
@@ -745,18 +745,11 @@ includes: prereq
 	    echo $$j; \
 	    eval "$$j"; \
 	done;
-.ifdef NAMESPACE
-${VERSION_SCRIPT}: ${SYMBOL_LIST} ${SYMBOL_NAMESPACE}
-	{ printf '{\n\tglobal:\n'; \
-	  sed '/^[._a-zA-Z]/s/$$/;/; s/^/		/' ${SYMBOL_NAMESPACE}; \
-	  sed '/^[._a-zA-Z]/s/$$/;/; s/^/		/' ${SYMBOL_LIST}; \
-	  printf '\n\tlocal:\n\t\t*;\n};\n'; } >$@.tmp && mv $@.tmp $@
-.else
 ${VERSION_SCRIPT}: ${SYMBOL_LIST}
 	{ printf '{\n\tglobal:\n'; \
+	  sed '/^[._a-zA-Z]/s/$$/;/; s/^/		_libre_/' ${SYMBOL_LIST}; \
 	  sed '/^[._a-zA-Z]/s/$$/;/; s/^/		/' ${SYMBOL_LIST}; \
 	  printf '\n\tlocal:\n\t\t*;\n};\n'; } >$@.tmp && mv $@.tmp $@
-.endif
 
 # generated
 CFLAGS+= -I${.OBJDIR}

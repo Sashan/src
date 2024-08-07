@@ -1,4 +1,4 @@
-/*	$OpenBSD: vionet.c,v 1.14 2024/02/22 02:38:53 dv Exp $	*/
+/*	$OpenBSD: vionet.c,v 1.16 2024/07/12 14:34:08 jan Exp $	*/
 
 /*
  * Copyright (c) 2023 Dave Voutila <dv@openbsd.org>
@@ -805,10 +805,8 @@ vionet_tx(struct virtio_dev *dev)
 		}
 
 		/* Check if we've got a minimum viable amount of data. */
-		if (chain_len < VIONET_MIN_TXLEN) {
-			sz = chain_len;
+		if (chain_len < VIONET_MIN_TXLEN)
 			goto drop;
-		}
 
 		/*
 		 * Packet inspection for ethernet header (if using a "local"
@@ -832,16 +830,17 @@ vionet_tx(struct virtio_dev *dev)
 				log_warnx("%s: bad source address %s",
 				    __func__, ether_ntoa((struct ether_addr *)
 					eh->ether_shost));
-				sz = chain_len;
 				goto drop;
 			}
 		}
 		if (vionet->local) {
 			dhcpsz = dhcp_request(dev, iov->iov_base, iov->iov_len,
 			    &dhcppkt);
-			if (dhcpsz > 0)
+			if (dhcpsz > 0) {
 				log_debug("%s: detected dhcp request of %zu bytes",
-			    	    __func__, dhcpsz);
+				    __func__, dhcpsz);
+				goto drop;
+			}
 		}
 
 		/* Write our packet to the tap(4). */
@@ -850,10 +849,10 @@ vionet_tx(struct virtio_dev *dev)
 			log_warn("%s", __func__);
 			goto reset;
 		}
-		sz += sizeof(struct virtio_net_hdr);
+		chain_len += sizeof(struct virtio_net_hdr);
 drop:
 		used->ring[used->idx & VIONET_QUEUE_MASK].id = hdr_idx;
-		used->ring[used->idx & VIONET_QUEUE_MASK].len = sz;
+		used->ring[used->idx & VIONET_QUEUE_MASK].len = chain_len;
 		__sync_synchronize();
 		used->idx++;
 		idx++;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_exit.c,v 1.224 2024/07/08 13:17:12 claudio Exp $	*/
+/*	$OpenBSD: kern_exit.c,v 1.230 2024/08/06 18:41:20 claudio Exp $	*/
 /*	$NetBSD: kern_exit.c,v 1.39 1996/04/22 01:38:25 christos Exp $	*/
 
 /*
@@ -69,7 +69,7 @@
 #include <sys/kcov.h>
 #endif
 
-void	proc_finish_wait(struct proc *, struct proc *);
+void	proc_finish_wait(struct proc *, struct process *);
 void	process_clear_orphan(struct process *);
 void	process_zap(struct process *);
 void	proc_free(struct proc *);
@@ -458,8 +458,6 @@ reaper(void *arg)
 
 		WITNESS_THREAD_EXIT(p);
 
-		KERNEL_LOCK();
-
 		/*
 		 * Free the VM resources we're still holding on to.
 		 * We must do this from a valid thread because doing
@@ -470,13 +468,16 @@ reaper(void *arg)
 
 		if (p->p_flag & P_THREAD) {
 			/* Just a thread */
+			KERNEL_LOCK();
 			proc_free(p);
+			KERNEL_UNLOCK();
 		} else {
 			struct process *pr = p->p_p;
 
 			/* Release the rest of the process's vmspace */
 			uvm_exit(pr);
 
+			KERNEL_LOCK();
 			if ((pr->ps_flags & PS_NOZOMBIE) == 0) {
 				/* Process is now a true zombie. */
 				atomic_setbits_int(&pr->ps_flags, PS_ZOMBIE);
@@ -493,9 +494,8 @@ reaper(void *arg)
 				/* No one will wait for us, just zap it. */
 				process_zap(pr);
 			}
+			KERNEL_UNLOCK();
 		}
-
-		KERNEL_UNLOCK();
 	}
 }
 
@@ -546,14 +546,13 @@ loop:
 			if (rusage != NULL)
 				memcpy(rusage, pr->ps_ru, sizeof(*rusage));
 			if ((options & WNOWAIT) == 0)
-				proc_finish_wait(q, p);
+				proc_finish_wait(q, pr);
 			return (0);
 		}
 		if ((options & WTRAPPED) &&
-		    pr->ps_flags & PS_TRACED &&
+		    (pr->ps_flags & PS_TRACED) &&
 		    (pr->ps_flags & PS_WAITED) == 0 && pr->ps_single &&
-		    pr->ps_single->p_stat == SSTOP &&
-		    (pr->ps_single->p_flag & P_SUSPSINGLE) == 0) {
+		    pr->ps_single->p_stat == SSTOP) {
 			if (single_thread_wait(pr, 0))
 				goto loop;
 
@@ -578,8 +577,8 @@ loop:
 		if (p->p_stat == SSTOP &&
 		    (pr->ps_flags & PS_WAITED) == 0 &&
 		    (p->p_flag & P_SUSPSINGLE) == 0 &&
-		    (pr->ps_flags & PS_TRACED ||
-		    options & WUNTRACED)) {
+		    ((pr->ps_flags & PS_TRACED) ||
+		    (options & WUNTRACED))) {
 			if ((options & WNOWAIT) == 0)
 				atomic_setbits_int(&pr->ps_flags, PS_WAITED);
 
@@ -598,9 +597,10 @@ loop:
 				memset(rusage, 0, sizeof(*rusage));
 			return (0);
 		}
-		if ((options & WCONTINUED) && (p->p_flag & P_CONTINUED)) {
+		if ((options & WCONTINUED) && (pr->ps_flags & PS_CONTINUED)) {
 			if ((options & WNOWAIT) == 0)
-				atomic_clearbits_int(&p->p_flag, P_CONTINUED);
+				atomic_clearbits_int(&pr->ps_flags,
+				    PS_CONTINUED);
 
 			*retval = pr->ps_pid;
 			if (info != NULL) {
@@ -737,16 +737,15 @@ sys_waitid(struct proc *q, void *v, register_t *retval)
 }
 
 void
-proc_finish_wait(struct proc *waiter, struct proc *p)
+proc_finish_wait(struct proc *waiter, struct process *pr)
 {
-	struct process *pr, *tr;
+	struct process *tr;
 	struct rusage *rup;
 
 	/*
 	 * If we got the child via a ptrace 'attach',
 	 * we need to give it back to the old parent.
 	 */
-	pr = p->p_p;
 	if (pr->ps_oppid != 0 && (pr->ps_oppid != pr->ps_pptr->ps_pid) &&
 	   (tr = prfind(pr->ps_oppid))) {
 		pr->ps_oppid = 0;
@@ -755,7 +754,7 @@ proc_finish_wait(struct proc *waiter, struct proc *p)
 		prsignal(tr, SIGCHLD);
 		wakeup(tr);
 	} else {
-		scheduler_wait_hook(waiter, p);
+		scheduler_wait_hook(waiter, pr->ps_mainproc);
 		rup = &waiter->p_p->ps_cru;
 		ruadd(rup, pr->ps_ru);
 		LIST_REMOVE(pr, ps_list);	/* off zombprocess */

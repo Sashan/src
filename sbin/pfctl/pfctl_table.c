@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfctl_table.c,v 1.88 2024/05/09 08:35:40 florian Exp $ */
+/*	$OpenBSD: pfctl_table.c,v 1.89 2024/07/14 19:51:08 sashan Exp $ */
 
 /*
  * Copyright (c) 2002 Cedric Berger
@@ -549,12 +549,13 @@ pfctl_define_table(char *name, int flags, int addrs, const char *anchor,
 	    sizeof(tbl->pfrt_anchor)) >= sizeof(tbl->pfrt_anchor))
 		errx(1, "%s: strlcpy", __func__);
 	tbl->pfrt_flags = flags;
-	DBGPRINT("%s %s@%s\n", __func__, tbl->pfrt_name, tbl->pfrt_anchor);
+	DBGPRINT("%s %s@%s [%x]\n", __func__, tbl->pfrt_name,
+	    tbl->pfrt_anchor, tbl->pfrt_flags);
 
 	/*
 	 * non-root anchors processed by parse.y are loaded to kernel later.
 	 * Here we load tables, which are either created for root anchor
-	 * are by 'pfctl -t ... -T ...' command.
+	 * or by 'pfctl -t ... -T ...' command.
 	 */
 	if (ukt != NULL)
 		return (0);

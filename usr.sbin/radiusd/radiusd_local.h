@@ -1,4 +1,4 @@
-/*	$OpenBSD: radiusd_local.h,v 1.11 2024/07/02 00:33:51 yasuoka Exp $	*/
+/*	$OpenBSD: radiusd_local.h,v 1.16 2024/07/17 11:31:46 yasuoka Exp $	*/
 
 /*
  * Copyright (c) 2013 Internet Initiative Japan Inc.
@@ -16,6 +16,9 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#ifndef RADIUSD_LOCAL_H
+#define RADIUSD_LOCAL_H 1
+
 #include <sys/socket.h>		/* for struct sockaddr_storage */
 #include <sys/queue.h>		/* for TAILQ_* */
 #include <netinet/in.h>		/* for struct sockaddr_in* */
@@ -30,6 +33,7 @@
 #define	MODULE_IO_TIMEOUT	2000
 
 #define	CONFFILE			"/etc/radiusd.conf"
+
 struct radius_query;	/* forward declaration */
 
 struct radiusd_addr {
@@ -93,6 +97,7 @@ struct radiusd_module_ref {
 struct radiusd_authentication {
 	char					**username;
 	struct radiusd_module_ref		 *auth;
+	bool					  isfilter;
 	TAILQ_HEAD(,radiusd_module_ref)		  deco;
 	TAILQ_ENTRY(radiusd_authentication)	  next;
 };
@@ -122,6 +127,7 @@ struct radiusd {
 
 struct radius_query {
 	u_int				 id;
+	struct radiusd			*radiusd;
 	struct sockaddr_storage		 clientaddr;
 	int				 clientaddrlen;
 	int				 req_id;
@@ -135,7 +141,18 @@ struct radius_query {
 	char				 username[256]; /* original username */
 	TAILQ_ENTRY(radius_query)	 next;
 	struct radiusd_module_ref	*deco;
+	struct radius_query		*prev;
 };
+
+struct imsgev {
+	struct imsgbuf		 ibuf;
+	void			(*handler)(int, short, void *);
+	struct event		 ev;
+	short			 events;
+};
+
+extern struct radiusd *radiusd_s;
+
 #ifndef nitems
 #define nitems(_x)    (sizeof((_x)) / sizeof((_x)[0]))
 #endif
@@ -143,7 +160,7 @@ struct radius_query {
 #ifdef RADIUSD_DEBUG
 #define	RADIUSD_DBG(x)	log_debug x
 #else
-#define	RADIUSD_DBG(x)
+#define	RADIUSD_DBG(x)	((void)0)
 #endif
 #define	RADIUSD_ASSERT(_cond)					\
 	do {							\
@@ -171,6 +188,9 @@ struct radius_query {
 #define	MODULE_DO_RESDECO(_m)					\
 	((_m)->fd >= 0 &&					\
 	    ((_m)->capabilities & RADIUSD_MODULE_CAP_RESDECO) != 0)
+#define	MODULE_DO_NEXTRES(_m)					\
+	((_m)->fd >= 0 &&					\
+	    ((_m)->capabilities & RADIUSD_MODULE_CAP_NEXTRES) != 0)
 
 int	 parse_config(const char *, struct radiusd *);
 void	 radiusd_conf_init(struct radiusd *);
@@ -181,10 +201,18 @@ struct radiusd_module	*radiusd_module_load(struct radiusd *, const char *,
 void			 radiusd_module_unload(struct radiusd_module *);
 
 void		 radiusd_access_request_answer(struct radius_query *);
+void		 radiusd_access_request_next(struct radius_query *, RADIUS_PACKET *);
 void		 radiusd_access_request_aborted(struct radius_query *);
-void		 radius_attr_hide(const char *, const char *, const u_char *,
-		    u_char *, int);
-void		 radius_attr_unhide(const char *, const char *, const u_char *,
-		    u_char *, int);
+int		 radiusd_imsg_compose_module(struct radiusd *, const char *,
+		    uint32_t, uint32_t, pid_t, int, void *, size_t);
 
-int radiusd_module_set(struct radiusd_module *, const char *, int, char * const *);
+int		 radiusd_module_set(struct radiusd_module *, const char *, int,
+		    char * const *);
+
+void		 imsg_event_add(struct imsgev *);
+int		 imsg_compose_event(struct imsgev *, uint32_t, uint32_t, pid_t,
+		    int, void *, size_t);
+int		 imsg_composev_event (struct imsgev *, uint32_t, uint32_t,
+		    pid_t, int, struct iovec *, int);
+
+#endif

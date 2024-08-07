@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.286 2024/03/25 17:24:03 patrick Exp $
+# $OpenBSD: GENERIC,v 1.288 2024/07/31 10:07:33 mglocker Exp $
 #
 # GENERIC machine description file
 #
@@ -46,6 +46,7 @@ acpiec*		at acpi?
 acpige*		at acpi?
 acpimcfg*	at acpi?
 acpiiort*	at acpi?
+acpisectwo*	at acpi?
 smmu*		at acpiiort?
 acpipci*	at acpi?
 pci*		at acpipci?
@@ -95,6 +96,7 @@ smmu*		at fdt?
 xhci*		at fdt?
 ccp*		at fdt?		# AMD Cryptographic Co-processor
 ipmi*		at fdt?
+ufshci*		at fdt?
 
 # NS16550 compatible serial ports
 com*		at fdt?

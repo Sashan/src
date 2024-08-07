@@ -1,4 +1,4 @@
-/* $OpenBSD: speed.c,v 1.36 2024/07/09 07:51:09 deraadt Exp $ */
+/* $OpenBSD: speed.c,v 1.39 2024/07/13 16:43:56 tb Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -150,7 +150,7 @@
 #include "./testrsa.h"
 
 #define BUFSIZE	(1024*8+64)
-volatile sig_atomic_t run = 0;
+volatile sig_atomic_t run;
 
 static int mr = 0;
 static int usertime = 1;
@@ -193,10 +193,6 @@ static void sig_done(int sig);
 static void
 sig_done(int sig)
 {
-	int save_errno = errno;
-
-	signal(SIGALRM, sig_done);
-	errno = save_errno;
 	run = 0;
 }
 
@@ -435,6 +431,7 @@ speed_main(int argc, char **argv)
 	const EVP_MD *evp_md = NULL;
 	int decrypt = 0;
 	int multi = 0;
+	struct sigaction sa;
 	const char *errstr = NULL;
 
 	if (pledge("stdio proc", NULL) == -1) {
@@ -935,7 +932,12 @@ speed_main(int argc, char **argv)
 	memset(rsa_c, 0, sizeof(rsa_c));
 #define COND(c)	(run && count<0x7fffffff)
 #define COUNT(d) (count)
-	signal(SIGALRM, sig_done);
+
+	memset(&sa, 0, sizeof(sa));
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = SA_RESTART;
+	sa.sa_handler = sig_done;
+	sigaction(SIGALRM, &sa, NULL);
 
 #ifndef OPENSSL_NO_MD4
 	if (doit[D_MD4]) {

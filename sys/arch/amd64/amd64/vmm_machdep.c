@@ -1,4 +1,4 @@
-/* $OpenBSD: vmm_machdep.c,v 1.28 2024/06/26 01:40:49 jsg Exp $ */
+/* $OpenBSD: vmm_machdep.c,v 1.31 2024/07/26 15:59:04 bluhm Exp $ */
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -126,7 +126,7 @@ int svm_fault_page(struct vcpu *, paddr_t);
 int vmx_fault_page(struct vcpu *, paddr_t);
 int vmx_handle_np_fault(struct vcpu *);
 int svm_handle_np_fault(struct vcpu *);
-int vmx_mprotect_ept(vm_map_t, paddr_t, paddr_t, int);
+int vmx_mprotect_ept(struct vcpu *, vm_map_t, paddr_t, paddr_t, int);
 pt_entry_t *vmx_pmap_find_pte_ept(pmap_t, paddr_t);
 int vmm_alloc_vpid(uint16_t *);
 void vmm_free_vpid(uint16_t);
@@ -777,7 +777,8 @@ vm_mprotect_ept(struct vm_mprotect_ept_params *vmep)
 	}
 
 	if (vmm_softc->mode == VMM_MODE_EPT)
-		ret = vmx_mprotect_ept(vm->vm_map, sgpa, sgpa + size, prot);
+		ret = vmx_mprotect_ept(vcpu, vm->vm_map, sgpa, sgpa + size,
+		    prot);
 	else if (vmm_softc->mode == VMM_MODE_RVI) {
 		pmap_write_protect(vm->vm_map->pmap, sgpa, sgpa + size, prot);
 		/* XXX requires a invlpga */
@@ -799,7 +800,8 @@ out_nolock:
  * required.
  */
 int
-vmx_mprotect_ept(vm_map_t vm_map, paddr_t sgpa, paddr_t egpa, int prot)
+vmx_mprotect_ept(struct vcpu *vcpu, vm_map_t vm_map, paddr_t sgpa, paddr_t egpa,
+    int prot)
 {
 	struct vmx_invept_descriptor vid;
 	pmap_t pmap;
@@ -859,7 +861,7 @@ vmx_mprotect_ept(vm_map_t vm_map, paddr_t sgpa, paddr_t egpa, int prot)
 		vid.vid_eptp = pmap->eptp;
 		DPRINTF("%s: flushing EPT TLB for EPTP 0x%llx\n", __func__,
 		    vid.vid_eptp);
-		invept(IA32_VMX_INVEPT_SINGLE_CTX, &vid);
+		invept(vcpu->vc_vmx_invept_op, &vid);
 	}
 
 	KERNEL_UNLOCK();
@@ -1903,6 +1905,7 @@ vcpu_reset_regs_svm(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 	 * I/O instructions (SVM_INTERCEPT_INOUT)
 	 * MSR access (SVM_INTERCEPT_MSR)
 	 * shutdown events (SVM_INTERCEPT_SHUTDOWN)
+	 * INVLPGA instruction (SVM_INTERCEPT_INVLPGA)
 	 *
 	 * VMRUN instruction (SVM_INTERCEPT_VMRUN)
 	 * VMMCALL instruction (SVM_INTERCEPT_VMMCALL)
@@ -1916,19 +1919,17 @@ vcpu_reset_regs_svm(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 	 * MWAIT instruction (SVM_INTERCEPT_MWAIT_COND)
 	 * MONITOR instruction (SVM_INTERCEPT_MONITOR)
 	 * RDTSCP instruction (SVM_INTERCEPT_RDTSCP)
-	 * INVLPGA instruction (SVM_INTERCEPT_INVLPGA)
 	 * XSETBV instruction (SVM_INTERCEPT_XSETBV) (if available)
 	 */
 	vmcb->v_intercept1 = SVM_INTERCEPT_INTR | SVM_INTERCEPT_NMI |
 	    SVM_INTERCEPT_CPUID | SVM_INTERCEPT_HLT | SVM_INTERCEPT_INOUT |
-	    SVM_INTERCEPT_MSR | SVM_INTERCEPT_SHUTDOWN;
+	    SVM_INTERCEPT_MSR | SVM_INTERCEPT_SHUTDOWN | SVM_INTERCEPT_INVLPGA;
 
 	vmcb->v_intercept2 = SVM_INTERCEPT_VMRUN | SVM_INTERCEPT_VMMCALL |
 	    SVM_INTERCEPT_VMLOAD | SVM_INTERCEPT_VMSAVE | SVM_INTERCEPT_STGI |
 	    SVM_INTERCEPT_CLGI | SVM_INTERCEPT_SKINIT | SVM_INTERCEPT_ICEBP |
 	    SVM_INTERCEPT_MWAIT_UNCOND | SVM_INTERCEPT_MONITOR |
-	    SVM_INTERCEPT_MWAIT_COND | SVM_INTERCEPT_RDTSCP |
-	    SVM_INTERCEPT_INVLPGA;
+	    SVM_INTERCEPT_MWAIT_COND | SVM_INTERCEPT_RDTSCP;
 
 	if (xsave_mask)
 		vmcb->v_intercept2 |= SVM_INTERCEPT_XSETBV;
@@ -1985,10 +1986,8 @@ vcpu_reset_regs_svm(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
             PATENTRY(6, PAT_UCMINUS) | PATENTRY(7, PAT_UC);
 
 	/* NPT */
-	if (vmm_softc->mode == VMM_MODE_RVI) {
-		vmcb->v_np_enable = 1;
-		vmcb->v_n_cr3 = vcpu->vc_parent->vm_map->pmap->pm_pdirpa;
-	}
+	vmcb->v_np_enable = 1;
+	vmcb->v_n_cr3 = vcpu->vc_parent->vm_map->pmap->pm_pdirpa;
 
 	/* Enable SVME in EFER (must always be set) */
 	vmcb->v_efer |= EFER_SVME;
@@ -2361,11 +2360,8 @@ vcpu_reset_regs_vmx(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 	    IA32_VMX_USE_TPR_SHADOW;
 	want0 = 0;
 
-	if (vmm_softc->mode == VMM_MODE_EPT) {
-		want1 |= IA32_VMX_ACTIVATE_SECONDARY_CONTROLS;
-		want0 |= IA32_VMX_CR3_LOAD_EXITING |
-		    IA32_VMX_CR3_STORE_EXITING;
-	}
+	want1 |= IA32_VMX_ACTIVATE_SECONDARY_CONTROLS;
+	want0 |= IA32_VMX_CR3_LOAD_EXITING | IA32_VMX_CR3_STORE_EXITING;
 
 	if (vcpu->vc_vmx_basic & IA32_VMX_TRUE_CTLS_AVAIL) {
 		ctrl = IA32_VMX_TRUE_PROCBASED_CTLS;
@@ -2401,7 +2397,7 @@ vcpu_reset_regs_vmx(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 	 * IA32_VMX_UNRESTRICTED_GUEST - enable unrestricted guest (if caller
 	 *     specified CR0_PG | CR0_PE in %cr0 in the 'vrs' parameter)
 	 */
-	want1 = 0;
+	want1 = IA32_VMX_ENABLE_EPT;
 
 	/* XXX checking for 2ndary controls can be combined here */
 	if (vcpu_vmx_check_cap(vcpu, IA32_VMX_PROCBASED_CTLS,
@@ -2412,9 +2408,6 @@ vcpu_reset_regs_vmx(struct vcpu *vcpu, struct vcpu_reg_state *vrs)
 			vcpu->vc_vmx_vpid_enabled = 1;
 		}
 	}
-
-	if (vmm_softc->mode == VMM_MODE_EPT)
-		want1 |= IA32_VMX_ENABLE_EPT;
 
 	if (vcpu_vmx_check_cap(vcpu, IA32_VMX_PROCBASED_CTLS,
 	    IA32_VMX_ACTIVATE_SECONDARY_CONTROLS, 1)) {
@@ -2948,6 +2941,10 @@ vcpu_init_vmx(struct vcpu *vcpu)
 		ret = EINVAL;
 		goto exit;
 	}
+	if (msr & IA32_EPT_VPID_CAP_INVEPT_CONTEXT)
+		vcpu->vc_vmx_invept_op = IA32_VMX_INVEPT_SINGLE_CTX;
+	else
+		vcpu->vc_vmx_invept_op = IA32_VMX_INVEPT_GLOBAL_CTX;
 
 	if (msr & IA32_EPT_VPID_CAP_WB) {
 		/* WB cache type supported */
@@ -3896,6 +3893,7 @@ vcpu_run_vmx(struct vcpu *vcpu, struct vm_run_params *vrp)
 	struct schedstate_percpu *spc;
 	struct vmx_msr_store *msr_store;
 	struct vmx_invvpid_descriptor vid;
+	struct vmx_invept_descriptor vid_ept;
 	uint64_t cr0, eii, procbased, int_st;
 	u_long s;
 
@@ -3939,14 +3937,6 @@ vcpu_run_vmx(struct vcpu *vcpu, struct vm_run_params *vrp)
 		break;
 	}
 	memset(&vcpu->vc_exit, 0, sizeof(vcpu->vc_exit));
-
-	/* Host CR3 */
-	cr3 = rcr3();
-	if (vmwrite(VMCS_HOST_IA32_CR3, cr3)) {
-		printf("%s: vmwrite(0x%04X, 0x%llx)\n", __func__,
-		    VMCS_HOST_IA32_CR3, cr3);
-		return (EINVAL);
-	}
 
 	/* Handle vmd(8) injected interrupts */
 	/* Is there an interrupt pending injection? */
@@ -4000,6 +3990,22 @@ vcpu_run_vmx(struct vcpu *vcpu, struct vm_run_params *vrp)
 		if (ci != curcpu()) {
 			ci = curcpu();
 			vcpu->vc_last_pcpu = ci;
+
+			/* Invalidate EPT cache. */
+			vid_ept.vid_reserved = 0;
+			vid_ept.vid_eptp = vcpu->vc_parent->vm_map->pmap->eptp;
+			if (invept(vcpu->vc_vmx_invept_op, &vid_ept)) {
+				printf("%s: invept\n", __func__);
+				return (EINVAL);
+			}
+
+			/* Host CR3 */
+			cr3 = rcr3();
+			if (vmwrite(VMCS_HOST_IA32_CR3, cr3)) {
+				printf("%s: vmwrite(0x%04X, 0x%llx)\n", __func__,
+				    VMCS_HOST_IA32_CR3, cr3);
+				return (EINVAL);
+			}
 
 			setregion(&gdt, ci->ci_gdt, GDT_SIZE - 1);
 			if (gdt.rd_base == 0) {
@@ -5404,8 +5410,7 @@ vmx_handle_cr0_write(struct vcpu *vcpu, uint64_t r)
 	/* If the guest hasn't enabled paging ... */
 	if (!(r & CR0_PG) && (oldcr0 & CR0_PG)) {
 		/* Paging was disabled (prev. enabled) - Flush TLB */
-		if (vmm_softc->mode == VMM_MODE_EPT &&
-		    vcpu->vc_vmx_vpid_enabled) {
+		if (vcpu->vc_vmx_vpid_enabled) {
 			vid.vid_vpid = vcpu->vc_vpid;
 			vid.vid_addr = 0;
 			invvpid(IA32_VMX_INVVPID_SINGLE_CTX_GLB, &vid);

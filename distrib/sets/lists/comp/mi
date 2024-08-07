@@ -1160,8 +1160,6 @@
 ./usr/include/openssl/sm4.h
 ./usr/include/openssl/srtp.h
 ./usr/include/openssl/ssl.h
-./usr/include/openssl/ssl2.h
-./usr/include/openssl/ssl23.h
 ./usr/include/openssl/ssl3.h
 ./usr/include/openssl/stack.h
 ./usr/include/openssl/tls1.h
@@ -1291,6 +1289,7 @@
 ./usr/include/sys/ataio.h
 ./usr/include/sys/atomic.h
 ./usr/include/sys/audioio.h
+./usr/include/sys/auxv.h
 ./usr/include/sys/blist.h
 ./usr/include/sys/buf.h
 ./usr/include/sys/cdefs.h
@@ -1927,6 +1926,7 @@
 ./usr/share/man/man3/EVP_PKEY_CTX_get_operation.3
 ./usr/share/man/man3/EVP_PKEY_CTX_new.3
 ./usr/share/man/man3/EVP_PKEY_CTX_set_hkdf_md.3
+./usr/share/man/man3/EVP_PKEY_CTX_set_tls1_prf_md.3
 ./usr/share/man/man3/EVP_PKEY_add1_attr.3
 ./usr/share/man/man3/EVP_PKEY_asn1_get_count.3
 ./usr/share/man/man3/EVP_PKEY_asn1_new.3
@@ -2450,6 +2450,7 @@
 ./usr/share/man/man3/eddsa_pk_new.3
 ./usr/share/man/man3/editline.3
 ./usr/share/man/man3/elf.3
+./usr/share/man/man3/elf_aux_info.3
 ./usr/share/man/man3/elf_begin.3
 ./usr/share/man/man3/elf_cntl.3
 ./usr/share/man/man3/elf_end.3

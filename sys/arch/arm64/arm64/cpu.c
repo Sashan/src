@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.c,v 1.123 2024/07/02 19:59:54 kettenis Exp $	*/
+/*	$OpenBSD: cpu.c,v 1.131 2024/07/30 08:59:33 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2016 Dale Rahn <drahn@dalerahn.com>
@@ -32,6 +32,7 @@
 #include <uvm/uvm.h>
 
 #include <machine/fdt.h>
+#include <machine/elf.h>
 
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_clock.h>
@@ -241,10 +242,14 @@ int cpu_node;
 uint64_t cpu_id_aa64isar0;
 uint64_t cpu_id_aa64isar1;
 uint64_t cpu_id_aa64isar2;
+uint64_t cpu_id_aa64mmfr0;
+uint64_t cpu_id_aa64mmfr1;
+uint64_t cpu_id_aa64mmfr2;
 uint64_t cpu_id_aa64pfr0;
 uint64_t cpu_id_aa64pfr1;
 
 int arm64_has_lse;
+int arm64_has_rng;
 #ifdef CRYPTO
 int arm64_has_aes;
 #endif
@@ -273,8 +278,12 @@ struct cfdriver cpu_cd = {
 	NULL, "cpu", DV_DULL
 };
 
+struct timeout cpu_rng_to;
+void	cpu_rng(void *);
+
 void	cpu_opp_init(struct cpu_info *, uint32_t);
 void	cpu_psci_init(struct cpu_info *);
+void	cpu_psci_idle_cycle(void);
 
 void	cpu_flush_bp_noop(void);
 void	cpu_flush_bp_psci(void);
@@ -284,6 +293,25 @@ void	cpu_serror_apple(void);
 void	cpu_kstat_attach(struct cpu_info *ci);
 void	cpu_opp_kstat_attach(struct cpu_info *ci);
 #endif
+
+void
+cpu_rng(void *arg)
+{
+	struct timeout *to = arg;
+	uint64_t rndr;
+	int ret;
+
+	ret = __builtin_arm_rndrrs(&rndr);
+	if (ret)
+		ret = __builtin_arm_rndr(&rndr);
+	if (ret == 0) {
+		enqueue_randomness(rndr & 0xffffffff);
+		enqueue_randomness(rndr >> 32);
+	}
+
+	if (to)
+		timeout_add_msec(to, 1000);
+}
 
 /*
  * Enable mitigation for Spectre-V2 branch target injection
@@ -462,6 +490,7 @@ cpu_identify(struct cpu_info *ci)
 	static uint64_t prev_id_aa64isar2;
 	static uint64_t prev_id_aa64mmfr0;
 	static uint64_t prev_id_aa64mmfr1;
+	static uint64_t prev_id_aa64mmfr2;
 	static uint64_t prev_id_aa64pfr0;
 	static uint64_t prev_id_aa64pfr1;
 	uint64_t midr, impl, part;
@@ -617,6 +646,7 @@ cpu_identify(struct cpu_info *ci)
 	    READ_SPECIALREG(id_aa64isar2_el1) == prev_id_aa64isar2 &&
 	    READ_SPECIALREG(id_aa64mmfr0_el1) == prev_id_aa64mmfr0 &&
 	    READ_SPECIALREG(id_aa64mmfr1_el1) == prev_id_aa64mmfr1 &&
+	    READ_SPECIALREG(id_aa64mmfr2_el1) == prev_id_aa64mmfr2 &&
 	    READ_SPECIALREG(id_aa64pfr0_el1) == prev_id_aa64pfr0 &&
 	    READ_SPECIALREG(id_aa64pfr1_el1) == prev_id_aa64pfr1)
 		return;
@@ -635,6 +665,18 @@ cpu_identify(struct cpu_info *ci)
 	}
 	if (READ_SPECIALREG(id_aa64isar2_el1) != cpu_id_aa64isar2) {
 		printf("\n%s: mismatched ID_AA64ISAR2_EL1",
+		    ci->ci_dev->dv_xname);
+	}
+	if (READ_SPECIALREG(id_aa64mmfr0_el1) != cpu_id_aa64mmfr0) {
+		printf("\n%s: mismatched ID_AA64MMFR0_EL1",
+		    ci->ci_dev->dv_xname);
+	}
+	if (READ_SPECIALREG(id_aa64mmfr1_el1) != cpu_id_aa64mmfr1) {
+		printf("\n%s: mismatched ID_AA64MMFR1_EL1",
+		    ci->ci_dev->dv_xname);
+	}
+	if (READ_SPECIALREG(id_aa64mmfr2_el1) != cpu_id_aa64mmfr2) {
+		printf("\n%s: mismatched ID_AA64MMFR2_EL1",
 		    ci->ci_dev->dv_xname);
 	}
 	id = READ_SPECIALREG(id_aa64pfr0_el1);
@@ -666,6 +708,7 @@ cpu_identify(struct cpu_info *ci)
 	if (ID_AA64ISAR0_RNDR(id) >= ID_AA64ISAR0_RNDR_IMPL) {
 		printf("%sRNDR", sep);
 		sep = ",";
+		arm64_has_rng = 1;
 	}
 
 	if (ID_AA64ISAR0_TLB(id) >= ID_AA64ISAR0_TLB_IOS) {
@@ -841,14 +884,46 @@ cpu_identify(struct cpu_info *ci)
 		printf("%sDPB", sep);
 		sep = ",";
 	}
+	if (ID_AA64ISAR1_DPB(id) >= ID_AA64ISAR1_DPB_DCCVADP)
+		printf("+DCCVADP");
 
 	/*
 	 * ID_AA64ISAR2
 	 */
 	id = READ_SPECIALREG(id_aa64isar2_el1);
 
+	if (ID_AA64ISAR2_CSSC(id) >= ID_AA64ISAR2_CSSC_IMPL) {
+		printf("%sCSSC", sep);
+		sep = ",";
+	}
+
+	if (ID_AA64ISAR2_RPRFM(id) >= ID_AA64ISAR2_RPRFM_IMPL) {
+		printf("%sRPRFM", sep);
+		sep = ",";
+	}
+
 	if (ID_AA64ISAR2_CLRBHB(id) >= ID_AA64ISAR2_CLRBHB_IMPL) {
 		printf("%sCLRBHB", sep);
+		sep = ",";
+	}
+
+	if (ID_AA64ISAR2_BC(id) >= ID_AA64ISAR2_BC_IMPL) {
+		printf("%sBC", sep);
+		sep = ",";
+	}
+
+	if (ID_AA64ISAR2_MOPS(id) >= ID_AA64ISAR2_MOPS_IMPL) {
+		printf("%sMOPS", sep);
+		sep = ",";
+	}
+
+	if (ID_AA64ISAR2_RPRES(id) >= ID_AA64ISAR2_RPRES_IMPL) {
+		printf("%sRPRES", sep);
+		sep = ",";
+	}
+
+	if (ID_AA64ISAR2_WFXT(id) >= ID_AA64ISAR2_WFXT_IMPL) {
+		printf("%sWFXT", sep);
 		sep = ",";
 	}
 
@@ -858,6 +933,13 @@ cpu_identify(struct cpu_info *ci)
 	 * We only print ASIDBits for now.
 	 */
 	id = READ_SPECIALREG(id_aa64mmfr0_el1);
+
+	if (ID_AA64MMFR0_ECV(id) >= ID_AA64MMFR0_ECV_IMPL) {
+		printf("%sECV", sep);
+		sep = ",";
+	}
+	if (ID_AA64MMFR0_ECV(id) >= ID_AA64MMFR0_ECV_CNTHCTL)
+		printf("+CNTHCTL");
 
 	if (ID_AA64MMFR0_ASID_BITS(id) == ID_AA64MMFR0_ASID_BITS_16) {
 		printf("%sASID16", sep);
@@ -870,6 +952,11 @@ cpu_identify(struct cpu_info *ci)
 	 * We omit printing most virtualization related fields for now.
 	 */
 	id = READ_SPECIALREG(id_aa64mmfr1_el1);
+
+	if (ID_AA64MMFR1_AFP(id) >= ID_AA64MMFR1_AFP_IMPL) {
+		printf("%sAFP", sep);
+		sep = ",";
+	}
 
 	if (ID_AA64MMFR1_SPECSEI(id) >= ID_AA64MMFR1_SPECSEI_IMPL) {
 		printf("%sSpecSEI", sep);
@@ -913,6 +1000,21 @@ cpu_identify(struct cpu_info *ci)
 	}
 
 	/*
+	 * ID_AA64MMFR2
+	 */
+	id = READ_SPECIALREG(id_aa64mmfr2_el1);
+
+	if (ID_AA64MMFR2_IDS(id) >= ID_AA64MMFR2_IDS_IMPL) {
+		printf("%sIDS", sep);
+		sep = ",";
+	}
+
+	if (ID_AA64MMFR2_AT(id) >= ID_AA64MMFR2_AT_IMPL) {
+		printf("%sAT", sep);
+		sep = ",";
+	}
+
+	/*
 	 * ID_AA64PFR0
 	 */
 	id = READ_SPECIALREG(id_aa64pfr0_el1);
@@ -933,6 +1035,18 @@ cpu_identify(struct cpu_info *ci)
 
 	if (ID_AA64PFR0_DIT(id) >= ID_AA64PFR0_DIT_IMPL) {
 		printf("%sDIT", sep);
+		sep = ",";
+	}
+
+	if (ID_AA64PFR0_ADV_SIMD(id) != ID_AA64PFR0_ADV_SIMD_NONE &&
+	    ID_AA64PFR0_ADV_SIMD(id) >= ID_AA64PFR0_ADV_SIMD_HP) {
+		printf("%sAdvSIMD+HP", sep);
+		sep = ",";
+	}
+
+	if (ID_AA64PFR0_FP(id) != ID_AA64PFR0_FP_NONE &&
+	    ID_AA64PFR0_FP(id) >= ID_AA64PFR0_FP_HP) {
+		printf("%sFP+HP", sep);
 		sep = ",";
 	}
 
@@ -963,6 +1077,7 @@ cpu_identify(struct cpu_info *ci)
 	prev_id_aa64isar2 = READ_SPECIALREG(id_aa64isar2_el1);
 	prev_id_aa64mmfr0 = READ_SPECIALREG(id_aa64mmfr0_el1);
 	prev_id_aa64mmfr1 = READ_SPECIALREG(id_aa64mmfr1_el1);
+	prev_id_aa64mmfr2 = READ_SPECIALREG(id_aa64mmfr2_el1);
 	prev_id_aa64pfr0 = READ_SPECIALREG(id_aa64pfr0_el1);
 	prev_id_aa64pfr1 = READ_SPECIALREG(id_aa64pfr1_el1);
 
@@ -992,6 +1107,187 @@ cpu_identify(struct cpu_info *ci)
 	id = READ_SPECIALREG(id_aa64pfr1_el1);
 	printf("\nID_AA64PFR1_EL1: 0x%016llx", id);
 #endif
+}
+
+void
+cpu_identify_cleanup(void)
+{
+	uint64_t id_aa64mmfr2;
+	uint64_t value;
+
+	/* ID_AA64ISAR0_EL1 */
+	value = cpu_id_aa64isar0 & ID_AA64ISAR0_MASK;
+	value &= ~ID_AA64ISAR0_TLB_MASK;
+	cpu_id_aa64isar0 = value;
+
+	/* ID_AA64ISAR1_EL1 */
+	value = cpu_id_aa64isar1 & ID_AA64ISAR1_MASK;
+	value &= ~ID_AA64ISAR1_SPECRES_MASK;
+	cpu_id_aa64isar1 = value;
+
+	/* ID_AA64ISAR2_EL1 */
+	value = cpu_id_aa64isar2 & ID_AA64ISAR2_MASK;
+	value &= ~ID_AA64ISAR2_CLRBHB_MASK;
+	cpu_id_aa64isar2 = value;
+
+	/* ID_AA64MMFR0_EL1 */
+	value = 0;
+	value |= cpu_id_aa64mmfr0 & ID_AA64MMFR0_ECV_MASK;
+	cpu_id_aa64mmfr0 = value;
+
+	/* ID_AA64MMFR1_EL1 */
+	value = 0;
+	value |= cpu_id_aa64mmfr1 & ID_AA64MMFR1_AFP_MASK;
+	cpu_id_aa64mmfr1 = value;
+
+	/* ID_AA64MMFR2_EL1 */
+	value = 0;
+	value |= cpu_id_aa64mmfr2 & ID_AA64MMFR2_AT_MASK;
+	cpu_id_aa64mmfr2 = value;
+
+	/* ID_AA64PFR0_EL1 */
+	value = 0;
+	value |= cpu_id_aa64pfr0 & ID_AA64PFR0_FP_MASK;
+	value |= cpu_id_aa64pfr0 & ID_AA64PFR0_ADV_SIMD_MASK;
+	value |= cpu_id_aa64pfr0 & ID_AA64PFR0_DIT_MASK;
+	cpu_id_aa64pfr0 = value;
+
+	/* ID_AA64PFR1_EL1 */
+	value = 0;
+	value |= cpu_id_aa64pfr1 & ID_AA64PFR1_BT_MASK;
+	value |= cpu_id_aa64pfr1 & ID_AA64PFR1_SSBS_MASK;
+	cpu_id_aa64pfr1 = value;
+
+	/* HWCAP */
+	hwcap |= HWCAP_FP;	/* OpenBSD assumes Floating-point support */
+	hwcap |= HWCAP_ASIMD;	/* OpenBSD assumes Advanced SIMD support */
+	/* HWCAP_EVTSTRM: OpenBSD kernel doesn't configure event stream */
+	if (ID_AA64ISAR0_AES(cpu_id_aa64isar0) >= ID_AA64ISAR0_AES_BASE)
+		hwcap |= HWCAP_AES;
+	if (ID_AA64ISAR0_AES(cpu_id_aa64isar0) >= ID_AA64ISAR0_AES_PMULL)
+		hwcap |= HWCAP_PMULL;
+	if (ID_AA64ISAR0_SHA1(cpu_id_aa64isar0) >= ID_AA64ISAR0_SHA1_BASE)
+		hwcap |= HWCAP_SHA1;
+	if (ID_AA64ISAR0_SHA2(cpu_id_aa64isar0) >= ID_AA64ISAR0_SHA2_BASE)
+		hwcap |= HWCAP_SHA2;
+	if (ID_AA64ISAR0_CRC32(cpu_id_aa64isar0) >= ID_AA64ISAR0_CRC32_BASE)
+		hwcap |= HWCAP_CRC32;
+	if (ID_AA64ISAR0_ATOMIC(cpu_id_aa64isar0) >= ID_AA64ISAR0_ATOMIC_IMPL)
+		hwcap |= HWCAP_ATOMICS;
+	if (ID_AA64PFR0_FP(cpu_id_aa64pfr0) != ID_AA64PFR0_FP_NONE &&
+	    ID_AA64PFR0_FP(cpu_id_aa64pfr0) >= ID_AA64PFR0_FP_HP)
+		hwcap |= HWCAP_FPHP;
+	if (ID_AA64PFR0_FP(cpu_id_aa64pfr0) != ID_AA64PFR0_ADV_SIMD_NONE &&
+	    ID_AA64PFR0_FP(cpu_id_aa64pfr0) >= ID_AA64PFR0_ADV_SIMD_HP)
+		hwcap |= HWCAP_ASIMDHP;
+	id_aa64mmfr2 = READ_SPECIALREG(id_aa64mmfr2_el1);
+	if (ID_AA64MMFR2_IDS(id_aa64mmfr2) >= ID_AA64MMFR2_IDS_IMPL)
+		hwcap |= HWCAP_CPUID;
+	if (ID_AA64ISAR0_RDM(cpu_id_aa64isar0) >= ID_AA64ISAR0_RDM_IMPL)
+		hwcap |= HWCAP_ASIMDRDM;
+	if (ID_AA64ISAR1_JSCVT(cpu_id_aa64isar1) >= ID_AA64ISAR1_JSCVT_IMPL)
+		hwcap |= HWCAP_JSCVT;
+	if (ID_AA64ISAR1_FCMA(cpu_id_aa64isar1) >= ID_AA64ISAR1_FCMA_IMPL)
+		hwcap |= HWCAP_FCMA;
+	if (ID_AA64ISAR1_LRCPC(cpu_id_aa64isar1) >= ID_AA64ISAR1_LRCPC_BASE)
+		hwcap |= HWCAP_LRCPC;
+	if (ID_AA64ISAR1_DPB(cpu_id_aa64isar1) >= ID_AA64ISAR1_DPB_IMPL)
+		hwcap |= HWCAP_DCPOP;
+	if (ID_AA64ISAR0_SHA3(cpu_id_aa64isar0) >= ID_AA64ISAR0_SHA3_IMPL)
+		hwcap |= HWCAP_SHA3;
+	if (ID_AA64ISAR0_SM3(cpu_id_aa64isar0) >= ID_AA64ISAR0_SM3_IMPL)
+		hwcap |= HWCAP_SM3;
+	if (ID_AA64ISAR0_SM4(cpu_id_aa64isar0) >= ID_AA64ISAR0_SM4_IMPL)
+		hwcap |= HWCAP_SM4;
+	if (ID_AA64ISAR0_DP(cpu_id_aa64isar0) >= ID_AA64ISAR0_DP_IMPL)
+		hwcap |= HWCAP_ASIMDDP;
+	if (ID_AA64ISAR0_SHA2(cpu_id_aa64isar0) >= ID_AA64ISAR0_SHA2_512)
+		hwcap |= HWCAP_SHA512;
+	/* HWCAP_SVE: OpenBSD kernel doesn't provide SVE support */
+	if (ID_AA64ISAR0_FHM(cpu_id_aa64isar0) >= ID_AA64ISAR0_FHM_IMPL)
+		hwcap |= HWCAP_ASIMDFHM;
+	if (ID_AA64PFR0_DIT(cpu_id_aa64pfr0) >= ID_AA64PFR0_DIT_IMPL)
+		hwcap |= HWCAP_DIT;
+	if (ID_AA64MMFR2_AT(cpu_id_aa64mmfr2) >= ID_AA64MMFR2_AT_IMPL)
+		hwcap |= HWCAP_USCAT;
+	if (ID_AA64ISAR1_LRCPC(cpu_id_aa64isar1) >= ID_AA64ISAR1_LRCPC_LDAPUR)
+		hwcap |= HWCAP_ILRCPC;
+	if (ID_AA64ISAR0_TS(cpu_id_aa64isar0) >= ID_AA64ISAR0_TS_BASE)
+		hwcap |= HWCAP_FLAGM;
+	if (ID_AA64PFR1_SSBS(cpu_id_aa64pfr1) >= ID_AA64PFR1_SSBS_PSTATE_MSR)
+		hwcap |= HWCAP_SSBS;
+	if (ID_AA64ISAR1_SB(cpu_id_aa64isar1) >= ID_AA64ISAR1_SB_IMPL)
+		hwcap |= HWCAP_SB;
+	if (ID_AA64ISAR1_APA(cpu_id_aa64isar1) >= ID_AA64ISAR1_APA_BASE ||
+	    ID_AA64ISAR1_API(cpu_id_aa64isar1) >= ID_AA64ISAR1_API_BASE)
+		hwcap |= HWCAP_PACA;
+	if (ID_AA64ISAR1_GPA(cpu_id_aa64isar1) >= ID_AA64ISAR1_GPA_IMPL ||
+	    ID_AA64ISAR1_GPI(cpu_id_aa64isar1) >= ID_AA64ISAR1_GPI_IMPL)
+		hwcap |= HWCAP_PACG;
+
+	/* HWCAP2 */
+	if (ID_AA64ISAR1_DPB(cpu_id_aa64isar1) >= ID_AA64ISAR1_DPB_DCCVADP)
+		hwcap2 |= HWCAP2_DCPODP;
+	/* HWCAP2_SVE2: OpenBSD kernel doesn't provide SVE support */
+	/* HWCAP2_SVEAES: OpenBSD kernel doesn't provide SVE support */
+	/* HWCAP2_SVEPMULL: OpenBSD kernel doesn't provide SVE support */
+	/* HWCAP2_SVEBITPERM: OpenBSD kernel doesn't provide SVE support */
+	/* HWCAP2_SVESHA3: OpenBSD kernel doesn't provide SVE support */
+	/* HWCAP2_SVESM4: OpenBSD kernel doesn't provide SVE support */
+	if (ID_AA64ISAR0_TS(cpu_id_aa64isar0) >= ID_AA64ISAR0_TS_AXFLAG)
+		hwcap2 |= HWCAP2_FLAGM2;
+	if (ID_AA64ISAR1_FRINTTS(cpu_id_aa64isar1) >= ID_AA64ISAR1_FRINTTS_IMPL)
+		hwcap2 |= HWCAP2_FRINT;
+	/* HWCAP2_SVEI8MM: OpenBSD kernel doesn't provide SVE support */
+	/* HWCAP2_SVEF32MM: OpenBSD kernel doesn't provide SVE support */
+	/* HWCAP2_SVEF64MM: OpenBSD kernel doesn't provide SVE support */
+	/* HWCAP2_SVEBF16: OpenBSD kernel doesn't provide SVE support */
+	if (ID_AA64ISAR1_I8MM(cpu_id_aa64isar1) >= ID_AA64ISAR1_I8MM_IMPL)
+		hwcap2 |= HWCAP2_I8MM;
+	if (ID_AA64ISAR1_BF16(cpu_id_aa64isar1) >= ID_AA64ISAR1_BF16_BASE)
+		hwcap2 |= HWCAP2_BF16;
+	if (ID_AA64ISAR1_DGH(cpu_id_aa64isar1) >= ID_AA64ISAR1_DGH_IMPL)
+		hwcap2 |= HWCAP2_DGH;
+	if (ID_AA64ISAR0_RNDR(cpu_id_aa64isar0) >= ID_AA64ISAR0_RNDR_IMPL)
+		hwcap2 |= HWCAP2_RNG;
+	if (ID_AA64PFR1_BT(cpu_id_aa64pfr1) >= ID_AA64PFR1_BT_IMPL)
+		hwcap2 |= HWCAP2_BTI;
+	/* HWCAP2_MTE: OpenBSD kernel doesn't provide MTE support */
+	if (ID_AA64MMFR0_ECV(cpu_id_aa64mmfr0) >= ID_AA64MMFR0_ECV_IMPL)
+		hwcap2 |= HWCAP2_ECV;
+	if (ID_AA64MMFR1_AFP(cpu_id_aa64mmfr1) >= ID_AA64MMFR1_AFP_IMPL)
+		hwcap2 |= HWCAP2_AFP;
+	if (ID_AA64ISAR2_RPRES(cpu_id_aa64isar2) >= ID_AA64ISAR2_RPRES_IMPL)
+		hwcap2 |= HWCAP2_RPRES;
+	/* HWCAP2_MTE3: OpenBSD kernel doesn't provide MTE support */
+	/* HWCAP2_SME: OpenBSD kernel doesn't provide SME support */
+	/* HWCAP2_SME_I16I64: OpenBSD kernel doesn't provide SME support */
+	/* HWCAP2_SME_F64F64: OpenBSD kernel doesn't provide SME support */
+	/* HWCAP2_SME_I8I32: OpenBSD kernel doesn't provide SME support */
+	/* HWCAP2_SME_F16F32: OpenBSD kernel doesn't provide SME support */
+	/* HWCAP2_SME_B16F32: OpenBSD kernel doesn't provide SME support */
+	/* HWCAP2_SME_F32F32: OpenBSD kernel doesn't provide SME support */
+	/* HWCAP2_SME_FA64: OpenBSD kernel doesn't provide SME support */
+	if (ID_AA64ISAR2_WFXT(cpu_id_aa64isar2) >= ID_AA64ISAR2_WFXT_IMPL)
+		hwcap2 |= HWCAP2_WFXT;
+	if (ID_AA64ISAR1_BF16(cpu_id_aa64isar1) >= ID_AA64ISAR1_BF16_EBF)
+		hwcap2 |= HWCAP2_EBF16;
+	/* HWCAP2_SVE_EBF16: OpenBSD kernel doesn't provide SVE support */
+	if (ID_AA64ISAR2_CSSC(cpu_id_aa64isar2) >= ID_AA64ISAR2_CSSC_IMPL)
+		hwcap2 |= HWCAP2_CSSC;
+	if (ID_AA64ISAR2_RPRFM(cpu_id_aa64isar2) >= ID_AA64ISAR2_RPRFM_IMPL)
+		hwcap2 |= HWCAP2_RPRFM;
+	/* HWCAP2_SVE2P1: OpenBSD kernel doesn't provide SVE support */
+	/* HWCAP2_SME2: OpenBSD kernel doesn't provide SME support */
+	/* HWCAP2_SME2P1: OpenBSD kernel doesn't provide SME support */
+	/* HWCAP2_SME_I16I32: OpenBSD kernel doesn't provide SME support */
+	/* HWCAP2_SME_BI32I32: OpenBSD kernel doesn't provide SME support */
+	/* HWCAP2_SME_B16B16: OpenBSD kernel doesn't provide SME support */
+	/* HWCAP2_SME_F16F16: OpenBSD kernel doesn't provide SME support */
+	if (ID_AA64ISAR2_MOPS(cpu_id_aa64isar2) >= ID_AA64ISAR2_MOPS_IMPL)
+		hwcap2 |= HWCAP2_MOPS;
+	if (ID_AA64ISAR2_BC(cpu_id_aa64isar2) >= ID_AA64ISAR2_BC_IMPL)
+		hwcap2 |= HWCAP2_HBC;
 }
 
 void	cpu_init(void);
@@ -1096,6 +1392,9 @@ cpu_attach(struct device *parent, struct device *dev, void *aux)
 		cpu_id_aa64isar0 = READ_SPECIALREG(id_aa64isar0_el1);
 		cpu_id_aa64isar1 = READ_SPECIALREG(id_aa64isar1_el1);
 		cpu_id_aa64isar2 = READ_SPECIALREG(id_aa64isar2_el1);
+		cpu_id_aa64mmfr0 = READ_SPECIALREG(id_aa64mmfr0_el1);
+		cpu_id_aa64mmfr1 = READ_SPECIALREG(id_aa64mmfr1_el1);
+		cpu_id_aa64mmfr2 = READ_SPECIALREG(id_aa64mmfr2_el1);
 		cpu_id_aa64pfr0 = READ_SPECIALREG(id_aa64pfr0_el1);
 		cpu_id_aa64pfr1 = READ_SPECIALREG(id_aa64pfr1_el1);
 
@@ -1138,6 +1437,11 @@ cpu_attach(struct device *parent, struct device *dev, void *aux)
 		}
 
 		cpu_init();
+
+		if (arm64_has_rng) {
+			timeout_set(&cpu_rng_to, cpu_rng, &cpu_rng_to);
+			cpu_rng(&cpu_rng_to);
+		}
 #ifdef MULTIPROCESSOR
 	}
 #endif
@@ -1956,6 +2260,51 @@ cpu_psci_init(struct cpu_info *ci)
 	int idx, len, node;
 
 	/*
+	 * Find the shallowest (for now) idle state for this CPU.
+	 * This should be the first one that is listed.  We'll use it
+	 * in the idle loop.
+	 */
+
+	len = OF_getproplen(ci->ci_node, "cpu-idle-states");
+	if (len < (int)sizeof(uint32_t))
+		return;
+
+	states = malloc(len, M_TEMP, M_WAITOK);
+	OF_getpropintarray(ci->ci_node, "cpu-idle-states", states, len);
+	node = OF_getnodebyphandle(states[0]);
+	free(states, M_TEMP, len);
+	if (node) {
+		uint32_t entry, exit, residency, param;
+		int32_t features;
+
+		param = OF_getpropint(node, "arm,psci-suspend-param", 0);
+		entry = OF_getpropint(node, "entry-latency-us", 0);
+		exit = OF_getpropint(node, "exit-latency-us", 0);
+		residency = OF_getpropint(node, "min-residency-us", 0);
+		ci->ci_psci_idle_latency += entry + exit + 2 * residency;
+
+		/* Skip states that stop the local timer. */
+		if (OF_getpropbool(node, "local-timer-stop"))
+			ci->ci_psci_idle_param = 0;
+
+		/* Skip powerdown states. */
+		features = psci_features(CPU_SUSPEND);
+		if (features == PSCI_NOT_SUPPORTED ||
+		    (features & PSCI_FEATURE_POWER_STATE_EXT) == 0) {
+			if (param & PSCI_POWER_STATE_POWERDOWN)
+				param = 0;
+		} else {
+			if (param & PSCI_POWER_STATE_EXT_POWERDOWN)
+				param = 0;
+		}
+
+		if (param) {
+			ci->ci_psci_idle_param = param;
+			cpu_idle_cycle_fcn = cpu_psci_idle_cycle;
+		}
+	}
+
+	/*
 	 * Hunt for the deepest idle state for this CPU.  This is
 	 * fairly complicated as it requires traversing quite a few
 	 * nodes in the device tree.  The first step is to look up the
@@ -2050,6 +2399,30 @@ cpu_psci_init(struct cpu_info *ci)
 
 	ci->ci_psci_suspend_param =
 		OF_getpropint(node, "arm,psci-suspend-param", 0);
+}
+
+void
+cpu_psci_idle_cycle(void)
+{
+	struct cpu_info *ci = curcpu();
+	struct timeval start, stop;
+	u_long itime;
+
+	microuptime(&start);
+
+	if (ci->ci_prev_sleep > ci->ci_psci_idle_latency)
+		psci_cpu_suspend(ci->ci_psci_idle_param, 0, 0);
+	else
+		cpu_wfi();
+
+	microuptime(&stop);
+	timersub(&stop, &start, &stop);
+	itime = stop.tv_sec * 1000000 + stop.tv_usec;
+
+	ci->ci_last_itime = itime;
+	itime >>= 1;
+	ci->ci_prev_sleep = (ci->ci_prev_sleep + (ci->ci_prev_sleep >> 1)
+	    + itime) >> 1;
 }
 
 #if NKSTAT > 0

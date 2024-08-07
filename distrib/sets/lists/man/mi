@@ -1581,6 +1581,7 @@
 ./usr/share/man/man4/inet.4
 ./usr/share/man/man4/inet6.4
 ./usr/share/man/man4/inphy.4
+./usr/share/man/man4/intelpmc.4
 ./usr/share/man/man4/iophy.4
 ./usr/share/man/man4/iosf.4
 ./usr/share/man/man4/ip.4
@@ -2615,6 +2616,9 @@
 ./usr/share/man/man8/radiusctl.8
 ./usr/share/man/man8/radiusd.8
 ./usr/share/man/man8/radiusd_bsdauth.8
+./usr/share/man/man8/radiusd_eap2mschap.8
+./usr/share/man/man8/radiusd_file.8
+./usr/share/man/man8/radiusd_ipcp.8
 ./usr/share/man/man8/radiusd_radius.8
 ./usr/share/man/man8/radiusd_standard.8
 ./usr/share/man/man8/rarpd.8

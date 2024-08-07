@@ -1,4 +1,4 @@
-/* $OpenBSD: ns8250.c,v 1.38 2023/10/25 12:44:28 dv Exp $ */
+/* $OpenBSD: ns8250.c,v 1.40 2024/07/10 09:27:33 dv Exp $ */
 /*
  * Copyright (c) 2016 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -19,8 +19,7 @@
 #include <sys/ttycom.h>
 
 #include <dev/ic/comreg.h>
-
-#include <machine/vmmvar.h>
+#include <dev/vmm/vmm.h>
 
 #include <errno.h>
 #include <event.h>
@@ -31,7 +30,6 @@
 #include "atomicio.h"
 #include "ns8250.h"
 #include "vmd.h"
-#include "vmm.h"
 
 extern char *__progname;
 struct ns8250_dev com1_dev;
@@ -81,7 +79,7 @@ ratelimit(int fd, short type, void *arg)
 	com1_dev.regs.iir |= IIR_TXRDY;
 	com1_dev.regs.iir &= ~IIR_NOPEND;
 
-	vcpu_assert_pic_irq(com1_dev.vmid, 0, com1_dev.irq);
+	vcpu_assert_irq(com1_dev.vmid, 0, com1_dev.irq);
 	mutex_unlock(&com1_dev.mutex);
 }
 
@@ -158,7 +156,7 @@ com_rcv_event(int fd, short kind, void *arg)
 	/* If pending interrupt, inject */
 	if ((com1_dev.regs.iir & IIR_NOPEND) == 0) {
 		/* XXX: vcpu_id */
-		vcpu_assert_pic_irq((uintptr_t)arg, 0, com1_dev.irq);
+		vcpu_assert_irq((uintptr_t)arg, 0, com1_dev.irq);
 	}
 
 	mutex_unlock(&com1_dev.mutex);

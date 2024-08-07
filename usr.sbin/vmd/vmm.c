@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmm.c,v 1.119 2024/02/05 21:58:09 dv Exp $	*/
+/*	$OpenBSD: vmm.c,v 1.121 2024/07/10 09:27:33 dv Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -28,10 +28,7 @@
 #include <dev/ic/i8253reg.h>
 #include <dev/isa/isareg.h>
 #include <dev/pci/pcireg.h>
-
-#include <machine/psl.h>
-#include <machine/specialreg.h>
-#include <machine/vmmvar.h>
+#include <dev/vmm/vmm.h>
 
 #include <net/if.h>
 
@@ -50,7 +47,6 @@
 #include <util.h>
 
 #include "vmd.h"
-#include "vmm.h"
 #include "atomicio.h"
 #include "proc.h"
 

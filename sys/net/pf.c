@@ -1,4 +1,4 @@
-/*	$OpenBSD: pf.c,v 1.1201 2024/07/04 12:50:08 bluhm Exp $ */
+/*	$OpenBSD: pf.c,v 1.1204 2024/08/06 16:56:09 bluhm Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -7966,7 +7966,7 @@ done:
 			if (pd.dir == PF_IN) {
 				int flags = IP_REDIRECT;
 
-				switch (ip_forwarding) {
+				switch (atomic_load_int(&ip_forwarding)) {
 				case 2:
 					SET(flags, IP_FORWARDING_IPSEC);
 					/* FALLTHROUGH */
@@ -7978,7 +7978,7 @@ done:
 					action = PF_DROP;
 					goto out;
 				}
-				if (ip_directedbcast)
+				if (atomic_load_int(&ip_directedbcast))
 					SET(flags, IP_ALLOWBROADCAST);
 				ip_forward(pd.m, ifp, NULL, flags);
 			} else
@@ -7988,7 +7988,7 @@ done:
 			if (pd.dir == PF_IN) {
 				int flags = IPV6_REDIRECT;
 
-				switch (ip6_forwarding) {
+				switch (atomic_load_int(&ip6_forwarding)) {
 				case 2:
 					SET(flags, IPV6_FORWARDING_IPSEC);
 					/* FALLTHROUGH */

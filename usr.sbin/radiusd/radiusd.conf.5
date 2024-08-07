@@ -1,4 +1,4 @@
-.\"	$OpenBSD: radiusd.conf.5,v 1.27 2024/07/04 13:14:26 sobrado Exp $
+.\"	$OpenBSD: radiusd.conf.5,v 1.34 2024/07/18 00:28:53 yasuoka Exp $
 .\"
 .\" Copyright (c) 2014 Esdenera Networks GmbH
 .\" Copyright (c) 2014, 2023 Internet Initiative Japan Inc.
@@ -15,7 +15,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: July 4 2024 $
+.Dd $Mdocdate: July 18 2024 $
 .Dt RADIUSD.CONF 5
 .Os
 .Sh NAME
@@ -77,12 +77,30 @@ The following modules are predefined:
 .It Do bsdauth Dc module
 The
 .Dq bsdauth
-module
-provides authentication from the local system's
+module provides authentication from the local system's
 .Xr authenticate 3
 interface.
 See
 .Xr radiusd_bsdauth 8 .
+.It Do eap2mschap Dc module
+The
+.Dq eap2mschap
+module provides conversion from EAP-MSCHAPv2 to MS-CHAPv2.
+See
+.Xr radiusd_eap2mschap 8 .
+.It Do file Dc module
+The
+.Dq file
+module provides authentication by a local file.
+See
+.Xr radiusd_file 8 .
+.It Do ipcp Dc module
+The
+.Dq ipcp
+module provides IP configuration and manages the IP address pool.
+It also provides session-timeout and disconnection feature.
+See
+.Xr radiusd_ipcp 8 .
 .It Do radius Dc module
 The
 .Dq radius
@@ -137,6 +155,18 @@ matches an authenticating user is used.
 Optionally decoration modules can be specified by
 .Ar deco .
 The specified modules decorate the RADIUS messages in the configured order.
+.It Xo
+.Ic authentication-filter
+.Ar username-pattern ...
+.Ic by Ar auth
+.Op Ic decorate-by Ar deco ...
+.Xc
+.Ic authentication-filter
+works the same as
+.Ic authenticate ,
+but the module can work as a filter,
+it can ask the authentication to the following authentication modules,
+and then it receives the authentication reply and modifies the reply.
 .It Xo
 .Ic account
 .Op Ic quick
@@ -211,5 +241,8 @@ account * to standard
 .Sh SEE ALSO
 .Xr radiusd 8 ,
 .Xr radiusd_bsdauth 8 ,
+.Xr radiusd_eap2mschap 8 ,
+.Xr radiusd_file 8 ,
+.Xr radiusd_ipcp 8 ,
 .Xr radiusd_radius 8 ,
 .Xr radiusd_standard 8

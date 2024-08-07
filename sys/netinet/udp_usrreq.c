@@ -1,4 +1,4 @@
-/*	$OpenBSD: udp_usrreq.c,v 1.320 2024/04/17 20:48:51 bluhm Exp $	*/
+/*	$OpenBSD: udp_usrreq.c,v 1.324 2024/08/06 20:15:53 mvs Exp $	*/
 /*	$NetBSD: udp_usrreq.c,v 1.28 1996/03/16 23:54:03 christos Exp $	*/
 
 /*
@@ -113,21 +113,23 @@
 #endif
 
 /*
+ * Locks used to protect data:
+ *	a	atomic
+ */
+
+/*
  * UDP protocol implementation.
  * Per RFC 768, August, 1980.
  */
-int	udpcksum = 1;
+int	udpcksum = 1;			/* [a] */
 
-u_int	udp_sendspace = 9216;		/* really max datagram size */
+u_int	udp_sendspace = 9216;		/* [a] really max datagram size */
 u_int	udp_recvspace = 40 * (1024 + sizeof(struct sockaddr_in));
-					/* 40 1K datagrams */
+					/* [a] 40 1K datagrams */
 
 const struct pr_usrreqs udp_usrreqs = {
 	.pru_attach	= udp_attach,
 	.pru_detach	= udp_detach,
-	.pru_lock	= udp_lock,
-	.pru_unlock	= udp_unlock,
-	.pru_locked	= udp_locked,
 	.pru_bind	= udp_bind,
 	.pru_connect	= udp_connect,
 	.pru_disconnect	= udp_disconnect,
@@ -142,9 +144,6 @@ const struct pr_usrreqs udp_usrreqs = {
 const struct pr_usrreqs udp6_usrreqs = {
 	.pru_attach	= udp_attach,
 	.pru_detach	= udp_detach,
-	.pru_lock	= udp_lock,
-	.pru_unlock	= udp_unlock,
-	.pru_locked	= udp_locked,
 	.pru_bind	= udp_bind,
 	.pru_connect	= udp_connect,
 	.pru_disconnect	= udp_disconnect,
@@ -598,7 +597,7 @@ udp_input(struct mbuf **mp, int *offp, int proto, int af)
 	}
 
 	KASSERT(sotoinpcb(inp->inp_socket) == inp);
-	soassertlocked(inp->inp_socket);
+	soassertlocked_readonly(inp->inp_socket);
 
 #ifdef INET6
 	if (ip6 && inp->inp_ip6_minhlim &&
@@ -1069,7 +1068,7 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct mbuf *addr,
 	((struct ip *)ui)->ip_len = htons(sizeof (struct udpiphdr) + len);
 	((struct ip *)ui)->ip_ttl = inp->inp_ip.ip_ttl;
 	((struct ip *)ui)->ip_tos = inp->inp_ip.ip_tos;
-	if (udpcksum)
+	if (atomic_load_int(&udpcksum))
 		m->m_pkthdr.csum_flags |= M_UDP_CSUM_OUT;
 
 	udpstat_inc(udps_opackets);
@@ -1104,7 +1103,8 @@ udp_attach(struct socket *so, int proto, int wait)
 	if (so->so_pcb != NULL)
 		return EINVAL;
 
-	if ((error = soreserve(so, udp_sendspace, udp_recvspace)))
+	if ((error = soreserve(so, atomic_load_int(&udp_sendspace),
+	    atomic_load_int(&udp_recvspace))))
 		return error;
 
 	NET_ASSERT_LOCKED();
@@ -1138,32 +1138,6 @@ udp_detach(struct socket *so)
 
 	in_pcbdetach(inp);
 	return (0);
-}
-
-void
-udp_lock(struct socket *so)
-{
-	struct inpcb *inp = sotoinpcb(so);
-
-	NET_ASSERT_LOCKED();
-	mtx_enter(&inp->inp_mtx);
-}
-
-void
-udp_unlock(struct socket *so)
-{
-	struct inpcb *inp = sotoinpcb(so);
-
-	NET_ASSERT_LOCKED();
-	mtx_leave(&inp->inp_mtx);
-}
-
-int
-udp_locked(struct socket *so)
-{
-	struct inpcb *inp = sotoinpcb(so);
-
-	return mtx_owned(&inp->inp_mtx);
 }
 
 int
@@ -1239,7 +1213,12 @@ udp_send(struct socket *so, struct mbuf *m, struct mbuf *addr,
 {
 	struct inpcb *inp = sotoinpcb(so);
 
-	soassertlocked(so);
+	soassertlocked_readonly(so);
+
+	if (inp == NULL) {
+		/* PCB could be destroyed, but socket still spliced. */
+		return (EINVAL);
+	}
 
 #ifdef PIPEX
 	if (inp->inp_pipex) {
@@ -1312,10 +1291,8 @@ udp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 		return (udp_sysctl_udpstat(oldp, oldlenp, newp));
 
 	default:
-		NET_LOCK();
 		error = sysctl_bounded_arr(udpctl_vars, nitems(udpctl_vars),
 		    name, namelen, oldp, oldlenp, newp, newlen);
-		NET_UNLOCK();
 		return (error);
 	}
 	/* NOTREACHED */

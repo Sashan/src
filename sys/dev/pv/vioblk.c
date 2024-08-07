@@ -1,4 +1,4 @@
-/*	$OpenBSD: vioblk.c,v 1.39 2024/06/26 01:40:49 jsg Exp $	*/
+/*	$OpenBSD: vioblk.c,v 1.41 2024/08/01 11:13:19 sf Exp $	*/
 
 /*
  * Copyright (c) 2012 Stefan Fritsch.
@@ -79,8 +79,11 @@ struct virtio_feature_name vioblk_feature_names[] = {
 	{ VIRTIO_BLK_F_FLUSH,		"Flush" },
 	{ VIRTIO_BLK_F_TOPOLOGY,	"Topology" },
 	{ VIRTIO_BLK_F_CONFIG_WCE,	"ConfigWCE" },
+	{ VIRTIO_BLK_F_MQ,		"MQ" },
 	{ VIRTIO_BLK_F_DISCARD,		"Discard" },
 	{ VIRTIO_BLK_F_WRITE_ZEROES,	"Write0s" },
+	{ VIRTIO_BLK_F_LIFETIME,	"Lifetime" },
+	{ VIRTIO_BLK_F_SECURE_ERASE,	"SecErase" },
 #endif
 	{ 0,				NULL }
 };
@@ -372,7 +375,7 @@ vioblk_reset(struct vioblk_softc *sc)
 	virtio_reset(sc->sc_virtio);
 
 	/* finish requests that have been completed */
-	vioblk_vq_done(&sc->sc_vq[0]);
+	virtio_check_vq(sc->sc_virtio, &sc->sc_vq[0]);
 
 	/* abort all remaining requests */
 	for (i = 0; i < sc->sc_nreqs; i++) {
@@ -532,7 +535,7 @@ vioblk_scsi_cmd(struct scsi_xfer *xs)
 	if (!ISSET(xs->flags, SCSI_POLL)) {
 		/* check if some xfers are done: */
 		if (sc->sc_queued > 1)
-			vioblk_vq_done(vq);
+			virtio_check_vq(sc->sc_virtio, vq);
 		splx(s);
 		return;
 	}

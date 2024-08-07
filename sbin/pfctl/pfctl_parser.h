@@ -1,4 +1,4 @@
-/*	$OpenBSD: pfctl_parser.h,v 1.119 2024/01/15 07:23:32 sashan Exp $ */
+/*	$OpenBSD: pfctl_parser.h,v 1.120 2024/07/14 19:51:08 sashan Exp $ */
 
 /*
  * Copyright (c) 2001 Daniel Hartmeier
@@ -85,6 +85,7 @@ struct pfctl {
 	struct pfioc_queue *pqueue;
 	struct pfioc_trans *trans;
 	struct pf_anchor *anchor, *alast;
+	struct pfr_ktablehead pfr_ktlast;
 	const char *ruleset;
 
 	/* 'set foo' options */

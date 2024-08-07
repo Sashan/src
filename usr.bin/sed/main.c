@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.45 2024/06/18 00:32:22 millert Exp $	*/
+/*	$OpenBSD: main.c,v 1.47 2024/07/17 20:57:16 millert Exp $	*/
 
 /*-
  * Copyright (c) 1992 Diomidis Spinellis.
@@ -38,6 +38,7 @@
 #include <sys/stat.h>
 
 #include <ctype.h>
+#include <err.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -166,10 +167,10 @@ main(int argc, char *argv[])
 
 	if (inplace != NULL) {
 		if (pledge("stdio rpath wpath cpath fattr chown", NULL) == -1)
-			error(FATAL, "pledge: %s", strerror(errno));
+			err(1, "pledge");
 	} else {
 		if (pledge("stdio rpath wpath cpath", NULL) == -1)
-			error(FATAL, "pledge: %s", strerror(errno));
+			err(1, "pledge");
 	}
 
 	/* First usage case; script is the first arg */
@@ -184,27 +185,27 @@ main(int argc, char *argv[])
 	if (*argv) {
 		if (!pledge_wpath && inplace == NULL) {
 			if (pledge("stdio rpath", NULL) == -1)
-				error(FATAL, "pledge: %s", strerror(errno));
+				err(1, "pledge");
 		}
 		for (; *argv; argv++)
 			add_file(*argv);
 	} else {
 		if (!pledge_wpath && !pledge_rpath) {
 			if (pledge("stdio", NULL) == -1)
-				error(FATAL, "pledge: %s", strerror(errno));
+				err(1, "pledge");
 		} else if (pledge_rpath) {
 			if (pledge("stdio rpath", NULL) == -1)
-				error(FATAL, "pledge: %s", strerror(errno));
+				err(1, "pledge");
 		} else if (pledge_wpath) {
 			if (pledge("stdio wpath cpath", NULL) == -1)
-				error(FATAL, "pledge: %s", strerror(errno));
+				err(1, "pledge");
 		}
 		add_file(NULL);
 	}
 	process();
 	cfclose(prog, NULL);
 	if (fclose(stdout))
-		error(FATAL, "stdout: %s", strerror(errno));
+		err(1, "stdout");
 	exit (rval);
 }
 
@@ -234,8 +235,7 @@ again:
 		switch (script->type) {
 		case CU_FILE:
 			if ((f = fopen(script->s, "r")) == NULL)
-				error(FATAL,
-				    "%s: %s", script->s, strerror(errno));
+				err(1, "%s", script->s);
 			fname = script->s;
 			state = ST_FILE;
 			goto again;
@@ -310,7 +310,7 @@ finish_file(void)
 		fclose(infile);
 		if (*oldfname != '\0') {
 			if (rename(fname, oldfname) != 0) {
-				warning("rename()");
+				warn("rename %s to %s", fname, oldfname);
 				unlink(tmpfname);
 				exit(1);
 			}
@@ -320,7 +320,11 @@ finish_file(void)
 			if (outfile != NULL && outfile != stdout)
 				fclose(outfile);
 			outfile = NULL;
-			rename(tmpfname, fname);
+			if (rename(tmpfname, fname) != 0) {
+				warn("rename %s to %s", tmpfname, fname);
+				unlink(tmpfname);
+				exit(1);
+			}
 			*tmpfname = '\0';
 		}
 		outfname = NULL;
@@ -346,7 +350,7 @@ mf_getline(SPACE *sp, enum e_spflag spflag)
 		/* stdin? */
 		if (files->fname == NULL) {
 			if (inplace != NULL)
-				error(FATAL, "-i may not be used with stdin");
+				errx(1, "-i may not be used with stdin");
 			infile = stdin;
 			fname = "stdin";
 			outfile = stdout;
@@ -377,34 +381,36 @@ mf_getline(SPACE *sp, enum e_spflag spflag)
 		}
 		fname = files->fname;
 		if (inplace != NULL) {
-			if (lstat(fname, &sb) != 0)
-				error(FATAL, "%s: %s", fname,
-				    strerror(errno ? errno : EIO));
+			if (stat(fname, &sb) != 0)
+				err(1, "%s", fname);
 			if (!S_ISREG(sb.st_mode))
-				error(FATAL, "%s: %s %s", fname,
+				errx(1, "%s: %s %s", fname,
 				    "in-place editing only",
 				    "works for regular files");
 			if (*inplace != '\0') {
-				strlcpy(oldfname, fname,
+				(void)strlcpy(oldfname, fname,
 				    sizeof(oldfname));
 				len = strlcat(oldfname, inplace,
 				    sizeof(oldfname));
-				if (len > sizeof(oldfname))
-					error(FATAL, "%s: name too long", fname);
+				if (len >= sizeof(oldfname))
+					errc(1, ENAMETOOLONG, "%s", fname);
 			}
-			strlcpy(dirbuf, fname, sizeof(dirbuf));
+			len = strlcpy(dirbuf, fname, sizeof(dirbuf));
+			if (len >= sizeof(dirbuf))
+				errc(1, ENAMETOOLONG, "%s", fname);
 			len = snprintf(tmpfname, sizeof(tmpfname),
 			    "%s/sedXXXXXXXXXX", dirname(dirbuf));
 			if (len >= sizeof(tmpfname))
-				error(FATAL, "%s: name too long", fname);
+				errc(1, ENAMETOOLONG, "%s", fname);
 			if ((fd = mkstemp(tmpfname)) == -1)
-				error(FATAL, "%s: %s", fname, strerror(errno));
+				err(1, "%s", fname);
+			(void)fchown(fd, sb.st_uid, sb.st_gid);
+			(void)fchmod(fd, sb.st_mode & ALLPERMS);
 			if ((outfile = fdopen(fd, "w")) == NULL) {
+				warn("%s", fname);
 				unlink(tmpfname);
-				error(FATAL, "%s", fname);
+				exit(1);
 			}
-			fchown(fileno(outfile), sb.st_uid, sb.st_gid);
-			fchmod(fileno(outfile), sb.st_mode & ALLPERMS);
 			outfname = tmpfname;
 			linenum = 0;
 			resetstate();
@@ -413,7 +419,7 @@ mf_getline(SPACE *sp, enum e_spflag spflag)
 			outfname = "stdout";
 		}
 		if ((infile = fopen(fname, "r")) == NULL) {
-			warning("%s", strerror(errno));
+			warn("%s", fname);
 			rval = 1;
 			continue;
 		}
@@ -429,7 +435,7 @@ mf_getline(SPACE *sp, enum e_spflag spflag)
 	 */
 	len = getline(&p, &psize, infile);
 	if ((ssize_t)len == -1)
-		error(FATAL, "%s: %s", fname, strerror(errno));
+		err(1, "%s", fname);
 	if (len != 0 && p[len - 1] == '\n') {
 		sp->append_newline = 1;
 		len--;

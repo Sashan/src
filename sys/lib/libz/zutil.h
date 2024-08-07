@@ -41,7 +41,7 @@ typedef long ptrdiff_t;
 #endif
 
 #ifdef Z_SOLO
-   typedef long ptrdiff_t;  /* guess -- will be caught if guess is wrong */
+   typedef long ptrdiff_t;
 #endif
 
 #ifndef local
@@ -62,6 +62,8 @@ typedef unsigned long  ulg;
 #  if (ULONG_MAX == 0xffffffffffffffff)
 #    define Z_U8 unsigned long
 #  elif (ULLONG_MAX == 0xffffffffffffffff)
+#    define Z_U8 unsigned long long
+#  elif (ULONG_LONG_MAX == 0xffffffffffffffff)
 #    define Z_U8 unsigned long long
 #  elif (UINT_MAX == 0xffffffffffffffff)
 #    define Z_U8 unsigned
