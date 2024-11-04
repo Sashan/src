@@ -139,11 +139,11 @@ kelf_open(struct bt_procmap_entry *pe, struct syms *syms)
 		name = elf_strptr(elf, strtabndx, sym.st_name);
 		if (name == NULL)
 			continue;
-		fprintf(stderr, "%s: %s @ %s [%p %llx]\n", __func__, name, pe->pe_name, sym.st_value, sym.st_size);
 		syms->table[syms->nsymb].sym_name = strdup(name);
 		if (syms->table[syms->nsymb].sym_name == NULL)
 			err(1, NULL);
-		syms->table[syms->nsymb].sym_value = sym.st_value + pe->pe_start;
+		syms->table[syms->nsymb].sym_value = sym.st_value +
+		    (intptr_t)pe->pe_start;
 		syms->table[syms->nsymb].sym_size = sym.st_size;
 		syms->nsymb++;
 	}
