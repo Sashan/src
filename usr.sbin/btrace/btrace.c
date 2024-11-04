@@ -183,30 +183,6 @@ main(int argc, char *argv[])
 	if (argc > 0 && btscript == NULL)
 		filename = argv[0];
 
-#if 0
-	 /* Cannot pledge due to special ioctl()s */
-	if (unveil(__PATH_DEVDT, "r") == -1)
-		err(1, "unveil %s", __PATH_DEVDT);
-	if (unveil(_PATH_KSYMS, "r") == -1)
-		err(1, "unveil %s", _PATH_KSYMS);
-	/* procmapinfo */
-	if (unveil(_PATH_MEM, "r") == -1)
-		err(1, "unveil %s", _PATH_MEM);
-	if (unveil(_PATH_KMEM, "r") == -1)
-		err(1, "unveil %s", _PATH_KMEM);
-#endif
-	if (unveil("/", "r") == -1)
-		err(1, "enveil %s", "/");
-
-	if (filename != NULL) {
-		if (unveil(filename, "r") == -1)
-			err(1, "unveil %s", filename);
-	}
-
-#if 0
-	if (unveil(NULL, NULL) == -1)
-		err(1, "unveil");
-#endif
 
 	if (filename != NULL) {
 		btscript = read_btfile(filename, &btslen);
@@ -646,10 +622,13 @@ rules_setup(int fd)
 		}
 	}
 
-#if 0
-	if (dokstack)
-		kelf = kelf_open(_PATH_KSYMS, NULL);
-#endif
+	if (dokstack) {
+		struct bt_procmap_entry	kernel_pe;
+
+		memset(&kernel_pe, 0, sizeof (struct bt_procmap_entry));
+		strlcpy(kernel_pe.pe_name, _PATH_KSYMS, sizeof (kernel_pe.pe_name));
+		kelf = kelf_open(&kernel_pe, NULL);
+	}
 
 	/* Initialize "fake" event for BEGIN/END */
 	bt_devt.dtev_pbn = EVENT_BEGIN;
