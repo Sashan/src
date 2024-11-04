@@ -169,9 +169,6 @@ main(int argc, char *argv[])
 		case 'n':
 			noaction = 1;
 			break;
-		case 'p':
-			uelf = kelf_open(optarg, NULL);
-			break;
 		case 'v':
 			verbose++;
 			break;
@@ -205,8 +202,11 @@ main(int argc, char *argv[])
 		if (unveil(filename, "r") == -1)
 			err(1, "unveil %s", filename);
 	}
+
+#if 0
 	if (unveil(NULL, NULL) == -1)
 		err(1, "unveil");
+#endif
 
 	if (filename != NULL) {
 		btscript = read_btfile(filename, &btslen);
@@ -226,18 +226,18 @@ main(int argc, char *argv[])
 		usage();
 
 	if (btscript != NULL) {
-		error = btparse(btscript, btslen, filename, 1);
-		if (error)
-			return error;
-
+		uelf = NULL;
 		if (pid != NO_PID) {
 			procmap_init(pid);
 			LIST_FOREACH(pe, procmap_list(), pe_next) {
-				uelf = kelf_open(pe->pe_name, uelf);
-				fprintf(stderr, "%s opening %s (%s)\n", __func__, pe->pe_name, (uelf == NULL) ? "fail" : "ok");
-				uelf = NULL;
+				uelf = kelf_open(pe, uelf);
+				fprintf(stderr, "%s [%p]\n", pe->pe_name, uelf);
 			}
 		}
+
+		error = btparse(btscript, btslen, filename, 1);
+		if (error)
+			return error;
 	}
 
 	if (noaction)
@@ -254,6 +254,9 @@ main(int argc, char *argv[])
 		dtpi_cache(fd);
 		dtpi_print_list(fd);
 	}
+
+	if (!TAILQ_EMPTY(&g_rules))
+		rules_do(fd);
 
 	if (fd != -1)
 		close(fd);
@@ -643,8 +646,10 @@ rules_setup(int fd)
 		}
 	}
 
+#if 0
 	if (dokstack)
 		kelf = kelf_open(_PATH_KSYMS, NULL);
+#endif
 
 	/* Initialize "fake" event for BEGIN/END */
 	bt_devt.dtev_pbn = EVENT_BEGIN;
