@@ -29,6 +29,7 @@ struct bt_procmap_entry {
 	LIST_ENTRY(bt_procmap_entry) pe_next;
 	void *pe_start, *pe_end;
 	size_t pe_sz;
+	size_t pe_offset;
 	char pe_name[256];
 };
 

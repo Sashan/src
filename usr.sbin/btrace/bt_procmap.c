@@ -183,9 +183,9 @@ static void load_symbols(kvm_t *);
 static struct vm_map_entry *load_vm_map_entries(kvm_t *, struct vm_map_entry *,
     struct vm_map_entry *);
 static void unload_vm_map_entries(struct vm_map_entry *);
-static void process_vm_map_entry(kvm_t *, struct kbit *, struct vm_map_entry *);
-static char *findname(kvm_t *, struct kbit *, struct vm_map_entry *, struct kbit *,
-    struct kbit *, struct kbit *);
+static void process_vm_map_entry(kvm_t *, struct vm_map_entry *);
+static char *findname(kvm_t *, struct vm_map_entry *, struct kbit *,
+    struct kbit *);
 static int search_cache(kvm_t *, struct kbit *, char **, char *, size_t);
 static void load_name_cache(kvm_t *);
 static void cache_enter(struct namecache *);
@@ -281,12 +281,17 @@ unload_vm_map_entries(struct vm_map_entry *ent)
 
 
 static char *
-findname(kvm_t *kd, struct kbit *vmspace,
-    struct vm_map_entry *vme, struct kbit *vp,
-    struct kbit *vfs, struct kbit *uvm_obj)
+findname(kvm_t *kd, struct vm_map_entry *vme, struct kbit *vp,
+    struct kbit *vfs)
 {
 	static char buf[1024], *name;
 	size_t l;
+
+	/*
+	 * for profiling we do care about shared elf objects only,
+	 * anything else should be skipped.
+	 */
+	name = NULL;
 
 	if (UVM_ET_ISOBJ(vme)) {
 		if (A(vfs)) {
@@ -317,38 +322,8 @@ findname(kvm_t *kd, struct kbit *vmspace,
 				}
 				break;
 			}
-		} else if (UVM_OBJ_IS_DEVICE(D(uvm_obj, uvm_object))) {
-			struct kbit kdev;
-			dev_t dev;
-
-			P(&kdev) = P(uvm_obj);
-			S(&kdev) = sizeof(struct uvm_device);
-			KDEREF(kd, &kdev);
-			dev = D(&kdev, uvm_device)->u_device;
-			name = devname(dev, S_IFCHR);
-			if (name != NULL)
-				snprintf(buf, sizeof(buf), "/dev/%s", name);
-			else
-				snprintf(buf, sizeof(buf), "  [ device %u,%u ]",
-				    major(dev), minor(dev));
-			name = buf;
-		} else if (UVM_OBJ_IS_AOBJ(D(uvm_obj, uvm_object)))
-			name = "  [ uvm_aobj ]";
-		else if (UVM_OBJ_IS_VNODE(D(uvm_obj, uvm_object)))
-			name = "  [ ?VNODE? ]";
-		else {
-			snprintf(buf, sizeof(buf), "  [ unknown (%p) ]",
-			    D(uvm_obj, uvm_object)->pgops);
-			name = buf;
 		}
-	} else if (D(vmspace, vmspace)->vm_maxsaddr <= (caddr_t)vme->start &&
-	    (D(vmspace, vmspace)->vm_maxsaddr + (size_t)maxssiz) >=
-	    (caddr_t)vme->end) {
-		name = "  [ stack ]";
-	} else if (UVM_ET_ISHOLE(vme))
-		name = "  [ hole ]";
-	else
-		name = "  [ anon ]";
+	}
 
 	return (name);
 }
@@ -443,8 +418,7 @@ cache_enter(struct namecache *ncp)
 }
 
 static void
-process_vm_map_entry(kvm_t *kd, struct kbit *vmspace,
-    struct vm_map_entry *vme)
+process_vm_map_entry(kvm_t *kd, struct vm_map_entry *vme)
 {
 	struct kbit kbit[5], *uvm_obj, *vp, *vfs, *amap, *uvn;
 	ino_t inode = 0;
@@ -537,7 +511,14 @@ process_vm_map_entry(kvm_t *kd, struct kbit *vmspace,
 		}
 	}
 
-	name = findname(kd, vmspace, vme, vp, vfs, uvm_obj);
+	/*
+	 * we are interested in executable memory, this is where
+	 * profiling relevant addresses are coming from.
+	 */
+	if ((vme->protection & PROT_EXEC) == 0)
+		return;
+
+	name = findname(kd, vme, vp, vfs);
 	if (name == NULL)
 		return;
 
@@ -549,6 +530,7 @@ process_vm_map_entry(kvm_t *kd, struct kbit *vmspace,
 	pe->pe_start = (void *)vme->start;
 	pe->pe_end = (void *)vme->end;
 	pe->pe_sz = vme->end - vme->start;
+	pe->pe_offset = vme->offset;
 
 	LIST_INSERT_HEAD(&bt_procmap, pe, pe_next);
 
@@ -563,7 +545,6 @@ procmap_init(pid_t pid)
 	struct vm_map_entry *vm_map_entry;
 	struct kinfo_proc *kproc;
 	char errbuf[_POSIX2_LINE_MAX];
-	unsigned long gid = getgid();
 	uid_t uid;
 	int rc;
 
@@ -571,9 +552,6 @@ procmap_init(pid_t pid)
 
 	/* start by opening libkvm */
 	kd = kvm_openfiles(NULL, NULL, NULL, O_RDONLY, errbuf);
-
-	if (setresgid(gid, gid, gid) == -1)
-		err(1, "setresgid");
 
 	if (kd == NULL)
 		errx(1, "%s", errbuf);
@@ -626,18 +604,9 @@ procmap_init(pid_t pid)
 		    &vm_map_entry->daddrs.addr_entry;
 	} else
 		RBT_INIT(uvm_map_addr, &D(vm_map, vm_map)->addr);
-	/* these are the "sub entries" */
-	vm_map_entry = load_vm_map_entries(kd,
-	    RBT_ROOT(uvm_map_addr, &D(vm_map, vm_map)->addr), NULL);
-	if (vm_map_entry != NULL) {
-		/* RBTs point at rb_entries inside nodes */
-		D(vm_map, vm_map)->addr.rbh_root.rbt_root =
-		    &vm_map_entry->daddrs.addr_entry;
-	} else
-		RBT_INIT(uvm_map_addr, &D(vm_map, vm_map)->addr);
 
 	RBT_FOREACH(vm_map_entry, uvm_map_addr, &D(vm_map, vm_map)->addr)
-		process_vm_map_entry(kd, vmspace, vm_map_entry);
+		process_vm_map_entry(kd, vm_map_entry);
 	unload_vm_map_entries(RBT_ROOT(uvm_map_addr, &D(vm_map, vm_map)->addr));
 
 	return (0);
