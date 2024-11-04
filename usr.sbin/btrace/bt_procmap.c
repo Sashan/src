@@ -34,12 +34,37 @@
 /*
  * Code here is derieved from usr.sbin/procmap/procmap.c.
  */
+#define _KERNEL
 #include <sys/tree.h>
+#undef _KERNEL
+
+#include <sys/types.h>
+#include <sys/time.h>
+#include <sys/exec.h>
+#include <sys/signal.h>
+#include <sys/proc.h>
+#include <sys/vnode.h>
+#include <sys/mount.h>
+#include <sys/uio.h>
+#include <sys/namei.h>
+#include <sys/sysctl.h>
+
+/* XXX until uvm gets cleaned up */
+typedef int boolean_t;
 
 #include <uvm/uvm.h>
 #include <uvm/uvm_device.h>
 #include <uvm/uvm_amap.h>
 #include <uvm/uvm_vnode.h>
+
+#include <ufs/ufs/quota.h>
+#include <ufs/ufs/inode.h>
+#undef doff_t
+#undef IN_ACCESS
+#undef i_size
+#undef i_devvp
+#include <isofs/cd9660/iso.h>
+#include <isofs/cd9660/cd9660_node.h>
 
 #include <kvm.h>
 #include <fcntl.h>
@@ -50,6 +75,9 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <limits.h>
+#include <string.h>
+
+#include "btrace.h"
 
 /*
  * stolen (and munged) from #include <uvm/uvm_object.h>
@@ -72,9 +100,9 @@ struct cache_entry {
 	char ce_name[256];
 };
 
+TAILQ_HEAD(namecache_head, namecache);
 static LIST_HEAD(cache_head, cache_entry) lcache;
-static TAILQ_HEAD(namecache_head, namecache) nclruhead;
-LIST_HEAD(procmap_head, procmap_entry) bt_procmap;
+struct bt_procmap_head bt_procmap;
 
 int namecache_loaded;
 void *uvm_vnodeops, *uvm_deviceops, *aobj_pager;
@@ -133,29 +161,29 @@ struct kbit {
 } while (0/*CONSTCOND*/)
 
 /* suck the data using the structure */
-#define KDEREF(kd, item) _KDEREF((kd), A(item), D(item, data), S(item))
+#define KDEREF(kd, item) _KDEREF((kd), A(item), D(item, data), (ssize_t)S(item))
 
 static struct nlist nl[] = {
-	{ "_maxsmap" },
+	{ "_maxsmap", 0, 0, 0, 0 },
 #define NL_MAXSSIZ		0
-	{ "_uvm_vnodeops" },
+	{ "_uvm_vnodeops", 0, 0, 0, 0 },
 #define NL_UVM_VNODEOPS		1
-	{ "_uvm_deviceops" },
+	{ "_uvm_deviceops", 0, 0, 0, 0 },
 #define NL_UVM_DEVICEOPS	2
-	{ "_aobj_pager" },
+	{ "_aobj_pager", 0, 0, 0, 0 },
 #define NL_AOBJ_PAGER		3
-	{ "_kernel_map" },
+	{ "_kernel_map", 0, 0, 0, 0 },
 #define NL_KERNEL_MAP		4
-	{ "_nclruhead" },
+	{ "_nclruhead", 0, 0, 0, 0 },
 #define NL_NCLRUHEAD		5
-	{ NULL }
+	{ 0 }
 };
 
 static void load_symbols(kvm_t *);
 static struct vm_map_entry *load_vm_map_entries(kvm_t *, struct vm_map_entry *,
     struct vm_map_entry *);
 static void unload_vm_map_entries(struct vm_map_entry *);
-static size_t process_vm_map_entry(kvm_t *, struct kbit *, struct vm_map_entry *);
+static void process_vm_map_entry(kvm_t *, struct kbit *, struct vm_map_entry *);
 static char *findname(kvm_t *, struct kbit *, struct vm_map_entry *, struct kbit *,
     struct kbit *, struct kbit *);
 static int search_cache(kvm_t *, struct kbit *, char **, char *, size_t);
@@ -165,11 +193,11 @@ static void cache_enter(struct namecache *);
 /*
  * uvm_map address tree implementation.
  */
-static int no_impl(const void *, const void *);
 static int
 no_impl(const void *p, const void *q)
 {
-	errx(1, "uvm_map address comparison not implemented");
+	errx(1, "uvm_map address comparison not implemented for (%p ? %p)",
+	    p, q);
 	return 0;
 }
 
@@ -179,7 +207,8 @@ RBT_GENERATE(uvm_map_addr, vm_map_entry, daddrs.addr_entry, no_impl);
 static void
 load_symbols(kvm_t *kd)
 {
-	int rc, i;
+	int rc;
+        unsigned long i;
 
 	rc = kvm_nlist(kd, &nl[0]);
 	if (rc == -1)
@@ -420,16 +449,14 @@ process_vm_map_entry(kvm_t *kd, struct kbit *vmspace,
 	struct kbit kbit[5], *uvm_obj, *vp, *vfs, *amap, *uvn;
 	ino_t inode = 0;
 	dev_t dev = 0;
-	size_t sz = 0;
 	char *name;
-	static u_long prevend;
-	struct procmap_entry *pe;
+	struct bt_procmap_entry *pe;
 
 	/*
 	 * We are building symbol map of functions so we can resolve the stack.
 	 * Functions are found in executable memory.
 	 */
-	if ((vms->max_protection & PROT_EXEC) == NULL)
+	if ((vme->max_protection & PROT_EXEC) == 0)
 		return;
 
 	uvm_obj = &kbit[0];
@@ -514,16 +541,16 @@ process_vm_map_entry(kvm_t *kd, struct kbit *vmspace,
 	if (name == NULL)
 		return;
 
-	pe = malloc(sizeof (struct procmap_entry));
+	pe = malloc(sizeof (struct bt_procmap_entry));
 	if (pe == NULL)
 		return;
 
 	strncpy(pe->pe_name, name, sizeof (pe->pe_name));
-	pe->pe_start = vme->start;
-	pe->pe_end = vme->end;
+	pe->pe_start = (void *)vme->start;
+	pe->pe_end = (void *)vme->end;
 	pe->pe_sz = vme->end - vme->start;
 
-	LIST_INSERT_HEAD(&procmap, pe, pe_next);
+	LIST_INSERT_HEAD(&bt_procmap, pe, pe_next);
 
 	return;
 }
@@ -536,9 +563,9 @@ procmap_init(pid_t pid)
 	struct vm_map_entry *vm_map_entry;
 	struct kinfo_proc *kproc;
 	char errbuf[_POSIX2_LINE_MAX];
-	git_t gid = getgid();
+	unsigned long gid = getgid();
 	uid_t uid;
-	struct bt_procmap_entry *pe;
+	int rc;
 
 	LIST_INIT(&bt_procmap);
 
@@ -559,9 +586,35 @@ procmap_init(pid_t pid)
 	if (kproc == NULL || rc == 0)
 		errx(1, "%s", kvm_geterr(kd));
 
-	if (uid = getuid()) {
-		if (prco->p_uid != uid)
-			errx("not owner of traced process");
+	if ((uid = getuid()) != 0) {
+		if (kproc->p_uid != uid)
+			errx(1, "not owner of traced process");
+	}
+
+
+	vmspace = &kbit[0];
+	vm_map = &kbit[1];
+
+	A(vmspace) = 0;
+	A(vm_map) = 0;
+
+	if (pid > 0) {
+		A(vmspace) = (u_long)kproc->p_vmspace;
+		S(vmspace) = sizeof(struct vmspace);
+		KDEREF(kd, vmspace);
+	} else {
+		A(vmspace) = 0;
+		S(vmspace) = 0;
+	}
+
+	S(vm_map) = sizeof(struct vm_map);
+	if (pid > 0) {
+		A(vm_map) = A(vmspace);
+		memcpy(D(vm_map, vm_map), &D(vmspace, vmspace)->vm_map,
+		    S(vm_map));
+	} else {
+		A(vm_map) = kernel_map_addr;
+		KDEREF(kd, vm_map);
 	}
 
 	/* these are the "sub entries" */
@@ -573,12 +626,27 @@ procmap_init(pid_t pid)
 		    &vm_map_entry->daddrs.addr_entry;
 	} else
 		RBT_INIT(uvm_map_addr, &D(vm_map, vm_map)->addr);
+	/* these are the "sub entries" */
+	vm_map_entry = load_vm_map_entries(kd,
+	    RBT_ROOT(uvm_map_addr, &D(vm_map, vm_map)->addr), NULL);
+	if (vm_map_entry != NULL) {
+		/* RBTs point at rb_entries inside nodes */
+		D(vm_map, vm_map)->addr.rbh_root.rbt_root =
+		    &vm_map_entry->daddrs.addr_entry;
+	} else
+		RBT_INIT(uvm_map_addr, &D(vm_map, vm_map)->addr);
 
 	RBT_FOREACH(vm_map_entry, uvm_map_addr, &D(vm_map, vm_map)->addr)
-		dump_vm_map_entry(kd, vmspace, vm_map_entry);
+		process_vm_map_entry(kd, vmspace, vm_map_entry);
 	unload_vm_map_entries(RBT_ROOT(uvm_map_addr, &D(vm_map, vm_map)->addr));
 
 	return (0);
+}
+
+struct bt_procmap_head *
+procmap_list(void)
+{
+	return (&bt_procmap);
 }
 
 void
