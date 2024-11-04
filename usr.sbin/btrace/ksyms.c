@@ -46,7 +46,7 @@ int sym_compare_search(const void *, const void *);
 int sym_compare_sort(const void *, const void *);
 
 struct syms *
-kelf_open(const char *path)
+kelf_open(const char *path, struct syms *syms)
 {
 	char *name;
 	Elf *elf;
@@ -57,7 +57,6 @@ kelf_open(const char *path)
 	size_t i, shstrndx, strtabndx = SIZE_MAX, symtab_size;
 	unsigned long diff;
 	struct sym *tmp;
-	struct syms *syms = NULL;
 	int fd;
 
 	if (elf_version(EV_CURRENT) == EV_NONE)
