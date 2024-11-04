@@ -46,7 +46,7 @@ int sym_compare_search(const void *, const void *);
 int sym_compare_sort(const void *, const void *);
 
 struct syms *
-kelf_open(const char *path, struct syms *syms)
+kelf_open(struct bt_procmap_entry *pe, struct syms *syms)
 {
 	char *name;
 	Elf *elf;
@@ -62,10 +62,10 @@ kelf_open(const char *path, struct syms *syms)
 	if (elf_version(EV_CURRENT) == EV_NONE)
 		errx(1, "elf_version: %s", elf_errmsg(-1));
 
-	fd = open(path, O_RDONLY);
+	fd = open(pe->pe_name, O_RDONLY);
 	if (fd == -1) {
-		warn("open: %s", path);
-		return NULL;
+		warn("open: %s", pe->pe_name);
+		return syms;
 	}
 
 	if ((elf = elf_begin(fd, ELF_C_READ, NULL)) == NULL) {
@@ -101,24 +101,37 @@ kelf_open(const char *path, struct syms *syms)
 		}
 	}
 	if (symtab == NULL) {
-		warnx("%s: %s: section not found", path, ELF_SYMTAB);
+		warnx("%s: %s: section not found", pe->pe_name, ELF_SYMTAB);
 		goto bad;
 	}
 	if (strtabndx == SIZE_MAX) {
-		warnx("%s: %s: section not found", path, ELF_STRTAB);
+		warnx("%s: %s: section not found", pe->pe_name, ELF_STRTAB);
 		goto bad;
 	}
 
 	data = elf_rawdata(symtab, data);
-	if (data == NULL)
+	if (data == NULL) {
+		warnx("%s elf_rwadata() unable to read syms from: %s\n",
+		    __func__, pe->pe_name);
 		goto bad;
+	}
 
-	if ((syms = calloc(1, sizeof(*syms))) == NULL)
-		err(1, NULL);
-	syms->table = calloc(symtab_size, sizeof *syms->table);
-	if (syms->table == NULL)
-		err(1, NULL);
-	for (i = 0; i < symtab_size; i++) {
+	if (syms == NULL) {
+		if ((syms = calloc(1, sizeof *syms)) == NULL)
+			err(1, NULL);
+		syms->table = calloc(symtab_size, sizeof *syms->table);
+		if (syms->table == NULL)
+			err(1, NULL);
+	} else {
+		tmp = reallocarray(syms->table, syms->nsymb + symtab_size,
+		    sizeof *syms->table);
+		if (tmp == NULL)
+			err(1, NULL);
+		syms->table = tmp;
+		symtab_size += syms->nsymb;
+	}
+	
+	for (i = syms->nsymb; i < symtab_size; i++) {
 		if (gelf_getsym(data, i, &sym) == NULL)
 			continue;
 		if (GELF_ST_TYPE(sym.st_info) != STT_FUNC)
@@ -126,10 +139,11 @@ kelf_open(const char *path, struct syms *syms)
 		name = elf_strptr(elf, strtabndx, sym.st_name);
 		if (name == NULL)
 			continue;
+		fprintf(stderr, "%s: %s @ %s [%p %llx]\n", __func__, name, pe->pe_name, sym.st_value, sym.st_size);
 		syms->table[syms->nsymb].sym_name = strdup(name);
 		if (syms->table[syms->nsymb].sym_name == NULL)
 			err(1, NULL);
-		syms->table[syms->nsymb].sym_value = sym.st_value;
+		syms->table[syms->nsymb].sym_value = sym.st_value + pe->pe_start;
 		syms->table[syms->nsymb].sym_size = sym.st_size;
 		syms->nsymb++;
 	}

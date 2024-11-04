@@ -49,7 +49,7 @@ unsigned long		 dt_get_offset(pid_t);
 
 /* ksyms.c */
 struct syms;
-struct syms		*kelf_open(const char *, struct syms *);
+struct syms		*kelf_open(struct bt_procmap_entry *, struct syms *);
 void			 kelf_close(struct syms *);
 int			 kelf_snprintsym(struct syms *, char *, size_t,
 			    unsigned long, unsigned long);
