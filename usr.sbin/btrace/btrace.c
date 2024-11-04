@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/queue.h>
+#include <sys/proc.h>
 
 #include <assert.h>
 #include <err.h>
@@ -142,6 +143,9 @@ main(int argc, char *argv[])
 	const char *filename = NULL, *btscript = NULL;
 	int showprobes = 0, noaction = 0;
 	size_t btslen = 0;
+	struct bt_rule *br;
+	pid_t pid = NO_PID;
+	struct procmap_entry *pe;
 
 	setlocale(LC_ALL, "");
 
@@ -158,10 +162,15 @@ main(int argc, char *argv[])
 			noaction = 1;
 			break;
 		case 'p':
-			uelf = kelf_open(optarg);
+			uelf = kelf_open(optarg, NULL);
 			break;
 		case 'v':
 			verbose++;
+			break;
+		case 'p':
+			pid = strtonum(str, 0, PID_MAX, NULL);
+			if (errno != 0)
+				usage();
 			break;
 		default:
 			usage();
@@ -202,6 +211,17 @@ main(int argc, char *argv[])
 		error = btparse(btscript, btslen, filename, 1);
 		if (error)
 			return error;
+
+		if (pid != NO_PID) {
+			procmap_init(pid);
+			uelf = NULL;
+			LIST_FOREACH(pe, &bt_procmap, pe_next) {
+				if (uelf == NULL)
+					uelf = kelf_open(pe->pe_name, uelf);
+				else
+					kelf_open(pe->pe_name, uelf);
+			}
+		}
 	}
 
 	if (noaction)
@@ -218,9 +238,6 @@ main(int argc, char *argv[])
 		dtpi_cache(fd);
 		dtpi_print_list(fd);
 	}
-
-	if (!TAILQ_EMPTY(&g_rules))
-		rules_do(fd);
 
 	if (fd != -1)
 		close(fd);

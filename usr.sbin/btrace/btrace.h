@@ -23,6 +23,15 @@
 #define nitems(_a)	(sizeof((_a)) / sizeof((_a)[0]))
 #endif
 
+struct bt_procmap_entry {
+	LIST_ENTRY(procmap_entry) pe_next;
+	void *pe_start, *pe_end;
+	size_t pe_sz;
+	char pe_name[256];
+};
+
+extern LIST_HEAD(procmap_head, procmap_entry) bt_procmap;
+
 struct dt_evt;
 struct bt_arg;
 struct bt_var;
@@ -64,5 +73,8 @@ int			 stmt_printf(struct bt_stmt *, struct dt_evt *);
 
 /* syscalls.c */
 extern const char	*const syscallnames[];
+
+extern int		 procmap_init(pid_t);
+extern void		 procmap_fini(void);
 
 #endif /* BTRACE_H */
