@@ -175,11 +175,6 @@ main(int argc, char *argv[])
 		case 'v':
 			verbose++;
 			break;
-		case 'P':
-			pid = strtonum(optarg, 0, PID_MAX, NULL);
-			if (errno != 0)
-				usage();
-			break;
 		default:
 			usage();
 		}
@@ -191,11 +186,21 @@ main(int argc, char *argv[])
 	if (argc > 0 && btscript == NULL)
 		filename = argv[0];
 
+#if 0
 	 /* Cannot pledge due to special ioctl()s */
 	if (unveil(__PATH_DEVDT, "r") == -1)
 		err(1, "unveil %s", __PATH_DEVDT);
 	if (unveil(_PATH_KSYMS, "r") == -1)
 		err(1, "unveil %s", _PATH_KSYMS);
+	/* procmapinfo */
+	if (unveil(_PATH_MEM, "r") == -1)
+		err(1, "unveil %s", _PATH_MEM);
+	if (unveil(_PATH_KMEM, "r") == -1)
+		err(1, "unveil %s", _PATH_KMEM);
+#endif
+	if (unveil("/", "r") == -1)
+		err(1, "enveil %s", "/");
+
 	if (filename != NULL) {
 		if (unveil(filename, "r") == -1)
 			err(1, "unveil %s", filename);
@@ -212,6 +217,11 @@ main(int argc, char *argv[])
 	nargs = argc;
 	vargs = argv;
 
+	if (argv[0] != NULL) {
+		pid = strtonum(argv[0], 0, PID_MAX, NULL);
+		if (errno != 0)
+			pid = NO_PID;
+	}
 	if (btscript == NULL && !showprobes)
 		usage();
 
@@ -222,12 +232,10 @@ main(int argc, char *argv[])
 
 		if (pid != NO_PID) {
 			procmap_init(pid);
-			uelf = NULL;
 			LIST_FOREACH(pe, procmap_list(), pe_next) {
-				if (uelf == NULL)
-					uelf = kelf_open(pe->pe_name, uelf);
-				else
-					kelf_open(pe->pe_name, uelf);
+				uelf = kelf_open(pe->pe_name, uelf);
+				fprintf(stderr, "%s opening %s (%s)\n", __func__, pe->pe_name, (uelf == NULL) ? "fail" : "ok");
+				uelf = NULL;
 			}
 		}
 	}
