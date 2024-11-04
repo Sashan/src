@@ -20,7 +20,16 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/queue.h>
-#include <sys/proc.h>
+
+/*
+ * Defined in sys/proc.h, but visible to kernel only
+ */
+#ifndef PID_MAX
+#define	PID_MAX			99999
+#endif
+#ifndef NO_PID
+#define	NO_PID		(PID_MAX+1)
+#endif
 
 #include <assert.h>
 #include <err.h>
@@ -143,9 +152,8 @@ main(int argc, char *argv[])
 	const char *filename = NULL, *btscript = NULL;
 	int showprobes = 0, noaction = 0;
 	size_t btslen = 0;
-	struct bt_rule *br;
 	pid_t pid = NO_PID;
-	struct procmap_entry *pe;
+	struct bt_procmap_entry *pe;
 
 	setlocale(LC_ALL, "");
 
@@ -167,8 +175,8 @@ main(int argc, char *argv[])
 		case 'v':
 			verbose++;
 			break;
-		case 'p':
-			pid = strtonum(str, 0, PID_MAX, NULL);
+		case 'P':
+			pid = strtonum(optarg, 0, PID_MAX, NULL);
 			if (errno != 0)
 				usage();
 			break;
@@ -215,7 +223,7 @@ main(int argc, char *argv[])
 		if (pid != NO_PID) {
 			procmap_init(pid);
 			uelf = NULL;
-			LIST_FOREACH(pe, &bt_procmap, pe_next) {
+			LIST_FOREACH(pe, procmap_list(), pe_next) {
 				if (uelf == NULL)
 					uelf = kelf_open(pe->pe_name, uelf);
 				else
@@ -628,7 +636,7 @@ rules_setup(int fd)
 	}
 
 	if (dokstack)
-		kelf = kelf_open(_PATH_KSYMS);
+		kelf = kelf_open(_PATH_KSYMS, NULL);
 
 	/* Initialize "fake" event for BEGIN/END */
 	bt_devt.dtev_pbn = EVENT_BEGIN;

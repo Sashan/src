@@ -14,7 +14,7 @@ CFLAGS+=	-DSYSVMSG
 CFLAGS+=	-W -Wall -Wstrict-prototypes -Wno-unused -Wunused-variable
 CFLAGS+=	-I${.CURDIR}
 
-LDADD+=		-lelf
+LDADD+=		-lelf -lkvm
 DPADD+=		${LIBELF}
 
 #DEBUG?=		-g

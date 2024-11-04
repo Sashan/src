@@ -19,18 +19,20 @@
 #ifndef BTRACE_H
 #define BTRACE_H
 
+#include <sys/queue.h>
+
 #ifndef nitems
 #define nitems(_a)	(sizeof((_a)) / sizeof((_a)[0]))
 #endif
 
 struct bt_procmap_entry {
-	LIST_ENTRY(procmap_entry) pe_next;
+	LIST_ENTRY(bt_procmap_entry) pe_next;
 	void *pe_start, *pe_end;
 	size_t pe_sz;
 	char pe_name[256];
 };
 
-extern LIST_HEAD(procmap_head, procmap_entry) bt_procmap;
+LIST_HEAD(bt_procmap_head, bt_procmap_entry);
 
 struct dt_evt;
 struct bt_arg;
@@ -46,7 +48,7 @@ unsigned long		 dt_get_offset(pid_t);
 
 /* ksyms.c */
 struct syms;
-struct syms		*kelf_open(const char *);
+struct syms		*kelf_open(const char *, struct syms *);
 void			 kelf_close(struct syms *);
 int			 kelf_snprintsym(struct syms *, char *, size_t,
 			    unsigned long, unsigned long);
@@ -75,6 +77,8 @@ int			 stmt_printf(struct bt_stmt *, struct dt_evt *);
 extern const char	*const syscallnames[];
 
 extern int		 procmap_init(pid_t);
+extern struct bt_procmap_head
+			*procmap_list(void);
 extern void		 procmap_fini(void);
 
 #endif /* BTRACE_H */
