@@ -502,6 +502,77 @@ __asm__(".pushsection .openbsd.syscalls,\"\",@progbits;"
     ".popsection");
 #endif
 
+struct sym_hint {
+	void	*sh_start;
+	void	*sh_end;
+	char	 sh_path;
+};
+
+struct sym_hint *
+_dl_add_sym_hint(struct sym_hint *sym_hints, const char *load_name,
+    struct load_list *ll, size_t *sz)
+{
+	size_t ll_name_len = _dl_strlen(load_name);
+	size_t item_size = ll_name_len + sizeof(struct sym_hint);
+	struct sym_hint *new;
+
+	new = _dl_realloc(sym_hints, *sz + item_size);
+	if (new == NULL) {
+		_dl_free(sym_hints);
+		*sz = 0;
+		return NULL;
+	}
+	sym_hints = new;
+	new = sym_hints + *sz;
+
+	new->sh_start = ll->start;
+	new->sh_end = ll->start + ll->size;
+	_dl_strlcpy(&new->sh_path, load_name, ll_name_len);
+
+	*sz += item_size;
+
+	return sym_hints;
+}
+
+void
+_dl_attach_linkmap(elf_object_t *object)
+{
+	struct load_list *llist;
+	struct sym_hint *sym_hints = NULL;
+	size_t sym_hints_sz = 0;
+
+	while (object != NULL) {
+		/*
+		 * load_name is abs. path for shared libs for executable the
+		 * load_name is copy command line. We skip a load_name if it
+		 * does not start with '/'
+		 */
+		if (*object->load_name != '/')
+			for (llist = object->load_list; llist != NULL;
+			    llist = llist->next) {
+				if (llist->prot & PROT_EXEC) {
+					sym_hints = _dl_add_sym_hint(sym_hints,
+					    object->load_name, llist,
+					    &sym_hints_sz);
+					/*
+					 * just return is fine here, as should
+					 * not prevent loading when failing to
+					 * create hints for btrace(8).
+					 */
+					if (sym_hints == NULL)
+						return;
+				}
+			}
+		object = object->next;
+	}
+
+	if (sym_hints != NULL) {
+		_dl_set_symhint(_dl_getpid(), sym_hints, sym_hints_sz);
+		_dl_getpid();
+		_dl_free(sym_hints);
+	}
+}
+
 /*
  * This is the dynamic loader entrypoint. When entering here, depending
  * on architecture type, the stack and registers are set up according
@@ -745,6 +816,8 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 
 	if (failed != 0)
 		_dl_die("relocation failed");
+
+	_dl_attach_linkmap(_dl_objects);
 
 	if (_dl_traceld)
 		_dl_exit(0);

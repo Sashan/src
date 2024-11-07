@@ -1,4 +1,4 @@
-/*	$OpenBSD: syscalls.c,v 1.280 2024/08/02 14:35:56 mvs Exp $	*/
+/*	$OpenBSD$	*/
 
 /*
  * System call names.
@@ -393,4 +393,6 @@ const char *const syscallnames[] = {
 	"#328 (obsolete __tfork51)",		/* 328 = obsolete __tfork51 */
 	"__set_tcb",			/* 329 = __set_tcb */
 	"__get_tcb",			/* 330 = __get_tcb */
+	"set_symhint",			/* 331 = set_symhint */
+	"get_symhint",			/* 332 = get_symhint */
 };
