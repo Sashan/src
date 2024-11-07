@@ -567,8 +567,15 @@ _dl_attach_linkmap(elf_object_t *object)
 	}
 
 	if (sym_hints != NULL) {
-		_dl_set_symhint(_dl_getpid(), sym_hints, sym_hints_sz);
-		_dl_getpid();
+	/* directly code the syscall, so that it's actually inline here */
+		register long syscall_num __asm("rax") = SYS_set_symhint;
+		register long  arg1 __asm("rdi") = _dl_getpid();
+		register void *arg2 __asm("rsi") = sym_hints;
+		register long  arg3 __asm("rdx") = sym_hints_sz;
+
+		__asm volatile("syscall" : "+r" (syscall_num), "+r" (arg3) :
+		    "r" (arg1), "r" (arg2) : "cc", "rcx", "r11", "memory");
+
 		_dl_free(sym_hints);
 	}
 }
