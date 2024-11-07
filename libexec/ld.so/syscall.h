@@ -62,6 +62,7 @@ int	_dl_sysctl(const int *, u_int, void *, size_t *, void *, size_t);
 __dead
 void	_dl_thrkill(pid_t, int, void *);
 int	_dl_utrace(const char *, const void *, size_t);
-int	_dl_set_symhint(const void *, size_t);
+int	_dl_set_symhint(pid_t, const void *, size_t);
+pid_t	_dl_getpid(void);
 
 #endif /*__DL_SYSCALL_H__*/

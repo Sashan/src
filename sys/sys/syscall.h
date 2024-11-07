@@ -728,4 +728,10 @@
 /* syscall: "__get_tcb" ret: "void *" args: */
 #define	SYS___get_tcb	330
 
-#define	SYS_MAXSYSCALL	331
+/* syscall: "set_symhint" ret: "int" args: "pid_t" "const void *" "size_t" */
+#define	SYS_set_symhint	331
+
+/* syscall: "get_symhint" ret: "int" args: "pid_t" "void *" "size_t *" */
+#define	SYS_get_symhint	332
+
+#define	SYS_MAXSYSCALL	333

@@ -569,3 +569,5 @@
 328	OBSOL		__tfork51
 329	STD NOLOCK	{ void sys___set_tcb(void *tcb); }
 330	STD NOLOCK	{ void *sys___get_tcb(void); }
+331	STD		{ int sys_set_symhint(pid_t pid, const void *symhints, size_t sz); }
+332	STD		{ int sys_get_symhint(pid_t pid, void *symhints, size_t *sz); }

@@ -311,6 +311,9 @@ process_new(struct proc *p, struct process *parent, int flags)
 	/* it's sufficiently inited to be globally visible */
 	LIST_INSERT_HEAD(&allprocess, pr, ps_list);
 
+	pr->ps_sym_hints = NULL;
+	pr->ps_sym_hints_sz = 0;
+
 	return pr;
 }
 

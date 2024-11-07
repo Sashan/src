@@ -1160,6 +1160,18 @@ struct sys___set_tcb_args {
 	syscallarg(void *) tcb;
 };
 
+struct sys_set_symhint_args {
+	syscallarg(pid_t) pid;
+	syscallarg(const void *) symhints;
+	syscallarg(size_t) sz;
+};
+
+struct sys_get_symhint_args {
+	syscallarg(pid_t) pid;
+	syscallarg(void *) symhints;
+	syscallarg(size_t *) sz;
+};
+
 /*
  * System call prototypes.
  */
@@ -1421,3 +1433,5 @@ int	sys_symlinkat(struct proc *, void *, register_t *);
 int	sys_unlinkat(struct proc *, void *, register_t *);
 int	sys___set_tcb(struct proc *, void *, register_t *);
 int	sys___get_tcb(struct proc *, void *, register_t *);
+int	sys_set_symhint(struct proc *, void *, register_t *);
+int	sys_get_symhint(struct proc *, void *, register_t *);
