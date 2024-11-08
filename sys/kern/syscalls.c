@@ -394,5 +394,4 @@ const char *const syscallnames[] = {
 	"__set_tcb",			/* 329 = __set_tcb */
 	"__get_tcb",			/* 330 = __get_tcb */
 	"set_symhint",			/* 331 = set_symhint */
-	"get_symhint",			/* 332 = get_symhint */
 };

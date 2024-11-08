@@ -32,6 +32,7 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/exec.h>
+#include <sys/symhint.h>
 #ifdef __i386__
 # include <machine/vmparam.h>
 #endif
@@ -502,12 +503,6 @@ __asm__(".pushsection .openbsd.syscalls,\"\",@progbits;"
     ".popsection");
 #endif
 
-struct sym_hint {
-	void	*sh_start;
-	void	*sh_end;
-	char	 sh_path;
-};
-
 struct sym_hint *
 _dl_add_sym_hint(struct sym_hint *sym_hints, const char *load_name,
     struct load_list *ll, size_t *sz)
@@ -563,18 +558,23 @@ _dl_attach_linkmap(elf_object_t *object)
 						return;
 				}
 			}
+
 		object = object->next;
 	}
 
 	if (sym_hints != NULL) {
-	/* directly code the syscall, so that it's actually inline here */
+#if 0
+	/* 
+	 * direct syscall is prevented by syscall pinning.
+	 */
 		register long syscall_num __asm("rax") = SYS_set_symhint;
 		register long  arg1 __asm("rdi") = _dl_getpid();
 		register void *arg2 __asm("rsi") = sym_hints;
 		register long  arg3 __asm("rdx") = sym_hints_sz;
 
-		__asm volatile("syscall" : "+r" (syscall_num), "+r" (arg3) :
-		    "r" (arg1), "r" (arg2) : "cc", "rcx", "r11", "memory");
+		__asm volatile("syscall" : "+r" (syscall_num) :
+		    "r" (arg1), "r" (arg2), "r" (arg3) : "cc", "r11", "memory");
+#endif
 
 		_dl_free(sym_hints);
 	}
