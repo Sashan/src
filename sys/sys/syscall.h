@@ -671,7 +671,9 @@
 				/* 306 is obsolete getfsstat53 */
 				/* 307 is obsolete statfs53 */
 				/* 308 is obsolete fstatfs53 */
-				/* 309 is obsolete fhstatfs53 */
+/* syscall: "set_symhint" ret: "int" args: "pid_t" "const void *" "size_t" */
+#define	SYS_set_symhint	309
+
 /* syscall: "setrtable" ret: "int" args: "int" */
 #define	SYS_setrtable	310
 
@@ -725,7 +727,4 @@
 /* syscall: "__get_tcb" ret: "void *" args: */
 #define	SYS___get_tcb	330
 
-/* syscall: "set_symhint" ret: "int" args: "pid_t" "const void *" "size_t" */
-#define	SYS_set_symhint	331
-
-#define	SYS_MAXSYSCALL	332
+#define	SYS_MAXSYSCALL	331

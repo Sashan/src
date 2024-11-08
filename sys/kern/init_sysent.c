@@ -707,8 +707,8 @@ const struct sysent sysent[] = {
 	    sys_nosys },			/* 307 = obsolete statfs53 */
 	{ 0, 0, 0,
 	    sys_nosys },			/* 308 = obsolete fstatfs53 */
-	{ 0, 0, 0,
-	    sys_nosys },			/* 309 = obsolete fhstatfs53 */
+	{ 3, s(struct sys_set_symhint_args), 0,
+	    sys_set_symhint },			/* 309 = set_symhint */
 	{ 1, s(struct sys_setrtable_args), SY_NOLOCK | 0,
 	    sys_setrtable },			/* 310 = setrtable */
 	{ 0, 0, SY_NOLOCK | 0,
@@ -751,7 +751,5 @@ const struct sysent sysent[] = {
 	    sys___set_tcb },			/* 329 = __set_tcb */
 	{ 0, 0, SY_NOLOCK | 0,
 	    sys___get_tcb },			/* 330 = __get_tcb */
-	{ 3, s(struct sys_set_symhint_args), 0,
-	    sys_set_symhint },			/* 331 = set_symhint */
 };
 
