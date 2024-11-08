@@ -535,6 +535,7 @@ _dl_attach_linkmap(elf_object_t *object)
 	struct load_list *llist;
 	struct sym_hint *sym_hints = NULL;
 	size_t sym_hints_sz = 0;
+	pid_t pid = _dl_getpid();
 
 	while (object != NULL) {
 		/*
@@ -563,19 +564,7 @@ _dl_attach_linkmap(elf_object_t *object)
 	}
 
 	if (sym_hints != NULL) {
-#if 0
-	/* 
-	 * direct syscall is prevented by syscall pinning.
-	 */
-		register long syscall_num __asm("rax") = SYS_set_symhint;
-		register long  arg1 __asm("rdi") = _dl_getpid();
-		register void *arg2 __asm("rsi") = sym_hints;
-		register long  arg3 __asm("rdx") = sym_hints_sz;
-
-		__asm volatile("syscall" : "+r" (syscall_num) :
-		    "r" (arg1), "r" (arg2), "r" (arg3) : "cc", "r11", "memory");
-#endif
-
+		_dl_set_symhint(pid, sym_hints, sym_hints_sz);
 		_dl_free(sym_hints);
 	}
 }

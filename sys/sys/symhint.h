@@ -41,7 +41,7 @@ struct sym_hint {
 
 #ifndef	_KERNEL
 __BEGIN_DECLS
-int	set_symhints(pid_t, const void *, size_t);
+int	set_symhint(pid_t, const void *, size_t);
 __END_DECLS
 #endif
 
