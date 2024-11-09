@@ -44,6 +44,10 @@
 #include <sys/vnode.h>
 #include <sys/syslog.h>
 
+#include <sys/mount.h>
+#include <sys/socket.h>
+#include <sys/syscallargs.h>
+
 /*
  *  Locks used to protect struct members in this file:
  *	I	immutable after creation
@@ -683,29 +687,28 @@ pgrpdump(void)
 #endif /* DEBUG */
 
 int
-sys_set_symhint(pid_t pid, const void *usym_hints, size_t usym_hints_sz)
-{
-	struct process *pr;
+sys_set_symhint(struct proc *q, void *v, register_t *retval)
+{	/* TODO: kill pid argument we don't need it */
+	struct sys_set_symhint_args /* {
+		syscallarg(pid_t) pid;
+		syscallarg(const void *) symhints;
+		syscallarg(size_t) usym_hints_sz;
+	} */ *uap = v;
+	const void *usymhints = SCARG(uap, symhints);;
+	size_t usymhints_sz = SCARG(uap, sz);;
+	struct process *pr = q->p_p;
 	void *sym_hints_buf;
 	void *old_sym_hints;
 	size_t old_sym_hints_sz;
 	int e;
 
-	log(LOG_ERR, "%s\n", __func__);
-	pr = prfind(pid);
-	if (pr == NULL) {
-		log(LOG_ERR, "%s no pid for %d\n", __func__, pid);
-		return ESRCH;
-	}
-
-	if (usym_hints_sz > 32768) {
-		log(LOG_ERR, "%s too big want: %lu\n", __func__, usym_hints_sz);
+	if (usymhints_sz > 32768) {
+		log(LOG_ERR, "%s too big want: %lu\n", __func__, usymhints_sz);
 		return ENOMEM;
 	}
 
 	/* ideally we want to make the syscall avaliable to ld.so only */
-
-	if (usym_hints == NULL) {
+	if (usymhints == NULL) {
 		log(LOG_ERR, "%s got NULL\n", __func__);
 		old_sym_hints = pr->ps_sym_hints;
 		old_sym_hints_sz = pr->ps_sym_hints_sz;
@@ -715,57 +718,21 @@ sys_set_symhint(pid_t pid, const void *usym_hints, size_t usym_hints_sz)
 		return 0;
 	}
 
-	sym_hints_buf = (char *)malloc(usym_hints_sz, M_PROC, M_WAITOK|M_ZERO);
-	e = copyin(usym_hints, sym_hints_buf, usym_hints_sz);
+	sym_hints_buf = (char *)malloc(usymhints_sz, M_PROC, M_WAITOK|M_ZERO);
+	e = copyin(usymhints, sym_hints_buf, usymhints_sz);
 	if (e != 0) {
 		log(LOG_ERR, "%s copyin() error %d\n", __func__, e);
-		free(sym_hints_buf, M_PROC, usym_hints_sz);
+		free(sym_hints_buf, M_PROC, usymhints_sz);
 		return e;
-	}
-
-	pr = prfind(pid);
-	if (pr == NULL) {
-		log(LOG_ERR, "%s (again) no pid for %d\n", __func__, pid);
-		free(sym_hints_buf, M_PROC, usym_hints_sz);
-		return ESRCH;
 	}
 
 	old_sym_hints_sz = pr->ps_sym_hints_sz;
 	old_sym_hints = pr->ps_sym_hints;
 	pr->ps_sym_hints = sym_hints_buf;
-	pr->ps_sym_hints_sz = usym_hints_sz;
+	pr->ps_sym_hints_sz = usymhints_sz;
 
 	free(old_sym_hints, M_PROC, old_sym_hints_sz);
 	log(LOG_ERR, "%s done!\n", __func__);
 
 	return 0;
 }
-
-#if 0
-int
-sys_get_symhint(pid_t pid, void *usym_hints, size_t *usym_hints_sz)
-{
-	struct process *pr;
-	size_t size;
-	int e;
-
-	e = copyin(usym_hints_sz, &size, sizeof(size_t));
-	if (e != 0)
-		return e;
-
-	pr = prfind(pid);
-	if (pr == NULL)
-		return ESRCH;
-
-	e = copyout(&pr->ps_sym_hints_sz, usym_hints_sz, sizeof(size_t));
-	if (pr->ps_sym_hints_sz > size) {
-		if (e == 0)
-			e = E2BIG;
-		return e;
-	}
-
-	e = copyout(pr->ps_sym_hints, usym_hints, pr->ps_sym_hints_sz);
-
-	return e;
-}
-#endif
