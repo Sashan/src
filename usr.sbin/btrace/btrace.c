@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/queue.h>
+#include <sys/symhint.h>
 
 #include <assert.h>
 #include <err.h>
@@ -111,6 +112,8 @@ void			 debug_dump_term(struct bt_arg *);
 void			 debug_dump_expr(struct bt_arg *);
 void			 debug_dump_filter(struct bt_rule *);
 
+struct syms		*dt_load_syms(pid_t, struct syms *);
+
 struct dtioc_probe_info	*dt_dtpis;	/* array of available probes */
 size_t			 dt_ndtpi;	/* # of elements in the array */
 struct dtioc_arg_info  **dt_args;	/* array of probe arguments */
@@ -142,6 +145,8 @@ main(int argc, char *argv[])
 	const char *filename = NULL, *btscript = NULL;
 	int showprobes = 0, noaction = 0;
 	size_t btslen = 0;
+	pid_t pid = -1;
+	const char *exec_path = NULL;
 
 	setlocale(LC_ALL, "");
 
@@ -158,7 +163,7 @@ main(int argc, char *argv[])
 			noaction = 1;
 			break;
 		case 'p':
-			uelf = kelf_open(optarg);
+			exec_path = optarg;
 			break;
 		case 'v':
 			verbose++;
@@ -195,10 +200,21 @@ main(int argc, char *argv[])
 	nargs = argc;
 	vargs = argv;
 
+	if (argv[0] != NULL) {
+		pid = strtonum(argv[0], 0, INT_MAX, NULL);
+		if (errno != 0)
+			pid = -1;
+	}
 	if (btscript == NULL && !showprobes)
 		usage();
 
 	if (btscript != NULL) {
+		if (pid != -1) {
+			if (exec_path != NULL)
+				uelf = kelf_open_exec(exec_path, pid);
+
+			uelf = dt_load_syms(pid, uelf);
+		}
 		error = btparse(btscript, btslen, filename, 1);
 		if (error)
 			return error;
@@ -547,7 +563,7 @@ rules_setup(int fd)
 	}
 
 	if (dokstack)
-		kelf = kelf_open(_PATH_KSYMS);
+		kelf = kelf_open_kernel(_PATH_KSYMS);
 
 	/* Initialize "fake" event for BEGIN/END */
 	bt_devt.dtev_pbn = EVENT_BEGIN;
@@ -1741,7 +1757,11 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 		str = builtin_stack(dtev, 1, 0);
 		break;
 	case B_AT_BI_USTACK:
-		str = builtin_stack(dtev, 0, dt_get_offset(dtev->dtev_pid));
+		/*
+		 * TODO: figure out how to handle static binaries, those
+		 * still need call to dt_get_offset() here
+		 */
+		str = builtin_stack(dtev, 0, 0);
 		break;
 	case B_AT_BI_COMM:
 		str = dtev->dtev_comm;
@@ -2089,4 +2109,39 @@ dt_get_offset(pid_t pid)
 	}
 
 	return aux->dtga_auxbase;
+}
+
+struct syms *
+dt_load_syms(pid_t pid, struct syms *syms)
+{
+	struct dtioc_getmap	dtgm;
+
+	dtgm.dtgm_pid = pid;
+	dtgm.dtgm_map_sz = 0;
+	dtgm.dtgm_map = NULL;
+
+	/* get maphint size */
+	if (ioctl(dtfd, DIOCGETMAPHINT, &dtgm)) {
+		warn("DIOCGETMAHINT");
+		return NULL;
+	}
+
+	dtgm.dtgm_map = malloc(*dtgm.dtgm_map_sz);
+	if (dtgm.dtgm_map == NULL) {
+		warn("malloc");
+		return NULL;
+	}
+
+	/* get maphint */
+	if (ioctl(dtfd, DIOCGETMAPHINT, &dtgm)) {
+		warn("DIOCGETMAHINT");
+		free(dtgm.dtgm_map);
+		return NULL;
+	}
+
+	syms = kelf_load_syms(&dtgm, syms);
+
+	free(dtgm.dtgm_map);
+
+	return syms;
 }
