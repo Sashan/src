@@ -709,6 +709,10 @@ sys_set_symhint(struct proc *q, void *v, register_t *retval)
 
 	/* ideally we want to make the syscall avaliable to ld.so only */
 	if (usymhints == NULL) {
+		/*
+		 *given syscall is supposed to be called by ld.so it's
+		 * perhaps worth to log and return
+		 */
 		log(LOG_ERR, "%s got NULL\n", __func__);
 		old_sym_hints = pr->ps_sym_hints;
 		old_sym_hints_sz = pr->ps_sym_hints_sz;
@@ -732,7 +736,6 @@ sys_set_symhint(struct proc *q, void *v, register_t *retval)
 	pr->ps_sym_hints_sz = usymhints_sz;
 
 	free(old_sym_hints, M_PROC, old_sym_hints_sz);
-	log(LOG_ERR, "%s done!\n", __func__);
 
 	return 0;
 }
