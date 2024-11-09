@@ -299,6 +299,7 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	case DTIOCPRBENABLE:
 	case DTIOCPRBDISABLE:
 	case DTIOCGETAUXBASE:
+	case DIOCGETMAPHINT:
 		/* root only ioctl(2) */
 		break;
 	default:
