@@ -209,12 +209,6 @@ main(int argc, char *argv[])
 		usage();
 
 	if (btscript != NULL) {
-		if (pid != -1) {
-			if (exec_path != NULL)
-				uelf = kelf_open_exec(exec_path, pid);
-
-			uelf = dt_load_syms(pid, uelf);
-		}
 		error = btparse(btscript, btslen, filename, 1);
 		if (error)
 			return error;
@@ -228,6 +222,13 @@ main(int argc, char *argv[])
 		if (fd == -1)
 			err(1, "could not open %s", __PATH_DEVDT);
 		dtfd = fd;
+
+		if (pid != -1) {
+			if (exec_path != NULL)
+				uelf = kelf_open_exec(exec_path, pid);
+
+			uelf = dt_load_syms(pid, uelf);
+		}
 	}
 
 	if (showprobes) {
@@ -2119,10 +2120,12 @@ dt_load_syms(pid_t pid, struct syms *syms)
 	dtgm.dtgm_pid = pid;
 	dtgm.dtgm_map_sz = 0;
 	dtgm.dtgm_map = NULL;
+	printf("%s: sizeof (struct dtioc_getmap): %lu\n", __func__, sizeof(struct dtioc_getmap)); 
 
 	/* get maphint size */
 	if (ioctl(dtfd, DIOCGETMAPHINT, &dtgm)) {
-		warn("DIOCGETMAHINT");
+		fprintf(stderr, "ioctlcmd: %lxn", DIOCGETMAPHINT);
+		warn("DIOCGETMAPHINT");
 		return NULL;
 	}
 
