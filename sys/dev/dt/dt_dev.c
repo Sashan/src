@@ -25,6 +25,7 @@
 #include <sys/malloc.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
+#include <sys/syslog.h>
 
 #include <machine/intr.h>
 
@@ -288,6 +289,7 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	sc = dtlookup(unit);
 	KASSERT(sc != NULL);
 
+	log(LOG_ERR, "%s(%lx) [%lu]\n", __func__, cmd, sizeof(struct dtioc_getmap));
 	switch (cmd) {
 	case DTIOCGPLIST:
 		return dt_ioctl_list_probes(sc, (struct dtioc_probe *)addr);
@@ -303,11 +305,14 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		/* root only ioctl(2) */
 		break;
 	default:
+		log(LOG_ERR, "%s ENOTTY\n", __func__);
 		return ENOTTY;
 	}
 
-	if ((error = suser(p)) != 0)
+	if ((error = suser(p)) != 0) {
+		log(LOG_ERR, "%s(%lx) EPERM\n", __func__, cmd);
 		return error;
+	}
 
 	switch (cmd) {
 	case DTIOCRECORD:
@@ -674,29 +679,30 @@ dt_ioctl_get_auxbase(struct dt_softc *sc, struct dtioc_getaux *dtga)
 int
 dt_ioctl_get_maphint(struct dt_softc *sc, struct dtioc_getmap *dtgm)
 {
-	size_t buf_sz;
 	struct process *pr;
-	int e;
+	int e = 0;
 
-	if ((e = copyin(dtgm->dtgm_map_sz, &buf_sz, sizeof(size_t))) != 0)
-		return e;
-
-	if ((pr = prfind(dtgm->dtgm_pid)) == NULL)
+	if ((pr = prfind(dtgm->dtgm_pid)) == NULL) {
+		log(LOG_ERR, "%s no process for %d\n", __func__, dtgm->dtgm_pid);
 		return ESRCH;
-
-	if (pr->ps_sym_hints_sz > buf_sz) {
-		e = copyout(&pr->ps_sym_hints_sz, dtgm->dtgm_map_sz,
-		    sizeof(size_t));
-		if (e == 0)
-			e = ENOMEM;
-		return e;
 	}
 
-	e = copyout(pr->ps_sym_hints, dtgm->dtgm_map, pr->ps_sym_hints_sz);
-	if (e != 0)
-		return e;
+	if (pr->ps_sym_hints_sz == 0) {
+		log(LOG_ERR, "%s no hints attached to %d\n", __func__, dtgm->dtgm_pid);
+		return ESRCH;
+	}
 
-	e = copyout(&pr->ps_sym_hints_sz, dtgm->dtgm_map_sz, sizeof(size_t));
+	if (pr->ps_sym_hints_sz <= dtgm->dtgm_map_sz)
+		e = copyout(pr->ps_sym_hints, dtgm->dtgm_map, pr->ps_sym_hints_sz);
+	else
+		log(LOG_ERR, "%s copyout() skipped\n", __func__);
+
+	dtgm->dtgm_map_sz = pr->ps_sym_hints_sz;
+
+	if (e != 0) {
+		log(LOG_ERR, "%s copyout(data) error %lu\n", __func__, pr->ps_sym_hints_sz);
+		return e;
+	}
 
 	return e;
 }
