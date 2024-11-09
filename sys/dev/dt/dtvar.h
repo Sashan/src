@@ -125,7 +125,7 @@ struct dtioc_getaux {
 
 struct dtioc_getmap {
 	pid_t			 dtgm_pid;	/* process to inspect */
-	size_t			*dtgm_map_sz;	/* size of buffer where */
+	size_t			 dtgm_map_sz;	/* size of dtgm_map buffer  */
 	void			*dtgm_map;	/* buffer where to put mapping */
 };
 
