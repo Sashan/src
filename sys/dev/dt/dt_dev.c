@@ -161,6 +161,7 @@ void	dt_ioctl_record_stop(struct dt_softc *);
 int	dt_ioctl_probe_enable(struct dt_softc *, struct dtioc_req *);
 int	dt_ioctl_probe_disable(struct dt_softc *, struct dtioc_req *);
 int	dt_ioctl_get_auxbase(struct dt_softc *, struct dtioc_getaux *);
+int	dt_ioctl_get_maphint(struct dt_softc *, struct dtioc_getmap *);
 
 int	dt_ring_copy(struct dt_cpubuf *, struct uio *, size_t, size_t *);
 
@@ -323,6 +324,9 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		break;
 	case DTIOCGETAUXBASE:
 		error = dt_ioctl_get_auxbase(sc, (struct dtioc_getaux *)addr);
+		break;
+	case DIOCGETMAPHINT:
+		error = dt_ioctl_get_maphint(sc, (struct dtioc_getmap *)addr);
 		break;
 	default:
 		KASSERT(0);
@@ -664,6 +668,36 @@ dt_ioctl_get_auxbase(struct dt_softc *sc, struct dtioc_getaux *dtga)
 			dtga->dtga_auxbase = auxv[i].au_v;
 
 	return 0;
+}
+
+int
+dt_ioctl_get_maphint(struct dt_softc *sc, struct dtioc_getmap *dtgm)
+{
+	size_t buf_sz;
+	struct process *pr;
+	int e;
+
+	if ((e = copyin(dtgm->dtgm_map_sz, &buf_sz, sizeof(size_t))) != 0)
+		return e;
+
+	if ((pr = prfind(dtgm->dtgm_pid)) == NULL)
+		return ESRCH;
+
+	if (pr->ps_sym_hints_sz > buf_sz) {
+		e = copyout(&pr->ps_sym_hints_sz, dtgm->dtgm_map_sz,
+		    sizeof(size_t));
+		if (e == 0)
+			e = ENOMEM;
+		return e;
+	}
+
+	e = copyout(pr->ps_sym_hints, dtgm->dtgm_map, pr->ps_sym_hints_sz);
+	if (e != 0)
+		return e;
+
+	e = copyout(&pr->ps_sym_hints_sz, dtgm->dtgm_map_sz, sizeof(size_t));
+
+	return e;
 }
 
 struct dt_probe *
