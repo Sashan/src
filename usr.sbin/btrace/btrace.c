@@ -2129,7 +2129,7 @@ dt_load_syms(pid_t pid, struct syms *syms)
 		return NULL;
 	}
 
-	dtgm.dtgm_map = malloc(*dtgm.dtgm_map_sz);
+	dtgm.dtgm_map = malloc(dtgm.dtgm_map_sz);
 	if (dtgm.dtgm_map == NULL) {
 		warn("malloc");
 		return NULL;

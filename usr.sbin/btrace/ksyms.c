@@ -296,7 +296,7 @@ kelf_load_syms(struct dtioc_getmap *dtgm, struct syms *syms)
 	char *p, *end;
 
 	end = (char *)dtgm->dtgm_map;
-	end += *dtgm->dtgm_map_sz;
+	end += dtgm->dtgm_map_sz;
 
 	sh = (struct sym_hint *)dtgm->dtgm_map;
 	do {
