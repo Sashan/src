@@ -543,7 +543,7 @@ _dl_attach_linkmap(elf_object_t *object)
 		 * load_name is copy command line. We skip a load_name if it
 		 * does not start with '/'
 		 */
-		if (*object->load_name != '/')
+		if (*object->load_name == '/')
 			for (llist = object->load_list; llist != NULL;
 			    llist = llist->next) {
 				if (llist->prot & PROT_EXEC) {
