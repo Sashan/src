@@ -251,7 +251,7 @@ struct syms *
 kelf_open_exec(const char *path, pid_t pid)
 {
 	struct sym_hint *sh;
-	size_t path_len = strlen(path);
+	size_t path_len = strlen(path) + 1;
 	struct syms *syms;
 
 	sh = malloc(sizeof(struct sym_hint) + path_len);
