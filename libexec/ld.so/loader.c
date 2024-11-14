@@ -518,7 +518,7 @@ _dl_add_sym_hint(struct sym_hint *sym_hints, const char *load_name,
 		return NULL;
 	}
 	sym_hints = new;
-	new = (struct sym_hints *)((char *)sym_hints + *sz);
+	new = (struct sym_hint *)((char *)sym_hints + *sz);
 
 	new->sh_start = ll->start;
 	new->sh_end = ll->start + ll->size;
