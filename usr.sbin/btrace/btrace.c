@@ -179,6 +179,7 @@ main(int argc, char *argv[])
 	if (argc > 0 && btscript == NULL)
 		filename = argv[0];
 
+#if 0
 	 /* Cannot pledge due to special ioctl()s */
 	if (unveil(__PATH_DEVDT, "r") == -1)
 		err(1, "unveil %s", __PATH_DEVDT);
@@ -190,6 +191,7 @@ main(int argc, char *argv[])
 	}
 	if (unveil(NULL, NULL) == -1)
 		err(1, "unveil");
+#endif
 
 	if (filename != NULL) {
 		btscript = read_btfile(filename, &btslen);
