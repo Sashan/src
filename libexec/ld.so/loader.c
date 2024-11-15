@@ -522,7 +522,7 @@ _dl_add_sym_hint(struct sym_hint *sym_hints, const char *load_name,
 
 	new->sh_start = ll->start;
 	new->sh_end = ll->start + ll->size;
-	_dl_strlcpy(&new->sh_path, load_name, ll_name_len);
+	_dl_strlcpy(&new->sh_path, load_name, ll_name_len + 1);
 
 	*sz += item_size;
 
