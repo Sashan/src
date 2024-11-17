@@ -37,7 +37,7 @@ struct sym_hint {
 	void	*sh_start;
 	void	*sh_end;
 	char	 sh_path;
-};
+} __attribute__ ((packed));
 
 #ifndef	_KERNEL
 __BEGIN_DECLS
