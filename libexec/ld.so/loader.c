@@ -548,9 +548,9 @@ _dl_attach_linkmap(elf_object_t *object)
 				 * line. We replace that with marker.
 				 */
 				if (*object->load_name == '/')
-					load_name = "\xff\xff";
-				else
 					load_name = object->load_name;
+				else
+					load_name = "\xff\xff";
 				sym_hints = _dl_add_sym_hint(sym_hints,
 				    load_name, llist, &sym_hints_sz);
 				/*
