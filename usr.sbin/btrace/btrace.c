@@ -112,7 +112,7 @@ void			 debug_dump_term(struct bt_arg *);
 void			 debug_dump_expr(struct bt_arg *);
 void			 debug_dump_filter(struct bt_rule *);
 
-struct syms		*dt_load_syms(pid_t, struct syms *);
+struct syms		*dt_load_syms(pid_t, struct syms *, const char *);
 
 struct dtioc_probe_info	*dt_dtpis;	/* array of available probes */
 size_t			 dt_ndtpi;	/* # of elements in the array */
@@ -226,10 +226,7 @@ main(int argc, char *argv[])
 		dtfd = fd;
 
 		if (pid != -1) {
-			if (exec_path != NULL)
-				uelf = kelf_open_exec(exec_path, pid);
-
-			uelf = dt_load_syms(pid, uelf);
+			uelf = dt_load_syms(pid, uelf, exec_path);
 		}
 	}
 
@@ -2115,7 +2112,7 @@ dt_get_offset(pid_t pid)
 }
 
 struct syms *
-dt_load_syms(pid_t pid, struct syms *syms)
+dt_load_syms(pid_t pid, struct syms *syms, const char *exec_path)
 {
 	struct dtioc_getmap	dtgm;
 
@@ -2144,7 +2141,7 @@ dt_load_syms(pid_t pid, struct syms *syms)
 		return NULL;
 	}
 
-	syms = kelf_load_syms(&dtgm, syms);
+	syms = kelf_load_syms(&dtgm, syms, exec_path);
 
 	free(dtgm.dtgm_map);
 

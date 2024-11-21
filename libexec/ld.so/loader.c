@@ -535,30 +535,33 @@ _dl_attach_linkmap(elf_object_t *object)
 	struct load_list *llist;
 	struct sym_hint *sym_hints = NULL;
 	size_t sym_hints_sz = 0;
+	const char *load_name;
 	pid_t pid = _dl_getpid();
 
 	while (object != NULL) {
-		/*
-		 * load_name is abs. path for shared libs for executable the
-		 * load_name is copy command line. We skip a load_name if it
-		 * does not start with '/'
-		 */
-		if (*object->load_name == '/')
-			for (llist = object->load_list; llist != NULL;
-			    llist = llist->next) {
-				if (llist->prot & PROT_EXEC) {
-					sym_hints = _dl_add_sym_hint(sym_hints,
-					    object->load_name, llist,
-					    &sym_hints_sz);
-					/*
-					 * just return is fine here, as should
-					 * not prevent loading when failing to
-					 * create hints for btrace(8).
-					 */
-					if (sym_hints == NULL)
-						return;
-				}
+		for (llist = object->load_list; llist != NULL;
+		    llist = llist->next) {
+			if (llist->prot & PROT_EXEC) {
+				/*
+				 * load_name is abs. path for shared libs for
+				 * executable the load_name is copy command
+				 * line. We replace that with marker.
+				 */
+				if (*object->load_name == '/')
+					load_name = "\xff\xff";
+				else
+					load_name = object->load_name;
+				sym_hints = _dl_add_sym_hint(sym_hints,
+				    load_name, llist, &sym_hints_sz);
+				/*
+				 * just return is fine here, as should
+				 * not prevent loading when failing to
+				 * create hints for btrace(8).
+				 */
+				if (sym_hints == NULL)
+					return;
 			}
+		}
 
 		object = object->next;
 	}

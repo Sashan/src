@@ -247,23 +247,30 @@ sym_compare_search(const void *keyp, const void *entryp)
  * don't create entry in kernel for it. I wonder if DTIOCGETAUXBASE would help
  * us to find a base address of text section where exec. got loaded to.
  */
-struct syms *
-kelf_open_exec(const char *path, pid_t pid)
+static struct syms *
+kelf_open_exec(struct syms *syms, const struct sym_hint *sh,
+    const char *exec_path)
 {
-	struct sym_hint *sh;
-	size_t path_len = strlen(path) + 1;
-	struct syms *syms;
+	struct sym_hint *tmp_sh;
+	size_t path_len;
+	struct syms *syms_new;
 
-	sh = malloc(sizeof(struct sym_hint) + path_len);
+	if (exec_path == NULL)
+		return syms;
+
+	path_len = strlen(exec_path);
+	tmp_sh = malloc(sizeof(struct sym_hint) + path_len);
 	if (sh == NULL)
-		return NULL;
+		return syms;
 
-	sh->sh_start = (intptr_t *)dt_get_offset(pid);
-	strlcpy(&sh->sh_path, path, path_len);
+	tmp_sh->sh_start = sh->sh_start;
+	strlcpy(&tmp_sh->sh_path, exec_path, path_len + 1);
 
-	syms = kelf_open(sh, NULL);
+	syms_new = kelf_open(tmp_sh, syms);
+	if (syms_new != NULL)
+		syms = syms_new;
 
-	free(sh);
+	free(tmp_sh);
 
 	return syms;
 }
@@ -280,7 +287,7 @@ kelf_open_kernel(const char *path)
 		return NULL;
 
 	sh->sh_start = 0;
-	strlcpy(&sh->sh_path, path, path_len);
+	strlcpy(&sh->sh_path, path, path_len + 1);
 
 	syms = kelf_open(sh, NULL);
 
@@ -290,7 +297,8 @@ kelf_open_kernel(const char *path)
 }
 
 struct syms *
-kelf_load_syms(struct dtioc_getmap *dtgm, struct syms *syms)
+kelf_load_syms(struct dtioc_getmap *dtgm, struct syms *syms,
+    const char *exec_path)
 {
 	struct sym_hint *sh;
 	char *p, *end;
@@ -300,7 +308,11 @@ kelf_load_syms(struct dtioc_getmap *dtgm, struct syms *syms)
 
 	sh = (struct sym_hint *)dtgm->dtgm_map;
 	do {
-		syms = kelf_open(sh, syms);
+		if (strcmp(&sh->sh_path, "\xff\xff") == 0)
+			syms = kelf_open_exec(syms, sh, exec_path);
+		else
+			syms = kelf_open(sh, syms);
+
 		p = &sh->sh_path;
 		/*
 		 * find next map entry in array. it starts right
