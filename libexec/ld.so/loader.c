@@ -527,7 +527,7 @@ _dl_find_sym_hint(struct sym_hint *sym_hints, const char *load_name, size_t sz)
 		p++;
 		sh = (struct sym_hint *)p;
 
-	} while (p < end)
+	} while (p < end);
 
 	return NULL;
 }
