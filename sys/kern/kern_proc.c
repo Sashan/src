@@ -688,11 +688,12 @@ pgrpdump(void)
 
 int
 sys_set_symhint(struct proc *q, void *v, register_t *retval)
-{	/* TODO: kill pid argument we don't need it */
+{
 	struct sys_set_symhint_args /* {
 		syscallarg(const void *) symhints;
 		syscallarg(size_t) usym_hints_sz;
 	} */ *uap = v;
+	extern int allowdt;
 	const void *usymhints = SCARG(uap, symhints);;
 	size_t usymhints_sz = SCARG(uap, sz);;
 	struct process *pr = q->p_p;
@@ -700,6 +701,9 @@ sys_set_symhint(struct proc *q, void *v, register_t *retval)
 	void *old_sym_hints;
 	size_t old_sym_hints_sz;
 	int e;
+
+	if (atomic_load_int(&allowdt) == 0)
+		return EPERM;
 
 	if (usymhints_sz > 32768) {
 		log(LOG_ERR, "%s too big want: %lu\n", __func__, usymhints_sz);
