@@ -504,27 +504,77 @@ __asm__(".pushsection .openbsd.syscalls,\"\",@progbits;"
 #endif
 
 struct sym_hint *
+_dl_find_sym_hint(struct sym_hint *sym_hints, const char *load_name, size_t sz)
+{
+	struct sym_hint *sh;
+	char *p, *end;
+
+	if (sym_hints == NULL)
+		return NULL;
+
+	sh = sym_hints;
+	end = (char *)sym_hints;
+	end += sz;
+
+	do {
+		if (strcmp(&sh->sh_path, load_name) == 0)
+			return sh;
+
+		/* move to next symhint in array */
+		p = &sh->sh_path;
+		while (*p)
+			p++;
+		p++;
+		sh = (struct sym_hint *)p;
+
+	} while (p < end)
+
+	return NULL;
+}
+
+struct sym_hint *
 _dl_add_sym_hint(struct sym_hint *sym_hints, const char *load_name,
     struct load_list *ll, size_t *sz)
 {
 	size_t ll_name_len = _dl_strlen(load_name);
 	size_t item_size = ll_name_len + sizeof(struct sym_hint);
-	struct sym_hint *new;
+	struct sym_hint *sh;
 
-	new = _dl_realloc(sym_hints, *sz + item_size);
-	if (new == NULL) {
-		_dl_free(sym_hints);
-		*sz = 0;
-		return NULL;
+	sh = _dl_find_sym_hint(sym_hints, load_name, *sz);
+	if (sh != NULL) {
+		/*
+		 * according to procmap(1) the shared libraries seem to be
+		 * loaded to several sections which look as follows:
+		 * 2fbd6a4e000-2fbd6a85fff     224k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6a86000-2fbd6b3cfff     732k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b3d000-2fbd6b3dfff       4k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b3e000-2fbd6b43fff      24k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b44000-2fbd6b45fff       8k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b46000-2fbd6b46fff       4k ... - /usr/lib/libc.so.100.4
+		 * As you can see ranges above continuous region
+		 * from 2fbd6a4e000 to 2fbd6b46fff. So this branch just updates
+		 * the existing symhint entry we keep for library.
+		 */
+		if (sh->sh_start > ll->start)
+			sh->sh_start = ll->start;
+		else
+			sh->sh_end += ll->size
+	} else {
+		sh = _dl_realloc(sym_hints, *sz + item_size);
+		if (sh == NULL) {
+			_dl_free(sym_hints);
+			*sz = 0;
+			return NULL;
+		}
+		sym_hints = sh;
+		sh = (struct sym_hint *)((char *)sym_hints + *sz);
+
+		sh->sh_start = ll->start;
+		sh->sh_end = ll->start + ll->size;
+		_dl_strlcpy(&sh->sh_path, load_name, ll_name_len + 1);
+
+		*sz += item_size;
 	}
-	sym_hints = new;
-	new = (struct sym_hint *)((char *)sym_hints + *sz);
-
-	new->sh_start = ll->start;
-	new->sh_end = ll->start + ll->size;
-	_dl_strlcpy(&new->sh_path, load_name, ll_name_len + 1);
-
-	*sz += item_size;
 
 	return sym_hints;
 }
@@ -541,26 +591,24 @@ _dl_attach_linkmap(elf_object_t *object)
 	while (object != NULL) {
 		for (llist = object->load_list; llist != NULL;
 		    llist = llist->next) {
-			if (llist->prot & PROT_EXEC) {
-				/*
-				 * load_name is abs. path for shared libs for
-				 * executable the load_name is copy command
-				 * line. We replace that with marker.
-				 */
-				if (*object->load_name == '/')
-					load_name = object->load_name;
-				else
-					load_name = "\xff\xff";
-				sym_hints = _dl_add_sym_hint(sym_hints,
-				    load_name, llist, &sym_hints_sz);
-				/*
-				 * just return is fine here, as should
-				 * not prevent loading when failing to
-				 * create hints for btrace(8).
-				 */
-				if (sym_hints == NULL)
-					return;
-			}
+			/*
+			 * load_name is abs. path for shared libs for
+			 * executable the load_name is copy command
+			 * line. We replace that with marker.
+			 */
+			if (*object->load_name == '/')
+				load_name = object->load_name;
+			else
+				load_name = "\xff\xff";
+			sym_hints = _dl_add_sym_hint(sym_hints,
+			    load_name, llist, &sym_hints_sz);
+			/*
+			 * just return is fine here, as should
+			 * not prevent loading when failing to
+			 * create hints for btrace(8).
+			 */
+			if (sym_hints == NULL)
+				return;
 		}
 
 		object = object->next;
