@@ -517,7 +517,7 @@ _dl_find_sym_hint(struct sym_hint *sym_hints, const char *load_name, size_t sz)
 	end += sz;
 
 	do {
-		if (strcmp(&sh->sh_path, load_name) == 0)
+		if (_dl_strcmp(&sh->sh_path, load_name) == 0)
 			return sh;
 
 		/* move to next symhint in array */
@@ -558,7 +558,7 @@ _dl_add_sym_hint(struct sym_hint *sym_hints, const char *load_name,
 		if (sh->sh_start > ll->start)
 			sh->sh_start = ll->start;
 		else
-			sh->sh_end += ll->size
+			sh->sh_end += ll->size;
 	} else {
 		sh = _dl_realloc(sym_hints, *sz + item_size);
 		if (sh == NULL) {
