@@ -671,7 +671,7 @@
 				/* 306 is obsolete getfsstat53 */
 				/* 307 is obsolete statfs53 */
 				/* 308 is obsolete fstatfs53 */
-/* syscall: "set_symhint" ret: "int" args: "pid_t" "const void *" "size_t" */
+/* syscall: "set_symhint" ret: "int" args: "const void *" "size_t" */
 #define	SYS_set_symhint	309
 
 /* syscall: "setrtable" ret: "int" args: "int" */

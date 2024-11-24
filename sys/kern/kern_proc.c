@@ -690,7 +690,6 @@ int
 sys_set_symhint(struct proc *q, void *v, register_t *retval)
 {	/* TODO: kill pid argument we don't need it */
 	struct sys_set_symhint_args /* {
-		syscallarg(pid_t) pid;
 		syscallarg(const void *) symhints;
 		syscallarg(size_t) usym_hints_sz;
 	} */ *uap = v;
@@ -707,19 +706,9 @@ sys_set_symhint(struct proc *q, void *v, register_t *retval)
 		return ENOMEM;
 	}
 
-	/* ideally we want to make the syscall avaliable to ld.so only */
 	if (usymhints == NULL) {
-		/*
-		 *given syscall is supposed to be called by ld.so it's
-		 * perhaps worth to log and return
-		 */
 		log(LOG_ERR, "%s got NULL\n", __func__);
-		old_sym_hints = pr->ps_sym_hints;
-		old_sym_hints_sz = pr->ps_sym_hints_sz;
-		pr->ps_sym_hints = NULL;
-		pr->ps_sym_hints_sz = 0;
-		free(old_sym_hints, M_PROC, old_sym_hints_sz);
-		return 0;
+		return EINVAL;
 	}
 
 	sym_hints_buf = (char *)malloc(usymhints_sz, M_PROC, M_WAITOK|M_ZERO);
@@ -730,6 +719,10 @@ sys_set_symhint(struct proc *q, void *v, register_t *retval)
 		return e;
 	}
 
+	/*
+	 * TODO: check how dlopen() updates symhint. We might need to
+	 * append symhint to existing hints.
+	 */
 	old_sym_hints_sz = pr->ps_sym_hints_sz;
 	old_sym_hints = pr->ps_sym_hints;
 	pr->ps_sym_hints = sym_hints_buf;

@@ -707,7 +707,7 @@ const struct sysent sysent[] = {
 	    sys_nosys },			/* 307 = obsolete statfs53 */
 	{ 0, 0, 0,
 	    sys_nosys },			/* 308 = obsolete fstatfs53 */
-	{ 3, s(struct sys_set_symhint_args), 0,
+	{ 2, s(struct sys_set_symhint_args), 0,
 	    sys_set_symhint },			/* 309 = set_symhint */
 	{ 1, s(struct sys_setrtable_args), SY_NOLOCK | 0,
 	    sys_setrtable },			/* 310 = setrtable */

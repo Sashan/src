@@ -1066,7 +1066,6 @@ struct sys_adjfreq_args {
 };
 
 struct sys_set_symhint_args {
-	syscallarg(pid_t) pid;
 	syscallarg(const void *) symhints;
 	syscallarg(size_t) sz;
 };
