@@ -2119,7 +2119,6 @@ dt_load_syms(pid_t pid, struct syms *syms, const char *exec_path)
 	dtgm.dtgm_pid = pid;
 	dtgm.dtgm_map_sz = 0;
 	dtgm.dtgm_map = NULL;
-	printf("%s: sizeof (struct dtioc_getmap): %lu\n", __func__, sizeof(struct dtioc_getmap)); 
 
 	/* get maphint size */
 	if (ioctl(dtfd, DIOCGETMAPHINT, &dtgm)) {

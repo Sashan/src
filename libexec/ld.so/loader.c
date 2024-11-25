@@ -543,7 +543,9 @@ _dl_add_sym_hint(struct sym_hint *sym_hints, const char *load_name,
 	sh = _dl_find_sym_hint(sym_hints, load_name, *sz);
 	if (sh != NULL) {
 		/*
-		 * according to procmap(1) the shared libraries seem to be
+		 * This branch just updates the existing symhint entry we keep
+		 * for library.
+		 * According to procmap(1) the shared libraries seem to be
 		 * loaded to several sections which look as follows:
 		 * 2fbd6a4e000-2fbd6a85fff     224k ... - /usr/lib/libc.so.100.4
 		 * 2fbd6a86000-2fbd6b3cfff     732k ... - /usr/lib/libc.so.100.4
@@ -551,9 +553,10 @@ _dl_add_sym_hint(struct sym_hint *sym_hints, const char *load_name,
 		 * 2fbd6b3e000-2fbd6b43fff      24k ... - /usr/lib/libc.so.100.4
 		 * 2fbd6b44000-2fbd6b45fff       8k ... - /usr/lib/libc.so.100.4
 		 * 2fbd6b46000-2fbd6b46fff       4k ... - /usr/lib/libc.so.100.4
-		 * As you can see ranges above continuous region
-		 * from 2fbd6a4e000 to 2fbd6b46fff. So this branch just updates
-		 * the existing symhint entry we keep for library.
+		 * As you can see ranges above create a continuous region
+		 * from 2fbd6a4e000 to 2fbd6b46fff. The symbol table entry in
+		 * elf file is offset to the start of the region (the lowest
+		 * address).
 		 */
 		if (sh->sh_start > ll->start)
 			sh->sh_start = ll->start;
