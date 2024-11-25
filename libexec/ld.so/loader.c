@@ -586,7 +586,6 @@ _dl_attach_linkmap(elf_object_t *object)
 	struct sym_hint *sym_hints = NULL;
 	size_t sym_hints_sz = 0;
 	const char *load_name;
-	pid_t pid = _dl_getpid();
 
 	while (object != NULL) {
 		for (llist = object->load_list; llist != NULL;
