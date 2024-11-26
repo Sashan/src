@@ -371,7 +371,7 @@ const char *const syscallnames[] = {
 	"#306 (obsolete getfsstat53)",		/* 306 = obsolete getfsstat53 */
 	"#307 (obsolete statfs53)",		/* 307 = obsolete statfs53 */
 	"#308 (obsolete fstatfs53)",		/* 308 = obsolete fstatfs53 */
-	"set_symhint",			/* 309 = set_symhint */
+	"#309 (obsolete fhstatfs53)",		/* 309 = obsolete fhstatfs53 */
 	"setrtable",			/* 310 = setrtable */
 	"getrtable",			/* 311 = getrtable */
 	"#312 (obsolete t32_getdirentries)",		/* 312 = obsolete t32_getdirentries */
@@ -393,4 +393,5 @@ const char *const syscallnames[] = {
 	"#328 (obsolete __tfork51)",		/* 328 = obsolete __tfork51 */
 	"__set_tcb",			/* 329 = __set_tcb */
 	"__get_tcb",			/* 330 = __get_tcb */
+	"set_symhint",			/* 331 = set_symhint */
 };

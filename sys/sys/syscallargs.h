@@ -1065,12 +1065,6 @@ struct sys_adjfreq_args {
 	syscallarg(int64_t *) oldfreq;
 };
 
-struct sys_set_symhint_args {
-	syscallarg(const void *) symhints;
-	syscallarg(size_t) sz;
-	syscallarg(int64_t) proc_cookie;
-};
-
 struct sys_setrtable_args {
 	syscallarg(int) rtableid;
 };
@@ -1159,6 +1153,11 @@ struct sys_unlinkat_args {
 
 struct sys___set_tcb_args {
 	syscallarg(void *) tcb;
+};
+
+struct sys_set_symhint_args {
+	syscallarg(const void *) symhints;
+	syscallarg(size_t) sz;
 };
 
 /*
@@ -1405,7 +1404,6 @@ int	sys___threxit(struct proc *, void *, register_t *);
 int	sys___thrsigdivert(struct proc *, void *, register_t *);
 int	sys___getcwd(struct proc *, void *, register_t *);
 int	sys_adjfreq(struct proc *, void *, register_t *);
-int	sys_set_symhint(struct proc *, void *, register_t *);
 int	sys_setrtable(struct proc *, void *, register_t *);
 int	sys_getrtable(struct proc *, void *, register_t *);
 int	sys_faccessat(struct proc *, void *, register_t *);
@@ -1422,3 +1420,4 @@ int	sys_symlinkat(struct proc *, void *, register_t *);
 int	sys_unlinkat(struct proc *, void *, register_t *);
 int	sys___set_tcb(struct proc *, void *, register_t *);
 int	sys___get_tcb(struct proc *, void *, register_t *);
+int	sys_set_symhint(struct proc *, void *, register_t *);
