@@ -500,6 +500,8 @@ __asm__(".pushsection .openbsd.syscalls,\"\",@progbits;"
     ".p2align 2;"
     ".long 0;"
     ".long " STRINGIFY(SYS_kbind) ";"
+    ".long 0;"
+    ".long " STRINGIFY(SYS_set_symhint) ";"
     ".popsection");
 #endif
 
@@ -589,6 +591,8 @@ _dl_attach_linkmap(elf_object_t *object)
 	struct sym_hint *sym_hints = NULL;
 	size_t sym_hints_sz = 0;
 	const char *load_name;
+	extern int64_t pcookie;
+	int64_t cookie = pcookie;
 
 	while (object != NULL) {
 		for (llist = object->load_list; llist != NULL;
@@ -619,10 +623,11 @@ _dl_attach_linkmap(elf_object_t *object)
 	if (sym_hints != NULL) {
 	/* directly code the syscall, so that it's actually inline here */
 		register long syscall_num __asm("rax") = SYS_set_symhint;
-		register void *arg2 __asm("rdi") = sym_hints;
-		register long  arg3 __asm("rsi") = sym_hints_sz;
+		register void *arg1 __asm("rdi") = sym_hints;
+		register long  arg2 __asm("rsi") = sym_hints_sz;
+		register long  arg3 __asm("rdx") = cookie;
 
-		__asm volatile("syscall" : "+r" (syscall_num) :
+		__asm volatile("syscall" : "+r" (syscall_num), "+r" (arg3) :
 		    "r" (arg1), "r" (arg2) : "cc", "rcx", "r11", "memory");
 
 #if 0

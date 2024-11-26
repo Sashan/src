@@ -1068,6 +1068,7 @@ struct sys_adjfreq_args {
 struct sys_set_symhint_args {
 	syscallarg(const void *) symhints;
 	syscallarg(size_t) sz;
+	syscallarg(int64_t) proc_cookie;
 };
 
 struct sys_setrtable_args {

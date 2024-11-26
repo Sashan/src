@@ -687,20 +687,41 @@ pgrpdump(void)
 #endif /* DEBUG */
 
 int
-sys_set_symhint(struct proc *q, void *v, register_t *retval)
+sys_set_symhint(struct proc *p, void *v, register_t *retval)
 {
 	struct sys_set_symhint_args /* {
 		syscallarg(const void *) symhints;
 		syscallarg(size_t) usym_hints_sz;
+		syscallargs(uint64_t) proc_cookie;
 	} */ *uap = v;
 	extern int allowdt;
 	const void *usymhints = SCARG(uap, symhints);;
 	size_t usymhints_sz = SCARG(uap, sz);;
-	struct process *pr = q->p_p;
+	struct process *pr = p->p_p;
 	void *sym_hints_buf;
 	void *old_sym_hints;
 	size_t old_sym_hints_sz;
+	u_long pc;
 	int e;
+	int sigill = 1;
+
+	pc = PROC_PC(p);
+
+	mtx_enter(&pr->ps_mtx);
+	if (pr->ps_set_sym_hint_addr == 0) {
+		pr->ps_set_sym_hint_addr = pc;
+		pr->ps_set_sym_hint_cookie = SCARG(uap, proc_cookie);
+	} else if (pc != pr->ps_set_sym_hint_addr ||
+	    pr->ps_set_sym_hint_cookie != SCARG(uap, proc_cookie)) {
+		sigill = 1;
+	}
+	mtx_leave(&pr->ps_mtx);
+	if (sigill) {
+		KERNEL_LOCK();
+		sigexit(p, SIGILL);
+		/* NOTREACHED */
+		KERNEL_UNLOCK();
+	}
 
 	if (atomic_load_int(&allowdt) == 0)
 		return EPERM;

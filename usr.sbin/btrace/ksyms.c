@@ -318,7 +318,7 @@ kelf_load_syms(struct dtioc_getmap *dtgm, struct syms *syms,
 		 * find next map entry in array. it starts right
 		 * after current. we need to find the end of
 		 * sh_path string and move to next byte.
-	 	 */
+		 */
 		while (*p)
 			p++;
 		p++;

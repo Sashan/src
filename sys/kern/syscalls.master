@@ -534,7 +534,8 @@
 306	OBSOL		getfsstat53
 307	OBSOL		statfs53
 308	OBSOL		fstatfs53
-309	STD		{ int sys_set_symhint(const void *symhints, size_t sz); }
+309	STD		{ int sys_set_symhint(const void *symhints, size_t sz, \
+			    int64_t proc_cookie); }
 310	STD NOLOCK	{ int sys_setrtable(int rtableid); }
 311	STD NOLOCK	{ int sys_getrtable(void); }
 312	OBSOL		t32_getdirentries
