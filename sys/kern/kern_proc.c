@@ -700,7 +700,6 @@ sys_set_symhint(struct proc *p, void *v, register_t *retval)
 	void *sym_hints_buf;
 	void *old_sym_hints;
 	size_t old_sym_hints_sz;
-	u_long pc;
 	int e;
 
 	if (atomic_load_int(&allowdt) == 0)
