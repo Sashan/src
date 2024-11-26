@@ -254,8 +254,6 @@ struct process {
 
 	int64_t ps_kbind_cookie;	/* [m] */
 	u_long  ps_kbind_addr;		/* [m] */
-	int64_t ps_set_sym_hint_cookie;	/* [m] */
-	u_long  ps_set_sym_hint_addr;	/* [m] */
 /* an address that can't be in userspace or kernelspace */
 #define	BOGO_PC	(u_long)-1
 

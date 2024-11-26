@@ -500,8 +500,6 @@ __asm__(".pushsection .openbsd.syscalls,\"\",@progbits;"
     ".p2align 2;"
     ".long 0;"
     ".long " STRINGIFY(SYS_kbind) ";"
-    ".long 0;"
-    ".long " STRINGIFY(SYS_set_symhint) ";"
     ".popsection");
 #endif
 
@@ -621,18 +619,7 @@ _dl_attach_linkmap(elf_object_t *object)
 	}
 
 	if (sym_hints != NULL) {
-	/* directly code the syscall, so that it's actually inline here */
-		register long syscall_num __asm("rax") = SYS_set_symhint;
-		register void *arg1 __asm("rdi") = sym_hints;
-		register long  arg2 __asm("rsi") = sym_hints_sz;
-		register long  arg3 __asm("rdx") = cookie;
-
-		__asm volatile("syscall" : "+r" (syscall_num), "+r" (arg3) :
-		    "r" (arg1), "r" (arg2) : "cc", "rcx", "r11", "memory");
-
-#if 0
 		_dl_set_symhint(sym_hints, sym_hints_sz);
-#endif
 		_dl_free(sym_hints);
 	}
 }

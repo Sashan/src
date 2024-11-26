@@ -533,8 +533,6 @@ sys_execve(struct proc *p, void *v, register_t *retval)
 	TCB_SET(p, NULL);	/* reset the TCB address */
 	pr->ps_kbind_addr = 0;	/* reset the kbind bits */
 	pr->ps_kbind_cookie = 0;
-	pr->ps_set_sym_hint_addr = 0;
-	pr->ps_set_sym_hint_cookie = 0; /* reset set_sym_hint */
 	arc4random_buf(&pr->ps_sigcookie, sizeof pr->ps_sigcookie);
 
 	/* set command name & other accounting info */
