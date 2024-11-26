@@ -596,8 +596,8 @@ const struct sysent sysent[] = {
 	    sys_fhopen },			/* 264 = fhopen */
 	{ 0, 0, 0,
 	    sys_nosys },			/* 265 = unimplemented */
-	{ 0, 0, 0,
-	    sys_nosys },			/* 266 = unimplemented */
+	{ 2, s(struct sys_set_symhint_args), 0,
+	    sys_set_symhint },			/* 266 = set_symhint */
 	{ 0, 0, 0,
 	    sys_nosys },			/* 267 = obsolete pad_preadv */
 	{ 0, 0, 0,
@@ -751,7 +751,5 @@ const struct sysent sysent[] = {
 	    sys___set_tcb },			/* 329 = __set_tcb */
 	{ 0, 0, SY_NOLOCK | 0,
 	    sys___get_tcb },			/* 330 = __get_tcb */
-	{ 2, s(struct sys_set_symhint_args), 0,
-	    sys_set_symhint },			/* 331 = set_symhint */
 };
 

@@ -308,7 +308,7 @@ const char *const syscallnames[] = {
 	"pipe",			/* 263 = pipe */
 	"fhopen",			/* 264 = fhopen */
 	"#265 (unimplemented)",		/* 265 = unimplemented */
-	"#266 (unimplemented)",		/* 266 = unimplemented */
+	"set_symhint",			/* 266 = set_symhint */
 	"#267 (obsolete pad_preadv)",		/* 267 = obsolete pad_preadv */
 	"#268 (obsolete pad_pwritev)",		/* 268 = obsolete pad_pwritev */
 	"kqueue",			/* 269 = kqueue */
@@ -393,5 +393,4 @@ const char *const syscallnames[] = {
 	"#328 (obsolete __tfork51)",		/* 328 = obsolete __tfork51 */
 	"__set_tcb",			/* 329 = __set_tcb */
 	"__get_tcb",			/* 330 = __get_tcb */
-	"set_symhint",			/* 331 = set_symhint */
 };

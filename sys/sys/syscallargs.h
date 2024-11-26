@@ -963,6 +963,11 @@ struct sys_fhopen_args {
 	syscallarg(int) flags;
 };
 
+struct sys_set_symhint_args {
+	syscallarg(const void *) symhints;
+	syscallarg(size_t) sz;
+};
+
 struct sys_kqueue1_args {
 	syscallarg(int) flags;
 };
@@ -1153,11 +1158,6 @@ struct sys_unlinkat_args {
 
 struct sys___set_tcb_args {
 	syscallarg(void *) tcb;
-};
-
-struct sys_set_symhint_args {
-	syscallarg(const void *) symhints;
-	syscallarg(size_t) sz;
 };
 
 /*
@@ -1366,6 +1366,7 @@ int	sys_getsid(struct proc *, void *, register_t *);
 int	sys_msync(struct proc *, void *, register_t *);
 int	sys_pipe(struct proc *, void *, register_t *);
 int	sys_fhopen(struct proc *, void *, register_t *);
+int	sys_set_symhint(struct proc *, void *, register_t *);
 int	sys_kqueue(struct proc *, void *, register_t *);
 int	sys_kqueue1(struct proc *, void *, register_t *);
 int	sys_mlockall(struct proc *, void *, register_t *);
@@ -1420,4 +1421,3 @@ int	sys_symlinkat(struct proc *, void *, register_t *);
 int	sys_unlinkat(struct proc *, void *, register_t *);
 int	sys___set_tcb(struct proc *, void *, register_t *);
 int	sys___get_tcb(struct proc *, void *, register_t *);
-int	sys_set_symhint(struct proc *, void *, register_t *);

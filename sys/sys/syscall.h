@@ -591,6 +591,9 @@
 /* syscall: "fhopen" ret: "int" args: "const fhandle_t *" "int" */
 #define	SYS_fhopen	264
 
+/* syscall: "set_symhint" ret: "int" args: "const void *" "size_t" */
+#define	SYS_set_symhint	266
+
 				/* 267 is obsolete pad_preadv */
 				/* 268 is obsolete pad_pwritev */
 /* syscall: "kqueue" ret: "int" args: */
@@ -725,7 +728,4 @@
 /* syscall: "__get_tcb" ret: "void *" args: */
 #define	SYS___get_tcb	330
 
-/* syscall: "set_symhint" ret: "int" args: "const void *" "size_t" */
-#define	SYS_set_symhint	331
-
-#define	SYS_MAXSYSCALL	332
+#define	SYS_MAXSYSCALL	331
