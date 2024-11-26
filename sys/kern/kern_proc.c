@@ -703,7 +703,7 @@ sys_set_symhint(struct proc *p, void *v, register_t *retval)
 	size_t old_sym_hints_sz;
 	u_long pc;
 	int e;
-	int sigill = 1;
+	int sigill = 0;
 
 	pc = PROC_PC(p);
 

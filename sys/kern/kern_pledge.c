@@ -101,6 +101,7 @@ const uint64_t pledge_syscalls[SYS_MAXSYSCALL] = {
 	[SYS_thrkill] = PLEDGE_ALWAYS,		/* raise, abort, stack pro */
 	[SYS_utrace] = PLEDGE_ALWAYS,		/* ltrace(1) from ld.so */
 	[SYS_pinsyscalls] = PLEDGE_ALWAYS,
+	[SYS_set_symhint] = PLEDGE_ALWAYS,
 
 	/* "getting" information about self is considered safe */
 	[SYS_getuid] = PLEDGE_STDIO,
