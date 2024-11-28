@@ -589,8 +589,6 @@ _dl_attach_linkmap(elf_object_t *object)
 	struct sym_hint *sym_hints = NULL;
 	size_t sym_hints_sz = 0;
 	const char *load_name;
-	extern int64_t pcookie;
-	int64_t cookie = pcookie;
 
 	while (object != NULL) {
 		for (llist = object->load_list; llist != NULL;
@@ -607,7 +605,7 @@ _dl_attach_linkmap(elf_object_t *object)
 			sym_hints = _dl_add_sym_hint(sym_hints,
 			    load_name, llist, &sym_hints_sz);
 			/*
-			 * just return is fine here, as should
+			 * just return is fine here, as we should
 			 * not prevent loading when failing to
 			 * create hints for btrace(8).
 			 */
