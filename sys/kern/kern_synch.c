@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_synch.c,v 1.209 2024/11/03 22:52:08 claudio Exp $	*/
+/*	$OpenBSD: kern_synch.c,v 1.213 2024/11/11 13:28:29 claudio Exp $	*/
 /*	$NetBSD: kern_synch.c,v 1.37 1996/04/22 01:38:37 christos Exp $	*/
 
 /*
@@ -62,9 +62,11 @@
 #include <sys/ktrace.h>
 #endif
 
-int	sleep_signal_check(struct proc *);
+int	sleep_signal_check(struct proc *, int);
 int	thrsleep(struct proc *, struct sys___thrsleep_args *);
 int	thrsleep_unlock(void *);
+
+extern void proc_stop(struct proc *p, int);
 
 /*
  * We're only looking at 7 bits of the address; everything is
@@ -337,9 +339,9 @@ sleep_setup(const volatile void *ident, int prio, const char *wmesg)
 	if (p->p_flag & P_CANTSLEEP)
 		panic("sleep: %s failed insomnia", p->p_p->ps_comm);
 	if (ident == NULL)
-		panic("tsleep: no ident");
+		panic("sleep: no ident");
 	if (p->p_stat != SONPROC)
-		panic("tsleep: not SONPROC");
+		panic("sleep: not SONPROC but %d", p->p_stat);
 #endif
 	/* exiting processes are not allowed to catch signals */
 	if (p->p_flag & P_WEXIT)
@@ -385,7 +387,7 @@ sleep_finish(int timo, int do_sleep)
 		 * we must be ready for sleep when sleep_signal_check() is
 		 * called.
 		 */
-		if ((error = sleep_signal_check(p)) != 0) {
+		if ((error = sleep_signal_check(p, 0)) != 0) {
 			catch = 0;
 			do_sleep = 0;
 		}
@@ -443,9 +445,12 @@ sleep_finish(int timo, int do_sleep)
 		atomic_clearbits_int(&p->p_flag, P_TIMEOUT);
 	}
 
-	/* Check if thread was woken up because of a unwind or signal */
+	/*
+	 * Check if thread was woken up because of a unwind or signal
+	 * but ignore any pending stop condition.
+	 */
 	if (catch != 0)
-		error = sleep_signal_check(p);
+		error = sleep_signal_check(p, 1);
 
 	/* Signal errors are higher priority than timeouts. */
 	if (error == 0 && error1 != 0)
@@ -456,9 +461,12 @@ sleep_finish(int timo, int do_sleep)
 
 /*
  * Check and handle signals and suspensions around a sleep cycle.
+ * The 2nd call in sleep_finish() sets nostop = 1 and then stop
+ * signals can be ignored since the sleep is over and the process
+ * will stop in userret.
  */
 int
-sleep_signal_check(struct proc *p)
+sleep_signal_check(struct proc *p, int nostop)
 {
 	struct sigctx ctx;
 	int err, sig;
@@ -466,7 +474,14 @@ sleep_signal_check(struct proc *p)
 	if ((err = single_thread_check(p, 1)) != 0)
 		return err;
 	if ((sig = cursig(p, &ctx, 1)) != 0) {
-		if (ctx.sig_intr)
+		if (ctx.sig_stop) {
+			if (nostop)
+				return 0;
+			p->p_p->ps_xsig = sig;
+			SCHED_LOCK();
+			proc_stop(p, 0);
+			SCHED_UNLOCK();
+		} else if (ctx.sig_intr)
 			return EINTR;
 		else
 			return ERESTART;

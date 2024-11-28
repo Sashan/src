@@ -1,4 +1,4 @@
-/*	$OpenBSD: rrdp.c,v 1.35 2024/09/02 11:56:22 job Exp $ */
+/*	$OpenBSD: rrdp.c,v 1.39 2024/11/21 13:32:27 claudio Exp $ */
 /*
  * Copyright (c) 2020 Nils Fisher <nils_fisher@hotmail.com>
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
@@ -36,7 +36,7 @@
 #define MAX_SESSIONS	32
 #define	READ_BUF_SIZE	(32 * 1024)
 
-static struct msgbuf	msgq;
+static struct msgbuf	*msgq;
 
 #define RRDP_STATE_REQ		0x01
 #define RRDP_STATE_WAIT		0x02
@@ -98,7 +98,7 @@ rrdp_done(unsigned int id, int ok)
 	io_simple_buffer(b, &type, sizeof(type));
 	io_simple_buffer(b, &id, sizeof(id));
 	io_simple_buffer(b, &ok, sizeof(ok));
-	io_close_buffer(&msgq, b);
+	io_close_buffer(msgq, b);
 }
 
 /*
@@ -120,7 +120,7 @@ rrdp_http_req(unsigned int id, const char *uri, const char *last_mod)
 	io_simple_buffer(b, &id, sizeof(id));
 	io_str_buffer(b, uri);
 	io_str_buffer(b, last_mod);
-	io_close_buffer(&msgq, b);
+	io_close_buffer(msgq, b);
 }
 
 /*
@@ -136,7 +136,7 @@ rrdp_state_send(struct rrdp *s)
 	io_simple_buffer(b, &type, sizeof(type));
 	io_simple_buffer(b, &s->id, sizeof(s->id));
 	rrdp_session_buffer(b, s->current);
-	io_close_buffer(&msgq, b);
+	io_close_buffer(msgq, b);
 }
 
 /*
@@ -151,7 +151,7 @@ rrdp_clear_repo(struct rrdp *s)
 	b = io_new_buffer();
 	io_simple_buffer(b, &type, sizeof(type));
 	io_simple_buffer(b, &s->id, sizeof(s->id));
-	io_close_buffer(&msgq, b);
+	io_close_buffer(msgq, b);
 }
 
 /*
@@ -174,7 +174,7 @@ rrdp_publish_file(struct rrdp *s, struct publish_xml *pxml,
 			io_simple_buffer(b, &pxml->hash, sizeof(pxml->hash));
 		io_str_buffer(b, pxml->uri);
 		io_buf_buffer(b, data, datasz);
-		io_close_buffer(&msgq, b);
+		io_close_buffer(msgq, b);
 		s->file_pending++;
 	}
 }
@@ -400,21 +400,15 @@ rrdp_abort_req(struct rrdp *s)
 }
 
 static void
-rrdp_input_handler(int fd)
+rrdp_input_handler(struct ibuf *b)
 {
-	static struct ibuf *inbuf;
 	struct rrdp_session *state;
 	char *local, *notify, *last_mod;
-	struct ibuf *b;
 	struct rrdp *s;
 	enum rrdp_msg type;
 	enum http_result res;
 	unsigned int id;
 	int ok;
-
-	b = io_buf_recvfd(fd, &inbuf);
-	if (b == NULL)
-		return;
 
 	io_read_buf(b, &type, sizeof(type));
 	io_read_buf(b, &id, sizeof(id));
@@ -483,7 +477,6 @@ rrdp_input_handler(int fd)
 	default:
 		errx(1, "unexpected message %d", type);
 	}
-	ibuf_free(b);
 }
 
 static void
@@ -538,13 +531,15 @@ proc_rrdp(int fd)
 {
 	struct pollfd pfds[MAX_SESSIONS + 1];
 	struct rrdp *s, *ns;
+	struct ibuf *b;
 	size_t i;
 
 	if (pledge("stdio recvfd", NULL) == -1)
 		err(1, "pledge");
 
-	msgbuf_init(&msgq);
-	msgq.fd = fd;
+	if ((msgq = msgbuf_new_reader(sizeof(size_t), io_parse_hdr, NULL)) ==
+	    NULL)
+		err(1, NULL);
 
 	for (;;) {
 		i = 1;
@@ -585,7 +580,7 @@ proc_rrdp(int fd)
 		 */
 		pfds[0].fd = fd;
 		pfds[0].events = POLLIN;
-		if (msgbuf_queuelen(&msgq) > 0)
+		if (msgbuf_queuelen(msgq) > 0)
 			pfds[0].events |= POLLOUT;
 
 		if (poll(pfds, i, INFTIM) == -1) {
@@ -597,15 +592,25 @@ proc_rrdp(int fd)
 		if (pfds[0].revents & POLLHUP)
 			break;
 		if (pfds[0].revents & POLLOUT) {
-			switch (msgbuf_write(&msgq)) {
-			case 0:
-				errx(1, "write: connection closed");
-			case -1:
-				err(1, "write");
+			if (msgbuf_write(fd, msgq) == -1) {
+				if (errno == EPIPE)
+					errx(1, "write: connection closed");
+				else
+					err(1, "write");
 			}
 		}
-		if (pfds[0].revents & POLLIN)
-			rrdp_input_handler(fd);
+		if (pfds[0].revents & POLLIN) {
+			switch (msgbuf_read(fd, msgq)) {
+			case -1:
+				err(1, "msgbuf_read");
+			case 0:
+				errx(1, "msgbuf_read: connection closed");
+			}
+			while ((b = io_buf_get(msgq)) != NULL) {
+				rrdp_input_handler(b);
+				ibuf_free(b);
+			}
+		}
 
 		TAILQ_FOREACH_SAFE(s, &states, entry, ns) {
 			if (s->pfd == NULL)

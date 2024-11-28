@@ -1,7 +1,6 @@
-/* $OpenBSD: arm64var.h,v 1.3 2021/04/02 03:02:45 tb Exp $ */
+/* $OpenBSD: sha256_amd64.c,v 1.2 2024/11/16 15:31:36 jsing Exp $ */
 /*
- * Copyright (c) 2005,2008 Dale Rahn <drahn@openbsd.org>
- * Copyright (c) 2012-2013 Patrick Wildt <patrick@blueri.se>
+ * Copyright (c) 2024 Joel Sing <jsing@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -16,10 +15,20 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#ifndef __ARM64VAR_H__
-#define __ARM64VAR_H__
+#include <openssl/sha.h>
 
-extern bus_space_t arm64_bs_tag;
+#include "crypto_arch.h"
 
-#endif /* __ARM64VAR_H__ */
+void sha256_block_generic(SHA256_CTX *ctx, const void *in, size_t num);
+void sha256_block_shani(SHA256_CTX *ctx, const void *in, size_t num);
 
+void
+sha256_block_data_order(SHA256_CTX *ctx, const void *in, size_t num)
+{
+	if ((crypto_cpu_caps_amd64 & CRYPTO_CPU_CAPS_AMD64_SHA) != 0) {
+		sha256_block_shani(ctx, in, num);
+		return;
+	}
+
+	sha256_block_generic(ctx, in, num);
+}

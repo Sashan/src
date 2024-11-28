@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.c,v 1.634 2024/09/25 14:46:51 claudio Exp $ */
+/*	$OpenBSD: rde.c,v 1.640 2024/11/21 13:38:14 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -201,7 +201,9 @@ rde_main(int debug, int verbose)
 
 	if ((ibuf_main = malloc(sizeof(struct imsgbuf))) == NULL)
 		fatal(NULL);
-	imsg_init(ibuf_main, 3);
+	if (imsgbuf_init(ibuf_main, 3) == -1)
+		fatal(NULL);
+	imsgbuf_allow_fdpass(ibuf_main);
 
 	/* initialize the RIB structures */
 	if ((out_rules = calloc(1, sizeof(struct filter_head))) == NULL)
@@ -245,12 +247,12 @@ rde_main(int debug, int verbose)
 
 			if (i >= pfd_elms)
 				fatalx("poll pfd too small");
-			if (msgbuf_queuelen(&mctx->mrt.wbuf) > 0) {
-				pfd[i].fd = mctx->mrt.wbuf.fd;
+			if (msgbuf_queuelen(mctx->mrt.wbuf) > 0) {
+				pfd[i].fd = mctx->mrt.fd;
 				pfd[i].events = POLLOUT;
 				i++;
 			} else if (mctx->mrt.state == MRT_STATE_REMOVE) {
-				close(mctx->mrt.wbuf.fd);
+				mrt_clean(&mctx->mrt);
 				LIST_REMOVE(mctx, entry);
 				free(mctx);
 				rde_mrt_cnt--;
@@ -274,7 +276,7 @@ rde_main(int debug, int verbose)
 
 		if (handle_pollfd(&pfd[PFD_PIPE_SESSION], ibuf_se) == -1) {
 			log_warnx("RDE: Lost connection to SE");
-			msgbuf_clear(&ibuf_se->w);
+			imsgbuf_clear(ibuf_se);
 			free(ibuf_se);
 			ibuf_se = NULL;
 		} else
@@ -283,7 +285,7 @@ rde_main(int debug, int verbose)
 		if (handle_pollfd(&pfd[PFD_PIPE_SESSION_CTL], ibuf_se_ctl) ==
 		    -1) {
 			log_warnx("RDE: Lost connection to SE control");
-			msgbuf_clear(&ibuf_se_ctl->w);
+			imsgbuf_clear(ibuf_se_ctl);
 			free(ibuf_se_ctl);
 			ibuf_se_ctl = NULL;
 		} else
@@ -291,7 +293,7 @@ rde_main(int debug, int verbose)
 
 		if (handle_pollfd(&pfd[PFD_PIPE_ROA], ibuf_rtr) == -1) {
 			log_warnx("RDE: Lost connection to ROA");
-			msgbuf_clear(&ibuf_rtr->w);
+			imsgbuf_clear(ibuf_rtr);
 			free(ibuf_rtr);
 			ibuf_rtr = NULL;
 		} else
@@ -299,7 +301,7 @@ rde_main(int debug, int verbose)
 
 		for (j = PFD_PIPE_COUNT, mctx = LIST_FIRST(&rde_mrts);
 		    j < i && mctx != 0; j++) {
-			if (pfd[j].fd == mctx->mrt.wbuf.fd &&
+			if (pfd[j].fd == mctx->mrt.fd &&
 			    pfd[j].revents & POLLOUT)
 				mrt_write(&mctx->mrt);
 			mctx = LIST_NEXT(mctx, entry);
@@ -308,7 +310,7 @@ rde_main(int debug, int verbose)
 		peer_foreach(rde_dispatch_imsg_peer, NULL);
 		rib_dump_runner();
 		nexthop_runner();
-		if (ibuf_se && ibuf_se->w.queued < SESS_MSG_HIGH_MARK) {
+		if (ibuf_se && imsgbuf_queuelen(ibuf_se) < SESS_MSG_HIGH_MARK) {
 			for (aid = AID_MIN; aid < AID_MAX; aid++)
 				rde_update_queue_runner(aid);
 		}
@@ -325,27 +327,26 @@ rde_main(int debug, int verbose)
 
 	/* close pipes */
 	if (ibuf_se) {
-		msgbuf_clear(&ibuf_se->w);
+		imsgbuf_clear(ibuf_se);
 		close(ibuf_se->fd);
 		free(ibuf_se);
 	}
 	if (ibuf_se_ctl) {
-		msgbuf_clear(&ibuf_se_ctl->w);
+		imsgbuf_clear(ibuf_se_ctl);
 		close(ibuf_se_ctl->fd);
 		free(ibuf_se_ctl);
 	}
 	if (ibuf_rtr) {
-		msgbuf_clear(&ibuf_rtr->w);
+		imsgbuf_clear(ibuf_rtr);
 		close(ibuf_rtr->fd);
 		free(ibuf_rtr);
 	}
-	msgbuf_clear(&ibuf_main->w);
+	imsgbuf_clear(ibuf_main);
 	close(ibuf_main->fd);
 	free(ibuf_main);
 
 	while ((mctx = LIST_FIRST(&rde_mrts)) != NULL) {
-		msgbuf_clear(&mctx->mrt.wbuf);
-		close(mctx->mrt.wbuf.fd);
+		mrt_clean(&mctx->mrt);
 		LIST_REMOVE(mctx, entry);
 		free(mctx);
 	}
@@ -843,13 +844,14 @@ rde_dispatch_imsg_parent(struct imsgbuf *imsgbuf)
 			}
 			if ((i = malloc(sizeof(struct imsgbuf))) == NULL)
 				fatal(NULL);
-			imsg_init(i, fd);
+			if (imsgbuf_init(i, fd) == -1)
+				fatal(NULL);
 			switch (imsg_get_type(&imsg)) {
 			case IMSG_SOCKET_CONN:
 				if (ibuf_se) {
 					log_warnx("Unexpected imsg connection "
 					    "to SE received");
-					msgbuf_clear(&ibuf_se->w);
+					imsgbuf_clear(ibuf_se);
 					free(ibuf_se);
 				}
 				ibuf_se = i;
@@ -858,7 +860,7 @@ rde_dispatch_imsg_parent(struct imsgbuf *imsgbuf)
 				if (ibuf_se_ctl) {
 					log_warnx("Unexpected imsg ctl "
 					    "connection to SE received");
-					msgbuf_clear(&ibuf_se_ctl->w);
+					imsgbuf_clear(ibuf_se_ctl);
 					free(ibuf_se_ctl);
 				}
 				ibuf_se_ctl = i;
@@ -867,7 +869,7 @@ rde_dispatch_imsg_parent(struct imsgbuf *imsgbuf)
 				if (ibuf_rtr) {
 					log_warnx("Unexpected imsg ctl "
 					    "connection to ROA received");
-					msgbuf_clear(&ibuf_rtr->w);
+					imsgbuf_clear(ibuf_rtr);
 					free(ibuf_rtr);
 				}
 				ibuf_rtr = i;
@@ -3193,7 +3195,7 @@ rde_mrt_throttled(void *arg)
 {
 	struct mrt	*mrt = arg;
 
-	return (msgbuf_queuelen(&mrt->wbuf) > SESS_MSG_LOW_MARK);
+	return (msgbuf_queuelen(mrt->wbuf) > SESS_MSG_LOW_MARK);
 }
 
 static void
@@ -3213,8 +3215,12 @@ rde_dump_mrt_new(struct mrt *mrt, pid_t pid, int fd)
 		return;
 	}
 	memcpy(&ctx->mrt, mrt, sizeof(struct mrt));
-	msgbuf_init(&ctx->mrt.wbuf);
-	ctx->mrt.wbuf.fd = fd;
+	if ((ctx->mrt.wbuf = msgbuf_new()) == NULL) {
+		log_warn("rde_dump_mrt_new");
+		free(ctx);
+		return;
+	}
+	ctx->mrt.fd = fd;
 	ctx->mrt.state = MRT_STATE_RUNNING;
 	rid = rib_find(ctx->mrt.rib);
 	if (rid == RIB_NOTFOUND) {
@@ -3344,7 +3350,7 @@ rde_update_queue_pending(void)
 	struct rde_peer *peer;
 	uint8_t aid;
 
-	if (ibuf_se && ibuf_se->w.queued >= SESS_MSG_HIGH_MARK)
+	if (ibuf_se && imsgbuf_queuelen(ibuf_se) >= SESS_MSG_HIGH_MARK)
 		return 0;
 
 	RB_FOREACH(peer, peer_tree, &peertable) {

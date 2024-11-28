@@ -1,4 +1,4 @@
-/*	$OpenBSD: ypldap.c,v 1.25 2024/05/21 05:00:48 jsg Exp $ */
+/*	$OpenBSD: ypldap.c,v 1.31 2024/11/21 13:38:15 claudio Exp $ */
 
 /*
  * Copyright (c) 2008 Pierre-Yves Ritschard <pyr@openbsd.org>
@@ -361,17 +361,18 @@ main_dispatch_client(int fd, short events, void *p)
 		fatalx("unknown event");
 
 	if (events & EV_READ) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			fatal("imsg_read error");
+		if ((n = imsgbuf_read(ibuf)) == -1)
+			fatal("imsgbuf_read error");
 		if (n == 0)
 			shut = 1;
 	}
 	if (events & EV_WRITE) {
-		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
-			fatal("msgbuf_write");
-		if (n == 0)
-			shut = 1;
-		goto done;
+		if (imsgbuf_write(ibuf) == -1) {
+			if (errno == EPIPE)	/* connection closed */
+				shut = 1;
+			else
+				fatal("imsgbuf_write");
+		}
 	}
 
 	for (;;) {
@@ -451,7 +452,6 @@ main_dispatch_client(int fd, short events, void *p)
 		imsg_free(&imsg);
 	}
 
-done:
 	if (!shut)
 		imsg_event_add(iev);
 	else {
@@ -589,7 +589,8 @@ main(int argc, char *argv[])
 	close(pipe_main2client[1]);
 	if ((env.sc_iev = calloc(1, sizeof(*env.sc_iev))) == NULL)
 		fatal(NULL);
-	imsg_init(&env.sc_iev->ibuf, pipe_main2client[0]);
+	if (imsgbuf_init(&env.sc_iev->ibuf, pipe_main2client[0]) == -1)
+		fatal(NULL);
 	env.sc_iev->handler = main_dispatch_client;
 
 	env.sc_iev->events = EV_READ;
@@ -630,12 +631,12 @@ void
 imsg_event_add(struct imsgev *iev)
 {
 	if (iev->handler == NULL) {
-		imsg_flush(&iev->ibuf);
+		imsgbuf_flush(&iev->ibuf);
 		return;
 	}
 
 	iev->events = EV_READ;
-	if (iev->ibuf.w.queued)
+	if (imsgbuf_queuelen(&iev->ibuf) > 0)
 		iev->events |= EV_WRITE;
 
 	event_del(&iev->ev);

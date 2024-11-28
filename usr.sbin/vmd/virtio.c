@@ -1,4 +1,4 @@
-/*	$OpenBSD: virtio.c,v 1.116 2024/09/26 01:45:13 jsg Exp $	*/
+/*	$OpenBSD: virtio.c,v 1.122 2024/11/21 13:39:34 claudio Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -820,8 +820,8 @@ virtio_shutdown(struct vmd_vm *vm)
 		if (ret == -1)
 			fatalx("%s: failed to send shutdown to device",
 			    __func__);
-		if (imsg_flush(ibuf) == -1)
-			fatalx("%s: imsg_flush", __func__);
+		if (imsgbuf_flush(ibuf) == -1)
+			fatalx("%s: imsgbuf_flush", __func__);
 	}
 
 	/*
@@ -1127,8 +1127,8 @@ vionet_dump(int fd)
 			    __func__, dev->vionet.idx);
 			return (-1);
 		}
-		if (imsg_flush(ibuf) == -1) {
-			log_warnx("%s: imsg_flush", __func__);
+		if (imsgbuf_flush(ibuf) == -1) {
+			log_warnx("%s: imsgbuf_flush", __func__);
 			return (-1);
 		}
 
@@ -1185,8 +1185,8 @@ vioblk_dump(int fd)
 			    __func__, dev->vioblk.idx);
 			return (-1);
 		}
-		if (imsg_flush(ibuf) == -1) {
-			log_warnx("%s: imsg_flush", __func__);
+		if (imsgbuf_flush(ibuf) == -1) {
+			log_warnx("%s: imsgbuf_flush", __func__);
 			return (-1);
 		}
 
@@ -1296,7 +1296,7 @@ virtio_dev_launch(struct vmd_vm *vm, struct virtio_dev *dev)
 	char *nargv[12], num[32], vmm_fd[32], vm_name[VM_NAME_MAX], t[2];
 	pid_t dev_pid;
 	int sync_fds[2], async_fds[2], ret = 0;
-	size_t sz = 0;
+	size_t i, sz = 0;
 	struct viodev_msg msg;
 	struct virtio_dev *dev_entry;
 	struct imsg imsg;
@@ -1381,10 +1381,12 @@ virtio_dev_launch(struct vmd_vm *vm, struct virtio_dev *dev)
 		 * communication will be synchronous. We expect the child to
 		 * report itself "ready" to confirm the launch was a success.
 		 */
-		imsg_init(&iev->ibuf, sync_fds[0]);
-		do
-			ret = imsg_read(&iev->ibuf);
-		while (ret == -1 && errno == EAGAIN);
+		if (imsgbuf_init(&iev->ibuf, sync_fds[0]) == -1) {
+			log_warn("%s: failed to init imsgbuf", __func__);
+			goto err;
+		}
+		imsgbuf_allow_fdpass(&iev->ibuf);
+		ret = imsgbuf_read_one(&iev->ibuf, &imsg);
 		if (ret == 0 || ret == -1) {
 			log_warnx("%s: failed to receive ready message from "
 			    "'%c' type device", __func__, dev->dev_type);
@@ -1393,12 +1395,6 @@ virtio_dev_launch(struct vmd_vm *vm, struct virtio_dev *dev)
 		}
 		ret = 0;
 
-		log_debug("%s: receiving reply", __func__);
-		if (imsg_get(&iev->ibuf, &imsg) < 1) {
-			log_warnx("%s: imsg_get", __func__);
-			ret = EIO;
-			goto err;
-		}
 		IMSG_SIZE_CHECK(&imsg, &msg);
 		memcpy(&msg, imsg.data, sizeof(msg));
 		imsg_free(&imsg);
@@ -1441,7 +1437,6 @@ virtio_dev_launch(struct vmd_vm *vm, struct virtio_dev *dev)
 				fatalx("unable to close other virtio devs");
 		}
 
-		memset(&nargv, 0, sizeof(nargv));
 		memset(num, 0, sizeof(num));
 		snprintf(num, sizeof(num), "%d", sync_fds[1]);
 		memset(vmm_fd, 0, sizeof(vmm_fd));
@@ -1453,25 +1448,25 @@ virtio_dev_launch(struct vmd_vm *vm, struct virtio_dev *dev)
 		t[0] = dev->dev_type;
 		t[1] = '\0';
 
-		nargv[0] = env->argv0;
-		nargv[1] = "-X";
-		nargv[2] = num;
-		nargv[3] = "-t";
-		nargv[4] = t;
-		nargv[5] = "-i";
-		nargv[6] = vmm_fd;
-		nargv[7] = "-p";
-		nargv[8] = vm_name;
-		nargv[9] = "-n";
-		nargv[10] = NULL;
-
-		if (env->vmd_verbose == 1) {
-			nargv[10] = VMD_VERBOSE_1;
-			nargv[11] = NULL;
-		} else if (env->vmd_verbose > 1) {
-			nargv[10] = VMD_VERBOSE_2;
-			nargv[11] = NULL;
-		}
+		i = 0;
+		nargv[i++] = env->argv0;
+		nargv[i++] = "-X";
+		nargv[i++] = num;
+		nargv[i++] = "-t";
+		nargv[i++] = t;
+		nargv[i++] = "-i";
+		nargv[i++] = vmm_fd;
+		nargv[i++] = "-p";
+		nargv[i++] = vm_name;
+		if (env->vmd_debug)
+			nargv[i++] = "-d";
+		if (env->vmd_verbose == 1)
+			nargv[i++] = "-v";
+		else if (env->vmd_verbose > 1)
+			nargv[i++] = "-vv";
+		nargv[i++] = NULL;
+		if (i > sizeof(nargv) / sizeof(nargv[0]))
+			fatalx("%s: nargv overflow", __func__);
 
 		/* Control resumes in vmd.c:main(). */
 		execvp(nargv[0], nargv);
@@ -1505,7 +1500,9 @@ vm_device_pipe(struct virtio_dev *dev, void (*cb)(int, short, void *),
 	log_debug("%s: initializing '%c' device pipe (fd=%d)", __func__,
 	    dev->dev_type, fd);
 
-	imsg_init(&iev->ibuf, fd);
+	if (imsgbuf_init(&iev->ibuf, fd) == -1)
+		fatal("imsgbuf_init");
+	imsgbuf_allow_fdpass(&iev->ibuf);
 	iev->handler = cb;
 	iev->data = dev;
 	iev->events = EV_READ;
@@ -1525,8 +1522,8 @@ virtio_dispatch_dev(int fd, short event, void *arg)
 	ssize_t			 n = 0;
 
 	if (event & EV_READ) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			fatal("%s: imsg_read", __func__);
+		if ((n = imsgbuf_read(ibuf)) == -1)
+			fatal("%s: imsgbuf_read", __func__);
 		if (n == 0) {
 			/* this pipe is dead, so remove the event handler */
 			log_debug("%s: pipe dead (EV_READ)", __func__);
@@ -1537,14 +1534,15 @@ virtio_dispatch_dev(int fd, short event, void *arg)
 	}
 
 	if (event & EV_WRITE) {
-		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
-			fatal("%s: msgbuf_write", __func__);
-		if (n == 0) {
-			/* this pipe is dead, so remove the event handler */
-			log_debug("%s: pipe dead (EV_WRITE)", __func__);
-			event_del(&iev->ev);
-			event_loopexit(NULL);
-			return;
+		if (imsgbuf_write(ibuf) == -1) {
+			if (errno == EPIPE) {
+				/* this pipe is dead, remove the handler */
+				log_debug("%s: pipe dead (EV_WRITE)", __func__);
+				event_del(&iev->ev);
+				event_loopexit(NULL);
+				return;
+			}
+			fatal("%s: imsgbuf_write", __func__);
 		}
 	}
 
@@ -1619,7 +1617,6 @@ virtio_pci_io(int dir, uint16_t reg, uint32_t *data, uint8_t *intr,
 	struct imsgbuf *ibuf = &dev->sync_iev.ibuf;
 	struct imsg imsg;
 	struct viodev_msg msg;
-	ssize_t n;
 	int ret = 0;
 
 	memset(&msg, 0, sizeof(msg));
@@ -1644,8 +1641,8 @@ virtio_pci_io(int dir, uint16_t reg, uint32_t *data, uint8_t *intr,
 			    " device", __func__);
 			return (ret);
 		}
-		if (imsg_flush(ibuf) == -1) {
-			log_warnx("%s: imsg_flush (write)", __func__);
+		if (imsgbuf_flush(ibuf) == -1) {
+			log_warnx("%s: imsgbuf_flush (write)", __func__);
 			return (-1);
 		}
 	} else {
@@ -1659,28 +1656,17 @@ virtio_pci_io(int dir, uint16_t reg, uint32_t *data, uint8_t *intr,
 			    " device", __func__);
 			return (ret);
 		}
-		if (imsg_flush(ibuf) == -1) {
-			log_warnx("%s: imsg_flush (read)", __func__);
+		if (imsgbuf_flush(ibuf) == -1) {
+			log_warnx("%s: imsgbuf_flush (read)", __func__);
 			return (-1);
 		}
 
 		/* Read our reply. */
-		do
-			n = imsg_read(ibuf);
-		while (n == -1 && errno == EAGAIN);
-		if (n == 0 || n == -1) {
-			log_warn("%s: imsg_read (n=%ld)", __func__, n);
+		ret = imsgbuf_read_one(ibuf, &imsg);
+		if (ret == 0 || ret == -1) {
+			log_warn("%s: imsgbuf_read (n=%d)", __func__, ret);
 			return (-1);
 		}
-		if ((n = imsg_get(ibuf, &imsg)) == -1) {
-			log_warn("%s: imsg_get (n=%ld)", __func__, n);
-			return (-1);
-		}
-		if (n == 0) {
-			log_warnx("%s: invalid imsg", __func__);
-			return (-1);
-		}
-
 		IMSG_SIZE_CHECK(&imsg, &msg);
 		memcpy(&msg, imsg.data, sizeof(msg));
 		imsg_free(&imsg);

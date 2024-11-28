@@ -1,4 +1,4 @@
-/*	$OpenBSD: radiusd_ipcp.c,v 1.17 2024/09/15 05:31:23 yasuoka Exp $	*/
+/*	$OpenBSD: radiusd_ipcp.c,v 1.19 2024/11/07 16:00:11 yasuoka Exp $	*/
 
 /*
  * Copyright (c) 2024 Internet Initiative Japan Inc.
@@ -780,9 +780,9 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 		msraserr = 935;
 		if (self->max_sessions != 0) {
 			if (self->nsessions >= self->max_sessions) {
-				log_info("q=%u rejected: number of "
+				log_info("q=%u user=%s rejected: number of "
 				    "sessions reached the limit(%d)", q_id,
-				    self->max_sessions);
+				    user->name, self->max_sessions);
 				goto reject;
 			}
 		}
@@ -791,9 +791,9 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 			TAILQ_FOREACH(assign, &user->ipv4s, next)
 				n++;
 			if (n >= self->user_max_sessions) {
-				log_info("q=%u rejected: number of "
+				log_info("q=%u user=%s rejected: number of "
 				    "sessions per a user reached the limit(%d)",
-				    q_id, self->user_max_sessions);
+				    q_id, user->name, self->user_max_sessions);
 				goto reject;
 			}
 		}
@@ -802,8 +802,9 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 		if (radius_get_ipv4_attr(radres,
 		    RADIUS_TYPE_FRAMED_IP_ADDRESS, &addr4) == 0) {
 			if (ipcp_ipv4_find(self, addr4) != NULL)
-				log_info("q=%u rejected: server requested IP "
-				    "address is busy", q_id);
+				log_info("q=%u user=%s rejected: server "
+				    "requested IP address is busy", q_id,
+				    user->name);
 			else {
 				/* compare in host byte order */
 				addr4.s_addr = ntohl(addr4.s_addr);
@@ -816,9 +817,10 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 						break;
 				}
 				if (addr == NULL)
-					log_info("q=%u rejected: server "
-					    "requested IP address is out of "
-					    "the range", q_id);
+					log_info("q=%u user=%s rejected: "
+					    "server requested IP address is "
+					    "out of the range", q_id,
+					    user->name);
 				else
 					found = true;
 				/* revert the addr to the network byte order */
@@ -855,8 +857,8 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 				}
 			}
 			if (!found) {
-				log_info("q=%u rejected: ran out of the "
-				    "address pool", q_id);
+				log_info("q=%u user=%s rejected: ran out of "
+				    "the address pool", q_id, user->name);
 				goto reject;
 			}
 		}
@@ -1090,14 +1092,21 @@ ipcp_accounting_request(void *ctx, u_int q_id, const u_char *pkt,
 	}
 
 	if (radius_get_ipv4_attr(radpkt, RADIUS_TYPE_FRAMED_IP_ADDRESS, &addr4)
-	    != 0)
+	    != 0) {
+		log_warnx("q=%u no Framed-IP-Address-Address attribute", q_id);
 		goto out;
+	}
 	if (radius_get_string_attr(radpkt, RADIUS_TYPE_USER_NAME, username,
-	    sizeof(username)) != 0)
+	    sizeof(username)) != 0) {
+		log_warnx("q=%u no User-Name attribute", q_id);
 		goto out;
-	if ((assign = ipcp_ipv4_find(self, addr4)) == NULL)
+	}
+	if ((assign = ipcp_ipv4_find(self, addr4)) == NULL) {
 		/* not assigned by this */
+		log_warnx("q=%u %s is not assigned by us", q_id,
+		    inet_ntop(AF_INET, &addr4, buf, sizeof(buf)));
 		goto out;
+	}
 
 	if (radius_get_uint32_attr(radpkt, RADIUS_TYPE_ACCT_DELAY_TIME, &delay)
 	    != 0)
@@ -1305,7 +1314,11 @@ ipcp_ipv4_release(struct module_ipcp *self, struct assigned_ipv4 *assign)
 int
 assigned_ipv4_compar(struct assigned_ipv4 *a, struct assigned_ipv4 *b)
 {
-	return (b->ipv4.s_addr - a->ipv4.s_addr);
+	if (a->ipv4.s_addr > b->ipv4.s_addr)
+		return (1);
+	else if (a->ipv4.s_addr < b->ipv4.s_addr)
+		return (-1);
+	return (0);
 }
 
 struct user *

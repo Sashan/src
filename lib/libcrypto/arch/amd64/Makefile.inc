@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile.inc,v 1.30 2024/10/18 13:36:24 jsing Exp $
+# $OpenBSD: Makefile.inc,v 1.33 2024/11/16 15:31:36 jsing Exp $
 
 # amd64-specific libcrypto build rules
 
@@ -51,17 +51,12 @@ SSLASM+= rc4 rc4-x86_64
 CFLAGS+= -DSHA1_ASM
 SSLASM+= sha sha1-x86_64
 CFLAGS+= -DSHA256_ASM
-SRCS+= sha256-x86_64.S
-GENERATED+= sha256-x86_64.S
-sha256-x86_64.S: ${LCRYPTO_SRC}/sha/asm/sha512-x86_64.pl ${EXTRA_PL}
-	cd ${LCRYPTO_SRC}/sha/asm ; \
-		/usr/bin/perl ./sha512-x86_64.pl ${.OBJDIR}/${.TARGET}
+SRCS+= sha256_amd64.c
+SRCS+= sha256_amd64_generic.S
+SRCS+= sha256_amd64_shani.S
 CFLAGS+= -DSHA512_ASM
-SRCS+= sha512-x86_64.S
-GENERATED+= sha512-x86_64.S
-sha512-x86_64.S: ${LCRYPTO_SRC}/sha/asm/sha512-x86_64.pl ${EXTRA_PL}
-	cd ${LCRYPTO_SRC}/sha/asm ; \
-		/usr/bin/perl ./sha512-x86_64.pl ${.OBJDIR}/${.TARGET}
+SRCS+= sha512_amd64.c
+SRCS+= sha512_amd64_generic.S
 
 .for dir f in ${SSLASM}
 SRCS+=	${f}.S

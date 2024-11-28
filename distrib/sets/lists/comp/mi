@@ -565,6 +565,8 @@
 ./usr/include/dev/pci/if_em_osdep.h
 ./usr/include/dev/pci/if_em_soc.h
 ./usr/include/dev/pci/if_etreg.h
+./usr/include/dev/pci/if_icereg.h
+./usr/include/dev/pci/if_icevar.h
 ./usr/include/dev/pci/if_igc.h
 ./usr/include/dev/pci/if_ipwreg.h
 ./usr/include/dev/pci/if_ipwvar.h
@@ -1945,6 +1947,7 @@
 ./usr/share/man/man3/EVP_PKEY_meth_get0_info.3
 ./usr/share/man/man3/EVP_PKEY_meth_new.3
 ./usr/share/man/man3/EVP_PKEY_new.3
+./usr/share/man/man3/EVP_PKEY_new_CMAC_key.3
 ./usr/share/man/man3/EVP_PKEY_print_private.3
 ./usr/share/man/man3/EVP_PKEY_set1_RSA.3
 ./usr/share/man/man3/EVP_PKEY_sign.3

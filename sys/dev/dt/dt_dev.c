@@ -1,4 +1,4 @@
-/*	$OpenBSD: dt_dev.c,v 1.39 2024/11/02 17:03:12 mpi Exp $ */
+/*	$OpenBSD: dt_dev.c,v 1.41 2024/11/26 10:28:27 mpi Exp $ */
 
 /*
  * Copyright (c) 2019 Martin Pieuchot <mpi@openbsd.org>
@@ -102,6 +102,8 @@ struct dt_cpubuf {
 
 	/* Counters */
 	unsigned int		 dc_dropevt;	/* [p] # of events dropped */
+	unsigned int		 dc_skiptick;	/* [p] # of ticks skipped */
+	unsigned int		 dc_recurevt;	/* [p] # of recursive events */
 	unsigned int		 dc_readevt;	/* [r] # of events read */
 };
 
@@ -206,11 +208,6 @@ dtopen(dev_t dev, int flags, int mode, struct proc *p)
 	TAILQ_INIT(&sc->ds_pcbs);
 	sc->ds_lastcpu = 0;
 	sc->ds_evtcnt = 0;
-	sc->ds_si = softintr_establish(IPL_SOFTCLOCK, dt_deferred_wakeup, sc);
-	if (sc->ds_si == NULL) {
-		dtfree(sc);
-		return ENOMEM;
-	}
 
 	SLIST_INSERT_HEAD(&dtdev_list, sc, ds_next);
 
@@ -233,7 +230,6 @@ dtclose(dev_t dev, int flags, int mode, struct proc *p)
 	SLIST_REMOVE(&dtdev_list, sc, dt_softc, ds_next);
 	dt_ioctl_record_stop(sc);
 	dt_pcb_purge(&sc->ds_pcbs);
-	softintr_disestablish(sc->ds_si);
 	dtfree(sc);
 
 	return 0;
@@ -364,13 +360,19 @@ dtalloc(void)
 		return NULL;
 
 	for (i = 0; i < ncpusfound; i++) {
-		dtev = mallocarray(DT_EVTRING_SIZE, sizeof(*dtev), M_DT,
-				   M_WAITOK|M_CANFAIL|M_ZERO);
+		dtev = mallocarray(DT_EVTRING_SIZE, sizeof(*dtev), M_DEVBUF,
+		    M_WAITOK|M_CANFAIL|M_ZERO);
 		if (dtev == NULL)
 			break;
 		sc->ds_cpu[i].dc_ring = dtev;
 	}
 	if (i < ncpusfound) {
+		dtfree(sc);
+		return NULL;
+	}
+
+	sc->ds_si = softintr_establish(IPL_SOFTCLOCK, dt_deferred_wakeup, sc);
+	if (sc->ds_si == NULL) {
 		dtfree(sc);
 		return NULL;
 	}
@@ -384,10 +386,12 @@ dtfree(struct dt_softc *sc)
 	struct dt_evt *dtev;
 	int i;
 
+	if (sc->ds_si != NULL)
+		softintr_disestablish(sc->ds_si);
+
 	for (i = 0; i < ncpusfound; i++) {
 		dtev = sc->ds_cpu[i].dc_ring;
-		if (dtev != NULL)
-			free(dtev, M_DT, DT_EVTRING_SIZE * sizeof(*dtev));
+		free(dtev, M_DEVBUF, DT_EVTRING_SIZE * sizeof(*dtev));
 	}
 	free(sc, M_DEVBUF, sizeof(*sc));
 }
@@ -488,19 +492,24 @@ int
 dt_ioctl_get_stats(struct dt_softc *sc, struct dtioc_stat *dtst)
 {
 	struct dt_cpubuf *dc;
-	uint64_t readevt = 0, dropevt = 0;
+	uint64_t readevt, dropevt, skiptick, recurevt;
 	int i;
 
+	readevt = dropevt = skiptick = 0;
 	for (i = 0; i < ncpusfound; i++) {
 		dc = &sc->ds_cpu[i];
 
 		membar_consumer();
 		dropevt += dc->dc_dropevt;
+		skiptick = dc->dc_skiptick;
+		recurevt = dc->dc_recurevt;
 		readevt += dc->dc_readevt;
 	}
 
 	dtst->dtst_readevt = readevt;
 	dtst->dtst_dropevt = dropevt;
+	dtst->dtst_skiptick = skiptick;
+	dtst->dtst_recurevt = recurevt;
 	return 0;
 }
 
@@ -723,6 +732,15 @@ dt_pcb_purge(struct dt_pcb_list *plist)
 	}
 }
 
+void
+dt_pcb_ring_skiptick(struct dt_pcb *dp, unsigned int skip)
+{
+	struct dt_cpubuf *dc = &dp->dp_sc->ds_cpu[cpu_number()];
+
+	dc->dc_skiptick += skip;
+	membar_producer();
+}
+
 /*
  * Get a reference to the next free event state from the ring.
  */
@@ -734,8 +752,11 @@ dt_pcb_ring_get(struct dt_pcb *dp, int profiling)
 	int prod, cons, distance;
 	struct dt_cpubuf *dc = &dp->dp_sc->ds_cpu[cpu_number()];
 
-	if (dc->dc_inevt == 1)
+	if (dc->dc_inevt == 1) {
+		dc->dc_recurevt++;
+		membar_producer();
 		return NULL;
+	}
 
 	dc->dc_inevt = 1;
 

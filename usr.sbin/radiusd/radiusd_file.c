@@ -1,4 +1,4 @@
-/*	$OpenBSD: radiusd_file.c,v 1.5 2024/07/18 22:40:09 yasuoka Exp $	*/
+/*	$OpenBSD: radiusd_file.c,v 1.8 2024/11/21 13:43:10 claudio Exp $	*/
 
 /*
  * Copyright (c) 2024 YASUOKA Masahiko <yasuoka@yasuoka.net>
@@ -128,7 +128,8 @@ main(int argc, char *argv[])
 	if (pledge("stdio rpath unveil", NULL) == -1)
 		err(EXIT_FAILURE, "pledge");
 	setproctitle("[priv]");
-	imsg_init(&ibuf, pairsock[0]);
+	if (imsgbuf_init(&ibuf, pairsock[0]) == -1)
+		err(EXIT_FAILURE, "imsgbuf_init");
 
 	/* Receive parameters from the main process. */
 	if (imsg_sync_read(&ibuf, 2000) <= 0 ||
@@ -158,7 +159,7 @@ main(int argc, char *argv[])
 	memcpy(&params, paramsp, sizeof(params));
 
 	for (;;) {
-		if ((n = imsg_read(&ibuf)) <= 0 && errno != EAGAIN)
+		if (imsgbuf_read(&ibuf) != 1)
 			break;
 		for (;;) {
 			if ((n = imsg_get(&ibuf, &imsg)) == -1)
@@ -167,11 +168,11 @@ main(int argc, char *argv[])
 				break;
 			parent_dispatch_main(&params, &ibuf, &imsg);
 			imsg_free(&imsg);
-			imsg_flush(&ibuf);
+			imsgbuf_flush(&ibuf);
 		}
-		imsg_flush(&ibuf);
+		imsgbuf_flush(&ibuf);
 	}
-	imsg_clear(&ibuf);
+	imsgbuf_clear(&ibuf);
 
 	while (waitpid(pid, &status, 0) == -1) {
 		if (errno != EINTR)
@@ -244,7 +245,8 @@ module_file_main(void)
 	module_drop_privilege(module_file.base, 0);
 
 	module_load(module_file.base);
-	imsg_init(&module_file.ibuf, 3);
+	if (imsgbuf_init(&module_file.ibuf, 3) == -1)
+		err(EXIT_FAILURE, "imsgbuf_init");
 
 	if (pledge("stdio", NULL) == -1)
 		err(EXIT_FAILURE, "pledge");
@@ -331,7 +333,7 @@ module_file_start(void *ctx)
 	}
 	imsg_compose(&module->ibuf, IMSG_RADIUSD_FILE_PARAMS, 0, -1, -1,
 	    &module->params, sizeof(module->params));
-	imsg_flush(&module->ibuf);
+	imsgbuf_flush(&module->ibuf);
 
 	module_send_message(module->base, IMSG_OK, NULL);
 }
@@ -359,9 +361,9 @@ module_file_access_request(void *ctx, u_int query_id, const u_char *pkt,
 
 	imsg_compose(&self->ibuf, IMSG_RADIUSD_FILE_USERINFO, 0, -1, -1,
 	    username, strlen(username) + 1);
-	imsg_flush(&self->ibuf);
-	if ((n = imsg_read(&self->ibuf)) == -1 || n == 0) {
-		log_warn("%s: imsg_read()", __func__);
+	imsgbuf_flush(&self->ibuf);
+	if (imsgbuf_read(&self->ibuf) != 1) {
+		log_warn("%s: imsgbuf_read()", __func__);
 		goto out;
 	}
 	if ((n = imsg_get(&self->ibuf, &imsg)) <= 0) {

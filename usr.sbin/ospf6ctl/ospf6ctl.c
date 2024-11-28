@@ -1,4 +1,4 @@
-/*	$OpenBSD: ospf6ctl.c,v 1.54 2023/06/21 09:47:03 sthen Exp $ */
+/*	$OpenBSD: ospf6ctl.c,v 1.59 2024/11/21 13:38:14 claudio Exp $ */
 
 /*
  * Copyright (c) 2005 Claudio Jeker <claudio@openbsd.org>
@@ -132,7 +132,8 @@ main(int argc, char *argv[])
 
 	if ((ibuf = malloc(sizeof(struct imsgbuf))) == NULL)
 		err(1, NULL);
-	imsg_init(ibuf, ctl_sock);
+	if (imsgbuf_init(ibuf, ctl_sock) == -1)
+		err(1, NULL);
 	done = 0;
 
 	/* process user request */
@@ -250,13 +251,12 @@ main(int argc, char *argv[])
 #endif
 	}
 
-	while (ibuf->w.queued)
-		if (msgbuf_write(&ibuf->w) <= 0 && errno != EAGAIN)
-			err(1, "write error");
+	if (imsgbuf_flush(ibuf) == -1)
+		err(1, "write error");
 
 	while (!done) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			errx(1, "imsg_read error");
+		if ((n = imsgbuf_read(ibuf)) == -1)
+			err(1, "read error");
 		if (n == 0)
 			errx(1, "pipe closed");
 

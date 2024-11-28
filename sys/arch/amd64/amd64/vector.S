@@ -1,4 +1,4 @@
-/*	$OpenBSD: vector.S,v 1.97 2024/09/26 13:18:25 dv Exp $	*/
+/*	$OpenBSD: vector.S,v 1.99 2024/11/10 03:02:43 jsg Exp $	*/
 /*	$NetBSD: vector.S,v 1.5 2004/06/28 09:13:11 fvdl Exp $	*/
 
 /*
@@ -531,9 +531,6 @@ KTEXT_PAGE_END
  * decide the ipending case with less overhead
  */
 
-/* XXX See comment in locore.s */
-#define	XINTR(name,num)		Xintr_##name##num
-
 KUENTRY(x2apic_eoi)
 	pushq   %rax
 	pushq   %rcx
@@ -774,6 +771,17 @@ IDTVEC(ipi_invlrange_pcid)
 	popq	%rax
 	iretq
 END(Xipi_invlrange_pcid)
+
+IDTVEC(ipi_wbinvd)
+	ioapic_asm_ack()
+
+	wbinvd
+
+	lock
+	decq	wbinvd_wait
+
+	iretq
+END(Xipi_wbinvd)
 
 #endif /* MULTIPROCESSOR */
 

@@ -1,4 +1,4 @@
-/* $OpenBSD: vmm_machdep.c,v 1.39 2024/10/07 20:30:17 dv Exp $ */
+/* $OpenBSD: vmm_machdep.c,v 1.41 2024/11/27 10:09:51 mpi Exp $ */
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -124,7 +124,6 @@ int svm_fault_page(struct vcpu *, paddr_t);
 int vmx_fault_page(struct vcpu *, paddr_t);
 int vmx_handle_np_fault(struct vcpu *);
 int svm_handle_np_fault(struct vcpu *);
-pt_entry_t *vmx_pmap_find_pte_ept(pmap_t, paddr_t);
 int vmm_alloc_vpid(uint16_t *);
 void vmm_free_vpid(uint16_t);
 const char *vcpu_state_decode(u_int);
@@ -616,67 +615,6 @@ vm_rwregs(struct vm_rwregs_params *vrwp, int dir)
 out:
 	refcnt_rele_wake(&vm->vm_refcnt);
 	return (ret);
-}
-
-/*
- * vmx_pmap_find_pte_ept
- *
- * find the page table entry specified by addr in the pmap supplied.
- */
-pt_entry_t *
-vmx_pmap_find_pte_ept(pmap_t pmap, paddr_t addr)
-{
-	int l4idx, l3idx, l2idx, l1idx;
-	pd_entry_t *pd;
-	paddr_t pdppa;
-	pt_entry_t *ptes, *pte;
-
-	l4idx = (addr & L4_MASK) >> L4_SHIFT; /* PML4E idx */
-	l3idx = (addr & L3_MASK) >> L3_SHIFT; /* PDPTE idx */
-	l2idx = (addr & L2_MASK) >> L2_SHIFT; /* PDE idx */
-	l1idx = (addr & L1_MASK) >> L1_SHIFT; /* PTE idx */
-
-	pd = (pd_entry_t *)pmap->pm_pdir;
-	if (pd == NULL)
-		return NULL;
-
-	/*
-	 * l4idx should always be 0 since we don't support more than 512GB
-	 * guest physical memory.
-	 */
-	if (l4idx > 0)
-		return NULL;
-
-	/*
-	 * l3idx should always be < MAXDSIZ/1GB because we don't support more
-	 * than MAXDSIZ guest phys mem.
-	 */
-	if (l3idx >= MAXDSIZ / ((paddr_t)1024 * 1024 * 1024))
-		return NULL;
-
-	pdppa = pd[l4idx] & PG_FRAME;
-	if (pdppa == 0)
-		return NULL;
-
-	ptes = (pt_entry_t *)PMAP_DIRECT_MAP(pdppa);
-
-	pdppa = ptes[l3idx] & PG_FRAME;
-	if (pdppa == 0)
-		return NULL;
-
-	ptes = (pt_entry_t *)PMAP_DIRECT_MAP(pdppa);
-
-	pdppa = ptes[l2idx] & PG_FRAME;
-	if (pdppa == 0)
-		return NULL;
-
-	ptes = (pt_entry_t *)PMAP_DIRECT_MAP(pdppa);
-
-	pte = &ptes[l1idx];
-	if (*pte == 0)
-		return NULL;
-
-	return pte;
 }
 
 /*
@@ -4604,9 +4542,10 @@ svm_get_guest_faulttype(struct vmcb *vmcb)
 int
 svm_fault_page(struct vcpu *vcpu, paddr_t gpa)
 {
+	paddr_t pa = trunc_page(gpa);
 	int ret;
 
-	ret = uvm_fault(vcpu->vc_parent->vm_map, gpa, VM_FAULT_WIRE,
+	ret = uvm_fault_wire(vcpu->vc_parent->vm_map, pa, pa + PAGE_SIZE,
 	    PROT_READ | PROT_WRITE | PROT_EXEC);
 	if (ret)
 		printf("%s: uvm_fault returns %d, GPA=0x%llx, rip=0x%llx\n",
@@ -4673,12 +4612,13 @@ svm_handle_np_fault(struct vcpu *vcpu)
  *  0: if successful
  *  EINVAL: if fault type could not be determined or VMCS reload fails
  *  EAGAIN: if a protection fault occurred, ie writing to a read-only page
- *  errno: if uvm_fault(9) fails to wire in the page
+ *  errno: if uvm_fault_wire() fails to wire in the page
  */
 int
 vmx_fault_page(struct vcpu *vcpu, paddr_t gpa)
 {
 	int fault_type, ret;
+	paddr_t pa = trunc_page(gpa);
 
 	fault_type = vmx_get_guest_faulttype();
 	switch (fault_type) {
@@ -4693,9 +4633,9 @@ vmx_fault_page(struct vcpu *vcpu, paddr_t gpa)
 		break;
 	}
 
-	/* We may sleep during uvm_fault(9), so reload VMCS. */
+	/* We may sleep during uvm_fault_wire(), so reload VMCS. */
 	vcpu->vc_last_pcpu = curcpu();
-	ret = uvm_fault(vcpu->vc_parent->vm_map, gpa, VM_FAULT_WIRE,
+	ret = uvm_fault_wire(vcpu->vc_parent->vm_map, pa, pa + PAGE_SIZE,
 	    PROT_READ | PROT_WRITE | PROT_EXEC);
 	if (vcpu_reload_vmcs_vmx(vcpu)) {
 		printf("%s: failed to reload vmcs\n", __func__);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: eigrpe.c,v 1.41 2023/12/14 11:09:56 claudio Exp $ */
+/*	$OpenBSD: eigrpe.c,v 1.47 2024/11/21 13:38:14 claudio Exp $ */
 
 /*
  * Copyright (c) 2015 Renato Westphal <renato@openbsd.org>
@@ -146,7 +146,9 @@ eigrpe(int debug, int verbose, char *sockname)
 	/* setup pipe and event handler to the parent process */
 	if ((iev_main = malloc(sizeof(struct imsgev))) == NULL)
 		fatal(NULL);
-	imsg_init(&iev_main->ibuf, 3);
+	if (imsgbuf_init(&iev_main->ibuf, 3) == -1)
+		fatal(NULL);
+	imsgbuf_allow_fdpass(&iev_main->ibuf);
 	iev_main->handler = eigrpe_dispatch_main;
 	iev_main->events = EV_READ;
 	event_set(&iev_main->ev, iev_main->ibuf.fd, iev_main->events,
@@ -173,11 +175,11 @@ static __dead void
 eigrpe_shutdown(void)
 {
 	/* close pipes */
-	msgbuf_write(&iev_rde->ibuf.w);
-	msgbuf_clear(&iev_rde->ibuf.w);
+	imsgbuf_write(&iev_rde->ibuf);
+	imsgbuf_clear(&iev_rde->ibuf);
 	close(iev_rde->ibuf.fd);
-	msgbuf_write(&iev_main->ibuf.w);
-	msgbuf_clear(&iev_main->ibuf.w);
+	imsgbuf_write(&iev_main->ibuf);
+	imsgbuf_clear(&iev_main->ibuf);
 	close(iev_main->ibuf.fd);
 
 	config_clear(econf, PROC_EIGRP_ENGINE);
@@ -226,16 +228,18 @@ eigrpe_dispatch_main(int fd, short event, void *bula)
 	int			 n, shut = 0;
 
 	if (event & EV_READ) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			fatal("imsg_read error");
+		if ((n = imsgbuf_read(ibuf)) == -1)
+			fatal("imsgbuf_read error");
 		if (n == 0)	/* connection closed */
 			shut = 1;
 	}
 	if (event & EV_WRITE) {
-		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
-			fatal("msgbuf_write");
-		if (n == 0)	/* connection closed */
-			shut = 1;
+		if (imsgbuf_write(ibuf) == -1) {
+			if (errno == EPIPE)	/* connection closed */
+				shut = 1;
+			else
+				fatal("imsgbuf_write");
+		}
 	}
 
 	for (;;) {
@@ -298,7 +302,8 @@ eigrpe_dispatch_main(int fd, short event, void *bula)
 			iev_rde = malloc(sizeof(struct imsgev));
 			if (iev_rde == NULL)
 				fatal(NULL);
-			imsg_init(&iev_rde->ibuf, fd);
+			if (imsgbuf_init(&iev_rde->ibuf, fd) == -1)
+				fatal(NULL);
 			iev_rde->handler = eigrpe_dispatch_rde;
 			iev_rde->events = EV_READ;
 			event_set(&iev_rde->ev, iev_rde->ibuf.fd,
@@ -396,16 +401,18 @@ eigrpe_dispatch_rde(int fd, short event, void *bula)
 	int			 n, shut = 0;
 
 	if (event & EV_READ) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			fatal("imsg_read error");
+		if ((n = imsgbuf_read(ibuf)) == -1)
+			fatal("imsgbuf_read error");
 		if (n == 0)	/* connection closed */
 			shut = 1;
 	}
 	if (event & EV_WRITE) {
-		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
-			fatal("msgbuf_write");
-		if (n == 0)	/* connection closed */
-			shut = 1;
+		if (imsgbuf_write(ibuf) == -1) {
+			if (errno == EPIPE)	/* connection closed */
+				shut = 1;
+			else
+				fatal("imsgbuf_write");
+		}
 	}
 
 	for (;;) {

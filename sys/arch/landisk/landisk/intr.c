@@ -1,4 +1,4 @@
-/*	$OpenBSD: intr.c,v 1.11 2024/10/24 05:28:00 miod Exp $	*/
+/*	$OpenBSD: intr.c,v 1.13 2024/11/06 18:59:09 miod Exp $	*/
 /*	$NetBSD: intr.c,v 1.1 2006/09/01 21:26:18 uwe Exp $	*/
 
 /*-
@@ -73,7 +73,7 @@ intc_intr(int ssr, int spc, int ssp)
 	struct clockframe cf;
 	int evtcode;
 
-	curcpu()->ci_intrdepth++;
+	curcpu()->ci_idepth++;
 
 	evtcode = _reg_read_4(SH4_INTEVT);
 	ih = EVTCODE_IH(evtcode);
@@ -110,9 +110,8 @@ intc_intr(int ssr, int spc, int ssp)
 
 	case SH_INTEVT_TMU0_TUNI0:
 		(void)_cpu_intr_resume(ih->ih_level);
-		cf.spc = spc;
 		cf.ssr = ssr;
-		cf.ssp = ssp;
+		cf.spc = spc;
 		if ((*ih->ih_func)(&cf) != 0)
 			ih->ih_count.ec_count++;
 		break;
@@ -122,7 +121,7 @@ intc_intr(int ssr, int spc, int ssp)
 		break;
 	}
 
-	curcpu()->ci_intrdepth--;
+	curcpu()->ci_idepth--;
 }
 
 void

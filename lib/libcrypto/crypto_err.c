@@ -1,16 +1,13 @@
-/* $OpenBSD: o_fips.c,v 1.9 2024/04/17 22:43:42 tb Exp $ */
-/* Written by Stephen Henson (steve@openssl.org) for the OpenSSL
- * project 2011.
- */
+/* $OpenBSD: crypto_err.c,v 1.1 2024/11/05 11:21:15 tb Exp $ */
 /* ====================================================================
- * Copyright (c) 2011 The OpenSSL Project.  All rights reserved.
+ * Copyright (c) 1999-2011 The OpenSSL Project.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
  *
  * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer. 
+ *    notice, this list of conditions and the following disclaimer.
  *
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in
@@ -20,12 +17,12 @@
  * 3. All advertising materials mentioning features or use of this
  *    software must display the following acknowledgment:
  *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
+ *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
  *
  * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
  *    endorse or promote products derived from this software without
  *    prior written permission. For written permission, please contact
- *    openssl-core@openssl.org.
+ *    openssl-core@OpenSSL.org.
  *
  * 5. Products derived from this software may not be called "OpenSSL"
  *    nor may "OpenSSL" appear in their names without prior written
@@ -34,7 +31,7 @@
  * 6. Redistributions of any form whatsoever must retain the following
  *    acknowledgment:
  *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
+ *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
  *
  * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
  * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -56,22 +53,50 @@
  *
  */
 
-#include <openssl/crypto.h>
+#include <stdio.h>
+
+#include <openssl/opensslconf.h>
+
 #include <openssl/err.h>
+#include <openssl/crypto.h>
 
-int
-FIPS_mode(void)
-{
-	return 0;
-}
-LCRYPTO_ALIAS(FIPS_mode);
+#include "err_local.h"
 
-int
-FIPS_mode_set(int r)
+#ifndef OPENSSL_NO_ERR
+
+#define ERR_FUNC(func) ERR_PACK(ERR_LIB_CRYPTO,func,0)
+#define ERR_REASON(reason) ERR_PACK(ERR_LIB_CRYPTO,0,reason)
+
+static const ERR_STRING_DATA CRYPTO_str_functs[] = {
+	{ERR_FUNC(CRYPTO_F_CRYPTO_GET_EX_NEW_INDEX),	"CRYPTO_get_ex_new_index"},
+	{ERR_FUNC(CRYPTO_F_CRYPTO_GET_NEW_DYNLOCKID),	"CRYPTO_get_new_dynlockid"},
+	{ERR_FUNC(CRYPTO_F_CRYPTO_GET_NEW_LOCKID),	"CRYPTO_get_new_lockid"},
+	{ERR_FUNC(CRYPTO_F_CRYPTO_SET_EX_DATA),	"CRYPTO_set_ex_data"},
+	{ERR_FUNC(CRYPTO_F_DEF_ADD_INDEX),	"DEF_ADD_INDEX"},
+	{ERR_FUNC(CRYPTO_F_DEF_GET_CLASS),	"DEF_GET_CLASS"},
+	{ERR_FUNC(CRYPTO_F_FIPS_MODE_SET),	"FIPS_mode_set"},
+	{ERR_FUNC(CRYPTO_F_INT_DUP_EX_DATA),	"INT_DUP_EX_DATA"},
+	{ERR_FUNC(CRYPTO_F_INT_FREE_EX_DATA),	"INT_FREE_EX_DATA"},
+	{ERR_FUNC(CRYPTO_F_INT_NEW_EX_DATA),	"INT_NEW_EX_DATA"},
+	{0, NULL}
+};
+
+static const ERR_STRING_DATA CRYPTO_str_reasons[] = {
+	{ERR_REASON(CRYPTO_R_FIPS_MODE_NOT_SUPPORTED), "fips mode not supported"},
+	{ERR_REASON(CRYPTO_R_NO_DYNLOCK_CREATE_CALLBACK), "no dynlock create callback"},
+	{0, NULL}
+};
+
+#endif
+
+void
+ERR_load_CRYPTO_strings(void)
 {
-	if (r == 0)
-		return 1;
-	CRYPTOerror(CRYPTO_R_FIPS_MODE_NOT_SUPPORTED);
-	return 0;
+#ifndef OPENSSL_NO_ERR
+	if (ERR_func_error_string(CRYPTO_str_functs[0].error) == NULL) {
+		ERR_load_const_strings(CRYPTO_str_functs);
+		ERR_load_const_strings(CRYPTO_str_reasons);
+	}
+#endif
 }
-LCRYPTO_ALIAS(FIPS_mode_set);
+LCRYPTO_ALIAS(ERR_load_CRYPTO_strings);

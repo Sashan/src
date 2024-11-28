@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhcpleasectl.c,v 1.8 2024/06/06 15:07:46 florian Exp $	*/
+/*	$OpenBSD: dhcpleasectl.c,v 1.13 2024/11/21 13:38:14 claudio Exp $	*/
 
 /*
  * Copyright (c) 2021 Florian Obser <florian@openbsd.org>
@@ -156,14 +156,14 @@ main(int argc, char *argv[])
 
 	if ((ibuf = malloc(sizeof(struct imsgbuf))) == NULL)
 		err(1, NULL);
-	imsg_init(ibuf, ctl_sock);
+	if (imsgbuf_init(ibuf, ctl_sock) == -1)
+		err(1, NULL);
 
 	if (!lFlag) {
 		imsg_compose(ibuf, IMSG_CTL_SEND_REQUEST, 0, 0, -1,
 		    &if_index, sizeof(if_index));
-		while (ibuf->w.queued)
-			if (msgbuf_write(&ibuf->w) <= 0 && errno != EAGAIN)
-				err(1, "write error");
+		if (imsgbuf_flush(ibuf) == -1)
+			err(1, "write error");
 
 	}
 
@@ -171,13 +171,11 @@ main(int argc, char *argv[])
 		imsg_compose(ibuf, IMSG_CTL_SHOW_INTERFACE_INFO, 0, 0, -1,
 		    &if_index, sizeof(if_index));
 
-		while (ibuf->w.queued)
-			if (msgbuf_write(&ibuf->w) <= 0 && errno != EAGAIN)
-				err(1, "write error");
+		if (imsgbuf_flush(ibuf) == -1)
+			err(1, "write error");
 
-
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			errx(1, "imsg_read error");
+		if ((n = imsgbuf_read(ibuf)) == -1)
+			err(1, "read error");
 		if (n == 0)
 			errx(1, "pipe closed");
 

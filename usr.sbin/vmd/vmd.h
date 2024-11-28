@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmd.h,v 1.128 2024/09/11 15:42:52 bluhm Exp $	*/
+/*	$OpenBSD: vmd.h,v 1.131 2024/11/06 23:04:45 bluhm Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -103,10 +103,6 @@
 
 /* Unique local address for IPv6 */
 #define VMD_ULA_PREFIX		"fd00::/8"
-
-/* Verbosity arguments for use when caling execvp(2). */
-#define VMD_VERBOSE_1		"-v";
-#define VMD_VERBOSE_2		"-vv";
 
 enum imsg_type {
 	IMSG_VMDOP_START_VM_REQUEST = IMSG_PROC_MAX,
@@ -586,7 +582,7 @@ __dead void vionet_main(int, int);
 __dead void vioblk_main(int, int);
 
 /* psp.c */
-int	 psp_get_pstate(uint16_t *);
+int	 psp_get_pstate(uint16_t *, uint8_t *, uint8_t *, uint8_t *, uint8_t *);
 int	 psp_df_flush(void);
 int	 psp_get_gstate(uint32_t, uint32_t *, uint32_t *, uint8_t *);
 int	 psp_launch_start(uint32_t *);
@@ -595,6 +591,7 @@ int	 psp_launch_measure(uint32_t);
 int	 psp_launch_finish(uint32_t);
 int	 psp_activate(uint32_t, uint32_t);
 int	 psp_guest_shutdown(uint32_t);
+void	 psp_setup(void);
 
 /* sev.c */
 int	sev_init(struct vmd_vm *);

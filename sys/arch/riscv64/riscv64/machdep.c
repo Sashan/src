@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.38 2024/04/06 18:33:54 kettenis Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.40 2024/11/18 05:32:39 jsg Exp $	*/
 
 /*
  * Copyright (c) 2014 Patrick Wildt <patrick@blueri.se>
@@ -35,14 +35,13 @@
 #include <sys/syscallargs.h>
 
 #include <net/if.h>
-#include <uvm/uvm.h>
+#include <uvm/uvm_extern.h>
 #include <dev/cons.h>
 #include <dev/ofw/fdt.h>
 #include <dev/ofw/openfirm.h>
 #include <machine/param.h>
 #include <machine/bootconfig.h>
 #include <machine/bus.h>
-#include <machine/riscv64var.h>
 #include <machine/sbi.h>
 #include <machine/sysarch.h>
 

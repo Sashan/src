@@ -1,4 +1,4 @@
-/*	$OpenBSD: efiboot.c,v 1.60 2024/09/23 00:10:04 jsg Exp $	*/
+/*	$OpenBSD: efiboot.c,v 1.62 2024/11/12 20:49:42 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2015 YASUOKA Masahiko <yasuoka@yasuoka.net>
@@ -397,7 +397,7 @@ efi_framebuffer(void)
 	uint32_t acells, scells;
 	uint64_t base, size;
 	uint32_t reg[4];
-	uint32_t width, height, stride;
+	uint32_t width, height, stride, pxsize;
 	char *format;
 	char *prop;
 
@@ -443,15 +443,31 @@ efi_framebuffer(void)
 	if (gop == NULL || gop->Mode == NULL || gop->Mode->Info == NULL)
 		return;
 
-	/* We only support 32-bit pixel modes for now. */
 	switch (gop->Mode->Info->PixelFormat) {
 	case PixelRedGreenBlueReserved8BitPerColor:
 		format = "x8b8g8r8";
+		pxsize = 4;
 		break;
 	case PixelBlueGreenRedReserved8BitPerColor:
 		format = "x8r8g8b8";
+		pxsize = 4;
 		break;
+	case PixelBitMask: {
+		EFI_PIXEL_BITMASK *bm = &gop->Mode->Info->PixelInformation;
+		if (bm->RedMask == 0xf800 &&
+		    bm->GreenMask == 0x07e0 &&
+		    bm->BlueMask == 0x001f) {
+			format = "r5g6b5";
+			pxsize = 2;
+			break;
+		}
+		printf("Unsupported PixelInformation bitmasks\n");
+		/* FALLTHROUGH */
+	}
 	default:
+		printf("Unsupported PixelFormat %d, not adding "
+		    "\"simple-framebuffer\" DT node\n",
+		    gop->Mode->Info->PixelFormat);
 		return;
 	}
 
@@ -459,7 +475,7 @@ efi_framebuffer(void)
 	size = gop->Mode->FrameBufferSize;
 	width = htobe32(gop->Mode->Info->HorizontalResolution);
 	height = htobe32(gop->Mode->Info->VerticalResolution);
-	stride = htobe32(gop->Mode->Info->PixelsPerScanLine * 4);
+	stride = htobe32(gop->Mode->Info->PixelsPerScanLine * pxsize);
 
 	node = fdt_find_node("/");
 	if (fdt_node_property_int(node, "#address-cells", &acells) != 1)
@@ -1115,8 +1131,11 @@ struct smbios_dtb {
 	const char *prod;
 	const char *dtb;
 } smbios_dtb[] = {
+	/* Keep the list below sorted by vendor */
 	{ "ASUS", "ASUS Vivobook S 15 S5507",
 	  "qcom/x1e80100-asus-vivobook-s15.dtb" },
+	{ "HP", "HP OmniBook X Laptop 14-fe0xxx",
+	  "qcom/x1e80100-hp-omnibook-x14.dtb" },
 	{ "LENOVO", "21BX",
 	  "qcom/sc8280xp-lenovo-thinkpad-x13s.dtb" },
 	{ "LENOVO", "21BY",
@@ -1129,8 +1148,6 @@ struct smbios_dtb {
 	  "qcom/x1e80100-lenovo-yoga-slim7x.dtb" },
 	{ "SAMSUNG", "Galaxy Book4 Edge",
 	  "qcom/x1e80100-samsung-galaxy-book4-edge.dtb" },
-	{ "HP", "HP Omnibook X Laptop 14-fe0xxx",
-	  "qcom/x1e80100-hp-omnibook-x14.dtb" },
 };
 
 void *

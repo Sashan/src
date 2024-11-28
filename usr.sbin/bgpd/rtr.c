@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtr.c,v 1.24 2024/10/08 12:28:09 claudio Exp $ */
+/*	$OpenBSD: rtr.c,v 1.27 2024/11/21 13:38:14 claudio Exp $ */
 
 /*
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
@@ -219,7 +219,9 @@ rtr_main(int debug, int verbose)
 
 	if ((ibuf_main = malloc(sizeof(struct imsgbuf))) == NULL)
 		fatal(NULL);
-	imsg_init(ibuf_main, 3);
+	if (imsgbuf_init(ibuf_main, 3) == -1)
+		fatal(NULL);
+	imsgbuf_allow_fdpass(ibuf_main);
 
 	conf = new_config();
 	log_info("rtr engine ready");
@@ -264,7 +266,7 @@ rtr_main(int debug, int verbose)
 
 		if (handle_pollfd(&pfd[PFD_PIPE_RDE], ibuf_rde) == -1) {
 			log_warnx("RTR: Lost connection to RDE");
-			msgbuf_clear(&ibuf_rde->w);
+			imsgbuf_clear(ibuf_rde);
 			free(ibuf_rde);
 			ibuf_rde = NULL;
 		} else
@@ -290,11 +292,11 @@ rtr_main(int debug, int verbose)
 
 	/* close pipes */
 	if (ibuf_rde) {
-		msgbuf_clear(&ibuf_rde->w);
+		imsgbuf_clear(ibuf_rde);
 		close(ibuf_rde->fd);
 		free(ibuf_rde);
 	}
-	msgbuf_clear(&ibuf_main->w);
+	imsgbuf_clear(ibuf_main);
 	close(ibuf_main->fd);
 	free(ibuf_main);
 
@@ -331,12 +333,13 @@ rtr_dispatch_imsg_parent(struct imsgbuf *imsgbuf)
 			if (ibuf_rde) {
 				log_warnx("Unexpected imsg ctl "
 				    "connection to RDE received");
-				msgbuf_clear(&ibuf_rde->w);
+				imsgbuf_clear(ibuf_rde);
 				free(ibuf_rde);
 			}
 			if ((ibuf_rde = malloc(sizeof(struct imsgbuf))) == NULL)
 				fatal(NULL);
-			imsg_init(ibuf_rde, fd);
+			if (imsgbuf_init(ibuf_rde, fd) == -1)
+				fatal(NULL);
 			break;
 		case IMSG_SOCKET_SETUP:
 			if ((fd = imsg_get_fd(&imsg)) == -1) {

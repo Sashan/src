@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.c,v 1.270 2024/10/08 12:28:09 claudio Exp $ */
+/*	$OpenBSD: bgpd.c,v 1.277 2024/11/21 13:38:14 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -276,9 +276,13 @@ main(int argc, char *argv[])
 	    (ibuf_rde = malloc(sizeof(struct imsgbuf))) == NULL ||
 	    (ibuf_rtr = malloc(sizeof(struct imsgbuf))) == NULL)
 		fatal(NULL);
-	imsg_init(ibuf_se, pipe_m2s[0]);
-	imsg_init(ibuf_rde, pipe_m2r[0]);
-	imsg_init(ibuf_rtr, pipe_m2roa[0]);
+	if (imsgbuf_init(ibuf_se, pipe_m2s[0]) == -1 ||
+	    imsgbuf_init(ibuf_rde, pipe_m2r[0]) == -1 ||
+	    imsgbuf_init(ibuf_rtr, pipe_m2roa[0]) == -1)
+		fatal(NULL);
+	imsgbuf_allow_fdpass(ibuf_se);
+	imsgbuf_allow_fdpass(ibuf_rde);
+	imsgbuf_allow_fdpass(ibuf_rtr);
 	mrt_init(ibuf_rde, ibuf_se);
 	if (kr_init(&rfd, conf->fib_priority) == -1)
 		quit = 1;
@@ -362,7 +366,7 @@ BROKEN	if (pledge("stdio rpath wpath cpath fattr unix route recvfd sendfd",
 
 		if (handle_pollfd(&pfd[PFD_PIPE_SESSION], ibuf_se) == -1) {
 			log_warnx("main: Lost connection to SE");
-			msgbuf_clear(&ibuf_se->w);
+			imsgbuf_clear(ibuf_se);
 			free(ibuf_se);
 			ibuf_se = NULL;
 			quit = 1;
@@ -374,7 +378,7 @@ BROKEN	if (pledge("stdio rpath wpath cpath fattr unix route recvfd sendfd",
 
 		if (handle_pollfd(&pfd[PFD_PIPE_RDE], ibuf_rde) == -1) {
 			log_warnx("main: Lost connection to RDE");
-			msgbuf_clear(&ibuf_rde->w);
+			imsgbuf_clear(ibuf_rde);
 			free(ibuf_rde);
 			ibuf_rde = NULL;
 			quit = 1;
@@ -385,7 +389,7 @@ BROKEN	if (pledge("stdio rpath wpath cpath fattr unix route recvfd sendfd",
 
 		if (handle_pollfd(&pfd[PFD_PIPE_RTR], ibuf_rtr) == -1) {
 			log_warnx("main: Lost connection to RTR");
-			msgbuf_clear(&ibuf_rtr->w);
+			imsgbuf_clear(ibuf_rtr);
 			free(ibuf_rtr);
 			ibuf_rtr = NULL;
 			quit = 1;
@@ -447,19 +451,19 @@ BROKEN	if (pledge("stdio rpath wpath cpath fattr unix route recvfd sendfd",
 
 	/* close pipes */
 	if (ibuf_se) {
-		msgbuf_clear(&ibuf_se->w);
+		imsgbuf_clear(ibuf_se);
 		close(ibuf_se->fd);
 		free(ibuf_se);
 		ibuf_se = NULL;
 	}
 	if (ibuf_rde) {
-		msgbuf_clear(&ibuf_rde->w);
+		imsgbuf_clear(ibuf_rde);
 		close(ibuf_rde->fd);
 		free(ibuf_rde);
 		ibuf_rde = NULL;
 	}
 	if (ibuf_rtr) {
-		msgbuf_clear(&ibuf_rtr->w);
+		imsgbuf_clear(ibuf_rtr);
 		close(ibuf_rtr->fd);
 		free(ibuf_rtr);
 		ibuf_rtr = NULL;
@@ -1260,7 +1264,7 @@ set_pollfd(struct pollfd *pfd, struct imsgbuf *i)
 	}
 	pfd->fd = i->fd;
 	pfd->events = POLLIN;
-	if (i->w.queued > 0)
+	if (imsgbuf_queuelen(i) > 0)
 		pfd->events |= POLLOUT;
 }
 
@@ -1273,7 +1277,7 @@ handle_pollfd(struct pollfd *pfd, struct imsgbuf *i)
 		return (0);
 
 	if (pfd->revents & POLLOUT)
-		if (msgbuf_write(&i->w) <= 0 && errno != EAGAIN) {
+		if (imsgbuf_write(i) == -1) {
 			log_warn("imsg write error");
 			close(i->fd);
 			i->fd = -1;
@@ -1281,7 +1285,7 @@ handle_pollfd(struct pollfd *pfd, struct imsgbuf *i)
 		}
 
 	if (pfd->revents & POLLIN) {
-		if ((n = imsg_read(i)) == -1 && errno != EAGAIN) {
+		if ((n = imsgbuf_read(i)) == -1) {
 			log_warn("imsg read error");
 			close(i->fd);
 			i->fd = -1;

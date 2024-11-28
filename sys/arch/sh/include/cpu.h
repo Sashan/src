@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.40 2024/10/24 05:28:00 miod Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.42 2024/11/06 18:59:09 miod Exp $	*/
 /*	$NetBSD: cpu.h,v 1.41 2006/01/21 04:24:12 uwe Exp $	*/
 
 /*-
@@ -72,7 +72,7 @@ struct cpu_info {
 #endif
 
 	int	ci_want_resched;
-	int	ci_intrdepth;
+	int	ci_idepth;
 
 	struct clockqueue ci_queue;
 
@@ -99,14 +99,13 @@ extern struct cpu_info cpu_info_store;
  * machine state in an opaque clockframe.
  */
 struct clockframe {
-	int	spc;	/* program counter at time of interrupt */
 	int	ssr;	/* status register at time of interrupt */
-	int	ssp;	/* stack pointer at time of interrupt */
+	int	spc;	/* program counter at time of interrupt */
 };
 
 #define	CLKF_USERMODE(cf)	(!KERNELMODE((cf)->ssr))
 #define	CLKF_PC(cf)		((cf)->spc)
-#define	CLKF_INTR(cf)		(curcpu()->ci_intrdepth > 1)
+#define	CLKF_INTR(cf)		(curcpu()->ci_idepth > 1)
 
 /*
  * This is used during profiling to integrate system time.  It can safely

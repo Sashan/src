@@ -1,4 +1,4 @@
-/*	$OpenBSD: proc.c,v 1.2 2019/04/04 19:25:46 eric Exp $	*/
+/*	$OpenBSD: proc.c,v 1.7 2024/11/21 13:34:51 claudio Exp $	*/
 
 /*
  * Copyright (c) 2017 Eric Faurot <eric@openbsd.org>
@@ -203,7 +203,7 @@ proc_free(struct imsgproc *p)
 	if (event_initialized(&p->ev))
 		event_del(&p->ev);
 	close(p->imsgbuf.fd);
-	imsg_clear(&p->imsgbuf);
+	imsgbuf_clear(&p->imsgbuf);
 	free(p->title);
 	free(p);
 }
@@ -217,10 +217,15 @@ proc_new(int type)
 	if (p == NULL)
 		return NULL;
 
+	if (imsgbuf_init(&p->imsgbuf, -1) == -1) {
+		free(p);
+		return NULL;
+	}
+	imsgbuf_allow_fdpass(&p->imsgbuf);
+
 	p->type = type;
 	p->instance = -1;
 	p->pid = -1;
-	imsg_init(&p->imsgbuf, -1);
 
 	TAILQ_INSERT_TAIL(&procs, p, tqe);
 
@@ -231,7 +236,6 @@ static void
 proc_setsock(struct imsgproc *p, int sock)
 {
 	p->imsgbuf.fd = sock;
-	p->imsgbuf.w.fd = sock;
 }
 
 static void
@@ -240,7 +244,7 @@ proc_event_add(struct imsgproc *p)
 	short	events;
 
 	events = EV_READ;
-	if (p->imsgbuf.w.queued)
+	if (imsgbuf_queuelen(&p->imsgbuf) > 0)
 		events |= EV_WRITE;
 
 	if (p->events)
@@ -278,12 +282,10 @@ proc_dispatch(int fd, short event, void *arg)
 	p->events = 0;
 
 	if (event & EV_READ) {
-		n = imsg_read(&p->imsgbuf);
+		n = imsgbuf_read(&p->imsgbuf);
 		switch (n) {
 		case -1:
-			if (errno == EAGAIN)
-				break;
-			log_warn("%s: imsg_read", __func__);
+			log_warn("%s: imsgbuf_read", __func__);
 			proc_callback(p, NULL);
 			return;
 		case 0:
@@ -296,20 +298,11 @@ proc_dispatch(int fd, short event, void *arg)
 	}
 
 	if (event & EV_WRITE) {
-		n = msgbuf_write(&p->imsgbuf.w);
-		switch (n) {
-		case -1:
-			if (errno == EAGAIN)
-				break;
-			log_warn("%s: msgbuf_write", __func__);
+		if (imsgbuf_write(&p->imsgbuf) == -1) {
+			if (errno != EPIPE)
+				log_warn("%s: imsgbuf_write", __func__);
 			proc_callback(p, NULL);
 			return;
-		case 0:
-			/* This pipe is dead. */
-			proc_callback(p, NULL);
-			return;
-		default:
-			break;
 		}
 	}
 

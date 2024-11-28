@@ -1,4 +1,4 @@
-/*	$OpenBSD: psp.c,v 1.2 2024/09/26 01:45:13 jsg Exp $	*/
+/*	$OpenBSD: psp.c,v 1.5 2024/11/06 23:04:45 bluhm Exp $	*/
 
 /*
  * Copyright (c) 2023, 2024 Hans-Joerg Hoexer <hshoexer@genua.de>
@@ -21,6 +21,8 @@
 
 #include <dev/ic/pspvar.h>
 
+#include <errno.h>
+#include <fcntl.h>
 #include <string.h>
 
 #include "vmd.h"
@@ -40,7 +42,8 @@ extern struct vmd	*env;
  * Retrieve platform state.
  */
 int
-psp_get_pstate(uint16_t *state)
+psp_get_pstate(uint16_t *state, uint8_t *major, uint8_t *minor,
+    uint8_t *build, uint8_t *seves)
 {
 	struct psp_platform_status pst;
 
@@ -51,6 +54,14 @@ psp_get_pstate(uint16_t *state)
 
 	if (state)
 		*state = pst.state;
+	if (major)
+		*major = pst.api_major;
+	if (minor)
+		*minor = pst.api_minor;
+	if (build)
+		*build = (pst.cfges_build >> 24) & 0xff;
+	if (seves)
+		*seves = pst.cfges_build & 0x1;
 
 	return (0);
 }
@@ -189,7 +200,7 @@ psp_launch_measure(uint32_t handle)
 	    i++, p += 2, len -= 2) {
 		snprintf(p, len, "%02x", lm.measure[i]);
 	}
-	log_info("%s: measurement\t0x%s", __func__, buf);
+	log_info("%s: measurement 0x%s", __func__, buf);
 
 	len = sizeof(buf);
 	memset(buf, 0, len);
@@ -198,7 +209,7 @@ psp_launch_measure(uint32_t handle)
 	    i++, p += 2, len -= 2) {
 		snprintf(p, len, "%02x", lm.measure_nonce[i]);
 	}
-	log_info("%s: nonce\t0x%s", __func__, buf);
+	log_info("%s: nonce 0x%s", __func__, buf);
 
 	return (0);
 }
@@ -266,4 +277,68 @@ psp_guest_shutdown(uint32_t handle)
 	}
 
 	return (0);
+}
+
+/*
+ * Initialize PSP.
+ */
+static int
+psp_init(void)
+{
+	if (ioctl(env->vmd_psp_fd, PSP_IOC_INIT) < 0) {
+		log_warn("%s: ioctl", __func__);
+		return (-1);
+	}
+
+	return (0);
+}
+
+/*
+ * Shutdown PSP.
+ */
+static int
+psp_shutdown(void)
+{
+	if (ioctl(env->vmd_psp_fd, PSP_IOC_SHUTDOWN) < 0) {
+		log_warn("%s: ioctl", __func__);
+		return (-1);
+	}
+
+	return (0);
+}
+
+/*
+ * Reset PSP.
+ *
+ * Shut PSP down, then re-initialize it.  This clears and resets
+ * all active contexts.
+ */
+static int
+psp_reset(void)
+{
+	int	ret;
+
+	if ((ret = psp_shutdown()) < 0 || (ret = psp_init()) < 0)
+		return (ret);
+
+	return (0);
+}
+
+void
+psp_setup(void)
+{
+	uint8_t	major, minor, build;
+
+	env->vmd_psp_fd = open(PSP_NODE, O_RDWR);
+	if (env->vmd_psp_fd == -1) {
+		if (errno != ENXIO)
+			log_debug("%s: failed to open %s", __func__, PSP_NODE);
+		return;
+	}
+
+	if (psp_reset() < 0)
+		fatalx("%s: failed to reset PSP", __func__);
+	if (psp_get_pstate(NULL, &major, &minor, &build, NULL) < 0)
+		fatalx("%s: failed to get platform state", __func__);
+	log_info("PSP api %hhu.%hhu, build %hhu", major, minor, build);
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: control.c,v 1.121 2024/10/29 12:35:37 claudio Exp $ */
+/*	$OpenBSD: control.c,v 1.131 2024/11/21 13:38:14 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -37,7 +37,6 @@ struct ctl_conn	*control_connbyfd(int);
 struct ctl_conn	*control_connbypid(pid_t);
 int		 control_close(struct ctl_conn *);
 void		 control_result(struct ctl_conn *, u_int);
-ssize_t		 imsg_read_nofd(struct imsgbuf *);
 
 int
 control_check(char *path)
@@ -147,7 +146,7 @@ control_fill_pfds(struct pollfd *pfd, size_t size)
 	TAILQ_FOREACH(ctl_conn, &ctl_conns, entry) {
 		pfd[i].fd = ctl_conn->imsgbuf.fd;
 		pfd[i].events = POLLIN;
-		if (ctl_conn->imsgbuf.w.queued > 0)
+		if (imsgbuf_queuelen(&ctl_conn->imsgbuf) > 0)
 			pfd[i].events |= POLLOUT;
 		i++;
 	}
@@ -181,7 +180,12 @@ control_accept(int listenfd, int restricted)
 		return (0);
 	}
 
-	imsg_init(&ctl_conn->imsgbuf, connfd);
+	if (imsgbuf_init(&ctl_conn->imsgbuf, connfd) == -1) {
+		log_warn("control_accept");
+		close(connfd);
+		free(ctl_conn);
+		return (0);
+	}
 	ctl_conn->restricted = restricted;
 
 	TAILQ_INSERT_TAIL(&ctl_conns, ctl_conn, entry);
@@ -221,7 +225,7 @@ control_close(struct ctl_conn *c)
 	if (c->terminate && c->imsgbuf.pid)
 		imsg_ctl_rde_msg(IMSG_CTL_TERMINATE, 0, c->imsgbuf.pid);
 
-	msgbuf_clear(&c->imsgbuf.w);
+	imsgbuf_clear(&c->imsgbuf);
 	TAILQ_REMOVE(&ctl_conns, c, entry);
 
 	close(c->imsgbuf.fd);
@@ -249,9 +253,10 @@ control_dispatch_msg(struct pollfd *pfd, struct peer_head *peers)
 	}
 
 	if (pfd->revents & POLLOUT) {
-		if (msgbuf_write(&c->imsgbuf.w) <= 0 && errno != EAGAIN)
+		if (imsgbuf_write(&c->imsgbuf) == -1)
 			return control_close(c);
-		if (c->throttled && c->imsgbuf.w.queued < CTL_MSG_LOW_MARK) {
+		if (c->throttled &&
+		    imsgbuf_queuelen(&c->imsgbuf) < CTL_MSG_LOW_MARK) {
 			if (imsg_ctl_rde_msg(IMSG_XON, 0, c->imsgbuf.pid) != -1)
 				c->throttled = 0;
 		}
@@ -260,8 +265,7 @@ control_dispatch_msg(struct pollfd *pfd, struct peer_head *peers)
 	if (!(pfd->revents & POLLIN))
 		return (0);
 
-	if (((n = imsg_read_nofd(&c->imsgbuf)) == -1 && errno != EAGAIN) ||
-	    n == 0)
+	if (imsgbuf_read(&c->imsgbuf) != 1)
 		return control_close(c);
 
 	for (;;) {
@@ -382,7 +386,7 @@ control_dispatch_msg(struct pollfd *pfd, struct peer_head *peers)
 
 				switch (type) {
 				case IMSG_CTL_NEIGHBOR_UP:
-					bgp_fsm(p, EVNT_START);
+					bgp_fsm(p, EVNT_START, NULL);
 					p->conf.down = 0;
 					p->conf.reason[0] = '\0';
 					p->IdleHoldTime =
@@ -568,7 +572,7 @@ control_imsg_relay(struct imsg *imsg, struct peer *p)
 		peer.stats.prefix_sent_eor = stats.prefix_sent_eor;
 		peer.stats.pending_update = stats.pending_update;
 		peer.stats.pending_withdraw = stats.pending_withdraw;
-		peer.stats.msg_queue_len = msgbuf_queuelen(&p->wbuf);
+		peer.stats.msg_queue_len = msgbuf_queuelen(p->wbuf);
 
 		return imsg_compose(&c->imsgbuf, type, 0, pid, -1,
 		    &peer, sizeof(peer));
@@ -578,7 +582,8 @@ control_imsg_relay(struct imsg *imsg, struct peer *p)
 	if (type == IMSG_CTL_END || type == IMSG_CTL_RESULT)
 		c->terminate = 0;
 
-	if (!c->throttled && c->imsgbuf.w.queued > CTL_MSG_HIGH_MARK) {
+	if (!c->throttled &&
+	    imsgbuf_queuelen(&c->imsgbuf) > CTL_MSG_HIGH_MARK) {
 		if (imsg_ctl_rde_msg(IMSG_XOFF, 0, pid) != -1)
 			c->throttled = 1;
 	}
@@ -591,24 +596,4 @@ control_result(struct ctl_conn *c, u_int code)
 {
 	imsg_compose(&c->imsgbuf, IMSG_CTL_RESULT, 0, c->imsgbuf.pid, -1,
 	    &code, sizeof(code));
-}
-
-/* This should go into libutil, from smtpd/mproc.c */
-ssize_t
-imsg_read_nofd(struct imsgbuf *imsgbuf)
-{
-	ssize_t	 n;
-	char	*buf;
-	size_t	 len;
-
-	buf = imsgbuf->r.buf + imsgbuf->r.wpos;
-	len = sizeof(imsgbuf->r.buf) - imsgbuf->r.wpos;
-
-	while ((n = recv(imsgbuf->fd, buf, len, 0)) == -1) {
-		if (errno != EINTR)
-			return (n);
-	}
-
-	imsgbuf->r.wpos += n;
-	return (n);
 }

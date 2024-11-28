@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.229 2024/11/02 12:30:28 job Exp $ */
+/*	$OpenBSD: extern.h,v 1.233 2024/11/26 13:59:09 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -26,6 +26,8 @@
 
 #define CTASSERT(x)	extern char  _ctassert[(x) ? 1 : -1 ] \
 			    __attribute__((__unused__))
+
+#define MAX_MSG_SIZE	(50 * 1024 * 1024)
 
 enum cert_as_type {
 	CERT_AS_ID, /* single identifier */
@@ -120,10 +122,10 @@ enum cert_purpose {
  * inheriting.
  */
 struct cert {
-	struct cert_ip	*ips; /* list of IP address ranges */
-	size_t		 ipsz; /* length of "ips" */
-	struct cert_as	*as; /* list of AS numbers and ranges */
-	size_t		 asz; /* length of "asz" */
+	struct cert_ip	*ips;	/* list of IP address ranges */
+	size_t		 num_ips;
+	struct cert_as	*ases;	/* list of AS numbers and ranges */
+	size_t		 num_ases;
 	int		 talid; /* cert is covered by which TAL */
 	int		 certid;
 	unsigned int	 repoid; /* repository of this cert file */
@@ -151,7 +153,7 @@ struct cert {
  */
 struct tal {
 	char		**uri; /* well-formed rsync URIs */
-	size_t		 urisz; /* number of URIs */
+	size_t		 num_uris;
 	unsigned char	*pkey; /* DER-encoded public key */
 	size_t		 pkeysz; /* length of pkey */
 	char		*descr; /* basename of tal file */
@@ -241,8 +243,8 @@ struct roa_ip {
  */
 struct roa {
 	uint32_t	 asid; /* asID of ROA (if 0, RFC 6483 sec 4) */
-	struct roa_ip	*ips; /* IP prefixes */
-	size_t		 ipsz; /* number of IP prefixes */
+	struct roa_ip	*ips;	/* IP prefixes */
+	size_t		 num_ips;
 	int		 talid; /* ROAs are covered by which TAL */
 	int		 valid; /* validated resources */
 	char		*aia; /* AIA */
@@ -266,12 +268,12 @@ struct rscfile {
 struct rsc {
 	int		 talid; /* RSC covered by what TAL */
 	int		 valid; /* eContent resources covered by EE's 3779? */
-	struct cert_ip	*ips; /* IP prefixes */
-	size_t		 ipsz; /* number of IP prefixes */
-	struct cert_as	*as; /* AS resources */
-	size_t		 asz; /* number of AS resources */
+	struct cert_ip	*ips;	/* IP prefixes */
+	size_t		 num_ips;
+	struct cert_as	*ases;	/* AS resources */
+	size_t		 num_ases;
 	struct rscfile	*files; /* FileAndHashes in the RSC */
-	size_t		 filesz; /* number of FileAndHashes */
+	size_t		 num_files;
 	char		*aia; /* AIA */
 	char		*aki; /* AKI */
 	char		*ski; /* SKI */
@@ -295,8 +297,8 @@ struct spl_pfx {
  */
 struct spl {
 	uint32_t	 asid;
-	struct spl_pfx	*pfxs;
-	size_t		 pfxsz;
+	struct spl_pfx	*prefixes;
+	size_t		 num_prefixes;
 	int		 talid;
 	char		*aia;
 	char		*aki;
@@ -314,9 +316,9 @@ struct spl {
  */
 struct takey {
 	char		**comments; /* Comments */
-	size_t		 commentsz; /* number of Comments */
+	size_t		 num_comments;
 	char		**uris; /* CertificateURI */
-	size_t		 urisz; /* number of CertificateURIs */
+	size_t		 num_uris;
 	unsigned char	*pubkey; /* DER encoded SubjectPublicKeyInfo */
 	size_t		 pubkeysz;
 	char		*ski; /* hex encoded SubjectKeyIdentifier of pubkey */
@@ -353,7 +355,7 @@ struct geoip {
  */
 struct geofeed {
 	struct geoip	*geoips; /* Prefix + location entry in the CSV */
-	size_t		 geoipsz; /* number of IPs */
+	size_t		 num_geoips;
 	char		*aia; /* AIA */
 	char		*aki; /* AKI */
 	char		*ski; /* SKI */
@@ -392,7 +394,7 @@ struct aspa {
 	char			*ski; /* SKI */
 	uint32_t		 custasid; /* the customerASID */
 	uint32_t		*providers; /* the providers */
-	size_t			 providersz; /* number of providers */
+	size_t			 num_providers;
 	time_t			 signtime; /* CMS signing-time attribute */
 	time_t			 notbefore; /* EE cert's Not Before */
 	time_t			 notafter; /* notAfter of the ASPA EE cert */
@@ -407,7 +409,7 @@ struct vap {
 	RB_ENTRY(vap)		 entry;
 	uint32_t		 custasid;
 	uint32_t		*providers;
-	size_t			 providersz;
+	size_t			 num_providers;
 	time_t			 expires;
 	int			 talid;
 	unsigned int		 repoid;
@@ -448,7 +450,7 @@ struct vsp {
 	RB_ENTRY(vsp)	 entry;
 	uint32_t	 asid;
 	struct spl_pfx	*prefixes;
-	size_t		 prefixesz;
+	size_t		 num_prefixes;
 	time_t		 expires;
 	int		 talid;
 	unsigned int	 repoid;
@@ -902,8 +904,8 @@ void		 io_close_buffer(struct msgbuf *, struct ibuf *);
 void		 io_read_buf(struct ibuf *, void *, size_t);
 void		 io_read_str(struct ibuf *, char **);
 void		 io_read_buf_alloc(struct ibuf *, void **, size_t *);
-struct ibuf	*io_buf_read(int, struct ibuf **);
-struct ibuf	*io_buf_recvfd(int, struct ibuf **);
+struct ibuf	*io_parse_hdr(struct ibuf *, void *, int *);
+struct ibuf	*io_buf_get(struct msgbuf *);
 
 /* X509 helpers. */
 

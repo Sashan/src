@@ -1,4 +1,4 @@
-/* $OpenBSD: malloc-wrapper.c,v 1.11 2024/04/10 14:51:02 beck Exp $ */
+/* $OpenBSD: crypto_memory.c,v 1.3 2024/11/06 04:18:42 tb Exp $ */
 /*
  * Copyright (c) 2014 Bob Beck
  *
@@ -14,11 +14,19 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <openssl/crypto.h>
+
+void
+OPENSSL_cleanse(void *ptr, size_t len)
+{
+	explicit_bzero(ptr, len);
+}
+LCRYPTO_ALIAS(OPENSSL_cleanse);
 
 int
 CRYPTO_set_mem_functions(void *(*m)(size_t), void *(*r)(void *, size_t),

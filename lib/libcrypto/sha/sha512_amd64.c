@@ -1,7 +1,6 @@
-/*	$OpenBSD: mainbus.h,v 1.2 2021/05/12 01:20:52 jsg Exp $	*/
-
+/* $OpenBSD: sha512_amd64.c,v 1.1 2024/11/16 14:56:39 jsing Exp $ */
 /*
- * Copyright (c) 2016 Patrick Wildt <patrick@blueri.se>
+ * Copyright (c) 2024 Joel Sing <jsing@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -16,13 +15,12 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#ifndef __MAINBUS_H__
-#define __MAINBUS_H__
+#include <openssl/sha.h>
 
-/* Passed as third arg to attach functions. */
-union mainbus_attach_args {
-	const char		*ma_name;
-	struct fdt_attach_args	 ma_faa;
-};
+void sha512_block_generic(SHA512_CTX *ctx, const void *in, size_t num);
 
-#endif /* __MAINBUS_H__ */
+void
+sha512_block_data_order(SHA512_CTX *ctx, const void *in, size_t num)
+{
+	sha512_block_generic(ctx, in, num);
+}
