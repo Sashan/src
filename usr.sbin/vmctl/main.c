@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.79 2024/08/17 20:50:06 mlarkin Exp $	*/
+/*	$OpenBSD: main.c,v 1.84 2024/11/21 13:39:34 claudio Exp $	*/
 
 /*
  * Copyright (c) 2015 Reyk Floeter <reyk@openbsd.org>
@@ -209,7 +209,9 @@ vmmaction(struct parse_result *res)
 
 		if ((ibuf = malloc(sizeof(struct imsgbuf))) == NULL)
 			err(1, "malloc");
-		imsg_init(ibuf, ctl_sock);
+		if (imsgbuf_init(ibuf, ctl_sock) == -1)
+			err(1, "imsgbuf_init");
+		imsgbuf_allow_fdpass(ibuf);
 	}
 
 	switch (res->action) {
@@ -273,13 +275,12 @@ vmmaction(struct parse_result *res)
 	flags = res->flags;
 	parse_free(res);
 
-	while (ibuf->w.queued)
-		if (msgbuf_write(&ibuf->w) <= 0 && errno != EAGAIN)
-			err(1, "write error");
+	if (imsgbuf_flush(ibuf) == -1)
+		err(1, "write error");
 
 	while (!done) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			errx(1, "imsg_read error");
+		if ((n = imsgbuf_read(ibuf)) == -1)
+			err(1, "read error");
 		if (n == 0)
 			errx(1, "pipe closed");
 

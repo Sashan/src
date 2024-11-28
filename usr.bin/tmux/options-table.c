@@ -1,4 +1,4 @@
-/* $OpenBSD: options-table.c,v 1.184 2024/11/05 09:41:17 nicm Exp $ */
+/* $OpenBSD: options-table.c,v 1.187 2024/11/26 15:52:41 nicm Exp $ */
 
 /*
  * Copyright (c) 2011 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -346,6 +346,15 @@ const struct options_table_entry options_table[] = {
 	  .default_str = "",
 	  .text = "Location of the command prompt history file. "
 		  "Empty does not write a history file."
+	},
+
+	{ .name = "input-buffer-size",
+	  .type = OPTIONS_TABLE_NUMBER,
+	  .scope = OPTIONS_TABLE_SERVER,
+	  .minimum = INPUT_BUF_DEFAULT_SIZE,
+	  .maximum = UINT_MAX,
+	  .default_num = INPUT_BUF_DEFAULT_SIZE,
+	  .text = "Number of byte accpted in a single input before dropping."
 	},
 
 	{ .name = "menu-style",
@@ -1017,6 +1026,24 @@ const struct options_table_entry options_table[] = {
 	  .text = "Format of the position indicator in copy mode."
 	},
 
+	{ .name = "copy-mode-position-style",
+	  .type = OPTIONS_TABLE_STRING,
+	  .scope = OPTIONS_TABLE_WINDOW,
+	  .default_str = "#{mode-style}",
+	  .flags = OPTIONS_TABLE_IS_STYLE,
+	  .separator = ",",
+	  .text = "Style of position indicator in copy mode."
+	},
+
+	{ .name = "copy-mode-selection-style",
+	  .type = OPTIONS_TABLE_STRING,
+	  .scope = OPTIONS_TABLE_WINDOW,
+	  .default_str = "#{mode-style}",
+	  .flags = OPTIONS_TABLE_IS_STYLE,
+	  .separator = ",",
+	  .text = "Style of selection in copy mode."
+	},
+
 	{ .name = "fill-character",
 	  .type = OPTIONS_TABLE_STRING,
 	  .scope = OPTIONS_TABLE_WINDOW,
@@ -1178,7 +1205,7 @@ const struct options_table_entry options_table[] = {
 	{ .name = "pane-scrollbars-style",
 	  .type = OPTIONS_TABLE_STRING,
 	  .scope = OPTIONS_TABLE_WINDOW|OPTIONS_TABLE_PANE,
-	  .default_str = "bg=black,fg=white",
+	  .default_str = "bg=black,fg=white,width=1,pad=0",
 	  .flags = OPTIONS_TABLE_IS_STYLE,
 	  .separator = ",",
 	  .text = "Style of the pane scrollbar."

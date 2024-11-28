@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmm.c,v 1.125 2024/11/06 23:04:45 bluhm Exp $	*/
+/*	$OpenBSD: vmm.c,v 1.130 2024/11/21 13:39:34 claudio Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -470,7 +470,11 @@ vmm_pipe(struct vmd_vm *vm, int fd, void (*cb)(int, short, void *))
 		return (-1);
 	}
 
-	imsg_init(&iev->ibuf, fd);
+	if (imsgbuf_init(&iev->ibuf, fd) == -1) {
+		log_warn("failed to init imsgbuf");
+		return (-1);
+	}
+	imsgbuf_allow_fdpass(&iev->ibuf);
 	iev->handler = cb;
 	iev->data = vm;
 	imsg_event_add(iev);
@@ -495,8 +499,8 @@ vmm_dispatch_vm(int fd, short event, void *arg)
 	unsigned int		 i;
 
 	if (event & EV_READ) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			fatal("%s: imsg_read", __func__);
+		if ((n = imsgbuf_read(ibuf)) == -1)
+			fatal("%s: imsgbuf_read", __func__);
 		if (n == 0) {
 			/* This pipe is dead, so remove the event handler */
 			event_del(&iev->ev);
@@ -505,12 +509,13 @@ vmm_dispatch_vm(int fd, short event, void *arg)
 	}
 
 	if (event & EV_WRITE) {
-		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
-			fatal("%s: msgbuf_write fd %d", __func__, ibuf->fd);
-		if (n == 0) {
-			/* This pipe is dead, so remove the event handler */
-			event_del(&iev->ev);
-			return;
+		if (imsgbuf_write(ibuf) == -1) {
+			if (errno == EPIPE) {
+				/* This pipe is dead, remove the handler */
+				event_del(&iev->ev);
+				return;
+			}
+			fatal("%s: imsgbuf_write fd %d", __func__, ibuf->fd);
 		}
 	}
 

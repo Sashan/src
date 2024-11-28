@@ -1,4 +1,4 @@
-/*	$OpenBSD: filemode.c,v 1.51 2024/11/05 06:05:35 tb Exp $ */
+/*	$OpenBSD: filemode.c,v 1.56 2024/11/21 13:32:27 claudio Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -269,7 +269,7 @@ parse_load_ta(struct tal *tal)
 
 	cert->talid = tal->id;
 	auth_insert(file, &auths, cert, NULL);
-	for (i = 0; i < tal->urisz; i++) {
+	for (i = 0; i < tal->num_uris; i++) {
 		if (strncasecmp(tal->uri[i], RSYNC_PROTO, RSYNC_PROTO_LEN) != 0)
 			continue;
 		/* Add all rsync uri since any of them could be used as AIA. */
@@ -724,8 +724,8 @@ void
 proc_filemode(int fd)
 {
 	struct entityq	 q;
-	struct msgbuf	 msgq;
 	struct pollfd	 pfd;
+	struct msgbuf	*msgq;
 	struct entity	*entp;
 	struct ibuf	*b, *inbuf = NULL;
 
@@ -748,14 +748,14 @@ proc_filemode(int fd)
 
 	TAILQ_INIT(&q);
 
-	msgbuf_init(&msgq);
-	msgq.fd = fd;
-
+	if ((msgq = msgbuf_new_reader(sizeof(size_t), io_parse_hdr, NULL)) ==
+	    NULL)
+		err(1, NULL);
 	pfd.fd = fd;
 
 	for (;;) {
 		pfd.events = POLLIN;
-		if (msgbuf_queuelen(&msgq) > 0)
+		if (msgbuf_queuelen(msgq) > 0)
 			pfd.events |= POLLOUT;
 
 		if (poll(&pfd, 1, INFTIM) == -1) {
@@ -772,8 +772,13 @@ proc_filemode(int fd)
 			break;
 
 		if ((pfd.revents & POLLIN)) {
-			b = io_buf_read(fd, &inbuf);
-			if (b != NULL) {
+			switch (ibuf_read(fd, msgq)) {
+			case -1:
+				err(1, "ibuf_read");
+			case 0:
+				errx(1, "ibuf_read: connection closed");
+			}
+			while ((b = io_buf_get(msgq)) != NULL) {
 				entp = calloc(1, sizeof(struct entity));
 				if (entp == NULL)
 					err(1, NULL);
@@ -784,18 +789,18 @@ proc_filemode(int fd)
 		}
 
 		if (pfd.revents & POLLOUT) {
-			switch (msgbuf_write(&msgq)) {
-			case 0:
-				errx(1, "write: connection closed");
-			case -1:
-				err(1, "write");
+			if (msgbuf_write(fd, msgq) == -1) {
+				if (errno == EPIPE)
+					errx(1, "write: connection closed");
+				else
+					err(1, "write");
 			}
 		}
 
-		parse_file(&q, &msgq);
+		parse_file(&q, msgq);
 	}
 
-	msgbuf_clear(&msgq);
+	msgbuf_free(msgq);
 	while ((entp = TAILQ_FIRST(&q)) != NULL) {
 		TAILQ_REMOVE(&q, entp, entries);
 		entity_free(entp);

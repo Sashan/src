@@ -1551,6 +1551,7 @@
 ./usr/share/man/man4/iatp.4
 ./usr/share/man/man4/iavf.4
 ./usr/share/man/man4/icc.4
+./usr/share/man/man4/ice.4
 ./usr/share/man/man4/ichiic.4
 ./usr/share/man/man4/ichwdt.4
 ./usr/share/man/man4/icmp.4
@@ -1855,6 +1856,7 @@
 ./usr/share/man/man4/pwmleds.4
 ./usr/share/man/man4/pwmreg.4
 ./usr/share/man/man4/qccpu.4
+./usr/share/man/man4/qccpucp.4
 ./usr/share/man/man4/qcdwusb.4
 ./usr/share/man/man4/qcgpio.4
 ./usr/share/man/man4/qciic.4
@@ -2055,7 +2057,6 @@
 ./usr/share/man/man4/sym.4
 ./usr/share/man/man4/sypwr.4
 ./usr/share/man/man4/syscon.4
-./usr/share/man/man4/tap.4
 ./usr/share/man/man4/tascodec.4
 ./usr/share/man/man4/tcic.4
 ./usr/share/man/man4/tcp.4

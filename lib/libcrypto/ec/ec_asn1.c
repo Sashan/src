@@ -1,4 +1,4 @@
-/* $OpenBSD: ec_asn1.c,v 1.105 2024/11/02 19:21:24 tb Exp $ */
+/* $OpenBSD: ec_asn1.c,v 1.107 2024/11/22 12:01:14 tb Exp $ */
 /*
  * Written by Nils Larsch for the OpenSSL project.
  */
@@ -1110,7 +1110,7 @@ ec_asn1_pkparameters2group(const ECPKPARAMETERS *params)
 			ECerror(ERR_R_EC_LIB);
 			return NULL;
 		}
-		EC_GROUP_set_asn1_flag(group, 0);
+		EC_GROUP_set_asn1_flag(group, OPENSSL_EC_EXPLICIT_CURVE);
 	} else if (params->type == ECPK_PARAM_IMPLICITLY_CA) {
 		return NULL;
 	} else {
@@ -1401,6 +1401,28 @@ d2i_ECParameters(EC_KEY **out_ec_key, const unsigned char **in, long len)
 	return NULL;
 }
 LCRYPTO_ALIAS(d2i_ECParameters);
+
+EC_KEY *
+ECParameters_dup(EC_KEY *key)
+{
+	const unsigned char *p;
+	unsigned char *der = NULL;
+	EC_KEY *dup = NULL;
+	int len;
+
+	if (key == NULL)
+		return NULL;
+
+	if ((len = i2d_ECParameters(key, &der)) <= 0)
+		return NULL;
+
+	p = der;
+	dup = d2i_ECParameters(NULL, &p, len);
+	freezero(der, len);
+
+	return dup;
+}
+LCRYPTO_ALIAS(ECParameters_dup);
 
 EC_KEY *
 o2i_ECPublicKey(EC_KEY **in_ec_key, const unsigned char **in, long len)

@@ -1,4 +1,4 @@
-/* $OpenBSD: window.c,v 1.296 2024/11/05 09:41:17 nicm Exp $ */
+/* $OpenBSD: window.c,v 1.298 2024/11/15 13:12:20 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -596,9 +596,10 @@ window_get_active_at(struct window *w, u_int x, u_int y)
 
 		if (pane_scrollbars == PANE_SCROLLBARS_ALWAYS ||
 		    (pane_scrollbars == PANE_SCROLLBARS_MODAL &&
-		     window_pane_mode(wp) != WINDOW_PANE_NO_MODE))
-			sb_w = PANE_SCROLLBARS_WIDTH;
-		else
+		     window_pane_mode(wp) != WINDOW_PANE_NO_MODE)) {
+			sb_w = wp->scrollbar_style.width +
+			    wp->scrollbar_style.pad;
+		} else
 			sb_w = 0;
 
 		if (sb_pos == PANE_SCROLLBARS_LEFT) {
@@ -960,6 +961,9 @@ window_pane_create(struct window *w, u_int sx, u_int sy, u_int hlimit)
 
 	wp->control_bg = -1;
 	wp->control_fg = -1;
+
+	style_set_scrollbar_style_from_option(&wp->scrollbar_style,
+	    wp->options);
 
 	colour_palette_init(&wp->palette);
 	colour_palette_from_option(&wp->palette, wp->options);
@@ -1725,4 +1729,17 @@ window_pane_mode(struct window_pane *wp)
 			return (WINDOW_PANE_VIEW_MODE);
 	}
 	return (WINDOW_PANE_NO_MODE);
+}
+
+/* Return 1 if scrollbar is or should be displayed. */
+int
+window_pane_show_scrollbar(struct window_pane *wp, int sb_option)
+{
+	if (SCREEN_IS_ALTERNATE(wp->screen))
+		return (0);
+	if (sb_option == PANE_SCROLLBARS_ALWAYS ||
+	    (sb_option == PANE_SCROLLBARS_MODAL &&
+	    window_pane_mode(wp) != WINDOW_PANE_NO_MODE))
+		return (1);
+	return (0);
 }

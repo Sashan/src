@@ -1,4 +1,4 @@
-/*	$OpenBSD: sys_process.c,v 1.102 2024/10/08 12:02:24 claudio Exp $	*/
+/*	$OpenBSD: sys_process.c,v 1.104 2024/11/27 12:29:14 jsg Exp $	*/
 /*	$NetBSD: sys_process.c,v 1.55 1996/05/15 06:17:47 tls Exp $	*/
 
 /*-
@@ -205,6 +205,24 @@ sys_ptrace(struct proc *p, void *v, register_t *retval)
 	case PT_PACMASK:
 		mode = OUT;
 		size = sizeof u.u_pacmask;
+		break;
+#endif
+#ifdef PT_GETXSTATE_INFO
+	case PT_GETXSTATE_INFO:
+		mode = OUT_ALLOC;
+		size = sizeof(struct ptrace_xstate_info);
+		break;
+#endif
+#ifdef PT_GETXSTATE
+	case PT_GETXSTATE:
+		mode = OUT_ALLOC;
+		size = fpu_save_len;
+		break;
+#endif
+#ifdef PT_SETXSTATE
+	case PT_SETXSTATE:
+		mode = IN_ALLOC;
+		size = fpu_save_len;
 		break;
 #endif
 	default:
@@ -759,6 +777,18 @@ ptrace_ustate(struct proc *p, int req, pid_t pid, void *addr, int data,
 		((register_t *)addr)[0] = process_get_pacmask(t);
 		((register_t *)addr)[1] = process_get_pacmask(t);
 		return 0;
+#endif
+#ifdef PT_GETXSTATE_INFO
+	case PT_GETXSTATE_INFO:
+		return process_read_xstate_info(t, addr);
+#endif
+#ifdef PT_GETXSTATE
+	case PT_GETXSTATE:
+		return process_read_xstate(t, addr);
+#endif
+#ifdef PT_SETXSTATE
+	case PT_SETXSTATE:
+		return process_write_xstate(t, addr);
 #endif
 	default:
 		KASSERTMSG(0, "%s: unhandled request %d", __func__, req);

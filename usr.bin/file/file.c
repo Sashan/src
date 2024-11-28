@@ -1,4 +1,4 @@
-/* $OpenBSD: file.c,v 1.70 2024/01/16 13:07:29 claudio Exp $ */
+/* $OpenBSD: file.c,v 1.74 2024/11/21 13:35:20 claudio Exp $ */
 
 /*
  * Copyright (c) 2015 Nicholas Marriott <nicm@openbsd.org>
@@ -125,7 +125,7 @@ main(int argc, char **argv)
 	struct imsgbuf		 ibuf;
 	struct imsg		 imsg;
 	struct input_msg	 msg;
-	struct input_ack	*ack;
+	struct input_ack	 ack;
 	pid_t			 pid, parent;
 
 	tzset();
@@ -216,17 +216,18 @@ main(int argc, char **argv)
 	if (cflag)
 		goto wait_for_child;
 
-	imsg_init(&ibuf, pair[0]);
+	if (imsgbuf_init(&ibuf, pair[0]) == -1)
+		err(1, "imsgbuf_init");
+	imsgbuf_allow_fdpass(&ibuf);
 	for (idx = 0; idx < argc; idx++) {
 		fd = prepare_message(&msg, idx, argv[idx]);
 		send_message(&ibuf, &msg, sizeof msg, fd);
 
 		if (read_message(&ibuf, &imsg, pid) == 0)
 			break;
-		if (imsg.hdr.len != IMSG_HEADER_SIZE + sizeof *ack)
-			errx(1, "message too small");
-		ack = imsg.data;
-		if (ack->idx != idx)
+		if (imsg_get_data(&imsg, &ack, sizeof ack) == -1)
+			err(1, "bad message");
+		if (ack.idx != idx)
 			errx(1, "index not expected");
 		imsg_free(&imsg);
 	}
@@ -288,32 +289,32 @@ send_message(struct imsgbuf *ibuf, void *msg, size_t msglen, int fd)
 {
 	if (imsg_compose(ibuf, -1, -1, 0, fd, msg, msglen) != 1)
 		err(1, "imsg_compose");
-	if (imsg_flush(ibuf) != 0)
-		err(1, "imsg_flush");
+	if (imsgbuf_flush(ibuf) != 0)
+		err(1, "imsgbuf_flush");
 }
 
 static int
 read_message(struct imsgbuf *ibuf, struct imsg *imsg, pid_t from)
 {
-	int	n;
+	while (1) {
+		switch (imsg_get(ibuf, imsg)) {
+		case -1:
+			err(1, "imsg_get");
+		case 0:
+			break;
+		default:
+			if ((pid_t)imsg->hdr.pid != from)
+				errx(1, "PIDs don't match");
+			return (1);
+		}
 
-	while ((n = imsg_read(ibuf)) == -1 && errno == EAGAIN)
-		/* nothing */ ;
-	if (n == -1)
-		err(1, "imsg_read");
-	if (n == 0)
-		return (0);
-
-	if ((n = imsg_get(ibuf, imsg)) == -1)
-		err(1, "imsg_get");
-	if (n == 0)
-		return (0);
-
-	if ((pid_t)imsg->hdr.pid != from)
-		errx(1, "PIDs don't match");
-
-	return (n);
-
+		switch (imsgbuf_read(ibuf)) {
+		case -1:
+			err(1, "imsgbuf_read");
+		case 0:
+			return (0);
+		}
+	}
 }
 
 static void
@@ -365,7 +366,7 @@ child(int fd, pid_t parent, int argc, char **argv)
 	struct magic		*m;
 	struct imsgbuf		 ibuf;
 	struct imsg		 imsg;
-	struct input_msg	*msg;
+	struct input_msg	 msg;
 	struct input_ack	 ack;
 	struct input_file	 inf;
 	int			 i, idx;
@@ -401,21 +402,22 @@ child(int fd, pid_t parent, int argc, char **argv)
 			width = len;
 	}
 
-	imsg_init(&ibuf, fd);
+	if (imsgbuf_init(&ibuf, fd) == -1)
+		err(1, "imsgbuf_init");
+	imsgbuf_allow_fdpass(&ibuf);
 	for (;;) {
 		if (read_message(&ibuf, &imsg, parent) == 0)
 			break;
-		if (imsg.hdr.len != IMSG_HEADER_SIZE + sizeof *msg)
-			errx(1, "message too small");
-		msg = imsg.data;
+		if (imsg_get_data(&imsg, &msg, sizeof msg) == -1)
+			err(1, "bad message");
 
-		idx = msg->idx;
+		idx = msg.idx;
 		if (idx < 0 || idx >= argc)
 			errx(1, "index out of range");
 
 		memset(&inf, 0, sizeof inf);
 		inf.m = m;
-		inf.msg = msg;
+		inf.msg = &msg;
 
 		inf.path = argv[idx];
 		inf.fd = imsg_get_fd(&imsg);

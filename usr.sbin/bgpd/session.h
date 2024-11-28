@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.h,v 1.174 2024/10/01 11:49:24 claudio Exp $ */
+/*	$OpenBSD: session.h,v 1.180 2024/11/21 13:34:30 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -106,12 +106,6 @@ enum opt_params {
 	OPT_PARAM_EXT_LEN=255,
 };
 
-struct bgp_msg {
-	struct ibuf	*buf;
-	enum msg_type	 type;
-	uint16_t	 len;
-};
-
 struct bgpd_sysdep {
 	uint8_t			no_pfkey;
 	uint8_t			no_md5sig;
@@ -212,8 +206,7 @@ struct peer {
 	struct bgpd_addr	 local_alt;
 	struct bgpd_addr	 remote;
 	struct timer_head	 timers;
-	struct msgbuf		 wbuf;
-	struct ibuf_read	*rbuf;
+	struct msgbuf		*wbuf;
 	struct peer		*template;
 	int			 fd;
 	int			 lasterr;
@@ -273,8 +266,8 @@ void	 log_conn_attempt(const struct peer *, struct sockaddr *,
 	    socklen_t);
 
 /* mrt.c */
-void	 mrt_dump_bgp_msg(struct mrt *, void *, uint16_t,
-	    struct peer *, enum msg_type);
+void	 mrt_dump_bgp_msg(struct mrt *, struct ibuf *, struct peer *,
+	    enum msg_type);
 void	 mrt_dump_state(struct mrt *, uint16_t, uint16_t,
 	    struct peer *);
 void	 mrt_done(struct mrt *);
@@ -331,7 +324,7 @@ void	rtr_recalc(void);
 RB_PROTOTYPE(peer_head, peer, entry, peer_compare);
 
 void		 session_main(int, int);
-void		 bgp_fsm(struct peer *, enum session_events);
+void		 bgp_fsm(struct peer *, enum session_events, struct ibuf *);
 int		 session_neighbor_rrefresh(struct peer *p);
 struct peer	*getpeerbydesc(struct bgpd_config *, const char *);
 struct peer	*getpeerbyip(struct bgpd_config *, struct sockaddr *);

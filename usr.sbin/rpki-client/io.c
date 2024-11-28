@@ -1,4 +1,4 @@
-/*	$OpenBSD: io.c,v 1.25 2024/08/28 09:39:17 tb Exp $ */
+/*	$OpenBSD: io.c,v 1.27 2024/11/26 13:59:09 claudio Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -30,6 +30,8 @@
 
 #include "extern.h"
 
+#define IO_FD_MARK	0x80000000U
+
 /*
  * Create new io buffer, call io_close() when done with it.
  * Function always returns a new buffer.
@@ -39,7 +41,7 @@ io_new_buffer(void)
 {
 	struct ibuf *b;
 
-	if ((b = ibuf_dynamic(64, INT32_MAX)) == NULL)
+	if ((b = ibuf_dynamic(64, MAX_MSG_SIZE)) == NULL)
 		err(1, NULL);
 	ibuf_add_zero(b, sizeof(size_t));	/* can not fail */
 	return b;
@@ -87,7 +89,9 @@ io_close_buffer(struct msgbuf *msgbuf, struct ibuf *b)
 {
 	size_t len;
 
-	len = ibuf_size(b) - sizeof(len);
+	len = ibuf_size(b);
+	if (ibuf_fd_avail(b))
+		len |= IO_FD_MARK;
 	ibuf_set(b, 0, &len, sizeof(len));
 	ibuf_close(msgbuf, b);
 }
@@ -144,164 +148,41 @@ io_read_buf_alloc(struct ibuf *b, void **res, size_t *sz)
 	io_read_buf(b, *res, *sz);
 }
 
-/* XXX copy from imsg-buffer.c */
-static int
-ibuf_realloc(struct ibuf *buf, size_t len)
+struct ibuf *
+io_parse_hdr(struct ibuf *buf, void *arg, int *fd)
 {
-	unsigned char	*b;
+	struct ibuf *b;
+	size_t len;
+	int hasfd = 0;
 
-	/* on static buffers max is eq size and so the following fails */
-	if (len > SIZE_MAX - buf->wpos || buf->wpos + len > buf->max) {
+	if (ibuf_get(buf, &len, sizeof(len)) == -1)
+		return NULL;
+
+	if (len & IO_FD_MARK) {
+		hasfd = 1;
+		len &= ~IO_FD_MARK;
+	}
+	if (len <= sizeof(len) || len > MAX_MSG_SIZE) {
 		errno = ERANGE;
-		return (-1);
+		return NULL;
 	}
-
-	b = realloc(buf->buf, buf->wpos + len);
-	if (b == NULL)
-		return (-1);
-	memset(b + buf->size, 0, buf->wpos + len - buf->size);
-	buf->buf = b;
-	buf->size = buf->wpos + len;
-
-	return (0);
+	if ((b = ibuf_open(len)) == NULL)
+		return NULL;
+	if (hasfd) {
+		ibuf_fd_set(b, *fd);
+		*fd = -1;
+	}
+	return b;
 }
 
-/*
- * Read once and fill a ibuf until it is finished.
- * Returns NULL if more data is needed, returns a full ibuf once
- * all data is received.
- */
 struct ibuf *
-io_buf_read(int fd, struct ibuf **ib)
+io_buf_get(struct msgbuf *msgq)
 {
-	struct ibuf *b = *ib;
-	ssize_t n;
-	size_t sz;
+	struct ibuf *b;
 
-	/* if ibuf == NULL allocate a new buffer */
-	if (b == NULL) {
-		if ((b = ibuf_dynamic(sizeof(sz), INT32_MAX)) == NULL)
-			err(1, NULL);
-		*ib = b;
-	}
+	if ((b = msgbuf_get(msgq)) == NULL)
+		return NULL;
 
- again:
-	/* read some data */
-	while ((n = read(fd, b->buf + b->wpos, b->size - b->wpos)) == -1) {
-		if (errno == EINTR)
-			continue;
-		if (errno == EAGAIN)
-			return NULL;
-		err(1, "read");
-	}
-
-	if (n == 0)
-		errx(1, "read: unexpected end of file");
-	b->wpos += n;
-
-	/* got full message */
-	if (b->wpos == b->size) {
-		/* only header received */
-		if (b->wpos == sizeof(sz)) {
-			memcpy(&sz, b->buf, sizeof(sz));
-			if (sz == 0 || sz > INT32_MAX)
-				errx(1, "bad internal framing, bad size");
-			if (ibuf_realloc(b, sz) == -1)
-				err(1, "ibuf_realloc");
-			goto again;
-		}
-
-		/* skip over initial size header */
-		b->rpos += sizeof(sz);
-		*ib = NULL;
-		return b;
-	}
-
-	return NULL;
-}
-
-/*
- * Read data from socket but receive a file descriptor at the same time.
- */
-struct ibuf *
-io_buf_recvfd(int fd, struct ibuf **ib)
-{
-	struct ibuf *b = *ib;
-	struct iovec iov;
-	struct msghdr msg;
-	struct cmsghdr *cmsg;
-	union {
-		struct cmsghdr	hdr;
-		char		buf[CMSG_SPACE(sizeof(int))];
-	} cmsgbuf;
-	ssize_t n;
-	size_t sz;
-
-	/* fd are only passed on the head, just use regular read afterwards */
-	if (b != NULL)
-		return io_buf_read(fd, ib);
-
-	if ((b = ibuf_dynamic(sizeof(sz), INT32_MAX)) == NULL)
-		err(1, NULL);
-	*ib = b;
-
-	memset(&msg, 0, sizeof(msg));
-	memset(&cmsgbuf, 0, sizeof(cmsgbuf));
-
-	iov.iov_base = b->buf;
-	iov.iov_len = b->size;
-
-	msg.msg_iov = &iov;
-	msg.msg_iovlen = 1;
-	msg.msg_control = &cmsgbuf.buf;
-	msg.msg_controllen = sizeof(cmsgbuf.buf);
-
-	while ((n = recvmsg(fd, &msg, 0)) == -1) {
-		if (errno == EINTR)
-			continue;
-		err(1, "recvmsg");
-	}
-
-	if (n == 0)
-		errx(1, "recvmsg: unexpected end of file");
-
-	for (cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL;
-	    cmsg = CMSG_NXTHDR(&msg, cmsg)) {
-		if (cmsg->cmsg_level == SOL_SOCKET &&
-		    cmsg->cmsg_type == SCM_RIGHTS) {
-			int i, j, f;
-
-			j = ((char *)cmsg + cmsg->cmsg_len -
-			    (char *)CMSG_DATA(cmsg)) / sizeof(int);
-			for (i = 0; i < j; i++) {
-				f = ((int *)CMSG_DATA(cmsg))[i];
-				if (i == 0)
-					ibuf_fd_set(b, f);
-				else
-					close(f);
-			}
-		}
-	}
-
-	b->wpos += n;
-
-	/* got full message */
-	if (b->wpos == b->size) {
-		/* only header received */
-		if (b->wpos == sizeof(sz)) {
-			memcpy(&sz, b->buf, sizeof(sz));
-			if (sz == 0 || sz > INT32_MAX)
-				errx(1, "read: bad internal framing, %zu", sz);
-			if (ibuf_realloc(b, sz) == -1)
-				err(1, "ibuf_realloc");
-			return NULL;
-		}
-
-		/* skip over initial size header */
-		b->rpos += sizeof(sz);
-		*ib = NULL;
-		return b;
-	}
-
-	return NULL;
+	ibuf_skip(b, sizeof(size_t));
+	return b;
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: control.c,v 1.8 2023/03/08 04:43:14 guenther Exp $	*/
+/*	$OpenBSD: control.c,v 1.15 2024/11/21 13:43:10 claudio Exp $	*/
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -181,13 +181,20 @@ control_accept(int listenfd, short event, void *arg)
 		return;
 	}
 	if ((c->ctx = npppd_ctl_create(cs->cs_ctx)) == NULL) {
-		free(c);
 		log_warn("control_accept");
 		close(connfd);
+		free(c);
 		return;
 	}
 
-	imsg_init(&c->iev.ibuf, connfd);
+	if (imsgbuf_init(&c->iev.ibuf, connfd) == -1) {
+		log_warn("control_accept");
+		close(connfd);
+		free(c->ctx);
+		free(c);
+		return;
+	}
+
 	c->iev.handler = control_dispatch_imsg;
 	c->iev.events = EV_READ;
 	c->iev.data = cs;
@@ -221,7 +228,7 @@ control_close(int fd, struct control_sock *cs)
 		return;
 	}
 
-	msgbuf_clear(&c->iev.ibuf.w);
+	imsgbuf_clear(&c->iev.ibuf);
 	TAILQ_REMOVE(&ctl_conns, c, entry);
 
 	event_del(&c->iev.ev);
@@ -252,19 +259,18 @@ control_dispatch_imsg(int fd, short event, void *arg)
 
 
 	if (event & EV_WRITE) {
-		if (msgbuf_write(&c->iev.ibuf.w) <= 0 && errno != EAGAIN) {
+		if (imsgbuf_write(&c->iev.ibuf) == -1) {
 			control_close(fd, cs);
 			return;
 		}
-		if (!c->iev.ibuf.w.queued)
+		if (imsgbuf_queuelen(&c->iev.ibuf) > 0)
 			npppd_ctl_imsg_compose(c->ctx, &c->iev.ibuf);
 		imsg_event_add(&c->iev);
 		if (!(event & EV_READ))
 			return;
 	}
 	if (event & EV_READ) {
-		if (((n = imsg_read(&c->iev.ibuf)) == -1 && errno != EAGAIN) ||
-		    n == 0) {
+		if (imsgbuf_read(&c->iev.ibuf) != 1) {
 			control_close(fd, cs);
 			return;
 		}
@@ -330,7 +336,7 @@ control_dispatch_imsg(int fd, short event, void *arg)
 		}
 		imsg_free(&imsg);
 	}
-	if (!c->iev.ibuf.w.queued)
+	if (imsgbuf_queuelen(&c->iev.ibuf) > 0)
 		npppd_ctl_imsg_compose(c->ctx, &c->iev.ibuf);
 	imsg_event_add(&c->iev);
 }

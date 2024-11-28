@@ -1,5 +1,5 @@
 #!/bin/ksh
-#	$OpenBSD: fw_update.sh,v 1.59 2024/11/04 01:24:00 afresh1 Exp $
+#	$OpenBSD: fw_update.sh,v 1.62 2024/11/24 21:27:04 afresh1 Exp $
 #
 # Copyright (c) 2021,2023 Andrew Hewus Fresh <afresh1@openbsd.org>
 #
@@ -245,7 +245,7 @@ verify_existing() {
 	( VERBOSE=$_v verify "$@" )
 }
 
-firmware_in_dmesg() {
+devices_in_dmesg() {
 	local IFS
 	local _d _m _dmesgtail _last='' _nl='
 '
@@ -360,7 +360,7 @@ detect_firmware() {
 	local _devices _last='' _d
 
 	set -sA _devices -- $(
-	    firmware_in_dmesg
+	    devices_in_dmesg
 	    for _d in $( installed_firmware '*' '-firmware-' '*' ); do
 		firmware_devicename "$_d"
 	    done
@@ -490,18 +490,19 @@ unregister_firmware() {
 }
 
 usage() {
-	echo "usage: ${0##*/} [-adFnv] [-p path] [driver | file ...]"
+	echo "usage: ${0##*/} [-adFlnv] [-p path] [driver | file ...]"
 	exit 1
 }
 
 ALL=false
-DOWNLOAD_ONLY=false
-while getopts :adFnp:v name
+LIST=false
+while getopts :adFlnp:v name
 do
 	case "$name" in
 	a) ALL=true ;;
 	d) DELETE=true ;;
-	F) DOWNLOAD_ONLY=true ;;
+	F) INSTALL=false ;;
+	l) LIST=true ;;
 	n) DRYRUN=true ;;
 	p) FWURL="$OPTARG" ;;
 	v) ((++VERBOSE)) ;;
@@ -517,6 +518,9 @@ do
 done
 shift $((OPTIND - 1))
 
+# When listing, provide a clean output
+"$LIST" && VERBOSE=1 ENABLE_SPINNER=false
+
 # Progress bars, not spinner When VERBOSE > 1
 ((VERBOSE > 1)) && ENABLE_SPINNER=false
 
@@ -525,19 +529,12 @@ if [[ $FWURL != @(ftp|http?(s))://* ]]; then
 	! [ -d "$FWURL" ] &&
 	    warn "The path must be a URL or an existing directory" &&
 	    exit 1
+	DOWNLOAD=false
 	FWURL="file:$FWURL"
 fi
 
-# "Download only" means local dir and don't install
-if "$DOWNLOAD_ONLY"; then
-	INSTALL=false
-	LOCALSRC="${LOCALSRC:-.}"
-elif [ "$LOCALSRC" ]; then
-	DOWNLOAD=false
-fi
-
 if [ -x /usr/bin/id ] && [ "$(/usr/bin/id -u)" != 0 ]; then
-	if "$DOWNLOAD_ONLY"; then
+	if ! "$INSTALL" || "$LIST"; then
 		# When we aren't in the installer,
 		# allow downloading as the current user.
 		DROP_PRIVS=false
@@ -564,7 +561,7 @@ WARN_FD=4
 status "${0##*/}:"
 
 if "$DELETE"; then
-	"$DOWNLOAD_ONLY" && warn "Cannot use -F and -d" && usage
+	! "$INSTALL" && warn "Cannot use -F and -d" && usage
 	lock_db
 
 	# Show the "Uninstall" message when just deleting not upgrading
@@ -591,6 +588,17 @@ if "$DELETE"; then
 		)
 	elif "$ALL"; then
 		set -A installed -- $( installed_firmware '*' '-firmware-' '*' )
+	else
+		set -A installed -- $(
+		    set -- $( devices_in_dmesg )
+		    for f in $( installed_firmware '*' -firmware- '*' ); do
+		        n="$( firmware_devicename "$f" )"
+		        for d; do
+		            [ "$d" = "$n" ] && continue 2
+		        done
+		        echo "$f"
+		    done
+		)
 	fi
 
 	status " delete "
@@ -602,6 +610,8 @@ if "$DELETE"; then
 			comma=,
 			if "$DRYRUN"; then
 				((VERBOSE)) && echo "Delete $fw"
+			elif "$LIST"; then
+				echo "$fw"
 			else
 				delete_firmware "$fw" || {
 					status " ($fw failed)"
@@ -613,8 +623,13 @@ if "$DELETE"; then
 
 	[ "$comma" ] || status none
 
+	# no status when listing
+	"$LIST" && rm -f "$FD_DIR/status"
+
 	exit
 fi
+
+! "$INSTALL" && ! "$LIST" && LOCALSRC="${LOCALSRC:-.}"
 
 if [ ! "$LOCALSRC" ]; then
 	LOCALSRC="$( tmpdir "${DESTDIR}/tmp/${0##*/}" )"
@@ -640,10 +655,18 @@ set -A update ''
 kept=''
 unregister=''
 
+"$LIST" && ! "$INSTALL" &&
+    echo "$FWURL/${CFILE##*/}"
+
 if [ "${devices[*]:-}" ]; then
 	lock_db
 	for f in "${devices[@]}"; do
 		d="$( firmware_devicename "$f" )"
+
+		if "$LIST" && "$INSTALL"; then
+			echo "$d"
+			continue
+		fi
 
 		verify_existing=true
 		if [ "$f" = "$d" ]; then
@@ -673,6 +696,11 @@ if [ "${devices[*]:-}" ]; then
 		else
 			# Don't verify files specified on the command-line
 			verify_existing=false
+		fi
+
+		if "$LIST"; then
+			echo "$FWURL/$f"
+			continue
 		fi
 
 		set -A installed
@@ -730,6 +758,12 @@ if [ "${devices[*]:-}" ]; then
 		fi
 
 	done
+fi
+
+if "$LIST"; then
+	# No status when listing
+	rm -f "$FD_DIR/status"
+	exit
 fi
 
 if "$INSTALL"; then

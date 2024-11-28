@@ -1,4 +1,4 @@
-/*	$OpenBSD: npppctl.c,v 1.11 2023/02/21 15:45:40 mbuhl Exp $	*/
+/*	$OpenBSD: npppctl.c,v 1.15 2024/11/21 13:43:10 claudio Exp $	*/
 
 /*
  * Copyright (c) 2012 Internet Initiative Japan Inc.
@@ -108,7 +108,8 @@ main(int argc, char *argv[])
 	if (connect(ctlsock, (struct sockaddr *)&sun, sizeof(sun)) == -1)
 		err(EXIT_FAILURE, "connect");
 
-	imsg_init(&ctl_ibuf, ctlsock);
+	if (imsgbuf_init(&ctl_ibuf, ctlsock) == -1)
+		err(EXIT_FAILURE, "imsgbuf_init");
 
 	switch (result->action) {
 	case SESSION_BRIEF:
@@ -509,16 +510,14 @@ imsg_wait_command_completion(void)
 {
 	int  n;
 
-	while (ctl_ibuf.w.queued)
-		if (msgbuf_write(&ctl_ibuf.w) <= 0 && errno != EAGAIN)
-			return (-1);
+	if (imsgbuf_flush(&ctl_ibuf) == -1)
+		return (-1);
 	do {
 		if ((n = imsg_get(&ctl_ibuf, &ctl_imsg)) == -1)
 			return (-1);
 		if (n != 0)
 			break;
-		if (((n = imsg_read(&ctl_ibuf)) == -1 && errno != EAGAIN) ||
-		    n == 0)
+		if (imsgbuf_read(&ctl_ibuf) != 1)
 			return (-1);
 	} while (1);
 

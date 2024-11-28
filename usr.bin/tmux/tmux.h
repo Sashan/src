@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.1238 2024/11/05 09:41:17 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.1246 2024/11/25 08:34:01 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -169,19 +169,25 @@ struct winlink;
 #define KEYC_CLICK_TIMEOUT 300
 
 /* Mouse key codes. */
-#define KEYC_MOUSE_KEY(name)					\
-	KEYC_ ## name ## _PANE,					\
-	KEYC_ ## name ## _STATUS,				\
-	KEYC_ ## name ## _STATUS_LEFT,				\
-	KEYC_ ## name ## _STATUS_RIGHT,				\
-	KEYC_ ## name ## _STATUS_DEFAULT,			\
+#define KEYC_MOUSE_KEY(name)		    \
+	KEYC_ ## name ## _PANE,		    \
+	KEYC_ ## name ## _STATUS,	    \
+	KEYC_ ## name ## _STATUS_LEFT,	    \
+	KEYC_ ## name ## _STATUS_RIGHT,	    \
+	KEYC_ ## name ## _STATUS_DEFAULT,   \
+	KEYC_ ## name ## _SCROLLBAR_UP,	    \
+	KEYC_ ## name ## _SCROLLBAR_SLIDER, \
+	KEYC_ ## name ## _SCROLLBAR_DOWN,   \
 	KEYC_ ## name ## _BORDER
-#define KEYC_MOUSE_STRING(name, s)				\
-	{ #s "Pane", KEYC_ ## name ## _PANE },			\
-	{ #s "Status", KEYC_ ## name ## _STATUS },		\
-	{ #s "StatusLeft", KEYC_ ## name ## _STATUS_LEFT },	\
-	{ #s "StatusRight", KEYC_ ## name ## _STATUS_RIGHT },	\
-	{ #s "StatusDefault", KEYC_ ## name ## _STATUS_DEFAULT }, \
+#define KEYC_MOUSE_STRING(name, s)				      \
+	{ #s "Pane", KEYC_ ## name ## _PANE },			      \
+	{ #s "Status", KEYC_ ## name ## _STATUS },		      \
+	{ #s "StatusLeft", KEYC_ ## name ## _STATUS_LEFT },	      \
+	{ #s "StatusRight", KEYC_ ## name ## _STATUS_RIGHT },	      \
+	{ #s "StatusDefault", KEYC_ ## name ## _STATUS_DEFAULT },     \
+	{ #s "ScrollbarUp", KEYC_ ## name ## _SCROLLBAR_UP },         \
+	{ #s "ScrollbarSlider", KEYC_ ## name ## _SCROLLBAR_SLIDER }, \
+	{ #s "ScrollbarDown", KEYC_ ## name ## _SCROLLBAR_DOWN },     \
 	{ #s "Border", KEYC_ ## name ## _BORDER }
 
 /*
@@ -599,7 +605,7 @@ enum tty_code_code {
 };
 
 /* Character classes. */
-#define WHITESPACE " "
+#define WHITESPACE "\t "
 
 /* Mode keys. */
 #define MODEKEY_EMACS 0
@@ -857,6 +863,10 @@ struct style_range {
 };
 TAILQ_HEAD(style_ranges, style_range);
 
+/* Default style width and pad. */
+#define STYLE_WIDTH_DEFAULT -1
+#define STYLE_PAD_DEFAULT -1
+
 /* Style default. */
 enum style_default_type {
 	STYLE_DEFAULT_BASE,
@@ -876,6 +886,9 @@ struct style {
 	enum style_range_type	range_type;
 	u_int			range_argument;
 	char			range_string[16];
+
+	int			width;
+	int			pad;
 
 	enum style_default_type	default_type;
 };
@@ -1109,6 +1122,9 @@ struct window_pane {
 #define PANE_UNSEENCHANGES 0x2000
 #define PANE_REDRAWSCROLLBAR 0x4000
 
+	u_int		 sb_slider_y;
+	u_int		 sb_slider_h;
+
 	int		 argc;
 	char	       **argv;
 	char		*shell;
@@ -1154,6 +1170,8 @@ struct window_pane {
 
 	int		 control_bg;
 	int		 control_fg;
+
+	struct style	 scrollbar_style;
 
 	TAILQ_ENTRY(window_pane) entry;  /* link in list of all panes */
 	TAILQ_ENTRY(window_pane) sentry; /* link in list of last visited */
@@ -1259,9 +1277,13 @@ TAILQ_HEAD(winlink_stack, winlink);
 #define PANE_SCROLLBARS_RIGHT 0
 #define PANE_SCROLLBARS_LEFT 1
 
-/* Pane scrollbars width and padding. */
-#define PANE_SCROLLBARS_WIDTH 1
-#define PANE_SCROLLBARS_PADDING 0
+/* Pane scrollbars width, padding and fill character. */
+#define PANE_SCROLLBARS_DEFAULT_PADDING 0
+#define PANE_SCROLLBARS_DEFAULT_WIDTH 1
+#define PANE_SCROLLBARS_CHARACTER ' '
+
+/* True if screen in alternate screen. */
+#define SCREEN_IS_ALTERNATE(s) ((s)->saved_grid != NULL)
 
 /* Layout direction. */
 enum layout_type {
@@ -1509,6 +1531,9 @@ struct tty {
 	u_int		 mouse_last_y;
 	u_int		 mouse_last_b;
 	int		 mouse_drag_flag;
+	int		 mouse_scrolling_flag;
+	int		 mouse_slider_mpos;
+
 	void		(*mouse_drag_update)(struct client *,
 			    struct mouse_event *);
 	void		(*mouse_drag_release)(struct client *,
@@ -1899,6 +1924,7 @@ struct client {
 #define CLIENT_BRACKETPASTING 0x1000000000ULL
 #define CLIENT_ASSUMEPASTING 0x2000000000ULL
 #define CLIENT_REDRAWSCROLLBARS 0x4000000000ULL
+#define CLIENT_NO_DETACH_ON_DESTROY 0x8000000000ULL
 #define CLIENT_ALLREDRAWFLAGS		\
 	(CLIENT_REDRAWWINDOW|		\
 	 CLIENT_REDRAWSTATUS|		\
@@ -2656,7 +2682,7 @@ u_int		 cmdq_next(struct client *);
 struct cmdq_item *cmdq_running(struct client *);
 void		 cmdq_guard(struct cmdq_item *, const char *, int);
 void printflike(2, 3) cmdq_print(struct cmdq_item *, const char *, ...);
-void 		 cmdq_print_data(struct cmdq_item *, int, struct evbuffer *);
+void 		 cmdq_print_data(struct cmdq_item *, struct evbuffer *);
 void printflike(2, 3) cmdq_error(struct cmdq_item *, const char *, ...);
 
 /* cmd-wait-for.c */
@@ -2840,6 +2866,7 @@ void	 recalculate_sizes(void);
 void	 recalculate_sizes_now(int);
 
 /* input.c */
+#define INPUT_BUF_DEFAULT_SIZE 1048576
 struct input_ctx *input_init(struct window_pane *, struct bufferevent *,
 	     struct colour_palette *);
 void	 input_free(struct input_ctx *);
@@ -2851,6 +2878,7 @@ void	 input_parse_screen(struct input_ctx *, struct screen *,
 	     screen_write_init_ctx_cb, void *, u_char *, size_t);
 void	 input_reply_clipboard(struct bufferevent *, const char *, size_t,
 	     const char *);
+void	 input_set_buffer_size(size_t);
 
 /* input-key.c */
 void	 input_key_build(void);
@@ -2916,6 +2944,7 @@ void	 grid_reflow(struct grid *, u_int);
 void	 grid_wrap_position(struct grid *, u_int, u_int, u_int *, u_int *);
 void	 grid_unwrap_position(struct grid *, u_int *, u_int *, u_int, u_int);
 u_int	 grid_line_length(struct grid *, u_int);
+int	 grid_in_set(struct grid *, u_int, u_int, const char *);
 
 /* grid-reader.c */
 void	 grid_reader_start(struct grid_reader *, struct grid *, u_int, u_int);
@@ -3159,6 +3188,7 @@ void		 window_pane_update_used_data(struct window_pane *,
 void		 window_set_fill_character(struct window *);
 void		 window_pane_default_cursor(struct window_pane *);
 int		 window_pane_mode(struct window_pane *);
+int		 window_pane_show_scrollbar(struct window_pane *, int);
 
 /* layout.c */
 u_int		 layout_count_cells(struct layout_cell *);
@@ -3264,6 +3294,7 @@ void printflike(3, 4) window_copy_add(struct window_pane *, int, const char *,
 		     ...);
 void printflike(3, 0) window_copy_vadd(struct window_pane *, int, const char *,
 		     va_list);
+void		 window_copy_scroll(struct window_pane *, int, u_int, int);
 void		 window_copy_pageup(struct window_pane *, int);
 void		 window_copy_pagedown(struct window_pane *, int, int);
 void		 window_copy_start_drag(struct client *, struct mouse_event *);
@@ -3317,9 +3348,12 @@ void	control_notify_paste_buffer_deleted(const char *);
 
 /* session.c */
 extern struct sessions sessions;
+extern struct session_groups session_groups;
 extern u_int next_session_id;
 int	session_cmp(struct session *, struct session *);
 RB_PROTOTYPE(sessions, session, entry, session_cmp);
+int	session_group_cmp(struct session_group *, struct session_group *s2);
+RB_PROTOTYPE(session_groups, session_group, entry, session_group_cmp);
 int		 session_alive(struct session *);
 struct session	*session_find(const char *);
 struct session	*session_find_by_id_str(const char *);
@@ -3450,6 +3484,8 @@ void		 style_apply(struct grid_cell *, struct options *,
 		     const char *, struct format_tree *);
 void		 style_set(struct style *, const struct grid_cell *);
 void		 style_copy(struct style *, struct style *);
+void		 style_set_scrollbar_style_from_option(struct style *,
+		     struct options *);
 
 /* spawn.c */
 struct winlink	*spawn_window(struct spawn_context *, char **);

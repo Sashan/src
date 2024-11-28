@@ -1,4 +1,4 @@
-/* $OpenBSD: screen-redraw.c,v 1.100 2024/11/05 09:41:17 nicm Exp $ */
+/* $OpenBSD: screen-redraw.c,v 1.103 2024/11/15 13:12:20 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -137,10 +137,8 @@ screen_redraw_pane_border(struct screen_redraw_ctx *ctx, struct window_pane *wp,
 	}
 
 	/* Are scrollbars enabled? */
-	if (pane_scrollbars == PANE_SCROLLBARS_ALWAYS ||
-	    (pane_scrollbars == PANE_SCROLLBARS_MODAL &&
-	     window_pane_mode(wp) != WINDOW_PANE_NO_MODE))
-		sb_w = PANE_SCROLLBARS_WIDTH;
+	if (window_pane_show_scrollbar(wp, pane_scrollbars))
+		sb_w = wp->scrollbar_style.width + wp->scrollbar_style.pad;
 
 	/*
 	 * Left/right borders. The wp->sy / 2 test is to colour only half the
@@ -173,7 +171,7 @@ screen_redraw_pane_border(struct screen_redraw_ctx *ctx, struct window_pane *wp,
 	} else {
 		if (sb_pos == PANE_SCROLLBARS_LEFT) {
 			if ((wp->xoff - sb_w == 0 || px >= wp->xoff - sb_w) &&
-			    (px <= ex || (sb_w != 0 && px - 1 == ex))) {
+			    (px <= ex || (sb_w != 0 && px < ex + sb_w))) {
 				if (wp->yoff != 0 && py == wp->yoff - 1)
 					return (SCREEN_REDRAW_BORDER_TOP);
 				if (py == ey)
@@ -181,7 +179,7 @@ screen_redraw_pane_border(struct screen_redraw_ctx *ctx, struct window_pane *wp,
 			}
 		} else { /* sb_pos == PANE_SCROLLBARS_RIGHT */
 			if ((wp->xoff == 0 || px >= wp->xoff) &&
-			    (px <= ex || (sb_w != 0 && px - 1 == ex))) {
+			    (px <= ex || (sb_w != 0 && px < ex + sb_w))) {
 				if (wp->yoff != 0 && py == wp->yoff - 1)
 					return (SCREEN_REDRAW_BORDER_TOP);
 				if (py == ey)
@@ -326,7 +324,7 @@ screen_redraw_check_cell(struct screen_redraw_ctx *ctx, u_int px, u_int py,
 	int			 border, pane_scrollbars = ctx->pane_scrollbars;
 	u_int			 right, line;
 	int			 sb_pos = ctx->pane_scrollbars_pos;
-	int			 sb_w = PANE_SCROLLBARS_WIDTH;
+	int			 sb_w;
 
 	*wpp = NULL;
 
@@ -364,9 +362,7 @@ screen_redraw_check_cell(struct screen_redraw_ctx *ctx, u_int px, u_int py,
 		*wpp = wp;
 
 		/* Check if CELL_SCROLLBAR */
-		if (pane_scrollbars == PANE_SCROLLBARS_ALWAYS ||
-		    (pane_scrollbars == PANE_SCROLLBARS_MODAL &&
-		     window_pane_mode(wp) != WINDOW_PANE_NO_MODE)) {
+		if (window_pane_show_scrollbar(wp, pane_scrollbars)) {
 
 			if (pane_status == PANE_STATUS_TOP)
 				line = wp->yoff - 1;
@@ -378,6 +374,8 @@ screen_redraw_check_cell(struct screen_redraw_ctx *ctx, u_int px, u_int py,
 			 * pane is at the top then py == 0 to sy; if the pane
 			 * is not at the top, then yoff to yoff + sy.
 			 */
+			sb_w = wp->scrollbar_style.width +
+			    wp->scrollbar_style.pad;
 			if ((pane_status && py != line) ||
 			    (wp->yoff == 0 && py < wp->sy) ||
 			     (py >= wp->yoff && py < wp->yoff + wp->sy)) {
@@ -669,11 +667,9 @@ screen_redraw_pane(struct client *c, struct window_pane *wp,
     int redraw_scrollbar_only)
 {
 	struct screen_redraw_ctx	ctx;
-	int				pane_scrollbars, mode;
 
 	if (!window_pane_visible(wp))
 		return;
-	mode = window_pane_mode(wp);
 
 	screen_redraw_set_context(c, &ctx);
 	tty_sync_start(&c->tty);
@@ -682,15 +678,7 @@ screen_redraw_pane(struct client *c, struct window_pane *wp,
 	if (!redraw_scrollbar_only)
 		screen_redraw_draw_pane(&ctx, wp);
 
-	/*
-	 * Redraw scrollbar if needed. Always redraw scrollbar in a mode because
-	 * if redrawing a pane, it's because pane has scrolled.
-	 */
-	pane_scrollbars = ctx.pane_scrollbars;
-	if (pane_scrollbars == PANE_SCROLLBARS_MODAL &&
-	    mode == WINDOW_PANE_NO_MODE)
-		pane_scrollbars = PANE_SCROLLBARS_OFF;
-	if (pane_scrollbars != PANE_SCROLLBARS_OFF)
+	if (window_pane_show_scrollbar(wp, ctx.pane_scrollbars))
 		screen_redraw_draw_pane_scrollbar(&ctx, wp);
 
 	tty_reset(&c->tty);
@@ -943,17 +931,8 @@ screen_redraw_draw_pane_scrollbars(struct screen_redraw_ctx *ctx)
 	log_debug("%s: %s @%u", __func__, c->name, w->id);
 
 	TAILQ_FOREACH(wp, &w->panes, entry) {
-		switch (ctx->pane_scrollbars) {
-		case PANE_SCROLLBARS_OFF:
-			return;
-		case PANE_SCROLLBARS_MODAL:
-			if (window_pane_mode(wp) == WINDOW_PANE_NO_MODE)
-				return;
-			break;
-		case PANE_SCROLLBARS_ALWAYS:
-			break;
-		}
-		if (window_pane_visible(wp))
+		if (window_pane_show_scrollbar(wp, ctx->pane_scrollbars) &&
+		    window_pane_visible(wp))
 			screen_redraw_draw_pane_scrollbar(ctx, wp);
 	}
 }
@@ -967,7 +946,9 @@ screen_redraw_draw_pane_scrollbar(struct screen_redraw_ctx *ctx,
 	double		 percent_view;
 	u_int		 sb = ctx->pane_scrollbars, total_height, sb_h = wp->sy;
 	u_int		 sb_pos = ctx->pane_scrollbars_pos, slider_h, slider_y;
-	u_int		 sb_w = PANE_SCROLLBARS_WIDTH, cm_y, cm_size;
+	int		 sb_w = wp->scrollbar_style.width;
+	int		 sb_pad = wp->scrollbar_style.pad;
+	int		 cm_y, cm_size, xoff = wp->xoff, ox = ctx->ox;
 	int		 sb_x, sb_y = (int)(wp->yoff - ctx->oy); /* sb top */
 
 	if (window_pane_mode(wp) == WINDOW_PANE_NO_MODE) {
@@ -990,9 +971,9 @@ screen_redraw_draw_pane_scrollbar(struct screen_redraw_ctx *ctx,
 	}
 
 	if (sb_pos == PANE_SCROLLBARS_LEFT)
-		sb_x = (int)wp->xoff - sb_w - ctx->ox;
+		sb_x = xoff - sb_w - sb_pad - ox;
 	else
-		sb_x = (int)wp->xoff + wp->sx - ctx->ox;
+		sb_x = xoff + wp->sx - ox;
 
 	if (slider_h < 1)
 		slider_h = 1;
@@ -1001,6 +982,10 @@ screen_redraw_draw_pane_scrollbar(struct screen_redraw_ctx *ctx,
 
 	screen_redraw_draw_scrollbar(ctx, wp, sb_pos, sb_x, sb_y, sb_h,
 	    slider_h, slider_y);
+
+	/* Store current position and height of the slider */
+	wp->sb_slider_y = slider_y;  /* top of slider y pos in scrollbar */
+	wp->sb_slider_h = slider_h;  /* height of slider */
 }
 
 static void
@@ -1009,39 +994,42 @@ screen_redraw_draw_scrollbar(struct screen_redraw_ctx *ctx,
     u_int slider_h, u_int slider_y)
 {
 	struct client		*c = ctx->c;
-	struct window		*w = wp->window;
 	struct tty		*tty = &c->tty;
 	struct grid_cell	 gc, slgc, *gcp;
-	u_int			 i, j, sb_w = PANE_SCROLLBARS_WIDTH;
-	u_int			 pad_col = 0;
+	struct style		*sb_style = &wp->scrollbar_style;
+	u_int			 i, j, imax, jmax;
+	u_int			 sb_w = sb_style->width, sb_pad = sb_style->pad;
 	int			 px, py, ox = ctx->ox, oy = ctx->oy;
-	int                      sb_pad = PANE_SCROLLBARS_PADDING, sx = ctx->sx;
-	int			 sy = ctx->sy, xoff = wp->xoff, yoff = wp->yoff;
-
-	/* Set up default style. */
-	style_apply(&gc, w->options, "pane-scrollbars-style", NULL);
-	utf8_set(&gc.data, ' ');
+	int			 sx = ctx->sx, sy = ctx->sy, xoff = wp->xoff;
+	int			 yoff = wp->yoff;
 
 	/* Set up style for slider. */
+	gc = sb_style->gc;
 	memcpy(&slgc, &gc, sizeof slgc);
+	slgc.fg = gc.bg;
 	slgc.bg = gc.fg;
 
-	if (sb_pad != 0) {
-		if (sb_pos == PANE_SCROLLBARS_RIGHT)
-			pad_col = 0;
-		else
-			pad_col = sb_w - 1;
-	}
+	imax = sb_w + sb_pad;
+	if ((int)imax + sb_x > sx)
+		imax = sx - sb_x;
+	jmax = sb_h;
+	if ((int)jmax + sb_y > sy)
+		jmax = sy - sb_y;
 
-	for (i = 0; i < sb_w; i++) {
-		for (j = 0; j < sb_h; j++) {
+	for (j = 0; j < jmax; j++) {
+		py = sb_y + j;
+		for (i = 0; i < imax; i++) {
 			px = sb_x + i;
-			py = sb_y + j;
-			if (px < xoff - ox - 1 || px >= sx || px < 0 ||
-			    py < yoff - oy - 1 || py >= sy || py < 0)
+			if (px < xoff - ox - (int)sb_w - (int)sb_pad ||
+			    px >= sx || px < 0 ||
+			    py < yoff - oy - 1 ||
+			    py >= sy || py < 0)
 				continue;
 			tty_cursor(tty, px, py);
-			if (sb_pad && i == pad_col) {
+			if ((sb_pos == PANE_SCROLLBARS_LEFT &&
+			    i >= sb_w && i < sb_w + sb_pad) ||
+			    (sb_pos == PANE_SCROLLBARS_RIGHT &&
+			     i < sb_pad)) {
 				tty_cell(tty, &grid_default_cell,
 				    &grid_default_cell, NULL, NULL);
 			} else {

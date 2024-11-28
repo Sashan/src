@@ -1,4 +1,4 @@
-#	$OpenBSD: Makefile,v 1.853 2024/11/05 11:12:48 miod Exp $
+#	$OpenBSD: Makefile,v 1.856 2024/11/26 21:59:29 stsp Exp $
 
 MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	acpi.4 acpiac.4 acpials.4 acpiasus.4 acpibat.4 \
@@ -42,7 +42,7 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	hds.4 hiclock.4 hidwusb.4 hil.4 hilid.4 hilkbd.4 hilms.4 \
 	hireset.4 hitemp.4 hme.4 hotplug.4 hsq.4 \
 	hvn.4 hvs.4 hyperv.4 \
-	iatp.4 iavf.4 icc.4 ichiic.4 ichwdt.4 \
+	iatp.4 iavf.4 icc.4 ice.4 ichiic.4 ichwdt.4 \
 	icmp.4 icmp6.4 icsphy.4 ietp.4 ifmedia.4 \
 	igc.4 iha.4 ihidev.4 iic.4 iicmux.4 ikbd.4 ims.4 imt.4 imxanatop.4 \
 	imxdog.4 imxesdhc.4 imxgpc.4 imxgpio.4 imxiic.4 imxpciephy.4 \
@@ -74,8 +74,8 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	pgt.4 piixpm.4 pijuice.4 pinctrl.4 pipex.4 plgpio.4 plrtc.4 pluart.4 \
 	pms.4 ppb.4 ppp.4 pppoe.4 pppx.4 psci.4 psp.4 pty.4 puc.4 pvbus.4 \
 	pvclock.4 pwdog.4 pwmbl.4 pwmfan.4 pwmleds.4 pwmreg.4 \
-	qccpu.4 qcdwusb.4 qcgpio.4 qciic.4 qcpdc.4 qcpmic.4 qcpmicgpio.4 \
-	qcpon.4 qcpwm.4 qcrng.4 qcrtc.4 qcspmi.4 \
+	qccpu.4 qccpucp.4 qcdwusb.4 qcgpio.4 qciic.4 qcpdc.4 qcpmic.4 \
+	qcpmicgpio.4 qcpon.4 qcpwm.4 qcrng.4 qcrtc.4 qcspmi.4 \
 	qla.4 qle.4 qlw.4 qsphy.4 qwx.4 \
 	radio.4 ral.4 random.4 rdomain.4 rd.4 rdac.4 re.4 rdcphy.4 rgephy.4 \
 	rge.4 ricohrtc.4 rkanxdp.4 rkclock.4 rkcomphy.4 \
@@ -95,7 +95,7 @@ MAN=	aac.4 abcrtc.4 abl.4 ac97.4 acphy.4 acrtc.4 \
 	tascodec.4 tcic.4 tcp.4 tcpci.4 termios.4 tht.4 ti.4 tipd.4 \
 	tipmic.4 titmp.4 tl.4 \
 	tlphy.4 thmc.4 tpm.4 tpmr.4 tqphy.4 trm.4 trunk.4 tsl.4 tty.4 \
-	tun.4 tap.4 twe.4 \
+	tun.4 twe.4 \
 	txp.4 txphy.4 uaudio.4 uaq.4 uark.4 uath.4 ubcmtp.4 uberry.4 ubsa.4 \
 	ucc.4 ucom.4 uchcom.4 ucrcom.4 ucycom.4 ukspan.4 uslhcom.4 \
 	udav.4 udcf.4 udl.4 udp.4 udsbr.4 ufshci.4 \

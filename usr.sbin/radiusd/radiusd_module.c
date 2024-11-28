@@ -1,4 +1,4 @@
-/*	$OpenBSD: radiusd_module.c,v 1.20 2024/09/15 05:14:32 yasuoka Exp $	*/
+/*	$OpenBSD: radiusd_module.c,v 1.26 2024/11/21 13:43:10 claudio Exp $	*/
 
 /*
  * Copyright (c) 2015 YASUOKA Masahiko <yasuoka@yasuoka.net>
@@ -95,7 +95,10 @@ module_create(int sock, void *ctx, struct module_handlers *handler)
 	if ((base = calloc(1, sizeof(struct module_base))) == NULL)
 		return (NULL);
 
-	imsg_init(&base->ibuf, sock);
+	if (imsgbuf_init(&base->ibuf, sock) == -1) {
+		free(base);
+		return (NULL);
+	}
 	base->ctx = ctx;
 
 	module_userpass = handler->userpass;
@@ -134,7 +137,7 @@ module_run(struct module_base *base)
 
 	ret = module_recv_imsg(base);
 	if (ret == 0)
-		imsg_flush(&base->ibuf);
+		imsgbuf_flush(&base->ibuf);
 
 	return (ret);
 }
@@ -145,7 +148,7 @@ module_destroy(struct module_base *base)
 	if (base != NULL) {
 		free(base->radpkt);
 		free(base->radpkt2);
-		imsg_clear(&base->ibuf);
+		imsgbuf_clear(&base->ibuf);
 	}
 	free(base);
 }
@@ -172,7 +175,7 @@ module_load(struct module_base *base)
 		load.cap |= RADIUSD_MODULE_CAP_CONTROL;
 	imsg_compose(&base->ibuf, IMSG_RADIUSD_MODULE_LOAD, 0, 0, -1, &load,
 	    sizeof(load));
-	imsg_flush(&base->ibuf);
+	imsgbuf_flush(&base->ibuf);
 }
 
 void
@@ -356,9 +359,9 @@ module_recv_imsg(struct module_base *base)
 	ssize_t		 n;
 	struct imsg	 imsg;
 
-	if (((n = imsg_read(&base->ibuf)) == -1 && errno != EAGAIN) || n == 0) {
-		if (n != 0)
-			syslog(LOG_ERR, "%s: imsg_read(): %m", __func__);
+	if ((n = imsgbuf_read(&base->ibuf)) != 1) {
+		if (n == -1)
+			syslog(LOG_ERR, "%s: imsgbuf_read(): %m", __func__);
 		module_stop(base);
 		return (-1);
 	}
@@ -631,27 +634,19 @@ module_on_event(int fd, short evmask, void *ctx)
 	int			 ret;
 
 	base->ev_onhandler = true;
-	if (evmask & EV_WRITE)
+	if (evmask & EV_WRITE) {
 		base->writeready = true;
+		if (imsgbuf_write(&base->ibuf) == -1) {
+			syslog(LOG_ERR, "%s: imsgbuf_write: %m", __func__);
+			module_stop(base);
+			return;
+		}
+		base->writeready = false;
+	}
 	if (evmask & EV_READ) {
 		ret = module_recv_imsg(base);
 		if (ret < 0)
 			return;
-	}
-	while (base->writeready && base->ibuf.w.queued) {
-		ret = msgbuf_write(&base->ibuf.w);
-		if (ret > 0)
-			continue;
-		base->writeready = false;
-		if (ret == -1 && errno == EAGAIN)
-			break;
-		if (ret == 0)
-			syslog(LOG_ERR, "%s: connection is closed", __func__);
-		else
-			syslog(LOG_ERR, "%s: msgbuf_write: %d %m", __func__,
-			    ret);
-		module_stop(base);
-		return;
 	}
 	base->ev_onhandler = false;
 	module_reset_event(base);
@@ -673,7 +668,7 @@ module_reset_event(struct module_base *base)
 	event_del(&base->ev);
 
 	evmask |= EV_READ;
-	if (base->ibuf.w.queued) {
+	if (imsgbuf_queuelen(&base->ibuf) > 0) {
 		if (!base->writeready)
 			evmask |= EV_WRITE;
 		else

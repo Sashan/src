@@ -1,4 +1,4 @@
-/*	$OpenBSD: dvmrpe.c,v 1.24 2024/04/23 13:34:51 jsg Exp $ */
+/*	$OpenBSD: dvmrpe.c,v 1.30 2024/11/21 13:38:14 claudio Exp $ */
 
 /*
  * Copyright (c) 2005 Claudio Jeker <claudio@openbsd.org>
@@ -143,10 +143,12 @@ dvmrpe(struct dvmrpd_conf *xconf, int pipe_parent2dvmrpe[2],
 	if ((iev_rde = malloc(sizeof(struct imsgev))) == NULL ||
 	    (iev_main = malloc(sizeof(struct imsgev))) == NULL)
 		fatal(NULL);
-	imsg_init(&iev_rde->ibuf, pipe_dvmrpe2rde[0]);
+	if (imsgbuf_init(&iev_rde->ibuf, pipe_dvmrpe2rde[0]) == -1)
+		fatal(NULL);
 	iev_rde->handler = dvmrpe_dispatch_rde;
 
-	imsg_init(&iev_main->ibuf, pipe_parent2dvmrpe[1]);
+	if (imsgbuf_init(&iev_main->ibuf, pipe_parent2dvmrpe[1]) == -1)
+		fatal(NULL);
 	iev_main->handler = dvmrpe_dispatch_main;
 
 	/* setup event handler */
@@ -191,11 +193,11 @@ dvmrpe_shutdown(void)
 	struct iface	*iface;
 
 	/* close pipes */
-	msgbuf_write(&iev_rde->ibuf.w);
-	msgbuf_clear(&iev_rde->ibuf.w);
+	imsgbuf_write(&iev_rde->ibuf);
+	imsgbuf_clear(&iev_rde->ibuf);
 	close(iev_rde->ibuf.fd);
-	msgbuf_write(&iev_main->ibuf.w);
-	msgbuf_clear(&iev_main->ibuf.w);
+	imsgbuf_write(&iev_main->ibuf);
+	imsgbuf_clear(&iev_main->ibuf);
 	close(iev_main->ibuf.fd);
 
 	/* stop all interfaces and delete them */
@@ -241,21 +243,23 @@ dvmrpe_dispatch_main(int fd, short event, void *bula)
 	int		 shut = 0, link_ok;
 
 	if (event & EV_READ) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			fatal("imsg_read error");
+		if ((n = imsgbuf_read(ibuf)) == -1)
+			fatal("imsgbuf_read error");
 		if (n == 0)	/* connection closed */
 			shut = 1;
 	}
 	if (event & EV_WRITE) {
-		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
-			fatal("msgbuf_write");
-		if (n == 0)	/* connection closed */
-			shut = 1;
+		if (imsgbuf_write(ibuf) == -1) {
+			if (errno == EPIPE)	/* connection closed */
+				shut = 1;
+			else
+				fatal("imsgbuf_write");
+		}
 	}
 
 	for (;;) {
 		if ((n = imsg_get(ibuf, &imsg)) == -1)
-			fatal("dvmrpe_dispatch_main: imsg_read error");
+			fatal("dvmrpe_dispatch_main: imsg_get error");
 		if (n == 0)
 			break;
 
@@ -315,21 +319,23 @@ dvmrpe_dispatch_rde(int fd, short event, void *bula)
 	int			 shut = 0;
 
 	if (event & EV_READ) {
-		if ((n = imsg_read(ibuf)) == -1 && errno != EAGAIN)
-			fatal("imsg_read error");
+		if ((n = imsgbuf_read(ibuf)) == -1)
+			fatal("imsgbuf_read error");
 		if (n == 0)	/* connection closed */
 			shut = 1;
 	}
 	if (event & EV_WRITE) {
-		if ((n = msgbuf_write(&ibuf->w)) == -1 && errno != EAGAIN)
-			fatal("msgbuf_write");
-		if (n == 0)	/* connection closed */
-			shut = 1;
+		if (imsgbuf_write(ibuf) == -1) {
+			if (errno == EPIPE)	/* connection closed */
+				shut = 1;
+			else
+				fatal("imsgbuf_write");
+		}
 	}
 
 	for (;;) {
 		if ((n = imsg_get(ibuf, &imsg)) == -1)
-			fatal("dvmrpe_dispatch_rde: imsg_read error");
+			fatal("dvmrpe_dispatch_rde: imsgbuf_get error");
 		if (n == 0)
 			break;
 

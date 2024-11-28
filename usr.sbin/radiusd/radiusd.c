@@ -1,4 +1,4 @@
-/*	$OpenBSD: radiusd.c,v 1.55 2024/08/14 07:06:50 yasuoka Exp $	*/
+/*	$OpenBSD: radiusd.c,v 1.61 2024/11/21 13:43:10 claudio Exp $	*/
 
 /*
  * Copyright (c) 2013, 2023 Internet Initiative Japan Inc.
@@ -1200,7 +1200,10 @@ radiusd_module_load(struct radiusd *radiusd, const char *path, const char *name)
 	}
 	strlcpy(module->name, name, sizeof(module->name));
 	module->pid = pid;
-	imsg_init(&module->ibuf, module->fd);
+	if (imsgbuf_init(&module->ibuf, module->fd) == -1) {
+		log_warn("Could not load module `%s': imsgbuf_init", name);
+		goto on_error;
+	}
 
 	if (imsg_sync_read(&module->ibuf, MODULE_IO_TIMEOUT) <= 0 ||
 	    (n = imsg_get(&module->ibuf, &imsg)) <= 0) {
@@ -1301,7 +1304,7 @@ radiusd_module_close(struct radiusd_module *module)
 {
 	if (module->fd >= 0) {
 		event_del(&module->ev);
-		imsg_clear(&module->ibuf);
+		imsgbuf_clear(&module->ibuf);
 		close(module->fd);
 		module->fd = -1;
 	}
@@ -1319,27 +1322,22 @@ static void
 radiusd_module_on_imsg_io(int fd, short evmask, void *ctx)
 {
 	struct radiusd_module	*module = ctx;
-	int			 ret;
 
-	if (evmask & EV_WRITE)
+	if (evmask & EV_WRITE) {
 		module->writeready = true;
+		if (imsgbuf_write(&module->ibuf) == -1) {
+			log_warn("Failed to write to module `%s': "
+			    "imsgbuf_write()", module->name);
+			goto on_error;
+		}
+		module->writeready = false;
+	}
 
 	if (evmask & EV_READ) {
 		if (radiusd_module_imsg_read(module) == -1)
 			goto on_error;
 	}
 
-	while (module->writeready && module->ibuf.w.queued) {
-		ret = msgbuf_write(&module->ibuf.w);
-		if (ret > 0)
-			continue;
-		module->writeready = false;
-		if (ret == 0 && errno == EAGAIN)
-			break;
-		log_warn("Failed to write to module `%s': msgbuf_write()",
-		    module->name);
-		goto on_error;
-	}
 	radiusd_module_reset_ev_handler(module);
 
 	return;
@@ -1357,7 +1355,7 @@ radiusd_module_reset_ev_handler(struct radiusd_module *module)
 	event_del(&module->ev);
 
 	evmask = EV_READ;
-	if (module->ibuf.w.queued) {
+	if (imsgbuf_queuelen(&module->ibuf) > 0) {
 		if (!module->writeready)
 			evmask |= EV_WRITE;
 		else
@@ -1386,12 +1384,10 @@ radiusd_module_imsg_read(struct radiusd_module *module)
 	int		 n;
 	struct imsg	 imsg;
 
-	if ((n = imsg_read(&module->ibuf)) == -1 || n == 0) {
-		if (n == -1 && errno == EAGAIN)
-			return (0);
+	if ((n = imsgbuf_read(&module->ibuf)) != 1) {
 		if (n == -1)
 			log_warn("Receiving a message from module `%s' "
-			    "failed: imsg_read", module->name);
+			    "failed: imsgbuf_read", module->name);
 		/* else closed */
 		radiusd_module_close(module);
 		return (-1);
@@ -1932,7 +1928,7 @@ void
 imsg_event_add(struct imsgev *iev)
 {
 	iev->events = EV_READ;
-	if (iev->ibuf.w.queued)
+	if (imsgbuf_queuelen(&iev->ibuf) > 0)
 		iev->events |= EV_WRITE;
 
 	event_del(&iev->ev);
