@@ -1,4 +1,4 @@
-/*	$OpenBSD: radiusd_ipcp.c,v 1.19 2024/11/07 16:00:11 yasuoka Exp $	*/
+/*	$OpenBSD: radiusd_ipcp.c,v 1.21 2024/11/28 11:51:45 yasuoka Exp $	*/
 
 /*
  * Copyright (c) 2024 Internet Initiative Japan Inc.
@@ -736,7 +736,7 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 	const struct in_addr	 mask4 = { .s_addr = 0xffffffffUL };
 	int			 res_code, msraserr = 935;
 	struct ipcp_address	*addr;
-	int			 i, j, n;
+	int			 i, n;
 	bool			 found = false;
 	char			 username[256], buf[128];
 	struct user		*user = NULL;
@@ -829,32 +829,39 @@ ipcp_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 			if (!found)
 				goto reject;
 		} else {
+			int inpool_idx = 0;
+
+			/* select a random address */
 			n = arc4random_uniform(self->npools);
 			i = 0;
 			TAILQ_FOREACH(addr, &self->addrs, next) {
 				if (addr->type == ADDRESS_TYPE_POOL) {
 					if (i <= n && n < i + addr->naddrs) {
-						j = n - i;
+						inpool_idx = n - i;
 						break;
 					}
 					i += addr->naddrs;
 				}
 			}
-			for (i = 0; i < self->npools; i++, j++) {
-				if (addr == NULL)
-					break;
-				if (j >= addr->naddrs) { /* next pool */
-					if ((addr = TAILQ_NEXT(addr, next))
-					    == NULL)
-						addr = TAILQ_FIRST(
-						    &self->addrs);
-					j = 0;
-				}
-				addr4.s_addr = htonl(addr->start.s_addr + j);
+			/* loop npools times until a free address is found */
+			for (i = 0; i < self->npools && addr != NULL; i++) {
+				addr4.s_addr = htonl(
+				    addr->start.s_addr + inpool_idx);
 				if (ipcp_ipv4_find(self, addr4) == NULL) {
 					found = true;
 					break;
 				}
+				/* try inpool_idx if it's in the range */
+				if (++inpool_idx < addr->naddrs)
+					continue;
+				/* iterate addr to the next pool */
+				do {
+					addr = TAILQ_NEXT(addr, next);
+					if (addr == NULL)
+						addr = TAILQ_FIRST(
+						    &self->addrs);
+				} while (addr->type != ADDRESS_TYPE_POOL);
+				inpool_idx = 0;	/* try the first */
 			}
 			if (!found) {
 				log_info("q=%u user=%s rejected: ran out of "
@@ -1289,9 +1296,9 @@ void
 ipcp_ipv4_delete(struct module_ipcp *self, struct assigned_ipv4 *assign,
     const char *cause)
 {
-	static struct radiusd_ipcp_statistics stat = { 0 };
+	struct radiusd_ipcp_statistics stat;
 
-	memset(stat.cause, 0, sizeof(stat.cause));
+	memset(&stat, 0, sizeof(stat));
 	strlcpy(stat.cause, cause, sizeof(stat.cause));
 
 	ipcp_del_db(self, assign);
@@ -1818,6 +1825,8 @@ parse_address_range(const char *range)
 			goto error;
 		start.s_addr = ntohl(start.s_addr);
 		end.s_addr = ntohl(end.s_addr);
+		if (end.s_addr < start.s_addr)
+			goto error;
 	} else {
 		if ((sep = strchr(buf, '/')) != NULL) {
 			*sep = '\0';
