@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_fault.c,v 1.148 2024/11/29 06:44:57 mpi Exp $	*/
+/*	$OpenBSD: uvm_fault.c,v 1.152 2024/12/04 09:21:06 mpi Exp $	*/
 /*	$NetBSD: uvm_fault.c,v 1.51 2000/08/06 00:22:53 thorpej Exp $	*/
 
 /*
@@ -316,7 +316,6 @@ uvmfault_anonget(struct uvm_faultinfo *ufi, struct vm_amap *amap,
 			 */
 			if ((pg->pg_flags & (PG_BUSY|PG_RELEASED)) == 0)
 				return 0;
-			atomic_setbits_int(&pg->pg_flags, PG_WANTED);
 			counters_inc(uvmexp_counters, flt_pgwait);
 
 			/*
@@ -326,13 +325,12 @@ uvmfault_anonget(struct uvm_faultinfo *ufi, struct vm_amap *amap,
 			if (pg->uobject) {
 				/* Owner of page is UVM object. */
 				uvmfault_unlockall(ufi, amap, NULL);
-				rwsleep_nsec(pg, pg->uobject->vmobjlock,
-				    PVM | PNORELOCK, "anonget1", INFSLP);
+				uvm_pagewait(pg, pg->uobject->vmobjlock,
+				    "anonget1");
 			} else {
 				/* Owner of page is anon. */
 				uvmfault_unlockall(ufi, NULL, NULL);
-				rwsleep_nsec(pg, anon->an_lock, PVM | PNORELOCK,
-				    "anonget2", INFSLP);
+				uvm_pagewait(pg, anon->an_lock, "anonget2");
 			}
 		} else {
 			/*
@@ -784,7 +782,7 @@ uvm_fault_check(struct uvm_faultinfo *ufi, struct uvm_faultctx *flt,
 	 * if we've got an amap then lock it and extract current anons.
 	 */
 	if (amap) {
-		amap_lock(amap);
+		amap_lock(amap, RW_WRITE);
 		amap_lookups(&ufi->entry->aref,
 		    flt->startva - ufi->entry->start, *ranons, flt->npages);
 	} else {
@@ -976,6 +974,9 @@ uvm_fault_upper(struct uvm_faultinfo *ufi, struct uvm_faultctx *flt,
 	 */
 
 	if ((flt->access_type & PROT_WRITE) != 0 && anon->an_ref > 1) {
+		/* promoting requires a write lock. */
+		KASSERT(rw_write_held(amap->am_lock));
+
 		counters_inc(uvmexp_counters, flt_acow);
 		oanon = anon;		/* oanon = old */
 		anon = uvm_analloc();
@@ -1016,7 +1017,10 @@ uvm_fault_upper(struct uvm_faultinfo *ufi, struct uvm_faultctx *flt,
 		    ufi->orig_rvaddr - ufi->entry->start, anon, 1);
 		KASSERT(ret == 0);
 
+		KASSERT(anon->an_lock == oanon->an_lock);
+
 		/* deref: can not drop to zero here by defn! */
+		KASSERT(oanon->an_ref > 1);
 		oanon->an_ref--;
 
 #if defined(MULTIPROCESSOR) && !defined(__HAVE_PMAP_MPSAFE_ENTER_COW)
@@ -1408,6 +1412,7 @@ uvm_fault_lower(struct uvm_faultinfo *ufi, struct uvm_faultctx *flt,
 			uvm_lock_pageq();
 			uvm_pageactivate(uobjpage);
 			uvm_unlock_pageq();
+			/* done with copied uobjpage. */
 			rw_exit(uobj->vmobjlock);
 			uobj = NULL;
 		} else {
@@ -1420,6 +1425,12 @@ uvm_fault_lower(struct uvm_faultinfo *ufi, struct uvm_faultctx *flt,
 
 		if (amap_add(&ufi->entry->aref,
 		    ufi->orig_rvaddr - ufi->entry->start, anon, 0)) {
+			if (pg->pg_flags & PG_WANTED)
+				wakeup(pg);
+
+			atomic_clearbits_int(&pg->pg_flags,
+			    PG_BUSY|PG_FAKE|PG_WANTED);
+			UVM_PAGE_OWN(pg, NULL);
 			uvmfault_unlockall(ufi, amap, uobj);
 			uvm_anfree(anon);
 			counters_inc(uvmexp_counters, flt_noamap);
@@ -1563,7 +1574,7 @@ uvm_fault_lower_io(
 	/* re-verify the state of the world.  */
 	locked = uvmfault_relock(ufi);
 	if (locked && amap != NULL)
-		amap_lock(amap);
+		amap_lock(amap, RW_WRITE);
 
 	/* might be changed */
 	if (pg != PGO_DONTCARE) {

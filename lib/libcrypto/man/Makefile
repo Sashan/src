@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.296 2024/11/12 20:15:24 schwarze Exp $
+# $OpenBSD: Makefile,v 1.300 2024/12/08 17:41:23 schwarze Exp $
 
 .include <bsd.own.mk>
 
@@ -178,16 +178,12 @@ MAN=	\
 	EVP_PKEY_CTX_set_hkdf_md.3 \
 	EVP_PKEY_CTX_set_tls1_prf_md.3 \
 	EVP_PKEY_asn1_get_count.3 \
-	EVP_PKEY_asn1_new.3 \
-	EVP_PKEY_check.3 \
 	EVP_PKEY_cmp.3 \
 	EVP_PKEY_decrypt.3 \
 	EVP_PKEY_derive.3 \
 	EVP_PKEY_encrypt.3 \
 	EVP_PKEY_get_default_digest_nid.3 \
 	EVP_PKEY_keygen.3 \
-	EVP_PKEY_meth_get0_info.3 \
-	EVP_PKEY_meth_new.3 \
 	EVP_PKEY_new.3 \
 	EVP_PKEY_new_CMAC_key.3 \
 	EVP_PKEY_print_private.3 \
@@ -203,6 +199,7 @@ MAN=	\
 	EVP_camellia_128_cbc.3 \
 	EVP_chacha20.3 \
 	EVP_des_cbc.3 \
+	EVP_rc2_cbc.3 \
 	EVP_rc4.3 \
 	EVP_sha1.3 \
 	EVP_sha3_224.3 \
@@ -268,6 +265,7 @@ MAN=	\
 	RAND_bytes.3 \
 	RAND_load_file.3 \
 	RAND_set_rand_method.3 \
+	RC2_encrypt.3 \
 	RC4.3 \
 	RIPEMD160.3 \
 	RSA_PSS_PARAMS_new.3 \

@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.c,v 1.640 2024/11/21 13:38:14 claudio Exp $ */
+/*	$OpenBSD: rde.c,v 1.643 2024/12/02 16:31:51 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -201,7 +201,8 @@ rde_main(int debug, int verbose)
 
 	if ((ibuf_main = malloc(sizeof(struct imsgbuf))) == NULL)
 		fatal(NULL);
-	if (imsgbuf_init(ibuf_main, 3) == -1)
+	if (imsgbuf_init(ibuf_main, 3) == -1 ||
+	    imsgbuf_set_maxsize(ibuf_main, MAX_BGPD_IMSGSIZE) == -1)
 		fatal(NULL);
 	imsgbuf_allow_fdpass(ibuf_main);
 
@@ -844,7 +845,8 @@ rde_dispatch_imsg_parent(struct imsgbuf *imsgbuf)
 			}
 			if ((i = malloc(sizeof(struct imsgbuf))) == NULL)
 				fatal(NULL);
-			if (imsgbuf_init(i, fd) == -1)
+			if (imsgbuf_init(i, fd) == -1 ||
+			    imsgbuf_set_maxsize(i, MAX_BGPD_IMSGSIZE) == -1)
 				fatal(NULL);
 			switch (imsg_get_type(&imsg)) {
 			case IMSG_SOCKET_CONN:
@@ -3011,6 +3013,9 @@ rde_dump_ctx_new(struct ctl_show_rib_request *req, pid_t pid,
 		return;
 	}
 
+	if (strcmp(req->rib, "Adj-RIB-Out") == 0)
+		req->flags |= F_CTL_ADJ_OUT;
+
 	memcpy(&ctx->req, req, sizeof(struct ctl_show_rib_request));
 	ctx->req.pid = pid;
 	ctx->req.type = type;
@@ -3341,8 +3346,6 @@ rde_up_flush_upcall(struct prefix *p, void *ptr)
 {
 	prefix_adjout_withdraw(p);
 }
-
-u_char	queue_buf[4096];
 
 int
 rde_update_queue_pending(void)

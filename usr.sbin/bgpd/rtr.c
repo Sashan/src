@@ -1,4 +1,4 @@
-/*	$OpenBSD: rtr.c,v 1.27 2024/11/21 13:38:14 claudio Exp $ */
+/*	$OpenBSD: rtr.c,v 1.29 2024/12/02 15:13:57 claudio Exp $ */
 
 /*
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
@@ -219,7 +219,8 @@ rtr_main(int debug, int verbose)
 
 	if ((ibuf_main = malloc(sizeof(struct imsgbuf))) == NULL)
 		fatal(NULL);
-	if (imsgbuf_init(ibuf_main, 3) == -1)
+	if (imsgbuf_init(ibuf_main, 3) == -1 ||
+	    imsgbuf_set_maxsize(ibuf_main, MAX_BGPD_IMSGSIZE) == -1)
 		fatal(NULL);
 	imsgbuf_allow_fdpass(ibuf_main);
 
@@ -338,7 +339,9 @@ rtr_dispatch_imsg_parent(struct imsgbuf *imsgbuf)
 			}
 			if ((ibuf_rde = malloc(sizeof(struct imsgbuf))) == NULL)
 				fatal(NULL);
-			if (imsgbuf_init(ibuf_rde, fd) == -1)
+			if (imsgbuf_init(ibuf_rde, fd) == -1 ||
+			    imsgbuf_set_maxsize(ibuf_rde, MAX_BGPD_IMSGSIZE) ==
+			    -1)
 				fatal(NULL);
 			break;
 		case IMSG_SOCKET_SETUP:
@@ -535,14 +538,6 @@ rtr_recalc(void)
 	/* walk tree in reverse because aspa_add_set requires that */
 	RB_FOREACH_REVERSE(aspa, aspa_tree, &at) {
 		struct aspa_set	as = { .as = aspa->as, .num = aspa->num };
-
-		/* XXX prevent oversized IMSG for now */
-		if (aspa->num * sizeof(*aspa->tas) >
-		    MAX_IMSGSIZE - IMSG_HEADER_SIZE) {
-			log_warnx("oversized ASPA set for customer-as %s, %s",
-			    log_as(aspa->as), "dropped");
-			continue;
-		}
 
 		imsg_compose(ibuf_rde, IMSG_RECONF_ASPA, 0, 0, -1,
 		    &as, offsetof(struct aspa_set, tas));

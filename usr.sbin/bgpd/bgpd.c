@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.c,v 1.277 2024/11/21 13:38:14 claudio Exp $ */
+/*	$OpenBSD: bgpd.c,v 1.280 2024/12/03 13:46:53 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -277,8 +277,11 @@ main(int argc, char *argv[])
 	    (ibuf_rtr = malloc(sizeof(struct imsgbuf))) == NULL)
 		fatal(NULL);
 	if (imsgbuf_init(ibuf_se, pipe_m2s[0]) == -1 ||
+	    imsgbuf_set_maxsize(ibuf_se, MAX_BGPD_IMSGSIZE) == -1 ||
 	    imsgbuf_init(ibuf_rde, pipe_m2r[0]) == -1 ||
-	    imsgbuf_init(ibuf_rtr, pipe_m2roa[0]) == -1)
+	    imsgbuf_set_maxsize(ibuf_rde, MAX_BGPD_IMSGSIZE) == -1 ||
+	    imsgbuf_init(ibuf_rtr, pipe_m2roa[0]) == -1 ||
+	    imsgbuf_set_maxsize(ibuf_rtr, MAX_BGPD_IMSGSIZE) == -1)
 		fatal(NULL);
 	imsgbuf_allow_fdpass(ibuf_se);
 	imsgbuf_allow_fdpass(ibuf_rde);
@@ -730,14 +733,6 @@ send_config(struct bgpd_config *conf)
 	}
 	free_roatree(&conf->roa);
 	RB_FOREACH(aspa, aspa_tree, &conf->aspa) {
-		/* XXX prevent oversized IMSG for now */
-		if (aspa->num * sizeof(*aspa->tas) >
-		    MAX_IMSGSIZE - IMSG_HEADER_SIZE) {
-			log_warnx("oversized ASPA set for customer-as %s, %s",
-			    log_as(aspa->as), "dropped");
-			continue;
-		}
-
 		if (imsg_compose(ibuf_rtr, IMSG_RECONF_ASPA, 0, 0,
 		    -1, aspa, offsetof(struct aspa_set, tas)) == -1)
 			return (-1);
@@ -1311,29 +1306,23 @@ getsockpair(int pipe[2])
 		fatal("socketpair");
 
 	for (i = 0; i < 2; i++) {
-		for (bsize = MAX_SOCK_BUF; bsize >= 16 * 1024; bsize /= 2) {
-			if (setsockopt(pipe[i], SOL_SOCKET, SO_RCVBUF,
-			    &bsize, sizeof(bsize)) == -1) {
-				if (errno != ENOBUFS)
-					fatal("setsockopt(SO_RCVBUF, %d)",
-					    bsize);
-				log_warn("setsockopt(SO_RCVBUF, %d)", bsize);
-				continue;
-			}
-			break;
+		bsize = MAX_SOCK_BUF;
+		if (setsockopt(pipe[i], SOL_SOCKET, SO_RCVBUF,
+		    &bsize, sizeof(bsize)) == -1) {
+			if (errno != ENOBUFS)
+				fatal("setsockopt(SO_RCVBUF, %d)",
+				    bsize);
+			log_warn("setsockopt(SO_RCVBUF, %d)", bsize);
 		}
 	}
 	for (i = 0; i < 2; i++) {
-		for (bsize = MAX_SOCK_BUF; bsize >= 16 * 1024; bsize /= 2) {
-			if (setsockopt(pipe[i], SOL_SOCKET, SO_SNDBUF,
-			    &bsize, sizeof(bsize)) == -1) {
-				if (errno != ENOBUFS)
-					fatal("setsockopt(SO_SNDBUF, %d)",
-					    bsize);
-				log_warn("setsockopt(SO_SNDBUF, %d)", bsize);
-				continue;
-			}
-			break;
+		bsize = MAX_SOCK_BUF;
+		if (setsockopt(pipe[i], SOL_SOCKET, SO_SNDBUF,
+		    &bsize, sizeof(bsize)) == -1) {
+			if (errno != ENOBUFS)
+				fatal("setsockopt(SO_SNDBUF, %d)",
+				    bsize);
+			log_warn("setsockopt(SO_SNDBUF, %d)", bsize);
 		}
 	}
 }

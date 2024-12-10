@@ -1,4 +1,4 @@
-/* $OpenBSD: ec_local.h,v 1.39 2024/11/22 12:14:41 tb Exp $ */
+/* $OpenBSD: ec_local.h,v 1.42 2024/12/06 15:49:37 tb Exp $ */
 /*
  * Originally written by Bodo Moeller for the OpenSSL project.
  */
@@ -101,11 +101,6 @@ struct ec_method_st {
 	int (*group_order_bits)(const EC_GROUP *);
 	int (*group_check_discriminant)(const EC_GROUP *, BN_CTX *);
 
-	int (*point_init)(EC_POINT *);
-	void (*point_finish)(EC_POINT *);
-	int (*point_copy)(EC_POINT *, const EC_POINT *);
-
-	int (*point_set_to_infinity)(const EC_GROUP *, EC_POINT *);
 	int (*point_set_Jprojective_coordinates)(const EC_GROUP *, EC_POINT *,
 	    const BIGNUM *x, const BIGNUM *y, const BIGNUM *z, BN_CTX *);
 	int (*point_get_Jprojective_coordinates)(const EC_GROUP *,
@@ -122,7 +117,6 @@ struct ec_method_st {
 	int (*dbl)(const EC_GROUP *, EC_POINT *r, const EC_POINT *a, BN_CTX *);
 	int (*invert)(const EC_GROUP *, EC_POINT *, BN_CTX *);
 
-	int (*is_at_infinity)(const EC_GROUP *, const EC_POINT *);
 	int (*is_on_curve)(const EC_GROUP *, const EC_POINT *, BN_CTX *);
 	int (*point_cmp)(const EC_GROUP *, const EC_POINT *a, const EC_POINT *b,
 	    BN_CTX *);
@@ -138,10 +132,6 @@ struct ec_method_st {
 	int (*mul_double_nonct)(const EC_GROUP *group, EC_POINT *r,
 	    const BIGNUM *g_scalar, const BIGNUM *p_scalar,
 	    const EC_POINT *point, BN_CTX *);
-
-	/*
-	 * Internal methods.
-	 */
 
 	/*
 	 * These can be used by 'add' and 'dbl' so that the same implementations
@@ -248,7 +238,7 @@ struct ec_point_st {
 } /* EC_POINT */;
 
 /* Compute r = generator * m + point * n in non-constant time. */
-int ec_wNAF_mul(const EC_GROUP *group, EC_POINT *r, const BIGNUM *m,
+int ec_wnaf_mul(const EC_GROUP *group, EC_POINT *r, const BIGNUM *m,
     const EC_POINT *point, const BIGNUM *n, BN_CTX *ctx);
 
 int ec_group_simple_order_bits(const EC_GROUP *group);
@@ -304,7 +294,7 @@ int EC_POINT_set_Jprojective_coordinates(const EC_GROUP *group, EC_POINT *p,
 int EC_POINT_get_Jprojective_coordinates(const EC_GROUP *group,
     const EC_POINT *p, BIGNUM *x, BIGNUM *y, BIGNUM *z, BN_CTX *ctx);
 
-int ec_group_is_builtin_curve(const EC_GROUP *group);
+int ec_group_is_builtin_curve(const EC_GROUP *group, int *out_nid);
 int ec_group_get_field_type(const EC_GROUP *group);
 
 /*

@@ -1,4 +1,4 @@
-/* $OpenBSD: ec_curve.c,v 1.50 2024/11/24 10:12:05 tb Exp $ */
+/* $OpenBSD: ec_curve.c,v 1.52 2024/12/06 04:35:03 tb Exp $ */
 /*
  * Written by Nils Larsch for the OpenSSL project.
  */
@@ -2121,6 +2121,7 @@ static const struct ec_curve {
 		.cofactor = 1,
 	},
 	{
+		/* XXX - this one's been wrong all along. Should use 160r1. */
 		.comment = "SECG/WTLS curve over a 160 bit prime field",
 		.nid = NID_wap_wsg_idm_ecid_wtls7,
 		.seed_len = sizeof(_EC_SECG_PRIME_160R2.seed),
@@ -2684,15 +2685,20 @@ ec_group_nid_from_curve(const struct ec_curve *curve)
 }
 
 int
-ec_group_is_builtin_curve(const EC_GROUP *group)
+ec_group_is_builtin_curve(const EC_GROUP *group, int *out_nid)
 {
 	struct ec_curve *curve;
 	int ret = 0;
+	int nid;
+
+	*out_nid = NID_undef;
 
 	if ((curve = ec_curve_from_group(group)) == NULL)
 		goto err;
-	if (ec_group_nid_from_curve(curve) == NID_undef)
+	if ((nid = ec_group_nid_from_curve(curve)) == NID_undef)
 		goto err;
+
+	*out_nid = nid;
 
 	ret = 1;
 
