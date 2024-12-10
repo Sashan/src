@@ -18,7 +18,7 @@
 .Dt set_symhint 2
 .Os
 .Sh NAME
-.Nm set_symhint 
+.Nm set_symhint
 .Nd attach symbol hints to process
 .Sh SYNOPSIS
 .In sys/symhint.h
@@ -46,7 +46,7 @@ to find symbols of traced process when collecting stack traces.
 points to a buffer filled with
 .Vt sym_hint
 structures.
-.Fa symhint_sz 
+.Fa symhint_sz
 specifies the size of block of
 .Vt symhint_sz
 structures.
@@ -65,7 +65,7 @@ members define address range in process virtual memory occupied
 by shared object.
 .Vt sh_path
 is NUL terminated string which holds file system path to shared object (.so).
-Note 
+Note
 .Vt sh_path
 member rather determines offset where file system ASCIIZ string with path is
 stored.
@@ -88,8 +88,8 @@ Cannot allocate memory for block of
 .Vt sym_hint
 structures.
 .It Bq Er EINVAL
-The 
-.Fa symhint 
+The
+.Fa symhint
 is outside the process's allocated address space,
 .It Bq Er EPERM
 When dynamic tracing is not allowed (kern.allowdt is 0).
