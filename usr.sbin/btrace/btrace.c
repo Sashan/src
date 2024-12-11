@@ -113,6 +113,8 @@ void			 debug_dump_term(struct bt_arg *);
 void			 debug_dump_expr(struct bt_arg *);
 void			 debug_dump_filter(struct bt_rule *);
 
+void                     unveil_shared_libs(int, pid_t);
+
 struct syms		*dt_load_syms(pid_t, struct syms *, const char *);
 
 struct dtioc_probe_info	*dt_dtpis;	/* array of available probes */
@@ -180,7 +182,6 @@ main(int argc, char *argv[])
 	if (argc > 0 && btscript == NULL)
 		filename = argv[0];
 
-#if 0
 	 /* Cannot pledge due to special ioctl()s */
 	if (unveil(__PATH_DEVDT, "r") == -1)
 		err(1, "unveil %s", __PATH_DEVDT);
@@ -189,13 +190,7 @@ main(int argc, char *argv[])
 	if (filename != NULL) {
 		if (unveil(filename, "r") == -1)
 			err(1, "unveil %s", filename);
-	}
-	if (unveil(NULL, NULL) == -1)
-		err(1, "unveil");
-#endif
 
-	if (filename != NULL) {
-		btscript = read_btfile(filename, &btslen);
 		argc--;
 		argv++;
 	}
@@ -207,7 +202,22 @@ main(int argc, char *argv[])
 		pid = strtonum(argv[0], 0, INT_MAX, NULL);
 		if (errno != 0)
 			pid = -1;
+		if (pid != -1) {
+			fd = open(__PATH_DEVDT, O_RDONLY);
+			if (fd == -1)
+				err(1, "could not open %s", __PATH_DEVDT);
+			unveil_shared_libs(fd, pid);
+			if (exec_path != NULL)
+				unveil(exec_path, "r");
+		}
 	}
+
+	if (unveil(NULL, NULL) == -1)
+		err(1, "unveil");
+
+	if (filename != NULL)
+		btscript = read_btfile(filename, &btslen);
+
 	if (btscript == NULL && !showprobes)
 		usage();
 
@@ -221,7 +231,8 @@ main(int argc, char *argv[])
 		return error;
 
 	if (showprobes || g_nprobes > 0) {
-		fd = open(__PATH_DEVDT, O_RDONLY);
+		if (fd == -1)
+			fd = open(__PATH_DEVDT, O_RDONLY);
 		if (fd == -1)
 			err(1, "could not open %s", __PATH_DEVDT);
 		dtfd = fd;
@@ -2165,4 +2176,60 @@ dt_load_syms(pid_t pid, struct syms *syms, const char *exec_path)
 	free(dtgm.dtgm_map);
 
 	return syms;
+}
+
+void
+unveil_shared_libs(int fd, pid_t pid)
+{
+	struct dtioc_getmap	dtgm;
+	struct sym_hint *sh;
+	char *p, *end;
+
+	dtgm.dtgm_pid = pid;
+	dtgm.dtgm_map_sz = 0;
+	dtgm.dtgm_map = NULL;
+
+	/* get maphint size */
+	if (ioctl(fd, DIOCGETMAPHINT, &dtgm)) {
+		fprintf(stderr, "ioctlcmd: %lxn", DIOCGETMAPHINT);
+		warn("DIOCGETMAPHINT");
+		return;
+	}
+
+	dtgm.dtgm_map = malloc(dtgm.dtgm_map_sz);
+	if (dtgm.dtgm_map == NULL) {
+		warn("malloc");
+		return;
+	}
+
+	/* get maphint */
+	if (ioctl(fd, DIOCGETMAPHINT, &dtgm)) {
+		warn("DIOCGETMAHINT");
+		free(dtgm.dtgm_map);
+		return;
+	}
+
+	end = (char *)dtgm.dtgm_map;
+	end += dtgm.dtgm_map_sz;
+
+	sh = (struct sym_hint *)dtgm.dtgm_map;
+	do {
+		/* path to executable is handled in main() */
+		if (strcmp(&sh->sh_path, "\xff\xff") != 0)
+			unveil(&sh->sh_path, "r");
+
+		p = &sh->sh_path;
+		/*
+		 * find next map entry in array. it starts right
+		 * after current. we need to find the end of
+		 * sh_path string and move to next byte.
+		 */
+		while (*p)
+			p++;
+		p++;
+
+		sh = (struct sym_hint *)p;
+	} while (p < end);
+
+	free(dtgm.dtgm_map);
 }
