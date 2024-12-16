@@ -303,6 +303,17 @@ kelf_load_syms(struct dtioc_getmap *dtgm, struct syms *syms,
 	struct sym_hint *sh;
 	char *p, *end;
 
+	/*
+	 * There ae no shared libs in statically linked binary. We load
+	 * symbols from exec_path using 0 as a base address.
+	 */
+	if (dtgm == NULL) {
+		struct sym_hint tmp_sh;
+
+		memset(tmp_sh, 0, sizeof (struct sym_hint));
+		return kelf_open_exec(syms, &tmp_sh, exec_path);
+	}
+
 	end = (char *)dtgm->dtgm_map;
 	end += dtgm->dtgm_map_sz;
 

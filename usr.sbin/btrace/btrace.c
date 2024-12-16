@@ -131,6 +131,7 @@ struct syms		*kelf, *uelf;
 char			**vargs;
 int			 nargs = 0;
 int			 verbose = 0;
+int			 is_dynamic_elf = 0;
 int			 dtfd;
 volatile sig_atomic_t	 quit_pending;
 
@@ -1815,11 +1816,10 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 		str = builtin_stack(dtev, 1, 0);
 		break;
 	case B_AT_BI_USTACK:
-		/*
-		 * TODO: figure out how to handle static binaries, those
-		 * still need call to dt_get_offset() here
-		 */
-		str = builtin_stack(dtev, 0, 0);
+		if (is_dynamici_elf)
+			str = builtin_stack(dtev, 0, 0);
+		else
+			str = builtin_stack(dtev, 0, dt_get_offset(dtev->dtev_pid));
 		break;
 	case B_AT_BI_COMM:
 		str = dtev->dtev_comm;
@@ -2153,9 +2153,8 @@ dt_load_syms(pid_t pid, struct syms *syms, const char *exec_path)
 
 	/* get maphint size */
 	if (ioctl(dtfd, DIOCGETMAPHINT, &dtgm)) {
-		fprintf(stderr, "ioctlcmd: %lxn", DIOCGETMAPHINT);
-		warn("DIOCGETMAPHINT");
-		return NULL;
+		warn("DIOCGETMAPHINT, assuming statically linked binary");
+		return kelf_load_syms(NULL, syms, exec_path);
 	}
 
 	dtgm.dtgm_map = malloc(dtgm.dtgm_map_sz);
@@ -2171,6 +2170,7 @@ dt_load_syms(pid_t pid, struct syms *syms, const char *exec_path)
 		return NULL;
 	}
 
+	is_dynamic_elf = 1;
 	syms = kelf_load_syms(&dtgm, syms, exec_path);
 
 	free(dtgm.dtgm_map);
