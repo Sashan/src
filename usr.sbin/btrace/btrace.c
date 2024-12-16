@@ -1816,7 +1816,7 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 		str = builtin_stack(dtev, 1, 0);
 		break;
 	case B_AT_BI_USTACK:
-		if (is_dynamici_elf)
+		if (is_dynamic_elf)
 			str = builtin_stack(dtev, 0, 0);
 		else
 			str = builtin_stack(dtev, 0, dt_get_offset(dtev->dtev_pid));
