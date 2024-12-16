@@ -310,7 +310,7 @@ kelf_load_syms(struct dtioc_getmap *dtgm, struct syms *syms,
 	if (dtgm == NULL) {
 		struct sym_hint tmp_sh;
 
-		memset(tmp_sh, 0, sizeof (struct sym_hint));
+		memset(&tmp_sh, 0, sizeof (struct sym_hint));
 		return kelf_open_exec(syms, &tmp_sh, exec_path);
 	}
 
