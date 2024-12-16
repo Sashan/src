@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpd.h,v 1.502 2024/12/09 10:51:46 claudio Exp $ */
+/*	$OpenBSD: bgpd.h,v 1.505 2024/12/12 20:19:03 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -131,6 +131,7 @@
  * IMSG_XON message will be sent and the RDE will produce more messages again.
  */
 #define RDE_RUNNER_ROUNDS	100
+#define RDE_REAPER_ROUNDS	5000
 #define SESS_MSG_HIGH_MARK	2000
 #define SESS_MSG_LOW_MARK	500
 #define CTL_MSG_HIGH_MARK	500
@@ -682,6 +683,7 @@ enum imsg_type {
 	IMSG_SESSION_ADD,
 	IMSG_SESSION_UP,
 	IMSG_SESSION_DOWN,
+	IMSG_SESSION_DELETE,
 	IMSG_SESSION_STALE,
 	IMSG_SESSION_NOGRACE,
 	IMSG_SESSION_FLUSH,
@@ -1761,6 +1763,7 @@ static const char * const timernames[] = {
 	"IdleHoldResetTimer",
 	"CarpUndemoteTimer",
 	"RestartTimer",
+	"SessionDownTimer",
 	"RTR RefreshTimer",
 	"RTR RetryTimer",
 	"RTR ExpireTimer",

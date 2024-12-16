@@ -1,4 +1,4 @@
-/*	$OpenBSD: qwz.c,v 1.12 2024/12/09 09:35:33 patrick Exp $	*/
+/*	$OpenBSD: qwz.c,v 1.16 2024/12/11 04:53:17 patrick Exp $	*/
 
 /*
  * Copyright 2023 Stefan Sperling <stsp@openbsd.org>
@@ -1056,626 +1056,216 @@ qwz_hw_mac_id_to_srng_id_wcn7850(struct ath12k_hw_params *hw, int mac_id)
 }
 
 int
-qwz_hw_ipq8074_rx_desc_get_first_msdu(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_first_msdu(struct hal_rx_desc *desc)
 {
-	return !!FIELD_GET(RX_MSDU_END_INFO2_FIRST_MSDU,
-	    le32toh(desc->u.ipq8074.msdu_end.info2));
-}
-
-uint8_t
-qwz_hw_ipq8074_rx_desc_get_l3_pad_bytes(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_END_INFO2_L3_HDR_PADDING,
-	    le32toh(desc->u.ipq8074.msdu_end.info2));
-}
-
-uint8_t *
-qwz_hw_ipq8074_rx_desc_get_hdr_status(struct hal_rx_desc *desc)
-{
-	return desc->u.ipq8074.hdr_status;
+	return !!FIELD_GET(RX_MSDU_END_INFO5_FIRST_MSDU,
+	      le32toh(desc->u.wcn7850.msdu_end.info5));
 }
 
 int
-qwz_hw_ipq8074_rx_desc_encrypt_valid(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_last_msdu(struct hal_rx_desc *desc)
 {
-	return le32toh(desc->u.ipq8074.mpdu_start.info1) &
-	       RX_MPDU_START_INFO1_ENCRYPT_INFO_VALID;
+	return !!FIELD_GET(RX_MSDU_END_INFO5_LAST_MSDU,
+	      le32toh(desc->u.wcn7850.msdu_end.info5));
+}
+
+uint8_t
+qwz_hw_wcn7850_rx_desc_get_l3_pad_bytes(struct hal_rx_desc *desc)
+{
+	return FIELD_GET(RX_MSDU_END_INFO5_L3_HDR_PADDING,
+	    le32toh(desc->u.wcn7850.msdu_end.info5));
+}
+
+int
+qwz_hw_wcn7850_rx_desc_encrypt_valid(struct hal_rx_desc *desc)
+{
+	return !!FIELD_GET(RX_MPDU_START_INFO4_ENCRYPT_INFO_VALID,
+	    le32toh(desc->u.wcn7850.mpdu_start.info4));
 }
 
 uint32_t
-qwz_hw_ipq8074_rx_desc_get_encrypt_type(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_encrypt_type(struct hal_rx_desc *desc)
 {
 	return FIELD_GET(RX_MPDU_START_INFO2_ENC_TYPE,
-	    le32toh(desc->u.ipq8074.mpdu_start.info2));
+	    le32toh(desc->u.wcn7850.mpdu_start.info2));
 }
 
 uint8_t
-qwz_hw_ipq8074_rx_desc_get_decap_type(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_decap_type(struct hal_rx_desc *desc)
 {
-	return FIELD_GET(RX_MSDU_START_INFO2_DECAP_FORMAT,
-	    le32toh(desc->u.ipq8074.msdu_start.info2));
+	return FIELD_GET(RX_MSDU_END_INFO11_DECAP_FORMAT,
+	    le32toh(desc->u.wcn7850.msdu_end.info11));
 }
 
 uint8_t
-qwz_hw_ipq8074_rx_desc_get_mesh_ctl(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_mesh_ctl(struct hal_rx_desc *desc)
 {
-	return FIELD_GET(RX_MSDU_START_INFO2_MESH_CTRL_PRESENT,
-	    le32toh(desc->u.ipq8074.msdu_start.info2));
+	return FIELD_GET(RX_MSDU_END_INFO11_MESH_CTRL_PRESENT,
+	    le32toh(desc->u.wcn7850.msdu_end.info11));
 }
 
 int
-qwz_hw_ipq8074_rx_desc_get_ldpc_support(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_mpdu_seq_ctl_vld(struct hal_rx_desc *desc)
 {
-	return FIELD_GET(RX_MSDU_START_INFO2_LDPC,
-	    le32toh(desc->u.ipq8074.msdu_start.info2));
+	return !!FIELD_GET(RX_MPDU_START_INFO4_MPDU_SEQ_CTRL_VALID,
+	      le32toh(desc->u.wcn7850.mpdu_start.info4));
 }
 
 int
-qwz_hw_ipq8074_rx_desc_get_mpdu_seq_ctl_vld(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_mpdu_fc_valid(struct hal_rx_desc *desc)
 {
-	return !!FIELD_GET(RX_MPDU_START_INFO1_MPDU_SEQ_CTRL_VALID,
-	      le32toh(desc->u.ipq8074.mpdu_start.info1));
-}
-
-int
-qwz_hw_ipq8074_rx_desc_get_mpdu_fc_valid(struct hal_rx_desc *desc)
-{
-	return !!FIELD_GET(RX_MPDU_START_INFO1_MPDU_FCTRL_VALID,
-	      le32toh(desc->u.ipq8074.mpdu_start.info1));
+	return !!FIELD_GET(RX_MPDU_START_INFO4_MPDU_FCTRL_VALID,
+	      le32toh(desc->u.wcn7850.mpdu_start.info4));
 }
 
 uint16_t
-qwz_hw_ipq8074_rx_desc_get_mpdu_start_seq_no(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_mpdu_start_seq_no(struct hal_rx_desc *desc)
 {
-	return FIELD_GET(RX_MPDU_START_INFO1_MPDU_SEQ_NUM,
-	    le32toh(desc->u.ipq8074.mpdu_start.info1));
+	return FIELD_GET(RX_MPDU_START_INFO4_MPDU_SEQ_NUM,
+	    le32toh(desc->u.wcn7850.mpdu_start.info4));
 }
 
 uint16_t
-qwz_hw_ipq8074_rx_desc_get_msdu_len(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_msdu_len(struct hal_rx_desc *desc)
 {
-	return FIELD_GET(RX_MSDU_START_INFO1_MSDU_LENGTH,
-	    le32toh(desc->u.ipq8074.msdu_start.info1));
+	return FIELD_GET(RX_MSDU_END_INFO10_MSDU_LENGTH,
+	    le32toh(desc->u.wcn7850.msdu_end.info10));
 }
 
 uint8_t
-qwz_hw_ipq8074_rx_desc_get_msdu_sgi(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_msdu_sgi(struct hal_rx_desc *desc)
 {
-	return FIELD_GET(RX_MSDU_START_INFO3_SGI,
-	    le32toh(desc->u.ipq8074.msdu_start.info3));
+	return FIELD_GET(RX_MSDU_END_INFO12_SGI,
+	    le32toh(desc->u.wcn7850.msdu_end.info12));
 }
 
 uint8_t
-qwz_hw_ipq8074_rx_desc_get_msdu_rate_mcs(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_msdu_rate_mcs(struct hal_rx_desc *desc)
 {
-	return FIELD_GET(RX_MSDU_START_INFO3_RATE_MCS,
-	    le32toh(desc->u.ipq8074.msdu_start.info3));
+	return FIELD_GET(RX_MSDU_END_INFO12_RATE_MCS,
+	    le32toh(desc->u.wcn7850.msdu_end.info12));
 }
 
 uint8_t
-qwz_hw_ipq8074_rx_desc_get_msdu_rx_bw(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_msdu_rx_bw(struct hal_rx_desc *desc)
 {
-	return FIELD_GET(RX_MSDU_START_INFO3_RECV_BW,
-	    le32toh(desc->u.ipq8074.msdu_start.info3));
+	return FIELD_GET(RX_MSDU_END_INFO12_RECV_BW,
+	    le32toh(desc->u.wcn7850.msdu_end.info12));
 }
 
 uint32_t
-qwz_hw_ipq8074_rx_desc_get_msdu_freq(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_msdu_freq(struct hal_rx_desc *desc)
 {
-	return le32toh(desc->u.ipq8074.msdu_start.phy_meta_data);
+	return le32toh(desc->u.wcn7850.msdu_end.phy_meta_data);
 }
 
 uint8_t
-qwz_hw_ipq8074_rx_desc_get_msdu_pkt_type(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_msdu_pkt_type(struct hal_rx_desc *desc)
 {
-	return FIELD_GET(RX_MSDU_START_INFO3_PKT_TYPE,
-	    le32toh(desc->u.ipq8074.msdu_start.info3));
+	return FIELD_GET(RX_MSDU_END_INFO12_PKT_TYPE,
+	    le32toh(desc->u.wcn7850.msdu_end.info12));
 }
 
 uint8_t
-qwz_hw_ipq8074_rx_desc_get_msdu_nss(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_msdu_nss(struct hal_rx_desc *desc)
 {
-	return FIELD_GET(RX_MSDU_START_INFO3_MIMO_SS_BITMAP,
-	    le32toh(desc->u.ipq8074.msdu_start.info3));
+	return FIELD_GET(RX_MSDU_END_INFO12_MIMO_SS_BITMAP,
+	    le32toh(desc->u.wcn7850.msdu_end.info12));
 }
 
 uint8_t
-qwz_hw_ipq8074_rx_desc_get_mpdu_tid(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_mpdu_tid(struct hal_rx_desc *desc)
 {
 	return FIELD_GET(RX_MPDU_START_INFO2_TID,
-	    le32toh(desc->u.ipq8074.mpdu_start.info2));
+	    le32toh(desc->u.wcn7850.mpdu_start.info2));
 }
 
 uint16_t
-qwz_hw_ipq8074_rx_desc_get_mpdu_peer_id(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_mpdu_peer_id(struct hal_rx_desc *desc)
 {
-	return le16toh(desc->u.ipq8074.mpdu_start.sw_peer_id);
+	return le16toh(desc->u.wcn7850.mpdu_start.sw_peer_id);
 }
 
 void
-qwz_hw_ipq8074_rx_desc_copy_attn_end(struct hal_rx_desc *fdesc,
-				       struct hal_rx_desc *ldesc)
+qwz_hw_wcn7850_rx_desc_copy_end_tlv(struct hal_rx_desc *fdesc,
+				    struct hal_rx_desc *ldesc)
 {
-	memcpy((uint8_t *)&fdesc->u.ipq8074.msdu_end, (uint8_t *)&ldesc->u.ipq8074.msdu_end,
-	       sizeof(struct rx_msdu_end_ipq8074));
-	memcpy((uint8_t *)&fdesc->u.ipq8074.attention, (uint8_t *)&ldesc->u.ipq8074.attention,
-	       sizeof(struct rx_attention));
-	memcpy((uint8_t *)&fdesc->u.ipq8074.mpdu_end, (uint8_t *)&ldesc->u.ipq8074.mpdu_end,
-	       sizeof(struct rx_mpdu_end));
+	memcpy((uint8_t *)&fdesc->u.wcn7850.msdu_end, (uint8_t *)&ldesc->u.wcn7850.msdu_end,
+	       sizeof(struct rx_msdu_end_qcn9274));
 }
 
 uint32_t
-qwz_hw_ipq8074_rx_desc_get_mpdu_start_tag(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_mpdu_start_tag(struct hal_rx_desc *desc)
 {
 	return FIELD_GET(HAL_TLV_HDR_TAG,
-	    le32toh(desc->u.ipq8074.mpdu_start_tag));
+	    le64toh(desc->u.wcn7850.mpdu_start_tag));
 }
 
 uint32_t
-qwz_hw_ipq8074_rx_desc_get_mpdu_ppdu_id(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_get_mpdu_ppdu_id(struct hal_rx_desc *desc)
 {
-	return le16toh(desc->u.ipq8074.mpdu_start.phy_ppdu_id);
+	return le16toh(desc->u.wcn7850.mpdu_start.phy_ppdu_id);
 }
 
 void
-qwz_hw_ipq8074_rx_desc_set_msdu_len(struct hal_rx_desc *desc, uint16_t len)
+qwz_hw_wcn7850_rx_desc_set_msdu_len(struct hal_rx_desc *desc, uint16_t len)
 {
-	uint32_t info = le32toh(desc->u.ipq8074.msdu_start.info1);
+	uint32_t info = le32toh(desc->u.wcn7850.msdu_end.info10);
 
-	info &= ~RX_MSDU_START_INFO1_MSDU_LENGTH;
-	info |= FIELD_PREP(RX_MSDU_START_INFO1_MSDU_LENGTH, len);
+	info &= ~RX_MSDU_END_INFO10_MSDU_LENGTH;
+	info |= FIELD_PREP(RX_MSDU_END_INFO10_MSDU_LENGTH, len);
 
-	desc->u.ipq8074.msdu_start.info1 = htole32(info);
+	desc->u.wcn7850.msdu_end.info10 = htole32(info);
 }
 
 int
-qwz_dp_rx_h_msdu_end_first_msdu(struct qwz_softc *sc, struct hal_rx_desc *desc)
+qwz_hw_wcn7850_rx_desc_is_da_mcbc(struct hal_rx_desc *desc)
 {
-	return sc->hal_rx_ops->rx_desc_get_first_msdu(desc);
+	return FIELD_GET(RX_MSDU_END_INFO13_MCAST_BCAST,
+	    le32toh(desc->u.wcn7850.msdu_end.info13));
 }
 
 int
-qwz_hw_ipq8074_rx_desc_mac_addr2_valid(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_dp_rx_h_is_decrypted(struct hal_rx_desc *desc)
 {
-	return le32toh(desc->u.ipq8074.mpdu_start.info1) &
-	       RX_MPDU_START_INFO1_MAC_ADDR2_VALID;
-}
-
-uint8_t *
-qwz_hw_ipq8074_rx_desc_mpdu_start_addr2(struct hal_rx_desc *desc)
-{
-	return desc->u.ipq8074.mpdu_start.addr2;
-}
-
-struct rx_attention *
-qwz_hw_ipq8074_rx_desc_get_attention(struct hal_rx_desc *desc)
-{
-	return &desc->u.ipq8074.attention;
-}
-
-uint8_t *
-qwz_hw_ipq8074_rx_desc_get_msdu_payload(struct hal_rx_desc *desc)
-{
-	return &desc->u.ipq8074.msdu_payload[0];
-}
-
-int
-qwz_hw_qcn9074_rx_desc_get_first_msdu(struct hal_rx_desc *desc)
-{
-	return !!FIELD_GET(RX_MSDU_END_INFO4_FIRST_MSDU,
-	      le16toh(desc->u.qcn9074.msdu_end.info4));
-}
-
-int
-qwz_hw_qcn9074_rx_desc_get_last_msdu(struct hal_rx_desc *desc)
-{
-	return !!FIELD_GET(RX_MSDU_END_INFO4_LAST_MSDU,
-	      le16toh(desc->u.qcn9074.msdu_end.info4));
-}
-
-uint8_t
-qwz_hw_qcn9074_rx_desc_get_l3_pad_bytes(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_END_INFO4_L3_HDR_PADDING,
-	    le16toh(desc->u.qcn9074.msdu_end.info4));
-}
-
-uint8_t *
-qwz_hw_qcn9074_rx_desc_get_hdr_status(struct hal_rx_desc *desc)
-{
-	return desc->u.qcn9074.hdr_status;
-}
-
-int
-qwz_hw_qcn9074_rx_desc_encrypt_valid(struct hal_rx_desc *desc)
-{
-	return le32toh(desc->u.qcn9074.mpdu_start.info11) &
-	       RX_MPDU_START_INFO11_ENCRYPT_INFO_VALID;
+	return FIELD_GET(RX_MSDU_END_INFO14_DECRYPT_STATUS_CODE,
+	    le32toh(desc->u.wcn7850.msdu_end.info14)) ==
+	    RX_DESC_DECRYPT_STATUS_CODE_OK;
 }
 
 uint32_t
-qwz_hw_qcn9074_rx_desc_get_encrypt_type(struct hal_rx_desc *desc)
+qwz_hw_wcn7850_dp_rx_h_mpdu_err(struct hal_rx_desc *desc)
 {
-	return FIELD_GET(RX_MPDU_START_INFO9_ENC_TYPE,
-	    le32toh(desc->u.qcn9074.mpdu_start.info9));
+	uint32_t info = le32toh(desc->u.wcn7850.msdu_end.info13);
+	uint32_t errmap = 0;
+
+	if (info & RX_MSDU_END_INFO13_FCS_ERR)
+		errmap |= HAL_RX_MPDU_ERR_FCS;
+
+	if (info & RX_MSDU_END_INFO13_DECRYPT_ERR)
+		errmap |= HAL_RX_MPDU_ERR_DECRYPT;
+
+	if (info & RX_MSDU_END_INFO13_TKIP_MIC_ERR)
+		errmap |= HAL_RX_MPDU_ERR_TKIP_MIC;
+
+	if (info & RX_MSDU_END_INFO13_A_MSDU_ERROR)
+		errmap |= HAL_RX_MPDU_ERR_AMSDU_ERR;
+
+	if (info & RX_MSDU_END_INFO13_OVERFLOW_ERR)
+		errmap |= HAL_RX_MPDU_ERR_OVERFLOW;
+
+	if (info & RX_MSDU_END_INFO13_MSDU_LEN_ERR)
+		errmap |= HAL_RX_MPDU_ERR_MSDU_LEN;
+
+	if (info & RX_MSDU_END_INFO13_MPDU_LEN_ERR)
+		errmap |= HAL_RX_MPDU_ERR_MPDU_LEN;
+
+	return errmap;
 }
 
-uint8_t
-qwz_hw_qcn9074_rx_desc_get_decap_type(struct hal_rx_desc *desc)
+uint32_t qwz_hw_wcn7850_get_rx_desc_size(void)
 {
-	return FIELD_GET(RX_MSDU_START_INFO2_DECAP_FORMAT,
-	    le32toh(desc->u.qcn9074.msdu_start.info2));
-}
-
-uint8_t
-qwz_hw_qcn9074_rx_desc_get_mesh_ctl(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO2_MESH_CTRL_PRESENT,
-	    le32toh(desc->u.qcn9074.msdu_start.info2));
-}
-
-int
-qwz_hw_qcn9074_rx_desc_get_ldpc_support(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO2_LDPC,
-	    le32toh(desc->u.qcn9074.msdu_start.info2));
-}
-
-int
-qwz_hw_qcn9074_rx_desc_get_mpdu_seq_ctl_vld(struct hal_rx_desc *desc)
-{
-	return !!FIELD_GET(RX_MPDU_START_INFO11_MPDU_SEQ_CTRL_VALID,
-	      le32toh(desc->u.qcn9074.mpdu_start.info11));
-}
-
-int
-qwz_hw_qcn9074_rx_desc_get_mpdu_fc_valid(struct hal_rx_desc *desc)
-{
-	return !!FIELD_GET(RX_MPDU_START_INFO11_MPDU_FCTRL_VALID,
-	      le32toh(desc->u.qcn9074.mpdu_start.info11));
-}
-
-uint16_t
-qwz_hw_qcn9074_rx_desc_get_mpdu_start_seq_no(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MPDU_START_INFO11_MPDU_SEQ_NUM,
-	    le32toh(desc->u.qcn9074.mpdu_start.info11));
-}
-
-uint16_t
-qwz_hw_qcn9074_rx_desc_get_msdu_len(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO1_MSDU_LENGTH,
-	    le32toh(desc->u.qcn9074.msdu_start.info1));
-}
-
-uint8_t
-qwz_hw_qcn9074_rx_desc_get_msdu_sgi(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO3_SGI,
-	    le32toh(desc->u.qcn9074.msdu_start.info3));
-}
-
-uint8_t
-qwz_hw_qcn9074_rx_desc_get_msdu_rate_mcs(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO3_RATE_MCS,
-	    le32toh(desc->u.qcn9074.msdu_start.info3));
-}
-
-uint8_t
-qwz_hw_qcn9074_rx_desc_get_msdu_rx_bw(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO3_RECV_BW,
-	    le32toh(desc->u.qcn9074.msdu_start.info3));
-}
-
-uint32_t
-qwz_hw_qcn9074_rx_desc_get_msdu_freq(struct hal_rx_desc *desc)
-{
-	return le32toh(desc->u.qcn9074.msdu_start.phy_meta_data);
-}
-
-uint8_t
-qwz_hw_qcn9074_rx_desc_get_msdu_pkt_type(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO3_PKT_TYPE,
-	    le32toh(desc->u.qcn9074.msdu_start.info3));
-}
-
-uint8_t
-qwz_hw_qcn9074_rx_desc_get_msdu_nss(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO3_MIMO_SS_BITMAP,
-	    le32toh(desc->u.qcn9074.msdu_start.info3));
-}
-
-uint8_t
-qwz_hw_qcn9074_rx_desc_get_mpdu_tid(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MPDU_START_INFO9_TID,
-	    le32toh(desc->u.qcn9074.mpdu_start.info9));
-}
-
-uint16_t
-qwz_hw_qcn9074_rx_desc_get_mpdu_peer_id(struct hal_rx_desc *desc)
-{
-	return le16toh(desc->u.qcn9074.mpdu_start.sw_peer_id);
-}
-
-void
-qwz_hw_qcn9074_rx_desc_copy_attn_end(struct hal_rx_desc *fdesc,
-				       struct hal_rx_desc *ldesc)
-{
-	memcpy((uint8_t *)&fdesc->u.qcn9074.msdu_end, (uint8_t *)&ldesc->u.qcn9074.msdu_end,
-	       sizeof(struct rx_msdu_end_qcn9074));
-	memcpy((uint8_t *)&fdesc->u.qcn9074.attention, (uint8_t *)&ldesc->u.qcn9074.attention,
-	       sizeof(struct rx_attention));
-	memcpy((uint8_t *)&fdesc->u.qcn9074.mpdu_end, (uint8_t *)&ldesc->u.qcn9074.mpdu_end,
-	       sizeof(struct rx_mpdu_end));
-}
-
-uint32_t
-qwz_hw_qcn9074_rx_desc_get_mpdu_start_tag(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(HAL_TLV_HDR_TAG,
-	    le32toh(desc->u.qcn9074.mpdu_start_tag));
-}
-
-uint32_t
-qwz_hw_qcn9074_rx_desc_get_mpdu_ppdu_id(struct hal_rx_desc *desc)
-{
-	return le16toh(desc->u.qcn9074.mpdu_start.phy_ppdu_id);
-}
-
-void
-qwz_hw_qcn9074_rx_desc_set_msdu_len(struct hal_rx_desc *desc, uint16_t len)
-{
-	uint32_t info = le32toh(desc->u.qcn9074.msdu_start.info1);
-
-	info &= ~RX_MSDU_START_INFO1_MSDU_LENGTH;
-	info |= FIELD_PREP(RX_MSDU_START_INFO1_MSDU_LENGTH, len);
-
-	desc->u.qcn9074.msdu_start.info1 = htole32(info);
-}
-
-struct rx_attention *
-qwz_hw_qcn9074_rx_desc_get_attention(struct hal_rx_desc *desc)
-{
-	return &desc->u.qcn9074.attention;
-}
-
-uint8_t *
-qwz_hw_qcn9074_rx_desc_get_msdu_payload(struct hal_rx_desc *desc)
-{
-	return &desc->u.qcn9074.msdu_payload[0];
-}
-
-int
-qwz_hw_ipq9074_rx_desc_mac_addr2_valid(struct hal_rx_desc *desc)
-{
-	return le32toh(desc->u.qcn9074.mpdu_start.info11) &
-	       RX_MPDU_START_INFO11_MAC_ADDR2_VALID;
-}
-
-uint8_t *
-qwz_hw_ipq9074_rx_desc_mpdu_start_addr2(struct hal_rx_desc *desc)
-{
-	return desc->u.qcn9074.mpdu_start.addr2;
-}
-
-int
-qwz_hw_wcn6855_rx_desc_get_first_msdu(struct hal_rx_desc *desc)
-{
-	return !!FIELD_GET(RX_MSDU_END_INFO2_FIRST_MSDU_WCN6855,
-	      le32toh(desc->u.wcn6855.msdu_end.info2));
-}
-
-int
-qwz_hw_wcn6855_rx_desc_get_last_msdu(struct hal_rx_desc *desc)
-{
-	return !!FIELD_GET(RX_MSDU_END_INFO2_LAST_MSDU_WCN6855,
-	      le32toh(desc->u.wcn6855.msdu_end.info2));
-}
-
-uint8_t
-qwz_hw_wcn6855_rx_desc_get_l3_pad_bytes(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_END_INFO2_L3_HDR_PADDING,
-	    le32toh(desc->u.wcn6855.msdu_end.info2));
-}
-
-uint8_t *
-qwz_hw_wcn6855_rx_desc_get_hdr_status(struct hal_rx_desc *desc)
-{
-	return desc->u.wcn6855.hdr_status;
-}
-
-int
-qwz_hw_wcn6855_rx_desc_encrypt_valid(struct hal_rx_desc *desc)
-{
-	return le32toh(desc->u.wcn6855.mpdu_start.info1) &
-	       RX_MPDU_START_INFO1_ENCRYPT_INFO_VALID;
-}
-
-uint32_t
-qwz_hw_wcn6855_rx_desc_get_encrypt_type(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MPDU_START_INFO2_ENC_TYPE,
-	    le32toh(desc->u.wcn6855.mpdu_start.info2));
-}
-
-uint8_t
-qwz_hw_wcn6855_rx_desc_get_decap_type(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO2_DECAP_FORMAT,
-	    le32toh(desc->u.wcn6855.msdu_start.info2));
-}
-
-uint8_t
-qwz_hw_wcn6855_rx_desc_get_mesh_ctl(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO2_MESH_CTRL_PRESENT,
-	    le32toh(desc->u.wcn6855.msdu_start.info2));
-}
-
-int
-qwz_hw_wcn6855_rx_desc_get_mpdu_seq_ctl_vld(struct hal_rx_desc *desc)
-{
-	return !!FIELD_GET(RX_MPDU_START_INFO1_MPDU_SEQ_CTRL_VALID,
-	      le32toh(desc->u.wcn6855.mpdu_start.info1));
-}
-
-int
-qwz_hw_wcn6855_rx_desc_get_mpdu_fc_valid(struct hal_rx_desc *desc)
-{
-	return !!FIELD_GET(RX_MPDU_START_INFO1_MPDU_FCTRL_VALID,
-	      le32toh(desc->u.wcn6855.mpdu_start.info1));
-}
-
-uint16_t
-qwz_hw_wcn6855_rx_desc_get_mpdu_start_seq_no(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MPDU_START_INFO1_MPDU_SEQ_NUM,
-	    le32toh(desc->u.wcn6855.mpdu_start.info1));
-}
-
-uint16_t
-qwz_hw_wcn6855_rx_desc_get_msdu_len(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO1_MSDU_LENGTH,
-	    le32toh(desc->u.wcn6855.msdu_start.info1));
-}
-
-uint8_t
-qwz_hw_wcn6855_rx_desc_get_msdu_sgi(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO3_SGI,
-	    le32toh(desc->u.wcn6855.msdu_start.info3));
-}
-
-uint8_t
-qwz_hw_wcn6855_rx_desc_get_msdu_rate_mcs(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO3_RATE_MCS,
-	    le32toh(desc->u.wcn6855.msdu_start.info3));
-}
-
-uint8_t
-qwz_hw_wcn6855_rx_desc_get_msdu_rx_bw(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO3_RECV_BW,
-	    le32toh(desc->u.wcn6855.msdu_start.info3));
-}
-
-uint32_t
-qwz_hw_wcn6855_rx_desc_get_msdu_freq(struct hal_rx_desc *desc)
-{
-	return le32toh(desc->u.wcn6855.msdu_start.phy_meta_data);
-}
-
-uint8_t
-qwz_hw_wcn6855_rx_desc_get_msdu_pkt_type(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO3_PKT_TYPE,
-	    le32toh(desc->u.wcn6855.msdu_start.info3));
-}
-
-uint8_t
-qwz_hw_wcn6855_rx_desc_get_msdu_nss(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MSDU_START_INFO3_MIMO_SS_BITMAP,
-	    le32toh(desc->u.wcn6855.msdu_start.info3));
-}
-
-uint8_t
-qwz_hw_wcn6855_rx_desc_get_mpdu_tid(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(RX_MPDU_START_INFO2_TID_WCN6855,
-	    le32toh(desc->u.wcn6855.mpdu_start.info2));
-}
-
-uint16_t
-qwz_hw_wcn6855_rx_desc_get_mpdu_peer_id(struct hal_rx_desc *desc)
-{
-	return le16toh(desc->u.wcn6855.mpdu_start.sw_peer_id);
-}
-
-void
-qwz_hw_wcn6855_rx_desc_copy_attn_end(struct hal_rx_desc *fdesc,
-    struct hal_rx_desc *ldesc)
-{
-	memcpy((uint8_t *)&fdesc->u.wcn6855.msdu_end, (uint8_t *)&ldesc->u.wcn6855.msdu_end,
-	       sizeof(struct rx_msdu_end_wcn6855));
-	memcpy((uint8_t *)&fdesc->u.wcn6855.attention, (uint8_t *)&ldesc->u.wcn6855.attention,
-	       sizeof(struct rx_attention));
-	memcpy((uint8_t *)&fdesc->u.wcn6855.mpdu_end, (uint8_t *)&ldesc->u.wcn6855.mpdu_end,
-	       sizeof(struct rx_mpdu_end));
-}
-
-uint32_t
-qwz_hw_wcn6855_rx_desc_get_mpdu_start_tag(struct hal_rx_desc *desc)
-{
-	return FIELD_GET(HAL_TLV_HDR_TAG,
-	    le32toh(desc->u.wcn6855.mpdu_start_tag));
-}
-
-uint32_t
-qwz_hw_wcn6855_rx_desc_get_mpdu_ppdu_id(struct hal_rx_desc *desc)
-{
-	return le16toh(desc->u.wcn6855.mpdu_start.phy_ppdu_id);
-}
-
-void
-qwz_hw_wcn6855_rx_desc_set_msdu_len(struct hal_rx_desc *desc, uint16_t len)
-{
-	uint32_t info = le32toh(desc->u.wcn6855.msdu_start.info1);
-
-	info &= ~RX_MSDU_START_INFO1_MSDU_LENGTH;
-	info |= FIELD_PREP(RX_MSDU_START_INFO1_MSDU_LENGTH, len);
-
-	desc->u.wcn6855.msdu_start.info1 = htole32(info);
-}
-
-struct rx_attention *
-qwz_hw_wcn6855_rx_desc_get_attention(struct hal_rx_desc *desc)
-{
-	return &desc->u.wcn6855.attention;
-}
-
-uint8_t *
-qwz_hw_wcn6855_rx_desc_get_msdu_payload(struct hal_rx_desc *desc)
-{
-	return &desc->u.wcn6855.msdu_payload[0];
-}
-
-int
-qwz_hw_wcn6855_rx_desc_mac_addr2_valid(struct hal_rx_desc *desc)
-{
-	return le32toh(desc->u.wcn6855.mpdu_start.info1) &
-	       RX_MPDU_START_INFO1_MAC_ADDR2_VALID;
-}
-
-uint8_t *
-qwz_hw_wcn6855_rx_desc_mpdu_start_addr2(struct hal_rx_desc *desc)
-{
-	return desc->u.wcn6855.mpdu_start.addr2;
-}
-
-/* Map from pdev index to hw mac index */
-uint8_t
-qwz_hw_ipq8074_mac_from_pdev_id(int pdev_idx)
-{
-	switch (pdev_idx) {
-	case 0:
-		return 0;
-	case 1:
-		return 2;
-	case 2:
-		return 1;
-	default:
-		return ATH12K_INVALID_HW_MAC_ID;
-	}
+	return sizeof(struct hal_rx_desc_wcn7850);
 }
 
 uint8_t
@@ -2045,13 +1635,58 @@ static const struct ath12k_hw_hal_params ath12k_hw_hal_params_wcn7850 = {
 			    HAL_WBM_SW_COOKIE_CONV_CFG_WBM2SW4_EN,
 };
 
-uint32_t qwz_hw_wcn7850_get_rx_desc_size(void)
-{
-	return sizeof(struct hal_rx_desc_wcn7850);
-}
-
 const struct hal_rx_ops hal_rx_wcn7850_ops = {
+	.rx_desc_get_first_msdu = qwz_hw_wcn7850_rx_desc_get_first_msdu,
+#ifdef notyet
+	.rx_desc_get_last_msdu = qwz_hw_wcn7850_rx_desc_get_last_msdu,
+#endif
+	.rx_desc_get_l3_pad_bytes = qwz_hw_wcn7850_rx_desc_get_l3_pad_bytes,
+	.rx_desc_encrypt_valid = qwz_hw_wcn7850_rx_desc_encrypt_valid,
+	.rx_desc_get_encrypt_type = qwz_hw_wcn7850_rx_desc_get_encrypt_type,
+	.rx_desc_get_decap_type = qwz_hw_wcn7850_rx_desc_get_decap_type,
+#ifdef notyet
+	.rx_desc_get_mesh_ctl = qwz_hw_wcn7850_rx_desc_get_mesh_ctl,
+	.rx_desc_get_mpdu_seq_ctl_vld = qwz_hw_wcn7850_rx_desc_get_mpdu_seq_ctl_vld,
+	.rx_desc_get_mpdu_fc_valid = qwz_hw_wcn7850_rx_desc_get_mpdu_fc_valid,
+	.rx_desc_get_mpdu_start_seq_no = qwz_hw_wcn7850_rx_desc_get_mpdu_start_seq_no,
+#endif
+	.rx_desc_get_msdu_len = qwz_hw_wcn7850_rx_desc_get_msdu_len,
+#ifdef notyet
+	.rx_desc_get_msdu_sgi = qwz_hw_wcn7850_rx_desc_get_msdu_sgi,
+	.rx_desc_get_msdu_rate_mcs = qwz_hw_wcn7850_rx_desc_get_msdu_rate_mcs,
+	.rx_desc_get_msdu_rx_bw = qwz_hw_wcn7850_rx_desc_get_msdu_rx_bw,
+#endif
+	.rx_desc_get_msdu_freq = qwz_hw_wcn7850_rx_desc_get_msdu_freq,
+	.rx_desc_get_msdu_pkt_type = qwz_hw_wcn7850_rx_desc_get_msdu_pkt_type,
+	.rx_desc_get_msdu_nss = qwz_hw_wcn7850_rx_desc_get_msdu_nss,
+	.rx_desc_get_mpdu_tid = qwz_hw_wcn7850_rx_desc_get_mpdu_tid,
+	.rx_desc_get_mpdu_peer_id = qwz_hw_wcn7850_rx_desc_get_mpdu_peer_id,
+	.rx_desc_copy_end_tlv = qwz_hw_wcn7850_rx_desc_copy_end_tlv,
+	.rx_desc_get_mpdu_start_tag = qwz_hw_wcn7850_rx_desc_get_mpdu_start_tag,
+	.rx_desc_get_mpdu_ppdu_id = qwz_hw_wcn7850_rx_desc_get_mpdu_ppdu_id,
+	.rx_desc_set_msdu_len = qwz_hw_wcn7850_rx_desc_set_msdu_len,
+#ifdef notyet
+	.rx_desc_get_msdu_payload = qwz_hw_wcn7850_rx_desc_get_msdu_payload,
+	.rx_desc_get_mpdu_start_offset = qwz_hw_wcn7850_rx_desc_get_mpdu_start_offset,
+	.rx_desc_get_msdu_end_offset = qwz_hw_wcn7850_rx_desc_get_msdu_end_offset,
+	.rx_desc_mac_addr2_valid = qwz_hw_wcn7850_rx_desc_mac_addr2_valid,
+	.rx_desc_mpdu_start_addr2 = qwz_hw_wcn7850_rx_desc_mpdu_start_addr2,
+#endif
+	.rx_desc_is_da_mcbc = qwz_hw_wcn7850_rx_desc_is_da_mcbc,
+#ifdef notyet
+	.rx_desc_get_dot11_hdr = qwz_hw_wcn7850_rx_desc_get_dot11_hdr,
+	.rx_desc_get_crypto_header = qwz_hw_wcn7850_rx_desc_get_crypto_hdr,
+	.rx_desc_get_mpdu_frame_ctl = qwz_hw_wcn7850_rx_desc_get_mpdu_frame_ctl,
+	.dp_rx_h_msdu_done = qwz_hw_wcn7850_dp_rx_h_msdu_done,
+	.dp_rx_h_l4_cksum_fail = qwz_hw_wcn7850_dp_rx_h_l4_cksum_fail,
+	.dp_rx_h_ip_cksum_fail = qwz_hw_wcn7850_dp_rx_h_ip_cksum_fail,
+#endif
+	.dp_rx_h_is_decrypted = qwz_hw_wcn7850_dp_rx_h_is_decrypted,
+	.dp_rx_h_mpdu_err = qwz_hw_wcn7850_dp_rx_h_mpdu_err,
 	.rx_desc_get_desc_size = qwz_hw_wcn7850_get_rx_desc_size,
+#ifdef notyet
+	.rx_desc_get_msdu_src_link_id = qwz_hw_wcn7850_rx_desc_get_msdu_src_link,
+#endif
 };
 
 const struct hal_ops hal_wcn7850_ops = {
@@ -2072,6 +1707,7 @@ static const struct ath12k_hw_params ath12k_hw_params[] = {
 			.cal_offset = 256 * 1024,
 		},
 		.max_radios = 1,
+		.single_pdev_only = true,
 		.internal_sleep_clock = true,
 		.hw_ops = &wcn7850_ops,
 		.ring_mask = &ath12k_hw_ring_mask_wcn7850,
@@ -8692,7 +8328,62 @@ qwz_dp_cc_desc_init(struct qwz_softc *sc)
 void
 qwz_dp_cc_cleanup(struct qwz_softc *sc)
 {
-	printf("%s:%d\n", __func__, __LINE__);
+	struct qwz_dp *dp = &sc->dp;
+	struct ath12k_rx_desc_info *rx_descs;
+	struct ath12k_tx_desc_info *tx_descs;
+	uint32_t i, j, pool_id, tx_spt_page;
+
+	if (!dp->spt_info)
+		return;
+
+#ifdef notyet
+	spin_lock_bh(&dp->rx_desc_lock);
+#endif
+
+	/* First ATH12K_NUM_RX_SPT_PAGES of allocated SPT pages are used for RX */
+	for (i = 0; i < ATH12K_NUM_RX_SPT_PAGES; i++) {
+		rx_descs = dp->spt_info->rxbaddr[i];
+		for (j = 0; j < ATH12K_MAX_SPT_ENTRIES; j++) {
+			if (!rx_descs[j].m)
+				continue;
+			bus_dmamap_unload(sc->sc_dmat, rx_descs[j].map);
+			m_freem(rx_descs[j].m);
+			rx_descs[j].m = NULL;
+		}
+
+		free(dp->spt_info->rxbaddr[i], M_DEVBUF,
+		    ATH12K_MAX_SPT_ENTRIES * sizeof(*rx_descs));
+		dp->spt_info->rxbaddr[i] = NULL;
+	}
+
+#ifdef notyet
+	spin_unlock_bh(&dp->rx_desc_lock);
+#endif
+
+	for (pool_id = 0; pool_id < ATH12K_HW_MAX_QUEUES; pool_id++) {
+#ifdef notyet
+		spin_lock_bh(&dp->tx_desc_lock[pool_id]);
+#endif
+		for (i = 0; i < ATH12K_TX_SPT_PAGES_PER_POOL; i++) {
+			tx_spt_page = i + pool_id * ATH12K_TX_SPT_PAGES_PER_POOL;
+			tx_descs = dp->spt_info->txbaddr[tx_spt_page];
+
+			for (j = 0; j < ATH12K_MAX_SPT_ENTRIES; j++) {
+				if (!tx_descs[j].m)
+					continue;
+				bus_dmamap_unload(sc->sc_dmat, tx_descs[j].map);
+				m_freem(tx_descs[j].m);
+				tx_descs[j].m = NULL;
+			}
+
+			free(dp->spt_info->txbaddr[tx_spt_page], M_DEVBUF,
+			    ATH12K_MAX_SPT_ENTRIES * sizeof(*tx_descs));
+			dp->spt_info->txbaddr[tx_spt_page] = NULL;
+		}
+#ifdef notyet
+		spin_unlock_bh(&dp->tx_desc_lock[pool_id]);
+#endif
+	}
 }
 
 int
@@ -9809,7 +9500,9 @@ qwz_wmi_tlv_ext_soc_hal_reg_caps_parse(struct qwz_softc *sc, uint16_t len,
 
 		sc->num_radios++;
 
-		/* For WCN7850, save mac_phy capability in the same pdev */
+		/* For single_pdev_only targets,
+		 * save mac_phy capability in the same pdev
+		 */
 		if (sc->hw_params.single_pdev_only)
 			pdev_index = 0;
 		else
@@ -9819,10 +9512,6 @@ qwz_wmi_tlv_ext_soc_hal_reg_caps_parse(struct qwz_softc *sc, uint16_t len,
 		phy_id_map >>= 1;
 	}
 
-	/* For WCN7850, set num_radios to 1 because host manages
-	 * both 2G and 5G radio in one pdev.
-	 * Set pdev_id = 0 and 0 means soc level.
-	 */
 	if (sc->hw_params.single_pdev_only) {
 		sc->num_radios = 1;
 		sc->pdevs[0].pdev_id = 0;
@@ -14666,20 +14355,17 @@ qwz_dp_rx_get_msdu_last_buf(struct qwz_rx_msdu_list *msdu_list,
 	return NULL;
 }
 
-static inline void *
-qwz_dp_rx_get_attention(struct qwz_softc *sc, struct hal_rx_desc *desc)
+int
+qwz_dp_rx_h_msdu_end_first_msdu(struct qwz_softc *sc, struct hal_rx_desc *desc)
 {
-	return sc->hal_rx_ops->rx_desc_get_attention(desc);
+	return sc->hal_rx_ops->rx_desc_get_first_msdu(desc);
 }
 
 int
-qwz_dp_rx_h_attn_is_mcbc(struct qwz_softc *sc, struct hal_rx_desc *desc)
+qwz_dp_rx_h_is_da_mcbc(struct qwz_softc *sc, struct hal_rx_desc *desc)
 {
-	struct rx_attention *attn = qwz_dp_rx_get_attention(sc, desc);
-
 	return qwz_dp_rx_h_msdu_end_first_msdu(sc, desc) &&
-		(!!FIELD_GET(RX_ATTENTION_INFO1_MCAST_BCAST,
-		 le32toh(attn->info1)));
+		sc->hal_rx_ops->rx_desc_is_da_mcbc(desc);
 }
 
 static inline uint8_t
@@ -14689,9 +14375,9 @@ qwz_dp_rx_h_msdu_end_l3pad(struct qwz_softc *sc, struct hal_rx_desc *desc)
 }
 
 static inline int
-qwz_dp_rx_h_attn_msdu_done(struct rx_attention *attn)
+qwz_dp_rx_h_msdu_done(struct qwz_softc *sc, struct hal_rx_desc *desc)
 {
-	return !!FIELD_GET(RX_ATTENTION_INFO2_MSDU_DONE, le32toh(attn->info2));
+	return sc->hal_rx_ops->dp_rx_h_msdu_done(desc);
 }
 
 static inline uint32_t
@@ -14700,53 +14386,16 @@ qwz_dp_rx_h_msdu_start_freq(struct qwz_softc *sc, struct hal_rx_desc *desc)
 	return sc->hal_rx_ops->rx_desc_get_msdu_freq(desc);
 }
 
+int
+qwz_dp_rx_h_is_decrypted(struct qwz_softc *sc, struct hal_rx_desc *desc)
+{
+	return sc->hal_rx_ops->dp_rx_h_is_decrypted(desc);
+}
+
 uint32_t
-qwz_dp_rx_h_attn_mpdu_err(struct rx_attention *attn)
+qwz_dp_rx_h_h_mpdu_err(struct qwz_softc *sc, struct hal_rx_desc *desc)
 {
-	uint32_t info = le32toh(attn->info1);
-	uint32_t errmap = 0;
-
-	if (info & RX_ATTENTION_INFO1_FCS_ERR)
-		errmap |= DP_RX_MPDU_ERR_FCS;
-
-	if (info & RX_ATTENTION_INFO1_DECRYPT_ERR)
-		errmap |= DP_RX_MPDU_ERR_DECRYPT;
-
-	if (info & RX_ATTENTION_INFO1_TKIP_MIC_ERR)
-		errmap |= DP_RX_MPDU_ERR_TKIP_MIC;
-
-	if (info & RX_ATTENTION_INFO1_A_MSDU_ERROR)
-		errmap |= DP_RX_MPDU_ERR_AMSDU_ERR;
-
-	if (info & RX_ATTENTION_INFO1_OVERFLOW_ERR)
-		errmap |= DP_RX_MPDU_ERR_OVERFLOW;
-
-	if (info & RX_ATTENTION_INFO1_MSDU_LEN_ERR)
-		errmap |= DP_RX_MPDU_ERR_MSDU_LEN;
-
-	if (info & RX_ATTENTION_INFO1_MPDU_LEN_ERR)
-		errmap |= DP_RX_MPDU_ERR_MPDU_LEN;
-
-	return errmap;
-}
-
-int
-qwz_dp_rx_h_attn_msdu_len_err(struct qwz_softc *sc, struct hal_rx_desc *desc)
-{
-	struct rx_attention *rx_attention;
-	uint32_t errmap;
-
-	rx_attention = qwz_dp_rx_get_attention(sc, desc);
-	errmap = qwz_dp_rx_h_attn_mpdu_err(rx_attention);
-
-	return errmap & DP_RX_MPDU_ERR_MSDU_LEN;
-}
-
-int
-qwz_dp_rx_h_attn_is_decrypted(struct rx_attention *attn)
-{
-	return (FIELD_GET(RX_ATTENTION_INFO2_DCRYPT_STATUS_CODE,
-	    le32toh(attn->info2)) == RX_DESC_DECRYPT_STATUS_CODE_OK);
+	return sc->hal_rx_ops->dp_rx_h_mpdu_err(desc);
 }
 
 int
@@ -14858,7 +14507,7 @@ qwz_dp_rx_h_80211_hdr(struct qwz_softc *sc, struct hal_rx_desc *desc)
 }
 
 static inline enum hal_encrypt_type
-qwz_dp_rx_h_mpdu_start_enctype(struct qwz_softc *sc, struct hal_rx_desc *desc)
+qwz_dp_rx_h_enctype(struct qwz_softc *sc, struct hal_rx_desc *desc)
 {
 	if (!sc->hal_rx_ops->rx_desc_encrypt_valid(desc))
 		return HAL_ENCRYPT_TYPE_OPEN;
@@ -14931,11 +14580,10 @@ qwz_dp_rx_h_mpdu(struct qwz_softc *sc, struct qwz_rx_msdu *msdu,
 #if 0
 	struct ath12k_peer *peer;
 #endif
-	struct rx_attention *rx_attention;
 	uint32_t err_bitmap;
 
 	/* PN for multicast packets will be checked in net80211 */
-	fill_crypto_hdr = qwz_dp_rx_h_attn_is_mcbc(sc, rx_desc);
+	fill_crypto_hdr = qwz_dp_rx_h_is_da_mcbc(sc, rx_desc);
 	msdu->is_mcbc = fill_crypto_hdr;
 #if 0
 	if (rxcb->is_mcbc) {
@@ -14952,15 +14600,14 @@ qwz_dp_rx_h_mpdu(struct qwz_softc *sc, struct qwz_rx_msdu *msdu,
 			enctype = peer->sec_type;
 	} else {
 #endif
-		enctype = qwz_dp_rx_h_mpdu_start_enctype(sc, rx_desc);
+		enctype = qwz_dp_rx_h_enctype(sc, rx_desc);
 #if 0
 	}
 	spin_unlock_bh(&ar->ab->base_lock);
 #endif
-	rx_attention = qwz_dp_rx_get_attention(sc, rx_desc);
-	err_bitmap = qwz_dp_rx_h_attn_mpdu_err(rx_attention);
+	err_bitmap = qwz_dp_rx_h_h_mpdu_err(sc, rx_desc);
 	if (enctype != HAL_ENCRYPT_TYPE_OPEN && !err_bitmap)
-		is_decrypted = qwz_dp_rx_h_attn_is_decrypted(rx_attention);
+		is_decrypted = qwz_dp_rx_h_is_decrypted(sc, rx_desc);
 #if 0
 	/* Clear per-MPDU flags while leaving per-PPDU flags intact */
 	rx_status->flag &= ~(RX_FLAG_FAILED_FCS_CRC |
@@ -14970,7 +14617,7 @@ qwz_dp_rx_h_mpdu(struct qwz_softc *sc, struct qwz_rx_msdu *msdu,
 			     RX_FLAG_MMIC_STRIPPED);
 
 #endif
-	if (err_bitmap & DP_RX_MPDU_ERR_FCS) {
+	if (err_bitmap & HAL_RX_MPDU_ERR_FCS) {
 		if (ic->ic_flags & IEEE80211_F_RSNON)
 			ic->ic_stats.is_rx_decryptcrc++;
 		else
@@ -14978,10 +14625,10 @@ qwz_dp_rx_h_mpdu(struct qwz_softc *sc, struct qwz_rx_msdu *msdu,
 	}
 
 	/* XXX Trusting firmware to handle Michael MIC counter-measures... */
-	if (err_bitmap & DP_RX_MPDU_ERR_TKIP_MIC)
+	if (err_bitmap & HAL_RX_MPDU_ERR_TKIP_MIC)
 		ic->ic_stats.is_rx_locmicfail++;
 
-	if (err_bitmap & DP_RX_MPDU_ERR_DECRYPT)
+	if (err_bitmap & HAL_RX_MPDU_ERR_DECRYPT)
 		ic->ic_stats.is_rx_wepfail++;
 
 	if (is_decrypted) {
@@ -15018,7 +14665,6 @@ qwz_dp_rx_process_msdu(struct qwz_softc *sc, struct qwz_rx_msdu *msdu,
     struct qwz_rx_msdu_list *msdu_list)
 {
 	struct hal_rx_desc *rx_desc, *lrx_desc;
-	struct rx_attention *rx_attention;
 	struct qwz_rx_msdu *last_buf;
 	uint8_t l3_pad_bytes;
 	uint16_t msdu_len;
@@ -15033,14 +14679,8 @@ qwz_dp_rx_process_msdu(struct qwz_softc *sc, struct qwz_rx_msdu *msdu,
 	}
 
 	rx_desc = mtod(msdu->m, struct hal_rx_desc *);
-	if (qwz_dp_rx_h_attn_msdu_len_err(sc, rx_desc)) {
-		DPRINTF("%s: msdu len not valid\n", __func__);
-		return EIO;
-	}
-
 	lrx_desc = mtod(last_buf->m, struct hal_rx_desc *);
-	rx_attention = qwz_dp_rx_get_attention(sc, lrx_desc);
-	if (!qwz_dp_rx_h_attn_msdu_done(rx_attention)) {
+	if (!qwz_dp_rx_h_msdu_done(sc, lrx_desc)) {
 		DPRINTF("%s: msdu_done bit in attention is not set\n",
 		    __func__);
 		return EIO;
@@ -16247,47 +15887,6 @@ qwz_wmi_pdev_set_ps_mode(struct qwz_softc *sc, int vdev_id, uint8_t pdev_id,
 
 	DNPRINTF(QWZ_D_WMI, "%s: cmd sta powersave mode psmode %d vdev id %d\n",
 	    __func__, psmode, vdev_id);
-
-	return 0;
-}
-
-int
-qwz_wmi_scan_prob_req_oui(struct qwz_softc *sc, const uint8_t *mac_addr,
-    uint8_t pdev_id)
-{
-	struct qwz_pdev_wmi *wmi = &sc->wmi.wmi[pdev_id];
-	struct mbuf *m;
-	struct wmi_scan_prob_req_oui_cmd *cmd;
-	uint32_t prob_req_oui;
-	int len, ret;
-
-	prob_req_oui = (((uint32_t)mac_addr[0]) << 16) |
-		       (((uint32_t)mac_addr[1]) << 8) | mac_addr[2];
-
-	len = sizeof(*cmd);
-	m = qwz_wmi_alloc_mbuf(len);
-	if (!m)
-		return ENOMEM;
-
-	cmd = (struct wmi_scan_prob_req_oui_cmd *)(mtod(m, uint8_t *) +
-	    sizeof(struct ath12k_htc_hdr) + sizeof(struct wmi_cmd_hdr));
-	cmd->tlv_header = FIELD_PREP(WMI_TLV_TAG,
-	    WMI_TAG_SCAN_PROB_REQ_OUI_CMD) |
-	    FIELD_PREP(WMI_TLV_LEN, sizeof(*cmd) - TLV_HDR_SIZE);
-	cmd->prob_req_oui = prob_req_oui;
-
-	DNPRINTF(QWZ_D_WMI, "%s: scan prob req oui %d\n", __func__,
-	    prob_req_oui);
-
-	ret = qwz_wmi_cmd_send(wmi, m, WMI_SCAN_PROB_REQ_OUI_CMDID);
-	if (ret) {
-		if (ret != ESHUTDOWN) {
-			printf("%s: failed to send WMI_SCAN_PROB_REQ_OUI cmd\n",
-			    sc->sc_dev.dv_xname);
-		}
-		m_freem(m);
-		return ret;
-	}
 
 	return 0;
 }
@@ -20809,7 +20408,6 @@ int
 qwz_mac_op_start(struct qwz_pdev *pdev)
 {
 	struct qwz_softc *sc = pdev->sc;
-	struct ieee80211com *ic = &sc->sc_ic;
 	int ret;
 
 	ret = qwz_wmi_pdev_set_param(sc, WMI_PDEV_PARAM_PMF_QOS, 1,
@@ -20826,17 +20424,6 @@ qwz_mac_op_start(struct qwz_pdev *pdev)
 		printf("%s: failed to enable dynamic bw for pdev %d: %d\n",
 		    sc->sc_dev.dv_xname, pdev->pdev_id, ret);
 		goto err;
-	}
-
-	if (isset(sc->wmi.svc_map, WMI_TLV_SERVICE_SPOOF_MAC_SUPPORT)) {
-		ret = qwz_wmi_scan_prob_req_oui(sc, ic->ic_myaddr,
-		    pdev->pdev_id);
-		if (ret) {
-			printf("%s: failed to set prob req oui for "
-			    "pdev %d: %i\n", sc->sc_dev.dv_xname,
-			    pdev->pdev_id, ret);
-			goto err;
-		}
 	}
 
 	ret = qwz_wmi_pdev_set_param(sc, WMI_PDEV_PARAM_ARP_AC_OVERRIDE, 0,

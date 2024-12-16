@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_ice.c,v 1.25 2024/12/05 09:55:50 stsp Exp $	*/
+/*	$OpenBSD: if_ice.c,v 1.27 2024/12/10 16:07:17 stsp Exp $	*/
 
 /*  Copyright (c) 2024, Intel Corporation
  *  All rights reserved.
@@ -13689,7 +13689,7 @@ ice_media_change(struct ifnet *ifp)
  * be called. If phy_type_low is zero, call ice_phy_type_high.
  */
 uint64_t
-ice_get_phy_type_low(uint64_t phy_type_low)
+ice_get_phy_type_low(struct ice_softc *sc, uint64_t phy_type_low)
 {
 	switch (phy_type_low) {
 	case ICE_PHY_TYPE_LOW_100BASE_TX:
@@ -13845,6 +13845,8 @@ ice_get_phy_type_low(uint64_t phy_type_low)
 		return IFM_100G_DR;
 #endif
 	default:
+		printf("%s: unhandled low PHY type 0x%llx\n",
+		    sc->sc_dev.dv_xname, phy_type_low);
 		return IFM_INST_ANY;
 	}
 }
@@ -13859,7 +13861,7 @@ ice_get_phy_type_low(uint64_t phy_type_low)
  * called. If phy_type_high is zero, call ice_get_phy_type_low.
  */
 uint64_t
-ice_get_phy_type_high(uint64_t phy_type_high)
+ice_get_phy_type_high(struct ice_softc *sc, uint64_t phy_type_high)
 {
 	switch (phy_type_high) {
 #if 0
@@ -13875,6 +13877,8 @@ ice_get_phy_type_high(uint64_t phy_type_high)
 		return IFM_100G_AUI2;
 #endif
 	default:
+		printf("%s: unhandled high PHY type 0x%llx\n",
+		    sc->sc_dev.dv_xname, phy_type_high);
 		return IFM_INST_ANY;
 	}
 }
@@ -13884,6 +13888,7 @@ ice_media_status(struct ifnet *ifp, struct ifmediareq *ifmr)
 {
 	struct ice_softc *sc = ifp->if_softc;
 	struct ice_link_status *li = &sc->hw.port_info->phy.link_info;
+	uint64_t media;
 
 	ifmr->ifm_status = IFM_AVALID;
 	ifmr->ifm_active = IFM_ETHER;
@@ -13898,10 +13903,15 @@ ice_media_status(struct ifnet *ifp, struct ifmediareq *ifmr)
 	ifmr->ifm_status |= IFM_ACTIVE;
 	ifmr->ifm_active |= IFM_FDX;
 
-	if (li->phy_type_low)
-		ifmr->ifm_active |= ice_get_phy_type_low(li->phy_type_low);
-	else if (li->phy_type_high)
-		ifmr->ifm_active |= ice_get_phy_type_high(li->phy_type_high);
+	if (li->phy_type_low) {
+		media = ice_get_phy_type_low(sc, li->phy_type_low);
+		if (media != IFM_INST_ANY)
+			ifmr->ifm_active |= media;
+	} else if (li->phy_type_high) {
+		media = ice_get_phy_type_high(sc, li->phy_type_high);
+		if (media != IFM_INST_ANY)
+			ifmr->ifm_active |= media;
+	}
 
 	/* Report flow control status as well */
 	if (li->an_info & ICE_AQ_LINK_PAUSE_TX)
@@ -13962,7 +13972,7 @@ ice_add_media_types(struct ice_softc *sc, struct ifmedia *media)
 			continue;
 
 		/* get the OS media type */
-		ostype = ice_get_phy_type_low(type);
+		ostype = ice_get_phy_type_low(sc, type);
 	
 		/* don't bother adding the unknown type */
 		if (ostype == IFM_INST_ANY)
@@ -13985,7 +13995,7 @@ ice_add_media_types(struct ice_softc *sc, struct ifmedia *media)
 			continue;
 
 		/* get the OS media type */
-		ostype = ice_get_phy_type_high(type);
+		ostype = ice_get_phy_type_high(sc, type);
 
 		/* don't bother adding the unknown type */
 		if (ostype == IFM_INST_ANY)

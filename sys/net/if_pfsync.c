@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_pfsync.c,v 1.327 2024/11/19 02:11:03 dlg Exp $	*/
+/*	$OpenBSD: if_pfsync.c,v 1.329 2024/12/11 04:22:41 dlg Exp $	*/
 
 /*
  * Copyright (c) 2002 Michael Shalayeff
@@ -210,7 +210,6 @@ struct pfsync_softc {
 	struct task		 sc_ltask;
 	struct task		 sc_dtask;
 	struct ip		 sc_template;
-	caddr_t			 sc_bpf;
 
 	struct pfsync_slice	 sc_slices[PFSYNC_NSLICES];
 
@@ -454,9 +453,6 @@ pfsync_clone_create(struct if_clone *ifc, int unit)
 
 #if NBPFILTER > 0
 	bpfattach(&sc->sc_if.if_bpf, ifp, DLT_PFSYNC, PFSYNC_HDRLEN);
-#if 0
-	bpfattach(&sc->sc_bpf, ifp, DLT_LOOP, sizeof(uint32_t));
-#endif
 #endif
 
 	return (0);
@@ -849,28 +845,16 @@ put:
 static struct mbuf *
 pfsync_encap(struct pfsync_softc *sc, struct mbuf *m)
 {
-	struct {
-		struct ip		ip;
-		struct pfsync_header	ph;
-	} __packed __aligned(4) *h;
-	unsigned int mlen = m->m_pkthdr.len;
+	struct pfsync_header *ph;
 
-	m = m_prepend(m, sizeof(*h), M_DONTWAIT);
+	m = m_prepend(m, sizeof(*ph), M_DONTWAIT);
 	if (m == NULL)
 		return (NULL);
 
-	h = mtod(m, void *);
-	memset(h, 0, sizeof(*h));
-
-	mlen += sizeof(h->ph);
-	h->ph.version = PFSYNC_VERSION;
-	h->ph.len = htons(mlen);
-	/* h->ph.pfcksum */
-
-	mlen += sizeof(h->ip);
-	h->ip = sc->sc_template;
-	h->ip.ip_len = htons(mlen);
-	h->ip.ip_id = htons(ip_randomid());
+	ph = mtod(m, struct pfsync_header *);
+	memset(ph, 0, sizeof(*ph));
+	ph->version = PFSYNC_VERSION;
+	ph->len = htons(m->m_pkthdr.len);
 
 	return (m);
 }
@@ -1543,12 +1527,6 @@ pfsync_sendout(struct pfsync_softc *sc, struct mbuf *m)
 	ip->ip_len = htons(m->m_pkthdr.len);
 	ip->ip_id = htons(ip_randomid());
 
-#if NBPFILTER > 0
-	if_bpf = sc->sc_bpf;
-	if (if_bpf)
-		bpf_mtap_af(if_bpf, AF_INET, m, BPF_DIRECTION_OUT);
-#endif
-
 	len = m->m_pkthdr.len;
 
 	imo.imo_ifidx = sc->sc_sync_ifidx;
@@ -1874,10 +1852,7 @@ pfsync_clear_states(u_int32_t creatorid, const char *ifname)
 	if (sc == NULL)
 		return;
 
-	hlen = sizeof(sc->sc_template) +
-	    sizeof(struct pfsync_header) +
-	    sizeof(*h);
-
+	hlen = sizeof(struct pfsync_header) + sizeof(*h);
 	mlen = max_linkhdr + hlen;
 
 	m = m_gethdr(M_DONTWAIT, MT_DATA);
@@ -2676,12 +2651,6 @@ pfsync_input(struct mbuf *m, int af, uint8_t ttl, unsigned int hlen)
 		goto leave;
 	}
 
-#if NBPFILTER > 0
-	if_bpf = sc->sc_bpf;
-	if (if_bpf)
-		bpf_mtap_af(if_bpf, af, m, BPF_DIRECTION_IN);
-#endif
-
 	m_adj(m, hlen);
 
 	if (m->m_pkthdr.len < sizeof(*ph)) {
@@ -3069,7 +3038,7 @@ pfsync_upd_req_init(struct pfsync_softc *sc, unsigned int count)
 		return (NULL);
 	}
 
-	mlen = max_linkhdr + sizeof(sc->sc_template) +
+	mlen = max_linkhdr +
 	    sizeof(struct pfsync_header) +
 	    sizeof(struct pfsync_subheader) +
 	    sizeof(struct pfsync_upd_req) * count;
