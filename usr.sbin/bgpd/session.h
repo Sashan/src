@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.h,v 1.182 2024/12/12 20:19:03 claudio Exp $ */
+/*	$OpenBSD: session.h,v 1.184 2024/12/16 16:10:10 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -26,6 +26,7 @@
 #define	INTERVAL_HOLD			90
 #define	INTERVAL_IDLE_HOLD_INITIAL	30
 #define	INTERVAL_HOLD_DEMOTED		60
+#define	INTERVAL_STALE			180
 #define	INTERVAL_SESSION_DOWN		3600
 #define	MAX_IDLE_HOLD			3600
 #define	MSGSIZE_HEADER			19
@@ -64,15 +65,16 @@ enum session_events {
 	EVNT_RCVD_OPEN,
 	EVNT_RCVD_KEEPALIVE,
 	EVNT_RCVD_UPDATE,
-	EVNT_RCVD_NOTIFICATION
+	EVNT_RCVD_NOTIFICATION,
+	EVNT_RCVD_GRACE_NOTIFICATION,
 };
 
 enum msg_type {
-	OPEN = 1,
-	UPDATE,
-	NOTIFICATION,
-	KEEPALIVE,
-	RREFRESH
+	MSG_OPEN = 1,
+	MSG_UPDATE,
+	MSG_NOTIFICATION,
+	MSG_KEEPALIVE,
+	MSG_RREFRESH
 };
 
 enum suberr_header {

@@ -1,4 +1,4 @@
-/*	$OpenBSD: session.c,v 1.503 2024/12/12 20:19:03 claudio Exp $ */
+/*	$OpenBSD: session.c,v 1.505 2024/12/16 16:10:10 claudio Exp $ */
 
 /*
  * Copyright (c) 2003, 2004, 2005 Henning Brauer <henning@openbsd.org>
@@ -922,24 +922,33 @@ change_state(struct peer *peer, enum session_state state,
 			imsg_compose(ibuf_main, IMSG_PFKEY_RELOAD,
 			    peer->conf.id, 0, -1, NULL, 0);
 
-		if (event != EVNT_STOP) {
-			timer_set(&peer->timers, Timer_IdleHold,
-			    peer->IdleHoldTime);
-			if (event != EVNT_NONE &&
-			    peer->IdleHoldTime < MAX_IDLE_HOLD/2)
-				peer->IdleHoldTime *= 2;
-		}
 		if (peer->state == STATE_ESTABLISHED) {
 			if (peer->capa.neg.grestart.restart == 2 &&
 			    (event == EVNT_CON_CLOSED ||
-			    event == EVNT_CON_FATAL)) {
+			    event == EVNT_CON_FATAL ||
+			    (peer->capa.neg.grestart.grnotification &&
+			    (event == EVNT_RCVD_GRACE_NOTIFICATION ||
+			    event == EVNT_TIMER_HOLDTIME ||
+			    event == EVNT_TIMER_SENDHOLD)))) {
 				/* don't punish graceful restart */
 				timer_set(&peer->timers, Timer_IdleHold, 0);
-				peer->IdleHoldTime /= 2;
 				session_graceful_restart(peer);
-			} else
+			} else {
+				timer_set(&peer->timers, Timer_IdleHold,
+				    peer->IdleHoldTime);
+				if (event != EVNT_NONE &&
+				    peer->IdleHoldTime < MAX_IDLE_HOLD/2)
+					peer->IdleHoldTime *= 2;
 				session_down(peer);
+			}
+		} else if (event != EVNT_STOP) {
+			timer_set(&peer->timers, Timer_IdleHold,
+			    peer->IdleHoldTime);
+			if (event != EVNT_NONE &&
+			    peer->IdleHoldTime < MAX_IDLE_HOLD / 2)
+				peer->IdleHoldTime *= 2;
 		}
+
 		if (peer->state == STATE_NONE ||
 		    peer->state == STATE_ESTABLISHED) {
 			/* initialize capability negotiation structures */
@@ -1418,7 +1427,7 @@ session_sendmsg(struct ibuf *msg, struct peer *p, enum msg_type msgtype)
 	struct mrt		*mrt;
 
 	LIST_FOREACH(mrt, &mrthead, entry) {
-		if (!(mrt->type == MRT_ALL_OUT || (msgtype == UPDATE &&
+		if (!(mrt->type == MRT_ALL_OUT || (msgtype == MSG_UPDATE &&
 		    mrt->type == MRT_UPDATE_OUT)))
 			continue;
 		if ((mrt->peer_id == 0 && mrt->group_id == 0) ||
@@ -1532,6 +1541,8 @@ session_open(struct peer *p)
 		/* Only set the R-flag if no graceful restart is ongoing */
 		if (!rst)
 			hdr |= CAPA_GR_R_FLAG;
+		if (p->capa.ann.grestart.grnotification)
+			hdr |= CAPA_GR_N_FLAG;
 		errs += session_capa_add(opb, CAPA_RESTART, sizeof(hdr));
 		errs += ibuf_add_n16(opb, hdr);
 	}
@@ -1591,7 +1602,7 @@ session_open(struct peer *p)
 		len += 2;
 	}
 
-	if ((buf = session_newmsg(OPEN, len)) == NULL) {
+	if ((buf = session_newmsg(MSG_OPEN, len)) == NULL) {
 		ibuf_free(opb);
 		bgp_fsm(p, EVNT_CON_FATAL, NULL);
 		return;
@@ -1635,7 +1646,7 @@ session_open(struct peer *p)
 		return;
 	}
 
-	session_sendmsg(buf, p, OPEN);
+	session_sendmsg(buf, p, MSG_OPEN);
 	p->stats.msg_sent_open++;
 }
 
@@ -1644,12 +1655,12 @@ session_keepalive(struct peer *p)
 {
 	struct ibuf		*buf;
 
-	if ((buf = session_newmsg(KEEPALIVE, MSGSIZE_KEEPALIVE)) == NULL) {
+	if ((buf = session_newmsg(MSG_KEEPALIVE, MSGSIZE_KEEPALIVE)) == NULL) {
 		bgp_fsm(p, EVNT_CON_FATAL, NULL);
 		return;
 	}
 
-	session_sendmsg(buf, p, KEEPALIVE);
+	session_sendmsg(buf, p, MSG_KEEPALIVE);
 	start_timer_keepalive(p);
 	p->stats.msg_sent_keepalive++;
 }
@@ -1678,7 +1689,7 @@ session_update(uint32_t peerid, struct ibuf *ibuf)
 		return;
 	}
 
-	if ((buf = session_newmsg(UPDATE, MSGSIZE_HEADER + len)) == NULL) {
+	if ((buf = session_newmsg(MSG_UPDATE, MSGSIZE_HEADER + len)) == NULL) {
 		bgp_fsm(p, EVNT_CON_FATAL, NULL);
 		return;
 	}
@@ -1689,9 +1700,41 @@ session_update(uint32_t peerid, struct ibuf *ibuf)
 		return;
 	}
 
-	session_sendmsg(buf, p, UPDATE);
+	session_sendmsg(buf, p, MSG_UPDATE);
 	start_timer_keepalive(p);
 	p->stats.msg_sent_update++;
+}
+
+static int
+session_req_hard_reset(enum err_codes errcode, uint8_t subcode)
+{
+	switch (errcode) {
+	case ERR_HEADER:
+	case ERR_OPEN:
+	case ERR_UPDATE:
+	case ERR_FSM:
+	case ERR_RREFRESH:
+		/*
+		 * Protocol errors trigger a hard reset. The peer
+		 * is not trustworthy and so there is no realistic
+		 * hope that forwarding can continue.
+		 */
+		return 1;
+	case ERR_HOLDTIMEREXPIRED:
+	case ERR_SENDHOLDTIMEREXPIRED:
+		/* Keep forwarding and hope the other side is back soon. */
+		return 0;
+	case ERR_CEASE:
+		switch (subcode) {
+		case ERR_CEASE_CONN_REJECT:
+		case ERR_CEASE_OTHER_CHANGE:
+		case ERR_CEASE_COLLISION:
+		case ERR_CEASE_RSRC_EXHAUST:
+			/* Per RFC8538 suggestion make these graceful. */
+			return 0;
+		}
+		return 1;
+	}
 }
 
 void
@@ -1709,7 +1752,8 @@ session_notification(struct peer *p, uint8_t errcode, uint8_t subcode,
     struct ibuf *ibuf)
 {
 	struct ibuf		*buf;
-	int			 errs = 0;
+	const char		*reason = "sending";
+	int			 errs = 0, need_hard_reset = 0;
 	size_t			 datalen = 0;
 
 	switch (p->state) {
@@ -1723,24 +1767,39 @@ session_notification(struct peer *p, uint8_t errcode, uint8_t subcode,
 		return;
 	}
 
-	log_notification(p, errcode, subcode, ibuf, "sending");
+	if (p->capa.neg.grestart.grnotification) {
+		if (session_req_hard_reset(errcode, subcode)) {
+			need_hard_reset = 1;
+			datalen += 2;
+			reason = "sending hard-reset";
+		} else {
+			reason = "sending graceful";
+		}
+	}
+
+	log_notification(p, errcode, subcode, ibuf, reason);
 
 	/* cap to maximum size */
 	if (ibuf != NULL) {
 		if (ibuf_size(ibuf) >
-		    MAX_PKTSIZE - MSGSIZE_NOTIFICATION_MIN) {
+		    MAX_PKTSIZE - MSGSIZE_NOTIFICATION_MIN - datalen) {
 			log_peer_warnx(&p->conf,
 			    "oversized notification, data trunkated");
 			ibuf_truncate(ibuf, MAX_PKTSIZE -
-			    MSGSIZE_NOTIFICATION_MIN);
+			    MSGSIZE_NOTIFICATION_MIN - datalen);
 		}
-		datalen = ibuf_size(ibuf);
+		datalen += ibuf_size(ibuf);
 	}
 
-	if ((buf = session_newmsg(NOTIFICATION,
+	if ((buf = session_newmsg(MSG_NOTIFICATION,
 	    MSGSIZE_NOTIFICATION_MIN + datalen)) == NULL) {
 		bgp_fsm(p, EVNT_CON_FATAL, NULL);
 		return;
+	}
+
+	if (need_hard_reset) {
+		errs += ibuf_add_n8(buf, ERR_CEASE);
+		errs += ibuf_add_n8(buf, ERR_CEASE_HARD_RESET);
 	}
 
 	errs += ibuf_add_n8(buf, errcode);
@@ -1755,7 +1814,7 @@ session_notification(struct peer *p, uint8_t errcode, uint8_t subcode,
 		return;
 	}
 
-	session_sendmsg(buf, p, NOTIFICATION);
+	session_sendmsg(buf, p, MSG_NOTIFICATION);
 	p->stats.msg_sent_notification++;
 	p->stats.last_sent_errcode = errcode;
 	p->stats.last_sent_suberr = subcode;
@@ -1806,7 +1865,7 @@ session_rrefresh(struct peer *p, uint8_t aid, uint8_t subtype)
 	if (aid2afi(aid, &afi, &safi) == -1)
 		fatalx("session_rrefresh: bad afi/safi pair");
 
-	if ((buf = session_newmsg(RREFRESH, MSGSIZE_RREFRESH)) == NULL) {
+	if ((buf = session_newmsg(MSG_RREFRESH, MSGSIZE_RREFRESH)) == NULL) {
 		bgp_fsm(p, EVNT_CON_FATAL, NULL);
 		return;
 	}
@@ -1821,7 +1880,7 @@ session_rrefresh(struct peer *p, uint8_t aid, uint8_t subtype)
 		return;
 	}
 
-	session_sendmsg(buf, p, RREFRESH);
+	session_sendmsg(buf, p, MSG_RREFRESH);
 	p->stats.msg_sent_rrefresh++;
 }
 
@@ -1829,9 +1888,15 @@ int
 session_graceful_restart(struct peer *p)
 {
 	uint8_t	i;
+	uint16_t staletime = conf->staletime;
 
-	timer_set(&p->timers, Timer_RestartTimeout,
-	    p->capa.neg.grestart.timeout);
+	if (p->conf.staletime)
+		staletime = p->conf.staletime;
+
+	/* RFC 8538: enforce configurable upper bound of the stale timer */
+	if (staletime > p->capa.neg.grestart.timeout)
+		staletime = p->capa.neg.grestart.timeout;
+	timer_set(&p->timers, Timer_RestartTimeout, staletime);
 
 	for (i = AID_MIN; i < AID_MAX; i++) {
 		if (p->capa.neg.grestart.flags[i] & CAPA_GR_PRESENT) {
@@ -1994,7 +2059,8 @@ session_process_msg(struct peer *p)
 
 		/* dump to MRT as soon as we have a full packet */
 		LIST_FOREACH(mrt, &mrthead, entry) {
-			if (!(mrt->type == MRT_ALL_IN || (msgtype == UPDATE &&
+			if (!(mrt->type == MRT_ALL_IN ||
+			    (msgtype == MSG_UPDATE &&
 			    mrt->type == MRT_UPDATE_IN)))
 				continue;
 			if ((mrt->peer_id == 0 && mrt->group_id == 0) ||
@@ -2006,23 +2072,23 @@ session_process_msg(struct peer *p)
 		ibuf_skip(msg, MSGSIZE_HEADER);
 
 		switch (msgtype) {
-		case OPEN:
+		case MSG_OPEN:
 			bgp_fsm(p, EVNT_RCVD_OPEN, msg);
 			p->stats.msg_rcvd_open++;
 			break;
-		case UPDATE:
+		case MSG_UPDATE:
 			bgp_fsm(p, EVNT_RCVD_UPDATE, msg);
 			p->stats.msg_rcvd_update++;
 			break;
-		case NOTIFICATION:
+		case MSG_NOTIFICATION:
 			bgp_fsm(p, EVNT_RCVD_NOTIFICATION, msg);
 			p->stats.msg_rcvd_notification++;
 			break;
-		case KEEPALIVE:
+		case MSG_KEEPALIVE:
 			bgp_fsm(p, EVNT_RCVD_KEEPALIVE, msg);
 			p->stats.msg_rcvd_keepalive++;
 			break;
-		case RREFRESH:
+		case MSG_RREFRESH:
 			parse_rrefresh(p, msg);
 			p->stats.msg_rcvd_rrefresh++;
 			break;
@@ -2073,35 +2139,35 @@ parse_header(struct ibuf *msg, void *arg, int *fd)
 	}
 
 	switch (type) {
-	case OPEN:
+	case MSG_OPEN:
 		if (len < MSGSIZE_OPEN_MIN || len > MAX_PKTSIZE) {
 			log_peer_warnx(&peer->conf,
 			    "received OPEN: illegal len: %u byte", len);
 			goto badlen;
 		}
 		break;
-	case NOTIFICATION:
+	case MSG_NOTIFICATION:
 		if (len < MSGSIZE_NOTIFICATION_MIN) {
 			log_peer_warnx(&peer->conf,
 			    "received NOTIFICATION: illegal len: %u byte", len);
 			goto badlen;
 		}
 		break;
-	case UPDATE:
+	case MSG_UPDATE:
 		if (len < MSGSIZE_UPDATE_MIN) {
 			log_peer_warnx(&peer->conf,
 			    "received UPDATE: illegal len: %u byte", len);
 			goto badlen;
 		}
 		break;
-	case KEEPALIVE:
+	case MSG_KEEPALIVE:
 		if (len != MSGSIZE_KEEPALIVE) {
 			log_peer_warnx(&peer->conf,
 			    "received KEEPALIVE: illegal len: %u byte", len);
 			goto badlen;
 		}
 		break;
-	case RREFRESH:
+	case MSG_RREFRESH:
 		if (len < MSGSIZE_RREFRESH_MIN) {
 			log_peer_warnx(&peer->conf,
 			    "received RREFRESH: illegal len: %u byte", len);
@@ -2417,8 +2483,10 @@ parse_rrefresh(struct peer *peer, struct ibuf *msg)
 void
 parse_notification(struct peer *peer, struct ibuf *msg)
 {
-	uint8_t		 errcode, subcode;
-	uint8_t		 reason_len;
+	const char		*reason = "received";
+	uint8_t			 errcode, subcode;
+	uint8_t			 reason_len;
+	enum session_events	 event = EVNT_RCVD_NOTIFICATION;
 
 	if (ibuf_get_n8(msg, &errcode) == -1 ||
 	    ibuf_get_n8(msg, &subcode) == -1) {
@@ -2426,11 +2494,27 @@ parse_notification(struct peer *peer, struct ibuf *msg)
 		goto done;
 	}
 
+	/* RFC8538: check for hard-reset or graceful notification */
+	if (peer->capa.neg.grestart.grnotification) {
+		if (errcode == ERR_CEASE && subcode == ERR_CEASE_HARD_RESET) {
+			if (ibuf_get_n8(msg, &errcode) == -1 ||
+			    ibuf_get_n8(msg, &subcode) == -1) {
+				log_peer_warnx(&peer->conf,
+				    "received bad hard-reset notification");
+				goto done;
+			}
+			reason = "received hard-reset";
+		} else {
+			reason = "received graceful";
+			event = EVNT_RCVD_GRACE_NOTIFICATION;
+		}
+	}
+
 	peer->errcnt++;
 	peer->stats.last_rcvd_errcode = errcode;
 	peer->stats.last_rcvd_suberr = subcode;
 
-	log_notification(peer, errcode, subcode, msg, "received");
+	log_notification(peer, errcode, subcode, msg, reason);
 
 	CTASSERT(sizeof(peer->stats.last_reason) > UINT8_MAX);
 	memset(peer->stats.last_reason, 0, sizeof(peer->stats.last_reason));
@@ -2447,7 +2531,7 @@ parse_notification(struct peer *peer, struct ibuf *msg)
 	}
 
 done:
-	change_state(peer, STATE_IDLE, EVNT_RCVD_NOTIFICATION);
+	change_state(peer, STATE_IDLE, event);
 }
 
 int
@@ -2568,6 +2652,8 @@ parse_capabilities(struct peer *peer, struct ibuf *buf, uint32_t *as)
 					    CAPA_GR_RESTART;
 				peer->capa.peer.grestart.restart = 2;
 			}
+			if (gr_header & CAPA_GR_N_FLAG)
+				peer->capa.peer.grestart.grnotification = 1;
 			break;
 		case CAPA_AS4BYTE:
 			if (capa_len != 4 ||
@@ -2704,6 +2790,11 @@ capa_neg_calc(struct peer *p)
 	p->capa.neg.grestart.restart = p->capa.peer.grestart.restart;
 	if (p->capa.ann.grestart.restart == 0)
 		p->capa.neg.grestart.restart = 0;
+
+	/* RFC 8538 graceful notification: both sides need to agree */
+	p->capa.neg.grestart.grnotification =
+	    (p->capa.ann.grestart.grnotification &&
+	    p->capa.peer.grestart.grnotification) != 0;
 
 	/*
 	 * ADD-PATH: set only those bits where both sides agree.
