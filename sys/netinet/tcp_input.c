@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_input.c,v 1.408 2024/11/08 21:40:39 bluhm Exp $	*/
+/*	$OpenBSD: tcp_input.c,v 1.410 2024/12/20 19:20:34 bluhm Exp $	*/
 /*	$NetBSD: tcp_input.c,v 1.23 1996/02/13 23:43:44 christos Exp $	*/
 
 /*
@@ -334,8 +334,11 @@ tcp_flush_queue(struct tcpcb *tp)
 		ND6_HINT(tp);
 		if (so->so_rcv.sb_state & SS_CANTRCVMORE)
 			m_freem(q->tcpqe_m);
-		else
+		else {
+			mtx_enter(&so->so_rcv.sb_mtx);
 			sbappendstream(so, &so->so_rcv, q->tcpqe_m);
+			mtx_leave(&so->so_rcv.sb_mtx);
+		}
 		pool_put(&tcpqe_pool, q);
 		q = nq;
 	} while (q != NULL && q->tcpqe_tcp->th_seq == tp->rcv_nxt);
@@ -1051,7 +1054,9 @@ findpcb:
 				} else
 					tp->rfbuf_cnt += tlen;
 				m_adj(m, iphlen + off);
+				mtx_enter(&so->so_rcv.sb_mtx);
 				sbappendstream(so, &so->so_rcv, m);
+				mtx_leave(&so->so_rcv.sb_mtx);
 			}
 			tp->t_flags |= TF_BLOCKOUTPUT;
 			sorwakeup(so);
@@ -1869,13 +1874,19 @@ step6:
 	 */
 	if ((tiflags & TH_URG) && th->th_urp &&
 	    TCPS_HAVERCVDFIN(tp->t_state) == 0) {
+		u_long urgent;
+
 		/*
 		 * This is a kludge, but if we receive and accept
 		 * random urgent pointers, we'll crash in
 		 * soreceive.  It's hard to imagine someone
 		 * actually wanting to send this much urgent data.
 		 */
-		if (th->th_urp + so->so_rcv.sb_cc > sb_max) {
+		mtx_enter(&so->so_rcv.sb_mtx);
+		urgent = th->th_urp + so->so_rcv.sb_cc;
+		mtx_leave(&so->so_rcv.sb_mtx);
+
+		if (urgent > sb_max) {
 			th->th_urp = 0;			/* XXX */
 			tiflags &= ~TH_URG;		/* XXX */
 			goto dodata;			/* XXX */
@@ -1948,7 +1959,9 @@ dodata:							/* XXX */
 				m_freem(m);
 			else {
 				m_adj(m, hdroptlen);
+			mtx_enter(&so->so_rcv.sb_mtx);
 				sbappendstream(so, &so->so_rcv, m);
+				mtx_leave(&so->so_rcv.sb_mtx);
 			}
 			tp->t_flags |= TF_BLOCKOUTPUT;
 			sorwakeup(so);
@@ -2998,6 +3011,7 @@ tcp_mss_update(struct tcpcb *tp)
 		(void)sbreserve(so, &so->so_snd, bufsize);
 	}
 
+	mtx_enter(&so->so_rcv.sb_mtx);
 	bufsize = so->so_rcv.sb_hiwat;
 	if (bufsize > mss) {
 		bufsize = roundup(bufsize, mss);
@@ -3005,6 +3019,7 @@ tcp_mss_update(struct tcpcb *tp)
 			bufsize = sb_max;
 		(void)sbreserve(so, &so->so_rcv, bufsize);
 	}
+	mtx_leave(&so->so_rcv.sb_mtx);
 
 }
 
@@ -3052,32 +3067,36 @@ tcp_newreno_partialack(struct tcpcb *tp, struct tcphdr *th)
 int
 tcp_mss_adv(struct mbuf *m, int af)
 {
-	int mss = 0;
-	int iphlen;
-	struct ifnet *ifp = NULL;
+	struct ifnet *ifp;
+	int iphlen, mss, mssdflt;
 
-	if (m && (m->m_flags & M_PKTHDR))
-		ifp = if_get(m->m_pkthdr.ph_ifidx);
+	mssdflt = atomic_load_int(&tcp_mssdflt);
+
+	if (m == NULL || (m->m_flags & M_PKTHDR) == 0)
+		return mssdflt;
+
+	ifp = if_get(m->m_pkthdr.ph_ifidx);
+	if (ifp == NULL)
+		return mssdflt;
 
 	switch (af) {
 	case AF_INET:
-		if (ifp != NULL)
-			mss = ifp->if_mtu;
 		iphlen = sizeof(struct ip);
 		break;
 #ifdef INET6
 	case AF_INET6:
-		if (ifp != NULL)
-			mss = ifp->if_mtu;
 		iphlen = sizeof(struct ip6_hdr);
 		break;
 #endif
 	default:
 		unhandled_af(af);
 	}
+	mss = ifp->if_mtu - iphlen - sizeof(struct tcphdr);
 	if_put(ifp);
-	mss = mss - iphlen - sizeof(struct tcphdr);
-	return (max(mss, tcp_mssdflt));
+
+	if (mss < mssdflt)
+		return mssdflt;
+	return mss;
 }
 
 /*

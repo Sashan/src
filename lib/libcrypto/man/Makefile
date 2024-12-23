@@ -1,4 +1,4 @@
-# $OpenBSD: Makefile,v 1.300 2024/12/08 17:41:23 schwarze Exp $
+# $OpenBSD: Makefile,v 1.303 2024/12/23 08:39:57 schwarze Exp $
 
 .include <bsd.own.mk>
 
@@ -196,6 +196,8 @@ MAN=	\
 	EVP_SignInit.3 \
 	EVP_VerifyInit.3 \
 	EVP_aes_128_cbc.3 \
+	EVP_aes_128_ccm.3 \
+	EVP_aes_128_gcm.3 \
 	EVP_camellia_128_cbc.3 \
 	EVP_chacha20.3 \
 	EVP_des_cbc.3 \
@@ -305,6 +307,7 @@ MAN=	\
 	X509V3_EXT_print.3 \
 	X509V3_extensions_print.3 \
 	X509V3_get_d2i.3 \
+	X509V3_parse_list.3 \
 	X509_ALGOR_dup.3 \
 	X509_ATTRIBUTE_get0_object.3 \
 	X509_ATTRIBUTE_new.3 \
