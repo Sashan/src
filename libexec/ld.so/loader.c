@@ -32,6 +32,7 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/exec.h>
+#include <sys/symhint.h>
 #ifdef __i386__
 # include <machine/vmparam.h>
 #endif
@@ -502,6 +503,125 @@ __asm__(".pushsection .openbsd.syscalls,\"\",@progbits;"
     ".popsection");
 #endif
 
+struct sym_hint *
+_dl_find_sym_hint(struct sym_hint *sym_hints, const char *load_name, size_t sz)
+{
+	struct sym_hint *sh;
+	char *p, *end;
+
+	if (sym_hints == NULL)
+		return NULL;
+
+	sh = sym_hints;
+	end = (char *)sym_hints;
+	end += sz;
+
+	do {
+		if (_dl_strcmp(&sh->sh_path, load_name) == 0)
+			return sh;
+
+		/* move to next symhint in array */
+		p = &sh->sh_path;
+		while (*p)
+			p++;
+		p++;
+		sh = (struct sym_hint *)p;
+
+	} while (p < end);
+
+	return NULL;
+}
+
+struct sym_hint *
+_dl_add_sym_hint(struct sym_hint *sym_hints, const char *load_name,
+    struct load_list *ll, size_t *sz)
+{
+	size_t ll_name_len = _dl_strlen(load_name);
+	size_t item_size = ll_name_len + sizeof(struct sym_hint);
+	struct sym_hint *sh;
+
+	sh = _dl_find_sym_hint(sym_hints, load_name, *sz);
+	if (sh != NULL) {
+		/*
+		 * This branch just updates the existing symhint entry we keep
+		 * for library.
+		 * According to procmap(1) the shared libraries seem to be
+		 * loaded to several sections which look as follows:
+		 * 2fbd6a4e000-2fbd6a85fff     224k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6a86000-2fbd6b3cfff     732k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b3d000-2fbd6b3dfff       4k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b3e000-2fbd6b43fff      24k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b44000-2fbd6b45fff       8k ... - /usr/lib/libc.so.100.4
+		 * 2fbd6b46000-2fbd6b46fff       4k ... - /usr/lib/libc.so.100.4
+		 * As you can see ranges above create a continuous region
+		 * from 2fbd6a4e000 to 2fbd6b46fff. The symbol table entry in
+		 * elf file is offset to the start of the region (the lowest
+		 * address).
+		 */
+		if (sh->sh_start > ll->start)
+			sh->sh_start = ll->start;
+		else
+			sh->sh_end += ll->size;
+	} else {
+		sh = _dl_realloc(sym_hints, *sz + item_size);
+		if (sh == NULL) {
+			_dl_free(sym_hints);
+			*sz = 0;
+			return NULL;
+		}
+		sym_hints = sh;
+		sh = (struct sym_hint *)((char *)sym_hints + *sz);
+
+		sh->sh_start = ll->start;
+		sh->sh_end = ll->start + ll->size;
+		_dl_strlcpy(&sh->sh_path, load_name, ll_name_len + 1);
+
+		*sz += item_size;
+	}
+
+	return sym_hints;
+}
+
+void
+_dl_attach_linkmap(elf_object_t *object)
+{
+	struct load_list *llist;
+	struct sym_hint *sym_hints = NULL;
+	size_t sym_hints_sz = 0;
+	const char *load_name;
+
+	while (object != NULL) {
+		for (llist = object->load_list; llist != NULL;
+		    llist = llist->next) {
+			/*
+			 * load_name is abs. path for shared libs for
+			 * executable the load_name is copy command
+			 * line. We replace that with marker.
+			 */
+			if (*object->load_name == '/')
+				load_name = object->load_name;
+			else
+				load_name = "\xff\xff";
+			sym_hints = _dl_add_sym_hint(sym_hints,
+			    load_name, llist, &sym_hints_sz);
+			/*
+			 * just return is fine here, as we should
+			 * not prevent loading when failing to
+			 * create hints for btrace(8).
+			 */
+			if (sym_hints == NULL)
+				return;
+		}
+
+		object = object->next;
+	}
+
+	if (sym_hints != NULL) {
+		_dl_set_symhint(sym_hints, sym_hints_sz);
+		_dl_free(sym_hints);
+	}
+}
+
 /*
  * This is the dynamic loader entrypoint. When entering here, depending
  * on architecture type, the stack and registers are set up according
@@ -745,6 +865,8 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 
 	if (failed != 0)
 		_dl_die("relocation failed");
+
+	_dl_attach_linkmap(_dl_objects);
 
 	if (_dl_traceld)
 		_dl_exit(0);

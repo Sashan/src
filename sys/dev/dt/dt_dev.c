@@ -25,6 +25,7 @@
 #include <sys/malloc.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
+#include <sys/syslog.h>
 
 #include <machine/intr.h>
 
@@ -163,6 +164,7 @@ void	dt_ioctl_record_stop(struct dt_softc *);
 int	dt_ioctl_probe_enable(struct dt_softc *, struct dtioc_req *);
 int	dt_ioctl_probe_disable(struct dt_softc *, struct dtioc_req *);
 int	dt_ioctl_get_auxbase(struct dt_softc *, struct dtioc_getaux *);
+int	dt_ioctl_get_maphint(struct dt_softc *, struct dtioc_getmap *);
 
 int	dt_ring_copy(struct dt_cpubuf *, struct uio *, size_t, size_t *);
 
@@ -289,6 +291,7 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	sc = dtlookup(unit);
 	KASSERT(sc != NULL);
 
+	log(LOG_ERR, "%s(%lx) [%lu]\n", __func__, cmd, sizeof(struct dtioc_getmap));
 	switch (cmd) {
 	case DTIOCGPLIST:
 		return dt_ioctl_list_probes(sc, (struct dtioc_probe *)addr);
@@ -300,14 +303,18 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	case DTIOCPRBENABLE:
 	case DTIOCPRBDISABLE:
 	case DTIOCGETAUXBASE:
+	case DIOCGETMAPHINT:
 		/* root only ioctl(2) */
 		break;
 	default:
+		log(LOG_ERR, "%s ENOTTY\n", __func__);
 		return ENOTTY;
 	}
 
-	if ((error = suser(p)) != 0)
+	if ((error = suser(p)) != 0) {
+		log(LOG_ERR, "%s(%lx) EPERM\n", __func__, cmd);
 		return error;
+	}
 
 	switch (cmd) {
 	case DTIOCRECORD:
@@ -325,6 +332,9 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		break;
 	case DTIOCGETAUXBASE:
 		error = dt_ioctl_get_auxbase(sc, (struct dtioc_getaux *)addr);
+		break;
+	case DIOCGETMAPHINT:
+		error = dt_ioctl_get_maphint(sc, (struct dtioc_getmap *)addr);
 		break;
 	default:
 		KASSERT(0);
@@ -678,6 +688,37 @@ dt_ioctl_get_auxbase(struct dt_softc *sc, struct dtioc_getaux *dtga)
 			dtga->dtga_auxbase = auxv[i].au_v;
 
 	return 0;
+}
+
+int
+dt_ioctl_get_maphint(struct dt_softc *sc, struct dtioc_getmap *dtgm)
+{
+	struct process *pr;
+	int e = 0;
+
+	if ((pr = prfind(dtgm->dtgm_pid)) == NULL) {
+		log(LOG_ERR, "%s no process for %d\n", __func__, dtgm->dtgm_pid);
+		return ESRCH;
+	}
+
+	if (pr->ps_sym_hints_sz == 0) {
+		log(LOG_ERR, "%s no hints attached to %d\n", __func__, dtgm->dtgm_pid);
+		return ESRCH;
+	}
+
+	if (pr->ps_sym_hints_sz <= dtgm->dtgm_map_sz)
+		e = copyout(pr->ps_sym_hints, dtgm->dtgm_map, pr->ps_sym_hints_sz);
+	else
+		log(LOG_ERR, "%s copyout() skipped\n", __func__);
+
+	dtgm->dtgm_map_sz = pr->ps_sym_hints_sz;
+
+	if (e != 0) {
+		log(LOG_ERR, "%s copyout(data) error %lu\n", __func__, pr->ps_sym_hints_sz);
+		return e;
+	}
+
+	return e;
 }
 
 struct dt_probe *

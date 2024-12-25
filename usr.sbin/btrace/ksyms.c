@@ -19,6 +19,7 @@
 #define _DYN_LOADER	/* needed for AuxInfo */
 
 #include <sys/types.h>
+#include <sys/symhint.h>
 
 #include <err.h>
 #include <fcntl.h>
@@ -28,6 +29,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <limits.h>
+#include <dev/dt/dtvar.h>
 
 #include "btrace.h"
 
@@ -46,7 +50,7 @@ int sym_compare_search(const void *, const void *);
 int sym_compare_sort(const void *, const void *);
 
 struct syms *
-kelf_open(const char *path)
+kelf_open(struct sym_hint *sh, struct syms *syms)
 {
 	char *name;
 	Elf *elf;
@@ -57,16 +61,15 @@ kelf_open(const char *path)
 	size_t i, shstrndx, strtabndx = SIZE_MAX, symtab_size;
 	unsigned long diff;
 	struct sym *tmp;
-	struct syms *syms = NULL;
 	int fd;
 
 	if (elf_version(EV_CURRENT) == EV_NONE)
 		errx(1, "elf_version: %s", elf_errmsg(-1));
 
-	fd = open(path, O_RDONLY);
+	fd = open(&sh->sh_path, O_RDONLY);
 	if (fd == -1) {
-		warn("open: %s", path);
-		return NULL;
+		warn("open: %s", &sh->sh_path);
+		return syms;
 	}
 
 	if ((elf = elf_begin(fd, ELF_C_READ, NULL)) == NULL) {
@@ -102,24 +105,37 @@ kelf_open(const char *path)
 		}
 	}
 	if (symtab == NULL) {
-		warnx("%s: %s: section not found", path, ELF_SYMTAB);
+		warnx("%s: %s: section not found", &sh->sh_path, ELF_SYMTAB);
 		goto bad;
 	}
 	if (strtabndx == SIZE_MAX) {
-		warnx("%s: %s: section not found", path, ELF_STRTAB);
+		warnx("%s: %s: section not found", &sh->sh_path, ELF_STRTAB);
 		goto bad;
 	}
 
 	data = elf_rawdata(symtab, data);
-	if (data == NULL)
+	if (data == NULL) {
+		warnx("%s elf_rwadata() unable to read syms from: %s\n",
+		    __func__, &sh->sh_path);
 		goto bad;
+	}
 
-	if ((syms = calloc(1, sizeof(*syms))) == NULL)
-		err(1, NULL);
-	syms->table = calloc(symtab_size, sizeof *syms->table);
-	if (syms->table == NULL)
-		err(1, NULL);
-	for (i = 0; i < symtab_size; i++) {
+	if (syms == NULL) {
+		if ((syms = calloc(1, sizeof *syms)) == NULL)
+			err(1, NULL);
+		syms->table = calloc(symtab_size, sizeof *syms->table);
+		if (syms->table == NULL)
+			err(1, NULL);
+	} else {
+		tmp = reallocarray(syms->table, syms->nsymb + symtab_size,
+		    sizeof *syms->table);
+		if (tmp == NULL)
+			err(1, NULL);
+		syms->table = tmp;
+		symtab_size += syms->nsymb;
+	}
+
+	for (i = syms->nsymb; i < symtab_size; i++) {
 		if (gelf_getsym(data, i, &sym) == NULL)
 			continue;
 		if (GELF_ST_TYPE(sym.st_info) != STT_FUNC)
@@ -130,7 +146,8 @@ kelf_open(const char *path)
 		syms->table[syms->nsymb].sym_name = strdup(name);
 		if (syms->table[syms->nsymb].sym_name == NULL)
 			err(1, NULL);
-		syms->table[syms->nsymb].sym_value = sym.st_value;
+		syms->table[syms->nsymb].sym_value = sym.st_value +
+		    (intptr_t)sh->sh_start;
 		syms->table[syms->nsymb].sym_size = sym.st_size;
 		syms->nsymb++;
 	}
@@ -223,4 +240,102 @@ sym_compare_search(const void *keyp, const void *entryp)
 	if (key->sym_value < entry->sym_value)
 		return -1;
 	return key->sym_value >= entry->sym_value + entry->sym_size;
+}
+
+/*
+ * TODO: path to executable, runtime linker does not know that path, so we
+ * don't create entry in kernel for it. I wonder if DTIOCGETAUXBASE would help
+ * us to find a base address of text section where exec. got loaded to.
+ */
+static struct syms *
+kelf_open_exec(struct syms *syms, const struct sym_hint *sh,
+    const char *exec_path)
+{
+	struct sym_hint *tmp_sh;
+	size_t path_len;
+	struct syms *syms_new;
+
+	if (exec_path == NULL)
+		return syms;
+
+	path_len = strlen(exec_path);
+	tmp_sh = malloc(sizeof(struct sym_hint) + path_len);
+	if (sh == NULL)
+		return syms;
+
+	tmp_sh->sh_start = sh->sh_start;
+	strlcpy(&tmp_sh->sh_path, exec_path, path_len + 1);
+
+	syms_new = kelf_open(tmp_sh, syms);
+	if (syms_new != NULL)
+		syms = syms_new;
+
+	free(tmp_sh);
+
+	return syms;
+}
+
+struct syms *
+kelf_open_kernel(const char *path)
+{
+	struct sym_hint *sh;
+	size_t path_len = strlen(path);
+	struct syms *syms;
+
+	sh = malloc(sizeof(struct sym_hint) + path_len);
+	if (sh == NULL)
+		return NULL;
+
+	sh->sh_start = 0;
+	strlcpy(&sh->sh_path, path, path_len + 1);
+
+	syms = kelf_open(sh, NULL);
+
+	free(sh);
+
+	return syms;
+}
+
+struct syms *
+kelf_load_syms(struct dtioc_getmap *dtgm, struct syms *syms,
+    const char *exec_path)
+{
+	struct sym_hint *sh;
+	char *p, *end;
+
+	/*
+	 * There ae no shared libs in statically linked binary. We load
+	 * symbols from exec_path using 0 as a base address.
+	 */
+	if (dtgm == NULL) {
+		struct sym_hint tmp_sh;
+
+		memset(&tmp_sh, 0, sizeof (struct sym_hint));
+		return kelf_open_exec(syms, &tmp_sh, exec_path);
+	}
+
+	end = (char *)dtgm->dtgm_map;
+	end += dtgm->dtgm_map_sz;
+
+	sh = (struct sym_hint *)dtgm->dtgm_map;
+	do {
+		if (strcmp(&sh->sh_path, "\xff\xff") == 0)
+			syms = kelf_open_exec(syms, sh, exec_path);
+		else
+			syms = kelf_open(sh, syms);
+
+		p = &sh->sh_path;
+		/*
+		 * find next map entry in array. it starts right
+		 * after current. we need to find the end of
+		 * sh_path string and move to next byte.
+		 */
+		while (*p)
+			p++;
+		p++;
+
+		sh = (struct sym_hint *)p;
+	} while (p < end);
+
+	return syms;
 }

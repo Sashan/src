@@ -1,4 +1,4 @@
-/*	$OpenBSD: syscalls.c,v 1.280 2024/08/02 14:35:56 mvs Exp $	*/
+/*	$OpenBSD$	*/
 
 /*
  * System call names.
@@ -308,7 +308,7 @@ const char *const syscallnames[] = {
 	"pipe",			/* 263 = pipe */
 	"fhopen",			/* 264 = fhopen */
 	"#265 (unimplemented)",		/* 265 = unimplemented */
-	"#266 (unimplemented)",		/* 266 = unimplemented */
+	"set_symhint",			/* 266 = set_symhint */
 	"#267 (obsolete pad_preadv)",		/* 267 = obsolete pad_preadv */
 	"#268 (obsolete pad_pwritev)",		/* 268 = obsolete pad_pwritev */
 	"kqueue",			/* 269 = kqueue */

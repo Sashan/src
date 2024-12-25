@@ -30,7 +30,7 @@ SRCS+=	malloc.c reallocarray.c tib.c ffs.c
 syscall=close exit fstat getdents getentropy getthrid issetugid kbind \
 	mimmutable mmap mprotect munmap open pledge \
 	pinsyscalls read __realpath sendsyslog __set_tcb sysctl thrkill \
-	utrace write
+	utrace write set_symhint
 
 .if (${MACHINE_ARCH} == "i386")
 syscall+=mquery

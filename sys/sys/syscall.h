@@ -1,4 +1,4 @@
-/*	$OpenBSD: syscall.h,v 1.279 2024/08/02 14:35:56 mvs Exp $	*/
+/*	$OpenBSD$	*/
 
 /*
  * System call numbers.
@@ -590,6 +590,9 @@
 
 /* syscall: "fhopen" ret: "int" args: "const fhandle_t *" "int" */
 #define	SYS_fhopen	264
+
+/* syscall: "set_symhint" ret: "int" args: "const void *" "size_t" */
+#define	SYS_set_symhint	266
 
 				/* 267 is obsolete pad_preadv */
 				/* 268 is obsolete pad_pwritev */
