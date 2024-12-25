@@ -869,6 +869,7 @@ process_zap(struct process *pr)
 	sigactsfree(pr->ps_sigacts);
 	lim_free(pr->ps_limit);
 	crfree(pr->ps_ucred);
+	free(pr->ps_sym_hints, M_PROC, pr->ps_sym_hints_sz);
 	pool_put(&process_pool, pr);
 	nprocesses--;
 

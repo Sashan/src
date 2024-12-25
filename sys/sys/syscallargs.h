@@ -1,4 +1,4 @@
-/*	$OpenBSD: syscallargs.h,v 1.285 2025/02/17 13:10:56 mpi Exp $	*/
+/*	$OpenBSD$	*/
 
 /*
  * System call argument lists.
@@ -963,6 +963,11 @@ struct sys_fhopen_args {
 	syscallarg(int) flags;
 };
 
+struct sys_set_symhint_args {
+	syscallarg(const void *) symhints;
+	syscallarg(size_t) sz;
+};
+
 struct sys_kqueue1_args {
 	syscallarg(int) flags;
 };
@@ -1361,6 +1366,7 @@ int	sys_getsid(struct proc *, void *, register_t *);
 int	sys_msync(struct proc *, void *, register_t *);
 int	sys_pipe(struct proc *, void *, register_t *);
 int	sys_fhopen(struct proc *, void *, register_t *);
+int	sys_set_symhint(struct proc *, void *, register_t *);
 int	sys_kqueue(struct proc *, void *, register_t *);
 int	sys_kqueue1(struct proc *, void *, register_t *);
 int	sys_mlockall(struct proc *, void *, register_t *);

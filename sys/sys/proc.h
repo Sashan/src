@@ -276,6 +276,8 @@ struct process {
 
 	struct	timespec ps_start;	/* starting uptime. */
 	struct	timeout ps_realit_to;	/* [m] ITIMER_REAL timeout */
+	void *ps_sym_hints;
+	size_t ps_sym_hints_sz;;
 };
 
 #define	ps_session	ps_pgrp->pg_session

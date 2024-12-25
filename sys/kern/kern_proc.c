@@ -42,6 +42,11 @@
 #include <sys/signalvar.h>
 #include <sys/pool.h>
 #include <sys/vnode.h>
+#include <sys/syslog.h>
+
+#include <sys/mount.h>
+#include <sys/socket.h>
+#include <sys/syscallargs.h>
 
 /*
  *  Locks used to protect struct members in this file:
@@ -680,3 +685,54 @@ pgrpdump(void)
 	}
 }
 #endif /* DEBUG */
+
+int
+sys_set_symhint(struct proc *p, void *v, register_t *retval)
+{
+	struct sys_set_symhint_args /* {
+		syscallarg(const void *) symhints;
+		syscallarg(size_t) usym_hints_sz;
+	} */ *uap = v;
+	extern int allowdt;
+	const void *usymhints = SCARG(uap, symhints);;
+	size_t usymhints_sz = SCARG(uap, sz);;
+	struct process *pr = p->p_p;
+	void *sym_hints_buf;
+	void *old_sym_hints;
+	size_t old_sym_hints_sz;
+	int e;
+
+	if (atomic_load_int(&allowdt) == 0)
+		return EPERM;
+
+	if (usymhints_sz > 32768) {
+		log(LOG_ERR, "%s too big want: %lu\n", __func__, usymhints_sz);
+		return ENOMEM;
+	}
+
+	if (usymhints == NULL) {
+		log(LOG_ERR, "%s got NULL\n", __func__);
+		return EINVAL;
+	}
+
+	sym_hints_buf = (char *)malloc(usymhints_sz, M_PROC, M_WAITOK|M_ZERO);
+	e = copyin(usymhints, sym_hints_buf, usymhints_sz);
+	if (e != 0) {
+		log(LOG_ERR, "%s copyin() error %d\n", __func__, e);
+		free(sym_hints_buf, M_PROC, usymhints_sz);
+		return e;
+	}
+
+	/*
+	 * TODO: check how dlopen() updates symhint. We might need to
+	 * append symhint to existing hints.
+	 */
+	old_sym_hints_sz = pr->ps_sym_hints_sz;
+	old_sym_hints = pr->ps_sym_hints;
+	pr->ps_sym_hints = sym_hints_buf;
+	pr->ps_sym_hints_sz = usymhints_sz;
+
+	free(old_sym_hints, M_PROC, old_sym_hints_sz);
+
+	return 0;
+}

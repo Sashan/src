@@ -126,6 +126,12 @@ struct dtioc_getaux {
 	unsigned long		 dtga_auxbase;	/* AUX_base value */
 };
 
+struct dtioc_getmap {
+	pid_t			 dtgm_pid;	/* process to inspect */
+	size_t			 dtgm_map_sz;	/* size of dtgm_map buffer  */
+	void			*dtgm_map;	/* buffer where to put mapping */
+};
+
 #define DTIOCGPLIST	_IOWR('D', 1, struct dtioc_probe)
 #define DTIOCGSTATS	_IOR('D', 2, struct dtioc_stat)
 #define DTIOCRECORD	_IOW('D', 3, int)
@@ -133,6 +139,7 @@ struct dtioc_getaux {
 #define DTIOCPRBDISABLE	 _IOW('D', 5, struct dtioc_req)
 #define DTIOCGARGS	_IOWR('D', 6, struct dtioc_arg)
 #define DTIOCGETAUXBASE	 _IOWR('D', 7, struct dtioc_getaux)
+#define DIOCGETMAPHINT	 _IOWR('D', 8, struct dtioc_getmap)
 
 #ifdef _KERNEL
 

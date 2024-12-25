@@ -1,4 +1,4 @@
-/*	$OpenBSD: init_sysent.c,v 1.286 2025/02/17 13:10:56 mpi Exp $	*/
+/*	$OpenBSD$	*/
 
 /*
  * System call switch table.
@@ -596,8 +596,8 @@ const struct sysent sysent[] = {
 	    sys_fhopen },			/* 264 = fhopen */
 	{ 0, 0, 0,
 	    sys_nosys },			/* 265 = unimplemented */
-	{ 0, 0, 0,
-	    sys_nosys },			/* 266 = unimplemented */
+	{ 2, s(struct sys_set_symhint_args), 0,
+	    sys_set_symhint },			/* 266 = set_symhint */
 	{ 0, 0, 0,
 	    sys_nosys },			/* 267 = obsolete pad_preadv */
 	{ 0, 0, 0,

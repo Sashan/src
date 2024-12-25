@@ -76,7 +76,7 @@ ASM=	__semctl.o __thrsigdivert.o \
 	sysarch.o sysctl.o \
 	thrkill.o truncate.o \
 	unlink.o unlinkat.o \
-	unmount.o unveil.o utimensat.o utimes.o utrace.o
+	unmount.o unveil.o utimensat.o utimes.o utrace.o set_symhint.o
 
 SRCS+=	${SRCS_${MACHINE_CPU}}
 .for i in ${SRCS_${MACHINE_CPU}}

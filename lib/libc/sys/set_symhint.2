@@ -1,0 +1,110 @@
+.\" $OpenBSD$
+.\"
+.\" Copyright (c) 2024 Alexandr Nedvedicky <sashan@openbsd.org>
+.\"
+.\" Permission to use, copy, modify, and distribute this software for any
+.\" purpose with or without fee is hereby granted, provided that the above
+.\" copyright notice and this permission notice appear in all copies.
+.\"
+.\" THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+.\" WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+.\" MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+.\" ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+.\" WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+.\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+.\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+.\"
+.Dd $Mdocdate$
+.Dt set_symhint 2
+.Os
+.Sh NAME
+.Nm set_symhint
+.Nd attach symbol hints to process
+.Sh SYNOPSIS
+.In sys/symhint.h
+.Bd -literal
+struct sym_hint {
+	void	*sh_start;
+	void	*sh_end;
+	char	 sh_path;
+} __attribute__ ((packed));;
+.Ed
+.Pp
+.Ft int
+.Fn set_symhint "const void *symhint" "size_t symhint_sz"
+.Sh DESCRIPTION
+The
+.Nm
+syscall attaches a block of
+.Vt sym_hint
+structures to process.
+The information is then used by
+.Xr btrace 8
+to find symbols of traced process when collecting stack traces.
+.Pp
+.Fa symhint
+points to a buffer filled with
+.Vt sym_hint
+structures.
+.Fa symhint_sz
+specifies the size of block of
+.Vt symhint_sz
+structures.
+.Nm
+is currently intended for use by
+.Xr ld.so 1 .
+The run-time linker constructs the process from shared objects.
+Each shared object is loaded to virtual address in process from
+file system. The
+.Vt sym_hint
+structure holds that information for each shared object.
+.Vt sh_start
+and
+.Vt sh_end
+members define address range in process virtual memory occupied
+by shared object.
+.Vt sh_path
+is NUL terminated string which holds file system path to shared object (.so).
+Note
+.Vt sh_path
+member rather determines offset where file system ASCIIZ string with path is
+stored.
+The
+.Vt sym_hint
+structure has variable size. The next
+.Vt sym_hint
+structure in block starts right after NUL character of
+.Vt sh_path
+in previous
+.Vt sym_hint .
+.Sh RETURN VALUES
+.Rv -std
+.Sh ERRORS
+.Fn set_symhint
+will fail if:
+.Bl -tag -width Er
+.It Bq Er ENOMEM
+Cannot allocate memory for block of
+.Vt sym_hint
+structures.
+.It Bq Er EINVAL
+The
+.Fa symhint
+is outside the process's allocated address space,
+.It Bq Er EPERM
+When dynamic tracing is not allowed (kern.allowdt is 0).
+.El
+.Sh SEE ALSO
+.Xr ld.so 1 ,
+.Xr dt 4
+.Sh STANDARDS
+The
+.Nm
+syscall is specific to the
+.Ox
+dynamic linker and should not be used in portable applications.
+.Sh HISTORY
+The
+.Nm
+syscall appeared in
+.Ox 7.7 .
