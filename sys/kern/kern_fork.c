@@ -297,13 +297,8 @@ process_new(struct proc *p, struct process *parent, int flags)
 	/* mark as embryo to protect against others */
 	pr->ps_flags |= PS_EMBRYO;
 
-	if (parent->ps_sym_hints != NULL) {
-		pr->ps_sym_hints = (char *)malloc(
-		    parent->ps_sym_hints_sz, M_PROC, M_WAITOK|M_ZERO);
-		pr->ps_sym_hints_sz = parent->ps_sym_hints_sz;
-		memcpy(pr->ps_sym_hints, parent->ps_sym_hints,
-		    pr->ps_sym_hints_sz);
-	}
+	pr->ps_sym_hints = parent->ps_sym_hints;
+	pr->ps_sym_hints_sz = parent->ps_sym_hints_sz;
 
 	/* Force visibility of all of the above changes */
 	membar_producer();

@@ -693,7 +693,11 @@ dt_ioctl_get_auxbase(struct dt_softc *sc, struct dtioc_getaux *dtga)
 int
 dt_ioctl_get_maphint(struct dt_softc *sc, struct dtioc_getmap *dtgm)
 {
+	struct uio uio;
+	struct iovec iov;
 	struct process *pr;
+	struct proc *p = curproc;
+	char *tmp_buf;
 	int e = 0;
 
 	if ((pr = prfind(dtgm->dtgm_pid)) == NULL) {
@@ -701,14 +705,22 @@ dt_ioctl_get_maphint(struct dt_softc *sc, struct dtioc_getmap *dtgm)
 		return ESRCH;
 	}
 
-	if (pr->ps_sym_hints_sz == 0) {
-		log(LOG_ERR, "%s no hints attached to %d\n", __func__, dtgm->dtgm_pid);
-		return ESRCH;
-	}
-
-	if (pr->ps_sym_hints_sz <= dtgm->dtgm_map_sz)
-		e = copyout(pr->ps_sym_hints, dtgm->dtgm_map, pr->ps_sym_hints_sz);
-	else
+	if (pr->ps_sym_hints_sz <= dtgm->dtgm_map_sz) {
+		tmp_buf = malloc(pr->ps_sym_hints_sz, M_TEMP, M_WAITOK);
+		iov.iov_base = tmp_buf;
+		iov.iov_len = pr->ps_sym_hints_sz;
+		uio.uio_iov = &iov;
+		uio.uio_iovcnt = 1;
+		uio.uio_offset = (off_t)pr->ps_sym_hints;
+		uio.uio_resid = pr->ps_sym_hints_sz;
+		uio.uio_segflg = UIO_USERSPACE;
+		uio.uio_procp = p;
+		uio.uio_rw = UIO_READ;
+		e = process_domem(p, pr, &uio, PT_READ_D);
+		if (e == 0)
+			e = copyout(tmp_buf, dtgm->dtgm_map, pr->ps_sym_hints_sz);
+		free(tmp_buf, M_TEMP, pr->ps_sym_hints_sz);
+	} else
 		log(LOG_ERR, "%s copyout() skipped\n", __func__);
 
 	dtgm->dtgm_map_sz = pr->ps_sym_hints_sz;
