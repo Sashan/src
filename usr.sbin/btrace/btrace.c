@@ -2172,7 +2172,7 @@ dt_load_syms(pid_t pid, struct syms *syms, const char *exec_path)
 	dtgm.dtgm_map = NULL;
 
 	/* get maphint size */
-	if (ioctl(dtfd, DIOCGETMAPHINT, &dtgm) != ERANGE) {
+	if (ioctl(dtfd, DIOCGETMAPHINT, &dtgm)) {
 		warn("DIOCGETMAPHINT, assuming statically linked binary");
 		return kelf_load_syms(NULL, syms, exec_path);
 	}
@@ -2210,7 +2210,7 @@ unveil_shared_libs(int fd, pid_t pid)
 	dtgm.dtgm_map = NULL;
 
 	/* get maphint size */
-	if (ioctl(fd, DIOCGETMAPHINT, &dtgm) != ERANGE) {
+	if (ioctl(fd, DIOCGETMAPHINT, &dtgm)) {
 		fprintf(stderr, "ioctlcmd: %lxn", DIOCGETMAPHINT);
 		warn("DIOCGETMAPHINT");
 		return;

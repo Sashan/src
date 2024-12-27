@@ -697,14 +697,12 @@ dt_ioctl_get_maphint(struct dt_softc *sc, struct dtioc_getmap *dtgm)
 	struct iovec iov;
 	struct process *pr;
 	struct proc *p = curproc;
-	int e = ERANGE;
+	int e = 0;
 
 	if ((pr = prfind(dtgm->dtgm_pid)) == NULL) {
 		log(LOG_ERR, "%s no process for %d\n", __func__, dtgm->dtgm_pid);
-		return ESRCH;
-	}
-
-	if (pr->ps_sym_hints_sz <= dtgm->dtgm_map_sz) {
+		e = ESRCH;
+	} else if (pr->ps_sym_hints_sz <= dtgm->dtgm_map_sz) {
 		iov.iov_base = dtgm->dtgm_map;
 		iov.iov_len = dtgm->dtgm_map_sz;
 		uio.uio_iov = &iov;
@@ -715,10 +713,11 @@ dt_ioctl_get_maphint(struct dt_softc *sc, struct dtioc_getmap *dtgm)
 		uio.uio_procp = p;
 		uio.uio_rw = UIO_READ;
 		e = process_domem(p, pr, &uio, PT_READ_D);
-	} else
-		log(LOG_ERR, "%s copyout() skipped\n", __func__);
+	}
 
 	dtgm->dtgm_map_sz = pr->ps_sym_hints_sz;
+	if (dtgm->dtgm_map_sz == 0)
+		e = ENOTSUP;
 
 	return e;
 }
