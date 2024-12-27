@@ -697,8 +697,7 @@ dt_ioctl_get_maphint(struct dt_softc *sc, struct dtioc_getmap *dtgm)
 	struct iovec iov;
 	struct process *pr;
 	struct proc *p = curproc;
-	char *tmp_buf;
-	int e = 0;
+	int e = ERANGE;
 
 	if ((pr = prfind(dtgm->dtgm_pid)) == NULL) {
 		log(LOG_ERR, "%s no process for %d\n", __func__, dtgm->dtgm_pid);
@@ -706,9 +705,8 @@ dt_ioctl_get_maphint(struct dt_softc *sc, struct dtioc_getmap *dtgm)
 	}
 
 	if (pr->ps_sym_hints_sz <= dtgm->dtgm_map_sz) {
-		tmp_buf = malloc(pr->ps_sym_hints_sz, M_TEMP, M_WAITOK);
-		iov.iov_base = tmp_buf;
-		iov.iov_len = pr->ps_sym_hints_sz;
+		iov.iov_base = dtgm->dtgm_map;
+		iov.iov_len = dtgm->dtgm_map_sz;
 		uio.uio_iov = &iov;
 		uio.uio_iovcnt = 1;
 		uio.uio_offset = (off_t)pr->ps_sym_hints;
@@ -717,18 +715,10 @@ dt_ioctl_get_maphint(struct dt_softc *sc, struct dtioc_getmap *dtgm)
 		uio.uio_procp = p;
 		uio.uio_rw = UIO_READ;
 		e = process_domem(p, pr, &uio, PT_READ_D);
-		if (e == 0)
-			e = copyout(tmp_buf, dtgm->dtgm_map, pr->ps_sym_hints_sz);
-		free(tmp_buf, M_TEMP, pr->ps_sym_hints_sz);
 	} else
 		log(LOG_ERR, "%s copyout() skipped\n", __func__);
 
 	dtgm->dtgm_map_sz = pr->ps_sym_hints_sz;
-
-	if (e != 0) {
-		log(LOG_ERR, "%s copyout(data) error %lu\n", __func__, pr->ps_sym_hints_sz);
-		return e;
-	}
 
 	return e;
 }
