@@ -704,15 +704,16 @@ dt_ioctl_get_maphint(struct dt_softc *sc, struct dtioc_getmap *dtgm)
 		e = ESRCH;
 	} else if (pr->ps_sym_hints_sz <= dtgm->dtgm_map_sz) {
 		iov.iov_base = dtgm->dtgm_map;
-		iov.iov_len = dtgm->dtgm_map_sz;
+		iov.iov_len = pr->ps_sym_hints_sz;
 		uio.uio_iov = &iov;
 		uio.uio_iovcnt = 1;
-		uio.uio_offset = (off_t)pr->ps_sym_hints;
+		uio.uio_offset = (off_t)(vaddr_t)pr->ps_sym_hints;
 		uio.uio_resid = pr->ps_sym_hints_sz;
 		uio.uio_segflg = UIO_USERSPACE;
 		uio.uio_procp = p;
 		uio.uio_rw = UIO_READ;
 		e = process_domem(p, pr, &uio, PT_READ_D);
+		log(LOG_ERR, "%s process_domeme() result: %d\n", __func__, e);
 	}
 
 	dtgm->dtgm_map_sz = pr->ps_sym_hints_sz;
