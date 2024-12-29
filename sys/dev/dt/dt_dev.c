@@ -25,7 +25,6 @@
 #include <sys/malloc.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
-#include <sys/syslog.h>
 
 #include <machine/intr.h>
 
@@ -291,7 +290,6 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	sc = dtlookup(unit);
 	KASSERT(sc != NULL);
 
-	log(LOG_ERR, "%s(%lx) [%lu]\n", __func__, cmd, sizeof(struct dtioc_getmap));
 	switch (cmd) {
 	case DTIOCGPLIST:
 		return dt_ioctl_list_probes(sc, (struct dtioc_probe *)addr);
@@ -307,14 +305,11 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 		/* root only ioctl(2) */
 		break;
 	default:
-		log(LOG_ERR, "%s ENOTTY\n", __func__);
 		return ENOTTY;
 	}
 
-	if ((error = suser(p)) != 0) {
-		log(LOG_ERR, "%s(%lx) EPERM\n", __func__, cmd);
+	if ((error = suser(p)) != 0)
 		return error;
-	}
 
 	switch (cmd) {
 	case DTIOCRECORD:
@@ -700,7 +695,6 @@ dt_ioctl_get_maphint(struct dt_softc *sc, struct dtioc_getmap *dtgm)
 	int e = 0;
 
 	if ((pr = prfind(dtgm->dtgm_pid)) == NULL) {
-		log(LOG_ERR, "%s no process for %d\n", __func__, dtgm->dtgm_pid);
 		e = ESRCH;
 	} else if (pr->ps_sym_hints_sz <= dtgm->dtgm_map_sz) {
 		iov.iov_base = dtgm->dtgm_map;
@@ -713,7 +707,6 @@ dt_ioctl_get_maphint(struct dt_softc *sc, struct dtioc_getmap *dtgm)
 		uio.uio_procp = p;
 		uio.uio_rw = UIO_READ;
 		e = process_domem(p, pr, &uio, PT_READ_D);
-		log(LOG_ERR, "%s process_domeme() result: %d\n", __func__, e);
 	}
 
 	dtgm->dtgm_map_sz = pr->ps_sym_hints_sz;

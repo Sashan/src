@@ -243,9 +243,8 @@ sym_compare_search(const void *keyp, const void *entryp)
 }
 
 /*
- * TODO: path to executable, runtime linker does not know that path, so we
- * don't create entry in kernel for it. I wonder if DTIOCGETAUXBASE would help
- * us to find a base address of text section where exec. got loaded to.
+ * runtime linker does not know path to executable, we need get path
+ * to executable from '-p' option.
  */
 static struct syms *
 kelf_open_exec(struct syms *syms, const struct sym_hint *sh,

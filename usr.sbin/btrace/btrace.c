@@ -2234,7 +2234,10 @@ unveil_shared_libs(int fd, pid_t pid)
 
 	sh = (struct sym_hint *)dtgm.dtgm_map;
 	do {
-		/* path to executable is handled in main() */
+		/*
+		 * path to executable is handled in main() runtime linker does
+		 * not know the path, it marks the entry for executable by
+		 * \xff\xff marker */
 		if (strcmp(&sh->sh_path, "\xff\xff") != 0)
 			unveil(&sh->sh_path, "r");
 
