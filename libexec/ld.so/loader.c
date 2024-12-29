@@ -616,8 +616,10 @@ _dl_attach_linkmap(elf_object_t *object)
 		object = object->next;
 	}
 
-	if (sym_hints != NULL)
-		_dl_set_symhint(sym_hints, sym_hints_sz);
+	if (sym_hints != NULL) {
+		if (_dl_set_symhint(sym_hints, sym_hints_sz) == -1)
+			free(sym_hints);
+	}
 }
 
 /*
