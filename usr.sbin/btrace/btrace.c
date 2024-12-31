@@ -2165,35 +2165,35 @@ dt_get_offset(pid_t pid)
 struct syms *
 dt_load_syms(pid_t pid, struct syms *syms, const char *exec_path)
 {
-	struct dtioc_getmap	dtgm;
+	struct dtioc_getsymhint	dtgs;
 
-	dtgm.dtgm_pid = pid;
-	dtgm.dtgm_map_sz = 0;
-	dtgm.dtgm_map = NULL;
+	dtgs.dtgs_pid = pid;
+	dtgs.dtgs_symhint_sz = 0;
+	dtgs.dtgs_symhint = NULL;
 
 	/* get maphint size */
-	if (ioctl(dtfd, DIOCGETSYMHINT, &dtgm)) {
+	if (ioctl(dtfd, DIOCGETSYMHINT, &dtgs)) {
 		warn("DIOCGETSYMHINT, assuming statically linked binary");
 		return kelf_load_syms(NULL, syms, exec_path);
 	}
 
-	dtgm.dtgm_map = malloc(dtgm.dtgm_map_sz);
-	if (dtgm.dtgm_map == NULL) {
+	dtgs.dtgs_symhint = malloc(dtgs.dtgs_symhint_sz);
+	if (dtgs.dtgs_symhint == NULL) {
 		warn("malloc");
 		return NULL;
 	}
 
 	/* get maphint */
-	if (ioctl(dtfd, DIOCGETSYMHINT, &dtgm)) {
+	if (ioctl(dtfd, DIOCGETSYMHINT, &dtgs)) {
 		warn("DIOCGETSYMHINT");
-		free(dtgm.dtgm_map);
+		free(dtgs.dtgs_symhint);
 		return NULL;
 	}
 
 	is_dynamic_elf = 1;
-	syms = kelf_load_syms(&dtgm, syms, exec_path);
+	syms = kelf_load_syms(&dtgs, syms, exec_path);
 
-	free(dtgm.dtgm_map);
+	free(dtgs.dtgs_symhint);
 
 	return syms;
 }
@@ -2201,37 +2201,37 @@ dt_load_syms(pid_t pid, struct syms *syms, const char *exec_path)
 void
 unveil_shared_libs(int fd, pid_t pid)
 {
-	struct dtioc_getmap	dtgm;
+	struct dtioc_getsymhint	dtgs;
 	struct sym_hint *sh;
 	char *p, *end;
 
-	dtgm.dtgm_pid = pid;
-	dtgm.dtgm_map_sz = 0;
-	dtgm.dtgm_map = NULL;
+	dtgs.dtgs_pid = pid;
+	dtgs.dtgs_symhint_sz = 0;
+	dtgs.dtgs_symhint = NULL;
 
 	/* get maphint size */
-	if (ioctl(fd, DIOCGETSYMHINT, &dtgm)) {
+	if (ioctl(fd, DIOCGETSYMHINT, &dtgs)) {
 		warn("DIOCGETSYMHINT");
 		return;
 	}
 
-	dtgm.dtgm_map = malloc(dtgm.dtgm_map_sz);
-	if (dtgm.dtgm_map == NULL) {
+	dtgs.dtgs_symhint = malloc(dtgs.dtgs_symhint_sz);
+	if (dtgs.dtgs_symhint == NULL) {
 		warn("malloc");
 		return;
 	}
 
 	/* get maphint */
-	if (ioctl(fd, DIOCGETSYMHINT, &dtgm)) {
+	if (ioctl(fd, DIOCGETSYMHINT, &dtgs)) {
 		warn("DIOCGETSYMHINT");
-		free(dtgm.dtgm_map);
+		free(dtgs.dtgs_symhint);
 		return;
 	}
 
-	end = (char *)dtgm.dtgm_map;
-	end += dtgm.dtgm_map_sz;
+	end = (char *)dtgs.dtgs_symhint;
+	end += dtgs.dtgs_symhint_sz;
 
-	sh = (struct sym_hint *)dtgm.dtgm_map;
+	sh = (struct sym_hint *)dtgs.dtgs_symhint;
 	do {
 		/*
 		 * path to executable is handled in main() runtime linker does
@@ -2253,5 +2253,5 @@ unveil_shared_libs(int fd, pid_t pid)
 		sh = (struct sym_hint *)p;
 	} while (p < end);
 
-	free(dtgm.dtgm_map);
+	free(dtgs.dtgs_symhint);
 }

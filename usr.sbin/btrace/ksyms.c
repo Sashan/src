@@ -296,7 +296,7 @@ kelf_open_kernel(const char *path)
 }
 
 struct syms *
-kelf_load_syms(struct dtioc_getmap *dtgm, struct syms *syms,
+kelf_load_syms(struct dtioc_getsymhint *dtgs, struct syms *syms,
     const char *exec_path)
 {
 	struct sym_hint *sh;
@@ -306,17 +306,17 @@ kelf_load_syms(struct dtioc_getmap *dtgm, struct syms *syms,
 	 * There ae no shared libs in statically linked binary. We load
 	 * symbols from exec_path using 0 as a base address.
 	 */
-	if (dtgm == NULL) {
+	if (dtgs == NULL) {
 		struct sym_hint tmp_sh;
 
 		memset(&tmp_sh, 0, sizeof (struct sym_hint));
 		return kelf_open_exec(syms, &tmp_sh, exec_path);
 	}
 
-	end = (char *)dtgm->dtgm_map;
-	end += dtgm->dtgm_map_sz;
+	end = (char *)dtgs->dtgs_symhint;
+	end += dtgs->dtgs_symhint_sz;
 
-	sh = (struct sym_hint *)dtgm->dtgm_map;
+	sh = (struct sym_hint *)dtgs->dtgs_symhint;
 	do {
 		if (strcmp(&sh->sh_path, "\xff\xff") == 0)
 			syms = kelf_open_exec(syms, sh, exec_path);
