@@ -2172,8 +2172,8 @@ dt_load_syms(pid_t pid, struct syms *syms, const char *exec_path)
 	dtgm.dtgm_map = NULL;
 
 	/* get maphint size */
-	if (ioctl(dtfd, DIOCGETMAPHINT, &dtgm)) {
-		warn("DIOCGETMAPHINT, assuming statically linked binary");
+	if (ioctl(dtfd, DIOCGETSYMHINT, &dtgm)) {
+		warn("DIOCGETSYMHINT, assuming statically linked binary");
 		return kelf_load_syms(NULL, syms, exec_path);
 	}
 
@@ -2184,8 +2184,8 @@ dt_load_syms(pid_t pid, struct syms *syms, const char *exec_path)
 	}
 
 	/* get maphint */
-	if (ioctl(dtfd, DIOCGETMAPHINT, &dtgm)) {
-		warn("DIOCGETMAHINT");
+	if (ioctl(dtfd, DIOCGETSYMHINT, &dtgm)) {
+		warn("DIOCGETSYMHINT");
 		free(dtgm.dtgm_map);
 		return NULL;
 	}
@@ -2210,9 +2210,8 @@ unveil_shared_libs(int fd, pid_t pid)
 	dtgm.dtgm_map = NULL;
 
 	/* get maphint size */
-	if (ioctl(fd, DIOCGETMAPHINT, &dtgm)) {
-		fprintf(stderr, "ioctlcmd: %lxn", DIOCGETMAPHINT);
-		warn("DIOCGETMAPHINT");
+	if (ioctl(fd, DIOCGETSYMHINT, &dtgm)) {
+		warn("DIOCGETSYMHINT");
 		return;
 	}
 
@@ -2223,8 +2222,8 @@ unveil_shared_libs(int fd, pid_t pid)
 	}
 
 	/* get maphint */
-	if (ioctl(fd, DIOCGETMAPHINT, &dtgm)) {
-		warn("DIOCGETMAHINT");
+	if (ioctl(fd, DIOCGETSYMHINT, &dtgm)) {
+		warn("DIOCGETSYMHINT");
 		free(dtgm.dtgm_map);
 		return;
 	}

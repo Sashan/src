@@ -139,7 +139,7 @@ struct dtioc_getmap {
 #define DTIOCPRBDISABLE	 _IOW('D', 5, struct dtioc_req)
 #define DTIOCGARGS	_IOWR('D', 6, struct dtioc_arg)
 #define DTIOCGETAUXBASE	 _IOWR('D', 7, struct dtioc_getaux)
-#define DIOCGETMAPHINT	 _IOWR('D', 8, struct dtioc_getmap)
+#define DIOCGETSYMHINT	 _IOWR('D', 8, struct dtioc_getmap)
 
 #ifdef _KERNEL
 

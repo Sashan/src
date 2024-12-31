@@ -301,7 +301,7 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	case DTIOCPRBENABLE:
 	case DTIOCPRBDISABLE:
 	case DTIOCGETAUXBASE:
-	case DIOCGETMAPHINT:
+	case DIOCGETSYMHINT:
 		/* root only ioctl(2) */
 		break;
 	default:
@@ -328,7 +328,7 @@ dtioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, struct proc *p)
 	case DTIOCGETAUXBASE:
 		error = dt_ioctl_get_auxbase(sc, (struct dtioc_getaux *)addr);
 		break;
-	case DIOCGETMAPHINT:
+	case DIOCGETSYMHINT:
 		error = dt_ioctl_get_maphint(sc, (struct dtioc_getmap *)addr);
 		break;
 	default:
