@@ -602,6 +602,7 @@ _dl_attach_linkmap(elf_object_t *object)
 				load_name = object->load_name;
 			else
 				load_name = "\xff\xff";
+			_dl_printf("%s %s %u %s\n", __func__, object->load_name, object->inode, __progname);
 			sym_hints = _dl_add_sym_hint(sym_hints,
 			    load_name, llist, &sym_hints_sz);
 			/*
@@ -866,6 +867,7 @@ _dl_boot(const char **argv, char **envp, const long dyn_loff, long *dl_data)
 	if (failed != 0)
 		_dl_die("relocation failed");
 
+	_dl_show_objects(NULL);
 	_dl_attach_linkmap(_dl_objects);
 
 	if (_dl_traceld)
